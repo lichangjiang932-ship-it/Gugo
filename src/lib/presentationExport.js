@@ -1,5 +1,6 @@
 const MAX_BULLETS_PER_SLIDE = 8
 const MAX_BULLET_LENGTH = 150
+const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
 
 function stripMarkdownFence(markdown = '') {
   return String(markdown)
@@ -114,7 +115,7 @@ export function buildPresentationFilename(title = 'presentation') {
   return `${base || 'presentation'}.pptx`
 }
 
-export async function downloadPptxFromMarkdown(markdown, { title, filename } = {}) {
+async function buildPresentationFromMarkdown(markdown, { title } = {}) {
   const slides = parseMarkdownSlides(markdown)
   if (!slides.length) throw new Error('没有可导出的 PPT 内容')
 
@@ -183,7 +184,37 @@ export async function downloadPptxFromMarkdown(markdown, { title, filename } = {
     })
   })
 
-  await pptx.writeFile({
-    fileName: filename || buildPresentationFilename(title || slides[0].title),
-  })
+  return { pptx, slides }
+}
+
+function saveBlob(blob, filename) {
+  if (typeof document === 'undefined') return
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.dataset.interception = 'off'
+  a.style.display = 'none'
+  document.body.appendChild(a)
+  a.click()
+  setTimeout(() => {
+    URL.revokeObjectURL(url)
+    a.remove()
+  }, 100)
+}
+
+export async function createPptxBlobFromMarkdown(markdown, { title } = {}) {
+  const { pptx } = await buildPresentationFromMarkdown(markdown, { title })
+  const content = await pptx.write({ outputType: 'blob' })
+  if (content instanceof Blob && content.type === PPTX_MIME) return content
+  return new Blob([content], { type: PPTX_MIME })
+}
+
+export async function downloadPptxFromMarkdown(markdown, { title, filename } = {}) {
+  const slides = parseMarkdownSlides(markdown)
+  if (!slides.length) throw new Error('没有可导出的 PPT 内容')
+
+  const blob = await createPptxBlobFromMarkdown(markdown, { title: title || slides[0].title })
+  saveBlob(blob, filename || buildPresentationFilename(title || slides[0].title))
+  return blob
 }

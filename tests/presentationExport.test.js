@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   buildPresentationFilename,
+  createPptxBlobFromMarkdown,
   parseMarkdownSlides,
   shouldOfferPptxExport,
 } from '../src/lib/presentationExport.js'
@@ -53,4 +54,11 @@ test('detects ppt replies and creates safe filenames', () => {
   assert.equal(shouldOfferPptxExport({ skillId: undefined, artifactType: 'pptx' }), true)
   assert.equal(shouldOfferPptxExport({ skillId: 'doc', artifactType: undefined }), false)
   assert.equal(buildPresentationFilename('GPT-5.6 即将到来: OpenAI / Claude?'), 'GPT-5.6-即将到来-OpenAI-Claude.pptx')
+})
+
+test('creates a pptx blob from markdown for explicit browser download', async () => {
+  const blob = await createPptxBlobFromMarkdown('# Demo\nIntro\n\n---\n\n## Plan\n- Build\n- Ship')
+
+  assert.equal(blob.type, 'application/vnd.openxmlformats-officedocument.presentationml.presentation')
+  assert.ok(blob.size > 1000)
 })

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X, FileText, BarChart3, LayoutList, Download } from 'lucide-react'
 import MarkdownRenderer from '../../components/MarkdownRenderer.jsx'
+import { buildArtifactPreview } from '../../lib/artifactPreview.js'
 import {
   buildPresentationFilename,
   downloadPptxFromMarkdown,
@@ -16,6 +17,7 @@ import {
   parseSpreadsheetRows,
   shouldOfferOfficeExport,
 } from '../../lib/officeExport.js'
+import ArtifactPreview from './ArtifactPreview.jsx'
 
 const EXAMPLE_QUESTIONS = [
   { icon: FileText, label: '生成周报' },
@@ -75,7 +77,7 @@ export default function ChatMessages({
         })
       } else if (type === 'xlsx') {
         const rows = parseSpreadsheetRows(msg.content)
-        const title = msg.meta?.artifactTitle || rows[0]?.[0] || 'export'
+        const title = rows[0]?.find((cell) => String(cell || '').trim()) || msg.meta?.artifactTitle || 'export'
         await downloadXlsxFromMarkdown(msg.content, {
           title,
           filename: buildOfficeFilename(title, 'xlsx'),
@@ -86,6 +88,11 @@ export default function ChatMessages({
     } finally {
       setExportingId('')
     }
+  }
+
+  const handleDownloadArtifact = (msg, type) => {
+    if (type === 'pptx') return handleDownloadPptx(msg)
+    return handleDownloadOffice(msg, type)
   }
 
   return (
@@ -137,7 +144,12 @@ export default function ChatMessages({
 
         {hasMessages ? (
           <>
-            {messages.map((msg, i) => (
+            {messages.map((msg, i) => {
+              const artifactPreview = msg.role === 'assistant' && msg.meta?.type === 'model_reply'
+                ? buildArtifactPreview({ content: msg.content, meta: msg.meta })
+                : null
+
+              return (
               <motion.div
                 key={msg.id ?? i}
                 initial={{ opacity: 0, y: 12 }}
@@ -154,9 +166,19 @@ export default function ChatMessages({
                     <SparklesIcon />
                   </div>
                 )}
-                <div className={'p-3 rounded-md text-sm leading-relaxed max-w-[920px] ' + (msg.role === 'assistant' ? 'bg-paper-2 border border-ink/10' : 'pt-1.5')}>
+                <div className={artifactPreview ? 'max-w-[920px] w-full' : 'p-3 rounded-md text-sm leading-relaxed max-w-[920px] ' + (msg.role === 'assistant' ? 'bg-paper-2 border border-ink/10' : 'pt-1.5')}>
                   {msg.role === 'assistant' ? (
-                    <MarkdownRenderer>{msg.content}</MarkdownRenderer>
+                    artifactPreview ? (
+                      <ArtifactPreview
+                        preview={artifactPreview}
+                        content={msg.content}
+                        downloading={exportingId === `${msg.id}:${artifactPreview.type}`}
+                        onDownload={() => handleDownloadArtifact(msg, artifactPreview.type)}
+                        onCopySource={() => navigator.clipboard?.writeText(msg.content)}
+                      />
+                    ) : (
+                      <MarkdownRenderer>{msg.content}</MarkdownRenderer>
+                    )
                   ) : (
                     <span className="whitespace-pre-wrap">{msg.content}</span>
                   )}
@@ -172,11 +194,11 @@ export default function ChatMessages({
                     </div>
                   )}
                   {msg.role === 'assistant' && msg.meta?.type === 'model_reply' && (
-                    <div className="mt-3 pt-2 border-t border-dashed border-ink-fade/40 flex flex-wrap gap-2 text-[11px] text-ink-fade items-center">
+                    <div className={`${artifactPreview ? 'mt-2 px-2' : 'mt-3 pt-2 border-t border-dashed border-ink-fade/40'} flex flex-wrap gap-2 text-[11px] text-ink-fade items-center`}>
                       <span>模型：{msg.meta.modelName}</span>
                       {msg.meta.latency !== undefined && <span>延迟：{msg.meta.latency} ms</span>}
                       <div className="flex-1" />
-                      {shouldOfferPptxExport(msg.meta) && (
+                      {!artifactPreview && shouldOfferPptxExport(msg.meta) && (
                         <button
                           onClick={() => handleDownloadPptx(msg)}
                           disabled={exportingId === `${msg.id}:pptx`}
@@ -187,7 +209,7 @@ export default function ChatMessages({
                           {exportingId === `${msg.id}:pptx` ? '生成中' : '下载 PPTX'}
                         </button>
                       )}
-                      {(() => {
+                      {!artifactPreview && (() => {
                         const officeType = shouldOfferOfficeExport(msg.meta)
                         if (!officeType) return null
                         return (
@@ -202,13 +224,15 @@ export default function ChatMessages({
                           </button>
                         )
                       })()}
-                      <button
-                        onClick={() => navigator.clipboard?.writeText(msg.content)}
-                        className="text-ink-fade hover:text-ink transition-colors"
-                        title="复制内容"
-                      >
-                        复制
-                      </button>
+                      {!artifactPreview && (
+                        <button
+                          onClick={() => navigator.clipboard?.writeText(msg.content)}
+                          className="text-ink-fade hover:text-ink transition-colors"
+                          title="复制内容"
+                        >
+                          复制
+                        </button>
+                      )}
                     </div>
                   )}
                   {msg.role === 'assistant' && msg.meta?.type === 'context_summary' && (
@@ -218,7 +242,8 @@ export default function ChatMessages({
                   )}
                 </div>
               </motion.div>
-            ))}
+              )
+            })}
 
             {/* Inline permission card */}
             <AnimatePresence>

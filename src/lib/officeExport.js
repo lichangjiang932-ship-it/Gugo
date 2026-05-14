@@ -320,8 +320,14 @@ function saveBlob(blob, filename) {
   const a = document.createElement('a')
   a.href = url
   a.download = filename
+  a.dataset.interception = 'off'
+  a.style.display = 'none'
+  document.body.appendChild(a)
   a.click()
-  URL.revokeObjectURL(url)
+  setTimeout(() => {
+    URL.revokeObjectURL(url)
+    a.remove()
+  }, 100)
 }
 
 export async function downloadDocxFromMarkdown(markdown, { title, filename } = {}) {
