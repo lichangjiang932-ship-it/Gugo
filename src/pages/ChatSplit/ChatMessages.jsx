@@ -8,6 +8,14 @@ import {
   parseMarkdownSlides,
   shouldOfferPptxExport,
 } from '../../lib/presentationExport.js'
+import {
+  buildOfficeFilename,
+  downloadDocxFromMarkdown,
+  downloadXlsxFromMarkdown,
+  parseMarkdownDocument,
+  parseSpreadsheetRows,
+  shouldOfferOfficeExport,
+} from '../../lib/officeExport.js'
 
 const EXAMPLE_QUESTIONS = [
   { icon: FileText, label: '生成周报' },
@@ -39,7 +47,8 @@ export default function ChatMessages({
   const [exportingId, setExportingId] = useState('')
 
   const handleDownloadPptx = async (msg) => {
-    setExportingId(msg.id)
+    const exportKey = `${msg.id}:pptx`
+    setExportingId(exportKey)
     try {
       const slides = parseMarkdownSlides(msg.content)
       const title = slides[0]?.title || msg.meta?.artifactTitle || 'presentation'
@@ -49,6 +58,31 @@ export default function ChatMessages({
       })
     } catch (err) {
       window.alert?.(err.message || 'PPTX 导出失败')
+    } finally {
+      setExportingId('')
+    }
+  }
+
+  const handleDownloadOffice = async (msg, type) => {
+    const exportKey = `${msg.id}:${type}`
+    setExportingId(exportKey)
+    try {
+      if (type === 'docx') {
+        const doc = parseMarkdownDocument(msg.content)
+        await downloadDocxFromMarkdown(msg.content, {
+          title: doc.title,
+          filename: buildOfficeFilename(doc.title, 'docx'),
+        })
+      } else if (type === 'xlsx') {
+        const rows = parseSpreadsheetRows(msg.content)
+        const title = msg.meta?.artifactTitle || rows[0]?.[0] || 'export'
+        await downloadXlsxFromMarkdown(msg.content, {
+          title,
+          filename: buildOfficeFilename(title, 'xlsx'),
+        })
+      }
+    } catch (err) {
+      window.alert?.(err.message || '文件导出失败')
     } finally {
       setExportingId('')
     }
@@ -145,14 +179,29 @@ export default function ChatMessages({
                       {shouldOfferPptxExport(msg.meta) && (
                         <button
                           onClick={() => handleDownloadPptx(msg)}
-                          disabled={exportingId === msg.id}
+                          disabled={exportingId === `${msg.id}:pptx`}
                           className="inline-flex items-center gap-1 text-ember hover:text-ink transition-colors disabled:opacity-50"
                           title="导出为 PowerPoint 文件"
                         >
                           <Download className="w-3.5 h-3.5" />
-                          {exportingId === msg.id ? '生成中' : '下载 PPTX'}
+                          {exportingId === `${msg.id}:pptx` ? '生成中' : '下载 PPTX'}
                         </button>
                       )}
+                      {(() => {
+                        const officeType = shouldOfferOfficeExport(msg.meta)
+                        if (!officeType) return null
+                        return (
+                          <button
+                            onClick={() => handleDownloadOffice(msg, officeType)}
+                            disabled={exportingId === `${msg.id}:${officeType}`}
+                            className="inline-flex items-center gap-1 text-ember hover:text-ink transition-colors disabled:opacity-50"
+                            title={`导出为 ${officeType.toUpperCase()} 文件`}
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            {exportingId === `${msg.id}:${officeType}` ? '生成中' : `下载 ${officeType.toUpperCase()}`}
+                          </button>
+                        )
+                      })()}
                       <button
                         onClick={() => navigator.clipboard?.writeText(msg.content)}
                         className="text-ink-fade hover:text-ink transition-colors"

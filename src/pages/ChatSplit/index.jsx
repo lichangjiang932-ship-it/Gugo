@@ -166,6 +166,11 @@ export default function ChatSplit() {
 
         setLastFailedPrompt('')
         setAttachments([])
+        const artifactType =
+          skillId === 'ppt' ? 'pptx' :
+          skillId === 'doc' ? 'docx' :
+          skillId === 'excel' ? 'xlsx' :
+          undefined
         dispatch({
           type: 'UPDATE_LAST_MESSAGE_META',
           payload: {
@@ -174,8 +179,8 @@ export default function ChatSplit() {
             creditsCharged: 0,
             latency,
             skillId,
-            artifactType: skillId === 'ppt' ? 'pptx' : undefined,
-            artifactTitle: skillId === 'ppt' ? taskName : undefined,
+            artifactType,
+            artifactTitle: artifactType ? taskName : undefined,
           },
         })
         dispatch({
