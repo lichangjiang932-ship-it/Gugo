@@ -3,10 +3,9 @@ import test from 'node:test'
 
 import {
   buildSendCodeResponse,
-  createMemoryStore,
-  getPublicAccount,
   issueEmailCode,
   verifyEmailCode,
+  getPublicAccount,
   rechargeAccount,
   estimateChatCost,
   chargeForModelUse,
@@ -15,18 +14,35 @@ import {
   loadBillingConfig,
 } from '../server/billingAuth.js'
 
+function cleanDb() {
+  const db = getDb()
+  try { db.prepare('DELETE FROM ledger').run() } catch {}
+  try { db.prepare('DELETE FROM sessions').run() } catch {}
+  try { db.prepare('DELETE FROM login_codes').run() } catch {}
+  try { db.prepare('DELETE FROM users').run() } catch {}
+}
+
+import { getDb } from '../server/db.js'
+
+test.beforeEach(() => {
+  cleanDb()
+})
+
+test.after(() => {
+  cleanDb()
+})
+
 test('email code login creates a reusable user token without exposing the code', () => {
-  const store = createMemoryStore()
-  const issued = issueEmailCode({ store, email: 'person@example.com', now: 1000, code: '123456' })
+  const issued = issueEmailCode({ email: 'person@example.com', code: '123456' })
 
   assert.equal(issued.ok, true)
   assert.equal(issued.email, 'person@example.com')
   assert.equal('code' in issued, false)
 
-  const session = verifyEmailCode({ store, email: 'person@example.com', code: '123456', now: 2000 })
+  const session = verifyEmailCode({ email: 'person@example.com', code: '123456' })
 
   assert.equal(session.ok, true)
-  assert.match(session.token, /^usr_/)
+  assert.match(session.token, /^tkn_/)
   assert.equal(session.user.email, 'person@example.com')
   assert.equal(session.user.credits, 0)
 })
@@ -52,14 +68,12 @@ test('send-code response exposes local dev code when smtp is not configured', ()
 })
 
 test('local recharge packages add credits and write ledger entries', () => {
-  const store = createMemoryStore()
   const { token } = verifyEmailCode({
-    store,
     email: 'buyer@example.com',
-    code: issueEmailCode({ store, email: 'buyer@example.com', code: '654321' }).devCode,
+    code: issueEmailCode({ email: 'buyer@example.com', code: '654321' }).devCode,
   })
 
-  const result = rechargeAccount({ store, token, packageId: 'local-50' })
+  const result = rechargeAccount({ token, packageId: 'local-50' })
 
   assert.equal(result.ok, true)
   assert.equal(result.user.credits, 5000)
@@ -131,22 +145,20 @@ test('billing and mail diagnostics are safe for browser display', () => {
 })
 
 test('charging model use blocks requests when credits are insufficient', () => {
-  const store = createMemoryStore()
   const { token } = verifyEmailCode({
-    store,
     email: 'low@example.com',
-    code: issueEmailCode({ store, email: 'low@example.com', code: '111111' }).devCode,
+    code: issueEmailCode({ email: 'low@example.com', code: '111111' }).devCode,
   })
-  const user = getPublicAccount({ store, token })
+  const user = getPublicAccount({ token })
   assert.equal(user.credits, 0)
 
   assert.throws(
-    () => chargeForModelUse({ store, token, modelName: 'pro-model', cost: 10 }),
+    () => chargeForModelUse({ token, modelName: 'pro-model', cost: 10 }),
     /积分不足/
   )
 
-  rechargeAccount({ store, token, packageId: 'local-10' })
-  const charged = chargeForModelUse({ store, token, modelName: 'pro-model', cost: 10 })
+  rechargeAccount({ token, packageId: 'local-10' })
+  const charged = chargeForModelUse({ token, modelName: 'pro-model', cost: 10 })
 
   assert.equal(charged.user.credits, 990)
   assert.equal(charged.ledger[0].type, 'model_charge')

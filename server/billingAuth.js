@@ -4,10 +4,30 @@ import net from 'node:net'
 import path from 'node:path'
 import tls from 'node:tls'
 
+import {
+  getUserByEmail,
+  getUserById,
+  createUser,
+  updateUserCredits,
+  getSessionByToken,
+  createSession,
+  deleteSession,
+  deleteExpiredSessions,
+  createLoginCode,
+  getLoginCode,
+  incrementLoginAttempts,
+  deleteLoginCode,
+  deleteExpiredCodes,
+  deleteExpiredRates,
+  addLedgerEntry,
+  getLedgerForUser,
+  migrateFromJson,
+  checkRateLimit,
+} from './db.js'
+
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
 const DATA_DIR = path.join(process.cwd(), 'server-data')
 const STORE_PATH = path.join(DATA_DIR, 'app-data.json')
-const CODE_TTL_MS = 10 * 60 * 1000
 
 export const RECHARGE_PACKAGES = [
   { id: 'local-10', amount: 10, credits: 1000, label: '10 元' },
@@ -16,34 +36,26 @@ export const RECHARGE_PACKAGES = [
   { id: 'local-300', amount: 300, credits: 36000, label: '300 元' },
 ]
 
-export function createMemoryStore(seed = {}) {
-  return {
-    users: {},
-    codes: {},
-    sessions: {},
-    ledger: [],
-    ...seed,
-  }
-}
+/* ── 旧 JSON 迁移 ── */
 
-function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true })
-}
-
-export function loadStore() {
-  ensureDataDir()
-  if (!fs.existsSync(STORE_PATH)) return createMemoryStore()
+function maybeMigrateLegacy() {
+  const migratedFlag = path.join(DATA_DIR, '.migrated')
+  if (!fs.existsSync(STORE_PATH) || fs.existsSync(migratedFlag)) return
   try {
-    return { ...createMemoryStore(), ...JSON.parse(fs.readFileSync(STORE_PATH, 'utf8')) }
-  } catch {
-    return createMemoryStore()
+    const raw = fs.readFileSync(STORE_PATH, 'utf8')
+    const store = JSON.parse(raw)
+    migrateFromJson(store)
+    fs.writeFileSync(migratedFlag, JSON.stringify({ migratedAt: Date.now() }))
+    // 保留原文件作为备份，不改名
+    console.log('[billingAuth] Migrated legacy JSON store to SQLite')
+  } catch (e) {
+    console.warn('[billingAuth] Failed to migrate legacy store:', e.message)
   }
 }
 
-export function saveStore(store) {
-  ensureDataDir()
-  fs.writeFileSync(STORE_PATH, JSON.stringify(store, null, 2))
-}
+maybeMigrateLegacy()
+
+/* ── 工具函数 ── */
 
 function normalizeEmail(email = '') {
   return email.trim().toLowerCase()
@@ -54,7 +66,7 @@ function createCode() {
 }
 
 function createToken() {
-  return `usr_${crypto.randomBytes(24).toString('hex')}`
+  return `tkn_${crypto.randomBytes(24).toString('hex')}`
 }
 
 function publicUser(user) {
@@ -62,83 +74,128 @@ function publicUser(user) {
     id: user.id,
     email: user.email,
     credits: user.credits || 0,
-    createdAt: user.createdAt,
-    updatedAt: user.updatedAt,
+    createdAt: user.created_at,
+    updatedAt: user.updated_at,
   }
 }
 
-function getUserByToken(store, token) {
-  const userId = store.sessions[token]
-  if (!userId) return null
-  return store.users[userId] || null
+function getUserByToken(token) {
+  const session = getSessionByToken(token)
+  if (!session) return null
+  return getUserById(session.user_id) || null
 }
 
-export function issueEmailCode({ store, email, now = Date.now(), code = createCode() }) {
+/* ── 验证码发送限制 ── */
+
+const MAX_CODES_PER_HOUR = 5
+const CODE_WINDOW_MS = 60 * 60 * 1000
+const MAX_LOGIN_ATTEMPTS = 5
+const CODE_TTL_MS = 10 * 60 * 1000
+
+function checkCodeRate(clientId) {
+  const key = `code:${clientId}`
+  return checkRateLimit({ key, windowMs: CODE_WINDOW_MS, maxRequests: MAX_CODES_PER_HOUR })
+}
+
+/* ── 核心逻辑 ── */
+
+export function issueEmailCode({ email, now = Date.now(), code }) {
   const normalized = normalizeEmail(email)
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(normalized)) {
     throw new Error('请输入有效邮箱地址')
   }
-  store.codes[normalized] = {
-    code,
-    expiresAt: now + CODE_TTL_MS,
-    createdAt: now,
-  }
-  return { ok: true, email: normalized, expiresIn: CODE_TTL_MS / 1000, devCode: code }
+  const actualCode = code || createCode()
+  createLoginCode({ email: normalized, code: actualCode, now, ttlMs: CODE_TTL_MS })
+  deleteExpiredCodes(now)
+  return { ok: true, email: normalized, expiresIn: CODE_TTL_MS / 1000, devCode: actualCode }
 }
 
-export function verifyEmailCode({ store, email, code, now = Date.now() }) {
+export function verifyEmailCode({ email, code, now = Date.now() }) {
   const normalized = normalizeEmail(email)
-  const record = store.codes[normalized]
-  if (!record || record.code !== String(code).trim()) throw new Error('验证码不正确')
-  if (record.expiresAt < now) throw new Error('验证码已过期')
+  const record = getLoginCode(normalized)
+  if (!record) throw new Error('验证码不存在或已过期')
+
+  if (record.attempts >= MAX_LOGIN_ATTEMPTS) {
+    deleteLoginCode(normalized)
+    throw new Error('验证失败次数过多，请重新获取验证码')
+  }
+
+  if (record.code !== String(code).trim()) {
+    incrementLoginAttempts(normalized)
+    throw new Error('验证码不正确')
+  }
+
+  if (record.expires_at < now) {
+    deleteLoginCode(normalized)
+    throw new Error('验证码已过期')
+  }
 
   const userId = crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 24)
-  const existing = store.users[userId]
-  const user = existing || {
-    id: userId,
-    email: normalized,
-    credits: 0,
-    createdAt: now,
+  let user = getUserById(userId)
+  if (!user) {
+    user = createUser({ id: userId, email: normalized, credits: 0, now })
   }
-  user.updatedAt = now
-  store.users[userId] = user
-  delete store.codes[normalized]
+  deleteLoginCode(normalized)
 
   const token = createToken()
-  store.sessions[token] = userId
-  return { ok: true, token, user: publicUser(user), ledger: getLedgerForUser(store, userId) }
+  createSession({ token, userId, now, ttlMs: 7 * 24 * 60 * 60 * 1000 }) // 7 天
+
+  return { ok: true, token, user: publicUser(user), ledger: getLedgerForUser(userId) }
 }
 
-export function getPublicAccount({ store, token }) {
-  const user = getUserByToken(store, token)
+export function getPublicAccount({ token }) {
+  const user = getUserByToken(token)
   if (!user) throw new Error('请先登录')
   return publicUser(user)
 }
 
-function getLedgerForUser(store, userId) {
-  return store.ledger.filter((item) => item.userId === userId).slice(-50).reverse()
-}
-
-export function rechargeAccount({ store, token, packageId, now = Date.now() }) {
-  const user = getUserByToken(store, token)
+export function rechargeAccount({ token, packageId, now = Date.now() }) {
+  const user = getUserByToken(token)
   if (!user) throw new Error('请先登录')
   const pack = RECHARGE_PACKAGES.find((item) => item.id === packageId)
   if (!pack) throw new Error('充值套餐不存在')
 
-  user.credits = (user.credits || 0) + pack.credits
-  user.updatedAt = now
-  store.ledger.push({
+  const newCredits = (user.credits || 0) + pack.credits
+  updateUserCredits({ id: user.id, credits: newCredits, now })
+
+  addLedgerEntry({
     id: crypto.randomUUID?.() || `led_${now}_${Math.random().toString(16).slice(2)}`,
     userId: user.id,
     type: 'recharge',
     packageId,
     amount: pack.amount,
     credits: pack.credits,
-    balance: user.credits,
-    createdAt: now,
+    balance: newCredits,
+    now,
   })
-  return { ok: true, user: publicUser(user), ledger: getLedgerForUser(store, user.id) }
+
+  return { ok: true, user: publicUser(getUserById(user.id)), ledger: getLedgerForUser(user.id) }
 }
+
+export function chargeForModelUse({ token, modelName, cost, now = Date.now() }) {
+  const user = getUserByToken(token)
+  if (!user) throw new Error('请先登录')
+  if ((user.credits || 0) < cost) {
+    throw new Error(`积分不足，需要 ${cost} 积分，当前余额 ${user.credits || 0}`)
+  }
+
+  const newCredits = user.credits - cost
+  updateUserCredits({ id: user.id, credits: newCredits, now })
+
+  addLedgerEntry({
+    id: crypto.randomUUID?.() || `led_${now}_${Math.random().toString(16).slice(2)}`,
+    userId: user.id,
+    type: 'model_charge',
+    modelName,
+    credits: -cost,
+    balance: newCredits,
+    now,
+  })
+
+  return { ok: true, user: publicUser(getUserById(user.id)), ledger: getLedgerForUser(user.id) }
+}
+
+/* ── 计费配置 ── */
 
 export function loadBillingConfig(env = process.env) {
   const basePer1k = Number(env.CREDIT_BASE_PER_1K_TOKENS ?? 10)
@@ -193,6 +250,8 @@ export function getMailDiagnostics(env = process.env) {
   }
 }
 
+/* ── Token 估算 ── */
+
 function contentToText(content) {
   if (typeof content === 'string') return content
   if (Array.isArray(content)) {
@@ -221,41 +280,7 @@ export function estimateChatCost({ modelName, messages, config }) {
   return Math.ceil(baseCost * multiplier)
 }
 
-export function chargeForModelUse({ store, token, modelName, cost, now = Date.now() }) {
-  const user = getUserByToken(store, token)
-  if (!user) throw new Error('请先登录')
-  if ((user.credits || 0) < cost) throw new Error(`积分不足，需要 ${cost} 积分，当前余额 ${user.credits || 0}`)
-
-  user.credits -= cost
-  user.updatedAt = now
-  store.ledger.push({
-    id: crypto.randomUUID?.() || `led_${now}_${Math.random().toString(16).slice(2)}`,
-    userId: user.id,
-    type: 'model_charge',
-    modelName,
-    credits: -cost,
-    balance: user.credits,
-    createdAt: now,
-  })
-  return { ok: true, user: publicUser(user), ledger: getLedgerForUser(store, user.id) }
-}
-
-function authToken(req) {
-  const header = req.headers.authorization || ''
-  return header.startsWith('Bearer ') ? header.slice(7).trim() : ''
-}
-
-async function readJson(req) {
-  const chunks = []
-  for await (const chunk of req) chunks.push(chunk)
-  const raw = Buffer.concat(chunks).toString('utf8')
-  return raw.trim() ? JSON.parse(raw) : {}
-}
-
-function sendJson(res, statusCode, body) {
-  res.writeHead(statusCode, JSON_HEADERS)
-  res.end(JSON.stringify(body))
-}
+/* ── SMTP 邮件发送 ── */
 
 function createSmtpReader(socket) {
   let buffer = ''
@@ -305,14 +330,8 @@ function createSmtpReader(socket) {
 function waitForSecureConnect(socket) {
   if (socket.authorized || socket.encrypted) return Promise.resolve()
   return new Promise((resolve, reject) => {
-    const onSecure = () => {
-      cleanup()
-      resolve()
-    }
-    const onError = (err) => {
-      cleanup()
-      reject(err)
-    }
+    const onSecure = () => { cleanup(); resolve() }
+    const onError = (err) => { cleanup(); reject(err) }
     const cleanup = () => {
       socket.off('secureConnect', onSecure)
       socket.off('error', onError)
@@ -325,14 +344,8 @@ function waitForSecureConnect(socket) {
 function waitForConnect(socket) {
   if (!socket.connecting) return Promise.resolve()
   return new Promise((resolve, reject) => {
-    const onConnect = () => {
-      cleanup()
-      resolve()
-    }
-    const onError = (err) => {
-      cleanup()
-      reject(err)
-    }
+    const onConnect = () => { cleanup(); resolve() }
+    const onError = (err) => { cleanup(); reject(err) }
     const cleanup = () => {
       socket.off('connect', onConnect)
       socket.off('error', onError)
@@ -348,31 +361,6 @@ async function smtpCommand(readResponse, socket, command, expected = /^2|^3/) {
   if (!expected.test(response)) throw new Error(`SMTP 错误：${response.trim()}`)
   return response
 }
-
-/*
-function readLine(socket) {
-  return new Promise((resolve, reject) => {
-    let buffer = ''
-    const onData = (chunk) => {
-      buffer += chunk.toString('utf8')
-      if (buffer.includes('\n')) {
-        cleanup()
-        resolve(buffer)
-      }
-    }
-    const onError = (err) => {
-      cleanup()
-      reject(err)
-    }
-    const cleanup = () => {
-      socket.off('data', onData)
-      socket.off('error', onError)
-    }
-    socket.on('data', onData)
-    socket.on('error', onError)
-  })
-}
-*/
 
 export async function sendEmailCode({ env, email, code }) {
   if (!env.MAIL_SERVER || !env.MAIL_USERNAME || !env.MAIL_PASSWORD) {
@@ -432,32 +420,57 @@ export function buildSendCodeResponse({ issued, delivery, env }) {
   return response
 }
 
+/* ── HTTP 处理 ── */
+
+function authToken(req) {
+  const header = req.headers.authorization || ''
+  return header.startsWith('Bearer ') ? header.slice(7).trim() : ''
+}
+
+async function readJson(req) {
+  const chunks = []
+  for await (const chunk of req) chunks.push(chunk)
+  const raw = Buffer.concat(chunks).toString('utf8')
+  return raw.trim() ? JSON.parse(raw) : {}
+}
+
+function sendJson(res, statusCode, body) {
+  res.writeHead(statusCode, JSON_HEADERS)
+  res.end(JSON.stringify(body))
+}
+
+function clientId(req) {
+  return req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown'
+}
+
 export async function handleAuthBillingRequest(req, res, env = process.env) {
   try {
-    const store = loadStore()
     const url = new URL(req.url, 'http://localhost')
 
     if (req.method === 'POST' && url.pathname === '/api/auth/send-code') {
       const body = await readJson(req)
-      const issued = issueEmailCode({ store, email: body.email })
+      const limit = checkCodeRate(clientId(req))
+      if (!limit.allowed) {
+        sendJson(res, 429, { ok: false, error: '发送验证码次数过多，请 1 小时后再试' })
+        return
+      }
+      const issued = issueEmailCode({ email: body.email })
       const delivery = await sendEmailCode({ env, email: issued.email, code: issued.devCode })
-      saveStore(store)
       sendJson(res, 200, buildSendCodeResponse({ issued, delivery, env }))
       return
     }
 
     if (req.method === 'POST' && url.pathname === '/api/auth/verify') {
       const body = await readJson(req)
-      const result = verifyEmailCode({ store, email: body.email, code: body.code })
-      saveStore(store)
+      const result = verifyEmailCode({ email: body.email, code: body.code })
       sendJson(res, 200, result)
       return
     }
 
     if (req.method === 'GET' && url.pathname === '/api/account/me') {
       const token = authToken(req)
-      const user = getPublicAccount({ store, token })
-      sendJson(res, 200, { ok: true, user, ledger: getLedgerForUser(store, user.id), packages: RECHARGE_PACKAGES })
+      const user = getPublicAccount({ token })
+      sendJson(res, 200, { ok: true, user, ledger: getLedgerForUser(user.id), packages: RECHARGE_PACKAGES })
       return
     }
 
@@ -468,8 +481,7 @@ export async function handleAuthBillingRequest(req, res, env = process.env) {
 
     if (req.method === 'POST' && url.pathname === '/api/billing/recharge') {
       const body = await readJson(req)
-      const result = rechargeAccount({ store, token: authToken(req), packageId: body.packageId })
-      saveStore(store)
+      const result = rechargeAccount({ token: authToken(req), packageId: body.packageId })
       sendJson(res, 200, { ...result, packages: RECHARGE_PACKAGES })
       return
     }

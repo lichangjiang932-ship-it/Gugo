@@ -346,6 +346,62 @@ function reducer(state, action) {
       return { ...state, skillConfigs: {} }
     }
 
+    case 'APPEND_TO_LAST_MESSAGE': {
+      if (!state.activeSessionId) return state
+      const delta = action.payload ?? ''
+      return {
+        ...state,
+        sessions: state.sessions.map((s) => {
+          if (s.id !== state.activeSessionId || s.messages.length === 0) return s
+          const msgs = [...s.messages]
+          const last = msgs[msgs.length - 1]
+          if (last.role !== 'assistant') return s
+          msgs[msgs.length - 1] = { ...last, content: last.content + delta }
+          return { ...s, messages: msgs, updatedAt: Date.now() }
+        }),
+      }
+    }
+
+    case 'UPDATE_LAST_MESSAGE_META': {
+      if (!state.activeSessionId) return state
+      const meta = action.payload ?? {}
+      return {
+        ...state,
+        sessions: state.sessions.map((s) => {
+          if (s.id !== state.activeSessionId || s.messages.length === 0) return s
+          const msgs = [...s.messages]
+          const last = msgs[msgs.length - 1]
+          if (last.role !== 'assistant') return s
+          msgs[msgs.length - 1] = { ...last, meta: { ...last.meta, ...meta } }
+          return { ...s, messages: msgs, updatedAt: Date.now() }
+        }),
+      }
+    }
+
+    case 'UPDATE_SESSION_TITLE': {
+      if (!state.activeSessionId) return state
+      const title = action.payload ?? '新对话'
+      return {
+        ...state,
+        sessions: state.sessions.map((s) =>
+          s.id === state.activeSessionId ? { ...s, title, updatedAt: Date.now() } : s
+        ),
+      }
+    }
+
+    case 'TRUNCATE_MESSAGES': {
+      if (!state.activeSessionId) return state
+      const keepCount = action.payload ?? 0
+      return {
+        ...state,
+        sessions: state.sessions.map((s) =>
+          s.id === state.activeSessionId
+            ? { ...s, messages: s.messages.slice(0, keepCount), updatedAt: Date.now() }
+            : s
+        ),
+      }
+    }
+
     default:
       return state
   }

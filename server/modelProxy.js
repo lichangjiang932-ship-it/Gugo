@@ -7,8 +7,6 @@ import {
   getMailDiagnostics,
   getPublicAccount,
   loadBillingConfig,
-  loadStore,
-  saveStore,
 } from './billingAuth.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
@@ -193,7 +191,7 @@ export function normalizeOpenAICompatibleUrl(rawUrl = '') {
   return `${trimmed}/chat/completions`
 }
 
-export function buildOpenAICompatibleRequest({ config, messages }) {
+export function buildOpenAICompatibleRequest({ config, messages, stream = false }) {
   const model = config?.modelName
   if (!model) throw new Error('请输入模型名称。')
   if (!Array.isArray(messages) || messages.length === 0) {
@@ -213,6 +211,7 @@ export function buildOpenAICompatibleRequest({ config, messages }) {
         messages,
         temperature: config?.temperature ?? 0.7,
         max_tokens: config?.maxTokens || 4096,
+        stream,
       }),
     },
   }
@@ -254,33 +253,48 @@ function sendJson(res, statusCode, body) {
   res.end(JSON.stringify(body))
 }
 
-async function callOpenAICompatible({ config, messages, fetchImpl = fetch }) {
-  const { url, init } = buildOpenAICompatibleRequest({ config, messages })
+async function* streamOpenAICompatible({ config, messages, fetchImpl = fetch }) {
+  const { url, init } = buildOpenAICompatibleRequest({ config, messages, stream: true })
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 60000)
+  const timeout = setTimeout(() => controller.abort(), 120000)
 
   try {
     const response = await fetchImpl(url, { ...init, signal: controller.signal })
-    const text = await response.text()
-    let data = null
-    try {
-      data = text ? JSON.parse(text) : null
-    } catch {
-      data = { raw: text }
-    }
-
     if (!response.ok) {
-      const message =
-        data?.error?.message ||
-        data?.message ||
-        text.slice(0, 240) ||
-        response.statusText
+      const text = await response.text()
+      let data = null
+      try { data = text ? JSON.parse(text) : null } catch { data = { raw: text } }
+      const message = data?.error?.message || data?.message || text.slice(0, 240) || response.statusText
       const error = new Error(message)
       error.status = response.status
       throw error
     }
 
-    return parseOpenAICompatibleResponse(data)
+    const reader = response.body?.getReader()
+    if (!reader) throw new Error('无法读取流式响应')
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed.startsWith('data: ')) continue
+        const payload = trimmed.slice(6)
+        if (payload === '[DONE]') return
+        try {
+          const chunk = JSON.parse(payload)
+          const delta = chunk?.choices?.[0]?.delta?.content || chunk?.choices?.[0]?.text || ''
+          if (delta) yield delta
+        } catch {
+          // 忽略无法解析的行
+        }
+      }
+    }
   } finally {
     clearTimeout(timeout)
   }
@@ -310,6 +324,7 @@ export async function handleModelProxyRequest(req, res) {
     }
 
     const testMode = req.url?.startsWith('/api/model/test')
+    const useStream = body.stream === true
     const messages = testMode
       ? [{ role: 'user', content: 'Reply with only: pong' }]
       : body.messages
@@ -320,13 +335,11 @@ export async function handleModelProxyRequest(req, res) {
     })
     const requestConfig = { ...config, modelName: selectedModel }
 
-    let store = null
     let token = ''
     let estimatedCost = 0
     if (!testMode) {
       token = authToken(req)
-      store = loadStore()
-      const account = getPublicAccount({ store, token })
+      const account = getPublicAccount({ token })
       const billingConfig = loadBillingConfig(getRuntimeEnv())
       estimatedCost = estimateChatCost({
         modelName: selectedModel,
@@ -344,17 +357,58 @@ export async function handleModelProxyRequest(req, res) {
       }
     }
 
+    if (useStream && !testMode) {
+      // SSE 流式响应
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+      })
+
+      const started = Date.now()
+      let fullText = ''
+      try {
+        for await (const delta of streamOpenAICompatible({ config: requestConfig, messages })) {
+          fullText += delta
+          res.write(`data: ${JSON.stringify({ ok: true, delta, latency: Date.now() - started })}\n\n`)
+        }
+        res.write(`data: ${JSON.stringify({ ok: true, done: true, latency: Date.now() - started })}\n\n`)
+
+        // 扣费
+        chargeForModelUse({ token, modelName: selectedModel, cost: estimatedCost })
+      } catch (err) {
+        res.write(`data: ${JSON.stringify({ ok: false, error: formatProxyError(err) })}\n\n`)
+      }
+      res.end()
+      return
+    }
+
+    // 非流式响应（测试模式或前端未启用 stream）
     const started = Date.now()
-    const reply = await callOpenAICompatible({ config: requestConfig, messages })
+    const reply = await (async () => {
+      const { url, init } = buildOpenAICompatibleRequest({ config: requestConfig, messages })
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 60000)
+      try {
+        const response = await fetch(url, { ...init, signal: controller.signal })
+        const text = await response.text()
+        let data = null
+        try { data = text ? JSON.parse(text) : null } catch { data = { raw: text } }
+        if (!response.ok) {
+          const message = data?.error?.message || data?.message || text.slice(0, 240) || response.statusText
+          const error = new Error(message)
+          error.status = response.status
+          throw error
+        }
+        return parseOpenAICompatibleResponse(data)
+      } finally {
+        clearTimeout(timeout)
+      }
+    })()
+
     let billing = null
     if (!testMode) {
-      billing = chargeForModelUse({
-        store,
-        token,
-        modelName: selectedModel,
-        cost: estimatedCost,
-      })
-      saveStore(store)
+      billing = chargeForModelUse({ token, modelName: selectedModel, cost: estimatedCost })
     }
     sendJson(res, 200, {
       ok: true,

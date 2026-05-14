@@ -43,6 +43,7 @@ test('builds an OpenAI compatible request with auth and model options', () => {
     messages: [{ role: 'user', content: 'hello' }],
     temperature: 0.2,
     max_tokens: 256,
+    stream: false,
   })
 })
 
