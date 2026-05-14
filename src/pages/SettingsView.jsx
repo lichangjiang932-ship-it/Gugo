@@ -22,6 +22,11 @@ import LeftRail from '../components/LeftRail'
 import { useAppContext } from '../store/AppContext'
 import { clearPersistedState } from '../store/AppContext.jsx'
 import { getAccount, getAuthToken, recharge, sendLoginCode, setAuthToken, verifyLoginCode } from '../lib/accountClient.js'
+import {
+  LOGIN_CODE_COUNTDOWN_SECONDS,
+  formatLoginCodeCountdownLabel,
+  shouldDisableLoginCodeButton,
+} from '../lib/loginCountdown.js'
 import { getSystemDiagnostics, testModelEndpoint } from '../lib/modelClient.js'
 
 const SETTINGS_NAV = ['账户', '权限中心', '外观', '快捷键', '数据 & 导出']
@@ -78,6 +83,7 @@ export default function SettingsView() {
   const [account, setAccount] = useState(null)
   const [accountMessage, setAccountMessage] = useState('')
   const [accountLoading, setAccountLoading] = useState(false)
+  const [loginCodeCountdown, setLoginCodeCountdown] = useState(0)
   const [dataMessage, setDataMessage] = useState('')
   const [storageBytes, setStorageBytes] = useState(() => getLocalStorageBytes())
   const [diagnostics, setDiagnostics] = useState(null)
@@ -110,6 +116,14 @@ export default function SettingsView() {
   useEffect(() => {
     refreshStorage()
   }, [state.sessions.length, state.history.length])
+
+  useEffect(() => {
+    if (loginCodeCountdown <= 0) return undefined
+    const timer = window.setInterval(() => {
+      setLoginCodeCountdown((current) => Math.max(0, current - 1))
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [loginCodeCountdown])
 
   const refreshAccount = async () => {
     setAccountLoading(true)
@@ -254,6 +268,7 @@ export default function SettingsView() {
       setAccountMessage('')
       try {
         const result = await sendLoginCode(loginEmail)
+        setLoginCodeCountdown(LOGIN_CODE_COUNTDOWN_SECONDS)
         setAccountMessage(result.devCode ? `验证码已生成：${result.devCode}` : '验证码已发送，请检查邮箱。')
       } catch (err) {
         setAccountMessage(err.message)
@@ -386,10 +401,14 @@ export default function SettingsView() {
                 />
               </label>
               <button
-                disabled={accountLoading || !loginEmail.trim()}
+                disabled={shouldDisableLoginCodeButton({
+                  accountLoading,
+                  loginEmail,
+                  countdown: loginCodeCountdown,
+                })}
                 className="h-9 px-4 bg-ink text-paper rounded-md text-sm hover:bg-ink-soft transition-colors self-start disabled:opacity-50"
               >
-                发送验证码
+                {formatLoginCodeCountdownLabel(loginCodeCountdown)}
               </button>
             </form>
             <form onSubmit={handleVerify} className="flex flex-col gap-3">
