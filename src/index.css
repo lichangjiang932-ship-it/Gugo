@@ -1,0 +1,190 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root,
+html[data-theme="light"] {
+  /* Full-color variables for direct CSS / inline-style use */
+  --color-paper: #F4EFE5;
+  --color-paper-2: #EAE2D2;
+  --color-paper-dark: #1a1510;
+  --color-ink: #2A1F17;
+  --color-ink-soft: #5E4F40;
+  --color-ink-fade: #8A7B68;
+  --color-ink-ghost: #B8AC97;
+  --color-skel: #DBD2BE;
+  --color-skel-2: #C9BFA8;
+  --color-ember: #E86A3C;
+  --color-ember-soft: rgba(232, 106, 60, 0.18);
+  --color-ember-line: rgba(232, 106, 60, 0.55);
+  --color-ember-glow: rgba(232, 106, 60, 0.10);
+  --color-cyan: #2E8FA3;
+  --color-cyan-soft: rgba(46, 143, 163, 0.14);
+
+  /* RGB-channel variables for Tailwind opacity modifiers */
+  --color-paper-rgb: 244 239 229;
+  --color-paper-2-rgb: 234 226 210;
+  --color-paper-dark-rgb: 26 21 16;
+  --color-ink-rgb: 42 31 23;
+  --color-ink-soft-rgb: 94 79 64;
+  --color-ink-fade-rgb: 138 123 104;
+  --color-ink-ghost-rgb: 184 172 151;
+  --color-skel-rgb: 219 210 190;
+  --color-skel-2-rgb: 201 191 168;
+  --color-ember-rgb: 232 106 60;
+  --color-cyan-rgb: 46 143 163;
+}
+
+html[data-theme="dark"] {
+  --color-paper: #1a1510;
+  --color-paper-2: #2a2318;
+  --color-paper-dark: #F4EFE5;
+  --color-ink: #f4efe5;
+  --color-ink-soft: #c9bfa8;
+  --color-ink-fade: #8a7b68;
+  --color-ink-ghost: #6a5f50;
+  --color-skel: #3a3228;
+  --color-skel-2: #4a4238;
+  --color-ember: #E86A3C;
+  --color-ember-soft: rgba(232, 106, 60, 0.18);
+  --color-ember-line: rgba(232, 106, 60, 0.55);
+  --color-ember-glow: rgba(232, 106, 60, 0.10);
+  --color-cyan: #2E8FA3;
+  --color-cyan-soft: rgba(46, 143, 163, 0.14);
+
+  --color-paper-rgb: 26 21 16;
+  --color-paper-2-rgb: 42 35 24;
+  --color-paper-dark-rgb: 244 239 229;
+  --color-ink-rgb: 244 239 229;
+  --color-ink-soft-rgb: 201 191 168;
+  --color-ink-fade-rgb: 138 123 104;
+  --color-ink-ghost-rgb: 106 95 80;
+  --color-skel-rgb: 58 50 40;
+  --color-skel-2-rgb: 74 66 56;
+  --color-ember-rgb: 232 106 60;
+  --color-cyan-rgb: 46 143 163;
+}
+
+@layer base {
+  html, body, #root {
+    height: 100%;
+    margin: 0;
+    background: var(--color-paper);
+    color: var(--color-ink);
+    font-family: "Inter", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  #root {
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+    text-align: left;
+    border: none;
+    min-height: 100svh;
+  }
+}
+
+@layer utilities {
+  /* Custom animations */
+  @keyframes pulse-ember {
+    0%, 100% { box-shadow: 0 0 0 0 rgb(var(--color-ember-rgb) / 0.25); }
+    50% { box-shadow: 0 0 0 8px rgb(var(--color-ember-rgb) / 0); }
+  }
+
+  @keyframes pulse-line {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+  }
+
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+
+  @keyframes float-up {
+    0% { transform: translateY(12px); opacity: 0; }
+    100% { transform: translateY(0); opacity: 1; }
+  }
+
+  @keyframes breathe {
+    0%, 100% { transform: scale(1); opacity: 0.6; }
+    50% { transform: scale(1.05); opacity: 0.9; }
+  }
+
+  .animate-pulse-ember {
+    animation: pulse-ember 1.4s ease-in-out infinite;
+  }
+
+  .animate-pulse-line {
+    animation: pulse-line 1.6s ease-in-out infinite;
+  }
+
+  .animate-shimmer {
+    background: linear-gradient(90deg, transparent 0%, rgb(var(--color-ember-rgb) / 0.15) 50%, transparent 100%);
+    background-size: 200% 100%;
+    animation: shimmer 2s ease-in-out infinite;
+  }
+
+  .animate-float-up {
+    animation: float-up 0.4s ease-out forwards;
+  }
+
+  .animate-breathe {
+    animation: breathe 3s ease-in-out infinite;
+  }
+
+  /* Dot grid pattern */
+  .dot-grid {
+    background-image: radial-gradient(var(--color-ink-ghost) 1px, transparent 1.4px);
+    background-size: 14px 14px;
+  }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-ink-ghost);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-ink-fade);
+}
+
+/* Animations disabled */
+html[data-animations="false"] *,
+html[data-animations="false"] *::before,
+html[data-animations="false"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+
+/* Density */
+html[data-density="compact"] {
+  --density-padding: 0.5rem;
+  --density-gap: 0.5rem;
+}
+
+html[data-density="comfortable"] {
+  --density-padding: 1rem;
+  --density-gap: 0.75rem;
+}
+
+html[data-density="loose"] {
+  --density-padding: 1.5rem;
+  --density-gap: 1rem;
+}
+
+/* Selection */
+::selection {
+  background: var(--color-ember-soft);
+  color: var(--color-ink);
+}
