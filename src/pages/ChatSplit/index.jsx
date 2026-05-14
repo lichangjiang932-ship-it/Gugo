@@ -168,7 +168,15 @@ export default function ChatSplit() {
         setAttachments([])
         dispatch({
           type: 'UPDATE_LAST_MESSAGE_META',
-          payload: { type: 'model_reply', modelName: modelName || 'backend-default', creditsCharged: 0, latency },
+          payload: {
+            type: 'model_reply',
+            modelName: modelName || 'backend-default',
+            creditsCharged: 0,
+            latency,
+            skillId,
+            artifactType: skillId === 'ppt' ? 'pptx' : undefined,
+            artifactTitle: skillId === 'ppt' ? taskName : undefined,
+          },
         })
         dispatch({
           type: 'ADD_HISTORY',

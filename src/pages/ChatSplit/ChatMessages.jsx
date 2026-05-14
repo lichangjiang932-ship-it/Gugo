@@ -1,6 +1,13 @@
+import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, FileText, BarChart3, LayoutList } from 'lucide-react'
+import { X, FileText, BarChart3, LayoutList, Download } from 'lucide-react'
 import MarkdownRenderer from '../../components/MarkdownRenderer.jsx'
+import {
+  buildPresentationFilename,
+  downloadPptxFromMarkdown,
+  parseMarkdownSlides,
+  shouldOfferPptxExport,
+} from '../../lib/presentationExport.js'
 
 const EXAMPLE_QUESTIONS = [
   { icon: FileText, label: '生成周报' },
@@ -29,6 +36,23 @@ export default function ChatMessages({
   onNavigatePermissions,
 }) {
   const hasMessages = messages.length > 0
+  const [exportingId, setExportingId] = useState('')
+
+  const handleDownloadPptx = async (msg) => {
+    setExportingId(msg.id)
+    try {
+      const slides = parseMarkdownSlides(msg.content)
+      const title = slides[0]?.title || msg.meta?.artifactTitle || 'presentation'
+      await downloadPptxFromMarkdown(msg.content, {
+        title,
+        filename: buildPresentationFilename(title),
+      })
+    } catch (err) {
+      window.alert?.(err.message || 'PPTX 导出失败')
+    } finally {
+      setExportingId('')
+    }
+  }
 
   return (
     <div className="flex-1 overflow-y-auto px-7 py-6">
@@ -118,6 +142,17 @@ export default function ChatMessages({
                       <span>模型：{msg.meta.modelName}</span>
                       {msg.meta.latency !== undefined && <span>延迟：{msg.meta.latency} ms</span>}
                       <div className="flex-1" />
+                      {shouldOfferPptxExport(msg.meta) && (
+                        <button
+                          onClick={() => handleDownloadPptx(msg)}
+                          disabled={exportingId === msg.id}
+                          className="inline-flex items-center gap-1 text-ember hover:text-ink transition-colors disabled:opacity-50"
+                          title="导出为 PowerPoint 文件"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          {exportingId === msg.id ? '生成中' : '下载 PPTX'}
+                        </button>
+                      )}
                       <button
                         onClick={() => navigator.clipboard?.writeText(msg.content)}
                         className="text-ink-fade hover:text-ink transition-colors"
