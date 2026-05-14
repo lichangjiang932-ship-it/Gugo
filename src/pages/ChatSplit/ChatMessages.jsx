@@ -1,5 +1,5 @@
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, FileText, BarChart3 } from 'lucide-react'
+import { X, FileText, BarChart3, LayoutList } from 'lucide-react'
 import MarkdownRenderer from '../../components/MarkdownRenderer.jsx'
 
 const EXAMPLE_QUESTIONS = [
@@ -22,7 +22,6 @@ export default function ChatMessages({
   showContextPanel,
   setShowContextPanel,
   selectedModel,
-  isGenerating,
   onExampleClick,
   onEditMessage,
   onPermAllow,

@@ -366,10 +366,8 @@ export async function handleModelProxyRequest(req, res) {
       })
 
       const started = Date.now()
-      let fullText = ''
       try {
         for await (const delta of streamOpenAICompatible({ config: requestConfig, messages })) {
-          fullText += delta
           res.write(`data: ${JSON.stringify({ ok: true, delta, latency: Date.now() - started })}\n\n`)
         }
         res.write(`data: ${JSON.stringify({ ok: true, done: true, latency: Date.now() - started })}\n\n`)

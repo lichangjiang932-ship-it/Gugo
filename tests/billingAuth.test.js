@@ -16,10 +16,9 @@ import {
 
 function cleanDb() {
   const db = getDb()
-  try { db.prepare('DELETE FROM ledger').run() } catch {}
-  try { db.prepare('DELETE FROM sessions').run() } catch {}
-  try { db.prepare('DELETE FROM login_codes').run() } catch {}
-  try { db.prepare('DELETE FROM users').run() } catch {}
+  for (const table of ['ledger', 'sessions', 'login_codes', 'users']) {
+    db.prepare(`DELETE FROM ${table}`).run()
+  }
 }
 
 import { getDb } from '../server/db.js'

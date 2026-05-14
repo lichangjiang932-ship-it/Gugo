@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useRef } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   Paperclip,
@@ -30,13 +30,10 @@ export default function ChatComposer({
   selectedIndex,
   setSelectedIndex,
   voiceState,
-  setVoiceState,
   showContextPanel,
-  setShowContextPanel,
   isGenerating,
   onAbort,
   messages,
-  onAttachmentClick,
   onFileChange,
   onVoiceClick,
   onContextClick,

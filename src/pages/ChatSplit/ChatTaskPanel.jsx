@@ -15,7 +15,6 @@ export default function ChatTaskPanel({
   skillChain,
   onPauseTask,
   onStopTask,
-  onNavigateTask,
   onNavigateDetail,
 }) {
   const [tasksExpanded, setTasksExpanded] = useState(true)

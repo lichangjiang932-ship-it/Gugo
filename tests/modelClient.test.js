@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 
 import {
   callModelThroughProxy,
+  callModelThroughProxyStream,
   getModelStatus,
   getSystemDiagnostics,
   testModelEndpoint,
@@ -96,4 +97,31 @@ test('proxy failures throw readable errors from response payload', async () => {
       }),
     /端点不可达/
   )
+})
+
+test('streaming model calls surface backend SSE errors', async () => {
+  const fetchImpl = async () =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('data: {"ok":false,"error":"模型服务不可用"}\n\n'))
+          controller.close()
+        },
+      }),
+      {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      }
+    )
+
+  const stream = callModelThroughProxyStream({
+    messages: [{ role: 'user', content: 'hello' }],
+    fetchImpl,
+  })
+
+  await assert.rejects(async () => {
+    for await (const delta of stream) {
+      assert.fail(`unexpected token delta before backend error: ${delta}`)
+    }
+  }, /模型服务不可用/)
 })

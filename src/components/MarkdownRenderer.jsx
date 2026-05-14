@@ -1,4 +1,3 @@
-import React from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
@@ -42,19 +41,19 @@ export default function MarkdownRenderer({ children, className = '' }) {
         rehypePlugins={[rehypeHighlight]}
         components={{
           // 自定义链接：强制新标签页打开 + noopener
-          a: ({ node, href, children, ...props }) => (
+          a: ({ href, children, ...props }) => (
             <a href={href} target="_blank" rel="noopener noreferrer" {...props}>
               {children}
             </a>
           ),
           // 代码块容器
-          pre: ({ node, children, ...props }) => (
+          pre: ({ children, ...props }) => (
             <pre className="bg-paper-2 border border-ink-fade/30 rounded-md p-3 overflow-x-auto my-2 text-sm" {...props}>
               {children}
             </pre>
           ),
           // 内联代码
-          code: ({ node, inline, className, children, ...props }) => {
+          code: ({ inline, className, children, ...props }) => {
             if (inline) {
               return (
                 <code className="bg-paper-2 px-1 py-0.5 rounded text-xs font-mono text-ember" {...props}>
@@ -69,23 +68,23 @@ export default function MarkdownRenderer({ children, className = '' }) {
             )
           },
           // 引用块
-          blockquote: ({ node, children, ...props }) => (
+          blockquote: ({ children, ...props }) => (
             <blockquote className="border-l-2 border-ember pl-3 py-1 my-2 text-ink-soft italic" {...props}>
               {children}
             </blockquote>
           ),
           // 表格
-          table: ({ node, children, ...props }) => (
+          table: ({ children, ...props }) => (
             <table className="w-full text-sm border-collapse my-2" {...props}>
               {children}
             </table>
           ),
-          th: ({ node, children, ...props }) => (
+          th: ({ children, ...props }) => (
             <th className="border border-ink-fade/30 px-2 py-1 bg-paper-2 text-left font-semibold" {...props}>
               {children}
             </th>
           ),
-          td: ({ node, children, ...props }) => (
+          td: ({ children, ...props }) => (
             <td className="border border-ink-fade/30 px-2 py-1" {...props}>
               {children}
             </td>

@@ -1,5 +1,4 @@
 import Database from 'better-sqlite3'
-import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -180,10 +179,10 @@ export function deleteExpiredCodes(now = Date.now()) {
 
 /* ── Ledger ── */
 
-export function addLedgerEntry({ id, userId, type, packageId, modelName, credits, balance, now = Date.now() }) {
+export function addLedgerEntry({ id, userId, type, packageId, modelName, credits, balance, now = Date.now(), ignoreDuplicate = false }) {
   const db = getDb()
   const stmt = db.prepare(
-    'INSERT INTO ledger (id, user_id, type, package_id, model_name, credits, balance, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    `${ignoreDuplicate ? 'INSERT OR IGNORE' : 'INSERT'} INTO ledger (id, user_id, type, package_id, model_name, credits, balance, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   )
   stmt.run(id, userId, type, packageId || null, modelName || null, credits, balance, now)
   return getLedgerForUser(userId)
@@ -258,6 +257,7 @@ export function migrateFromJson(store) {
         credits: entry.credits,
         balance: entry.balance,
         now: entry.createdAt || now,
+        ignoreDuplicate: true,
       })
     }
   })()

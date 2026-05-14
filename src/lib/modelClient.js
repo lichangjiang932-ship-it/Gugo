@@ -87,15 +87,16 @@ export async function* callModelThroughProxyStream({ messages, modelName, fetchI
         const trimmed = line.trim()
         if (!trimmed.startsWith('data: ')) continue
         const payload = trimmed.slice(6)
+        let chunk
         try {
-          const chunk = JSON.parse(payload)
-          if (chunk.ok === false) throw new Error(chunk.error || '流式响应错误')
-          if (chunk.done) return
-          if (chunk.delta !== undefined) yield chunk.delta
-        } catch (err) {
-          if (err.message === '流式响应错误') throw err
-          // 忽略无法解析的行
+          chunk = JSON.parse(payload)
+        } catch {
+          // Ignore non-JSON keepalive/debug lines without hiding backend error events.
+          continue
         }
+        if (chunk.ok === false) throw new Error(chunk.error || '流式响应错误')
+        if (chunk.done) return
+        if (chunk.delta !== undefined) yield chunk.delta
       }
     }
   } finally {

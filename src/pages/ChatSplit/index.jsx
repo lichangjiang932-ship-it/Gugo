@@ -14,6 +14,7 @@ import ChatTaskPanel from './ChatTaskPanel'
 
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024
 const MAX_TEXT_BYTES = 256 * 1024
+const EMPTY_MESSAGES = []
 
 function downloadJson(filename, data) {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
@@ -57,7 +58,7 @@ export default function ChatSplit() {
   const recognitionRef = useRef(null)
 
   const activeSession = state.sessions.find((s) => s.id === state.activeSessionId)
-  const messages = activeSession?.messages ?? []
+  const messages = activeSession?.messages ?? EMPTY_MESSAGES
   const tasks = state.tasks
   const activeTask = tasks.find((t) => t.status === 'running') || tasks[0]
   const skillChain = activeTask?.perms || []
@@ -85,9 +86,12 @@ export default function ChatSplit() {
 
   useEffect(() => {
     if (state.draftInput) {
-      setInput(state.draftInput)
+      const nextInput = state.draftInput
+      const timer = window.setTimeout(() => setInput(nextInput), 0)
       dispatch({ type: 'SET_DRAFT_INPUT', payload: '' })
+      return () => window.clearTimeout(timer)
     }
+    return undefined
   }, [state.draftInput, dispatch])
 
   useEffect(() => {
@@ -173,7 +177,11 @@ export default function ChatSplit() {
 
         const notifyPerm = state.permissions.find((p) => p.id === 'notify')
         if (notifyPerm?.enabled && 'Notification' in window && Notification.permission === 'granted') {
-          try { new Notification('模型回复完成', { body: taskName, icon: '/favicon.svg' }) } catch {}
+          try {
+            new Notification('模型回复完成', { body: taskName, icon: '/favicon.svg' })
+          } catch {
+            // Notification delivery can be blocked by browser/user settings.
+          }
         }
       } catch (err) {
         setIsGenerating(false)

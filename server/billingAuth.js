@@ -5,20 +5,16 @@ import path from 'node:path'
 import tls from 'node:tls'
 
 import {
-  getUserByEmail,
   getUserById,
   createUser,
   updateUserCredits,
   getSessionByToken,
   createSession,
-  deleteSession,
-  deleteExpiredSessions,
   createLoginCode,
   getLoginCode,
   incrementLoginAttempts,
   deleteLoginCode,
   deleteExpiredCodes,
-  deleteExpiredRates,
   addLedgerEntry,
   getLedgerForUser,
   migrateFromJson,
@@ -53,7 +49,13 @@ function maybeMigrateLegacy() {
   }
 }
 
-maybeMigrateLegacy()
+let migrationChecked = false
+
+function ensureLegacyMigration() {
+  if (migrationChecked) return
+  migrationChecked = true
+  maybeMigrateLegacy()
+}
 
 /* ── 工具函数 ── */
 
@@ -100,6 +102,7 @@ function checkCodeRate(clientId) {
 /* ── 核心逻辑 ── */
 
 export function issueEmailCode({ email, now = Date.now(), code }) {
+  ensureLegacyMigration()
   const normalized = normalizeEmail(email)
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(normalized)) {
     throw new Error('请输入有效邮箱地址')
@@ -111,6 +114,7 @@ export function issueEmailCode({ email, now = Date.now(), code }) {
 }
 
 export function verifyEmailCode({ email, code, now = Date.now() }) {
+  ensureLegacyMigration()
   const normalized = normalizeEmail(email)
   const record = getLoginCode(normalized)
   if (!record) throw new Error('验证码不存在或已过期')
@@ -144,12 +148,14 @@ export function verifyEmailCode({ email, code, now = Date.now() }) {
 }
 
 export function getPublicAccount({ token }) {
+  ensureLegacyMigration()
   const user = getUserByToken(token)
   if (!user) throw new Error('请先登录')
   return publicUser(user)
 }
 
 export function rechargeAccount({ token, packageId, now = Date.now() }) {
+  ensureLegacyMigration()
   const user = getUserByToken(token)
   if (!user) throw new Error('请先登录')
   const pack = RECHARGE_PACKAGES.find((item) => item.id === packageId)
@@ -173,6 +179,7 @@ export function rechargeAccount({ token, packageId, now = Date.now() }) {
 }
 
 export function chargeForModelUse({ token, modelName, cost, now = Date.now() }) {
+  ensureLegacyMigration()
   const user = getUserByToken(token)
   if (!user) throw new Error('请先登录')
   if ((user.credits || 0) < cost) {
@@ -444,6 +451,7 @@ function clientId(req) {
 }
 
 export async function handleAuthBillingRequest(req, res, env = process.env) {
+  ensureLegacyMigration()
   try {
     const url = new URL(req.url, 'http://localhost')
 
