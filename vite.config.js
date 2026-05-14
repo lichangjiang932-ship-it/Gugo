@@ -2,6 +2,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { getRuntimeEnv, modelProxyPlugin } from './server/modelProxy.js'
 import { handleAuthBillingRequest } from './server/billingAuth.js'
+import { toolProxyPlugin } from './server/toolProxy.js'
 
 function authBillingPlugin() {
   return {
@@ -24,6 +25,6 @@ function authBillingPlugin() {
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), authBillingPlugin(), modelProxyPlugin()],
+  plugins: [react(), authBillingPlugin(), modelProxyPlugin(), toolProxyPlugin()],
   base: './',
 })
