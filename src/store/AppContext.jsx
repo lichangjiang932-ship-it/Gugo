@@ -1,5 +1,6 @@
 import { createContext, useContext, useReducer, useEffect } from 'react'
 import { PERMISSIONS } from '../data.js'
+import { persistWithDegradation } from './persistDegradation.js'
 
 const STORAGE_KEY = 'your-model-atelier:state:v1'
 
@@ -458,17 +459,16 @@ export function AppProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, initialState)
 
   // 持久化：state 变化时把白名单字段写回 localStorage
+  // 防容量炸弹:抓到 QuotaExceededError 走逐步降级策略,见 persistWithDegradation.
   useEffect(() => {
     if (typeof window === 'undefined') return
-    try {
-      const toSave = {}
-      for (const key of PERSIST_KEYS) {
-        toSave[key] = state[key]
-      }
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave))
-    } catch (err) {
-      // QuotaExceeded 等异常静默处理
-      console.warn('[AppContext] failed to persist state:', err)
+    const snapshot = {}
+    for (const key of PERSIST_KEYS) snapshot[key] = state[key]
+    const result = persistWithDegradation(snapshot, (k, v) => window.localStorage.setItem(k, v))
+    if (!result.ok) {
+      console.error('[AppContext] localStorage 完全不可写:', result.error)
+    } else if (result.level !== 'full') {
+      console.warn(`[AppContext] localStorage 容量告急,已降级到: ${result.level}`)
     }
   }, [state])
 

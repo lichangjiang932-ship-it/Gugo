@@ -163,6 +163,11 @@ export default function ChatSplit() {
           const tools = buildToolSpecs(enabledToolNames)
           const MAX_TOOL_ROUNDS = 5
           let chunkCount = 0
+          // 工具调用每轮都会真的请求一次模型,后端每轮都会扣费.把每轮 billing.creditsCharged
+          // 累加上来,UI 能看到实际花了多少积分,余额取最后一次后端返回的快照.
+          let totalCreditsCharged = 0
+          let latestCreditsBalance = null
+          let billingRoundError = null
 
           for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
             let pendingToolCalls = null
@@ -182,6 +187,14 @@ export default function ChatSplit() {
                 }
               } else if (event.type === 'tool_calls') {
                 pendingToolCalls = event.toolCalls
+              } else if (event.type === 'billing') {
+                if (typeof event.billing?.creditsCharged === 'number') {
+                  totalCreditsCharged += event.billing.creditsCharged
+                }
+                if (typeof event.billing?.credits === 'number') {
+                  latestCreditsBalance = event.billing.credits
+                }
+                if (event.billing?.error) billingRoundError = event.billing.error
               }
             }
 
@@ -249,7 +262,9 @@ export default function ChatSplit() {
           payload: {
             type: 'model_reply',
             modelName: modelName || 'backend-default',
-            creditsCharged: 0,
+            creditsCharged: totalCreditsCharged,
+            creditsBalance: latestCreditsBalance,
+            billingError: billingRoundError,
             latency,
             skillId,
             artifactType,
