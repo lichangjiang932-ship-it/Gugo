@@ -91,32 +91,27 @@ function router(req, res) {
     req.url?.startsWith('/api/account/') ||
     req.url?.startsWith('/api/billing/')
   ) {
-    handleAuthBillingRequest(req, res, getRuntimeEnv())
-    return
+    return handleAuthBillingRequest(req, res, getRuntimeEnv())
   }
 
   // 模型状态
   if (req.url?.startsWith('/api/model/status')) {
-    handleModelStatusRequest(req, res)
-    return
+    return handleModelStatusRequest(req, res)
   }
 
   // 系统诊断
   if (req.url?.startsWith('/api/system/diagnostics')) {
-    handleSystemDiagnosticsRequest(req, res)
-    return
+    return handleSystemDiagnosticsRequest(req, res)
   }
 
   // 模型代理（chat / test）
   if (req.url?.startsWith('/api/model/test') || req.url?.startsWith('/api/model/chat')) {
-    handleModelProxyRequest(req, res)
-    return
+    return handleModelProxyRequest(req, res)
   }
 
   // 工具代理(web 搜索 / URL 抓取)
   if (req.url?.startsWith('/api/tools/')) {
-    handleToolProxyRequest(req, res)
-    return
+    return handleToolProxyRequest(req, res)
   }
 
   // 静态文件
@@ -128,11 +123,11 @@ export function createAppServer() {
 }
 
 function gracefulShutdown(server) {
-  console.log('\n[server] 收到关闭信号，正在优雅退出...')
+  if (process.env.NODE_ENV !== 'production') console.log('\n[server] 收到关闭信号，正在优雅退出...')
   server.close(() => {
-    console.log('[server] HTTP server 已关闭')
+    if (process.env.NODE_ENV !== 'production') console.log('[server] HTTP server 已关闭')
     closeDb()
-    console.log('[server] 数据库连接已关闭')
+    if (process.env.NODE_ENV !== 'production') console.log('[server] 数据库连接已关闭')
     process.exit(0)
   })
 
@@ -153,7 +148,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const host = env.SERVER_HOST || '127.0.0.1'
   const port = Number(env.SERVER_PORT || 5173)
   const server = createAppServer().listen(port, host, () => {
-    console.log(`Your Model Atelier running at http://${host}:${port}/`)
+    if (process.env.NODE_ENV !== 'production') console.log(`Your Model Atelier running at http://${host}:${port}/`)
   })
 
   // ★ #34: 进程级兜底 — 一个未捕获的异常不应该让服务静默退出

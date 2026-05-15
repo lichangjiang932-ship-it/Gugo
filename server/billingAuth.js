@@ -51,9 +51,9 @@ function maybeMigrateLegacy() {
     migrateFromJson(store)
     fs.writeFileSync(migratedFlag, JSON.stringify({ migratedAt: Date.now() }))
     // 保留原文件作为备份，不改名
-    console.log('[billingAuth] Migrated legacy JSON store to SQLite')
+    if (process.env.NODE_ENV !== 'production') console.log('[billingAuth] Migrated legacy JSON store to SQLite')
   } catch (e) {
-    console.warn('[billingAuth] Failed to migrate legacy store:', e.message)
+    if (process.env.NODE_ENV !== 'production') console.warn('[billingAuth] Failed to migrate legacy store:', e.message)
   }
 }
 
@@ -412,7 +412,8 @@ async function smtpCommand(readResponse, socket, command, expected = /^2|^3/) {
 
 export async function sendEmailCode({ env, email, code }) {
   if (!env.MAIL_SERVER || !env.MAIL_USERNAME || !env.MAIL_PASSWORD) {
-    console.log(`[auth] ${email} login code: ${code}`)
+    // 开发调试用: 如需查看验证码,取消下面注释
+  // console.log(`[auth] ${email} login code: ${code}`)
     return { sent: false, devCode: code }
   }
 

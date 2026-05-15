@@ -58,9 +58,8 @@ export function securityHeaders(req, res, next) {
     res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains')
   }
   // CSP:
-  //   · script-src 不再放 unsafe-eval (Vite 构建的产物不需要;run_js 走 Worker blob: 已显式列)
+  //   · script-src 不再放 unsafe-eval (Vite 构建的产物不需要)
   //   · 仍保留 unsafe-inline 兼容 React 内联事件;后续可改用 nonce
-  //   · worker-src blob: 让 run_js 的 Worker URL 能加载
   //   · connect-src 默认只放 self + DeepSeek;额外模型端点通过 ALLOWED_MODEL_ENDPOINTS 注入
   const extraConnect = (process.env.ALLOWED_MODEL_ENDPOINTS || '')
     .split(',').map((s) => s.trim()).filter(Boolean).join(' ')
@@ -87,7 +86,17 @@ export function securityHeaders(req, res, next) {
 
 export function errorBoundary(req, res, next) {
   try {
-    next()
+    const result = next()
+    // 捕获异步 Promise rejection
+    if (result && typeof result.catch === 'function') {
+      result.catch((err) => {
+        console.error('[ERROR]', err)
+        if (!res.headersSent) {
+          res.writeHead(500, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ error: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error' }))
+        }
+      })
+    }
   } catch (err) {
     console.error('[ERROR]', err)
     if (!res.headersSent) {
@@ -104,7 +113,7 @@ export function requestLogger(req, res, next) {
   const originalEnd = res.end.bind(res)
   res.end = (...args) => {
     const duration = Date.now() - start
-    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url} ${res.statusCode || 200} ${duration}ms`)
+    if (process.env.NODE_ENV !== 'production') console.log(`[${new Date().toISOString()}] ${req.method} ${req.url} ${res.statusCode || 200} ${duration}ms`)
     originalEnd(...args)
   }
   next()

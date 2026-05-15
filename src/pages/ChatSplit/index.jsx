@@ -342,7 +342,7 @@ export default function ChatSplit() {
           setTimeout(() => dispatch({ type: 'REMOVE_TASK', payload: taskId }), 3000)
           return
         }
-        console.error('Model call failed:', err)
+        if (import.meta.env.DEV) console.error('Model call failed:', err)
         setLastFailedPrompt(content)
         dispatch({ type: 'APPEND_TO_LAST_MESSAGE', payload: `\n\n模型调用失败：${err.message}\n\n请联系管理员检查后端 .env 中的 MODEL_BASE_URL、MODEL_NAME 和 MODEL_API_KEY。` })
         dispatch({ type: 'ADD_HISTORY', payload: { name: taskName, skill: skill?.name || '通用对话', status: HISTORY_STATUS.FAILED, detail: content.length > 60 ? `${content.slice(0, 60)}...` : content, state: `失败: ${err.message}`.slice(0, 80), date: Date.now() } })

@@ -52,7 +52,7 @@ function makeBigSnapshot({ sessionCount, msgsPerSession, msgSize }) {
     density: 'comfortable',
     animationsEnabled: true,
     skillConfigs: {},
-    toolsConfig: { web_search: false, fetch_url: false, run_js: false },
+    toolsConfig: { web_search: false, fetch_url: false },
   }
 }
 

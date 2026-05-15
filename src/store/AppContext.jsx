@@ -42,7 +42,7 @@ function createInitialState() {
     draftInput: '',
     skillConfigs: {}, // { skillId: { enabled, systemPrompt, temperature, maxTokens } }
     previewArtifact: null, // { messageId, content, preview } — 右侧 artifact 预览面板
-    toolsConfig: { web_search: false, fetch_url: false, run_js: false }, // 工具开关
+    toolsConfig: { web_search: false, fetch_url: false }, // 工具开关
     // #13 切会话保草稿:每个 sessionId → 该会话当前未发送的输入文本
     // 不放进 sessions[].draft 是为了切会话只 dispatch 一个轻动作,不动整棵 sessions 树
     sessionDrafts: {},

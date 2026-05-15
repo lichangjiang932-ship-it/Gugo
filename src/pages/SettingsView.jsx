@@ -615,7 +615,7 @@ export default function SettingsView() {
     const TOOLS = [
       { id: 'web_search', name: '网页搜索', desc: '让模型通过 DuckDuckGo 查询最新信息(返回 title/url/snippet)。' },
       { id: 'fetch_url', name: '抓取链接', desc: '让模型把页面正文抓回来转 markdown 阅读。配合搜索使用。' },
-      { id: 'run_js', name: '执行 JavaScript', desc: '在浏览器隔离 Worker 中跑纯 JS,5 秒超时,无 DOM/网络。' },
+
     ]
     const onToggle = (id) => {
       dispatch({ type: 'SET_TOOLS_CONFIG', payload: { [id]: !tc[id] } })

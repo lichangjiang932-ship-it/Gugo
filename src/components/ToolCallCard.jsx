@@ -1,16 +1,14 @@
 import { useState } from 'react'
-import { Search, Globe, Terminal, ChevronDown, ChevronRight, CheckCircle2, XCircle, Loader2 } from 'lucide-react'
+import { Search, Globe, ChevronDown, ChevronRight, CheckCircle2, XCircle, Loader2 } from 'lucide-react'
 
 const ICONS = {
   web_search: Search,
   fetch_url: Globe,
-  run_js: Terminal,
 }
 
 const LABELS = {
   web_search: '网页搜索',
   fetch_url: '抓取链接',
-  run_js: '执行 JS',
 }
 
 function summarizeArgs(name, argsJson) {
@@ -18,16 +16,12 @@ function summarizeArgs(name, argsJson) {
   try { args = JSON.parse(argsJson || '{}') } catch { /* noop */ }
   if (name === 'web_search') return args.query || '(空)'
   if (name === 'fetch_url') return args.url || '(空)'
-  if (name === 'run_js') {
-    const code = String(args.code || '')
-    return code.length > 60 ? code.slice(0, 60) + '…' : code
-  }
   return JSON.stringify(args).slice(0, 80)
 }
 
 export default function ToolCallCard({ call }) {
   const [open, setOpen] = useState(false)
-  const Icon = ICONS[call.name] || Terminal
+  const Icon = ICONS[call.name] || Search
   const label = LABELS[call.name] || call.name
   const summary = summarizeArgs(call.name, call.arguments)
 
