@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Download, Copy, Maximize2, Minimize2, Code, Eye, FileText, Table2, Presentation, Globe } from 'lucide-react'
+import { X, Download, Copy, Maximize2, Minimize2, Code, Eye, FileText, Table2, Presentation, Globe, Sparkles } from 'lucide-react'
 import {
   buildPresentationFilename,
   downloadPptxFromMarkdown,
+  downloadPremiumPptx,
   parseMarkdownSlides,
   buildHtmlPreview,
 } from '../../lib/presentationExport.js'
@@ -142,6 +143,8 @@ function SourceView({ content }) {
 export default function RightPreviewPane({ artifact, onClose, onMessage }) {
   const [view, setView] = useState('preview') // 'preview' | 'source'
   const [downloading, setDownloading] = useState(false)
+  const [premiumExporting, setPremiumExporting] = useState(false)
+  const [premiumProgress, setPremiumProgress] = useState('')
   const [maximized, setMaximized] = useState(false)
   // ★ #24: 可拖拽宽度,持久化到 localStorage
   const [paneWidth, setPaneWidth] = useState(() => {
@@ -238,6 +241,25 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
     }
   }
 
+  const handlePremiumDownload = async () => {
+    if (preview.type !== 'pptx') return
+    setPremiumExporting(true)
+    try {
+      const slides = parseMarkdownSlides(content)
+      const title = slides[0]?.title || preview.title
+      await downloadPremiumPptx(content, {
+        title,
+        filename: buildPresentationFilename(title).replace('.pptx', '_premium.pptx'),
+        onProgress: (current, total) => setPremiumProgress(`${current}/${total}`),
+      })
+    } catch (err) {
+      onMessage?.(err.message || '高级导出失败')
+    } finally {
+      setPremiumExporting(false)
+      setPremiumProgress('')
+    }
+  }
+
   return (
     <AnimatePresence>
       <motion.div
@@ -326,9 +348,20 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
               <Copy className="w-3 h-3" />
               复制
             </button>
+            {preview.type === 'pptx' && (
+              <button
+                onClick={handlePremiumDownload}
+                disabled={premiumExporting}
+                className="h-7 px-2 rounded-md border border-ink-fade/40 text-ink-soft hover:bg-paper hover:text-ember transition-colors inline-flex items-center gap-1 text-[11px] disabled:opacity-50"
+                title="高级导出：截图生成高清 PPT"
+              >
+                <Sparkles className="w-3 h-3" />
+                {premiumExporting ? `截图 ${premiumProgress}` : '高级'}
+              </button>
+            )}
             <button
               onClick={handleDownload}
-              disabled={downloading}
+              disabled={downloading || premiumExporting}
               className="h-7 px-2.5 rounded-md bg-ember text-paper hover:bg-ember/90 transition-colors inline-flex items-center gap-1 text-[11px] disabled:opacity-50"
               title={`下载 ${preview.filename}`}
             >

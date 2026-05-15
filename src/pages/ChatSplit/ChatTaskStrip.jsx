@@ -1,5 +1,4 @@
-import { ArrowUpRight, Loader2, X } from 'lucide-react'
-import { motion } from 'framer-motion'
+import { ArrowUpRight, X } from 'lucide-react'
 import { TASK_STATUS } from '../../store/taskStatus.js'
 
 export default function ChatTaskStrip({
@@ -14,7 +13,7 @@ export default function ChatTaskStrip({
     <div className="px-6 pt-4">
       <div className="rounded-md border border-ink/15 bg-paper-2/80 px-4 py-3 flex items-center gap-4">
         <div className="w-8 h-8 rounded-md bg-ember-soft text-ember flex items-center justify-center shrink-0">
-          <Loader2 className="w-4 h-4 animate-spin" />
+          <span className="w-2.5 h-2.5 rounded-full bg-ember" aria-hidden="true" />
         </div>
 
         <div className="min-w-0 flex-1">
@@ -25,21 +24,9 @@ export default function ChatTaskStrip({
             <span className="text-sm text-ink truncate" title={activeTask.name}>
               {activeTask.name}
             </span>
-            <span className="font-mono text-[10px] text-ember shrink-0">
-              {activeTask.progress ?? 0}%
-            </span>
           </div>
 
-          <div className="mt-2 h-1.5 bg-ink-ghost/40 rounded-full overflow-hidden" role="progressbar" aria-valuenow={activeTask.progress ?? 0} aria-valuemin={0} aria-valuemax={100}>
-            <motion.div
-              className="h-full bg-ember rounded-full"
-              initial={{ width: 0 }}
-              animate={{ width: `${activeTask.progress ?? 0}%` }}
-              transition={{ duration: 0.45, ease: 'easeOut' }}
-            />
-          </div>
-
-          <div className="mt-1.5 text-[11px] text-ink-fade truncate">
+          <div className="mt-1 text-[11px] text-ink-fade truncate">
             {activeTask.stepLabel || '任务执行中'}
           </div>
         </div>

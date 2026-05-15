@@ -3,8 +3,7 @@ import { motion } from 'framer-motion'
 import { CheckCircle2, LayoutList, MessageSquare } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
 import { useAppContext } from '../store/AppContext'
-
-const circumference = 264
+import { TASK_STATUS_LABEL } from '../store/taskStatus.js'
 
 export default function TaskRunPanel() {
   const navigate = useNavigate()
@@ -12,6 +11,7 @@ export default function TaskRunPanel() {
   const tasks = state.tasks
   const task = tasks.find((t) => t.status === 'running') || tasks[0]
   const taskSteps = task?.steps || []
+  const taskStatusLabel = task ? (TASK_STATUS_LABEL[task.status] || task.status) : ''
 
   if (!task) {
     return (
@@ -61,7 +61,7 @@ export default function TaskRunPanel() {
         <div className="px-7 py-4 flex items-center justify-between">
           <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">SESSION · 任务执行</span>
           <span className="inline-flex items-center h-7 px-3 rounded-full text-xs border border-ember-line text-ember bg-ember-soft">
-            {task.status} · {task.progress ?? 0}%
+            {taskStatusLabel}
           </span>
         </div>
         <div className="flex-1" />
@@ -82,31 +82,13 @@ export default function TaskRunPanel() {
           </span>
         </div>
 
-        <div className="flex items-center gap-4">
-          <div className="relative w-[100px] h-[100px] shrink-0">
-            <svg width="100" height="100" className="-rotate-90">
-              <circle cx="50" cy="50" r="42" stroke="var(--color-ink-ghost)" strokeWidth="6" fill="none" opacity="0.4" />
-              <motion.circle
-                cx="50"
-                cy="50"
-                r="42"
-                stroke="var(--color-ember)"
-                strokeWidth="6"
-                fill="none"
-                strokeDasharray={circumference}
-                strokeDashoffset={circumference * (1 - (task.progress ?? 0) / 100)}
-                strokeLinecap="round"
-                initial={{ strokeDashoffset: circumference }}
-                animate={{ strokeDashoffset: circumference * (1 - (task.progress ?? 0) / 100) }}
-                transition={{ duration: 1.5, ease: 'easeOut' }}
-              />
-            </svg>
-            <div className="absolute inset-0 flex flex-col items-center justify-center">
-              <span className="font-hand text-2xl text-ember">{task.progress ?? 0}%</span>
-              <span className="font-mono text-[9px] tracking-wider text-ink-fade">进度</span>
-            </div>
+        <div className="rounded-md border border-dashed border-ink-fade/40 bg-paper px-4 py-4 flex items-start gap-3">
+          <div className="w-9 h-9 rounded-md bg-ember-soft text-ember flex items-center justify-center shrink-0">
+            <span className="w-2.5 h-2.5 rounded-full bg-ember" aria-hidden="true" />
           </div>
-          <div className="flex-1 flex flex-col gap-1.5">
+          <div className="flex-1 flex flex-col gap-1.5 min-w-0">
+            <span className="font-mono text-[9px] tracking-wider text-ink-fade">当前状态</span>
+            <span className="text-sm text-ink">{taskStatusLabel}</span>
             <span className="font-mono text-[9px] tracking-wider text-ink-fade">当前步骤</span>
             <span className="text-sm text-ink">{task.stepLabel || '等待任务更新'}</span>
             {task.perms?.length > 0 && (

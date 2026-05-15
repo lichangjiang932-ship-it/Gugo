@@ -176,7 +176,7 @@ export default function ChatSplit() {
 
         dispatch({
           type: 'ADD_TASK',
-          payload: { id: taskId, name: taskName, detail: content, status: TASK_STATUS.RUNNING, progress: 10, step: 1, stepLabel: '调用模型中', perms: skill?.perms || [] },
+          payload: { id: taskId, name: taskName, detail: content, status: TASK_STATUS.RUNNING, step: 1, stepLabel: '调用模型中', perms: skill?.perms || [] },
         })
 
         dispatch({ type: 'RECEIVE_MESSAGE', payload: '' })
@@ -204,10 +204,10 @@ export default function ChatSplit() {
             .map(([name]) => name)
           const tools = buildToolSpecs(enabledToolNames)
           const MAX_TOOL_ROUNDS = 5
-          let chunkCount = 0
 
           for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
             let pendingToolCalls = null
+            let sawTextThisRound = false
             for await (const event of callModelThroughProxyStream({
               messages,
               modelName,
@@ -217,10 +217,9 @@ export default function ChatSplit() {
               latency = Date.now() - started
               if (event.type === 'text') {
                 dispatch({ type: 'APPEND_TO_LAST_MESSAGE', payload: event.delta })
-                chunkCount += 1
-                if (chunkCount % 4 === 0) {
-                  const nextProgress = Math.min(10 + chunkCount * 4, 90)
-                  dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { progress: nextProgress, stepLabel: '生成中' } } })
+                if (!sawTextThisRound) {
+                  sawTextThisRound = true
+                  dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { stepLabel: '生成中' } } })
                 }
               } else if (event.type === 'tool_calls') {
                 pendingToolCalls = event.toolCalls
@@ -317,7 +316,7 @@ export default function ChatSplit() {
         })
 
         // ★ FIX: 标记任务完成,5 秒后从 LIVE TASKS 移除
-        dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: TASK_STATUS.COMPLETED, progress: 100, stepLabel: '已完成' } } })
+        dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: TASK_STATUS.COMPLETED, stepLabel: '已完成' } } })
         setTimeout(() => dispatch({ type: 'REMOVE_TASK', payload: taskId }), 5000)
 
         dispatch({
@@ -338,7 +337,7 @@ export default function ChatSplit() {
         abortCtrlRef.current = null
         if (err.message === '已停止生成') {
           // ★ FIX: 中断也要把任务清掉,不能继续显示 "running 10%"
-          dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: TASK_STATUS.CANCELLED, progress: 100, stepLabel: '已中断' } } })
+          dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: TASK_STATUS.CANCELLED, stepLabel: '已中断' } } })
           setTimeout(() => dispatch({ type: 'REMOVE_TASK', payload: taskId }), 3000)
           return
         }
@@ -347,7 +346,7 @@ export default function ChatSplit() {
         dispatch({ type: 'APPEND_TO_LAST_MESSAGE', payload: `\n\n模型调用失败：${err.message}\n\n请联系管理员检查后端 .env 中的 MODEL_BASE_URL、MODEL_NAME 和 MODEL_API_KEY。` })
         dispatch({ type: 'ADD_HISTORY', payload: { name: taskName, skill: skill?.name || '通用对话', status: HISTORY_STATUS.FAILED, detail: content.length > 60 ? `${content.slice(0, 60)}...` : content, state: `失败: ${err.message}`.slice(0, 80), date: Date.now() } })
         // ★ FIX: 失败时把同一个任务标记 failed (而非再 ADD 一条新的"running 15%"),5 秒后移除
-        dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: TASK_STATUS.FAILED, progress: 100, stepLabel: '调用失败' } } })
+        dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: TASK_STATUS.FAILED, stepLabel: '调用失败' } } })
         setTimeout(() => dispatch({ type: 'REMOVE_TASK', payload: taskId }), 5000)
       }
     },
@@ -496,7 +495,7 @@ export default function ChatSplit() {
     dispatch({ type: 'SET_PERM_REQUEST', payload: null })
     const pendingTask = [...state.tasks].reverse().find((t) => t.status === 'pending')
     if (pendingTask) {
-      dispatch({ type: 'UPDATE_TASK', payload: { id: pendingTask.id, updates: { status: TASK_STATUS.RUNNING, progress: 20, stepLabel: '权限已获取，继续执行' } } })
+      dispatch({ type: 'UPDATE_TASK', payload: { id: pendingTask.id, updates: { status: TASK_STATUS.RUNNING, stepLabel: '权限已获取，继续执行' } } })
     }
     dispatch({ type: 'RECEIVE_MESSAGE', payload: '✅ 已授权，继续执行中。' })
   }

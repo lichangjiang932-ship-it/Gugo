@@ -18,6 +18,7 @@
     "dompurify": "^3.4.3",
     "framer-motion": "^12.38.0",
     "highlight.js": "^11.11.1",
+    "html-to-image": "^1.11.13",
     "jsdom": "^29.1.1",
     "jszip": "^3.10.1",
     "lucide-react": "^1.16.0",

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import test from 'node:test'
 
 import {
@@ -26,6 +27,41 @@ GPT-5.6 即将到来
   assert.deepEqual(slides[0].bullets, ['GPT-5.6 即将到来'])
   assert.equal(slides[1].title, '竞争格局')
   assert.deepEqual(slides[1].bullets, ['OpenAI 与 Anthropic 正面竞争', '企业开始多模型部署'])
+})
+
+test('infers untagged table and image slides for backwards-compatible layouts', () => {
+  const markdown = `# Cover
+Intro
+
+---
+
+## Metrics
+
+| A | B |
+| - | - |
+| 1 | 2 |
+
+---
+
+## Visual
+
+![chart](image)
+- trend`
+  const slides = parseMarkdownSlides(markdown)
+
+  assert.equal(slides[1].type, 'table')
+  assert.equal(slides[2].type, 'image')
+
+  const html = buildHtmlPreview(markdown)
+  assert.match(html, /<div class="slide slide-table">[\s\S]*Metrics/)
+  assert.match(html, /<div class="slide slide-image">[\s\S]*Visual/)
+})
+
+test('premium export keeps off-screen capture slides renderable', () => {
+  const source = fs.readFileSync(new URL('../src/lib/presentationExport.js', import.meta.url), 'utf8')
+
+  assert.doesNotMatch(source, /visibility:hidden/)
+  assert.match(source, /left:-99999px/)
 })
 
 test('parses numbered outline output when the model omits separators', () => {

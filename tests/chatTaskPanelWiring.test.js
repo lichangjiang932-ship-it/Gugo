@@ -30,3 +30,22 @@ test('chat task strip exposes a real abort action instead of fake pause states',
   assert.doesNotMatch(detailSource, /handlePause/)
   assert.doesNotMatch(detailSource, /handleInterrupt/)
 })
+
+test('chat task views avoid speculative numeric progress while a model request is running', () => {
+  const chatSource = fs.readFileSync(new URL('../src/pages/ChatSplit/index.jsx', import.meta.url), 'utf8')
+  const stripSource = fs.readFileSync(new URL('../src/pages/ChatSplit/ChatTaskStrip.jsx', import.meta.url), 'utf8')
+  const detailSource = fs.readFileSync(new URL('../src/pages/TaskRunPanel.jsx', import.meta.url), 'utf8')
+
+  assert.doesNotMatch(chatSource, /progress:\s*10/)
+  assert.doesNotMatch(chatSource, /chunkCount/)
+  assert.doesNotMatch(chatSource, /nextProgress/)
+  assert.match(chatSource, /sawTextThisRound/)
+  assert.match(chatSource, /stepLabel:\s*'生成中'/)
+
+  assert.doesNotMatch(stripSource, /Loader2/)
+  assert.doesNotMatch(stripSource, /activeTask\.progress/)
+  assert.doesNotMatch(stripSource, /role="progressbar"/)
+
+  assert.doesNotMatch(detailSource, /task\.progress/)
+  assert.doesNotMatch(detailSource, /strokeDashoffset/)
+})
