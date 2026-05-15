@@ -103,6 +103,28 @@ export default function ChatSplit() {
     }
   }, [dispatch, state.activeSessionId])
 
+  // #13 切会话保草稿:
+  //   - 切走前:把当前 input 写入 sessionDrafts[旧 id]
+  //   - 切到新 id:从 sessionDrafts[新 id] 拉草稿,没草稿就清空
+  // 用 ref 拿"上一次的 sessionId",避免每次 input 变就 dispatch
+  const prevSessionIdRef = useRef(state.activeSessionId)
+  const inputRef = useRef(input)
+  useEffect(() => { inputRef.current = input }, [input])
+  useEffect(() => {
+    const prevId = prevSessionIdRef.current
+    const nextId = state.activeSessionId
+    if (prevId === nextId) return
+    if (prevId) {
+      // 把切走前那一刻的输入塞回 store
+      dispatch({ type: 'SET_SESSION_DRAFT', payload: { sessionId: prevId, text: inputRef.current } })
+    }
+    const nextDraft = (state.sessionDrafts || {})[nextId] || ''
+    setInput(nextDraft)
+    prevSessionIdRef.current = nextId
+    // sessionDrafts 在依赖里会让此 effect 在草稿写入时重跑;但 prevId === nextId 直接 return
+    // 所以不会引发循环
+  }, [state.activeSessionId, state.sessionDrafts, dispatch])
+
   const isSlashActive = input.startsWith('/') && !input.includes(' ')
   const slashQuery = isSlashActive ? input.slice(1).toLowerCase() : ''
   const filteredSkills = slashQuery
@@ -316,9 +338,13 @@ export default function ChatSplit() {
     if (!typedContent && attachments.length === 0) return
     const content = typedContent || describeAttachmentPrompt(attachments)
     setInput('')
+    // 发送后顺手清掉本会话草稿,免得切走再回来还残留
+    if (state.activeSessionId) {
+      dispatch({ type: 'SET_SESSION_DRAFT', payload: { sessionId: state.activeSessionId, text: '' } })
+    }
     setShowSlashMenu(false)
     triggerSendFlow(content)
-  }, [attachments, input, triggerSendFlow])
+  }, [attachments, input, triggerSendFlow, state.activeSessionId, dispatch])
 
   const handleKeyDown = useCallback((e) => {
     if (showSlashMenu && filteredSkills.length > 0) {

@@ -21,6 +21,7 @@ const PERSIST_KEYS = [
   'animationsEnabled',
   'skillConfigs',
   'toolsConfig',
+  'sessionDrafts',
 ]
 
 function createInitialState() {
@@ -42,6 +43,9 @@ function createInitialState() {
     skillConfigs: {}, // { skillId: { enabled, systemPrompt, temperature, maxTokens } }
     previewArtifact: null, // { messageId, content, preview } — 右侧 artifact 预览面板
     toolsConfig: { web_search: false, fetch_url: false, run_js: false }, // 工具开关
+    // #13 切会话保草稿:每个 sessionId → 该会话当前未发送的输入文本
+    // 不放进 sessions[].draft 是为了切会话只 dispatch 一个轻动作,不动整棵 sessions 树
+    sessionDrafts: {},
   }
 }
 
@@ -151,10 +155,14 @@ function reducer(state, action) {
       if (state.activeSessionId === id) {
         nextActiveId = filtered[0]?.id ?? null
       }
+      // 同步清掉这个会话的草稿,免得 sessionDrafts 越积越多
+      const nextDrafts = { ...(state.sessionDrafts || {}) }
+      delete nextDrafts[id]
       return {
         ...state,
         sessions: filtered,
         activeSessionId: nextActiveId,
+        sessionDrafts: nextDrafts,
       }
     }
 
@@ -382,6 +390,17 @@ function reducer(state, action) {
 
     case 'SET_DRAFT_INPUT': {
       return { ...state, draftInput: action.payload ?? '' }
+    }
+
+    case 'SET_SESSION_DRAFT': {
+      // payload: { sessionId, text }
+      const { sessionId, text } = action.payload || {}
+      if (!sessionId) return state
+      const drafts = { ...(state.sessionDrafts || {}) }
+      const t = text ?? ''
+      if (t) drafts[sessionId] = t
+      else delete drafts[sessionId]
+      return { ...state, sessionDrafts: drafts }
     }
 
     case 'SET_SKILL_CONFIG': {
