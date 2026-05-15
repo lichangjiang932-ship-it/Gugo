@@ -330,7 +330,10 @@ export default function ChatSplit() {
         setTimeout(() => dispatch({ type: 'REMOVE_TASK', payload: taskId }), 5000)
       }
     },
-    [attachments, dispatch, modelOptions, selectedModel, state]
+    // ★ #27: 细粒度 deps,只收 triggerSendFlow body 里实际读的字段;
+    //         避免依赖整个 state 导致每次 sessionDrafts/tasks 变都重建 callback
+    [attachments, dispatch, modelOptions, selectedModel,
+      state.activeSessionId, state.sessions, state.toolsConfig, state.permissions]
   )
 
   const handleSend = useCallback(() => {
