@@ -285,6 +285,13 @@ async function searchWithBing(query, limit) {
       'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'Accept-Language': 'en-US,en;q=0.9',
+      // ★ #28: 加 Referer + Sec-Fetch-* 让请求更像真实浏览器,避免 Bing 反爬给空页
+      'Referer': 'https://www.bing.com/',
+      'Sec-Fetch-Site': 'same-origin',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-User': '?1',
+      'Upgrade-Insecure-Requests': '1',
     },
     timeoutMs: SEARCH_TIMEOUT_MS,
   })
