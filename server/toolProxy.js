@@ -504,13 +504,6 @@ export async function handleToolProxyRequest(req, res) {
     sendJson(res, 405, { ok: false, error: '仅支持 POST' })
     return
   }
-  const rate = checkToolRate(req)
-  res.setHeader('X-RateLimit-Limit', String(TOOL_RATE_MAX))
-  res.setHeader('X-RateLimit-Remaining', String(rate.remaining))
-  if (!rate.allowed) {
-    sendJson(res, 429, { ok: false, error: `工具调用过于频繁,请 ${Math.ceil(rate.resetMs / 1000)}s 后再试` })
-    return
-  }
 
   // ★ batchF P1: 鉴权 + 估算 + 余额检查.先做这三步再读 body 之外的逻辑,
   //   未登录或余额不足直接拒绝,不消耗后端 outbound 配额.
@@ -524,6 +517,13 @@ export async function handleToolProxyRequest(req, res) {
     account = getPublicAccount({ token })
   } catch {
     sendJson(res, 401, { ok: false, error: '登录已失效,请重新登录' })
+    return
+  }
+  const rate = checkToolRate(req)
+  res.setHeader('X-RateLimit-Limit', String(TOOL_RATE_MAX))
+  res.setHeader('X-RateLimit-Remaining', String(rate.remaining))
+  if (!rate.allowed) {
+    sendJson(res, 429, { ok: false, error: `工具调用过于频繁,请 ${Math.ceil(rate.resetMs / 1000)}s 后再试` })
     return
   }
   const cost = getToolCost()

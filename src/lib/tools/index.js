@@ -125,22 +125,28 @@ async function execWebSearch(args) {
   const max_results = Number(args?.max_results) || 6
   const data = await callJson('/api/tools/search', { query, maxResults: max_results })
   // 返给模型的内容尽量精简
-  return JSON.stringify({
-    query,
-    results: (data.results || []).map((r) => ({ title: r.title, url: r.url, snippet: r.snippet })),
-  })
+  return {
+    content: JSON.stringify({
+      query,
+      results: (data.results || []).map((r) => ({ title: r.title, url: r.url, snippet: r.snippet })),
+    }),
+    billing: data.billing || null,
+  }
 }
 
 async function execFetchUrl(args) {
   const url = String(args?.url || '').trim()
   if (!url) throw new Error('url 不能为空')
   const data = await callJson('/api/tools/fetch', { url })
-  return JSON.stringify({
-    url: data.url || url,
-    title: data.title || '',
-    truncated: !!data.truncated,
-    markdown: data.markdown || '',
-  })
+  return {
+    content: JSON.stringify({
+      url: data.url || url,
+      title: data.title || '',
+      truncated: !!data.truncated,
+      markdown: data.markdown || '',
+    }),
+    billing: data.billing || null,
+  }
 }
 
 async function execRunJs(args) {
@@ -241,8 +247,10 @@ export async function executeToolCall(call, options = {}) {
   let lastErr
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      const content = await fn(parsedArgs)
-      return { ok: true, content, attempts: attempt + 1 }
+      const output = await fn(parsedArgs)
+      const content = typeof output === 'string' ? output : output.content
+      const billing = typeof output === 'string' ? null : output.billing
+      return { ok: true, content, billing, attempts: attempt + 1 }
     } catch (err) {
       lastErr = err
       const msg = err?.message || String(err)

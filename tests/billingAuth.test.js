@@ -9,6 +9,7 @@ import {
   rechargeAccount,
   estimateChatCost,
   chargeForModelUse,
+  chargeForToolUse,
   getBillingDiagnostics,
   getMailDiagnostics,
   loadBillingConfig,
@@ -161,4 +162,19 @@ test('charging model use blocks requests when credits are insufficient', () => {
 
   assert.equal(charged.user.credits, 990)
   assert.equal(charged.ledger[0].type, 'model_charge')
+})
+
+test('charging tool use deducts credits and records tool ledger entries', () => {
+  const { token } = verifyEmailCode({
+    email: 'tool-user@example.com',
+    code: issueEmailCode({ email: 'tool-user@example.com', code: '222222' }).devCode,
+  })
+
+  rechargeAccount({ token, packageId: 'local-10' })
+  const charged = chargeForToolUse({ token, toolName: 'web_search', cost: 3 })
+
+  assert.equal(charged.user.credits, 997)
+  assert.equal(charged.ledger[0].type, 'tool_charge')
+  assert.equal(charged.ledger[0].model_name, 'web_search')
+  assert.equal(charged.ledger[0].credits, -3)
 })

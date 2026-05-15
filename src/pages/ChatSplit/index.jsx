@@ -260,6 +260,13 @@ export default function ChatSplit() {
               })
               dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { stepLabel: `调用 ${call.name}` } } })
               const result = await executeToolCall(call)
+              if (typeof result.billing?.creditsCharged === 'number') {
+                totalCreditsCharged += result.billing.creditsCharged
+              }
+              if (typeof result.billing?.credits === 'number') {
+                latestCreditsBalance = result.billing.credits
+              }
+              if (result.billing?.error) billingRoundError = result.billing.error
               dispatch({
                 type: 'APPEND_TOOL_CALL_TO_LAST_MESSAGE',
                 payload: {
