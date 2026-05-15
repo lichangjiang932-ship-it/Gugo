@@ -5,6 +5,7 @@ import {
   buildPresentationFilename,
   downloadPptxFromMarkdown,
   parseMarkdownSlides,
+  buildHtmlPreview,
 } from '../../lib/presentationExport.js'
 import {
   buildOfficeFilename,
@@ -39,32 +40,16 @@ function HtmlPreview({ html }) {
   )
 }
 
-function PptxPreview({ slides }) {
+function PptxPreview({ content }) {
+  const srcDoc = useMemo(() => buildHtmlPreview(content), [content])
   return (
-    <div className="grid grid-cols-1 gap-3 p-4 overflow-auto h-full">
-      {slides.map((slide, index) => (
-        <div
-          key={`${slide.title}-${index}`}
-          className="aspect-video rounded-md border border-ink-fade/30 bg-paper overflow-hidden flex flex-col shadow-sm"
-        >
-          <div className="h-1 bg-ember" />
-          <div className="p-4 flex-1 min-h-0 flex flex-col gap-2">
-            <div className="text-[10px] font-mono text-ink-fade">SLIDE {index + 1}</div>
-            <div className="font-semibold text-ink text-base leading-snug break-words">
-              {slide.title}
-            </div>
-            <div className="flex flex-col gap-1.5 text-xs text-ink-soft leading-relaxed mt-1">
-              {slide.bullets.slice(0, 8).map((bullet, bulletIndex) => (
-                <div key={bulletIndex} className="grid grid-cols-[10px_1fr] gap-1.5">
-                  <span className="text-ember">•</span>
-                  <span className="break-words">{bullet}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      ))}
-    </div>
+    <iframe
+      title="PPT 预览"
+      srcDoc={srcDoc}
+      className="w-full h-full border-0"
+      sandbox="allow-scripts allow-forms allow-modals"
+      referrerPolicy="no-referrer"
+    />
   )
 }
 
@@ -360,7 +345,7 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
           ) : (
             <>
               {preview.type === 'html' && <HtmlPreview html={preview.html} />}
-              {preview.type === 'pptx' && <PptxPreview slides={preview.slides} />}
+              {preview.type === 'pptx' && <PptxPreview content={content} />}
               {preview.type === 'docx' && <DocxPreview blocks={preview.blocks} title={preview.title} />}
               {preview.type === 'xlsx' && <XlsxPreview rows={preview.rows} />}
             </>

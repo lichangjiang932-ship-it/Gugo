@@ -62,7 +62,6 @@ export default function ChatSplit() {
   const tasks = state.tasks
   const activeTask = tasks.find((t) => t.status === 'running') || tasks[0]
   const skillChain = activeTask?.perms || []
-
   useEffect(() => {
     let cancelled = false
     async function loadModels() {
@@ -602,7 +601,6 @@ export default function ChatSplit() {
         skillChain={skillChain}
         onPauseTask={handlePauseTask}
         onStopTask={handleStopTask}
-        onNavigateTask={() => navigate('/task')}
         onNavigateDetail={() => navigate('/task')}
       />
     </div>

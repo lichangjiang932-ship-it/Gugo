@@ -22,8 +22,15 @@ import {
 } from './db.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
-const DATA_DIR = path.join(process.cwd(), 'server-data')
-const STORE_PATH = path.join(DATA_DIR, 'app-data.json')
+const DEFAULT_DATA_DIR = path.join(process.cwd(), 'server-data')
+
+function getDataDir() {
+  return process.env.APP_DATA_DIR || DEFAULT_DATA_DIR
+}
+
+function getStorePath() {
+  return path.join(getDataDir(), 'app-data.json')
+}
 
 export const RECHARGE_PACKAGES = [
   { id: 'local-10', amount: 10, credits: 1000, label: '10 元' },
@@ -35,10 +42,11 @@ export const RECHARGE_PACKAGES = [
 /* ── 旧 JSON 迁移 ── */
 
 function maybeMigrateLegacy() {
-  const migratedFlag = path.join(DATA_DIR, '.migrated')
-  if (!fs.existsSync(STORE_PATH) || fs.existsSync(migratedFlag)) return
+  const storePath = getStorePath()
+  const migratedFlag = path.join(getDataDir(), '.migrated')
+  if (!fs.existsSync(storePath) || fs.existsSync(migratedFlag)) return
   try {
-    const raw = fs.readFileSync(STORE_PATH, 'utf8')
+    const raw = fs.readFileSync(storePath, 'utf8')
     const store = JSON.parse(raw)
     migrateFromJson(store)
     fs.writeFileSync(migratedFlag, JSON.stringify({ migratedAt: Date.now() }))

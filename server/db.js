@@ -2,19 +2,27 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 
-const DATA_DIR = path.join(process.cwd(), 'server-data')
-const DB_PATH = path.join(DATA_DIR, 'app.db')
+const DEFAULT_DATA_DIR = path.join(process.cwd(), 'server-data')
+
+function getDataDir() {
+  return process.env.APP_DATA_DIR || DEFAULT_DATA_DIR
+}
+
+function getDbPath() {
+  return process.env.APP_DB_PATH || path.join(getDataDir(), 'app.db')
+}
 
 let _db = null
 
 function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true })
+  const dir = getDataDir()
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
 }
 
 export function getDb() {
   if (_db) return _db
   ensureDataDir()
-  _db = new Database(DB_PATH)
+  _db = new Database(getDbPath())
   _db.pragma('journal_mode = WAL')
   _db.pragma('foreign_keys = ON')
   // ★ #37: 写入并发时遇到 SQLITE_BUSY 自动等待最多 5s 而不是立刻报错

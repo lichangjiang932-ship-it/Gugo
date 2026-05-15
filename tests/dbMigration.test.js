@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import path from 'node:path'
+import os from 'node:os'
 
 import { getDb, migrateFromJson } from '../server/db.js'
+
+// 每个测试进程使用独立数据库目录，避免并行测试冲突
+process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-tests', String(process.pid))
 
 function cleanDb() {
   const db = getDb()

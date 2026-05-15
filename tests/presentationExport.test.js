@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  buildHtmlPreview,
   buildPresentationFilename,
   createPptxBlobFromMarkdown,
   parseMarkdownSlides,
@@ -61,4 +62,17 @@ test('creates a pptx blob from markdown for explicit browser download', async ()
 
   assert.equal(blob.type, 'application/vnd.openxmlformats-officedocument.presentationml.presentation')
   assert.ok(blob.size > 1000)
+})
+
+test('keeps a concise final content slide as content instead of forcing an ending slide', () => {
+  const html = buildHtmlPreview(`# 封面
+副标题
+
+---
+
+## 市场结论
+- 增长仍在继续`)
+
+  assert.match(html, /<div class="slide slide-content">[\s\S]*市场结论/)
+  assert.doesNotMatch(html, /<div class="slide slide-end">[\s\S]*市场结论/)
 })
