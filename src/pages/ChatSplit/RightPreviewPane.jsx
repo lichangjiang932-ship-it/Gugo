@@ -158,7 +158,43 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
   const [view, setView] = useState('preview') // 'preview' | 'source'
   const [downloading, setDownloading] = useState(false)
   const [maximized, setMaximized] = useState(false)
+  // ★ #24: 可拖拽宽度,持久化到 localStorage
+  const [paneWidth, setPaneWidth] = useState(() => {
+    try {
+      const saved = Number(localStorage.getItem('preview-pane-width'))
+      if (Number.isFinite(saved) && saved >= 360 && saved <= 900) return saved
+    } catch (_) { /* ignore */ }
+    return 520
+  })
+  const dragStateRef = useRef(null)
   const previousArtifactKey = useRef('')
+
+  useEffect(() => {
+    try { localStorage.setItem('preview-pane-width', String(paneWidth)) } catch (_) { /* ignore */ }
+  }, [paneWidth])
+
+  const startResize = (e) => {
+    e.preventDefault()
+    dragStateRef.current = { startX: e.clientX, startWidth: paneWidth }
+    const onMove = (ev) => {
+      if (!dragStateRef.current) return
+      // pane 在右侧,向左拖 (clientX 减小) → 变宽
+      const delta = dragStateRef.current.startX - ev.clientX
+      const next = Math.min(900, Math.max(360, dragStateRef.current.startWidth + delta))
+      setPaneWidth(next)
+    }
+    const onUp = () => {
+      dragStateRef.current = null
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+  }
 
   // 切换 artifact 时复位视图状态
   useEffect(() => {
@@ -225,10 +261,21 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
         animate={{ x: 0, opacity: 1 }}
         exit={{ x: 40, opacity: 0 }}
         transition={{ duration: 0.22, ease: 'easeOut' }}
+        style={maximized ? undefined : { width: `${paneWidth}px` }}
         className={`${
-          maximized ? 'fixed inset-0 z-40 w-screen' : 'w-[520px]'
-        } bg-paper-2 flex flex-col border-l border-dashed border-ink-fade/50 overflow-hidden`}
+          maximized ? 'fixed inset-0 z-40 w-screen' : ''
+        } bg-paper-2 flex flex-col border-l border-dashed border-ink-fade/50 overflow-hidden relative`}
       >
+        {/* ★ #24: 左边缘拖拽 handle (最大化时隐藏) */}
+        {!maximized && (
+          <div
+            onMouseDown={startResize}
+            onDoubleClick={() => setPaneWidth(520)}
+            title="拖动调节宽度,双击重置"
+            className="absolute top-0 left-0 bottom-0 w-1.5 cursor-col-resize z-10 hover:bg-ember/30 transition-colors"
+            aria-hidden="true"
+          />
+        )}
         {/* Header */}
         <div className="flex items-center gap-3 px-4 py-3 border-b border-dashed border-ink-fade/40 bg-paper">
           <div className="w-8 h-8 rounded-md border border-ink-fade/40 bg-paper-2 flex items-center justify-center text-ember shrink-0">
