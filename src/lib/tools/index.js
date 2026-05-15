@@ -55,9 +55,20 @@ const TOOL_SPECS = {
 }
 
 export function buildToolSpecs(enabledNames) {
+  // 接受 Array / Set / 任何 iterable;去重防同一 spec 被塞进两遍
+  // (#18 用户在权限中心可能勾选过 + toolsConfig 也开了重复来源)
+  const seen = new Set()
   const list = []
-  for (const name of enabledNames) {
-    if (TOOL_SPECS[name]) list.push(TOOL_SPECS[name])
+  for (const name of enabledNames || []) {
+    if (typeof name !== 'string') continue
+    if (seen.has(name)) continue
+    seen.add(name)
+    const spec = TOOL_SPECS[name]
+    if (spec) {
+      list.push(spec)
+    } else if (typeof console !== 'undefined') {
+      console.warn(`[tools] 未知工具被忽略: ${name}`)
+    }
   }
   return list
 }
