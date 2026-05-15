@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { MessageSquare, Wrench, Shield, History, Settings, Sparkles, ListChecks, X } from 'lucide-react'
+import { MessageSquare, Wrench, Shield, History, Settings, Sparkles, ListChecks, X, Search } from 'lucide-react'
 import { useAppContext } from '../store/AppContext'
 import { getAuthToken, sendLoginCode, verifyLoginCode } from '../lib/accountClient.js'
 
@@ -13,6 +13,8 @@ export default function LeftRail() {
   const [loginCode, setLoginCode] = useState('')
   const [loginMessage, setLoginMessage] = useState('')
   const [loginLoading, setLoginLoading] = useState(false)
+  // ★ #13: 全局会话搜索 — 标题 + 消息内容
+  const [searchQuery, setSearchQuery] = useState('')
 
   const navItems = [
     { path: '/chat', icon: MessageSquare, label: '对话' },
@@ -29,6 +31,31 @@ export default function LeftRail() {
   const todaySessions = sessions.filter((s) => s.createdAt >= startOfToday)
   const weekSessions = sessions.filter((s) => s.createdAt >= startOfWeek && s.createdAt < startOfToday)
   const earlierSessions = sessions.filter((s) => s.createdAt < startOfWeek)
+
+  // ★ #13: 搜索结果 — 标题命中 OR 任一消息 content 命中
+  const searchTrim = searchQuery.trim().toLowerCase()
+  const searchResults = useMemo(() => {
+    if (!searchTrim) return null
+    return sessions
+      .map((s) => {
+        const titleHit = String(s.title || '').toLowerCase().includes(searchTrim)
+        let snippet = null
+        if (Array.isArray(s.messages)) {
+          for (const m of s.messages) {
+            const c = String(m.content || '')
+            const idx = c.toLowerCase().indexOf(searchTrim)
+            if (idx >= 0) {
+              snippet = c.slice(Math.max(0, idx - 20), idx + searchTrim.length + 30)
+              break
+            }
+          }
+        }
+        if (!titleHit && !snippet) return null
+        return { session: s, snippet }
+      })
+      .filter(Boolean)
+      .slice(0, 50)
+  }, [sessions, searchTrim])
 
   const handleNewChat = () => {
     dispatch({ type: 'NEW_SESSION', payload: '新对话' })
@@ -141,6 +168,26 @@ export default function LeftRail() {
           <span className="font-mono text-[10px] text-ink-fade tracking-wider">Ctrl N</span>
         </button>
 
+        {/* ★ #13: 全局搜索 */}
+        <div className="relative">
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-ink-fade pointer-events-none" />
+          <input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="搜索会话…"
+            className="w-full h-7 pl-7 pr-7 border border-ink-fade/40 rounded-md bg-paper text-xs text-ink outline-none focus:border-ember"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-ink-fade/20 text-ink-fade"
+              title="清除搜索"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          )}
+        </div>
+
         <div className="flex flex-col gap-0.5 mt-1">
           {navItems.map((item) => {
             const isActive = location.pathname === item.path
@@ -161,7 +208,38 @@ export default function LeftRail() {
           })}
         </div>
 
-        {sessions.length ? (
+        {searchResults ? (
+          searchResults.length ? (
+            <div className="mt-2">
+              <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">
+                搜索结果 ({searchResults.length})
+              </span>
+              <div className="flex flex-col gap-0.5 mt-1.5">
+                {searchResults.map(({ session: s, snippet }) => (
+                  <button
+                    key={s.id}
+                    onClick={() => {
+                      dispatch({ type: 'SWITCH_SESSION', payload: s.id })
+                      navigate('/chat')
+                    }}
+                    className={`flex flex-col items-start gap-0.5 px-2 py-1.5 rounded-md text-[13px] transition-colors min-w-0 text-left ${
+                      s.id === state.activeSessionId ? 'bg-paper-2 border border-ink-fade/40 text-ink' : 'text-ink-soft hover:bg-paper-2/50'
+                    }`}
+                  >
+                    <span className="truncate w-full">{s.title}</span>
+                    {snippet && (
+                      <span className="text-[10px] text-ink-fade truncate w-full">…{snippet}…</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="mt-4 px-2 py-4 text-center">
+              <p className="text-xs text-ink-fade">未找到匹配会话</p>
+            </div>
+          )
+        ) : sessions.length ? (
           <>
             {renderSessionGroup('今天', todaySessions)}
             {renderSessionGroup('本周', weekSessions)}
@@ -170,7 +248,7 @@ export default function LeftRail() {
         ) : (
           <div className="mt-4 px-2 py-6 border border-dashed border-ink-fade/40 rounded-md text-center">
             <p className="text-xs text-ink-fade">还没有对话</p>
-            <p className="text-[10px] text-ink-ghost mt-1">点击“新对话”开始</p>
+            <p className="text-[10px] text-ink-ghost mt-1">点击"新对话"开始</p>
           </div>
         )}
 

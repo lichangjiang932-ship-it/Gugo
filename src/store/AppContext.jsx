@@ -477,6 +477,21 @@ function reducer(state, action) {
       }
     }
 
+    // ★ #8: 按指定 sessionId 改名 (用于异步 AI 标题回填),
+    //   onlyIfMatches: 当前标题必须等于这个值才覆盖, 否则跳过 (防止用户已手动改名时被覆盖)
+    case 'UPDATE_SESSION_TITLE_FOR': {
+      const { sessionId, title, onlyIfMatches } = action.payload || {}
+      if (!sessionId || !title) return state
+      return {
+        ...state,
+        sessions: state.sessions.map((s) => {
+          if (s.id !== sessionId) return s
+          if (onlyIfMatches !== undefined && s.title !== onlyIfMatches) return s
+          return { ...s, title, updatedAt: Date.now() }
+        }),
+      }
+    }
+
     case 'TRUNCATE_MESSAGES': {
       if (!state.activeSessionId) return state
       const keepCount = action.payload ?? 0

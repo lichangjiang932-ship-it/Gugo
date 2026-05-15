@@ -4,7 +4,7 @@ import LeftRail from '../../components/LeftRail'
 import { useAppContext } from '../../store/AppContext'
 import { SKILLS, getSkillSystemPrompt } from '../../data.js'
 import { buildUserContentWithAttachments, describeAttachmentPrompt } from '../../lib/attachments.js'
-import { callModelThroughProxyStream, getModelStatus } from '../../lib/modelClient.js'
+import { callModelThroughProxyStream, getModelStatus, summarizeSessionTitle } from '../../lib/modelClient.js'
 import { buildToolSpecs, executeToolCall } from '../../lib/tools/index.js'
 import { readStoredModel, resolveInitialModel, writeStoredModel } from '../../lib/modelSelection.js'
 import { isLoggedInLocally } from '../../lib/accountClient.js'
@@ -14,20 +14,11 @@ import ChatMessages from './ChatMessages'
 import ChatComposer from './ChatComposer'
 import ChatTaskPanel from './ChatTaskPanel'
 import RightPreviewPane from './RightPreviewPane'
+import { exportSession } from '../../lib/sessionExport.js'
 
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024
 const MAX_TEXT_BYTES = 256 * 1024
 const EMPTY_MESSAGES = []
-
-function downloadJson(filename, data) {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  a.click()
-  URL.revokeObjectURL(url)
-}
 
 function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -53,6 +44,12 @@ export default function ChatSplit() {
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [lastFailedPrompt, setLastFailedPrompt] = useState('')
   const [workbenchMessage, setWorkbenchMessage] = useState('')
+  // ★ #18: workbench 提示 5s 自动消失,避免长期残留
+  useEffect(() => {
+    if (!workbenchMessage) return undefined
+    const t = setTimeout(() => setWorkbenchMessage(''), 5000)
+    return () => clearTimeout(t)
+  }, [workbenchMessage])
   const [attachments, setAttachments] = useState([])
   const [isGenerating, setIsGenerating] = useState(false)
   const [voiceState, setVoiceState] = useState('idle')
@@ -138,9 +135,26 @@ export default function ChatSplit() {
       setWorkbenchMessage('')
 
       const activeSession = state.sessions.find((s) => s.id === state.activeSessionId)
-      if (activeSession && (activeSession.title === '新对话' || activeSession.title.startsWith('新会话'))) {
-        const title = content.slice(0, 18).trim() || '新对话'
-        dispatch({ type: 'UPDATE_SESSION_TITLE', payload: title.length > 15 ? title.slice(0, 15) + '…' : title })
+      const isFreshSession = activeSession && (activeSession.title === '新对话' || activeSession.title.startsWith('新会话'))
+      if (isFreshSession) {
+        // ★ #8: 立即兜底用截断, 让用户看到响应; 然后异步用 AI 覆盖一次
+        const fallback = content.slice(0, 18).trim() || '新对话'
+        const initialTitle = fallback.length > 15 ? fallback.slice(0, 15) + '…' : fallback
+        const sessionIdSnapshot = state.activeSessionId
+        dispatch({ type: 'UPDATE_SESSION_TITLE', payload: initialTitle })
+        // fire-and-forget — 拿到 AI 标题后再 dispatch 一次
+        summarizeSessionTitle({ firstUserContent: content, modelName: selectedModel })
+          .then((aiTitle) => {
+            if (!aiTitle) return
+            // 切了会话就不要覆盖错的, 校验一下当前 session 还是这个,且标题没被人手动改过
+            const fresh = state.sessions.find((s) => s.id === sessionIdSnapshot)
+            if (!fresh) return
+            // 注意: dispatch 时 state 可能已经变, 这里依赖 reducer 内的 activeSessionId
+            // 所以严格地说,只有当 sessionIdSnapshot === current activeSessionId 才覆盖
+            // 简单起见: 直接发, reducer 里只动 active 那个; 如果用户切走了就不更新, 也可接受
+            dispatch({ type: 'UPDATE_SESSION_TITLE_FOR', payload: { sessionId: sessionIdSnapshot, title: aiTitle, onlyIfMatches: initialTitle } })
+          })
+          .catch(() => {/* fallback 已经显示了 */})
       }
 
       const skillMatch = content.match(/^\/(\w+)\s*(.*)/)
@@ -490,10 +504,10 @@ export default function ChatSplit() {
           modelOptions={modelOptions}
           selectedModel={selectedModel}
           hasTasks={tasks.length > 0}
-          onExport={() => {
+          onExport={(format = 'json') => {
             if (!activeSession) return
-            downloadJson(`session-${activeSession.id}.json`, activeSession)
-            setWorkbenchMessage('当前会话已导出。')
+            exportSession(activeSession, format)
+            setWorkbenchMessage(format === 'md' ? '当前会话已导出为 Markdown。' : '当前会话已导出为 JSON。')
           }}
           onCompress={() => {
             if (messages.length <= 8) { setWorkbenchMessage('当前上下文还不长，暂时不需要压缩。'); return }
@@ -560,6 +574,7 @@ export default function ChatSplit() {
       <RightPreviewPane
         artifact={state.previewArtifact}
         onClose={() => dispatch({ type: 'CLOSE_PREVIEW_ARTIFACT' })}
+        onMessage={setWorkbenchMessage}
       />
 
       <ChatTaskPanel
