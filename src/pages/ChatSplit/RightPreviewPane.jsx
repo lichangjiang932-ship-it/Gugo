@@ -154,7 +154,7 @@ function SourceView({ content }) {
   )
 }
 
-export default function RightPreviewPane({ artifact, onClose }) {
+export default function RightPreviewPane({ artifact, onClose, onMessage }) {
   const [view, setView] = useState('preview') // 'preview' | 'source'
   const [downloading, setDownloading] = useState(false)
   const [maximized, setMaximized] = useState(false)
@@ -210,7 +210,8 @@ export default function RightPreviewPane({ artifact, onClose }) {
         }, 100)
       }
     } catch (err) {
-      window.alert?.(err.message || '导出失败')
+      // ★ #26: 统一通过外层 toast 通道,避免阻塞式 alert
+      onMessage?.(err.message || '导出失败')
     } finally {
       setDownloading(false)
     }

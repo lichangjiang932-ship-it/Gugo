@@ -48,6 +48,53 @@ export async function callModelThroughProxy({ messages, modelName, fetchImpl = f
   return data
 }
 
+/**
+ * ★ #8: 异步生成会话标题 — 用首句喂模型 8 字内总结。
+ * 失败/空返回时返回 null,让调用方 fallback 到截断。
+ * 不计入工具调用 / 计费(后端可按需 free pass,本期前端只做调用)。
+ */
+export async function summarizeSessionTitle({ firstUserContent, modelName, fetchImpl = fetch, signal }) {
+  const text = String(firstUserContent || '').trim()
+  if (!text) return null
+  // 内容已经很短就不用 AI 了
+  if (text.length <= 12) return text
+  try {
+    const response = await fetchImpl('/api/model/chat', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${getAuthToken()}`,
+      },
+      body: JSON.stringify({
+        messages: [
+          {
+            role: 'system',
+            content: '你是会话标题生成器。读完用户首句后,用 8 个汉字以内总结主题,只返回标题文本,不要引号、不要句号、不要解释。',
+          },
+          { role: 'user', content: text.slice(0, 600) },
+        ],
+        modelName,
+        purpose: 'title', // 给后端一个标记,可按需做计费豁免
+      }),
+      signal,
+    })
+    if (!response.ok) return null
+    const data = await response.json()
+    const reply = String(data?.reply || '').trim()
+    if (!reply) return null
+    // 清理常见噪声
+    const cleaned = reply
+      .replace(/^["『「【]+|["』」】]+$/g, '')
+      .replace(/[。！？.!?]+$/u, '')
+      .trim()
+    if (!cleaned) return null
+    // 限长 — 8 字 / 16 字符兜底
+    return cleaned.length > 16 ? cleaned.slice(0, 16) : cleaned
+  } catch {
+    return null
+  }
+}
+
 /* ── 流式输出（SSE）── */
 /**
  * 注意:旧版 yield 字符串(text delta);新版 yield event 对象 { type, ... },

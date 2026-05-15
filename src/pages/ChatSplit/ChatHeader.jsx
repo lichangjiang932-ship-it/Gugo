@@ -3,7 +3,9 @@ import {
   Minimize2,
   RotateCcw,
   LayoutList,
+  ChevronDown,
 } from 'lucide-react'
+import { useState, useRef, useEffect } from 'react'
 
 export default function ChatHeader({
   activeSession,
@@ -18,6 +20,17 @@ export default function ChatHeader({
   onModelChange,
   onNavigateTask,
 }) {
+  // ★ #12: 导出下拉 (JSON / Markdown)
+  const [exportOpen, setExportOpen] = useState(false)
+  const exportBoxRef = useRef(null)
+  useEffect(() => {
+    if (!exportOpen) return undefined
+    const handler = (e) => {
+      if (exportBoxRef.current && !exportBoxRef.current.contains(e.target)) setExportOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [exportOpen])
   return (
     <div className="flex items-center justify-between px-6 py-4 border-b border-dashed border-ink-fade/50">
       <div>
@@ -29,15 +42,34 @@ export default function ChatHeader({
         </h2>
       </div>
       <div className="flex gap-2 items-center">
-        <button
-          onClick={onExport}
-          disabled={!activeSession}
-          className="inline-flex items-center h-7 px-2 rounded-full text-xs border border-ink-fade/60 text-ink-soft hover:border-ink-fade transition-colors gap-1 disabled:opacity-50"
-          title="导出当前会话"
-        >
-          <Download className="w-3.5 h-3.5" />
-          导出
-        </button>
+        <div className="relative" ref={exportBoxRef}>
+          <button
+            onClick={() => setExportOpen((v) => !v)}
+            disabled={!activeSession}
+            className="inline-flex items-center h-7 px-2 rounded-full text-xs border border-ink-fade/60 text-ink-soft hover:border-ink-fade transition-colors gap-1 disabled:opacity-50"
+            title="导出当前会话"
+          >
+            <Download className="w-3.5 h-3.5" />
+            导出
+            <ChevronDown className="w-3 h-3" />
+          </button>
+          {exportOpen && (
+            <div className="absolute right-0 mt-1 w-32 rounded-md border border-ink-fade/40 bg-paper shadow-lg z-20 text-xs">
+              <button
+                onClick={() => { setExportOpen(false); onExport?.('json') }}
+                className="block w-full text-left px-3 py-1.5 hover:bg-ink-fade/10"
+              >
+                JSON (备份)
+              </button>
+              <button
+                onClick={() => { setExportOpen(false); onExport?.('md') }}
+                className="block w-full text-left px-3 py-1.5 hover:bg-ink-fade/10"
+              >
+                Markdown
+              </button>
+            </div>
+          )}
+        </div>
         <button
           onClick={onCompress}
           disabled={messages.length <= 8}
