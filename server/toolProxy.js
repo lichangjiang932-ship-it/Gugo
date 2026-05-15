@@ -118,8 +118,19 @@ function sendJson(res, status, body) {
 }
 
 async function readJson(req) {
+  // ★ #36: 请求体大小限制 — 4MB,超出立即抛 413
+  const MAX_BYTES = 4 * 1024 * 1024
   const chunks = []
-  for await (const chunk of req) chunks.push(chunk)
+  let total = 0
+  for await (const chunk of req) {
+    total += chunk.length
+    if (total > MAX_BYTES) {
+      const err = new Error(`request body exceeds ${MAX_BYTES} bytes`)
+      err.statusCode = 413
+      throw err
+    }
+    chunks.push(chunk)
+  }
   const raw = Buffer.concat(chunks).toString('utf8')
   if (!raw.trim()) return {}
   return JSON.parse(raw)
@@ -494,7 +505,9 @@ export async function handleToolProxyRequest(req, res) {
     }
     sendJson(res, 404, { ok: false, error: '未知的工具端点' })
   } catch (err) {
-    sendJson(res, 502, { ok: false, error: err?.message || '工具调用失败' })
+    // ★ #36: 尊重 readJson 抛的 statusCode (e.g. 413)
+    const status = err?.statusCode || 502
+    sendJson(res, status, { ok: false, error: err?.message || '工具调用失败' })
   }
 }
 

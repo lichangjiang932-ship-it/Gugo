@@ -2,6 +2,7 @@ import { Suspense, lazy } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 
 import GlobalShortcuts from './components/GlobalShortcuts'
+import ErrorBoundary from './components/ErrorBoundary'
 
 const ChatSplit = lazy(() => import('./pages/ChatSplit'))
 const SkillsMarket = lazy(() => import('./pages/SkillsMarket'))
@@ -20,7 +21,7 @@ function Fallback() {
 
 function App() {
   return (
-    <>
+    <ErrorBoundary>
       <GlobalShortcuts />
       <Suspense fallback={<Fallback />}>
         <Routes>
@@ -36,7 +37,7 @@ function App() {
           <Route path="*" element={<Navigate to="/chat" replace />} />
         </Routes>
       </Suspense>
-    </>
+    </ErrorBoundary>
   )
 }
 

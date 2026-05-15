@@ -156,6 +156,15 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     console.log(`Your Model Atelier running at http://${host}:${port}/`)
   })
 
+  // ★ #34: 进程级兜底 — 一个未捕获的异常不应该让服务静默退出
+  process.on('uncaughtException', (err) => {
+    console.error('[server] uncaughtException:', err?.stack || err)
+    // 不立即 exit:让 SIGTERM/SIGINT 走优雅路径;运维侧应靠日志告警
+  })
+  process.on('unhandledRejection', (reason) => {
+    console.error('[server] unhandledRejection:', reason?.stack || reason)
+  })
+
   process.on('SIGTERM', () => gracefulShutdown(server))
   process.on('SIGINT', () => gracefulShutdown(server))
 }

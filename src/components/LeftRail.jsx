@@ -4,6 +4,39 @@ import { MessageSquare, Wrench, Shield, History, Settings, Sparkles, ListChecks,
 import { useAppContext } from '../store/AppContext'
 import { getAuthToken, sendLoginCode, verifyLoginCode } from '../lib/accountClient.js'
 
+// ★ #21: 提取会话最后消息的纯文本预览 (剥 markdown / 多模态 array / 工具卡)
+function getSessionPreview(session) {
+  const msgs = session?.messages
+  if (!Array.isArray(msgs) || msgs.length === 0) return ''
+  // 从尾向前找第一条有可视文本的消息 (跳过 tool_call / 纯 meta 卡)
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i]
+    let text = ''
+    if (typeof m?.content === 'string') text = m.content
+    else if (Array.isArray(m?.content)) {
+      // multimodal: 取所有 text 段
+      text = m.content
+        .filter((p) => p?.type === 'text' || typeof p?.text === 'string')
+        .map((p) => p.text || '')
+        .join(' ')
+    }
+    text = text.replace(/```[\s\S]*?```/g, '〔代码〕').replace(/[#*`>_~|]+/g, '').replace(/\s+/g, ' ').trim()
+    if (text) {
+      const prefix = m.role === 'user' ? '你: ' : (m.role === 'assistant' ? '' : '')
+      return prefix + text.slice(0, 60)
+    }
+  }
+  return ''
+}
+
+// ★ #22: 是否未读 — updatedAt > lastViewedAt 且不是当前会话
+function isSessionUnread(session, activeId) {
+  if (!session || session.id === activeId) return false
+  if (!session.updatedAt) return false
+  if (!session.lastViewedAt) return false  // 老数据无标记,不显示未读
+  return session.updatedAt > session.lastViewedAt
+}
+
 export default function LeftRail() {
   const navigate = useNavigate()
   const location = useLocation()
@@ -124,19 +157,39 @@ export default function LeftRail() {
       <div className="mt-2">
         <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">{title}</span>
         <div className="flex flex-col gap-0.5 mt-1.5">
-          {items.map((s, i) => (
+          {items.map((s, i) => {
+            const preview = getSessionPreview(s)
+            const unread = isSessionUnread(s, state.activeSessionId)
+            const isActive = s.id === state.activeSessionId
+            return (
             <div key={s.id ?? i} className="group relative flex items-center">
               <button
                 onClick={() => {
                   dispatch({ type: 'SWITCH_SESSION', payload: s.id })
                   navigate('/chat')
                 }}
-                className={`flex-1 flex items-center gap-2 px-2 py-1.5 rounded-md text-[13px] transition-colors min-w-0 ${
-                  s.id === state.activeSessionId ? 'bg-paper-2 border border-ink-fade/40 text-ink' : 'text-ink-soft hover:bg-paper-2/50'
+                className={`flex-1 flex items-start gap-2 px-2 py-1.5 rounded-md text-[13px] transition-colors min-w-0 ${
+                  isActive ? 'bg-paper-2 border border-ink-fade/40 text-ink' : 'text-ink-soft hover:bg-paper-2/50'
                 }`}
               >
-                <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${s.id === state.activeSessionId ? 'bg-ember' : 'bg-ink-ghost'}`} />
-                <span className="truncate">{s.title}</span>
+                {/* ★ #22: 未读用 ember 实心点;已读 ghost 点;当前会话 ember */}
+                <div className={`w-1.5 h-1.5 rounded-full shrink-0 mt-1.5 ${
+                  isActive ? 'bg-ember' : (unread ? 'bg-ember' : 'bg-ink-ghost')
+                }`} />
+                <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className={`truncate ${unread ? 'font-medium text-ink' : ''}`}>{s.title}</span>
+                    {unread && (
+                      <span
+                        title="有新消息"
+                        className="shrink-0 inline-block w-1.5 h-1.5 rounded-full bg-ember"
+                      />
+                    )}
+                  </div>
+                  {preview && (
+                    <span className="text-[11px] text-ink-fade truncate text-left">{preview}</span>
+                  )}
+                </div>
               </button>
               <button
                 onClick={(e) => {
@@ -151,7 +204,8 @@ export default function LeftRail() {
                 <X className="w-3 h-3" />
               </button>
             </div>
-          ))}
+            )
+          })}
         </div>
       </div>
     )

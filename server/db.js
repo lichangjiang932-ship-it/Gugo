@@ -17,6 +17,10 @@ export function getDb() {
   _db = new Database(DB_PATH)
   _db.pragma('journal_mode = WAL')
   _db.pragma('foreign_keys = ON')
+  // ★ #37: 写入并发时遇到 SQLITE_BUSY 自动等待最多 5s 而不是立刻报错
+  _db.pragma('busy_timeout = 5000')
+  // synchronous=NORMAL 配合 WAL 是耐久性/性能折中,符合本应用 (本地工作台) 场景
+  _db.pragma('synchronous = NORMAL')
   initSchema(_db)
   return _db
 }

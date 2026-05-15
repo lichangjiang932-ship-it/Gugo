@@ -435,8 +435,19 @@ function authToken(req) {
 }
 
 async function readJson(req) {
+  // ★ #36: 请求体大小限制 — 256KB (账号路由 payload 很小)
+  const MAX_BYTES = 256 * 1024
   const chunks = []
-  for await (const chunk of req) chunks.push(chunk)
+  let total = 0
+  for await (const chunk of req) {
+    total += chunk.length
+    if (total > MAX_BYTES) {
+      const err = new Error(`request body exceeds ${MAX_BYTES} bytes`)
+      err.statusCode = 413
+      throw err
+    }
+    chunks.push(chunk)
+  }
   const raw = Buffer.concat(chunks).toString('utf8')
   return raw.trim() ? JSON.parse(raw) : {}
 }
@@ -496,6 +507,8 @@ export async function handleAuthBillingRequest(req, res, env = process.env) {
 
     sendJson(res, 404, { ok: false, error: '接口不存在' })
   } catch (error) {
-    sendJson(res, 400, { ok: false, error: error.message || '请求失败' })
+    // ★ #36: 尊重 readJson 抛的 statusCode (e.g. 413)
+    const status = error?.statusCode || 400
+    sendJson(res, status, { ok: false, error: error.message || '请求失败' })
   }
 }
