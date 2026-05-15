@@ -224,6 +224,17 @@ export default function ChatMessages({
                     <div className={`${artifactPreview ? 'mt-2 px-2' : 'mt-3 pt-2 border-t border-dashed border-ink-fade/40'} flex flex-wrap gap-2 text-[11px] text-ink-fade items-center`}>
                       <span>模型：{msg.meta.modelName}</span>
                       {msg.meta.latency !== undefined && <span>延迟：{msg.meta.latency} ms</span>}
+                      {typeof msg.meta.creditsCharged === 'number' && msg.meta.creditsCharged > 0 && (
+                        <span title="工具调用每轮都会请求模型,这里是本次对话累计扣的积分">
+                          消耗：{msg.meta.creditsCharged} 积分
+                          {typeof msg.meta.creditsBalance === 'number' && (
+                            <span className="text-ink-fade/70"> · 余 {msg.meta.creditsBalance}</span>
+                          )}
+                        </span>
+                      )}
+                      {msg.meta.billingError && (
+                        <span className="text-red-500" title={msg.meta.billingError}>计费失败</span>
+                      )}
                       <div className="flex-1" />
                       {!artifactPreview && shouldOfferPptxExport(msg.meta) && (
                         <button

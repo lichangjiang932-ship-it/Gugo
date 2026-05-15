@@ -125,3 +125,32 @@ test('streaming model calls surface backend SSE errors', async () => {
     }
   }, /模型服务不可用/)
 })
+
+test('streaming yields billing event on done frame for tool-call charge accounting', async () => {
+  const fetchImpl = async () =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          const enc = new TextEncoder()
+          controller.enqueue(enc.encode('data: {"ok":true,"delta":"hi"}\n\n'))
+          controller.enqueue(enc.encode('data: {"ok":true,"done":true,"latency":42,"billing":{"creditsCharged":7,"credits":993,"error":null}}\n\n'))
+          controller.close()
+        },
+      }),
+      { status: 200, headers: { 'Content-Type': 'text/event-stream' } }
+    )
+
+  const events = []
+  for await (const event of callModelThroughProxyStream({
+    messages: [{ role: 'user', content: 'hello' }],
+    fetchImpl,
+  })) {
+    events.push(event)
+  }
+
+  // 应有 text 帧 + billing 帧两条 (done 后流式终止,billing 帧必须在 return 之前 yield)
+  assert.deepEqual(events[0], { type: 'text', delta: 'hi' })
+  assert.equal(events[1].type, 'billing')
+  assert.equal(events[1].billing.creditsCharged, 7)
+  assert.equal(events[1].billing.credits, 993)
+})

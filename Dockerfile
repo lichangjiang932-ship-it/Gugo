@@ -1,21 +1,29 @@
 # ---- build stage ----
 FROM node:20-alpine AS builder
 WORKDIR /app
+# better-sqlite3 是原生模块,Alpine 默认无 python/g++,要自己装
+RUN apk add --no-cache python3 make g++
 COPY package*.json ./
 RUN npm ci
 COPY . .
 RUN npm run build
 
+# ---- deps stage: 单独编译 prod deps,把 native 二进制带到 runtime ----
+FROM node:20-alpine AS deps
+WORKDIR /app
+RUN apk add --no-cache python3 make g++
+COPY package*.json ./
+RUN npm ci --omit=dev
+
 # ---- runtime stage ----
 FROM node:20-alpine
 WORKDIR /app
 
-# Install sqlite deps
+# Runtime 只要 sqlite-libs(运行期共享库),编译工具留在 deps stage
 RUN apk add --no-cache sqlite-libs
 
 COPY package*.json ./
-RUN npm ci --omit=dev
-
+COPY --from=deps /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY server ./server
 COPY .env.example .env.example

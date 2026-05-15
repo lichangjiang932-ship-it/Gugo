@@ -105,7 +105,11 @@ export async function* callModelThroughProxyStream({ messages, modelName, fetchI
           continue
         }
         if (chunk.ok === false) throw new Error(chunk.error || '流式响应错误')
-        if (chunk.done) return
+        if (chunk.done) {
+          // done 帧可能带 billing,让上层多轮工具调用累计计费
+          if (chunk.billing) yield { type: 'billing', billing: chunk.billing }
+          return
+        }
         if (chunk.toolCalls) {
           yield { type: 'tool_calls', toolCalls: chunk.toolCalls, finishReason: chunk.finishReason }
         } else if (chunk.delta !== undefined) {

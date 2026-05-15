@@ -422,10 +422,27 @@ export async function handleModelProxyRequest(req, res) {
             res.write(`data: ${JSON.stringify({ ok: true, toolCalls: event.toolCalls, finishReason: event.finishReason, latency: Date.now() - started })}\n\n`)
           }
         }
-        res.write(`data: ${JSON.stringify({ ok: true, done: true, latency: Date.now() - started })}\n\n`)
-
         // 扣费
-        chargeForModelUse({ token, modelName: selectedModel, cost: estimatedCost })
+        let chargedBilling = null
+        let billingError = null
+        try {
+          chargedBilling = chargeForModelUse({ token, modelName: selectedModel, cost: estimatedCost })
+        } catch (chargeErr) {
+          // 扣费失败(余额不够等)不阻断已经流出去的内容,但要告诉前端
+          billingError = chargeErr.message
+        }
+        // done 帧带上 billing,前端能在 stream 收尾时拿到本轮实际消耗,
+        // 用于工具调用循环里"多轮累计计费"显示.放一起避免被 done 后的 return 截断.
+        res.write(`data: ${JSON.stringify({
+          ok: true,
+          done: true,
+          latency: Date.now() - started,
+          billing: {
+            creditsCharged: estimatedCost,
+            credits: chargedBilling?.user?.credits ?? null,
+            error: billingError,
+          },
+        })}\n\n`)
       } catch (err) {
         res.write(`data: ${JSON.stringify({ ok: false, error: formatProxyError(err) })}\n\n`)
       }
