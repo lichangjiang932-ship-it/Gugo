@@ -145,7 +145,15 @@ function reducer(state, action) {
       const id = action.payload
       if (!id) return state
       const exists = state.sessions.some((s) => s.id === id)
-      return exists ? { ...state, activeSessionId: id } : state
+      if (!exists) return state
+      // ★ #22: 切到该会话即视为已读 — 写入 lastViewedAt
+      return {
+        ...state,
+        activeSessionId: id,
+        sessions: state.sessions.map((s) =>
+          s.id === id ? { ...s, lastViewedAt: Date.now() } : s
+        ),
+      }
     }
 
     case 'DELETE_SESSION': {
@@ -382,7 +390,12 @@ function reducer(state, action) {
     }
 
     case 'IMPORT_SETTINGS': {
-      const p = action.payload || {}
+      // ★ #26: 支持 merge / replace 两种模式 (默认 merge,向后兼容)
+      // payload 可以是 { settings, mode } 或老格式直接传 settings
+      const raw = action.payload || {}
+      const hasMode = raw && typeof raw === 'object' && 'mode' in raw && 'settings' in raw
+      const p = hasMode ? (raw.settings || {}) : raw
+      const mode = hasMode && raw.mode === 'replace' ? 'replace' : 'merge'
       const next = { ...state }
       const stringFields = ['theme', 'accentColor', 'fontSize', 'density']
       for (const k of stringFields) {
@@ -390,15 +403,25 @@ function reducer(state, action) {
       }
       if (typeof p.animationsEnabled === 'boolean') next.animationsEnabled = p.animationsEnabled
       if (Array.isArray(p.permissions)) {
-        // 按 id 合并,保留运行时的图标等元信息
         const incomingMap = new Map(p.permissions.map((perm) => [perm.id, !!perm.enabled]))
-        next.permissions = state.permissions.map((perm) => ({
-          ...perm,
-          enabled: incomingMap.has(perm.id) ? incomingMap.get(perm.id) : perm.enabled,
-        }))
+        if (mode === 'replace') {
+          // 覆盖模式:不在导入文件里的权限项关掉
+          next.permissions = state.permissions.map((perm) => ({
+            ...perm,
+            enabled: incomingMap.has(perm.id) ? incomingMap.get(perm.id) : false,
+          }))
+        } else {
+          // 合并模式:不在导入里的保留原值
+          next.permissions = state.permissions.map((perm) => ({
+            ...perm,
+            enabled: incomingMap.has(perm.id) ? incomingMap.get(perm.id) : perm.enabled,
+          }))
+        }
       }
       if (p.skillConfigs && typeof p.skillConfigs === 'object' && !Array.isArray(p.skillConfigs)) {
-        next.skillConfigs = { ...state.skillConfigs, ...p.skillConfigs }
+        next.skillConfigs = mode === 'replace'
+          ? { ...p.skillConfigs }
+          : { ...state.skillConfigs, ...p.skillConfigs }
       }
       return next
     }

@@ -402,8 +402,18 @@ export default function ChatSplit() {
         nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'file', error: err.message || '读取失败' })
       }
     }
-    setAttachments((current) => [...current, ...nextAttachments].slice(0, 8))
-    setWorkbenchMessage(`已添加 ${nextAttachments.length} 个附件。`)
+    // ★ #25: 超过 8 个时提示截断
+    setAttachments((current) => {
+      const merged = [...current, ...nextAttachments]
+      const dropped = merged.length - 8
+      const result = merged.slice(0, 8)
+      if (dropped > 0) {
+        setWorkbenchMessage(`附件最多 8 个,已保留前 8 个,丢弃 ${dropped} 个。`)
+      } else {
+        setWorkbenchMessage(`已添加 ${nextAttachments.length} 个附件。`)
+      }
+      return result
+    })
   }
 
   const handleVoice = () => {

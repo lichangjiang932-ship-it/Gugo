@@ -4,11 +4,51 @@
 
 export const DEFAULT_STORAGE_KEY = 'your-model-atelier:state:v1'
 
+// ★ #35 敏感字段黑名单:任何对象层级里出现这些 key 名,序列化前替换为 '[REDACTED]'
+//    用来防御性兜底:即便上游 toolCall result / 第三方 API 响应不小心带进了 token,
+//    也不会被同步到 localStorage 里被另一个会话/账号读到.
+//    用户密码 / API Key 不在 state 里(token 走独立键 your-model-atelier:auth-token),
+//    这里覆盖的是"未来字段不小心漏进 PERSIST 树"的回归风险.
+const SENSITIVE_KEY_PATTERNS = [
+  /^authorization$/i,
+  /^auth[-_]?token$/i,
+  /^access[-_]?token$/i,
+  /^refresh[-_]?token$/i,
+  /^password$/i,
+  /^passwd$/i,
+  /^secret$/i,
+  /^api[-_]?key$/i,
+  /^private[-_]?key$/i,
+  /^client[-_]?secret$/i,
+  /^session[-_]?key$/i,
+  /^cookie$/i,
+  /^set[-_]?cookie$/i,
+]
+
+const REDACTED = '[REDACTED]'
+
+export function sanitizeForPersist(value, depth = 0) {
+  // 防御性深度限制,避免环引用 / 异常深结构爆栈
+  if (depth > 12) return value
+  if (value === null || typeof value !== 'object') return value
+  if (Array.isArray(value)) return value.map((v) => sanitizeForPersist(v, depth + 1))
+  const out = {}
+  for (const [k, v] of Object.entries(value)) {
+    if (SENSITIVE_KEY_PATTERNS.some((re) => re.test(k))) {
+      out[k] = REDACTED
+    } else {
+      out[k] = sanitizeForPersist(v, depth + 1)
+    }
+  }
+  return out
+}
+
 const isQuotaError = (err) =>
   err && (err.name === 'QuotaExceededError' || err.code === 22 || err.code === 1014 || /quota/i.test(err.message || ''))
 
 export function persistWithDegradation(snapshot, setItem, storageKey = DEFAULT_STORAGE_KEY) {
-  let payload = { ...snapshot }
+  // ★ #35: 入口先做一遍敏感字段 redact
+  let payload = sanitizeForPersist(snapshot)
   try {
     setItem(storageKey, JSON.stringify(payload))
     return { ok: true, level: 'full' }

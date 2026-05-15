@@ -8,6 +8,22 @@
  *   4) 把 { role: 'tool', tool_call_id, content } 追加到 messages,再发一轮
  */
 
+import { z } from 'zod'
+
+// ★ #18: 工具参数 zod schema — 模型可能给出脏数据,先校验再执行
+const TOOL_ARG_SCHEMAS = {
+  web_search: z.object({
+    query: z.string().min(1, 'query 不能为空').max(500, 'query 过长'),
+    max_results: z.number().int().min(1).max(10).optional(),
+  }),
+  fetch_url: z.object({
+    url: z.string().url('url 必须是合法 http/https 链接'),
+  }),
+  run_js: z.object({
+    code: z.string().min(1, 'code 不能为空').max(8000, 'code 超过 8000 字符上限'),
+  }),
+}
+
 const TOOL_SPECS = {
   web_search: {
     type: 'function',
@@ -191,7 +207,8 @@ const EXECUTORS = {
   run_js: execRunJs,
 }
 
-export async function executeToolCall(call) {
+export async function executeToolCall(call, options = {}) {
+  const { maxRetries = 2, retryDelayMs = 600 } = options
   const name = call?.name
   const fn = EXECUTORS[name]
   let parsedArgs = {}
@@ -201,10 +218,39 @@ export async function executeToolCall(call) {
   if (!fn) {
     return { ok: false, content: JSON.stringify({ error: `未知工具: ${name}` }) }
   }
-  try {
-    const content = await fn(parsedArgs)
-    return { ok: true, content }
-  } catch (err) {
-    return { ok: false, content: JSON.stringify({ error: err?.message || String(err) }) }
+
+  // ★ #18: zod 参数校验 — 失败直接返回 (不可重试)
+  const schema = TOOL_ARG_SCHEMAS[name]
+  if (schema) {
+    const parsed = schema.safeParse(parsedArgs)
+    if (!parsed.success) {
+      const issues = parsed.error.issues.map((i) => i.message).join('; ')
+      return { ok: false, content: JSON.stringify({ error: `参数无效: ${issues}` }) }
+    }
+    parsedArgs = parsed.data
+  }
+
+  // ★ #24: 失败重试 — 网络/反爬瞬时错误自动重试 (最多 maxRetries 次,指数退避)
+  let lastErr
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const content = await fn(parsedArgs)
+      return { ok: true, content, attempts: attempt + 1 }
+    } catch (err) {
+      lastErr = err
+      const msg = err?.message || String(err)
+      // 不可重试:参数校验类错误 (含「参数」「不能为空」等关键字)
+      const nonRetriable = /参数|不能为空|invalid|required/i.test(msg)
+      if (nonRetriable || attempt === maxRetries) break
+      // 指数退避:600ms → 1200ms
+      await new Promise((r) => setTimeout(r, retryDelayMs * (attempt + 1)))
+    }
+  }
+  return {
+    ok: false,
+    content: JSON.stringify({
+      error: lastErr?.message || String(lastErr),
+      attempts: maxRetries + 1,
+    }),
   }
 }

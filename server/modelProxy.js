@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { z } from 'zod'
 import {
   chargeForModelUse,
   estimateChatCost,
@@ -8,6 +9,17 @@ import {
   getPublicAccount,
   loadBillingConfig,
 } from './billingAuth.js'
+
+// ★ #18: 消息格式 schema — 拒绝畸形 messages 入参,防 OpenAI 上游报 400 / 计费爆零
+const MESSAGE_SCHEMA = z.object({
+  role: z.enum(['system', 'user', 'assistant', 'tool']),
+  // content 可以是 string、null (assistant tool_calls 时)、或 multimodal array
+  content: z.union([z.string(), z.null(), z.array(z.any())]).optional(),
+  name: z.string().optional(),
+  tool_call_id: z.string().optional(),
+  tool_calls: z.array(z.any()).optional(),
+}).passthrough()
+const MESSAGES_SCHEMA = z.array(MESSAGE_SCHEMA).min(1, 'messages 不能为空')
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
 const REQUIRED_ENV = ['MODEL_BASE_URL', 'MODEL_NAME', 'MODEL_API_KEY']
@@ -248,8 +260,19 @@ export function formatProxyError(error) {
 }
 
 async function readJson(req) {
+  // ★ #36: 请求体大小限制 — 4MB,超出立即抛 413
+  const MAX_BYTES = 4 * 1024 * 1024
   const chunks = []
-  for await (const chunk of req) chunks.push(chunk)
+  let total = 0
+  for await (const chunk of req) {
+    total += chunk.length
+    if (total > MAX_BYTES) {
+      const err = new Error(`request body exceeds ${MAX_BYTES} bytes`)
+      err.statusCode = 413
+      throw err
+    }
+    chunks.push(chunk)
+  }
   const raw = Buffer.concat(chunks).toString('utf8')
   if (!raw.trim()) return {}
   return JSON.parse(raw)
@@ -260,10 +283,19 @@ function sendJson(res, statusCode, body) {
   res.end(JSON.stringify(body))
 }
 
-async function* streamOpenAICompatible({ config, messages, fetchImpl = fetch, tools, toolChoice }) {
+async function* streamOpenAICompatible({ config, messages, fetchImpl = fetch, tools, toolChoice, externalSignal }) {
   const { url, init } = buildOpenAICompatibleRequest({ config, messages, stream: true, tools, toolChoice })
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 120000)
+  // ★ #38: 外部 (客户端断开) 触发 abort 时也立即放弃上游请求
+  let onExternalAbort = null
+  if (externalSignal) {
+    if (externalSignal.aborted) controller.abort()
+    else {
+      onExternalAbort = () => controller.abort()
+      externalSignal.addEventListener('abort', onExternalAbort, { once: true })
+    }
+  }
 
   try {
     const response = await fetchImpl(url, { ...init, signal: controller.signal })
@@ -340,6 +372,10 @@ async function* streamOpenAICompatible({ config, messages, fetchImpl = fetch, to
     }
   } finally {
     clearTimeout(timeout)
+    // ★ #38: 清掉外部 signal 监听器,避免后续 abort 误触
+    if (externalSignal && onExternalAbort) {
+      externalSignal.removeEventListener('abort', onExternalAbort)
+    }
   }
 }
 
@@ -371,6 +407,17 @@ export async function handleModelProxyRequest(req, res) {
     const messages = testMode
       ? [{ role: 'user', content: 'Reply with only: pong' }]
       : body.messages
+
+    // ★ #18: 校验 messages 形态;testMode 跳过 (内部硬编码)
+    if (!testMode) {
+      const validated = MESSAGES_SCHEMA.safeParse(messages)
+      if (!validated.success) {
+        const issues = validated.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')
+        res.writeHead(400, JSON_HEADERS)
+        res.end(JSON.stringify({ ok: false, error: `messages 格式无效: ${issues}` }))
+        return
+      }
+    }
     const selectedModel = pickAllowedModel({
       requestedModel: body.modelName,
       config,
@@ -408,6 +455,20 @@ export async function handleModelProxyRequest(req, res) {
         'Connection': 'keep-alive',
       })
 
+      // ★ #38: 客户端断开 → abort 上游 fetch 避免空转烧 token
+      const sseAbort = new AbortController()
+      let clientGone = false
+      const onClose = () => {
+        clientGone = true
+        sseAbort.abort()
+      }
+      req.on('close', onClose)
+
+      const safeWrite = (payload) => {
+        if (clientGone || res.writableEnded || res.destroyed) return false
+        return res.write(payload)
+      }
+
       const started = Date.now()
       try {
         for await (const event of streamOpenAICompatible({
@@ -415,38 +476,47 @@ export async function handleModelProxyRequest(req, res) {
           messages,
           tools: body.tools,
           toolChoice: body.tool_choice,
+          externalSignal: sseAbort.signal,
         })) {
+          if (clientGone) break
           if (event.type === 'text') {
-            res.write(`data: ${JSON.stringify({ ok: true, delta: event.delta, latency: Date.now() - started })}\n\n`)
+            safeWrite(`data: ${JSON.stringify({ ok: true, delta: event.delta, latency: Date.now() - started })}\n\n`)
           } else if (event.type === 'tool_calls') {
-            res.write(`data: ${JSON.stringify({ ok: true, toolCalls: event.toolCalls, finishReason: event.finishReason, latency: Date.now() - started })}\n\n`)
+            safeWrite(`data: ${JSON.stringify({ ok: true, toolCalls: event.toolCalls, finishReason: event.finishReason, latency: Date.now() - started })}\n\n`)
           }
         }
-        // 扣费
-        let chargedBilling = null
-        let billingError = null
-        try {
-          chargedBilling = chargeForModelUse({ token, modelName: selectedModel, cost: estimatedCost })
-        } catch (chargeErr) {
-          // 扣费失败(余额不够等)不阻断已经流出去的内容,但要告诉前端
-          billingError = chargeErr.message
+        // 扣费 — 客户端断了就跳过,不收钱
+        if (!clientGone) {
+          let chargedBilling = null
+          let billingError = null
+          try {
+            chargedBilling = chargeForModelUse({ token, modelName: selectedModel, cost: estimatedCost })
+          } catch (chargeErr) {
+            // 扣费失败(余额不够等)不阻断已经流出去的内容,但要告诉前端
+            billingError = chargeErr.message
+          }
+          // done 帧带上 billing,前端能在 stream 收尾时拿到本轮实际消耗,
+          // 用于工具调用循环里"多轮累计计费"显示.放一起避免被 done 后的 return 截断.
+          safeWrite(`data: ${JSON.stringify({
+            ok: true,
+            done: true,
+            latency: Date.now() - started,
+            billing: {
+              creditsCharged: estimatedCost,
+              credits: chargedBilling?.user?.credits ?? null,
+              error: billingError,
+            },
+          })}\n\n`)
         }
-        // done 帧带上 billing,前端能在 stream 收尾时拿到本轮实际消耗,
-        // 用于工具调用循环里"多轮累计计费"显示.放一起避免被 done 后的 return 截断.
-        res.write(`data: ${JSON.stringify({
-          ok: true,
-          done: true,
-          latency: Date.now() - started,
-          billing: {
-            creditsCharged: estimatedCost,
-            credits: chargedBilling?.user?.credits ?? null,
-            error: billingError,
-          },
-        })}\n\n`)
       } catch (err) {
-        res.write(`data: ${JSON.stringify({ ok: false, error: formatProxyError(err) })}\n\n`)
+        // AbortError 来自客户端断开,不当成错误回写
+        if (!clientGone && err?.name !== 'AbortError') {
+          safeWrite(`data: ${JSON.stringify({ ok: false, error: formatProxyError(err) })}\n\n`)
+        }
+      } finally {
+        req.off('close', onClose)
       }
-      res.end()
+      if (!res.writableEnded) res.end()
       return
     }
 
@@ -485,7 +555,11 @@ export async function handleModelProxyRequest(req, res) {
       user: billing?.user,
     })
   } catch (error) {
-    const status = /请先登录/.test(error?.message || '') ? 401 : 502
+    // ★ #36: 尊重 readJson 抛的 413 (request body too large)
+    let status
+    if (error?.statusCode) status = error.statusCode
+    else if (/请先登录/.test(error?.message || '')) status = 401
+    else status = 502
     sendJson(res, status, { ok: false, error: formatProxyError(error) })
   }
 }

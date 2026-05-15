@@ -103,6 +103,8 @@ export default function SettingsView() {
   const [diagnostics, setDiagnostics] = useState(null)
   const [diagnosticsMessage, setDiagnosticsMessage] = useState('')
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
+  // ★ #26: 导入设置模式 — 'merge' 默认,'replace' 覆盖
+  const [settingsImportMode, setSettingsImportMode] = useState('merge')
   const importInputRef = useRef(null)
 
   const refreshStorage = () => setStorageBytes(getLocalStorageBytes())
@@ -711,8 +713,10 @@ export default function SettingsView() {
           dispatch({ type: 'IMPORT_SESSIONS', payload: parsed.payload })
           setDataMessage(`已导入 ${parsed.payload.length} 个会话 (schema: ${parsed.schema})。`)
         } else if (parsed.kind === 'settings') {
-          dispatch({ type: 'IMPORT_SETTINGS', payload: parsed.payload })
-          setDataMessage(`已导入设置 (schema: ${parsed.schema})。`)
+          // ★ #26: 透传 mode (merge / replace)
+          dispatch({ type: 'IMPORT_SETTINGS', payload: { settings: parsed.payload, mode: settingsImportMode } })
+          const modeLabel = settingsImportMode === 'replace' ? '覆盖' : '合并'
+          setDataMessage(`已导入设置 — ${modeLabel}模式 (schema: ${parsed.schema})。`)
         }
         refreshStorage()
       } catch (err) {
@@ -793,6 +797,32 @@ export default function SettingsView() {
               选择 JSON 文件
             </button>
             <span className="text-xs text-ink-soft">支持当前 schema (v{SCHEMA_VERSION}) 或老版本裸 sessions 数组,导入前会做结构校验。</span>
+          </div>
+          {/* ★ #26: 设置导入模式 (仅对 settings 文件生效;sessions 始终追加) */}
+          <div className="flex flex-wrap items-center gap-3 mt-2 text-xs text-ink-soft">
+            <span>设置导入模式:</span>
+            <label className="flex items-center gap-1.5 cursor-pointer">
+              <input
+                type="radio"
+                name="settingsImportMode"
+                value="merge"
+                checked={settingsImportMode === 'merge'}
+                onChange={() => setSettingsImportMode('merge')}
+                className="accent-ember"
+              />
+              <span className={settingsImportMode === 'merge' ? 'text-ink' : ''}>合并 (保留未在文件里的项)</span>
+            </label>
+            <label className="flex items-center gap-1.5 cursor-pointer">
+              <input
+                type="radio"
+                name="settingsImportMode"
+                value="replace"
+                checked={settingsImportMode === 'replace'}
+                onChange={() => setSettingsImportMode('replace')}
+                className="accent-ember"
+              />
+              <span className={settingsImportMode === 'replace' ? 'text-ink' : ''}>覆盖 (以文件为准,清掉未列出的)</span>
+            </label>
           </div>
         </SettingsGroup>
 

@@ -1,4 +1,20 @@
 import { getAuthToken } from './accountClient.js'
+import { z } from 'zod'
+
+// ★ #18: SSE chunk schema — 后端可能返回畸形 JSON,先验证再消费
+// 后端发的所有 chunk 形态:
+//   { ok: false, error }                       — 错误
+//   { done: true, billing? }                   — 流结束
+//   { toolCalls: [...], finishReason? }        — 工具调用帧
+//   { delta: string }                          — 文本增量
+const SSE_CHUNK_SCHEMA = z.union([
+  z.object({ ok: z.literal(false), error: z.string().optional() }),
+  z.object({ done: z.literal(true), billing: z.any().optional() }),
+  z.object({ toolCalls: z.array(z.any()).min(1), finishReason: z.string().optional() }),
+  z.object({ delta: z.string() }),
+  // 未来兼容:任意带 ok=true 的状态帧
+  z.object({ ok: z.literal(true) }).passthrough(),
+])
 
 async function parseProxyResponse(response) {
   let data
@@ -151,6 +167,15 @@ export async function* callModelThroughProxyStream({ messages, modelName, fetchI
           // Ignore non-JSON keepalive/debug lines without hiding backend error events.
           continue
         }
+        // ★ #18: schema 校验 — 不符合任何已知形态的 chunk 跳过 (但保留 ok:false 错误抛出路径)
+        const validated = SSE_CHUNK_SCHEMA.safeParse(chunk)
+        if (!validated.success) {
+          if (typeof console !== 'undefined') {
+            console.warn('[modelClient] 跳过畸形 SSE chunk:', validated.error.issues?.[0]?.message)
+          }
+          continue
+        }
+        chunk = validated.data
         if (chunk.ok === false) throw new Error(chunk.error || '流式响应错误')
         if (chunk.done) {
           // done 帧可能带 billing,让上层多轮工具调用累计计费
