@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useRef, useEffect } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   Paperclip,
@@ -42,6 +42,18 @@ export default function ChatComposer({
 }) {
   const textareaRef = useRef(null)
   const fileInputRef = useRef(null)
+
+  // ★ #21: input 被外部清空 (发送后) 也回弹到 1 行高度
+  useEffect(() => {
+    const ta = textareaRef.current
+    if (!ta) return
+    if (!input) {
+      ta.style.height = 'auto'
+    } else {
+      ta.style.height = 'auto'
+      ta.style.height = Math.min(ta.scrollHeight, 24 * 8) + 'px'
+    }
+  }, [input])
 
   return (
     <div className="px-6 pb-6 pt-3 border-t border-dashed border-ink-fade/50 relative">
@@ -160,6 +172,11 @@ export default function ChatComposer({
               const prev = input
               setInput(val)
 
+              // ★ #21: 自动撑高 textarea (1 ~ 8 行)
+              const ta = e.target
+              ta.style.height = 'auto'
+              ta.style.height = Math.min(ta.scrollHeight, 24 * 8) + 'px'
+
               const shouldShow = (v) => {
                 if (!v.startsWith('/') || v.includes(' ')) return false
                 const q = v.slice(1).toLowerCase()
@@ -181,7 +198,7 @@ export default function ChatComposer({
             }}
             onKeyDown={handleKeyDown}
             placeholder="输入指令，或 / 调用技能…"
-            className="w-full bg-transparent outline-none text-sm text-ink placeholder:text-ink-soft/80 resize-none flex-1"
+            className="w-full bg-transparent outline-none text-sm text-ink placeholder:text-ink-soft/80 resize-none flex-1 leading-6 max-h-48 overflow-y-auto"
             rows={1}
           />
           <div className="flex justify-between items-center mt-2">

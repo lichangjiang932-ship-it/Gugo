@@ -5,9 +5,12 @@ import MarkdownRenderer from '../../components/MarkdownRenderer.jsx'
 import ToolCallCard from '../../components/ToolCallCard.jsx'
 import { buildArtifactPreview } from '../../lib/artifactPreview.js'
 
+// ★ #22: 入门示例 — 覆盖文档/数据/编程/创意四大类,降低首次使用门槛
 const EXAMPLE_QUESTIONS = [
-  { icon: FileText, label: '生成周报' },
-  { icon: BarChart3, label: '分析数据' },
+  { icon: FileText, label: '帮我写一份本周项目周报' },
+  { icon: BarChart3, label: '把这段销售数据生成 Excel 表格并分析' },
+  { icon: FileText, label: '生成一份 5 页的产品介绍 PPT' },
+  { icon: LayoutList, label: '帮我列出今天的工作计划' },
 ]
 
 function SparklesIcon() {
@@ -185,7 +188,13 @@ export default function ChatMessages({
                         </div>
                       </button>
                     ) : (
-                      <MarkdownRenderer>{msg.content}</MarkdownRenderer>
+                      <>
+                        <MarkdownRenderer>{msg.content}</MarkdownRenderer>
+                        {/* ★ #23: streaming 时在尾部显示闪烁光标 */}
+                        {msg.meta?.streaming && (
+                          <span className="inline-block w-1.5 h-3.5 bg-ember/80 ml-0.5 align-middle animate-pulse" aria-hidden="true" />
+                        )}
+                      </>
                     )
                   ) : (
                     <span className="whitespace-pre-wrap">{msg.content}</span>

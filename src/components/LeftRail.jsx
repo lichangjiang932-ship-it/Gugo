@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { MessageSquare, Wrench, Shield, History, Settings, Sparkles, ListChecks, X, Search } from 'lucide-react'
 import { useAppContext } from '../store/AppContext'
@@ -15,6 +15,13 @@ export default function LeftRail() {
   const [loginLoading, setLoginLoading] = useState(false)
   // ★ #13: 全局会话搜索 — 标题 + 消息内容
   const [searchQuery, setSearchQuery] = useState('')
+
+  // ★ #25: 监听全局 Esc 清空搜索框 (preview 不开时才会派发)
+  useEffect(() => {
+    const onEsc = () => setSearchQuery('')
+    window.addEventListener('app:escape', onEsc)
+    return () => window.removeEventListener('app:escape', onEsc)
+  }, [])
 
   const navItems = [
     { path: '/chat', icon: MessageSquare, label: '对话' },

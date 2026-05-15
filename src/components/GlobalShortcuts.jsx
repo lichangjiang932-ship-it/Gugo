@@ -9,6 +9,7 @@ import { useAppContext } from '../store/AppContext'
  *   ⌘/Ctrl + ,  →  设置
  *   ⌘/Ctrl + B  →  切换历史
  *   ⌘/Ctrl + /  →  快捷键帮助（toggle 提示）
+ *   Esc        →  关闭右侧预览 (优先) / 否则广播 'app:escape' 让组件清理本地状态
  *
  * （⌘K 由各页面自己处理聚焦搜索框）
  *
@@ -16,10 +17,22 @@ import { useAppContext } from '../store/AppContext'
  */
 export default function GlobalShortcuts() {
   const navigate = useNavigate()
-  const { dispatch } = useAppContext()
+  const { state, dispatch } = useAppContext()
 
   useEffect(() => {
     const onKey = (e) => {
+      // ★ #25: 全局 Esc — 关闭预览;否则广播事件给监听的组件
+      if (e.key === 'Escape') {
+        if (state.previewArtifact) {
+          e.preventDefault()
+          dispatch({ type: 'CLOSE_PREVIEW_ARTIFACT' })
+          return
+        }
+        // 让其它组件 (LeftRail 搜索框等) 听 'app:escape' 自行清理
+        window.dispatchEvent(new CustomEvent('app:escape'))
+        return
+      }
+
       const mod = e.metaKey || e.ctrlKey
       if (!mod) return
 
@@ -50,7 +63,7 @@ export default function GlobalShortcuts() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [navigate, dispatch])
+  }, [navigate, dispatch, state.previewArtifact])
 
   return null
 }
