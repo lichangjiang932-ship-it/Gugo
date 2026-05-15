@@ -14,6 +14,11 @@ function inferSpreadsheetTitle(rows, fallback = 'spreadsheet') {
  * 内容嗅探 — 在没有 /ppt /doc /excel /html 斜杠命令时,根据消息正文自动判别要不要做成"文件卡片"。
  * 优先级: html > pptx > xlsx > docx
  *
+ * ★ batchF P2b: 嗅探阈值之前太激进 — 3 个编号小节就当 PPT,
+ *   2 行 markdown 表格就当 Excel,普通问答里常见的对比表/步骤清单全被误判.
+ *   现在统一抬高门槛,并且 ChatMessages 不再用卡片替代正文 — 卡片只作为
+ *   辅助 CTA 出现,用户始终能看到完整答案.
+ *
  * 返回值: 'html' | 'pptx' | 'xlsx' | 'docx' | null
  */
 export function detectArtifactType(content = '') {
@@ -25,29 +30,33 @@ export function detectArtifactType(content = '') {
   if (htmlFence && /<\w+[\s>]/.test(htmlFence[1])) return 'html'
   if (/^\s*(?:<!doctype\s+html|<html[\s>])/i.test(text)) return 'html'
 
-  // ── PPTX: 至少 2 张 --- 分隔的幻灯片, 或 ≥3 条 "数字." 大纲 ──
+  // ── PPTX: 至少 3 张 --- 分隔的幻灯片, 或 ≥6 条 "数字." 大纲 ──
+  //    (原来 2 张/3 条太松,普通分点回答会被识别成 PPT)
   const dashSlideCount = (text.match(/^\s*---+\s*$/gm) || []).length
-  if (dashSlideCount >= 2) {
-    const slides = parseMarkdownSlides(text)
-    if (slides.length >= 2) return 'pptx'
-  }
-  const numberedHeads = (text.match(/^(?:#{1,4}\s*)?\d{1,2}[.、]\s+\S/gm) || []).length
-  if (numberedHeads >= 3) {
+  if (dashSlideCount >= 3) {
     const slides = parseMarkdownSlides(text)
     if (slides.length >= 3) return 'pptx'
   }
+  const numberedHeads = (text.match(/^(?:#{1,4}\s*)?\d{1,2}[.、]\s+\S/gm) || []).length
+  if (numberedHeads >= 6) {
+    const slides = parseMarkdownSlides(text)
+    if (slides.length >= 6) return 'pptx'
+  }
 
-  // ── XLSX: csv 代码块 或 真·markdown 表格 (含分隔行) ──
+  // ── XLSX: csv 代码块 或 真·markdown 表格 (含分隔行 + ≥4 数据行) ──
+  //    (原来 ≥2 行表格就识别,会把对比表/步骤表都当成 Excel)
   if (/```(?:csv|tsv)\s*\n[\s\S]*?```/i.test(text)) return 'xlsx'
   const tableLines = text.split('\n').filter((l) => /^\s*\|.+\|\s*$/.test(l))
   const hasSeparatorRow = text.split('\n').some((l) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$/.test(l))
-  if (tableLines.length >= 2 && hasSeparatorRow) return 'xlsx'
+  // 表头 + 分隔 + ≥4 数据行 ≈ 6 行表格,小对比表不会触发
+  if (tableLines.length >= 6 && hasSeparatorRow) return 'xlsx'
 
-  // ── DOCX: 至少 1 个 markdown 标题 + 一定字数 ──
+  // ── DOCX: 至少 3 个 markdown 标题 + 一定字数 ──
+  //    (原来 1 个标题就够,普通带标题的回答都被当成 Word)
   const headingCount = (text.match(/^#{1,6}\s+\S/gm) || []).length
-  if (headingCount >= 1 && text.length >= 80) {
+  if (headingCount >= 3 && text.length >= 400) {
     const doc = parseMarkdownDocument(text)
-    if (doc.blocks.length >= 3) return 'docx'
+    if (doc.blocks.length >= 5) return 'docx'
   }
 
   return null
@@ -86,14 +95,22 @@ ${src}
 export function buildArtifactPreview({ content = '', meta = {} } = {}) {
   // 先按 meta 的显式声明走 (slash 命令路径)
   let resolvedType = ''
+  let inferred = false
   if (shouldOfferPptxExport(meta)) resolvedType = 'pptx'
   else {
     const officeType = shouldOfferOfficeExport(meta)
     if (officeType) resolvedType = officeType
   }
   // 没有显式 meta 时, 按内容嗅探 fallback
-  if (!resolvedType) resolvedType = detectArtifactType(content) || ''
+  // ★ batchF P2b: 嗅探出来的 artifact 不再替代正文,只在正文下追加一个
+  //   "在右侧打开预览" CTA;通过返回 inferred:true 让 ChatMessages 区分.
+  if (!resolvedType) {
+    resolvedType = detectArtifactType(content) || ''
+    if (resolvedType) inferred = true
+  }
   if (!resolvedType) return null
+
+  const base = { inferred }
 
   if (resolvedType === 'html') {
     const html = extractHtmlSource(content)
@@ -101,6 +118,7 @@ export function buildArtifactPreview({ content = '', meta = {} } = {}) {
     const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i) || html.match(/<h1[^>]*>([^<]+)<\/h1>/i)
     const title = (titleMatch?.[1] || meta.artifactTitle || 'preview').trim()
     return {
+      ...base,
       type: 'html',
       title,
       label: 'HTML',
@@ -116,6 +134,7 @@ export function buildArtifactPreview({ content = '', meta = {} } = {}) {
     if (!slides.length) return null
     const title = slides[0]?.title || meta.artifactTitle || 'presentation'
     return {
+      ...base,
       type: 'pptx',
       title,
       label: 'PowerPoint',
@@ -131,6 +150,7 @@ export function buildArtifactPreview({ content = '', meta = {} } = {}) {
     const doc = parseMarkdownDocument(content)
     if (!doc.blocks.length) return null
     return {
+      ...base,
       type: 'docx',
       title: doc.title,
       label: 'Word',
@@ -147,6 +167,7 @@ export function buildArtifactPreview({ content = '', meta = {} } = {}) {
     if (!rows.length) return null
     const title = inferSpreadsheetTitle(rows, meta.artifactTitle || 'spreadsheet')
     return {
+      ...base,
       type: 'xlsx',
       title,
       label: 'Excel',

@@ -13,12 +13,17 @@
 
 import { JSDOM } from 'jsdom'
 import https from 'node:https'
+import http from 'node:http'
 import dns from 'node:dns/promises'
 import net from 'node:net'
 import { URL as NodeURL } from 'node:url'
+import {
+  chargeForToolUse,
+  getPublicAccount,
+  getToolCost,
+} from './billingAuth.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
-const UA = 'Mozilla/5.0 (X11; Linux x86_64; Your-Model-Atelier) AppleWebKit/537.36'
 const SEARCH_TIMEOUT_MS = 12000
 const FETCH_TIMEOUT_MS = 15000
 const MAX_FETCH_BYTES = 1.5 * 1024 * 1024
@@ -136,25 +141,26 @@ async function readJson(req) {
   return JSON.parse(raw)
 }
 
-function withTimeout(ms) {
-  const ctrl = new AbortController()
-  const t = setTimeout(() => ctrl.abort(), ms)
-  return { signal: ctrl.signal, cancel: () => clearTimeout(t) }
-}
-
 /**
- * 用 node:https 直发请求(node 内置 fetch 会被 DuckDuckGo 反爬识别为 bot 拦截,
+ * 用 node:https / node:http 直发请求(node 内置 fetch 会被 DuckDuckGo 反爬识别为 bot 拦截,
  * 回 14kb 的占位页;https module 直发回真正的 25kb 结果页)。
  *
  * lockedIp:可选,指定一个已经解析+审核过的 IP,通过 socket lookup hook 强制 connect 到该 IP,
  * 避免 SSRF DNS rebinding (第二次解析换成内网 IP 的 TOCTOU 攻击)。
+ *
+ * ★ batchF P2a: 按 protocol 分流到 https / http,默认端口也跟着 protocol 走.
+ *   原实现固定 https.request + 默认 443,导致 fetch_url 宣称支持 http/https
+ *   但实际只能访问 https 站点.
  */
-function httpsRequest({ url, method = 'GET', headers = {}, body, timeoutMs = 12000, lockedIp = null }) {
+function safeRequest({ url, method = 'GET', headers = {}, body, timeoutMs = 12000, lockedIp = null }) {
   return new Promise((resolve, reject) => {
     const u = new NodeURL(url)
+    const isHttps = u.protocol === 'https:'
+    const transport = isHttps ? https : http
+    const defaultPort = isHttps ? 443 : 80
     const opts = {
       hostname: u.hostname,
-      port: u.port || 443,
+      port: u.port || defaultPort,
       path: u.pathname + u.search,
       method,
       headers: { ...headers },
@@ -163,11 +169,18 @@ function httpsRequest({ url, method = 'GET', headers = {}, body, timeoutMs = 120
       opts.headers['Content-Length'] = Buffer.byteLength(body)
     }
     if (lockedIp) {
-      // 用一个 fake lookup 把所有 DNS 查询固定到已审核 IP;TLS 仍按 hostname 校验证书 (servername 默认走 hostname).
-      opts.lookup = (_h, _o, cb) => cb(null, lockedIp, net.isIPv6(lockedIp) ? 6 : 4)
-      opts.servername = u.hostname
+      // 用 fake lookup 把 DNS 固定到已审核 IP;TLS 仍按 hostname 校验 (servername=hostname).
+      // ★ batchF P2a: node 18+ 的 net.connect 会传 { all: true },回调期待数组而不是单个 (addr,family).
+      //   原写法 cb(null, lockedIp, family) 在 all 模式下会让内层 emitLookup 把 lockedIp 当成 array,
+      //   从而抛 ERR_INVALID_IP_ADDRESS: undefined.
+      const family = net.isIPv6(lockedIp) ? 6 : 4
+      opts.lookup = (_h, o, cb) => {
+        if (o && o.all) cb(null, [{ address: lockedIp, family }])
+        else cb(null, lockedIp, family)
+      }
+      if (isHttps) opts.servername = u.hostname
     }
-    const req = https.request(opts, (res) => {
+    const req = transport.request(opts, (res) => {
       // follow 1 redirect (重定向后会重新走 assertSafeOutboundUrl,所以仍然安全)
       if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
         res.resume()
@@ -209,7 +222,7 @@ async function fetchSafe({ url, method = 'GET', headers = {}, body, timeoutMs = 
       const records = await dns.lookup(target.hostname, { all: true, verbatim: true })
       lockedIp = records[0]?.address || null
     }
-    const resp = await httpsRequest({
+    const resp = await safeRequest({
       url: target.toString(),
       method,
       headers: { ...headers, Host: target.host },
@@ -478,6 +491,14 @@ function checkToolRate(req) {
   return { allowed: true, remaining: TOOL_RATE_MAX - fresh.length }
 }
 
+// ★ batchF P1: 从 Authorization: Bearer <token> 抽 token,
+//   /api/tools/* 不允许匿名调用,前端必须先登录才能用搜索/抓取.
+function authToken(req) {
+  const auth = req.headers?.authorization || ''
+  if (!auth.startsWith('Bearer ')) return ''
+  return auth.slice(7).trim()
+}
+
 export async function handleToolProxyRequest(req, res) {
   if (req.method !== 'POST') {
     sendJson(res, 405, { ok: false, error: '仅支持 POST' })
@@ -490,20 +511,62 @@ export async function handleToolProxyRequest(req, res) {
     sendJson(res, 429, { ok: false, error: `工具调用过于频繁,请 ${Math.ceil(rate.resetMs / 1000)}s 后再试` })
     return
   }
+
+  // ★ batchF P1: 鉴权 + 估算 + 余额检查.先做这三步再读 body 之外的逻辑,
+  //   未登录或余额不足直接拒绝,不消耗后端 outbound 配额.
+  const token = authToken(req)
+  if (!token) {
+    sendJson(res, 401, { ok: false, error: '请先登录后再使用工具' })
+    return
+  }
+  let account
+  try {
+    account = getPublicAccount({ token })
+  } catch {
+    sendJson(res, 401, { ok: false, error: '登录已失效,请重新登录' })
+    return
+  }
+  const cost = getToolCost()
+  if ((account?.credits ?? 0) < cost) {
+    sendJson(res, 402, {
+      ok: false,
+      error: `积分不足,工具调用需要 ${cost} 积分,当前余额 ${account?.credits ?? 0}.请先充值.`,
+      requiredCredits: cost,
+      credits: account?.credits ?? 0,
+    })
+    return
+  }
+
   const url = req.url || ''
   try {
     const body = await readJson(req)
+    let result
+    let toolName
     if (url.startsWith('/api/tools/search')) {
-      const result = await searchDuckDuckGo({ query: body.query, maxResults: body.maxResults })
-      sendJson(res, 200, result)
+      toolName = 'web_search'
+      result = await searchDuckDuckGo({ query: body.query, maxResults: body.maxResults })
+    } else if (url.startsWith('/api/tools/fetch')) {
+      toolName = 'fetch_url'
+      result = await fetchAndExtract({ url: body.url })
+    } else {
+      sendJson(res, 404, { ok: false, error: '未知的工具端点' })
       return
     }
-    if (url.startsWith('/api/tools/fetch')) {
-      const result = await fetchAndExtract({ url: body.url })
-      sendJson(res, 200, result)
-      return
+
+    // 只有真正成功才扣费;失败不扣,避免 SSRF 探测/上游不稳定还吃用户积分.
+    let billing = null
+    if (result?.ok !== false) {
+      try {
+        const charged = chargeForToolUse({ token, toolName, cost })
+        billing = {
+          creditsCharged: cost,
+          credits: charged?.user?.credits ?? null,
+        }
+      } catch (err) {
+        billing = { error: err?.message || '扣费失败' }
+      }
     }
-    sendJson(res, 404, { ok: false, error: '未知的工具端点' })
+    sendJson(res, 200, { ...result, billing })
   } catch (err) {
     // ★ #36: 尊重 readJson 抛的 statusCode (e.g. 413)
     const status = err?.statusCode || 502

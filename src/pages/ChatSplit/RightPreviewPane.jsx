@@ -163,14 +163,14 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
     try {
       const saved = Number(localStorage.getItem('preview-pane-width'))
       if (Number.isFinite(saved) && saved >= 360 && saved <= 900) return saved
-    } catch (_) { /* ignore */ }
+    } catch { /* ignore */ }
     return 520
   })
   const dragStateRef = useRef(null)
   const previousArtifactKey = useRef('')
 
   useEffect(() => {
-    try { localStorage.setItem('preview-pane-width', String(paneWidth)) } catch (_) { /* ignore */ }
+    try { localStorage.setItem('preview-pane-width', String(paneWidth)) } catch { /* ignore */ }
   }, [paneWidth])
 
   const startResize = (e) => {

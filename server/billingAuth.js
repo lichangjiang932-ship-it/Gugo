@@ -204,6 +204,39 @@ export function chargeForModelUse({ token, modelName, cost, now = Date.now() }) 
 
 /* ── 计费配置 ── */
 
+// ★ batchF P1: 工具调用(搜索/抓取)也走鉴权和计费,
+//   防止未登录用户直接打 /api/tools/* 白嫖后端资源.
+//   固定费率,从 env CREDIT_TOOL_COST 读,默认 1 积分/次.
+export function getToolCost(env = process.env) {
+  const raw = Number(env.CREDIT_TOOL_COST)
+  if (!Number.isFinite(raw) || raw < 0) return 1
+  return raw
+}
+
+export function chargeForToolUse({ token, toolName, cost, now = Date.now() }) {
+  ensureLegacyMigration()
+  const user = getUserByToken(token)
+  if (!user) throw new Error('请先登录')
+  if ((user.credits || 0) < cost) {
+    throw new Error(`积分不足，需要 ${cost} 积分，当前余额 ${user.credits || 0}`)
+  }
+
+  const newCredits = user.credits - cost
+  updateUserCredits({ id: user.id, credits: newCredits, now })
+
+  addLedgerEntry({
+    id: crypto.randomUUID?.() || `led_${now}_${Math.random().toString(16).slice(2)}`,
+    userId: user.id,
+    type: 'tool_charge',
+    modelName: toolName,
+    credits: -cost,
+    balance: newCredits,
+    now,
+  })
+
+  return { ok: true, user: publicUser(getUserById(user.id)), ledger: getLedgerForUser(user.id) }
+}
+
 export function loadBillingConfig(env = process.env) {
   const basePer1k = Number(env.CREDIT_BASE_PER_1K_TOKENS ?? 10)
   const maxTokens = Number(env.MODEL_MAX_TOKENS ?? 4096)

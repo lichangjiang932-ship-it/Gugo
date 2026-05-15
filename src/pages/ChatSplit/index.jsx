@@ -191,6 +191,14 @@ export default function ChatSplit() {
         abortCtrlRef.current = controller
         setIsGenerating(true)
 
+        // 工具调用每轮都会真的请求一次模型,后端每轮都会扣费.把每轮 billing.creditsCharged
+        // 累加上来,UI 能看到实际花了多少积分,余额取最后一次后端返回的快照.
+        // ★ batchF P1: 这三个原本在 try 块内声明,导致 try 后的 UPDATE_LAST_MESSAGE_META
+        //   读不到 → ReferenceError 把整条收尾链路打断.提到 try 外修掉.
+        let totalCreditsCharged = 0
+        let latestCreditsBalance = null
+        let billingRoundError = null
+
         try {
           // 工具调用循环:每轮 stream 模型 → 收 tool_calls → 本地执行 → messages 追加 tool 结果 → 再 stream
           // 上限 5 轮防止失控;无 tool_calls 即文本回复完成,直接退出
@@ -200,11 +208,6 @@ export default function ChatSplit() {
           const tools = buildToolSpecs(enabledToolNames)
           const MAX_TOOL_ROUNDS = 5
           let chunkCount = 0
-          // 工具调用每轮都会真的请求一次模型,后端每轮都会扣费.把每轮 billing.creditsCharged
-          // 累加上来,UI 能看到实际花了多少积分,余额取最后一次后端返回的快照.
-          let totalCreditsCharged = 0
-          let latestCreditsBalance = null
-          let billingRoundError = null
 
           for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
             let pendingToolCalls = null
@@ -460,7 +463,7 @@ export default function ChatSplit() {
     const target = messages[idx]
     // 用户消息: 截到本条之前 → 重发本条 (相当于编辑后不改直接发)
     // 助手消息: 截到本条之前(含上一条 user 也保留) → 重发上一条 user 触发新回复
-    let resendText = ''
+    let resendText
     if (target.role === 'user') {
       dispatch({ type: 'TRUNCATE_MESSAGES', payload: idx })
       resendText = target.content

@@ -151,14 +151,14 @@ export default function ChatMessages({
                     <SparklesIcon />
                   </div>
                 )}
-                <div className={artifactPreview ? 'max-w-[920px] w-full' : 'p-3 rounded-md text-sm leading-relaxed max-w-[920px] ' + (msg.role === 'assistant' ? 'bg-paper-2 border border-ink/10' : 'pt-1.5')}>
+                <div className={artifactPreview && !artifactPreview.inferred ? 'max-w-[920px] w-full' : 'p-3 rounded-md text-sm leading-relaxed max-w-[920px] ' + (msg.role === 'assistant' ? 'bg-paper-2 border border-ink/10' : 'pt-1.5')}>
                   {msg.role === 'assistant' && Array.isArray(msg.meta?.toolCalls) && msg.meta.toolCalls.length > 0 && (
                     <div className="mb-2">
                       {msg.meta.toolCalls.map((tc) => <ToolCallCard key={tc.id} call={tc} />)}
                     </div>
                   )}
                   {msg.role === 'assistant' ? (
-                    artifactPreview ? (
+                    artifactPreview && !artifactPreview.inferred ? (
                       <button
                         type="button"
                         onClick={() => onOpenInPreview?.(msg, artifactPreview)}
@@ -193,6 +193,18 @@ export default function ChatMessages({
                         {/* ★ #23: streaming 时在尾部显示闪烁光标 */}
                         {msg.meta?.streaming && (
                           <span className="inline-block w-1.5 h-3.5 bg-ember/80 ml-0.5 align-middle animate-pulse" aria-hidden="true" />
+                        )}
+                        {/* ★ batchF P2b: 嗅探出来的 artifact 不再替代正文,作为辅助 CTA 出现在正文下方 */}
+                        {artifactPreview?.inferred && !msg.meta?.streaming && (
+                          <button
+                            type="button"
+                            onClick={() => onOpenInPreview?.(msg, artifactPreview)}
+                            className="mt-3 inline-flex items-center gap-2 px-2.5 py-1.5 rounded-md border border-ink-fade/25 bg-paper hover:border-ember/50 hover:text-ember text-[11px] text-ink-fade transition-colors"
+                            title={`像 ${artifactPreview.label} 一样在右侧预览/导出`}
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            像 {artifactPreview.label} 一样预览
+                          </button>
                         )}
                       </>
                     )

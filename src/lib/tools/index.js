@@ -8,6 +8,10 @@
  *   4) 把 { role: 'tool', tool_call_id, content } 追加到 messages,再发一轮
  */
 
+// ★ batchF P1: /api/tools/* 现在强制鉴权,前端必须带 token,
+//   否则未登录用户能直接调搜索/抓取消耗后端资源(也消耗别人的免费额度).
+import { getAuthToken } from '../accountClient.js'
+
 import { z } from 'zod'
 
 // ★ #18: 工具参数 zod schema — 模型可能给出脏数据,先校验再执行
@@ -96,9 +100,12 @@ export function listToolNames() {
 /* ── 执行器 ── */
 
 async function callJson(url, body) {
+  const headers = { 'Content-Type': 'application/json' }
+  const token = getAuthToken?.()
+  if (token) headers.Authorization = `Bearer ${token}`
   const resp = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(body),
   })
   const text = await resp.text()
