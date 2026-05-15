@@ -11,3 +11,22 @@ test('chat split uses an inline task strip instead of the right live task panel'
   assert.match(source, /<ChatTaskStrip/)
   assert.doesNotMatch(source, /<ChatTaskPanel/)
 })
+
+test('chat task strip exposes a real abort action instead of fake pause states', () => {
+  const chatSource = fs.readFileSync(new URL('../src/pages/ChatSplit/index.jsx', import.meta.url), 'utf8')
+  const stripSource = fs.readFileSync(new URL('../src/pages/ChatSplit/ChatTaskStrip.jsx', import.meta.url), 'utf8')
+  const detailSource = fs.readFileSync(new URL('../src/pages/TaskRunPanel.jsx', import.meta.url), 'utf8')
+
+  assert.match(chatSource, /const handleAbortTask = \(\) => abortCtrlRef\.current\?\.abort\(\)/)
+  assert.match(chatSource, /onAbortTask=\{handleAbortTask\}/)
+  assert.doesNotMatch(chatSource, /status:\s*'paused'/)
+  assert.doesNotMatch(chatSource, /status:\s*'stopped'/)
+
+  assert.match(stripSource, /onAbortTask/)
+  assert.doesNotMatch(stripSource, /onPauseTask/)
+  assert.doesNotMatch(stripSource, /Pause/)
+
+  assert.doesNotMatch(detailSource, /status === 'paused'/)
+  assert.doesNotMatch(detailSource, /handlePause/)
+  assert.doesNotMatch(detailSource, /handleInterrupt/)
+})

@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { CheckCircle2, LayoutList, MessageSquare, Pause, X } from 'lucide-react'
+import { CheckCircle2, LayoutList, MessageSquare } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
 import { useAppContext } from '../store/AppContext'
 
@@ -8,7 +8,7 @@ const circumference = 264
 
 export default function TaskRunPanel() {
   const navigate = useNavigate()
-  const { state, dispatch } = useAppContext()
+  const { state } = useAppContext()
   const tasks = state.tasks
   const task = tasks.find((t) => t.status === 'running') || tasks[0]
   const taskSteps = task?.steps || []
@@ -46,22 +46,11 @@ export default function TaskRunPanel() {
               <CheckCircle2 className="w-4 h-4 text-ink-fade" />
             </div>
             <p className="text-sm text-ink-soft">任务面板为空</p>
-            <p className="text-xs text-ink-fade">当前没有可暂停或中断的本地任务。</p>
+            <p className="text-xs text-ink-fade">当前没有正在执行的本地任务。</p>
           </div>
         </aside>
       </div>
     )
-  }
-
-  const handlePause = () => {
-    dispatch({
-      type: 'UPDATE_TASK',
-      payload: { id: task.id, updates: { status: task.status === 'paused' ? 'running' : 'paused' } },
-    })
-  }
-
-  const handleInterrupt = () => {
-    dispatch({ type: 'REMOVE_TASK', payload: task.id })
   }
 
   return (
@@ -146,23 +135,6 @@ export default function TaskRunPanel() {
         </div>
 
         <div className="flex-1" />
-
-        <div className="flex gap-2 pt-2">
-          <button
-            onClick={handlePause}
-            className="h-9 px-4 border border-dashed border-ink-fade/60 rounded-md font-hand text-sm text-ink-soft hover:border-ink-fade transition-colors flex items-center gap-1.5"
-          >
-            <Pause className="w-4 h-4" />
-            {task.status === 'paused' ? '继续' : '暂停'}
-          </button>
-          <button
-            onClick={handleInterrupt}
-            className="h-9 px-4 border border-ink/70 rounded-md font-hand text-sm text-ink hover:bg-paper-2 transition-colors flex items-center gap-1.5"
-          >
-            <X className="w-4 h-4" />
-            中断
-          </button>
-        </div>
       </aside>
     </div>
   )

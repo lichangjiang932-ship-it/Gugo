@@ -28,10 +28,10 @@ function HtmlPreview({ html }) {
   return (
     <iframe
       title="HTML 预览"
-      // SECURITY: 只给 allow-scripts + allow-forms + allow-modals。绝不加 allow-same-origin —
+      // SECURITY: 只给 allow-scripts + allow-forms。绝不加 allow-same-origin —
       // srcdoc 文档默认是 opaque origin,加上后会让脚本访问父页 storage/cookie + 逃逸沙箱。
       // 工件页面如需调用外部 API,通过 postMessage 让父页代理。
-      sandbox="allow-scripts allow-forms allow-modals"
+      sandbox="allow-scripts allow-forms"
       // 可选:再加 referrerpolicy 防泄漏来源
       referrerPolicy="no-referrer"
       srcDoc={srcDoc}
@@ -47,7 +47,7 @@ function PptxPreview({ content }) {
       title="PPT 预览"
       srcDoc={srcDoc}
       className="w-full h-full border-0"
-      sandbox="allow-scripts allow-forms allow-modals"
+      sandbox="allow-scripts allow-forms"
       referrerPolicy="no-referrer"
     />
   )

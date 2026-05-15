@@ -1,11 +1,10 @@
-import { ArrowUpRight, Loader2, Pause, X } from 'lucide-react'
+import { ArrowUpRight, Loader2, X } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { TASK_STATUS } from '../../store/taskStatus.js'
 
 export default function ChatTaskStrip({
   tasks,
-  onPauseTask,
-  onStopTask,
+  onAbortTask,
   onNavigateDetail,
 }) {
   const activeTask = tasks.find((task) => task.status === TASK_STATUS.RUNNING)
@@ -48,15 +47,7 @@ export default function ChatTaskStrip({
         <div className="flex items-center gap-2 shrink-0">
           <button
             type="button"
-            onClick={() => onPauseTask(activeTask.id)}
-            className="h-8 px-3 border border-dashed border-ink-fade/60 rounded-md text-xs text-ink-soft hover:border-ink-fade transition-colors flex items-center gap-1"
-          >
-            <Pause className="w-3.5 h-3.5" />
-            暂停
-          </button>
-          <button
-            type="button"
-            onClick={() => onStopTask(activeTask.id)}
+            onClick={onAbortTask}
             className="h-8 px-3 border border-ink/70 rounded-md text-xs text-ink hover:bg-paper transition-colors flex items-center gap-1"
           >
             <X className="w-3.5 h-3.5" />

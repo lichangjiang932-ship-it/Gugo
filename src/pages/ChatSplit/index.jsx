@@ -506,8 +506,7 @@ export default function ChatSplit() {
     dispatch({ type: 'RECEIVE_MESSAGE', payload: '已拒绝该操作。' })
   }
 
-  const handlePauseTask = (taskId) => dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: 'paused' } } })
-  const handleStopTask = (taskId) => dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: 'stopped' } } })
+  const handleAbortTask = () => abortCtrlRef.current?.abort()
 
   return (
     <div className="h-screen flex bg-paper overflow-hidden">
@@ -538,8 +537,7 @@ export default function ChatSplit() {
 
         <ChatTaskStrip
           tasks={tasks}
-          onPauseTask={handlePauseTask}
-          onStopTask={handleStopTask}
+          onAbortTask={handleAbortTask}
           onNavigateDetail={() => navigate('/task')}
         />
 
@@ -582,7 +580,7 @@ export default function ChatSplit() {
           showContextPanel={showContextPanel}
           setShowContextPanel={setShowContextPanel}
           isGenerating={isGenerating}
-          onAbort={() => abortCtrlRef.current?.abort()}
+          onAbort={handleAbortTask}
           messages={messages}
           onFileChange={handleFileChange}
           onVoiceClick={handleVoice}
