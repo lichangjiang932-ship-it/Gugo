@@ -1,0 +1,58 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { buildToolSpecs, listToolNames } from '../src/lib/tools/index.js'
+import { TASK_STATUS, TOOL_CALL_STATUS, HISTORY_STATUS, isTaskStatus, isToolCallStatus } from '../src/store/taskStatus.js'
+
+test('TASK_STATUS 是 frozen', () => {
+  assert.ok(Object.isFrozen(TASK_STATUS))
+  assert.ok(Object.isFrozen(TOOL_CALL_STATUS))
+  assert.ok(Object.isFrozen(HISTORY_STATUS))
+})
+
+test('isTaskStatus / isToolCallStatus 正确判别', () => {
+  assert.ok(isTaskStatus(TASK_STATUS.RUNNING))
+  assert.ok(isTaskStatus(TASK_STATUS.COMPLETED))
+  assert.ok(!isTaskStatus('weird'))
+  assert.ok(isToolCallStatus(TOOL_CALL_STATUS.RUNNING))
+  assert.ok(!isToolCallStatus('weird'))
+})
+
+test('buildToolSpecs 接受 Array', () => {
+  const specs = buildToolSpecs(['web_search'])
+  assert.equal(specs.length, 1)
+  assert.equal(specs[0].function.name, 'web_search')
+})
+
+test('buildToolSpecs 接受 Set', () => {
+  const specs = buildToolSpecs(new Set(['web_search', 'fetch_url']))
+  assert.equal(specs.length, 2)
+})
+
+test('buildToolSpecs 去重', () => {
+  const specs = buildToolSpecs(['web_search', 'web_search', 'web_search'])
+  assert.equal(specs.length, 1)
+})
+
+test('buildToolSpecs 忽略未知工具', () => {
+  // console.warn 也容忍
+  const specs = buildToolSpecs(['web_search', 'shell_exec'])
+  assert.equal(specs.length, 1)
+  assert.equal(specs[0].function.name, 'web_search')
+})
+
+test('buildToolSpecs 忽略非字符串', () => {
+  const specs = buildToolSpecs(['web_search', null, undefined, 42, {}])
+  assert.equal(specs.length, 1)
+})
+
+test('buildToolSpecs 接受空/null', () => {
+  assert.deepEqual(buildToolSpecs(null), [])
+  assert.deepEqual(buildToolSpecs(undefined), [])
+  assert.deepEqual(buildToolSpecs([]), [])
+})
+
+test('listToolNames 返回所有内置工具', () => {
+  const names = listToolNames()
+  assert.ok(names.includes('web_search'))
+  assert.ok(names.includes('fetch_url'))
+})

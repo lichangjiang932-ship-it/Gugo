@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   Bell,
@@ -15,6 +15,7 @@ import {
   Shield,
   Sun,
   Trash2,
+  Upload,
   Zap,
   MonitorSmartphone,
 } from 'lucide-react'
@@ -28,6 +29,13 @@ import {
   shouldDisableLoginCodeButton,
 } from '../lib/loginCountdown.js'
 import { getSystemDiagnostics, testModelEndpoint } from '../lib/modelClient.js'
+import {
+  wrapSessionsExport,
+  wrapSettingsExport,
+  parseImport,
+  InvalidExportError,
+  SCHEMA_VERSION,
+} from '../store/exportSchema.js'
 
 const SETTINGS_NAV = ['账户', '权限中心', '工具', '外观', '快捷键', '数据 & 导出']
 const ACCENT_COLORS = ['#E86A3C', '#2E8FA3', '#A5C97A', '#D4A4FF']
@@ -58,9 +66,15 @@ function formatBytes(bytes) {
 function getLocalStorageBytes() {
   if (typeof window === 'undefined') return 0
   let total = 0
-  for (const key of Object.keys(window.localStorage)) {
-    const value = window.localStorage.getItem(key) || ''
-    total += key.length + value.length
+  try {
+    for (const key of Object.keys(window.localStorage)) {
+      const value = window.localStorage.getItem(key) || ''
+      total += key.length + value.length
+    }
+  } catch (err) {
+    // SecurityError (Safari 隐私 / 跨源 iframe / quota 检测时也可能抛)
+    console.warn('[SettingsView] localStorage 不可读:', err?.name || err)
+    return 0
   }
   return total * 2
 }
@@ -89,6 +103,7 @@ export default function SettingsView() {
   const [diagnostics, setDiagnostics] = useState(null)
   const [diagnosticsMessage, setDiagnosticsMessage] = useState('')
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
+  const importInputRef = useRef(null)
 
   const refreshStorage = () => setStorageBytes(getLocalStorageBytes())
   const refreshDiagnostics = async ({ check = false } = {}) => {
@@ -670,12 +685,12 @@ export default function SettingsView() {
 
   function renderDataExport() {
     const handleExportSessions = () => {
-      downloadJson(`sessions-${Date.now()}.json`, state.sessions)
-      setDataMessage('会话数据已导出。')
+      downloadJson(`sessions-${Date.now()}.json`, wrapSessionsExport(state.sessions))
+      setDataMessage(`会话数据已导出 (schema v${SCHEMA_VERSION})。`)
     }
 
     const handleExportSettings = () => {
-      downloadJson(`settings-${Date.now()}.json`, {
+      downloadJson(`settings-${Date.now()}.json`, wrapSettingsExport({
         theme: state.theme,
         accentColor: state.accentColor,
         fontSize: state.fontSize,
@@ -683,17 +698,47 @@ export default function SettingsView() {
         animationsEnabled: state.animationsEnabled,
         permissions: state.permissions,
         skillConfigs: state.skillConfigs,
-      })
-      setDataMessage('设置已导出，导出内容不包含 API Key。')
+      }))
+      setDataMessage(`设置已导出 (schema v${SCHEMA_VERSION},不含 API Key)。`)
+    }
+
+    const handleImportFile = async (file) => {
+      if (!file) return
+      try {
+        const text = await file.text()
+        const parsed = parseImport(text)
+        if (parsed.kind === 'sessions') {
+          dispatch({ type: 'IMPORT_SESSIONS', payload: parsed.payload })
+          setDataMessage(`已导入 ${parsed.payload.length} 个会话 (schema: ${parsed.schema})。`)
+        } else if (parsed.kind === 'settings') {
+          dispatch({ type: 'IMPORT_SETTINGS', payload: parsed.payload })
+          setDataMessage(`已导入设置 (schema: ${parsed.schema})。`)
+        }
+        refreshStorage()
+      } catch (err) {
+        if (err instanceof InvalidExportError) {
+          setDataMessage(`导入失败: ${err.reason}`)
+        } else {
+          setDataMessage(`导入失败: ${err?.message || err}`)
+        }
+      } finally {
+        // 同一文件再次选择需要重置 input
+        if (importInputRef.current) importInputRef.current.value = ''
+      }
     }
 
     const handleClearTmp = () => {
       let cleared = 0
-      for (const key of Object.keys(localStorage)) {
-        if (key.startsWith('your-model-atelier:tmp:') || key.startsWith('tmp:')) {
-          localStorage.removeItem(key)
-          cleared += 1
+      try {
+        for (const key of Object.keys(localStorage)) {
+          if (key.startsWith('your-model-atelier:tmp:') || key.startsWith('tmp:')) {
+            localStorage.removeItem(key)
+            cleared += 1
+          }
         }
+      } catch (err) {
+        setDataMessage(`本地存储不可访问 (${err?.name || 'Error'})。`)
+        return
       }
       refreshStorage()
       setDataMessage(`已清理 ${cleared} 项本地临时数据。`)
@@ -701,9 +746,13 @@ export default function SettingsView() {
 
     const handleClearAll = () => {
       if (!confirm('确定清除所有本地会话、设置和历史记录？此操作不可撤销。')) return
-      clearPersistedState()
+      const result = clearPersistedState()
       dispatch({ type: 'CLEAR_ALL_DATA' })
-      setDataMessage('所有本地数据已清除。')
+      if (result?.ok) {
+        setDataMessage('所有本地数据已清除。')
+      } else {
+        setDataMessage(`内存状态已重置;localStorage 不可写 (${result?.reason || 'unknown'}),刷新后将以干净状态启动。`)
+      }
       refreshStorage()
     }
 
@@ -724,6 +773,26 @@ export default function SettingsView() {
               <Download className="w-3.5 h-3.5" />
               导出设置
             </button>
+          </div>
+        </SettingsGroup>
+
+        <SettingsGroup title="导入数据">
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              ref={importInputRef}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={(e) => handleImportFile(e.target.files?.[0])}
+            />
+            <button
+              onClick={() => importInputRef.current?.click()}
+              className="h-9 px-4 border border-ink/70 rounded-md text-sm text-ink hover:bg-paper-2 transition-colors flex items-center gap-1.5"
+            >
+              <Upload className="w-3.5 h-3.5" />
+              选择 JSON 文件
+            </button>
+            <span className="text-xs text-ink-soft">支持当前 schema (v{SCHEMA_VERSION}) 或老版本裸 sessions 数组,导入前会做结构校验。</span>
           </div>
         </SettingsGroup>
 

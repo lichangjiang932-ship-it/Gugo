@@ -1,6 +1,7 @@
 import { createContext, useContext, useReducer, useEffect } from 'react'
 import { PERMISSIONS } from '../data.js'
 import { persistWithDegradation } from './persistDegradation.js'
+import { TASK_STATUS } from './taskStatus.js'
 
 const STORAGE_KEY = 'your-model-atelier:state:v1'
 
@@ -46,9 +47,16 @@ function createInitialState() {
 
 function loadPersistedState() {
   if (typeof window === 'undefined') return createInitialState()
+  let raw
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY)
-    if (!raw) return createInitialState()
+    raw = window.localStorage.getItem(STORAGE_KEY)
+  } catch (err) {
+    // Safari 隐私模式 / 禁用 storage 直接抛 SecurityError
+    console.warn('[AppContext] localStorage 不可读,以默认状态启动:', err?.name || err)
+    return createInitialState()
+  }
+  if (!raw) return createInitialState()
+  try {
     const saved = JSON.parse(raw)
     const base = createInitialState()
     const merged = { ...base }
@@ -247,7 +255,7 @@ function reducer(state, action) {
         id: crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`,
         name: '',
         detail: '',
-        status: 'pending',
+        status: TASK_STATUS.PENDING,
         progress: 0,
         step: 0,
         stepLabel: '',
@@ -328,6 +336,48 @@ function reducer(state, action) {
 
     case 'CLEAR_ALL_DATA': {
       return createInitialState()
+    }
+
+    case 'IMPORT_SESSIONS': {
+      // payload: 已经过 schema 校验的 sessions 数组
+      const incoming = Array.isArray(action.payload) ? action.payload : []
+      // id 冲突时把导入项重新分配 id,避免覆盖
+      const existingIds = new Set(state.sessions.map((s) => s.id))
+      const remapped = incoming.map((s) => {
+        if (existingIds.has(s.id)) {
+          const newId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+          return { ...s, id: newId }
+        }
+        return s
+      })
+      return {
+        ...state,
+        sessions: [...remapped, ...state.sessions],
+      }
+    }
+
+    case 'IMPORT_SETTINGS': {
+      const p = action.payload || {}
+      const next = { ...state }
+      const stringFields = ['theme', 'accentColor', 'fontSize', 'density']
+      for (const k of stringFields) {
+        if (typeof p[k] === 'string') next[k] = p[k]
+      }
+      if (typeof p.animationsEnabled === 'boolean') next.animationsEnabled = p.animationsEnabled
+      if (Array.isArray(p.permissions)) {
+        // 按 id 合并,保留运行时的图标等元信息
+        const incomingMap = new Map(p.permissions.map((perm) => [perm.id, !!perm.enabled]))
+        next.permissions = state.permissions.map((perm) => ({
+          ...perm,
+          enabled: incomingMap.has(perm.id) ? incomingMap.get(perm.id) : perm.enabled,
+        }))
+      }
+      if (p.skillConfigs && typeof p.skillConfigs === 'object' && !Array.isArray(p.skillConfigs)) {
+        next.skillConfigs = { ...state.skillConfigs, ...p.skillConfigs }
+      }
+      return next
     }
 
     case 'SET_DRAFT_INPUT': {
@@ -482,11 +532,14 @@ export function AppProvider({ children }) {
 // 暴露给外部（如 SettingsView "清空全部数据"）调用
 // eslint-disable-next-line react-refresh/only-export-components
 export function clearPersistedState() {
-  if (typeof window === 'undefined') return
+  if (typeof window === 'undefined') return { ok: true }
   try {
     window.localStorage.removeItem(STORAGE_KEY)
-  } catch {
-    // ignore
+    return { ok: true }
+  } catch (err) {
+    // Safari 隐私模式 / 用户禁用 storage / iframe 跨源限制 → SecurityError
+    console.warn('[AppContext] localStorage 不可写,清除被忽略:', err?.name || err)
+    return { ok: false, reason: err?.name === 'SecurityError' ? 'storage-disabled' : (err?.message || 'unknown') }
   }
 }
 
