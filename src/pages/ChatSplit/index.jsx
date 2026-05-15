@@ -12,7 +12,7 @@ import { TASK_STATUS, TOOL_CALL_STATUS, HISTORY_STATUS } from '../../store/taskS
 import ChatHeader from './ChatHeader'
 import ChatMessages from './ChatMessages'
 import ChatComposer from './ChatComposer'
-import ChatTaskPanel from './ChatTaskPanel'
+import ChatTaskStrip from './ChatTaskStrip'
 import RightPreviewPane from './RightPreviewPane'
 import { exportSession } from '../../lib/sessionExport.js'
 
@@ -60,8 +60,6 @@ export default function ChatSplit() {
   const activeSession = state.sessions.find((s) => s.id === state.activeSessionId)
   const messages = activeSession?.messages ?? EMPTY_MESSAGES
   const tasks = state.tasks
-  const activeTask = tasks.find((t) => t.status === 'running') || tasks[0]
-  const skillChain = activeTask?.perms || []
   useEffect(() => {
     let cancelled = false
     async function loadModels() {
@@ -538,6 +536,13 @@ export default function ChatSplit() {
           onNavigateTask={() => navigate('/task')}
         />
 
+        <ChatTaskStrip
+          tasks={tasks}
+          onPauseTask={handlePauseTask}
+          onStopTask={handleStopTask}
+          onNavigateDetail={() => navigate('/task')}
+        />
+
         <ChatMessages
           messages={messages}
           state={state}
@@ -594,14 +599,6 @@ export default function ChatSplit() {
         artifact={state.previewArtifact}
         onClose={() => dispatch({ type: 'CLOSE_PREVIEW_ARTIFACT' })}
         onMessage={setWorkbenchMessage}
-      />
-
-      <ChatTaskPanel
-        tasks={tasks}
-        skillChain={skillChain}
-        onPauseTask={handlePauseTask}
-        onStopTask={handleStopTask}
-        onNavigateDetail={() => navigate('/task')}
       />
     </div>
   )
