@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, FileText, BarChart3, LayoutList, Download, ExternalLink } from 'lucide-react'
+import { X, FileText, BarChart3, LayoutList, Download, ExternalLink, ChevronDown } from 'lucide-react'
 import MarkdownRenderer from '../../components/MarkdownRenderer.jsx'
 import ToolCallCard from '../../components/ToolCallCard.jsx'
 import { buildArtifactPreview } from '../../lib/artifactPreview.js'
@@ -96,8 +96,46 @@ export default function ChatMessages({
     return handleDownloadOffice(msg, type)
   }
 
+  // #11 自动滚到底 + 浮动「回到底部」按钮
+  // 规则:用户已贴底 → 新消息自动滚;用户上滑离开底部 → 不打扰,显示按钮让其手动回
+  const scrollRef = useRef(null)
+  const [atBottom, setAtBottom] = useState(true)
+  const lastCountRef = useRef(messages.length)
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const onScroll = () => {
+      const distance = el.scrollHeight - el.scrollTop - el.clientHeight
+      setAtBottom(distance < 80) // 80px 容差,刚好够看到下一条进入
+    }
+    el.addEventListener('scroll', onScroll, { passive: true })
+    onScroll()
+    return () => el.removeEventListener('scroll', onScroll)
+  }, [])
+
+  // 新消息或流式追加时,如果用户在底部就跟着滚
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const grew = messages.length > lastCountRef.current
+    const lastMsg = messages[messages.length - 1]
+    // 流式中:最后一条 assistant 还在更新 content,也算"内容增长"
+    const streaming = lastMsg?.role === 'assistant' && lastMsg?.meta?.streaming
+    if ((grew || streaming) && atBottom) {
+      el.scrollTop = el.scrollHeight
+    }
+    lastCountRef.current = messages.length
+  }, [messages, atBottom])
+
+  const scrollToBottom = () => {
+    const el = scrollRef.current
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+  }
+
   return (
-    <div className="flex-1 overflow-y-auto px-7 py-6">
+    <div ref={scrollRef} className="flex-1 overflow-y-auto px-7 py-6 relative">
       <div className="w-full max-w-[1080px] ml-0 mr-auto flex flex-col gap-5">
         {workbenchMessage && (
           <div className="p-3 border border-ink-fade/40 rounded-md bg-paper-2 text-xs text-ink-soft">
@@ -356,6 +394,18 @@ export default function ChatMessages({
           </motion.div>
         )}
       </div>
+      {/* #11 浮动「回到底部」按钮 — 离底超过 80px 才显示 */}
+      {!atBottom && messages.length > 0 && (
+        <button
+          onClick={scrollToBottom}
+          className="absolute bottom-4 right-6 z-10 inline-flex items-center gap-1.5 h-8 px-3 rounded-full bg-paper border border-ink-fade/60 shadow-sm text-xs text-ink-soft hover:border-ink-fade hover:text-ink transition-colors"
+          title="回到底部"
+          aria-label="回到底部"
+        >
+          <ChevronDown className="w-3.5 h-3.5" />
+          回到底部
+        </button>
+      )}
     </div>
   )
 }
