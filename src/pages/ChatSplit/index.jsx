@@ -428,6 +428,39 @@ export default function ChatSplit() {
     dispatch({ type: 'TRUNCATE_MESSAGES', payload: idx })
   }, [messages, dispatch])
 
+  // ★ #9: 重发 — 找到消息位置,截掉它之后的所有消息(含本条),
+  //   再用本条文本走完整发送流程(经过 triggerSendFlow 才能跑完工具/计费/SSE)
+  const handleRegenerate = useCallback((msgId) => {
+    const idx = messages.findIndex((m) => m.id === msgId)
+    if (idx === -1) return
+    const target = messages[idx]
+    // 用户消息: 截到本条之前 → 重发本条 (相当于编辑后不改直接发)
+    // 助手消息: 截到本条之前(含上一条 user 也保留) → 重发上一条 user 触发新回复
+    let resendText = ''
+    if (target.role === 'user') {
+      dispatch({ type: 'TRUNCATE_MESSAGES', payload: idx })
+      resendText = target.content
+    } else {
+      // 找上一条 user
+      let prevUserIdx = -1
+      for (let i = idx - 1; i >= 0; i -= 1) {
+        if (messages[i].role === 'user') { prevUserIdx = i; break }
+      }
+      if (prevUserIdx === -1) return
+      dispatch({ type: 'TRUNCATE_MESSAGES', payload: prevUserIdx })
+      resendText = messages[prevUserIdx].content
+    }
+    if (resendText) triggerSendFlow(resendText)
+  }, [messages, dispatch, triggerSendFlow])
+
+  // ★ #10: 删除单条消息
+  const handleDeleteMessage = useCallback((msgId) => {
+    if (!msgId) return
+    if (typeof window !== 'undefined' && !window.confirm('删除这条消息?')) return
+    dispatch({ type: 'DELETE_MESSAGE', payload: msgId })
+  }, [dispatch])
+
+
   const handlePermAllow = () => {
     dispatch({ type: 'SET_PERM_REQUEST', payload: null })
     const pendingTask = [...state.tasks].reverse().find((t) => t.status === 'pending')
@@ -482,6 +515,8 @@ export default function ChatSplit() {
           isGenerating={isGenerating}
           onExampleClick={(label) => triggerSendFlow(label)}
           onEditMessage={handleEditMessage}
+          onRegenerateMessage={handleRegenerate}
+          onDeleteMessage={handleDeleteMessage}
           onPermAllow={handlePermAllow}
           onPermDeny={handlePermDeny}
           onNavigatePermissions={() => navigate('/permissions')}
