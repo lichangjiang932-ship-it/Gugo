@@ -115,39 +115,59 @@ async function execRunJs(args) {
   if (code.length > 8000) throw new Error('代码过长(>8000 字符)')
   // 用 Worker 跑,5 秒超时
   return await new Promise((resolve, reject) => {
+    // SECURITY: blob URL 创建的 Worker 继承父页 origin → 能 fetch /api/* 拿用户 token,
+    // 还能 importScripts() 跨域加载脚本做数据回传 (exfil)。
+    // 在 worker 顶部把所有出网 API 都禁掉,只留纯计算能力 + console.log。
     const src = `
+      // —— 禁掉所有出网/外部加载能力,防止 exfil ——
+      self.importScripts = function () { throw new Error('importScripts is disabled in run_js sandbox') };
+      self.fetch = undefined;
+      self.XMLHttpRequest = undefined;
+      self.WebSocket = undefined;
+      self.EventSource = undefined;
+      try { delete self.indexedDB } catch (e) {}
+      try { delete self.caches } catch (e) {}
+      // ——————————————————————————————————————————————
+
       const __logs = [];
-      const console = { log: (...a) => __logs.push(a.map(x => typeof x === 'string' ? x : JSON.stringify(x)).join(' ')) };
+      const console = {
+        log: (...a) => __logs.push(a.map(x => typeof x === 'string' ? x : (() => { try { return JSON.stringify(x) } catch { return String(x) } })()).join(' ')),
+        error: (...a) => __logs.push('[err] ' + a.map(x => typeof x === 'string' ? x : String(x)).join(' ')),
+        warn: (...a) => __logs.push('[warn] ' + a.map(x => typeof x === 'string' ? x : String(x)).join(' ')),
+        info: (...a) => __logs.push('[info] ' + a.map(x => typeof x === 'string' ? x : String(x)).join(' ')),
+      };
       self.onmessage = async (e) => {
         try {
           const fn = new Function('console', 'return (async () => { ' + e.data + ' })()');
           const value = await fn(console);
-          self.postMessage({ ok: true, stdout: __logs.join('\\n'), value: value === undefined ? null : JSON.parse(JSON.stringify(value)) });
+          // value 序列化时如果含循环引用会抛 → 兜底改 String
+          let safeValue = null;
+          try { safeValue = value === undefined ? null : JSON.parse(JSON.stringify(value)) }
+          catch { safeValue = '[unserializable: ' + Object.prototype.toString.call(value) + ']' }
+          self.postMessage({ ok: true, stdout: __logs.join('\\n'), value: safeValue });
         } catch (err) {
-          self.postMessage({ ok: false, error: String(err && err.message || err) });
+          self.postMessage({ ok: false, error: String(err && err.message || err), stdout: __logs.join('\\n') });
         }
       };
     `
     const blob = new Blob([src], { type: 'application/javascript' })
     const url = URL.createObjectURL(blob)
     const worker = new Worker(url)
+    const cleanup = () => { worker.terminate(); URL.revokeObjectURL(url) }
     const timer = setTimeout(() => {
-      worker.terminate()
-      URL.revokeObjectURL(url)
+      cleanup()
       reject(new Error('运行超时(>5s)'))
     }, 5000)
     worker.onmessage = (ev) => {
       clearTimeout(timer)
-      worker.terminate()
-      URL.revokeObjectURL(url)
+      cleanup()
       const data = ev.data
       if (!data?.ok) return reject(new Error(data?.error || '执行失败'))
       resolve(JSON.stringify({ stdout: data.stdout, value: data.value }))
     }
     worker.onerror = (err) => {
       clearTimeout(timer)
-      worker.terminate()
-      URL.revokeObjectURL(url)
+      cleanup()
       reject(new Error(err.message || 'Worker 错误'))
     }
     worker.postMessage(code)

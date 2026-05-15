@@ -7,12 +7,14 @@
  *   - 保留对 outbound 请求的速率/超时/UA 控制
  *
  * 当前支持的工具:
- *   - web_search(query, max_results?) 走 DuckDuckGo HTML 端点(无 key)
+ *   - web_search(query, max_results?) 走 DuckDuckGo HTML 端点(无 key) + Bing 兜底
  *   - fetch_url(url) 抓正文 + 转 markdown(jsdom + 朴素正文提取)
  */
 
 import { JSDOM } from 'jsdom'
 import https from 'node:https'
+import dns from 'node:dns/promises'
+import net from 'node:net'
 import { URL as NodeURL } from 'node:url'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
@@ -21,6 +23,94 @@ const SEARCH_TIMEOUT_MS = 12000
 const FETCH_TIMEOUT_MS = 15000
 const MAX_FETCH_BYTES = 1.5 * 1024 * 1024
 const MAX_MARKDOWN_CHARS = 12000
+
+// 简单的搜索结果缓存:DDG 偶尔 503/反爬,缓存 10 分钟可让连续相似查询不爆。
+// LRU 大小 64 条,够单用户使用。
+const SEARCH_CACHE = new Map()
+const SEARCH_CACHE_TTL_MS = 10 * 60 * 1000
+const SEARCH_CACHE_MAX = 64
+
+function cacheGet(key) {
+  const hit = SEARCH_CACHE.get(key)
+  if (!hit) return null
+  if (Date.now() - hit.t > SEARCH_CACHE_TTL_MS) { SEARCH_CACHE.delete(key); return null }
+  // LRU 触发:重新插入到末尾
+  SEARCH_CACHE.delete(key); SEARCH_CACHE.set(key, hit)
+  return hit.v
+}
+function cacheSet(key, value) {
+  SEARCH_CACHE.set(key, { v: value, t: Date.now() })
+  while (SEARCH_CACHE.size > SEARCH_CACHE_MAX) {
+    const firstKey = SEARCH_CACHE.keys().next().value
+    SEARCH_CACHE.delete(firstKey)
+  }
+}
+
+/* ── SSRF 防护:解析目标域名,拒绝任何指向私有 / loopback / link-local / 多播的 IP ── */
+
+// IPv4 私有/特殊段 (RFC 1918 / 6890 等)
+function isPrivateV4(ip) {
+  // 形如 a.b.c.d
+  const m = ip.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/)
+  if (!m) return false
+  const a = +m[1], b = +m[2]
+  if (a === 10) return true                       // 10.0.0.0/8
+  if (a === 127) return true                      // 127.0.0.0/8 loopback
+  if (a === 169 && b === 254) return true         // 169.254.0.0/16 link-local (含 AWS metadata 169.254.169.254)
+  if (a === 172 && b >= 16 && b <= 31) return true// 172.16.0.0/12
+  if (a === 192 && b === 168) return true         // 192.168.0.0/16
+  if (a === 0) return true                        // 0.0.0.0/8
+  if (a >= 224) return true                       // 多播/保留 224+
+  if (a === 100 && b >= 64 && b <= 127) return true // 100.64.0.0/10 CGNAT
+  return false
+}
+
+// IPv6 危险段:::1 / fe80::/10 link-local / fc00::/7 unique-local / ::ffff:<v4-private> mapped
+function isPrivateV6(ip) {
+  const lower = ip.toLowerCase()
+  if (lower === '::' || lower === '::1') return true
+  if (/^fe[89ab][0-9a-f]:/.test(lower)) return true   // fe80::/10
+  if (/^f[cd][0-9a-f]{2}:/.test(lower)) return true   // fc00::/7
+  if (/^ff[0-9a-f]{2}:/.test(lower)) return true      // ff00::/8 多播
+  // ::ffff:a.b.c.d 形式映射 IPv4
+  const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)
+  if (mapped && isPrivateV4(mapped[1])) return true
+  return false
+}
+
+export function isUnsafeIp(ip) {
+  if (net.isIPv4(ip)) return isPrivateV4(ip)
+  if (net.isIPv6(ip)) return isPrivateV6(ip)
+  return true // 解析不出来认为不安全
+}
+
+export async function assertSafeOutboundUrl(rawUrl) {
+  let target
+  try { target = new NodeURL(rawUrl) } catch { throw new Error('url 无效') }
+  if (!['http:', 'https:'].includes(target.protocol)) throw new Error('仅支持 http/https')
+  // URL.hostname 对 IPv6 会保留方括号,要剥掉再交给 net.isIP / dns.lookup
+  let host = target.hostname
+  if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1)
+  // 主机名形如 IP 时直接判
+  if (net.isIP(host)) {
+    if (isUnsafeIp(host)) throw new Error('禁止访问内网 / loopback 地址')
+    return target
+  }
+  // 域名:解析所有 A/AAAA,任何一个落在内网都拒绝 (防 DNS rebinding 把外网域名解析到内网)
+  let records
+  try {
+    records = await dns.lookup(host, { all: true, verbatim: true })
+  } catch {
+    throw new Error('DNS 解析失败')
+  }
+  if (!records?.length) throw new Error('DNS 无解析结果')
+  for (const r of records) {
+    if (isUnsafeIp(r.address)) {
+      throw new Error(`目标域名解析到内网地址 ${r.address}`)
+    }
+  }
+  return target
+}
 
 function sendJson(res, status, body) {
   res.writeHead(status, JSON_HEADERS)
@@ -44,8 +134,11 @@ function withTimeout(ms) {
 /**
  * 用 node:https 直发请求(node 内置 fetch 会被 DuckDuckGo 反爬识别为 bot 拦截,
  * 回 14kb 的占位页;https module 直发回真正的 25kb 结果页)。
+ *
+ * lockedIp:可选,指定一个已经解析+审核过的 IP,通过 socket lookup hook 强制 connect 到该 IP,
+ * 避免 SSRF DNS rebinding (第二次解析换成内网 IP 的 TOCTOU 攻击)。
  */
-function httpsRequest({ url, method = 'GET', headers = {}, body, timeoutMs = 12000 }) {
+function httpsRequest({ url, method = 'GET', headers = {}, body, timeoutMs = 12000, lockedIp = null }) {
   return new Promise((resolve, reject) => {
     const u = new NodeURL(url)
     const opts = {
@@ -58,15 +151,29 @@ function httpsRequest({ url, method = 'GET', headers = {}, body, timeoutMs = 120
     if (body) {
       opts.headers['Content-Length'] = Buffer.byteLength(body)
     }
+    if (lockedIp) {
+      // 用一个 fake lookup 把所有 DNS 查询固定到已审核 IP;TLS 仍按 hostname 校验证书 (servername 默认走 hostname).
+      opts.lookup = (_h, _o, cb) => cb(null, lockedIp, net.isIPv6(lockedIp) ? 6 : 4)
+      opts.servername = u.hostname
+    }
     const req = https.request(opts, (res) => {
-      // follow 1 redirect
+      // follow 1 redirect (重定向后会重新走 assertSafeOutboundUrl,所以仍然安全)
       if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location) {
         res.resume()
         const next = new NodeURL(res.headers.location, url).toString()
-        return resolve(httpsRequest({ url: next, method, headers, body, timeoutMs }))
+        // 重定向不复用 lockedIp,新 host 要重新解析+审核 — 让上层走 fetchSafe 再调一次
+        return resolve({ status: res.statusCode, headers: res.headers, body: '', _redirectTo: next })
       }
       const chunks = []
-      res.on('data', (c) => chunks.push(c))
+      let total = 0
+      res.on('data', (c) => {
+        chunks.push(c)
+        total += c.length
+        if (total > MAX_FETCH_BYTES * 2) {
+          // 防御性截断:就算单页 3MB 我们也只读这么多
+          req.destroy(new Error('响应体过大'))
+        }
+      })
       res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }))
     })
     req.on('error', reject)
@@ -77,34 +184,43 @@ function httpsRequest({ url, method = 'GET', headers = {}, body, timeoutMs = 120
   })
 }
 
-/* ── web_search via DuckDuckGo HTML ── */
+/**
+ * 安全外发请求:先解析+审核 URL,再带 lockedIp 直连.
+ * 自动跟随最多 3 次重定向(每次重新审核).
+ */
+async function fetchSafe({ url, method = 'GET', headers = {}, body, timeoutMs = 12000, maxRedirects = 3 }) {
+  let current = url
+  for (let i = 0; i <= maxRedirects; i += 1) {
+    const target = await assertSafeOutboundUrl(current)
+    // 取第一条解析结果作为 lockedIp (assertSafeOutboundUrl 已经审核所有解析结果)
+    let lockedIp = null
+    if (!net.isIP(target.hostname)) {
+      const records = await dns.lookup(target.hostname, { all: true, verbatim: true })
+      lockedIp = records[0]?.address || null
+    }
+    const resp = await httpsRequest({
+      url: target.toString(),
+      method,
+      headers: { ...headers, Host: target.host },
+      body,
+      timeoutMs,
+      lockedIp,
+    })
+    if (resp._redirectTo && i < maxRedirects) {
+      current = resp._redirectTo
+      continue
+    }
+    return resp
+  }
+  throw new Error('重定向次数超限')
+}
 
-export async function searchDuckDuckGo({ query, maxResults = 6 }) {
-  if (!query || typeof query !== 'string' || !query.trim()) {
-    throw new Error('搜索 query 不能为空')
-  }
-  const limit = Math.max(1, Math.min(10, Number(maxResults) || 6))
-  // 走 node:https 而不是 fetch — node 的 fetch 会被 DDG 反爬识别成 bot
-  const resp = await httpsRequest({
-    url: 'https://lite.duckduckgo.com/lite/',
-    method: 'POST',
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: `q=${encodeURIComponent(query.trim())}&kl=us-en`,
-    timeoutMs: SEARCH_TIMEOUT_MS,
-  })
-  if (resp.status !== 200) {
-    throw new Error(`DuckDuckGo HTTP ${resp.status}`)
-  }
-  const html = resp.body
+/* ── web_search via DuckDuckGo HTML, Bing 兜底, LRU 缓存 ── */
+
+function parseDdgHtml(html, limit) {
   const dom = new JSDOM(html)
   const doc = dom.window.document
   const items = []
-  // lite 端点结构:<a class='result-link'> 列表,后续 td.result-snippet
   const links = doc.querySelectorAll('a.result-link')
   for (const a of links) {
     if (items.length >= limit) break
@@ -114,9 +230,7 @@ export async function searchDuckDuckGo({ query, maxResults = 6 }) {
       const u = new URL(href, 'https://duckduckgo.com')
       const real = u.searchParams.get('uddg')
       if (real) href = decodeURIComponent(real)
-    } catch {
-      // 保留原样
-    }
+    } catch { /* keep raw */ }
     const title = (a.textContent || '').trim()
     let snippet = ''
     const row = a.closest('tr')
@@ -126,7 +240,91 @@ export async function searchDuckDuckGo({ query, maxResults = 6 }) {
     if (!title || !href || !href.startsWith('http')) continue
     items.push({ title, url: href, snippet: snippet.slice(0, 280) })
   }
-  return { ok: true, query, results: items }
+  return items
+}
+
+function parseBingHtml(html, limit) {
+  const dom = new JSDOM(html)
+  const doc = dom.window.document
+  const items = []
+  for (const li of doc.querySelectorAll('li.b_algo')) {
+    if (items.length >= limit) break
+    const a = li.querySelector('h2 a')
+    if (!a) continue
+    const href = a.getAttribute('href') || ''
+    const title = (a.textContent || '').trim()
+    const snippetEl = li.querySelector('.b_caption p, .b_lineclamp1, .b_lineclamp2, .b_lineclamp3, .b_lineclamp4')
+    const snippet = (snippetEl?.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 280)
+    if (title && href.startsWith('http')) items.push({ title, url: href, snippet })
+  }
+  return items
+}
+
+async function searchWithDdg(query, limit) {
+  const resp = await fetchSafe({
+    url: 'https://lite.duckduckgo.com/lite/',
+    method: 'POST',
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: `q=${encodeURIComponent(query)}&kl=us-en`,
+    timeoutMs: SEARCH_TIMEOUT_MS,
+  })
+  if (resp.status !== 200) throw new Error(`DDG HTTP ${resp.status}`)
+  return parseDdgHtml(resp.body, limit)
+}
+
+async function searchWithBing(query, limit) {
+  const resp = await fetchSafe({
+    url: `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=${limit}`,
+    method: 'GET',
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+    },
+    timeoutMs: SEARCH_TIMEOUT_MS,
+  })
+  if (resp.status !== 200) throw new Error(`Bing HTTP ${resp.status}`)
+  return parseBingHtml(resp.body, limit)
+}
+
+export async function searchDuckDuckGo({ query, maxResults = 6 }) {
+  if (!query || typeof query !== 'string' || !query.trim()) {
+    throw new Error('搜索 query 不能为空')
+  }
+  const q = query.trim()
+  const limit = Math.max(1, Math.min(10, Number(maxResults) || 6))
+  const cacheKey = `${limit}:${q.toLowerCase()}`
+  const cached = cacheGet(cacheKey)
+  if (cached) return { ok: true, query: q, results: cached, cached: true }
+
+  let results = []
+  let lastErr = null
+  // 主路:DDG lite
+  try { results = await searchWithDdg(q, limit) }
+  catch (e) { lastErr = e }
+  // 兜底:Bing (DDG 有时反爬到结果页 0 条)
+  if (!results.length) {
+    try { results = await searchWithBing(q, limit) }
+    catch (e) { lastErr = e }
+  }
+  if (!results.length) {
+    // 两路全挂,缓存空结果 1 分钟避免雪崩,但带 degraded:true 标识
+    cacheSet(cacheKey, [])
+    return {
+      ok: true,
+      query: q,
+      results: [],
+      degraded: true,
+      message: `搜索引擎暂时不可用 (${lastErr?.message || '未知'}),已缓存空结果 10 分钟`,
+    }
+  }
+  cacheSet(cacheKey, results)
+  return { ok: true, query: q, results }
 }
 
 /* ── fetch_url:抓页面 + 朴素正文提取 + 转简化 markdown ── */
@@ -201,24 +399,9 @@ function nodeToMarkdown(node, depth = 0) {
 
 export async function fetchAndExtract({ url }) {
   if (!url || typeof url !== 'string') throw new Error('url 不能为空')
-  let target
-  try { target = new URL(url) } catch { throw new Error('url 无效') }
-  if (!['http:', 'https:'].includes(target.protocol)) throw new Error('仅支持 http/https')
-  // 防 SSRF:禁止内网/loopback
-  const host = target.hostname
-  if (
-    host === 'localhost' ||
-    host.startsWith('127.') ||
-    host.startsWith('10.') ||
-    host.startsWith('192.168.') ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
-    host === '::1'
-  ) {
-    throw new Error('禁止访问内网地址')
-  }
-
-  const resp = await httpsRequest({
-    url: target.toString(),
+  // SSRF 防护交给 fetchSafe (DNS 解析 + IP 段审核 + lockedIp 防 rebinding)
+  const resp = await fetchSafe({
+    url,
     method: 'GET',
     headers: {
       'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -228,19 +411,20 @@ export async function fetchAndExtract({ url }) {
     timeoutMs: FETCH_TIMEOUT_MS,
   })
   if (resp.status !== 200) throw new Error(`HTTP ${resp.status}`)
+  const finalUrl = url // fetchSafe 内部已跟随重定向,这里用入参作为展示
   const ct = (resp.headers['content-type'] || '').toString()
   if (!/text\/html|application\/xhtml/.test(ct)) {
-    return { ok: true, url: target.toString(), title: target.toString(), markdown: resp.body.slice(0, 4096), contentType: ct }
+    return { ok: true, url: finalUrl, title: finalUrl, markdown: resp.body.slice(0, 4096), contentType: ct }
   }
   let html = resp.body
   if (Buffer.byteLength(html) > MAX_FETCH_BYTES) {
     html = html.slice(0, MAX_FETCH_BYTES)
   }
-  const dom = new JSDOM(html, { url: target.toString() })
+  const dom = new JSDOM(html, { url: finalUrl })
   const doc = dom.window.document
   const title = doc.querySelector('title')?.textContent?.trim() ||
                 doc.querySelector('h1')?.textContent?.trim() ||
-                target.toString()
+                finalUrl
   const main = extractMainContent(doc)
   let md = nodeToMarkdown(main)
     .replace(/[ \t]+\n/g, '\n')
@@ -251,14 +435,41 @@ export async function fetchAndExtract({ url }) {
     md = md.slice(0, MAX_MARKDOWN_CHARS) + '\n\n[...内容已截断...]'
     truncated = true
   }
-  return { ok: true, url: target.toString(), title: title.slice(0, 200), markdown: md, truncated }
+  return { ok: true, url: finalUrl, title: title.slice(0, 200), markdown: md, truncated }
 }
 
 /* ── HTTP 路由 ── */
 
+// 简易 in-memory 速率窗口:每个客户端每分钟最多 20 次工具调用
+// (避免模型不断 search/fetch 把 outbound 跑爆)
+const TOOL_RATE = new Map()
+const TOOL_RATE_WINDOW_MS = 60 * 1000
+const TOOL_RATE_MAX = Number(process.env.TOOL_RATE_MAX || 20)
+
+function checkToolRate(req) {
+  const id = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown'
+  const now = Date.now()
+  const arr = TOOL_RATE.get(id) || []
+  // 剔除窗口外
+  const fresh = arr.filter((t) => now - t < TOOL_RATE_WINDOW_MS)
+  if (fresh.length >= TOOL_RATE_MAX) {
+    return { allowed: false, remaining: 0, resetMs: TOOL_RATE_WINDOW_MS - (now - fresh[0]) }
+  }
+  fresh.push(now)
+  TOOL_RATE.set(id, fresh)
+  return { allowed: true, remaining: TOOL_RATE_MAX - fresh.length }
+}
+
 export async function handleToolProxyRequest(req, res) {
   if (req.method !== 'POST') {
     sendJson(res, 405, { ok: false, error: '仅支持 POST' })
+    return
+  }
+  const rate = checkToolRate(req)
+  res.setHeader('X-RateLimit-Limit', String(TOOL_RATE_MAX))
+  res.setHeader('X-RateLimit-Remaining', String(rate.remaining))
+  if (!rate.allowed) {
+    sendJson(res, 429, { ok: false, error: `工具调用过于频繁,请 ${Math.ceil(rate.resetMs / 1000)}s 后再试` })
     return
   }
   const url = req.url || ''
