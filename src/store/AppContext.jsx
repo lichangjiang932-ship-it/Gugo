@@ -18,6 +18,7 @@ const PERSIST_KEYS = [
   'density',
   'animationsEnabled',
   'skillConfigs',
+  'toolsConfig',
 ]
 
 function createInitialState() {
@@ -37,6 +38,8 @@ function createInitialState() {
     animationsEnabled: true,
     draftInput: '',
     skillConfigs: {}, // { skillId: { enabled, systemPrompt, temperature, maxTokens } }
+    previewArtifact: null, // { messageId, content, preview } — 右侧 artifact 预览面板
+    toolsConfig: { web_search: false, fetch_url: false, run_js: false }, // 工具开关
   }
 }
 
@@ -399,6 +402,48 @@ function reducer(state, action) {
             ? { ...s, messages: s.messages.slice(0, keepCount), updatedAt: Date.now() }
             : s
         ),
+      }
+    }
+
+    case 'OPEN_PREVIEW_ARTIFACT': {
+      // payload: { messageId, content, preview }
+      return { ...state, previewArtifact: action.payload ?? null }
+    }
+
+    case 'CLOSE_PREVIEW_ARTIFACT': {
+      return { ...state, previewArtifact: null }
+    }
+
+    case 'SET_TOOLS_CONFIG': {
+      const next = { ...(state.toolsConfig || {}), ...(action.payload || {}) }
+      return { ...state, toolsConfig: next }
+    }
+
+    case 'APPEND_TOOL_CALL_TO_LAST_MESSAGE': {
+      // payload: { id, name, arguments, status: 'running'|'success'|'error', result, error }
+      if (!state.activeSessionId) return state
+      const entry = action.payload
+      if (!entry) return state
+      return {
+        ...state,
+        sessions: state.sessions.map((s) => {
+          if (s.id !== state.activeSessionId || s.messages.length === 0) return s
+          const msgs = [...s.messages]
+          const last = msgs[msgs.length - 1]
+          if (last.role !== 'assistant') return s
+          const existingMeta = last.meta || {}
+          const existingCalls = Array.isArray(existingMeta.toolCalls) ? existingMeta.toolCalls : []
+          const idx = existingCalls.findIndex((c) => c.id === entry.id)
+          let nextCalls
+          if (idx === -1) {
+            nextCalls = [...existingCalls, entry]
+          } else {
+            nextCalls = existingCalls.slice()
+            nextCalls[idx] = { ...nextCalls[idx], ...entry }
+          }
+          msgs[msgs.length - 1] = { ...last, meta: { ...existingMeta, toolCalls: nextCalls } }
+          return { ...s, messages: msgs, updatedAt: Date.now() }
+        }),
       }
     }
 

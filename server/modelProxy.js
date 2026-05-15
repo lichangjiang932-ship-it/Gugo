@@ -191,7 +191,7 @@ export function normalizeOpenAICompatibleUrl(rawUrl = '') {
   return `${trimmed}/chat/completions`
 }
 
-export function buildOpenAICompatibleRequest({ config, messages, stream = false }) {
+export function buildOpenAICompatibleRequest({ config, messages, stream = false, tools, toolChoice }) {
   const model = config?.modelName
   if (!model) throw new Error('请输入模型名称。')
   if (!Array.isArray(messages) || messages.length === 0) {
@@ -201,18 +201,25 @@ export function buildOpenAICompatibleRequest({ config, messages, stream = false 
   const headers = { 'Content-Type': 'application/json' }
   if (config?.apiKey) headers.Authorization = `Bearer ${config.apiKey}`
 
+  const body = {
+    model,
+    messages,
+    temperature: config?.temperature ?? 0.7,
+    max_tokens: config?.maxTokens || 4096,
+    stream,
+  }
+  // ★ 工具调用:仅当上游提供 tools 字段时才透传,避免不支持工具的模型报 400
+  if (Array.isArray(tools) && tools.length > 0) {
+    body.tools = tools
+    if (toolChoice) body.tool_choice = toolChoice
+  }
+
   return {
     url: normalizeOpenAICompatibleUrl(config?.baseUrl),
     init: {
       method: 'POST',
       headers,
-      body: JSON.stringify({
-        model,
-        messages,
-        temperature: config?.temperature ?? 0.7,
-        max_tokens: config?.maxTokens || 4096,
-        stream,
-      }),
+      body: JSON.stringify(body),
     },
   }
 }
@@ -253,8 +260,8 @@ function sendJson(res, statusCode, body) {
   res.end(JSON.stringify(body))
 }
 
-async function* streamOpenAICompatible({ config, messages, fetchImpl = fetch }) {
-  const { url, init } = buildOpenAICompatibleRequest({ config, messages, stream: true })
+async function* streamOpenAICompatible({ config, messages, fetchImpl = fetch, tools, toolChoice }) {
+  const { url, init } = buildOpenAICompatibleRequest({ config, messages, stream: true, tools, toolChoice })
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 120000)
 
@@ -275,6 +282,10 @@ async function* streamOpenAICompatible({ config, messages, fetchImpl = fetch }) 
 
     const decoder = new TextDecoder()
     let buffer = ''
+    // ★ tool_call 增量合并:OpenAI 流式协议每个 chunk 给 tool_calls[i].function.arguments 的片段,需要按 index 累加
+    const toolCallAcc = new Map() // index -> { id, name, arguments }
+    let finishReason = null
+
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
@@ -285,15 +296,47 @@ async function* streamOpenAICompatible({ config, messages, fetchImpl = fetch }) 
         const trimmed = line.trim()
         if (!trimmed.startsWith('data: ')) continue
         const payload = trimmed.slice(6)
-        if (payload === '[DONE]') return
+        if (payload === '[DONE]') {
+          // 流末尾:把累积的 tool_calls 一次性吐出
+          if (toolCallAcc.size > 0) {
+            const calls = [...toolCallAcc.entries()]
+              .sort((a, b) => a[0] - b[0])
+              .map(([, v]) => v)
+            yield { type: 'tool_calls', toolCalls: calls, finishReason: finishReason || 'tool_calls' }
+          }
+          return
+        }
         try {
           const chunk = JSON.parse(payload)
-          const delta = chunk?.choices?.[0]?.delta?.content || chunk?.choices?.[0]?.text || ''
-          if (delta) yield delta
+          const choice = chunk?.choices?.[0]
+          if (!choice) continue
+          const delta = choice.delta || {}
+          if (choice.finish_reason) finishReason = choice.finish_reason
+          // 文本增量
+          const text = delta.content || choice.text || ''
+          if (text) yield { type: 'text', delta: text }
+          // 工具调用增量
+          if (Array.isArray(delta.tool_calls)) {
+            for (const tc of delta.tool_calls) {
+              const idx = tc.index ?? 0
+              const existing = toolCallAcc.get(idx) || { id: '', name: '', arguments: '' }
+              if (tc.id) existing.id = tc.id
+              if (tc.function?.name) existing.name = tc.function.name
+              if (tc.function?.arguments) existing.arguments += tc.function.arguments
+              toolCallAcc.set(idx, existing)
+            }
+          }
         } catch {
           // 忽略无法解析的行
         }
       }
+    }
+    // 兜底:某些后端不发 [DONE]
+    if (toolCallAcc.size > 0) {
+      const calls = [...toolCallAcc.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([, v]) => v)
+      yield { type: 'tool_calls', toolCalls: calls, finishReason: finishReason || 'tool_calls' }
     }
   } finally {
     clearTimeout(timeout)
@@ -367,8 +410,17 @@ export async function handleModelProxyRequest(req, res) {
 
       const started = Date.now()
       try {
-        for await (const delta of streamOpenAICompatible({ config: requestConfig, messages })) {
-          res.write(`data: ${JSON.stringify({ ok: true, delta, latency: Date.now() - started })}\n\n`)
+        for await (const event of streamOpenAICompatible({
+          config: requestConfig,
+          messages,
+          tools: body.tools,
+          toolChoice: body.tool_choice,
+        })) {
+          if (event.type === 'text') {
+            res.write(`data: ${JSON.stringify({ ok: true, delta: event.delta, latency: Date.now() - started })}\n\n`)
+          } else if (event.type === 'tool_calls') {
+            res.write(`data: ${JSON.stringify({ ok: true, toolCalls: event.toolCalls, finishReason: event.finishReason, latency: Date.now() - started })}\n\n`)
+          }
         }
         res.write(`data: ${JSON.stringify({ ok: true, done: true, latency: Date.now() - started })}\n\n`)
 

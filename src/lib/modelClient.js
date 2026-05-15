@@ -49,15 +49,25 @@ export async function callModelThroughProxy({ messages, modelName, fetchImpl = f
 }
 
 /* ── 流式输出（SSE）── */
-
-export async function* callModelThroughProxyStream({ messages, modelName, fetchImpl = fetch, signal }) {
+/**
+ * 注意:旧版 yield 字符串(text delta);新版 yield event 对象 { type, ... },
+ * 让上层能区分文本增量和工具调用。
+ *   { type: 'text', delta: string }
+ *   { type: 'tool_calls', toolCalls: [{id,name,arguments}], finishReason }
+ */
+export async function* callModelThroughProxyStream({ messages, modelName, fetchImpl = fetch, signal, tools, toolChoice }) {
+  const body = { messages, modelName, stream: true }
+  if (Array.isArray(tools) && tools.length > 0) {
+    body.tools = tools
+    if (toolChoice) body.tool_choice = toolChoice
+  }
   const response = await fetchImpl('/api/model/chat', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${getAuthToken()}`,
     },
-    body: JSON.stringify({ messages, modelName, stream: true }),
+    body: JSON.stringify(body),
     signal,
   })
 
@@ -96,7 +106,11 @@ export async function* callModelThroughProxyStream({ messages, modelName, fetchI
         }
         if (chunk.ok === false) throw new Error(chunk.error || '流式响应错误')
         if (chunk.done) return
-        if (chunk.delta !== undefined) yield chunk.delta
+        if (chunk.toolCalls) {
+          yield { type: 'tool_calls', toolCalls: chunk.toolCalls, finishReason: chunk.finishReason }
+        } else if (chunk.delta !== undefined) {
+          yield { type: 'text', delta: chunk.delta }
+        }
       }
     }
   } finally {

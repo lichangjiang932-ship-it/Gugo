@@ -5,12 +5,14 @@ import { useAppContext } from '../../store/AppContext'
 import { SKILLS, getSkillSystemPrompt } from '../../data.js'
 import { buildUserContentWithAttachments, describeAttachmentPrompt } from '../../lib/attachments.js'
 import { callModelThroughProxyStream, getModelStatus } from '../../lib/modelClient.js'
+import { buildToolSpecs, executeToolCall } from '../../lib/tools/index.js'
 import { readStoredModel, resolveInitialModel, writeStoredModel } from '../../lib/modelSelection.js'
 import { isLoggedInLocally } from '../../lib/accountClient.js'
 import ChatHeader from './ChatHeader'
 import ChatMessages from './ChatMessages'
 import ChatComposer from './ChatComposer'
 import ChatTaskPanel from './ChatTaskPanel'
+import RightPreviewPane from './RightPreviewPane'
 
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024
 const MAX_TEXT_BYTES = 256 * 1024
@@ -129,6 +131,9 @@ export default function ChatSplit() {
         return
       }
 
+      // 提前生成 task ID,后续 UPDATE_TASK / REMOVE_TASK 用得上
+      const taskId = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+
       try {
         const messages = []
         const systemPrompt = skillId ? getSkillSystemPrompt(skillId) : ''
@@ -137,7 +142,7 @@ export default function ChatSplit() {
 
         dispatch({
           type: 'ADD_TASK',
-          payload: { name: taskName, detail: content, status: 'running', progress: 10, step: 1, stepLabel: '调用模型中', perms: skill?.perms || [] },
+          payload: { id: taskId, name: taskName, detail: content, status: 'running', progress: 10, step: 1, stepLabel: '调用模型中', perms: skill?.perms || [] },
         })
 
         dispatch({ type: 'RECEIVE_MESSAGE', payload: '' })
@@ -150,9 +155,77 @@ export default function ChatSplit() {
         setIsGenerating(true)
 
         try {
-          for await (const delta of callModelThroughProxyStream({ messages, modelName, signal: controller.signal })) {
-            latency = Date.now() - started
-            dispatch({ type: 'APPEND_TO_LAST_MESSAGE', payload: delta })
+          // 工具调用循环:每轮 stream 模型 → 收 tool_calls → 本地执行 → messages 追加 tool 结果 → 再 stream
+          // 上限 5 轮防止失控;无 tool_calls 即文本回复完成,直接退出
+          const enabledToolNames = Object.entries(state.toolsConfig || {})
+            .filter(([, on]) => !!on)
+            .map(([name]) => name)
+          const tools = buildToolSpecs(enabledToolNames)
+          const MAX_TOOL_ROUNDS = 5
+          let chunkCount = 0
+
+          for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
+            let pendingToolCalls = null
+            for await (const event of callModelThroughProxyStream({
+              messages,
+              modelName,
+              signal: controller.signal,
+              tools: tools.length > 0 ? tools : undefined,
+            })) {
+              latency = Date.now() - started
+              if (event.type === 'text') {
+                dispatch({ type: 'APPEND_TO_LAST_MESSAGE', payload: event.delta })
+                chunkCount += 1
+                if (chunkCount % 4 === 0) {
+                  const nextProgress = Math.min(10 + chunkCount * 4, 90)
+                  dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { progress: nextProgress, stepLabel: '生成中' } } })
+                }
+              } else if (event.type === 'tool_calls') {
+                pendingToolCalls = event.toolCalls
+              }
+            }
+
+            // 本轮没工具调用 → 模型已经给出最终文本,退出
+            if (!pendingToolCalls || pendingToolCalls.length === 0) break
+
+            // 1) 把模型本轮发出的 assistant tool_calls 落入 messages(给上游做上下文)
+            messages.push({
+              role: 'assistant',
+              content: '',
+              tool_calls: pendingToolCalls.map((c) => ({
+                id: c.id,
+                type: 'function',
+                function: { name: c.name, arguments: c.arguments || '{}' },
+              })),
+            })
+
+            // 2) 在 UI 上为每个 call 先展示 running 状态,然后执行,然后回填结果
+            for (const call of pendingToolCalls) {
+              dispatch({
+                type: 'APPEND_TOOL_CALL_TO_LAST_MESSAGE',
+                payload: { id: call.id, name: call.name, arguments: call.arguments, status: 'running' },
+              })
+              dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { stepLabel: `调用 ${call.name}` } } })
+              const result = await executeToolCall(call)
+              dispatch({
+                type: 'APPEND_TOOL_CALL_TO_LAST_MESSAGE',
+                payload: {
+                  id: call.id,
+                  name: call.name,
+                  arguments: call.arguments,
+                  status: result.ok ? 'success' : 'error',
+                  result: result.ok ? result.content : undefined,
+                  error: !result.ok ? result.content : undefined,
+                },
+              })
+              messages.push({
+                role: 'tool',
+                tool_call_id: call.id,
+                name: call.name,
+                content: result.content,
+              })
+            }
+            // 进入下一轮 stream,模型基于 tool 结果继续生成
           }
         } catch (err) {
           if (err.message === '已停止生成') {
@@ -183,6 +256,11 @@ export default function ChatSplit() {
             artifactTitle: artifactType ? taskName : undefined,
           },
         })
+
+        // ★ FIX: 标记任务完成,5 秒后从 LIVE TASKS 移除
+        dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: 'completed', progress: 100, stepLabel: '已完成' } } })
+        setTimeout(() => dispatch({ type: 'REMOVE_TASK', payload: taskId }), 5000)
+
         dispatch({
           type: 'ADD_HISTORY',
           payload: { name: taskName, skill: skill?.name || '通用对话', status: 'success', detail: content.length > 60 ? `${content.slice(0, 60)}...` : content, state: '已完成', date: Date.now() },
@@ -199,12 +277,19 @@ export default function ChatSplit() {
       } catch (err) {
         setIsGenerating(false)
         abortCtrlRef.current = null
-        if (err.message === '已停止生成') return
+        if (err.message === '已停止生成') {
+          // ★ FIX: 中断也要把任务清掉,不能继续显示 "running 10%"
+          dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: 'cancelled', progress: 100, stepLabel: '已中断' } } })
+          setTimeout(() => dispatch({ type: 'REMOVE_TASK', payload: taskId }), 3000)
+          return
+        }
         console.error('Model call failed:', err)
         setLastFailedPrompt(content)
         dispatch({ type: 'APPEND_TO_LAST_MESSAGE', payload: `\n\n模型调用失败：${err.message}\n\n请联系管理员检查后端 .env 中的 MODEL_BASE_URL、MODEL_NAME 和 MODEL_API_KEY。` })
         dispatch({ type: 'ADD_HISTORY', payload: { name: taskName, skill: skill?.name || '通用对话', status: 'failed', detail: content.length > 60 ? `${content.slice(0, 60)}...` : content, state: `失败: ${err.message}`.slice(0, 80), date: Date.now() } })
-        dispatch({ type: 'ADD_TASK', payload: { name: taskName, detail: content, status: 'running', progress: 15, step: 1, stepLabel: '调用失败', perms: skill?.perms || [] } })
+        // ★ FIX: 失败时把同一个任务标记 failed (而非再 ADD 一条新的"running 15%"),5 秒后移除
+        dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: 'failed', progress: 100, stepLabel: '调用失败' } } })
+        setTimeout(() => dispatch({ type: 'REMOVE_TASK', payload: taskId }), 5000)
       }
     },
     [attachments, dispatch, modelOptions, selectedModel, state]
@@ -355,6 +440,12 @@ export default function ChatSplit() {
           onPermAllow={handlePermAllow}
           onPermDeny={handlePermDeny}
           onNavigatePermissions={() => navigate('/permissions')}
+          onOpenInPreview={(msg, preview) =>
+            dispatch({
+              type: 'OPEN_PREVIEW_ARTIFACT',
+              payload: { messageId: msg.id, content: msg.content, preview },
+            })
+          }
         />
 
         <ChatComposer
@@ -385,6 +476,11 @@ export default function ChatSplit() {
           handleKeyDown={handleKeyDown}
         />
       </div>
+
+      <RightPreviewPane
+        artifact={state.previewArtifact}
+        onClose={() => dispatch({ type: 'CLOSE_PREVIEW_ARTIFACT' })}
+      />
 
       <ChatTaskPanel
         tasks={tasks}

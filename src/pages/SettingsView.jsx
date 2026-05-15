@@ -29,7 +29,7 @@ import {
 } from '../lib/loginCountdown.js'
 import { getSystemDiagnostics, testModelEndpoint } from '../lib/modelClient.js'
 
-const SETTINGS_NAV = ['账户', '权限中心', '外观', '快捷键', '数据 & 导出']
+const SETTINGS_NAV = ['账户', '权限中心', '工具', '外观', '快捷键', '数据 & 导出']
 const ACCENT_COLORS = ['#E86A3C', '#2E8FA3', '#A5C97A', '#D4A4FF']
 
 const SHORTCUTS = [
@@ -593,6 +593,48 @@ export default function SettingsView() {
     )
   }
 
+  function renderTools() {
+    const tc = state.toolsConfig || {}
+    const TOOLS = [
+      { id: 'web_search', name: '网页搜索', desc: '让模型通过 DuckDuckGo 查询最新信息(返回 title/url/snippet)。' },
+      { id: 'fetch_url', name: '抓取链接', desc: '让模型把页面正文抓回来转 markdown 阅读。配合搜索使用。' },
+      { id: 'run_js', name: '执行 JavaScript', desc: '在浏览器隔离 Worker 中跑纯 JS,5 秒超时,无 DOM/网络。' },
+    ]
+    const onToggle = (id) => {
+      dispatch({ type: 'SET_TOOLS_CONFIG', payload: { [id]: !tc[id] } })
+    }
+    return (
+      <section className="flex flex-col gap-5 animate-float-up">
+        <div>
+          <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">TOOLS</span>
+          <h1 className="font-hand text-[28px] text-ink mt-1.5">模型工具</h1>
+          <p className="text-sm text-ink-soft mt-1">开启后,会按 OpenAI tool calling 协议把工具规格塞给模型;模型自行决定何时调用。需上游支持 <code>tools</code> 字段。</p>
+        </div>
+        <div className="flex flex-col gap-2">
+          {TOOLS.map((t) => (
+            <div key={t.id} className="p-3 border border-ink/20 rounded-md flex items-center gap-3 hover:border-ink/40 transition-colors">
+              <div className="flex-1 min-w-0">
+                <div className="text-sm text-ink">{t.name}</div>
+                <div className="font-mono text-[10px] tracking-wider text-ink-fade mt-0.5">{t.id}</div>
+                <div className="text-xs text-ink-soft mt-1">{t.desc}</div>
+              </div>
+              <button
+                onClick={() => onToggle(t.id)}
+                className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ${tc[t.id] ? 'bg-ember' : 'bg-ink-fade/40'}`}
+                aria-pressed={!!tc[t.id]}
+              >
+                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-paper transition-all ${tc[t.id] ? 'left-[22px]' : 'left-0.5'}`} />
+              </button>
+            </div>
+          ))}
+        </div>
+        <div className="p-4 border border-dashed border-ink-fade/40 rounded-md bg-paper-2 text-xs text-ink-soft">
+          提示:工具调用最多迭代 5 轮(防止循环)。如果模型后端不支持 <code>tools</code> 字段会报错,关掉所有开关即可恢复纯文本对话。
+        </div>
+      </section>
+    )
+  }
+
   function renderShortcuts() {
     return (
       <section className="flex flex-col gap-5 animate-float-up">
@@ -735,6 +777,8 @@ export default function SettingsView() {
         return renderAccount()
       case '权限中心':
         return renderPermissions()
+      case '工具':
+        return renderTools()
       case '外观':
         return renderAppearance()
       case '快捷键':

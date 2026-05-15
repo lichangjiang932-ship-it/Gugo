@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, FileText, BarChart3, LayoutList, Download } from 'lucide-react'
+import { X, FileText, BarChart3, LayoutList, Download, ExternalLink } from 'lucide-react'
 import MarkdownRenderer from '../../components/MarkdownRenderer.jsx'
+import ToolCallCard from '../../components/ToolCallCard.jsx'
 import { buildArtifactPreview } from '../../lib/artifactPreview.js'
 import {
   buildPresentationFilename,
@@ -17,7 +18,6 @@ import {
   parseSpreadsheetRows,
   shouldOfferOfficeExport,
 } from '../../lib/officeExport.js'
-import ArtifactPreview from './ArtifactPreview.jsx'
 
 const EXAMPLE_QUESTIONS = [
   { icon: FileText, label: '生成周报' },
@@ -44,6 +44,7 @@ export default function ChatMessages({
   onPermAllow,
   onPermDeny,
   onNavigatePermissions,
+  onOpenInPreview,
 }) {
   const hasMessages = messages.length > 0
   const [exportingId, setExportingId] = useState('')
@@ -145,8 +146,8 @@ export default function ChatMessages({
         {hasMessages ? (
           <>
             {messages.map((msg, i) => {
-              const artifactPreview = msg.role === 'assistant' && msg.meta?.type === 'model_reply'
-                ? buildArtifactPreview({ content: msg.content, meta: msg.meta })
+              const artifactPreview = msg.role === 'assistant' && msg.content
+                ? buildArtifactPreview({ content: msg.content, meta: msg.meta || {} })
                 : null
 
               return (
@@ -167,15 +168,41 @@ export default function ChatMessages({
                   </div>
                 )}
                 <div className={artifactPreview ? 'max-w-[920px] w-full' : 'p-3 rounded-md text-sm leading-relaxed max-w-[920px] ' + (msg.role === 'assistant' ? 'bg-paper-2 border border-ink/10' : 'pt-1.5')}>
+                  {msg.role === 'assistant' && Array.isArray(msg.meta?.toolCalls) && msg.meta.toolCalls.length > 0 && (
+                    <div className="mb-2">
+                      {msg.meta.toolCalls.map((tc) => <ToolCallCard key={tc.id} call={tc} />)}
+                    </div>
+                  )}
                   {msg.role === 'assistant' ? (
                     artifactPreview ? (
-                      <ArtifactPreview
-                        preview={artifactPreview}
-                        content={msg.content}
-                        downloading={exportingId === `${msg.id}:${artifactPreview.type}`}
-                        onDownload={() => handleDownloadArtifact(msg, artifactPreview.type)}
-                        onCopySource={() => navigator.clipboard?.writeText(msg.content)}
-                      />
+                      <button
+                        type="button"
+                        onClick={() => onOpenInPreview?.(msg, artifactPreview)}
+                        className="group w-full text-left rounded-md border border-ink-fade/30 bg-paper hover:border-ember/60 hover:shadow-sm transition-all p-3 flex items-center gap-3"
+                        title="在右侧预览面板打开"
+                      >
+                        <div className="w-10 h-10 rounded-md bg-ember-soft border border-ember/30 flex items-center justify-center text-ember shrink-0">
+                          {artifactPreview.type === 'pptx' && <BarChart3 className="w-5 h-5" />}
+                          {artifactPreview.type === 'docx' && <FileText className="w-5 h-5" />}
+                          {artifactPreview.type === 'xlsx' && <LayoutList className="w-5 h-5" />}
+                          {artifactPreview.type === 'html' && <ExternalLink className="w-5 h-5" />}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-ember">
+                            {artifactPreview.label}
+                          </div>
+                          <div className="font-semibold text-ink text-sm truncate" title={artifactPreview.filename}>
+                            {artifactPreview.filename}
+                          </div>
+                          <div className="text-xs text-ink-fade truncate">{artifactPreview.summary}</div>
+                        </div>
+                        <div className="shrink-0 inline-flex items-center gap-1.5">
+                          <span className="text-[11px] text-ink-fade group-hover:text-ember transition-colors hidden sm:inline">
+                            在右侧打开
+                          </span>
+                          <ExternalLink className="w-4 h-4 text-ink-fade group-hover:text-ember transition-colors" />
+                        </div>
+                      </button>
                     ) : (
                       <MarkdownRenderer>{msg.content}</MarkdownRenderer>
                     )

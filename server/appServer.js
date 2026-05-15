@@ -17,6 +17,7 @@ import {
   handleSystemDiagnosticsRequest,
 } from './modelProxy.js'
 import { handleAuthBillingRequest } from './billingAuth.js'
+import { handleToolProxyRequest } from './toolProxy.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -109,6 +110,12 @@ function router(req, res) {
   // 模型代理（chat / test）
   if (req.url?.startsWith('/api/model/test') || req.url?.startsWith('/api/model/chat')) {
     handleModelProxyRequest(req, res)
+    return
+  }
+
+  // 工具代理(web 搜索 / URL 抓取)
+  if (req.url?.startsWith('/api/tools/')) {
+    handleToolProxyRequest(req, res)
     return
   }
 
