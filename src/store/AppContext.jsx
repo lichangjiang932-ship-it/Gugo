@@ -228,6 +228,21 @@ function reducer(state, action) {
       }
     }
 
+    // ★ #10: 删除单条消息 — payload: messageId
+    case 'DELETE_MESSAGE': {
+      if (!state.activeSessionId) return state
+      const msgId = action.payload
+      if (!msgId) return state
+      return {
+        ...state,
+        sessions: state.sessions.map((s) =>
+          s.id === state.activeSessionId
+            ? { ...s, messages: s.messages.filter((m) => m.id !== msgId), updatedAt: Date.now() }
+            : s
+        ),
+      }
+    }
+
     case 'COMPRESS_CURRENT_SESSION': {
       if (!state.activeSessionId) return state
       return {

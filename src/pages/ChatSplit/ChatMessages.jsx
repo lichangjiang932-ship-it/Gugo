@@ -1,23 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, FileText, BarChart3, LayoutList, Download, ExternalLink, ChevronDown } from 'lucide-react'
+import { X, FileText, BarChart3, LayoutList, ExternalLink, ChevronDown, RefreshCw, Trash2, Copy } from 'lucide-react'
 import MarkdownRenderer from '../../components/MarkdownRenderer.jsx'
 import ToolCallCard from '../../components/ToolCallCard.jsx'
 import { buildArtifactPreview } from '../../lib/artifactPreview.js'
-import {
-  buildPresentationFilename,
-  downloadPptxFromMarkdown,
-  parseMarkdownSlides,
-  shouldOfferPptxExport,
-} from '../../lib/presentationExport.js'
-import {
-  buildOfficeFilename,
-  downloadDocxFromMarkdown,
-  downloadXlsxFromMarkdown,
-  parseMarkdownDocument,
-  parseSpreadsheetRows,
-  shouldOfferOfficeExport,
-} from '../../lib/officeExport.js'
 
 const EXAMPLE_QUESTIONS = [
   { icon: FileText, label: '生成周报' },
@@ -41,60 +27,17 @@ export default function ChatMessages({
   selectedModel,
   onExampleClick,
   onEditMessage,
+  onRegenerateMessage,
+  onDeleteMessage,
   onPermAllow,
   onPermDeny,
   onNavigatePermissions,
   onOpenInPreview,
 }) {
   const hasMessages = messages.length > 0
-  const [exportingId, setExportingId] = useState('')
 
-  const handleDownloadPptx = async (msg) => {
-    const exportKey = `${msg.id}:pptx`
-    setExportingId(exportKey)
-    try {
-      const slides = parseMarkdownSlides(msg.content)
-      const title = slides[0]?.title || msg.meta?.artifactTitle || 'presentation'
-      await downloadPptxFromMarkdown(msg.content, {
-        title,
-        filename: buildPresentationFilename(title),
-      })
-    } catch (err) {
-      window.alert?.(err.message || 'PPTX 导出失败')
-    } finally {
-      setExportingId('')
-    }
-  }
-
-  const handleDownloadOffice = async (msg, type) => {
-    const exportKey = `${msg.id}:${type}`
-    setExportingId(exportKey)
-    try {
-      if (type === 'docx') {
-        const doc = parseMarkdownDocument(msg.content)
-        await downloadDocxFromMarkdown(msg.content, {
-          title: doc.title,
-          filename: buildOfficeFilename(doc.title, 'docx'),
-        })
-      } else if (type === 'xlsx') {
-        const rows = parseSpreadsheetRows(msg.content)
-        const title = rows[0]?.find((cell) => String(cell || '').trim()) || msg.meta?.artifactTitle || 'export'
-        await downloadXlsxFromMarkdown(msg.content, {
-          title,
-          filename: buildOfficeFilename(title, 'xlsx'),
-        })
-      }
-    } catch (err) {
-      window.alert?.(err.message || '文件导出失败')
-    } finally {
-      setExportingId('')
-    }
-  }
-
-  const handleDownloadArtifact = (msg, type) => {
-    if (type === 'pptx') return handleDownloadPptx(msg)
-    return handleDownloadOffice(msg, type)
-  }
+  // ★ #19: 移除 handleDownloadPptx/Office 双路径 — artifact 卡片走 RightPreviewPane.handleDownload,
+  // 普通 markdown 不再嗅探导出 (避免 shouldOfferOfficeExport vs detectArtifactType 两套规则不一致)
 
   // #11 自动滚到底 + 浮动「回到底部」按钮
   // 规则:用户已贴底 → 新消息自动滚;用户上滑离开底部 → 不打扰,显示按钮让其手动回
@@ -248,7 +191,15 @@ export default function ChatMessages({
                     <span className="whitespace-pre-wrap">{msg.content}</span>
                   )}
                   {msg.role === 'user' && (
-                    <div className="mt-2 flex justify-end gap-2 text-[11px] text-ink-fade">
+                    <div className="mt-2 flex justify-end gap-3 text-[11px] text-ink-fade">
+                      <button
+                        onClick={() => navigator.clipboard?.writeText(msg.content)}
+                        className="inline-flex items-center gap-1 hover:text-ink transition-colors"
+                        title="复制内容"
+                      >
+                        <Copy className="w-3 h-3" />
+                        复制
+                      </button>
                       <button
                         onClick={() => onEditMessage(msg.id, msg.content)}
                         className="hover:text-ink transition-colors"
@@ -256,6 +207,26 @@ export default function ChatMessages({
                       >
                         编辑
                       </button>
+                      {onRegenerateMessage && (
+                        <button
+                          onClick={() => onRegenerateMessage(msg.id)}
+                          className="inline-flex items-center gap-1 hover:text-ink transition-colors"
+                          title="重新发送本条"
+                        >
+                          <RefreshCw className="w-3 h-3" />
+                          重发
+                        </button>
+                      )}
+                      {onDeleteMessage && (
+                        <button
+                          onClick={() => onDeleteMessage(msg.id)}
+                          className="inline-flex items-center gap-1 hover:text-red-500 transition-colors"
+                          title="删除本条"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          删除
+                        </button>
+                      )}
                     </div>
                   )}
                   {msg.role === 'assistant' && msg.meta?.type === 'model_reply' && (
@@ -274,39 +245,35 @@ export default function ChatMessages({
                         <span className="text-red-500" title={msg.meta.billingError}>计费失败</span>
                       )}
                       <div className="flex-1" />
-                      {!artifactPreview && shouldOfferPptxExport(msg.meta) && (
+                      {/* ★ #19: 删除 shouldOfferPptxExport/shouldOfferOfficeExport 双路径,
+                          artifact 卡片走 RightPreviewPane 自带的导出,卡不出 artifact 时也不再单独显示导出按钮(避免内容嗅探不一致). */}
+                      {/* ★ #11: 不论 artifact 还是普通,都给复制按钮 */}
+                      <button
+                        onClick={() => navigator.clipboard?.writeText(msg.content)}
+                        className="inline-flex items-center gap-1 text-ink-fade hover:text-ink transition-colors"
+                        title="复制内容"
+                      >
+                        <Copy className="w-3 h-3" />
+                        复制
+                      </button>
+                      {onRegenerateMessage && (
                         <button
-                          onClick={() => handleDownloadPptx(msg)}
-                          disabled={exportingId === `${msg.id}:pptx`}
-                          className="inline-flex items-center gap-1 text-ember hover:text-ink transition-colors disabled:opacity-50"
-                          title="导出为 PowerPoint 文件"
+                          onClick={() => onRegenerateMessage(msg.id)}
+                          className="inline-flex items-center gap-1 text-ink-fade hover:text-ink transition-colors"
+                          title="基于上一条用户消息重新生成回复"
                         >
-                          <Download className="w-3.5 h-3.5" />
-                          {exportingId === `${msg.id}:pptx` ? '生成中' : '下载 PPTX'}
+                          <RefreshCw className="w-3 h-3" />
+                          重新生成
                         </button>
                       )}
-                      {!artifactPreview && (() => {
-                        const officeType = shouldOfferOfficeExport(msg.meta)
-                        if (!officeType) return null
-                        return (
-                          <button
-                            onClick={() => handleDownloadOffice(msg, officeType)}
-                            disabled={exportingId === `${msg.id}:${officeType}`}
-                            className="inline-flex items-center gap-1 text-ember hover:text-ink transition-colors disabled:opacity-50"
-                            title={`导出为 ${officeType.toUpperCase()} 文件`}
-                          >
-                            <Download className="w-3.5 h-3.5" />
-                            {exportingId === `${msg.id}:${officeType}` ? '生成中' : `下载 ${officeType.toUpperCase()}`}
-                          </button>
-                        )
-                      })()}
-                      {!artifactPreview && (
+                      {onDeleteMessage && (
                         <button
-                          onClick={() => navigator.clipboard?.writeText(msg.content)}
-                          className="text-ink-fade hover:text-ink transition-colors"
-                          title="复制内容"
+                          onClick={() => onDeleteMessage(msg.id)}
+                          className="inline-flex items-center gap-1 text-ink-fade hover:text-red-500 transition-colors"
+                          title="删除本条"
                         >
-                          复制
+                          <Trash2 className="w-3 h-3" />
+                          删除
                         </button>
                       )}
                     </div>
