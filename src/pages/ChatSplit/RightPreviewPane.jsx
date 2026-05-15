@@ -27,7 +27,12 @@ function HtmlPreview({ html }) {
   return (
     <iframe
       title="HTML 预览"
-      sandbox="allow-scripts allow-same-origin allow-forms allow-modals"
+      // SECURITY: 只给 allow-scripts + allow-forms + allow-modals。绝不加 allow-same-origin —
+      // srcdoc 文档默认是 opaque origin,加上后会让脚本访问父页 storage/cookie + 逃逸沙箱。
+      // 工件页面如需调用外部 API,通过 postMessage 让父页代理。
+      sandbox="allow-scripts allow-forms allow-modals"
+      // 可选:再加 referrerpolicy 防泄漏来源
+      referrerPolicy="no-referrer"
       srcDoc={srcDoc}
       className="w-full h-full border-0 bg-white"
     />

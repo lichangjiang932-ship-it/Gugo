@@ -3,22 +3,41 @@ import { z } from 'zod'
 
 /* ── CORS ── */
 
+// 解析允许源:
+//   · ALLOWED_ORIGINS=https://a.example.com,https://b.example.com  → 精确匹配
+//   · 没设 + NODE_ENV=production → 同源 only (不发 CORS 头,浏览器同源仍走得通)
+//   · 没设 + NODE_ENV!=production → 本地默认列表
+function getAllowedOrigins() {
+  if (process.env.ALLOWED_ORIGINS) {
+    return process.env.ALLOWED_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean)
+  }
+  if (process.env.NODE_ENV === 'production') {
+    // 生产没显式配 → 不允许任何跨域 (返回空数组,下面的 allowedOrigins.includes(origin) 永假)
+    return []
+  }
+  return ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:5175', 'http://127.0.0.1:5175']
+}
+
 export function corsMiddleware(req, res, next) {
   const origin = req.headers.origin
-  // 生产环境应该限制具体域名
-  const allowedOrigins = process.env.ALLOWED_ORIGINS
-    ? process.env.ALLOWED_ORIGINS.split(',')
-    : ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:5175', 'http://127.0.0.1:5175']
+  const allowedOrigins = getAllowedOrigins()
 
-  if (allowedOrigins.includes(origin)) {
+  if (origin && allowedOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin)
     res.setHeader('Access-Control-Allow-Credentials', 'true')
+    res.setHeader('Vary', 'Origin')
   }
 
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS')
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
 
   if (req.method === 'OPTIONS') {
+    // 预检请求:同源(没 origin 头)放行,跨源且不在白名单 → 403
+    if (origin && !allowedOrigins.includes(origin)) {
+      res.writeHead(403, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'CORS origin not allowed' }))
+      return
+    }
     res.writeHead(204)
     res.end()
     return
@@ -33,10 +52,33 @@ export function securityHeaders(req, res, next) {
   res.setHeader('X-Frame-Options', 'DENY')
   res.setHeader('X-XSS-Protection', '1; mode=block')
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
-  // CSP: 生产环境根据实际资源调整
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()')
+  // HSTS:仅 HTTPS 上才发
+  if (process.env.NODE_ENV === 'production' && (req.headers['x-forwarded-proto'] === 'https' || req.connection?.encrypted)) {
+    res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains')
+  }
+  // CSP:
+  //   · script-src 不再放 unsafe-eval (Vite 构建的产物不需要;run_js 走 Worker blob: 已显式列)
+  //   · 仍保留 unsafe-inline 兼容 React 内联事件;后续可改用 nonce
+  //   · worker-src blob: 让 run_js 的 Worker URL 能加载
+  //   · connect-src 默认只放 self + DeepSeek;额外模型端点通过 ALLOWED_MODEL_ENDPOINTS 注入
+  const extraConnect = (process.env.ALLOWED_MODEL_ENDPOINTS || '')
+    .split(',').map((s) => s.trim()).filter(Boolean).join(' ')
   res.setHeader(
     'Content-Security-Policy',
-    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' ws: wss: https://api.deepseek.com;"
+    [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline' blob:",
+      "worker-src 'self' blob:",
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+      "font-src 'self' https://fonts.gstatic.com",
+      "img-src 'self' data: blob: https:",
+      `connect-src 'self' ws: wss: https://api.deepseek.com ${extraConnect}`.trim(),
+      "frame-src 'self' blob:",
+      "object-src 'none'",
+      "base-uri 'self'",
+      "form-action 'self'",
+    ].join('; '),
   )
   next()
 }
