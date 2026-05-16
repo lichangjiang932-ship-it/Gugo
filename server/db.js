@@ -135,6 +135,24 @@ function initSchema(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_job_artifacts_job_created ON job_artifacts(job_id, created_at);
 
+    CREATE TABLE IF NOT EXISTS skills (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL,
+      version TEXT NOT NULL,
+      icon TEXT NOT NULL,
+      permissions_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS skill_assets (
+      skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+      path TEXT NOT NULL,
+      content TEXT NOT NULL,
+      PRIMARY KEY (skill_id, path)
+    );
+
     CREATE TABLE IF NOT EXISTS meta (
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
