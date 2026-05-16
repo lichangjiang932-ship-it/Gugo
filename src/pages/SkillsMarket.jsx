@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Search, Sparkles, X } from 'lucide-react'
+import { Plus, Search, Sparkles, Upload, X } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
 import { SKILLS } from '../data.js'
 import { useAppContext } from '../store/AppContext'
+import { importSkillPack, listSkills } from '../lib/skillClient.js'
 
 const CUSTOM_KEY = 'your-model-atelier:custom-skills:v1'
 
@@ -28,12 +29,32 @@ export default function SkillsMarket() {
   const [query, setQuery] = useState('')
   const [activeFilter, setActiveFilter] = useState('全部')
   const [customSkills, setCustomSkills] = useState(() => loadCustomSkills())
+  const [runtimeSkills, setRuntimeSkills] = useState(SKILLS)
   const [showModal, setShowModal] = useState(false)
   const [draft, setDraft] = useState({ id: '', name: '', desc: '', icon: '*', perms: '' })
   const [draftError, setDraftError] = useState('')
+  const [importFiles, setImportFiles] = useState(null)
+  const [importPreview, setImportPreview] = useState(null)
+  const [importError, setImportError] = useState('')
+  const [importing, setImporting] = useState(false)
   const searchRef = useRef(null)
+  const folderInputRef = useRef(null)
 
-  const allSkills = useMemo(() => [...customSkills, ...SKILLS], [customSkills])
+  const allSkills = useMemo(() => [...customSkills, ...runtimeSkills], [customSkills, runtimeSkills])
+
+  useEffect(() => {
+    let active = true
+    listSkills()
+      .then(({ skills }) => {
+        if (active && Array.isArray(skills) && skills.length) setRuntimeSkills(skills)
+      })
+      .catch(() => {
+        if (active) setRuntimeSkills(SKILLS)
+      })
+    return () => {
+      active = false
+    }
+  }, [])
 
   const permCounts = useMemo(() => {
     const acc = {}
@@ -114,6 +135,7 @@ export default function SkillsMarket() {
         perms: draft.perms.split(',').map((s) => s.trim()).filter(Boolean),
         recommended: false,
         custom: true,
+        localCustom: true,
       },
       ...customSkills,
     ]
@@ -131,6 +153,48 @@ export default function SkillsMarket() {
     saveCustomSkills(next)
   }
 
+  const handleFolderSelected = async (event) => {
+    const files = [...(event.target.files || [])]
+    event.target.value = ''
+    if (!files.length) return
+    const nextFiles = {}
+    for (const file of files) {
+      const parts = (file.webkitRelativePath || file.name).split('/').filter(Boolean)
+      const relativePath = parts.length > 1 ? parts.slice(1).join('/') : file.name
+      nextFiles[relativePath] = await file.text()
+    }
+    setImportFiles(nextFiles)
+    try {
+      const manifest = JSON.parse(nextFiles['skill.json'] || '{}')
+      if (!nextFiles['prompts/system.md']) throw new Error('缺少 prompts/system.md')
+      setImportPreview({
+        ...manifest,
+        promptPreview: nextFiles['prompts/system.md'].slice(0, 180),
+      })
+      setImportError('')
+    } catch (err) {
+      setImportPreview(null)
+      setImportError(err.message || '技能包读取失败')
+    }
+  }
+
+  const handleConfirmImport = async () => {
+    if (!importFiles) return
+    setImporting(true)
+    setImportError('')
+    try {
+      await importSkillPack(importFiles)
+      const { skills } = await listSkills()
+      setRuntimeSkills(skills)
+      setImportFiles(null)
+      setImportPreview(null)
+    } catch (err) {
+      setImportError(err.message)
+    } finally {
+      setImporting(false)
+    }
+  }
+
   return (
     <div className="h-screen flex bg-paper overflow-hidden">
       <LeftRail />
@@ -145,6 +209,15 @@ export default function SkillsMarket() {
             <p className="font-hand text-base text-ink-soft mt-1">点击技能会把 /命令 写入聊天输入框。</p>
           </div>
           <div className="flex gap-2">
+            <input
+              ref={folderInputRef}
+              type="file"
+              webkitdirectory=""
+              directory=""
+              multiple
+              className="hidden"
+              onChange={handleFolderSelected}
+            />
             <div className="h-9 px-3.5 border border-ink/70 rounded-md flex items-center gap-1.5 bg-paper">
               <Search className="w-4 h-4 text-ink-fade" />
               <input
@@ -155,6 +228,13 @@ export default function SkillsMarket() {
                 className="bg-transparent text-sm text-ink outline-none placeholder:text-ink-soft w-40"
               />
             </div>
+            <button
+              onClick={() => folderInputRef.current?.click()}
+              className="h-9 px-4 border border-ink/70 rounded-md font-hand text-sm flex items-center gap-1.5 hover:bg-paper-2 transition-colors"
+            >
+              <Upload className="w-4 h-4" />
+              导入技能包
+            </button>
             <button
               onClick={handleCreateCustom}
               className="h-9 px-4 bg-ember text-paper rounded-md font-hand text-sm flex items-center gap-1.5 hover:bg-ember/90 transition-colors"
@@ -188,7 +268,7 @@ export default function SkillsMarket() {
                 skill.recommended ? 'border-ember bg-ember-soft' : skill.custom ? 'border-ink/40 border-dashed bg-paper-2' : 'border-ink/30 hover:border-ink/60'
               }`}
             >
-              {skill.custom && (
+              {skill.localCustom && (
                 <span
                   role="button"
                   tabIndex={0}
@@ -211,7 +291,7 @@ export default function SkillsMarket() {
                     <Sparkles className="w-3 h-3" /> 推荐
                   </span>
                 )}
-                {skill.custom && <span className="font-mono text-[9px] tracking-wider text-ink-fade">自定义</span>}
+                {skill.custom && <span className="font-mono text-[9px] tracking-wider text-ink-fade">{skill.imported ? '已导入' : '自定义'}</span>}
               </div>
               <div>
                 <div className="font-hand text-[17px] leading-tight text-ink">{skill.name}</div>
@@ -310,6 +390,78 @@ export default function SkillsMarket() {
               >
                 创建
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {(importPreview || importError) && (
+        <div className="fixed inset-0 bg-ink/40 flex items-center justify-center z-50 p-4" onClick={() => {
+          setImportPreview(null)
+          setImportError('')
+          setImportFiles(null)
+        }}>
+          <div className="bg-paper border border-ink rounded-md p-6 w-full max-w-lg flex flex-col gap-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h2 className="font-hand text-xl text-ink">导入技能包</h2>
+              <button onClick={() => {
+                setImportPreview(null)
+                setImportError('')
+                setImportFiles(null)
+              }} className="text-ink-fade hover:text-ink">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {importError ? (
+              <div className="p-3 border border-ember-line bg-ember-soft/30 rounded-md text-sm text-ember">{importError}</div>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <p className="text-ink-fade">ID</p>
+                    <p className="text-ink">{importPreview?.id}</p>
+                  </div>
+                  <div>
+                    <p className="text-ink-fade">版本</p>
+                    <p className="text-ink">{importPreview?.version}</p>
+                  </div>
+                  <div className="col-span-2">
+                    <p className="text-ink-fade">名称</p>
+                    <p className="text-ink">{importPreview?.name}</p>
+                  </div>
+                  <div className="col-span-2">
+                    <p className="text-ink-fade">说明</p>
+                    <p className="text-ink">{importPreview?.description}</p>
+                  </div>
+                </div>
+                <div className="rounded-md border border-dashed border-ink-fade/40 p-3">
+                  <p className="text-xs text-ink-fade mb-1">提示词预览</p>
+                  <p className="text-sm text-ink-soft whitespace-pre-wrap">{importPreview?.promptPreview}</p>
+                </div>
+              </>
+            )}
+
+            <div className="flex gap-2 justify-end">
+              <button
+                onClick={() => {
+                  setImportPreview(null)
+                  setImportError('')
+                  setImportFiles(null)
+                }}
+                className="h-9 px-4 border border-ink/40 rounded-md font-hand text-sm text-ink-soft hover:border-ink"
+              >
+                取消
+              </button>
+              {!importError && (
+                <button
+                  onClick={handleConfirmImport}
+                  disabled={importing}
+                  className="h-9 px-4 bg-ember text-paper rounded-md font-hand text-sm hover:bg-ember/90 disabled:opacity-40"
+                >
+                  {importing ? '导入中…' : '确认导入'}
+                </button>
+              )}
             </div>
           </div>
         </div>

@@ -28,6 +28,7 @@ function mapImportedSkill(skill) {
     perms: skill.permissions || [],
     recommended: false,
     custom: true,
+    imported: true,
     version: skill.version,
     systemPrompt: full?.files?.['prompts/system.md'] || '',
   }
@@ -47,4 +48,3 @@ export function getRuntimeSkill(id) {
 export function listRuntimeSkillIds() {
   return listRuntimeSkills().map((skill) => skill.id)
 }
-
