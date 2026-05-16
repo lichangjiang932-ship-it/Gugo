@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { closeDb } from './db.js'
+import { closeDb, getDbStatus } from './db.js'
 import {
   corsMiddleware,
   securityHeaders,
@@ -15,6 +15,7 @@ import {
   handleModelProxyRequest,
   handleModelStatusRequest,
   handleSystemDiagnosticsRequest,
+  getModelStatus,
 } from './modelProxy.js'
 import { handleAuthBillingRequest } from './billingAuth.js'
 import { handleToolProxyRequest } from './toolProxy.js'
@@ -60,9 +61,42 @@ function serveStatic(req, res) {
   })
 }
 
+// 启动时一次性算出 version,后续 health 直接复用,避免每次 health 都读 fs
+let cachedVersion = null
+function readVersion() {
+  if (cachedVersion !== null) return cachedVersion
+  try {
+    const pkgPath = path.join(rootDir, 'package.json')
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
+    cachedVersion = pkg.version || '0.0.0'
+  } catch {
+    cachedVersion = '0.0.0'
+  }
+  return cachedVersion
+}
+
 function healthCheck(req, res) {
-  res.writeHead(200, { 'Content-Type': 'application/json' })
-  res.end(JSON.stringify({ ok: true, time: Date.now() }))
+  // G6: /api/health 必须返回结构化 JSON,带 db + model 子状态.
+  // 任何子系统未就绪 → 503,但响应体仍是 JSON,方便运维和探针解析.
+  const env = (() => { try { return getRuntimeEnv() } catch { return process.env } })()
+  const db = getDbStatus()
+  const model = getModelStatus(env)
+  const overallOk = db.ok && model.configured
+  const status = overallOk ? 200 : 503
+  res.writeHead(status, { 'Content-Type': 'application/json' })
+  res.end(JSON.stringify({
+    ok: overallOk,
+    version: readVersion(),
+    uptimeSec: Math.round(process.uptime()),
+    time: Date.now(),
+    db,
+    model: {
+      configured: !!model.configured,
+      missing: Array.isArray(model.missing) ? model.missing : [],
+      modelName: model.modelName || null,
+      toolMaxRounds: model.toolMaxRounds,
+    },
+  }))
 }
 
 function applyMiddlewares(handler) {

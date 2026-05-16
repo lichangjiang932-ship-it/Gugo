@@ -19,47 +19,66 @@ function inferSpreadsheetTitle(rows, fallback = 'spreadsheet') {
  *   现在统一抬高门槛,并且 ChatMessages 不再用卡片替代正文 — 卡片只作为
  *   辅助 CTA 出现,用户始终能看到完整答案.
  *
+ * ★ batchG G4: 同时返回 confidence (0..1).调用方可用阈值筛掉低置信度命中.
+ *   返回旧形式 (字符串) 由 detectArtifactType 兼容,新接口走 detectArtifactWithConfidence.
+ *
  * 返回值: 'html' | 'pptx' | 'xlsx' | 'docx' | null
  */
-export function detectArtifactType(content = '') {
+export function detectArtifactWithConfidence(content = '') {
   const text = String(content || '')
-  if (text.length < 60) return null
+  if (text.length < 60) return { type: null, confidence: 0 }
 
   // ── HTML: 完整 html 代码块 或 以 <!doctype html> / <html 开头 ──
   const htmlFence = text.match(/```html\s*\n([\s\S]*?)```/i)
-  if (htmlFence && /<\w+[\s>]/.test(htmlFence[1])) return 'html'
-  if (/^\s*(?:<!doctype\s+html|<html[\s>])/i.test(text)) return 'html'
+  if (htmlFence && /<\w+[\s>]/.test(htmlFence[1])) return { type: 'html', confidence: 0.95 }
+  if (/^\s*(?:<!doctype\s+html|<html[\s>])/i.test(text)) return { type: 'html', confidence: 0.95 }
 
   // ── PPTX: 至少 3 张 --- 分隔的幻灯片, 或 ≥6 条 "数字." 大纲 ──
-  //    (原来 2 张/3 条太松,普通分点回答会被识别成 PPT)
   const dashSlideCount = (text.match(/^\s*---+\s*$/gm) || []).length
   if (dashSlideCount >= 3) {
     const slides = parseMarkdownSlides(text)
-    if (slides.length >= 3) return 'pptx'
+    if (slides.length >= 3) {
+      const conf = Math.min(0.95, 0.6 + slides.length * 0.05)
+      return { type: 'pptx', confidence: conf }
+    }
   }
   const numberedHeads = (text.match(/^(?:#{1,4}\s*)?\d{1,2}[.、]\s+\S/gm) || []).length
   if (numberedHeads >= 6) {
     const slides = parseMarkdownSlides(text)
-    if (slides.length >= 6) return 'pptx'
+    if (slides.length >= 6) {
+      const conf = Math.min(0.85, 0.55 + slides.length * 0.04)
+      return { type: 'pptx', confidence: conf }
+    }
   }
 
   // ── XLSX: csv 代码块 或 真·markdown 表格 (含分隔行 + ≥4 数据行) ──
-  //    (原来 ≥2 行表格就识别,会把对比表/步骤表都当成 Excel)
-  if (/```(?:csv|tsv)\s*\n[\s\S]*?```/i.test(text)) return 'xlsx'
+  if (/```(?:csv|tsv)\s*\n[\s\S]*?```/i.test(text)) return { type: 'xlsx', confidence: 0.9 }
   const tableLines = text.split('\n').filter((l) => /^\s*\|.+\|\s*$/.test(l))
   const hasSeparatorRow = text.split('\n').some((l) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$/.test(l))
-  // 表头 + 分隔 + ≥4 数据行 ≈ 6 行表格,小对比表不会触发
-  if (tableLines.length >= 6 && hasSeparatorRow) return 'xlsx'
+  if (tableLines.length >= 6 && hasSeparatorRow) {
+    const conf = Math.min(0.9, 0.6 + tableLines.length * 0.03)
+    return { type: 'xlsx', confidence: conf }
+  }
 
   // ── DOCX: 至少 3 个 markdown 标题 + 一定字数 ──
-  //    (原来 1 个标题就够,普通带标题的回答都被当成 Word)
   const headingCount = (text.match(/^#{1,6}\s+\S/gm) || []).length
   if (headingCount >= 3 && text.length >= 400) {
     const doc = parseMarkdownDocument(text)
-    if (doc.blocks.length >= 5) return 'docx'
+    if (doc.blocks.length >= 5) {
+      const conf = Math.min(0.85, 0.5 + headingCount * 0.05 + Math.min(0.2, text.length / 4000))
+      return { type: 'docx', confidence: conf }
+    }
   }
 
-  return null
+  return { type: null, confidence: 0 }
+}
+
+// 阈值低于该值的嗅探结果不会触发自动右栏弹出.
+// 用户主动点击 artifact 卡片仍然能预览 — 只是不会无邀请弹出来打扰.
+export const ARTIFACT_AUTO_OPEN_CONFIDENCE = 0.7
+
+export function detectArtifactType(content = '') {
+  return detectArtifactWithConfidence(content).type
 }
 
 /**
@@ -96,6 +115,7 @@ export function buildArtifactPreview({ content = '', meta = {} } = {}) {
   // 先按 meta 的显式声明走 (slash 命令路径)
   let resolvedType = ''
   let inferred = false
+  let confidence = 1
   if (shouldOfferPptxExport(meta)) resolvedType = 'pptx'
   else {
     const officeType = shouldOfferOfficeExport(meta)
@@ -104,13 +124,18 @@ export function buildArtifactPreview({ content = '', meta = {} } = {}) {
   // 没有显式 meta 时, 按内容嗅探 fallback
   // ★ batchF P2b: 嗅探出来的 artifact 不再替代正文,只在正文下追加一个
   //   "在右侧打开预览" CTA;通过返回 inferred:true 让 ChatMessages 区分.
+  // ★ batchG G4: 同时返回置信度,UI 可只对 ≥ ARTIFACT_AUTO_OPEN_CONFIDENCE 的命中弹右栏.
   if (!resolvedType) {
-    resolvedType = detectArtifactType(content) || ''
-    if (resolvedType) inferred = true
+    const probe = detectArtifactWithConfidence(content)
+    if (probe.type) {
+      resolvedType = probe.type
+      inferred = true
+      confidence = probe.confidence
+    }
   }
   if (!resolvedType) return null
 
-  const base = { inferred }
+  const base = { inferred, confidence }
 
   if (resolvedType === 'html') {
     const html = extractHtmlSource(content)

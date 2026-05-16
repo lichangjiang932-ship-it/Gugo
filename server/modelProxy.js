@@ -68,10 +68,19 @@ export function loadModelConfig(env = process.env) {
   }
 }
 
+export function getToolMaxRounds(env = process.env) {
+  // 工具调用循环上限.默认 5,允许 1..12,超出范围按默认.
+  // 上限 12 是经验值:超过反而是模型策略劣化(看上次工具结果就够了),
+  // 下限 1 是为了允许测试场景禁用工具循环.
+  const raw = Number(env.TOOL_MAX_ROUNDS)
+  if (!Number.isFinite(raw) || raw < 1 || raw > 12) return 5
+  return Math.floor(raw)
+}
+
 export function getModelStatus(env = process.env) {
   const config = loadModelConfig(env)
   if (!config.configured) {
-    return { ok: true, configured: false, missing: config.missing }
+    return { ok: true, configured: false, missing: config.missing, toolMaxRounds: getToolMaxRounds(env) }
   }
 
   const status = {
@@ -81,6 +90,7 @@ export function getModelStatus(env = process.env) {
     baseUrlMasked: config.baseUrl,
     temperature: config.temperature,
     maxTokens: config.maxTokens,
+    toolMaxRounds: getToolMaxRounds(env),
   }
 
   const models = getVisibleModels(env, config.modelName)

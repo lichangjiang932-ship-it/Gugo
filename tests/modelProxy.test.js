@@ -160,6 +160,7 @@ test('returns backend model status without exposing API key', () => {
       baseUrlMasked: 'https://api.example.com/v1',
       temperature: 0.7,
       maxTokens: 4096,
+      toolMaxRounds: 5,
     }
   )
 })

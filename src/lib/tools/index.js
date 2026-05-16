@@ -23,7 +23,22 @@ const TOOL_ARG_SCHEMAS = {
   fetch_url: z.object({
     url: z.string().url('url 必须是合法 http/https 链接'),
   }),
-
+  create_pptx: z.object({
+    title: z.string().min(1, 'title 不能为空').max(200),
+    // markdown:用 --- 分页或 # 分页;每页第一行非分隔则当标题
+    markdown: z.string().min(1, 'markdown 不能为空').max(60000),
+  }),
+  create_docx: z.object({
+    title: z.string().min(1, 'title 不能为空').max(200),
+    markdown: z.string().min(1, 'markdown 不能为空').max(120000),
+  }),
+  create_xlsx: z.object({
+    title: z.string().min(1, 'title 不能为空').max(200),
+    // 二维数组 (优先) 或 markdown 表格 / csv
+    rows: z.array(z.array(z.union([z.string(), z.number(), z.boolean(), z.null()]))).optional(),
+    markdown: z.string().max(60000).optional(),
+  }).refine((d) => Array.isArray(d.rows) ? d.rows.length > 0 : !!d.markdown,
+    { message: '需要提供 rows 或 markdown 至少一项' }),
 }
 
 const TOOL_SPECS = {
@@ -53,6 +68,56 @@ const TOOL_SPECS = {
           url: { type: 'string', description: '完整的 http/https URL' },
         },
         required: ['url'],
+      },
+    },
+  },
+  create_pptx: {
+    type: 'function',
+    function: {
+      name: 'create_pptx',
+      description: '生成可下载的 PowerPoint 演示文稿(.pptx).当用户需要 PPT/幻灯片/汇报材料时调用。markdown 用 --- 或 # 分页,第一行作为页标题。生成完成后右侧会自动出现预览窗口,用户可一键下载。',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: '演示文稿标题(也作为下载文件名)' },
+          markdown: { type: 'string', description: '幻灯片 markdown 源,---/# 分页' },
+        },
+        required: ['title', 'markdown'],
+      },
+    },
+  },
+  create_docx: {
+    type: 'function',
+    function: {
+      name: 'create_docx',
+      description: '生成可下载的 Word 文档(.docx).当用户需要长文报告/合同/说明书时调用。markdown 标题、列表、引用、代码块都会被正确转换。生成完成后右侧自动预览,用户可一键下载。',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: '文档标题(也作为下载文件名)' },
+          markdown: { type: 'string', description: '文档正文 markdown' },
+        },
+        required: ['title', 'markdown'],
+      },
+    },
+  },
+  create_xlsx: {
+    type: 'function',
+    function: {
+      name: 'create_xlsx',
+      description: '生成可下载的 Excel 表格(.xlsx).当用户需要数据表/对比表/任务清单时调用。优先用 rows(二维数组)给结构化数据,否则用 markdown 表格。生成完成后右侧自动预览,用户可一键下载。',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: '表格标题(也作为下载文件名)' },
+          rows: {
+            type: 'array',
+            description: '二维数组形式的表格数据,第一行通常是表头.示例 [["姓名","部门"],["张三","研发"]]',
+            items: { type: 'array', items: {} },
+          },
+          markdown: { type: 'string', description: '当不便用 rows 时,可传 markdown 表格或 csv 文本(三反引号包裹)' },
+        },
+        required: ['title'],
       },
     },
   },
@@ -134,9 +199,86 @@ async function execFetchUrl(args) {
   }
 }
 
+// ── G1: 文件生成工具 ────────────────────────────────────────────────────────
+// 这三个工具不走后端 — 直接在前端用 pptxgenjs / docx / xlsx 生成,
+// 返回带 artifact 描述符的结果.executor 把 artifact 透到 callsite,
+// callsite 再写到 last message meta(artifactType + artifactSource),
+// ChatMessages 看到 explicit artifact 就直接渲染卡片 + 弹右栏预览.
+//
+// 模型拿到的工具 content 只是简短 ack(避免 markdown 全文回灌占用上下文).
+
+async function execCreatePptx(args) {
+  const title = String(args.title).trim().slice(0, 200) || 'presentation'
+  const markdown = String(args.markdown)
+  // 用现有 parseMarkdownSlides 做一次 sanity 解析,失败就让模型知道
+  const { parseMarkdownSlides } = await import('../presentationExport.js')
+  const slides = parseMarkdownSlides(markdown)
+  if (!slides.length) throw new Error('markdown 解析为 0 张幻灯片;请用 --- 分页或以 # 开头的页标题')
+  return {
+    content: JSON.stringify({
+      ok: true,
+      title,
+      slides: slides.length,
+      message: `已生成 PPT 草稿 "${title}"(${slides.length} 页),用户可在右侧预览并下载。`,
+    }),
+    artifact: { type: 'pptx', title, source: markdown },
+  }
+}
+
+async function execCreateDocx(args) {
+  const title = String(args.title).trim().slice(0, 200) || 'document'
+  const markdown = String(args.markdown)
+  const { parseMarkdownDocument } = await import('../officeExport.js')
+  const doc = parseMarkdownDocument(markdown)
+  if (!doc.blocks.length) throw new Error('markdown 解析为 0 个内容块')
+  return {
+    content: JSON.stringify({
+      ok: true,
+      title,
+      blocks: doc.blocks.length,
+      message: `已生成 Word 草稿 "${title}"(${doc.blocks.length} 个块),用户可在右侧预览并下载。`,
+    }),
+    artifact: { type: 'docx', title, source: markdown },
+  }
+}
+
+async function execCreateXlsx(args) {
+  const title = String(args.title).trim().slice(0, 200) || 'spreadsheet'
+  const rows = Array.isArray(args.rows) ? args.rows : null
+  let source
+  if (rows && rows.length) {
+    // 直接用结构化数组 — 转成 csv 让现有 parseSpreadsheetRows 走通
+    source = '```csv\n' + rows.map((r) =>
+      r.map((c) => {
+        const s = c == null ? '' : String(c)
+        return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+      }).join(',')
+    ).join('\n') + '\n```'
+  } else if (args.markdown) {
+    source = String(args.markdown)
+  } else {
+    throw new Error('需要 rows 或 markdown 至少一项')
+  }
+  const { parseSpreadsheetRows } = await import('../officeExport.js')
+  const parsed = parseSpreadsheetRows(source)
+  if (!parsed.length) throw new Error('解析为 0 行数据')
+  return {
+    content: JSON.stringify({
+      ok: true,
+      title,
+      rows: parsed.length,
+      message: `已生成 Excel 草稿 "${title}"(${parsed.length} 行),用户可在右侧预览并下载。`,
+    }),
+    artifact: { type: 'xlsx', title, source },
+  }
+}
+
 const EXECUTORS = {
   web_search: execWebSearch,
   fetch_url: execFetchUrl,
+  create_pptx: execCreatePptx,
+  create_docx: execCreateDocx,
+  create_xlsx: execCreateXlsx,
 }
 
 export async function executeToolCall(call, options = {}) {
@@ -169,7 +311,8 @@ export async function executeToolCall(call, options = {}) {
       const output = await fn(parsedArgs)
       const content = typeof output === 'string' ? output : output.content
       const billing = typeof output === 'string' ? null : output.billing
-      return { ok: true, content, billing, attempts: attempt + 1 }
+      const artifact = typeof output === 'string' ? null : (output.artifact || null)
+      return { ok: true, content, billing, artifact, attempts: attempt + 1 }
     } catch (err) {
       lastErr = err
       const msg = err?.message || String(err)

@@ -130,8 +130,13 @@ export default function ChatMessages({
         {hasMessages ? (
           <>
             {messages.map((msg, i) => {
-              const artifactPreview = msg.role === 'assistant' && msg.content
-                ? buildArtifactPreview({ content: msg.content, meta: msg.meta || {} })
+              const artifactPreview = msg.role === 'assistant' && (msg.meta?.artifactSource || msg.content)
+                // G1: 优先用工具产出的 artifactSource(模型显式给的 markdown)
+                //     而不是 msg.content(对话回复正文,可能只是个 ack).
+                ? buildArtifactPreview({
+                    content: msg.meta?.artifactSource || msg.content,
+                    meta: msg.meta || {},
+                  })
                 : null
 
               return (
