@@ -5,7 +5,11 @@ import test from 'node:test'
 
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-job-runtime-tests', String(process.pid))
 
-const { JobRuntime, recoverInterruptedJobs } = await import('../server/jobRuntime.js')
+const {
+  JobRuntime,
+  createDefaultExecuteStep,
+  recoverInterruptedJobs,
+} = await import('../server/jobRuntime.js')
 
 test('runtime completes queued child steps in order', async () => {
   const executed = []
@@ -49,4 +53,27 @@ test('recovery returns interrupted running work to queued', () => {
     { id: 'job-2', status: 'completed' },
   ])
   assert.deepEqual(recovered, [{ id: 'job-1', status: 'queued' }])
+})
+
+test('default executor turns generated text into a downloadable artifact', async () => {
+  const runtime = new JobRuntime({
+    executeStep: createDefaultExecuteStep({
+      runModel: async ({ userPrompt }) => `结果：${userPrompt}`,
+      createDocxImpl: async () => ({
+        id: 'artifact-1',
+        type: 'docx',
+        title: '任务结果',
+        url: '/api/artifacts/result.docx',
+        filename: 'result.docx',
+      }),
+    }),
+  })
+
+  const job = await runtime.createJob('整理会议纪要并导出')
+  await runtime.drain()
+  const loaded = runtime.getJob(job.id)
+
+  assert.equal(loaded.artifacts.length, 1)
+  assert.equal(loaded.artifacts[0].filename, 'result.docx')
+  assert.equal(loaded.steps[1].output.text, '结果：整理会议纪要并导出')
 })

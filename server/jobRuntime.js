@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import { buildInitialPlan } from './jobPlanner.js'
 import {
+  appendJobArtifact,
   appendJobEvent,
   appendJobSteps,
   createJob as persistJob,
@@ -11,6 +12,9 @@ import {
   updateJob,
   updateJobStep,
 } from './jobStore.js'
+import { createDocx } from './artifactGen.js'
+import { callBackgroundModel } from './modelProxy.js'
+import { getRuntimeSkill } from './skillRegistry.js'
 
 const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled'])
 const RECOVERABLE_JOB_STATUSES = new Set(['planning', 'running', 'waiting'])
@@ -19,23 +23,84 @@ function newId(prefix) {
   return `${prefix}-${crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
 }
 
-function defaultExecuteStep({ job, step }) {
-  if (step.kind === 'plan') {
-    return Promise.resolve({
-      ok: true,
-      output: { summary: `已规划任务：${job.title}` },
-    })
+function parseSkillPrompt(prompt = '') {
+  const match = String(prompt).match(/^\/([a-z0-9_-]+)\s*(.*)$/i)
+  if (!match) return { skillId: null, userPrompt: String(prompt || '').trim() }
+  return {
+    skillId: match[1],
+    userPrompt: match[2].trim(),
   }
-  if (step.kind === 'finalize') {
-    return Promise.resolve({
-      ok: true,
-      output: { summary: '已汇总任务结果' },
+}
+
+export function createDefaultExecuteStep({
+  runModel = async ({ messages }) => callBackgroundModel({ messages }),
+  createDocxImpl = createDocx,
+} = {}) {
+  return async function defaultExecuteStep({ job, step }) {
+    if (step.kind === 'plan') {
+      return {
+        ok: true,
+        output: { summary: `已规划任务：${job.title}` },
+      }
+    }
+
+    if (step.kind === 'finalize') {
+      const generatedTexts = (job.steps || [])
+        .filter((item) => ['execute', 'batch_item'].includes(item.kind))
+        .map((item) => item.output?.text)
+        .filter(Boolean)
+      if (!generatedTexts.length) {
+        return {
+          ok: true,
+          output: { summary: '没有可汇总的文本结果' },
+        }
+      }
+      const artifact = await createDocxImpl({
+        title: job.title,
+        paragraphs: generatedTexts.map((text, index) => ({
+          heading: index === 0 ? 1 : 2,
+          text,
+        })),
+      })
+      appendJobArtifact({
+        id: artifact.id,
+        jobId: job.id,
+        stepId: step.id,
+        type: artifact.type,
+        title: artifact.title || job.title,
+        url: artifact.url,
+        filename: artifact.filename,
+      })
+      return {
+        ok: true,
+        output: {
+          summary: '已汇总任务结果',
+          artifactId: artifact.id,
+        },
+      }
+    }
+
+    const { skillId, userPrompt } = parseSkillPrompt(job.prompt)
+    const skill = skillId ? getRuntimeSkill(skillId) : null
+    const messages = []
+    if (skill?.systemPrompt) messages.push({ role: 'system', content: skill.systemPrompt })
+    const promptSuffix = step.kind === 'batch_item'
+      ? `\n\n这是批量任务中的第 ${step.input?.index || 1} / ${step.input?.total || 1} 项，请只完成这一项。`
+      : ''
+    const finalPrompt = `${userPrompt || job.prompt}${promptSuffix}`
+    messages.push({ role: 'user', content: finalPrompt })
+    const text = await runModel({
+      job,
+      step,
+      messages,
+      userPrompt: finalPrompt,
+      skill,
     })
+    return {
+      ok: true,
+      output: { text },
+    }
   }
-  return Promise.resolve({
-    ok: true,
-    output: { text: step.title },
-  })
 }
 
 function deriveProgress(steps = []) {
@@ -61,7 +126,7 @@ export function recoverInterruptedJobs(jobs = []) {
 export class JobRuntime {
   constructor({
     planner = buildInitialPlan,
-    executeStep = defaultExecuteStep,
+    executeStep = createDefaultExecuteStep(),
     tickMs = 250,
   } = {}) {
     this.planner = planner
@@ -338,4 +403,3 @@ export function closeJobRuntime() {
   singletonRuntime?.stop()
   singletonRuntime = null
 }
-

@@ -257,6 +257,42 @@ export function parseOpenAICompatibleResponse(data) {
   return reply
 }
 
+export async function callBackgroundModel({
+  messages,
+  modelName,
+  env = getRuntimeEnv(),
+  fetchImpl = fetch,
+} = {}) {
+  const config = loadModelConfig(env)
+  if (!config.configured) {
+    throw new Error(`后台任务缺少模型配置：${config.missing.join(', ')}`)
+  }
+  const selectedModel = pickAllowedModel({
+    requestedModel: modelName,
+    config,
+    env,
+  })
+  const { url, init } = buildOpenAICompatibleRequest({
+    config: { ...config, modelName: selectedModel },
+    messages,
+    stream: false,
+  })
+  const response = await fetchImpl(url, init)
+  const text = await response.text()
+  let data = null
+  try {
+    data = text ? JSON.parse(text) : null
+  } catch {
+    data = { raw: text }
+  }
+  if (!response.ok) {
+    const error = new Error(data?.error?.message || data?.message || response.statusText)
+    error.status = response.status
+    throw error
+  }
+  return parseOpenAICompatibleResponse(data)
+}
+
 export function formatProxyError(error) {
   if (error?.status === 400) return '请求参数无效，请检查 Base URL、模型名称和消息内容。'
   if (error?.status === 401 || error?.status === 403) return 'API Key 无效或没有权限。'
