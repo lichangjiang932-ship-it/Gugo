@@ -16,6 +16,7 @@ server-data/
 .env
 .env.*
 !.env.example
+.tmp/
 
 # Editor directories and files
 .vscode/*
