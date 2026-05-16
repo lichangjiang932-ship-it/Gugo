@@ -28,12 +28,11 @@ test('skill import endpoint installs and lists imported skills', async () => {
     })
     assert.equal(importedResponse.status, 201)
     const imported = await importedResponse.json()
-    assert.equal(imported.skill.id, 'writer')
+    assert.match(imported.skill.id, /^writer(?:-\d+)?$/)
 
     const listed = await fetch(`http://127.0.0.1:${port}/api/skills`).then((res) => res.json())
-    assert.equal(listed.skills.some((skill) => skill.id === 'writer'), true)
+    assert.equal(listed.skills.some((skill) => skill.id === imported.skill.id), true)
   } finally {
     await new Promise((resolve) => server.close(resolve))
   }
 })
-

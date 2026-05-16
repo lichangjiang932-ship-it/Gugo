@@ -1,7 +1,7 @@
 async function readJsonResponse(responsePromise) {
   const response = await responsePromise
   if (!response.ok) {
-    let payload = null
+    let payload
     try {
       payload = await response.json()
     } catch {
@@ -23,4 +23,3 @@ export function importSkillPack(files, { fetchImpl = fetch } = {}) {
     body: JSON.stringify({ files }),
   }))
 }
-

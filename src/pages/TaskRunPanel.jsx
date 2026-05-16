@@ -68,26 +68,14 @@ export default function TaskRunPanel() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
 
-  async function refreshJobs() {
-    const { jobs: nextJobs } = await listJobs()
-    setJobs(nextJobs)
-    setSelectedJobId((current) => current || nextJobs[0]?.id || null)
-  }
-
-  async function refreshSelectedJob(jobId = selectedJobId) {
-    if (!jobId) {
-      setSelectedJob(null)
-      return
-    }
-    const { job } = await getJob(jobId)
-    setSelectedJob(job)
-  }
-
   useEffect(() => {
     let active = true
     async function load() {
       try {
-        await refreshJobs()
+        const { jobs: nextJobs } = await listJobs()
+        if (!active) return
+        setJobs(nextJobs)
+        setSelectedJobId((current) => current || nextJobs[0]?.id || null)
       } catch (err) {
         if (active) setError(err.message)
       } finally {
@@ -101,16 +89,32 @@ export default function TaskRunPanel() {
   }, [])
 
   useEffect(() => {
-    refreshSelectedJob(selectedJobId).catch((err) => setError(err.message))
+    let active = true
+    if (!selectedJobId) {
+      return undefined
+    }
+    getJob(selectedJobId)
+      .then(({ job }) => {
+        if (active) setSelectedJob(job)
+      })
+      .catch((err) => {
+        if (active) setError(err.message)
+      })
+    return () => {
+      active = false
+    }
   }, [selectedJobId])
 
-  useEffect(() => subscribeToJobEvents(async () => {
-    try {
-      await refreshJobs()
-      await refreshSelectedJob()
-    } catch (err) {
-      setError(err.message)
-    }
+  useEffect(() => subscribeToJobEvents(() => {
+    Promise.all([
+      listJobs(),
+      selectedJobId ? getJob(selectedJobId) : Promise.resolve({ job: null }),
+    ])
+      .then(([jobsPayload, jobPayload]) => {
+        setJobs(jobsPayload.jobs)
+        if (jobPayload.job) setSelectedJob(jobPayload.job)
+      })
+      .catch((err) => setError(err.message))
   }), [selectedJobId])
 
   const visibleJobs = useMemo(

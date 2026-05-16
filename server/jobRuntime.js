@@ -183,7 +183,7 @@ export class JobRuntime {
   async createJob(prompt) {
     const plan = this.planner(prompt)
     const id = newId('job')
-    const job = persistJob({
+    persistJob({
       id,
       title: plan.title,
       prompt: plan.prompt || String(prompt || '').trim(),
@@ -222,9 +222,9 @@ export class JobRuntime {
   }
 
   retryJob(jobId) {
-    const job = this.getJob(jobId)
-    if (!job) return null
-    for (const step of job.steps) {
+    const currentJob = this.getJob(jobId)
+    if (!currentJob) return null
+    for (const step of currentJob.steps) {
       if (['failed', 'cancelled'].includes(step.status)) {
         updateJobStep(step.id, {
           status: 'queued',

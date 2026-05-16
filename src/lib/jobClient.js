@@ -1,7 +1,7 @@
 async function readJsonResponse(responsePromise) {
   const response = await responsePromise
   if (!response.ok) {
-    let payload = null
+    let payload
     try {
       payload = await response.json()
     } catch {
@@ -59,4 +59,3 @@ export function subscribeToJobEvents(onEvent, { EventSourceImpl = globalThis.Eve
   stream.addEventListener('job_event', handler)
   return () => stream.close()
 }
-
