@@ -14,8 +14,9 @@ import {
   updateJobStep,
 } from './jobStore.js'
 import { createDocx } from './artifactGen.js'
-import { callBackgroundModel } from './modelProxy.js'
+import { callBackgroundModel, callBackgroundModelWithTools } from './modelProxy.js'
 import { getRuntimeSkill } from './skillRegistry.js'
+import { runToolsLoop } from './jobTools.js'
 
 const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled'])
 const RECOVERABLE_JOB_STATUSES = new Set(['planning', 'running', 'waiting'])
@@ -35,7 +36,10 @@ function parseSkillPrompt(prompt = '') {
 
 export function createDefaultExecuteStep({
   runModel = async ({ messages, signal }) => callBackgroundModel({ messages, signal }),
+  runModelWithTools = async ({ messages, tools, signal }) =>
+    callBackgroundModelWithTools({ messages, tools, signal }),
   createDocxImpl = createDocx,
+  enableServerTools = true,
 } = {}) {
   return async function defaultExecuteStep({ job, step, signal }) {
     if (step.kind === 'plan') {
@@ -86,11 +90,38 @@ export function createDefaultExecuteStep({
     const skill = skillId ? getRuntimeSkill(skillId, { userId: job.userId }) : null
     const messages = []
     if (skill?.systemPrompt) messages.push({ role: 'system', content: skill.systemPrompt })
+    // ★ tools loop 系统提示:鼓励模型在用户明确要 PPT/Word/Excel 时调工具落盘
+    if (enableServerTools) {
+      messages.push({
+        role: 'system',
+        content: '你可以调用以下工具直接生成文件:create_pptx (PowerPoint)、create_docx (Word)、create_xlsx (Excel)。当用户的需求需要可下载的文档/表格/演示稿时,直接调用对应工具并把内容完整填好,不要把内容写成纯文本回答。如果只需要文字答案,正常回答即可。',
+      })
+    }
     const promptSuffix = step.kind === 'batch_item'
       ? `\n\n这是批量任务中的第 ${step.input?.index || 1} / ${step.input?.total || 1} 项，请只完成这一项。`
       : ''
     const finalPrompt = `${userPrompt || job.prompt}${promptSuffix}`
     messages.push({ role: 'user', content: finalPrompt })
+
+    if (enableServerTools) {
+      const result = await runToolsLoop({
+        job,
+        step,
+        messages,
+        runModel: runModelWithTools,
+        signal,
+      })
+      return {
+        ok: true,
+        output: {
+          text: result.text,
+          artifactIds: result.artifactIds,
+          toolIterations: result.iterations,
+        },
+      }
+    }
+
+    // 兼容路径:enableServerTools=false 时退回纯文本(老行为)
     const text = await runModel({
       job,
       step,

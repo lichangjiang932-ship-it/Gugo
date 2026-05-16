@@ -89,6 +89,7 @@ test('recovery returns interrupted running work to queued', () => {
 test('default executor turns generated text into a downloadable artifact', async () => {
   const runtime = new JobRuntime({
     executeStep: createDefaultExecuteStep({
+      enableServerTools: false,
       runModel: async ({ userPrompt }) => `结果：${userPrompt}`,
       createDocxImpl: async () => ({
         id: 'artifact-1',
@@ -113,6 +114,7 @@ test('default executor forwards cancellation signals to the model runner', async
   const controller = new AbortController()
   let receivedSignal = null
   const executeStep = createDefaultExecuteStep({
+    enableServerTools: false,
     runModel: async ({ signal }) => {
       receivedSignal = signal
       return '完成'

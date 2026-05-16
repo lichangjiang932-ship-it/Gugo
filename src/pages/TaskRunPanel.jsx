@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Activity, CheckCircle2, Clock3, LayoutList, PauseCircle, RotateCcw } from 'lucide-react'
+import { Activity, CheckCircle2, Clock3, LayoutList, PauseCircle, RotateCcw, Eye } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
+import TaskArtifactPreview from './TaskArtifactPreview.jsx'
 import {
   cancelJob,
   createJob,
@@ -9,6 +10,7 @@ import {
   retryJob,
   retryStep,
   subscribeToJobEvents,
+  withDownloadToken,
 } from '../lib/jobClient.js'
 
 const FILTERS = [
@@ -63,6 +65,7 @@ export default function TaskRunPanel() {
   const [jobs, setJobs] = useState([])
   const [selectedJobId, setSelectedJobId] = useState(null)
   const [selectedJob, setSelectedJob] = useState(null)
+  const [selectedArtifact, setSelectedArtifact] = useState(null)
   const [activeFilter, setActiveFilter] = useState('all')
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
@@ -103,6 +106,10 @@ export default function TaskRunPanel() {
     return () => {
       active = false
     }
+  }, [selectedJobId])
+
+  useEffect(() => {
+    setSelectedArtifact(null)
   }, [selectedJobId])
 
   useEffect(() => subscribeToJobEvents(() => {
@@ -340,15 +347,39 @@ export default function TaskRunPanel() {
                       </div>
                       {(selectedJob.artifacts || []).length ? (
                         <div className="flex flex-col gap-2">
-                          {selectedJob.artifacts.map((artifact) => (
-                            <a
-                              key={artifact.id}
-                              href={artifact.url}
-                              className="text-sm text-ink hover:text-ember"
-                            >
-                              {artifact.title}
-                            </a>
-                          ))}
+                          {selectedJob.artifacts.map((artifact) => {
+                            const active = selectedArtifact?.id === artifact.id
+                            return (
+                              <div
+                                key={artifact.id}
+                                className={`rounded-md border p-2 flex items-center gap-2 ${
+                                  active ? 'border-ember bg-ember-soft' : 'border-ink/15'
+                                }`}
+                              >
+                                <button
+                                  onClick={() => setSelectedArtifact(artifact)}
+                                  className="flex-1 text-left text-sm text-ink hover:text-ember truncate"
+                                  title="预览"
+                                >
+                                  {artifact.title || artifact.filename}
+                                </button>
+                                <button
+                                  onClick={() => setSelectedArtifact(artifact)}
+                                  className="h-7 w-7 inline-flex items-center justify-center rounded border border-ink/20 text-ink-soft"
+                                  aria-label="预览"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                </button>
+                                <a
+                                  href={withDownloadToken(artifact.url)}
+                                  download={artifact.filename || ''}
+                                  className="text-xs text-ember"
+                                >
+                                  下载
+                                </a>
+                              </div>
+                            )
+                          })}
                         </div>
                       ) : (
                         <p className="text-xs text-ink-fade">这个任务还没有生成可下载产物。</p>
@@ -361,6 +392,14 @@ export default function TaskRunPanel() {
           </div>
         </section>
       </main>
+
+      {selectedArtifact && (
+        <TaskArtifactPreview
+          key={selectedArtifact.id}
+          artifact={selectedArtifact}
+          onClose={() => setSelectedArtifact(null)}
+        />
+      )}
     </div>
   )
 }
