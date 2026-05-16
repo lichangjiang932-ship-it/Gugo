@@ -1,123 +1,362 @@
-import { useNavigate } from 'react-router-dom'
-import { motion } from 'framer-motion'
-import { CheckCircle2, LayoutList, MessageSquare } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Activity, CheckCircle2, Clock3, LayoutList, PauseCircle, RotateCcw } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
-import { useAppContext } from '../store/AppContext'
-import { TASK_STATUS_LABEL } from '../store/taskStatus.js'
+import {
+  cancelJob,
+  createJob,
+  getJob,
+  listJobs,
+  retryJob,
+  retryStep,
+  subscribeToJobEvents,
+} from '../lib/jobClient.js'
+
+const FILTERS = [
+  { key: 'all', label: '全部' },
+  { key: 'active', label: '进行中' },
+  { key: 'queued', label: '排队中' },
+  { key: 'completed', label: '已完成' },
+  { key: 'failed', label: '失败' },
+  { key: 'cancelled', label: '已终止' },
+]
+
+const STATUS_LABELS = Object.freeze({
+  queued: '排队中',
+  planning: '规划中',
+  running: '运行中',
+  waiting: '等待中',
+  completed: '已完成',
+  failed: '失败',
+  cancel_requested: '终止中',
+  cancelled: '已终止',
+})
+
+const ACTIVE_STATUSES = new Set(['queued', 'planning', 'running', 'waiting', 'cancel_requested'])
+
+function formatTime(value) {
+  if (!value) return '—'
+  return new Date(value).toLocaleString()
+}
+
+function filterJob(job, filter) {
+  if (filter === 'all') return true
+  if (filter === 'active') return ACTIVE_STATUSES.has(job.status)
+  return job.status === filter
+}
+
+function StepDot({ status }) {
+  const cls =
+    status === 'completed'
+      ? 'bg-ink'
+      : status === 'running'
+      ? 'bg-ember'
+      : status === 'failed'
+      ? 'bg-red-500'
+      : status === 'cancelled'
+      ? 'bg-ink-fade'
+      : 'bg-ink-ghost'
+  return <span className={`w-2.5 h-2.5 rounded-full ${cls}`} aria-hidden="true" />
+}
 
 export default function TaskRunPanel() {
-  const navigate = useNavigate()
-  const { state } = useAppContext()
-  const tasks = state.tasks
-  const task = tasks.find((t) => t.status === 'running') || tasks[0]
-  const taskSteps = task?.steps || []
-  const taskStatusLabel = task ? (TASK_STATUS_LABEL[task.status] || task.status) : ''
+  const [prompt, setPrompt] = useState('')
+  const [jobs, setJobs] = useState([])
+  const [selectedJobId, setSelectedJobId] = useState(null)
+  const [selectedJob, setSelectedJob] = useState(null)
+  const [activeFilter, setActiveFilter] = useState('all')
+  const [loading, setLoading] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
 
-  if (!task) {
-    return (
-      <div className="h-screen flex bg-paper overflow-hidden">
-        <LeftRail />
-        <main className="flex-1 flex flex-col items-center justify-center min-w-0">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5 }}
-            className="flex flex-col items-center text-center gap-4"
-          >
-            <div className="w-14 h-14 rounded-full border border-dashed border-ink-fade/60 flex items-center justify-center">
-              <LayoutList className="w-6 h-6 text-ink-fade" />
-            </div>
-            <div>
-              <h1 className="font-hand text-[28px] text-ink">没有进行中的任务</h1>
-              <p className="text-sm text-ink-soft mt-1.5">发送一条对话后，任务状态会显示在这里。</p>
-            </div>
-            <button
-              onClick={() => navigate('/chat')}
-              className="h-9 px-5 bg-ember text-paper rounded-md font-hand text-sm hover:bg-ember/90 transition-colors flex items-center gap-1.5 mt-2"
-            >
-              <MessageSquare className="w-4 h-4" />
-              返回对话
-            </button>
-          </motion.div>
-        </main>
-        <aside className="w-[440px] bg-paper-2 p-5 flex flex-col gap-4 border-l border-dashed border-ink-fade/50 overflow-y-auto">
-          <div className="flex-1 flex flex-col items-center justify-center text-center gap-3">
-            <div className="w-10 h-10 rounded-full border border-dashed border-ink-fade/60 flex items-center justify-center">
-              <CheckCircle2 className="w-4 h-4 text-ink-fade" />
-            </div>
-            <p className="text-sm text-ink-soft">任务面板为空</p>
-            <p className="text-xs text-ink-fade">当前没有正在执行的本地任务。</p>
-          </div>
-        </aside>
-      </div>
-    )
+  async function refreshJobs() {
+    const { jobs: nextJobs } = await listJobs()
+    setJobs(nextJobs)
+    setSelectedJobId((current) => current || nextJobs[0]?.id || null)
+  }
+
+  async function refreshSelectedJob(jobId = selectedJobId) {
+    if (!jobId) {
+      setSelectedJob(null)
+      return
+    }
+    const { job } = await getJob(jobId)
+    setSelectedJob(job)
+  }
+
+  useEffect(() => {
+    let active = true
+    async function load() {
+      try {
+        await refreshJobs()
+      } catch (err) {
+        if (active) setError(err.message)
+      } finally {
+        if (active) setLoading(false)
+      }
+    }
+    load()
+    return () => {
+      active = false
+    }
+  }, [])
+
+  useEffect(() => {
+    refreshSelectedJob(selectedJobId).catch((err) => setError(err.message))
+  }, [selectedJobId])
+
+  useEffect(() => subscribeToJobEvents(async () => {
+    try {
+      await refreshJobs()
+      await refreshSelectedJob()
+    } catch (err) {
+      setError(err.message)
+    }
+  }), [selectedJobId])
+
+  const visibleJobs = useMemo(
+    () => jobs.filter((job) => filterJob(job, activeFilter)),
+    [jobs, activeFilter],
+  )
+
+  async function handleCreate(event) {
+    event.preventDefault()
+    const trimmed = prompt.trim()
+    if (!trimmed) return
+    setSubmitting(true)
+    setError('')
+    try {
+      const { job } = await createJob(trimmed)
+      setPrompt('')
+      setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)])
+      setSelectedJobId(job.id)
+      setSelectedJob(job)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function handleCancel() {
+    if (!selectedJob) return
+    const { job } = await cancelJob(selectedJob.id)
+    setSelectedJob(job)
+    setJobs((current) => current.map((item) => item.id === job.id ? job : item))
+  }
+
+  async function handleRetry() {
+    if (!selectedJob) return
+    const { job } = await retryJob(selectedJob.id)
+    setSelectedJob(job)
+    setJobs((current) => current.map((item) => item.id === job.id ? job : item))
+  }
+
+  async function handleRetryStep(stepId) {
+    if (!selectedJob) return
+    const { job } = await retryStep(selectedJob.id, stepId)
+    setSelectedJob(job)
+    setJobs((current) => current.map((item) => item.id === job.id ? job : item))
   }
 
   return (
     <div className="h-screen flex bg-paper overflow-hidden">
       <LeftRail />
 
-      <main className="flex-1 flex flex-col min-w-0">
-        <div className="px-7 py-4 flex items-center justify-between">
-          <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">SESSION · 任务执行</span>
-          <span className="inline-flex items-center h-7 px-3 rounded-full text-xs border border-ember-line text-ember bg-ember-soft">
-            {taskStatusLabel}
-          </span>
-        </div>
-        <div className="flex-1" />
-        <div className="px-7 pb-5 pt-3 text-xs text-ink-fade border-t border-dashed border-ink-fade/40">
-          任务详情只显示当前聊天触发的真实任务状态；继续对话请返回聊天页。
-        </div>
-      </main>
+      <main className="flex-1 min-w-0 flex flex-col">
+        <header className="px-7 py-5 border-b border-dashed border-ink-fade/40">
+          <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">TASK CENTER · 后台作业台</span>
+          <h1 className="font-hand text-[28px] text-ink mt-1.5">把一句话，交给后台继续做完。</h1>
+          <form onSubmit={handleCreate} className="mt-4 flex gap-2">
+            <input
+              value={prompt}
+              onChange={(event) => setPrompt(event.target.value)}
+              placeholder="例如：生成 30 份行业周报并导出"
+              className="flex-1 h-11 px-4 rounded-md border border-ink/30 bg-paper outline-none focus:border-ember text-sm"
+            />
+            <button
+              disabled={submitting || !prompt.trim()}
+              className="h-11 px-5 rounded-md bg-ember text-paper font-hand text-sm disabled:opacity-50"
+            >
+              {submitting ? '创建中…' : '开始任务'}
+            </button>
+          </form>
+          {error && <p className="text-xs text-red-600 mt-2">{error}</p>}
+        </header>
 
-      <aside className="w-[440px] bg-paper-2 p-5 flex flex-col gap-4 border-l border-dashed border-ink-fade/50 overflow-y-auto">
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">TASK · {task.name || '本地任务'}</span>
-            <h2 className="font-hand text-lg text-ink mt-1 truncate">{task.name || '本地任务'}</h2>
-            <p className="text-xs text-ink-soft mt-1">{task.stepLabel || task.detail || '等待下一步执行状态。'}</p>
-          </div>
-          <span className="inline-flex items-center h-7 px-2 rounded-full text-xs border border-ink-fade/60 text-ink-soft shrink-0">
-            {task.status}
-          </span>
-        </div>
+        <section className="flex-1 min-h-0 grid grid-cols-[320px_minmax(0,1fr)]">
+          <aside className="border-r border-dashed border-ink-fade/40 p-4 overflow-y-auto">
+            <div className="flex flex-wrap gap-2 mb-4">
+              {FILTERS.map((filter) => (
+                <button
+                  key={filter.key}
+                  onClick={() => setActiveFilter(filter.key)}
+                  className={`h-7 px-3 rounded-full border text-xs ${
+                    activeFilter === filter.key
+                      ? 'bg-ink text-paper border-ink'
+                      : 'border-ink-fade/60 text-ink-soft'
+                  }`}
+                >
+                  {filter.label}
+                </button>
+              ))}
+            </div>
 
-        <div className="rounded-md border border-dashed border-ink-fade/40 bg-paper px-4 py-4 flex items-start gap-3">
-          <div className="w-9 h-9 rounded-md bg-ember-soft text-ember flex items-center justify-center shrink-0">
-            <span className="w-2.5 h-2.5 rounded-full bg-ember" aria-hidden="true" />
-          </div>
-          <div className="flex-1 flex flex-col gap-1.5 min-w-0">
-            <span className="font-mono text-[9px] tracking-wider text-ink-fade">当前状态</span>
-            <span className="text-sm text-ink">{taskStatusLabel}</span>
-            <span className="font-mono text-[9px] tracking-wider text-ink-fade">当前步骤</span>
-            <span className="text-sm text-ink">{task.stepLabel || '等待任务更新'}</span>
-            {task.perms?.length > 0 && (
-              <span className="font-mono text-[9px] tracking-wider text-ember">已用 {task.perms.join(' / ')}</span>
+            {loading ? (
+              <p className="text-sm text-ink-fade">正在加载任务…</p>
+            ) : visibleJobs.length === 0 ? (
+              <div className="rounded-md border border-dashed border-ink-fade/40 p-4 text-sm text-ink-fade">
+                这里还没有任务。上面写一句需求，系统会替你接住长活。
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {visibleJobs.map((job) => (
+                  <button
+                    key={job.id}
+                    onClick={() => setSelectedJobId(job.id)}
+                    className={`text-left rounded-md border p-3 transition-colors ${
+                      selectedJobId === job.id
+                        ? 'border-ember bg-ember-soft'
+                        : 'border-ink/20 hover:border-ink/40'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-sm text-ink line-clamp-2">{job.title}</span>
+                      <span className="text-[10px] text-ink-fade shrink-0">{job.progress}%</span>
+                    </div>
+                    <div className="mt-2 flex items-center justify-between text-[11px] text-ink-soft">
+                      <span>{STATUS_LABELS[job.status] || job.status}</span>
+                      <span>{formatTime(job.updatedAt)}</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </aside>
+
+          <div className="p-5 overflow-y-auto">
+            {!selectedJob ? (
+              <div className="h-full flex flex-col items-center justify-center text-center gap-3 text-ink-fade">
+                <LayoutList className="w-8 h-8" />
+                <p className="text-sm">选中一个任务，右侧会展开它的过程和结果。</p>
+              </div>
+            ) : (
+              <div className="max-w-4xl mx-auto flex flex-col gap-5">
+                <div className="rounded-md border border-ink/20 bg-paper-2 p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">JOB · {selectedJob.id}</span>
+                      <h2 className="font-hand text-2xl text-ink mt-1">{selectedJob.title}</h2>
+                      <p className="text-sm text-ink-soft mt-1">{selectedJob.prompt}</p>
+                    </div>
+                    <div className="flex gap-2">
+                      {ACTIVE_STATUSES.has(selectedJob.status) && (
+                        <button onClick={handleCancel} className="h-9 px-3 border border-ink/40 rounded-md text-sm flex items-center gap-1.5">
+                          <PauseCircle className="w-4 h-4" />
+                          终止
+                        </button>
+                      )}
+                      {['failed', 'cancelled'].includes(selectedJob.status) && (
+                        <button onClick={handleRetry} className="h-9 px-3 border border-ink/40 rounded-md text-sm flex items-center gap-1.5">
+                          <RotateCcw className="w-4 h-4" />
+                          重试
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="mt-4 grid grid-cols-4 gap-3 text-sm">
+                    <div>
+                      <p className="text-[11px] text-ink-fade">状态</p>
+                      <p className="text-ink mt-1">{STATUS_LABELS[selectedJob.status] || selectedJob.status}</p>
+                    </div>
+                    <div>
+                      <p className="text-[11px] text-ink-fade">进度</p>
+                      <p className="text-ink mt-1">{selectedJob.progress}%</p>
+                    </div>
+                    <div>
+                      <p className="text-[11px] text-ink-fade">创建时间</p>
+                      <p className="text-ink mt-1">{formatTime(selectedJob.createdAt)}</p>
+                    </div>
+                    <div>
+                      <p className="text-[11px] text-ink-fade">更新时间</p>
+                      <p className="text-ink mt-1">{formatTime(selectedJob.updatedAt)}</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-[1.2fr_0.8fr] gap-4">
+                  <section className="rounded-md border border-ink/20 p-4">
+                    <div className="flex items-center gap-2 mb-3">
+                      <Activity className="w-4 h-4 text-ember" />
+                      <h3 className="font-hand text-lg text-ink">子任务</h3>
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      {(selectedJob.steps || []).map((step) => (
+                        <div key={step.id} className="rounded-md border border-dashed border-ink-fade/40 p-3">
+                          <div className="flex items-center gap-2">
+                            <StepDot status={step.status} />
+                            <span className="text-sm text-ink">{step.title}</span>
+                            <span className="ml-auto text-xs text-ink-fade">{STATUS_LABELS[step.status] || step.status}</span>
+                          </div>
+                          {step.error && <p className="text-xs text-red-600 mt-2">{step.error}</p>}
+                          {step.output?.text && <p className="text-xs text-ink-soft mt-2">{step.output.text}</p>}
+                          {step.status === 'failed' && (
+                            <button
+                              onClick={() => handleRetryStep(step.id)}
+                              className="mt-2 text-xs text-ember inline-flex items-center gap-1"
+                            >
+                              <RotateCcw className="w-3 h-3" />
+                              重试这个步骤
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+
+                  <div className="flex flex-col gap-4">
+                    <section className="rounded-md border border-ink/20 p-4">
+                      <div className="flex items-center gap-2 mb-3">
+                        <Clock3 className="w-4 h-4 text-ember" />
+                        <h3 className="font-hand text-lg text-ink">事件流</h3>
+                      </div>
+                      <div className="flex flex-col gap-2 max-h-64 overflow-y-auto">
+                        {(selectedJob.events || []).slice().reverse().map((event) => (
+                          <div key={event.id} className="text-xs">
+                            <p className="text-ink">{event.message}</p>
+                            <p className="text-ink-fade">{formatTime(event.createdAt)}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+
+                    <section className="rounded-md border border-ink/20 p-4">
+                      <div className="flex items-center gap-2 mb-3">
+                        <CheckCircle2 className="w-4 h-4 text-ember" />
+                        <h3 className="font-hand text-lg text-ink">产物</h3>
+                      </div>
+                      {(selectedJob.artifacts || []).length ? (
+                        <div className="flex flex-col gap-2">
+                          {selectedJob.artifacts.map((artifact) => (
+                            <a
+                              key={artifact.id}
+                              href={artifact.url}
+                              className="text-sm text-ink hover:text-ember"
+                            >
+                              {artifact.title}
+                            </a>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-ink-fade">这个任务还没有生成可下载产物。</p>
+                      )}
+                    </section>
+                  </div>
+                </div>
+              </div>
             )}
           </div>
-        </div>
-
-        <div className="flex flex-col gap-1.5">
-          <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">STEPS · {taskSteps.length}</span>
-          {taskSteps.length ? (
-            taskSteps.map((s, i) => (
-              <div key={i} className="flex items-center gap-2">
-                <div className={`w-2 h-2 rounded-full ${s.status === 'done' ? 'bg-ink' : s.status === 'active' ? 'bg-ember' : 'bg-ink-ghost'}`} />
-                <span className="text-xs text-ink-soft">{s.name}</span>
-                <div className="flex-1" />
-                {s.status === 'active' && <span className="font-mono text-[9px] tracking-wider text-ember">正在</span>}
-                {s.time && <span className="font-mono text-[9px] tracking-wider text-ink-fade">{s.time}</span>}
-              </div>
-            ))
-          ) : (
-            <div className="p-3 border border-dashed border-ink-fade/40 rounded-md text-xs text-ink-fade">
-              这个任务还没有写入步骤轨迹。
-            </div>
-          )}
-        </div>
-
-        <div className="flex-1" />
-      </aside>
+        </section>
+      </main>
     </div>
   )
 }
