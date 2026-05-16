@@ -20,6 +20,8 @@ import {
 import { handleAuthBillingRequest } from './billingAuth.js'
 import { handleToolProxyRequest } from './toolProxy.js'
 import { handleArtifactDownload } from './artifactGen.js'
+import { closeJobRuntime, getJobRuntime } from './jobRuntime.js'
+import { handleJobRequest } from './jobRoutes.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -114,6 +116,7 @@ function applyMiddlewares(handler) {
 }
 
 function createRouter(getEnv = getRuntimeEnv) {
+  const jobRuntime = getJobRuntime()
   return function router(req, res) {
   // 健康检查
   if (req.url === '/api/health') {
@@ -155,6 +158,11 @@ function createRouter(getEnv = getRuntimeEnv) {
     return handleArtifactDownload(req, res)
   }
 
+  // 后台任务中心
+  if (req.url?.startsWith('/api/jobs')) {
+    return handleJobRequest(req, res, jobRuntime)
+  }
+
   // 静态文件
   serveStatic(req, res)
   }
@@ -168,6 +176,7 @@ function gracefulShutdown(server) {
   if (process.env.NODE_ENV !== 'production') console.log('\n[server] 收到关闭信号，正在优雅退出...')
   server.close(() => {
     if (process.env.NODE_ENV !== 'production') console.log('[server] HTTP server 已关闭')
+    closeJobRuntime()
     closeDb()
     if (process.env.NODE_ENV !== 'production') console.log('[server] 数据库连接已关闭')
     process.exit(0)

@@ -1,0 +1,86 @@
+const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
+
+function sendJson(res, status, body) {
+  res.writeHead(status, JSON_HEADERS)
+  res.end(JSON.stringify(body))
+}
+
+async function readJson(req) {
+  const chunks = []
+  for await (const chunk of req) chunks.push(chunk)
+  const raw = Buffer.concat(chunks).toString('utf8')
+  return raw.trim() ? JSON.parse(raw) : {}
+}
+
+function sendSse(res, event, data) {
+  res.write(`event: ${event}\n`)
+  res.write(`data: ${JSON.stringify(data)}\n\n`)
+}
+
+function routeParts(pathname) {
+  return pathname.split('/').filter(Boolean)
+}
+
+export async function handleJobRequest(req, res, runtime) {
+  const url = new URL(req.url, 'http://localhost')
+  const parts = routeParts(url.pathname)
+
+  if (req.method === 'GET' && url.pathname === '/api/jobs/stream') {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    })
+    sendSse(res, 'ready', { ok: true })
+    const unsubscribe = runtime.subscribe((event) => sendSse(res, 'job_event', event))
+    req.on('close', unsubscribe)
+    return
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/jobs') {
+    const body = await readJson(req)
+    const prompt = String(body.prompt || '').trim()
+    if (!prompt) return sendJson(res, 400, { error: 'prompt is required' })
+    const job = await runtime.createJob(prompt)
+    return sendJson(res, 201, { job })
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/jobs') {
+    return sendJson(res, 200, { jobs: runtime.listJobs() })
+  }
+
+  if (parts[0] === 'api' && parts[1] === 'jobs' && parts[2]) {
+    const jobId = decodeURIComponent(parts[2])
+
+    if (req.method === 'GET' && parts.length === 3) {
+      const job = runtime.getJob(jobId)
+      return job
+        ? sendJson(res, 200, { job })
+        : sendJson(res, 404, { error: 'job not found' })
+    }
+
+    if (req.method === 'POST' && parts[3] === 'cancel') {
+      const job = runtime.requestCancel(jobId)
+      return job
+        ? sendJson(res, 200, { job })
+        : sendJson(res, 404, { error: 'job not found' })
+    }
+
+    if (req.method === 'POST' && parts[3] === 'retry') {
+      const job = runtime.retryJob(jobId)
+      return job
+        ? sendJson(res, 200, { job })
+        : sendJson(res, 404, { error: 'job not found' })
+    }
+
+    if (req.method === 'POST' && parts[3] === 'steps' && parts[4] && parts[5] === 'retry') {
+      const job = runtime.retryStep(jobId, decodeURIComponent(parts[4]))
+      return job
+        ? sendJson(res, 200, { job })
+        : sendJson(res, 404, { error: 'step not found' })
+    }
+  }
+
+  return sendJson(res, 404, { error: 'not found' })
+}
+
