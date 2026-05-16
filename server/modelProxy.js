@@ -262,6 +262,7 @@ export async function callBackgroundModel({
   modelName,
   env = getRuntimeEnv(),
   fetchImpl = fetch,
+  signal,
 } = {}) {
   const config = loadModelConfig(env)
   if (!config.configured) {
@@ -277,7 +278,7 @@ export async function callBackgroundModel({
     messages,
     stream: false,
   })
-  const response = await fetchImpl(url, init)
+  const response = await fetchImpl(url, { ...init, signal })
   const text = await response.text()
   let data
   try {

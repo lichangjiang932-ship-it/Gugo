@@ -9,6 +9,7 @@ import { buildToolSpecs, executeToolCall } from '../../lib/tools/index.js'
 import { readStoredModel, resolveInitialModel, writeStoredModel } from '../../lib/modelSelection.js'
 import { isLoggedInLocally } from '../../lib/accountClient.js'
 import { listSkills } from '../../lib/skillClient.js'
+import { parseSkillCommand } from '../../lib/skillCommands.js'
 import { TASK_STATUS, TOOL_CALL_STATUS, HISTORY_STATUS } from '../../store/taskStatus.js'
 import ChatHeader from './ChatHeader'
 import ChatMessages from './ChatMessages'
@@ -172,9 +173,7 @@ export default function ChatSplit() {
           .catch(() => {/* fallback 已经显示了 */})
       }
 
-      const skillMatch = content.match(/^\/(\w+)\s*(.*)/)
-      const skillId = skillMatch ? skillMatch[1] : null
-      const userPrompt = skillMatch ? skillMatch[2] : content
+      const { skillId, userPrompt } = parseSkillCommand(content)
       const skill = skillId ? runtimeSkills.find((s) => s.id === skillId) : null
       const taskName = skill?.name || (content.toLowerCase().includes('ppt') ? '制作 PPT' : content.toLowerCase().includes('excel') ? '分析表格' : '通用任务')
 

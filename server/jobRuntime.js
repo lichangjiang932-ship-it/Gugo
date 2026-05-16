@@ -33,10 +33,10 @@ function parseSkillPrompt(prompt = '') {
 }
 
 export function createDefaultExecuteStep({
-  runModel = async ({ messages }) => callBackgroundModel({ messages }),
+  runModel = async ({ messages, signal }) => callBackgroundModel({ messages, signal }),
   createDocxImpl = createDocx,
 } = {}) {
-  return async function defaultExecuteStep({ job, step }) {
+  return async function defaultExecuteStep({ job, step, signal }) {
     if (step.kind === 'plan') {
       return {
         ok: true,
@@ -95,6 +95,7 @@ export function createDefaultExecuteStep({
       messages,
       userPrompt: finalPrompt,
       skill,
+      signal,
     })
     return {
       ok: true,
@@ -134,6 +135,7 @@ export class JobRuntime {
     this.tickMs = tickMs
     this.timer = null
     this.listeners = new Set()
+    this.activeControllers = new Map()
     this.recover()
   }
 
@@ -212,6 +214,7 @@ export class JobRuntime {
     const job = this.getJob(jobId)
     if (!job || TERMINAL_JOB_STATUSES.has(job.status)) return job
     updateJob(jobId, { status: 'cancel_requested', cancelRequested: true })
+    this.activeControllers.get(jobId)?.abort()
     const event = appendJobEvent({
       jobId,
       type: 'cancel_requested',
@@ -339,9 +342,15 @@ export class JobRuntime {
       message: `开始：${nextStep.title}`,
     }))
 
+    const controller = new AbortController()
+    this.activeControllers.set(job.id, controller)
     try {
       const freshJob = this.getJob(job.id)
-      const result = await this.executeStep({ job: freshJob, step: nextStep })
+      const result = await this.executeStep({
+        job: freshJob,
+        step: nextStep,
+        signal: controller.signal,
+      })
       if (result?.ok === false) {
         throw new Error(result.error || '步骤执行失败')
       }
@@ -359,6 +368,30 @@ export class JobRuntime {
         message: `完成：${nextStep.title}`,
       }))
     } catch (error) {
+      const latestJob = this.getJob(job.id)
+      const cancelled = controller.signal.aborted || latestJob?.cancelRequested || latestJob?.status === 'cancel_requested'
+      if (cancelled) {
+        for (const step of listJobSteps(job.id)) {
+          if (['queued', 'running'].includes(step.status)) {
+            updateJobStep(step.id, {
+              status: 'cancelled',
+              finishedAt: Date.now(),
+            })
+          }
+        }
+        updateJob(job.id, {
+          status: 'cancelled',
+          progress: deriveProgress(listJobSteps(job.id)),
+          finishedAt: Date.now(),
+        })
+        this.emit(appendJobEvent({
+          jobId: job.id,
+          stepId: nextStep.id,
+          type: 'cancelled',
+          message: '任务已终止',
+        }))
+        return true
+      }
       updateJobStep(nextStep.id, {
         status: 'failed',
         error: error?.message || String(error),
@@ -375,6 +408,10 @@ export class JobRuntime {
         type: 'failed',
         message: error?.message || '步骤执行失败',
       }))
+    } finally {
+      if (this.activeControllers.get(job.id) === controller) {
+        this.activeControllers.delete(job.id)
+      }
     }
 
     return true
