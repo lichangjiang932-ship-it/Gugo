@@ -12,7 +12,6 @@ import { TASK_STATUS, TOOL_CALL_STATUS, HISTORY_STATUS } from '../../store/taskS
 import ChatHeader from './ChatHeader'
 import ChatMessages from './ChatMessages'
 import ChatComposer from './ChatComposer'
-import ChatTaskStrip from './ChatTaskStrip'
 import RightPreviewPane from './RightPreviewPane'
 import { exportSession } from '../../lib/sessionExport.js'
 
@@ -564,12 +563,6 @@ export default function ChatSplit() {
           onRetry={() => { if (lastFailedPrompt) triggerSendFlow(lastFailedPrompt) }}
           onModelChange={(val) => { setSelectedModel(val); writeStoredModel(val) }}
           onNavigateTask={() => navigate('/task')}
-        />
-
-        <ChatTaskStrip
-          tasks={tasks}
-          onAbortTask={handleAbortTask}
-          onNavigateDetail={() => navigate('/task')}
         />
 
         <ChatMessages
