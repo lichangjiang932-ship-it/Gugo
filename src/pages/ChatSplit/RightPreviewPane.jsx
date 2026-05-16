@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Download, Copy, Maximize2, Minimize2, Code, Eye, FileText, Table2, Presentation, Globe, Sparkles } from 'lucide-react'
+import { X, Download, Copy, Maximize2, Minimize2, Code, Eye, FileText, Table2, Presentation, Globe, Sparkles, Code2, RefreshCw } from 'lucide-react'
 import {
   buildPresentationFilename,
   downloadPptxFromMarkdown,
@@ -21,6 +21,7 @@ function ArtifactIcon({ type }) {
   if (type === 'html') return <Globe className="w-4 h-4" />
   if (type === 'pptx') return <Presentation className="w-4 h-4" />
   if (type === 'xlsx') return <Table2 className="w-4 h-4" />
+  if (type === 'react') return <Code2 className="w-4 h-4" />
   return <FileText className="w-4 h-4" />
 }
 
@@ -140,6 +141,115 @@ function SourceView({ content }) {
   )
 }
 
+// ★ batchH H1: React 沙箱预览 — 对标 Claude artifacts / Codex preview
+//   把模型生成的单文件 React 组件放进 iframe,加载 React 18 + babel-standalone
+//   (内置 cdn,sandbox 仍是 allow-scripts only,不带 allow-same-origin),
+//   编译后挂载到 #root.编译错误捕获后写到页面顶部红条,方便用户自己 fix prompt.
+function buildReactSandboxDoc(code) {
+  const safe = String(code || '')
+    // 防止源里有 </script> 提前结束
+    .replace(/<\/script>/gi, '<\\/script>')
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>React 沙箱</title>
+<script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  html,body,#root{margin:0;padding:0;min-height:100vh;background:#fff;color:#111;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  #__err{position:fixed;top:0;left:0;right:0;background:#FEE2E2;color:#7F1D1D;padding:10px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.5;border-bottom:1px solid #FCA5A5;white-space:pre-wrap;z-index:99999;display:none;max-height:50vh;overflow:auto}
+  #__loading{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;color:#9CA3AF;font-size:13px}
+</style>
+</head>
+<body>
+<div id="__err"></div>
+<div id="root"><div id="__loading">编译中…</div></div>
+<script id="__usercode" type="text/babel" data-presets="react,env" data-type="module">
+${safe}
+</script>
+<script>
+(function(){
+  function showErr(msg){
+    var box = document.getElementById('__err');
+    box.textContent = String(msg);
+    box.style.display = 'block';
+  }
+  window.addEventListener('error', function(e){ showErr('运行错误: ' + (e?.error?.stack || e?.message || e)); });
+  window.addEventListener('unhandledrejection', function(e){ showErr('Promise 错误: ' + (e?.reason?.stack || e?.reason || e)); });
+
+  function boot(){
+    try {
+      var src = document.getElementById('__usercode').textContent;
+      // babel 把 export default 转 esm,但我们要塞回 ReactDOM.createRoot —
+      // 替换为 const __default = ...
+      var rewritten = src.replace(/export\\s+default\\s+/m, 'var __default = ');
+      var compiled = Babel.transform(rewritten, { presets: ['react', ['env', { modules: false }]] }).code;
+      // 关掉 loading
+      var loading = document.getElementById('__loading');
+      if (loading) loading.remove();
+      // 在隔离作用域里执行,把 React/ReactDOM/hooks 注入
+      var React = window.React, ReactDOM = window.ReactDOM;
+      var useState = React.useState, useEffect = React.useEffect, useRef = React.useRef,
+          useMemo = React.useMemo, useCallback = React.useCallback, useReducer = React.useReducer,
+          useContext = React.useContext, useLayoutEffect = React.useLayoutEffect,
+          Fragment = React.Fragment, createElement = React.createElement;
+      var __default;
+      // eslint-disable-next-line no-eval
+      eval(compiled + '\\n;');
+      if (!__default) { showErr('未找到 export default 组件'); return; }
+      var root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(React.createElement(__default));
+    } catch (err) {
+      showErr('编译/执行失败: ' + (err && err.stack ? err.stack : err));
+    }
+  }
+  if (window.Babel) boot();
+  else {
+    var t = 0;
+    var timer = setInterval(function(){
+      t += 50;
+      if (window.Babel) { clearInterval(timer); boot(); }
+      else if (t > 8000) { clearInterval(timer); showErr('依赖加载超时,请检查网络'); }
+    }, 50);
+  }
+})();
+</script>
+</body>
+</html>`
+}
+
+function ReactPreview({ code }) {
+  const [reloadTick, setReloadTick] = useState(0)
+  // reloadTick 是故意的依赖:用户点刷新时增 1,强制 useMemo 重算,iframe 重渲染
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const srcDoc = useMemo(() => buildReactSandboxDoc(code), [code, reloadTick])
+  return (
+    <div className="relative w-full h-full">
+      <iframe
+        key={reloadTick}
+        title="React 沙箱"
+        srcDoc={srcDoc}
+        // SECURITY: 只 allow-scripts + allow-forms,不开 allow-same-origin —
+        //   组件无法访问父页 storage/cookie,iframe 沙箱视为 opaque origin.
+        sandbox="allow-scripts allow-forms"
+        referrerPolicy="no-referrer"
+        className="w-full h-full border-0 bg-white"
+      />
+      <button
+        onClick={() => setReloadTick((k) => k + 1)}
+        title="重新加载沙箱(清状态)"
+        className="absolute top-2 right-2 w-8 h-8 rounded-md bg-paper-2/90 border border-ink-fade/40 text-ink-fade hover:text-ember hover:border-ember/60 flex items-center justify-center transition-colors backdrop-blur"
+      >
+        <RefreshCw className="w-3.5 h-3.5" />
+      </button>
+    </div>
+  )
+}
+
 export default function RightPreviewPane({ artifact, onClose, onMessage }) {
   const [view, setView] = useState('preview') // 'preview' | 'source'
   const [downloading, setDownloading] = useState(false)
@@ -222,6 +332,19 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
         })
       } else if (preview.type === 'html') {
         const blob = new Blob([buildHtmlDocument(preview.html)], { type: 'text/html;charset=utf-8' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = preview.filename
+        document.body.appendChild(a)
+        a.click()
+        setTimeout(() => {
+          URL.revokeObjectURL(url)
+          a.remove()
+        }, 100)
+      } else if (preview.type === 'react') {
+        // 直接下载组件源码 .jsx
+        const blob = new Blob([content], { type: 'text/jsx;charset=utf-8' })
         const url = URL.createObjectURL(blob)
         const a = document.createElement('a')
         a.href = url
@@ -381,6 +504,7 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
               {preview.type === 'pptx' && <PptxPreview content={content} />}
               {preview.type === 'docx' && <DocxPreview blocks={preview.blocks} title={preview.title} />}
               {preview.type === 'xlsx' && <XlsxPreview rows={preview.rows} />}
+              {preview.type === 'react' && <ReactPreview code={content} />}
             </>
           )}
         </div>

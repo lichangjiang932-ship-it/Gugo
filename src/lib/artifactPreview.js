@@ -117,6 +117,7 @@ export function buildArtifactPreview({ content = '', meta = {} } = {}) {
   let inferred = false
   let confidence = 1
   if (shouldOfferPptxExport(meta)) resolvedType = 'pptx'
+  else if (meta?.artifactType === 'react') resolvedType = 'react'
   else {
     const officeType = shouldOfferOfficeExport(meta)
     if (officeType) resolvedType = officeType
@@ -201,6 +202,23 @@ export function buildArtifactPreview({ content = '', meta = {} } = {}) {
       rows: rows.slice(0, MAX_PREVIEW_ROWS).map((row) => row.slice(0, MAX_PREVIEW_COLUMNS)),
       totalCount: rows.length,
       totalColumns: Math.max(...rows.map((row) => row.length)),
+      previewable: true,
+    }
+  }
+
+  if (resolvedType === 'react') {
+    // ★ batchH H1: React 沙箱 — 源就是单文件组件代码,在 RightPreviewPane
+    //   里用 iframe + babel-standalone 实时编译并渲染.
+    const title = (meta.artifactTitle || 'react-component').toString().trim() || 'react-component'
+    const description = meta.artifactDescription ? String(meta.artifactDescription).trim() : ''
+    return {
+      ...base,
+      type: 'react',
+      title,
+      label: 'React',
+      filename: buildOfficeFilename(title, 'jsx'),
+      summary: description || `${content.length} 字符组件`,
+      description,
       previewable: true,
     }
   }
