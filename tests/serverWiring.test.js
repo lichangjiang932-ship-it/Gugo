@@ -11,6 +11,7 @@ test('router returns async handlers so errorBoundary can observe rejected promis
   assert.match(source, /return handleModelProxyRequest\(req, res\)/)
   assert.match(source, /return handleToolProxyRequest\(req, res\)/)
   assert.match(source, /return handleJobRequest\(req, res, \w+\)/)
+  assert.match(source, /return handleSkillRequest\(req, res\)/)
 })
 
 test('fatal process handlers keep logging in production', () => {

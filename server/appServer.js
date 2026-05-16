@@ -22,6 +22,7 @@ import { handleToolProxyRequest } from './toolProxy.js'
 import { handleArtifactDownload } from './artifactGen.js'
 import { closeJobRuntime, getJobRuntime } from './jobRuntime.js'
 import { handleJobRequest } from './jobRoutes.js'
+import { handleSkillRequest } from './skillRoutes.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -161,6 +162,11 @@ function createRouter(getEnv = getRuntimeEnv) {
   // 后台任务中心
   if (req.url?.startsWith('/api/jobs')) {
     return handleJobRequest(req, res, jobRuntime)
+  }
+
+  // 技能包
+  if (req.url?.startsWith('/api/skills')) {
+    return handleSkillRequest(req, res)
   }
 
   // 静态文件
