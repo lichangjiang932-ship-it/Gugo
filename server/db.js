@@ -30,7 +30,56 @@ export function getDb() {
   // synchronous=NORMAL 配合 WAL 是耐久性/性能折中,符合本应用 (本地工作台) 场景
   _db.pragma('synchronous = NORMAL')
   initSchema(_db)
+  runMigrations(_db)
   return _db
+}
+
+function hasColumn(db, table, column) {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all()
+  return rows.some((row) => row.name === column)
+}
+
+function getSchemaVersionInternal(db) {
+  const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')
+  return row ? Number(row.value) : 0
+}
+
+function setSchemaVersionInternal(db, version) {
+  db.prepare(
+    'INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+  ).run('schema_version', String(version))
+}
+
+function runMigrations(db) {
+  const version = getSchemaVersionInternal(db)
+  if (version < 2) migrateToV2(db)
+}
+
+/**
+ * Migration v2:为 jobs / job_artifacts / skills 引入 user_id 归属列。
+ * v1 阶段后台作业 / 技能未做用户隔离,理论上所有历史数据都属于「无归属」,
+ * 而 v2 之后所有写入都强制带 user_id。为避免历史孤儿数据被错误访问,
+ * 一次性清空这几张表(本项目尚未公开,清理代价可控),然后加列。
+ */
+function migrateToV2(db) {
+  if (!hasColumn(db, 'jobs', 'user_id')) {
+    db.exec('DELETE FROM job_artifacts; DELETE FROM job_events; DELETE FROM job_steps; DELETE FROM jobs;')
+    db.exec('ALTER TABLE jobs ADD COLUMN user_id TEXT')
+  }
+  if (!hasColumn(db, 'job_artifacts', 'user_id')) {
+    db.exec('ALTER TABLE job_artifacts ADD COLUMN user_id TEXT')
+  }
+  if (!hasColumn(db, 'skills', 'user_id')) {
+    db.exec('DELETE FROM skill_assets; DELETE FROM skills;')
+    db.exec('ALTER TABLE skills ADD COLUMN user_id TEXT')
+  }
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_jobs_user_created ON jobs(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_jobs_user_status ON jobs(user_id, status);
+    CREATE INDEX IF NOT EXISTS idx_job_artifacts_user ON job_artifacts(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_skills_user ON skills(user_id, created_at);
+  `)
+  setSchemaVersionInternal(db, 2)
 }
 
 function initSchema(db) {
@@ -80,6 +129,7 @@ function initSchema(db) {
 
     CREATE TABLE IF NOT EXISTS jobs (
       id TEXT PRIMARY KEY,
+      user_id TEXT,
       title TEXT NOT NULL,
       prompt TEXT NOT NULL,
       status TEXT NOT NULL,
@@ -92,6 +142,8 @@ function initSchema(db) {
       error TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_jobs_user_created ON jobs(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_jobs_user_status ON jobs(user_id, status);
 
     CREATE TABLE IF NOT EXISTS job_steps (
       id TEXT PRIMARY KEY,
@@ -126,6 +178,7 @@ function initSchema(db) {
     CREATE TABLE IF NOT EXISTS job_artifacts (
       id TEXT PRIMARY KEY,
       job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      user_id TEXT,
       step_id TEXT,
       type TEXT NOT NULL,
       title TEXT NOT NULL,
@@ -134,9 +187,11 @@ function initSchema(db) {
       created_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_job_artifacts_job_created ON job_artifacts(job_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_job_artifacts_user ON job_artifacts(user_id, created_at);
 
     CREATE TABLE IF NOT EXISTS skills (
       id TEXT PRIMARY KEY,
+      user_id TEXT,
       name TEXT NOT NULL,
       description TEXT NOT NULL,
       version TEXT NOT NULL,
@@ -145,6 +200,7 @@ function initSchema(db) {
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
+    CREATE INDEX IF NOT EXISTS idx_skills_user ON skills(user_id, created_at);
 
     CREATE TABLE IF NOT EXISTS skill_assets (
       skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
@@ -158,7 +214,7 @@ function initSchema(db) {
       value TEXT NOT NULL
     );
 
-    -- 迁移：如果 meta 表没有 schema_version，插入初始值
+    -- 迁移：如果 meta 表没有 schema_version，插入初始值（runMigrations 会推到当前版本）
     INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1');
   `)
 }

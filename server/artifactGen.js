@@ -19,6 +19,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import JSZip from 'jszip'
+import { authenticateRequest } from './middleware.js'
+import { getArtifactByFilename } from './jobStore.js'
 
 const ARTIFACT_DIR =
   process.env.ARTIFACT_DIR && path.isAbsolute(process.env.ARTIFACT_DIR)
@@ -273,6 +275,27 @@ export function handleArtifactDownload(req, res) {
   if (!m) { res.statusCode = 404; res.end('not found'); return }
   const filename = decodeURIComponent(m[1])
   if (!SAFE_NAME.test(filename)) { res.statusCode = 400; res.end('bad filename'); return }
+
+  // 鉴权:Header 优先,query token 兜底(浏览器 <a> 下载没法带 Authorization 头)
+  let userId = authenticateRequest(req)
+  if (!userId) {
+    const u = new URL(req.url, 'http://localhost')
+    const queryToken = u.searchParams.get('token')
+    if (queryToken) {
+      req.headers.authorization = `Bearer ${queryToken}`
+      userId = authenticateRequest(req)
+    }
+  }
+  if (!userId) { res.statusCode = 401; res.end('Unauthorized'); return }
+
+  // Ownership:artifact 的 user_id 必须匹配
+  const artifact = getArtifactByFilename(filename)
+  if (!artifact) { res.statusCode = 404; res.end('not found'); return }
+  if (artifact.userId && artifact.userId !== userId) {
+    // 不暴露存在性,统一 404
+    res.statusCode = 404; res.end('not found'); return
+  }
+
   ensureArtifactDir()
   const full = path.join(ARTIFACT_DIR, filename)
   // 防 path traversal

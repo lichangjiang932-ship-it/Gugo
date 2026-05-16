@@ -294,6 +294,57 @@ export async function callBackgroundModel({
   return parseOpenAICompatibleResponse(data)
 }
 
+/**
+ * 与 callBackgroundModel 同一条路径,但额外支持 tools 字段 + 返回 tool_calls。
+ * jobRuntime 的 server-side tools loop 用这个入口。
+ *
+ * @returns {Promise<{content:string, toolCalls:Array}>}
+ */
+export async function callBackgroundModelWithTools({
+  messages,
+  tools,
+  toolChoice,
+  modelName,
+  env = getRuntimeEnv(),
+  fetchImpl = fetch,
+  signal,
+} = {}) {
+  const config = loadModelConfig(env)
+  if (!config.configured) {
+    throw new Error(`后台任务缺少模型配置：${config.missing.join(', ')}`)
+  }
+  const selectedModel = pickAllowedModel({
+    requestedModel: modelName,
+    config,
+    env,
+  })
+  const { url, init } = buildOpenAICompatibleRequest({
+    config: { ...config, modelName: selectedModel },
+    messages,
+    stream: false,
+    tools,
+    toolChoice,
+  })
+  const response = await fetchImpl(url, { ...init, signal })
+  const text = await response.text()
+  let data
+  try {
+    data = text ? JSON.parse(text) : null
+  } catch {
+    data = { raw: text }
+  }
+  if (!response.ok) {
+    const error = new Error(data?.error?.message || data?.message || response.statusText)
+    error.status = response.status
+    throw error
+  }
+  const msg = data?.choices?.[0]?.message || {}
+  return {
+    content: msg.content || '',
+    toolCalls: Array.isArray(msg.tool_calls) ? msg.tool_calls : [],
+  }
+}
+
 export function formatProxyError(error) {
   if (error?.status === 400) return '请求参数无效，请检查 Base URL、模型名称和消息内容。'
   if (error?.status === 401 || error?.status === 403) return 'API Key 无效或没有权限。'

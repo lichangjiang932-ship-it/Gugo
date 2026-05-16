@@ -8,13 +8,15 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import JSZip from 'jszip'
-import { createAppServer } from '../server/appServer.js'
 
 // 用临时目录,跑完清理
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'artifact-test-'))
 process.env.ARTIFACT_DIR = TMP
+process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-artifact-tests', String(process.pid))
 
+const { createAppServer } = await import('../server/appServer.js')
 const { createPptx, createDocx, createXlsx, getArtifactDir } = await import('../server/artifactGen.js')
+const { issueTestSession } = await import('./helpers/testAuth.js')
 
 test('createPptx 真实生成可解析的 OOXML pptx', async () => {
   const result = await createPptx({
@@ -108,27 +110,72 @@ test('artifact 文件名格式安全(只含字母数字-.)', async () => {
   assert.match(r.filename, /^[\w.-]+\.pptx$/, '文件名应只含安全字符')
 })
 
-test('generated artifacts are downloadable from /api/artifacts/*', async () => {
-  const artifact = await createDocx({
-    title: 'download-test',
-    paragraphs: [{ text: 'hello' }],
+test('generated artifacts are downloadable from /api/artifacts/* with auth', async () => {
+  // 起 mock OpenAI 兼容服务器(default executor 用 callBackgroundModel)
+  const http = await import('node:http')
+  const mockModel = http.createServer((req, res) => {
+    let body = ''
+    req.on('data', (chunk) => { body += chunk })
+    req.on('end', () => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({
+        choices: [{ message: { role: 'assistant', content: '这是测试生成的内容。' } }],
+      }))
+    })
   })
-  const server = createAppServer({ getEnv: () => ({}) })
+  await new Promise((resolve) => mockModel.listen(0, '127.0.0.1', resolve))
+  const mockPort = mockModel.address().port
+
+  const { token } = issueTestSession()
+  const server = createAppServer({ getEnv: () => ({
+    MODEL_BASE_URL: `http://127.0.0.1:${mockPort}/v1`,
+    MODEL_API_KEY: 'sk-test',
+    MODEL_NAME: 'gpt-4o-mini',
+  }) })
+  // jobRuntime 通过 getRuntimeEnv() 读 env;测试里直接写 process.env
+  process.env.MODEL_BASE_URL = `http://127.0.0.1:${mockPort}/v1`
+  process.env.MODEL_API_KEY = 'sk-test'
+  process.env.MODEL_NAME = 'gpt-4o-mini'
+
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   const { port } = server.address()
 
   try {
-    const res = await fetch(`http://127.0.0.1:${port}${artifact.url}`)
-    assert.equal(res.status, 200)
-    assert.equal(
-      res.headers.get('content-type'),
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    )
-    assert.match(res.headers.get('content-disposition') || '', /attachment;/)
-    const bytes = new Uint8Array(await res.arrayBuffer())
+    const createResp = await fetch(`http://127.0.0.1:${port}/api/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ prompt: '导出测试文档' }),
+    })
+    assert.equal(createResp.status, 201)
+    const { job } = await createResp.json()
+
+    let detail = null
+    for (let i = 0; i < 100; i += 1) {
+      const r = await fetch(`http://127.0.0.1:${port}/api/jobs/${job.id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      detail = await r.json()
+      if (detail.job.status === 'completed' || detail.job.status === 'failed') break
+      await new Promise((res) => setTimeout(res, 50))
+    }
+    assert.equal(detail.job.status, 'completed', `job status: ${detail?.job?.status}`)
+    assert.ok(detail.job.artifacts && detail.job.artifacts.length > 0, '应生成至少一个 artifact')
+    const artifactUrl = detail.job.artifacts[0].url
+
+    // 不带 token → 401
+    const noAuth = await fetch(`http://127.0.0.1:${port}${artifactUrl}`)
+    assert.equal(noAuth.status, 401)
+
+    // 带 query token → 200
+    const sep = artifactUrl.includes('?') ? '&' : '?'
+    const withToken = await fetch(`http://127.0.0.1:${port}${artifactUrl}${sep}token=${token}`)
+    assert.equal(withToken.status, 200)
+    assert.match(withToken.headers.get('content-disposition') || '', /attachment;/)
+    const bytes = new Uint8Array(await withToken.arrayBuffer())
     assert.ok(bytes.byteLength > 0)
   } finally {
     await new Promise((resolve) => server.close(resolve))
+    await new Promise((resolve) => mockModel.close(resolve))
   }
 })
 

@@ -10,6 +10,9 @@ const {
   createDefaultExecuteStep,
   recoverInterruptedJobs,
 } = await import('../server/jobRuntime.js')
+const { issueTestSession } = await import('./helpers/testAuth.js')
+
+const TEST_USER = issueTestSession().userId
 
 test('runtime completes queued child steps in order', async () => {
   const executed = []
@@ -20,9 +23,9 @@ test('runtime completes queued child steps in order', async () => {
     },
   })
 
-  const job = await runtime.createJob('生成 2 份周报')
+  const job = await runtime.createJob('生成 2 份周报', { userId: TEST_USER })
   await runtime.drain()
-  const loaded = runtime.getJob(job.id)
+  const loaded = runtime.getJob(job.id, { userId: TEST_USER })
 
   assert.equal(loaded.status, 'completed')
   assert.deepEqual(executed, ['plan', 'batch_item', 'batch_item', 'finalize'])
@@ -38,13 +41,13 @@ test('runtime honors cancellation before the next step starts', async () => {
     },
   })
 
-  const job = await runtime.createJob('生成 2 份周报')
+  const job = await runtime.createJob('生成 2 份周报', { userId: TEST_USER })
   await runtime.runOneTick()
-  runtime.requestCancel(job.id)
+  runtime.requestCancel(job.id, { userId: TEST_USER })
   await runtime.drain()
 
   assert.deepEqual(executed, ['plan'])
-  assert.equal(runtime.getJob(job.id).status, 'cancelled')
+  assert.equal(runtime.getJob(job.id, { userId: TEST_USER }).status, 'cancelled')
 })
 
 test('runtime aborts an in-flight step when cancellation is requested', async () => {
@@ -63,13 +66,13 @@ test('runtime aborts an in-flight step when cancellation is requested', async ()
     }),
   })
 
-  const job = await runtime.createJob('生成长文')
+  const job = await runtime.createJob('生成长文', { userId: TEST_USER })
   const runningTick = runtime.runOneTick()
   await new Promise((resolve) => setTimeout(resolve, 0))
-  runtime.requestCancel(job.id)
+  runtime.requestCancel(job.id, { userId: TEST_USER })
   await runningTick
 
-  const loaded = runtime.getJob(job.id)
+  const loaded = runtime.getJob(job.id, { userId: TEST_USER })
   assert.equal(sawAbort, true)
   assert.equal(loaded.status, 'cancelled')
   assert.equal(loaded.steps[0].status, 'cancelled')
@@ -86,6 +89,7 @@ test('recovery returns interrupted running work to queued', () => {
 test('default executor turns generated text into a downloadable artifact', async () => {
   const runtime = new JobRuntime({
     executeStep: createDefaultExecuteStep({
+      enableServerTools: false,
       runModel: async ({ userPrompt }) => `结果：${userPrompt}`,
       createDocxImpl: async () => ({
         id: 'artifact-1',
@@ -97,9 +101,9 @@ test('default executor turns generated text into a downloadable artifact', async
     }),
   })
 
-  const job = await runtime.createJob('整理会议纪要并导出')
+  const job = await runtime.createJob('整理会议纪要并导出', { userId: TEST_USER })
   await runtime.drain()
-  const loaded = runtime.getJob(job.id)
+  const loaded = runtime.getJob(job.id, { userId: TEST_USER })
 
   assert.equal(loaded.artifacts.length, 1)
   assert.equal(loaded.artifacts[0].filename, 'result.docx')
@@ -110,6 +114,7 @@ test('default executor forwards cancellation signals to the model runner', async
   const controller = new AbortController()
   let receivedSignal = null
   const executeStep = createDefaultExecuteStep({
+    enableServerTools: false,
     runModel: async ({ signal }) => {
       receivedSignal = signal
       return '完成'
