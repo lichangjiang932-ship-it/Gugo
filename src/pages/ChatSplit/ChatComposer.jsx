@@ -9,7 +9,6 @@ import {
   X,
   FileText,
 } from 'lucide-react'
-import { SKILLS } from '../../data.js'
 
 const QUICK_SKILLS = [
   { label: '/ppt', command: '/ppt', active: true },
@@ -39,6 +38,7 @@ export default function ChatComposer({
   onContextClick,
   onQuickSkillClick,
   handleKeyDown,
+  skills,
 }) {
   const textareaRef = useRef(null)
   const fileInputRef = useRef(null)
@@ -181,7 +181,7 @@ export default function ChatComposer({
                 if (!v.startsWith('/') || v.includes(' ')) return false
                 const q = v.slice(1).toLowerCase()
                 if (!q) return true
-                return SKILLS.some(
+                return skills.some(
                   (s) => s.id.toLowerCase().includes(q) || s.name.toLowerCase().includes(q)
                 )
               }

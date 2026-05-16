@@ -77,15 +77,19 @@ SKILLS.forEach((skill) => {
   }
 })
 
-export function getSkillSystemPrompt(skillId, skillConfigs) {
+function findSkill(skillId, externalSkills = []) {
+  return [...externalSkills, ...SKILLS].find((item) => item.id === skillId)
+}
+
+export function getSkillSystemPrompt(skillId, skillConfigs, externalSkills = []) {
   const cfg = skillConfigs?.[skillId]
   if (cfg?.systemPrompt != null) return cfg.systemPrompt
-  const skill = SKILLS.find((item) => item.id === skillId)
+  const skill = findSkill(skillId, externalSkills)
   return skill?.systemPrompt || ''
 }
 
-export function getSkillEffectiveConfig(skillId, skillConfigs) {
-  const skill = SKILLS.find((item) => item.id === skillId)
+export function getSkillEffectiveConfig(skillId, skillConfigs, externalSkills = []) {
+  const skill = findSkill(skillId, externalSkills)
   const cfg = skillConfigs?.[skillId] || {}
   return {
     enabled: cfg.enabled !== false,

@@ -8,6 +8,7 @@ import { callModelThroughProxyStream, getModelStatus, summarizeSessionTitle } fr
 import { buildToolSpecs, executeToolCall } from '../../lib/tools/index.js'
 import { readStoredModel, resolveInitialModel, writeStoredModel } from '../../lib/modelSelection.js'
 import { isLoggedInLocally } from '../../lib/accountClient.js'
+import { listSkills } from '../../lib/skillClient.js'
 import { TASK_STATUS, TOOL_CALL_STATUS, HISTORY_STATUS } from '../../store/taskStatus.js'
 import ChatHeader from './ChatHeader'
 import ChatMessages from './ChatMessages'
@@ -40,6 +41,7 @@ export default function ChatSplit() {
   const [modelOptions, setModelOptions] = useState([])
   const [toolMaxRounds, setToolMaxRounds] = useState(5)
   const [selectedModel, setSelectedModel] = useState('')
+  const [runtimeSkills, setRuntimeSkills] = useState(SKILLS)
   const [showSlashMenu, setShowSlashMenu] = useState(false)
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [lastFailedPrompt, setLastFailedPrompt] = useState('')
@@ -86,6 +88,18 @@ export default function ChatSplit() {
   }, [])
 
   useEffect(() => {
+    let cancelled = false
+    listSkills()
+      .then(({ skills }) => {
+        if (!cancelled && Array.isArray(skills) && skills.length) setRuntimeSkills(skills)
+      })
+      .catch(() => {
+        if (!cancelled) setRuntimeSkills(SKILLS)
+      })
+    return () => { cancelled = true }
+  }, [])
+
+  useEffect(() => {
     if (state.draftInput) {
       const nextInput = state.draftInput
       const timer = window.setTimeout(() => setInput(nextInput), 0)
@@ -126,8 +140,8 @@ export default function ChatSplit() {
   const isSlashActive = input.startsWith('/') && !input.includes(' ')
   const slashQuery = isSlashActive ? input.slice(1).toLowerCase() : ''
   const filteredSkills = slashQuery
-    ? SKILLS.filter((s) => s.id.toLowerCase().includes(slashQuery) || s.name.toLowerCase().includes(slashQuery))
-    : SKILLS
+    ? runtimeSkills.filter((s) => s.id.toLowerCase().includes(slashQuery) || s.name.toLowerCase().includes(slashQuery))
+    : runtimeSkills
 
   /* ── send flow ── */
   const triggerSendFlow = useCallback(
@@ -161,7 +175,7 @@ export default function ChatSplit() {
       const skillMatch = content.match(/^\/(\w+)\s*(.*)/)
       const skillId = skillMatch ? skillMatch[1] : null
       const userPrompt = skillMatch ? skillMatch[2] : content
-      const skill = skillId ? SKILLS.find((s) => s.id === skillId) : null
+      const skill = skillId ? runtimeSkills.find((s) => s.id === skillId) : null
       const taskName = skill?.name || (content.toLowerCase().includes('ppt') ? '制作 PPT' : content.toLowerCase().includes('excel') ? '分析表格' : '通用任务')
 
       if (!isLoggedInLocally()) {
@@ -174,7 +188,7 @@ export default function ChatSplit() {
 
       try {
         const messages = []
-        const systemPrompt = skillId ? getSkillSystemPrompt(skillId) : ''
+        const systemPrompt = skillId ? getSkillSystemPrompt(skillId, state.skillConfigs, runtimeSkills) : ''
         if (systemPrompt) messages.push({ role: 'system', content: systemPrompt })
         messages.push({ role: 'user', content: buildUserContentWithAttachments(userPrompt || content, attachments) })
 
@@ -383,8 +397,8 @@ export default function ChatSplit() {
     },
     // ★ #27: 细粒度 deps,只收 triggerSendFlow body 里实际读的字段;
     //         避免依赖整个 state 导致每次 sessionDrafts/tasks 变都重建 callback
-    [attachments, dispatch, modelOptions, selectedModel, toolMaxRounds,
-      state.activeSessionId, state.sessions, state.toolsConfig, state.permissions]
+    [attachments, dispatch, modelOptions, selectedModel, toolMaxRounds, runtimeSkills,
+      state.activeSessionId, state.sessions, state.toolsConfig, state.permissions, state.skillConfigs]
   )
 
   const handleSend = useCallback(() => {
@@ -620,6 +634,7 @@ export default function ChatSplit() {
             setInput(skill.command + ' ')
           }}
           handleKeyDown={handleKeyDown}
+          skills={runtimeSkills}
         />
       </div>
 
