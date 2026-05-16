@@ -142,8 +142,6 @@ function initSchema(db) {
       error TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at);
-    CREATE INDEX IF NOT EXISTS idx_jobs_user_created ON jobs(user_id, created_at);
-    CREATE INDEX IF NOT EXISTS idx_jobs_user_status ON jobs(user_id, status);
 
     CREATE TABLE IF NOT EXISTS job_steps (
       id TEXT PRIMARY KEY,
@@ -187,7 +185,6 @@ function initSchema(db) {
       created_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_job_artifacts_job_created ON job_artifacts(job_id, created_at);
-    CREATE INDEX IF NOT EXISTS idx_job_artifacts_user ON job_artifacts(user_id, created_at);
 
     CREATE TABLE IF NOT EXISTS skills (
       id TEXT PRIMARY KEY,
@@ -200,7 +197,6 @@ function initSchema(db) {
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL
     );
-    CREATE INDEX IF NOT EXISTS idx_skills_user ON skills(user_id, created_at);
 
     CREATE TABLE IF NOT EXISTS skill_assets (
       skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,

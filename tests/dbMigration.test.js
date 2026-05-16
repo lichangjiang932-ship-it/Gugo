@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
+import { spawnSync } from 'node:child_process'
+import Database from 'better-sqlite3'
 
 import { getDb, migrateFromJson } from '../server/db.js'
 
@@ -53,4 +56,103 @@ test('legacy JSON migration is idempotent for ledger rows', () => {
   const rows = getDb().prepare('SELECT * FROM ledger WHERE id = ?').all('legacy-ledger-1')
   assert.equal(rows.length, 1)
   assert.equal(rows[0].balance, 100)
+})
+
+test('legacy sqlite schema upgrades before creating user-scoped indexes', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-legacy-db-'))
+  const dbPath = path.join(dir, 'app.db')
+  const legacyDb = new Database(dbPath)
+  legacyDb.exec(`
+    CREATE TABLE jobs (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      status TEXT NOT NULL,
+      progress INTEGER NOT NULL DEFAULT 0,
+      cancel_requested INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      started_at INTEGER,
+      finished_at INTEGER,
+      error TEXT
+    );
+    CREATE TABLE job_steps (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      parent_step_id TEXT,
+      title TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      status TEXT NOT NULL,
+      sort_order INTEGER NOT NULL,
+      input_json TEXT,
+      output_json TEXT,
+      error TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      started_at INTEGER,
+      finished_at INTEGER
+    );
+    CREATE TABLE job_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      step_id TEXT,
+      type TEXT NOT NULL,
+      message TEXT NOT NULL,
+      payload_json TEXT,
+      created_at INTEGER NOT NULL
+    );
+    CREATE TABLE job_artifacts (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      step_id TEXT,
+      type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      url TEXT NOT NULL,
+      filename TEXT,
+      created_at INTEGER NOT NULL
+    );
+    CREATE TABLE skills (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL,
+      version TEXT NOT NULL,
+      icon TEXT NOT NULL,
+      permissions_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE skill_assets (
+      skill_id TEXT NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+      path TEXT NOT NULL,
+      content TEXT NOT NULL,
+      PRIMARY KEY (skill_id, path)
+    );
+    CREATE TABLE meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+    INSERT INTO meta (key, value) VALUES ('schema_version', '1');
+  `)
+  legacyDb.close()
+
+  const script = `
+    process.env.APP_DB_PATH = ${JSON.stringify(dbPath)};
+    const { getDbStatus, closeDb } = await import('./server/db.js');
+    const status = getDbStatus();
+    console.log(JSON.stringify(status));
+    closeDb();
+  `
+  const result = spawnSync(process.execPath, ['--input-type=module', '--eval', script], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+  })
+
+  try {
+    assert.equal(result.status, 0, result.stderr || result.stdout)
+    const status = JSON.parse(result.stdout.trim())
+    assert.equal(status.ok, true)
+    assert.equal(status.schemaVersion, '2')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
 })

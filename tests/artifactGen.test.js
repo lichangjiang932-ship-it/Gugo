@@ -114,8 +114,7 @@ test('generated artifacts are downloadable from /api/artifacts/* with auth', asy
   // 起 mock OpenAI 兼容服务器(default executor 用 callBackgroundModel)
   const http = await import('node:http')
   const mockModel = http.createServer((req, res) => {
-    let body = ''
-    req.on('data', (chunk) => { body += chunk })
+    req.resume()
     req.on('end', () => {
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({

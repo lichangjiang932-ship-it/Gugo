@@ -108,10 +108,6 @@ export default function TaskRunPanel() {
     }
   }, [selectedJobId])
 
-  useEffect(() => {
-    setSelectedArtifact(null)
-  }, [selectedJobId])
-
   useEffect(() => subscribeToJobEvents(() => {
     Promise.all([
       listJobs(),
@@ -223,7 +219,10 @@ export default function TaskRunPanel() {
                 {visibleJobs.map((job) => (
                   <button
                     key={job.id}
-                    onClick={() => setSelectedJobId(job.id)}
+                    onClick={() => {
+                      setSelectedArtifact(null)
+                      setSelectedJobId(job.id)
+                    }}
                     className={`text-left rounded-md border p-3 transition-colors ${
                       selectedJobId === job.id
                         ? 'border-ember bg-ember-soft'
