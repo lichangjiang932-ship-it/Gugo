@@ -47,7 +47,8 @@ export function validateSkillPack(files = {}) {
   }
 }
 
-export function installValidatedSkillPack({ files, existingIds = [] }) {
+export function installValidatedSkillPack({ files, existingIds = [], userId }) {
+  if (!userId) return { ok: false, reason: '缺少 userId' }
   const validation = validateSkillPack(files)
   if (!validation.ok) return validation
   const id = resolveImportedSkillId(validation.skill.id, existingIds)
@@ -56,6 +57,7 @@ export function installValidatedSkillPack({ files, existingIds = [] }) {
     skill: installSkill({
       ...validation.skill,
       id,
+      userId,
       files,
     }),
   }

@@ -10,10 +10,13 @@ const {
   installSkill,
   listImportedSkills,
 } = await import('../server/skillStore.js')
+const { issueTestSession } = await import('./helpers/testAuth.js')
 
 test('skill store persists imported skill metadata and prompt asset', () => {
+  const { userId } = issueTestSession()
   installSkill({
     id: 'writer',
+    userId,
     name: '写作助手',
     description: '生成长文',
     version: '1.0.0',
@@ -25,9 +28,13 @@ test('skill store persists imported skill metadata and prompt asset', () => {
     },
   })
 
-  const skill = getImportedSkill('writer')
+  const skill = getImportedSkill('writer', { userId })
   assert.equal(skill.name, '写作助手')
   assert.equal(skill.files['prompts/system.md'], '你是写作助手')
-  assert.equal(listImportedSkills().length, 1)
-})
+  assert.equal(listImportedSkills({ userId }).length, 1)
 
+  // 另一个用户看不到
+  const other = issueTestSession()
+  assert.equal(getImportedSkill('writer', { userId: other.userId }), null)
+  assert.equal(listImportedSkills({ userId: other.userId }).length, 0)
+})

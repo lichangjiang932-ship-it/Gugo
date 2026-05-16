@@ -16,10 +16,13 @@ const {
   listJobs,
   updateJob,
 } = await import('../server/jobStore.js')
+const { issueTestSession } = await import('./helpers/testAuth.js')
 
 test('job store persists parent job, child steps, events, and artifacts', () => {
+  const { userId } = issueTestSession()
   const job = createJob({
     id: 'job-1',
+    userId,
     title: '生成 3 份周报',
     prompt: '生成 3 份周报',
     status: 'queued',
@@ -32,6 +35,7 @@ test('job store persists parent job, child steps, events, and artifacts', () => 
   appendJobArtifact({
     id: 'artifact-1',
     jobId: 'job-1',
+    userId,
     stepId: 'step-2',
     type: 'docx',
     title: '周报',
@@ -40,11 +44,15 @@ test('job store persists parent job, child steps, events, and artifacts', () => 
   })
   updateJob('job-1', { status: 'running', progress: 50 })
 
-  const loaded = getJobWithChildren('job-1')
+  const loaded = getJobWithChildren('job-1', { userId })
   assert.equal(job.id, 'job-1')
-  assert.equal(listJobs()[0].status, 'running')
+  assert.equal(listJobs({ userId })[0].status, 'running')
   assert.equal(loaded.steps.length, 2)
   assert.equal(listJobEvents('job-1')[0].message, '已创建')
   assert.equal(listJobArtifacts('job-1')[0].filename, 'report.docx')
-})
 
+  // 另一个用户看不到这个 job
+  const other = issueTestSession()
+  assert.equal(listJobs({ userId: other.userId }).length, 0)
+  assert.equal(getJobWithChildren('job-1', { userId: other.userId }), null)
+})

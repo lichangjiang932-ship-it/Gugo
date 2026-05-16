@@ -13,6 +13,7 @@ function mapJob(row) {
   if (!row) return null
   return {
     id: row.id,
+    userId: row.user_id || null,
     title: row.title,
     prompt: row.prompt,
     status: row.status,
@@ -64,6 +65,7 @@ function mapArtifact(row) {
   return {
     id: row.id,
     jobId: row.job_id,
+    userId: row.user_id || null,
     stepId: row.step_id,
     type: row.type,
     title: row.title,
@@ -73,26 +75,45 @@ function mapArtifact(row) {
   }
 }
 
+/**
+ * 新建后台作业。`userId` 是必填——P0 之后所有作业都必须归属到某个用户,
+ * 任何调用方忘记传都会被这里早早抛错,避免落库后变成「无主作业」。
+ */
 export function createJob({
   id,
+  userId,
   title,
   prompt,
   status = 'queued',
   progress = 0,
   now = Date.now(),
 }) {
+  if (!userId) throw new Error('createJob requires userId')
   getDb().prepare(`
-    INSERT INTO jobs (id, title, prompt, status, progress, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(id, title, prompt, status, progress, now, now)
+    INSERT INTO jobs (id, user_id, title, prompt, status, progress, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, userId, title, prompt, status, progress, now, now)
   return getJob(id)
 }
 
-export function getJob(id) {
-  return mapJob(getDb().prepare('SELECT * FROM jobs WHERE id = ?').get(id))
+/**
+ * 读取作业。如果传了 `userId`,会再做一次归属校验,
+ * 让接入 API 路由的鉴权代码可以直接复用,不必再写额外 if。
+ */
+export function getJob(id, { userId } = {}) {
+  const row = getDb().prepare('SELECT * FROM jobs WHERE id = ?').get(id)
+  if (!row) return null
+  if (userId && row.user_id && row.user_id !== userId) return null
+  return mapJob(row)
 }
 
-export function listJobs({ limit = 100 } = {}) {
+export function listJobs({ userId, limit = 100 } = {}) {
+  if (userId) {
+    return getDb()
+      .prepare('SELECT * FROM jobs WHERE user_id = ? ORDER BY created_at DESC LIMIT ?')
+      .all(userId, limit)
+      .map(mapJob)
+  }
   return getDb()
     .prepare('SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?')
     .all(limit)
@@ -219,9 +240,14 @@ export function listJobEvents(jobId, { afterId = 0 } = {}) {
     .map(mapEvent)
 }
 
+/**
+ * 新增作业产物。`userId` 必填——artifact 是下载路由的最终授权依据,
+ * 必须把归属直接写在产物行上,后面 handleArtifactDownload 就能 O(1) 判定。
+ */
 export function appendJobArtifact({
   id,
   jobId,
+  userId,
   stepId = null,
   type,
   title,
@@ -229,10 +255,11 @@ export function appendJobArtifact({
   filename = null,
   now = Date.now(),
 }) {
+  if (!userId) throw new Error('appendJobArtifact requires userId')
   getDb().prepare(`
-    INSERT INTO job_artifacts (id, job_id, step_id, type, title, url, filename, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, jobId, stepId, type, title, url, filename, now)
+    INSERT INTO job_artifacts (id, job_id, user_id, step_id, type, title, url, filename, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, jobId, userId, stepId, type, title, url, filename, now)
   return listJobArtifacts(jobId).find((artifact) => artifact.id === id) || null
 }
 
@@ -243,8 +270,24 @@ export function listJobArtifacts(jobId) {
     .map(mapArtifact)
 }
 
-export function getJobWithChildren(id) {
-  const job = getJob(id)
+/**
+ * 按产物 id 直接查询,主要给下载路由用——它已经从 URL 拿到唯一 id,
+ * 不需要再二次过滤 job_id。返回 userId 让上层做 ownership 校验。
+ */
+export function getArtifactById(artifactId) {
+  return mapArtifact(getDb().prepare('SELECT * FROM job_artifacts WHERE id = ?').get(artifactId))
+}
+
+/**
+ * 按 filename 查询。下载路由从 URL 拿到 filename,没法直接 O(1) 查 id,
+ * 所以需要这条额外索引——filename 在 newArtifactPath 里已经全局唯一(timestamp + 8 字节随机)。
+ */
+export function getArtifactByFilename(filename) {
+  return mapArtifact(getDb().prepare('SELECT * FROM job_artifacts WHERE filename = ?').get(filename))
+}
+
+export function getJobWithChildren(id, { userId } = {}) {
+  const job = getJob(id, { userId })
   if (!job) return null
   return {
     ...job,
@@ -264,4 +307,3 @@ export function listRecoverableJobs() {
     .all()
     .map(mapJob)
 }
-

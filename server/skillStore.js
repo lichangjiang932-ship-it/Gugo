@@ -12,6 +12,7 @@ function mapSkill(row) {
   if (!row) return null
   return {
     id: row.id,
+    userId: row.user_id || null,
     name: row.name,
     description: row.description,
     version: row.version,
@@ -22,8 +23,13 @@ function mapSkill(row) {
   }
 }
 
+/**
+ * 导入用户技能包。`userId` 必填——P0 之后所有导入技能都强制归属,
+ * 同一个用户内 id 唯一,不同用户互不可见也不冲突。
+ */
 export function installSkill({
   id,
+  userId,
   name,
   description,
   version,
@@ -32,12 +38,13 @@ export function installSkill({
   files = {},
   now = Date.now(),
 }) {
+  if (!userId) throw new Error('installSkill requires userId')
   const db = getDb()
   const tx = db.transaction(() => {
     db.prepare(`
-      INSERT INTO skills (id, name, description, version, icon, permissions_json, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, name, description, version, icon, JSON.stringify(permissions), now, now)
+      INSERT INTO skills (id, user_id, name, description, version, icon, permissions_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, userId, name, description, version, icon, JSON.stringify(permissions), now, now)
 
     const stmt = db.prepare(`
       INSERT INTO skill_assets (skill_id, path, content)
@@ -48,13 +55,14 @@ export function installSkill({
     })
   })
   tx()
-  return getImportedSkill(id)
+  return getImportedSkill(id, { userId })
 }
 
-export function getImportedSkill(id) {
+export function getImportedSkill(id, { userId } = {}) {
   const row = getDb().prepare('SELECT * FROM skills WHERE id = ?').get(id)
   const skill = mapSkill(row)
   if (!skill) return null
+  if (userId && skill.userId && skill.userId !== userId) return null
   const assets = getDb()
     .prepare('SELECT path, content FROM skill_assets WHERE skill_id = ? ORDER BY path ASC')
     .all(id)
@@ -64,14 +72,19 @@ export function getImportedSkill(id) {
   }
 }
 
-export function listImportedSkills() {
+export function listImportedSkills({ userId } = {}) {
+  if (userId) {
+    return getDb()
+      .prepare('SELECT * FROM skills WHERE user_id = ? ORDER BY created_at DESC')
+      .all(userId)
+      .map(mapSkill)
+  }
   return getDb()
     .prepare('SELECT * FROM skills ORDER BY created_at DESC')
     .all()
     .map(mapSkill)
 }
 
-export function listImportedSkillIds() {
-  return listImportedSkills().map((skill) => skill.id)
+export function listImportedSkillIds({ userId } = {}) {
+  return listImportedSkills({ userId }).map((skill) => skill.id)
 }
-

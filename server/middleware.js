@@ -121,6 +121,22 @@ export function requestLogger(req, res, next) {
 
 /* ── Auth 验证 ── */
 
+/**
+ * 直接从请求里同步解析出用户 id,不写响应。
+ * 给非中间件风格的 (req, res) 路由用,例如 jobRoutes/skillRoutes/artifactGen。
+ * 命中即把 `req.userId / req.token` 也带上,方便后续就近读取。
+ */
+export function authenticateRequest(req) {
+  const auth = req.headers?.authorization
+  if (!auth || !auth.startsWith('Bearer ')) return null
+  const token = auth.slice(7)
+  const session = getSessionByToken(token)
+  if (!session) return null
+  req.userId = session.user_id
+  req.token = token
+  return session.user_id
+}
+
 export function requireAuth(req, res, next) {
   const auth = req.headers.authorization
   if (!auth || !auth.startsWith('Bearer ')) {

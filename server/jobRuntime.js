@@ -5,6 +5,7 @@ import {
   appendJobEvent,
   appendJobSteps,
   createJob as persistJob,
+  getJob as getJobRow,
   getJobWithChildren,
   listJobSteps,
   listJobs,
@@ -65,6 +66,7 @@ export function createDefaultExecuteStep({
       appendJobArtifact({
         id: artifact.id,
         jobId: job.id,
+        userId: job.userId,
         stepId: step.id,
         type: artifact.type,
         title: artifact.title || job.title,
@@ -81,7 +83,7 @@ export function createDefaultExecuteStep({
     }
 
     const { skillId, userPrompt } = parseSkillPrompt(job.prompt)
-    const skill = skillId ? getRuntimeSkill(skillId) : null
+    const skill = skillId ? getRuntimeSkill(skillId, { userId: job.userId }) : null
     const messages = []
     if (skill?.systemPrompt) messages.push({ role: 'system', content: skill.systemPrompt })
     const promptSuffix = step.kind === 'batch_item'
@@ -134,17 +136,53 @@ export class JobRuntime {
     this.executeStep = executeStep
     this.tickMs = tickMs
     this.timer = null
-    this.listeners = new Set()
+    // listeners 改成 Map<listener, userId>;userId === null 表示无过滤(给内部/测试用)。
+    this.listeners = new Map()
     this.activeControllers = new Map()
+    // jobId → userId 缓存,避免每次 emit 都查 DB;recover/createJob 时写入。
+    this.jobUserCache = new Map()
     this.recover()
   }
 
-  emit(event) {
-    for (const listener of this.listeners) listener(event)
+  _jobUserId(jobId) {
+    if (this.jobUserCache.has(jobId)) return this.jobUserCache.get(jobId)
+    const row = getJobRow(jobId)
+    const uid = row?.userId || null
+    this.jobUserCache.set(jobId, uid)
+    return uid
   }
 
-  subscribe(listener) {
-    this.listeners.add(listener)
+  emit(event) {
+    if (!event) return
+    const jobId = event.jobId || event.job_id
+    const eventOwner = jobId ? this._jobUserId(jobId) : null
+    for (const [listener, listenerUserId] of this.listeners) {
+      // 没指定 userId 的订阅者收所有事件(测试/内部用);
+      // 指定了的只收自己 job 的事件——事件没归属(eventOwner=null)兜底也只发给同 userId,
+      // 防止历史无主 job 被错误推送。
+      if (listenerUserId == null) {
+        listener(event)
+      } else if (eventOwner && eventOwner === listenerUserId) {
+        listener(event)
+      }
+    }
+  }
+
+  /**
+   * 订阅事件流。两种调用形式:
+   *   subscribe(listener)            → 收所有事件(内部 / 测试)
+   *   subscribe(userId, listener)    → 只收该用户名下 job 的事件(SSE 路由)
+   */
+  subscribe(userIdOrListener, maybeListener) {
+    let userId = null
+    let listener
+    if (typeof userIdOrListener === 'function') {
+      listener = userIdOrListener
+    } else {
+      userId = userIdOrListener
+      listener = maybeListener
+    }
+    this.listeners.set(listener, userId)
     return () => this.listeners.delete(listener)
   }
 
@@ -152,6 +190,7 @@ export class JobRuntime {
     const jobs = listRecoverableJobs()
     const recovered = recoverInterruptedJobs(jobs)
     for (const job of recovered) {
+      this.jobUserCache.set(job.id, job.userId || null)
       updateJob(job.id, { status: 'queued' })
       for (const step of listJobSteps(job.id)) {
         if (step.status === 'running') updateJobStep(step.id, { status: 'queued' })
@@ -182,15 +221,18 @@ export class JobRuntime {
     this.timer = null
   }
 
-  async createJob(prompt) {
+  async createJob(prompt, { userId } = {}) {
+    if (!userId) throw new Error('createJob requires userId')
     const plan = this.planner(prompt)
     const id = newId('job')
     persistJob({
       id,
+      userId,
       title: plan.title,
       prompt: plan.prompt || String(prompt || '').trim(),
       status: 'queued',
     })
+    this.jobUserCache.set(id, userId)
     appendJobSteps(id, withStableStepIds(id, plan.steps))
     const event = appendJobEvent({
       jobId: id,
@@ -199,19 +241,19 @@ export class JobRuntime {
       payload: { stepCount: plan.steps.length },
     })
     this.emit(event)
-    return this.getJob(id)
+    return this.getJob(id, { userId })
   }
 
-  listJobs() {
-    return listJobs()
+  listJobs({ userId } = {}) {
+    return listJobs({ userId })
   }
 
-  getJob(id) {
-    return getJobWithChildren(id)
+  getJob(id, { userId } = {}) {
+    return getJobWithChildren(id, { userId })
   }
 
-  requestCancel(jobId) {
-    const job = this.getJob(jobId)
+  requestCancel(jobId, { userId } = {}) {
+    const job = this.getJob(jobId, { userId })
     if (!job || TERMINAL_JOB_STATUSES.has(job.status)) return job
     updateJob(jobId, { status: 'cancel_requested', cancelRequested: true })
     this.activeControllers.get(jobId)?.abort()
@@ -221,11 +263,11 @@ export class JobRuntime {
       message: '已请求终止任务',
     })
     this.emit(event)
-    return this.getJob(jobId)
+    return this.getJob(jobId, { userId })
   }
 
-  retryJob(jobId) {
-    const currentJob = this.getJob(jobId)
+  retryJob(jobId, { userId } = {}) {
+    const currentJob = this.getJob(jobId, { userId })
     if (!currentJob) return null
     for (const step of currentJob.steps) {
       if (['failed', 'cancelled'].includes(step.status)) {
@@ -241,7 +283,7 @@ export class JobRuntime {
       cancelRequested: false,
       finishedAt: null,
       error: null,
-      progress: deriveProgress(this.getJob(jobId).steps),
+      progress: deriveProgress(this.getJob(jobId, { userId }).steps),
     })
     const event = appendJobEvent({
       jobId,
@@ -249,11 +291,11 @@ export class JobRuntime {
       message: '任务已重新入队',
     })
     this.emit(event)
-    return this.getJob(jobId)
+    return this.getJob(jobId, { userId })
   }
 
-  retryStep(jobId, stepId) {
-    const job = this.getJob(jobId)
+  retryStep(jobId, stepId, { userId } = {}) {
+    const job = this.getJob(jobId, { userId })
     const step = job?.steps.find((item) => item.id === stepId)
     if (!job || !step) return null
     updateJobStep(stepId, {
@@ -274,7 +316,7 @@ export class JobRuntime {
       message: `已重试步骤：${step.title}`,
     })
     this.emit(event)
-    return this.getJob(jobId)
+    return this.getJob(jobId, { userId })
   }
 
   async runOneTick() {
@@ -345,7 +387,9 @@ export class JobRuntime {
     const controller = new AbortController()
     this.activeControllers.set(job.id, controller)
     try {
-      const freshJob = this.getJob(job.id)
+      // 直接传 freshJob(已经包含 userId),不再做权限过滤——
+      // tick 是服务端内部调度,不是面向用户的查询。
+      const freshJob = getJobWithChildren(job.id)
       const result = await this.executeStep({
         job: freshJob,
         step: nextStep,
@@ -368,7 +412,7 @@ export class JobRuntime {
         message: `完成：${nextStep.title}`,
       }))
     } catch (error) {
-      const latestJob = this.getJob(job.id)
+      const latestJob = getJobWithChildren(job.id)
       const cancelled = controller.signal.aborted || latestJob?.cancelRequested || latestJob?.status === 'cancel_requested'
       if (cancelled) {
         for (const step of listJobSteps(job.id)) {

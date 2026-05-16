@@ -17,7 +17,7 @@ function mapBuiltInSkill(skill) {
 }
 
 function mapImportedSkill(skill) {
-  const full = getImportedSkill(skill.id)
+  const full = getImportedSkill(skill.id, { userId: skill.userId })
   return {
     id: skill.id,
     name: skill.name,
@@ -34,17 +34,21 @@ function mapImportedSkill(skill) {
   }
 }
 
-export function listRuntimeSkills() {
+/**
+ * 返回当前用户可见的全部技能。内置 SKILLS 对所有用户可见,
+ * 导入技能必须带 userId 才会被附加进列表——避免跨用户泄漏。
+ */
+export function listRuntimeSkills({ userId } = {}) {
   return [
     ...SKILLS.map(mapBuiltInSkill),
-    ...listImportedSkills().map(mapImportedSkill),
+    ...listImportedSkills({ userId }).map(mapImportedSkill),
   ]
 }
 
-export function getRuntimeSkill(id) {
-  return listRuntimeSkills().find((skill) => skill.id === id) || null
+export function getRuntimeSkill(id, { userId } = {}) {
+  return listRuntimeSkills({ userId }).find((skill) => skill.id === id) || null
 }
 
-export function listRuntimeSkillIds() {
-  return listRuntimeSkills().map((skill) => skill.id)
+export function listRuntimeSkillIds({ userId } = {}) {
+  return listRuntimeSkills({ userId }).map((skill) => skill.id)
 }
