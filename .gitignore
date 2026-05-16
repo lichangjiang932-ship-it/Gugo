@@ -12,6 +12,7 @@ dist
 dist-ssr
 *.local
 server-data/
+.artifacts/
 .env
 .env.*
 !.env.example

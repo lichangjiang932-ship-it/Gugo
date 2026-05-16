@@ -10,7 +10,7 @@ test('GET /api/health returns version + db + model status', async () => {
   delete process.env.MODEL_API_KEY
   delete process.env.MODEL_NAME
 
-  const server = createAppServer()
+  const server = createAppServer({ getEnv: () => ({}) })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   const { port } = server.address()
 

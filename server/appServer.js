@@ -19,6 +19,7 @@ import {
 } from './modelProxy.js'
 import { handleAuthBillingRequest } from './billingAuth.js'
 import { handleToolProxyRequest } from './toolProxy.js'
+import { handleArtifactDownload } from './artifactGen.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -75,10 +76,10 @@ function readVersion() {
   return cachedVersion
 }
 
-function healthCheck(req, res) {
+function healthCheck(req, res, getEnv = getRuntimeEnv) {
   // G6: /api/health 必须返回结构化 JSON,带 db + model 子状态.
   // 任何子系统未就绪 → 503,但响应体仍是 JSON,方便运维和探针解析.
-  const env = (() => { try { return getRuntimeEnv() } catch { return process.env } })()
+  const env = (() => { try { return getEnv() } catch { return process.env } })()
   const db = getDbStatus()
   const model = getModelStatus(env)
   const overallOk = db.ok && model.configured
@@ -112,10 +113,11 @@ function applyMiddlewares(handler) {
   }
 }
 
-function router(req, res) {
+function createRouter(getEnv = getRuntimeEnv) {
+  return function router(req, res) {
   // 健康检查
   if (req.url === '/api/health') {
-    healthCheck(req, res)
+    healthCheck(req, res, getEnv)
     return
   }
 
@@ -125,7 +127,7 @@ function router(req, res) {
     req.url?.startsWith('/api/account/') ||
     req.url?.startsWith('/api/billing/')
   ) {
-    return handleAuthBillingRequest(req, res, getRuntimeEnv())
+    return handleAuthBillingRequest(req, res, getEnv())
   }
 
   // 模型状态
@@ -148,12 +150,18 @@ function router(req, res) {
     return handleToolProxyRequest(req, res)
   }
 
+  // 产物下载
+  if (req.url?.startsWith('/api/artifacts/')) {
+    return handleArtifactDownload(req, res)
+  }
+
   // 静态文件
   serveStatic(req, res)
+  }
 }
 
-export function createAppServer() {
-  return http.createServer(applyMiddlewares(router))
+export function createAppServer({ getEnv = getRuntimeEnv } = {}) {
+  return http.createServer(applyMiddlewares(createRouter(getEnv)))
 }
 
 function gracefulShutdown(server) {

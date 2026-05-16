@@ -8,6 +8,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import JSZip from 'jszip'
+import { createAppServer } from '../server/appServer.js'
 
 // 用临时目录,跑完清理
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'artifact-test-'))
@@ -105,6 +106,30 @@ test('createXlsx 全空 sheets 报错', async () => {
 test('artifact 文件名格式安全(只含字母数字-.)', async () => {
   const r = await createPptx({ title: 'x', slides: [{ title: 'a', bullets: [] }] })
   assert.match(r.filename, /^[\w.-]+\.pptx$/, '文件名应只含安全字符')
+})
+
+test('generated artifacts are downloadable from /api/artifacts/*', async () => {
+  const artifact = await createDocx({
+    title: 'download-test',
+    paragraphs: [{ text: 'hello' }],
+  })
+  const server = createAppServer({ getEnv: () => ({}) })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const { port } = server.address()
+
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}${artifact.url}`)
+    assert.equal(res.status, 200)
+    assert.equal(
+      res.headers.get('content-type'),
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    )
+    assert.match(res.headers.get('content-disposition') || '', /attachment;/)
+    const bytes = new Uint8Array(await res.arrayBuffer())
+    assert.ok(bytes.byteLength > 0)
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
 })
 
 // 跑完清理
