@@ -39,6 +39,7 @@ export default function ChatSplit() {
   const { state, dispatch } = useAppContext()
   const [input, setInput] = useState('')
   const [modelOptions, setModelOptions] = useState([])
+  const [toolMaxRounds, setToolMaxRounds] = useState(5)
   const [selectedModel, setSelectedModel] = useState('')
   const [showSlashMenu, setShowSlashMenu] = useState(false)
   const [selectedIndex, setSelectedIndex] = useState(0)
@@ -73,6 +74,10 @@ export default function ChatSplit() {
           : []
         setModelOptions(models)
         setSelectedModel((current) => resolveInitialModel(models, current || readStoredModel()))
+        // 后端权威决定工具循环轮数;status 拿不到字段时维持默认 5
+        if (Number.isFinite(status.toolMaxRounds) && status.toolMaxRounds >= 1 && status.toolMaxRounds <= 12) {
+          setToolMaxRounds(status.toolMaxRounds)
+        }
       } catch {
         if (!cancelled) setModelOptions([])
       }
@@ -195,6 +200,11 @@ export default function ChatSplit() {
         let totalCreditsCharged = 0
         let latestCreditsBalance = null
         let billingRoundError = null
+        // G1: 工具调用产出的 artifact (create_pptx/docx/xlsx) 暂存,
+        // 流程结束后写到 last message meta — 让 ChatMessages 直接渲染卡片 + 弹右栏.
+        // 取最后一个,因为同一轮多次生成时模型期望的"最终产物"通常是末次调用.
+        // 提升到 try 外:try 内声明会让后面的 finalize 块拿不到。
+        let toolArtifact = null
 
         try {
           // 工具调用循环:每轮 stream 模型 → 收 tool_calls → 本地执行 → messages 追加 tool 结果 → 再 stream
@@ -203,9 +213,13 @@ export default function ChatSplit() {
             .filter(([, on]) => !!on)
             .map(([name]) => name)
           const tools = buildToolSpecs(enabledToolNames)
-          const MAX_TOOL_ROUNDS = 5
 
-          for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
+          // G1: 工具调用产出的 artifact (create_pptx/docx/xlsx) 暂存,
+          // 流程结束后写到 last message meta — 让 ChatMessages 直接渲染卡片 + 弹右栏.
+          // 取最后一个,因为同一轮多次生成时模型期望的"最终产物"通常是末次调用.
+          // ↑ 已提升到 try 外
+
+          for (let round = 0; round < toolMaxRounds; round += 1) {
             let pendingToolCalls = null
             let sawTextThisRound = false
             for await (const event of callModelThroughProxyStream({
@@ -263,6 +277,10 @@ export default function ChatSplit() {
                 latestCreditsBalance = result.billing.credits
               }
               if (result.billing?.error) billingRoundError = result.billing.error
+              // G1: create_* 工具会在 result.artifact 里挂 { type, title, source }
+              if (result.artifact && result.artifact.type && result.artifact.source) {
+                toolArtifact = result.artifact
+              }
               dispatch({
                 type: 'APPEND_TOOL_CALL_TO_LAST_MESSAGE',
                 payload: {
@@ -295,11 +313,20 @@ export default function ChatSplit() {
 
         setLastFailedPrompt('')
         setAttachments([])
-        const artifactType =
+        // G1: 工具产出的 artifact 优先于 slash skill 的 artifactType,
+        //     因为它是模型显式选择的产物,且自带 source(模型给的 markdown).
+        let artifactType =
           skillId === 'ppt' ? 'pptx' :
           skillId === 'doc' ? 'docx' :
           skillId === 'excel' ? 'xlsx' :
           undefined
+        let artifactTitle = artifactType ? taskName : undefined
+        let artifactSource
+        if (toolArtifact) {
+          artifactType = toolArtifact.type
+          artifactTitle = toolArtifact.title || taskName
+          artifactSource = toolArtifact.source
+        }
         dispatch({
           type: 'UPDATE_LAST_MESSAGE_META',
           payload: {
@@ -311,7 +338,9 @@ export default function ChatSplit() {
             latency,
             skillId,
             artifactType,
-            artifactTitle: artifactType ? taskName : undefined,
+            artifactTitle,
+            artifactSource,
+            artifactExplicit: !!toolArtifact,
           },
         })
 
@@ -352,7 +381,7 @@ export default function ChatSplit() {
     },
     // ★ #27: 细粒度 deps,只收 triggerSendFlow body 里实际读的字段;
     //         避免依赖整个 state 导致每次 sessionDrafts/tasks 变都重建 callback
-    [attachments, dispatch, modelOptions, selectedModel,
+    [attachments, dispatch, modelOptions, selectedModel, toolMaxRounds,
       state.activeSessionId, state.sessions, state.toolsConfig, state.permissions]
   )
 
@@ -558,7 +587,13 @@ export default function ChatSplit() {
           onOpenInPreview={(msg, preview) =>
             dispatch({
               type: 'OPEN_PREVIEW_ARTIFACT',
-              payload: { messageId: msg.id, content: msg.content, preview },
+              // G1: 优先把模型显式给的 artifactSource 当 content,
+              //     这样 ChatMessages 嗅探来源 / RightPreviewPane 复用都基于同一份源.
+              payload: {
+                messageId: msg.id,
+                content: msg.meta?.artifactSource || msg.content,
+                preview,
+              },
             })
           }
         />

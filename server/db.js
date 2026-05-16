@@ -88,6 +88,26 @@ function initSchema(db) {
   `)
 }
 
+// G6 health: 健康探针只看「能否打开 db + 拿到 schema_version」, 不做写入,
+// 用于 /api/health 给运维一眼判断 db 子系统状态.
+export function getDbStatus() {
+  try {
+    const db = getDb()
+    const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')
+    return {
+      ok: true,
+      schemaVersion: row?.value || null,
+      path: getDbPath(),
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      error: err?.message || String(err),
+      path: getDbPath(),
+    }
+  }
+}
+
 export function closeDb() {
   if (_db) {
     _db.close()
