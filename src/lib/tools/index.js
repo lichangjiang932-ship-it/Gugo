@@ -14,6 +14,13 @@ import { getAuthToken } from '../accountClient.js'
 
 import { z } from 'zod'
 
+// ★ batchG: 文件生成工具用到的解析器 — 旧版动态 import 会触发 vite
+//   INEFFECTIVE_DYNAMIC_IMPORT 警告(因为同模块还被 artifactPreview.js /
+//   RightPreviewPane.jsx 静态 import),所以这里直接静态引入,反正
+//   ChatSplit chunk 里本就包含这两个模块.
+import { parseMarkdownSlides } from '../presentationExport.js'
+import { parseMarkdownDocument, parseSpreadsheetRows } from '../officeExport.js'
+
 // ★ #18: 工具参数 zod schema — 模型可能给出脏数据,先校验再执行
 const TOOL_ARG_SCHEMAS = {
   web_search: z.object({
@@ -39,6 +46,14 @@ const TOOL_ARG_SCHEMAS = {
     markdown: z.string().max(60000).optional(),
   }).refine((d) => Array.isArray(d.rows) ? d.rows.length > 0 : !!d.markdown,
     { message: '需要提供 rows 或 markdown 至少一项' }),
+  create_react_component: z.object({
+    title: z.string().min(1, 'title 不能为空').max(200),
+    // 单文件 React 组件源码;模型必须导出一个默认组件
+    //   export default function App() { ... }
+    // 沙箱里只能用 react/react-dom — 不允许 import 任何包,也不允许网络.
+    code: z.string().min(1, 'code 不能为空').max(40000),
+    description: z.string().max(500).optional(),
+  }),
 }
 
 const TOOL_SPECS = {
@@ -118,6 +133,22 @@ const TOOL_SPECS = {
           markdown: { type: 'string', description: '当不便用 rows 时,可传 markdown 表格或 csv 文本(三反引号包裹)' },
         },
         required: ['title'],
+      },
+    },
+  },
+  create_react_component: {
+    type: 'function',
+    function: {
+      name: 'create_react_component',
+      description: '生成一个可在右侧实时渲染的 React 单文件组件(类似 Claude artifacts / Codex web preview)。当用户要求做交互式 demo、可视化、小工具、UI 原型时调用。约束:必须是单文件,只能用 React + ReactDOM(已注入全局),不能 import 任何包,不能访问网络;可以用 useState/useEffect 等所有 React hooks,可以用内联 Tailwind class(已注入 cdn)或内联 style。源码末尾必须 export default 一个组件(如 export default function App(){...})。',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: '组件标题(展示在预览顶部 + 文件名)' },
+          code: { type: 'string', description: '完整的单文件 React 组件源码,含 export default。可以用 JSX 和现代 ES 语法 — 沙箱用 babel-standalone 编译。' },
+          description: { type: 'string', description: '可选: 简短说明这个组件做什么(展示给用户)' },
+        },
+        required: ['title', 'code'],
       },
     },
   },
@@ -211,7 +242,6 @@ async function execCreatePptx(args) {
   const title = String(args.title).trim().slice(0, 200) || 'presentation'
   const markdown = String(args.markdown)
   // 用现有 parseMarkdownSlides 做一次 sanity 解析,失败就让模型知道
-  const { parseMarkdownSlides } = await import('../presentationExport.js')
   const slides = parseMarkdownSlides(markdown)
   if (!slides.length) throw new Error('markdown 解析为 0 张幻灯片;请用 --- 分页或以 # 开头的页标题')
   return {
@@ -228,7 +258,6 @@ async function execCreatePptx(args) {
 async function execCreateDocx(args) {
   const title = String(args.title).trim().slice(0, 200) || 'document'
   const markdown = String(args.markdown)
-  const { parseMarkdownDocument } = await import('../officeExport.js')
   const doc = parseMarkdownDocument(markdown)
   if (!doc.blocks.length) throw new Error('markdown 解析为 0 个内容块')
   return {
@@ -259,7 +288,6 @@ async function execCreateXlsx(args) {
   } else {
     throw new Error('需要 rows 或 markdown 至少一项')
   }
-  const { parseSpreadsheetRows } = await import('../officeExport.js')
   const parsed = parseSpreadsheetRows(source)
   if (!parsed.length) throw new Error('解析为 0 行数据')
   return {
@@ -273,12 +301,38 @@ async function execCreateXlsx(args) {
   }
 }
 
+async function execCreateReactComponent(args) {
+  const title = String(args.title).trim().slice(0, 200) || 'react-component'
+  const code = String(args.code)
+  const description = args.description ? String(args.description).trim().slice(0, 500) : ''
+  // 最轻量 sanity check — 防止常见错误传到沙箱前就报
+  if (!/export\s+default/.test(code)) {
+    throw new Error('代码缺少 export default — 请用 `export default function App() { ... }` 或 `export default () => ...`')
+  }
+  if (/\bimport\s+[^;]*\bfrom\b/.test(code)) {
+    throw new Error('沙箱不允许 import 外部包;只能用 React/ReactDOM(已作为全局变量注入)')
+  }
+  if (/\bfetch\s*\(|XMLHttpRequest|WebSocket/.test(code)) {
+    throw new Error('沙箱禁用网络请求(fetch/XHR/WebSocket);请用本地状态生成示例数据')
+  }
+  return {
+    content: JSON.stringify({
+      ok: true,
+      title,
+      bytes: code.length,
+      message: `已生成 React 组件 "${title}"(${code.length} 字符),用户可在右侧实时预览并交互。`,
+    }),
+    artifact: { type: 'react', title, source: code, description },
+  }
+}
+
 const EXECUTORS = {
   web_search: execWebSearch,
   fetch_url: execFetchUrl,
   create_pptx: execCreatePptx,
   create_docx: execCreateDocx,
   create_xlsx: execCreateXlsx,
+  create_react_component: execCreateReactComponent,
 }
 
 export async function executeToolCall(call, options = {}) {
@@ -316,8 +370,8 @@ export async function executeToolCall(call, options = {}) {
     } catch (err) {
       lastErr = err
       const msg = err?.message || String(err)
-      // 不可重试:参数校验类错误 (含「参数」「不能为空」等关键字)
-      const nonRetriable = /参数|不能为空|invalid|required/i.test(msg)
+      // 不可重试:参数校验类错误 / 沙箱策略拒绝
+      const nonRetriable = /参数|不能为空|invalid|required|沙箱/i.test(msg)
       if (nonRetriable || attempt === maxRetries) break
       // 指数退避:600ms → 1200ms
       await new Promise((r) => setTimeout(r, retryDelayMs * (attempt + 1)))

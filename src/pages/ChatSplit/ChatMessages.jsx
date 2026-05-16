@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, FileText, BarChart3, LayoutList, ExternalLink, ChevronDown, RefreshCw, Trash2, Copy } from 'lucide-react'
+import { X, FileText, BarChart3, LayoutList, ExternalLink, ChevronDown, RefreshCw, Trash2, Copy, Code2 } from 'lucide-react'
 import MarkdownRenderer from '../../components/MarkdownRenderer.jsx'
 import ToolCallCard from '../../components/ToolCallCard.jsx'
 import { buildArtifactPreview } from '../../lib/artifactPreview.js'
@@ -175,6 +175,7 @@ export default function ChatMessages({
                           {artifactPreview.type === 'docx' && <FileText className="w-5 h-5" />}
                           {artifactPreview.type === 'xlsx' && <LayoutList className="w-5 h-5" />}
                           {artifactPreview.type === 'html' && <ExternalLink className="w-5 h-5" />}
+                          {artifactPreview.type === 'react' && <Code2 className="w-5 h-5" />}
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-ember">

@@ -322,10 +322,12 @@ export default function ChatSplit() {
           undefined
         let artifactTitle = artifactType ? taskName : undefined
         let artifactSource
+        let artifactDescription
         if (toolArtifact) {
           artifactType = toolArtifact.type
           artifactTitle = toolArtifact.title || taskName
           artifactSource = toolArtifact.source
+          artifactDescription = toolArtifact.description || undefined
         }
         dispatch({
           type: 'UPDATE_LAST_MESSAGE_META',
@@ -340,6 +342,7 @@ export default function ChatSplit() {
             artifactType,
             artifactTitle,
             artifactSource,
+            artifactDescription,
             artifactExplicit: !!toolArtifact,
           },
         })
