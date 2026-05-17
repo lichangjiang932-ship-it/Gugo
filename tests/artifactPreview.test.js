@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { buildArtifactPreview } from '../src/lib/artifactPreview.js'
+import { buildArtifactPreview, shouldCollapseArtifactPreview } from '../src/lib/artifactPreview.js'
 
 test('builds a pptx artifact preview from slide markdown', () => {
   const preview = buildArtifactPreview({
@@ -59,4 +59,16 @@ test('treats htmlppt as an explicit html artifact instead of inferred content', 
   assert.equal(preview.title, 'Pitch Deck')
   assert.equal(preview.filename, 'Pitch-Deck.html')
   assert.equal(preview.previewable, true)
+})
+
+
+test('collapses inferred file previews into a single file card too', () => {
+  const preview = buildArtifactPreview({
+    content: '| Metric | Value |\n| --- | --- |\n| Revenue | 120 |\n| Cost | 45 |\n| Margin | 75 |\n| Users | 300 |\n| Growth | 12% |',
+    meta: {},
+  })
+
+  assert.equal(preview.type, 'xlsx')
+  assert.equal(preview.inferred, true)
+  assert.equal(shouldCollapseArtifactPreview(preview), true)
 })

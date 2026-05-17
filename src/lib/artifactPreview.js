@@ -81,6 +81,10 @@ export function detectArtifactType(content = '') {
   return detectArtifactWithConfidence(content).type
 }
 
+export function shouldCollapseArtifactPreview(preview) {
+  return !!preview
+}
+
 /**
  * 取出消息里的 HTML 源 — 优先用 ```html``` 代码块, fallback 到整段文本。
  */
