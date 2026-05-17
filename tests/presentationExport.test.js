@@ -119,3 +119,11 @@ test('presentation themes vary by topic cues', async () => {
   assert.equal(mod.resolvePresentationTheme('bank annual strategy').id, 'finance')
   assert.equal(mod.resolvePresentationTheme('consumer brand launch').id, 'consumer')
 })
+
+test('parses Chinese page headings into multiple slides for ppt artifacts', () => {
+  const slides = parseMarkdownSlides(`以下是一份5页产品介绍PPT的完整内容方案\n\n第1页：封面页\n- 产品名称\n\n第2页：核心卖点\n- 快\n\n第3页：功能亮点\n- 稳`)
+
+  assert.equal(slides.length, 3)
+  assert.equal(slides[0].title, '封面页')
+  assert.equal(slides[1].title, '核心卖点')
+})

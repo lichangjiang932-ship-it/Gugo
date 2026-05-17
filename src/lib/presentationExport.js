@@ -344,10 +344,13 @@ function parseNumberedOutline(markdown) {
   for (const rawLine of lines) {
     const line = rawLine.trim()
     if (!line) continue
-    const numbered = line.match(/^(?:#{1,4}\s*)?(\d{1,2})[.、]\s+(.+)$/)
+    const numbered =
+      line.match(/^(?:#{1,4}\s*)?(\d{1,2})(?:\.|\u3001)\s+(.+)$/) ||
+      line.match(/^\u7b2c\s*([\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\d]{1,3})\s*\u9875[\uFF1A:\u3001.]?\s*(.+)$/)
     if (numbered) {
       if (!current && preface.length) {
-        const titleSlide = chunkToSlide(preface.filter((item) => !/^\d{1,2}[.、]/.test(item)), 0)
+        const prefaceLines = preface.filter((item) => !/^(?:#{1,4}\s*)?\d{1,2}(?:\.|\u3001)\s+/.test(item))
+        const titleSlide = prefaceLines.length >= 2 ? chunkToSlide(prefaceLines, 0) : null
         if (titleSlide) slides.push(titleSlide)
         preface = []
       }
