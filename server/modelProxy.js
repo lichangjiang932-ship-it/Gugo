@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { z } from 'zod'
+import { readJson } from './utils.js'
 import {
   chargeForModelUse,
   estimateChatCost,
@@ -355,25 +356,6 @@ export function formatProxyError(error) {
   }
   if (error?.status) return `模型服务返回 HTTP ${error.status}：${error.message || '请求失败'}`
   return error?.message || '模型代理调用失败。'
-}
-
-async function readJson(req) {
-  // ★ #36: 请求体大小限制 — 4MB,超出立即抛 413
-  const MAX_BYTES = 4 * 1024 * 1024
-  const chunks = []
-  let total = 0
-  for await (const chunk of req) {
-    total += chunk.length
-    if (total > MAX_BYTES) {
-      const err = new Error(`request body exceeds ${MAX_BYTES} bytes`)
-      err.statusCode = 413
-      throw err
-    }
-    chunks.push(chunk)
-  }
-  const raw = Buffer.concat(chunks).toString('utf8')
-  if (!raw.trim()) return {}
-  return JSON.parse(raw)
 }
 
 function sendJson(res, statusCode, body) {

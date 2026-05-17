@@ -16,6 +16,7 @@ import ChatMessages from './ChatMessages'
 import ChatComposer from './ChatComposer'
 import RightPreviewPane from './RightPreviewPane'
 import { exportSession } from '../../lib/sessionExport.js'
+import * as XLSX from 'xlsx'
 
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024
 const MAX_TEXT_BYTES = 256 * 1024
@@ -33,6 +34,22 @@ function readFileAsDataUrl(file) {
 function isTextLikeFile(file) {
   return /^text\/|json|xml|csv|markdown|javascript|typescript/.test(file.type) ||
     /\.(txt|md|json|csv|xml|yml|yaml|log|js|jsx|ts|tsx|css|html)$/i.test(file.name)
+}
+
+function isExcelFile(file) {
+  return /\.(xlsx|xls|xlsm|xlsb|ods)$/i.test(file.name)
+}
+
+async function readExcelAsText(file) {
+  const buffer = await file.arrayBuffer()
+  const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array' })
+  const parts = []
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName]
+    const csv = XLSX.utils.sheet_to_csv(sheet)
+    parts.push(`[工作表: ${sheetName}]\n${csv}`)
+  }
+  return parts.join('\n\n')
 }
 
 export default function ChatSplit() {
@@ -146,8 +163,8 @@ export default function ChatSplit() {
 
   /* ── send flow ── */
   const triggerSendFlow = useCallback(
-    async (content) => {
-      dispatch({ type: 'SEND_MESSAGE', payload: content })
+    async (content, explicitAttachments = null) => {
+      dispatch({ type: 'SEND_MESSAGE', payload: { content, attachments: explicitAttachments } })
       setWorkbenchMessage('')
 
       const activeSession = state.sessions.find((s) => s.id === state.activeSessionId)
@@ -159,15 +176,11 @@ export default function ChatSplit() {
         const sessionIdSnapshot = state.activeSessionId
         dispatch({ type: 'UPDATE_SESSION_TITLE', payload: initialTitle })
         // fire-and-forget — 拿到 AI 标题后再 dispatch 一次
+        // 不在回调里读取闭包 state, 完全依赖 reducer 做 onlyIfMatches 校验,
+        // 避免闭包 state 陈旧导致误判。
         summarizeSessionTitle({ firstUserContent: content, modelName: selectedModel })
           .then((aiTitle) => {
             if (!aiTitle) return
-            // 切了会话就不要覆盖错的, 校验一下当前 session 还是这个,且标题没被人手动改过
-            const fresh = state.sessions.find((s) => s.id === sessionIdSnapshot)
-            if (!fresh) return
-            // 注意: dispatch 时 state 可能已经变, 这里依赖 reducer 内的 activeSessionId
-            // 所以严格地说,只有当 sessionIdSnapshot === current activeSessionId 才覆盖
-            // 简单起见: 直接发, reducer 里只动 active 那个; 如果用户切走了就不更新, 也可接受
             dispatch({ type: 'UPDATE_SESSION_TITLE_FOR', payload: { sessionId: sessionIdSnapshot, title: aiTitle, onlyIfMatches: initialTitle } })
           })
           .catch(() => {/* fallback 已经显示了 */})
@@ -189,7 +202,8 @@ export default function ChatSplit() {
         const messages = []
         const systemPrompt = skillId ? getSkillSystemPrompt(skillId, state.skillConfigs, runtimeSkills) : ''
         if (systemPrompt) messages.push({ role: 'system', content: systemPrompt })
-        messages.push({ role: 'user', content: buildUserContentWithAttachments(userPrompt || content, attachments) })
+        const attachmentsToUse = explicitAttachments || attachments
+        messages.push({ role: 'user', content: buildUserContentWithAttachments(userPrompt || content, attachmentsToUse) })
 
         dispatch({
           type: 'ADD_TASK',
@@ -324,7 +338,7 @@ export default function ChatSplit() {
         }
 
         setLastFailedPrompt('')
-        setAttachments([])
+        if (!explicitAttachments) setAttachments([])
         // G1: 工具产出的 artifact 优先于 slash skill 的 artifactType,
         //     因为它是模型显式选择的产物,且自带 source(模型给的 markdown).
         let artifactType =
@@ -403,14 +417,16 @@ export default function ChatSplit() {
   const handleSend = useCallback(() => {
     const typedContent = input.trim()
     if (!typedContent && attachments.length === 0) return
-    const content = typedContent || describeAttachmentPrompt(attachments)
+    const currentAttachments = [...attachments]
+    const content = typedContent || describeAttachmentPrompt(currentAttachments)
     setInput('')
+    setAttachments([])
     // 发送后顺手清掉本会话草稿,免得切走再回来还残留
     if (state.activeSessionId) {
       dispatch({ type: 'SET_SESSION_DRAFT', payload: { sessionId: state.activeSessionId, text: '' } })
     }
     setShowSlashMenu(false)
-    triggerSendFlow(content)
+    triggerSendFlow(content, currentAttachments)
   }, [attachments, input, triggerSendFlow, state.activeSessionId, dispatch])
 
   const handleKeyDown = useCallback((e) => {
@@ -442,6 +458,16 @@ export default function ChatSplit() {
             nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'file', error: '图片超过 4MB，已只附加文件信息' })
           } else {
             nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'image', dataUrl: await readFileAsDataUrl(file) })
+          }
+        } else if (isExcelFile(file)) {
+          const text = await readExcelAsText(file)
+          const textBytes = new TextEncoder().encode(text).length
+          if (textBytes > MAX_TEXT_BYTES) {
+            const maxChars = Math.floor(MAX_TEXT_BYTES / 2)
+            const truncated = text.slice(0, maxChars) + '\n\n[Excel 内容过长，已截断]'
+            nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'text', text: truncated })
+          } else {
+            nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'text', text })
           }
         } else if (isTextLikeFile(file) && file.size <= MAX_TEXT_BYTES) {
           nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'text', text: await file.text() })

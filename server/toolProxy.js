@@ -17,6 +17,7 @@ import http from 'node:http'
 import dns from 'node:dns/promises'
 import net from 'node:net'
 import { URL as NodeURL } from 'node:url'
+import { readJson } from './utils.js'
 import {
   chargeForToolUse,
   getPublicAccount,
@@ -122,26 +123,8 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body))
 }
 
-async function readJson(req) {
-  // ★ #36: 请求体大小限制 — 4MB,超出立即抛 413
-  const MAX_BYTES = 4 * 1024 * 1024
-  const chunks = []
-  let total = 0
-  for await (const chunk of req) {
-    total += chunk.length
-    if (total > MAX_BYTES) {
-      const err = new Error(`request body exceeds ${MAX_BYTES} bytes`)
-      err.statusCode = 413
-      throw err
-    }
-    chunks.push(chunk)
-  }
-  const raw = Buffer.concat(chunks).toString('utf8')
-  if (!raw.trim()) return {}
-  return JSON.parse(raw)
-}
-
 /**
+ * 用 node:https / node:http 直发请求
  * 用 node:https / node:http 直发请求(node 内置 fetch 会被 DuckDuckGo 反爬识别为 bot 拦截,
  * 回 14kb 的占位页;https module 直发回真正的 25kb 结果页)。
  *

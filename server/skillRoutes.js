@@ -1,20 +1,7 @@
 import { authenticateRequest } from './middleware.js'
 import { installValidatedSkillPack } from './skillImport.js'
 import { listRuntimeSkillIds, listRuntimeSkills } from './skillRegistry.js'
-
-const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
-
-function sendJson(res, status, body) {
-  res.writeHead(status, JSON_HEADERS)
-  res.end(JSON.stringify(body))
-}
-
-async function readJson(req) {
-  const chunks = []
-  for await (const chunk of req) chunks.push(chunk)
-  const raw = Buffer.concat(chunks).toString('utf8')
-  return raw.trim() ? JSON.parse(raw) : {}
-}
+import { readJson, sendJson } from './utils.js'
 
 export async function handleSkillRequest(req, res) {
   const url = new URL(req.url, 'http://localhost')

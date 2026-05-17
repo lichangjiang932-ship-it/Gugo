@@ -38,7 +38,8 @@ ENV SERVER_PORT=5173
 
 EXPOSE 5173
 
+COPY scripts/healthcheck.js ./scripts/healthcheck.js
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD node -e "fetch('http://localhost:5173/api/health').then(r => r.ok ? process.exit(0) : process.exit(1)).catch(() => process.exit(1))"
+  CMD node scripts/healthcheck.js
 
 CMD ["node", "server/appServer.js"]

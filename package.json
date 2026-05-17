@@ -29,6 +29,7 @@
     "react-router-dom": "^7.15.1",
     "rehype-highlight": "^7.0.2",
     "remark-gfm": "^4.0.1",
+    "xlsx": "^0.18.5",
     "zod": "^4.4.3"
   },
   "devDependencies": {

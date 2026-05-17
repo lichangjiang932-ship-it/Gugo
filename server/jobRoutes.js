@@ -1,21 +1,8 @@
 import { authenticateRequest } from './middleware.js'
-
-const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
-
-function sendJson(res, status, body) {
-  res.writeHead(status, JSON_HEADERS)
-  res.end(JSON.stringify(body))
-}
+import { readJson, sendJson } from './utils.js'
 
 function unauthorized(res) {
   return sendJson(res, 401, { error: 'Unauthorized' })
-}
-
-async function readJson(req) {
-  const chunks = []
-  for await (const chunk of req) chunks.push(chunk)
-  const raw = Buffer.concat(chunks).toString('utf8')
-  return raw.trim() ? JSON.parse(raw) : {}
 }
 
 function sendSse(res, event, data) {

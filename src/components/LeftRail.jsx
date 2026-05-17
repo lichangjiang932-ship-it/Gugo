@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { MessageSquare, Wrench, Shield, History, Settings, Sparkles, ListChecks, X, Search } from 'lucide-react'
 import { useAppContext } from '../store/AppContext'
@@ -48,6 +48,18 @@ export default function LeftRail() {
   const [loginLoading, setLoginLoading] = useState(false)
   // ★ #13: 全局会话搜索 — 标题 + 消息内容
   const [searchQuery, setSearchQuery] = useState('')
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('')
+  const searchTimerRef = useRef(null)
+
+  useEffect(() => {
+    if (searchTimerRef.current) window.clearTimeout(searchTimerRef.current)
+    searchTimerRef.current = window.setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery)
+    }, 150)
+    return () => {
+      if (searchTimerRef.current) window.clearTimeout(searchTimerRef.current)
+    }
+  }, [searchQuery])
 
   // ★ #25: 监听全局 Esc 清空搜索框 (preview 不开时才会派发)
   useEffect(() => {
@@ -73,7 +85,7 @@ export default function LeftRail() {
   const earlierSessions = sessions.filter((s) => s.createdAt < startOfWeek)
 
   // ★ #13: 搜索结果 — 标题命中 OR 任一消息 content 命中
-  const searchTrim = searchQuery.trim().toLowerCase()
+  const searchTrim = debouncedSearchQuery.trim().toLowerCase()
   const searchResults = useMemo(() => {
     if (!searchTrim) return null
     return sessions

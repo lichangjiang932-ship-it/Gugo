@@ -53,5 +53,5 @@ test('falls back to an attachment analysis prompt when only files are provided',
     { kind: 'file', name: 'archive.zip', sizeKB: '12.4', type: 'application/zip' },
   ])
 
-  assert.equal(content, '请分析附件内容。\n\n[附件: archive.zip, 12.4 KB, 类型: application/zip]')
+  assert.equal(content, '请分析附件内容。\n\n[附件: archive.zip, 12.4 KB, 类型: application/zip（二进制文件，无法直接读取内容）]')
 })

@@ -291,7 +291,7 @@ export function handleArtifactDownload(req, res) {
   // Ownership:artifact 的 user_id 必须匹配
   const artifact = getArtifactByFilename(filename)
   if (!artifact) { res.statusCode = 404; res.end('not found'); return }
-  if (artifact.userId && artifact.userId !== userId) {
+  if (artifact.userId !== userId) {
     // 不暴露存在性,统一 404
     res.statusCode = 404; res.end('not found'); return
   }

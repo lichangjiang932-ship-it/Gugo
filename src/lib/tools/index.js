@@ -90,12 +90,18 @@ const TOOL_SPECS = {
     type: 'function',
     function: {
       name: 'create_pptx',
-      description: '生成可下载的 PowerPoint 演示文稿(.pptx).当用户需要 PPT/幻灯片/汇报材料时调用。markdown 用 --- 或 # 分页,第一行作为页标题。生成完成后右侧会自动出现预览窗口,用户可一键下载。',
+      description: [
+        '生成可下载的 PowerPoint 演示文稿(.pptx).当用户需要 PPT/幻灯片/汇报材料时调用。',
+        'markdown 用 --- 分页,每页第一行 `# 标题`,第二行 HTML 注释指定类型: <!-- cover -->, <!-- toc -->, <!-- section -->, <!-- content -->, <!-- data -->, <!-- chart -->, <!-- table -->, <!-- split -->, <!-- process -->, <!-- quote -->, <!-- image -->, <!-- end -->.',
+        '图表页用 <!-- chart --> + fenced ```chart``` 块,语法: type: bar|line|pie / categories: a, b, c / series:\\n  系列名: 1, 2, 3.',
+        '每页 bullets ≤ 4 条且每条 ≤ 18 字,标题写结论句不要写抽象主题词.同类数据 3+ 项优先用 chart 或 table.',
+        '生成后右侧自动预览,用户可一键下载;点"高级"按钮走截图法导出更精致视觉。',
+      ].join(' '),
       parameters: {
         type: 'object',
         properties: {
           title: { type: 'string', description: '演示文稿标题(也作为下载文件名)' },
-          markdown: { type: 'string', description: '幻灯片 markdown 源,---/# 分页' },
+          markdown: { type: 'string', description: '幻灯片 markdown 源,--- 分页,首行 # 标题,次行 <!-- type -->' },
         },
         required: ['title', 'markdown'],
       },
@@ -301,6 +307,21 @@ async function execCreateXlsx(args) {
   }
 }
 
+// ★ 危险代码模式 — 沙箱逃逸/恶意行为拦截
+const DANGEROUS_PATTERNS = [
+  { pattern: /\beval\s*\(/, msg: '沙箱禁用 eval() — 请用本地状态与逻辑实现功能' },
+  { pattern: /\bnew\s+Function\s*\(/, msg: '沙箱禁用 new Function() — 请用常规函数定义' },
+  { pattern: /\bsetTimeout\s*\(\s*["']/, msg: '沙箱禁用 setTimeout 字符串参数 — 请传入函数' },
+  { pattern: /\bsetInterval\s*\(\s*["']/, msg: '沙箱禁用 setInterval 字符串参数 — 请传入函数' },
+  { pattern: /document\.write\s*\(/, msg: '沙箱禁用 document.write — 请用 JSX 渲染' },
+  { pattern: /window\.location\s*=/, msg: '沙箱禁用 window.location 跳转 — 请用本地交互实现功能' },
+  { pattern: /<script\b/i, msg: '沙箱禁用 <script> 标签 — 请用 JSX 与 hooks 实现逻辑' },
+  { pattern: /\brequire\s*\(/, msg: '沙箱禁用 require() — 只能用 React/ReactDOM 全局变量' },
+  { pattern: /\bimport\s*\(/, msg: '沙箱禁用动态 import() — 请用本地状态实现功能' },
+  { pattern: /\bfetch\s*\(|XMLHttpRequest|WebSocket/, msg: '沙箱禁用网络请求(fetch/XHR/WebSocket);请用本地状态生成示例数据' },
+  { pattern: /\bimport\s+[^;]*\bfrom\b/, msg: '沙箱不允许 import 外部包;只能用 React/ReactDOM(已作为全局变量注入)' },
+]
+
 async function execCreateReactComponent(args) {
   const title = String(args.title).trim().slice(0, 200) || 'react-component'
   const code = String(args.code)
@@ -309,11 +330,10 @@ async function execCreateReactComponent(args) {
   if (!/export\s+default/.test(code)) {
     throw new Error('代码缺少 export default — 请用 `export default function App() { ... }` 或 `export default () => ...`')
   }
-  if (/\bimport\s+[^;]*\bfrom\b/.test(code)) {
-    throw new Error('沙箱不允许 import 外部包;只能用 React/ReactDOM(已作为全局变量注入)')
-  }
-  if (/\bfetch\s*\(|XMLHttpRequest|WebSocket/.test(code)) {
-    throw new Error('沙箱禁用网络请求(fetch/XHR/WebSocket);请用本地状态生成示例数据')
+  for (const { pattern, msg } of DANGEROUS_PATTERNS) {
+    if (pattern.test(code)) {
+      throw new Error(msg)
+    }
   }
   return {
     content: JSON.stringify({

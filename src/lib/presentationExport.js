@@ -121,6 +121,51 @@ function parseProcessSteps(lines) {
   }).filter(Boolean)
 }
 
+// fenced ```chart``` 块或裸 key:value 行,返回 { type, categories, series:[{name, values}] }.
+// 容错:无 type 默认 bar;column 视作 bar;无 series 但末尾跟数值行,自动命名"系列 N".
+function parseChartBlock(lines) {
+  const body = []
+  let inFence = false
+  let sawFence = false
+  for (const raw of lines) {
+    const line = raw.trim()
+    if (/^```(\s*chart)?\s*$/i.test(line)) { sawFence = true; inFence = !inFence; continue }
+    if (sawFence && !inFence) continue
+    if (line) body.push(line)
+  }
+
+  let type = 'bar'
+  let categories = []
+  const series = []
+  for (const line of body) {
+    const mType = line.match(/^type\s*[:=]\s*(.+)$/i)
+    if (mType) {
+      const v = mType[1].trim().toLowerCase()
+      if (v === 'line' || v === 'pie') type = v
+      else if (v === 'column' || v === 'bar') type = 'bar'
+      continue
+    }
+    const mCat = line.match(/^(?:categories|labels|x|横轴)\s*[:=]\s*(.+)$/i)
+    if (mCat) {
+      categories = mCat[1].split(/[,，、]/).map((s) => s.trim()).filter(Boolean)
+      continue
+    }
+    if (/^series\s*[:=]?\s*$/i.test(line)) continue
+    const mRow = line.match(/^[-*]?\s*(?:["']?(.+?)["']?\s*[:：]\s*)?(.+)$/)
+    if (!mRow) continue
+    const valuesPart = mRow[2] || ''
+    const values = valuesPart.split(/[,，、\s]+/).map((s) => Number(s)).filter((n) => Number.isFinite(n))
+    if (values.length === 0) continue
+    const name = (mRow[1] || '').trim() || `系列${series.length + 1}`
+    series.push({ name, values })
+  }
+  if (!categories.length && series.length) {
+    const len = Math.max(...series.map((s) => s.values.length))
+    categories = Array.from({ length: len }, (_, i) => String(i + 1))
+  }
+  return { type, categories, series }
+}
+
 function chunkToSlide(lines, index) {
   const cleaned = lines.map((line) => line.trim()).filter(Boolean)
   if (!cleaned.length) return null
@@ -135,6 +180,11 @@ function chunkToSlide(lines, index) {
   }
 
   const rest = cleaned.slice(1)
+
+  if (type === 'chart') {
+    const chart = parseChartBlock(rest)
+    return { title, type, index, chart }
+  }
 
   const tableRows = parseTableLines(rest)
   if (tableRows.length >= 2 && (type === 'table' || type === 'content')) {
@@ -755,6 +805,84 @@ function addProcessSlide(pptx, slideData, index, total) {
   addPageNumber(slide, index, total)
 }
 
+/* ── Chart ── */
+// 用 pptxgenjs 原生 addChart 画柱/折/饼.调色板从主题 accent 派生,保持视觉一致.
+const CHART_PALETTE = [THEME.ember, THEME.cyan, '8A7B68', '4A6B82', 'C97C5D', '3E7A8C']
+
+function addChartSlide(pptx, slideData, index, total) {
+  const slide = pptx.addSlide()
+  slide.background = { color: THEME.paper }
+  slide.addShape(pptx.ShapeType.rect, {
+    x: 0, y: 0, w: 0.12, h: SLIDE_H,
+    fill: { color: THEME.ember }, line: { color: THEME.ember, width: 0 },
+  })
+  slide.addText(slideData.title, {
+    x: 0.7, y: 0.5, w: 11.8, h: 0.7,
+    fontFace: 'Aptos Display', fontSize: 28, bold: true, color: THEME.ink, margin: 0,
+  })
+  slide.addShape(pptx.ShapeType.rect, {
+    x: 0.7, y: 1.15, w: 0.6, h: 0.04,
+    fill: { color: THEME.ember }, line: { color: THEME.ember, width: 0 },
+  })
+
+  const chart = slideData.chart || { type: 'bar', categories: [], series: [] }
+  const chartType =
+    chart.type === 'line' ? pptx.ChartType.line
+    : chart.type === 'pie' ? pptx.ChartType.pie
+    : pptx.ChartType.bar
+
+  let data
+  if (chart.type === 'pie') {
+    const first = chart.series[0] || { name: '占比', values: [] }
+    data = [{
+      name: first.name,
+      labels: chart.categories.length ? chart.categories : first.values.map((_, i) => `项${i + 1}`),
+      values: first.values,
+    }]
+  } else {
+    data = chart.series.map((s) => ({
+      name: s.name,
+      labels: chart.categories.length ? chart.categories : s.values.map((_, i) => String(i + 1)),
+      values: s.values,
+    }))
+  }
+
+  if (data.length && data.some((d) => d.values && d.values.length)) {
+    slide.addChart(chartType, data, {
+      x: 0.7, y: 1.55, w: 12, h: 5.1,
+      chartColors: CHART_PALETTE.slice(0, Math.max(1, data.length)),
+      showLegend: data.length > 1 || chart.type === 'pie',
+      legendPos: 'b',
+      legendFontFace: 'Aptos',
+      legendFontSize: 11,
+      legendColor: THEME.inkSoft,
+      catAxisLabelFontFace: 'Aptos',
+      catAxisLabelFontSize: 10,
+      catAxisLabelColor: THEME.inkSoft,
+      valAxisLabelFontFace: 'Aptos',
+      valAxisLabelFontSize: 10,
+      valAxisLabelColor: THEME.inkSoft,
+      dataLabelColor: THEME.ink,
+      dataLabelFontFace: 'Aptos',
+      dataLabelFontSize: 10,
+      showValue: chart.type === 'pie',
+      barGapWidthPct: 60,
+      lineDataSymbol: chart.type === 'line' ? 'circle' : undefined,
+      lineDataSymbolSize: chart.type === 'line' ? 6 : undefined,
+      catGridLine: { style: 'none' },
+      valGridLine: { color: THEME.skeleton, style: 'solid', size: 0.5 },
+    })
+  } else {
+    slide.addText('（图表数据缺失）', {
+      x: 0.7, y: 3, w: 12, h: 0.5,
+      fontFace: 'Aptos', fontSize: 14, color: THEME.inkFade, align: 'center', margin: 0,
+    })
+  }
+
+  addBottomLine(slide)
+  addPageNumber(slide, index, total)
+}
+
 /* ── Section ── */
 
 function addSectionSlide(pptx, slideData, index, total) {
@@ -826,6 +954,7 @@ async function buildPresentationFromMarkdown(markdown, { title } = {}) {
       case 'split': addSplitSlide(pptx, slideData, index, total); break
       case 'table': addTableSlide(pptx, slideData, index, total); break
       case 'process': addProcessSlide(pptx, slideData, index, total); break
+      case 'chart': addChartSlide(pptx, slideData, index, total); break
       case 'section': addSectionSlide(pptx, slideData, index, total); break
       default: addContentSlide(pptx, slideData, index, total)
     }
@@ -874,6 +1003,139 @@ function escapeHtml(text) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
+}
+
+/* SVG chart renderer — 共享给 normal HTML 预览和 Premium HTML 截图导出.
+   Premium 走深色 bg 与高对比色,普通预览走 paper bg 与柔和坐标轴. */
+function niceCeil(v) {
+  if (v <= 0) return 1
+  const mag = Math.pow(10, Math.floor(Math.log10(v)))
+  const norm = v / mag
+  const nice = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10
+  return nice * mag
+}
+function formatChartNumber(v) {
+  const abs = Math.abs(v)
+  if (abs >= 10000) return (v / 1000).toFixed(0) + 'k'
+  if (abs >= 1000) return (v / 1000).toFixed(1) + 'k'
+  if (Number.isInteger(v)) return String(v)
+  return v.toFixed(1)
+}
+function buildChartSvg(chart, opts) {
+  const { palette, axisColor, gridColor, labelColor, valueColor, bg } = opts
+  const W = 1080, H = 540
+  const PAD = { top: 36, right: 40, bottom: 60, left: 70 }
+  const innerW = W - PAD.left - PAD.right
+  const innerH = H - PAD.top - PAD.bottom
+  const series = (chart?.series || []).filter((s) => s && Array.isArray(s.values) && s.values.length)
+  const categories = chart?.categories || []
+  if (!series.length) return ''
+
+  const bgRect = bg ? `<rect width="${W}" height="${H}" fill="${bg}"/>` : ''
+
+  if (chart.type === 'pie') {
+    const s0 = series[0]
+    const total = s0.values.reduce((a, b) => a + Math.max(0, Number(b) || 0), 0)
+    if (!total) return ''
+    const cx = W / 2 - 120, cy = H / 2 + 10
+    const R = Math.min(innerW, innerH) / 2 - 20
+    let angle = -Math.PI / 2
+    const slices = []
+    const legendItems = []
+    s0.values.forEach((v, i) => {
+      const a = Math.max(0, Number(v) || 0)
+      if (a <= 0) return
+      const frac = a / total
+      const da = frac * Math.PI * 2
+      const x1 = cx + R * Math.cos(angle), y1 = cy + R * Math.sin(angle)
+      const x2 = cx + R * Math.cos(angle + da), y2 = cy + R * Math.sin(angle + da)
+      const large = da > Math.PI ? 1 : 0
+      const color = palette[i % palette.length]
+      slices.push(`<path d="M ${cx} ${cy} L ${x1.toFixed(1)} ${y1.toFixed(1)} A ${R} ${R} 0 ${large} 1 ${x2.toFixed(1)} ${y2.toFixed(1)} Z" fill="${color}" opacity="0.92"/>`)
+      const labelAngle = angle + da / 2
+      const labelR = R * 0.62
+      const lx = cx + labelR * Math.cos(labelAngle), ly = cy + labelR * Math.sin(labelAngle)
+      slices.push(`<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" fill="#fff" font-size="14" font-weight="700" text-anchor="middle" dominant-baseline="middle">${(frac * 100).toFixed(1)}%</text>`)
+      legendItems.push({ cat: categories[i] || `项${i + 1}`, color })
+      angle += da
+    })
+    const legendX = cx + R + 60
+    const legend = legendItems.map((it, i) => {
+      const y = cy - (legendItems.length * 28) / 2 + i * 28
+      return `<rect x="${legendX}" y="${y - 10}" width="14" height="14" rx="2" fill="${it.color}"/>` +
+        `<text x="${legendX + 22}" y="${y}" fill="${labelColor}" font-size="14" dominant-baseline="middle">${escapeHtml(it.cat)}</text>`
+    }).join('')
+    return `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" style="width:100%;height:100%;display:block">
+${bgRect}${slices.join('')}${legend}</svg>`
+  }
+
+  const allValues = series.flatMap((s) => s.values.map((v) => Number(v) || 0))
+  const maxV = Math.max(...allValues, 0)
+  const minV = Math.min(...allValues, 0)
+  const niceMax = niceCeil(maxV || 1)
+  const niceMin = minV < 0 ? -niceCeil(-minV) : 0
+  const span = niceMax - niceMin || 1
+  const yToPx = (v) => PAD.top + innerH - ((v - niceMin) / span) * innerH
+  const catCount = Math.max(...series.map((s) => s.values.length), 1)
+  const xStep = innerW / catCount
+
+  let grid = ''
+  const ticks = 4
+  for (let t = 0; t <= ticks; t++) {
+    const v = niceMin + (span * t / ticks)
+    const y = yToPx(v).toFixed(1)
+    grid += `<line x1="${PAD.left}" y1="${y}" x2="${PAD.left + innerW}" y2="${y}" stroke="${gridColor}" stroke-width="0.5"/>` +
+      `<text x="${PAD.left - 8}" y="${y}" fill="${labelColor}" font-size="11" text-anchor="end" dominant-baseline="middle">${formatChartNumber(v)}</text>`
+  }
+
+  let xLabels = ''
+  for (let i = 0; i < catCount; i++) {
+    const x = PAD.left + xStep * (i + 0.5)
+    const cat = categories[i] || ''
+    xLabels += `<text x="${x.toFixed(1)}" y="${(PAD.top + innerH + 22).toFixed(1)}" fill="${labelColor}" font-size="12" text-anchor="middle">${escapeHtml(cat)}</text>`
+  }
+
+  let body
+  if (chart.type === 'line') {
+    body = series.map((s, sIdx) => {
+      const color = palette[sIdx % palette.length]
+      const points = s.values.map((v, i) => [PAD.left + xStep * (i + 0.5), yToPx(Number(v) || 0)])
+      const path = points.map(([x, y], i) => `${i === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)}`).join(' ')
+      const dots = points.map(([x, y]) => `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4.5" fill="${color}" stroke="${bg || '#fff'}" stroke-width="2"/>`).join('')
+      return `<path d="${path}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>${dots}`
+    }).join('')
+  } else {
+    const groupGap = 0.28
+    const barGroupW = xStep * (1 - groupGap)
+    const barW = Math.max(8, barGroupW / series.length)
+    body = series.map((s, sIdx) => {
+      const color = palette[sIdx % palette.length]
+      return s.values.map((v, i) => {
+        const val = Number(v) || 0
+        const x = PAD.left + xStep * i + (xStep * groupGap) / 2 + barW * sIdx
+        const y0 = yToPx(0)
+        const y = yToPx(val)
+        const top = Math.min(y, y0)
+        const h = Math.max(2, Math.abs(y - y0))
+        return `<rect x="${x.toFixed(1)}" y="${top.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" fill="${color}" rx="2"/>` +
+          `<text x="${(x + barW / 2).toFixed(1)}" y="${(top - 6).toFixed(1)}" fill="${valueColor}" font-size="11" font-weight="600" text-anchor="middle">${formatChartNumber(val)}</text>`
+      }).join('')
+    }).join('')
+  }
+
+  let legend = ''
+  if (series.length > 1) {
+    const lY = 22
+    legend = series.map((s, i) => {
+      const color = palette[i % palette.length]
+      const lx = PAD.left + i * 160
+      return `<rect x="${lx}" y="${lY - 10}" width="12" height="12" rx="2" fill="${color}"/>` +
+        `<text x="${lx + 18}" y="${lY}" fill="${labelColor}" font-size="12" dominant-baseline="middle">${escapeHtml(s.name)}</text>`
+    }).join('')
+  }
+
+  return `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet" style="width:100%;height:100%;display:block">
+${bgRect}${grid}<line x1="${PAD.left}" y1="${PAD.top}" x2="${PAD.left}" y2="${PAD.top + innerH}" stroke="${axisColor}" stroke-width="1"/><line x1="${PAD.left}" y1="${(PAD.top + innerH).toFixed(1)}" x2="${PAD.left + innerW}" y2="${(PAD.top + innerH).toFixed(1)}" stroke="${axisColor}" stroke-width="1"/>${body}${xLabels}${legend}</svg>`
 }
 
 const PREVIEW_CSS = `
@@ -1635,6 +1897,22 @@ function buildSlideHtml(slide, index, total) {
   <div class="section-line"></div>
 </div>`
     }
+    case 'chart': {
+      const svg = buildChartSvg(slide.chart, {
+        palette: ['#E86A3C', '#2E8FA3', '#8A7B68', '#4A6B82', '#C97C5D', '#3E7A8C'],
+        axisColor: '#8A7B68',
+        gridColor: 'rgba(42,31,23,0.10)',
+        labelColor: '#5E4F40',
+        valueColor: '#2A1F17',
+        bg: '',
+      })
+      return `<div class="slide slide-chart" style="background:#F4EFE5;padding:48px 56px;display:flex;flex-direction:column;box-sizing:border-box">
+  <div class="slide-number">SLIDE ${num} / ${totalStr}</div>
+  <h2 style="font-family:'Aptos Display','Source Han Sans SC',sans-serif;font-size:28px;font-weight:700;color:#2A1F17;margin:0 0 6px 0">${escapeHtml(slide.title)}</h2>
+  <div style="width:48px;height:3px;background:#E86A3C;margin-bottom:14px;border-radius:2px"></div>
+  <div style="flex:1;min-height:0">${svg || '<div style="color:#8A7B68;font-size:13px">（图表数据缺失）</div>'}</div>
+</div>`
+    }
     default: {
       const bullets = slide.bullets.map(b => `
     <li>${escapeHtml(b)}</li>`).join('')
@@ -1676,12 +1954,17 @@ export function buildHtmlPreview(markdown) {
    Premium Visual Export — HTML Screenshot → PPTX
    ═══════════════════════════════════════════════════════════════════════ */
 
+
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Premium Visual Export — HTML Screenshot → PPTX  (v2)
+   ═══════════════════════════════════════════════════════════════════════ */
+
 const PREMIUM_CSS = `
 * { margin:0; padding:0; box-sizing:border-box; }
-body {
+html,body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
-  background:#0d0b09;
-  padding:0;
+  background:#0a0908;
 }
 .slide {
   width:1920px;
@@ -1691,72 +1974,152 @@ body {
   background:#F4EFE5;
 }
 
+/* ── utilities ── */
+.grid-bg {
+  position:absolute; inset:0;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+  background-size:60px 60px;
+  pointer-events:none;
+}
+.grid-bg-light {
+  position:absolute; inset:0;
+  background-image:
+    linear-gradient(rgba(42,31,23,0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(42,31,23,0.04) 1px, transparent 1px);
+  background-size:48px 48px;
+  pointer-events:none;
+}
+.dot-texture {
+  position:absolute; inset:0;
+  background-image: radial-gradient(circle, rgba(255,255,255,0.06) 1px, transparent 1px);
+  background-size:24px 24px;
+  pointer-events:none;
+}
+.glow-ember {
+  position:absolute;
+  border-radius:50%;
+  filter:blur(80px);
+  opacity:0.35;
+  pointer-events:none;
+}
+.glow-cyan {
+  position:absolute;
+  border-radius:50%;
+  filter:blur(80px);
+  opacity:0.25;
+  pointer-events:none;
+}
+.accent-bar-v {
+  position:absolute;
+  left:0; top:0; bottom:0;
+  width:6px;
+  background: linear-gradient(180deg, #E86A3C 0%, #2E8FA3 100%);
+}
+.accent-bar-h {
+  position:absolute;
+  left:0; right:0;
+  height:6px;
+  background: linear-gradient(90deg, #E86A3C 0%, #2E8FA3 100%);
+}
+.corner-badge {
+  position:absolute;
+  top:40px; right:50px;
+  font-size:14px;
+  font-weight:600;
+  letter-spacing:4px;
+  text-transform:uppercase;
+  color:#8A7B68;
+  padding:8px 16px;
+  border:1px solid rgba(138,123,104,0.3);
+  border-radius:4px;
+}
+
 /* ── Cover ── */
 .slide-cover {
-  background: linear-gradient(145deg, #15120f 0%, #1e1913 40%, #15120f 100%);
+  background: linear-gradient(160deg, #12100e 0%, #1a1712 35%, #0f0d0b 70%, #1a1510 100%);
   display:flex;
   flex-direction:column;
   align-items:center;
   justify-content:center;
 }
-.cover-decor-1 {
-  position:absolute;
+.slide-cover .glow-ember {
+  width:900px; height:900px;
+  top:-300px; right:-250px;
+  background: radial-gradient(circle, rgba(232,106,60,0.5) 0%, transparent 60%);
+}
+.slide-cover .glow-cyan {
   width:700px; height:700px;
-  top:-250px; right:-200px;
-  border-radius:50%;
-  background: radial-gradient(circle, rgba(232,106,60,0.18) 0%, transparent 70%);
+  bottom:-250px; left:-200px;
+  background: radial-gradient(circle, rgba(46,143,163,0.4) 0%, transparent 60%);
 }
-.cover-decor-2 {
+.cover-grid { opacity:0.4; }
+.cover-wave {
   position:absolute;
-  width:500px; height:500px;
-  bottom:-150px; left:-150px;
-  border-radius:50%;
-  background: radial-gradient(circle, rgba(46,143,163,0.12) 0%, transparent 70%);
-}
-.cover-line-top {
-  position:absolute;
-  top:80px; left:50%; transform:translateX(-50%);
-  width:100px; height:4px;
-  background:#E86A3C;
-  border-radius:2px;
-}
-.cover-line-bottom {
-  position:absolute;
-  bottom:100px; left:50%; transform:translateX(-50%);
-  width:60px; height:3px;
-  background:#E86A3C;
-  border-radius:2px;
+  bottom:0; left:0; right:0;
+  height:180px;
+  background: linear-gradient(180deg, transparent 0%, rgba(232,106,60,0.08) 100%);
+  clip-path: polygon(0% 60%, 15% 45%, 35% 55%, 55% 35%, 75% 50%, 100% 30%, 100% 100%, 0% 100%);
 }
 .cover-tag {
-  font-size:18px;
-  letter-spacing:10px;
+  font-size:16px;
+  letter-spacing:12px;
   text-transform:uppercase;
   color:#E86A3C;
   margin-bottom:50px;
-  font-weight:600;
+  font-weight:700;
+  padding:10px 24px;
+  border:2px solid rgba(232,106,60,0.4);
+  border-radius:4px;
+  background: rgba(232,106,60,0.08);
 }
 .cover-title {
-  font-size:96px;
-  font-weight:800;
-  letter-spacing:-2px;
-  line-height:1.1;
-  max-width:1400px;
+  font-size:110px;
+  font-weight:900;
+  letter-spacing:-3px;
+  line-height:1.05;
+  max-width:1500px;
   text-align:center;
   color:#F4EFE5;
+  text-shadow: 0 4px 30px rgba(0,0,0,0.4);
 }
 .cover-subtitle {
-  font-size:32px;
+  font-size:34px;
   color:#b8a88a;
-  margin-top:40px;
-  max-width:1000px;
+  margin-top:45px;
+  max-width:1100px;
   text-align:center;
-  line-height:1.4;
+  line-height:1.5;
+  font-weight:400;
 }
 .cover-date {
-  font-size:20px;
+  font-size:18px;
   color:#7a6e5a;
-  margin-top:60px;
-  letter-spacing:4px;
+  margin-top:70px;
+  letter-spacing:6px;
+  font-weight:500;
+}
+.cover-line-bottom {
+  position:absolute;
+  bottom:80px; left:50%; transform:translateX(-50%);
+  width:80px; height:4px;
+  background: linear-gradient(90deg, transparent 0%, #E86A3C 50%, transparent 100%);
+  border-radius:2px;
+}
+.cover-decor-ring {
+  position:absolute;
+  width:300px; height:300px;
+  top:60px; right:80px;
+  border:2px solid rgba(232,106,60,0.15);
+  border-radius:50%;
+}
+.cover-decor-ring::before {
+  content:'';
+  position:absolute;
+  inset:30px;
+  border:1px solid rgba(46,143,163,0.12);
+  border-radius:50%;
 }
 
 /* ── TOC ── */
@@ -1765,44 +2128,45 @@ body {
   display:flex;
 }
 .toc-sidebar {
-  width:420px;
-  background: linear-gradient(180deg, #2A1F17 0%, #1e1710 100%);
+  width:480px;
+  background: linear-gradient(180deg, #1e1913 0%, #15120f 100%);
   display:flex;
   flex-direction:column;
   justify-content:center;
-  padding:80px 50px;
+  padding:100px 60px;
   position:relative;
 }
-.toc-sidebar::after {
-  content:'';
-  position:absolute;
-  top:60px; right:-30px;
-  width:60px; height:60px;
-  border-radius:50%;
-  background: radial-gradient(circle, rgba(232,106,60,0.25) 0%, transparent 70%);
-}
+.toc-sidebar .dot-texture { opacity:0.5; }
 .toc-sidebar-title {
-  font-size:56px;
-  font-weight:800;
+  font-size:64px;
+  font-weight:900;
   color:#F4EFE5;
   line-height:1.1;
+  letter-spacing:-1px;
 }
 .toc-sidebar-sub {
-  font-size:18px;
-  letter-spacing:6px;
+  font-size:20px;
+  letter-spacing:8px;
   text-transform:uppercase;
   color:#8A7B68;
-  margin-top:20px;
+  margin-top:24px;
 }
 .toc-sidebar-line {
-  width:60px; height:4px;
-  background:#E86A3C;
-  margin-top:40px;
-  border-radius:2px;
+  width:80px; height:5px;
+  background: linear-gradient(90deg, #E86A3C 0%, #c9552e 100%);
+  margin-top:50px;
+  border-radius:3px;
+}
+.toc-sidebar-ring {
+  position:absolute;
+  width:200px; height:200px;
+  top:60px; right:-60px;
+  border:2px solid rgba(232,106,60,0.15);
+  border-radius:50%;
 }
 .toc-main {
   flex:1;
-  padding:80px 80px 80px 100px;
+  padding:100px 100px 100px 120px;
   display:flex;
   flex-direction:column;
   justify-content:center;
@@ -1810,21 +2174,22 @@ body {
 .toc-item {
   display:flex;
   align-items:baseline;
-  gap:24px;
-  padding:28px 0;
-  border-bottom:1px solid rgba(219,210,190,0.6);
+  gap:28px;
+  padding:32px 0;
+  border-bottom:1px solid rgba(219,210,190,0.5);
 }
 .toc-item-num {
-  font-size:20px;
-  font-weight:700;
+  font-size:22px;
+  font-weight:800;
   color:#E86A3C;
   font-variant-numeric: tabular-nums;
-  min-width:40px;
+  min-width:48px;
 }
 .toc-item-text {
-  font-size:28px;
+  font-size:30px;
   color:#2A1F17;
-  font-weight:500;
+  font-weight:600;
+  letter-spacing:-0.3px;
 }
 
 /* ── Section ── */
@@ -1833,43 +2198,48 @@ body {
   display:flex;
   flex-direction:column;
   justify-content:center;
-  padding-left:180px;
+  padding-left:200px;
   position:relative;
 }
-.section-decor-num {
+.slide-section .grid-bg-light { opacity:0.6; }
+.section-bg-num {
   position:absolute;
-  top:80px; left:100px;
-  font-size:220px;
+  top:50px; left:80px;
+  font-size:280px;
   font-weight:900;
-  color:rgba(232,106,60,0.08);
+  color:rgba(232,106,60,0.06);
   line-height:1;
   font-variant-numeric:tabular-nums;
+  letter-spacing:-10px;
 }
-.section-decor-circle {
+.section-decor-tri {
   position:absolute;
-  width:400px; height:400px;
-  bottom:-100px; right:-100px;
-  border-radius:50%;
-  background: radial-gradient(circle, rgba(46,143,163,0.1) 0%, transparent 70%);
+  width:0; height:0;
+  bottom:80px; right:100px;
+  border-left:80px solid transparent;
+  border-right:80px solid transparent;
+  border-bottom:140px solid rgba(46,143,163,0.08);
+  transform:rotate(15deg);
 }
 .section-title {
-  font-size:80px;
-  font-weight:800;
+  font-size:88px;
+  font-weight:900;
   color:#2A1F17;
-  max-width:1200px;
-  line-height:1.15;
+  max-width:1300px;
+  line-height:1.1;
+  letter-spacing:-2px;
 }
 .section-desc {
-  font-size:28px;
+  font-size:30px;
   color:#5E4F40;
-  margin-top:30px;
-  max-width:900px;
-  line-height:1.5;
+  margin-top:35px;
+  max-width:1000px;
+  line-height:1.6;
 }
 .section-line {
-  width:80px; height:5px;
-  background:#E86A3C;
-  margin-top:40px;
+  width:100px; height:6px;
+  background: linear-gradient(90deg, #E86A3C 0%, #2E8FA3 100%);
+  margin-top:45px;
   border-radius:3px;
 }
 
@@ -1878,172 +2248,205 @@ body {
   background:#F4EFE5;
   display:flex;
   flex-direction:column;
-  padding:90px 140px;
+  padding:100px 160px;
+  position:relative;
 }
-.content-header-tag {
+.slide-content .accent-bar-v {
+  width:8px;
+  background: linear-gradient(180deg, #E86A3C 0%, rgba(232,106,60,0.3) 70%, transparent 100%);
+}
+.content-tag {
   font-size:16px;
-  letter-spacing:6px;
+  letter-spacing:7px;
   text-transform:uppercase;
   color:#E86A3C;
   margin-bottom:20px;
-  font-weight:600;
-}
-.content-header-title {
-  font-size:56px;
   font-weight:700;
-  color:#2A1F17;
-  line-height:1.2;
 }
-.content-header-line {
-  width:60px; height:4px;
-  background:#E86A3C;
-  margin-top:24px;
-  border-radius:2px;
+.content-title {
+  font-size:64px;
+  font-weight:900;
+  color:#2A1F17;
+  line-height:1.15;
+  letter-spacing:-1px;
+}
+.content-title-line {
+  width:80px; height:5px;
+  background: linear-gradient(90deg, #E86A3C 0%, #2E8FA3 100%);
+  margin-top:28px;
+  border-radius:3px;
 }
 .content-bullets {
   list-style:none;
-  margin-top:50px;
+  margin-top:60px;
   display:flex;
   flex-direction:column;
-  gap:4px;
+  gap:8px;
 }
 .content-bullets li {
-  font-size:28px;
-  color:#5E4F40;
+  font-size:30px;
+  color:#3d3328;
   line-height:1.55;
-  padding:18px 0 18px 48px;
+  padding:20px 0 20px 56px;
   position:relative;
-  border-bottom:1px solid rgba(219,210,190,0.5);
+  border-bottom:1px solid rgba(219,210,190,0.4);
 }
 .content-bullets li:last-child { border-bottom:none; }
-.content-bullets li .bullet-dot {
+.content-bullets li .bullet-diamond {
   position:absolute;
   left:0; top:28px;
   width:14px; height:14px;
-  background:#E86A3C;
-  border-radius:50%;
+  background: linear-gradient(135deg, #E86A3C 0%, #c9552e 100%);
+  transform:rotate(45deg);
+  border-radius:2px;
+}
+.content-footer-line {
+  position:absolute;
+  bottom:50px; left:160px; right:160px;
+  height:2px;
+  background: linear-gradient(90deg, rgba(232,106,60,0.3) 0%, transparent 100%);
 }
 
 /* ── Data ── */
 .slide-data {
-  background: linear-gradient(180deg, #15120f 0%, #1e1913 100%);
+  background: linear-gradient(180deg, #0f0d0b 0%, #1a1712 50%, #0f0d0b 100%);
   display:flex;
   flex-direction:column;
-  padding:90px 140px;
+  padding:100px 140px;
   position:relative;
 }
-.data-decor {
+.slide-data .grid-bg { opacity:0.3; }
+.data-glow-1 {
+  position:absolute;
+  width:800px; height:800px;
+  top:-300px; right:-300px;
+  border-radius:50%;
+  background: radial-gradient(circle, rgba(232,106,60,0.2) 0%, transparent 55%);
+  filter:blur(40px);
+  pointer-events:none;
+}
+.data-glow-2 {
   position:absolute;
   width:600px; height:600px;
-  top:-200px; right:-200px;
+  bottom:-200px; left:-200px;
   border-radius:50%;
-  background: radial-gradient(circle, rgba(232,106,60,0.1) 0%, transparent 70%);
+  background: radial-gradient(circle, rgba(46,143,163,0.15) 0%, transparent 55%);
+  filter:blur(40px);
+  pointer-events:none;
 }
-.data-header-tag {
+.data-tag {
   font-size:16px;
-  letter-spacing:6px;
+  letter-spacing:7px;
   text-transform:uppercase;
   color:#E86A3C;
   margin-bottom:20px;
-  font-weight:600;
-}
-.data-header-title {
-  font-size:56px;
   font-weight:700;
-  color:#F4EFE5;
-  line-height:1.2;
 }
-.data-header-line {
-  width:60px; height:4px;
-  background:#E86A3C;
-  margin-top:24px;
-  border-radius:2px;
+.data-title {
+  font-size:64px;
+  font-weight:900;
+  color:#F4EFE5;
+  line-height:1.15;
+  letter-spacing:-1px;
+}
+.data-title-line {
+  width:80px; height:5px;
+  background: linear-gradient(90deg, #E86A3C 0%, #2E8FA3 100%);
+  margin-top:28px;
+  border-radius:3px;
 }
 .data-grid {
   display:flex;
-  gap:32px;
-  margin-top:60px;
+  gap:40px;
+  margin-top:70px;
 }
 .data-card {
   flex:1;
-  background: rgba(244,239,229,0.06);
-  border:1px solid rgba(244,239,229,0.12);
-  border-radius:20px;
-  padding:50px 30px;
+  background: rgba(244,239,229,0.04);
+  border:1px solid rgba(244,239,229,0.1);
+  border-radius:24px;
+  padding:55px 35px;
   text-align:center;
-  backdrop-filter:blur(12px);
+  backdrop-filter:blur(16px);
   position:relative;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.05);
 }
-.data-card-accent {
+.data-card-glow {
   position:absolute;
-  top:0; left:50%; transform:translateX(-50%);
-  width:60px; height:4px;
-  background:#E86A3C;
-  border-radius:0 0 4px 4px;
+  top:-1px; left:15%; right:15%;
+  height:2px;
+  background: linear-gradient(90deg, transparent 0%, #E86A3C 50%, transparent 100%);
+  border-radius:2px;
 }
 .data-value {
-  font-size:80px;
-  font-weight:800;
+  font-size:90px;
+  font-weight:900;
   color:#E86A3C;
   line-height:1;
+  letter-spacing:-2px;
 }
 .data-unit {
-  font-size:40px;
-  font-weight:600;
+  font-size:44px;
+  font-weight:700;
 }
 .data-label {
-  font-size:22px;
+  font-size:24px;
   color:#a89b82;
-  margin-top:20px;
-  line-height:1.4;
+  margin-top:24px;
+  line-height:1.5;
 }
 .data-card-line {
-  width:40px; height:3px;
-  background:#E86A3C;
-  margin:30px auto 0;
+  width:50px; height:3px;
+  background: linear-gradient(90deg, #E86A3C 0%, #2E8FA3 100%);
+  margin:35px auto 0;
   border-radius:2px;
 }
 
 /* ── Quote ── */
 .slide-quote {
-  background: linear-gradient(135deg, #1e1913 0%, #15120f 100%);
+  background: linear-gradient(135deg, #15120f 0%, #1e1913 50%, #15120f 100%);
   display:flex;
   flex-direction:column;
   align-items:center;
   justify-content:center;
-  padding:140px;
+  padding:160px;
   position:relative;
 }
-.quote-decor {
+.slide-quote .dot-texture { opacity:0.4; }
+.quote-glow {
   position:absolute;
-  width:500px; height:500px;
-  top:-150px; left:-150px;
+  width:600px; height:600px;
+  top:-200px; left:-200px;
   border-radius:50%;
-  background: radial-gradient(circle, rgba(46,143,163,0.12) 0%, transparent 70%);
+  background: radial-gradient(circle, rgba(46,143,163,0.2) 0%, transparent 55%);
+  filter:blur(50px);
+  pointer-events:none;
 }
-.quote-mark {
-  font-size:200px;
+.quote-mark-svg {
+  font-size:220px;
   font-weight:900;
-  color:rgba(232,106,60,0.18);
-  line-height:0.5;
-  margin-bottom:30px;
+  color:rgba(232,106,60,0.15);
+  line-height:0.4;
+  margin-bottom:20px;
+  font-family: Georgia, serif;
 }
 .quote-text {
-  font-size:48px;
+  font-size:52px;
   font-style:italic;
-  line-height:1.5;
+  line-height:1.55;
   max-width:1400px;
   text-align:center;
   color:#F4EFE5;
+  font-weight:500;
 }
 .quote-line {
-  width:60px; height:3px;
-  background:#E86A3C;
+  width:80px; height:4px;
+  background: linear-gradient(90deg, #E86A3C 0%, #2E8FA3 100%);
   margin:50px auto;
   border-radius:2px;
 }
 .quote-source {
-  font-size:24px;
+  font-size:26px;
   color:#8a7d68;
 }
 
@@ -2052,102 +2455,127 @@ body {
   background:#F4EFE5;
   display:flex;
   flex-direction:column;
-  padding:90px 140px;
+  padding:100px 140px;
+  position:relative;
 }
-.split-header-tag {
+.slide-split .grid-bg-light { opacity:0.5; }
+.split-tag {
   font-size:16px;
-  letter-spacing:6px;
+  letter-spacing:7px;
   text-transform:uppercase;
   color:#E86A3C;
   margin-bottom:20px;
-  font-weight:600;
-}
-.split-header-title {
-  font-size:56px;
   font-weight:700;
-  color:#2A1F17;
-  line-height:1.2;
 }
-.split-header-line {
-  width:60px; height:4px;
-  background:#E86A3C;
-  margin-top:24px;
-  border-radius:2px;
+.split-title {
+  font-size:64px;
+  font-weight:900;
+  color:#2A1F17;
+  line-height:1.15;
+  letter-spacing:-1px;
+}
+.split-title-line {
+  width:80px; height:5px;
+  background: linear-gradient(90deg, #E86A3C 0%, #2E8FA3 100%);
+  margin-top:28px;
+  border-radius:3px;
 }
 .split-body {
   display:flex;
-  gap:60px;
-  margin-top:50px;
+  gap:50px;
+  margin-top:60px;
   flex:1;
 }
 .split-col {
   flex:1;
-  padding:50px;
-  border-radius:24px;
+  padding:55px;
+  border-radius:28px;
   display:flex;
   flex-direction:column;
+  position:relative;
+  overflow:hidden;
 }
 .split-col-cyan {
-  background: linear-gradient(135deg, rgba(46,143,163,0.08) 0%, rgba(46,143,163,0.02) 100%);
-  border:2px solid rgba(46,143,163,0.2);
+  background: linear-gradient(135deg, rgba(46,143,163,0.06) 0%, rgba(46,143,163,0.02) 100%);
+  border:2px solid rgba(46,143,163,0.18);
+  box-shadow: 0 4px 20px rgba(46,143,163,0.08);
 }
 .split-col-ember {
-  background: linear-gradient(135deg, rgba(232,106,60,0.08) 0%, rgba(232,106,60,0.02) 100%);
-  border:2px solid rgba(232,106,60,0.2);
+  background: linear-gradient(135deg, rgba(232,106,60,0.06) 0%, rgba(232,106,60,0.02) 100%);
+  border:2px solid rgba(232,106,60,0.18);
+  box-shadow: 0 4px 20px rgba(232,106,60,0.08);
+}
+.split-col-accent {
+  position:absolute;
+  top:0; left:0; right:0;
+  height:5px;
+  border-radius:28px 28px 0 0;
+}
+.split-col-cyan .split-col-accent {
+  background: linear-gradient(90deg, #2E8FA3 0%, #236b7a 100%);
+}
+.split-col-ember .split-col-accent {
+  background: linear-gradient(90deg, #E86A3C 0%, #c9552e 100%);
 }
 .split-col-title {
-  font-size:36px;
-  font-weight:700;
-  margin-bottom:30px;
+  font-size:40px;
+  font-weight:900;
+  margin-bottom:35px;
+  letter-spacing:-0.5px;
 }
 .split-col-title-cyan { color:#2E8FA3; }
 .split-col-title-ember { color:#E86A3C; }
 .split-col-bullets { list-style:none; }
 .split-col-bullets li {
-  font-size:24px;
-  color:#5E4F40;
+  font-size:26px;
+  color:#3d3328;
   line-height:1.6;
-  padding:14px 0 14px 36px;
+  padding:16px 0 16px 40px;
   position:relative;
+  border-bottom:1px solid rgba(219,210,190,0.3);
 }
+.split-col-bullets li:last-child { border-bottom:none; }
 .split-col-bullets li .bullet-square {
   position:absolute;
-  left:0; top:22px;
-  width:10px; height:10px;
+  left:0; top:24px;
+  width:12px; height:12px;
   border-radius:3px;
 }
-.bullet-square-cyan { background:#2E8FA3; }
-.bullet-square-ember { background:#E86A3C; }
+.bullet-square-cyan { background: linear-gradient(135deg, #2E8FA3 0%, #236b7a 100%); }
+.bullet-square-ember { background: linear-gradient(135deg, #E86A3C 0%, #c9552e 100%); }
 
 /* ── Table ── */
 .slide-table {
   background:#F4EFE5;
   display:flex;
   flex-direction:column;
-  padding:90px 140px;
+  padding:100px 140px;
+  position:relative;
 }
-.table-header-tag {
+.slide-table .grid-bg-light { opacity:0.5; }
+.table-tag {
   font-size:16px;
-  letter-spacing:6px;
+  letter-spacing:7px;
   text-transform:uppercase;
   color:#2E8FA3;
   margin-bottom:20px;
-  font-weight:600;
-}
-.table-header-title {
-  font-size:56px;
   font-weight:700;
-  color:#2A1F17;
-  line-height:1.2;
 }
-.table-header-line {
-  width:60px; height:4px;
-  background:#2E8FA3;
-  margin-top:24px;
-  border-radius:2px;
+.table-title {
+  font-size:64px;
+  font-weight:900;
+  color:#2A1F17;
+  line-height:1.15;
+  letter-spacing:-1px;
+}
+.table-title-line {
+  width:80px; height:5px;
+  background: linear-gradient(90deg, #2E8FA3 0%, #236b7a 100%);
+  margin-top:28px;
+  border-radius:3px;
 }
 .table-body {
-  margin-top:50px;
+  margin-top:55px;
   flex:1;
   overflow:auto;
 }
@@ -2155,25 +2583,29 @@ body {
   width:100%;
   border-collapse:separate;
   border-spacing:0;
-  font-size:24px;
+  font-size:26px;
+  box-shadow: 0 8px 32px rgba(42,31,23,0.08);
+  border-radius:16px;
+  overflow:hidden;
 }
 .table-body th {
   background: linear-gradient(135deg, #2E8FA3 0%, #267a8c 100%);
   color:white;
-  padding:28px 32px;
+  padding:32px 36px;
   text-align:left;
-  font-weight:600;
+  font-weight:700;
 }
-.table-body th:first-child { border-radius:12px 0 0 0; }
-.table-body th:last-child { border-radius:0 12px 0 0; }
+.table-body th:first-child { border-radius:16px 0 0 0; }
+.table-body th:last-child { border-radius:0 16px 0 0; }
 .table-body td {
   background:white;
-  color:#5E4F40;
-  padding:22px 32px;
+  color:#3d3328;
+  padding:26px 36px;
   border-bottom:2px solid #EAE2D2;
+  font-weight:500;
 }
-.table-body tr:last-child td:first-child { border-radius:0 0 0 12px; }
-.table-body tr:last-child td:last-child { border-radius:0 0 12px 0; }
+.table-body tr:last-child td:first-child { border-radius:0 0 0 16px; }
+.table-body tr:last-child td:last-child { border-radius:0 0 16px 0; }
 .table-body tr:nth-child(even) td { background:#faf8f4; }
 
 /* ── Process ── */
@@ -2181,34 +2613,46 @@ body {
   background:#F4EFE5;
   display:flex;
   flex-direction:column;
-  padding:90px 140px;
+  padding:100px 140px;
+  position:relative;
 }
-.process-header-tag {
+.slide-process .grid-bg-light { opacity:0.5; }
+.process-tag {
   font-size:16px;
-  letter-spacing:6px;
+  letter-spacing:7px;
   text-transform:uppercase;
   color:#2E8FA3;
   margin-bottom:20px;
-  font-weight:600;
-}
-.process-header-title {
-  font-size:56px;
   font-weight:700;
-  color:#2A1F17;
-  line-height:1.2;
 }
-.process-header-line {
-  width:60px; height:4px;
-  background:#2E8FA3;
-  margin-top:24px;
-  border-radius:2px;
+.process-title {
+  font-size:64px;
+  font-weight:900;
+  color:#2A1F17;
+  line-height:1.15;
+  letter-spacing:-1px;
+}
+.process-title-line {
+  width:80px; height:5px;
+  background: linear-gradient(90deg, #2E8FA3 0%, #236b7a 100%);
+  margin-top:28px;
+  border-radius:3px;
 }
 .process-body {
   display:flex;
   align-items:flex-start;
   gap:20px;
-  margin-top:60px;
+  margin-top:70px;
   flex:1;
+  position:relative;
+}
+.process-track {
+  position:absolute;
+  top:44px; left:90px; right:90px;
+  height:3px;
+  background: linear-gradient(90deg, #E86A3C 0%, #2E8FA3 100%);
+  opacity:0.3;
+  border-radius:2px;
 }
 .process-step {
   flex:1;
@@ -2216,39 +2660,41 @@ body {
   display:flex;
   flex-direction:column;
   align-items:center;
+  position:relative;
+  z-index:1;
 }
 .process-circle {
-  width:90px; height:90px;
+  width:100px; height:100px;
   border-radius:50%;
   display:inline-flex;
   align-items:center;
   justify-content:center;
-  font-size:36px;
-  font-weight:800;
+  font-size:40px;
+  font-weight:900;
   color:white;
-  margin-bottom:30px;
-  box-shadow:0 8px 24px rgba(0,0,0,0.15);
+  margin-bottom:35px;
+  box-shadow: 0 8px 30px rgba(0,0,0,0.2), inset 0 2px 4px rgba(255,255,255,0.2);
+  position:relative;
 }
 .process-circle-ember { background: linear-gradient(135deg, #E86A3C 0%, #c9552e 100%); }
 .process-circle-cyan { background: linear-gradient(135deg, #2E8FA3 0%, #236b7a 100%); }
+.process-circle-ring {
+  position:absolute;
+  inset:-6px;
+  border-radius:50%;
+  border:2px solid rgba(255,255,255,0.15);
+}
 .process-name {
-  font-size:28px;
-  font-weight:700;
+  font-size:30px;
+  font-weight:800;
   color:#2A1F17;
 }
 .process-desc {
-  font-size:20px;
+  font-size:22px;
   color:#5E4F40;
-  margin-top:16px;
+  margin-top:18px;
   line-height:1.5;
-  max-width:280px;
-}
-.process-arrow {
-  font-size:36px;
-  color:#DBD2BE;
-  margin-top:26px;
-  flex-shrink:0;
-  font-weight:300;
+  max-width:300px;
 }
 
 /* ── Image ── */
@@ -2256,118 +2702,150 @@ body {
   background:#F4EFE5;
   display:flex;
   flex-direction:column;
-  padding:90px 140px;
+  padding:100px 140px;
+  position:relative;
 }
-.image-header-tag {
+.slide-image .grid-bg-light { opacity:0.5; }
+.image-tag {
   font-size:16px;
-  letter-spacing:6px;
+  letter-spacing:7px;
   text-transform:uppercase;
   color:#E86A3C;
   margin-bottom:20px;
-  font-weight:600;
-}
-.image-header-title {
-  font-size:56px;
   font-weight:700;
-  color:#2A1F17;
-  line-height:1.2;
 }
-.image-header-line {
-  width:60px; height:4px;
-  background:#E86A3C;
-  margin-top:24px;
-  border-radius:2px;
+.image-title {
+  font-size:64px;
+  font-weight:900;
+  color:#2A1F17;
+  line-height:1.15;
+  letter-spacing:-1px;
+}
+.image-title-line {
+  width:80px; height:5px;
+  background: linear-gradient(90deg, #E86A3C 0%, #2E8FA3 100%);
+  margin-top:28px;
+  border-radius:3px;
 }
 .image-body {
   display:flex;
   gap:60px;
-  margin-top:50px;
+  margin-top:55px;
   flex:1;
   overflow:hidden;
 }
 .image-text { flex:1; }
 .image-text ul { list-style:none; }
 .image-text li {
-  font-size:26px;
-  color:#5E4F40;
+  font-size:28px;
+  color:#3d3328;
   line-height:1.6;
-  padding:16px 0 16px 40px;
+  padding:18px 0 18px 44px;
   position:relative;
+  border-bottom:1px solid rgba(219,210,190,0.3);
 }
-.image-text li .bullet-dot {
+.image-text li:last-child { border-bottom:none; }
+.image-text li .bullet-diamond {
   position:absolute;
   left:0; top:26px;
-  width:12px; height:12px;
-  background:#E86A3C;
-  border-radius:50%;
+  width:14px; height:14px;
+  background: linear-gradient(135deg, #E86A3C 0%, #c9552e 100%);
+  transform:rotate(45deg);
+  border-radius:2px;
 }
 .image-placeholder {
   width:45%;
   background: linear-gradient(135deg, #EAE2D2 0%, #F4EFE5 100%);
-  border:3px dashed #C9BFA8;
-  border-radius:20px;
+  border:3px dashed rgba(201,191,168,0.6);
+  border-radius:24px;
   display:flex;
   align-items:center;
   justify-content:center;
-  font-size:24px;
+  font-size:26px;
   color:#8A7B68;
+  position:relative;
+  overflow:hidden;
+}
+.image-placeholder::before {
+  content:'';
+  position:absolute;
+  inset:20px;
+  border:2px dashed rgba(201,191,168,0.3);
+  border-radius:16px;
 }
 
 /* ── End ── */
 .slide-end {
-  background: linear-gradient(145deg, #15120f 0%, #1e1913 50%, #15120f 100%);
+  background: linear-gradient(160deg, #12100e 0%, #1a1712 35%, #0f0d0b 70%, #1a1510 100%);
   display:flex;
   flex-direction:column;
   align-items:center;
   justify-content:center;
   position:relative;
 }
-.end-decor-1 {
-  position:absolute;
-  width:500px; height:500px;
-  top:-150px; left:-150px;
-  border-radius:50%;
-  background: radial-gradient(circle, rgba(46,143,163,0.15) 0%, transparent 70%);
+.slide-end .glow-cyan {
+  width:900px; height:900px;
+  top:-350px; left:-300px;
+  background: radial-gradient(circle, rgba(46,143,163,0.5) 0%, transparent 55%);
 }
-.end-decor-2 {
-  position:absolute;
-  width:350px; height:350px;
-  bottom:-80px; right:-80px;
-  border-radius:50%;
-  background: radial-gradient(circle, rgba(232,106,60,0.1) 0%, transparent 70%);
+.slide-end .glow-ember {
+  width:700px; height:700px;
+  bottom:-300px; right:-250px;
+  background: radial-gradient(circle, rgba(232,106,60,0.4) 0%, transparent 55%);
 }
-.end-line-top {
+.end-wave {
   position:absolute;
-  top:80px; left:50%; transform:translateX(-50%);
-  width:80px; height:4px;
-  background:#2E8FA3;
-  border-radius:2px;
+  top:0; left:0; right:0;
+  height:180px;
+  background: linear-gradient(0deg, transparent 0%, rgba(46,143,163,0.08) 100%);
+  clip-path: polygon(0% 70%, 20% 50%, 40% 65%, 60% 45%, 80% 60%, 100% 40%, 100% 0%, 0% 0%);
 }
 .end-tag {
   font-size:18px;
-  letter-spacing:8px;
+  letter-spacing:10px;
   text-transform:uppercase;
   color:#2E8FA3;
-  margin-bottom:40px;
-  font-weight:600;
+  margin-bottom:45px;
+  font-weight:700;
+  padding:10px 24px;
+  border:2px solid rgba(46,143,163,0.4);
+  border-radius:4px;
+  background: rgba(46,143,163,0.08);
 }
 .end-title {
-  font-size:90px;
-  font-weight:800;
-  letter-spacing:4px;
+  font-size:100px;
+  font-weight:900;
+  letter-spacing:6px;
   color:#F4EFE5;
+  text-shadow: 0 4px 30px rgba(0,0,0,0.4);
 }
 .end-subtitle {
-  font-size:28px;
+  font-size:32px;
   color:#b8a88a;
-  margin-top:30px;
+  margin-top:35px;
+  max-width:1000px;
+  text-align:center;
 }
 .end-line-bottom {
   position:absolute;
-  bottom:100px; left:50%; transform:translateX(-50%);
-  width:60px; height:3px;
-  background:#2E8FA3;
+  bottom:80px; left:50%; transform:translateX(-50%);
+  width:80px; height:4px;
+  background: linear-gradient(90deg, transparent 0%, #2E8FA3 50%, transparent 100%);
   border-radius:2px;
+}
+.end-decor-ring {
+  position:absolute;
+  width:250px; height:250px;
+  bottom:100px; left:80px;
+  border:2px solid rgba(46,143,163,0.12);
+  border-radius:50%;
+}
+.end-decor-ring::before {
+  content:'';
+  position:absolute;
+  inset:25px;
+  border:1px solid rgba(232,106,60,0.1);
+  border-radius:50%;
 }
 `
 
@@ -2383,14 +2861,16 @@ function buildPremiumSlideHtml(slide, index) {
         ? `<p class="cover-subtitle">${escapeHtml(slide.bullets[0])}</p>`
         : ''
       return `<div class="slide slide-cover">
-  <div class="cover-decor-1"></div>
-  <div class="cover-decor-2"></div>
-  <div class="cover-line-top"></div>
-  <div class="cover-line-bottom"></div>
+  <div class="glow-ember"></div>
+  <div class="glow-cyan"></div>
+  <div class="grid-bg cover-grid"></div>
+  <div class="cover-wave"></div>
+  <div class="cover-decor-ring"></div>
   <div class="cover-tag">PRESENTATION</div>
   <h1 class="cover-title">${escapeHtml(slide.title)}</h1>
   ${subtitle}
   <p class="cover-date">${new Date().toLocaleDateString('zh-CN')}</p>
+  <div class="cover-line-bottom"></div>
 </div>`
     }
 
@@ -2406,9 +2886,11 @@ function buildPremiumSlideHtml(slide, index) {
         .join('')
       return `<div class="slide slide-toc">
   <div class="toc-sidebar">
+    <div class="dot-texture"></div>
     <div class="toc-sidebar-title">目录</div>
     <div class="toc-sidebar-sub">CONTENTS</div>
     <div class="toc-sidebar-line"></div>
+    <div class="toc-sidebar-ring"></div>
   </div>
   <div class="toc-main">${items}
   </div>
@@ -2420,8 +2902,10 @@ function buildPremiumSlideHtml(slide, index) {
         ? `<p class="section-desc">${escapeHtml(slide.bullets[0])}</p>`
         : ''
       return `<div class="slide slide-section">
-  <div class="section-decor-num">${num}</div>
-  <div class="section-decor-circle"></div>
+  <div class="grid-bg-light"></div>
+  <div class="section-bg-num">${num}</div>
+  <div class="section-decor-tri"></div>
+  <div class="corner-badge">CHAPTER ${num}</div>
   <h1 class="section-title">${escapeHtml(slide.title)}</h1>
   ${desc}
   <div class="section-line"></div>
@@ -2434,7 +2918,7 @@ function buildPremiumSlideHtml(slide, index) {
         .map(
           (p) => `
   <div class="data-card">
-    <div class="data-card-accent"></div>
+    <div class="data-card-glow"></div>
     <div class="data-value">${escapeHtml(p.value)}</div>
     <div class="data-label">${escapeHtml(p.label)}</div>
     <div class="data-card-line"></div>
@@ -2442,10 +2926,13 @@ function buildPremiumSlideHtml(slide, index) {
         )
         .join('')
       return `<div class="slide slide-data">
-  <div class="data-decor"></div>
-  <div class="data-header-tag">DATA INSIGHTS</div>
-  <h2 class="data-header-title">${escapeHtml(slide.title)}</h2>
-  <div class="data-header-line"></div>
+  <div class="grid-bg"></div>
+  <div class="data-glow-1"></div>
+  <div class="data-glow-2"></div>
+  <div class="corner-badge">DATA</div>
+  <div class="data-tag">DATA INSIGHTS</div>
+  <h2 class="data-title">${escapeHtml(slide.title)}</h2>
+  <div class="data-title-line"></div>
   <div class="data-grid">${cards}
   </div>
 </div>`
@@ -2457,8 +2944,9 @@ function buildPremiumSlideHtml(slide, index) {
         ? `<p class="quote-source">— ${escapeHtml(q.source)}</p>`
         : ''
       return `<div class="slide slide-quote">
-  <div class="quote-decor"></div>
-  <div class="quote-mark">"</div>
+  <div class="dot-texture"></div>
+  <div class="quote-glow"></div>
+  <div class="quote-mark-svg">"</div>
   <p class="quote-text">${escapeHtml(q.text)}</p>
   <div class="quote-line"></div>
   ${sourceHtml}
@@ -2481,16 +2969,19 @@ function buildPremiumSlideHtml(slide, index) {
         )
         .join('')
       return `<div class="slide slide-split">
-  <div class="split-header-tag">COMPARISON</div>
-  <h2 class="split-header-title">${escapeHtml(slide.title)}</h2>
-  <div class="split-header-line"></div>
+  <div class="grid-bg-light"></div>
+  <div class="split-tag">COMPARISON</div>
+  <h2 class="split-title">${escapeHtml(slide.title)}</h2>
+  <div class="split-title-line"></div>
   <div class="split-body">
     <div class="split-col split-col-cyan">
+      <div class="split-col-accent"></div>
       <div class="split-col-title split-col-title-cyan">${escapeHtml(left.title)}</div>
       <ul class="split-col-bullets">${leftBullets}
       </ul>
     </div>
     <div class="split-col split-col-ember">
+      <div class="split-col-accent"></div>
       <div class="split-col-title split-col-title-ember">${escapeHtml(right.title)}</div>
       <ul class="split-col-bullets">${rightBullets}
       </ul>
@@ -2512,9 +3003,11 @@ function buildPremiumSlideHtml(slide, index) {
         tableHtml = `<table><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table>`
       }
       return `<div class="slide slide-table">
-  <div class="table-header-tag">DATA TABLE</div>
-  <h2 class="table-header-title">${escapeHtml(slide.title)}</h2>
-  <div class="table-header-line"></div>
+  <div class="grid-bg-light"></div>
+  <div class="corner-badge">TABLE</div>
+  <div class="table-tag">DATA TABLE</div>
+  <h2 class="table-title">${escapeHtml(slide.title)}</h2>
+  <div class="table-title-line"></div>
   <div class="table-body">${tableHtml}</div>
 </div>`
     }
@@ -2524,24 +3017,23 @@ function buildPremiumSlideHtml(slide, index) {
         .slice(0, 5)
         .map((step, i) => {
           const cls = i % 2 === 0 ? 'process-circle-ember' : 'process-circle-cyan'
-          const arrow =
-            i < (slide.processSteps || []).length - 1 && i < 4
-              ? '<div class="process-arrow">→</div>'
-              : ''
           const desc = step.desc ? `<div class="process-desc">${escapeHtml(step.desc)}</div>` : ''
           return `
   <div class="process-step">
-    <div class="process-circle ${cls}">${i + 1}</div>
+    <div class="process-circle ${cls}"><div class="process-circle-ring"></div>${i + 1}</div>
     <div class="process-name">${escapeHtml(step.name)}</div>
     ${desc}
-  </div>${arrow}`
+  </div>`
         })
         .join('')
       return `<div class="slide slide-process">
-  <div class="process-header-tag">PROCESS</div>
-  <h2 class="process-header-title">${escapeHtml(slide.title)}</h2>
-  <div class="process-header-line"></div>
-  <div class="process-body">${steps}
+  <div class="grid-bg-light"></div>
+  <div class="corner-badge">PROCESS</div>
+  <div class="process-tag">PROCESS</div>
+  <h2 class="process-title">${escapeHtml(slide.title)}</h2>
+  <div class="process-title-line"></div>
+  <div class="process-body">
+    <div class="process-track"></div>${steps}
   </div>
 </div>`
     }
@@ -2551,13 +3043,15 @@ function buildPremiumSlideHtml(slide, index) {
         .slice(0, 5)
         .map(
           (b) => `
-    <li><span class="bullet-dot"></span>${escapeHtml(b)}</li>`
+    <li><span class="bullet-diamond"></span>${escapeHtml(b)}</li>`
         )
         .join('')
       return `<div class="slide slide-image">
-  <div class="image-header-tag">VISUAL</div>
-  <h2 class="image-header-title">${escapeHtml(slide.title)}</h2>
-  <div class="image-header-line"></div>
+  <div class="grid-bg-light"></div>
+  <div class="corner-badge">VISUAL</div>
+  <div class="image-tag">VISUAL</div>
+  <h2 class="image-title">${escapeHtml(slide.title)}</h2>
+  <div class="image-title-line"></div>
   <div class="image-body">
     <div class="image-text">
       <ul>${bullets}
@@ -2573,13 +3067,35 @@ function buildPremiumSlideHtml(slide, index) {
         ? `<p class="end-subtitle">${escapeHtml(slide.bullets[0])}</p>`
         : ''
       return `<div class="slide slide-end">
-  <div class="end-decor-1"></div>
-  <div class="end-decor-2"></div>
-  <div class="end-line-top"></div>
-  <div class="end-line-bottom"></div>
+  <div class="glow-cyan"></div>
+  <div class="glow-ember"></div>
+  <div class="end-wave"></div>
+  <div class="end-decor-ring"></div>
   <div class="end-tag">THANK YOU</div>
   <h1 class="end-title">${escapeHtml(slide.title)}</h1>
   ${subtitle}
+  <div class="end-line-bottom"></div>
+</div>`
+    }
+
+    case 'chart': {
+      const svg = buildChartSvg(slide.chart, {
+        palette: ['#E86A3C', '#2E8FA3', '#C97C5D', '#3E7A8C', '#8A7B68', '#4A6B82'],
+        axisColor: '#8A7B68',
+        gridColor: 'rgba(42,31,23,0.08)',
+        labelColor: '#5E4F40',
+        valueColor: '#2A1F17',
+        bg: '',
+      })
+      return `<div class="slide slide-content" style="padding:60px 70px 70px;display:flex;flex-direction:column;box-sizing:border-box">
+  <div class="accent-bar-v"></div>
+  <div class="grid-bg-light"></div>
+  <div class="corner-badge">DATA</div>
+  <div class="content-tag">CHART · ${num}</div>
+  <h2 class="content-title">${escapeHtml(slide.title)}</h2>
+  <div class="content-title-line"></div>
+  <div style="flex:1;min-height:0;margin-top:18px">${svg || '<div style="color:#8A7B68;font-size:13px">（图表数据缺失）</div>'}</div>
+  <div class="content-footer-line"></div>
 </div>`
     }
 
@@ -2587,15 +3103,19 @@ function buildPremiumSlideHtml(slide, index) {
       const bullets = slide.bullets
         .map(
           (b) => `
-    <li><span class="bullet-dot"></span>${escapeHtml(b)}</li>`
+    <li><span class="bullet-diamond"></span>${escapeHtml(b)}</li>`
         )
         .join('')
       return `<div class="slide slide-content">
-  <div class="content-header-tag">CONTENT</div>
-  <h2 class="content-header-title">${escapeHtml(slide.title)}</h2>
-  <div class="content-header-line"></div>
+  <div class="accent-bar-v"></div>
+  <div class="grid-bg-light"></div>
+  <div class="corner-badge">CONTENT</div>
+  <div class="content-tag">CONTENT</div>
+  <h2 class="content-title">${escapeHtml(slide.title)}</h2>
+  <div class="content-title-line"></div>
   <ul class="content-bullets">${bullets}
   </ul>
+  <div class="content-footer-line"></div>
 </div>`
     }
   }

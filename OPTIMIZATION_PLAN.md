@@ -24,23 +24,23 @@
 ### Phase 3: 功能增强
 1. ✅ 流式输出 SSE — `callModelThroughProxyStream`
 2. ✅ Markdown 渲染 + 代码高亮 — `ChatMessages.jsx` 已用 react-markdown + DOMPurify + highlight.js
-3. 🚧 消息编辑/重发 — 编辑 (`handleEditMessage`) 已落地；重发待加（批 B #9）
-4. ⏳ 会话标题自动总结 — 仍是 `slice(0,15)` 截断；走 `/api/model/proxy?purpose=title` 异步总结（批 C #8）
-5. ⏳ 单条消息删除 + 整消息复制（artifact 路径）— 批 B #10/#11
+3. ✅ 消息编辑/重发 — 编辑与重发均已落地
+4. ✅ 会话标题自动总结 — `summarizeSessionTitle` 异步 AI 总结 + fallback 截断已落地
+5. ✅ 单条消息删除 (`DELETE_MESSAGE`) 已落地；整消息复制待加
 6. ⏳ 跨会话消息搜索 `Ctrl+K` — 批 C #12
-7. ⏳ 多格式导出（Markdown/HTML/PDF/Word）— 当前仅 JSON，批 C #13
-8. ⏳ 导入 settings 合并/覆盖开关 — 批 C #26
-9. ⏳ 工具调用失败指数退避重试 — 批 D #24
-10. ⏳ 附件超 8 个 toast 提示 — 批 D #25
-11. ⏳ 左侧会话最后消息预览 — 批 D #21
-12. ⏳ 未读 / 新消息标记 — 批 D #22
-13. ⏳ `/` 快捷指令最近使用置顶 — 批 D #23
+7. 🚧 多格式导出 — JSON 已落地；前端 PPT/Word/Excel 工具生成已落地；后端 artifactGen DOCX/XLSX/PPTX 已落地
+8. ✅ 导入 settings 合并/覆盖开关 (`IMPORT_SETTINGS` merge/replace) 已落地
+9. ✅ 工具调用失败指数退避重试 (`executeToolCall` maxRetries + 退避) 已落地
+10. 🚧 附件大小/数量限制已在前端校验；toast 提示待加
+11. ✅ 左侧会话最后消息预览 (`getSessionPreview`) 已落地
+12. ✅ 未读标记 (`isSessionUnread` + ember 圆点) 已落地
+13. ⏳ `/` 快捷指令最近使用置顶 — 待办
 
 ### Phase 4: 代码质量
 1. ✅ 拆分 ChatSplit 超大组件 — 现已拆为 ChatHeader/ChatSidebar(LeftRail)/ChatMessages/ChatComposer/ChatTaskPanel/RightPreviewPane/ArtifactPreview
 2. ⏳ artifact 双路径合并（`buildArtifactPreview` vs `shouldOfferPptxExport/OfficeExport`）— 批 B #19
 3. ⏳ TypeScript 全量迁移 — 单独立项，本轮不做（#16）
-4. ⏳ Docker 配置
+4. ✅ Docker 配置 — Dockerfile + docker-compose + 动态端口 healthcheck 已落地
 5. 🚧 schema 版本化导入导出框架 — `b7130c2` 已搭骨架（`exportSchema.js`），待补 Markdown/HTML/PDF/Word（批 C #13）
 
 ### Phase 5: 数据层（已完成）

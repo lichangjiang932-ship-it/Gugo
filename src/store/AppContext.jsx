@@ -175,10 +175,13 @@ function reducer(state, action) {
     }
 
     case 'SEND_MESSAGE': {
-      const content =
-        typeof action.payload === 'string'
-          ? action.payload
-          : action.payload?.content ?? ''
+      const payload = action.payload
+      let content = typeof payload === 'string' ? payload : payload?.content ?? ''
+      const msgAttachments = typeof payload === 'string' ? [] : payload?.attachments || []
+      if (msgAttachments.length > 0) {
+        const attachmentInfo = msgAttachments.map((a) => `[附件: ${a.name}, ${a.sizeKB} KB]`).join('\n')
+        content = content ? `${content}\n\n${attachmentInfo}` : `请分析附件：${msgAttachments.map((a) => a.name).join('、')}`
+      }
       if (!state.activeSessionId) return state
 
       const userMsg = {

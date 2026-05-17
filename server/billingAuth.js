@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import tls from 'node:tls'
+import { readJson, sendJson, authToken } from './utils.js'
 
 import {
   getUserById,
@@ -21,7 +22,6 @@ import {
   checkRateLimit,
 } from './db.js'
 
-const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
 const DEFAULT_DATA_DIR = path.join(process.cwd(), 'server-data')
 
 function getDataDir() {
@@ -471,34 +471,6 @@ export function buildSendCodeResponse({ issued, delivery, env }) {
 
 /* ── HTTP 处理 ── */
 
-function authToken(req) {
-  const header = req.headers.authorization || ''
-  return header.startsWith('Bearer ') ? header.slice(7).trim() : ''
-}
-
-async function readJson(req) {
-  // ★ #36: 请求体大小限制 — 256KB (账号路由 payload 很小)
-  const MAX_BYTES = 256 * 1024
-  const chunks = []
-  let total = 0
-  for await (const chunk of req) {
-    total += chunk.length
-    if (total > MAX_BYTES) {
-      const err = new Error(`request body exceeds ${MAX_BYTES} bytes`)
-      err.statusCode = 413
-      throw err
-    }
-    chunks.push(chunk)
-  }
-  const raw = Buffer.concat(chunks).toString('utf8')
-  return raw.trim() ? JSON.parse(raw) : {}
-}
-
-function sendJson(res, statusCode, body) {
-  res.writeHead(statusCode, JSON_HEADERS)
-  res.end(JSON.stringify(body))
-}
-
 function clientId(req) {
   return req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown'
 }
@@ -509,7 +481,7 @@ export async function handleAuthBillingRequest(req, res, env = process.env) {
     const url = new URL(req.url, 'http://localhost')
 
     if (req.method === 'POST' && url.pathname === '/api/auth/send-code') {
-      const body = await readJson(req)
+      const body = await readJson(req, { maxBytes: 256 * 1024 })
       const limit = checkCodeRate(clientId(req))
       if (!limit.allowed) {
         sendJson(res, 429, { ok: false, error: '发送验证码次数过多，请 1 小时后再试' })
@@ -522,7 +494,7 @@ export async function handleAuthBillingRequest(req, res, env = process.env) {
     }
 
     if (req.method === 'POST' && url.pathname === '/api/auth/verify') {
-      const body = await readJson(req)
+      const body = await readJson(req, { maxBytes: 256 * 1024 })
       const result = verifyEmailCode({ email: body.email, code: body.code })
       sendJson(res, 200, result)
       return
@@ -541,7 +513,7 @@ export async function handleAuthBillingRequest(req, res, env = process.env) {
     }
 
     if (req.method === 'POST' && url.pathname === '/api/billing/recharge') {
-      const body = await readJson(req)
+      const body = await readJson(req, { maxBytes: 256 * 1024 })
       const result = rechargeAccount({ token: authToken(req), packageId: body.packageId })
       sendJson(res, 200, { ...result, packages: RECHARGE_PACKAGES })
       return

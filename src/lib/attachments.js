@@ -2,7 +2,10 @@ export function formatAttachmentForPrompt(attachment) {
   if (attachment.kind === 'text') {
     return `\n\n[附件: ${attachment.name}, ${attachment.sizeKB} KB]\n\`\`\`\n${attachment.text}\n\`\`\``
   }
-  return `\n\n[附件: ${attachment.name}, ${attachment.sizeKB} KB, 类型: ${attachment.type || 'unknown'}]`
+  const ext = attachment.name.split('.').pop()?.toLowerCase()
+  const binaryTypes = ['xlsx', 'xls', 'xlsm', 'xlsb', 'ods', 'docx', 'doc', 'pptx', 'ppt', 'pdf', 'zip', 'epub', 'rtf']
+  const note = binaryTypes.includes(ext) ? '（二进制文件，无法直接读取内容）' : ''
+  return `\n\n[附件: ${attachment.name}, ${attachment.sizeKB} KB, 类型: ${attachment.type || 'unknown'}${note}]`
 }
 
 export function buildUserContentWithAttachments(prompt, attachments = []) {
