@@ -5,16 +5,97 @@ const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.
 const SLIDE_W = 13.333
 const SLIDE_H = 7.5
 
-const THEME = {
-  paper: 'F4EFE5',
-  paper2: 'EAE2D2',
-  ink: '2A1F17',
-  inkSoft: '5E4F40',
-  inkFade: '8A7B68',
-  ember: 'E86A3C',
-  cyan: '2E8FA3',
-  white: 'FFFFFF',
-  skeleton: 'DBD2BE',
+const THEMES = {
+  warm: {
+    id: 'warm',
+    paper: 'F4EFE5',
+    paper2: 'EAE2D2',
+    ink: '2A1F17',
+    inkSoft: '5E4F40',
+    inkFade: '8A7B68',
+    ember: 'E86A3C',
+    cyan: '2E8FA3',
+    white: 'FFFFFF',
+    skeleton: 'DBD2BE',
+    glowA: 'F6B26B',
+    glowB: 'F08A5D',
+  },
+  tech: {
+    id: 'tech',
+    paper: 'EEF2FF',
+    paper2: 'E0E7FF',
+    ink: '151A2D',
+    inkSoft: '334155',
+    inkFade: '64748B',
+    ember: '6366F1',
+    cyan: '06B6D4',
+    white: 'FFFFFF',
+    skeleton: 'CBD5E1',
+    glowA: '818CF8',
+    glowB: '22D3EE',
+  },
+  finance: {
+    id: 'finance',
+    paper: 'EEF7F1',
+    paper2: 'DDEFE4',
+    ink: '13261C',
+    inkSoft: '315141',
+    inkFade: '5F7D6B',
+    ember: '0F766E',
+    cyan: '65A30D',
+    white: 'FFFFFF',
+    skeleton: 'C6D8CC',
+    glowA: '34D399',
+    glowB: 'A3E635',
+  },
+  consumer: {
+    id: 'consumer',
+    paper: 'FFF1F2',
+    paper2: 'FFE4E6',
+    ink: '32121A',
+    inkSoft: '6B3240',
+    inkFade: '9F5D6F',
+    ember: 'F43F5E',
+    cyan: 'FB7185',
+    white: 'FFFFFF',
+    skeleton: 'F4C7CF',
+    glowA: 'FDA4AF',
+    glowB: 'FBCFE8',
+  },
+}
+
+let THEME = THEMES.warm
+
+export function resolvePresentationTheme(topic = '') {
+  const text = String(topic || '').toLowerCase()
+  if (/ai|saas|software|cloud|tech|digital|智能|科技|算法|平台/.test(text)) return THEMES.tech
+  if (/bank|finance|fund|insurance|wealth|金融|银行|保险|基金|投研/.test(text)) return THEMES.finance
+  if (/consumer|brand|retail|beauty|food|fashion|消费|品牌|零售|美妆|餐饮/.test(text)) return THEMES.consumer
+  return THEMES.warm
+}
+
+function addAmbientDecor(slide, pptx, index, { dense = false } = {}) {
+  slide.addShape(pptx.ShapeType.ellipse, {
+    x: index % 2 === 0 ? 10.7 : -1.2,
+    y: index % 2 === 0 ? -1.3 : 5.1,
+    w: dense ? 3.3 : 2.7,
+    h: dense ? 3.3 : 2.7,
+    fill: { color: THEME.glowA, transparency: 78 },
+    line: { color: THEME.glowA, width: 0 },
+  })
+  slide.addShape(pptx.ShapeType.ellipse, {
+    x: index % 2 === 0 ? -0.8 : 10.8,
+    y: index % 2 === 0 ? 5.5 : -1.1,
+    w: dense ? 2.5 : 2.1,
+    h: dense ? 2.5 : 2.1,
+    fill: { color: THEME.glowB, transparency: 84 },
+    line: { color: THEME.glowB, width: 0 },
+  })
+  slide.addShape(pptx.ShapeType.rect, {
+    x: 11.55, y: 0.36, w: 1.05, h: 0.22,
+    fill: { color: THEME.paper2, transparency: 12 },
+    line: { color: THEME.skeleton, width: 0.5 },
+  })
 }
 
 function stripMarkdownFence(markdown = '') {
@@ -427,6 +508,7 @@ function addContentSlide(pptx, slideData, index, total) {
   const slide = pptx.addSlide()
   const accentColor = index % 2 === 0 ? THEME.ember : THEME.cyan
   slide.background = { color: THEME.paper }
+  addAmbientDecor(slide, pptx, index)
   slide.addShape(pptx.ShapeType.rect, {
     x: 0, y: 0, w: 0.12, h: SLIDE_H,
     fill: { color: accentColor },
@@ -557,6 +639,7 @@ function addDataSlide(pptx, slideData, index, total) {
   const slide = pptx.addSlide()
   const accentColor = index % 3 === 0 ? THEME.ember : index % 3 === 1 ? THEME.cyan : '8A7B68'
   slide.background = { color: THEME.paper }
+  addAmbientDecor(slide, pptx, index, { dense: true })
   slide.addText(slideData.title, {
     x: 0.7, y: 0.5, w: 11.8, h: 0.7,
     fontFace: 'Aptos Display', fontSize: 30, bold: true, color: THEME.ink, margin: 0,
@@ -812,6 +895,7 @@ const CHART_PALETTE = [THEME.ember, THEME.cyan, '8A7B68', '4A6B82', 'C97C5D', '3
 function addChartSlide(pptx, slideData, index, total) {
   const slide = pptx.addSlide()
   slide.background = { color: THEME.paper }
+  addAmbientDecor(slide, pptx, index)
   slide.addShape(pptx.ShapeType.rect, {
     x: 0, y: 0, w: 0.12, h: SLIDE_H,
     fill: { color: THEME.ember }, line: { color: THEME.ember, width: 0 },
@@ -896,6 +980,7 @@ function addSectionSlide(pptx, slideData, index, total) {
     },
     line: { color: THEME.paper, width: 0 },
   })
+  addAmbientDecor(slide, pptx, index, { dense: true })
   const sectionNum = String(index + 1).padStart(2, '0')
   slide.addText(sectionNum, {
     x: 0.5, y: 1.5, w: 4, h: 2,
@@ -924,6 +1009,7 @@ function addSectionSlide(pptx, slideData, index, total) {
 async function buildPresentationFromMarkdown(markdown, { title } = {}) {
   const slides = parseMarkdownSlides(markdown)
   if (!slides.length) throw new Error('没有可导出的 PPT 内容')
+  THEME = resolvePresentationTheme(`${title || ''} ${slides.map((slide) => slide.title).join(' ')}`)
 
   const module = await import('pptxgenjs')
   const PptxGenJS = module.default || module

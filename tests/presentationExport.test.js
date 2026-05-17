@@ -112,3 +112,10 @@ test('keeps a concise final content slide as content instead of forcing an endin
   assert.match(html, /<div class="slide slide-content">[\s\S]*市场结论/)
   assert.doesNotMatch(html, /<div class="slide slide-end">[\s\S]*市场结论/)
 })
+
+test('presentation themes vary by topic cues', async () => {
+  const mod = await import('../src/lib/presentationExport.js')
+  assert.equal(mod.resolvePresentationTheme('AI product roadmap').id, 'tech')
+  assert.equal(mod.resolvePresentationTheme('bank annual strategy').id, 'finance')
+  assert.equal(mod.resolvePresentationTheme('consumer brand launch').id, 'consumer')
+})
