@@ -1,0 +1,8 @@
+{
+  "id": "guizang-ppt",
+  "name": "歸藏 · 网页 PPT",
+  "description": "生成单文件 HTML 网页 PPT（横向翻页 + WebGL 背景 + Motion 动效）。两种风格：电子杂志风 / 瑞士国际主义风。适合分享、发布会、demo day、年度总结。",
+  "version": "1.0.0",
+  "icon": "Presentation",
+  "permissions": ["chat.write"]
+}
