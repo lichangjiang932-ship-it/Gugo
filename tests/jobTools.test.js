@@ -12,8 +12,10 @@ const { issueTestSession } = await import('./helpers/testAuth.js')
 const TEST_USER = issueTestSession().userId
 
 test('SERVER_TOOL_SPECS exposes create_pptx / create_docx / create_xlsx', () => {
-  const names = SERVER_TOOL_SPECS.map((spec) => spec.function.name).sort()
-  assert.deepEqual(names, ['create_docx', 'create_pptx', 'create_xlsx'])
+  const names = SERVER_TOOL_SPECS.map((spec) => spec.function.name)
+  for (const required of ['create_pptx', 'create_docx', 'create_xlsx']) {
+    assert.ok(names.includes(required), `${required} missing from SERVER_TOOL_SPECS`)
+  }
   for (const spec of SERVER_TOOL_SPECS) {
     assert.equal(spec.type, 'function')
     assert.ok(spec.function.parameters, `${spec.function.name} missing parameters`)

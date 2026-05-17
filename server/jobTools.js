@@ -10,6 +10,7 @@
  */
 import { appendJobArtifact } from './jobStore.js'
 import { createDocx, createPptx, createXlsx } from './artifactGen.js'
+import { FS_SHELL_TOOL_SPECS, dispatchFsShellTool } from './fsShellTools.js'
 import crypto from 'node:crypto'
 
 function newId(prefix) {
@@ -103,6 +104,10 @@ export const SERVER_TOOL_SPECS = [
       },
     },
   },
+  // claude-code 风格的文件 / shell 工具.默认全部关闭,需要在 .env 里设
+  // WORKSPACE_FS_ENABLED=1 / WORKSPACE_SHELL_ENABLED=1 才生效;
+  // 路径沙箱在 WORKSPACE_ROOT(默认 process.cwd()).
+  ...FS_SHELL_TOOL_SPECS,
 ]
 
 /**
@@ -150,6 +155,15 @@ async function executeServerTool({ name, args, job, step }) {
       filename: artifact.filename,
     })
     return { ok: true, artifactId: artifact.id, filename: artifact.filename, url: artifact.url }
+  }
+  // fs/shell 工具不落 artifact,执行结果直接回给模型.
+  // 任意 fsShellTools 抛错(包括 env 未启用 / 路径越界)都返回 {ok:false,error}.
+  if (['read_file', 'write_file', 'edit_file', 'bash_exec'].includes(name)) {
+    try {
+      return await dispatchFsShellTool(name, args || {})
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) }
+    }
   }
   return { ok: false, error: `unknown tool: ${name}` }
 }
