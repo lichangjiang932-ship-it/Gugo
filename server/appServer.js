@@ -23,6 +23,7 @@ import { handleArtifactDownload } from './artifactGen.js'
 import { closeJobRuntime, getJobRuntime } from './jobRuntime.js'
 import { handleJobRequest } from './jobRoutes.js'
 import { handleSkillRequest } from './skillRoutes.js'
+import { handleReasonixRequest } from './reasonixRoutes.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -167,6 +168,11 @@ function createRouter(getEnv = getRuntimeEnv) {
   // 技能包
   if (req.url?.startsWith('/api/skills')) {
     return handleSkillRequest(req, res)
+  }
+
+  // Reasonix-inspired: 钉记忆 / TODO / effort / session meter
+  if (req.url?.startsWith('/api/reasonix/')) {
+    return handleReasonixRequest(req, res)
   }
 
   // 静态文件

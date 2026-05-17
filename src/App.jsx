@@ -10,6 +10,7 @@ const PermissionsDashboard = lazy(() => import('./pages/PermissionsDashboard'))
 const TaskRunPanel = lazy(() => import('./pages/TaskRunPanel'))
 const HistoryView = lazy(() => import('./pages/HistoryView'))
 const SettingsView = lazy(() => import('./pages/SettingsView'))
+const ReasonixWorkspace = lazy(() => import('./pages/ReasonixWorkspace'))
 
 function Fallback() {
   return (
@@ -32,6 +33,7 @@ function App() {
           <Route path="/task" element={<TaskRunPanel />} />
           <Route path="/history" element={<HistoryView />} />
           <Route path="/settings" element={<SettingsView />} />
+          <Route path="/reasonix" element={<ReasonixWorkspace />} />
 
           <Route path="/login" element={<Navigate to="/chat" replace />} />
           <Route path="*" element={<Navigate to="/chat" replace />} />

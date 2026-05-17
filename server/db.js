@@ -53,6 +53,68 @@ function setSchemaVersionInternal(db, version) {
 function runMigrations(db) {
   const version = getSchemaVersionInternal(db)
   if (version < 2) migrateToV2(db)
+  runReasonixMigrations(db)
+}
+
+/**
+ * Reasonix 集成迁移：使用独立的 reasonix_schema_version meta key，与主迁移链解耦，
+ * 这样与 password-login 分支的 v3 迁移互不冲突，可以任意先后合并。
+ */
+function runReasonixMigrations(db) {
+  const row = db.prepare("SELECT value FROM meta WHERE key = 'reasonix_schema_version'").get()
+  const current = row ? Number(row.value) : 0
+  if (current < 1) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS pinned_memories (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL DEFAULT 'user',
+        title TEXT NOT NULL,
+        content TEXT NOT NULL,
+        tokens INTEGER NOT NULL DEFAULT 0,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_pinned_memories_user ON pinned_memories(user_id, updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS todos (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        priority INTEGER NOT NULL DEFAULT 0,
+        project TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        completed_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS idx_todos_user_status ON todos(user_id, status, priority DESC);
+
+      CREATE TABLE IF NOT EXISTS effort_settings (
+        user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        effort TEXT NOT NULL DEFAULT 'medium',
+        max_steps INTEGER NOT NULL DEFAULT 12,
+        reasoning_depth INTEGER NOT NULL DEFAULT 2,
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS session_meters (
+        session_id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        tokens_in INTEGER NOT NULL DEFAULT 0,
+        tokens_out INTEGER NOT NULL DEFAULT 0,
+        tokens_cached INTEGER NOT NULL DEFAULT 0,
+        cost_credits INTEGER NOT NULL DEFAULT 0,
+        turns INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_session_meters_user ON session_meters(user_id, updated_at DESC);
+    `)
+    db.prepare(
+      "INSERT INTO meta (key, value) VALUES ('reasonix_schema_version', '1') ON CONFLICT(key) DO UPDATE SET value = '1'"
+    ).run()
+  }
 }
 
 /**
