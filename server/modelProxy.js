@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { z } from 'zod'
 import { readJson } from './utils.js'
+import { authenticateRequest } from './middleware.js'
 import {
   chargeForModelUse,
   estimateChatCost,
@@ -649,12 +650,22 @@ export async function handleModelStatusRequest(req, res) {
     sendJson(res, 405, { error: '仅支持 GET 请求。' })
     return
   }
+  // 鉴权:匿名访问会泄露 baseUrl / MAIL_* 等内部基础设施信息.
+  if (!authenticateRequest(req)) {
+    sendJson(res, 401, { error: 'Unauthorized' })
+    return
+  }
   sendJson(res, 200, getModelStatus(getRuntimeEnv()))
 }
 
 export async function handleSystemDiagnosticsRequest(req, res) {
   if (req.method !== 'GET') {
     sendJson(res, 405, { error: '仅支持 GET 请求。' })
+    return
+  }
+  // 鉴权:?check=1 会触发后端发出 outbound 探测请求,匿名暴露 = 任意来源都能让本服务去打上游模型端点.
+  if (!authenticateRequest(req)) {
+    sendJson(res, 401, { error: 'Unauthorized' })
     return
   }
   const url = new URL(req.url, 'http://localhost')

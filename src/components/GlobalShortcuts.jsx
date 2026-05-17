@@ -43,10 +43,13 @@ export default function GlobalShortcuts() {
           navigate('/chat')
           break
         case 'l':
-          // 仅 chat 页生效，其他页不拦截
+          // 仅 chat 页生效,其他页不拦截.
+          // 加确认:CLEAR_CURRENT_SESSION 不可撤销,误触一次损失整个对话.
           if (window.location.hash.includes('/chat')) {
             e.preventDefault()
-            dispatch({ type: 'CLEAR_CURRENT_SESSION' })
+            if (typeof window !== 'undefined' && window.confirm?.('清空当前会话?此操作不可撤销。')) {
+              dispatch({ type: 'CLEAR_CURRENT_SESSION' })
+            }
           }
           break
         case ',':

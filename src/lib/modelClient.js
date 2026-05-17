@@ -40,13 +40,21 @@ export async function testModelEndpoint({ fetchImpl = fetch } = {}) {
   return parseProxyResponse(response)
 }
 
+function authHeaders() {
+  const token = getAuthToken()
+  return token ? { Authorization: `Bearer ${token}` } : undefined
+}
+
 export async function getModelStatus({ fetchImpl = fetch } = {}) {
-  const response = await fetchImpl('/api/model/status')
+  const response = await fetchImpl('/api/model/status', { headers: authHeaders() })
   return parseProxyResponse(response)
 }
 
 export async function getSystemDiagnostics({ check = false, fetchImpl = fetch } = {}) {
-  const response = await fetchImpl(`/api/system/diagnostics${check ? '?check=1' : ''}`)
+  const response = await fetchImpl(
+    `/api/system/diagnostics${check ? '?check=1' : ''}`,
+    { headers: authHeaders() },
+  )
   return parseProxyResponse(response)
 }
 
