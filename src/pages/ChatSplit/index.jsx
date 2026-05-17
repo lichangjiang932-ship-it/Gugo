@@ -343,6 +343,7 @@ export default function ChatSplit() {
         //     因为它是模型显式选择的产物,且自带 source(模型给的 markdown).
         let artifactType =
           skillId === 'ppt' ? 'pptx' :
+          skillId === 'htmlppt' ? 'html' :
           skillId === 'doc' ? 'docx' :
           skillId === 'excel' ? 'xlsx' :
           undefined
