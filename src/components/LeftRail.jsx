@@ -3,6 +3,11 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { MessageSquare, Wrench, Shield, History, Settings, Sparkles, ListChecks, X, Search } from 'lucide-react'
 import { useAppContext } from '../store/AppContext'
 import { getAuthToken, sendLoginCode, verifyLoginCode } from '../lib/accountClient.js'
+import {
+  LOGIN_CODE_COUNTDOWN_SECONDS,
+  formatLoginCodeCountdownLabel,
+  shouldDisableLoginCodeButton,
+} from '../lib/loginCountdown.js'
 
 // ★ #21: 提取会话最后消息的纯文本预览 (剥 markdown / 多模态 array / 工具卡)
 function getSessionPreview(session) {
@@ -46,6 +51,7 @@ export default function LeftRail() {
   const [loginCode, setLoginCode] = useState('')
   const [loginMessage, setLoginMessage] = useState('')
   const [loginLoading, setLoginLoading] = useState(false)
+  const [loginCodeCountdown, setLoginCodeCountdown] = useState(0)
   // ★ #13: 全局会话搜索 — 标题 + 消息内容
   const [searchQuery, setSearchQuery] = useState('')
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('')
@@ -123,12 +129,22 @@ export default function LeftRail() {
     navigate(item.path)
   }
 
+  useEffect(() => {
+    if (loginCodeCountdown <= 0) return undefined
+    const timer = window.setInterval(() => {
+      setLoginCodeCountdown((current) => Math.max(0, current - 1))
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [loginCodeCountdown])
+
   const handleSendCode = async (event) => {
     event.preventDefault()
+    if (loginCodeCountdown > 0) return
     setLoginLoading(true)
     setLoginMessage('')
     try {
       const result = await sendLoginCode(loginEmail)
+      setLoginCodeCountdown(LOGIN_CODE_COUNTDOWN_SECONDS)
       setLoginMessage(result.devCode ? `验证码：${result.devCode}` : '验证码已发送，请查看邮箱。')
     } catch (error) {
       setLoginMessage(error.message)
@@ -364,10 +380,14 @@ export default function LeftRail() {
                 />
               </label>
               <button
-                disabled={loginLoading || !loginEmail.trim()}
-                className="h-9 px-4 bg-ink text-paper rounded-md text-sm hover:bg-ink-soft transition-colors self-start disabled:opacity-50"
+                disabled={shouldDisableLoginCodeButton({
+                  accountLoading: loginLoading,
+                  loginEmail,
+                  countdown: loginCodeCountdown,
+                })}
+                className="h-9 px-4 bg-ink text-paper rounded-md text-sm hover:bg-ink-soft transition-colors self-start disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                发送验证码
+                {formatLoginCodeCountdownLabel(loginCodeCountdown)}
               </button>
             </form>
 
