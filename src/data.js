@@ -20,7 +20,7 @@ export const HISTORY = []
 export const SKILLS = [
   {
     id: 'ppt',
-    icon: '📊',
+    icon: '',
     name: '制作 PPT',
     desc: '根据主题、资料或大纲生成演示文稿内容',
     perms: ['内容生成'],
@@ -30,7 +30,7 @@ export const SKILLS = [
   },
   {
     id: 'htmlppt',
-    icon: '🎨',
+    icon: '',
     name: 'HTML 高级感 PPT',
     desc: '输出单文件 HTML 幻灯片（暗色高级感、键盘翻页、自适应）',
     perms: ['内容生成'],
@@ -40,7 +40,7 @@ export const SKILLS = [
   },
   {
     id: 'doc',
-    icon: '📑',
+    icon: '',
     name: '整理文档',
     desc: '摘要、润色、改写、结构梳理',
     perms: ['内容生成'],
@@ -50,7 +50,7 @@ export const SKILLS = [
   },
   {
     id: 'excel',
-    icon: '📈',
+    icon: '',
     name: '分析表格',
     desc: '基于上传的 CSV/文本表格做分析和公式建议',
     perms: ['内容分析'],
@@ -59,7 +59,7 @@ export const SKILLS = [
   },
   {
     id: 'mail',
-    icon: '✉️',
+    icon: '',
     name: '邮件起草',
     desc: '根据要点生成邮件草稿',
     perms: ['内容生成'],
@@ -68,7 +68,7 @@ export const SKILLS = [
   },
   {
     id: 'finance',
-    icon: '🧮',
+    icon: '',
     name: '财务分析',
     desc: '基于上传文本或表格做核对分析',
     perms: ['内容分析'],
@@ -131,9 +131,10 @@ export const PERMISSIONS = [
 export const TASK_STEPS = []
 
 export const QUICK_ACTIONS = [
-  { icon: '📊', name: '制作 PPT', active: true },
-  { icon: '📑', name: '整理文档', active: false },
-  { icon: '📈', name: '分析表格', active: false },
+  { icon: '', name: '制作 PPT', active: true },
+  { icon: '', name: 'HTML 高级感 PPT', active: true },
+  { icon: '', name: '整理文档', active: false },
+  { icon: '', name: '分析表格', active: false },
 ]
 
 export const PERM_REQUEST = null

@@ -11,7 +11,7 @@ const tabs = [
 ]
 
 function formatStatus(item) {
-  const prefix = item.state === 'done' ? '✓' : item.state === 'active' ? '●' : '✕'
+  const prefix = item.state === 'done' ? '[完成]' : item.state === 'active' ? '[进行中]' : '[失败]'
   return `${prefix} ${item.status || ''} · ${item.detail || ''}`
 }
 

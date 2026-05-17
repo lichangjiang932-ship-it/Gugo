@@ -8,6 +8,11 @@ import {
   Pause,
   X,
   FileText,
+  Presentation,
+  Monitor,
+  Table,
+  Mail,
+  Calculator,
 } from 'lucide-react'
 
 const QUICK_SKILLS = [
@@ -92,7 +97,11 @@ export default function ChatComposer({
                     (i === selectedIndex ? 'bg-ember-soft' : 'hover:bg-paper-2')
                   }
                 >
-                  <span className="text-lg">{skill.icon}</span>
+                  {(() => {
+                    const IconMap = { ppt: Presentation, htmlppt: Monitor, doc: FileText, excel: Table, mail: Mail, finance: Calculator }
+                    const Icon = IconMap[skill.id]
+                    return Icon ? <Icon className="w-5 h-5 text-ink-fade" /> : null
+                  })()}
                   <div className="flex-1 min-w-0">
                     <div className={'text-sm font-medium ' + (i === selectedIndex ? 'text-ember' : 'text-ink')}>
                       {skill.name}

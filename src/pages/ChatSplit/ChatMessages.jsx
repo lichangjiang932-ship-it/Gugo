@@ -327,7 +327,7 @@ export default function ChatMessages({
                   <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-2">
                       <span className="font-mono text-[9px] tracking-wider text-ember">
-                        ● 请求授权 · {state.permRequest.skillName}
+                        [请求授权] {state.permRequest.skillName}
                       </span>
                     </div>
                   </div>

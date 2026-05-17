@@ -6,9 +6,8 @@
 // Keynote / WPS 里既保留视觉效果，也能直接双击修改文字。
 //
 // 仅在浏览器环境使用（依赖 document / html-to-image / pptxgenjs）。
-
-import { toPng } from 'html-to-image'
-import PptxGenJS from 'pptxgenjs'
+// 注意:html-to-image 和 pptxgenjs 都走动态 import,与 presentationExport.js 对齐 —
+// 否则 vite 会报 INEFFECTIVE_DYNAMIC_IMPORT,这两个大包会被打进主 chunk.
 
 const SLIDE_W_IN = 13.333
 const SLIDE_H_IN = 7.5
@@ -136,6 +135,13 @@ export async function convertHtmlDeckToPptx(html, { title = 'presentation', onPr
   try {
     const slides = getSlides(doc)
     if (!slides.length) throw new Error('未在 HTML 中找到任何 .slide 节点')
+
+    // 动态加载大包,让 vite 把它们切到独立 chunk,首屏不带这两个依赖
+    const [{ toPng }, PptxGenJSMod] = await Promise.all([
+      import('html-to-image'),
+      import('pptxgenjs'),
+    ])
+    const PptxGenJS = PptxGenJSMod.default || PptxGenJSMod
 
     const pptx = new PptxGenJS()
     pptx.layout = 'LAYOUT_WIDE' // 13.333 x 7.5

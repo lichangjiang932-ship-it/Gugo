@@ -32,7 +32,7 @@ export function sessionToMarkdown(session) {
 
   const msgs = Array.isArray(session.messages) ? session.messages : []
   msgs.forEach((m, idx) => {
-    const role = m.role === 'user' ? '🧑 用户' : m.role === 'assistant' ? '🤖 助手' : `⚙️ ${m.role}`
+    const role = m.role === 'user' ? '用户' : m.role === 'assistant' ? '助手' : `系统 ${m.role}`
     lines.push(`## ${idx + 1}. ${role}`)
     if (m.meta?.modelName) lines.push(`*模型: ${m.meta.modelName}*  `)
     if (typeof m.meta?.latency === 'number') lines.push(`*延迟: ${m.meta.latency} ms*  `)
