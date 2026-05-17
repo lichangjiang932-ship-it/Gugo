@@ -53,6 +53,7 @@ function setSchemaVersionInternal(db, version) {
 function runMigrations(db) {
   const version = getSchemaVersionInternal(db)
   if (version < 2) migrateToV2(db)
+  if (version < 3) migrateToV3(db)
 }
 
 /**
@@ -80,6 +81,18 @@ function migrateToV2(db) {
     CREATE INDEX IF NOT EXISTS idx_skills_user ON skills(user_id, created_at);
   `)
   setSchemaVersionInternal(db, 2)
+}
+
+/**
+ * Migration v3：users 表增加可选密码列（邮箱验证码仍可用，密码是额外的快捷登录方式）。
+ */
+function migrateToV3(db) {
+  if (!hasColumn(db, 'users', 'password_hash')) {
+    db.exec('ALTER TABLE users ADD COLUMN password_hash TEXT')
+    db.exec('ALTER TABLE users ADD COLUMN password_salt TEXT')
+    db.exec('ALTER TABLE users ADD COLUMN password_set_at INTEGER')
+  }
+  setSchemaVersionInternal(db, 3)
 }
 
 function initSchema(db) {
@@ -263,6 +276,23 @@ export function getUserByEmail(email) {
   const db = getDb()
   const stmt = db.prepare('SELECT * FROM users WHERE email = ?')
   return stmt.get(email) || null
+}
+
+export function setUserPassword({ id, passwordHash, passwordSalt, now = Date.now() }) {
+  const db = getDb()
+  const stmt = db.prepare(
+    'UPDATE users SET password_hash = ?, password_salt = ?, password_set_at = ?, updated_at = ? WHERE id = ?'
+  )
+  stmt.run(passwordHash, passwordSalt, now, now, id)
+  return getUserById(id)
+}
+
+export function clearUserPassword({ id, now = Date.now() }) {
+  const db = getDb()
+  db.prepare(
+    'UPDATE users SET password_hash = NULL, password_salt = NULL, password_set_at = NULL, updated_at = ? WHERE id = ?'
+  ).run(now, id)
+  return getUserById(id)
 }
 
 export function updateUserCredits({ id, credits, now = Date.now() }) {

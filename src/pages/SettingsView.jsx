@@ -22,7 +22,7 @@ import {
 import LeftRail from '../components/LeftRail'
 import { useAppContext } from '../store/AppContext'
 import { clearPersistedState } from '../store/AppContext.jsx'
-import { getAccount, getAuthToken, recharge, sendLoginCode, setAuthToken, verifyLoginCode } from '../lib/accountClient.js'
+import { getAccount, getAuthToken, recharge, removeAccountPassword, sendLoginCode, setAccountPassword, setAuthToken, verifyLoginCode } from '../lib/accountClient.js'
 import {
   LOGIN_CODE_COUNTDOWN_SECONDS,
   formatLoginCodeCountdownLabel,
@@ -97,6 +97,11 @@ export default function SettingsView() {
   const [account, setAccount] = useState(null)
   const [accountMessage, setAccountMessage] = useState('')
   const [accountLoading, setAccountLoading] = useState(false)
+  const [pwdCurrent, setPwdCurrent] = useState('')
+  const [pwdNew, setPwdNew] = useState('')
+  const [pwdConfirm, setPwdConfirm] = useState('')
+  const [pwdLoading, setPwdLoading] = useState(false)
+  const [pwdMessage, setPwdMessage] = useState('')
   const [loginCodeCountdown, setLoginCodeCountdown] = useState(0)
   const [dataMessage, setDataMessage] = useState('')
   const [storageBytes, setStorageBytes] = useState(() => getLocalStorageBytes())
@@ -392,6 +397,101 @@ export default function SettingsView() {
                   </button>
                 ))}
               </div>
+            </SettingsGroup>
+
+            <SettingsGroup title="登录密码">
+              <p className="text-sm text-ink-soft mb-3">
+                {account.user.hasPassword
+                  ? '已设置密码。下次可在登录弹窗「密码登录」页签直接输入邮箱+密码登录，不再依赖邮件验证码。'
+                  : '设置一个登录密码，下次可不再等邮件验证码，直接用邮箱+密码登录。邮箱验证码登录不受影响，仍可用于找回密码。'}
+              </p>
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault()
+                  setPwdMessage('')
+                  if (pwdNew !== pwdConfirm) { setPwdMessage('两次输入的新密码不一致'); return }
+                  setPwdLoading(true)
+                  try {
+                    const result = await setAccountPassword({ currentPassword: pwdCurrent, newPassword: pwdNew })
+                    setAccount((prev) => prev ? { ...prev, user: { ...prev.user, ...result.user } } : prev)
+                    setPwdCurrent(''); setPwdNew(''); setPwdConfirm('')
+                    setPwdMessage('密码已保存。')
+                  } catch (err) {
+                    setPwdMessage(err.message)
+                  } finally {
+                    setPwdLoading(false)
+                  }
+                }}
+                className="grid grid-cols-1 md:grid-cols-2 gap-3"
+              >
+                {account.user.hasPassword ? (
+                  <label className="flex flex-col gap-1 md:col-span-2">
+                    <span className="text-xs text-ink-fade">当前密码</span>
+                    <input
+                      type="password"
+                      autoComplete="current-password"
+                      value={pwdCurrent}
+                      onChange={(e) => setPwdCurrent(e.target.value)}
+                      className="h-9 px-3 border border-ink/40 rounded-md bg-paper outline-none focus:border-ember text-sm text-ink"
+                    />
+                  </label>
+                ) : null}
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs text-ink-fade">新密码（8位以上，含字母和数字）</span>
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    value={pwdNew}
+                    onChange={(e) => setPwdNew(e.target.value)}
+                    className="h-9 px-3 border border-ink/40 rounded-md bg-paper outline-none focus:border-ember text-sm text-ink"
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs text-ink-fade">确认新密码</span>
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    value={pwdConfirm}
+                    onChange={(e) => setPwdConfirm(e.target.value)}
+                    className="h-9 px-3 border border-ink/40 rounded-md bg-paper outline-none focus:border-ember text-sm text-ink"
+                  />
+                </label>
+                <div className="md:col-span-2 flex gap-2">
+                  <button
+                    type="submit"
+                    disabled={pwdLoading || !pwdNew || !pwdConfirm || (account.user.hasPassword && !pwdCurrent)}
+                    className="h-9 px-4 bg-ember text-paper rounded-md text-sm hover:bg-ember/90 transition-colors disabled:opacity-50"
+                  >
+                    {account.user.hasPassword ? '修改密码' : '设置密码'}
+                  </button>
+                  {account.user.hasPassword ? (
+                    <button
+                      type="button"
+                      disabled={pwdLoading || !pwdCurrent}
+                      onClick={async () => {
+                        if (!confirm('确定移除密码？以后只能用邮箱验证码登录。')) return
+                        setPwdMessage(''); setPwdLoading(true)
+                        try {
+                          const result = await removeAccountPassword({ currentPassword: pwdCurrent })
+                          setAccount((prev) => prev ? { ...prev, user: { ...prev.user, ...result.user } } : prev)
+                          setPwdCurrent(''); setPwdNew(''); setPwdConfirm('')
+                          setPwdMessage('密码已移除。')
+                        } catch (err) {
+                          setPwdMessage(err.message)
+                        } finally {
+                          setPwdLoading(false)
+                        }
+                      }}
+                      className="h-9 px-4 border border-dashed border-ink-fade/60 rounded-md text-sm text-ink-soft hover:border-ink-fade disabled:opacity-50"
+                    >
+                      移除密码
+                    </button>
+                  ) : null}
+                </div>
+                {pwdMessage && (
+                  <div className="md:col-span-2 p-2 border border-ink-fade/40 rounded-md text-sm text-ink-soft bg-paper-2">{pwdMessage}</div>
+                )}
+              </form>
             </SettingsGroup>
 
             <SettingsGroup title="最近账单">

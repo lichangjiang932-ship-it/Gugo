@@ -151,7 +151,7 @@ test('legacy sqlite schema upgrades before creating user-scoped indexes', () => 
     assert.equal(result.status, 0, result.stderr || result.stdout)
     const status = JSON.parse(result.stdout.trim())
     assert.equal(status.ok, true)
-    assert.equal(status.schemaVersion, '2')
+    assert.equal(status.schemaVersion, '3')
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }
