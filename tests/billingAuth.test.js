@@ -51,6 +51,14 @@ test('email code login creates a reusable user token without exposing the code',
   assert.equal(session.user.credits, 0)
 })
 
+test('email codes are stored as hashes instead of plaintext', () => {
+  issueEmailCode({ email: 'hashed@example.com', code: '123456' })
+
+  const row = getDb().prepare('SELECT code FROM login_codes WHERE email = ?').get('hashed@example.com')
+  assert.notEqual(row.code, '123456')
+  assert.match(row.code, /^sha256:/)
+})
+
 test('send-code response exposes local dev code when smtp is not configured', () => {
   assert.deepEqual(
     buildSendCodeResponse({
@@ -181,4 +189,18 @@ test('charging tool use deducts credits and records tool ledger entries', () => 
   assert.equal(charged.ledger[0].type, 'tool_charge')
   assert.equal(charged.ledger[0].model_name, 'web_search')
   assert.equal(charged.ledger[0].credits, -3)
+})
+
+test('model charges use relative credit deductions', () => {
+  const { token } = verifyEmailCode({
+    email: 'relative-charge@example.com',
+    code: issueEmailCode({ email: 'relative-charge@example.com', code: '444444' }).devCode,
+  })
+  rechargeAccount({ token, packageId: 'local-10' })
+
+  chargeForModelUse({ token, modelName: 'pro-model', cost: 10 })
+  getDb().prepare('UPDATE users SET credits = credits + 5 WHERE email = ?').run('relative-charge@example.com')
+  const charged = chargeForModelUse({ token, modelName: 'pro-model', cost: 10 })
+
+  assert.equal(charged.user.credits, 985)
 })

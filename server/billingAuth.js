@@ -9,6 +9,7 @@ import {
   getUserById,
   createUser,
   updateUserCredits,
+  deductUserCredits,
   getSessionByToken,
   createSession,
   createLoginCode,
@@ -102,6 +103,20 @@ const CODE_WINDOW_MS = 60 * 60 * 1000
 const MAX_LOGIN_ATTEMPTS = 5
 const CODE_TTL_MS = 10 * 60 * 1000
 
+function hashLoginCode(code) {
+  return `sha256:${crypto.createHash('sha256').update(String(code)).digest('hex')}`
+}
+
+function loginCodesMatch(storedCode, candidateCode) {
+  const expected = String(storedCode || '').startsWith('sha256:')
+    ? String(storedCode)
+    : hashLoginCode(storedCode)
+  const actual = hashLoginCode(candidateCode)
+  const left = Buffer.from(expected)
+  const right = Buffer.from(actual)
+  return left.length === right.length && crypto.timingSafeEqual(left, right)
+}
+
 function checkCodeRate(clientId) {
   const key = `code:${clientId}`
   return checkRateLimit({ key, windowMs: CODE_WINDOW_MS, maxRequests: MAX_CODES_PER_HOUR })
@@ -116,7 +131,7 @@ export function issueEmailCode({ email, now = Date.now(), code }) {
     throw new Error('请输入有效邮箱地址')
   }
   const actualCode = code || createCode()
-  createLoginCode({ email: normalized, code: actualCode, now, ttlMs: CODE_TTL_MS })
+  createLoginCode({ email: normalized, code: hashLoginCode(actualCode), now, ttlMs: CODE_TTL_MS })
   deleteExpiredCodes(now)
   return { ok: true, email: normalized, expiresIn: CODE_TTL_MS / 1000, devCode: actualCode }
 }
@@ -132,7 +147,7 @@ export function verifyEmailCode({ email, code, now = Date.now() }) {
     throw new Error('验证失败次数过多，请重新获取验证码')
   }
 
-  if (record.code !== String(code).trim()) {
+  if (!loginCodesMatch(record.code, String(code).trim())) {
     incrementLoginAttempts(normalized)
     throw new Error('验证码不正确')
   }
@@ -194,8 +209,10 @@ export function chargeForModelUse({ token, modelName, cost, now = Date.now() }) 
     throw new Error(`积分不足，需要 ${cost} 积分，当前余额 ${user.credits || 0}`)
   }
 
-  const newCredits = user.credits - cost
-  updateUserCredits({ id: user.id, credits: newCredits, now })
+  const result = deductUserCredits({ id: user.id, amount: cost, now })
+  if (!result.changed) {
+    throw new Error(`积分不足，需要 ${cost} 积分`)
+  }
 
   addLedgerEntry({
     id: crypto.randomUUID?.() || `led_${now}_${Math.random().toString(16).slice(2)}`,
@@ -203,11 +220,11 @@ export function chargeForModelUse({ token, modelName, cost, now = Date.now() }) 
     type: 'model_charge',
     modelName,
     credits: -cost,
-    balance: newCredits,
+    balance: result.user.credits,
     now,
   })
 
-  return { ok: true, user: publicUser(getUserById(user.id)), ledger: getLedgerForUser(user.id) }
+  return { ok: true, user: publicUser(result.user), ledger: getLedgerForUser(user.id) }
 }
 
 /* ── 计费配置 ── */
@@ -229,8 +246,10 @@ export function chargeForToolUse({ token, toolName, cost, now = Date.now() }) {
     throw new Error(`积分不足，需要 ${cost} 积分，当前余额 ${user.credits || 0}`)
   }
 
-  const newCredits = user.credits - cost
-  updateUserCredits({ id: user.id, credits: newCredits, now })
+  const result = deductUserCredits({ id: user.id, amount: cost, now })
+  if (!result.changed) {
+    throw new Error(`积分不足，需要 ${cost} 积分`)
+  }
 
   addLedgerEntry({
     id: crypto.randomUUID?.() || `led_${now}_${Math.random().toString(16).slice(2)}`,
@@ -238,11 +257,11 @@ export function chargeForToolUse({ token, toolName, cost, now = Date.now() }) {
     type: 'tool_charge',
     modelName: toolName,
     credits: -cost,
-    balance: newCredits,
+    balance: result.user.credits,
     now,
   })
 
-  return { ok: true, user: publicUser(getUserById(user.id)), ledger: getLedgerForUser(user.id) }
+  return { ok: true, user: publicUser(result.user), ledger: getLedgerForUser(user.id) }
 }
 
 export function loadBillingConfig(env = process.env) {

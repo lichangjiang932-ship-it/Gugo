@@ -164,10 +164,15 @@ export default function ChatSplit() {
   /* ── send flow ── */
   const triggerSendFlow = useCallback(
     async (content, explicitAttachments = null) => {
+      if (isGenerating) return
+      const activeSession = state.sessions.find((s) => s.id === state.activeSessionId)
+      const historyMessages = (activeSession?.messages || [])
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .slice(-20)
+        .map((m) => ({ role: m.role, content: typeof m.content === 'string' ? m.content : '' }))
       dispatch({ type: 'SEND_MESSAGE', payload: { content, attachments: explicitAttachments } })
       setWorkbenchMessage('')
 
-      const activeSession = state.sessions.find((s) => s.id === state.activeSessionId)
       const isFreshSession = activeSession && (activeSession.title === '新对话' || activeSession.title.startsWith('新会话'))
       if (isFreshSession) {
         // ★ #8: 立即兜底用截断, 让用户看到响应; 然后异步用 AI 覆盖一次
@@ -202,6 +207,7 @@ export default function ChatSplit() {
         const messages = []
         const systemPrompt = skillId ? getSkillSystemPrompt(skillId, state.skillConfigs, runtimeSkills) : ''
         if (systemPrompt) messages.push({ role: 'system', content: systemPrompt })
+        messages.push(...historyMessages)
         const attachmentsToUse = explicitAttachments || attachments
         messages.push({ role: 'user', content: buildUserContentWithAttachments(userPrompt || content, attachmentsToUse) })
 
@@ -411,7 +417,7 @@ export default function ChatSplit() {
     },
     // ★ #27: 细粒度 deps,只收 triggerSendFlow body 里实际读的字段;
     //         避免依赖整个 state 导致每次 sessionDrafts/tasks 变都重建 callback
-    [attachments, dispatch, modelOptions, selectedModel, toolMaxRounds, runtimeSkills,
+    [attachments, dispatch, isGenerating, modelOptions, selectedModel, toolMaxRounds, runtimeSkills,
       state.activeSessionId, state.sessions, state.toolsConfig, state.permissions, state.skillConfigs]
   )
 
@@ -532,9 +538,10 @@ export default function ChatSplit() {
   // ★ #9: 重发 — 找到消息位置,截掉它之后的所有消息(含本条),
   //   再用本条文本走完整发送流程(经过 triggerSendFlow 才能跑完工具/计费/SSE)
   const handleRegenerate = useCallback((msgId) => {
-    const idx = messages.findIndex((m) => m.id === msgId)
+    const currentMessages = state.sessions.find((s) => s.id === state.activeSessionId)?.messages ?? EMPTY_MESSAGES
+    const idx = currentMessages.findIndex((m) => m.id === msgId)
     if (idx === -1) return
-    const target = messages[idx]
+    const target = currentMessages[idx]
     // 用户消息: 截到本条之前 → 重发本条 (相当于编辑后不改直接发)
     // 助手消息: 截到本条之前(含上一条 user 也保留) → 重发上一条 user 触发新回复
     let resendText
@@ -545,14 +552,14 @@ export default function ChatSplit() {
       // 找上一条 user
       let prevUserIdx = -1
       for (let i = idx - 1; i >= 0; i -= 1) {
-        if (messages[i].role === 'user') { prevUserIdx = i; break }
+        if (currentMessages[i].role === 'user') { prevUserIdx = i; break }
       }
       if (prevUserIdx === -1) return
       dispatch({ type: 'TRUNCATE_MESSAGES', payload: prevUserIdx })
-      resendText = messages[prevUserIdx].content
+      resendText = currentMessages[prevUserIdx].content
     }
     if (resendText) triggerSendFlow(resendText)
-  }, [messages, dispatch, triggerSendFlow])
+  }, [dispatch, state.activeSessionId, state.sessions, triggerSendFlow])
 
   // ★ #10: 删除单条消息
   const handleDeleteMessage = useCallback((msgId) => {

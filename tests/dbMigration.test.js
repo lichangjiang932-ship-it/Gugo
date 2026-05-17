@@ -6,7 +6,7 @@ import os from 'node:os'
 import { spawnSync } from 'node:child_process'
 import Database from 'better-sqlite3'
 
-import { getDb, migrateFromJson } from '../server/db.js'
+import { checkRateLimit, getDb, migrateFromJson } from '../server/db.js'
 
 // 每个测试进程使用独立数据库目录，避免并行测试冲突
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-tests', String(process.pid))
@@ -155,4 +155,26 @@ test('legacy sqlite schema upgrades before creating user-scoped indexes', () => 
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('rate limit cleanup does not delete other keys with longer windows', () => {
+  const now = 1_700_000_000_000
+  const db = getDb()
+
+  assert.equal(checkRateLimit({
+    key: 'login_code:client',
+    windowMs: 60 * 60 * 1000,
+    maxRequests: 5,
+    now,
+  }).allowed, true)
+
+  assert.equal(checkRateLimit({
+    key: 'tool:client',
+    windowMs: 60 * 1000,
+    maxRequests: 20,
+    now: now + 2 * 60 * 1000,
+  }).allowed, true)
+
+  const loginRow = db.prepare('SELECT * FROM rate_limits WHERE key = ?').get('login_code:client')
+  assert.ok(loginRow, 'short-window cleanup must not delete long-window rate rows')
 })

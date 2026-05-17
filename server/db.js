@@ -272,6 +272,15 @@ export function updateUserCredits({ id, credits, now = Date.now() }) {
   return getUserById(id)
 }
 
+export function deductUserCredits({ id, amount, now = Date.now() }) {
+  const db = getDb()
+  const stmt = db.prepare(
+    'UPDATE users SET credits = credits - ?, updated_at = ? WHERE id = ? AND credits >= ?'
+  )
+  const result = stmt.run(amount, now, id, amount)
+  return { changed: result.changes > 0, user: getUserById(id) }
+}
+
 /* ── Sessions (auth tokens) ── */
 
 const TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
@@ -359,21 +368,23 @@ export function getLedgerForUser(userId, limit = 50) {
 
 export function checkRateLimit({ key, windowMs, maxRequests, now = Date.now() }) {
   const db = getDb()
-  // 清理旧窗口
-  db.prepare('DELETE FROM rate_limits WHERE window_start < ?').run(now - windowMs)
+  return db.transaction(() => {
+    // 只清理当前 key 的旧窗口；不同限流器可能窗口长度不同，不能互相删记录。
+    db.prepare('DELETE FROM rate_limits WHERE key = ? AND window_start < ?').run(key, now - windowMs)
 
-  const row = db.prepare('SELECT * FROM rate_limits WHERE key = ?').get(key)
-  if (!row) {
-    db.prepare('INSERT INTO rate_limits (key, count, window_start) VALUES (?, 1, ?)').run(key, now)
-    return { allowed: true, remaining: maxRequests - 1 }
-  }
+    const row = db.prepare('SELECT * FROM rate_limits WHERE key = ?').get(key)
+    if (!row) {
+      db.prepare('INSERT INTO rate_limits (key, count, window_start) VALUES (?, 1, ?)').run(key, now)
+      return { allowed: true, remaining: maxRequests - 1 }
+    }
 
-  if (row.count >= maxRequests) {
-    return { allowed: false, remaining: 0, resetAt: row.window_start + windowMs }
-  }
+    if (row.count >= maxRequests) {
+      return { allowed: false, remaining: 0, resetAt: row.window_start + windowMs }
+    }
 
-  db.prepare('UPDATE rate_limits SET count = count + 1 WHERE key = ?').run(key)
-  return { allowed: true, remaining: maxRequests - row.count - 1 }
+    db.prepare('UPDATE rate_limits SET count = count + 1 WHERE key = ?').run(key)
+    return { allowed: true, remaining: maxRequests - row.count - 1 }
+  })()
 }
 
 /* ── Migration ── */
