@@ -16,7 +16,7 @@ import ChatMessages from './ChatMessages'
 import ChatComposer from './ChatComposer'
 import RightPreviewPane from './RightPreviewPane'
 import { exportSession } from '../../lib/sessionExport.js'
-import * as XLSX from 'xlsx'
+import * as XLSX from '@e965/xlsx'
 
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024
 const MAX_TEXT_BYTES = 256 * 1024
