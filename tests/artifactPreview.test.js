@@ -48,3 +48,15 @@ test('builds an xlsx artifact preview from table markdown', () => {
 test('returns null for non-file replies', () => {
   assert.equal(buildArtifactPreview({ content: 'hello', meta: { skillId: 'mail' } }), null)
 })
+test('treats htmlppt as an explicit html artifact instead of inferred content', () => {
+  const preview = buildArtifactPreview({
+    content: '```html\n<!doctype html><html><head><title>Pitch Deck</title></head><body><section class="slide active"><h1>Pitch Deck</h1></section></body></html>\n```',
+    meta: { skillId: 'htmlppt', artifactType: 'html', artifactTitle: 'Pitch Deck' },
+  })
+
+  assert.equal(preview.type, 'html')
+  assert.equal(preview.inferred, false)
+  assert.equal(preview.title, 'Pitch Deck')
+  assert.equal(preview.filename, 'Pitch-Deck.html')
+  assert.equal(preview.previewable, true)
+})

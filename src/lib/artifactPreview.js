@@ -117,6 +117,7 @@ export function buildArtifactPreview({ content = '', meta = {} } = {}) {
   let inferred = false
   let confidence = 1
   if (shouldOfferPptxExport(meta)) resolvedType = 'pptx'
+  else if (meta?.artifactType === 'html' || meta?.skillId === 'htmlppt') resolvedType = 'html'
   else if (meta?.artifactType === 'react') resolvedType = 'react'
   else {
     const officeType = shouldOfferOfficeExport(meta)
