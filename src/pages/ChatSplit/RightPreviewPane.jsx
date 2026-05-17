@@ -16,6 +16,7 @@ import {
   parseSpreadsheetRows,
 } from '../../lib/officeExport.js'
 import { buildHtmlDocument } from '../../lib/artifactPreview.js'
+import { downloadHtmlDeckAsPptx } from '../../lib/htmlSlidesToPptx.js'
 
 function ArtifactIcon({ type }) {
   if (type === 'html') return <Globe className="w-4 h-4" />
@@ -383,6 +384,26 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
     }
   }
 
+  // HTML 幻灯片 → 可编辑 .pptx（每页截图 + 透明文本框覆盖）
+  const handleHtmlToPptx = async () => {
+    if (preview.type !== 'html') return
+    setPremiumExporting(true)
+    try {
+      const title = (preview.title || preview.filename || 'presentation').replace(/\.html$/i, '')
+      const fullHtml = buildHtmlDocument(preview.html)
+      await downloadHtmlDeckAsPptx(fullHtml, {
+        title,
+        filename: buildPresentationFilename(title),
+        onProgress: (current, total) => setPremiumProgress(`${current}/${total}`),
+      })
+    } catch (err) {
+      onMessage?.(err.message || '转 PPTX 失败')
+    } finally {
+      setPremiumExporting(false)
+      setPremiumProgress('')
+    }
+  }
+
   return (
     <AnimatePresence>
       <motion.div
@@ -480,6 +501,17 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
               >
                 <Sparkles className="w-3 h-3" />
                 {premiumExporting ? `截图 ${premiumProgress}` : '高级'}
+              </button>
+            )}
+            {preview.type === 'html' && (
+              <button
+                onClick={handleHtmlToPptx}
+                disabled={premiumExporting || downloading}
+                className="h-7 px-2 rounded-md border border-ink-fade/40 text-ink-soft hover:bg-paper hover:text-ember transition-colors inline-flex items-center gap-1 text-[11px] disabled:opacity-50"
+                title="把 HTML 幻灯片转成可编辑 PPTX（每页截图 + 透明文本框）"
+              >
+                <Presentation className="w-3 h-3" />
+                {premiumExporting ? `转换 ${premiumProgress}` : '转 PPTX'}
               </button>
             )}
             <button
