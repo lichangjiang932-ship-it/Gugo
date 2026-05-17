@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Search, Sparkles, Upload, X, Presentation, Monitor, FileText, Table, Mail, Calculator } from 'lucide-react'
+import { Plus, Search, Sparkles, Upload, X } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
 import { SKILLS } from '../data.js'
 import { useAppContext } from '../store/AppContext'
 import { importSkillPack, listSkills } from '../lib/skillClient.js'
+import { SKILL_ICONS } from '../lib/skillIcons.js'
 
 const CUSTOM_KEY = 'your-model-atelier:custom-skills:v1'
 
@@ -285,8 +286,7 @@ export default function SkillsMarket() {
               <div className="flex items-start justify-between gap-2">
                 <div className="w-9 h-9 rounded-lg border border-ink-fade/60 flex items-center justify-center bg-paper">
                   {(() => {
-                    const IconMap = { ppt: Presentation, htmlppt: Monitor, doc: FileText, excel: Table, mail: Mail, finance: Calculator }
-                    const Icon = IconMap[skill.id]
+                    const Icon = SKILL_ICONS[skill.id]
                     return Icon ? <Icon className="w-5 h-5 text-ink-fade" /> : <span className="text-xl">{skill.icon}</span>
                   })()}
                 </div>

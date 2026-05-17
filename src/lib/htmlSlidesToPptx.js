@@ -15,9 +15,15 @@ const RENDER_W = 1920
 const RENDER_H = 1080
 
 // 在 body 里挂一个隐藏 iframe，写入 html 并等到 .slide 全部渲染好。
+//
+// 安全:sandbox="allow-same-origin" 禁止脚本执行,但保留同源 DOM 访问,
+// 这样模型生成的 deck 即便注入 <script> 也跑不起来,无法读取父页 token /
+// localStorage.代价:deck 里 Chart.js 等 JS 渲染图表不会出现在 PPTX,
+// 纯 HTML/CSS deck 不受影响.若日后需要 JS 图表,要改用 postMessage 协议.
 async function mountDeckIframe(html) {
   const iframe = document.createElement('iframe')
   iframe.setAttribute('aria-hidden', 'true')
+  iframe.setAttribute('sandbox', 'allow-same-origin')
   iframe.style.cssText = [
     'position:fixed',
     'left:-99999px',
@@ -152,27 +158,30 @@ export async function convertHtmlDeckToPptx(html, { title = 'presentation', onPr
       onProgress?.(i + 1, slides.length)
       const node = slides[i]
       const restore = activateSlide(slides, node)
-      // 让浏览器走一次布局 + 动画首帧
-      await new Promise((r) => setTimeout(r, 80))
-
+      // restore() 必须无论 toPng / extractEditableText 是否抛错都执行,
+      // 否则下张 slide 的 activateSlide 会基于"被强制 display:none"的状态再去找节点.
       let dataUrl
+      let editable
       try {
-        dataUrl = await toPng(node, {
-          width: RENDER_W,
-          height: RENDER_H,
-          pixelRatio: 1,
-          cacheBust: true,
-          backgroundColor: '#0b0d12',
-          skipFonts: false,
-          style: { transform: 'none' },
-        })
-      } catch (err) {
+        // 让浏览器走一次布局 + 动画首帧
+        await new Promise((r) => setTimeout(r, 80))
+        try {
+          dataUrl = await toPng(node, {
+            width: RENDER_W,
+            height: RENDER_H,
+            pixelRatio: 1,
+            cacheBust: true,
+            backgroundColor: '#0b0d12',
+            skipFonts: false,
+            style: { transform: 'none' },
+          })
+        } catch (err) {
+          throw new Error(`第 ${i + 1} 页截图失败：${err.message || err}`, { cause: err })
+        }
+        editable = extractEditableText(node)
+      } finally {
         restore()
-        throw new Error(`第 ${i + 1} 页截图失败：${err.message || err}`, { cause: err })
       }
-
-      const editable = extractEditableText(node)
-      restore()
 
       const slide = pptx.addSlide()
       // 整页背景图（视觉真相）

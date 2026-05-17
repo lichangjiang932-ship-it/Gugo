@@ -8,12 +8,8 @@ import {
   Pause,
   X,
   FileText,
-  Presentation,
-  Monitor,
-  Table,
-  Mail,
-  Calculator,
 } from 'lucide-react'
+import { SKILL_ICONS } from '../../lib/skillIcons.js'
 
 const QUICK_SKILLS = [
   { label: '/ppt', command: '/ppt', active: true },
@@ -98,8 +94,7 @@ export default function ChatComposer({
                   }
                 >
                   {(() => {
-                    const IconMap = { ppt: Presentation, htmlppt: Monitor, doc: FileText, excel: Table, mail: Mail, finance: Calculator }
-                    const Icon = IconMap[skill.id]
+                    const Icon = SKILL_ICONS[skill.id]
                     return Icon ? <Icon className="w-5 h-5 text-ink-fade" /> : null
                   })()}
                   <div className="flex-1 min-w-0">
