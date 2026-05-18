@@ -18,6 +18,7 @@ function mapBuiltInSkill(skill) {
 
 function mapImportedSkill(skill) {
   const full = getImportedSkill(skill.id, { userId: skill.userId })
+  const fileList = full?.files ? Object.keys(full.files) : []
   return {
     id: skill.id,
     name: skill.name,
@@ -26,10 +27,13 @@ function mapImportedSkill(skill) {
     icon: skill.icon,
     permissions: skill.permissions || [],
     perms: skill.permissions || [],
-    recommended: false,
-    custom: true,
-    imported: true,
+    recommended: !!skill.system, // 系统内置默认推荐
+    custom: !skill.system,
+    imported: !skill.system,
+    system: !!skill.system,
     version: skill.version,
+    assetCount: fileList.length,
+    hasTemplates: fileList.some((p) => p.startsWith('templates/')),
     systemPrompt: full?.files?.['prompts/system.md'] || '',
   }
 }

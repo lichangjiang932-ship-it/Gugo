@@ -23,6 +23,7 @@ import { handleArtifactDownload } from './artifactGen.js'
 import { closeJobRuntime, getJobRuntime } from './jobRuntime.js'
 import { handleJobRequest } from './jobRoutes.js'
 import { handleSkillRequest } from './skillRoutes.js'
+import { seedSystemSkills } from './seedSystemSkills.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -204,6 +205,15 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const env = getRuntimeEnv()
   const host = env.SERVER_HOST || '127.0.0.1'
   const port = Number(env.SERVER_PORT || 5173)
+
+  // ★ 启动时播种系统级技能 (seed/skills/<id>/ → SQLite)
+  // 失败时只记 log 不阻塞启动
+  try {
+    seedSystemSkills()
+  } catch (err) {
+    console.error('[server] seedSystemSkills failed:', err.message)
+  }
+
   const server = createAppServer().listen(port, host, () => {
     if (process.env.NODE_ENV !== 'production') console.log(`Your Model Atelier running at http://${host}:${port}/`)
   })

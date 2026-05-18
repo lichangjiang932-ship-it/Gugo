@@ -10,7 +10,8 @@
     "test": "node --test tests/*.test.js",
     "serve": "node server/appServer.js",
     "local": "npm run build && npm run serve",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "seed:skills": "node server/seedSystemSkills.js"
   },
   "dependencies": {
     "@e965/xlsx": "^0.20.3",
