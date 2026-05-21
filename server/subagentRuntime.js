@@ -1,24 +1,224 @@
+/**
+ * 隔离子代理运行时。
+ *
+ * 借鉴 Reasonix 的 subagent 设计：
+ *  - 子代理有独立 tool call 循环（不与父 session 共享执行上下文）
+ *  - 子代理可以调任意工具，但结果不写入父 session
+ *  - 只返回最终文本答案
+ *  - 不同类型的子代理获得不同工具集
+ */
+
 import { randomUUID } from 'node:crypto'
 import { getDb } from './db.js'
-import { callBackgroundModel } from './modelProxy.js'
+import { callBackgroundModel, callBackgroundModelWithTools } from './modelProxy.js'
+
+import { fetchAndExtract, searchDuckDuckGo } from './toolProxy.js'
+import { dispatchFsShellTool } from './fsShellTools.js'
 
 const MAX_CONCURRENT_PER_USER = 3
 const activeByUser = new Map()
+
+const SUBAGENT_MAX_ITERS = 8
+
+/* ─── 子代理工具定义 ─── */
+
+/**
+ * 只读工具规格 — 用于 explore/plan 类型（不能修改文件）。
+ */
+const READONLY_TOOL_SPECS = [
+  {
+    type: 'function',
+    function: {
+      name: 'web_search',
+      description: '搜索互联网，获取最新信息。',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: '搜索关键词' },
+          maxResults: { type: 'number', description: '返回结果数量（默认 5）' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fetch_url',
+      description: '抓取 URL 内容并提取正文为 Markdown。',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: '要抓取的网页 URL' },
+        },
+        required: ['url'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_file',
+      description: '读取工作区文件。',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: '文件路径' },
+        },
+        required: ['path'],
+      },
+    },
+  },
+]
+
+/**
+ * 完整工具规格 — 用于 general 类型（可读写）。
+ */
+const FULL_TOOL_SPECS = [
+  ...READONLY_TOOL_SPECS,
+  {
+    type: 'function',
+    function: {
+      name: 'write_file',
+      description: '写文件到工作区。',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: '文件路径' },
+          content: { type: 'string', description: '文件内容' },
+        },
+        required: ['path', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'edit_file',
+      description: '编辑文件中的指定内容（SEARCH/REPLACE）。',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: '文件路径' },
+          oldText: { type: 'string', description: '要替换的原文' },
+          newText: { type: 'string', description: '替换后的新内容' },
+        },
+        required: ['path', 'oldText', 'newText'],
+      },
+    },
+  },
+]
+
+/* ─── 子代理类型 ─── */
 
 export const SUBAGENT_TYPES = {
   explore: {
     label: 'Explore',
     system: 'You are an isolated explore sub-agent. Read the task, investigate carefully, and return concise findings with concrete file paths, commands, risks, and next actions. Do not claim to edit files.',
+    tools: READONLY_TOOL_SPECS,
   },
   plan: {
     label: 'Plan',
     system: 'You are an isolated planning sub-agent. Produce a practical implementation plan with acceptance checks. Stay read-only and avoid write instructions unless asked by the parent.',
+    tools: READONLY_TOOL_SPECS,
   },
   general: {
     label: 'General',
     system: 'You are an isolated general sub-agent. Complete the focused sub-task and return the final answer only; keep it compact and actionable.',
+    tools: FULL_TOOL_SPECS,
   },
 }
+
+/* ─── 子代理工具执行器 ─── */
+
+/**
+ * 在子代理沙箱中执行一个工具调用。
+ * 结果只返回给子代理自己的上下文，不会写入父 session 或 DB。
+ */
+async function executeSubagentTool(toolName, args) {
+  switch (toolName) {
+    case 'web_search':
+      return searchDuckDuckGo({ query: args.query, maxResults: args.maxResults })
+    case 'fetch_url':
+      return fetchAndExtract({ url: args.url })
+    case 'read_file':
+    case 'write_file':
+    case 'edit_file':
+      return dispatchFsShellTool(toolName, args)
+    default:
+      return { ok: false, error: `unknown subagent tool: ${toolName}` }
+  }
+}
+
+/* ─── 子代理工具循环（隔离执行） ─── */
+
+/**
+ * 子代理的独立 tool call 循环。
+ * 所有 tool call 结果只在子代理上下文中流转，不会污染父 session。
+ *
+ * @param {Object} options
+ * @param {Array} options.messages - 初始消息列表
+ * @param {Array} options.tools - OpenAI function-calling 工具规格
+ * @param {AbortSignal} [options.signal]
+ * @param {number} [options.maxIters=SUBAGENT_MAX_ITERS]
+ * @returns {Promise<string>} 最终文本回答
+ */
+async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS }) {
+  let currentMessages = [...messages]
+
+  for (let iter = 0; iter < maxIters; iter++) {
+    const response = await callBackgroundModelWithTools({
+      messages: currentMessages,
+      tools,
+      signal,
+    })
+
+    const text = response?.content || ''
+    const toolCalls = response?.toolCalls || []
+
+    // 没有工具调用 → 这就是最终答案
+    if (!toolCalls.length) return text
+
+    currentMessages.push({
+      role: 'assistant',
+      content: text || null,
+      tool_calls: toolCalls.map((tc) => ({
+        id: tc.id,
+        type: 'function',
+        function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+      })),
+    })
+
+    for (const call of toolCalls) {
+      let result
+      try {
+        result = await executeSubagentTool(call.name, call.arguments)
+      } catch (err) {
+        result = { ok: false, error: err?.message || String(err) }
+      }
+      currentMessages.push({
+        role: 'tool',
+        tool_call_id: call.id,
+        content: JSON.stringify(result),
+      })
+    }
+  }
+
+  // 达到最大迭代次数后，让模型做一次总结
+  currentMessages.push({
+    role: 'system',
+    content: `你已经达到工具调用上限（${maxIters} 次）。请基于已有信息给出最终回答。不要进一步调工具。`,
+  })
+  const finalResponse = await callBackgroundModelWithTools({
+    messages: currentMessages,
+    tools, // 仍然传入 tools 但不期望模型再调
+    signal,
+    toolChoice: 'none', // 强制不调工具
+  })
+  return finalResponse?.content || '(工具循环已达上限)'
+}
+
+/* ─── DB CRUD ─── */
 
 function now() {
   return Date.now()
@@ -69,6 +269,16 @@ export function listSubagentTypes() {
   return Object.entries(SUBAGENT_TYPES).map(([id, info]) => ({ id, label: info.label }))
 }
 
+/* ─── 主入口 ─── */
+
+/**
+ * 运行一个隔离子代理。
+ *
+ * 子代理拥有独立的 tool call 循环 —— 所有工具调用结果只在子代理
+ * 上下文内流转，不会写入父 session 或父空间。
+ *
+ * 返回结果只包含最终文本，中间步骤不暴露给调用方。
+ */
 export async function runSubagent({
   userId,
   type = 'general',
@@ -96,14 +306,16 @@ export async function runSubagent({
   insertRun({ id, userId, type, prompt, parentSessionId, parentMessageId, trace })
 
   try {
-    const resultText = await callBackgroundModel({
-      modelName,
-      signal,
-      messages: [
-        { role: 'system', content: SUBAGENT_TYPES[type].system },
-        { role: 'user', content: String(prompt).trim() },
-      ],
-    })
+    const { system, tools } = SUBAGENT_TYPES[type]
+    const messages = [
+      { role: 'system', content: system },
+      { role: 'user', content: String(prompt).trim() },
+    ]
+
+    const resultText = tools?.length
+      ? await subagentToolsLoop({ messages, tools, signal })
+      : await callBackgroundModel({ modelName, signal, messages })
+
     trace.push({ type: 'done', at: now() })
     return updateRun({ id, userId, status: 'completed', resultText, trace })
   } catch (err) {
