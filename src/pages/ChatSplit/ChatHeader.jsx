@@ -7,6 +7,12 @@ import {
 } from 'lucide-react'
 import { useState, useRef, useEffect } from 'react'
 
+const AGENT_MODES = [
+  { id: 'chat', label: 'Chat' },
+  { id: 'plan', label: 'Plan' },
+  { id: 'code', label: 'Code' },
+]
+
 export default function ChatHeader({
   activeSession,
   messages,
@@ -14,6 +20,8 @@ export default function ChatHeader({
   modelOptions,
   selectedModel,
   hasTasks,
+  agentMode = 'chat',
+  onAgentModeChange,
   onExport,
   onCompress,
   onRetry,
@@ -42,6 +50,17 @@ export default function ChatHeader({
         </h2>
       </div>
       <div className="flex gap-2 items-center">
+        <div className="inline-flex rounded-full border border-ink-fade/50 overflow-hidden bg-paper-2" title="Agent mode">
+          {AGENT_MODES.map((mode) => (
+            <button
+              key={mode.id}
+              onClick={() => onAgentModeChange?.(mode.id)}
+              className={`h-7 px-2.5 text-[11px] transition-colors ${agentMode === mode.id ? 'bg-ink text-paper' : 'text-ink-soft hover:bg-paper'}`}
+            >
+              {mode.label}
+            </button>
+          ))}
+        </div>
         <div className="relative" ref={exportBoxRef}>
           <button
             onClick={() => setExportOpen((v) => !v)}

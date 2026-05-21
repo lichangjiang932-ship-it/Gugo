@@ -5,7 +5,7 @@ import { useAppContext } from '../../store/AppContext'
 import { SKILLS, getSkillSystemPrompt } from '../../data.js'
 import { buildUserContentWithAttachments, describeAttachmentPrompt } from '../../lib/attachments.js'
 import { callModelThroughProxyStream, getModelStatus, summarizeSessionTitle } from '../../lib/modelClient.js'
-import { buildToolSpecs, executeToolCall } from '../../lib/tools/index.js'
+import { buildToolSpecs, executeToolCall, resolveToolsForMode } from '../../lib/tools/index.js'
 import { readStoredModel, resolveInitialModel, writeStoredModel } from '../../lib/modelSelection.js'
 import { isLoggedInLocally } from '../../lib/accountClient.js'
 import { listSkills } from '../../lib/skillClient.js'
@@ -15,6 +15,7 @@ import ChatHeader from './ChatHeader'
 import ChatMessages from './ChatMessages'
 import ChatComposer from './ChatComposer'
 import RightPreviewPane from './RightPreviewPane'
+import CodingWorkbench from './CodingWorkbench'
 import { exportSession } from '../../lib/sessionExport.js'
 import * as XLSX from '@e965/xlsx'
 
@@ -80,6 +81,7 @@ export default function ChatSplit() {
   const activeSession = state.sessions.find((s) => s.id === state.activeSessionId)
   const messages = activeSession?.messages ?? EMPTY_MESSAGES
   const tasks = state.tasks
+  const agentMode = state.agentMode || 'chat'
   useEffect(() => {
     let cancelled = false
     async function loadModels() {
@@ -209,6 +211,17 @@ export default function ChatSplit() {
         const messages = []
         const systemPrompt = skillId ? getSkillSystemPrompt(skillId, state.skillConfigs, runtimeSkills) : ''
         if (systemPrompt) messages.push({ role: 'system', content: systemPrompt })
+        if (agentMode === 'plan') {
+          messages.push({
+            role: 'system',
+            content: 'Plan mode: inspect/read only. Do not modify files, do not run shell/build/test commands, and return a concise implementation plan with risks and acceptance checks.',
+          })
+        } else if (agentMode === 'code') {
+          messages.push({
+            role: 'system',
+            content: 'Code mode: behave like a local coding agent. Inspect git status/diff, read files before editing, use precise file edits, run allowed checks when useful, and summarize changed files. Never commit or push; the user must do that from Coding Workbench.',
+          })
+        }
         messages.push(...historyMessages)
         const attachmentsToUse = explicitAttachments || attachments
         messages.push({ role: 'user', content: buildUserContentWithAttachments(userPrompt || content, attachmentsToUse) })
@@ -243,9 +256,7 @@ export default function ChatSplit() {
         try {
           // 工具调用循环:每轮 stream 模型 → 收 tool_calls → 本地执行 → messages 追加 tool 结果 → 再 stream
           // 上限 5 轮防止失控;无 tool_calls 即文本回复完成,直接退出
-          const enabledToolNames = Object.entries(state.toolsConfig || {})
-            .filter(([, on]) => !!on)
-            .map(([name]) => name)
+          const enabledToolNames = resolveToolsForMode(state.toolsConfig || {}, agentMode)
           const tools = buildToolSpecs(enabledToolNames)
 
           // G1: 工具调用产出的 artifact (create_pptx/docx/xlsx) 暂存,
@@ -419,7 +430,7 @@ export default function ChatSplit() {
     },
     // ★ #27: 细粒度 deps,只收 triggerSendFlow body 里实际读的字段;
     //         避免依赖整个 state 导致每次 sessionDrafts/tasks 变都重建 callback
-    [attachments, dispatch, isGenerating, modelOptions, selectedModel, toolMaxRounds, runtimeSkills,
+    [attachments, dispatch, isGenerating, modelOptions, selectedModel, toolMaxRounds, runtimeSkills, agentMode,
       state.activeSessionId, state.sessions, state.toolsConfig, state.permissions, state.skillConfigs]
   )
 
@@ -599,6 +610,8 @@ export default function ChatSplit() {
           modelOptions={modelOptions}
           selectedModel={selectedModel}
           hasTasks={tasks.length > 0}
+          agentMode={agentMode}
+          onAgentModeChange={(mode) => dispatch({ type: 'SET_AGENT_MODE', payload: mode })}
           onExport={(format = 'json') => {
             if (!activeSession) return
             exportSession(activeSession, format)
@@ -673,11 +686,15 @@ export default function ChatSplit() {
         />
       </div>
 
-      <RightPreviewPane
-        artifact={state.previewArtifact}
-        onClose={() => dispatch({ type: 'CLOSE_PREVIEW_ARTIFACT' })}
-        onMessage={setWorkbenchMessage}
-      />
+      {state.previewArtifact ? (
+        <RightPreviewPane
+          artifact={state.previewArtifact}
+          onClose={() => dispatch({ type: 'CLOSE_PREVIEW_ARTIFACT' })}
+          onMessage={setWorkbenchMessage}
+        />
+      ) : agentMode === 'code' ? (
+        <CodingWorkbench onMessage={setWorkbenchMessage} />
+      ) : null}
     </div>
   )
 }

@@ -150,6 +150,37 @@ const TOOL_SPECS = {
       },
     },
   },
+  git_status: {
+    type: 'function',
+    function: {
+      name: 'git_status',
+      description: 'Read git branch and changed files for the configured workspace. Read-only. Use before and after code edits.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  git_diff: {
+    type: 'function',
+    function: {
+      name: 'git_diff',
+      description: 'Read unified git diff for the workspace or a single changed file. Read-only.',
+      parameters: {
+        type: 'object',
+        properties: { path: { type: 'string', description: 'Optional workspace-relative changed file path.' } },
+      },
+    },
+  },
+  run_project_check: {
+    type: 'function',
+    function: {
+      name: 'run_project_check',
+      description: 'Run exactly one allowed project check: lint, test, or build. Does not execute arbitrary shell commands.',
+      parameters: {
+        type: 'object',
+        properties: { check: { type: 'string', enum: ['lint', 'test', 'build'], description: 'Allowed verification command.' } },
+        required: ['check'],
+      },
+    },
+  },
   create_pptx: {
     type: 'function',
     function: {
@@ -223,6 +254,26 @@ const TOOL_SPECS = {
     },
   },
 
+}
+
+
+const READ_ONLY_MODE_TOOLS = new Set(['web_search', 'fetch_url', 'read_file', 'git_status', 'git_diff'])
+const CODE_MODE_TOOLS = ['read_file', 'write_file', 'edit_file', 'bash_exec', 'git_status', 'git_diff', 'run_project_check']
+
+export function resolveToolsForMode(toolsConfig = {}, mode = 'chat') {
+  const enabled = Object.entries(toolsConfig || {})
+    .filter(([, on]) => !!on)
+    .map(([name]) => name)
+
+  if (mode === 'plan') {
+    return enabled.filter((name) => READ_ONLY_MODE_TOOLS.has(name))
+  }
+
+  if (mode === 'code') {
+    return [...new Set([...enabled, ...CODE_MODE_TOOLS])]
+  }
+
+  return enabled
 }
 
 export function buildToolSpecs(enabledNames) {
@@ -350,6 +401,21 @@ async function execBashExec(args) {
   return { content: JSON.stringify(data) }
 }
 
+async function execGitStatus(args) {
+  const data = await callWorkspaceJson('/api/tools/git/status', args || {})
+  return { content: JSON.stringify(data) }
+}
+
+async function execGitDiff(args) {
+  const data = await callWorkspaceJson('/api/tools/git/diff', args || {})
+  return { content: JSON.stringify(data) }
+}
+
+async function execRunProjectCheck(args) {
+  const data = await callWorkspaceJson('/api/tools/check/run', args || {})
+  return { content: JSON.stringify(data) }
+}
+
 async function execCreatePptx(args) {
   const title = String(args.title).trim().slice(0, 200) || 'presentation'
   const markdown = String(args.markdown)
@@ -463,6 +529,9 @@ const EXECUTORS = {
   write_file: execWriteFile,
   edit_file: execEditFile,
   bash_exec: execBashExec,
+  git_status: execGitStatus,
+  git_diff: execGitDiff,
+  run_project_check: execRunProjectCheck,
 }
 
 export async function executeToolCall(call, options = {}) {

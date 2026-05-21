@@ -11,6 +11,7 @@
 import { appendJobArtifact } from './jobStore.js'
 import { createDocx, createPptx, createXlsx } from './artifactGen.js'
 import { FS_SHELL_TOOL_SPECS, dispatchFsShellTool } from './fsShellTools.js'
+import { GIT_TOOL_SPECS, dispatchGitTool } from './gitWorkbench.js'
 import crypto from 'node:crypto'
 
 function newId(prefix) {
@@ -108,6 +109,7 @@ export const SERVER_TOOL_SPECS = [
   // WORKSPACE_FS_ENABLED=1 / WORKSPACE_SHELL_ENABLED=1 才生效;
   // 路径沙箱在 WORKSPACE_ROOT(默认 process.cwd()).
   ...FS_SHELL_TOOL_SPECS,
+  ...GIT_TOOL_SPECS,
 ]
 
 /**
@@ -161,6 +163,13 @@ async function executeServerTool({ name, args, job, step }) {
   if (['read_file', 'write_file', 'edit_file', 'bash_exec'].includes(name)) {
     try {
       return await dispatchFsShellTool(name, args || {})
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) }
+    }
+  }
+  if (['git_status', 'git_diff', 'run_project_check'].includes(name)) {
+    try {
+      return await dispatchGitTool(name, args || {})
     } catch (err) {
       return { ok: false, error: err?.message || String(err) }
     }

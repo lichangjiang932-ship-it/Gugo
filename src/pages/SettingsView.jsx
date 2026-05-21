@@ -623,6 +623,9 @@ export default function SettingsView() {
       { id: 'write_file', name: '写入工作区文件', desc: '允许模型创建或覆盖 WORKSPACE_ROOT 内文件。高风险,默认关闭。' },
       { id: 'edit_file', name: '编辑工作区文件', desc: '允许模型用精确字符串替换修改文件。高风险,默认关闭。' },
       { id: 'bash_exec', name: '执行 Shell 命令', desc: '允许模型运行测试/构建/检查命令。服务端还需 WORKSPACE_SHELL_ENABLED=1。' },
+      { id: 'git_status', name: 'Git status', desc: 'Read-only git status for Code mode.' },
+      { id: 'git_diff', name: 'Git diff', desc: 'Read-only unified diff for Code/Plan mode.' },
+      { id: 'run_project_check', name: 'Project checks', desc: 'Allow npm run lint/test/build only.' },
     ]
     const onToggle = (id) => {
       dispatch({ type: 'SET_TOOLS_CONFIG', payload: { [id]: !tc[id] } })

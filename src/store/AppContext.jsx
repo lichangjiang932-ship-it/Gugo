@@ -21,6 +21,7 @@ const PERSIST_KEYS = [
   'animationsEnabled',
   'skillConfigs',
   'toolsConfig',
+  'agentMode',
   'sessionDrafts',
 ]
 
@@ -41,8 +42,9 @@ function createInitialState() {
     animationsEnabled: true,
     draftInput: '',
     skillConfigs: {}, // { skillId: { enabled, systemPrompt, temperature, maxTokens } }
+    agentMode: 'chat', // 'chat' | 'plan' | 'code'
     previewArtifact: null, // { messageId, content, preview } — 右侧 artifact 预览面板
-    toolsConfig: { web_search: false, fetch_url: false, create_pptx: true, create_docx: true, create_xlsx: true, create_react_component: true, read_file: false, write_file: false, edit_file: false, bash_exec: false }, // tool toggles
+    toolsConfig: { web_search: false, fetch_url: false, create_pptx: true, create_docx: true, create_xlsx: true, create_react_component: true, read_file: false, write_file: false, edit_file: false, bash_exec: false, git_status: false, git_diff: false, run_project_check: false }, // tool toggles
     // #13 切会话保草稿:每个 sessionId → 该会话当前未发送的输入文本
     // 不放进 sessions[].draft 是为了切会话只 dispatch 一个轻动作,不动整棵 sessions 树
     sessionDrafts: {},
@@ -546,6 +548,11 @@ function reducer(state, action) {
     case 'SET_TOOLS_CONFIG': {
       const next = { ...(state.toolsConfig || {}), ...(action.payload || {}) }
       return { ...state, toolsConfig: next }
+    }
+
+    case 'SET_AGENT_MODE': {
+      const mode = ['chat', 'plan', 'code'].includes(action.payload) ? action.payload : 'chat'
+      return { ...state, agentMode: mode }
     }
 
     case 'APPEND_TOOL_CALL_TO_LAST_MESSAGE': {
