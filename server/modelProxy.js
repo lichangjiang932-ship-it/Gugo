@@ -371,15 +371,30 @@ export async function callBackgroundModelWithTools({
 }
 
 export function formatProxyError(error) {
-  if (error?.status === 400) return '请求参数无效，请检查 Base URL、模型名称和消息内容。'
+  const msg = error?.message || ''
+  const code = error?.code || ''
+
+  // ★ 诊断增强: 400 错误可能是 token 溢出或参数真的无效
+  if (error?.status === 400) {
+    if (/context_length|token.?limit|maximum context|reduce the length/i.test(msg + code)) {
+      return '内容超出模型最大上下文长度，请缩短消息或开启会话压缩。'
+    }
+    if (/invalid.*model|model.*not found/i.test(msg)) {
+      return '模型名称无效，请检查 .env 中的 MODEL_NAME。'
+    }
+    if (/rate.?limit/i.test(msg)) {
+      return 'API 调用频率超限，请稍后重试。'
+    }
+    return '请求参数无效，请检查 Base URL、模型名称和消息内容。'
+  }
   if (error?.status === 401 || error?.status === 403) return 'API Key 无效或没有权限。'
   if (error?.status === 404) return '模型或端点不存在，请检查 Base URL 和模型名称。'
   if (error?.status === 408 || error?.name === 'AbortError') return '模型请求超时，请稍后重试或调小 Max Tokens。'
   if (error?.code === 'ECONNREFUSED' || error?.cause?.code === 'ECONNREFUSED') {
     return '端点不可达，请确认本地模型服务或代理已启动。'
   }
-  if (error?.status) return `模型服务返回 HTTP ${error.status}：${error.message || '请求失败'}`
-  return error?.message || '模型代理调用失败。'
+  if (error?.status) return `模型服务返回 HTTP ${error.status}：${msg || '请求失败'}`
+  return msg || '模型代理调用失败。'
 }
 
 function sendJson(res, statusCode, body) {

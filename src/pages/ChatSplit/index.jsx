@@ -148,6 +148,12 @@ export default function ChatSplit() {
     return undefined
   }, [state.draftInput, dispatch])
 
+  // ★ 切换会话时自动中断正在进行的模型流
+  useEffect(() => {
+    // 用 abort 中断上游请求，模型流自然结束会走 finally 清理
+    abortCtrlRef.current?.abort()
+  }, [state.activeSessionId])
+
   useEffect(() => {
     if (!state.activeSessionId) {
       dispatch({ type: 'NEW_SESSION', payload: '新对话' })
@@ -188,10 +194,19 @@ export default function ChatSplit() {
     async (content, explicitAttachments = null) => {
       if (isGenerating) return
       const activeSession = state.sessions.find((s) => s.id === state.activeSessionId)
+      // ★ 修复: 保留 tool 消息，让模型能回顾上一轮工具结果
+      // 但截断过长内容防止 token 溢出
       const historyMessages = (activeSession?.messages || [])
-        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'tool')
         .slice(-20)
-        .map((m) => ({ role: m.role, content: typeof m.content === 'string' ? m.content : '' }))
+        .map((m) => {
+          let content = typeof m.content === 'string' ? m.content : ''
+          // tool 消息通常有大量 JSON，截断
+          if (m.role === 'tool' && content.length > 2000) {
+            content = content.slice(0, 2000) + '\n...[已截断]'
+          }
+          return { role: m.role, content, name: m.name || undefined, tool_call_id: m.tool_call_id || undefined }
+        })
       dispatch({ type: 'SEND_MESSAGE', payload: { content, attachments: explicitAttachments } })
       setWorkbenchMessage('')
 
