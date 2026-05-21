@@ -35,6 +35,7 @@ function createInitialState() {
     history: [],
     permissions: PERMISSIONS.map((p) => ({ ...p, enabled: false, icon: p.icon ?? null })),
     permRequest: null,
+    choiceRequest: null, // { text, options } — 模型发出的 [[choice:...]] 选择请求
     theme: 'system',
     accentColor: '#E86A3C',
     fontSize: 'medium',
@@ -333,6 +334,10 @@ function reducer(state, action) {
 
     case 'SET_PERM_REQUEST': {
       return { ...state, permRequest: action.payload ?? null }
+    }
+
+    case 'SET_CHOICE_REQUEST': {
+      return { ...state, choiceRequest: action.payload ?? null }
     }
 
     case 'SET_THEME': {

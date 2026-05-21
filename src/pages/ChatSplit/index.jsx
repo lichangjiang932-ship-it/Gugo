@@ -159,6 +159,7 @@ export default function ChatSplit() {
   const prevSessionIdRef = useRef(state.activeSessionId)
   const inputRef = useRef(input)
   useEffect(() => { inputRef.current = input }, [input])
+
   useEffect(() => {
     const prevId = prevSessionIdRef.current
     const nextId = state.activeSessionId
@@ -475,6 +476,18 @@ export default function ChatSplit() {
     setShowSlashMenu(false)
     triggerSendFlow(content, currentAttachments)
   }, [attachments, input, triggerSendFlow, state.activeSessionId, dispatch])
+
+  // ★ Reasonix-style ask_choice: 监听 choice-selected 事件 → 发送选择作为用户消息
+  useEffect(() => {
+    const handler = (e) => {
+      const { choiceId, choiceTitle } = e.detail || {}
+      if (choiceId && choiceTitle) {
+        triggerSendFlow(`[[choice:${choiceId}]] ${choiceTitle}`)
+      }
+    }
+    window.addEventListener('choice-selected', handler)
+    return () => window.removeEventListener('choice-selected', handler)
+  }, [triggerSendFlow])
 
   const handleKeyDown = useCallback((e) => {
     if (showSlashMenu && filteredSkills.length > 0) {

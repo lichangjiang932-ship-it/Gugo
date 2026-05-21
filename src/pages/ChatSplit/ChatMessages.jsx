@@ -5,6 +5,8 @@ import MarkdownRenderer from '../../components/MarkdownRenderer.jsx'
 import ToolCallCard from '../../components/ToolCallCard.jsx'
 import SubagentCard from '../../components/SubagentCard.jsx'
 import CompactionPill from '../../components/CompactionPill.jsx'
+import ChoicePicker from '../../components/ChoicePicker.jsx'
+import { hasChoices, stripChoices } from '../../lib/choices.js'
 import { buildArtifactPreview, shouldCollapseArtifactPreview } from '../../lib/artifactPreview.js'
 
 // ★ #22: 入门示例 — 覆盖文档/数据/编程/创意四大类,降低首次使用门槛
@@ -207,10 +209,22 @@ export default function ChatMessages({
                       </button>
                     ) : (
                       <>
-                        <MarkdownRenderer>{msg.content}</MarkdownRenderer>
+                        <MarkdownRenderer>{stripChoices(msg.content)}</MarkdownRenderer>
                         {/* ★ #23: streaming 时在尾部显示闪烁光标 */}
                         {msg.meta?.streaming && (
                           <span className="inline-block w-1.5 h-3.5 bg-ember/80 ml-0.5 align-middle animate-pulse" aria-hidden="true" />
+                        )}
+                        {/* ★ Reasonix-style ask_choice: [[choice:...]] 选择器 */}
+                        {hasChoices(msg.content) && !msg.meta?.streaming && (
+                          <ChoicePicker
+                            text={msg.content}
+                            onChoose={(id, title) => {
+                              // 把选择注入为下一条用户消息
+                              window.dispatchEvent(new CustomEvent('choice-selected', {
+                                detail: { messageId: msg.id, choiceId: id, choiceTitle: title },
+                              }))
+                            }}
+                          />
                         )}
                         {/* ★ batchF P2b: 嗅探出来的 artifact 不再替代正文,作为辅助 CTA 出现在正文下方 */}
                       </>
