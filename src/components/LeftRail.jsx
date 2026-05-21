@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { MessageSquare, Wrench, Shield, History, Settings, Sparkles, ListChecks, X, Search } from 'lucide-react'
+import { MessageSquare, Wrench, Shield, History, Settings, Sparkles, ListChecks, X, Search, BookOpen, Webhook, Plug } from 'lucide-react'
 import { useAppContext } from '../store/AppContext'
 import { getAuthToken, sendLoginCode, verifyLoginCode } from '../lib/accountClient.js'
 
@@ -73,6 +73,9 @@ export default function LeftRail() {
     { path: '/task', icon: ListChecks, label: '任务' },
     { path: '/skills', icon: Wrench, label: '技能库' },
     { path: '/permissions', icon: Shield, label: '权限中心' },
+    { path: '/memory', icon: BookOpen, label: '记忆', requiresLogin: true },
+    { path: '/mcp', icon: Plug, label: 'MCP', requiresLogin: true },
+    { path: '/hooks', icon: Webhook, label: 'Hooks', requiresLogin: true },
     { path: '/history', icon: History, label: '历史' },
     { path: '/settings', icon: Settings, label: '设置', requiresLogin: true },
   ]

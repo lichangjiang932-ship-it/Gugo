@@ -54,6 +54,39 @@ const TOOL_ARG_SCHEMAS = {
     code: z.string().min(1, 'code 不能为空').max(40000),
     description: z.string().max(500).optional(),
   }),
+  create_mermaid: z.object({
+    title: z.string().min(1).max(200),
+    diagram: z.string().min(1).max(50000),
+    theme: z.enum(['default', 'neutral', 'dark', 'forest', 'base']).optional(),
+  }),
+  create_chart: z.object({
+    title: z.string().min(1).max(200),
+    config: z.record(z.string(), z.any()),
+  }),
+  create_svg: z.object({
+    title: z.string().min(1).max(200),
+    svg: z.string().min(1).max(200000),
+  }),
+  create_html_app: z.object({
+    title: z.string().min(1).max(200),
+    files: z.record(z.string(), z.string()).refine((files) => !!files['index.html'], { message: 'files must include index.html' }),
+  }),
+  Agent: z.object({
+    subagent_type: z.enum(['explore', 'plan', 'general']),
+    prompt: z.string().min(1).max(20000),
+    description: z.string().min(1).max(120),
+  }),
+  // Feature 8: Todo — 整组替换 — 模型可反复调用更新状态
+  manage_todos: z.object({
+    todos: z.array(z.object({
+      content: z.string().min(1, 'content 不能为空').max(300),
+      status: z.enum(['pending', 'in_progress', 'completed']),
+      activeForm: z.string().min(1, 'activeForm 不能为空').max(300),
+    })).max(50, 'todo 数量上限 50'),
+  }).refine((d) => {
+    const inProg = d.todos.filter((t) => t.status === 'in_progress').length
+    return inProg <= 1
+  }, { message: '同一时间只允许一个 in_progress' }),
 }
 
 const TOOL_SPECS = {
@@ -253,12 +286,120 @@ const TOOL_SPECS = {
       },
     },
   },
+  create_mermaid: {
+    type: 'function',
+    function: {
+      name: 'create_mermaid',
+      description: 'Create a Mermaid diagram artifact that opens in the right preview pane. Use for flows, architecture graphs, sequences, and system maps.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          diagram: { type: 'string', description: 'Mermaid source, for example flowchart TD; A-->B' },
+          theme: { type: 'string', enum: ['default', 'neutral', 'dark', 'forest', 'base'] },
+        },
+        required: ['title', 'diagram'],
+      },
+    },
+  },
+  create_chart: {
+    type: 'function',
+    function: {
+      name: 'create_chart',
+      description: 'Create a Chart.js artifact from a JSON chart configuration. Use when data should be previewed visually instead of left as a table.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          config: { type: 'object', description: 'Chart.js config with type, data, and options.' },
+        },
+        required: ['title', 'config'],
+      },
+    },
+  },
+  create_svg: {
+    type: 'function',
+    function: {
+      name: 'create_svg',
+      description: 'Create a sanitized SVG artifact for logos, diagrams, icons, or vector illustrations.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          svg: { type: 'string', description: 'Complete inline SVG source, without scripts or external links.' },
+        },
+        required: ['title', 'svg'],
+      },
+    },
+  },
+  create_html_app: {
+    type: 'function',
+    function: {
+      name: 'create_html_app',
+      description: 'Create a multi-file HTML artifact. Provide index.html plus optional styles.css/app.js; it is collapsed into one previewable file card.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          files: {
+            type: 'object',
+            description: 'Map of filename to text content. Must include index.html. External script/link tags are rejected.',
+            additionalProperties: { type: 'string' },
+          },
+        },
+        required: ['title', 'files'],
+      },
+    },
+  },
+  Agent: {
+    type: 'function',
+    function: {
+      name: 'Agent',
+      description: 'Delegate a focused sub-task to an isolated sub-agent. Returns a final summary only. Use for bounded research, planning, or code exploration.',
+      parameters: {
+        type: 'object',
+        properties: {
+          subagent_type: { type: 'string', enum: ['explore', 'plan', 'general'] },
+          prompt: { type: 'string', description: 'Full instructions; the sub-agent cannot see hidden parent context unless you include it.' },
+          description: { type: 'string', description: '5-10 word label shown to the user.' },
+        },
+        required: ['subagent_type', 'prompt', 'description'],
+      },
+    },
+  },
+
+  // Feature 8: Todo 追踪 — 模型用来管理多步任务清单,UI 顶部 sticky 渲染
+  manage_todos: {
+    type: 'function',
+    function: {
+      name: 'manage_todos',
+      description: '维护当前任务的 Todo 清单。多步任务必须调用本工具让用户实时看到进度;每次传整组替换,同一时间只允许一个 in_progress。content 用祈使句(如"添加错误处理"),activeForm 用进行时(如"添加错误处理中")。模型可反复调用更新状态。',
+      parameters: {
+        type: 'object',
+        properties: {
+          todos: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                content: { type: 'string', description: '祈使句形式,如"修复登录闪退"' },
+                status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] },
+                activeForm: { type: 'string', description: '进行时,如"修复登录闪退中"' },
+              },
+              required: ['content', 'status', 'activeForm'],
+            },
+          },
+        },
+        required: ['todos'],
+      },
+    },
+  },
 
 }
 
 
-const READ_ONLY_MODE_TOOLS = new Set(['web_search', 'fetch_url', 'read_file', 'git_status', 'git_diff'])
-const CODE_MODE_TOOLS = ['read_file', 'write_file', 'edit_file', 'bash_exec', 'git_status', 'git_diff', 'run_project_check']
+const READ_ONLY_MODE_TOOLS = new Set(['web_search', 'fetch_url', 'read_file', 'git_status', 'git_diff', 'manage_todos', 'Agent'])
+const CODE_MODE_TOOLS = ['read_file', 'write_file', 'edit_file', 'bash_exec', 'git_status', 'git_diff', 'run_project_check', 'manage_todos', 'Agent']
 
 export function resolveToolsForMode(toolsConfig = {}, mode = 'chat') {
   const enabled = Object.entries(toolsConfig || {})
@@ -297,6 +438,47 @@ export function buildToolSpecs(enabledNames) {
 
 export function listToolNames() {
   return Object.keys(TOOL_SPECS)
+}
+
+/**
+ * Feature 1: 拉服务端 /api/tools/specs 取得当前模式的完整工具列表
+ *   - builtin: 服务端镜像了 TOOL_SPECS
+ *   - mcp: McpManager 在连接时注入的动态工具
+ *   - skill: 后续 feature
+ * 返回 [{type:'function', function:{name, description, parameters}}]
+ *
+ * 失败时返回空数组（caller 应该 fallback 到本地 buildToolSpecs(enabledNames)）。
+ */
+export async function fetchToolSpecsFromServer(mode = 'chat') {
+  try {
+    const params = new URLSearchParams()
+    if (mode) params.set('mode', mode)
+    const resp = await fetch(`/api/tools/specs?${params.toString()}`)
+    if (!resp.ok) return []
+    const data = await resp.json()
+    if (!data?.ok || !Array.isArray(data.specs)) return []
+    return data.specs.map((s) => s.tool).filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Feature 1: 合并 builtin 启用工具 + 服务端动态工具 (mcp/skill/subagent)
+ * builtin 工具的开关由 toolsConfig 控制；MCP 工具一旦 server enabled 就默认开启。
+ */
+export async function buildToolSpecsAsync({ enabledBuiltinNames, mode = 'chat' }) {
+  const builtin = buildToolSpecs(enabledBuiltinNames || [])
+  const serverList = await fetchToolSpecsFromServer(mode)
+  const seen = new Set(builtin.map((t) => t.function?.name))
+  const dynamic = serverList.filter((t) => {
+    const name = t.function?.name
+    if (!name || seen.has(name)) return false
+    // 只补充非 builtin 部分（mcp__* / skill 等）
+    return name.startsWith('mcp__') || name.startsWith('skill__') || !TOOL_SPECS[name]
+  })
+  // 排除已经在 builtin 里出现的同名
+  return [...builtin, ...dynamic]
 }
 
 /* ── 执行器 ── */
@@ -518,6 +700,113 @@ async function execCreateReactComponent(args) {
   }
 }
 
+
+function rejectDangerousHtml(source, label = 'HTML') {
+  const text = String(source || '')
+  const bad = [
+    /<script\b[^>]*\bsrc\s*=/i,
+    /<link\b[^>]*\brel=["']?stylesheet["']?[^>]*\bhref\s*=/i,
+    /javascript:/i,
+    /on\w+\s*=/i,
+  ]
+  if (bad.some((re) => re.test(text))) {
+    throw new Error(`${label} contains external scripts/styles or inline event handlers; keep artifacts self-contained.`)
+  }
+  return text
+}
+
+function rejectSvgScripts(svg) {
+  const text = String(svg || '')
+  if (!/^\s*<svg[\s>]/i.test(text)) throw new Error('svg must start with an <svg> element')
+  if (/<script\b|javascript:|on\w+\s*=/i.test(text)) throw new Error('SVG scripts and event handlers are not allowed')
+  return text
+}
+
+async function execCreateMermaid(args) {
+  const title = String(args.title || 'diagram').trim().slice(0, 200) || 'diagram'
+  const diagram = String(args.diagram || '').trim()
+  if (!diagram) throw new Error('diagram is required')
+  if (/<script\b|javascript:/i.test(diagram)) throw new Error('Mermaid source cannot contain scripts')
+  return {
+    content: JSON.stringify({ ok: true, title, type: 'mermaid', message: `Created Mermaid artifact "${title}".` }),
+    artifact: { type: 'mermaid', title, source: diagram, description: args.theme || 'default' },
+  }
+}
+
+async function execCreateChart(args) {
+  const title = String(args.title || 'chart').trim().slice(0, 200) || 'chart'
+  const config = args.config && typeof args.config === 'object' ? args.config : null
+  if (!config) throw new Error('config is required')
+  const source = JSON.stringify(config, null, 2)
+  return {
+    content: JSON.stringify({ ok: true, title, type: 'chart', message: `Created chart artifact "${title}".` }),
+    artifact: { type: 'chart', title, source },
+  }
+}
+
+async function execCreateSvg(args) {
+  const title = String(args.title || 'vector').trim().slice(0, 200) || 'vector'
+  const source = rejectSvgScripts(args.svg)
+  return {
+    content: JSON.stringify({ ok: true, title, type: 'svg', bytes: source.length, message: `Created SVG artifact "${title}".` }),
+    artifact: { type: 'svg', title, source },
+  }
+}
+
+async function execCreateHtmlApp(args) {
+  const title = String(args.title || 'html-app').trim().slice(0, 200) || 'html-app'
+  const files = args.files && typeof args.files === 'object' ? args.files : {}
+  if (!files['index.html']) throw new Error('files must include index.html')
+  const safeFiles = {}
+  for (const [name, value] of Object.entries(files)) {
+    if (!/^[\w./-]+$/.test(name) || name.includes('..')) throw new Error(`unsafe filename: ${name}`)
+    safeFiles[name] = rejectDangerousHtml(String(value || ''), name)
+  }
+  const source = JSON.stringify(safeFiles, null, 2)
+  return {
+    content: JSON.stringify({ ok: true, title, type: 'html_multi', files: Object.keys(safeFiles), message: `Created multi-file HTML artifact "${title}".` }),
+    artifact: { type: 'html_multi', title, source },
+  }
+}
+
+async function execAgent(args) {
+  const data = await callJson('/api/subagent/run', {
+    subagent_type: args.subagent_type,
+    prompt: args.prompt,
+    description: args.description,
+  })
+  return {
+    content: JSON.stringify({
+      ok: true,
+      runId: data.run?.id || data.id || null,
+      status: data.run?.status || data.status || 'completed',
+      description: args.description,
+      result: data.result_text || data.run?.resultText || data.result || '',
+    }),
+  }
+}
+
+// Feature 8: Todo — 纯前端,返回 todos 字段供 caller dispatch SET_TODOS
+async function execManageTodos(args) {
+  const todos = Array.isArray(args.todos) ? args.todos : []
+  const summary = {
+    pending: todos.filter((t) => t.status === 'pending').length,
+    in_progress: todos.filter((t) => t.status === 'in_progress').length,
+    completed: todos.filter((t) => t.status === 'completed').length,
+  }
+  const inProgressItem = todos.find((t) => t.status === 'in_progress')
+  return {
+    content: JSON.stringify({
+      ok: true,
+      total: todos.length,
+      summary,
+      currentTask: inProgressItem?.activeForm || null,
+      message: `Todo 已更新: ${summary.completed}/${todos.length} 完成${inProgressItem ? `; 当前: ${inProgressItem.activeForm}` : ''}`,
+    }),
+    todos,
+  }
+}
+
 const EXECUTORS = {
   web_search: execWebSearch,
   fetch_url: execFetchUrl,
@@ -525,6 +814,11 @@ const EXECUTORS = {
   create_docx: execCreateDocx,
   create_xlsx: execCreateXlsx,
   create_react_component: execCreateReactComponent,
+  create_mermaid: execCreateMermaid,
+  create_chart: execCreateChart,
+  create_svg: execCreateSvg,
+  create_html_app: execCreateHtmlApp,
+  Agent: execAgent,
   read_file: execReadFile,
   write_file: execWriteFile,
   edit_file: execEditFile,
@@ -532,16 +826,41 @@ const EXECUTORS = {
   git_status: execGitStatus,
   git_diff: execGitDiff,
   run_project_check: execRunProjectCheck,
+  manage_todos: execManageTodos,
 }
 
 export async function executeToolCall(call, options = {}) {
   const { maxRetries = 2, retryDelayMs = 600 } = options
   const name = call?.name
-  const fn = EXECUTORS[name]
   let parsedArgs = {}
   if (call?.arguments) {
     try { parsedArgs = JSON.parse(call.arguments) } catch { parsedArgs = {} }
   }
+
+  // Feature 1: MCP 工具 (mcp__server__tool) — 没在本地 EXECUTORS 注册,统一走后端
+  if (name && name.startsWith('mcp__')) {
+    try {
+      const data = await callJson('/api/tools/mcp/call', { fullToolName: name, arguments: parsedArgs })
+      // MCP tools/call 返回 { content: [{type, text/...}], isError? }
+      const result = data?.result || data
+      const isError = !!result?.isError
+      const textParts = Array.isArray(result?.content)
+        ? result.content
+            .filter((c) => c && (c.type === 'text' || typeof c.text === 'string'))
+            .map((c) => c.text || '')
+            .join('\n')
+        : JSON.stringify(result)
+      return {
+        ok: !isError,
+        content: textParts || JSON.stringify(result),
+        attempts: 1,
+      }
+    } catch (err) {
+      return { ok: false, content: JSON.stringify({ error: err.message || String(err) }) }
+    }
+  }
+
+  const fn = EXECUTORS[name]
   if (!fn) {
     return { ok: false, content: JSON.stringify({ error: `未知工具: ${name}` }) }
   }
@@ -565,7 +884,9 @@ export async function executeToolCall(call, options = {}) {
       const content = typeof output === 'string' ? output : output.content
       const billing = typeof output === 'string' ? null : output.billing
       const artifact = typeof output === 'string' ? null : (output.artifact || null)
-      return { ok: true, content, billing, artifact, attempts: attempt + 1 }
+      // Feature 8: manage_todos 返回的 todos 字段直传 caller,用于 dispatch SET_TODOS
+      const todos = typeof output === 'string' ? null : (output.todos || null)
+      return { ok: true, content, billing, artifact, todos, attempts: attempt + 1 }
     } catch (err) {
       lastErr = err
       const msg = err?.message || String(err)

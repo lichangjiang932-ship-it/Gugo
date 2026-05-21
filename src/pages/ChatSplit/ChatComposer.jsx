@@ -56,8 +56,38 @@ export default function ChatComposer({
     }
   }, [input])
 
+  // Feature 9: 命令面板/外部触发的 prefill 事件
+  useEffect(() => {
+    const onPrefill = (e) => {
+      const text = String(e.detail || '')
+      if (!text) return
+      setInput(text)
+      // focus + 光标到末尾
+      requestAnimationFrame(() => {
+        const ta = textareaRef.current
+        if (ta) {
+          ta.focus()
+          ta.setSelectionRange(text.length, text.length)
+        }
+      })
+    }
+    window.addEventListener('command-palette:prefill', onPrefill)
+    return () => window.removeEventListener('command-palette:prefill', onPrefill)
+  }, [setInput])
+
   return (
-    <div className="px-6 pb-6 pt-3 border-t border-dashed border-ink-fade/50 relative">
+    <div
+      className="px-6 pb-6 pt-3 border-t border-dashed border-ink-fade/50 relative"
+      onDragOver={(e) => {
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'copy'
+      }}
+      onDrop={(e) => {
+        e.preventDefault()
+        if (!e.dataTransfer?.files?.length) return
+        onFileChange?.({ target: { files: e.dataTransfer.files, value: '' } })
+      }}
+    >
       {/* Slash menu overlay */}
       <AnimatePresence>
         {showSlashMenu && filteredSkills.length > 0 && (

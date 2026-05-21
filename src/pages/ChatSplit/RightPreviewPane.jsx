@@ -19,7 +19,7 @@ import { buildHtmlDocument } from '../../lib/artifactPreview.js'
 import { downloadHtmlDeckAsPptx } from '../../lib/htmlSlidesToPptx.js'
 
 function ArtifactIcon({ type }) {
-  if (type === 'html') return <Globe className="w-4 h-4" />
+  if (['html', 'html_multi', 'mermaid', 'chart', 'svg'].includes(type)) return <Globe className="w-4 h-4" />
   if (type === 'pptx') return <Presentation className="w-4 h-4" />
   if (type === 'xlsx') return <Table2 className="w-4 h-4" />
   if (type === 'react') return <Code2 className="w-4 h-4" />
@@ -331,8 +331,20 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
           title,
           filename: buildOfficeFilename(title, 'xlsx'),
         })
-      } else if (preview.type === 'html') {
+      } else if (['html', 'html_multi', 'mermaid', 'chart'].includes(preview.type)) {
         const blob = new Blob([buildHtmlDocument(preview.html)], { type: 'text/html;charset=utf-8' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = preview.filename
+        document.body.appendChild(a)
+        a.click()
+        setTimeout(() => {
+          URL.revokeObjectURL(url)
+          a.remove()
+        }, 100)
+      } else if (preview.type === 'svg') {
+        const blob = new Blob([content], { type: 'image/svg+xml;charset=utf-8' })
         const url = URL.createObjectURL(blob)
         const a = document.createElement('a')
         a.href = url
@@ -532,7 +544,7 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
             <SourceView content={content} />
           ) : (
             <>
-              {preview.type === 'html' && <HtmlPreview html={preview.html} />}
+              {['html', 'html_multi', 'mermaid', 'chart', 'svg'].includes(preview.type) && <HtmlPreview html={preview.html} />}
               {preview.type === 'pptx' && <PptxPreview content={content} />}
               {preview.type === 'docx' && <DocxPreview blocks={preview.blocks} title={preview.title} />}
               {preview.type === 'xlsx' && <XlsxPreview rows={preview.rows} />}

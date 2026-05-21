@@ -3,6 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { X, FileText, BarChart3, LayoutList, ExternalLink, ChevronDown, RefreshCw, Trash2, Copy, Code2 } from 'lucide-react'
 import MarkdownRenderer from '../../components/MarkdownRenderer.jsx'
 import ToolCallCard from '../../components/ToolCallCard.jsx'
+import SubagentCard from '../../components/SubagentCard.jsx'
+import CompactionPill from '../../components/CompactionPill.jsx'
 import { buildArtifactPreview, shouldCollapseArtifactPreview } from '../../lib/artifactPreview.js'
 
 // ★ #22: 入门示例 — 覆盖文档/数据/编程/创意四大类,降低首次使用门槛
@@ -36,6 +38,7 @@ export default function ChatMessages({
   onPermDeny,
   onNavigatePermissions,
   onOpenInPreview,
+  onExpandCompaction,
 }) {
   const hasMessages = messages.length > 0
 
@@ -160,7 +163,11 @@ export default function ChatMessages({
                 <div className={collapseArtifact ? 'max-w-[920px] w-full' : 'p-3 rounded-md text-sm leading-relaxed max-w-[920px] ' + (msg.role === 'assistant' ? 'bg-paper-2 border border-ink/10' : 'pt-1.5')}>
                   {msg.role === 'assistant' && Array.isArray(msg.meta?.toolCalls) && msg.meta.toolCalls.length > 0 && (
                     <div className="mb-2">
-                      {msg.meta.toolCalls.map((tc) => <ToolCallCard key={tc.id} call={tc} />)}
+                      {msg.meta.toolCalls.map((tc) =>
+                        tc.name === 'Agent'
+                          ? <SubagentCard key={tc.id} call={tc} />
+                          : <ToolCallCard key={tc.id} call={tc} />
+                      )}
                     </div>
                   )}
                   {msg.role === 'assistant' ? (
@@ -176,6 +183,10 @@ export default function ChatMessages({
                           {artifactPreview.type === 'docx' && <FileText className="w-5 h-5" />}
                           {artifactPreview.type === 'xlsx' && <LayoutList className="w-5 h-5" />}
                           {artifactPreview.type === 'html' && <ExternalLink className="w-5 h-5" />}
+                          {artifactPreview.type === 'html_multi' && <ExternalLink className="w-5 h-5" />}
+                          {artifactPreview.type === 'mermaid' && <LayoutList className="w-5 h-5" />}
+                          {artifactPreview.type === 'chart' && <BarChart3 className="w-5 h-5" />}
+                          {artifactPreview.type === 'svg' && <Code2 className="w-5 h-5" />}
                           {artifactPreview.type === 'react' && <Code2 className="w-5 h-5" />}
                         </div>
                         <div className="min-w-0 flex-1">
@@ -297,7 +308,11 @@ export default function ChatMessages({
                   )}
                   {msg.role === 'assistant' && msg.meta?.type === 'context_summary' && (
                     <div className="mt-3 pt-2 border-t border-dashed border-ink-fade/40 text-[11px] text-ink-fade">
-                      已压缩{msg.meta.compressedCount} 条较早消息
+                      <CompactionPill
+                        count={msg.meta.compressedCount || 0}
+                        archiveId={msg.meta.archiveId || msg.meta.compactionArchiveId}
+                        onExpand={onExpandCompaction}
+                      />
                     </div>
                   )}
                 </div>

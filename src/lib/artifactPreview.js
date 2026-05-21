@@ -115,6 +115,124 @@ ${src}
 </html>`
 }
 
+function escapeHtml(value = '') {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
+function stripDangerousMarkup(value = '') {
+  return String(value || '')
+    .replace(/<script\b[\s\S]*?<\/script>/gi, '')
+    .replace(/\son\w+\s*=\s*(['"]).*?\1/gi, '')
+    .replace(/\s(?:href|src)\s*=\s*(['"])\s*javascript:[\s\S]*?\1/gi, '')
+}
+
+export function parseMultiHtmlSource(source = '') {
+  if (source && typeof source === 'object') return source
+  try {
+    const parsed = JSON.parse(String(source || '{}'))
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return { 'index.html': String(source || '') }
+  }
+}
+
+export function buildMultiHtmlDocument(source = '') {
+  const files = parseMultiHtmlSource(source)
+  const index = stripDangerousMarkup(files['index.html'] || '')
+  const css = Object.entries(files)
+    .filter(([name]) => /\.css$/i.test(name))
+    .map(([, content]) => String(content || ''))
+    .join('\n\n')
+  const js = Object.entries(files)
+    .filter(([name]) => /\.js$/i.test(name))
+    .map(([, content]) => String(content || '').replace(/<\/script>/gi, '<\\/script>'))
+    .join('\n;\n')
+
+  let html = index || '<main id="app"></main>'
+  if (css) {
+    html = html.includes('</head>')
+      ? html.replace('</head>', `<style>${css}</style></head>`)
+      : `<style>${css}</style>${html}`
+  }
+  if (js) {
+    html = html.includes('</body>')
+      ? html.replace('</body>', `<script>${js}</script></body>`)
+      : `${html}<script>${js}</script>`
+  }
+  return buildHtmlDocument(html)
+}
+
+export function buildMermaidDocument(diagram = '', theme = 'default') {
+  const safeDiagram = escapeHtml(diagram)
+  const safeTheme = ['default', 'neutral', 'dark', 'forest', 'base'].includes(theme) ? theme : 'default'
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+html,body{margin:0;min-height:100%;background:radial-gradient(circle at top left,#fff7ed,#eef2ff 42%,#f8fafc);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#111827}
+.wrap{min-height:100vh;display:grid;place-items:center;padding:32px}
+.card{width:min(1080px,100%);border:1px solid rgba(17,24,39,.12);border-radius:24px;background:rgba(255,255,255,.78);box-shadow:0 24px 80px rgba(15,23,42,.14);backdrop-filter:blur(16px);padding:28px;overflow:auto}
+</style>
+</head>
+<body>
+<div class="wrap"><div class="card"><pre class="mermaid">${safeDiagram}</pre></div></div>
+<script>mermaid.initialize({startOnLoad:true,theme:${JSON.stringify(safeTheme)},securityLevel:'strict'});</script>
+</body>
+</html>`
+}
+
+export function buildChartDocument(configSource = '') {
+  const config = (() => {
+    try { return typeof configSource === 'string' ? JSON.parse(configSource) : configSource }
+    catch { return {} }
+  })()
+  const safeConfig = JSON.stringify(config).replace(/<\/script>/gi, '<\\/script>')
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+html,body{margin:0;height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:linear-gradient(135deg,#0f172a,#312e81 45%,#7c2d12);color:white}
+.wrap{height:100%;display:grid;place-items:center;padding:32px;box-sizing:border-box}
+.card{width:min(980px,100%);height:min(640px,82vh);padding:28px;border-radius:28px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.2);box-shadow:0 30px 90px rgba(0,0,0,.35);backdrop-filter:blur(18px)}
+</style>
+</head>
+<body>
+<div class="wrap"><div class="card"><canvas id="chart"></canvas></div></div>
+<script>
+const config = ${safeConfig};
+new Chart(document.getElementById('chart'), config);
+</script>
+</body>
+</html>`
+}
+
+export function buildSvgDocument(svgSource = '') {
+  const svg = stripDangerousMarkup(svgSource)
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+html,body{margin:0;height:100%;background:conic-gradient(from 180deg at 50% 50%,#fff7ed,#f1f5f9,#eef2ff,#fff7ed);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.wrap{height:100%;display:grid;place-items:center;padding:28px;box-sizing:border-box}
+.card{max-width:min(1000px,92vw);max-height:84vh;border-radius:28px;background:rgba(255,255,255,.82);border:1px solid rgba(15,23,42,.12);box-shadow:0 24px 80px rgba(15,23,42,.16);padding:28px;overflow:auto}
+svg{max-width:100%;height:auto;display:block}
+</style>
+</head>
+<body><div class="wrap"><div class="card">${svg}</div></div></body>
+</html>`
+}
+
 export function buildArtifactPreview({ content = '', meta = {} } = {}) {
   // 先按 meta 的显式声明走 (slash 命令路径)
   let resolvedType = ''
@@ -123,6 +241,7 @@ export function buildArtifactPreview({ content = '', meta = {} } = {}) {
   if (shouldOfferPptxExport(meta)) resolvedType = 'pptx'
   else if (meta?.artifactType === 'html' || meta?.skillId === 'htmlppt') resolvedType = 'html'
   else if (meta?.artifactType === 'react') resolvedType = 'react'
+  else if (['mermaid', 'chart', 'svg', 'html_multi'].includes(meta?.artifactType)) resolvedType = meta.artifactType
   else {
     const officeType = shouldOfferOfficeExport(meta)
     if (officeType) resolvedType = officeType
@@ -156,6 +275,63 @@ export function buildArtifactPreview({ content = '', meta = {} } = {}) {
       filename: buildOfficeFilename(title, 'html'),
       summary: `${html.length} 字符`,
       html,
+      previewable: true,
+    }
+  }
+
+  if (resolvedType === 'mermaid') {
+    const title = (meta.artifactTitle || 'diagram').toString().trim() || 'diagram'
+    return {
+      ...base,
+      type: 'mermaid',
+      title,
+      label: 'Mermaid',
+      filename: buildOfficeFilename(title, 'mmd'),
+      summary: `${content.length} characters`,
+      html: buildMermaidDocument(content, meta.artifactDescription || 'default'),
+      previewable: true,
+    }
+  }
+
+  if (resolvedType === 'chart') {
+    const title = (meta.artifactTitle || 'chart').toString().trim() || 'chart'
+    return {
+      ...base,
+      type: 'chart',
+      title,
+      label: 'Chart',
+      filename: buildOfficeFilename(title, 'json'),
+      summary: 'Chart.js preview',
+      html: buildChartDocument(content),
+      previewable: true,
+    }
+  }
+
+  if (resolvedType === 'svg') {
+    const title = (meta.artifactTitle || 'vector').toString().trim() || 'vector'
+    return {
+      ...base,
+      type: 'svg',
+      title,
+      label: 'SVG',
+      filename: buildOfficeFilename(title, 'svg'),
+      summary: `${content.length} characters`,
+      html: buildSvgDocument(content),
+      previewable: true,
+    }
+  }
+
+  if (resolvedType === 'html_multi') {
+    const title = (meta.artifactTitle || 'html-app').toString().trim() || 'html-app'
+    const files = parseMultiHtmlSource(content)
+    return {
+      ...base,
+      type: 'html_multi',
+      title,
+      label: 'HTML App',
+      filename: buildOfficeFilename(title, 'html'),
+      summary: `${Object.keys(files).length || 1} files`,
+      html: buildMultiHtmlDocument(files),
       previewable: true,
     }
   }

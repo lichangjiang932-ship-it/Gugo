@@ -108,17 +108,20 @@ export default function TaskRunPanel() {
     }
   }, [selectedJobId])
 
-  useEffect(() => subscribeToJobEvents(() => {
-    Promise.all([
-      listJobs(),
-      selectedJobId ? getJob(selectedJobId) : Promise.resolve({ job: null }),
-    ])
-      .then(([jobsPayload, jobPayload]) => {
-        setJobs(jobsPayload.jobs)
-        if (jobPayload.job) setSelectedJob(jobPayload.job)
-      })
-      .catch((err) => setError(err.message))
-  }), [selectedJobId])
+  useEffect(() => {
+    const unsub = subscribeToJobEvents(() => {
+      Promise.all([
+        listJobs(),
+        selectedJobId ? getJob(selectedJobId) : Promise.resolve({ job: null }),
+      ])
+        .then(([jobsPayload, jobPayload]) => {
+          setJobs(jobsPayload.jobs)
+          if (jobPayload.job) setSelectedJob(jobPayload.job)
+        })
+        .catch((err) => setError(err.message))
+    })
+    return unsub
+  }, [selectedJobId])
 
   const visibleJobs = useMemo(
     () => jobs.filter((job) => filterJob(job, activeFilter)),

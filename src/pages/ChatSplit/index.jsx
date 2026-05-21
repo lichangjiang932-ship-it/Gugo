@@ -5,7 +5,7 @@ import { useAppContext } from '../../store/AppContext'
 import { SKILLS, getSkillSystemPrompt } from '../../data.js'
 import { buildUserContentWithAttachments, describeAttachmentPrompt } from '../../lib/attachments.js'
 import { callModelThroughProxyStream, getModelStatus, summarizeSessionTitle } from '../../lib/modelClient.js'
-import { buildToolSpecs, executeToolCall, resolveToolsForMode } from '../../lib/tools/index.js'
+import { buildToolSpecs, buildToolSpecsAsync, executeToolCall, resolveToolsForMode } from '../../lib/tools/index.js'
 import { readStoredModel, resolveInitialModel, writeStoredModel } from '../../lib/modelSelection.js'
 import { isLoggedInLocally } from '../../lib/accountClient.js'
 import { listSkills } from '../../lib/skillClient.js'
@@ -16,10 +16,15 @@ import ChatMessages from './ChatMessages'
 import ChatComposer from './ChatComposer'
 import RightPreviewPane from './RightPreviewPane'
 import CodingWorkbench from './CodingWorkbench'
+import TodoTracker from '../../components/TodoTracker'
 import { exportSession } from '../../lib/sessionExport.js'
-import * as XLSX from '@e965/xlsx'
+import { compressImageDataUrl } from '../../lib/imageCompress.js'
+import { extractPdfText } from '../../lib/pdfExtract.js'
+import { fetchCompactionArchive } from '../../lib/compactionClient.js'
 
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024
+const MAX_RAW_IMAGE_BYTES = 16 * 1024 * 1024
+const MAX_IMAGES_PER_MESSAGE = 5
 const MAX_TEXT_BYTES = 256 * 1024
 const EMPTY_MESSAGES = []
 
@@ -32,6 +37,17 @@ function readFileAsDataUrl(file) {
   })
 }
 
+
+function dataUrlByteLength(dataUrl = '') {
+  const comma = String(dataUrl).indexOf(',')
+  const payload = comma >= 0 ? String(dataUrl).slice(comma + 1) : String(dataUrl)
+  return Math.floor((payload.length * 3) / 4)
+}
+
+function isPdfFile(file) {
+  return file.type === 'application/pdf' || /\.pdf$/i.test(file.name)
+}
+
 function isTextLikeFile(file) {
   return /^text\/|json|xml|csv|markdown|javascript|typescript/.test(file.type) ||
     /\.(txt|md|json|csv|xml|yml|yaml|log|js|jsx|ts|tsx|css|html)$/i.test(file.name)
@@ -42,6 +58,7 @@ function isExcelFile(file) {
 }
 
 async function readExcelAsText(file) {
+  const XLSX = await import('@e965/xlsx')
   const buffer = await file.arrayBuffer()
   const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array' })
   const parts = []
@@ -257,7 +274,13 @@ export default function ChatSplit() {
           // 工具调用循环:每轮 stream 模型 → 收 tool_calls → 本地执行 → messages 追加 tool 结果 → 再 stream
           // 上限 5 轮防止失控;无 tool_calls 即文本回复完成,直接退出
           const enabledToolNames = resolveToolsForMode(state.toolsConfig || {}, agentMode)
-          const tools = buildToolSpecs(enabledToolNames)
+          // Feature 1: 拉服务端拼上 MCP / skill 动态工具,fallback 到纯本地 builtin
+          let tools
+          try {
+            tools = await buildToolSpecsAsync({ enabledBuiltinNames: enabledToolNames, mode: agentMode })
+          } catch {
+            tools = buildToolSpecs(enabledToolNames)
+          }
 
           // G1: 工具调用产出的 artifact (create_pptx/docx/xlsx) 暂存,
           // 流程结束后写到 last message meta — 让 ChatMessages 直接渲染卡片 + 弹右栏.
@@ -325,6 +348,10 @@ export default function ChatSplit() {
               // G1: create_* 工具会在 result.artifact 里挂 { type, title, source }
               if (result.artifact && result.artifact.type && result.artifact.source) {
                 toolArtifact = result.artifact
+              }
+              // Feature 8: manage_todos 返回 todos 字段 → 派发 SET_TODOS 让 UI 同步
+              if (Array.isArray(result.todos)) {
+                dispatch({ type: 'SET_TODOS', payload: { todos: result.todos } })
               }
               dispatch({
                 type: 'APPEND_TOOL_CALL_TO_LAST_MESSAGE',
@@ -464,20 +491,48 @@ export default function ChatSplit() {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
   }, [showSlashMenu, filteredSkills, selectedIndex, handleSend])
 
+  const handleExpandCompaction = useCallback(async (archiveId) => {
+    if (!archiveId) return
+    try {
+      const archive = await fetchCompactionArchive(archiveId)
+      dispatch({
+        type: 'EXPAND_COMPACTED',
+        payload: {
+          sessionId: state.activeSessionId,
+          archiveId,
+          archivedMessages: archive.archivedMessages || [],
+        },
+      })
+      setWorkbenchMessage(`Restored ${archive.replacedMessageCount || 0} archived messages.`)
+    } catch (err) {
+      setWorkbenchMessage(err.message || 'Failed to restore compacted context.')
+    }
+  }, [dispatch, state.activeSessionId])
+
   const handleFileChange = async (e) => {
     const selectedFiles = Array.from(e.target.files || [])
     e.target.value = ''
     if (!selectedFiles.length) return
     const nextAttachments = []
+    let imageCount = attachments.filter((item) => item.kind === 'image').length
     for (const file of selectedFiles) {
       const sizeKB = (file.size / 1024).toFixed(1)
       const id = crypto.randomUUID?.() ?? `${Date.now()}-${file.name}`
       try {
         if (file.type.startsWith('image/')) {
-          if (file.size > MAX_IMAGE_BYTES) {
-            nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'file', error: '图片超过 4MB，已只附加文件信息' })
+          if (imageCount >= MAX_IMAGES_PER_MESSAGE) {
+            nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'file', error: 'Image limit reached; only 5 images can be sent in one message.' })
+          } else if (file.size > MAX_RAW_IMAGE_BYTES) {
+            nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'file', error: 'Image is too large to process locally.' })
           } else {
-            nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'image', dataUrl: await readFileAsDataUrl(file) })
+            const rawDataUrl = await readFileAsDataUrl(file)
+            const dataUrl = await compressImageDataUrl(rawDataUrl)
+            if (dataUrlByteLength(dataUrl) > MAX_IMAGE_BYTES) {
+              nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'file', error: 'Compressed image is still over 4MB.' })
+            } else {
+              imageCount += 1
+              nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'image', dataUrl })
+            }
           }
         } else if (isExcelFile(file)) {
           const text = await readExcelAsText(file)
@@ -489,6 +544,9 @@ export default function ChatSplit() {
           } else {
             nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'text', text })
           }
+        } else if (isPdfFile(file)) {
+          const text = await extractPdfText(file)
+          nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'text', text })
         } else if (isTextLikeFile(file) && file.size <= MAX_TEXT_BYTES) {
           nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'text', text: await file.text() })
         } else {
@@ -627,6 +685,14 @@ export default function ChatSplit() {
           onNavigateTask={() => navigate('/task')}
         />
 
+        {/* Feature 8: Todo 追踪 sticky strip */}
+        {Array.isArray(activeSession?.todos) && activeSession.todos.length > 0 && (
+          <TodoTracker
+            todos={activeSession.todos}
+            onClear={() => dispatch({ type: 'CLEAR_TODOS' })}
+          />
+        )}
+
         <ChatMessages
           messages={messages}
           state={state}
@@ -654,6 +720,7 @@ export default function ChatSplit() {
               },
             })
           }
+          onExpandCompaction={handleExpandCompaction}
         />
 
         <ChatComposer
