@@ -21,7 +21,9 @@ export default function SkillCommandsSync() {
           syncSkillsToCommands(skills)
         }
       })
-      .catch(() => { /* 已用 fallback */ })
+      .catch((err) => {
+        console.warn('[SkillCommandsSync] 远程技能同步失败:', err?.message || err)
+      })
     return () => { cancelled = true }
   }, [])
 

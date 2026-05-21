@@ -1,14 +1,50 @@
 import { useState } from 'react'
-import { Search, Globe, ChevronDown, ChevronRight, CheckCircle2, XCircle, Loader2 } from 'lucide-react'
+import { Search, Globe, ChevronDown, ChevronRight, CheckCircle2, XCircle, Loader2, FileText, Presentation, Table2, Code2, PieChart, Image, Bot, FolderOpen, FileEdit, Terminal, GitBranch, Diff, CheckSquare, Layers } from 'lucide-react'
 
 const ICONS = {
   web_search: Search,
   fetch_url: Globe,
+  create_pptx: Presentation,
+  create_docx: FileText,
+  create_xlsx: Table2,
+  create_react_component: Code2,
+  create_mermaid: PieChart,
+  create_chart: PieChart,
+  create_svg: Image,
+  create_html_app: Code2,
+  Agent: Bot,
+  read_file: FolderOpen,
+  write_file: FileEdit,
+  edit_file: FileEdit,
+  multi_edit: Layers,
+  bash_exec: Terminal,
+  git_status: GitBranch,
+  git_diff: Diff,
+  run_project_check: CheckSquare,
+  manage_todos: CheckSquare,
 }
 
 const LABELS = {
   web_search: '网页搜索',
   fetch_url: '抓取链接',
+  create_pptx: '生成 PPT',
+  create_docx: '生成 Word',
+  create_xlsx: '生成 Excel',
+  create_react_component: 'React 组件',
+  create_mermaid: '流程图',
+  create_chart: '图表',
+  create_svg: 'SVG 图形',
+  create_html_app: 'HTML 应用',
+  Agent: '子代理',
+  read_file: '读取文件',
+  write_file: '写入文件',
+  edit_file: '编辑文件',
+  multi_edit: '批量编辑',
+  bash_exec: '终端命令',
+  git_status: 'Git 状态',
+  git_diff: 'Git 差异',
+  run_project_check: '项目检查',
+  manage_todos: '任务管理',
 }
 
 function summarizeArgs(name, argsJson) {
@@ -16,6 +52,11 @@ function summarizeArgs(name, argsJson) {
   try { args = JSON.parse(argsJson || '{}') } catch { /* noop */ }
   if (name === 'web_search') return args.query || '(空)'
   if (name === 'fetch_url') return args.url || '(空)'
+  if (name === 'read_file' || name === 'write_file' || name === 'edit_file') return args.path || '(空)'
+  if (name === 'multi_edit') return `${(args.edits || []).length} 个编辑`
+  if (name === 'bash_exec') return (args.command || '').slice(0, 60) || '(空)'
+  if (name === 'Agent') return args.subagent_type ? `${args.subagent_type}: ${(args.description || '').slice(0, 40)}` : '(空)'
+  if (name && name.startsWith('create_')) return args.title || '(空)'
   return JSON.stringify(args).slice(0, 80)
 }
 

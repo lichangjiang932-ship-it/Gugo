@@ -49,7 +49,8 @@ export default function SkillsMarket() {
       .then(({ skills }) => {
         if (active && Array.isArray(skills) && skills.length) setRuntimeSkills(skills)
       })
-      .catch(() => {
+      .catch((err) => {
+        console.warn('[SkillsMarket] 无法加载远程技能:', err?.message || err)
         if (active) setRuntimeSkills(SKILLS)
       })
     return () => {

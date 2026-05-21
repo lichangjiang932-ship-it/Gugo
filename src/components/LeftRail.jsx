@@ -69,6 +69,7 @@ export default function LeftRail() {
   }, [])
 
   const navItems = [
+    { path: '/', icon: Sparkles, label: '首页' },
     { path: '/chat', icon: MessageSquare, label: '对话' },
     { path: '/task', icon: ListChecks, label: '任务' },
     { path: '/skills', icon: Wrench, label: '技能库' },

@@ -5,6 +5,7 @@ import GlobalShortcuts from './components/GlobalShortcuts'
 import ErrorBoundary from './components/ErrorBoundary'
 import CommandPalette from './components/CommandPalette'
 import SkillCommandsSync from './components/SkillCommandsSync'
+import RequireAuth from './components/RequireAuth'
 
 const CoverPage = lazy(() => import('./pages/CoverPage'))
 const ChatSplit = lazy(() => import('./pages/ChatSplit'))
@@ -39,10 +40,10 @@ function App() {
           <Route path="/permissions" element={<PermissionsDashboard />} />
           <Route path="/task" element={<TaskRunPanel />} />
           <Route path="/history" element={<HistoryView />} />
-          <Route path="/settings" element={<SettingsView />} />
-          <Route path="/memory" element={<MemoryView />} />
-          <Route path="/hooks" element={<HooksView />} />
-          <Route path="/mcp" element={<McpServersView />} />
+          <Route path="/settings" element={<RequireAuth><SettingsView /></RequireAuth>} />
+          <Route path="/memory" element={<RequireAuth><MemoryView /></RequireAuth>} />
+          <Route path="/hooks" element={<RequireAuth><HooksView /></RequireAuth>} />
+          <Route path="/mcp" element={<RequireAuth><McpServersView /></RequireAuth>} />
 
           <Route path="/login" element={<Navigate to="/chat" replace />} />
           <Route path="*" element={<Navigate to="/chat" replace />} />

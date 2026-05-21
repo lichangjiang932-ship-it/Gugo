@@ -130,7 +130,8 @@ export default function ChatSplit() {
       .then(({ skills }) => {
         if (!cancelled && Array.isArray(skills) && skills.length) setRuntimeSkills(skills)
       })
-      .catch(() => {
+      .catch((err) => {
+        console.warn('[ChatSplit] 无法加载远程技能，使用内置技能:', err?.message || err)
         if (!cancelled) setRuntimeSkills(SKILLS)
       })
     return () => { cancelled = true }
