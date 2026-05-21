@@ -20,8 +20,9 @@ const McpServersView = lazy(() => import('./pages/McpServersView'))
 
 function Fallback() {
   return (
-    <div className="min-h-screen flex items-center justify-center text-stone-400 text-sm">
-      加载中...
+    <div className="min-h-screen flex flex-col items-center justify-center gap-4 text-stone-400" role="status" aria-label="页面加载中">
+      <div className="w-8 h-8 rounded-full border-2 border-ember/30 border-t-ember animate-spin" />
+      <span className="text-sm tracking-wide">加载中…</span>
     </div>
   )
 }
@@ -33,7 +34,8 @@ function App() {
       <CommandPalette />
       <SkillCommandsSync />
       <Suspense fallback={<Fallback />}>
-        <Routes>
+        <main>
+          <Routes>
           <Route path="/" element={<CoverPage />} />
           <Route path="/chat" element={<ChatSplit />} />
           <Route path="/skills" element={<SkillsMarket />} />
@@ -48,6 +50,7 @@ function App() {
           <Route path="/login" element={<Navigate to="/chat" replace />} />
           <Route path="*" element={<Navigate to="/chat" replace />} />
         </Routes>
+        </main>
       </Suspense>
     </ErrorBoundary>
   )

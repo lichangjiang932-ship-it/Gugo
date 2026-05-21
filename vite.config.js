@@ -109,4 +109,23 @@ const PUBLIC_BASE_PATH = process.env.PUBLIC_BASE_PATH || '/'
 export default defineConfig({
   plugins: [react(), authBillingPlugin(), modelProxyPlugin(), toolProxyPlugin(), fallbackApiPlugin()],
   base: PUBLIC_BASE_PATH,
+  build: {
+    chunkSizeWarningLimit: 800,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          // Group React + Router into one stable vendor chunk
+          if (id.includes('node_modules/react') || id.includes('node_modules/react-dom') || id.includes('node_modules/react-router')) return 'vendor-react'
+          // Group Framer Motion separately (large, stable)
+          if (id.includes('node_modules/framer-motion')) return 'vendor-motion'
+          // Group Three.js into one chunk
+          if (id.includes('node_modules/three') || id.includes('node_modules/@react-three')) return 'vendor-three'
+          // Group lucide icons (many small files)
+          if (id.includes('node_modules/lucide-react')) return 'vendor-icons'
+          // Group all remaining node_modules
+          if (id.includes('node_modules/')) return 'vendor-common'
+        },
+      },
+    },
+  },
 })

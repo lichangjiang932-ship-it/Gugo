@@ -229,8 +229,8 @@ export default function LeftRail() {
 
   return (
     <>
-      <aside className="w-[240px] h-full border-r border-dashed border-ink-fade/50 flex flex-col gap-3 p-4 bg-paper shrink-0 overflow-y-auto">
-        <button onClick={() => navigate('/chat')} className="flex items-center gap-2 mb-1">
+      <aside role="navigation" aria-label="主导航" className="w-[240px] h-full border-r border-dashed border-ink-fade/50 flex flex-col gap-3 p-4 bg-paper shrink-0 overflow-y-auto">
+        <button onClick={() => navigate('/chat')} aria-label="回到首页" className="flex items-center gap-2 mb-1">
           <div className="w-7 h-7 rounded-full border border-ink flex items-center justify-center bg-paper">
             <Sparkles className="w-3.5 h-3.5 text-ember" />
           </div>
