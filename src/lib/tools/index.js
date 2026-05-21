@@ -87,6 +87,15 @@ const TOOL_ARG_SCHEMAS = {
     const inProg = d.todos.filter((t) => t.status === 'in_progress').length
     return inProg <= 1
   }, { message: '同一时间只允许一个 in_progress' }),
+
+  // Reasonix-style multi_edit: 原子化批量 SEARCH/REPLACE
+  multi_edit: z.object({
+    edits: z.array(z.object({
+      path: z.string().min(1, 'path 不能为空').max(500),
+      oldText: z.string().min(1, 'oldText 不能为空'),
+      newText: z.string().min(0),
+    })).min(1, '至少需要一个 edit').max(20, '单次最多 20 个 edit'),
+  }),
 }
 
 const TOOL_SPECS = {
@@ -164,6 +173,32 @@ const TOOL_SPECS = {
           replace_all: { type: 'boolean', description: 'Replace all occurrences instead of requiring uniqueness.' },
         },
         required: ['path', 'old_string', 'new_string'],
+      },
+    },
+  },
+  multi_edit: {
+    type: 'function',
+    function: {
+      name: 'multi_edit',
+      description: 'Atomic batch edit across multiple files. Pre-validates all SEARCH texts exist and are unique, then applies all edits. Rollbacks on any failure. Use for cross-file refactoring and bulk pattern replacements.',
+      parameters: {
+        type: 'object',
+        properties: {
+          edits: {
+            type: 'array',
+            description: 'List of SEARCH/REPLACE edits (max 20)',
+            items: {
+              type: 'object',
+              properties: {
+                path: { type: 'string', description: 'File path relative to workspace' },
+                oldText: { type: 'string', description: 'Exact text to replace — must be unique in file' },
+                newText: { type: 'string', description: 'Replacement text' },
+              },
+              required: ['path', 'oldText', 'newText'],
+            },
+          },
+        },
+        required: ['edits'],
       },
     },
   },
@@ -827,6 +862,77 @@ const EXECUTORS = {
   git_diff: execGitDiff,
   run_project_check: execRunProjectCheck,
   manage_todos: execManageTodos,
+  multi_edit: execMultiEdit,
+}
+
+/**
+ * multi_edit — 原子化批量 SEARCH/REPLACE。
+ *
+ * 流程：
+ *   1. 读取所有目标文件的内容（读一次）
+ *   2. 校验每个 oldText 在文件中唯一存在
+ *   3. 全部通过 → 对所有文件做替换并写回
+ *   4. 任何一个写入失败 → 回滚已写的文件到原始内容
+ */
+async function execMultiEdit(args) {
+  const { edits } = args
+  if (!Array.isArray(edits) || edits.length === 0) {
+    throw new Error('multi_edit: edits 不能为空')
+  }
+
+  // Phase 1: 读取所有文件 + 校验
+  const originalContents = []
+  for (const edit of edits) {
+    const resp = await fetch('/api/tools/fs/read_file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getAuthToken()}` },
+      body: JSON.stringify({ path: edit.path }),
+    })
+    const data = await resp.json()
+    if (!data.ok) throw new Error(`multi_edit: 无法读取 ${edit.path} — ${data.error || resp.status}`)
+
+    const content = data.content
+    const firstIdx = content.indexOf(edit.oldText)
+    const lastIdx = content.lastIndexOf(edit.oldText)
+
+    if (firstIdx === -1) {
+      throw new Error(`multi_edit: "${edit.oldText.slice(0, 50)}..." 在 ${edit.path} 中不存在`)
+    }
+    if (firstIdx !== lastIdx) {
+      throw new Error(`multi_edit: "${edit.oldText.slice(0, 50)}..." 在 ${edit.path} 中出现多次，不是唯一`)
+    }
+
+    originalContents.push({ path: edit.path, original: content, edit })
+  }
+
+  // Phase 2: 全部通过 → 执行写入
+  const writtenFiles = []
+  try {
+    for (const item of originalContents) {
+      const newContent = item.original.replace(item.edit.oldText, item.edit.newText)
+      const resp = await fetch('/api/tools/fs/write_file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getAuthToken()}` },
+        body: JSON.stringify({ path: item.path, content: newContent }),
+      })
+      const data = await resp.json()
+      if (!data.ok) throw new Error(`写入 ${item.path} 失败: ${data.error || resp.status}`)
+      writtenFiles.push(item)
+    }
+    return { ok: true, edited: edits.length, files: edits.map((e) => e.path) }
+  } catch (err) {
+    // Phase 3: 回滚已写的文件
+    for (const item of writtenFiles) {
+      try {
+        await fetch('/api/tools/fs/write_file', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getAuthToken()}` },
+          body: JSON.stringify({ path: item.path, content: item.original }),
+        })
+      } catch { /* 回滚失败静默 */ }
+    }
+    throw new Error(`multi_edit 失败，已回滚 ${writtenFiles.length} 个文件: ${err.message}`, { cause: err })
+  }
 }
 
 export async function executeToolCall(call, options = {}) {

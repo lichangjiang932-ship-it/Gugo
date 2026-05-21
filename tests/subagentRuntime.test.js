@@ -5,7 +5,6 @@ import {
   SUBAGENT_TYPES,
   runSubagent,
   listSubagentTypes,
-  getSubagentRun,
 } from '../server/subagentRuntime.js'
 
 const { userId } = issueTestSession({ email: 'subagent-test@example.com' })
