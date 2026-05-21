@@ -11,6 +11,13 @@ import {
   getPublicAccount,
   loadBillingConfig,
 } from './billingAuth.js'
+import { getSessionByToken } from './db.js'
+import {
+  selectActiveMemoriesForInjection,
+  buildMemorySystemBlock,
+  touchMemoryUsage,
+} from './memoryStore.js'
+import { dispatchHooks } from './hooksService.js'
 
 // ★ #18: 消息格式 schema — 拒绝畸形 messages 入参,防 OpenAI 上游报 400 / 计费爆零
 const MESSAGE_SCHEMA = z.object({
@@ -77,6 +84,22 @@ export function getToolMaxRounds(env = process.env) {
   const raw = Number(env.TOOL_MAX_ROUNDS)
   if (!Number.isFinite(raw) || raw < 1 || raw > 12) return 5
   return Math.floor(raw)
+}
+
+export function hasVisionContent(messages = []) {
+  return messages.some((message) =>
+    Array.isArray(message?.content) &&
+    message.content.some((part) => part?.type === 'image_url' || part?.image_url)
+  )
+}
+
+export function supportsVisionModel(modelName = '', env = process.env) {
+  const configured = String(env.MODEL_NAMES_VISION || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+  if (!configured.length) return true
+  return configured.includes(modelName)
 }
 
 export function getModelStatus(env = process.env) {
@@ -485,7 +508,7 @@ export async function handleModelProxyRequest(req, res) {
 
     const testMode = req.url?.startsWith('/api/model/test')
     const useStream = body.stream === true
-    const messages = testMode
+    let messages = testMode
       ? [{ role: 'user', content: 'Reply with only: pong' }]
       : body.messages
 
@@ -504,13 +527,61 @@ export async function handleModelProxyRequest(req, res) {
       config,
       env: getRuntimeEnv(),
     })
+    if (!testMode && hasVisionContent(messages) && !supportsVisionModel(selectedModel, getRuntimeEnv())) {
+      sendJson(res, 422, {
+        ok: false,
+        error: `当前模型 ${selectedModel} 未启用视觉输入，请切换到支持图片的模型。`,
+        modelName: selectedModel,
+      })
+      return
+    }
     const requestConfig = { ...config, modelName: selectedModel }
 
     let token = ''
     let estimatedCost = 0
+    let injectedMemoryIds = []
+    let session = null
     if (!testMode) {
       token = authToken(req)
       const account = getPublicAccount({ token })
+      session = token ? getSessionByToken(token) : null
+
+      if (session?.user_id) {
+        const promptHook = await dispatchHooks({
+          userId: session.user_id,
+          event: 'user_prompt_submit',
+          tool: 'chat',
+          args: { messages },
+        })
+        if (!promptHook.allow) {
+          sendJson(res, 403, { ok: false, error: promptHook.reason || 'hook rejected prompt' })
+          return
+        }
+        if (Array.isArray(promptHook.replacementArgs?.messages)) {
+          messages = promptHook.replacementArgs.messages
+        }
+      }
+
+      // Feature 3: 注入用户长期记忆为 system block
+      try {
+        if (session?.user_id) {
+          const cap = Number(getRuntimeEnv().MEMORY_INJECT_TOKEN_CAP || 800)
+          const picked = selectActiveMemoriesForInjection({ userId: session.user_id, tokenCap: cap })
+          if (picked.memories.length) {
+            const block = buildMemorySystemBlock(picked.memories)
+            messages.unshift({ role: 'system', content: block })
+            injectedMemoryIds = picked.memories.map((m) => m.id)
+            // 标记 last_used_at — 注入即视为使用,影响后续优先级排序
+            touchMemoryUsage(session.user_id, injectedMemoryIds)
+          }
+        }
+      } catch (err) {
+        // 注入失败不阻断 chat
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn('[memory] inject failed:', err?.message || err)
+        }
+      }
+
       const billingConfig = loadBillingConfig(getRuntimeEnv())
       estimatedCost = estimateChatCost({
         modelName: selectedModel,
@@ -576,6 +647,14 @@ export async function handleModelProxyRequest(req, res) {
             // 扣费失败(余额不够等)不阻断已经流出去的内容,但要告诉前端
             billingError = chargeErr.message
           }
+          if (session?.user_id) {
+            dispatchHooks({
+              userId: session.user_id,
+              event: 'stop',
+              tool: 'chat',
+              args: { latency: Date.now() - started, stream: true },
+            }).catch(() => {})
+          }
           // done 帧带上 billing,前端能在 stream 收尾时拿到本轮实际消耗,
           // 用于工具调用循环里"多轮累计计费"显示.放一起避免被 done 后的 return 截断.
           safeWrite(`data: ${JSON.stringify({
@@ -627,6 +706,14 @@ export async function handleModelProxyRequest(req, res) {
     let billing = null
     if (!testMode) {
       billing = chargeForModelUse({ token, modelName: selectedModel, cost: estimatedCost })
+      if (session?.user_id) {
+        dispatchHooks({
+          userId: session.user_id,
+          event: 'stop',
+          tool: 'chat',
+          args: { latency: Date.now() - started, stream: false },
+        }).catch(() => {})
+      }
     }
     sendJson(res, 200, {
       ok: true,

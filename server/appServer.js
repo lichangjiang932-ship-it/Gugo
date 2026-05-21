@@ -25,6 +25,13 @@ import { handleArtifactDownload } from './artifactGen.js'
 import { closeJobRuntime, getJobRuntime } from './jobRuntime.js'
 import { handleJobRequest } from './jobRoutes.js'
 import { handleSkillRequest } from './skillRoutes.js'
+import { handleToolSpecsRequest } from './toolRegistry.js'
+import { handleMemoryRequest } from './memoryRoutes.js'
+import { handleHooksRequest } from './hooksRoutes.js'
+import { handleMcpRequest } from './mcpRoutes.js'
+import { handleSubagentRequest } from './subagentRoutes.js'
+import { handleCompactionRequest } from './compactionRoutes.js'
+import { shutdownAll as shutdownMcpAll } from './mcp/mcpManager.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -81,7 +88,7 @@ function readVersion() {
   return cachedVersion
 }
 
-function healthCheck(req, res, getEnv = getRuntimeEnv) {
+export function healthCheck(req, res, getEnv = getRuntimeEnv) {
   // G6: /api/health 必须返回结构化 JSON,带 db + model 子状态.
   // 任何子系统未就绪 → 503,但响应体仍是 JSON,方便运维和探针解析.
   const env = (() => { try { return getEnv() } catch { return process.env } })()
@@ -152,6 +159,11 @@ function createRouter(getEnv = getRuntimeEnv) {
   }
 
   // 工具代理(web 搜索 / URL 抓取)
+  // 工具 spec 列表(底座 A) — 在更具体的 /api/tools/* 路由之前匹配,GET 公共端点
+  if (req.url?.startsWith('/api/tools/specs')) {
+    return handleToolSpecsRequest(req, res)
+  }
+
   // Workspace fs/shell tools use the stricter fsShell handler before generic web tools.
   if (req.url?.startsWith('/api/tools/fs/') || req.url?.startsWith('/api/tools/shell/')) {
     return handleFsShellRequest(req, res)
@@ -181,6 +193,31 @@ function createRouter(getEnv = getRuntimeEnv) {
     return handleSkillRequest(req, res)
   }
 
+  // 记忆中心（feature 3）
+  if (req.url?.startsWith('/api/memory/')) {
+    return handleMemoryRequest(req, res)
+  }
+
+  // Hooks（feature 7）
+  if (req.url?.startsWith('/api/hooks')) {
+    return handleHooksRequest(req, res)
+  }
+
+  // MCP (feature 1) — /api/mcp/* + /api/tools/mcp/call
+  if (req.url?.startsWith('/api/mcp/') || req.url?.startsWith('/api/tools/mcp/')) {
+    return handleMcpRequest(req, res)
+  }
+
+  // Subagents (feature 2)
+  if (req.url?.startsWith('/api/subagent/')) {
+    return handleSubagentRequest(req, res)
+  }
+
+  // Context compaction (feature 6)
+  if (req.url?.startsWith('/api/compaction/')) {
+    return handleCompactionRequest(req, res)
+  }
+
   // 静态文件
   serveStatic(req, res)
   }
@@ -195,6 +232,7 @@ function gracefulShutdown(server) {
   server.close(() => {
     if (process.env.NODE_ENV !== 'production') console.log('[server] HTTP server 已关闭')
     closeJobRuntime()
+    try { shutdownMcpAll() } catch { /* ignore */ }
     closeDb()
     if (process.env.NODE_ENV !== 'production') console.log('[server] 数据库连接已关闭')
     process.exit(0)

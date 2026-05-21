@@ -3,8 +3,19 @@ import react from '@vitejs/plugin-react'
 import { getRuntimeEnv, modelProxyPlugin } from './server/modelProxy.js'
 import { handleAuthBillingRequest } from './server/billingAuth.js'
 import { toolProxyPlugin } from './server/toolProxy.js'
+import { healthCheck } from './server/appServer.js'
+import { handleJobRequest } from './server/jobRoutes.js'
+import { handleSkillRequest } from './server/skillRoutes.js'
+import { handleArtifactDownload } from './server/artifactGen.js'
+import { getJobRuntime } from './server/jobRuntime.js'
 import { handleFsShellRequest } from './server/fsShellTools.js'
 import { handleGitWorkbenchRequest } from './server/gitWorkbench.js'
+import { handleToolSpecsRequest } from './server/toolRegistry.js'
+import { handleMemoryRequest } from './server/memoryRoutes.js'
+import { handleHooksRequest } from './server/hooksRoutes.js'
+import { handleMcpRequest } from './server/mcpRoutes.js'
+import { handleSubagentRequest } from './server/subagentRoutes.js'
+import { handleCompactionRequest } from './server/compactionRoutes.js'
 
 function authBillingPlugin() {
   return {
@@ -25,11 +36,52 @@ function authBillingPlugin() {
   }
 }
 
-function workspaceToolsPlugin() {
+function fallbackApiPlugin() {
+  const jobRuntime = getJobRuntime()
   return {
-    name: 'local-workspace-tools',
+    name: 'local-fallback-api',
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
+        if (req.url === '/api/health') {
+          healthCheck(req, res)
+          return
+        }
+        if (req.url?.startsWith('/api/jobs')) {
+          handleJobRequest(req, res, jobRuntime)
+          return
+        }
+        if (req.url?.startsWith('/api/skills')) {
+          handleSkillRequest(req, res)
+          return
+        }
+        if (req.url?.startsWith('/api/artifacts')) {
+          handleArtifactDownload(req, res)
+          return
+        }
+        if (req.url?.startsWith('/api/tools/specs')) {
+          handleToolSpecsRequest(req, res)
+          return
+        }
+        if (req.url?.startsWith('/api/memory/')) {
+          handleMemoryRequest(req, res)
+          return
+        }
+        if (req.url?.startsWith('/api/hooks')) {
+          handleHooksRequest(req, res)
+          return
+        }
+        if (req.url?.startsWith('/api/mcp/') || req.url?.startsWith('/api/tools/mcp/')) {
+          handleMcpRequest(req, res)
+          return
+        }
+        if (req.url?.startsWith('/api/subagent/')) {
+          handleSubagentRequest(req, res)
+          return
+        }
+        if (req.url?.startsWith('/api/compaction/')) {
+          handleCompactionRequest(req, res)
+          return
+        }
         if (req.url?.startsWith('/api/tools/fs/') || req.url?.startsWith('/api/tools/shell/')) {
           handleFsShellRequest(req, res)
           return
@@ -50,6 +102,6 @@ function workspaceToolsPlugin() {
 const PUBLIC_BASE_PATH = process.env.PUBLIC_BASE_PATH || '/'
 
 export default defineConfig({
-  plugins: [react(), authBillingPlugin(), modelProxyPlugin(), toolProxyPlugin(), workspaceToolsPlugin()],
+  plugins: [react(), authBillingPlugin(), modelProxyPlugin(), toolProxyPlugin(), fallbackApiPlugin()],
   base: PUBLIC_BASE_PATH,
 })

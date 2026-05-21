@@ -1,0 +1,133 @@
+/**
+ * Feature 1: MCP HTTP/SSE transport
+ *
+ * 协议（streamable HTTP，2024-11-05 后）:
+ *   - 客户端 POST /endpoint，body = JSON-RPC 请求
+ *   - 服务端可返回 application/json（单条响应）
+ *     或返回 text/event-stream（流式：服务端不断 push event:message data:{...} ）
+ *
+ * 我们的简化实现:
+ *   - 所有请求都 POST 到同一 URL
+ *   - 如果 Content-Type 是 application/json → 直接 parse
+ *   - 如果是 text/event-stream → 逐 event 解析 data: 行，按 id 匹配到 pending
+ *
+ * 安全:
+ *   - 强制 HTTPS（生产）
+ *   - 可附自定义 headers（鉴权 token）
+ *   - 每个请求自带超时
+ *
+ * NB: 本实现不支持服务端主动 server-initiated streams（实测大多数 MCP server 也未实现）。
+ */
+
+export class SseTransport {
+  constructor({ url, headers = {}, label = 'mcp', timeoutMs = 30000 }) {
+    if (!url || !/^https?:\/\//.test(url)) throw new Error('SSE transport 需要 http/https url')
+    if (process.env.NODE_ENV === 'production' && !url.startsWith('https://')) {
+      throw new Error('生产环境 MCP SSE 必须 https')
+    }
+    this.url = url
+    this.headers = headers
+    this.label = label
+    this.timeoutMs = timeoutMs
+    this.closed = false
+    this.notificationHandlers = new Set()
+    this.errorHandlers = new Set()
+  }
+
+  start() { /* no-op for HTTP */ }
+
+  onNotification(fn) { this.notificationHandlers.add(fn); return () => this.notificationHandlers.delete(fn) }
+  onError(fn) { this.errorHandlers.add(fn); return () => this.errorHandlers.delete(fn) }
+  _emitError(err) { for (const fn of this.errorHandlers) { try { fn(err) } catch { /* ignore */ } } }
+
+  send(message) {
+    // 通知（无 id）：fire-and-forget POST
+    return this._post(message).then(() => {}).catch((err) => this._emitError(err))
+  }
+
+  async request(message, { timeoutMs } = {}) {
+    if (this.closed) throw new Error(`MCP "${this.label}" 已关闭`)
+    const ctrl = new AbortController()
+    const t = setTimeout(() => ctrl.abort(), timeoutMs || this.timeoutMs)
+    try {
+      const resp = await fetch(this.url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+          ...(this.headers || {}),
+        },
+        body: JSON.stringify(message),
+        signal: ctrl.signal,
+      })
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => '')
+        throw new Error(`MCP HTTP ${resp.status}: ${errText.slice(0, 200)}`)
+      }
+      const ct = resp.headers.get('content-type') || ''
+      if (ct.includes('text/event-stream')) {
+        return this._parseSseResponse(resp, message.id)
+      }
+      const text = await resp.text()
+      const data = text ? JSON.parse(text) : {}
+      if (data.error) throw new Error(data.error.message || 'MCP error')
+      return data.result
+    } finally {
+      clearTimeout(t)
+    }
+  }
+
+  async _post(message) {
+    const ctrl = new AbortController()
+    const t = setTimeout(() => ctrl.abort(), this.timeoutMs)
+    try {
+      await fetch(this.url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(this.headers || {}) },
+        body: JSON.stringify(message),
+        signal: ctrl.signal,
+      })
+    } finally {
+      clearTimeout(t)
+    }
+  }
+
+  async _parseSseResponse(resp, expectedId) {
+    const reader = resp.body.getReader()
+    const decoder = new TextDecoder('utf-8')
+    let buffer = ''
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let idx
+      while ((idx = buffer.indexOf('\n\n')) >= 0) {
+        const evt = buffer.slice(0, idx)
+        buffer = buffer.slice(idx + 2)
+        const dataLines = evt.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim())
+        if (!dataLines.length) continue
+        const payload = dataLines.join('\n')
+        let msg
+        try { msg = JSON.parse(payload) } catch { continue }
+        if (msg.id !== undefined && msg.id === expectedId) {
+          if (msg.error) throw new Error(msg.error.message || 'MCP error')
+          // 关掉 reader,后续 event 丢弃
+          try { await reader.cancel() } catch { /* ignore */ }
+          return msg.result
+        }
+        if (msg.method && msg.id === undefined) {
+          for (const fn of this.notificationHandlers) { try { fn(msg) } catch { /* ignore */ } }
+        }
+      }
+    }
+    throw new Error(`MCP "${this.label}" SSE 流结束但未收到 id=${expectedId} 的响应`)
+  }
+
+  stop() {
+    this.closed = true
+  }
+
+  isAlive() {
+    return !this.closed
+  }
+}

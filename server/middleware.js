@@ -249,21 +249,36 @@ export function parseBody(req, res, next) {
   }
 
   let body = ''
+  let oversized = false
   req.on('data', (chunk) => {
+    if (oversized) return
     body += chunk
     if (body.length > 1e6) {
+      oversized = true
       req.destroy()
-      res.writeHead(413, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ error: 'Payload too large' }))
-      return
+      if (!res.headersSent) {
+        res.writeHead(413, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: 'Payload too large' }))
+      }
     }
   })
   req.on('end', () => {
+    if (oversized) return
     try {
       req.body = body ? JSON.parse(body) : {}
-    } catch {
-      req.body = {}
+    } catch (err) {
+      if (!res.headersSent) {
+        res.writeHead(400, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: 'Invalid JSON', details: err.message }))
+      }
+      return
     }
     next()
+  })
+  req.on('error', () => {
+    if (!res.headersSent) {
+      res.writeHead(400, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Request body read error' }))
+    }
   })
 }

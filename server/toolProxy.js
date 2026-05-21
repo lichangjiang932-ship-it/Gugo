@@ -23,6 +23,8 @@ import {
   getPublicAccount,
   getToolCost,
 } from './billingAuth.js'
+import { getSessionByToken } from './db.js'
+import { dispatchHooks } from './hooksService.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
 const SEARCH_TIMEOUT_MS = 12000
@@ -365,8 +367,11 @@ function extractMainContent(doc) {
   return best || doc.body
 }
 
+const MAX_NODE_DEPTH = 128
+
 function nodeToMarkdown(node, depth = 0) {
   if (!node) return ''
+  if (depth > MAX_NODE_DEPTH) return ''
   if (node.nodeType === 3) return node.textContent || '' // text
   if (node.nodeType !== 1) return ''
   const tag = node.tagName?.toLowerCase()
@@ -525,15 +530,39 @@ export async function handleToolProxyRequest(req, res) {
     const body = await readJson(req)
     let result
     let toolName
+    let toolArgs = body
     if (url.startsWith('/api/tools/search')) {
       toolName = 'web_search'
-      result = await searchDuckDuckGo({ query: body.query, maxResults: body.maxResults })
     } else if (url.startsWith('/api/tools/fetch')) {
       toolName = 'fetch_url'
-      result = await fetchAndExtract({ url: body.url })
     } else {
       sendJson(res, 404, { ok: false, error: '未知的工具端点' })
       return
+    }
+
+    // Feature 7: pre_tool_use hook —  可拒绝或重写 args
+    const session = getSessionByToken(token)
+    const userId = session?.user_id
+    if (userId) {
+      const pre = await dispatchHooks({ userId, event: 'pre_tool_use', tool: toolName, args: toolArgs })
+      if (!pre.allow) {
+        sendJson(res, 403, { ok: false, error: pre.reason || 'hook 拒绝该工具调用' })
+        return
+      }
+      if (pre.replacementArgs && typeof pre.replacementArgs === 'object') {
+        toolArgs = pre.replacementArgs
+      }
+    }
+
+    if (toolName === 'web_search') {
+      result = await searchDuckDuckGo({ query: toolArgs.query, maxResults: toolArgs.maxResults })
+    } else {
+      result = await fetchAndExtract({ url: toolArgs.url })
+    }
+
+    // post_tool_use hook (非阻塞观察)
+    if (userId) {
+      dispatchHooks({ userId, event: 'post_tool_use', tool: toolName, args: { input: toolArgs, output: result } }).catch(() => {})
     }
 
     // 只有真正成功才扣费;失败不扣,避免 SSRF 探测/上游不稳定还吃用户积分.

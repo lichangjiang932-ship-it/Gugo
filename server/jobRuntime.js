@@ -188,13 +188,17 @@ export class JobRuntime {
     const jobId = event.jobId || event.job_id
     const eventOwner = jobId ? this._jobUserId(jobId) : null
     for (const [listener, listenerUserId] of this.listeners) {
-      // 没指定 userId 的订阅者收所有事件(测试/内部用);
-      // 指定了的只收自己 job 的事件——事件没归属(eventOwner=null)兜底也只发给同 userId,
-      // 防止历史无主 job 被错误推送。
-      if (listenerUserId == null) {
-        listener(event)
-      } else if (eventOwner && eventOwner === listenerUserId) {
-        listener(event)
+      try {
+        // 没指定 userId 的订阅者收所有事件(测试/内部用);
+        // 指定了的只收自己 job 的事件——事件没归属(eventOwner=null)兜底也只发给同 userId,
+        // 防止历史无主 job 被错误推送。
+        if (listenerUserId == null) {
+          listener(event)
+        } else if (eventOwner && eventOwner === listenerUserId) {
+          listener(event)
+        }
+      } catch (err) {
+        console.error('[jobs] listener error:', err?.stack || err)
       }
     }
   }
@@ -238,17 +242,24 @@ export class JobRuntime {
 
   start() {
     if (this.timer) return
-    this.timer = setInterval(() => {
-      this.runOneTick().catch((error) => {
+    const tick = async () => {
+      try {
+        await this.runOneTick()
+      } catch (error) {
         console.error('[jobs] tick failed:', error?.stack || error)
-      })
-    }, this.tickMs)
-    this.timer.unref?.()
+      }
+      if (this.timer) {
+        this.timer = setTimeout(tick, this.tickMs)
+        this.timer.unref()
+      }
+    }
+    this.timer = setTimeout(tick, this.tickMs)
+    this.timer.unref()
   }
 
   stop() {
     if (!this.timer) return
-    clearInterval(this.timer)
+    clearTimeout(this.timer)
     this.timer = null
   }
 

@@ -53,6 +53,7 @@ function setSchemaVersionInternal(db, version) {
 function runMigrations(db) {
   const version = getSchemaVersionInternal(db)
   if (version < 2) migrateToV2(db)
+  if (getSchemaVersionInternal(db) < 3) migrateToV3(db)
 }
 
 /**
@@ -80,6 +81,136 @@ function migrateToV2(db) {
     CREATE INDEX IF NOT EXISTS idx_skills_user ON skills(user_id, created_at);
   `)
   setSchemaVersionInternal(db, 2)
+}
+
+/**
+ * Migration v3：一次性引入 MCP / 子代理 / 记忆 / 压缩 / Hooks 全部新表。
+ * 走 CREATE TABLE IF NOT EXISTS — 重复跑安全；所有表都带 user_id 列做隔离。
+ */
+function migrateToV3(db) {
+  db.exec(`
+    -- MCP 配置（feature 1）
+    CREATE TABLE IF NOT EXISTS mcp_servers (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      transport TEXT NOT NULL CHECK (transport IN ('stdio','sse')),
+      command TEXT,
+      args_json TEXT,
+      env_json TEXT,
+      cwd TEXT,
+      url TEXT,
+      headers_json TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      auto_approve_json TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_mcp_servers_user ON mcp_servers(user_id, enabled);
+
+    -- 统一审计日志（MCP / Hooks / 子代理 共用）
+    CREATE TABLE IF NOT EXISTS tool_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL,
+      origin TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      server_id TEXT,
+      args_hash TEXT,
+      status TEXT NOT NULL,
+      duration_ms INTEGER,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_tool_audit_user_time ON tool_audit(user_id, created_at);
+
+    -- 子代理（feature 2）
+    CREATE TABLE IF NOT EXISTS subagent_runs (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      parent_session_id TEXT,
+      parent_message_id TEXT,
+      agent_type TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      status TEXT NOT NULL,
+      result_text TEXT,
+      trace_json TEXT,
+      tokens_in INTEGER,
+      tokens_out INTEGER,
+      credits INTEGER,
+      created_at INTEGER NOT NULL,
+      finished_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_subagent_runs_user_time ON subagent_runs(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_subagent_runs_status ON subagent_runs(status);
+
+    CREATE TABLE IF NOT EXISTS subagents_custom (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT,
+      tool_whitelist_json TEXT NOT NULL,
+      system_prompt TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_subagents_custom_user ON subagents_custom(user_id);
+
+    -- 记忆（feature 3）
+    CREATE TABLE IF NOT EXISTS memories (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      type TEXT NOT NULL CHECK (type IN ('user','feedback','project','reference')),
+      title TEXT NOT NULL,
+      slug TEXT NOT NULL,
+      body TEXT NOT NULL,
+      frontmatter_json TEXT NOT NULL,
+      pinned INTEGER NOT NULL DEFAULT 0,
+      source_session_id TEXT,
+      source_message_id TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      last_used_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_memories_user_type ON memories(user_id, type);
+    CREATE INDEX IF NOT EXISTS idx_memories_user_slug ON memories(user_id, slug);
+    CREATE INDEX IF NOT EXISTS idx_memories_user_pinned ON memories(user_id, pinned, last_used_at);
+
+    CREATE TABLE IF NOT EXISTS memory_links (
+      from_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+      to_slug TEXT NOT NULL,
+      PRIMARY KEY (from_id, to_slug)
+    );
+
+    -- 压缩归档（feature 6）
+    CREATE TABLE IF NOT EXISTS compaction_archive (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      replaced_message_count INTEGER NOT NULL,
+      archived_messages_json TEXT NOT NULL,
+      summary_text TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_compaction_user_session ON compaction_archive(user_id, session_id, created_at);
+
+    -- Hooks（feature 7）
+    CREATE TABLE IF NOT EXISTS hooks (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      event TEXT NOT NULL CHECK (event IN ('user_prompt_submit','pre_tool_use','post_tool_use','stop')),
+      tool_pattern TEXT,
+      kind TEXT NOT NULL CHECK (kind IN ('shell','http')),
+      command TEXT,
+      url TEXT,
+      headers_json TEXT,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      blocking INTEGER NOT NULL DEFAULT 1,
+      timeout_ms INTEGER NOT NULL DEFAULT 5000,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_hooks_user_event ON hooks(user_id, event, enabled);
+  `)
+  setSchemaVersionInternal(db, 3)
 }
 
 function initSchema(db) {
@@ -221,10 +352,15 @@ export function getDbStatus() {
   try {
     const db = getDb()
     const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+      .all()
+      .map((table) => table.name)
     return {
       ok: true,
       schemaVersion: row?.value || null,
       path: getDbPath(),
+      tables,
     }
   } catch (err) {
     return {

@@ -334,9 +334,31 @@ function contentToText(content) {
   return content ? JSON.stringify(content) : ''
 }
 
+function estimateImageTokensFromUrl(url = '') {
+  const text = String(url || '')
+  if (!text.startsWith('data:image/')) return 1000
+  const comma = text.indexOf(',')
+  const payload = comma >= 0 ? text.slice(comma + 1) : text
+  const approxBytes = Math.floor((payload.length * 3) / 4)
+  return Math.max(85, Math.ceil(approxBytes / 750))
+}
+
+function imageTokenCount(messages) {
+  let total = 0
+  for (const message of messages || []) {
+    if (!Array.isArray(message?.content)) continue
+    for (const part of message.content) {
+      if (part?.type === 'image_url') {
+        total += estimateImageTokensFromUrl(part.image_url?.url || '')
+      }
+    }
+  }
+  return total
+}
+
 function roughTokenCount(messages) {
   const text = messages.map((m) => contentToText(m.content)).join('\n')
-  return Math.max(1, Math.ceil(text.length / 4))
+  return Math.max(1, Math.ceil(text.length / 4) + imageTokenCount(messages))
 }
 
 export function estimateChatCost({ modelName, messages, config }) {

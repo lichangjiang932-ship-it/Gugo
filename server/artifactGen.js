@@ -297,9 +297,14 @@ export function handleArtifactDownload(req, res) {
   }
 
   ensureArtifactDir()
-  const full = path.join(ARTIFACT_DIR, filename)
-  // 防 path traversal
-  if (!full.startsWith(ARTIFACT_DIR + path.sep)) { res.statusCode = 400; res.end('bad filename'); return }
+  let full = path.join(ARTIFACT_DIR, filename)
+  // 防 path traversal (含 symlink)
+  try {
+    full = fs.realpathSync(full)
+  } catch {
+    res.statusCode = 404; res.end('not found'); return
+  }
+  if (!full.startsWith(fs.realpathSync(ARTIFACT_DIR) + path.sep)) { res.statusCode = 400; res.end('bad filename'); return }
   if (!fs.existsSync(full)) { res.statusCode = 404; res.end('not found'); return }
   const ext = path.extname(filename).slice(1)
   const ct =
@@ -314,7 +319,14 @@ export function handleArtifactDownload(req, res) {
     'Content-Length': fs.statSync(full).size,
     'Cache-Control': 'no-store',
   })
-  fs.createReadStream(full).pipe(res)
+  const stream = fs.createReadStream(full)
+  stream.on('error', (err) => {
+    console.error('[artifactGen] read stream error:', err?.message)
+    if (!res.headersSent) {
+      res.statusCode = 500; res.end('read error')
+    }
+  })
+  stream.pipe(res)
 }
 
 export function getArtifactDir() {
