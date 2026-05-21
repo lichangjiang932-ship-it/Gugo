@@ -6,6 +6,7 @@ import ErrorBoundary from './components/ErrorBoundary'
 import CommandPalette from './components/CommandPalette'
 import SkillCommandsSync from './components/SkillCommandsSync'
 
+const CoverPage = lazy(() => import('./pages/CoverPage'))
 const ChatSplit = lazy(() => import('./pages/ChatSplit'))
 const SkillsMarket = lazy(() => import('./pages/SkillsMarket'))
 const PermissionsDashboard = lazy(() => import('./pages/PermissionsDashboard'))
@@ -32,7 +33,7 @@ function App() {
       <SkillCommandsSync />
       <Suspense fallback={<Fallback />}>
         <Routes>
-          <Route path="/" element={<Navigate to="/chat" replace />} />
+          <Route path="/" element={<CoverPage />} />
           <Route path="/chat" element={<ChatSplit />} />
           <Route path="/skills" element={<SkillsMarket />} />
           <Route path="/permissions" element={<PermissionsDashboard />} />
