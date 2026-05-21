@@ -336,6 +336,78 @@ export class JobRuntime {
     return this.getJob(jobId, { userId })
   }
 
+  /**
+   * 标记步骤完成并附 evidence。
+   * 借鉴 Reasonix mark_step_complete 设计。
+   */
+  completeStep(jobId, stepId, { userId, evidence = [] } = {}) {
+    const job = this.getJob(jobId, { userId })
+    if (!job) return null
+    updateJobStep(stepId, {
+      status: 'completed',
+      output_json: JSON.stringify({ evidence, completedAt: Date.now() }),
+      updated_at: Date.now(),
+    })
+    this.emit({
+      jobId,
+      type: 'step_completed',
+      stepId,
+      message: `步骤已完成，${evidence.length} 项验证`,
+      at: Date.now(),
+    })
+    // 检查是否所有步骤完成
+    const updated = this.getJob(jobId, { userId })
+    if (updated?.steps?.every((s) => s.status === 'completed')) {
+      updateJob(jobId, { status: 'completed', progress: 100, finishedAt: Date.now() })
+    }
+    return updated
+  }
+
+  /**
+   * 创建结构化计划（带风险/目标/验收标准）。
+   * 借鉴 Reasonix submit_plan 设计。
+   */
+  createPlan({ userId, title, prompt, steps } = {}) {
+    if (!userId) throw new Error('createPlan requires userId')
+    const id = `job-${crypto.randomUUID()}`
+    const t = Date.now()
+    // steps 可以是 [{ id, title, action, risk, targets, acceptance, verification }]
+    const persistedSteps = steps.map((s, i) => ({
+      id: s.id || `step-${i + 1}`,
+      job_id: id,
+      parent_step_id: null,
+      title: s.title || s.id,
+      kind: 'plan_step',
+      status: 'pending',
+      sort_order: i + 1,
+      input_json: JSON.stringify({
+        action: s.action || '',
+        risk: s.risk || 'low',
+        targets: Array.isArray(s.targets) ? s.targets : [],
+        acceptance: s.acceptance || '',
+        verification: Array.isArray(s.verification) ? s.verification : [],
+      }),
+      output_json: null,
+      error: null,
+      created_at: t,
+      updated_at: t,
+      started_at: null,
+    }))
+
+    persistJob({
+      id,
+      userId,
+      title,
+      prompt,
+      status: 'planning',
+      progress: 0,
+      now: t,
+    })
+    appendJobSteps(id, persistedSteps)
+    this.jobUserCache.set(id, userId)
+    return this.getJob(id, { userId })
+  }
+
   retryStep(jobId, stepId, { userId } = {}) {
     const job = this.getJob(jobId, { userId })
     const step = job?.steps.find((item) => item.id === stepId)
