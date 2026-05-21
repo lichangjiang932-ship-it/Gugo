@@ -389,11 +389,17 @@ export default function ChatSplit() {
                   })
                 }
               }
+              // ★ 截断过长工具结果，防止下一轮模型调用超出 token 限制
+              const MAX_TOOL_RESULT_CHARS = 4000
+              let toolContent = String(result.content || '')
+              if (toolContent.length > MAX_TOOL_RESULT_CHARS) {
+                toolContent = toolContent.slice(0, MAX_TOOL_RESULT_CHARS) + `\n...[截断，共 ${toolContent.length} 字符]`
+              }
               messages.push({
                 role: 'tool',
                 tool_call_id: call.id,
                 name: call.name,
-                content: result.content,
+                content: toolContent,
               })
             }
             // 进入下一轮 stream,模型基于 tool 结果继续生成
