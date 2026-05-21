@@ -338,51 +338,54 @@ export function buildArtifactPreview({ content = '', meta = {} } = {}) {
 
   if (resolvedType === 'pptx') {
     const slides = parseMarkdownSlides(content)
-    if (!slides.length) return null
     const title = slides[0]?.title || meta.artifactTitle || 'presentation'
+    // ★ 关键修复: 即使 slides 解析为 0（模型输出格式不标准），只要 meta.artifactType
+    //   显式声明为 pptx（来自 create_pptx 工具成功调用），仍然创建预览卡片。
+    //   否则 artifact 不显示 → 右侧预览不打开 → 用户看到的是原始文本。
+    if (!slides.length && meta.artifactType !== 'pptx') return null
     return {
       ...base,
       type: 'pptx',
       title,
       label: 'PowerPoint',
       filename: buildPresentationFilename(title),
-      summary: `${slides.length} 页幻灯片`,
-      slides: slides.slice(0, MAX_PREVIEW_SLIDES),
-      totalCount: slides.length,
+      summary: slides.length ? `${slides.length} 页幻灯片` : `${content.length} 字符内容`,
+      slides: slides.length ? slides.slice(0, MAX_PREVIEW_SLIDES) : [{ title, body: content.slice(0, 500) }],
+      totalCount: slides.length || 1,
       previewable: true,
     }
   }
 
   if (resolvedType === 'docx') {
     const doc = parseMarkdownDocument(content)
-    if (!doc.blocks.length) return null
+    if (!doc.blocks.length && meta.artifactType !== 'docx') return null
     return {
       ...base,
       type: 'docx',
-      title: doc.title,
+      title: doc.title || meta.artifactTitle || 'document',
       label: 'Word',
-      filename: buildOfficeFilename(doc.title, 'docx'),
-      summary: `${doc.blocks.length} 个内容块`,
-      blocks: doc.blocks.slice(0, MAX_PREVIEW_BLOCKS),
-      totalCount: doc.blocks.length,
+      filename: buildOfficeFilename(doc.title || meta.artifactTitle || 'document', 'docx'),
+      summary: doc.blocks.length ? `${doc.blocks.length} 个内容块` : `${content.length} 字符内容`,
+      blocks: doc.blocks.length ? doc.blocks.slice(0, MAX_PREVIEW_BLOCKS) : [{ title: '内容', body: content.slice(0, 500) }],
+      totalCount: doc.blocks.length || 1,
       previewable: true,
     }
   }
 
   if (resolvedType === 'xlsx') {
     const rows = parseSpreadsheetRows(content)
-    if (!rows.length) return null
-    const title = inferSpreadsheetTitle(rows, meta.artifactTitle || 'spreadsheet')
+    const title = inferSpreadsheetTitle(rows.length ? rows : [], meta.artifactTitle || 'spreadsheet')
+    if (!rows.length && meta.artifactType !== 'xlsx') return null
     return {
       ...base,
       type: 'xlsx',
       title,
       label: 'Excel',
       filename: buildOfficeFilename(title, 'xlsx'),
-      summary: `${rows.length} 行数据`,
-      rows: rows.slice(0, MAX_PREVIEW_ROWS).map((row) => row.slice(0, MAX_PREVIEW_COLUMNS)),
-      totalCount: rows.length,
-      totalColumns: Math.max(...rows.map((row) => row.length)),
+      summary: rows.length ? `${rows.length} 行数据` : `${content.length} 字符内容`,
+      rows: rows.length ? rows.slice(0, MAX_PREVIEW_ROWS).map((row) => row.slice(0, MAX_PREVIEW_COLUMNS)) : [['内容', content.slice(0, 200)]],
+      totalCount: rows.length || 1,
+      totalColumns: rows.length ? Math.max(...rows.map((row) => row.length)) : 1,
       previewable: true,
     }
   }

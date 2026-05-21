@@ -305,8 +305,23 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
     }
   }, [artifact])
 
-  if (!artifact || !artifact.preview) return null
+  // ★ 即使 preview 解析失败也要渲染面板框架，给用户"无法预览"提示而不是静默消失
+  if (!artifact) return null
   const { preview, content } = artifact
+  if (!preview) {
+    return (
+      <AnimatePresence>
+        <motion.aside className="w-full h-full border-l border-ink-fade/30 bg-paper flex flex-col items-center justify-center gap-4 text-ink-fade" initial={{ opacity: 0, x: 40 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 40 }} transition={{ duration: 0.2 }}>
+          <FileText className="w-10 h-10 opacity-30" />
+          <p className="text-sm">无法渲染预览</p>
+          <p className="text-xs text-ink-fade/70 max-w-[200px] text-center">内容格式不支持预览，但你可以下载原文件或切换到源码视图查看</p>
+          {onClose && (
+            <button onClick={onClose} className="mt-2 h-8 px-4 border border-ink-fade/30 rounded-md text-xs hover:border-ember/50 transition-colors">关闭面板</button>
+          )}
+        </motion.aside>
+      </AnimatePresence>
+    )
+  }
 
   const handleDownload = async () => {
     setDownloading(true)

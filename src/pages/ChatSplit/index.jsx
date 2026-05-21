@@ -17,6 +17,7 @@ import ChatComposer from './ChatComposer'
 import RightPreviewPane from './RightPreviewPane'
 import CodingWorkbench from './CodingWorkbench'
 import TodoTracker from '../../components/TodoTracker'
+import { buildArtifactPreview } from '../../lib/artifactPreview.js'
 import { exportSession } from '../../lib/sessionExport.js'
 import { compressImageDataUrl } from '../../lib/imageCompress.js'
 import { extractPdfText } from '../../lib/pdfExtract.js'
@@ -366,6 +367,28 @@ export default function ChatSplit() {
                   error: !result.ok ? result.content : undefined,
                 },
               })
+              // ★ 自动打开右侧预览：create_* / Agent 工具成功时
+              if (result.ok && result.artifact) {
+                const artPreview = buildArtifactPreview({
+                  content: result.artifact.source || '',
+                  meta: {
+                    artifactType: result.artifact.type,
+                    artifactTitle: result.artifact.title,
+                    artifactSource: result.artifact.source,
+                    artifactDescription: result.artifact.description,
+                  },
+                })
+                if (artPreview) {
+                  dispatch({
+                    type: 'OPEN_PREVIEW_ARTIFACT',
+                    payload: {
+                      messageId: null, // 新消息还没 id，传 null 让 reducer 找最新的
+                      content: result.artifact.source || '',
+                      preview: artPreview,
+                    },
+                  })
+                }
+              }
               messages.push({
                 role: 'tool',
                 tool_call_id: call.id,

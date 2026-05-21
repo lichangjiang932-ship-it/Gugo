@@ -253,13 +253,7 @@ const TOOL_SPECS = {
     type: 'function',
     function: {
       name: 'create_pptx',
-      description: [
-        '生成可下载的 PowerPoint 演示文稿(.pptx).当用户需要 PPT/幻灯片/汇报材料时调用。',
-        'markdown 用 --- 分页,每页第一行 `# 标题`,第二行 HTML 注释指定类型: <!-- cover -->, <!-- toc -->, <!-- section -->, <!-- content -->, <!-- data -->, <!-- chart -->, <!-- table -->, <!-- split -->, <!-- process -->, <!-- quote -->, <!-- image -->, <!-- end -->.',
-        '图表页用 <!-- chart --> + fenced ```chart``` 块,语法: type: bar|line|pie / categories: a, b, c / series:\\n  系列名: 1, 2, 3.',
-        '每页 bullets ≤ 4 条且每条 ≤ 18 字,标题写结论句不要写抽象主题词.同类数据 3+ 项优先用 chart 或 table.',
-        '生成后右侧自动预览,用户可一键下载;点"高级"按钮走截图法导出更精致视觉。',
-      ].join(' '),
+      description: '生成可下载的.PPTX 演示文稿。用 --- 分页,# 标题,<!-- type --> 标记页面类型(cover/toc/content/chart/table 等)。图表用 ```chart``` 块。每页 ≤4 条要点，标题写结论句。',
       parameters: {
         type: 'object',
         properties: {
