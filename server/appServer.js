@@ -19,6 +19,7 @@ import {
 } from './modelProxy.js'
 import { handleAuthBillingRequest } from './billingAuth.js'
 import { handleToolProxyRequest } from './toolProxy.js'
+import { handleFsShellRequest } from './fsShellTools.js'
 import { handleArtifactDownload } from './artifactGen.js'
 import { closeJobRuntime, getJobRuntime } from './jobRuntime.js'
 import { handleJobRequest } from './jobRoutes.js'
@@ -150,6 +151,11 @@ function createRouter(getEnv = getRuntimeEnv) {
   }
 
   // 工具代理(web 搜索 / URL 抓取)
+  // Workspace fs/shell tools use the stricter fsShell handler before generic web tools.
+  if (req.url?.startsWith('/api/tools/fs/') || req.url?.startsWith('/api/tools/shell/')) {
+    return handleFsShellRequest(req, res)
+  }
+
   if (req.url?.startsWith('/api/tools/')) {
     return handleToolProxyRequest(req, res)
   }

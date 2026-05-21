@@ -56,3 +56,14 @@ test('listToolNames 返回所有内置工具', () => {
   assert.ok(names.includes('web_search'))
   assert.ok(names.includes('fetch_url'))
 })
+
+
+test('chat tools expose Claude/Codex style workspace tools', () => {
+  const names = listToolNames()
+  assert.ok(names.includes('read_file'))
+  assert.ok(names.includes('write_file'))
+  assert.ok(names.includes('edit_file'))
+  assert.ok(names.includes('bash_exec'))
+  const specs = buildToolSpecs(['read_file', 'write_file', 'edit_file', 'bash_exec'])
+  assert.deepEqual(specs.map((s) => s.function.name), ['read_file', 'write_file', 'edit_file', 'bash_exec'])
+})

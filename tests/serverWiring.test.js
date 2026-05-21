@@ -20,3 +20,11 @@ test('fatal process handlers keep logging in production', () => {
   assert.match(source, /process\.on\('uncaughtException', \(err\) => \{\s*console\.error\('\[server\] uncaughtException:'/)
   assert.match(source, /process\.on\('unhandledRejection', \(reason\) => \{\s*console\.error\('\[server\] unhandledRejection:'/)
 })
+
+
+test('app server routes fs and shell tool endpoints before generic web tools proxy', () => {
+  const source = fs.readFileSync(new URL('../server/appServer.js', import.meta.url), 'utf8')
+  assert.match(source, /handleFsShellRequest/)
+  assert.match(source, /startsWith\('\/api\/tools\/fs\/'\)/)
+  assert.match(source, /startsWith\('\/api\/tools\/shell\/'\)/)
+})

@@ -615,7 +615,14 @@ export default function SettingsView() {
     const TOOLS = [
       { id: 'web_search', name: '网页搜索', desc: '让模型通过 DuckDuckGo 查询最新信息(返回 title/url/snippet)。' },
       { id: 'fetch_url', name: '抓取链接', desc: '让模型把页面正文抓回来转 markdown 阅读。配合搜索使用。' },
-
+      { id: 'create_pptx', name: '生成 PPT 文件', desc: '需要演示文稿时直接生成可预览、可下载的 PPTX 卡片。' },
+      { id: 'create_docx', name: '生成 Word 文件', desc: '需要文档/报告时直接产出 DOCX 文件,不要把正文铺在聊天里。' },
+      { id: 'create_xlsx', name: '生成 Excel 文件', desc: '需要表格时直接产出 XLSX 文件。' },
+      { id: 'create_react_component', name: 'React 预览工件', desc: '类似 Claude Artifacts / Codex preview,生成可交互的单文件 React 原型。' },
+      { id: 'read_file', name: '读取工作区文件', desc: 'Claude/Codex 风格:允许模型读取 WORKSPACE_ROOT 内文件。服务端还需 WORKSPACE_FS_ENABLED=1。' },
+      { id: 'write_file', name: '写入工作区文件', desc: '允许模型创建或覆盖 WORKSPACE_ROOT 内文件。高风险,默认关闭。' },
+      { id: 'edit_file', name: '编辑工作区文件', desc: '允许模型用精确字符串替换修改文件。高风险,默认关闭。' },
+      { id: 'bash_exec', name: '执行 Shell 命令', desc: '允许模型运行测试/构建/检查命令。服务端还需 WORKSPACE_SHELL_ENABLED=1。' },
     ]
     const onToggle = (id) => {
       dispatch({ type: 'SET_TOOLS_CONFIG', payload: { [id]: !tc[id] } })

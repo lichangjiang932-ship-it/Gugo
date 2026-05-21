@@ -86,6 +86,70 @@ const TOOL_SPECS = {
       },
     },
   },
+  read_file: {
+    type: 'function',
+    function: {
+      name: 'read_file',
+      description: 'Read a UTF-8 file inside the configured workspace, optionally by line offset/limit. Use this before editing existing project files.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Relative path inside workspace, or an absolute path that still resolves inside workspace.' },
+          offset: { type: 'integer', description: 'Zero-based starting line. Optional.' },
+          limit: { type: 'integer', description: 'Number of lines to return. 0 or omitted reads to the end.' },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  write_file: {
+    type: 'function',
+    function: {
+      name: 'write_file',
+      description: 'Create or overwrite a UTF-8 file inside the configured workspace. Prefer edit_file for small changes to existing files.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          content: { type: 'string', description: 'Complete file content.' },
+        },
+        required: ['path', 'content'],
+      },
+    },
+  },
+  edit_file: {
+    type: 'function',
+    function: {
+      name: 'edit_file',
+      description: 'Precise string replacement inside a workspace file. old_string must be unique unless replace_all is true.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          old_string: { type: 'string', description: 'Exact existing text, including whitespace.' },
+          new_string: { type: 'string', description: 'Replacement text.' },
+          replace_all: { type: 'boolean', description: 'Replace all occurrences instead of requiring uniqueness.' },
+        },
+        required: ['path', 'old_string', 'new_string'],
+      },
+    },
+  },
+  bash_exec: {
+    type: 'function',
+    function: {
+      name: 'bash_exec',
+      description: 'Run a shell command inside the configured workspace. Use for tests/builds/inspection; output is capped and secrets are masked server-side.',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string', description: 'Command string, e.g. npm test or git diff --stat.' },
+          cwd: { type: 'string', description: 'Optional workspace-relative working directory.' },
+          timeout_ms: { type: 'integer', description: 'Timeout in milliseconds, 1000-300000.' },
+        },
+        required: ['command'],
+      },
+    },
+  },
   create_pptx: {
     type: 'function',
     function: {
@@ -206,6 +270,27 @@ async function callJson(url, body) {
   return data
 }
 
+
+async function callWorkspaceJson(url, body) {
+  const headers = { 'Content-Type': 'application/json' }
+  const token = getAuthToken?.()
+  if (token) headers.Authorization = `Bearer ${token}`
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  })
+  const text = await resp.text()
+  let data
+  try { data = text ? JSON.parse(text) : {} } catch { data = { raw: text } }
+  if (!resp.ok) {
+    const err = new Error(data?.error || `HTTP ${resp.status}`)
+    err.status = resp.status
+    throw err
+  }
+  return data
+}
+
 async function execWebSearch(args) {
   const query = String(args?.query || '').trim()
   if (!query) throw new Error('query 不能为空')
@@ -243,6 +328,27 @@ async function execFetchUrl(args) {
 // ChatMessages 看到 explicit artifact 就直接渲染卡片 + 弹右栏预览.
 //
 // 模型拿到的工具 content 只是简短 ack(避免 markdown 全文回灌占用上下文).
+
+
+async function execReadFile(args) {
+  const data = await callWorkspaceJson('/api/tools/fs/read', args)
+  return { content: JSON.stringify(data) }
+}
+
+async function execWriteFile(args) {
+  const data = await callWorkspaceJson('/api/tools/fs/write', args)
+  return { content: JSON.stringify(data) }
+}
+
+async function execEditFile(args) {
+  const data = await callWorkspaceJson('/api/tools/fs/edit', args)
+  return { content: JSON.stringify(data) }
+}
+
+async function execBashExec(args) {
+  const data = await callWorkspaceJson('/api/tools/shell/exec', args)
+  return { content: JSON.stringify(data) }
+}
 
 async function execCreatePptx(args) {
   const title = String(args.title).trim().slice(0, 200) || 'presentation'
@@ -353,6 +459,10 @@ const EXECUTORS = {
   create_docx: execCreateDocx,
   create_xlsx: execCreateXlsx,
   create_react_component: execCreateReactComponent,
+  read_file: execReadFile,
+  write_file: execWriteFile,
+  edit_file: execEditFile,
+  bash_exec: execBashExec,
 }
 
 export async function executeToolCall(call, options = {}) {

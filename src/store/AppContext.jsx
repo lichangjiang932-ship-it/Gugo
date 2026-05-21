@@ -42,7 +42,7 @@ function createInitialState() {
     draftInput: '',
     skillConfigs: {}, // { skillId: { enabled, systemPrompt, temperature, maxTokens } }
     previewArtifact: null, // { messageId, content, preview } — 右侧 artifact 预览面板
-    toolsConfig: { web_search: false, fetch_url: false }, // 工具开关
+    toolsConfig: { web_search: false, fetch_url: false, create_pptx: true, create_docx: true, create_xlsx: true, create_react_component: true, read_file: false, write_file: false, edit_file: false, bash_exec: false }, // tool toggles
     // #13 切会话保草稿:每个 sessionId → 该会话当前未发送的输入文本
     // 不放进 sessions[].draft 是为了切会话只 dispatch 一个轻动作,不动整棵 sessions 树
     sessionDrafts: {},
@@ -66,6 +66,9 @@ function loadPersistedState() {
     const merged = { ...base }
     for (const key of PERSIST_KEYS) {
       if (saved[key] !== undefined) merged[key] = saved[key]
+    }
+    if (saved.toolsConfig && typeof saved.toolsConfig === 'object') {
+      merged.toolsConfig = { ...base.toolsConfig, ...saved.toolsConfig }
     }
     // 权限定义可能升级，按 id 合并保留 enabled 状态
     if (Array.isArray(saved.permissions)) {
