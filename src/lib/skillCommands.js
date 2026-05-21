@@ -26,5 +26,12 @@ export function inferSkillIdFromPrompt(content = '') {
     return 'ppt'
   }
 
+  if (/代码审查|code\s*review|review\s*code|审查代码|代码质量|bug\s*检查/i.test(text)) return 'review'
+  if (/写测试|生成测试|test\s*case|单元测试|add\s*test/i.test(text)) return 'test'
+  if (/翻译|translate|英译中|中译英|translate\s*to/i.test(text)) return 'translate'
+  if (/调研|行业分析|市场分析|竞品|research|行业研究/i.test(text)) return 'research'
+  if (/项目计划|任务拆解|milestone|project\s*plan|规划|实施方案/i.test(text)) return 'plan'
+  if (/生成代码|写代码|写一个|实现一个|create\s*a\s*component|coding|编程|重构|refactor/i.test(text)) return 'code'
+
   return null
 }
