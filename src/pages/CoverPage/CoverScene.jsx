@@ -94,7 +94,8 @@ function Particles({ isExiting }) {
   const scaleRef = useRef(0)
   const timeRef = useRef(0)
 
-  const { positions, randoms } = useMemo(() => {
+  /* eslint-disable react-hooks/purity */
+  function genParticleData() {
     const count = 2000
     const pos = new Float32Array(count * 3)
     const rnd = new Float32Array(count)
@@ -108,7 +109,10 @@ function Particles({ isExiting }) {
       rnd[i] = Math.random() * Math.PI * 2
     }
     return { positions: pos, randoms: rnd }
-  }, [])
+  }
+  /* eslint-enable react-hooks/purity */
+
+  const { positions, randoms } = useMemo(() => genParticleData(), [])
 
   useFrame((state, delta) => {
     if (!pointsRef.current) return

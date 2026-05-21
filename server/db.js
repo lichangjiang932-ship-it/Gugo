@@ -54,6 +54,7 @@ function runMigrations(db) {
   const version = getSchemaVersionInternal(db)
   if (version < 2) migrateToV2(db)
   if (getSchemaVersionInternal(db) < 3) migrateToV3(db)
+  if (getSchemaVersionInternal(db) < 4) migrateToV4(db)
 }
 
 /**
@@ -211,6 +212,49 @@ function migrateToV3(db) {
     CREATE INDEX IF NOT EXISTS idx_hooks_user_event ON hooks(user_id, event, enabled);
   `)
   setSchemaVersionInternal(db, 3)
+}
+
+/**
+ * Migration v4: 知识图谱 — entities / relations / observations 三张表。
+ * 参考 Reasonix 的 memory_* 工具集设计。
+ *   entities:   { id, user_id, name, entity_type, created_at, updated_at }
+ *   relations:  { id, user_id, from_entity_id, to_entity_id, relation_type, created_at }
+ *   observations: { id, entity_id, content, created_at }
+ */
+function migrateToV4(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS entities (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      entity_type TEXT NOT NULL DEFAULT 'general',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_entities_user ON entities(user_id, name);
+    CREATE INDEX IF NOT EXISTS idx_entities_user_type ON entities(user_id, entity_type);
+
+    CREATE TABLE IF NOT EXISTS relations (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      from_entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      to_entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      relation_type TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_relations_from ON relations(from_entity_id);
+    CREATE INDEX IF NOT EXISTS idx_relations_to ON relations(to_entity_id);
+    CREATE INDEX IF NOT EXISTS idx_relations_user ON relations(user_id);
+
+    CREATE TABLE IF NOT EXISTS observations (
+      id TEXT PRIMARY KEY,
+      entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      content TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_observations_entity ON observations(entity_id);
+  `)
+  setSchemaVersionInternal(db, 4)
 }
 
 function initSchema(db) {

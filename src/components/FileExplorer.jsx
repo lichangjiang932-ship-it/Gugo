@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Folder, FolderOpen, FileText, FileCode, FileImage, FileJson,
-  FileSpreadsheet, File, ChevronRight, ChevronDown, Plus,
+  FileSpreadsheet, File, ChevronRight, ChevronDown,
   Trash2, RefreshCw, Search, X
 } from 'lucide-react'
 
@@ -105,8 +105,12 @@ function TreeNode({ node, depth = 0, onFileClick, onFileDelete, activeFile, expa
   )
 }
 
+function renderFileIcon(name, color) {
+  const IconComp = getFileIcon(name)
+  return <IconComp className="w-3.5 h-3.5 shrink-0" style={{ color }} />
+}
+
 function FileNode({ file, depth, onClick, onDelete, active }) {
-  const Icon = getFileIcon(file.name)
   const color = getFileColor(file.name)
   return (
     <div
@@ -115,7 +119,7 @@ function FileNode({ file, depth, onClick, onDelete, active }) {
       }`}
       style={{ paddingLeft: `${depth * 12 + 20}px` }}
     >
-      <Icon className="w-3.5 h-3.5 shrink-0" style={{ color }} />
+      {renderFileIcon(file.name, color)}
       <span className="truncate flex-1" onClick={onClick}>{file.name}</span>
       <button
         onClick={(e) => { e.stopPropagation(); onDelete() }}
@@ -130,8 +134,6 @@ function FileNode({ file, depth, onClick, onDelete, active }) {
 export default function FileExplorer({ files, onFileClick, onFileDelete, onRefresh }) {
   const [expanded, setExpanded] = useState({ src: true, components: true })
   const [searchQuery, setSearchQuery] = useState('')
-
-  const tree = useMemo(() => buildTree(files), [files])
 
   const filteredFiles = useMemo(() => {
     if (!searchQuery.trim()) return files

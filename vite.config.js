@@ -16,6 +16,7 @@ import { handleHooksRequest } from './server/hooksRoutes.js'
 import { handleMcpRequest } from './server/mcpRoutes.js'
 import { handleSubagentRequest } from './server/subagentRoutes.js'
 import { handleCompactionRequest } from './server/compactionRoutes.js'
+import { handleKnowledgeGraphRequest } from './server/knowledgeGraphRoutes.js'
 
 function authBillingPlugin() {
   return {
@@ -60,6 +61,10 @@ function fallbackApiPlugin() {
         }
         if (req.url?.startsWith('/api/tools/specs')) {
           handleToolSpecsRequest(req, res)
+          return
+        }
+        if (req.url?.startsWith('/api/knowledge/')) {
+          handleKnowledgeGraphRequest(req, res)
           return
         }
         if (req.url?.startsWith('/api/memory/')) {

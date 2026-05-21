@@ -31,6 +31,7 @@ import { handleHooksRequest } from './hooksRoutes.js'
 import { handleMcpRequest } from './mcpRoutes.js'
 import { handleSubagentRequest } from './subagentRoutes.js'
 import { handleCompactionRequest } from './compactionRoutes.js'
+import { handleKnowledgeGraphRequest } from './knowledgeGraphRoutes.js'
 import { shutdownAll as shutdownMcpAll } from './mcp/mcpManager.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -186,6 +187,11 @@ function createRouter(getEnv = getRuntimeEnv) {
   // 后台任务中心
   if (req.url?.startsWith('/api/jobs')) {
     return handleJobRequest(req, res, jobRuntime)
+  }
+
+  // 知识图谱（feature 8 — 借鉴 Reasonix memory_* 设计）
+  if (req.url?.startsWith('/api/knowledge/')) {
+    return handleKnowledgeGraphRequest(req, res)
   }
 
   // 技能包
