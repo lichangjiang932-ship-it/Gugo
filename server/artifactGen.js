@@ -24,6 +24,11 @@ import crypto from 'node:crypto'
 import JSZip from 'jszip'
 import { authenticateRequest } from './middleware.js'
 import { getArtifactByFilename } from './jobStore.js'
+import {
+  HEAD_FONT, BODY_FONT, CJK_FONT,
+  PREMIUM_THEMES, resolvePremiumTheme,
+  escapeXml, normalizeBullets, injectEaFont, shape,
+} from '../src/lib/pptCore.js'
 
 const ARTIFACT_DIR =
   process.env.ARTIFACT_DIR && path.isAbsolute(process.env.ARTIFACT_DIR)
@@ -42,90 +47,13 @@ function newArtifactPath(ext) {
   return { id, filename, fullPath: path.join(ARTIFACT_DIR, filename), url: `/api/artifacts/${filename}` }
 }
 
-function escapeXml(s = '') {
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;')
-}
 
 /* ════════════════════════ PPTX (premium) ════════════════════════ */
-/*
- * 字体策略
- *   - 西文 head/body 都用 Calibri（Office 全平台内置）+ bold 区分层级
- *   - CJK 走 Office 的 east-asia fallback；并在 build 完后把 theme1.xml 里的
- *     <a:ea typeface="..."/> 改成 "Microsoft YaHei"，Win/Mac Office 都内置；
- *     LibreOffice 会回退到系统 sans CJK（Noto/WenQuanYi）。
- */
-const HEAD_FONT = 'Calibri'
-const BODY_FONT = 'Calibri'
-const CJK_FONT = 'Microsoft YaHei'
-
-/*
- * 主题：4 个克制的高级色系，避免 AI 紫蓝渐变 + 高饱和。
- *   bg/panel/card 三层灰阶；text/soft/muted 三层灰；accent + accentSoft 双强调。
- *   关键：accent 饱和度 < 80%；transparency 数值都按 pptxgenjs 真正语义（0=不透，100=全透）。
- */
-const THEMES = {
-  noir: { // 编辑暗（默认）
-    bg: '0E1014', panel: '171A21', card: '1C2029',
-    text: 'ECEEF1', soft: 'A8AEB8', muted: '5C636E',
-    accent: 'D4A574',  // 香槟金
-    accentSoft: '7BA7B5',
-    line: '2A2F38',
-  },
-  paper: { // 暖纸（轻量编辑）
-    bg: 'F5F1E8', panel: 'EAE3D2', card: 'FFFFFF',
-    text: '20180F', soft: '4A3E2E', muted: '8A7B68',
-    accent: 'B5532A',  // 砖红
-    accentSoft: '3F6E76',
-    line: 'D6CCB6',
-  },
-  ocean: { // 深蓝沉静（金融/咨询）
-    bg: '0B1A2A', panel: '11253A', card: '163149',
-    text: 'E8EEF5', soft: 'A4B5C7', muted: '5A6B7E',
-    accent: 'D8B255',  // 沙金
-    accentSoft: '6FA8B0',
-    line: '24344A',
-  },
-  forest: { // 墨绿（可持续/医疗）
-    bg: '0F1A14', panel: '162621', card: '1D3128',
-    text: 'EAEFE8', soft: 'A6B5A7', muted: '5A6C5D',
-    accent: 'C1A35A',
-    accentSoft: '6FA890',
-    line: '243329',
-  },
-}
-
-function resolvePptxTheme(seed = '') {
-  const text = String(seed || '').toLowerCase()
-  if (/bank|finance|fund|insurance|wealth|金融|银行|保险|基金|投研|财务|consulting|咨询/.test(text)) return THEMES.ocean
-  if (/esg|green|carbon|health|medical|biology|环保|医疗|生物|可持续/.test(text)) return THEMES.forest
-  if (/journal|writing|brand|notion|文档|品牌|出版|杂志|手册|写作/.test(text)) return THEMES.paper
-  return THEMES.noir
-}
-
-function shape(pptx, name) {
-  return pptx.ShapeType?.[name] || name
-}
-
-/* ── 文本/数据 normalization ── */
-
-const BULLET_MAX_CHARS = 60          // 单条 bullet 最长
-const BULLETS_PER_PAGE = 5           // 单页最多 bullet
-function normalizeBullets(slide = {}) {
-  let bullets = Array.isArray(slide.bullets) ? slide.bullets : []
-  if (!bullets.length && slide.body) {
-    bullets = String(slide.body).split(/\n+/).map((line) => line.replace(/^[-*•]\s*/, '').trim())
-  }
-  return bullets
-    .map((b) => String(b || '').trim())
-    .filter(Boolean)
-    .map((b) => (b.length > BULLET_MAX_CHARS ? `${b.slice(0, BULLET_MAX_CHARS - 1)}…` : b))
-    .slice(0, BULLETS_PER_PAGE)
-}
+// fonts / themes / shape helper / normalizeBullets 均来自 src/lib/pptCore.js
+const THEMES = PREMIUM_THEMES
+const resolvePptxTheme = resolvePremiumTheme
+const BULLET_MAX_CHARS = 60
+const BULLETS_PER_PAGE = 5
 
 function normalizeKpis(slide = {}) {
   const raw = Array.isArray(slide.kpi) ? slide.kpi : Array.isArray(slide.kpis) ? slide.kpis : []
@@ -681,42 +609,17 @@ export async function createPptx({ title = 'Presentation', subtitle = '', theme:
   let buffer = await pptx.write({ outputType: 'nodebuffer' })
 
   // 后处理 theme.xml 注入 east-asia 字体，保证 Win/Mac Office 中文字形一致
-  buffer = await injectEaFont(buffer, CJK_FONT)
+  const injected = await injectEaFont(buffer, CJK_FONT)
+  buffer = Buffer.isBuffer(injected) ? injected : Buffer.from(injected)
 
   const a = newArtifactPath('pptx')
   fs.writeFileSync(a.fullPath, buffer)
   return { ...a, type: 'pptx', title, slideCount: slides.length, byteLength: buffer.length, themeName: explicit ? themeName : undefined }
 }
 
-/* ── 注入 east-asia 字体（让 CJK 渲染稳定） ── */
-
-async function injectEaFont(pptxBuffer, eaFont) {
-  try {
-    const zip = await JSZip.loadAsync(pptxBuffer)
-    const themeFile = zip.file('ppt/theme/theme1.xml')
-    if (!themeFile) return pptxBuffer
-    let xml = await themeFile.async('string')
-    // 在 majorFont/minorFont 的 <a:latin .../> 后插一行 <a:ea typeface="..." />
-    // 如果已有 a:ea 就替换 typeface 值
-    const eaTag = `<a:ea typeface="${escapeXml(eaFont)}"/>`
-    xml = xml.replace(/<a:majorFont>([\s\S]*?)<\/a:majorFont>/, (_, inner) => {
-      const updated = inner.includes('<a:ea')
-        ? inner.replace(/<a:ea[^/]*\/>/, eaTag)
-        : inner.replace(/(<a:latin[^/]*\/>)/, `$1${eaTag}`)
-      return `<a:majorFont>${updated}</a:majorFont>`
-    })
-    xml = xml.replace(/<a:minorFont>([\s\S]*?)<\/a:minorFont>/, (_, inner) => {
-      const updated = inner.includes('<a:ea')
-        ? inner.replace(/<a:ea[^/]*\/>/, eaTag)
-        : inner.replace(/(<a:latin[^/]*\/>)/, `$1${eaTag}`)
-      return `<a:minorFont>${updated}</a:minorFont>`
-    })
-    zip.file('ppt/theme/theme1.xml', xml)
-    return await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
-  } catch {
-    return pptxBuffer
-  }
-}
+/* ── 注入 east-asia 字体（让 CJK 渲染稳定） ──
+ * 实现已下沉到 src/lib/pptCore.js#injectEaFont
+ */
 
 /* ────────────────────────── DOCX ────────────────────────── */
 

@@ -1,3 +1,5 @@
+import { injectEaFont, CJK_FONT } from './pptCore.js'
+
 const MAX_BULLETS_PER_SLIDE = 8
 const MAX_BULLET_LENGTH = 150
 const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
@@ -1070,9 +1072,10 @@ function saveBlob(blob, filename) {
 
 export async function createPptxBlobFromMarkdown(markdown, { title } = {}) {
   const { pptx } = await buildPresentationFromMarkdown(markdown, { title })
-  const content = await pptx.write({ outputType: 'blob' })
-  if (content instanceof Blob && content.type === PPTX_MIME) return content
-  return new Blob([content], { type: PPTX_MIME })
+  const raw = await pptx.write({ outputType: 'blob' })
+  const buf = raw instanceof Blob ? new Uint8Array(await raw.arrayBuffer()) : raw
+  const injected = await injectEaFont(buf, CJK_FONT)
+  return new Blob([injected], { type: PPTX_MIME })
 }
 
 export async function downloadPptxFromMarkdown(markdown, { title, filename } = {}) {
@@ -3284,9 +3287,10 @@ export async function createPremiumPptxBlob(markdown, { title, onProgress } = {}
     slide.addImage({ data: dataUrl, x: 0, y: 0, w: SLIDE_W, h: SLIDE_H })
   }
 
-  const content = await pptx.write({ outputType: 'blob' })
-  if (content instanceof Blob && content.type === PPTX_MIME) return content
-  return new Blob([content], { type: PPTX_MIME })
+  const raw = await pptx.write({ outputType: 'blob' })
+  const buf = raw instanceof Blob ? new Uint8Array(await raw.arrayBuffer()) : raw
+  const injected = await injectEaFont(buf, CJK_FONT)
+  return new Blob([injected], { type: PPTX_MIME })
 }
 
 export async function downloadPremiumPptx(markdown, { title, filename, onProgress } = {}) {
