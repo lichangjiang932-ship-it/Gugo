@@ -50,6 +50,68 @@ function escapeXml(s = '') {
 
 /* ────────────────────────── PPTX ────────────────────────── */
 
+const PPTX_THEMES = {
+  tech: { bg: '0B0D12', panel: '151B2E', card: '1E293B', text: 'E6E8EE', soft: 'AAB3C5', muted: '667085', accent: '6366F1', accent2: 'EC4899', line: '334155' },
+  finance: { bg: '0D1812', panel: '14251C', card: '1D3228', text: 'E8EFE6', soft: 'B9CABB', muted: '6B806F', accent: '10B981', accent2: 'FBBF24', line: '315141' },
+  consumer: { bg: 'FEF8F4', panel: 'FFF1E8', card: 'FFFFFF', text: '1F2937', soft: '4B5563', muted: '9CA3AF', accent: 'FB7185', accent2: 'F59E0B', line: 'FED7AA' },
+  warm: { bg: '1A1612', panel: '251E18', card: '30261E', text: 'F5ECD9', soft: 'D6C4A7', muted: '907F67', accent: 'D4A574', accent2: '8B2929', line: '514235' },
+}
+
+function resolvePptxTheme(seed = '') {
+  const text = String(seed || '').toLowerCase()
+  if (/ai|saas|software|cloud|tech|digital|智能|科技|算法|平台|模型/.test(text)) return PPTX_THEMES.tech
+  if (/bank|finance|fund|insurance|wealth|金融|银行|保险|基金|投研|财务/.test(text)) return PPTX_THEMES.finance
+  if (/consumer|brand|retail|beauty|food|fashion|消费|品牌|零售|美妆|餐饮/.test(text)) return PPTX_THEMES.consumer
+  return PPTX_THEMES.warm
+}
+
+function getBullets(slide = {}) {
+  const bullets = Array.isArray(slide.bullets) ? slide.bullets : []
+  if (bullets.length) return bullets.map((b) => String(b)).filter(Boolean).slice(0, 6)
+  if (slide.body) return String(slide.body).split(/\n+/).map((line) => line.replace(/^[-*]\s*/, '').trim()).filter(Boolean).slice(0, 6)
+  return []
+}
+
+function shape(pptx, name) {
+  return pptx.ShapeType?.[name] || name
+}
+
+function addDeckDecor(slide, pptx, theme, index) {
+  slide.background = { color: theme.bg }
+  slide.addShape(shape(pptx, 'rect'), {
+    x: 0, y: 0, w: 13.333, h: 7.5,
+    fill: { color: theme.bg },
+    line: { color: theme.bg, width: 0 },
+  })
+  slide.addShape(shape(pptx, 'ellipse'), {
+    x: index % 2 === 0 ? 10.2 : -1.4, y: index % 2 === 0 ? -1.6 : 5.1, w: 4.2, h: 4.2,
+    fill: { color: theme.accent, transparency: 78 },
+    line: { color: theme.accent, width: 0 },
+  })
+  slide.addShape(shape(pptx, 'ellipse'), {
+    x: index % 2 === 0 ? -1.0 : 10.7, y: index % 2 === 0 ? 5.3 : -1.0, w: 2.8, h: 2.8,
+    fill: { color: theme.accent2, transparency: 84 },
+    line: { color: theme.accent2, width: 0 },
+  })
+  slide.addShape(shape(pptx, 'rect'), {
+    x: 0.48, y: 0.42, w: 1.1, h: 0.08,
+    fill: { color: theme.accent },
+    line: { color: theme.accent, width: 0 },
+  })
+}
+
+function addDeckFooter(slide, theme, index, total) {
+  slide.addShape('rect', {
+    x: 0.65, y: 6.86, w: 10.2, h: 0.015,
+    fill: { color: theme.line, transparency: 20 },
+    line: { color: theme.line, width: 0 },
+  })
+  slide.addText(`${String(index + 1).padStart(2, '0')} / ${String(total).padStart(2, '0')}`, {
+    x: 11.0, y: 6.7, w: 1.45, h: 0.22,
+    fontSize: 9, color: theme.muted, align: 'right', margin: 0,
+  })
+}
+
 export async function createPptx({ title = 'Presentation', slides = [] } = {}) {
   if (!Array.isArray(slides) || slides.length === 0) {
     throw new Error('slides 不能为空')
@@ -60,30 +122,126 @@ export async function createPptx({ title = 'Presentation', slides = [] } = {}) {
   pptx.title = title
   pptx.author = 'Your Model Atelier'
   pptx.lang = 'zh-CN'
+  pptx.subject = title
+  pptx.company = 'Your Model Atelier'
+  pptx.theme = {
+    headFontFace: 'Aptos Display',
+    bodyFontFace: 'Aptos',
+    lang: 'zh-CN',
+  }
+
+  const theme = resolvePptxTheme(`${title} ${slides.map((s) => s?.title || '').join(' ')}`)
+  const total = slides.length
 
   for (let i = 0; i < slides.length; i++) {
     const s = slides[i] || {}
     const slide = pptx.addSlide()
-    slide.background = { color: 'F8F4EC' }
-    slide.addShape('rect', {
-      x: 0, y: 0, w: 13.333, h: 0.18,
-      fill: { color: i === 0 ? 'E86A3C' : '2E8FA3' },
-      line: { color: i === 0 ? 'E86A3C' : '2E8FA3' },
-    })
-    slide.addText(String(s.title || `Slide ${i + 1}`), {
-      x: 0.75, y: i === 0 ? 1.15 : 0.6, w: 11.8, h: 0.8,
-      fontSize: i === 0 ? 34 : 28, bold: true, color: '26211C', fit: 'shrink',
-    })
-    const bullets = Array.isArray(s.bullets) ? s.bullets : []
-    if (bullets.length) {
-      slide.addText(
-        bullets.map((b) => ({ text: String(b), options: { bullet: { type: 'bullet' } } })),
-        { x: 0.95, y: i === 0 ? 2.35 : 1.65, w: 11.35, h: 4.7, fontSize: 18, color: '403A34', paraSpaceAfterPt: 10, fit: 'shrink' },
-      )
+    const titleText = String(s.title || `Slide ${i + 1}`)
+    const bullets = getBullets(s)
+    const layout = i === 0 ? 'cover' : i === total - 1 ? 'end' : ['cards', 'split', 'statement', 'content'][i % 4]
+
+    addDeckDecor(slide, pptx, theme, i)
+
+    if (layout === 'cover') {
+      slide.addText(titleText, {
+        x: 0.85, y: 1.85, w: 10.9, h: 1.4,
+        fontFace: 'Aptos Display', fontSize: 44, bold: true, color: theme.text,
+        margin: 0, breakLine: false, fit: 'shrink',
+      })
+      if (bullets[0]) {
+        slide.addText(bullets[0], {
+          x: 0.9, y: 3.38, w: 9.8, h: 0.45,
+          fontFace: 'Aptos', fontSize: 18, color: theme.soft, margin: 0,
+        })
+      }
+      slide.addText('YOUR MODEL ATELIER', {
+        x: 0.9, y: 5.85, w: 3.6, h: 0.25,
+        fontFace: 'Aptos', fontSize: 9, color: theme.muted, bold: true, charSpace: 2.2, margin: 0,
+      })
+      slide.addShape(shape(pptx, 'rect'), {
+        x: 0.9, y: 4.28, w: 2.2, h: 0.055,
+        fill: { color: theme.accent2 },
+        line: { color: theme.accent2, width: 0 },
+      })
+    } else if (layout === 'cards') {
+      slide.addText(titleText, {
+        x: 0.72, y: 0.72, w: 11.3, h: 0.65,
+        fontFace: 'Aptos Display', fontSize: 28, bold: true, color: theme.text, margin: 0, fit: 'shrink',
+      })
+      bullets.slice(0, 4).forEach((bullet, idx) => {
+        const x = 0.72 + idx * 3.05
+        slide.addShape(shape(pptx, 'roundRect'), {
+          x, y: 2.0, w: 2.65, h: 2.9,
+          rectRadius: 0.12,
+          fill: { color: theme.card, transparency: 6 },
+          line: { color: theme.line, transparency: 28, width: 0.7 },
+        })
+        slide.addText(String(idx + 1).padStart(2, '0'), {
+          x: x + 0.22, y: 2.22, w: 0.7, h: 0.28,
+          fontFace: 'Aptos Display', fontSize: 15, bold: true, color: idx % 2 ? theme.accent2 : theme.accent, margin: 0,
+        })
+        slide.addText(bullet, {
+          x: x + 0.22, y: 2.82, w: 2.18, h: 1.2,
+          fontFace: 'Aptos', fontSize: 15, color: theme.soft, margin: 0, breakLine: false, fit: 'shrink',
+        })
+      })
+    } else if (layout === 'split') {
+      slide.addText(titleText, {
+        x: 0.72, y: 0.72, w: 11.3, h: 0.65,
+        fontFace: 'Aptos Display', fontSize: 28, bold: true, color: theme.text, margin: 0, fit: 'shrink',
+      })
+      const left = bullets.slice(0, Math.ceil(bullets.length / 2))
+      const right = bullets.slice(Math.ceil(bullets.length / 2))
+      ;[
+        { x: 0.75, items: left, accent: theme.accent, label: 'A' },
+        { x: 6.85, items: right.length ? right : left.slice(0, 2), accent: theme.accent2, label: 'B' },
+      ].forEach((panel) => {
+        slide.addShape(shape(pptx, 'rect'), {
+          x: panel.x, y: 1.72, w: 5.35, h: 4.6,
+          fill: { color: theme.panel, transparency: 2 },
+          line: { color: panel.accent, transparency: 35, width: 1.2 },
+        })
+        slide.addText(panel.label, {
+          x: panel.x + 0.28, y: 1.98, w: 0.48, h: 0.36,
+          fontFace: 'Aptos Display', fontSize: 17, bold: true, color: panel.accent, margin: 0,
+        })
+        if (panel.items.length) {
+          slide.addText(panel.items.map((b) => ({ text: b, options: { bullet: { type: 'bullet' }, breakLine: true, paraSpaceAfterPt: 8 } })), {
+            x: panel.x + 0.45, y: 2.55, w: 4.55, h: 3.2,
+            fontFace: 'Aptos', fontSize: 15, color: theme.soft, fit: 'shrink',
+          })
+        }
+      })
+    } else if (layout === 'statement') {
+      slide.addText(titleText, {
+        x: 1.0, y: 1.55, w: 10.6, h: 1.35,
+        fontFace: 'Aptos Display', fontSize: 34, bold: true, color: theme.text, align: 'center', margin: 0, fit: 'shrink',
+      })
+      slide.addShape(shape(pptx, 'rect'), {
+        x: 5.35, y: 3.15, w: 2.6, h: 0.05,
+        fill: { color: theme.accent },
+        line: { color: theme.accent, width: 0 },
+      })
+      if (bullets.length) {
+        slide.addText(bullets.slice(0, 3).join('  ·  '), {
+          x: 1.55, y: 3.58, w: 10.2, h: 0.8,
+          fontFace: 'Aptos', fontSize: 16, color: theme.soft, align: 'center', margin: 0, fit: 'shrink',
+        })
+      }
+    } else {
+      slide.addText(titleText, {
+        x: 0.72, y: 0.72, w: 11.3, h: 0.65,
+        fontFace: 'Aptos Display', fontSize: 28, bold: true, color: theme.text, margin: 0, fit: 'shrink',
+      })
+      if (bullets.length) {
+        slide.addText(bullets.map((b) => ({ text: b, options: { bullet: { type: 'bullet' }, breakLine: true, paraSpaceAfterPt: 12 } })), {
+          x: 1.0, y: 1.75, w: 10.9, h: 4.55,
+          fontFace: 'Aptos', fontSize: 18, color: theme.soft, fit: 'shrink',
+        })
+      }
     }
-    slide.addText(`${i + 1} / ${slides.length}`, {
-      x: 11.55, y: 7.05, w: 1, h: 0.22, fontSize: 9, color: '8A8178', align: 'right',
-    })
+
+    addDeckFooter(slide, theme, i, total)
   }
   const buffer = await pptx.write({ outputType: 'nodebuffer' })
   const a = newArtifactPath('pptx')

@@ -95,13 +95,167 @@ export function extractHtmlSource(content = '') {
   return text.trim()
 }
 
+export function isHtmlDeckLike(htmlSource = '') {
+  const src = String(htmlSource || '')
+  if (!src.trim()) return false
+  const sectionCount = (src.match(/<section\b/gi) || []).length
+  const explicitSlideCount = (src.match(/\bclass\s*=\s*["'][^"']*\bslide\b[^"']*["']/gi) || []).length
+  const dataSlideCount = (src.match(/\bdata-slide\s*=/gi) || []).length
+  const pageClassCount = (src.match(/\bclass\s*=\s*["'][^"']*\b(?:page|deck-page|presentation-slide|deck-slide)\b[^"']*["']/gi) || []).length
+  return explicitSlideCount >= 2 || dataSlideCount >= 2 || sectionCount >= 2 || pageClassCount >= 2
+}
+
+const HTML_DECK_ENHANCER_CSS = `
+html.yma-deck-active, html.yma-deck-active body {
+  margin: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  overflow: hidden !important;
+}
+html.yma-deck-active .slide {
+  width: 100vw !important;
+  height: 100vh !important;
+  min-height: 100vh !important;
+  position: relative !important;
+  overflow: hidden !important;
+}
+html.yma-deck-active .slide:not(.active) {
+  display: none !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+.yma-deck-controls {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 2147483647;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255,255,255,.22);
+  border-radius: 999px;
+  color: #fff;
+  background: rgba(10,10,14,.58);
+  box-shadow: 0 16px 48px rgba(0,0,0,.28);
+  backdrop-filter: blur(16px);
+  font: 12px/1 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.yma-deck-controls button {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 50%;
+  color: inherit;
+  background: rgba(255,255,255,.16);
+  cursor: pointer;
+}
+.yma-deck-controls button:hover { background: rgba(255,255,255,.26); }
+.yma-deck-controls .yma-deck-count { min-width: 54px; text-align: center; opacity: .86; }
+`
+
+const HTML_DECK_ENHANCER_SCRIPT = `
+;(() => {
+  if (window.__ymaDeck?.ready) return;
+  const selector = '.slide,[data-slide],section,.page,.deck-page,.deck-slide,.presentation-slide';
+  const raw = Array.from(document.querySelectorAll(selector));
+  const slides = raw
+    .filter((el, index, all) => el && el !== document.body && all.indexOf(el) === index)
+    .filter((el, _, all) => !all.some((other) => other !== el && other.contains(el)));
+  if (slides.length < 2) return;
+  document.documentElement.classList.add('yma-deck-active');
+  slides.forEach((slide, index) => {
+    slide.classList.add('slide');
+    slide.dataset.ymaSlide = String(index + 1);
+    if (!slide.querySelector(':scope > .pager')) {
+      const pager = document.createElement('div');
+      pager.className = 'pager';
+      pager.textContent = String(index + 1).padStart(2, '0') + ' / ' + String(slides.length).padStart(2, '0');
+      slide.appendChild(pager);
+    }
+  });
+  let current = Math.max(0, slides.findIndex((slide) => slide.classList.contains('active')));
+  function render() {
+    slides.forEach((slide, index) => {
+      const active = index === current;
+      slide.classList.toggle('active', active);
+      slide.setAttribute('aria-hidden', active ? 'false' : 'true');
+      if (active) {
+        slide.style.display = '';
+        slide.style.opacity = '';
+        slide.style.pointerEvents = '';
+      }
+    });
+    const count = document.querySelector('.yma-deck-count');
+    if (count) count.textContent = String(current + 1).padStart(2, '0') + ' / ' + String(slides.length).padStart(2, '0');
+  }
+  function goTo(index) {
+    const next = Math.max(0, Math.min(slides.length - 1, Number(index) || 0));
+    current = next;
+    render();
+  }
+  const api = {
+    ready: true,
+    count: slides.length,
+    get current() { return current; },
+    next: () => goTo(current + 1),
+    prev: () => goTo(current - 1),
+    goTo,
+  };
+  window.__ymaDeck = api;
+  if (!document.querySelector('.yma-deck-controls')) {
+    const controls = document.createElement('div');
+    controls.className = 'yma-deck-controls';
+    controls.innerHTML = '<button type="button" data-yma-prev aria-label="上一页">‹</button><span class="yma-deck-count"></span><button type="button" data-yma-next aria-label="下一页">›</button>';
+    controls.querySelector('[data-yma-prev]').addEventListener('click', api.prev);
+    controls.querySelector('[data-yma-next]').addEventListener('click', api.next);
+    document.body.appendChild(controls);
+  }
+  document.addEventListener('keydown', (event) => {
+    const key = event.key;
+    if (['ArrowRight', 'PageDown', ' '].includes(key)) { event.preventDefault(); api.next(); }
+    else if (['ArrowLeft', 'PageUp'].includes(key)) { event.preventDefault(); api.prev(); }
+    else if (key === 'Home') { event.preventDefault(); api.goTo(0); }
+    else if (key === 'End') { event.preventDefault(); api.goTo(slides.length - 1); }
+    else if (/^[1-9]$/.test(key)) { event.preventDefault(); api.goTo(Number(key) - 1); }
+  });
+  window.addEventListener('message', (event) => {
+    const data = event.data || {};
+    if (data.type === 'yma-deck-next') api.next();
+    if (data.type === 'yma-deck-prev') api.prev();
+    if (data.type === 'yma-deck-goto') api.goTo(data.index);
+  });
+  render();
+})();`
+
+function injectBeforeCloseTag(documentHtml, tag, injection) {
+  const close = new RegExp(`</${tag}>`, 'i')
+  if (close.test(documentHtml)) return documentHtml.replace(close, `${injection}</${tag}>`)
+  return `${documentHtml}\n${injection}`
+}
+
+export function enhanceHtmlDeckDocument(documentHtml = '') {
+  const doc = String(documentHtml || '')
+  if (!isHtmlDeckLike(doc) || doc.includes('data-yma-deck-enhancer')) return doc
+  const withCss = injectBeforeCloseTag(
+    doc,
+    'head',
+    `<style data-yma-deck-enhancer="style">${HTML_DECK_ENHANCER_CSS}</style>`
+  )
+  return injectBeforeCloseTag(
+    withCss,
+    'body',
+    `<script data-yma-deck-enhancer="script">${HTML_DECK_ENHANCER_SCRIPT.replace(/<\/script>/gi, '<\\/script>')}</script>`
+  )
+}
+
 /**
  * 把 HTML 源包装成可放进 iframe srcdoc 的完整文档 — 缺 doctype 时补全。
  */
 export function buildHtmlDocument(htmlSource = '') {
   const src = String(htmlSource || '').trim()
-  if (/^\s*(?:<!doctype\s+html|<html[\s>])/i.test(src)) return src
-  return `<!doctype html>
+  if (/^\s*(?:<!doctype\s+html|<html[\s>])/i.test(src)) return enhanceHtmlDeckDocument(src)
+  return enhanceHtmlDeckDocument(`<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
@@ -112,7 +266,7 @@ export function buildHtmlDocument(htmlSource = '') {
 <body>
 ${src}
 </body>
-</html>`
+</html>`)
 }
 
 function escapeHtml(value = '') {

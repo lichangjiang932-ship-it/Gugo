@@ -145,7 +145,7 @@ const BUILTIN_SPECS = {
     type: 'function',
     function: {
       name: 'create_pptx',
-      description: '生成可下载的 PowerPoint 演示文稿(.pptx)。',
+      description: '生成可下载的 PowerPoint 演示文稿(.pptx)。必须产出分页面、结论式标题和精炼内容，避免普通大纲或说明尾巴。',
       parameters: {
         type: 'object',
         properties: {

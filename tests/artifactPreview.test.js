@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { buildArtifactPreview, shouldCollapseArtifactPreview } from '../src/lib/artifactPreview.js'
+import {
+  buildArtifactPreview,
+  buildHtmlDocument,
+  isHtmlDeckLike,
+  shouldCollapseArtifactPreview,
+} from '../src/lib/artifactPreview.js'
 
 test('builds a pptx artifact preview from slide markdown', () => {
   const preview = buildArtifactPreview({
@@ -59,6 +64,26 @@ test('treats htmlppt as an explicit html artifact instead of inferred content', 
   assert.equal(preview.title, 'Pitch Deck')
   assert.equal(preview.filename, 'Pitch-Deck.html')
   assert.equal(preview.previewable, true)
+})
+
+test('enhances html slide decks with platform navigation fallback', () => {
+  const html = buildHtmlDocument(`
+    <section class="slide active"><h1>封面</h1></section>
+    <section class="slide"><h1>第二页</h1></section>
+  `)
+
+  assert.equal(isHtmlDeckLike(html), true)
+  assert.match(html, /data-yma-deck-enhancer="style"/)
+  assert.match(html, /window\.__ymaDeck/)
+  assert.match(html, /yma-deck-next/)
+  assert.match(html, /yma-deck-prev/)
+})
+
+test('does not inject deck controls into ordinary html fragments', () => {
+  const html = buildHtmlDocument('<main><h1>普通网页</h1><p>Hello</p></main>')
+
+  assert.equal(isHtmlDeckLike(html), false)
+  assert.doesNotMatch(html, /data-yma-deck-enhancer/)
 })
 
 

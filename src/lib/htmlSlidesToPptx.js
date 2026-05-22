@@ -69,11 +69,39 @@ async function mountDeckIframe(html) {
   return { iframe, doc }
 }
 
+export function collectHtmlDeckSlides(doc) {
+  if (!doc?.querySelectorAll) return []
+  const selectors = [
+    '.slide',
+    '[data-slide]',
+    'section',
+    '.page',
+    '.deck-page',
+    '.deck-slide',
+    '.presentation-slide',
+    'article',
+  ]
+  const candidates = []
+  const seen = new Set()
+  for (const selector of selectors) {
+    for (const node of Array.from(doc.querySelectorAll(selector))) {
+      if (!node || seen.has(node) || node === doc.body || node === doc.documentElement) continue
+      seen.add(node)
+      candidates.push(node)
+    }
+  }
+
+  // 如果一个候选 slide 包含另一个候选 slide，优先保留外层，避免把 slide 内部的 section/card 当成独立页。
+  const slides = candidates.filter((node) => !candidates.some((other) => other !== node && other.contains(node)))
+  slides.forEach((slide, index) => {
+    slide.classList.add('slide')
+    if (!slide.dataset.slide) slide.dataset.slide = String(index + 1)
+  })
+  return slides
+}
+
 function getSlides(doc) {
-  const list = Array.from(doc.querySelectorAll('.slide, section.slide, [data-slide]'))
-  if (list.length) return list
-  // 兜底：把 <section> 全当 slide
-  return Array.from(doc.querySelectorAll('section'))
+  return collectHtmlDeckSlides(doc)
 }
 
 // 截图前调用:在 iframe 里注入一个 style,把所有文字渲染"挖空"(color/text-fill

@@ -30,7 +30,7 @@ export const SERVER_TOOL_SPECS = [
     type: 'function',
     function: {
       name: 'create_pptx',
-      description: '生成 PowerPoint(.pptx)演示文稿。slides 为数组,每页含 title + bullets/body。',
+      description: '生成高质量 PowerPoint(.pptx)演示文稿。slides 为数组,每页含结论式 title + 精炼 bullets/body；每页最多 4-6 条,避免长文。',
       parameters: {
         type: 'object',
         properties: {

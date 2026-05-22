@@ -15,7 +15,7 @@ import {
   parseMarkdownDocument,
   parseSpreadsheetRows,
 } from '../../lib/officeExport.js'
-import { buildHtmlDocument } from '../../lib/artifactPreview.js'
+import { buildHtmlDocument, isHtmlDeckLike } from '../../lib/artifactPreview.js'
 import { downloadHtmlDeckAsPptx } from '../../lib/htmlSlidesToPptx.js'
 
 function ArtifactIcon({ type }) {
@@ -28,18 +28,46 @@ function ArtifactIcon({ type }) {
 
 function HtmlPreview({ html }) {
   const srcDoc = useMemo(() => buildHtmlDocument(html), [html])
+  const iframeRef = useRef(null)
+  const isDeck = useMemo(() => isHtmlDeckLike(html), [html])
+  const sendDeckCommand = (type) => {
+    iframeRef.current?.contentWindow?.postMessage({ type }, '*')
+  }
   return (
-    <iframe
-      title="HTML 预览"
-      // SECURITY: 只给 allow-scripts + allow-forms。绝不加 allow-same-origin —
-      // srcdoc 文档默认是 opaque origin,加上后会让脚本访问父页 storage/cookie + 逃逸沙箱。
-      // 工件页面如需调用外部 API,通过 postMessage 让父页代理。
-      sandbox="allow-scripts allow-forms"
-      // 可选:再加 referrerpolicy 防泄漏来源
-      referrerPolicy="no-referrer"
-      srcDoc={srcDoc}
-      className="w-full h-full border-0 bg-white"
-    />
+    <div className="relative w-full h-full">
+      <iframe
+        ref={iframeRef}
+        title="HTML 预览"
+        // SECURITY: 只给 allow-scripts + allow-forms。绝不加 allow-same-origin —
+        // srcdoc 文档默认是 opaque origin,加上后会让脚本访问父页 storage/cookie + 逃逸沙箱。
+        // 工件页面如需调用外部 API,通过 postMessage 让父页代理。
+        sandbox="allow-scripts allow-forms"
+        // 可选:再加 referrerpolicy 防泄漏来源
+        referrerPolicy="no-referrer"
+        srcDoc={srcDoc}
+        className="w-full h-full border-0 bg-white"
+      />
+      {isDeck && (
+        <div className="absolute left-3 bottom-3 z-10 flex items-center gap-1 rounded-full border border-ink-fade/30 bg-paper/85 p-1 shadow-sm backdrop-blur">
+          <button
+            type="button"
+            onClick={() => sendDeckCommand('yma-deck-prev')}
+            className="h-7 px-2 rounded-full text-xs text-ink-soft hover:bg-paper-2 hover:text-ember transition-colors"
+            title="上一页"
+          >
+            上一页
+          </button>
+          <button
+            type="button"
+            onClick={() => sendDeckCommand('yma-deck-next')}
+            className="h-7 px-2 rounded-full text-xs text-ink-soft hover:bg-paper-2 hover:text-ember transition-colors"
+            title="下一页"
+          >
+            下一页
+          </button>
+        </div>
+      )}
+    </div>
   )
 }
 
