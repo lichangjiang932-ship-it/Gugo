@@ -108,7 +108,8 @@ export async function injectEaFont(pptxBytes, eaFont = CJK_FONT) {
 function toUint8Array(b) {
   if (b instanceof Uint8Array) return b
   if (b instanceof ArrayBuffer) return new Uint8Array(b)
-  if (typeof Buffer !== 'undefined' && Buffer.isBuffer(b)) return new Uint8Array(b.buffer, b.byteOffset, b.byteLength)
+  const BufferCtor = globalThis.Buffer
+  if (BufferCtor?.isBuffer?.(b)) return new Uint8Array(b.buffer, b.byteOffset, b.byteLength)
   return new Uint8Array(b)
 }
 

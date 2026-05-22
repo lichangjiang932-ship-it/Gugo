@@ -52,8 +52,6 @@ function newArtifactPath(ext) {
 // fonts / themes / shape helper / normalizeBullets 均来自 src/lib/pptCore.js
 const THEMES = PREMIUM_THEMES
 const resolvePptxTheme = resolvePremiumTheme
-const BULLET_MAX_CHARS = 60
-const BULLETS_PER_PAGE = 5
 
 function normalizeKpis(slide = {}) {
   const raw = Array.isArray(slide.kpi) ? slide.kpi : Array.isArray(slide.kpis) ? slide.kpis : []
@@ -228,7 +226,7 @@ function renderSection(slide, pptx, theme, { titleText, eyebrow, index, brand })
   })
 }
 
-function renderStatement(slide, pptx, theme, { titleText, bullets, brand }) {
+function renderStatement(slide, pptx, theme, { titleText, bullets }) {
   paintBackground(slide, pptx, theme)
   // 装饰线放到大字正上方 0.6 in，与标题左对齐，形成视觉组
   slide.addShape(shape(pptx, 'rect'), {
@@ -251,7 +249,7 @@ function renderStatement(slide, pptx, theme, { titleText, bullets, brand }) {
   }
 }
 
-function renderBullets(slide, pptx, theme, { titleText, bullets, eyebrow, brand }) {
+function renderBullets(slide, pptx, theme, { titleText, bullets, eyebrow }) {
   paintBackground(slide, pptx, theme)
   addCornerMark(slide, pptx, theme)
   addPageTitle(slide, pptx, theme, titleText, { eyebrow })
@@ -474,7 +472,7 @@ function renderChart(slide, pptx, theme, { titleText, chart, eyebrow }) {
   })
 }
 
-function renderQuote(slide, pptx, theme, { titleText, quote, eyebrow }) {
+function renderQuote(slide, pptx, theme, { titleText, quote }) {
   paintBackground(slide, pptx, theme)
   addCornerMark(slide, pptx, theme)
   // 引号符（巨大，淡）
