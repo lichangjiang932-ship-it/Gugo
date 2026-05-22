@@ -227,7 +227,9 @@ export async function dispatchHooks(ctx) {
       }
     } else {
       // 非阻塞: fire-and-forget
-      executeOne(h, payload).catch(() => {})
+      executeOne(h, payload).catch((err) => {
+        console.warn('[hooks] 非阻塞 hook 执行失败:', h.id, err?.message || err)
+      })
     }
   }
   return { allow: true, replacementArgs: workingArgs }

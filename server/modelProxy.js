@@ -682,7 +682,9 @@ export async function handleModelProxyRequest(req, res) {
               event: 'stop',
               tool: 'chat',
               args: { latency: Date.now() - started, stream: true },
-            }).catch(() => {})
+            }).catch((err) => {
+              console.warn('[hooks] stop hook 失败 (stream):', err?.message || err)
+            })
           }
           // done 帧带上 billing,前端能在 stream 收尾时拿到本轮实际消耗,
           // 用于工具调用循环里"多轮累计计费"显示.放一起避免被 done 后的 return 截断.
@@ -741,7 +743,9 @@ export async function handleModelProxyRequest(req, res) {
           event: 'stop',
           tool: 'chat',
           args: { latency: Date.now() - started, stream: false },
-        }).catch(() => {})
+        }).catch((err) => {
+          console.warn('[hooks] stop hook 失败 (non-stream):', err?.message || err)
+        })
       }
     }
     sendJson(res, 200, {

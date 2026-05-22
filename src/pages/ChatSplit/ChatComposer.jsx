@@ -13,8 +13,9 @@ import { SKILL_ICONS } from '../../lib/skillIcons.js'
 
 const QUICK_SKILLS = [
   { label: '/ppt', command: '/ppt', active: true },
-  { label: '/excel', command: '/excel', active: false },
-  { label: '/doc', command: '/doc', active: false },
+  { label: '/code', command: '/code', active: true },
+  { label: '/review', command: '/review', active: true },
+  { label: '/doc', command: '/doc', active: true },
   { label: '+ 全部技能', command: null, solid: true },
 ]
 

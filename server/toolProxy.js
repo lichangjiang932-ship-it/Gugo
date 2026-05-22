@@ -562,7 +562,9 @@ export async function handleToolProxyRequest(req, res) {
 
     // post_tool_use hook (非阻塞观察)
     if (userId) {
-      dispatchHooks({ userId, event: 'post_tool_use', tool: toolName, args: { input: toolArgs, output: result } }).catch(() => {})
+      dispatchHooks({ userId, event: 'post_tool_use', tool: toolName, args: { input: toolArgs, output: result } }).catch((err) => {
+        console.warn('[hooks] post_tool_use hook 失败:', err?.message || err)
+      })
     }
 
     // 只有真正成功才扣费;失败不扣,避免 SSRF 探测/上游不稳定还吃用户积分.
