@@ -16,6 +16,7 @@ import { fetchAndExtract, searchDuckDuckGo } from './toolProxy.js'
 import { dispatchFsShellTool } from './fsShellTools.js'
 import { CODE_SEARCH_TOOL_SPECS, dispatchCodeSearchTool } from './utils/codeSearch.js'
 import { APPLY_PATCH_TOOL_SPECS, dispatchApplyPatchTool } from './utils/applyPatch.js'
+import { AGENTIC_TOOL_SPECS, dispatchAgenticTool, isLoopPauseResult } from './utils/agenticTools.js'
 
 const MAX_CONCURRENT_PER_USER = 3
 const activeByUser = new Map()
@@ -73,6 +74,8 @@ const READONLY_TOOL_SPECS = [
   },
   // ★ M1:代码搜索三件套(全只读,适合 explore/plan)
   ...CODE_SEARCH_TOOL_SPECS,
+  // ★ M3:反思 / 请求澄清(纯思维型,无副作用)
+  ...AGENTIC_TOOL_SPECS,
 ]
 
 /**
@@ -157,6 +160,9 @@ async function executeSubagentTool(toolName, args, { userId = null } = {}) {
       return dispatchCodeSearchTool(toolName, args)
     case 'apply_patch':
       return dispatchApplyPatchTool(toolName, args)
+    case 'reflect':
+    case 'request_clarification':
+      return dispatchAgenticTool(toolName, args)
     default:
       return { ok: false, error: `unknown subagent tool: ${toolName}` }
   }
@@ -201,10 +207,12 @@ async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_
       })),
     })
 
+    let pausedClarif = null
     for (const call of toolCalls) {
       let result
       try {
         result = await executeSubagentTool(call.name, call.arguments, { userId })
+        if (isLoopPauseResult(result)) pausedClarif = result.clarification
       } catch (err) {
         result = { ok: false, error: err?.message || String(err) }
       }
@@ -213,6 +221,12 @@ async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_
         tool_call_id: call.id,
         content: JSON.stringify(result),
       })
+    }
+    if (pausedClarif) {
+      // ★ M3:子代理调 request_clarification → 中断并把问题当作最终输出返回
+      return `⚠ 需要澄清(${pausedClarif.blocker_kind}):${pausedClarif.question}` +
+        (pausedClarif.options ? `\n选项:${pausedClarif.options.join(' / ')}` : '') +
+        (pausedClarif.why ? `\n原因:${pausedClarif.why}` : '')
     }
   }
 

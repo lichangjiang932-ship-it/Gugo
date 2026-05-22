@@ -45,7 +45,7 @@ export function createDefaultExecuteStep({
     if (step.kind === 'plan') {
       return {
         ok: true,
-        output: { summary: `已规划任务：${job.title}` },
+        output: { summary: `已规划任务:${job.title}` },
       }
     }
 
@@ -94,11 +94,17 @@ export function createDefaultExecuteStep({
     if (enableServerTools) {
       messages.push({
         role: 'system',
-        content: '你可以调用以下工具直接生成文件:create_pptx (PowerPoint)、create_docx (Word)、create_xlsx (Excel)。当用户的需求需要可下载的文档/表格/演示稿时,直接调用对应工具并把内容完整填好,不要把内容写成纯文本回答。如果只需要文字答案,正常回答即可。',
+        content: [
+          '你可以调用以下工具直接生成文件：create_pptx (PowerPoint)、create_docx (Word)、create_xlsx (Excel)。当用户需要可下载的文档/表格/演示稿时，直接调用对应工具并把内容完整填好，不要把内容写成纯文本回答。只需文字答案时正常回答即可。',
+          '代码理解：遇到“这个函数/类在哪”先调 find_symbol；需要全文搜索用 grep_code；看依赖用 list_imports。不要盲用 bash_exec("grep -r ...")。',
+          '代码编辑：多文件/不可分割的改动优先用 apply_patch（原子，任一失败自动回滚）。不确定时先传 dry_run=true 预览。',
+          '反思节奏：多步任务先 manage_todos 拆分；每完成一个关键动作后调一次 reflect 复盘（事实/下一步/confidence）。',
+          '遇阶求助：出现歧义、缺信息、需授权、有风险决策时，调 request_clarification 问用户而不是编造。问具体可决策的细节，能给选项就给。',
+        ].join('\n'),
       })
     }
     const promptSuffix = step.kind === 'batch_item'
-      ? `\n\n这是批量任务中的第 ${step.input?.index || 1} / ${step.input?.total || 1} 项，请只完成这一项。`
+      ? `\n\n这是批量任务中的第 ${step.input?.index || 1} / ${step.input?.total || 1} 项,请只完成这一项。`
       : ''
     const finalPrompt = `${userPrompt || job.prompt}${promptSuffix}`
     messages.push({ role: 'user', content: finalPrompt })
@@ -190,7 +196,7 @@ export class JobRuntime {
     for (const [listener, listenerUserId] of this.listeners) {
       try {
         // 没指定 userId 的订阅者收所有事件(测试/内部用);
-        // 指定了的只收自己 job 的事件——事件没归属(eventOwner=null)兜底也只发给同 userId,
+        // 指定了的只收自己 job 的事件--事件没归属(eventOwner=null)兜底也只发给同 userId,
         // 防止历史无主 job 被错误推送。
         if (listenerUserId == null) {
           listener(event)
@@ -352,7 +358,7 @@ export class JobRuntime {
       jobId,
       type: 'step_completed',
       stepId,
-      message: `步骤已完成，${evidence.length} 项验证`,
+      message: `步骤已完成,${evidence.length} 项验证`,
       at: Date.now(),
     })
     // 检查是否所有步骤完成
@@ -364,7 +370,7 @@ export class JobRuntime {
   }
 
   /**
-   * 创建结构化计划（带风险/目标/验收标准）。
+   * 创建结构化计划(带风险/目标/验收标准)。
    * 借鉴 Reasonix submit_plan 设计。
    */
   createPlan({ userId, title, prompt, steps } = {}) {
@@ -427,7 +433,7 @@ export class JobRuntime {
       jobId,
       stepId,
       type: 'step_retried',
-      message: `已重试步骤：${step.title}`,
+      message: `已重试步骤:${step.title}`,
     })
     this.emit(event)
     return this.getJob(jobId, { userId })
@@ -495,13 +501,13 @@ export class JobRuntime {
       jobId: job.id,
       stepId: nextStep.id,
       type: 'step_started',
-      message: `开始：${nextStep.title}`,
+      message: `开始:${nextStep.title}`,
     }))
 
     const controller = new AbortController()
     this.activeControllers.set(job.id, controller)
     try {
-      // 直接传 freshJob(已经包含 userId),不再做权限过滤——
+      // 直接传 freshJob(已经包含 userId),不再做权限过滤--
       // tick 是服务端内部调度,不是面向用户的查询。
       const freshJob = getJobWithChildren(job.id)
       const result = await this.executeStep({
@@ -523,7 +529,7 @@ export class JobRuntime {
         jobId: job.id,
         stepId: nextStep.id,
         type: 'step_completed',
-        message: `完成：${nextStep.title}`,
+        message: `完成:${nextStep.title}`,
       }))
     } catch (error) {
       const latestJob = getJobWithChildren(job.id)

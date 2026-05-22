@@ -121,6 +121,19 @@ const TOOL_ARG_SCHEMAS = {
     patch: z.string().min(1, 'patch 不能为空').max(2 * 1024 * 1024, 'patch 过大'),
     dry_run: z.boolean().optional(),
   }),
+  reflect: z.object({
+    observation: z.string().min(1, 'observation 不能为空').max(4000),
+    what_worked: z.string().max(600).optional().nullable(),
+    what_didnt: z.string().max(600).optional().nullable(),
+    next_step: z.string().min(1, 'next_step 不能为空').max(600),
+    confidence: z.enum(['low', 'medium', 'high']).optional(),
+  }),
+  request_clarification: z.object({
+    question: z.string().min(1, 'question 不能为空').max(4000),
+    why: z.string().max(600).optional().nullable(),
+    blocker_kind: z.enum(['missing_info', 'ambiguous_intent', 'permission', 'risk_decision', 'other']).optional(),
+    options: z.array(z.string().max(200)).max(8).optional().nullable(),
+  }),
 }
 
 const TOOL_SPECS = {
@@ -684,6 +697,14 @@ async function execApplyPatch(args) {
   const data = await callWorkspaceJson('/api/tools/code/apply-patch', args)
   return { content: JSON.stringify(data) }
 }
+async function execReflect(args) {
+  const data = await callWorkspaceJson('/api/tools/agent/reflect', args)
+  return { content: JSON.stringify(data) }
+}
+async function execRequestClarification(args) {
+  const data = await callWorkspaceJson('/api/tools/agent/clarify', args)
+  return { content: JSON.stringify(data) }
+}
 
 async function execCreatePptx(args) {
   const title = String(args.title).trim().slice(0, 200) || 'presentation'
@@ -919,6 +940,8 @@ const EXECUTORS = {
   find_symbol: execFindSymbol,
   list_imports: execListImports,
   apply_patch: execApplyPatch,
+  reflect: execReflect,
+  request_clarification: execRequestClarification,
 }
 
 /**

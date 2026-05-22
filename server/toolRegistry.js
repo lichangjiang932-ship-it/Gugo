@@ -378,6 +378,43 @@ const BUILTIN_SPECS = {
       },
     },
   },
+  reflect: {
+    type: 'function',
+    function: {
+      name: 'reflect',
+      description:
+        '★ 多步任务中每完成一个关键动作后调一次,简短复盘(只输出反思,无副作用).observation=实际发生的,next_step=下一步(或 "done").',
+      parameters: {
+        type: 'object',
+        properties: {
+          observation: { type: 'string' },
+          what_worked: { type: 'string' },
+          what_didnt: { type: 'string' },
+          next_step: { type: 'string' },
+          confidence: { type: 'string', enum: ['low', 'medium', 'high'] },
+        },
+        required: ['observation', 'next_step'],
+      },
+    },
+  },
+  request_clarification: {
+    type: 'function',
+    function: {
+      name: 'request_clarification',
+      description:
+        '★ 遇到歧义/缺信息/需授权/风险决策时,调它问用户而不是编造.调用后当轮工具循环会停下来等用户回复.options 给 2-5 个选项可加速回复.',
+      parameters: {
+        type: 'object',
+        properties: {
+          question: { type: 'string' },
+          why: { type: 'string' },
+          blocker_kind: { type: 'string', enum: ['missing_info', 'ambiguous_intent', 'permission', 'risk_decision', 'other'] },
+          options: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['question'],
+      },
+    },
+  },
 }
 
 const READ_ONLY_MODE_TOOLS = new Set([
@@ -389,6 +426,8 @@ const READ_ONLY_MODE_TOOLS = new Set([
   'list_imports',
   'git_status',
   'git_diff',
+  'reflect',
+  'request_clarification',
   'Agent',
 ])
 const CODE_MODE_TOOLS = [
@@ -403,6 +442,8 @@ const CODE_MODE_TOOLS = [
   'git_status',
   'git_diff',
   'run_project_check',
+  'reflect',
+  'request_clarification',
   'Agent',
 ]
 

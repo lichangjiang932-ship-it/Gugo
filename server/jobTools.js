@@ -14,6 +14,7 @@ import { FS_SHELL_TOOL_SPECS, dispatchFsShellTool } from './fsShellTools.js'
 import { GIT_TOOL_SPECS, dispatchGitTool } from './gitWorkbench.js'
 import { CODE_SEARCH_TOOL_SPECS, dispatchCodeSearchTool } from './utils/codeSearch.js'
 import { APPLY_PATCH_TOOL_SPECS, dispatchApplyPatchTool } from './utils/applyPatch.js'
+import { AGENTIC_TOOL_SPECS, dispatchAgenticTool, isLoopPauseResult } from './utils/agenticTools.js'
 import crypto from 'node:crypto'
 
 function newId(prefix) {
@@ -114,6 +115,7 @@ export const SERVER_TOOL_SPECS = [
   ...GIT_TOOL_SPECS,
   ...CODE_SEARCH_TOOL_SPECS,
   ...APPLY_PATCH_TOOL_SPECS,
+  ...AGENTIC_TOOL_SPECS,
 ]
 
 /**
@@ -185,6 +187,13 @@ async function executeServerTool({ name, args, job, step }) {
       return { ok: false, error: err?.message || String(err) }
     }
   }
+  if (['reflect', 'request_clarification'].includes(name)) {
+    try {
+      return await dispatchAgenticTool(name, args || {})
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) }
+    }
+  }
   if (['git_status', 'git_diff', 'run_project_check'].includes(name)) {
     try {
       return await dispatchGitTool(name, args || {})
@@ -248,6 +257,7 @@ export async function runToolsLoop({ job, step, messages, runModel, signal, maxI
       })),
     })
 
+    let pausedByClarification = null
     for (const tc of toolCalls) {
       const name = tc.function?.name || tc.name
       const args = safeParseArgs(tc.function?.arguments || tc.arguments)
@@ -255,6 +265,7 @@ export async function runToolsLoop({ job, step, messages, runModel, signal, maxI
       try {
         result = await executeTool({ name, args, job, step })
         if (result?.artifactId) artifactIds.push(result.artifactId)
+        if (isLoopPauseResult(result)) pausedByClarification = result.clarification
       } catch (err) {
         result = { ok: false, error: err?.message || String(err) }
       }
@@ -264,6 +275,16 @@ export async function runToolsLoop({ job, step, messages, runModel, signal, maxI
         name,
         content: clipToolOutput(result),
       })
+    }
+    if (pausedByClarification) {
+      // ★ M3: 模型主动调 request_clarification → 当轮 loop 中断交回用户
+      return {
+        text: finalText,
+        artifactIds,
+        iterations: iter + 1,
+        paused: true,
+        clarification: pausedByClarification,
+      }
     }
   }
 
