@@ -22,6 +22,13 @@ import { exportSession } from '../../lib/sessionExport.js'
 import { compressImageDataUrl } from '../../lib/imageCompress.js'
 import { extractPdfText } from '../../lib/pdfExtract.js'
 import { fetchCompactionArchive } from '../../lib/compactionClient.js'
+import {
+  artifactTypeForSkill,
+  buildAssistantToolCallsMessage,
+  buildChatFailureMessage,
+  filterToolNamesForSkill,
+  shouldStopAfterArtifactTool,
+} from '../../lib/chatFlowGuards.js'
 
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024
 const MAX_RAW_IMAGE_BYTES = 16 * 1024 * 1024
@@ -266,7 +273,18 @@ export default function ChatSplit() {
           payload: { id: taskId, name: taskName, detail: content, status: TASK_STATUS.RUNNING, step: 1, stepLabel: '调用模型中', perms: skill?.perms || [] },
         })
 
-        dispatch({ type: 'RECEIVE_MESSAGE', payload: '' })
+        const initialArtifactType = artifactTypeForSkill(skillId)
+        dispatch({
+          type: 'RECEIVE_MESSAGE',
+          payload: {
+            content: '',
+            meta: {
+              skillId,
+              artifactType: initialArtifactType,
+              artifactTitle: initialArtifactType ? taskName : undefined,
+            },
+          },
+        })
 
         const modelName = selectedModel || resolveInitialModel(modelOptions)
         let latency = 0
@@ -291,7 +309,10 @@ export default function ChatSplit() {
         try {
           // 工具调用循环:每轮 stream 模型 → 收 tool_calls → 本地执行 → messages 追加 tool 结果 → 再 stream
           // 上限 5 轮防止失控;无 tool_calls 即文本回复完成,直接退出
-          const enabledToolNames = resolveToolsForMode(state.toolsConfig || {}, agentMode)
+          const enabledToolNames = filterToolNamesForSkill(
+            resolveToolsForMode(state.toolsConfig || {}, agentMode),
+            skillId,
+          )
           // Feature 1: 拉服务端拼上 MCP / skill 动态工具,fallback 到纯本地 builtin
           let tools
           try {
@@ -308,6 +329,7 @@ export default function ChatSplit() {
           for (let round = 0; round < toolMaxRounds; round += 1) {
             let pendingToolCalls = null
             let sawTextThisRound = false
+            let stopAfterArtifact = false
             for await (const event of callModelThroughProxyStream({
               messages,
               modelName,
@@ -338,15 +360,7 @@ export default function ChatSplit() {
             if (!pendingToolCalls || pendingToolCalls.length === 0) break
 
             // 1) 把模型本轮发出的 assistant tool_calls 落入 messages(给上游做上下文)
-            messages.push({
-              role: 'assistant',
-              content: '',
-              tool_calls: pendingToolCalls.map((c) => ({
-                id: c.id,
-                type: 'function',
-                function: { name: c.name, arguments: c.arguments || '{}' },
-              })),
-            })
+            messages.push(buildAssistantToolCallsMessage(pendingToolCalls))
 
             // 2) 在 UI 上为每个 call 先展示 running 状态,然后执行,然后回填结果
             for (const call of pendingToolCalls) {
@@ -366,6 +380,7 @@ export default function ChatSplit() {
               // G1: create_* 工具会在 result.artifact 里挂 { type, title, source }
               if (result.artifact && result.artifact.type && result.artifact.source) {
                 toolArtifact = result.artifact
+                if (shouldStopAfterArtifactTool(result.artifact)) stopAfterArtifact = true
               }
               // Feature 8: manage_todos 返回 todos 字段 → 派发 SET_TODOS 让 UI 同步
               if (Array.isArray(result.todos)) {
@@ -417,6 +432,7 @@ export default function ChatSplit() {
                 content: toolContent,
               })
             }
+            if (stopAfterArtifact) break
             // 进入下一轮 stream,模型基于 tool 结果继续生成
           }
         } catch (err) {
@@ -433,12 +449,7 @@ export default function ChatSplit() {
         if (!explicitAttachments) setAttachments([])
         // G1: 工具产出的 artifact 优先于 slash skill 的 artifactType,
         //     因为它是模型显式选择的产物,且自带 source(模型给的 markdown).
-        let artifactType =
-          skillId === 'ppt' ? 'pptx' :
-          skillId === 'htmlppt' ? 'html' :
-          skillId === 'doc' ? 'docx' :
-          skillId === 'excel' ? 'xlsx' :
-          undefined
+        let artifactType = artifactTypeForSkill(skillId)
         let artifactTitle = artifactType ? taskName : undefined
         let artifactSource
         let artifactDescription
@@ -494,7 +505,7 @@ export default function ChatSplit() {
         }
         if (import.meta.env.DEV) console.error('Model call failed:', err)
         setLastFailedPrompt(content)
-        dispatch({ type: 'APPEND_TO_LAST_MESSAGE', payload: `\n\n模型调用失败：${err.message}\n\n请联系管理员检查后端 .env 中的 MODEL_BASE_URL、MODEL_NAME 和 MODEL_API_KEY。` })
+        dispatch({ type: 'APPEND_TO_LAST_MESSAGE', payload: buildChatFailureMessage(err.message) })
         dispatch({ type: 'ADD_HISTORY', payload: { name: taskName, skill: skill?.name || '通用对话', status: HISTORY_STATUS.FAILED, detail: content.length > 60 ? `${content.slice(0, 60)}...` : content, state: `失败: ${err.message}`.slice(0, 80), date: Date.now() } })
         // ★ FIX: 失败时把同一个任务标记 failed (而非再 ADD 一条新的"running 15%"),5 秒后移除
         dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: TASK_STATUS.FAILED, stepLabel: '调用失败' } } })

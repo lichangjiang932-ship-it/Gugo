@@ -47,6 +47,30 @@ test('builds an OpenAI compatible request with auth and model options', () => {
   })
 })
 
+test('normalizes assistant tool-call messages to null content before upstream request', () => {
+  const request = buildOpenAICompatibleRequest({
+    config: {
+      baseUrl: 'https://api.example.com/v1',
+      apiKey: 'sk-test',
+      modelName: 'gpt-test',
+    },
+    messages: [
+      { role: 'user', content: 'make deck' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [
+          { id: 'call_1', type: 'function', function: { name: 'create_pptx', arguments: '{}' } },
+        ],
+      },
+      { role: 'tool', tool_call_id: 'call_1', name: 'create_pptx', content: '{"ok":true}' },
+    ],
+  })
+
+  const parsed = JSON.parse(request.init.body)
+  assert.equal(parsed.messages[1].content, null)
+})
+
 test('loads model config from backend environment and reports missing fields', () => {
   const configured = loadModelConfig({
     MODEL_BASE_URL: 'https://api.example.com/v1',
@@ -183,4 +207,8 @@ test('formats proxy errors into user-readable Chinese messages', () => {
   assert.equal(formatProxyError({ status: 401 }), 'API Key 无效或没有权限。')
   assert.equal(formatProxyError({ status: 404 }), '模型或端点不存在，请检查 Base URL 和模型名称。')
   assert.equal(formatProxyError({ code: 'ECONNREFUSED' }), '端点不可达，请确认本地模型服务或代理已启动。')
+  assert.equal(
+    formatProxyError({ status: 400, message: 'invalid request: tool role is unsupported' }),
+    '请求参数无效：请检查消息内容、工具调用上下文或当前模型的 OpenAI 兼容性。'
+  )
 })

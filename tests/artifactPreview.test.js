@@ -66,6 +66,18 @@ test('treats htmlppt as an explicit html artifact instead of inferred content', 
   assert.equal(preview.previewable, true)
 })
 
+test('html artifacts ignore diagnostic text appended after the closing html tag', () => {
+  const preview = buildArtifactPreview({
+    content: '<!doctype html><html><head><title>Deck</title></head><body><section class="slide">One</section></body></html>\n\n模型调用失败：请求参数无效',
+    meta: { skillId: 'htmlppt', artifactType: 'html' },
+  })
+
+  assert.equal(preview.type, 'html')
+  assert.equal(preview.title, 'Deck')
+  assert.equal(preview.html.trim().endsWith('</html>'), true)
+  assert.doesNotMatch(preview.html, /模型调用失败/)
+})
+
 test('enhances html slide decks with platform navigation fallback', () => {
   const html = buildHtmlDocument(`
     <section class="slide active"><h1>封面</h1></section>

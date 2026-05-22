@@ -92,6 +92,8 @@ export function extractHtmlSource(content = '') {
   const text = String(content || '')
   const fence = text.match(/```html\s*\n([\s\S]*?)```/i)
   if (fence) return fence[1].trim()
+  const fullDocument = text.match(/(?:<!doctype\s+html[^>]*>\s*)?<html[\s\S]*?<\/html>/i)
+  if (fullDocument) return fullDocument[0].trim()
   return text.trim()
 }
 

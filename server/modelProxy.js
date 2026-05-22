@@ -238,6 +238,20 @@ export function normalizeOpenAICompatibleUrl(rawUrl = '') {
   return `${trimmed}/chat/completions`
 }
 
+function normalizeMessagesForOpenAI(messages = []) {
+  return messages.map((message) => {
+    if (
+      message?.role === 'assistant' &&
+      Array.isArray(message.tool_calls) &&
+      message.tool_calls.length > 0 &&
+      message.content === ''
+    ) {
+      return { ...message, content: null }
+    }
+    return message
+  })
+}
+
 export function buildOpenAICompatibleRequest({ config, messages, stream = false, tools, toolChoice }) {
   const model = config?.modelName
   if (!model) throw new Error('请输入模型名称。')
@@ -250,7 +264,7 @@ export function buildOpenAICompatibleRequest({ config, messages, stream = false,
 
   const body = {
     model,
-    messages,
+    messages: normalizeMessagesForOpenAI(messages),
     temperature: config?.temperature ?? 0.7,
     max_tokens: config?.maxTokens || 4096,
     stream,
@@ -385,7 +399,7 @@ export function formatProxyError(error) {
     if (/rate.?limit/i.test(msg)) {
       return 'API 调用频率超限，请稍后重试。'
     }
-    return '请求参数无效，请检查 Base URL、模型名称和消息内容。'
+    return '请求参数无效：请检查消息内容、工具调用上下文或当前模型的 OpenAI 兼容性。'
   }
   if (error?.status === 401 || error?.status === 403) return 'API Key 无效或没有权限。'
   if (error?.status === 404) return '模型或端点不存在，请检查 Base URL 和模型名称。'
