@@ -162,7 +162,7 @@ async function executeServerTool({ name, args, job, step }) {
   // 任意 fsShellTools 抛错(包括 env 未启用 / 路径越界)都返回 {ok:false,error}.
   if (['read_file', 'write_file', 'edit_file', 'bash_exec'].includes(name)) {
     try {
-      return await dispatchFsShellTool(name, args || {})
+      return await dispatchFsShellTool(name, args || {}, { userId: job?.userId || null })
     } catch (err) {
       return { ok: false, error: err?.message || String(err) }
     }

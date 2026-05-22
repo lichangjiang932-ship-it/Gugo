@@ -135,7 +135,7 @@ export const SUBAGENT_TYPES = {
  * 在子代理沙箱中执行一个工具调用。
  * 结果只返回给子代理自己的上下文，不会写入父 session 或 DB。
  */
-async function executeSubagentTool(toolName, args) {
+async function executeSubagentTool(toolName, args, { userId = null } = {}) {
   switch (toolName) {
     case 'web_search':
       return searchDuckDuckGo({ query: args.query, maxResults: args.maxResults })
@@ -144,7 +144,7 @@ async function executeSubagentTool(toolName, args) {
     case 'read_file':
     case 'write_file':
     case 'edit_file':
-      return dispatchFsShellTool(toolName, args)
+      return dispatchFsShellTool(toolName, args, { userId })
     default:
       return { ok: false, error: `unknown subagent tool: ${toolName}` }
   }
@@ -163,7 +163,7 @@ async function executeSubagentTool(toolName, args) {
  * @param {number} [options.maxIters=SUBAGENT_MAX_ITERS]
  * @returns {Promise<string>} 最终文本回答
  */
-async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS }) {
+async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS, userId = null }) {
   let currentMessages = [...messages]
 
   for (let iter = 0; iter < maxIters; iter++) {
@@ -192,7 +192,7 @@ async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_
     for (const call of toolCalls) {
       let result
       try {
-        result = await executeSubagentTool(call.name, call.arguments)
+        result = await executeSubagentTool(call.name, call.arguments, { userId })
       } catch (err) {
         result = { ok: false, error: err?.message || String(err) }
       }
@@ -313,7 +313,7 @@ export async function runSubagent({
     ]
 
     const resultText = tools?.length
-      ? await subagentToolsLoop({ messages, tools, signal })
+      ? await subagentToolsLoop({ messages, tools, signal, userId })
       : await callBackgroundModel({ modelName, signal, messages })
 
     trace.push({ type: 'done', at: now() })

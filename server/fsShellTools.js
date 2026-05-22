@@ -17,6 +17,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
+import { sanitizeChildEnv } from './utils/sensitiveEnv.js'
+import { writeToolAudit } from './utils/audit.js'
+import { checkBashCommandDanger } from './utils/bashGuard.js'
 import { authenticateRequest } from './middleware.js'
 import { readJson, sendJson } from './utils.js'
 
@@ -170,12 +173,19 @@ export async function editFileTool({
 
 /* ── bash_exec ─────────────────────────────────────────────── */
 
-export async function bashExecTool({ command, cwd: rawCwd, timeout_ms }) {
+export async function bashExecTool({ command, cwd: rawCwd, timeout_ms, userId = null }) {
   if (!isShellEnabled()) {
     throw badReq('WORKSPACE_SHELL_ENABLED=1 未启用,无法执行 shell 命令', 403)
   }
   if (typeof command !== 'string' || !command.trim()) throw badReq('command 必填')
   if (command.length > 10_000) throw badReq('command 过长', 413)
+
+  // ★ P0:危险命令拦截(rm -rf / / dd /dev / curl|sh / 私钥外泄等)
+  const danger = checkBashCommandDanger(command)
+  if (danger) {
+    if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: { command }, status: 'denied' })
+    throw badReq(`命令被安全策略拦截:${danger.reason}`, 403)
+  }
 
   const root = getWorkspaceRoot()
   const cwd = rawCwd ? resolveInWorkspace(rawCwd) : root
@@ -189,6 +199,7 @@ export async function bashExecTool({ command, cwd: rawCwd, timeout_ms }) {
   const isWin = process.platform === 'win32'
   const shellPath = isWin ? (process.env.COMSPEC || 'cmd.exe') : '/bin/sh'
   const shellArgs = isWin ? ['/d', '/s', '/c', command] : ['-c', command]
+  const startedAt = Date.now()
 
   return new Promise((resolve) => {
     execFile(
@@ -199,17 +210,15 @@ export async function bashExecTool({ command, cwd: rawCwd, timeout_ms }) {
         timeout,
         maxBuffer: SHELL_MAX_OUTPUT,
         windowsHide: true,
-        // 屏蔽继承父进程的敏感 env
-        env: {
-          ...process.env,
-          MODEL_API_KEY: '',
-          MAIL_PASSWORD: '',
-          OPENAI_API_KEY: '',
-        },
+        // ★ P0:统一从 sanitizeChildEnv 取,自动覆盖所有 *_API_KEY/*_TOKEN/*_SECRET/*_PASSWORD
+        env: sanitizeChildEnv(),
       },
       (err, stdout, stderr) => {
+        const durationMs = Date.now() - startedAt
+        const auditArgs = { command, cwd: toRelative(cwd) }
         if (err) {
           if (err.killed) {
+            if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'timeout', durationMs })
             resolve({
               ok: false,
               timedOut: true,
@@ -221,6 +230,7 @@ export async function bashExecTool({ command, cwd: rawCwd, timeout_ms }) {
             return
           }
           if (err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+            if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'truncated', durationMs })
             resolve({
               ok: false,
               truncated: true,
@@ -231,6 +241,7 @@ export async function bashExecTool({ command, cwd: rawCwd, timeout_ms }) {
             })
             return
           }
+          if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'error', durationMs })
           resolve({
             ok: false,
             exitCode: typeof err.code === 'number' ? err.code : -1,
@@ -241,6 +252,7 @@ export async function bashExecTool({ command, cwd: rawCwd, timeout_ms }) {
           })
           return
         }
+        if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'ok', durationMs })
         resolve({
           ok: true,
           exitCode: 0,
@@ -268,11 +280,13 @@ export async function handleFsShellRequest(req, res) {
   const url = req.url || ''
   try {
     const body = await readJson(req)
+    // ★ P0:透传 userId 让 audit 能记是谁干的
+    const bodyWithUser = { ...body, userId: req.userId }
     let result
-    if (url.startsWith('/api/tools/fs/read')) result = await readFileTool(body)
-    else if (url.startsWith('/api/tools/fs/write')) result = await writeFileTool(body)
-    else if (url.startsWith('/api/tools/fs/edit')) result = await editFileTool(body)
-    else if (url.startsWith('/api/tools/shell/exec')) result = await bashExecTool(body)
+    if (url.startsWith('/api/tools/fs/read')) result = await readFileTool(bodyWithUser)
+    else if (url.startsWith('/api/tools/fs/write')) result = await writeFileTool(bodyWithUser)
+    else if (url.startsWith('/api/tools/fs/edit')) result = await editFileTool(bodyWithUser)
+    else if (url.startsWith('/api/tools/shell/exec')) result = await bashExecTool(bodyWithUser)
     else { sendJson(res, 404, { ok: false, error: '未知端点' }); return }
     sendJson(res, 200, result)
   } catch (err) {
@@ -282,12 +296,14 @@ export async function handleFsShellRequest(req, res) {
 }
 
 // 给 jobTools/jobRuntime 共用:统一 dispatcher,直接函数调用,不经 HTTP.
-export async function dispatchFsShellTool(name, args) {
+// userId 可选(内部 job/subagent 传进来),有则落 audit
+export async function dispatchFsShellTool(name, args, { userId = null } = {}) {
+  const argsWithUser = userId ? { ...args, userId } : args
   switch (name) {
-    case 'read_file': return readFileTool(args)
-    case 'write_file': return writeFileTool(args)
-    case 'edit_file': return editFileTool(args)
-    case 'bash_exec': return bashExecTool(args)
+    case 'read_file': return readFileTool(argsWithUser)
+    case 'write_file': return writeFileTool(argsWithUser)
+    case 'edit_file': return editFileTool(argsWithUser)
+    case 'bash_exec': return bashExecTool(argsWithUser)
     default: throw new Error(`unknown fsShell tool: ${name}`)
   }
 }

@@ -18,6 +18,7 @@
 import { execFile } from 'node:child_process'
 import { getDb } from './db.js'
 import { randomUUID } from 'node:crypto'
+import { writeToolAudit } from './utils/audit.js'
 
 const ALLOWED_EVENTS = ['user_prompt_submit', 'pre_tool_use', 'post_tool_use', 'stop']
 
@@ -182,13 +183,16 @@ async function executeOne(hook, payload) {
     outcome = { allow: true, error: err?.message || String(err) }
   }
   const duration = Date.now() - start
-  // 审计日志
-  try {
-    const db = getDb()
-    db.prepare(
-      'INSERT INTO tool_audit (user_id, origin, tool_name, server_id, args_hash, status, duration_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    ).run(hook.userId, 'hook', `${hook.event}:${payload.tool || '-'}`, hook.id, null, outcome?.allow === false ? 'denied' : 'ok', duration, Date.now())
-  } catch { /* audit best-effort */ }
+  // ★ P0:走统一 audit 写入器(与 fsShell/mcp 共享同一条路径)
+  writeToolAudit({
+    userId: hook.userId,
+    origin: 'hook',
+    toolName: `${hook.event}:${payload.tool || '-'}`,
+    serverId: hook.id,
+    args: payload,
+    status: outcome?.allow === false ? 'denied' : 'ok',
+    durationMs: duration,
+  })
   return outcome
 }
 

@@ -151,7 +151,7 @@ test('legacy sqlite schema upgrades before creating user-scoped indexes', () => 
     assert.equal(result.status, 0, result.stderr || result.stdout)
     const status = JSON.parse(result.stdout.trim())
     assert.equal(status.ok, true)
-    assert.equal(status.schemaVersion, '3')
+    assert.equal(status.schemaVersion, '4')
     assert.ok(status.tables.includes('mcp_servers'))
     assert.ok(status.tables.includes('tool_audit'))
     assert.ok(status.tables.includes('subagent_runs'))

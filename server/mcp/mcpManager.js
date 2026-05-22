@@ -33,7 +33,7 @@ import {
   registerDynamicTool,
   unregisterByOrigin,
 } from '../toolRegistry.js'
-import { getDb } from '../db.js'
+import { writeToolAudit } from '../utils/audit.js'
 
 const DEFAULT_ALLOWED_COMMANDS = ['npx', 'node', 'uvx', 'python', 'python3']
 
@@ -217,11 +217,16 @@ export async function callTool({ userId, fullToolName, args }) {
     status = 'error'
     throw err
   } finally {
-    try {
-      getDb().prepare(
-        'INSERT INTO tool_audit (user_id, origin, tool_name, server_id, args_hash, status, duration_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-      ).run(userId, 'mcp', fullToolName, server.id, null, status, Date.now() - started, Date.now())
-    } catch { /* audit best-effort */ }
+    // ★ P0:走统一 audit 写入器
+    writeToolAudit({
+      userId,
+      origin: 'mcp',
+      toolName: fullToolName,
+      serverId: server.id,
+      args,
+      status,
+      durationMs: Date.now() - started,
+    })
   }
   // tools/call 结果通常是 { content: [...], isError? }
   return result
