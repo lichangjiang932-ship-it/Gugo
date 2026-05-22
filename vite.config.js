@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import { getRuntimeEnv, modelProxyPlugin } from './server/modelProxy.js'
+import { getRuntimeEnv, modelProxyPlugin, handleSystemDiagnosticsRequest } from './server/modelProxy.js'
 import { handleAuthBillingRequest } from './server/billingAuth.js'
 import { toolProxyPlugin } from './server/toolProxy.js'
 import { healthCheck } from './server/appServer.js'
@@ -45,6 +45,10 @@ function fallbackApiPlugin() {
       server.middlewares.use((req, res, next) => {
         if (req.url === '/api/health') {
           healthCheck(req, res)
+          return
+        }
+        if (req.url?.startsWith('/api/system/diagnostics')) {
+          handleSystemDiagnosticsRequest(req, res)
           return
         }
         if (req.url?.startsWith('/api/jobs')) {
