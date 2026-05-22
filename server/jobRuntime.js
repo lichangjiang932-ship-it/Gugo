@@ -94,7 +94,20 @@ export function createDefaultExecuteStep({
     if (enableServerTools) {
       messages.push({
         role: 'system',
-        content: '你可以调用以下工具直接生成文件:create_pptx (PowerPoint)、create_docx (Word)、create_xlsx (Excel)。当用户的需求需要可下载的文档/表格/演示稿时,直接调用对应工具并把内容完整填好,不要把内容写成纯文本回答。如果只需要文字答案,正常回答即可。',
+        content: [
+          '你可以调用以下工具直接生成文件:create_pptx (PowerPoint)、create_docx (Word)、create_xlsx (Excel)。',
+          '当用户的需求需要可下载的文档/表格/演示稿时,直接调用对应工具并把内容完整填好,不要把内容写成纯文本回答。',
+          '如果只需要文字答案,正常回答即可。',
+          '',
+          '【高级 PPT 必守规则】(create_pptx 时强制)',
+          '1. 配色、版式、字体由系统控制,你只给文字 + 数据,不要在 bullet 里堆 emoji/装饰符号。',
+          '2. 标题 ≤ 14 字、结论式("X 增长 Y%" 而不是 "X 的情况");bullet ≤ 30 字、动词开头、含数字。',
+          '3. 单页 bullet ≤ 4 条,超出请拆页。短句胜过长段。',
+          '4. 必须用 layout 字段控制版式:cover(封面) / section(章节页) / kpi(数据卡 — 传 kpi 数组) / chart(图表 — 传 chart 字段) / statement(单点结论大字) / split(双栏对比) / process(横向流程) / quote(引用) / bullets(常规要点) / end(感谢页)。',
+          '5. 6 页以上的 deck 至少含 1 个 layout="section" 章节分隔 + 至少 1 个 kpi 或 chart。',
+          '6. cover 不要叫"封面";直接用真实主题作 title,系统会自动用 deck title 显示大字。',
+          '7. theme 字段按主题选: noir(默认/科技) / paper(文档/品牌) / ocean(金融/咨询) / forest(可持续/医疗)。',
+        ].join('\n'),
       })
     }
     const promptSuffix = step.kind === 'batch_item'
