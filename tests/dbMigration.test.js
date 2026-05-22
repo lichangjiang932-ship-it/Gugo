@@ -6,7 +6,7 @@ import os from 'node:os'
 import { spawnSync } from 'node:child_process'
 import Database from 'better-sqlite3'
 
-import { checkRateLimit, getDb, migrateFromJson } from '../server/db.js'
+import { DB_SCHEMA_VERSION, checkRateLimit, getDb, migrateFromJson } from '../server/db.js'
 
 // 每个测试进程使用独立数据库目录，避免并行测试冲突
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-tests', String(process.pid))
@@ -151,7 +151,7 @@ test('legacy sqlite schema upgrades before creating user-scoped indexes', () => 
     assert.equal(result.status, 0, result.stderr || result.stdout)
     const status = JSON.parse(result.stdout.trim())
     assert.equal(status.ok, true)
-    assert.equal(status.schemaVersion, '3')
+    assert.equal(status.schemaVersion, String(DB_SCHEMA_VERSION))
     assert.ok(status.tables.includes('mcp_servers'))
     assert.ok(status.tables.includes('tool_audit'))
     assert.ok(status.tables.includes('subagent_runs'))

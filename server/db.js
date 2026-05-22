@@ -2,6 +2,8 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 
+export const DB_SCHEMA_VERSION = 4
+
 const DEFAULT_DATA_DIR = path.join(process.cwd(), 'server-data')
 
 function getDataDir() {
@@ -54,7 +56,7 @@ function runMigrations(db) {
   const version = getSchemaVersionInternal(db)
   if (version < 2) migrateToV2(db)
   if (getSchemaVersionInternal(db) < 3) migrateToV3(db)
-  if (getSchemaVersionInternal(db) < 4) migrateToV4(db)
+  if (getSchemaVersionInternal(db) < DB_SCHEMA_VERSION) migrateToV4(db)
 }
 
 /**
@@ -254,7 +256,7 @@ function migrateToV4(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_observations_entity ON observations(entity_id);
   `)
-  setSchemaVersionInternal(db, 4)
+  setSchemaVersionInternal(db, DB_SCHEMA_VERSION)
 }
 
 function initSchema(db) {
