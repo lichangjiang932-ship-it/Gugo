@@ -57,6 +57,8 @@ export function runProcessWithGroup({
 
     const collect = (stream, which) => {
       stream?.setEncoding('utf8')
+      // ★ Lens-3 fix: child 还在写时 destroy 会触发 EPIPE,静默吃掉避免日志噪
+      stream?.on('error', () => { /* ignore EPIPE after destroy */ })
       stream?.on('data', (chunk) => {
         if (truncated) return
         const total = stdoutBuf.length + stderrBuf.length
@@ -96,11 +98,12 @@ export function runProcessWithGroup({
       settled = true
       if (killTimer) clearTimeout(killTimer)
       if (sigkillTimer) clearTimeout(sigkillTimer)
-      // 兜底:即便正常退出也再 kill 一次进程组,清掉 detached 留下的孙子
-      // (没有进程会报错,捕获忽略)
-      if (!isWin && child.pid != null && !timedOut) {
-        try { process.kill(-child.pid, 'SIGTERM') } catch { /* noop */ }
-      }
+      // ★ Lens-2 fix: 不再无条件给已退出 child 的 pgid 再发 SIGTERM
+      // 原因:child.pid 在 close 后可能被 OS 复用,主动 kill(-pid) 会误杀别人。
+      // 只在 timedOut 路径杀进程组(那时仍然 alive,killTree 内已处理)。
+      // 孤儿孙进程的清理由 timedOut 分支负责,正常退出场景假定 child 自己已带走孙
+      // (POSIX 下 detached + setsid 不会自动带,但 detached process 退出后 init 收;
+      //  这是 trade-off:可控误杀风险 vs. 罕见孤儿。选可控。)
       resolve({
         stdout: stdoutBuf,
         stderr: stderrBuf,

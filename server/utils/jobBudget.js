@@ -17,6 +17,21 @@
 const DEFAULT_MAX_CALLS = 80
 const DEFAULT_MAX_WALL_MS = 10 * 60 * 1000
 
+// ★ Lens-2:用 WeakMap 而不是 job.__budget,模型/工具碰不到、不能 delete 绕过
+const BUDGET_BY_JOB = new WeakMap()
+
+export function attachJobBudget(job, opts) {
+  if (!job || typeof job !== 'object') return null
+  let b = BUDGET_BY_JOB.get(job)
+  if (!b) { b = createJobBudget(opts); BUDGET_BY_JOB.set(job, b) }
+  return b
+}
+
+export function getJobBudget(job) {
+  if (!job || typeof job !== 'object') return null
+  return BUDGET_BY_JOB.get(job) || null
+}
+
 export function createJobBudget({
   maxTotalCalls = DEFAULT_MAX_CALLS,
   maxWallMs = DEFAULT_MAX_WALL_MS,

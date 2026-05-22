@@ -80,7 +80,7 @@ test('runToolsLoop: reflect 不中断,继续下一轮', async () => {
 })
 
 test('runToolsLoop: budgetExceeded 触发停止', async () => {
-  const { createJobBudget } = await import('../server/utils/jobBudget.js')
+  const { attachJobBudget } = await import('../server/utils/jobBudget.js')
   let n = 0
   const fakeRunModel = async () => {
     n++
@@ -90,7 +90,8 @@ test('runToolsLoop: budgetExceeded 触发停止', async () => {
     }
   }
   const fakeExecute = async () => ({ ok: true })
-  const job = { id: 'j', userId: 'u', steps: [], __budget: createJobBudget({ maxTotalCalls: 3, maxWallMs: 60_000 }) }
+  const job = { id: 'j', userId: 'u', steps: [] }
+  attachJobBudget(job, { maxTotalCalls: 3, maxWallMs: 60_000 })
   const r = await runToolsLoop({
     job, step: { id: 's' },
     messages: [{ role: 'user', content: 'x' }],

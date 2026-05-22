@@ -15,7 +15,8 @@ import { GIT_TOOL_SPECS, dispatchGitTool } from './gitWorkbench.js'
 import { CODE_SEARCH_TOOL_SPECS, dispatchCodeSearchTool } from './utils/codeSearch.js'
 import { APPLY_PATCH_TOOL_SPECS, dispatchApplyPatchTool } from './utils/applyPatch.js'
 import { AGENTIC_TOOL_SPECS, dispatchAgenticTool, isLoopPauseResult } from './utils/agenticTools.js'
-import { createJobBudget } from './utils/jobBudget.js'
+import { attachJobBudget, getJobBudget, createJobBudget } from './utils/jobBudget.js'
+import { writeToolAudit } from './utils/audit.js'
 import crypto from 'node:crypto'
 
 function newId(prefix) {
@@ -234,12 +235,8 @@ export async function runToolsLoop({ job, step, messages, runModel, signal, maxI
   const artifactIds = []
   let finalText = ''
   let iter = 0
-  // ★ M3.5:任务级预算(跨多 step + 多子代理累计).
-  // 如果 job 上已挂(jobRuntime 创建时挂的) 就复用,否则此 loop 内创一个。
-  if (job && !job.__budget) {
-    job.__budget = createJobBudget()
-  }
-  const budget = job?.__budget || createJobBudget()
+  // ★ M3.5 + Lens-2 fix:任务级预算用 WeakMap 持有,模型/工具碰不到 job 的属性也无法绕过。
+  const budget = job ? (getJobBudget(job) || attachJobBudget(job)) : createJobBudget()
 
   for (; iter < maxIters; iter += 1) {
     const { content, toolCalls } = await runModel({
@@ -291,6 +288,17 @@ export async function runToolsLoop({ job, step, messages, runModel, signal, maxI
       })
     }
     if (budgetExceeded) {
+      // ★ Lens-4 fix:预算超限写 audit,审计员能追查 job 为什么没跑完
+      if (job?.userId) {
+        writeToolAudit({
+          userId: job.userId,
+          origin: 'budget',
+          toolName: 'job_budget',
+          args: { jobId: job.id, stepId: step?.id, snapshot: budget.snapshot?.() },
+          status: 'denied',
+          durationMs: 0,
+        })
+      }
       return {
         text: finalText,
         artifactIds,
