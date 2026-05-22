@@ -117,6 +117,10 @@ const TOOL_ARG_SCHEMAS = {
   list_imports: z.object({
     file: z.string().min(1, 'file 必填').max(500),
   }),
+  apply_patch: z.object({
+    patch: z.string().min(1, 'patch 不能为空').max(2 * 1024 * 1024, 'patch 过大'),
+    dry_run: z.boolean().optional(),
+  }),
 }
 
 const TOOL_SPECS = {
@@ -220,6 +224,21 @@ const TOOL_SPECS = {
           },
         },
         required: ['edits'],
+      },
+    },
+  },
+  apply_patch: {
+    type: 'function',
+    function: {
+      name: 'apply_patch',
+      description: 'Codex-style atomic multi-file patch. Supports Add/Update/Delete File with unified-diff hunks. Cheaper than edit_file for large changes, safer than write_file (refuses to overwrite existing). All-or-nothing: any failure rolls back. Set dry_run=true to preview diff without writing.',
+      parameters: {
+        type: 'object',
+        properties: {
+          patch: { type: 'string', description: 'Codex-format patch text starting with "*** Begin Patch" and ending with "*** End Patch".' },
+          dry_run: { type: 'boolean', description: 'Default false. true returns diff preview without writing.' },
+        },
+        required: ['patch'],
       },
     },
   },
@@ -661,6 +680,10 @@ async function execListImports(args) {
   const data = await callWorkspaceJson('/api/tools/code/list-imports', args)
   return { content: JSON.stringify(data) }
 }
+async function execApplyPatch(args) {
+  const data = await callWorkspaceJson('/api/tools/code/apply-patch', args)
+  return { content: JSON.stringify(data) }
+}
 
 async function execCreatePptx(args) {
   const title = String(args.title).trim().slice(0, 200) || 'presentation'
@@ -895,6 +918,7 @@ const EXECUTORS = {
   grep_code: execGrepCode,
   find_symbol: execFindSymbol,
   list_imports: execListImports,
+  apply_patch: execApplyPatch,
 }
 
 /**

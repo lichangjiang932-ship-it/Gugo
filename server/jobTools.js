@@ -13,6 +13,7 @@ import { createDocx, createPptx, createXlsx } from './artifactGen.js'
 import { FS_SHELL_TOOL_SPECS, dispatchFsShellTool } from './fsShellTools.js'
 import { GIT_TOOL_SPECS, dispatchGitTool } from './gitWorkbench.js'
 import { CODE_SEARCH_TOOL_SPECS, dispatchCodeSearchTool } from './utils/codeSearch.js'
+import { APPLY_PATCH_TOOL_SPECS, dispatchApplyPatchTool } from './utils/applyPatch.js'
 import crypto from 'node:crypto'
 
 function newId(prefix) {
@@ -112,6 +113,7 @@ export const SERVER_TOOL_SPECS = [
   ...FS_SHELL_TOOL_SPECS,
   ...GIT_TOOL_SPECS,
   ...CODE_SEARCH_TOOL_SPECS,
+  ...APPLY_PATCH_TOOL_SPECS,
 ]
 
 /**
@@ -172,6 +174,13 @@ async function executeServerTool({ name, args, job, step }) {
   if (['grep_code', 'find_symbol', 'list_imports'].includes(name)) {
     try {
       return await dispatchCodeSearchTool(name, args || {})
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) }
+    }
+  }
+  if (name === 'apply_patch') {
+    try {
+      return await dispatchApplyPatchTool(name, args || {})
     } catch (err) {
       return { ok: false, error: err?.message || String(err) }
     }

@@ -362,6 +362,22 @@ const BUILTIN_SPECS = {
       },
     },
   },
+  apply_patch: {
+    type: 'function',
+    function: {
+      name: 'apply_patch',
+      description:
+        'Codex 风格多文件原子 patch(Add/Update/Delete).Update 用 unified-diff hunks(@@ 分隔,\' \'上下文,+加行,-删行).比 edit_file 省 token,比 write_file 安全(不覆盖已存在),全部成功才落盘,失败自动回滚.dry_run=true 只预览.',
+      parameters: {
+        type: 'object',
+        properties: {
+          patch: { type: 'string' },
+          dry_run: { type: 'boolean' },
+        },
+        required: ['patch'],
+      },
+    },
+  },
 }
 
 const READ_ONLY_MODE_TOOLS = new Set([
@@ -379,6 +395,7 @@ const CODE_MODE_TOOLS = [
   'read_file',
   'write_file',
   'edit_file',
+  'apply_patch',
   'grep_code',
   'find_symbol',
   'list_imports',

@@ -15,6 +15,7 @@ import { callBackgroundModel, callBackgroundModelWithTools } from './modelProxy.
 import { fetchAndExtract, searchDuckDuckGo } from './toolProxy.js'
 import { dispatchFsShellTool } from './fsShellTools.js'
 import { CODE_SEARCH_TOOL_SPECS, dispatchCodeSearchTool } from './utils/codeSearch.js'
+import { APPLY_PATCH_TOOL_SPECS, dispatchApplyPatchTool } from './utils/applyPatch.js'
 
 const MAX_CONCURRENT_PER_USER = 3
 const activeByUser = new Map()
@@ -110,6 +111,8 @@ const FULL_TOOL_SPECS = [
       },
     },
   },
+  // ★ M2: Codex 风格多文件原子 patch
+  ...APPLY_PATCH_TOOL_SPECS,
 ]
 
 /* ─── 子代理类型 ─── */
@@ -152,6 +155,8 @@ async function executeSubagentTool(toolName, args, { userId = null } = {}) {
     case 'find_symbol':
     case 'list_imports':
       return dispatchCodeSearchTool(toolName, args)
+    case 'apply_patch':
+      return dispatchApplyPatchTool(toolName, args)
     default:
       return { ok: false, error: `unknown subagent tool: ${toolName}` }
   }

@@ -12,6 +12,7 @@
 
 import { authenticateRequest } from '../middleware.js'
 import { grepCodeTool, findSymbolTool, listImportsTool } from './codeSearch.js'
+import { applyPatchTool } from './applyPatch.js'
 import { writeToolAudit } from './audit.js'
 
 function sendJson(res, status, body) {
@@ -52,6 +53,7 @@ export async function handleCodeSearchRequest(req, res) {
     if (url.startsWith('/api/tools/code/grep')) { toolName = 'grep_code'; result = await grepCodeTool(body) }
     else if (url.startsWith('/api/tools/code/find-symbol')) { toolName = 'find_symbol'; result = await findSymbolTool(body) }
     else if (url.startsWith('/api/tools/code/list-imports')) { toolName = 'list_imports'; result = await listImportsTool(body) }
+    else if (url.startsWith('/api/tools/code/apply-patch')) { toolName = 'apply_patch'; result = await applyPatchTool(body) }
     else { sendJson(res, 404, { ok: false, error: '未知端点' }); return }
     writeToolAudit({
       userId: req.userId,
