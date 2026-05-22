@@ -1,7 +1,7 @@
 import { injectEaFont, CJK_FONT } from './pptCore.js'
 
-const MAX_BULLETS_PER_SLIDE = 8
-const MAX_BULLET_LENGTH = 150
+const MAX_BULLETS_PER_SLIDE = 5
+const MAX_BULLET_LENGTH = 80
 const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
 
 const SLIDE_W = 13.333
@@ -315,6 +315,15 @@ function chunkToSlide(lines, index) {
 
   if (type === 'content' && images.length > 0) {
     type = 'image'
+  }
+
+  if (type === 'content') {
+    const dataPoints = bullets
+      .map(parseDataPoint)
+      .filter((point) => point && /[\d０-９%％¥￥$万亿kK+\-.]/.test(point.value))
+    if (dataPoints.length >= 3) {
+      return { title, type: 'data', index, dataPoints }
+    }
   }
 
   return {
@@ -2023,7 +2032,7 @@ function buildSlideHtml(slide, index, total) {
   }
 }
 
-export function buildHtmlPreview(markdown) {
+export function buildClassicHtmlPreview(markdown) {
   const slides = parseMarkdownSlides(markdown)
   if (!slides.length) return ''
 
@@ -2039,6 +2048,10 @@ export function buildHtmlPreview(markdown) {
 </head>
 <body>${slideHtml}</body>
 </html>`
+}
+
+export function buildHtmlPreview(markdown) {
+  return buildPremiumHtmlPreview(markdown, { responsive: true })
 }
 
 
@@ -2343,9 +2356,51 @@ html,body {
   padding:100px 160px;
   position:relative;
 }
+.slide-content-light {
+  background:
+    radial-gradient(circle at 88% 18%, rgba(232,106,60,0.14) 0%, transparent 30%),
+    radial-gradient(circle at 10% 82%, rgba(46,143,163,0.12) 0%, transparent 28%),
+    linear-gradient(135deg, #F6F0E4 0%, #EAE2D2 100%);
+}
+.slide-content-dark {
+  background:
+    radial-gradient(circle at 82% 12%, rgba(232,106,60,0.26) 0%, transparent 30%),
+    radial-gradient(circle at 14% 86%, rgba(46,143,163,0.24) 0%, transparent 32%),
+    linear-gradient(145deg, #11100e 0%, #1b1712 48%, #0d0c0b 100%);
+}
 .slide-content .accent-bar-v {
   width:8px;
   background: linear-gradient(180deg, #E86A3C 0%, rgba(232,106,60,0.3) 70%, transparent 100%);
+}
+.slide-content-dark .accent-bar-v {
+  background: linear-gradient(180deg, #E86A3C 0%, #2E8FA3 100%);
+  box-shadow: 0 0 24px rgba(232,106,60,.45);
+}
+.content-orb {
+  position:absolute;
+  border-radius:999px;
+  pointer-events:none;
+  filter:blur(6px);
+}
+.content-orb-a {
+  width:360px; height:360px;
+  right:-120px; top:70px;
+  border:1px solid rgba(232,106,60,.22);
+  background:radial-gradient(circle, rgba(232,106,60,.10), transparent 62%);
+}
+.content-orb-b {
+  width:220px; height:220px;
+  left:96px; bottom:42px;
+  border:1px solid rgba(46,143,163,.18);
+  background:radial-gradient(circle, rgba(46,143,163,.10), transparent 64%);
+}
+.content-shard {
+  position:absolute;
+  width:240px; height:110px;
+  right:120px; bottom:72px;
+  transform:skewX(-18deg) rotate(-8deg);
+  background:linear-gradient(135deg, rgba(255,255,255,.18), rgba(255,255,255,0));
+  border:1px solid rgba(255,255,255,.18);
 }
 .content-tag {
   font-size:16px;
@@ -2361,42 +2416,99 @@ html,body {
   color:#2A1F17;
   line-height:1.15;
   letter-spacing:-1px;
+  max-width:1320px;
+  position:relative;
+  z-index:1;
+}
+.slide-content-dark .content-title {
+  color:#F4EFE5;
+  text-shadow:0 12px 42px rgba(0,0,0,.35);
 }
 .content-title-line {
   width:80px; height:5px;
   background: linear-gradient(90deg, #E86A3C 0%, #2E8FA3 100%);
   margin-top:28px;
   border-radius:3px;
-}
-.content-bullets {
-  list-style:none;
-  margin-top:60px;
-  display:flex;
-  flex-direction:column;
-  gap:8px;
-}
-.content-bullets li {
-  font-size:30px;
-  color:#3d3328;
-  line-height:1.55;
-  padding:20px 0 20px 56px;
   position:relative;
-  border-bottom:1px solid rgba(219,210,190,0.4);
+  z-index:1;
 }
-.content-bullets li:last-child { border-bottom:none; }
-.content-bullets li .bullet-diamond {
+.content-card-grid {
+  margin-top:58px;
+  display:grid;
+  grid-template-columns:repeat(2, minmax(0, 1fr));
+  gap:28px;
+  position:relative;
+  z-index:1;
+}
+.content-card {
+  min-height:148px;
+  border-radius:26px;
+  padding:30px 34px;
+  display:grid;
+  grid-template-columns:64px 1fr;
+  gap:20px;
+  align-items:start;
+  position:relative;
+  overflow:hidden;
+  background:rgba(255,255,255,.62);
+  border:1px solid rgba(42,31,23,.08);
+  box-shadow:0 18px 45px rgba(42,31,23,.08), inset 0 1px 0 rgba(255,255,255,.75);
+  backdrop-filter:blur(14px);
+}
+.slide-content-dark .content-card {
+  background:rgba(244,239,229,.055);
+  border:1px solid rgba(244,239,229,.12);
+  box-shadow:0 20px 55px rgba(0,0,0,.26), inset 0 1px 0 rgba(255,255,255,.08);
+}
+.content-card::after {
+  content:'';
   position:absolute;
-  left:0; top:28px;
-  width:14px; height:14px;
-  background: linear-gradient(135deg, #E86A3C 0%, #c9552e 100%);
-  transform:rotate(45deg);
-  border-radius:2px;
+  left:0; right:0; top:0;
+  height:4px;
+  background:linear-gradient(90deg, #E86A3C 0%, #2E8FA3 100%);
+  opacity:.82;
+}
+.content-card-index {
+  width:54px; height:54px;
+  border-radius:18px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  font-weight:900;
+  font-size:22px;
+  color:#F4EFE5;
+  background:linear-gradient(135deg, #E86A3C 0%, #2E8FA3 100%);
+  box-shadow:0 12px 28px rgba(232,106,60,.22);
+  font-variant-numeric:tabular-nums;
+}
+.content-card-text {
+  font-size:28px;
+  color:#33281f;
+  line-height:1.42;
+  font-weight:650;
+  letter-spacing:-.2px;
+}
+.slide-content-dark .content-card-text {
+  color:#F4EFE5;
+}
+.content-card-note {
+  grid-column:2;
+  margin-top:10px;
+  font-size:18px;
+  line-height:1.5;
+  color:#7b6f5f;
+}
+.slide-content-dark .content-card-note {
+  color:#A89B82;
 }
 .content-footer-line {
   position:absolute;
   bottom:50px; left:160px; right:160px;
   height:2px;
   background: linear-gradient(90deg, rgba(232,106,60,0.3) 0%, transparent 100%);
+}
+.slide-content-dark .content-footer-line {
+  background:linear-gradient(90deg, rgba(232,106,60,.5), rgba(46,143,163,.18), transparent);
 }
 
 /* ── Data ── */
@@ -2941,6 +3053,28 @@ html,body {
 }
 `
 
+const PREMIUM_RESPONSIVE_CSS = `
+@media screen {
+  html, body {
+    min-height:100%;
+    background:#070707;
+  }
+  body {
+    padding:24px;
+    overflow:auto;
+  }
+  .slide {
+    width:min(100%, 1120px);
+    height:auto;
+    aspect-ratio:16/9;
+    margin:0 auto 24px;
+    border-radius:18px;
+    box-shadow:0 26px 90px rgba(0,0,0,.38);
+  }
+  .slide:last-child { margin-bottom:0; }
+}
+`
+
 /* ── Premium Slide HTML Builder ── */
 
 function buildPremiumSlideHtml(slide, index) {
@@ -3192,28 +3326,39 @@ function buildPremiumSlideHtml(slide, index) {
     }
 
     default: {
-      const bullets = slide.bullets
-        .map(
-          (b) => `
-    <li><span class="bullet-diamond"></span>${escapeHtml(b)}</li>`
-        )
+      const variant = index % 2 === 0 ? 'slide-content-dark' : 'slide-content-light'
+      const bullets = (slide.bullets?.length ? slide.bullets : ['围绕核心判断展开下一步行动'])
+        .slice(0, 4)
+        .map((b, i) => {
+          const [main, note] = String(b).split(/\s*[;；]\s*/, 2)
+          const noteHtml = note ? `<div class="content-card-note">${escapeHtml(note)}</div>` : ''
+          return `
+    <article class="content-card">
+      <div class="content-card-index">${String(i + 1).padStart(2, '0')}</div>
+      <div class="content-card-text">${escapeHtml(main)}</div>
+      ${noteHtml}
+    </article>`
+        })
         .join('')
-      return `<div class="slide slide-content">
+      return `<div class="slide slide-content ${variant}">
   <div class="accent-bar-v"></div>
   <div class="grid-bg-light"></div>
+  <div class="content-orb content-orb-a"></div>
+  <div class="content-orb content-orb-b"></div>
+  <div class="content-shard"></div>
   <div class="corner-badge">CONTENT</div>
   <div class="content-tag">CONTENT</div>
   <h2 class="content-title">${escapeHtml(slide.title)}</h2>
   <div class="content-title-line"></div>
-  <ul class="content-bullets">${bullets}
-  </ul>
+  <div class="content-card-grid">${bullets}
+  </div>
   <div class="content-footer-line"></div>
 </div>`
     }
   }
 }
 
-export function buildPremiumHtmlPreview(markdown) {
+export function buildPremiumHtmlPreview(markdown, { responsive = false } = {}) {
   const slides = parseMarkdownSlides(markdown)
   if (!slides.length) return ''
 
@@ -3224,7 +3369,8 @@ export function buildPremiumHtmlPreview(markdown) {
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
-<style>${PREMIUM_CSS}</style>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>${PREMIUM_CSS}${responsive ? PREMIUM_RESPONSIVE_CSS : ''}</style>
 </head>
 <body>${slideHtml}</body>
 </html>`

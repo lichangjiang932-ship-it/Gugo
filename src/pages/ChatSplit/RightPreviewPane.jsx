@@ -357,9 +357,10 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
       if (preview.type === 'pptx') {
         const slides = parseMarkdownSlides(content)
         const title = slides[0]?.title || preview.title
-        await downloadPptxFromMarkdown(content, {
+        await downloadPremiumPptx(content, {
           title,
           filename: buildPresentationFilename(title),
+          onProgress: (current, total) => setPremiumProgress(`${current}/${total}`),
         })
       } else if (preview.type === 'docx') {
         const doc = parseMarkdownDocument(content)
@@ -417,22 +418,22 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
       onMessage?.(err.message || '导出失败')
     } finally {
       setDownloading(false)
+      setPremiumProgress('')
     }
   }
 
-  const handlePremiumDownload = async () => {
+  const handleEditablePptxDownload = async () => {
     if (preview.type !== 'pptx') return
     setPremiumExporting(true)
     try {
       const slides = parseMarkdownSlides(content)
       const title = slides[0]?.title || preview.title
-      await downloadPremiumPptx(content, {
+      await downloadPptxFromMarkdown(content, {
         title,
-        filename: buildPresentationFilename(title).replace('.pptx', '_premium.pptx'),
-        onProgress: (current, total) => setPremiumProgress(`${current}/${total}`),
+        filename: buildPresentationFilename(title).replace('.pptx', '_editable.pptx'),
       })
     } catch (err) {
-      onMessage?.(err.message || '高级导出失败')
+      onMessage?.(err.message || '编辑版导出失败')
     } finally {
       setPremiumExporting(false)
       setPremiumProgress('')
@@ -549,13 +550,13 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
             </button>
             {preview.type === 'pptx' && (
               <button
-                onClick={handlePremiumDownload}
-                disabled={premiumExporting}
+                onClick={handleEditablePptxDownload}
+                disabled={premiumExporting || downloading}
                 className="h-7 px-2 rounded-md border border-ink-fade/40 text-ink-soft hover:bg-paper hover:text-ember transition-colors inline-flex items-center gap-1 text-[11px] disabled:opacity-50"
-                title="高级导出：截图生成高清 PPT"
+                title="导出轻量可编辑版（视觉效果低于默认高清版）"
               >
                 <Sparkles className="w-3 h-3" />
-                {premiumExporting ? `截图 ${premiumProgress}` : '高级'}
+                {premiumExporting ? `导出 ${premiumProgress}` : '编辑版'}
               </button>
             )}
             {preview.type === 'html' && (
@@ -576,7 +577,7 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
               title={`下载 ${preview.filename}`}
             >
               <Download className="w-3 h-3" />
-              {downloading ? '生成中' : '下载'}
+              {downloading ? (premiumProgress ? `生成 ${premiumProgress}` : '生成中') : '下载高清'}
             </button>
           </div>
         </div>

@@ -4,6 +4,7 @@ import test from 'node:test'
 
 import {
   buildHtmlPreview,
+  buildPremiumHtmlPreview,
   buildPresentationFilename,
   createPptxBlobFromMarkdown,
   parseMarkdownSlides,
@@ -109,7 +110,8 @@ test('keeps a concise final content slide as content instead of forcing an endin
 ## 市场结论
 - 增长仍在继续`)
 
-  assert.match(html, /<div class="slide slide-content">[\s\S]*市场结论/)
+  assert.match(html, /<div class="slide slide-content[^"]*">[\s\S]*content-card-grid/)
+  assert.equal(html.includes('\u5e02\u573a\u7ed3\u8bba'), true)
   assert.doesNotMatch(html, /<div class="slide slide-end">[\s\S]*市场结论/)
 })
 
@@ -126,4 +128,47 @@ test('parses Chinese page headings into multiple slides for ppt artifacts', () =
   assert.equal(slides.length, 3)
   assert.equal(slides[0].title, '封面页')
   assert.equal(slides[1].title, '核心卖点')
+})
+
+
+test('default PPT preview uses premium responsive visual system instead of legacy bullet template', () => {
+  const html = buildHtmlPreview(`# DeepSeek V4 Pro
+Premium agentic reasoning platform
+
+---
+
+## Reasoning becomes production grade
+- Multi-step tasks stabilize
+- Long context stays controllable
+- Tool calls become reliable`)
+
+  assert.match(html, /slide-cover/)
+  assert.match(html, /cover-tag/) // premium cover marker
+  assert.match(html, /content-card-grid/) // cards, not plain bullet template
+  assert.match(html, /@media screen/) // iframe preview is responsive
+  assert.doesNotMatch(html, /cover-top-bar/) // old low-fi preview marker
+})
+
+test('premium preview alternates content pages and keeps screenshot mode fixed-size', () => {
+  const markdown = `# Cover
+Subtitle
+
+---
+
+## First strategic claim
+- Speed improves 40%
+- Cost drops 25%
+
+---
+
+## Second strategic claim
+- Integration is lighter
+- Security boundary is clearer`
+  const responsive = buildPremiumHtmlPreview(markdown, { responsive: true })
+  const screenshot = buildPremiumHtmlPreview(markdown)
+
+  assert.match(responsive, /slide-content-dark|slide-content-light/)
+  assert.match(responsive, /content-card-index/)
+  assert.match(responsive, /@media screen/)
+  assert.doesNotMatch(screenshot, /@media screen/)
 })
