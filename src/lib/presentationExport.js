@@ -443,19 +443,19 @@ function addCoverSlide(pptx, slideData, index, total) {
   })
   slide.addText(slideData.title, {
     x: 1, y: 2.2, w: 11.3, h: 1.2,
-    fontFace: 'Aptos Display', fontSize: 44, bold: true, color: THEME.ink,
+    fontFace: 'Calibri', fontSize: 44, bold: true, color: THEME.ink,
     align: 'center', margin: 0,
   })
   if (slideData.bullets?.[0]) {
     slide.addText(slideData.bullets[0], {
       x: 1, y: 3.6, w: 11.3, h: 0.6,
-      fontFace: 'Aptos', fontSize: 20, color: THEME.inkSoft,
+      fontFace: 'Calibri', fontSize: 20, color: THEME.inkSoft,
       align: 'center', margin: 0,
     })
   }
   slide.addText(new Date().toLocaleDateString('zh-CN'), {
     x: 1, y: 4.4, w: 11.3, h: 0.4,
-    fontFace: 'Aptos', fontSize: 12, color: THEME.inkFade,
+    fontFace: 'Calibri', fontSize: 12, color: THEME.inkFade,
     align: 'center', margin: 0,
   })
   slide.addShape(pptx.ShapeType.rect, {
@@ -478,21 +478,21 @@ function addTocSlide(pptx, slideData, index, total) {
   })
   slide.addText('目录', {
     x: 0.5, y: 2.8, w: 2.6, h: 1,
-    fontFace: 'Aptos Display', fontSize: 32, bold: true, color: THEME.white, margin: 0,
+    fontFace: 'Calibri', fontSize: 32, bold: true, color: THEME.white, margin: 0,
   })
   slide.addText('CONTENTS', {
     x: 0.5, y: 3.6, w: 2.6, h: 0.4,
-    fontFace: 'Aptos', fontSize: 11, color: 'B8D4DB', margin: 0,
+    fontFace: 'Calibri', fontSize: 11, color: 'B8D4DB', margin: 0,
   })
   slideData.bullets.forEach((bullet, i) => {
     const yBase = 1.2 + i * 0.85
     slide.addText(String(i + 1).padStart(2, '0'), {
       x: 4.2, y: yBase, w: 0.8, h: 0.4,
-      fontFace: 'Aptos Display', fontSize: 22, bold: true, color: THEME.ember, margin: 0,
+      fontFace: 'Calibri', fontSize: 22, bold: true, color: THEME.ember, margin: 0,
     })
     slide.addText(bullet, {
       x: 5.1, y: yBase + 0.05, w: 7.5, h: 0.5,
-      fontFace: 'Aptos', fontSize: 18, color: THEME.ink, margin: 0,
+      fontFace: 'Calibri', fontSize: 18, color: THEME.ink, margin: 0,
     })
     if (i < slideData.bullets.length - 1) {
       slide.addShape(pptx.ShapeType.rect, {
@@ -519,7 +519,7 @@ function addContentSlide(pptx, slideData, index, total) {
   })
   slide.addText(slideData.title, {
     x: 0.7, y: 0.5, w: 11.8, h: 0.7,
-    fontFace: 'Aptos Display', fontSize: 30, bold: true, color: THEME.ink, margin: 0,
+    fontFace: 'Calibri', fontSize: 30, bold: true, color: THEME.ink, margin: 0,
   })
   slide.addShape(pptx.ShapeType.rect, {
     x: 0.7, y: 1.15, w: 0.6, h: 0.04,
@@ -534,7 +534,7 @@ function addContentSlide(pptx, slideData, index, total) {
       })),
       {
         x: 0.95, y: 1.5, w: 11.35, h: 5.2,
-        fontFace: 'Aptos', fontSize: 18, color: THEME.inkSoft,
+        fontFace: 'Calibri', fontSize: 18, color: THEME.inkSoft,
         breakLine: false, fit: 'shrink',
       }
     )
@@ -550,7 +550,7 @@ function addImageSlide(pptx, slideData, index, total) {
   slide.background = { color: THEME.paper }
   slide.addText(slideData.title, {
     x: 0.7, y: 0.5, w: 11.8, h: 0.7,
-    fontFace: 'Aptos Display', fontSize: 30, bold: true, color: THEME.ink, margin: 0,
+    fontFace: 'Calibri', fontSize: 30, bold: true, color: THEME.ink, margin: 0,
   })
   slide.addShape(pptx.ShapeType.rect, {
     x: 0.7, y: 1.15, w: 0.6, h: 0.04,
@@ -565,7 +565,7 @@ function addImageSlide(pptx, slideData, index, total) {
       })),
       {
         x: 0.95, y: 1.5, w: 6.5, h: 5.2,
-        fontFace: 'Aptos', fontSize: 17, color: THEME.inkSoft,
+        fontFace: 'Calibri', fontSize: 17, color: THEME.inkSoft,
         breakLine: false, fit: 'shrink',
       }
     )
@@ -581,7 +581,7 @@ function addImageSlide(pptx, slideData, index, total) {
   })
   slide.addText(`[ ${slideData.images?.[0]?.alt || '配图建议'} ]`, {
     x: imgX, y: imgY + imgH / 2 - 0.3, w: imgW, h: 0.6,
-    fontFace: 'Aptos', fontSize: 14, color: THEME.inkFade,
+    fontFace: 'Calibri', fontSize: 14, color: THEME.inkFade,
     align: 'center', valign: 'middle', margin: 0,
   })
   addBottomLine(slide)
@@ -618,13 +618,13 @@ function addEndSlide(pptx, slideData, index, total) {
   })
   slide.addText(slideData.title, {
     x: 1, y: 2.4, w: 11.3, h: 1.2,
-    fontFace: 'Aptos Display', fontSize: 40, bold: true, color: THEME.ink,
+    fontFace: 'Calibri', fontSize: 40, bold: true, color: THEME.ink,
     align: 'center', margin: 0,
   })
   if (slideData.bullets?.[0]) {
     slide.addText(slideData.bullets[0], {
       x: 1, y: 3.7, w: 11.3, h: 0.6,
-      fontFace: 'Aptos', fontSize: 18, color: THEME.inkSoft,
+      fontFace: 'Calibri', fontSize: 18, color: THEME.inkSoft,
       align: 'center', margin: 0,
     })
   }
@@ -645,7 +645,7 @@ function addDataSlide(pptx, slideData, index, total) {
   addAmbientDecor(slide, pptx, index, { dense: true })
   slide.addText(slideData.title, {
     x: 0.7, y: 0.5, w: 11.8, h: 0.7,
-    fontFace: 'Aptos Display', fontSize: 30, bold: true, color: THEME.ink, margin: 0,
+    fontFace: 'Calibri', fontSize: 30, bold: true, color: THEME.ink, margin: 0,
   })
   slide.addShape(pptx.ShapeType.rect, {
     x: 0.7, y: 1.15, w: 0.6, h: 0.04,
@@ -663,12 +663,12 @@ function addDataSlide(pptx, slideData, index, total) {
       const x = startX + i * cardW
       slide.addText(point.value, {
         x, y, w: cardW - 0.3, h: 0.9,
-        fontFace: 'Aptos Display', fontSize: 36, bold: true, color: accentColor,
+        fontFace: 'Calibri', fontSize: 36, bold: true, color: accentColor,
         align: 'center', margin: 0,
       })
       slide.addText(point.label, {
         x, y: y + 1.0, w: cardW - 0.3, h: 0.8,
-        fontFace: 'Aptos', fontSize: 14, color: THEME.inkSoft,
+        fontFace: 'Calibri', fontSize: 14, color: THEME.inkSoft,
         align: 'center', margin: 0,
       })
       slide.addShape(pptx.ShapeType.rect, {
@@ -697,19 +697,19 @@ function addQuoteSlide(pptx, slideData, index, total) {
   })
   slide.addText('"', {
     x: 0.8, y: 1.2, w: 1.5, h: 1.2,
-    fontFace: 'Aptos Display', fontSize: 72, bold: true, color: THEME.ember, margin: 0,
+    fontFace: 'Calibri', fontSize: 72, bold: true, color: THEME.ember, margin: 0,
   })
   if (slideData.quote?.text) {
     slide.addText(slideData.quote.text, {
       x: 1.5, y: 2.2, w: 10.3, h: 2.0,
-      fontFace: 'Aptos', fontSize: 24, italic: true, color: THEME.ink,
+      fontFace: 'Calibri', fontSize: 24, italic: true, color: THEME.ink,
       align: 'center', margin: 0,
     })
   }
   if (slideData.quote?.source) {
     slide.addText(`— ${slideData.quote.source}`, {
       x: 1.5, y: 4.4, w: 10.3, h: 0.5,
-      fontFace: 'Aptos', fontSize: 14, color: THEME.inkFade,
+      fontFace: 'Calibri', fontSize: 14, color: THEME.inkFade,
       align: 'right', margin: 0,
     })
   }
@@ -728,7 +728,7 @@ function addSplitSlide(pptx, slideData, index, total) {
   slide.background = { color: THEME.paper }
   slide.addText(slideData.title, {
     x: 0.7, y: 0.5, w: 11.8, h: 0.7,
-    fontFace: 'Aptos Display', fontSize: 30, bold: true, color: THEME.ink, margin: 0,
+    fontFace: 'Calibri', fontSize: 30, bold: true, color: THEME.ink, margin: 0,
   })
   slide.addShape(pptx.ShapeType.rect, {
     x: 0.7, y: 1.15, w: 0.6, h: 0.04,
@@ -753,7 +753,7 @@ function addSplitSlide(pptx, slideData, index, total) {
   if (left.title) {
     slide.addText(left.title, {
       x: 0.7, y: 1.7, w: 5.4, h: 0.5,
-      fontFace: 'Aptos Display', fontSize: 18, bold: true, color: THEME.cyan, margin: 0,
+      fontFace: 'Calibri', fontSize: 18, bold: true, color: THEME.cyan, margin: 0,
     })
   }
   if (left.bullets.length) {
@@ -761,7 +761,7 @@ function addSplitSlide(pptx, slideData, index, total) {
       left.bullets.map((b) => ({ text: b, options: { bullet: { type: 'bullet' }, breakLine: true, paraSpaceAfterPt: 6 } })),
       {
         x: 0.8, y: 2.3, w: 5.2, h: 3.8,
-        fontFace: 'Aptos', fontSize: 14, color: THEME.inkSoft,
+        fontFace: 'Calibri', fontSize: 14, color: THEME.inkSoft,
         breakLine: false, fit: 'shrink',
       }
     )
@@ -770,7 +770,7 @@ function addSplitSlide(pptx, slideData, index, total) {
   if (right.title) {
     slide.addText(right.title, {
       x: 7.0, y: 1.7, w: 5.4, h: 0.5,
-      fontFace: 'Aptos Display', fontSize: 18, bold: true, color: THEME.ember, margin: 0,
+      fontFace: 'Calibri', fontSize: 18, bold: true, color: THEME.ember, margin: 0,
     })
   }
   if (right.bullets.length) {
@@ -778,7 +778,7 @@ function addSplitSlide(pptx, slideData, index, total) {
       right.bullets.map((b) => ({ text: b, options: { bullet: { type: 'bullet' }, breakLine: true, paraSpaceAfterPt: 6 } })),
       {
         x: 7.1, y: 2.3, w: 5.2, h: 3.8,
-        fontFace: 'Aptos', fontSize: 14, color: THEME.inkSoft,
+        fontFace: 'Calibri', fontSize: 14, color: THEME.inkSoft,
         breakLine: false, fit: 'shrink',
       }
     )
@@ -795,7 +795,7 @@ function addTableSlide(pptx, slideData, index, total) {
   slide.background = { color: THEME.paper }
   slide.addText(slideData.title, {
     x: 0.7, y: 0.5, w: 11.8, h: 0.7,
-    fontFace: 'Aptos Display', fontSize: 30, bold: true, color: THEME.ink, margin: 0,
+    fontFace: 'Calibri', fontSize: 30, bold: true, color: THEME.ink, margin: 0,
   })
   slide.addShape(pptx.ShapeType.rect, {
     x: 0.7, y: 1.15, w: 0.6, h: 0.04,
@@ -809,8 +809,8 @@ function addTableSlide(pptx, slideData, index, total) {
     const header = table[0]
     const body = table.slice(1)
     const tableData = [
-      header.map((cell) => ({ text: cell, options: { bold: true, fill: THEME.cyan, color: THEME.white, fontFace: 'Aptos', fontSize: 13 } })),
-      ...body.map((row) => row.map((cell) => ({ text: cell, options: { fill: 'F8F4EC', color: THEME.inkSoft, fontFace: 'Aptos', fontSize: 12 } }))),
+      header.map((cell) => ({ text: cell, options: { bold: true, fill: THEME.cyan, color: THEME.white, fontFace: 'Calibri', fontSize: 13 } })),
+      ...body.map((row) => row.map((cell) => ({ text: cell, options: { fill: 'F8F4EC', color: THEME.inkSoft, fontFace: 'Calibri', fontSize: 12 } }))),
     ]
     slide.addTable(tableData, {
       x: 0.7, y: 1.5, w: 12, h: 4.5,
@@ -830,7 +830,7 @@ function addProcessSlide(pptx, slideData, index, total) {
   slide.background = { color: THEME.paper }
   slide.addText(slideData.title, {
     x: 0.7, y: 0.5, w: 11.8, h: 0.7,
-    fontFace: 'Aptos Display', fontSize: 30, bold: true, color: THEME.ink, margin: 0,
+    fontFace: 'Calibri', fontSize: 30, bold: true, color: THEME.ink, margin: 0,
   })
   slide.addShape(pptx.ShapeType.rect, {
     x: 0.7, y: 1.15, w: 0.6, h: 0.04,
@@ -855,20 +855,20 @@ function addProcessSlide(pptx, slideData, index, total) {
       })
       slide.addText(String(i + 1), {
         x: x + stepW / 2 - 0.3, y, w: 0.6, h: 0.6,
-        fontFace: 'Aptos Display', fontSize: 16, bold: true, color: THEME.white,
+        fontFace: 'Calibri', fontSize: 16, bold: true, color: THEME.white,
         align: 'center', valign: 'middle', margin: 0,
       })
 
       slide.addText(step.name, {
         x, y: y + 0.8, w: stepW - 0.2, h: 0.5,
-        fontFace: 'Aptos Display', fontSize: 14, bold: true, color: THEME.ink,
+        fontFace: 'Calibri', fontSize: 14, bold: true, color: THEME.ink,
         align: 'center', margin: 0,
       })
 
       if (step.desc) {
         slide.addText(step.desc, {
           x, y: y + 1.3, w: stepW - 0.2, h: 1.5,
-          fontFace: 'Aptos', fontSize: 11, color: THEME.inkSoft,
+          fontFace: 'Calibri', fontSize: 11, color: THEME.inkSoft,
           align: 'center', margin: 0,
         })
       }
@@ -905,7 +905,7 @@ function addChartSlide(pptx, slideData, index, total) {
   })
   slide.addText(slideData.title, {
     x: 0.7, y: 0.5, w: 11.8, h: 0.7,
-    fontFace: 'Aptos Display', fontSize: 28, bold: true, color: THEME.ink, margin: 0,
+    fontFace: 'Calibri', fontSize: 28, bold: true, color: THEME.ink, margin: 0,
   })
   slide.addShape(pptx.ShapeType.rect, {
     x: 0.7, y: 1.15, w: 0.6, h: 0.04,
@@ -940,17 +940,17 @@ function addChartSlide(pptx, slideData, index, total) {
       chartColors: CHART_PALETTE.slice(0, Math.max(1, data.length)),
       showLegend: data.length > 1 || chart.type === 'pie',
       legendPos: 'b',
-      legendFontFace: 'Aptos',
+      legendFontFace: 'Calibri',
       legendFontSize: 11,
       legendColor: THEME.inkSoft,
-      catAxisLabelFontFace: 'Aptos',
+      catAxisLabelFontFace: 'Calibri',
       catAxisLabelFontSize: 10,
       catAxisLabelColor: THEME.inkSoft,
-      valAxisLabelFontFace: 'Aptos',
+      valAxisLabelFontFace: 'Calibri',
       valAxisLabelFontSize: 10,
       valAxisLabelColor: THEME.inkSoft,
       dataLabelColor: THEME.ink,
-      dataLabelFontFace: 'Aptos',
+      dataLabelFontFace: 'Calibri',
       dataLabelFontSize: 10,
       showValue: chart.type === 'pie',
       barGapWidthPct: 60,
@@ -962,7 +962,7 @@ function addChartSlide(pptx, slideData, index, total) {
   } else {
     slide.addText('（图表数据缺失）', {
       x: 0.7, y: 3, w: 12, h: 0.5,
-      fontFace: 'Aptos', fontSize: 14, color: THEME.inkFade, align: 'center', margin: 0,
+      fontFace: 'Calibri', fontSize: 14, color: THEME.inkFade, align: 'center', margin: 0,
     })
   }
 
@@ -987,16 +987,16 @@ function addSectionSlide(pptx, slideData, index, total) {
   const sectionNum = String(index + 1).padStart(2, '0')
   slide.addText(sectionNum, {
     x: 0.5, y: 1.5, w: 4, h: 2,
-    fontFace: 'Aptos Display', fontSize: 96, bold: true, color: THEME.ember, margin: 0,
+    fontFace: 'Calibri', fontSize: 96, bold: true, color: THEME.ember, margin: 0,
   })
   slide.addText(slideData.title, {
     x: 0.7, y: 3.5, w: 11, h: 1,
-    fontFace: 'Aptos Display', fontSize: 36, bold: true, color: THEME.ink, margin: 0,
+    fontFace: 'Calibri', fontSize: 36, bold: true, color: THEME.ink, margin: 0,
   })
   if (slideData.bullets?.[0]) {
     slide.addText(slideData.bullets[0], {
       x: 0.7, y: 4.6, w: 11, h: 0.6,
-      fontFace: 'Aptos', fontSize: 16, color: THEME.inkSoft, margin: 0,
+      fontFace: 'Calibri', fontSize: 16, color: THEME.inkSoft, margin: 0,
     })
   }
   slide.addShape(pptx.ShapeType.rect, {
@@ -1024,8 +1024,8 @@ async function buildPresentationFromMarkdown(markdown, { title } = {}) {
   pptx.title = title || slides[0].title
   pptx.lang = 'zh-CN'
   pptx.theme = {
-    headFontFace: 'Aptos Display',
-    bodyFontFace: 'Aptos',
+    headFontFace: 'Calibri',
+    bodyFontFace: 'Calibri',
     lang: 'zh-CN',
   }
 
@@ -1997,7 +1997,7 @@ function buildSlideHtml(slide, index, total) {
       })
       return `<div class="slide slide-chart" style="background:#F4EFE5;padding:48px 56px;display:flex;flex-direction:column;box-sizing:border-box">
   <div class="slide-number">SLIDE ${num} / ${totalStr}</div>
-  <h2 style="font-family:'Aptos Display','Source Han Sans SC',sans-serif;font-size:28px;font-weight:700;color:#2A1F17;margin:0 0 6px 0">${escapeHtml(slide.title)}</h2>
+  <h2 style="font-family:'Calibri','Source Han Sans SC',sans-serif;font-size:28px;font-weight:700;color:#2A1F17;margin:0 0 6px 0">${escapeHtml(slide.title)}</h2>
   <div style="width:48px;height:3px;background:#E86A3C;margin-bottom:14px;border-radius:2px"></div>
   <div style="flex:1;min-height:0">${svg || '<div style="color:#8A7B68;font-size:13px">（图表数据缺失）</div>'}</div>
 </div>`
