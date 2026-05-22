@@ -38,6 +38,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { patchLimiter } from './rateLimiter.js'
 
 const MAX_PATCH_BYTES = 2 * 1024 * 1024
 const MAX_FILE_BYTES = 8 * 1024 * 1024
@@ -271,8 +272,12 @@ function findHunkPosition(lines, oldLines, fromIdx) {
 
 /* ─── 主入口 ─── */
 
-export async function applyPatchTool({ patch, dry_run = false } = {}) {
+export async function applyPatchTool({ patch, dry_run = false, userId = null } = {}) {
   if (typeof patch !== 'string' || !patch.trim()) throw badReq('patch 必填')
+  // ★ M3.5:限流(dry_run 不计费)
+  if (!dry_run && userId && !patchLimiter.tryConsume(userId, 'apply_patch')) {
+    throw badReq('apply_patch 限流:超过 60 次/分钟', 429)
+  }
 
   const ops = parsePatch(patch)
 

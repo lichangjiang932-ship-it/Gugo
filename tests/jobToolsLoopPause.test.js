@@ -78,3 +78,26 @@ test('runToolsLoop: reflect 不中断,继续下一轮', async () => {
   assert.equal(result.text, '完成')
   assert.equal(callCount, 2)
 })
+
+test('runToolsLoop: budgetExceeded 触发停止', async () => {
+  const { createJobBudget } = await import('../server/utils/jobBudget.js')
+  let n = 0
+  const fakeRunModel = async () => {
+    n++
+    return {
+      content: '',
+      toolCalls: [{ id: `c${n}`, function: { name: 'echo_tool', arguments: '{}' } }],
+    }
+  }
+  const fakeExecute = async () => ({ ok: true })
+  const job = { id: 'j', userId: 'u', steps: [], __budget: createJobBudget({ maxTotalCalls: 3, maxWallMs: 60_000 }) }
+  const r = await runToolsLoop({
+    job, step: { id: 's' },
+    messages: [{ role: 'user', content: 'x' }],
+    runModel: fakeRunModel,
+    executeTool: fakeExecute,
+    maxIters: 20,
+  })
+  assert.equal(r.budgetExceeded, true)
+  assert.match(r.reason, /budget/)
+})

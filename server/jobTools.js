@@ -15,6 +15,7 @@ import { GIT_TOOL_SPECS, dispatchGitTool } from './gitWorkbench.js'
 import { CODE_SEARCH_TOOL_SPECS, dispatchCodeSearchTool } from './utils/codeSearch.js'
 import { APPLY_PATCH_TOOL_SPECS, dispatchApplyPatchTool } from './utils/applyPatch.js'
 import { AGENTIC_TOOL_SPECS, dispatchAgenticTool, isLoopPauseResult } from './utils/agenticTools.js'
+import { createJobBudget } from './utils/jobBudget.js'
 import crypto from 'node:crypto'
 
 function newId(prefix) {
@@ -233,6 +234,12 @@ export async function runToolsLoop({ job, step, messages, runModel, signal, maxI
   const artifactIds = []
   let finalText = ''
   let iter = 0
+  // ★ M3.5:任务级预算(跨多 step + 多子代理累计).
+  // 如果 job 上已挂(jobRuntime 创建时挂的) 就复用,否则此 loop 内创一个。
+  if (job && !job.__budget) {
+    job.__budget = createJobBudget()
+  }
+  const budget = job?.__budget || createJobBudget()
 
   for (; iter < maxIters; iter += 1) {
     const { content, toolCalls } = await runModel({
@@ -258,9 +265,16 @@ export async function runToolsLoop({ job, step, messages, runModel, signal, maxI
     })
 
     let pausedByClarification = null
+    let budgetExceeded = null
     for (const tc of toolCalls) {
       const name = tc.function?.name || tc.name
       const args = safeParseArgs(tc.function?.arguments || tc.arguments)
+      // ★ M3.5:预算检查(reflect/request_clarification 不计,鼓励复盘与澄清)
+      const isFree = name === 'reflect' || name === 'request_clarification'
+      if (!isFree) {
+        const b = budget.consume(1)
+        if (!b.ok) { budgetExceeded = b.reason; break }
+      }
       let result
       try {
         result = await executeTool({ name, args, job, step })
@@ -275,6 +289,15 @@ export async function runToolsLoop({ job, step, messages, runModel, signal, maxI
         name,
         content: clipToolOutput(result),
       })
+    }
+    if (budgetExceeded) {
+      return {
+        text: finalText,
+        artifactIds,
+        iterations: iter + 1,
+        budgetExceeded: true,
+        reason: budgetExceeded,
+      }
     }
     if (pausedByClarification) {
       // ★ M3: 模型主动调 request_clarification → 当轮 loop 中断交回用户

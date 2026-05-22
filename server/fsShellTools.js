@@ -16,8 +16,9 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { execFile } from 'node:child_process'
 import { sanitizeChildEnv } from './utils/sensitiveEnv.js'
+import { runProcessWithGroup } from './utils/processGroup.js'
+import { bashLimiter, writeLimiter } from './utils/rateLimiter.js'
 import { writeToolAudit } from './utils/audit.js'
 import { checkBashCommandDanger } from './utils/bashGuard.js'
 import { authenticateRequest } from './middleware.js'
@@ -108,7 +109,11 @@ export async function readFileTool({ path: rawPath, offset = 0, limit = 0 }) {
 
 /* ── write_file ────────────────────────────────────────────── */
 
-export async function writeFileTool({ path: rawPath, content }) {
+export async function writeFileTool({ path: rawPath, content, userId = null }) {
+  // ★ M3.5:写类限流
+  if (userId && !writeLimiter.tryConsume(userId, 'write')) {
+    throw badReq('写文件限流:超过 120 次/分钟', 429)
+  }
   if (!isFsEnabled()) throw badReq('WORKSPACE_FS_ENABLED=1 未启用,无法写入文件', 403)
   if (typeof content !== 'string') throw badReq('content 必须是字符串')
   const bytes = Buffer.byteLength(content, 'utf8')
@@ -128,7 +133,12 @@ export async function editFileTool({
   old_string,
   new_string,
   replace_all = false,
+  userId = null,
 }) {
+  // ★ M3.5:写类限流
+  if (userId && !writeLimiter.tryConsume(userId, 'write')) {
+    throw badReq('编辑限流:超过 120 次/分钟', 429)
+  }
   if (!isFsEnabled()) throw badReq('WORKSPACE_FS_ENABLED=1 未启用,无法编辑文件', 403)
   if (typeof old_string !== 'string' || old_string.length === 0) {
     throw badReq('old_string 必填且不能为空')
@@ -187,6 +197,12 @@ export async function bashExecTool({ command, cwd: rawCwd, timeout_ms, userId = 
     throw badReq(`命令被安全策略拦截:${danger.reason}`, 403)
   }
 
+  // ★ M3.5:单用户限流(防模型失控狂打)
+  if (userId && !bashLimiter.tryConsume(userId, 'bash_exec')) {
+    writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: { command }, status: 'denied' })
+    throw badReq('bash_exec 限流:超过 30 次/分钟,请稍后重试', 429)
+  }
+
   const root = getWorkspaceRoot()
   const cwd = rawCwd ? resolveInWorkspace(rawCwd) : root
   if (!fs.statSync(cwd).isDirectory()) throw badReq('cwd 不是目录')
@@ -202,66 +218,63 @@ export async function bashExecTool({ command, cwd: rawCwd, timeout_ms, userId = 
   const startedAt = Date.now()
 
   return new Promise((resolve) => {
-    execFile(
+    runProcessWithGroup({
       shellPath,
       shellArgs,
-      {
-        cwd,
-        timeout,
-        maxBuffer: SHELL_MAX_OUTPUT,
-        windowsHide: true,
-        // ★ P0:统一从 sanitizeChildEnv 取,自动覆盖所有 *_API_KEY/*_TOKEN/*_SECRET/*_PASSWORD
-        env: sanitizeChildEnv(),
-      },
-      (err, stdout, stderr) => {
-        const durationMs = Date.now() - startedAt
-        const auditArgs = { command, cwd: toRelative(cwd) }
-        if (err) {
-          if (err.killed) {
-            if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'timeout', durationMs })
-            resolve({
-              ok: false,
-              timedOut: true,
-              error: `命令超时(${timeout}ms)`,
-              stdout: String(stdout || ''),
-              stderr: String(stderr || ''),
-              cwd: toRelative(cwd),
-            })
-            return
-          }
-          if (err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
-            if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'truncated', durationMs })
-            resolve({
-              ok: false,
-              truncated: true,
-              error: `输出超过 ${SHELL_MAX_OUTPUT} 字节,已截断`,
-              stdout: String(stdout || ''),
-              stderr: String(stderr || ''),
-              cwd: toRelative(cwd),
-            })
-            return
-          }
-          if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'error', durationMs })
-          resolve({
-            ok: false,
-            exitCode: typeof err.code === 'number' ? err.code : -1,
-            error: err.message,
-            stdout: String(stdout || ''),
-            stderr: String(stderr || ''),
-            cwd: toRelative(cwd),
-          })
-          return
-        }
-        if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'ok', durationMs })
+      cwd,
+      env: sanitizeChildEnv(),
+      timeout,
+      maxBuffer: SHELL_MAX_OUTPUT,
+      windowsHide: true,
+    }).then((r) => {
+      const durationMs = Date.now() - startedAt
+      const auditArgs = { command, cwd: toRelative(cwd) }
+      if (r.timedOut) {
+        if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'timeout', durationMs })
         resolve({
-          ok: true,
-          exitCode: 0,
-          stdout: String(stdout || ''),
-          stderr: String(stderr || ''),
+          ok: false,
+          timedOut: true,
+          error: `命令超时(${timeout}ms),进程组已被清理`,
+          stdout: r.stdout,
+          stderr: r.stderr,
           cwd: toRelative(cwd),
         })
+        return
       }
-    )
+      if (r.truncated) {
+        if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'truncated', durationMs })
+        resolve({
+          ok: false,
+          truncated: true,
+          error: `输出超过 ${SHELL_MAX_OUTPUT} 字节,已截断并杀进程组`,
+          stdout: r.stdout,
+          stderr: r.stderr,
+          cwd: toRelative(cwd),
+        })
+        return
+      }
+      if (r.code !== 0) {
+        if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'error', durationMs })
+        resolve({
+          ok: false,
+          exitCode: r.code,
+          signal: r.signal,
+          error: `命令退出码 ${r.code}${r.signal ? ` (signal=${r.signal})` : ''}`,
+          stdout: r.stdout,
+          stderr: r.stderr,
+          cwd: toRelative(cwd),
+        })
+        return
+      }
+      if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'ok', durationMs })
+      resolve({
+        ok: true,
+        exitCode: 0,
+        stdout: r.stdout,
+        stderr: r.stderr,
+        cwd: toRelative(cwd),
+      })
+    })
   })
 }
 
