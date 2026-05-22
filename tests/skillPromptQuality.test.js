@@ -24,6 +24,13 @@ test('ppt prompts require exportable slide structure and no useless tail text', 
   assert.match(prompt, /可直接导出 PPTX/)
 })
 
+test('ppt prompt requires evidence-rich content instead of thin bullets', () => {
+  const prompt = promptOf('ppt')
+  assert.match(prompt, /主张；证据/)
+  assert.match(prompt, /用户要求页数/)
+  assert.match(prompt, /不要空泛形容词/)
+})
+
 test('htmlppt prompt requires single-file offline deck with conversion hooks', () => {
   const prompt = promptOf('htmlppt')
   assert.match(prompt, /单文件零外部依赖/)

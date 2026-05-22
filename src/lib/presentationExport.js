@@ -2,6 +2,8 @@ import { injectEaFont, CJK_FONT } from './pptCore.js'
 
 const MAX_BULLETS_PER_SLIDE = 5
 const MAX_BULLET_LENGTH = 80
+const MAX_RICH_BULLET_MAIN_LENGTH = 96
+const MAX_RICH_BULLET_NOTE_LENGTH = 160
 const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
 
 const SLIDE_W = 13.333
@@ -128,6 +130,26 @@ function cleanBullet(line = '') {
 
 function truncateBullet(line) {
   return line.length > MAX_BULLET_LENGTH ? `${line.slice(0, MAX_BULLET_LENGTH)}...` : line
+}
+
+function clipText(line, maxLength) {
+  const text = String(line || '').trim()
+  return text.length > maxLength ? `${text.slice(0, maxLength).trim()}...` : text
+}
+
+function splitRichBullet(line) {
+  const text = String(line || '').trim()
+  const parts = text.split(/\s*[;；]\s*/).map((part) => part.trim()).filter(Boolean)
+  if (parts.length <= 1) return { main: text, note: '' }
+  return { main: parts[0], note: parts.slice(1).join('; ') }
+}
+
+function truncateRichBullet(line) {
+  const { main, note } = splitRichBullet(line)
+  if (!note) return truncateBullet(main)
+  const clippedMain = clipText(main, MAX_RICH_BULLET_MAIN_LENGTH)
+  const clippedNote = clipText(note, MAX_RICH_BULLET_NOTE_LENGTH)
+  return clippedNote ? `${clippedMain}; ${clippedNote}` : clippedMain
 }
 
 /* ── Enhanced parser ── */
@@ -275,7 +297,7 @@ function chunkToSlide(lines, index) {
     return {
       title, type: type === 'content' ? 'table' : type, index,
       table: tableRows,
-      bullets: nonTable.map(cleanBullet).filter(Boolean).slice(0, MAX_BULLETS_PER_SLIDE).map(truncateBullet),
+      bullets: nonTable.map(cleanBullet).filter(Boolean).slice(0, MAX_BULLETS_PER_SLIDE).map(truncateRichBullet),
     }
   }
 
@@ -328,7 +350,7 @@ function chunkToSlide(lines, index) {
 
   return {
     title, type, index,
-    bullets: bullets.slice(0, MAX_BULLETS_PER_SLIDE).map(truncateBullet),
+    bullets: bullets.slice(0, MAX_BULLETS_PER_SLIDE).map(truncateRichBullet),
     images,
   }
 }
@@ -2440,6 +2462,74 @@ html,body {
   position:relative;
   z-index:1;
 }
+.slide-template-editorial .content-card-grid {
+  grid-template-columns:1.18fr .82fr;
+  grid-auto-rows:minmax(150px, auto);
+  align-items:stretch;
+}
+.slide-template-editorial .content-card:first-child {
+  grid-row:span 2;
+  min-height:328px;
+  padding:42px 44px;
+  background:linear-gradient(145deg, rgba(255,255,255,.72), rgba(255,255,255,.45));
+}
+.slide-template-editorial .content-card:first-child .content-card-text {
+  font-size:34px;
+  line-height:1.34;
+}
+.slide-template-editorial .content-card:first-child .content-card-note {
+  font-size:21px;
+  line-height:1.56;
+}
+.slide-template-matrix .content-card-grid {
+  grid-template-columns:repeat(2, minmax(0, 1fr));
+  gap:24px;
+}
+.slide-template-matrix .content-card {
+  min-height:158px;
+  border-radius:22px;
+  background:
+    linear-gradient(135deg, rgba(255,255,255,.68), rgba(255,255,255,.38)),
+    radial-gradient(circle at 92% 18%, rgba(46,143,163,.12), transparent 42%);
+}
+.slide-template-matrix .content-card:nth-child(2n) {
+  background:
+    linear-gradient(135deg, rgba(255,255,255,.64), rgba(255,255,255,.34)),
+    radial-gradient(circle at 12% 88%, rgba(232,106,60,.12), transparent 44%);
+}
+.slide-template-dark-card {
+  padding:92px 130px;
+}
+.slide-template-dark-card .grid-bg-light {
+  opacity:.18;
+  filter:invert(1);
+}
+.slide-template-dark-card .content-card-grid {
+  grid-template-columns:repeat(4, minmax(0, 1fr));
+  gap:20px;
+  margin-top:52px;
+}
+.slide-template-dark-card .content-card {
+  grid-template-columns:1fr;
+  min-height:300px;
+  padding:34px 28px;
+  align-content:start;
+  background:linear-gradient(180deg, rgba(244,239,229,.09), rgba(244,239,229,.035));
+}
+.slide-template-dark-card .content-card-index {
+  width:48px;
+  height:48px;
+  border-radius:16px;
+}
+.slide-template-dark-card .content-card-text {
+  font-size:25px;
+}
+.slide-template-dark-card .content-card-note {
+  grid-column:1;
+  margin-top:16px;
+  font-size:17px;
+  color:#C5B694;
+}
 .content-card {
   min-height:148px;
   border-radius:26px;
@@ -3077,6 +3167,35 @@ const PREMIUM_RESPONSIVE_CSS = `
 
 /* ── Premium Slide HTML Builder ── */
 
+const PREMIUM_CONTENT_TEMPLATES = [
+  {
+    id: 'editorial',
+    className: 'slide-template-editorial',
+    badge: 'EDITORIAL',
+    tag: 'DEEP DIVE',
+    dark: false,
+  },
+  {
+    id: 'matrix',
+    className: 'slide-template-matrix',
+    badge: 'MATRIX',
+    tag: 'DECISION MAP',
+    dark: false,
+  },
+  {
+    id: 'dark-card',
+    className: 'slide-template-dark-card',
+    badge: 'INSIGHT',
+    tag: 'EXECUTIVE LOGIC',
+    dark: true,
+  },
+]
+
+function resolvePremiumContentTemplate(index) {
+  const offset = Math.max(0, index - 1)
+  return PREMIUM_CONTENT_TEMPLATES[offset % PREMIUM_CONTENT_TEMPLATES.length]
+}
+
 function buildPremiumSlideHtml(slide, index) {
   const num = String(index + 1).padStart(2, '0')
   const type = slide.type || 'content'
@@ -3326,11 +3445,12 @@ function buildPremiumSlideHtml(slide, index) {
     }
 
     default: {
-      const variant = index % 2 === 0 ? 'slide-content-dark' : 'slide-content-light'
+      const template = resolvePremiumContentTemplate(index)
+      const variant = template.dark ? 'slide-content-dark' : 'slide-content-light'
       const bullets = (slide.bullets?.length ? slide.bullets : ['围绕核心判断展开下一步行动'])
         .slice(0, 4)
         .map((b, i) => {
-          const [main, note] = String(b).split(/\s*[;；]\s*/, 2)
+          const { main, note } = splitRichBullet(b)
           const noteHtml = note ? `<div class="content-card-note">${escapeHtml(note)}</div>` : ''
           return `
     <article class="content-card">
@@ -3340,14 +3460,14 @@ function buildPremiumSlideHtml(slide, index) {
     </article>`
         })
         .join('')
-      return `<div class="slide slide-content ${variant}">
+      return `<div class="slide slide-content ${variant} ${template.className}">
   <div class="accent-bar-v"></div>
   <div class="grid-bg-light"></div>
   <div class="content-orb content-orb-a"></div>
   <div class="content-orb content-orb-b"></div>
   <div class="content-shard"></div>
-  <div class="corner-badge">CONTENT</div>
-  <div class="content-tag">CONTENT</div>
+  <div class="corner-badge">${template.badge}</div>
+  <div class="content-tag" data-template="${template.id}">${template.tag} · ${num}</div>
   <h2 class="content-title">${escapeHtml(slide.title)}</h2>
   <div class="content-title-line"></div>
   <div class="content-card-grid">${bullets}

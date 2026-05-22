@@ -253,7 +253,7 @@ const TOOL_SPECS = {
     type: 'function',
     function: {
       name: 'create_pptx',
-      description: '生成可下载的.PPTX 演示文稿。必须用 --- 分页、# 结论式标题、第二行 <!-- type --> 页面类型(cover/toc/section/data/chart/table/split/process/quote/content/end)。图表用 ```chart``` 块。每页 ≤4 条要点，严禁输出制作建议或说明尾巴。',
+      description: '生成可下载的.PPTX 演示文稿。必须用 --- 分页、# 结论式标题、第二行 <!-- type --> 页面类型(cover/toc/section/data/chart/table/split/process/quote/content/end)。图表用 ```chart``` 块。内容页每条要点用“主张；证据/机制/影响：具体事实或因果链”，用户要求页数时严格遵守，严禁输出制作建议或说明尾巴。',
       parameters: {
         type: 'object',
         properties: {

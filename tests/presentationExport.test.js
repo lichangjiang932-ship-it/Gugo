@@ -172,3 +172,46 @@ Subtitle
   assert.match(responsive, /@media screen/)
   assert.doesNotMatch(screenshot, /@media screen/)
 })
+
+
+test('premium content cards render evidence notes from semicolon-rich bullets', () => {
+  const html = buildHtmlPreview(`# Product Strategy
+Subtitle
+
+---
+
+## Adoption depends on inference economics
+- Enterprise teams adopt only when latency is predictable; evidence: p95 delay becomes the buying criterion
+- API switching cost is lower than model switching cost; impact: reliability beats novelty in procurement`)
+
+  assert.match(html, /content-card-note/)
+  assert.match(html, /evidence: p95 delay becomes the buying criterion/)
+  assert.match(html, /impact: reliability beats novelty in procurement/)
+})
+
+test('premium deck preview exposes a reusable template library instead of one fixed content layout', () => {
+  const html = buildHtmlPreview(`# Market Map
+Subtitle
+
+---
+
+## Economics define the first wedge
+- Cost structure controls deployment depth; evidence: inference budget caps daily use
+- Integration cost decides renewal; evidence: teams renew when workflows stay stable
+
+---
+
+## Governance becomes the buying committee
+- Security review gates rollout; evidence: procurement asks for audit boundaries
+- Observability turns into trust; evidence: teams need failure traces
+
+---
+
+## Roadmap shifts from model to system
+- The product is orchestration; evidence: value lands in routing and memory
+- The moat is evaluation; evidence: teams compare outcomes, not benchmarks`)
+
+  assert.match(html, /data-template="editorial"/)
+  assert.match(html, /data-template="matrix"/)
+  assert.match(html, /data-template="dark-card"/)
+})
