@@ -251,7 +251,7 @@ export default function ChatSplit() {
 
       try {
         const messages = []
-        const systemPrompt = skillId ? getSkillSystemPrompt(skillId, state.skillConfigs, runtimeSkills) : ''
+        const systemPrompt = skillId ? getSkillSystemPrompt(skillId, state.skillConfigs, runtimeSkills, { userPrompt }) : ''
         if (systemPrompt) messages.push({ role: 'system', content: systemPrompt })
         if (agentMode === 'plan') {
           messages.push({

@@ -1,3 +1,5 @@
+import { buildPresentationPlannerPrompt } from './lib/presentationPlanner.js'
+
 export const USER = {
   name: '未登录',
   handle: '',
@@ -151,11 +153,14 @@ function findSkill(skillId, externalSkills = []) {
   return [...externalSkills, ...SKILLS].find((item) => item.id === skillId)
 }
 
-export function getSkillSystemPrompt(skillId, skillConfigs, externalSkills = []) {
+export function getSkillSystemPrompt(skillId, skillConfigs, externalSkills = [], context = {}) {
   const cfg = skillConfigs?.[skillId]
-  if (cfg?.systemPrompt != null) return cfg.systemPrompt
   const skill = findSkill(skillId, externalSkills)
-  return skill?.systemPrompt || ''
+  const basePrompt = cfg?.systemPrompt != null ? cfg.systemPrompt : skill?.systemPrompt || ''
+  if ((skillId === 'ppt' || skillId === 'htmlppt') && context?.userPrompt) {
+    return `${basePrompt}${buildPresentationPlannerPrompt(context.userPrompt, { skillId })}`
+  }
+  return basePrompt
 }
 
 export function getSkillEffectiveConfig(skillId, skillConfigs, externalSkills = []) {
