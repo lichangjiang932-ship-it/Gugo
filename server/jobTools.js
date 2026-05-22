@@ -12,6 +12,7 @@ import { appendJobArtifact } from './jobStore.js'
 import { createDocx, createPptx, createXlsx } from './artifactGen.js'
 import { FS_SHELL_TOOL_SPECS, dispatchFsShellTool } from './fsShellTools.js'
 import { GIT_TOOL_SPECS, dispatchGitTool } from './gitWorkbench.js'
+import { CODE_SEARCH_TOOL_SPECS, dispatchCodeSearchTool } from './utils/codeSearch.js'
 import crypto from 'node:crypto'
 
 function newId(prefix) {
@@ -110,6 +111,7 @@ export const SERVER_TOOL_SPECS = [
   // 路径沙箱在 WORKSPACE_ROOT(默认 process.cwd()).
   ...FS_SHELL_TOOL_SPECS,
   ...GIT_TOOL_SPECS,
+  ...CODE_SEARCH_TOOL_SPECS,
 ]
 
 /**
@@ -163,6 +165,13 @@ async function executeServerTool({ name, args, job, step }) {
   if (['read_file', 'write_file', 'edit_file', 'bash_exec'].includes(name)) {
     try {
       return await dispatchFsShellTool(name, args || {}, { userId: job?.userId || null })
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) }
+    }
+  }
+  if (['grep_code', 'find_symbol', 'list_imports'].includes(name)) {
+    try {
+      return await dispatchCodeSearchTool(name, args || {})
     } catch (err) {
       return { ok: false, error: err?.message || String(err) }
     }

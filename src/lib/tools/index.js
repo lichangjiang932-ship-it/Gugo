@@ -96,6 +96,27 @@ const TOOL_ARG_SCHEMAS = {
       newText: z.string().min(0),
     })).min(1, '至少需要一个 edit').max(20, '单次最多 20 个 edit'),
   }),
+
+  // ★ M1: ripgrep 代码搜索三件套
+  grep_code: z.object({
+    pattern: z.string().min(1, 'pattern 不能为空').max(1000),
+    path: z.string().max(500).optional(),
+    glob: z.string().max(200).optional(),
+    file_type: z.string().regex(/^[a-z0-9+-]+$/i, 'file_type 仅允许字母数字').optional(),
+    case_sensitive: z.boolean().optional(),
+    word: z.boolean().optional(),
+    max_results: z.number().int().min(1).max(500).optional(),
+  }),
+  find_symbol: z.object({
+    name: z.string().regex(/^[a-zA-Z_$][\w$]*$/, 'name 必须是合法标识符'),
+    kind: z.enum(['all', 'function', 'class', 'const']).optional(),
+    language: z.string().regex(/^[a-z0-9+-]+$/i).optional(),
+    path: z.string().max(500).optional(),
+    max_results: z.number().int().min(1).max(100).optional(),
+  }),
+  list_imports: z.object({
+    file: z.string().min(1, 'file 必填').max(500),
+  }),
 }
 
 const TOOL_SPECS = {
@@ -627,6 +648,20 @@ async function execRunProjectCheck(args) {
   return { content: JSON.stringify(data) }
 }
 
+// ★ M1: 代码搜索三件套
+async function execGrepCode(args) {
+  const data = await callWorkspaceJson('/api/tools/code/grep', args)
+  return { content: JSON.stringify(data) }
+}
+async function execFindSymbol(args) {
+  const data = await callWorkspaceJson('/api/tools/code/find-symbol', args)
+  return { content: JSON.stringify(data) }
+}
+async function execListImports(args) {
+  const data = await callWorkspaceJson('/api/tools/code/list-imports', args)
+  return { content: JSON.stringify(data) }
+}
+
 async function execCreatePptx(args) {
   const title = String(args.title).trim().slice(0, 200) || 'presentation'
   const markdown = String(args.markdown)
@@ -857,6 +892,9 @@ const EXECUTORS = {
   run_project_check: execRunProjectCheck,
   manage_todos: execManageTodos,
   multi_edit: execMultiEdit,
+  grep_code: execGrepCode,
+  find_symbol: execFindSymbol,
+  list_imports: execListImports,
 }
 
 /**

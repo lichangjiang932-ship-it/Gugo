@@ -14,6 +14,7 @@ import { callBackgroundModel, callBackgroundModelWithTools } from './modelProxy.
 
 import { fetchAndExtract, searchDuckDuckGo } from './toolProxy.js'
 import { dispatchFsShellTool } from './fsShellTools.js'
+import { CODE_SEARCH_TOOL_SPECS, dispatchCodeSearchTool } from './utils/codeSearch.js'
 
 const MAX_CONCURRENT_PER_USER = 3
 const activeByUser = new Map()
@@ -69,6 +70,8 @@ const READONLY_TOOL_SPECS = [
       },
     },
   },
+  // ★ M1:代码搜索三件套(全只读,适合 explore/plan)
+  ...CODE_SEARCH_TOOL_SPECS,
 ]
 
 /**
@@ -145,6 +148,10 @@ async function executeSubagentTool(toolName, args, { userId = null } = {}) {
     case 'write_file':
     case 'edit_file':
       return dispatchFsShellTool(toolName, args, { userId })
+    case 'grep_code':
+    case 'find_symbol':
+    case 'list_imports':
+      return dispatchCodeSearchTool(toolName, args)
     default:
       return { ok: false, error: `unknown subagent tool: ${toolName}` }
   }
