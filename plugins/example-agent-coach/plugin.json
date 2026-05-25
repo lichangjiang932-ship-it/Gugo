@@ -1,0 +1,11 @@
+{
+  "id": "example-agent-coach",
+  "name": "Coach Agent Template",
+  "version": "0.1.0",
+  "type": "agent-template",
+  "entry": "agent.md",
+  "description": "一个简洁、克制、目标导向的教练型 Agent 模板。适合工作日程梳理、目标拆解、问题溯源。",
+  "author": "yma-team",
+  "license": "MIT",
+  "tags": ["agent", "coach", "productivity"]
+}

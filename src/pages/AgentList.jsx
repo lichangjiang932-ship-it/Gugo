@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, Save, Star, X, Download, Upload } from 'lucide-react'
+import { Plus, Trash2, Save, Star, X, Download, Upload, Sparkles } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { useActiveAgent } from '../agents/activeAgentContext.js'
@@ -12,6 +12,7 @@ import {
   exportAgentUrl,
   importAgentApi,
 } from '../lib/agentClient.js'
+import { listPluginsApi, getPluginApi } from '../lib/pluginClient.js'
 
 function emptyAgent() {
   return { id: '', name: '', soulMd: '', identityMd: '', avatarUrl: '', isDefault: false }
@@ -122,6 +123,33 @@ export default function AgentList() {
     input.click()
   }
 
+  const [templates, setTemplates] = useState([])
+  const [showTemplates, setShowTemplates] = useState(false)
+
+  const openTemplates = async () => {
+    setErr('')
+    try {
+      const { plugins } = await listPluginsApi({ type: 'agent-template' })
+      setTemplates(plugins || [])
+      setShowTemplates(true)
+    } catch (e) {
+      setErr(e.message || t('errors.loadFailed'))
+    }
+  }
+
+  const handleUseTemplate = async (tpl) => {
+    try {
+      const detail = await getPluginApi(tpl.id)
+      const source = detail?.entryPreview?.content || ''
+      if (!source) throw new Error('template entry empty')
+      await importAgentApi(source)
+      setShowTemplates(false)
+      await reload()
+    } catch (e) {
+      setErr(e.message || t('errors.loadFailed'))
+    }
+  }
+
   const handleExport = async (a) => {
     try {
       // 使用项目已有的 accountClient.getAuthToken() 最鲁棒
@@ -153,6 +181,12 @@ export default function AgentList() {
               <h1 className="text-3xl font-semibold tracking-tight">{t('agents.title')}</h1>
               <p className="text-sm text-ink-fade mt-1">{t('agents.subtitle')}</p>
             </div>
+            <button
+              onClick={openTemplates}
+              className="inline-flex items-center gap-2 px-3 py-2 border border-ink/15 rounded-md text-sm hover:bg-ink/5"
+            >
+              <Sparkles size={14} /> {t('agents.fromTemplate')}
+            </button>
             <button
               onClick={handleImport}
               className="inline-flex items-center gap-2 px-3 py-2 border border-ink/15 rounded-md text-sm hover:bg-ink/5"
@@ -281,6 +315,45 @@ export default function AgentList() {
                     className="inline-flex items-center gap-2 px-4 py-2 bg-ink text-canvas rounded text-sm disabled:opacity-50"
                   ><Save size={14} /> {saving ? t('common.saving') : t('common.save')}</button>
                 </footer>
+              </div>
+            </div>
+          )}
+          {showTemplates && (
+            <div
+              className="fixed inset-0 bg-ink/30 flex items-center justify-center z-50"
+              onClick={() => setShowTemplates(false)}
+            >
+              <div
+                className="bg-canvas rounded-lg shadow-2xl w-full max-w-2xl max-h-[80vh] overflow-hidden flex flex-col"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <header className="flex items-center justify-between px-6 py-4 border-b border-ink/10">
+                  <h2 className="text-base font-medium">{t('agents.templatesTitle')}</h2>
+                  <button onClick={() => setShowTemplates(false)} className="p-1 text-ink-fade hover:text-ink"><X size={16} /></button>
+                </header>
+                <div className="flex-1 overflow-y-auto px-6 py-4">
+                  {templates.length === 0 ? (
+                    <p className="text-sm text-ink-fade">{t('agents.templatesEmpty')}</p>
+                  ) : (
+                    <ul className="divide-y divide-ink/10">
+                      {templates.map((tpl) => (
+                        <li key={tpl.id} className="py-3 flex items-start justify-between gap-4">
+                          <div className="min-w-0 flex-1">
+                            <div className="font-medium text-sm">{tpl.name}</div>
+                            <div className="text-xs text-ink-fade mt-0.5">{tpl.description}</div>
+                            <div className="font-mono text-[10px] text-ink-fade mt-1">{tpl.id} v{tpl.version}</div>
+                          </div>
+                          <button
+                            onClick={() => handleUseTemplate(tpl)}
+                            className="shrink-0 px-3 py-1.5 bg-ink text-canvas rounded text-xs hover:opacity-90"
+                          >
+                            {t('agents.useThis')}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
               </div>
             </div>
           )}

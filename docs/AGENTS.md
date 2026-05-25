@@ -179,3 +179,26 @@ exported_at: 2026-05-25T13:00:00.000Z
 - 一个浏览器同一时刻只有一个 active agent（不区分 session）
 - localStorage key `***`，跨标签页通过 storage event 同步留给后续
 - 切 agent 不影响历史消息已注入的 system block（只影响下一次请求）
+
+---
+
+## 阶段 6 已落地：session sticky + agent-MEMORY + plugin 真消费
+
+### session sticky agent
+- AppContext NEW_SESSION 可带 `{ agentId }`；新 case `SET_SESSION_AGENT`
+- ChatSplit 优先用 `session.agentId`，回落到全局 active；切换器同时写两处
+- 不影响历史消息（只影响下一条请求）
+
+### agent-MEMORY 关联（DB v6）
+- memories 加可选 `agent_id`（`ON DELETE SET NULL`）
+- `selectActiveMemoriesForInjection({ agentId })`：传则返"全局 + 该 agent"，不传只返全局
+- chat 注入处自动传 `injectedAgentId`
+- v5→v6 升级路径已手测
+- breaking = 0：旧记忆 `agent_id IS NULL` = 全局 = 旧行为
+
+### plugin 第一次真消费：agent-template
+- 新增 plugin type `agent-template`
+- `plugins/example-agent-coach/` 一个克制的教练 agent 模板
+- AgentList 新按钮 "Templates"：列 agent-template plugins，一键 import
+- 路径：`GET /api/plugins?type=agent-template` → 用户选 → `GET /api/plugins/:id` 拿 `entryPreview.content` → `POST /api/agents/import`
+- 验证 Plugin SDK 不是 PPT 展示，真有消费方
