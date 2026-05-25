@@ -45,7 +45,7 @@ function row2memory(row) {
   }
 }
 
-export function listMemories({ userId, type = null, query = null, limit = 200 }) {
+export function listMemories({ userId, type = null, query = null, limit = 200, agentFilter = null }) {
   if (!userId) return []
   const db = getDb()
   const params = [userId]
@@ -58,6 +58,16 @@ export function listMemories({ userId, type = null, query = null, limit = 200 })
     sql += ' AND (title LIKE ? OR body LIKE ?)'
     const q = `%${String(query).trim()}%`
     params.push(q, q)
+  }
+  // v0.8：agent 过滤
+  // '__global__'      → 只看全局（agent_id IS NULL）
+  // 具体 agentId   → 只看该 agent 专属
+  // null / undefined  → 不过滤（全部）
+  if (agentFilter === '__global__') {
+    sql += ' AND agent_id IS NULL'
+  } else if (agentFilter) {
+    sql += ' AND agent_id = ?'
+    params.push(agentFilter)
   }
   sql += ' ORDER BY pinned DESC, COALESCE(last_used_at, updated_at) DESC LIMIT ?'
   params.push(Math.min(Math.max(1, Number(limit) || 200), 500))

@@ -70,3 +70,46 @@ test('阶段 6: 删除 agent 后其记忆 agent_id SET NULL → 退回全局', a
   const after = mem.getMemory(u, m.id)
   assert.equal(after.agentId, null, '删 agent 后 memory.agentId 应 SET NULL')
 })
+
+import fsExtra from 'node:fs'
+import osExtra from 'node:os'
+import pathExtra from 'node:path'
+
+function tmpDir2() {
+  return fsExtra.mkdtempSync(pathExtra.join(osExtra.tmpdir(), 'yma-agentmem-list-'))
+}
+
+test('v0.8: listMemories agentFilter — all / __global__ / 具体 agentId', async () => {
+  process.env.APP_DATA_DIR = tmpDir2()
+  const auth = await import(`../server/adapters/billingAuth.js?am3=${Date.now()}`)
+  const issued = auth.issueEmailCode({ email: 'agentmem3@example.com' })
+  const u = auth.verifyEmailCode({ email: issued.email, code: issued.devCode }).user.id
+
+  const ag = await import(`../server/services/agentStore.js?am3=${Date.now()}`)
+  const a1 = ag.createAgent({ userId: u, name: 'A1', soulMd: 's', identityMd: 'i', isDefault: true })
+  const a2 = ag.createAgent({ userId: u, name: 'A2', soulMd: 's', identityMd: 'i', isDefault: false })
+
+  const mem = await import(`../server/services/memoryStore.js?am3=${Date.now()}`)
+  mem.upsertMemory({ userId: u, type: 'user', title: 'global1', body: 'g1' })
+  mem.upsertMemory({ userId: u, type: 'user', title: 'a1m', body: 'am1', agentId: a1.id })
+  mem.upsertMemory({ userId: u, type: 'user', title: 'a2m', body: 'am2', agentId: a2.id })
+
+  // all (无 filter) 看到 3 条
+  const all = mem.listMemories({ userId: u })
+  assert.equal(all.length, 3)
+
+  // __global__ 只看 1 条
+  const onlyG = mem.listMemories({ userId: u, agentFilter: '__global__' })
+  assert.deepStrictEqual(onlyG.map((x) => x.title).sort(), ['global1'])
+
+  // a1 只看 1 条 (a1 专属，不混 global)
+  const onlyA1 = mem.listMemories({ userId: u, agentFilter: a1.id })
+  assert.deepStrictEqual(onlyA1.map((x) => x.title).sort(), ['a1m'])
+
+  // a2 只看 1 条
+  const onlyA2 = mem.listMemories({ userId: u, agentFilter: a2.id })
+  assert.deepStrictEqual(onlyA2.map((x) => x.title).sort(), ['a2m'])
+
+  // 注意：listMemories(agentFilter) 是"管理视图"语义，跟 selectActiveMemoriesForInjection 不同
+  // injection 路径会自动叠加 global；管理路径让用户清楚看到归属
+})

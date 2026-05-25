@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Plus, Trash2, Save, Pin, Search, BookOpen, X } from 'lucide-react'
+import { Plus, Trash2, Save, Pin, Search, BookOpen, X, Users } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
+import { useActiveAgent } from '../agents/activeAgentContext.js'
 import {
   listMemoriesApi,
   upsertMemoryApi,
@@ -21,18 +22,27 @@ function emptyMemory() {
     title: '',
     body: '',
     pinned: false,
+    agentId: null,
     frontmatter: {},
   }
 }
 
 export default function MemoryView() {
+  const { agents, activeAgentId } = useActiveAgent()
   const [memories, setMemories] = useState([])
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
   const [filterType, setFilterType] = useState('all')
+  const [filterAgent, setFilterAgent] = useState('all') // 'all' | '__global__' | <agentId>
   const [query, setQuery] = useState('')
   const [editing, setEditing] = useState(null)
   const [saving, setSaving] = useState(false)
+
+  const agentNameById = useMemo(() => {
+    const m = new Map()
+    for (const a of agents) m.set(a.id, a.name)
+    return m
+  }, [agents])
 
   const reload = async () => {
     setLoading(true)
@@ -56,12 +66,14 @@ export default function MemoryView() {
     const q = query.trim().toLowerCase()
     return memories.filter((m) => {
       if (filterType !== 'all' && m.type !== filterType) return false
+      if (filterAgent === '__global__' && m.agentId) return false
+      if (filterAgent !== 'all' && filterAgent !== '__global__' && m.agentId !== filterAgent) return false
       if (!q) return true
       return m.title.toLowerCase().includes(q) || m.body.toLowerCase().includes(q)
     })
-  }, [memories, filterType, query])
+  }, [memories, filterType, filterAgent, query])
 
-  const handleNew = () => setEditing(emptyMemory())
+  const handleNew = () => setEditing({ ...emptyMemory(), agentId: filterAgent !== 'all' && filterAgent !== '__global__' ? filterAgent : null })
 
   const handleSave = async () => {
     if (!editing) return
@@ -73,6 +85,7 @@ export default function MemoryView() {
         title: editing.title,
         body: editing.body,
         pinned: !!editing.pinned,
+        agentId: editing.agentId || null,
         frontmatter: editing.frontmatter || {},
       })
       setEditing(null)
@@ -119,7 +132,7 @@ export default function MemoryView() {
         </div>
 
         {/* Filters */}
-        <div className="px-6 py-3 flex items-center gap-3 border-b border-ink/5">
+        <div className="px-6 py-3 flex items-center gap-3 border-b border-ink/5 flex-wrap">
           <div className="flex items-center gap-1.5 border border-ink/15 rounded-md overflow-hidden text-[11px]">
             <FilterChip active={filterType === 'all'} onClick={() => setFilterType('all')}>全部</FilterChip>
             {TYPES.map((t) => (
@@ -131,6 +144,21 @@ export default function MemoryView() {
                 {t.label}
               </FilterChip>
             ))}
+          </div>
+          {/* v0.8 Agent 范围 */}
+          <div className="flex items-center gap-1.5 text-[11px]">
+            <Users className="w-3 h-3 text-ink-fade" />
+            <select
+              value={filterAgent}
+              onChange={(e) => setFilterAgent(e.target.value)}
+              className="h-7 px-2 text-[11px] bg-paper-2 border border-ink/15 rounded-md outline-none focus:border-ember"
+            >
+              <option value="all">所有 agent</option>
+              <option value="__global__">仅全局</option>
+              {agents.map((a) => (
+                <option key={a.id} value={a.id}>仅 {a.name}</option>
+              ))}
+            </select>
           </div>
           <div className="relative flex-1 max-w-[280px]">
             <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-fade" />
@@ -166,6 +194,12 @@ export default function MemoryView() {
                 <div className="flex items-center gap-2">
                   <span className="font-mono text-[9px] uppercase tracking-wider text-ember">{m.type}</span>
                   {m.pinned && <Pin className="w-3 h-3 text-ember" />}
+                  {m.agentId && (
+                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-ink/5 text-[9px] text-ink-fade">
+                      <Users className="w-2.5 h-2.5" />
+                      {agentNameById.get(m.agentId) || m.agentId.slice(0, 6)}
+                    </span>
+                  )}
                   <span className="text-sm text-ink truncate">{m.title}</span>
                 </div>
                 <div className="text-[11px] text-ink-fade truncate mt-1">
@@ -249,6 +283,26 @@ export default function MemoryView() {
                   <Pin className="w-3.5 h-3.5" />
                   置顶（优先注入到模型上下文）
                 </label>
+
+                {/* v0.8 绑定到 agent */}
+                <div>
+                  <label className="block text-[11px] text-ink-fade mb-1.5 flex items-center gap-1">
+                    <Users className="w-3 h-3" />绑定到 agent
+                  </label>
+                  <select
+                    value={editing.agentId || ''}
+                    onChange={(e) => setEditing({ ...editing, agentId: e.target.value || null })}
+                    className="w-full h-8 px-2 text-xs bg-paper-2 border border-ink/15 rounded-md outline-none focus:border-ember"
+                  >
+                    <option value="">全局（所有 agent 可见）</option>
+                    {agents.map((a) => (
+                      <option key={a.id} value={a.id}>{a.name}{a.id === activeAgentId ? '（当前）' : ''}</option>
+                    ))}
+                  </select>
+                  <div className="text-[10px] text-ink-fade mt-1">
+                    选“全局”则任何 agent 谈话都能看到；选具体 agent 则仅该 agent 生效。
+                  </div>
+                </div>
 
                 <div className="flex items-center gap-2 pt-2">
                   <button
