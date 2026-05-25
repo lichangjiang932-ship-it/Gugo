@@ -622,7 +622,7 @@ export async function handleModelProxyRequest(req, res) {
       try {
         if (session?.user_id) {
           const cap = Number(getRuntimeEnv().MEMORY_INJECT_TOKEN_CAP || 800)
-          const picked = selectActiveMemoriesForInjection({ userId: session.user_id, tokenCap: cap })
+          const picked = selectActiveMemoriesForInjection({ userId: session.user_id, tokenCap: cap, agentId: injectedAgentId })
           if (picked.memories.length) {
             const block = buildMemorySystemBlock(picked.memories)
             // 插入在 agent block 之后（如果有），使 agent 始终为 messages[0]

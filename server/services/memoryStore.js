@@ -38,6 +38,7 @@ function row2memory(row) {
     pinned: !!row.pinned,
     sourceSessionId: row.source_session_id || null,
     sourceMessageId: row.source_message_id || null,
+    agentId: row.agent_id || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lastUsedAt: row.last_used_at,
@@ -70,7 +71,7 @@ export function getMemory(userId, id) {
   return row2memory(row)
 }
 
-export function upsertMemory({ id, userId, type, title, body, frontmatter = {}, pinned = false, sourceSessionId = null, sourceMessageId = null }) {
+export function upsertMemory({ id, userId, type, title, body, frontmatter = {}, pinned = false, sourceSessionId = null, sourceMessageId = null, agentId = null }) {
   if (!userId) throw new Error('userId 必填')
   if (!ALLOWED_TYPES.includes(type)) throw new Error(`type 必须是 ${ALLOWED_TYPES.join('/')} 之一`)
   if (!title?.trim()) throw new Error('title 不能为空')
@@ -84,13 +85,13 @@ export function upsertMemory({ id, userId, type, title, body, frontmatter = {}, 
   const existing = db.prepare('SELECT id FROM memories WHERE user_id = ? AND id = ?').get(userId, memoryId)
   if (existing) {
     db.prepare(
-      `UPDATE memories SET type=?, title=?, slug=?, body=?, frontmatter_json=?, pinned=?, updated_at=? WHERE id=?`
-    ).run(type, title.trim(), slug, body.trim(), frontmatterJson, pinned ? 1 : 0, now, memoryId)
+      `UPDATE memories SET type=?, title=?, slug=?, body=?, frontmatter_json=?, pinned=?, agent_id=?, updated_at=? WHERE id=?`
+    ).run(type, title.trim(), slug, body.trim(), frontmatterJson, pinned ? 1 : 0, agentId || null, now, memoryId)
   } else {
     db.prepare(
-      `INSERT INTO memories (id, user_id, type, title, slug, body, frontmatter_json, pinned, source_session_id, source_message_id, created_at, updated_at, last_used_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`
-    ).run(memoryId, userId, type, title.trim(), slug, body.trim(), frontmatterJson, pinned ? 1 : 0, sourceSessionId, sourceMessageId, now, now)
+      `INSERT INTO memories (id, user_id, type, title, slug, body, frontmatter_json, pinned, source_session_id, source_message_id, agent_id, created_at, updated_at, last_used_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`
+    ).run(memoryId, userId, type, title.trim(), slug, body.trim(), frontmatterJson, pinned ? 1 : 0, sourceSessionId, sourceMessageId, agentId || null, now, now)
   }
 
   // 重新计算 [[slug]] 链
@@ -127,14 +128,25 @@ export function touchMemoryUsage(userId, ids) {
 /**
  * 选 active 记忆做注入。优先 pinned > last_used_at > updated_at。
  * token 预算用粗算 (chars / 4)，超出就尾部裁掉。
+ *
+ * 阶段 6：支持 agentId 过滤。只返回 “agent_id IS NULL (全局) OR agent_id = :agentId” 的记忆。
+ * agentId = null 则只拿全局记忆 (未绑 agent)。
  */
-export function selectActiveMemoriesForInjection({ userId, tokenCap = 800 }) {
+export function selectActiveMemoriesForInjection({ userId, tokenCap = 800, agentId = null }) {
   if (!userId) return { memories: [], totalChars: 0 }
   const db = getDb()
-  const rows = db.prepare(
-    `SELECT * FROM memories WHERE user_id = ?
-     ORDER BY pinned DESC, COALESCE(last_used_at, updated_at) DESC LIMIT 60`
-  ).all(userId)
+  let rows
+  if (agentId) {
+    rows = db.prepare(
+      `SELECT * FROM memories WHERE user_id = ? AND (agent_id IS NULL OR agent_id = ?)
+       ORDER BY pinned DESC, COALESCE(last_used_at, updated_at) DESC LIMIT 60`
+    ).all(userId, agentId)
+  } else {
+    rows = db.prepare(
+      `SELECT * FROM memories WHERE user_id = ? AND agent_id IS NULL
+       ORDER BY pinned DESC, COALESCE(last_used_at, updated_at) DESC LIMIT 60`
+    ).all(userId)
+  }
   const out = []
   let charsUsed = 0
   const charsCap = Math.max(200, tokenCap * 4)

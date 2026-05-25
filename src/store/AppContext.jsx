@@ -130,7 +130,8 @@ function reducer(state, action) {
     }
 
     case 'NEW_SESSION': {
-      const title = action.payload ?? `新会话 ${new Date().toLocaleTimeString()}`
+      const title = action.payload?.title ?? action.payload ?? `新会话 ${new Date().toLocaleTimeString()}`
+      const agentId = typeof action.payload === 'object' && action.payload ? (action.payload.agentId || null) : null
       const id = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
       const now = Date.now()
       const newSession = {
@@ -139,11 +140,22 @@ function reducer(state, action) {
         messages: [],
         createdAt: now,
         updatedAt: now,
+        agentId, // 阶段 6：session sticky agent。null 表示跟随全局 active agent
       }
       return {
         ...state,
         sessions: [newSession, ...state.sessions],
         activeSessionId: id,
+      }
+    }
+    case 'SET_SESSION_AGENT': {
+      const { sessionId, agentId } = action.payload || {}
+      if (!sessionId) return state
+      return {
+        ...state,
+        sessions: state.sessions.map((s) =>
+          s.id === sessionId ? { ...s, agentId: agentId || null, updatedAt: Date.now() } : s,
+        ),
       }
     }
 

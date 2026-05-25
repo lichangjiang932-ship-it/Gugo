@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const DB_SCHEMA_VERSION = 5
+export const DB_SCHEMA_VERSION = 6
 
 const DEFAULT_DATA_DIR = path.join(process.cwd(), 'server-data')
 
@@ -57,7 +57,8 @@ function runMigrations(db) {
   if (version < 2) migrateToV2(db)
   if (getSchemaVersionInternal(db) < 3) migrateToV3(db)
   if (getSchemaVersionInternal(db) < 4) migrateToV4(db)
-  if (getSchemaVersionInternal(db) < DB_SCHEMA_VERSION) migrateToV5(db)
+  if (getSchemaVersionInternal(db) < 5) migrateToV5(db)
+  if (getSchemaVersionInternal(db) < DB_SCHEMA_VERSION) migrateToV6(db)
   runReasonixMigrations(db)
 }
 
@@ -241,11 +242,13 @@ function migrateToV3(db) {
       source_message_id TEXT,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
-      last_used_at INTEGER
+      last_used_at INTEGER,
+      agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL
     );
     CREATE INDEX IF NOT EXISTS idx_memories_user_type ON memories(user_id, type);
     CREATE INDEX IF NOT EXISTS idx_memories_user_slug ON memories(user_id, slug);
     CREATE INDEX IF NOT EXISTS idx_memories_user_pinned ON memories(user_id, pinned, last_used_at);
+    CREATE INDEX IF NOT EXISTS idx_memories_user_agent ON memories(user_id, agent_id, pinned, last_used_at);
 
     CREATE TABLE IF NOT EXISTS memory_links (
       from_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
@@ -352,6 +355,20 @@ function migrateToV5(db) {
     CREATE INDEX IF NOT EXISTS idx_agents_user ON agents(user_id, updated_at DESC);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_user_name ON agents(user_id, name);
   `)
+  setSchemaVersionInternal(db, 5)
+}
+
+/**
+ * 阶段 6：memories 补上可选 agent_id，实现“不同 agent 看到不同记忆切片”。
+ * - agent_id IS NULL 表示全局记忆（所有 agent 可见）
+ * - agent_id 具体 表示仅该 agent 可见
+ * - ON DELETE SET NULL：删除 agent 后它的记忆退回全局
+ */
+function migrateToV6(db) {
+  if (!hasColumn(db, 'memories', 'agent_id')) {
+    db.exec('ALTER TABLE memories ADD COLUMN agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL')
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_memories_user_agent ON memories(user_id, agent_id, pinned, last_used_at)')
   setSchemaVersionInternal(db, DB_SCHEMA_VERSION)
 }
 
