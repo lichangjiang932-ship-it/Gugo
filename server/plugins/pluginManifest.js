@@ -21,6 +21,7 @@ export const PLUGIN_TYPES = Object.freeze([
   'prompt-template',
   'asset-pack',
   'agent-template',
+  'skill-bundle',
 ])
 
 const ID_RE = /^[a-z0-9][a-z0-9-]*$/

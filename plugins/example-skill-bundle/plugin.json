@@ -1,0 +1,11 @@
+{
+  "id": "example-skill-bundle",
+  "name": "Skill Bundle 示例",
+  "version": "0.1.0",
+  "type": "skill-bundle",
+  "entry": "skill.json",
+  "description": "演示如何用 plugin 打包一个可安装到 skillStore 的 skill。",
+  "author": "yma-team",
+  "license": "MIT",
+  "tags": ["example", "skill-bundle"]
+}

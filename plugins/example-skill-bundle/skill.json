@@ -1,0 +1,8 @@
+{
+  "id": "example-bundled",
+  "name": "示例打包技能",
+  "description": "由 plugin 打包安装而来的演示 skill，用于验证 skill-bundle 通路。",
+  "version": "0.1.0",
+  "icon": "bookmark",
+  "permissions": []
+}
