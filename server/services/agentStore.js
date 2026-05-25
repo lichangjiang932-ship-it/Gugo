@@ -168,3 +168,83 @@ export function ensureDefaultAgent({ userId, now = Date.now() }) {
     now,
   })
 }
+
+/**
+ * 把 agent 的 SOUL + IDENTITY 拼成一个 system block 字符串。
+ * 用于 chat 注入；空 agent 或两字段都空时返回空字符串（调用方应跳过）。
+ */
+export function buildAgentSystemBlock(agent) {
+  if (!agent) return ''
+  const parts = []
+  const soul = (agent.soulMd || '').trim()
+  const identity = (agent.identityMd || '').trim()
+  if (!soul && !identity) return ''
+  parts.push(`# Agent: ${agent.name || 'Agent'}`)
+  if (identity) parts.push('\n## IDENTITY\n' + identity)
+  if (soul) parts.push('\n## SOUL\n' + soul)
+  parts.push('\nFollow the persona above. Stay in character.')
+  return parts.join('\n')
+}
+
+/**
+ * 序列化 agent 为 .agent.md 文本：frontmatter + IDENTITY + SOUL。
+ */
+export function serializeAgentMarkdown(agent) {
+  if (!agent) throw new Error('agent required')
+  const front = [
+    '---',
+    `name: ${JSON.stringify(agent.name || '')}`,
+    `avatar_url: ${JSON.stringify(agent.avatarUrl || '')}`,
+    `exported_at: ${new Date().toISOString()}`,
+    '---',
+    '',
+  ].join('\n')
+  return front +
+    `# ${agent.name || 'Agent'}\n\n` +
+    `## IDENTITY\n\n${agent.identityMd || ''}\n\n` +
+    `## SOUL\n\n${agent.soulMd || ''}\n`
+}
+
+/**
+ * 解析 .agent.md 文本回 { name, avatarUrl, soulMd, identityMd }。
+ * 容错：找不到 frontmatter 就从 H1 取 name；找不到 ## SOUL/IDENTITY 就把全文当 soul。
+ */
+export function parseAgentMarkdown(text) {
+  if (!text || typeof text !== 'string') throw new Error('source 不能为空')
+  let body = text
+  let name = ''
+  let avatarUrl = null
+
+  const fmMatch = body.match(/^---\s*\n([\s\S]*?)\n---\s*\n/)
+  if (fmMatch) {
+    const fm = fmMatch[1]
+    const nm = fm.match(/^name:\s*(.+)$/m)
+    if (nm) {
+      try { name = JSON.parse(nm[1]) } catch { name = nm[1].trim() }
+    }
+    const av = fm.match(/^avatar_url:\s*(.+)$/m)
+    if (av) {
+      try { avatarUrl = JSON.parse(av[1]) || null } catch { avatarUrl = av[1].trim() || null }
+    }
+    body = body.slice(fmMatch[0].length)
+  }
+
+  if (!name) {
+    const h1 = body.match(/^#\s+(.+)$/m)
+    if (h1) name = h1[1].trim()
+  }
+  if (!name) name = 'Imported Agent'
+
+  // 抽 ## IDENTITY / ## SOUL（不区分顺序）
+  let identityMd = ''
+  let soulMd = ''
+  const idMatch = body.match(/##\s*IDENTITY\s*\n([\s\S]*?)(?=\n##\s|$)/i)
+  if (idMatch) identityMd = idMatch[1].trim()
+  const soulMatch = body.match(/##\s*SOUL\s*\n([\s\S]*?)(?=\n##\s|$)/i)
+  if (soulMatch) soulMd = soulMatch[1].trim()
+
+  // fallback：全文当 soul
+  if (!identityMd && !soulMd) soulMd = body.trim()
+
+  return { name, avatarUrl, soulMd, identityMd }
+}

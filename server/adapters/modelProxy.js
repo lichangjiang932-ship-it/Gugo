@@ -18,6 +18,7 @@ import {
   touchMemoryUsage,
 } from '../services/memoryStore.js'
 import { dispatchHooks } from '../services/hooksService.js'
+import { ensureDefaultAgent, buildAgentSystemBlock } from '../services/agentStore.js'
 
 // ★ #18: 消息格式 schema — 拒绝畸形 messages 入参,防 OpenAI 上游报 400 / 计费爆零
 const MESSAGE_SCHEMA = z.object({
@@ -591,6 +592,26 @@ export async function handleModelProxyRequest(req, res) {
         }
       }
 
+      // 阶段 4：注入 Agent SOUL/IDENTITY 为第一个 system block（位于 memory 之前只让他在 messages 顶部）
+      // - 使用用户默认 agent（v0.1；session 维度切 agent 等阶段 5）
+      // - 可通过 AGENT_INJECT_ENABLED=0 关闭
+      // - 任何错误不阻断 chat
+      let injectedAgentId = null
+      try {
+        if (session?.user_id && getRuntimeEnv().AGENT_INJECT_ENABLED !== '0') {
+          const agent = ensureDefaultAgent({ userId: session.user_id })
+          const block = buildAgentSystemBlock(agent)
+          if (block) {
+            messages.unshift({ role: 'system', content: block })
+            injectedAgentId = agent.id
+          }
+        }
+      } catch (err) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn('[agent] inject failed:', err?.message || err)
+        }
+      }
+
       // Feature 3: 注入用户长期记忆为 system block
       try {
         if (session?.user_id) {
@@ -598,14 +619,14 @@ export async function handleModelProxyRequest(req, res) {
           const picked = selectActiveMemoriesForInjection({ userId: session.user_id, tokenCap: cap })
           if (picked.memories.length) {
             const block = buildMemorySystemBlock(picked.memories)
-            messages.unshift({ role: 'system', content: block })
+            // 插入在 agent block 之后（如果有），使 agent 始终为 messages[0]
+            const insertAt = injectedAgentId ? 1 : 0
+            messages.splice(insertAt, 0, { role: 'system', content: block })
             injectedMemoryIds = picked.memories.map((m) => m.id)
-            // 标记 last_used_at — 注入即视为使用,影响后续优先级排序
             touchMemoryUsage(session.user_id, injectedMemoryIds)
           }
         }
       } catch (err) {
-        // 注入失败不阻断 chat
         if (process.env.NODE_ENV !== 'production') {
           console.warn('[memory] inject failed:', err?.message || err)
         }

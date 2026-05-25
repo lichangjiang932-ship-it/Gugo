@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, Save, Star, X } from 'lucide-react'
+import { Plus, Trash2, Save, Star, X, Download, Upload } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
 import { useT } from '../i18n/I18nProvider.jsx'
 import {
@@ -8,6 +8,8 @@ import {
   updateAgentApi,
   deleteAgentApi,
   getDefaultAgentApi,
+  exportAgentUrl,
+  importAgentApi,
 } from '../lib/agentClient.js'
 
 function emptyAgent() {
@@ -98,6 +100,45 @@ export default function AgentList() {
     }
   }
 
+  const handleImport = async () => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.md,text/markdown,text/plain'
+    input.onchange = async () => {
+      const file = input.files?.[0]
+      if (!file) return
+      try {
+        const source = await file.text()
+        await importAgentApi(source)
+        await reload()
+      } catch (e) {
+        setErr(e.message || t('errors.loadFailed'))
+      }
+    }
+    input.click()
+  }
+
+  const handleExport = async (a) => {
+    try {
+      // 使用项目已有的 accountClient.getAuthToken() 最鲁棒
+      const mod = await import('../lib/accountClient.js')
+      const token = mod.getAuthToken?.() || ''
+      const r = await fetch(exportAgentUrl(a.id), { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+      if (!r.ok) throw new Error('export failed')
+      const blob = await r.blob()
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `${a.name}.agent.md`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setErr(e.message || t('errors.loadFailed'))
+    }
+  }
+
   return (
     <div className="flex h-screen bg-canvas">
       <LeftRail />
@@ -108,6 +149,12 @@ export default function AgentList() {
               <h1 className="text-3xl font-semibold tracking-tight">{t('agents.title')}</h1>
               <p className="text-sm text-ink-fade mt-1">{t('agents.subtitle')}</p>
             </div>
+            <button
+              onClick={handleImport}
+              className="inline-flex items-center gap-2 px-3 py-2 border border-ink/15 rounded-md text-sm hover:bg-ink/5"
+            >
+              <Upload size={14} /> {t('agents.import')}
+            </button>
             <button
               onClick={handleNew}
               className="inline-flex items-center gap-2 px-4 py-2 bg-ink text-canvas rounded-md text-sm hover:opacity-90"
@@ -142,8 +189,15 @@ export default function AgentList() {
                     </div>
                   </button>
                   <button
+                    onClick={() => handleExport(a)}
+                    className="ml-2 p-2 text-ink-fade hover:text-ink"
+                    aria-label={t('agents.export')}
+                  >
+                    <Download size={16} />
+                  </button>
+                  <button
                     onClick={() => handleDelete(a)}
-                    className="ml-4 p-2 text-ink-fade hover:text-red-600"
+                    className="ml-2 p-2 text-ink-fade hover:text-red-600"
                     aria-label={t('common.delete')}
                   >
                     <Trash2 size={16} />

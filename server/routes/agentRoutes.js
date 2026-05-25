@@ -4,6 +4,8 @@
  *   GET    /api/agents              列出当前用户所有 agent
  *   GET    /api/agents/default      取默认 agent（无则触发 ensureDefault）
  *   GET    /api/agents/:id          取详情
+ *   GET    /api/agents/:id/export   导出为 .agent.md（frontmatter + SOUL + IDENTITY）
+ *   POST   /api/agents/import       从 .agent.md 文本导入（body: { source }）
  *   POST   /api/agents              创建 { name, soulMd, identityMd?, avatarUrl?, isDefault? }
  *   PATCH  /api/agents/:id          部分更新
  *   DELETE /api/agents/:id          删除
@@ -21,6 +23,8 @@ import {
   updateAgent,
   deleteAgent,
   ensureDefaultAgent,
+  serializeAgentMarkdown,
+  parseAgentMarkdown,
 } from '../services/agentStore.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
@@ -65,6 +69,35 @@ export async function handleAgentRequest(req, res) {
         isDefault: !!body.isDefault,
       })
       return sendJson(res, 200, { ok: true, agent })
+    }
+
+    // POST /api/agents/import
+    if (req.method === 'POST' && pathname === '/api/agents/import') {
+      const body = await readJson(req)
+      const parsed = parseAgentMarkdown(String(body?.source || ''))
+      const agent = createAgent({
+        userId,
+        name: parsed.name,
+        soulMd: parsed.soulMd,
+        identityMd: parsed.identityMd,
+        avatarUrl: parsed.avatarUrl,
+        isDefault: false,
+      })
+      return sendJson(res, 200, { ok: true, agent })
+    }
+
+    // /api/agents/:id/export
+    const exportMatch = pathname.match(/^\/api\/agents\/([A-Za-z0-9_-]+)\/export$/)
+    if (exportMatch && req.method === 'GET') {
+      const agent = getAgent({ userId, id: exportMatch[1] })
+      if (!agent) return sendJson(res, 404, { ok: false, error: 'agent 不存在' })
+      const text = serializeAgentMarkdown(agent)
+      res.writeHead(200, {
+        'Content-Type': 'text/markdown; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${encodeURIComponent(agent.name)}.agent.md"`,
+      })
+      res.end(text)
+      return undefined
     }
 
     // /api/agents/:id

@@ -114,3 +114,66 @@ test('Agent 路由：非法 id / 404 / method not allowed', async () => {
     assert.equal(res.status, 405)
   })
 })
+
+test('GET /api/agents/:id/export → text/markdown + 可被 POST /import 还原', async () => {
+  const { token } = issueTestSession()
+  await withServer(async (base) => {
+    const created = await (await fetch(`${base}/api/agents`, {
+      method: 'POST',
+      headers: authHeaders(token),
+      body: JSON.stringify({ name: 'ExportMe', soulMd: '## be sharp', identityMd: '- Name: ExportMe' }),
+    })).json()
+
+    const exportRes = await fetch(`${base}/api/agents/${created.agent.id}/export`, { headers: authHeaders(token) })
+    assert.equal(exportRes.status, 200)
+    assert.match(exportRes.headers.get('content-type') || '', /markdown/)
+    const text = await exportRes.text()
+    assert.match(text, /^---/)
+    assert.match(text, /name: "ExportMe"/)
+    assert.match(text, /## IDENTITY/)
+    assert.match(text, /## SOUL/)
+    assert.match(text, /be sharp/)
+
+    // 删原 agent 避免 import 撞名
+    await fetch(`${base}/api/agents/${created.agent.id}`, { method: 'DELETE', headers: authHeaders(token) })
+
+    const importRes = await fetch(`${base}/api/agents/import`, {
+      method: 'POST',
+      headers: authHeaders(token),
+      body: JSON.stringify({ source: text }),
+    })
+    assert.equal(importRes.status, 200)
+    const imported = await importRes.json()
+    assert.equal(imported.agent.name, 'ExportMe')
+    assert.match(imported.agent.soulMd, /be sharp/)
+    assert.match(imported.agent.identityMd, /- Name: ExportMe/)
+    assert.equal(imported.agent.isDefault, false, 'import 不应抢默认')
+  })
+})
+
+test('POST /api/agents/import: 空 source → 400', async () => {
+  const { token } = issueTestSession()
+  await withServer(async (base) => {
+    const res = await fetch(`${base}/api/agents/import`, {
+      method: 'POST',
+      headers: authHeaders(token),
+      body: JSON.stringify({ source: '' }),
+    })
+    assert.equal(res.status, 400)
+  })
+})
+
+test('POST /api/agents/import: 无 frontmatter 也能 fallback', async () => {
+  const { token } = issueTestSession()
+  await withServer(async (base) => {
+    const res = await fetch(`${base}/api/agents/import`, {
+      method: 'POST',
+      headers: authHeaders(token),
+      body: JSON.stringify({ source: '# FallbackName\n\nThis is everything as soul.' }),
+    })
+    assert.equal(res.status, 200)
+    const body = await res.json()
+    assert.equal(body.agent.name, 'FallbackName')
+    assert.match(body.agent.soulMd, /everything as soul/)
+  })
+})
