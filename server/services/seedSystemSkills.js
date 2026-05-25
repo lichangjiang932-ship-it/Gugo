@@ -10,7 +10,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { getDb } from './db.js'
+import { getDb } from '../db.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const SEED_ROOT = path.resolve(__dirname, '../seed/skills')

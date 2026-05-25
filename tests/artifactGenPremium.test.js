@@ -17,7 +17,7 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'pptx-premium-'))
 process.env.ARTIFACT_DIR = TMP
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-premium-tests', String(process.pid))
 
-const { createPptx } = await import('../server/artifactGen.js')
+const { createPptx } = await import('../server/services/artifactGen.js')
 
 async function loadSlides(filename) {
   const buf = fs.readFileSync(filename)

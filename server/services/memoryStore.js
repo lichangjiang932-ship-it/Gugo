@@ -9,7 +9,7 @@
  *   - 渲染时 MarkdownRenderer 检测 [[slug]] 替换为 anchor (前端做)
  */
 
-import { getDb } from './db.js'
+import { getDb } from '../db.js'
 import { randomUUID } from 'node:crypto'
 
 const ALLOWED_TYPES = ['user', 'feedback', 'project', 'reference']

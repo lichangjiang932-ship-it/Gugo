@@ -14,7 +14,7 @@ import {
   updateJobStep,
 } from './jobStore.js'
 import { createDocx } from './artifactGen.js'
-import { callBackgroundModel, callBackgroundModelWithTools } from './adapters/modelProxy.js'
+import { callBackgroundModel, callBackgroundModelWithTools } from '../adapters/modelProxy.js'
 import { getRuntimeSkill } from './skillRegistry.js'
 import { runToolsLoop } from './jobTools.js'
 

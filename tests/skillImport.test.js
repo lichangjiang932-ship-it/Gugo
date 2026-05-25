@@ -3,7 +3,7 @@ import test from 'node:test'
 import {
   resolveImportedSkillId,
   validateSkillPack,
-} from '../server/skillImport.js'
+} from '../server/services/skillImport.js'
 
 test('validator accepts a complete folder skill pack', () => {
   const result = validateSkillPack({

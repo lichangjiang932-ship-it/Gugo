@@ -16,7 +16,7 @@ import {
   upsertHook,
   deleteHook,
   testHook,
-} from '../hooksService.js'
+} from '../services/hooksService.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
 function sendJson(res, status, body) {

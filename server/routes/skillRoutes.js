@@ -1,7 +1,7 @@
 import { authenticateRequest } from '../middleware.js'
-import { installValidatedSkillPack } from '../skillImport.js'
-import { listRuntimeSkillIds, listRuntimeSkills } from '../skillRegistry.js'
-import { getImportedSkill } from '../skillStore.js'
+import { installValidatedSkillPack } from '../services/skillImport.js'
+import { listRuntimeSkillIds, listRuntimeSkills } from '../services/skillRegistry.js'
+import { getImportedSkill } from '../services/skillStore.js'
 import { readJson, sendJson } from '../utils.js'
 
 const ASSET_MIME = {

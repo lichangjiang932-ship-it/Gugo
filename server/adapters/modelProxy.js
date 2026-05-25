@@ -16,8 +16,8 @@ import {
   selectActiveMemoriesForInjection,
   buildMemorySystemBlock,
   touchMemoryUsage,
-} from '../memoryStore.js'
-import { dispatchHooks } from '../hooksService.js'
+} from '../services/memoryStore.js'
+import { dispatchHooks } from '../services/hooksService.js'
 
 // ★ #18: 消息格式 schema — 拒绝畸形 messages 入参,防 OpenAI 上游报 400 / 计费爆零
 const MESSAGE_SCHEMA = z.object({

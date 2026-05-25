@@ -32,7 +32,7 @@ import { listEnabledServers, getServer } from './mcpStore.js'
 import {
   registerDynamicTool,
   unregisterByOrigin,
-} from '../toolRegistry.js'
+} from '../services/toolRegistry.js'
 import { writeToolAudit } from '../utils/audit.js'
 
 const DEFAULT_ALLOWED_COMMANDS = ['npx', 'node', 'uvx', 'python', 'python3']

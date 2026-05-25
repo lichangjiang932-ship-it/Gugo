@@ -1,6 +1,6 @@
 import { authenticateRequest } from '../middleware.js'
 import { readJson } from '../utils.js'
-import { buildCompaction, createCompactionArchive, getCompactionArchive } from '../compactionService.js'
+import { buildCompaction, createCompactionArchive, getCompactionArchive } from '../services/compactionService.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
 

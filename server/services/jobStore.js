@@ -1,4 +1,4 @@
-import { getDb } from './db.js'
+import { getDb } from '../db.js'
 
 function parseJson(value, fallback = null) {
   if (value == null || value === '') return fallback

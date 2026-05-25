@@ -24,7 +24,7 @@ import {
   getToolCost,
 } from './billingAuth.js'
 import { getSessionByToken } from '../db.js'
-import { dispatchHooks } from '../hooksService.js'
+import { dispatchHooks } from '../services/hooksService.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
 const SEARCH_TIMEOUT_MS = 12000

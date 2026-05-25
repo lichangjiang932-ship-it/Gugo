@@ -5,8 +5,8 @@ import test from 'node:test'
 
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-job-tools-tests', String(process.pid))
 
-const { SERVER_TOOL_SPECS, runToolsLoop } = await import('../server/jobTools.js')
-const { createDefaultExecuteStep, JobRuntime } = await import('../server/jobRuntime.js')
+const { SERVER_TOOL_SPECS, runToolsLoop } = await import('../server/services/jobTools.js')
+const { createDefaultExecuteStep, JobRuntime } = await import('../server/services/jobRuntime.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 const TEST_USER = issueTestSession().userId

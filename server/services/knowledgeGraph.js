@@ -14,7 +14,7 @@
  *   searchNodes / readGraph / openNodes
  */
 
-import { getDb } from './db.js'
+import { getDb } from '../db.js'
 import crypto from 'node:crypto'
 
 function newId() {

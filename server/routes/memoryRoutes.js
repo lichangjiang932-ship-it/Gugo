@@ -18,7 +18,7 @@ import {
   deleteMemory,
   buildMemoryIndex,
   findBySlug,
-} from '../memoryStore.js'
+} from '../services/memoryStore.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
 

@@ -6,7 +6,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { runToolsLoop } from '../server/jobTools.js'
+import { runToolsLoop } from '../server/services/jobTools.js'
 import { requestClarificationTool, reflectTool } from '../server/utils/agenticTools.js'
 
 function makeFakeJob() {

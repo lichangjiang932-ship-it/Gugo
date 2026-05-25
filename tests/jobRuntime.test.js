@@ -9,7 +9,7 @@ const {
   JobRuntime,
   createDefaultExecuteStep,
   recoverInterruptedJobs,
-} = await import('../server/jobRuntime.js')
+} = await import('../server/services/jobRuntime.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 const TEST_USER = issueTestSession().userId
