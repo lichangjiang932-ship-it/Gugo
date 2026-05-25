@@ -105,6 +105,23 @@ export default function AgentList() {
     }
   }
 
+  // v0.7: 撞名重试。后端报 "已存在同名 agent: <x>" 时，弹 prompt 让用户改名 retry。
+  const importWithRetry = async (source, hintName) => {
+    try {
+      await importAgentApi(source)
+    } catch (e) {
+      const msg = String(e?.message || '')
+      if (/已存在同名/.test(msg) || /UNIQUE/i.test(msg)) {
+        const next = window.prompt(t('agents.renameOnConflict'), `${hintName} (copy)`)
+        if (next && next.trim()) {
+          await importAgentApi(source, { overrideName: next.trim() })
+          return
+        }
+      }
+      throw e
+    }
+  }
+
   const handleImport = async () => {
     const input = document.createElement('input')
     input.type = 'file'
@@ -114,7 +131,7 @@ export default function AgentList() {
       if (!file) return
       try {
         const source = await file.text()
-        await importAgentApi(source)
+        await importWithRetry(source, /name:\s*"?([^"\n]+)/.exec(source)?.[1]?.trim() || 'Agent')
         await reload()
       } catch (e) {
         setErr(e.message || t('errors.loadFailed'))
@@ -125,6 +142,9 @@ export default function AgentList() {
 
   const [templates, setTemplates] = useState([])
   const [showTemplates, setShowTemplates] = useState(false)
+  const [previewTpl, setPreviewTpl] = useState(null)
+  const [previewSource, setPreviewSource] = useState('')
+  const [previewLoading, setPreviewLoading] = useState(false)
 
   const openTemplates = async () => {
     setErr('')
@@ -132,17 +152,36 @@ export default function AgentList() {
       const { plugins } = await listPluginsApi({ type: 'agent-template' })
       setTemplates(plugins || [])
       setShowTemplates(true)
+      setPreviewTpl(null)
+      setPreviewSource('')
     } catch (e) {
       setErr(e.message || t('errors.loadFailed'))
     }
   }
 
-  const handleUseTemplate = async (tpl) => {
+  const openPreview = async (tpl) => {
+    setPreviewTpl(tpl)
+    setPreviewSource('')
+    setPreviewLoading(true)
     try {
       const detail = await getPluginApi(tpl.id)
-      const source = detail?.entryPreview?.content || ''
+      setPreviewSource(detail?.entryPreview?.content || '')
+    } catch (e) {
+      setErr(e.message || t('errors.loadFailed'))
+    } finally {
+      setPreviewLoading(false)
+    }
+  }
+
+  const handleUseTemplate = async (tpl) => {
+    try {
+      let source = previewSource
+      if (!source || previewTpl?.id !== tpl.id) {
+        const detail = await getPluginApi(tpl.id)
+        source = detail?.entryPreview?.content || ''
+      }
       if (!source) throw new Error('template entry empty')
-      await importAgentApi(source)
+      await importWithRetry(source, tpl.name || 'Agent')
       setShowTemplates(false)
       await reload()
     } catch (e) {
@@ -324,36 +363,59 @@ export default function AgentList() {
               onClick={() => setShowTemplates(false)}
             >
               <div
-                className="bg-canvas rounded-lg shadow-2xl w-full max-w-2xl max-h-[80vh] overflow-hidden flex flex-col"
+                className="bg-canvas rounded-lg shadow-2xl w-full max-w-4xl max-h-[85vh] overflow-hidden flex flex-col"
                 onClick={(e) => e.stopPropagation()}
               >
                 <header className="flex items-center justify-between px-6 py-4 border-b border-ink/10">
                   <h2 className="text-base font-medium">{t('agents.templatesTitle')}</h2>
                   <button onClick={() => setShowTemplates(false)} className="p-1 text-ink-fade hover:text-ink"><X size={16} /></button>
                 </header>
-                <div className="flex-1 overflow-y-auto px-6 py-4">
-                  {templates.length === 0 ? (
-                    <p className="text-sm text-ink-fade">{t('agents.templatesEmpty')}</p>
-                  ) : (
-                    <ul className="divide-y divide-ink/10">
-                      {templates.map((tpl) => (
-                        <li key={tpl.id} className="py-3 flex items-start justify-between gap-4">
-                          <div className="min-w-0 flex-1">
-                            <div className="font-medium text-sm">{tpl.name}</div>
-                            <div className="text-xs text-ink-fade mt-0.5">{tpl.description}</div>
-                            <div className="font-mono text-[10px] text-ink-fade mt-1">{tpl.id} v{tpl.version}</div>
-                          </div>
-                          <button
-                            onClick={() => handleUseTemplate(tpl)}
-                            className="shrink-0 px-3 py-1.5 bg-ink text-canvas rounded text-xs hover:opacity-90"
+                <div className="flex-1 overflow-hidden flex min-h-0">
+                  <div className="w-64 shrink-0 border-r border-ink/10 overflow-y-auto">
+                    {templates.length === 0 ? (
+                      <p className="text-sm text-ink-fade p-4">{t('agents.templatesEmpty')}</p>
+                    ) : (
+                      <ul className="divide-y divide-ink/10">
+                        {templates.map((tpl) => (
+                          <li
+                            key={tpl.id}
+                            onClick={() => openPreview(tpl)}
+                            className={`px-4 py-3 cursor-pointer hover:bg-ink/5 ${previewTpl?.id === tpl.id ? 'bg-ink/5' : ''}`}
                           >
-                            {t('agents.useThis')}
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
+                            <div className="font-medium text-sm">{tpl.name}</div>
+                            <div className="text-xs text-ink-fade mt-0.5 line-clamp-2">{tpl.description}</div>
+                            <div className="font-mono text-[10px] text-ink-fade mt-1">{tpl.id} v{tpl.version}</div>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                  <div className="flex-1 overflow-y-auto px-6 py-4 min-w-0">
+                    {!previewTpl ? (
+                      <p className="text-sm text-ink-fade">{t('agents.templatesHint')}</p>
+                    ) : previewLoading ? (
+                      <p className="text-sm text-ink-fade">{t('common.loading')}</p>
+                    ) : (
+                      <pre className="text-xs leading-relaxed whitespace-pre-wrap font-mono text-ink">
+{previewSource}
+                      </pre>
+                    )}
+                  </div>
                 </div>
+                {previewTpl && (
+                  <footer className="flex items-center justify-end gap-2 px-6 py-3 border-t border-ink/10">
+                    <button
+                      onClick={() => setShowTemplates(false)}
+                      className="px-4 py-2 text-sm text-ink-fade hover:text-ink"
+                    >{t('common.cancel')}</button>
+                    <button
+                      onClick={() => handleUseTemplate(previewTpl)}
+                      className="inline-flex items-center gap-2 px-4 py-2 bg-ink text-canvas rounded text-sm hover:opacity-90"
+                    >
+                      <Sparkles size={14} /> {t('agents.useThis')}
+                    </button>
+                  </footer>
+                )}
               </div>
             </div>
           )}

@@ -177,3 +177,32 @@ test('POST /api/agents/import: 无 frontmatter 也能 fallback', async () => {
     assert.match(body.agent.soulMd, /everything as soul/)
   })
 })
+
+test('POST /api/agents/import: overrideName 撞名重命名', async () => {
+  const { token } = issueTestSession()
+  await withServer(async (base) => {
+    const source = '---\nname: "DupName"\n---\n# DupName\n\n## SOUL\nx'
+    // 首次 import 成功
+    const r1 = await fetch(`${base}/api/agents/import`, {
+      method: 'POST', headers: authHeaders(token), body: JSON.stringify({ source }),
+    })
+    assert.equal(r1.status, 200)
+
+    // 再次同 source 撞名 → 400/500
+    const r2 = await fetch(`${base}/api/agents/import`, {
+      method: 'POST', headers: authHeaders(token), body: JSON.stringify({ source }),
+    })
+    assert.notEqual(r2.status, 200)
+
+    // 带 overrideName 改名 → 200
+    const r3 = await fetch(`${base}/api/agents/import`, {
+      method: 'POST', headers: authHeaders(token),
+      body: JSON.stringify({ source, overrideName: 'DupName (copy)' }),
+    })
+    assert.equal(r3.status, 200)
+    const body = await r3.json()
+    assert.equal(body.agent.name, 'DupName (copy)')
+    // soul/identity 内容来自原 source 不受 override 影响
+    assert.match(body.agent.soulMd, /^x/)
+  })
+})

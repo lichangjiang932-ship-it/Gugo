@@ -65,11 +65,11 @@ export function exportAgentUrl(id) {
   return `/api/agents/${encodeURIComponent(id)}/export`
 }
 
-export async function importAgentApi(source) {
+export async function importAgentApi(source, { overrideName } = {}) {
   const resp = await fetch('/api/agents/import', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    body: JSON.stringify({ source }),
+    body: JSON.stringify({ source, overrideName }),
   })
   return jsonOk(resp)
 }
