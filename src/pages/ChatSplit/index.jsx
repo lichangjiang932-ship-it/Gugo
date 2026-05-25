@@ -10,6 +10,7 @@ import { readStoredModel, resolveInitialModel, writeStoredModel } from '../../li
 import { isLoggedInLocally } from '../../lib/accountClient.js'
 import { useActiveAgent } from '../../agents/activeAgentContext.js'
 import { listSkills } from '../../lib/skillClient.js'
+import { listPromptTemplatesApi, getPromptTemplateContentApi, renderPromptTemplate } from '../../lib/pluginClient.js'
 import { inferSkillIdFromPrompt, parseSkillCommand } from '../../lib/skillCommands.js'
 import { TASK_STATUS, TOOL_CALL_STATUS, HISTORY_STATUS } from '../../store/taskStatus.js'
 import ChatHeader from './ChatHeader'
@@ -88,6 +89,8 @@ export default function ChatSplit() {
   const [toolMaxRounds, setToolMaxRounds] = useState(5)
   const [selectedModel, setSelectedModel] = useState('')
   const [runtimeSkills, setRuntimeSkills] = useState(SKILLS)
+  // Phase 2 S4: prompt-template plugins 进 slash 菜单
+  const [promptTemplates, setPromptTemplates] = useState([])
   const [showSlashMenu, setShowSlashMenu] = useState(false)
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [lastFailedPrompt, setLastFailedPrompt] = useState('')
@@ -151,6 +154,19 @@ export default function ChatSplit() {
     return () => { cancelled = true }
   }, [])
 
+  // Phase 2 S4: 拉 prompt-template plugins 进 slash 菜单
+  useEffect(() => {
+    let cancelled = false
+    listPromptTemplatesApi()
+      .then((list) => {
+        if (!cancelled && Array.isArray(list)) setPromptTemplates(list)
+      })
+      .catch(() => {
+        if (!cancelled) setPromptTemplates([])
+      })
+    return () => { cancelled = true }
+  }, [])
+
   useEffect(() => {
     if (state.draftInput) {
       const nextInput = state.draftInput
@@ -201,6 +217,12 @@ export default function ChatSplit() {
   const filteredSkills = slashQuery
     ? runtimeSkills.filter((s) => s.id.toLowerCase().includes(slashQuery) || s.name.toLowerCase().includes(slashQuery))
     : runtimeSkills
+  // Phase 2 S4: prompt-template plugins 跟 skills 一起进 slash 菜单
+  const filteredPromptTemplates = slashQuery
+    ? promptTemplates.filter((p) => String(p.id || '').toLowerCase().includes(slashQuery) || String(p.name || '').toLowerCase().includes(slashQuery))
+    : promptTemplates
+  // 跟 ChatComposer 内 buildSlashItems 一致：skills 在前，templates 在后
+  const slashItemsCount = filteredSkills.length + filteredPromptTemplates.length
 
   /* ── send flow ── */
   const triggerSendFlow = useCallback(
@@ -552,20 +574,50 @@ export default function ChatSplit() {
     return () => window.removeEventListener('choice-selected', handler)
   }, [triggerSendFlow])
 
+  // Phase 2 S4: 用户在 slash 菜单选 prompt-template 时：拉模板原文 → 渲染 → 写入输入框
+  const handlePickPromptTemplate = useCallback(async (tpl) => {
+    if (!tpl?.id) return
+    try {
+      const content = await getPromptTemplateContentApi(tpl.id)
+      if (!content) {
+        // 拉不到就退化成把 plugin 名字写进输入框，至少不卡死
+        setInput(`# ${tpl.name}\n`)
+        return
+      }
+      const rendered = renderPromptTemplate(content, {
+        name: tpl.name || '',
+        description: tpl.description || '',
+      })
+      setInput(rendered)
+    } catch {
+      setInput(`# ${tpl.name}\n`)
+    }
+  }, [])
+
   const handleKeyDown = useCallback((e) => {
-    if (showSlashMenu && filteredSkills.length > 0) {
-      if (e.key === 'ArrowDown') { e.preventDefault(); setSelectedIndex((i) => (i + 1) % filteredSkills.length); return }
-      if (e.key === 'ArrowUp') { e.preventDefault(); setSelectedIndex((i) => (i - 1 + filteredSkills.length) % filteredSkills.length); return }
+    if (showSlashMenu && slashItemsCount > 0) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setSelectedIndex((i) => (i + 1) % slashItemsCount); return }
+      if (e.key === 'ArrowUp') { e.preventDefault(); setSelectedIndex((i) => (i - 1 + slashItemsCount) % slashItemsCount); return }
       if (e.key === 'Enter') {
         e.preventDefault()
-        const skill = filteredSkills[selectedIndex]
-        if (skill) { setInput(`/${skill.id} `); setShowSlashMenu(false) }
+        // 先 skills，再 prompt-templates，跟 buildSlashItems 顺序一致
+        if (selectedIndex < filteredSkills.length) {
+          const skill = filteredSkills[selectedIndex]
+          if (skill) { setInput(`/${skill.id} `); setShowSlashMenu(false) }
+        } else {
+          const tplIdx = selectedIndex - filteredSkills.length
+          const tpl = filteredPromptTemplates[tplIdx]
+          if (tpl) {
+            setShowSlashMenu(false)
+            handlePickPromptTemplate(tpl)
+          }
+        }
         return
       }
       if (e.key === 'Escape') { setShowSlashMenu(false); return }
     }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
-  }, [showSlashMenu, filteredSkills, selectedIndex, handleSend])
+  }, [showSlashMenu, slashItemsCount, filteredSkills, filteredPromptTemplates, selectedIndex, handleSend, handlePickPromptTemplate])
 
   const handleExpandCompaction = useCallback(async (archiveId) => {
     if (!archiveId) return
@@ -835,6 +887,8 @@ export default function ChatSplit() {
           }}
           handleKeyDown={handleKeyDown}
           skills={runtimeSkills}
+          promptTemplates={filteredPromptTemplates}
+          onPickPromptTemplate={handlePickPromptTemplate}
         />
       </div>
 

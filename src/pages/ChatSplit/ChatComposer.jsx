@@ -1,6 +1,8 @@
-import { useRef, useEffect, useState } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
+import { useRef, useEffect, useState, useMemo } from 'react'
+import { AnimatePresence } from 'framer-motion'
 import FullscreenMediaModal from '../../components/FullscreenMediaModal.jsx'
+import SlashAutocomplete from '../../components/SlashAutocomplete.jsx'
+import { buildSlashItems } from '../../components/slashItems.js'
 import {
   Paperclip,
   Mic,
@@ -10,7 +12,6 @@ import {
   X,
   FileText,
 } from 'lucide-react'
-import { SKILL_ICONS } from '../../lib/skillIcons.js'
 
 const QUICK_SKILLS = [
   { label: '/ppt', command: '/ppt', active: true },
@@ -42,6 +43,8 @@ export default function ChatComposer({
   onQuickSkillClick,
   handleKeyDown,
   skills,
+  promptTemplates = [],
+  onPickPromptTemplate,
 }) {
   const textareaRef = useRef(null)
   const fileInputRef = useRef(null)
@@ -79,6 +82,13 @@ export default function ChatComposer({
 
   const [fullscreenSrc, setFullscreenSrc] = useState(null)
 
+  // Phase 2 S4: 把当前 slash query 跟 prompt-templates 合并到统一 items 数组
+  const slashQuery = input.startsWith('/') && !input.includes(' ') ? input.slice(1) : ''
+  const slashItems = useMemo(
+    () => buildSlashItems({ skills: filteredSkills, promptTemplates, query: slashQuery }),
+    [filteredSkills, promptTemplates, slashQuery],
+  )
+
   return (
     <div
       className="px-6 pb-6 pt-3 border-t border-dashed border-ink-fade/50 relative"
@@ -92,58 +102,26 @@ export default function ChatComposer({
         onFileChange?.({ target: { files: e.dataTransfer.files, value: '' } })
       }}
     >
-      {/* Slash menu overlay */}
+      {/* Slash menu overlay (Phase 2 S4: SlashAutocomplete 抽离) */}
       <AnimatePresence>
-        {showSlashMenu && filteredSkills.length > 0 && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-start justify-center pt-[30vh] bg-black/20"
-            onClick={() => setShowSlashMenu(false)}
-          >
-            <motion.div
-              initial={{ opacity: 0, y: 8, scale: 0.98 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 8, scale: 0.98 }}
-              transition={{ duration: 0.2 }}
-              className="w-[480px] max-h-[360px] overflow-y-auto rounded-xl shadow-2xl border border-ink-fade/50 bg-paper p-2"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="px-2 py-1.5 font-mono text-[9px] tracking-wider text-ink-fade uppercase">
-                选择技能
-              </div>
-              {filteredSkills.map((skill, i) => (
-                <button
-                  key={skill.id}
-                  onClick={() => {
-                    setInput('/' + skill.id + ' ')
-                    setShowSlashMenu(false)
-                    setTimeout(() => textareaRef.current?.focus(), 0)
-                  }}
-                  onMouseEnter={() => setSelectedIndex(i)}
-                  className={
-                    'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-colors ' +
-                    (i === selectedIndex ? 'bg-ember-soft' : 'hover:bg-paper-2')
-                  }
-                >
-                  {(() => {
-                    const Icon = SKILL_ICONS[skill.id]
-                    return Icon ? <Icon className="w-5 h-5 text-ink-fade" /> : null
-                  })()}
-                  <div className="flex-1 min-w-0">
-                    <div className={'text-sm font-medium ' + (i === selectedIndex ? 'text-ember' : 'text-ink')}>
-                      {skill.name}
-                    </div>
-                    <div className="text-xs text-ink-fade truncate">{skill.desc}</div>
-                  </div>
-                  {skill.recommended && (
-                    <span className="font-mono text-[9px] text-ember bg-ember-soft px-1.5 py-0.5 rounded">推荐</span>
-                  )}
-                </button>
-              ))}
-            </motion.div>
-          </motion.div>
+        {showSlashMenu && slashItems.length > 0 && (
+          <SlashAutocomplete
+            visible
+            items={slashItems}
+            selectedIndex={selectedIndex}
+            setSelectedIndex={setSelectedIndex}
+            onPickSkill={(skill) => {
+              setInput('/' + skill.id + ' ')
+              setShowSlashMenu(false)
+              setTimeout(() => textareaRef.current?.focus(), 0)
+            }}
+            onPickPromptTemplate={(tpl) => {
+              setShowSlashMenu(false)
+              onPickPromptTemplate?.(tpl)
+              setTimeout(() => textareaRef.current?.focus(), 0)
+            }}
+            onDismiss={() => setShowSlashMenu(false)}
+          />
         )}
       </AnimatePresence>
 
@@ -225,9 +203,9 @@ export default function ChatComposer({
                 if (!v.startsWith('/') || v.includes(' ')) return false
                 const q = v.slice(1).toLowerCase()
                 if (!q) return true
-                return skills.some(
-                  (s) => s.id.toLowerCase().includes(q) || s.name.toLowerCase().includes(q)
-                )
+                if (skills.some((s) => s.id.toLowerCase().includes(q) || s.name.toLowerCase().includes(q))) return true
+                if (promptTemplates.some((p) => String(p.id || '').toLowerCase().includes(q) || String(p.name || '').toLowerCase().includes(q))) return true
+                return false
               }
 
               const nowShow = shouldShow(val)

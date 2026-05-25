@@ -1,6 +1,8 @@
 /**
  * Plugin client — 拉 plugin 列表 / 详情。
  * 阶段 6 接入：AgentList "From template" 按钮调 listPluginsApi({type:'agent-template'})。
+ * Phase 2 S4：listPromptTemplatesApi 拉 prompt-template plugin 列表，
+ *           getPromptTemplateContentApi 拉 entry markdown 内容（已限 50KB）。
  */
 import { authHeaders, jsonOk } from './agentClient.js'
 
@@ -25,4 +27,40 @@ export async function installPluginAsSkillApi(pluginId) {
     headers: authHeaders(),
   })
   return jsonOk(resp)
+}
+
+/* ── Phase 2 S4: prompt-template plugins as slash command ────────────── */
+
+/**
+ * 拉所有 type='prompt-template' 的 plugin（公开端点）。
+ * 返回 [{ id, name, description, ... }]
+ */
+export async function listPromptTemplatesApi() {
+  const data = await listPluginsApi({ type: 'prompt-template' })
+  return Array.isArray(data?.plugins) ? data.plugins : []
+}
+
+/**
+ * 拉 prompt-template plugin 的 entry markdown 内容。
+ * 公共端点 ENTRY_PREVIEW_LIMIT=50KB 已在 server 侧限制。
+ * @returns string 模板原文；找不到或非 prompt-template 返空串。
+ */
+export async function getPromptTemplateContentApi(id) {
+  const data = await getPluginApi(id)
+  if (!data?.plugin || data.plugin.type !== 'prompt-template') return ''
+  const preview = data.entryPreview || {}
+  if (preview.error) return ''
+  return String(preview.content || '')
+}
+
+/**
+ * 用 ctx 渲染 prompt-template：把 `{{var}}` 替成 ctx[var]，缺省替成空串。
+ * 没有 ctx 时返回原文。
+ */
+export function renderPromptTemplate(content, ctx = {}) {
+  const text = String(content || '')
+  return text.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => {
+    const v = ctx[key]
+    return v == null ? '' : String(v)
+  })
 }
