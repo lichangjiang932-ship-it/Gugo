@@ -1,7 +1,9 @@
+import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import DOMPurify from 'dompurify'
+import FullscreenMediaModal from './FullscreenMediaModal.jsx'
 
 /**
  * MarkdownRenderer —— 安全渲染 Markdown + 代码高亮
@@ -33,6 +35,7 @@ function sanitizeHtml(raw) {
 
 export default function MarkdownRenderer({ children, className = '' }) {
   const safeContent = sanitizeHtml(children || '')
+  const [fullscreen, setFullscreen] = useState(null)
 
   return (
     <div className={`prose prose-sm max-w-none ${className}`}>
@@ -67,6 +70,16 @@ export default function MarkdownRenderer({ children, className = '' }) {
               </code>
             )
           },
+          // 图片：点击进入全屏查看器
+          img: ({ src, alt, ...props }) => (
+            <img
+              {...props}
+              src={src}
+              alt={alt || ''}
+              className="cursor-zoom-in rounded border border-ink-fade/30 max-w-full h-auto"
+              onClick={() => src && setFullscreen({ src, alt: alt || '' })}
+            />
+          ),
           // 引用块
           blockquote: ({ children, ...props }) => (
             <blockquote className="border-l-2 border-ember pl-3 py-1 my-2 text-ink-soft italic" {...props}>
@@ -93,6 +106,13 @@ export default function MarkdownRenderer({ children, className = '' }) {
       >
         {safeContent}
       </ReactMarkdown>
+      {fullscreen && (
+        <FullscreenMediaModal
+          src={fullscreen.src}
+          alt={fullscreen.alt}
+          onClose={() => setFullscreen(null)}
+        />
+      )}
     </div>
   )
 }

@@ -1,5 +1,6 @@
-import { useRef, useEffect } from 'react'
+import { useRef, useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
+import FullscreenMediaModal from '../../components/FullscreenMediaModal.jsx'
 import {
   Paperclip,
   Mic,
@@ -75,6 +76,8 @@ export default function ChatComposer({
     window.addEventListener('command-palette:prefill', onPrefill)
     return () => window.removeEventListener('command-palette:prefill', onPrefill)
   }, [setInput])
+
+  const [fullscreenSrc, setFullscreenSrc] = useState(null)
 
   return (
     <div
@@ -174,7 +177,13 @@ export default function ChatComposer({
               {attachments.map((item) => (
                 <div key={item.id} className="flex items-center gap-2 px-2 py-1.5 rounded-md border border-ink-fade/40 bg-paper-2 text-xs text-ink-soft max-w-[240px]">
                   {item.kind === 'image' && item.dataUrl ? (
-                    <img src={item.dataUrl} alt={item.name} className="w-7 h-7 object-cover rounded border border-ink-fade/30" />
+                    <img
+                      src={item.dataUrl}
+                      alt={item.name}
+                      className="w-7 h-7 object-cover rounded border border-ink-fade/30 cursor-zoom-in"
+                      onClick={() => setFullscreenSrc({ src: item.dataUrl, alt: item.name })}
+                      title="点击查看大图"
+                    />
                   ) : (
                     <FileText className="w-4 h-4 text-ink-fade shrink-0" />
                   )}
@@ -304,6 +313,13 @@ export default function ChatComposer({
           </div>
         </div>
       </div>
+      {fullscreenSrc && (
+        <FullscreenMediaModal
+          src={fullscreenSrc.src}
+          alt={fullscreenSrc.alt}
+          onClose={() => setFullscreenSrc(null)}
+        />
+      )}
     </div>
   )
 }
