@@ -75,9 +75,10 @@ export async function handleAgentRequest(req, res) {
     if (req.method === 'POST' && pathname === '/api/agents/import') {
       const body = await readJson(req)
       const parsed = parseAgentMarkdown(String(body?.source || ''))
+      const finalName = (body?.overrideName && String(body.overrideName).trim()) || parsed.name
       const agent = createAgent({
         userId,
-        name: parsed.name,
+        name: finalName,
         soulMd: parsed.soulMd,
         identityMd: parsed.identityMd,
         avatarUrl: parsed.avatarUrl,
