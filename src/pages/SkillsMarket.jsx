@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Search, Sparkles, Upload, X, Package } from 'lucide-react'
+import { Plus, Search, Sparkles, Upload, X, Package, GitBranch as Github } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
 import { SKILLS } from '../data.js'
 import { useAppContext } from '../store/AppContext'
-import { importSkillPack, listSkills } from '../lib/skillClient.js'
+import { importSkillPack, listSkills, importSkillFromGithubUrl } from '../lib/skillClient.js'
 import { listPluginsApi, installPluginAsSkillApi } from '../lib/pluginClient.js'
 import { SKILL_ICONS } from '../lib/skillIcons.js'
 
@@ -39,6 +39,11 @@ export default function SkillsMarket() {
   const [importPreview, setImportPreview] = useState(null)
   const [importError, setImportError] = useState('')
   const [importing, setImporting] = useState(false)
+  const [showGithubPanel, setShowGithubPanel] = useState(false)
+  const [githubUrl, setGithubUrl] = useState('')
+  const [githubInstalling, setGithubInstalling] = useState(false)
+  const [githubError, setGithubError] = useState('')
+  const [githubSuccess, setGithubSuccess] = useState(null)
   const [showPluginPanel, setShowPluginPanel] = useState(false)
   const [pluginBundles, setPluginBundles] = useState([])
   const [pluginPanelLoading, setPluginPanelLoading] = useState(false)
@@ -203,6 +208,34 @@ export default function SkillsMarket() {
     }
   }
 
+  const handleConfirmGithubImport = async () => {
+    if (!githubUrl.trim()) {
+      setGithubError('请输入 GitHub 仓库 URL')
+      return
+    }
+    setGithubInstalling(true)
+    setGithubError('')
+    setGithubSuccess(null)
+    try {
+      const res = await importSkillFromGithubUrl(githubUrl.trim())
+      if (!res?.skill) throw new Error(res?.error || '安装失败')
+      try {
+        const { skills } = await listSkills()
+        if (Array.isArray(skills)) setRuntimeSkills(skills)
+      } catch { /* 列表刷新失败不阻断 */ }
+      setGithubSuccess({
+        name: res.skill?.name || res.skill?.id,
+        source: res.source,
+        repo: res.repo,
+      })
+      setGithubUrl('')
+    } catch (err) {
+      setGithubError(err.message || '安装失败')
+    } finally {
+      setGithubInstalling(false)
+    }
+  }
+
   const openPluginPanel = async () => {
     setPluginPanelError('')
     setShowPluginPanel(true)
@@ -285,6 +318,14 @@ export default function SkillsMarket() {
             >
               <Package className="w-4 h-4" />
               从 Plugin
+            </button>
+            <button
+              onClick={() => { setShowGithubPanel(true); setGithubError(''); setGithubSuccess(null) }}
+              className="h-9 px-4 border border-ink/70 rounded-md font-hand text-sm flex items-center gap-1.5 hover:bg-paper-2 transition-colors"
+              title="从 GitHub 仓库 URL 拉取技能"
+            >
+              <Github className="w-4 h-4" />
+              从 GitHub
             </button>
             <button
               onClick={handleCreateCustom}
@@ -516,6 +557,78 @@ export default function SkillsMarket() {
                   {importing ? '导入中…' : '确认导入'}
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+      {showGithubPanel && (
+        <div
+          className="fixed inset-0 bg-ink/40 flex items-center justify-center z-50 p-4"
+          onClick={() => !githubInstalling && setShowGithubPanel(false)}
+        >
+          <div
+            className="bg-paper border border-ink/30 rounded-lg max-w-xl w-full overflow-hidden flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-5 border-b border-ink-line flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Github className="w-4 h-4 text-ink-soft" />
+                <h2 className="font-hand text-xl text-ink">从 GitHub 导入技能</h2>
+              </div>
+              <button
+                onClick={() => !githubInstalling && setShowGithubPanel(false)}
+                className="p-1 rounded hover:bg-paper-2"
+                aria-label="关闭"
+              >
+                <X className="w-4 h-4 text-ink-soft" />
+              </button>
+            </div>
+            <div className="p-5 space-y-3">
+              <p className="text-sm text-ink-soft leading-relaxed">
+                粘贴一个 <code className="font-mono text-xs text-ink">github.com/owner/repo</code> 的 URL，
+                可包含 <code className="font-mono text-xs text-ink">/tree/&lt;branch&gt;/&lt;subpath&gt;</code>。
+                自动识别：<br />
+                <span className="text-xs">①&nbsp;yma 原生：<code className="font-mono">skill.json + prompts/system.md</code></span><br />
+                <span className="text-xs">②&nbsp;openhanako 风格：<code className="font-mono">SKILL.md</code>（YAML frontmatter）</span>
+              </p>
+              <input
+                type="url"
+                value={githubUrl}
+                onChange={(e) => setGithubUrl(e.target.value)}
+                placeholder="https://github.com/owner/repo 或 .../tree/main/skills/foo"
+                className="w-full px-3 py-2 border border-ink-line rounded-md text-sm text-ink bg-paper outline-none focus:border-ink/70 font-mono"
+                disabled={githubInstalling}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !githubInstalling) handleConfirmGithubImport() }}
+              />
+              {githubError && (
+                <div className="p-3 border border-ember-line bg-ember-soft/30 rounded-md text-sm text-ember">
+                  {githubError}
+                </div>
+              )}
+              {githubSuccess && (
+                <div className="p-3 border border-ink-line bg-paper-2/50 rounded-md text-sm text-ink">
+                  ✓ 已安装：<span className="font-medium">{githubSuccess.name}</span>
+                  <span className="ml-2 text-ink-soft font-mono text-xs">
+                    [{githubSuccess.source} · {githubSuccess.repo}]
+                  </span>
+                </div>
+              )}
+            </div>
+            <div className="p-5 pt-0 flex items-center justify-end gap-2">
+              <button
+                onClick={() => !githubInstalling && setShowGithubPanel(false)}
+                disabled={githubInstalling}
+                className="h-9 px-4 border border-ink/40 rounded-md font-hand text-sm hover:bg-paper-2 disabled:opacity-50"
+              >
+                关闭
+              </button>
+              <button
+                onClick={handleConfirmGithubImport}
+                disabled={githubInstalling || !githubUrl.trim()}
+                className="h-9 px-4 bg-ember text-paper rounded-md font-hand text-sm hover:bg-ember/90 disabled:opacity-50"
+              >
+                {githubInstalling ? '拉取中…' : '拉取并安装'}
+              </button>
             </div>
           </div>
         </div>

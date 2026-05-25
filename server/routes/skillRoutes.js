@@ -1,5 +1,6 @@
 import { authenticateRequest } from '../middleware.js'
 import { installValidatedSkillPack } from '../services/skillImport.js'
+import { installSkillFromGithubUrl } from '../services/skillGithubInstall.js'
 import { listRuntimeSkillIds, listRuntimeSkills } from '../services/skillRegistry.js'
 import { getImportedSkill } from '../services/skillStore.js'
 import { readJson, sendJson } from '../utils.js'
@@ -75,6 +76,25 @@ export async function handleSkillRequest(req, res) {
     })
     if (!result.ok) return sendJson(res, 400, { error: result.reason })
     return sendJson(res, 201, { skill: result.skill })
+  }
+
+  // POST /api/skills/import-github  ⇒  从 GitHub URL 拉取并安装（Phase 2 A1）
+  if (req.method === 'POST' && url.pathname === '/api/skills/import-github') {
+    const body = await readJson(req)
+    if (!body?.url) return sendJson(res, 400, { error: '缺少 url 字段' })
+    const result = await installSkillFromGithubUrl({
+      url: body.url,
+      userId,
+      installFn: installValidatedSkillPack,
+      listExistingIdsFn: listRuntimeSkillIds,
+    })
+    if (!result.ok) return sendJson(res, 400, { error: result.reason })
+    return sendJson(res, 201, {
+      skill: result.skill,
+      source: result.source,
+      repo: result.repo,
+      subpath: result.subpath,
+    })
   }
 
   return sendJson(res, 404, { error: 'not found' })

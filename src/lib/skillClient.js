@@ -23,3 +23,11 @@ export function importSkillPack(files, { fetchImpl = fetch } = {}) {
     body: JSON.stringify({ files }),
   }))
 }
+
+export function importSkillFromGithubUrl(url, { fetchImpl = fetch } = {}) {
+  return readJsonResponse(fetchImpl('/api/skills/import-github', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  }))
+}
