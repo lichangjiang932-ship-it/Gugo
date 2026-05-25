@@ -1,5 +1,5 @@
-import { authenticateRequest } from './middleware.js'
-import { readJson, sendJson } from './utils.js'
+import { authenticateRequest } from '../middleware.js'
+import { readJson, sendJson } from '../utils.js'
 
 function unauthorized(res) {
   return sendJson(res, 401, { error: 'Unauthorized' })

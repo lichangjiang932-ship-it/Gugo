@@ -9,8 +9,8 @@
  *   GET    /api/memory/wikilink/:slug   → 解析 [[slug]] 到 memory
  */
 
-import { readJson } from './utils.js'
-import { authenticateRequest } from './middleware.js'
+import { readJson } from '../utils.js'
+import { authenticateRequest } from '../middleware.js'
 import {
   listMemories,
   getMemory,
@@ -18,7 +18,7 @@ import {
   deleteMemory,
   buildMemoryIndex,
   findBySlug,
-} from './memoryStore.js'
+} from '../memoryStore.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
 
