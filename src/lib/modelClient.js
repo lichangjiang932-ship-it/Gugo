@@ -58,14 +58,14 @@ export async function getSystemDiagnostics({ check = false, fetchImpl = fetch } 
   return parseProxyResponse(response)
 }
 
-export async function callModelThroughProxy({ messages, modelName, fetchImpl = fetch }) {
+export async function callModelThroughProxy({ messages, modelName, agentId, fetchImpl = fetch }) {
   const response = await fetchImpl('/api/model/chat', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${getAuthToken()}`,
     },
-    body: JSON.stringify({ messages, modelName }),
+    body: JSON.stringify({ messages, modelName, agentId }),
   })
   const data = await parseProxyResponse(response)
   if (!data?.reply) throw new Error('模型返回为空。')
@@ -126,8 +126,8 @@ export async function summarizeSessionTitle({ firstUserContent, modelName, fetch
  *   { type: 'text', delta: string }
  *   { type: 'tool_calls', toolCalls: [{id,name,arguments}], finishReason }
  */
-export async function* callModelThroughProxyStream({ messages, modelName, fetchImpl = fetch, signal, tools, toolChoice }) {
-  const body = { messages, modelName, stream: true }
+export async function* callModelThroughProxyStream({ messages, modelName, agentId, fetchImpl = fetch, signal, tools, toolChoice }) {
+  const body = { messages, modelName, agentId, stream: true }
   if (Array.isArray(tools) && tools.length > 0) {
     body.tools = tools
     if (toolChoice) body.tool_choice = toolChoice

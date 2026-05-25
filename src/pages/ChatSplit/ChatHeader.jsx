@@ -4,6 +4,7 @@ import {
   RotateCcw,
   LayoutList,
   ChevronDown,
+  Users,
 } from 'lucide-react'
 import { useState, useRef, useEffect } from 'react'
 
@@ -27,6 +28,9 @@ export default function ChatHeader({
   onRetry,
   onModelChange,
   onNavigateTask,
+  activeAgent,
+  agents,
+  onAgentChange,
 }) {
   // ★ #12: 导出下拉 (JSON / Markdown)
   const [exportOpen, setExportOpen] = useState(false)
@@ -50,6 +54,23 @@ export default function ChatHeader({
         </h2>
       </div>
       <div className="flex gap-2 items-center">
+        {Array.isArray(agents) && agents.length > 0 && (
+          <label
+            className="inline-flex items-center gap-1 h-7 px-2 rounded-full border border-ink-fade/50 text-[11px] text-ink-soft hover:border-ink-fade transition-colors bg-paper-2"
+            title={`当前 Agent: ${activeAgent?.name || '默认'}`}
+          >
+            <Users className="w-3 h-3 opacity-70" />
+            <select
+              value={activeAgent?.id || ''}
+              onChange={(e) => onAgentChange?.(e.target.value)}
+              className="bg-transparent outline-none cursor-pointer text-[11px] text-ink-soft max-w-[120px] truncate"
+            >
+              {agents.map((a) => (
+                <option key={a.id} value={a.id}>{a.name}{a.isDefault ? ' (default)' : ''}</option>
+              ))}
+            </select>
+          </label>
+        )}
         <div className="inline-flex rounded-full border border-ink-fade/50 overflow-hidden bg-paper-2" title="Agent mode">
           {AGENT_MODES.map((mode) => (
             <button

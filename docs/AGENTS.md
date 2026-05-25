@@ -148,3 +148,34 @@ exported_at: 2026-05-25T13:00:00.000Z
 - 没 frontmatter → 从首个 `# H1` 取 name；缺 H1 → "Imported Agent"
 - 没 `## IDENTITY` / `## SOUL` → 把全文当 SOUL
 - 撞名 → 抛 400（前端捕获展示）
+
+---
+
+## 阶段 5 已落地：session 维度切 agent
+
+### 后端
+
+`POST /api/model/chat` 现在接收 `body.agentId`：
+- 传入且属于该 user → 注入指定 agent 的 SOUL/IDENTITY
+- 未传 / 跨用户 / id 不存在 → silently fallback 到该 user 的 default agent
+- 错误不阻断 chat（沿用阶段 4 策略）
+
+### 前端
+
+新增 `src/agents/`：
+- `activeAgentContext.js` — `ActiveAgentContext` + `useActiveAgent()` hook（拆出便于 react-refresh）
+- `ActiveAgentProvider.jsx` — Provider，localStorage 持久化 `***`，启动拉一次 list，本地 id 失效自动 fallback
+
+`src/App.jsx`：包 `<ActiveAgentProvider>`
+
+`ChatHeader.jsx`：右上角加紧凑 `<Users icon> + <select>`，无 agent 列表时不渲染
+
+`ChatSplit/index.jsx`：`useActiveAgent()` 取 `activeAgentId` 传给 `callModelThroughProxyStream({ agentId })`
+
+`AgentList.jsx`：CRUD 后调 `refreshActiveAgent()`，保证切到/删掉时 ChatHeader 立刻同步
+
+### 关键约束
+
+- 一个浏览器同一时刻只有一个 active agent（不区分 session）
+- localStorage key `***`，跨标签页通过 storage event 同步留给后续
+- 切 agent 不影响历史消息已注入的 system block（只影响下一次请求）

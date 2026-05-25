@@ -8,6 +8,7 @@ import { callModelThroughProxyStream, getModelStatus, summarizeSessionTitle } fr
 import { buildToolSpecs, buildToolSpecsAsync, executeToolCall, resolveToolsForMode } from '../../lib/tools/index.js'
 import { readStoredModel, resolveInitialModel, writeStoredModel } from '../../lib/modelSelection.js'
 import { isLoggedInLocally } from '../../lib/accountClient.js'
+import { useActiveAgent } from '../../agents/activeAgentContext.js'
 import { listSkills } from '../../lib/skillClient.js'
 import { inferSkillIdFromPrompt, parseSkillCommand } from '../../lib/skillCommands.js'
 import { TASK_STATUS, TOOL_CALL_STATUS, HISTORY_STATUS } from '../../store/taskStatus.js'
@@ -81,6 +82,7 @@ async function readExcelAsText(file) {
 export default function ChatSplit() {
   const navigate = useNavigate()
   const { state, dispatch } = useAppContext()
+  const { activeAgentId, activeAgent, agents, setActiveAgentId } = useActiveAgent()
   const [input, setInput] = useState('')
   const [modelOptions, setModelOptions] = useState([])
   const [toolMaxRounds, setToolMaxRounds] = useState(5)
@@ -333,6 +335,7 @@ export default function ChatSplit() {
             for await (const event of callModelThroughProxyStream({
               messages,
               modelName,
+              agentId: activeAgentId || undefined,
               signal: controller.signal,
               tools: tools.length > 0 ? tools : undefined,
             })) {
@@ -752,6 +755,9 @@ export default function ChatSplit() {
           onRetry={() => { if (lastFailedPrompt) triggerSendFlow(lastFailedPrompt) }}
           onModelChange={(val) => { setSelectedModel(val); writeStoredModel(val) }}
           onNavigateTask={() => navigate('/task')}
+          activeAgent={activeAgent}
+          agents={agents}
+          onAgentChange={setActiveAgentId}
         />
 
         {/* Feature 8: Todo 追踪 sticky strip */}

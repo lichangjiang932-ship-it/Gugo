@@ -18,7 +18,7 @@ import {
   touchMemoryUsage,
 } from '../services/memoryStore.js'
 import { dispatchHooks } from '../services/hooksService.js'
-import { ensureDefaultAgent, buildAgentSystemBlock } from '../services/agentStore.js'
+import { ensureDefaultAgent, buildAgentSystemBlock, getAgent } from '../services/agentStore.js'
 
 // ★ #18: 消息格式 schema — 拒绝畸形 messages 入参,防 OpenAI 上游报 400 / 计费爆零
 const MESSAGE_SCHEMA = z.object({
@@ -592,14 +592,20 @@ export async function handleModelProxyRequest(req, res) {
         }
       }
 
-      // 阶段 4：注入 Agent SOUL/IDENTITY 为第一个 system block（位于 memory 之前只让他在 messages 顶部）
-      // - 使用用户默认 agent（v0.1；session 维度切 agent 等阶段 5）
+      // 阶段 4 + 阶段 5：注入 Agent SOUL/IDENTITY 为第一个 system block。
+      // - body.agentId 优先（阶段 5），未传 / 不属于该用户 → fallback default
       // - 可通过 AGENT_INJECT_ENABLED=0 关闭
       // - 任何错误不阻断 chat
       let injectedAgentId = null
       try {
         if (session?.user_id && getRuntimeEnv().AGENT_INJECT_ENABLED !== '0') {
-          const agent = ensureDefaultAgent({ userId: session.user_id })
+          let agent = null
+          const requestedAgentId = typeof body.agentId === 'string' ? body.agentId : null
+          if (requestedAgentId) {
+            const found = getAgent({ userId: session.user_id, id: requestedAgentId })
+            if (found) agent = found
+          }
+          if (!agent) agent = ensureDefaultAgent({ userId: session.user_id })
           const block = buildAgentSystemBlock(agent)
           if (block) {
             messages.unshift({ role: 'system', content: block })

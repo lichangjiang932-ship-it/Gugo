@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Plus, Trash2, Save, Star, X, Download, Upload } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
 import { useT } from '../i18n/I18nProvider.jsx'
+import { useActiveAgent } from '../agents/activeAgentContext.js'
 import {
   listAgentsApi,
   createAgentApi,
@@ -18,6 +19,7 @@ function emptyAgent() {
 
 export default function AgentList() {
   const { t } = useT()
+  const { refresh: refreshActiveAgent } = useActiveAgent()
   const [agents, setAgents] = useState([])
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
@@ -37,6 +39,8 @@ export default function AgentList() {
       } else {
         setAgents(list.agents || [])
       }
+      // 列表变动后同步 active agent context
+      refreshActiveAgent?.()
     } catch (e) {
       setErr(e.message || t('errors.loadFailed'))
     } finally {
