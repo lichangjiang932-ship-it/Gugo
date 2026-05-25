@@ -8,7 +8,8 @@
   <img src="https://img.shields.io/badge/Node.js-20-10b981?logo=node.js" alt="Node 20" />
   <img src="https://img.shields.io/badge/SQLite-WAL-2e8fa3" alt="SQLite WAL" />
   <img src="https://img.shields.io/badge/Vite-8-ec4899?logo=vite" alt="Vite 8" />
-  <img src="https://img.shields.io/badge/tests-356%20passing-success" alt="tests" />
+  <img src="https://img.shields.io/badge/tests-422%20passing-success" alt="tests" />
+  <img src="https://img.shields.io/badge/release-v0.9.0-blue" alt="v0.9.0" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT" />
 </p>
 
@@ -104,19 +105,29 @@
 
 技术栈：React 19 · Vite 8 · Tailwind CSS 3 · Framer Motion · Three.js · Node.js 20 · better-sqlite3 · JSDOM · JSZip · Zod · PPTXGenJS · @e965/xlsx
 
-规模：~17,000 行代码 · 50+ 测试文件 · **356 个测试用例** · 零后端框架依赖
+规模：~17,000 行代码 · 50+ 测试文件 · **422 个测试用例**（v0.9.0） · 零后端框架依赖
 
 ---
 
 ## 路线图
 
-正在执行 [docs/REFOUND_PLAN.md](./docs/REFOUND_PLAN.md)（参照 openhanako 的内核架构重构）：
+详细进度看 [PROGRESS.md](./PROGRESS.md)，发布历史看 [CHANGELOG.md](./CHANGELOG.md)。
 
-- [x] **阶段 0.1**：分支大扫除（13 → 1），356 测试全过
-- [ ] **阶段 0.2**：CI workflow + 三件套 + README 重写（**当前**）
-- [ ] **阶段 1**：server/ 重组为 `core/ + managers/ + routes/ + adapters/`，对外接口零变化
-- [ ] **阶段 2**：独立 Hub 进程 + Plugin SDK 静态配置 + i18n（zh/en）
-- [ ] **阶段 3**：Agent 交互层升级（人格 / 记忆 / 自主性）
+**已完成**：
+- [x] **v0.5**：plugin SDK 真消费 + agent-template
+- [x] **v0.6**：agent-MEMORY DB v6 + session sticky agent + ChatHeader 切换器
+- [x] **v0.7**：跨标签页 storage 同步 + Templates 弹层 preview + import 撞名重命名
+- [x] **v0.8**：Memory 管理视图加 agent 绑定 UI（filter chip / list badge / editor select）
+- [x] **v0.9**：Agent 角色卡 zip 导出/导入（对齐 openhanako）
+
+**进行中 / 下一步**（按 ROI 排，详见 PROGRESS.md）：
+- [ ] Skills 安装机制（plugin 接 `skill-bundle` type）
+- [ ] prompt-template plugin 接 chat slash command
+- [ ] PPT 视觉升级（gradient cover/section + 更多 chart 类型）
+- [ ] 多 agent 频道 / 互调（@agent 委派）
+- [ ] Cron / 调度层（轻提醒 vs 重任务）
+
+历史架构重构进度：[docs/REFOUND_PLAN.md](./docs/REFOUND_PLAN.md)
 
 ---
 
@@ -171,7 +182,7 @@ npm run build    # 生产构建
 npm run serve    # 仅启动后端（需先 build）
 npm run local    # build + 启动
 npm run lint     # ESLint
-npm test         # 356 测试
+npm test         # 422 测试
 ```
 
 ---
