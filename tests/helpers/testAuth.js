@@ -9,7 +9,7 @@
  *   const { token, userId } = issueTestSession({ email: 'user@example.com' })
  *   fetch(url, { headers: { Authorization: `Bearer ${token}` } })
  */
-import { issueEmailCode, verifyEmailCode } from '../../server/billingAuth.js'
+import { issueEmailCode, verifyEmailCode } from '../../server/adapters/billingAuth.js'
 
 let counter = 0
 

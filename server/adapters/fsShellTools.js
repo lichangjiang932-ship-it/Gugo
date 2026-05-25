@@ -16,13 +16,13 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { sanitizeChildEnv } from './utils/sensitiveEnv.js'
-import { runProcessWithGroup } from './utils/processGroup.js'
-import { bashLimiter, writeLimiter } from './utils/rateLimiter.js'
-import { writeToolAudit } from './utils/audit.js'
-import { checkBashCommandDanger } from './utils/bashGuard.js'
-import { authenticateRequest } from './middleware.js'
-import { readJson, sendJson } from './utils.js'
+import { sanitizeChildEnv } from '../utils/sensitiveEnv.js'
+import { runProcessWithGroup } from '../utils/processGroup.js'
+import { bashLimiter, writeLimiter } from '../utils/rateLimiter.js'
+import { writeToolAudit } from '../utils/audit.js'
+import { checkBashCommandDanger } from '../utils/bashGuard.js'
+import { authenticateRequest } from '../middleware.js'
+import { readJson, sendJson } from '../utils.js'
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024 // 5 MB read/write upper bound
 const SHELL_DEFAULT_TIMEOUT_MS = 60 * 1000

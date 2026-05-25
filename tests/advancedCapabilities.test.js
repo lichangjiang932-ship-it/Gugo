@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { buildArtifactPreview } from '../src/lib/artifactPreview.js'
 import { buildToolSpecs, executeToolCall, listToolNames } from '../src/lib/tools/index.js'
 import { buildCompaction, validateToolCallChain } from '../server/compactionService.js'
-import { hasVisionContent, supportsVisionModel } from '../server/modelProxy.js'
+import { hasVisionContent, supportsVisionModel } from '../server/adapters/modelProxy.js'
 
 test('advanced artifact previews render mermaid, chart, svg, and multi-file html', () => {
   const mermaid = buildArtifactPreview({

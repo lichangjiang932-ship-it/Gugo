@@ -11,7 +11,7 @@ import {
   runProjectCheckTool,
   gitCommitTool,
   gitPushTool,
-} from '../server/gitWorkbench.js'
+} from '../server/adapters/gitWorkbench.js'
 
 function git(cwd, args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8' })

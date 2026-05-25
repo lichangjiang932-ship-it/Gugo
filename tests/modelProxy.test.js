@@ -9,7 +9,7 @@ import {
   loadModelConfig,
   normalizeOpenAICompatibleUrl,
   parseOpenAICompatibleResponse,
-} from '../server/modelProxy.js'
+} from '../server/adapters/modelProxy.js'
 
 test('normalizes OpenAI compatible base URLs to chat completions endpoint', () => {
   assert.equal(

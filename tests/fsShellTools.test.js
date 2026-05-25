@@ -10,7 +10,7 @@ import {
   editFileTool,
   bashExecTool,
   resolveInWorkspace,
-} from '../server/fsShellTools.js'
+} from '../server/adapters/fsShellTools.js'
 
 // 每个测试自带 workspace 临时目录 + env 闸门管理.
 let workspace

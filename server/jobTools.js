@@ -10,8 +10,8 @@
  */
 import { appendJobArtifact } from './jobStore.js'
 import { createDocx, createPptx, createXlsx } from './artifactGen.js'
-import { FS_SHELL_TOOL_SPECS, dispatchFsShellTool } from './fsShellTools.js'
-import { GIT_TOOL_SPECS, dispatchGitTool } from './gitWorkbench.js'
+import { FS_SHELL_TOOL_SPECS, dispatchFsShellTool } from './adapters/fsShellTools.js'
+import { GIT_TOOL_SPECS, dispatchGitTool } from './adapters/gitWorkbench.js'
 import { CODE_SEARCH_TOOL_SPECS, dispatchCodeSearchTool } from './utils/codeSearch.js'
 import { APPLY_PATCH_TOOL_SPECS, dispatchApplyPatchTool } from './utils/applyPatch.js'
 import { AGENTIC_TOOL_SPECS, dispatchAgenticTool, isLoopPauseResult } from './utils/agenticTools.js'

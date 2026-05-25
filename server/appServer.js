@@ -16,11 +16,11 @@ import {
   handleModelStatusRequest,
   handleSystemDiagnosticsRequest,
   getModelStatus,
-} from './modelProxy.js'
-import { handleAuthBillingRequest } from './billingAuth.js'
-import { handleToolProxyRequest } from './toolProxy.js'
-import { handleFsShellRequest } from './fsShellTools.js'
-import { handleGitWorkbenchRequest } from './gitWorkbench.js'
+} from './adapters/modelProxy.js'
+import { handleAuthBillingRequest } from './adapters/billingAuth.js'
+import { handleToolProxyRequest } from './adapters/toolProxy.js'
+import { handleFsShellRequest } from './adapters/fsShellTools.js'
+import { handleGitWorkbenchRequest } from './adapters/gitWorkbench.js'
 import { handleCodeSearchRequest } from './utils/codeSearchRoutes.js'
 import { handleAgenticToolRequest } from './utils/agenticToolsRoutes.js'
 import { handleArtifactDownload } from './artifactGen.js'

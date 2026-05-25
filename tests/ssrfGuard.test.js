@@ -4,7 +4,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert'
-import { isUnsafeIp, assertSafeOutboundUrl } from '../server/toolProxy.js'
+import { isUnsafeIp, assertSafeOutboundUrl } from '../server/adapters/toolProxy.js'
 
 /* ── isUnsafeIp ── */
 

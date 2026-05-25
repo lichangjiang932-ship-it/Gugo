@@ -15,7 +15,7 @@ import {
   getBillingDiagnostics,
   getMailDiagnostics,
   loadBillingConfig,
-} from '../server/billingAuth.js'
+} from '../server/adapters/billingAuth.js'
 import { getDb } from '../server/db.js'
 
 // 每个测试进程使用独立数据库目录，避免并行测试冲突
