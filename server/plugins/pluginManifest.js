@@ -20,6 +20,7 @@ export const PLUGIN_TYPES = Object.freeze([
   'ppt-theme',
   'prompt-template',
   'asset-pack',
+  'agent-template',
 ])
 
 const ID_RE = /^[a-z0-9][a-z0-9-]*$/

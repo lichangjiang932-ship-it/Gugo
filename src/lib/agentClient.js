@@ -3,12 +3,12 @@
  */
 import { getAuthToken } from './accountClient.js'
 
-function authHeaders() {
+export function authHeaders() {
   const token = getAuthToken?.()
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
-async function jsonOk(resp) {
+export async function jsonOk(resp) {
   const text = await resp.text()
   let data
   try { data = text ? JSON.parse(text) : {} } catch { data = { raw: text } }
