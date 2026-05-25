@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { MessageSquare, Wrench, Shield, History, Settings, Sparkles, ListChecks, X, Search, BookOpen, Webhook, Plug } from 'lucide-react'
+import { MessageSquare, Wrench, Shield, History, Settings, Sparkles, ListChecks, X, Search, BookOpen, Webhook, Plug, Users } from 'lucide-react'
 import { useAppContext } from '../store/AppContext'
 import {
   LOGIN_CODE_COUNTDOWN_SECONDS,
@@ -93,6 +93,7 @@ export default function LeftRail() {
     { path: '/skills', icon: Wrench, label: t('nav.skills') },
     { path: '/permissions', icon: Shield, label: t('nav.permissions') },
     { path: '/memory', icon: BookOpen, label: t('nav.memory'), requiresLogin: true },
+    { path: '/agents', icon: Users, label: t('nav.agents'), requiresLogin: true },
     { path: '/mcp', icon: Plug, label: t('nav.mcp'), requiresLogin: true },
     { path: '/hooks', icon: Webhook, label: t('nav.hooks'), requiresLogin: true },
     { path: '/history', icon: History, label: t('nav.history') },

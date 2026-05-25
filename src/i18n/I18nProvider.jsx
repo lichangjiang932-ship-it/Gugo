@@ -44,7 +44,11 @@ export function I18nProvider({ children }) {
     lang,
     setLang,
     languages: SUPPORTED_LANGUAGES,
-    t: (key) => translateKey(key, lang),
+    t: (key, vars) => {
+      const raw = translateKey(key, lang)
+      if (!vars || typeof raw !== 'string') return raw
+      return raw.replace(/\{(\w+)\}/g, (_, name) => (name in vars ? String(vars[name]) : `{${name}}`))
+    },
   }), [lang, setLang])
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>

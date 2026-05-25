@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const DB_SCHEMA_VERSION = 4
+export const DB_SCHEMA_VERSION = 5
 
 const DEFAULT_DATA_DIR = path.join(process.cwd(), 'server-data')
 
@@ -56,7 +56,8 @@ function runMigrations(db) {
   const version = getSchemaVersionInternal(db)
   if (version < 2) migrateToV2(db)
   if (getSchemaVersionInternal(db) < 3) migrateToV3(db)
-  if (getSchemaVersionInternal(db) < DB_SCHEMA_VERSION) migrateToV4(db)
+  if (getSchemaVersionInternal(db) < 4) migrateToV4(db)
+  if (getSchemaVersionInternal(db) < DB_SCHEMA_VERSION) migrateToV5(db)
   runReasonixMigrations(db)
 }
 
@@ -324,6 +325,32 @@ function migrateToV4(db) {
       created_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_observations_entity ON observations(entity_id);
+  `)
+  setSchemaVersionInternal(db, 4)
+}
+
+/**
+ * V5: Agents 表 —— 用户可拥有多个 Agent 人格（SOUL + IDENTITY 卡片）
+ *
+ *   agents: { id, user_id, name, soul_md, identity_md, avatar_url, is_default, created_at, updated_at }
+ *
+ * 不直接接入 chat 注入流程（那是阶段 4 的事），本阶段只提供管理能力。
+ */
+function migrateToV5(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS agents (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      soul_md TEXT NOT NULL DEFAULT '',
+      identity_md TEXT NOT NULL DEFAULT '',
+      avatar_url TEXT,
+      is_default INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_agents_user ON agents(user_id, updated_at DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_agents_user_name ON agents(user_id, name);
   `)
   setSchemaVersionInternal(db, DB_SCHEMA_VERSION)
 }
