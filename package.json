@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "test": "node --test tests/*.test.js",
     "serve": "node server/appServer.js",
+    "hub": "node server/hub/index.js",
     "local": "npm run build && npm run serve",
     "preview": "vite preview",
     "seed:skills": "node server/seedSystemSkills.js"
