@@ -8,6 +8,7 @@ import {
   shouldDisableLoginCodeButton,
 } from '../lib/loginCountdown.js'
 import { getAuthToken, loginWithPassword, sendLoginCode, verifyLoginCode } from '../lib/accountClient.js'
+import { useT } from '../i18n/I18nProvider.jsx'
 
 // ★ #21: 提取会话最后消息的纯文本预览 (剥 markdown / 多模态 array / 工具卡)
 function getSessionPreview(session) {
@@ -46,6 +47,7 @@ export default function LeftRail() {
   const navigate = useNavigate()
   const location = useLocation()
   const { state, dispatch } = useAppContext()
+  const { t } = useT()
   const [showLogin, setShowLogin] = useState(false)
   const [loginEmail, setLoginEmail] = useState('')
   const [loginCode, setLoginCode] = useState('')
@@ -85,16 +87,16 @@ export default function LeftRail() {
   }, [loginCodeCountdown])
 
   const navItems = [
-    { path: '/', icon: Sparkles, label: '首页' },
-    { path: '/chat', icon: MessageSquare, label: '对话' },
-    { path: '/task', icon: ListChecks, label: '任务' },
-    { path: '/skills', icon: Wrench, label: '技能库' },
-    { path: '/permissions', icon: Shield, label: '权限中心' },
-    { path: '/memory', icon: BookOpen, label: '记忆', requiresLogin: true },
-    { path: '/mcp', icon: Plug, label: 'MCP', requiresLogin: true },
-    { path: '/hooks', icon: Webhook, label: 'Hooks', requiresLogin: true },
-    { path: '/history', icon: History, label: '历史' },
-    { path: '/settings', icon: Settings, label: '设置', requiresLogin: true },
+    { path: '/', icon: Sparkles, label: t('nav.home') },
+    { path: '/chat', icon: MessageSquare, label: t('nav.chat') },
+    { path: '/task', icon: ListChecks, label: t('nav.task') },
+    { path: '/skills', icon: Wrench, label: t('nav.skills') },
+    { path: '/permissions', icon: Shield, label: t('nav.permissions') },
+    { path: '/memory', icon: BookOpen, label: t('nav.memory'), requiresLogin: true },
+    { path: '/mcp', icon: Plug, label: t('nav.mcp'), requiresLogin: true },
+    { path: '/hooks', icon: Webhook, label: t('nav.hooks'), requiresLogin: true },
+    { path: '/history', icon: History, label: t('nav.history') },
+    { path: '/settings', icon: Settings, label: t('nav.settings'), requiresLogin: true },
   ]
 
   const sessions = state.sessions
@@ -262,7 +264,7 @@ export default function LeftRail() {
           onClick={handleNewChat}
           className="flex items-center justify-between h-9 px-3 border border-ink/80 rounded-md bg-paper hover:bg-paper-2 transition-colors"
         >
-          <span className="text-sm text-ink-soft">新对话</span>
+          <span className="text-sm text-ink-soft">{t('nav.newChat')}</span>
           <span className="font-mono text-[10px] text-ink-fade tracking-wider">Ctrl N</span>
         </button>
 
@@ -272,7 +274,7 @@ export default function LeftRail() {
           <input
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="搜索会话…"
+            placeholder={t('nav.searchPlaceholder')}
             className="w-full h-7 pl-7 pr-7 border border-ink-fade/40 rounded-md bg-paper text-xs text-ink outline-none focus:border-ember"
           />
           {searchQuery && (
@@ -310,7 +312,7 @@ export default function LeftRail() {
           searchResults.length ? (
             <div className="mt-2">
               <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">
-                搜索结果 ({searchResults.length})
+                {t('nav.searchResults')} ({searchResults.length})
               </span>
               <div className="flex flex-col gap-0.5 mt-1.5">
                 {searchResults.map(({ session: s, snippet }) => (
@@ -334,19 +336,19 @@ export default function LeftRail() {
             </div>
           ) : (
             <div className="mt-4 px-2 py-4 text-center">
-              <p className="text-xs text-ink-fade">未找到匹配会话</p>
+              <p className="text-xs text-ink-fade">{t('nav.searchNoMatch')}</p>
             </div>
           )
         ) : sessions.length ? (
           <>
-            {renderSessionGroup('今天', todaySessions)}
-            {renderSessionGroup('本周', weekSessions)}
-            {renderSessionGroup('更早', earlierSessions)}
+            {renderSessionGroup(t('nav.groupToday'), todaySessions)}
+            {renderSessionGroup(t('nav.groupWeek'), weekSessions)}
+            {renderSessionGroup(t('nav.groupEarlier'), earlierSessions)}
           </>
         ) : (
           <div className="mt-4 px-2 py-6 border border-dashed border-ink-fade/40 rounded-md text-center">
-            <p className="text-xs text-ink-fade">还没有对话</p>
-            <p className="text-[10px] text-ink-ghost mt-1">点击"新对话"开始</p>
+            <p className="text-xs text-ink-fade">{t('nav.emptyTitle')}</p>
+            <p className="text-[10px] text-ink-ghost mt-1">{t('nav.emptyHint')}</p>
           </div>
         )}
 

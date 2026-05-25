@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 
 import GlobalShortcuts from './components/GlobalShortcuts'
 import ErrorBoundary from './components/ErrorBoundary'
+import { I18nProvider } from './i18n/I18nProvider.jsx'
 import CommandPalette from './components/CommandPalette'
 import SkillCommandsSync from './components/SkillCommandsSync'
 import RequireAuth from './components/RequireAuth'
@@ -30,6 +31,7 @@ function Fallback() {
 
 function App() {
   return (
+    <I18nProvider>
     <ErrorBoundary>
       <GlobalShortcuts />
       <CommandPalette />
@@ -55,6 +57,7 @@ function App() {
         </main>
       </Suspense>
     </ErrorBoundary>
+    </I18nProvider>
   )
 }
 

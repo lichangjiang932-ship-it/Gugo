@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useT } from '../i18n/I18nProvider.jsx'
 import {
   AlertTriangle,
   Bell,
@@ -92,6 +93,19 @@ function downloadJson(filename, data) {
 export default function SettingsView() {
   const { state, dispatch } = useAppContext()
   const [activeNav, setActiveNav] = useState('账户')
+  const { t, lang, setLang, languages } = useT()
+  const navLabel = (item) => {
+    switch (item) {
+      case '系统诊断': return t('settings.systemDiagnostics')
+      case '账户': return t('settings.account')
+      case '权限中心': return t('nav.permissions')
+      case '工具': return t('settings.tools')
+      case '外观': return t('settings.appearance')
+      case '快捷键': return t('settings.shortcuts')
+      case '数据 & 导出': return t('settings.dataExport')
+      default: return item
+    }
+  }
   const [loginEmail, setLoginEmail] = useState('')
   const [loginCode, setLoginCode] = useState('')
   const [account, setAccount] = useState(null)
@@ -1004,7 +1018,21 @@ export default function SettingsView() {
       <LeftRail />
 
       <div className="w-[220px] border-r border-dashed border-ink-fade/50 p-4 overflow-y-auto bg-paper-2">
-        <div className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade mb-3">SETTINGS</div>
+        <div className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade mb-3">{t('settings.sectionTitle')}</div>
+        <div className="mb-4">
+          <label className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade block mb-1.5">{t('settings.language')}</label>
+          <select
+            value={lang}
+            onChange={(e) => setLang(e.target.value)}
+            aria-label={t('settings.language')}
+            className="w-full h-8 px-2 border border-ink/30 rounded-md bg-paper text-sm text-ink outline-none focus:border-ember"
+          >
+            {languages.map((l) => (
+              <option key={l.code} value={l.code}>{l.label}</option>
+            ))}
+          </select>
+          <p className="text-[10px] text-ink-fade mt-1">{t('settings.languageHint')}</p>
+        </div>
         <div className="flex flex-col gap-1">
           {['系统诊断', ...SETTINGS_NAV].map((item) => (
             <button
@@ -1014,7 +1042,7 @@ export default function SettingsView() {
                 activeNav === item ? 'bg-paper border border-ink-fade/50 text-ink' : 'text-ink-soft hover:bg-paper/70'
               }`}
             >
-              {item}
+              {navLabel(item)}
             </button>
           ))}
         </div>
