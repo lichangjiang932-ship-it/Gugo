@@ -4,19 +4,22 @@
 
 ## [Unreleased]
 
-### Added
-- `POST /api/plugins/:id/install-as-skill` — 将 `type=skill-bundle` 的 plugin 安装为当前用户 skill（需登录）
-- `server/services/pluginToSkill.js` `installPluginAsSkill({pluginId,userId,existingIds})` — 底座函数，纯函数风格 + realpath 守 symlink + ALLOWED_EXTS=.md/.txt/.json + MAX_FILES=64/256KB
-- `server/plugins/pluginManifest.js` `PLUGIN_TYPES` 加 `'skill-bundle'`
-- `server/services/skillStore.js` `listAllSkillIds()` — 全库 ID dedup，避免不同 user 装同一 skill-bundle 撞 SQLite PRIMARY KEY
-- `plugins/example-skill-bundle/` 示例 plugin
-- `src/pages/SkillsMarket.jsx` 上添“从 Plugin”按钮 + 弹层列 skill-bundle plugin + 一键安装
-- `src/lib/pluginClient.js` `installPluginAsSkillApi(pluginId)`
+### Added (Phase 1 补 openhanako gap)
+- **S3 角色卡 zip v0.2** — `export.zip` 多了 `?avatar=0/?skills=0` query；data-URL avatar 内嵌为 `avatar.<ext>`（限 2MB）；skills/<id>/ 打包当前 user 非系统 skill；import 反向回灌 avatar data-URL + `resolveImportedSkillId` 全库 dedup 装入新 user；manifest v0.1 老卡完全兼容
+- **A2 i18n 扩三语** — `translations.js` 加 `ja/ko/zh-TW` 完整词典；`SUPPORTED_LANGUAGES` 升到 5 项；SettingsView 现有 `<select>` 自动亮出三个新选项
+- **A5 全屏媒体查看器** — `src/components/FullscreenMediaModal.jsx`，鼠标滚轮缩放、拖拽平移、Esc/+/-/0/←/→，framer-motion 深入，接 ArtifactPreview 点击图片触发
+- **B6 per-job AbortController** — `POST /api/jobs/:id/abort` 需登录 + user_id 校验；jobRuntime 在每个 step 间 check `signal.aborted` 触发后标 `cancelled` 退出；job 完成/失败时 cleanup map
+- **原 Skill-Bundle 全链路** — `POST /api/plugins/:id/install-as-skill` + `installPluginAsSkill` + SkillsMarket “从 Plugin”按钮弹层，本轮同步梳理完成
+
+### Stats
+- 测试 433 → 446（+13：agentCardZip v0.10 两个、jobAbort 三个、fullscreenMediaModal 五个、i18n 三语对称性三个）
+- lint 0 error（2 warning 历史遗留）、build OK
+- commits：`0026d2c` i18n · `c622b27` agent-card zip v0.2 · `cdbd5ba` job abort · `c1c543b` fullscreen modal
 
 ### Notes
-- 测试 422 → 433（+11 ：pluginSkillBundle 7 + pluginRoutes 新增 5、原 POST 405 用例被替换）
-- lint 0 error（保留 2 个历史 warning）、build OK
-- 路线图看 [PROGRESS.md](./PROGRESS.md) 。
+- Phase 1 中 S3/A2/A5/B6 全交付；B4 first-run 向导推到下轮与 Settings 页结合重设
+- 下一阶段 (Phase 2)：S2 cron/调度、S4 prompt-template slash command、A1 skill GitHub URL 安装、A3 Yuan 人格模板、A6 Notifications
+- 路线图看 [PROGRESS.md](./PROGRESS.md) 、完整 gap 表看 [GAP_VS_OPENHANAKO.md](./GAP_VS_OPENHANAKO.md)
 
 ## [0.9.0] · 2026-05-25
 
