@@ -149,10 +149,17 @@ function migrateToV2(db) {
 }
 
 /**
- * Migration v3：一次性引入 MCP / 子代理 / 记忆 / 压缩 / Hooks 全部新表。
- * 走 CREATE TABLE IF NOT EXISTS — 重复跑安全；所有表都带 user_id 列做隔离。
+ * Migration v3：一次性引入 MCP / 子代理 / 记忆 / 压缩 / Hooks 全部新表
+ * 同时给 users 表加 password_hash/salt/set_at（邮箱验证码仍可用，密码是额外快捷登录方式）。
+ * 全部走 CREATE TABLE IF NOT EXISTS / hasColumn 守卫 — 重复跑安全；所有表都带 user_id 列做隔离。
  */
 function migrateToV3(db) {
+  // password-login 合并进来的用户密码列
+  if (!hasColumn(db, 'users', 'password_hash')) {
+    db.exec('ALTER TABLE users ADD COLUMN password_hash TEXT')
+    db.exec('ALTER TABLE users ADD COLUMN password_salt TEXT')
+    db.exec('ALTER TABLE users ADD COLUMN password_set_at INTEGER')
+  }
   db.exec(`
     -- MCP 配置（feature 1）
     CREATE TABLE IF NOT EXISTS mcp_servers (
@@ -507,6 +514,23 @@ export function getUserByEmail(email) {
   const db = getDb()
   const stmt = db.prepare('SELECT * FROM users WHERE email = ?')
   return stmt.get(email) || null
+}
+
+export function setUserPassword({ id, passwordHash, passwordSalt, now = Date.now() }) {
+  const db = getDb()
+  const stmt = db.prepare(
+    'UPDATE users SET password_hash = ?, password_salt = ?, password_set_at = ?, updated_at = ? WHERE id = ?'
+  )
+  stmt.run(passwordHash, passwordSalt, now, now, id)
+  return getUserById(id)
+}
+
+export function clearUserPassword({ id, now = Date.now() }) {
+  const db = getDb()
+  db.prepare(
+    'UPDATE users SET password_hash = NULL, password_salt = NULL, password_set_at = NULL, updated_at = ? WHERE id = ?'
+  ).run(now, id)
+  return getUserById(id)
 }
 
 export function updateUserCredits({ id, credits, now = Date.now() }) {

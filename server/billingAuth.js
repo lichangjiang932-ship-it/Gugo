@@ -7,9 +7,12 @@ import { readJson, sendJson, authToken } from './utils.js'
 
 import {
   getUserById,
+  getUserByEmail,
   createUser,
   updateUserCredits,
   deductUserCredits,
+  setUserPassword,
+  clearUserPassword,
   getSessionByToken,
   createSession,
   createLoginCode,
@@ -85,9 +88,83 @@ function publicUser(user) {
     id: user.id,
     email: user.email,
     credits: user.credits || 0,
+    hasPassword: !!user.password_hash,
     createdAt: user.created_at,
     updatedAt: user.updated_at,
   }
+}
+
+/* ── 密码 ── */
+
+const PWD_ITERATIONS = 120000
+const PWD_KEYLEN = 32
+const PWD_DIGEST = 'sha256'
+
+function hashPassword(plain, salt = crypto.randomBytes(16).toString('hex')) {
+  const hash = crypto
+    .pbkdf2Sync(String(plain), salt, PWD_ITERATIONS, PWD_KEYLEN, PWD_DIGEST)
+    .toString('hex')
+  return { hash, salt }
+}
+
+function verifyPasswordHash(plain, salt, expectedHash) {
+  if (!salt || !expectedHash) return false
+  const { hash } = hashPassword(plain, salt)
+  const a = Buffer.from(hash, 'hex')
+  const b = Buffer.from(expectedHash, 'hex')
+  if (a.length !== b.length) return false
+  return crypto.timingSafeEqual(a, b)
+}
+
+function validatePasswordStrength(plain) {
+  if (typeof plain !== 'string') return '密码必须为字符串'
+  if (plain.length < 8) return '密码至少 8 位'
+  if (plain.length > 128) return '密码最多 128 位'
+  if (!/[A-Za-z]/.test(plain) || !/\d/.test(plain)) return '密码需同时含字母和数字'
+  return null
+}
+
+export function setPasswordForUser({ token, currentPassword, newPassword, now = Date.now() }) {
+  ensureLegacyMigration()
+  const user = getUserByToken(token)
+  if (!user) throw new Error('未登录或会话已过期')
+  const err = validatePasswordStrength(newPassword)
+  if (err) throw new Error(err)
+  if (user.password_hash) {
+    if (!currentPassword) throw new Error('请提供当前密码')
+    if (!verifyPasswordHash(currentPassword, user.password_salt, user.password_hash)) {
+      throw new Error('当前密码不正确')
+    }
+  }
+  const { hash, salt } = hashPassword(newPassword)
+  const updated = setUserPassword({ id: user.id, passwordHash: hash, passwordSalt: salt, now })
+  return { ok: true, user: publicUser(updated) }
+}
+
+export function removePasswordForUser({ token, currentPassword, now = Date.now() }) {
+  ensureLegacyMigration()
+  const user = getUserByToken(token)
+  if (!user) throw new Error('未登录或会话已过期')
+  if (!user.password_hash) throw new Error('当前未设置密码')
+  if (!verifyPasswordHash(currentPassword, user.password_salt, user.password_hash)) {
+    throw new Error('当前密码不正确')
+  }
+  const updated = clearUserPassword({ id: user.id, now })
+  return { ok: true, user: publicUser(updated) }
+}
+
+export function loginWithPassword({ email, password, now = Date.now() }) {
+  ensureLegacyMigration()
+  if (!email || !password) throw new Error('邮箱与密码不能为空')
+  const normalized = String(email).trim().toLowerCase()
+  const user = getUserByEmail(normalized)
+  // 统一报错避免透露「账号是否存在」
+  const FAIL = new Error('邮箱或密码不正确')
+  if (!user || !user.password_hash) throw FAIL
+  if (!verifyPasswordHash(password, user.password_salt, user.password_hash)) throw FAIL
+  const token = createToken()
+  createSession({ token, userId: user.id, now, ttlMs: 7 * 24 * 60 * 60 * 1000 })
+  return { ok: true, token, user: publicUser(user), ledger: getLedgerForUser(user.id) }
 }
 
 function getUserByToken(token) {
@@ -537,6 +614,39 @@ export async function handleAuthBillingRequest(req, res, env = process.env) {
     if (req.method === 'POST' && url.pathname === '/api/auth/verify') {
       const body = await readJson(req, { maxBytes: 256 * 1024 })
       const result = verifyEmailCode({ email: body.email, code: body.code })
+      sendJson(res, 200, result)
+      return
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/auth/login-password') {
+      const body = await readJson(req, { maxBytes: 256 * 1024 })
+      const limit = checkCodeRate(clientId(req))
+      if (!limit.allowed) {
+        sendJson(res, 429, { ok: false, error: '请求过于频繁，请稍后再试' })
+        return
+      }
+      const result = loginWithPassword({ email: body.email, password: body.password })
+      sendJson(res, 200, result)
+      return
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/account/password') {
+      const body = await readJson(req, { maxBytes: 256 * 1024 })
+      const result = setPasswordForUser({
+        token: authToken(req),
+        currentPassword: body.currentPassword,
+        newPassword: body.newPassword,
+      })
+      sendJson(res, 200, result)
+      return
+    }
+
+    if (req.method === 'DELETE' && url.pathname === '/api/account/password') {
+      const body = await readJson(req, { maxBytes: 256 * 1024 })
+      const result = removePasswordForUser({
+        token: authToken(req),
+        currentPassword: body.currentPassword,
+      })
       sendJson(res, 200, result)
       return
     }

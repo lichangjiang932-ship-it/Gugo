@@ -48,6 +48,41 @@ export async function verifyLoginCode({ email, code, fetchImpl = fetch }) {
   return data
 }
 
+export async function loginWithPassword({ email, password, fetchImpl = fetch }) {
+  const response = await fetchImpl('/api/auth/login-password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  })
+  const data = await parseResponse(response)
+  setAuthToken(data.token)
+  return data
+}
+
+export async function setAccountPassword({ currentPassword, newPassword, fetchImpl = fetch }) {
+  const response = await fetchImpl('/api/account/password', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${getAuthToken()}`,
+    },
+    body: JSON.stringify({ currentPassword, newPassword }),
+  })
+  return parseResponse(response)
+}
+
+export async function removeAccountPassword({ currentPassword, fetchImpl = fetch }) {
+  const response = await fetchImpl('/api/account/password', {
+    method: 'DELETE',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${getAuthToken()}`,
+    },
+    body: JSON.stringify({ currentPassword }),
+  })
+  return parseResponse(response)
+}
+
 export async function getAccount({ fetchImpl = fetch } = {}) {
   const response = await fetchImpl('/api/account/me', {
     headers: { Authorization: `Bearer ${getAuthToken()}` },

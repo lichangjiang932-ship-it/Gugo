@@ -2,7 +2,12 @@ import { useState, useMemo, useEffect, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { MessageSquare, Wrench, Shield, History, Settings, Sparkles, ListChecks, X, Search, BookOpen, Webhook, Plug } from 'lucide-react'
 import { useAppContext } from '../store/AppContext'
-import { getAuthToken, sendLoginCode, verifyLoginCode } from '../lib/accountClient.js'
+import {
+  LOGIN_CODE_COUNTDOWN_SECONDS,
+  formatLoginCodeCountdownLabel,
+  shouldDisableLoginCodeButton,
+} from '../lib/loginCountdown.js'
+import { getAuthToken, loginWithPassword, sendLoginCode, verifyLoginCode } from '../lib/accountClient.js'
 
 // ★ #21: 提取会话最后消息的纯文本预览 (剥 markdown / 多模态 array / 工具卡)
 function getSessionPreview(session) {
@@ -46,6 +51,9 @@ export default function LeftRail() {
   const [loginCode, setLoginCode] = useState('')
   const [loginMessage, setLoginMessage] = useState('')
   const [loginLoading, setLoginLoading] = useState(false)
+  const [loginMode, setLoginMode] = useState('password')
+  const [loginPassword, setLoginPassword] = useState('')
+  const [loginCodeCountdown, setLoginCodeCountdown] = useState(0)
   // ★ #13: 全局会话搜索 — 标题 + 消息内容
   const [searchQuery, setSearchQuery] = useState('')
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('')
@@ -67,6 +75,14 @@ export default function LeftRail() {
     window.addEventListener('app:escape', onEsc)
     return () => window.removeEventListener('app:escape', onEsc)
   }, [])
+
+  useEffect(() => {
+    if (loginCodeCountdown <= 0) return undefined
+    const timer = window.setInterval(() => {
+      setLoginCodeCountdown((current) => Math.max(0, current - 1))
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [loginCodeCountdown])
 
   const navItems = [
     { path: '/', icon: Sparkles, label: '首页' },
@@ -129,10 +145,12 @@ export default function LeftRail() {
 
   const handleSendCode = async (event) => {
     event.preventDefault()
+    if (loginCodeCountdown > 0) return
     setLoginLoading(true)
     setLoginMessage('')
     try {
       const result = await sendLoginCode(loginEmail)
+      setLoginCodeCountdown(LOGIN_CODE_COUNTDOWN_SECONDS)
       setLoginMessage(result.devCode ? `验证码：${result.devCode}` : '验证码已发送，请查看邮箱。')
     } catch (error) {
       setLoginMessage(error.message)
@@ -146,7 +164,9 @@ export default function LeftRail() {
     setLoginLoading(true)
     setLoginMessage('')
     try {
-      const data = await verifyLoginCode({ email: loginEmail, code: loginCode })
+      const data = loginMode === 'password'
+        ? await loginWithPassword({ email: loginEmail, password: loginPassword })
+        : await verifyLoginCode({ email: loginEmail, code: loginCode })
       dispatch({
         type: 'LOGIN',
         payload: {
@@ -158,6 +178,7 @@ export default function LeftRail() {
       })
       setShowLogin(false)
       setLoginCode('')
+      setLoginPassword('')
       setLoginMessage('')
       navigate('/settings')
     } catch (error) {
@@ -357,36 +378,82 @@ export default function LeftRail() {
               </button>
             </div>
 
-            <form onSubmit={handleSendCode} className="flex flex-col gap-3">
-              <label className="flex flex-col gap-1">
-                <span className="text-xs text-ink-fade">邮箱</span>
-                <input
-                  value={loginEmail}
-                  onChange={(e) => setLoginEmail(e.target.value)}
-                  placeholder="you@example.com"
-                  className="h-9 px-3 border border-ink/40 rounded-md bg-paper outline-none focus:border-ember text-sm text-ink"
-                />
-              </label>
+            <div className="flex gap-2 border-b border-ink-fade/30 -mt-1">
               <button
-                disabled={loginLoading || !loginEmail.trim()}
-                className="h-9 px-4 bg-ink text-paper rounded-md text-sm hover:bg-ink-soft transition-colors self-start disabled:opacity-50"
+                type="button"
+                onClick={() => { setLoginMode('password'); setLoginMessage('') }}
+                className={`px-3 py-1.5 text-sm border-b-2 transition-colors ${loginMode === 'password' ? 'border-ember text-ink' : 'border-transparent text-ink-fade hover:text-ink-soft'}`}
               >
-                发送验证码
+                密码登录
               </button>
-            </form>
+              <button
+                type="button"
+                onClick={() => { setLoginMode('code'); setLoginMessage('') }}
+                className={`px-3 py-1.5 text-sm border-b-2 transition-colors ${loginMode === 'code' ? 'border-ember text-ink' : 'border-transparent text-ink-fade hover:text-ink-soft'}`}
+              >
+                邮件验证码
+              </button>
+            </div>
+
+            {loginMode === 'code' ? (
+              <form onSubmit={handleSendCode} className="flex flex-col gap-3">
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs text-ink-fade">邮箱</span>
+                  <input
+                    value={loginEmail}
+                    onChange={(e) => setLoginEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    className="h-9 px-3 border border-ink/40 rounded-md bg-paper outline-none focus:border-ember text-sm text-ink"
+                  />
+                </label>
+                <button
+                  disabled={shouldDisableLoginCodeButton({
+                    accountLoading: loginLoading,
+                    loginEmail,
+                    countdown: loginCodeCountdown,
+                  })}
+                  className="h-9 px-4 bg-ink text-paper rounded-md text-sm hover:bg-ink-soft transition-colors self-start disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {formatLoginCodeCountdownLabel(loginCodeCountdown)}
+                </button>
+              </form>
+            ) : null}
 
             <form onSubmit={handleVerify} className="flex flex-col gap-3">
+              {loginMode === 'password' ? (
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs text-ink-fade">邮箱</span>
+                  <input
+                    value={loginEmail}
+                    onChange={(e) => setLoginEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    autoComplete="email"
+                    className="h-9 px-3 border border-ink/40 rounded-md bg-paper outline-none focus:border-ember text-sm text-ink"
+                  />
+                </label>
+              ) : null}
               <label className="flex flex-col gap-1">
-                <span className="text-xs text-ink-fade">验证码</span>
-                <input
-                  value={loginCode}
-                  onChange={(e) => setLoginCode(e.target.value)}
-                  placeholder="6 位数字"
-                  className="h-9 px-3 border border-ink/40 rounded-md bg-paper outline-none focus:border-ember text-sm text-ink"
-                />
+                <span className="text-xs text-ink-fade">{loginMode === 'password' ? '密码' : '验证码'}</span>
+                {loginMode === 'password' ? (
+                  <input
+                    type="password"
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    placeholder="输入密码"
+                    autoComplete="current-password"
+                    className="h-9 px-3 border border-ink/40 rounded-md bg-paper outline-none focus:border-ember text-sm text-ink"
+                  />
+                ) : (
+                  <input
+                    value={loginCode}
+                    onChange={(e) => setLoginCode(e.target.value)}
+                    placeholder="6 位数字"
+                    className="h-9 px-3 border border-ink/40 rounded-md bg-paper outline-none focus:border-ember text-sm text-ink"
+                  />
+                )}
               </label>
               <button
-                disabled={loginLoading || !loginEmail.trim() || !loginCode.trim()}
+                disabled={loginLoading || !loginEmail.trim() || (loginMode === 'password' ? !loginPassword : !loginCode.trim())}
                 className="h-9 px-4 bg-ember text-paper rounded-md text-sm hover:bg-ember/90 transition-colors self-start disabled:opacity-50"
               >
                 登录并进入设置
