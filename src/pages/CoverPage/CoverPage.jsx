@@ -1,8 +1,11 @@
-import { useRef, useEffect, useState, useCallback } from 'react'
+import { useRef, useEffect, useState, useCallback, Suspense, lazy } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Sparkles } from 'lucide-react'
-import CoverScene from './CoverScene'
+
+// three / @react-three 是重点包（1MB+）— 延迟加载
+// CoverPage 其他内容不需要等 3D scene 准备好才能呈现。
+const CoverScene = lazy(() => import('./CoverScene'))
 
 export default function CoverPage() {
   const navigate = useNavigate()
@@ -72,7 +75,9 @@ export default function CoverPage() {
       }}
     >
       {/* 3D Canvas Layer */}
-      <CoverScene isExiting={isExiting} />
+      <Suspense fallback={null}>
+        <CoverScene isExiting={isExiting} />
+      </Suspense>
 
       {/* Vignette overlay */}
       <div

@@ -114,20 +114,44 @@ export default defineConfig({
   plugins: [react(), authBillingPlugin(), modelProxyPlugin(), toolProxyPlugin(), fallbackApiPlugin()],
   base: PUBLIC_BASE_PATH,
   build: {
-    chunkSizeWarningLimit: 800,
+    chunkSizeWarningLimit: 1100,
     rollupOptions: {
       output: {
         manualChunks(id) {
           // Group React + Router into one stable vendor chunk
-          if (id.includes('node_modules/react') || id.includes('node_modules/react-dom') || id.includes('node_modules/react-router')) return 'vendor-react'
+          if (id.includes('node_modules/react-router')) return 'vendor-react'
+          if (id.includes('node_modules/react-dom')) return 'vendor-react'
+          if (id.includes('node_modules/react/')) return 'vendor-react'
+          if (id.includes('node_modules/scheduler')) return 'vendor-react'
           // Group Framer Motion separately (large, stable)
           if (id.includes('node_modules/framer-motion')) return 'vendor-motion'
-          // Group Three.js into one chunk
-          if (id.includes('node_modules/three') || id.includes('node_modules/@react-three')) return 'vendor-three'
+          // Three.js 不再合名 — 让它跟随 CoverPage 的 lazy chunk
+          // (manualChunks 会把 node_modules 提到同步 vendor，重点的 3D 装饰不该堆到首屏)
           // Group lucide icons (many small files)
           if (id.includes('node_modules/lucide-react')) return 'vendor-icons'
+          // 大货独立分块 — 原 vendor-common 2.4MB 原凶
+          // 注意：pptxgenjs / xlsx / jszip / html-to-image 都有代码里 await import，
+          // 指定 manualChunks 会把它们从异步 chunk 提到 entry vendor，反而变大。
+          // 全部交给 vite 默认的动态拆分，仅拆真同步依赖。
+          if (id.includes('node_modules/highlight.js')) return 'vendor-hljs'
+          if (id.includes('node_modules/react-markdown') ||
+              id.includes('node_modules/remark-') ||
+              id.includes('node_modules/rehype-') ||
+              id.includes('node_modules/micromark') ||
+              id.includes('node_modules/mdast-') ||
+              id.includes('node_modules/hast-') ||
+              id.includes('node_modules/unist-') ||
+              id.includes('node_modules/unified') ||
+              id.includes('node_modules/vfile') ||
+              id.includes('node_modules/property-information') ||
+              id.includes('node_modules/space-separated-tokens') ||
+              id.includes('node_modules/comma-separated-tokens')) return 'vendor-markdown'
+          if (id.includes('node_modules/dompurify')) return 'vendor-purify'
+          if (id.includes('node_modules/zod')) return 'vendor-zod'
           // Group all remaining node_modules
-          if (id.includes('node_modules/')) return 'vendor-common'
+          // 不再 fallback 到 vendor-common：未命中上面规则的 node_modules 交给 vite
+          // 默认动态拆分，避免 pptxgenjs / xlsx / jszip / html-to-image 被捞进同一个
+          // 巨块。这些库代码里都是 await import，会被拆到各自的 async chunk。
         },
       },
     },
