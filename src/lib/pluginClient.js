@@ -14,3 +14,15 @@ export async function getPluginApi(id) {
   const resp = await fetch(`/api/plugins/${encodeURIComponent(id)}`, { headers: authHeaders() })
   return jsonOk(resp)
 }
+
+/**
+ * 将 type='skill-bundle' 的 plugin 安装为当前用户的 skill。
+ * 需登录。2xx 返 { ok:true, skill }; 其他返 { ok:false, error } 抑或抛。
+ */
+export async function installPluginAsSkillApi(pluginId) {
+  const resp = await fetch(`/api/plugins/${encodeURIComponent(pluginId)}/install-as-skill`, {
+    method: 'POST',
+    headers: authHeaders(),
+  })
+  return jsonOk(resp)
+}

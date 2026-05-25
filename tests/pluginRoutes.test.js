@@ -73,9 +73,73 @@ test('GET /api/plugins/no-such 返回 404', async () => {
   })
 })
 
-test('POST /api/plugins 被拒绝 (只读)', async () => {
+test('POST /api/plugins/example-greeting-prompt/install-as-skill 拒绝非 skill-bundle (400)', async () => {
+  const { issueTestSession } = await import('./helpers/testAuth.js')
+  const { token } = issueTestSession()
   await withServer(async (base) => {
-    const res = await fetch(`${base}/api/plugins`, { method: 'POST', body: '{}' })
-    assert.equal(res.status, 405)
+    const res = await fetch(`${base}/api/plugins/example-greeting-prompt/install-as-skill`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    assert.equal(res.status, 400)
+    const body = await res.json()
+    assert.ok(/类型必须/.test(body.error))
+  })
+})
+
+test('POST /api/plugins/no-such/install-as-skill 返 404', async () => {
+  const { issueTestSession } = await import('./helpers/testAuth.js')
+  const { token } = issueTestSession()
+  await withServer(async (base) => {
+    const res = await fetch(`${base}/api/plugins/no-such/install-as-skill`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    assert.equal(res.status, 404)
+  })
+})
+
+test('POST /api/plugins/example-skill-bundle/install-as-skill 未登录 401', async () => {
+  await withServer(async (base) => {
+    const res = await fetch(`${base}/api/plugins/example-skill-bundle/install-as-skill`, { method: 'POST' })
+    assert.equal(res.status, 401)
+  })
+})
+
+test('POST /api/plugins/example-skill-bundle/install-as-skill 成功 200', async () => {
+  const { issueTestSession } = await import('./helpers/testAuth.js')
+  const { token } = issueTestSession()
+  await withServer(async (base) => {
+    const res = await fetch(`${base}/api/plugins/example-skill-bundle/install-as-skill`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    assert.equal(res.status, 200)
+    const body = await res.json()
+    assert.equal(body.ok, true)
+    assert.ok(body.skill)
+    assert.match(body.skill.id, /^example-bundled(-\d+)?$/)
+  })
+})
+
+test('POST /api/plugins/example-skill-bundle/install-as-skill 重复安装自动衰减 id', async () => {
+  const { issueTestSession } = await import('./helpers/testAuth.js')
+  const { token } = issueTestSession()
+  await withServer(async (base) => {
+    const first = await fetch(`${base}/api/plugins/example-skill-bundle/install-as-skill`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    assert.equal(first.status, 200)
+    const firstBody = await first.json()
+    assert.match(firstBody.skill.id, /^example-bundled(-\d+)?$/)
+    const second = await fetch(`${base}/api/plugins/example-skill-bundle/install-as-skill`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    assert.equal(second.status, 200)
+    const secondBody = await second.json()
+    assert.notEqual(secondBody.skill.id, firstBody.skill.id)
+    assert.match(secondBody.skill.id, /^example-bundled-\d+$/)
   })
 })

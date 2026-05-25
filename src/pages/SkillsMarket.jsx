@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Search, Sparkles, Upload, X } from 'lucide-react'
+import { Plus, Search, Sparkles, Upload, X, Package } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
 import { SKILLS } from '../data.js'
 import { useAppContext } from '../store/AppContext'
 import { importSkillPack, listSkills } from '../lib/skillClient.js'
+import { listPluginsApi, installPluginAsSkillApi } from '../lib/pluginClient.js'
 import { SKILL_ICONS } from '../lib/skillIcons.js'
 
 const CUSTOM_KEY = 'your-model-atelier:custom-skills:v1'
@@ -38,6 +39,11 @@ export default function SkillsMarket() {
   const [importPreview, setImportPreview] = useState(null)
   const [importError, setImportError] = useState('')
   const [importing, setImporting] = useState(false)
+  const [showPluginPanel, setShowPluginPanel] = useState(false)
+  const [pluginBundles, setPluginBundles] = useState([])
+  const [pluginPanelLoading, setPluginPanelLoading] = useState(false)
+  const [pluginPanelError, setPluginPanelError] = useState('')
+  const [installingPluginId, setInstallingPluginId] = useState(null)
   const searchRef = useRef(null)
   const folderInputRef = useRef(null)
 
@@ -197,6 +203,41 @@ export default function SkillsMarket() {
     }
   }
 
+  const openPluginPanel = async () => {
+    setPluginPanelError('')
+    setShowPluginPanel(true)
+    setPluginPanelLoading(true)
+    try {
+      const { plugins } = await listPluginsApi({ type: 'skill-bundle' })
+      setPluginBundles(Array.isArray(plugins) ? plugins : [])
+    } catch (e) {
+      setPluginPanelError(e?.message || '无法加载 plugin')
+      setPluginBundles([])
+    } finally {
+      setPluginPanelLoading(false)
+    }
+  }
+
+  const handleInstallPluginAsSkill = async (pluginId) => {
+    setPluginPanelError('')
+    setInstallingPluginId(pluginId)
+    try {
+      const res = await installPluginAsSkillApi(pluginId)
+      if (!res?.ok || !res.skill) {
+        throw new Error(res?.error || '安装失败')
+      }
+      try {
+        const { skills } = await listSkills()
+        if (Array.isArray(skills) && skills.length) setRuntimeSkills(skills)
+      } catch { /* 列表刷新失败不阻断安装反馈 */ }
+      setShowPluginPanel(false)
+    } catch (e) {
+      setPluginPanelError(e?.message || '安装失败')
+    } finally {
+      setInstallingPluginId(null)
+    }
+  }
+
   return (
     <div className="h-screen flex bg-paper overflow-hidden">
       <LeftRail />
@@ -236,6 +277,14 @@ export default function SkillsMarket() {
             >
               <Upload className="w-4 h-4" />
               导入技能包
+            </button>
+            <button
+              onClick={openPluginPanel}
+              className="h-9 px-4 border border-ink/70 rounded-md font-hand text-sm flex items-center gap-1.5 hover:bg-paper-2 transition-colors"
+              title="从 Plugin 安装为 Skill"
+            >
+              <Package className="w-4 h-4" />
+              从 Plugin
             </button>
             <button
               onClick={handleCreateCustom}
@@ -466,6 +515,65 @@ export default function SkillsMarket() {
                 >
                   {importing ? '导入中…' : '确认导入'}
                 </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+      {showPluginPanel && (
+        <div
+          className="fixed inset-0 bg-ink/40 flex items-center justify-center z-50 p-4"
+          onClick={() => setShowPluginPanel(false)}
+        >
+          <div
+            className="bg-paper border border-ink/30 rounded-lg max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-5 py-3 border-b border-ink/20">
+              <div className="flex items-center gap-2">
+                <Package className="w-4 h-4" />
+                <h2 className="font-hand text-base">从 Plugin 安装为 Skill</h2>
+              </div>
+              <button onClick={() => setShowPluginPanel(false)} className="text-ink-fade hover:text-ink">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto p-5">
+              {pluginPanelLoading && <div className="text-sm text-ink-soft">加载中...</div>}
+              {pluginPanelError && (
+                <div className="mb-3 p-2 border border-ember-line bg-ember-soft/30 rounded-md text-sm text-ember">
+                  {pluginPanelError}
+                </div>
+              )}
+              {!pluginPanelLoading && !pluginBundles.length && !pluginPanelError && (
+                <div className="text-sm text-ink-soft">
+                  未发现 type=skill-bundle 的 plugin。可在 <code className="font-mono text-xs">plugins/</code> 目录下放含 <code className="font-mono text-xs">skill.json</code> + <code className="font-mono text-xs">prompts/system.md</code> 的 plugin。
+                </div>
+              )}
+              {pluginBundles.length > 0 && (
+                <ul className="divide-y divide-ink/10">
+                  {pluginBundles.map((p) => (
+                    <li key={p.id} className="py-3 flex items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <div className="font-medium text-sm flex items-center gap-2">
+                          {p.name}
+                          <span className="text-xs text-ink-fade font-mono">v{p.version}</span>
+                        </div>
+                        <div className="text-xs text-ink-fade font-mono mt-0.5">{p.id}</div>
+                        {p.description && (
+                          <div className="text-xs text-ink-soft mt-1 line-clamp-2">{p.description}</div>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => handleInstallPluginAsSkill(p.id)}
+                        disabled={installingPluginId === p.id}
+                        className="shrink-0 h-8 px-3 bg-ink text-paper rounded-md text-xs font-hand hover:bg-ink/90 disabled:opacity-50 disabled:cursor-wait"
+                      >
+                        {installingPluginId === p.id ? '安装中...' : '安装'}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
               )}
             </div>
           </div>

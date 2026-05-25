@@ -91,3 +91,11 @@ export function listImportedSkills({ userId } = {}) {
 export function listImportedSkillIds({ userId } = {}) {
   return listImportedSkills({ userId }).map((skill) => skill.id)
 }
+
+/**
+ * 返回全库 skill ID（不区分 user_id）。
+ * 用于底层 ID dedup：PRIMARY KEY 全局唯一，任何新 install 都要避开现有 id。
+ */
+export function listAllSkillIds() {
+  return getDb().prepare('SELECT id FROM skills').all().map((r) => r.id)
+}
