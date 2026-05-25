@@ -9,10 +9,16 @@
  * - 给未来的 Manager facade（SessionManager / SkillManager / ...）留 hook 点
  */
 
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { closeDb } from '../db.js'
 import { closeJobRuntime } from '../services/jobRuntime.js'
 import { shutdownAll as shutdownMcpAll } from '../mcp/mcpManager.js'
 import { seedSystemSkills } from '../services/seedSystemSkills.js'
+import { initPlugins } from '../plugins/pluginRegistry.js'
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const DEFAULT_PLUGIN_ROOT = path.resolve(__dirname, '../../plugins')
 
 const SHUTDOWN_TIMEOUT_MS = 10_000
 
@@ -25,6 +31,12 @@ export function bootstrap({ silent = process.env.NODE_ENV === 'production' } = {
     seedSystemSkills()
   } catch (err) {
     console.error('[server] seedSystemSkills failed:', err.message)
+  }
+  try {
+    initPlugins({ rootDir: DEFAULT_PLUGIN_ROOT, silent })
+  } catch (err) {
+    // 加载失败绝不阻塞主进程启动
+    console.error('[server] initPlugins failed:', err.message)
   }
   if (!silent) console.log('[lifecycle] bootstrap complete')
   return {}

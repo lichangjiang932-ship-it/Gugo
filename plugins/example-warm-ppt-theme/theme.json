@@ -1,0 +1,24 @@
+{
+  "name": "Warm Business",
+  "palette": {
+    "bg": "#FBF5EC",
+    "surface": "#F3E7D2",
+    "title": "#2B1B14",
+    "body": "#3A2A20",
+    "muted": "#8C6F5E",
+    "accent": "#C9522E",
+    "accentSoft": "#E8A37A",
+    "line": "#D8C3A8"
+  },
+  "fonts": {
+    "heading": "Cabinet Grotesk",
+    "body": "Geist",
+    "mono": "Geist Mono"
+  },
+  "sizing": {
+    "titleScale": 1.0,
+    "bodyScale": 1.0,
+    "radius": "12px"
+  },
+  "vibe": "warm, editorial, low-saturation, magazine-style"
+}

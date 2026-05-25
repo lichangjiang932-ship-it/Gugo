@@ -1,0 +1,11 @@
+{
+  "id": "example-greeting-prompt",
+  "name": "Opening Greeting Generator",
+  "version": "0.1.0",
+  "type": "prompt-template",
+  "entry": "template.md",
+  "description": "演讲/会议开场白生成器：根据场景、受众、风格输出 3 段候选开场白。",
+  "author": "yma-team",
+  "license": "MIT",
+  "tags": ["prompt", "greeting", "speech"]
+}
