@@ -22,14 +22,28 @@ function leafKeys(obj, prefix = '') {
   return out
 }
 
-test('translations 包含 zh 和 en 两种语言', () => {
+test('translations 包含 zh / en / ja / ko / zh-TW 五种语言', () => {
   assert.ok(translations.zh, 'zh 缺失')
   assert.ok(translations.en, 'en 缺失')
+  assert.ok(translations.ja, 'ja 缺失')
+  assert.ok(translations.ko, 'ko 缺失')
+  assert.ok(translations['zh-TW'], 'zh-TW 缺失')
   assert.equal(DEFAULT_LANGUAGE, 'zh')
   assert.deepEqual(
     SUPPORTED_LANGUAGES.map((l) => l.code).sort(),
-    ['en', 'zh'],
+    ['en', 'ja', 'ko', 'zh', 'zh-TW'],
   )
+})
+
+test('新增语言 ja/ko/zh-TW 的 key 与 zh 完全对称', () => {
+  const zhKeys = leafKeys(translations.zh).sort()
+  for (const lang of ['ja', 'ko', 'zh-TW']) {
+    const langKeys = leafKeys(translations[lang]).sort()
+    const missing = zhKeys.filter((k) => !langKeys.includes(k))
+    const extra = langKeys.filter((k) => !zhKeys.includes(k))
+    assert.deepEqual(missing, [], `${lang} 缺少 key：${missing.join(', ')}`)
+    assert.deepEqual(extra, [], `${lang} 多出 key：${extra.join(', ')}`)
+  }
 })
 
 test('translations 结构合法：zh 和 en 都有 nav/settings/errors 至少 3 个 key', () => {
