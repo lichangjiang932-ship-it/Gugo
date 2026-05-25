@@ -1,0 +1,11 @@
+{
+  "id": "example-warm-ppt-theme",
+  "name": "Warm PPT Theme",
+  "version": "0.1.0",
+  "type": "ppt-theme",
+  "entry": "theme.json",
+  "description": "一组暖色调商务 PPT 主题色板与字体配置，适合品牌发布/季度复盘场景。",
+  "author": "yma-team",
+  "license": "MIT",
+  "tags": ["warm", "business", "earth-tone"]
+}
