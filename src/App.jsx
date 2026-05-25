@@ -16,6 +16,7 @@ const TaskRunPanel = lazy(() => import('./pages/TaskRunPanel'))
 const HistoryView = lazy(() => import('./pages/HistoryView'))
 const SettingsView = lazy(() => import('./pages/SettingsView'))
 const MemoryView = lazy(() => import('./pages/MemoryView'))
+const AgentList = lazy(() => import('./pages/AgentList'))
 const HooksView = lazy(() => import('./pages/HooksView'))
 const McpServersView = lazy(() => import('./pages/McpServersView'))
 const ReasonixWorkspace = lazy(() => import('./pages/ReasonixWorkspace'))
@@ -47,6 +48,7 @@ function App() {
           <Route path="/history" element={<HistoryView />} />
           <Route path="/settings" element={<RequireAuth><SettingsView /></RequireAuth>} />
           <Route path="/memory" element={<RequireAuth><MemoryView /></RequireAuth>} />
+          <Route path="/agents" element={<RequireAuth><AgentList /></RequireAuth>} />
           <Route path="/hooks" element={<RequireAuth><HooksView /></RequireAuth>} />
           <Route path="/mcp" element={<RequireAuth><McpServersView /></RequireAuth>} />
           <Route path="/reasonix" element={<RequireAuth><ReasonixWorkspace /></RequireAuth>} />

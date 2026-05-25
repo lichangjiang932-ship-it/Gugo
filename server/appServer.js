@@ -29,6 +29,7 @@ import { getJobRuntime } from './services/jobRuntime.js'
 import { handleJobRequest } from './routes/jobRoutes.js'
 import { handleSkillRequest } from './routes/skillRoutes.js'
 import { handlePluginRequest } from './routes/pluginRoutes.js'
+import { handleAgentRequest } from './routes/agentRoutes.js'
 import { handleToolSpecsRequest } from './services/toolRegistry.js'
 import { handleMemoryRequest } from './routes/memoryRoutes.js'
 import { handleHooksRequest } from './routes/hooksRoutes.js'
@@ -216,6 +217,10 @@ function createRouter(getEnv = getRuntimeEnv) {
   // Plugin SDK (stage-2.2) — 静态只读
   if (req.url?.startsWith('/api/plugins')) {
     return handlePluginRequest(req, res)
+  }
+
+  if (req.url?.startsWith('/api/agents')) {
+    return handleAgentRequest(req, res)
   }
 
   // 记忆中心（feature 3）

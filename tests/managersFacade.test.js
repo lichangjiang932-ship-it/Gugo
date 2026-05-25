@@ -8,13 +8,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { SessionManager, JobManager, SkillManager, MemoryManager } from '../server/managers/index.js'
+import { SessionManager, JobManager, SkillManager, MemoryManager, AgentManager } from '../server/managers/index.js'
 import * as dbMod from '../server/db.js'
 import * as jobStore from '../server/services/jobStore.js'
 import * as jobRuntime from '../server/services/jobRuntime.js'
 import * as skillRegistry from '../server/services/skillRegistry.js'
 import * as skillStore from '../server/services/skillStore.js'
 import * as memoryStore from '../server/services/memoryStore.js'
+import * as agentStore from '../server/services/agentStore.js'
 import { seedSystemSkills } from '../server/services/seedSystemSkills.js'
 
 test('SessionManager exposes auth + user APIs from db.js', () => {
@@ -66,4 +67,17 @@ test('MemoryManager exposes CRUD + injection helpers', () => {
 
   assert.equal(MemoryManager.list, memoryStore.listMemories)
   assert.equal(MemoryManager.remove, memoryStore.deleteMemory)
+})
+
+test('AgentManager exposes Agent CRUD + ensureDefault', () => {
+  assert.equal(typeof AgentManager.list, 'function')
+  assert.equal(typeof AgentManager.get, 'function')
+  assert.equal(typeof AgentManager.getDefault, 'function')
+  assert.equal(typeof AgentManager.create, 'function')
+  assert.equal(typeof AgentManager.update, 'function')
+  assert.equal(typeof AgentManager.remove, 'function')
+  assert.equal(typeof AgentManager.ensureDefault, 'function')
+
+  assert.equal(AgentManager.list, agentStore.listAgents)
+  assert.equal(AgentManager.ensureDefault, agentStore.ensureDefaultAgent)
 })
