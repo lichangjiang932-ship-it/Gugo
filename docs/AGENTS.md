@@ -94,3 +94,57 @@ server/db.js                      v5 schema
 - 切 agent UI（聊天页右上角下拉）
 - agent 维度的 MEMORY 关联（让不同 agent 看到不同记忆切片）
 - agent export/import（一个 `.agent.md` 文件含双卡 + frontmatter）
+
+
+---
+
+## 阶段 4 已落地：chat 注入 + export/import
+
+### chat 注入
+
+`server/adapters/modelProxy.js` 的 chat handler 在 memory 注入**之前**，先 unshift 一个 system block：
+
+```
+# Agent: <name>
+
+## IDENTITY
+<identity_md>
+
+## SOUL
+<soul_md>
+
+Follow the persona above. Stay in character.
+```
+
+- 使用 `ensureDefaultAgent({ userId })` 拿当前用户的默认 agent
+- 顺序：`[agent system] → [memory system] → ...rest`
+- 开关：`AGENT_INJECT_ENABLED=0` 可关闭（默认开）
+- 任何异常 try/catch 吞掉，不阻断 chat（与 memory 注入同策略）
+
+### export
+
+`GET /api/agents/:id/export` 返回 `text/markdown`：
+
+```
+---
+name: "Atelier"
+avatar_url: ""
+exported_at: 2026-05-25T13:00:00.000Z
+---
+
+# Atelier
+
+## IDENTITY
+...
+
+## SOUL
+...
+```
+
+### import
+
+`POST /api/agents/import { source }` 解析上述格式，创建新 agent（不抢 default）。
+容错：
+- 没 frontmatter → 从首个 `# H1` 取 name；缺 H1 → "Imported Agent"
+- 没 `## IDENTITY` / `## SOUL` → 把全文当 SOUL
+- 撞名 → 抛 400（前端捕获展示）

@@ -60,3 +60,16 @@ export async function deleteAgentApi(id) {
   })
   return jsonOk(resp)
 }
+
+export function exportAgentUrl(id) {
+  return `/api/agents/${encodeURIComponent(id)}/export`
+}
+
+export async function importAgentApi(source) {
+  const resp = await fetch('/api/agents/import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ source }),
+  })
+  return jsonOk(resp)
+}
