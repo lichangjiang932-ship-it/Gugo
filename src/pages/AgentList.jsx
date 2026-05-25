@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, Save, Star, X, Download, Upload, Sparkles } from 'lucide-react'
+import { Plus, Trash2, Save, Star, X, Download, Upload, Sparkles, Package } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { useActiveAgent } from '../agents/activeAgentContext.js'
@@ -10,7 +10,9 @@ import {
   deleteAgentApi,
   getDefaultAgentApi,
   exportAgentUrl,
+  exportAgentZipUrl,
   importAgentApi,
+  importAgentZipApi,
 } from '../lib/agentClient.js'
 import { listPluginsApi, getPluginApi } from '../lib/pluginClient.js'
 
@@ -210,6 +212,63 @@ export default function AgentList() {
     }
   }
 
+  // v0.9: 导出角色卡 zip (包含 memories)
+  const handleExportZip = async (a) => {
+    try {
+      const mod = await import('../lib/accountClient.js')
+      const token = mod.getAuthToken?.() || ''
+      const r = await fetch(exportAgentZipUrl(a.id), { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+      if (!r.ok) throw new Error('export failed')
+      const blob = await r.blob()
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `${a.name}.agent.zip`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setErr(e.message || t('errors.loadFailed'))
+    }
+  }
+
+  // v0.9: 导入角色卡 zip
+  const handleImportZip = async () => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.zip,application/zip'
+    input.onchange = async () => {
+      const file = input.files?.[0]
+      if (!file) return
+      try {
+        if (file.size > 10 * 1024 * 1024) throw new Error('zip > 10MB')
+        try {
+          const r = await importAgentZipApi(file)
+          if (r.memoriesImported > 0) {
+            setErr(`OK: imported ${r.memoriesImported} memories`)
+          }
+        } catch (e) {
+          const msg = String(e?.message || '')
+          if (/已存在同名/.test(msg) || /UNIQUE/i.test(msg)) {
+            const next = window.prompt(t('agents.renameOnConflict'), 'imported-agent (copy)')
+            if (next && next.trim()) {
+              await importAgentZipApi(file, { overrideName: next.trim() })
+            } else {
+              throw e
+            }
+          } else {
+            throw e
+          }
+        }
+        await reload()
+      } catch (e) {
+        setErr(e.message || t('errors.loadFailed'))
+      }
+    }
+    input.click()
+  }
+
   return (
     <div className="flex h-screen bg-canvas">
       <LeftRail />
@@ -225,6 +284,12 @@ export default function AgentList() {
               className="inline-flex items-center gap-2 px-3 py-2 border border-ink/15 rounded-md text-sm hover:bg-ink/5"
             >
               <Sparkles size={14} /> {t('agents.fromTemplate')}
+            </button>
+            <button
+              onClick={handleImportZip}
+              className="inline-flex items-center gap-2 px-3 py-2 border border-ink/15 rounded-md text-sm hover:bg-ink/5"
+            >
+              <Package size={14} /> {t('agents.importZip')}
             </button>
             <button
               onClick={handleImport}
@@ -269,8 +334,17 @@ export default function AgentList() {
                     onClick={() => handleExport(a)}
                     className="ml-2 p-2 text-ink-fade hover:text-ink"
                     aria-label={t('agents.export')}
+                    title=".agent.md"
                   >
                     <Download size={16} />
+                  </button>
+                  <button
+                    onClick={() => handleExportZip(a)}
+                    className="ml-1 p-2 text-ink-fade hover:text-ink"
+                    aria-label={t('agents.exportZip')}
+                    title={t('agents.exportZip')}
+                  >
+                    <Package size={16} />
                   </button>
                   <button
                     onClick={() => handleDelete(a)}
