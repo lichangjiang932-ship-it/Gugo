@@ -1,0 +1,18 @@
+{
+  "id": "ppt-master",
+  "name": "PPT Master · 顶级演示设计",
+  "description": "源自 hugohe3/ppt-master 的多角色 PPT 生成工作流。内置 71 个图表 SVG 模板、17 套布局风格（咨询/科技/政务/医学/像素等）、640 个 chunk-filled 图标。生成 16:9 高级感 HTML 演示，可一键打印为 PDF。",
+  "version": "1.0.0",
+  "icon": "🎨",
+  "permissions": ["内容生成", "模板读取"],
+  "templates": {
+    "charts": "templates/charts",
+    "layouts": "templates/layouts",
+    "icons": "templates/icons/chunk-filled",
+    "indexes": {
+      "charts": "templates/charts/charts_index.json",
+      "layouts": "templates/layouts/layouts_index.json",
+      "icons": "templates/icons/README.md"
+    }
+  }
+}

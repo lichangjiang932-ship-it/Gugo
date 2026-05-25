@@ -13,6 +13,7 @@ function mapSkill(row) {
   return {
     id: row.id,
     userId: row.user_id || null,
+    system: row.user_id == null, // user_id IS NULL ⇒ 系统内置
     name: row.name,
     description: row.description,
     version: row.version,
@@ -62,7 +63,8 @@ export function getImportedSkill(id, { userId } = {}) {
   const row = getDb().prepare('SELECT * FROM skills WHERE id = ?').get(id)
   const skill = mapSkill(row)
   if (!skill) return null
-  if (userId && skill.userId && skill.userId !== userId) return null
+  // skill.userId === null ⇒ 全站共享 (内置系统技能), 任何用户都可读
+  if (skill.userId && userId && skill.userId !== userId) return null
   const assets = getDb()
     .prepare('SELECT path, content FROM skill_assets WHERE skill_id = ? ORDER BY path ASC')
     .all(id)
@@ -74,8 +76,9 @@ export function getImportedSkill(id, { userId } = {}) {
 
 export function listImportedSkills({ userId } = {}) {
   if (userId) {
+    // 当前用户私有技能 + 全站公共系统技能
     return getDb()
-      .prepare('SELECT * FROM skills WHERE user_id = ? ORDER BY created_at DESC')
+      .prepare('SELECT * FROM skills WHERE user_id = ? OR user_id IS NULL ORDER BY user_id IS NULL DESC, created_at DESC')
       .all(userId)
       .map(mapSkill)
   }
