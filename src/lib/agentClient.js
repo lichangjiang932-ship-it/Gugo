@@ -73,3 +73,18 @@ export async function importAgentApi(source, { overrideName } = {}) {
   })
   return jsonOk(resp)
 }
+
+// v0.9: 角色卡 zip
+export function exportAgentZipUrl(id, { memories = true } = {}) {
+  return `/api/agents/${encodeURIComponent(id)}/export.zip${memories ? '' : '?memories=0'}`
+}
+
+export async function importAgentZipApi(file, { overrideName } = {}) {
+  const qs = overrideName ? `?overrideName=${encodeURIComponent(overrideName)}` : ''
+  const resp = await fetch(`/api/agents/import.zip${qs}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/zip', ...authHeaders() },
+    body: file,
+  })
+  return jsonOk(resp)
+}
