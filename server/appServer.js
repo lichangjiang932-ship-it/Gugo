@@ -21,6 +21,8 @@ import { handleAuthBillingRequest } from './billingAuth.js'
 import { handleToolProxyRequest } from './toolProxy.js'
 import { handleFsShellRequest } from './fsShellTools.js'
 import { handleGitWorkbenchRequest } from './gitWorkbench.js'
+import { handleCodeSearchRequest } from './utils/codeSearchRoutes.js'
+import { handleAgenticToolRequest } from './utils/agenticToolsRoutes.js'
 import { handleArtifactDownload } from './artifactGen.js'
 import { closeJobRuntime, getJobRuntime } from './jobRuntime.js'
 import { handleJobRequest } from './jobRoutes.js'
@@ -168,6 +170,16 @@ function createRouter(getEnv = getRuntimeEnv) {
   // Workspace fs/shell tools use the stricter fsShell handler before generic web tools.
   if (req.url?.startsWith('/api/tools/fs/') || req.url?.startsWith('/api/tools/shell/')) {
     return handleFsShellRequest(req, res)
+  }
+
+  // ★ M1: 代码搜索(只读, 比 fs/shell 风险低)
+  if (req.url?.startsWith('/api/tools/code/')) {
+    return handleCodeSearchRequest(req, res)
+  }
+
+  // ★ M3: 思维型工具(reflect / request_clarification)
+  if (req.url?.startsWith('/api/tools/agent/')) {
+    return handleAgenticToolRequest(req, res)
   }
 
   // Git workbench/check routes are stricter than generic web tools and must be handled first.

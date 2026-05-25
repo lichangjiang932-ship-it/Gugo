@@ -12,6 +12,11 @@ import { appendJobArtifact } from './jobStore.js'
 import { createDocx, createPptx, createXlsx } from './artifactGen.js'
 import { FS_SHELL_TOOL_SPECS, dispatchFsShellTool } from './fsShellTools.js'
 import { GIT_TOOL_SPECS, dispatchGitTool } from './gitWorkbench.js'
+import { CODE_SEARCH_TOOL_SPECS, dispatchCodeSearchTool } from './utils/codeSearch.js'
+import { APPLY_PATCH_TOOL_SPECS, dispatchApplyPatchTool } from './utils/applyPatch.js'
+import { AGENTIC_TOOL_SPECS, dispatchAgenticTool, isLoopPauseResult } from './utils/agenticTools.js'
+import { attachJobBudget, getJobBudget, createJobBudget } from './utils/jobBudget.js'
+import { writeToolAudit } from './utils/audit.js'
 import crypto from 'node:crypto'
 
 function newId(prefix) {
@@ -171,6 +176,9 @@ export const SERVER_TOOL_SPECS = [
   // 路径沙箱在 WORKSPACE_ROOT(默认 process.cwd()).
   ...FS_SHELL_TOOL_SPECS,
   ...GIT_TOOL_SPECS,
+  ...CODE_SEARCH_TOOL_SPECS,
+  ...APPLY_PATCH_TOOL_SPECS,
+  ...AGENTIC_TOOL_SPECS,
 ]
 
 /**
@@ -229,7 +237,28 @@ async function executeServerTool({ name, args, job, step }) {
   // 任意 fsShellTools 抛错(包括 env 未启用 / 路径越界)都返回 {ok:false,error}.
   if (['read_file', 'write_file', 'edit_file', 'bash_exec'].includes(name)) {
     try {
-      return await dispatchFsShellTool(name, args || {})
+      return await dispatchFsShellTool(name, args || {}, { userId: job?.userId || null })
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) }
+    }
+  }
+  if (['grep_code', 'find_symbol', 'list_imports'].includes(name)) {
+    try {
+      return await dispatchCodeSearchTool(name, args || {})
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) }
+    }
+  }
+  if (name === 'apply_patch') {
+    try {
+      return await dispatchApplyPatchTool(name, args || {})
+    } catch (err) {
+      return { ok: false, error: err?.message || String(err) }
+    }
+  }
+  if (['reflect', 'request_clarification'].includes(name)) {
+    try {
+      return await dispatchAgenticTool(name, args || {})
     } catch (err) {
       return { ok: false, error: err?.message || String(err) }
     }
@@ -273,6 +302,8 @@ export async function runToolsLoop({ job, step, messages, runModel, signal, maxI
   const artifactIds = []
   let finalText = ''
   let iter = 0
+  // ★ M3.5 + Lens-2 fix:任务级预算用 WeakMap 持有,模型/工具碰不到 job 的属性也无法绕过。
+  const budget = job ? (getJobBudget(job) || attachJobBudget(job)) : createJobBudget()
 
   for (; iter < maxIters; iter += 1) {
     const { content, toolCalls } = await runModel({
@@ -297,13 +328,22 @@ export async function runToolsLoop({ job, step, messages, runModel, signal, maxI
       })),
     })
 
+    let pausedByClarification = null
+    let budgetExceeded = null
     for (const tc of toolCalls) {
       const name = tc.function?.name || tc.name
       const args = safeParseArgs(tc.function?.arguments || tc.arguments)
+      // ★ M3.5:预算检查(reflect/request_clarification 不计,鼓励复盘与澄清)
+      const isFree = name === 'reflect' || name === 'request_clarification'
+      if (!isFree) {
+        const b = budget.consume(1)
+        if (!b.ok) { budgetExceeded = b.reason; break }
+      }
       let result
       try {
         result = await executeTool({ name, args, job, step })
         if (result?.artifactId) artifactIds.push(result.artifactId)
+        if (isLoopPauseResult(result)) pausedByClarification = result.clarification
       } catch (err) {
         result = { ok: false, error: err?.message || String(err) }
       }
@@ -313,6 +353,36 @@ export async function runToolsLoop({ job, step, messages, runModel, signal, maxI
         name,
         content: clipToolOutput(result),
       })
+    }
+    if (budgetExceeded) {
+      // ★ Lens-4 fix:预算超限写 audit,审计员能追查 job 为什么没跑完
+      if (job?.userId) {
+        writeToolAudit({
+          userId: job.userId,
+          origin: 'budget',
+          toolName: 'job_budget',
+          args: { jobId: job.id, stepId: step?.id, snapshot: budget.snapshot?.() },
+          status: 'denied',
+          durationMs: 0,
+        })
+      }
+      return {
+        text: finalText,
+        artifactIds,
+        iterations: iter + 1,
+        budgetExceeded: true,
+        reason: budgetExceeded,
+      }
+    }
+    if (pausedByClarification) {
+      // ★ M3: 模型主动调 request_clarification → 当轮 loop 中断交回用户
+      return {
+        text: finalText,
+        artifactIds,
+        iterations: iter + 1,
+        paused: true,
+        clarification: pausedByClarification,
+      }
     }
   }
 

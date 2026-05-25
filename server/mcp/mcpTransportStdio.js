@@ -21,23 +21,11 @@ import { Buffer } from 'node:buffer'
 
 const STDOUT_BUFFER_LIMIT = 1024 * 1024 // 1MB
 
-const SENSITIVE_ENV_KEYS = [
-  'MODEL_API_KEY',
-  'APP_SECRET',
-  'AUTH_SECRET',
-  'DATABASE_URL',
-  'OPENAI_API_KEY',
-  'ANTHROPIC_API_KEY',
-  'GITHUB_TOKEN',
-]
+// ★ P0:与 fsShellTools / gitWorkbench 共用统一规则(覆盖所有 *_API_KEY / *_TOKEN / *_SECRET / *_PASSWORD)
+import { sanitizeChildEnv } from '../utils/sensitiveEnv.js'
 
 function sanitizeEnv(extra = {}) {
-  const base = {}
-  for (const [k, v] of Object.entries(process.env)) {
-    if (SENSITIVE_ENV_KEYS.includes(k)) continue
-    if (typeof v === 'string') base[k] = v
-  }
-  return { ...base, ...(extra || {}) }
+  return sanitizeChildEnv(extra)
 }
 
 export class StdioTransport {

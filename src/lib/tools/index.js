@@ -96,6 +96,44 @@ const TOOL_ARG_SCHEMAS = {
       newText: z.string().min(0),
     })).min(1, '至少需要一个 edit').max(20, '单次最多 20 个 edit'),
   }),
+
+  // ★ M1: ripgrep 代码搜索三件套
+  grep_code: z.object({
+    pattern: z.string().min(1, 'pattern 不能为空').max(1000),
+    path: z.string().max(500).optional(),
+    glob: z.string().max(200).optional(),
+    file_type: z.string().regex(/^[a-z0-9+-]+$/i, 'file_type 仅允许字母数字').optional(),
+    case_sensitive: z.boolean().optional(),
+    word: z.boolean().optional(),
+    max_results: z.number().int().min(1).max(500).optional(),
+  }),
+  find_symbol: z.object({
+    name: z.string().regex(/^[a-zA-Z_$][\w$]*$/, 'name 必须是合法标识符'),
+    kind: z.enum(['all', 'function', 'class', 'const']).optional(),
+    language: z.string().regex(/^[a-z0-9+-]+$/i).optional(),
+    path: z.string().max(500).optional(),
+    max_results: z.number().int().min(1).max(100).optional(),
+  }),
+  list_imports: z.object({
+    file: z.string().min(1, 'file 必填').max(500),
+  }),
+  apply_patch: z.object({
+    patch: z.string().min(1, 'patch 不能为空').max(2 * 1024 * 1024, 'patch 过大'),
+    dry_run: z.boolean().optional(),
+  }),
+  reflect: z.object({
+    observation: z.string().min(1, 'observation 不能为空').max(4000),
+    what_worked: z.string().max(600).optional().nullable(),
+    what_didnt: z.string().max(600).optional().nullable(),
+    next_step: z.string().min(1, 'next_step 不能为空').max(600),
+    confidence: z.enum(['low', 'medium', 'high']).optional(),
+  }),
+  request_clarification: z.object({
+    question: z.string().min(1, 'question 不能为空').max(4000),
+    why: z.string().max(600).optional().nullable(),
+    blocker_kind: z.enum(['missing_info', 'ambiguous_intent', 'permission', 'risk_decision', 'other']).optional(),
+    options: z.array(z.string().max(200)).max(8).optional().nullable(),
+  }),
 }
 
 const TOOL_SPECS = {
@@ -199,6 +237,21 @@ const TOOL_SPECS = {
           },
         },
         required: ['edits'],
+      },
+    },
+  },
+  apply_patch: {
+    type: 'function',
+    function: {
+      name: 'apply_patch',
+      description: 'Codex-style atomic multi-file patch. Supports Add/Update/Delete File with unified-diff hunks. Cheaper than edit_file for large changes, safer than write_file (refuses to overwrite existing). All-or-nothing: any failure rolls back. Set dry_run=true to preview diff without writing.',
+      parameters: {
+        type: 'object',
+        properties: {
+          patch: { type: 'string', description: 'Codex-format patch text starting with "*** Begin Patch" and ending with "*** End Patch".' },
+          dry_run: { type: 'boolean', description: 'Default false. true returns diff preview without writing.' },
+        },
+        required: ['patch'],
       },
     },
   },
@@ -627,6 +680,32 @@ async function execRunProjectCheck(args) {
   return { content: JSON.stringify(data) }
 }
 
+// ★ M1: 代码搜索三件套
+async function execGrepCode(args) {
+  const data = await callWorkspaceJson('/api/tools/code/grep', args)
+  return { content: JSON.stringify(data) }
+}
+async function execFindSymbol(args) {
+  const data = await callWorkspaceJson('/api/tools/code/find-symbol', args)
+  return { content: JSON.stringify(data) }
+}
+async function execListImports(args) {
+  const data = await callWorkspaceJson('/api/tools/code/list-imports', args)
+  return { content: JSON.stringify(data) }
+}
+async function execApplyPatch(args) {
+  const data = await callWorkspaceJson('/api/tools/code/apply-patch', args)
+  return { content: JSON.stringify(data) }
+}
+async function execReflect(args) {
+  const data = await callWorkspaceJson('/api/tools/agent/reflect', args)
+  return { content: JSON.stringify(data) }
+}
+async function execRequestClarification(args) {
+  const data = await callWorkspaceJson('/api/tools/agent/clarify', args)
+  return { content: JSON.stringify(data) }
+}
+
 async function execCreatePptx(args) {
   const title = String(args.title).trim().slice(0, 200) || 'presentation'
   const markdown = String(args.markdown)
@@ -857,6 +936,12 @@ const EXECUTORS = {
   run_project_check: execRunProjectCheck,
   manage_todos: execManageTodos,
   multi_edit: execMultiEdit,
+  grep_code: execGrepCode,
+  find_symbol: execFindSymbol,
+  list_imports: execListImports,
+  apply_patch: execApplyPatch,
+  reflect: execReflect,
+  request_clarification: execRequestClarification,
 }
 
 /**

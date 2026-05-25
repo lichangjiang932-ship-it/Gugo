@@ -307,24 +307,143 @@ const BUILTIN_SPECS = {
       },
     },
   },
+  grep_code: {
+    type: 'function',
+    function: {
+      name: 'grep_code',
+      description:
+        '在 workspace 里全文搜索代码(ripgrep).比 read_file + 正则快一个量级,支持 glob/文件类型过滤 + 上下文行,默认忽略 .git/node_modules/dist.结果是结构化 {file,line,col,text,context_before,context_after}.',
+      parameters: {
+        type: 'object',
+        properties: {
+          pattern: { type: 'string' },
+          path: { type: 'string', description: '默认 workspace 根' },
+          glob: { type: 'string', description: '例如 "*.tsx"' },
+          file_type: { type: 'string', description: 'rg 类型别名,如 "ts"/"py"' },
+          case_sensitive: { type: 'boolean' },
+          word: { type: 'boolean' },
+          max_results: { type: 'integer', minimum: 1, maximum: 500 },
+        },
+        required: ['pattern'],
+      },
+    },
+  },
+  find_symbol: {
+    type: 'function',
+    function: {
+      name: 'find_symbol',
+      description:
+        '定位符号定义位置(function/class/const),支持 JS/TS/Python/Go/Rust/Java.只返回声明行,不返回调用.适合"这个函数定义在哪".',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: '符号名(合法标识符)' },
+          kind: { type: 'string', enum: ['all', 'function', 'class', 'const'] },
+          language: { type: 'string', description: 'rg 类型别名' },
+          path: { type: 'string' },
+          max_results: { type: 'integer', minimum: 1, maximum: 100 },
+        },
+        required: ['name'],
+      },
+    },
+  },
+  list_imports: {
+    type: 'function',
+    function: {
+      name: 'list_imports',
+      description:
+        '扫单个文件首 80 行,提取 import/require/use 语句.快速看依赖.',
+      parameters: {
+        type: 'object',
+        properties: {
+          file: { type: 'string' },
+        },
+        required: ['file'],
+      },
+    },
+  },
+  apply_patch: {
+    type: 'function',
+    function: {
+      name: 'apply_patch',
+      description:
+        'Codex 风格多文件原子 patch(Add/Update/Delete).Update 用 unified-diff hunks(@@ 分隔,\' \'上下文,+加行,-删行).比 edit_file 省 token,比 write_file 安全(不覆盖已存在),全部成功才落盘,失败自动回滚.dry_run=true 只预览.',
+      parameters: {
+        type: 'object',
+        properties: {
+          patch: { type: 'string' },
+          dry_run: { type: 'boolean' },
+        },
+        required: ['patch'],
+      },
+    },
+  },
+  reflect: {
+    type: 'function',
+    function: {
+      name: 'reflect',
+      description:
+        '★ 多步任务中每完成一个关键动作后调一次,简短复盘(只输出反思,无副作用).observation=实际发生的,next_step=下一步(或 "done").',
+      parameters: {
+        type: 'object',
+        properties: {
+          observation: { type: 'string' },
+          what_worked: { type: 'string' },
+          what_didnt: { type: 'string' },
+          next_step: { type: 'string' },
+          confidence: { type: 'string', enum: ['low', 'medium', 'high'] },
+        },
+        required: ['observation', 'next_step'],
+      },
+    },
+  },
+  request_clarification: {
+    type: 'function',
+    function: {
+      name: 'request_clarification',
+      description:
+        '★ 遇到歧义/缺信息/需授权/风险决策时,调它问用户而不是编造.调用后当轮工具循环会停下来等用户回复.options 给 2-5 个选项可加速回复.',
+      parameters: {
+        type: 'object',
+        properties: {
+          question: { type: 'string' },
+          why: { type: 'string' },
+          blocker_kind: { type: 'string', enum: ['missing_info', 'ambiguous_intent', 'permission', 'risk_decision', 'other'] },
+          options: { type: 'array', items: { type: 'string' } },
+        },
+        required: ['question'],
+      },
+    },
+  },
 }
 
 const READ_ONLY_MODE_TOOLS = new Set([
   'web_search',
   'fetch_url',
   'read_file',
+  'grep_code',
+  'find_symbol',
+  'list_imports',
   'git_status',
   'git_diff',
+  'reflect',
+  'request_clarification',
   'Agent',
 ])
 const CODE_MODE_TOOLS = [
   'read_file',
   'write_file',
   'edit_file',
+  'apply_patch',
+  'grep_code',
+  'find_symbol',
+  'list_imports',
   'bash_exec',
   'git_status',
   'git_diff',
   'run_project_check',
+  'reflect',
+  'request_clarification',
   'Agent',
 ]
 

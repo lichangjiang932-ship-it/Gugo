@@ -14,6 +14,9 @@ import { callBackgroundModel, callBackgroundModelWithTools } from './modelProxy.
 
 import { fetchAndExtract, searchDuckDuckGo } from './toolProxy.js'
 import { dispatchFsShellTool } from './fsShellTools.js'
+import { CODE_SEARCH_TOOL_SPECS, dispatchCodeSearchTool } from './utils/codeSearch.js'
+import { APPLY_PATCH_TOOL_SPECS, dispatchApplyPatchTool } from './utils/applyPatch.js'
+import { AGENTIC_TOOL_SPECS, dispatchAgenticTool, isLoopPauseResult } from './utils/agenticTools.js'
 
 const MAX_CONCURRENT_PER_USER = 3
 const activeByUser = new Map()
@@ -69,6 +72,10 @@ const READONLY_TOOL_SPECS = [
       },
     },
   },
+  // ★ M1:代码搜索三件套(全只读,适合 explore/plan)
+  ...CODE_SEARCH_TOOL_SPECS,
+  // ★ M3:反思 / 请求澄清(纯思维型,无副作用)
+  ...AGENTIC_TOOL_SPECS,
 ]
 
 /**
@@ -107,6 +114,8 @@ const FULL_TOOL_SPECS = [
       },
     },
   },
+  // ★ M2: Codex 风格多文件原子 patch
+  ...APPLY_PATCH_TOOL_SPECS,
 ]
 
 /* ─── 子代理类型 ─── */
@@ -135,7 +144,7 @@ export const SUBAGENT_TYPES = {
  * 在子代理沙箱中执行一个工具调用。
  * 结果只返回给子代理自己的上下文，不会写入父 session 或 DB。
  */
-async function executeSubagentTool(toolName, args) {
+async function executeSubagentTool(toolName, args, { userId = null } = {}) {
   switch (toolName) {
     case 'web_search':
       return searchDuckDuckGo({ query: args.query, maxResults: args.maxResults })
@@ -144,7 +153,16 @@ async function executeSubagentTool(toolName, args) {
     case 'read_file':
     case 'write_file':
     case 'edit_file':
-      return dispatchFsShellTool(toolName, args)
+      return dispatchFsShellTool(toolName, args, { userId })
+    case 'grep_code':
+    case 'find_symbol':
+    case 'list_imports':
+      return dispatchCodeSearchTool(toolName, args)
+    case 'apply_patch':
+      return dispatchApplyPatchTool(toolName, args)
+    case 'reflect':
+    case 'request_clarification':
+      return dispatchAgenticTool(toolName, args)
     default:
       return { ok: false, error: `unknown subagent tool: ${toolName}` }
   }
@@ -163,7 +181,7 @@ async function executeSubagentTool(toolName, args) {
  * @param {number} [options.maxIters=SUBAGENT_MAX_ITERS]
  * @returns {Promise<string>} 最终文本回答
  */
-async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS }) {
+async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS, userId = null }) {
   let currentMessages = [...messages]
 
   for (let iter = 0; iter < maxIters; iter++) {
@@ -189,10 +207,12 @@ async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_
       })),
     })
 
+    let pausedClarif = null
     for (const call of toolCalls) {
       let result
       try {
-        result = await executeSubagentTool(call.name, call.arguments)
+        result = await executeSubagentTool(call.name, call.arguments, { userId })
+        if (isLoopPauseResult(result)) pausedClarif = result.clarification
       } catch (err) {
         result = { ok: false, error: err?.message || String(err) }
       }
@@ -201,6 +221,12 @@ async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_
         tool_call_id: call.id,
         content: JSON.stringify(result),
       })
+    }
+    if (pausedClarif) {
+      // ★ M3:子代理调 request_clarification → 中断并把问题当作最终输出返回
+      return `⚠ 需要澄清(${pausedClarif.blocker_kind}):${pausedClarif.question}` +
+        (pausedClarif.options ? `\n选项:${pausedClarif.options.join(' / ')}` : '') +
+        (pausedClarif.why ? `\n原因:${pausedClarif.why}` : '')
     }
   }
 
@@ -313,7 +339,7 @@ export async function runSubagent({
     ]
 
     const resultText = tools?.length
-      ? await subagentToolsLoop({ messages, tools, signal })
+      ? await subagentToolsLoop({ messages, tools, signal, userId })
       : await callBackgroundModel({ modelName, signal, messages })
 
     trace.push({ type: 'done', at: now() })

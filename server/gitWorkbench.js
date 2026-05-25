@@ -32,17 +32,11 @@ function requireMutationEnabled() {
   }
 }
 
+// ★ P0:统一从 sanitizeChildEnv 取,自动覆盖所有 *_API_KEY / *_TOKEN / *_SECRET / *_PASSWORD
+// 老实现只屏蔽 3 个固定 key,换用户配 ANTHROPIC_API_KEY/GITHUB_TOKEN 就漏了
+import { sanitizeChildEnv } from './utils/sensitiveEnv.js'
 function commandEnv() {
-  const env = {}
-  for (const [key, value] of Object.entries(process.env)) {
-    if (!key || key.startsWith('=')) continue
-    if (value == null) continue
-    env[key] = String(value)
-  }
-  env.MODEL_API_KEY = ''
-  env.OPENAI_API_KEY = ''
-  env.MAIL_PASSWORD = ''
-  return env
+  return sanitizeChildEnv()
 }
 
 function runFile(file, args, { cwd = workspaceRoot(), timeout = DEFAULT_TIMEOUT, rejectOnError = true } = {}) {
