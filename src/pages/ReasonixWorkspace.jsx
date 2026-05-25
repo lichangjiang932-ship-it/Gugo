@@ -70,6 +70,7 @@ function MemoriesPanel() {
       setErr('')
     } catch (e) { setErr(e.message) } finally { setLoading(false) }
   }
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- mount-time fetch (refresh 内部 await 后才真正 setState 主体，setLoading 是预期行为)
   useEffect(() => { refresh() }, [])
 
   const totalTokens = useMemo(
@@ -185,6 +186,7 @@ function TodosPanel() {
     setLoading(true)
     try { setItems((await listTodos()).todos || []); setErr('') } catch (e) { setErr(e.message) } finally { setLoading(false) }
   }
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- mount-time fetch (refresh 内部 await 后才真正 setState 主体，setLoading 是预期行为)
   useEffect(() => { refresh() }, [])
 
   const handleAdd = async (e) => {
@@ -264,6 +266,7 @@ function EffortPanel() {
   const refresh = async () => {
     try { setData((await getEffort()).effort); setErr('') } catch (e) { setErr(e.message) }
   }
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- mount-time fetch (refresh 内部 await 后才真正 setState 主体，setLoading 是预期行为)
   useEffect(() => { refresh() }, [])
 
   const handleChange = async (effort) => {
