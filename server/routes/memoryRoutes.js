@@ -41,7 +41,8 @@ export async function handleMemoryRequest(req, res) {
     if (req.method === 'GET' && pathname === '/api/memory/list') {
       const type = url.searchParams.get('type') || null
       const query = url.searchParams.get('q') || null
-      const memories = listMemories({ userId, type, query, limit: 200 })
+      const agentFilter = url.searchParams.get('agent') || null
+      const memories = listMemories({ userId, type, query, limit: 200, agentFilter })
       return sendJson(res, 200, { ok: true, memories })
     }
 

@@ -20,10 +20,11 @@ async function jsonOk(resp) {
   return data
 }
 
-export async function listMemoriesApi({ type, q } = {}) {
+export async function listMemoriesApi({ type, q, agent } = {}) {
   const params = new URLSearchParams()
   if (type) params.set('type', type)
   if (q) params.set('q', q)
+  if (agent) params.set('agent', agent)
   const resp = await fetch(`/api/memory/list?${params.toString()}`, { headers: authHeaders() })
   return jsonOk(resp)
 }
