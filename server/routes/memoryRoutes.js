@@ -76,6 +76,7 @@ export async function handleMemoryRequest(req, res) {
         pinned: !!body.pinned,
         sourceSessionId: body.sourceSessionId || null,
         sourceMessageId: body.sourceMessageId || null,
+        agentId: body.agentId || null,
       })
       return sendJson(res, 200, { ok: true, memory: mem })
     }

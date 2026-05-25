@@ -82,7 +82,7 @@ async function readExcelAsText(file) {
 export default function ChatSplit() {
   const navigate = useNavigate()
   const { state, dispatch } = useAppContext()
-  const { activeAgentId, activeAgent, agents, setActiveAgentId } = useActiveAgent()
+  const { activeAgentId: globalActiveAgentId, activeAgent: globalActiveAgent, agents, setActiveAgentId } = useActiveAgent()
   const [input, setInput] = useState('')
   const [modelOptions, setModelOptions] = useState([])
   const [toolMaxRounds, setToolMaxRounds] = useState(5)
@@ -106,6 +106,10 @@ export default function ChatSplit() {
   const recognitionRef = useRef(null)
 
   const activeSession = state.sessions.find((s) => s.id === state.activeSessionId)
+  // 阶段 6: session sticky agent。优先用 session.agentId，没设则 fallback 全局。
+  const sessionAgentId = activeSession?.agentId || null
+  const effectiveAgentId = sessionAgentId || globalActiveAgentId || null
+  const effectiveAgent = agents.find((a) => a.id === effectiveAgentId) || globalActiveAgent || null
   const messages = activeSession?.messages ?? EMPTY_MESSAGES
   const tasks = state.tasks
   const agentMode = state.agentMode || 'chat'
@@ -335,7 +339,7 @@ export default function ChatSplit() {
             for await (const event of callModelThroughProxyStream({
               messages,
               modelName,
-              agentId: activeAgentId || undefined,
+              agentId: effectiveAgentId || undefined,
               signal: controller.signal,
               tools: tools.length > 0 ? tools : undefined,
             })) {
@@ -755,9 +759,15 @@ export default function ChatSplit() {
           onRetry={() => { if (lastFailedPrompt) triggerSendFlow(lastFailedPrompt) }}
           onModelChange={(val) => { setSelectedModel(val); writeStoredModel(val) }}
           onNavigateTask={() => navigate('/task')}
-          activeAgent={activeAgent}
+          activeAgent={effectiveAgent}
           agents={agents}
-          onAgentChange={setActiveAgentId}
+          onAgentChange={(newId) => {
+            // 设为 session sticky；同时更新全局默认 (下个新会话会用这个)
+            if (activeSession?.id) {
+              dispatch({ type: 'SET_SESSION_AGENT', payload: { sessionId: activeSession.id, agentId: newId } })
+            }
+            setActiveAgentId(newId)
+          }}
         />
 
         {/* Feature 8: Todo 追踪 sticky strip */}
