@@ -617,3 +617,23 @@ export function closeJobRuntime() {
   singletonRuntime?.stop()
   singletonRuntime = null
 }
+
+/**
+ * Module-level helper:abort a running job via the singleton runtime.
+ * 返回 { ok: true, job } 表示成功(包括幂等的 already-terminal),
+ * 返回 null 表示 job 不存在或不属于该 user。
+ * 内部复用 requestCancel,后者会:
+ *   1. 标 status=cancel_requested、cancelRequested=true
+ *   2. 调 activeControllers.get(jobId)?.abort() —— 触发 step 内 signal
+ *   3. 发 cancel_requested 事件
+ * 工具循环 / executeStep 在 step 之间和 in-flight 时都会检查 signal,
+ * 触发后 runOneTick 会把状态推进到 cancelled。
+ */
+export function abortJob(jobId, { userId } = {}) {
+  if (!jobId) return null
+  const runtime = getJobRuntime()
+  const existing = runtime.getJob(jobId, { userId })
+  if (!existing) return null
+  const job = runtime.requestCancel(jobId, { userId })
+  return job ? { ok: true, job } : null
+}

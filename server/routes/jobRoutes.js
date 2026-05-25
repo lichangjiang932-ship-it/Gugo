@@ -1,5 +1,6 @@
 import { authenticateRequest } from '../middleware.js'
 import { readJson, sendJson } from '../utils.js'
+import { abortJob as abortJobImpl } from '../services/jobRuntime.js'
 
 function unauthorized(res) {
   return sendJson(res, 401, { error: 'Unauthorized' })
@@ -71,6 +72,15 @@ export async function handleJobRequest(req, res, runtime) {
       const job = runtime.requestCancel(jobId, { userId })
       return job
         ? sendJson(res, 200, { job })
+        : sendJson(res, 404, { error: 'job not found' })
+    }
+
+    // 硬终止:调模块级 abortJob 打 AbortController.signal。
+    // 与 /cancel 同义(均走 requestCancel),但返回体更极简。
+    if (req.method === 'POST' && parts[3] === 'abort') {
+      const result = abortJobImpl(jobId, { userId })
+      return result
+        ? sendJson(res, 200, { ok: true })
         : sendJson(res, 404, { error: 'job not found' })
     }
 
