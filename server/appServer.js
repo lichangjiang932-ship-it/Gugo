@@ -2,13 +2,14 @@ import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { closeDb, getDbStatus } from './db.js'
+import { getDbStatus } from './db.js'
 import {
   corsMiddleware,
   securityHeaders,
   errorBoundary,
   requestLogger,
 } from './middleware.js'
+import { bootstrap, gracefulShutdown } from './core/lifecycle.js'
 
 import {
   getRuntimeEnv,
@@ -24,7 +25,7 @@ import { handleGitWorkbenchRequest } from './adapters/gitWorkbench.js'
 import { handleCodeSearchRequest } from './utils/codeSearchRoutes.js'
 import { handleAgenticToolRequest } from './utils/agenticToolsRoutes.js'
 import { handleArtifactDownload } from './services/artifactGen.js'
-import { closeJobRuntime, getJobRuntime } from './services/jobRuntime.js'
+import { getJobRuntime } from './services/jobRuntime.js'
 import { handleJobRequest } from './routes/jobRoutes.js'
 import { handleSkillRequest } from './routes/skillRoutes.js'
 import { handleToolSpecsRequest } from './services/toolRegistry.js'
@@ -34,9 +35,7 @@ import { handleMcpRequest } from './routes/mcpRoutes.js'
 import { handleSubagentRequest } from './routes/subagentRoutes.js'
 import { handleCompactionRequest } from './routes/compactionRoutes.js'
 import { handleKnowledgeGraphRequest } from './routes/knowledgeGraphRoutes.js'
-import { shutdownAll as shutdownMcpAll } from './mcp/mcpManager.js'
 import { handleReasonixRequest } from './routes/reasonixRoutes.js'
-import { seedSystemSkills } from './services/seedSystemSkills.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -252,22 +251,10 @@ export function createAppServer({ getEnv = getRuntimeEnv } = {}) {
   return http.createServer(applyMiddlewares(createRouter(getEnv)))
 }
 
-function gracefulShutdown(server) {
-  if (process.env.NODE_ENV !== 'production') console.log('\n[server] 收到关闭信号，正在优雅退出...')
-  server.close(() => {
-    if (process.env.NODE_ENV !== 'production') console.log('[server] HTTP server 已关闭')
-    closeJobRuntime()
-    try { shutdownMcpAll() } catch { /* ignore */ }
-    closeDb()
-    if (process.env.NODE_ENV !== 'production') console.log('[server] 数据库连接已关闭')
-    process.exit(0)
-  })
-
-  // 10 秒后强制退出
-  setTimeout(() => {
-    console.error('[server] 强制退出')
-    process.exit(1)
-  }, 10000)
+// 旧 gracefulShutdown 已下沉到 server/core/lifecycle.js
+// 这里仅做兼容代理：旧调用点 → 新统一入口
+function gracefulShutdownProxy(server) {
+  gracefulShutdown(server)
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
@@ -280,13 +267,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const host = env.SERVER_HOST || '127.0.0.1'
   const port = Number(env.SERVER_PORT || 5173)
 
-  // ★ 启动时播种系统级技能 (seed/skills/<id>/ → SQLite)
-  // 失败时只记 log 不阻塞启动
-  try {
-    seedSystemSkills()
-  } catch (err) {
-    console.error('[server] seedSystemSkills failed:', err.message)
-  }
+  // ★ 启动时由 lifecycle.bootstrap 统一编排 (包含 seedSystemSkills 等)
+  bootstrap()
 
   const server = createAppServer().listen(port, host, () => {
     if (process.env.NODE_ENV !== 'production') console.log(`Your Model Atelier running at http://${host}:${port}/`)
@@ -301,6 +283,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     console.error('[server] unhandledRejection:', reason?.stack || reason)
   })
 
-  process.on('SIGTERM', () => gracefulShutdown(server))
-  process.on('SIGINT', () => gracefulShutdown(server))
+  process.on('SIGTERM', () => gracefulShutdownProxy(server))
+  process.on('SIGINT', () => gracefulShutdownProxy(server))
 }
