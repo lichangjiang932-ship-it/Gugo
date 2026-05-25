@@ -1,0 +1,66 @@
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import { DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES, translateKey } from './translations.js'
+
+const STORAGE_KEY = 'lang'
+const I18nContext = createContext(null)
+
+function readInitialLang() {
+  if (typeof window === 'undefined') return DEFAULT_LANGUAGE
+  try {
+    const stored = window.localStorage?.getItem(STORAGE_KEY)
+    if (stored && SUPPORTED_LANGUAGES.some((l) => l.code === stored)) return stored
+  } catch {
+    // localStorage 不可用（隐私模式/SSR）→ 默认
+  }
+  return DEFAULT_LANGUAGE
+}
+
+export function I18nProvider({ children }) {
+  const [lang, setLangState] = useState(readInitialLang)
+
+  const setLang = useCallback((next) => {
+    if (!SUPPORTED_LANGUAGES.some((l) => l.code === next)) return
+    setLangState(next)
+    try {
+      window.localStorage?.setItem(STORAGE_KEY, next)
+    } catch {
+      // 忽略写入失败
+    }
+  }, [])
+
+  // 跨标签页同步
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const onStorage = (e) => {
+      if (e.key === STORAGE_KEY && e.newValue && SUPPORTED_LANGUAGES.some((l) => l.code === e.newValue)) {
+        setLangState(e.newValue)
+      }
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
+
+  const value = useMemo(() => ({
+    lang,
+    setLang,
+    languages: SUPPORTED_LANGUAGES,
+    t: (key) => translateKey(key, lang),
+  }), [lang, setLang])
+
+  return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function useT() {
+  const ctx = useContext(I18nContext)
+  if (!ctx) {
+    // 没包 Provider 时也别让组件崩 —— 退化到纯 zh
+    return {
+      lang: DEFAULT_LANGUAGE,
+      setLang: () => {},
+      languages: SUPPORTED_LANGUAGES,
+      t: (key) => translateKey(key, DEFAULT_LANGUAGE),
+    }
+  }
+  return ctx
+}
