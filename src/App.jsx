@@ -17,6 +17,7 @@ const SettingsView = lazy(() => import('./pages/SettingsView'))
 const MemoryView = lazy(() => import('./pages/MemoryView'))
 const HooksView = lazy(() => import('./pages/HooksView'))
 const McpServersView = lazy(() => import('./pages/McpServersView'))
+const ReasonixWorkspace = lazy(() => import('./pages/ReasonixWorkspace'))
 
 function Fallback() {
   return (
@@ -46,6 +47,7 @@ function App() {
           <Route path="/memory" element={<RequireAuth><MemoryView /></RequireAuth>} />
           <Route path="/hooks" element={<RequireAuth><HooksView /></RequireAuth>} />
           <Route path="/mcp" element={<RequireAuth><McpServersView /></RequireAuth>} />
+          <Route path="/reasonix" element={<RequireAuth><ReasonixWorkspace /></RequireAuth>} />
 
           <Route path="/login" element={<Navigate to="/chat" replace />} />
           <Route path="*" element={<Navigate to="/chat" replace />} />

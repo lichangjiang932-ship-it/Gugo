@@ -35,6 +35,7 @@ import { handleSubagentRequest } from './subagentRoutes.js'
 import { handleCompactionRequest } from './compactionRoutes.js'
 import { handleKnowledgeGraphRequest } from './knowledgeGraphRoutes.js'
 import { shutdownAll as shutdownMcpAll } from './mcp/mcpManager.js'
+import { handleReasonixRequest } from './reasonixRoutes.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -234,6 +235,11 @@ function createRouter(getEnv = getRuntimeEnv) {
   // Context compaction (feature 6)
   if (req.url?.startsWith('/api/compaction/')) {
     return handleCompactionRequest(req, res)
+  }
+
+  // Reasonix-inspired: 钉记忆 / TODO / effort / session meter
+  if (req.url?.startsWith('/api/reasonix/')) {
+    return handleReasonixRequest(req, res)
   }
 
   // 静态文件
