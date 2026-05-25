@@ -17,14 +17,14 @@ import http from 'node:http'
 import dns from 'node:dns/promises'
 import net from 'node:net'
 import { URL as NodeURL } from 'node:url'
-import { readJson } from './utils.js'
+import { readJson } from '../utils.js'
 import {
   chargeForToolUse,
   getPublicAccount,
   getToolCost,
 } from './billingAuth.js'
-import { getSessionByToken } from './db.js'
-import { dispatchHooks } from './hooksService.js'
+import { getSessionByToken } from '../db.js'
+import { dispatchHooks } from '../services/hooksService.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
 const SEARCH_TIMEOUT_MS = 12000

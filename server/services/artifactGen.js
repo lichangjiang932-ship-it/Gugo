@@ -22,13 +22,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import JSZip from 'jszip'
-import { authenticateRequest } from './middleware.js'
+import { authenticateRequest } from '../middleware.js'
 import { getArtifactByFilename } from './jobStore.js'
 import {
   HEAD_FONT, BODY_FONT, CJK_FONT,
   PREMIUM_THEMES, resolvePremiumTheme,
   escapeXml, normalizeBullets, injectEaFont, shape,
-} from '../src/lib/pptCore.js'
+} from '../../src/lib/pptCore.js'
 
 const ARTIFACT_DIR =
   process.env.ARTIFACT_DIR && path.isAbsolute(process.env.ARTIFACT_DIR)

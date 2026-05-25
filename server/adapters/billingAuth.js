@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import tls from 'node:tls'
-import { readJson, sendJson, authToken } from './utils.js'
+import { readJson, sendJson, authToken } from '../utils.js'
 
 import {
   getUserById,
@@ -24,7 +24,7 @@ import {
   getLedgerForUser,
   migrateFromJson,
   checkRateLimit,
-} from './db.js'
+} from '../db.js'
 
 const DEFAULT_DATA_DIR = path.join(process.cwd(), 'server-data')
 

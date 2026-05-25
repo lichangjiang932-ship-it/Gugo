@@ -15,7 +15,7 @@ process.env.ARTIFACT_DIR = TMP
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-artifact-tests', String(process.pid))
 
 const { createAppServer } = await import('../server/appServer.js')
-const { createPptx, createDocx, createXlsx, getArtifactDir } = await import('../server/artifactGen.js')
+const { createPptx, createDocx, createXlsx, getArtifactDir } = await import('../server/services/artifactGen.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 test('createPptx 真实生成可解析的 OOXML pptx', async () => {

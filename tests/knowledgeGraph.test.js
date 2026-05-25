@@ -9,7 +9,7 @@ import {
   searchNodes,
   readGraph,
   openNodes,
-} from '../server/knowledgeGraph.js'
+} from '../server/services/knowledgeGraph.js'
 import { issueTestSession } from './helpers/testAuth.js'
 
 const { userId: TEST_USER } = issueTestSession({ email: 'kg-test@example.com' })

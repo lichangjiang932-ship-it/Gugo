@@ -9,14 +9,14 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { getDb } from './db.js'
-import { callBackgroundModel, callBackgroundModelWithTools } from './modelProxy.js'
+import { getDb } from '../db.js'
+import { callBackgroundModel, callBackgroundModelWithTools } from '../adapters/modelProxy.js'
 
-import { fetchAndExtract, searchDuckDuckGo } from './toolProxy.js'
-import { dispatchFsShellTool } from './fsShellTools.js'
-import { CODE_SEARCH_TOOL_SPECS, dispatchCodeSearchTool } from './utils/codeSearch.js'
-import { APPLY_PATCH_TOOL_SPECS, dispatchApplyPatchTool } from './utils/applyPatch.js'
-import { AGENTIC_TOOL_SPECS, dispatchAgenticTool, isLoopPauseResult } from './utils/agenticTools.js'
+import { fetchAndExtract, searchDuckDuckGo } from '../adapters/toolProxy.js'
+import { dispatchFsShellTool } from '../adapters/fsShellTools.js'
+import { CODE_SEARCH_TOOL_SPECS, dispatchCodeSearchTool } from '../utils/codeSearch.js'
+import { APPLY_PATCH_TOOL_SPECS, dispatchApplyPatchTool } from '../utils/applyPatch.js'
+import { AGENTIC_TOOL_SPECS, dispatchAgenticTool, isLoopPauseResult } from '../utils/agenticTools.js'
 
 const MAX_CONCURRENT_PER_USER = 3
 const activeByUser = new Map()

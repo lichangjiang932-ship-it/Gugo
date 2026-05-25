@@ -1,6 +1,6 @@
-import { readJson } from './utils.js'
-import { authenticateRequest } from './middleware.js'
-import { getSubagentRun, listSubagentTypes, runSubagent } from './subagentRuntime.js'
+import { readJson } from '../utils.js'
+import { authenticateRequest } from '../middleware.js'
+import { getSubagentRun, listSubagentTypes, runSubagent } from '../services/subagentRuntime.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
 

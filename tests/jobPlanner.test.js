@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { buildInitialPlan } from '../server/jobPlanner.js'
+import { buildInitialPlan } from '../server/services/jobPlanner.js'
 
 test('planner creates batch children when prompt mentions multiple outputs', () => {
   const plan = buildInitialPlan('生成 3 份行业周报并导出')

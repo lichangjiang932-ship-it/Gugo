@@ -8,15 +8,15 @@
  *   POST   /api/hooks/:id/test
  */
 
-import { readJson } from './utils.js'
-import { authenticateRequest } from './middleware.js'
+import { readJson } from '../utils.js'
+import { authenticateRequest } from '../middleware.js'
 import {
   listHooks,
   getHook,
   upsertHook,
   deleteHook,
   testHook,
-} from './hooksService.js'
+} from '../services/hooksService.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
 function sendJson(res, status, body) {

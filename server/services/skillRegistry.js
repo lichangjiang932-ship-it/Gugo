@@ -1,4 +1,4 @@
-import { SKILLS } from '../src/data.js'
+import { SKILLS } from '../../src/data.js'
 import { getImportedSkill, listImportedSkills } from './skillStore.js'
 
 function mapBuiltInSkill(skill) {

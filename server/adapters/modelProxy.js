@@ -1,8 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { z } from 'zod'
-import { readJson } from './utils.js'
-import { authenticateRequest } from './middleware.js'
+import { readJson } from '../utils.js'
+import { authenticateRequest } from '../middleware.js'
 import {
   chargeForModelUse,
   estimateChatCost,
@@ -11,13 +11,13 @@ import {
   getPublicAccount,
   loadBillingConfig,
 } from './billingAuth.js'
-import { getSessionByToken } from './db.js'
+import { getSessionByToken } from '../db.js'
 import {
   selectActiveMemoriesForInjection,
   buildMemorySystemBlock,
   touchMemoryUsage,
-} from './memoryStore.js'
-import { dispatchHooks } from './hooksService.js'
+} from '../services/memoryStore.js'
+import { dispatchHooks } from '../services/hooksService.js'
 
 // ★ #18: 消息格式 schema — 拒绝畸形 messages 入参,防 OpenAI 上游报 400 / 计费爆零
 const MESSAGE_SCHEMA = z.object({

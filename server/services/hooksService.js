@@ -16,9 +16,9 @@
  */
 
 import { execFile } from 'node:child_process'
-import { getDb } from './db.js'
+import { getDb } from '../db.js'
 import { randomUUID } from 'node:crypto'
-import { writeToolAudit } from './utils/audit.js'
+import { writeToolAudit } from '../utils/audit.js'
 
 const ALLOWED_EVENTS = ['user_prompt_submit', 'pre_tool_use', 'post_tool_use', 'stop']
 

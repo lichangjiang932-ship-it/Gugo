@@ -3,12 +3,12 @@ import assert from 'node:assert/strict'
 import path from 'node:path'
 import os from 'node:os'
 
-import { handleToolProxyRequest } from '../server/toolProxy.js'
+import { handleToolProxyRequest } from '../server/adapters/toolProxy.js'
 import {
   issueEmailCode,
   rechargeAccount,
   verifyEmailCode,
-} from '../server/billingAuth.js'
+} from '../server/adapters/billingAuth.js'
 import { getDb } from '../server/db.js'
 
 // 每个测试进程使用独立数据库目录，避免并行测试冲突

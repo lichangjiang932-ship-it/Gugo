@@ -15,7 +15,7 @@ const {
   listJobEvents,
   listJobs,
   updateJob,
-} = await import('../server/jobStore.js')
+} = await import('../server/services/jobStore.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 test('job store persists parent job, child steps, events, and artifacts', () => {

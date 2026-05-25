@@ -1,8 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
-import { authenticateRequest } from './middleware.js'
-import { readJson, sendJson } from './utils.js'
+import { authenticateRequest } from '../middleware.js'
+import { readJson, sendJson } from '../utils.js'
 
 const MAX_OUTPUT = 1024 * 1024
 const DEFAULT_TIMEOUT = 60_000
@@ -34,7 +34,7 @@ function requireMutationEnabled() {
 
 // ★ P0:统一从 sanitizeChildEnv 取,自动覆盖所有 *_API_KEY / *_TOKEN / *_SECRET / *_PASSWORD
 // 老实现只屏蔽 3 个固定 key,换用户配 ANTHROPIC_API_KEY/GITHUB_TOKEN 就漏了
-import { sanitizeChildEnv } from './utils/sensitiveEnv.js'
+import { sanitizeChildEnv } from '../utils/sensitiveEnv.js'
 function commandEnv() {
   return sanitizeChildEnv()
 }

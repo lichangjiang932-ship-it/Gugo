@@ -9,7 +9,7 @@ const {
   getImportedSkill,
   installSkill,
   listImportedSkills,
-} = await import('../server/skillStore.js')
+} = await import('../server/services/skillStore.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 test('skill store persists imported skill metadata and prompt asset', () => {

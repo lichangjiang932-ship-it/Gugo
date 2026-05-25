@@ -13,14 +13,14 @@
  *   POST   /api/tools/mcp/call          body: { fullToolName, arguments }
  */
 
-import { readJson } from './utils.js'
-import { authenticateRequest } from './middleware.js'
+import { readJson } from '../utils.js'
+import { authenticateRequest } from '../middleware.js'
 import {
   listServers,
   getServer,
   upsertServer,
   deleteServer,
-} from './mcp/mcpStore.js'
+} from '../mcp/mcpStore.js'
 import {
   testServer,
   ensureServerConnected,
@@ -29,7 +29,7 @@ import {
   callTool,
   readResource,
   getPrompt,
-} from './mcp/mcpManager.js'
+} from '../mcp/mcpManager.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
 function sendJson(res, status, body) {

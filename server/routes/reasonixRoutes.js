@@ -8,8 +8,8 @@
  */
 
 import crypto from 'node:crypto'
-import { getDb, getSessionByToken, getUserById } from './db.js'
-import { readJson, sendJson, authToken } from './utils.js'
+import { getDb, getSessionByToken, getUserById } from '../db.js'
+import { readJson, sendJson, authToken } from '../utils.js'
 
 function requireUser(req) {
   const token = authToken(req)
