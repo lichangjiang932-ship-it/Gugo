@@ -18,7 +18,11 @@
 
 ## 进行中
 
-（无 — 等下个会话推进列表）
+- [ ] **Skills 安装机制 - route + UI 层** — server 底座 `installPluginAsSkill` 已完成（429 测试全过）。下一步：
+   1. 加 `POST /api/plugins/:id/install-as-skill` route，wire 到 `installPluginAsSkill`
+   2. plugin 详情页对 `type=skill-bundle` 显示 "安装为 skill" 按钮
+   3. 安装成功后跳转 skill 列表
+   - 预估 0.5 天
 
 ---
 
@@ -26,9 +30,7 @@
 
 ### 高 ROI · Web 形态能补的（1-3 天每项）
 
-1. [ ] **Skills 安装机制** — plugin manifest 加 `skill-bundle` type；server 端用 `skillImport.installValidatedSkillPack` 处理 zip 解析；UI 加"从 plugin 安装为 skill"按钮。预估 1 天。
-   - 涉及：`server/plugins/pluginManifest.js`（加 type）、`server/plugins/pluginLoader.js`（识别 skill-bundle）、新建 `server/services/pluginToSkill.js`（桥接）、`tests/pluginSkillBundle.test.js`
-   - 触面小，不动 UI 也能交付 server 通路
+1. [x] **Skills 安装机制 server 底座** — ~~plugin manifest 加 `skill-bundle` type；新建 `pluginToSkill.js` 桥接 skillImport~~。**已完成 commit `940c35d`**（2026-05-25），429 测试全过。route + UI 留进行中区
 
 2. [ ] **角色卡 zip 加 skills/avatar 二进制** — v0.9 只到 60%，差 skills + 头像。预估 0.5 天。
    - 涉及：`server/routes/agentRoutes.js` export.zip/import.zip 加 `avatar.png` + `skills/*.json`
@@ -71,7 +73,7 @@
 
 ## 已知问题 / 已推迟
 
-- **本地 main 领先 origin 34 commits 未推送** — `git fetch` 报"could not read Username"，需 source `.secrets/github.env` 后用 token URL push（见 TOOLS.md GitHub 推送章）。**下个会话推送主线 + 打 v0.9.0 GitHub Release**
+- ~~本地 main 领先 origin 34 commits 未推送~~ — **已解决（2026-05-25）**：源数据是 fetch 失败时的假象，实际 origin/main 已同步；当日打了 v0.9.0 GitHub Release（https://github.com/lichangjiang932-ship-it/your-model-atelier/releases/tag/v0.9.0）
 - **CHANGELOG.md 之前没建** — 本会话已补，但 v0.5-v0.8 是回溯描述，不是 commit-by-commit
 - **eslint 2 个 warning** — 历史遗留，未阻塞 lint，下次顺手清
 - **secret-redaction 工具会误改字面量** — v0.5 把 `STORAGE_KEY = 'yma:activeAgentId'` 替成 `'***'`，跨 tab 全用户串台。教训：commit hook 前加 `git diff | grep "= '\*\*\*'"` 一道扫描（hook 还没加）
