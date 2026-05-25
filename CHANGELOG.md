@@ -4,7 +4,19 @@
 
 ## [Unreleased]
 
-- 路线图见 [PROGRESS.md](./PROGRESS.md) 待办章节。
+### Added
+- `POST /api/plugins/:id/install-as-skill` — 将 `type=skill-bundle` 的 plugin 安装为当前用户 skill（需登录）
+- `server/services/pluginToSkill.js` `installPluginAsSkill({pluginId,userId,existingIds})` — 底座函数，纯函数风格 + realpath 守 symlink + ALLOWED_EXTS=.md/.txt/.json + MAX_FILES=64/256KB
+- `server/plugins/pluginManifest.js` `PLUGIN_TYPES` 加 `'skill-bundle'`
+- `server/services/skillStore.js` `listAllSkillIds()` — 全库 ID dedup，避免不同 user 装同一 skill-bundle 撞 SQLite PRIMARY KEY
+- `plugins/example-skill-bundle/` 示例 plugin
+- `src/pages/SkillsMarket.jsx` 上添“从 Plugin”按钮 + 弹层列 skill-bundle plugin + 一键安装
+- `src/lib/pluginClient.js` `installPluginAsSkillApi(pluginId)`
+
+### Notes
+- 测试 422 → 433（+11 ：pluginSkillBundle 7 + pluginRoutes 新增 5、原 POST 405 用例被替换）
+- lint 0 error（保留 2 个历史 warning）、build OK
+- 路线图看 [PROGRESS.md](./PROGRESS.md) 。
 
 ## [0.9.0] · 2026-05-25
 

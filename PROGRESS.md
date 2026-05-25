@@ -1,11 +1,16 @@
 # PROGRESS.md · your-model-atelier
 
-> 最后更新：2026-05-25 by wx 主会话（v0.9.0 发布日）
+> 最后更新：2026-05-25 by wx 主会话（v0.9.0 + skill-bundle 全链路）
 > 跨会话项目状态入口。代码跟本文件冲突时**以 git 为准**，回头修本文件。
 
 ---
 
 ## 已完成
+
+- [x] **Skills 安装机制全链路（server + UI）** — 2026-05-25 同日
+  - server：`POST /api/plugins/:id/install-as-skill`（需登录），调 `installPluginAsSkill`，用 `listAllSkillIds()` 做全局 dedup迒防 SQLite PRIMARY KEY 冲突
+  - UI：`src/pages/SkillsMarket.jsx` 加“从 Plugin”按钮 + 弹层列 skill-bundle plugin + 一键安装 + 装后刷新 runtime skill。commit `86c5e8a`
+  - 测试 429→433（5 个 route 用例），lint 0 error，build OK
 
 - [x] **v0.5** — plugin SDK 真消费 + agent-template（commit `93a5242` 合并）
 - [x] **v0.6** — agent-MEMORY DB v6（memories.agent_id FK）+ session sticky agent + ChatHeader 切换器（`db376dc`）
@@ -18,11 +23,7 @@
 
 ## 进行中
 
-- [ ] **Skills 安装机制 - route + UI 层** — server 底座 `installPluginAsSkill` 已完成（429 测试全过）。下一步：
-   1. 加 `POST /api/plugins/:id/install-as-skill` route，wire 到 `installPluginAsSkill`
-   2. plugin 详情页对 `type=skill-bundle` 显示 "安装为 skill" 按钮
-   3. 安装成功后跳转 skill 列表
-   - 预估 0.5 天
+（无，上一项 skill-bundle 全链路已交付）
 
 ---
 
@@ -30,7 +31,7 @@
 
 ### 高 ROI · Web 形态能补的（1-3 天每项）
 
-1. [x] **Skills 安装机制 server 底座** — ~~plugin manifest 加 `skill-bundle` type；新建 `pluginToSkill.js` 桥接 skillImport~~。**已完成 commit `940c35d`**（2026-05-25），429 测试全过。route + UI 留进行中区
+1. [x] **Skills 安装机制 server 底座 + route + UI** — ~~plugin manifest 加 `skill-bundle` type；新建 `pluginToSkill.js` 桥接 skillImport~~。**已完成**（2026-05-25），commit 序列 `940c35d` (底座) + `86c5e8a` (route+UI)。433 测试全过
 
 2. [ ] **角色卡 zip 加 skills/avatar 二进制** — v0.9 只到 60%，差 skills + 头像。预估 0.5 天。
    - 涉及：`server/routes/agentRoutes.js` export.zip/import.zip 加 `avatar.png` + `skills/*.json`
