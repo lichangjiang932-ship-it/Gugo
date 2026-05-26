@@ -39,6 +39,7 @@ import { handleSubagentRequest } from './routes/subagentRoutes.js'
 import { handleCompactionRequest } from './routes/compactionRoutes.js'
 import { handleKnowledgeGraphRequest } from './routes/knowledgeGraphRoutes.js'
 import { handleReasonixRequest } from './routes/reasonixRoutes.js'
+import { handleNotificationRequest } from './routes/notificationRoutes.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -203,6 +204,10 @@ function createRouter(getEnv = getRuntimeEnv) {
   // 后台任务中心
   if (req.url?.startsWith('/api/jobs')) {
     return handleJobRequest(req, res, jobRuntime)
+  }
+
+  if (req.url?.startsWith('/api/notifications')) {
+    return handleNotificationRequest(req, res)
   }
 
   // 知识图谱（feature 8 — 借鉴 Reasonix memory_* 设计）

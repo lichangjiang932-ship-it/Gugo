@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const DB_SCHEMA_VERSION = 7
+export const DB_SCHEMA_VERSION = 8
 
 const DEFAULT_DATA_DIR = path.join(process.cwd(), 'server-data')
 
@@ -59,7 +59,8 @@ function runMigrations(db) {
   if (getSchemaVersionInternal(db) < 4) migrateToV4(db)
   if (getSchemaVersionInternal(db) < 5) migrateToV5(db)
   if (getSchemaVersionInternal(db) < 6) migrateToV6(db)
-  if (getSchemaVersionInternal(db) < DB_SCHEMA_VERSION) migrateToV7(db)
+  if (getSchemaVersionInternal(db) < 7) migrateToV7(db)
+  if (getSchemaVersionInternal(db) < 8) migrateToV8(db)
   runReasonixMigrations(db)
 }
 
@@ -380,7 +381,29 @@ function migrateToV7(db) {
   if (!hasColumn(db, 'agents', 'persona_template')) {
     db.exec('ALTER TABLE agents ADD COLUMN persona_template TEXT')
   }
-  setSchemaVersionInternal(db, DB_SCHEMA_VERSION)
+  setSchemaVersionInternal(db, 7)
+}
+
+/**
+ * A6: Unified notifications for web UI, SSE, and background jobs.
+ */
+function migrateToV8(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN ('info','success','warn','error','job')),
+      title TEXT NOT NULL,
+      body TEXT NOT NULL DEFAULT '',
+      link TEXT,
+      data_json TEXT,
+      read_at INTEGER,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, read_at, created_at DESC);
+  `)
+  setSchemaVersionInternal(db, 8)
 }
 
 function initSchema(db) {

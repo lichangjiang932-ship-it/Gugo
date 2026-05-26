@@ -9,6 +9,7 @@ import {
 } from '../lib/loginCountdown.js'
 import { getAuthToken, loginWithPassword, sendLoginCode, verifyLoginCode } from '../lib/accountClient.js'
 import { useT } from '../i18n/I18nProvider.jsx'
+import { useToast } from './Toast.jsx'
 
 // ★ #21: 提取会话最后消息的纯文本预览 (剥 markdown / 多模态 array / 工具卡)
 function getSessionPreview(session) {
@@ -48,6 +49,7 @@ export default function LeftRail() {
   const location = useLocation()
   const { state, dispatch } = useAppContext()
   const { t } = useT()
+  const toast = useToast()
   const [showLogin, setShowLogin] = useState(false)
   const [loginEmail, setLoginEmail] = useState('')
   const [loginCode, setLoginCode] = useState('')
@@ -157,6 +159,7 @@ export default function LeftRail() {
       setLoginMessage(result.devCode ? `验证码：${result.devCode}` : '验证码已发送，请查看邮箱。')
     } catch (error) {
       setLoginMessage(error.message)
+      toast.error({ title: t('toast.sendCodeFailed'), body: error.message })
     } finally {
       setLoginLoading(false)
     }
@@ -186,6 +189,7 @@ export default function LeftRail() {
       navigate('/settings')
     } catch (error) {
       setLoginMessage(error.message)
+      toast.error({ title: t('toast.loginFailed'), body: error.message })
     } finally {
       setLoginLoading(false)
     }

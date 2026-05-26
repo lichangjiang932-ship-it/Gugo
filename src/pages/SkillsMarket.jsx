@@ -7,6 +7,8 @@ import { useAppContext } from '../store/AppContext'
 import { importSkillPack, listSkills, importSkillFromGithubUrl } from '../lib/skillClient.js'
 import { listPluginsApi, installPluginAsSkillApi } from '../lib/pluginClient.js'
 import { SKILL_ICONS } from '../lib/skillIcons.js'
+import { useToast } from '../components/Toast.jsx'
+import { useT } from '../i18n/I18nProvider.jsx'
 
 const CUSTOM_KEY = 'your-model-atelier:custom-skills:v1'
 
@@ -28,6 +30,8 @@ function saveCustomSkills(skills) {
 export default function SkillsMarket() {
   const navigate = useNavigate()
   const { dispatch } = useAppContext()
+  const toast = useToast()
+  const { t } = useT()
   const [query, setQuery] = useState('')
   const [activeFilter, setActiveFilter] = useState('全部')
   const [customSkills, setCustomSkills] = useState(() => loadCustomSkills())
@@ -203,6 +207,7 @@ export default function SkillsMarket() {
       setImportPreview(null)
     } catch (err) {
       setImportError(err.message)
+      toast.error({ title: t('toast.importFailed'), body: err.message })
     } finally {
       setImporting(false)
     }
@@ -231,6 +236,7 @@ export default function SkillsMarket() {
       setGithubUrl('')
     } catch (err) {
       setGithubError(err.message || '安装失败')
+      toast.error({ title: t('toast.installFailed'), body: err.message || '安装失败' })
     } finally {
       setGithubInstalling(false)
     }
@@ -266,6 +272,7 @@ export default function SkillsMarket() {
       setShowPluginPanel(false)
     } catch (e) {
       setPluginPanelError(e?.message || '安装失败')
+      toast.error({ title: t('toast.installFailed'), body: e?.message || '安装失败' })
     } finally {
       setInstallingPluginId(null)
     }

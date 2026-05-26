@@ -17,6 +17,7 @@ import { createDocx } from './artifactGen.js'
 import { callBackgroundModel, callBackgroundModelWithTools } from '../adapters/modelProxy.js'
 import { getRuntimeSkill } from './skillRegistry.js'
 import { runToolsLoop } from './jobTools.js'
+import { createNotification } from './notificationsStore.js'
 
 const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled'])
 const RECOVERABLE_JOB_STATUSES = new Set(['planning', 'running', 'waiting'])
@@ -168,6 +169,26 @@ function withStableStepIds(jobId, steps = []) {
     id: `${jobId}:${step.id || index}`,
     sortOrder: index,
   }))
+}
+
+function notifyJobTerminal(job, { status, body }) {
+  if (!job?.id || !job.userId) return
+  try {
+    createNotification({
+      userId: job.userId,
+      kind: 'job',
+      title: job.title || job.id,
+      body,
+      link: `/?job=${encodeURIComponent(job.id)}`,
+      data: {
+        jobId: job.id,
+        status,
+        error: job.error || null,
+      },
+    })
+  } catch (err) {
+    console.error('[jobs] notification failed:', err?.stack || err)
+  }
 }
 
 export function recoverInterruptedJobs(jobs = []) {
@@ -477,6 +498,7 @@ export class JobRuntime {
         message: '任务已终止',
       })
       this.emit(event)
+      notifyJobTerminal(job, { status: 'cancelled', body: '任务已终止' })
       return true
     }
 
@@ -503,6 +525,7 @@ export class JobRuntime {
         message: '任务已完成',
       })
       this.emit(event)
+      notifyJobTerminal(job, { status: 'completed', body: '任务已完成' })
       return true
     }
 
@@ -567,6 +590,7 @@ export class JobRuntime {
           type: 'cancelled',
           message: '任务已终止',
         }))
+        notifyJobTerminal(job, { status: 'cancelled', body: '任务已终止' })
         return true
       }
       updateJobStep(nextStep.id, {
@@ -585,6 +609,10 @@ export class JobRuntime {
         type: 'failed',
         message: error?.message || '步骤执行失败',
       }))
+      notifyJobTerminal(
+        { ...job, error: error?.message || String(error) },
+        { status: 'failed', body: error?.message || '步骤执行失败' },
+      )
     } finally {
       if (this.activeControllers.get(job.id) === controller) {
         this.activeControllers.delete(job.id)
