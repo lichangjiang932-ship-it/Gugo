@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 
 import GlobalShortcuts from './components/GlobalShortcuts'
 import ErrorBoundary from './components/ErrorBoundary'
+import { AppLayout } from './components/AppLayout'
 
 const CoverPage = lazy(() => import('./pages/CoverPage'))
 const ChatSplit = lazy(() => import('./pages/ChatSplit'))
@@ -27,7 +28,7 @@ function App() {
       <Suspense fallback={<Fallback />}>
         <Routes>
           <Route path="/" element={<CoverPage />} />
-          <Route path="/chat" element={<ChatSplit />} />
+          <Route path="/chat" element={<AppLayout />} />
           <Route path="/skills" element={<SkillsMarket />} />
           <Route path="/permissions" element={<PermissionsDashboard />} />
           <Route path="/task" element={<TaskRunPanel />} />

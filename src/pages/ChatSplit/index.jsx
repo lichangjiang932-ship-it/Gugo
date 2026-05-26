@@ -1,7 +1,8 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import LeftRail from '../../components/LeftRail'
 import { useAppContext } from '../../store/AppContext'
+import { useStore } from '../../stores'
+import { AppLayout } from '../../components/AppLayout'
 import { SKILLS, getSkillSystemPrompt } from '../../data.js'
 import { buildUserContentWithAttachments, describeAttachmentPrompt } from '../../lib/attachments.js'
 import { callModelThroughProxyStream, getModelStatus, summarizeSessionTitle } from '../../lib/modelClient.js'
@@ -11,11 +12,6 @@ import { readStoredModel, resolveInitialModel, writeStoredModel } from '../../li
 import { listSkills } from '../../lib/skillClient.js'
 import { inferSkillIdFromPrompt, parseSkillCommand } from '../../lib/skillCommands.js'
 import { TASK_STATUS, TOOL_CALL_STATUS, HISTORY_STATUS } from '../../store/taskStatus.js'
-import ChatHeader from './ChatHeader'
-import ChatMessages from './ChatMessages'
-import ChatComposer from './ChatComposer'
-import RightPreviewPane from './RightPreviewPane'
-import CodingWorkbench from './CodingWorkbench'
 import { exportSession } from '../../lib/sessionExport.js'
 import * as XLSX from '@e965/xlsx'
 
@@ -621,103 +617,114 @@ export default function ChatSplit() {
 
   const handleAbortTask = () => abortCtrlRef.current?.abort()
 
+  // Sync sessions to Zustand store for new UI components
+  const prevSessionsRef = useRef('');
+  useEffect(() => {
+    const sessionsKey = state.sessions.map(s => s.id).join(',');
+    if (prevSessionsRef.current === sessionsKey) return;
+    prevSessionsRef.current = sessionsKey;
+    const { setSessions, setCurrentSessionId } = useStore.getState();
+    const sessionsForStore = state.sessions.map(s => ({
+      id: s.id,
+      title: s.title || '新对话',
+      firstMessage: s.firstMessage || '',
+      modified: s.updatedAt ? new Date(s.updatedAt).toISOString() : new Date().toISOString(),
+      messageCount: s.messages?.length || 0,
+      agentId: null,
+      agentName: null,
+      cwd: null,
+    }));
+    setSessions(sessionsForStore);
+    if (state.activeSessionId) {
+      setCurrentSessionId(state.activeSessionId);
+    }
+  }, [state.sessions, state.activeSessionId]);
+
+  // Sync messages to Zustand store
+  const prevMsgsRef = useRef('');
+  useEffect(() => {
+    if (!state.activeSessionId || !activeSession?.messages) return;
+    const msgsKey = activeSession.messages.map(m => m.id).join(',');
+    if (prevMsgsRef.current === msgsKey) return;
+    prevMsgsRef.current = msgsKey;
+    const { setSessionMessages } = useStore.getState();
+    const msgs = activeSession.messages.map(m => {
+      const blocks = [];
+      if (typeof m.content === 'string') {
+        blocks.push({ type: 'text', html: m.content, source: m.content });
+      }
+      return {
+        id: m.id,
+        role: m.role,
+        text: typeof m.content === 'string' ? m.content : '',
+        blocks,
+        timestamp: m.createdAt || Date.now(),
+      };
+    });
+    setSessionMessages(state.activeSessionId, msgs);
+  }, [activeSession?.messages, state.activeSessionId]);
+
+  // Handle new UI send events
+  useEffect(() => {
+    const handleSendEvent = (e) => {
+      const { text, files } = e.detail;
+      if (text || (files && files.length > 0)) {
+        const processedAttachments = files?.map(f => ({
+          id: f.fileId || `file-${Date.now()}-${Math.random()}`,
+          name: f.name,
+          sizeKB: f.file ? ((f.file.size / 1024).toFixed(1)) : '0',
+          type: f.file?.type || 'application/octet-stream',
+          kind: f.file?.type?.startsWith('image/') ? 'image' : 'file',
+          file: f.file,
+        })) || [];
+        setAttachments(processedAttachments);
+        const content = text || describeAttachmentPrompt(processedAttachments);
+        triggerSendFlow(content, processedAttachments);
+      }
+    };
+    const handleStopEvent = () => {
+      abortCtrlRef.current?.abort();
+    };
+    window.addEventListener('send-message', handleSendEvent);
+    window.addEventListener('stop-streaming', handleStopEvent);
+    return () => {
+      window.removeEventListener('send-message', handleSendEvent);
+      window.removeEventListener('stop-streaming', handleStopEvent);
+    };
+  }, [triggerSendFlow]);
+
+  // Sync streaming state to Zustand
+  const prevStreamingRef = useRef(false);
+  useEffect(() => {
+    if (prevStreamingRef.current === isGenerating) return;
+    prevStreamingRef.current = isGenerating;
+    const { addStreamingSession, removeStreamingSession } = useStore.getState();
+    if (isGenerating && state.activeSessionId) {
+      addStreamingSession(state.activeSessionId);
+    } else if (state.activeSessionId) {
+      removeStreamingSession(state.activeSessionId);
+    }
+  }, [isGenerating, state.activeSessionId]);
+
+  // Sync agent info to Zustand - one time
+  useEffect(() => {
+    const { setAgentName } = useStore.getState();
+    setAgentName('AI 助手');
+  }, []);
+
+  // Hide welcome when there are messages
+  const prevMsgLenRef = useRef(0);
+  useEffect(() => {
+    if (messages.length > 0 && prevMsgLenRef.current === 0) {
+      const { setWelcomeVisible } = useStore.getState();
+      setWelcomeVisible(false);
+    }
+    prevMsgLenRef.current = messages.length;
+  }, [messages.length]);
+
   return (
-    <div className="h-screen flex bg-paper overflow-hidden">
-      <LeftRail />
-
-      <div className="flex-1 flex flex-col min-w-0">
-        <ChatHeader
-          activeSession={activeSession}
-          messages={messages}
-          lastFailedPrompt={lastFailedPrompt}
-          modelOptions={modelOptions}
-          selectedModel={selectedModel}
-          hasTasks={tasks.length > 0}
-          agentMode={agentMode}
-          onAgentModeChange={(mode) => dispatch({ type: 'SET_AGENT_MODE', payload: mode })}
-          onExport={(format = 'json') => {
-            if (!activeSession) return
-            exportSession(activeSession, format)
-            setWorkbenchMessage(format === 'md' ? '当前会话已导出为 Markdown。' : '当前会话已导出为 JSON。')
-          }}
-          onCompress={() => {
-            if (messages.length <= 8) { setWorkbenchMessage('当前上下文还不长，暂时不需要压缩。'); return }
-            dispatch({ type: 'COMPRESS_CURRENT_SESSION' })
-            setWorkbenchMessage('已压缩较早上下文，保留最近消息。')
-          }}
-          onRetry={() => { if (lastFailedPrompt) triggerSendFlow(lastFailedPrompt) }}
-          onModelChange={(val) => { setSelectedModel(val); writeStoredModel(val) }}
-          onNavigateTask={() => navigate('/task')}
-        />
-
-        <ChatMessages
-          messages={messages}
-          state={state}
-          workbenchMessage={workbenchMessage}
-          showContextPanel={showContextPanel}
-          setShowContextPanel={setShowContextPanel}
-          selectedModel={selectedModel}
-          isGenerating={isGenerating}
-          onExampleClick={(label) => triggerSendFlow(label)}
-          onEditMessage={handleEditMessage}
-          onRegenerateMessage={handleRegenerate}
-          onDeleteMessage={handleDeleteMessage}
-          onPermAllow={handlePermAllow}
-          onPermDeny={handlePermDeny}
-          onNavigatePermissions={() => navigate('/permissions')}
-          onOpenInPreview={(msg, preview) =>
-            dispatch({
-              type: 'OPEN_PREVIEW_ARTIFACT',
-              // G1: 优先把模型显式给的 artifactSource 当 content,
-              //     这样 ChatMessages 嗅探来源 / RightPreviewPane 复用都基于同一份源.
-              payload: {
-                messageId: msg.id,
-                content: msg.meta?.artifactSource || msg.content,
-                preview,
-              },
-            })
-          }
-        />
-
-        <ChatComposer
-          input={input}
-          setInput={setInput}
-          onSend={handleSend}
-          attachments={attachments}
-          setAttachments={setAttachments}
-          showSlashMenu={showSlashMenu}
-          setShowSlashMenu={setShowSlashMenu}
-          filteredSkills={filteredSkills}
-          selectedIndex={selectedIndex}
-          setSelectedIndex={setSelectedIndex}
-          voiceState={voiceState}
-          setVoiceState={setVoiceState}
-          showContextPanel={showContextPanel}
-          setShowContextPanel={setShowContextPanel}
-          isGenerating={isGenerating}
-          onAbort={handleAbortTask}
-          messages={messages}
-          onFileChange={handleFileChange}
-          onVoiceClick={handleVoice}
-          onContextClick={() => setShowContextPanel((v) => !v)}
-          onQuickSkillClick={(skill) => {
-            if (skill.solid) { navigate('/skills'); return }
-            setInput(skill.command + ' ')
-          }}
-          handleKeyDown={handleKeyDown}
-          skills={runtimeSkills}
-        />
-      </div>
-
-      {state.previewArtifact ? (
-        <RightPreviewPane
-          artifact={state.previewArtifact}
-          onClose={() => dispatch({ type: 'CLOSE_PREVIEW_ARTIFACT' })}
-          onMessage={setWorkbenchMessage}
-        />
-      ) : agentMode === 'code' ? (
-        <CodingWorkbench onMessage={setWorkbenchMessage} />
-      ) : null}
+    <div className="app-layout-wrapper">
+      <AppLayout />
     </div>
   )
 }

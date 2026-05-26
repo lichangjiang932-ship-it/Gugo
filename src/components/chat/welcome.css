@@ -1,0 +1,127 @@
+/* WelcomeScreen 样式 */
+
+.welcome-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100%;
+  padding: 48px 24px;
+}
+
+.welcome-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  max-width: 640px;
+  width: 100%;
+}
+
+.welcome-avatar-img,
+.welcome-avatar-fallback {
+  border-radius: 50%;
+  object-fit: cover;
+  margin-bottom: 20px;
+}
+
+.welcome-avatar-fallback {
+  background: linear-gradient(135deg, #E86A3C 0%, #F5A623 100%);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+  font-weight: 600;
+}
+
+.welcome-title {
+  font-size: 28px;
+  font-weight: 600;
+  color: var(--text-primary, #1a1a1a);
+  margin: 0 0 8px;
+  letter-spacing: -0.5px;
+}
+
+.welcome-greeting {
+  font-size: 15px;
+  color: var(--text-secondary, #666);
+  margin: 0 0 36px;
+  line-height: 1.6;
+  max-width: 480px;
+}
+
+.suggestions-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  width: 100%;
+}
+
+.suggestion-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border-color, #e5e5e5);
+  background: var(--card-bg, rgba(255, 255, 255, 0.6));
+  cursor: pointer;
+  transition: all 0.2s ease;
+  backdrop-filter: blur(8px);
+}
+
+.suggestion-card:hover {
+  border-color: var(--accent-color, #E86A3C);
+  background: var(--card-bg-hover, rgba(255, 255, 255, 0.9));
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+}
+
+.suggestion-icon {
+  font-size: 24px;
+  margin-bottom: 8px;
+}
+
+.suggestion-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary, #1a1a1a);
+  margin-bottom: 4px;
+}
+
+.suggestion-desc {
+  font-size: 12px;
+  color: var(--text-tertiary, #999);
+  line-height: 1.4;
+}
+
+/* 深色模式适配 */
+@media (prefers-color-scheme: dark) {
+  .welcome-title {
+    color: var(--text-primary-dark, #f0f0f0);
+  }
+  .welcome-greeting {
+    color: var(--text-secondary-dark, #aaa);
+  }
+  .suggestion-card {
+    background: var(--card-bg-dark, rgba(40, 40, 40, 0.6));
+    border-color: var(--border-color-dark, #333);
+  }
+  .suggestion-card:hover {
+    background: var(--card-bg-hover-dark, rgba(50, 50, 50, 0.9));
+  }
+  .suggestion-title {
+    color: var(--text-primary-dark, #f0f0f0);
+  }
+  .suggestion-desc {
+    color: var(--text-tertiary-dark, #777);
+  }
+}
+
+/* 响应式 */
+@media (max-width: 640px) {
+  .suggestions-grid {
+    grid-template-columns: 1fr;
+  }
+}
