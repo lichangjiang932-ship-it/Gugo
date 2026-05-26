@@ -40,6 +40,7 @@ import { handleCompactionRequest } from './routes/compactionRoutes.js'
 import { handleKnowledgeGraphRequest } from './routes/knowledgeGraphRoutes.js'
 import { handleReasonixRequest } from './routes/reasonixRoutes.js'
 import { handleNotificationRequest } from './routes/notificationRoutes.js'
+import { handleSessionRequest } from './routes/sessionRoutes.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -208,6 +209,10 @@ function createRouter(getEnv = getRuntimeEnv) {
 
   if (req.url?.startsWith('/api/notifications')) {
     return handleNotificationRequest(req, res)
+  }
+
+  if (req.url?.startsWith('/api/sessions')) {
+    return handleSessionRequest(req, res)
   }
 
   // 知识图谱（feature 8 — 借鉴 Reasonix memory_* 设计）

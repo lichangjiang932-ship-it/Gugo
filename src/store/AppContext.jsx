@@ -192,6 +192,30 @@ function reducer(state, action) {
       }
     }
 
+    case 'ARCHIVE_SESSION': {
+      const id = action.payload
+      if (!id) return state
+      const now = Date.now()
+      return {
+        ...state,
+        sessions: state.sessions.map((s) =>
+          s.id === id ? { ...s, archivedAt: s.archivedAt || now, updatedAt: now } : s
+        ),
+      }
+    }
+
+    case 'UNARCHIVE_SESSION': {
+      const id = action.payload
+      if (!id) return state
+      const now = Date.now()
+      return {
+        ...state,
+        sessions: state.sessions.map((s) =>
+          s.id === id ? { ...s, archivedAt: null, updatedAt: now } : s
+        ),
+      }
+    }
+
     case 'SEND_MESSAGE': {
       const payload = action.payload
       let content = typeof payload === 'string' ? payload : payload?.content ?? ''

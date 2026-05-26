@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const DB_SCHEMA_VERSION = 8
+export const DB_SCHEMA_VERSION = 9
 
 const DEFAULT_DATA_DIR = path.join(process.cwd(), 'server-data')
 
@@ -61,6 +61,7 @@ function runMigrations(db) {
   if (getSchemaVersionInternal(db) < 6) migrateToV6(db)
   if (getSchemaVersionInternal(db) < 7) migrateToV7(db)
   if (getSchemaVersionInternal(db) < 8) migrateToV8(db)
+  if (getSchemaVersionInternal(db) < 9) migrateToV9(db)
   runReasonixMigrations(db)
 }
 
@@ -404,6 +405,107 @@ function migrateToV8(db) {
     CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, read_at, created_at DESC);
   `)
   setSchemaVersionInternal(db, 8)
+}
+
+/**
+ * A4: Chat sessions archive state + cross-session message search.
+ *
+ * The existing `sessions` table stores auth sessions. To keep old auth rows and tests intact,
+ * chat rows reuse `token` as the stable session id and only rows with a non-null `title`
+ * are treated as chat sessions by the session store.
+ */
+function migrateToV9(db) {
+  if (!hasColumn(db, 'sessions', 'id')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN id TEXT')
+  }
+  if (!hasColumn(db, 'sessions', 'title')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN title TEXT')
+  }
+  if (!hasColumn(db, 'sessions', 'updated_at')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN updated_at INTEGER')
+  }
+  if (!hasColumn(db, 'sessions', 'last_viewed_at')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN last_viewed_at INTEGER')
+  }
+  if (!hasColumn(db, 'sessions', 'archived_at')) {
+    db.exec('ALTER TABLE sessions ADD COLUMN archived_at INTEGER')
+  }
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_sessions_user_updated ON sessions(user_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_sessions_user_archived ON sessions(user_id, archived_at, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS messages (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES sessions(token) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role TEXT NOT NULL CHECK (role IN ('user','assistant','system','tool')),
+      content TEXT NOT NULL DEFAULT '',
+      session_title TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_messages_session_created ON messages(session_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_messages_user_created ON messages(user_id, created_at);
+  `)
+
+  if (!hasColumn(db, 'messages', 'session_title')) {
+    db.exec("ALTER TABLE messages ADD COLUMN session_title TEXT NOT NULL DEFAULT ''")
+  }
+  if (!hasColumn(db, 'messages', 'updated_at')) {
+    db.exec('ALTER TABLE messages ADD COLUMN updated_at INTEGER')
+    db.exec('UPDATE messages SET updated_at = COALESCE(updated_at, created_at, 0)')
+  }
+  db.exec(`
+    UPDATE messages
+    SET session_title = COALESCE((
+      SELECT title FROM sessions WHERE sessions.token = messages.session_id
+    ), session_title, '')
+    WHERE session_title = '';
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+      content,
+      role UNINDEXED,
+      session_title,
+      content='messages',
+      content_rowid='rowid',
+      tokenize='unicode61'
+    );
+
+    CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+      INSERT INTO messages_fts(rowid, content, role, session_title)
+      VALUES (new.rowid, new.content, new.role, new.session_title);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+      INSERT INTO messages_fts(messages_fts, rowid, content, role, session_title)
+      VALUES ('delete', old.rowid, old.content, old.role, old.session_title);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+      INSERT INTO messages_fts(messages_fts, rowid, content, role, session_title)
+      VALUES ('delete', old.rowid, old.content, old.role, old.session_title);
+      INSERT INTO messages_fts(rowid, content, role, session_title)
+      VALUES (new.rowid, new.content, new.role, new.session_title);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS sessions_title_au AFTER UPDATE OF title ON sessions
+    WHEN old.title IS NOT new.title AND new.title IS NOT NULL
+    BEGIN
+      UPDATE messages
+      SET session_title = COALESCE(new.title, '')
+      WHERE session_id = new.token;
+    END;
+  `)
+
+  const ftsCount = db.prepare('SELECT COUNT(*) AS count FROM messages_fts').get()?.count || 0
+  if (ftsCount === 0) {
+    db.prepare(`
+      INSERT INTO messages_fts(rowid, content, role, session_title)
+      SELECT rowid, content, role, session_title FROM messages
+    `).run()
+  }
+  setSchemaVersionInternal(db, 9)
 }
 
 function initSchema(db) {

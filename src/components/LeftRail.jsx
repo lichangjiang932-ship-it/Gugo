@@ -1,6 +1,6 @@
-import { useState, useMemo, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { MessageSquare, Wrench, Shield, History, Settings, Sparkles, ListChecks, X, Search, BookOpen, Webhook, Plug, Users } from 'lucide-react'
+import { MessageSquare, Wrench, Shield, History, Settings, Sparkles, ListChecks, X, Search, BookOpen, Webhook, Plug, Users, MoreHorizontal, Archive, ArchiveRestore } from 'lucide-react'
 import { useAppContext } from '../store/AppContext'
 import {
   LOGIN_CODE_COUNTDOWN_SECONDS,
@@ -8,6 +8,7 @@ import {
   shouldDisableLoginCodeButton,
 } from '../lib/loginCountdown.js'
 import { getAuthToken, loginWithPassword, sendLoginCode, verifyLoginCode } from '../lib/accountClient.js'
+import { archiveSessionRemote, unarchiveSessionRemote } from '../lib/sessionClient.js'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { useToast } from './Toast.jsx'
 
@@ -58,24 +59,12 @@ export default function LeftRail() {
   const [loginMode, setLoginMode] = useState('password')
   const [loginPassword, setLoginPassword] = useState('')
   const [loginCodeCountdown, setLoginCodeCountdown] = useState(0)
-  // ★ #13: 全局会话搜索 — 标题 + 消息内容
-  const [searchQuery, setSearchQuery] = useState('')
-  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('')
-  const searchTimerRef = useRef(null)
-
-  useEffect(() => {
-    if (searchTimerRef.current) window.clearTimeout(searchTimerRef.current)
-    searchTimerRef.current = window.setTimeout(() => {
-      setDebouncedSearchQuery(searchQuery)
-    }, 150)
-    return () => {
-      if (searchTimerRef.current) window.clearTimeout(searchTimerRef.current)
-    }
-  }, [searchQuery])
+  const [sessionFilter, setSessionFilter] = useState('active')
+  const [openMenuId, setOpenMenuId] = useState(null)
 
   // ★ #25: 监听全局 Esc 清空搜索框 (preview 不开时才会派发)
   useEffect(() => {
-    const onEsc = () => setSearchQuery('')
+    const onEsc = () => setOpenMenuId(null)
     window.addEventListener('app:escape', onEsc)
     return () => window.removeEventListener('app:escape', onEsc)
   }, [])
@@ -102,37 +91,16 @@ export default function LeftRail() {
     { path: '/settings', icon: Settings, label: t('nav.settings'), requiresLogin: true },
   ]
 
-  const sessions = state.sessions
+  const sessions = state.sessions.filter((session) => {
+    if (sessionFilter === 'archived') return !!session.archivedAt
+    if (sessionFilter === 'all') return true
+    return !session.archivedAt
+  })
   const startOfToday = new Date().setHours(0, 0, 0, 0)
   const startOfWeek = startOfToday - ((new Date().getDay() + 6) % 7) * 86400000
   const todaySessions = sessions.filter((s) => s.createdAt >= startOfToday)
   const weekSessions = sessions.filter((s) => s.createdAt >= startOfWeek && s.createdAt < startOfToday)
   const earlierSessions = sessions.filter((s) => s.createdAt < startOfWeek)
-
-  // ★ #13: 搜索结果 — 标题命中 OR 任一消息 content 命中
-  const searchTrim = debouncedSearchQuery.trim().toLowerCase()
-  const searchResults = useMemo(() => {
-    if (!searchTrim) return null
-    return sessions
-      .map((s) => {
-        const titleHit = String(s.title || '').toLowerCase().includes(searchTrim)
-        let snippet = null
-        if (Array.isArray(s.messages)) {
-          for (const m of s.messages) {
-            const c = String(m.content || '')
-            const idx = c.toLowerCase().indexOf(searchTrim)
-            if (idx >= 0) {
-              snippet = c.slice(Math.max(0, idx - 20), idx + searchTrim.length + 30)
-              break
-            }
-          }
-        }
-        if (!titleHit && !snippet) return null
-        return { session: s, snippet }
-      })
-      .filter(Boolean)
-      .slice(0, 50)
-  }, [sessions, searchTrim])
 
   const handleNewChat = () => {
     dispatch({ type: 'NEW_SESSION', payload: '新对话' })
@@ -146,6 +114,25 @@ export default function LeftRail() {
       return
     }
     navigate(item.path)
+  }
+
+  const openSearch = () => {
+    window.dispatchEvent(new CustomEvent('session-search:open'))
+  }
+
+  const handleArchiveToggle = async (session) => {
+    setOpenMenuId(null)
+    const archived = !!session.archivedAt
+    dispatch({ type: archived ? 'UNARCHIVE_SESSION' : 'ARCHIVE_SESSION', payload: session.id })
+    if (!getAuthToken()) return
+    try {
+      if (archived) await unarchiveSessionRemote(session.id)
+      else await archiveSessionRemote(session.id)
+    } catch (error) {
+      if (/session not found/i.test(error.message || '')) return
+      dispatch({ type: archived ? 'ARCHIVE_SESSION' : 'UNARCHIVE_SESSION', payload: session.id })
+      toast.error({ title: t('errors.saveFailed'), body: error.message })
+    }
   }
 
   const handleSendCode = async (event) => {
@@ -247,6 +234,31 @@ export default function LeftRail() {
               >
                 <X className="w-3 h-3" />
               </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setOpenMenuId(openMenuId === s.id ? null : s.id)
+                }}
+                title={t('nav.sessionMenu')}
+                className="opacity-0 group-hover:opacity-100 ml-1 p-1 rounded hover:bg-paper-2 text-ink-fade hover:text-ink transition-opacity shrink-0"
+              >
+                <MoreHorizontal className="w-3 h-3" />
+              </button>
+              {openMenuId === s.id && (
+                <div className="absolute right-0 top-7 z-20 min-w-32 bg-paper border border-ink-fade/40 rounded-md shadow-lg p-1">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      handleArchiveToggle(s)
+                    }}
+                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs text-ink-soft hover:bg-paper-2"
+                  >
+                    {s.archivedAt ? <ArchiveRestore className="w-3 h-3" /> : <Archive className="w-3 h-3" />}
+                    {s.archivedAt ? t('nav.unarchiveSession') : t('nav.archiveSession')}
+                  </button>
+                </div>
+              )}
             </div>
             )
           })}
@@ -273,25 +285,17 @@ export default function LeftRail() {
           <span className="font-mono text-[10px] text-ink-fade tracking-wider">Ctrl N</span>
         </button>
 
-        {/* ★ #13: 全局搜索 */}
-        <div className="relative">
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-ink-fade pointer-events-none" />
-          <input
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder={t('nav.searchPlaceholder')}
-            className="w-full h-7 pl-7 pr-7 border border-ink-fade/40 rounded-md bg-paper text-xs text-ink outline-none focus:border-ember"
-          />
-          {searchQuery && (
-            <button
-              onClick={() => setSearchQuery('')}
-              className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-ink-fade/20 text-ink-fade"
-              title="清除搜索"
-            >
-              <X className="w-3 h-3" />
-            </button>
-          )}
-        </div>
+        <button
+          type="button"
+          onClick={openSearch}
+          className="flex items-center justify-between h-8 px-2.5 border border-ink-fade/40 rounded-md bg-paper text-xs text-ink-soft hover:bg-paper-2 transition-colors"
+        >
+          <span className="inline-flex items-center gap-2 min-w-0">
+            <Search className="w-3.5 h-3.5 text-ink-fade" />
+            <span className="truncate">{t('nav.searchPlaceholder')}</span>
+          </span>
+          <span className="font-mono text-[10px] text-ink-fade">Ctrl K</span>
+        </button>
 
         <div className="flex flex-col gap-0.5 mt-1">
           {navItems.map((item) => {
@@ -313,38 +317,28 @@ export default function LeftRail() {
           })}
         </div>
 
-        {searchResults ? (
-          searchResults.length ? (
-            <div className="mt-2">
-              <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">
-                {t('nav.searchResults')} ({searchResults.length})
-              </span>
-              <div className="flex flex-col gap-0.5 mt-1.5">
-                {searchResults.map(({ session: s, snippet }) => (
-                  <button
-                    key={s.id}
-                    onClick={() => {
-                      dispatch({ type: 'SWITCH_SESSION', payload: s.id })
-                      navigate('/chat')
-                    }}
-                    className={`flex flex-col items-start gap-0.5 px-2 py-1.5 rounded-md text-[13px] transition-colors min-w-0 text-left ${
-                      s.id === state.activeSessionId ? 'bg-paper-2 border border-ink-fade/40 text-ink' : 'text-ink-soft hover:bg-paper-2/50'
-                    }`}
-                  >
-                    <span className="truncate w-full">{s.title}</span>
-                    {snippet && (
-                      <span className="text-[10px] text-ink-fade truncate w-full">…{snippet}…</span>
-                    )}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div className="mt-4 px-2 py-4 text-center">
-              <p className="text-xs text-ink-fade">{t('nav.searchNoMatch')}</p>
-            </div>
-          )
-        ) : sessions.length ? (
+        <div className="grid grid-cols-3 gap-1">
+          {[
+            ['active', t('nav.filterActive')],
+            ['archived', t('nav.filterArchived')],
+            ['all', t('nav.filterAll')],
+          ].map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setSessionFilter(key)}
+              className={`h-7 rounded-md text-[11px] transition-colors ${
+                sessionFilter === key
+                  ? 'bg-paper-2 border border-ink-fade/50 text-ink'
+                  : 'border border-transparent text-ink-fade hover:bg-paper-2/60 hover:text-ink-soft'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {sessions.length ? (
           <>
             {renderSessionGroup(t('nav.groupToday'), todaySessions)}
             {renderSessionGroup(t('nav.groupWeek'), weekSessions)}

@@ -9,6 +9,7 @@ import CommandPalette from './components/CommandPalette'
 import SkillCommandsSync from './components/SkillCommandsSync'
 import RequireAuth from './components/RequireAuth'
 import NotificationCenter from './components/NotificationCenter'
+import SessionSearchModal from './components/SessionSearchModal'
 import { ToastProvider } from './components/Toast.jsx'
 
 const CoverPage = lazy(() => import('./pages/CoverPage'))
@@ -43,6 +44,7 @@ function App() {
       <CommandPalette />
       <SkillCommandsSync />
       <NotificationCenter />
+      <SessionSearchModal />
       <Suspense fallback={<Fallback />}>
         <main>
           <Routes>
