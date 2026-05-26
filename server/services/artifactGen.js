@@ -875,3 +875,151 @@ export function handleArtifactDownload(req, res) {
 export function getArtifactDir() {
   return ARTIFACT_DIR
 }
+
+/**
+ * P2: GET /api/artifacts/:filename/slides → 解析 .pptx 抽每页文字摘要.
+ *
+ * 复用 handleArtifactDownload 的鉴权 + ownership + path traversal 防御.
+ * 拒绝 docx/xlsx, 只支持 .pptx; 大小上限 50MB.
+ */
+import { parsePptx } from '../../src/lib/pptxParse.js'
+import { renderPptxPage, probeRenderer } from './artifactRender.js'
+
+const SLIDES_MAX_BYTES = 50 * 1024 * 1024
+const RENDER_MAX_BYTES = 50 * 1024 * 1024
+
+export async function handleArtifactSlides(req, res) {
+  const url = req.url || ''
+  const m = url.match(/^\/api\/artifacts\/([^?#/]+)\/slides/)
+  if (!m) { res.statusCode = 404; res.end('not found'); return }
+  const filename = decodeURIComponent(m[1])
+  if (!SAFE_NAME.test(filename)) { res.statusCode = 400; res.end('bad filename'); return }
+  if (!filename.toLowerCase().endsWith('.pptx')) {
+    res.statusCode = 415; res.end('only pptx slides parsing supported'); return
+  }
+
+  let userId = authenticateRequest(req)
+  if (!userId) {
+    const u = new URL(req.url, 'http://localhost')
+    const queryToken = u.searchParams.get('token')
+    if (queryToken) {
+      req.headers.authorization = `Bearer ${queryToken}`
+      userId = authenticateRequest(req)
+    }
+  }
+  if (!userId) { res.statusCode = 401; res.end('Unauthorized'); return }
+
+  const artifact = getArtifactByFilename(filename)
+  if (!artifact) { res.statusCode = 404; res.end('not found'); return }
+  if (artifact.userId !== userId) { res.statusCode = 404; res.end('not found'); return }
+
+  ensureArtifactDir()
+  let full = path.join(ARTIFACT_DIR, filename)
+  try { full = fs.realpathSync(full) } catch { res.statusCode = 404; res.end('not found'); return }
+  if (!full.startsWith(fs.realpathSync(ARTIFACT_DIR) + path.sep)) { res.statusCode = 400; res.end('bad filename'); return }
+  if (!fs.existsSync(full)) { res.statusCode = 404; res.end('not found'); return }
+
+  const stat = fs.statSync(full)
+  if (stat.size > SLIDES_MAX_BYTES) {
+    res.statusCode = 413
+    res.setHeader('Content-Type', 'application/json')
+    res.end(JSON.stringify({ error: 'pptx too large', sizeMB: +(stat.size / 1024 / 1024).toFixed(1) }))
+    return
+  }
+
+  try {
+    const buf = fs.readFileSync(full)
+    const slides = await parsePptx(buf, { maxBytes: SLIDES_MAX_BYTES })
+    res.statusCode = 200
+    res.setHeader('Content-Type', 'application/json')
+    res.setHeader('Cache-Control', 'no-store')
+    res.end(JSON.stringify({ filename, slides }))
+  } catch (err) {
+    res.statusCode = 422
+    res.setHeader('Content-Type', 'application/json')
+    res.end(JSON.stringify({ error: 'parse failed', detail: err?.message || String(err) }))
+  }
+}
+
+/**
+ * P3: GET /api/artifacts/:filename/render?page=N → 真实 PPT 版式 PNG.
+ *
+ * 链路依赖 libreoffice + pdftoppm; 缺一返 503, 前端走文字摘要 fallback.
+ * 复用 download 的鉴权 / ownership / path traversal 防御.
+ */
+export async function handleArtifactRender(req, res) {
+  const url = req.url || ''
+  const m = url.match(/^\/api\/artifacts\/([^?#/]+)\/render(?:\?|$)/)
+  if (!m) { res.statusCode = 404; res.end('not found'); return }
+  const filename = decodeURIComponent(m[1])
+  if (!SAFE_NAME.test(filename)) { res.statusCode = 400; res.end('bad filename'); return }
+  if (!filename.toLowerCase().endsWith('.pptx')) {
+    res.statusCode = 415; res.end('only pptx rendering supported'); return
+  }
+
+  let userId = authenticateRequest(req)
+  if (!userId) {
+    const u = new URL(req.url, 'http://localhost')
+    const queryToken = u.searchParams.get('token')
+    if (queryToken) {
+      req.headers.authorization = `Bearer ${queryToken}`
+      userId = authenticateRequest(req)
+    }
+  }
+  if (!userId) { res.statusCode = 401; res.end('Unauthorized'); return }
+
+  const artifact = getArtifactByFilename(filename)
+  if (!artifact) { res.statusCode = 404; res.end('not found'); return }
+  if (artifact.userId !== userId) { res.statusCode = 404; res.end('not found'); return }
+
+  const u = new URL(req.url, 'http://localhost')
+  const pageRaw = u.searchParams.get('page') || '1'
+  const page = Number.parseInt(pageRaw, 10)
+  if (!Number.isInteger(page) || page < 1 || page > 500) {
+    res.statusCode = 400; res.end('bad page'); return
+  }
+
+  ensureArtifactDir()
+  let full = path.join(ARTIFACT_DIR, filename)
+  try { full = fs.realpathSync(full) } catch { res.statusCode = 404; res.end('not found'); return }
+  if (!full.startsWith(fs.realpathSync(ARTIFACT_DIR) + path.sep)) { res.statusCode = 400; res.end('bad filename'); return }
+  if (!fs.existsSync(full)) { res.statusCode = 404; res.end('not found'); return }
+
+  const stat = fs.statSync(full)
+  if (stat.size > RENDER_MAX_BYTES) {
+    res.statusCode = 413
+    res.setHeader('Content-Type', 'application/json')
+    res.end(JSON.stringify({ error: 'pptx too large', sizeMB: +(stat.size / 1024 / 1024).toFixed(1) }))
+    return
+  }
+
+  const probe = await probeRenderer()
+  if (!probe.available) {
+    res.statusCode = 503
+    res.setHeader('Content-Type', 'application/json')
+    res.setHeader('X-Render-Available', '0')
+    res.end(JSON.stringify({
+      error: 'renderer unavailable',
+      missing: [!probe.libreoffice && 'libreoffice', !probe.pdftoppm && 'pdftoppm'].filter(Boolean),
+      hint: 'install libreoffice and poppler-utils for visual PPT rendering',
+    }))
+    return
+  }
+
+  try {
+    const buf = await renderPptxPage({ srcPath: full, page })
+    res.statusCode = 200
+    res.setHeader('Content-Type', 'image/png')
+    res.setHeader('Cache-Control', 'private, max-age=3600')
+    res.setHeader('Content-Length', buf.length)
+    res.setHeader('X-Render-Page', String(page))
+    res.end(buf)
+  } catch (err) {
+    const msg = err?.message || String(err)
+    const code = /out of range/i.test(msg) ? 404 : /timeout/i.test(msg) ? 504 : 500
+    res.statusCode = code
+    res.setHeader('Content-Type', 'application/json')
+    res.end(JSON.stringify({ error: 'render failed', detail: msg }))
+  }
+}
+

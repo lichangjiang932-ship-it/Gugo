@@ -47,7 +47,7 @@ export default function ChatMessages({
   // ★ #19: 移除 handleDownloadPptx/Office 双路径 — artifact 卡片走 RightPreviewPane.handleDownload,
   // 普通 markdown 不再嗅探导出 (避免 shouldOfferOfficeExport vs detectArtifactType 两套规则不一致)
 
-  // #11 自动滚到底 + 浮动「回到底部」按钮
+  // #11 自动滚到底 + 浮动「回到底部」按钮 (P3: 阈值从 80px 收紧到 60px)
   // 规则:用户已贴底 → 新消息自动滚;用户上滑离开底部 → 不打扰,显示按钮让其手动回
   const scrollRef = useRef(null)
   const [atBottom, setAtBottom] = useState(true)
@@ -58,7 +58,7 @@ export default function ChatMessages({
     if (!el) return
     const onScroll = () => {
       const distance = el.scrollHeight - el.scrollTop - el.clientHeight
-      setAtBottom(distance < 80) // 80px 容差,刚好够看到下一条进入
+      setAtBottom(distance < 60) // P3: 60px 容差, 贴底判定 (从 80 调完)
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     onScroll()
@@ -210,9 +210,9 @@ export default function ChatMessages({
                     ) : (
                       <>
                         <MarkdownRenderer>{stripChoices(msg.content)}</MarkdownRenderer>
-                        {/* ★ #23: streaming 时在尾部显示闪烁光标 */}
+                        {/* P3: streaming 尾部闪烁光标 (暖橙 2px × 1em, 0.8s blink) */}
                         {msg.meta?.streaming && (
-                          <span className="inline-block w-1.5 h-3.5 bg-ember/80 ml-0.5 align-middle animate-pulse" aria-hidden="true" />
+                          <span className="p0-cursor" aria-hidden="true" />
                         )}
                         {/* ★ Reasonix-style ask_choice: [[choice:...]] 选择器 */}
                         {hasChoices(msg.content) && !msg.meta?.streaming && (
@@ -407,7 +407,7 @@ export default function ChatMessages({
           </motion.div>
         )}
       </div>
-      {/* #11 浮动「回到底部」按钮 — 离底超过 80px 才显示 */}
+      {/* #11 浮动「回到底部」按钮 — 离底超过 60px 才显示 */}
       {!atBottom && messages.length > 0 && (
         <button
           onClick={scrollToBottom}

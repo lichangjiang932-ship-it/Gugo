@@ -1,13 +1,13 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
-import { useNavigate, useLocation } from 'react-router-dom'
-import { MessageSquare, Wrench, Shield, History, Settings, Sparkles, ListChecks, X, Search, BookOpen, Webhook, Plug, Users } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { Settings, Sparkles, X, Search } from 'lucide-react'
 import { useAppContext } from '../store/AppContext'
 import {
   LOGIN_CODE_COUNTDOWN_SECONDS,
   formatLoginCodeCountdownLabel,
   shouldDisableLoginCodeButton,
 } from '../lib/loginCountdown.js'
-import { getAuthToken, loginWithPassword, sendLoginCode, verifyLoginCode } from '../lib/accountClient.js'
+import { loginWithPassword, sendLoginCode, verifyLoginCode } from '../lib/accountClient.js'
 import { useT } from '../i18n/I18nProvider.jsx'
 
 // ★ #21: 提取会话最后消息的纯文本预览 (剥 markdown / 多模态 array / 工具卡)
@@ -43,9 +43,9 @@ function isSessionUnread(session, activeId) {
   return session.updatedAt > session.lastViewedAt
 }
 
-export default function LeftRail() {
+export default function LeftRail({ onOpenSettings } = {}) {
   const navigate = useNavigate()
-  const location = useLocation()
+  // P0: location 不再需要（原用于 nav active 检查）。
   const { state, dispatch } = useAppContext()
   const { t } = useT()
   const [showLogin, setShowLogin] = useState(false)
@@ -86,19 +86,8 @@ export default function LeftRail() {
     return () => window.clearInterval(timer)
   }, [loginCodeCountdown])
 
-  const navItems = [
-    { path: '/', icon: Sparkles, label: t('nav.home') },
-    { path: '/chat', icon: MessageSquare, label: t('nav.chat') },
-    { path: '/task', icon: ListChecks, label: t('nav.task') },
-    { path: '/skills', icon: Wrench, label: t('nav.skills') },
-    { path: '/permissions', icon: Shield, label: t('nav.permissions') },
-    { path: '/memory', icon: BookOpen, label: t('nav.memory'), requiresLogin: true },
-    { path: '/agents', icon: Users, label: t('nav.agents'), requiresLogin: true },
-    { path: '/mcp', icon: Plug, label: t('nav.mcp'), requiresLogin: true },
-    { path: '/hooks', icon: Webhook, label: t('nav.hooks'), requiresLogin: true },
-    { path: '/history', icon: History, label: t('nav.history') },
-    { path: '/settings', icon: Settings, label: t('nav.settings'), requiresLogin: true },
-  ]
+  // P0 重做: 顶部 nav tabs 全部收进“设置抽屉”。
+  // 原 navItems / handleNav 已移除。路由仍然可通过 SettingsDrawer / 直接 URL 进入。
 
   const sessions = state.sessions
   const startOfToday = new Date().setHours(0, 0, 0, 0)
@@ -137,14 +126,7 @@ export default function LeftRail() {
     navigate('/chat')
   }
 
-  const handleNav = (item) => {
-    if (item.requiresLogin && !getAuthToken()) {
-      setShowLogin(true)
-      setLoginMessage('请先登录账户')
-      return
-    }
-    navigate(item.path)
-  }
+  // P0: handleNav 与 navItems 数据已移除；navigate 仍保留给 search 跳转。
 
   const handleSendCode = async (event) => {
     event.preventDefault()
@@ -195,7 +177,15 @@ export default function LeftRail() {
     if (!items.length) return null
     return (
       <div className="mt-2">
-        <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">{title}</span>
+        <span
+          style={{
+            fontSize: 11,
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+            color: 'var(--p0-text-secondary)',
+            padding: '0 4px',
+          }}
+        >{title}</span>
         <div className="flex flex-col gap-0.5 mt-1.5">
           {items.map((s, i) => {
             const preview = getSessionPreview(s)
@@ -208,26 +198,48 @@ export default function LeftRail() {
                   dispatch({ type: 'SWITCH_SESSION', payload: s.id })
                   navigate('/chat')
                 }}
-                className={`flex-1 flex items-start gap-2 px-2 py-1.5 rounded-md text-[13px] transition-colors min-w-0 ${
-                  isActive ? 'bg-paper-2 border border-ink-fade/40 text-ink' : 'text-ink-soft hover:bg-paper-2/50'
-                }`}
+                className="flex-1 flex items-start gap-2 px-2 py-1.5 transition-colors min-w-0 text-left"
+                style={{
+                  borderRadius: 'var(--p0-radius-btn)',
+                  fontSize: 13,
+                  background: isActive ? 'var(--p0-accent-soft)' : 'transparent',
+                  color: isActive ? 'var(--p0-text-primary)' : 'var(--p0-text-secondary)',
+                }}
+                onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = 'var(--p0-accent-soft)' }}
+                onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = 'transparent' }}
               >
-                {/* ★ #22: 未读用 ember 实心点;已读 ghost 点;当前会话 ember */}
-                <div className={`w-1.5 h-1.5 rounded-full shrink-0 mt-1.5 ${
-                  isActive ? 'bg-ember' : (unread ? 'bg-ember' : 'bg-ink-ghost')
-                }`} />
+                {/* ★ #22: 未读用 accent 实心点;已读 ghost 点;当前会话 accent */}
+                <div
+                  className="shrink-0 mt-1.5"
+                  style={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: '50%',
+                    background: isActive ? 'var(--p0-accent)' : (unread ? 'var(--p0-accent)' : 'var(--p0-border-strong)'),
+                  }}
+                />
                 <div className="flex-1 min-w-0 flex flex-col gap-0.5">
                   <div className="flex items-center gap-1.5">
-                    <span className={`truncate ${unread ? 'font-medium text-ink' : ''}`}>{s.title}</span>
+                    <span
+                      className="truncate"
+                      style={{
+                        fontWeight: unread ? 500 : 400,
+                        color: isActive || unread ? 'var(--p0-text-primary)' : 'var(--p0-text-primary)',
+                      }}
+                    >{s.title}</span>
                     {unread && (
                       <span
                         title="有新消息"
-                        className="shrink-0 inline-block w-1.5 h-1.5 rounded-full bg-ember"
+                        className="shrink-0 inline-block"
+                        style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--p0-accent)' }}
                       />
                     )}
                   </div>
                   {preview && (
-                    <span className="text-[11px] text-ink-fade truncate text-left">{preview}</span>
+                    <span
+                      className="truncate text-left"
+                      style={{ fontSize: 11, color: 'var(--p0-text-tertiary)' }}
+                    >{preview}</span>
                   )}
                 </div>
               </button>
@@ -239,7 +251,8 @@ export default function LeftRail() {
                   }
                 }}
                 title="删除会话"
-                className="opacity-0 group-hover:opacity-100 ml-1 p-1 rounded hover:bg-paper-2 text-ink-fade hover:text-ink transition-opacity shrink-0"
+                className="opacity-0 group-hover:opacity-100 ml-1 p-1 transition-opacity shrink-0"
+                style={{ borderRadius: 'var(--p0-radius-btn)', color: 'var(--p0-text-tertiary)' }}
               >
                 <X className="w-3 h-3" />
               </button>
@@ -253,35 +266,55 @@ export default function LeftRail() {
 
   return (
     <>
-      <aside role="navigation" aria-label="主导航" className="w-[240px] h-full border-r border-dashed border-ink-fade/50 flex flex-col gap-3 p-4 bg-paper shrink-0 overflow-y-auto">
+      <aside role="navigation" aria-label="主导航" className="w-[240px] h-full flex flex-col gap-3 p-4 shrink-0 overflow-y-auto" style={{ background: 'var(--p0-card)', borderRight: '1px solid var(--p0-border)', fontFamily: 'var(--p0-font-sans)' }}>
         <button onClick={() => navigate('/chat')} aria-label="回到首页" className="flex items-center gap-2 mb-1">
-          <div className="w-7 h-7 rounded-full border border-ink flex items-center justify-center bg-paper">
-            <Sparkles className="w-3.5 h-3.5 text-ember" />
+          <div className="w-7 h-7 rounded-full flex items-center justify-center" style={{ border: '1px solid var(--p0-border-strong)', background: 'var(--p0-card)' }}>
+            <Sparkles className="w-3.5 h-3.5" style={{ color: 'var(--p0-accent)' }} />
           </div>
-          <span className="font-display italic text-lg text-ink">your model</span>
+          <span style={{ fontSize: 15, fontWeight: 500, color: 'var(--p0-text-primary)' }}>your model</span>
         </button>
 
         <button
           onClick={handleNewChat}
-          className="flex items-center justify-between h-9 px-3 border border-ink/80 rounded-md bg-paper hover:bg-paper-2 transition-colors"
+          className="flex items-center justify-between h-10 px-3 transition-colors"
+          style={{
+            background: 'var(--p0-card)',
+            border: '1px solid var(--p0-border)',
+            borderRadius: 'var(--p0-radius-card)',
+            color: 'var(--p0-accent)',
+            fontSize: 13,
+            fontWeight: 500,
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--p0-accent-soft)'; e.currentTarget.style.borderColor = 'var(--p0-accent-line)' }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--p0-card)'; e.currentTarget.style.borderColor = 'var(--p0-border)' }}
         >
-          <span className="text-sm text-ink-soft">{t('nav.newChat')}</span>
-          <span className="font-mono text-[10px] text-ink-fade tracking-wider">Ctrl N</span>
+          <span className="inline-flex items-center gap-1.5">
+            <span style={{ fontSize: 14, lineHeight: 1 }}>+</span>
+            {t('nav.newChat')}
+          </span>
         </button>
 
         {/* ★ #13: 全局搜索 */}
         <div className="relative">
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-ink-fade pointer-events-none" />
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 pointer-events-none" style={{ color: 'var(--p0-text-tertiary)' }} />
           <input
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder={t('nav.searchPlaceholder')}
-            className="w-full h-7 pl-7 pr-7 border border-ink-fade/40 rounded-md bg-paper text-xs text-ink outline-none focus:border-ember"
+            className="w-full h-8 pl-7 pr-7 outline-none"
+            style={{
+              background: 'var(--p0-card)',
+              border: '1px solid var(--p0-border)',
+              borderRadius: 'var(--p0-radius-btn)',
+              fontSize: 12,
+              color: 'var(--p0-text-primary)',
+            }}
           />
           {searchQuery && (
             <button
               onClick={() => setSearchQuery('')}
-              className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-ink-fade/20 text-ink-fade"
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded"
+              style={{ color: 'var(--p0-text-tertiary)' }}
               title="清除搜索"
             >
               <X className="w-3 h-3" />
@@ -289,25 +322,7 @@ export default function LeftRail() {
           )}
         </div>
 
-        <div className="flex flex-col gap-0.5 mt-1">
-          {navItems.map((item) => {
-            const isActive = location.pathname === item.path
-            return (
-              <button
-                key={item.path}
-                onClick={() => handleNav(item)}
-                className={`flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-sm transition-colors ${
-                  isActive
-                    ? 'bg-paper-2 border border-ink-fade/50 text-ink'
-                    : 'text-ink-soft hover:bg-paper-2/60'
-                }`}
-              >
-                <item.icon className="w-4 h-4" />
-                {item.label}
-              </button>
-            )
-          })}
-        </div>
+        {/* P0 重做: 顶部 nav tabs 已收纳到“设置抽屉”(齿轮按钮)。 */}
 
         {searchResults ? (
           searchResults.length ? (
@@ -355,16 +370,32 @@ export default function LeftRail() {
 
         <div className="flex-1" />
 
-        <div className="border-t border-dashed border-ink-fade/50 pt-3">
-          <div className="flex items-center gap-2.5">
-            <div className="w-6 h-6 rounded-full border border-ink flex items-center justify-center bg-paper shrink-0">
-              <span className="font-hand text-xs text-ink">{state.user.avatar || '本'}</span>
+        {/* P0 footer: 用户区 + 齿轮入口 */}
+        <div className="pt-3 flex items-center gap-2" style={{ borderTop: '1px solid var(--p0-border)' }}>
+          <div className="flex items-center gap-2.5 flex-1 min-w-0">
+            <div
+              className="w-6 h-6 rounded-full flex items-center justify-center shrink-0"
+              style={{ border: '1px solid var(--p0-border-strong)', background: 'var(--p0-card)' }}
+            >
+              <span style={{ fontSize: 11, color: 'var(--p0-text-primary)' }}>{state.user.avatar || '本'}</span>
             </div>
             <div className="leading-tight flex-1 min-w-0">
-              <span className="text-xs text-ink truncate block">{state.user.name || '本地工作台'}</span>
-              <span className="font-mono text-[9px] tracking-wider text-ink-fade">LOCAL AI WORKBENCH</span>
+              <span className="truncate block" style={{ fontSize: 12, color: 'var(--p0-text-primary)' }}>{state.user.name || '本地工作台'}</span>
+              <span style={{ fontFamily: 'var(--p0-font-mono)', fontSize: 9, letterSpacing: '0.08em', color: 'var(--p0-text-tertiary)' }}>LOCAL AI WORKBENCH</span>
             </div>
           </div>
+          <button
+            type="button"
+            onClick={() => onOpenSettings?.()}
+            aria-label="打开设置"
+            title="设置"
+            className="w-7 h-7 inline-flex items-center justify-center transition-colors"
+            style={{ borderRadius: 'var(--p0-radius-btn)', color: 'var(--p0-text-secondary)' }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--p0-accent-soft)')}
+            onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+          >
+            <Settings className="w-3.5 h-3.5" />
+          </button>
         </div>
       </aside>
 

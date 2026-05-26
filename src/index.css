@@ -2,6 +2,8 @@
 @tailwind components;
 @tailwind utilities;
 
+@import './styles/tokens.css';
+
 :root,
 html[data-theme="light"] {
   /* Full-color variables for direct CSS / inline-style use */

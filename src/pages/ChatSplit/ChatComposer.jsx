@@ -91,7 +91,12 @@ export default function ChatComposer({
 
   return (
     <div
-      className="px-6 pb-6 pt-3 border-t border-dashed border-ink-fade/50 relative"
+      className="px-6 pb-6 pt-3 relative"
+      style={{
+        borderTop: '1px solid var(--p0-border)',
+        background: 'var(--p0-bg)',
+        fontFamily: 'var(--p0-font-sans)',
+      }}
       onDragOver={(e) => {
         e.preventDefault()
         e.dataTransfer.dropEffect = 'copy'
@@ -149,7 +154,15 @@ export default function ChatComposer({
           })}
         </div>
 
-        <div className="border border-ink/70 rounded-md bg-paper flex flex-col justify-between min-h-[80px] p-3.5">
+        <div
+          className="flex flex-col justify-between min-h-[80px] p-3.5"
+          style={{
+            background: 'var(--p0-card)',
+            border: '1px solid var(--p0-border)',
+            borderRadius: 'var(--p0-radius-card)',
+            boxShadow: 'var(--p0-shadow-card)',
+          }}
+        >
           {attachments.length > 0 && (
             <div className="flex flex-wrap gap-2 mb-3">
               {attachments.map((item) => (
@@ -189,6 +202,7 @@ export default function ChatComposer({
           <textarea
             ref={textareaRef}
             value={input}
+            style={{ color: 'var(--p0-text-primary)' }}
             onChange={(e) => {
               const val = e.target.value
               const prev = input
@@ -271,22 +285,48 @@ export default function ChatComposer({
               {isGenerating ? (
                 <button
                   onClick={onAbort}
-                  className="h-8 px-3 rounded-full bg-ember text-paper text-xs font-medium hover:bg-ember/90 transition-colors flex items-center gap-1"
+                  className="h-8 px-3 transition-colors flex items-center gap-1"
+                  style={{
+                    borderRadius: 'var(--p0-radius-pill)',
+                    background: 'var(--p0-accent)',
+                    color: '#FFFFFF',
+                    fontSize: 12,
+                  }}
                 >
                   <Pause className="w-3.5 h-3.5" />
                   停止
                 </button>
-              ) : (
-                <>
-                  <span className="font-mono text-[9px] tracking-wider text-ink-fade">Enter</span>
-                  <button
-                    onClick={onSend}
-                    className="w-8 h-8 rounded-full bg-ink flex items-center justify-center hover:bg-ink-soft transition-colors"
-                  >
-                    <Send className="w-3.5 h-3.5 text-paper" />
-                  </button>
-                </>
-              )}
+              ) : (() => {
+                const canSend = (input || '').trim().length > 0 || (attachments && attachments.length > 0)
+                return (
+                  <>
+                    <span
+                      style={{
+                        fontFamily: 'var(--p0-font-mono)',
+                        fontSize: 10,
+                        letterSpacing: '0.08em',
+                        color: 'var(--p0-text-tertiary)',
+                      }}
+                    >Enter</span>
+                    <button
+                      onClick={onSend}
+                      aria-label="发送"
+                      disabled={!canSend}
+                      className="flex items-center justify-center transition-colors"
+                      style={{
+                        width: 32,
+                        height: 32,
+                        borderRadius: '50%',
+                        background: canSend ? 'var(--p0-accent)' : 'var(--p0-border-strong)',
+                        color: '#FFFFFF',
+                        cursor: canSend ? 'pointer' : 'not-allowed',
+                      }}
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                    </button>
+                  </>
+                )
+              })()}
             </div>
           </div>
         </div>

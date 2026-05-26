@@ -1,6 +1,10 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import LeftRail from '../../components/LeftRail'
+import SettingsDrawer from '../../components/SettingsDrawer'
+import ProjectFilesPane from '../../components/ProjectFilesPane'
+import AgentEmptyState from '../../components/AgentEmptyState'
+import ArtifactPane from '../../components/ArtifactPane'
 import { useAppContext } from '../../store/AppContext'
 import { SKILLS, getSkillSystemPrompt } from '../../data.js'
 import { buildUserContentWithAttachments, describeAttachmentPrompt } from '../../lib/attachments.js'
@@ -107,6 +111,20 @@ export default function ChatSplit() {
   const [showContextPanel, setShowContextPanel] = useState(false)
   const abortCtrlRef = useRef(null)
   const recognitionRef = useRef(null)
+  // P0: 设置抽屉开关
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  // P1: 右栏 activeArtifact —— 为 null 时显 ProjectFilesPane，有值时显 ArtifactPane
+  const [activeArtifact, setActiveArtifact] = useState(null)
+
+  // P1: 聊天里点击 [deck-xxx.pptx] 标记 → 打开 ArtifactPane
+  useEffect(() => {
+    const handler = (e) => {
+      const file = e.detail?.file
+      if (file) setActiveArtifact({ type: 'pptx', file })
+    }
+    window.addEventListener('artifact:open', handler)
+    return () => window.removeEventListener('artifact:open', handler)
+  }, [])
 
   const activeSession = state.sessions.find((s) => s.id === state.activeSessionId)
   // 阶段 6: session sticky agent。优先用 session.agentId，没设则 fallback 全局。
@@ -785,8 +803,9 @@ export default function ChatSplit() {
   const handleAbortTask = () => abortCtrlRef.current?.abort()
 
   return (
-    <div className="h-screen flex bg-paper overflow-hidden">
-      <LeftRail />
+    <div className="p0-shell h-screen flex overflow-hidden" style={{ background: 'var(--p0-bg)', fontFamily: 'var(--p0-font-sans)' }}>
+      <LeftRail onOpenSettings={() => setSettingsOpen(true)} />
+      <SettingsDrawer open={settingsOpen} onClose={() => setSettingsOpen(false)} />
 
       <div className="flex-1 flex flex-col min-w-0">
         <ChatHeader
@@ -830,6 +849,45 @@ export default function ChatSplit() {
           />
         )}
 
+        {messages.length === 0 ? (
+          <AgentEmptyState
+            agentName={effectiveAgent?.name || '默认 Agent'}
+            agentAvatar={effectiveAgent?.avatar || (effectiveAgent?.name?.[0]) || 'A'}
+            workbenchPath={`/projects/${effectiveAgent?.id || 'yma'}`}
+            memoryCount={Array.isArray(effectiveAgent?.memories) ? effectiveAgent.memories.length : 0}
+            askBeforeAction={state.askBeforeAction !== false}
+          >
+            <ChatComposer
+              input={input}
+              setInput={setInput}
+              onSend={handleSend}
+              attachments={attachments}
+              setAttachments={setAttachments}
+              showSlashMenu={showSlashMenu}
+              setShowSlashMenu={setShowSlashMenu}
+              filteredSkills={filteredSkills}
+              selectedIndex={selectedIndex}
+              setSelectedIndex={setSelectedIndex}
+              voiceState={voiceState}
+              setVoiceState={setVoiceState}
+              showContextPanel={showContextPanel}
+              setShowContextPanel={setShowContextPanel}
+              isGenerating={isGenerating}
+              onAbort={handleAbortTask}
+              messages={messages}
+              onFileChange={handleFileChange}
+              onVoiceClick={handleVoice}
+              onContextClick={() => setShowContextPanel((v) => !v)}
+              onQuickSkillClick={(skill) => {
+                if (skill.solid) { navigate('/skills'); return }
+                setInput(skill.command + ' ')
+              }}
+              handleKeyDown={handleKeyDown}
+              skills={runtimeSkills}
+            />
+          </AgentEmptyState>
+        ) : (
+        <>
         <ChatMessages
           messages={messages}
           state={state}
@@ -890,6 +948,8 @@ export default function ChatSplit() {
           promptTemplates={filteredPromptTemplates}
           onPickPromptTemplate={handlePickPromptTemplate}
         />
+        </>
+        )}
       </div>
 
       {state.previewArtifact ? (
@@ -900,7 +960,44 @@ export default function ChatSplit() {
         />
       ) : agentMode === 'code' ? (
         <CodingWorkbench onMessage={setWorkbenchMessage} />
-      ) : null}
+      ) : (
+        <aside
+          className="shrink-0 border-l"
+          style={{ width: 360, borderColor: 'var(--p0-border)', background: 'var(--p0-bg)' }}
+        >
+          {/* P2: ProjectFilesPane 保持 mount (display:none) 避免切回丢滚动 / tab / query */}
+          <div style={{ display: activeArtifact ? 'none' : 'block', height: '100%' }}>
+            <ProjectFilesPane
+              projectName={effectiveAgent?.name ? `项目·${effectiveAgent.name}` : '当前项目'}
+              sessionFiles={(activeSession?.artifacts || []).map((a, i) => ({
+                id: a.id || `s-${i}`,
+                name: a.title || a.name || `生成产物 ${i + 1}`,
+                kind: a.type || 'file',
+                createdAt: a.createdAt || activeSession?.updatedAt || 0,
+              }))}
+              pinnedFiles={[]}
+              onOpen={(f) => {
+                if (f?.id && activeSession?.artifacts) {
+                  const found = activeSession.artifacts.find((a) => a.id === f.id)
+                  if (found) {
+                    dispatch({ type: 'OPEN_PREVIEW_ARTIFACT', payload: { messageId: null, content: found.content || '', preview: found } })
+                  }
+                }
+              }}
+              onOpenProjectSkills={() => navigate('/skills')}
+            />
+          </div>
+          {activeArtifact && (
+            <ArtifactPane
+              artifact={activeArtifact}
+              onClose={() => setActiveArtifact(null)}
+              onDownload={(a) => {
+                setWorkbenchMessage(`正在下载 ${a?.file || 'artifact'} …`)
+              }}
+            />
+          )}
+        </aside>
+      )}
     </div>
   )
 }
