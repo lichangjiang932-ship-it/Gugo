@@ -79,6 +79,16 @@ export default function ChatMessages({
     lastCountRef.current = messages.length
   }, [messages, atBottom])
 
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.location.hash.startsWith('#message-')) return
+    const targetId = decodeURIComponent(window.location.hash.slice(1))
+    const timer = window.setTimeout(() => {
+      const target = document.getElementById(targetId)
+      target?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    }, 80)
+    return () => window.clearTimeout(timer)
+  }, [messages])
+
   const scrollToBottom = () => {
     const el = scrollRef.current
     if (!el) return
@@ -148,6 +158,7 @@ export default function ChatMessages({
               return (
               <motion.div
                 key={msg.id ?? i}
+                id={msg.id ? `message-${msg.id}` : undefined}
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: i * 0.05, duration: 0.35 }}
