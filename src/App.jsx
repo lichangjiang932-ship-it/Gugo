@@ -6,7 +6,6 @@ import ErrorBoundary from './components/ErrorBoundary'
 import { AppLayout } from './components/AppLayout'
 
 const CoverPage = lazy(() => import('./pages/CoverPage'))
-const ChatSplit = lazy(() => import('./pages/ChatSplit'))
 const SkillsMarket = lazy(() => import('./pages/SkillsMarket'))
 const PermissionsDashboard = lazy(() => import('./pages/PermissionsDashboard'))
 const TaskRunPanel = lazy(() => import('./pages/TaskRunPanel'))

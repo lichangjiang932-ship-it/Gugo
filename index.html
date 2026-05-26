@@ -11,6 +11,22 @@
   </head>
   <body>
     <div id="root"></div>
+    <div id="error-log" style="position:fixed;top:0;left:0;right:0;z-index:99999;background:#ef4444;color:white;padding:10px;font-size:12px;display:none;white-space:pre-wrap;max-height:200px;overflow:auto;"></div>
+    <script>
+      window.__errors = [];
+      window.addEventListener('error', function(e) {
+        window.__errors.push(e.error?.stack || e.message);
+        var el = document.getElementById('error-log');
+        if (el) { el.style.display = 'block'; el.textContent = window.__errors.join('\n---\n'); }
+        console.error('Captured:', e.error);
+      });
+      window.addEventListener('unhandledrejection', function(e) {
+        window.__errors.push('Promise rejection: ' + (e.reason?.stack || e.reason));
+        var el = document.getElementById('error-log');
+        if (el) { el.style.display = 'block'; el.textContent = window.__errors.join('\n---\n'); }
+        console.error('Captured promise:', e.reason);
+      });
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

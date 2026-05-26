@@ -138,7 +138,7 @@ export const createChatSlice = (set, get) => ({
 
   // Skills attached to input
   inputSkills: [],
-  setInputSkills: (skills) => set({ inputSkills }),
+  setInputSkills: (skills) => set({ inputSkills: skills }),
   toggleInputSkill: (skill) => set(s => {
     const exists = s.inputSkills.includes(skill);
     return {

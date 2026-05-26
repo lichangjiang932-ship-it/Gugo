@@ -29,13 +29,15 @@ export function useIsStreaming(sessionId) {
 }
 
 export function useSessionMessages(sessionId) {
-  return useStore(s => s.messagesBySession[sessionId] || []);
+  return useStore(s => s.messagesBySession[sessionId] || EMPTY_MESSAGES);
 }
+
+const EMPTY_MESSAGES = [];
 
 export function useCurrentSessionMessages() {
   return useStore(s => {
     const sid = s.currentSessionId;
-    return sid ? (s.messagesBySession[sid] || []) : [];
+    return sid ? (s.messagesBySession[sid] || EMPTY_MESSAGES) : EMPTY_MESSAGES;
   });
 }
 

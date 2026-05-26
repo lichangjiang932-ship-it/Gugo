@@ -77,13 +77,6 @@ function AttachmentChip({ attachment }) {
 }
 
 function MessageActions({ onCopy, onDelete }) {
-  const [showActions, setShowActions] = useStore(s => {
-    // 通过闭包获取，不使用
-    void s;
-    return [false, () => {}];
-  });
-  void showActions;
-
   return (
     <div className="message-actions">
       <button className="msg-action-btn" onClick={onCopy} title="复制">
