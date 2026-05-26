@@ -26,7 +26,9 @@ import { handleCodeSearchRequest } from './utils/codeSearchRoutes.js'
 import { handleAgenticToolRequest } from './utils/agenticToolsRoutes.js'
 import { handleArtifactDownload } from './services/artifactGen.js'
 import { getJobRuntime } from './services/jobRuntime.js'
+import { getCronScheduler } from './services/cronScheduler.js'
 import { handleJobRequest } from './routes/jobRoutes.js'
+import { handleCronRequest } from './routes/cronRoutes.js'
 import { handleSkillRequest } from './routes/skillRoutes.js'
 import { handlePluginRequest } from './routes/pluginRoutes.js'
 import { handleAgentRequest } from './routes/agentRoutes.js'
@@ -136,6 +138,8 @@ function applyMiddlewares(handler) {
 
 function createRouter(getEnv = getRuntimeEnv) {
   const jobRuntime = getJobRuntime()
+  const cronScheduler = getCronScheduler()
+  cronScheduler.start()
   return function router(req, res) {
   // 健康检查
   if (req.url === '/api/health') {
@@ -205,6 +209,10 @@ function createRouter(getEnv = getRuntimeEnv) {
   // 后台任务中心
   if (req.url?.startsWith('/api/jobs')) {
     return handleJobRequest(req, res, jobRuntime)
+  }
+
+  if (req.url?.startsWith('/api/cron-jobs')) {
+    return handleCronRequest(req, res)
   }
 
   if (req.url?.startsWith('/api/notifications')) {
