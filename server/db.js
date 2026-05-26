@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const DB_SCHEMA_VERSION = 9
+export const DB_SCHEMA_VERSION = 10
 
 const DEFAULT_DATA_DIR = path.join(process.cwd(), 'server-data')
 
@@ -62,6 +62,7 @@ function runMigrations(db) {
   if (getSchemaVersionInternal(db) < 7) migrateToV7(db)
   if (getSchemaVersionInternal(db) < 8) migrateToV8(db)
   if (getSchemaVersionInternal(db) < 9) migrateToV9(db)
+  if (getSchemaVersionInternal(db) < 10) migrateToV10(db)
   runReasonixMigrations(db)
 }
 
@@ -506,6 +507,36 @@ function migrateToV9(db) {
     `).run()
   }
   setSchemaVersionInternal(db, 9)
+}
+
+/**
+ * S2: Studio cron + per-agent heartbeat scheduler.
+ */
+function migrateToV10(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS cron_jobs (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+      title TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('heartbeat','cron')),
+      schedule_type TEXT NOT NULL CHECK (schedule_type IN ('at','every','cron')),
+      schedule_value TEXT NOT NULL,
+      exec_type TEXT NOT NULL CHECK (exec_type IN ('agent_session','direct_notify','plugin_action')),
+      exec_payload_json TEXT NOT NULL DEFAULT '{}',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      last_run_at INTEGER,
+      next_run_at INTEGER,
+      last_status TEXT,
+      last_error TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_cron_jobs_user ON cron_jobs(user_id, enabled, next_run_at);
+    CREATE INDEX IF NOT EXISTS idx_cron_jobs_user_agent ON cron_jobs(user_id, agent_id, enabled);
+    CREATE INDEX IF NOT EXISTS idx_cron_jobs_next ON cron_jobs(enabled, next_run_at);
+  `)
+  setSchemaVersionInternal(db, 10)
 }
 
 function initSchema(db) {

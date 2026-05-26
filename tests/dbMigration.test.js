@@ -158,6 +158,7 @@ test('legacy sqlite schema upgrades before creating user-scoped indexes', () => 
     assert.ok(status.tables.includes('memories'))
     assert.ok(status.tables.includes('compaction_archive'))
     assert.ok(status.tables.includes('hooks'))
+    assert.ok(status.tables.includes('cron_jobs'))
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }
