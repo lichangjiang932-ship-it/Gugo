@@ -250,6 +250,10 @@ function now() {
   return Date.now()
 }
 
+export function newSubagentRunId() {
+  return `subagent-${randomUUID()}`
+}
+
 function toRun(row) {
   if (!row) return null
   return {
@@ -306,6 +310,7 @@ export function listSubagentTypes() {
  * 返回结果只包含最终文本，中间步骤不暴露给调用方。
  */
 export async function runSubagent({
+  id = newSubagentRunId(),
   userId,
   type = 'general',
   prompt,
@@ -327,7 +332,6 @@ export async function runSubagent({
   }
   activeByUser.set(userId, active + 1)
 
-  const id = `subagent-${randomUUID()}`
   const trace = [{ type: 'start', description, at: now() }]
   insertRun({ id, userId, type, prompt, parentSessionId, parentMessageId, trace })
 

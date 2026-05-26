@@ -1,0 +1,179 @@
+import { authenticateRequest } from '../middleware.js'
+import { readJson, sendJson } from '../utils.js'
+import {
+  addAgentToChannel,
+  archiveChannel,
+  createChannel,
+  getChannel,
+  listChannels,
+  listMessages,
+  removeAgentFromChannel,
+  subscribeChannelMessages,
+  updateChannel,
+} from '../services/channelStore.js'
+import { dispatchUserMessage } from '../services/channelDispatcher.js'
+
+function unauthorized(res) {
+  return sendJson(res, 401, { ok: false, error: 'Unauthorized' })
+}
+
+function routeParts(pathname) {
+  return pathname.split('/').filter(Boolean)
+}
+
+function sendSse(res, event, data) {
+  res.write(`event: ${event}\n`)
+  res.write(`data: ${JSON.stringify(data)}\n\n`)
+}
+
+function authForSse(req, url) {
+  let userId = authenticateRequest(req)
+  if (!userId) {
+    const queryToken = url.searchParams.get('token')
+    if (queryToken) {
+      req.headers.authorization = `Bearer ${queryToken}`
+      userId = authenticateRequest(req)
+    }
+  }
+  return userId
+}
+
+function statusForError(err) {
+  if (err?.statusCode) return err.statusCode
+  if (/does not belong to user/i.test(err?.message || '')) return 403
+  if (/not found/i.test(err?.message || '')) return 404
+  return 400
+}
+
+export async function handleChannelRequest(req, res) {
+  const url = new URL(req.url, 'http://localhost')
+  const parts = routeParts(url.pathname)
+
+  if (req.method === 'GET' && parts[0] === 'api' && parts[1] === 'channels' && parts[2] && parts[3] === 'stream') {
+    const userId = authForSse(req, url)
+    if (!userId) return unauthorized(res)
+    const channelId = decodeURIComponent(parts[2])
+    const channel = getChannel({ userId, channelId })
+    if (!channel) return sendJson(res, 404, { ok: false, error: 'channel not found' })
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    })
+    sendSse(res, 'ready', { ok: true, channelId })
+    const unsubscribe = subscribeChannelMessages(channelId, (message) => {
+      sendSse(res, 'channel_message', message)
+    })
+    req.on('close', unsubscribe)
+    return undefined
+  }
+
+  const userId = authenticateRequest(req)
+  if (!userId) return unauthorized(res)
+
+  try {
+    if (req.method === 'GET' && url.pathname === '/api/channels') {
+      const channels = listChannels({
+        userId,
+        archived: url.searchParams.get('archived') || 'false',
+        limit: url.searchParams.get('limit') || 200,
+        offset: url.searchParams.get('offset') || 0,
+      })
+      return sendJson(res, 200, { ok: true, channels })
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/channels') {
+      const body = await readJson(req)
+      const channel = createChannel({
+        userId,
+        name: body.name,
+        kind: body.kind || 'group',
+        agentIds: Array.isArray(body.agentIds) ? body.agentIds : [],
+        defaultAgentId: body.defaultAgentId || body.default_agent_id || null,
+      })
+      return sendJson(res, 200, { ok: true, channel })
+    }
+
+    if (parts[0] === 'api' && parts[1] === 'channels' && parts[2]) {
+      const channelId = decodeURIComponent(parts[2])
+
+      if (req.method === 'GET' && parts.length === 3) {
+        const channel = getChannel({ userId, channelId })
+        return channel
+          ? sendJson(res, 200, { ok: true, channel })
+          : sendJson(res, 404, { ok: false, error: 'channel not found' })
+      }
+
+      if (req.method === 'PATCH' && parts.length === 3) {
+        const body = await readJson(req)
+        const patch = {}
+        if ('name' in body) patch.name = body.name
+        if ('defaultAgentId' in body || 'default_agent_id' in body) {
+          patch.defaultAgentId = body.defaultAgentId ?? body.default_agent_id ?? null
+        }
+        if ('archived' in body) patch.archived = body.archived
+        const channel = updateChannel({
+          userId,
+          channelId,
+          patch,
+        })
+        return sendJson(res, 200, { ok: true, channel })
+      }
+
+      if (req.method === 'DELETE' && parts.length === 3) {
+        const channel = archiveChannel({ userId, channelId, archived: true })
+        return sendJson(res, 200, { ok: true, channel })
+      }
+
+      if (parts[3] === 'agents') {
+        if (req.method === 'POST' && parts.length === 4) {
+          const body = await readJson(req)
+          const channel = addAgentToChannel({
+            userId,
+            channelId,
+            agentId: body.agentId,
+            role: body.role || 'member',
+          })
+          return sendJson(res, 200, { ok: true, channel })
+        }
+
+        if (req.method === 'DELETE' && parts[4]) {
+          const result = removeAgentFromChannel({
+            userId,
+            channelId,
+            agentId: decodeURIComponent(parts[4]),
+          })
+          return result.removed
+            ? sendJson(res, 200, { ok: true, channel: result.channel })
+            : sendJson(res, 404, { ok: false, error: 'agent membership not found' })
+        }
+      }
+
+      if (parts[3] === 'messages') {
+        if (req.method === 'GET') {
+          const messages = listMessages({
+            userId,
+            channelId,
+            limit: url.searchParams.get('limit') || 50,
+            before: url.searchParams.get('before') || null,
+          })
+          return sendJson(res, 200, { ok: true, messages })
+        }
+
+        if (req.method === 'POST') {
+          const body = await readJson(req)
+          const result = await dispatchUserMessage({
+            channelId,
+            userId,
+            text: body.content ?? body.body ?? '',
+          })
+          return sendJson(res, 200, { ok: true, messageId: result.messageId, jobIds: result.jobIds })
+        }
+      }
+    }
+
+    return sendJson(res, 404, { ok: false, error: 'not found' })
+  } catch (err) {
+    return sendJson(res, statusForError(err), { ok: false, error: err?.message || String(err) })
+  }
+}
