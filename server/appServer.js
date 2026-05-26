@@ -24,7 +24,7 @@ import { handleFsShellRequest } from './adapters/fsShellTools.js'
 import { handleGitWorkbenchRequest } from './adapters/gitWorkbench.js'
 import { handleCodeSearchRequest } from './utils/codeSearchRoutes.js'
 import { handleAgenticToolRequest } from './utils/agenticToolsRoutes.js'
-import { handleArtifactDownload } from './services/artifactGen.js'
+import { handleArtifactDownload, handleArtifactSlides, handleArtifactRender } from './services/artifactGen.js'
 import { getJobRuntime } from './services/jobRuntime.js'
 import { handleJobRequest } from './routes/jobRoutes.js'
 import { handleSkillRequest } from './routes/skillRoutes.js'
@@ -194,8 +194,14 @@ function createRouter(getEnv = getRuntimeEnv) {
     return handleToolProxyRequest(req, res)
   }
 
-  // 产物下载
+  // 产物下载 / slides 解析 / render PNG
   if (req.url?.startsWith('/api/artifacts/')) {
+    if (/^\/api\/artifacts\/[^/?#]+\/slides/.test(req.url)) {
+      return handleArtifactSlides(req, res)
+    }
+    if (/^\/api\/artifacts\/[^/?#]+\/render(?:\?|$)/.test(req.url)) {
+      return handleArtifactRender(req, res)
+    }
     return handleArtifactDownload(req, res)
   }
 
