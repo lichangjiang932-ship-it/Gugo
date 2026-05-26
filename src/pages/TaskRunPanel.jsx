@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { Activity, CheckCircle2, Clock3, LayoutList, PauseCircle, RotateCcw, Eye } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
 import TaskArtifactPreview from './TaskArtifactPreview.jsx'
+import { useToast } from '../components/Toast.jsx'
+import { useT } from '../i18n/I18nProvider.jsx'
 import {
   cancelJob,
   createJob,
@@ -61,6 +63,8 @@ function StepDot({ status }) {
 }
 
 export default function TaskRunPanel() {
+  const toast = useToast()
+  const { t } = useT()
   const [prompt, setPrompt] = useState('')
   const [jobs, setJobs] = useState([])
   const [selectedJobId, setSelectedJobId] = useState(null)
@@ -142,6 +146,7 @@ export default function TaskRunPanel() {
       setSelectedJob(job)
     } catch (err) {
       setError(err.message)
+      toast.error({ title: t('toast.chatSendFailed'), body: err.message })
     } finally {
       setSubmitting(false)
     }
@@ -149,9 +154,14 @@ export default function TaskRunPanel() {
 
   async function handleCancel() {
     if (!selectedJob) return
-    const { job } = await cancelJob(selectedJob.id)
-    setSelectedJob(job)
-    setJobs((current) => current.map((item) => item.id === job.id ? job : item))
+    try {
+      const { job } = await cancelJob(selectedJob.id)
+      setSelectedJob(job)
+      setJobs((current) => current.map((item) => item.id === job.id ? job : item))
+    } catch (err) {
+      setError(err.message)
+      toast.error({ title: t('toast.jobAbortFailed'), body: err.message })
+    }
   }
 
   async function handleRetry() {

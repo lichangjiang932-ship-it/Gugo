@@ -19,6 +19,8 @@ import ChatComposer from './ChatComposer'
 import RightPreviewPane from './RightPreviewPane'
 import CodingWorkbench from './CodingWorkbench'
 import TodoTracker from '../../components/TodoTracker'
+import { useToast } from '../../components/Toast.jsx'
+import { useT } from '../../i18n/I18nProvider.jsx'
 import { buildArtifactPreview } from '../../lib/artifactPreview.js'
 import { exportSession } from '../../lib/sessionExport.js'
 import { compressImageDataUrl } from '../../lib/imageCompress.js'
@@ -83,6 +85,8 @@ async function readExcelAsText(file) {
 export default function ChatSplit() {
   const navigate = useNavigate()
   const { state, dispatch } = useAppContext()
+  const toast = useToast()
+  const { t } = useT()
   const { activeAgentId: globalActiveAgentId, activeAgent: globalActiveAgent, agents, setActiveAgentId } = useActiveAgent()
   const [input, setInput] = useState('')
   const [modelOptions, setModelOptions] = useState([])
@@ -271,6 +275,7 @@ export default function ChatSplit() {
 
       if (!isLoggedInLocally()) {
         dispatch({ type: 'RECEIVE_MESSAGE', payload: '请登录账户' })
+        toast.error(t('errors.loginRequired'))
         return
       }
 
@@ -533,6 +538,10 @@ export default function ChatSplit() {
           return
         }
         if (import.meta.env.DEV) console.error('Model call failed:', err)
+        toast.error({
+          title: t('toast.chatSendFailed'),
+          body: err.message,
+        })
         setLastFailedPrompt(content)
         dispatch({ type: 'APPEND_TO_LAST_MESSAGE', payload: buildChatFailureMessage(err.message) })
         dispatch({ type: 'ADD_HISTORY', payload: { name: taskName, skill: skill?.name || '通用对话', status: HISTORY_STATUS.FAILED, detail: content.length > 60 ? `${content.slice(0, 60)}...` : content, state: `失败: ${err.message}`.slice(0, 80), date: Date.now() } })
@@ -543,7 +552,7 @@ export default function ChatSplit() {
     },
     // ★ #27: 细粒度 deps,只收 triggerSendFlow body 里实际读的字段;
     //         避免依赖整个 state 导致每次 sessionDrafts/tasks 变都重建 callback
-    [attachments, dispatch, isGenerating, modelOptions, selectedModel, toolMaxRounds, runtimeSkills, agentMode,
+    [attachments, dispatch, isGenerating, modelOptions, selectedModel, toolMaxRounds, runtimeSkills, agentMode, effectiveAgentId, toast, t,
       state.activeSessionId, state.sessions, state.toolsConfig, state.permissions, state.skillConfigs]
   )
 
