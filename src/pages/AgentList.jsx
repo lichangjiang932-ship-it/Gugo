@@ -9,6 +9,8 @@ import {
   updateAgentApi,
   deleteAgentApi,
   getDefaultAgentApi,
+  listAgentTemplatesApi,
+  getAgentTemplateApi,
   exportAgentUrl,
   exportAgentZipUrl,
   importAgentApi,
@@ -17,17 +19,21 @@ import {
 import { listPluginsApi, getPluginApi } from '../lib/pluginClient.js'
 
 function emptyAgent() {
-  return { id: '', name: '', soulMd: '', identityMd: '', avatarUrl: '', isDefault: false }
+  return { id: '', name: '', soulMd: '', identityMd: '', personaTemplate: '', avatarUrl: '', isDefault: false }
 }
 
 export default function AgentList() {
-  const { t } = useT()
+  const { t, lang } = useT()
   const { refresh: refreshActiveAgent } = useActiveAgent()
   const [agents, setAgents] = useState([])
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
   const [editing, setEditing] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [personaTemplates, setPersonaTemplates] = useState([])
+  const [personaDraftId, setPersonaDraftId] = useState('')
+  const [personaPreview, setPersonaPreview] = useState(null)
+  const [personaLoading, setPersonaLoading] = useState(false)
 
   const reload = async () => {
     setLoading(true)
@@ -54,18 +60,62 @@ export default function AgentList() {
   useEffect(() => {
     const timer = window.setTimeout(() => { reload() }, 0)
     return () => window.clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const handleNew = () => setEditing(emptyAgent())
+  const templateLang = () => (lang === 'en' ? 'en' : 'zh')
 
-  const handleEdit = (a) => setEditing({
-    id: a.id,
-    name: a.name,
-    soulMd: a.soulMd || '',
-    identityMd: a.identityMd || '',
-    avatarUrl: a.avatarUrl || '',
-    isDefault: !!a.isDefault,
-  })
+  const loadPersonaTemplates = async () => {
+    try {
+      const data = await listAgentTemplatesApi({ lang: templateLang() })
+      setPersonaTemplates(data.templates || [])
+    } catch (e) {
+      setErr(e.message || t('errors.loadFailed'))
+    }
+  }
+
+  const loadPersonaPreview = async (id) => {
+    if (!id) {
+      setPersonaPreview(null)
+      return
+    }
+    setPersonaLoading(true)
+    try {
+      const data = await getAgentTemplateApi(id, { lang: templateLang() })
+      setPersonaPreview(data.template || null)
+    } catch (e) {
+      setPersonaPreview(null)
+      setErr(e.message || t('errors.loadFailed'))
+    } finally {
+      setPersonaLoading(false)
+    }
+  }
+
+  const handleNew = () => {
+    setEditing(emptyAgent())
+    setPersonaDraftId('')
+    setPersonaPreview(null)
+    setPersonaLoading(false)
+    loadPersonaTemplates()
+  }
+
+  const handleEdit = (a) => {
+    const personaTemplate = a.personaTemplate || ''
+    setEditing({
+      id: a.id,
+      name: a.name,
+      soulMd: a.soulMd || '',
+      identityMd: a.identityMd || '',
+      personaTemplate,
+      avatarUrl: a.avatarUrl || '',
+      isDefault: !!a.isDefault,
+    })
+    setPersonaDraftId(personaTemplate)
+    setPersonaPreview(null)
+    setPersonaLoading(false)
+    loadPersonaTemplates()
+    if (personaTemplate) loadPersonaPreview(personaTemplate)
+  }
 
   const handleSave = async () => {
     if (!editing) return
@@ -80,6 +130,7 @@ export default function AgentList() {
         name: editing.name.trim(),
         soulMd: editing.soulMd,
         identityMd: editing.identityMd,
+        personaTemplate: editing.personaTemplate || '',
         avatarUrl: editing.avatarUrl || null,
         isDefault: editing.isDefault,
       }
@@ -189,6 +240,16 @@ export default function AgentList() {
     } catch (e) {
       setErr(e.message || t('errors.loadFailed'))
     }
+  }
+
+  const handlePersonaSelect = (id) => {
+    setPersonaDraftId(id)
+    loadPersonaPreview(id)
+  }
+
+  const handleApplyPersonaTemplate = () => {
+    if (!editing) return
+    setEditing({ ...editing, personaTemplate: personaDraftId || '' })
   }
 
   const handleExport = async (a) => {
@@ -325,6 +386,11 @@ export default function AgentList() {
                           <Star size={10} /> {t('agents.defaultBadge')}
                         </span>
                       )}
+                      {a.personaTemplate && (
+                        <span className="inline-flex items-center gap-1 text-xs text-ink-fade bg-ink/5 px-2 py-0.5 rounded">
+                          <Sparkles size={10} /> {a.personaTemplate}
+                        </span>
+                      )}
                     </div>
                     <div className="text-xs text-ink-fade mt-1 line-clamp-1">
                       {(a.soulMd || '').slice(0, 120) || t('agents.noSoul')}
@@ -377,6 +443,55 @@ export default function AgentList() {
                       placeholder="Atelier"
                       maxLength={80}
                     />
+                  </div>
+                  <div className="border border-ink/10 rounded-md p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <label className="block text-xs font-medium text-ink-fade">{t('agents.fieldPersonaTemplate')}</label>
+                      <span className="text-xs text-ink-fade">
+                        {editing.personaTemplate
+                          ? t('agents.personaApplied', { id: editing.personaTemplate })
+                          : t('agents.personaNotApplied')}
+                      </span>
+                    </div>
+                    <div className="flex gap-2">
+                      <select
+                        value={personaDraftId}
+                        onChange={(e) => handlePersonaSelect(e.target.value)}
+                        className="flex-1 px-3 py-2 border border-ink/15 rounded bg-canvas text-ink text-sm"
+                      >
+                        <option value="">{t('agents.personaTemplateNone')}</option>
+                        {personaTemplates.map((tpl) => (
+                          <option key={tpl.id} value={tpl.id}>{tpl.label || tpl.name}</option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={handleApplyPersonaTemplate}
+                        disabled={personaLoading || personaDraftId === (editing.personaTemplate || '')}
+                        className="inline-flex items-center gap-2 px-3 py-2 border border-ink/15 rounded text-sm hover:bg-ink/5 disabled:opacity-50"
+                      >
+                        <Sparkles size={14} /> {t('agents.personaApply')}
+                      </button>
+                    </div>
+                    {personaLoading ? (
+                      <p className="text-sm text-ink-fade">{t('common.loading')}</p>
+                    ) : personaPreview ? (
+                      <div className="space-y-2">
+                        <div className="text-xs text-ink-fade">
+                          {personaPreview.description || t('agents.personaPreview')}
+                        </div>
+                        <div className="grid gap-2">
+                          {(personaPreview.sections || []).slice(0, 5).map((section) => (
+                            <section key={section.title} className="border border-ink/10 rounded p-3 bg-paper-2/40">
+                              <div className="text-xs font-semibold text-ink mb-1">{section.title}</div>
+                              <pre className="text-xs leading-relaxed whitespace-pre-wrap break-words font-mono text-ink-fade">{section.body}</pre>
+                            </section>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-ink-fade">{t('agents.personaPreview')}</p>
+                    )}
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-ink-fade mb-1">{t('agents.fieldSoul')}</label>

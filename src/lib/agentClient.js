@@ -35,6 +35,18 @@ export async function getAgentApi(id) {
   return jsonOk(resp)
 }
 
+export async function listAgentTemplatesApi({ lang = 'zh' } = {}) {
+  const qs = lang ? `?lang=${encodeURIComponent(lang)}` : ''
+  const resp = await fetch(`/api/agent-templates${qs}`)
+  return jsonOk(resp)
+}
+
+export async function getAgentTemplateApi(id, { lang = 'zh' } = {}) {
+  const qs = lang ? `?lang=${encodeURIComponent(lang)}` : ''
+  const resp = await fetch(`/api/agent-templates/${encodeURIComponent(id)}${qs}`)
+  return jsonOk(resp)
+}
+
 export async function createAgentApi(payload) {
   const resp = await fetch('/api/agents', {
     method: 'POST',
