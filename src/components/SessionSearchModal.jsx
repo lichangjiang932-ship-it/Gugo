@@ -96,7 +96,11 @@ export default function SessionSearchModal() {
   const localResults = useMemo(() => buildLocalResults(state.sessions, query), [state.sessions, query])
 
   useEffect(() => {
-    const openSearch = () => setOpen(true)
+    const openSearch = (event) => {
+      const nextQuery = event?.detail?.query
+      if (typeof nextQuery === 'string') setQuery(nextQuery)
+      setOpen(true)
+    }
     const onKey = (event) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()

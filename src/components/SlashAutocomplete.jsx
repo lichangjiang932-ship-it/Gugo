@@ -1,90 +1,106 @@
-/**
- * SlashAutocomplete — Phase 2 S4
- *
- * 把斜杠菜单从 ChatComposer 里抽出来，独立组件好测试也好扩展。
- * 现在支持两种条目：
- *   - kind:'skill'           → 内置技能 / 用户安装技能
- *   - kind:'prompt-template' → type='prompt-template' 的 plugin
- *
- * 选中 skill 时回调 onPickSkill(skill)；选中 template 时回调 onPickPromptTemplate(tpl)。
- * 调用方负责真正的副作用（prefill input / fetch template content / etc）。
- */
-import { motion } from 'framer-motion'
-import { FileText } from 'lucide-react'
-import { SKILL_ICONS } from '../lib/skillIcons.js'
+import { useEffect, useMemo, useState } from 'react'
+import { Command, FileText, Wand2 } from 'lucide-react'
+import { useT } from '../i18n/I18nProvider.jsx'
+import {
+  clampSlashIndex,
+  getSlashAutocompleteItems,
+  handleSlashAutocompleteKeyDown,
+} from './slashAutocompleteLogic.js'
+
+function labelForSource(entry, t) {
+  if (entry.kind === 'skill') return t('slash.sourceSkill')
+  return entry.source === 'plugin' ? t('slash.sourcePlugin') : t('slash.sourceCore')
+}
+
+function iconForEntry(entry) {
+  if (entry.source === 'plugin') return FileText
+  if (entry.kind === 'skill') return Wand2
+  return Command
+}
 
 export default function SlashAutocomplete({
-  visible,
-  items,
+  value,
+  registry,
+  visible = true,
   selectedIndex,
   setSelectedIndex,
-  onPickSkill,
-  onPickPromptTemplate,
+  onPick,
+  onComplete,
   onDismiss,
 }) {
-  if (!visible) return null
-  if (!items || items.length === 0) return null
+  const { t } = useT()
+  const items = useMemo(
+    () => getSlashAutocompleteItems({ value, registry }),
+    [value, registry],
+  )
+  const [localIndex, setLocalIndex] = useState(0)
+  const activeIndex = selectedIndex ?? localIndex
+  const updateIndex = setSelectedIndex || setLocalIndex
+
+  useEffect(() => {
+    updateIndex(0)
+  }, [value, items.length]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!visible || items.length === 0) return null
+
+  const safeIndex = clampSlashIndex(activeIndex, items.length)
+
+  const pickItem = (item) => {
+    if (!item) return
+    onPick?.(item)
+  }
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-start justify-center pt-[30vh] bg-black/20"
-      onClick={onDismiss}
+    <div
+      className="absolute left-6 right-6 bottom-[calc(100%-0.5rem)] z-50 flex justify-center pointer-events-none"
       data-testid="slash-autocomplete-overlay"
+      tabIndex={-1}
+      onKeyDown={(event) => handleSlashAutocompleteKeyDown(event, {
+        items,
+        selectedIndex: safeIndex,
+        setSelectedIndex: updateIndex,
+        onPick: pickItem,
+        onDismiss,
+        onComplete,
+      })}
     >
-      <motion.div
-        initial={{ opacity: 0, y: 8, scale: 0.98 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={{ opacity: 0, y: 8, scale: 0.98 }}
-        transition={{ duration: 0.2 }}
-        className="w-[480px] max-h-[360px] overflow-y-auto rounded-xl shadow-2xl border border-ink-fade/50 bg-paper p-2"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="px-2 py-1.5 font-mono text-[9px] tracking-wider text-ink-fade uppercase">
-          选择技能 / 模板
+      <div className="w-full max-w-xl max-h-[340px] overflow-y-auto rounded-md shadow-xl border border-ink-fade/50 bg-paper p-2 pointer-events-auto">
+        <div className="px-2 py-1.5 font-mono text-[10px] tracking-wide text-ink-fade uppercase">
+          {t('slash.menuLabel')}
         </div>
-        {items.map((item, i) => {
-          const isTpl = item.kind === 'prompt-template'
-          const Icon = isTpl ? FileText : SKILL_ICONS[item.id]
-          const selected = i === selectedIndex
+        {items.map((item, index) => {
+          const selected = index === safeIndex
+          const Icon = iconForEntry(item)
           return (
             <button
-              key={`${item.kind}:${item.id}`}
+              key={`${item.source}:${item.name}:${item.kind || 'command'}`}
               type="button"
-              onClick={() => {
-                if (isTpl) onPickPromptTemplate?.(item.raw)
-                else onPickSkill?.(item.raw)
-              }}
-              onMouseEnter={() => setSelectedIndex?.(i)}
+              onClick={() => pickItem(item)}
+              onMouseEnter={() => updateIndex(index)}
               className={
-                'w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-colors ' +
+                'w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-left transition-colors ' +
                 (selected ? 'bg-ember-soft' : 'hover:bg-paper-2')
               }
-              data-kind={item.kind}
-              data-id={item.id}
+              aria-selected={selected}
+              data-testid="slash-autocomplete-item"
+              data-source={item.source}
+              data-name={item.name}
             >
-              {Icon ? <Icon className="w-5 h-5 text-ink-fade" /> : null}
-              <div className="flex-1 min-w-0">
+              <Icon className="w-4 h-4 text-ink-fade shrink-0" />
+              <div className="min-w-0 flex-1">
                 <div className={'text-sm font-medium ' + (selected ? 'text-ember' : 'text-ink')}>
-                  {item.name}
+                  /{item.name}
+                  {item.hint ? <span className="ml-1 text-xs font-normal text-ink-fade">{item.hint}</span> : null}
                 </div>
-                <div className="text-xs text-ink-fade truncate">{item.desc}</div>
+                <div className="text-xs text-ink-fade truncate">{item.description}</div>
               </div>
-              {isTpl ? (
-                <span className="font-mono text-[9px] text-ink-fade bg-paper-2 px-1.5 py-0.5 rounded border border-ink-fade/40">
-                  模板
-                </span>
-              ) : item.recommended ? (
-                <span className="font-mono text-[9px] text-ember bg-ember-soft px-1.5 py-0.5 rounded">
-                  推荐
-                </span>
-              ) : null}
+              <span className="font-mono text-[10px] text-ink-fade bg-paper-2 px-1.5 py-0.5 rounded border border-ink-fade/40 shrink-0">
+                {labelForSource(item, t)}
+              </span>
             </button>
           )
         })}
-      </motion.div>
-    </motion.div>
+      </div>
+    </div>
   )
 }

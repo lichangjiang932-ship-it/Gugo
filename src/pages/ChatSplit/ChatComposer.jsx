@@ -1,8 +1,7 @@
-import { useRef, useEffect, useState, useMemo } from 'react'
+import { useRef, useEffect, useState } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import FullscreenMediaModal from '../../components/FullscreenMediaModal.jsx'
 import SlashAutocomplete from '../../components/SlashAutocomplete.jsx'
-import { buildSlashItems } from '../../components/slashItems.js'
 import {
   Paperclip,
   Mic,
@@ -29,7 +28,6 @@ export default function ChatComposer({
   setAttachments,
   showSlashMenu,
   setShowSlashMenu,
-  filteredSkills,
   selectedIndex,
   setSelectedIndex,
   voiceState,
@@ -43,8 +41,9 @@ export default function ChatComposer({
   onQuickSkillClick,
   handleKeyDown,
   skills,
-  promptTemplates = [],
-  onPickPromptTemplate,
+  slashRegistry,
+  onPickSlashCommand,
+  onCompleteSlashCommand,
 }) {
   const textareaRef = useRef(null)
   const fileInputRef = useRef(null)
@@ -82,13 +81,6 @@ export default function ChatComposer({
 
   const [fullscreenSrc, setFullscreenSrc] = useState(null)
 
-  // Phase 2 S4: 把当前 slash query 跟 prompt-templates 合并到统一 items 数组
-  const slashQuery = input.startsWith('/') && !input.includes(' ') ? input.slice(1) : ''
-  const slashItems = useMemo(
-    () => buildSlashItems({ skills: filteredSkills, promptTemplates, query: slashQuery }),
-    [filteredSkills, promptTemplates, slashQuery],
-  )
-
   return (
     <div
       className="px-6 pb-6 pt-3 border-t border-dashed border-ink-fade/50 relative"
@@ -104,20 +96,19 @@ export default function ChatComposer({
     >
       {/* Slash menu overlay (Phase 2 S4: SlashAutocomplete 抽离) */}
       <AnimatePresence>
-        {showSlashMenu && slashItems.length > 0 && (
+        {showSlashMenu && (
           <SlashAutocomplete
-            visible
-            items={slashItems}
+            visible={showSlashMenu}
+            value={input}
+            registry={slashRegistry}
             selectedIndex={selectedIndex}
             setSelectedIndex={setSelectedIndex}
-            onPickSkill={(skill) => {
-              setInput('/' + skill.id + ' ')
-              setShowSlashMenu(false)
+            onPick={(entry) => {
+              onPickSlashCommand?.(entry)
               setTimeout(() => textareaRef.current?.focus(), 0)
             }}
-            onPickPromptTemplate={(tpl) => {
-              setShowSlashMenu(false)
-              onPickPromptTemplate?.(tpl)
+            onComplete={(entry) => {
+              onCompleteSlashCommand?.(entry)
               setTimeout(() => textareaRef.current?.focus(), 0)
             }}
             onDismiss={() => setShowSlashMenu(false)}
@@ -202,10 +193,8 @@ export default function ChatComposer({
               const shouldShow = (v) => {
                 if (!v.startsWith('/') || v.includes(' ')) return false
                 const q = v.slice(1).toLowerCase()
-                if (!q) return true
-                if (skills.some((s) => s.id.toLowerCase().includes(q) || s.name.toLowerCase().includes(q))) return true
-                if (promptTemplates.some((p) => String(p.id || '').toLowerCase().includes(q) || String(p.name || '').toLowerCase().includes(q))) return true
-                return false
+                if (slashRegistry?.listCommands?.({ query: q }).length) return true
+                return skills.some((s) => s.id.toLowerCase().includes(q) || s.name.toLowerCase().includes(q))
               }
 
               const nowShow = shouldShow(val)
