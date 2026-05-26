@@ -1,0 +1,133 @@
+/*
+ * P0 三列 IA 设计令牌
+ * 对标 Claude.ai / chatgpt.com / codex web 的"舒服"观感。
+ * 写一次定死,后续组件只引用 var(--*),不再 hardcode 颜色/字号。
+ *
+ * 注意:本文件**不**覆盖现存 --color-* 变量,只新增 P0 专用 token。
+ * 旧组件保持 ember/ink 主题不破;新 AppShell / 三列壳读这套。
+ */
+
+:root {
+  /* ========== 颜色 ========== */
+  --p0-bg: #F5F5F5;              /* 主背景,暖灰 */
+  --p0-card: #FFFFFF;             /* 卡 / 白底块 */
+  --p0-card-hover: #FAFAFA;       /* 卡 hover */
+  --p0-border: #E8E5E1;           /* 默认边框 */
+  --p0-border-strong: #D8D5D1;    /* 加强边框 */
+  --p0-text-primary: #1F1F1F;     /* 主文本 */
+  --p0-text-secondary: #888888;   /* 次文本 / placeholder */
+  --p0-text-tertiary: #B0B0B0;    /* 弱文本 / hint */
+  --p0-accent: #D97757;           /* 暖橙(Claude orange-ish) */
+  --p0-accent-hover: #C66744;
+  --p0-accent-soft: rgba(217, 119, 87, 0.08);   /* hover 背景 */
+  --p0-accent-line: rgba(217, 119, 87, 0.35);   /* 描边 */
+
+  /* ========== 圆角 ========== */
+  --p0-radius-card: 12px;
+  --p0-radius-btn: 8px;
+  --p0-radius-pill: 999px;
+
+  /* ========== 间距(都 >=16px) ========== */
+  --p0-gap-xs: 8px;
+  --p0-gap-sm: 12px;
+  --p0-gap-md: 16px;
+  --p0-gap-lg: 24px;
+  --p0-gap-xl: 32px;
+
+  /* ========== 字体 ========== */
+  --p0-font-sans: 'Noto Sans SC', 'PingFang SC', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+  --p0-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* ========== 阴影(克制) ========== */
+  --p0-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --p0-shadow-pop: 0 4px 16px rgba(0, 0, 0, 0.08);
+}
+
+/* ========== P3 微交互 ========== */
+
+/* 流式光标: 暖橙 2px × 1em, 0.8s opacity blink */
+@keyframes p0BlinkCursor {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+.p0-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: var(--p0-accent);
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  animation: p0BlinkCursor 0.8s steps(1, end) infinite;
+}
+
+/* 骨架屏 shimmer: 走 transform translateX, 不动 left/width */
+@keyframes p0Shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+.p0-shimmer {
+  background: var(--p0-card);
+  overflow: hidden;
+  position: relative;
+}
+.p0-shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    rgba(232, 229, 225, 0) 0%,
+    rgba(232, 229, 225, 0.6) 50%,
+    rgba(232, 229, 225, 0) 100%
+  );
+  animation: p0Shimmer 1.4s linear infinite;
+  will-change: transform;
+}
+
+/* prefers-reduced-motion / data-animations=false: 禁掉动画 */
+@media (prefers-reduced-motion: reduce) {
+  .p0-cursor { animation: none; opacity: 1; }
+  .p0-shimmer::after { animation: none; }
+}
+html[data-animations="false"] .p0-cursor { animation: none; opacity: 1; }
+html[data-animations="false"] .p0-shimmer::after { animation: none; }
+
+/* ========== 工具类 ========== */
+
+.p0-shell {
+  background: var(--p0-bg);
+  color: var(--p0-text-primary);
+  font-family: var(--p0-font-sans);
+}
+
+.p0-card {
+  background: var(--p0-card);
+  border: 1px solid var(--p0-border);
+  border-radius: var(--p0-radius-card);
+}
+
+.p0-btn-primary {
+  background: var(--p0-accent);
+  color: #FFFFFF;
+  border-radius: var(--p0-radius-btn);
+  padding: 8px 14px;
+  font-size: 13px;
+  transition: background 120ms ease;
+}
+.p0-btn-primary:hover { background: var(--p0-accent-hover); }
+
+.p0-btn-ghost {
+  background: transparent;
+  color: var(--p0-text-primary);
+  border-radius: var(--p0-radius-btn);
+  padding: 6px 10px;
+  font-size: 13px;
+  transition: background 120ms ease;
+}
+.p0-btn-ghost:hover { background: var(--p0-accent-soft); }
+
+.p0-divider {
+  height: 1px;
+  background: var(--p0-border);
+  margin: var(--p0-gap-md) 0;
+}
