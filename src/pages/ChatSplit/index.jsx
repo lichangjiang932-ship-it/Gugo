@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import LeftRail from '../../components/LeftRail'
 import { useAppContext } from '../../store/AppContext'
@@ -11,6 +11,9 @@ import { isLoggedInLocally } from '../../lib/accountClient.js'
 import { useActiveAgent } from '../../agents/activeAgentContext.js'
 import { listSkills } from '../../lib/skillClient.js'
 import { listPromptTemplatesApi, getPromptTemplateContentApi, renderPromptTemplate } from '../../lib/pluginClient.js'
+import { createSlashCommandRegistry, normalizeSlashCommandName, parseSlashCommandInput } from '../../lib/slashCommandRegistry.js'
+import { CORE_SLASH_COMMANDS, registerCoreSlashCommands } from '../../lib/slashCoreCommands.js'
+import { handleSlashAutocompleteKeyDown } from '../../components/slashAutocompleteLogic.js'
 import { inferSkillIdFromPrompt, parseSkillCommand } from '../../lib/skillCommands.js'
 import { TASK_STATUS, TOOL_CALL_STATUS, HISTORY_STATUS } from '../../store/taskStatus.js'
 import ChatHeader from './ChatHeader'
@@ -39,6 +42,11 @@ const MAX_RAW_IMAGE_BYTES = 16 * 1024 * 1024
 const MAX_IMAGES_PER_MESSAGE = 5
 const MAX_TEXT_BYTES = 256 * 1024
 const EMPTY_MESSAGES = []
+
+function promptTemplateCommandName(tpl) {
+  const byName = normalizeSlashCommandName(tpl?.name)
+  return byName || normalizeSlashCommandName(tpl?.id)
+}
 
 function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -111,6 +119,7 @@ export default function ChatSplit() {
   const [showContextPanel, setShowContextPanel] = useState(false)
   const abortCtrlRef = useRef(null)
   const recognitionRef = useRef(null)
+  const stateRef = useRef(state)
 
   const activeSession = state.sessions.find((s) => s.id === state.activeSessionId)
   // 阶段 6: session sticky agent。优先用 session.agentId，没设则 fallback 全局。
@@ -120,6 +129,57 @@ export default function ChatSplit() {
   const messages = activeSession?.messages ?? EMPTY_MESSAGES
   const tasks = state.tasks
   const agentMode = state.agentMode || 'chat'
+  useEffect(() => {
+    stateRef.current = state
+  }, [state])
+
+  const slashRegistry = useMemo(() => {
+    const registry = createSlashCommandRegistry()
+    registerCoreSlashCommands(registry, { t })
+    for (const skill of runtimeSkills || []) {
+      if (!skill?.id) continue
+      const name = normalizeSlashCommandName(skill.id)
+      if (!name || CORE_SLASH_COMMANDS.includes(name)) continue
+      registry.register({
+        name,
+        description: skill.name || skill.desc || skill.description || skill.id,
+        hint: '<prompt>',
+        kind: 'skill',
+        handler: async () => `/${name} `,
+        meta: { displayName: skill.name || skill.id },
+      }, 'core')
+    }
+
+    for (const tpl of promptTemplates || []) {
+      if (!tpl?.id) continue
+      let name = promptTemplateCommandName(tpl)
+      if (!name) continue
+      if (registry.getCommand(name)?.source === 'core') {
+        name = normalizeSlashCommandName(tpl.id)
+      }
+      if (!name || registry.getCommand(name)?.source === 'core') continue
+      registry.register({
+        name,
+        description: tpl.description || tpl.name || tpl.id,
+        kind: 'prompt-template',
+        handler: async () => {
+          try {
+            const content = await getPromptTemplateContentApi(tpl.id)
+            if (!content) return `# ${tpl.name || tpl.id}\n`
+            return renderPromptTemplate(content, {
+              name: tpl.name || '',
+              description: tpl.description || '',
+            })
+          } catch {
+            return `# ${tpl.name || tpl.id}\n`
+          }
+        },
+        meta: { pluginId: tpl.id, displayName: tpl.name || tpl.id },
+      }, 'plugin')
+    }
+    return registry
+  }, [promptTemplates, runtimeSkills, t])
+
   useEffect(() => {
     let cancelled = false
     async function loadModels() {
@@ -218,15 +278,11 @@ export default function ChatSplit() {
 
   const isSlashActive = input.startsWith('/') && !input.includes(' ')
   const slashQuery = isSlashActive ? input.slice(1).toLowerCase() : ''
-  const filteredSkills = slashQuery
-    ? runtimeSkills.filter((s) => s.id.toLowerCase().includes(slashQuery) || s.name.toLowerCase().includes(slashQuery))
-    : runtimeSkills
-  // Phase 2 S4: prompt-template plugins 跟 skills 一起进 slash 菜单
-  const filteredPromptTemplates = slashQuery
-    ? promptTemplates.filter((p) => String(p.id || '').toLowerCase().includes(slashQuery) || String(p.name || '').toLowerCase().includes(slashQuery))
-    : promptTemplates
-  // 跟 ChatComposer 内 buildSlashItems 一致：skills 在前，templates 在后
-  const slashItemsCount = filteredSkills.length + filteredPromptTemplates.length
+  const slashAutocompleteItems = useMemo(
+    () => (isSlashActive ? slashRegistry.listCommands({ query: slashQuery }) : []),
+    [isSlashActive, slashQuery, slashRegistry],
+  )
+  const slashItemsCount = slashAutocompleteItems.length
 
   /* ── send flow ── */
   const triggerSendFlow = useCallback(
@@ -556,9 +612,64 @@ export default function ChatSplit() {
       state.activeSessionId, state.sessions, state.toolsConfig, state.permissions, state.skillConfigs]
   )
 
+  const executeSlashEntry = useCallback(async (entry, args = '') => {
+    if (!entry) return false
+    slashRegistry.recordRecent(entry.name)
+    setShowSlashMenu(false)
+
+    if (entry.kind === 'skill') {
+      setInput(`/${entry.name} `)
+      return true
+    }
+
+    try {
+      const result = await entry.handler(args, {
+        dispatch,
+        getState: () => stateRef.current,
+        registry: slashRegistry,
+        triggerSendFlow,
+        confirm: (message) => (typeof window === 'undefined' ? true : window.confirm(message)),
+        openSessionSearch: (query) => {
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('session-search:open', { detail: { query } }))
+          }
+        },
+      })
+
+      if (entry.source === 'plugin') {
+        setInput(result || `# ${entry.meta?.displayName || entry.name}\n`)
+        return true
+      }
+
+      setInput('')
+      if (stateRef.current.activeSessionId) {
+        dispatch({ type: 'SET_SESSION_DRAFT', payload: { sessionId: stateRef.current.activeSessionId, text: '' } })
+      }
+      if (result && entry.name !== 'help') setWorkbenchMessage(result)
+      return true
+    } catch (err) {
+      setWorkbenchMessage(err?.message || 'Slash command failed.')
+      return true
+    }
+  }, [dispatch, slashRegistry, triggerSendFlow])
+
+  const completeSlashEntry = useCallback((entry) => {
+    if (!entry?.name) return
+    setInput(`/${entry.name} `)
+    setShowSlashMenu(false)
+  }, [])
+
   const handleSend = useCallback(() => {
     const typedContent = input.trim()
     if (!typedContent && attachments.length === 0) return
+    const parsedSlash = parseSlashCommandInput(typedContent)
+    const slashEntry = parsedSlash ? slashRegistry.getCommand(parsedSlash.name) : null
+    if (slashEntry && slashEntry.kind !== 'skill') {
+      setInput('')
+      setShowSlashMenu(false)
+      executeSlashEntry(slashEntry, parsedSlash.args)
+      return
+    }
     const currentAttachments = [...attachments]
     const content = typedContent || describeAttachmentPrompt(currentAttachments)
     setInput('')
@@ -569,7 +680,7 @@ export default function ChatSplit() {
     }
     setShowSlashMenu(false)
     triggerSendFlow(content, currentAttachments)
-  }, [attachments, input, triggerSendFlow, state.activeSessionId, dispatch])
+  }, [attachments, input, triggerSendFlow, state.activeSessionId, dispatch, slashRegistry, executeSlashEntry])
 
   // ★ Reasonix-style ask_choice: 监听 choice-selected 事件 → 发送选择作为用户消息
   useEffect(() => {
@@ -583,50 +694,20 @@ export default function ChatSplit() {
     return () => window.removeEventListener('choice-selected', handler)
   }, [triggerSendFlow])
 
-  // Phase 2 S4: 用户在 slash 菜单选 prompt-template 时：拉模板原文 → 渲染 → 写入输入框
-  const handlePickPromptTemplate = useCallback(async (tpl) => {
-    if (!tpl?.id) return
-    try {
-      const content = await getPromptTemplateContentApi(tpl.id)
-      if (!content) {
-        // 拉不到就退化成把 plugin 名字写进输入框，至少不卡死
-        setInput(`# ${tpl.name}\n`)
-        return
-      }
-      const rendered = renderPromptTemplate(content, {
-        name: tpl.name || '',
-        description: tpl.description || '',
-      })
-      setInput(rendered)
-    } catch {
-      setInput(`# ${tpl.name}\n`)
-    }
-  }, [])
-
   const handleKeyDown = useCallback((e) => {
     if (showSlashMenu && slashItemsCount > 0) {
-      if (e.key === 'ArrowDown') { e.preventDefault(); setSelectedIndex((i) => (i + 1) % slashItemsCount); return }
-      if (e.key === 'ArrowUp') { e.preventDefault(); setSelectedIndex((i) => (i - 1 + slashItemsCount) % slashItemsCount); return }
-      if (e.key === 'Enter') {
-        e.preventDefault()
-        // 先 skills，再 prompt-templates，跟 buildSlashItems 顺序一致
-        if (selectedIndex < filteredSkills.length) {
-          const skill = filteredSkills[selectedIndex]
-          if (skill) { setInput(`/${skill.id} `); setShowSlashMenu(false) }
-        } else {
-          const tplIdx = selectedIndex - filteredSkills.length
-          const tpl = filteredPromptTemplates[tplIdx]
-          if (tpl) {
-            setShowSlashMenu(false)
-            handlePickPromptTemplate(tpl)
-          }
-        }
-        return
-      }
-      if (e.key === 'Escape') { setShowSlashMenu(false); return }
+      const handled = handleSlashAutocompleteKeyDown(e, {
+        items: slashAutocompleteItems,
+        selectedIndex,
+        setSelectedIndex,
+        onPick: (entry) => executeSlashEntry(entry, ''),
+        onComplete: completeSlashEntry,
+        onDismiss: () => setShowSlashMenu(false),
+      })
+      if (handled) return
     }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
-  }, [showSlashMenu, slashItemsCount, filteredSkills, filteredPromptTemplates, selectedIndex, handleSend, handlePickPromptTemplate])
+  }, [showSlashMenu, slashItemsCount, slashAutocompleteItems, selectedIndex, handleSend, executeSlashEntry, completeSlashEntry])
 
   const handleExpandCompaction = useCallback(async (archiveId) => {
     if (!archiveId) return
@@ -877,7 +958,6 @@ export default function ChatSplit() {
           setAttachments={setAttachments}
           showSlashMenu={showSlashMenu}
           setShowSlashMenu={setShowSlashMenu}
-          filteredSkills={filteredSkills}
           selectedIndex={selectedIndex}
           setSelectedIndex={setSelectedIndex}
           voiceState={voiceState}
@@ -896,8 +976,9 @@ export default function ChatSplit() {
           }}
           handleKeyDown={handleKeyDown}
           skills={runtimeSkills}
-          promptTemplates={filteredPromptTemplates}
-          onPickPromptTemplate={handlePickPromptTemplate}
+          slashRegistry={slashRegistry}
+          onPickSlashCommand={(entry) => executeSlashEntry(entry, '')}
+          onCompleteSlashCommand={completeSlashEntry}
         />
       </div>
 
