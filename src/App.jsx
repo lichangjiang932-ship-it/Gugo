@@ -24,6 +24,7 @@ const AgentList = lazy(() => import('./pages/AgentList'))
 const HooksView = lazy(() => import('./pages/HooksView'))
 const McpServersView = lazy(() => import('./pages/McpServersView'))
 const ReasonixWorkspace = lazy(() => import('./pages/ReasonixWorkspace'))
+const CronJobsPage = lazy(() => import('./pages/CronJobsPage'))
 
 function Fallback() {
   return (
@@ -59,6 +60,7 @@ function App() {
           <Route path="/agents" element={<RequireAuth><AgentList /></RequireAuth>} />
           <Route path="/hooks" element={<RequireAuth><HooksView /></RequireAuth>} />
           <Route path="/mcp" element={<RequireAuth><McpServersView /></RequireAuth>} />
+          <Route path="/cron" element={<RequireAuth><CronJobsPage /></RequireAuth>} />
           <Route path="/reasonix" element={<RequireAuth><ReasonixWorkspace /></RequireAuth>} />
 
           <Route path="/login" element={<Navigate to="/chat" replace />} />
