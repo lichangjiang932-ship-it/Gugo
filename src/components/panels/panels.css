@@ -1,0 +1,278 @@
+/* 面板系统样式 */
+
+/* ═══════════════════════════════════════════
+   通用面板样式
+   ═══════════════════════════════════════════ */
+
+.panel-card {
+  margin: 8px 16px;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--card-bg, rgba(255,255,255,0.7));
+  border: 1px solid var(--border-color, rgba(0,0,0,0.06));
+  backdrop-filter: blur(8px);
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.panel-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary, #1a1a1a);
+}
+
+.panel-badge {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.panel-badge.running {
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+}
+
+/* ═══════════════════════════════════════════
+   侧边面板 (Activity / Bridge / Automation)
+   ═══════════════════════════════════════════ */
+
+.side-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 280px;
+  background: var(--panel-bg, rgba(250, 250, 250, 0.95));
+  border-left: 1px solid var(--border-color, #e5e5e5);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  backdrop-filter: blur(20px);
+  animation: panelSlideIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes panelSlideIn {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+.side-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-color, #e5e5e5);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.side-panel-header button {
+  padding: 4px;
+  border: none;
+  background: none;
+  color: var(--text-tertiary, #999);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.15s;
+}
+
+.side-panel-header button:hover {
+  background: var(--btn-hover-bg, rgba(0,0,0,0.05));
+  color: var(--text-secondary, #666);
+}
+
+.side-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.side-panel-empty {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--text-tertiary, #999);
+  font-size: 13px;
+}
+
+/* Activity */
+.activity-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.activity-item {
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--item-bg, rgba(0,0,0,0.02));
+  font-size: 12px;
+}
+
+.activity-type {
+  display: block;
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--accent-color, #E86A3C);
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.activity-title {
+  display: block;
+  color: var(--text-primary, #1a1a1a);
+  margin-bottom: 2px;
+}
+
+.activity-time {
+  color: var(--text-tertiary, #999);
+  font-size: 11px;
+}
+
+/* Bridge */
+.bridge-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  font-size: 13px;
+}
+
+.bridge-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-tertiary, #999);
+}
+
+.bridge-dot.connected {
+  background: #22c55e;
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.4);
+}
+
+/* Automation */
+.automation-section {
+  margin-bottom: 16px;
+}
+
+.automation-section h4 {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--text-tertiary, #999);
+  margin: 0 0 8px;
+  letter-spacing: 0.5px;
+}
+
+.cron-item,
+.automation-item {
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--item-bg, rgba(0,0,0,0.02));
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
+.cron-schedule {
+  display: block;
+  font-family: monospace;
+  color: var(--accent-color, #E86A3C);
+}
+
+/* ═══════════════════════════════════════════
+   Computer Overlay
+   ═══════════════════════════════════════════ */
+
+.computer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.computer-overlay-card {
+  padding: 16px 24px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.8);
+  color: white;
+  backdrop-filter: blur(12px);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  pointer-events: auto;
+}
+
+.computer-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+/* ═══════════════════════════════════════════
+   Browser Panel
+   ═══════════════════════════════════════════ */
+
+.browser-thumbnail {
+  border-radius: 6px;
+  overflow: hidden;
+  margin-top: 8px;
+  border: 1px solid var(--border-color, #e5e5e5);
+}
+
+.browser-thumbnail img {
+  width: 100%;
+  display: block;
+}
+
+.browser-url {
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-tertiary, #999);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ═══════════════════════════════════════════
+   深色模式
+   ═══════════════════════════════════════════ */
+
+@media (prefers-color-scheme: dark) {
+  .panel-card {
+    background: var(--card-bg-dark, rgba(40,40,40,0.7));
+    border-color: var(--border-color-dark, rgba(255,255,255,0.06));
+  }
+  .panel-title {
+    color: var(--text-primary-dark, #f0f0f0);
+  }
+  .side-panel {
+    background: var(--panel-bg-dark, rgba(30, 30, 30, 0.95));
+    border-color: var(--border-color-dark, #333);
+  }
+  .side-panel-header {
+    border-color: var(--border-color-dark, #333);
+  }
+  .activity-item,
+  .cron-item,
+  .automation-item {
+    background: var(--item-bg-dark, rgba(255,255,255,0.03));
+  }
+  .activity-title {
+    color: var(--text-primary-dark, #f0f0f0);
+  }
+}

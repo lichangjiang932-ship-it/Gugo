@@ -1,8 +1,7 @@
 /**
- * Store — Zustand 主 store
+ * Store — Zustand 主 store (完整版)
  *
- * 参考 openhanako 的多 slice 架构，整合所有功能 slice。
- * 使用简单合并模式，不依赖中间件。
+ * 整合所有功能 slice，参考 openhanako 的完整架构。
  */
 
 import { create } from 'zustand';
@@ -12,6 +11,7 @@ import { createChatSlice } from './chatSlice';
 import { createPreviewSlice } from './previewSlice';
 import { createToastSlice } from './toastSlice';
 import { createAgentSlice } from './agentSlice';
+import { createEngineSlice } from './engineSlice';
 
 export const useStore = create((set, get) => ({
   ...createUiSlice(set, get),
@@ -20,9 +20,10 @@ export const useStore = create((set, get) => ({
   ...createPreviewSlice(set),
   ...createToastSlice(set),
   ...createAgentSlice(set),
+  ...createEngineSlice(set, get),
 }));
 
-// Selector hooks for common patterns
+// Selector hooks
 export function useIsStreaming(sessionId) {
   return useStore(s => s.streamingSessions.includes(sessionId));
 }
@@ -39,7 +40,17 @@ export function useCurrentSessionMessages() {
 }
 
 export function useActivePreviewItem() {
-  return useStore(s => {
-    return s.previewTabs.find(t => t.id === s.activePreviewId) || null;
-  });
+  return useStore(s => s.previewTabs.find(t => t.id === s.activePreviewId) || null);
+}
+
+export function useCurrentAgent() {
+  return useStore(s => s.agents.find(a => a.id === s.currentAgentId) || s.agents[0]);
+}
+
+export function useToolSchema(toolName) {
+  return useStore(s => s.toolRegistry[toolName] || null);
+}
+
+export function useEnabledTools() {
+  return useStore(s => s.enabledTools.map(name => s.toolRegistry[name]).filter(Boolean));
 }
