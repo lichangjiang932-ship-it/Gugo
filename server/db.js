@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const DB_SCHEMA_VERSION = 10
+export const DB_SCHEMA_VERSION = 11
 
 const DEFAULT_DATA_DIR = path.join(process.cwd(), 'server-data')
 
@@ -63,6 +63,7 @@ function runMigrations(db) {
   if (getSchemaVersionInternal(db) < 8) migrateToV8(db)
   if (getSchemaVersionInternal(db) < 9) migrateToV9(db)
   if (getSchemaVersionInternal(db) < 10) migrateToV10(db)
+  if (getSchemaVersionInternal(db) < 11) migrateToV11(db)
   runReasonixMigrations(db)
 }
 
@@ -537,6 +538,88 @@ function migrateToV10(db) {
     CREATE INDEX IF NOT EXISTS idx_cron_jobs_next ON cron_jobs(enabled, next_run_at);
   `)
   setSchemaVersionInternal(db, 10)
+}
+
+/**
+ * S1: Multi-agent channels.
+ *
+ * Channels are intentionally parallel to chat sessions/messages. The legacy
+ * sessions/messages tables remain the single-agent chat path; channel tables
+ * model DM/group collaboration between one user and one or more agents.
+ */
+function migrateToV11(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS channels (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('dm','group')),
+      default_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      archived_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_channels_user_updated ON channels(user_id, archived_at, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_channels_user_kind ON channels(user_id, kind, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS channel_agents (
+      channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+      role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('member','owner')),
+      joined_at INTEGER NOT NULL,
+      PRIMARY KEY (channel_id, agent_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_channel_agents_agent ON channel_agents(agent_id, channel_id);
+
+    CREATE TABLE IF NOT EXISTS channel_messages (
+      id TEXT PRIMARY KEY,
+      channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+      sender_kind TEXT NOT NULL CHECK (sender_kind IN ('user','agent')),
+      sender_id TEXT NOT NULL,
+      content TEXT NOT NULL DEFAULT '',
+      mentions_json TEXT NOT NULL DEFAULT '[]',
+      parent_message_id TEXT REFERENCES channel_messages(id) ON DELETE SET NULL,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_channel_messages_channel_created ON channel_messages(channel_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_channel_messages_parent ON channel_messages(parent_message_id);
+    CREATE INDEX IF NOT EXISTS idx_channel_messages_sender ON channel_messages(channel_id, sender_kind, sender_id, created_at DESC);
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS channel_messages_fts USING fts5(
+      content,
+      channel_id UNINDEXED,
+      sender_kind UNINDEXED,
+      content='channel_messages',
+      content_rowid='rowid',
+      tokenize='unicode61'
+    );
+
+    CREATE TRIGGER IF NOT EXISTS channel_messages_ai AFTER INSERT ON channel_messages BEGIN
+      INSERT INTO channel_messages_fts(rowid, content, channel_id, sender_kind)
+      VALUES (new.rowid, new.content, new.channel_id, new.sender_kind);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS channel_messages_ad AFTER DELETE ON channel_messages BEGIN
+      INSERT INTO channel_messages_fts(channel_messages_fts, rowid, content, channel_id, sender_kind)
+      VALUES ('delete', old.rowid, old.content, old.channel_id, old.sender_kind);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS channel_messages_au AFTER UPDATE ON channel_messages BEGIN
+      INSERT INTO channel_messages_fts(channel_messages_fts, rowid, content, channel_id, sender_kind)
+      VALUES ('delete', old.rowid, old.content, old.channel_id, old.sender_kind);
+      INSERT INTO channel_messages_fts(rowid, content, channel_id, sender_kind)
+      VALUES (new.rowid, new.content, new.channel_id, new.sender_kind);
+    END;
+  `)
+
+  const ftsCount = db.prepare('SELECT COUNT(*) AS count FROM channel_messages_fts').get()?.count || 0
+  if (ftsCount === 0) {
+    db.prepare(`
+      INSERT INTO channel_messages_fts(rowid, content, channel_id, sender_kind)
+      SELECT rowid, content, channel_id, sender_kind FROM channel_messages
+    `).run()
+  }
+  setSchemaVersionInternal(db, 11)
 }
 
 function initSchema(db) {
