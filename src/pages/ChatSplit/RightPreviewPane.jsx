@@ -294,11 +294,24 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
     return 520
   })
   const dragStateRef = useRef(null)
+  const touchStateRef = useRef(null)
   const previousArtifactKey = useRef('')
 
   useEffect(() => {
     try { localStorage.setItem('preview-pane-width', String(paneWidth)) } catch { /* ignore */ }
   }, [paneWidth])
+
+  useEffect(() => {
+    if (!onClose) return undefined
+    const handleKeyDown = (event) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      event.stopPropagation()
+      onClose()
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
 
   const startResize = (e) => {
     e.preventDefault()
@@ -323,6 +336,35 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
     document.body.style.userSelect = 'none'
   }
 
+  const handleTouchStart = (event) => {
+    if (typeof window !== 'undefined' && window.innerWidth >= 768) return
+    const touch = event.touches?.[0]
+    if (!touch) return
+    touchStateRef.current = {
+      startX: touch.clientX,
+      startY: touch.clientY,
+      currentX: touch.clientX,
+      currentY: touch.clientY,
+    }
+  }
+
+  const handleTouchMove = (event) => {
+    if (!touchStateRef.current) return
+    const touch = event.touches?.[0]
+    if (!touch) return
+    touchStateRef.current.currentX = touch.clientX
+    touchStateRef.current.currentY = touch.clientY
+  }
+
+  const handleTouchEnd = () => {
+    const touchState = touchStateRef.current
+    touchStateRef.current = null
+    if (!touchState || !onClose) return
+    const deltaX = touchState.startX - touchState.currentX
+    const deltaY = Math.abs(touchState.startY - touchState.currentY)
+    if (deltaX > 80 && deltaX > deltaY) onClose()
+  }
+
   // 切换 artifact 时复位视图状态
   useEffect(() => {
     const key = `${artifact?.messageId || ''}:${artifact?.preview?.type || ''}`
@@ -339,7 +381,18 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
   if (!preview) {
     return (
       <AnimatePresence>
-        <motion.aside className="w-full h-full border-l border-ink-fade/30 bg-paper flex flex-col items-center justify-center gap-4 text-ink-fade" initial={{ opacity: 0, x: 40 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 40 }} transition={{ duration: 0.2 }}>
+        <motion.div
+          key="preview-backdrop"
+          data-testid="preview-backdrop"
+          aria-hidden="true"
+          onClick={onClose}
+          className="fixed inset-0 z-30 bg-ink/20 pointer-events-auto"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.18 }}
+        />
+        <motion.aside className="w-full h-full border-l border-ink-fade/30 bg-paper flex flex-col items-center justify-center gap-4 text-ink-fade relative z-40" initial={{ opacity: 0, x: 40 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 40 }} transition={{ duration: 0.2 }}>
           <FileText className="w-10 h-10 opacity-30" />
           <p className="text-sm">无法渲染预览</p>
           <p className="text-xs text-ink-fade/70 max-w-[200px] text-center">内容格式不支持预览，但你可以下载原文件或切换到源码视图查看</p>
@@ -463,7 +516,21 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
   return (
     <AnimatePresence>
       <motion.div
+        key="preview-backdrop"
+        data-testid="preview-backdrop"
+        aria-hidden="true"
+        onClick={onClose}
+        className="fixed inset-0 z-30 bg-ink/20 pointer-events-auto"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.18 }}
+      />
+      <motion.div
         key="preview-pane"
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
         initial={{ x: 40, opacity: 0 }}
         animate={{ x: 0, opacity: 1 }}
         exit={{ x: 40, opacity: 0 }}
@@ -471,7 +538,7 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
         style={maximized ? undefined : { width: `${paneWidth}px` }}
         className={`${
           maximized ? 'fixed inset-0 z-40 w-screen' : ''
-        } bg-paper-2 flex flex-col border-l border-dashed border-ink-fade/50 overflow-hidden relative`}
+        } bg-paper-2 flex flex-col border-l border-dashed border-ink-fade/50 overflow-hidden relative z-40`}
       >
         {/* ★ #24: 左边缘拖拽 handle (最大化时隐藏) */}
         {!maximized && (
@@ -508,8 +575,10 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
               {maximized ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
             </button>
             <button
+              type="button"
               onClick={onClose}
-              className="w-8 h-8 rounded-md hover:bg-paper-2 transition-colors flex items-center justify-center text-ink-fade hover:text-ink"
+              aria-label="关闭预览"
+              className="w-10 h-10 rounded-md border border-transparent hover:bg-ember/10 hover:text-ember hover:border-ember/30 transition-colors flex items-center justify-center text-ink-fade focus:outline-none focus:ring-2 focus:ring-ember/40"
               title="关闭预览"
             >
               <X className="w-4 h-4" />
