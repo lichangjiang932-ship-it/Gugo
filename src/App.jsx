@@ -8,6 +8,8 @@ import { ActiveAgentProvider } from './agents/ActiveAgentProvider.jsx'
 import CommandPalette from './components/CommandPalette'
 import SkillCommandsSync from './components/SkillCommandsSync'
 import RequireAuth from './components/RequireAuth'
+import NotificationCenter from './components/NotificationCenter'
+import { ToastProvider } from './components/Toast.jsx'
 
 const CoverPage = lazy(() => import('./pages/CoverPage'))
 const ChatSplit = lazy(() => import('./pages/ChatSplit'))
@@ -34,11 +36,13 @@ function Fallback() {
 function App() {
   return (
     <I18nProvider>
+    <ToastProvider>
     <ActiveAgentProvider>
     <ErrorBoundary>
       <GlobalShortcuts />
       <CommandPalette />
       <SkillCommandsSync />
+      <NotificationCenter />
       <Suspense fallback={<Fallback />}>
         <main>
           <Routes>
@@ -62,6 +66,7 @@ function App() {
       </Suspense>
     </ErrorBoundary>
     </ActiveAgentProvider>
+    </ToastProvider>
     </I18nProvider>
   )
 }
