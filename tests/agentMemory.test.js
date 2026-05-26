@@ -41,14 +41,14 @@ test('阶段 6: memory agent_id 过滤 — agent 专属 vs 全局', async () => 
   assert.deepStrictEqual(titlesN, ['global'])
 })
 
-test('阶段 6: DB schema v6 migration 干净，memories.agent_id 列存在', async () => {
+test('阶段 6: DB schema migration 干净，memories.agent_id 列存在', async () => {
   process.env.APP_DATA_DIR = tmpDir()
   const dbMod = await import(`../server/db.js?am=${Date.now()}`)
   const db = dbMod.getDb()
   const cols = db.prepare('PRAGMA table_info(memories)').all().map((c) => c.name)
   assert.ok(cols.includes('agent_id'), 'memories.agent_id 必须存在')
   const ver = db.prepare("SELECT value FROM meta WHERE key='schema_version'").get()
-  assert.equal(Number(ver.value), 6)
+  assert.equal(Number(ver.value), dbMod.DB_SCHEMA_VERSION)
 })
 
 test('阶段 6: 删除 agent 后其记忆 agent_id SET NULL → 退回全局', async () => {
