@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const DB_SCHEMA_VERSION = 6
+export const DB_SCHEMA_VERSION = 7
 
 const DEFAULT_DATA_DIR = path.join(process.cwd(), 'server-data')
 
@@ -58,7 +58,8 @@ function runMigrations(db) {
   if (getSchemaVersionInternal(db) < 3) migrateToV3(db)
   if (getSchemaVersionInternal(db) < 4) migrateToV4(db)
   if (getSchemaVersionInternal(db) < 5) migrateToV5(db)
-  if (getSchemaVersionInternal(db) < DB_SCHEMA_VERSION) migrateToV6(db)
+  if (getSchemaVersionInternal(db) < 6) migrateToV6(db)
+  if (getSchemaVersionInternal(db) < DB_SCHEMA_VERSION) migrateToV7(db)
   runReasonixMigrations(db)
 }
 
@@ -369,6 +370,16 @@ function migrateToV6(db) {
     db.exec('ALTER TABLE memories ADD COLUMN agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL')
   }
   db.exec('CREATE INDEX IF NOT EXISTS idx_memories_user_agent ON memories(user_id, agent_id, pinned, last_used_at)')
+  setSchemaVersionInternal(db, 6)
+}
+
+/**
+ * A3: Agent 可选绑定内置 Yuan/persona 模板。
+ */
+function migrateToV7(db) {
+  if (!hasColumn(db, 'agents', 'persona_template')) {
+    db.exec('ALTER TABLE agents ADD COLUMN persona_template TEXT')
+  }
   setSchemaVersionInternal(db, DB_SCHEMA_VERSION)
 }
 

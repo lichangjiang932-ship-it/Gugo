@@ -79,6 +79,7 @@ export async function handleAgentRequest(req, res) {
         name: body.name,
         soulMd: body.soulMd || '',
         identityMd: body.identityMd || '',
+        personaTemplate: body.personaTemplate || body.persona_template || '',
         avatarUrl: body.avatarUrl || null,
         isDefault: !!body.isDefault,
       })
@@ -95,6 +96,7 @@ export async function handleAgentRequest(req, res) {
         name: finalName,
         soulMd: parsed.soulMd,
         identityMd: parsed.identityMd,
+        personaTemplate: parsed.personaTemplate || '',
         avatarUrl: parsed.avatarUrl,
         isDefault: false,
       })
@@ -153,6 +155,7 @@ export async function handleAgentRequest(req, res) {
         exportedAt: new Date().toISOString(),
         agent: {
           name: agent.name,
+          personaTemplate: agent.personaTemplate || '',
           isDefault: false, // import 时不抢默认
           hasAvatar: !!agent.avatarUrl,
         },
@@ -229,6 +232,7 @@ export async function handleAgentRequest(req, res) {
           userId, name: finalName,
           soulMd: parsed.soulMd,
           identityMd: parsed.identityMd,
+          personaTemplate: parsed.personaTemplate || '',
           avatarUrl: finalAvatarUrl,
           isDefault: false,
         })
