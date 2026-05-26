@@ -13,6 +13,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { closeDb } from '../db.js'
 import { closeJobRuntime } from '../services/jobRuntime.js'
+import { closeCronScheduler } from '../services/cronScheduler.js'
 import { shutdownAll as shutdownMcpAll } from '../mcp/mcpManager.js'
 import { seedSystemSkills } from '../services/seedSystemSkills.js'
 import { initPlugins } from '../plugins/pluginRegistry.js'
@@ -63,6 +64,7 @@ export function gracefulShutdown(server, { silent = process.env.NODE_ENV === 'pr
 
   server.close(() => {
     if (!silent) console.log('[lifecycle] http server closed')
+    try { closeCronScheduler() } catch { /* ignore */ }
     try { closeJobRuntime() } catch { /* ignore */ }
     try { shutdownMcpAll() } catch { /* ignore */ }
     try { closeDb() } catch { /* ignore */ }
