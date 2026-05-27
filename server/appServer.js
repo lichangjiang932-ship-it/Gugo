@@ -24,7 +24,7 @@ import { handleFsShellRequest } from './adapters/fsShellTools.js'
 import { handleGitWorkbenchRequest } from './adapters/gitWorkbench.js'
 import { handleCodeSearchRequest } from './utils/codeSearchRoutes.js'
 import { handleAgenticToolRequest } from './utils/agenticToolsRoutes.js'
-import { handleArtifactDownload } from './services/artifactGen.js'
+import { handleArtifactRequest } from './routes/artifacts.js'
 import { getJobRuntime } from './services/jobRuntime.js'
 import { getCronScheduler } from './services/cronScheduler.js'
 import { handleJobRequest } from './routes/jobRoutes.js'
@@ -204,7 +204,7 @@ function createRouter(getEnv = getRuntimeEnv) {
 
   // 产物下载
   if (req.url?.startsWith('/api/artifacts/')) {
-    return handleArtifactDownload(req, res)
+    return handleArtifactRequest(req, res)
   }
 
   // 后台任务中心

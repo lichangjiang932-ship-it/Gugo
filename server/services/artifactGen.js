@@ -19,8 +19,12 @@
  */
 
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { pathToFileURL } from 'node:url'
 import JSZip from 'jszip'
 import { authenticateRequest } from '../middleware.js'
 import { getArtifactByFilename } from './jobStore.js'
@@ -52,6 +56,7 @@ function newArtifactPath(ext) {
 // fonts / themes / shape helper / normalizeBullets 均来自 src/lib/pptCore.js
 const THEMES = PREMIUM_THEMES
 const resolvePptxTheme = resolvePremiumTheme
+const execFileAsync = promisify(execFile)
 
 function normalizeKpis(slide = {}) {
   const raw = Array.isArray(slide.kpi) ? slide.kpi : Array.isArray(slide.kpis) ? slide.kpis : []
@@ -897,6 +902,137 @@ ${validSheets.map((s, i) => `    <sheet name="${escapeXml(s.name)}" sheetId="${i
 /* ────────────────────────── 静态服务 ────────────────────────── */
 
 const SAFE_NAME = /^[\w.-]+\.(pptx|docx|xlsx)$/
+const PREVIEW_NAME = /^[\w.-]+\.pptx$/
+
+function withStatus(statusCode, message) {
+  const err = new Error(message)
+  err.statusCode = statusCode
+  return err
+}
+
+async function findExecutable(names) {
+  for (const name of names) {
+    try {
+      const { stdout } = await execFileAsync('which', [name], { timeout: 3000 })
+      const bin = stdout.trim().split(/\n+/)[0]
+      if (bin) return bin
+    } catch {
+      // try next executable name
+    }
+  }
+  return ''
+}
+
+function filenameFromArtifactPath(input) {
+  const raw = String(input || '').trim()
+  if (!raw) return ''
+  try {
+    const url = new URL(raw, 'http://localhost')
+    if (url.pathname.startsWith('/api/artifacts/')) {
+      return decodeURIComponent(path.basename(url.pathname))
+    }
+  } catch {
+    // fall through to filename/path handling
+  }
+  if (PREVIEW_NAME.test(raw)) return raw
+  return ''
+}
+
+function resolvePreviewArtifactPath(input, userId) {
+  const raw = String(input || '').trim()
+  if (!raw) throw withStatus(400, 'artifactPath is required')
+
+  const filename = filenameFromArtifactPath(raw)
+  let full = filename ? path.join(ensureArtifactDir(), filename) : raw
+  if (!path.isAbsolute(full)) throw withStatus(400, 'artifactPath must be a pptx artifact path or filename')
+  if (path.extname(full).toLowerCase() !== '.pptx') throw withStatus(400, 'render-preview only supports pptx artifacts')
+
+  const artifactDirReal = fs.realpathSync(ensureArtifactDir())
+  try {
+    full = fs.realpathSync(full)
+  } catch {
+    throw withStatus(404, 'artifact not found')
+  }
+  if (full !== artifactDirReal && !full.startsWith(artifactDirReal + path.sep)) {
+    throw withStatus(400, 'artifactPath must be inside the artifact directory')
+  }
+
+  const dbArtifact = getArtifactByFilename(path.basename(full))
+  if (dbArtifact?.userId && dbArtifact.userId !== userId) {
+    throw withStatus(404, 'artifact not found')
+  }
+  return full
+}
+
+export async function getArtifactPreviewRendererStatus() {
+  const libreOfficePath = await findExecutable(['libreoffice', 'soffice'])
+  const pdftoppmPath = await findExecutable(['pdftoppm'])
+  return {
+    available: !!libreOfficePath,
+    libreOfficePath,
+    pdftoppmPath,
+  }
+}
+
+export async function renderArtifactPreviewPng({ artifactPath, page = 1, userId = '' } = {}) {
+  const status = await getArtifactPreviewRendererStatus()
+  if (!status.libreOfficePath) {
+    throw withStatus(503, 'LibreOffice is not installed; render-preview is unavailable')
+  }
+  if (!status.pdftoppmPath) {
+    throw withStatus(503, 'pdftoppm is not installed; render-preview cannot extract a specific page')
+  }
+
+  const pageNo = Math.max(1, Math.floor(Number(page) || 1))
+  const input = resolvePreviewArtifactPath(artifactPath, userId)
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'artifact-preview-'))
+  try {
+    const profileDir = path.join(tmp, 'lo-profile')
+    fs.mkdirSync(profileDir, { recursive: true })
+    await execFileAsync(status.libreOfficePath, [
+      `-env:UserInstallation=${pathToFileURL(profileDir).href}`,
+      '--headless',
+      '--nologo',
+      '--nofirststartwizard',
+      '--convert-to',
+      'pdf',
+      '--outdir',
+      tmp,
+      input,
+    ], { timeout: 60000, maxBuffer: 4 * 1024 * 1024 })
+
+    let pdfPath = path.join(tmp, `${path.basename(input, path.extname(input))}.pdf`)
+    if (!fs.existsSync(pdfPath)) {
+      const pdf = fs.readdirSync(tmp).find((name) => name.toLowerCase().endsWith('.pdf'))
+      if (pdf) pdfPath = path.join(tmp, pdf)
+    }
+    if (!fs.existsSync(pdfPath)) throw withStatus(500, 'LibreOffice did not produce a PDF preview source')
+
+    const outPrefix = path.join(tmp, 'page')
+    await execFileAsync(status.pdftoppmPath, [
+      '-f', String(pageNo),
+      '-l', String(pageNo),
+      '-singlefile',
+      '-png',
+      '-r', '144',
+      pdfPath,
+      outPrefix,
+    ], { timeout: 30000, maxBuffer: 4 * 1024 * 1024 })
+
+    const pngPath = `${outPrefix}.png`
+    if (!fs.existsSync(pngPath)) throw withStatus(404, `page ${pageNo} was not rendered`)
+    const png = fs.readFileSync(pngPath)
+    return {
+      dataUrl: `data:image/png;base64,${png.toString('base64')}`,
+      page: pageNo,
+      byteLength: png.length,
+      renderer: 'libreoffice',
+      libreOfficePath: status.libreOfficePath,
+    }
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true })
+  }
+}
 
 export function handleArtifactDownload(req, res) {
   const url = req.url || ''
