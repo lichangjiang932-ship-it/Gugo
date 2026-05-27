@@ -202,3 +202,38 @@ exported_at: 2026-05-25T13:00:00.000Z
 - AgentList 新按钮 "Templates"：列 agent-template plugins，一键 import
 - 路径：`GET /api/plugins?type=agent-template` → 用户选 → `GET /api/plugins/:id` 拿 `entryPreview.content` → `POST /api/agents/import`
 - 验证 Plugin SDK 不是 PPT 展示，真有消费方
+
+---
+
+## 阶段 7-11 已落地：schema 演进概览
+
+文档以 Agent 视角写，但 DB 还在并行长其它能力。下表是 v6→v11 实际加进 `server/db.js` 的迁移，标注哪些直接动了 agents/相关字段、哪些是平行能力：
+
+| 版本 | 迁移函数 | 主题 | 表/字段 | 与 Agent 的关系 |
+|---|---|---|---|---|
+| v7 | `migrateToV7` | A3：Agent 绑定 persona 模板 | `agents.persona_template` (TEXT) | **直接相关**——agent 可选挂一个内置 Yuan/persona 模板名 |
+| v8 | `migrateToV8` | A6：统一通知中心 | `notifications` 表 (kind: info/success/warn/error/job + read_at) | 平行能力，agent 后续可作为通知来源 |
+| v9 | `migrateToV9` | A4：Chat sessions archive + 跨会话搜索 | `sessions` 扩列 (id/title/updated_at/last_viewed_at/archived_at)、`messages` 表、`messages_fts` (fts5 unicode61) + 三个 triggers | 不动 agents，但 chat 注入路径会落地到这里 |
+| v10 | `migrateToV10` | S2：Studio cron + per-agent heartbeat | `cron_jobs` 表 (kind: heartbeat/cron, exec_type: agent_session/direct_notify/plugin_action, `agent_id` FK ON DELETE SET NULL) | **直接相关**——心跳/定时任务可绑定到具体 agent |
+| v11 | `migrateToV11` | S1：多 agent 频道（DM/Group） | `channels` + `channel_agents` (PK=channel_id+agent_id) + `channel_messages` + `channel_messages_fts` | **直接相关**——agent 与 user 之间的多对多协作通道，并行于 sessions/messages |
+
+### 与上面阶段 3-6 叙事的衔接
+
+- **agent persona_template (v7)**：`agentStore.createAgent / updateAgent` 接受可选 `personaTemplate`，模板表定义在 `server/services/agentTemplates.js`，通过 `getAgentTemplateSystemPrompt(name, { lang })` 渲染。chat 注入时若有 personaTemplate，会在 `## SOUL` 之前追加一段 `## PERSONA TEMPLATE`，三段拼成完整 system block。export/import (`.agent.md`) frontmatter 也带 `persona_template` 字段。
+- **per-agent cron (v10)**：`cron_jobs.agent_id` 可空——空 = 全局任务；非空 = "以这个 agent 的身份"在 tick 时跑（exec_type=`agent_session` 走 `ensureDefaultAgent`-like 注入路径）。**红线**：删 agent 时不级联删 cron，而是 `SET NULL`，让任务退化为全局，避免静默丢任务。
+- **channels (v11)**：channels 是一条独立路径，**不复用** `sessions/messages`。原因：sessions 是"一 user 对一 agent"的线性 chat；channels 是"一 user 对多 agent" + 可 `@mention`，sender_kind 同时包含 `user` 和 `agent`，路由逻辑差异大。两套表暂时不互通，迁移留给后续阶段。
+
+### 当前 schema 版本
+
+```js
+// server/db.js
+export const DB_SCHEMA_VERSION = 11
+```
+
+新增迁移时记得：
+1. 写 `migrateToVN(db)`，幂等（`IF NOT EXISTS` / `hasColumn` 守门）
+2. 末尾 `setSchemaVersionInternal(db, N)`
+3. 在 `runMigrations` 链里追加
+4. `DB_SCHEMA_VERSION` 同步更新
+5. 跨主表新增 FK 用 `ON DELETE SET NULL`（任务/记忆）或 `ON DELETE CASCADE`（强从属），不要默认 RESTRICT
+
