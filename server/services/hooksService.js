@@ -18,6 +18,7 @@
 import { execFile } from 'node:child_process'
 import { getDb } from '../db.js'
 import { randomUUID } from 'node:crypto'
+import { assertSafeOutboundUrl } from '../adapters/toolProxy.js'
 import { writeToolAudit } from '../utils/audit.js'
 
 const ALLOWED_EVENTS = ['user_prompt_submit', 'pre_tool_use', 'post_tool_use', 'stop']
@@ -150,6 +151,13 @@ async function runHttp({ url, headers, body, timeoutMs }) {
   const ctrl = new AbortController()
   const t = setTimeout(() => ctrl.abort(), Math.max(500, Math.min(60000, timeoutMs || 5000)))
   try {
+    let safeUrl
+    try {
+      safeUrl = await assertSafeOutboundUrl(url)
+    } catch (err) {
+      return { ok: false, error: `ssrf_blocked: ${err?.message || String(err)}` }
+    }
+    if (safeUrl.protocol !== 'https:') return { ok: false, error: 'http_required_https' }
     const resp = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...(headers || {}) },
