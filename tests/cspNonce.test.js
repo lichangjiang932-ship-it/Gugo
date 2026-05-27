@@ -1,7 +1,26 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 import { createAppServer } from '../server/appServer.js'
 import { securityHeaders } from '../server/middleware.js'
+
+const repoRoot = fileURLToPath(new URL('..', import.meta.url))
+const distIndex = path.join(repoRoot, 'dist', 'index.html')
+// CI 阶段顺序 Lint → Test → Build，集成测试运行时 dist/index.html 可能还不存在。
+// 用一个最小占位 HTML 兜底，断言 nonce 注入语义而非 vite 真实产物。
+function ensureDistIndex() {
+  if (fs.existsSync(distIndex)) return () => {}
+  fs.mkdirSync(path.dirname(distIndex), { recursive: true })
+  fs.writeFileSync(
+    distIndex,
+    '<!doctype html><html><body><div id="root"></div><script type="module" src="/assets/main.js"></script></body></html>',
+  )
+  return () => {
+    try { fs.unlinkSync(distIndex) } catch { /* ignore */ }
+  }
+}
 
 function getDirective(csp, name) {
   return csp
@@ -43,6 +62,7 @@ test('securityHeaders creates a per-response CSP nonce without script unsafe-inl
 })
 
 test('static index response injects CSP nonce into every script tag', async () => {
+  const cleanup = ensureDistIndex()
   const server = createAppServer({ getEnv: () => ({}) })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   const { port } = server.address()
@@ -64,5 +84,6 @@ test('static index response injects CSP nonce into every script tag', async () =
     }
   } finally {
     await new Promise((resolve) => server.close(resolve))
+    cleanup()
   }
 })
