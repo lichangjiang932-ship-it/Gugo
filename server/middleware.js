@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { checkRateLimit, getSessionByToken } from './db.js'
 import { z } from 'zod'
 
@@ -48,6 +49,10 @@ export function corsMiddleware(req, res, next) {
 /* ── 安全头 ── */
 
 export function securityHeaders(req, res, next) {
+  const nonce = randomBytes(16).toString('base64')
+  res.locals = res.locals || {}
+  res.locals.cspNonce = nonce
+
   res.setHeader('X-Content-Type-Options', 'nosniff')
   res.setHeader('X-Frame-Options', 'DENY')
   res.setHeader('X-XSS-Protection', '1; mode=block')
@@ -59,7 +64,9 @@ export function securityHeaders(req, res, next) {
   }
   // CSP:
   //   · script-src 不再放 unsafe-eval (Vite 构建的产物不需要)
-  //   · 仍保留 unsafe-inline 兼容 React 内联事件;后续可改用 nonce
+  //   · script-src 使用每请求 nonce + strict-dynamic,不再允许 unsafe-inline
+  //   · style-src 仍保留 unsafe-inline:React JSX style={{...}} 会落到 DOM style 属性,
+  //     CSP3 style-src-attr 兼容性不足,暂不能用 nonce 覆盖这个现实
   //   · connect-src 默认只放 self + DeepSeek;额外模型端点通过 ALLOWED_MODEL_ENDPOINTS 注入
   const extraConnect = (process.env.ALLOWED_MODEL_ENDPOINTS || '')
     .split(',').map((s) => s.trim()).filter(Boolean).join(' ')
@@ -67,9 +74,9 @@ export function securityHeaders(req, res, next) {
     'Content-Security-Policy',
     [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' blob:",
+      `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' blob:`,
       "worker-src 'self' blob:",
-      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com",
       "font-src 'self' https://fonts.gstatic.com",
       "img-src 'self' data: blob: https:",
       `connect-src 'self' ws: wss: https://api.deepseek.com ${extraConnect}`.trim(),
