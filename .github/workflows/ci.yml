@@ -15,13 +15,10 @@ jobs:
         os: [ubuntu-latest]
         node-version: [20.x, 22.x]
         include:
-          # Windows 是摸底矩阵：允许失败不阻塞主线，逐步把 26 个真失败 case 修绿。
-          # 修完一批就把 continue-on-error 摘掉，把 windows 升为强制门禁。
+          # Windows 升为强制门禁：F6 已修绿全部 19 个原 fail，windows-latest 22.x 现在 572/572。
+          # 后续若有 Windows 偶发问题，先 PR 修代码，不允许重新软失败。
           - os: windows-latest
             node-version: 22.x
-            experimental: true
-
-    continue-on-error: ${{ matrix.experimental == true }}
 
     steps:
       - uses: actions/checkout@v4
