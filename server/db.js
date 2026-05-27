@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const DB_SCHEMA_VERSION = 11
+export const DB_SCHEMA_VERSION = 12
 
 const DEFAULT_DATA_DIR = path.join(process.cwd(), 'server-data')
 
@@ -64,6 +64,7 @@ function runMigrations(db) {
   if (getSchemaVersionInternal(db) < 9) migrateToV9(db)
   if (getSchemaVersionInternal(db) < 10) migrateToV10(db)
   if (getSchemaVersionInternal(db) < 11) migrateToV11(db)
+  if (getSchemaVersionInternal(db) < 12) migrateToV12(db)
   runReasonixMigrations(db)
 }
 
@@ -620,6 +621,35 @@ function migrateToV11(db) {
     `).run()
   }
   setSchemaVersionInternal(db, 11)
+}
+
+/**
+ * V12 — 第三方集成（社交平台 / IM）配置 + 视觉辅助模型
+ * - integrations 表：每用户多条记录，记录 provider/credentials/enabled，凭据 JSON 落库不再走 .env
+ * - 用于 QQ / Feishu / WeChat / DingTalk / Discord / Telegram / Slack / 其他自定义平台
+ * - 也可承载 vision-assist 副驾配置（kind='vision_assist'）
+ */
+function migrateToV12(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS integrations (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      name TEXT NOT NULL DEFAULT '',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      config_json TEXT NOT NULL DEFAULT '{}',
+      secret_json TEXT NOT NULL DEFAULT '{}',
+      last_test_at INTEGER,
+      last_test_ok INTEGER,
+      last_test_message TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_integrations_user ON integrations(user_id, kind, updated_at DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_integrations_user_provider ON integrations(user_id, kind, provider);
+  `)
+  setSchemaVersionInternal(db, 12)
 }
 
 function initSchema(db) {
