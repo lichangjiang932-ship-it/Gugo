@@ -69,7 +69,7 @@ function normalizeKpis(slide = {}) {
 function normalizeChart(slide = {}) {
   const c = slide.chart
   if (!c || typeof c !== 'object') return null
-  const type = ['bar', 'line', 'pie'].includes(c.type) ? c.type : 'bar'
+  const type = ['bar', 'bar-stacked', 'line', 'pie'].includes(c.type) ? c.type : 'bar'
   const categories = Array.isArray(c.categories) ? c.categories.map((x) => String(x)) : []
   const seriesRaw = Array.isArray(c.series) ? c.series : []
   const series = seriesRaw
@@ -106,6 +106,83 @@ function pickLayout(slide, i, total) {
 
 function paintBackground(slide, pptx, theme) {
   slide.background = { color: theme.bg }
+}
+
+function hexToRgb(hex) {
+  const s = String(hex || '').replace('#', '').padStart(6, '0').slice(0, 6)
+  return [
+    Number.parseInt(s.slice(0, 2), 16),
+    Number.parseInt(s.slice(2, 4), 16),
+    Number.parseInt(s.slice(4, 6), 16),
+  ].map((n) => (Number.isFinite(n) ? n : 0))
+}
+
+function rgbToHex([r, g, b]) {
+  return [r, g, b]
+    .map((n) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0'))
+    .join('')
+    .toUpperCase()
+}
+
+function mixHex(a, b, weight = 0.5) {
+  const ar = hexToRgb(a)
+  const br = hexToRgb(b)
+  return rgbToHex(ar.map((v, i) => v * (1 - weight) + br[i] * weight))
+}
+
+function themeKey(theme) {
+  const hit = Object.entries(THEMES).find(([, t]) =>
+    t.bg === theme.bg && t.panel === theme.panel && t.accent === theme.accent)
+  return hit?.[0] || 'noir'
+}
+
+function coverDecor(theme) {
+  const key = themeKey(theme)
+  const byTheme = {
+    noir: { glow: mixHex(theme.panel, theme.accentSoft, 0.18), vignette: theme.panel, stripeT: 78, glowT: 54, vignetteT: 78 },
+    paper: { glow: mixHex(theme.panel, theme.accentSoft, 0.16), vignette: 'FFFFFF', stripeT: 84, glowT: 42, vignetteT: 72 },
+    ocean: { glow: mixHex(theme.panel, theme.accentSoft, 0.18), vignette: mixHex(theme.panel, theme.accent, 0.10), stripeT: 80, glowT: 52, vignetteT: 76 },
+    forest: { glow: mixHex(theme.panel, theme.accentSoft, 0.16), vignette: mixHex(theme.panel, theme.accent, 0.10), stripeT: 80, glowT: 52, vignetteT: 76 },
+  }
+  return byTheme[key] || byTheme.noir
+}
+
+function addCoverBackdrop(slide, pptx, theme) {
+  const decor = coverDecor(theme)
+  // 3-element cap: two translucent ellipses approximate a radial vignette, one diagonal stripe adds motion.
+  slide.addShape(shape(pptx, 'ellipse'), {
+    x: 7.75, y: -1.45, w: 6.7, h: 6.7,
+    fill: { color: decor.glow, transparency: decor.glowT },
+    line: { color: decor.glow, transparency: 100 },
+  })
+  slide.addShape(shape(pptx, 'ellipse'), {
+    x: -1.95, y: 4.45, w: 5.0, h: 3.8,
+    fill: { color: decor.vignette, transparency: decor.vignetteT },
+    line: { color: decor.vignette, transparency: 100 },
+  })
+  slide.addShape(shape(pptx, 'rect'), {
+    x: 10.95, y: -0.65, w: 0.18, h: 4.1,
+    rotate: 25,
+    fill: { color: theme.accent, transparency: decor.stripeT },
+    line: { color: theme.accent, transparency: 100 },
+  })
+}
+
+function addSectionPanelGradient(slide, pptx, theme) {
+  const bottom = mixHex(theme.panel, 'FFFFFF', themeKey(theme) === 'paper' ? 0.10 : 0.08)
+  const mid = mixHex(theme.panel, bottom, 0.48)
+  const bands = [
+    { y: 0, h: 2.55, color: theme.panel },
+    { y: 2.55, h: 2.45, color: mid },
+    { y: 5.0, h: 2.5, color: bottom },
+  ]
+  bands.forEach((band) => {
+    slide.addShape(shape(pptx, 'rect'), {
+      x: 0, y: band.y, w: 5.6, h: band.h,
+      fill: { color: band.color },
+      line: { color: band.color, width: 0 },
+    })
+  })
 }
 
 function addCornerMark(slide, pptx, theme) {
@@ -157,6 +234,7 @@ function addPageTitle(slide, pptx, theme, titleText, { eyebrow } = {}) {
 
 function renderCover(slide, pptx, theme, { deckTitle, subtitle, brand }) {
   paintBackground(slide, pptx, theme)
+  addCoverBackdrop(slide, pptx, theme)
   // brand 与左侧 hairline 同行，形成定位锚
   slide.addShape(shape(pptx, 'rect'), {
     x: 0.85, y: 0.97, w: 0.30, h: 0.018,
@@ -192,11 +270,13 @@ function renderCover(slide, pptx, theme, { deckTitle, subtitle, brand }) {
 
 function renderSection(slide, pptx, theme, { titleText, eyebrow, index, brand }) {
   paintBackground(slide, pptx, theme)
-  // 左半深色 panel，右半保持 bg —— 给章节号一个落点，去掉留白灾难
-  slide.addShape(shape(pptx, 'rect'), {
-    x: 0, y: 0, w: 5.6, h: 7.5,
-    fill: { color: theme.panel },
-    line: { color: theme.panel, width: 0 },
+  // 左半 panel 用 3 段叠层模拟纵向 gradient，右半保持 bg。
+  addSectionPanelGradient(slide, pptx, theme)
+  // 章节号阴影：向右下偏移 1in，透明度 70，不压过正文。
+  slide.addText(String(index).padStart(2, '0'), {
+    x: 1.6, y: 3.4, w: 4.6, h: 3.2,
+    fontFace: HEAD_FONT, fontSize: 220, bold: true, color: theme.text,
+    transparency: 70, margin: 0, align: 'left', valign: 'top',
   })
   // 巨大的章节号（不再悬空，落在左 panel 中）
   slide.addText(String(index).padStart(2, '0'), {
@@ -223,6 +303,11 @@ function renderSection(slide, pptx, theme, { titleText, eyebrow, index, brand })
   slide.addShape(shape(pptx, 'rect'), {
     x: 6.0, y: 5.15, w: 0.9, h: 0.045,
     fill: { color: theme.accent }, line: { color: theme.accent, width: 0 },
+  })
+  slide.addShape(shape(pptx, 'rect'), {
+    x: 7.05, y: 5.17, w: 1.35, h: 0.014,
+    fill: { color: theme.accentSoft, transparency: 42 },
+    line: { color: theme.accentSoft, width: 0 },
   })
 }
 
@@ -464,6 +549,7 @@ function renderChart(slide, pptx, theme, { titleText, chart, eyebrow }) {
     dataLabelFontSize: 10,
     showValue: chart.type === 'pie',
     barGapWidthPct: 60,
+    barGrouping: chart.type === 'bar-stacked' ? 'stacked' : undefined,
     lineDataSymbol: chart.type === 'line' ? 'circle' : undefined,
     lineDataSymbolSize: chart.type === 'line' ? 6 : undefined,
     catGridLine: { style: 'none' },

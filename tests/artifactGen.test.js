@@ -18,6 +18,28 @@ const { createAppServer } = await import('../server/appServer.js')
 const { createPptx, createDocx, createXlsx, getArtifactDir } = await import('../server/services/artifactGen.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
+async function loadPptxZip(result) {
+  return JSZip.loadAsync(fs.readFileSync(result.fullPath || path.join(getArtifactDir(), result.filename)))
+}
+
+async function loadSlideXml(result, slideNo) {
+  const zip = await loadPptxZip(result)
+  return zip.file(`ppt/slides/slide${slideNo}.xml`).async('string')
+}
+
+async function loadFirstChartXml(result) {
+  const zip = await loadPptxZip(result)
+  const chartFile = Object.keys(zip.files).find((n) => /^ppt\/charts\/chart\d+\.xml$/.test(n))
+  assert.ok(chartFile, 'pptx 应生成 chart xml')
+  return zip.file(chartFile).async('string')
+}
+
+function countNonTextShapes(slideXml) {
+  return (slideXml.match(/<p:sp>[\s\S]*?<\/p:sp>/g) || [])
+    .filter((part) => !part.includes('<p:txBody>'))
+    .length
+}
+
 test('createPptx 真实生成可解析的 OOXML pptx', async () => {
   const result = await createPptx({
     title: '季度汇报',
@@ -38,6 +60,76 @@ test('createPptx 真实生成可解析的 OOXML pptx', async () => {
   // JSZip 能解析,且含 ppt/presentation.xml
   const zip = await JSZip.loadAsync(fs.readFileSync(full))
   assert.ok(zip.file('ppt/presentation.xml'), 'pptx 应含 ppt/presentation.xml')
+})
+
+test('cover/section 为所有 premium theme 渲染受控 gradient 装饰', async () => {
+  for (const theme of ['noir', 'paper', 'ocean', 'forest']) {
+    const result = await createPptx({
+      title: `${theme} 视觉测试`,
+      subtitle: 'gradient sanity',
+      theme,
+      brand: 'YMA',
+      slides: [
+        { title: '封面' },
+        { title: '章节一', layout: 'section', eyebrow: 'SECTION' },
+      ],
+    })
+    const coverXml = await loadSlideXml(result, 1)
+    assert.equal((coverXml.match(/prst="ellipse"/g) || []).length, 2, `${theme} cover 应有 2 个 vignette 椭圆`)
+    assert.equal((coverXml.match(/rot="1500000"/g) || []).length, 1, `${theme} cover 应有 1 条 25° accent stripe`)
+    assert.ok(countNonTextShapes(coverXml) <= 5, `${theme} cover 背景/线条元素应受控`)
+
+    const sectionXml = await loadSlideXml(result, 2)
+    assert.ok((sectionXml.match(/<a:alpha val="30000"\/>/g) || []).length >= 1, `${theme} section 应有 70% 透明数字阴影`)
+    assert.ok((sectionXml.match(/prst="rect"/g) || []).length >= 5, `${theme} section 应含 panel gradient 和双 hairline`)
+    assert.ok(countNonTextShapes(sectionXml) <= 5, `${theme} section 背景/线条元素应受控`)
+  }
+})
+
+test('bar-stacked chart 写入 stacked grouping XML', async () => {
+  const result = await createPptx({
+    title: '收入构成',
+    slides: [
+      { title: '封面' },
+      {
+        title: '收入构成',
+        layout: 'chart',
+        chart: {
+          type: 'bar-stacked',
+          categories: ['Q1', 'Q2', 'Q3'],
+          series: [
+            { name: '订阅', values: [60, 72, 85] },
+            { name: '服务', values: [20, 24, 28] },
+          ],
+        },
+      },
+    ],
+  })
+  const chartXml = await loadFirstChartXml(result)
+  assert.ok(chartXml.includes('<c:grouping val="stacked"/>'), 'bar-stacked 应输出 stacked grouping')
+})
+
+test('旧 bar chart 保持非 stacked 行为', async () => {
+  const result = await createPptx({
+    title: '收入对比',
+    slides: [
+      { title: '封面' },
+      {
+        title: '收入对比',
+        layout: 'chart',
+        chart: {
+          type: 'bar',
+          categories: ['Q1', 'Q2'],
+          series: [
+            { name: '今年', values: [100, 120] },
+            { name: '去年', values: [80, 95] },
+          ],
+        },
+      },
+    ],
+  })
+  const chartXml = await loadFirstChartXml(result)
+  assert.ok(!chartXml.includes('<c:grouping val="stacked"/>'), '旧 bar 不应变成 stacked')
 })
 
 test('createPptx slides 为空时报错', async () => {
