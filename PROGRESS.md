@@ -1,7 +1,18 @@
 # PROGRESS.md · your-model-atelier
 
-> 最后更新：2026-05-25 by wx 主会话（v0.9.0 + skill-bundle 全链路）
+> 最后更新：2026-05-27（文档同步会话）
 > 跨会话项目状态入口。代码跟本文件冲突时**以 git 为准**，回头修本文件。
+>
+> **2026-05-27 同步注记**：测试基线已是 **534/534**（不是下文写的 422/433）；待办区第 4/5/10 项已落地——
+> - #4 多 agent 频道 / 委派 → **已实现** (DB v11：`channels` + `channel_agents` + `channel_messages` + FTS5；详见 `docs/AGENTS.md` 阶段 7-11)
+> - #5 Cron / 调度层 → **已实现** (DB v10：`cron_jobs` 表，三种 schedule_type + 三种 exec_type，含 per-agent `agent_id` FK)
+> - #10 i18n 扩 ja/ko/zh-TW → **已实现** (`src/i18n/translations.js` 现含 zh/en/ja/ko/zh-TW 五语全量)
+> - 独立 Hub → **已实现** (`server/hub/` + `docs/HUB.md`，`HUB_ENABLED=1 npm run hub` 启动)
+> - 统一通知中心 → **已实现** (DB v8：`notifications` 表)
+> - 会话归档 + 跨会话搜索 → **已实现** (DB v9：sessions 扩列 + `messages_fts`)
+> - agent persona 模板 → **已实现** (DB v7：`agents.persona_template`，模板表在 `server/services/agentTemplates.js`)
+>
+> 下方"待办"区与 GAP_VS_OPENHANAKO.md / REFOUND_PLAN.md 的"待新增"段落对应项均可视为已勾选，**未单独逐条回填**——以 git 与 `server/db.js` 为准。
 
 ---
 
