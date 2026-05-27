@@ -35,6 +35,7 @@ test('validateManifest: 合法 manifest 通过', () => {
   assert.equal(r.ok, true, JSON.stringify(r.errors))
   assert.equal(r.manifest.id, 'sample-x')
   assert.deepEqual(r.manifest.tags, ['a', 'b'])
+  assert.deepEqual(r.manifest.capabilities, [])
 })
 
 test('validateManifest: 缺字段 / 非法 id / 非法 type / 非法 semver / 非法 entry', () => {
@@ -78,11 +79,38 @@ test('validateManifest: 非对象输入被拒', () => {
   assert.equal(validateManifest([1, 2]).ok, false)
 })
 
-test('validateManifest: PLUGIN_TYPES 覆盖三种类型', () => {
+test('validateManifest: PLUGIN_TYPES 覆盖所有类型', () => {
   for (const t of PLUGIN_TYPES) {
-    const r = validateManifest({ ...VALID, type: t })
+    const r = validateManifest({ ...VALID, type: t, entry: t === 'transformer' ? 'entry.js' : VALID.entry })
     assert.equal(r.ok, true, `${t} should be ok`)
   }
+})
+
+test('validateManifest: capabilities 仅允许白名单且最多 16 项', () => {
+  let r = validateManifest({ ...VALID, capabilities: ['log'] })
+  assert.equal(r.ok, true, JSON.stringify(r.errors))
+  assert.deepEqual(r.manifest.capabilities, ['log'])
+
+  r = validateManifest({ ...VALID, capabilities: 'log' })
+  assert.equal(r.ok, false)
+  assert.ok(r.errors.some((e) => e.startsWith('capabilities:')))
+
+  r = validateManifest({ ...VALID, capabilities: ['fetch'] })
+  assert.equal(r.ok, false)
+  assert.ok(r.errors.some((e) => e.startsWith('capabilities:')))
+
+  r = validateManifest({ ...VALID, capabilities: Array(17).fill('log') })
+  assert.equal(r.ok, false)
+  assert.ok(r.errors.some((e) => e.startsWith('capabilities:')))
+})
+
+test('validateManifest: transformer entry 必须是 .js', () => {
+  let r = validateManifest({ ...VALID, type: 'transformer', entry: 'entry.js' })
+  assert.equal(r.ok, true, JSON.stringify(r.errors))
+
+  r = validateManifest({ ...VALID, type: 'transformer', entry: 'theme.json' })
+  assert.equal(r.ok, false)
+  assert.ok(r.errors.some((e) => e.startsWith('entry:')))
 })
 
 test('loadPlugins: 空目录返回空（不存在亦不报错）', () => {
@@ -139,6 +167,7 @@ test('loadPlugins: 读到 2 个示例 plugin', () => {
   const ids = r.plugins.map((p) => p.id)
   assert.ok(ids.includes('example-warm-ppt-theme'))
   assert.ok(ids.includes('example-greeting-prompt'))
+  assert.ok(ids.includes('example-transformer-upper'))
 })
 
 test('loadPlugins: 重复 id 被拒', () => {
