@@ -1,22 +1,31 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useT } from '../i18n/I18nProvider.jsx'
 import {
   AlertTriangle,
   Bell,
+  BookOpen,
+  CalendarClock,
   Check,
   CheckCircle2,
   Download,
   FileJson,
   HardDrive,
+  Hash,
+  History,
+  ListChecks,
   MessageSquare,
   Mic,
   Moon,
+  Plug,
   RefreshCw,
   Server,
   Shield,
   Sun,
   Trash2,
   Upload,
+  Users,
+  Webhook,
   Zap,
   MonitorSmartphone,
 } from 'lucide-react'
@@ -38,7 +47,7 @@ import {
   SCHEMA_VERSION,
 } from '../store/exportSchema.js'
 
-const SETTINGS_NAV = ['账户', '权限中心', '工具', '外观', '快捷键', '数据 & 导出']
+const SETTINGS_NAV = ['功能入口', '系统诊断', '账户', '权限中心', '工具', '外观', '快捷键', '数据 & 导出']
 const ACCENT_COLORS = ['#E86A3C', '#2E8FA3', '#A5C97A', '#D4A4FF']
 
 const SHORTCUTS = [
@@ -92,10 +101,12 @@ function downloadJson(filename, data) {
 
 export default function SettingsView() {
   const { state, dispatch } = useAppContext()
-  const [activeNav, setActiveNav] = useState('账户')
+  const navigate = useNavigate()
+  const [activeNav, setActiveNav] = useState('功能入口')
   const { t, lang, setLang, languages } = useT()
   const navLabel = (item) => {
     switch (item) {
+      case '功能入口': return '功能入口'
       case '系统诊断': return t('settings.systemDiagnostics')
       case '账户': return t('settings.account')
       case '权限中心': return t('nav.permissions')
@@ -576,6 +587,51 @@ export default function SettingsView() {
     )
   }
 
+  function renderFeatureHub() {
+    const featureLinks = [
+      { path: '/task', icon: ListChecks, title: t('nav.task'), desc: '后台任务、Artifacts 与运行记录。' },
+      { path: '/memory', icon: BookOpen, title: t('nav.memory'), desc: '长期记忆、置顶记忆与 Agent 关联。' },
+      { path: '/agents', icon: Users, title: t('nav.agents'), desc: '角色、人格、技能和角色卡管理。' },
+      { path: '/channels', icon: Hash, title: t('nav.channels'), desc: '多 Agent 频道与协作消息流。' },
+      { path: '/mcp', icon: Plug, title: t('nav.mcp'), desc: 'MCP 服务、工具、资源和 prompts。' },
+      { path: '/hooks', icon: Webhook, title: t('nav.hooks'), desc: '事件 Hooks、规则和自动化扩展点。' },
+      { path: '/cron', icon: CalendarClock, title: t('nav.cron'), desc: 'Cron、Heartbeat 和定时执行。' },
+      { path: '/history', icon: History, title: t('nav.history'), desc: '运行历史、生成记录和可追溯结果。' },
+    ]
+
+    return (
+      <section className="flex flex-col gap-5 animate-float-up">
+        <div>
+          <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">FEATURES</span>
+          <h1 className="font-hand text-[28px] text-ink mt-1.5">功能入口</h1>
+          <p className="text-sm text-ink-soft mt-1">低频能力集中在这里，左侧主导航只保留日常高频入口。</p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {featureLinks.map((item) => {
+            const Icon = item.icon
+            return (
+              <button
+                key={item.path}
+                type="button"
+                onClick={() => navigate(item.path)}
+                className="group text-left p-4 border border-ink/30 rounded-md bg-paper hover:bg-paper-2 hover:border-ink-fade/70 transition-colors flex items-start gap-3"
+              >
+                <span className="w-9 h-9 rounded-md border border-ink-fade/40 flex items-center justify-center shrink-0 bg-paper">
+                  <Icon className="w-4 h-4 text-ink-soft group-hover:text-ink" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-sm text-ink">{item.title}</span>
+                  <span className="block text-xs text-ink-soft mt-1 leading-relaxed">{item.desc}</span>
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      </section>
+    )
+  }
+
   function renderPermissions() {
     return (
       <section className="flex flex-col gap-5 animate-float-up">
@@ -994,6 +1050,8 @@ export default function SettingsView() {
 
   const renderActive = () => {
     switch (activeNav) {
+      case '功能入口':
+        return renderFeatureHub()
       case '系统诊断':
         return renderDiagnostics()
       case '账户':
@@ -1034,7 +1092,7 @@ export default function SettingsView() {
           <p className="text-[10px] text-ink-fade mt-1">{t('settings.languageHint')}</p>
         </div>
         <div className="flex flex-col gap-1">
-          {['系统诊断', ...SETTINGS_NAV].map((item) => (
+          {SETTINGS_NAV.map((item) => (
             <button
               key={item}
               onClick={() => setActiveNav(item)}

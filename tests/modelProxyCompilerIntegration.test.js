@@ -20,6 +20,7 @@ const mockPort = mockModel.address().port
 process.env.MODEL_BASE_URL = `http://127.0.0.1:${mockPort}/v1`
 process.env.MODEL_NAME = 'gpt-test'
 process.env.MODEL_API_KEY = 'sk-test'
+process.env.MODEL_PROVIDERS = ''
 
 const { createAppServer } = await import('../server/appServer.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')

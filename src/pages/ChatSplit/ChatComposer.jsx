@@ -20,6 +20,22 @@ const QUICK_SKILLS = [
   { label: '+ 全部技能', command: null, solid: true },
 ]
 
+function normalizeCommandName(value = '') {
+  return String(value || '').replace(/^\//, '').trim().toLowerCase()
+}
+
+function getActiveSkillToken(input, skills = [], slashRegistry = null) {
+  const match = String(input || '').match(/^\/([a-z0-9_-]+)\s+([\s\S]*)$/i)
+  if (!match) return null
+  const name = normalizeCommandName(match[1])
+  if (!name) return null
+  const isQuickSkill = QUICK_SKILLS.some((item) => normalizeCommandName(item.command) === name)
+  const isRuntimeSkill = skills.some((skill) => normalizeCommandName(skill?.id) === name)
+  const slashEntry = slashRegistry?.getCommand?.(name)
+  if (!isQuickSkill && !isRuntimeSkill && slashEntry?.kind !== 'skill') return null
+  return { command: `/${name}`, rest: match[2] || '' }
+}
+
 export default function ChatComposer({
   input,
   setInput,
@@ -47,6 +63,8 @@ export default function ChatComposer({
 }) {
   const textareaRef = useRef(null)
   const fileInputRef = useRef(null)
+  const activeSkillToken = getActiveSkillToken(input, skills, slashRegistry)
+  const composerText = activeSkillToken ? activeSkillToken.rest : input
 
   // ★ #21: input 被外部清空 (发送后) 也回弹到 1 行高度
   useEffect(() => {
@@ -70,14 +88,16 @@ export default function ChatComposer({
       requestAnimationFrame(() => {
         const ta = textareaRef.current
         if (ta) {
+          const token = getActiveSkillToken(text, skills, slashRegistry)
+          const cursor = token ? token.rest.length : text.length
           ta.focus()
-          ta.setSelectionRange(text.length, text.length)
+          ta.setSelectionRange(cursor, cursor)
         }
       })
     }
     window.addEventListener('command-palette:prefill', onPrefill)
     return () => window.removeEventListener('command-palette:prefill', onPrefill)
-  }, [setInput])
+  }, [setInput, skills, slashRegistry])
 
   const [fullscreenSrc, setFullscreenSrc] = useState(null)
 
@@ -177,13 +197,20 @@ export default function ChatComposer({
               </button>
             </div>
           )}
-          <textarea
-            ref={textareaRef}
-            value={input}
-            onChange={(e) => {
+          <div className="flex items-start gap-2 min-h-6">
+            {activeSkillToken && (
+              <span className="inline-flex items-center h-6 px-2.5 rounded-full border border-ember-line bg-ember-soft text-ember text-sm font-mono shrink-0">
+                {activeSkillToken.command}
+              </span>
+            )}
+            <textarea
+              ref={textareaRef}
+              value={composerText}
+              onChange={(e) => {
               const val = e.target.value
               const prev = input
-              setInput(val)
+              const next = activeSkillToken ? `${activeSkillToken.command} ${val}` : val
+              setInput(next)
 
               // ★ #21: 自动撑高 textarea (1 ~ 8 行)
               const ta = e.target
@@ -197,7 +224,7 @@ export default function ChatComposer({
                 return skills.some((s) => s.id.toLowerCase().includes(q) || s.name.toLowerCase().includes(q))
               }
 
-              const nowShow = shouldShow(val)
+              const nowShow = shouldShow(next)
               const wasShow = shouldShow(prev)
 
               if (nowShow && !wasShow) {
@@ -207,11 +234,20 @@ export default function ChatComposer({
                 setShowSlashMenu(false)
               }
             }}
-            onKeyDown={handleKeyDown}
+              onKeyDown={(e) => {
+              if (activeSkillToken && !composerText && (e.key === 'Backspace' || e.key === 'Delete')) {
+                e.preventDefault()
+                setInput('')
+                setShowSlashMenu(false)
+                return
+              }
+              handleKeyDown(e)
+            }}
             placeholder="输入指令，或 / 调用技能…"
-            className="w-full bg-transparent outline-none text-sm text-ink placeholder:text-ink-soft/80 resize-none flex-1 leading-6 max-h-48 overflow-y-auto"
-            rows={1}
-          />
+              className="w-full min-w-0 bg-transparent outline-none text-sm text-ink placeholder:text-ink-soft/80 resize-none flex-1 leading-6 max-h-48 overflow-y-auto"
+              rows={1}
+            />
+          </div>
           <div className="flex justify-between items-center mt-2">
             <div className="flex gap-1.5">
               <input

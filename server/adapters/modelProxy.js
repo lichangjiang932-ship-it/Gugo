@@ -40,6 +40,17 @@ const MESSAGES_SCHEMA = z.array(MESSAGE_SCHEMA).min(1, 'messages 不能为空')
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
 const REQUIRED_ENV = ['MODEL_BASE_URL', 'MODEL_NAME', 'MODEL_API_KEY']
 
+function parseCsv(raw = '') {
+  return String(raw || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function providerEnvPrefix(id = '') {
+  return `MODEL_PROVIDER_${String(id).trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`
+}
+
 function readEnvFile(cwd = process.cwd()) {
   const envPath = path.join(cwd, '.env')
   if (!fs.existsSync(envPath)) return {}
@@ -68,10 +79,54 @@ export function getRuntimeEnv(env = process.env) {
   return { ...readEnvFile(), ...env }
 }
 
+export function getModelProviders(env = process.env) {
+  const ids = parseCsv(env.MODEL_PROVIDERS)
+  return ids.map((id) => {
+    const prefix = providerEnvPrefix(id)
+    return {
+      id,
+      baseUrl: env[`${prefix}_BASE_URL`]?.trim() || '',
+      apiKey: env[`${prefix}_API_KEY`]?.trim() || '',
+      models: parseCsv(env[`${prefix}_MODELS`]),
+    }
+  })
+}
+
+function findProviderForModel(modelName, env = process.env) {
+  return getModelProviders(env).find((provider) => provider.models.includes(modelName)) || null
+}
+
+function providerMissingFields(provider) {
+  const prefix = providerEnvPrefix(provider.id)
+  const missing = []
+  if (!provider.baseUrl) missing.push(`${prefix}_BASE_URL`)
+  if (!provider.apiKey) missing.push(`${prefix}_API_KEY`)
+  if (!provider.models.length) missing.push(`${prefix}_MODELS`)
+  return missing
+}
+
 export function loadModelConfig(env = process.env) {
+  const providers = getModelProviders(env)
   const missing = REQUIRED_ENV.filter((key) => !env[key]?.trim())
   const temperature = Number(env.MODEL_TEMPERATURE ?? 0.7)
   const maxTokens = Number(env.MODEL_MAX_TOKENS ?? 4096)
+
+  if (providers.length) {
+    const modelName = env.MODEL_NAME?.trim() || providers.find((provider) => provider.models.length)?.models[0] || ''
+    const provider = findProviderForModel(modelName, env) || providers[0]
+    const providerMissing = provider ? providerMissingFields(provider) : ['MODEL_PROVIDERS']
+    if (!modelName) providerMissing.unshift('MODEL_NAME')
+
+    return {
+      configured: providerMissing.length === 0,
+      missing: providerMissing,
+      baseUrl: provider?.baseUrl || '',
+      modelName,
+      apiKey: provider?.apiKey || '',
+      temperature: Number.isFinite(temperature) ? temperature : 0.7,
+      maxTokens: Number.isFinite(maxTokens) ? maxTokens : 4096,
+    }
+  }
 
   return {
     configured: missing.length === 0,
@@ -81,6 +136,23 @@ export function loadModelConfig(env = process.env) {
     apiKey: env.MODEL_API_KEY?.trim() || '',
     temperature: Number.isFinite(temperature) ? temperature : 0.7,
     maxTokens: Number.isFinite(maxTokens) ? maxTokens : 4096,
+  }
+}
+
+export function resolveModelConfigForModel({ modelName, env = process.env } = {}) {
+  const base = loadModelConfig(env)
+  const selectedModel = modelName?.trim() || base.modelName
+  const provider = findProviderForModel(selectedModel, env)
+  if (!provider) return { ...base, modelName: selectedModel }
+
+  const missing = providerMissingFields(provider)
+  return {
+    ...base,
+    configured: missing.length === 0,
+    missing,
+    baseUrl: provider.baseUrl,
+    modelName: selectedModel,
+    apiKey: provider.apiKey,
   }
 }
 
@@ -217,16 +289,21 @@ export async function getSystemDiagnostics({ env = process.env, fetchImpl = fetc
 }
 
 export function getVisibleModels(env = process.env, defaultModel = '') {
-  const names = (env.MODEL_NAMES || defaultModel)
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean)
+  const providers = getModelProviders(env)
+  const providerModelEntries = providers.flatMap((provider) =>
+    provider.models.map((name) => ({ name, provider: provider.id }))
+  )
+  const names = providerModelEntries.length
+    ? providerModelEntries.map((entry) => entry.name)
+    : parseCsv(env.MODEL_NAMES || defaultModel)
   const uniqueNames = [...new Set(names.length ? names : [defaultModel].filter(Boolean))]
   const billingConfig = loadBillingConfig({ ...env, MODEL_NAME: defaultModel })
+  const providerByModel = new Map(providerModelEntries.map((entry) => [entry.name, entry.provider]))
   return uniqueNames.map((name) => ({
     name,
     multiplier: billingConfig.multipliers[name] || 1,
     active: name === defaultModel,
+    ...(providerByModel.has(name) ? { provider: providerByModel.get(name) } : {}),
   }))
 }
 
@@ -320,7 +397,7 @@ export async function callBackgroundModel({
     env,
   })
   const { url, init } = buildOpenAICompatibleRequest({
-    config: { ...config, modelName: selectedModel },
+    config: resolveModelConfigForModel({ modelName: selectedModel, env }),
     messages,
     stream: false,
   })
@@ -365,7 +442,7 @@ export async function callBackgroundModelWithTools({
     env,
   })
   const { url, init } = buildOpenAICompatibleRequest({
-    config: { ...config, modelName: selectedModel },
+    config: resolveModelConfigForModel({ modelName: selectedModel, env }),
     messages,
     stream: false,
     tools,
@@ -571,7 +648,7 @@ export async function handleModelProxyRequest(req, res) {
       })
       return
     }
-    const requestConfig = { ...config, modelName: selectedModel }
+    const requestConfig = resolveModelConfigForModel({ modelName: selectedModel, env: getRuntimeEnv() })
 
     let token = ''
     let estimatedCost = 0

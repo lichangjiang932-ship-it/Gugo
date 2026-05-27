@@ -155,11 +155,15 @@ docker compose up -d
 
 | 变量 | 必填 | 说明 | 默认值 |
 |---|---|---|---|
-| `MODEL_BASE_URL` | 是 | OpenAI 兼容 API 地址 | — |
+| `MODEL_BASE_URL` | 是* | OpenAI 兼容 API 地址；单 provider 模式使用 | — |
 | `MODEL_NAME` | 是 | 默认模型名 | — |
-| `MODEL_API_KEY` | 是 | API key | — |
+| `MODEL_API_KEY` | 是* | API key；单 provider 模式使用 | — |
+| `MODEL_PROVIDERS` | 否 | 多 provider 路由 ID 列表，例如 `deepseek,mimo`；启用后用 `MODEL_PROVIDER_<ID>_*` 配置不同上游 | — |
+| `MODEL_PROVIDER_<ID>_BASE_URL` | 否 | 多 provider 模式下某个上游的 OpenAI 兼容 API 地址 | — |
+| `MODEL_PROVIDER_<ID>_API_KEY` | 否 | 多 provider 模式下某个上游的 API key | — |
+| `MODEL_PROVIDER_<ID>_MODELS` | 否 | 多 provider 模式下某个上游可用模型，逗号分隔 | — |
 | `MODEL_NAMES_VISION` | 否 | 视觉模型名（逗号分隔） | — |
-| `MODEL_MULTIPLIER` | 否 | 积分倍率 | `1.0` |
+| `MODEL_PRICE_MULTIPLIERS` | 否 | 每个模型的积分倍率，例如 `model-a:1,model-b:3` | `MODEL_NAME:1` |
 | `SMTP_HOST/PORT/USER/PASS` | 否 | 邮箱服务（缺省时控制台打码） | — |
 | `WORKSPACE_FS_ENABLED` | 否 | 文件系统工具开关 | `0` |
 | `WORKSPACE_SHELL_ENABLED` | 否 | Shell 工具开关 | `0` |

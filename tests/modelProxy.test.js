@@ -9,6 +9,7 @@ import {
   loadModelConfig,
   normalizeOpenAICompatibleUrl,
   parseOpenAICompatibleResponse,
+  resolveModelConfigForModel,
 } from '../server/adapters/modelProxy.js'
 
 test('normalizes OpenAI compatible base URLs to chat completions endpoint', () => {
@@ -110,6 +111,65 @@ test('loads a backend model catalog without exposing API keys', () => {
     { name: 'gpt-pro', multiplier: 3, active: false },
   ])
   assert.equal(JSON.stringify(status).includes('sk-test'), false)
+})
+
+test('loads a multi-provider model catalog with per-model multipliers', () => {
+  const env = {
+    MODEL_PROVIDERS: 'deepseek,mimo',
+    MODEL_PROVIDER_DEEPSEEK_BASE_URL: 'https://api.deepseek.com',
+    MODEL_PROVIDER_DEEPSEEK_API_KEY: 'sk-deepseek',
+    MODEL_PROVIDER_DEEPSEEK_MODELS: 'deepseek-v4-pro,deepseek-v4-flash',
+    MODEL_PROVIDER_MIMO_BASE_URL: 'https://api.xiaomimimo.com/v1',
+    MODEL_PROVIDER_MIMO_API_KEY: 'sk-mimo',
+    MODEL_PROVIDER_MIMO_MODELS: 'mimo-v2.5,mimo-v2.5-pro',
+    MODEL_NAME: 'deepseek-v4-pro',
+    MODEL_PRICE_MULTIPLIERS: 'deepseek-v4-pro:3,deepseek-v4-flash:0.6,mimo-v2.5:1,mimo-v2.5-pro:3',
+  }
+
+  const status = getModelStatus(env)
+
+  assert.equal(status.configured, true)
+  assert.deepEqual(status.models, [
+    { name: 'deepseek-v4-pro', multiplier: 3, active: true, provider: 'deepseek' },
+    { name: 'deepseek-v4-flash', multiplier: 0.6, active: false, provider: 'deepseek' },
+    { name: 'mimo-v2.5', multiplier: 1, active: false, provider: 'mimo' },
+    { name: 'mimo-v2.5-pro', multiplier: 3, active: false, provider: 'mimo' },
+  ])
+  assert.equal(JSON.stringify(status).includes('sk-deepseek'), false)
+  assert.equal(JSON.stringify(status).includes('sk-mimo'), false)
+})
+
+test('resolves selected models to their provider endpoint and API key', () => {
+  const env = {
+    MODEL_PROVIDERS: 'deepseek,mimo',
+    MODEL_PROVIDER_DEEPSEEK_BASE_URL: 'https://api.deepseek.com',
+    MODEL_PROVIDER_DEEPSEEK_API_KEY: 'sk-deepseek',
+    MODEL_PROVIDER_DEEPSEEK_MODELS: 'deepseek-v4-pro,deepseek-v4-flash',
+    MODEL_PROVIDER_MIMO_BASE_URL: 'https://api.xiaomimimo.com/v1',
+    MODEL_PROVIDER_MIMO_API_KEY: 'sk-mimo',
+    MODEL_PROVIDER_MIMO_MODELS: 'mimo-v2.5,mimo-v2.5-pro',
+    MODEL_NAME: 'deepseek-v4-pro',
+  }
+
+  assert.deepEqual(resolveModelConfigForModel({ modelName: 'mimo-v2.5-pro', env }), {
+    configured: true,
+    missing: [],
+    baseUrl: 'https://api.xiaomimimo.com/v1',
+    modelName: 'mimo-v2.5-pro',
+    apiKey: 'sk-mimo',
+    temperature: 0.7,
+    maxTokens: 4096,
+  })
+
+  assert.deepEqual(resolveModelConfigForModel({ modelName: 'deepseek-v4-flash', env }), {
+    configured: true,
+    missing: [],
+    baseUrl: 'https://api.deepseek.com',
+    modelName: 'deepseek-v4-flash',
+    apiKey: 'sk-deepseek',
+    temperature: 0.7,
+    maxTokens: 4096,
+  })
 })
 
 test('system diagnostics summarize model, billing, and mail without secrets', async () => {

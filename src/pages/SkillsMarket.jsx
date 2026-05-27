@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Search, Sparkles, Upload, X, Package, GitBranch as Github } from 'lucide-react'
+import { Plus, Search, Upload, X, Package, GitBranch as Github } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
 import { SKILLS } from '../data.js'
 import { useAppContext } from '../store/AppContext'
@@ -364,7 +364,7 @@ export default function SkillsMarket() {
               key={skill.id}
               onClick={() => handleSkillClick(skill)}
               className={`relative p-4 border rounded-md text-left flex flex-col gap-2.5 hover:shadow-md transition-shadow ${
-                skill.recommended ? 'border-ember bg-ember-soft' : skill.custom ? 'border-ink/40 border-dashed bg-paper-2' : 'border-ink/30 hover:border-ink/60'
+                skill.custom ? 'border-ink/40 border-dashed bg-paper-2' : 'border-ink/30 hover:border-ink/60'
               }`}
             >
               {skill.localCustom && (
@@ -388,11 +388,6 @@ export default function SkillsMarket() {
                     return Icon ? <Icon className="w-5 h-5 text-ink-fade" /> : <span className="text-xl">{skill.icon}</span>
                   })()}
                 </div>
-                {skill.recommended && (
-                  <span className="font-mono text-[9px] tracking-wider text-ember flex items-center gap-1">
-                    <Sparkles className="w-3 h-3" /> 推荐
-                  </span>
-                )}
                 {skill.custom && <span className="font-mono text-[9px] tracking-wider text-ink-fade">{skill.imported ? '已导入' : '自定义'}</span>}
               </div>
               <div>

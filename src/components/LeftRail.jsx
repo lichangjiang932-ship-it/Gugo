@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { MessageSquare, Wrench, Shield, History, Settings, Sparkles, ListChecks, X, Search, BookOpen, Webhook, Plug, Users, MoreHorizontal, Archive, ArchiveRestore, CalendarClock, Hash } from 'lucide-react'
+import { MessageSquare, Wrench, Settings, Sparkles, X, Search, MoreHorizontal, Archive, ArchiveRestore } from 'lucide-react'
 import { useAppContext } from '../store/AppContext'
 import {
   LOGIN_CODE_COUNTDOWN_SECONDS,
@@ -77,20 +77,11 @@ export default function LeftRail() {
     return () => window.clearInterval(timer)
   }, [loginCodeCountdown])
 
+  const settingsChildPaths = ['/task', '/permissions', '/memory', '/agents', '/channels', '/mcp', '/hooks', '/cron', '/history']
   const navItems = [
-    { path: '/', icon: Sparkles, label: t('nav.home') },
     { path: '/chat', icon: MessageSquare, label: t('nav.chat') },
-    { path: '/task', icon: ListChecks, label: t('nav.task') },
     { path: '/skills', icon: Wrench, label: t('nav.skills') },
-    { path: '/permissions', icon: Shield, label: t('nav.permissions') },
-    { path: '/memory', icon: BookOpen, label: t('nav.memory'), requiresLogin: true },
-    { path: '/agents', icon: Users, label: t('nav.agents'), requiresLogin: true },
-    { path: '/channels', icon: Hash, label: t('nav.channels'), requiresLogin: true },
-    { path: '/mcp', icon: Plug, label: t('nav.mcp'), requiresLogin: true },
-    { path: '/hooks', icon: Webhook, label: t('nav.hooks'), requiresLogin: true },
-    { path: '/cron', icon: CalendarClock, label: t('nav.cron'), requiresLogin: true },
-    { path: '/history', icon: History, label: t('nav.history') },
-    { path: '/settings', icon: Settings, label: t('nav.settings'), requiresLogin: true },
+    { path: '/settings', icon: Settings, label: t('nav.settings'), requiresLogin: true, activePaths: settingsChildPaths },
   ]
 
   const sessions = state.sessions.filter((session) => {
@@ -301,7 +292,7 @@ export default function LeftRail() {
 
         <div className="flex flex-col gap-0.5 mt-1">
           {navItems.map((item) => {
-            const isActive = location.pathname === item.path
+            const isActive = location.pathname === item.path || item.activePaths?.includes(location.pathname)
             return (
               <button
                 key={item.path}
