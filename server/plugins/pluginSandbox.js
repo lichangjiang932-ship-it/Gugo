@@ -3,7 +3,7 @@ import { Worker } from 'node:worker_threads'
 import { performance } from 'node:perf_hooks'
 import { PLUGIN_CAPABILITIES } from './pluginManifest.js'
 
-const DEFAULT_TIMEOUT_MS = 1000
+const DEFAULT_TIMEOUT_MS = 5000
 const DEFAULT_MEMORY_LIMIT_MB = 32
 const ERROR_LIMIT = 1024
 
