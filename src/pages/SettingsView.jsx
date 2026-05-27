@@ -30,6 +30,7 @@ import {
   MonitorSmartphone,
 } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
+import IntegrationsPanel from '../components/IntegrationsPanel.jsx'
 import { useAppContext } from '../store/AppContext'
 import { clearPersistedState } from '../store/AppContext.jsx'
 import { getAccount, getAuthToken, recharge, removeAccountPassword, sendLoginCode, setAccountPassword, setAuthToken, verifyLoginCode } from '../lib/accountClient.js'
@@ -47,7 +48,7 @@ import {
   SCHEMA_VERSION,
 } from '../store/exportSchema.js'
 
-const SETTINGS_NAV = ['功能入口', '系统诊断', '账户', '权限中心', '工具', '外观', '快捷键', '数据 & 导出']
+const SETTINGS_NAV = ['功能入口', '系统诊断', '账户', '权限中心', '工具', '集成', '外观', '快捷键', '数据 & 导出']
 const ACCENT_COLORS = ['#E86A3C', '#2E8FA3', '#A5C97A', '#D4A4FF']
 
 const SHORTCUTS = [
@@ -111,6 +112,7 @@ export default function SettingsView() {
       case '账户': return t('settings.account')
       case '权限中心': return t('nav.permissions')
       case '工具': return t('settings.tools')
+      case '集成': return t('settings.integrations')
       case '外观': return t('settings.appearance')
       case '快捷键': return t('settings.shortcuts')
       case '数据 & 导出': return t('settings.dataExport')
@@ -744,6 +746,27 @@ export default function SettingsView() {
     )
   }
 
+  function renderIntegrations() {
+    return (
+      <section className="flex flex-col gap-5 animate-float-up">
+        <div>
+          <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">INTEGRATIONS</span>
+          <h1 className="font-hand text-[28px] text-ink mt-1.5">{t('settings.integrations')}</h1>
+          <p className="text-sm text-ink-soft mt-1">{t('settings.integrationsSubtitle')}</p>
+        </div>
+
+        <IntegrationsPanel kind="social" t={t} />
+
+        <div className="flex flex-col gap-3">
+          <div className="p-3 border border-dashed border-ink-fade/40 rounded-md bg-paper-2 text-sm text-ink-soft">
+            {t('integrations.visionAssistHint')}
+          </div>
+          <IntegrationsPanel kind="vision_assist" t={t} />
+        </div>
+      </section>
+    )
+  }
+
   function SettingsGroup({ title, children }) {
     return (
       <div className="p-4 border border-ink/30 rounded-md flex flex-col gap-3">
@@ -1060,6 +1083,8 @@ export default function SettingsView() {
         return renderPermissions()
       case '工具':
         return renderTools()
+      case '集成':
+        return renderIntegrations()
       case '外观':
         return renderAppearance()
       case '快捷键':

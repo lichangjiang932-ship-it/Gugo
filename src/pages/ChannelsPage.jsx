@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Archive, Bot, ChevronDown, Hash, MessageCircle, Plus, Send, Settings, User, X } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { Archive, Bot, ChevronDown, Hash, MessageCircle, MessageSquarePlus, Plus, Send, Settings, User, X } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
 import MentionsAutocomplete from '../components/MentionsAutocomplete.jsx'
 import { applyMention, getMentionQuery } from '../components/mentionsAutocompleteLogic.js'
@@ -437,6 +438,11 @@ export default function ChannelsPage() {
         <div className="flex flex-col gap-4">
           <ChannelListGroup title={t('channels.group')} channels={grouped.group} activeId={activeId} onSelect={(id) => { setShowSettings(false); setActiveId(id) }} />
           <ChannelListGroup title={t('channels.dm')} channels={grouped.dm} activeId={activeId} onSelect={(id) => { setShowSettings(false); setActiveId(id) }} />
+          {!loading && grouped.group.length === 0 && grouped.dm.length === 0 ? (
+            <div className="rounded-md border border-dashed border-ink-fade/40 bg-paper-2/60 px-3 py-3 text-xs leading-relaxed text-ink-fade">
+              {t('channels.emptyHint')}
+            </div>
+          ) : null}
           <button type="button" onClick={() => setShowArchived((open) => !open)} className="flex items-center justify-between px-2 py-1 text-xs text-ink-fade hover:text-ink-soft">
             {t('channels.archived')}
             <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showArchived ? 'rotate-180' : ''}`} />
@@ -528,7 +534,25 @@ export default function ChannelsPage() {
             </footer>
           </>
         ) : (
-          <div className="flex-1 flex items-center justify-center text-sm text-ink-fade">{t('channels.empty')}</div>
+          <div className="flex-1 flex items-center justify-center p-6">
+            <div className="w-full max-w-md rounded-md border border-ink-fade/40 bg-paper p-6 text-center flex flex-col items-center gap-4">
+              <div className="w-14 h-14 rounded-md border border-ink-fade/40 bg-paper-2 flex items-center justify-center">
+                <MessageSquarePlus className="w-7 h-7 text-ink-soft" />
+              </div>
+              <div>
+                <h2 className="font-hand text-2xl text-ink">{t('channels.emptyTitle')}</h2>
+                <p className="mt-2 text-sm leading-relaxed text-ink-soft">{t('channels.emptyHint')}</p>
+              </div>
+              <div className="flex flex-col items-center gap-2">
+                <button type="button" onClick={() => setShowCreate(true)} className="h-10 px-4 rounded-md bg-ember text-paper text-sm hover:bg-ember/90">
+                  {t('channels.emptyCta')}
+                </button>
+                <Link to="/settings" className="text-xs text-ink-fade hover:text-ink-soft">
+                  {t('channels.emptyBindIm')}
+                </Link>
+              </div>
+            </div>
+          </div>
         )}
       </main>
 
