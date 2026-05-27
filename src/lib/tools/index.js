@@ -694,8 +694,33 @@ async function execListImports(args) {
   return { content: JSON.stringify(data) }
 }
 async function execApplyPatch(args) {
-  const data = await callWorkspaceJson('/api/tools/code/apply-patch', args)
-  return { content: JSON.stringify(data) }
+  const preview = await callWorkspaceJson('/api/tools/code/apply-patch', { ...args, dry_run: true })
+  if (preview?.ok === false) {
+    return { ok: false, content: JSON.stringify(preview) }
+  }
+
+  let approved = false
+  try {
+    const autoApprove = typeof window !== 'undefined' &&
+      window.localStorage?.getItem('apply_patch.auto_approve') === '1'
+    if (autoApprove) {
+      approved = true
+    } else if (typeof window !== 'undefined' && typeof window.__applyPatchApproval === 'function') {
+      approved = await window.__applyPatchApproval(preview?.changes || [])
+    }
+  } catch {
+    approved = false
+  }
+
+  if (!approved) {
+    return {
+      ok: false,
+      content: JSON.stringify({ ok: false, error: 'User rejected patch', rejected: true }),
+    }
+  }
+
+  const data = await callWorkspaceJson('/api/tools/code/apply-patch', { ...args, dry_run: false })
+  return { ok: data?.ok !== false, content: JSON.stringify(data) }
 }
 async function execReflect(args) {
   const data = await callWorkspaceJson('/api/tools/agent/reflect', args)
@@ -1066,12 +1091,13 @@ export async function executeToolCall(call, options = {}) {
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       const output = await fn(parsedArgs)
+      const ok = output && typeof output === 'object' && typeof output.ok === 'boolean' ? output.ok : true
       const content = typeof output === 'string' ? output : output.content
       const billing = typeof output === 'string' ? null : output.billing
       const artifact = typeof output === 'string' ? null : (output.artifact || null)
       // Feature 8: manage_todos 返回的 todos 字段直传 caller,用于 dispatch SET_TODOS
       const todos = typeof output === 'string' ? null : (output.todos || null)
-      return { ok: true, content, billing, artifact, todos, attempts: attempt + 1 }
+      return { ok, content, billing, artifact, todos, attempts: attempt + 1 }
     } catch (err) {
       lastErr = err
       const msg = err?.message || String(err)

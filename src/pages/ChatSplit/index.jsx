@@ -22,6 +22,7 @@ import ChatComposer from './ChatComposer'
 import RightPreviewPane from './RightPreviewPane'
 import CodingWorkbench from './CodingWorkbench'
 import TodoTracker from '../../components/TodoTracker'
+import ApplyPatchApprovalModal from '../../components/ApplyPatchApprovalModal'
 import { useToast } from '../../components/Toast.jsx'
 import { useT } from '../../i18n/I18nProvider.jsx'
 import { buildArtifactPreview } from '../../lib/artifactPreview.js'
@@ -117,7 +118,46 @@ export default function ChatSplit() {
   const [isGenerating, setIsGenerating] = useState(false)
   const [voiceState, setVoiceState] = useState('idle')
   const [showContextPanel, setShowContextPanel] = useState(false)
+  const [applyPatchApproval, setApplyPatchApproval] = useState({ open: false, changes: [], busy: false })
   const abortCtrlRef = useRef(null)
+  const applyPatchApprovalResolveRef = useRef(null)
+
+  const resolveApplyPatchApproval = useCallback((approved) => {
+    const resolve = applyPatchApprovalResolveRef.current
+    applyPatchApprovalResolveRef.current = null
+    setApplyPatchApproval((current) => ({ ...current, busy: true }))
+    if (resolve) resolve(approved)
+    if (typeof window !== 'undefined') {
+      window.setTimeout(() => setApplyPatchApproval({ open: false, changes: [], busy: false }), 0)
+    } else {
+      setApplyPatchApproval({ open: false, changes: [], busy: false })
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const approvalGateway = (changes) => new Promise((resolve) => {
+      if (applyPatchApprovalResolveRef.current) {
+        applyPatchApprovalResolveRef.current(false)
+      }
+      applyPatchApprovalResolveRef.current = resolve
+      setApplyPatchApproval({
+        open: true,
+        changes: Array.isArray(changes) ? changes : [],
+        busy: false,
+      })
+    })
+    window.__applyPatchApproval = approvalGateway
+    return () => {
+      if (window.__applyPatchApproval === approvalGateway) {
+        delete window.__applyPatchApproval
+      }
+      if (applyPatchApprovalResolveRef.current) {
+        applyPatchApprovalResolveRef.current(false)
+        applyPatchApprovalResolveRef.current = null
+      }
+    }
+  }, [])
   const recognitionRef = useRef(null)
   const stateRef = useRef(state)
 
@@ -996,6 +1036,14 @@ export default function ChatSplit() {
       ) : agentMode === 'code' ? (
         <CodingWorkbench onMessage={setWorkbenchMessage} />
       ) : null}
+
+      <ApplyPatchApprovalModal
+        open={applyPatchApproval.open}
+        changes={applyPatchApproval.changes}
+        busy={applyPatchApproval.busy}
+        onApprove={() => resolveApplyPatchApproval(true)}
+        onReject={() => resolveApplyPatchApproval(false)}
+      />
     </div>
   )
 }
