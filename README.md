@@ -31,7 +31,7 @@
 | 子代理 | 隔离子代理 + 工具白名单 | 是 | 是 |
 | Skill 系统 | 内置 + 可导入 + 内置 SQLite 系统库 | 是 | 是 |
 | 3D 沉浸式入口 | Three.js 粒子封面页 | 无 | 无 |
-| 独立 Hub | 计划中（v0.4） | 是 | 无 |
+| 独立 Hub | ✓ 已实现（`server/hub/` · `HUB_ENABLED=1` 启动 · 详见 [docs/HUB.md](docs/HUB.md)） | 是 | 无 |
 | 跨平台 Bridge | 计划中（v0.5+） | Telegram/飞书/微信/QQ | 无 |
 
 ---
