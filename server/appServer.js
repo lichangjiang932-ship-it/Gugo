@@ -8,6 +8,7 @@ import {
   securityHeaders,
   errorBoundary,
   requestLogger,
+  requireAuth,
 } from './middleware.js'
 import { bootstrap, gracefulShutdown } from './core/lifecycle.js'
 
@@ -101,8 +102,8 @@ function readVersion() {
   return cachedVersion
 }
 
-export function healthCheck(req, res, getEnv = getRuntimeEnv) {
-  // G6: /api/health 必须返回结构化 JSON,带 db + model 子状态.
+export function healthCheckFull(req, res, getEnv = getRuntimeEnv) {
+  // 鉴权版保留完整子系统细节,供运维排障使用.
   // 任何子系统未就绪 → 503,但响应体仍是 JSON,方便运维和探针解析.
   const env = (() => { try { return getEnv() } catch { return process.env } })()
   const db = getDbStatus()
@@ -122,6 +123,20 @@ export function healthCheck(req, res, getEnv = getRuntimeEnv) {
       modelName: model.modelName || null,
       toolMaxRounds: model.toolMaxRounds,
     },
+  }))
+}
+
+export function healthCheck(req, res, getEnv = getRuntimeEnv) {
+  const env = (() => { try { return getEnv() } catch { return process.env } })()
+  const db = getDbStatus()
+  const model = getModelStatus(env)
+  const overallOk = db.ok && model.configured
+  const status = overallOk ? 200 : 503
+  res.writeHead(status, { 'Content-Type': 'application/json' })
+  res.end(JSON.stringify({
+    ok: overallOk,
+    time: Date.now(),
+    version: readVersion(),
   }))
 }
 
@@ -146,6 +161,11 @@ function createRouter(getEnv = getRuntimeEnv) {
   // 健康检查
   if (req.url === '/api/health') {
     healthCheck(req, res, getEnv)
+    return
+  }
+
+  if (req.url === '/api/health/full') {
+    requireAuth(req, res, () => healthCheckFull(req, res, getEnv))
     return
   }
 
