@@ -10,15 +10,18 @@ function tmpDir() {
 
 async function freshModule(dir) {
   process.env.APP_DATA_DIR = dir
-  const dbMod = await import(`../server/db.js?pwd=${Date.now()}_${Math.random()}`)
+  const dbMod = await import('../server/db.js')
   const authMod = await import(`../server/adapters/billingAuth.js?pwd=${Date.now()}_${Math.random()}`)
   return { dbMod, authMod }
 }
 
 test('password lifecycle: set, login, change, remove', async () => {
   const dir = tmpDir()
+  let dbMod = null
   try {
-    const { authMod } = await freshModule(dir)
+    const fresh = await freshModule(dir)
+    dbMod = fresh.dbMod
+    const { authMod } = fresh
     const { issueEmailCode, verifyEmailCode, setPasswordForUser, loginWithPassword, removePasswordForUser } = authMod
 
     // 邮箱登录拿到 token
@@ -64,6 +67,7 @@ test('password lifecycle: set, login, change, remove', async () => {
     assert.equal(removed.user.hasPassword, false)
     assert.throws(() => loginWithPassword({ email: 'pwd-test@example.com', password: 'newPass456' }), /邮箱或密码/)
   } finally {
+    try { dbMod?.closeDb() } catch { /* ignore */ }
     fs.rmSync(dir, { recursive: true, force: true })
     delete process.env.APP_DATA_DIR
   }

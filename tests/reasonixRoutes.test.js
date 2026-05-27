@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { closeDb } from '../server/db.js'
 
 function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-reasonix-'))
@@ -10,10 +11,16 @@ function tmpDir() {
 
 async function freshModule(dir) {
   process.env.APP_DATA_DIR = dir
-  const dbMod = await import(`../server/db.js?rx=${Date.now()}_${Math.random()}`)
+  const dbMod = await import('../server/db.js')
   const authMod = await import(`../server/adapters/billingAuth.js?rx=${Date.now()}_${Math.random()}`)
   const rxMod = await import(`../server/routes/reasonixRoutes.js?rx=${Date.now()}_${Math.random()}`)
   return { dbMod, authMod, rxMod }
+}
+
+function cleanupDataDir(dir) {
+  try { closeDb() } catch { /* ignore */ }
+  fs.rmSync(dir, { recursive: true, force: true })
+  delete process.env.APP_DATA_DIR
 }
 
 async function makeUser() {
@@ -61,8 +68,7 @@ test('memory: create / list / update / disable / build prefix', async () => {
     assert.throws(() => rxMod.createMemory({ userId, title: '', content: 'c' }), /title/)
     assert.throws(() => rxMod.createMemory({ userId, title: 't', content: 'x'.repeat(5000) }), /4000/)
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true })
-    delete process.env.APP_DATA_DIR
+    cleanupDataDir(dir)
   }
 })
 
@@ -92,8 +98,7 @@ test('todo: lifecycle + status filter + user isolation', async () => {
     assert.equal(rxMod.listTodos({ userId: other.user.id }).length, 0)
     assert.throws(() => rxMod.updateTodo({ userId: other.user.id, id: t1.id, patch: { status: 'done' } }), /不存在/)
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true })
-    delete process.env.APP_DATA_DIR
+    cleanupDataDir(dir)
   }
 })
 
@@ -112,8 +117,7 @@ test('effort: default medium + switch levels', async () => {
 
     assert.throws(() => rxMod.setEffortSetting({ userId, effort: 'evil' }), /effort/)
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true })
-    delete process.env.APP_DATA_DIR
+    cleanupDataDir(dir)
   }
 })
 
@@ -135,7 +139,6 @@ test('session meter: bump and cache hit rate', async () => {
     assert.equal(recents.length, 1)
     assert.equal(recents[0].sessionId, 's1')
   } finally {
-    fs.rmSync(dir, { recursive: true, force: true })
-    delete process.env.APP_DATA_DIR
+    cleanupDataDir(dir)
   }
 })
