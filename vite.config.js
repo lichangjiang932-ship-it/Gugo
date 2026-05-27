@@ -17,6 +17,15 @@ import { handleMcpRequest } from './server/routes/mcpRoutes.js'
 import { handleSubagentRequest } from './server/routes/subagentRoutes.js'
 import { handleCompactionRequest } from './server/routes/compactionRoutes.js'
 import { handleKnowledgeGraphRequest } from './server/routes/knowledgeGraphRoutes.js'
+import { handleCronRequest } from './server/routes/cronRoutes.js'
+import { handleAgentRequest } from './server/routes/agentRoutes.js'
+import { handleAgentTemplateRequest } from './server/routes/agentTemplateRoutes.js'
+import { handlePluginRequest } from './server/routes/pluginRoutes.js'
+import { handleChannelRequest } from './server/routes/channelRoutes.js'
+import { handleIntegrationsRequest } from './server/routes/integrationsRoutes.js'
+import { handleReasonixRequest } from './server/routes/reasonixRoutes.js'
+import { handleNotificationRequest } from './server/routes/notificationRoutes.js'
+import { handleSessionRequest } from './server/routes/sessionRoutes.js'
 
 function authBillingPlugin() {
   return {
@@ -93,6 +102,42 @@ function fallbackApiPlugin() {
         }
         if (req.url?.startsWith('/api/tools/fs/') || req.url?.startsWith('/api/tools/shell/')) {
           handleFsShellRequest(req, res)
+          return
+        }
+        if (req.url === '/api/cron-jobs' || req.url?.startsWith('/api/cron-jobs/') || req.url?.startsWith('/api/cron-jobs?')) {
+          handleCronRequest(req, res)
+          return
+        }
+        if (req.url === '/api/agent-templates' || req.url?.startsWith('/api/agent-templates/') || req.url?.startsWith('/api/agent-templates?')) {
+          handleAgentTemplateRequest(req, res)
+          return
+        }
+        if (req.url === '/api/agents' || req.url?.startsWith('/api/agents/') || req.url?.startsWith('/api/agents?')) {
+          handleAgentRequest(req, res)
+          return
+        }
+        if (req.url === '/api/plugins' || req.url?.startsWith('/api/plugins/') || req.url?.startsWith('/api/plugins?')) {
+          handlePluginRequest(req, res)
+          return
+        }
+        if (req.url === '/api/channels' || req.url?.startsWith('/api/channels/') || req.url?.startsWith('/api/channels?')) {
+          handleChannelRequest(req, res)
+          return
+        }
+        if (req.url === '/api/integrations' || req.url?.startsWith('/api/integrations/') || req.url?.startsWith('/api/integrations?')) {
+          handleIntegrationsRequest(req, res)
+          return
+        }
+        if (req.url?.startsWith('/api/reasonix/')) {
+          handleReasonixRequest(req, res)
+          return
+        }
+        if (req.url === '/api/notifications' || req.url?.startsWith('/api/notifications/') || req.url?.startsWith('/api/notifications?')) {
+          handleNotificationRequest(req, res)
+          return
+        }
+        if (req.url === '/api/sessions' || req.url?.startsWith('/api/sessions/') || req.url?.startsWith('/api/sessions?')) {
+          handleSessionRequest(req, res)
           return
         }
         if (req.url?.startsWith('/api/tools/git/') || req.url?.startsWith('/api/tools/check/') || req.url?.startsWith('/api/workbench/')) {
