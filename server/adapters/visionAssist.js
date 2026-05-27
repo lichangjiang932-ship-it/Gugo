@@ -151,7 +151,6 @@ export async function attachVisionDescriptions({
         continue
       }
       processed += 1
-      // eslint-disable-next-line no-await-in-loop
       const result = await describeOneImage({
         imagePart,
         config: assistConfig.config,

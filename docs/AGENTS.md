@@ -237,12 +237,13 @@ exported_at: 2026-05-25T13:00:00.000Z
 - **agent persona_template (v7)**：`agentStore.createAgent / updateAgent` 接受可选 `personaTemplate`，模板表定义在 `server/services/agentTemplates.js`，通过 `getAgentTemplateSystemPrompt(name, { lang })` 渲染。chat 注入时若有 personaTemplate，会在 `## SOUL` 之前追加一段 `## PERSONA TEMPLATE`，三段拼成完整 system block。export/import (`.agent.md`) frontmatter 也带 `persona_template` 字段。
 - **per-agent cron (v10)**：`cron_jobs.agent_id` 可空——空 = 全局任务；非空 = "以这个 agent 的身份"在 tick 时跑（exec_type=`agent_session` 走 `ensureDefaultAgent`-like 注入路径）。**红线**：删 agent 时不级联删 cron，而是 `SET NULL`，让任务退化为全局，避免静默丢任务。
 - **channels (v11)**：channels 是一条独立路径，**不复用** `sessions/messages`。原因：sessions 是"一 user 对一 agent"的线性 chat；channels 是"一 user 对多 agent" + 可 `@mention`，sender_kind 同时包含 `user` 和 `agent`，路由逻辑差异大。两套表暂时不互通，迁移留给后续阶段。
+- **v12**：integrations 表（社交媒体/IM/视觉副驾凭据，per-user CRUD + 测试连通性）
 
 ### 当前 schema 版本
 
 ```js
 // server/db.js
-export const DB_SCHEMA_VERSION = 11
+export const DB_SCHEMA_VERSION = 12
 ```
 
 新增迁移时记得：

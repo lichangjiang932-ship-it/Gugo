@@ -119,13 +119,11 @@
 - [x] **v0.7**：跨标签页 storage 同步 + Templates 弹层 preview + import 撞名重命名
 - [x] **v0.8**：Memory 管理视图加 agent 绑定 UI（filter chip / list badge / editor select）
 - [x] **v0.9**：Agent 角色卡 zip 导出/导入（对齐 openhanako）
+- [x] **v0.10**：integrations 中心 — 飞书/微信/钉钉/QQ/Discord/Telegram/Slack 等账号配置 + 视觉副驾（无视觉模型自动图→文）+ 频道空状态引导 CTA
 
 **进行中 / 下一步**（按 ROI 排，详见 PROGRESS.md）：
-- [ ] Skills 安装机制（plugin 接 `skill-bundle` type）
 - [ ] prompt-template plugin 接 chat slash command
 - [ ] PPT 视觉升级（gradient cover/section + 更多 chart 类型）
-- [ ] 多 agent 频道 / 互调（@agent 委派）
-- [ ] Cron / 调度层（轻提醒 vs 重任务）
 
 历史架构重构进度：[docs/REFOUND_PLAN.md](./docs/REFOUND_PLAN.md)
 

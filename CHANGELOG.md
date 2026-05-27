@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-05-27
+
+### Added
+- DB v12: `integrations` 表 — per-user 第三方账号凭据（feishu/wechat_official/wechat_personal/dingtalk/qq/discord/telegram/slack/lark_bot/webhook）
+- 视觉副驾（vision assist）：无视觉能力的模型自动调副驾把图片转文本描述
+- `/api/integrations` REST 全套：CRUD + 测试连通性 + 启用/禁用
+- 前端「设置 → 集成」页 + IntegrationsPanel 组件
+- 频道空状态从纯文字升级为图文 CTA（含「新建频道」主按钮）
+- i18n 五语补齐（zh/en/ja/ko/zh-TW）
+
+### Changed
+- `modelProxy` 422 拒绝改为：先尝试 vision assist 副驾，失败/未配置才 422
+- 响应头透出 `X-Vision-Assist-Count` / `X-Vision-Assist-Failures` 供前端调试
+
+### Fixed
+- `visionAssist.js` 未使用的 `eslint-disable` 注释
+
 ### Added (Phase 1 补 openhanako gap)
 - **S3 角色卡 zip v0.2** — `export.zip` 多了 `?avatar=0/?skills=0` query；data-URL avatar 内嵌为 `avatar.<ext>`（限 2MB）；skills/<id>/ 打包当前 user 非系统 skill；import 反向回灌 avatar data-URL + `resolveImportedSkillId` 全库 dedup 装入新 user；manifest v0.1 老卡完全兼容
 - **A2 i18n 扩三语** — `translations.js` 加 `ja/ko/zh-TW` 完整词典；`SUPPORTED_LANGUAGES` 升到 5 项；SettingsView 现有 `<select>` 自动亮出三个新选项
