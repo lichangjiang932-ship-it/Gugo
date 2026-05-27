@@ -83,8 +83,24 @@ function serveStatic(req, res) {
     ? filePath
     : path.join(distDir, 'index.html')
   const ext = path.extname(finalPath)
-  send(res, 200, fs.readFileSync(finalPath), {
+  const headers = {
     'Content-Type': MIME_TYPES[ext] || 'application/octet-stream',
+  }
+
+  if (path.basename(finalPath) === 'index.html') {
+    const nonce = res.locals?.cspNonce
+    const html = fs.readFileSync(finalPath, 'utf8')
+      .replace(/<script(?![^>]*\bnonce=)/g, `<script nonce="${nonce}"`)
+    send(res, 200, html, {
+      ...headers,
+      'Cache-Control': 'no-store, must-revalidate',
+    })
+    return
+  }
+
+  send(res, 200, fs.readFileSync(finalPath), {
+    ...headers,
+    'Cache-Control': 'public, max-age=3600',
   })
 }
 
