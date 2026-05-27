@@ -7,28 +7,30 @@ import {
   pushWorkbenchBranch,
   runWorkbenchCheck,
 } from '../../lib/workbenchClient.js'
+import { useT } from '../../i18n/I18nProvider.jsx'
 
 const CHECKS = [
-  { id: 'lint', label: 'npm run lint' },
-  { id: 'test', label: 'npm run test' },
-  { id: 'build', label: 'npm run build' },
+  { id: 'lint', labelKey: 'codingWorkbench.runLint' },
+  { id: 'test', labelKey: 'codingWorkbench.runTests' },
+  { id: 'build', labelKey: 'codingWorkbench.runBuild' },
 ]
 
-function statusLabel(status) {
+function statusLabel(status, t) {
   if (!status) return ''
-  if (status.includes('??')) return 'new'
-  if (status.includes('D')) return 'deleted'
-  if (status.includes('M')) return 'modified'
-  if (status.includes('A')) return 'added'
-  if (status.includes('R')) return 'renamed'
-  return status.trim() || 'changed'
+  if (status.includes('??')) return t('codingWorkbench.statusNew')
+  if (status.includes('D')) return t('codingWorkbench.statusDeleted')
+  if (status.includes('M')) return t('codingWorkbench.statusModified')
+  if (status.includes('A')) return t('codingWorkbench.statusAdded')
+  if (status.includes('R')) return t('codingWorkbench.statusRenamed')
+  return status.trim() || t('codingWorkbench.statusChanged')
 }
 
 export default function CodingWorkbench({ onMessage }) {
+  const { t } = useT()
   const [status, setStatus] = useState(null)
   const [diff, setDiff] = useState(null)
   const [selectedFiles, setSelectedFiles] = useState([])
-  const [commitMessage, setCommitMessage] = useState('feat: add coding workbench')
+  const [commitMessage, setCommitMessage] = useState(() => t('codingWorkbench.defaultCommitMessage'))
   const [checkRuns, setCheckRuns] = useState([])
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
@@ -85,7 +87,7 @@ export default function CodingWorkbench({ onMessage }) {
     try {
       const result = await runWorkbenchCheck(check)
       setCheckRuns((current) => [{ ...result, at: Date.now() }, ...current].slice(0, 6))
-      onMessage?.(result.ok ? `${result.command} passed` : `${result.command} failed`)
+      onMessage?.(t(result.ok ? 'codingWorkbench.checkPassed' : 'codingWorkbench.checkFailed', { command: result.command }))
     } catch (err) {
       setError(err.message)
     } finally {
@@ -101,7 +103,11 @@ export default function CodingWorkbench({ onMessage }) {
       const commit = await commitWorkbenchChanges({ message: commitMessage.trim(), files: selectedFiles })
       setBusy('push')
       const push = await pushWorkbenchBranch()
-      onMessage?.(`Committed ${commit.commit.slice(0, 7)} and pushed ${push.remote}/${push.branch}`)
+      onMessage?.(t('codingWorkbench.committedAndPushed', {
+        commit: commit.commit.slice(0, 7),
+        remote: push.remote,
+        branch: push.branch,
+      }))
       await refresh()
     } catch (err) {
       setError(err.message)
@@ -117,10 +123,12 @@ export default function CodingWorkbench({ onMessage }) {
           <GitBranch className="w-4 h-4" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-ember">Coding Workbench</div>
-          <div className="text-sm text-ink truncate">{status?.branch || 'workspace'} · {status?.clean ? 'clean' : `${files.length} changed`}</div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-ember">{t('codingWorkbench.title')}</div>
+          <div className="text-sm text-ink truncate">
+            {status?.branch || t('codingWorkbench.workspace')} · {status?.clean ? t('codingWorkbench.clean') : t('codingWorkbench.changedCount', { count: files.length })}
+          </div>
         </div>
-        <button onClick={refresh} disabled={!!busy} className="w-8 h-8 rounded-md border border-ink-fade/40 flex items-center justify-center text-ink-soft hover:text-ember disabled:opacity-50" title="Refresh git status">
+        <button onClick={refresh} disabled={!!busy} className="w-8 h-8 rounded-md border border-ink-fade/40 flex items-center justify-center text-ink-soft hover:text-ember disabled:opacity-50" title={t('codingWorkbench.refreshGitStatus')}>
           <RefreshCw className="w-3.5 h-3.5" />
         </button>
       </div>
@@ -135,11 +143,11 @@ export default function CodingWorkbench({ onMessage }) {
 
         <section className="rounded-md border border-ink/15 bg-paper p-3">
           <div className="flex items-center justify-between mb-2">
-            <h3 className="font-hand text-lg text-ink">Changed files</h3>
-            <button onClick={() => setSelectedFiles(files.map((f) => f.path))} className="text-[11px] text-ember">select all</button>
+            <h3 className="font-hand text-lg text-ink">{t('codingWorkbench.changedFiles')}</h3>
+            <button onClick={() => setSelectedFiles(files.map((f) => f.path))} className="text-[11px] text-ember">{t('codingWorkbench.selectAll')}</button>
           </div>
           {files.length === 0 ? (
-            <p className="text-xs text-ink-fade">No git changes.</p>
+            <p className="text-xs text-ink-fade">{t('codingWorkbench.noGitChanges')}</p>
           ) : (
             <div className="space-y-1.5">
               {files.map((file) => (
@@ -148,7 +156,7 @@ export default function CodingWorkbench({ onMessage }) {
                   <button onClick={() => refreshDiffFor(file.path)} className="flex-1 min-w-0 text-left truncate text-ink hover:text-ember" title={file.path}>
                     {file.path}
                   </button>
-                  <span className="font-mono text-[10px] text-ink-fade">{statusLabel(file.status)}</span>
+                  <span className="font-mono text-[10px] text-ink-fade">{statusLabel(file.status, t)}</span>
                 </div>
               ))}
             </div>
@@ -157,14 +165,14 @@ export default function CodingWorkbench({ onMessage }) {
 
         <section className="rounded-md border border-ink/15 bg-paper p-3">
           <div className="flex items-center justify-between mb-2">
-            <h3 className="font-hand text-lg text-ink">Project checks</h3>
-            <span className="text-[10px] text-ink-fade">allowlist only</span>
+            <h3 className="font-hand text-lg text-ink">{t('codingWorkbench.projectChecks')}</h3>
+            <span className="text-[10px] text-ink-fade">{t('codingWorkbench.allowlistOnly')}</span>
           </div>
           <div className="grid grid-cols-3 gap-2">
             {CHECKS.map((item) => (
               <button key={item.id} onClick={() => runCheck(item.id)} disabled={!!busy} className="h-8 rounded-md border border-ink-fade/40 text-[11px] text-ink-soft hover:text-ember hover:border-ember/50 disabled:opacity-50 inline-flex items-center justify-center gap-1">
                 <Play className="w-3 h-3" />
-                {item.label}
+                {t(item.labelKey)}
               </button>
             ))}
           </div>
@@ -175,9 +183,9 @@ export default function CodingWorkbench({ onMessage }) {
                   <div className="flex items-center gap-1.5 text-ink">
                     <CheckCircle2 className={`w-3.5 h-3.5 ${run.ok ? 'text-emerald-600' : 'text-red-600'}`} />
                     <span className="font-mono">{run.command}</span>
-                    <span className="ml-auto text-ink-fade">exit {run.exitCode}</span>
+                    <span className="ml-auto text-ink-fade">{t('codingWorkbench.exitCode', { code: run.exitCode })}</span>
                   </div>
-                  <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap text-ink-fade">{run.stdout || run.stderr || 'no output'}</pre>
+                  <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap text-ink-fade">{run.stdout || run.stderr || t('codingWorkbench.noOutput')}</pre>
                 </div>
               ))}
             </div>
@@ -186,11 +194,11 @@ export default function CodingWorkbench({ onMessage }) {
 
         <section className="rounded-md border border-ink/15 bg-paper p-3">
           <div className="flex items-center justify-between mb-2">
-            <h3 className="font-hand text-lg text-ink">Unified Diff</h3>
-            <button onClick={() => refreshDiffFor('')} className="text-[11px] text-ember">full diff</button>
+            <h3 className="font-hand text-lg text-ink">{t('codingWorkbench.unifiedDiff')}</h3>
+            <button onClick={() => refreshDiffFor('')} className="text-[11px] text-ember">{t('codingWorkbench.fullDiff')}</button>
           </div>
           <pre className="max-h-80 overflow-auto rounded bg-ink text-paper p-3 text-[11px] leading-relaxed whitespace-pre-wrap font-mono">
-            {diff?.diff || diff?.stat || 'No diff loaded.'}
+            {diff?.diff || diff?.stat || t('codingWorkbench.noDiffLoaded')}
           </pre>
         </section>
       </div>
@@ -200,13 +208,13 @@ export default function CodingWorkbench({ onMessage }) {
           value={commitMessage}
           onChange={(event) => setCommitMessage(event.target.value)}
           className="w-full h-9 px-3 rounded-md border border-ink/25 bg-paper-2 text-sm outline-none focus:border-ember"
-          placeholder="feat: describe this change"
+          placeholder={t('codingWorkbench.commitPlaceholder')}
         />
         <button onClick={commitAndPush} disabled={!canCommit} className="w-full h-9 rounded-md bg-ember text-paper text-sm font-hand disabled:opacity-50 inline-flex items-center justify-center gap-2">
           <UploadCloud className="w-4 h-4" />
-          提交并推送
+          {t('codingWorkbench.commitAndPush')}
         </button>
-        <p className="text-[11px] text-ink-fade">Commit/push uses explicit selected files only. Server still requires WORKSPACE_GIT_MUTATION_ENABLED=1.</p>
+        <p className="text-[11px] text-ink-fade">{t('codingWorkbench.mutationHint')}</p>
       </div>
     </aside>
   )
