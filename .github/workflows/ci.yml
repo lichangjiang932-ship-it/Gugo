@@ -8,10 +8,20 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         node-version: [20.x, 22.x]
+        include:
+          # Windows 是摸底矩阵：允许失败不阻塞主线，逐步把 26 个真失败 case 修绿。
+          # 修完一批就把 continue-on-error 摘掉，把 windows 升为强制门禁。
+          - os: windows-latest
+            node-version: 22.x
+            experimental: true
+
+    continue-on-error: ${{ matrix.experimental == true }}
 
     steps:
       - uses: actions/checkout@v4
@@ -22,8 +32,13 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
 
-      - name: Install ripgrep (required by codeSearch tools)
+      - name: Install ripgrep (Linux)
+        if: runner.os == 'Linux'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
+
+      - name: Install ripgrep (Windows)
+        if: runner.os == 'Windows'
+        run: choco install ripgrep -y --no-progress
 
       - name: Install dependencies
         run: npm ci
