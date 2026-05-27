@@ -18,7 +18,13 @@ import {
   touchMemoryUsage,
 } from '../services/memoryStore.js'
 import { dispatchHooks } from '../services/hooksService.js'
-import { ensureDefaultAgent, buildAgentSystemBlock, getAgent } from '../services/agentStore.js'
+import { ensureDefaultAgent, getAgent } from '../services/agentStore.js'
+import {
+  buildIdentityBlock,
+  buildIshikiBlock,
+  buildSkillsBlock,
+  buildSessionsBlock,
+} from '../services/promptCompiler.js'
 
 // ★ #18: 消息格式 schema — 拒绝畸形 messages 入参,防 OpenAI 上游报 400 / 计费爆零
 const MESSAGE_SCHEMA = z.object({
@@ -571,9 +577,22 @@ export async function handleModelProxyRequest(req, res) {
     let estimatedCost = 0
     let injectedMemoryIds = []
     let session = null
+    let account = null
+    let injectedAgentId = null
+    let promptSystemBlockCount = 0
+    const compilerFingerprints = {
+      identity: 'empty',
+      ishiki: 'empty',
+      skills: 'empty',
+      sessions: 'empty',
+    }
+    if (testMode) {
+      token = authToken(req)
+      session = token ? getSessionByToken(token) : null
+    }
     if (!testMode) {
       token = authToken(req)
-      const account = getPublicAccount({ token })
+      account = getPublicAccount({ token })
       session = token ? getSessionByToken(token) : null
 
       if (session?.user_id) {
@@ -591,12 +610,11 @@ export async function handleModelProxyRequest(req, res) {
           messages = promptHook.replacementArgs.messages
         }
       }
+    }
 
-      // 阶段 4 + 阶段 5：注入 Agent SOUL/IDENTITY 为第一个 system block。
-      // - body.agentId 优先（阶段 5），未传 / 不属于该用户 → fallback default
-      // - 可通过 AGENT_INJECT_ENABLED=0 关闭
-      // - 任何错误不阻断 chat
-      let injectedAgentId = null
+    // FreshCompact 风格：identity / ishiki / skills / sessions 分块编译为独立 system message。
+    if (session?.user_id) {
+      const compiledSystemMessages = []
       try {
         if (session?.user_id && getRuntimeEnv().AGENT_INJECT_ENABLED !== '0') {
           let agent = null
@@ -606,9 +624,13 @@ export async function handleModelProxyRequest(req, res) {
             if (found) agent = found
           }
           if (!agent) agent = ensureDefaultAgent({ userId: session.user_id })
-          const block = buildAgentSystemBlock(agent)
-          if (block) {
-            messages.unshift({ role: 'system', content: block })
+          const identity = buildIdentityBlock({ agent })
+          const ishiki = buildIshikiBlock({ agent })
+          compilerFingerprints.identity = identity.fingerprint
+          compilerFingerprints.ishiki = ishiki.fingerprint
+          if (identity.text) compiledSystemMessages.push({ role: 'system', content: identity.text })
+          if (ishiki.text) compiledSystemMessages.push({ role: 'system', content: ishiki.text })
+          if (identity.text || ishiki.text) {
             injectedAgentId = agent.id
           }
         }
@@ -618,7 +640,42 @@ export async function handleModelProxyRequest(req, res) {
         }
       }
 
-      // Feature 3: 注入用户长期记忆为 system block
+      try {
+        const skills = buildSkillsBlock({
+          userId: session.user_id,
+          agentId: injectedAgentId,
+          skillIds: Array.isArray(body.skillIds) ? body.skillIds : [],
+        })
+        compilerFingerprints.skills = skills.fingerprint
+        if (skills.text) compiledSystemMessages.push({ role: 'system', content: skills.text })
+      } catch (err) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn('[skills] prompt compile failed:', err?.message || err)
+        }
+      }
+
+      try {
+        const sessions = buildSessionsBlock({
+          userId: session.user_id,
+          sessionId: typeof body.sessionId === 'string' ? body.sessionId : null,
+          recentMessages: Array.isArray(body.recentMessages) ? body.recentMessages : [],
+        })
+        compilerFingerprints.sessions = sessions.fingerprint
+        if (sessions.text) compiledSystemMessages.push({ role: 'system', content: sessions.text })
+      } catch (err) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn('[sessions] prompt compile failed:', err?.message || err)
+        }
+      }
+
+      if (compiledSystemMessages.length) {
+        messages = [...compiledSystemMessages, ...messages]
+        promptSystemBlockCount = compiledSystemMessages.length
+      }
+    }
+
+    // Feature 3: 注入用户长期记忆为 system block
+    if (!testMode) {
       try {
         if (session?.user_id) {
           const cap = Number(getRuntimeEnv().MEMORY_INJECT_TOKEN_CAP || 800)
@@ -626,7 +683,7 @@ export async function handleModelProxyRequest(req, res) {
           if (picked.memories.length) {
             const block = buildMemorySystemBlock(picked.memories)
             // 插入在 agent block 之后（如果有），使 agent 始终为 messages[0]
-            const insertAt = injectedAgentId ? 1 : 0
+            const insertAt = promptSystemBlockCount || (injectedAgentId ? 1 : 0)
             messages.splice(insertAt, 0, { role: 'system', content: block })
             injectedMemoryIds = picked.memories.map((m) => m.id)
             touchMemoryUsage(session.user_id, injectedMemoryIds)
@@ -783,6 +840,7 @@ export async function handleModelProxyRequest(req, res) {
       creditsCharged: estimatedCost,
       user: billing?.user,
       injectedMemoryIds,
+      ...(testMode ? { compilerFingerprints } : {}),
     })
   } catch (error) {
     // ★ #36: 尊重 readJson 抛的 413 (request body too large)

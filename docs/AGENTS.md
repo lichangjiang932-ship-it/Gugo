@@ -180,6 +180,21 @@ exported_at: 2026-05-25T13:00:00.000Z
 - localStorage key `***`，跨标签页通过 storage event 同步留给后续
 - 切 agent 不影响历史消息已注入的 system block（只影响下一次请求）
 
+## Prompt Compiler（FreshCompact 风格）
+
+`server/services/promptCompiler.js` 将 chat 前置上下文拆成 4 个独立 system block：
+
+| block | 内容来源 | 说明 |
+|---|---|---|
+| identity | `agent.id/name/identityMd/avatarUrl/personaTemplate` | Agent 标题、persona template、IDENTITY |
+| ishiki | `agent.id/soulMd/personaTemplate` | SOUL 与收尾行为约束；与 IDENTITY 文本变更隔离 |
+| skills | 当前用户 runtime skills + `skillIds` | 选中 skill 的 manifest 与 system prompt |
+| sessions | `sessionId/recentMessages` + compaction archive | 最近 tail summary；若消息带 archiveId，则只读最近一份 compaction archive summary |
+
+每块先把参与编译的输入做稳定 JSON 序列化（对象 key 排序），再计算 `sha256`，取前 16 位 hex 作为 fingerprint。空输入返回 `fingerprint: "empty"`，调用方跳过注入。
+
+缓存是进程内 LRU，按块隔离：identity / ishiki / skills / sessions 各 64 项，key 为 `${blockType}:${fingerprint}`，value 为已编译文本。命中时直接返回缓存文本，不再重新拼装字符串；`getPromptCompilerStats()` 暴露 hits/misses/size，`clearPromptCompilerCache(blockType?)` 供测试清理。
+
 ---
 
 ## 阶段 6 已落地：session sticky + agent-MEMORY + plugin 真消费
@@ -236,4 +251,3 @@ export const DB_SCHEMA_VERSION = 11
 3. 在 `runMigrations` 链里追加
 4. `DB_SCHEMA_VERSION` 同步更新
 5. 跨主表新增 FK 用 `ON DELETE SET NULL`（任务/记忆）或 `ON DELETE CASCADE`（强从属），不要默认 RESTRICT
-
