@@ -8,8 +8,8 @@
   <img src="https://img.shields.io/badge/Node.js-20-10b981?logo=node.js" alt="Node 20" />
   <img src="https://img.shields.io/badge/SQLite-WAL-2e8fa3" alt="SQLite WAL" />
   <img src="https://img.shields.io/badge/Vite-8-ec4899?logo=vite" alt="Vite 8" />
-  <img src="https://img.shields.io/badge/tests-422%20passing-success" alt="tests" />
-  <img src="https://img.shields.io/badge/release-v0.9.0-blue" alt="v0.9.0" />
+  <img src="https://img.shields.io/badge/tests-572%20passing-success" alt="tests" />
+  <img src="https://img.shields.io/badge/release-v0.10.0-blue" alt="v0.10.0" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT" />
 </p>
 
@@ -105,7 +105,7 @@
 
 技术栈：React 19 · Vite 8 · Tailwind CSS 3 · Framer Motion · Three.js · Node.js 20 · better-sqlite3 · JSDOM · JSZip · Zod · PPTXGenJS · @e965/xlsx
 
-规模：~17,000 行代码 · 50+ 测试文件 · **422 个测试用例**（v0.9.0） · 零后端框架依赖
+规模：~17,000 行代码 · 50+ 测试文件 · **572 个测试用例**（v0.10.0） · 零后端框架依赖
 
 ---
 
@@ -184,7 +184,7 @@ npm run build    # 生产构建
 npm run serve    # 仅启动后端（需先 build）
 npm run local    # build + 启动
 npm run lint     # ESLint
-npm test         # 422 测试
+npm test         # 572 测试
 ```
 
 ---
