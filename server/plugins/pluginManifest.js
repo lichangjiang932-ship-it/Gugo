@@ -2,7 +2,7 @@
  * server/plugins/pluginManifest.js
  *
  * Plugin manifest 校验（纯函数，无外部依赖）。
- * Manifest 是纯 JSON，本阶段（v0.1）不执行任何 plugin 代码。
+ * Manifest 是纯 JSON；除 transformer 的沙箱入口外，plugin 仍按数据资源处理。
  *
  * Schema:
  *   id          string  必填  [a-z0-9-]+，全局唯一
@@ -10,6 +10,7 @@
  *   version     string  必填  semver: MAJOR.MINOR.PATCH (+pre/build 可选)
  *   type        string  必填  枚举见 PLUGIN_TYPES
  *   entry       string  必填  相对 plugin 根目录的入口文件路径，禁止 .. / 绝对路径
+ *   capabilities string[] 可选 v0.5 沙箱能力白名单
  *   description string  可选  ≤ 2000
  *   author      string  可选  ≤ 200
  *   license     string  可选  ≤ 80
@@ -22,6 +23,11 @@ export const PLUGIN_TYPES = Object.freeze([
   'asset-pack',
   'agent-template',
   'skill-bundle',
+  'transformer',
+])
+
+export const PLUGIN_CAPABILITIES = Object.freeze([
+  'log',
 ])
 
 const ID_RE = /^[a-z0-9][a-z0-9-]*$/
@@ -67,9 +73,17 @@ export function validateManifest(json) {
     if (!e) errors.push('entry: empty')
     else if (e.startsWith('/') || /^[A-Za-z]:[\\/]/.test(e)) errors.push('entry: must be relative (no leading /)')
     else if (e.split(/[\\/]/).includes('..')) errors.push('entry: must not contain ..')
+    else if (m.type === 'transformer' && !e.endsWith('.js')) errors.push('entry: transformer entry must be a .js file')
   }
 
   // optional
+  if (m.capabilities !== undefined) {
+    if (!Array.isArray(m.capabilities)) errors.push('capabilities: must be array when present')
+    else if (m.capabilities.length > 16) errors.push('capabilities: too many (>16)')
+    else if (!m.capabilities.every((c) => isStr(c) && PLUGIN_CAPABILITIES.includes(/** @type {string} */ (c)))) {
+      errors.push(`capabilities: each item must be one of ${PLUGIN_CAPABILITIES.join('|')}`)
+    }
+  }
   if (m.description !== undefined && (!isStr(m.description) || /** @type {string} */ (m.description).length > 2000)) {
     errors.push('description: must be string ≤2000 when present')
   }
@@ -99,6 +113,7 @@ export function validateManifest(json) {
     author: m.author ?? '',
     license: m.license ?? '',
     tags: Array.isArray(m.tags) ? [...m.tags] : [],
+    capabilities: Array.isArray(m.capabilities) ? [...m.capabilities] : [],
   }
   return { ok: true, errors: [], manifest }
 }

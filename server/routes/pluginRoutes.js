@@ -1,21 +1,23 @@
 /**
  * server/routes/pluginRoutes.js
  *
- * 只读公开端点：
+ * 公开 GET 端点 + 受控登录 POST：
  *   GET /api/plugins              → 列出所有 plugin（可选 ?type=ppt-theme 过滤）
  *   GET /api/plugins/:id          → plugin 详情 + entry 内容预览（限 50KB）
- *
- * 严格只读：不实现 POST/PUT/DELETE。匿名可访问（plugin 元数据是公开静态资源）。
+ *   POST /api/plugins/:id/run-sandbox → 登录后运行 transformer 沙箱
+ *   POST /api/plugins/:id/install-as-skill → 登录后安装 skill-bundle
  */
 
 import fs from 'node:fs'
 import { getPlugin, listPlugins } from '../plugins/pluginRegistry.js'
+import { runTransformer } from '../plugins/pluginSandbox.js'
 import { authenticateRequest } from '../middleware.js'
 import { installPluginAsSkill } from '../services/pluginToSkill.js'
 import { listAllSkillIds } from '../services/skillStore.js'
-import { sendJson } from '../utils.js'
+import { readJson, sendJson } from '../utils.js'
 
 const ENTRY_PREVIEW_LIMIT = 50 * 1024
+const SANDBOX_INPUT_LIMIT = 64 * 1024
 
 function publicView(p) {
   if (!p) return null
@@ -54,8 +56,54 @@ function readEntryPreview(p) {
   }
 }
 
+function isSandboxInput(input) {
+  return typeof input === 'string' || (input !== null && typeof input === 'object')
+}
+
+function serializedInputSize(input) {
+  return Buffer.byteLength(JSON.stringify(input), 'utf8')
+}
+
 export async function handlePluginRequest(req, res) {
   const url = new URL(req.url, 'http://localhost')
+
+  // POST /api/plugins/:id/run-sandbox — 需登录，运行 transformer plugin 的受限入口
+  const sandboxMatch = url.pathname.match(/^\/api\/plugins\/([a-z0-9][a-z0-9-]*)\/run-sandbox$/i)
+  if (sandboxMatch && req.method === 'POST') {
+    const userId = authenticateRequest(req)
+    if (!userId) return sendJson(res, 401, { error: 'Unauthorized' })
+
+    const internal = getPlugin(sandboxMatch[1])
+    if (!internal) return sendJson(res, 404, { error: 'plugin not found' })
+    if (internal.type !== 'transformer') {
+      return sendJson(res, 400, { error: 'plugin type must be transformer' })
+    }
+
+    let body
+    try {
+      body = await readJson(req, { maxBytes: 128 * 1024 })
+    } catch (err) {
+      return sendJson(res, 400, { error: err.message || 'invalid json' })
+    }
+    if (!Object.prototype.hasOwnProperty.call(body, 'input') || !isSandboxInput(body.input)) {
+      return sendJson(res, 400, { error: 'input must be string or object' })
+    }
+    if (serializedInputSize(body.input) > SANDBOX_INPUT_LIMIT) {
+      return sendJson(res, 400, { error: 'input exceeds 64KB' })
+    }
+
+    try {
+      const source = fs.readFileSync(internal.entryPath, 'utf8')
+      const result = await runTransformer({
+        plugin: { ...internal, source },
+        input: body.input,
+        capabilities: internal.capabilities || [],
+      })
+      return sendJson(res, 200, result)
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, error: err.message || 'sandbox internal error' })
+    }
+  }
 
   // POST /api/plugins/:id/install-as-skill — 需登录，将 skill-bundle plugin 装为用户 skill
   const installMatch = url.pathname.match(/^\/api\/plugins\/([a-z0-9][a-z0-9-]*)\/install-as-skill$/i)

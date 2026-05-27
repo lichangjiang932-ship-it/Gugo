@@ -29,6 +29,7 @@
 - [x] **v0.7** — 跨标签页 storage 同步 + Templates 弹层 preview + import 撞名重命名 + activeAgent useMemo 派生 + 修复 `STORAGE_KEY='***'` 串台 bug（`c6ea049` / `14c00c2`）
 - [x] **v0.8** — Memory 管理视图加 agent 绑定 UI（filter chip Users 下拉 + list item agent badge + editor select + handleNew 智能继承）（`4f21db4` / `8da0058`）
 - [x] **v0.9** — Agent 角色卡 zip 导出/导入（`GET /api/agents/:id/export.zip` + `POST /api/agents/import.zip`，manifest.json + agent.md + memories/*.md，10MB 上限，撞名→409+overrideName retry）（`3dc01bb` / `106b149`）
+- [x] **Plugin v0.5 沙箱（transformer + worker_threads + capability whitelist）**
 - [x] **基线** — 测试 422/422 全过 · lint 0 error · build OK
 
 ---

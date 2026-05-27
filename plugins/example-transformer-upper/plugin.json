@@ -1,0 +1,9 @@
+{
+  "id": "example-transformer-upper",
+  "name": "Uppercase Transformer",
+  "version": "0.1.0",
+  "type": "transformer",
+  "entry": "entry.js",
+  "capabilities": ["log"],
+  "description": "把 input 字符串大写化的最小示例"
+}

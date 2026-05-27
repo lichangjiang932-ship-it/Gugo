@@ -2,7 +2,7 @@
 
 Your Model Atelier 的 Plugin 子系统。本阶段（stage-2.2 ~ 阶段 6）交付**静态配置 + 只读加载器**，
 另加两条受控的"安装到用户域"通道（`skill-bundle` → skillStore，`agent-template` → agentStore），
-为后续 v0.5 的代码执行（isolated-vm 沙箱）打地基。
+并在 v0.5 落地 `transformer` 类型的受限沙箱执行。
 
 ## 为什么有 Plugin（与 Skill / Agent 的区别）
 
@@ -11,7 +11,7 @@ Your Model Atelier 的 Plugin 子系统。本阶段（stage-2.2 ~ 阶段 6）交
 | 存储          | SQLite (`imported_skills` 表) + 系统种子                         | SQLite (`agents` 表) + 默认 Atelier               | 文件系统：`plugins/<id>/plugin.json`            |
 | 生命周期      | 运行时可装载、可升级、有用户级隔离 (`user_id`)                   | 运行时 CRUD、按 user 隔离                          | 启动时一次性扫描，仓库级只读                    |
 | 内容          | 提示词 + tool spec + 资源文件，参与对话上下文                    | SOUL.md + IDENTITY.md，注入 system block          | 主题色 / 模板 / 静态素材 / 可安装包             |
-| 安全模型      | 严格 schema 校验、按用户隔离                                     | clamp + name 唯一 + default 互斥                  | v0.1 完全不执行代码；v0.5 计划接 isolated-vm    |
+| 安全模型      | 严格 schema 校验、按用户隔离                                     | clamp + name 唯一 + default 互斥                  | 默认纯数据；`transformer` 通过 v0.5 沙箱执行    |
 | 谁来发        | 用户从 UI 上传                                                   | 用户从 UI 创建/导入                                | 仓库内置 + 未来第三方静态包                     |
 
 一句话：**Skill 是"动态认知扩展"，Agent 是"人格卡片"，Plugin 是"静态资产 + 可分发模板源"。**
@@ -27,6 +27,7 @@ Your Model Atelier 的 Plugin 子系统。本阶段（stage-2.2 ~ 阶段 6）交
   "version": "0.1.0",
   "type": "ppt-theme",
   "entry": "theme.json",
+  "capabilities": [],
   "description": "可选描述",
   "author": "可选",
   "license": "MIT",
@@ -42,7 +43,8 @@ Your Model Atelier 的 Plugin 子系统。本阶段（stage-2.2 ~ 阶段 6）交
 | name        | 是   | 1..120 字符                                                           |
 | version     | 是   | semver `MAJOR.MINOR.PATCH` (可加 `-pre` / `+build`)                   |
 | type        | 是   | 枚举：见下方"类型枚举"                                                |
-| entry       | 是   | 相对 plugin 根目录的文件路径，禁止 `/` 开头、禁止 `..`                |
+| entry       | 是   | 相对 plugin 根目录的文件路径，禁止 `/` 开头、禁止 `..`；`transformer` 必须是 `.js` |
+| capabilities | 否 | 能力白名单数组，当前仅允许 `"log"`，最多 16 项                        |
 | description | 否   | ≤2000                                                                 |
 | author      | 否   | ≤200                                                                  |
 | license     | 否   | ≤80                                                                   |
@@ -57,6 +59,7 @@ Your Model Atelier 的 Plugin 子系统。本阶段（stage-2.2 ~ 阶段 6）交
 - **asset-pack** — 通用静态素材包（SVG / 图片 / JSON 数据）。entry 指向清单或主资源。
 - **agent-template** — 可安装为 Agent 的人格模板。entry 通常是 `agent.md`，格式同 `POST /api/agents/import` 接受的 export 文件（frontmatter + `## IDENTITY` + `## SOUL`）。AgentList 的 "Templates" 按钮会列举这种 plugin 并支持一键导入。
 - **skill-bundle** — 可安装为用户 Skill 的模板包。目录必须含 `skill.json` + `prompts/system.md`，整包通过 `POST /api/plugins/:id/install-as-skill` 写入 `imported_skills` 表（按 user_id 隔离）。
+- **transformer** — v0.5 沙箱执行的纯函数转换器。entry 必须是 `.js`，源码需暴露顶层 `function transform(input)`。
 
 > 新增类型必须同时改 `PLUGIN_TYPES`、本文档、对应消费方（route / UI）。光改 schema 是 dead code。
 
@@ -153,6 +156,30 @@ plugins/my-skill/
 
 参考实现：`plugins/example-skill-bundle/`。
 
+### transformer
+
+```
+plugins/my-transformer/
+  plugin.json
+  entry.js
+```
+
+`plugin.json`：
+
+```json
+{ "id": "my-transformer", "name": "My Transformer", "version": "0.1.0", "type": "transformer", "entry": "entry.js", "capabilities": ["log"] }
+```
+
+`entry.js` 必须暴露顶层函数：
+
+```js
+function transform(input) {
+  return input
+}
+```
+
+参考实现：`plugins/example-transformer-upper/`。
+
 ## 加载流程
 
 ```
@@ -187,6 +214,7 @@ bootstrap() (server/core/lifecycle.js)
 | GET    | `/api/plugins`                                | 匿名   | 列出全部 plugin，支持 `?type=ppt-theme` 等过滤                       |
 | GET    | `/api/plugins/:id`                            | 匿名   | 详情 + entry 文件内容预览（限 50KB，超过 `truncated:true`）          |
 | POST   | `/api/plugins/:id/install-as-skill`           | 登录   | 把 `skill-bundle` plugin 装为当前用户的 skill；非 skill-bundle 拒    |
+| POST   | `/api/plugins/:id/run-sandbox`                | 登录   | 执行 `transformer` plugin；body 为 `{ "input": string|object }`，input ≤64KB |
 | 其他   | `/api/plugins/*`                              | —      | 一律 `405 method not allowed`                                        |
 
 GET 返回示例：
@@ -216,11 +244,22 @@ GET 返回示例：
 
 | 版本 | 能力                                                                                            |
 | ---- | ----------------------------------------------------------------------------------------------- |
-| v0.1 | 纯静态 JSON / 资源文件；**绝不执行 plugin 内任何 js**；路径越界 / `..` 被 schema 与 loader 双拦 |
-| v0.5 | 计划接 `isolated-vm` 沙箱，允许 plugin 暴露受限 hook（如自定义渲染器），CPU/内存/时间限额      |
+| v0.1 | 纯静态 JSON / 资源文件；除 `transformer` 外不执行 plugin 内 js；路径越界 / `..` 被 schema 与 loader 双拦 |
+| v0.5 | 已落地 `transformer` 沙箱：Node `worker_threads` + `vm.createContext`，能力白名单 + 时间/内存限额 |
 | 未来 | plugin 签名 + 仓库分发 + 用户级安装/卸载                                                        |
 
-当前阶段如果 plugin 目录里出现 `*.js`，它只会被记账为普通资源文件，**不会被 require / import**。
+除 `transformer` 的 `entry.js` 外，plugin 目录里的 `*.js` 仍只会被记账为普通资源文件，**不会被 require / import**。
+
+## v0.5 沙箱（transformer 类型）
+
+`transformer` 是 v0.5 唯一允许执行 JavaScript 的 plugin 类型，用于把 JSON-serializable input 转成 JSON-serializable output。
+
+- 沙箱实现：主线程启动 Node 内置 `worker_threads.Worker`，worker 内再用 `vm.createContext({})` 执行 plugin 源码；不依赖 `isolated-vm`，不新增 native module。
+- 启动方式：worker 使用 `eval` 字符串启动，plugin 源码作为 string 传入 worker；不会把 plugin 文件当成 worker 主体运行。
+- 协议：plugin 源码必须暴露顶层 `function transform(input) { return output }`。
+- 默认限制：HTTP endpoint 固定 `timeoutMs = 1000`、`memoryLimitMb = 32`；客户端不可覆盖。
+- capability 白名单：manifest 可声明 `capabilities`，当前仅允许 `"log"`。只有声明 `"log"` 时，沙箱内才暴露 `console.log`；`process`、`require`、`fetch`、`Buffer`、`setImmediate`、`setInterval` 不暴露。
+- HTTP 调用：`POST /api/plugins/:id/run-sandbox` 需要登录，body 是 `{ "input": "abc" }` 或 `{ "input": { "text": "abc" } }`，input 序列化后必须 ≤64KB。
 
 `install-as-skill` 通道的额外硬约束（见 `server/services/pluginToSkill.js`）：
 
@@ -241,6 +280,8 @@ GET 返回示例：
 ```bash
 node --test tests/pluginLoader.test.js
 node --test tests/pluginRoutes.test.js
+node --test tests/pluginSandbox.test.js
+node --test tests/pluginSandboxRoutes.test.js
 ```
 
 ## 文件清单
@@ -264,3 +305,9 @@ node --test tests/pluginRoutes.test.js
 - `plugins/example-skill-bundle/` — 示例 skill-bundle
 - `server/plugins/pluginManifest.js` — `PLUGIN_TYPES` 加 `agent-template` / `skill-bundle`
 - `src/pages/AgentList.jsx` — Templates 按钮消费 agent-template plugin
+
+### v0.5 沙箱扩展
+
+- `server/plugins/pluginSandbox.js` — `transformer` 的 worker + vm 沙箱执行器
+- `plugins/example-transformer-upper/` — 示例 transformer
+- `tests/pluginSandbox.test.js` / `tests/pluginSandboxRoutes.test.js`
