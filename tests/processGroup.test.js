@@ -4,11 +4,16 @@ import { spawn } from 'node:child_process'
 import { runProcessWithGroup } from '../server/utils/processGroup.js'
 
 const isPosix = process.platform !== 'win32'
+const node = process.execPath
+
+function nodeArgs(script) {
+  return ['-e', script]
+}
 
 test('runProcessWithGroup: 正常退出收集 stdout/stderr/code', async () => {
   const r = await runProcessWithGroup({
-    shellPath: '/bin/sh',
-    shellArgs: ['-c', 'echo hello; echo bad 1>&2; exit 0'],
+    shellPath: node,
+    shellArgs: nodeArgs("console.log('hello'); console.error('bad'); process.exit(0)"),
     cwd: process.cwd(),
     env: process.env,
     timeout: 5_000,
@@ -21,8 +26,8 @@ test('runProcessWithGroup: 正常退出收集 stdout/stderr/code', async () => {
 
 test('runProcessWithGroup: 非零退出码', async () => {
   const r = await runProcessWithGroup({
-    shellPath: '/bin/sh',
-    shellArgs: ['-c', 'exit 42'],
+    shellPath: node,
+    shellArgs: nodeArgs('process.exit(42)'),
     cwd: process.cwd(),
     env: process.env,
     timeout: 5_000,
@@ -33,8 +38,8 @@ test('runProcessWithGroup: 非零退出码', async () => {
 test('runProcessWithGroup: 超时杀死 + timedOut=true', async () => {
   const t0 = Date.now()
   const r = await runProcessWithGroup({
-    shellPath: '/bin/sh',
-    shellArgs: ['-c', 'sleep 5'],
+    shellPath: node,
+    shellArgs: nodeArgs('setTimeout(() => {}, 5_000)'),
     cwd: process.cwd(),
     env: process.env,
     timeout: 300,
@@ -69,8 +74,8 @@ if (isPosix) {
 
 test('runProcessWithGroup: maxBuffer 触发 truncated 并杀进程', async () => {
   const r = await runProcessWithGroup({
-    shellPath: '/bin/sh',
-    shellArgs: ['-c', 'yes hello | head -c 200000; sleep 5'],
+    shellPath: node,
+    shellArgs: nodeArgs("process.stdout.write('x'.repeat(200_000)); setTimeout(() => {}, 5_000)"),
     cwd: process.cwd(),
     env: process.env,
     timeout: 10_000,
