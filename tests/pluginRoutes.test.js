@@ -2,13 +2,14 @@ import assert from 'node:assert/strict'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-plugin-routes-tests', String(process.pid))
 
 const { createAppServer } = await import('../server/appServer.js')
 const { initPlugins } = await import('../server/plugins/pluginRegistry.js')
 
-const repoRoot = path.resolve(new URL('..', import.meta.url).pathname)
+const repoRoot = fileURLToPath(new URL('..', import.meta.url))
 initPlugins({ rootDir: path.join(repoRoot, 'plugins'), silent: true })
 
 // appServer 启动会走 bootstrap → initPlugins，使用仓库根的 plugins/

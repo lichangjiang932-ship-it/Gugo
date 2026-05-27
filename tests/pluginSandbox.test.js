@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import path from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 import { runTransformer } from '../server/plugins/pluginSandbox.js'
 
-const repoRoot = path.resolve(new URL('..', import.meta.url).pathname)
+const repoRoot = fileURLToPath(new URL('..', import.meta.url))
 const examplePlugin = {
   id: 'example-transformer-upper',
   entryPath: path.join(repoRoot, 'plugins/example-transformer-upper/entry.js'),

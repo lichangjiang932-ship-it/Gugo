@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 
 import { validateManifest, PLUGIN_TYPES } from '../server/plugins/pluginManifest.js'
 import { loadPlugins } from '../server/plugins/pluginLoader.js'
@@ -161,7 +162,7 @@ test('loadPlugins: 跳过坏 manifest 但 errors 收集', () => {
 })
 
 test('loadPlugins: 读到 2 个示例 plugin', () => {
-  const repoRoot = path.resolve(new URL('..', import.meta.url).pathname)
+  const repoRoot = fileURLToPath(new URL('..', import.meta.url))
   const r = loadPlugins({ rootDir: path.join(repoRoot, 'plugins') })
   assert.ok(r.plugins.length >= 2, `expected ≥2, got ${r.plugins.length}`)
   const ids = r.plugins.map((p) => p.id)
@@ -185,7 +186,7 @@ test('loadPlugins: 重复 id 被拒', () => {
 
 test('registry: getPlugin / listPlugins / type 过滤', () => {
   _resetForTests()
-  const repoRoot = path.resolve(new URL('..', import.meta.url).pathname)
+  const repoRoot = fileURLToPath(new URL('..', import.meta.url))
   initPlugins({ rootDir: path.join(repoRoot, 'plugins'), silent: true })
 
   assert.equal(getPlugin('not-exist'), null)
