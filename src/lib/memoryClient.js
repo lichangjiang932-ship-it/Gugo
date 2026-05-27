@@ -29,6 +29,14 @@ export async function listMemoriesApi({ type, q, agent } = {}) {
   return jsonOk(resp)
 }
 
+export async function getMemoriesByIdsApi(ids = []) {
+  const cleanIds = [...new Set(ids.map((id) => String(id || '').trim()).filter(Boolean))]
+  if (cleanIds.length === 0) return { ok: true, memories: [] }
+  const params = new URLSearchParams({ ids: cleanIds.join(',') })
+  const resp = await fetch(`/api/memory/by-ids?${params.toString()}`, { headers: authHeaders() })
+  return jsonOk(resp)
+}
+
 export async function getMemoryIndex() {
   const resp = await fetch('/api/memory/index', { headers: authHeaders() })
   return jsonOk(resp)

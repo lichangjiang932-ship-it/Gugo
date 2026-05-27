@@ -389,6 +389,7 @@ export default function ChatSplit() {
         let totalCreditsCharged = 0
         let latestCreditsBalance = null
         let billingRoundError = null
+        const injectedMemoryIdSet = new Set()
         // G1: 工具调用产出的 artifact (create_pptx/docx/xlsx) 暂存,
         // 流程结束后写到 last message meta — 让 ChatMessages 直接渲染卡片 + 弹右栏.
         // 取最后一个,因为同一轮多次生成时模型期望的"最终产物"通常是末次调用.
@@ -436,6 +437,9 @@ export default function ChatSplit() {
               } else if (event.type === 'tool_calls') {
                 pendingToolCalls = event.toolCalls
               } else if (event.type === 'billing') {
+                if (Array.isArray(event.injectedMemoryIds)) {
+                  for (const id of event.injectedMemoryIds) injectedMemoryIdSet.add(id)
+                }
                 if (typeof event.billing?.creditsCharged === 'number') {
                   totalCreditsCharged += event.billing.creditsCharged
                 }
@@ -564,6 +568,7 @@ export default function ChatSplit() {
             artifactSource,
             artifactDescription,
             artifactExplicit: !!toolArtifact,
+            injectedMemoryIds: [...injectedMemoryIdSet],
           },
         })
 

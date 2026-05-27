@@ -8,6 +8,7 @@ import CompactionPill from '../../components/CompactionPill.jsx'
 import ChoicePicker from '../../components/ChoicePicker.jsx'
 import { hasChoices, stripChoices } from '../../lib/choices.js'
 import { buildArtifactPreview, shouldCollapseArtifactPreview } from '../../lib/artifactPreview.js'
+import { getMemoriesByIdsApi } from '../../lib/memoryClient.js'
 
 // ★ #22: 入门示例 — 覆盖文档/数据/编程/创意四大类,降低首次使用门槛
 const EXAMPLE_QUESTIONS = [
@@ -22,6 +23,66 @@ function SparklesIcon() {
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-ember">
       <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" />
     </svg>
+  )
+}
+
+function MemoryUsageDisclosure({ ids = [] }) {
+  const [open, setOpen] = useState(false)
+  const [items, setItems] = useState([])
+  const [loadedKey, setLoadedKey] = useState('')
+  const [error, setError] = useState(null)
+  const idsKey = ids.join(',')
+  const errorMessage = error?.key === idsKey ? error.message : ''
+
+  useEffect(() => {
+    if (!open || !ids.length || loadedKey === idsKey) return
+    let cancelled = false
+    getMemoriesByIdsApi(ids)
+      .then((data) => {
+        if (cancelled) return
+        setItems(Array.isArray(data.memories) ? data.memories : [])
+        setLoadedKey(idsKey)
+        setError(null)
+      })
+      .catch((err) => {
+        if (!cancelled) setError({ key: idsKey, message: err.message || '加载失败' })
+      })
+    return () => { cancelled = true }
+  }, [open, idsKey, loadedKey, ids])
+
+  if (!ids.length) return null
+
+  return (
+    <div className="mt-3 rounded-md border border-dashed border-ember/30 bg-ember-soft/30 px-3 py-2 text-xs text-ink-soft">
+      <button
+        type="button"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        className="inline-flex items-center gap-1 text-ember hover:text-ink transition-colors"
+      >
+        <span aria-hidden="true">📌</span>
+        <span>用了 {ids.length} 条长期记忆</span>
+        <span aria-hidden="true">{open ? '▴' : '▾'}</span>
+      </button>
+      {open && (
+        <div className="mt-2 space-y-2">
+          {errorMessage && <div className="text-red-500">{errorMessage}</div>}
+          {!errorMessage && loadedKey !== idsKey && <div className="text-ink-fade">加载中...</div>}
+          {!errorMessage && loadedKey === idsKey && items.length === 0 && (
+            <div className="text-ink-fade">这些记忆已不可用</div>
+          )}
+          {!errorMessage && items.map((memory) => {
+            const preview = String(memory.body || '').replace(/\s+/g, ' ').trim().slice(0, 80)
+            return (
+              <div key={memory.id} className="rounded border border-ink-fade/20 bg-paper/70 px-2.5 py-2">
+                <div className="font-medium text-ink truncate">{memory.title}</div>
+                <div className="mt-1 text-ink-fade leading-relaxed">{preview}</div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -242,6 +303,9 @@ export default function ChatMessages({
                     )
                   ) : (
                     <span className="whitespace-pre-wrap">{msg.content}</span>
+                  )}
+                  {msg.role === 'assistant' && msg.meta?.injectedMemoryIds?.length > 0 && (
+                    <MemoryUsageDisclosure ids={msg.meta.injectedMemoryIds} />
                   )}
                   {msg.role === 'user' && (
                     <div className="mt-2 flex justify-end gap-3 text-[11px] text-ink-fade">

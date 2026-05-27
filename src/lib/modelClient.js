@@ -4,12 +4,16 @@ import { z } from 'zod'
 // ★ #18: SSE chunk schema — 后端可能返回畸形 JSON,先验证再消费
 // 后端发的所有 chunk 形态:
 //   { ok: false, error }                       — 错误
-//   { done: true, billing? }                   — 流结束
+//   { done: true, billing?, injectedMemoryIds? } — 流结束
 //   { toolCalls: [...], finishReason? }        — 工具调用帧
 //   { delta: string }                          — 文本增量
 const SSE_CHUNK_SCHEMA = z.union([
   z.object({ ok: z.literal(false), error: z.string().optional() }),
-  z.object({ done: z.literal(true), billing: z.any().optional() }),
+  z.object({
+    done: z.literal(true),
+    billing: z.any().optional(),
+    injectedMemoryIds: z.array(z.string()).optional(),
+  }),
   z.object({ toolCalls: z.array(z.any()).min(1), finishReason: z.string().optional() }),
   z.object({ delta: z.string() }),
   // 未来兼容:任意带 ok=true 的状态帧
@@ -186,8 +190,14 @@ export async function* callModelThroughProxyStream({ messages, modelName, agentI
         chunk = validated.data
         if (chunk.ok === false) throw new Error(chunk.error || '流式响应错误')
         if (chunk.done) {
-          // done 帧可能带 billing,让上层多轮工具调用累计计费
-          if (chunk.billing) yield { type: 'billing', billing: chunk.billing }
+          // done 帧可能带 billing / memory ids,让上层在 return 前完成收尾 meta.
+          if (chunk.billing || chunk.injectedMemoryIds) {
+            yield {
+              type: 'billing',
+              billing: chunk.billing,
+              injectedMemoryIds: chunk.injectedMemoryIds || [],
+            }
+          }
           return
         }
         if (chunk.toolCalls) {

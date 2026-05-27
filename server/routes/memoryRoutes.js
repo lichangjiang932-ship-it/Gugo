@@ -2,6 +2,7 @@
  * Feature 3: 记忆系统 REST 路由
  *
  *   GET    /api/memory/list?type=&q=
+ *   GET    /api/memory/by-ids?ids=a,b,c
  *   GET    /api/memory/index            → MEMORY.md 合成内容
  *   GET    /api/memory/get/:id
  *   POST   /api/memory/upsert
@@ -49,6 +50,18 @@ export async function handleMemoryRequest(req, res) {
     if (req.method === 'GET' && pathname === '/api/memory/index') {
       const content = buildMemoryIndex(userId)
       return sendJson(res, 200, { ok: true, content })
+    }
+
+    if (req.method === 'GET' && pathname === '/api/memory/by-ids') {
+      const ids = (url.searchParams.get('ids') || '')
+        .split(',')
+        .map((id) => id.trim())
+        .filter(Boolean)
+        .slice(0, 60)
+      const memories = ids
+        .map((id) => getMemory(userId, id))
+        .filter(Boolean)
+      return sendJson(res, 200, { ok: true, memories })
     }
 
     if (req.method === 'GET' && pathname.startsWith('/api/memory/get/')) {

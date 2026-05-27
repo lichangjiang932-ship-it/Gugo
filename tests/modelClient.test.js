@@ -133,7 +133,7 @@ test('streaming yields billing event on done frame for tool-call charge accounti
         start(controller) {
           const enc = new TextEncoder()
           controller.enqueue(enc.encode('data: {"ok":true,"delta":"hi"}\n\n'))
-          controller.enqueue(enc.encode('data: {"ok":true,"done":true,"latency":42,"billing":{"creditsCharged":7,"credits":993,"error":null}}\n\n'))
+          controller.enqueue(enc.encode('data: {"ok":true,"done":true,"latency":42,"injectedMemoryIds":["mem-1","mem-2"],"billing":{"creditsCharged":7,"credits":993,"error":null}}\n\n'))
           controller.close()
         },
       }),
@@ -153,4 +153,5 @@ test('streaming yields billing event on done frame for tool-call charge accounti
   assert.equal(events[1].type, 'billing')
   assert.equal(events[1].billing.creditsCharged, 7)
   assert.equal(events[1].billing.credits, 993)
+  assert.deepEqual(events[1].injectedMemoryIds, ['mem-1', 'mem-2'])
 })

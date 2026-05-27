@@ -719,6 +719,7 @@ export async function handleModelProxyRequest(req, res) {
             ok: true,
             done: true,
             latency: Date.now() - started,
+            injectedMemoryIds,
             billing: {
               creditsCharged: estimatedCost,
               credits: chargedBilling?.user?.credits ?? null,
@@ -781,6 +782,7 @@ export async function handleModelProxyRequest(req, res) {
       latency: Date.now() - started,
       creditsCharged: estimatedCost,
       user: billing?.user,
+      injectedMemoryIds,
     })
   } catch (error) {
     // ★ #36: 尊重 readJson 抛的 413 (request body too large)
