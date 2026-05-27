@@ -2,8 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createAppServer } from '../server/appServer.js'
 
-// G6: /api/health 必须返回真实状态(版本/db/model),不能只是占位 ok:true
-test('GET /api/health returns version + db + model status', async () => {
+test('GET /api/health returns slim anonymous status without fingerprints', async () => {
   // 用最小 env 启动 — 模型未配置时仍能返回 503 + JSON,而不是 200/纯文本
   const prevEnv = { ...process.env }
   delete process.env.MODEL_BASE_URL
@@ -23,16 +22,29 @@ test('GET /api/health returns version + db + model status', async () => {
     assert.equal(typeof body.version, 'string', 'version 必须是字符串')
     assert.ok(body.version.length > 0, 'version 不能为空')
     assert.equal(typeof body.time, 'number')
-    assert.equal(typeof body.db, 'object')
-    assert.equal(typeof body.model, 'object')
-    assert.ok(Array.isArray(body.model.missing), 'model.missing 必须是数组')
+    assert.deepEqual(Object.keys(body).sort(), ['ok', 'time', 'version'])
+    assert.equal(body.db, undefined)
+    assert.equal(body.model, undefined)
+    assert.equal(body.uptimeSec, undefined)
 
     // 模型未配置时,overall ok=false 且 status=503
-    assert.equal(body.model.configured, false)
     assert.equal(body.ok, false)
     assert.equal(res.status, 503)
   } finally {
     await new Promise((resolve) => server.close(resolve))
     process.env = prevEnv
+  }
+})
+
+test('GET /api/health/full requires authentication', async () => {
+  const server = createAppServer({ getEnv: () => ({}) })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const { port } = server.address()
+
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/health/full`)
+    assert.equal(res.status, 401)
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
   }
 })
