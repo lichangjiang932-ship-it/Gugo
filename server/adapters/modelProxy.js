@@ -25,6 +25,7 @@ import {
   buildSkillsBlock,
   buildSessionsBlock,
 } from '../services/promptCompiler.js'
+import { attachVisionDescriptions, hasVisionAssistConfigured } from './visionAssist.js'
 
 // ★ #18: 消息格式 schema — 拒绝畸形 messages 入参,防 OpenAI 上游报 400 / 计费爆零
 const MESSAGE_SCHEMA = z.object({
@@ -641,12 +642,37 @@ export async function handleModelProxyRequest(req, res) {
       env: getRuntimeEnv(),
     })
     if (!testMode && hasVisionContent(messages) && !supportsVisionModel(selectedModel, getRuntimeEnv())) {
-      sendJson(res, 422, {
-        ok: false,
-        error: `当前模型 ${selectedModel} 未启用视觉输入，请切换到支持图片的模型。`,
-        modelName: selectedModel,
-      })
-      return
+      const sessionForAssist = session || (authToken(req) ? getSessionByToken(authToken(req)) : null)
+      const userIdForAssist = sessionForAssist?.user_id || null
+      if (hasVisionAssistConfigured({ userId: userIdForAssist, env: getRuntimeEnv() })) {
+        try {
+          const assistResult = await attachVisionDescriptions({
+            messages,
+            userId: userIdForAssist,
+            env: getRuntimeEnv(),
+          })
+          messages = assistResult.messages
+          res.setHeader('X-Vision-Assist-Count', String(assistResult.assistCount))
+          if (assistResult.failures.length) {
+            res.setHeader('X-Vision-Assist-Failures', String(assistResult.failures.length))
+          }
+        } catch (assistErr) {
+          sendJson(res, 422, {
+            ok: false,
+            error: `视觉副驾调用失败，请检查配置：${assistErr.message || assistErr}`,
+            modelName: selectedModel,
+          })
+          return
+        }
+      } else {
+        sendJson(res, 422, {
+          ok: false,
+          error: `当前模型 ${selectedModel} 未启用视觉输入。请切换到支持图片的模型，或在「设置 → 集成」中配置「视觉辅助副驾」让无视觉模型也能间接理解图片。`,
+          modelName: selectedModel,
+          visionAssistAvailable: false,
+        })
+        return
+      }
     }
     const requestConfig = resolveModelConfigForModel({ modelName: selectedModel, env: getRuntimeEnv() })
 

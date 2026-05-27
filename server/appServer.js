@@ -44,6 +44,7 @@ import { handleReasonixRequest } from './routes/reasonixRoutes.js'
 import { handleNotificationRequest } from './routes/notificationRoutes.js'
 import { handleSessionRequest } from './routes/sessionRoutes.js'
 import { handleChannelRequest } from './routes/channelRoutes.js'
+import { handleIntegrationsRequest } from './routes/integrationsRoutes.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -222,6 +223,10 @@ function createRouter(getEnv = getRuntimeEnv) {
 
   if (req.url?.startsWith('/api/channels')) {
     return handleChannelRequest(req, res)
+  }
+
+  if (req.url?.startsWith('/api/integrations')) {
+    return handleIntegrationsRequest(req, res)
   }
 
   if (req.url?.startsWith('/api/sessions')) {

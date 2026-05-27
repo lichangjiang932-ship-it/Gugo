@@ -17,6 +17,8 @@ import { closeCronScheduler } from '../services/cronScheduler.js'
 import { shutdownAll as shutdownMcpAll } from '../mcp/mcpManager.js'
 import { seedSystemSkills } from '../services/seedSystemSkills.js'
 import { initPlugins } from '../plugins/pluginRegistry.js'
+import { getEnabledIntegrationCredentials } from '../services/integrationsStore.js'
+import { setVisionAssistResolver } from '../adapters/visionAssist.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULT_PLUGIN_ROOT = path.resolve(__dirname, '../../plugins')
@@ -38,6 +40,15 @@ export function bootstrap({ silent = process.env.NODE_ENV === 'production' } = {
   } catch (err) {
     // 加载失败绝不阻塞主进程启动
     console.error('[server] initPlugins failed:', err.message)
+  }
+  // 视觉副驾 resolver：让 modelProxy 能按 userId 拉 DB 里的副驾配置
+  try {
+    setVisionAssistResolver((userId) => {
+      if (!userId) return null
+      return getEnabledIntegrationCredentials({ userId, provider: 'vision_assist' })
+    })
+  } catch (err) {
+    console.error('[server] setVisionAssistResolver failed:', err.message)
   }
   if (!silent) console.log('[lifecycle] bootstrap complete')
   return {}
