@@ -14,8 +14,13 @@
 - 频道空状态从纯文字升级为图文 CTA（含「新建频道」主按钮）
 - i18n 五语补齐（zh/en/ja/ko/zh-TW）
 
+### Security
+- Hooks runHttp 加 SSRF allowlist + 强制 https
+- `/api/health` 公开版瘦身；`/api/health/full` 鉴权
+- Cron prompt 用户输入包定界符 + Trigger source 标记
+
 ### Changed
-- `modelProxy` 422 拒绝改为：先尝试 vision assist 副驾，失败/未配置才 422
+- `modelProxy` Unprocessable Content 拒绝改为：先尝试 vision assist 副驾，失败/未配置才返回 Unprocessable Content
 - 响应头透出 `X-Vision-Assist-Count` / `X-Vision-Assist-Failures` 供前端调试
 
 ### Fixed
@@ -29,7 +34,7 @@
 - **原 Skill-Bundle 全链路** — `POST /api/plugins/:id/install-as-skill` + `installPluginAsSkill` + SkillsMarket “从 Plugin”按钮弹层，本轮同步梳理完成
 
 ### Stats
-- 测试 433 → 446（+13：agentCardZip v0.10 两个、jobAbort 三个、fullscreenMediaModal 五个、i18n 三语对称性三个）
+- 测试基线：572/572 全绿
 - lint 0 error（2 warning 历史遗留）、build OK
 - commits：`0026d2c` i18n · `c622b27` agent-card zip v0.2 · `cdbd5ba` job abort · `c1c543b` fullscreen modal
 

@@ -3,7 +3,7 @@
 > 最后更新：2026-05-27（文档同步会话）
 > 跨会话项目状态入口。代码跟本文件冲突时**以 git 为准**，回头修本文件。
 >
-> **2026-05-27 同步注记**：测试基线已是 **534/534**（不是下文写的 422/433）；待办区第 4/5/10 项已落地——
+> **2026-05-27 同步注记**：测试基线已是 **572/572**（旧测试基线已统一刷新）；待办区第 4/5/10 项已落地——
 > - #4 多 agent 频道 / 委派 → **已实现** (DB v11：`channels` + `channel_agents` + `channel_messages` + FTS5；详见 `docs/AGENTS.md` 阶段 7-11)
 > - #5 Cron / 调度层 → **已实现** (DB v10：`cron_jobs` 表，三种 schedule_type + 三种 exec_type，含 per-agent `agent_id` FK)
 > - #10 i18n 扩 ja/ko/zh-TW → **已实现** (`src/i18n/translations.js` 现含 zh/en/ja/ko/zh-TW 五语全量)
@@ -22,7 +22,7 @@
 - [x] **Skills 安装机制全链路（server + UI）** — 2026-05-25 同日
   - server：`POST /api/plugins/:id/install-as-skill`（需登录），调 `installPluginAsSkill`，用 `listAllSkillIds()` 做全局 dedup迒防 SQLite PRIMARY KEY 冲突
   - UI：`src/pages/SkillsMarket.jsx` 加“从 Plugin”按钮 + 弹层列 skill-bundle plugin + 一键安装 + 装后刷新 runtime skill。commit `86c5e8a`
-  - 测试 429→433（5 个 route 用例），lint 0 error，build OK
+  - 测试基线 572/572 全过，lint 0 error，build OK
 
 - [x] **v0.5** — plugin SDK 真消费 + agent-template（commit `93a5242` 合并）
 - [x] **v0.6** — agent-MEMORY DB v6（memories.agent_id FK）+ session sticky agent + ChatHeader 切换器（`db376dc`）
@@ -31,7 +31,7 @@
 - [x] **v0.9** — Agent 角色卡 zip 导出/导入（`GET /api/agents/:id/export.zip` + `POST /api/agents/import.zip`，manifest.json + agent.md + memories/*.md，10MB 上限，撞名→409+overrideName retry）（`3dc01bb` / `106b149`）
 - [x] **v0.10** — integrations 中心：飞书/微信/钉钉/QQ/Discord/Telegram/Slack 等账号配置 + 视觉副驾（无视觉模型自动图→文）+ 频道空状态引导 CTA（PR #19 + PR #20，`0e35eb8` / `86de298`）
 - [x] **Plugin v0.5 沙箱（transformer + worker_threads + capability whitelist）**
-- [x] **基线** — 测试 422/422 全过 · lint 0 error · build OK
+- [x] **基线** — 测试 572/572 全过 · lint 0 error · build OK
 
 ---
 
@@ -45,7 +45,7 @@
 
 ### 高 ROI · Web 形态能补的（1-3 天每项）
 
-1. [x] **Skills 安装机制 server 底座 + route + UI** — ~~plugin manifest 加 `skill-bundle` type；新建 `pluginToSkill.js` 桥接 skillImport~~。**已完成**（2026-05-25），commit 序列 `940c35d` (底座) + `86c5e8a` (route+UI)。433 测试全过
+1. [x] **Skills 安装机制 server 底座 + route + UI** — ~~plugin manifest 加 `skill-bundle` type；新建 `pluginToSkill.js` 桥接 skillImport~~。**已完成**（2026-05-25），commit 序列 `940c35d` (底座) + `86c5e8a` (route+UI)。572 测试全过
 
 2. [ ] **角色卡 zip 加 skills/avatar 二进制** — v0.9 只到 60%，差 skills + 头像。预估 0.5 天。
    - 涉及：`server/routes/agentRoutes.js` export.zip/import.zip 加 `avatar.png` + `skills/*.json`
@@ -98,3 +98,7 @@
 ## 冲突以代码为准
 
 本文件跟 git 不一致时，**代码是唯一事实源**，以 git 为准、回头修本文件。
+
+## v0.10 完成同步
+
+- 2026-05-27：v0.10.0 已完成 integrations 后端、Vision 副驾、前端集成面板、安全加固与五语 i18n；测试基线 572/572 全绿。
