@@ -362,7 +362,7 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
     if (!touchState || !onClose) return
     const deltaX = touchState.startX - touchState.currentX
     const deltaY = Math.abs(touchState.startY - touchState.currentY)
-    if (deltaX > 80 && deltaX > deltaY) onClose()
+    if (deltaX > 50 && deltaX > deltaY) onClose()
   }
 
   // 切换 artifact 时复位视图状态
@@ -393,9 +393,20 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
           transition={{ duration: 0.18 }}
         />
         <motion.aside className="w-full h-full border-l border-ink-fade/30 bg-paper flex flex-col items-center justify-center gap-4 text-ink-fade relative z-40" initial={{ opacity: 0, x: 40 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 40 }} transition={{ duration: 0.2 }}>
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="关闭预览"
+              className="absolute right-4 top-4 w-10 h-10 rounded-md border border-transparent bg-paper/80 hover:bg-ember/10 hover:text-ember hover:border-ember/30 transition-colors flex items-center justify-center text-ink-soft focus:outline-none focus:ring-2 focus:ring-ember/40"
+              title="关闭预览"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          )}
           <FileText className="w-10 h-10 opacity-30" />
-          <p className="text-sm">无法渲染预览</p>
-          <p className="text-xs text-ink-fade/70 max-w-[200px] text-center">内容格式不支持预览，但你可以下载原文件或切换到源码视图查看</p>
+          <p className="text-sm">暂不支持预览</p>
+          <p className="text-xs text-ink-fade/70 max-w-[200px] text-center">你可以下载原文件或切换源码视图查看</p>
           {onClose && (
             <button onClick={onClose} className="mt-2 h-8 px-4 border border-ink-fade/30 rounded-md text-xs hover:border-ember/50 transition-colors">关闭面板</button>
           )}
@@ -578,7 +589,7 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
               type="button"
               onClick={onClose}
               aria-label="关闭预览"
-              className="w-10 h-10 rounded-md border border-transparent hover:bg-ember/10 hover:text-ember hover:border-ember/30 transition-colors flex items-center justify-center text-ink-fade focus:outline-none focus:ring-2 focus:ring-ember/40"
+              className="w-10 h-10 rounded-md border border-transparent bg-paper/80 hover:bg-ember/10 hover:text-ember hover:border-ember/30 transition-colors flex items-center justify-center text-ink-soft focus:outline-none focus:ring-2 focus:ring-ember/40"
               title="关闭预览"
             >
               <X className="w-4 h-4" />

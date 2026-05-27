@@ -1,4 +1,4 @@
-import { ChevronDown, Copy, Download, FileText, Table2 } from 'lucide-react'
+import { ChevronDown, Copy, Download, FileText, Maximize2, Table2 } from 'lucide-react'
 import { useState } from 'react'
 
 function ArtifactIcon({ type }) {
@@ -86,7 +86,7 @@ function SheetPreview({ preview }) {
   )
 }
 
-export default function ArtifactPreview({ preview, content, downloading, onDownload, onCopySource }) {
+export default function ArtifactPreview({ preview, content, downloading, onDownload, onCopySource, onExpand }) {
   const [showSource, setShowSource] = useState(false)
 
   return (
@@ -110,6 +110,15 @@ export default function ArtifactPreview({ preview, content, downloading, onDownl
         >
           <Download className="w-3.5 h-3.5" />
           {downloading ? '生成中' : '下载'}
+        </button>
+        <button
+          type="button"
+          onClick={() => onExpand?.()}
+          className="h-8 px-3 rounded-md border border-ink-fade/40 text-ink-soft hover:bg-paper hover:text-ember hover:border-ember/40 transition-colors inline-flex items-center gap-1.5 text-xs"
+          title="在面板中打开"
+        >
+          <Maximize2 className="w-3.5 h-3.5" />
+          在面板中打开
         </button>
       </div>
 

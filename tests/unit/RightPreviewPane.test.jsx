@@ -40,7 +40,7 @@ function setupDom() {
   return dom
 }
 
-async function renderPane(onClose) {
+async function renderPane(onClose, artifactOverride = artifact) {
   const dom = setupDom()
   const rootEl = dom.window.document.getElementById('root')
   const root = createRoot(rootEl)
@@ -48,7 +48,7 @@ async function renderPane(onClose) {
   await act(async () => {
     root.render(
       <RightPreviewPane
-        artifact={artifact}
+        artifact={artifactOverride}
         onClose={onClose}
         onMessage={() => {}}
       />,
@@ -115,6 +115,32 @@ test('RightPreviewPane closes from the enlarged X button', async () => {
     assert.ok(closeButton)
     assert.match(closeButton.className, /\bw-10\b/)
     assert.match(closeButton.className, /\bh-10\b/)
+
+    await act(async () => {
+      closeButton.dispatchEvent(new dom.window.MouseEvent('click', {
+        bubbles: true,
+        cancelable: true,
+      }))
+    })
+
+    assert.equal(closeCount, 1)
+  } finally {
+    await cleanup()
+  }
+})
+
+test('RightPreviewPane shows a clickable X when preview is unavailable', async () => {
+  let closeCount = 0
+  const { dom, rootEl, cleanup } = await renderPane(() => { closeCount += 1 }, {
+    messageId: 'msg-null',
+    content: '# Unsupported artifact',
+    preview: null,
+  })
+
+  try {
+    const closeButton = rootEl.querySelector('button[aria-label="关闭预览"]')
+    assert.ok(closeButton)
+    assert.equal(closeButton.textContent.trim(), '')
 
     await act(async () => {
       closeButton.dispatchEvent(new dom.window.MouseEvent('click', {
