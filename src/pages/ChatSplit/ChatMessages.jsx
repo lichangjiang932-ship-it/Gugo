@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, FileText, BarChart3, LayoutList, ExternalLink, ChevronDown, RefreshCw, Trash2, Copy, Code2 } from 'lucide-react'
+import { X, FileText, BarChart3, LayoutList, ExternalLink, ChevronDown, RefreshCw, Trash2, Copy, Code2, Quote } from 'lucide-react'
 import MarkdownRenderer from '../../components/MarkdownRenderer.jsx'
 import ToolCallCard from '../../components/ToolCallCard.jsx'
 import SubagentCard from '../../components/SubagentCard.jsx'
@@ -9,6 +9,7 @@ import ChoicePicker from '../../components/ChoicePicker.jsx'
 import { hasChoices, stripChoices } from '../../lib/choices.js'
 import { buildArtifactPreview, shouldCollapseArtifactPreview } from '../../lib/artifactPreview.js'
 import { getMemoriesByIdsApi } from '../../lib/memoryClient.js'
+import { useT } from '../../i18n/I18nProvider.jsx'
 
 // ★ #22: 入门示例 — 覆盖文档/数据/编程/创意四大类,降低首次使用门槛
 const EXAMPLE_QUESTIONS = [
@@ -102,8 +103,13 @@ export default function ChatMessages({
   onNavigatePermissions,
   onOpenInPreview,
   onExpandCompaction,
+  onQuoteSelection,
 }) {
+  const { t } = useT()
   const hasMessages = messages.length > 0
+  // ★ PR3: 选中文本浮动「引用」气泡 — 仅在 assistant 消息内选词时显示
+  const [quoteBubble, setQuoteBubble] = useState(null) // { top, left, text } | null
+  const containerRef = useRef(null)
 
   // ★ #19: 移除 handleDownloadPptx/Office 双路径 — artifact 卡片走 RightPreviewPane.handleDownload,
   // 普通 markdown 不再嗅探导出 (避免 shouldOfferOfficeExport vs detectArtifactType 两套规则不一致)
@@ -156,8 +162,57 @@ export default function ChatMessages({
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
   }
 
+  // ★ PR3: 选中文本气泡 — 监听 mouseup/keyup,只有选中范围落在 [data-quotable] 元素内才弹
+  useEffect(() => {
+    const handleSelectionChange = () => {
+      const sel = typeof window !== 'undefined' ? window.getSelection() : null
+      if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
+        setQuoteBubble(null)
+        return
+      }
+      const text = sel.toString().trim()
+      if (!text) {
+        setQuoteBubble(null)
+        return
+      }
+      const range = sel.getRangeAt(0)
+      // 必须完全落在某个 [data-quotable] 内
+      const anchorNode = range.startContainer
+      const focusNode = range.endContainer
+      const startEl = anchorNode.nodeType === 1 ? anchorNode : anchorNode.parentElement
+      const endEl = focusNode.nodeType === 1 ? focusNode : focusNode.parentElement
+      const startBlock = startEl?.closest?.('[data-quotable="true"]')
+      const endBlock = endEl?.closest?.('[data-quotable="true"]')
+      if (!startBlock || startBlock !== endBlock) {
+        setQuoteBubble(null)
+        return
+      }
+      const container = containerRef.current
+      if (!container) return
+      const rect = range.getBoundingClientRect()
+      const containerRect = container.getBoundingClientRect()
+      // 气泡定位:落在选区上方 8px,水平居中,限制在容器内
+      const top = rect.top - containerRect.top + container.scrollTop - 36
+      const left = Math.max(8, rect.left - containerRect.left + rect.width / 2)
+      setQuoteBubble({ top, left, text })
+    }
+    document.addEventListener('mouseup', handleSelectionChange)
+    document.addEventListener('keyup', handleSelectionChange)
+    return () => {
+      document.removeEventListener('mouseup', handleSelectionChange)
+      document.removeEventListener('keyup', handleSelectionChange)
+    }
+  }, [])
+
+  const handleQuoteClick = () => {
+    if (!quoteBubble?.text) return
+    onQuoteSelection?.(quoteBubble.text)
+    setQuoteBubble(null)
+    if (typeof window !== 'undefined') window.getSelection()?.removeAllRanges()
+  }
+
   return (
-    <div ref={scrollRef} className="flex-1 overflow-y-auto px-7 py-6 relative">
+    <div ref={(el) => { scrollRef.current = el; containerRef.current = el }} className="flex-1 overflow-y-auto px-7 py-6 relative">
       <div className="w-full max-w-[1080px] ml-0 mr-auto flex flex-col gap-5">
         {workbenchMessage && (
           <div className="p-3 border border-ink-fade/40 rounded-md bg-paper-2 text-xs text-ink-soft">
@@ -281,7 +336,9 @@ export default function ChatMessages({
                       </button>
                     ) : (
                       <>
-                        <MarkdownRenderer>{stripChoices(msg.content)}</MarkdownRenderer>
+                        <div data-quotable="true">
+                          <MarkdownRenderer>{stripChoices(msg.content)}</MarkdownRenderer>
+                        </div>
                         {/* ★ #23: streaming 时在尾部显示闪烁光标 */}
                         {msg.meta?.streaming && (
                           <span className="inline-block w-1.5 h-3.5 bg-ember/80 ml-0.5 align-middle animate-pulse" aria-hidden="true" />
@@ -492,6 +549,20 @@ export default function ChatMessages({
         >
           <ChevronDown className="w-3.5 h-3.5" />
           回到底部
+        </button>
+      )}
+      {/* ★ PR3: 选中文本「引用」浮动气泡 */}
+      {quoteBubble && (
+        <button
+          type="button"
+          onMouseDown={(e) => { e.preventDefault(); handleQuoteClick() }}
+          style={{ top: quoteBubble.top, left: quoteBubble.left, transform: 'translateX(-50%)' }}
+          className="absolute z-20 inline-flex items-center gap-1 h-7 px-2.5 rounded-full bg-ink text-paper text-xs font-medium shadow-lg hover:bg-ember transition-colors"
+          title={t('nav.quoteSelectionTitle')}
+          aria-label={t('nav.quoteSelectionTitle')}
+        >
+          <Quote className="w-3 h-3" />
+          {t('nav.quoteSelection')}
         </button>
       )}
     </div>

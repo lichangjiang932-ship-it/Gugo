@@ -980,6 +980,17 @@ export default function ChatSplit() {
           onPermAllow={handlePermAllow}
           onPermDeny={handlePermDeny}
           onNavigatePermissions={() => navigate('/permissions')}
+          onQuoteSelection={(text) => {
+            // ★ PR3: 选中文本 → 在 composer 顶部插入 markdown 引用块
+            // 复用 SET_DRAFT_INPUT,index.jsx 的 useEffect 会自动同步到 setInput
+            const quoted = String(text || '')
+              .split('\n')
+              .map((line) => `> ${line}`)
+              .join('\n')
+            const current = inputRef.current || ''
+            const next = current ? `${quoted}\n\n${current}` : `${quoted}\n\n`
+            dispatch({ type: 'SET_DRAFT_INPUT', payload: next })
+          }}
           onOpenInPreview={(msg, preview) =>
             dispatch({
               type: 'OPEN_PREVIEW_ARTIFACT',
