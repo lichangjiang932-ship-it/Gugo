@@ -1,14 +1,20 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Search, RefreshCw, ArrowUpRight, MessageSquare, LayoutList, Clock } from 'lucide-react'
+import { Search, RefreshCw, ArrowUpRight, MessageSquare, LayoutList, Clock, Archive, ArchiveRestore } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
 import { useAppContext } from '../store/AppContext'
+import { useT } from '../i18n/I18nProvider.jsx'
+import { useToast } from '../components/Toast.jsx'
+import { getAuthToken } from '../lib/accountClient'
+import { archiveSessionRemote, unarchiveSessionRemote } from '../lib/sessionClient'
 
 const tabs = [
   { key: 'sessions', label: '会话', icon: MessageSquare },
   { key: 'tasks', label: '任务', icon: LayoutList },
 ]
+
+const archiveFilters = ['active', 'archived', 'all']
 
 function formatStatus(item) {
   const prefix = item.state === 'done' ? '[完成]' : item.state === 'active' ? '[进行中]' : '[失败]'
@@ -49,9 +55,13 @@ function groupByDate(items) {
 export default function HistoryView() {
   const navigate = useNavigate()
   const { state, dispatch } = useAppContext()
+  const { t } = useT()
+  const toast = useToast()
   const [activeTab, setActiveTab] = useState('tasks')
   const [query, setQuery] = useState('')
   const [retryingId, setRetryingId] = useState(null)
+  const [archiveFilter, setArchiveFilter] = useState('active')
+  const [archivingId, setArchivingId] = useState(null)
 
   const rawHistory = [
     ...(state.sessions || []).map((session) => ({
@@ -62,6 +72,7 @@ export default function HistoryView() {
       status: '会话',
       detail: contentPreview(session.messages?.at(-1)?.content) || '空会话',
       date: session.updatedAt || session.createdAt,
+      archivedAt: session.archivedAt || null,
     })),
     ...(state.history || []).map((item) => ({ ...item, type: 'task' })),
   ]
@@ -73,6 +84,11 @@ export default function HistoryView() {
       (item.name && item.name.includes(query)) ||
       (item.skill && item.skill.includes(query)) ||
       (item.status && item.status.includes(query))
+    if (activeTab === 'sessions') {
+      const isArchived = !!item.archivedAt
+      if (archiveFilter === 'active' && isArchived) return false
+      if (archiveFilter === 'archived' && !isArchived) return false
+    }
     return typeMatch && searchMatch
   })
 
@@ -108,6 +124,28 @@ export default function HistoryView() {
     }, 600)
   }
 
+  const handleArchiveToggle = async (item) => {
+    if (getItemType(item) !== 'sessions' || !item.id) return
+    const isArchived = !!item.archivedAt
+    const next = isArchived ? 'UNARCHIVE_SESSION' : 'ARCHIVE_SESSION'
+    const rollback = isArchived ? 'ARCHIVE_SESSION' : 'UNARCHIVE_SESSION'
+    setArchivingId(item.id)
+    dispatch({ type: next, payload: item.id })
+    try {
+      if (getAuthToken()) {
+        if (isArchived) await unarchiveSessionRemote(item.id)
+        else await archiveSessionRemote(item.id)
+      }
+    } catch (error) {
+      if (!/session not found/i.test(error?.message || '')) {
+        dispatch({ type: rollback, payload: item.id })
+        toast.error({ title: t('errors.saveFailed'), body: error?.message })
+      }
+    } finally {
+      setArchivingId(null)
+    }
+  }
+
   return (
     <div className="h-screen flex bg-paper overflow-hidden">
       <LeftRail />
@@ -122,20 +160,37 @@ export default function HistoryView() {
             </h1>
           </div>
           <div className="flex gap-2">
-            {tabs.map(t => (
+            {tabs.map(tab => (
               <button
-                key={t.key}
-                onClick={() => setActiveTab(t.key)}
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key)}
                 className={`inline-flex items-center h-7 px-3 rounded-full text-xs border transition-colors gap-1.5 ${
-                  activeTab === t.key
+                  activeTab === tab.key
                     ? 'bg-ink text-paper border-ink'
                     : 'border-ink-fade/60 text-ink-soft hover:border-ink-fade'
                 }`}
               >
-                <t.icon className="w-3.5 h-3.5" />
-                {t.label}
+                <tab.icon className="w-3.5 h-3.5" />
+                {tab.label}
               </button>
             ))}
+            {activeTab === 'sessions' && (
+              <div className="flex items-center gap-1 ml-1">
+                {archiveFilters.map((key) => (
+                  <button
+                    key={key}
+                    onClick={() => setArchiveFilter(key)}
+                    className={`inline-flex items-center h-7 px-2.5 rounded-full text-[11px] border transition-colors ${
+                      archiveFilter === key
+                        ? 'bg-ink text-paper border-ink'
+                        : 'border-ink-fade/50 text-ink-soft hover:border-ink-fade'
+                    }`}
+                  >
+                    {t(`nav.filter${key.charAt(0).toUpperCase()}${key.slice(1)}`)}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="h-8 px-3 border border-ink/70 rounded-md flex items-center gap-1.5 bg-paper">
               <Search className="w-4 h-4 text-ink-fade" />
               <input
@@ -172,6 +227,19 @@ export default function HistoryView() {
                       <span className="font-mono text-[9px] tracking-wider text-ink-fade">{item.skill || ''}</span>
                       <span className="text-sm text-ink-soft">{formatStatus(item)}</span>
                       <div className="flex gap-1.5 justify-self-end">
+                        {getItemType(item) === 'sessions' && item.id && (
+                          <button
+                            onClick={() => handleArchiveToggle(item)}
+                            disabled={archivingId === item.id}
+                            title={item.archivedAt ? t('nav.unarchiveSession') : t('nav.archiveSession')}
+                            aria-label={item.archivedAt ? t('nav.unarchiveSession') : t('nav.archiveSession')}
+                            className="w-7 h-7 rounded-full border border-ink-fade/60 flex items-center justify-center hover:border-ink-fade transition-colors disabled:opacity-40"
+                          >
+                            {item.archivedAt
+                              ? <ArchiveRestore className="w-3.5 h-3.5 text-ink-soft" />
+                              : <Archive className="w-3.5 h-3.5 text-ink-soft" />}
+                          </button>
+                        )}
                         <button
                           onClick={() => handleRetry(item)}
                           className="w-7 h-7 rounded-full border border-ink-fade/60 flex items-center justify-center hover:border-ink-fade transition-colors"
