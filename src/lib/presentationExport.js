@@ -246,8 +246,9 @@ function parseChartBlock(lines) {
     const mType = line.match(/^type\s*[:=]\s*(.+)$/i)
     if (mType) {
       const v = mType[1].trim().toLowerCase()
-      if (v === 'line' || v === 'pie') type = v
+      if (v === 'line' || v === 'pie' || v === 'area' || v === 'stacked' || v === 'scatter') type = v
       else if (v === 'column' || v === 'bar') type = 'bar'
+      else if (v === 'stack' || v === 'stackedbar' || v === 'stacked_bar') type = 'stacked'
       continue
     }
     const mCat = line.match(/^(?:categories|labels|x|横轴)\s*[:=]\s*(.+)$/i)
@@ -946,10 +947,14 @@ function addChartSlide(pptx, slideData, index, total) {
   })
 
   const chart = slideData.chart || { type: 'bar', categories: [], series: [] }
+  // PR4a: 扩展 chart 类型 — area/scatter/stacked 走 pptxgenjs 原生
   const chartType =
     chart.type === 'line' ? pptx.ChartType.line
+    : chart.type === 'area' ? pptx.ChartType.area
+    : chart.type === 'scatter' ? pptx.ChartType.scatter
     : chart.type === 'pie' ? pptx.ChartType.pie
     : pptx.ChartType.bar
+  const isStacked = chart.type === 'stacked'
 
   let data
   if (chart.type === 'pie') {
@@ -968,7 +973,7 @@ function addChartSlide(pptx, slideData, index, total) {
   }
 
   if (data.length && data.some((d) => d.values && d.values.length)) {
-    slide.addChart(chartType, data, {
+    slide.addChart(isStacked ? pptx.ChartType.bar : chartType, data, {
       x: 0.7, y: 1.55, w: 12, h: 5.1,
       chartColors: CHART_PALETTE.slice(0, Math.max(1, data.length)),
       showLegend: data.length > 1 || chart.type === 'pie',
@@ -987,8 +992,9 @@ function addChartSlide(pptx, slideData, index, total) {
       dataLabelFontSize: 10,
       showValue: chart.type === 'pie',
       barGapWidthPct: 60,
-      lineDataSymbol: chart.type === 'line' ? 'circle' : undefined,
-      lineDataSymbolSize: chart.type === 'line' ? 6 : undefined,
+      barGrouping: isStacked ? 'stacked' : 'clustered',
+      lineDataSymbol: chart.type === 'line' || chart.type === 'area' ? 'circle' : undefined,
+      lineDataSymbolSize: chart.type === 'line' || chart.type === 'area' ? 6 : undefined,
       catGridLine: { style: 'none' },
       valGridLine: { color: THEME.skeleton, style: 'solid', size: 0.5 },
     })
@@ -1219,14 +1225,66 @@ ${bgRect}${slices.join('')}${legend}</svg>`
   }
 
   let body
-  if (chart.type === 'line') {
+  if (chart.type === 'line' || chart.type === 'area') {
     body = series.map((s, sIdx) => {
       const color = palette[sIdx % palette.length]
       const points = s.values.map((v, i) => [PAD.left + xStep * (i + 0.5), yToPx(Number(v) || 0)])
       const path = points.map(([x, y], i) => `${i === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)}`).join(' ')
       const dots = points.map(([x, y]) => `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4.5" fill="${color}" stroke="${bg || '#fff'}" stroke-width="2"/>`).join('')
-      return `<path d="${path}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>${dots}`
+      // PR4a: area = line + 下方填半透明色块
+      let area = ''
+      if (chart.type === 'area' && points.length) {
+        const y0 = yToPx(0).toFixed(1)
+        const first = points[0]
+        const last = points[points.length - 1]
+        const areaPath = `M ${first[0].toFixed(1)} ${y0} ${path} L ${last[0].toFixed(1)} ${y0} Z`
+        area = `<path d="${areaPath}" fill="${color}" opacity="0.18" stroke="none"/>`
+      }
+      return `${area}<path d="${path}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>${dots}`
     }).join('')
+  } else if (chart.type === 'scatter') {
+    // PR4a: 散点 — 仅圆点,无连线
+    body = series.map((s, sIdx) => {
+      const color = palette[sIdx % palette.length]
+      return s.values.map((v, i) => {
+        const x = PAD.left + xStep * (i + 0.5)
+        const y = yToPx(Number(v) || 0)
+        return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="5.5" fill="${color}" opacity="0.85" stroke="${bg || '#fff'}" stroke-width="1.5"/>`
+      }).join('')
+    }).join('')
+  } else if (chart.type === 'stacked') {
+    // PR4a: 堆叠柱 — 同 category 下,各 series 正值依次叠加
+    const groupGap = 0.28
+    const barW = Math.max(8, xStep * (1 - groupGap))
+    const stacks = []
+    const catCount = categories.length || Math.max(...series.map((s) => s.values.length))
+    for (let i = 0; i < catCount; i++) {
+      let cumPos = 0
+      let cumNeg = 0
+      series.forEach((s, sIdx) => {
+        const color = palette[sIdx % palette.length]
+        const val = Number(s.values[i]) || 0
+        if (val === 0) return
+        const x = PAD.left + xStep * i + (xStep * groupGap) / 2
+        if (val >= 0) {
+          const yTop = yToPx(cumPos + val)
+          const yBot = yToPx(cumPos)
+          stacks.push(`<rect x="${x.toFixed(1)}" y="${yTop.toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.max(2, yBot - yTop).toFixed(1)}" fill="${color}" rx="2"/>`)
+          cumPos += val
+        } else {
+          const yTop = yToPx(cumNeg)
+          const yBot = yToPx(cumNeg + val)
+          stacks.push(`<rect x="${x.toFixed(1)}" y="${yTop.toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.max(2, yBot - yTop).toFixed(1)}" fill="${color}" rx="2"/>`)
+          cumNeg += val
+        }
+      })
+      if (cumPos > 0) {
+        const yTop = yToPx(cumPos)
+        const cx = PAD.left + xStep * i + (xStep * groupGap) / 2 + barW / 2
+        stacks.push(`<text x="${cx.toFixed(1)}" y="${(yTop - 6).toFixed(1)}" fill="${valueColor}" font-size="11" font-weight="600" text-anchor="middle">${formatChartNumber(cumPos)}</text>`)
+      }
+    }
+    body = stacks.join('')
   } else {
     const groupGap = 0.28
     const barGroupW = xStep * (1 - groupGap)
