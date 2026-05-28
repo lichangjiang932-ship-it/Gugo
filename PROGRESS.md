@@ -51,9 +51,7 @@
    - 涉及：`server/routes/agentRoutes.js` export.zip/import.zip 加 `avatar.png` + `skills/*.json`
    - 依赖 #1（先有 skill-bundle 概念）
 
-3. [ ] **prompt-template plugin 接 chat slash command** — `/template-name` 触发自动补全。预估 1-2 天。
-   - 涉及：`src/components/ChatInput.jsx`（核心多人改文件，触面大）、`src/lib/pluginClient.js`、新建 `src/components/SlashAutocomplete.jsx`
-   - 风险：ChatInput 是核心组件，按"独立模块策略"先抽 SlashAutocomplete 独立组件再 mount
+3. [x] **prompt-template plugin 接 chat slash command** — **已完成** (v0.10 Phase 2 S4)。`src/components/slashItems.js` 含 `prompt-template` kind，`src/lib/pluginClient.js` 暴露 `listPromptTemplatesApi` / `fetchPromptTemplateEntryContent`，`ChatComposer` 通过 slashRegistry 触发。
 
 ### 中 ROI · 结构性升级（2-5 天每项）
 
@@ -71,10 +69,10 @@
 
 ### 中 ROI · 易跑的小件
 
-7. [ ] **会话搜索 + 归档** — 现有 sessions 列表加搜索框 + archive 状态字段
+7. [~] **会话搜索 + 归档** — 搜索 + DB 字段已完成（v0.10：`server/services/sessionSearchService.js` bm25/fts5 + `src/components/SessionSearchModal.jsx` 244 行 + DB v9 `sessions.archived_at`）。**剩余**：`src/pages/HistoryView.jsx` 未接 `archived_at` 过滤入口（数据库字段有了 UI 没接）。
 8. [ ] **选中文本 → 引用卡片** — chat 区选中后弹按钮"引用"，自动塞 markdown blockquote
 9. [ ] **全屏媒体查看器** — 图片/视频点开 lightbox
-10. [ ] **i18n 扩 ja + ko + zh-TW** — 现有 zh/en 已通
+10. [x] **i18n 扩 ja + ko + zh-TW** — **已完成** (v0.10)。`src/i18n/translations.js` 现含 zh/en/ja/ko/zh-TW 五语全量。
 
 ### 低 ROI / 方向不匹配 · 不做
 
@@ -90,8 +88,8 @@
 
 - ~~本地 main 领先 origin 34 commits 未推送~~ — **已解决（2026-05-25）**：源数据是 fetch 失败时的假象，实际 origin/main 已同步；当日打了 v0.9.0 GitHub Release（https://github.com/lichangjiang932-ship-it/your-model-atelier/releases/tag/v0.9.0）
 - **CHANGELOG.md 之前没建** — 本会话已补，但 v0.5-v0.8 是回溯描述，不是 commit-by-commit
-- **eslint 2 个 warning** — 历史遗留，未阻塞 lint，下次顺手清
-- **secret-redaction 工具会误改字面量** — v0.5 把 `STORAGE_KEY = 'yma:activeAgentId'` 替成 `'***'`，跨 tab 全用户串台。教训：commit hook 前加 `git diff | grep "= '\*\*\*'"` 一道扫描（hook 还没加）
+- ~~**eslint 2 个 warning** — 历史遗留~~ — **已清** (v0.10 之前已为 0 warning 0 error；本节误判)
+- **secret-redaction 工具会误改字面量** — v0.5 把 `STORAGE_KEY = 'yma:activeAgentId'` 替成 `'***'`，跨 tab 全用户串台。教训：commit hook 前加 `git diff | grep "= '\*\*\*'"` 一道扫描（**已加，见 `.githooks/pre-commit`**）
 
 ---
 
@@ -101,4 +99,4 @@
 
 ## v0.10 完成同步
 
-- 2026-05-27：v0.10.0 已完成 integrations 后端、Vision 副驾、前端集成面板、安全加固与五语 i18n；测试基线 572/572 全绿。
+- 2026-05-27：v0.10.0 已完成 integrations 后端、Vision 副驾、前端集成面板、安全加固与五语 i18n；测试基线 574/574 全绿。
