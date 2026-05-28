@@ -15,6 +15,8 @@ import {
 } from 'lucide-react'
 import {
   deleteIntegrationApi,
+  getWechatQrcodeApi,
+  pollWechatQrcodeApi,
   listIntegrationsApi,
   listProvidersApi,
   testIntegrationApi,
@@ -157,6 +159,8 @@ export default function IntegrationsPanel({ kind, t }) {
   const [saving, setSaving] = useState(false)
   const [testingId, setTestingId] = useState('')
   const [testMessage, setTestMessage] = useState('')
+  const [wechatQr, setWechatQr] = useState(null)
+  const [wechatPolling, setWechatPolling] = useState(false)
 
   const visibleProviders = useMemo(
     () => providers.filter((provider) => provider.kind === kind),
@@ -171,18 +175,26 @@ export default function IntegrationsPanel({ kind, t }) {
   const reload = async () => {
     setLoading(true)
     setError('')
+    // providers 端点不需要登录，必须独立请求 — 否则一旦 integrations 端点 401 / 网络挂掉，
+    // providers 也跟着不会被 set，导致"+ 新建集成"下拉空白、按钮看似无响应。
+    let providerErr = ''
     try {
-      const [providerData, integrationData] = await Promise.all([
-        listProvidersApi(),
-        listIntegrationsApi({ kind }),
-      ])
+      const providerData = await listProvidersApi()
       setProviders(providerData.providers || [])
+    } catch (err) {
+      providerErr = err.message || t('errors.loadFailed')
+    }
+    try {
+      const integrationData = await listIntegrationsApi({ kind })
       setIntegrations(integrationData.integrations || [])
     } catch (err) {
-      setError(err.message || t('errors.loadFailed'))
-    } finally {
-      setLoading(false)
+      // 未登录 / token 过期等，列表展示为空但仍保留 providers 让用户可以新建
+      const msg = err.message || t('errors.loadFailed')
+      setError(providerErr ? `${providerErr}; ${msg}` : msg)
+      setIntegrations([])
     }
+    if (providerErr && !error) setError(providerErr)
+    setLoading(false)
   }
 
   useEffect(() => {
@@ -194,11 +206,13 @@ export default function IntegrationsPanel({ kind, t }) {
   const openNew = (provider) => {
     setProviderMenuOpen(false)
     setTestMessage('')
+    setWechatQr(null)
     setForm(emptyForm(provider.provider, provider))
   }
 
   const openEdit = (integration) => {
     setTestMessage('')
+    setWechatQr(null)
     setForm(formFromIntegration(integration, providersById[integration.provider]))
   }
 
@@ -310,6 +324,48 @@ export default function IntegrationsPanel({ kind, t }) {
       setIntegrations((current) => current.filter((item) => item.id !== integration.id))
     } catch (err) {
       setError(err.message || t('errors.deleteFailed'))
+    }
+  }
+
+  const openWechatQr = async () => {
+    setTestMessage('')
+    try {
+      const data = await getWechatQrcodeApi()
+      setWechatQr(data)
+    } catch (err) {
+      setTestMessage(err.message || '微信扫码图获取失败')
+    }
+  }
+
+  const pollWechatQr = async () => {
+    if (!wechatQr?.qrcodeId || !form) return
+    setWechatPolling(true)
+    setTestMessage('')
+    try {
+      const data = await pollWechatQrcodeApi({
+        qrcodeId: wechatQr.qrcodeId,
+        integrationId: form.id || undefined,
+        name: form.name || 'WeChat Personal',
+        defaultAgentId: form.config?.defaultAgentId || '',
+      })
+      if (data.status === 'confirmed' && data.integration) {
+        const next = data.integration
+        setIntegrations((current) => {
+          if (current.some((item) => item.id === next.id)) {
+            return current.map((item) => item.id === next.id ? next : item)
+          }
+          return [next, ...current]
+        })
+        setForm(null)
+        setWechatQr(null)
+        setTestMessage('')
+      } else {
+        setTestMessage(`微信扫码状态：${data.status || 'waiting'}`)
+      }
+    } catch (err) {
+      setTestMessage(err.message || '微信扫码状态检查失败')
+    } finally {
+      setWechatPolling(false)
     }
   }
 
@@ -481,6 +537,28 @@ export default function IntegrationsPanel({ kind, t }) {
                 )
               })}
             </div>
+
+            {form.provider === 'wechat_personal' ? (
+              <div className="rounded-md border border-ink-fade/30 p-3 flex flex-col gap-3">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-sm text-ink-soft">个人微信扫码登录</span>
+                  <button type="button" onClick={openWechatQr} className="h-8 px-3 rounded-md border border-ink-fade/40 text-xs text-ink-soft hover:bg-paper-2">
+                    获取扫码图
+                  </button>
+                </div>
+                {wechatQr?.qrcodeUrl ? (
+                  <div className="flex flex-col sm:flex-row items-center gap-3">
+                    <img src={wechatQr.qrcodeUrl} alt="WeChat QR code" className="w-40 h-40 rounded-md border border-ink-fade/30 bg-white" />
+                    <div className="flex flex-col gap-2 min-w-0">
+                      <button type="button" onClick={pollWechatQr} disabled={wechatPolling} className="h-8 px-3 rounded-md bg-ink text-paper text-xs hover:bg-ink-soft disabled:opacity-50">
+                        {wechatPolling ? '检查中...' : '我已扫码，检查状态'}
+                      </button>
+                      <span className="text-xs text-ink-fade leading-relaxed">成功后会自动保存 botToken 并启用微信 Bridge。</span>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
 
             <label className="flex items-center justify-between gap-3 rounded-md border border-ink-fade/30 p-3">
               <span className="text-sm text-ink-soft">{form.enabled ? t('integrations.enabled') : t('integrations.disabled')}</span>

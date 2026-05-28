@@ -66,7 +66,8 @@ function toRelative(absPath) {
 
 function runRg(args, { cwd = getWorkspaceRoot() } = {}) {
   return new Promise((resolve) => {
-    execFile(
+    try {
+      execFile(
       RG_BIN,
       args,
       {
@@ -82,6 +83,7 @@ function runRg(args, { cwd = getWorkspaceRoot() } = {}) {
         if (err && code !== 0 && code !== 1) {
           resolve({
             ok: false,
+            code,
             error: err.killed ? `rg 超时(${RG_TIMEOUT_MS}ms)` : (stderr || err.message || 'rg 失败'),
             stdout: String(stdout || ''),
           })
@@ -89,8 +91,134 @@ function runRg(args, { cwd = getWorkspaceRoot() } = {}) {
         }
         resolve({ ok: true, stdout: String(stdout || ''), stderr: String(stderr || '') })
       }
-    )
+      )
+    } catch (err) {
+      resolve({
+        ok: false,
+        code: err?.code,
+        error: err?.message || 'rg failed to start',
+        stdout: '',
+      })
+    }
   })
+}
+
+function isRgUnavailable(result) {
+  const msg = String(result?.error || '')
+  return ['EPERM', 'EACCES', 'ENOENT'].includes(result?.code) ||
+    /spawn\s+(EPERM|EACCES|ENOENT)|not recognized|not found/i.test(msg)
+}
+
+const EXCLUDED_DIRS = new Set(['.git', 'node_modules', 'dist', '.next', 'build', 'server-data'])
+const TYPE_EXTENSIONS = {
+  js: ['.js', '.jsx', '.mjs', '.cjs'],
+  jsx: ['.jsx'],
+  ts: ['.ts', '.tsx'],
+  tsx: ['.tsx'],
+  py: ['.py'],
+  rs: ['.rs'],
+  md: ['.md', '.mdx'],
+  json: ['.json'],
+  css: ['.css'],
+  html: ['.html', '.htm'],
+}
+
+function walkFiles(root, out = []) {
+  let entries = []
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true })
+  } catch {
+    return out
+  }
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      if (!EXCLUDED_DIRS.has(entry.name)) walkFiles(path.join(root, entry.name), out)
+    } else if (entry.isFile()) {
+      out.push(path.join(root, entry.name))
+    }
+  }
+  return out
+}
+
+function globToRegex(glob) {
+  const escaped = String(glob)
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*\*/g, '\0')
+    .replace(/\*/g, '[^/\\\\]*')
+    .replace(/\?/g, '[^/\\\\]')
+    .replace(/\0/g, '.*')
+  return new RegExp(`^${escaped}$`)
+}
+
+function matchesGlob(rel, glob) {
+  if (!glob) return true
+  const normalized = rel.replace(/\\/g, '/')
+  const base = path.basename(rel)
+  const re = globToRegex(String(glob).replace(/\\/g, '/'))
+  return re.test(normalized) || re.test(base)
+}
+
+function matchesFileType(file, fileType) {
+  if (!fileType) return true
+  const ext = path.extname(file).toLowerCase()
+  const allowed = TYPE_EXTENSIONS[String(fileType).toLowerCase()]
+  return allowed ? allowed.includes(ext) : ext === `.${String(fileType).toLowerCase()}`
+}
+
+function buildSearchRegex(pattern, { caseSensitive = false, word = false } = {}) {
+  const source = word ? `\\b(?:${pattern})\\b` : pattern
+  return new RegExp(source, caseSensitive ? '' : 'i')
+}
+
+function searchFilesFallback({
+  pattern,
+  target,
+  maxResults,
+  context = DEFAULT_CONTEXT,
+  fileType = null,
+  glob = null,
+  caseSensitive = false,
+  word = false,
+}) {
+  const re = buildSearchRegex(pattern, { caseSensitive, word })
+  const matches = []
+  for (const file of walkFiles(target)) {
+    const rel = toRelative(file)
+    if (!matchesFileType(file, fileType) || !matchesGlob(rel, glob)) continue
+    let stat
+    try { stat = fs.statSync(file) } catch { continue }
+    if (!stat.isFile() || stat.size > 2 * 1024 * 1024) continue
+    let lines
+    try { lines = fs.readFileSync(file, 'utf8').split(/\r?\n/) } catch { continue }
+    let countInFile = 0
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i]
+      re.lastIndex = 0
+      const match = re.exec(line)
+      if (!match) continue
+      countInFile += 1
+      if (countInFile > 20) break
+      const before = []
+      for (let j = Math.max(0, i - context); j < i; j += 1) {
+        before.push({ line: j + 1, text: lines[j] })
+      }
+      const after = []
+      for (let j = i + 1; j < Math.min(lines.length, i + 1 + context); j += 1) {
+        after.push({ line: j + 1, text: lines[j] })
+      }
+      matches.push({
+        file: rel,
+        line: i + 1,
+        col: match.index + 1,
+        text: line,
+        submatches: [{ match: match[0], start: match.index, end: match.index + match[0].length }],
+        context_before: before,
+        context_after: after,
+      })
+      if (matches.length >= maxResults) return matches
+    }
+  }
+  return matches
 }
 
 /**
@@ -205,7 +333,29 @@ export async function grepCodeTool({
   args.push('--', pattern, toRelative(target) || '.')
 
   const result = await runRg(args)
-  if (!result.ok) return { ok: false, error: result.error, matches: [] }
+  if (!result.ok) {
+    if (isRgUnavailable(result)) {
+      const matches = searchFilesFallback({
+        pattern,
+        target,
+        maxResults: limit,
+        context: DEFAULT_CONTEXT,
+        fileType: file_type,
+        glob,
+        caseSensitive: case_sensitive,
+        word,
+      })
+      return {
+        ok: true,
+        pattern,
+        searched_path: toRelative(target),
+        total: matches.length,
+        truncated: matches.length >= limit,
+        matches,
+      }
+    }
+    return { ok: false, error: result.error, matches: [] }
+  }
   const matches = parseRgJson(result.stdout, limit)
   return {
     ok: true,
@@ -308,7 +458,33 @@ export async function findSymbolTool({
   args.push('--', regex, toRelative(target) || '.')
 
   const result = await runRg(args)
-  if (!result.ok) return { ok: false, error: result.error, symbols: [] }
+  if (!result.ok) {
+    if (isRgUnavailable(result)) {
+      const matches = searchFilesFallback({
+        pattern: regex,
+        target,
+        maxResults: limit,
+        context: 1,
+        fileType: language,
+        caseSensitive: true,
+      })
+      return {
+        ok: true,
+        name,
+        kind,
+        searched_path: toRelative(target),
+        total: matches.length,
+        truncated: matches.length >= limit,
+        symbols: matches.map((m) => ({
+          file: m.file,
+          line: m.line,
+          definition: m.text.trim(),
+          context_before: m.context_before,
+        })),
+      }
+    }
+    return { ok: false, error: result.error, symbols: [] }
+  }
   const matches = parseRgJson(result.stdout, limit)
   return {
     ok: true,

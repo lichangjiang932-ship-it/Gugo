@@ -75,3 +75,22 @@ export async function toggleIntegrationEnabledApi(id, enabled) {
   })
   return jsonOk(resp)
 }
+
+export async function getWechatQrcodeApi() {
+  const resp = await fetch('/api/bridge/wechat/qrcode', { headers: authHeaders() })
+  return jsonOk(resp)
+}
+
+export async function pollWechatQrcodeApi({ qrcodeId, integrationId, name, defaultAgentId } = {}) {
+  const resp = await fetch('/api/bridge/wechat/qrcode/status', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ qrcodeId, integrationId, name, defaultAgentId }),
+  })
+  return jsonOk(resp)
+}
+
+export async function getBridgeStatusApi() {
+  const resp = await fetch('/api/bridge/status', { headers: authHeaders() })
+  return jsonOk(resp)
+}

@@ -17,8 +17,9 @@ import { closeCronScheduler } from '../services/cronScheduler.js'
 import { shutdownAll as shutdownMcpAll } from '../mcp/mcpManager.js'
 import { seedSystemSkills } from '../services/seedSystemSkills.js'
 import { initPlugins } from '../plugins/pluginRegistry.js'
-import { getEnabledIntegrationCredentials } from '../services/integrationsStore.js'
+import { getEnabledIntegrationCredentials, listEnabledIntegrationCredentials } from '../services/integrationsStore.js'
 import { setVisionAssistResolver } from '../adapters/visionAssist.js'
+import { socialBridgeManager } from '../services/socialBridgeManager.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULT_PLUGIN_ROOT = path.resolve(__dirname, '../../plugins')
@@ -50,6 +51,16 @@ export function bootstrap({ silent = process.env.NODE_ENV === 'production' } = {
   } catch (err) {
     console.error('[server] setVisionAssistResolver failed:', err.message)
   }
+  try {
+    const integrations = listEnabledIntegrationCredentials({ kind: 'social' })
+    for (const integration of integrations) {
+      socialBridgeManager.startIntegration(integration).catch((err) => {
+        console.error(`[bridge] start ${integration.provider} failed:`, err?.message || err)
+      })
+    }
+  } catch (err) {
+    console.error('[server] start social bridge failed:', err.message)
+  }
   if (!silent) console.log('[lifecycle] bootstrap complete')
   return {}
 }
@@ -77,6 +88,7 @@ export function gracefulShutdown(server, { silent = process.env.NODE_ENV === 'pr
     if (!silent) console.log('[lifecycle] http server closed')
     try { closeCronScheduler() } catch { /* ignore */ }
     try { closeJobRuntime() } catch { /* ignore */ }
+    try { socialBridgeManager.stopAll() } catch { /* ignore */ }
     try { shutdownMcpAll() } catch { /* ignore */ }
     try { closeDb() } catch { /* ignore */ }
     if (!silent) console.log('[lifecycle] db closed')

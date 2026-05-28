@@ -163,6 +163,7 @@ test('legacy sqlite schema upgrades before creating user-scoped indexes', () => 
     assert.ok(status.tables.includes('channel_agents'))
     assert.ok(status.tables.includes('channel_messages'))
     assert.ok(status.tables.includes('channel_messages_fts'))
+    assert.ok(status.tables.includes('bridge_sessions'))
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }

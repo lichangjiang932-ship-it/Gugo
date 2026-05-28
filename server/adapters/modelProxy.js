@@ -636,6 +636,7 @@ export async function handleModelProxyRequest(req, res) {
         return
       }
     }
+    let session = null
     const selectedModel = pickAllowedModel({
       requestedModel: body.modelName,
       config,
@@ -679,7 +680,6 @@ export async function handleModelProxyRequest(req, res) {
     let token = ''
     let estimatedCost = 0
     let injectedMemoryIds = []
-    let session = null
     let account = null
     let injectedAgentId = null
     let promptSystemBlockCount = 0

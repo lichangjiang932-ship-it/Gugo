@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const DB_SCHEMA_VERSION = 12
+export const DB_SCHEMA_VERSION = 13
 
 const DEFAULT_DATA_DIR = path.join(process.cwd(), 'server-data')
 
@@ -41,6 +41,18 @@ function hasColumn(db, table, column) {
   return rows.some((row) => row.name === column)
 }
 
+function ensureUserPasswordColumns(db) {
+  if (!hasColumn(db, 'users', 'password_hash')) {
+    db.exec('ALTER TABLE users ADD COLUMN password_hash TEXT')
+  }
+  if (!hasColumn(db, 'users', 'password_salt')) {
+    db.exec('ALTER TABLE users ADD COLUMN password_salt TEXT')
+  }
+  if (!hasColumn(db, 'users', 'password_set_at')) {
+    db.exec('ALTER TABLE users ADD COLUMN password_set_at INTEGER')
+  }
+}
+
 function getSchemaVersionInternal(db) {
   const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')
   return row ? Number(row.value) : 0
@@ -53,6 +65,10 @@ function setSchemaVersionInternal(db, version) {
 }
 
 function runMigrations(db) {
+  // ★ 防御性：某些旧 DB 直接从更高版本起步（meta.schema_version=13 但 users 表是 v0 的样子），
+  // 导致 v3 的 ALTER TABLE 永远不会重跑，setUserPassword 会抛 "no such column: password_hash"。
+  // 这里独立于 schema_version 检查，缺什么列就补什么列，重复执行安全。
+  ensureUserPasswordColumns(db)
   const version = getSchemaVersionInternal(db)
   if (version < 2) migrateToV2(db)
   if (getSchemaVersionInternal(db) < 3) migrateToV3(db)
@@ -65,6 +81,7 @@ function runMigrations(db) {
   if (getSchemaVersionInternal(db) < 10) migrateToV10(db)
   if (getSchemaVersionInternal(db) < 11) migrateToV11(db)
   if (getSchemaVersionInternal(db) < 12) migrateToV12(db)
+  if (getSchemaVersionInternal(db) < 13) migrateToV13(db)
   runReasonixMigrations(db)
 }
 
@@ -650,6 +667,29 @@ function migrateToV12(db) {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_integrations_user_provider ON integrations(user_id, kind, provider);
   `)
   setSchemaVersionInternal(db, 12)
+}
+
+function migrateToV13(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS bridge_sessions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      integration_id TEXT NOT NULL REFERENCES integrations(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL,
+      external_chat_id TEXT NOT NULL,
+      chat_type TEXT NOT NULL DEFAULT 'dm',
+      external_user_id TEXT,
+      external_username TEXT,
+      channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_bridge_sessions_unique
+      ON bridge_sessions(user_id, integration_id, provider, external_chat_id);
+    CREATE INDEX IF NOT EXISTS idx_bridge_sessions_channel
+      ON bridge_sessions(channel_id);
+  `)
+  setSchemaVersionInternal(db, 13)
 }
 
 function initSchema(db) {

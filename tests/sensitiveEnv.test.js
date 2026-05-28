@@ -54,7 +54,7 @@ test('sanitizeChildEnv: strips sensitive process.env', () => {
     const env = sanitizeChildEnv()
     assert.equal(env.OPENAI_API_KEY, undefined)
     assert.equal(env.XAI_API_KEY, undefined)
-    assert.ok(env.HOME != null || env.PATH != null, 'should keep harmless env')
+    assert.ok(env.HOME != null || env.PATH != null || env.Path != null, 'should keep harmless env')
   } finally {
     if (originals.OPENAI_API_KEY == null) delete process.env.OPENAI_API_KEY
     else process.env.OPENAI_API_KEY = originals.OPENAI_API_KEY

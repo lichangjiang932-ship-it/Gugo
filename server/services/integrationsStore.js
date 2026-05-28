@@ -25,7 +25,7 @@ const PROVIDER_REGISTRY = {
     kind: 'social',
     label: '飞书 / Lark',
     fields: {
-      config: ['appId', 'botName'],
+      config: ['appId', 'botName', 'defaultAgentId'],
       secret: ['appSecret', 'verificationToken', 'encryptKey'],
     },
     test: testFeishu,
@@ -39,8 +39,8 @@ const PROVIDER_REGISTRY = {
   wechat_personal: {
     kind: 'social',
     label: '企业微信 / Work',
-    fields: { config: ['corpId', 'agentId'], secret: ['corpSecret'] },
-    test: testWechatWork,
+    fields: { config: ['botId', 'baseUrl', 'defaultAgentId'], secret: ['botToken'] },
+    test: testWechatPersonal,
   },
   dingtalk: {
     kind: 'social',
@@ -51,7 +51,7 @@ const PROVIDER_REGISTRY = {
   qq: {
     kind: 'social',
     label: 'QQ 开放平台',
-    fields: { config: ['appId', 'botQq'], secret: ['appSecret', 'token'] },
+    fields: { config: ['appId', 'defaultAgentId'], secret: ['appSecret', 'token'] },
     test: testQQ,
   },
   discord: {
@@ -63,7 +63,7 @@ const PROVIDER_REGISTRY = {
   telegram: {
     kind: 'social',
     label: 'Telegram',
-    fields: { config: ['botUsername'], secret: ['botToken'] },
+    fields: { config: ['botUsername', 'mode', 'defaultAgentId'], secret: ['botToken'] },
     test: testTelegram,
   },
   slack: {
@@ -140,6 +140,22 @@ function row2integration(row) {
   }
 }
 
+function row2integrationCredentials(row) {
+  if (!row) return null
+  return {
+    id: row.id,
+    userId: row.user_id,
+    kind: row.kind,
+    provider: row.provider,
+    name: row.name || '',
+    enabled: row.enabled === 1,
+    config: parseJson(row.config_json, {}),
+    secret: parseJson(row.secret_json, {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
 export function listIntegrations({ userId, kind = null } = {}) {
   if (!userId) return []
   const db = getDb()
@@ -147,6 +163,21 @@ export function listIntegrations({ userId, kind = null } = {}) {
     ? db.prepare('SELECT * FROM integrations WHERE user_id = ? AND kind = ? ORDER BY updated_at DESC').all(userId, kind)
     : db.prepare('SELECT * FROM integrations WHERE user_id = ? ORDER BY kind, updated_at DESC').all(userId)
   return rows.map(row2integration)
+}
+
+export function listEnabledIntegrationCredentials({ kind = 'social' } = {}) {
+  const rows = getDb().prepare(`
+    SELECT * FROM integrations
+    WHERE enabled = 1 AND kind = ?
+    ORDER BY updated_at DESC
+  `).all(kind)
+  return rows.map(row2integrationCredentials)
+}
+
+export function getIntegrationCredentialsById({ id }) {
+  if (!id) return null
+  const row = getDb().prepare('SELECT * FROM integrations WHERE id = ?').get(id)
+  return row2integrationCredentials(row)
 }
 
 export function getIntegration({ userId, id }) {
@@ -327,6 +358,12 @@ async function testWechatWork({ config, secret, fetchImpl }) {
     return { ok: false, message: `企业微信 ${status}: ${data?.errmsg || '鉴权失败'}` }
   }
   return { ok: true, message: `access_token 获取成功（有效期 ${data.expires_in}s）` }
+}
+
+async function testWechatPersonal({ secret }) {
+  const botToken = secret?.botToken?.trim()
+  if (!botToken) return { ok: false, message: '缺少 botToken；请先扫码登录个人微信机器人' }
+  return { ok: true, message: 'botToken 已保存。启用后会通过 iLink 长轮询接收个人微信消息。' }
 }
 
 async function testDingtalk({ config, secret, fetchImpl }) {

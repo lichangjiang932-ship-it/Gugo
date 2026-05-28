@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useT } from '../i18n/I18nProvider.jsx'
 import {
   AlertTriangle,
@@ -39,6 +39,11 @@ import {
   formatLoginCodeCountdownLabel,
   shouldDisableLoginCodeButton,
 } from '../lib/loginCountdown.js'
+import {
+  resolveSettingsNavFromSearch,
+  SETTINGS_TAB_ACCOUNT,
+  shouldPromptPasswordSetup,
+} from '../lib/settingsNavigation.js'
 import { getSystemDiagnostics, testModelEndpoint } from '../lib/modelClient.js'
 import {
   wrapSessionsExport,
@@ -65,6 +70,76 @@ const PERM_ICONS = {
 function PermIcon({ id, className }) {
   const Icon = PERM_ICONS[id] || Shield
   return <Icon className={className} />
+}
+
+// ★ 这些组件必须定义在 SettingsView 外部 — 否则每次 SettingsView 重新渲染都会
+// 创建新的函数引用，React 把它们当成不同的组件类型，于是 unmount + remount 整个子树，
+// 表单 input 在 onChange 触发后立刻丢焦点，导致"一次只能输入一个字符"。
+function StatusPill({ ok, label }) {
+  const tone =
+    ok === true
+      ? 'border-emerald-500/40 text-emerald-700 bg-emerald-50'
+      : ok === false
+      ? 'border-ember-line text-ember bg-ember-soft'
+      : 'border-ink-fade/50 text-ink-soft bg-paper-2'
+  return <span className={`inline-flex items-center h-7 px-2.5 rounded-full border text-xs ${tone}`}>{label}</span>
+}
+
+function Info({ label, value }) {
+  return (
+    <div className="p-3 border border-ink-fade/30 rounded-md bg-paper">
+      <div className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">{label}</div>
+      <div className="text-ink mt-1 break-all">{value}</div>
+    </div>
+  )
+}
+
+function SettingsGroup({ title, children }) {
+  return (
+    <div className="p-4 border border-ink/30 rounded-md flex flex-col gap-3">
+      <h3 className="font-hand text-lg text-ink">{title}</h3>
+      {children}
+    </div>
+  )
+}
+
+function Segmented({ value, options, onChange }) {
+  return (
+    <div className="flex gap-2 flex-wrap">
+      {options.map(([key, label]) => (
+        <button
+          key={key}
+          onClick={() => onChange(key)}
+          className={`h-9 px-4 rounded-md text-sm border transition-colors ${value === key ? 'bg-ink text-paper border-ink' : 'border-ink-fade/60 text-ink-soft hover:border-ink-fade'}`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function Toggle({ enabled, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`relative w-11 h-6 rounded-full border transition-colors ${enabled ? 'bg-ember border-ember' : 'bg-paper-2 border-ink-fade/60'}`}
+    >
+      <div className={`absolute top-0.5 w-4.5 h-4.5 rounded-full border bg-paper transition-all ${enabled ? 'left-[22px] border-ember' : 'left-0.5 border-ink-fade/60'}`} />
+    </button>
+  )
+}
+
+function Stat({ icon: Icon, value, label }) {
+  return (
+    <div className="p-3 border border-ink-fade/30 rounded-md flex items-center gap-3">
+      <Icon className="w-5 h-5 text-ink-fade" />
+      <div>
+        <span className="text-sm text-ink">{value}</span>
+        <span className="text-xs text-ink-soft block">{label}</span>
+      </div>
+    </div>
+  )
 }
 
 function formatBytes(bytes) {
@@ -103,7 +178,8 @@ function downloadJson(filename, data) {
 export default function SettingsView() {
   const { state, dispatch } = useAppContext()
   const navigate = useNavigate()
-  const [activeNav, setActiveNav] = useState('功能入口')
+  const location = useLocation()
+  const [activeNav, setActiveNav] = useState(() => resolveSettingsNavFromSearch(location.search))
   const { t, lang, setLang, languages } = useT()
   const navLabel = (item) => {
     switch (item) {
@@ -163,6 +239,17 @@ export default function SettingsView() {
   }, [])
 
   useEffect(() => {
+    setActiveNav(resolveSettingsNavFromSearch(location.search))
+  }, [location.search])
+
+  useEffect(() => {
+    if (!account?.user) return
+    if (!shouldPromptPasswordSetup(location.search, account.user)) return
+    setActiveNav(SETTINGS_TAB_ACCOUNT)
+    setPwdMessage('请设置一个登录密码，下次可以直接用邮箱和密码登录。')
+  }, [account?.user?.hasPassword, location.search])
+
+  useEffect(() => {
     refreshStorage()
   }, [state.sessions.length, state.history.length])
 
@@ -201,16 +288,6 @@ export default function SettingsView() {
     () => state.permissions.filter((p) => p.enabled).length,
     [state.permissions]
   )
-
-  function StatusPill({ ok, label }) {
-    const tone =
-      ok === true
-        ? 'border-emerald-500/40 text-emerald-700 bg-emerald-50'
-        : ok === false
-        ? 'border-ember-line text-ember bg-ember-soft'
-        : 'border-ink-fade/50 text-ink-soft bg-paper-2'
-    return <span className={`inline-flex items-center h-7 px-2.5 rounded-full border text-xs ${tone}`}>{label}</span>
-  }
 
   function renderDiagnostics() {
     const model = diagnostics?.model
@@ -580,15 +657,6 @@ export default function SettingsView() {
     )
   }
 
-  function Info({ label, value }) {
-    return (
-      <div className="p-3 border border-ink-fade/30 rounded-md bg-paper">
-        <div className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">{label}</div>
-        <div className="text-ink mt-1 break-all">{value}</div>
-      </div>
-    )
-  }
-
   function renderFeatureHub() {
     const featureLinks = [
       { path: '/task', icon: ListChecks, title: t('nav.task'), desc: '后台任务、Artifacts 与运行记录。' },
@@ -764,42 +832,6 @@ export default function SettingsView() {
           <IntegrationsPanel kind="vision_assist" t={t} />
         </div>
       </section>
-    )
-  }
-
-  function SettingsGroup({ title, children }) {
-    return (
-      <div className="p-4 border border-ink/30 rounded-md flex flex-col gap-3">
-        <h3 className="font-hand text-lg text-ink">{title}</h3>
-        {children}
-      </div>
-    )
-  }
-
-  function Segmented({ value, options, onChange }) {
-    return (
-      <div className="flex gap-2 flex-wrap">
-        {options.map(([key, label]) => (
-          <button
-            key={key}
-            onClick={() => onChange(key)}
-            className={`h-9 px-4 rounded-md text-sm border transition-colors ${value === key ? 'bg-ink text-paper border-ink' : 'border-ink-fade/60 text-ink-soft hover:border-ink-fade'}`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-    )
-  }
-
-  function Toggle({ enabled, onClick }) {
-    return (
-      <button
-        onClick={onClick}
-        className={`relative w-11 h-6 rounded-full border transition-colors ${enabled ? 'bg-ember border-ember' : 'bg-paper-2 border-ink-fade/60'}`}
-      >
-        <div className={`absolute top-0.5 w-4.5 h-4.5 rounded-full border bg-paper transition-all ${enabled ? 'left-[22px] border-ember' : 'left-0.5 border-ink-fade/60'}`} />
-      </button>
     )
   }
 
@@ -1056,18 +1088,6 @@ export default function SettingsView() {
           清除数据只影响当前浏览器，不会修改后端 .env 模型配置。
         </div>
       </section>
-    )
-  }
-
-  function Stat({ icon: Icon, value, label }) {
-    return (
-      <div className="p-3 border border-ink-fade/30 rounded-md flex items-center gap-3">
-        <Icon className="w-5 h-5 text-ink-fade" />
-        <div>
-          <span className="text-sm text-ink">{value}</span>
-          <span className="text-xs text-ink-soft block">{label}</span>
-        </div>
-      </div>
     )
   }
 

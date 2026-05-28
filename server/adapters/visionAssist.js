@@ -115,6 +115,41 @@ async function describeOneImage({ imagePart, config, secret, fetchImpl, language
  * 把 messages 中所有 image_url 块替换为文本描述块。
  * 返回 { messages: 新数组, assistCount, failures }
  */
+export async function describeImageAttachments({
+  attachments = [],
+  userId = null,
+  env = process.env,
+  fetchImpl = fetch,
+} = {}) {
+  const assistConfig = resolveVisionAssistConfig({ userId, env })
+  if (!assistConfig) return []
+  const language = assistConfig.config.language || 'zh'
+  const maxImages = Math.max(1, Number(assistConfig.config.maxImages) || 4)
+  const results = []
+  let processed = 0
+  for (const attachment of attachments) {
+    if (processed >= maxImages) break
+    const url = attachment?.url || attachment?.imageUrl || attachment?.image_url?.url
+    if (!url) continue
+    const result = await describeOneImage({
+      imagePart: { type: 'image_url', image_url: { url } },
+      config: assistConfig.config,
+      secret: assistConfig.secret,
+      fetchImpl,
+      language,
+    })
+    results.push({
+      index: processed,
+      ok: result.ok,
+      description: result.description || '',
+      error: result.message || '',
+      source: url,
+    })
+    processed += 1
+  }
+  return results
+}
+
 export async function attachVisionDescriptions({
   messages,
   userId = null,

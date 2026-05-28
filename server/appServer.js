@@ -46,6 +46,7 @@ import { handleNotificationRequest } from './routes/notificationRoutes.js'
 import { handleSessionRequest } from './routes/sessionRoutes.js'
 import { handleChannelRequest } from './routes/channelRoutes.js'
 import { handleIntegrationsRequest } from './routes/integrationsRoutes.js'
+import { handleBridgeRequest } from './routes/bridgeRoutes.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -259,6 +260,10 @@ function createRouter(getEnv = getRuntimeEnv) {
 
   if (req.url?.startsWith('/api/channels')) {
     return handleChannelRequest(req, res)
+  }
+
+  if (req.url?.startsWith('/api/bridge')) {
+    return handleBridgeRequest(req, res)
   }
 
   if (req.url?.startsWith('/api/integrations')) {

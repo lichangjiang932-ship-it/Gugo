@@ -8,6 +8,7 @@ import {
   shouldDisableLoginCodeButton,
 } from '../lib/loginCountdown.js'
 import { getAuthToken, loginWithPassword, sendLoginCode, verifyLoginCode } from '../lib/accountClient.js'
+import { settingsPathAfterLogin } from '../lib/settingsNavigation.js'
 import { archiveSessionRemote, unarchiveSessionRemote } from '../lib/sessionClient.js'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { useToast } from './Toast.jsx'
@@ -166,7 +167,7 @@ export default function LeftRail() {
       setLoginCode('')
       setLoginPassword('')
       setLoginMessage('')
-      navigate('/settings')
+      navigate(settingsPathAfterLogin(data.user))
     } catch (error) {
       setLoginMessage(error.message)
       toast.error({ title: t('toast.loginFailed'), body: error.message })

@@ -227,6 +227,7 @@ test('generated artifacts are downloadable from /api/artifacts/* with auth', asy
   process.env.MODEL_BASE_URL = `http://127.0.0.1:${mockPort}/v1`
   process.env.MODEL_API_KEY = 'sk-test'
   process.env.MODEL_NAME = 'gpt-4o-mini'
+  process.env.MODEL_PROVIDERS = ''
 
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   const { port } = server.address()

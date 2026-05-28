@@ -23,6 +23,7 @@ import { handleAgentTemplateRequest } from './server/routes/agentTemplateRoutes.
 import { handlePluginRequest } from './server/routes/pluginRoutes.js'
 import { handleChannelRequest } from './server/routes/channelRoutes.js'
 import { handleIntegrationsRequest } from './server/routes/integrationsRoutes.js'
+import { handleBridgeRequest } from './server/routes/bridgeRoutes.js'
 import { handleReasonixRequest } from './server/routes/reasonixRoutes.js'
 import { handleNotificationRequest } from './server/routes/notificationRoutes.js'
 import { handleSessionRequest } from './server/routes/sessionRoutes.js'
@@ -126,6 +127,10 @@ function fallbackApiPlugin() {
         }
         if (req.url === '/api/integrations' || req.url?.startsWith('/api/integrations/') || req.url?.startsWith('/api/integrations?')) {
           handleIntegrationsRequest(req, res)
+          return
+        }
+        if (req.url === '/api/bridge' || req.url?.startsWith('/api/bridge/') || req.url?.startsWith('/api/bridge?')) {
+          handleBridgeRequest(req, res)
           return
         }
         if (req.url?.startsWith('/api/reasonix/')) {
