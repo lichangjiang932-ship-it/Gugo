@@ -125,7 +125,7 @@
 - [ ] prompt-template plugin 接 chat slash command
 - [ ] PPT 视觉升级（gradient cover/section + 更多 chart 类型）
 
-历史架构重构进度：[docs/REFOUND_PLAN.md](./docs/REFOUND_PLAN.md)
+历史架构重构进度（已归档）：[docs/archive/REFOUND_PLAN.md](./docs/archive/REFOUND_PLAN.md)
 
 ---
 
@@ -214,8 +214,9 @@ your-model-atelier/
 ├── seed/                  # 系统 skill 静态种子
 ├── tests/                 # 50+ 测试文件
 ├── docs/
-│   ├── REFOUND_PLAN.md    # 重构路线图
-│   └── superpowers/
+│   ├── archive/           # 历史归档（REFOUND_PLAN / 旧 RELEASE_NOTES 等）
+│   ├── superpowers/       # 任务级 specs/plans
+│   └── HUB.md / PLUGIN_SDK.md / I18N.md / AGENTS.md
 └── .github/workflows/
     └── ci.yml             # PR / push 自动跑 lint + test + build
 ```

@@ -85,7 +85,7 @@
 - DB schema v6：`memories` 表加可选 `agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL`
 - session sticky agent（会话粘住选定 agent）
 - ChatHeader agent 切换器
-- 体积治理 + Agent 差异化（详见 `docs/RELEASE_NOTES_v0.6.0.md`）
+- 体积治理 + Agent 差异化（详见 `docs/archive/releases/RELEASE_NOTES_v0.6.md`）
 
 ## [0.5.0] · 2026-05-25
 

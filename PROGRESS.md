@@ -13,7 +13,7 @@
 > - agent persona 模板 → **已实现** (DB v7：`agents.persona_template`，模板表在 `server/services/agentTemplates.js`)
 > - FreshCompact 四块分编译 + 指纹缓存（identity/ishiki/skills/sessions）
 >
-> 下方"待办"区与 GAP_VS_OPENHANAKO.md / REFOUND_PLAN.md 的"待新增"段落对应项均可视为已勾选，**未单独逐条回填**——以 git 与 `server/db.js` 为准。
+> 下方"待办"区与 GAP_VS_OPENHANAKO.md / docs/archive/REFOUND_PLAN.md 的"待新增"段落对应项均可视为已勾选，**未单独逐条回填**——以 git 与 `server/db.js` 为准。
 
 ---
 
