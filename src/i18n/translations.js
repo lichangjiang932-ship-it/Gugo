@@ -43,6 +43,8 @@ export const translations = {
       filterActive: 'Active',
       filterArchived: 'Archived',
       filterAll: 'All',
+      quoteSelection: '引用',
+      quoteSelectionTitle: '引用所选文本到输入框',
     },
     settings: {
       sectionTitle: '设置',
@@ -322,6 +324,8 @@ export const translations = {
       filterActive: 'Active',
       filterArchived: 'Archived',
       filterAll: 'All',
+      quoteSelection: 'Quote',
+      quoteSelectionTitle: 'Quote selection into composer',
     },
     settings: {
       sectionTitle: 'Settings',
@@ -601,6 +605,8 @@ export const translations = {
       filterActive: 'Active',
       filterArchived: 'Archived',
       filterAll: 'All',
+      quoteSelection: '引用',
+      quoteSelectionTitle: '選択テキストを入力欄に引用',
     },
     settings: {
       sectionTitle: '設定',
@@ -880,6 +886,8 @@ export const translations = {
       filterActive: 'Active',
       filterArchived: 'Archived',
       filterAll: 'All',
+      quoteSelection: '인용',
+      quoteSelectionTitle: '선택한 텍스트를 입력란에 인용',
     },
     settings: {
       sectionTitle: '설정',
@@ -1159,6 +1167,8 @@ export const translations = {
       filterActive: 'Active',
       filterArchived: 'Archived',
       filterAll: 'All',
+      quoteSelection: '引用',
+      quoteSelectionTitle: '引用所選文字到輸入框',
     },
     settings: {
       sectionTitle: '設定',
