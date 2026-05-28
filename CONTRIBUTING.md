@@ -8,10 +8,11 @@
 git clone https://github.com/lichangjiang932-ship-it/your-model-atelier.git
 cd your-model-atelier
 npm install
+git config core.hooksPath .githooks  # 启用 pre-commit hook（防 secret-redaction 误改字面量）
 cp .env.example .env   # 按需配置
 npm run dev            # 前端 HMR
 npm run serve          # 启动 server
-npm test               # 跑测试套（当前 356 用例）
+npm test               # 跑测试套（当前 574 用例）
 ```
 
 ## 工作流
@@ -22,6 +23,17 @@ npm test               # 跑测试套（当前 356 用例）
 4. **测试驱动**：新功能必须带测试，bug 修复必须带回归测试
 5. **跑全套再提**：PR 前必须 `npm run lint && npm test && npm run build` 全过
 6. **Self-review**：提 PR 前先自己 review 一遍 diff，去掉 `console.log` 和实验性代码
+
+## Git hooks
+
+本仓库自带 `.githooks/pre-commit`，防 secret-redaction 工具误把字面量替成 `'***'`（参 PROGRESS.md "已知问题"）。
+clone 后跑一次启用：
+
+```bash
+git config core.hooksPath .githooks
+```
+
+紧急 bypass：`git commit --no-verify`（仅当 `'***'` 是有意为之时）。
 
 ## 代码风格
 

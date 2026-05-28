@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# yma pre-commit hook
+# 防 secret-redaction 工具误改字面量（参 PROGRESS.md 已知问题）
+#
+# 触发条件：staged diff 含 `= '***'` 或 `= "***"` 形态赋值
+# 历史教训：v0.5 把 STORAGE_KEY = 'yma:activeAgentId' 替成 '***'，跨 tab 全用户串台
+#
+# 启用：git config core.hooksPath .githooks
+# 强制 bypass：git commit --no-verify
+
+set -e
+
+if git diff --cached --unified=0 | grep -E "^\+.*=\s*['\"]\*\*\*['\"]" > /dev/null; then
+  echo "❌ pre-commit: detected '= ***' assignment in staged diff."
+  echo "   secret-redaction tool likely overwrote a literal. Review:"
+  git diff --cached --unified=0 | grep -nE "^\+.*=\s*['\"]\*\*\*['\"]"
+  echo
+  echo "If intentional, bypass with: git commit --no-verify"
+  exit 1
+fi
+
+exit 0
