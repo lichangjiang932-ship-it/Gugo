@@ -29,6 +29,7 @@ import { buildArtifactPreview } from '../../lib/artifactPreview.js'
 import { exportSession } from '../../lib/sessionExport.js'
 import { compressImageDataUrl } from '../../lib/imageCompress.js'
 import { extractPdfText } from '../../lib/pdfExtract.js'
+import { extractDocxText, extractPptxText, isDocxFile, isPptxFile } from '../../lib/officeExtract.js'
 import { fetchCompactionArchive } from '../../lib/compactionClient.js'
 import {
   artifactTypeForSkill,
@@ -89,6 +90,15 @@ async function readExcelAsText(file) {
     parts.push(`[工作表: ${sheetName}]\n${csv}`)
   }
   return parts.join('\n\n')
+}
+
+// 统一截断：提取出的文本超过 MAX_TEXT_BYTES 时截到一半字符并加提示，
+// 而不是丢掉内容回退成"只有名称"。
+function clampTextToBytes(text, label = '内容过长') {
+  const value = String(text ?? '')
+  if (new TextEncoder().encode(value).length <= MAX_TEXT_BYTES) return value
+  const maxChars = Math.floor(MAX_TEXT_BYTES / 2)
+  return `${value.slice(0, maxChars)}\n\n[${label}，已截断]`
 }
 
 export default function ChatSplit() {
@@ -798,22 +808,32 @@ export default function ChatSplit() {
             }
           }
         } else if (isExcelFile(file)) {
-          const text = await readExcelAsText(file)
-          const textBytes = new TextEncoder().encode(text).length
-          if (textBytes > MAX_TEXT_BYTES) {
-            const maxChars = Math.floor(MAX_TEXT_BYTES / 2)
-            const truncated = text.slice(0, maxChars) + '\n\n[Excel 内容过长，已截断]'
-            nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'text', text: truncated })
-          } else {
-            nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'text', text })
-          }
+          const text = clampTextToBytes(await readExcelAsText(file), 'Excel 内容过长')
+          nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'text', text })
         } else if (isPdfFile(file)) {
           const text = await extractPdfText(file)
           nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'text', text })
-        } else if (isTextLikeFile(file) && file.size <= MAX_TEXT_BYTES) {
-          nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'text', text: await file.text() })
+        } else if (isDocxFile(file)) {
+          const text = clampTextToBytes(await extractDocxText(file), 'Word 内容过长')
+          nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'text', text })
+        } else if (isPptxFile(file)) {
+          const text = clampTextToBytes(await extractPptxText(file), 'PPT 内容过长')
+          nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'text', text })
+        } else if (isTextLikeFile(file)) {
+          // 文本类文件不再因超过 256KB 直接丢内容；统一截断后保留正文。
+          const text = clampTextToBytes(await file.text(), '文本内容过长')
+          nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'text', text })
         } else {
-          nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'file' })
+          // 真正无法本地解析的二进制（旧版 .doc/.ppt、.zip、.epub 等）：保留为附件并显式告知原因，
+          // 而不是静默变成"只有名称"。
+          nextAttachments.push({
+            id,
+            name: file.name,
+            sizeKB,
+            type: file.type,
+            kind: 'file',
+            error: '该格式无法在本地读取正文，仅发送文件名与元信息。',
+          })
         }
       } catch (err) {
         nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'file', error: err.message || '读取失败' })

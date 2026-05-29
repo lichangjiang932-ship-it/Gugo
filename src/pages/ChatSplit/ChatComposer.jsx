@@ -126,20 +126,67 @@ export default function ChatComposer({
   }, [setInput, skills, slashRegistry])
 
   const [fullscreenSrc, setFullscreenSrc] = useState(null)
+  // 拖放上传：dragCounter 计数解决移到子元素时 dragleave 误触发导致高亮闪烁。
+  const [isDraggingFile, setIsDraggingFile] = useState(false)
+  const dragCounter = useRef(0)
+
+  // 全局守卫：拖放文件到 composer 以外的任何区域时，浏览器默认会"打开/下载该文件"
+  // 从而离开整个聊天页。这里在 window 级别 preventDefault，把误拖变成无害操作。
+  // composer 自身的 onDrop 仍照常处理文件，不受影响。
+  useEffect(() => {
+    const hasFiles = (e) => Array.from(e.dataTransfer?.types || []).includes('Files')
+    const onWindowDragOver = (e) => { if (hasFiles(e)) e.preventDefault() }
+    const onWindowDrop = (e) => {
+      if (!hasFiles(e)) return
+      e.preventDefault()
+      dragCounter.current = 0
+      setIsDraggingFile(false)
+    }
+    window.addEventListener('dragover', onWindowDragOver)
+    window.addEventListener('drop', onWindowDrop)
+    return () => {
+      window.removeEventListener('dragover', onWindowDragOver)
+      window.removeEventListener('drop', onWindowDrop)
+    }
+  }, [])
+
+  const isFileDrag = (e) => Array.from(e.dataTransfer?.types || []).includes('Files')
 
   return (
     <div
       className="px-6 pb-6 pt-3 border-t border-dashed border-ink-fade/50 relative"
+      onDragEnter={(e) => {
+        if (!isFileDrag(e)) return
+        e.preventDefault()
+        dragCounter.current += 1
+        setIsDraggingFile(true)
+      }}
       onDragOver={(e) => {
+        if (!isFileDrag(e)) return
         e.preventDefault()
         e.dataTransfer.dropEffect = 'copy'
       }}
+      onDragLeave={(e) => {
+        if (!isFileDrag(e)) return
+        dragCounter.current = Math.max(0, dragCounter.current - 1)
+        if (dragCounter.current === 0) setIsDraggingFile(false)
+      }}
       onDrop={(e) => {
         e.preventDefault()
+        dragCounter.current = 0
+        setIsDraggingFile(false)
         if (!e.dataTransfer?.files?.length) return
         onFileChange?.({ target: { files: e.dataTransfer.files, value: '' } })
       }}
     >
+      {isDraggingFile && (
+        <div className="absolute inset-2 z-20 rounded-md border-2 border-dashed border-ember bg-ember-soft/80 flex items-center justify-center pointer-events-none">
+          <span className="inline-flex items-center gap-2 text-sm text-ember font-medium">
+            <Paperclip className="w-4 h-4" />
+            松开以上传文件
+          </span>
+        </div>
+      )}
       {/* Slash menu overlay (Phase 2 S4: SlashAutocomplete 抽离) */}
       <AnimatePresence>
         {showSlashMenu && (
