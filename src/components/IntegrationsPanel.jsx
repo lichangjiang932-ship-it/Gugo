@@ -66,6 +66,7 @@ function normalizeFields(meta) {
         type: field.type || inferFieldType(key, secret),
         location: secret ? 'secret' : 'config',
         options: field.options || inferOptions(key),
+        optional: !!field.optional,
       }
     }).filter((field) => field.key)
   }
@@ -76,6 +77,7 @@ function normalizeFields(meta) {
     type: inferFieldType(key, false),
     location: 'config',
     options: inferOptions(key),
+    optional: false,
   }))
   const secretFields = (fields?.secret || []).map((key) => ({
     key,
@@ -83,8 +85,25 @@ function normalizeFields(meta) {
     type: 'password',
     location: 'secret',
     options: [],
+    optional: false,
   }))
-  return [...configFields, ...secretFields]
+  const optionalConfigFields = (fields?.optional?.config || []).map((key) => ({
+    key,
+    label: fieldLabel(key),
+    type: inferFieldType(key, false),
+    location: 'config',
+    options: inferOptions(key),
+    optional: true,
+  }))
+  const optionalSecretFields = (fields?.optional?.secret || []).map((key) => ({
+    key,
+    label: fieldLabel(key),
+    type: 'password',
+    location: 'secret',
+    options: [],
+    optional: true,
+  }))
+  return [...configFields, ...secretFields, ...optionalConfigFields, ...optionalSecretFields]
 }
 
 function getLastTest(integration) {
@@ -371,6 +390,38 @@ export default function IntegrationsPanel({ kind, t }) {
 
   const activeMeta = form ? providersById[form.provider] : null
   const activeFields = normalizeFields(activeMeta)
+  const requiredFields = activeFields.filter((field) => !field.optional)
+  const optionalFields = activeFields.filter((field) => field.optional)
+
+  const renderField = (field) => {
+    const value = field.location === 'secret' ? form.secret?.[field.key] || '' : form.config?.[field.key] || ''
+    return (
+      <label key={`${field.location}.${field.key}`} className="flex flex-col gap-1.5">
+        <span className="text-xs text-ink-fade">{field.label}</span>
+        {field.type === 'select' ? (
+          <select
+            value={value}
+            onChange={(event) => updateFormValue(field, event.target.value)}
+            className="h-10 px-3 rounded-md border border-ink-fade/40 bg-paper text-sm outline-none focus:border-ember"
+          >
+            <option value="">-</option>
+            {field.options.map((option) => <option key={option} value={option}>{option}</option>)}
+          </select>
+        ) : (
+          <input
+            type={field.type === 'password' ? 'password' : field.type === 'url' ? 'url' : 'text'}
+            value={value}
+            placeholder={field.type === 'password' && form?.id ? t('integrations.secretPlaceholder') : ''}
+            onFocus={() => {
+              if (field.location === 'secret' && value === SECRET_SENTINEL) updateFormValue(field, '')
+            }}
+            onChange={(event) => updateFormValue(field, event.target.value)}
+            className="h-10 px-3 rounded-md border border-ink-fade/40 bg-paper text-sm outline-none focus:border-ember"
+          />
+        )}
+      </label>
+    )
+  }
 
   return (
     <div className="border border-ink-fade/40 rounded-md p-4 flex flex-col gap-4 bg-paper">
@@ -507,36 +558,20 @@ export default function IntegrationsPanel({ kind, t }) {
             </label>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {activeFields.map((field) => {
-                const value = field.location === 'secret' ? form.secret?.[field.key] || '' : form.config?.[field.key] || ''
-                return (
-                  <label key={`${field.location}.${field.key}`} className="flex flex-col gap-1.5">
-                    <span className="text-xs text-ink-fade">{field.label}</span>
-                    {field.type === 'select' ? (
-                      <select
-                        value={value}
-                        onChange={(event) => updateFormValue(field, event.target.value)}
-                        className="h-10 px-3 rounded-md border border-ink-fade/40 bg-paper text-sm outline-none focus:border-ember"
-                      >
-                        <option value="">-</option>
-                        {field.options.map((option) => <option key={option} value={option}>{option}</option>)}
-                      </select>
-                    ) : (
-                      <input
-                        type={field.type === 'password' ? 'password' : field.type === 'url' ? 'url' : 'text'}
-                        value={value}
-                        placeholder={field.type === 'password' && form.id ? t('integrations.secretPlaceholder') : ''}
-                        onFocus={() => {
-                          if (field.location === 'secret' && value === SECRET_SENTINEL) updateFormValue(field, '')
-                        }}
-                        onChange={(event) => updateFormValue(field, event.target.value)}
-                        className="h-10 px-3 rounded-md border border-ink-fade/40 bg-paper text-sm outline-none focus:border-ember"
-                      />
-                    )}
-                  </label>
-                )
-              })}
+              {requiredFields.map(renderField)}
             </div>
+
+            {optionalFields.length ? (
+              <details className="rounded-md border border-ink-fade/30 px-3 py-2 group">
+                <summary className="cursor-pointer text-sm text-ink-soft select-none list-none flex items-center gap-1.5">
+                  <ChevronDown className="w-3.5 h-3.5 transition-transform group-open:rotate-180" />
+                  {t('integrations.advancedOptions')}
+                </summary>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-3">
+                  {optionalFields.map(renderField)}
+                </div>
+              </details>
+            ) : null}
 
             {form.provider === 'wechat_personal' ? (
               <div className="rounded-md border border-ink-fade/30 p-3 flex flex-col gap-3">

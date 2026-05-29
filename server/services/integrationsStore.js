@@ -25,8 +25,12 @@ const PROVIDER_REGISTRY = {
     kind: 'social',
     label: '飞书 / Lark',
     fields: {
-      config: ['appId', 'botName', 'defaultAgentId'],
-      secret: ['appSecret', 'verificationToken', 'encryptKey'],
+      config: ['appId'],
+      secret: ['appSecret'],
+      optional: {
+        config: ['botName', 'defaultAgentId'],
+        secret: ['verificationToken', 'encryptKey'],
+      },
     },
     test: testFeishu,
   },
