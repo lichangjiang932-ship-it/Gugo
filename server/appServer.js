@@ -269,7 +269,7 @@ function createRouter(getEnv = getRuntimeEnv) {
   }
 
   if (req.url?.startsWith('/api/integrations')) {
-    return handleIntegrationsRequest(req, res)
+    return handleIntegrationsRequest(req, res, { env: getEnv() })
   }
 
   // Desk Notes (Hanako 平行：书桌便笺)

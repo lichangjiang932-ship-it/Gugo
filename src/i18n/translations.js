@@ -112,6 +112,23 @@ export const translations = {
       lastTest: '上次测试：{time}',
       lastTestNever: '从未测试',
     },
+    visionAssist: {
+      badge: {
+        active: '已启用',
+        inactive: '未启用',
+        hint: '视觉辅助副驾需要同时满足两个条件才会被链路使用：在本页配置 vision_assist 凭据（baseUrl / modelName / apiKey），并且在服务端 .env 设置 MODEL_NAMES_VISION（逗号分隔的视觉模型名）。两者缺一不可。',
+      },
+    },
+    wechat: {
+      qr: {
+        expiresIn: '二维码 {seconds}s 后过期',
+        expired: '二维码已过期，点击重新获取',
+        refresh: '重新获取',
+        networkError: '网络异常，请重试',
+        serverError: '服务器错误，请稍后重试',
+        timeout: '扫码超时，请重新获取二维码',
+      },
+    },
     applyPatchApproval: {
       title: '审批代码补丁',
       subtitle: '模型请求修改 {count} 个文件。请检查预览后决定是否写入工作区。',
@@ -427,6 +444,23 @@ export const translations = {
       advancedOptions: 'Advanced options (optional)',
       lastTest: 'Last test: {time}',
       lastTestNever: 'Never tested',
+    },
+    visionAssist: {
+      badge: {
+        active: 'Active',
+        inactive: 'Not configured',
+        hint: 'Vision copilot only kicks in when both pieces are in place: configure the vision_assist credentials on this page (baseUrl / modelName / apiKey) AND set MODEL_NAMES_VISION (comma-separated vision model ids) in the server .env. Either alone is not enough.',
+      },
+    },
+    wechat: {
+      qr: {
+        expiresIn: 'QR code expires in {seconds}s',
+        expired: 'QR code expired — click to refresh',
+        refresh: 'Refresh',
+        networkError: 'Network error, please retry',
+        serverError: 'Server error, please retry later',
+        timeout: 'Scan timeout, please refresh the QR code',
+      },
     },
     applyPatchApproval: {
       title: 'Approve Code Patch',
@@ -744,6 +778,23 @@ export const translations = {
       lastTest: '前回テスト：{time}',
       lastTestNever: '未テスト',
     },
+    visionAssist: {
+      badge: {
+        active: '有効',
+        inactive: '未設定',
+        hint: 'ビジョン副操縦士は、このページで vision_assist の資格情報（baseUrl / modelName / apiKey）を設定し、かつサーバの .env に MODEL_NAMES_VISION（カンマ区切りのビジョンモデル ID）を設定した場合にのみ呼び出されます。どちらか一方では不十分です。',
+      },
+    },
+    wechat: {
+      qr: {
+        expiresIn: 'QRコードはあと {seconds} 秒で期限切れ',
+        expired: 'QRコードの期限切れ — クリックして再取得',
+        refresh: '再取得',
+        networkError: 'ネットワークエラー、再試行してください',
+        serverError: 'サーバーエラー、後ほど再試行してください',
+        timeout: 'スキャンがタイムアウトしました。QRコードを再取得してください',
+      },
+    },
     applyPatchApproval: {
       title: 'コードパッチを承認',
       subtitle: 'モデルが {count} 個のファイルを変更しようとしています。ワークスペースへ書き込む前にプレビューを確認してください。',
@@ -1060,6 +1111,23 @@ export const translations = {
       lastTest: '마지막 테스트: {time}',
       lastTestNever: '테스트한 적 없음',
     },
+    visionAssist: {
+      badge: {
+        active: '활성화됨',
+        inactive: '미설정',
+        hint: '비전 코파일럿은 두 가지가 모두 충족될 때만 호출됩니다: 이 페이지에서 vision_assist 자격 증명(baseUrl / modelName / apiKey)을 설정하고, 서버 .env에 MODEL_NAMES_VISION(쉼표로 구분된 비전 모델 ID)을 설정해야 합니다. 하나만으로는 부족합니다.',
+      },
+    },
+    wechat: {
+      qr: {
+        expiresIn: 'QR 코드가 {seconds}초 후 만료됩니다',
+        expired: 'QR 코드가 만료되었습니다 — 클릭하여 재발급',
+        refresh: '재발급',
+        networkError: '네트워크 오류, 다시 시도해주세요',
+        serverError: '서버 오류, 잠시 후 다시 시도해주세요',
+        timeout: '스캔 시간 초과, QR 코드를 다시 받아주세요',
+      },
+    },
     applyPatchApproval: {
       title: '코드 패치 승인',
       subtitle: '모델이 {count}개 파일을 수정하려고 합니다. 작업공간에 쓰기 전에 미리보기를 확인하세요.',
@@ -1375,6 +1443,23 @@ export const translations = {
       advancedOptions: '進階選項（可選）',
       lastTest: '上次測試：{time}',
       lastTestNever: '從未測試',
+    },
+    visionAssist: {
+      badge: {
+        active: '已啟用',
+        inactive: '未啟用',
+        hint: '視覺輔助副駕需要同時滿足兩個條件才會被鏈路使用：在本頁設定 vision_assist 憑證（baseUrl / modelName / apiKey），並且在伺服器 .env 設定 MODEL_NAMES_VISION（逗號分隔的視覺模型名）。兩者缺一不可。',
+      },
+    },
+    wechat: {
+      qr: {
+        expiresIn: '二維碼 {seconds}s 後過期',
+        expired: '二維碼已過期，點擊重新取得',
+        refresh: '重新取得',
+        networkError: '網路異常，請重試',
+        serverError: '伺服器錯誤，請稍後再試',
+        timeout: '掃碼逾時，請重新取得二維碼',
+      },
     },
     applyPatchApproval: {
       title: '審批程式碼補丁',

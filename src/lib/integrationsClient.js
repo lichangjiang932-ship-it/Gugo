@@ -94,3 +94,9 @@ export async function getBridgeStatusApi() {
   const resp = await fetch('/api/bridge/status', { headers: authHeaders() })
   return jsonOk(resp)
 }
+
+// 视觉副驾就绪探针：configured 同时检查后端凭据 + env.MODEL_NAMES_VISION
+export async function fetchVisionAssistStatus() {
+  const resp = await fetch('/api/integrations/vision_assist/status', { headers: authHeaders() })
+  return jsonOk(resp)
+}
