@@ -1010,6 +1010,7 @@ export default function ChatSplit() {
           input={input}
           setInput={setInput}
           onSend={handleSend}
+          agentMode={agentMode}
           attachments={attachments}
           setAttachments={setAttachments}
           showSlashMenu={showSlashMenu}

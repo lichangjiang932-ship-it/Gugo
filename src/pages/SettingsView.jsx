@@ -31,6 +31,7 @@ import {
 } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
 import IntegrationsPanel from '../components/IntegrationsPanel.jsx'
+import { ROUTE_READINESS } from '../config/routeReadiness.js'
 import { useAppContext } from '../store/AppContext'
 import { clearPersistedState } from '../store/AppContext.jsx'
 import { getAccount, getAuthToken, recharge, removeAccountPassword, sendLoginCode, setAccountPassword, setAuthToken, verifyLoginCode } from '../lib/accountClient.js'
@@ -685,6 +686,10 @@ export default function SettingsView() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {featureLinks.map((item) => {
             const Icon = item.icon
+            // T7: 入口卡片角标——preview/wip 才显示
+            const readinessLevel = ROUTE_READINESS[item.path]
+            const showBadge = readinessLevel === 'preview' || readinessLevel === 'wip'
+            const readinessLabel = showBadge ? t(`routeReadiness.${readinessLevel}`) : null
             return (
               <button
                 key={item.path}
@@ -695,8 +700,21 @@ export default function SettingsView() {
                 <span className="w-9 h-9 rounded-md border border-ink-fade/40 flex items-center justify-center shrink-0 bg-paper">
                   <Icon className="w-4 h-4 text-ink-soft group-hover:text-ink" />
                 </span>
-                <span className="min-w-0">
-                  <span className="block text-sm text-ink">{item.title}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-2">
+                    <span className="text-sm text-ink">{item.title}</span>
+                    {readinessLabel ? (
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded ${
+                          readinessLevel === 'wip'
+                            ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                            : 'bg-paper-2 text-ink-fade'
+                        }`}
+                      >
+                        {readinessLabel}
+                      </span>
+                    ) : null}
+                  </span>
                   <span className="block text-xs text-ink-soft mt-1 leading-relaxed">{item.desc}</span>
                 </span>
               </button>
