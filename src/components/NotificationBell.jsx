@@ -11,6 +11,7 @@ import {
   markNotificationsRead,
   subscribeToNotifications,
 } from '../lib/notificationClient.js'
+import { formatUnreadBadge, toastTypeForNotification } from '../lib/notificationBellUtils.js'
 
 function formatRelative(ts, lang) {
   if (!ts) return ''
@@ -21,20 +22,9 @@ function formatRelative(ts, lang) {
   return new Date(ts).toLocaleDateString(lang)
 }
 
-function toastTypeForNotification(notification) {
-  if (['success', 'error', 'warn'].includes(notification?.kind)) return notification.kind
-  if (notification?.kind === 'job') {
-    const status = notification.data?.status
-    if (status === 'completed') return 'success'
-    if (status === 'failed') return 'error'
-    if (status === 'cancelled') return 'warn'
-  }
-  return null
-}
-
-export default function NotificationCenter() {
+export default function NotificationBell() {
   const navigate = useNavigate()
-  const panelRef = useRef(null)
+  const containerRef = useRef(null)
   const { state } = useAppContext()
   const { t, lang } = useT()
   const toast = useToast()
@@ -93,7 +83,7 @@ export default function NotificationCenter() {
   useEffect(() => {
     if (!open) return undefined
     const onPointerDown = (event) => {
-      if (panelRef.current && !panelRef.current.contains(event.target)) setOpen(false)
+      if (containerRef.current && !containerRef.current.contains(event.target)) setOpen(false)
     }
     window.addEventListener('pointerdown', onPointerDown)
     return () => window.removeEventListener('pointerdown', onPointerDown)
@@ -134,24 +124,26 @@ export default function NotificationCenter() {
 
   if (!enabled) return null
 
+  const badge = formatUnreadBadge(unreadCount)
+
   return (
-    <div ref={panelRef} className="fixed top-4 right-4 z-30">
+    <div ref={containerRef} className="relative inline-flex">
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
-        className="relative w-10 h-10 rounded-md border border-ink/20 bg-paper/95 shadow-sm backdrop-blur inline-flex items-center justify-center text-ink-soft hover:text-ink hover:border-ember/60"
+        className="relative w-8 h-8 rounded-md border border-ink-fade/40 bg-paper hover:bg-paper-2 inline-flex items-center justify-center text-ink-soft hover:text-ink hover:border-ember/60 transition-colors"
         aria-label={t('notifications.bellLabel')}
       >
-        <Bell className="w-5 h-5" />
-        {unreadCount > 0 && (
-          <span className="absolute -top-1 -right-1 min-w-5 h-5 px-1 rounded-full bg-red-600 text-white text-[10px] font-semibold flex items-center justify-center">
-            {unreadCount > 99 ? '99+' : unreadCount}
+        <Bell className="w-4 h-4" />
+        {badge && (
+          <span className="absolute -top-1 -right-1 min-w-4 h-4 px-1 rounded-full bg-red-600 text-white text-[9px] font-semibold flex items-center justify-center">
+            {badge}
           </span>
         )}
       </button>
 
       {open && (
-        <section className="absolute right-0 mt-2 w-[min(380px,calc(100vw-2rem))] rounded-md border border-ink/20 bg-paper shadow-xl overflow-hidden">
+        <section className="fixed left-[248px] top-3 z-40 w-[min(380px,calc(100vw-260px))] rounded-md border border-ink/20 bg-paper shadow-xl overflow-hidden">
           <header className="px-3 py-2.5 border-b border-dashed border-ink-fade/40 flex items-center justify-between gap-3">
             <div>
               <h2 className="text-sm font-semibold text-ink">{t('notifications.title')}</h2>

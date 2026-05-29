@@ -12,6 +12,7 @@ import { settingsPathAfterLogin } from '../lib/settingsNavigation.js'
 import { archiveSessionRemote, unarchiveSessionRemote } from '../lib/sessionClient.js'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { useToast } from './Toast.jsx'
+import NotificationBell from './NotificationBell.jsx'
 
 // ★ #21: 提取会话最后消息的纯文本预览 (剥 markdown / 多模态 array / 工具卡)
 function getSessionPreview(session) {
@@ -264,12 +265,15 @@ export default function LeftRail() {
   return (
     <>
       <aside role="navigation" aria-label="主导航" className="w-[240px] h-full border-r border-dashed border-ink-fade/50 flex flex-col gap-3 p-4 bg-paper shrink-0 overflow-y-auto">
-        <button onClick={() => navigate('/chat')} aria-label="回到首页" className="flex items-center gap-2 mb-1">
-          <div data-accent-bg className="w-7 h-7 rounded-full border border-ink flex items-center justify-center bg-paper">
-            <Sparkles data-accent className="w-3.5 h-3.5 text-ember" />
-          </div>
-          <span className="font-display italic text-lg text-ink">your model</span>
-        </button>
+        <div className="flex items-center justify-between mb-1">
+          <button onClick={() => navigate('/chat')} aria-label="回到首页" className="flex items-center gap-2">
+            <div data-accent-bg className="w-7 h-7 rounded-full border border-ink flex items-center justify-center bg-paper">
+              <Sparkles data-accent className="w-3.5 h-3.5 text-ember" />
+            </div>
+            <span className="font-display italic text-lg text-ink">your model</span>
+          </button>
+          <NotificationBell />
+        </div>
 
         <button
           onClick={handleNewChat}
