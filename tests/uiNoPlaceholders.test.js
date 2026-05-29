@@ -12,7 +12,7 @@ const BLOCKED = [
   /alert\s*\(/,
   /window\.open\s*\(/,
   /手机端配对/,
-  /二维码/,
+  // 「二维码」是微信扫码登录的合法 UX 词，不再视为占位
 ]
 
 function collectFiles(dir) {
