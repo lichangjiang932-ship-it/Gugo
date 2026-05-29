@@ -124,7 +124,7 @@ const TYPE_EXTENSIONS = {
 }
 
 function walkFiles(root, out = []) {
-  let entries = []
+  let entries
   try {
     entries = fs.readdirSync(root, { withFileTypes: true })
   } catch {

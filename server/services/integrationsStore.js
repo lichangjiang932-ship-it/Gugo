@@ -346,6 +346,8 @@ async function testWechatOfficial({ config, secret, fetchImpl }) {
   return { ok: true, message: `access_token 获取成功（有效期 ${data.expires_in}s）` }
 }
 
+// TODO: 接入企业微信 channel 时挂回 SOCIAL_CHANNELS.test
+// eslint-disable-next-line no-unused-vars
 async function testWechatWork({ config, secret, fetchImpl }) {
   const corpId = config?.corpId?.trim()
   const corpSecret = secret?.corpSecret?.trim()
