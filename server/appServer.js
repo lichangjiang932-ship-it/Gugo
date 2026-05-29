@@ -47,6 +47,8 @@ import { handleSessionRequest } from './routes/sessionRoutes.js'
 import { handleChannelRequest } from './routes/channelRoutes.js'
 import { handleIntegrationsRequest } from './routes/integrationsRoutes.js'
 import { handleBridgeRequest } from './routes/bridgeRoutes.js'
+import { handleDeskRequest } from './routes/deskRoutes.js'
+import { handleMobileRequest } from './routes/mobileRoutes.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -268,6 +270,16 @@ function createRouter(getEnv = getRuntimeEnv) {
 
   if (req.url?.startsWith('/api/integrations')) {
     return handleIntegrationsRequest(req, res)
+  }
+
+  // Desk Notes (Hanako 平行：书桌便笺)
+  if (req.url?.startsWith('/api/desk/')) {
+    return handleDeskRequest(req, res)
+  }
+
+  // Mobile / LAN access keys (Hanako 平行)
+  if (req.url?.startsWith('/api/mobile/')) {
+    return handleMobileRequest(req, res)
   }
 
   if (req.url?.startsWith('/api/sessions')) {

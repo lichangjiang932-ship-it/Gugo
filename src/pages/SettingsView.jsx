@@ -664,6 +664,8 @@ export default function SettingsView() {
     const featureLinks = [
       { path: '/task', icon: ListChecks, title: t('nav.task'), desc: '后台任务、Artifacts 与运行记录。' },
       { path: '/memory', icon: BookOpen, title: t('nav.memory'), desc: '长期记忆、置顶记忆与 Agent 关联。' },
+      { path: '/desk', icon: BookOpen, title: t('nav.desk') || '书桌', desc: '随手便笺、灵感、TODO；自动保存、置顶。' },
+      { path: '/mobile-keys', icon: MonitorSmartphone, title: t('nav.mobileKeys') || '手机入口', desc: '生成访问钥匙，在手机/局域网打开 /mobile.html。' },
       { path: '/agents', icon: Users, title: t('nav.agents'), desc: '角色、人格、技能和角色卡管理。' },
       { path: '/channels', icon: Hash, title: t('nav.channels'), desc: '多 Agent 频道与协作消息流。' },
       { path: '/mcp', icon: Plug, title: t('nav.mcp'), desc: 'MCP 服务、工具、资源和 prompts。' },

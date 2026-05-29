@@ -78,7 +78,7 @@ export default function LeftRail() {
     return () => window.clearInterval(timer)
   }, [loginCodeCountdown])
 
-  const settingsChildPaths = ['/task', '/permissions', '/memory', '/agents', '/channels', '/mcp', '/hooks', '/cron', '/history']
+  const settingsChildPaths = ['/task', '/permissions', '/memory', '/desk', '/mobile-keys', '/agents', '/channels', '/mcp', '/hooks', '/cron', '/history']
   const navItems = [
     { path: '/chat', icon: MessageSquare, label: t('nav.chat') },
     { path: '/skills', icon: Wrench, label: t('nav.skills') },
