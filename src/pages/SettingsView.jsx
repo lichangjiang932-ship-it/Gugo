@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useT } from '../i18n/I18nProvider.jsx'
 import {
@@ -215,8 +215,8 @@ export default function SettingsView() {
   const [settingsImportMode, setSettingsImportMode] = useState('merge')
   const importInputRef = useRef(null)
 
-  const refreshStorage = () => setStorageBytes(getLocalStorageBytes())
-  const refreshDiagnostics = async ({ check = false } = {}) => {
+  const refreshStorage = useCallback(() => setStorageBytes(getLocalStorageBytes()), [])
+  const refreshDiagnostics = useCallback(async ({ check = false } = {}) => {
     setDiagnosticsLoading(true)
     setDiagnosticsMessage(check ? '正在探测模型端点...' : '')
     try {
@@ -228,40 +228,9 @@ export default function SettingsView() {
     } finally {
       setDiagnosticsLoading(false)
     }
-  }
-
-  useEffect(() => {
-    if (getAuthToken()) {
-      refreshAccount()
-    }
-    refreshDiagnostics()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  useEffect(() => {
-    setActiveNav(resolveSettingsNavFromSearch(location.search))
-  }, [location.search])
-
-  useEffect(() => {
-    if (!account?.user) return
-    if (!shouldPromptPasswordSetup(location.search, account.user)) return
-    setActiveNav(SETTINGS_TAB_ACCOUNT)
-    setPwdMessage('请设置一个登录密码，下次可以直接用邮箱和密码登录。')
-  }, [account?.user?.hasPassword, location.search])
-
-  useEffect(() => {
-    refreshStorage()
-  }, [state.sessions.length, state.history.length])
-
-  useEffect(() => {
-    if (loginCodeCountdown <= 0) return undefined
-    const timer = window.setInterval(() => {
-      setLoginCodeCountdown((current) => Math.max(0, current - 1))
-    }, 1000)
-    return () => window.clearInterval(timer)
-  }, [loginCodeCountdown])
-
-  const refreshAccount = async () => {
+  const refreshAccount = useCallback(async () => {
     setAccountLoading(true)
     try {
       const data = await getAccount()
@@ -282,7 +251,41 @@ export default function SettingsView() {
     } finally {
       setAccountLoading(false)
     }
-  }
+  }, [dispatch])
+
+  useEffect(() => {
+    if (getAuthToken()) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- bootstrap fetch on mount
+      refreshAccount()
+    }
+    refreshDiagnostics()
+  }, [refreshAccount, refreshDiagnostics])
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing nav tab to URL search param
+    setActiveNav(resolveSettingsNavFromSearch(location.search))
+  }, [location.search])
+
+  useEffect(() => {
+    if (!account?.user) return
+    if (!shouldPromptPasswordSetup(location.search, account.user)) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot password-setup prompt
+    setActiveNav(SETTINGS_TAB_ACCOUNT)
+    setPwdMessage('请设置一个登录密码，下次可以直接用邮箱和密码登录。')
+  }, [account?.user, location.search])
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local storage usage
+    refreshStorage()
+  }, [state.sessions.length, state.history.length, refreshStorage])
+
+  useEffect(() => {
+    if (loginCodeCountdown <= 0) return undefined
+    const timer = window.setInterval(() => {
+      setLoginCodeCountdown((current) => Math.max(0, current - 1))
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [loginCodeCountdown])
 
   const enabledPermCount = useMemo(
     () => state.permissions.filter((p) => p.enabled).length,

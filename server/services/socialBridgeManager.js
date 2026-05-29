@@ -191,7 +191,7 @@ export function createSocialBridgeManager({
     const base = cleanString(text)
     const images = attachments.filter(isImageAttachment)
     if (!images.length) return base
-    let descriptions = []
+    let descriptions
     try {
       descriptions = await describeAttachments({ userId, attachments: images })
     } catch (err) {

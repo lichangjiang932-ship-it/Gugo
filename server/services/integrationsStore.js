@@ -42,6 +42,12 @@ const PROVIDER_REGISTRY = {
     fields: { config: ['botId', 'baseUrl', 'defaultAgentId'], secret: ['botToken'] },
     test: testWechatPersonal,
   },
+  wechat_work: {
+    kind: 'social',
+    label: '企业微信 (Work API)',
+    fields: { config: ['corpId'], secret: ['corpSecret'] },
+    test: testWechatWork,
+  },
   dingtalk: {
     kind: 'social',
     label: '钉钉',
