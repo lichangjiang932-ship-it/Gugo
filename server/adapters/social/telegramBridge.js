@@ -103,7 +103,7 @@ export function createTelegramBridgeAdapter({ integration, onMessage, fetchImpl 
           const message = await normalizeUpdate({ token, update, fetchImpl, signal: controller.signal })
           if (message.chatId && (message.text || message.attachments.length)) onMessage(message)
         }
-      } catch (err) {
+      } catch {
         if (stopped || controller.signal.aborted) return
         await sleep(3000)
       }

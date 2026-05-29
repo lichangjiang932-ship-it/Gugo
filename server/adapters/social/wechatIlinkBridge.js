@@ -2,7 +2,6 @@ import crypto from 'node:crypto'
 
 const DEFAULT_BASE_URL = 'https://ilinkai.weixin.qq.com'
 const LONG_POLL_MS = 40_000
-const MESSAGE_TYPE_USER = 1
 const MESSAGE_TYPE_BOT = 2
 const MESSAGE_STATE_FINISH = 2
 const ITEM_TEXT = 1
@@ -106,7 +105,7 @@ export function createWechatIlinkBridgeAdapter({ integration, onMessage, fetchIm
           if (msg.context_token) contextTokens.set(inbound.chatId, msg.context_token)
           if (inbound.text || inbound.attachments.length) onMessage(inbound)
         }
-      } catch (err) {
+      } catch {
         if (stopped || controller.signal.aborted) return
         await sleep(3000)
       }
