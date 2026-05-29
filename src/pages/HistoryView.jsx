@@ -8,13 +8,12 @@ import { useT } from '../i18n/I18nProvider.jsx'
 import { useToast } from '../components/Toast.jsx'
 import { getAuthToken } from '../lib/accountClient'
 import { archiveSessionRemote, unarchiveSessionRemote } from '../lib/sessionClient'
+import { visibleTabs } from '../lib/tabVisibility.js'
 
 const tabs = [
   { key: 'sessions', label: '会话', icon: MessageSquare },
   { key: 'tasks', label: '任务', icon: LayoutList },
 ]
-
-const archiveFilters = ['active', 'archived', 'all']
 
 function formatStatus(item) {
   const prefix = item.state === 'done' ? '[完成]' : item.state === 'active' ? '[进行中]' : '[失败]'
@@ -77,6 +76,17 @@ export default function HistoryView() {
     ...(state.history || []).map((item) => ({ ...item, type: 'task' })),
   ]
 
+  // 计算 session 子集的 active / archived / all 数量，决定 archive filter tab 可见性
+  const allSessionItems = rawHistory.filter((item) => getItemType(item) === 'sessions')
+  const activeSessionItems = allSessionItems.filter((item) => !item.archivedAt)
+  const archivedSessionItems = allSessionItems.filter((item) => !!item.archivedAt)
+  const sessionTabsToShow = visibleTabs({
+    active: activeSessionItems.length,
+    archived: archivedSessionItems.length,
+    all: allSessionItems.length,
+  })
+  const effectiveArchiveFilter = sessionTabsToShow.includes(archiveFilter) ? archiveFilter : 'active'
+
   const filtered = rawHistory.filter((item) => {
     const typeMatch = getItemType(item) === activeTab
     const searchMatch =
@@ -86,8 +96,8 @@ export default function HistoryView() {
       (item.status && item.status.includes(query))
     if (activeTab === 'sessions') {
       const isArchived = !!item.archivedAt
-      if (archiveFilter === 'active' && isArchived) return false
-      if (archiveFilter === 'archived' && !isArchived) return false
+      if (effectiveArchiveFilter === 'active' && isArchived) return false
+      if (effectiveArchiveFilter === 'archived' && !isArchived) return false
     }
     return typeMatch && searchMatch
   })
@@ -176,19 +186,26 @@ export default function HistoryView() {
             ))}
             {activeTab === 'sessions' && (
               <div className="flex items-center gap-1 ml-1">
-                {archiveFilters.map((key) => (
-                  <button
-                    key={key}
-                    onClick={() => setArchiveFilter(key)}
-                    className={`inline-flex items-center h-7 px-2.5 rounded-full text-[11px] border transition-colors ${
-                      archiveFilter === key
-                        ? 'bg-ink text-paper border-ink'
-                        : 'border-ink-fade/50 text-ink-soft hover:border-ink-fade'
-                    }`}
-                  >
-                    {t(`nav.filter${key.charAt(0).toUpperCase()}${key.slice(1)}`)}
-                  </button>
-                ))}
+                {sessionTabsToShow.map((key) => {
+                  const count =
+                    key === 'active' ? activeSessionItems.length
+                      : key === 'archived' ? archivedSessionItems.length
+                        : allSessionItems.length
+                  const showBadge = sessionTabsToShow.includes('archived')
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => setArchiveFilter(key)}
+                      className={`inline-flex items-center h-7 px-2.5 rounded-full text-[11px] border transition-colors ${
+                        effectiveArchiveFilter === key
+                          ? 'bg-ink text-paper border-ink'
+                          : 'border-ink-fade/50 text-ink-soft hover:border-ink-fade'
+                      }`}
+                    >
+                      {t(`nav.filter${key.charAt(0).toUpperCase()}${key.slice(1)}`)}{showBadge ? ` (${count})` : ''}
+                    </button>
+                  )
+                })}
               </div>
             )}
             <div className="h-8 px-3 border border-ink/70 rounded-md flex items-center gap-1.5 bg-paper">

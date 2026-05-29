@@ -1,16 +1,28 @@
 #!/usr/bin/env node
-import { readdirSync } from 'node:fs'
+import { readdirSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 const rawArgs = process.argv.slice(2)
 const selectors = rawArgs.filter((arg) => !arg.startsWith('-'))
 const nodeArgs = rawArgs.filter((arg) => arg.startsWith('-') && arg !== '--run')
 
+function walk(dir) {
+  const out = []
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry)
+    const st = statSync(full)
+    if (st.isDirectory()) {
+      out.push(...walk(full))
+    } else if (entry.endsWith('.test.js')) {
+      out.push(full)
+    }
+  }
+  return out
+}
+
 function allTestFiles() {
-  return readdirSync('tests')
-    .filter((name) => name.endsWith('.test.js'))
-    .sort()
-    .map((name) => `tests/${name}`)
+  return walk('tests').sort()
 }
 
 function resolveSelector(selector) {

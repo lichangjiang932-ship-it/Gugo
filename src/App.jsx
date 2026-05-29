@@ -8,9 +8,9 @@ import { ActiveAgentProvider } from './agents/ActiveAgentProvider.jsx'
 import CommandPalette from './components/CommandPalette'
 import SkillCommandsSync from './components/SkillCommandsSync'
 import RequireAuth from './components/RequireAuth'
-import NotificationCenter from './components/NotificationCenter'
 import SessionSearchModal from './components/SessionSearchModal'
 import { ToastProvider } from './components/Toast.jsx'
+import PreviewBanner from './components/PreviewBanner.jsx'
 
 const CoverPage = lazy(() => import('./pages/CoverPage'))
 const ChatSplit = lazy(() => import('./pages/ChatSplit'))
@@ -20,6 +20,8 @@ const TaskRunPanel = lazy(() => import('./pages/TaskRunPanel'))
 const HistoryView = lazy(() => import('./pages/HistoryView'))
 const SettingsView = lazy(() => import('./pages/SettingsView'))
 const MemoryView = lazy(() => import('./pages/MemoryView'))
+const DeskView = lazy(() => import('./pages/DeskView'))
+const MobileKeysView = lazy(() => import('./pages/MobileKeysView'))
 const AgentList = lazy(() => import('./pages/AgentList'))
 const HooksView = lazy(() => import('./pages/HooksView'))
 const McpServersView = lazy(() => import('./pages/McpServersView'))
@@ -45,10 +47,10 @@ function App() {
       <GlobalShortcuts />
       <CommandPalette />
       <SkillCommandsSync />
-      <NotificationCenter />
       <SessionSearchModal />
       <Suspense fallback={<Fallback />}>
         <main>
+          <PreviewBanner />
           <Routes>
           <Route path="/" element={<CoverPage />} />
           <Route path="/chat" element={<ChatSplit />} />
@@ -58,6 +60,8 @@ function App() {
           <Route path="/history" element={<HistoryView />} />
           <Route path="/settings" element={<RequireAuth><SettingsView /></RequireAuth>} />
           <Route path="/memory" element={<RequireAuth><MemoryView /></RequireAuth>} />
+          <Route path="/desk" element={<RequireAuth><DeskView /></RequireAuth>} />
+          <Route path="/mobile-keys" element={<RequireAuth><MobileKeysView /></RequireAuth>} />
           <Route path="/agents" element={<RequireAuth><AgentList /></RequireAuth>} />
           <Route path="/channels" element={<RequireAuth><ChannelsPage /></RequireAuth>} />
           <Route path="/hooks" element={<RequireAuth><HooksView /></RequireAuth>} />

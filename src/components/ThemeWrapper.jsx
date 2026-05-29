@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { useAppContext } from '../store/AppContext'
+import { applyAccent, ACCENT_DEFAULT_HEX } from '../lib/themeAccent.js'
 
 function getSystemTheme() {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
@@ -34,11 +35,20 @@ export default function ThemeWrapper({ children }) {
     }
   }, [state.theme])
 
-  /* accent color */
+  /* accent color + strong mode → CSS vars (--accent-h/s/l/--accent) */
   useEffect(() => {
-    const rgb = hexToRgb(state.accentColor || '#E86A3C')
+    const hex = state.accentColor || ACCENT_DEFAULT_HEX
+    const strong = !!state.strongAccent
+    const rgb = hexToRgb(hex)
+    // 保留旧 ember RGB 通道,免得既有 bg-ember 类失效
     document.documentElement.style.setProperty('--color-ember-rgb', rgb)
-  }, [state.accentColor])
+
+    const { vars, className } = applyAccent({ hex, strong })
+    for (const [key, value] of Object.entries(vars)) {
+      document.documentElement.style.setProperty(key, value)
+    }
+    document.documentElement.classList.toggle('theme-accent-strong', !!className)
+  }, [state.accentColor, state.strongAccent])
 
   /* font size scale */
   useEffect(() => {

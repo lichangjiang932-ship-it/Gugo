@@ -25,8 +25,12 @@ const PROVIDER_REGISTRY = {
     kind: 'social',
     label: '飞书 / Lark',
     fields: {
-      config: ['appId', 'botName', 'defaultAgentId'],
-      secret: ['appSecret', 'verificationToken', 'encryptKey'],
+      config: ['appId'],
+      secret: ['appSecret'],
+      optional: {
+        config: ['botName', 'defaultAgentId'],
+        secret: ['verificationToken', 'encryptKey'],
+      },
     },
     test: testFeishu,
   },
@@ -41,6 +45,12 @@ const PROVIDER_REGISTRY = {
     label: '企业微信 / Work',
     fields: { config: ['botId', 'baseUrl', 'defaultAgentId'], secret: ['botToken'] },
     test: testWechatPersonal,
+  },
+  wechat_work: {
+    kind: 'social',
+    label: '企业微信 (Work API)',
+    fields: { config: ['corpId'], secret: ['corpSecret'] },
+    test: testWechatWork,
   },
   dingtalk: {
     kind: 'social',
@@ -346,8 +356,6 @@ async function testWechatOfficial({ config, secret, fetchImpl }) {
   return { ok: true, message: `access_token 获取成功（有效期 ${data.expires_in}s）` }
 }
 
-// TODO: 接入企业微信 channel 时挂回 SOCIAL_CHANNELS.test
-// eslint-disable-next-line no-unused-vars
 async function testWechatWork({ config, secret, fetchImpl }) {
   const corpId = config?.corpId?.trim()
   const corpSecret = secret?.corpSecret?.trim()

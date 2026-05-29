@@ -440,7 +440,7 @@ export default function AgentList() {
                       value={editing.name}
                       onChange={(e) => setEditing({ ...editing, name: e.target.value })}
                       className="w-full px-3 py-2 border border-ink/15 rounded bg-canvas text-ink text-sm"
-                      placeholder="Atelier"
+                      placeholder={t('agents.namePlaceholder')}
                       maxLength={80}
                     />
                   </div>

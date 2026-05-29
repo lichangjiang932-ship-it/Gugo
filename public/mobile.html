@@ -1,0 +1,150 @@
+<!doctype html>
+<!--
+  Hanako 平行：手机/局域网 access key 登录入口
+  纯原生：无 React、无构建依赖，直接由 public/ 拷到 dist/，访问 /mobile.html
+  流程：
+    1. 用户在桌面端创建 access key（show-once）
+    2. 手机打开本地址，粘贴 key，POST /api/mobile/handshake
+    3. 拿到 token 后写入 localStorage（key = 'ymak_auth_token'），跳到 /chat
+-->
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#1a1a1a" />
+    <title>Your Model · 手机登录</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <style>
+      * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+      html, body { margin: 0; padding: 0; min-height: 100vh; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background: #f5f3ee; color: #2a2620; }
+      .wrap { max-width: 480px; margin: 0 auto; padding: 24px 20px 40px; }
+      .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 28px; }
+      .brand-dot { width: 10px; height: 10px; border-radius: 50%; background: linear-gradient(135deg, #c2410c, #f97316); }
+      .brand-name { font-size: 16px; font-weight: 600; letter-spacing: 0.02em; }
+      h1 { font-size: 22px; font-weight: 600; margin: 0 0 6px; }
+      .sub { font-size: 13px; color: #7a7065; margin: 0 0 24px; line-height: 1.55; }
+      label { display: block; font-size: 12px; color: #5a5048; margin: 0 0 6px; }
+      .input {
+        width: 100%; padding: 12px 14px; font-size: 15px; font-family: "SF Mono", ui-monospace, "JetBrains Mono", monospace;
+        background: #fff; border: 1px solid #d8d2c8; border-radius: 10px; outline: none; color: #2a2620;
+        transition: border-color 0.15s ease;
+      }
+      .input:focus { border-color: #c2410c; }
+      .btn {
+        width: 100%; padding: 13px; font-size: 15px; font-weight: 600; margin-top: 16px;
+        background: #c2410c; color: #fff; border: 0; border-radius: 10px; cursor: pointer;
+        transition: background 0.15s ease, opacity 0.15s ease;
+      }
+      .btn:hover { background: #9a330a; }
+      .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+      .msg { font-size: 13px; margin-top: 14px; padding: 10px 12px; border-radius: 8px; line-height: 1.5; }
+      .msg.err { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+      .msg.ok { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
+      .hint { font-size: 12px; color: #8a8175; margin-top: 28px; line-height: 1.6; padding-top: 18px; border-top: 1px solid #e6e1d8; }
+      .hint code { background: #ede8df; padding: 1px 6px; border-radius: 4px; font-family: "SF Mono", ui-monospace, monospace; font-size: 11.5px; }
+      .footer { text-align: center; margin-top: 32px; font-size: 11px; color: #a8a094; }
+      @media (prefers-color-scheme: dark) {
+        html, body { background: #1a1714; color: #e8e2d6; }
+        .input { background: #2a2520; border-color: #3a342c; color: #e8e2d6; }
+        .input:focus { border-color: #f97316; }
+        .hint { border-top-color: #3a342c; color: #918878; }
+        .hint code { background: #2a2520; }
+        .sub { color: #918878; }
+        .msg.err { background: #2a1818; color: #fca5a5; border-color: #4a2a2a; }
+        .msg.ok { background: #122620; color: #6ee7b7; border-color: #1a4a3a; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="brand">
+        <div class="brand-dot"></div>
+        <div class="brand-name">Your Model</div>
+      </div>
+      <h1>手机 / 局域网登录</h1>
+      <p class="sub">
+        粘贴桌面端「手机入口」生成的 access key 即可登录。
+        登录后会跳转到聊天页，可在任何浏览器上继续使用工作台。
+      </p>
+
+      <form id="form" autocomplete="off">
+        <label for="key">Access key</label>
+        <input
+          id="key"
+          class="input"
+          name="key"
+          type="text"
+          inputmode="text"
+          autocapitalize="off"
+          autocorrect="off"
+          spellcheck="false"
+          placeholder="ymak_..."
+          required
+        />
+        <button id="submit" type="submit" class="btn">登录</button>
+        <div id="msg" class="msg" style="display:none"></div>
+      </form>
+
+      <div class="hint">
+        没有 key？打开桌面端 → <code>设置 → 手机入口</code> → 「新建 Key」，
+        把生成的 <code>ymak_...</code> 字符串粘贴到这里。<br />
+        key 仅显示一次，关闭对话框后无法再次查看；如已丢失请直接撤销并重新创建。
+      </div>
+
+      <div class="footer">your-model-atelier · mobile gateway</div>
+    </div>
+
+    <script>
+      (function () {
+        var form = document.getElementById('form')
+        var input = document.getElementById('key')
+        var btn = document.getElementById('submit')
+        var msg = document.getElementById('msg')
+        // 与主应用 accountClient 保持一致的 localStorage key
+        var TOKEN_KEY = 'your-model-atelier:auth-token'
+
+        function show(kind, text) {
+          msg.className = 'msg ' + kind
+          msg.textContent = text
+          msg.style.display = 'block'
+        }
+
+        form.addEventListener('submit', function (ev) {
+          ev.preventDefault()
+          var rawKey = (input.value || '').trim()
+          if (!rawKey) { show('err', '请输入 access key'); return }
+
+          btn.disabled = true
+          btn.textContent = '正在验证…'
+          msg.style.display = 'none'
+
+          fetch('/api/mobile/handshake', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ key: rawKey }),
+          })
+            .then(function (resp) { return resp.json().then(function (data) { return { status: resp.status, data: data } }) })
+            .then(function (r) {
+              if (!r.data || r.data.ok === false) {
+                throw new Error((r.data && r.data.error) || ('HTTP ' + r.status))
+              }
+              try { localStorage.setItem(TOKEN_KEY, r.data.token) } catch (_) {}
+              try {
+                if (r.data.user) localStorage.setItem('your-model-atelier:auth-user', JSON.stringify(r.data.user))
+              } catch (_) {}
+              show('ok', '登录成功，正在跳转到聊天…')
+              window.setTimeout(function () { window.location.href = '/chat' }, 600)
+            })
+            .catch(function (err) {
+              show('err', (err && err.message) || '验证失败，请检查 key')
+              btn.disabled = false
+              btn.textContent = '登录'
+            })
+        })
+
+        // 软键盘体验：聚焦后清空旧 placeholder
+        input.addEventListener('focus', function () { msg.style.display = 'none' })
+      })()
+    </script>
+  </body>
+</html>

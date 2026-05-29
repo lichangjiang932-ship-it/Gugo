@@ -31,6 +31,7 @@ import {
 } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
 import IntegrationsPanel from '../components/IntegrationsPanel.jsx'
+import { ROUTE_READINESS } from '../config/routeReadiness.js'
 import { useAppContext } from '../store/AppContext'
 import { clearPersistedState } from '../store/AppContext.jsx'
 import { getAccount, getAuthToken, recharge, removeAccountPassword, sendLoginCode, setAccountPassword, setAuthToken, verifyLoginCode } from '../lib/accountClient.js'
@@ -675,6 +676,8 @@ export default function SettingsView() {
     const featureLinks = [
       { path: '/task', icon: ListChecks, title: t('nav.task'), desc: '后台任务、Artifacts 与运行记录。' },
       { path: '/memory', icon: BookOpen, title: t('nav.memory'), desc: '长期记忆、置顶记忆与 Agent 关联。' },
+      { path: '/desk', icon: BookOpen, title: t('nav.desk') || '书桌', desc: '随手便笺、灵感、TODO；自动保存、置顶。' },
+      { path: '/mobile-keys', icon: MonitorSmartphone, title: t('nav.mobileKeys') || '手机入口', desc: '生成访问钥匙，在手机/局域网打开 /mobile.html。' },
       { path: '/agents', icon: Users, title: t('nav.agents'), desc: '角色、人格、技能和角色卡管理。' },
       { path: '/channels', icon: Hash, title: t('nav.channels'), desc: '多 Agent 频道与协作消息流。' },
       { path: '/mcp', icon: Plug, title: t('nav.mcp'), desc: 'MCP 服务、工具、资源和 prompts。' },
@@ -694,6 +697,10 @@ export default function SettingsView() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           {featureLinks.map((item) => {
             const Icon = item.icon
+            // T7: 入口卡片角标——preview/wip 才显示
+            const readinessLevel = ROUTE_READINESS[item.path]
+            const showBadge = readinessLevel === 'preview' || readinessLevel === 'wip'
+            const readinessLabel = showBadge ? t(`routeReadiness.${readinessLevel}`) : null
             return (
               <button
                 key={item.path}
@@ -704,8 +711,21 @@ export default function SettingsView() {
                 <span className="w-9 h-9 rounded-md border border-ink-fade/40 flex items-center justify-center shrink-0 bg-paper">
                   <Icon className="w-4 h-4 text-ink-soft group-hover:text-ink" />
                 </span>
-                <span className="min-w-0">
-                  <span className="block text-sm text-ink">{item.title}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-2">
+                    <span className="text-sm text-ink">{item.title}</span>
+                    {readinessLabel ? (
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded ${
+                          readinessLevel === 'wip'
+                            ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                            : 'bg-paper-2 text-ink-fade'
+                        }`}
+                      >
+                        {readinessLabel}
+                      </span>
+                    ) : null}
+                  </span>
                   <span className="block text-xs text-ink-soft mt-1 leading-relaxed">{item.desc}</span>
                 </span>
               </button>
@@ -802,6 +822,16 @@ export default function SettingsView() {
                 {state.accentColor === c && <Check className="w-4 h-4 text-white absolute inset-0 m-auto" />}
               </button>
             ))}
+          </div>
+          <div className="flex items-center justify-between gap-3 pt-1">
+            <div className="flex flex-col">
+              <span className="text-sm text-ink">强色调模式</span>
+              <span className="text-xs text-ink-fade">让强调色填充 logo / 主按钮等高亮位</span>
+            </div>
+            <Toggle
+              enabled={!!state.strongAccent}
+              onClick={() => dispatch({ type: 'SET_STRONG_ACCENT', payload: !state.strongAccent })}
+            />
           </div>
         </SettingsGroup>
 

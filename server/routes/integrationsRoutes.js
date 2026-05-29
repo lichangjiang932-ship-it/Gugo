@@ -2,6 +2,7 @@ import { authenticateRequest } from '../middleware.js'
 import { readJson, sendJson } from '../utils.js'
 import {
   deleteIntegration,
+  getIntegrationByProvider,
   getIntegrationCredentialsById,
   listIntegrations,
   listProviderRegistry,
@@ -29,10 +30,17 @@ async function refreshBridgeIntegration(integration) {
   }
 }
 
-export async function handleIntegrationsRequest(req, res) {
+function parseVisionModelsFromEnv(env = process.env) {
+  return String(env?.MODEL_NAMES_VISION || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+export async function handleIntegrationsRequest(req, res, { env = process.env } = {}) {
   const url = new URL(req.url, 'http://localhost')
   const parts = url.pathname.split('/').filter(Boolean)
-  // 路由：/api/integrations[/providers | /:id | /:id/test | /:id/enabled]
+  // 路由：/api/integrations[/providers | /vision_assist/status | /:id | /:id/test | /:id/enabled]
 
   // 公共：GET /api/integrations/providers — 列出可用 provider 元数据
   if (req.method === 'GET' && parts[2] === 'providers') {
@@ -41,6 +49,22 @@ export async function handleIntegrationsRequest(req, res) {
 
   const userId = authenticateRequest(req)
   if (!userId) return unauthorized(res)
+
+  // GET /api/integrations/vision_assist/status — 视觉副驾就绪探针
+  // 同时检查：(a) 当前用户已配置 vision_assist 凭据；(b) env.MODEL_NAMES_VISION 非空。
+  // 两个条件必须同时满足才算 configured，便于前端在 IntegrationsPanel 上挂徽章。
+  if (req.method === 'GET' && parts[2] === 'vision_assist' && parts[3] === 'status') {
+    const integration = getIntegrationByProvider({ userId, provider: 'vision_assist' })
+    const models = parseVisionModelsFromEnv(env)
+    const configured = !!integration && models.length > 0
+    return sendJson(res, 200, {
+      ok: true,
+      configured,
+      hasIntegration: !!integration,
+      hasVisionEnv: models.length > 0,
+      models,
+    })
+  }
 
   try {
     if (req.method === 'GET' && parts.length === 2) {

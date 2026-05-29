@@ -10,8 +10,11 @@ import {
 import { getAuthToken, loginWithPassword, sendLoginCode, verifyLoginCode } from '../lib/accountClient.js'
 import { settingsPathAfterLogin } from '../lib/settingsNavigation.js'
 import { archiveSessionRemote, unarchiveSessionRemote } from '../lib/sessionClient.js'
+import { visibleTabs } from '../lib/tabVisibility.js'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { useToast } from './Toast.jsx'
+import NotificationBell from './NotificationBell.jsx'
+import { ROUTE_READINESS } from '../config/routeReadiness.js'
 
 // ★ #21: 提取会话最后消息的纯文本预览 (剥 markdown / 多模态 array / 工具卡)
 function getSessionPreview(session) {
@@ -78,16 +81,26 @@ export default function LeftRail() {
     return () => window.clearInterval(timer)
   }, [loginCodeCountdown])
 
-  const settingsChildPaths = ['/task', '/permissions', '/memory', '/agents', '/channels', '/mcp', '/hooks', '/cron', '/history']
+  const settingsChildPaths = ['/task', '/permissions', '/memory', '/desk', '/mobile-keys', '/agents', '/channels', '/mcp', '/hooks', '/cron', '/history']
   const navItems = [
     { path: '/chat', icon: MessageSquare, label: t('nav.chat') },
     { path: '/skills', icon: Wrench, label: t('nav.skills') },
     { path: '/settings', icon: Settings, label: t('nav.settings'), requiresLogin: true, activePaths: settingsChildPaths },
   ]
 
-  const sessions = state.sessions.filter((session) => {
-    if (sessionFilter === 'archived') return !!session.archivedAt
-    if (sessionFilter === 'all') return true
+  const allSessions = state.sessions
+  const activeSessions = allSessions.filter((s) => !s.archivedAt)
+  const archivedSessions = allSessions.filter((s) => !!s.archivedAt)
+  const tabsToShow = visibleTabs({
+    active: activeSessions.length,
+    archived: archivedSessions.length,
+    all: allSessions.length,
+  })
+  // 如果当前选中的 tab 被隐藏了，自动回退到 'active'
+  const effectiveFilter = tabsToShow.includes(sessionFilter) ? sessionFilter : 'active'
+  const sessions = allSessions.filter((session) => {
+    if (effectiveFilter === 'archived') return !!session.archivedAt
+    if (effectiveFilter === 'all') return true
     return !session.archivedAt
   })
   const startOfToday = new Date().setHours(0, 0, 0, 0)
@@ -264,12 +277,15 @@ export default function LeftRail() {
   return (
     <>
       <aside role="navigation" aria-label="主导航" className="w-[240px] h-full border-r border-dashed border-ink-fade/50 flex flex-col gap-3 p-4 bg-paper shrink-0 overflow-y-auto">
-        <button onClick={() => navigate('/chat')} aria-label="回到首页" className="flex items-center gap-2 mb-1">
-          <div className="w-7 h-7 rounded-full border border-ink flex items-center justify-center bg-paper">
-            <Sparkles className="w-3.5 h-3.5 text-ember" />
-          </div>
-          <span className="font-display italic text-lg text-ink">your model</span>
-        </button>
+        <div className="flex items-center justify-between mb-1">
+          <button onClick={() => navigate('/chat')} aria-label="回到首页" className="flex items-center gap-2">
+            <div data-accent-bg className="w-7 h-7 rounded-full border border-ink flex items-center justify-center bg-paper">
+              <Sparkles data-accent className="w-3.5 h-3.5 text-ember" />
+            </div>
+            <span className="font-display italic text-lg text-ink">your model</span>
+          </button>
+          <NotificationBell />
+        </div>
 
         <button
           onClick={handleNewChat}
@@ -294,6 +310,10 @@ export default function LeftRail() {
         <div className="flex flex-col gap-0.5 mt-1">
           {navItems.map((item) => {
             const isActive = location.pathname === item.path || item.activePaths?.includes(location.pathname)
+            // T7: readiness 角标——stable 返回 null（不渲染）
+            const readinessLevel = ROUTE_READINESS[item.path]
+            const showBadge = readinessLevel === 'preview' || readinessLevel === 'wip'
+            const readinessLabel = showBadge ? t(`routeReadiness.${readinessLevel}`) : null
             return (
               <button
                 key={item.path}
@@ -305,31 +325,49 @@ export default function LeftRail() {
                 }`}
               >
                 <item.icon className="w-4 h-4" />
-                {item.label}
+                <span className="flex-1 text-left">{item.label}</span>
+                {readinessLabel ? (
+                  <span
+                    className={`text-[10px] px-1.5 py-0.5 rounded ${
+                      readinessLevel === 'wip'
+                        ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                        : 'bg-paper-2 text-ink-fade'
+                    }`}
+                  >
+                    {readinessLabel}
+                  </span>
+                ) : null}
               </button>
             )
           })}
         </div>
 
-        <div className="grid grid-cols-3 gap-1">
+        <div className={`grid gap-1 ${tabsToShow.length === 3 ? 'grid-cols-3' : tabsToShow.length === 2 ? 'grid-cols-2' : 'grid-cols-1'}`}>
           {[
-            ['active', t('nav.filterActive')],
-            ['archived', t('nav.filterArchived')],
-            ['all', t('nav.filterAll')],
-          ].map(([key, label]) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setSessionFilter(key)}
-              className={`h-7 rounded-md text-[11px] transition-colors ${
-                sessionFilter === key
-                  ? 'bg-paper-2 border border-ink-fade/50 text-ink'
-                  : 'border border-transparent text-ink-fade hover:bg-paper-2/60 hover:text-ink-soft'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
+            ['active', t('nav.filterActive'), activeSessions.length],
+            ['archived', t('nav.filterArchived'), archivedSessions.length],
+            ['all', t('nav.filterAll'), allSessions.length],
+          ]
+            .filter(([key]) => tabsToShow.includes(key))
+            .map(([key, label, count]) => {
+              // archived 非空时给个 (N) badge；active/all 在 archived 隐藏的情况下不强求 badge，
+              // 但 archived 显示时三者都标一下计数，方便看到分布。
+              const showBadge = tabsToShow.includes('archived') && typeof count === 'number'
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setSessionFilter(key)}
+                  className={`h-7 rounded-md text-[11px] transition-colors ${
+                    effectiveFilter === key
+                      ? 'bg-paper-2 border border-ink-fade/50 text-ink'
+                      : 'border border-transparent text-ink-fade hover:bg-paper-2/60 hover:text-ink-soft'
+                  }`}
+                >
+                  {label}{showBadge ? ` (${count})` : ''}
+                </button>
+              )
+            })}
         </div>
 
         {sessions.length ? (

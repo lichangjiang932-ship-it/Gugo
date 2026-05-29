@@ -1,5 +1,6 @@
 // ★ U1: 集成 UI + 视觉副驾 UI
-import { useEffect, useMemo, useState } from 'react'
+// ★ T2: 微信扫码 —— 倒计时 + 自动轮询 + 错误提示 + 重试
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Bot,
   Check,
@@ -15,6 +16,7 @@ import {
 } from 'lucide-react'
 import {
   deleteIntegrationApi,
+  fetchVisionAssistStatus,
   getWechatQrcodeApi,
   pollWechatQrcodeApi,
   listIntegrationsApi,
@@ -23,6 +25,7 @@ import {
   toggleIntegrationEnabledApi,
   upsertIntegrationApi,
 } from '../lib/integrationsClient.js'
+import { createPoller as createWechatQrPoller } from '../lib/wechatQrPoller.js'
 
 const SECRET_SENTINEL = '••••'
 
@@ -66,6 +69,7 @@ function normalizeFields(meta) {
         type: field.type || inferFieldType(key, secret),
         location: secret ? 'secret' : 'config',
         options: field.options || inferOptions(key),
+        optional: !!field.optional,
       }
     }).filter((field) => field.key)
   }
@@ -76,6 +80,7 @@ function normalizeFields(meta) {
     type: inferFieldType(key, false),
     location: 'config',
     options: inferOptions(key),
+    optional: false,
   }))
   const secretFields = (fields?.secret || []).map((key) => ({
     key,
@@ -83,8 +88,25 @@ function normalizeFields(meta) {
     type: 'password',
     location: 'secret',
     options: [],
+    optional: false,
   }))
-  return [...configFields, ...secretFields]
+  const optionalConfigFields = (fields?.optional?.config || []).map((key) => ({
+    key,
+    label: fieldLabel(key),
+    type: inferFieldType(key, false),
+    location: 'config',
+    options: inferOptions(key),
+    optional: true,
+  }))
+  const optionalSecretFields = (fields?.optional?.secret || []).map((key) => ({
+    key,
+    label: fieldLabel(key),
+    type: 'password',
+    location: 'secret',
+    options: [],
+    optional: true,
+  }))
+  return [...configFields, ...secretFields, ...optionalConfigFields, ...optionalSecretFields]
 }
 
 function getLastTest(integration) {
@@ -160,7 +182,20 @@ export default function IntegrationsPanel({ kind, t }) {
   const [testingId, setTestingId] = useState('')
   const [testMessage, setTestMessage] = useState('')
   const [wechatQr, setWechatQr] = useState(null)
-  const [wechatPolling, setWechatPolling] = useState(false)
+  // ★ T2: 微信扫码完整状态机
+  // phase: 'idle'(还没点) | 'loading'(拿二维码中) | 'ready'(轮询中) | 'success' | 'expired' | 'timeout' | 'error'
+  const [wechatState, setWechatState] = useState({
+    phase: 'idle',
+    secondsLeft: 0,
+    expiresAt: 0,
+    statusText: '',
+    errorText: '',
+  })
+  const wechatPollerRef = useRef(null)
+  const wechatExpiresAtRef = useRef(0)
+  // 视觉副驾就绪状态：仅在 kind === 'vision_assist' 时调 probe 拿
+  const [visionStatus, setVisionStatus] = useState(null)
+  const [visionHintOpen, setVisionHintOpen] = useState(false)
 
   const visibleProviders = useMemo(
     () => providers.filter((provider) => provider.kind === kind),
@@ -194,6 +229,15 @@ export default function IntegrationsPanel({ kind, t }) {
       setIntegrations([])
     }
     if (providerErr && !error) setError(providerErr)
+    // 视觉副驾：拉 /status 判断徽章状态。失败时静默——不阻塞主面板渲染。
+    if (kind === 'vision_assist') {
+      try {
+        const status = await fetchVisionAssistStatus()
+        setVisionStatus(status)
+      } catch {
+        setVisionStatus(null)
+      }
+    }
     setLoading(false)
   }
 
@@ -206,13 +250,17 @@ export default function IntegrationsPanel({ kind, t }) {
   const openNew = (provider) => {
     setProviderMenuOpen(false)
     setTestMessage('')
+    stopWechatPoller()
     setWechatQr(null)
+    setWechatState({ phase: 'idle', secondsLeft: 0, expiresAt: 0, statusText: '', errorText: '' })
     setForm(emptyForm(provider.provider, provider))
   }
 
   const openEdit = (integration) => {
     setTestMessage('')
+    stopWechatPoller()
     setWechatQr(null)
+    setWechatState({ phase: 'idle', secondsLeft: 0, expiresAt: 0, statusText: '', errorText: '' })
     setForm(formFromIntegration(integration, providersById[integration.provider]))
   }
 
@@ -327,57 +375,194 @@ export default function IntegrationsPanel({ kind, t }) {
     }
   }
 
-  const openWechatQr = async () => {
-    setTestMessage('')
-    try {
-      const data = await getWechatQrcodeApi()
-      setWechatQr(data)
-    } catch (err) {
-      setTestMessage(err.message || '微信扫码图获取失败')
+  // ★ T2: 停掉正在跑的微信扫码轮询，幂等
+  const stopWechatPoller = () => {
+    if (wechatPollerRef.current) {
+      wechatPollerRef.current.stop()
+      wechatPollerRef.current = null
     }
   }
 
-  const pollWechatQr = async () => {
-    if (!wechatQr?.qrcodeId || !form) return
-    setWechatPolling(true)
+  // ★ T2: 拿一次二维码 + 启动轮询；可重复调用（重试）
+  const openWechatQr = async () => {
+    stopWechatPoller()
     setTestMessage('')
+    setWechatQr(null)
+    setWechatState({ phase: 'loading', secondsLeft: 0, expiresAt: 0, statusText: '', errorText: '' })
+    let data
     try {
-      const data = await pollWechatQrcodeApi({
-        qrcodeId: wechatQr.qrcodeId,
-        integrationId: form.id || undefined,
-        name: form.name || 'WeChat Personal',
-        defaultAgentId: form.config?.defaultAgentId || '',
-      })
-      if (data.status === 'confirmed' && data.integration) {
-        const next = data.integration
-        setIntegrations((current) => {
-          if (current.some((item) => item.id === next.id)) {
-            return current.map((item) => item.id === next.id ? next : item)
-          }
-          return [next, ...current]
-        })
-        setForm(null)
-        setWechatQr(null)
-        setTestMessage('')
-      } else {
-        setTestMessage(`微信扫码状态：${data.status || 'waiting'}`)
-      }
+      data = await getWechatQrcodeApi()
     } catch (err) {
-      setTestMessage(err.message || '微信扫码状态检查失败')
-    } finally {
-      setWechatPolling(false)
+      const httpStatus = Number(err?.status) || 0
+      let errorText
+      if (httpStatus >= 400 && httpStatus < 500) {
+        errorText = err?.message || t('wechat.qr.serverError')
+      } else if (httpStatus >= 500) {
+        errorText = t('wechat.qr.serverError')
+      } else {
+        errorText = t('wechat.qr.networkError')
+      }
+      setWechatState({ phase: 'error', secondsLeft: 0, expiresAt: 0, statusText: '', errorText })
+      return
     }
+    setWechatQr(data)
+    const expiresIn = Number(data?.expiresIn) > 0 ? Number(data.expiresIn) : 120
+    const expiresAt = Date.now() + expiresIn * 1000
+    wechatExpiresAtRef.current = expiresAt
+    setWechatState({
+      phase: 'ready',
+      secondsLeft: expiresIn,
+      expiresAt,
+      statusText: '',
+      errorText: '',
+    })
+    startWechatPolling(data)
   }
+
+  // ★ T2: 启轮询；状态机由 createPoller 内部维护
+  const startWechatPolling = (qr) => {
+    if (!qr?.qrcodeId) return
+    const poller = createWechatQrPoller({
+      fetch: async () => {
+        return pollWechatQrcodeApi({
+          qrcodeId: qr.qrcodeId,
+          integrationId: form?.id || undefined,
+          name: form?.name || 'WeChat Personal',
+          defaultAgentId: form?.config?.defaultAgentId || '',
+        })
+      },
+      intervalMs: 2000,
+      maxAttempts: 60,
+      maxFailures: 3,
+      onUpdate: (ev) => {
+        if (ev.type === 'status') {
+          // 中间态：scanned / pending —— 只更状态条
+          setWechatState((cur) => ({ ...cur, statusText: ev.status || '', errorText: '' }))
+        } else if (ev.type === 'done') {
+          if (ev.status === 'confirmed' && ev.data?.integration) {
+            const next = ev.data.integration
+            setIntegrations((current) => {
+              if (current.some((item) => item.id === next.id)) {
+                return current.map((item) => item.id === next.id ? next : item)
+              }
+              return [next, ...current]
+            })
+            setForm(null)
+            setWechatQr(null)
+            setWechatState({ phase: 'success', secondsLeft: 0, expiresAt: 0, statusText: '', errorText: '' })
+          } else if (ev.status === 'expired') {
+            setWechatState((cur) => ({ ...cur, phase: 'expired', errorText: t('wechat.qr.expired') }))
+          } else {
+            // failed / 其他终态
+            setWechatState((cur) => ({ ...cur, phase: 'error', errorText: ev.data?.message || ev.status }))
+          }
+        } else if (ev.type === 'error') {
+          let errorText = ''
+          if (ev.kind === 'networkError') errorText = t('wechat.qr.networkError')
+          else if (ev.kind === 'serverError') errorText = t('wechat.qr.serverError')
+          else if (ev.kind === 'clientError') errorText = ev.message || t('wechat.qr.serverError')
+          else if (ev.kind === 'timeout') errorText = t('wechat.qr.timeout')
+          const phase = ev.kind === 'timeout' ? 'timeout' : 'error'
+          setWechatState((cur) => ({ ...cur, phase, errorText }))
+        }
+      },
+    })
+    wechatPollerRef.current = poller
+    poller.start()
+  }
+
+  // ★ T2: 二维码过期倒计时 + 自然过期切 phase
+  useEffect(() => {
+    if (wechatState.phase !== 'ready') return undefined
+    const tick = () => {
+      const remaining = Math.max(0, Math.round((wechatExpiresAtRef.current - Date.now()) / 1000))
+      setWechatState((cur) => {
+        if (cur.phase !== 'ready') return cur
+        if (remaining <= 0) {
+          stopWechatPoller()
+          return { ...cur, phase: 'expired', secondsLeft: 0, errorText: t('wechat.qr.expired') }
+        }
+        return { ...cur, secondsLeft: remaining }
+      })
+    }
+    tick()
+    const id = window.setInterval(tick, 1000)
+    return () => window.clearInterval(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wechatState.phase])
+
+  // ★ T2: 卸载 / 关弹窗时停掉轮询
+  useEffect(() => {
+    return () => stopWechatPoller()
+  }, [])
 
   const activeMeta = form ? providersById[form.provider] : null
   const activeFields = normalizeFields(activeMeta)
+  const requiredFields = activeFields.filter((field) => !field.optional)
+  const optionalFields = activeFields.filter((field) => field.optional)
+
+  const renderField = (field) => {
+    const value = field.location === 'secret' ? form.secret?.[field.key] || '' : form.config?.[field.key] || ''
+    return (
+      <label key={`${field.location}.${field.key}`} className="flex flex-col gap-1.5">
+        <span className="text-xs text-ink-fade">{field.label}</span>
+        {field.type === 'select' ? (
+          <select
+            value={value}
+            onChange={(event) => updateFormValue(field, event.target.value)}
+            className="h-10 px-3 rounded-md border border-ink-fade/40 bg-paper text-sm outline-none focus:border-ember"
+          >
+            <option value="">-</option>
+            {field.options.map((option) => <option key={option} value={option}>{option}</option>)}
+          </select>
+        ) : (
+          <input
+            type={field.type === 'password' ? 'password' : field.type === 'url' ? 'url' : 'text'}
+            value={value}
+            placeholder={field.type === 'password' && form?.id ? t('integrations.secretPlaceholder') : ''}
+            onFocus={() => {
+              if (field.location === 'secret' && value === SECRET_SENTINEL) updateFormValue(field, '')
+            }}
+            onChange={(event) => updateFormValue(field, event.target.value)}
+            className="h-10 px-3 rounded-md border border-ink-fade/40 bg-paper text-sm outline-none focus:border-ember"
+          />
+        )}
+      </label>
+    )
+  }
 
   return (
     <div className="border border-ink-fade/40 rounded-md p-4 flex flex-col gap-4 bg-paper">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h3 className="font-hand text-lg text-ink">{kindLabel}</h3>
-          <p className="font-mono text-[10px] text-ink-fade mt-0.5">{kind}</p>
+          <div className="flex items-center gap-2 mt-0.5">
+            <p className="font-mono text-[10px] text-ink-fade">{kind}</p>
+            {kind === 'vision_assist' && visionStatus ? (
+              <span className="relative inline-flex">
+                <button
+                  type="button"
+                  onClick={() => setVisionHintOpen((open) => !open)}
+                  onBlur={() => window.setTimeout(() => setVisionHintOpen(false), 120)}
+                  className={`inline-flex items-center gap-1 h-5 px-2 rounded-full text-[10px] font-mono cursor-pointer transition-colors ${visionStatus.configured ? 'bg-emerald-50 text-emerald-700 border border-emerald-300 hover:bg-emerald-100' : 'bg-paper-2 text-ink-fade border border-ink-fade/40 hover:bg-paper'}`}
+                  aria-label={visionStatus.configured ? t('integrations.visionAssist.badge.active') : t('integrations.visionAssist.badge.inactive')}
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full ${visionStatus.configured ? 'bg-emerald-500' : 'bg-ink-fade'}`} />
+                  {visionStatus.configured ? t('integrations.visionAssist.badge.active') : t('integrations.visionAssist.badge.inactive')}
+                </button>
+                {visionHintOpen ? (
+                  <span className="absolute z-30 left-0 top-6 w-72 p-2.5 rounded-md border border-ink-fade/40 bg-paper shadow-lg text-[11px] text-ink-soft leading-relaxed">
+                    {t('integrations.visionAssist.badge.hint')}
+                    {visionStatus.models?.length ? (
+                      <span className="block mt-1.5 font-mono text-[10px] text-ink-fade truncate">
+                        MODEL_NAMES_VISION = {visionStatus.models.join(', ')}
+                      </span>
+                    ) : null}
+                  </span>
+                ) : null}
+              </span>
+            ) : null}
+          </div>
         </div>
         <div className="relative">
           <button
@@ -507,36 +692,20 @@ export default function IntegrationsPanel({ kind, t }) {
             </label>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {activeFields.map((field) => {
-                const value = field.location === 'secret' ? form.secret?.[field.key] || '' : form.config?.[field.key] || ''
-                return (
-                  <label key={`${field.location}.${field.key}`} className="flex flex-col gap-1.5">
-                    <span className="text-xs text-ink-fade">{field.label}</span>
-                    {field.type === 'select' ? (
-                      <select
-                        value={value}
-                        onChange={(event) => updateFormValue(field, event.target.value)}
-                        className="h-10 px-3 rounded-md border border-ink-fade/40 bg-paper text-sm outline-none focus:border-ember"
-                      >
-                        <option value="">-</option>
-                        {field.options.map((option) => <option key={option} value={option}>{option}</option>)}
-                      </select>
-                    ) : (
-                      <input
-                        type={field.type === 'password' ? 'password' : field.type === 'url' ? 'url' : 'text'}
-                        value={value}
-                        placeholder={field.type === 'password' && form.id ? t('integrations.secretPlaceholder') : ''}
-                        onFocus={() => {
-                          if (field.location === 'secret' && value === SECRET_SENTINEL) updateFormValue(field, '')
-                        }}
-                        onChange={(event) => updateFormValue(field, event.target.value)}
-                        className="h-10 px-3 rounded-md border border-ink-fade/40 bg-paper text-sm outline-none focus:border-ember"
-                      />
-                    )}
-                  </label>
-                )
-              })}
+              {requiredFields.map(renderField)}
             </div>
+
+            {optionalFields.length ? (
+              <details className="rounded-md border border-ink-fade/30 px-3 py-2 group">
+                <summary className="cursor-pointer text-sm text-ink-soft select-none list-none flex items-center gap-1.5">
+                  <ChevronDown className="w-3.5 h-3.5 transition-transform group-open:rotate-180" />
+                  {t('integrations.advancedOptions')}
+                </summary>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-3">
+                  {optionalFields.map(renderField)}
+                </div>
+              </details>
+            ) : null}
 
             {form.provider === 'wechat_personal' ? (
               <div className="rounded-md border border-ink-fade/30 p-3 flex flex-col gap-3">
@@ -548,11 +717,35 @@ export default function IntegrationsPanel({ kind, t }) {
                 </div>
                 {wechatQr?.qrcodeUrl ? (
                   <div className="flex flex-col sm:flex-row items-center gap-3">
-                    <img src={wechatQr.qrcodeUrl} alt="WeChat QR code" className="w-40 h-40 rounded-md border border-ink-fade/30 bg-white" />
+                    <div className="relative w-40 h-40 shrink-0">
+                      <img
+                        src={wechatQr.qrcodeUrl}
+                        alt="WeChat QR code"
+                        className={`w-40 h-40 rounded-md border border-ink-fade/30 bg-white ${['expired', 'timeout', 'error'].includes(wechatState.phase) ? 'opacity-40 grayscale' : ''}`}
+                      />
+                      {['expired', 'timeout', 'error'].includes(wechatState.phase) ? (
+                        <button
+                          type="button"
+                          onClick={openWechatQr}
+                          className="absolute inset-0 m-auto h-9 w-28 rounded-md bg-ink text-paper text-xs hover:bg-ink-soft self-center"
+                        >
+                          {t('wechat.qr.refresh')}
+                        </button>
+                      ) : null}
+                    </div>
                     <div className="flex flex-col gap-2 min-w-0">
-                      <button type="button" onClick={pollWechatQr} disabled={wechatPolling} className="h-8 px-3 rounded-md bg-ink text-paper text-xs hover:bg-ink-soft disabled:opacity-50">
-                        {wechatPolling ? '检查中...' : '我已扫码，检查状态'}
-                      </button>
+                      {wechatState.phase === 'ready' ? (
+                        <span className="inline-flex items-center gap-1.5 self-start h-6 px-2 rounded-full bg-paper-2 text-[11px] text-ink-soft font-mono">
+                          <Circle className="w-2 h-2 fill-emerald-500 text-emerald-500" />
+                          {t('wechat.qr.expiresIn', { seconds: wechatState.secondsLeft })}
+                        </span>
+                      ) : null}
+                      {wechatState.statusText && !['expired', 'timeout', 'error'].includes(wechatState.phase) ? (
+                        <span className="text-xs text-ink-soft leading-relaxed">{wechatState.statusText}</span>
+                      ) : null}
+                      {['expired', 'timeout', 'error'].includes(wechatState.phase) && wechatState.errorText ? (
+                        <span className="text-xs text-red-600 leading-relaxed">{wechatState.errorText}</span>
+                      ) : null}
                       <span className="text-xs text-ink-fade leading-relaxed">成功后会自动保存 botToken 并启用微信 Bridge。</span>
                     </div>
                   </div>

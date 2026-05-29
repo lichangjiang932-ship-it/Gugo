@@ -6,7 +6,7 @@ import { SKILLS } from '../data.js'
 import { useAppContext } from '../store/AppContext'
 import { importSkillPack, listSkills, importSkillFromGithubUrl } from '../lib/skillClient.js'
 import { listPluginsApi, installPluginAsSkillApi } from '../lib/pluginClient.js'
-import { SKILL_ICONS } from '../lib/skillIcons.js'
+import { getSkillIcon } from '../lib/skillIcons.js'
 import { useToast } from '../components/Toast.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
 
@@ -384,8 +384,8 @@ export default function SkillsMarket() {
               <div className="flex items-start justify-between gap-2">
                 <div className="w-9 h-9 rounded-lg border border-ink-fade/60 flex items-center justify-center bg-paper">
                   {(() => {
-                    const Icon = SKILL_ICONS[skill.id]
-                    return Icon ? <Icon className="w-5 h-5 text-ink-fade" /> : <span className="text-xl">{skill.icon}</span>
+                    const Icon = getSkillIcon(skill.id)
+                    return <Icon className="w-5 h-5 text-ink-fade" />
                   })()}
                 </div>
                 {skill.custom && <span className="font-mono text-[9px] tracking-wider text-ink-fade">{skill.imported ? '已导入' : '自定义'}</span>}

@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const DB_SCHEMA_VERSION = 13
+export const DB_SCHEMA_VERSION = 14
 
 const DEFAULT_DATA_DIR = path.join(process.cwd(), 'server-data')
 
@@ -82,6 +82,7 @@ function runMigrations(db) {
   if (getSchemaVersionInternal(db) < 11) migrateToV11(db)
   if (getSchemaVersionInternal(db) < 12) migrateToV12(db)
   if (getSchemaVersionInternal(db) < 13) migrateToV13(db)
+  if (getSchemaVersionInternal(db) < 14) migrateToV14(db)
   runReasonixMigrations(db)
 }
 
@@ -690,6 +691,49 @@ function migrateToV13(db) {
       ON bridge_sessions(channel_id);
   `)
   setSchemaVersionInternal(db, 13)
+}
+
+/**
+ * V14: Desk Notes + Mobile Access Keys (Hanako parity)
+ *
+ * - desk_notes：Agent 书桌便笺。可选 agent_id；pinned 排序在前。
+ * - mobile_access_keys：移动端 / LAN 远程登录凭据。key_hash 不存明文，
+ *   show-once 在创建路由里返回。expires_at 可空（NULL = 不过期）。
+ */
+function migrateToV14(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS desk_notes (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+      title TEXT NOT NULL DEFAULT '',
+      body TEXT NOT NULL DEFAULT '',
+      pinned INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_desk_notes_user
+      ON desk_notes(user_id, pinned DESC, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_desk_notes_agent
+      ON desk_notes(agent_id);
+
+    CREATE TABLE IF NOT EXISTS mobile_access_keys (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      label TEXT NOT NULL DEFAULT '',
+      key_hash TEXT NOT NULL,
+      key_prefix TEXT NOT NULL,
+      last_used_at INTEGER,
+      expires_at INTEGER,
+      revoked_at INTEGER,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_mobile_keys_user
+      ON mobile_access_keys(user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_mobile_keys_hash
+      ON mobile_access_keys(key_hash);
+  `)
+  setSchemaVersionInternal(db, 14)
 }
 
 function initSchema(db) {
