@@ -10,9 +10,11 @@ import {
 import { getAuthToken, loginWithPassword, sendLoginCode, verifyLoginCode } from '../lib/accountClient.js'
 import { settingsPathAfterLogin } from '../lib/settingsNavigation.js'
 import { archiveSessionRemote, unarchiveSessionRemote } from '../lib/sessionClient.js'
+import { visibleTabs } from '../lib/tabVisibility.js'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { useToast } from './Toast.jsx'
 import NotificationBell from './NotificationBell.jsx'
+import { getBadgeLabelForPath } from '../config/routeReadiness.js'
 
 // ★ #21: 提取会话最后消息的纯文本预览 (剥 markdown / 多模态 array / 工具卡)
 function getSessionPreview(session) {
@@ -86,9 +88,19 @@ export default function LeftRail() {
     { path: '/settings', icon: Settings, label: t('nav.settings'), requiresLogin: true, activePaths: settingsChildPaths },
   ]
 
-  const sessions = state.sessions.filter((session) => {
-    if (sessionFilter === 'archived') return !!session.archivedAt
-    if (sessionFilter === 'all') return true
+  const allSessions = state.sessions
+  const activeSessions = allSessions.filter((s) => !s.archivedAt)
+  const archivedSessions = allSessions.filter((s) => !!s.archivedAt)
+  const tabsToShow = visibleTabs({
+    active: activeSessions.length,
+    archived: archivedSessions.length,
+    all: allSessions.length,
+  })
+  // 如果当前选中的 tab 被隐藏了，自动回退到 'active'
+  const effectiveFilter = tabsToShow.includes(sessionFilter) ? sessionFilter : 'active'
+  const sessions = allSessions.filter((session) => {
+    if (effectiveFilter === 'archived') return !!session.archivedAt
+    if (effectiveFilter === 'all') return true
     return !session.archivedAt
   })
   const startOfToday = new Date().setHours(0, 0, 0, 0)
@@ -315,25 +327,32 @@ export default function LeftRail() {
           })}
         </div>
 
-        <div className="grid grid-cols-3 gap-1">
+        <div className={`grid gap-1 ${tabsToShow.length === 3 ? 'grid-cols-3' : tabsToShow.length === 2 ? 'grid-cols-2' : 'grid-cols-1'}`}>
           {[
-            ['active', t('nav.filterActive')],
-            ['archived', t('nav.filterArchived')],
-            ['all', t('nav.filterAll')],
-          ].map(([key, label]) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setSessionFilter(key)}
-              className={`h-7 rounded-md text-[11px] transition-colors ${
-                sessionFilter === key
-                  ? 'bg-paper-2 border border-ink-fade/50 text-ink'
-                  : 'border border-transparent text-ink-fade hover:bg-paper-2/60 hover:text-ink-soft'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
+            ['active', t('nav.filterActive'), activeSessions.length],
+            ['archived', t('nav.filterArchived'), archivedSessions.length],
+            ['all', t('nav.filterAll'), allSessions.length],
+          ]
+            .filter(([key]) => tabsToShow.includes(key))
+            .map(([key, label, count]) => {
+              // archived 非空时给个 (N) badge；active/all 在 archived 隐藏的情况下不强求 badge，
+              // 但 archived 显示时三者都标一下计数，方便看到分布。
+              const showBadge = tabsToShow.includes('archived') && typeof count === 'number'
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setSessionFilter(key)}
+                  className={`h-7 rounded-md text-[11px] transition-colors ${
+                    effectiveFilter === key
+                      ? 'bg-paper-2 border border-ink-fade/50 text-ink'
+                      : 'border border-transparent text-ink-fade hover:bg-paper-2/60 hover:text-ink-soft'
+                  }`}
+                >
+                  {label}{showBadge ? ` (${count})` : ''}
+                </button>
+              )
+            })}
         </div>
 
         {sessions.length ? (
