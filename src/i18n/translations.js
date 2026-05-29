@@ -345,6 +345,19 @@ export const translations = {
       itemCameraName: '摄像头',
       itemCameraScope: '浏览器视频/拍照',
     },
+    routeReadiness: {
+      preview: '预览',
+      wip: '开发中',
+      previewBanner: '该页面为预览版，功能尚未完善',
+      wipBanner: '该页面正在开发中',
+    },
+    chat: {
+      modeHint: {
+        plan: '计划模式：该轮会先列出实施步骤不直接执行',
+        code: '代码模式：该轮优先返回可运行的代码块',
+        dismiss: '之后不再提示',
+      },
+    },
   },
   en: {
     nav: {
@@ -677,6 +690,19 @@ export const translations = {
       itemMicScope: 'Browser voice input',
       itemCameraName: 'Camera',
       itemCameraScope: 'Browser video / capture',
+    },
+    routeReadiness: {
+      preview: 'Preview',
+      wip: 'WIP',
+      previewBanner: 'Preview page — features may be incomplete',
+      wipBanner: 'Work in progress — actively under development',
+    },
+    chat: {
+      modeHint: {
+        plan: 'Plan mode: this turn lists implementation steps without executing',
+        code: 'Code mode: this turn prioritizes returning runnable code blocks',
+        dismiss: "Don't show again",
+      },
     },
   },
   ja: {
@@ -1011,6 +1037,19 @@ export const translations = {
       itemCameraName: 'カメラ',
       itemCameraScope: 'ブラウザ映像/撮影',
     },
+    routeReadiness: {
+      preview: 'プレビュー',
+      wip: '開発中',
+      previewBanner: 'このページはプレビュー版です。機能は未完成の可能性があります',
+      wipBanner: 'このページは開発中です',
+    },
+    chat: {
+      modeHint: {
+        plan: 'プランモード：このターンは実装手順を列挙し、実行しません',
+        code: 'コードモード：このターンは実行可能なコードブロックを優先します',
+        dismiss: '今後表示しない',
+      },
+    },
   },
   ko: {
     nav: {
@@ -1344,6 +1383,19 @@ export const translations = {
       itemCameraName: '카메라',
       itemCameraScope: '브라우저 비디오 / 촬영',
     },
+    routeReadiness: {
+      preview: '미리보기',
+      wip: '개발 중',
+      previewBanner: '미리보기 페이지 — 기능이 미완성일 수 있습니다',
+      wipBanner: '개발 중인 페이지입니다',
+    },
+    chat: {
+      modeHint: {
+        plan: '계획 모드: 이번 턴은 실행 없이 구현 단계만 나열합니다',
+        code: '코드 모드: 이번 턴은 실행 가능한 코드 블록을 우선합니다',
+        dismiss: '다시 표시하지 않음',
+      },
+    },
   },
   'zh-TW': {
     nav: {
@@ -1676,6 +1728,19 @@ export const translations = {
       itemMicScope: '瀏覽器語音輸入',
       itemCameraName: '攝影機',
       itemCameraScope: '瀏覽器視訊/拍照',
+    },
+    routeReadiness: {
+      preview: '預覽',
+      wip: '開發中',
+      previewBanner: '此頁面為預覽版，功能尚未完善',
+      wipBanner: '此頁面開發中',
+    },
+    chat: {
+      modeHint: {
+        plan: '計劃模式：該輪會先列出實施步驟不直接執行',
+        code: '代碼模式：該輪優先返回可運行的代碼塊',
+        dismiss: '之後不再提示',
+      },
     },
   },
 }

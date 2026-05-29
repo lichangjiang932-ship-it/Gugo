@@ -14,7 +14,7 @@ import { visibleTabs } from '../lib/tabVisibility.js'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { useToast } from './Toast.jsx'
 import NotificationBell from './NotificationBell.jsx'
-import { getBadgeLabelForPath } from '../config/routeReadiness.js'
+import { ROUTE_READINESS } from '../config/routeReadiness.js'
 
 // ★ #21: 提取会话最后消息的纯文本预览 (剥 markdown / 多模态 array / 工具卡)
 function getSessionPreview(session) {
@@ -310,6 +310,10 @@ export default function LeftRail() {
         <div className="flex flex-col gap-0.5 mt-1">
           {navItems.map((item) => {
             const isActive = location.pathname === item.path || item.activePaths?.includes(location.pathname)
+            // T7: readiness 角标——stable 返回 null（不渲染）
+            const readinessLevel = ROUTE_READINESS[item.path]
+            const showBadge = readinessLevel === 'preview' || readinessLevel === 'wip'
+            const readinessLabel = showBadge ? t(`routeReadiness.${readinessLevel}`) : null
             return (
               <button
                 key={item.path}
@@ -321,7 +325,18 @@ export default function LeftRail() {
                 }`}
               >
                 <item.icon className="w-4 h-4" />
-                {item.label}
+                <span className="flex-1 text-left">{item.label}</span>
+                {readinessLabel ? (
+                  <span
+                    className={`text-[10px] px-1.5 py-0.5 rounded ${
+                      readinessLevel === 'wip'
+                        ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                        : 'bg-paper-2 text-ink-fade'
+                    }`}
+                  >
+                    {readinessLabel}
+                  </span>
+                ) : null}
               </button>
             )
           })}

@@ -10,6 +10,7 @@ import SkillCommandsSync from './components/SkillCommandsSync'
 import RequireAuth from './components/RequireAuth'
 import SessionSearchModal from './components/SessionSearchModal'
 import { ToastProvider } from './components/Toast.jsx'
+import PreviewBanner from './components/PreviewBanner.jsx'
 
 const CoverPage = lazy(() => import('./pages/CoverPage'))
 const ChatSplit = lazy(() => import('./pages/ChatSplit'))
@@ -49,6 +50,7 @@ function App() {
       <SessionSearchModal />
       <Suspense fallback={<Fallback />}>
         <main>
+          <PreviewBanner />
           <Routes>
           <Route path="/" element={<CoverPage />} />
           <Route path="/chat" element={<ChatSplit />} />
