@@ -33,6 +33,12 @@ html[data-theme="light"] {
   --color-skel-2-rgb: 201 191 168;
   --color-ember-rgb: 232 106 60;
   --color-cyan-rgb: 46 143 163;
+
+  /* Accent color tokens (动态写入 by ThemeWrapper / applyAccent) */
+  --accent-h: 21;
+  --accent-s: 79%;
+  --accent-l: 57%;
+  --accent: hsl(var(--accent-h) var(--accent-s) var(--accent-l));
 }
 
 html[data-theme="dark"] {
@@ -187,4 +193,26 @@ html[data-density="loose"] {
 ::selection {
   background: var(--color-ember-soft);
   color: var(--color-ink);
+}
+
+/* ── Accent (strong) mode ──
+ * 默认模式只把 --accent 写到 :root,组件想用就 var(--accent).
+ * strong 模式把 .primary / [data-accent] / [data-accent-bg] 强制刷成 --accent,
+ * 这样不动 tailwind config 也能让用户"看到"强调色生效.
+ */
+.theme-accent-strong {
+  --accent: hsl(var(--accent-h) var(--accent-s) var(--accent-l));
+}
+
+.theme-accent-strong a.primary,
+.theme-accent-strong button.primary,
+.theme-accent-strong [data-accent] {
+  color: var(--accent) !important;
+}
+
+.theme-accent-strong button.primary,
+.theme-accent-strong [data-accent-bg] {
+  background-color: var(--accent) !important;
+  color: #fff !important;
+  border-color: var(--accent) !important;
 }

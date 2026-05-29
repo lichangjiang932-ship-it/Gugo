@@ -794,6 +794,16 @@ export default function SettingsView() {
               </button>
             ))}
           </div>
+          <div className="flex items-center justify-between gap-3 pt-1">
+            <div className="flex flex-col">
+              <span className="text-sm text-ink">强色调模式</span>
+              <span className="text-xs text-ink-fade">让强调色填充 logo / 主按钮等高亮位</span>
+            </div>
+            <Toggle
+              enabled={!!state.strongAccent}
+              onClick={() => dispatch({ type: 'SET_STRONG_ACCENT', payload: !state.strongAccent })}
+            />
+          </div>
         </SettingsGroup>
 
         <SettingsGroup title="字体大小">

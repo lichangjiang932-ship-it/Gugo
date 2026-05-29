@@ -16,6 +16,7 @@ const PERSIST_KEYS = [
   'permissions',
   'theme',
   'accentColor',
+  'strongAccent',
   'fontSize',
   'density',
   'animationsEnabled',
@@ -38,6 +39,7 @@ function createInitialState() {
     choiceRequest: null, // { text, options } — 模型发出的 [[choice:...]] 选择请求
     theme: 'system',
     accentColor: '#E86A3C',
+    strongAccent: false,
     fontSize: 'medium',
     density: 'comfortable',
     animationsEnabled: true,
@@ -384,6 +386,10 @@ function reducer(state, action) {
       return { ...state, accentColor: action.payload }
     }
 
+    case 'SET_STRONG_ACCENT': {
+      return { ...state, strongAccent: !!action.payload }
+    }
+
     case 'SET_FONT_SIZE': {
       return { ...state, fontSize: action.payload }
     }
@@ -451,6 +457,7 @@ function reducer(state, action) {
         if (typeof p[k] === 'string') next[k] = p[k]
       }
       if (typeof p.animationsEnabled === 'boolean') next.animationsEnabled = p.animationsEnabled
+      if (typeof p.strongAccent === 'boolean') next.strongAccent = p.strongAccent
       if (Array.isArray(p.permissions)) {
         const incomingMap = new Map(p.permissions.map((perm) => [perm.id, !!perm.enabled]))
         if (mode === 'replace') {
