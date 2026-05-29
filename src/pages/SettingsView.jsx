@@ -180,7 +180,6 @@ export default function SettingsView() {
   const { state, dispatch } = useAppContext()
   const navigate = useNavigate()
   const location = useLocation()
-  const [activeNav, setActiveNav] = useState(() => resolveSettingsNavFromSearch(location.search))
   const { t, lang, setLang, languages } = useT()
   const navLabel = (item) => {
     switch (item) {
@@ -208,7 +207,7 @@ export default function SettingsView() {
   const [pwdMessage, setPwdMessage] = useState('')
   const [loginCodeCountdown, setLoginCodeCountdown] = useState(0)
   const [dataMessage, setDataMessage] = useState('')
-  const [storageBytes, setStorageBytes] = useState(() => getLocalStorageBytes())
+  const [storageTick, setStorageTick] = useState(0)
   const [diagnostics, setDiagnostics] = useState(null)
   const [diagnosticsMessage, setDiagnosticsMessage] = useState('')
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
@@ -216,20 +215,21 @@ export default function SettingsView() {
   const [settingsImportMode, setSettingsImportMode] = useState('merge')
   const importInputRef = useRef(null)
 
-  const refreshStorage = useCallback(() => setStorageBytes(getLocalStorageBytes()), [])
-  const refreshDiagnostics = useCallback(async ({ check = false } = {}) => {
-    setDiagnosticsLoading(true)
-    setDiagnosticsMessage(check ? '正在探测模型端点...' : '')
-    try {
-      const data = await getSystemDiagnostics({ check })
-      setDiagnostics(data)
-      setDiagnosticsMessage(check ? '端点探测完成。' : '诊断状态已刷新。')
-    } catch (err) {
-      setDiagnosticsMessage(err.message)
-    } finally {
-      setDiagnosticsLoading(false)
-    }
-  }, [])
+  // navTab derived from URL (URL is single source of truth) + local override for manual clicks
+  const urlNav = resolveSettingsNavFromSearch(location.search)
+  const [navOverride, setNavOverride] = useState({ search: location.search, nav: null })
+  const activeNav = navOverride.search === location.search && navOverride.nav
+    ? navOverride.nav
+    : urlNav
+  const setActiveNav = (nav) => setNavOverride({ search: location.search, nav })
+
+  // storageBytes derived state — recomputed when sessions/history change or after explicit refresh
+  const storageBytes = useMemo(
+    () => getLocalStorageBytes(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [state.sessions.length, state.history.length, storageTick]
+  )
+  const refreshStorage = useCallback(() => setStorageTick((n) => n + 1), [])
 
   const refreshAccount = useCallback(async () => {
     setAccountLoading(true)
@@ -254,31 +254,42 @@ export default function SettingsView() {
     }
   }, [dispatch])
 
-  useEffect(() => {
-    if (getAuthToken()) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- bootstrap fetch on mount
-      refreshAccount()
+  const refreshDiagnostics = useCallback(async ({ check = false } = {}) => {
+    setDiagnosticsLoading(true)
+    setDiagnosticsMessage(check ? '正在探测模型端点...' : '')
+    try {
+      const data = await getSystemDiagnostics({ check })
+      setDiagnostics(data)
+      setDiagnosticsMessage(check ? '端点探测完成。' : '诊断状态已刷新。')
+    } catch (err) {
+      setDiagnosticsMessage(err.message)
+    } finally {
+      setDiagnosticsLoading(false)
     }
-    refreshDiagnostics()
+  }, [])
+
+  // Initial mount: kick off async fetches outside the effect body so setState
+  // doesn't run synchronously inside the effect callback.
+  useEffect(() => {
+    Promise.resolve().then(() => {
+      if (getAuthToken()) {
+        refreshAccount()
+      }
+      refreshDiagnostics()
+    })
   }, [refreshAccount, refreshDiagnostics])
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing nav tab to URL search param
-    setActiveNav(resolveSettingsNavFromSearch(location.search))
-  }, [location.search])
-
-  useEffect(() => {
-    if (!account?.user) return
-    if (!shouldPromptPasswordSetup(location.search, account.user)) return
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot password-setup prompt
-    setActiveNav(SETTINGS_TAB_ACCOUNT)
+  // Password setup prompt: render-time check using "store previous value" pattern (no effect needed).
+  const [pwdPromptShownFor, setPwdPromptShownFor] = useState(null)
+  if (
+    account?.user
+    && shouldPromptPasswordSetup(location.search, account.user)
+    && pwdPromptShownFor !== location.search
+  ) {
+    setPwdPromptShownFor(location.search)
+    setNavOverride({ search: location.search, nav: SETTINGS_TAB_ACCOUNT })
     setPwdMessage('请设置一个登录密码，下次可以直接用邮箱和密码登录。')
-  }, [account?.user, location.search])
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local storage usage
-    refreshStorage()
-  }, [state.sessions.length, state.history.length, refreshStorage])
+  }
 
   useEffect(() => {
     if (loginCodeCountdown <= 0) return undefined
