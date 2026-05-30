@@ -14,7 +14,7 @@ Usage:
   yma-cli --help
 
 Environment:
-  SERVER_PORT   server port (default 5176)
+  SERVER_PORT   server port (default 5173)
   SERVER_HOST   server host (default 127.0.0.1)
 
 Auth token is stored at ~/.yma-cli/token (chmod 0600).
@@ -61,7 +61,7 @@ function writeToken(token) {
 
 function baseUrl() {
   const host = process.env.SERVER_HOST || '127.0.0.1'
-  const port = process.env.SERVER_PORT || '5176'
+  const port = process.env.SERVER_PORT || '5173'
   return `http://${host}:${port}`
 }
 
