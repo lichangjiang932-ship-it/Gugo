@@ -184,10 +184,10 @@ function buildReactSandboxDoc(code) {
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>React 沙箱</title>
-<script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
-<script src="https://cdn.tailwindcss.com"></script>
+<script src="/sandbox/react.umd.js"></script>
+<script src="/sandbox/react-dom.umd.js"></script>
+<script src="/sandbox/babel.standalone.js"></script>
+<script src="/sandbox/tailwind.js"></script>
 <style>
   html,body,#root{margin:0;padding:0;min-height:100vh;background:#fff;color:#111;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
   #__err{position:fixed;top:0;left:0;right:0;background:#FEE2E2;color:#7F1D1D;padding:10px 14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.5;border-bottom:1px solid #FCA5A5;white-space:pre-wrap;z-index:99999;display:none;max-height:50vh;overflow:auto}
@@ -265,6 +265,7 @@ function ReactPreview({ code }) {
         // SECURITY: 只 allow-scripts + allow-forms,不开 allow-same-origin —
         //   组件无法访问父页 storage/cookie,iframe 沙箱视为 opaque origin.
         sandbox="allow-scripts allow-forms"
+        csp="default-src 'self' data:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'none'; img-src 'self' data:;"
         referrerPolicy="no-referrer"
         className="w-full h-full border-0 bg-white"
       />
