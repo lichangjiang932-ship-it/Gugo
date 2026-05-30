@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { checkRateLimit, getSessionByToken } from './db.js'
+import { logger } from './utils/logger.js'
 import { z } from 'zod'
 
 /* ── CORS ── */
@@ -120,7 +121,7 @@ export function requestLogger(req, res, next) {
   const originalEnd = res.end.bind(res)
   res.end = (...args) => {
     const duration = Date.now() - start
-    if (process.env.NODE_ENV !== 'production') console.log(`[${new Date().toISOString()}] ${req.method} ${req.url} ${res.statusCode || 200} ${duration}ms`)
+    if (process.env.NODE_ENV !== 'production') logger.info(`${req.method} ${req.url} ${res.statusCode || 200} ${duration}ms`)
     originalEnd(...args)
   }
   next()

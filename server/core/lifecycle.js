@@ -13,6 +13,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { closeDb } from '../db.js'
 import { closeJobRuntime } from '../services/jobRuntime.js'
+import { logger } from '../utils/logger.js'
 import { closeCronScheduler } from '../services/cronScheduler.js'
 import { shutdownAll as shutdownMcpAll } from '../mcp/mcpManager.js'
 import { seedSystemSkills } from '../services/seedSystemSkills.js'
@@ -61,7 +62,7 @@ export function bootstrap({ silent = process.env.NODE_ENV === 'production' } = {
   } catch (err) {
     console.error('[server] start social bridge failed:', err.message)
   }
-  if (!silent) console.log('[lifecycle] bootstrap complete')
+  if (!silent) logger.info('[lifecycle] bootstrap complete')
   return {}
 }
 
@@ -74,24 +75,24 @@ export function bootstrap({ silent = process.env.NODE_ENV === 'production' } = {
  *   5. 超时强退
  */
 export function gracefulShutdown(server, { silent = process.env.NODE_ENV === 'production', exit = true } = {}) {
-  if (!silent) console.log('\n[lifecycle] shutdown signal received')
+  if (!silent) logger.info('\n[lifecycle] shutdown signal received')
 
   let done = false
   const finish = (code) => {
     if (done) return
     done = true
-    if (!silent) console.log('[lifecycle] shutdown complete')
+    if (!silent) logger.info('[lifecycle] shutdown complete')
     if (exit) process.exit(code)
   }
 
   server.close(() => {
-    if (!silent) console.log('[lifecycle] http server closed')
+    if (!silent) logger.info('[lifecycle] http server closed')
     try { closeCronScheduler() } catch { /* ignore */ }
     try { closeJobRuntime() } catch { /* ignore */ }
     try { socialBridgeManager.stopAll() } catch { /* ignore */ }
     try { shutdownMcpAll() } catch { /* ignore */ }
     try { closeDb() } catch { /* ignore */ }
-    if (!silent) console.log('[lifecycle] db closed')
+    if (!silent) logger.info('[lifecycle] db closed')
     finish(0)
   })
 

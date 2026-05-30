@@ -3,6 +3,7 @@ import http from 'node:http'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { getDbStatus } from './db.js'
+import { logger } from './utils/logger.js'
 import {
   corsMiddleware,
   securityHeaders,
@@ -368,7 +369,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   bootstrap()
 
   const server = createAppServer().listen(port, host, () => {
-    if (process.env.NODE_ENV !== 'production') console.log(`Your Model Atelier running at http://${host}:${port}/`)
+    if (process.env.NODE_ENV !== 'production') logger.info(`Your Model Atelier running at http://${host}:${port}/`)
   })
 
   // ★ #34: 进程级兜底 — 一个未捕获的异常不应该让服务静默退出

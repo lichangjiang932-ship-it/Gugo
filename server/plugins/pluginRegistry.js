@@ -6,6 +6,7 @@
  */
 
 import { loadPlugins } from './pluginLoader.js'
+import { logger } from '../utils/logger.js'
 
 let CURRENT = []
 let LAST_ERRORS = []
@@ -21,7 +22,7 @@ export function initPlugins({ rootDir = './plugins', silent = process.env.NODE_E
   LAST_ERRORS = errors
   INITIALIZED = true
   if (!silent) {
-    console.log(`[plugins] loaded ${plugins.length} plugin(s) from ${rootDir}`)
+    logger.info(`[plugins] loaded ${plugins.length} plugin(s) from ${rootDir}`)
     for (const e of errors) console.warn(`[plugins] skip ${e.dir}: ${e.message}`)
   }
   return { plugins: CURRENT.slice(), errors: LAST_ERRORS.slice() }

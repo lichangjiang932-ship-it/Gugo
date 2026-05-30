@@ -27,4 +27,10 @@ export default defineConfig([
       },
     },
   },
+  {
+    files: ['server/**/*.js'],
+    rules: {
+      'no-console': ['error', { allow: ['warn', 'error'] }],
+    },
+  },
 ])
