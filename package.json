@@ -6,6 +6,9 @@
     "node": ">=20.0.0"
   },
   "type": "module",
+  "bin": {
+    "yma-cli": "./bin/yma-cli.js"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -15,7 +18,8 @@
     "hub": "node server/hub/index.js",
     "local": "npm run build && npm run serve",
     "preview": "vite preview",
-    "seed:skills": "node server/seedSystemSkills.js"
+    "seed:skills": "node server/seedSystemSkills.js",
+    "cli": "node bin/yma-cli.js"
   },
   "dependencies": {
     "@e965/xlsx": "^0.20.3",
