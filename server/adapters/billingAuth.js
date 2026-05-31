@@ -4,6 +4,7 @@ import net from 'node:net'
 import path from 'node:path'
 import tls from 'node:tls'
 import { readJson, sendJson, authToken } from '../utils.js'
+import { logger } from '../utils/logger.js'
 
 import {
   getUserById,
@@ -55,7 +56,7 @@ function maybeMigrateLegacy() {
     migrateFromJson(store)
     fs.writeFileSync(migratedFlag, JSON.stringify({ migratedAt: Date.now() }))
     // 保留原文件作为备份，不改名
-    if (process.env.NODE_ENV !== 'production') console.log('[billingAuth] Migrated legacy JSON store to SQLite')
+    if (process.env.NODE_ENV !== 'production') logger.info('[billingAuth] Migrated legacy JSON store to SQLite')
   } catch (e) {
     if (process.env.NODE_ENV !== 'production') console.warn('[billingAuth] Failed to migrate legacy store:', e.message)
   }

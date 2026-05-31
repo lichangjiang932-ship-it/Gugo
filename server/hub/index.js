@@ -16,6 +16,7 @@
  */
 
 import { closeDb } from '../db.js'
+import { logger } from '../utils/logger.js'
 import { runHubMigrations, claimNextPending, markDone, markFailed } from './hubDb.js'
 import { getHandler, listHandlers } from './jobRegistry.js'
 
@@ -27,11 +28,11 @@ let _running = false
 let _shuttingDown = false
 
 function log(...args) {
-  console.log('[hub]', ...args)
+  logger.info('[hub]', ...args)
 }
 
 function logErr(...args) {
-  console.error('[hub]', ...args)
+  logger.error('[hub]', ...args)
 }
 
 /**
@@ -133,7 +134,7 @@ function isMain() {
 
 if (isMain()) {
   if (process.env.HUB_ENABLED !== '1') {
-    console.log('[hub] HUB_ENABLED!=1, exiting (set HUB_ENABLED=1 to start)')
+    logger.info('[hub] HUB_ENABLED!=1, exiting (set HUB_ENABLED=1 to start)')
     process.exit(0)
   }
   process.on('SIGINT', () => shutdownHub())

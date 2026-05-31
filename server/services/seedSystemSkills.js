@@ -11,6 +11,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { getDb } from '../db.js'
+import { logger } from '../utils/logger.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const SEED_ROOT = path.resolve(__dirname, '../seed/skills')
@@ -113,7 +114,7 @@ function upsertSystemSkill(db, skillDir, manifest) {
 
 export function seedSystemSkills({ silent = false } = {}) {
   if (!fs.existsSync(SEED_ROOT)) {
-    if (!silent) console.log('[seed] no seed/skills directory, skip')
+    if (!silent) logger.info('[seed] no seed/skills directory, skip')
     return []
   }
   const db = getDb()
@@ -128,7 +129,7 @@ export function seedSystemSkills({ silent = false } = {}) {
       const result = upsertSystemSkill(db, dir, manifest)
       results.push(result)
       if (!silent) {
-        console.log(`[seed] ${result.id} v${result.version}: ${result.status}${result.files ? ` (${result.files} files)` : ''}`)
+        logger.info(`[seed] ${result.id} v${result.version}: ${result.status}${result.files ? ` (${result.files} files)` : ''}`)
       }
     } catch (err) {
       console.error(`[seed] failed for ${dir}:`, err.message)
@@ -141,6 +142,6 @@ export function seedSystemSkills({ silent = false } = {}) {
 // 允许 CLI 直接执行：node server/seedSystemSkills.js
 if (import.meta.url === `file://${process.argv[1]}`) {
   const results = seedSystemSkills()
-  console.log('\n[seed] done:', JSON.stringify(results, null, 2))
+  logger.info('\n[seed] done:', JSON.stringify(results, null, 2))
   process.exit(0)
 }
