@@ -34,7 +34,7 @@ import IntegrationsPanel from '../components/IntegrationsPanel.jsx'
 import { ROUTE_READINESS } from '../config/routeReadiness.js'
 import { useAppContext } from '../store/AppContext'
 import { clearPersistedState } from '../store/AppContext.jsx'
-import { getAccount, getAuthToken, recharge, removeAccountPassword, sendLoginCode, setAccountPassword, setAuthToken, verifyLoginCode } from '../lib/accountClient.js'
+import { getAccount, getAuthToken, loginWithPassword, recharge, removeAccountPassword, sendLoginCode, setAccountPassword, setAuthToken, verifyLoginCode } from '../lib/accountClient.js'
 import {
   LOGIN_CODE_COUNTDOWN_SECONDS,
   formatLoginCodeCountdownLabel,
@@ -58,8 +58,8 @@ const SETTINGS_NAV = ['功能入口', '系统诊断', '账户', '权限中心', 
 const ACCENT_COLORS = ['#E86A3C', '#2E8FA3', '#A5C97A', '#D4A4FF']
 
 const SHORTCUTS = [
-  { category: '通用', items: [{ name: '新建对话', keys: ['Ctrl', 'N'] }, { name: '搜索技能', keys: ['Ctrl', 'K'] }, { name: '打开设置', keys: ['Ctrl', ','] }] },
-  { category: '对话', items: [{ name: '发送消息', keys: ['Enter'] }, { name: '换行', keys: ['Shift', 'Enter'] }, { name: '清空当前会话', keys: ['Ctrl', 'L'] }] },
+  { category: '通用', items: [{ name: '新建对话', keys: ['Alt', 'N'] }, { name: '打开设置', keys: ['Alt', ','] }] },
+  { category: '对话', items: [{ name: '发送消息', keys: ['Enter'] }, { name: '换行', keys: ['Shift', 'Enter'] }, { name: '清空当前会话', keys: ['Alt', 'L'] }] },
   { category: '导航', items: [{ name: '返回对话', keys: ['Esc'] }] },
 ]
 
@@ -197,6 +197,8 @@ export default function SettingsView() {
   }
   const [loginEmail, setLoginEmail] = useState('')
   const [loginCode, setLoginCode] = useState('')
+  const [loginPassword, setLoginPassword] = useState('')
+  const [loginMode, setLoginMode] = useState('code')
   const [account, setAccount] = useState(null)
   const [accountMessage, setAccountMessage] = useState('')
   const [accountLoading, setAccountLoading] = useState(false)
@@ -423,7 +425,9 @@ export default function SettingsView() {
       setAccountLoading(true)
       setAccountMessage('')
       try {
-        const data = await verifyLoginCode({ email: loginEmail, code: loginCode })
+        const data = loginMode === 'password'
+          ? await loginWithPassword({ email: loginEmail, password: loginPassword })
+          : await verifyLoginCode({ email: loginEmail, code: loginCode })
         setAccount(data)
         dispatch({
           type: 'LOGIN',
@@ -434,6 +438,8 @@ export default function SettingsView() {
             plan: `${data.user.credits} 积分`,
           },
         })
+        setLoginPassword('')
+        setLoginCode('')
         setAccountMessage('登录成功。')
       } catch (err) {
         setAccountMessage(err.message)
@@ -626,44 +632,92 @@ export default function SettingsView() {
           </>
         ) : (
           <div className="p-4 border border-ink/30 rounded-md flex flex-col gap-3 max-w-xl">
-            <form onSubmit={handleSendCode} className="flex flex-col gap-3">
-              <label className="flex flex-col gap-1">
-                <span className="text-xs text-ink-fade">邮箱</span>
-                <input
-                  value={loginEmail}
-                  onChange={(e) => setLoginEmail(e.target.value)}
-                  placeholder="you@example.com"
-                  className="h-9 px-3 border border-ink/40 rounded-md bg-paper outline-none focus:border-ember text-sm text-ink"
-                />
-              </label>
+            <div className="flex gap-2">
               <button
-                disabled={shouldDisableLoginCodeButton({
-                  accountLoading,
-                  loginEmail,
-                  countdown: loginCodeCountdown,
-                })}
-                className="h-9 px-4 bg-ink text-paper rounded-md text-sm hover:bg-ink-soft transition-colors self-start disabled:opacity-50"
+                type="button"
+                onClick={() => { setLoginMode('code'); setAccountMessage('') }}
+                className={`h-9 px-4 rounded-md text-sm border transition-colors ${loginMode === 'code' ? 'bg-ink text-paper border-ink' : 'border-ink-fade/60 text-ink-soft hover:border-ink-fade'}`}
               >
-                {formatLoginCodeCountdownLabel(loginCodeCountdown)}
+                {t('settings.loginWithCode')}
               </button>
-            </form>
-            <form onSubmit={handleVerify} className="flex flex-col gap-3">
-              <label className="flex flex-col gap-1">
-                <span className="text-xs text-ink-fade">验证码</span>
-                <input
-                  value={loginCode}
-                  onChange={(e) => setLoginCode(e.target.value)}
-                  placeholder="6 位数字"
-                  className="h-9 px-3 border border-ink/40 rounded-md bg-paper outline-none focus:border-ember text-sm text-ink"
-                />
-              </label>
               <button
-                disabled={accountLoading || !loginEmail.trim() || !loginCode.trim()}
-                className="h-9 px-4 bg-ember text-paper rounded-md text-sm hover:bg-ember/90 transition-colors self-start disabled:opacity-50"
+                type="button"
+                onClick={() => { setLoginMode('password'); setAccountMessage('') }}
+                className={`h-9 px-4 rounded-md text-sm border transition-colors ${loginMode === 'password' ? 'bg-ink text-paper border-ink' : 'border-ink-fade/60 text-ink-soft hover:border-ink-fade'}`}
               >
-                登录
+                {t('settings.loginWithPassword')}
               </button>
-            </form>
+            </div>
+            {loginMode === 'password' ? (
+              <form onSubmit={handleVerify} className="flex flex-col gap-3">
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs text-ink-fade">邮箱</span>
+                  <input
+                    value={loginEmail}
+                    onChange={(e) => setLoginEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    className="h-9 px-3 border border-ink/40 rounded-md bg-paper outline-none focus:border-ember text-sm text-ink"
+                  />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs text-ink-fade">{t('settings.loginPassword')}</span>
+                  <input
+                    type="password"
+                    autoComplete="current-password"
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    className="h-9 px-3 border border-ink/40 rounded-md bg-paper outline-none focus:border-ember text-sm text-ink"
+                  />
+                </label>
+                <button
+                  disabled={accountLoading || !loginEmail.trim() || !loginPassword.trim()}
+                  className="h-9 px-4 bg-ember text-paper rounded-md text-sm hover:bg-ember/90 transition-colors self-start disabled:opacity-50"
+                >
+                  {t('settings.loginSubmit')}
+                </button>
+              </form>
+            ) : (
+              <>
+                <form onSubmit={handleSendCode} className="flex flex-col gap-3">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-xs text-ink-fade">邮箱</span>
+                    <input
+                      value={loginEmail}
+                      onChange={(e) => setLoginEmail(e.target.value)}
+                      placeholder="you@example.com"
+                      className="h-9 px-3 border border-ink/40 rounded-md bg-paper outline-none focus:border-ember text-sm text-ink"
+                    />
+                  </label>
+                  <button
+                    disabled={shouldDisableLoginCodeButton({
+                      accountLoading,
+                      loginEmail,
+                      countdown: loginCodeCountdown,
+                    })}
+                    className="h-9 px-4 bg-ink text-paper rounded-md text-sm hover:bg-ink-soft transition-colors self-start disabled:opacity-50"
+                  >
+                    {formatLoginCodeCountdownLabel(loginCodeCountdown)}
+                  </button>
+                </form>
+                <form onSubmit={handleVerify} className="flex flex-col gap-3">
+                  <label className="flex flex-col gap-1">
+                    <span className="text-xs text-ink-fade">验证码</span>
+                    <input
+                      value={loginCode}
+                      onChange={(e) => setLoginCode(e.target.value)}
+                      placeholder="6 位数字"
+                      className="h-9 px-3 border border-ink/40 rounded-md bg-paper outline-none focus:border-ember text-sm text-ink"
+                    />
+                  </label>
+                  <button
+                    disabled={accountLoading || !loginEmail.trim() || !loginCode.trim()}
+                    className="h-9 px-4 bg-ember text-paper rounded-md text-sm hover:bg-ember/90 transition-colors self-start disabled:opacity-50"
+                  >
+                    登录
+                  </button>
+                </form>
+              </>
+            )}
           </div>
         )}
 
