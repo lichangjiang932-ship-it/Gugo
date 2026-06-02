@@ -90,6 +90,12 @@ test('assertSafeOutboundUrl: 不存在域名拒绝', async () => {
   )
 })
 
+test('assertSafeOutboundUrl: 直接 IP 形式回填 lockedIp 复用同一次审核结果 (C-P2.2)', async () => {
+  const target = await assertSafeOutboundUrl('http://8.8.8.8/')
+  // 复用已审核的 IP,不再二次解析
+  assert.strictEqual(target.lockedIp, '8.8.8.8')
+})
+
 test('assertSafeOutboundUrl: 非法 URL 拒绝', async () => {
   await assert.rejects(() => assertSafeOutboundUrl('not a url'), /url/)
   await assert.rejects(() => assertSafeOutboundUrl(''), /url/)

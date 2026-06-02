@@ -58,13 +58,16 @@ export function retryStep(jobId, stepId, { fetchImpl = fetch } = {}) {
   }))
 }
 
-// SSE: EventSource 原生不支持 header,走 query token 兜底
-// 服务端 SSE 路由 /api/jobs/stream 同时接受 Bearer header 和 ?token=
-export function subscribeToJobEvents(onEvent, { EventSourceImpl = globalThis.EventSource } = {}) {
+// SSE: EventSource 原生不支持 header。用 header token 先换一个 60s 一次性 ticket,
+// 再用 ?ticket= 连接,避免把 7 天 session token 放 URL query(落日志/Referer/历史)。
+export function subscribeToJobEvents(
+  onEvent,
+  { EventSourceImpl = globalThis.EventSource, fetchImpl = fetch } = {},
+) {
   if (!EventSourceImpl) return () => {}
-  const token = getAuthToken?.()
-  const url = token ? `/api/jobs/stream?token=${encodeURIComponent(token)}` : '/api/jobs/stream'
-  const stream = new EventSourceImpl(url)
+  let stream = null
+  let closed = false
+
   const handler = (event) => {
     try {
       onEvent(JSON.parse(event.data))
@@ -72,8 +75,36 @@ export function subscribeToJobEvents(onEvent, { EventSourceImpl = globalThis.Eve
       // Ignore malformed events; the stream should keep breathing.
     }
   }
-  stream.addEventListener('job_event', handler)
-  return () => stream.close()
+
+  const connect = (url) => {
+    if (closed) return
+    stream = new EventSourceImpl(url)
+    stream.addEventListener('job_event', handler)
+  }
+
+  ;(async () => {
+    try {
+      const res = await fetchImpl('/api/jobs/stream-ticket', {
+        method: 'POST',
+        headers: authHeaders(),
+      })
+      if (res.ok) {
+        const { ticket } = await res.json()
+        if (ticket) {
+          connect(`/api/jobs/stream?ticket=${encodeURIComponent(ticket)}`)
+          return
+        }
+      }
+    } catch {
+      // 换 ticket 失败 → 退回无 ticket 连接(服务端会用 Authorization 头兜底,浏览器下会 401)
+    }
+    connect('/api/jobs/stream')
+  })()
+
+  return () => {
+    closed = true
+    if (stream) stream.close()
+  }
 }
 
 // 给前端 <a href> 下载用 — 拼上 query token 避免 EventSource/<a> 没法带 header 的问题

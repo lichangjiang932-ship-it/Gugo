@@ -190,3 +190,67 @@ test('rate limit cleanup does not delete other keys with longer windows', () => 
   const loginRow = db.prepare('SELECT * FROM rate_limits WHERE key = ?').get('login_code:client')
   assert.ok(loginRow, 'short-window cleanup must not delete long-window rate rows')
 })
+
+/* ── E2/E3/E4: 外键 + NOT NULL + 索引 ── */
+
+function fkList(db, table) {
+  return db.prepare(`PRAGMA foreign_key_list(${table})`).all()
+}
+function colInfo(db, table, col) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().find((r) => r.name === col)
+}
+
+test('E2: jobs.user_id is NOT NULL and cascades from users', () => {
+  const db = getDb()
+  const uid = colInfo(db, 'jobs', 'user_id')
+  assert.equal(uid.notnull, 1, 'jobs.user_id must be NOT NULL')
+  const fks = fkList(db, 'jobs')
+  const userFk = fks.find((f) => f.table === 'users' && f.from === 'user_id')
+  assert.ok(userFk, 'jobs.user_id must reference users')
+  assert.equal(userFk.on_delete, 'CASCADE')
+})
+
+test('E2: inserting a job with unknown user_id is rejected by FK', () => {
+  const db = getDb()
+  const now = Date.now()
+  assert.throws(() => {
+    db.prepare(
+      'INSERT INTO jobs (id, user_id, title, prompt, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?)'
+    ).run('job_fk_test', 'ghost-user', 't', 'p', 'queued', now, now)
+  }, /FOREIGN KEY/)
+})
+
+test('E2: deleting a user cascades to their jobs', () => {
+  const db = getDb()
+  const now = Date.now()
+  db.prepare('INSERT INTO users (id, email, credits, created_at, updated_at) VALUES (?,?,?,?,?)')
+    .run('cascade-user', 'cascade@example.com', 0, now, now)
+  db.prepare(
+    'INSERT INTO jobs (id, user_id, title, prompt, status, created_at, updated_at) VALUES (?,?,?,?,?,?,?)'
+  ).run('job_cascade', 'cascade-user', 't', 'p', 'queued', now, now)
+  db.prepare('DELETE FROM users WHERE id = ?').run('cascade-user')
+  const row = db.prepare('SELECT * FROM jobs WHERE id = ?').get('job_cascade')
+  assert.equal(row, undefined, 'job should be cascade-deleted with its user')
+})
+
+test('E3 (已撤回 FK): tool_audit/subagent_runs/subagents_custom/hooks/compaction_archive 仍是 user_id NOT NULL 的弱引用', () => {
+  // 产品决策：这些表的 user_id 是既有弱引用契约（多处调用不建 user 行直写），
+  // 强加外键会破坏契约，故 V15 只保留 NOT NULL，不加 CASCADE FK。
+  const db = getDb()
+  for (const table of ['tool_audit', 'subagent_runs', 'subagents_custom', 'hooks', 'compaction_archive']) {
+    const uid = colInfo(db, table, 'user_id')
+    assert.ok(uid, `${table} 应有 user_id 列`)
+    assert.equal(uid.notnull, 1, `${table}.user_id 应为 NOT NULL`)
+  }
+})
+
+test('E4: job_steps.parent_step_id has an index', () => {
+  const db = getDb()
+  const indexes = db.prepare('PRAGMA index_list(job_steps)').all()
+  let found = false
+  for (const idx of indexes) {
+    const cols = db.prepare(`PRAGMA index_info(${idx.name})`).all().map((c) => c.name)
+    if (cols.includes('parent_step_id')) found = true
+  }
+  assert.ok(found, 'job_steps.parent_step_id must be indexed')
+})

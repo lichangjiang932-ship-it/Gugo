@@ -32,6 +32,17 @@ test('runtime completes queued child steps in order', async () => {
   assert.deepEqual(loaded.steps.map((step) => step.status), ['completed', 'completed', 'completed', 'completed'])
 })
 
+test('D6: jobUserCache is evicted once a job reaches a terminal state', async () => {
+  const runtime = new JobRuntime({
+    executeStep: async ({ step }) => ({ ok: true, output: { text: step.title } }),
+  })
+  const job = await runtime.createJob('内存泄漏检查', { userId: TEST_USER })
+  assert.ok(runtime.jobUserCache.has(job.id), 'cache populated while job runs')
+  await runtime.drain()
+  assert.equal(runtime.getJob(job.id, { userId: TEST_USER }).status, 'completed')
+  assert.equal(runtime.jobUserCache.has(job.id), false, 'cache entry removed after completion')
+})
+
 test('runtime honors cancellation before the next step starts', async () => {
   const executed = []
   const runtime = new JobRuntime({

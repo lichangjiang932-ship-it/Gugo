@@ -4,7 +4,13 @@ import net from 'node:net'
 import path from 'node:path'
 import tls from 'node:tls'
 import { readJson, sendJson, authToken } from '../utils.js'
-import { logger } from '../utils/logger.js'
+import {
+  resolveClientId,
+  recordPasswordFailure,
+  isAccountLocked,
+  clearPasswordFailures,
+} from '../utils/loginGuard.js'
+import { logger, logWarn } from '../utils/logger.js'
 
 import {
   getUserById,
@@ -58,7 +64,8 @@ function maybeMigrateLegacy() {
     // 保留原文件作为备份，不改名
     if (process.env.NODE_ENV !== 'production') logger.info('[billingAuth] Migrated legacy JSON store to SQLite')
   } catch (e) {
-    if (process.env.NODE_ENV !== 'production') console.warn('[billingAuth] Failed to migrate legacy store:', e.message)
+    // D4: 迁移失败属于需要排障的信号,生产也要 log(原来仅 dev warn)。
+    logWarn('billingAuth.legacyMigrate', e, { storePath })
   }
 }
 
@@ -158,11 +165,23 @@ export function loginWithPassword({ email, password, now = Date.now() }) {
   ensureLegacyMigration()
   if (!email || !password) throw new Error('邮箱与密码不能为空')
   const normalized = String(email).trim().toLowerCase()
+  // ★ C-P2.5: 账号维度锁定(与发码限流分离),多次失败先拒。
+  if (isAccountLocked(normalized)) {
+    throw new Error('账号因多次登录失败已被临时锁定，请 15 分钟后再试')
+  }
   const user = getUserByEmail(normalized)
   // 统一报错避免透露「账号是否存在」
   const FAIL = new Error('邮箱或密码不正确')
-  if (!user || !user.password_hash) throw FAIL
-  if (!verifyPasswordHash(password, user.password_salt, user.password_hash)) throw FAIL
+  if (!user || !user.password_hash) {
+    recordPasswordFailure(normalized)
+    throw FAIL
+  }
+  if (!verifyPasswordHash(password, user.password_salt, user.password_hash)) {
+    recordPasswordFailure(normalized)
+    throw FAIL
+  }
+  // 成功:清空失败计数
+  clearPasswordFailures(normalized)
   const token = createToken()
   createSession({ token, userId: user.id, now, ttlMs: 7 * 24 * 60 * 60 * 1000 })
   return { ok: true, token, user: publicUser(user), ledger: getLedgerForUser(user.id) }
@@ -198,6 +217,13 @@ function loginCodesMatch(storedCode, candidateCode) {
 function checkCodeRate(clientId) {
   const key = `code:${clientId}`
   return checkRateLimit({ key, windowMs: CODE_WINDOW_MS, maxRequests: MAX_CODES_PER_HOUR })
+}
+
+// ★ C-P2.5: 密码登录限流用独立 key,与发码窗口分离(避免改密码误伤发码,反之亦然)。
+const MAX_PASSWORD_ATTEMPTS_PER_WINDOW = 10
+function checkPasswordLoginRate(clientId) {
+  const key = `pwd_login:${clientId}`
+  return checkRateLimit({ key, windowMs: CODE_WINDOW_MS, maxRequests: MAX_PASSWORD_ATTEMPTS_PER_WINDOW })
 }
 
 /* ── 核心逻辑 ── */
@@ -279,7 +305,17 @@ export function rechargeAccount({ token, packageId, now = Date.now() }) {
   return { ok: true, user: publicUser(getUserById(user.id)), ledger: getLedgerForUser(user.id) }
 }
 
-export function chargeForModelUse({ token, modelName, cost, now = Date.now() }) {
+/**
+ * D3: 统一扣费。chargeForModelUse / chargeForToolUse 原本逐行重复,
+ * 只有 ledger 的 type 和 model_name 字段不同。这里抽出公共逻辑,行为零变化。
+ *
+ * @param {object} p
+ * @param {string} p.token   会话 token
+ * @param {string} p.type    ledger 入账类型('model_charge' | 'tool_charge')
+ * @param {string} p.name    入账 model_name 字段(模型名或工具名)
+ * @param {number} p.cost    扣减积分
+ */
+function chargeCredits({ token, type, name, cost, now = Date.now() }) {
   ensureLegacyMigration()
   const user = getUserByToken(token)
   if (!user) throw new Error('请先登录')
@@ -295,14 +331,18 @@ export function chargeForModelUse({ token, modelName, cost, now = Date.now() }) 
   addLedgerEntry({
     id: crypto.randomUUID?.() || `led_${now}_${Math.random().toString(16).slice(2)}`,
     userId: user.id,
-    type: 'model_charge',
-    modelName,
+    type,
+    modelName: name,
     credits: -cost,
     balance: result.user.credits,
     now,
   })
 
   return { ok: true, user: publicUser(result.user), ledger: getLedgerForUser(user.id) }
+}
+
+export function chargeForModelUse({ token, modelName, cost, now = Date.now() }) {
+  return chargeCredits({ token, type: 'model_charge', name: modelName, cost, now })
 }
 
 /* ── 计费配置 ── */
@@ -317,29 +357,7 @@ export function getToolCost(env = process.env) {
 }
 
 export function chargeForToolUse({ token, toolName, cost, now = Date.now() }) {
-  ensureLegacyMigration()
-  const user = getUserByToken(token)
-  if (!user) throw new Error('请先登录')
-  if ((user.credits || 0) < cost) {
-    throw new Error(`积分不足，需要 ${cost} 积分，当前余额 ${user.credits || 0}`)
-  }
-
-  const result = deductUserCredits({ id: user.id, amount: cost, now })
-  if (!result.changed) {
-    throw new Error(`积分不足，需要 ${cost} 积分`)
-  }
-
-  addLedgerEntry({
-    id: crypto.randomUUID?.() || `led_${now}_${Math.random().toString(16).slice(2)}`,
-    userId: user.id,
-    type: 'tool_charge',
-    modelName: toolName,
-    credits: -cost,
-    balance: result.user.credits,
-    now,
-  })
-
-  return { ok: true, user: publicUser(result.user), ledger: getLedgerForUser(user.id) }
+  return chargeCredits({ token, type: 'tool_charge', name: toolName, cost, now })
 }
 
 export function loadBillingConfig(env = process.env) {
@@ -588,8 +606,9 @@ export function buildSendCodeResponse({ issued, delivery, env }) {
 
 /* ── HTTP 处理 ── */
 
-function clientId(req) {
-  return req.headers['x-forwarded-for'] || req.socket?.remoteAddress || 'unknown'
+function clientId(req, env = process.env) {
+  // ★ C-P2.5: 默认不信可伪造的 x-forwarded-for;仅 TRUST_PROXY=1 时采信 XFF 最左 hop。
+  return resolveClientId(req, env)
 }
 
 export async function handleAuthBillingRequest(req, res, env = process.env) {
@@ -599,7 +618,7 @@ export async function handleAuthBillingRequest(req, res, env = process.env) {
 
     if (req.method === 'POST' && url.pathname === '/api/auth/send-code') {
       const body = await readJson(req, { maxBytes: 256 * 1024 })
-      const limit = checkCodeRate(clientId(req))
+      const limit = checkCodeRate(clientId(req, env))
       if (!limit.allowed) {
         sendJson(res, 429, { ok: false, error: '发送验证码次数过多，请 1 小时后再试' })
         return
@@ -619,7 +638,7 @@ export async function handleAuthBillingRequest(req, res, env = process.env) {
 
     if (req.method === 'POST' && url.pathname === '/api/auth/login-password') {
       const body = await readJson(req, { maxBytes: 256 * 1024 })
-      const limit = checkCodeRate(clientId(req))
+      const limit = checkPasswordLoginRate(clientId(req, env))
       if (!limit.allowed) {
         sendJson(res, 429, { ok: false, error: '请求过于频繁，请稍后再试' })
         return

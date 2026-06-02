@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
-import { Mic, Bell, HardDrive, Database, Camera, RefreshCw, Pause } from 'lucide-react'
+import { Mic, Bell, HardDrive, Database, Camera, RefreshCw, Pause, Terminal, FilePen, FileText } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
 import { useT } from '../i18n/I18nProvider.jsx'
 import {
@@ -9,6 +9,11 @@ import {
   probeNotifications,
   probeMedia,
 } from '../lib/permissionsProbes.js'
+import {
+  GATEABLE_TOOLS,
+  fetchToolPermissions,
+  setToolPermission,
+} from '../lib/toolPermissionClient'
 
 // 5 个固定能力。Key 来自 i18n permissionsDashboard 域。
 const ITEMS = [
@@ -42,6 +47,33 @@ const STATE_KEY = {
   unknown: 'stateUnknown',
 }
 
+// 后端真实工具图标映射（工具 gate）
+const toolIconMap = {
+  bash_exec: Terminal,
+  write_file: FilePen,
+  edit_file: FileText,
+}
+
+function PermSwitch({ on, onToggle, label }) {
+  return (
+    <button
+      onClick={onToggle}
+      aria-label={label}
+      className={`w-[38px] h-[22px] rounded-full border relative transition-all duration-200 ${
+        on ? 'bg-ember border-ember' : 'bg-paper border-ink-fade'
+      }`}
+    >
+      <motion.div
+        className={`absolute top-[2px] w-4 h-4 rounded-full ${
+          on ? 'bg-paper left-[18px]' : 'bg-ink-fade left-[2px]'
+        }`}
+        layout
+        transition={{ type: 'spring', stiffness: 500, damping: 30 }}
+      />
+    </button>
+  )
+}
+
 function emptyResults() {
   return ITEMS.reduce((acc, it) => {
     acc[it.id] = { state: 'unknown', detail: null }
@@ -53,6 +85,36 @@ export default function PermissionsDashboard() {
   const { t } = useT()
   const [results, setResults] = useState(() => emptyResults())
   const [checking, setChecking] = useState(false)
+
+  // 后端权威的 per-user 工具 gate（显式覆盖 map: { toolName: false }）；默认放行。
+  const [toolOverrides, setToolOverrides] = useState({})
+  const [toolError, setToolError] = useState(null)
+
+  useEffect(() => {
+    let alive = true
+    fetchToolPermissions()
+      .then((perms) => { if (alive) setToolOverrides(perms || {}) })
+      .catch((err) => { if (alive) setToolError(err.message) })
+    return () => { alive = false }
+  }, [])
+
+  // 某工具是否启用：无显式覆盖 → 默认开；显式 false → 关。
+  const isToolEnabled = (id) => toolOverrides[id] !== false
+
+  const toggleTool = async (id) => {
+    const next = !isToolEnabled(id)
+    // 乐观更新
+    setToolOverrides((prev) => ({ ...prev, [id]: next }))
+    try {
+      const perms = await setToolPermission(id, next)
+      setToolOverrides(perms || {})
+      setToolError(null)
+    } catch (err) {
+      // 回滚乐观更新
+      setToolOverrides((prev) => ({ ...prev, [id]: !next }))
+      setToolError(err.message)
+    }
+  }
 
   const runChecks = useCallback(async () => {
     setChecking(true)
@@ -125,11 +187,13 @@ export default function PermissionsDashboard() {
     return { granted, denied, prompt, unsupported }
   }, [results])
 
+  const gatedOffCount = GATEABLE_TOOLS.filter((tool) => !isToolEnabled(tool.id)).length
+
   const stats = [
     { label: t('permissionsDashboard.statEnabled'),     value: String(counts.granted),     tone: 'ember' },
     { label: t('permissionsDashboard.statDenied'),      value: String(counts.denied),      tone: '' },
-    { label: t('permissionsDashboard.statPrompt'),      value: String(counts.prompt),      tone: 'cyan' },
-    { label: t('permissionsDashboard.statUnsupported'), value: String(counts.unsupported), tone: '' },
+    { label: '工具已启用', value: `${GATEABLE_TOOLS.length - gatedOffCount}/${GATEABLE_TOOLS.length}`, tone: 'cyan' },
+    { label: '工具 gate',  value: '后端校验', tone: '' },
   ]
 
   return (
@@ -172,6 +236,54 @@ export default function PermissionsDashboard() {
           ))}
         </div>
 
+        {toolError && (
+          <div className="mb-4 px-4 py-2.5 border border-dashed border-ember/60 rounded-md font-hand text-sm text-ember">
+            工具权限同步失败：{toolError}
+          </div>
+        )}
+
+        <div className="mb-2 flex items-baseline gap-2">
+          <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">TOOLS</span>
+          <span className="font-hand text-base text-ink-soft">真实后端工具（后端 gate：关闭后即使前端被绕过，工具入口也会拒绝执行）</span>
+        </div>
+        <div className="border border-ink/30 rounded-md overflow-hidden mb-6">
+          <div className="px-4 py-2.5 border-b border-dashed border-ink-fade/50 grid grid-cols-[40px_1.4fr_1fr_1fr_80px] gap-3 items-center bg-paper-2">
+            <span />
+            <span className="font-mono text-[9px] tracking-wider text-ink-fade">工具</span>
+            <span className="font-mono text-[9px] tracking-wider text-ink-fade">范围</span>
+            <span className="font-mono text-[9px] tracking-wider text-ink-fade">状态</span>
+            <span className="font-mono text-[9px] tracking-wider text-ink-fade">开关</span>
+          </div>
+          {GATEABLE_TOOLS.map((tool, i) => {
+            const IconComp = toolIconMap[tool.id] || Terminal
+            const on = isToolEnabled(tool.id)
+            return (
+              <div
+                key={tool.id}
+                className={`px-4 py-3 grid grid-cols-[40px_1.4fr_1fr_1fr_80px] gap-3 items-center ${
+                  i < GATEABLE_TOOLS.length - 1 ? 'border-b border-dashed border-ink-fade/40' : ''
+                }`}
+                style={{ opacity: on ? 1 : 0.55 }}
+              >
+                <div className="w-7 h-7 rounded-md border border-ink-fade/60 flex items-center justify-center bg-paper">
+                  <IconComp className="w-3.5 h-3.5 text-ink-soft" />
+                </div>
+                <div className="flex flex-col leading-tight">
+                  <span className="text-sm text-ink">{tool.name}</span>
+                  <span className="font-mono text-[9px] tracking-wider text-ink-fade">{tool.id}</span>
+                </div>
+                <span className="text-sm text-ink-soft">{tool.scope}</span>
+                <span className="text-sm text-ink-soft">{on ? '已开启' : '已关闭'}</span>
+                <PermSwitch on={on} onToggle={() => toggleTool(tool.id)} label={`${on ? '关闭' : '开启'}${tool.name}`} />
+              </div>
+            )
+          })}
+        </div>
+
+        <div className="mb-2 flex items-baseline gap-2">
+          <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">BROWSER</span>
+          <span className="font-hand text-base text-ink-soft">浏览器本地权限</span>
+        </div>
         <div className="border border-ink/30 rounded-md overflow-hidden">
           <div className="px-4 py-2.5 border-b border-dashed border-ink-fade/50 grid grid-cols-[40px_1.4fr_1fr_1fr_90px] gap-3 items-center bg-paper-2">
             <span />

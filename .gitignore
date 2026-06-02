@@ -30,3 +30,4 @@ server-data/
 *.sw?
 sample-png/
 sample-out/
+.worktrees/

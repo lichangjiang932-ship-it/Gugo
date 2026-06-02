@@ -1,6 +1,7 @@
 import { authenticateRequest } from '../middleware.js'
 import { readJson, sendJson } from '../utils.js'
 import { abortJob as abortJobImpl } from '../services/jobRuntime.js'
+import { createStreamTicket, consumeStreamTicket } from '../utils/streamTicket.js'
 
 function unauthorized(res) {
   return sendJson(res, 401, { error: 'Unauthorized' })
@@ -19,16 +20,22 @@ export async function handleJobRequest(req, res, runtime) {
   const url = new URL(req.url, 'http://localhost')
   const parts = routeParts(url.pathname)
 
-  // SSE 流:走 query token,EventSource 没法带 Authorization 头。
-  // 同时兼容已有 Authorization 头(给非浏览器 client/测试)。
+  // 一次性短 TTL ticket(C-P2.1):用 header token 换 60s 一次性 ticket,
+  // EventSource 用 ?ticket= 连接,避免把 7 天 session token 放 URL query。
+  if (req.method === 'POST' && url.pathname === '/api/jobs/stream-ticket') {
+    const userId = authenticateRequest(req)
+    if (!userId) return unauthorized(res)
+    const ticket = createStreamTicket(userId)
+    return sendJson(res, 201, { ticket, expiresIn: 60 })
+  }
+
+  // SSE 流:EventSource 没法带 Authorization 头,改用一次性短 TTL ticket(?ticket=)。
+  // 仍兼容 Authorization 头(给非浏览器 client/测试)。旧的 ?token= 已移除(避免长效 token 落日志)。
   if (req.method === 'GET' && url.pathname === '/api/jobs/stream') {
     let userId = authenticateRequest(req)
     if (!userId) {
-      const queryToken = url.searchParams.get('token')
-      if (queryToken) {
-        req.headers.authorization = `Bearer ${queryToken}`
-        userId = authenticateRequest(req)
-      }
+      const ticket = url.searchParams.get('ticket')
+      if (ticket) userId = consumeStreamTicket(ticket)
     }
     if (!userId) return unauthorized(res)
     res.writeHead(200, {

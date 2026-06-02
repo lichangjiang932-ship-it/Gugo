@@ -197,6 +197,9 @@ export function recoverInterruptedJobs(jobs = []) {
     .map((job) => ({ ...job, status: 'queued' }))
 }
 
+// ★ D6: job 进入这些终态事件后,从 jobUserCache 淘汰对应条目(防内存泄漏)。
+const TERMINAL_EVENT_TYPES = new Set(['completed', 'failed', 'cancelled', 'aborted'])
+
 export class JobRuntime {
   constructor({
     planner = buildInitialPlan,
@@ -240,6 +243,11 @@ export class JobRuntime {
       } catch (err) {
         console.error('[jobs] listener error:', err?.stack || err)
       }
+    }
+    // ★ D6: job 进入终态后从 jobUserCache 删除对应条目,修内存泄漏(原来只增不清)。
+    //   放在 dispatch 之后,保证本条终态事件仍能正确解析 owner。
+    if (jobId && TERMINAL_EVENT_TYPES.has(event.type)) {
+      this.jobUserCache.delete(jobId)
     }
   }
 

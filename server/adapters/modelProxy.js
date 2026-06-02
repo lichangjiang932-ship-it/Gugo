@@ -26,6 +26,7 @@ import {
   buildSessionsBlock,
 } from '../services/promptCompiler.js'
 import { attachVisionDescriptions, hasVisionAssistConfigured } from './visionAssist.js'
+import { logWarn } from '../utils/logger.js'
 
 // ★ #18: 消息格式 schema — 拒绝畸形 messages 入参,防 OpenAI 上游报 400 / 计费爆零
 const MESSAGE_SCHEMA = z.object({
@@ -738,9 +739,8 @@ export async function handleModelProxyRequest(req, res) {
           }
         }
       } catch (err) {
-        if (process.env.NODE_ENV !== 'production') {
-          console.warn('[agent] inject failed:', err?.message || err)
-        }
+        // D4: inject 失败不阻断 chat,但生产也要有可观测信号(原来仅 dev warn)。
+        logWarn('agent.inject', err, { userId: session?.user_id })
       }
 
       try {
@@ -793,9 +793,8 @@ export async function handleModelProxyRequest(req, res) {
           }
         }
       } catch (err) {
-        if (process.env.NODE_ENV !== 'production') {
-          console.warn('[memory] inject failed:', err?.message || err)
-        }
+        // D4: 记忆注入失败不阻断 chat,但生产也要有可观测信号(原来仅 dev warn)。
+        logWarn('memory.inject', err, { userId: session?.user_id })
       }
 
       const billingConfig = loadBillingConfig(getRuntimeEnv())

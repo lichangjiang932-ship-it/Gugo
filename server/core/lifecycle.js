@@ -21,6 +21,7 @@ import { initPlugins } from '../plugins/pluginRegistry.js'
 import { getEnabledIntegrationCredentials, listEnabledIntegrationCredentials } from '../services/integrationsStore.js'
 import { setVisionAssistResolver } from '../adapters/visionAssist.js'
 import { socialBridgeManager } from '../services/socialBridgeManager.js'
+import { warnShellTrust } from '../utils/bashGuard.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULT_PLUGIN_ROOT = path.resolve(__dirname, '../../plugins')
@@ -32,6 +33,8 @@ const SHUTDOWN_TIMEOUT_MS = 10_000
  * 返回值预留：未来 Manager 实例化后会从这里返回 ManagerRegistry。
  */
 export function bootstrap({ silent = process.env.NODE_ENV === 'production' } = {}) {
+  // ★ C-P1.3: shell 开启时打信任声明 warn(黑名单非安全边界)
+  warnShellTrust()
   try {
     seedSystemSkills()
   } catch (err) {

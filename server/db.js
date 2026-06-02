@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const DB_SCHEMA_VERSION = 14
+export const DB_SCHEMA_VERSION = 15
 
 const DEFAULT_DATA_DIR = path.join(process.cwd(), 'server-data')
 
@@ -83,6 +83,7 @@ function runMigrations(db) {
   if (getSchemaVersionInternal(db) < 12) migrateToV12(db)
   if (getSchemaVersionInternal(db) < 13) migrateToV13(db)
   if (getSchemaVersionInternal(db) < 14) migrateToV14(db)
+  if (getSchemaVersionInternal(db) < 15) migrateToV15(db)
   runReasonixMigrations(db)
 }
 
@@ -736,6 +737,93 @@ function migrateToV14(db) {
   setSchemaVersionInternal(db, 14)
 }
 
+/**
+ * V15 (E2/E4 数据一致性 + 工具权限 gate) —— 远端 main 已占 v7~v14，本批顺延为 V15。
+ *   - jobs.user_id 补 NOT NULL + REFERENCES users(id) ON DELETE CASCADE（计费核心链路）
+ *   - job_steps.parent_step_id 补索引 (E4)
+ *   - user_tool_permissions 表（功能补全：per-user 工具 gate）
+ *
+ * 注：E3（给 tool_audit/subagent_runs/subagents_custom/hooks/compaction_archive 补外键）
+ * 已撤回——这些表的 user_id 是既有弱引用契约，多处调用不建 user 行直写，强加 FK 会破坏契约。
+ *
+ * SQLite 无法用 ALTER TABLE 给现有表加外键/NOT NULL,必须「建新表→搬数据→换名」。
+ * 迁移**保留现有数据**:搬迁前先清理孤儿行。绝不 DELETE 全表。
+ */
+function migrateToV15(db) {
+  // 外键迁移期间必须临时关掉 foreign_keys,否则建表/改名过程中的中间态会触发约束。
+  db.pragma('foreign_keys = OFF')
+  const tx = db.transaction(() => {
+    rebuildJobsWithUserFk(db)
+    // E4: parent_step_id 自引用层级补索引
+    db.exec('CREATE INDEX IF NOT EXISTS idx_job_steps_parent ON job_steps(parent_step_id);')
+    // 功能补全: per-user 工具权限 gate(默认放行,仅存显式覆盖)
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS user_tool_permissions (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        tool_name TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, tool_name)
+      );
+      CREATE INDEX IF NOT EXISTS idx_user_tool_permissions_user ON user_tool_permissions(user_id);
+    `)
+    setSchemaVersionInternal(db, 15)
+  })
+  tx()
+  db.pragma('foreign_keys = ON')
+  // 迁移后做一次完整性自检(开发期暴露问题;生产仅 log)
+  const violations = db.pragma('foreign_key_check')
+  if (violations.length && process.env.NODE_ENV !== 'production') {
+    console.warn('[db] migrateToV15 后存在外键违规:', violations)
+  }
+}
+
+/**
+ * 重建 jobs 表:user_id 加 NOT NULL + 外键级联。先删孤儿 job(及其子表),保留有主 job。
+ */
+function rebuildJobsWithUserFk(db) {
+  if (!hasColumn(db, 'jobs', 'user_id')) {
+    // 理论上 v2 已加列;若没有则补一个裸列再继续(防御)。
+    db.exec('ALTER TABLE jobs ADD COLUMN user_id TEXT')
+  }
+  // 清理孤儿:user_id 为空或指向不存在的用户。级联会顺带清子表,但此刻 FK 关掉,手动清。
+  db.exec(`
+    DELETE FROM job_events WHERE job_id IN (
+      SELECT id FROM jobs WHERE user_id IS NULL OR user_id NOT IN (SELECT id FROM users)
+    );
+    DELETE FROM job_steps WHERE job_id IN (
+      SELECT id FROM jobs WHERE user_id IS NULL OR user_id NOT IN (SELECT id FROM users)
+    );
+    DELETE FROM job_artifacts WHERE job_id IN (
+      SELECT id FROM jobs WHERE user_id IS NULL OR user_id NOT IN (SELECT id FROM users)
+    );
+    DELETE FROM jobs WHERE user_id IS NULL OR user_id NOT IN (SELECT id FROM users);
+  `)
+  db.exec(`
+    CREATE TABLE jobs__v15 (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      prompt TEXT NOT NULL,
+      status TEXT NOT NULL,
+      progress INTEGER NOT NULL DEFAULT 0,
+      cancel_requested INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      started_at INTEGER,
+      finished_at INTEGER,
+      error TEXT
+    );
+    INSERT INTO jobs__v15 (id, user_id, title, prompt, status, progress, cancel_requested, created_at, updated_at, started_at, finished_at, error)
+      SELECT id, user_id, title, prompt, status, progress, cancel_requested, created_at, updated_at, started_at, finished_at, error FROM jobs;
+    DROP TABLE jobs;
+    ALTER TABLE jobs__v15 RENAME TO jobs;
+    CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs(status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_jobs_user_created ON jobs(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_jobs_user_status ON jobs(user_id, status);
+  `)
+}
+
 function initSchema(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
@@ -955,6 +1043,46 @@ export function deductUserCredits({ id, amount, now = Date.now() }) {
   )
   const result = stmt.run(amount, now, id, amount)
   return { changed: result.changes > 0, user: getUserById(id) }
+}
+
+/* ── User Tool Permissions (per-user 工具 gate) ── */
+
+/**
+ * 设置某用户对某工具的权限。enabled=false 表示显式禁用(默认放行,只存覆盖)。
+ */
+export function setUserToolPermission({ userId, toolName, enabled, now = Date.now() }) {
+  const db = getDb()
+  db.prepare(
+    `INSERT INTO user_tool_permissions (user_id, tool_name, enabled, updated_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(user_id, tool_name) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at`
+  ).run(userId, toolName, enabled ? 1 : 0, now)
+}
+
+/**
+ * 返回该用户的显式权限覆盖 map: { toolName: boolean }。只含显式设过的工具。
+ */
+export function getUserToolPermissions(userId) {
+  const db = getDb()
+  const rows = db
+    .prepare('SELECT tool_name, enabled FROM user_tool_permissions WHERE user_id = ?')
+    .all(userId)
+  const map = {}
+  for (const row of rows) map[row.tool_name] = !!row.enabled
+  return map
+}
+
+/**
+ * 工具是否对该用户放行。默认放行(无显式覆盖即 true);只有显式 enabled=0 才拒绝。
+ */
+export function isToolPermittedForUser(userId, toolName) {
+  if (!userId) return true // 无用户上下文(系统/匿名内部调用)不 gate
+  const db = getDb()
+  const row = db
+    .prepare('SELECT enabled FROM user_tool_permissions WHERE user_id = ? AND tool_name = ?')
+    .get(userId, toolName)
+  if (!row) return true
+  return !!row.enabled
 }
 
 /* ── Sessions (auth tokens) ── */

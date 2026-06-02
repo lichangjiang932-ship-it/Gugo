@@ -50,6 +50,7 @@ import { handleIntegrationsRequest } from './routes/integrationsRoutes.js'
 import { handleBridgeRequest } from './routes/bridgeRoutes.js'
 import { handleDeskRequest } from './routes/deskRoutes.js'
 import { handleMobileRequest } from './routes/mobileRoutes.js'
+import { handleToolPermissionsRequest } from './routes/toolPermissionRoutes.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -333,6 +334,11 @@ function createRouter(getEnv = getRuntimeEnv) {
   // Context compaction (feature 6)
   if (req.url?.startsWith('/api/compaction/')) {
     return handleCompactionRequest(req, res)
+  }
+
+  // Per-user 工具权限 gate(PermissionsDashboard 真 gate)
+  if (req.url?.startsWith('/api/tool-permissions')) {
+    return handleToolPermissionsRequest(req, res)
   }
 
   // Reasonix-inspired: 钉记忆 / TODO / effort / session meter

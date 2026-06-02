@@ -21,6 +21,8 @@ import { runProcessWithGroup } from '../utils/processGroup.js'
 import { bashLimiter, writeLimiter } from '../utils/rateLimiter.js'
 import { writeToolAudit } from '../utils/audit.js'
 import { checkBashCommandDanger } from '../utils/bashGuard.js'
+import { checkWorkspaceSize } from '../utils/workspaceSize.js'
+import { isToolPermittedForUser } from '../db.js'
 import { authenticateRequest } from '../middleware.js'
 import { readJson, sendJson } from '../utils.js'
 
@@ -41,6 +43,14 @@ function badReq(message, statusCode = 400) {
   const e = new Error(message)
   e.statusCode = statusCode
   return e
+}
+
+// per-user 工具 gate(功能补全):用户在权限中心关掉某工具后,后端入口也拒绝执行,
+// 不只靠前端不暴露(前端可被绕过)。userId 为空(系统/内部调用)不 gate。
+function assertToolPermitted(userId, toolName) {
+  if (userId && !isToolPermittedForUser(userId, toolName)) {
+    throw badReq(`工具 ${toolName} 已被该用户在权限中心关闭`, 403)
+  }
 }
 
 // 把任意 path 字符串解析到 WORKSPACE_ROOT 下的绝对路径.防 traversal + symlink 逃逸.
@@ -110,6 +120,7 @@ export async function readFileTool({ path: rawPath, offset = 0, limit = 0 }) {
 /* ── write_file ────────────────────────────────────────────── */
 
 export async function writeFileTool({ path: rawPath, content, userId = null }) {
+  assertToolPermitted(userId, 'write_file')
   // ★ M3.5:写类限流
   if (userId && !writeLimiter.tryConsume(userId, 'write')) {
     throw badReq('写文件限流:超过 120 次/分钟', 429)
@@ -123,6 +134,8 @@ export async function writeFileTool({ path: rawPath, content, userId = null }) {
   const full = resolveInWorkspace(rawPath, { allowMissing: true })
   fs.mkdirSync(path.dirname(full), { recursive: true })
   fs.writeFileSync(full, content, 'utf8')
+  // ★ C-P2.4: 轻量可观测 — 总大小超阈值仅 warn,不阻断
+  try { checkWorkspaceSize(getWorkspaceRoot()) } catch { /* 巡检失败不影响写入 */ }
   return { ok: true, path: toRelative(full), bytes }
 }
 
@@ -135,6 +148,7 @@ export async function editFileTool({
   replace_all = false,
   userId = null,
 }) {
+  assertToolPermitted(userId, 'edit_file')
   // ★ M3.5:写类限流
   if (userId && !writeLimiter.tryConsume(userId, 'write')) {
     throw badReq('编辑限流:超过 120 次/分钟', 429)
@@ -184,6 +198,7 @@ export async function editFileTool({
 /* ── bash_exec ─────────────────────────────────────────────── */
 
 export async function bashExecTool({ command, cwd: rawCwd, timeout_ms, userId = null }) {
+  assertToolPermitted(userId, 'bash_exec')
   if (!isShellEnabled()) {
     throw badReq('WORKSPACE_SHELL_ENABLED=1 未启用,无法执行 shell 命令', 403)
   }

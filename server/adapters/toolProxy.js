@@ -102,6 +102,7 @@ export async function assertSafeOutboundUrl(rawUrl) {
   // 主机名形如 IP 时直接判
   if (net.isIP(host)) {
     if (isUnsafeIp(host)) throw new Error('禁止访问内网 / loopback 地址')
+    target.lockedIp = host
     return target
   }
   // 域名:解析所有 A/AAAA,任何一个落在内网都拒绝 (防 DNS rebinding 把外网域名解析到内网)
@@ -117,6 +118,9 @@ export async function assertSafeOutboundUrl(rawUrl) {
       throw new Error(`目标域名解析到内网地址 ${r.address}`)
     }
   }
+  // ★ C-P2.2: 把已审核的第一条解析结果回填给调用方,fetchSafe 直接复用,
+  //   不再独立 dns.lookup 一次(消除审核与使用 IP 不一致的 rebinding 窗口)。
+  target.lockedIp = records[0]?.address || null
   return target
 }
 
@@ -201,12 +205,9 @@ async function fetchSafe({ url, method = 'GET', headers = {}, body, timeoutMs = 
   let current = url
   for (let i = 0; i <= maxRedirects; i += 1) {
     const target = await assertSafeOutboundUrl(current)
-    // 取第一条解析结果作为 lockedIp (assertSafeOutboundUrl 已经审核所有解析结果)
-    let lockedIp = null
-    if (!net.isIP(target.hostname)) {
-      const records = await dns.lookup(target.hostname, { all: true, verbatim: true })
-      lockedIp = records[0]?.address || null
-    }
+    // ★ C-P2.2: 复用 assertSafeOutboundUrl 已审核并返回的具体 IP,不再独立解析一次
+    //   (消除审核与使用之间的 DNS rebinding 窗口)。
+    const lockedIp = net.isIP(target.hostname) ? target.hostname : target.lockedIp || null
     const resp = await safeRequest({
       url: target.toString(),
       method,

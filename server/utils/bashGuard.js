@@ -1,8 +1,16 @@
 /**
  * bash_exec 危险命令拦截器。
  *
- * 这里不做"完整 sandbox"(那是 M4 系统级隔离的事),只挡明确的破坏性 / 数据外泄模式,
- * 防 prompt injection 一行 payload 把磁盘炸了或把密钥送出去。
+ * ⚠ 安全边界声明(C-P1.3):
+ *   这个黑名单**不是安全边界**,只是"防手滑 / 防 prompt-injection 一行 payload"的护栏。
+ *   它无法挡住有意绕过:变量拼接(`R=-rf; rm $R /`)、编码执行(`base64 -d | sh`)、
+ *   解释器外泄(`python3 -c "..."`)、命令替换(`$(printf '\x72\x6d')`)等都能平凡绕过——
+ *   黑名单注定补不全,不要把它当成沙箱。
+ *
+ *   真正的信任模型是:**开启 `WORKSPACE_SHELL_ENABLED=1` ≡ 完全信任能调用该接口的用户。**
+ *   该用户能在 server 进程权限下执行任意命令。若不信任用户,就不要开这个 env;
+ *   需要给不可信用户开 shell,必须上 OS 级隔离(容器 / nsjail / seccomp),而不是靠本文件。
+ *   启动期会由 warnShellTrust() 打一条醒目 warn 提醒运维这一点。
  *
  * 设计原则:
  *   - 黑名单而非白名单(白名单会过严,影响正常 dev 体验)
@@ -54,3 +62,25 @@ export function checkBashCommandDanger(command) {
 
 // 测试用
 export const _internals = { RULES }
+
+/**
+ * 当 WORKSPACE_SHELL_ENABLED=1 时返回一条信任声明 warn 文案,否则返回 null。
+ * 黑名单不是安全边界,开 shell = 完全信任用户(见文件头注释)。
+ */
+export function shellTrustWarning(env = process.env) {
+  if (env.WORKSPACE_SHELL_ENABLED !== '1') return null
+  return (
+    'WORKSPACE_SHELL_ENABLED=1: bash_exec 已开启。' +
+    '危险命令黑名单仅防手滑,不是安全边界——开启 shell 等同于完全信任能调用该接口的用户' +
+    '(可在 server 进程权限下执行任意命令)。不信任用户请勿开此 env,' +
+    '不可信场景须上 OS 级隔离(容器 / nsjail / seccomp)。'
+  )
+}
+
+/**
+ * 启动期调用:shell 开启时打一条醒目 warn 日志。
+ */
+export function warnShellTrust(env = process.env, logger = console) {
+  const msg = shellTrustWarning(env)
+  if (msg) logger.warn(`[bashGuard] ${msg}`)
+}
