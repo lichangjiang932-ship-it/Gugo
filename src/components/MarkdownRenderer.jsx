@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import rehypeHighlight from 'rehype-highlight'
+import { Check, Copy } from 'lucide-react'
 import FullscreenMediaModal from './FullscreenMediaModal.jsx'
 
 /**
@@ -27,6 +28,47 @@ const sanitizeSchema = {
   },
 }
 
+// 从 react-markdown 传进来的 children（字符串 / 元素 / 数组嵌套）里递归抽出纯文本，
+// 供代码块「复制」按钮使用。highlight.js 会把代码拆成一堆 <span>，所以要递归。
+function extractText(node) {
+  if (node == null || node === false) return ''
+  if (typeof node === 'string' || typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(extractText).join('')
+  if (typeof node === 'object' && node.props) return extractText(node.props.children)
+  return ''
+}
+
+// 代码块：在 <pre> 外层包一层 relative 容器，右上角常驻一键复制按钮。
+// 常驻（非 hover-only）以保证触屏可达；hover/focus 时加深以示可点。
+function CodeBlock({ children, ...props }) {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = () => {
+    const text = extractText(children)
+    if (!navigator.clipboard?.writeText) return
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1600)
+    }).catch(() => {})
+  }
+  return (
+    <div className="relative group/code my-2">
+      <button
+        type="button"
+        onClick={handleCopy}
+        aria-label={copied ? '已复制' : '复制代码'}
+        title={copied ? '已复制' : '复制代码'}
+        className="absolute top-2 right-2 z-10 inline-flex items-center gap-1 h-6 px-2 rounded border border-ink-fade/40 bg-paper/90 text-[11px] text-ink-soft opacity-70 hover:opacity-100 hover:text-ink hover:border-ink-fade focus-visible:opacity-100 transition-opacity"
+      >
+        {copied ? <Check className="w-3 h-3 text-ember" /> : <Copy className="w-3 h-3" />}
+        {copied ? '已复制' : '复制'}
+      </button>
+      <pre className="bg-paper-2 border border-ink-fade/30 rounded-md p-3 pr-14 overflow-x-auto text-sm" {...props}>
+        {children}
+      </pre>
+    </div>
+  )
+}
+
 export default function MarkdownRenderer({ children, className = '' }) {
   const [fullscreen, setFullscreen] = useState(null)
 
@@ -45,11 +87,9 @@ export default function MarkdownRenderer({ children, className = '' }) {
               {children}
             </a>
           ),
-          // 代码块容器
+          // 代码块容器（含右上角一键复制）
           pre: ({ children, ...props }) => (
-            <pre className="bg-paper-2 border border-ink-fade/30 rounded-md p-3 overflow-x-auto my-2 text-sm" {...props}>
-              {children}
-            </pre>
+            <CodeBlock {...props}>{children}</CodeBlock>
           ),
           // 内联代码
           code: ({ inline, className, children, ...props }) => {
