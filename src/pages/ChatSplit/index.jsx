@@ -421,6 +421,9 @@ export default function ChatSplit() {
               skillId,
               artifactType: initialArtifactType,
               artifactTitle: initialArtifactType ? taskName : undefined,
+              // ★ #1/#2: 标记本条进入流式态 → 点亮打字光标 + 让贴底用户跟手自动滚.
+              //   收尾/中断/失败三条路径都会清掉(见 finalize / catch).
+              streaming: true,
             },
           },
         })
@@ -619,6 +622,7 @@ export default function ChatSplit() {
             artifactDescription,
             artifactExplicit: !!toolArtifact,
             injectedMemoryIds: [...injectedMemoryIdSet],
+            streaming: false,
           },
         })
 
@@ -644,6 +648,7 @@ export default function ChatSplit() {
         abortCtrlRef.current = null
         if (err.message === '已停止生成') {
           // ★ FIX: 中断也要把任务清掉,不能继续显示 "running 10%"
+          dispatch({ type: 'UPDATE_LAST_MESSAGE_META', payload: { streaming: false } })
           dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: TASK_STATUS.CANCELLED, stepLabel: '已中断' } } })
           setTimeout(() => dispatch({ type: 'REMOVE_TASK', payload: taskId }), 3000)
           return
@@ -655,6 +660,7 @@ export default function ChatSplit() {
         })
         setLastFailedPrompt(content)
         dispatch({ type: 'APPEND_TO_LAST_MESSAGE', payload: buildChatFailureMessage(err.message) })
+        dispatch({ type: 'UPDATE_LAST_MESSAGE_META', payload: { streaming: false } })
         dispatch({ type: 'ADD_HISTORY', payload: { name: taskName, skill: skill?.name || '通用对话', status: HISTORY_STATUS.FAILED, detail: content.length > 60 ? `${content.slice(0, 60)}...` : content, state: `失败: ${err.message}`.slice(0, 80), date: Date.now() } })
         // ★ FIX: 失败时把同一个任务标记 failed (而非再 ADD 一条新的"running 15%"),5 秒后移除
         dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: TASK_STATUS.FAILED, stepLabel: '调用失败' } } })
