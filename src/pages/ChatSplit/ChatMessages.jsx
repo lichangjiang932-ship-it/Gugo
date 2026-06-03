@@ -452,6 +452,32 @@ export default function ChatMessages({
                       )}
                     </div>
                   )}
+                  {msg.role === 'assistant' && msg.meta?.failed && msg.meta?.type !== 'model_reply' && (
+                    <div className="mt-3 pt-2 border-t border-dashed border-ember/40 flex flex-wrap items-center gap-2 text-[11px]">
+                      <span className="text-ember">这条回复没能完成</span>
+                      <div className="flex-1" />
+                      {onRegenerateMessage && (
+                        <button
+                          onClick={() => onRegenerateMessage(msg.id)}
+                          className="inline-flex items-center gap-1 h-7 px-2.5 rounded-full border border-ember-line text-ember bg-ember-soft hover:bg-ember/20 transition-colors"
+                          title="重新生成这条回复"
+                        >
+                          <RefreshCw className="w-3 h-3" />
+                          重新生成
+                        </button>
+                      )}
+                      {onDeleteMessage && (
+                        <button
+                          onClick={() => onDeleteMessage(msg.id)}
+                          className="inline-flex items-center gap-1 text-ink-fade hover:text-red-500 transition-colors"
+                          title="删除本条"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          删除
+                        </button>
+                      )}
+                    </div>
+                  )}
                   {msg.role === 'assistant' && msg.meta?.type === 'context_summary' && (
                     <div className="mt-3 pt-2 border-t border-dashed border-ink-fade/40 text-[11px] text-ink-fade">
                       <CompactionPill
