@@ -25,6 +25,7 @@ import { checkWorkspaceSize } from '../utils/workspaceSize.js'
 import { isToolPermittedForUser } from '../db.js'
 import { authenticateRequest } from '../middleware.js'
 import { readJson, sendJson } from '../utils.js'
+import { resolveAuthorizedLocalPath } from '../services/localFileAccessService.js'
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024 // 5 MB read/write upper bound
 const SHELL_DEFAULT_TIMEOUT_MS = 60 * 1000
@@ -51,6 +52,13 @@ function assertToolPermitted(userId, toolName) {
   if (userId && !isToolPermittedForUser(userId, toolName)) {
     throw badReq(`工具 ${toolName} 已被该用户在权限中心关闭`, 403)
   }
+}
+
+function resolveForFileTool(rawPath, { userId = null, write = false, allowMissing = false } = {}) {
+  if (!userId && !isFsEnabled()) {
+    throw badReq('WORKSPACE_FS_ENABLED=1 未启用,无法访问文件', 403)
+  }
+  return resolveAuthorizedLocalPath({ userId, rawPath, write, allowMissing })
 }
 
 // 把任意 path 字符串解析到 WORKSPACE_ROOT 下的绝对路径.防 traversal + symlink 逃逸.
@@ -93,9 +101,9 @@ function toRelative(absPath) {
 
 /* ── read_file ─────────────────────────────────────────────── */
 
-export async function readFileTool({ path: rawPath, offset = 0, limit = 0 }) {
-  if (!isFsEnabled()) throw badReq('WORKSPACE_FS_ENABLED=1 未启用,无法读取文件', 403)
-  const full = resolveInWorkspace(rawPath)
+export async function readFileTool({ path: rawPath, offset = 0, limit = 0, userId = null }) {
+  const resolved = resolveForFileTool(rawPath, { userId })
+  const full = resolved.fullPath
   const stat = fs.statSync(full)
   if (stat.isDirectory()) throw badReq('路径是目录,不是文件', 400)
   if (stat.size > MAX_FILE_BYTES) {
@@ -108,12 +116,49 @@ export async function readFileTool({ path: rawPath, offset = 0, limit = 0 }) {
   const slice = l > 0 ? lines.slice(o, o + l) : lines.slice(o)
   return {
     ok: true,
-    path: toRelative(full),
+    path: resolved.displayPath,
+    scope: resolved.source,
     size: stat.size,
     totalLines: lines.length,
     offset: o,
     returnedLines: slice.length,
     content: slice.join('\n'),
+  }
+}
+
+/* ── list_directory ───────────────────────────────────────── */
+
+export async function listDirectoryTool({ path: rawPath, limit = 200, userId = null }) {
+  const resolved = resolveForFileTool(rawPath, { userId })
+  const full = resolved.fullPath
+  const stat = fs.statSync(full)
+  if (!stat.isDirectory()) throw badReq('路径不是文件夹', 400)
+  const maxEntries = Math.min(Math.max(Number(limit) || 200, 1), 500)
+  const allEntries = fs.readdirSync(full, { withFileTypes: true })
+    .map((entry) => {
+      const entryPath = path.join(full, entry.name)
+      let entryStat = null
+      try { entryStat = fs.statSync(entryPath) } catch { /* inaccessible entry */ }
+      return {
+        name: entry.name,
+        type: entry.isDirectory() ? 'directory' : entry.isFile() ? 'file' : entry.isSymbolicLink() ? 'symlink' : 'other',
+        size: entryStat?.isFile() ? entryStat.size : null,
+        modifiedAt: entryStat?.mtimeMs ? Math.round(entryStat.mtimeMs) : null,
+      }
+    })
+    .sort((a, b) => {
+      if (a.type === b.type) return a.name.localeCompare(b.name)
+      if (a.type === 'directory') return -1
+      if (b.type === 'directory') return 1
+      return a.name.localeCompare(b.name)
+    })
+  return {
+    ok: true,
+    path: resolved.displayPath,
+    scope: resolved.source,
+    total: allEntries.length,
+    truncated: allEntries.length > maxEntries,
+    entries: allEntries.slice(0, maxEntries),
   }
 }
 
@@ -125,18 +170,20 @@ export async function writeFileTool({ path: rawPath, content, userId = null }) {
   if (userId && !writeLimiter.tryConsume(userId, 'write')) {
     throw badReq('写文件限流:超过 120 次/分钟', 429)
   }
-  if (!isFsEnabled()) throw badReq('WORKSPACE_FS_ENABLED=1 未启用,无法写入文件', 403)
   if (typeof content !== 'string') throw badReq('content 必须是字符串')
   const bytes = Buffer.byteLength(content, 'utf8')
   if (bytes > MAX_FILE_BYTES) {
     throw badReq(`内容过大(${bytes} 字节,上限 ${MAX_FILE_BYTES})`, 413)
   }
-  const full = resolveInWorkspace(rawPath, { allowMissing: true })
+  const resolved = resolveForFileTool(rawPath, { userId, write: true, allowMissing: true })
+  const full = resolved.fullPath
   fs.mkdirSync(path.dirname(full), { recursive: true })
   fs.writeFileSync(full, content, 'utf8')
   // ★ C-P2.4: 轻量可观测 — 总大小超阈值仅 warn,不阻断
-  try { checkWorkspaceSize(getWorkspaceRoot()) } catch { /* 巡检失败不影响写入 */ }
-  return { ok: true, path: toRelative(full), bytes }
+  if (resolved.source === 'workspace') {
+    try { checkWorkspaceSize(getWorkspaceRoot()) } catch { /* 巡检失败不影响写入 */ }
+  }
+  return { ok: true, path: resolved.displayPath, scope: resolved.source, bytes }
 }
 
 /* ── edit_file (字符串精确替换) ────────────────────────────── */
@@ -153,7 +200,6 @@ export async function editFileTool({
   if (userId && !writeLimiter.tryConsume(userId, 'write')) {
     throw badReq('编辑限流:超过 120 次/分钟', 429)
   }
-  if (!isFsEnabled()) throw badReq('WORKSPACE_FS_ENABLED=1 未启用,无法编辑文件', 403)
   if (typeof old_string !== 'string' || old_string.length === 0) {
     throw badReq('old_string 必填且不能为空')
   }
@@ -163,7 +209,8 @@ export async function editFileTool({
   if (old_string === new_string) {
     throw badReq('old_string 与 new_string 相同,没有改动')
   }
-  const full = resolveInWorkspace(rawPath)
+  const resolved = resolveForFileTool(rawPath, { userId, write: true })
+  const full = resolved.fullPath
   const stat = fs.statSync(full)
   if (stat.size > MAX_FILE_BYTES) {
     throw badReq(`文件过大(${stat.size} 字节,上限 ${MAX_FILE_BYTES})`, 413)
@@ -189,7 +236,8 @@ export async function editFileTool({
   fs.writeFileSync(full, next, 'utf8')
   return {
     ok: true,
-    path: toRelative(full),
+    path: resolved.displayPath,
+    scope: resolved.source,
     replacedCount,
     deltaBytes: Buffer.byteLength(next, 'utf8') - Buffer.byteLength(orig, 'utf8'),
   }
@@ -311,7 +359,8 @@ export async function handleFsShellRequest(req, res) {
     // ★ P0:透传 userId 让 audit 能记是谁干的
     const bodyWithUser = { ...body, userId: req.userId }
     let result
-    if (url.startsWith('/api/tools/fs/read')) result = await readFileTool(bodyWithUser)
+    if (url.startsWith('/api/tools/fs/list')) result = await listDirectoryTool(bodyWithUser)
+    else if (url.startsWith('/api/tools/fs/read')) result = await readFileTool(bodyWithUser)
     else if (url.startsWith('/api/tools/fs/write')) result = await writeFileTool(bodyWithUser)
     else if (url.startsWith('/api/tools/fs/edit')) result = await editFileTool(bodyWithUser)
     else if (url.startsWith('/api/tools/shell/exec')) result = await bashExecTool(bodyWithUser)
@@ -328,6 +377,7 @@ export async function handleFsShellRequest(req, res) {
 export async function dispatchFsShellTool(name, args, { userId = null } = {}) {
   const argsWithUser = userId ? { ...args, userId } : args
   switch (name) {
+    case 'list_directory': return listDirectoryTool(argsWithUser)
     case 'read_file': return readFileTool(argsWithUser)
     case 'write_file': return writeFileTool(argsWithUser)
     case 'edit_file': return editFileTool(argsWithUser)
@@ -341,12 +391,27 @@ export const FS_SHELL_TOOL_SPECS = [
   {
     type: 'function',
     function: {
-      name: 'read_file',
-      description: '读取 workspace 内的文件全文(或指定行区间).path 相对 workspace 或绝对路径,必须在 workspace 内.超过 5MB 会拒绝.',
+      name: 'list_directory',
+      description: '列出工作区或用户已授权本地文件夹中的内容。额外授权范围必须使用绝对路径，最多返回 500 项。',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: '文件路径,相对 workspace 或绝对(须在 workspace 内)' },
+          path: { type: 'string', description: '文件夹路径。可使用工作区相对路径或已授权的绝对路径。' },
+          limit: { type: 'integer', description: '最多返回多少项，默认 200，最大 500。' },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_file',
+      description: '读取工作区或用户已授权本地范围内的 UTF-8 文件全文（或指定行区间）。额外授权范围请使用绝对路径，超过 5MB 会拒绝。',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: '工作区相对路径，或用户已授权范围内的绝对路径。' },
           offset: { type: 'integer', description: '起始行号(从 0),可选' },
           limit: { type: 'integer', description: '读取行数,0 表示读到末尾' },
         },

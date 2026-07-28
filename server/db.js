@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const DB_SCHEMA_VERSION = 15
+export const DB_SCHEMA_VERSION = 18
 
 const DEFAULT_DATA_DIR = path.join(process.cwd(), 'server-data')
 
@@ -69,6 +69,7 @@ function runMigrations(db) {
   // 导致 v3 的 ALTER TABLE 永远不会重跑，setUserPassword 会抛 "no such column: password_hash"。
   // 这里独立于 schema_version 检查，缺什么列就补什么列，重复执行安全。
   ensureUserPasswordColumns(db)
+  ensureUserToolPermissionsTable(db)
   const version = getSchemaVersionInternal(db)
   if (version < 2) migrateToV2(db)
   if (getSchemaVersionInternal(db) < 3) migrateToV3(db)
@@ -84,7 +85,24 @@ function runMigrations(db) {
   if (getSchemaVersionInternal(db) < 13) migrateToV13(db)
   if (getSchemaVersionInternal(db) < 14) migrateToV14(db)
   if (getSchemaVersionInternal(db) < 15) migrateToV15(db)
+  if (getSchemaVersionInternal(db) < 16) migrateToV16(db)
+  if (getSchemaVersionInternal(db) < 17) migrateToV17(db)
+  if (getSchemaVersionInternal(db) < 18) migrateToV18(db)
   runReasonixMigrations(db)
+}
+
+function ensureUserToolPermissionsTable(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS user_tool_permissions (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      tool_name TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (user_id, tool_name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_user_tool_permissions_user
+      ON user_tool_permissions(user_id);
+  `)
 }
 
 /**
@@ -776,6 +794,94 @@ function migrateToV15(db) {
   if (violations.length && process.env.NODE_ENV !== 'production') {
     console.warn('[db] migrateToV15 后存在外键违规:', violations)
   }
+}
+
+/**
+ * V16: user-scoped OpenAI-compatible model providers.
+ * Secrets stay server-side; API responses only expose their presence.
+ */
+function migrateToV16(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS model_providers (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      provider_key TEXT NOT NULL,
+      label TEXT NOT NULL,
+      base_url TEXT NOT NULL,
+      secret_json TEXT NOT NULL,
+      headers_json TEXT NOT NULL DEFAULT '{}',
+      models_json TEXT NOT NULL,
+      default_model TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      is_default INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      UNIQUE(user_id, provider_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_model_providers_user
+      ON model_providers(user_id, enabled, provider_key);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_model_providers_one_default
+      ON model_providers(user_id) WHERE is_default = 1;
+  `)
+  setSchemaVersionInternal(db, 16)
+}
+
+/** V17: accept the current MCP Streamable HTTP transport name. */
+function migrateToV17(db) {
+  db.pragma('foreign_keys = OFF')
+  const tx = db.transaction(() => {
+    db.exec(`
+      CREATE TABLE mcp_servers__v17 (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        transport TEXT NOT NULL CHECK (transport IN ('stdio','sse','http')),
+        command TEXT,
+        args_json TEXT,
+        env_json TEXT,
+        cwd TEXT,
+        url TEXT,
+        headers_json TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        auto_approve_json TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO mcp_servers__v17
+        SELECT id,user_id,name,transport,command,args_json,env_json,cwd,url,headers_json,enabled,auto_approve_json,created_at,updated_at
+        FROM mcp_servers;
+      DROP TABLE mcp_servers;
+      ALTER TABLE mcp_servers__v17 RENAME TO mcp_servers;
+      CREATE INDEX IF NOT EXISTS idx_mcp_servers_user ON mcp_servers(user_id, enabled);
+    `)
+    setSchemaVersionInternal(db, 17)
+  })
+  tx()
+  db.pragma('foreign_keys = ON')
+}
+
+/** V18: user-approved local file and folder access. */
+function migrateToV18(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS local_file_access_settings (
+      user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      all_files_enabled INTEGER NOT NULL DEFAULT 0,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS local_file_grants (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      root_path TEXT NOT NULL,
+      resource_type TEXT NOT NULL CHECK (resource_type IN ('file','directory')),
+      access_mode TEXT NOT NULL CHECK (access_mode IN ('read_only','read_write')),
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      UNIQUE(user_id, root_path)
+    );
+    CREATE INDEX IF NOT EXISTS idx_local_file_grants_user
+      ON local_file_grants(user_id, created_at);
+  `)
+  setSchemaVersionInternal(db, 18)
 }
 
 /**
