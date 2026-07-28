@@ -189,6 +189,7 @@ async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_
       messages: currentMessages,
       tools,
       signal,
+      userId,
     })
 
     const text = response?.content || ''
@@ -239,6 +240,7 @@ async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_
     messages: currentMessages,
     tools, // 仍然传入 tools 但不期望模型再调
     signal,
+    userId,
     toolChoice: 'none', // 强制不调工具
   })
   return finalResponse?.content || '(工具循环已达上限)'
@@ -344,7 +346,7 @@ export async function runSubagent({
 
     const resultText = tools?.length
       ? await subagentToolsLoop({ messages, tools, signal, userId })
-      : await callBackgroundModel({ modelName, signal, messages })
+      : await callBackgroundModel({ modelName, signal, messages, userId })
 
     trace.push({ type: 'done', at: now() })
     return updateRun({ id, userId, status: 'completed', resultText, trace })

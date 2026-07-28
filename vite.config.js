@@ -27,6 +27,12 @@ import { handleBridgeRequest } from './server/routes/bridgeRoutes.js'
 import { handleReasonixRequest } from './server/routes/reasonixRoutes.js'
 import { handleNotificationRequest } from './server/routes/notificationRoutes.js'
 import { handleSessionRequest } from './server/routes/sessionRoutes.js'
+import { handleBrowserRequest } from './server/routes/browserRoutes.js'
+import { handleConnectorRequest } from './server/routes/connectorRoutes.js'
+import { handleModelProviderRequest } from './server/routes/modelProviderRoutes.js'
+import { handleMobileRequest } from './server/routes/mobileRoutes.js'
+import { handleMcpServerRequest } from './server/mcp/mcpServer.js'
+import { handleLocalFileAccessRequest } from './server/routes/localFileAccessRoutes.js'
 
 function authBillingPlugin() {
   return {
@@ -53,12 +59,36 @@ function fallbackApiPlugin() {
     name: 'local-fallback-api',
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
+        if (req.url === '/mcp' || req.url?.startsWith('/mcp?')) {
+          handleMcpServerRequest(req, res)
+          return
+        }
         if (req.url === '/api/health') {
           healthCheck(req, res)
           return
         }
         if (req.url?.startsWith('/api/system/diagnostics')) {
           handleSystemDiagnosticsRequest(req, res)
+          return
+        }
+        if (req.url?.startsWith('/api/browser/')) {
+          handleBrowserRequest(req, res)
+          return
+        }
+        if (req.url?.startsWith('/api/connectors/')) {
+          handleConnectorRequest(req, res)
+          return
+        }
+        if (req.url?.startsWith('/api/local-files')) {
+          handleLocalFileAccessRequest(req, res)
+          return
+        }
+        if (req.url?.startsWith('/api/model/providers')) {
+          handleModelProviderRequest(req, res)
+          return
+        }
+        if (req.url?.startsWith('/api/mobile/')) {
+          handleMobileRequest(req, res)
           return
         }
         if (req.url?.startsWith('/api/jobs')) {

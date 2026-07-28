@@ -24,14 +24,12 @@ export const ROUTE_READINESS = Object.freeze({
   '/settings': 'stable',      // SettingsView
   '/memory': 'stable',        // MemoryView
   '/desk': 'stable',          // DeskView
-  '/mobile-keys': 'stable',   // MobileKeysView
   '/agents': 'stable',        // AgentList
   '/channels': 'stable',      // ChannelsPage
-  '/cron': 'stable',          // CronJobsPage
+  '/access': 'stable',        // AccessView
+  '/mcp': 'stable',           // McpServersView
 
   // ---- preview: 主流程能跑，但 i18n / UX 还粗糙 ----
-  '/hooks': 'preview',        // HooksView：英文/硬编码中文混用，未走 useT
-  '/mcp': 'preview',          // McpServersView：未走 useT，表单原生 input
   '/reasonix': 'preview',     // ReasonixWorkspace：硬编码 zh，记忆/TODO 雏形
 })
 

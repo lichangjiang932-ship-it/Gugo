@@ -46,12 +46,10 @@ test('App.jsx 中声明的主要业务路由全部已登记 readiness', () => {
     '/settings',
     '/memory',
     '/desk',
-    '/mobile-keys',
     '/agents',
     '/channels',
-    '/hooks',
+    '/access',
     '/mcp',
-    '/cron',
     '/reasonix',
   ]
   for (const p of expected) {
@@ -64,7 +62,7 @@ test('App.jsx 中声明的主要业务路由全部已登记 readiness', () => {
 
 test('getBannerKindForPath：preview / wip 返回级别，stable / 未知 返回 null', () => {
   // preview
-  assert.equal(getBannerKindForPath('/hooks'), 'preview')
+  assert.equal(getBannerKindForPath('/reasonix'), 'preview')
   // stable
   assert.equal(getBannerKindForPath('/chat'), null)
   assert.equal(getBannerKindForPath('/settings'), null)
@@ -79,7 +77,7 @@ test('getBannerKindForPath：preview / wip 返回级别，stable / 未知 返回
 
 test('getBadgeLabelForPath：返回与等级对应的文案 / null', () => {
   assert.equal(getBadgeLabelForPath('/chat'), null)        // stable
-  assert.equal(getBadgeLabelForPath('/hooks'), 'Preview')  // preview
+  assert.equal(getBadgeLabelForPath('/reasonix'), 'Preview')  // preview
   assert.equal(getBadgeLabelForPath('/nowhere'), null)     // 未注册
 })
 

@@ -52,7 +52,7 @@ export const SERVER_TOOL_SPECS = [
           title: { type: 'string', description: '演示文稿标题(用于封面大字 + 文件名)' },
           subtitle: { type: 'string', description: '封面副标题(可选,一句话提示主题)' },
           theme: { type: 'string', enum: ['noir', 'paper', 'ocean', 'forest'], description: '色系: noir 编辑暗(默认科技/通用) / paper 暖纸(文档/品牌) / ocean 深蓝(金融/咨询) / forest 墨绿(可持续/医疗)' },
-          brand: { type: 'string', description: '页脚 brand 字(可选,默认 Your Model Atelier)' },
+          brand: { type: 'string', description: '页脚 brand 字(可选,默认 Gugo)' },
           slides: {
             type: 'array',
             items: {

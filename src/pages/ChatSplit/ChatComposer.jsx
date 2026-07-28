@@ -1,9 +1,9 @@
 import { useRef, useEffect, useState } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import FullscreenMediaModal from '../../components/FullscreenMediaModal.jsx'
+import LocalFilesModal from '../../components/LocalFilesModal.jsx'
 import SlashAutocomplete from '../../components/SlashAutocomplete.jsx'
 import { useT } from '../../i18n/I18nProvider.jsx'
-import { readDismissed, writeDismissed } from '../../lib/modeHintStorage.js'
 import {
   Paperclip,
   Mic,
@@ -42,7 +42,6 @@ export default function ChatComposer({
   input,
   setInput,
   onSend,
-  agentMode = 'chat',
   attachments,
   setAttachments,
   showSlashMenu,
@@ -64,34 +63,11 @@ export default function ChatComposer({
   onPickSlashCommand,
   onCompleteSlashCommand,
 }) {
+  const { t } = useT()
   const textareaRef = useRef(null)
   const fileInputRef = useRef(null)
   const activeSkillToken = getActiveSkillToken(input, skills, slashRegistry)
   const composerText = activeSkillToken ? activeSkillToken.rest : input
-  const { t } = useT()
-
-  // T11: plan/code 模式提示气泡 — 用户可点"之后不再提示"，写 localStorage。
-  // 初始值从 localStorage 读，点击 dismiss 时同步更新本组件 state + storage。
-  const [planDismissed, setPlanDismissed] = useState(() => readDismissed('plan'))
-  const [codeDismissed, setCodeDismissed] = useState(() => readDismissed('code'))
-  const showModeHint =
-    (agentMode === 'plan' && !planDismissed) ||
-    (agentMode === 'code' && !codeDismissed)
-  const modeHintText = agentMode === 'plan'
-    ? t('chat.modeHint.plan')
-    : agentMode === 'code'
-    ? t('chat.modeHint.code')
-    : ''
-  const handleDismissHint = () => {
-    if (agentMode === 'plan') {
-      writeDismissed('plan')
-      setPlanDismissed(true)
-    } else if (agentMode === 'code') {
-      writeDismissed('code')
-      setCodeDismissed(true)
-    }
-  }
-
   // ★ #21: input 被外部清空 (发送后) 也回弹到 1 行高度
   useEffect(() => {
     const ta = textareaRef.current
@@ -126,6 +102,7 @@ export default function ChatComposer({
   }, [setInput, skills, slashRegistry])
 
   const [fullscreenSrc, setFullscreenSrc] = useState(null)
+  const [showLocalFiles, setShowLocalFiles] = useState(false)
   // 拖放上传：dragCounter 计数解决移到子元素时 dragleave 误触发导致高亮闪烁。
   const [isDraggingFile, setIsDraggingFile] = useState(false)
   const dragCounter = useRef(0)
@@ -231,24 +208,16 @@ export default function ChatComposer({
               </button>
             )
           })}
-        </div>
-
-        {/* T11: plan/code 模式提示气泡（可关闭并记忆） */}
-        {showModeHint && (
-          <div
-            role="status"
-            className="flex items-center justify-between gap-2 px-3 py-1.5 rounded-md border border-dashed border-ink-fade/50 bg-paper-2 text-xs text-ink-fade"
+          <button
+            type="button"
+            onClick={() => setShowLocalFiles(true)}
+            className="inline-flex items-center h-[22px] px-2.5 rounded-full text-xs border border-ink-fade/60 text-ink-soft hover:border-ink-fade hover:bg-paper-2 transition-colors"
+            data-testid="local-files-chat-action"
           >
-            <span className="truncate">{modeHintText}</span>
-            <button
-              type="button"
-              onClick={handleDismissHint}
-              className="shrink-0 text-[11px] text-ink-soft hover:text-ink underline-offset-2 hover:underline"
-            >
-              {t('chat.modeHint.dismiss')}
-            </button>
-          </div>
-        )}
+            <FolderOpen className="w-3.5 h-3.5 mr-1" />
+            {t('localFiles.chatAction')}
+          </button>
+        </div>
 
         <div className="border border-ink/70 rounded-md bg-paper flex flex-col justify-between min-h-[80px] p-3.5">
           {attachments.length > 0 && (
@@ -413,6 +382,7 @@ export default function ChatComposer({
           onClose={() => setFullscreenSrc(null)}
         />
       )}
+      {showLocalFiles && <LocalFilesModal onClose={() => setShowLocalFiles(false)} />}
     </div>
   )
 }

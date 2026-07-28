@@ -22,6 +22,9 @@ import { getEnabledIntegrationCredentials, listEnabledIntegrationCredentials } f
 import { setVisionAssistResolver } from '../adapters/visionAssist.js'
 import { socialBridgeManager } from '../services/socialBridgeManager.js'
 import { warnShellTrust } from '../utils/bashGuard.js'
+import { registerBrowserTools } from '../services/browserTools.js'
+import { registerConnectorTools } from '../services/connectorTools.js'
+import { shutdownBrowsers } from '../adapters/browserAutomation.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULT_PLUGIN_ROOT = path.resolve(__dirname, '../../plugins')
@@ -35,6 +38,8 @@ const SHUTDOWN_TIMEOUT_MS = 10_000
 export function bootstrap({ silent = process.env.NODE_ENV === 'production' } = {}) {
   // ★ C-P1.3: shell 开启时打信任声明 warn(黑名单非安全边界)
   warnShellTrust()
+  registerBrowserTools()
+  registerConnectorTools()
   try {
     seedSystemSkills()
   } catch (err) {
@@ -93,6 +98,7 @@ export function gracefulShutdown(server, { silent = process.env.NODE_ENV === 'pr
     try { closeCronScheduler() } catch { /* ignore */ }
     try { closeJobRuntime() } catch { /* ignore */ }
     try { socialBridgeManager.stopAll() } catch { /* ignore */ }
+    try { shutdownBrowsers() } catch { /* ignore */ }
     try { shutdownMcpAll() } catch { /* ignore */ }
     try { closeDb() } catch { /* ignore */ }
     if (!silent) logger.info('[lifecycle] db closed')

@@ -5,7 +5,6 @@ import {
   AlertTriangle,
   Bell,
   BookOpen,
-  CalendarClock,
   Check,
   CheckCircle2,
   Download,
@@ -16,6 +15,7 @@ import {
   ListChecks,
   MessageSquare,
   Mic,
+  Monitor,
   Moon,
   Plug,
   RefreshCw,
@@ -25,9 +25,7 @@ import {
   Trash2,
   Upload,
   Users,
-  Webhook,
   Zap,
-  MonitorSmartphone,
 } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
 import IntegrationsPanel from '../components/IntegrationsPanel.jsx'
@@ -43,9 +41,11 @@ import {
 import {
   resolveSettingsNavFromSearch,
   SETTINGS_TAB_ACCOUNT,
+  SETTINGS_TAB_MODELS,
   shouldPromptPasswordSetup,
 } from '../lib/settingsNavigation.js'
 import { getSystemDiagnostics, testModelEndpoint } from '../lib/modelClient.js'
+import ModelProvidersPanel from '../components/ModelProvidersPanel.jsx'
 import {
   wrapSessionsExport,
   wrapSettingsExport,
@@ -54,14 +54,8 @@ import {
   SCHEMA_VERSION,
 } from '../store/exportSchema.js'
 
-const SETTINGS_NAV = ['功能入口', '系统诊断', '账户', '权限中心', '工具', '集成', '外观', '快捷键', '数据 & 导出']
+const SETTINGS_NAV = ['功能入口', '模型', '账户', '权限中心', '工具', '集成', '外观', '系统诊断', '数据 & 导出']
 const ACCENT_COLORS = ['#E86A3C', '#2E8FA3', '#A5C97A', '#D4A4FF']
-
-const SHORTCUTS = [
-  { category: '通用', items: [{ name: '新建对话', keys: ['Alt', 'N'] }, { name: '打开设置', keys: ['Alt', ','] }] },
-  { category: '对话', items: [{ name: '发送消息', keys: ['Enter'] }, { name: '换行', keys: ['Shift', 'Enter'] }, { name: '清空当前会话', keys: ['Alt', 'L'] }] },
-  { category: '导航', items: [{ name: '返回对话', keys: ['Esc'] }] },
-]
 
 const PERM_ICONS = {
   mic: Mic,
@@ -184,13 +178,13 @@ export default function SettingsView() {
   const navLabel = (item) => {
     switch (item) {
       case '功能入口': return '功能入口'
+      case '模型': return t('modelProviders.navTitle')
       case '系统诊断': return t('settings.systemDiagnostics')
       case '账户': return t('settings.account')
       case '权限中心': return t('nav.permissions')
       case '工具': return t('settings.tools')
       case '集成': return t('settings.integrations')
       case '外观': return t('settings.appearance')
-      case '快捷键': return t('settings.shortcuts')
       case '数据 & 导出': return t('settings.dataExport')
       default: return item
     }
@@ -306,6 +300,27 @@ export default function SettingsView() {
     [state.permissions]
   )
 
+  function renderModels() {
+    const model = diagnostics?.model
+    return (
+      <section className="flex flex-col gap-5 animate-float-up">
+        <div>
+          <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">MODEL PROVIDERS</span>
+          <h1 className="font-hand text-[28px] text-ink mt-1.5">{t('modelProviders.navTitle')}</h1>
+          <p className="text-sm text-ink-soft mt-1">{t('modelProviders.navSubtitle')}</p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <Info label="当前默认模型" value={model?.modelName || '尚未配置'} />
+          <Info label="Base URL" value={model?.baseUrlMasked || '尚未配置'} />
+          <Info label="连接状态" value={model?.configured ? '配置可用' : '等待配置'} />
+        </div>
+
+        <ModelProvidersPanel onChanged={() => refreshDiagnostics()} />
+      </section>
+    )
+  }
+
   function renderDiagnostics() {
     const model = diagnostics?.model
     const endpoint = diagnostics?.endpoint
@@ -348,7 +363,7 @@ export default function SettingsView() {
         <SettingsGroup title="模型服务">
           <div className="flex flex-wrap gap-2">
             <StatusPill ok={model?.configured} label={model?.configured ? '已配置' : '未配置'} />
-            <StatusPill ok={model?.apiKeyConfigured} label={model?.apiKeyConfigured ? 'API Key 已配置' : '缺少 API Key'} />
+            <StatusPill ok={model?.apiKeyConfigured ? true : null} label={model?.apiKeyConfigured ? 'API Key 已配置' : 'API Key 未设置（本地模型可用）'} />
             <StatusPill ok={endpoint?.checked ? endpoint.ok : null} label={endpoint?.checked ? (endpoint.ok ? '端点可达' : '端点异常') : '未探测端点'} />
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -731,12 +746,9 @@ export default function SettingsView() {
       { path: '/task', icon: ListChecks, title: t('nav.task'), desc: '后台任务、Artifacts 与运行记录。' },
       { path: '/memory', icon: BookOpen, title: t('nav.memory'), desc: '长期记忆、置顶记忆与 Agent 关联。' },
       { path: '/desk', icon: BookOpen, title: t('nav.desk') || '书桌', desc: '随手便笺、灵感、TODO；自动保存、置顶。' },
-      { path: '/mobile-keys', icon: MonitorSmartphone, title: t('nav.mobileKeys') || '手机入口', desc: '生成访问钥匙，在手机/局域网打开 /mobile.html。' },
-      { path: '/agents', icon: Users, title: t('nav.agents'), desc: '角色、人格、技能和角色卡管理。' },
+      { path: '/agents', icon: Users, title: '人物与性格', desc: '集中管理人物、性格提示词、技能和角色卡；聊天主页不再重复显示。' },
       { path: '/channels', icon: Hash, title: t('nav.channels'), desc: '多 Agent 频道与协作消息流。' },
       { path: '/mcp', icon: Plug, title: t('nav.mcp'), desc: 'MCP 服务、工具、资源和 prompts。' },
-      { path: '/hooks', icon: Webhook, title: t('nav.hooks'), desc: '事件 Hooks、规则和自动化扩展点。' },
-      { path: '/cron', icon: CalendarClock, title: t('nav.cron'), desc: 'Cron、Heartbeat 和定时执行。' },
       { path: '/history', icon: History, title: t('nav.history'), desc: '运行历史、生成记录和可追溯结果。' },
     ]
 
@@ -849,7 +861,7 @@ export default function SettingsView() {
             {[
               { key: 'dark', label: '深色', icon: Moon },
               { key: 'light', label: '浅色', icon: Sun },
-              { key: 'system', label: '跟随系统', icon: MonitorSmartphone },
+              { key: 'system', label: '跟随系统', icon: Monitor },
             ].map(({ key, label, icon: Icon }) => (
               <button
                 key={key}
@@ -921,7 +933,13 @@ export default function SettingsView() {
           <p className="text-sm text-ink-soft mt-1">{t('settings.integrationsSubtitle')}</p>
         </div>
 
-        <IntegrationsPanel kind="social" t={t} />
+        <div className="p-4 rounded-lg border border-ink-fade/40 bg-paper shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <span className="w-10 h-10 rounded-lg bg-blue-50 border border-blue-200 flex items-center justify-center shrink-0"><Plug className="w-4 h-4 text-blue-600" /></span>
+            <div><h2 className="text-sm font-medium text-ink">{t('access.manageInAccess')}</h2><p className="text-xs text-ink-soft mt-1 max-w-xl">{t('access.manageHint')}</p></div>
+          </div>
+          <button type="button" onClick={() => navigate('/access')} className="h-9 px-4 rounded-md bg-ink text-paper text-sm shrink-0 hover:bg-ink-soft">{t('access.manageInAccess')}</button>
+        </div>
 
         <div className="flex flex-col gap-3">
           <div className="p-3 border border-dashed border-ink-fade/40 rounded-md bg-paper-2 text-sm text-ink-soft">
@@ -942,9 +960,10 @@ export default function SettingsView() {
       { id: 'create_docx', name: '生成 Word 文件', desc: '需要文档/报告时直接产出 DOCX 文件,不要把正文铺在聊天里。' },
       { id: 'create_xlsx', name: '生成 Excel 文件', desc: '需要表格时直接产出 XLSX 文件。' },
       { id: 'create_react_component', name: 'React 预览工件', desc: '类似 Claude Artifacts / Codex preview,生成可交互的单文件 React 原型。' },
-      { id: 'read_file', name: '读取工作区文件', desc: 'Claude/Codex 风格:允许模型读取 WORKSPACE_ROOT 内文件。服务端还需 WORKSPACE_FS_ENABLED=1。' },
-      { id: 'write_file', name: '写入工作区文件', desc: '允许模型创建或覆盖 WORKSPACE_ROOT 内文件。高风险,默认关闭。' },
-      { id: 'edit_file', name: '编辑工作区文件', desc: '允许模型用精确字符串替换修改文件。高风险,默认关闭。' },
+      { id: 'list_directory', name: '浏览本地目录', desc: '列出工作区或“本地文件”中已授权文件夹的内容。' },
+      { id: 'read_file', name: '读取本地文件', desc: '读取工作区或“本地文件”中已授权路径内的 UTF-8 文件。' },
+      { id: 'write_file', name: '写入本地文件', desc: '在已获读写授权的路径内创建或覆盖文件。' },
+      { id: 'edit_file', name: '编辑本地文件', desc: '在已获读写授权的路径内精确替换文件内容。' },
       { id: 'bash_exec', name: '执行 Shell 命令', desc: '允许模型运行测试/构建/检查命令。服务端还需 WORKSPACE_SHELL_ENABLED=1。' },
       { id: 'git_status', name: 'Git status', desc: 'Read-only git status for Code mode.' },
       { id: 'git_diff', name: 'Git diff', desc: 'Read-only unified diff for Code/Plan mode.' },
@@ -981,39 +1000,6 @@ export default function SettingsView() {
         <div className="p-4 border border-dashed border-ink-fade/40 rounded-md bg-paper-2 text-xs text-ink-soft">
           提示:工具调用最多迭代 5 轮(防止循环)。如果模型后端不支持 <code>tools</code> 字段会报错,关掉所有开关即可恢复纯文本对话。
         </div>
-      </section>
-    )
-  }
-
-  function renderShortcuts() {
-    return (
-      <section className="flex flex-col gap-5 animate-float-up">
-        <div>
-          <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">SHORTCUTS</span>
-          <h1 className="font-hand text-[28px] text-ink mt-1.5">快捷键</h1>
-          <p className="text-sm text-ink-soft mt-1">当前版本只展示已经接入的快捷键。</p>
-        </div>
-
-        {SHORTCUTS.map((group) => (
-          <div key={group.category} className="flex flex-col gap-2">
-            <h3 className="font-hand text-lg text-ink">{group.category}</h3>
-            <div className="flex flex-col gap-1">
-              {group.items.map((item) => (
-                <div key={item.name} className="flex items-center justify-between p-3 border border-ink/20 rounded-md hover:border-ink/40 transition-colors">
-                  <span className="text-sm text-ink">{item.name}</span>
-                  <div className="flex items-center gap-1">
-                    {item.keys.map((k, i) => (
-                      <span key={k} className="flex items-center gap-1">
-                        <kbd className="inline-flex items-center h-6 px-1.5 rounded border border-ink-fade/60 bg-paper-2 text-[11px] font-mono text-ink-soft min-w-[24px] justify-center">{k}</kbd>
-                        {i < item.keys.length - 1 && <span className="text-ink-ghost text-xs">+</span>}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
       </section>
     )
   }
@@ -1193,6 +1179,8 @@ export default function SettingsView() {
     switch (activeNav) {
       case '功能入口':
         return renderFeatureHub()
+      case SETTINGS_TAB_MODELS:
+        return renderModels()
       case '系统诊断':
         return renderDiagnostics()
       case '账户':
@@ -1205,8 +1193,6 @@ export default function SettingsView() {
         return renderIntegrations()
       case '外观':
         return renderAppearance()
-      case '快捷键':
-        return renderShortcuts()
       case '数据 & 导出':
         return renderDataExport()
       default:

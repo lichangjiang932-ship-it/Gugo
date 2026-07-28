@@ -47,7 +47,7 @@ function createInitialState() {
     skillConfigs: {}, // { skillId: { enabled, systemPrompt, temperature, maxTokens } }
     agentMode: 'chat', // 'chat' | 'plan' | 'code'
     previewArtifact: null, // { messageId, content, preview } — 右侧 artifact 预览面板
-    toolsConfig: { web_search: false, fetch_url: false, create_pptx: true, create_docx: true, create_xlsx: true, create_react_component: true, create_mermaid: true, create_chart: true, create_svg: true, create_html_app: true, Agent: true, read_file: false, write_file: false, edit_file: false, bash_exec: false, git_status: false, git_diff: false, run_project_check: false, manage_todos: true }, // tool toggles
+    toolsConfig: { web_search: false, fetch_url: false, create_pptx: true, create_docx: true, create_xlsx: true, create_react_component: true, create_mermaid: true, create_chart: true, create_svg: true, create_html_app: true, Agent: true, list_directory: false, read_file: false, write_file: false, edit_file: false, bash_exec: false, git_status: false, git_diff: false, run_project_check: false, manage_todos: true }, // tool toggles
     // #13 切会话保草稿:每个 sessionId → 该会话当前未发送的输入文本
     // 不放进 sessions[].draft 是为了切会话只 dispatch 一个轻动作,不动整棵 sessions 树
     sessionDrafts: {},

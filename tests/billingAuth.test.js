@@ -15,6 +15,7 @@ import {
   getBillingDiagnostics,
   getMailDiagnostics,
   loadBillingConfig,
+  sendEmailCode,
 } from '../server/adapters/billingAuth.js'
 import { getDb } from '../server/db.js'
 
@@ -77,6 +78,21 @@ test('send-code response exposes local dev code when smtp is not configured', ()
     }),
     { ok: true, email: 'mail@example.com', expiresIn: 600 }
   )
+})
+
+test('AUTH_DEV_CODES skips SMTP even when mail is configured', async () => {
+  const result = await sendEmailCode({
+    env: {
+      AUTH_DEV_CODES: 'true',
+      MAIL_SERVER: 'smtp.example.com',
+      MAIL_USERNAME: 'mailer@example.com',
+      MAIL_PASSWORD: 'secret',
+    },
+    email: 'local@example.com',
+    code: '123456',
+  })
+
+  assert.deepEqual(result, { sent: false, devCode: '123456' })
 })
 
 test('local recharge packages add credits and write ledger entries', () => {

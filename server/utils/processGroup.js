@@ -80,6 +80,13 @@ export function runProcessWithGroup({
         if (isWin) {
           // Windows 下用 taskkill 杀进程树
           spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true }).on('error', () => {})
+          // Restricted Windows environments can delay or block taskkill. Ensure
+          // the root process still obeys the caller's timeout.
+          const fallback = setTimeout(() => {
+            if (settled) return
+            try { child.kill('SIGKILL') } catch { /* process may already be gone */ }
+          }, 250)
+          fallback.unref?.()
         } else {
           // 负 pid → kill 整个进程组
           process.kill(-child.pid, signal)

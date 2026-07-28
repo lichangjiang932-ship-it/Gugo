@@ -23,6 +23,10 @@ import { parseMarkdownDocument, parseSpreadsheetRows } from '../officeExport.js'
 
 // ★ #18: 工具参数 zod schema — 模型可能给出脏数据,先校验再执行
 const TOOL_ARG_SCHEMAS = {
+  list_directory: z.object({
+    path: z.string().min(1, 'path 不能为空').max(2000),
+    limit: z.number().int().min(1).max(500).optional(),
+  }),
   web_search: z.object({
     query: z.string().min(1, 'query 不能为空').max(500, 'query 过长'),
     max_results: z.number().int().min(1).max(10).optional(),
@@ -137,6 +141,21 @@ const TOOL_ARG_SCHEMAS = {
 }
 
 const TOOL_SPECS = {
+  list_directory: {
+    type: 'function',
+    function: {
+      name: 'list_directory',
+      description: 'List files and folders inside the workspace or a user-authorized local directory. Use absolute paths for additional local grants.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Workspace-relative path or an authorized absolute folder path.' },
+          limit: { type: 'integer', description: 'Maximum entries to return, from 1 to 500.' },
+        },
+        required: ['path'],
+      },
+    },
+  },
   web_search: {
     type: 'function',
     function: {
@@ -170,11 +189,11 @@ const TOOL_SPECS = {
     type: 'function',
     function: {
       name: 'read_file',
-      description: 'Read a UTF-8 file inside the configured workspace, optionally by line offset/limit. Use this before editing existing project files.',
+      description: 'Read a UTF-8 file inside the workspace or a user-authorized local path, optionally by line offset/limit. Use absolute paths for additional local grants.',
       parameters: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'Relative path inside workspace, or an absolute path that still resolves inside workspace.' },
+          path: { type: 'string', description: 'Workspace-relative path or an authorized absolute file path.' },
           offset: { type: 'integer', description: 'Zero-based starting line. Optional.' },
           limit: { type: 'integer', description: 'Number of lines to return. 0 or omitted reads to the end.' },
         },
@@ -186,7 +205,7 @@ const TOOL_SPECS = {
     type: 'function',
     function: {
       name: 'write_file',
-      description: 'Create or overwrite a UTF-8 file inside the configured workspace. Prefer edit_file for small changes to existing files.',
+      description: 'Create or overwrite a UTF-8 file inside the workspace or a user-authorized read/write local path. Prefer edit_file for small changes.',
       parameters: {
         type: 'object',
         properties: {
@@ -201,7 +220,7 @@ const TOOL_SPECS = {
     type: 'function',
     function: {
       name: 'edit_file',
-      description: 'Precise string replacement inside a workspace file. old_string must be unique unless replace_all is true.',
+      description: 'Precise string replacement inside a workspace or user-authorized read/write file. old_string must be unique unless replace_all is true.',
       parameters: {
         type: 'object',
         properties: {
@@ -480,8 +499,8 @@ const TOOL_SPECS = {
 }
 
 
-const READ_ONLY_MODE_TOOLS = new Set(['web_search', 'fetch_url', 'read_file', 'git_status', 'git_diff', 'manage_todos', 'Agent'])
-const CODE_MODE_TOOLS = ['read_file', 'write_file', 'edit_file', 'bash_exec', 'git_status', 'git_diff', 'run_project_check', 'manage_todos', 'Agent']
+const READ_ONLY_MODE_TOOLS = new Set(['web_search', 'fetch_url', 'list_directory', 'read_file', 'git_status', 'git_diff', 'manage_todos', 'Agent'])
+const CODE_MODE_TOOLS = ['list_directory', 'read_file', 'write_file', 'edit_file', 'bash_exec', 'git_status', 'git_diff', 'run_project_check', 'manage_todos', 'Agent']
 
 export function resolveToolsForMode(toolsConfig = {}, mode = 'chat') {
   const enabled = Object.entries(toolsConfig || {})
@@ -565,14 +584,14 @@ export async function buildToolSpecsAsync({ enabledBuiltinNames, mode = 'chat' }
 
 /* ── 执行器 ── */
 
-async function callJson(url, body) {
+async function callJson(url, body, { method = 'POST' } = {}) {
   const headers = { 'Content-Type': 'application/json' }
   const token = getAuthToken?.()
   if (token) headers.Authorization = `Bearer ${token}`
   const resp = await fetch(url, {
-    method: 'POST',
+    method,
     headers,
-    body: JSON.stringify(body),
+    ...(method === 'GET' ? {} : { body: JSON.stringify(body) }),
   })
   const text = await resp.text()
   let data
@@ -647,6 +666,11 @@ async function execFetchUrl(args) {
 
 async function execReadFile(args) {
   const data = await callWorkspaceJson('/api/tools/fs/read', args)
+  return { content: JSON.stringify(data) }
+}
+
+async function execListDirectory(args) {
+  const data = await callWorkspaceJson('/api/tools/fs/list', args)
   return { content: JSON.stringify(data) }
 }
 
@@ -952,6 +976,7 @@ const EXECUTORS = {
   create_svg: execCreateSvg,
   create_html_app: execCreateHtmlApp,
   Agent: execAgent,
+  list_directory: execListDirectory,
   read_file: execReadFile,
   write_file: execWriteFile,
   edit_file: execEditFile,
@@ -1067,6 +1092,53 @@ export async function executeToolCall(call, options = {}) {
       }
     } catch (err) {
       return { ok: false, content: JSON.stringify({ error: err.message || String(err) }) }
+    }
+  }
+
+  if (name && name.startsWith('browser_')) {
+    const routes = {
+      browser_open_url: '/api/browser/open',
+      browser_state: '/api/browser/state',
+      browser_snapshot: '/api/browser/snapshot',
+      browser_console: '/api/browser/console',
+      browser_click: '/api/browser/click',
+      browser_type: '/api/browser/type',
+      browser_wait: '/api/browser/wait',
+      browser_screenshot: '/api/browser/screenshot',
+      browser_close: '/api/browser/close',
+    }
+    const route = routes[name]
+    if (!route) return { ok: false, content: JSON.stringify({ error: `未知 Browser 工具: ${name}` }) }
+    try {
+      const data = await callJson(route, parsedArgs)
+      const result = data?.result ?? data
+      const compact = name === 'browser_screenshot' && result?.data
+        ? { ...result, data: undefined, captured: true }
+        : result
+      return { ok: true, content: JSON.stringify(compact), attempts: 1 }
+    } catch (err) {
+      return { ok: false, content: JSON.stringify({ error: err.message || String(err) }), attempts: 1 }
+    }
+  }
+
+  if (name && (name.startsWith('connected_app_') || name.startsWith('notion_') || name.startsWith('github_'))) {
+    const routes = {
+      connected_app_list: '/api/connectors/apps',
+      connected_app_open: '/api/connectors/apps/open',
+      notion_search: '/api/connectors/notion/search',
+      notion_fetch_page: '/api/connectors/notion/page',
+      github_search_repositories: '/api/connectors/github/search-repositories',
+      github_get_file: '/api/connectors/github/file',
+    }
+    const route = routes[name]
+    if (!route) return { ok: false, content: JSON.stringify({ error: `Unknown connector tool: ${name}` }) }
+    try {
+      const data = name === 'connected_app_list'
+        ? await callJson(route, undefined, { method: 'GET' })
+        : await callJson(route, parsedArgs)
+      return { ok: true, content: JSON.stringify(data?.result ?? data?.apps ?? data), attempts: 1 }
+    } catch (err) {
+      return { ok: false, content: JSON.stringify({ error: err.message || String(err) }), attempts: 1 }
     }
   }
 

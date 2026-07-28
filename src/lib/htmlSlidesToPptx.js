@@ -266,7 +266,7 @@ export async function convertHtmlDeckToPptx(html, { title = 'presentation', onPr
     const pptx = new PptxGenJS()
     pptx.layout = 'LAYOUT_WIDE' // 13.333 x 7.5
     pptx.title = title
-    pptx.author = 'your-model-atelier'
+    pptx.author = 'Gugo'
 
     for (let i = 0; i < slides.length; i++) {
       onProgress?.(i + 1, slides.length)

@@ -245,7 +245,7 @@ function renderCover(slide, pptx, theme, { deckTitle, subtitle, brand }) {
     x: 0.85, y: 0.97, w: 0.30, h: 0.018,
     fill: { color: theme.accent }, line: { color: theme.accent, width: 0 },
   })
-  slide.addText(String(brand || 'YOUR MODEL ATELIER').toUpperCase(), {
+  slide.addText(String(brand || 'GUGO').toUpperCase(), {
     x: 1.30, y: 0.83, w: 8.0, h: 0.32,
     fontFace: BODY_FONT, fontSize: 9, bold: true, color: theme.accent, charSpace: 3.5, margin: 0,
   })
@@ -290,7 +290,7 @@ function renderSection(slide, pptx, theme, { titleText, eyebrow, index, brand })
     margin: 0, align: 'left', valign: 'top',
   })
   // 左 panel 底部 brand
-  slide.addText(String(brand || 'YOUR MODEL ATELIER').toUpperCase(), {
+  slide.addText(String(brand || 'GUGO').toUpperCase(), {
     x: 0.6, y: 6.5, w: 4.6, h: 0.3,
     fontFace: BODY_FONT, fontSize: 8, bold: true, color: theme.muted, charSpace: 3, margin: 0,
   })
@@ -608,7 +608,7 @@ function renderEnd(slide, pptx, theme, { titleText, bullets, brand }) {
       fontFace: BODY_FONT, fontSize: 16, color: theme.soft, margin: 0, fit: 'shrink',
     })
   }
-  slide.addText(String(brand || 'YOUR MODEL ATELIER').toUpperCase(), {
+  slide.addText(String(brand || 'GUGO').toUpperCase(), {
     x: 0.85, y: 6.40, w: 6.0, h: 0.3,
     fontFace: BODY_FONT, fontSize: 9, bold: true, color: theme.accent, charSpace: 3.5, margin: 0,
   })
@@ -616,7 +616,7 @@ function renderEnd(slide, pptx, theme, { titleText, bullets, brand }) {
 
 /* ── 主入口 ── */
 
-export async function createPptx({ title = 'Presentation', subtitle = '', theme: themeName, brand = 'Your Model Atelier', slides = [] } = {}) {
+export async function createPptx({ title = 'Presentation', subtitle = '', theme: themeName, brand = 'Gugo', slides = [] } = {}) {
   if (!Array.isArray(slides) || slides.length === 0) {
     throw new Error('slides 不能为空')
   }

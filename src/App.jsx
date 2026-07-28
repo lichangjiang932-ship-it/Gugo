@@ -1,12 +1,9 @@
 import { Suspense, lazy } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 
-import GlobalShortcuts from './components/GlobalShortcuts'
 import ErrorBoundary from './components/ErrorBoundary'
 import { I18nProvider } from './i18n/I18nProvider.jsx'
 import { ActiveAgentProvider } from './agents/ActiveAgentProvider.jsx'
-import CommandPalette from './components/CommandPalette'
-import SkillCommandsSync from './components/SkillCommandsSync'
 import RequireAuth from './components/RequireAuth'
 import SessionSearchModal from './components/SessionSearchModal'
 import { ToastProvider } from './components/Toast.jsx'
@@ -21,13 +18,11 @@ const HistoryView = lazy(() => import('./pages/HistoryView'))
 const SettingsView = lazy(() => import('./pages/SettingsView'))
 const MemoryView = lazy(() => import('./pages/MemoryView'))
 const DeskView = lazy(() => import('./pages/DeskView'))
-const MobileKeysView = lazy(() => import('./pages/MobileKeysView'))
 const AgentList = lazy(() => import('./pages/AgentList'))
-const HooksView = lazy(() => import('./pages/HooksView'))
 const McpServersView = lazy(() => import('./pages/McpServersView'))
 const ReasonixWorkspace = lazy(() => import('./pages/ReasonixWorkspace'))
-const CronJobsPage = lazy(() => import('./pages/CronJobsPage'))
 const ChannelsPage = lazy(() => import('./pages/ChannelsPage'))
+const AccessView = lazy(() => import('./pages/AccessView'))
 
 function Fallback() {
   return (
@@ -44,9 +39,6 @@ function App() {
     <ToastProvider>
     <ActiveAgentProvider>
     <ErrorBoundary>
-      <GlobalShortcuts />
-      <CommandPalette />
-      <SkillCommandsSync />
       <SessionSearchModal />
       <Suspense fallback={<Fallback />}>
         <main>
@@ -61,12 +53,10 @@ function App() {
           <Route path="/settings" element={<RequireAuth><SettingsView /></RequireAuth>} />
           <Route path="/memory" element={<RequireAuth><MemoryView /></RequireAuth>} />
           <Route path="/desk" element={<RequireAuth><DeskView /></RequireAuth>} />
-          <Route path="/mobile-keys" element={<RequireAuth><MobileKeysView /></RequireAuth>} />
           <Route path="/agents" element={<RequireAuth><AgentList /></RequireAuth>} />
           <Route path="/channels" element={<RequireAuth><ChannelsPage /></RequireAuth>} />
-          <Route path="/hooks" element={<RequireAuth><HooksView /></RequireAuth>} />
+          <Route path="/access" element={<RequireAuth><AccessView /></RequireAuth>} />
           <Route path="/mcp" element={<RequireAuth><McpServersView /></RequireAuth>} />
-          <Route path="/cron" element={<RequireAuth><CronJobsPage /></RequireAuth>} />
           <Route path="/reasonix" element={<RequireAuth><ReasonixWorkspace /></RequireAuth>} />
 
           <Route path="/login" element={<Navigate to="/chat" replace />} />

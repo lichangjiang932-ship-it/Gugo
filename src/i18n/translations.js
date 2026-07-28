@@ -12,8 +12,104 @@ export const SUPPORTED_LANGUAGES = [
 
 export const DEFAULT_LANGUAGE = 'zh'
 
+const ACCESS_TRANSLATIONS = {
+  zh: {
+    eyebrow: 'ACCESS', title: '连接', subtitle: '连接 Browser 和常用应用，让模型能安全地读取、搜索和处理你的内容。', summary: '已启用 {count} 个来源',
+    sources: '来源', sourcesHint: '连接一次，之后随时开关模型访问权限。', nativeTitle: '原生连接', nativeHint: '授权后，模型可直接调用这些服务。', webTitle: 'Browser 应用', webHint: '连接后保留本机登录状态，供模型在任务中辅助使用。', searchPlaceholder: '搜索连接器…', noMatch: '没有匹配的连接器', connected: '已连接',
+    connect: '连接', connecting: '连接中', useApp: '使用', open: '打开', configure: '配置', disconnect: '断开连接', enabled: '已启用', disabled: '已停用', cancel: '取消', saveAndTest: '保存并测试', connectError: '连接失败', manageInAccess: '前往连接中心', manageHint: '社交、办公与 Browser 应用统一在连接中心管理，避免重复配置。', webAppDesc: '连接后在本机登录，模型即可辅助完成相关任务。', webConnectedDesc: '已可供模型在任务和项目中辅助使用。', filterLabel: '连接器分类', filterAll: '全部', filterNative: '原生连接', filterCommunication: '通讯', filterProductivity: '文件与办公', filterCreative: '设计创作', filterWork: '项目管理',
+    browserDesc: '打开网页、点击、输入、截图并读取页面。', notionDesc: '搜索并读取共享给集成的 Notion 页面。', githubDesc: '搜索仓库并读取代码和文件。', feishuDesc: '通过飞书机器人接收与回复消息。', wechatDesc: '扫码连接个人微信消息桥。',
+    browserHint: 'Browser 在本机 Edge 或 Chrome 中运行，不上传浏览器配置。', notionHint: '创建一个 Notion Integration，并把需要访问的页面共享给它。', githubHint: '建议使用可随时撤销、只授予所需仓库的 Fine-grained PAT。', feishuHint: '在飞书开放平台创建企业自建应用，复制 App ID 和 App Secret。', wechatHint: '使用微信扫码授权个人微信消息桥。',
+    workspace: '工作区名称（可选）', account: '账号名称（可选）', token: '访问令牌', appId: 'App ID', appSecret: 'App Secret', secretKept: '留空保留现有密钥', openSetup: '打开官方配置页面', qrLoading: '正在生成二维码…', qrWaiting: '请使用微信扫码确认', wechatUnavailable: '个人微信 iLink 服务暂不可用，请检查网络或代理后重试。',
+  },
+  en: {
+    eyebrow: 'ACCESS', title: 'Connections', subtitle: 'Connect Browser and everyday apps so the model can safely search, read, and work with your content.', summary: '{count} sources enabled',
+    sources: 'Sources', sourcesHint: 'Connect once, then turn model access on or off at any time.', nativeTitle: 'Native connections', nativeHint: 'Once authorized, the model can call these services directly.', webTitle: 'Browser apps', webHint: 'Connect once and keep the local sign-in available for model-assisted tasks.', searchPlaceholder: 'Search connectors…', noMatch: 'No matching connectors', connected: 'Connected',
+    connect: 'Connect', connecting: 'Connecting', useApp: 'Use', open: 'Open', configure: 'Configure', disconnect: 'Disconnect', enabled: 'Enabled', disabled: 'Disabled', cancel: 'Cancel', saveAndTest: 'Save & test', connectError: 'Connection failed', manageInAccess: 'Open Connections', manageHint: 'Manage social, productivity, and Browser apps in one place without duplicate setup.', webAppDesc: 'Connect and sign in locally so the model can assist with related tasks.', webConnectedDesc: 'Ready for the model to use while assisting with tasks and projects.', filterLabel: 'Connector categories', filterAll: 'All', filterNative: 'Native', filterCommunication: 'Communication', filterProductivity: 'Files & productivity', filterCreative: 'Design', filterWork: 'Project management',
+    browserDesc: 'Open pages, click, type, capture screenshots, and read content.', notionDesc: 'Search and read Notion pages shared with the integration.', githubDesc: 'Search repositories and read code or files.', feishuDesc: 'Receive and reply to messages through a Feishu bot.', wechatDesc: 'Connect the personal WeChat message bridge by QR code.',
+    browserHint: 'Browser runs in local Edge or Chrome and never uploads your browser profile.', notionHint: 'Create a Notion integration and share the pages it should access.', githubHint: 'Use a revocable fine-grained PAT limited to the repositories you need.', feishuHint: 'Create an internal app in Feishu Open Platform and copy its App ID and App Secret.', wechatHint: 'Scan with WeChat to authorize the personal message bridge.',
+    workspace: 'Workspace name (optional)', account: 'Account name (optional)', token: 'Access token', appId: 'App ID', appSecret: 'App Secret', secretKept: 'Leave blank to keep the saved secret', openSetup: 'Open official setup page', qrLoading: 'Generating QR code…', qrWaiting: 'Scan and confirm in WeChat', wechatUnavailable: 'The personal WeChat iLink service is unavailable. Check your network or proxy and try again.',
+  },
+  ja: {
+    eyebrow: 'ACCESS', title: '接続', subtitle: 'Browser と日常のアプリを接続し、モデルがコンテンツを安全に検索・閲覧・処理できるようにします。', summary: '{count} 件のソースが有効',
+    sources: 'ソース', sourcesHint: '一度接続すれば、モデルのアクセスをいつでも切り替えられます。', nativeTitle: 'ネイティブ接続', nativeHint: '認証後、モデルがサービスを直接利用できます。', webTitle: 'Browser アプリ', webHint: '再設定せず、公式アプリをブラウザーで開きます。', searchPlaceholder: 'コネクターを検索…', noMatch: '一致するコネクターがありません', connected: '接続済み',
+    connect: '接続', connecting: '接続中', useApp: '使用', open: '開く', configure: '設定', disconnect: '切断', enabled: '有効', disabled: '無効', cancel: 'キャンセル', saveAndTest: '保存してテスト', connectError: '接続に失敗しました', manageInAccess: '接続センターを開く', manageHint: 'ソーシャル、業務、Browser アプリを一か所で管理します。', webAppDesc: '接続してローカルでログインすると、モデルが関連タスクを支援できます。', webConnectedDesc: 'タスクやプロジェクトでモデルが利用できます。', filterLabel: 'コネクター分類', filterAll: 'すべて', filterNative: 'ネイティブ', filterCommunication: 'コミュニケーション', filterProductivity: 'ファイルと業務', filterCreative: 'デザイン', filterWork: 'プロジェクト管理',
+    browserDesc: 'ページを開く、クリック、入力、スクリーンショット、内容の読み取り。', notionDesc: '共有された Notion ページを検索・閲覧します。', githubDesc: 'リポジトリを検索し、コードやファイルを読み取ります。', feishuDesc: 'Feishu ボットでメッセージを送受信します。', wechatDesc: 'QR コードで個人 WeChat メッセージブリッジを接続します。',
+    browserHint: 'Browser はローカルの Edge または Chrome で動作します。', notionHint: 'Notion Integration を作成し、アクセスするページを共有してください。', githubHint: '必要なリポジトリだけに限定した Fine-grained PAT を使用してください。', feishuHint: 'Feishu Open Platform で社内アプリを作成し、App ID と Secret を取得します。', wechatHint: 'WeChat でスキャンしてメッセージブリッジを承認します。',
+    workspace: 'ワークスペース名（任意）', account: 'アカウント名（任意）', token: 'アクセストークン', appId: 'App ID', appSecret: 'App Secret', secretKept: '空欄で保存済みの秘密情報を保持', openSetup: '公式設定ページを開く', qrLoading: 'QR コードを生成中…', qrWaiting: 'WeChat でスキャンして確認してください', wechatUnavailable: '個人 WeChat iLink サービスを利用できません。ネットワークまたはプロキシを確認して再試行してください。',
+  },
+  ko: {
+    eyebrow: 'ACCESS', title: '연결', subtitle: 'Browser와 자주 쓰는 앱을 연결하여 모델이 콘텐츠를 안전하게 검색하고 읽도록 합니다.', summary: '{count}개 소스 사용 중',
+    sources: '소스', sourcesHint: '한 번 연결한 뒤 언제든 모델 접근을 켜거나 끌 수 있습니다.', nativeTitle: '기본 연결', nativeHint: '인증 후 모델이 서비스를 직접 호출할 수 있습니다.', webTitle: 'Browser 앱', webHint: '중복 설정 없이 공식 앱을 브라우저에서 엽니다.', searchPlaceholder: '커넥터 검색…', noMatch: '일치하는 커넥터가 없습니다', connected: '연결됨',
+    connect: '연결', connecting: '연결 중', useApp: '사용', open: '열기', configure: '설정', disconnect: '연결 해제', enabled: '사용', disabled: '중지', cancel: '취소', saveAndTest: '저장 및 테스트', connectError: '연결 실패', manageInAccess: '연결 센터 열기', manageHint: '소셜, 업무 및 Browser 앱을 한 곳에서 관리합니다.', webAppDesc: '연결하고 로컬에서 로그인하면 모델이 관련 작업을 지원할 수 있습니다.', webConnectedDesc: '작업과 프로젝트에서 모델이 사용할 수 있습니다.', filterLabel: '커넥터 분류', filterAll: '전체', filterNative: '기본 연결', filterCommunication: '커뮤니케이션', filterProductivity: '파일 및 업무', filterCreative: '디자인', filterWork: '프로젝트 관리',
+    browserDesc: '페이지 열기, 클릭, 입력, 스크린샷 및 콘텐츠 읽기.', notionDesc: '공유된 Notion 페이지를 검색하고 읽습니다.', githubDesc: '저장소를 검색하고 코드와 파일을 읽습니다.', feishuDesc: 'Feishu 봇으로 메시지를 받고 답합니다.', wechatDesc: 'QR 코드로 개인 WeChat 메시지 브리지를 연결합니다.',
+    browserHint: 'Browser는 로컬 Edge 또는 Chrome에서 실행됩니다.', notionHint: 'Notion Integration을 만들고 접근할 페이지를 공유하세요.', githubHint: '필요한 저장소만 허용한 Fine-grained PAT를 사용하세요.', feishuHint: 'Feishu Open Platform에서 사내 앱을 만들고 App ID와 Secret을 복사하세요.', wechatHint: 'WeChat으로 스캔하여 메시지 브리지를 승인하세요.',
+    workspace: '워크스페이스 이름(선택)', account: '계정 이름(선택)', token: '액세스 토큰', appId: 'App ID', appSecret: 'App Secret', secretKept: '비워 두면 저장된 비밀 유지', openSetup: '공식 설정 페이지 열기', qrLoading: 'QR 코드 생성 중…', qrWaiting: 'WeChat에서 스캔하고 확인하세요', wechatUnavailable: '개인 WeChat iLink 서비스를 사용할 수 없습니다. 네트워크 또는 프록시를 확인한 후 다시 시도하세요.',
+  },
+  'zh-TW': {
+    eyebrow: 'ACCESS', title: '連接', subtitle: '連接 Browser 與常用應用程式，讓模型安全地搜尋、讀取及處理內容。', summary: '已啟用 {count} 個來源',
+    sources: '來源', sourcesHint: '連接一次，之後可隨時開關模型存取權限。', nativeTitle: '原生連接', nativeHint: '授權後，模型可直接呼叫這些服務。', webTitle: 'Browser 應用程式', webHint: '無需重複設定，點擊後在瀏覽器開啟官方應用程式。', searchPlaceholder: '搜尋連接器…', noMatch: '沒有符合的連接器', connected: '已連接',
+    connect: '連接', connecting: '連接中', useApp: '使用', open: '開啟', configure: '設定', disconnect: '中斷連接', enabled: '已啟用', disabled: '已停用', cancel: '取消', saveAndTest: '儲存並測試', connectError: '連接失敗', manageInAccess: '前往連接中心', manageHint: '社交、辦公與 Browser 應用程式統一在連接中心管理。', webAppDesc: '連接後在本機登入，模型即可協助完成相關任務。', webConnectedDesc: '已可供模型在任務與專案中協助使用。', filterLabel: '連接器分類', filterAll: '全部', filterNative: '原生連接', filterCommunication: '通訊', filterProductivity: '檔案與辦公', filterCreative: '設計創作', filterWork: '專案管理',
+    browserDesc: '開啟網頁、點擊、輸入、截圖並讀取頁面。', notionDesc: '搜尋並讀取分享給整合的 Notion 頁面。', githubDesc: '搜尋儲存庫並讀取程式碼與檔案。', feishuDesc: '透過飛書機器人接收與回覆訊息。', wechatDesc: '掃碼連接個人微信訊息橋接。',
+    browserHint: 'Browser 在本機 Edge 或 Chrome 中執行，不會上傳瀏覽器設定。', notionHint: '建立 Notion Integration，並分享需要存取的頁面。', githubHint: '建議使用可撤銷、只授權所需儲存庫的 Fine-grained PAT。', feishuHint: '在飛書開放平台建立企業自建應用，複製 App ID 與 App Secret。', wechatHint: '使用微信掃碼授權個人訊息橋接。',
+    workspace: '工作區名稱（選填）', account: '帳號名稱（選填）', token: '存取權杖', appId: 'App ID', appSecret: 'App Secret', secretKept: '留空保留現有密鑰', openSetup: '開啟官方設定頁面', qrLoading: '正在產生二維碼…', qrWaiting: '請使用微信掃碼確認', wechatUnavailable: '個人微信 iLink 服務暫時無法使用，請檢查網路或代理後重試。',
+  },
+}
+
+const LOCAL_FILES_TRANSLATIONS = {
+  zh: {
+    title: '本地文件', subtitle: '授权后可在对话中直接引用绝对路径，让模型浏览、读取或修改运行此工作台服务的电脑文件。', securityTitle: '默认无权访问', securityHint: '仅开放你明确授权的文件或文件夹；撤销后立即失效。远程打开网页时访问的是服务器电脑，不是浏览器所在电脑。', addTitle: '授权文件或文件夹', addHint: '可输入绝对路径，或使用系统文件夹选择器。授权成功后会自动启用相关模型工具。', pathPlaceholder: '例如 D:\\Projects\\my-app', accessMode: '访问模式', readWrite: '读取和修改', readOnly: '仅读取', authorize: '授权路径', authorizing: '授权中…', pickFolder: '选择文件夹并授权', pickerWaiting: '请在系统窗口中选择文件夹…', pickerCancelled: '已取消选择。', granted: '路径已授权，可以在对话中直接引用。', revoked: '授权已撤销。', allTitle: '访问本机所有文件', allHint: '高权限模式。开启后模型可按绝对路径访问此服务所在电脑的全部可读文件，并修改系统账号允许写入的文件。Shell 权限不会随之扩大。', allConfirm: '确定允许模型访问此电脑上的所有文件吗？开启后，模型可读取或修改当前系统账号有权限访问的路径。', allEnabled: '全盘文件访问已开启。', allDisabled: '全盘文件访问已关闭。', enable: '开启', disable: '关闭', authorizedTitle: '已授权范围', available: '可用', unavailable: '路径不可用', copy: '复制路径', copied: '路径已复制。', copyFailed: '无法复制，请手动选择路径文本。', revoke: '撤销授权', empty: '尚未授权任何本地路径。',
+  },
+  en: {
+    title: 'Local files', subtitle: 'After authorization, reference absolute paths in chat so the model can browse, read, or edit files on the computer running this workbench service.', securityTitle: 'No access by default', securityHint: 'Only explicitly authorized files and folders are available, and revocation takes effect immediately. When opened remotely, this accesses the server computer—not the browser device.', addTitle: 'Authorize a file or folder', addHint: 'Enter an absolute path or use the system folder picker. Relevant model tools are enabled after authorization.', pathPlaceholder: 'For example D:\\Projects\\my-app', accessMode: 'Access mode', readWrite: 'Read and edit', readOnly: 'Read only', authorize: 'Authorize path', authorizing: 'Authorizing…', pickFolder: 'Choose and authorize folder', pickerWaiting: 'Choose a folder in the system window…', pickerCancelled: 'Folder selection cancelled.', granted: 'Path authorized. You can reference it directly in chat.', revoked: 'Authorization revoked.', allTitle: 'Access all local files', allHint: 'High-privilege mode. The model may access any readable absolute path on the service host and edit files writable by its system account. Shell permissions do not expand.', allConfirm: 'Allow the model to access all files on this computer? It may read or edit paths available to the current system account.', allEnabled: 'All-files access enabled.', allDisabled: 'All-files access disabled.', enable: 'Enable', disable: 'Disable', authorizedTitle: 'Authorized locations', available: 'Available', unavailable: 'Unavailable', copy: 'Copy path', copied: 'Path copied.', copyFailed: 'Could not copy. Select the path text manually.', revoke: 'Revoke', empty: 'No local paths have been authorized.',
+  },
+  ja: {
+    title: 'ローカルファイル', subtitle: '許可後、チャットで絶対パスを指定し、このワークベンチを実行しているコンピューターのファイルを閲覧・読取・編集できます。', securityTitle: '既定ではアクセス不可', securityHint: '明示的に許可したファイルとフォルダーのみ利用でき、取り消しは直ちに反映されます。リモート利用時はブラウザー端末ではなくサーバーのファイルにアクセスします。', addTitle: 'ファイルまたはフォルダーを許可', addHint: '絶対パスを入力するか、システムのフォルダー選択を使用します。', pathPlaceholder: '例 D:\\Projects\\my-app', accessMode: 'アクセスモード', readWrite: '読取と編集', readOnly: '読取のみ', authorize: 'パスを許可', authorizing: '許可中…', pickFolder: 'フォルダーを選択して許可', pickerWaiting: 'システム画面でフォルダーを選択してください…', pickerCancelled: '選択をキャンセルしました。', granted: 'パスを許可しました。チャットで直接指定できます。', revoked: '許可を取り消しました。', allTitle: 'すべてのローカルファイルにアクセス', allHint: '高権限モードです。サービスを実行するシステムアカウントが利用できる絶対パスにアクセスします。Shell 権限は拡大しません。', allConfirm: 'このコンピューター上のすべてのファイルへのアクセスを許可しますか？', allEnabled: '全ファイルアクセスを有効にしました。', allDisabled: '全ファイルアクセスを無効にしました。', enable: '有効化', disable: '無効化', authorizedTitle: '許可済みの場所', available: '利用可能', unavailable: '利用不可', copy: 'パスをコピー', copied: 'パスをコピーしました。', copyFailed: 'コピーできませんでした。手動で選択してください。', revoke: '許可を取消', empty: '許可されたローカルパスはありません。',
+  },
+  ko: {
+    title: '로컬 파일', subtitle: '권한을 부여한 뒤 채팅에서 절대 경로를 참조해 이 워크벤치 서비스가 실행되는 컴퓨터의 파일을 탐색·읽기·수정할 수 있습니다.', securityTitle: '기본적으로 접근 불가', securityHint: '명시적으로 허용한 파일과 폴더만 사용할 수 있으며 취소 즉시 차단됩니다. 원격으로 열면 브라우저 기기가 아니라 서버 컴퓨터 파일에 접근합니다.', addTitle: '파일 또는 폴더 권한 부여', addHint: '절대 경로를 입력하거나 시스템 폴더 선택기를 사용하세요.', pathPlaceholder: '예: D:\\Projects\\my-app', accessMode: '접근 모드', readWrite: '읽기 및 수정', readOnly: '읽기 전용', authorize: '경로 허용', authorizing: '허용 중…', pickFolder: '폴더 선택 및 허용', pickerWaiting: '시스템 창에서 폴더를 선택하세요…', pickerCancelled: '선택을 취소했습니다.', granted: '경로를 허용했습니다. 채팅에서 직접 참조할 수 있습니다.', revoked: '권한을 취소했습니다.', allTitle: '모든 로컬 파일 접근', allHint: '고권한 모드입니다. 서비스 시스템 계정이 접근 가능한 절대 경로를 읽거나 수정할 수 있습니다. Shell 권한은 확대되지 않습니다.', allConfirm: '이 컴퓨터의 모든 파일에 모델 접근을 허용할까요?', allEnabled: '전체 파일 접근을 켰습니다.', allDisabled: '전체 파일 접근을 껐습니다.', enable: '켜기', disable: '끄기', authorizedTitle: '허용된 위치', available: '사용 가능', unavailable: '사용 불가', copy: '경로 복사', copied: '경로를 복사했습니다.', copyFailed: '복사할 수 없습니다. 경로 텍스트를 직접 선택하세요.', revoke: '권한 취소', empty: '허용된 로컬 경로가 없습니다.',
+  },
+  'zh-TW': {
+    title: '本機檔案', subtitle: '授權後可在對話中直接引用絕對路徑，讓模型瀏覽、讀取或修改執行此工作台服務的電腦檔案。', securityTitle: '預設無權存取', securityHint: '僅開放你明確授權的檔案或資料夾；撤銷後立即失效。遠端開啟網頁時存取的是伺服器電腦，不是瀏覽器所在電腦。', addTitle: '授權檔案或資料夾', addHint: '可輸入絕對路徑，或使用系統資料夾選擇器。', pathPlaceholder: '例如 D:\\Projects\\my-app', accessMode: '存取模式', readWrite: '讀取和修改', readOnly: '僅讀取', authorize: '授權路徑', authorizing: '授權中…', pickFolder: '選擇資料夾並授權', pickerWaiting: '請在系統視窗中選擇資料夾…', pickerCancelled: '已取消選擇。', granted: '路徑已授權，可在對話中直接引用。', revoked: '授權已撤銷。', allTitle: '存取本機所有檔案', allHint: '高權限模式。模型可按絕對路徑存取服務所在電腦的可讀檔案，並修改系統帳號允許寫入的檔案。Shell 權限不會擴大。', allConfirm: '確定允許模型存取此電腦上的所有檔案嗎？', allEnabled: '全機檔案存取已開啟。', allDisabled: '全機檔案存取已關閉。', enable: '開啟', disable: '關閉', authorizedTitle: '已授權範圍', available: '可用', unavailable: '路徑不可用', copy: '複製路徑', copied: '路徑已複製。', copyFailed: '無法複製，請手動選取路徑文字。', revoke: '撤銷授權', empty: '尚未授權任何本機路徑。',
+  },
+}
+
+const MCP_TRANSLATIONS = {
+  zh: {
+    title: 'MCP 服务', subtitle: '连接第三方 MCP 服务，工具会自动加入对话。', addServer: '新增服务', loading: '加载中…', disabled: '停用', empty: '还没有 MCP 服务。点击“新增服务”开始配置。', selectHint: '从左侧选择服务，或新增一个 MCP 服务。', transportHint: 'stdio 运行本地进程；Streamable HTTP 用于当前远程协议；SSE 仅兼容旧服务。',
+    editTitle: '编辑 MCP 服务', newTitle: '新建 MCP 服务', close: '关闭编辑器', name: '名称（用作工具前缀）', namePlaceholder: 'filesystem / github / postgres', transport: '传输方式', stdio: 'stdio（本地进程）', http: 'Streamable HTTP', sse: 'Legacy SSE', command: '命令（允许 npx / node / uvx / python）', args: '参数（空格分隔）', cwd: '工作目录（可选）', cwdPlaceholder: '留空使用项目根目录', url: 'MCP URL', headers: 'Headers JSON（Bearer Token / API Key）', enabled: '启用，保存后即可在对话中调用', save: '保存', saving: '保存中…', test: '测试', testConnection: '测试连接', connect: '连接', disconnect: '断开', delete: '删除', confirmDelete: '删除这个 MCP 服务？', connected: '已连接 {count} 个工具', testing: '测试中…', error: '错误', tools: '工具', resources: '资源', prompts: '提示词',
+  },
+  en: {
+    title: 'MCP Servers', subtitle: 'Connect third-party MCP servers and make their tools available in chat.', addServer: 'Add server', loading: 'Loading…', disabled: 'Disabled', empty: 'No MCP servers yet. Select “Add server” to configure one.', selectHint: 'Select a server on the left, or add a new MCP server.', transportHint: 'stdio runs a local process; Streamable HTTP is the current remote protocol; SSE supports legacy servers.',
+    editTitle: 'Edit MCP server', newTitle: 'New MCP server', close: 'Close editor', name: 'Name (used as the tool prefix)', namePlaceholder: 'filesystem / github / postgres', transport: 'Transport', stdio: 'stdio (local process)', http: 'Streamable HTTP', sse: 'Legacy SSE', command: 'Command (npx / node / uvx / python allowed)', args: 'Arguments (space-separated)', cwd: 'Working directory (optional)', cwdPlaceholder: 'Leave blank to use the project root', url: 'MCP URL', headers: 'Headers JSON (Bearer token / API key)', enabled: 'Enable this server for use in chat after saving', save: 'Save', saving: 'Saving…', test: 'Test', testConnection: 'Test connection', connect: 'Connect', disconnect: 'Disconnect', delete: 'Delete', confirmDelete: 'Delete this MCP server?', connected: '{count} tools connected', testing: 'Testing…', error: 'Error', tools: 'Tools', resources: 'Resources', prompts: 'Prompts',
+  },
+  ja: {
+    title: 'MCP サーバー', subtitle: '外部 MCP サーバーを接続し、ツールをチャットで利用できます。', addServer: 'サーバーを追加', loading: '読み込み中…', disabled: '無効', empty: 'MCP サーバーはまだありません。「サーバーを追加」から設定してください。', selectHint: '左側でサーバーを選択するか、新しい MCP サーバーを追加します。', transportHint: 'stdio はローカルプロセス、Streamable HTTP は現在のリモートプロトコル、SSE は旧サービス互換です。',
+    editTitle: 'MCP サーバーを編集', newTitle: 'MCP サーバーを新規作成', close: 'エディターを閉じる', name: '名前（ツールの接頭辞）', namePlaceholder: 'filesystem / github / postgres', transport: '転送方式', stdio: 'stdio（ローカルプロセス）', http: 'Streamable HTTP', sse: 'Legacy SSE', command: 'コマンド（npx / node / uvx / python）', args: '引数（スペース区切り）', cwd: '作業ディレクトリ（任意）', cwdPlaceholder: '空欄ならプロジェクトルートを使用', url: 'MCP URL', headers: 'Headers JSON（Bearer Token / API Key）', enabled: '保存後、チャットでこのサーバーを使用する', save: '保存', saving: '保存中…', test: 'テスト', testConnection: '接続テスト', connect: '接続', disconnect: '切断', delete: '削除', confirmDelete: 'この MCP サーバーを削除しますか？', connected: '{count} 個のツールを接続しました', testing: 'テスト中…', error: 'エラー', tools: 'ツール', resources: 'リソース', prompts: 'プロンプト',
+  },
+  ko: {
+    title: 'MCP 서버', subtitle: '외부 MCP 서버를 연결하고 해당 도구를 채팅에서 사용하세요.', addServer: '서버 추가', loading: '불러오는 중…', disabled: '사용 안 함', empty: 'MCP 서버가 없습니다. “서버 추가”를 눌러 설정하세요.', selectHint: '왼쪽에서 서버를 선택하거나 새 MCP 서버를 추가하세요.', transportHint: 'stdio는 로컬 프로세스, Streamable HTTP는 현재 원격 프로토콜, SSE는 이전 서버 호환용입니다.',
+    editTitle: 'MCP 서버 편집', newTitle: '새 MCP 서버', close: '편집기 닫기', name: '이름(도구 접두사)', namePlaceholder: 'filesystem / github / postgres', transport: '전송 방식', stdio: 'stdio(로컬 프로세스)', http: 'Streamable HTTP', sse: 'Legacy SSE', command: '명령(npx / node / uvx / python 허용)', args: '인수(공백으로 구분)', cwd: '작업 디렉터리(선택)', cwdPlaceholder: '비워 두면 프로젝트 루트 사용', url: 'MCP URL', headers: 'Headers JSON(Bearer Token / API Key)', enabled: '저장 후 채팅에서 이 서버 사용', save: '저장', saving: '저장 중…', test: '테스트', testConnection: '연결 테스트', connect: '연결', disconnect: '연결 해제', delete: '삭제', confirmDelete: '이 MCP 서버를 삭제할까요?', connected: '도구 {count}개를 연결했습니다', testing: '테스트 중…', error: '오류', tools: '도구', resources: '리소스', prompts: '프롬프트',
+  },
+  'zh-TW': {
+    title: 'MCP 服務', subtitle: '連接第三方 MCP 服務，工具會自動加入對話。', addServer: '新增服務', loading: '載入中…', disabled: '停用', empty: '尚未設定 MCP 服務。點擊「新增服務」開始設定。', selectHint: '從左側選擇服務，或新增一個 MCP 服務。', transportHint: 'stdio 執行本機程序；Streamable HTTP 用於目前遠端協定；SSE 僅相容舊服務。',
+    editTitle: '編輯 MCP 服務', newTitle: '新建 MCP 服務', close: '關閉編輯器', name: '名稱（用作工具前綴）', namePlaceholder: 'filesystem / github / postgres', transport: '傳輸方式', stdio: 'stdio（本機程序）', http: 'Streamable HTTP', sse: 'Legacy SSE', command: '命令（允許 npx / node / uvx / python）', args: '參數（以空格分隔）', cwd: '工作目錄（選填）', cwdPlaceholder: '留空使用專案根目錄', url: 'MCP URL', headers: 'Headers JSON（Bearer Token / API Key）', enabled: '啟用，儲存後即可在對話中呼叫', save: '儲存', saving: '儲存中…', test: '測試', testConnection: '測試連接', connect: '連接', disconnect: '中斷', delete: '刪除', confirmDelete: '刪除這個 MCP 服務？', connected: '已連接 {count} 個工具', testing: '測試中…', error: '錯誤', tools: '工具', resources: '資源', prompts: '提示詞',
+  },
+}
+
 export const translations = {
   zh: {
+    access: ACCESS_TRANSLATIONS.zh,
+    localFiles: { ...LOCAL_FILES_TRANSLATIONS.zh, chatAction: '授权文件' },
+    mcp: MCP_TRANSLATIONS.zh,
+    modelProviders: {
+      title: '自定义模型 Provider', subtitle: '配置 OpenAI 兼容端点，API Key 仅保存在服务端。', add: '新增', saved: '已保存模型配置。',
+      confirmDelete: '删除这个模型 Provider？', testing: '正在测试端点…', testOk: '端点可用，延迟', default: '默认', test: '测试',
+      empty: '尚未配置自定义 Provider，将继续使用服务端 .env。', editor: '模型 Provider 配置', name: '显示名称', keepSecret: '留空保留原 Key',
+      models: '模型列表（每行或逗号分隔）', defaultModel: '默认模型', headers: '自定义 Headers JSON（可选）', enabled: '启用', makeDefault: '设为默认', save: '保存', navTitle: '模型', navSubtitle: '管理云端和本地 OpenAI 兼容模型。', localPreset: '本地模型快速配置', optional: '可选', localNoKey: 'Ollama / LM Studio 可留空', discover: '检测模型', detecting: '正在检测…', discovered: '已检测到 {count} 个模型。', noModels: '端点可达，但没有返回模型列表。', manage: '管理模型',
+    },
+    mcpExternal: {
+      title: '连接外部 MCP 应用', endpoint: 'MCP 端点', instruction: '选择常用客户端，粘贴访问密钥后即可复制可用配置。', createKey: '创建访问密钥', keyLabel: '临时访问密钥', keyPrivacy: '仅用于生成当前配置，不会保存到浏览器。', invalidKey: '访问密钥必须以 ymak_ 开头。', appLabel: 'MCP 客户端', configHint: '复制后粘贴到所选应用的 MCP 设置。', copy: '复制配置', copied: '已复制', copyError: '复制失败，请手动选择上方配置。',
+    },
     nav: {
       home: '首页',
       chat: '对话',
@@ -364,6 +460,18 @@ export const translations = {
     },
   },
   en: {
+    access: ACCESS_TRANSLATIONS.en,
+    localFiles: { ...LOCAL_FILES_TRANSLATIONS.en, chatAction: 'Authorize files' },
+    mcp: MCP_TRANSLATIONS.en,
+    modelProviders: {
+      title: 'Custom model providers', subtitle: 'Configure OpenAI-compatible endpoints. API keys stay on the server.', add: 'Add', saved: 'Model provider saved.',
+      confirmDelete: 'Delete this model provider?', testing: 'Testing endpoint…', testOk: 'Endpoint is available, latency', default: 'Default', test: 'Test',
+      empty: 'No custom provider yet. Server environment settings remain active.', editor: 'Model provider settings', name: 'Display name', keepSecret: 'leave blank to keep current key',
+      models: 'Models (one per line or comma-separated)', defaultModel: 'Default model', headers: 'Custom Headers JSON (optional)', enabled: 'Enabled', makeDefault: 'Make default', save: 'Save', navTitle: 'Models', navSubtitle: 'Manage cloud and local OpenAI-compatible models.', localPreset: 'Quick local setup', optional: 'optional', localNoKey: 'Leave blank for Ollama / LM Studio', discover: 'Detect models', detecting: 'Detecting…', discovered: 'Found {count} models.', noModels: 'The endpoint is reachable but returned no models.', manage: 'Manage models',
+    },
+    mcpExternal: {
+      title: 'Connect external MCP applications', endpoint: 'MCP endpoint', instruction: 'Choose a client, paste an access key, and copy a ready-to-use configuration.', createKey: 'Create access key', keyLabel: 'Temporary access key', keyPrivacy: 'Used only to generate this configuration and never saved in the browser.', invalidKey: 'The access key must begin with ymak_.', appLabel: 'MCP client', configHint: 'Paste the copied configuration into the selected app’s MCP settings.', copy: 'Copy config', copied: 'Copied', copyError: 'Copy failed. Select and copy the configuration above manually.',
+    },
     nav: {
       home: 'Home',
       chat: 'Chat',
@@ -714,6 +822,18 @@ export const translations = {
     },
   },
   ja: {
+    access: ACCESS_TRANSLATIONS.ja,
+    localFiles: { ...LOCAL_FILES_TRANSLATIONS.ja, chatAction: 'ファイルを許可' },
+    mcp: MCP_TRANSLATIONS.ja,
+    modelProviders: {
+      title: 'カスタムモデル Provider', subtitle: 'OpenAI 互換エンドポイントを設定します。API Key はサーバー内に保存されます。', add: '追加', saved: 'モデル設定を保存しました。',
+      confirmDelete: 'このモデル Provider を削除しますか？', testing: '接続をテスト中…', testOk: '接続成功、遅延', default: '既定', test: 'テスト',
+      empty: 'カスタム Provider は未設定です。サーバーの環境設定を使用します。', editor: 'モデル Provider 設定', name: '表示名', keepSecret: '空欄なら現在の Key を保持',
+      models: 'モデル一覧（1行またはカンマ区切り）', defaultModel: '既定モデル', headers: 'カスタム Headers JSON（任意）', enabled: '有効', makeDefault: '既定にする', save: '保存', navTitle: 'モデル', navSubtitle: 'クラウドとローカルの OpenAI 互換モデルを管理します。', localPreset: 'ローカルモデルのクイック設定', optional: '任意', localNoKey: 'Ollama / LM Studio は空欄可', discover: 'モデルを検出', detecting: '検出中…', discovered: '{count} 個のモデルを検出しました。', noModels: '接続できましたがモデル一覧が空です。', manage: 'モデル管理',
+    },
+    mcpExternal: {
+      title: '外部 MCP アプリを接続', endpoint: 'MCP エンドポイント', instruction: 'クライアントを選択し、アクセスキーを貼り付けて、そのまま使える設定をコピーします。', createKey: 'アクセスキーを作成', keyLabel: '一時アクセスキー', keyPrivacy: '現在の設定生成にのみ使用され、ブラウザーには保存されません。', invalidKey: 'アクセスキーは ymak_ で始める必要があります。', appLabel: 'MCP クライアント', configHint: 'コピーした設定を選択したアプリの MCP 設定に貼り付けます。', copy: '設定をコピー', copied: 'コピー済み', copyError: 'コピーできませんでした。上の設定を手動で選択してコピーしてください。',
+    },
     nav: {
       home: 'ホーム',
       chat: 'チャット',
@@ -1064,6 +1184,18 @@ export const translations = {
     },
   },
   ko: {
+    access: ACCESS_TRANSLATIONS.ko,
+    localFiles: { ...LOCAL_FILES_TRANSLATIONS.ko, chatAction: '파일 권한 부여' },
+    mcp: MCP_TRANSLATIONS.ko,
+    modelProviders: {
+      title: '사용자 지정 모델 Provider', subtitle: 'OpenAI 호환 엔드포인트를 설정합니다. API Key는 서버에만 저장됩니다.', add: '추가', saved: '모델 설정을 저장했습니다.',
+      confirmDelete: '이 모델 Provider를 삭제할까요?', testing: '엔드포인트 테스트 중…', testOk: '엔드포인트 사용 가능, 지연', default: '기본값', test: '테스트',
+      empty: '사용자 지정 Provider가 없습니다. 서버 환경 설정을 계속 사용합니다.', editor: '모델 Provider 설정', name: '표시 이름', keepSecret: '비워 두면 기존 Key 유지',
+      models: '모델 목록(줄 또는 쉼표로 구분)', defaultModel: '기본 모델', headers: '사용자 지정 Headers JSON(선택)', enabled: '사용', makeDefault: '기본값으로 설정', save: '저장', navTitle: '모델', navSubtitle: '클라우드 및 로컬 OpenAI 호환 모델을 관리합니다.', localPreset: '로컬 모델 빠른 설정', optional: '선택', localNoKey: 'Ollama / LM Studio는 비워 둘 수 있음', discover: '모델 감지', detecting: '감지 중…', discovered: '{count}개 모델을 찾았습니다.', noModels: '엔드포인트는 연결되지만 모델 목록이 비어 있습니다.', manage: '모델 관리',
+    },
+    mcpExternal: {
+      title: '외부 MCP 앱 연결', endpoint: 'MCP 엔드포인트', instruction: '클라이언트를 선택하고 액세스 키를 붙여 넣은 뒤 바로 사용할 설정을 복사하세요.', createKey: '액세스 키 만들기', keyLabel: '임시 액세스 키', keyPrivacy: '현재 설정 생성에만 사용되며 브라우저에 저장되지 않습니다.', invalidKey: '액세스 키는 ymak_로 시작해야 합니다.', appLabel: 'MCP 클라이언트', configHint: '복사한 설정을 선택한 앱의 MCP 설정에 붙여 넣으세요.', copy: '설정 복사', copied: '복사됨', copyError: '복사하지 못했습니다. 위 설정을 직접 선택하여 복사하세요.',
+    },
     nav: {
       home: '홈',
       chat: '채팅',
@@ -1414,6 +1546,18 @@ export const translations = {
     },
   },
   'zh-TW': {
+    access: ACCESS_TRANSLATIONS['zh-TW'],
+    localFiles: { ...LOCAL_FILES_TRANSLATIONS['zh-TW'], chatAction: '授權檔案' },
+    mcp: MCP_TRANSLATIONS['zh-TW'],
+    modelProviders: {
+      title: '自訂模型 Provider', subtitle: '設定 OpenAI 相容端點，API Key 僅保存在伺服器端。', add: '新增', saved: '已儲存模型設定。',
+      confirmDelete: '刪除這個模型 Provider？', testing: '正在測試端點…', testOk: '端點可用，延遲', default: '預設', test: '測試',
+      empty: '尚未設定自訂 Provider，將繼續使用伺服器 .env。', editor: '模型 Provider 設定', name: '顯示名稱', keepSecret: '留空保留原 Key',
+      models: '模型清單（每行或逗號分隔）', defaultModel: '預設模型', headers: '自訂 Headers JSON（選填）', enabled: '啟用', makeDefault: '設為預設', save: '儲存', navTitle: '模型', navSubtitle: '管理雲端與本機 OpenAI 相容模型。', localPreset: '本機模型快速設定', optional: '選填', localNoKey: 'Ollama / LM Studio 可留空', discover: '偵測模型', detecting: '偵測中…', discovered: '已偵測到 {count} 個模型。', noModels: '端點可連線，但未回傳模型清單。', manage: '管理模型',
+    },
+    mcpExternal: {
+      title: '連接外部 MCP 應用程式', endpoint: 'MCP 端點', instruction: '選擇常用客戶端，貼上存取金鑰後即可複製可用設定。', createKey: '建立存取金鑰', keyLabel: '臨時存取金鑰', keyPrivacy: '僅用於產生目前設定，不會儲存在瀏覽器。', invalidKey: '存取金鑰必須以 ymak_ 開頭。', appLabel: 'MCP 客戶端', configHint: '複製後貼到所選應用程式的 MCP 設定。', copy: '複製設定', copied: '已複製', copyError: '複製失敗，請手動選取上方設定。',
+    },
     nav: {
       home: '首頁',
       chat: '對話',

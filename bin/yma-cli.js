@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync } from 'n
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-const HELP = `yma-cli — server-first CLI for your-model-atelier
+const HELP = `yma-cli — server-first CLI for Gugo
 
 Usage:
   yma-cli login --email <email>

@@ -1,4 +1,4 @@
-# Your Model Atelier
+# Gugo
 
 > 本地/内网可用的 Web AI 工作台 — Agent · Skill · Memory · Tool · Subagent · Job  
 > 开浏览器就用，无需安装客户端。
@@ -19,7 +19,7 @@
 
 一个**完整的 Web AI Agent 平台**，跟你熟悉的 Claude Code、Cursor、Cherry Studio、LobeChat、openhanako 是同一品类，但走 **Web 路线**（浏览器即用，没有 .dmg / .exe / .AppImage）。
 
-| 维度 | Your Model Atelier | openhanako | Claude Code |
+| 维度 | Gugo | openhanako | Claude Code |
 |---|---|---|---|
 | 形态 | Web（浏览器即用） | Electron 桌面 | CLI |
 | 部署 | 单 Node 进程 + SQLite | 多端打包 | 终端 |
@@ -62,8 +62,13 @@
 - 反思工具：manage_todos / reflect / request_clarification
 
 ### MCP 客户端
-- stdio + SSE Transport，工具发现 / 调用 / 自动重连
+- stdio + Streamable HTTP + Legacy SSE，工具发现 / 调用 / 自动重连
 - 命令白名单 + 工具审计
+
+### 模型与 Browser
+- 设置页可新增用户隔离的 OpenAI 兼容 Provider：Base URL、API Key、模型列表、自定义 Headers 与默认模型
+- 本机 Edge/Chrome DevTools 自动化：打开、快照、点击、输入、等待、截图、控制台诊断与关闭
+- API Key 只保存在服务端，列表与编辑响应均脱敏
 
 ### 鉴权 / 安全
 - 邮箱验证码 + 邮箱密码双通道（60s 倒计时防刷）
@@ -149,6 +154,38 @@ Docker：
 docker compose up -d
 ```
 
+### 自定义模型与外部 MCP 应用
+
+登录后在「设置 → 系统诊断 → 自定义模型 Provider」新增 OpenAI 兼容端点。模型配置会自动用于聊天、诊断、后台任务和子代理；留空 API Key 可保留原密钥。
+
+Browser 工具需要 Node.js 22+ 和已安装的 Edge/Chrome。默认自动探测浏览器，也可在 `.env` 设置 `BROWSER_EXECUTABLE_PATH`；仅受限 CI/沙箱环境才使用 `BROWSER_NO_SANDBOX=1`。
+
+登录后从左侧「连接」进入 Access 中心（Hash 路由为 `/#/access`）：Browser 默认启用，可随时关闭；Notion 使用 Integration Token，并需把目标页面共享给该 Integration；GitHub 建议使用仅授权所需仓库的 Fine-grained PAT；飞书使用企业自建应用的 App ID / App Secret；个人微信使用二维码扫码。凭据只保存在服务端，返回前端时会脱敏。连接成功后，Notion、GitHub 与 Browser 工具会同时出现在站内聊天工具和对外 MCP 的工具列表中。
+
+对外 MCP Server 位于 `http://<服务器地址>:5175/mcp`。先在「手机入口 / LAN Access Keys」创建 `ymak_...` 密钥，再作为 `Authorization: Bearer <key>` 使用。Claude Desktop、Cursor 和兼容 JSON 导入的客户端可配置：
+
+```json
+{
+  "mcpServers": {
+    "gugo": {
+      "type": "http",
+      "url": "http://127.0.0.1:5175/mcp",
+      "headers": { "Authorization": "Bearer ymak_YOUR_ACCESS_KEY" }
+    }
+  }
+}
+```
+
+Codex 的 `.codex/config.toml`：
+
+```toml
+[mcp_servers.gugo]
+url = "http://127.0.0.1:5175/mcp"
+http_headers = { Authorization = "Bearer ymak_YOUR_ACCESS_KEY" }
+```
+
+Cherry Studio 选择 `Streamable HTTP`，URL 填上述 `/mcp` 地址，并添加同一个 Authorization Header。跨设备连接时请把 `127.0.0.1` 换成运行本项目机器的局域网地址；生产公网部署应使用 HTTPS。
+
 ---
 
 ## 环境变量
@@ -166,6 +203,9 @@ docker compose up -d
 | `WORKSPACE_GIT_ENABLED` | 否 | Git 工具开关 | `0` |
 | `WORKSPACE_ROOT` | 否 | 工作区根目录 | `process.cwd()` |
 | `MCP_STDIO_ALLOWED_COMMANDS` | 否 | MCP stdio 命令白名单 | `npx,node,uvx,…` |
+| `MCP_SERVER_ENABLED` | 否 | 开启对外 `/mcp` Streamable HTTP Server | `1` |
+| `MCP_RATE_LIMIT_PER_MINUTE` | 否 | `/mcp` 每来源 IP 每分钟请求上限 | `300` |
+| `MCP_MAX_BODY_BYTES` | 否 | `/mcp` 单请求最大字节数 | `1048576` |
 | `APP_DATA_DIR` | 否 | 数据目录 | `server-data/` |
 | `APP_DB_PATH` | 否 | SQLite 路径 | `server-data/app.db` |
 | `PORT` | 否 | HTTP 端口 | `5175` |

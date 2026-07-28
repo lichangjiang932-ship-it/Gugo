@@ -6,7 +6,7 @@ const r = await createPptx({
   title: '2026 增长策略',
   subtitle: '从规模扩张到效率驱动',
   theme: 'noir',
-  brand: 'Your Model Atelier',
+  brand: 'Gugo',
   slides: [
     { title: '占位', layout: 'cover' },
     { title: '本季度核心指标', layout: 'kpi', kpi: [
@@ -39,7 +39,7 @@ const r = await createPptx({
       text: '过去 6 个月，我们用 1/3 的人完成了原计划 2 倍的事情',
       source: '某 SaaS 公司 CTO',
     }},
-    { title: 'Q&A', layout: 'end', bullets: ['question@yourmodelatelier.ai'] },
+    { title: 'Q&A', layout: 'end', bullets: ['contact@gugo.example'] },
   ],
 })
 console.log('生成:', r.fullPath, `${(r.byteLength/1024).toFixed(1)} KB · ${r.slideCount} 页`)

@@ -156,7 +156,7 @@ export default function CoverPage() {
                 textShadow: '0 0 60px rgba(232, 106, 60, 0.15)',
               }}
             >
-              Your Model Atelier
+              Gugo
             </motion.h1>
 
             {/* Subtitle */}

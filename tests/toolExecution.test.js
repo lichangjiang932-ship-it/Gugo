@@ -67,3 +67,39 @@ test('executeToolCall routes workspace read_file through authenticated fs endpoi
     globalThis.window = oldWindow
   }
 })
+
+test('executeToolCall routes connected app list and open through authenticated connector endpoints', async () => {
+  const oldWindow = globalThis.window
+  const oldFetch = globalThis.fetch
+  globalThis.window = {
+    localStorage: {
+      getItem: (key) => key === TOKEN_KEY ? 'token-apps' : null,
+      setItem: () => {},
+      removeItem: () => {},
+    },
+  }
+  const calls = []
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url, init })
+    if (url === '/api/connectors/apps') {
+      return new Response(JSON.stringify({ ok: true, apps: [{ provider: 'web_gmail', enabled: true }] }), { status: 200 })
+    }
+    return new Response(JSON.stringify({ ok: true, result: { app: { provider: 'web_gmail' }, browser: { connected: true } } }), { status: 200 })
+  }
+  try {
+    const listed = await executeToolCall({ name: 'connected_app_list', arguments: '{}' })
+    const opened = await executeToolCall({ name: 'connected_app_open', arguments: JSON.stringify({ provider: 'web_gmail' }) })
+    assert.equal(listed.ok, true)
+    assert.match(listed.content, /web_gmail/)
+    assert.equal(opened.ok, true)
+    assert.equal(calls[0].url, '/api/connectors/apps')
+    assert.equal(calls[0].init.method, 'GET')
+    assert.equal(calls[0].init.headers.Authorization, 'Bearer token-apps')
+    assert.equal(calls[1].url, '/api/connectors/apps/open')
+    assert.equal(calls[1].init.method, 'POST')
+    assert.deepEqual(JSON.parse(calls[1].init.body), { provider: 'web_gmail' })
+  } finally {
+    globalThis.fetch = oldFetch
+    globalThis.window = oldWindow
+  }
+})

@@ -18,6 +18,21 @@
  */
 
 const BUILTIN_SPECS = {
+  list_directory: {
+    type: 'function',
+    function: {
+      name: 'list_directory',
+      description: 'List files and folders inside the workspace or a user-authorized local directory.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          limit: { type: 'integer', minimum: 1, maximum: 500 },
+        },
+        required: ['path'],
+      },
+    },
+  },
   web_search: {
     type: 'function',
     function: {

@@ -51,6 +51,11 @@ import { handleBridgeRequest } from './routes/bridgeRoutes.js'
 import { handleDeskRequest } from './routes/deskRoutes.js'
 import { handleMobileRequest } from './routes/mobileRoutes.js'
 import { handleToolPermissionsRequest } from './routes/toolPermissionRoutes.js'
+import { handleModelProviderRequest } from './routes/modelProviderRoutes.js'
+import { handleBrowserRequest } from './routes/browserRoutes.js'
+import { handleConnectorRequest } from './routes/connectorRoutes.js'
+import { handleLocalFileAccessRequest } from './routes/localFileAccessRoutes.js'
+import { handleMcpServerRequest } from './mcp/mcpServer.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -179,6 +184,10 @@ function createRouter(getEnv = getRuntimeEnv) {
   const cronScheduler = getCronScheduler()
   cronScheduler.start()
   return function router(req, res) {
+  if (req.url === '/mcp' || req.url?.startsWith('/mcp?')) {
+    return handleMcpServerRequest(req, res)
+  }
+
   // 健康检查
   if (req.url === '/api/health') {
     healthCheck(req, res, getEnv)
@@ -200,6 +209,10 @@ function createRouter(getEnv = getRuntimeEnv) {
   }
 
   // 模型状态
+  if (req.url?.startsWith('/api/model/providers')) {
+    return handleModelProviderRequest(req, res)
+  }
+
   if (req.url?.startsWith('/api/model/status')) {
     return handleModelStatusRequest(req, res)
   }
@@ -215,6 +228,18 @@ function createRouter(getEnv = getRuntimeEnv) {
   }
 
   // 工具代理(web 搜索 / URL 抓取)
+  if (req.url?.startsWith('/api/browser/')) {
+    return handleBrowserRequest(req, res)
+  }
+
+  if (req.url?.startsWith('/api/connectors/')) {
+    return handleConnectorRequest(req, res)
+  }
+
+  if (req.url?.startsWith('/api/local-files')) {
+    return handleLocalFileAccessRequest(req, res)
+  }
+
   // 工具 spec 列表(底座 A) — 在更具体的 /api/tools/* 路由之前匹配,GET 公共端点
   if (req.url?.startsWith('/api/tools/specs')) {
     return handleToolSpecsRequest(req, res)
@@ -375,7 +400,7 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   bootstrap()
 
   const server = createAppServer().listen(port, host, () => {
-    if (process.env.NODE_ENV !== 'production') logger.info(`Your Model Atelier running at http://${host}:${port}/`)
+    if (process.env.NODE_ENV !== 'production') logger.info(`Gugo running at http://${host}:${port}/`)
   })
 
   // ★ #34: 进程级兜底 — 一个未捕获的异常不应该让服务静默退出

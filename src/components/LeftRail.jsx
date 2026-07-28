@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { MessageSquare, Wrench, Settings, Sparkles, X, Search, MoreHorizontal, Archive, ArchiveRestore } from 'lucide-react'
+import { Link2, MessageSquare, Wrench, Settings, Sparkles, X, Search, MoreHorizontal, Archive, ArchiveRestore } from 'lucide-react'
 import { useAppContext } from '../store/AppContext'
 import {
   LOGIN_CODE_COUNTDOWN_SECONDS,
@@ -63,6 +63,7 @@ export default function LeftRail() {
   const [loginMode, setLoginMode] = useState('password')
   const [loginPassword, setLoginPassword] = useState('')
   const [loginCodeCountdown, setLoginCodeCountdown] = useState(0)
+  const [loginTarget, setLoginTarget] = useState(null)
   const [sessionFilter, setSessionFilter] = useState('active')
   const [openMenuId, setOpenMenuId] = useState(null)
 
@@ -74,6 +75,16 @@ export default function LeftRail() {
   }, [])
 
   useEffect(() => {
+    const openLogin = (event) => {
+      setLoginTarget(event.detail?.path || null)
+      setLoginMessage(event.detail?.message || '请先登录账户')
+      setShowLogin(true)
+    }
+    window.addEventListener('auth:required', openLogin)
+    return () => window.removeEventListener('auth:required', openLogin)
+  }, [])
+
+  useEffect(() => {
     if (loginCodeCountdown <= 0) return undefined
     const timer = window.setInterval(() => {
       setLoginCodeCountdown((current) => Math.max(0, current - 1))
@@ -81,10 +92,11 @@ export default function LeftRail() {
     return () => window.clearInterval(timer)
   }, [loginCodeCountdown])
 
-  const settingsChildPaths = ['/task', '/permissions', '/memory', '/desk', '/mobile-keys', '/agents', '/channels', '/mcp', '/hooks', '/cron', '/history']
+  const settingsChildPaths = ['/task', '/permissions', '/memory', '/desk', '/agents', '/channels', '/mcp', '/history']
   const navItems = [
     { path: '/chat', icon: MessageSquare, label: t('nav.chat') },
     { path: '/skills', icon: Wrench, label: t('nav.skills') },
+    { path: '/access', icon: Link2, label: t('access.title'), requiresLogin: true },
     { path: '/settings', icon: Settings, label: t('nav.settings'), requiresLogin: true, activePaths: settingsChildPaths },
   ]
 
@@ -116,6 +128,7 @@ export default function LeftRail() {
 
   const handleNav = (item) => {
     if (item.requiresLogin && !getAuthToken()) {
+      setLoginTarget(item.path)
       setShowLogin(true)
       setLoginMessage('请先登录账户')
       return
@@ -180,7 +193,9 @@ export default function LeftRail() {
       setLoginCode('')
       setLoginPassword('')
       setLoginMessage('')
-      navigate(settingsPathAfterLogin(data.user))
+      const defaultPath = settingsPathAfterLogin(data.user)
+      navigate(data.user.hasPassword === false ? defaultPath : (loginTarget || defaultPath))
+      setLoginTarget(null)
     } catch (error) {
       setLoginMessage(error.message)
       toast.error({ title: t('toast.loginFailed'), body: error.message })
@@ -282,7 +297,7 @@ export default function LeftRail() {
             <div data-accent-bg className="w-7 h-7 rounded-full border border-ink flex items-center justify-center bg-paper">
               <Sparkles data-accent className="w-3.5 h-3.5 text-ember" />
             </div>
-            <span className="font-display italic text-lg text-ink">your model</span>
+            <span className="font-display italic text-lg text-ink">Gugo</span>
           </button>
           <NotificationBell />
         </div>
@@ -406,7 +421,7 @@ export default function LeftRail() {
                 <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">LOGIN REQUIRED</span>
                 <h2 className="font-hand text-xl text-ink mt-1">登录账户</h2>
               </div>
-              <button onClick={() => setShowLogin(false)} className="text-ink-fade hover:text-ink">
+              <button onClick={() => { setShowLogin(false); setLoginTarget(null) }} className="text-ink-fade hover:text-ink">
                 <X className="w-4 h-4" />
               </button>
             </div>

@@ -36,9 +36,9 @@ function parseSkillPrompt(prompt = '') {
 }
 
 export function createDefaultExecuteStep({
-  runModel = async ({ messages, signal }) => callBackgroundModel({ messages, signal }),
-  runModelWithTools = async ({ messages, tools, signal }) =>
-    callBackgroundModelWithTools({ messages, tools, signal }),
+  runModel = async ({ messages, signal, userId }) => callBackgroundModel({ messages, signal, userId }),
+  runModelWithTools = async ({ messages, tools, signal, userId }) =>
+    callBackgroundModelWithTools({ messages, tools, signal, userId }),
   createDocxImpl = createDocx,
   enableServerTools = true,
 } = {}) {
@@ -128,7 +128,7 @@ export function createDefaultExecuteStep({
         job,
         step,
         messages,
-        runModel: runModelWithTools,
+        runModel: (options) => runModelWithTools({ ...options, userId: job.userId }),
         signal,
       })
       return {
@@ -149,6 +149,7 @@ export function createDefaultExecuteStep({
       userPrompt: finalPrompt,
       skill,
       signal,
+      userId: job.userId,
     })
     return {
       ok: true,

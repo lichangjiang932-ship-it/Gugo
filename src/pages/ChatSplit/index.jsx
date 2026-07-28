@@ -106,7 +106,7 @@ export default function ChatSplit() {
   const { state, dispatch } = useAppContext()
   const toast = useToast()
   const { t } = useT()
-  const { activeAgentId: globalActiveAgentId, activeAgent: globalActiveAgent, agents, setActiveAgentId } = useActiveAgent()
+  const { activeAgentId: globalActiveAgentId } = useActiveAgent()
   const [input, setInput] = useState('')
   const [modelOptions, setModelOptions] = useState([])
   const [toolMaxRounds, setToolMaxRounds] = useState(5)
@@ -175,10 +175,9 @@ export default function ChatSplit() {
   // 阶段 6: session sticky agent。优先用 session.agentId，没设则 fallback 全局。
   const sessionAgentId = activeSession?.agentId || null
   const effectiveAgentId = sessionAgentId || globalActiveAgentId || null
-  const effectiveAgent = agents.find((a) => a.id === effectiveAgentId) || globalActiveAgent || null
   const messages = activeSession?.messages ?? EMPTY_MESSAGES
   const tasks = state.tasks
-  const agentMode = state.agentMode || 'chat'
+  const [showCodingWorkbench, setShowCodingWorkbench] = useState(false)
   useEffect(() => {
     stateRef.current = state
   }, [state])
@@ -252,7 +251,11 @@ export default function ChatSplit() {
       }
     }
     loadModels()
-    return () => { cancelled = true }
+    window.addEventListener('model-providers:changed', loadModels)
+    return () => {
+      cancelled = true
+      window.removeEventListener('model-providers:changed', loadModels)
+    }
   }, [])
 
   useEffect(() => {
@@ -392,17 +395,6 @@ export default function ChatSplit() {
         const messages = []
         const systemPrompt = skillId ? getSkillSystemPrompt(skillId, state.skillConfigs, runtimeSkills, { userPrompt }) : ''
         if (systemPrompt) messages.push({ role: 'system', content: systemPrompt })
-        if (agentMode === 'plan') {
-          messages.push({
-            role: 'system',
-            content: 'Plan mode: inspect/read only. Do not modify files, do not run shell/build/test commands, and return a concise implementation plan with risks and acceptance checks.',
-          })
-        } else if (agentMode === 'code') {
-          messages.push({
-            role: 'system',
-            content: 'Code mode: behave like a local coding agent. Inspect git status/diff, read files before editing, use precise file edits, run allowed checks when useful, and summarize changed files. Never commit or push; the user must do that from Coding Workbench.',
-          })
-        }
         messages.push(...historyMessages)
         const attachmentsToUse = explicitAttachments || attachments
         messages.push({ role: 'user', content: buildUserContentWithAttachments(userPrompt || content, attachmentsToUse) })
@@ -453,13 +445,13 @@ export default function ChatSplit() {
           // 工具调用循环:每轮 stream 模型 → 收 tool_calls → 本地执行 → messages 追加 tool 结果 → 再 stream
           // 上限 5 轮防止失控;无 tool_calls 即文本回复完成,直接退出
           const enabledToolNames = filterToolNamesForSkill(
-            resolveToolsForMode(state.toolsConfig || {}, agentMode),
+            resolveToolsForMode(state.toolsConfig || {}),
             skillId,
           )
           // Feature 1: 拉服务端拼上 MCP / skill 动态工具,fallback 到纯本地 builtin
           let tools
           try {
-            tools = await buildToolSpecsAsync({ enabledBuiltinNames: enabledToolNames, mode: agentMode })
+            tools = await buildToolSpecsAsync({ enabledBuiltinNames: enabledToolNames, mode: 'chat' })
           } catch {
             tools = buildToolSpecs(enabledToolNames)
           }
@@ -669,7 +661,7 @@ export default function ChatSplit() {
     },
     // ★ #27: 细粒度 deps,只收 triggerSendFlow body 里实际读的字段;
     //         避免依赖整个 state 导致每次 sessionDrafts/tasks 变都重建 callback
-    [attachments, dispatch, isGenerating, modelOptions, selectedModel, toolMaxRounds, runtimeSkills, agentMode, effectiveAgentId, toast, t,
+    [attachments, dispatch, isGenerating, modelOptions, selectedModel, toolMaxRounds, runtimeSkills, effectiveAgentId, toast, t,
       state.activeSessionId, state.sessions, state.toolsConfig, state.permissions, state.skillConfigs]
   )
 
@@ -945,6 +937,19 @@ export default function ChatSplit() {
 
   const handleAbortTask = () => abortCtrlRef.current?.abort()
 
+  const handleManageModels = () => {
+    if (!isLoggedInLocally()) {
+      window.dispatchEvent(new CustomEvent('auth:required', {
+        detail: {
+          path: '/settings?tab=models',
+          message: '登录后即可添加和使用第三方或本地模型。',
+        },
+      }))
+      return
+    }
+    navigate('/settings?tab=models')
+  }
+
   return (
     <div className="h-screen flex bg-paper overflow-hidden">
       <LeftRail />
@@ -957,8 +962,11 @@ export default function ChatSplit() {
           modelOptions={modelOptions}
           selectedModel={selectedModel}
           hasTasks={tasks.length > 0}
-          agentMode={agentMode}
-          onAgentModeChange={(mode) => dispatch({ type: 'SET_AGENT_MODE', payload: mode })}
+          showWorkbench={showCodingWorkbench}
+          onToggleWorkbench={() => {
+            if (state.previewArtifact) dispatch({ type: 'CLOSE_PREVIEW_ARTIFACT' })
+            setShowCodingWorkbench((visible) => !visible)
+          }}
           onExport={(format = 'json') => {
             if (!activeSession) return
             exportSession(activeSession, format)
@@ -971,16 +979,8 @@ export default function ChatSplit() {
           }}
           onRetry={() => { if (lastFailedPrompt) triggerSendFlow(lastFailedPrompt) }}
           onModelChange={(val) => { setSelectedModel(val); writeStoredModel(val) }}
+          onManageModels={handleManageModels}
           onNavigateTask={() => navigate('/task')}
-          activeAgent={effectiveAgent}
-          agents={agents}
-          onAgentChange={(newId) => {
-            // 设为 session sticky；同时更新全局默认 (下个新会话会用这个)
-            if (activeSession?.id) {
-              dispatch({ type: 'SET_SESSION_AGENT', payload: { sessionId: activeSession.id, agentId: newId } })
-            }
-            setActiveAgentId(newId)
-          }}
         />
 
         {/* Feature 8: Todo 追踪 sticky strip */}
@@ -1036,7 +1036,6 @@ export default function ChatSplit() {
           input={input}
           setInput={setInput}
           onSend={handleSend}
-          agentMode={agentMode}
           attachments={attachments}
           setAttachments={setAttachments}
           showSlashMenu={showSlashMenu}
@@ -1071,7 +1070,7 @@ export default function ChatSplit() {
           onClose={() => dispatch({ type: 'CLOSE_PREVIEW_ARTIFACT' })}
           onMessage={setWorkbenchMessage}
         />
-      ) : agentMode === 'code' ? (
+      ) : showCodingWorkbench ? (
         <CodingWorkbench onMessage={setWorkbenchMessage} />
       ) : null}
 

@@ -4,15 +4,10 @@ import {
   RotateCcw,
   LayoutList,
   ChevronDown,
-  Users,
+  PanelRight,
+  Settings2,
 } from 'lucide-react'
 import { useState, useRef, useEffect } from 'react'
-
-const AGENT_MODES = [
-  { id: 'chat', label: 'Chat' },
-  { id: 'plan', label: 'Plan' },
-  { id: 'code', label: 'Code' },
-]
 
 export default function ChatHeader({
   activeSession,
@@ -21,16 +16,14 @@ export default function ChatHeader({
   modelOptions,
   selectedModel,
   hasTasks,
-  agentMode = 'chat',
-  onAgentModeChange,
+  showWorkbench = false,
+  onToggleWorkbench,
   onExport,
   onCompress,
   onRetry,
   onModelChange,
+  onManageModels,
   onNavigateTask,
-  activeAgent,
-  agents,
-  onAgentChange,
 }) {
   // ★ #12: 导出下拉 (JSON / Markdown)
   const [exportOpen, setExportOpen] = useState(false)
@@ -54,34 +47,16 @@ export default function ChatHeader({
         </h2>
       </div>
       <div className="flex gap-2 items-center">
-        {Array.isArray(agents) && agents.length > 0 && (
-          <label
-            className="inline-flex items-center gap-1 h-7 px-2 rounded-full border border-ink-fade/50 text-[11px] text-ink-soft hover:border-ink-fade transition-colors bg-paper-2"
-            title={`当前 Agent: ${activeAgent?.name || '默认'}`}
-          >
-            <Users className="w-3 h-3 opacity-70" />
-            <select
-              value={activeAgent?.id || ''}
-              onChange={(e) => onAgentChange?.(e.target.value)}
-              className="bg-transparent outline-none cursor-pointer text-[11px] text-ink-soft max-w-[120px] truncate"
-            >
-              {agents.map((a) => (
-                <option key={a.id} value={a.id}>{a.name}{a.isDefault ? ' (default)' : ''}</option>
-              ))}
-            </select>
-          </label>
-        )}
-        <div className="inline-flex rounded-full border border-ink-fade/50 overflow-hidden bg-paper-2" title="Agent mode">
-          {AGENT_MODES.map((mode) => (
-            <button
-              key={mode.id}
-              onClick={() => onAgentModeChange?.(mode.id)}
-              className={`h-7 px-2.5 text-[11px] transition-colors ${agentMode === mode.id ? 'bg-ink text-paper' : 'text-ink-soft hover:bg-paper'}`}
-            >
-              {mode.label}
-            </button>
-          ))}
-        </div>
+        <button
+          type="button"
+          onClick={onToggleWorkbench}
+          aria-pressed={showWorkbench}
+          className={`inline-flex items-center h-7 px-2.5 rounded-full text-xs border transition-colors gap-1.5 ${showWorkbench ? 'border-ink bg-ink text-paper' : 'border-ink-fade/60 text-ink-soft hover:border-ink-fade'}`}
+          title="打开代码工作台"
+        >
+          <PanelRight className="w-3.5 h-3.5" />
+          工作台
+        </button>
         <div className="relative" ref={exportBoxRef}>
           <button
             onClick={() => setExportOpen((v) => !v)}
@@ -143,21 +118,21 @@ export default function ChatHeader({
             ))}
           </select>
         )}
-        {hasTasks && (
-          <button
-            onClick={onNavigateTask}
-            className="inline-flex items-center h-7 px-3 rounded-full text-xs border border-ember-line text-ember bg-ember-soft gap-1.5 hover:bg-ember-soft/70 transition-colors"
-          >
-            <LayoutList className="w-3.5 h-3.5" />
-            任务进行中
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={onManageModels}
+          className="inline-flex items-center h-7 px-2 rounded-full text-xs border border-ink-fade/60 text-ink-soft hover:border-ink-fade transition-colors gap-1"
+          title="添加、检测或切换模型服务"
+        >
+          <Settings2 className="w-3.5 h-3.5" />
+          管理模型
+        </button>
         <button
           onClick={onNavigateTask}
-          className="inline-flex items-center h-7 px-3 rounded-full text-xs border border-ink-fade/60 text-ink-soft hover:border-ink-fade transition-colors gap-1.5"
+          className={`inline-flex items-center h-7 px-3 rounded-full text-xs border transition-colors gap-1.5 ${hasTasks ? 'border-ember-line text-ember bg-ember-soft hover:bg-ember-soft/70' : 'border-ink-fade/60 text-ink-soft hover:border-ink-fade'}`}
         >
           <LayoutList className="w-3.5 h-3.5" />
-          任务面板
+          {hasTasks ? '任务进行中' : '任务面板'}
         </button>
       </div>
     </div>

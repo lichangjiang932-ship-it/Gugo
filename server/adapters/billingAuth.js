@@ -548,6 +548,9 @@ async function smtpCommand(readResponse, socket, command, expected = /^2|^3/) {
 }
 
 export async function sendEmailCode({ env, email, code }) {
+  if (String(env.AUTH_DEV_CODES).toLowerCase() === 'true') {
+    return { sent: false, devCode: code }
+  }
   if (!env.MAIL_SERVER || !env.MAIL_USERNAME || !env.MAIL_PASSWORD) {
     return { sent: false, devCode: code }
   }
@@ -555,7 +558,7 @@ export async function sendEmailCode({ env, email, code }) {
   const port = Number(env.MAIL_PORT || 587)
   const useSsl = String(env.MAIL_USE_SSL).toLowerCase() === 'true'
   const sender = env.MAIL_DEFAULT_SENDER || env.MAIL_USERNAME
-  const subject = 'Your Model Atelier 登录验证码'
+  const subject = 'Gugo 登录验证码'
   const body = `你的登录验证码是：${code}\n\n验证码 10 分钟内有效。`
   const message = [
     `From: ${sender}`,
