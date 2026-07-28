@@ -16,6 +16,7 @@ import { CODE_SEARCH_TOOL_SPECS, dispatchCodeSearchTool } from '../utils/codeSea
 import { APPLY_PATCH_TOOL_SPECS, dispatchApplyPatchTool } from '../utils/applyPatch.js'
 import { AGENTIC_TOOL_SPECS, dispatchAgenticTool, isLoopPauseResult } from '../utils/agenticTools.js'
 import { attachJobBudget, getJobBudget, createJobBudget } from '../utils/jobBudget.js'
+import { requestApproval } from './approvalGate.js'
 import { writeToolAudit } from '../utils/audit.js'
 import crypto from 'node:crypto'
 
@@ -297,7 +298,7 @@ function clipToolOutput(value) {
  * @param {number} [opts.maxIters=MAX_ITERS]
  * @returns {Promise<{text:string, artifactIds:string[], iterations:number}>}
  */
-export async function runToolsLoop({ job, step, messages, runModel, signal, maxIters = MAX_ITERS, executeTool = executeServerTool }) {
+export async function runToolsLoop({ job, step, messages, runModel, signal, maxIters = MAX_ITERS, executeTool = executeServerTool, onApprovalPending = null, onApprovalResolved = null }) {
   const convo = [...messages]
   const artifactIds = []
   let finalText = ''
@@ -341,9 +342,30 @@ export async function runToolsLoop({ job, step, messages, runModel, signal, maxI
       }
       let result
       try {
-        result = await executeTool({ name, args, job, step })
-        if (result?.artifactId) artifactIds.push(result.artifactId)
-        if (isLoopPauseResult(result)) pausedByClarification = result.clarification
+        // ★ 审批门控:高风险工具执行前挂起等人批准/拒绝/改写参数。
+        // 被拒不 throw —— 把拒绝结果喂回模型让它改道,而不是让整个 job 硬失败。
+        const gate = await requestApproval({
+          userId: job?.userId || null,
+          origin: 'job',
+          jobId: job?.id || null,
+          stepId: step?.id || null,
+          toolName: name,
+          args,
+          signal,
+          onPending: onApprovalPending,
+        })
+        if (!gate.proceed) {
+          result = { ok: false, denied: true, error: gate.reason || '用户拒绝了这次调用' }
+        } else {
+          // gate.args 可能被用户改写过,用它而不是原始 args
+          result = await executeTool({ name, args: gate.args ?? args, job, step })
+          if (result?.artifactId) artifactIds.push(result.artifactId)
+          if (isLoopPauseResult(result)) pausedByClarification = result.clarification
+        }
+        // 决策已出(无论批准还是拒绝),把 job 从 awaiting_approval 放回 running
+        if (gate.approvalId && typeof onApprovalResolved === 'function') {
+          await onApprovalResolved(gate)
+        }
       } catch (err) {
         result = { ok: false, error: err?.message || String(err) }
       }

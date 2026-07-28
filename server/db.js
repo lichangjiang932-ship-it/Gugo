@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const DB_SCHEMA_VERSION = 18
+export const DB_SCHEMA_VERSION = 19
 
 const DEFAULT_DATA_DIR = path.join(process.cwd(), 'server-data')
 
@@ -88,6 +88,7 @@ function runMigrations(db) {
   if (getSchemaVersionInternal(db) < 16) migrateToV16(db)
   if (getSchemaVersionInternal(db) < 17) migrateToV17(db)
   if (getSchemaVersionInternal(db) < 18) migrateToV18(db)
+  if (getSchemaVersionInternal(db) < 19) migrateToV19(db)
   runReasonixMigrations(db)
 }
 
@@ -882,6 +883,77 @@ function migrateToV18(db) {
       ON local_file_grants(user_id, created_at);
   `)
   setSchemaVersionInternal(db, 18)
+}
+
+/**
+ * v19: 审批门控(approval gating)。服务端 agent 循环在执行高风险工具前把调用
+ * 挂起写进这张表,等用户在收件箱里批准/拒绝/改写后再继续。
+ *
+ * 这是「运行中、每次调用」的门控,和 user_tool_permissions 那种「运行前、每工具名」
+ * 的静态开关是两回事,两者并存。
+ */
+function migrateToV19(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS pending_approvals (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      origin TEXT NOT NULL CHECK (origin IN ('job','subagent','chat')),
+      job_id TEXT REFERENCES jobs(id) ON DELETE CASCADE,
+      step_id TEXT,
+      session_id TEXT,
+      tool_name TEXT NOT NULL,
+      args_json TEXT NOT NULL,
+      risk TEXT NOT NULL CHECK (risk IN ('low','medium','high')),
+      reason TEXT,
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending','approved','denied','edited','expired','cancelled')),
+      decided_args_json TEXT,
+      decided_by TEXT,
+      decided_at INTEGER,
+      expires_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_pending_approvals_user_status
+      ON pending_approvals(user_id, status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_pending_approvals_job
+      ON pending_approvals(job_id);
+  `)
+  // notifications.kind 是表级 CHECK,SQLite 不能 ALTER,只能重建表把 'approval' 加进去。
+  // 不改 migrateToV8(AGENTS.md 2.5.1),在这里重建。
+  widenNotificationKinds(db)
+  setSchemaVersionInternal(db, 19)
+}
+
+/**
+ * 重建 notifications 表,把 kind 的 CHECK 放宽到含 'approval'。数据全量搬迁。
+ */
+function widenNotificationKinds(db) {
+  const sql = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='notifications'")
+    .get()?.sql
+  // 已经含 approval(全新库由本函数之外的路径建过)就跳过,幂等
+  if (!sql || sql.includes("'approval'")) return
+
+  db.exec(`
+    CREATE TABLE notifications_v19 (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN ('info','success','warn','error','job','approval')),
+      title TEXT NOT NULL,
+      body TEXT NOT NULL DEFAULT '',
+      link TEXT,
+      data_json TEXT,
+      read_at INTEGER,
+      created_at INTEGER NOT NULL
+    );
+    INSERT INTO notifications_v19 (id, user_id, kind, title, body, link, data_json, read_at, created_at)
+      SELECT id, user_id, kind, title, body, link, data_json, read_at, created_at FROM notifications;
+    DROP TABLE notifications;
+    ALTER TABLE notifications_v19 RENAME TO notifications;
+    CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications(user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON notifications(user_id, read_at, created_at DESC);
+  `)
 }
 
 /**

@@ -17,6 +17,7 @@ import { dispatchFsShellTool } from '../adapters/fsShellTools.js'
 import { CODE_SEARCH_TOOL_SPECS, dispatchCodeSearchTool } from '../utils/codeSearch.js'
 import { APPLY_PATCH_TOOL_SPECS, dispatchApplyPatchTool } from '../utils/applyPatch.js'
 import { AGENTIC_TOOL_SPECS, dispatchAgenticTool, isLoopPauseResult } from '../utils/agenticTools.js'
+import { requestApproval } from './approvalGate.js'
 
 const MAX_CONCURRENT_PER_USER = 3
 const activeByUser = new Map()
@@ -212,8 +213,20 @@ async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_
     for (const call of toolCalls) {
       let result
       try {
-        result = await executeSubagentTool(call.name, call.arguments, { userId })
-        if (isLoopPauseResult(result)) pausedClarif = result.clarification
+        // ★ 审批门控:子代理同样是无人值守路径,必须过门。
+        const gate = await requestApproval({
+          userId,
+          origin: 'subagent',
+          toolName: call.name,
+          args: call.arguments,
+          signal,
+        })
+        if (!gate.proceed) {
+          result = { ok: false, denied: true, error: gate.reason || '用户拒绝了这次调用' }
+        } else {
+          result = await executeSubagentTool(call.name, gate.args ?? call.arguments, { userId })
+          if (isLoopPauseResult(result)) pausedClarif = result.clarification
+        }
       } catch (err) {
         result = { ok: false, error: err?.message || String(err) }
       }

@@ -96,8 +96,72 @@ const MCP_TRANSLATIONS = {
   },
 }
 
+const APPROVAL_TRANSLATIONS = {
+  zh: {
+    nav: '审批',
+    risk: { high: '高风险', medium: '中风险', low: '低风险' },
+    origin: { job: '后台任务', subagent: '子代理', chat: '对话' },
+    inbox: {
+      title: '审批收件箱', subtitle: '模型执行高风险操作前会停下来等你决定。可以直接批准、拒绝，或改写参数后再批准。',
+      refresh: '刷新', statPending: '待审批', statHighRisk: '高风险',
+      empty: '没有待审批的操作。', emptyHint: '模型调用 shell、写文件或代你操作浏览器时，会出现在这里。',
+      approve: '批准', deny: '拒绝', edit: '改写参数', approveEdited: '按改写后批准', cancelEdit: '取消',
+      jsonMustBeObject: '参数必须是一个 JSON 对象。',
+    },
+  },
+  en: {
+    nav: 'Approvals',
+    risk: { high: 'High risk', medium: 'Medium risk', low: 'Low risk' },
+    origin: { job: 'Background job', subagent: 'Subagent', chat: 'Chat' },
+    inbox: {
+      title: 'Approval inbox', subtitle: 'The model pauses before consequential actions. Approve, deny, or edit the arguments before approving.',
+      refresh: 'Refresh', statPending: 'Pending', statHighRisk: 'High risk',
+      empty: 'Nothing waiting for approval.', emptyHint: 'Shell commands, file writes, and browser actions taken on your behalf appear here.',
+      approve: 'Approve', deny: 'Deny', edit: 'Edit arguments', approveEdited: 'Approve with edits', cancelEdit: 'Cancel',
+      jsonMustBeObject: 'Arguments must be a JSON object.',
+    },
+  },
+  ja: {
+    nav: '承認',
+    risk: { high: '高リスク', medium: '中リスク', low: '低リスク' },
+    origin: { job: 'バックグラウンドジョブ', subagent: 'サブエージェント', chat: 'チャット' },
+    inbox: {
+      title: '承認インボックス', subtitle: '影響の大きい操作の前にモデルが停止します。承認・拒否、または引数を編集してから承認できます。',
+      refresh: '更新', statPending: '承認待ち', statHighRisk: '高リスク',
+      empty: '承認待ちの操作はありません。', emptyHint: 'シェル実行、ファイル書き込み、ブラウザー操作がここに表示されます。',
+      approve: '承認', deny: '拒否', edit: '引数を編集', approveEdited: '編集内容で承認', cancelEdit: 'キャンセル',
+      jsonMustBeObject: '引数は JSON オブジェクトである必要があります。',
+    },
+  },
+  ko: {
+    nav: '승인',
+    risk: { high: '높은 위험', medium: '보통 위험', low: '낮은 위험' },
+    origin: { job: '백그라운드 작업', subagent: '서브에이전트', chat: '채팅' },
+    inbox: {
+      title: '승인 받은편지함', subtitle: '중요한 작업 전에 모델이 멈춥니다. 승인하거나 거부하고, 인수를 수정한 뒤 승인할 수 있습니다.',
+      refresh: '새로고침', statPending: '대기 중', statHighRisk: '높은 위험',
+      empty: '승인 대기 중인 작업이 없습니다.', emptyHint: '셸 실행, 파일 쓰기, 브라우저 조작이 여기에 표시됩니다.',
+      approve: '승인', deny: '거부', edit: '인수 수정', approveEdited: '수정 후 승인', cancelEdit: '취소',
+      jsonMustBeObject: '인수는 JSON 객체여야 합니다.',
+    },
+  },
+  'zh-TW': {
+    nav: '審批',
+    risk: { high: '高風險', medium: '中風險', low: '低風險' },
+    origin: { job: '背景任務', subagent: '子代理', chat: '對話' },
+    inbox: {
+      title: '審批收件匣', subtitle: '模型執行高風險操作前會停下來等你決定。可直接批准、拒絕，或改寫參數後再批准。',
+      refresh: '重新整理', statPending: '待審批', statHighRisk: '高風險',
+      empty: '沒有待審批的操作。', emptyHint: '模型呼叫 shell、寫檔案或代你操作瀏覽器時，會出現在這裡。',
+      approve: '批准', deny: '拒絕', edit: '改寫參數', approveEdited: '按改寫後批准', cancelEdit: '取消',
+      jsonMustBeObject: '參數必須是一個 JSON 物件。',
+    },
+  },
+}
+
 export const translations = {
   zh: {
+    approvals: APPROVAL_TRANSLATIONS.zh,
     access: ACCESS_TRANSLATIONS.zh,
     localFiles: { ...LOCAL_FILES_TRANSLATIONS.zh, chatAction: '授权文件' },
     mcp: MCP_TRANSLATIONS.zh,
@@ -460,6 +524,7 @@ export const translations = {
     },
   },
   en: {
+    approvals: APPROVAL_TRANSLATIONS.en,
     access: ACCESS_TRANSLATIONS.en,
     localFiles: { ...LOCAL_FILES_TRANSLATIONS.en, chatAction: 'Authorize files' },
     mcp: MCP_TRANSLATIONS.en,
@@ -822,6 +887,7 @@ export const translations = {
     },
   },
   ja: {
+    approvals: APPROVAL_TRANSLATIONS.ja,
     access: ACCESS_TRANSLATIONS.ja,
     localFiles: { ...LOCAL_FILES_TRANSLATIONS.ja, chatAction: 'ファイルを許可' },
     mcp: MCP_TRANSLATIONS.ja,
@@ -1184,6 +1250,7 @@ export const translations = {
     },
   },
   ko: {
+    approvals: APPROVAL_TRANSLATIONS.ko,
     access: ACCESS_TRANSLATIONS.ko,
     localFiles: { ...LOCAL_FILES_TRANSLATIONS.ko, chatAction: '파일 권한 부여' },
     mcp: MCP_TRANSLATIONS.ko,
@@ -1546,6 +1613,7 @@ export const translations = {
     },
   },
   'zh-TW': {
+    approvals: APPROVAL_TRANSLATIONS['zh-TW'],
     access: ACCESS_TRANSLATIONS['zh-TW'],
     localFiles: { ...LOCAL_FILES_TRANSLATIONS['zh-TW'], chatAction: '授權檔案' },
     mcp: MCP_TRANSLATIONS['zh-TW'],

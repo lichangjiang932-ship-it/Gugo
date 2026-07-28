@@ -28,6 +28,7 @@ export const ROUTE_READINESS = Object.freeze({
   '/channels': 'stable',      // ChannelsPage
   '/access': 'stable',        // AccessView
   '/mcp': 'stable',           // McpServersView
+  '/approvals': 'stable',     // ApprovalsInbox
 
   // ---- preview: 主流程能跑，但 i18n / UX 还粗糙 ----
   '/reasonix': 'preview',     // ReasonixWorkspace：硬编码 zh，记忆/TODO 雏形

@@ -18,8 +18,11 @@ import { callBackgroundModel, callBackgroundModelWithTools } from '../adapters/m
 import { getRuntimeSkill } from './skillRegistry.js'
 import { runToolsLoop } from './jobTools.js'
 import { createNotification } from './notificationsStore.js'
+import { releaseApprovalsForJob } from './approvalGate.js'
 
 const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled'])
+// ★ 注意:awaiting_approval 故意不在这里。等人的 job 崩溃恢复时若被重排成 queued,
+// 会把已经批准执行过的动作重跑一遍(发消息/改日历这类不可撤销动作尤其危险)。
 const RECOVERABLE_JOB_STATUSES = new Set(['planning', 'running', 'waiting'])
 
 function newId(prefix) {
@@ -130,9 +133,20 @@ export function createDefaultExecuteStep({
         messages,
         runModel: (options) => runModelWithTools({ ...options, userId: job.userId }),
         signal,
+        onApprovalPending: () => markJobAwaitingApproval(job),
+        onApprovalResolved: () => markJobRunningAgain(job),
       })
+      // ★ 修:以前这里只取 text/artifactIds/iterations,把 paused / budgetExceeded
+      // 静默丢掉 → 被澄清打断或预算耗尽的截断运行会上报 ok:true 假装成功。
+      // 现在如实透传,截断就是截断。
+      const truncated = !!(result.paused || result.budgetExceeded)
       return {
-        ok: true,
+        ok: !truncated,
+        truncated,
+        paused: !!result.paused,
+        clarification: result.clarification || null,
+        budgetExceeded: !!result.budgetExceeded,
+        reason: result.reason || (result.paused ? '需要用户澄清' : null),
         output: {
           text: result.text,
           artifactIds: result.artifactIds,
@@ -155,6 +169,40 @@ export function createDefaultExecuteStep({
       ok: true,
       output: { text },
     }
+  }
+}
+
+/**
+ * 有工具调用挂起等审批时,把 job 标成 awaiting_approval,让前端能看出「不是卡死,是在等你」。
+ * 注意 awaiting_approval 不在 RECOVERABLE_JOB_STATUSES 里 —— 崩溃恢复时不会被重排成
+ * queued 重跑,否则已批准执行过的动作会被重复执行。
+ */
+function markJobAwaitingApproval(job) {
+  if (!job?.id) return
+  try {
+    updateJob(job.id, { status: 'awaiting_approval' })
+    appendJobEvent({
+      jobId: job.id,
+      type: 'awaiting_approval',
+      message: '等待用户批准一个工具调用',
+    })
+  } catch (err) {
+    // 标记失败不该阻断门控本身
+    console.error('[jobs] 标记 awaiting_approval 失败:', err?.stack || err)
+  }
+}
+
+/** 审批决策已出,把 job 从 awaiting_approval 放回 running,循环继续。 */
+function markJobRunningAgain(job) {
+  if (!job?.id) return
+  try {
+    const fresh = getJobRow(job.id)
+    // 只有还停在 awaiting_approval 才回滚状态,别覆盖掉取消/失败
+    if (fresh?.status === 'awaiting_approval') {
+      updateJob(job.id, { status: 'running' })
+    }
+  } catch (err) {
+    console.error('[jobs] 恢复 running 状态失败:', err?.stack || err)
   }
 }
 
@@ -560,6 +608,34 @@ export class JobRuntime {
         step: nextStep,
         signal: controller.signal,
       })
+      // ★ 截断(需澄清 / 预算耗尽):不是失败也不是成功,如实标记并通知用户,
+      // 不能再像以前那样被吞成 ok:true 假装完成。
+      if (result?.truncated) {
+        const why = result.paused
+          ? `需要澄清:${result.clarification?.question || '模型请求用户补充信息'}`
+          : `预算耗尽:${result.reason || '工具调用次数达上限'}`
+        updateJobStep(nextStep.id, {
+          status: 'failed',
+          output: result?.output ?? null,
+          error: why,
+          finishedAt: Date.now(),
+        })
+        updateJob(job.id, {
+          status: 'failed',
+          error: why,
+          progress: deriveProgress(listJobSteps(job.id)),
+          finishedAt: Date.now(),
+        })
+        this.emit(appendJobEvent({
+          jobId: job.id,
+          stepId: nextStep.id,
+          type: 'failed',
+          message: why,
+        }))
+        releaseApprovalsForJob(job.id)
+        notifyJobTerminal(job, { status: 'failed', body: why })
+        return true
+      }
       if (result?.ok === false) {
         throw new Error(result.error || '步骤执行失败')
       }

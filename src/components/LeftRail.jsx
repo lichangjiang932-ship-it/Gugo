@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { Link2, MessageSquare, Wrench, Settings, Sparkles, X, Search, MoreHorizontal, Archive, ArchiveRestore } from 'lucide-react'
+import { Link2, MessageSquare, Wrench, Settings, Sparkles, X, Search, MoreHorizontal, Archive, ArchiveRestore, ShieldCheck } from 'lucide-react'
 import { useAppContext } from '../store/AppContext'
 import {
   LOGIN_CODE_COUNTDOWN_SECONDS,
@@ -15,6 +15,7 @@ import { useT } from '../i18n/I18nProvider.jsx'
 import { useToast } from './Toast.jsx'
 import NotificationBell from './NotificationBell.jsx'
 import { ROUTE_READINESS } from '../config/routeReadiness.js'
+import { fetchPendingCount } from '../lib/approvalClient.js'
 
 // ★ #21: 提取会话最后消息的纯文本预览 (剥 markdown / 多模态 array / 工具卡)
 function getSessionPreview(session) {
@@ -92,11 +93,40 @@ export default function LeftRail() {
     return () => window.clearInterval(timer)
   }, [loginCodeCountdown])
 
+  // 待审批数角标:登录后拉一次,并订阅 SSE 增量刷新(SSE 不可用则退化为静态)
+  const [pendingApprovals, setPendingApprovals] = useState(0)
+  useEffect(() => {
+    let alive = true
+    if (!getAuthToken()) {
+      // 未登录:异步清零,避免在 effect 体里同步 setState 触发级联渲染
+      Promise.resolve().then(() => { if (alive) setPendingApprovals(0) })
+      return () => { alive = false }
+    }
+    const refresh = () => {
+      fetchPendingCount()
+        .then((count) => { if (alive) setPendingApprovals(count) })
+        .catch(() => { /* 角标失败不该打断导航 */ })
+    }
+    refresh()
+    let source
+    try {
+      source = new EventSource('/api/approvals/stream')
+      source.addEventListener('approval', refresh)
+    } catch {
+      /* 环境不支持 SSE 时忽略 */
+    }
+    return () => {
+      alive = false
+      try { source?.close() } catch { /* noop */ }
+    }
+  }, [location.pathname])
+
   const settingsChildPaths = ['/task', '/permissions', '/memory', '/desk', '/agents', '/channels', '/mcp', '/history']
   const navItems = [
     { path: '/chat', icon: MessageSquare, label: t('nav.chat') },
     { path: '/skills', icon: Wrench, label: t('nav.skills') },
     { path: '/access', icon: Link2, label: t('access.title'), requiresLogin: true },
+    { path: '/approvals', icon: ShieldCheck, label: t('approvals.nav'), requiresLogin: true, badge: pendingApprovals },
     { path: '/settings', icon: Settings, label: t('nav.settings'), requiresLogin: true, activePaths: settingsChildPaths },
   ]
 
@@ -341,6 +371,11 @@ export default function LeftRail() {
               >
                 <item.icon className="w-4 h-4" />
                 <span className="flex-1 text-left">{item.label}</span>
+                {item.badge > 0 ? (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-ember/15 text-ember font-mono">
+                    {item.badge > 99 ? '99+' : item.badge}
+                  </span>
+                ) : null}
                 {readinessLabel ? (
                   <span
                     className={`text-[10px] px-1.5 py-0.5 rounded ${

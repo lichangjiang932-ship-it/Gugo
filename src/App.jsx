@@ -13,6 +13,7 @@ const CoverPage = lazy(() => import('./pages/CoverPage'))
 const ChatSplit = lazy(() => import('./pages/ChatSplit'))
 const SkillsMarket = lazy(() => import('./pages/SkillsMarket'))
 const PermissionsDashboard = lazy(() => import('./pages/PermissionsDashboard'))
+const ApprovalsInbox = lazy(() => import('./pages/ApprovalsInbox'))
 const TaskRunPanel = lazy(() => import('./pages/TaskRunPanel'))
 const HistoryView = lazy(() => import('./pages/HistoryView'))
 const SettingsView = lazy(() => import('./pages/SettingsView'))
@@ -48,6 +49,7 @@ function App() {
           <Route path="/chat" element={<ChatSplit />} />
           <Route path="/skills" element={<SkillsMarket />} />
           <Route path="/permissions" element={<PermissionsDashboard />} />
+          <Route path="/approvals" element={<RequireAuth><ApprovalsInbox /></RequireAuth>} />
           <Route path="/task" element={<TaskRunPanel />} />
           <Route path="/history" element={<HistoryView />} />
           <Route path="/settings" element={<RequireAuth><SettingsView /></RequireAuth>} />

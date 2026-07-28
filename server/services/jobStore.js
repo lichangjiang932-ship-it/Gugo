@@ -301,7 +301,7 @@ export function listRecoverableJobs() {
   return getDb()
     .prepare(`
       SELECT * FROM jobs
-      WHERE status IN ('queued', 'planning', 'running', 'waiting', 'cancel_requested')
+      WHERE status IN ('queued', 'planning', 'running', 'waiting', 'awaiting_approval', 'cancel_requested')
       ORDER BY created_at ASC
     `)
     .all()

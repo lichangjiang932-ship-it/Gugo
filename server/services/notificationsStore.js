@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import { getDb } from '../db.js'
 
-const VALID_KINDS = new Set(['info', 'success', 'warn', 'error', 'job'])
+const VALID_KINDS = new Set(['info', 'success', 'warn', 'error', 'job', 'approval'])
 const subscribers = new Map()
 
 function newId() {
