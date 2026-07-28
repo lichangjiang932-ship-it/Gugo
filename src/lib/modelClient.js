@@ -62,6 +62,46 @@ export async function getSystemDiagnostics({ check = false, fetchImpl = fetch } 
   return parseProxyResponse(response)
 }
 
+async function modelProviderRequest(path = '', init = {}, fetchImpl = fetch) {
+  const response = await fetchImpl(`/api/model/providers${path}`, {
+    ...init,
+    headers: {
+      ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(authHeaders() || {}),
+      ...(init.headers || {}),
+    },
+  })
+  let data
+  try { data = await response.json() } catch { data = null }
+  if (!response.ok || data?.ok === false || data?.error) {
+    throw new Error(data?.error?.message || data?.error || `HTTP ${response.status}`)
+  }
+  return data
+}
+
+export async function listModelProviders({ fetchImpl = fetch } = {}) {
+  return modelProviderRequest('', {}, fetchImpl)
+}
+
+export async function saveModelProvider(provider, { fetchImpl = fetch } = {}) {
+  return modelProviderRequest('', { method: 'POST', body: JSON.stringify(provider) }, fetchImpl)
+}
+
+export async function deleteModelProvider(id, { fetchImpl = fetch } = {}) {
+  return modelProviderRequest(`/${encodeURIComponent(id)}`, { method: 'DELETE' }, fetchImpl)
+}
+
+export async function testModelProvider(id, { fetchImpl = fetch } = {}) {
+  return modelProviderRequest(`/${encodeURIComponent(id)}/test`, { method: 'POST' }, fetchImpl)
+}
+
+export async function discoverModelProvider({ id, baseUrl, apiKey = '', headers = {} }, { fetchImpl = fetch } = {}) {
+  return modelProviderRequest('/discover', {
+    method: 'POST',
+    body: JSON.stringify({ id, baseUrl, apiKey, headers }),
+  }, fetchImpl)
+}
+
 export async function callModelThroughProxy({ messages, modelName, agentId, fetchImpl = fetch }) {
   const response = await fetchImpl('/api/model/chat', {
     method: 'POST',

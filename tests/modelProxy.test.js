@@ -48,6 +48,20 @@ test('builds an OpenAI compatible request with auth and model options', () => {
   })
 })
 
+test('builds a local model request without an Authorization header', () => {
+  const request = buildOpenAICompatibleRequest({
+    config: {
+      baseUrl: 'http://127.0.0.1:11434/v1',
+      apiKey: '',
+      modelName: 'qwen3:8b',
+    },
+    messages: [{ role: 'user', content: 'hello' }],
+  })
+
+  assert.equal(request.url, 'http://127.0.0.1:11434/v1/chat/completions')
+  assert.equal(Object.hasOwn(request.init.headers, 'Authorization'), false)
+})
+
 test('normalizes assistant tool-call messages to null content before upstream request', () => {
   const request = buildOpenAICompatibleRequest({
     config: {
@@ -93,7 +107,14 @@ test('loads model config from backend environment and reports missing fields', (
 
   const missing = loadModelConfig({ MODEL_BASE_URL: 'https://api.example.com/v1' })
   assert.equal(missing.configured, false)
-  assert.deepEqual(missing.missing, ['MODEL_NAME', 'MODEL_API_KEY'])
+  assert.deepEqual(missing.missing, ['MODEL_NAME'])
+
+  const local = loadModelConfig({
+    MODEL_BASE_URL: 'http://127.0.0.1:11434/v1',
+    MODEL_NAME: 'qwen3:8b',
+  })
+  assert.equal(local.configured, true)
+  assert.equal(local.apiKey, '')
 })
 
 test('loads a backend model catalog without exposing API keys', () => {

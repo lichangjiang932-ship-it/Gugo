@@ -27,6 +27,7 @@ import {
 } from '../services/promptCompiler.js'
 import { attachVisionDescriptions, hasVisionAssistConfigured } from './visionAssist.js'
 import { logWarn } from '../utils/logger.js'
+import { buildUserModelEnv } from '../services/modelProviderStore.js'
 
 // ★ #18: 消息格式 schema — 拒绝畸形 messages 入参,防 OpenAI 上游报 400 / 计费爆零
 const MESSAGE_SCHEMA = z.object({
@@ -40,7 +41,7 @@ const MESSAGE_SCHEMA = z.object({
 const MESSAGES_SCHEMA = z.array(MESSAGE_SCHEMA).min(1, 'messages 不能为空')
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
-const REQUIRED_ENV = ['MODEL_BASE_URL', 'MODEL_NAME', 'MODEL_API_KEY']
+const REQUIRED_ENV = ['MODEL_BASE_URL', 'MODEL_NAME']
 
 function parseCsv(raw = '') {
   return String(raw || '')
@@ -51,6 +52,17 @@ function parseCsv(raw = '') {
 
 function providerEnvPrefix(id = '') {
   return `MODEL_PROVIDER_${String(id).trim().toUpperCase().replace(/[^A-Z0-9]+/g, '_')}`
+}
+
+function parseHeaders(raw = '') {
+  if (!raw) return {}
+  try {
+    const value = typeof raw === 'string' ? JSON.parse(raw) : raw
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+    return Object.fromEntries(Object.entries(value).map(([key, val]) => [String(key), String(val)]))
+  } catch {
+    return {}
+  }
 }
 
 function readEnvFile(cwd = process.cwd()) {
@@ -90,6 +102,7 @@ export function getModelProviders(env = process.env) {
       baseUrl: env[`${prefix}_BASE_URL`]?.trim() || '',
       apiKey: env[`${prefix}_API_KEY`]?.trim() || '',
       models: parseCsv(env[`${prefix}_MODELS`]),
+      headers: parseHeaders(env[`${prefix}_HEADERS`]),
     }
   })
 }
@@ -102,7 +115,6 @@ function providerMissingFields(provider) {
   const prefix = providerEnvPrefix(provider.id)
   const missing = []
   if (!provider.baseUrl) missing.push(`${prefix}_BASE_URL`)
-  if (!provider.apiKey) missing.push(`${prefix}_API_KEY`)
   if (!provider.models.length) missing.push(`${prefix}_MODELS`)
   return missing
 }
@@ -125,6 +137,7 @@ export function loadModelConfig(env = process.env) {
       baseUrl: provider?.baseUrl || '',
       modelName,
       apiKey: provider?.apiKey || '',
+      ...(Object.keys(provider?.headers || {}).length ? { headers: provider.headers } : {}),
       temperature: Number.isFinite(temperature) ? temperature : 0.7,
       maxTokens: Number.isFinite(maxTokens) ? maxTokens : 4096,
     }
@@ -136,6 +149,7 @@ export function loadModelConfig(env = process.env) {
     baseUrl: env.MODEL_BASE_URL?.trim() || '',
     modelName: env.MODEL_NAME?.trim() || '',
     apiKey: env.MODEL_API_KEY?.trim() || '',
+    ...(Object.keys(parseHeaders(env.MODEL_HEADERS)).length ? { headers: parseHeaders(env.MODEL_HEADERS) } : {}),
     temperature: Number.isFinite(temperature) ? temperature : 0.7,
     maxTokens: Number.isFinite(maxTokens) ? maxTokens : 4096,
   }
@@ -148,13 +162,16 @@ export function resolveModelConfigForModel({ modelName, env = process.env } = {}
   if (!provider) return { ...base, modelName: selectedModel }
 
   const missing = providerMissingFields(provider)
+  const baseWithoutHeaders = { ...base }
+  delete baseWithoutHeaders.headers
   return {
-    ...base,
+    ...baseWithoutHeaders,
     configured: missing.length === 0,
     missing,
     baseUrl: provider.baseUrl,
     modelName: selectedModel,
     apiKey: provider.apiKey,
+    ...(Object.keys(provider.headers || {}).length ? { headers: provider.headers } : {}),
   }
 }
 
@@ -230,8 +247,10 @@ async function checkModelsEndpoint({ config, fetchImpl = fetch }) {
   const started = Date.now()
   const timeout = setTimeout(() => controller.abort(), 8000)
   try {
-    const headers = {}
-    if (config.apiKey) headers.Authorization = `Bearer ${config.apiKey}`
+    const headers = { ...(config.headers || {}) }
+    if (config.apiKey && !headers.Authorization && !headers.authorization) {
+      headers.Authorization = `Bearer ${config.apiKey}`
+    }
     const response = await fetchImpl(url, { headers, signal: controller.signal })
     const text = await response.text()
     let data = null
@@ -345,8 +364,10 @@ export function buildOpenAICompatibleRequest({ config, messages, stream = false,
     throw new Error('消息不能为空。')
   }
 
-  const headers = { 'Content-Type': 'application/json' }
-  if (config?.apiKey) headers.Authorization = `Bearer ${config.apiKey}`
+  const headers = { 'Content-Type': 'application/json', ...(config?.headers || {}) }
+  if (config?.apiKey && !headers.Authorization && !headers.authorization) {
+    headers.Authorization = `Bearer ${config.apiKey}`
+  }
 
   const body = {
     model,
@@ -385,21 +406,23 @@ export function parseOpenAICompatibleResponse(data) {
 export async function callBackgroundModel({
   messages,
   modelName,
+  userId,
   env = getRuntimeEnv(),
   fetchImpl = fetch,
   signal,
 } = {}) {
-  const config = loadModelConfig(env)
+  const runtimeEnv = buildUserModelEnv({ userId, env })
+  const config = loadModelConfig(runtimeEnv)
   if (!config.configured) {
     throw new Error(`后台任务缺少模型配置：${config.missing.join(', ')}`)
   }
   const selectedModel = pickAllowedModel({
     requestedModel: modelName,
     config,
-    env,
+    env: runtimeEnv,
   })
   const { url, init } = buildOpenAICompatibleRequest({
-    config: resolveModelConfigForModel({ modelName: selectedModel, env }),
+    config: resolveModelConfigForModel({ modelName: selectedModel, env: runtimeEnv }),
     messages,
     stream: false,
   })
@@ -430,21 +453,23 @@ export async function callBackgroundModelWithTools({
   tools,
   toolChoice,
   modelName,
+  userId,
   env = getRuntimeEnv(),
   fetchImpl = fetch,
   signal,
 } = {}) {
-  const config = loadModelConfig(env)
+  const runtimeEnv = buildUserModelEnv({ userId, env })
+  const config = loadModelConfig(runtimeEnv)
   if (!config.configured) {
     throw new Error(`后台任务缺少模型配置：${config.missing.join(', ')}`)
   }
   const selectedModel = pickAllowedModel({
     requestedModel: modelName,
     config,
-    env,
+    env: runtimeEnv,
   })
   const { url, init } = buildOpenAICompatibleRequest({
-    config: resolveModelConfigForModel({ modelName: selectedModel, env }),
+    config: resolveModelConfigForModel({ modelName: selectedModel, env: runtimeEnv }),
     messages,
     stream: false,
     tools,
@@ -611,7 +636,9 @@ export async function handleModelProxyRequest(req, res) {
 
   try {
     const body = await readJson(req)
-    const config = loadModelConfig(getRuntimeEnv())
+    const requestUserId = authenticateRequest(req)
+    const runtimeEnv = buildUserModelEnv({ userId: requestUserId, env: getRuntimeEnv() })
+    const config = loadModelConfig(runtimeEnv)
     if (!config.configured) {
       sendJson(res, 500, {
         ok: false,
@@ -641,17 +668,17 @@ export async function handleModelProxyRequest(req, res) {
     const selectedModel = pickAllowedModel({
       requestedModel: body.modelName,
       config,
-      env: getRuntimeEnv(),
+      env: runtimeEnv,
     })
-    if (!testMode && hasVisionContent(messages) && !supportsVisionModel(selectedModel, getRuntimeEnv())) {
+    if (!testMode && hasVisionContent(messages) && !supportsVisionModel(selectedModel, runtimeEnv)) {
       const sessionForAssist = session || (authToken(req) ? getSessionByToken(authToken(req)) : null)
       const userIdForAssist = sessionForAssist?.user_id || null
-      if (hasVisionAssistConfigured({ userId: userIdForAssist, env: getRuntimeEnv() })) {
+      if (hasVisionAssistConfigured({ userId: userIdForAssist, env: runtimeEnv })) {
         try {
           const assistResult = await attachVisionDescriptions({
             messages,
             userId: userIdForAssist,
-            env: getRuntimeEnv(),
+            env: runtimeEnv,
           })
           messages = assistResult.messages
           res.setHeader('X-Vision-Assist-Count', String(assistResult.assistCount))
@@ -676,7 +703,7 @@ export async function handleModelProxyRequest(req, res) {
         return
       }
     }
-    const requestConfig = resolveModelConfigForModel({ modelName: selectedModel, env: getRuntimeEnv() })
+    const requestConfig = resolveModelConfigForModel({ modelName: selectedModel, env: runtimeEnv })
 
     let token = ''
     let estimatedCost = 0
@@ -960,11 +987,12 @@ export async function handleModelStatusRequest(req, res) {
     return
   }
   // 鉴权:匿名访问会泄露 baseUrl / MAIL_* 等内部基础设施信息.
-  if (!authenticateRequest(req)) {
+  const userId = authenticateRequest(req)
+  if (!userId) {
     sendJson(res, 401, { error: 'Unauthorized' })
     return
   }
-  sendJson(res, 200, getModelStatus(getRuntimeEnv()))
+  sendJson(res, 200, getModelStatus(buildUserModelEnv({ userId, env: getRuntimeEnv() })))
 }
 
 export async function handleSystemDiagnosticsRequest(req, res) {
@@ -973,13 +1001,15 @@ export async function handleSystemDiagnosticsRequest(req, res) {
     return
   }
   // 鉴权:?check=1 会触发后端发出 outbound 探测请求,匿名暴露 = 任意来源都能让本服务去打上游模型端点.
-  if (!authenticateRequest(req)) {
+  const userId = authenticateRequest(req)
+  if (!userId) {
     sendJson(res, 401, { error: 'Unauthorized' })
     return
   }
   const url = new URL(req.url, 'http://localhost')
   const checkEndpoint = url.searchParams.get('check') === '1'
-  sendJson(res, 200, await getSystemDiagnostics({ env: getRuntimeEnv(), checkEndpoint }))
+  const env = buildUserModelEnv({ userId, env: getRuntimeEnv() })
+  sendJson(res, 200, await getSystemDiagnostics({ env, checkEndpoint }))
 }
 
 export function modelProxyPlugin() {
