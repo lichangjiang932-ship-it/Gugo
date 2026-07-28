@@ -145,7 +145,12 @@ function unauthorized(res) {
   return sendJson(res, 401, { ok: false, error: 'Unauthorized' })
 }
 
-export function createBridgeRequestHandler({ manager = socialBridgeManager } = {}) {
+export function createBridgeRequestHandler({
+  manager = socialBridgeManager,
+  authenticate = authenticateRequest,
+  getWechatQrcode = getWechatIlinkQrcode,
+  pollWechatQrcode = pollWechatIlinkQrcode,
+} = {}) {
   return async function handleBridgeRequest(req, res) {
     const url = new URL(req.url, 'http://localhost')
     const parts = url.pathname.split('/').filter(Boolean)
@@ -168,7 +173,7 @@ export function createBridgeRequestHandler({ manager = socialBridgeManager } = {
         return sendJson(res, 200, { ok: true, result })
       }
 
-      const userId = authenticateRequest(req)
+      const userId = authenticate(req)
       if (!userId) return unauthorized(res)
 
       if (req.method === 'GET' && url.pathname === '/api/bridge/status') {
@@ -176,14 +181,14 @@ export function createBridgeRequestHandler({ manager = socialBridgeManager } = {
       }
 
       if (req.method === 'GET' && url.pathname === '/api/bridge/wechat/qrcode') {
-        const qr = await getWechatIlinkQrcode()
+        const qr = await getWechatQrcode()
         const qrcodeUrl = await QRCode.toDataURL(qr.qrcodeText, { width: 280, margin: 2 })
         return sendJson(res, 200, { ok: true, qrcodeId: qr.qrcodeId, qrcodeText: qr.qrcodeText, qrcodeUrl })
       }
 
       if (req.method === 'POST' && url.pathname === '/api/bridge/wechat/qrcode/status') {
         const body = await readJson(req)
-        const result = await pollWechatIlinkQrcode({ qrcodeId: body.qrcodeId })
+        const result = await pollWechatQrcode({ qrcodeId: body.qrcodeId })
         if (result.status === 'confirmed' && result.botToken) {
           const integration = upsertIntegration({
             userId,
@@ -205,7 +210,11 @@ export function createBridgeRequestHandler({ manager = socialBridgeManager } = {
         return sendJson(res, 200, { ok: true, ...result })
       }
     } catch (err) {
-      return sendJson(res, err?.statusCode || 400, { ok: false, error: err?.message || 'bridge error' })
+      return sendJson(res, err?.statusCode || 400, {
+        ok: false,
+        error: err?.message || 'bridge error',
+        ...(err?.code ? { code: err.code } : {}),
+      })
     }
 
     return sendJson(res, 404, { ok: false, error: 'unknown bridge route' })

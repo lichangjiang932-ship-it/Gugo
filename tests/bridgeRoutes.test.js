@@ -98,3 +98,28 @@ test('bridge route normalizes Telegram webhook messages', async () => {
     raw: calls[0].raw,
   })
 })
+
+test('bridge route preserves the WeChat iLink unavailable error code', async () => {
+  const routeMod = await import('../server/routes/bridgeRoutes.js')
+  const route = routeMod.createBridgeRequestHandler({
+    authenticate: () => 'user-1',
+    getWechatQrcode: async () => {
+      throw Object.assign(new Error('WeChat iLink service is unavailable'), {
+        code: 'WECHAT_ILINK_UNAVAILABLE',
+        statusCode: 503,
+      })
+    },
+  })
+
+  const res = await call(route, {
+    method: 'GET',
+    url: '/api/bridge/wechat/qrcode',
+  })
+
+  assert.equal(res.statusCode, 503)
+  assert.deepEqual(res.json(), {
+    ok: false,
+    error: 'WeChat iLink service is unavailable',
+    code: 'WECHAT_ILINK_UNAVAILABLE',
+  })
+})

@@ -14,12 +14,48 @@
 
 import crypto from 'node:crypto'
 import { getDb } from '../db.js'
+import { WEB_CONNECTOR_CATALOG } from '../../shared/webConnectorCatalog.js'
 
 function newId() {
   return crypto.randomUUID?.() || `integration-${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
+const WEB_PROVIDER_REGISTRY = Object.fromEntries(WEB_CONNECTOR_CATALOG.map((connector) => [
+  connector.provider,
+  {
+    kind: 'browser_app',
+    label: connector.label,
+    fields: [],
+    test: testBrowserApp,
+  },
+]))
+
 const PROVIDER_REGISTRY = {
+  // Access connectors
+  browser: {
+    kind: 'connector',
+    label: 'Browser',
+    fields: [],
+    test: testBrowser,
+  },
+  notion: {
+    kind: 'connector',
+    label: 'Notion',
+    fields: [
+      { key: 'workspace', label: 'Workspace name', location: 'config', optional: true },
+      { key: 'token', label: 'Integration token', location: 'secret', type: 'password' },
+    ],
+    test: testNotion,
+  },
+  github: {
+    kind: 'connector',
+    label: 'GitHub',
+    fields: [
+      { key: 'account', label: 'Account', location: 'config', optional: true },
+      { key: 'token', label: 'Fine-grained personal access token', location: 'secret', type: 'password' },
+    ],
+    test: testGithub,
+  },
   // === IM / 社交（kind='social'）===
   feishu: {
     kind: 'social',
@@ -99,6 +135,7 @@ const PROVIDER_REGISTRY = {
     },
     test: testVisionAssist,
   },
+  ...WEB_PROVIDER_REGISTRY,
 }
 
 export function listProviderRegistry() {
@@ -214,6 +251,11 @@ export function getIntegrationByProvider({ userId, provider }) {
   return row2integration(row)
 }
 
+export function isIntegrationEnabled({ userId, provider, defaultEnabled = false }) {
+  const row = findByProvider({ userId, provider })
+  return row ? row.enabled === 1 : !!defaultEnabled
+}
+
 // 给后端服务（不通过 API）读真实凭据：例：调度器拉 enabled=true 的 IM 配置
 export function getEnabledIntegrationCredentials({ userId, provider }) {
   const row = findByProvider({ userId, provider })
@@ -325,6 +367,50 @@ async function jsonFetch({ fetchImpl, url, init = {}, timeoutMs = 8000 }) {
   } finally {
     clearTimeout(timer)
   }
+}
+
+async function testBrowser() {
+  return { ok: true, message: 'Browser automation is available locally' }
+}
+
+async function testBrowserApp() {
+  return { ok: true, message: 'Browser app connection is ready for local task assistance' }
+}
+
+async function testNotion({ secret, fetchImpl }) {
+  const token = secret?.token?.trim()
+  if (!token) return { ok: false, message: 'Missing Notion Integration Token' }
+  const { ok, status, data } = await jsonFetch({
+    fetchImpl,
+    url: 'https://api.notion.com/v1/users/me',
+    init: {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Notion-Version': '2022-06-28',
+      },
+    },
+  })
+  if (!ok || !data?.id) return { ok: false, message: `Notion ${status}: ${data?.message || 'authentication failed'}` }
+  return { ok: true, message: `Connected to Notion ${data.name || data.type || 'integration'}` }
+}
+
+async function testGithub({ secret, fetchImpl }) {
+  const token = secret?.token?.trim()
+  if (!token) return { ok: false, message: 'Missing GitHub fine-grained PAT' }
+  const { ok, status, data } = await jsonFetch({
+    fetchImpl,
+    url: 'https://api.github.com/user',
+    init: {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        Authorization: `Bearer ${token}`,
+        'User-Agent': 'your-model-atelier',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    },
+  })
+  if (!ok || !data?.login) return { ok: false, message: `GitHub ${status}: ${data?.message || 'authentication failed'}` }
+  return { ok: true, message: `Connected to GitHub @${data.login}` }
 }
 
 async function testFeishu({ config, secret, fetchImpl }) {

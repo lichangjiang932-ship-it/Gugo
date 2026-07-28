@@ -15,6 +15,14 @@ function clean(value) {
   return String(value ?? '').trim()
 }
 
+function ilinkUnavailable(error) {
+  return Object.assign(new Error('WeChat iLink service is unavailable'), {
+    code: 'WECHAT_ILINK_UNAVAILABLE',
+    statusCode: 503,
+    cause: error,
+  })
+}
+
 function botToken(integration) {
   return clean(integration?.secret?.botToken || integration?.secret?.token || integration?.config?.botToken)
 }
@@ -148,9 +156,14 @@ export function createWechatIlinkBridgeAdapter({ integration, onMessage, fetchIm
 }
 
 export async function getWechatIlinkQrcode({ fetchImpl = fetch } = {}) {
-  const response = await fetchImpl(`${DEFAULT_BASE_URL}/ilink/bot/get_bot_qrcode?bot_type=3`, {
-    headers: { 'iLink-App-ClientVersion': '1' },
-  })
+  let response
+  try {
+    response = await fetchImpl(`${DEFAULT_BASE_URL}/ilink/bot/get_bot_qrcode?bot_type=3`, {
+      headers: { 'iLink-App-ClientVersion': '1' },
+    })
+  } catch (error) {
+    throw ilinkUnavailable(error)
+  }
   const data = await response.json().catch(() => null)
   if (!response.ok || !data?.qrcode) throw new Error(data?.errmsg || `WeChat QR HTTP ${response.status}`)
   return {
@@ -161,9 +174,14 @@ export async function getWechatIlinkQrcode({ fetchImpl = fetch } = {}) {
 
 export async function pollWechatIlinkQrcode({ qrcodeId, fetchImpl = fetch } = {}) {
   if (!qrcodeId) throw new Error('qrcodeId is required')
-  const response = await fetchImpl(`${DEFAULT_BASE_URL}/ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(qrcodeId)}`, {
-    headers: { 'iLink-App-ClientVersion': '1' },
-  })
+  let response
+  try {
+    response = await fetchImpl(`${DEFAULT_BASE_URL}/ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(qrcodeId)}`, {
+      headers: { 'iLink-App-ClientVersion': '1' },
+    })
+  } catch (error) {
+    throw ilinkUnavailable(error)
+  }
   const data = await response.json().catch(() => null)
   if (!response.ok) throw new Error(data?.errmsg || `WeChat QR HTTP ${response.status}`)
   if (data.status === 'confirmed') {

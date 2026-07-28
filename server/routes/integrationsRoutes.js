@@ -11,6 +11,7 @@ import {
   upsertIntegration,
 } from '../services/integrationsStore.js'
 import { socialBridgeManager } from '../services/socialBridgeManager.js'
+import { isWebConnectorProvider } from '../../shared/webConnectorCatalog.js'
 
 function unauthorized(res) { return sendJson(res, 401, { ok: false, error: 'Unauthorized' }) }
 
@@ -74,6 +75,9 @@ export async function handleIntegrationsRequest(req, res, { env = process.env } 
 
     if (req.method === 'POST' && parts.length === 2) {
       const body = await readJson(req)
+      if (isWebConnectorProvider(body.provider)) {
+        return sendJson(res, 400, { ok: false, error: 'Use /api/connectors/apps/connect for Browser apps' })
+      }
       const integration = upsertIntegration({
         userId,
         provider: body.provider,
@@ -89,6 +93,9 @@ export async function handleIntegrationsRequest(req, res, { env = process.env } 
     if (req.method === 'PATCH' && parts.length === 3) {
       const id = decodeURIComponent(parts[2])
       const body = await readJson(req)
+      if (isWebConnectorProvider(body.provider)) {
+        return sendJson(res, 400, { ok: false, error: 'Browser app connections are managed by the dedicated connector route' })
+      }
       const integration = upsertIntegration({
         userId,
         id,

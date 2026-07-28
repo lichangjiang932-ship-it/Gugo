@@ -26,6 +26,7 @@ async function jsonOk(res) {
   if (!res.ok || data?.ok === false) {
     const err = new Error(data?.error || text || `HTTP ${res.status}`)
     err.status = res.status
+    if (data?.code) err.code = data.code
     throw err
   }
   return data
@@ -72,6 +73,24 @@ export async function toggleIntegrationEnabledApi(id, enabled) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ enabled }),
+  })
+  return jsonOk(resp)
+}
+
+export async function connectBrowserAppApi(provider) {
+  const resp = await fetch('/api/connectors/apps/connect', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ provider }),
+  })
+  return jsonOk(resp)
+}
+
+export async function openConnectedBrowserAppApi(provider) {
+  const resp = await fetch('/api/connectors/apps/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ provider }),
   })
   return jsonOk(resp)
 }
