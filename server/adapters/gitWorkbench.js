@@ -21,14 +21,14 @@ function workspaceRoot() {
 
 function requireGitEnabled() {
   if (process.env.WORKSPACE_GIT_ENABLED !== '1') {
-    throw badReq('WORKSPACE_GIT_ENABLED=1 is required for git workbench tools', 403)
+    throw badReq('WORKSPACE_GIT_ENABLED=1 未启用,无法使用 Git 工作台。在项目根目录的 .env 里加上这一行后重启服务。', 403)
   }
 }
 
 function requireMutationEnabled() {
   requireGitEnabled()
   if (process.env.WORKSPACE_GIT_MUTATION_ENABLED !== '1') {
-    throw badReq('WORKSPACE_GIT_MUTATION_ENABLED=1 is required for commit/push', 403)
+    throw badReq('WORKSPACE_GIT_MUTATION_ENABLED=1 未启用,无法 commit/push(只读的 status/diff 不受影响)。在 .env 里加上这一行后重启服务。', 403)
   }
 }
 

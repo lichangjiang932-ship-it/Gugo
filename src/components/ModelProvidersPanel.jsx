@@ -180,9 +180,15 @@ export default function ModelProvidersPanel({ onChanged }) {
       {message && <div className="text-xs text-ink-soft border border-ink/10 rounded-md p-2">{message}</div>}
 
       {editing && (
-        <div className="fixed inset-0 z-50 bg-ink/40 flex items-center justify-center p-4">
-          <div className="w-[620px] max-w-full max-h-[90vh] overflow-auto bg-paper border border-ink/20 rounded-md p-5 flex flex-col gap-3">
-            <div className="flex items-center"><div className="font-semibold text-ink flex-1">{t('modelProviders.editor')}</div><button type="button" onClick={() => setEditing(null)}><X className="w-4 h-4" /></button></div>
+        <div className="fixed inset-0 z-50 bg-ink/40 flex items-start sm:items-center justify-center p-4 overflow-y-auto">
+          <div className="w-[620px] max-w-full max-h-[92vh] my-auto bg-paper border border-ink/20 rounded-md flex flex-col overflow-hidden">
+            {/* 标题栏固定,不随表单滚动 */}
+            <div className="flex items-center shrink-0 px-5 pt-5 pb-3 border-b border-ink/10">
+              <div className="font-semibold text-ink flex-1">{t('modelProviders.editor')}</div>
+              <button type="button" onClick={() => setEditing(null)}><X className="w-4 h-4" /></button>
+            </div>
+            {/* 只有表单区滚动,长内容不会把标题和保存按钮顶出视口 */}
+            <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 flex flex-col gap-3">
             <div className="flex flex-col gap-2 p-3 rounded-md border border-ink-fade/30 bg-paper-2">
               <span className="text-xs text-ink-soft">{t('modelProviders.localPreset')}</span>
               <div className="flex flex-wrap gap-2">
@@ -206,7 +212,9 @@ export default function ModelProvidersPanel({ onChanged }) {
               <label><input type="checkbox" checked={editing.enabled} onChange={(e) => setEditing({ ...editing, enabled: e.target.checked })} /> {t('modelProviders.enabled')}</label>
               <label><input type="checkbox" checked={editing.isDefault} onChange={(e) => setEditing({ ...editing, isDefault: e.target.checked })} /> {t('modelProviders.makeDefault')}</label>
             </div>
-            <div className="flex justify-end gap-2">
+            </div>
+            {/* 操作栏固定在底部,表单再长也点得到保存 */}
+            <div className="flex justify-end gap-2 shrink-0 px-5 py-4 border-t border-ink/10 bg-paper">
               <button type="button" disabled={busy || detecting || !editing.baseUrl.trim()} onClick={discover} className="h-9 px-4 border border-ink/50 text-ink rounded-md text-sm flex items-center gap-1 disabled:opacity-40"><RefreshCw className={`w-4 h-4 ${detecting ? 'animate-spin' : ''}`} />{detecting ? t('modelProviders.detecting') : t('modelProviders.discover')}</button>
               <button type="button" disabled={busy || detecting} onClick={save} className="h-9 px-4 bg-ember text-paper rounded-md text-sm flex items-center gap-1 disabled:opacity-40"><Save className="w-4 h-4" />{t('modelProviders.save')}</button>
             </div>

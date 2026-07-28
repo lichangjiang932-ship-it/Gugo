@@ -965,9 +965,9 @@ export default function SettingsView() {
       { id: 'write_file', name: '写入本地文件', desc: '在已获读写授权的路径内创建或覆盖文件。' },
       { id: 'edit_file', name: '编辑本地文件', desc: '在已获读写授权的路径内精确替换文件内容。' },
       { id: 'bash_exec', name: '执行 Shell 命令', desc: '允许模型运行测试/构建/检查命令。服务端还需 WORKSPACE_SHELL_ENABLED=1。' },
-      { id: 'git_status', name: 'Git status', desc: 'Read-only git status for Code mode.' },
-      { id: 'git_diff', name: 'Git diff', desc: 'Read-only unified diff for Code/Plan mode.' },
-      { id: 'run_project_check', name: 'Project checks', desc: 'Allow npm run lint/test/build only.' },
+      { id: 'git_status', name: 'Git 状态', desc: '只读查看工作区的 git status。服务端还需 WORKSPACE_GIT_ENABLED=1。' },
+      { id: 'git_diff', name: 'Git 差异', desc: '只读查看 unified diff。服务端还需 WORKSPACE_GIT_ENABLED=1。' },
+      { id: 'run_project_check', name: '项目检查', desc: '仅允许运行 npm run lint / test / build。' },
     ]
     const onToggle = (id) => {
       dispatch({ type: 'SET_TOOLS_CONFIG', payload: { [id]: !tc[id] } })
