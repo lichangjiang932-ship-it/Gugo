@@ -111,8 +111,11 @@ export function resolveApprovalTimeoutMs(env = process.env) {
  */
 export function classifyToolRisk(toolName, args = {}, options = {}) {
   const name = str(toolName)
-  const mode = options.mode || resolveApprovalMode()
-  const origin = options.origin || 'job'
+  // options 显式传 null 时 default 参数不生效,这里兜一道 —— 本模块在 prompt/工具
+  // 注入路径上被调用,不许 throw(AGENTS.md 2.5.3)。
+  const opts = options && typeof options === 'object' ? options : {}
+  const mode = opts.mode || resolveApprovalMode()
+  const origin = opts.origin || 'job'
   const safeArgs = args && typeof args === 'object' ? args : {}
 
   if (mode === 'off') return { needsApproval: false, risk: 'low', reason: null }
