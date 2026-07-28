@@ -1,0 +1,399 @@
+import fs from 'node:fs'
+import crypto from 'node:crypto'
+import path from 'node:path'
+import { spawn } from 'node:child_process'
+import { sanitizeChildEnv } from '../utils/sensitiveEnv.js'
+
+const sessions = new Map()
+const START_TIMEOUT_MS = 15000
+const ACTION_TIMEOUT_MS = 15000
+
+function findBrowserExecutable(env = process.env) {
+  const configured = String(env.BROWSER_EXECUTABLE_PATH || '').trim()
+  const candidates = [
+    configured,
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    '/usr/bin/microsoft-edge',
+  ].filter(Boolean)
+  return candidates.find((candidate) => fs.existsSync(candidate)) || ''
+}
+
+function assertEnabled() {
+  if (process.env.BROWSER_ENABLED === '0') throw new Error('Browser 工具已禁用（BROWSER_ENABLED=0）')
+  if (typeof globalThis.WebSocket !== 'function') {
+    throw new Error('Browser 工具需要 Node.js 22+ 的内置 WebSocket 支持')
+  }
+}
+
+function validateUrl(raw) {
+  let url
+  try { url = new URL(String(raw || '')) } catch { throw new Error('请输入有效 URL') }
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Browser 仅允许 http/https URL')
+  return url.href
+}
+
+function profileDirectoryForUser(userId, env = process.env) {
+  const dataRoot = path.resolve(String(env.APP_DATA_DIR || path.join(process.cwd(), 'server-data')))
+  const userKey = crypto.createHash('sha256').update(String(userId || '')).digest('hex').slice(0, 32)
+  const profileDir = path.join(dataRoot, 'browser-profiles', userKey)
+  fs.mkdirSync(profileDir, { recursive: true })
+  return profileDir
+}
+
+class CdpClient {
+  constructor(url) {
+    this.url = url
+    this.ws = null
+    this.nextId = 1
+    this.pending = new Map()
+    this.events = []
+    this.requests = new Map()
+    this.closing = false
+  }
+
+  async connect() {
+    this.ws = new WebSocket(this.url)
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('连接浏览器 DevTools 超时')), START_TIMEOUT_MS)
+      this.ws.addEventListener('open', () => { clearTimeout(timer); resolve() }, { once: true })
+      this.ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('无法连接浏览器 DevTools')) }, { once: true })
+    })
+    this.ws.addEventListener('message', (event) => {
+      let message
+      try { message = JSON.parse(String(event.data || '')) } catch { return }
+      if (!message.id) {
+        if (message.method === 'Network.requestWillBeSent') {
+          this.requests.set(message.params?.requestId, message.params?.request?.url || '')
+          return
+        }
+        if (message.method === 'Network.responseReceived' && Number(message.params?.response?.status) < 400) return
+        if (['Runtime.consoleAPICalled', 'Runtime.exceptionThrown', 'Log.entryAdded', 'Network.loadingFailed', 'Network.responseReceived'].includes(message.method)) {
+          this.events.push(message)
+          if (this.events.length > 500) this.events.splice(0, this.events.length - 500)
+        }
+        return
+      }
+      const pending = this.pending.get(message.id)
+      if (!pending) return
+      this.pending.delete(message.id)
+      clearTimeout(pending.timer)
+      if (message.error) pending.reject(new Error(message.error.message || 'DevTools 请求失败'))
+      else pending.resolve(message.result || {})
+    })
+    this.ws.addEventListener('close', () => {
+      for (const pending of this.pending.values()) {
+        clearTimeout(pending.timer)
+        if (this.closing) pending.resolve({})
+        else pending.reject(new Error(`浏览器连接已关闭（等待 ${pending.method}）`))
+      }
+      this.pending.clear()
+    })
+  }
+
+  request(method, params = {}, sessionId = null, timeoutMs = ACTION_TIMEOUT_MS) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return Promise.reject(new Error('浏览器未连接'))
+    const id = this.nextId++
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id)
+        reject(new Error(`Browser action timeout: ${method}`))
+      }, timeoutMs)
+      this.pending.set(id, { resolve, reject, timer, method })
+      this.ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }))
+    })
+  }
+
+  close() {
+    this.closing = true
+    try { this.ws?.close() } catch { /* ignore */ }
+  }
+}
+
+function launchProcess(executable, profileDir, { headless = true } = {}) {
+  return new Promise((resolve, reject) => {
+    const args = [
+      ...(headless ? ['--headless=new'] : ['--start-maximized']),
+      '--disable-gpu',
+      '--disable-extensions',
+      '--disable-gpu-shader-disk-cache',
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--disable-background-networking',
+      '--disable-component-update',
+      '--remote-debugging-port=0',
+      '--remote-allow-origins=*',
+      ...(process.env.BROWSER_NO_SANDBOX === '1' ? ['--no-sandbox'] : []),
+      `--user-data-dir=${profileDir}`,
+      'about:blank',
+    ]
+    const child = spawn(executable, args, {
+      windowsHide: true,
+      stdio: ['ignore', 'ignore', 'pipe'],
+      env: sanitizeChildEnv(),
+    })
+    let stderr = ''
+    const timer = setTimeout(() => {
+      try { child.kill() } catch { /* ignore */ }
+      reject(new Error('启动本机浏览器超时'))
+    }, START_TIMEOUT_MS)
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', (chunk) => {
+      stderr = (stderr + chunk).slice(-20000)
+      const match = stderr.match(/DevTools listening on (ws:\/\/[^\s]+)/)
+      if (!match) return
+      clearTimeout(timer)
+      resolve({ child, websocketUrl: match[1] })
+    })
+    child.once('error', (error) => { clearTimeout(timer); reject(error) })
+    child.once('exit', (code) => {
+      clearTimeout(timer)
+      if (!/DevTools listening on/.test(stderr)) reject(new Error(`浏览器启动失败（exit ${code}）`))
+    })
+  })
+}
+
+async function createSession(userId, { headless = process.env.BROWSER_HEADLESS !== '0' } = {}) {
+  assertEnabled()
+  const executable = findBrowserExecutable()
+  if (!executable) throw new Error('未找到 Edge/Chrome；可用 BROWSER_EXECUTABLE_PATH 指定路径')
+  const profileDir = profileDirectoryForUser(userId)
+  let child
+  let client
+  try {
+    const launched = await launchProcess(executable, profileDir, { headless })
+    child = launched.child
+    const debuggerBase = launched.websocketUrl
+      .replace(/^ws:/, 'http:')
+      .replace(/\/devtools\/browser\/.*$/, '')
+    const targetsResponse = await fetch(`${debuggerBase}/json/list`)
+    if (!targetsResponse.ok) throw new Error(`读取浏览器 Target 失败: HTTP ${targetsResponse.status}`)
+    const targets = await targetsResponse.json()
+    const pageTarget = targets.find((target) => target.type === 'page' && target.webSocketDebuggerUrl)
+    if (!pageTarget) throw new Error('浏览器未创建 Page Target')
+    client = new CdpClient(pageTarget.webSocketDebuggerUrl)
+    await client.connect()
+    const session = { userId, executable, profileDir, child, client, targetId: pageTarget.id, sessionId: null, headless, createdAt: Date.now() }
+    child.once('exit', () => sessions.delete(userId))
+    await Promise.all([
+      client.request('Page.enable', {}, session.sessionId),
+      client.request('Runtime.enable', {}, session.sessionId),
+      client.request('Log.enable', {}, session.sessionId),
+      client.request('Network.enable', {}, session.sessionId),
+    ])
+    sessions.set(userId, session)
+    return session
+  } catch (error) {
+    try { client?.close() } catch { /* ignore */ }
+    try { child?.kill() } catch { /* ignore */ }
+    throw error
+  }
+}
+
+async function getSession(userId, { headed = false } = {}) {
+  if (!userId) throw new Error('userId required')
+  const existing = sessions.get(userId)
+  if (existing && existing.child.exitCode === null && (!headed || existing.headless === false)) return existing
+  if (existing) closeBrowserSession(userId)
+  return createSession(userId, { headless: headed ? false : process.env.BROWSER_HEADLESS !== '0' })
+}
+
+async function evaluate(session, expression) {
+  const result = await session.client.request('Runtime.evaluate', {
+    expression,
+    awaitPromise: true,
+    returnByValue: true,
+    userGesture: true,
+  }, session.sessionId)
+  if (result.exceptionDetails) throw new Error(result.exceptionDetails.text || '页面脚本执行失败')
+  return result.result?.value
+}
+
+async function waitForReady(session, timeoutMs = ACTION_TIMEOUT_MS) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const ready = await evaluate(session, 'document.readyState')
+    if (ready === 'complete' || ready === 'interactive') return
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  throw new Error('等待页面加载超时')
+}
+
+export async function browserOpenUrl({ userId, url }) {
+  const session = await getSession(userId)
+  const targetUrl = validateUrl(url)
+  const result = await session.client.request('Page.navigate', { url: targetUrl }, session.sessionId)
+  if (result.errorText) throw new Error(result.errorText)
+  await waitForReady(session)
+  return browserState({ userId })
+}
+
+export async function browserConnectApp({ userId, url }) {
+  const session = await getSession(userId, { headed: true })
+  const targetUrl = validateUrl(url)
+  const result = await session.client.request('Page.navigate', { url: targetUrl }, session.sessionId)
+  if (result.errorText) throw new Error(result.errorText)
+  await waitForReady(session)
+  return browserState({ userId })
+}
+
+export async function browserState({ userId }) {
+  const session = sessions.get(userId)
+  if (!session || session.child.exitCode !== null) return { connected: false }
+  const page = await evaluate(session, `({
+    url: location.href,
+    title: document.title,
+    readyState: document.readyState,
+    rootChildren: document.getElementById('root')?.childElementCount ?? null,
+    scripts: [...document.scripts].map((script) => ({ src: script.src, type: script.type })),
+    resources: performance.getEntriesByType('resource').map((entry) => entry.name).slice(-100),
+  })`)
+  return { connected: true, ...page, createdAt: session.createdAt }
+}
+
+export async function browserSnapshot({ userId, maxText = 12000 } = {}) {
+  const session = await getSession(userId)
+  const limit = Math.max(1000, Math.min(50000, Number(maxText) || 12000))
+  return evaluate(session, `(() => {
+    const clean = (value) => String(value || '').replace(/\\s+/g, ' ').trim()
+    const nodes = [...document.querySelectorAll('a,button,input,textarea,select,[role="button"],[contenteditable="true"]')]
+      .filter((el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 })
+      .slice(0, 200)
+      .map((el, index) => {
+        const ref = 'e' + (index + 1); el.setAttribute('data-yma-ref', ref)
+        const label = clean(el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.name)
+        return '[ref=' + ref + '] <' + el.tagName.toLowerCase() + '> ' + JSON.stringify(label).slice(0, 240)
+      })
+    return { url: location.href, title: document.title, text: clean(document.body?.innerText).slice(0, ${limit}), elements: nodes }
+  })()`)
+}
+
+export async function browserConsole({ userId, clear = false } = {}) {
+  const session = await getSession(userId)
+  const entries = session.client.events.map((event) => {
+    if (event.method === 'Network.loadingFailed') {
+      const params = event.params || {}
+      return {
+        type: 'network-error',
+        text: params.errorText || params.blockedReason || 'Network loading failed',
+        url: session.client.requests.get(params.requestId) || '',
+      }
+    }
+    if (event.method === 'Network.responseReceived') {
+      const response = event.params?.response || {}
+      return { type: 'http-error', text: `HTTP ${response.status}`, url: response.url || '' }
+    }
+    if (event.method === 'Runtime.consoleAPICalled') {
+      const params = event.params || {}
+      return {
+        type: params.type || 'log',
+        text: (params.args || []).map((arg) => String(arg.value ?? arg.description ?? '')).join(' '),
+        timestamp: params.timestamp || null,
+      }
+    }
+    if (event.method === 'Runtime.exceptionThrown') {
+      const details = event.params?.exceptionDetails || {}
+      return {
+        type: 'error',
+        text: details.exception?.description || details.text || 'Uncaught exception',
+        url: details.url || '',
+        lineNumber: details.lineNumber ?? null,
+        columnNumber: details.columnNumber ?? null,
+        timestamp: event.params?.timestamp || null,
+      }
+    }
+    const entry = event.params?.entry || {}
+    return { type: entry.level || 'log', text: entry.text || '', url: entry.url || '', timestamp: entry.timestamp || null }
+  })
+  if (clear) session.client.events.length = 0
+  return { entries }
+}
+
+function elementExpression(refOrSelector, action) {
+  const target = JSON.stringify(String(refOrSelector || ''))
+  return `(() => {
+    const target = ${target}
+    let el = document.querySelector('[data-yma-ref="' + CSS.escape(target) + '"]')
+    if (!el) { try { el = document.querySelector(target) } catch {} }
+    if (!el) return { ok: false, error: 'element not found: ' + target }
+    ${action}
+  })()`
+}
+
+export async function browserClick({ userId, target }) {
+  const session = await getSession(userId)
+  const result = await evaluate(session, elementExpression(target, `el.scrollIntoView({block:'center'}); el.click(); return {ok:true}`))
+  if (!result?.ok) throw new Error(result?.error || '点击失败')
+  await new Promise((resolve) => setTimeout(resolve, 250))
+  return browserState({ userId })
+}
+
+export async function browserType({ userId, target, text, submit = false }) {
+  const session = await getSession(userId)
+  const value = JSON.stringify(String(text ?? ''))
+  const result = await evaluate(session, elementExpression(target, `
+    el.focus(); const value = ${value};
+    if ('value' in el) { const setter = Object.getOwnPropertyDescriptor(el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, 'value')?.set; setter ? setter.call(el, value) : (el.value = value) }
+    else el.textContent = value
+    el.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText', data:value})); el.dispatchEvent(new Event('change', {bubbles:true}));
+    ${submit ? "el.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',bubbles:true})); el.form?.requestSubmit?.()" : ''}
+    return {ok:true}
+  `))
+  if (!result?.ok) throw new Error(result?.error || '输入失败')
+  return { ok: true }
+}
+
+export async function browserWait({ userId, ms = 500, target = '' }) {
+  const session = await getSession(userId)
+  const delay = Math.max(0, Math.min(10000, Number(ms) || 0))
+  if (!target) {
+    await new Promise((resolve) => setTimeout(resolve, delay))
+    return browserState({ userId })
+  }
+  const deadline = Date.now() + Math.max(delay, 1000)
+  while (Date.now() < deadline) {
+    const found = await evaluate(session, elementExpression(target, 'return {ok:true}'))
+    if (found?.ok) return { ok: true, target }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  throw new Error(`等待元素超时: ${target}`)
+}
+
+export async function browserScreenshot({ userId, fullPage = false } = {}) {
+  const session = await getSession(userId)
+  let clip
+  if (fullPage) {
+    const metrics = await session.client.request('Page.getLayoutMetrics', {}, session.sessionId)
+    const size = metrics.cssContentSize || metrics.contentSize
+    if (size) clip = { x: 0, y: 0, width: Math.min(size.width, 8000), height: Math.min(size.height, 16000), scale: 1 }
+  }
+  const result = await session.client.request('Page.captureScreenshot', {
+    format: 'png',
+    fromSurface: true,
+    captureBeyondViewport: !!fullPage,
+    ...(clip ? { clip } : {}),
+  }, session.sessionId, 30000)
+  return { mimeType: 'image/png', data: result.data, bytes: Buffer.byteLength(result.data || '', 'base64') }
+}
+
+export function closeBrowserSession(userId) {
+  const session = sessions.get(userId)
+  if (!session) return false
+  sessions.delete(userId)
+  try { session.client.close() } catch { /* ignore */ }
+  try { session.child.kill() } catch { /* ignore */ }
+  return true
+}
+
+export function shutdownBrowsers() {
+  for (const userId of [...sessions.keys()]) closeBrowserSession(userId)
+}
+
+export const _browserInternals = { findBrowserExecutable, validateUrl, profileDirectoryForUser }
