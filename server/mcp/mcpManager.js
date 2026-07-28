@@ -79,7 +79,7 @@ async function startConnection(server) {
       label: server.name,
     })
     transport.start()
-  } else if (server.transport === 'sse') {
+  } else if (server.transport === 'sse' || server.transport === 'http') {
     transport = new SseTransport({
       url: server.url,
       headers: server.headers || {},

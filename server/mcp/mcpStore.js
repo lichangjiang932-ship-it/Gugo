@@ -8,7 +8,7 @@
 import { getDb } from '../db.js'
 import { randomUUID } from 'node:crypto'
 
-const TRANSPORTS = ['stdio', 'sse']
+const TRANSPORTS = ['stdio', 'sse', 'http']
 
 function obfuscate(s) {
   if (s == null) return null
@@ -74,11 +74,11 @@ export function getServer(userId, id) {
 export function upsertServer({ id, userId, name, transport, command, args, env, cwd, url, headers, enabled, autoApprove }) {
   if (!userId) throw new Error('userId 必填')
   if (!name?.trim()) throw new Error('name 不能为空')
-  if (!TRANSPORTS.includes(transport)) throw new Error('transport 必须是 stdio / sse')
+  if (!TRANSPORTS.includes(transport)) throw new Error('transport 必须是 stdio / http / sse')
   if (transport === 'stdio') {
     if (!command?.trim()) throw new Error('stdio 必须提供 command')
-  } else if (transport === 'sse') {
-    if (!url || !/^https?:\/\//.test(url)) throw new Error('sse 必须提供 http/https url')
+  } else {
+    if (!url || !/^https?:\/\//.test(url)) throw new Error('HTTP MCP 必须提供 http/https url')
   }
   const db = getDb()
   const now = Date.now()

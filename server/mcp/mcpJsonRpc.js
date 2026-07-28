@@ -17,7 +17,7 @@ export function nextRequestId() {
 }
 
 export const CLIENT_INFO = {
-  name: 'your-model-atelier',
+  name: 'Gugo',
   version: '1.0.0',
 }
 

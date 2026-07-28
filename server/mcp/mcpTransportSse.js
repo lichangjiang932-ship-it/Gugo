@@ -19,10 +19,19 @@
  * NB: 本实现不支持服务端主动 server-initiated streams（实测大多数 MCP server 也未实现）。
  */
 
+function isLoopbackHttpUrl(raw) {
+  try {
+    const url = new URL(raw)
+    return url.protocol === 'http:' && ['localhost', '127.0.0.1', '::1', '[::1]'].includes(url.hostname)
+  } catch {
+    return false
+  }
+}
+
 export class SseTransport {
   constructor({ url, headers = {}, label = 'mcp', timeoutMs = 30000 }) {
     if (!url || !/^https?:\/\//.test(url)) throw new Error('SSE transport 需要 http/https url')
-    if (process.env.NODE_ENV === 'production' && !url.startsWith('https://')) {
+    if (process.env.NODE_ENV === 'production' && !url.startsWith('https://') && !isLoopbackHttpUrl(url)) {
       throw new Error('生产环境 MCP SSE 必须 https')
     }
     this.url = url
@@ -30,6 +39,7 @@ export class SseTransport {
     this.label = label
     this.timeoutMs = timeoutMs
     this.closed = false
+    this.sessionId = null
     this.notificationHandlers = new Set()
     this.errorHandlers = new Set()
   }
@@ -55,6 +65,8 @@ export class SseTransport {
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json, text/event-stream',
+          'MCP-Protocol-Version': '2025-03-26',
+          ...(this.sessionId ? { 'MCP-Session-Id': this.sessionId } : {}),
           ...(this.headers || {}),
         },
         body: JSON.stringify(message),
@@ -64,6 +76,7 @@ export class SseTransport {
         const errText = await resp.text().catch(() => '')
         throw new Error(`MCP HTTP ${resp.status}: ${errText.slice(0, 200)}`)
       }
+      this.sessionId = resp.headers.get('mcp-session-id') || this.sessionId
       const ct = resp.headers.get('content-type') || ''
       if (ct.includes('text/event-stream')) {
         return this._parseSseResponse(resp, message.id)
@@ -81,12 +94,23 @@ export class SseTransport {
     const ctrl = new AbortController()
     const t = setTimeout(() => ctrl.abort(), this.timeoutMs)
     try {
-      await fetch(this.url, {
+      const resp = await fetch(this.url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(this.headers || {}) },
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+          'MCP-Protocol-Version': '2025-03-26',
+          ...(this.sessionId ? { 'MCP-Session-Id': this.sessionId } : {}),
+          ...(this.headers || {}),
+        },
         body: JSON.stringify(message),
         signal: ctrl.signal,
       })
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => '')
+        throw new Error(`MCP HTTP ${resp.status}: ${errText.slice(0, 200)}`)
+      }
+      this.sessionId = resp.headers.get('mcp-session-id') || this.sessionId
     } finally {
       clearTimeout(t)
     }
@@ -99,7 +123,7 @@ export class SseTransport {
     while (true) {
       const { value, done } = await reader.read()
       if (done) break
-      buffer += decoder.decode(value, { stream: true })
+      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n')
       let idx
       while ((idx = buffer.indexOf('\n\n')) >= 0) {
         const evt = buffer.slice(0, idx)
@@ -131,3 +155,5 @@ export class SseTransport {
     return !this.closed
   }
 }
+
+export const _sseTransportInternals = { isLoopbackHttpUrl }
