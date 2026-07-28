@@ -8,8 +8,8 @@
   <img src="https://img.shields.io/badge/Node.js-20-10b981?logo=node.js" alt="Node 20" />
   <img src="https://img.shields.io/badge/SQLite-WAL-2e8fa3" alt="SQLite WAL" />
   <img src="https://img.shields.io/badge/Vite-8-ec4899?logo=vite" alt="Vite 8" />
-  <img src="https://img.shields.io/badge/tests-422%20passing-success" alt="tests" />
-  <img src="https://img.shields.io/badge/release-v0.9.0-blue" alt="v0.9.0" />
+  <img src="https://img.shields.io/badge/tests-853%20passing-success" alt="tests" />
+  <img src="https://img.shields.io/badge/release-v0.10.0-blue" alt="v0.10.0" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT" />
 </p>
 
@@ -31,8 +31,9 @@
 | 子代理 | 隔离子代理 + 工具白名单 | 是 | 是 |
 | Skill 系统 | 内置 + 可导入 + 内置 SQLite 系统库 | 是 | 是 |
 | 3D 沉浸式入口 | Three.js 粒子封面页 | 无 | 无 |
-| 独立 Hub | 计划中（v0.4） | 是 | 无 |
-| 跨平台 Bridge | 计划中（v0.5+） | Telegram/飞书/微信/QQ | 无 |
+| 独立 Hub | 已实现（`HUB_ENABLED=1`） | 是 | 无 |
+| 跨平台 Bridge | 飞书 / 微信 / Telegram 等（v0.10） | Telegram/飞书/微信/QQ | 无 |
+| 审批门控 | 服务端 pause/resume + 收件箱 + 单次调用批准/拒绝/改参数 | 无 | 权限提示 |
 
 ---
 
@@ -77,6 +78,13 @@
 - 敏感 env 屏蔽 · tool_audit 全闭环
 - 速率限制（rateLimiterBudget）
 
+### 审批门控（对标 openworker 的 check-in）
+- 服务端 **pause / resume 原语**：后台任务与子代理执行高风险工具前挂起，等人决定
+- **收件箱**：批准 / 拒绝 / **改写参数后再批准**——单次调用粒度，不是「按工具名一刀切」
+- 风险分级按**具体参数**判定：`bash_exec` 命中危险命令黑名单升 high、写文件越出工作区升 high、`fetch_url` 只拦非安全方法、`apply_patch` 的 `dry_run` 直接放行
+- 决策权威在 DB，进程重启后挂起的审批仍可决策；等待中的任务不会被崩溃恢复重跑
+- `APPROVAL_MODE=off | unattended | all` 控制范围，默认只拦无人值守路径
+
 ---
 
 ## 架构
@@ -105,12 +113,13 @@
         ├── entities / relations / observations
         ├── subagent_runs / subagents_custom
         ├── compaction_archive / tool_audit
+        ├── pending_approvals          ← 挂起的工具调用 + 决策结果
         └── effort_settings / session_meters
 ```
 
 技术栈：React 19 · Vite 8 · Tailwind CSS 3 · Framer Motion · Three.js · Node.js 20 · better-sqlite3 · JSDOM · JSZip · Zod · PPTXGenJS · @e965/xlsx
 
-规模：~17,000 行代码 · 50+ 测试文件 · **422 个测试用例**（v0.9.0） · 零后端框架依赖
+规模：~17,000 行代码 · 153 个测试文件 · **853 个测试用例**（v0.10.0） · 零后端框架依赖
 
 ---
 
@@ -206,6 +215,8 @@ Cherry Studio 选择 `Streamable HTTP`，URL 填上述 `/mcp` 地址，并添加
 | `MCP_SERVER_ENABLED` | 否 | 开启对外 `/mcp` Streamable HTTP Server | `1` |
 | `MCP_RATE_LIMIT_PER_MINUTE` | 否 | `/mcp` 每来源 IP 每分钟请求上限 | `300` |
 | `MCP_MAX_BODY_BYTES` | 否 | `/mcp` 单请求最大字节数 | `1048576` |
+| `APPROVAL_MODE` | 否 | 审批门控范围：`off` / `unattended` / `all` | `unattended` |
+| `APPROVAL_TIMEOUT_MS` | 否 | 审批超时（超时视同拒绝） | `86400000` |
 | `APP_DATA_DIR` | 否 | 数据目录 | `server-data/` |
 | `APP_DB_PATH` | 否 | SQLite 路径 | `server-data/app.db` |
 | `PORT` | 否 | HTTP 端口 | `5175` |
@@ -224,7 +235,7 @@ npm run build    # 生产构建
 npm run serve    # 仅启动后端（需先 build）
 npm run local    # build + 启动
 npm run lint     # ESLint
-npm test         # 422 测试
+npm test         # 853 测试
 ```
 
 ---
@@ -252,7 +263,7 @@ your-model-atelier/
 │   └── store/             # 状态 + 持久化
 ├── skill-packs/           # 可分发的 skill 包
 ├── seed/                  # 系统 skill 静态种子
-├── tests/                 # 50+ 测试文件
+├── tests/                 # 153 个测试文件
 ├── docs/
 │   ├── REFOUND_PLAN.md    # 重构路线图
 │   └── superpowers/
