@@ -3,13 +3,18 @@ import assert from 'node:assert/strict'
 
 import {
   buildOpenAICompatibleRequest,
+  extractUsage,
   formatProxyError,
   getModelStatus,
   getSystemDiagnostics,
+  getUsageStats,
   loadModelConfig,
   normalizeOpenAICompatibleUrl,
   parseOpenAICompatibleResponse,
+  recordUsage,
+  resetUsageStats,
   resolveModelConfigForModel,
+  supportsStreamUsage,
 } from '../server/adapters/modelProxy.js'
 
 test('normalizes OpenAI compatible base URLs to chat completions endpoint', () => {
@@ -292,4 +297,93 @@ test('formats proxy errors into user-readable Chinese messages', () => {
     formatProxyError({ status: 400, message: 'invalid request: tool role is unsupported' }),
     '请求参数无效：请检查消息内容、工具调用上下文或当前模型的 OpenAI 兼容性。'
   )
+})
+
+// ───────────────────────── usage / 缓存命中率 ─────────────────────────
+// 背景:以前 usage 全链路没人读,stream_options 没设,且 SSE 循环的
+// `if (!choice) continue` 会把 usage 帧(choices 为空数组)直接跳过 —— 
+// 导致缓存命中率完全无法测量。下面这组守住修复。
+
+test('extractUsage 解析 DeepSeek 的缓存命中字段', () => {
+  const usage = extractUsage({
+    usage: {
+      prompt_tokens: 1000,
+      completion_tokens: 50,
+      total_tokens: 1050,
+      prompt_cache_hit_tokens: 896,
+      prompt_cache_miss_tokens: 104,
+    },
+  })
+  assert.equal(usage.promptTokens, 1000)
+  assert.equal(usage.cacheHitTokens, 896)
+  assert.equal(usage.cacheMissTokens, 104)
+})
+
+test('extractUsage 解析 OpenAI 的 cached_tokens 并推算 miss', () => {
+  const usage = extractUsage({
+    usage: { prompt_tokens: 1000, completion_tokens: 50, prompt_tokens_details: { cached_tokens: 768 } },
+  })
+  assert.equal(usage.cacheHitTokens, 768)
+  // OpenAI 不给 miss,由 prompt - cached 推出
+  assert.equal(usage.cacheMissTokens, 232)
+})
+
+test('extractUsage 对缺失/畸形输入返回 null 且不抛', () => {
+  for (const input of [null, undefined, {}, { choices: [] }, { usage: 'x' }, { usage: null }]) {
+    assert.doesNotThrow(() => extractUsage(input))
+    assert.equal(extractUsage(input), null)
+  }
+})
+
+test('supportsStreamUsage 只对已知端点开启,未知端点保持关闭', () => {
+  assert.equal(supportsStreamUsage({ baseUrl: 'https://api.deepseek.com' }, {}), true)
+  assert.equal(supportsStreamUsage({ baseUrl: 'https://api.openai.com/v1' }, {}), true)
+  // 未知端点默认不发 stream_options,避免上游 400
+  assert.equal(supportsStreamUsage({ baseUrl: 'https://unknown.example.com/v1' }, {}), false)
+  assert.equal(supportsStreamUsage({ baseUrl: '' }, {}), false)
+  // 可显式强制开/关
+  assert.equal(supportsStreamUsage({ baseUrl: 'https://unknown.example.com' }, { MODEL_STREAM_USAGE: '1' }), true)
+  assert.equal(supportsStreamUsage({ baseUrl: 'https://api.deepseek.com' }, { MODEL_STREAM_USAGE: '0' }), false)
+})
+
+test('流式请求对支持的端点带上 stream_options.include_usage', () => {
+  const config = { baseUrl: 'https://api.deepseek.com', apiKey: 'sk-x', modelName: 'deepseek-chat' }
+  const streamed = JSON.parse(
+    buildOpenAICompatibleRequest({ config, messages: [{ role: 'user', content: 'hi' }], stream: true }).init.body
+  )
+  assert.deepEqual(streamed.stream_options, { include_usage: true })
+
+  // 非流式不该带
+  const nonStream = JSON.parse(
+    buildOpenAICompatibleRequest({ config, messages: [{ role: 'user', content: 'hi' }], stream: false }).init.body
+  )
+  assert.equal(nonStream.stream_options, undefined)
+
+  // 未知端点即便流式也不带
+  const unknown = JSON.parse(
+    buildOpenAICompatibleRequest({
+      config: { ...config, baseUrl: 'https://unknown.example.com/v1' },
+      messages: [{ role: 'user', content: 'hi' }],
+      stream: true,
+    }).init.body
+  )
+  assert.equal(unknown.stream_options, undefined)
+})
+
+test('usage 聚合算出缓存命中率,无数据时为 null 而不是 0%', () => {
+  resetUsageStats()
+  assert.equal(getUsageStats().cacheHitRatePercent, null, '没有样本时应为 null,不能谎报 0%')
+
+  recordUsage('m1', extractUsage({ usage: { prompt_tokens: 1000, prompt_cache_hit_tokens: 900, prompt_cache_miss_tokens: 100 } }))
+  recordUsage('m1', extractUsage({ usage: { prompt_tokens: 1000, prompt_cache_hit_tokens: 800, prompt_cache_miss_tokens: 200 } }))
+  const stats = getUsageStats()
+  assert.equal(stats.requests, 2)
+  assert.equal(stats.cacheHitTokens, 1700)
+  assert.equal(stats.cacheHitRatePercent, 85)
+  assert.equal(stats.byModel.m1.cacheHitRatePercent, 85)
+
+  // recordUsage(null) 不该污染统计
+  recordUsage('m1', null)
+  assert.equal(getUsageStats().requests, 2)
+  resetUsageStats()
 })

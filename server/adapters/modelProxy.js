@@ -24,6 +24,7 @@ import {
   buildIshikiBlock,
   buildSkillsBlock,
   buildSessionsBlock,
+  getPromptCompilerStats,
 } from '../services/promptCompiler.js'
 import { attachVisionDescriptions, hasVisionAssistConfigured } from './visionAssist.js'
 import { logWarn } from '../utils/logger.js'
@@ -306,6 +307,13 @@ export async function getSystemDiagnostics({ env = process.env, fetchImpl = fetc
     endpoint,
     billing,
     mail,
+    // 缓存可观测性:上游 token 命中率 + 本地 prompt block LRU 命中率。
+    // 以前这两个数字都拿不到,任何前缀优化都无法验证效果。
+    cache: {
+      upstream: getUsageStats(),
+      promptBlocks: getPromptCompilerStats(),
+      streamUsageEnabled: supportsStreamUsage(config, env),
+    },
   }
 }
 
@@ -357,8 +365,22 @@ function normalizeMessagesForOpenAI(messages = []) {
   })
 }
 
-export function buildOpenAICompatibleRequest({ config, messages, stream = false, tools, toolChoice }) {
-  const model = config?.modelName
+/**
+ * 该端点能不能吃 stream_options.include_usage。
+ * 保守策略:已知支持的家族才开;其余保持关闭,除非用户显式 MODEL_STREAM_USAGE=1。
+ * 关掉只是拿不到 usage(命中率显示为未知),不影响聊天本身。
+ */
+export function supportsStreamUsage(config, env = process.env) {
+  const forced = String(env.MODEL_STREAM_USAGE || '').trim()
+  if (forced === '1') return true
+  if (forced === '0') return false
+  const base = String(config?.baseUrl || '').toLowerCase()
+  if (!base) return false
+  return /(^|\/\/|\.)(api\.)?(deepseek|openai|siliconflow|moonshot|dashscope|bigmodel|xiaomimimo|together|fireworks|groq)\b/.test(base)
+    || base.includes('openai.azure.com')
+}
+
+export function buildOpenAICompatibleRequest({ config, messages, stream = false, tools, toolChoice }) {  const model = config?.modelName
   if (!model) throw new Error('请输入模型名称。')
   if (!Array.isArray(messages) || messages.length === 0) {
     throw new Error('消息不能为空。')
@@ -381,6 +403,11 @@ export function buildOpenAICompatibleRequest({ config, messages, stream = false,
     body.tools = tools
     if (toolChoice) body.tool_choice = toolChoice
   }
+  // ★ 流式 usage:拿到才能算缓存命中率。同 tools 的口径,默认只对已知支持的端点开,
+  // 不认识的端点保持沉默(有些实现见到未知字段直接 400)。可用 MODEL_STREAM_USAGE 强制。
+  if (stream && supportsStreamUsage(config)) {
+    body.stream_options = { include_usage: true }
+  }
 
   return {
     url: normalizeOpenAICompatibleUrl(config?.baseUrl),
@@ -392,6 +419,67 @@ export function buildOpenAICompatibleRequest({ config, messages, stream = false,
   }
 }
 
+/**
+ * 进程内 usage 聚合。用于回答「缓存命中率是多少」——改前改后能对比,
+ * 否则任何前缀优化都是盲改。故意不落库:这是运维观测指标,不是业务数据。
+ */
+const usageTotals = {
+  requests: 0,
+  promptTokens: 0,
+  completionTokens: 0,
+  cacheHitTokens: 0,
+  cacheMissTokens: 0,
+  byModel: new Map(),
+}
+
+export function recordUsage(modelName, usage) {
+  if (!usage) return
+  usageTotals.requests += 1
+  usageTotals.promptTokens += usage.promptTokens || 0
+  usageTotals.completionTokens += usage.completionTokens || 0
+  usageTotals.cacheHitTokens += usage.cacheHitTokens || 0
+  usageTotals.cacheMissTokens += usage.cacheMissTokens || 0
+  const key = String(modelName || 'unknown')
+  const m = usageTotals.byModel.get(key) || { requests: 0, promptTokens: 0, cacheHitTokens: 0, cacheMissTokens: 0 }
+  m.requests += 1
+  m.promptTokens += usage.promptTokens || 0
+  m.cacheHitTokens += usage.cacheHitTokens || 0
+  m.cacheMissTokens += usage.cacheMissTokens || 0
+  usageTotals.byModel.set(key, m)
+}
+
+function hitRate(hit, total) {
+  return total > 0 ? Number(((hit / total) * 100).toFixed(2)) : null
+}
+
+export function getUsageStats() {
+  const cacheable = usageTotals.cacheHitTokens + usageTotals.cacheMissTokens
+  return {
+    requests: usageTotals.requests,
+    promptTokens: usageTotals.promptTokens,
+    completionTokens: usageTotals.completionTokens,
+    cacheHitTokens: usageTotals.cacheHitTokens,
+    cacheMissTokens: usageTotals.cacheMissTokens,
+    // null 表示上游没回 usage(端点不支持或未开 stream_options),不是 0%
+    cacheHitRatePercent: hitRate(usageTotals.cacheHitTokens, cacheable),
+    byModel: Object.fromEntries(
+      [...usageTotals.byModel.entries()].map(([name, m]) => [
+        name,
+        { ...m, cacheHitRatePercent: hitRate(m.cacheHitTokens, m.cacheHitTokens + m.cacheMissTokens) },
+      ]),
+    ),
+  }
+}
+
+export function resetUsageStats() {
+  usageTotals.requests = 0
+  usageTotals.promptTokens = 0
+  usageTotals.completionTokens = 0
+  usageTotals.cacheHitTokens = 0
+  usageTotals.cacheMissTokens = 0
+  usageTotals.byModel.clear()
+}
+
 export function parseOpenAICompatibleResponse(data) {
   const reply =
     data?.choices?.[0]?.message?.content ||
@@ -401,6 +489,36 @@ export function parseOpenAICompatibleResponse(data) {
 
   if (!reply) throw new Error('模型返回为空，请检查模型名称或端点响应格式。')
   return reply
+}
+
+/**
+ * 从上游响应里抽 token usage,顺带归一化各家的缓存命中字段。
+ *
+ * 故意不并进 parseOpenAICompatibleResponse —— 那个函数返回裸字符串,
+ * 有 3 处调用点直接当字符串用(含 HTTP response 序列化),改返回类型会渲染成
+ * "[object Object]"。这里单独取,纯读、只用可选链、绝不 throw。
+ *
+ *   DeepSeek : prompt_cache_hit_tokens / prompt_cache_miss_tokens
+ *   OpenAI   : prompt_tokens_details.cached_tokens
+ */
+export function extractUsage(data) {
+  const u = data?.usage
+  if (!u || typeof u !== 'object') return null
+  const promptTokens = Number(u.prompt_tokens) || 0
+  const cacheHitTokens = Number(
+    u.prompt_cache_hit_tokens ?? u.prompt_tokens_details?.cached_tokens ?? 0,
+  ) || 0
+  // DeepSeek 直接给 miss;OpenAI 只给 cached,miss 由 prompt - cached 推出
+  const cacheMissTokens = Number(
+    u.prompt_cache_miss_tokens ?? Math.max(0, promptTokens - cacheHitTokens),
+  ) || 0
+  return {
+    promptTokens,
+    completionTokens: Number(u.completion_tokens) || 0,
+    totalTokens: Number(u.total_tokens) || 0,
+    cacheHitTokens,
+    cacheMissTokens,
+  }
 }
 
 export async function callBackgroundModel({
@@ -561,6 +679,7 @@ async function* streamOpenAICompatible({ config, messages, fetchImpl = fetch, to
     // ★ tool_call 增量合并:OpenAI 流式协议每个 chunk 给 tool_calls[i].function.arguments 的片段,需要按 index 累加
     const toolCallAcc = new Map() // index -> { id, name, arguments }
     let finishReason = null
+    let lastUsage = null
 
     while (true) {
       const { done, value } = await reader.read()
@@ -578,12 +697,19 @@ async function* streamOpenAICompatible({ config, messages, fetchImpl = fetch, to
             const calls = [...toolCallAcc.entries()]
               .sort((a, b) => a[0] - b[0])
               .map(([, v]) => v)
-            yield { type: 'tool_calls', toolCalls: calls, finishReason: finishReason || 'tool_calls' }
+            yield { type: 'tool_calls', toolCalls: calls, finishReason: finishReason || 'tool_calls', usage: lastUsage }
           }
           return
         }
         try {
           const chunk = JSON.parse(payload)
+          // ★ usage 帧的 choices 是空数组,必须在 !choice 守卫之前取,
+          // 否则永远被 continue 跳过 —— 这正是以前命中率无法测量的原因。
+          const chunkUsage = extractUsage(chunk)
+          if (chunkUsage) {
+            lastUsage = chunkUsage
+            yield { type: 'usage', usage: chunkUsage }
+          }
           const choice = chunk?.choices?.[0]
           if (!choice) continue
           const delta = choice.delta || {}
@@ -612,7 +738,7 @@ async function* streamOpenAICompatible({ config, messages, fetchImpl = fetch, to
       const calls = [...toolCallAcc.entries()]
         .sort((a, b) => a[0] - b[0])
         .map(([, v]) => v)
-      yield { type: 'tool_calls', toolCalls: calls, finishReason: finishReason || 'tool_calls' }
+      yield { type: 'tool_calls', toolCalls: calls, finishReason: finishReason || 'tool_calls', usage: lastUsage }
     }
   } finally {
     clearTimeout(timeout)
@@ -864,6 +990,7 @@ export async function handleModelProxyRequest(req, res) {
       }
 
       const started = Date.now()
+      let streamUsage = null
       try {
         for await (const event of streamOpenAICompatible({
           config: requestConfig,
@@ -876,7 +1003,16 @@ export async function handleModelProxyRequest(req, res) {
           if (event.type === 'text') {
             safeWrite(`data: ${JSON.stringify({ ok: true, delta: event.delta, latency: Date.now() - started })}\n\n`)
           } else if (event.type === 'tool_calls') {
+            // 工具调用轮:usage 帧若已单独到达就不重复记,否则用终止帧带的兜底
+            if (event.usage && !streamUsage) {
+              streamUsage = event.usage
+              recordUsage(selectedModel, event.usage)
+            }
             safeWrite(`data: ${JSON.stringify({ ok: true, toolCalls: event.toolCalls, finishReason: event.finishReason, latency: Date.now() - started })}\n\n`)
+          } else if (event.type === 'usage') {
+            // 不单独下发,攒到 done 帧一起给,避免前端多处理一种帧型
+            streamUsage = event.usage
+            recordUsage(selectedModel, event.usage)
           }
         }
         // 扣费 — 客户端断了就跳过,不收钱
@@ -906,6 +1042,7 @@ export async function handleModelProxyRequest(req, res) {
             done: true,
             latency: Date.now() - started,
             injectedMemoryIds,
+            usage: streamUsage,
             billing: {
               creditsCharged: estimatedCost,
               credits: chargedBilling?.user?.credits ?? null,
@@ -942,6 +1079,9 @@ export async function handleModelProxyRequest(req, res) {
           error.status = response.status
           throw error
         }
+        // usage 只读不改返回类型 —— parseOpenAICompatibleResponse 返回裸字符串,
+        // 多处调用点直接当字符串用,不能在这里改形状。
+        recordUsage(selectedModel, extractUsage(data))
         return parseOpenAICompatibleResponse(data)
       } finally {
         clearTimeout(timeout)
