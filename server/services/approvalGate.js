@@ -122,7 +122,8 @@ export async function requestApproval({
       kind: 'approval',
       title: `需要批准:${toolName}`,
       body: verdict.reason || '有一个操作等待你的批准',
-      link: `/#/approvals?id=${encodeURIComponent(approval.id)}`,
+      // 前端是 HashRouter + navigate(link),这里给路由路径而非带 /#/ 的完整 URL
+      link: `/approvals?id=${encodeURIComponent(approval.id)}`,
       data: {
         approvalId: approval.id,
         toolName,

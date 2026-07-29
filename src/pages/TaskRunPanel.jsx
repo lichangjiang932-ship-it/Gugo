@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Activity, CheckCircle2, Clock3, LayoutList, PauseCircle, RotateCcw, Eye } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
 import TaskArtifactPreview from './TaskArtifactPreview.jsx'
@@ -29,13 +30,16 @@ const STATUS_LABELS = Object.freeze({
   planning: '规划中',
   running: '运行中',
   waiting: '等待中',
+  awaiting_approval: '等待批准',
   completed: '已完成',
   failed: '失败',
   cancel_requested: '终止中',
   cancelled: '已终止',
 })
 
-const ACTIVE_STATUSES = new Set(['queued', 'planning', 'running', 'waiting', 'cancel_requested'])
+// ★ awaiting_approval 必须算「进行中」—— 否则等审批的任务在所有筛选下都不可见,
+// 用户会以为任务凭空消失了(它其实在收件箱里等着你点批准)。
+const ACTIVE_STATUSES = new Set(['queued', 'planning', 'running', 'waiting', 'awaiting_approval', 'cancel_requested'])
 
 function formatTime(value) {
   if (!value) return '—'
@@ -65,6 +69,7 @@ function StepDot({ status }) {
 export default function TaskRunPanel() {
   const toast = useToast()
   const { t } = useT()
+  const navigate = useNavigate()
   const [prompt, setPrompt] = useState('')
   const [jobs, setJobs] = useState([])
   const [selectedJobId, setSelectedJobId] = useState(null)
@@ -304,6 +309,25 @@ export default function TaskRunPanel() {
                       <p className="text-ink mt-1">{formatTime(selectedJob.updatedAt)}</p>
                     </div>
                   </div>
+                  {/* ★ job 级失败原因以前存了却从不显示,用户只能看到步骤级错误 ——
+                      而「被澄清打断」「预算耗尽」这类原因只记在 job 上 */}
+                  {selectedJob.error && (
+                    <div className="mt-3 rounded-md border border-dashed border-red-500/50 bg-red-500/5 p-3">
+                      <p className="text-[11px] text-red-600">失败原因</p>
+                      <p className="text-sm text-ink mt-1 break-words">{selectedJob.error}</p>
+                    </div>
+                  )}
+                  {selectedJob.status === 'awaiting_approval' && (
+                    <div className="mt-3 rounded-md border border-dashed border-amber-500/50 bg-amber-500/5 p-3 flex items-center gap-3">
+                      <p className="text-sm text-ink flex-1">这个任务正在等你批准一个操作。</p>
+                      <button
+                        onClick={() => navigate('/approvals')}
+                        className="h-8 px-3 border border-amber-500/60 rounded-md text-sm text-amber-700 hover:bg-amber-500/10 transition-colors shrink-0"
+                      >
+                        去审批
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-[1.2fr_0.8fr] gap-4">

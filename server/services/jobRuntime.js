@@ -277,7 +277,10 @@ function notifyJobTerminal(job, { status, body }) {
       kind: 'job',
       title: job.title || job.id,
       body,
-      link: `/?job=${encodeURIComponent(job.id)}`,
+      // ★ 以前是 `/?job=…`,点通知会落到 3D 封面页而不是任务页。
+      // 前端用 HashRouter + navigate(link),所以这里给的必须是「路由路径」,
+      // 不能带 `/#/` 前缀(那会被当成字面路径)。
+      link: `/task?job=${encodeURIComponent(job.id)}`,
       data: {
         jobId: job.id,
         status,
