@@ -158,7 +158,7 @@ async function executeSubagentTool(toolName, args, { userId = null } = {}) {
     case 'grep_code':
     case 'find_symbol':
     case 'list_imports':
-      return dispatchCodeSearchTool(toolName, args)
+      return dispatchCodeSearchTool(toolName, args, { userId })
     case 'apply_patch':
       return dispatchApplyPatchTool(toolName, args)
     case 'reflect':

@@ -250,7 +250,7 @@ async function executeServerTool({ name, args, job, step }) {
   }
   if (['grep_code', 'find_symbol', 'list_imports'].includes(name)) {
     try {
-      return await dispatchCodeSearchTool(name, args || {})
+      return await dispatchCodeSearchTool(name, args || {}, { userId: job?.userId || null })
     } catch (err) {
       return { ok: false, error: err?.message || String(err) }
     }

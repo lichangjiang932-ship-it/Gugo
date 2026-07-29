@@ -17,6 +17,7 @@ import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { sanitizeChildEnv } from './sensitiveEnv.js'
+import { resolveAuthorizedLocalPath } from '../services/localFileAccessService.js'
 
 const RG_BIN = process.env.RG_BIN || 'rg'
 const RG_TIMEOUT_MS = 15_000
@@ -37,10 +38,20 @@ function badReq(msg, status = 400) {
 }
 
 /**
- * 把任意 path 解析到 WORKSPACE_ROOT 下绝对路径,防 traversal/symlink 逃逸。
- * 复用 fsShellTools 的逻辑思路,这里独立实现避免循环依赖。
+ * 把任意 path 解析到可访问范围内的绝对路径,防 traversal/symlink 逃逸。
+ *
+ * ★ 以前这里硬锁在 WORKSPACE_ROOT,导致 grep_code / find_symbol / list_imports
+ * 永远看不到用户在「本地文件」里授权的目录 —— 用户授权了 D:\x,
+ * list_directory / read_file 能读,这三个却一律 403,模型只好放弃并让用户贴代码。
+ * 现在优先走和 fs 工具同一套授权解析(workspace + 用户授权的路径),
+ * 拿不到 userId(内部调用)时退回原来的 workspace 限制。
  */
-function resolveInWorkspace(rawPath) {
+function resolveInWorkspace(rawPath, { userId = null } = {}) {
+  if (userId) {
+    // 与 read_file / list_directory 完全同一条授权路径,避免两套口径打架
+    const resolved = resolveAuthorizedLocalPath({ userId, rawPath: rawPath || '.', write: false })
+    return resolved.fullPath
+  }
   const root = getWorkspaceRoot()
   if (!rawPath || rawPath === '.') return root
   const absRaw = path.isAbsolute(rawPath) ? rawPath : path.resolve(root, rawPath)
@@ -300,10 +311,11 @@ export async function grepCodeTool({
   case_sensitive = false,
   word = false,
   max_results = DEFAULT_MAX_RESULTS,
+  userId = null,
 } = {}) {
   if (typeof pattern !== 'string' || !pattern.trim()) throw badReq('pattern 必填')
   if (pattern.length > 1000) throw badReq('pattern 过长', 413)
-  const target = resolveInWorkspace(rawPath)
+  const target = resolveInWorkspace(rawPath, { userId })
   const limit = Math.min(Math.max(Number(max_results) || DEFAULT_MAX_RESULTS, 1), HARD_MAX_RESULTS)
 
   const args = [
@@ -427,13 +439,14 @@ export async function findSymbolTool({
   language = null,
   path: rawPath = '.',
   max_results = 20,
+  userId = null,
 } = {}) {
   if (typeof name !== 'string' || !name.trim()) throw badReq('name 必填')
   if (!/^[a-zA-Z_$][\w$]*$/.test(name)) throw badReq('name 必须是合法标识符')
   if (!['all', 'function', 'class', 'const'].includes(kind)) {
     throw badReq('kind 必须是 all/function/class/const')
   }
-  const target = resolveInWorkspace(rawPath)
+  const target = resolveInWorkspace(rawPath, { userId })
   const limit = Math.min(Math.max(Number(max_results) || 20, 1), 100)
   const regex = buildSymbolRegex(name, kind)
 
@@ -522,9 +535,9 @@ const IMPORT_PATTERNS = [
   { re: /^\s*import\s+(?:static\s+)?([\w.]+(?:\.\*)?)/, kind: 'java' },
 ]
 
-export async function listImportsTool({ file } = {}) {
+export async function listImportsTool({ file, userId = null } = {}) {
   if (typeof file !== 'string' || !file.trim()) throw badReq('file 必填')
-  const abs = resolveInWorkspace(file)
+  const abs = resolveInWorkspace(file, { userId })
   const stat = fs.statSync(abs)
   if (!stat.isFile()) throw badReq(`不是文件: ${file}`)
   if (stat.size > 5 * 1024 * 1024) throw badReq('文件过大', 413)
@@ -555,11 +568,14 @@ export async function listImportsTool({ file } = {}) {
 
 /* ─── dispatcher + OpenAI specs ─── */
 
-export async function dispatchCodeSearchTool(name, args) {
+export async function dispatchCodeSearchTool(name, args, { userId = null } = {}) {
+  // userId 决定能不能看到用户在「本地文件」里授权的目录。
+  // 没有它这三个工具只能看 WORKSPACE_ROOT,授权了也白授权。
+  const withUser = { ...(args || {}), userId: (args && args.userId) || userId }
   switch (name) {
-    case 'grep_code': return grepCodeTool(args || {})
-    case 'find_symbol': return findSymbolTool(args || {})
-    case 'list_imports': return listImportsTool(args || {})
+    case 'grep_code': return grepCodeTool(withUser)
+    case 'find_symbol': return findSymbolTool(withUser)
+    case 'list_imports': return listImportsTool(withUser)
     default: throw new Error(`unknown codeSearch tool: ${name}`)
   }
 }
