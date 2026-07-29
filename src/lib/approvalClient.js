@@ -55,9 +55,30 @@ export async function decideApproval(id, decision, args = null, { fetchImpl = fe
 
 export const PERMISSION_MODES = ['normal', 'acceptEdits', 'plan', 'bypass']
 
+/** 兜底值:任何拿不到设置的情况都退回最严格的档位,绝不放宽权限。 */
+export const DEFAULT_APPROVAL_SETTINGS = Object.freeze({
+  mode: 'normal',
+  rememberedTools: [],
+  modes: PERMISSION_MODES,
+})
+
+/**
+ * 归一化服务端返回的设置。
+ * parse() 在响应体不是 JSON 时会返回 null(比如 dev server 代理不到后端、
+ * 返回了 HTML 错误页),直接塞进 state 会让 approvalSettings.mode 读到 null 崩掉。
+ */
+function normalizeSettings(data) {
+  if (!data || typeof data !== 'object') return { ...DEFAULT_APPROVAL_SETTINGS }
+  return {
+    mode: PERMISSION_MODES.includes(data.mode) ? data.mode : 'normal',
+    rememberedTools: Array.isArray(data.rememberedTools) ? data.rememberedTools : [],
+    modes: Array.isArray(data.modes) && data.modes.length ? data.modes : PERMISSION_MODES,
+  }
+}
+
 export async function fetchApprovalSettings({ fetchImpl = fetch } = {}) {
   const res = await fetchImpl('/api/approvals/settings', { headers: authHeaders() })
-  return parse(res)
+  return normalizeSettings(await parse(res))
 }
 
 export async function updateApprovalSettings(patch, { fetchImpl = fetch } = {}) {
@@ -66,5 +87,5 @@ export async function updateApprovalSettings(patch, { fetchImpl = fetch } = {}) 
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(patch || {}),
   })
-  return parse(res)
+  return normalizeSettings(await parse(res))
 }

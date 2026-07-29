@@ -215,8 +215,10 @@ export default function ChatSplit() {
       fetchApprovalSettings()
         .then((s) => {
           if (!alive) return
-          setApprovalSettings(s)
-          setCachedApprovalSettings(s)
+          // 双保险:客户端已归一化,这里再挡一道,绝不让 null 进 state
+          const safe = s && typeof s === 'object' ? s : { mode: 'normal', rememberedTools: [] }
+          setApprovalSettings(safe)
+          setCachedApprovalSettings(safe)
         })
         .catch(() => { /* 拉不到就用默认的最严档位 */ })
     }
@@ -231,8 +233,9 @@ export default function ChatSplit() {
     setCachedApprovalSettings(next)
     try {
       const saved = await updateApprovalSettings({ mode })
-      setApprovalSettings(saved)
-      setCachedApprovalSettings(saved)
+      const safe = saved && typeof saved === 'object' ? saved : next
+      setApprovalSettings(safe)
+      setCachedApprovalSettings(safe)
     } catch (err) {
       setApprovalSettings(prev)
       setCachedApprovalSettings(prev)
@@ -1131,7 +1134,7 @@ export default function ChatSplit() {
         {/* 权限档位:随时能改「要被问到什么程度」 */}
         <div className="px-4 pb-1.5 flex items-center">
           <PermissionModeSwitcher
-            mode={approvalSettings.mode}
+            mode={approvalSettings?.mode || 'normal'}
             onChange={changeApprovalMode}
             disabled={isGenerating}
           />
