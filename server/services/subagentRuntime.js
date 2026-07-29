@@ -63,6 +63,21 @@ const READONLY_TOOL_SPECS = [
   {
     type: 'function',
     function: {
+      name: 'list_directory',
+      description: '列出目录内容。探索一个陌生项目时先用它看结构,再决定读哪些文件。',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: '目录路径(绝对路径,或已授权的本地路径)' },
+          limit: { type: 'number', description: '最多返回多少项(默认 200)' },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'read_file',
       description: '读取工作区文件。',
       parameters: {
@@ -153,6 +168,7 @@ async function executeSubagentTool(toolName, args, { userId = null } = {}) {
     case 'fetch_url':
       return fetchAndExtract({ url: args.url })
     case 'read_file':
+    case 'list_directory':
     case 'write_file':
     case 'edit_file':
       return dispatchFsShellTool(toolName, args, { userId })
@@ -183,30 +199,66 @@ async function executeSubagentTool(toolName, args, { userId = null } = {}) {
  * @param {number} [options.maxIters=SUBAGENT_MAX_ITERS]
  * @returns {Promise<string>} 最终文本回答
  */
-async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS, userId = null }) {
+async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS, userId = null, callModel = callBackgroundModelWithTools }) {
   let currentMessages = [...messages]
 
   for (let iter = 0; iter < maxIters; iter++) {
-    const response = await callBackgroundModelWithTools({
-      messages: currentMessages,
-      tools,
-      signal,
-      userId,
-    })
+    // ★ 上游调用失败(限流后重试仍失败、400、网络断)以前会直接冒到 runSubagent
+    // 的 catch,整个 run 标记 failed,前面查到的东西全丢。第一轮就失败确实没什么
+    // 可留的,但第二轮之后已经有工具结果了 —— 降级成部分结论比整个失败有用得多。
+    let response
+    try {
+      response = await callModel({
+        messages: currentMessages,
+        tools,
+        signal,
+        userId,
+      })
+    } catch (err) {
+      if (err?.name === 'AbortError' || iter === 0) throw err
+      const collected = currentMessages
+        .filter((m) => m.role === 'tool')
+        .map((m) => m.content)
+        .join('\n')
+        .slice(0, 4000)
+      return `(探索中断:${err?.message || String(err)})\n\n已经查到的信息:\n${collected || '(无)'}`
+    }
 
     const text = response?.content || ''
-    const toolCalls = response?.toolCalls || []
+    const rawToolCalls = response?.toolCalls || []
 
     // 没有工具调用 → 这就是最终答案
-    if (!toolCalls.length) return text
+    if (!rawToolCalls.length) return text
+
+    // ★ 归一化 wire 形状。callBackgroundModelWithTools 原样返回上游的
+    // { id, type, function: { name, arguments: "<json 字符串>" } },
+    // 而这里以前直接读 tc.name / tc.arguments —— 两个都是 undefined,
+    // 于是每一次工具调用都以 undefined 派发,全部落到 default 分支返回
+    // 「unknown subagent tool: undefined」。回填给上游的 assistant 消息
+    // 也因此变成 function:{},下一轮直接被上游 400,整个子代理 run 失败。
+    // jobTools.runToolsLoop 一直是对的,只有这条路径漏了归一化。
+    const toolCalls = rawToolCalls.map((tc) => {
+      const rawArgs = tc.function?.arguments ?? tc.arguments
+      let args = {}
+      if (typeof rawArgs === 'string') {
+        try { args = rawArgs ? JSON.parse(rawArgs) : {} } catch { args = {} }
+      } else if (rawArgs && typeof rawArgs === 'object') {
+        args = rawArgs
+      }
+      return {
+        id: tc.id || `call-${randomUUID()}`,
+        name: tc.function?.name || tc.name || '',
+        args,
+      }
+    })
 
     currentMessages.push({
       role: 'assistant',
       content: text || null,
-      tool_calls: toolCalls.map((tc) => ({
-        id: tc.id,
+      tool_calls: toolCalls.map((call) => ({
+        id: call.id,
         type: 'function',
-        function: { name: tc.name, arguments: JSON.stringify(tc.arguments) },
+        function: { name: call.name, arguments: JSON.stringify(call.args) },
       })),
     })
 
@@ -219,13 +271,13 @@ async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_
           userId,
           origin: 'subagent',
           toolName: call.name,
-          args: call.arguments,
+          args: call.args,
           signal,
         })
         if (!gate.proceed) {
           result = { ok: false, denied: true, error: gate.reason || '用户拒绝了这次调用' }
         } else {
-          result = await executeSubagentTool(call.name, gate.args ?? call.arguments, { userId })
+          result = await executeSubagentTool(call.name, gate.args ?? call.args, { userId })
           if (isLoopPauseResult(result)) pausedClarif = result.clarification
         }
       } catch (err) {
@@ -250,14 +302,21 @@ async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_
     role: 'system',
     content: `你已经达到工具调用上限（${maxIters} 次）。请基于已有信息给出最终回答。不要进一步调工具。`,
   })
-  const finalResponse = await callBackgroundModelWithTools({
-    messages: currentMessages,
-    tools, // 仍然传入 tools 但不期望模型再调
-    signal,
-    userId,
-    toolChoice: 'none', // 强制不调工具
-  })
-  return finalResponse?.content || '(工具循环已达上限)'
+  // ★ 收尾调用失败不该让整个 run 变成 failed —— 前面辛苦查到的东西全白费。
+  // 降级成一句说明,让父代理至少知道发生了什么。
+  try {
+    const finalResponse = await callModel({
+      messages: currentMessages,
+      tools, // 仍然传入 tools 但不期望模型再调
+      signal,
+      userId,
+      toolChoice: 'none', // 强制不调工具
+    })
+    return finalResponse?.content || '(工具循环已达上限)'
+  } catch (err) {
+    if (err?.name === 'AbortError') throw err
+    return `(已达工具调用上限,且收尾总结失败:${err?.message || String(err)})`
+  }
 }
 
 /* ─── DB CRUD ─── */
@@ -374,3 +433,7 @@ export async function runSubagent({
     else activeByUser.delete(userId)
   }
 }
+
+// 测试入口:注入假的上游模型,验证 wire 形状归一化与工具派发。
+// 生产代码不用它,但 runSubagent 走的是同一个 subagentToolsLoop。
+export const _testing = { subagentToolsLoop, executeSubagentTool }
