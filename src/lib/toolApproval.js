@@ -48,9 +48,13 @@ function isOutsideWorkspace(p) {
  * @returns {{ needsApproval:boolean, denied?:boolean, risk:string, reason:string|null }}
  */
 export function classifyClientTool(name, args = {}, { mode = 'normal', rememberedTools = [] } = {}) {
-  const tool = String(name || '')
+  const tool = String(name || '').trim()
   const safeArgs = args && typeof args === 'object' ? args : {}
-  if (!tool || NEVER_APPROVE.has(tool)) return { needsApproval: false, risk: 'low', reason: null }
+  // ★ 空工具名不能当成安全放行(fail-open)。身份不明 = 无法判定风险 = 拒绝。
+  if (!tool) {
+    return { needsApproval: false, denied: true, risk: 'high', reason: '工具名为空,无法判定风险,已拒绝' }
+  }
+  if (NEVER_APPROVE.has(tool)) return { needsApproval: false, risk: 'low', reason: null }
   if (mode === 'bypass') return { needsApproval: false, risk: 'low', reason: null }
 
   let risk = APPROVAL_REQUIRED[tool]

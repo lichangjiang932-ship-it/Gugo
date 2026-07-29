@@ -129,7 +129,7 @@ export function resolveApprovalTimeoutMs(env = process.env) {
  * @returns {{ needsApproval: boolean, risk: 'low'|'medium'|'high', reason: string|null, denied?: boolean }}
  */
 export function classifyToolRisk(toolName, args = {}, options = {}) {
-  const name = str(toolName)
+  const name = str(toolName).trim()
   // options 显式传 null 时 default 参数不生效,这里兜一道 —— 本模块在 prompt/工具
   // 注入路径上被调用,不许 throw(AGENTS.md 2.5.3)。
   const opts = options && typeof options === 'object' ? options : {}
@@ -142,7 +142,18 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
   const safeArgs = args && typeof args === 'object' ? args : {}
 
   if (mode === 'off') return { needsApproval: false, risk: 'low', reason: null }
-  if (!name) return { needsApproval: false, risk: 'low', reason: null }
+  // ★ 空工具名不能当成「安全」放行 —— 那是 fail-open。
+  // 归一化漏了(比如上游 wire 形状没被解开)时 name 会是空串,
+  // 以前这里直接返回不需审批,等于让一个身份不明的调用绕过整个门控。
+  // 身份不明 = 无法判定风险 = 必须拦。
+  if (!name) {
+    return {
+      needsApproval: false,
+      denied: true,
+      risk: 'high',
+      reason: '工具名为空,无法判定风险,已拒绝(这通常是上游返回格式未被正确解析)',
+    }
+  }
   if (NEVER.has(name)) return { needsApproval: false, risk: 'low', reason: null }
 
   // bypass:用户显式选了全放行

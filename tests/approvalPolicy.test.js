@@ -300,9 +300,52 @@ test('classifyToolRisk tolerates malformed input without throwing', () => {
   }
 })
 
-test('empty / non-string tool name is never gated', () => {
-  for (const name of ['', null, undefined, 0, {}, []]) {
-    const out = classifyToolRisk(name, {}, { origin: 'job', mode: 'all' })
-    assert.deepEqual(out, { needsApproval: false, risk: 'low', reason: null }, `name=${String(name)}`)
+test('非字符串工具名不会抛错(数字/对象/数组)', () => {
+  // 这些都归一化成空名 → 走「身份不明」分支拒绝,但绝不能抛
+  for (const name of [0, {}, []]) {
+    let out
+    assert.doesNotThrow(() => {
+      out = classifyToolRisk(name, {}, { origin: 'job', mode: 'all' })
+    }, `name=${String(name)}`)
+    assert.equal(out.needsApproval, false, '不该进审批队列')
+    assert.equal(out.denied, true, '身份不明必须拒绝,不能当成安全放行')
   }
+})
+
+// ★ 安全回归:空/畸形工具名以前会 fail-open。
+// classifyToolRisk 里 `if (!name) return { needsApproval: false }` 意味着
+// 一个身份不明的调用直接绕过整个审批门控。子代理那次 wire 形状解析漏了,
+// toolName 正好是 undefined —— 门控当时是完全失效的。
+// 身份不明 = 无法判定风险 = 必须拒绝,不能当成安全。
+test('★ 安全:空/畸形工具名一律拒绝,不得 fail-open', () => {
+  for (const bad of ['', '   ', '\t', '\n', null, undefined]) {
+    const verdict = classifyToolRisk(bad, { command: 'rm -rf /' }, {
+      origin: 'job', mode: 'all', permissionMode: 'normal',
+    })
+    assert.equal(verdict.denied, true, `工具名 ${JSON.stringify(bad)} 必须被拒绝`)
+    assert.equal(verdict.needsApproval, false, '拒绝不是「等审批」,是直接不执行')
+    assert.equal(verdict.risk, 'high')
+  }
+})
+
+test('★ 安全:空工具名在任何权限档位下都不放行', () => {
+  // 连 bypass 都不行 —— 用户选的是「信任我认识的工具」,不是「信任不明来源」
+  for (const permissionMode of ['normal', 'acceptEdits', 'plan', 'bypass']) {
+    const verdict = classifyToolRisk('', { command: 'x' }, { origin: 'job', mode: 'all', permissionMode })
+    assert.notEqual(verdict.needsApproval, true, `${permissionMode}: 不该进审批队列`)
+    if (permissionMode !== 'bypass') {
+      assert.equal(verdict.denied, true, `${permissionMode}: 应直接拒绝`)
+    }
+  }
+})
+
+test('正常工具不受空名检查影响', () => {
+  assert.equal(
+    classifyToolRisk('bash_exec', { command: 'ls' }, { origin: 'job', mode: 'all' }).needsApproval,
+    true,
+  )
+  assert.equal(
+    classifyToolRisk('read_file', { path: 'x' }, { origin: 'job', mode: 'all' }).needsApproval,
+    false,
+  )
 })
