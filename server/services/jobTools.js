@@ -16,6 +16,7 @@ import { CODE_SEARCH_TOOL_SPECS, dispatchCodeSearchTool } from '../utils/codeSea
 import { APPLY_PATCH_TOOL_SPECS, dispatchApplyPatchTool } from '../utils/applyPatch.js'
 import { AGENTIC_TOOL_SPECS, dispatchAgenticTool, isLoopPauseResult } from '../utils/agenticTools.js'
 import { getBuiltinSpec } from './toolRegistry.js'
+import { MEMORY_TOOL_SPECS, dispatchMemoryTool } from '../utils/memoryTools.js'
 import { attachJobBudget, getJobBudget, createJobBudget } from '../utils/jobBudget.js'
 import { formatDeniedToolResult, requestApproval } from './approvalGate.js'
 import { writeToolAudit } from '../utils/audit.js'
@@ -188,6 +189,7 @@ export const SERVER_TOOL_SPECS = [
   // 但这个工具以前根本不在 job 循环的工具集里 —— 模型照做就必然撞 unknown tool。
   // 从 toolRegistry 取同一份 spec,避免两处定义漂移。
   getBuiltinSpec('manage_todos'),
+  ...MEMORY_TOOL_SPECS,
 ].filter(Boolean)
 
 /**
@@ -264,6 +266,9 @@ async function executeServerTool({ name, args, job, step }) {
     } catch (err) {
       return { ok: false, error: err?.message || String(err) }
     }
+  }
+  if (name === 'remember') {
+    return dispatchMemoryTool(name, args || {}, { userId: job?.userId || null })
   }
   if (['reflect', 'request_clarification'].includes(name)) {
     try {

@@ -761,6 +761,11 @@ async function execReflect(args) {
   const data = await callWorkspaceJson('/api/tools/agent/reflect', args)
   return { content: JSON.stringify(data) }
 }
+async function execRemember(args) {
+  const data = await callWorkspaceJson('/api/tools/agent/remember', args)
+  return { ok: data?.ok !== false, content: JSON.stringify(data) }
+}
+
 async function execRequestClarification(args) {
   const data = await callWorkspaceJson('/api/tools/agent/clarify', args)
   return { content: JSON.stringify(data) }
@@ -1003,6 +1008,7 @@ const EXECUTORS = {
   apply_patch: execApplyPatch,
   reflect: execReflect,
   request_clarification: execRequestClarification,
+  remember: execRemember,
 }
 
 /**

@@ -8,6 +8,7 @@
 import { authenticateRequest } from '../middleware.js'
 import { reflectTool, requestClarificationTool } from './agenticTools.js'
 import { writeToolAudit } from './audit.js'
+import { dispatchMemoryTool } from './memoryTools.js'
 
 function sendJson(res, status, body) {
   res.statusCode = status
@@ -50,6 +51,11 @@ export async function handleAgenticToolRequest(req, res) {
     } else if (url.startsWith('/api/tools/agent/clarify')) {
       toolName = 'request_clarification'
       result = requestClarificationTool(body)
+    } else if (url.startsWith('/api/tools/agent/remember')) {
+      // 长期记忆写入。记忆注入一直是通的,但以前没人写 —— 模型无法自己记住
+      // 「项目在哪」「用什么技术栈」这类跨会话事实。
+      toolName = 'remember'
+      result = dispatchMemoryTool('remember', body, { userId: req.userId })
     } else {
       sendJson(res, 404, { ok: false, error: '未知端点' })
       return

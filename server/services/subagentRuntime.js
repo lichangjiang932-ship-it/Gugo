@@ -17,6 +17,7 @@ import { dispatchFsShellTool } from '../adapters/fsShellTools.js'
 import { CODE_SEARCH_TOOL_SPECS, dispatchCodeSearchTool } from '../utils/codeSearch.js'
 import { APPLY_PATCH_TOOL_SPECS, dispatchApplyPatchTool } from '../utils/applyPatch.js'
 import { AGENTIC_TOOL_SPECS, dispatchAgenticTool, isLoopPauseResult } from '../utils/agenticTools.js'
+import { MEMORY_TOOL_SPECS, dispatchMemoryTool } from '../utils/memoryTools.js'
 import { formatDeniedToolResult, requestApproval } from './approvalGate.js'
 
 const MAX_CONCURRENT_PER_USER = 3
@@ -93,6 +94,8 @@ const READONLY_TOOL_SPECS = [
   ...CODE_SEARCH_TOOL_SPECS,
   // ★ M3:反思 / 请求澄清(纯思维型,无副作用)
   ...AGENTIC_TOOL_SPECS,
+  // ★ 长期记忆:探索到的项目背景值得跨会话留下来
+  ...MEMORY_TOOL_SPECS,
 ]
 
 /**
@@ -178,6 +181,8 @@ async function executeSubagentTool(toolName, args, { userId = null } = {}) {
       return dispatchCodeSearchTool(toolName, args, { userId })
     case 'apply_patch':
       return dispatchApplyPatchTool(toolName, args)
+    case 'remember':
+      return dispatchMemoryTool(toolName, args, { userId })
     case 'reflect':
     case 'request_clarification':
       return dispatchAgenticTool(toolName, args)

@@ -1,3 +1,4 @@
+import { MEMORY_TOOL_SPECS } from '../utils/memoryTools.js'
 /**
  * 服务端工具注册表（底座 A）
  *
@@ -286,6 +287,10 @@ const BUILTIN_SPECS = {
       },
     },
   },
+
+  // ★ 长期记忆写入。记忆注入一直是通的,但以前没人写 —— 只有 Memory 管理页
+  // 能手动加,于是模型在同一个上下文里也像没有记忆。
+  remember: MEMORY_TOOL_SPECS[0],
 
   manage_todos: {
     type: 'function',

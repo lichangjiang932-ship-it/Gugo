@@ -7,6 +7,7 @@ import SubagentCard from '../../components/SubagentCard.jsx'
 import CompactionPill from '../../components/CompactionPill.jsx'
 import ChoicePicker from '../../components/ChoicePicker.jsx'
 import { hasChoices, stripChoices } from '../../lib/choices.js'
+import { buildMessageTimeline } from '../../lib/messageTimeline.js'
 import { buildArtifactPreview, shouldCollapseArtifactPreview } from '../../lib/artifactPreview.js'
 import { getMemoriesByIdsApi } from '../../lib/memoryClient.js'
 import { useT } from '../../i18n/I18nProvider.jsx'
@@ -339,7 +340,11 @@ export default function ChatMessages({
                   </div>
                 )}
                 <div className={collapseArtifact ? 'max-w-[920px] w-full' : 'p-3 rounded-md text-sm leading-relaxed max-w-[920px] ' + (msg.role === 'assistant' ? 'bg-paper-2 border border-ink/10' : 'pt-1.5')}>
-                  {msg.role === 'assistant' && Array.isArray(msg.meta?.toolCalls) && msg.meta.toolCalls.length > 0 && (
+                  {/* 工具调用不再整块堆在正文之前 —— 改由 buildMessageTimeline
+                      按 textOffset 交错插进正文里(见下方 assistant 分支)。
+                      折叠态(artifact 卡片)没有正文可交错,仍在这里整块渲染。 */}
+                  {msg.role === 'assistant' && collapseArtifact
+                    && Array.isArray(msg.meta?.toolCalls) && msg.meta.toolCalls.length > 0 && (
                     <ToolCallTrace calls={msg.meta.toolCalls} />
                   )}
                   {msg.role === 'assistant' ? (
@@ -380,7 +385,13 @@ export default function ChatMessages({
                     ) : (
                       <>
                         <div data-quotable="true">
-                          <MarkdownRenderer>{stripChoices(msg.content)}</MarkdownRenderer>
+                          {/* ★ 按真实发生顺序交错渲染:说一段 → 干几件事 → 再说一段。
+                              以前是「一整块工具调用 + 最后的正文」,读起来像先给结论后干活。 */}
+                          {buildMessageTimeline(stripChoices(msg.content), msg.meta?.toolCalls).map((seg, i) => (
+                            seg.kind === 'tools'
+                              ? <ToolCallTrace key={`t-${i}`} calls={seg.calls} />
+                              : <MarkdownRenderer key={`m-${i}`}>{seg.text}</MarkdownRenderer>
+                          ))}
                         </div>
                         {/* ★ #23: streaming 时在尾部显示闪烁光标 */}
                         {msg.meta?.streaming && (

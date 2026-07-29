@@ -685,7 +685,11 @@ function reducer(state, action) {
           const idx = existingCalls.findIndex((c) => c.id === entry.id)
           let nextCalls
           if (idx === -1) {
-            nextCalls = [...existingCalls, entry]
+            // ★ 记下这次工具调用发生时正文已经写到哪 —— 有了这个锚点,
+            // 渲染时才能把「说的话」和「做的事」按真实先后顺序交错排列。
+            // 以前只存一个 toolCalls 数组,渲染只能整块堆在正文前面,
+            // 用户读起来就是「先给结论后干活」,顺序是反的。
+            nextCalls = [...existingCalls, { ...entry, textOffset: (last.content || '').length }]
           } else {
             nextCalls = existingCalls.slice()
             nextCalls[idx] = { ...nextCalls[idx], ...entry }
