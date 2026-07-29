@@ -113,7 +113,7 @@ export default function ChatSplit() {
   const { activeAgentId: globalActiveAgentId } = useActiveAgent()
   const [input, setInput] = useState('')
   const [modelOptions, setModelOptions] = useState([])
-  const [toolMaxRounds, setToolMaxRounds] = useState(5)
+  const [toolMaxRounds, setToolMaxRounds] = useState(30)
   const [selectedModel, setSelectedModel] = useState('')
   const [runtimeSkills, setRuntimeSkills] = useState(SKILLS)
   // Phase 2 S4: prompt-template plugins 进 slash 菜单
@@ -318,7 +318,7 @@ export default function ChatSplit() {
         setModelOptions(models)
         setSelectedModel((current) => resolveInitialModel(models, current || readStoredModel()))
         // 后端权威决定工具循环轮数;status 拿不到字段时维持默认 5
-        if (Number.isFinite(status.toolMaxRounds) && status.toolMaxRounds >= 1 && status.toolMaxRounds <= 12) {
+        if (Number.isFinite(status.toolMaxRounds) && status.toolMaxRounds >= 1 && status.toolMaxRounds <= 200) {
           setToolMaxRounds(status.toolMaxRounds)
         }
       } catch {
@@ -584,6 +584,55 @@ export default function ChatSplit() {
 
             // 本轮没工具调用 → 模型已经给出最终文本,退出
             if (!pendingToolCalls || pendingToolCalls.length === 0) break
+
+            // ★ 最后一轮还在调工具 → 不能就这么切断(用户会看到「让我继续...」然后没了)。
+            // 收掉工具,强制模型基于已有结果给个交代,和 subagent/job 循环的做法一致。
+            if (round === toolMaxRounds - 1) {
+              messages.push(buildAssistantToolCallsMessage(pendingToolCalls))
+              for (const call of pendingToolCalls) {
+                dispatch({
+                  type: 'APPEND_TOOL_CALL_TO_LAST_MESSAGE',
+                  payload: {
+                    id: call.id,
+                    name: call.name,
+                    arguments: call.arguments,
+                    status: 'error',
+                    error: JSON.stringify({ ok: false, error: `已达工具调用轮数上限(${toolMaxRounds})` }),
+                  },
+                })
+                messages.push({
+                  role: 'tool',
+                  tool_call_id: call.id,
+                  name: call.name,
+                  content: JSON.stringify({ ok: false, error: `已达工具调用轮数上限(${toolMaxRounds}),不要再调工具` }),
+                })
+              }
+              messages.push({
+                role: 'system',
+                content: `你已达到本轮对话的工具调用上限(${toolMaxRounds} 轮)。`
+                  + '请立刻基于目前已经拿到的信息给出结论,不要再调用任何工具。'
+                  + '如果信息不足以完成用户的全部要求,就说明已经查清了什么、还差什么、建议下一步怎么做。',
+              })
+              for await (const event of callModelThroughProxyStream({
+                messages,
+                modelName,
+                agentId: effectiveAgentId || undefined,
+                signal: controller.signal,
+                // 不传 tools,从协议层杜绝它再调工具
+              })) {
+                if (event.type === 'text') {
+                  dispatch({ type: 'APPEND_TO_LAST_MESSAGE', payload: event.delta })
+                } else if (event.type === 'done') {
+                  if (typeof event.billing?.creditsCharged === 'number') {
+                    totalCreditsCharged += event.billing.creditsCharged
+                  }
+                  if (typeof event.billing?.credits === 'number') {
+                    latestCreditsBalance = event.billing.credits
+                  }
+                }
+              }
+              break
+            }
 
             // 1) 把模型本轮发出的 assistant tool_calls 落入 messages(给上游做上下文)
             messages.push(buildAssistantToolCallsMessage(pendingToolCalls))

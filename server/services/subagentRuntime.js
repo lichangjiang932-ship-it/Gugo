@@ -22,7 +22,8 @@ import { requestApproval } from './approvalGate.js'
 const MAX_CONCURRENT_PER_USER = 3
 const activeByUser = new Map()
 
-const SUBAGENT_MAX_ITERS = 8
+// 同 jobTools 的口径:安全阀而非预算,收敛靠 jobBudget。以前是 8。
+const SUBAGENT_MAX_ITERS = 25
 
 /* ─── 子代理工具定义 ─── */
 

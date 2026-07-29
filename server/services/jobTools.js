@@ -25,7 +25,10 @@ function newId(prefix) {
   return `${prefix}-${crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
 }
 
-const MAX_ITERS = 6
+// 防失控的安全阀,不是「给模型的预算」—— 循环本来就会在模型停止调工具时自然退出。
+// 真正和成本挂钩的收敛交给 jobBudget(累积调用数 + 挂钟时间)。
+// 以前是 6,读一个中等项目光探索就能吃满,任务被硬切在半路。
+const MAX_ITERS = 30
 const MAX_TOOL_OUTPUT_CHARS = 2000
 
 /**

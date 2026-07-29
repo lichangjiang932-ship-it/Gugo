@@ -178,11 +178,19 @@ export function resolveModelConfigForModel({ modelName, env = process.env } = {}
 }
 
 export function getToolMaxRounds(env = process.env) {
-  // 工具调用循环上限.默认 5,允许 1..12,超出范围按默认.
-  // 上限 12 是经验值:超过反而是模型策略劣化(看上次工具结果就够了),
-  // 下限 1 是为了允许测试场景禁用工具循环.
+  // 工具调用循环上限。
+  //
+  // ★ 这不是「给模型的预算」,而是防失控的安全阀 —— 循环本来就会在模型
+  // 停止调工具时自然退出(ChatSplit 里 `if (!pendingToolCalls) break`)。
+  // 以前默认 5 / 上限 12,读一个中等项目光 list_directory + read_file
+  // 就能吃满,模型被硬切在半路,只留下一句「让我继续」然后就没了 ——
+  // 用户付了钱却拿不到结论。Claude Code / Codex / openworker 都不设
+  // 这种低位硬顶,它们靠 token 预算和用户随时可中断来收敛。
+  //
+  // 现在默认 30,允许 1..200。真正防失控交给 jobBudget 那套
+  // (累积调用数 + 挂钟时间),那才是和成本线性相关的维度。
   const raw = Number(env.TOOL_MAX_ROUNDS)
-  if (!Number.isFinite(raw) || raw < 1 || raw > 12) return 5
+  if (!Number.isFinite(raw) || raw < 1 || raw > 200) return 30
   return Math.floor(raw)
 }
 

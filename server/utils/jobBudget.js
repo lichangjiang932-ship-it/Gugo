@@ -14,8 +14,11 @@
  * runToolsLoop/subagentToolsLoop 在每次 executeTool 前调 consume,超了就停.
  */
 
-const DEFAULT_MAX_CALLS = 80
-const DEFAULT_MAX_WALL_MS = 10 * 60 * 1000
+// 提高迭代上限后,这里才是真正的收敛点(和成本线性相关)。
+// 80 次调用对「读完一个中等项目再动手改」偏紧 —— 光探索就可能几十次。
+// 200 次 / 20 分钟仍然远低于失控量级,但够正常任务跑完。
+const DEFAULT_MAX_CALLS = 200
+const DEFAULT_MAX_WALL_MS = 20 * 60 * 1000
 
 // ★ Lens-2:用 WeakMap 而不是 job.__budget,模型/工具碰不到、不能 delete 绕过
 const BUDGET_BY_JOB = new WeakMap()
