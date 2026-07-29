@@ -87,6 +87,55 @@ function MemoryUsageDisclosure({ ids = [] }) {
   )
 }
 
+/**
+ * 工具调用轨迹。
+ *
+ * ★ 以前这些卡片直接堆在回复正文上面,一大坨没有任何说明 —— 用户会以为
+ * 「回复在上、操作在下」,把执行顺序读反。实际上工具是先跑的,模型看到结果
+ * 才写的回复,所以位置没错,错的是没标出来。
+ * 现在加一条明确的「执行过程」标头,默认折叠成一行,展开才看细节;
+ * 下面紧跟着就是基于这些结果写出的答复。
+ */
+function ToolCallTrace({ calls = [] }) {
+  const [open, setOpen] = useState(false)
+  const failed = calls.filter((c) => c.status === 'error').length
+  const running = calls.filter((c) => c.status === 'running').length
+  // 还在跑的时候自动展开,让用户看到进度;跑完了收起来,别淹没正文
+  const expanded = open || running > 0
+
+  return (
+    <div className="mb-2 rounded-md border border-ink/10 bg-paper/60 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full px-2.5 py-1.5 flex items-center gap-2 text-left hover:bg-paper-2/60 transition-colors"
+      >
+        <ChevronDown className={`w-3 h-3 text-ink-fade transition-transform ${expanded ? '' : '-rotate-90'}`} />
+        <span className="font-mono text-[10px] tracking-wider uppercase text-ink-fade">执行过程</span>
+        <span className="text-xs text-ink-soft">
+          {running > 0 ? `进行中 · ${calls.length} 步` : `${calls.length} 步`}
+          {failed > 0 && <span className="text-red-600 ml-1.5">{failed} 步失败</span>}
+        </span>
+        <span className="ml-auto font-mono text-[10px] text-ink-fade">
+          {expanded ? '' : '点击展开'}
+        </span>
+      </button>
+      {expanded && (
+        <div className="px-2 pb-2 pt-0.5 border-t border-ink/10">
+          {calls.map((tc) =>
+            tc.name === 'Agent'
+              ? <SubagentCard key={tc.id} call={tc} />
+              : <ToolCallCard key={tc.id} call={tc} />
+          )}
+          <div className="mt-1.5 pt-1.5 border-t border-dashed border-ink-fade/30 font-mono text-[10px] text-ink-fade">
+            ↓ 以下是基于上述执行结果给出的答复
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function ChatMessages({
   messages,
   state,
@@ -291,13 +340,7 @@ export default function ChatMessages({
                 )}
                 <div className={collapseArtifact ? 'max-w-[920px] w-full' : 'p-3 rounded-md text-sm leading-relaxed max-w-[920px] ' + (msg.role === 'assistant' ? 'bg-paper-2 border border-ink/10' : 'pt-1.5')}>
                   {msg.role === 'assistant' && Array.isArray(msg.meta?.toolCalls) && msg.meta.toolCalls.length > 0 && (
-                    <div className="mb-2">
-                      {msg.meta.toolCalls.map((tc) =>
-                        tc.name === 'Agent'
-                          ? <SubagentCard key={tc.id} call={tc} />
-                          : <ToolCallCard key={tc.id} call={tc} />
-                      )}
-                    </div>
+                    <ToolCallTrace calls={msg.meta.toolCalls} />
                   )}
                   {msg.role === 'assistant' ? (
                     collapseArtifact ? (

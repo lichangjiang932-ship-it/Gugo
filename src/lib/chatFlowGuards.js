@@ -48,8 +48,25 @@ export function buildAssistantToolCallsMessage(toolCalls = []) {
   }
 }
 
-export function shouldStopAfterArtifactTool(artifact) {
-  return !!(artifact && artifact.type && artifact.source)
+/**
+ * 产物工具跑完后是否直接结束整轮对话。
+ *
+ * ★ 以前只要产出任何 artifact 就 break —— 于是模型刚生成完文件,
+ * 循环立刻中断,它没有机会说「我改了什么、为什么改、还有什么问题」。
+ * 用户看到的就是:一堆工具调用 + 一个凭空出现的文件,零解释。
+ *
+ * 现在只有「产物本身就是最终答复」的场景才提前结束:
+ * 用户明确要一份 PPT/文档,文件给了就等于答完了。
+ * 而在改代码、调研这类任务里,产物只是中间物,必须让模型继续说完。
+ *
+ * @param {object} artifact
+ * @param {object} [context]
+ * @param {boolean} [context.artifactWasRequested] 用户是否明确要这类产物(有 skillId 即视为要)
+ */
+export function shouldStopAfterArtifactTool(artifact, { artifactWasRequested = false } = {}) {
+  if (!artifact || !artifact.type || !artifact.source) return false
+  // 没明确要产物 = 产物是中间步骤,不能拿它当结束信号
+  return artifactWasRequested
 }
 
 export function buildChatFailureMessage(message = '') {

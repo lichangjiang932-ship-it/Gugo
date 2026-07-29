@@ -485,6 +485,27 @@ export default function ChatSplit() {
         const stablePrompt = typeof skillPrompt === 'string' ? skillPrompt : skillPrompt.base
         const volatilePrompt = typeof skillPrompt === 'string' ? '' : skillPrompt.perTurn
         if (stablePrompt) messages.push({ role: 'system', content: stablePrompt })
+        // ★ 没走 skill = 用户没点名要产物。明确禁止模型自作主张生成
+        // PPT/Excel/网页 —— 以前它会在「帮我改代码」这种任务里凭空产出一个
+        // Excel,既没人要,又因为产物会中断循环导致它没机会解释改了什么。
+        // 同时要求它改完必须说清楚,别扔下一堆工具调用就没了。
+        if (!skillId) {
+          messages.push({
+            role: 'system',
+            content: [
+              '【产物纪律】用户没有明确要求文件时,不要调用 create_pptx / create_docx / create_xlsx /',
+              'create_html_app 等产物工具。直接在对话里回答。只有用户说了「做个 PPT」「导出表格」',
+              '这类明确要求,才生成文件。',
+              '',
+              '【改完要交代】如果你修改了文件,回复里必须说清楚:',
+              '1. 改了哪几个文件,每个文件改了什么(一句话说清)',
+              '2. 为什么这么改 —— 原来的问题是什么',
+              '3. 预期效果 —— 用户现在应该能看到什么变化',
+              '4. 还剩什么问题 / 你没能解决的部分 / 需要用户验证的地方',
+              '不要只贴一堆工具调用就结束。用户看不懂工具调用,他要的是人话总结。',
+            ].join('\n'),
+          })
+        }
         messages.push(...historyMessages)
         if (volatilePrompt) messages.push({ role: 'system', content: volatilePrompt })
         const attachmentsToUse = explicitAttachments || attachments
@@ -673,7 +694,11 @@ export default function ChatSplit() {
               // G1: create_* 工具会在 result.artifact 里挂 { type, title, source }
               if (result.artifact && result.artifact.type && result.artifact.source) {
                 toolArtifact = result.artifact
-                if (shouldStopAfterArtifactTool(result.artifact)) stopAfterArtifact = true
+                // 只有用户明确要产物时(走了 skill)才把产物当成最终答复;
+                // 否则产物只是中间物,必须让模型继续说清改了什么
+                if (shouldStopAfterArtifactTool(result.artifact, { artifactWasRequested: !!skillId })) {
+                  stopAfterArtifact = true
+                }
               }
               // Feature 8: manage_todos 返回 todos 字段 → 派发 SET_TODOS 让 UI 同步
               if (Array.isArray(result.todos)) {
