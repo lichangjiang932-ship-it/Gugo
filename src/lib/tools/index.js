@@ -20,6 +20,35 @@ import { z } from 'zod'
 //   ChatSplit chunk 里本就包含这两个模块.
 import { parseMarkdownSlides } from '../presentationExport.js'
 import { parseMarkdownDocument, parseSpreadsheetRows } from '../officeExport.js'
+import { askToolApproval, classifyClientTool } from '../toolApproval.js'
+
+/**
+ * 审批档位 + 「总是允许」清单的进程内缓存。
+ * 工具调用是高频路径,不能每次都打一次 HTTP;由 ChatSplit 在挂载和设置变更时刷新。
+ */
+let approvalSettingsCache = { mode: 'normal', rememberedTools: [] }
+
+export function setCachedApprovalSettings(settings) {
+  if (!settings || typeof settings !== 'object') return
+  approvalSettingsCache = {
+    mode: settings.mode || 'normal',
+    rememberedTools: Array.isArray(settings.rememberedTools) ? settings.rememberedTools : [],
+  }
+}
+
+export function getCachedApprovalSettings() {
+  return approvalSettingsCache
+}
+
+/** 用户点了「总是允许」后本地立即生效,不等服务端回包(服务端已在 decide 时落库)。 */
+function rememberToolLocally(name) {
+  if (!approvalSettingsCache.rememberedTools.includes(name)) {
+    approvalSettingsCache = {
+      ...approvalSettingsCache,
+      rememberedTools: [...approvalSettingsCache.rememberedTools, name],
+    }
+  }
+}
 
 // ★ #18: 工具参数 zod schema — 模型可能给出脏数据,先校验再执行
 const TOOL_ARG_SCHEMAS = {
@@ -718,31 +747,13 @@ async function execListImports(args) {
   return { content: JSON.stringify(data) }
 }
 async function execApplyPatch(args) {
+  // 审批已在 executeToolCall 的统一闸口做过(含 dry_run diff 预览),
+  // 这里不再单独弹窗 —— 以前那条路径只覆盖 apply_patch,而且
+  // localStorage 的 apply_patch.auto_approve 是个能一键全放行的后门。
   const preview = await callWorkspaceJson('/api/tools/code/apply-patch', { ...args, dry_run: true })
   if (preview?.ok === false) {
     return { ok: false, content: JSON.stringify(preview) }
   }
-
-  let approved = false
-  try {
-    const autoApprove = typeof window !== 'undefined' &&
-      window.localStorage?.getItem('apply_patch.auto_approve') === '1'
-    if (autoApprove) {
-      approved = true
-    } else if (typeof window !== 'undefined' && typeof window.__applyPatchApproval === 'function') {
-      approved = await window.__applyPatchApproval(preview?.changes || [])
-    }
-  } catch {
-    approved = false
-  }
-
-  if (!approved) {
-    return {
-      ok: false,
-      content: JSON.stringify({ ok: false, error: 'User rejected patch', rejected: true }),
-    }
-  }
-
   const data = await callWorkspaceJson('/api/tools/code/apply-patch', { ...args, dry_run: false })
   return { ok: data?.ok !== false, content: JSON.stringify(data) }
 }
@@ -1064,8 +1075,7 @@ async function execMultiEdit(args) {
   }
 }
 
-export async function executeToolCall(call, options = {}) {
-  const { maxRetries = 2, retryDelayMs = 600 } = options
+export async function executeToolCall(call, options = {}) {  const { maxRetries = 2, retryDelayMs = 600 } = options
   const name = call?.name
   let parsedArgs = {}
   if (call?.arguments) {
@@ -1156,6 +1166,48 @@ export async function executeToolCall(call, options = {}) {
       return { ok: false, content: JSON.stringify({ error: `参数无效: ${issues}` }) }
     }
     parsedArgs = parsed.data
+  }
+
+  // ★ 审批闸口:所有前端工具调用的唯一入口,决策就在对话里做,不用切页面。
+  // 对齐 Claude Code —— 允许一次 / 总是允许这个工具 / 拒绝。
+  // 注意这只是前端先拦一道(可被绕过),服务端仍会独立判定,不是安全边界。
+  {
+    const settings = getCachedApprovalSettings()
+    const verdict = classifyClientTool(name, parsedArgs, settings)
+    if (verdict.denied) {
+      return { ok: false, content: JSON.stringify({ error: verdict.reason, denied: true }) }
+    }
+    if (verdict.needsApproval) {
+      // apply_patch 先跑 dry_run 拿 diff 预览,让用户看到到底要改什么
+      let preview = null
+      if (name === 'apply_patch') {
+        try {
+          const dry = await callWorkspaceJson('/api/tools/code/apply-patch', { ...parsedArgs, dry_run: true })
+          if (dry?.ok === false) return { ok: false, content: JSON.stringify(dry) }
+          preview = dry?.changes || null
+        } catch {
+          preview = null
+        }
+      }
+      const decision = await askToolApproval({
+        name,
+        args: parsedArgs,
+        risk: verdict.risk,
+        reason: verdict.reason,
+        preview,
+      })
+      if (!decision.approved) {
+        return {
+          ok: false,
+          content: JSON.stringify({
+            ok: false,
+            rejected: true,
+            error: decision.reason || '用户拒绝了这次调用',
+          }),
+        }
+      }
+      if (decision.remember) rememberToolLocally(name)
+    }
   }
 
   // ★ #24: 失败重试 — 网络/反爬瞬时错误自动重试 (最多 maxRetries 次,指数退避)

@@ -5,7 +5,7 @@ import { useAppContext } from '../../store/AppContext'
 import { SKILLS, getSkillSystemPrompt } from '../../data.js'
 import { buildUserContentWithAttachments, describeAttachmentPrompt } from '../../lib/attachments.js'
 import { callModelThroughProxyStream, getModelStatus, summarizeSessionTitle } from '../../lib/modelClient.js'
-import { buildToolSpecs, buildToolSpecsAsync, executeToolCall, resolveToolsForMode } from '../../lib/tools/index.js'
+import { buildToolSpecs, buildToolSpecsAsync, executeToolCall, resolveToolsForMode, setCachedApprovalSettings } from '../../lib/tools/index.js'
 import { readStoredModel, resolveInitialModel, writeStoredModel } from '../../lib/modelSelection.js'
 import { isLoggedInLocally } from '../../lib/accountClient.js'
 import { useActiveAgent } from '../../agents/activeAgentContext.js'
@@ -23,6 +23,9 @@ import RightPreviewPane from './RightPreviewPane'
 import CodingWorkbench from './CodingWorkbench'
 import TodoTracker from '../../components/TodoTracker'
 import ApplyPatchApprovalModal from '../../components/ApplyPatchApprovalModal'
+import ToolApprovalCard from '../../components/ToolApprovalCard.jsx'
+import PermissionModeSwitcher from '../../components/PermissionModeSwitcher.jsx'
+import { fetchApprovalSettings, updateApprovalSettings } from '../../lib/approvalClient.js'
 import { useToast } from '../../components/Toast.jsx'
 import { useT } from '../../i18n/I18nProvider.jsx'
 import { buildArtifactPreview } from '../../lib/artifactPreview.js'
@@ -130,6 +133,10 @@ export default function ChatSplit() {
   const [voiceState, setVoiceState] = useState('idle')
   const [showContextPanel, setShowContextPanel] = useState(false)
   const [applyPatchApproval, setApplyPatchApproval] = useState({ open: false, changes: [], busy: false })
+  // ★ 通用工具审批:决策就在对话里做,不用切页面(对齐 Claude Code)
+  const [toolApproval, setToolApproval] = useState({ open: false, request: null, busy: false })
+  const toolApprovalResolveRef = useRef(null)
+  const [approvalSettings, setApprovalSettings] = useState({ mode: 'normal', rememberedTools: [] })
   const abortCtrlRef = useRef(null)
   const applyPatchApprovalResolveRef = useRef(null)
 
@@ -169,6 +176,70 @@ export default function ChatSplit() {
       }
     }
   }, [])
+  // ★ 通用工具审批闸口:executeToolCall 调 window.__toolApprovalGate,
+  // 这里把它变成对话里的一张卡,用户点完 promise 才 resolve。
+  const resolveToolApproval = useCallback((decision) => {
+    const resolve = toolApprovalResolveRef.current
+    toolApprovalResolveRef.current = null
+    setToolApproval((cur) => ({ ...cur, busy: true }))
+    if (resolve) resolve(decision)
+    if (typeof window !== 'undefined') {
+      window.setTimeout(() => setToolApproval({ open: false, request: null, busy: false }), 0)
+    } else {
+      setToolApproval({ open: false, request: null, busy: false })
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const gate = (request) => new Promise((resolve) => {
+      // 上一张卡还没决策就来了新的:按拒绝处理,避免 promise 泄漏
+      if (toolApprovalResolveRef.current) toolApprovalResolveRef.current({ approved: false })
+      toolApprovalResolveRef.current = resolve
+      setToolApproval({ open: true, request, busy: false })
+    })
+    window.__toolApprovalGate = gate
+    return () => {
+      if (window.__toolApprovalGate === gate) delete window.__toolApprovalGate
+      if (toolApprovalResolveRef.current) {
+        toolApprovalResolveRef.current({ approved: false })
+        toolApprovalResolveRef.current = null
+      }
+    }
+  }, [])
+
+  // 拉审批档位 + 「总是允许」清单,喂给 executeToolCall 的本地缓存
+  useEffect(() => {
+    let alive = true
+    const load = () => {
+      fetchApprovalSettings()
+        .then((s) => {
+          if (!alive) return
+          setApprovalSettings(s)
+          setCachedApprovalSettings(s)
+        })
+        .catch(() => { /* 拉不到就用默认的最严档位 */ })
+    }
+    Promise.resolve().then(load)
+    return () => { alive = false }
+  }, [])
+
+  const changeApprovalMode = useCallback(async (mode) => {
+    const prev = approvalSettings
+    const next = { ...approvalSettings, mode }
+    setApprovalSettings(next)
+    setCachedApprovalSettings(next)
+    try {
+      const saved = await updateApprovalSettings({ mode })
+      setApprovalSettings(saved)
+      setCachedApprovalSettings(saved)
+    } catch (err) {
+      setApprovalSettings(prev)
+      setCachedApprovalSettings(prev)
+      toast.error({ title: t('errors.saveFailed'), body: err.message })
+    }
+  }, [approvalSettings, toast, t])
+
   const recognitionRef = useRef(null)
   const stateRef = useRef(state)
 
@@ -1044,6 +1115,27 @@ export default function ChatSplit() {
           }
           onExpandCompaction={handleExpandCompaction}
         />
+
+        {/* ★ 工具审批卡:紧贴输入框上方,在对话流里就能决策,不用切页面 */}
+        {toolApproval.open && (
+          <div className="px-4 pb-2">
+            <ToolApprovalCard
+              open={toolApproval.open}
+              request={toolApproval.request}
+              busy={toolApproval.busy}
+              onDecide={resolveToolApproval}
+            />
+          </div>
+        )}
+
+        {/* 权限档位:随时能改「要被问到什么程度」 */}
+        <div className="px-4 pb-1.5 flex items-center">
+          <PermissionModeSwitcher
+            mode={approvalSettings.mode}
+            onChange={changeApprovalMode}
+            disabled={isGenerating}
+          />
+        </div>
 
         <ChatComposer
           input={input}

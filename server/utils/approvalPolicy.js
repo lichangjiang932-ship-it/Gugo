@@ -11,6 +11,23 @@ import { checkBashCommandDanger } from './bashGuard.js'
 
 export const APPROVAL_MODES = Object.freeze(['off', 'unattended', 'all'])
 export const DEFAULT_APPROVAL_MODE = 'unattended'
+
+/**
+ * 每用户的权限档位(对齐 Claude Code / Codex)。和上面的 env 级 APPROVAL_MODE 是两层:
+ *   env APPROVAL_MODE  = 部署者决定「审批系统开不开、管不管交互式聊天」
+ *   用户 PERMISSION_MODE = 用户决定「我现在要被问到什么程度」
+ *
+ *   normal      —— 默认。写操作、shell、外部写请求都要问。
+ *   acceptEdits —— 改文件不问了(write/edit/apply_patch 放行),shell 和外部写请求仍然问。
+ *   plan        —— 只读模式。任何写操作直接拒绝,不是「问」,是「不许」。
+ *   bypass      —— 全部放行。危险,给完全信任的本机环境用。
+ */
+export const PERMISSION_MODES = Object.freeze(['normal', 'acceptEdits', 'plan', 'bypass'])
+export const DEFAULT_PERMISSION_MODE = 'normal'
+
+/** acceptEdits 档位下自动放行的工具:只碰文件,不执行命令、不发外部请求。 */
+const EDIT_TOOLS = Object.freeze(['write_file', 'edit_file', 'apply_patch'])
+
 // 24h。Windows CI 下任何 < 5000ms 的默认值都会 flake(见 AGENTS.md 五),这里远大于阈值。
 export const DEFAULT_APPROVAL_TIMEOUT_MS = 86_400_000
 
@@ -106,8 +123,10 @@ export function resolveApprovalTimeoutMs(env = process.env) {
  * @param {object} [args]           工具入参
  * @param {object} [options]
  * @param {string} [options.origin] 'job' | 'subagent' | 'chat'
- * @param {string} [options.mode]   审批模式,默认读 env
- * @returns {{ needsApproval: boolean, risk: 'low'|'medium'|'high', reason: string|null }}
+ * @param {string} [options.mode]   env 级审批模式,默认读 env
+ * @param {string} [options.permissionMode] 用户档位 normal|acceptEdits|plan|bypass
+ * @param {string[]} [options.rememberedTools] 用户点过「总是允许」的工具名
+ * @returns {{ needsApproval: boolean, risk: 'low'|'medium'|'high', reason: string|null, denied?: boolean }}
  */
 export function classifyToolRisk(toolName, args = {}, options = {}) {
   const name = str(toolName)
@@ -116,11 +135,18 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
   const opts = options && typeof options === 'object' ? options : {}
   const mode = opts.mode || resolveApprovalMode()
   const origin = opts.origin || 'job'
+  const permissionMode = PERMISSION_MODES.includes(opts.permissionMode)
+    ? opts.permissionMode
+    : DEFAULT_PERMISSION_MODE
+  const remembered = Array.isArray(opts.rememberedTools) ? opts.rememberedTools : []
   const safeArgs = args && typeof args === 'object' ? args : {}
 
   if (mode === 'off') return { needsApproval: false, risk: 'low', reason: null }
   if (!name) return { needsApproval: false, risk: 'low', reason: null }
   if (NEVER.has(name)) return { needsApproval: false, risk: 'low', reason: null }
+
+  // bypass:用户显式选了全放行
+  if (permissionMode === 'bypass') return { needsApproval: false, risk: 'low', reason: null }
 
   // unattended 模式:交互式聊天不拦(前端已有 apply_patch 弹窗),只拦无人值守路径
   if (mode === 'unattended' && origin === 'chat') {
@@ -139,6 +165,25 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
       return { needsApproval: false, risk: 'low', reason: null }
     }
   }
+
+  // plan 档位:任何需要审批的(即有副作用的)操作一律拒绝,不是问,是不许。
+  // 这样用户能安全地让模型「只看不动」地过一遍方案。
+  if (permissionMode === 'plan') {
+    return {
+      needsApproval: false,
+      denied: true,
+      risk,
+      reason: '当前是计划模式(只读),不执行任何写操作。要执行请切回正常模式。',
+    }
+  }
+
+  // acceptEdits:改文件放行,shell / 外部写请求仍然要问
+  if (permissionMode === 'acceptEdits' && EDIT_TOOLS.includes(name)) {
+    return { needsApproval: false, risk, reason: null }
+  }
+
+  // 用户对这个工具点过「总是允许」
+  if (remembered.includes(name)) return { needsApproval: false, risk, reason: null }
 
   // ── 参数敏感度加权 ──
   if (name === 'bash_exec') {

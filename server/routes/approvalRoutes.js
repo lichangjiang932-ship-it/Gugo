@@ -16,6 +16,13 @@ import {
   getPendingApproval,
   listPendingApprovals,
 } from '../services/approvalStore.js'
+import {
+  clearRememberedTools,
+  forgetTool,
+  getApprovalSettings,
+  rememberTool,
+  setApprovalMode,
+} from '../services/approvalSettingsStore.js'
 import { releaseApproval } from '../services/approvalGate.js'
 
 const VALID_DECISIONS = new Set(['approve', 'deny', 'edit'])
@@ -73,6 +80,25 @@ export async function handleApprovalRequest(req, res) {
   if (!userId) return unauthorized(res)
 
   try {
+    if (req.method === 'GET' && pathname === '/api/approvals/settings') {
+      return sendJson(res, 200, getApprovalSettings({ userId }))
+    }
+
+    if (req.method === 'POST' && pathname === '/api/approvals/settings') {
+      const body = await readJson(req)
+      if (body?.mode !== undefined) {
+        try {
+          setApprovalMode({ userId, mode: String(body.mode) })
+        } catch (err) {
+          return badRequest(res, err?.message || '非法模式')
+        }
+      }
+      // 允许一次请求里同时改档位和撤销某个「总是允许」
+      if (body?.forgetTool) forgetTool({ userId, toolName: String(body.forgetTool) })
+      if (body?.clearRemembered) clearRememberedTools({ userId })
+      return sendJson(res, 200, getApprovalSettings({ userId }))
+    }
+
     if (req.method === 'GET' && pathname === '/api/approvals') {
       const status = url.searchParams.get('status') || 'pending'
       if (!VALID_STATUS_FILTERS.has(status)) return badRequest(res, `非法 status: ${status}`)
@@ -95,7 +121,14 @@ export async function handleApprovalRequest(req, res) {
       if (!VALID_DECISIONS.has(decision)) {
         return badRequest(res, `decision 必须是 approve / deny / edit,收到:${decision || '(空)'}`)
       }
-      if (!getPendingApproval({ userId, id })) return notFound(res)
+      const existing = getPendingApproval({ userId, id })
+      if (!existing) return notFound(res)
+
+      // 「总是允许这个工具」:批准的同时记住,下次同名工具不再问
+      let rememberedTools = null
+      if (decision === 'approve' && body?.remember === true) {
+        rememberedTools = rememberTool({ userId, toolName: existing.toolName })
+      }
 
       const result = decideApproval({
         userId,
@@ -108,10 +141,10 @@ export async function handleApprovalRequest(req, res) {
       releaseApproval(id)
       if (!result.ok && result.alreadyDecided) {
         // 幂等:已被决策过不算错,把当前状态如实返回
-        return sendJson(res, 200, { ok: false, alreadyDecided: true, approval: result.approval })
+        return sendJson(res, 200, { ok: false, alreadyDecided: true, approval: result.approval, rememberedTools })
       }
       if (!result.ok) return notFound(res)
-      return sendJson(res, 200, { ok: true, approval: result.approval })
+      return sendJson(res, 200, { ok: true, approval: result.approval, rememberedTools })
     }
 
     const detailMatch = pathname.match(/^\/api\/approvals\/([^/]+)$/)

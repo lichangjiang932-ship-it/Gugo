@@ -17,6 +17,7 @@ import {
   getApprovalById,
 } from './approvalStore.js'
 import { createNotification } from './notificationsStore.js'
+import { getApprovalSettings } from './approvalSettingsStore.js'
 import { classifyToolRisk, resolveApprovalMode, resolveApprovalTimeoutMs } from '../utils/approvalPolicy.js'
 
 /** approvalId → Set<resolve>。同进程决策时立刻唤醒等待者。 */
@@ -93,7 +94,21 @@ export async function requestApproval({
   if (!userId) return { proceed: true, args }
 
   const effectiveMode = mode || resolveApprovalMode()
-  const verdict = classifyToolRisk(toolName, args, { origin, mode: effectiveMode })
+  // 用户档位 + 「总是允许」清单。读失败不阻断,退回最严格的默认(normal/空)。
+  let settings = { mode: undefined, rememberedTools: [] }
+  try {
+    settings = getApprovalSettings({ userId })
+  } catch (err) {
+    console.error('[approval] 读取用户档位失败,按默认最严处理:', err?.stack || err)
+  }
+  const verdict = classifyToolRisk(toolName, args, {
+    origin,
+    mode: effectiveMode,
+    permissionMode: settings.mode,
+    rememberedTools: settings.rememberedTools,
+  })
+  // plan 档位:直接拒,不排队等人 —— 用户要的就是「只看不动」
+  if (verdict.denied) return { proceed: false, reason: verdict.reason }
   if (!verdict.needsApproval) return { proceed: true, args }
 
   let approval

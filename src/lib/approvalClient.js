@@ -38,12 +38,33 @@ export async function fetchApproval(id, { fetchImpl = fetch } = {}) {
 /**
  * @param {'approve'|'deny'|'edit'} decision
  * @param {object} [args] decision='edit' 时的改写参数
+ * @param {object} [options]
+ * @param {boolean} [options.remember] 批准的同时「总是允许这个工具」
  */
-export async function decideApproval(id, decision, args = null, { fetchImpl = fetch } = {}) {
+export async function decideApproval(id, decision, args = null, { fetchImpl = fetch, remember = false } = {}) {
+  const payload = { decision }
+  if (args) payload.args = args
+  if (remember) payload.remember = true
   const res = await fetchImpl(`/api/approvals/${encodeURIComponent(id)}/decide`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    body: JSON.stringify(args ? { decision, args } : { decision }),
+    body: JSON.stringify(payload),
+  })
+  return parse(res)
+}
+
+export const PERMISSION_MODES = ['normal', 'acceptEdits', 'plan', 'bypass']
+
+export async function fetchApprovalSettings({ fetchImpl = fetch } = {}) {
+  const res = await fetchImpl('/api/approvals/settings', { headers: authHeaders() })
+  return parse(res)
+}
+
+export async function updateApprovalSettings(patch, { fetchImpl = fetch } = {}) {
+  const res = await fetchImpl('/api/approvals/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(patch || {}),
   })
   return parse(res)
 }

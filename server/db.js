@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const DB_SCHEMA_VERSION = 19
+export const DB_SCHEMA_VERSION = 20
 
 const DEFAULT_DATA_DIR = path.join(process.cwd(), 'server-data')
 
@@ -89,6 +89,7 @@ function runMigrations(db) {
   if (getSchemaVersionInternal(db) < 17) migrateToV17(db)
   if (getSchemaVersionInternal(db) < 18) migrateToV18(db)
   if (getSchemaVersionInternal(db) < 19) migrateToV19(db)
+  if (getSchemaVersionInternal(db) < 20) migrateToV20(db)
   runReasonixMigrations(db)
 }
 
@@ -923,6 +924,32 @@ function migrateToV19(db) {
   // 不改 migrateToV8(AGENTS.md 2.5.1),在这里重建。
   widenNotificationKinds(db)
   setSchemaVersionInternal(db, 19)
+}
+
+/**
+ * v20: 审批模式(对齐 Claude Code / Codex 的权限档位)。
+ *
+ * 以前审批只有一个 env 级的 APPROVAL_MODE,用户改不了,且没有「总是允许」——
+ * 同一个工具第 N 次还在问,只能一次次点。现在:
+ *   - mode: 每用户一个档位,前端可切
+ *   - approval_tool_grants: 用户点「总是允许这个工具」后记在这里
+ */
+function migrateToV20(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS user_approval_settings (
+      user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      mode TEXT NOT NULL DEFAULT 'normal'
+        CHECK (mode IN ('normal','acceptEdits','plan','bypass')),
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS approval_tool_grants (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      tool_name TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (user_id, tool_name)
+    );
+  `)
+  setSchemaVersionInternal(db, 20)
 }
 
 /**

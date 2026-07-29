@@ -1,0 +1,73 @@
+/**
+ * 每用户的审批档位与「总是允许」清单。
+ *
+ * 对齐 Claude Code / Codex:用户能自己选被问到什么程度,也能对某个工具说
+ * 「以后别问了」。以前只有一个 env 级开关,用户改不了,且每次都得重新点。
+ */
+import { getDb } from '../db.js'
+import { DEFAULT_PERMISSION_MODE, PERMISSION_MODES } from '../utils/approvalPolicy.js'
+
+export function getApprovalMode({ userId } = {}) {
+  if (!userId) return DEFAULT_PERMISSION_MODE
+  const row = getDb()
+    .prepare('SELECT mode FROM user_approval_settings WHERE user_id = ?')
+    .get(userId)
+  return PERMISSION_MODES.includes(row?.mode) ? row.mode : DEFAULT_PERMISSION_MODE
+}
+
+export function setApprovalMode({ userId, mode } = {}) {
+  if (!userId) throw new Error('userId 必填')
+  if (!PERMISSION_MODES.includes(mode)) throw new Error(`非法模式: ${mode}`)
+  const now = Date.now()
+  getDb().prepare(`
+    INSERT INTO user_approval_settings (user_id, mode, updated_at)
+    VALUES (@userId, @mode, @now)
+    ON CONFLICT(user_id) DO UPDATE SET mode = @mode, updated_at = @now
+  `).run({ userId, mode, now })
+  return getApprovalMode({ userId })
+}
+
+export function listRememberedTools({ userId } = {}) {
+  if (!userId) return []
+  return getDb()
+    .prepare('SELECT tool_name FROM approval_tool_grants WHERE user_id = ? ORDER BY tool_name')
+    .all(userId)
+    .map((r) => r.tool_name)
+}
+
+/** 用户点了「总是允许这个工具」。幂等。 */
+export function rememberTool({ userId, toolName } = {}) {
+  if (!userId) throw new Error('userId 必填')
+  const name = String(toolName || '').trim()
+  if (!name) throw new Error('toolName 必填')
+  getDb().prepare(`
+    INSERT INTO approval_tool_grants (user_id, tool_name, created_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(user_id, tool_name) DO NOTHING
+  `).run(userId, name, Date.now())
+  return listRememberedTools({ userId })
+}
+
+/** 撤销「总是允许」,恢复成每次都问。 */
+export function forgetTool({ userId, toolName } = {}) {
+  if (!userId) throw new Error('userId 必填')
+  getDb()
+    .prepare('DELETE FROM approval_tool_grants WHERE user_id = ? AND tool_name = ?')
+    .run(userId, String(toolName || ''))
+  return listRememberedTools({ userId })
+}
+
+export function clearRememberedTools({ userId } = {}) {
+  if (!userId) return []
+  getDb().prepare('DELETE FROM approval_tool_grants WHERE user_id = ?').run(userId)
+  return []
+}
+
+/** 一次拿齐,供 approvalGate 和前端使用。 */
+export function getApprovalSettings({ userId } = {}) {
+  return {
+    mode: getApprovalMode({ userId }),
+    rememberedTools: listRememberedTools({ userId }),
+    modes: PERMISSION_MODES,
+  }
+}
