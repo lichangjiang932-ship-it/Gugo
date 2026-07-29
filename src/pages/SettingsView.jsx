@@ -21,6 +21,7 @@ import {
   RefreshCw,
   Server,
   Shield,
+  ShieldCheck,
   Sun,
   Trash2,
   Upload,
@@ -744,6 +745,7 @@ export default function SettingsView() {
   function renderFeatureHub() {
     const featureLinks = [
       { path: '/task', icon: ListChecks, title: t('nav.task'), desc: '后台任务、Artifacts 与运行记录。' },
+      { path: '/approvals', icon: ShieldCheck, title: t('approvals.nav'), desc: '无人值守的后台任务需要批准时在这里排队；对话中的审批直接在聊天里完成。' },
       { path: '/memory', icon: BookOpen, title: t('nav.memory'), desc: '长期记忆、置顶记忆与 Agent 关联。' },
       { path: '/desk', icon: BookOpen, title: t('nav.desk') || '书桌', desc: '随手便笺、灵感、TODO；自动保存、置顶。' },
       { path: '/agents', icon: Users, title: '人物与性格', desc: '集中管理人物、性格提示词、技能和角色卡；聊天主页不再重复显示。' },

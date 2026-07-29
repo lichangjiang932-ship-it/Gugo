@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { Link2, MessageSquare, Wrench, Settings, Sparkles, X, Search, MoreHorizontal, Archive, ArchiveRestore, ShieldCheck } from 'lucide-react'
+import { Link2, MessageSquare, Wrench, Settings, Sparkles, X, Search, MoreHorizontal, Archive, ArchiveRestore } from 'lucide-react'
 import { useAppContext } from '../store/AppContext'
 import {
   LOGIN_CODE_COUNTDOWN_SECONDS,
@@ -121,13 +121,22 @@ export default function LeftRail() {
     }
   }, [location.pathname])
 
-  const settingsChildPaths = ['/task', '/permissions', '/memory', '/desk', '/agents', '/channels', '/mcp', '/history']
+  const settingsChildPaths = ['/task', '/permissions', '/memory', '/desk', '/agents', '/channels', '/mcp', '/history', '/approvals']
   const navItems = [
     { path: '/chat', icon: MessageSquare, label: t('nav.chat') },
     { path: '/skills', icon: Wrench, label: t('nav.skills') },
     { path: '/access', icon: Link2, label: t('access.title'), requiresLogin: true },
-    { path: '/approvals', icon: ShieldCheck, label: t('approvals.nav'), requiresLogin: true, badge: pendingApprovals },
-    { path: '/settings', icon: Settings, label: t('nav.settings'), requiresLogin: true, activePaths: settingsChildPaths },
+    // ★ 审批不再占主导航:对话里的工具审批已经内联在聊天页,
+    // 这个页面只剩「无人值守的后台 job / cron 排队等批准」这一种低频场景,
+    // 按项目约定归到设置里的功能入口。待审时才在设置项上显示角标。
+    {
+      path: '/settings',
+      icon: Settings,
+      label: t('nav.settings'),
+      requiresLogin: true,
+      activePaths: settingsChildPaths,
+      badge: pendingApprovals,
+    },
   ]
 
   const allSessions = state.sessions
