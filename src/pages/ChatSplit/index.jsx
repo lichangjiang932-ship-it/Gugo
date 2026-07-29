@@ -31,6 +31,7 @@ import { compressImageDataUrl } from '../../lib/imageCompress.js'
 import { extractPdfText } from '../../lib/pdfExtract.js'
 import { extractDocxText, extractPptxText, isDocxFile, isPptxFile } from '../../lib/officeExtract.js'
 import { fetchCompactionArchive } from '../../lib/compactionClient.js'
+import { trimHistoryWithHysteresis } from '../../lib/historyWindow.js'
 import {
   artifactTypeForSkill,
   buildAssistantToolCallsMessage,
@@ -344,9 +345,13 @@ export default function ChatSplit() {
       const activeSession = state.sessions.find((s) => s.id === state.activeSessionId)
       // ★ 修复: 保留 tool 消息，让模型能回顾上一轮工具结果
       // 但截断过长内容防止 token 溢出
-      const historyMessages = (activeSession?.messages || [])
+      //
+      // ★ 缓存: 用滞回窗口而不是每轮 slice(-20)。固定 slice(-20) 在会话超过 20 条后
+      // 每轮都丢掉最老一条,字节前缀每次都变 → 上游前缀缓存从第 21 轮起彻底失效。
+      // 改成「超过 HIGH 才裁,一裁裁到 LOW」,前缀能连续稳定约 10 轮再变一次。
+      const eligible = (activeSession?.messages || [])
         .filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'tool')
-        .slice(-20)
+      const historyMessages = trimHistoryWithHysteresis(eligible)
         .map((m) => {
           let content = typeof m.content === 'string' ? m.content : ''
           // tool 消息通常有大量 JSON，截断
@@ -393,9 +398,17 @@ export default function ChatSplit() {
 
       try {
         const messages = []
-        const systemPrompt = skillId ? getSkillSystemPrompt(skillId, state.skillConfigs, runtimeSkills, { userPrompt }) : ''
-        if (systemPrompt) messages.push({ role: 'system', content: systemPrompt })
+        // ★ 缓存: 技能 system prompt 拆成「稳定基底」和「随本轮输入变化的规划器」两段。
+        // 基底放最前面(可进缓存前缀),规划器放到 history 之后、紧邻用户消息
+        // —— 它本来就是为这一轮生成的,放前面等于每轮亲手炸掉整个前缀。
+        const skillPrompt = skillId
+          ? getSkillSystemPrompt(skillId, state.skillConfigs, runtimeSkills, { userPrompt, split: true })
+          : ''
+        const stablePrompt = typeof skillPrompt === 'string' ? skillPrompt : skillPrompt.base
+        const volatilePrompt = typeof skillPrompt === 'string' ? '' : skillPrompt.perTurn
+        if (stablePrompt) messages.push({ role: 'system', content: stablePrompt })
         messages.push(...historyMessages)
+        if (volatilePrompt) messages.push({ role: 'system', content: volatilePrompt })
         const attachmentsToUse = explicitAttachments || attachments
         messages.push({ role: 'user', content: buildUserContentWithAttachments(userPrompt || content, attachmentsToUse) })
 

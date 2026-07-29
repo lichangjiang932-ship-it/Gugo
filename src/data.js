@@ -172,14 +172,22 @@ function findSkill(skillId, externalSkills = []) {
   return [...externalSkills, ...SKILLS].find((item) => item.id === skillId)
 }
 
+/**
+ * @param {object} [context]
+ * @param {string} [context.userPrompt]
+ * @param {boolean} [context.split] 传 true 时返回 { base, perTurn } 而不是拼好的字符串。
+ *   base   = 稳定基底,可进上游前缀缓存
+ *   perTurn = 依赖本轮输入的规划器,调用方应放到 history 之后
+ *   老调用方不传 split 时行为不变(仍返回拼接后的字符串)。
+ */
 export function getSkillSystemPrompt(skillId, skillConfigs, externalSkills = [], context = {}) {
   const cfg = skillConfigs?.[skillId]
   const skill = findSkill(skillId, externalSkills)
   const basePrompt = cfg?.systemPrompt != null ? cfg.systemPrompt : skill?.systemPrompt || ''
-  if ((skillId === 'ppt' || skillId === 'htmlppt') && context?.userPrompt) {
-    return `${basePrompt}${buildPresentationPlannerPrompt(context.userPrompt, { skillId })}`
-  }
-  return basePrompt
+  const usesPlanner = (skillId === 'ppt' || skillId === 'htmlppt') && context?.userPrompt
+  const perTurn = usesPlanner ? buildPresentationPlannerPrompt(context.userPrompt, { skillId }) : ''
+  if (context?.split) return { base: basePrompt, perTurn }
+  return perTurn ? `${basePrompt}${perTurn}` : basePrompt
 }
 
 export function getSkillEffectiveConfig(skillId, skillConfigs, externalSkills = []) {

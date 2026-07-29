@@ -502,6 +502,15 @@ export function listAllSpecs() {
   for (const [name, info] of dynamicTools) {
     out.push({ origin: info.origin, source: info.source, name, tool: info.spec })
   }
+  // ★ 缓存: 按 name 稳定排序后再返回。dynamicTools 是 Map,按插入序迭代 ——
+  // MCP / 连接器的注册顺序随进程重启和连接时序变化,工具列表一抖,
+  // 序列化后的字节前缀就变,上游前缀缓存直接失效。
+  // builtin 在前、dynamic 在后,组内按 name 排,保证同一份工具集永远同一个字节序列。
+  out.sort((a, b) => {
+    if (a.origin === 'builtin' && b.origin !== 'builtin') return -1
+    if (a.origin !== 'builtin' && b.origin === 'builtin') return 1
+    return a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+  })
   return out
 }
 
