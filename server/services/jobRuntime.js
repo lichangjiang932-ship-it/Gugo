@@ -123,6 +123,14 @@ export function createDefaultExecuteStep({
     const promptSuffix = step.kind === 'batch_item'
       ? `\n\n这是批量任务中的第 ${step.input?.index || 1} / ${step.input?.total || 1} 项,请只完成这一项。`
       : ''
+
+    // ★ Harness: 把已完成步骤的结论带进本步上下文。
+    // 以前每一步都是从 job.prompt 重新起一个 zero-shot 调用 —— 上一步的
+    // 工具循环结论在步骤边界就丢了,模型看不到自己刚做过什么,
+    // 多步任务实际退化成 N 个互不相干的单步任务。这是任务成功率的最大杀手。
+    const priorContext = buildPriorStepsContext({ jobId: job.id, currentStepId: step.id })
+    if (priorContext) messages.push({ role: 'system', content: priorContext })
+
     const finalPrompt = `${userPrompt || job.prompt}${promptSuffix}`
     messages.push({ role: 'user', content: finalPrompt })
 
@@ -204,6 +212,47 @@ function markJobRunningAgain(job) {
   } catch (err) {
     console.error('[jobs] 恢复 running 状态失败:', err?.stack || err)
   }
+}
+
+/**
+ * 汇总本 job 里已完成步骤的结论,作为一个 system block 带进下一步。
+ *
+ * 只取 completed 且排在当前步之前的,按 sortOrder。每步限长,总量也限,
+ * 避免长任务把上下文撑爆(超出的用条数提示代替,不静默丢)。
+ */
+function buildPriorStepsContext({ jobId, currentStepId, perStepChars = 600, maxSteps = 8 } = {}) {
+  if (!jobId) return ''
+  let steps
+  try {
+    steps = listJobSteps(jobId)
+  } catch {
+    return '' // 读不到就当没有,不阻断执行
+  }
+  const currentIndex = steps.findIndex((s) => s.id === currentStepId)
+  const done = steps
+    .filter((s, i) => s.status === 'completed' && (currentIndex < 0 || i < currentIndex))
+    .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
+  if (!done.length) return ''
+
+  const shown = done.slice(-maxSteps)
+  const omitted = done.length - shown.length
+  const lines = ['# 本任务已完成的步骤', '下面是你在这个任务里已经做完的事和产出。基于它们继续,不要重复劳动,也不要和已有结论矛盾。', '']
+  if (omitted > 0) lines.push(`(更早的 ${omitted} 个步骤已省略)`, '')
+  for (const s of shown) {
+    const out = s.output || {}
+    let text = typeof out.text === 'string' && out.text
+      ? out.text
+      : typeof out.summary === 'string' ? out.summary : ''
+    text = String(text).trim().replace(/\s+/g, ' ')
+    if (text.length > perStepChars) text = `${text.slice(0, perStepChars)}…(已截断)`
+    const artifacts = Array.isArray(out.artifactIds) && out.artifactIds.length
+      ? ` [已生成 ${out.artifactIds.length} 个产物]`
+      : ''
+    lines.push(`## ${s.title || s.id}${artifacts}`)
+    lines.push(text || '(无文本输出)')
+    lines.push('')
+  }
+  return lines.join('\n').trim()
 }
 
 function deriveProgress(steps = []) {

@@ -28,6 +28,7 @@ import {
 } from '../services/promptCompiler.js'
 import { attachVisionDescriptions, hasVisionAssistConfigured } from './visionAssist.js'
 import { logWarn } from '../utils/logger.js'
+import { withRetry } from '../utils/modelRetry.js'
 import { buildUserModelEnv } from '../services/modelProviderStore.js'
 
 // ★ #18: 消息格式 schema — 拒绝畸形 messages 入参,防 OpenAI 上游报 400 / 计费爆零
@@ -544,6 +545,8 @@ export async function callBackgroundModel({
     messages,
     stream: false,
   })
+  // ★ Harness: 同 callBackgroundModelWithTools —— 瞬时故障退避重试,不让一次抖动杀掉整个 job
+  return withRetry(async () => {
   const response = await fetchImpl(url, { ...init, signal })
   const text = await response.text()
   let data
@@ -555,9 +558,18 @@ export async function callBackgroundModel({
   if (!response.ok) {
     const error = new Error(data?.error?.message || data?.message || response.statusText)
     error.status = response.status
+    // 带上 Retry-After,withRetry 会优先尊重上游给的等待时长
+    error.retryAfter = response.headers?.get?.('retry-after') ?? null
     throw error
   }
+  recordUsage(selectedModel, extractUsage(data))
   return parseOpenAICompatibleResponse(data)
+  }, {
+    signal,
+    onRetry: ({ attempt, delayMs, error }) => {
+      logWarn('model.retry', error, { attempt, delayMs, model: selectedModel })
+    },
+  })
 }
 
 /**
@@ -593,24 +605,35 @@ export async function callBackgroundModelWithTools({
     tools,
     toolChoice,
   })
-  const response = await fetchImpl(url, { ...init, signal })
-  const text = await response.text()
-  let data
-  try {
-    data = text ? JSON.parse(text) : null
-  } catch {
-    data = { raw: text }
-  }
-  if (!response.ok) {
-    const error = new Error(data?.error?.message || data?.message || response.statusText)
-    error.status = response.status
-    throw error
-  }
-  const msg = data?.choices?.[0]?.message || {}
-  return {
-    content: msg.content || '',
-    toolCalls: Array.isArray(msg.tool_calls) ? msg.tool_calls : [],
-  }
+  // ★ Harness: 后台工具循环对上游只发一次的话,一个 429 就把整个 job 判死。
+  // 限流/5xx/网络抖动退避重试;4xx 业务错误立即失败,重试无意义。
+  return withRetry(async () => {
+    const response = await fetchImpl(url, { ...init, signal })
+    const text = await response.text()
+    let data
+    try {
+      data = text ? JSON.parse(text) : null
+    } catch {
+      data = { raw: text }
+    }
+    if (!response.ok) {
+      const error = new Error(data?.error?.message || data?.message || response.statusText)
+      error.status = response.status
+      error.retryAfter = response.headers?.get?.('retry-after') ?? null
+      throw error
+    }
+    recordUsage(selectedModel, extractUsage(data))
+    const msg = data?.choices?.[0]?.message || {}
+    return {
+      content: msg.content || '',
+      toolCalls: Array.isArray(msg.tool_calls) ? msg.tool_calls : [],
+    }
+  }, {
+    signal,
+    onRetry: ({ attempt, delayMs, error }) => {
+      logWarn('model.retry', error, { attempt, delayMs, model: selectedModel })
+    },
+  })
 }
 
 export function formatProxyError(error) {

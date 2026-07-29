@@ -100,8 +100,10 @@ test('runToolsLoop stops at maxIters when model keeps calling tools', async () =
     maxIters: 3,
   })
 
-  assert.equal(calls, 3, 'should cap at maxIters')
-  assert.equal(result.artifactIds.length, 3)
+  assert.equal(calls, 4, '3 轮工具调用 + 1 次收尾总结')
+  assert.equal(result.artifactIds.length, 3, '工具调用仍严格封顶在 maxIters')
+  // ★ 到达上限后不再静默返回空文本 —— 必须给用户一个交代
+  assert.ok(result.text, '达到迭代上限时应有收尾说明,不能是空字符串')
 })
 
 test('runToolsLoop handles malformed tool args without throwing', async () => {
@@ -165,4 +167,87 @@ test('jobRuntime end-to-end: model calling create_pptx persists artifact under j
   const pptx = loaded.artifacts.find((a) => a.filename?.endsWith('.pptx'))
   assert.ok(pptx, 'should have pptx artifact')
   assert.equal(pptx.userId, TEST_USER, 'artifact should be owned by job.userId')
+})
+
+// ───────────────── Harness 修复:工具集 / 截断 / 步骤间上下文 ─────────────────
+
+test('manage_todos 在 job 循环的工具集里(system prompt 让调它,以前却不存在)', () => {
+  const names = SERVER_TOOL_SPECS.map((s) => s.function.name)
+  assert.ok(names.includes('manage_todos'), 'system prompt 指示模型调 manage_todos,工具集必须提供它')
+  // 所有 spec 结构合法,避免 getBuiltinSpec 拿到 undefined 混进去
+  for (const spec of SERVER_TOOL_SPECS) {
+    assert.equal(spec.type, 'function')
+    assert.ok(spec.function?.name, 'spec 必须有名字')
+    assert.ok(spec.function?.parameters, `${spec.function.name} 缺 parameters`)
+  }
+})
+
+test('manage_todos 可被真实调用并回执进度(不再是 unknown tool)', async () => {
+  const runModel = async ({ messages }) => {
+    const called = messages.some((m) => m.role === 'tool' && m.name === 'manage_todos')
+    if (called) return { content: '计划已记录。', toolCalls: [] }
+    return {
+      content: '',
+      toolCalls: [{
+        id: 'call-todo',
+        type: 'function',
+        function: {
+          name: 'manage_todos',
+          arguments: JSON.stringify({
+            todos: [
+              { content: '收集数据', status: 'completed', activeForm: '正在收集数据' },
+              { content: '生成报告', status: 'in_progress', activeForm: '正在生成报告' },
+            ],
+          }),
+        },
+      }],
+    }
+  }
+
+  const job = { id: 'job-todos', userId: TEST_USER, title: 'todos' }
+  const step = { id: 'step-todos', kind: 'execute' }
+  const result = await runToolsLoop({
+    job,
+    step,
+    messages: [{ role: 'user', content: '做个多步任务' }],
+    runModel,
+    maxIters: 3,
+  })
+  assert.equal(result.text, '计划已记录。')
+})
+
+test('工具输出截断后仍是合法 JSON,且显式标注被截断', async () => {
+  const huge = 'x'.repeat(50_000)
+  let toolMessage = null
+  const runModel = async ({ messages }) => {
+    const found = messages.find((m) => m.role === 'tool')
+    if (found) {
+      toolMessage = found
+      return { content: '收到。', toolCalls: [] }
+    }
+    return {
+      content: '',
+      toolCalls: [{
+        id: 'call-big',
+        type: 'function',
+        function: { name: 'read_file', arguments: JSON.stringify({ path: 'big.txt' }) },
+      }],
+    }
+  }
+  const fakeExecute = async () => ({ ok: true, content: huge })
+
+  await runToolsLoop({
+    job: { id: 'job-clip', userId: TEST_USER, title: 'clip' },
+    step: { id: 'step-clip', kind: 'execute' },
+    messages: [{ role: 'user', content: '读个大文件' }],
+    runModel,
+    executeTool: fakeExecute,
+    maxIters: 3,
+  })
+
+  assert.ok(toolMessage, '应有工具结果回填进对话')
+  // ★ 关键:以前是 JSON.stringify 后直接 slice,会把 JSON 从中间切断
+  let parsed
+  assert.doesNotThrow(() => { parsed = JSON.parse(toolMessage.content) }, '截断后必须仍是合法 JSON')
+  assert.equal(parsed._truncated, true, '必须显式告诉模型内容被省略了')
 })

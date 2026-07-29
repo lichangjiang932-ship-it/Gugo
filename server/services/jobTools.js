@@ -15,6 +15,7 @@ import { GIT_TOOL_SPECS, dispatchGitTool } from '../adapters/gitWorkbench.js'
 import { CODE_SEARCH_TOOL_SPECS, dispatchCodeSearchTool } from '../utils/codeSearch.js'
 import { APPLY_PATCH_TOOL_SPECS, dispatchApplyPatchTool } from '../utils/applyPatch.js'
 import { AGENTIC_TOOL_SPECS, dispatchAgenticTool, isLoopPauseResult } from '../utils/agenticTools.js'
+import { getBuiltinSpec } from './toolRegistry.js'
 import { attachJobBudget, getJobBudget, createJobBudget } from '../utils/jobBudget.js'
 import { requestApproval } from './approvalGate.js'
 import { writeToolAudit } from '../utils/audit.js'
@@ -180,7 +181,11 @@ export const SERVER_TOOL_SPECS = [
   ...CODE_SEARCH_TOOL_SPECS,
   ...APPLY_PATCH_TOOL_SPECS,
   ...AGENTIC_TOOL_SPECS,
-]
+  // ★ Harness: system prompt 明确让模型「多步任务先 manage_todos 拆分」,
+  // 但这个工具以前根本不在 job 循环的工具集里 —— 模型照做就必然撞 unknown tool。
+  // 从 toolRegistry 取同一份 spec,避免两处定义漂移。
+  getBuiltinSpec('manage_todos'),
+].filter(Boolean)
 
 /**
  * 执行单个工具调用 → 落盘 artifact → appendJobArtifact → 返回给模型的简短结果。
@@ -271,6 +276,25 @@ async function executeServerTool({ name, args, job, step }) {
       return { ok: false, error: err?.message || String(err) }
     }
   }
+  // ★ manage_todos: 无副作用的计划工具,把清单原样回执给模型,
+  // 让它在后续轮次里看得到自己拆的步骤和完成进度。
+  if (name === 'manage_todos') {
+    const todos = Array.isArray(args?.todos) ? args.todos : []
+    const normalized = todos
+      .filter((t) => t && typeof t === 'object')
+      .slice(0, 50)
+      .map((t) => ({
+        content: String(t.content || '').slice(0, 300),
+        status: ['pending', 'in_progress', 'completed'].includes(t.status) ? t.status : 'pending',
+        activeForm: String(t.activeForm || '').slice(0, 300),
+      }))
+    const done = normalized.filter((t) => t.status === 'completed').length
+    return {
+      ok: true,
+      todos: normalized,
+      summary: `共 ${normalized.length} 项,已完成 ${done} 项`,
+    }
+  }
   return { ok: false, error: `unknown tool: ${name}` }
 }
 
@@ -280,10 +304,45 @@ function safeParseArgs(raw) {
   try { return JSON.parse(raw) } catch { return {} }
 }
 
+/**
+ * 把工具结果序列化给模型看。
+ *
+ * ★ Harness: 以前是 JSON.stringify 后直接 slice —— 会把 JSON 从中间切断,
+ * 模型收到的是语法坏掉的片段(可能停在 `"na` 这种地方),既解析不了,
+ * 也看不出「这里被省略了」。现在:
+ *   1. 优先只截断最长的那个字符串字段,保持整体仍是合法 JSON
+ *   2. 实在不行才整体截断,但一定补一个显式的说明对象
+ */
 function clipToolOutput(value) {
   const json = JSON.stringify(value)
+  if (json == null) return 'null'
   if (json.length <= MAX_TOOL_OUTPUT_CHARS) return json
-  return json.slice(0, MAX_TOOL_OUTPUT_CHARS) + '...[truncated]'
+
+  // 逐个截断长字符串字段,直到整体进预算 —— 结果仍是合法 JSON
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const clone = { ...value }
+    const entries = Object.entries(clone)
+      .filter(([, v]) => typeof v === 'string')
+      .sort((a, b) => b[1].length - a[1].length)
+    for (const [key, str] of entries) {
+      if (JSON.stringify(clone).length <= MAX_TOOL_OUTPUT_CHARS) break
+      const over = JSON.stringify(clone).length - MAX_TOOL_OUTPUT_CHARS
+      const keep = Math.max(200, str.length - over - 64)
+      if (keep < str.length) {
+        clone[key] = `${str.slice(0, keep)}…[已截断 ${str.length - keep} 字符]`
+      }
+    }
+    const clipped = JSON.stringify({ ...clone, _truncated: true })
+    if (clipped.length <= MAX_TOOL_OUTPUT_CHARS * 1.1) return clipped
+  }
+
+  // 兜底:整体过长(比如超大数组),给模型一个合法且自解释的对象
+  return JSON.stringify({
+    _truncated: true,
+    _originalChars: json.length,
+    preview: json.slice(0, MAX_TOOL_OUTPUT_CHARS - 200),
+    note: '工具输出过长已截断,如需完整内容请缩小查询范围或分批获取',
+  })
 }
 
 /**
@@ -405,6 +464,39 @@ export async function runToolsLoop({ job, step, messages, runModel, signal, maxI
         paused: true,
         clarification: pausedByClarification,
       }
+    }
+  }
+
+  // ★ Harness: 到达迭代上限时,以前直接返回空 finalText —— 用户看到的是
+  // "任务完成但什么都没说"。对齐 subagentRuntime 的做法:让模型基于已有信息
+  // 收个尾,拿不到就至少说清楚是被上限截断的,不要静默空返回。
+  if (!finalText) {
+    try {
+      const wrapUp = await runModel({
+        messages: [
+          ...convo,
+          {
+            role: 'system',
+            content: `你已达到工具调用上限(${maxIters} 轮)。请基于目前已有的信息给出最终回答,不要再调用任何工具。`,
+          },
+        ],
+        tools: [],
+        signal,
+      })
+      finalText = wrapUp?.content || ''
+    } catch {
+      writeToolAudit?.({
+        userId: job?.userId,
+        origin: 'loop',
+        toolName: 'wrap_up',
+        args: { jobId: job?.id, stepId: step?.id },
+        status: 'error',
+        durationMs: 0,
+      })
+      finalText = ''
+    }
+    if (!finalText) {
+      finalText = `(已达到 ${maxIters} 轮工具调用上限,任务未能自行收尾。上面的工具结果可能已包含部分进展。)`
     }
   }
 
