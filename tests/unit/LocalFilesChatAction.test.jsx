@@ -88,7 +88,9 @@ test('chat local-file action opens the panel and all close controls work', async
 
   const action = rootElement.querySelector('[data-testid="local-files-chat-action"]')
   assert.ok(action)
-  assert.equal(action.textContent.trim(), '授权文件')
+  // 「本地文件」比「授权文件」更能让用户意识到「模型能读我电脑上的文件」。
+  // 未授权时不显示计数,所以这里就是纯标签。
+  assert.equal(action.textContent.trim(), '本地文件')
 
   try {
     await click(dom, action)

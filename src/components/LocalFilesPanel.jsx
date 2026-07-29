@@ -17,6 +17,11 @@ function applyStatus(setStatus, data) {
     workspace: data.workspace || { enabled: false, path: null },
     runtime: data.runtime || {},
   })
+  // 广播给输入框上的「本地文件」按钮,让它的已授权计数立刻跟上。
+  // 所有增删改都经过这里,一处发事件就够。
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('local-files:changed'))
+  }
 }
 
 export default function LocalFilesPanel() {

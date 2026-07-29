@@ -217,11 +217,27 @@ export function resolveAuthorizedLocalPath({ userId, rawPath, write = false, all
     return isInside(row.root_path, checkedPath)
   })
   if (!grant) {
-    throw serviceError(
-      write ? '该路径未获得写入授权' : '该路径未获得读取授权',
+    // ★ 把具体路径带进错误里。以前只说「该路径未获得读取授权」,模型无法告诉用户
+    // 到底要授权哪个目录,用户就卡在「它说读不到,但我不知道去哪开」。
+    const shown = target.fullPath || rawPath || ''
+    const err = serviceError(
+      `${write ? '该路径未获得写入授权' : '该路径未获得读取授权'}：${shown}`
+        + '。请在聊天输入框上方点「本地文件」授权这个目录后重试。',
       403,
       'PATH_NOT_AUTHORIZED'
     )
+    err.path = shown
+    // 给模型一个可直接转述的提示:授权哪个目录最省事(文件就给它的父目录)
+    let suggest = shown
+    try {
+      if (target.exists && fs.statSync(target.fullPath).isFile()) {
+        suggest = path.dirname(target.fullPath)
+      }
+    } catch {
+      // stat 失败就用原路径,不影响主流程
+    }
+    err.suggestGrantPath = suggest
+    throw err
   }
   return {
     fullPath: target.fullPath,

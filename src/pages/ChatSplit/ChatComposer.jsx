@@ -13,6 +13,7 @@ import {
   X,
   FileText,
 } from 'lucide-react'
+import { getLocalFileAccessApi } from '../../lib/localFileAccessClient.js'
 
 const QUICK_SKILLS = [
   { label: '/ppt', command: '/ppt', active: true },
@@ -103,6 +104,29 @@ export default function ChatComposer({
 
   const [fullscreenSrc, setFullscreenSrc] = useState(null)
   const [showLocalFiles, setShowLocalFiles] = useState(false)
+  // 已授权的本地路径数。用户经常不知道「模型能不能读我电脑上的文件」——
+  // 在按钮上直接把状态摆出来,而不是等模型报 404 才发现要去授权。
+  const [localGrantCount, setLocalGrantCount] = useState(null)
+
+  useEffect(() => {
+    let alive = true
+    const refresh = () => {
+      getLocalFileAccessApi()
+        .then((data) => {
+          if (!alive) return
+          const grants = Array.isArray(data?.grants) ? data.grants.length : 0
+          setLocalGrantCount(data?.allFilesEnabled ? 'all' : grants)
+        })
+        .catch(() => { if (alive) setLocalGrantCount(null) })
+    }
+    Promise.resolve().then(refresh)
+    // 授权面板改动后立刻刷新按钮状态
+    window.addEventListener('local-files:changed', refresh)
+    return () => {
+      alive = false
+      window.removeEventListener('local-files:changed', refresh)
+    }
+  }, [])
   // 拖放上传：dragCounter 计数解决移到子元素时 dragleave 误触发导致高亮闪烁。
   const [isDraggingFile, setIsDraggingFile] = useState(false)
   const dragCounter = useRef(0)
@@ -211,11 +235,21 @@ export default function ChatComposer({
           <button
             type="button"
             onClick={() => setShowLocalFiles(true)}
-            className="inline-flex items-center h-[22px] px-2.5 rounded-full text-xs border border-ink-fade/60 text-ink-soft hover:border-ink-fade hover:bg-paper-2 transition-colors"
+            title={t('localFiles.chatActionHint')}
+            className={
+              'inline-flex items-center h-[22px] px-2.5 rounded-full text-xs border transition-colors '
+              + (localGrantCount === 'all' || localGrantCount > 0
+                ? 'border-ember-line text-ember bg-ember-soft'
+                : 'border-ink-fade/60 text-ink-soft hover:border-ink-fade hover:bg-paper-2')
+            }
             data-testid="local-files-chat-action"
           >
             <FolderOpen className="w-3.5 h-3.5 mr-1" />
             {t('localFiles.chatAction')}
+            {localGrantCount === 'all' && <span className="ml-1 font-mono text-[10px]">全盘</span>}
+            {typeof localGrantCount === 'number' && localGrantCount > 0 && (
+              <span className="ml-1 font-mono text-[10px]">{localGrantCount}</span>
+            )}
           </button>
         </div>
 

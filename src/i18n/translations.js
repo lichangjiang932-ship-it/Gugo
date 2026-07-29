@@ -242,7 +242,7 @@ export const translations = {
     approvals: APPROVAL_TRANSLATIONS.zh,
     toolApproval: TOOL_APPROVAL_TRANSLATIONS.zh,
     access: ACCESS_TRANSLATIONS.zh,
-    localFiles: { ...LOCAL_FILES_TRANSLATIONS.zh, chatAction: '授权文件' },
+    localFiles: { ...LOCAL_FILES_TRANSLATIONS.zh, chatAction: '本地文件', chatActionHint: '授权后模型才能读写你电脑上的文件。点这里添加目录。' },
     mcp: MCP_TRANSLATIONS.zh,
     modelProviders: {
       title: '自定义模型 Provider', subtitle: '配置 OpenAI 兼容端点，API Key 仅保存在服务端。', add: '新增', saved: '已保存模型配置。',
@@ -606,7 +606,7 @@ export const translations = {
     approvals: APPROVAL_TRANSLATIONS.en,
     toolApproval: TOOL_APPROVAL_TRANSLATIONS.en,
     access: ACCESS_TRANSLATIONS.en,
-    localFiles: { ...LOCAL_FILES_TRANSLATIONS.en, chatAction: 'Authorize files' },
+    localFiles: { ...LOCAL_FILES_TRANSLATIONS.en, chatAction: 'Local files', chatActionHint: 'The model can only read or edit files you authorize here. Click to add a folder.' },
     mcp: MCP_TRANSLATIONS.en,
     modelProviders: {
       title: 'Custom model providers', subtitle: 'Configure OpenAI-compatible endpoints. API keys stay on the server.', add: 'Add', saved: 'Model provider saved.',
@@ -970,7 +970,7 @@ export const translations = {
     approvals: APPROVAL_TRANSLATIONS.ja,
     toolApproval: TOOL_APPROVAL_TRANSLATIONS.ja,
     access: ACCESS_TRANSLATIONS.ja,
-    localFiles: { ...LOCAL_FILES_TRANSLATIONS.ja, chatAction: 'ファイルを許可' },
+    localFiles: { ...LOCAL_FILES_TRANSLATIONS.ja, chatAction: 'ローカルファイル', chatActionHint: '許可したファイルのみモデルが読み書きできます。クリックしてフォルダーを追加。' },
     mcp: MCP_TRANSLATIONS.ja,
     modelProviders: {
       title: 'カスタムモデル Provider', subtitle: 'OpenAI 互換エンドポイントを設定します。API Key はサーバー内に保存されます。', add: '追加', saved: 'モデル設定を保存しました。',
@@ -1334,7 +1334,7 @@ export const translations = {
     approvals: APPROVAL_TRANSLATIONS.ko,
     toolApproval: TOOL_APPROVAL_TRANSLATIONS.ko,
     access: ACCESS_TRANSLATIONS.ko,
-    localFiles: { ...LOCAL_FILES_TRANSLATIONS.ko, chatAction: '파일 권한 부여' },
+    localFiles: { ...LOCAL_FILES_TRANSLATIONS.ko, chatAction: '로컬 파일', chatActionHint: '허용한 파일만 모델이 읽거나 수정할 수 있습니다. 클릭해 폴더를 추가하세요.' },
     mcp: MCP_TRANSLATIONS.ko,
     modelProviders: {
       title: '사용자 지정 모델 Provider', subtitle: 'OpenAI 호환 엔드포인트를 설정합니다. API Key는 서버에만 저장됩니다.', add: '추가', saved: '모델 설정을 저장했습니다.',
@@ -1698,7 +1698,7 @@ export const translations = {
     approvals: APPROVAL_TRANSLATIONS['zh-TW'],
     toolApproval: TOOL_APPROVAL_TRANSLATIONS['zh-TW'],
     access: ACCESS_TRANSLATIONS['zh-TW'],
-    localFiles: { ...LOCAL_FILES_TRANSLATIONS['zh-TW'], chatAction: '授權檔案' },
+    localFiles: { ...LOCAL_FILES_TRANSLATIONS['zh-TW'], chatAction: '本機檔案', chatActionHint: '授權後模型才能讀寫你電腦上的檔案。點這裡新增資料夾。' },
     mcp: MCP_TRANSLATIONS['zh-TW'],
     modelProviders: {
       title: '自訂模型 Provider', subtitle: '設定 OpenAI 相容端點，API Key 僅保存在伺服器端。', add: '新增', saved: '已儲存模型設定。',
