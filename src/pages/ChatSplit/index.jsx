@@ -47,6 +47,9 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024
 const MAX_RAW_IMAGE_BYTES = 16 * 1024 * 1024
 const MAX_IMAGES_PER_MESSAGE = 5
 const MAX_TEXT_BYTES = 256 * 1024
+// 死循环护栏。正常任务(哪怕读完整个项目再动手改)也远到不了这个量级,
+// 它防的是模型反复调同一个工具停不下来,不是给工作设预算。
+const RUNAWAY_ROUND_GUARD = 500
 const EMPTY_MESSAGES = []
 
 function promptTemplateCommandName(tpl) {
@@ -113,7 +116,8 @@ export default function ChatSplit() {
   const { activeAgentId: globalActiveAgentId } = useActiveAgent()
   const [input, setInput] = useState('')
   const [modelOptions, setModelOptions] = useState([])
-  const [toolMaxRounds, setToolMaxRounds] = useState(30)
+  // 0 = 不限轮数(默认)。只有服务端显式配了正数才封顶。
+  const [toolMaxRounds, setToolMaxRounds] = useState(0)
   const [selectedModel, setSelectedModel] = useState('')
   const [runtimeSkills, setRuntimeSkills] = useState(SKILLS)
   // Phase 2 S4: prompt-template plugins 进 slash 菜单
@@ -318,7 +322,7 @@ export default function ChatSplit() {
         setModelOptions(models)
         setSelectedModel((current) => resolveInitialModel(models, current || readStoredModel()))
         // 后端权威决定工具循环轮数;status 拿不到字段时维持默认 5
-        if (Number.isFinite(status.toolMaxRounds) && status.toolMaxRounds >= 1 && status.toolMaxRounds <= 200) {
+        if (Number.isFinite(status.toolMaxRounds) && status.toolMaxRounds >= 0 && status.toolMaxRounds <= 1000) {
           setToolMaxRounds(status.toolMaxRounds)
         }
       } catch {
@@ -548,7 +552,18 @@ export default function ChatSplit() {
           // 取最后一个,因为同一轮多次生成时模型期望的"最终产物"通常是末次调用.
           // ↑ 已提升到 try 外
 
-          for (let round = 0; round < toolMaxRounds; round += 1) {
+          // ★ 不设轮数上限:循环本来就在模型停止调工具时自然退出,
+          // 想让它停随时点「停止生成」。toolMaxRounds<=0 表示无限制。
+          // 只保留一个极高的防呆护栏(RUNAWAY_ROUND_GUARD),防的是
+          // 模型陷入死循环反复调同一个工具,不是防正常工作。
+          for (let round = 0; toolMaxRounds <= 0 || round < toolMaxRounds; round += 1) {
+            if (round >= RUNAWAY_ROUND_GUARD) {
+              dispatch({
+                type: 'APPEND_TO_LAST_MESSAGE',
+                payload: `\n\n[已连续调用工具 ${RUNAWAY_ROUND_GUARD} 轮,疑似死循环,已停下。可以再发一条消息让我继续。]`,
+              })
+              break
+            }
             let pendingToolCalls = null
             let sawTextThisRound = false
             let stopAfterArtifact = false
@@ -587,7 +602,10 @@ export default function ChatSplit() {
 
             // ★ 最后一轮还在调工具 → 不能就这么切断(用户会看到「让我继续...」然后没了)。
             // 收掉工具,强制模型基于已有结果给个交代,和 subagent/job 循环的做法一致。
-            if (round === toolMaxRounds - 1) {
+            // 只有在真的设了上限、且这是最后一轮时才强制收尾。
+            // 无限制模式(toolMaxRounds<=0)下走不到这里 —— 循环靠模型自己停。
+            const isLastRound = toolMaxRounds > 0 && round === toolMaxRounds - 1
+            if (isLastRound) {
               messages.push(buildAssistantToolCallsMessage(pendingToolCalls))
               for (const call of pendingToolCalls) {
                 dispatch({

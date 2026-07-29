@@ -271,7 +271,7 @@ test('returns backend model status without exposing API key', () => {
       baseUrlMasked: 'https://api.example.com/v1',
       temperature: 0.7,
       maxTokens: 4096,
-      toolMaxRounds: 30,
+      toolMaxRounds: 0,
     }
   )
 })
@@ -390,26 +390,27 @@ test('usage 聚合算出缓存命中率,无数据时为 null 而不是 0%', () =
 })
 
 // ───────────────────── 工具轮数上限 ─────────────────────
-// 这是防失控的安全阀,不是「给模型的预算」—— 循环本来就会在模型停止调工具时
-// 自然退出。以前默认 5 / 上限 12,读一个中等项目光探索就吃满,模型被硬切在
-// 半路只留一句「让我继续」,用户付了钱拿不到结论。
+// ★ 默认不限制(0)。工具循环本来就在模型停止调工具时自然退出,想中断随时
+// 点「停止生成」。以前默认 5,读一个中等项目光探索就吃满,模型被硬切在半路
+// 只留一句「让我继续」,用户付了钱拿不到结论。
 
-test('工具轮数默认值足以读完一个中等项目', () => {
-  assert.equal(getToolMaxRounds({}), 30)
-  assert.equal(getToolMaxRounds({ TOOL_MAX_ROUNDS: '' }), 30)
-  assert.equal(getToolMaxRounds({ TOOL_MAX_ROUNDS: 'abc' }), 30)
+test('默认不限制工具轮数', () => {
+  assert.equal(getToolMaxRounds({}), 0)
+  assert.equal(getToolMaxRounds({ TOOL_MAX_ROUNDS: '' }), 0)
+  assert.equal(getToolMaxRounds({ TOOL_MAX_ROUNDS: 'abc' }), 0)
+  // 显式设 0 / 负数 = 不限制
+  assert.equal(getToolMaxRounds({ TOOL_MAX_ROUNDS: '0' }), 0)
+  assert.equal(getToolMaxRounds({ TOOL_MAX_ROUNDS: '-5' }), 0)
 })
 
-test('工具轮数可配置,上限放宽到 200', () => {
-  assert.equal(getToolMaxRounds({ TOOL_MAX_ROUNDS: '50' }), 50)
-  assert.equal(getToolMaxRounds({ TOOL_MAX_ROUNDS: '200' }), 200)
-  // 越界回落默认,不是静默截断成边界值
-  assert.equal(getToolMaxRounds({ TOOL_MAX_ROUNDS: '201' }), 30)
-  assert.equal(getToolMaxRounds({ TOOL_MAX_ROUNDS: '0' }), 30)
-  assert.equal(getToolMaxRounds({ TOOL_MAX_ROUNDS: '-5' }), 30)
+test('受控环境仍可显式封顶', () => {
+  assert.equal(getToolMaxRounds({ TOOL_MAX_ROUNDS: '5' }), 5)
+  assert.equal(getToolMaxRounds({ TOOL_MAX_ROUNDS: '1000' }), 1000)
+  // 荒谬的大值当成没配,回落到不限制
+  assert.equal(getToolMaxRounds({ TOOL_MAX_ROUNDS: '99999' }), 0)
 })
 
-test('★ 回归:默认轮数不得再退回到「读个项目就吃满」的量级', () => {
-  // 12 是旧上限。默认值必须显著高于它,否则等于没修。
-  assert.ok(getToolMaxRounds({}) > 12, '默认轮数必须高于旧上限 12')
+test('★ 回归:默认值不得再变回低位硬顶', () => {
+  const d = getToolMaxRounds({})
+  assert.ok(d === 0 || d > 100, '默认要么不限制,要么远高于旧上限 12')
 })
