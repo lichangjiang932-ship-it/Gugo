@@ -55,22 +55,62 @@ export function releaseApprovalsForJob(jobId) {
   return changed
 }
 
+/**
+ * 把审批记录的终态翻译成 gate 结果。
+ *
+ * ★ 区分「人做了决定」和「系统坏了」:两者以前返回一模一样的形状,
+ * 模型只能看到一句拒绝,于是当成用户不同意 → 放弃任务、让用户手动来。
+ * 实际上后者应该重试。带 systemFailure/retryable 标记后,
+ * caller 能给模型完全不同的措辞。
+ */
 function terminalDecision(approval) {
-  if (!approval) return { proceed: false, reason: '审批记录已丢失' }
+  // 记录凭空消失 = 基础设施问题(DB 被清/行被删),不是用户拒绝
+  if (!approval) {
+    return { proceed: false, reason: '审批记录已丢失', systemFailure: true, retryable: true }
+  }
   switch (approval.status) {
     case 'approved':
       return { proceed: true, args: approval.effectiveArgs, approvalId: approval.id }
     case 'edited':
       return { proceed: true, args: approval.effectiveArgs, approvalId: approval.id, edited: true }
     case 'denied':
-      return { proceed: false, reason: '用户拒绝了这次调用', approvalId: approval.id }
+      // 唯一真正的「用户说不」
+      return { proceed: false, reason: '用户拒绝了这次调用', approvalId: approval.id, deniedByUser: true }
     case 'expired':
-      return { proceed: false, reason: '审批超时未处理(视同拒绝)', approvalId: approval.id }
+      return { proceed: false, reason: '审批超时未处理(视同拒绝)', approvalId: approval.id, expired: true }
     case 'cancelled':
-      return { proceed: false, reason: '任务已取消,审批作废', approvalId: approval.id }
+      return { proceed: false, reason: '任务已取消,审批作废', approvalId: approval.id, cancelled: true }
     default:
       return null // still pending
   }
+}
+
+/**
+ * 把 gate 的拒绝结果翻译成给模型看的工具结果。
+ *
+ * 关键是让模型能区分三种情况并采取不同行动:
+ *   - 用户拒绝  → 别再试了,换个思路或问用户
+ *   - 系统故障  → 可以重试,不是用户不同意
+ *   - 超时/取消 → 说明情况,别当成被否决
+ */
+export function formatDeniedToolResult(gate) {
+  const base = { ok: false, denied: true, error: gate?.reason || '调用未获批准' }
+  if (gate?.systemFailure) {
+    return {
+      ...base,
+      denied: false, // 不是「被拒绝」,是没走成
+      systemFailure: true,
+      retryable: true,
+      error: `${gate.reason || '审批系统暂时不可用'}。这是系统故障,不是用户拒绝 —— 可以稍后重试,不要因此放弃任务或要求用户手动操作。`,
+    }
+  }
+  if (gate?.expired) {
+    return { ...base, expired: true, error: `${gate.reason}。用户可能不在,可以先做不需要批准的部分。` }
+  }
+  if (gate?.cancelled) {
+    return { ...base, cancelled: true, error: gate.reason }
+  }
+  return { ...base, deniedByUser: true, error: `${gate?.reason || '用户拒绝了这次调用'}。请换一个方案,不要重复请求同一个操作。` }
 }
 
 /**
@@ -126,9 +166,15 @@ export async function requestApproval({
       expiresAt: Date.now() + resolveApprovalTimeoutMs(),
     })
   } catch (err) {
-    // 写不进审批表 = 无法保证门控 → 保守拒绝,不静默放行
+    // 写不进审批表 = 无法保证门控 → 保守拒绝,不静默放行。
+    // 但要让 caller 知道这是系统故障而非用户拒绝,否则模型会当成「用户不同意」放弃任务。
     console.error('[approval] 创建审批失败,保守拒绝:', err?.stack || err)
-    return { proceed: false, reason: '审批系统不可用,已保守拒绝' }
+    return {
+      proceed: false,
+      reason: '审批系统暂时不可用,已保守拒绝',
+      systemFailure: true,
+      retryable: true,
+    }
   }
 
   try {
@@ -189,6 +235,11 @@ export function waitForDecision({ approvalId, signal = null, pollIntervalMs = PO
       resolve(value)
     }
 
+    // 连续读失败次数。DB 短暂抖动可以忍,一直读不到就别干等到 24h 超时 ——
+    // 那样调用方以为「人还没决定」,实际上是数据库挂了。
+    let consecutiveReadFailures = 0
+    const MAX_READ_FAILURES = 5
+
     const check = () => {
       if (settled) return
       let approval
@@ -196,8 +247,22 @@ export function waitForDecision({ approvalId, signal = null, pollIntervalMs = PO
         // 顺手把超时的置 expired —— 无需额外后台任务
         expireStaleApprovals()
         approval = getApprovalById(approvalId)
+        consecutiveReadFailures = 0
       } catch (err) {
-        console.error('[approval] 读取审批状态失败:', err?.stack || err)
+        consecutiveReadFailures += 1
+        console.error(
+          `[approval] 读取审批状态失败(${consecutiveReadFailures}/${MAX_READ_FAILURES}):`,
+          err?.stack || err,
+        )
+        if (consecutiveReadFailures >= MAX_READ_FAILURES) {
+          settle({
+            proceed: false,
+            reason: '审批系统读取持续失败,已保守拒绝',
+            approvalId,
+            systemFailure: true,
+            retryable: true,
+          })
+        }
         return
       }
       const decision = terminalDecision(approval)

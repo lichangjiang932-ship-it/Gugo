@@ -17,7 +17,7 @@ import { APPLY_PATCH_TOOL_SPECS, dispatchApplyPatchTool } from '../utils/applyPa
 import { AGENTIC_TOOL_SPECS, dispatchAgenticTool, isLoopPauseResult } from '../utils/agenticTools.js'
 import { getBuiltinSpec } from './toolRegistry.js'
 import { attachJobBudget, getJobBudget, createJobBudget } from '../utils/jobBudget.js'
-import { requestApproval } from './approvalGate.js'
+import { formatDeniedToolResult, requestApproval } from './approvalGate.js'
 import { writeToolAudit } from '../utils/audit.js'
 import crypto from 'node:crypto'
 
@@ -417,7 +417,7 @@ export async function runToolsLoop({ job, step, messages, runModel, signal, maxI
           onPending: onApprovalPending,
         })
         if (!gate.proceed) {
-          result = { ok: false, denied: true, error: gate.reason || '用户拒绝了这次调用' }
+          result = formatDeniedToolResult(gate)
         } else {
           // gate.args 可能被用户改写过,用它而不是原始 args
           result = await executeTool({ name, args: gate.args ?? args, job, step })

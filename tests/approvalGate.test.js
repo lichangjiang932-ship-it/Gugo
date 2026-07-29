@@ -20,6 +20,7 @@ const {
   waitForDecision,
   releaseApproval,
   releaseApprovalsForJob,
+  formatDeniedToolResult,
   _resetWaiters,
 } = await import('../server/services/approvalGate.js')
 const {
@@ -246,4 +247,66 @@ test('waitForDecision 直接调用:小 pollIntervalMs + releaseApproval 唤醒',
   const [a, b] = await Promise.all([pending, secondWaiter])
   assert.equal(a.proceed, true)
   assert.equal(b.proceed, true)
+})
+
+// ─────────── 区分「用户拒绝」与「系统故障」 ───────────
+// 以前两者返回一模一样的形状,模型只能看到一句拒绝 → 当成用户不同意 →
+// 放弃任务、要求用户手动操作。实际上系统故障应该重试。
+
+test('★ 系统故障标记为 retryable,且明确告诉模型这不是用户拒绝', () => {
+  const out = formatDeniedToolResult({
+    proceed: false,
+    reason: '审批系统暂时不可用,已保守拒绝',
+    systemFailure: true,
+    retryable: true,
+  })
+  assert.equal(out.ok, false, '仍然不执行 —— 失败必须 fail closed')
+  assert.equal(out.systemFailure, true)
+  assert.equal(out.retryable, true)
+  assert.equal(out.denied, false, '不是「被拒绝」,是没走成')
+  assert.match(out.error, /不是用户拒绝/, '必须让模型看懂区别')
+  assert.match(out.error, /重试/)
+})
+
+test('★ 用户拒绝不标 retryable,并提示模型换方案', () => {
+  const out = formatDeniedToolResult({
+    proceed: false,
+    reason: '用户拒绝了这次调用',
+    deniedByUser: true,
+  })
+  assert.equal(out.ok, false)
+  assert.equal(out.denied, true)
+  assert.equal(out.deniedByUser, true)
+  assert.notEqual(out.retryable, true, '用户说不,重试是骚扰')
+  assert.notEqual(out.systemFailure, true)
+  assert.match(out.error, /换一个方案/)
+})
+
+test('超时与取消各有独立措辞,不与用户拒绝混淆', () => {
+  const expired = formatDeniedToolResult({ proceed: false, reason: '审批超时未处理(视同拒绝)', expired: true })
+  assert.equal(expired.expired, true)
+  assert.notEqual(expired.retryable, true)
+  assert.match(expired.error, /用户可能不在/)
+
+  const cancelled = formatDeniedToolResult({ proceed: false, reason: '任务已取消,审批作废', cancelled: true })
+  assert.equal(cancelled.cancelled, true)
+  assert.notEqual(cancelled.systemFailure, true)
+})
+
+test('缺字段的 gate 结果不抛错,默认按用户拒绝处理', () => {
+  for (const bad of [null, undefined, {}, { proceed: false }]) {
+    let out
+    assert.doesNotThrow(() => { out = formatDeniedToolResult(bad) })
+    assert.equal(out.ok, false, '任何情况下都不能放行')
+  }
+})
+
+test('★ 审批记录丢失算系统故障,不算用户拒绝', async () => {
+  const { token } = newUser('gate-missing')
+  void token
+  // 直接等一个不存在的审批 —— 记录丢失应被判为系统故障
+  const decision = await waitForDecision({ approvalId: 'does-not-exist', pollIntervalMs: 20 })
+  assert.equal(decision.proceed, false)
+  assert.equal(decision.systemFailure, true, '记录消失是基础设施问题')
+  assert.equal(decision.retryable, true)
 })

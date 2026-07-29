@@ -17,7 +17,7 @@ import { dispatchFsShellTool } from '../adapters/fsShellTools.js'
 import { CODE_SEARCH_TOOL_SPECS, dispatchCodeSearchTool } from '../utils/codeSearch.js'
 import { APPLY_PATCH_TOOL_SPECS, dispatchApplyPatchTool } from '../utils/applyPatch.js'
 import { AGENTIC_TOOL_SPECS, dispatchAgenticTool, isLoopPauseResult } from '../utils/agenticTools.js'
-import { requestApproval } from './approvalGate.js'
+import { formatDeniedToolResult, requestApproval } from './approvalGate.js'
 
 const MAX_CONCURRENT_PER_USER = 3
 const activeByUser = new Map()
@@ -275,7 +275,7 @@ async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_
           signal,
         })
         if (!gate.proceed) {
-          result = { ok: false, denied: true, error: gate.reason || '用户拒绝了这次调用' }
+          result = formatDeniedToolResult(gate)
         } else {
           result = await executeSubagentTool(call.name, gate.args ?? call.args, { userId })
           if (isLoopPauseResult(result)) pausedClarif = result.clarification
