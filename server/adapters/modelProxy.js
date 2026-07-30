@@ -410,8 +410,40 @@ export function normalizeOpenAICompatibleUrl(rawUrl = '') {
   return `${ensureApiVersionPath(trimmed)}/chat/completions`
 }
 
+/**
+ * 合并开头连续的 system 消息。
+ *
+ * ★ 本项目把前置上下文拆成多个独立 system block(identity / ishiki / skills /
+ * sessions / memory),这在云端 API 上没问题,但 LM Studio 会直接崩:
+ *   Engine protocol predict request returned 400:
+ *   Unable to generate parser for this template.
+ * 实测 1 个 system 正常、2 个及以上必炸、合并回 1 个又正常 —— 它的 chat
+ * template 只处理单个 system,多个就生成不出 parser。
+ *
+ * 现象很迷惑:HTTP 200 + text/event-stream,但流里只有一个 error 事件就断了,
+ * 用户看到的是「不到 2 秒就结束、没有任何回复」。
+ *
+ * 合并是无损的 —— 拼接后语义完全一致,而且本来就都是发给模型的前置指令。
+ * 只合并开头连续的那一段,中间穿插的 system(比如工具循环里插的收尾指令)
+ * 不动,避免打乱对话结构。
+ */
+function mergeLeadingSystemMessages(messages = []) {
+  if (!Array.isArray(messages) || messages.length < 2) return messages
+  let end = 0
+  while (end < messages.length && messages[end]?.role === 'system') end += 1
+  if (end < 2) return messages
+
+  const merged = messages
+    .slice(0, end)
+    .map((m) => (typeof m.content === 'string' ? m.content : ''))
+    .filter(Boolean)
+    .join('\n\n')
+
+  return [{ role: 'system', content: merged }, ...messages.slice(end)]
+}
+
 function normalizeMessagesForOpenAI(messages = []) {
-  return messages.map((message) => {
+  return mergeLeadingSystemMessages(messages).map((message) => {
     if (
       message?.role === 'assistant' &&
       Array.isArray(message.tool_calls) &&

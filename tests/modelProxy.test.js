@@ -513,3 +513,79 @@ test('思考内容不混进正文', () => {
   assert.equal(reasoning, '思考中')
   assert.equal(text, '', '思考阶段不该产生正文')
 })
+
+// ───────────── 连续 system 消息会打挂 LM Studio ─────────────
+// 本项目把前置上下文拆成多个独立 system block(identity/ishiki/skills/
+// sessions/memory)。云端 API 没问题,LM Studio 直接 400:
+//   Unable to generate parser for this template.
+// 实测 1 个 system 正常、2 个及以上必炸、合并回 1 个又正常。
+// 现象极具迷惑性:HTTP 200 + text/event-stream,但流里只有一个 error 事件
+// 就断了 —— 用户看到「不到 2 秒结束、没有任何回复」。
+
+test('★ 开头连续的 system 消息被合并成一条', () => {
+  const body = JSON.parse(buildOpenAICompatibleRequest({
+    config: { baseUrl: 'http://127.0.0.1:1234/v1', modelName: 'm' },
+    messages: [
+      { role: 'system', content: 'identity' },
+      { role: 'system', content: 'soul' },
+      { role: 'system', content: 'memory' },
+      { role: 'user', content: '你好' },
+    ],
+  }).init.body)
+
+  const systems = body.messages.filter((m) => m.role === 'system')
+  assert.equal(systems.length, 1, 'LM Studio 只认一个 system,多了直接 400')
+  assert.equal(systems[0].content, 'identity\n\nsoul\n\nmemory', '合并必须无损')
+  assert.equal(body.messages.length, 2)
+  assert.equal(body.messages[1].role, 'user')
+})
+
+test('单个 system 消息保持原样', () => {
+  const body = JSON.parse(buildOpenAICompatibleRequest({
+    config: { baseUrl: 'http://127.0.0.1:1234/v1', modelName: 'm' },
+    messages: [{ role: 'system', content: 'only one' }, { role: 'user', content: 'hi' }],
+  }).init.body)
+  assert.equal(body.messages[0].content, 'only one')
+  assert.equal(body.messages.length, 2)
+})
+
+test('对话中间穿插的 system 不动 —— 那是工具循环的收尾指令', () => {
+  const body = JSON.parse(buildOpenAICompatibleRequest({
+    config: { baseUrl: 'http://127.0.0.1:1234/v1', modelName: 'm' },
+    messages: [
+      { role: 'system', content: 'a' },
+      { role: 'system', content: 'b' },
+      { role: 'user', content: 'q' },
+      { role: 'assistant', content: 'r' },
+      { role: 'system', content: '别再调工具了' },
+      { role: 'user', content: 'q2' },
+    ],
+  }).init.body)
+  // 开头两条合并成一条,中间那条原样保留
+  assert.equal(body.messages.length, 5)
+  assert.equal(body.messages[0].content, 'a\n\nb')
+  assert.equal(body.messages[3].role, 'system')
+  assert.equal(body.messages[3].content, '别再调工具了')
+})
+
+test('没有 system 消息时不受影响', () => {
+  const body = JSON.parse(buildOpenAICompatibleRequest({
+    config: { baseUrl: 'http://127.0.0.1:1234/v1', modelName: 'm' },
+    messages: [{ role: 'user', content: 'hi' }],
+  }).init.body)
+  assert.equal(body.messages.length, 1)
+  assert.equal(body.messages[0].role, 'user')
+})
+
+test('合并时跳过非字符串 content,不产生 undefined', () => {
+  const body = JSON.parse(buildOpenAICompatibleRequest({
+    config: { baseUrl: 'http://127.0.0.1:1234/v1', modelName: 'm' },
+    messages: [
+      { role: 'system', content: 'ok' },
+      { role: 'system', content: null },
+      { role: 'user', content: 'hi' },
+    ],
+  }).init.body)
+  assert.equal(body.messages[0].content, 'ok')
+  assert.ok(!String(body.messages[0].content).includes('undefined'))
+})
