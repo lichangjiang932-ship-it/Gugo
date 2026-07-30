@@ -1,6 +1,7 @@
 // ★ U1: 集成 UI + 视觉副驾 UI
 // ★ T2: 微信扫码 —— 倒计时 + 自动轮询 + 错误提示 + 重试
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   Bot,
   Check,
@@ -669,7 +670,10 @@ export default function IntegrationsPanel({ kind, t }) {
         </div>
       )}
 
-      {form ? (
+      {form ? createPortal(
+        // ★ 同 ModelProvidersPanel:父级 section 带 animate-float-up(keyframes 用了
+        // transform),有 transform 的祖先会成为 position:fixed 的包含块,
+        // inset-0 量的就是那个 section 而非视口 —— 弹窗会被切掉下半截。
         <div className="fixed inset-0 z-50 bg-ink/35 flex items-center justify-center p-4">
           <form onSubmit={save} className="w-full max-w-lg max-h-[88vh] overflow-y-auto rounded-md border border-ink bg-paper shadow-xl p-5 flex flex-col gap-4">
             <div className="flex items-center justify-between gap-3">
@@ -780,7 +784,8 @@ export default function IntegrationsPanel({ kind, t }) {
               </div>
             </div>
           </form>
-        </div>
+        </div>,
+        document.body,
       ) : null}
     </div>
   )

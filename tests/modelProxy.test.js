@@ -414,3 +414,47 @@ test('★ 回归:默认值不得再变回低位硬顶', () => {
   const d = getToolMaxRounds({})
   assert.ok(d === 0 || d > 100, '默认要么不限制,要么远高于旧上限 12')
 })
+
+// ───────────── 本地模型 Base URL 缺 /v1 ─────────────
+// 用户手填 LM Studio 地址常漏 /v1(http://127.0.0.1:1234),以前直接拼
+// /models → GET /models,LM Studio 日志报「Unexpected endpoint or method」
+// 却仍返回 200,前端只能说「端点可达,但没有返回模型列表」,用户根本猜不到原因。
+
+test('本地端点缺 /v1 时自动补上', () => {
+  assert.equal(
+    normalizeOpenAICompatibleUrl('http://127.0.0.1:1234'),
+    'http://127.0.0.1:1234/v1/chat/completions',
+  )
+  assert.equal(
+    normalizeOpenAICompatibleUrl('http://localhost:11434'),
+    'http://localhost:11434/v1/chat/completions',
+  )
+  // 已经带 /v1 不重复补
+  assert.equal(
+    normalizeOpenAICompatibleUrl('http://127.0.0.1:1234/v1'),
+    'http://127.0.0.1:1234/v1/chat/completions',
+  )
+})
+
+test('★ 云端 provider 一律不动 —— 无条件补 /v1 会打挂已配好的线上模型', () => {
+  // DeepSeek 官方 base 就是不带 /v1 且能正常工作
+  assert.equal(
+    normalizeOpenAICompatibleUrl('https://api.deepseek.com'),
+    'https://api.deepseek.com/chat/completions',
+  )
+  assert.equal(
+    normalizeOpenAICompatibleUrl('https://api.xiaomimimo.com/v1'),
+    'https://api.xiaomimimo.com/v1/chat/completions',
+  )
+})
+
+test('已经是完整 chat/completions 的地址原样返回', () => {
+  for (const u of ['http://127.0.0.1:1234/v1/chat/completions', 'https://api.deepseek.com/chat/completions']) {
+    assert.equal(normalizeOpenAICompatibleUrl(u), u)
+  }
+})
+
+test('非法 URL 不抛错(交给 fetch 自己报)', () => {
+  assert.doesNotThrow(() => normalizeOpenAICompatibleUrl('not-a-url'))
+  assert.throws(() => normalizeOpenAICompatibleUrl(''), /请输入 Base URL/)
+})

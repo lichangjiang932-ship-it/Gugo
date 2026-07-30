@@ -230,13 +230,46 @@ export function getModelStatus(env = process.env) {
   return status
 }
 
+/**
+ * 补齐本地模型端点缺失的 /v1 前缀。
+ *
+ * ★ 用户手填 Base URL 时经常漏掉 /v1(比如 LM Studio 填成 http://127.0.0.1:1234),
+ * 于是请求打到 GET /models —— LM Studio 日志里那句
+ * 「Unexpected endpoint or method. (GET /models)」就是这么来的,
+ * 而且它还返回 200,前端只能报「端点可达,但没有返回模型列表」,
+ * 用户根本猜不到是少了 /v1。
+ *
+ * ⚠ 只对本机地址做这个补全。云端 provider 的路径约定各家不同 ——
+ * DeepSeek 官方 base 就是 https://api.deepseek.com(不带 /v1)且能正常工作,
+ * 无条件补 /v1 会把已经配好的线上 provider 全部打挂。
+ */
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1]'])
+
+function ensureApiVersionPath(trimmed) {
+  try {
+    const url = new URL(trimmed)
+    if (!LOCAL_HOSTS.has(url.hostname)) return trimmed
+    const path = url.pathname.replace(/\/+$/, '')
+    // 只有「光秃秃的 host:port」才补;已经有任何路径就不猜
+    if (path === '' || path === '/') {
+      url.pathname = '/v1'
+      return url.toString().replace(/\/+$/, '')
+    }
+    return trimmed
+  } catch {
+    // 不是合法 URL 就原样返回,让后续 fetch 自己报错
+    return trimmed
+  }
+}
+
 function normalizeModelsUrl(rawUrl = '') {
   const trimmed = rawUrl.trim().replace(/\/+$/, '')
   if (!trimmed) return ''
   if (/\/chat\/completions$/i.test(trimmed)) {
     return trimmed.replace(/\/chat\/completions$/i, '/models')
   }
-  return `${trimmed}/models`
+  if (/\/models$/i.test(trimmed)) return trimmed
+  return `${ensureApiVersionPath(trimmed)}/models`
 }
 
 function safeErrorMessage(error) {
@@ -356,7 +389,8 @@ export function normalizeOpenAICompatibleUrl(rawUrl = '') {
   const trimmed = rawUrl.trim().replace(/\/+$/, '')
   if (!trimmed) throw new Error('请输入 Base URL。')
   if (/\/chat\/completions$/i.test(trimmed)) return trimmed
-  return `${trimmed}/chat/completions`
+  // 同 normalizeModelsUrl:用户只填 host:port 时补 /v1,否则聊天也会 404
+  return `${ensureApiVersionPath(trimmed)}/chat/completions`
 }
 
 function normalizeMessagesForOpenAI(messages = []) {

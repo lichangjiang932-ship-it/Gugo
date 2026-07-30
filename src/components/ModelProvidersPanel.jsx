@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { CheckCircle2, Pencil, Plus, RefreshCw, Save, Server, Trash2, X } from 'lucide-react'
 import { useT } from '../i18n/I18nProvider.jsx'
 import {
@@ -179,7 +180,11 @@ export default function ModelProvidersPanel({ onChanged }) {
       {!providers.length && <div className="text-xs text-ink-fade py-3 text-center">{t('modelProviders.empty')}</div>}
       {message && <div className="text-xs text-ink-soft border border-ink/10 rounded-md p-2">{message}</div>}
 
-      {editing && (
+      {editing && createPortal(
+        // ★ 必须挂到 body。父级 section 带 animate-float-up,它的 keyframes 用了
+        // transform —— 有 transform 的祖先会成为 position:fixed 的包含块,
+        // 于是 inset-0 量的是那个 section 而不是视口,弹窗只盖住页面上半部分,
+        // 下半截(模型列表、保存按钮)直接被切掉。portal 出去就绕开了这个约束。
         <div className="fixed inset-0 z-50 bg-ink/40 flex items-start sm:items-center justify-center p-4 overflow-y-auto">
           <div className="w-[620px] max-w-full max-h-[92vh] my-auto bg-paper border border-ink/20 rounded-md flex flex-col overflow-hidden">
             {/* 标题栏固定,不随表单滚动 */}
@@ -219,7 +224,8 @@ export default function ModelProvidersPanel({ onChanged }) {
               <button type="button" disabled={busy || detecting} onClick={save} className="h-9 px-4 bg-ember text-paper rounded-md text-sm flex items-center gap-1 disabled:opacity-40"><Save className="w-4 h-4" />{t('modelProviders.save')}</button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )
