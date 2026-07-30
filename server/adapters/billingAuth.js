@@ -319,6 +319,11 @@ function chargeCredits({ token, type, name, cost, now = Date.now() }) {
   ensureLegacyMigration()
   const user = getUserByToken(token)
   if (!user) throw new Error('请先登录')
+  // ★ 免费请求(本地模型)直接返回,不写账本 —— 否则每轮都留一条
+  // credits: -0 的空记录,把真实消费记录淹掉。返回形状与正常路径一致。
+  if (!(cost > 0)) {
+    return { ok: true, user: publicUser(user), ledger: getLedgerForUser(user.id) }
+  }
   if ((user.credits || 0) < cost) {
     throw new Error(`积分不足，需要 ${cost} 积分，当前余额 ${user.credits || 0}`)
   }

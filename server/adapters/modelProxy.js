@@ -245,6 +245,23 @@ export function getModelStatus(env = process.env) {
  */
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1]'])
 
+/**
+ * 这个端点是不是跑在本机(Ollama / LM Studio 之类)。
+ *
+ * ★ 本地模型跑在用户自己的电脑上,不产生任何上游 API 费用 —— 却照样扣积分,
+ * 用户明明用的是自己的显卡还要付钱。积分体系是为了覆盖云端 API 成本,
+ * 本地推理不该计入。
+ */
+export function isLocalModelEndpoint(baseUrl = '') {
+  const trimmed = String(baseUrl || '').trim()
+  if (!trimmed) return false
+  try {
+    return LOCAL_HOSTS.has(new URL(trimmed).hostname)
+  } catch {
+    return false
+  }
+}
+
 function ensureApiVersionPath(trimmed) {
   try {
     const url = new URL(trimmed)
@@ -1015,11 +1032,16 @@ export async function handleModelProxyRequest(req, res) {
       }
 
       const billingConfig = loadBillingConfig(getRuntimeEnv())
-      estimatedCost = estimateChatCost({
-        modelName: selectedModel,
-        messages,
-        config: billingConfig,
-      })
+      // ★ 本地模型(Ollama / LM Studio)跑在用户自己电脑上,没有上游 API 成本,
+      // 不该扣积分。以前一律按 token 估算收费 —— 用自己的显卡还要付钱。
+      const localModel = isLocalModelEndpoint(requestConfig?.baseUrl)
+      estimatedCost = localModel
+        ? 0
+        : estimateChatCost({
+          modelName: selectedModel,
+          messages,
+          config: billingConfig,
+        })
       if (account.credits < estimatedCost) {
         sendJson(res, 402, {
           ok: false,

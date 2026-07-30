@@ -9,6 +9,7 @@ import {
   getSystemDiagnostics,
   getToolMaxRounds,
   getUsageStats,
+  isLocalModelEndpoint,
   loadModelConfig,
   normalizeOpenAICompatibleUrl,
   parseOpenAICompatibleResponse,
@@ -457,4 +458,36 @@ test('已经是完整 chat/completions 的地址原样返回', () => {
 test('非法 URL 不抛错(交给 fetch 自己报)', () => {
   assert.doesNotThrow(() => normalizeOpenAICompatibleUrl('not-a-url'))
   assert.throws(() => normalizeOpenAICompatibleUrl(''), /请输入 Base URL/)
+})
+
+// ───────────── 本地模型不计费 ─────────────
+// 本地模型跑在用户自己电脑上,没有上游 API 成本,却照样按 token 扣积分 ——
+// 用自己的显卡还要付钱。积分是为了覆盖云端 API 开销,本地推理不该计入。
+
+test('★ 本地端点识别为免费', () => {
+  for (const u of [
+    'http://127.0.0.1:1234/v1',
+    'http://localhost:11434/v1',
+    'http://0.0.0.0:8080/v1',
+    'http://127.0.0.1:1234',
+  ]) {
+    assert.equal(isLocalModelEndpoint(u), true, `${u} 应识别为本地`)
+  }
+})
+
+test('★ 云端端点仍然计费', () => {
+  for (const u of [
+    'https://api.deepseek.com',
+    'https://api.openai.com/v1',
+    'https://api.xiaomimimo.com/v1',
+  ]) {
+    assert.equal(isLocalModelEndpoint(u), false, `${u} 是云端,必须计费`)
+  }
+})
+
+test('isLocalModelEndpoint 对畸形输入返回 false 且不抛', () => {
+  for (const bad of ['', null, undefined, 'not-a-url', 123, {}]) {
+    assert.doesNotThrow(() => isLocalModelEndpoint(bad))
+    assert.equal(isLocalModelEndpoint(bad), false, '判断不了就按收费处理,不能白送')
+  }
 })

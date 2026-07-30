@@ -595,7 +595,11 @@ export default function ChatSplit() {
               signal: controller.signal,
               tools: tools.length > 0 ? tools : undefined,
             })) {
-              latency = Date.now() - started
+              // ★ 以前每收到一个流式事件就覆盖一次 latency,最后留下的是
+              // 「最后两个 chunk 之间的间隔」而不是总耗时 —— 本地模型真跑了
+              // 25 秒,界面上显示 117ms,用户完全看不出慢在哪。
+              // 现在只记第一个 token 的到达时间(TTFT),这才是「等了多久」的体感。
+              if (!latency) latency = Date.now() - started
               if (event.type === 'text') {
                 dispatch({ type: 'APPEND_TO_LAST_MESSAGE', payload: event.delta })
                 if (!sawTextThisRound) {
