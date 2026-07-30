@@ -97,6 +97,50 @@ function MemoryUsageDisclosure({ ids = [] }) {
  * 现在加一条明确的「执行过程」标头,默认折叠成一行,展开才看细节;
  * 下面紧跟着就是基于这些结果写出的答复。
  */
+/**
+ * 推理模型的思考过程。
+ *
+ * ★ qwen3.5 / DeepSeek-R1 这类模型回答前会先想很久 —— 实测本地
+ * qwen3.5-9b 的 reasoning_content 339ms 就开始流,而正文要等到 11.6 秒。
+ * 不显示的话这十几秒屏幕上什么都没有,用户以为卡死了。
+ * 思考中默认展开(让用户看到它在动),出正文后自动收起(别淹没答案)。
+ */
+function ReasoningTrace({ text = '', streaming = false }) {
+  const [manual, setManual] = useState(null)
+  if (!text) return null
+  // manual 为 null 时跟随默认:思考中展开,出了正文就收起
+  const expanded = manual === null ? streaming : manual
+
+  return (
+    <div className="mb-2 rounded-md border border-cyan/25 bg-cyan-soft/40 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setManual(!expanded)}
+        className="w-full px-2.5 py-1.5 flex items-center gap-2 text-left hover:bg-cyan-soft/60 transition-colors"
+      >
+        <ChevronDown className={`w-3 h-3 text-cyan transition-transform ${expanded ? '' : '-rotate-90'}`} />
+        <span className="font-mono text-[10px] tracking-wider uppercase text-cyan">思考过程</span>
+        <span className="text-xs text-ink-soft">
+          {streaming ? '思考中…' : `${text.length} 字`}
+        </span>
+        {streaming && (
+          <span className="inline-block w-1.5 h-1.5 rounded-full bg-cyan animate-pulse" aria-hidden="true" />
+        )}
+        <span className="ml-auto font-mono text-[10px] text-ink-fade">
+          {expanded ? '' : '点击展开'}
+        </span>
+      </button>
+      {expanded && (
+        <div className="px-3 pb-2 pt-0.5 border-t border-cyan/15">
+          <pre className="whitespace-pre-wrap break-words font-sans text-xs text-ink-soft leading-relaxed max-h-64 overflow-y-auto">
+            {text}
+          </pre>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ToolCallTrace({ calls = [] }) {
   const [open, setOpen] = useState(false)
   const failed = calls.filter((c) => c.status === 'error').length
@@ -385,6 +429,11 @@ export default function ChatMessages({
                     ) : (
                       <>
                         <div data-quotable="true">
+                          {/* 思考过程排在最前面 —— 它确实发生在正文之前 */}
+                          <ReasoningTrace
+                            text={msg.meta?.reasoning || ''}
+                            streaming={!!msg.meta?.streaming && !msg.content}
+                          />
                           {/* ★ 按真实发生顺序交错渲染:说一段 → 干几件事 → 再说一段。
                               以前是「一整块工具调用 + 最后的正文」,读起来像先给结论后干活。 */}
                           {buildMessageTimeline(stripChoices(msg.content), msg.meta?.toolCalls).map((seg, i) => (

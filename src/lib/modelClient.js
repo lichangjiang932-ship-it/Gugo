@@ -16,6 +16,7 @@ const SSE_CHUNK_SCHEMA = z.union([
   }),
   z.object({ toolCalls: z.array(z.any()).min(1), finishReason: z.string().optional() }),
   z.object({ delta: z.string() }),
+  z.object({ reasoning: z.string() }),
   // 未来兼容:任意带 ok=true 的状态帧
   z.object({ ok: z.literal(true) }).passthrough(),
 ])
@@ -244,6 +245,9 @@ export async function* callModelThroughProxyStream({ messages, modelName, agentI
           yield { type: 'tool_calls', toolCalls: chunk.toolCalls, finishReason: chunk.finishReason }
         } else if (chunk.delta !== undefined) {
           yield { type: 'text', delta: chunk.delta }
+        } else if (chunk.reasoning !== undefined) {
+          // 推理模型的思考过程,和正文分开传,前端折叠显示
+          yield { type: 'reasoning', delta: chunk.reasoning }
         }
       }
     }

@@ -795,6 +795,12 @@ async function* streamOpenAICompatible({ config, messages, fetchImpl = fetch, to
           if (!choice) continue
           const delta = choice.delta || {}
           if (choice.finish_reason) finishReason = choice.finish_reason
+          // ★ 推理模型(qwen3.5 / DeepSeek-R1 / 各类 thinking 模型)在给出正文前
+          // 会先吐一大段思考。实测 LM Studio 上 reasoning_content 339ms 就开始来了,
+          // 而 content 要等到 11.6 秒 —— 不透传的话这 11 秒屏幕上什么都没有,
+          // 用户以为卡死了。字段名各家不一,三个都认。
+          const reasoning = delta.reasoning_content || delta.reasoning || delta.thinking || ''
+          if (reasoning) yield { type: 'reasoning', delta: reasoning }
           // 文本增量
           const text = delta.content || choice.text || ''
           if (text) yield { type: 'text', delta: text }
@@ -1088,6 +1094,9 @@ export async function handleModelProxyRequest(req, res) {
           if (clientGone) break
           if (event.type === 'text') {
             safeWrite(`data: ${JSON.stringify({ ok: true, delta: event.delta, latency: Date.now() - started })}\n\n`)
+          } else if (event.type === 'reasoning') {
+            // 思考过程单独一种帧型,前端折叠显示,不混进正文
+            safeWrite(`data: ${JSON.stringify({ ok: true, reasoning: event.delta, latency: Date.now() - started })}\n\n`)
           } else if (event.type === 'tool_calls') {
             // 工具调用轮:usage 帧若已单独到达就不重复记,否则用终止帧带的兜底
             if (event.usage && !streamUsage) {

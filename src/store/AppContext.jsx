@@ -513,6 +513,29 @@ function reducer(state, action) {
       return { ...state, skillConfigs: {} }
     }
 
+    // ★ 推理模型的思考过程。单独存进 meta.reasoning,绝不混进 content ——
+    // 它不是回答,不该进正文,也不该被当成上下文发回给模型。
+    case 'APPEND_REASONING_TO_LAST_MESSAGE': {
+      if (!state.activeSessionId) return state
+      const delta = action.payload ?? ''
+      if (!delta) return state
+      return {
+        ...state,
+        sessions: state.sessions.map((s) => {
+          if (s.id !== state.activeSessionId || s.messages.length === 0) return s
+          const msgs = [...s.messages]
+          const last = msgs[msgs.length - 1]
+          if (last.role !== 'assistant') return s
+          const meta = last.meta || {}
+          msgs[msgs.length - 1] = {
+            ...last,
+            meta: { ...meta, reasoning: (meta.reasoning || '') + delta },
+          }
+          return { ...s, messages: msgs, updatedAt: Date.now() }
+        }),
+      }
+    }
+
     case 'APPEND_TO_LAST_MESSAGE': {
       if (!state.activeSessionId) return state
       const delta = action.payload ?? ''

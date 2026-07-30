@@ -587,6 +587,7 @@ export default function ChatSplit() {
             }
             let pendingToolCalls = null
             let sawTextThisRound = false
+            let sawReasoningThisRound = false
             let stopAfterArtifact = false
             for await (const event of callModelThroughProxyStream({
               messages,
@@ -605,6 +606,14 @@ export default function ChatSplit() {
                 if (!sawTextThisRound) {
                   sawTextThisRound = true
                   dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { stepLabel: '生成中' } } })
+                }
+              } else if (event.type === 'reasoning') {
+                // 推理模型先思考后回答。思考阶段可能持续十几秒,
+                // 不显示的话屏幕上什么都没有,用户以为卡死了。
+                dispatch({ type: 'APPEND_REASONING_TO_LAST_MESSAGE', payload: event.delta })
+                if (!sawReasoningThisRound) {
+                  sawReasoningThisRound = true
+                  dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { stepLabel: '思考中' } } })
                 }
               } else if (event.type === 'tool_calls') {
                 pendingToolCalls = event.toolCalls
