@@ -47,6 +47,7 @@ function createInitialState() {
     density: 'comfortable',
     animationsEnabled: true,
     draftInput: '',
+    newDraftVersion: 0,
     skillConfigs: {}, // { skillId: { enabled, systemPrompt, temperature, maxTokens } }
     agentMode: 'chat', // 'chat' | 'plan' | 'code'
     previewArtifact: null, // { messageId, content, preview } — 右侧 artifact 预览面板
@@ -114,17 +115,9 @@ function reducer(state, action) {
   switch (action.type) {
     case 'LOGIN': {
       const payload = action.payload ?? {}
-      // 登录成功后若没有任何会话，自动建一个，这样 /chat 一进就能发消息
-      let nextSessions = state.sessions
-      let nextActiveId = state.activeSessionId
-      if (nextSessions.length === 0) {
-        const id = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
-        const now = Date.now()
-        nextSessions = [{ id, title: '新对话', messages: [], createdAt: now, updatedAt: now }]
-        nextActiveId = id
-      } else if (!nextActiveId) {
-        nextActiveId = nextSessions[0].id
-      }
+      const nextActiveId = state.sessions.some((session) => session.id === state.activeSessionId)
+        ? state.activeSessionId
+        : state.sessions[0]?.id ?? null
       return {
         ...state,
         user: {
@@ -136,7 +129,6 @@ function reducer(state, action) {
           totalCalls: payload.totalCalls ?? state.user.totalCalls ?? 0,
         },
         isLoggedIn: true,
-        sessions: nextSessions,
         activeSessionId: nextActiveId,
       }
     }
@@ -152,7 +144,8 @@ function reducer(state, action) {
     case 'NEW_SESSION': {
       const title = action.payload?.title ?? action.payload ?? `新会话 ${new Date().toLocaleTimeString()}`
       const agentId = typeof action.payload === 'object' && action.payload ? (action.payload.agentId || null) : null
-      const id = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+      const requestedId = typeof action.payload === 'object' && action.payload ? action.payload.id : null
+      const id = requestedId || crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
       const now = Date.now()
       const newSession = {
         id,
@@ -166,6 +159,13 @@ function reducer(state, action) {
         ...state,
         sessions: [newSession, ...state.sessions],
         activeSessionId: id,
+      }
+    }
+    case 'START_NEW_DRAFT': {
+      return {
+        ...state,
+        activeSessionId: null,
+        newDraftVersion: state.newDraftVersion + 1,
       }
     }
     case 'SET_SESSION_AGENT': {

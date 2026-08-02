@@ -224,6 +224,7 @@ export default function ChatSplit() {
 
   const recognitionRef = useRef(null)
   const stateRef = useRef(state)
+  const newDraftVersionRef = useRef(state.newDraftVersion)
 
   useEffect(() => () => {
     recognitionRef.current?.abort?.()
@@ -267,6 +268,15 @@ export default function ChatSplit() {
   useEffect(() => {
     stateRef.current = state
   }, [state])
+
+  useEffect(() => {
+    if (newDraftVersionRef.current === state.newDraftVersion) return
+    newDraftVersionRef.current = state.newDraftVersion
+    setInput('')
+    setAttachments([])
+    setEditingMessageId(null)
+    setWorkbenchMessage('')
+  }, [state.newDraftVersion])
 
   const setModelForActiveSession = useCallback((modelName) => {
     const normalized = String(modelName || '').trim()
@@ -414,12 +424,6 @@ export default function ChatSplit() {
   // 组件真正卸载时才无条件中断,避免留下没人消费的流
   useEffect(() => () => abortCtrlRef.current?.abort(), [])
 
-  useEffect(() => {
-    if (!state.activeSessionId) {
-      dispatch({ type: 'NEW_SESSION', payload: '新对话' })
-    }
-  }, [dispatch, state.activeSessionId])
-
   // #13 切会话保草稿:
   //   - 切走前:把当前 input 写入 sessionDrafts[旧 id]
   //   - 切到新 id:从 sessionDrafts[新 id] 拉草稿,没草稿就清空
@@ -457,7 +461,17 @@ export default function ChatSplit() {
   const triggerSendFlow = useCallback(
     async (content, explicitAttachments = null, historyLimit = null) => {
       if (isGenerating) return
-      const activeSession = state.sessions.find((s) => s.id === state.activeSessionId)
+      let sessionId = state.activeSessionId
+      let activeSession = state.sessions.find((s) => s.id === sessionId)
+      if (!activeSession) {
+        sessionId = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+        activeSession = { id: sessionId, title: '新对话', messages: [], agentId: effectiveAgentId || null }
+        abortSessionIdRef.current = sessionId
+        dispatch({
+          type: 'NEW_SESSION',
+          payload: { id: sessionId, title: '新对话', agentId: effectiveAgentId || null },
+        })
+      }
       const modelName = resolveSessionModel(modelOptions, {
         sessionModel: activeSession?.modelName,
         selectedModel,
@@ -497,8 +511,8 @@ export default function ChatSplit() {
         // ★ #8: 立即兜底用截断, 让用户看到响应; 然后异步用 AI 覆盖一次
         const fallback = content.slice(0, 18).trim() || '新对话'
         const initialTitle = fallback.length > 15 ? fallback.slice(0, 15) + '…' : fallback
-        const sessionIdSnapshot = state.activeSessionId
-        dispatch({ type: 'UPDATE_SESSION_TITLE', payload: initialTitle })
+        const sessionIdSnapshot = sessionId
+        dispatch({ type: 'UPDATE_SESSION_TITLE_FOR', payload: { sessionId, title: initialTitle } })
         // fire-and-forget — 拿到 AI 标题后再 dispatch 一次
         // 不在回调里读取闭包 state, 完全依赖 reducer 做 onlyIfMatches 校验,
         // 避免闭包 state 陈旧导致误判。
@@ -579,7 +593,7 @@ export default function ChatSplit() {
           .filter((message) => message.role === 'system' && typeof message.content === 'string')
           .map((message) => message.content)
           .join('\n\n')
-        const contextSessionKey = state.activeSessionId || '__draft__'
+        const contextSessionKey = sessionId || '__draft__'
         setContextSystemPrompts((current) => current[contextSessionKey] === requestSystemPrompt
           ? current
           : { ...current, [contextSessionKey]: requestSystemPrompt })
@@ -659,7 +673,7 @@ export default function ChatSplit() {
               messages,
               modelName,
               agentId: effectiveAgentId || undefined,
-              sessionId: state.activeSessionId || undefined,
+              sessionId: sessionId || undefined,
               signal: controller.signal,
               // ★ 收尾必须拿到独立的、更大的输出预算。
               // 推理模型的「思考」和正文共用 max_tokens,默认 4096 常常在
@@ -723,7 +737,7 @@ export default function ChatSplit() {
               messages,
               modelName,
               agentId: effectiveAgentId || undefined,
-              sessionId: state.activeSessionId || undefined,
+              sessionId: sessionId || undefined,
               signal: controller.signal,
               tools: tools.length > 0 ? tools : undefined,
             })) {

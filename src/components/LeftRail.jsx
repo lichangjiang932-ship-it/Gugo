@@ -104,7 +104,7 @@ export default function LeftRail() {
   const sessions = state.sessions.filter((session) => !session.archivedAt)
 
   const handleNewChat = () => {
-    dispatch({ type: 'NEW_SESSION', payload: '新对话' })
+    dispatch({ type: 'START_NEW_DRAFT' })
     navigate('/chat')
   }
 
@@ -209,18 +209,6 @@ export default function LeftRail() {
               <button
                 onClick={(e) => {
                   e.stopPropagation()
-                  if (confirm(`删除会话“${s.title}”？`)) {
-                    dispatch({ type: 'DELETE_SESSION', payload: s.id })
-                  }
-                }}
-                title="删除会话"
-                className="absolute right-7 opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-paper text-ink-fade hover:text-ink transition-opacity shrink-0"
-              >
-                <X className="w-3 h-3" />
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
                   setOpenMenuId(openMenuId === s.id ? null : s.id)
                 }}
                 title={t('nav.sessionMenu')}
@@ -240,6 +228,20 @@ export default function LeftRail() {
                   >
                     {s.archivedAt ? <ArchiveRestore className="w-3 h-3" /> : <Archive className="w-3 h-3" />}
                     {s.archivedAt ? t('nav.unarchiveSession') : t('nav.archiveSession')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setOpenMenuId(null)
+                      if (confirm(t('nav.confirmDeleteSession', { title: s.title }))) {
+                        dispatch({ type: 'DELETE_SESSION', payload: s.id })
+                      }
+                    }}
+                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs text-ink-soft hover:bg-paper-2"
+                  >
+                    <X className="w-3 h-3" />
+                    {t('nav.deleteSession')}
                   </button>
                 </div>
               )}

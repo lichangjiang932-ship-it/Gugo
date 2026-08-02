@@ -55,8 +55,22 @@ test('chat chrome stays focused on conversations and essential composer controls
   assert.match(rail, /path: '\/access'/)
   assert.match(rail, /path: '\/settings'/)
   assert.doesNotMatch(rail, /groupSessionsByDay|formatSessionGroupDate|formatMessageTime/)
+  assert.match(rail, /dispatch\(\{ type: 'START_NEW_DRAFT' \}\)/)
+  assert.doesNotMatch(rail, /handleNewChat[\s\S]*?dispatch\(\{ type: 'NEW_SESSION'/)
+  const sessionRowBeforeMenu = rail.slice(
+    rail.indexOf('<div key={s.id ?? i}'),
+    rail.indexOf('{openMenuId === s.id &&'),
+  )
+  const sessionMenu = rail.match(/\{openMenuId === s\.id && \([\s\S]*?<\/div>\s*\)\}/)?.[0] || ''
+  assert.doesNotMatch(sessionRowBeforeMenu, /DELETE_SESSION|<X className=/)
+  assert.match(sessionMenu, /DELETE_SESSION/)
+  assert.match(sessionMenu, /<X className=/)
+  assert.match(sessionMenu, /setOpenMenuId\(null\)/)
 
   assert.doesNotMatch(chat, /<ChatHeader|<TodoTracker|<CodingWorkbench/)
+  assert.doesNotMatch(chat, /if \(!state\.activeSessionId\) \{\s*dispatch\(\{ type: 'NEW_SESSION'/)
+  assert.match(chat, /if \(!activeSession\) \{[\s\S]*?type: 'NEW_SESSION'/)
+  assert.match(chat, /const handleSend[\s\S]*?if \(!typedContent && attachments\.length === 0\) return/)
   assert.doesNotMatch(messages, /EXAMPLE_QUESTIONS|chatMessages\.emptyTitle/)
   assert.match(composer, /<PermissionModeSwitcher/)
   assert.match(composer, /<ModelPicker/)
