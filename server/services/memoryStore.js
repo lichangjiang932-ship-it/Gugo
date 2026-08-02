@@ -149,12 +149,12 @@ export function selectActiveMemoriesForInjection({ userId, tokenCap = 800, agent
   if (agentId) {
     rows = db.prepare(
       `SELECT * FROM memories WHERE user_id = ? AND (agent_id IS NULL OR agent_id = ?)
-       ORDER BY pinned DESC, COALESCE(last_used_at, updated_at) DESC LIMIT 60`
+       ORDER BY pinned DESC, COALESCE(last_used_at, updated_at) DESC, id ASC LIMIT 60`
     ).all(userId, agentId)
   } else {
     rows = db.prepare(
       `SELECT * FROM memories WHERE user_id = ? AND agent_id IS NULL
-       ORDER BY pinned DESC, COALESCE(last_used_at, updated_at) DESC LIMIT 60`
+       ORDER BY pinned DESC, COALESCE(last_used_at, updated_at) DESC, id ASC LIMIT 60`
     ).all(userId)
   }
   const out = []

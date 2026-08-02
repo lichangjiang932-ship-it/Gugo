@@ -519,7 +519,11 @@ export default function ChatMessages({
                   )}
                   {msg.role === 'user' && (
                     <div className="mt-1 flex min-h-3 items-center justify-end gap-3 text-[10px] text-ink-fade">
-                      <span title={formatMessageDateTime(msg.timestamp, lang)}>
+                      <span
+                        data-testid="user-message-time"
+                        className="chat-message-meta opacity-0 pointer-events-none transition-opacity group-hover/message:opacity-100 group-hover/message:pointer-events-auto group-focus-within/message:opacity-100 group-focus-within/message:pointer-events-auto"
+                        title={formatMessageDateTime(msg.timestamp, lang)}
+                      >
                         {formatMessageTime(msg.timestamp, lang)}
                       </span>
                       {!isGenerating && !msg.meta?.streaming && (
@@ -538,15 +542,20 @@ export default function ChatMessages({
                   )}
                   {msg.role === 'assistant' && (
                     <div className={`${showArtifactPreview ? 'mt-2 px-2' : 'mt-4'} flex flex-wrap items-center gap-2 text-[11px] text-ink-fade/85`}>
-                      <span title={formatMessageDateTime(msg.timestamp, lang)}>
-                        {formatMessageTime(msg.timestamp, lang)}
-                      </span>
-                      {msg.meta?.type === 'model_reply' && (
-                        <span>{t('chatMessages.model', { name: msg.meta.modelName })}</span>
-                      )}
-                      {msg.meta?.type === 'model_reply' && msg.meta.latency !== undefined && (
-                        <span>{t('chatMessages.latency', { value: msg.meta.latency })}</span>
-                      )}
+                      <div
+                        data-testid="assistant-message-meta"
+                        className="chat-message-meta flex items-center gap-2 opacity-0 pointer-events-none transition-opacity group-hover/message:opacity-100 group-hover/message:pointer-events-auto group-focus-within/message:opacity-100 group-focus-within/message:pointer-events-auto"
+                      >
+                        <span title={formatMessageDateTime(msg.timestamp, lang)}>
+                          {formatMessageTime(msg.timestamp, lang)}
+                        </span>
+                        {msg.meta?.type === 'model_reply' && (
+                          <span>{t('chatMessages.model', { name: msg.meta.modelName })}</span>
+                        )}
+                        {msg.meta?.type === 'model_reply' && msg.meta.latency !== undefined && (
+                          <span>{t('chatMessages.latency', { value: msg.meta.latency })}</span>
+                        )}
+                      </div>
                       {msg.meta?.type === 'model_reply' && typeof msg.meta.creditsCharged === 'number' && msg.meta.creditsCharged > 0 && (
                         <span title={t('chatMessages.credits', { value: msg.meta.creditsCharged })}>
                           {t('chatMessages.credits', { value: msg.meta.creditsCharged })}

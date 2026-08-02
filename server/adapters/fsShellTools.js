@@ -404,6 +404,8 @@ export async function handleFsShellRequest(req, res) {
       retryable: err?.retryable ?? ![401, 403, 404].includes(status),
       ...(err?.path ? { path: err.path } : {}),
       ...(err?.hint ? { hint: err.hint } : {}),
+      ...(err?.suggestGrantPath ? { suggestGrantPath: err.suggestGrantPath } : {}),
+      ...(err?.requiredAccessMode ? { requiredAccessMode: err.requiredAccessMode } : {}),
     })
   }
 }

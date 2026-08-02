@@ -264,7 +264,11 @@ export function resolveAuthorizedLocalPath({
   }
 
   if (!userId) {
-    throw serviceError('路径越出 workspace', 403, 'PATH_NOT_AUTHORIZED')
+    const err = serviceError('路径越出 workspace', 403, 'PATH_NOT_AUTHORIZED')
+    err.path = target.fullPath || rawPath || ''
+    err.suggestGrantPath = err.path
+    err.requiredAccessMode = write ? 'read_write' : 'read_only'
+    throw err
   }
   if (getSettingsRow(userId)?.all_files_enabled) {
     return {
@@ -293,7 +297,7 @@ export function resolveAuthorizedLocalPath({
     )
     err.path = shown
     // 给模型一个可直接转述的提示:授权哪个目录最省事(文件就给它的父目录)
-    let suggest = shown
+    let suggest = target.exists ? shown : (target.anchorPath || path.dirname(shown))
     try {
       if (target.exists && fs.statSync(target.fullPath).isFile()) {
         suggest = path.dirname(target.fullPath)
@@ -302,6 +306,7 @@ export function resolveAuthorizedLocalPath({
       // stat 失败就用原路径,不影响主流程
     }
     err.suggestGrantPath = suggest
+    err.requiredAccessMode = write ? 'read_write' : 'read_only'
     throw err
   }
   return {

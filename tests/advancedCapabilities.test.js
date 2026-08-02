@@ -43,7 +43,7 @@ test('tool registry exposes canvas tools and Agent tool', () => {
     assert.ok(names.includes(name), `${name} should be registered`)
   }
   const specs = buildToolSpecs(['create_mermaid', 'create_chart', 'create_svg', 'create_html_app', 'Agent'])
-  assert.deepEqual(specs.map((spec) => spec.function.name), ['create_mermaid', 'create_chart', 'create_svg', 'create_html_app', 'Agent'])
+  assert.deepEqual(specs.map((spec) => spec.function.name), ['Agent', 'create_chart', 'create_html_app', 'create_mermaid', 'create_svg'])
 })
 
 test('artifact tools return collapsed preview artifacts and reject unsafe html apps', async () => {

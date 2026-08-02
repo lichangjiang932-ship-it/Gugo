@@ -22,7 +22,9 @@ import RightPreviewPane from './RightPreviewPane'
 import useInputHistory from './useInputHistory.js'
 import ApplyPatchApprovalModal from '../../components/ApplyPatchApprovalModal'
 import ToolApprovalCard from '../../components/ToolApprovalCard.jsx'
+import DirectoryApprovalModal from '../../components/DirectoryApprovalModal.jsx'
 import { fetchApprovalSettings, updateApprovalSettings } from '../../lib/approvalClient.js'
+import { grantLocalPathApi, pickLocalDirectoryApi } from '../../lib/localFileAccessClient.js'
 import { useToast } from '../../components/Toast.jsx'
 import { useT } from '../../i18n/I18nProvider.jsx'
 import { buildArtifactPreview } from '../../lib/artifactPreview.js'
@@ -110,6 +112,8 @@ export default function ChatSplit() {
   // ★ 通用工具审批:决策就在对话里做,不用切页面(对齐 Claude Code)
   const [toolApproval, setToolApproval] = useState({ open: false, request: null, busy: false })
   const toolApprovalResolveRef = useRef(null)
+  const [directoryApproval, setDirectoryApproval] = useState({ open: false, request: null, busy: false, error: '' })
+  const directoryApprovalResolveRef = useRef(null)
   const [approvalSettings, setApprovalSettings] = useState({ mode: 'normal', rememberedTools: [] })
   const [contextSystemPrompts, setContextSystemPrompts] = useState({})
   const abortCtrlRef = useRef(null)
@@ -363,6 +367,58 @@ export default function ChatSplit() {
     return () => {
       cancelled = true
       window.removeEventListener('model-providers:changed', loadModels)
+    }
+  }, [])
+
+  const resolveDirectoryApproval = useCallback((decision) => {
+    const resolve = directoryApprovalResolveRef.current
+    directoryApprovalResolveRef.current = null
+    if (resolve) resolve(decision)
+    setDirectoryApproval({ open: false, request: null, busy: false, error: '' })
+  }, [])
+
+  const authorizeDirectory = useCallback(async ({ path, accessMode, usePicker }) => {
+    setDirectoryApproval((current) => ({ ...current, busy: usePicker ? 'picker' : 'grant', error: '' }))
+    try {
+      let selectedPath = String(path || '').trim()
+      if (usePicker) {
+        const picked = await pickLocalDirectoryApi()
+        selectedPath = String(picked?.path || '').trim()
+        if (!selectedPath) {
+          setDirectoryApproval((current) => ({ ...current, busy: false }))
+          return
+        }
+      }
+      if (!selectedPath) return
+      const safeAccessMode = accessMode === 'read_write' ? 'read_write' : 'read_only'
+      await grantLocalPathApi({ path: selectedPath, accessMode: safeAccessMode })
+      toast.success({ title: t('taskSteering.directoryGranted') })
+      resolveDirectoryApproval({ approved: true, path: selectedPath, accessMode: safeAccessMode })
+    } catch (err) {
+      setDirectoryApproval((current) => ({
+        ...current,
+        busy: false,
+        error: err?.message || t('taskSteering.directoryGrantFailed'),
+      }))
+    }
+  }, [resolveDirectoryApproval, t, toast])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const gate = (request) => new Promise((resolve) => {
+      if (directoryApprovalResolveRef.current) {
+        directoryApprovalResolveRef.current({ approved: false })
+      }
+      directoryApprovalResolveRef.current = resolve
+      setDirectoryApproval({ open: true, request, busy: false, error: '' })
+    })
+    window.__directoryApprovalGate = gate
+    return () => {
+      if (window.__directoryApprovalGate === gate) delete window.__directoryApprovalGate
+      if (directoryApprovalResolveRef.current) {
+        directoryApprovalResolveRef.current({ approved: false })
+        directoryApprovalResolveRef.current = null
+      }
     }
   }, [])
 
@@ -1464,6 +1520,15 @@ export default function ChatSplit() {
         busy={applyPatchApproval.busy}
         onApprove={() => resolveApplyPatchApproval(true)}
         onReject={() => resolveApplyPatchApproval(false)}
+      />
+      <DirectoryApprovalModal
+        key={directoryApproval.open ? (directoryApproval.request?.suggestGrantPath || directoryApproval.request?.path || 'request') : 'closed'}
+        open={directoryApproval.open}
+        request={directoryApproval.request}
+        busy={directoryApproval.busy}
+        error={directoryApproval.error}
+        onAuthorize={authorizeDirectory}
+        onReject={() => resolveDirectoryApproval({ approved: false })}
       />
     </div>
   )

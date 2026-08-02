@@ -17,6 +17,8 @@ async function parse(response) {
     error.path = data?.error?.path
     error.retryable = data?.error?.retryable
     error.hint = data?.error?.hint
+    error.suggestGrantPath = data?.error?.suggestGrantPath
+    error.requiredAccessMode = data?.error?.requiredAccessMode
     throw error
   }
   return data

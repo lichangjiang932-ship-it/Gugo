@@ -147,3 +147,36 @@ export async function askToolApproval({ name, args, risk, reason, preview }) {
     return { approved: false, reason: '审批界面异常,已保守拒绝' }
   }
 }
+
+/**
+ * Ask the active chat surface to grant a specific local path. The UI must
+ * commit the grant before resolving with `approved: true`; callers may then
+ * retry the exact failed file operation once.
+ */
+export async function askDirectoryApproval({
+  name,
+  args,
+  path,
+  suggestGrantPath,
+  requiredAccessMode,
+}) {
+  if (typeof window === 'undefined' || typeof window.__directoryApprovalGate !== 'function') {
+    return { approved: false, reason: '没有可用的目录授权界面，已保守拒绝。' }
+  }
+  try {
+    const result = await window.__directoryApprovalGate({
+      name,
+      args,
+      path,
+      suggestGrantPath,
+      requiredAccessMode,
+    })
+    if (typeof result === 'boolean') return { approved: result }
+    return {
+      approved: !!result?.approved,
+      reason: typeof result?.reason === 'string' ? result.reason : undefined,
+    }
+  } catch {
+    return { approved: false, reason: '目录授权界面异常，已保守拒绝。' }
+  }
+}

@@ -20,7 +20,7 @@ import { z } from 'zod'
 //   ChatSplit chunk 里本就包含这两个模块.
 import { parseMarkdownSlides } from '../presentationExport.js'
 import { parseMarkdownDocument, parseSpreadsheetRows } from '../officeExport.js'
-import { askToolApproval, buildClientRememberedGrant, classifyClientTool } from '../toolApproval.js'
+import { askDirectoryApproval, askToolApproval, buildClientRememberedGrant, classifyClientTool } from '../toolApproval.js'
 import { translateKey } from '../../i18n/translations.js'
 
 const FILE_ARTIFACT_TOOL_NAMES = new Set(['create_pptx', 'create_docx', 'create_xlsx'])
@@ -583,6 +583,14 @@ const TOOL_SPECS = {
 const READ_ONLY_MODE_TOOLS = new Set(['web_search', 'fetch_url', 'list_directory', 'read_file', 'git_status', 'git_diff', 'manage_todos', 'Agent'])
 const CODE_MODE_TOOLS = ['list_directory', 'read_file', 'write_file', 'edit_file', 'bash_exec', 'git_status', 'git_diff', 'run_project_check', 'manage_todos', 'Agent']
 
+function sortToolSpecsByName(specs = []) {
+  return [...specs].sort((a, b) => {
+    const aName = String(a?.function?.name || '')
+    const bName = String(b?.function?.name || '')
+    return aName < bName ? -1 : aName > bName ? 1 : 0
+  })
+}
+
 export function resolveToolsForMode(toolsConfig = {}, mode = 'chat') {
   const enabled = Object.entries(toolsConfig || {})
     .filter(([, on]) => !!on)
@@ -617,7 +625,7 @@ export function buildToolSpecs(enabledNames) {
         : `[tools] 未知工具被忽略: ${name}`)
     }
   }
-  return list
+  return sortToolSpecsByName(list)
 }
 
 export function listToolNames() {
@@ -662,7 +670,7 @@ export async function buildToolSpecsAsync({ enabledBuiltinNames, mode = 'chat' }
     return name.startsWith('mcp__') || name.startsWith('skill__') || !TOOL_SPECS[name]
   })
   // 排除已经在 builtin 里出现的同名
-  return [...builtin, ...dynamic]
+  return sortToolSpecsByName([...builtin, ...dynamic])
 }
 
 /* ── 执行器 ── */
@@ -723,6 +731,8 @@ async function callWorkspaceJson(url, body) {
     err.retryable = data?.retryable
     err.path = data?.path
     err.hint = data?.hint
+    err.suggestGrantPath = data?.suggestGrantPath
+    err.requiredAccessMode = data?.requiredAccessMode
     throw err
   }
   return data
@@ -1360,6 +1370,42 @@ export async function executeToolCall(call, options = {}) {  const { maxRetries 
       return { ok, content, billing, artifact, todos, attempts: attempt + 1 }
     } catch (err) {
       lastErr = err
+      if (err?.code === 'PATH_NOT_AUTHORIZED') {
+        const decision = await askDirectoryApproval({
+          name,
+          args: parsedArgs,
+          path: err.path || parsedArgs?.path || null,
+          suggestGrantPath: err.suggestGrantPath || err.path || parsedArgs?.path || null,
+          requiredAccessMode: err.requiredAccessMode
+            || (['write_file', 'edit_file', 'apply_patch'].includes(name) ? 'read_write' : 'read_only'),
+        })
+        if (!decision.approved) {
+          const denied = new Error(decision.reason || '用户拒绝了目录授权。')
+          denied.code = 'PATH_AUTHORIZATION_REJECTED'
+          denied.status = 403
+          denied.retryable = false
+          denied.path = err.path
+          lastErr = denied
+          break
+        }
+
+        // The grant UI resolves only after persistence. Retry this exact
+        // operation once; a second failure is final and must not reopen the
+        // authorization prompt or enter the generic retry loop.
+        usedAttempts += 1
+        try {
+          const output = await fn(parsedArgs)
+          const ok = output && typeof output === 'object' && typeof output.ok === 'boolean' ? output.ok : true
+          const content = typeof output === 'string' ? output : output.content
+          const billing = typeof output === 'string' ? null : output.billing
+          const artifact = typeof output === 'string' ? null : (output.artifact || null)
+          const todos = typeof output === 'string' ? null : (output.todos || null)
+          return { ok, content, billing, artifact, todos, attempts: usedAttempts }
+        } catch (retryError) {
+          lastErr = retryError
+          break
+        }
+      }
       const msg = err?.message || String(err)
       // 不可重试:参数校验类错误 / 沙箱策略拒绝
       let nonRetriable = /参数|不能为空|invalid|required|沙箱/i.test(msg)

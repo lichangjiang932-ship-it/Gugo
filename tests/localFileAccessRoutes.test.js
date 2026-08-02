@@ -10,6 +10,8 @@ fs.mkdirSync(allowedDir)
 fs.writeFileSync(path.join(allowedDir, 'route.txt'), 'route access', 'utf8')
 process.env.APP_DATA_DIR = tempDir
 delete process.env.WORKSPACE_FS_ENABLED
+const previousGitEnabled = process.env.WORKSPACE_GIT_ENABLED
+process.env.WORKSPACE_GIT_ENABLED = '1'
 
 const { createAppServer } = await import('../server/appServer.js')
 const { closeDb } = await import('../server/db.js')
@@ -23,6 +25,8 @@ test.after(async () => {
   await new Promise((resolve) => server.close(resolve))
   closeDb()
   fs.rmSync(tempDir, { recursive: true, force: true })
+  if (previousGitEnabled === undefined) delete process.env.WORKSPACE_GIT_ENABLED
+  else process.env.WORKSPACE_GIT_ENABLED = previousGitEnabled
 })
 
 function headers(token) {
@@ -61,6 +65,38 @@ test('authorized path can be used by file tools and remains user-scoped', async 
     body: JSON.stringify({ path: path.join(allowedDir, 'route.txt') }),
   })
   assert.equal(bobRead.status, 403)
+  const bobReadBody = await bobRead.json()
+  assert.equal(bobReadBody.code, 'PATH_NOT_AUTHORIZED')
+  assert.equal(bobReadBody.requiredAccessMode, 'read_only')
+  assert.equal(bobReadBody.path, fs.realpathSync(path.join(allowedDir, 'route.txt')))
+  assert.equal(bobReadBody.suggestGrantPath, fs.realpathSync(allowedDir))
+
+  const bobPatch = await fetch(`${origin}/api/tools/code/apply-patch`, {
+    method: 'POST',
+    headers: headers(bob.token),
+    body: JSON.stringify({
+      patch: `*** Begin Patch\n*** Update File: ${path.join(allowedDir, 'route.txt')}\n@@\n-route access\n+patched route\n*** End Patch`,
+      dry_run: true,
+    }),
+  })
+  assert.equal(bobPatch.status, 403)
+  const bobPatchBody = await bobPatch.json()
+  assert.equal(bobPatchBody.code, 'PATH_NOT_AUTHORIZED')
+  assert.equal(bobPatchBody.requiredAccessMode, 'read_write')
+  assert.equal(bobPatchBody.path, fs.realpathSync(path.join(allowedDir, 'route.txt')))
+  assert.equal(bobPatchBody.suggestGrantPath, fs.realpathSync(allowedDir))
+
+  const bobGitStatus = await fetch(`${origin}/api/tools/git/status`, {
+    method: 'POST',
+    headers: headers(bob.token),
+    body: JSON.stringify({ cwd: allowedDir }),
+  })
+  assert.equal(bobGitStatus.status, 403)
+  const bobGitBody = await bobGitStatus.json()
+  assert.equal(bobGitBody.code, 'PATH_NOT_AUTHORIZED')
+  assert.equal(bobGitBody.requiredAccessMode, 'read_only')
+  assert.equal(bobGitBody.path, fs.realpathSync(allowedDir))
+  assert.equal(bobGitBody.suggestGrantPath, fs.realpathSync(allowedDir))
 
   const removed = await fetch(`${origin}/api/local-files/grants/${grantBody.grants[0].id}`, {
     method: 'DELETE',

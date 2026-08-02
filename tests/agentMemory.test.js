@@ -39,6 +39,23 @@ test('阶段 6: memory agent_id 过滤 — agent 专属 vs 全局', async () => 
   const pickedNone = mem.selectActiveMemoriesForInjection({ userId: u })
   const titlesN = pickedNone.memories.map((m) => m.title)
   assert.deepStrictEqual(titlesN, ['global'])
+
+  const tied = [
+    pickedNone.memories[0],
+    mem.upsertMemory({ userId: u, type: 'user', title: 'global-tie-a', body: 'tie a' }),
+    mem.upsertMemory({ userId: u, type: 'user', title: 'global-tie-b', body: 'tie b' }),
+  ]
+  const tiedIds = tied.map((memory) => memory.id)
+  const expectedIds = [...tiedIds].sort()
+  mem.touchMemoryUsage(u, tiedIds)
+  const firstStableSelection = mem.selectActiveMemoriesForInjection({ userId: u }).memories
+  const firstStableOrder = firstStableSelection.map((memory) => memory.id)
+  mem.touchMemoryUsage(u, [...tiedIds].reverse())
+  const secondStableSelection = mem.selectActiveMemoriesForInjection({ userId: u }).memories
+  const secondStableOrder = secondStableSelection.map((memory) => memory.id)
+  assert.deepStrictEqual(firstStableOrder, expectedIds)
+  assert.deepStrictEqual(secondStableOrder, expectedIds)
+  assert.equal(mem.buildMemorySystemBlock(firstStableSelection), mem.buildMemorySystemBlock(secondStableSelection))
 })
 
 test('阶段 6: DB schema migration 干净，memories.agent_id 列存在', async () => {

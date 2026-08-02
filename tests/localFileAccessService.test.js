@@ -84,6 +84,29 @@ test('read-only grants block writes and can be upgraded to read-write', async ()
   )
 })
 
+test('unauthorized path errors declare the least access mode required', async () => {
+  await assert.rejects(
+    () => readFileTool({ userId: 'local-user-b', path: path.join(outsideDir, 'secret.txt') }),
+    (error) => {
+      assert.equal(error.code, 'PATH_NOT_AUTHORIZED')
+      assert.equal(error.requiredAccessMode, 'read_only')
+      assert.equal(error.path, fs.realpathSync(path.join(outsideDir, 'secret.txt')))
+      assert.equal(error.suggestGrantPath, fs.realpathSync(outsideDir))
+      return true
+    },
+  )
+
+  await assert.rejects(
+    () => writeFileTool({ userId: 'local-user-b', path: path.join(outsideDir, 'new.txt'), content: 'new' }),
+    (error) => {
+      assert.equal(error.code, 'PATH_NOT_AUTHORIZED')
+      assert.equal(error.requiredAccessMode, 'read_write')
+      assert.equal(error.suggestGrantPath, fs.realpathSync(outsideDir))
+      return true
+    },
+  )
+})
+
 test('apply_patch uses the same read-write grant as file tools outside WORKSPACE_ROOT', async () => {
   grantLocalPath({ userId: 'local-user-a', rootPath: grantedDir, accessMode: 'read_write' })
   const target = path.join(grantedDir, 'note.txt')

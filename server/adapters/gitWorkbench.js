@@ -321,7 +321,18 @@ export async function handleGitWorkbenchRequest(req, res) {
     else return sendJson(res, 404, { ok: false, error: 'not found' })
     return sendJson(res, 200, result)
   } catch (err) {
-    return sendJson(res, err?.statusCode || 500, { ok: false, error: err?.message || 'git workbench failed', result: err?.result })
+    const status = err?.statusCode || 500
+    return sendJson(res, status, {
+      ok: false,
+      code: err?.code || 'GIT_WORKBENCH_FAILED',
+      error: err?.message || 'git workbench failed',
+      retryable: err?.retryable ?? ![401, 403, 404].includes(status),
+      result: err?.result,
+      ...(err?.path ? { path: err.path } : {}),
+      ...(err?.hint ? { hint: err.hint } : {}),
+      ...(err?.suggestGrantPath ? { suggestGrantPath: err.suggestGrantPath } : {}),
+      ...(err?.requiredAccessMode ? { requiredAccessMode: err.requiredAccessMode } : {}),
+    })
   }
 }
 
