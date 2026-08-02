@@ -1380,7 +1380,7 @@ export async function executeToolCall(call, options = {}) {  const { maxRetries 
             || (['write_file', 'edit_file', 'apply_patch'].includes(name) ? 'read_write' : 'read_only'),
         })
         if (!decision.approved) {
-          const denied = new Error(decision.reason || '用户拒绝了目录授权。')
+          const denied = new Error(decision.reason || 'The user denied directory authorization.')
           denied.code = 'PATH_AUTHORIZATION_REJECTED'
           denied.status = 403
           denied.retryable = false

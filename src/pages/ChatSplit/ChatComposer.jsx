@@ -13,6 +13,15 @@ import {
 } from 'lucide-react'
 import { getClipboardImageFiles } from '../../lib/chatAttachmentFiles.js'
 
+function splitLeadingSkillCommand(value, skillIds = []) {
+  const raw = String(value || '')
+  const match = raw.match(/^\/([a-z0-9_-]+)\s([\s\S]*)$/i)
+  if (!match) return { command: '', body: raw }
+  const known = new Set((Array.isArray(skillIds) ? skillIds : []).map((id) => String(id).toLowerCase()))
+  if (!known.has(match[1].toLowerCase())) return { command: '', body: raw }
+  return { command: `/${match[1]}`, body: match[2] }
+}
+
 export default function ChatComposer({
   input,
   setInput,
@@ -34,6 +43,7 @@ export default function ChatComposer({
   approvalMode,
   onApprovalModeChange,
   handleKeyDown,
+  skillIds = [],
 }) {
   const { t } = useT()
   const voiceLabel = {
@@ -45,6 +55,7 @@ export default function ChatComposer({
   }[voiceState] || t('chatMessages.voice')
   const textareaRef = useRef(null)
   const fileInputRef = useRef(null)
+  const skillCommand = splitLeadingSkillCommand(input, skillIds)
   // ★ #21: input 被外部清空 (发送后) 也回弹到 1 行高度
   useEffect(() => {
     const ta = textareaRef.current
@@ -178,18 +189,33 @@ export default function ChatComposer({
             </div>
           )}
           <div className="flex items-start gap-2 min-h-6">
+            {skillCommand.command && (
+              <span
+                data-testid="active-skill-command"
+                className="mt-0.5 inline-flex h-6 shrink-0 items-center rounded-md bg-ink px-2 font-mono text-xs font-medium text-paper shadow-sm"
+              >
+                {skillCommand.command}
+              </span>
+            )}
             <textarea
               ref={textareaRef}
-              value={input}
+              value={skillCommand.command ? skillCommand.body : input}
               onChange={(e) => {
-              setInput(e.target.value)
+              setInput(skillCommand.command ? `${skillCommand.command} ${e.target.value}` : e.target.value)
 
               // ★ #21: 自动撑高 textarea (1 ~ 8 行)
               const ta = e.target
               ta.style.height = 'auto'
               ta.style.height = Math.min(ta.scrollHeight, 24 * 8) + 'px'
             }}
-              onKeyDown={handleKeyDown}
+              onKeyDown={(e) => {
+                if (skillCommand.command && !skillCommand.body && e.key === 'Backspace' && !e.nativeEvent?.isComposing) {
+                  e.preventDefault()
+                  setInput('')
+                  return
+                }
+                handleKeyDown(e)
+              }}
               onPaste={(e) => {
                 const images = getClipboardImageFiles(e.clipboardData)
                 if (!images.length) return

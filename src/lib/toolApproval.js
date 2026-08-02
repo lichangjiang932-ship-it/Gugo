@@ -161,7 +161,7 @@ export async function askDirectoryApproval({
   requiredAccessMode,
 }) {
   if (typeof window === 'undefined' || typeof window.__directoryApprovalGate !== 'function') {
-    return { approved: false, reason: '没有可用的目录授权界面，已保守拒绝。' }
+    return { approved: false, reason: 'No directory authorization UI is available; access was denied.' }
   }
   try {
     const result = await window.__directoryApprovalGate({
@@ -177,6 +177,6 @@ export async function askDirectoryApproval({
       reason: typeof result?.reason === 'string' ? result.reason : undefined,
     }
   } catch {
-    return { approved: false, reason: '目录授权界面异常，已保守拒绝。' }
+    return { approved: false, reason: 'The directory authorization UI failed; access was denied.' }
   }
 }

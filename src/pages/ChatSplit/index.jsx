@@ -1503,6 +1503,7 @@ export default function ChatSplit() {
           approvalMode={approvalSettings?.mode || 'normal'}
           onApprovalModeChange={changeApprovalMode}
           handleKeyDown={handleKeyDown}
+          skillIds={runtimeSkills.map((skill) => skill.id)}
         />
       </div>
 

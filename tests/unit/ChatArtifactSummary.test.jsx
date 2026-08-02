@@ -155,6 +155,12 @@ test('streaming assistant does not render completed result actions', async () =>
     assert.ok(rootElement.querySelector('.chat-message-actions'))
     assert.ok(rootElement.querySelector('.chat-code-block button'))
     assert.ok(rootElement.querySelector('[data-testid="artifact-open-card"]'))
+    const userBubble = rootElement.querySelector('[data-testid="user-message-bubble"]')
+    assert.ok(userBubble)
+    assert.equal(userBubble.querySelector('[data-testid="user-message-time"]'), null)
+    assert.equal(userBubble.querySelector('.chat-message-actions'), null)
+    assert.ok(userBubble.parentElement.querySelector('[data-testid="user-message-time"]'))
+    assert.ok(userBubble.parentElement.querySelector('.chat-message-actions'))
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

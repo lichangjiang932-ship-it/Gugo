@@ -51,6 +51,14 @@ test('composer groups model and voice beside send without an Enter label', () =>
   assert.doesNotMatch(composerSource, />Enter<\/span>/)
 })
 
+test('selected slash skill renders as a dark tag inside the composer', () => {
+  assert.match(composerSource, /function splitLeadingSkillCommand/)
+  assert.match(composerSource, /data-testid="active-skill-command"/)
+  assert.match(composerSource, /bg-ink[\s\S]{0,120}text-paper/)
+  assert.match(composerSource, /value=\{skillCommand\.command \? skillCommand\.body : input\}/)
+  assert.match(chatSource, /skillIds=\{runtimeSkills\.map\(\(skill\) => skill\.id\)\}/)
+})
+
 test('long-term memory remains internal instead of adding a disclosure after every answer', () => {
   assert.doesNotMatch(messagesSource, /MemoryUsageDisclosure|getMemoriesByIdsApi|chatMessages\.memoryUsed/)
 })
@@ -74,10 +82,21 @@ test('message time, model, and latency reveal with copy actions on hover or focu
   assert.match(stylesSource, /@media \(hover: none\), \(pointer: coarse\)[\s\S]*?\.chat-message-actions,\s*\.chat-message-meta\s*\{[\s\S]*?opacity:\s*1;[\s\S]*?pointer-events:\s*auto;/)
 })
 
+test('user message time and copy actions sit outside the compact bubble', () => {
+  const bubble = messagesSource.match(/data-testid="user-message-bubble"[\s\S]*?<\/div>/)?.[0] || ''
+  assert.match(bubble, /chat-user-message/)
+  assert.match(bubble, /px-3\.5 py-2/)
+  assert.doesNotMatch(bubble, /user-message-time|chat-message-actions/)
+  assert.match(messagesSource, /max-w-\[min\(720px,86%\)\] flex flex-col items-end/)
+  assert.match(messagesSource, /mt-1 flex h-4[\s\S]{0,120}leading-none/)
+})
+
 test('reasoning and tool traces remain collapsed until the user expands them', () => {
   const reasoningTrace = messagesSource.match(/function ReasoningTrace[\s\S]*?(?=\nfunction ToolCallTrace)/)?.[0] || ''
   const toolCallTrace = messagesSource.match(/function ToolCallTrace[\s\S]*?(?=\nexport default)/)?.[0] || ''
 
   assert.match(reasoningTrace, /const expanded = manual === true/)
   assert.match(toolCallTrace, /const expanded = open/)
+  assert.doesNotMatch(reasoningTrace, /chatMessages\.clickExpand/)
+  assert.doesNotMatch(toolCallTrace, /chatMessages\.clickExpand/)
 })

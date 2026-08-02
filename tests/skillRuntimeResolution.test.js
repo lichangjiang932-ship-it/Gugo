@@ -39,8 +39,10 @@ test('chat split loads runtime skills instead of filtering only hard-coded skill
   assert.match(source, /enabled !== false/)
 })
 
-test('chat composer checks runtime skills for slash menu visibility', () => {
+test('chat composer checks runtime skills before styling a slash command', () => {
   const source = fs.readFileSync(new URL('../src/pages/ChatSplit/ChatComposer.jsx', import.meta.url), 'utf8')
-  assert.match(source, /skills/)
-  assert.doesNotMatch(source, /return SKILLS\.some/)
+  assert.match(source, /skillIds/)
+  assert.match(source, /splitLeadingSkillCommand/)
+  assert.match(source, /data-testid="active-skill-command"/)
+  assert.doesNotMatch(source, /SlashAutocomplete|QUICK_SKILLS/)
 })

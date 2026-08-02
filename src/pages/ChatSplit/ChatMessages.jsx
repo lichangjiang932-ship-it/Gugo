@@ -91,9 +91,6 @@ function ReasoningTrace({ text = '', streaming = false }) {
             <span className="sr-only">{t('chatMessages.reasoningActive')}</span>
           </span>
         )}
-        <span className="ml-auto font-mono text-[10px] text-ink-fade">
-          {expanded ? '' : t('chatMessages.clickExpand')}
-        </span>
       </button>
       {expanded && (
         <div id={panelId} className="border-t border-ink/10 px-3 py-2">
@@ -129,9 +126,6 @@ function ToolCallTrace({ calls = [] }) {
         <span className="text-xs text-ink-soft">
           {running > 0 ? t('chatMessages.runningSteps', { count: calls.length }) : t('chatMessages.steps', { count: calls.length })}
           {failed > 0 && <span className="text-red-600 ml-1.5">{t('chatMessages.failedSteps', { count: failed })}</span>}
-        </span>
-        <span className="ml-auto font-mono text-[10px] text-ink-fade">
-          {expanded ? '' : t('chatMessages.clickExpand')}
         </span>
       </button>
       {expanded && (
@@ -452,7 +446,7 @@ export default function ChatMessages({
                   ? 'max-w-[840px] w-full'
                   : msg.role === 'assistant'
                     ? 'chat-assistant-message w-full max-w-[840px] text-[15px] leading-7'
-                    : 'chat-user-message max-w-[min(720px,86%)] rounded-2xl rounded-br-md border border-ink/10 bg-paper-2 px-4 py-2.5 text-[14px] leading-6 shadow-[0_1px_2px_rgb(var(--color-ink-rgb)/0.03)]'}>
+                    : 'max-w-[min(720px,86%)] flex flex-col items-end'}>
                   {msg.role === 'assistant' && !collapseArtifact && isCurrentStreamingMessage && (
                     <div className="mb-2 flex items-center gap-2 text-[11px] text-ink-fade" role="status" aria-live="polite">
                       <span className="h-1.5 w-1.5 rounded-full bg-ember animate-pulse" aria-hidden="true" />
@@ -515,10 +509,15 @@ export default function ChatMessages({
                       </>
                     )
                   ) : (
-                    <span className="whitespace-pre-wrap">{msg.content}</span>
+                    <div
+                      data-testid="user-message-bubble"
+                      className="chat-user-message max-w-full rounded-2xl rounded-br-md border border-ink/10 bg-paper-2 px-3.5 py-2 text-[14px] leading-6 shadow-[0_1px_2px_rgb(var(--color-ink-rgb)/0.03)]"
+                    >
+                      <span className="whitespace-pre-wrap">{msg.content}</span>
+                    </div>
                   )}
                   {msg.role === 'user' && (
-                    <div className="mt-1 flex min-h-3 items-center justify-end gap-3 text-[10px] text-ink-fade">
+                    <div className="mt-1 flex h-4 items-center justify-end gap-3 pr-1 text-[10px] leading-none text-ink-fade">
                       <span
                         data-testid="user-message-time"
                         className="chat-message-meta opacity-0 pointer-events-none transition-opacity group-hover/message:opacity-100 group-hover/message:pointer-events-auto group-focus-within/message:opacity-100 group-focus-within/message:pointer-events-auto"
@@ -587,7 +586,7 @@ export default function ChatMessages({
                   )}
                   {msg.role === 'assistant' && msg.meta?.failed && msg.meta?.type !== 'model_reply' && (
                     <div className="mt-3 pt-2 border-t border-dashed border-ember/40 flex flex-wrap items-center gap-2 text-[11px]">
-                      <span className="text-ember">这条回复没能完成</span>
+                      <span className="text-ember">{t('chatMessages.replyIncomplete')}</span>
                     </div>
                   )}
                   {msg.role === 'assistant' && msg.meta?.type === 'context_summary' && (
