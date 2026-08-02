@@ -9,10 +9,11 @@ process.env.APP_DB_PATH = path.join(dir, 'app.db')
 
 const { closeDb, createUser } = await import('../server/db.js')
 const { WEB_CONNECTOR_CATALOG } = await import('../shared/webConnectorCatalog.js')
-const { isIntegrationEnabled, upsertIntegration } = await import('../server/services/integrationsStore.js')
+const { getIntegrationByProvider, isIntegrationEnabled, upsertIntegration } = await import('../server/services/integrationsStore.js')
 const {
   assertBrowserAppUrlAccess,
   connectBrowserApp,
+  ensureConnectedBrowserAppSession,
   getGithubFile,
   listConnectedBrowserApps,
   openConnectedBrowserApp,
@@ -22,6 +23,7 @@ const {
 createUser({ id: 'u-connectors', email: 'connectors@example.com' })
 createUser({ id: 'u-connectors-other', email: 'connectors-other@example.com' })
 createUser({ id: 'u-connectors-all', email: 'connectors-all@example.com' })
+createUser({ id: 'u-connectors-persistent', email: 'connectors-persistent@example.com' })
 
 test.after(() => {
   closeDb()
@@ -88,6 +90,45 @@ test('connected app open rejects unconnected apps and never accepts a client URL
     openImpl: async (input) => { calls.push(input); return { connected: true } },
   })
   assert.equal(calls[0].url, 'https://mail.google.com/')
+})
+
+test('persistent Browser connection automatically resumes after its in-memory session is gone', async () => {
+  const userId = 'u-connectors-persistent'
+  const connected = await connectBrowserApp({
+    userId,
+    provider: 'web_gmail',
+    connectImpl: async ({ url }) => ({ connected: true, url }),
+  })
+  assert.equal(connected.app.persistent, true)
+  assert.equal(getIntegrationByProvider({ userId, provider: 'web_gmail' }).config.connectionMode, 'persistent_browser')
+
+  const resumedCalls = []
+  const resumed = await ensureConnectedBrowserAppSession({
+    userId,
+    stateImpl: async () => ({ connected: false }),
+    resumeImpl: async (input) => {
+      resumedCalls.push(input)
+      return { connected: true, url: input.url }
+    },
+  })
+  assert.equal(resumed.resumed, true)
+  assert.equal(resumed.provider, 'web_gmail')
+  assert.deepEqual(resumedCalls, [{ userId, url: 'https://mail.google.com/' }])
+
+  const current = await ensureConnectedBrowserAppSession({
+    userId,
+    stateImpl: async () => ({ connected: true, headless: false, url: 'https://mail.google.com/mail/u/0/' }),
+    resumeImpl: async () => { throw new Error('must not relaunch an active session') },
+  })
+  assert.equal(current.url, 'https://mail.google.com/mail/u/0/')
+
+  const recovered = await ensureConnectedBrowserAppSession({
+    userId,
+    stateImpl: async () => { throw new Error('stale CDP socket') },
+    resumeImpl: async ({ url }) => ({ connected: true, url }),
+  })
+  assert.equal(recovered.resumed, true)
+  assert.equal(recovered.url, 'https://mail.google.com/')
 })
 
 test('every catalog app can establish an isolated Browser assistance connection', async () => {

@@ -74,6 +74,13 @@ export async function handleCodeSearchRequest(req, res) {
       durationMs: Date.now() - startedAt,
     })
     const status = err?.statusCode || 500
-    sendJson(res, status, { ok: false, error: err?.message || 'code search failed' })
+    sendJson(res, status, {
+      ok: false,
+      code: err?.code || 'CODE_TOOL_FAILED',
+      error: err?.message || 'code search failed',
+      retryable: err?.retryable ?? ![401, 403, 404].includes(status),
+      ...(err?.path ? { path: err.path } : {}),
+      ...(err?.hint ? { hint: err.hint } : {}),
+    })
   }
 }

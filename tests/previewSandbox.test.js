@@ -9,6 +9,13 @@ test('artifact preview iframes do not allow modal popups by default', () => {
   assert.doesNotMatch(source, /allow-modals/)
 })
 
+test('React artifact previews apply the shared readability guard', () => {
+  const source = fs.readFileSync(new URL('../src/pages/ChatSplit/RightPreviewPane.jsx', import.meta.url), 'utf8')
+
+  assert.match(source, /import \{[^}]*enhanceHtmlPreviewReadability[^}]*\} from '\.\.\/\.\.\/lib\/artifactPreview\.js'/)
+  assert.match(source, /return enhanceHtmlPreviewReadability\(`<!doctype html>/)
+})
+
 test('pptx default download uses premium visual export and keeps editable fallback explicit', () => {
   const source = fs.readFileSync(new URL('../src/pages/ChatSplit/RightPreviewPane.jsx', import.meta.url), 'utf8')
 

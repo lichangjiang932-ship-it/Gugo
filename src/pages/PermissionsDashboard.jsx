@@ -3,6 +3,7 @@ import { motion } from 'framer-motion'
 import { Mic, Bell, HardDrive, Database, Camera, RefreshCw, Pause, Terminal, FilePen, FileText } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
 import { useT } from '../i18n/I18nProvider.jsx'
+import { useAppContext } from '../store/AppContext'
 import {
   probeLocalStorage,
   probeStorage,
@@ -83,6 +84,7 @@ function emptyResults() {
 
 export default function PermissionsDashboard() {
   const { t } = useT()
+  const { state: appState, dispatch } = useAppContext()
   const [results, setResults] = useState(() => emptyResults())
   const [checking, setChecking] = useState(false)
 
@@ -192,8 +194,8 @@ export default function PermissionsDashboard() {
   const stats = [
     { label: t('permissionsDashboard.statEnabled'),     value: String(counts.granted),     tone: 'ember' },
     { label: t('permissionsDashboard.statDenied'),      value: String(counts.denied),      tone: '' },
-    { label: '工具已启用', value: `${GATEABLE_TOOLS.length - gatedOffCount}/${GATEABLE_TOOLS.length}`, tone: 'cyan' },
-    { label: '工具 gate',  value: '后端校验', tone: '' },
+    { label: t('permissionsDashboard.toolsEnabled'), value: `${GATEABLE_TOOLS.length - gatedOffCount}/${GATEABLE_TOOLS.length}`, tone: 'cyan' },
+    { label: t('permissionsDashboard.toolGate'), value: t('permissionsDashboard.serverEnforced'), tone: '' },
   ]
 
   return (
@@ -241,6 +243,39 @@ export default function PermissionsDashboard() {
             工具权限同步失败：{toolError}
           </div>
         )}
+
+        <div className="mb-2 flex items-baseline gap-2">
+          <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">WORKBENCH</span>
+          <span className="font-hand text-base text-ink-soft">{t('permissionsDashboard.policyTitle')}</span>
+        </div>
+        <p className="text-xs text-ink-fade mb-2">{t('permissionsDashboard.policyHint')}</p>
+        <div className="border border-ink/30 rounded-md overflow-hidden mb-6">
+          {(appState.permissions || []).map((permission, index) => {
+            const IconComp = permission.id === 'mic' ? Mic : Bell
+            return (
+              <div
+                key={permission.id}
+                className={`px-4 py-3 flex items-center gap-3 ${index < appState.permissions.length - 1 ? 'border-b border-dashed border-ink-fade/40' : ''}`}
+              >
+                <div className="w-8 h-8 rounded-md border border-ink-fade/60 flex items-center justify-center bg-paper-2">
+                  <IconComp className="w-4 h-4 text-ink-soft" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm text-ink">{permission.name}</div>
+                  <div className="text-xs text-ink-fade">{permission.scope}</div>
+                </div>
+                <span className={`text-xs ${permission.enabled ? 'text-emerald-600' : 'text-ink-fade'}`}>
+                  {permission.enabled ? t('permissionsDashboard.policyAllowed') : t('permissionsDashboard.policyBlocked')}
+                </span>
+                <PermSwitch
+                  on={permission.enabled}
+                  onToggle={() => dispatch({ type: 'TOGGLE_PERM', payload: permission.id })}
+                  label={`${permission.enabled ? t('permissionsDashboard.disable') : t('permissionsDashboard.enable')} ${permission.name}`}
+                />
+              </div>
+            )
+          })}
+        </div>
 
         <div className="mb-2 flex items-baseline gap-2">
           <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">TOOLS</span>

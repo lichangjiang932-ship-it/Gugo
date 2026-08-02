@@ -24,6 +24,7 @@ import {
   setApprovalMode,
 } from '../services/approvalSettingsStore.js'
 import { releaseApproval } from '../services/approvalGate.js'
+import { getJobRuntime } from '../services/jobRuntime.js'
 
 const VALID_DECISIONS = new Set(['approve', 'deny', 'edit'])
 const VALID_STATUS_FILTERS = new Set(['pending', 'approved', 'denied', 'edited', 'expired', 'cancelled', 'all'])
@@ -125,9 +126,10 @@ export async function handleApprovalRequest(req, res) {
       if (!existing) return notFound(res)
 
       // 「总是允许这个工具」:批准的同时记住,下次同名工具不再问
-      let rememberedTools = null
+      let rememberedSettings = null
       if (decision === 'approve' && body?.remember === true) {
-        rememberedTools = rememberTool({ userId, toolName: existing.toolName })
+        rememberTool({ userId, toolName: existing.toolName, args: existing.args })
+        rememberedSettings = getApprovalSettings({ userId })
       }
 
       const result = decideApproval({
@@ -139,12 +141,29 @@ export async function handleApprovalRequest(req, res) {
       })
       // 无论抢到与否都唤醒等待的 agent 循环(它会自己去 DB 读权威状态)
       releaseApproval(id)
+      if (existing.origin === 'job' && existing.jobId) {
+        getJobRuntime().resumeAfterApproval(existing.jobId, {
+          userId,
+          stepId: existing.stepId,
+        })
+      }
       if (!result.ok && result.alreadyDecided) {
         // 幂等:已被决策过不算错,把当前状态如实返回
-        return sendJson(res, 200, { ok: false, alreadyDecided: true, approval: result.approval, rememberedTools })
+        return sendJson(res, 200, {
+          ok: false,
+          alreadyDecided: true,
+          approval: result.approval,
+          rememberedTools: rememberedSettings?.rememberedTools || null,
+          rememberedGrants: rememberedSettings?.rememberedGrants || null,
+        })
       }
       if (!result.ok) return notFound(res)
-      return sendJson(res, 200, { ok: true, approval: result.approval, rememberedTools })
+      return sendJson(res, 200, {
+        ok: true,
+        approval: result.approval,
+        rememberedTools: rememberedSettings?.rememberedTools || null,
+        rememberedGrants: rememberedSettings?.rememberedGrants || null,
+      })
     }
 
     const detailMatch = pathname.match(/^\/api\/approvals\/([^/]+)$/)

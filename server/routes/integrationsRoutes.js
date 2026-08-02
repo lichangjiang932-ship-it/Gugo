@@ -12,6 +12,14 @@ import {
 } from '../services/integrationsStore.js'
 import { socialBridgeManager } from '../services/socialBridgeManager.js'
 import { isWebConnectorProvider } from '../../shared/webConnectorCatalog.js'
+import { closeBrowserSession } from '../adapters/browserAutomation.js'
+import {
+  completeOAuthConnection,
+  getOAuthConnectionStatus,
+  listOAuthProviders,
+  oauthCompletionRedirect,
+  startOAuthConnection,
+} from '../services/integrationOAuthService.js'
 
 function unauthorized(res) { return sendJson(res, 401, { ok: false, error: 'Unauthorized' }) }
 
@@ -38,7 +46,7 @@ function parseVisionModelsFromEnv(env = process.env) {
     .filter(Boolean)
 }
 
-export async function handleIntegrationsRequest(req, res, { env = process.env } = {}) {
+export async function handleIntegrationsRequest(req, res, { env = process.env, fetchImpl = fetch } = {}) {
   const url = new URL(req.url, 'http://localhost')
   const parts = url.pathname.split('/').filter(Boolean)
   // 路由：/api/integrations[/providers | /vision_assist/status | /:id | /:id/test | /:id/enabled]
@@ -46,6 +54,33 @@ export async function handleIntegrationsRequest(req, res, { env = process.env } 
   // 公共：GET /api/integrations/providers — 列出可用 provider 元数据
   if (req.method === 'GET' && parts[2] === 'providers') {
     return sendJson(res, 200, { ok: true, providers: listProviderRegistry() })
+  }
+
+  // OAuth provider callbacks cannot carry the app bearer token. The one-time state
+  // binds the callback to the authenticated user who started the handshake.
+  if (req.method === 'GET' && parts[2] === 'oauth' && parts[3] === 'callback' && parts[4]) {
+    try {
+      const session = await completeOAuthConnection({
+        provider: decodeURIComponent(parts[4]),
+        state: url.searchParams.get('state') || '',
+        code: url.searchParams.get('code') || '',
+        providerError: url.searchParams.get('error_description') || url.searchParams.get('error') || '',
+        env,
+        fetchImpl,
+      })
+      res.writeHead(302, {
+        Location: oauthCompletionRedirect(session),
+        'Cache-Control': 'no-store',
+      })
+      res.end()
+      return undefined
+    } catch (err) {
+      return sendJson(res, statusForError(err), {
+        ok: false,
+        error: err.message || 'OAuth callback failed',
+        code: err.code || 'OAUTH_CALLBACK_FAILED',
+      })
+    }
   }
 
   const userId = authenticateRequest(req)
@@ -68,6 +103,31 @@ export async function handleIntegrationsRequest(req, res, { env = process.env } 
   }
 
   try {
+    if (req.method === 'GET' && parts[2] === 'oauth' && parts[3] === 'providers') {
+      return sendJson(res, 200, { ok: true, providers: listOAuthProviders({ env }) })
+    }
+
+    if (req.method === 'POST' && parts[2] === 'oauth' && parts[3] === 'start') {
+      const body = await readJson(req)
+      const result = startOAuthConnection({
+        userId,
+        provider: body.provider,
+        integrationId: body.integrationId || null,
+        origin: req.headers.origin || '',
+        env,
+      })
+      return sendJson(res, 200, { ok: true, ...result })
+    }
+
+    if (req.method === 'GET' && parts[2] === 'oauth' && parts[3] === 'sessions' && parts[4]) {
+      const session = getOAuthConnectionStatus({
+        userId,
+        id: decodeURIComponent(parts[4]),
+      })
+      if (!session) return sendJson(res, 404, { ok: false, error: 'OAuth session not found' })
+      return sendJson(res, 200, { ok: true, session })
+    }
+
     if (req.method === 'GET' && parts.length === 2) {
       const kind = url.searchParams.get('kind') || null
       return sendJson(res, 200, { ok: true, integrations: listIntegrations({ userId, kind }) })
@@ -114,6 +174,9 @@ export async function handleIntegrationsRequest(req, res, { env = process.env } 
       const body = await readJson(req)
       const integration = setIntegrationEnabled({ userId, id, enabled: !!body.enabled })
       await refreshBridgeIntegration(integration)
+      if (!integration.enabled && (integration.kind === 'browser_app' || integration.provider === 'browser')) {
+        closeBrowserSession(userId)
+      }
       return sendJson(res, 200, { ok: true, integration })
     }
 
@@ -128,10 +191,17 @@ export async function handleIntegrationsRequest(req, res, { env = process.env } 
       const integration = getIntegrationCredentialsById({ id })
       const removed = deleteIntegration({ userId, id })
       if (removed) await socialBridgeManager.stopIntegration(id, integration?.provider)
+      if (removed && (integration?.kind === 'browser_app' || integration?.provider === 'browser')) {
+        closeBrowserSession(userId)
+      }
       return sendJson(res, removed ? 200 : 404, { ok: removed })
     }
   } catch (err) {
-    return sendJson(res, statusForError(err), { ok: false, error: err.message || 'integration error' })
+    return sendJson(res, statusForError(err), {
+      ok: false,
+      error: err.message || 'integration error',
+      code: err.code || undefined,
+    })
   }
 
   return sendJson(res, 404, { ok: false, error: 'unknown integrations route' })

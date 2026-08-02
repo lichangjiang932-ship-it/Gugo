@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Plus, Trash2, Save, Star, X, Download, Upload, Sparkles, Package } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
+import PersonaManifestEditor from '../components/PersonaManifestEditor.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { useActiveAgent } from '../agents/activeAgentContext.js'
 import {
@@ -19,7 +20,16 @@ import {
 import { listPluginsApi, getPluginApi } from '../lib/pluginClient.js'
 
 function emptyAgent() {
-  return { id: '', name: '', soulMd: '', identityMd: '', personaTemplate: '', avatarUrl: '', isDefault: false }
+  return {
+    id: '',
+    name: '',
+    soulMd: '',
+    identityMd: '',
+    personaTemplate: '',
+    personaManifest: { version: 1, capabilityIds: [], recommendedConnectorIds: [], defaultPermissionMode: 'normal' },
+    avatarUrl: '',
+    isDefault: false,
+  }
 }
 
 export default function AgentList() {
@@ -107,6 +117,7 @@ export default function AgentList() {
       soulMd: a.soulMd || '',
       identityMd: a.identityMd || '',
       personaTemplate,
+      personaManifest: a.personaManifest || { version: 1, capabilityIds: [], recommendedConnectorIds: [], defaultPermissionMode: 'normal' },
       avatarUrl: a.avatarUrl || '',
       isDefault: !!a.isDefault,
     })
@@ -131,6 +142,7 @@ export default function AgentList() {
         soulMd: editing.soulMd,
         identityMd: editing.identityMd,
         personaTemplate: editing.personaTemplate || '',
+        personaManifest: editing.personaManifest,
         avatarUrl: editing.avatarUrl || null,
         isDefault: editing.isDefault,
       }
@@ -391,6 +403,11 @@ export default function AgentList() {
                           <Sparkles size={10} /> {a.personaTemplate}
                         </span>
                       )}
+                      {(a.personaManifest?.capabilityIds || []).slice(0, 2).map((id) => (
+                        <span key={id} className="inline-flex text-xs text-blue-700 bg-blue-50 px-2 py-0.5 rounded">
+                          {id}
+                        </span>
+                      ))}
                     </div>
                     <div className="text-xs text-ink-fade mt-1 line-clamp-1">
                       {(a.soulMd || '').slice(0, 120) || t('agents.noSoul')}
@@ -493,6 +510,12 @@ export default function AgentList() {
                       <p className="text-sm text-ink-fade">{t('agents.personaPreview')}</p>
                     )}
                   </div>
+                  <PersonaManifestEditor
+                    key={editing.id || 'new-agent'}
+                    value={editing.personaManifest}
+                    onChange={(personaManifest) => setEditing({ ...editing, personaManifest })}
+                    t={t}
+                  />
                   <div>
                     <label className="block text-xs font-medium text-ink-fade mb-1">{t('agents.fieldSoul')}</label>
                     <textarea

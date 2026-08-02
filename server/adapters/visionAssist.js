@@ -58,14 +58,17 @@ export function hasVisionAssistConfigured({ userId, env = process.env } = {}) {
   return !!resolveVisionAssistConfig({ userId, env })
 }
 
-function extractImageParts(message) {
-  if (!Array.isArray(message?.content)) return []
-  return message.content.filter((part) => part?.type === 'image_url' || part?.image_url)
+function isImagePart(part) {
+  return !!(part && (
+    part.type === 'image_url' ||
+    part.type === 'input_image' ||
+    part.image_url
+  ))
 }
 
-function extractTextParts(message) {
-  if (!Array.isArray(message?.content)) return [{ type: 'text', text: typeof message?.content === 'string' ? message.content : '' }]
-  return message.content.filter((part) => part?.type === 'text' || typeof part?.text === 'string')
+function extractImageParts(message) {
+  if (!Array.isArray(message?.content)) return []
+  return message.content.filter(isImagePart)
 }
 
 async function describeOneImage({ imagePart, config, secret, fetchImpl, language }) {
@@ -73,6 +76,12 @@ async function describeOneImage({ imagePart, config, secret, fetchImpl, language
   const prompt = language === 'en'
     ? 'Describe this image in a concise English paragraph, including main subject, scene, text, colors and notable details, so a text-only model can understand it.'
     : DEFAULT_PROMPT
+
+  const rawImageUrl = typeof imagePart?.image_url === 'string'
+    ? imagePart.image_url
+    : imagePart?.image_url?.url || imagePart?.url || null
+  if (!rawImageUrl) return { ok: false, message: '不支持的图片引用格式' }
+  const normalizedImagePart = { type: 'image_url', image_url: { url: rawImageUrl } }
 
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 30_000)
@@ -87,7 +96,7 @@ async function describeOneImage({ imagePart, config, secret, fetchImpl, language
         messages: [
           { role: 'user', content: [
             { type: 'text', text: prompt },
-            imagePart.type === 'image_url' ? imagePart : { type: 'image_url', image_url: imagePart.image_url },
+            normalizedImagePart,
           ] },
         ],
       }),
@@ -173,13 +182,13 @@ export async function attachVisionDescriptions({
     if (!imageParts.length) { nextMessages.push(message); continue }
 
     const newContent = []
-    const textParts = extractTextParts(message)
-    for (const part of textParts) {
-      newContent.push({ type: 'text', text: part.text || '' })
-    }
-
     let index = 0
-    for (const imagePart of imageParts) {
+    for (const part of message.content) {
+      if (!isImagePart(part)) {
+        newContent.push(part)
+        continue
+      }
+      const imagePart = part
       index += 1
       if (processed >= maxImages) {
         newContent.push({ type: 'text', text: `[图片 ${index} 已跳过：超出 vision-assist 单轮上限 ${maxImages}]` })
@@ -205,4 +214,27 @@ export async function attachVisionDescriptions({
   }
 
   return { messages: nextMessages, assistCount: processed, failures }
+}
+
+/**
+ * Rewrite only the outbound view for a text-only model. The caller's canonical
+ * messages and content arrays are never mutated.
+ */
+export function replaceUnsupportedVisionContent({ messages = [], modelName = '' } = {}) {
+  let replacementCount = 0
+  const nextMessages = messages.map((message) => {
+    if (!Array.isArray(message?.content) || !message.content.some(isImagePart)) return message
+    let imageIndex = 0
+    const content = message.content.map((part) => {
+      if (!isImagePart(part)) return part
+      imageIndex += 1
+      replacementCount += 1
+      return {
+        type: 'text',
+        text: `[Image ${imageIndex} omitted: model ${modelName || '(unknown)'} does not accept vision input. Ask the user for a text description or configure Vision Assist if image details are required.]`,
+      }
+    })
+    return { ...message, content }
+  })
+  return { messages: nextMessages, replacementCount }
 }

@@ -103,7 +103,14 @@ export async function handleKnowledgeGraphRequest(req, res) {
     }
 
     if (req.method === 'GET' && path === '/api/knowledge/graph') {
-      const result = readGraph({ userId })
+      // limit/offset 可选;响应含 totalEntities 与 truncated,供调用方判断是否需要翻页
+      const limitParam = url.searchParams.get('limit')
+      const offsetParam = url.searchParams.get('offset')
+      const result = readGraph({
+        userId,
+        ...(limitParam != null ? { limit: Number(limitParam) } : {}),
+        ...(offsetParam != null ? { offset: Number(offsetParam) } : {}),
+      })
       return sendJson(res, 200, result)
     }
 

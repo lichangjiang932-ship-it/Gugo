@@ -63,3 +63,88 @@ test('subscribeToJobEvents exchanges a one-time ticket and connects with ?ticket
   unsubscribe()
 })
 
+test('subscribeToJobEvents gets a fresh one-time ticket after the stream disconnects', async () => {
+  const tickets = ['st_first', 'st_second']
+  const calls = []
+  const instances = []
+  const timers = []
+  const fetchImpl = async (url) => {
+    calls.push(url)
+    return { ok: true, status: 201, json: async () => ({ ticket: tickets.shift() }) }
+  }
+  class FakeES {
+    constructor(url) {
+      this.url = url
+      this.listeners = new Map()
+      this.closed = false
+      instances.push(this)
+    }
+    addEventListener(type, listener) { this.listeners.set(type, listener) }
+    close() { this.closed = true }
+    emit(type, data = {}) { this.listeners.get(type)?.(data) }
+  }
+
+  const unsubscribe = subscribeToJobEvents(() => {}, {
+    EventSourceImpl: FakeES,
+    fetchImpl,
+    setTimeoutImpl: (callback, delay) => {
+      timers.push({ callback, delay })
+      return timers.length
+    },
+    clearTimeoutImpl: () => {},
+  })
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  instances[0].emit('ready')
+  instances[0].emit('error')
+
+  assert.equal(instances[0].closed, true)
+  assert.equal(timers.length, 1)
+  assert.equal(timers[0].delay, 1_000)
+  timers[0].callback()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+
+  assert.equal(calls.length, 2)
+  assert.equal(instances[1].url, '/api/jobs/stream?ticket=st_second')
+  unsubscribe()
+})
+
+test('subscribeToJobEvents retries ticket exchange failures without opening an unauthenticated stream', async () => {
+  const calls = []
+  const instances = []
+  const timers = []
+  const fetchImpl = async (url) => {
+    calls.push(url)
+    if (calls.length === 1) return { ok: false, status: 503, json: async () => ({}) }
+    return { ok: true, status: 201, json: async () => ({ ticket: 'st_recovered' }) }
+  }
+  class FakeES {
+    constructor(url) {
+      this.url = url
+      instances.push(this)
+    }
+    addEventListener() {}
+    close() {}
+  }
+
+  const unsubscribe = subscribeToJobEvents(() => {}, {
+    EventSourceImpl: FakeES,
+    fetchImpl,
+    setTimeoutImpl: (callback, delay) => {
+      timers.push({ callback, delay })
+      return timers.length
+    },
+    clearTimeoutImpl: () => {},
+  })
+  await new Promise((resolve) => setTimeout(resolve, 0))
+
+  assert.equal(instances.length, 0)
+  assert.equal(timers.length, 1)
+  assert.equal(timers[0].delay, 1_000)
+  timers[0].callback()
+  await new Promise((resolve) => setTimeout(resolve, 0))
+
+  assert.equal(calls.length, 2)
+  assert.equal(instances[0].url, '/api/jobs/stream?ticket=st_recovered')
+  unsubscribe()
+})
+

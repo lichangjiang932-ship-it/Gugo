@@ -10,7 +10,12 @@
 
 import { randomUUID } from 'node:crypto'
 import { getDb } from '../db.js'
-import { callBackgroundModel, callBackgroundModelWithTools } from '../adapters/modelProxy.js'
+import {
+  callBackgroundModel,
+  callBackgroundModelWithTools,
+  getModelContextWindow,
+  isContextLengthError,
+} from '../adapters/modelProxy.js'
 
 import { fetchAndExtract, searchDuckDuckGo } from '../adapters/toolProxy.js'
 import { dispatchFsShellTool } from '../adapters/fsShellTools.js'
@@ -18,13 +23,203 @@ import { CODE_SEARCH_TOOL_SPECS, dispatchCodeSearchTool } from '../utils/codeSea
 import { APPLY_PATCH_TOOL_SPECS, dispatchApplyPatchTool } from '../utils/applyPatch.js'
 import { AGENTIC_TOOL_SPECS, dispatchAgenticTool, isLoopPauseResult } from '../utils/agenticTools.js'
 import { MEMORY_TOOL_SPECS, dispatchMemoryTool } from '../utils/memoryTools.js'
+import { createJobBudget } from '../utils/jobBudget.js'
+import {
+  buildAssistantToolCallsMessage,
+  buildToolResultMessage,
+  createToolLoopGuard,
+  mapWithConcurrency,
+  normalizeToolCalls,
+  validateToolCall,
+} from '../utils/toolCallHarness.js'
 import { formatDeniedToolResult, requestApproval } from './approvalGate.js'
+import { callModelWithContextRecovery } from './contextCompactionRuntime.js'
+import { buildSafetyBlock, ensureSafetySystemMessages } from './promptCompiler.js'
+import { getBuiltinSpec } from './toolRegistry.js'
 
-const MAX_CONCURRENT_PER_USER = 3
-const activeByUser = new Map()
+/** 读一个正整数 env,不合法就用默认值。 */
+function envInt(name, fallback) {
+  const raw = Number(process.env[name])
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback
+}
+
+const MAX_CONCURRENT_PER_USER = envInt('SUBAGENT_MAX_CONCURRENT', 8)
+// ★ 2 → 3。深度 2 意味着「主任务 → 子代理 → 孙代理」就到顶了,
+// 复杂任务里子代理想再拆一层就被拒。3 层仍然远离失控。
+const MAX_SUBAGENT_DEPTH = envInt('SUBAGENT_MAX_DEPTH', 3)
+// ★ 3 → 8。一次只能并行 3 个子任务,对「同时看 6 个模块」这类
+// 请求会被硬拆成两批,慢一倍。
+const MAX_SUBAGENTS_PER_BATCH = envInt('SUBAGENT_MAX_PER_BATCH', 8)
+const MAX_TRANSCRIPT_EVENT_CHARS = 12_000
+
+/**
+ * 独立跑的子代理默认预算。
+ * ★ 120 次 / 10 分钟 → 1000 次 / 2 小时,和 job 侧的放宽保持同一口径。
+ * 墙钟同样不含模型延迟(见 jobBudget.trackModelMs)。
+ */
+const SUBAGENT_BUDGET = Object.freeze({
+  maxTotalCalls: envInt('SUBAGENT_MAX_TOOL_CALLS', 1000),
+  maxWallMs: envInt('SUBAGENT_MAX_WALL_MS', 2 * 60 * 60 * 1000),
+})
+
+const concurrencyByUser = new Map()
 
 // 同 jobTools:死循环护栏而非工作预算,收敛靠 jobBudget。
-const SUBAGENT_MAX_ITERS = 150
+// ★ 150 → 1000 并可配。子代理常被派去「把整个模块读一遍」,
+// 150 轮在中型项目上不够用,碰到就只能交半份答案回去。
+const SUBAGENT_MAX_ITERS = (() => {
+  const raw = Number(process.env.SUBAGENT_MAX_ITERS)
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 1000
+})()
+const SUBAGENT_READ_CONCURRENCY = 4
+const PARALLEL_SAFE_SUBAGENT_TOOLS = new Set([
+  'web_search',
+  'fetch_url',
+  'list_directory',
+  'read_file',
+  'grep_code',
+  'find_symbol',
+  'list_imports',
+])
+
+function abortError() {
+  const error = new Error('subagent run aborted while waiting for a concurrency slot')
+  error.name = 'AbortError'
+  return error
+}
+
+function limiterState(userId) {
+  let state = concurrencyByUser.get(userId)
+  if (!state) {
+    state = { active: 0, queue: [] }
+    concurrencyByUser.set(userId, state)
+  }
+  return state
+}
+
+function cleanupLimiter(userId, state) {
+  if (state.active === 0 && state.queue.length === 0) concurrencyByUser.delete(userId)
+}
+
+function drainLimiter(userId, state) {
+  while (state.active < MAX_CONCURRENT_PER_USER && state.queue.length) {
+    const waiter = state.queue.shift()
+    if (waiter.signal) waiter.signal.removeEventListener('abort', waiter.onAbort)
+    if (waiter.signal?.aborted) {
+      waiter.reject(abortError())
+      continue
+    }
+    state.active += 1
+    waiter.resolve(() => releaseUserSlot(userId, state))
+  }
+  cleanupLimiter(userId, state)
+}
+
+function releaseUserSlot(userId, expectedState) {
+  const state = concurrencyByUser.get(userId)
+  if (!state || state !== expectedState) return
+  state.active = Math.max(0, state.active - 1)
+  drainLimiter(userId, state)
+}
+
+function acquireUserSlot(userId, signal = null) {
+  if (signal?.aborted) return Promise.reject(abortError())
+  const state = limiterState(userId)
+  if (state.active < MAX_CONCURRENT_PER_USER) {
+    state.active += 1
+    return Promise.resolve(() => releaseUserSlot(userId, state))
+  }
+  return new Promise((resolve, reject) => {
+    const waiter = { resolve, reject, signal, onAbort: null }
+    waiter.onAbort = () => {
+      const index = state.queue.indexOf(waiter)
+      if (index >= 0) state.queue.splice(index, 1)
+      if (signal) signal.removeEventListener('abort', waiter.onAbort)
+      cleanupLimiter(userId, state)
+      reject(abortError())
+    }
+    state.queue.push(waiter)
+    if (signal) signal.addEventListener('abort', waiter.onAbort, { once: true })
+  })
+}
+
+function createSlotLease(userId) {
+  let releaseCurrent = null
+  return {
+    get held() {
+      return typeof releaseCurrent === 'function'
+    },
+    async acquire(signal = null) {
+      if (releaseCurrent) return
+      releaseCurrent = await acquireUserSlot(userId, signal)
+    },
+    release() {
+      if (!releaseCurrent) return
+      const release = releaseCurrent
+      releaseCurrent = null
+      release()
+    },
+  }
+}
+
+async function withYieldedSlot(slotLease, signal, callback) {
+  if (!slotLease?.held) return callback()
+  slotLease.release()
+  try {
+    return await callback()
+  } finally {
+    await slotLease.acquire(signal)
+  }
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`
+  }
+  const encoded = JSON.stringify(value)
+  return encoded === undefined ? String(value) : encoded
+}
+
+function boundedTranscriptValue(value, maxChars = MAX_TRANSCRIPT_EVENT_CHARS) {
+  const text = typeof value === 'string' ? value : JSON.stringify(value ?? null)
+  return text.length <= maxChars ? text : `${text.slice(0, maxChars)}\n[transcript event truncated]`
+}
+
+export function createSubagentApprovalContext() {
+  return { approved: new Map(), pending: new Map() }
+}
+
+function approvalCacheKey(toolName, args) {
+  return `${String(toolName)}\n${canonicalJson(args || {})}`
+}
+
+export function rememberApprovedSubagentCall(context, toolName, args, gate) {
+  if (!context?.approved || !gate?.proceed || !gate.approvalId || gate.edited) return false
+  context.approved.set(approvalCacheKey(toolName, args), {
+    proceed: true,
+    args: gate.args ?? args,
+    approvalId: gate.approvalId,
+  })
+  return true
+}
+
+async function requestTreeApproval({ context, approveTool = requestApproval, ...request }) {
+  if (!context?.approved || !context?.pending) return approveTool(request)
+  const key = approvalCacheKey(request.toolName, request.args)
+  const approved = context.approved.get(key)
+  if (approved) return { ...approved, reused: true }
+  const existing = context.pending.get(key)
+  if (existing) return existing
+  const pending = Promise.resolve(approveTool(request))
+    .then((gate) => {
+      rememberApprovedSubagentCall(context, request.toolName, request.args, gate)
+      return gate
+    })
+    .finally(() => context.pending.delete(key))
+  context.pending.set(key, pending)
+  return pending
+}
 
 /* ─── 子代理工具定义 ─── */
 
@@ -136,6 +331,7 @@ const FULL_TOOL_SPECS = [
   },
   // ★ M2: Codex 风格多文件原子 patch
   ...APPLY_PATCH_TOOL_SPECS,
+  getBuiltinSpec('Agent'),
 ]
 
 /* ─── 子代理类型 ─── */
@@ -143,12 +339,12 @@ const FULL_TOOL_SPECS = [
 export const SUBAGENT_TYPES = {
   explore: {
     label: 'Explore',
-    system: 'You are an isolated explore sub-agent. Read the task, investigate carefully, and return concise findings with concrete file paths, commands, risks, and next actions. Do not claim to edit files.',
+    system: 'You are an isolated explore sub-agent. Read the task, investigate carefully, and return concise findings with concrete file paths, commands, risks, and next actions. Do not claim to edit files. Issue independent read/search tool calls together in one response so they can run in parallel.',
     tools: READONLY_TOOL_SPECS,
   },
   plan: {
     label: 'Plan',
-    system: 'You are an isolated planning sub-agent. Produce a practical implementation plan with acceptance checks. Stay read-only and avoid write instructions unless asked by the parent.',
+    system: 'You are an isolated planning sub-agent. Produce a practical implementation plan with acceptance checks. Stay read-only and avoid write instructions unless asked by the parent. Issue independent read/search tool calls together in one response so they can run in parallel.',
     tools: READONLY_TOOL_SPECS,
   },
   general: {
@@ -164,7 +360,17 @@ export const SUBAGENT_TYPES = {
  * 在子代理沙箱中执行一个工具调用。
  * 结果只返回给子代理自己的上下文，不会写入父 session 或 DB。
  */
-async function executeSubagentTool(toolName, args, { userId = null } = {}) {
+async function executeSubagentTool(toolName, args, {
+  userId = null,
+  depth = 0,
+  parentRunId = null,
+  parentSessionId = null,
+  signal = null,
+  budget = null,
+  approvalContext = null,
+  slotLease = null,
+  approveTool = requestApproval,
+} = {}) {
   switch (toolName) {
     case 'web_search':
       return searchDuckDuckGo({ query: args.query, maxResults: args.maxResults })
@@ -180,12 +386,26 @@ async function executeSubagentTool(toolName, args, { userId = null } = {}) {
     case 'list_imports':
       return dispatchCodeSearchTool(toolName, args, { userId })
     case 'apply_patch':
-      return dispatchApplyPatchTool(toolName, args)
+      return dispatchApplyPatchTool(toolName, args, { userId })
     case 'remember':
       return dispatchMemoryTool(toolName, args, { userId })
     case 'reflect':
     case 'request_clarification':
+    case 'request_directory':
+    case 'sleep_until':
       return dispatchAgenticTool(toolName, args)
+    case 'Agent':
+      return withYieldedSlot(slotLease, signal, () => runSubagentBatch({
+          userId,
+          request: args,
+          depth,
+          parentSessionId: parentSessionId || (parentRunId ? `subagent:${parentRunId}` : null),
+          parentMessageId: parentRunId,
+          signal,
+          budget,
+          approvalContext,
+          approveTool,
+        }))
     default:
       return { ok: false, error: `unknown subagent tool: ${toolName}` }
   }
@@ -204,8 +424,62 @@ async function executeSubagentTool(toolName, args, { userId = null } = {}) {
  * @param {number} [options.maxIters=SUBAGENT_MAX_ITERS]
  * @returns {Promise<string>} 最终文本回答
  */
-async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS, userId = null, callModel = callBackgroundModelWithTools }) {
-  let currentMessages = [...messages]
+async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS, userId = null, sessionId = null, runId = null, depth = 0, callModel = callBackgroundModelWithTools, executeTool = executeSubagentTool, budget = null, approvalContext = null, slotLease = null, approveTool = requestApproval, onTranscriptEvent = null }) {
+  let currentMessages = ensureSafetySystemMessages([...messages])
+  const loopGuard = createToolLoopGuard()
+  // 子代理以前只有迭代次数上限,单轮却可发多个调用,并没有真正消费 jobBudget。
+  // 给每次独立运行一个硬预算,防止批量 tool_calls 绕过 maxIters。
+  const effectiveBudget = budget || createJobBudget({ ...SUBAGENT_BUDGET })
+  const effectiveApprovalContext = approvalContext || createSubagentApprovalContext()
+  const contextWindow = getModelContextWindow({ userId })
+  const emitTranscript = (event) => {
+    if (typeof onTranscriptEvent !== 'function') return
+    onTranscriptEvent({ ...event, at: now() })
+  }
+
+  const requestModel = async ({ messages: nextMessages = currentMessages, tools: nextTools = tools, ...options } = {}) => {
+    emitTranscript({ type: 'model_request', messageCount: nextMessages.length, toolCount: nextTools?.length || 0 })
+    const request = await callModelWithContextRecovery({
+      ...options,
+      messages: nextMessages,
+      tools: nextTools,
+      callModel,
+      isContextLengthError,
+      contextWindow,
+      signal,
+      userId,
+      sessionId,
+      consumeBudget: (cost) => effectiveBudget.consume(cost),
+    })
+    if (nextMessages === currentMessages) currentMessages = request.messages
+    emitTranscript({
+      type: 'model_response',
+      content: boundedTranscriptValue(request.response?.content || ''),
+      toolCalls: (request.response?.toolCalls || []).map((call) => ({
+        id: call?.id || null,
+        name: call?.function?.name || call?.name || null,
+      })),
+    })
+    return request.response
+  }
+
+  const finalizePartial = async (reason) => {
+    currentMessages.push({
+      role: 'system',
+      content: `${reason}。请基于已有信息给出最终回答,不要进一步调用工具。`,
+    })
+    try {
+      const finalResponse = await requestModel({
+        messages: currentMessages,
+        tools,
+        toolChoice: 'none',
+      })
+      return finalResponse?.content || `(${reason})`
+    } catch (err) {
+      if (err?.name === 'AbortError') throw err
+      return `(${reason},且收尾总结失败:${err?.message || String(err)})`
+    }
+  }
 
   for (let iter = 0; iter < maxIters; iter++) {
     // ★ 上游调用失败(限流后重试仍失败、400、网络断)以前会直接冒到 runSubagent
@@ -213,11 +487,9 @@ async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_
     // 可留的,但第二轮之后已经有工具结果了 —— 降级成部分结论比整个失败有用得多。
     let response
     try {
-      response = await callModel({
+      response = await requestModel({
         messages: currentMessages,
         tools,
-        signal,
-        userId,
       })
     } catch (err) {
       if (err?.name === 'AbortError' || iter === 0) throw err
@@ -235,64 +507,112 @@ async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_
     // 没有工具调用 → 这就是最终答案
     if (!rawToolCalls.length) return text
 
-    // ★ 归一化 wire 形状。callBackgroundModelWithTools 原样返回上游的
-    // { id, type, function: { name, arguments: "<json 字符串>" } },
-    // 而这里以前直接读 tc.name / tc.arguments —— 两个都是 undefined,
-    // 于是每一次工具调用都以 undefined 派发,全部落到 default 分支返回
-    // 「unknown subagent tool: undefined」。回填给上游的 assistant 消息
-    // 也因此变成 function:{},下一轮直接被上游 400,整个子代理 run 失败。
-    // jobTools.runToolsLoop 一直是对的,只有这条路径漏了归一化。
-    const toolCalls = rawToolCalls.map((tc) => {
-      const rawArgs = tc.function?.arguments ?? tc.arguments
-      let args = {}
-      if (typeof rawArgs === 'string') {
-        try { args = rawArgs ? JSON.parse(rawArgs) : {} } catch { args = {} }
-      } else if (rawArgs && typeof rawArgs === 'object') {
-        args = rawArgs
-      }
-      return {
-        id: tc.id || `call-${randomUUID()}`,
-        name: tc.function?.name || tc.name || '',
-        args,
-      }
-    })
-
-    currentMessages.push({
-      role: 'assistant',
-      content: text || null,
-      tool_calls: toolCalls.map((call) => ({
-        id: call.id,
-        type: 'function',
-        function: { name: call.name, arguments: JSON.stringify(call.args) },
-      })),
-    })
+    const toolCalls = normalizeToolCalls(rawToolCalls)
+    currentMessages.push(buildAssistantToolCallsMessage(toolCalls, text))
 
     let pausedClarif = null
-    for (const call of toolCalls) {
+    let stopReason = null
+    const executeOne = async (call) => {
+      emitTranscript({ type: 'tool_start', toolCallId: call.id, name: call.name, args: boundedTranscriptValue(call.args) })
       let result
-      try {
-        // ★ 审批门控:子代理同样是无人值守路径,必须过门。
-        const gate = await requestApproval({
-          userId,
-          origin: 'subagent',
-          toolName: call.name,
-          args: call.args,
-          signal,
-        })
-        if (!gate.proceed) {
-          result = formatDeniedToolResult(gate)
-        } else {
-          result = await executeSubagentTool(call.name, gate.args ?? call.args, { userId })
-          if (isLoopPauseResult(result)) pausedClarif = result.clarification
+      let outcomeStopReason = null
+      let clarification = null
+      const guardDecision = loopGuard.before(call)
+      if (!guardDecision.ok) {
+        result = guardDecision.result
+        outcomeStopReason = guardDecision.reason
+      } else {
+        const isFree = ['reflect', 'request_clarification', 'request_directory', 'sleep_until'].includes(call.name)
+        if (!isFree) {
+          const consumed = effectiveBudget.consume(1)
+          if (!consumed.ok) {
+            result = { ok: false, code: 'tool_budget_exceeded', error: consumed.reason, retryable: false }
+            outcomeStopReason = consumed.reason
+          }
         }
-      } catch (err) {
-        result = { ok: false, error: err?.message || String(err) }
+
+        if (!result) {
+          const validationError = validateToolCall(call, tools)
+          if (validationError) result = validationError
+        }
+
+        if (!result) {
+          try {
+            // ★ 审批门控:子代理同样是无人值守路径,必须过门。
+            const gate = await requestTreeApproval({
+              context: effectiveApprovalContext,
+              approveTool,
+              userId,
+              origin: 'subagent',
+              toolName: call.name,
+              args: call.args,
+              signal,
+            })
+            if (!gate.proceed) {
+              result = formatDeniedToolResult(gate)
+            } else {
+              result = await executeTool(call.name, gate.args ?? call.args, {
+                userId,
+                depth,
+                parentRunId: runId,
+                parentSessionId: sessionId,
+                signal,
+                budget: effectiveBudget,
+                approvalContext: effectiveApprovalContext,
+                slotLease,
+                approveTool,
+              })
+              if (isLoopPauseResult(result)) clarification = result.clarification
+            }
+          } catch (err) {
+            result = { ok: false, error: err?.message || String(err) }
+          }
+        }
       }
-      currentMessages.push({
-        role: 'tool',
-        tool_call_id: call.id,
-        content: JSON.stringify(result),
+      emitTranscript({
+        type: 'tool_result',
+        toolCallId: call.id,
+        name: call.name,
+        ok: result?.ok !== false,
+        result: boundedTranscriptValue(result),
       })
+      return { call, result, stopReason: outcomeStopReason, clarification }
+    }
+
+    const canRunInParallel = toolCalls.length > 1
+      && toolCalls.every((call) => PARALLEL_SAFE_SUBAGENT_TOOLS.has(call.name))
+
+    if (canRunInParallel) {
+      // 仅整批纯只读时并发；结果由 mapWithConcurrency 按原调用顺序返回，
+      // 因此回填给模型的 tool messages 仍与 assistant.tool_calls 一一对应。
+      const outcomes = await mapWithConcurrency(toolCalls, executeOne, {
+        concurrency: SUBAGENT_READ_CONCURRENCY,
+      })
+      for (const outcome of outcomes) {
+        currentMessages.push(buildToolResultMessage(outcome.call, outcome.result))
+        const progress = loopGuard.after(outcome.result)
+        if (!stopReason) stopReason = outcome.stopReason || (!progress.ok ? progress.reason : null)
+      }
+    } else {
+      for (let callIndex = 0; callIndex < toolCalls.length; callIndex += 1) {
+        const outcome = await executeOne(toolCalls[callIndex])
+        currentMessages.push(buildToolResultMessage(outcome.call, outcome.result))
+        const progress = loopGuard.after(outcome.result)
+        if (!stopReason) stopReason = outcome.stopReason || (!progress.ok ? progress.reason : null)
+        if (!pausedClarif && outcome.clarification) pausedClarif = outcome.clarification
+
+        if (stopReason || pausedClarif) {
+          for (const skipped of toolCalls.slice(callIndex + 1)) {
+            currentMessages.push(buildToolResultMessage(skipped, {
+              ok: false,
+              code: 'tool_execution_skipped',
+              error: stopReason || '当前轮已暂停',
+              retryable: false,
+            }))
+          }
+          break
+        }
+      }
     }
     if (pausedClarif) {
       // ★ M3:子代理调 request_clarification → 中断并把问题当作最终输出返回
@@ -300,28 +620,10 @@ async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_
         (pausedClarif.options ? `\n选项:${pausedClarif.options.join(' / ')}` : '') +
         (pausedClarif.why ? `\n原因:${pausedClarif.why}` : '')
     }
+    if (stopReason) return finalizePartial(`工具循环因无进展或预算限制停止:${stopReason}`)
   }
 
-  // 达到最大迭代次数后，让模型做一次总结
-  currentMessages.push({
-    role: 'system',
-    content: `你已经达到工具调用上限（${maxIters} 次）。请基于已有信息给出最终回答。不要进一步调工具。`,
-  })
-  // ★ 收尾调用失败不该让整个 run 变成 failed —— 前面辛苦查到的东西全白费。
-  // 降级成一句说明,让父代理至少知道发生了什么。
-  try {
-    const finalResponse = await callModel({
-      messages: currentMessages,
-      tools, // 仍然传入 tools 但不期望模型再调
-      signal,
-      userId,
-      toolChoice: 'none', // 强制不调工具
-    })
-    return finalResponse?.content || '(工具循环已达上限)'
-  } catch (err) {
-    if (err?.name === 'AbortError') throw err
-    return `(已达工具调用上限,且收尾总结失败:${err?.message || String(err)})`
-  }
+  return finalizePartial(`你已经达到工具调用上限(${maxIters} 次)`)
 }
 
 /* ─── DB CRUD ─── */
@@ -336,6 +638,7 @@ export function newSubagentRunId() {
 
 function toRun(row) {
   if (!row) return null
+  const trace = row.trace_json ? JSON.parse(row.trace_json) : []
   return {
     id: row.id,
     userId: row.user_id,
@@ -345,7 +648,9 @@ function toRun(row) {
     prompt: row.prompt,
     status: row.status,
     resultText: row.result_text || '',
-    trace: row.trace_json ? JSON.parse(row.trace_json) : [],
+    trace,
+    team: trace.find((event) => event?.type === 'team')?.team || null,
+    transcript: trace.filter((event) => event?.type === 'transcript'),
     tokensIn: row.tokens_in,
     tokensOut: row.tokens_out,
     credits: row.credits,
@@ -379,6 +684,105 @@ export function listSubagentTypes() {
   return Object.entries(SUBAGENT_TYPES).map(([id, info]) => ({ id, label: info.label }))
 }
 
+function normalizeSubagentTasks(request = {}) {
+  const rawTasks = Array.isArray(request?.tasks) && request.tasks.length
+    ? request.tasks
+    : [request]
+  if (rawTasks.length > MAX_SUBAGENTS_PER_BATCH) {
+    throw new Error(`a subagent batch may contain at most ${MAX_SUBAGENTS_PER_BATCH} tasks`)
+  }
+  return rawTasks.map((task, index) => {
+    const type = String(task?.subagent_type || task?.type || 'general').trim()
+    const prompt = String(task?.prompt || '').trim()
+    const description = String(task?.description || `subtask ${index + 1}`).trim().slice(0, 120)
+    if (!SUBAGENT_TYPES[type]) throw new Error(`unknown subagent type: ${type}`)
+    if (!prompt) throw new Error(`subagent task ${index + 1} requires prompt`)
+    if (prompt.length > 20_000) throw new Error(`subagent task ${index + 1} prompt exceeds 20000 characters`)
+    const role = String(task?.role || description).trim().slice(0, 120)
+    return { type, prompt, description, role }
+  })
+}
+
+export async function runSubagentBatch({
+  userId,
+  request,
+  depth = 0,
+  parentSessionId = null,
+  parentMessageId = null,
+  signal,
+  budget = null,
+  approvalContext = null,
+  approveTool = requestApproval,
+  callModel = undefined,
+  executeTool = undefined,
+} = {}) {
+  if (!userId) throw new Error('userId is required')
+  if (depth >= MAX_SUBAGENT_DEPTH) {
+    return {
+      ok: false,
+      code: 'subagent_depth_exceeded',
+      error: `general subagents may nest at most ${MAX_SUBAGENT_DEPTH} levels`,
+      retryable: false,
+    }
+  }
+  const tasks = normalizeSubagentTasks(request)
+  const team = {
+    id: String(request?.team_id || `team-${randomUUID()}`),
+    name: String(request?.team_name || (tasks.length > 1 ? 'Subagent swarm' : 'Subagent run')).slice(0, 120),
+    mode: tasks.length > 1 ? 'swarm' : 'solo',
+    size: tasks.length,
+  }
+  const effectiveBudget = budget || createJobBudget({ ...SUBAGENT_BUDGET })
+  const effectiveApprovalContext = approvalContext || createSubagentApprovalContext()
+  const settled = await Promise.allSettled(tasks.map((task) => runSubagent({
+    userId,
+    type: task.type,
+    prompt: task.prompt,
+    description: task.description,
+    team: { ...team, role: task.role, memberIndex: tasks.indexOf(task) },
+    parentSessionId,
+    parentMessageId,
+    depth: depth + 1,
+    signal,
+    budget: effectiveBudget,
+    approvalContext: effectiveApprovalContext,
+    approveTool,
+    callModel,
+    executeTool,
+  })))
+  const runs = settled.map((result, index) => result.status === 'fulfilled'
+    ? {
+        ok: true,
+        id: result.value.id,
+        type: tasks[index].type,
+        description: tasks[index].description,
+        status: result.value.status,
+        result: result.value.resultText,
+      }
+    : {
+        ok: false,
+        type: tasks[index].type,
+        description: tasks[index].description,
+        status: 'failed',
+        error: result.reason?.message || String(result.reason),
+      })
+  return {
+    ok: runs.some((run) => run.ok),
+    parallel: tasks.length > 1,
+    team: {
+      ...team,
+      members: runs.map((run, index) => ({
+        runId: run.id || null,
+        role: tasks[index].role,
+        type: tasks[index].type,
+        status: run.status,
+        transcriptRef: run.id ? `subagent:${run.id}` : null,
+      })),
+    },
+    runs,
+  }
+}
+
 /* ─── 主入口 ─── */
 
 /**
@@ -395,36 +799,75 @@ export async function runSubagent({
   type = 'general',
   prompt,
   description = '',
+  team = null,
   parentSessionId = null,
   parentMessageId = null,
   modelName,
   signal,
+  depth = 0,
+  budget = null,
+  approvalContext = null,
+  callModel = callBackgroundModelWithTools,
+  executeTool = executeSubagentTool,
+  approveTool = requestApproval,
 } = {}) {
   if (!userId) throw new Error('userId is required')
   if (!prompt || !String(prompt).trim()) throw new Error('prompt is required')
   if (!SUBAGENT_TYPES[type]) throw new Error(`unknown subagent type: ${type}`)
-
-  const active = activeByUser.get(userId) || 0
-  if (active >= MAX_CONCURRENT_PER_USER) {
-    const err = new Error('too many concurrent subagents')
-    err.statusCode = 429
-    throw err
+  if (!Number.isInteger(depth) || depth < 0 || depth > MAX_SUBAGENT_DEPTH) {
+    throw new Error(`subagent depth must be between 0 and ${MAX_SUBAGENT_DEPTH}`)
   }
-  activeByUser.set(userId, active + 1)
 
-  const trace = [{ type: 'start', description, at: now() }]
-  insertRun({ id, userId, type, prompt, parentSessionId, parentMessageId, trace })
+  const slotLease = createSlotLease(userId)
+  await slotLease.acquire(signal)
+  const effectiveBudget = budget || createJobBudget({ ...SUBAGENT_BUDGET })
+  const effectiveApprovalContext = approvalContext || createSubagentApprovalContext()
+
+  const trace = [
+    { type: 'start', description, at: now() },
+    ...(team ? [{ type: 'team', team, at: now() }] : []),
+  ]
+  const onTranscriptEvent = (event) => trace.push({ ...event, type: 'transcript', eventType: event.type })
 
   try {
+    insertRun({ id, userId, type, prompt, parentSessionId, parentMessageId, trace })
     const { system, tools } = SUBAGENT_TYPES[type]
     const messages = [
-      { role: 'system', content: system },
+      { role: 'system', content: buildSafetyBlock().text },
+      {
+        role: 'system',
+        content: type === 'general'
+          ? `${system}\nYou may call Agent with up to ${MAX_SUBAGENTS_PER_BATCH} independent tasks to run them in parallel. Nested delegation is bounded to ${MAX_SUBAGENT_DEPTH} levels.`
+          : system,
+      },
+      ...(team ? [{
+        role: 'system',
+        content: `# Team Context\nTeam: ${team.name} (${team.id})\nMode: ${team.mode}\nYour role: ${team.role || description || type}\nWork only on your assigned scope. Your transcript is isolated from other members; return a concise result for the leader to merge.`,
+      }] : []),
       { role: 'user', content: String(prompt).trim() },
     ]
 
     const resultText = tools?.length
-      ? await subagentToolsLoop({ messages, tools, signal, userId })
-      : await callBackgroundModel({ modelName, signal, messages, userId })
+      ? await subagentToolsLoop({
+          messages,
+          tools,
+          signal,
+          userId,
+          sessionId: `subagent:${id}`,
+          runId: id,
+          depth,
+          budget: effectiveBudget,
+          approvalContext: effectiveApprovalContext,
+          slotLease,
+          callModel,
+          executeTool,
+          approveTool,
+          onTranscriptEvent,
+        })
+      : await callBackgroundModel({ modelName, signal, messages, userId }).then((result) => {
+          onTranscriptEvent({ type: 'model_response', content: boundedTranscriptValue(result), at: now() })
+          return result
+        })
 
     trace.push({ type: 'done', at: now() })
     return updateRun({ id, userId, status: 'completed', resultText, trace })
@@ -433,12 +876,25 @@ export async function runSubagent({
     const run = updateRun({ id, userId, status: 'failed', resultText: err?.message || String(err), trace })
     throw Object.assign(err, { run })
   } finally {
-    const next = Math.max(0, (activeByUser.get(userId) || 1) - 1)
-    if (next) activeByUser.set(userId, next)
-    else activeByUser.delete(userId)
+    slotLease.release()
   }
 }
 
 // 测试入口:注入假的上游模型,验证 wire 形状归一化与工具派发。
 // 生产代码不用它,但 runSubagent 走的是同一个 subagentToolsLoop。
-export const _testing = { subagentToolsLoop, executeSubagentTool }
+export const _testing = {
+  subagentToolsLoop,
+  executeSubagentTool,
+  normalizeSubagentTasks,
+  MAX_SUBAGENT_DEPTH,
+  MAX_SUBAGENTS_PER_BATCH,
+  MAX_CONCURRENT_PER_USER,
+  createSlotLease,
+  withYieldedSlot,
+  requestTreeApproval,
+  approvalCacheKey,
+  getLimiterSnapshot(userId) {
+    const state = concurrencyByUser.get(userId)
+    return { active: state?.active || 0, queued: state?.queue.length || 0 }
+  },
+}

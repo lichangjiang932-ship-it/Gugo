@@ -114,12 +114,12 @@ const BUILTIN_SPECS = {
     type: 'function',
     function: {
       name: 'bash_exec',
-      description: 'Run a shell command inside the configured workspace.',
+      description: 'Run a shell command inside the configured workspace or a user-authorized local directory.',
       parameters: {
         type: 'object',
         properties: {
           command: { type: 'string' },
-          cwd: { type: 'string' },
+          cwd: { type: 'string', description: 'Optional workspace-relative or authorized absolute working directory.' },
           timeout_ms: { type: 'integer' },
         },
         required: ['command'],
@@ -130,18 +130,24 @@ const BUILTIN_SPECS = {
     type: 'function',
     function: {
       name: 'git_status',
-      description: 'Read git branch and changed files for the workspace.',
-      parameters: { type: 'object', properties: {} },
+      description: 'Read git branch and changed files for the workspace or a user-authorized repository.',
+      parameters: {
+        type: 'object',
+        properties: { cwd: { type: 'string', description: 'Optional workspace-relative or authorized absolute repository path.' } },
+      },
     },
   },
   git_diff: {
     type: 'function',
     function: {
       name: 'git_diff',
-      description: 'Read unified git diff for the workspace or a single file.',
+      description: 'Read unified git diff for the workspace or a user-authorized repository.',
       parameters: {
         type: 'object',
-        properties: { path: { type: 'string' } },
+        properties: {
+          path: { type: 'string' },
+          cwd: { type: 'string', description: 'Optional workspace-relative or authorized absolute repository path.' },
+        },
       },
     },
   },
@@ -152,7 +158,10 @@ const BUILTIN_SPECS = {
       description: 'Run exactly one allowed project check: lint, test, or build.',
       parameters: {
         type: 'object',
-        properties: { check: { type: 'string', enum: ['lint', 'test', 'build'] } },
+        properties: {
+          check: { type: 'string', enum: ['lint', 'test', 'build'] },
+          cwd: { type: 'string', description: 'Optional workspace-relative or authorized absolute repository path.' },
+        },
         required: ['check'],
       },
     },
@@ -275,15 +284,32 @@ const BUILTIN_SPECS = {
     type: 'function',
     function: {
       name: 'Agent',
-      description: 'Delegate a focused sub-task to an isolated sub-agent. Returns a final summary only.',
+      description: 'Delegate focused work to isolated sub-agents. Pass one task, or up to 3 independent tasks to run them in parallel. Returns final summaries only.',
       parameters: {
         type: 'object',
         properties: {
           subagent_type: { type: 'string', enum: ['explore', 'plan', 'general'] },
           prompt: { type: 'string' },
           description: { type: 'string' },
+          tasks: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 3,
+            items: {
+              type: 'object',
+              properties: {
+                subagent_type: { type: 'string', enum: ['explore', 'plan', 'general'] },
+                prompt: { type: 'string' },
+                description: { type: 'string' },
+              },
+              required: ['subagent_type', 'prompt', 'description'],
+            },
+          },
         },
-        required: ['subagent_type', 'prompt', 'description'],
+        anyOf: [
+          { required: ['subagent_type', 'prompt', 'description'] },
+          { required: ['tasks'] },
+        ],
       },
     },
   },

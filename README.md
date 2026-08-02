@@ -169,7 +169,9 @@ docker compose up -d
 
 Browser 工具需要 Node.js 22+ 和已安装的 Edge/Chrome。默认自动探测浏览器，也可在 `.env` 设置 `BROWSER_EXECUTABLE_PATH`；仅受限 CI/沙箱环境才使用 `BROWSER_NO_SANDBOX=1`。
 
-登录后从左侧「连接」进入 Access 中心（Hash 路由为 `/#/access`）：Browser 默认启用，可随时关闭；Notion 使用 Integration Token，并需把目标页面共享给该 Integration；GitHub 建议使用仅授权所需仓库的 Fine-grained PAT；飞书使用企业自建应用的 App ID / App Secret；个人微信使用二维码扫码。凭据只保存在服务端，返回前端时会脱敏。连接成功后，Notion、GitHub 与 Browser 工具会同时出现在站内聊天工具和对外 MCP 的工具列表中。
+登录后从左侧「连接」进入 Access 中心（Hash 路由为 `/#/access`）：32 个 Browser 应用负责广覆盖；Notion、GitHub、Slack 与 Google Drive 提供可被 agent 结构化调用的原生连接，并支持 OAuth 一键授权（配置 `APP_PUBLIC_URL` 与对应 OAuth Client 环境变量），未配置时仍可手工填 token；飞书使用企业自建应用的 App ID / App Secret；个人微信使用二维码扫码。OAuth 握手使用一次性 state、PKCE（GitHub/Google Drive）与 10 分钟持久会话，凭据探测成功后才启用；GitHub 默认仅请求 `read:user`，Slack 默认仅请求公开频道读取范围，Google Drive 默认仅请求 `drive.readonly`，额外 scope 必须通过对应 `*_OAUTH_SCOPES` 显式开启。Google Drive access token 到期后会使用服务端保存的 refresh token 自动续期。凭据只保存在服务端，返回前端时会脱敏。连接成功后，Notion、GitHub、Slack、Google Drive 与 Browser 工具会同时出现在站内聊天工具和对外 MCP 的工具列表中。
+
+连接器 token、模型 API key 与自定义模型请求头使用 AES-256-GCM 加密后再写入数据库。默认会在数据库旁原子生成权限受限的 `.credentials.key`；生产环境可用 `CREDENTIAL_ENCRYPTION_KEY` 注入 32 字节主密钥，或用 `CREDENTIAL_KEY_PATH` 指定密钥文件。请把数据库和密钥分开备份；密钥丢失后密文无法恢复。旧版本的 JSON/base64 凭据会在首次读取时自动迁移为密文。
 
 对外 MCP Server 位于 `http://<服务器地址>:5175/mcp`。先在「手机入口 / LAN Access Keys」创建 `ymak_...` 密钥，再作为 `Authorization: Bearer <key>` 使用。Claude Desktop、Cursor 和兼容 JSON 导入的客户端可配置：
 

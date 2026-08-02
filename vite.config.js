@@ -10,6 +10,11 @@ import { handleArtifactDownload } from './server/services/artifactGen.js'
 import { getJobRuntime } from './server/services/jobRuntime.js'
 import { handleFsShellRequest } from './server/adapters/fsShellTools.js'
 import { handleGitWorkbenchRequest } from './server/adapters/gitWorkbench.js'
+import { handleCodeSearchRequest } from './server/utils/codeSearchRoutes.js'
+import { handleAgenticToolRequest } from './server/utils/agenticToolsRoutes.js'
+import { handleApprovalRequest } from './server/routes/approvalRoutes.js'
+import { handleDeskRequest } from './server/routes/deskRoutes.js'
+import { handleToolPermissionsRequest } from './server/routes/toolPermissionRoutes.js'
 import { handleToolSpecsRequest } from './server/services/toolRegistry.js'
 import { handleMemoryRequest } from './server/routes/memoryRoutes.js'
 import { handleHooksRequest } from './server/routes/hooksRoutes.js'
@@ -175,6 +180,40 @@ function fallbackApiPlugin() {
           handleSessionRequest(req, res)
           return
         }
+        // ★ 代码搜索 + 补丁 (grep_code / find_symbol / list_imports / apply_patch)
+        //
+        // 这条**曾经漏掉过**,后果极其隐蔽:dev 模式下模型每次调 grep_code
+        // 都拿到 HTTP 404,既搜不到代码也改不了文件,只能退而求其次去
+        // 生成 PPT/文档来"交差" —— 用户看到的是「工具执行 33 步 1 步失败,
+        // 然后产出了一个莫名其妙的 PPT」,根本看不出根因在构建配置里。
+        //
+        // 任何加进 appServer.js 的 /api 前缀都必须同步加到这里,
+        // 否则 dev 和 prod 行为不一致。tests/devServerRoutes.test.js 会守住。
+        if (req.url?.startsWith('/api/tools/code/')) {
+          handleCodeSearchRequest(req, res)
+          return
+        }
+        // ★ 思维型工具 (reflect / request_clarification)
+        if (req.url?.startsWith('/api/tools/agent/')) {
+          handleAgenticToolRequest(req, res)
+          return
+        }
+        // ★ 审批闸口。漏了它 dev 模式下所有需要审批的工具(写文件/执行命令)
+        // 都会 404 —— 表现为「工具明明开了却总是失败」。
+        if (req.url?.startsWith('/api/approvals')) {
+          handleApprovalRequest(req, res)
+          return
+        }
+        // ★ per-user 工具权限 gate(PermissionsDashboard 的真 gate)
+        if (req.url?.startsWith('/api/tool-permissions')) {
+          handleToolPermissionsRequest(req, res)
+          return
+        }
+        // Desk Notes(书桌便笺)
+        if (req.url?.startsWith('/api/desk/')) {
+          handleDeskRequest(req, res)
+          return
+        }
         if (req.url?.startsWith('/api/tools/git/') || req.url?.startsWith('/api/tools/check/') || req.url?.startsWith('/api/workbench/')) {
           handleGitWorkbenchRequest(req, res)
           return
@@ -190,9 +229,41 @@ function fallbackApiPlugin() {
 // 历史值 './' 在子目录部署 + SPA fallback 场景会让 chunk 走相对路径,刷新非根路径直接 404.
 const PUBLIC_BASE_PATH = process.env.PUBLIC_BASE_PATH || '/'
 
+/**
+ * ★ dev server 的 host/port 必须**固定**,而且要和 `npm run serve`(生产)一致。
+ *
+ * 背景:登录 token 和**全部对话记录**都存在 localStorage 里
+ * (`your-model-atelier:auth-token` / `your-model-atelier:state:v1`),
+ * 而 localStorage 是按 **origin**(协议+主机+端口)隔离的。
+ *
+ * 以前 vite 没配 server,`npm run dev` 落在默认的 localhost:5173,
+ * 手动加 `--host 127.0.0.1 --port 5175` 又落在另一个 origin ——
+ * 两边是两套完全独立的存储:一边登录了、有历史对话,另一边是全新状态。
+ * 用户以为"数据丢了",其实只是换了个门进屋。
+ *
+ * 注意 localhost 和 127.0.0.1 **也是不同 origin**,所以 host 也必须钉死,
+ * 不能只钉端口。这里读的是和 server/appServer.js 完全同一份配置
+ * (getRuntimeEnv 会加载 .env),保证 dev 和 prod 落在同一个 origin,
+ * 切换运行方式不丢登录态。
+ *
+ * ⚠ 必须用 getRuntimeEnv() 而不是裸的 process.env —— vite.config.js 加载时
+ * 没人把 .env 灌进 process.env,直接读 process.env.SERVER_PORT 恒为 undefined,
+ * 会静默退回默认值,配了也不生效。
+ */
+const RUNTIME_ENV = getRuntimeEnv()
+const DEV_HOST = RUNTIME_ENV.SERVER_HOST || '127.0.0.1'
+const DEV_PORT = Number(RUNTIME_ENV.VITE_DEV_PORT || RUNTIME_ENV.SERVER_PORT || 5175)
+
 export default defineConfig({
   plugins: [react(), authBillingPlugin(), modelProxyPlugin(), toolProxyPlugin(), fallbackApiPlugin()],
   base: PUBLIC_BASE_PATH,
+  server: {
+    host: DEV_HOST,
+    port: DEV_PORT,
+    // 端口被占就直接报错,**不要**自动换一个 —— 静默换端口正是
+    // "同一个命令这次能看到历史、下次看不到"的元凶。
+    strictPort: true,
+  },
   build: {
     chunkSizeWarningLimit: 1100,
     rollupOptions: {

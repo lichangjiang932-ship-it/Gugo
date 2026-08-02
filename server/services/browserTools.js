@@ -1,4 +1,4 @@
-import { registerDynamicTool, unregisterByOrigin } from './toolRegistry.js'
+import { listAllSpecs, registerDynamicTool, unregisterByOrigin } from './toolRegistry.js'
 
 const definitions = [
   ['browser_open_url', 'Open an http/https URL in the isolated local browser.', { url: { type: 'string' } }, ['url']],
@@ -9,7 +9,6 @@ const definitions = [
   ['browser_type', 'Fill an input by snapshot ref or CSS selector.', { target: { type: 'string' }, text: { type: 'string' }, submit: { type: 'boolean' } }, ['target', 'text']],
   ['browser_wait', 'Wait for milliseconds or for an element to appear.', { ms: { type: 'integer', minimum: 0, maximum: 10000 }, target: { type: 'string' } }, []],
   ['browser_screenshot', 'Capture the current page as PNG.', { fullPage: { type: 'boolean' } }, []],
-  ['browser_close', 'Close the isolated browser session.', {}, []],
 ]
 
 export function registerBrowserTools() {
@@ -22,4 +21,10 @@ export function registerBrowserTools() {
       spec: { type: 'function', function: { name, description, parameters: { type: 'object', properties, required } } },
     })
   }
+}
+
+export function listRegisteredBrowserToolSpecs() {
+  return listAllSpecs()
+    .filter((entry) => entry.origin === 'browser')
+    .map((entry) => entry.tool)
 }

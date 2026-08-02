@@ -26,7 +26,23 @@ export function isRetryableError(err) {
   if (!err) return false
   // 用户/上层主动取消,绝不重试
   if (err.name === 'AbortError') return false
+  // ★ 我们自己的超时不重试。
+  //
+  // 「本地模型慢」重试 3 次 = 对着一个单槽推理服务器再排 3 次队,
+  // 每次都要重新处理整个 prompt,只会更慢,而且第 2、3 次通常还没跑完
+  // 就又超时了 —— 用户等了 3 倍的时间,拿到同一个错误。
+  //
+  // 注意:超时错误现在**不带 status**(见 modelProxy.modelTimeoutError),
+  // 所以不会再走进下面的 RETRYABLE_STATUS 分支。这里显式再挡一道,
+  // 防止将来有人给它加回 status。
+  if (err.code === 'MODEL_TIMEOUT') return false
+  // 思考失控:重试只会再烧一次钱,问题不在网络层
+  if (err.code === 'REASONING_RUNAWAY') return false
   if (Number.isFinite(err.status) && RETRYABLE_STATUS.has(err.status)) return true
+  // ★ ECONNREFUSED 对本地端点无意义 —— 服务根本没起,退避 3 次它也不会
+  // 自己启动。直接失败并给出「请确认 Ollama / LM Studio 已启动」更有用。
+  const code = err.code || err.cause?.code
+  if (code === 'ECONNREFUSED' && err.localEndpoint) return false
   if (err.code && RETRYABLE_CODES.has(err.code)) return true
   // fetch 的网络层失败通常是裸 TypeError('fetch failed'),带 cause
   if (err.cause?.code && RETRYABLE_CODES.has(err.cause.code)) return true

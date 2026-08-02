@@ -20,19 +20,23 @@ import { z } from 'zod'
 //   ChatSplit chunk 里本就包含这两个模块.
 import { parseMarkdownSlides } from '../presentationExport.js'
 import { parseMarkdownDocument, parseSpreadsheetRows } from '../officeExport.js'
-import { askToolApproval, classifyClientTool } from '../toolApproval.js'
+import { askToolApproval, buildClientRememberedGrant, classifyClientTool } from '../toolApproval.js'
+import { translateKey } from '../../i18n/translations.js'
+
+const FILE_ARTIFACT_TOOL_NAMES = new Set(['create_pptx', 'create_docx', 'create_xlsx'])
 
 /**
  * 审批档位 + 「总是允许」清单的进程内缓存。
  * 工具调用是高频路径,不能每次都打一次 HTTP;由 ChatSplit 在挂载和设置变更时刷新。
  */
-let approvalSettingsCache = { mode: 'normal', rememberedTools: [] }
+let approvalSettingsCache = { mode: 'normal', rememberedTools: [], rememberedGrants: [] }
 
 export function setCachedApprovalSettings(settings) {
   if (!settings || typeof settings !== 'object') return
   approvalSettingsCache = {
     mode: settings.mode || 'normal',
     rememberedTools: Array.isArray(settings.rememberedTools) ? settings.rememberedTools : [],
+    rememberedGrants: Array.isArray(settings.rememberedGrants) ? settings.rememberedGrants : [],
   }
 }
 
@@ -41,11 +45,23 @@ export function getCachedApprovalSettings() {
 }
 
 /** 用户点了「总是允许」后本地立即生效,不等服务端回包(服务端已在 decide 时落库)。 */
-function rememberToolLocally(name) {
-  if (!approvalSettingsCache.rememberedTools.includes(name)) {
+function rememberToolLocally(name, args) {
+  const grant = buildClientRememberedGrant(name, args)
+  if (!grant) return
+  if (name === 'bash_exec') {
+    const exists = approvalSettingsCache.rememberedGrants.some((item) =>
+      item?.toolName === grant.toolName && item?.commandPrefix === grant.commandPrefix)
+    if (!exists) {
+      approvalSettingsCache = {
+        ...approvalSettingsCache,
+        rememberedGrants: [...approvalSettingsCache.rememberedGrants, grant],
+      }
+    }
+  } else if (!approvalSettingsCache.rememberedTools.includes(name)) {
     approvalSettingsCache = {
       ...approvalSettingsCache,
       rememberedTools: [...approvalSettingsCache.rememberedTools, name],
+      rememberedGrants: [...approvalSettingsCache.rememberedGrants, grant],
     }
   }
 }
@@ -105,9 +121,19 @@ const TOOL_ARG_SCHEMAS = {
     files: z.record(z.string(), z.string()).refine((files) => !!files['index.html'], { message: 'files must include index.html' }),
   }),
   Agent: z.object({
-    subagent_type: z.enum(['explore', 'plan', 'general']),
-    prompt: z.string().min(1).max(20000),
-    description: z.string().min(1).max(120),
+    subagent_type: z.enum(['explore', 'plan', 'general']).optional(),
+    prompt: z.string().min(1).max(20000).optional(),
+    description: z.string().min(1).max(120).optional(),
+    tasks: z.array(z.object({
+      subagent_type: z.enum(['explore', 'plan', 'general']),
+      prompt: z.string().min(1).max(20000),
+      description: z.string().min(1).max(120),
+    })).min(1).max(3).optional(),
+  }).superRefine((value, ctx) => {
+    const hasSingle = value.subagent_type && value.prompt && value.description
+    if (!hasSingle && !value.tasks?.length) {
+      ctx.addIssue({ code: 'custom', message: 'provide one subagent task or a tasks array' })
+    }
   }),
   // Feature 8: Todo — 整组替换 — 模型可反复调用更新状态
   manage_todos: z.object({
@@ -307,12 +333,12 @@ const TOOL_SPECS = {
     type: 'function',
     function: {
       name: 'bash_exec',
-      description: 'Run a shell command inside the configured workspace. Use for tests/builds/inspection; output is capped and secrets are masked server-side.',
+      description: 'Run a shell command inside the configured workspace or a user-authorized local directory. Use for tests/builds/inspection; output is capped and secrets are masked server-side.',
       parameters: {
         type: 'object',
         properties: {
           command: { type: 'string', description: 'Command string, e.g. npm test or git diff --stat.' },
-          cwd: { type: 'string', description: 'Optional workspace-relative working directory.' },
+          cwd: { type: 'string', description: 'Optional workspace-relative or authorized absolute working directory.' },
           timeout_ms: { type: 'integer', description: 'Timeout in milliseconds, 1000-300000.' },
         },
         required: ['command'],
@@ -323,18 +349,24 @@ const TOOL_SPECS = {
     type: 'function',
     function: {
       name: 'git_status',
-      description: 'Read git branch and changed files for the configured workspace. Read-only. Use before and after code edits.',
-      parameters: { type: 'object', properties: {} },
+      description: 'Read git branch and changed files for the configured workspace or a user-authorized repository. Read-only. Use before and after code edits.',
+      parameters: {
+        type: 'object',
+        properties: { cwd: { type: 'string', description: 'Optional workspace-relative or authorized absolute repository path.' } },
+      },
     },
   },
   git_diff: {
     type: 'function',
     function: {
       name: 'git_diff',
-      description: 'Read unified git diff for the workspace or a single changed file. Read-only.',
+      description: 'Read unified git diff for the workspace or a user-authorized repository. Read-only.',
       parameters: {
         type: 'object',
-        properties: { path: { type: 'string', description: 'Optional workspace-relative changed file path.' } },
+        properties: {
+          path: { type: 'string', description: 'Optional repository-relative changed file path.' },
+          cwd: { type: 'string', description: 'Optional workspace-relative or authorized absolute repository path.' },
+        },
       },
     },
   },
@@ -345,7 +377,10 @@ const TOOL_SPECS = {
       description: 'Run exactly one allowed project check: lint, test, or build. Does not execute arbitrary shell commands.',
       parameters: {
         type: 'object',
-        properties: { check: { type: 'string', enum: ['lint', 'test', 'build'], description: 'Allowed verification command.' } },
+        properties: {
+          check: { type: 'string', enum: ['lint', 'test', 'build'], description: 'Allowed verification command.' },
+          cwd: { type: 'string', description: 'Optional workspace-relative or authorized absolute repository path.' },
+        },
         required: ['check'],
       },
     },
@@ -485,15 +520,32 @@ const TOOL_SPECS = {
     type: 'function',
     function: {
       name: 'Agent',
-      description: 'Delegate a focused sub-task to an isolated sub-agent. Returns a final summary only. Use for bounded research, planning, or code exploration.',
+      description: 'Delegate focused work to isolated sub-agents. Pass one task, or up to 3 independent tasks to run them in parallel. Returns final summaries only.',
       parameters: {
         type: 'object',
         properties: {
           subagent_type: { type: 'string', enum: ['explore', 'plan', 'general'] },
           prompt: { type: 'string', description: 'Full instructions; the sub-agent cannot see hidden parent context unless you include it.' },
           description: { type: 'string', description: '5-10 word label shown to the user.' },
+          tasks: {
+            type: 'array',
+            minItems: 1,
+            maxItems: 3,
+            items: {
+              type: 'object',
+              properties: {
+                subagent_type: { type: 'string', enum: ['explore', 'plan', 'general'] },
+                prompt: { type: 'string' },
+                description: { type: 'string' },
+              },
+              required: ['subagent_type', 'prompt', 'description'],
+            },
+          },
         },
-        required: ['subagent_type', 'prompt', 'description'],
+        anyOf: [
+          { required: ['subagent_type', 'prompt', 'description'] },
+          { required: ['tasks'] },
+        ],
       },
     },
   },
@@ -557,10 +609,12 @@ export function buildToolSpecs(enabledNames) {
     if (seen.has(name)) continue
     seen.add(name)
     const spec = TOOL_SPECS[name]
-    if (spec) {
+    if (spec && typeof EXECUTORS[name] === 'function') {
       list.push(spec)
     } else if (typeof console !== 'undefined') {
-      console.warn(`[tools] 未知工具被忽略: ${name}`)
+      console.warn(spec
+        ? `[tools] Tool without an executor was ignored: ${name}`
+        : `[tools] 未知工具被忽略: ${name}`)
     }
   }
   return list
@@ -628,6 +682,10 @@ async function callJson(url, body, { method = 'POST' } = {}) {
   if (!resp.ok || data?.ok === false) {
     const err = new Error(data?.error || `HTTP ${resp.status}`)
     err.status = resp.status
+    err.code = data?.code
+    err.retryable = data?.retryable
+    err.path = data?.path
+    err.hint = data?.hint
     throw err
   }
   return data
@@ -647,8 +705,24 @@ async function callWorkspaceJson(url, body) {
   let data
   try { data = text ? JSON.parse(text) : {} } catch { data = { raw: text } }
   if (!resp.ok) {
-    const err = new Error(data?.error || `HTTP ${resp.status}`)
+    let message = data?.error || `HTTP ${resp.status}`
+    // ★ 404 且响应体不是 JSON → 是**路由本身没注册**,不是资源不存在。
+    //
+    // 真实事故:dev server 漏注册 /api/tools/code/,模型每次调 grep_code
+    // 都只看到裸的 "HTTP 404",于是它以为是路径写错了,连着换了 5 种
+    // 路径写法反复重试,全失败,最后绕道用 read_file 硬啃整个文件。
+    // 说清楚「这是后端没接上,换路径没用」,它才能立刻改用别的工具。
+    if (resp.status === 404 && !data?.error) {
+      message = `接口 ${url} 未注册（HTTP 404）。这是后端路由缺失，不是文件或资源不存在——`
+        + '换路径重试没有用，请改用其他工具（如 read_file / list_directory）完成任务，'
+        + '并在最终回复里告诉用户这个接口不可用。'
+    }
+    const err = new Error(message)
     err.status = resp.status
+    err.code = data?.code
+    err.retryable = data?.retryable
+    err.path = data?.path
+    err.hint = data?.hint
     throw err
   }
   return data
@@ -943,18 +1017,31 @@ async function execCreateHtmlApp(args) {
 }
 
 async function execAgent(args) {
-  const data = await callJson('/api/subagent/run', {
-    subagent_type: args.subagent_type,
-    prompt: args.prompt,
-    description: args.description,
-  })
+  const tasks = Array.isArray(args.tasks) && args.tasks.length ? args.tasks : [args]
+  const settled = await Promise.allSettled(tasks.map((task) => callJson('/api/subagent/run', {
+    subagent_type: task.subagent_type,
+    prompt: task.prompt,
+    description: task.description,
+  })))
+  const runs = settled.map((result, index) => result.status === 'fulfilled'
+    ? {
+        ok: true,
+        runId: result.value.run?.id || result.value.id || null,
+        status: result.value.run?.status || result.value.status || 'completed',
+        description: tasks[index].description,
+        result: result.value.result_text || result.value.run?.resultText || result.value.result || '',
+      }
+    : {
+        ok: false,
+        status: 'failed',
+        description: tasks[index].description,
+        error: result.reason?.message || String(result.reason),
+      })
   return {
     content: JSON.stringify({
-      ok: true,
-      runId: data.run?.id || data.id || null,
-      status: data.run?.status || data.status || 'completed',
-      description: args.description,
-      result: data.result_text || data.run?.resultText || data.result || '',
+      ok: runs.some((run) => run.ok),
+      parallel: runs.length > 1,
+      runs,
     }),
   }
 }
@@ -1009,6 +1096,16 @@ const EXECUTORS = {
   reflect: execReflect,
   request_clarification: execRequestClarification,
   remember: execRemember,
+}
+
+/** 模型可见的内置工具必须同时具备 schema 和真实执行器。 */
+export function getBuiltinToolRuntimeStatus() {
+  const specNames = Object.keys(TOOL_SPECS)
+  const executorNames = Object.keys(EXECUTORS)
+  return {
+    missingExecutors: specNames.filter((name) => typeof EXECUTORS[name] !== 'function'),
+    missingSpecs: executorNames.filter((name) => !TOOL_SPECS[name]),
+  }
 }
 
 /**
@@ -1083,9 +1180,41 @@ async function execMultiEdit(args) {
 
 export async function executeToolCall(call, options = {}) {  const { maxRetries = 2, retryDelayMs = 600 } = options
   const name = call?.name
+  if (FILE_ARTIFACT_TOOL_NAMES.has(name)) {
+    const granted = options.allowedArtifactTools instanceof Set
+      ? options.allowedArtifactTools
+      : new Set(options.allowedArtifactTools || [])
+    if (!granted.has(name)) {
+      return {
+        ok: false,
+        content: JSON.stringify({
+          code: 'artifact_tool_not_requested',
+          error: String(translateKey('toolRuntime.artifactNotRequested', options.lang || 'zh')).replace('{name}', name),
+          retryable: false,
+        }),
+        attempts: 0,
+      }
+    }
+  }
   let parsedArgs = {}
   if (call?.arguments) {
-    try { parsedArgs = JSON.parse(call.arguments) } catch { parsedArgs = {} }
+    try {
+      parsedArgs = typeof call.arguments === 'string' ? JSON.parse(call.arguments) : call.arguments
+      if (!parsedArgs || typeof parsedArgs !== 'object' || Array.isArray(parsedArgs)) {
+        throw new Error('参数 JSON 的顶层必须是对象')
+      }
+    } catch (err) {
+      return {
+        ok: false,
+        content: JSON.stringify({
+          code: 'invalid_tool_arguments',
+          error: `工具参数不是有效 JSON：${err?.message || String(err)}`,
+          retryable: true,
+          hint: '请修正 JSON 后重新调用，不要重复发送相同参数。',
+        }),
+        attempts: 0,
+      }
+    }
   }
 
   // Feature 1: MCP 工具 (mcp__server__tool) — 没在本地 EXECUTORS 注册,统一走后端
@@ -1121,7 +1250,6 @@ export async function executeToolCall(call, options = {}) {  const { maxRetries 
       browser_type: '/api/browser/type',
       browser_wait: '/api/browser/wait',
       browser_screenshot: '/api/browser/screenshot',
-      browser_close: '/api/browser/close',
     }
     const route = routes[name]
     if (!route) return { ok: false, content: JSON.stringify({ error: `未知 Browser 工具: ${name}` }) }
@@ -1212,13 +1340,15 @@ export async function executeToolCall(call, options = {}) {  const { maxRetries 
           }),
         }
       }
-      if (decision.remember) rememberToolLocally(name)
+      if (decision.remember) rememberToolLocally(name, parsedArgs)
     }
   }
 
   // ★ #24: 失败重试 — 网络/反爬瞬时错误自动重试 (最多 maxRetries 次,指数退避)
   let lastErr
+  let usedAttempts = 0
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    usedAttempts = attempt + 1
     try {
       const output = await fn(parsedArgs)
       const ok = output && typeof output === 'object' && typeof output.ok === 'boolean' ? output.ok : true
@@ -1232,7 +1362,14 @@ export async function executeToolCall(call, options = {}) {  const { maxRetries 
       lastErr = err
       const msg = err?.message || String(err)
       // 不可重试:参数校验类错误 / 沙箱策略拒绝
-      const nonRetriable = /参数|不能为空|invalid|required|沙箱/i.test(msg)
+      let nonRetriable = /参数|不能为空|invalid|required|沙箱/i.test(msg)
+      // ★ 404(路由不存在)/ 403(权限不足)/ 401 重试毫无意义 —— 这些是
+      // 确定性失败,退避再打三次只是把一次失败变成三次失败 + 两次等待。
+      // 实测日志里 grep_code 因为后端漏注册路由,每次调用都白等两轮退避,
+      // 模型连试 6 次共 18 个请求全 404,预算和时间都烧在了原地打转上。
+      if (err?.status === 404 || err?.status === 403 || err?.status === 401) {
+        nonRetriable = true
+      }
       if (nonRetriable || attempt === maxRetries) break
       // 指数退避:600ms → 1200ms
       await new Promise((r) => setTimeout(r, retryDelayMs * (attempt + 1)))
@@ -1241,8 +1378,15 @@ export async function executeToolCall(call, options = {}) {  const { maxRetries 
   return {
     ok: false,
     content: JSON.stringify({
+      ...(lastErr?.code ? { code: lastErr.code } : {}),
       error: lastErr?.message || String(lastErr),
-      attempts: maxRetries + 1,
+      // 真实尝试次数 —— 确定性失败会提前 break,不该谎报成 maxRetries + 1
+      attempts: usedAttempts,
+      // 确定性失败要明确告诉模型别再试同一个工具
+      ...(lastErr?.retryable === false || lastErr?.status === 404 || lastErr?.status === 403 || lastErr?.status === 401
+        ? { retryable: false, hint: lastErr?.hint || '这是确定性失败，重试或换参数都没用，请改用其他工具。' }
+        : {}),
+      ...(lastErr?.path ? { path: lastErr.path } : {}),
     }),
   }
 }

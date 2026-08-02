@@ -3,7 +3,16 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-notification-routes-tests', String(process.pid))
+// ★ 目录只按 pid 区分是不够的:PID 会被系统回收,撞上以前某次跑测试
+// 留下的同名目录就会读到那次的 DB —— 而本文件用的是 'route-list-1' 这类
+// 固定 id,于是 createNotification 直接 UNIQUE constraint failed。
+// (临时目录里已经堆了两千多个 yma-* 残留,撞上只是时间问题。)
+// 加一个随机后缀，每次跑都是全新的空库。
+process.env.APP_DATA_DIR = path.join(
+  os.tmpdir(),
+  'yma-notification-routes-tests',
+  `${process.pid}-${Math.random().toString(36).slice(2, 10)}`,
+)
 
 const { createAppServer } = await import('../server/appServer.js')
 const { createNotification } = await import('../server/services/notificationsStore.js')

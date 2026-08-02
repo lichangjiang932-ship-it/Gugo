@@ -5,6 +5,7 @@
 //   · 任何导出都包成 { __schema: 'yma.v1.<kind>', exportedAt, payload }
 //   · 导入时先 parse → 检查 magic + version → 按 kind 走轻量结构校验 (不依赖 zod)
 //   · 校验失败抛 InvalidExportError,UI 用 .reason 给用户人话提示
+import { isThemeMode } from '../lib/themeMode.js'
 
 export const SCHEMA_VERSION = 1
 export const SESSIONS_SCHEMA = `yma.v${SCHEMA_VERSION}.sessions`
@@ -110,6 +111,9 @@ export function parseImport(raw) {
       if (k in p && typeof p[k] !== 'string') {
         throw new InvalidExportError(`settings.${k} 必须为字符串`)
       }
+    }
+    if ('theme' in p && !isThemeMode(p.theme)) {
+      throw new InvalidExportError('settings.theme 不是受支持的主题')
     }
     if ('animationsEnabled' in p && typeof p.animationsEnabled !== 'boolean') {
       throw new InvalidExportError('settings.animationsEnabled 必须为布尔')

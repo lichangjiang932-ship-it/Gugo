@@ -258,10 +258,94 @@ key 命名：`<domain>.<feature>.<element>`，例 `channels.list.empty`、`agent
 5. **better-sqlite3 prepared statement 跨 user 复用** → 不准。每次操作都要把 `userId` 当 param 传进去。
 6. **写 plugin 忘加 manifest type 校验** → loader silently skip。`pluginManifest.js` 的 `PLUGIN_TYPES` 是 source of truth。
 7. **CSP nonce 拼错** → `script-src 'nonce-...' 'strict-dynamic'`，不要 `'unsafe-inline'` 回退。`tests/cspNonce.test.js` 守这条。
+8. **给模型调用加"整请求超时"** → 见下面第十二节。本地模型正在正常吐字也会被砍断。要加只能加 idle 超时。
+9. **测试里走真 planner / 真模型** → 单个用例几十秒、要配 key、断言随模型措辞变化随机变红。用 `planner:` / `runModel:` 注入 stub，见 `tests/jobRuntime.test.js`。
 
 ---
 
-## 十二、给"主人"的话
+## 十二、本地模型支持约定（改模型链路前必读）
+
+本项目要同时支持 **Ollama / LM Studio / llama.cpp / vLLM / 云端自定义 API**。本地推理和云端 API 的性能特征完全不同，下面这些是踩过坑之后定下的规矩。
+
+### 12.1 唯一的能力判断入口：`server/utils/endpointProfile.js`
+
+「这个端点是什么、能干什么、该给多少耐心」全部由 `resolveEndpointProfile()` 回答。**不要**在别处重新猜端点类型、上下文窗口、是否支持工具。纯函数、无 IO，探测结果作为 `overrides` 传进去。
+
+```js
+resolveEndpointProfile({ baseUrl, modelName, env, overrides }) → {
+  kind, isLocal, timeouts: { probeMs, firstTokenMs, idleMs, requestMs, backgroundMs },
+  contextWindow, supportsTools, supportsStreaming, supportsVision, failoverEligible, keepAlive,
+}
+```
+
+adapters 层用 `profileForConfig(config, env)` 拿画像。
+
+### 12.2 超时必须是「首 token + idle」双轨，绝不能是整请求超时
+
+- **首 token 超时**：从发请求到第一个字。本地加载几个 G 的权重可能要几分钟。本地默认 10 分钟。
+- **idle 超时**：两个 chunk 之间的最大间隔，**每收到一个 chunk 就重置**。含义是「N 秒一个字节都没有 = 连接死了」。
+
+只要模型还在吐字，就永远不该有上限 —— CPU 上 1 tok/s 也要让它跑完。`tests/modelProxyTimeout.test.js` 守这条。
+
+### 12.3 超时错误**不准带 `status`**
+
+用 `modelTimeoutError()` 造，它给 `code: 'MODEL_TIMEOUT'` 但不给 status。原因：曾经把超时伪装成 `status: 504`，而 `isProviderFailoverError` 判定 `>= 500` 可转移 —— 结果「本地模型慢了一下」= **静默切到云端 provider + 按云端价扣积分**，用户既不知道换了模型也不知道为什么被扣钱。
+
+同理 `modelRetry.js` 里 `MODEL_TIMEOUT` 不重试：对着单槽推理服务器重试 3 次只会更慢。
+
+### 12.4 本地端点默认不参与 failover
+
+`resolveModelFailoverConfigs` 在主 provider 是本地时只返回它自己。用户要这个行为可以在 provider 设置里显式打开 `failover_enabled`。
+
+### 12.5 SSE 必须有心跳
+
+`flushHeaders()` + `X-Accel-Buffering: no` + 每 15s 一个 `: keepalive` 注释帧。本地模型冷启动时几十秒一个字节都没有，任何中间层（nginx 默认 60s）都会掐断。另外首 token 前要发 `phase: 'connecting'` 帧，否则界面全白，用户只会以为卡死了。
+
+### 12.6 前端必须能区分「截断」和「正常结束」
+
+`callModelThroughProxyStream` 跟踪 `sawDone`。reader 结束但没见过 done 帧 → 抛 `StreamTruncatedError`（带 `partialText`）。**不准**静默 `return` —— 那样用户看到半句话却没有任何提示。截断后要给「继续生成」入口，不要让用户整轮重发（本地慢模型上代价极大）。
+
+### 12.7 agent 循环任何退出路径都不准返回空文本
+
+预算耗尽 / 达到轮数上限 / 无进展，**每一条**都要做一次 `toolChoice: 'none'` 的收尾调用，拿不到就给兜底文案。模型中途报错且已经跑过至少一轮 → 降级返回已收集的工具结果，**不要** throw 掉整个 step（那会连 checkpoint 一起删掉，前面几十轮全白干）。
+
+「做到一半就没有后续」几乎都是这里出的问题。`tests/jobLoopContinuity.test.js` 守这条。
+
+### 12.8 上下文窗口不准默认成一个大数
+
+本地模型常见 4k–8k。默认值给大了 → 压缩阈值算成几十万 → 主动压缩永远不触发 → 每个长对话都撞上游 400。本地默认 8192，且允许配到 1024（不要再加 `>= 4096` 这种下限）。
+
+`isContextLengthError` 要认各家的说法（llama.cpp 说 `exceeds the available context size`、有的返 413/500），别只认 OpenAI 那套文案。
+
+### 12.9 本地模型不计费
+
+聊天和**工具调用**都要豁免（`toolProxy.js` 那处曾经漏掉，导致积分不够时本地 agent 任务直接 402）。`isLocalEndpoint` 认回环 + RFC1918 私网段 + Tailscale + `.local`/`.lan`，别只认 `127.0.0.1`。
+
+### 12.10 不准给「工作量」设紧上限
+
+这条是反复踩坑之后的硬规矩。项目里所有 `MAX_*` 常量分两类，改之前先想清楚自己在改哪一类：
+
+| 类型 | 例子 | 该怎么设 |
+|---|---|---|
+| **安全上限** | 单文件 5MB、patch 30 个操作、登录尝试 5 次 | 保持紧，这些防的是攻击和资源耗尽 |
+| **工作量护栏** | 工具轮数、累积调用数、墙钟、子代理并发 | 给到正常任务**碰不到**的量级，并且可配 |
+
+第二类给紧了，症状永远是同一个：**任务做到一半停下，用户看到半成品**。而且往往看不出是撞了限制——所以每一条退出路径都必须说清楚原因（见 12.7）。
+
+当前默认值（全部可用 env 覆盖，见 `.env.example`）：
+
+- `max_tokens`：**不限制**（不发这个字段）。填数字对推理模型是灾难——思考和正文共用预算。
+- Job 单步轮数 2000 / 累积调用 2000 / 墙钟 6 小时（**不含等模型的时间**）
+- 子代理 1000 轮 / 1000 次 / 2 小时，深度 3，并发 8，每批 8
+- 规划探索 40 轮，工具结果回喂 24000 字符
+
+`TOOL_MAX_ROUNDS` 默认 0 = 不限制，循环靠模型自己停。
+
+**墙钟必须排除模型延迟**（`jobBudget.trackModelMs`）。把等模型的时间算进墙钟，等于「模型越慢能做的事越少」——方向完全反了，本地模型慢是常态，不是失控信号。
+
+---
+
+## 十三、给"主人"的话
 
 我（项目主人）习惯：
 - **直接告诉我结果**。"合了"、"挂了第 23 行"，不要"我先 ... 然后 ... 最后 ..."。

@@ -15,4 +15,18 @@ test('infers built-in ppt skills from natural language prompts', () => {
   assert.equal(inferSkillIdFromPrompt('make a premium html ppt'), 'htmlppt')
   assert.equal(inferSkillIdFromPrompt('\u505a\u4e00\u4e2a\u9ad8\u7ea7\u611f html ppt'), 'htmlppt')
   assert.equal(inferSkillIdFromPrompt('just chat with me'), null)
+  assert.equal(inferSkillIdFromPrompt('为什么云端模型可以，你是我的本地模型好不好'), null)
+})
+
+test('does not infer a ppt skill from negation, complaints, or code discussion', () => {
+  for (const prompt of [
+    '不要生成 PPT',
+    '修复自动生成 PPT 的问题',
+    '为什么会突然变成幻灯片',
+    '我没有让他生成，他自动生成 pptx 文件',
+    '还有在生成幻灯片.pptx文件，我没有让他生成，他自动生成，你深入解读代码，彻底修复',
+    '检查 create_pptx 的调用逻辑',
+  ]) {
+    assert.equal(inferSkillIdFromPrompt(prompt), null, prompt)
+  }
 })

@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 import {
   reflectTool,
   requestClarificationTool,
+  requestDirectoryTool,
+  AGENTIC_TOOL_SPECS,
   dispatchAgenticTool,
   isLoopPauseResult,
 } from '../server/utils/agenticTools.js'
@@ -104,6 +106,30 @@ test('request_clarification: blocker_kind 非法拒绝', () => {
   )
 })
 
+test('request_directory: 以最小权限挂起并携带结构化目录请求', () => {
+  const result = requestDirectoryTool({
+    purpose: '读取季度报告',
+    suggested_path: 'D:\\Reports',
+  })
+  assert.equal(result.paused, true)
+  assert.equal(result.clarification.request_type, 'directory')
+  assert.equal(result.clarification.access_mode, 'read_only')
+  assert.equal(result.clarification.suggested_path, 'D:\\Reports')
+  assert.equal(result.clarification.blocker_kind, 'permission')
+  assert.equal(isLoopPauseResult(result), true)
+})
+
+test('request_directory: 拒绝空用途和非法读写模式', () => {
+  assert.throws(() => requestDirectoryTool({}), /purpose/)
+  assert.throws(() => requestDirectoryTool({ purpose: '输出文件', access_mode: 'all_files' }), /access_mode/)
+})
+
+test('request_directory spec tells models to request read_write for file changes', () => {
+  const spec = AGENTIC_TOOL_SPECS.find((item) => item.function.name === 'request_directory')
+  assert.match(spec.function.description, /create, edit, patch, rename, or delete files/)
+  assert.match(spec.function.parameters.properties.access_mode.description, /require read_write/)
+})
+
 /* dispatcher + loop-pause helper */
 
 test('dispatchAgenticTool 分发', async () => {
@@ -111,6 +137,8 @@ test('dispatchAgenticTool 分发', async () => {
   assert.equal(r1.ok, true)
   const r2 = await dispatchAgenticTool('request_clarification', { question: 'q' })
   assert.equal(r2.paused, true)
+  const r3 = await dispatchAgenticTool('request_directory', { purpose: 'read project files' })
+  assert.equal(r3.clarification.request_type, 'directory')
   await assert.rejects(() => dispatchAgenticTool('unknown', {}), /unknown agentic tool/)
 })
 

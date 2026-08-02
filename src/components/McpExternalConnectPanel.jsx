@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Check, Copy, ExternalLink, Globe, KeyRound } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from '../lib/router.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
 import {
   buildExternalMcpConfig,

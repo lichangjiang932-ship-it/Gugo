@@ -15,6 +15,9 @@
 import crypto from 'node:crypto'
 import { getDb } from '../db.js'
 import { WEB_CONNECTOR_CATALOG } from '../../shared/webConnectorCatalog.js'
+import { openCredentialObject, sealCredentialObject } from '../utils/credentialVault.js'
+
+const INTEGRATION_SECRET_PURPOSE = 'integration-secret'
 
 function newId() {
   return crypto.randomUUID?.() || `integration-${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -55,6 +58,16 @@ const PROVIDER_REGISTRY = {
       { key: 'token', label: 'Fine-grained personal access token', location: 'secret', type: 'password' },
     ],
     test: testGithub,
+  },
+  google_drive: {
+    kind: 'connector',
+    label: 'Google Drive',
+    fields: [
+      { key: 'account', label: 'Account', location: 'config', optional: true },
+      { key: 'token', label: 'OAuth access token', location: 'secret', type: 'password' },
+      { key: 'refreshToken', label: 'OAuth refresh token', location: 'secret', type: 'password', optional: true },
+    ],
+    test: testGoogleDrive,
   },
   // === IM / 社交（kind='social'）===
   feishu: {
@@ -152,6 +165,23 @@ function parseJson(value, fallback) {
   try { return JSON.parse(value) } catch { return fallback }
 }
 
+function readIntegrationSecret(row) {
+  if (!row) return {}
+  const decoded = openCredentialObject(row.secret_json, {
+    purpose: INTEGRATION_SECRET_PURPOSE,
+    legacyDecoder: (raw) => parseJson(raw, {}),
+  })
+  if (decoded.legacy && row.id && Object.keys(decoded.value).length) {
+    getDb().prepare('UPDATE integrations SET secret_json = ? WHERE id = ?')
+      .run(sealCredentialObject(decoded.value, { purpose: INTEGRATION_SECRET_PURPOSE }), row.id)
+  }
+  return decoded.value
+}
+
+function writeIntegrationSecret(secret) {
+  return sealCredentialObject(secret || {}, { purpose: INTEGRATION_SECRET_PURPOSE })
+}
+
 function maskSecret(secret) {
   const out = {}
   for (const [key, val] of Object.entries(secret || {})) {
@@ -176,7 +206,7 @@ function row2integration(row) {
     enabled: row.enabled === 1,
     config: parseJson(row.config_json, {}),
     // 仅返回脱敏视图；如需读取真实值请用 getIntegrationSecret
-    secret: maskSecret(parseJson(row.secret_json, {})),
+    secret: maskSecret(readIntegrationSecret(row)),
     lastTest: row.last_test_at ? {
       at: row.last_test_at,
       ok: row.last_test_ok === 1,
@@ -197,7 +227,7 @@ function row2integrationCredentials(row) {
     name: row.name || '',
     enabled: row.enabled === 1,
     config: parseJson(row.config_json, {}),
-    secret: parseJson(row.secret_json, {}),
+    secret: readIntegrationSecret(row),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -238,11 +268,11 @@ function findByProvider({ userId, provider }) {
 }
 
 function getIntegrationSecretInternal({ userId, id }) {
-  const row = getDb().prepare('SELECT secret_json, config_json FROM integrations WHERE user_id = ? AND id = ?').get(userId, id)
+  const row = getDb().prepare('SELECT id, secret_json, config_json FROM integrations WHERE user_id = ? AND id = ?').get(userId, id)
   if (!row) return null
   return {
     config: parseJson(row.config_json, {}),
-    secret: parseJson(row.secret_json, {}),
+    secret: readIntegrationSecret(row),
   }
 }
 
@@ -262,7 +292,7 @@ export function getEnabledIntegrationCredentials({ userId, provider }) {
   if (!row || row.enabled !== 1) return null
   return {
     config: parseJson(row.config_json, {}),
-    secret: parseJson(row.secret_json, {}),
+    secret: readIntegrationSecret(row),
   }
 }
 
@@ -295,7 +325,7 @@ export function upsertIntegration({ userId, id, provider, name, enabled, config,
 
   const nextEnabled = enabled === undefined ? (row ? row.enabled === 1 : true) : !!enabled
   const nextConfig = config === undefined ? parseJson(row?.config_json, {}) : (config || {})
-  const existingSecret = parseJson(row?.secret_json, {})
+  const existingSecret = readIntegrationSecret(row)
   const nextSecret = mergeSecret(existingSecret, secret || {})
   const nextName = name === undefined ? (row?.name || meta.label) : (name || meta.label)
 
@@ -303,7 +333,7 @@ export function upsertIntegration({ userId, id, provider, name, enabled, config,
     db.prepare(`UPDATE integrations
       SET name = ?, enabled = ?, config_json = ?, secret_json = ?, updated_at = ?
       WHERE id = ?`).run(
-      nextName, nextEnabled ? 1 : 0, JSON.stringify(nextConfig), JSON.stringify(nextSecret), now, row.id,
+      nextName, nextEnabled ? 1 : 0, JSON.stringify(nextConfig), writeIntegrationSecret(nextSecret), now, row.id,
     )
     return getIntegration({ userId, id: row.id })
   }
@@ -313,7 +343,7 @@ export function upsertIntegration({ userId, id, provider, name, enabled, config,
     (id, user_id, kind, provider, name, enabled, config_json, secret_json, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
     newRowId, userId, meta.kind, provider, nextName, nextEnabled ? 1 : 0,
-    JSON.stringify(nextConfig), JSON.stringify(nextSecret), now, now,
+    JSON.stringify(nextConfig), writeIntegrationSecret(nextSecret), now, now,
   )
   return getIntegration({ userId, id: newRowId })
 }
@@ -333,6 +363,12 @@ export function deleteIntegration({ userId, id }) {
   return true
 }
 
+export async function testProviderCredentials({ provider, config = {}, secret = {}, fetchImpl = fetch }) {
+  const meta = PROVIDER_REGISTRY[provider]
+  if (!meta) throw badRequest(`unknown provider: ${provider}`)
+  return meta.test({ config, secret, fetchImpl })
+}
+
 export async function testIntegration({ userId, id, fetchImpl = fetch }) {
   const integration = getIntegration({ userId, id })
   if (!integration) throw notFound('integration not found')
@@ -342,7 +378,12 @@ export async function testIntegration({ userId, id, fetchImpl = fetch }) {
   const creds = getIntegrationSecretInternal({ userId, id })
   let result
   try {
-    result = await meta.test({ config: creds.config, secret: creds.secret, fetchImpl })
+    result = await testProviderCredentials({
+      provider: integration.provider,
+      config: creds.config,
+      secret: creds.secret,
+      fetchImpl,
+    })
   } catch (err) {
     result = { ok: false, message: err?.message || '未知错误' }
   }
@@ -411,6 +452,23 @@ async function testGithub({ secret, fetchImpl }) {
   })
   if (!ok || !data?.login) return { ok: false, message: `GitHub ${status}: ${data?.message || 'authentication failed'}` }
   return { ok: true, message: `Connected to GitHub @${data.login}` }
+}
+
+async function testGoogleDrive({ secret, fetchImpl }) {
+  const token = secret?.token?.trim()
+  if (!token) return { ok: false, message: 'Missing Google Drive access token' }
+  const { ok, status, data } = await jsonFetch({
+    fetchImpl,
+    url: 'https://www.googleapis.com/drive/v3/about?fields=user(displayName,emailAddress)',
+    init: { headers: { Authorization: `Bearer ${token}` } },
+  })
+  if (!ok || !data?.user) {
+    return { ok: false, message: `Google Drive ${status}: ${data?.error?.message || 'authentication failed'}` }
+  }
+  return {
+    ok: true,
+    message: `Connected to Google Drive ${data.user.emailAddress || data.user.displayName || ''}`.trim(),
+  }
 }
 
 async function testFeishu({ config, secret, fetchImpl }) {

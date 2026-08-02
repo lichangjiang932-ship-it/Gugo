@@ -9,7 +9,7 @@
  *
  * 不打断布局：纯展示型，不拦截事件。
  */
-import { useLocation } from 'react-router-dom'
+import { useLocation } from '../lib/router.jsx'
 import { getBannerKindForPath } from '../config/routeReadiness.js'
 import { useT } from '../i18n/I18nProvider.jsx'
 

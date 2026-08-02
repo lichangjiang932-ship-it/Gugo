@@ -1,14 +1,19 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ExternalLink, LoaderCircle, QrCode, X } from 'lucide-react'
 import {
   getWechatQrcodeApi,
+  getIntegrationOAuthStatusApi,
   pollWechatQrcodeApi,
+  startIntegrationOAuthApi,
   testIntegrationApi,
+  toggleIntegrationEnabledApi,
   upsertIntegrationApi,
 } from '../lib/integrationsClient.js'
 import { createPoller } from '../lib/wechatQrPoller.js'
+import { openOAuthAuthorizationWindow } from '../lib/oauthPopup.js'
+import { manualIntegrationValues } from '../lib/accessManualCredentials.js'
 
-const EMPTY = Object.freeze({ workspace: '', account: '', token: '', appId: '', appSecret: '' })
+const EMPTY = Object.freeze({ workspace: '', account: '', token: '', appId: '', appSecret: '', botUsername: '' })
 
 export default function AccessConnectModal({ connector, integration, onClose, onConnected, t }) {
   const [form, setForm] = useState(() => ({
@@ -16,11 +21,14 @@ export default function AccessConnectModal({ connector, integration, onClose, on
     workspace: integration?.config?.workspace || '',
     account: integration?.config?.account || '',
     appId: integration?.config?.appId || '',
+    botUsername: integration?.config?.botUsername || '',
   }))
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [qr, setQr] = useState(null)
   const [qrStatus, setQrStatus] = useState('')
+  const [oauthSessionId, setOauthSessionId] = useState('')
+  const oauthPopupRef = useRef(null)
 
   useEffect(() => {
     if (connector.provider !== 'wechat_personal') return undefined
@@ -63,32 +71,84 @@ export default function AccessConnectModal({ connector, integration, onClose, on
     return () => { cancelled = true; poller?.stop?.() }
   }, [connector.provider, integration?.id, onConnected, t])
 
+  useEffect(() => {
+    if (!oauthSessionId) return undefined
+    let cancelled = false
+    let timer
+    const poll = async () => {
+      try {
+        const data = await getIntegrationOAuthStatusApi(oauthSessionId)
+        if (cancelled) return
+        const session = data.session
+        if (session?.status === 'completed') {
+          oauthPopupRef.current?.close?.()
+          setBusy(false)
+          onConnected(session.integration)
+          return
+        }
+        if (session?.status === 'failed' || session?.status === 'expired') {
+          oauthPopupRef.current?.close?.()
+          setBusy(false)
+          setMessage(session.error || t('access.oauthFailed'))
+          return
+        }
+        timer = window.setTimeout(poll, 1000)
+      } catch (error) {
+        if (!cancelled) {
+          setBusy(false)
+          setMessage(error.message || t('access.oauthFailed'))
+        }
+      }
+    }
+    poll()
+    return () => {
+      cancelled = true
+      if (timer) window.clearTimeout(timer)
+    }
+  }, [oauthSessionId, onConnected, t])
+
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }))
+
+  const beginOAuth = async () => {
+    setBusy(true)
+    setMessage('')
+    try {
+      const data = await startIntegrationOAuthApi({
+        provider: connector.provider,
+        integrationId: integration?.id,
+      })
+      const popup = openOAuthAuthorizationWindow(data.authorizationUrl, connector.provider)
+      if (!popup) throw new Error(t('access.oauthPopupBlocked'))
+      oauthPopupRef.current = popup
+      setOauthSessionId(data.session.id)
+    } catch (error) {
+      setBusy(false)
+      setMessage(error.code === 'OAUTH_NOT_CONFIGURED'
+        ? t('access.oauthNotConfigured')
+        : (error.message || t('access.oauthFailed')))
+    }
+  }
 
   const save = async (event) => {
     event.preventDefault()
     setBusy(true)
     setMessage('')
     try {
-      const config = connector.provider === 'notion'
-        ? { workspace: form.workspace }
-        : connector.provider === 'github'
-          ? { account: form.account }
-          : { appId: form.appId }
-      const secret = {}
-      if (connector.provider === 'feishu' && form.appSecret) secret.appSecret = form.appSecret
-      if ((connector.provider === 'notion' || connector.provider === 'github') && form.token) secret.token = form.token
+      const { config, secret } = manualIntegrationValues(connector.provider, form)
       const saved = await upsertIntegrationApi({
         id: integration?.id,
         provider: connector.provider,
         name: connector.label,
-        enabled: true,
+        // 凭据先以禁用状态保存；只有真实探测成功后才启用。
+        // 避免无效 token 在刷新后被显示成“已连接”。
+        enabled: false,
         config,
         secret,
       })
       const tested = await testIntegrationApi(saved.integration.id)
-      if (tested.result?.ok === false) throw new Error(tested.result.message || t('access.connectError'))
-      onConnected(saved.integration)
+      if (tested.result?.ok !== true) throw new Error(tested.result?.message || t('access.connectError'))
+      const enabled = await toggleIntegrationEnabledApi(saved.integration.id, true)
+      onConnected(enabled.integration)
     } catch (error) {
       setMessage(error.message || t('access.connectError'))
     } finally {
@@ -117,11 +177,34 @@ export default function AccessConnectModal({ connector, integration, onClose, on
           </div>
         ) : (
           <form onSubmit={save} className="p-5 flex flex-col gap-4">
-            {connector.provider === 'notion' && <TextField label={t('access.workspace')} value={form.workspace} onChange={(value) => set('workspace', value)} />}
-            {connector.provider === 'github' && <TextField label={t('access.account')} value={form.account} onChange={(value) => set('account', value)} />}
+            {connector.oauth && (
+              <>
+                <button
+                  type="button"
+                  onClick={beginOAuth}
+                  disabled={busy}
+                  className="h-10 px-4 rounded-md bg-ink text-paper text-sm flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {busy ? <LoaderCircle className="w-4 h-4 animate-spin" /> : <ExternalLink className="w-4 h-4" />}
+                  {busy ? t('access.oauthConnecting') : t('access.oauthConnect')}
+                </button>
+                <div className="flex items-center gap-3 text-[11px] text-ink-fade">
+                  <span className="h-px bg-ink-fade/30 flex-1" />
+                  {t('access.oauthManualFallback')}
+                  <span className="h-px bg-ink-fade/30 flex-1" />
+                </div>
+              </>
+            )}
+            {(connector.provider === 'notion' || connector.provider === 'slack') && <TextField label={t('access.workspace')} value={form.workspace} onChange={(value) => set('workspace', value)} />}
+            {(connector.provider === 'github' || connector.provider === 'google_drive') && <TextField label={t('access.account')} value={form.account} onChange={(value) => set('account', value)} />}
             {connector.provider === 'feishu' && <TextField label={t('access.appId')} value={form.appId} onChange={(value) => set('appId', value)} required />}
-            {(connector.provider === 'notion' || connector.provider === 'github') && <TextField type="password" label={t('access.token')} value={form.token} onChange={(value) => set('token', value)} placeholder={passwordPlaceholder} required={!integration} />}
+            {connector.provider === 'telegram' && <TextField label={t('access.botUsername')} value={form.botUsername} onChange={(value) => set('botUsername', value)} />}
+            {connector.provider === 'qq' && <TextField label={t('access.appId')} value={form.appId} onChange={(value) => set('appId', value)} required />}
+            {['notion', 'github', 'google_drive', 'slack'].includes(connector.provider) && <TextField type="password" label={t('access.token')} value={form.token} onChange={(value) => set('token', value)} placeholder={passwordPlaceholder} required={!integration} />}
             {connector.provider === 'feishu' && <TextField type="password" label={t('access.appSecret')} value={form.appSecret} onChange={(value) => set('appSecret', value)} placeholder={passwordPlaceholder} required={!integration} />}
+            {connector.provider === 'telegram' && <TextField type="password" label={t('access.botToken')} value={form.token} onChange={(value) => set('token', value)} placeholder={passwordPlaceholder} required={!integration} />}
+            {connector.provider === 'qq' && <TextField type="password" label={t('access.appSecret')} value={form.appSecret} onChange={(value) => set('appSecret', value)} placeholder={passwordPlaceholder} required={!integration} />}
+            {connector.provider === 'qq' && <TextField type="password" label={t('access.botTokenOptional')} value={form.token} onChange={(value) => set('token', value)} placeholder={passwordPlaceholder} />}
             {connector.setupUrl && <a href={connector.setupUrl} target="_blank" rel="noreferrer" className="text-xs text-ember hover:underline inline-flex items-center gap-1">{t('access.openSetup')}<ExternalLink className="w-3 h-3" /></a>}
             {message && <p className="text-sm text-red-600">{message}</p>}
             <div className="flex justify-end gap-2 pt-2">

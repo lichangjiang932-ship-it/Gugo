@@ -30,10 +30,13 @@ test('ppt skill prompt appends a topic-specific presentation blueprint', () => {
 test('chat split loads runtime skills instead of filtering only hard-coded skills', () => {
   const source = fs.readFileSync(new URL('../src/pages/ChatSplit/index.jsx', import.meta.url), 'utf8')
   assert.match(source, /listSkills/)
+  assert.match(source, /listLocalSkills/)
+  assert.match(source, /mergeRuntimeSkills/)
   assert.match(source, /runtimeSkills/)
   // split: true —— 技能 prompt 拆成稳定基底 + 随本轮变化的规划器,
   // 规划器改放到 history 之后,避免每轮炸掉上游前缀缓存。
   assert.match(source, /getSkillSystemPrompt\(skillId, state\.skillConfigs, runtimeSkills, \{ userPrompt, split: true \}\)/)
+  assert.match(source, /enabled !== false/)
 })
 
 test('chat composer checks runtime skills for slash menu visibility', () => {
@@ -41,4 +44,3 @@ test('chat composer checks runtime skills for slash menu visibility', () => {
   assert.match(source, /skills/)
   assert.doesNotMatch(source, /return SKILLS\.some/)
 })
-

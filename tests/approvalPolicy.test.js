@@ -16,6 +16,9 @@ const {
   APPROVAL_REQUIRED_TOOLS,
   NEVER_APPROVE_TOOLS,
   DEFAULT_APPROVAL_TIMEOUT_MS,
+  buildRememberedGrant,
+  isSafeCommandPrefix,
+  matchesRememberedGrant,
 } = await import('../server/utils/approvalPolicy.js')
 
 const JOB = { origin: 'job', mode: 'unattended' }
@@ -93,6 +96,47 @@ test('bash_exec: missing / non-string command does not throw', () => {
     assert.equal(out.needsApproval, true)
     assert.equal(out.risk, 'high')
   }
+})
+
+test('bash_exec remembered grants match only a safe command prefix', () => {
+  const grant = buildRememberedGrant('bash_exec', { command: 'git status' })
+  assert.deepEqual(grant, { toolName: 'bash_exec', commandPrefix: 'git status' })
+  assert.equal(matchesRememberedGrant('bash_exec', { command: 'git status --short' }, [grant]), true)
+  assert.equal(matchesRememberedGrant('bash_exec', { command: 'git statusx' }, [grant]), false)
+  assert.equal(matchesRememberedGrant('bash_exec', { command: 'rm -rf /' }, [grant]), false)
+})
+
+test('bash_exec remembered grants reject shell operators and ignore legacy tool-wide grants', () => {
+  for (const command of [
+    'git status; rm -rf /',
+    'git status && rm -rf /',
+    'git status | tee out',
+    'git status > out',
+    'git status < in',
+    'git `status`',
+    'git $(status)',
+    'git status\nrm -rf /',
+  ]) {
+    assert.equal(isSafeCommandPrefix(command), false, command)
+    assert.throws(() => buildRememberedGrant('bash_exec', { command }))
+  }
+  const verdict = classifyToolRisk('bash_exec', { command: 'git status' }, {
+    ...JOB,
+    rememberedTools: ['bash_exec'],
+  })
+  assert.equal(verdict.needsApproval, true)
+})
+
+test('bash_exec remembered prefix bypasses approval only for matching safe commands', () => {
+  const rememberedGrants = [{ toolName: 'bash_exec', commandPrefix: 'git status' }]
+  assert.equal(classifyToolRisk('bash_exec', { command: 'git status --short' }, {
+    ...JOB,
+    rememberedGrants,
+  }).needsApproval, false)
+  assert.equal(classifyToolRisk('bash_exec', { command: 'git status && rm -rf /' }, {
+    ...JOB,
+    rememberedGrants,
+  }).needsApproval, true)
 })
 
 // ──────────────────────── write_file / edit_file ──────────────────────────
@@ -200,6 +244,14 @@ test('unknown read-ish tools are not gated', () => {
   for (const name of ['foo_list', 'get_bar', 'something_search', 'linear_issue_details', 'jira_query']) {
     const out = classifyToolRisk(name, {}, JOB)
     assert.deepEqual(out, { needsApproval: false, risk: 'low', reason: null }, `${name} should pass`)
+  }
+})
+
+test('git mutation tools always require high-risk approval', () => {
+  for (const name of ['git_commit', 'git_push', 'git_rollback']) {
+    const result = classifyToolRisk(name, {}, { mode: 'unattended', origin: 'job' })
+    assert.equal(result.needsApproval, true, `${name} should require approval`)
+    assert.equal(result.risk, 'high', `${name} should be high risk`)
   }
 })
 

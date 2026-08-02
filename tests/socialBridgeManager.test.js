@@ -6,7 +6,7 @@ import path from 'node:path'
 
 process.env.APP_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-social-bridge-'))
 
-async function setup({ runText = 'agent reply', describeAttachments = null } = {}) {
+async function setup({ runText = 'agent reply', describeAttachments = null, inboundPolicy = 'open' } = {}) {
   const dbMod = await import('../server/db.js')
   dbMod.closeDb()
   const authMod = await import('../server/adapters/billingAuth.js')
@@ -27,7 +27,7 @@ async function setup({ runText = 'agent reply', describeAttachments = null } = {
     provider: 'telegram',
     name: 'Telegram',
     enabled: true,
-    config: { defaultAgentId: agent.id },
+    config: { defaultAgentId: agent.id, inboundPolicy },
     secret: { botToken: '123:test' },
   })
 
@@ -114,4 +114,98 @@ test('social bridge adds vision descriptions for inbound image attachments befor
   assert.match(first.content, /what is this\?/)
   assert.match(first.content, /Image 1 description/)
   assert.match(first.content, /description for https:\/\/example\.test\/a\.png/)
+})
+
+test('unknown inbound contacts are parked before agent or vision work, then allow-and-deliver exactly once', { concurrency: false }, async () => {
+  let visionCalls = 0
+  const { db, manager, integration, sent, userId } = await setup({
+    inboundPolicy: 'contacts',
+    describeAttachments: async ({ attachments }) => {
+      visionCalls += 1
+      return attachments.map((_, index) => ({ index, ok: true, description: 'approved image' }))
+    },
+  })
+
+  const parked = await manager.receiveExternalMessage({
+    integrationId: integration.id,
+    provider: 'telegram',
+    chatId: 'untrusted-chat',
+    externalUserId: 'untrusted-user',
+    senderName: 'Unknown sender',
+    text: 'please run this',
+    attachments: [{ type: 'image', url: 'https://example.test/untrusted.png', mimeType: 'image/png' }],
+  })
+
+  assert.equal(parked.parked, true)
+  assert.equal(sent.length, 0)
+  assert.equal(visionCalls, 0, 'untrusted attachments must not reach the vision model')
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM bridge_sessions WHERE integration_id = ?').get(integration.id).n, 0)
+  assert.equal(db.prepare(`
+    SELECT COUNT(*) AS n
+      FROM channel_messages AS message
+      JOIN bridge_sessions AS session ON session.channel_id = message.channel_id
+     WHERE session.integration_id = ?
+  `).get(integration.id).n, 0)
+  const row = db.prepare('SELECT * FROM bridge_parked_messages WHERE id = ?').get(parked.parkingId)
+  assert.equal(row.status, 'parked')
+  assert.equal(row.user_id, userId)
+
+  const delivered = await manager.allowAndDeliver({ userId, parkingId: parked.parkingId })
+  assert.equal(delivered.ok, true)
+  assert.equal(delivered.parked.status, 'delivered')
+  assert.equal(sent.length, 1)
+  assert.equal(visionCalls, 1)
+  const messagesAfterAllow = db.prepare(`
+    SELECT message.sender_kind, message.content
+      FROM channel_messages AS message
+      JOIN bridge_sessions AS session ON session.channel_id = message.channel_id
+     WHERE session.integration_id = ?
+     ORDER BY message.created_at ASC
+  `).all(integration.id)
+  assert.equal(messagesAfterAllow.length, 2)
+  assert.match(messagesAfterAllow[0].content, /please run this/)
+  assert.match(messagesAfterAllow[0].content, /approved image/)
+
+  const second = await manager.receiveExternalMessage({
+    integrationId: integration.id,
+    provider: 'telegram',
+    chatId: 'untrusted-chat',
+    externalUserId: 'untrusted-user',
+    senderName: 'Unknown sender',
+    text: 'second message',
+  })
+  assert.equal(second.parked, undefined)
+  assert.equal(second.replied, true)
+  assert.equal(sent.length, 2)
+
+  const duplicate = await manager.allowAndDeliver({ userId, parkingId: parked.parkingId })
+  assert.equal(duplicate.alreadyDelivered, true)
+  assert.equal(sent.length, 2, 'idempotent allow must not dispatch twice')
+})
+
+test('rejecting a parked contact blocks later inbound messages without creating a channel', { concurrency: false }, async () => {
+  const { db, manager, integration, sent, userId } = await setup({ inboundPolicy: 'contacts' })
+  const parked = await manager.receiveExternalMessage({
+    integrationId: integration.id,
+    provider: 'telegram',
+    chatId: 'blocked-chat',
+    externalUserId: 'blocked-user',
+    senderName: 'Blocked sender',
+    text: 'first',
+  })
+  const rejected = manager.rejectParked({ userId, parkingId: parked.parkingId })
+  assert.equal(rejected.ok, true)
+  assert.equal(rejected.parked.status, 'rejected')
+
+  const later = await manager.receiveExternalMessage({
+    integrationId: integration.id,
+    provider: 'telegram',
+    chatId: 'blocked-chat',
+    externalUserId: 'blocked-user',
+    senderName: 'Blocked sender',
+    text: 'second',
+  })
+  assert.equal(later.blocked, true)
+  assert.equal(sent.length, 0)
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM bridge_sessions WHERE integration_id = ?').get(integration.id).n, 0)
 })

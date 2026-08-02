@@ -11,7 +11,13 @@ function authHeaders(json = false) {
 async function parse(response) {
   const data = await response.json().catch(() => ({}))
   if (!response.ok || data?.ok === false) {
-    throw new Error(data?.error?.message || data?.error || `HTTP ${response.status}`)
+    const error = new Error(data?.error?.message || data?.error || `HTTP ${response.status}`)
+    error.status = response.status
+    error.code = data?.error?.code
+    error.path = data?.error?.path
+    error.retryable = data?.error?.retryable
+    error.hint = data?.error?.hint
+    throw error
   }
   return data
 }

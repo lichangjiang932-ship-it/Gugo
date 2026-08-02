@@ -2,12 +2,13 @@ import { useEffect, useState } from 'react'
 import { Plus, Trash2, Save, Play, X, Webhook, Terminal } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
 import { getAuthToken } from '../lib/accountClient.js'
+import { useT } from '../i18n/I18nProvider.jsx'
 
 const EVENTS = [
-  { id: 'user_prompt_submit', label: '用户消息提交前' },
-  { id: 'pre_tool_use', label: '工具调用前 (可拒绝)' },
-  { id: 'post_tool_use', label: '工具调用后 (观察)' },
-  { id: 'stop', label: '一轮对话结束' },
+  { id: 'user_prompt_submit', labelKey: 'hooks.eventUserPrompt' },
+  { id: 'pre_tool_use', labelKey: 'hooks.eventPreTool' },
+  { id: 'post_tool_use', labelKey: 'hooks.eventPostTool' },
+  { id: 'stop', labelKey: 'hooks.eventStop' },
 ]
 
 function authHeaders() {
@@ -45,6 +46,7 @@ function emptyHook() {
 }
 
 export default function HooksView() {
+  const { t } = useT()
   const [hooks, setHooks] = useState([])
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
@@ -91,7 +93,7 @@ export default function HooksView() {
   }
 
   const remove = async (id) => {
-    if (!window.confirm('删除这个 hook?')) return
+    if (!window.confirm(t('hooks.confirmDelete'))) return
     try {
       await jsonFetch(`/api/hooks/${id}`, { method: 'DELETE' })
       if (editing?.id === id) setEditing(null)
@@ -119,7 +121,7 @@ export default function HooksView() {
           <Webhook className="w-5 h-5 text-ember" />
           <div className="flex-1">
             <div className="text-base font-semibold text-ink">Hooks</div>
-            <div className="text-[11px] text-ink-fade">在工具调用前后挂自定义脚本/HTTP 回调；可拒绝、改写参数、做审计</div>
+            <div className="text-[11px] text-ink-fade">{t('hooks.subtitle')}</div>
           </div>
           <button
             type="button"
@@ -127,16 +129,16 @@ export default function HooksView() {
             className="h-8 px-3 bg-ember text-paper rounded-md text-xs hover:bg-ember/90 flex items-center gap-1"
           >
             <Plus className="w-3.5 h-3.5" />
-            新增 Hook
+            {t('hooks.add')}
           </button>
         </div>
 
         <div className="flex-1 flex min-h-0">
           <div className="w-[420px] border-r border-ink/10 overflow-auto">
-            {loading && <div className="p-4 text-sm text-ink-fade">加载中…</div>}
+            {loading && <div className="p-4 text-sm text-ink-fade">{t('hooks.loading')}</div>}
             {err && <div className="p-4 text-sm text-rose-700">{err}</div>}
             {!loading && hooks.length === 0 && (
-              <div className="p-6 text-center text-sm text-ink-fade">还没有 Hook，点「新增」开始</div>
+              <div className="p-6 text-center text-sm text-ink-fade">{t('hooks.empty')}</div>
             )}
             {hooks.map((h) => (
               <button
@@ -152,14 +154,14 @@ export default function HooksView() {
                     ? <Terminal className="w-3.5 h-3.5 text-ink-fade" />
                     : <Webhook className="w-3.5 h-3.5 text-ink-fade" />}
                   <span className="font-mono text-[10px] uppercase tracking-wider text-ember">{h.event}</span>
-                  {!h.enabled && <span className="text-[10px] text-ink-fade">已停用</span>}
-                  {h.blocking && <span className="text-[10px] text-amber-700">阻塞</span>}
+                  {!h.enabled && <span className="text-[10px] text-ink-fade">{t('hooks.disabled')}</span>}
+                  {h.blocking && <span className="text-[10px] text-amber-700">{t('hooks.blocking')}</span>}
                 </div>
                 <div className="text-xs text-ink truncate mt-1">
                   {h.kind === 'http' ? h.url : (Array.isArray(h.command) ? h.command.join(' ') : '')}
                 </div>
                 <div className="text-[10px] text-ink-fade mt-0.5">
-                  匹配: {h.toolPattern || '*'} · 超时 {h.timeoutMs}ms
+                  {t('hooks.matchTimeout', { pattern: h.toolPattern || '*', timeout: h.timeoutMs })}
                 </div>
               </button>
             ))}
@@ -168,26 +170,26 @@ export default function HooksView() {
           <div className="flex-1 overflow-auto">
             {!editing ? (
               <div className="h-full flex items-center justify-center text-sm text-ink-fade">
-                左侧选择 Hook，或点「新增」
+                {t('hooks.choose')}
               </div>
             ) : (
               <div className="max-w-[720px] mx-auto px-8 py-6 space-y-4">
                 <div className="flex items-center justify-between">
-                  <div className="text-sm font-semibold text-ink">{editing.id ? '编辑 Hook' : '新建 Hook'}</div>
+                  <div className="text-sm font-semibold text-ink">{editing.id ? t('hooks.edit') : t('hooks.create')}</div>
                   <button type="button" onClick={() => setEditing(null)} className="text-ink-fade hover:text-ink"><X className="w-4 h-4" /></button>
                 </div>
 
-                <Field label="触发事件">
+                <Field label={t('hooks.event')}>
                   <select
                     value={editing.event}
                     onChange={(e) => setEditing({ ...editing, event: e.target.value })}
                     className="w-full h-9 px-3 text-sm bg-paper-2 border border-ink/15 rounded-md outline-none"
                   >
-                    {EVENTS.map((e) => <option key={e.id} value={e.id}>{e.label}</option>)}
+                    {EVENTS.map((e) => <option key={e.id} value={e.id}>{t(e.labelKey)}</option>)}
                   </select>
                 </Field>
 
-                <Field label="工具名匹配 (glob, 例 web_search / mcp__* / *)">
+                <Field label={t('hooks.toolPattern')}>
                   <input
                     value={editing.toolPattern}
                     onChange={(e) => setEditing({ ...editing, toolPattern: e.target.value })}
@@ -195,10 +197,10 @@ export default function HooksView() {
                   />
                 </Field>
 
-                <Field label="Hook 类型">
+                <Field label={t('hooks.kind')}>
                   <div className="flex gap-1.5">
-                    <KindChip active={editing.kind === 'http'} onClick={() => setEditing({ ...editing, kind: 'http' })}>HTTP 回调</KindChip>
-                    <KindChip active={editing.kind === 'shell'} onClick={() => setEditing({ ...editing, kind: 'shell' })}>Shell (需 HOOKS_SHELL_ENABLED=1)</KindChip>
+                    <KindChip active={editing.kind === 'http'} onClick={() => setEditing({ ...editing, kind: 'http' })}>{t('hooks.httpCallback')}</KindChip>
+                    <KindChip active={editing.kind === 'shell'} onClick={() => setEditing({ ...editing, kind: 'shell' })}>{t('hooks.shellEnabled')}</KindChip>
                   </div>
                 </Field>
 
@@ -212,7 +214,7 @@ export default function HooksView() {
                     />
                   </Field>
                 ) : (
-                  <Field label="Shell argv (空格分隔; 第一个元素是可执行命令)">
+                  <Field label={t('hooks.shellArgv')}>
                     <input
                       value={Array.isArray(editing.command) ? editing.command.join(' ') : editing.command || ''}
                       onChange={(e) => setEditing({ ...editing, command: e.target.value })}
@@ -225,14 +227,14 @@ export default function HooksView() {
                 <div className="flex items-center gap-4 text-xs text-ink-soft">
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input type="checkbox" checked={editing.enabled} onChange={(e) => setEditing({ ...editing, enabled: e.target.checked })} />
-                    启用
+                    {t('hooks.enabled')}
                   </label>
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input type="checkbox" checked={editing.blocking} onChange={(e) => setEditing({ ...editing, blocking: e.target.checked })} />
-                    阻塞型（可拒绝调用）
+                    {t('hooks.blockingMode')}
                   </label>
                   <label className="flex items-center gap-2">
-                    超时 (ms)
+                    {t('hooks.timeout')}
                     <input
                       type="number"
                       value={editing.timeoutMs}
@@ -249,15 +251,15 @@ export default function HooksView() {
                     disabled={saving}
                     className="h-8 px-4 bg-ember text-paper rounded-md text-xs hover:bg-ember/90 disabled:opacity-50 flex items-center gap-1"
                   >
-                    <Save className="w-3.5 h-3.5" />{saving ? '保存中…' : '保存'}
+                    <Save className="w-3.5 h-3.5" />{saving ? t('hooks.saving') : t('hooks.save')}
                   </button>
                   {editing.id && (
                     <>
                       <button type="button" onClick={() => test(editing.id)} className="h-8 px-3 border border-ink/15 text-ink-soft rounded-md text-xs hover:bg-paper-2 flex items-center gap-1">
-                        <Play className="w-3.5 h-3.5" />测试
+                        <Play className="w-3.5 h-3.5" />{t('hooks.test')}
                       </button>
                       <button type="button" onClick={() => remove(editing.id)} className="h-8 px-3 border border-rose-300 text-rose-700 rounded-md text-xs hover:bg-rose-50 flex items-center gap-1">
-                        <Trash2 className="w-3.5 h-3.5" />删除
+                        <Trash2 className="w-3.5 h-3.5" />{t('hooks.delete')}
                       </button>
                     </>
                   )}

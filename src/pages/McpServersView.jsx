@@ -10,7 +10,10 @@ import {
   testMcpServerApi,
   connectMcpServerApi,
   disconnectMcpServerApi,
+  getMcpCatalogApi,
 } from '../lib/mcpClient.js'
+import { createMcpServerFromPreset, MCP_SERVER_PRESETS } from '../lib/mcpPresets.js'
+import { parseKeyValueLines, serializeKeyValueLines } from '../lib/mcpKeyValue.js'
 
 function emptyServer() {
   return {
@@ -23,34 +26,49 @@ function emptyServer() {
     cwd: '',
     url: '',
     headers: {},
-    headersText: '{}',
     enabled: true,
     autoApprove: [],
+  }
+}
+
+function formFromServer(server) {
+  return {
+    ...server,
+    envText: serializeKeyValueLines(server?.env),
+    headersText: serializeKeyValueLines(server?.headers),
   }
 }
 
 export default function McpServersView() {
   const { t } = useT()
   const [servers, setServers] = useState([])
+  const [catalog, setCatalog] = useState([])
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
   const [editing, setEditing] = useState(null)
   const [saving, setSaving] = useState(false)
   const [testResult, setTestResult] = useState(null)
   const [notice, setNotice] = useState('')
+  const [fieldErrors, setFieldErrors] = useState({})
+  const [presetChoice, setPresetChoice] = useState('')
   const externalEndpoint = `${window.location.origin}/mcp`
 
   const selectServer = (server) => {
-    setEditing({ ...server, headersText: JSON.stringify(server.headers || {}, null, 2) })
+    setEditing(formFromServer(server))
     setTestResult(null)
+    setFieldErrors({})
   }
 
   const reload = async () => {
     setLoading(true)
     setErr('')
     try {
-      const data = await listMcpServersApi()
-      setServers(data.servers || [])
+      const [serverData, catalogData] = await Promise.all([
+        listMcpServersApi(),
+        getMcpCatalogApi(),
+      ])
+      setServers(serverData.servers || [])
+      setCatalog(catalogData.catalog || [])
     } catch (e) { setErr(e.message) } finally { setLoading(false) }
   }
   useEffect(() => {
@@ -62,14 +80,25 @@ export default function McpServersView() {
     if (!editing) return
     setSaving(true)
     setErr('')
+    setFieldErrors({})
     try {
       const payload = { ...editing }
       if (typeof payload.args === 'string') {
         payload.args = payload.args.trim().split(/\s+/).filter(Boolean)
       }
-      if (payload.transport !== 'stdio') {
-        payload.headers = payload.headersText?.trim() ? JSON.parse(payload.headersText) : {}
+      try {
+        payload.env = payload.transport === 'stdio' ? parseKeyValueLines(payload.envText) : {}
+      } catch (parseError) {
+        setFieldErrors({ env: t('mcp.keyValueLineError', { line: parseError.line || 1 }) })
+        return
       }
+      try {
+        payload.headers = payload.transport === 'stdio' ? {} : parseKeyValueLines(payload.headersText)
+      } catch (parseError) {
+        setFieldErrors({ headers: t('mcp.keyValueLineError', { line: parseError.line || 1 }) })
+        return
+      }
+      delete payload.envText
       delete payload.headersText
       await upsertMcpServerApi(payload)
       setEditing(null)
@@ -101,7 +130,19 @@ export default function McpServersView() {
       const data = await connectMcpServerApi(id)
       setErr('')
       setNotice(t('mcp.connected', { count: data.toolCount || 0 }))
+      await reload()
     } catch (e) { setErr(e.message) }
+  }
+
+  const choosePreset = (presetId) => {
+    setPresetChoice(presetId)
+    const preset = createMcpServerFromPreset(presetId)
+    if (preset) {
+      setEditing(formFromServer(preset))
+      setTestResult(null)
+      setFieldErrors({})
+    }
+    window.setTimeout(() => setPresetChoice(''), 0)
   }
 
   const disconnect = async (id) => {
@@ -122,7 +163,14 @@ export default function McpServersView() {
             <div className="text-base font-semibold text-ink">{t('mcp.title')}</div>
             <div className="text-[11px] text-ink-fade">{t('mcp.subtitle')}</div>
           </div>
-          <button type="button" onClick={() => setEditing(emptyServer())} className="h-8 px-3 bg-ember text-paper rounded-md text-xs hover:bg-ember/90 flex items-center gap-1">
+          <label className="inline-flex h-8 items-center gap-1.5 rounded-md border border-ember/30 px-2 text-xs text-ember hover:bg-ember/10">
+            <Globe className="h-3.5 w-3.5" />
+            <select value={presetChoice} onChange={(event) => choosePreset(event.target.value)} className="max-w-40 bg-transparent outline-none" aria-label={t('mcp.choosePreset')}>
+              <option value="">{t('mcp.choosePreset')}</option>
+              {MCP_SERVER_PRESETS.map((preset) => <option key={preset.id} value={preset.id}>{preset.label}</option>)}
+            </select>
+          </label>
+          <button type="button" onClick={() => { setEditing(formFromServer(emptyServer())); setFieldErrors({}) }} className="h-8 px-3 bg-ember text-paper rounded-md text-xs hover:bg-ember/90 flex items-center gap-1">
             <Plus className="w-3.5 h-3.5" />{t('mcp.addServer')}
           </button>
         </div>
@@ -140,16 +188,25 @@ export default function McpServersView() {
                 <pre className="mt-2 text-[10px] text-left bg-paper-2 p-2 rounded">npx -y @modelcontextprotocol/server-filesystem .</pre>
               </div>
             )}
-            {servers.map((s) => (
+            {servers.map((s) => {
+              const runtime = catalog.find((entry) => entry.serverId === s.id)
+              const connected = runtime?.connected === true
+              const credentialCount = Object.keys(s.transport === 'stdio' ? (s.env || {}) : (s.headers || {})).length
+              return (
               <div key={s.id} className={`border-b border-ink/5 ${editing?.id === s.id ? 'bg-ember/10' : ''}`}>
                 <button type="button" onClick={() => selectServer(s)} className="w-full text-left px-4 pt-3 pb-2 hover:bg-paper-2/70">
                   <div className="flex items-center gap-2">
                     {s.transport === 'stdio' ? <Terminal className="w-3.5 h-3.5 text-ink-fade" /> : <Globe className="w-3.5 h-3.5 text-ink-fade" />}
                     <span className="text-sm font-medium text-ink truncate flex-1">{s.name}</span>
+                    <span className={`inline-flex items-center gap-1 text-[10px] ${connected ? 'text-emerald-700' : 'text-ink-fade'}`}><span className={`h-1.5 w-1.5 rounded-full ${connected ? 'bg-emerald-500' : 'bg-ink-fade/50'}`} />{t(connected ? 'mcp.connectedStatus' : 'mcp.stoppedStatus')}</span>
                     {!s.enabled && <span className="text-[10px] text-ink-fade">{t('mcp.disabled')}</span>}
                   </div>
                   <div className="text-[10px] text-ink-fade truncate mt-1">
                     {s.transport === 'stdio' ? `${s.command} ${(s.args || []).join(' ')}` : s.url}
+                  </div>
+                  <div className="mt-1 flex gap-3 text-[10px] text-ink-fade">
+                    <span>{t('mcp.toolCount', { count: runtime?.tools?.length || 0 })}</span>
+                    <span>{t('mcp.credentialCount', { count: credentialCount })}</span>
                   </div>
                 </button>
                 <div className="px-4 pb-3 flex items-center gap-2">
@@ -162,7 +219,8 @@ export default function McpServersView() {
                   <button type="button" onClick={() => disconnect(s.id)} className="text-[10px] text-ink-fade hover:text-ink">{t('mcp.disconnect')}</button>
                 </div>
               </div>
-            ))}
+              )
+            })}
           </div>
 
           <div className="flex-1 overflow-auto">
@@ -205,14 +263,17 @@ export default function McpServersView() {
                     <Field label={t('mcp.cwd')}>
                       <input value={editing.cwd || ''} onChange={(e) => setEditing({ ...editing, cwd: e.target.value })} className="w-full h-9 px-3 text-sm bg-paper-2 border border-ink/15 rounded-md outline-none focus:border-ember font-mono" placeholder={t('mcp.cwdPlaceholder')} />
                     </Field>
+                    <Field label={t('mcp.env')} error={fieldErrors.env} hint={t('mcp.keyValueHint')}>
+                      <textarea rows="4" value={editing.envText || ''} onChange={(e) => { setEditing({ ...editing, envText: e.target.value }); setFieldErrors((current) => ({ ...current, env: '' })) }} className="w-full px-3 py-2 text-xs bg-paper-2 border border-ink/15 rounded-md outline-none focus:border-ember font-mono" placeholder={'GITHUB_TOKEN=...\nAPI_KEY=...'} spellCheck="false" />
+                    </Field>
                   </>
                 ) : (
                   <>
                     <Field label={t('mcp.url')}>
                       <input value={editing.url || ''} onChange={(e) => setEditing({ ...editing, url: e.target.value })} className="w-full h-9 px-3 text-sm bg-paper-2 border border-ink/15 rounded-md outline-none focus:border-ember" placeholder="https://your-mcp.example.com/mcp" />
                     </Field>
-                    <Field label={t('mcp.headers')}>
-                      <textarea rows="4" value={editing.headersText || ''} onChange={(e) => setEditing({ ...editing, headersText: e.target.value })} className="w-full px-3 py-2 text-xs bg-paper-2 border border-ink/15 rounded-md outline-none focus:border-ember font-mono" placeholder={'{"Authorization":"Bearer ..."}'} />
+                    <Field label={t('mcp.headers')} error={fieldErrors.headers} hint={t('mcp.keyValueHint')}>
+                      <textarea rows="4" value={editing.headersText || ''} onChange={(e) => { setEditing({ ...editing, headersText: e.target.value }); setFieldErrors((current) => ({ ...current, headers: '' })) }} className="w-full px-3 py-2 text-xs bg-paper-2 border border-ink/15 rounded-md outline-none focus:border-ember font-mono" placeholder={'Authorization=Bearer ...\nX-API-Key=...'} spellCheck="false" />
                     </Field>
                   </>
                 )}
@@ -275,11 +336,13 @@ export default function McpServersView() {
   )
 }
 
-function Field({ label, children }) {
+function Field({ label, hint, error, children }) {
   return (
     <div>
       <label className="block text-[11px] text-ink-fade mb-1.5">{label}</label>
       {children}
+      {hint && !error && <p className="mt-1 text-[10px] text-ink-fade">{hint}</p>}
+      {error && <p className="mt-1 text-[10px] text-rose-700">{error}</p>}
     </div>
   )
 }

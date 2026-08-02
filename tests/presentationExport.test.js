@@ -120,6 +120,51 @@ test('presentation themes vary by topic cues', async () => {
   assert.equal(mod.resolvePresentationTheme('AI product roadmap').id, 'tech')
   assert.equal(mod.resolvePresentationTheme('bank annual strategy').id, 'finance')
   assert.equal(mod.resolvePresentationTheme('consumer brand launch').id, 'consumer')
+  assert.equal(
+    mod.resolvePresentationTheme('a neutral topic without industry cues').id,
+    mod.resolvePresentationTheme('a neutral topic without industry cues').id,
+  )
+})
+
+test('premium preview applies the resolved topic theme instead of one hard-coded palette', () => {
+  const html = buildPremiumHtmlPreview(`# AI product roadmap
+Cloud inference platform
+
+---
+
+## Delivery plan
+- Ship the routing layer`)
+
+  assert.match(html, /data-presentation-theme="tech"/)
+  assert.match(html, /--deck-primary:#6366F1/)
+})
+
+test('untagged slides infer split, process, and quote layouts from their content', () => {
+  const slides = parseMarkdownSlides(`# Cover
+Subtitle
+
+---
+
+## Options
+**Local**
+- Private
+**Cloud**
+- Elastic
+
+---
+
+## Rollout
+1. Prepare - inventory
+2. Migrate - canary
+3. Verify - regression
+
+---
+
+## Principle
+> Reliability beats novelty
+> Architecture review`)
+
+  assert.deepEqual(slides.map((slide) => slide.type), ['cover', 'split', 'process', 'quote'])
 })
 
 test('parses Chinese page headings into multiple slides for ppt artifacts', () => {

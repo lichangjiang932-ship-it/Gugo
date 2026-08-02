@@ -14,7 +14,7 @@ import { getDb } from '../db.js'
 import { logger } from '../utils/logger.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const SEED_ROOT = path.resolve(__dirname, '../seed/skills')
+export const SYSTEM_SKILLS_SEED_ROOT = path.resolve(__dirname, '../../seed/skills')
 
 // 容易超 SQLite row 大小的极端 SVG 文件做一下 sanity 限制（实际我们的素材最大 ~40KB，没问题）
 const MAX_ASSET_BYTES = 2 * 1024 * 1024 // 2MB / file
@@ -113,13 +113,13 @@ function upsertSystemSkill(db, skillDir, manifest) {
 }
 
 export function seedSystemSkills({ silent = false } = {}) {
-  if (!fs.existsSync(SEED_ROOT)) {
+  if (!fs.existsSync(SYSTEM_SKILLS_SEED_ROOT)) {
     if (!silent) logger.info('[seed] no seed/skills directory, skip')
     return []
   }
   const db = getDb()
-  const skillDirs = fs.readdirSync(SEED_ROOT)
-    .map((name) => path.join(SEED_ROOT, name))
+  const skillDirs = fs.readdirSync(SYSTEM_SKILLS_SEED_ROOT)
+    .map((name) => path.join(SYSTEM_SKILLS_SEED_ROOT, name))
     .filter((p) => fs.statSync(p).isDirectory())
 
   const results = []

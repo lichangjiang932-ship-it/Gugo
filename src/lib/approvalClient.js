@@ -59,6 +59,7 @@ export const PERMISSION_MODES = ['normal', 'acceptEdits', 'plan', 'bypass']
 export const DEFAULT_APPROVAL_SETTINGS = Object.freeze({
   mode: 'normal',
   rememberedTools: [],
+  rememberedGrants: [],
   modes: PERMISSION_MODES,
 })
 
@@ -72,6 +73,7 @@ function normalizeSettings(data) {
   return {
     mode: PERMISSION_MODES.includes(data.mode) ? data.mode : 'normal',
     rememberedTools: Array.isArray(data.rememberedTools) ? data.rememberedTools : [],
+    rememberedGrants: Array.isArray(data.rememberedGrants) ? data.rememberedGrants : [],
     modes: Array.isArray(data.modes) && data.modes.length ? data.modes : PERMISSION_MODES,
   }
 }

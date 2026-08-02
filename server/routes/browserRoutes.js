@@ -1,7 +1,7 @@
 import { readJson } from '../utils.js'
 import { authenticateRequest } from '../middleware.js'
 import { isIntegrationEnabled } from '../services/integrationsStore.js'
-import { assertBrowserAppUrlAccess, assertBrowserSessionAppAccess } from '../services/connectorService.js'
+import { assertBrowserAppUrlAccess, assertBrowserSessionAppAccess, listConnectedBrowserApps } from '../services/connectorService.js'
 import {
   browserClick,
   browserConsole,
@@ -33,7 +33,7 @@ export async function handleBrowserRequest(req, res) {
       return sendJson(res, 200, { ok: true, state: await browserState({ userId }) })
     }
     if (req.method === 'POST' && pathname === '/api/browser/state') {
-      return sendJson(res, 200, { ok: true, result: await browserState({ userId }) })
+      return sendJson(res, 200, { ok: true, result: await assertBrowserSessionAppAccess({ userId }) })
     }
     if (req.method === 'POST' && pathname === '/api/browser/close') {
       return sendJson(res, 200, { ok: true, closed: closeBrowserSession(userId) })
@@ -41,8 +41,9 @@ export async function handleBrowserRequest(req, res) {
     if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: '仅支持 POST' })
     const body = await readJson(req)
     if (pathname === '/api/browser/open') {
-      assertBrowserAppUrlAccess({ userId, url: body.url })
-      return sendJson(res, 200, { ok: true, result: await browserOpenUrl({ userId, url: body.url }) })
+      const connectedApp = assertBrowserAppUrlAccess({ userId, url: body.url })
+      const persistent = !!connectedApp || listConnectedBrowserApps({ userId }).length > 0
+      return sendJson(res, 200, { ok: true, result: await browserOpenUrl({ userId, url: body.url, headed: persistent }) })
     }
     await assertBrowserSessionAppAccess({ userId })
     if (pathname === '/api/browser/snapshot') return sendJson(res, 200, { ok: true, result: await browserSnapshot({ userId, maxText: body.maxText }) })

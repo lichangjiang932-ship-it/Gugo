@@ -1,130 +1,98 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from '../../lib/router.jsx'
 import LeftRail from '../../components/LeftRail'
 import { useAppContext } from '../../store/AppContext'
 import { SKILLS, getSkillSystemPrompt } from '../../data.js'
 import { buildUserContentWithAttachments, describeAttachmentPrompt } from '../../lib/attachments.js'
 import { callModelThroughProxyStream, getModelStatus, summarizeSessionTitle } from '../../lib/modelClient.js'
 import { buildToolSpecs, buildToolSpecsAsync, executeToolCall, resolveToolsForMode, setCachedApprovalSettings } from '../../lib/tools/index.js'
-import { readStoredModel, resolveInitialModel, writeStoredModel } from '../../lib/modelSelection.js'
+import { readStoredModel, resolveInitialModel, resolveSessionModel, writeStoredModel } from '../../lib/modelSelection.js'
 import { isLoggedInLocally } from '../../lib/accountClient.js'
 import { useActiveAgent } from '../../agents/activeAgentContext.js'
 import { listSkills } from '../../lib/skillClient.js'
+import { listLocalSkills, mergeRuntimeSkills } from '../../lib/localSkills.js'
 import { listPromptTemplatesApi, getPromptTemplateContentApi, renderPromptTemplate } from '../../lib/pluginClient.js'
 import { createSlashCommandRegistry, normalizeSlashCommandName, parseSlashCommandInput } from '../../lib/slashCommandRegistry.js'
 import { CORE_SLASH_COMMANDS, registerCoreSlashCommands } from '../../lib/slashCoreCommands.js'
-import { handleSlashAutocompleteKeyDown } from '../../components/slashAutocompleteLogic.js'
 import { inferSkillIdFromPrompt, parseSkillCommand } from '../../lib/skillCommands.js'
 import { TASK_STATUS, TOOL_CALL_STATUS, HISTORY_STATUS } from '../../store/taskStatus.js'
-import ChatHeader from './ChatHeader'
 import ChatMessages from './ChatMessages'
 import ChatComposer from './ChatComposer'
 import RightPreviewPane from './RightPreviewPane'
-import CodingWorkbench from './CodingWorkbench'
-import TodoTracker from '../../components/TodoTracker'
+import useInputHistory from './useInputHistory.js'
 import ApplyPatchApprovalModal from '../../components/ApplyPatchApprovalModal'
 import ToolApprovalCard from '../../components/ToolApprovalCard.jsx'
-import PermissionModeSwitcher from '../../components/PermissionModeSwitcher.jsx'
 import { fetchApprovalSettings, updateApprovalSettings } from '../../lib/approvalClient.js'
 import { useToast } from '../../components/Toast.jsx'
 import { useT } from '../../i18n/I18nProvider.jsx'
 import { buildArtifactPreview } from '../../lib/artifactPreview.js'
 import { exportSession } from '../../lib/sessionExport.js'
-import { compressImageDataUrl } from '../../lib/imageCompress.js'
-import { extractPdfText } from '../../lib/pdfExtract.js'
-import { extractDocxText, extractPptxText, isDocxFile, isPptxFile } from '../../lib/officeExtract.js'
 import { fetchCompactionArchive } from '../../lib/compactionClient.js'
 import { trimHistoryWithHysteresis } from '../../lib/historyWindow.js'
+import { StreamingToolExecutor } from '../../lib/StreamingToolExecutor.js'
+import { parseChatAttachments } from '../../lib/chatAttachmentParser.js'
+import { readContextUsageVisible, writeContextUsageVisible } from '../../lib/chatUiPreferences.js'
+import {
+  getSpeechRecognitionConstructor,
+  mergeSpeechTranscript,
+  readSpeechRecognitionEvent,
+  resolveSpeechRecognitionLanguage,
+} from '../../lib/voiceRecognition.js'
 import {
   artifactTypeForSkill,
   buildAssistantToolCallsMessage,
   buildChatFailureMessage,
+  buildToolRunSummary,
+  clipChatToolContent,
+  createChatToolLoopGuard,
   filterToolNamesForSkill,
+  getVisibleModelErrorMessage,
+  isStreamingSafeToolCall,
+  normalizeChatToolCalls,
+  shouldForceChatTextWrapUp,
   shouldStopAfterArtifactTool,
+  validateChatToolCallAllowed,
 } from '../../lib/chatFlowGuards.js'
 
-const MAX_IMAGE_BYTES = 4 * 1024 * 1024
-const MAX_RAW_IMAGE_BYTES = 16 * 1024 * 1024
-const MAX_IMAGES_PER_MESSAGE = 5
-const MAX_TEXT_BYTES = 256 * 1024
 // 死循环护栏。正常任务(哪怕读完整个项目再动手改)也远到不了这个量级,
 // 它防的是模型反复调同一个工具停不下来,不是给工作设预算。
-const RUNAWAY_ROUND_GUARD = 500
+// ★ 500 → 2000:和后端 JOB_MAX_ITERS 对齐。前端有用户盯着、随时能点停止,
+// 护栏可以比后端更松。真正拦重复调用的是 createChatToolLoopGuard。
+const RUNAWAY_ROUND_GUARD = 2000
 const EMPTY_MESSAGES = []
+
+/**
+ * 用户是不是主动点了「停止」。
+ *
+ * ★ 原来到处比对 `err.message === '已停止生成'`,但真实的 AbortController
+ * 在 reader.read() 期间抛的是 DOMException("The user aborted a request."),
+ * 中文 message 只在极少数路径上成立 —— 于是按停止键通常会走到失败分支:
+ * 弹错误 toast、把「模型调用失败」塞进用户消息、写一条 FAILED 历史。
+ * 按 name/code 判断才靠谱。
+ */
+function isUserStopped(err) {
+  return err?.name === 'AbortError' || err?.code === 'USER_STOPPED' || err?.message === '已停止生成'
+}
 
 function promptTemplateCommandName(tpl) {
   const byName = normalizeSlashCommandName(tpl?.name)
   return byName || normalizeSlashCommandName(tpl?.id)
 }
 
-function readFileAsDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(reader.result)
-    reader.onerror = () => reject(reader.error || new Error('读取图片失败'))
-    reader.readAsDataURL(file)
-  })
-}
-
-
-function dataUrlByteLength(dataUrl = '') {
-  const comma = String(dataUrl).indexOf(',')
-  const payload = comma >= 0 ? String(dataUrl).slice(comma + 1) : String(dataUrl)
-  return Math.floor((payload.length * 3) / 4)
-}
-
-function isPdfFile(file) {
-  return file.type === 'application/pdf' || /\.pdf$/i.test(file.name)
-}
-
-function isTextLikeFile(file) {
-  return /^text\/|json|xml|csv|markdown|javascript|typescript/.test(file.type) ||
-    /\.(txt|md|json|csv|xml|yml|yaml|log|js|jsx|ts|tsx|css|html)$/i.test(file.name)
-}
-
-function isExcelFile(file) {
-  return /\.(xlsx|xls|xlsm|xlsb|ods)$/i.test(file.name)
-}
-
-async function readExcelAsText(file) {
-  const XLSX = await import('@e965/xlsx')
-  const buffer = await file.arrayBuffer()
-  const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array' })
-  const parts = []
-  for (const sheetName of workbook.SheetNames) {
-    const sheet = workbook.Sheets[sheetName]
-    const csv = XLSX.utils.sheet_to_csv(sheet)
-    parts.push(`[工作表: ${sheetName}]\n${csv}`)
-  }
-  return parts.join('\n\n')
-}
-
-// 统一截断：提取出的文本超过 MAX_TEXT_BYTES 时截到一半字符并加提示，
-// 而不是丢掉内容回退成"只有名称"。
-function clampTextToBytes(text, label = '内容过长') {
-  const value = String(text ?? '')
-  if (new TextEncoder().encode(value).length <= MAX_TEXT_BYTES) return value
-  const maxChars = Math.floor(MAX_TEXT_BYTES / 2)
-  return `${value.slice(0, maxChars)}\n\n[${label}，已截断]`
-}
-
 export default function ChatSplit() {
   const navigate = useNavigate()
   const { state, dispatch } = useAppContext()
   const toast = useToast()
-  const { t } = useT()
+  const { t, lang } = useT()
   const { activeAgentId: globalActiveAgentId } = useActiveAgent()
   const [input, setInput] = useState('')
   const [modelOptions, setModelOptions] = useState([])
   // 0 = 不限轮数(默认)。只有服务端显式配了正数才封顶。
   const [toolMaxRounds, setToolMaxRounds] = useState(0)
   const [selectedModel, setSelectedModel] = useState('')
-  const [runtimeSkills, setRuntimeSkills] = useState(SKILLS)
-  // Phase 2 S4: prompt-template plugins 进 slash 菜单
+  const [runtimeSkills, setRuntimeSkills] = useState(() => mergeRuntimeSkills(listLocalSkills(), SKILLS))
+  // Phase 2 S4: prompt-template plugins 仍可通过手动输入 slash 命令调用
   const [promptTemplates, setPromptTemplates] = useState([])
-  const [showSlashMenu, setShowSlashMenu] = useState(false)
-  const [selectedIndex, setSelectedIndex] = useState(0)
-  const [lastFailedPrompt, setLastFailedPrompt] = useState('')
   const [workbenchMessage, setWorkbenchMessage] = useState('')
   // ★ #18: workbench 提示 5s 自动消失,避免长期残留
   useEffect(() => {
@@ -133,15 +101,22 @@ export default function ChatSplit() {
     return () => clearTimeout(t)
   }, [workbenchMessage])
   const [attachments, setAttachments] = useState([])
+  const [editingMessageId, setEditingMessageId] = useState(null)
   const [isGenerating, setIsGenerating] = useState(false)
   const [voiceState, setVoiceState] = useState('idle')
+  const [showContextUsage, setShowContextUsage] = useState(readContextUsageVisible)
   const [showContextPanel, setShowContextPanel] = useState(false)
+  const [showModelPicker, setShowModelPicker] = useState(false)
   const [applyPatchApproval, setApplyPatchApproval] = useState({ open: false, changes: [], busy: false })
   // ★ 通用工具审批:决策就在对话里做,不用切页面(对齐 Claude Code)
   const [toolApproval, setToolApproval] = useState({ open: false, request: null, busy: false })
   const toolApprovalResolveRef = useRef(null)
   const [approvalSettings, setApprovalSettings] = useState({ mode: 'normal', rememberedTools: [] })
+  const [contextSystemPrompts, setContextSystemPrompts] = useState({})
   const abortCtrlRef = useRef(null)
+  // ★ 流被截断后的续写状态。本地模型跑长回答时中断是常态,
+  // 让用户接着写比整轮重发省太多。
+  const [resumeState, setResumeState] = useState(null)
   const applyPatchApprovalResolveRef = useRef(null)
 
   const resolveApplyPatchApproval = useCallback((approved) => {
@@ -250,22 +225,68 @@ export default function ChatSplit() {
   const recognitionRef = useRef(null)
   const stateRef = useRef(state)
 
+  useEffect(() => () => {
+    recognitionRef.current?.abort?.()
+    recognitionRef.current = null
+  }, [])
+
   const activeSession = state.sessions.find((s) => s.id === state.activeSessionId)
+  const activeSessionId = activeSession?.id || null
   // 阶段 6: session sticky agent。优先用 session.agentId，没设则 fallback 全局。
   const sessionAgentId = activeSession?.agentId || null
   const effectiveAgentId = sessionAgentId || globalActiveAgentId || null
   const messages = activeSession?.messages ?? EMPTY_MESSAGES
-  const tasks = state.tasks
-  const [showCodingWorkbench, setShowCodingWorkbench] = useState(false)
+  const navigateInputHistory = useInputHistory({
+    messages,
+    input,
+    setInput,
+    sessionId: activeSessionId,
+  })
+
+  const contextToolSpecs = useMemo(() => {
+    try {
+      return buildToolSpecs(resolveToolsForMode(state.toolsConfig || {}))
+    } catch {
+      return []
+    }
+  }, [state.toolsConfig])
+  const effectiveSelectedModel = resolveSessionModel(modelOptions, {
+    sessionModel: activeSession?.modelName,
+    selectedModel,
+    storedModel: readStoredModel(),
+  }) || activeSession?.modelName || selectedModel || readStoredModel()
+  const selectedContextWindow = modelOptions.find((model) => model.name === effectiveSelectedModel)?.contextWindow || 1_000_000
+  const setContextUsageVisible = useCallback((visible) => {
+    const next = Boolean(visible)
+    setShowContextUsage(next)
+    if (!next) setShowContextPanel(false)
+  }, [])
+  useEffect(() => {
+    writeContextUsageVisible(showContextUsage)
+  }, [showContextUsage])
   useEffect(() => {
     stateRef.current = state
   }, [state])
+
+  const setModelForActiveSession = useCallback((modelName) => {
+    const normalized = String(modelName || '').trim()
+    if (!normalized) return
+    setSelectedModel(normalized)
+    writeStoredModel(normalized)
+    if (activeSessionId) {
+      dispatch({
+        type: 'SET_SESSION_MODEL',
+        payload: { sessionId: activeSessionId, modelName: normalized },
+      })
+    }
+  }, [activeSessionId, dispatch])
 
   const slashRegistry = useMemo(() => {
     const registry = createSlashCommandRegistry()
     registerCoreSlashCommands(registry, { t })
     for (const skill of runtimeSkills || []) {
       if (!skill?.id) continue
+      if (state.skillConfigs?.[skill.id]?.enabled === false) continue
       const name = normalizeSlashCommandName(skill.id)
       if (!name || CORE_SLASH_COMMANDS.includes(name)) continue
       registry.register({
@@ -306,7 +327,7 @@ export default function ChatSplit() {
       }, 'plugin')
     }
     return registry
-  }, [promptTemplates, runtimeSkills, t])
+  }, [promptTemplates, runtimeSkills, state.skillConfigs, t])
 
   useEffect(() => {
     let cancelled = false
@@ -341,11 +362,13 @@ export default function ChatSplit() {
     let cancelled = false
     listSkills()
       .then(({ skills }) => {
-        if (!cancelled && Array.isArray(skills) && skills.length) setRuntimeSkills(skills)
+        if (!cancelled && Array.isArray(skills) && skills.length) {
+          setRuntimeSkills(mergeRuntimeSkills(listLocalSkills(), skills))
+        }
       })
       .catch((err) => {
         console.warn('[ChatSplit] 无法加载远程技能，使用内置技能:', err?.message || err)
-        if (!cancelled) setRuntimeSkills(SKILLS)
+        if (!cancelled) setRuntimeSkills(mergeRuntimeSkills(listLocalSkills(), SKILLS))
       })
     return () => { cancelled = true }
   }, [])
@@ -373,11 +396,23 @@ export default function ChatSplit() {
     return undefined
   }, [state.draftInput, dispatch])
 
-  // ★ 切换会话时自动中断正在进行的模型流
+  // ★ 切换会话时中断正在进行的模型流。
+  //
+  // 原来这个 effect 在**首次挂载**时也会跑一次 abort —— 组件因为任何原因
+  // 重挂载(路由回退、HMR、父组件 key 变化)都会把正在跑的流杀掉,
+  // 用户看到的是「说到一半突然停了」。
+  // 现在只在 sessionId 真正从 A 变成 B 时才中断,首次挂载不动。
+  const abortSessionIdRef = useRef(state.activeSessionId)
   useEffect(() => {
-    // 用 abort 中断上游请求，模型流自然结束会走 finally 清理
-    abortCtrlRef.current?.abort()
+    if (abortSessionIdRef.current !== state.activeSessionId) {
+      abortSessionIdRef.current = state.activeSessionId
+      // 用 abort 中断上游请求，模型流自然结束会走 finally 清理
+      abortCtrlRef.current?.abort()
+    }
   }, [state.activeSessionId])
+
+  // 组件真正卸载时才无条件中断,避免留下没人消费的流
+  useEffect(() => () => abortCtrlRef.current?.abort(), [])
 
   useEffect(() => {
     if (!state.activeSessionId) {
@@ -408,26 +443,42 @@ export default function ChatSplit() {
     // 所以不会引发循环
   }, [state.activeSessionId, state.sessionDrafts, dispatch])
 
-  const isSlashActive = input.startsWith('/') && !input.includes(' ')
-  const slashQuery = isSlashActive ? input.slice(1).toLowerCase() : ''
-  const slashAutocompleteItems = useMemo(
-    () => (isSlashActive ? slashRegistry.listCommands({ query: slashQuery }) : []),
-    [isSlashActive, slashQuery, slashRegistry],
-  )
-  const slashItemsCount = slashAutocompleteItems.length
+  // 输入过程中持续保存当前会话草稿；刷新页面时不再依赖“先切换会话”才能落盘。
+  useEffect(() => {
+    const sessionId = state.activeSessionId
+    if (!sessionId) return undefined
+    const timer = window.setTimeout(() => {
+      dispatch({ type: 'SET_SESSION_DRAFT', payload: { sessionId, text: input } })
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [dispatch, input, state.activeSessionId])
 
   /* ── send flow ── */
   const triggerSendFlow = useCallback(
-    async (content, explicitAttachments = null) => {
+    async (content, explicitAttachments = null, historyLimit = null) => {
       if (isGenerating) return
       const activeSession = state.sessions.find((s) => s.id === state.activeSessionId)
+      const modelName = resolveSessionModel(modelOptions, {
+        sessionModel: activeSession?.modelName,
+        selectedModel,
+        storedModel: readStoredModel(),
+      }) || activeSession?.modelName || selectedModel || readStoredModel() || resolveInitialModel(modelOptions)
+      if (activeSession?.id && modelName && activeSession.modelName !== modelName) {
+        dispatch({
+          type: 'SET_SESSION_MODEL',
+          payload: { sessionId: activeSession.id, modelName },
+        })
+      }
       // ★ 修复: 保留 tool 消息，让模型能回顾上一轮工具结果
       // 但截断过长内容防止 token 溢出
       //
       // ★ 缓存: 用滞回窗口而不是每轮 slice(-20)。固定 slice(-20) 在会话超过 20 条后
       // 每轮都丢掉最老一条,字节前缀每次都变 → 上游前缀缓存从第 21 轮起彻底失效。
       // 改成「超过 HIGH 才裁,一裁裁到 LOW」,前缀能连续稳定约 10 轮再变一次。
-      const eligible = (activeSession?.messages || [])
+      const sourceMessages = historyLimit == null
+        ? (activeSession?.messages || [])
+        : (activeSession?.messages || []).slice(0, historyLimit)
+      const eligible = sourceMessages
         .filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'tool')
       const historyMessages = trimHistoryWithHysteresis(eligible)
         .map((m) => {
@@ -451,7 +502,7 @@ export default function ChatSplit() {
         // fire-and-forget — 拿到 AI 标题后再 dispatch 一次
         // 不在回调里读取闭包 state, 完全依赖 reducer 做 onlyIfMatches 校验,
         // 避免闭包 state 陈旧导致误判。
-        summarizeSessionTitle({ firstUserContent: content, modelName: selectedModel })
+        summarizeSessionTitle({ firstUserContent: content, modelName })
           .then((aiTitle) => {
             if (!aiTitle) return
             dispatch({ type: 'UPDATE_SESSION_TITLE_FOR', payload: { sessionId: sessionIdSnapshot, title: aiTitle, onlyIfMatches: initialTitle } })
@@ -460,10 +511,14 @@ export default function ChatSplit() {
       }
 
       const parsedSkill = parseSkillCommand(content)
-      const skillId = parsedSkill.skillId || inferSkillIdFromPrompt(content)
-      const userPrompt = parsedSkill.skillId ? parsedSkill.userPrompt : content
-      const skill = skillId ? runtimeSkills.find((s) => s.id === skillId) : null
-      const taskName = skill?.name || (content.toLowerCase().includes('ppt') ? '制作 PPT' : content.toLowerCase().includes('excel') ? '分析表格' : '通用任务')
+      const requestedSkillId = parsedSkill.skillId || inferSkillIdFromPrompt(content)
+      const requestedSkill = requestedSkillId ? runtimeSkills.find((s) => s.id === requestedSkillId) : null
+      const skill = requestedSkill && state.skillConfigs?.[requestedSkill.id]?.enabled !== false
+        ? requestedSkill
+        : null
+      const skillId = skill?.id || null
+      const userPrompt = parsedSkill.skillId && skill ? parsedSkill.userPrompt : content
+      const taskName = skill?.name || '通用任务'
 
       if (!isLoggedInLocally()) {
         dispatch({ type: 'RECEIVE_MESSAGE', payload: '请登录账户' })
@@ -473,6 +528,14 @@ export default function ChatSplit() {
 
       // 提前生成 task ID,后续 UPDATE_TASK / REMOVE_TASK 用得上
       const taskId = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+
+      // ★ 这两个必须声明在**最外层 try 之外** —— 下面 1155 行的 catch 要读它们。
+      //
+      // 中途失败(network error / 上游 5xx)时,前面几十步工具调用的成果
+      // 不能静默作废:用户至少要知道"读过什么、改到哪了、要不要回滚"。
+      // 声明在 try 内的话 catch 里是 ReferenceError,整条兜底链路直接断掉。
+      let toolArtifact = null
+      const executedToolCalls = []
 
       try {
         const messages = []
@@ -497,6 +560,10 @@ export default function ChatSplit() {
               'create_html_app 等产物工具。直接在对话里回答。只有用户说了「做个 PPT」「导出表格」',
               '这类明确要求,才生成文件。',
               '',
+              '【修 bug / 改代码的任务永远不产出文件】用户让你「优化某个页面」「修复某个功能」',
+              '「改一下样式」时,他要的是**你去改代码**,然后用文字告诉他改了什么。',
+              '把说明写进 PPT 或文档是完全错误的 —— 那既没解决问题,也让他读不到你的结论。',
+              '',
               '【改完要交代】如果你修改了文件,回复里必须说清楚:',
               '1. 改了哪几个文件,每个文件改了什么(一句话说清)',
               '2. 为什么这么改 —— 原来的问题是什么',
@@ -508,6 +575,14 @@ export default function ChatSplit() {
         }
         messages.push(...historyMessages)
         if (volatilePrompt) messages.push({ role: 'system', content: volatilePrompt })
+        const requestSystemPrompt = messages
+          .filter((message) => message.role === 'system' && typeof message.content === 'string')
+          .map((message) => message.content)
+          .join('\n\n')
+        const contextSessionKey = state.activeSessionId || '__draft__'
+        setContextSystemPrompts((current) => current[contextSessionKey] === requestSystemPrompt
+          ? current
+          : { ...current, [contextSessionKey]: requestSystemPrompt })
         const attachmentsToUse = explicitAttachments || attachments
         messages.push({ role: 'user', content: buildUserContentWithAttachments(userPrompt || content, attachmentsToUse) })
 
@@ -532,7 +607,6 @@ export default function ChatSplit() {
           },
         })
 
-        const modelName = selectedModel || resolveInitialModel(modelOptions)
         let latency = 0
         const started = Date.now()
         const controller = new AbortController()
@@ -550,8 +624,7 @@ export default function ChatSplit() {
         // G1: 工具调用产出的 artifact (create_pptx/docx/xlsx) 暂存,
         // 流程结束后写到 last message meta — 让 ChatMessages 直接渲染卡片 + 弹右栏.
         // 取最后一个,因为同一轮多次生成时模型期望的"最终产物"通常是末次调用.
-        // 提升到 try 外:try 内声明会让后面的 finalize 块拿不到。
-        let toolArtifact = null
+        // 提升到最外层 try 外(见上面 taskId 附近的声明)。
 
         try {
           // 工具调用循环:每轮 stream 模型 → 收 tool_calls → 本地执行 → messages 追加 tool 结果 → 再 stream
@@ -566,6 +639,51 @@ export default function ChatSplit() {
             tools = await buildToolSpecsAsync({ enabledBuiltinNames: enabledToolNames, mode: 'chat' })
           } catch {
             tools = buildToolSpecs(enabledToolNames)
+          }
+          const allowedToolNames = new Set(tools.map((spec) => spec?.function?.name).filter(Boolean))
+          const executeAuthorizedToolCall = (call) => executeToolCall(call, { allowedArtifactTools: allowedToolNames, lang })
+          const toolLoopGuard = createChatToolLoopGuard({ lang })
+          const beforeToolExecution = (call) => {
+            const declared = validateChatToolCallAllowed(call, allowedToolNames, lang)
+            return declared.ok ? toolLoopGuard.before(call) : declared
+          }
+          let completedToolCalls = 0
+          // 最后一次模型调用的终止原因。'length' = 被 max_tokens 砍断,
+          // 这是「跑完工具却一个字都没说」最常见的真实原因。
+          let lastFinishReason = null
+
+          const streamToolLoopWrapUp = async (reason) => {
+            messages.push({ role: 'system', content: reason })
+            let producedText = false
+            for await (const event of callModelThroughProxyStream({
+              messages,
+              modelName,
+              agentId: effectiveAgentId || undefined,
+              sessionId: state.activeSessionId || undefined,
+              signal: controller.signal,
+              // ★ 收尾必须拿到独立的、更大的输出预算。
+              // 推理模型的「思考」和正文共用 max_tokens,默认 4096 常常在
+              // 写正文之前就被思考吃光 —— 那正是「工具跑完却一个字都没有」的原因。
+              maxTokensBoost: 8192,
+              // 不传 tools,从协议层杜绝收尾时再次调用工具
+            })) {
+              if (event.type === 'text') {
+                producedText = true
+                dispatch({ type: 'APPEND_TO_LAST_MESSAGE', payload: event.delta })
+              } else if (event.type === 'reasoning') {
+                dispatch({ type: 'APPEND_REASONING_TO_LAST_MESSAGE', payload: event.delta })
+              } else if (event.type === 'billing') {
+                if (typeof event.billing?.creditsCharged === 'number') {
+                  totalCreditsCharged += event.billing.creditsCharged
+                }
+                if (typeof event.billing?.credits === 'number') {
+                  latestCreditsBalance = event.billing.credits
+                }
+                if (event.billing?.error) billingRoundError = event.billing.error
+                if (event.finishReason) lastFinishReason = event.finishReason
+              }
+            }
+            return producedText
           }
 
           // G1: 工具调用产出的 artifact (create_pptx/docx/xlsx) 暂存,
@@ -588,11 +706,24 @@ export default function ChatSplit() {
             let pendingToolCalls = null
             let sawTextThisRound = false
             let sawReasoningThisRound = false
-            let stopAfterArtifact = false
+            const streamingToolExecutor = new StreamingToolExecutor({
+              isSafe: isStreamingSafeToolCall,
+              before: beforeToolExecution,
+              execute: executeAuthorizedToolCall,
+              onStart: (call) => {
+                dispatch({
+                  type: 'APPEND_TOOL_CALL_TO_LAST_MESSAGE',
+                  payload: { id: call.id, name: call.name, arguments: call.arguments, status: TOOL_CALL_STATUS.RUNNING },
+                })
+                dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { stepLabel: `调用 ${call.name}` } } })
+              },
+            })
+            const beginToolExecution = (call, options) => streamingToolExecutor.begin(call, options)
             for await (const event of callModelThroughProxyStream({
               messages,
               modelName,
               agentId: effectiveAgentId || undefined,
+              sessionId: state.activeSessionId || undefined,
               signal: controller.signal,
               tools: tools.length > 0 ? tools : undefined,
             })) {
@@ -601,6 +732,18 @@ export default function ChatSplit() {
               // 25 秒,界面上显示 117ms,用户完全看不出慢在哪。
               // 现在只记第一个 token 的到达时间(TTFT),这才是「等了多久」的体感。
               if (!latency) latency = Date.now() - started
+              if (event.type === 'phase') {
+                // ★ 服务端在首 token 之前发的状态帧。本地模型加载权重要几十秒,
+                // 这段时间界面原来是完全空白的 —— 用户唯一的判断是「卡死了」。
+                dispatch({
+                  type: 'UPDATE_TASK',
+                  payload: {
+                    id: taskId,
+                    updates: { stepLabel: event.phase === 'connecting' ? '模型加载中' : '生成中' },
+                  },
+                })
+                continue
+              }
               if (event.type === 'text') {
                 dispatch({ type: 'APPEND_TO_LAST_MESSAGE', payload: event.delta })
                 if (!sawTextThisRound) {
@@ -616,7 +759,10 @@ export default function ChatSplit() {
                   dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { stepLabel: '思考中' } } })
                 }
               } else if (event.type === 'tool_calls') {
-                pendingToolCalls = event.toolCalls
+                pendingToolCalls = normalizeChatToolCalls(event.toolCalls)
+              } else if (event.type === 'tool_call_ready') {
+                const [readyCall] = normalizeChatToolCalls([event.toolCall])
+                if (readyCall) beginToolExecution(readyCall, { eager: true })
               } else if (event.type === 'billing') {
                 if (Array.isArray(event.injectedMemoryIds)) {
                   for (const id of event.injectedMemoryIds) injectedMemoryIdSet.add(id)
@@ -628,11 +774,50 @@ export default function ChatSplit() {
                   latestCreditsBalance = event.billing.credits
                 }
                 if (event.billing?.error) billingRoundError = event.billing.error
+                if (event.finishReason) lastFinishReason = event.finishReason
               }
             }
 
-            // 本轮没工具调用 → 模型已经给出最终文本,退出
-            if (!pendingToolCalls || pendingToolCalls.length === 0) break
+            // 本轮没工具调用 → 模型应该给出最终文本。工具已经执行过却仍然
+            // 没有正文时,再发一次禁用工具的强制收尾,不能给用户留下空白或纯文件卡。
+            if (!pendingToolCalls || pendingToolCalls.length === 0) {
+              if (shouldForceChatTextWrapUp({ completedToolCalls, sawTextThisRound })) {
+                let produced = await streamToolLoopWrapUp(
+                  '工具执行已经结束,但你还没有给用户最终文字答复。'
+                  + '请用简洁文字说明完成了什么、关键结果、验证情况和仍存在的问题。'
+                  + '如果生成了文件,说明文件是什么以及包含什么。不要再调用工具。',
+                )
+                // ★ 第一次收尾没出正文时再试一次,用更硬的指令。
+                //
+                // 最常见的原因是推理模型把 max_tokens 全用在「思考」上了
+                // (截图里那次思考了 93778 字,而 MODEL_MAX_TOKENS=4096)。
+                // 明确要求它别再思考、直接写结论,通常一次就能拿到。
+                if (!produced) {
+                  produced = await streamToolLoopWrapUp(
+                    '你上一次没有输出任何正文。现在**不要再思考**，直接用中文写出结论，'
+                    + '控制在 300 字以内：做了哪些修改、关键结果、还有什么没做完。立刻开始写正文。',
+                  )
+                }
+                if (!produced) {
+                  // ★ 模型两次都不给正文 → 我们自己按执行记录写。
+                  //
+                  // 原来这里只留一句「模型未返回详细文字总结，请重试生成说明。」——
+                  // 用户跑了几十步工具、等了几分钟,拿到一句正确的废话:
+                  // 没说改了什么、没说哪里没做完、也没给下一步。
+                  // 而这些事实前端全都有,不需要再问模型。
+                  dispatch({
+                    type: 'APPEND_TO_LAST_MESSAGE',
+                    payload: `\n\n${buildToolRunSummary({
+                      toolCalls: executedToolCalls,
+                      artifact: toolArtifact,
+                      finishReason: lastFinishReason,
+                      lang,
+                    })}`,
+                  })
+                }
+              }
+              break
+            }
 
             // ★ 最后一轮还在调工具 → 不能就这么切断(用户会看到「让我继续...」然后没了)。
             // 收掉工具,强制模型基于已有结果给个交代,和 subagent/job 循环的做法一致。
@@ -659,30 +844,11 @@ export default function ChatSplit() {
                   content: JSON.stringify({ ok: false, error: `已达工具调用轮数上限(${toolMaxRounds}),不要再调工具` }),
                 })
               }
-              messages.push({
-                role: 'system',
-                content: `你已达到本轮对话的工具调用上限(${toolMaxRounds} 轮)。`
-                  + '请立刻基于目前已经拿到的信息给出结论,不要再调用任何工具。'
-                  + '如果信息不足以完成用户的全部要求,就说明已经查清了什么、还差什么、建议下一步怎么做。',
-              })
-              for await (const event of callModelThroughProxyStream({
-                messages,
-                modelName,
-                agentId: effectiveAgentId || undefined,
-                signal: controller.signal,
-                // 不传 tools,从协议层杜绝它再调工具
-              })) {
-                if (event.type === 'text') {
-                  dispatch({ type: 'APPEND_TO_LAST_MESSAGE', payload: event.delta })
-                } else if (event.type === 'done') {
-                  if (typeof event.billing?.creditsCharged === 'number') {
-                    totalCreditsCharged += event.billing.creditsCharged
-                  }
-                  if (typeof event.billing?.credits === 'number') {
-                    latestCreditsBalance = event.billing.credits
-                  }
-                }
-              }
+              await streamToolLoopWrapUp(
+                `你已达到本轮对话的工具调用上限(${toolMaxRounds} 轮)。`
+                + '请立刻基于目前已经拿到的信息给出结论,不要再调用任何工具。'
+                + '如果信息不足以完成用户的全部要求,就说明已经查清了什么、还差什么、建议下一步怎么做。',
+              )
               break
             }
 
@@ -690,13 +856,21 @@ export default function ChatSplit() {
             messages.push(buildAssistantToolCallsMessage(pendingToolCalls))
 
             // 2) 在 UI 上为每个 call 先展示 running 状态,然后执行,然后回填结果
-            for (const call of pendingToolCalls) {
-              dispatch({
-                type: 'APPEND_TOOL_CALL_TO_LAST_MESSAGE',
-                payload: { id: call.id, name: call.name, arguments: call.arguments, status: TOOL_CALL_STATUS.RUNNING },
+            let noProgressReason = null
+            for (let callIndex = 0; callIndex < pendingToolCalls.length; callIndex += 1) {
+              const call = pendingToolCalls[callIndex]
+              const execution = streamingToolExecutor.get(call.id) || beginToolExecution(call)
+              const guardDecision = execution.guardDecision
+              const result = await execution.promise
+              completedToolCalls += 1
+              // ★ 记下事实,供模型收尾失败时本地合成说明用
+              executedToolCalls.push({
+                name: call.name,
+                arguments: call.arguments,
+                ok: result.ok !== false,
+                error: result.ok === false ? result.content : undefined,
               })
-              dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { stepLabel: `调用 ${call.name}` } } })
-              const result = await executeToolCall(call)
+              if (!guardDecision.ok) noProgressReason = guardDecision.reason
               if (typeof result.billing?.creditsCharged === 'number') {
                 totalCreditsCharged += result.billing.creditsCharged
               }
@@ -707,11 +881,8 @@ export default function ChatSplit() {
               // G1: create_* 工具会在 result.artifact 里挂 { type, title, source }
               if (result.artifact && result.artifact.type && result.artifact.source) {
                 toolArtifact = result.artifact
-                // 只有用户明确要产物时(走了 skill)才把产物当成最终答复;
-                // 否则产物只是中间物,必须让模型继续说清改了什么
-                if (shouldStopAfterArtifactTool(result.artifact, { artifactWasRequested: !!skillId })) {
-                  stopAfterArtifact = true
-                }
+                // 产物不能代替文字答复;循环继续一轮让模型说明结果。
+                shouldStopAfterArtifactTool(result.artifact, { artifactWasRequested: !!skillId })
               }
               // Feature 8: manage_todos 返回 todos 字段 → 派发 SET_TODOS 让 UI 同步
               if (Array.isArray(result.todos)) {
@@ -728,6 +899,8 @@ export default function ChatSplit() {
                   error: !result.ok ? result.content : undefined,
                 },
               })
+              const progress = toolLoopGuard.after(result, call)
+              if (!progress.ok && !noProgressReason) noProgressReason = progress.reason
               // ★ 自动打开右侧预览：create_* / Agent 工具成功时
               if (result.ok && result.artifact) {
                 const artPreview = buildArtifactPreview({
@@ -750,24 +923,65 @@ export default function ChatSplit() {
                   })
                 }
               }
-              // ★ 截断过长工具结果，防止下一轮模型调用超出 token 限制
-              const MAX_TOOL_RESULT_CHARS = 4000
-              let toolContent = String(result.content || '')
-              if (toolContent.length > MAX_TOOL_RESULT_CHARS) {
-                toolContent = toolContent.slice(0, MAX_TOOL_RESULT_CHARS) + `\n...[截断，共 ${toolContent.length} 字符]`
-              }
+              // 保持长 JSON 的语法完整,让模型明确知道结果被截断而不是误判解析失败。
+              const toolContent = clipChatToolContent(result.content, 24_000, lang)
               messages.push({
                 role: 'tool',
                 tool_call_id: call.id,
                 name: call.name,
                 content: toolContent,
               })
+
+              if (noProgressReason) {
+                for (const skipped of pendingToolCalls.slice(callIndex + 1)) {
+                  const skippedContent = JSON.stringify({
+                    code: 'tool_execution_skipped',
+                    error: noProgressReason,
+                    retryable: false,
+                  })
+                  dispatch({
+                    type: 'APPEND_TOOL_CALL_TO_LAST_MESSAGE',
+                    payload: {
+                      id: skipped.id,
+                      name: skipped.name,
+                      arguments: skipped.arguments,
+                      status: 'error',
+                      error: skippedContent,
+                    },
+                  })
+                  messages.push({
+                    role: 'tool',
+                    tool_call_id: skipped.id,
+                    name: skipped.name,
+                    content: skippedContent,
+                  })
+                }
+                break
+              }
             }
-            if (stopAfterArtifact) break
+            if (noProgressReason) {
+              const produced = await streamToolLoopWrapUp(
+                `工具循环因无进展停止:${noProgressReason}。`
+                + '请基于已经获得的信息给出部分结论,不要再调用工具。',
+              )
+              if (!produced) {
+                // 同样不能只丢一句「循环已停止」——把实际做过的事交代清楚
+                dispatch({
+                  type: 'APPEND_TO_LAST_MESSAGE',
+                  payload: `\n\n[工具循环已停止:${noProgressReason}]\n\n${buildToolRunSummary({
+                    toolCalls: executedToolCalls,
+                    artifact: toolArtifact,
+                    finishReason: lastFinishReason,
+                    lang,
+                  })}`,
+                })
+              }
+              break
+            }
             // 进入下一轮 stream,模型基于 tool 结果继续生成
           }
         } catch (err) {
-          if (err.message === '已停止生成') {
+          if (isUserStopped(err)) {
             dispatch({ type: 'APPEND_TO_LAST_MESSAGE', payload: '\n\n[已停止生成]' })
           }
           throw err
@@ -776,7 +990,6 @@ export default function ChatSplit() {
           abortCtrlRef.current = null
         }
 
-        setLastFailedPrompt('')
         if (!explicitAttachments) setAttachments([])
         // G1: 工具产出的 artifact 优先于 slash skill 的 artifactType,
         //     因为它是模型显式选择的产物,且自带 source(模型给的 markdown).
@@ -830,7 +1043,7 @@ export default function ChatSplit() {
       } catch (err) {
         setIsGenerating(false)
         abortCtrlRef.current = null
-        if (err.message === '已停止生成') {
+        if (isUserStopped(err)) {
           // ★ FIX: 中断也要把任务清掉,不能继续显示 "running 10%"
           dispatch({ type: 'UPDATE_LAST_MESSAGE_META', payload: { streaming: false } })
           dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: TASK_STATUS.CANCELLED, stepLabel: '已中断' } } })
@@ -838,14 +1051,37 @@ export default function ChatSplit() {
           return
         }
         if (import.meta.env.DEV) console.error('Model call failed:', err)
+        // ★ 流被截断(连接断了但没收到 done 帧)是可续的,不是普通失败。
+        // 已经吐出来的正文要保留,并给用户一个「继续生成」的入口 ——
+        // 本地模型跑长回答时中断是常态,让用户整轮重发代价太大。
+        const truncated = err?.code === 'STREAM_TRUNCATED'
+        const visibleErrorMessage = getVisibleModelErrorMessage(err, t)
         toast.error({
-          title: t('toast.chatSendFailed'),
-          body: err.message,
+          title: truncated ? t('toast.chatTruncated') : t('toast.chatSendFailed'),
+          body: visibleErrorMessage,
         })
-        setLastFailedPrompt(content)
-        dispatch({ type: 'APPEND_TO_LAST_MESSAGE', payload: buildChatFailureMessage(err.message) })
+        if (truncated) {
+          setResumeState({ prompt: content, partialText: err.partialText || '' })
+          dispatch({ type: 'APPEND_TO_LAST_MESSAGE', payload: `\n\n[${visibleErrorMessage}]` })
+        } else {
+          dispatch({ type: 'APPEND_TO_LAST_MESSAGE', payload: buildChatFailureMessage(visibleErrorMessage) })
+          // 中途失败时保留已经执行过的工具结果，避免前面的工作不可追溯。
+          if (executedToolCalls.length > 0) {
+            dispatch({
+              type: 'APPEND_TO_LAST_MESSAGE',
+              payload: `\n\n${buildToolRunSummary({
+                toolCalls: executedToolCalls,
+                artifact: toolArtifact,
+                finishReason: null,
+                lang,
+              })}`,
+            })
+          }
+          // 失败的轮次同样可以重发,把 prompt 留住
+          setResumeState({ prompt: content, partialText: '' })
+        }
         dispatch({ type: 'UPDATE_LAST_MESSAGE_META', payload: { streaming: false, failed: true } })
-        dispatch({ type: 'ADD_HISTORY', payload: { name: taskName, skill: skill?.name || '通用对话', status: HISTORY_STATUS.FAILED, detail: content.length > 60 ? `${content.slice(0, 60)}...` : content, state: `失败: ${err.message}`.slice(0, 80), date: Date.now() } })
+        dispatch({ type: 'ADD_HISTORY', payload: { name: taskName, skill: skill?.name || '通用对话', status: HISTORY_STATUS.FAILED, detail: content.length > 60 ? `${content.slice(0, 60)}...` : content, state: `失败: ${visibleErrorMessage}`.slice(0, 80), date: Date.now() } })
         // ★ FIX: 失败时把同一个任务标记 failed (而非再 ADD 一条新的"running 15%"),5 秒后移除
         dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: TASK_STATUS.FAILED, stepLabel: '调用失败' } } })
         setTimeout(() => dispatch({ type: 'REMOVE_TASK', payload: taskId }), 5000)
@@ -853,14 +1089,13 @@ export default function ChatSplit() {
     },
     // ★ #27: 细粒度 deps,只收 triggerSendFlow body 里实际读的字段;
     //         避免依赖整个 state 导致每次 sessionDrafts/tasks 变都重建 callback
-    [attachments, dispatch, isGenerating, modelOptions, selectedModel, toolMaxRounds, runtimeSkills, effectiveAgentId, toast, t,
+    [attachments, dispatch, isGenerating, modelOptions, selectedModel, toolMaxRounds, runtimeSkills, effectiveAgentId, toast, t, lang,
       state.activeSessionId, state.sessions, state.toolsConfig, state.permissions, state.skillConfigs]
   )
 
   const executeSlashEntry = useCallback(async (entry, args = '') => {
     if (!entry) return false
     slashRegistry.recordRecent(entry.name)
-    setShowSlashMenu(false)
 
     if (entry.kind === 'skill') {
       setInput(`/${entry.name} `)
@@ -879,6 +1114,15 @@ export default function ChatSplit() {
             window.dispatchEvent(new CustomEvent('session-search:open', { detail: { query } }))
           }
         },
+        navigate,
+        selectedModel: effectiveSelectedModel,
+        modelOptions,
+        setModel: setModelForActiveSession,
+        openModelPicker: () => setShowModelPicker(true),
+        contextUsageVisible: showContextUsage,
+        setContextUsage: setContextUsageVisible,
+        copyText: (text) => navigator.clipboard?.writeText(text),
+        exportSession,
       })
 
       if (entry.source === 'plugin') {
@@ -896,13 +1140,7 @@ export default function ChatSplit() {
       setWorkbenchMessage(err?.message || 'Slash command failed.')
       return true
     }
-  }, [dispatch, slashRegistry, triggerSendFlow])
-
-  const completeSlashEntry = useCallback((entry) => {
-    if (!entry?.name) return
-    setInput(`/${entry.name} `)
-    setShowSlashMenu(false)
-  }, [])
+  }, [dispatch, slashRegistry, triggerSendFlow, navigate, effectiveSelectedModel, modelOptions, setModelForActiveSession, showContextUsage, setContextUsageVisible])
 
   const handleSend = useCallback(() => {
     const typedContent = input.trim()
@@ -911,21 +1149,34 @@ export default function ChatSplit() {
     const slashEntry = parsedSlash ? slashRegistry.getCommand(parsedSlash.name) : null
     if (slashEntry && slashEntry.kind !== 'skill') {
       setInput('')
-      setShowSlashMenu(false)
+      setEditingMessageId(null)
       executeSlashEntry(slashEntry, parsedSlash.args)
       return
     }
     const currentAttachments = [...attachments]
     const content = typedContent || describeAttachmentPrompt(currentAttachments)
+    const editIndex = editingMessageId
+      ? messages.findIndex((message) => message.id === editingMessageId)
+      : -1
+    if (editIndex >= 0) {
+      dispatch({ type: 'TRUNCATE_MESSAGES', payload: editIndex })
+    }
+    setEditingMessageId(null)
     setInput('')
     setAttachments([])
     // 发送后顺手清掉本会话草稿,免得切走再回来还残留
     if (state.activeSessionId) {
       dispatch({ type: 'SET_SESSION_DRAFT', payload: { sessionId: state.activeSessionId, text: '' } })
     }
-    setShowSlashMenu(false)
-    triggerSendFlow(content, currentAttachments)
-  }, [attachments, input, triggerSendFlow, state.activeSessionId, dispatch, slashRegistry, executeSlashEntry])
+    triggerSendFlow(content, currentAttachments, editIndex >= 0 ? editIndex : null)
+  }, [attachments, editingMessageId, input, messages, triggerSendFlow, state.activeSessionId, dispatch, slashRegistry, executeSlashEntry])
+
+  // 从已有会话历史的截断处续写，不重发原问题。
+  const handleResumeGeneration = useCallback(() => {
+    if (!resumeState) return
+    setResumeState(null)
+    triggerSendFlow('接着上面被中断的地方继续写完，不要重复已经写过的内容，也不要重新开头。')
+  }, [resumeState, triggerSendFlow])
 
   // ★ Reasonix-style ask_choice: 监听 choice-selected 事件 → 发送选择作为用户消息
   useEffect(() => {
@@ -940,19 +1191,15 @@ export default function ChatSplit() {
   }, [triggerSendFlow])
 
   const handleKeyDown = useCallback((e) => {
-    if (showSlashMenu && slashItemsCount > 0) {
-      const handled = handleSlashAutocompleteKeyDown(e, {
-        items: slashAutocompleteItems,
-        selectedIndex,
-        setSelectedIndex,
-        onPick: (entry) => executeSlashEntry(entry, ''),
-        onComplete: completeSlashEntry,
-        onDismiss: () => setShowSlashMenu(false),
-      })
-      if (handled) return
+    if (e.key === 'Escape' && editingMessageId) {
+      e.preventDefault()
+      setEditingMessageId(null)
+      setInput('')
+      return
     }
+    if (navigateInputHistory(e)) return
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
-  }, [showSlashMenu, slashItemsCount, slashAutocompleteItems, selectedIndex, handleSend, executeSlashEntry, completeSlashEntry])
+  }, [editingMessageId, handleSend, navigateInputHistory])
 
   const handleExpandCompaction = useCallback(async (archiveId) => {
     if (!archiveId) return
@@ -976,112 +1223,109 @@ export default function ChatSplit() {
     const selectedFiles = Array.from(e.target.files || [])
     e.target.value = ''
     if (!selectedFiles.length) return
-    const nextAttachments = []
-    let imageCount = attachments.filter((item) => item.kind === 'image').length
-    for (const file of selectedFiles) {
-      const sizeKB = (file.size / 1024).toFixed(1)
-      const id = crypto.randomUUID?.() ?? `${Date.now()}-${file.name}`
-      try {
-        if (file.type.startsWith('image/')) {
-          if (imageCount >= MAX_IMAGES_PER_MESSAGE) {
-            nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'file', error: 'Image limit reached; only 5 images can be sent in one message.' })
-          } else if (file.size > MAX_RAW_IMAGE_BYTES) {
-            nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'file', error: 'Image is too large to process locally.' })
-          } else {
-            const rawDataUrl = await readFileAsDataUrl(file)
-            const dataUrl = await compressImageDataUrl(rawDataUrl)
-            if (dataUrlByteLength(dataUrl) > MAX_IMAGE_BYTES) {
-              nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'file', error: 'Compressed image is still over 4MB.' })
-            } else {
-              imageCount += 1
-              nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'image', dataUrl })
-            }
-          }
-        } else if (isExcelFile(file)) {
-          const text = clampTextToBytes(await readExcelAsText(file), 'Excel 内容过长')
-          nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'text', text })
-        } else if (isPdfFile(file)) {
-          const text = await extractPdfText(file)
-          nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'text', text })
-        } else if (isDocxFile(file)) {
-          const text = clampTextToBytes(await extractDocxText(file), 'Word 内容过长')
-          nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'text', text })
-        } else if (isPptxFile(file)) {
-          const text = clampTextToBytes(await extractPptxText(file), 'PPT 内容过长')
-          nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'text', text })
-        } else if (isTextLikeFile(file)) {
-          // 文本类文件不再因超过 256KB 直接丢内容；统一截断后保留正文。
-          const text = clampTextToBytes(await file.text(), '文本内容过长')
-          nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'text', text })
-        } else {
-          // 真正无法本地解析的二进制（旧版 .doc/.ppt、.zip、.epub 等）：保留为附件并显式告知原因，
-          // 而不是静默变成"只有名称"。
-          nextAttachments.push({
-            id,
-            name: file.name,
-            sizeKB,
-            type: file.type,
-            kind: 'file',
-            error: '该格式无法在本地读取正文，仅发送文件名与元信息。',
-          })
-        }
-      } catch (err) {
-        nextAttachments.push({ id, name: file.name, sizeKB, type: file.type, kind: 'file', error: err.message || '读取失败' })
-      }
-    }
+    const nextAttachments = await parseChatAttachments(selectedFiles, {
+      existingImageCount: attachments.filter((item) => item.kind === 'image').length,
+      messages: {
+        imageLimit: t('chatAttachments.imageLimit'),
+        imageTooLarge: t('chatAttachments.imageTooLarge'),
+        compressedTooLarge: t('chatAttachments.compressedTooLarge'),
+        excelTooLong: t('chatAttachments.excelTooLong'),
+        wordTooLong: t('chatAttachments.wordTooLong'),
+        pptTooLong: t('chatAttachments.pptTooLong'),
+        textTooLong: t('chatAttachments.textTooLong'),
+        unsupportedFormat: t('chatAttachments.unsupportedFormat'),
+        readFailed: t('chatAttachments.readFailed'),
+      },
+    })
     // ★ #25: 超过 8 个时提示截断
     setAttachments((current) => {
       const merged = [...current, ...nextAttachments]
       const dropped = merged.length - 8
       const result = merged.slice(0, 8)
       if (dropped > 0) {
-        setWorkbenchMessage(`附件最多 8 个,已保留前 8 个,丢弃 ${dropped} 个。`)
+        setWorkbenchMessage(t('chatAttachments.maxCountNotice', { count: dropped }))
       } else {
-        setWorkbenchMessage(`已添加 ${nextAttachments.length} 个附件。`)
+        setWorkbenchMessage(t('chatAttachments.addedNotice', { count: nextAttachments.length }))
       }
       return result
     })
   }
 
-  const handleVoice = () => {
-    const micPerm = state.permissions.find((p) => p.id === 'mic')
-    if (!micPerm?.enabled) { setWorkbenchMessage('请在权限中心开启麦克风输入权限。'); return }
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition
-    if (!SR) { setVoiceState('unsupported'); setTimeout(() => setVoiceState('idle'), 2000); return }
-    if (voiceState === 'listening') { recognitionRef.current?.stop(); return }
+  const handleVoice = async () => {
+    if (voiceState === 'requesting') return
+    if (voiceState === 'listening') {
+      recognitionRef.current?.stop?.()
+      setWorkbenchMessage(t('chatMessages.voiceStopped'))
+      return
+    }
+    const SR = getSpeechRecognitionConstructor(window)
+    if (!SR) {
+      setVoiceState('unsupported')
+      setWorkbenchMessage(t('chatMessages.voiceUnsupported'))
+      return
+    }
+
+    setVoiceState('requesting')
     try {
       const rec = new SR()
-      rec.lang = 'zh-CN'
+      rec.lang = resolveSpeechRecognitionLanguage(lang)
       rec.continuous = false
       rec.interimResults = true
-      rec.onresult = (event) => {
-        const transcript = Array.from(event.results).map((r) => r[0]?.transcript || '').join('')
-        setInput((prev) => {
-          const base = prev.replace(/\s*\[识别中：[^\]]*\]\s*$/, '')
-          return event.results[0]?.isFinal ? `${base}${base ? ' ' : ''}${transcript}` : `${base} [识别中：${transcript}]`
-        })
+      const baseInput = input.trimEnd()
+      let finalTranscript = ''
+      let failed = false
+      rec.onstart = () => {
+        const micPerm = state.permissions.find((permission) => permission.id === 'mic')
+        if (!micPerm?.enabled) dispatch({ type: 'TOGGLE_PERM', payload: 'mic' })
+        setVoiceState('listening')
       }
-      rec.onend = () => setVoiceState('idle')
-      rec.onerror = () => setVoiceState('idle')
-      rec.start()
+      rec.onresult = (event) => {
+        const next = readSpeechRecognitionEvent(event, finalTranscript)
+        finalTranscript = next.committed
+        setInput(mergeSpeechTranscript(baseInput, next.transcript))
+      }
+      rec.onend = () => {
+        if (recognitionRef.current === rec) recognitionRef.current = null
+        if (!failed) setVoiceState('idle')
+      }
+      rec.onerror = (event) => {
+        failed = true
+        recognitionRef.current = null
+        const error = event?.error || 'unknown'
+        const status = error === 'not-allowed' || error === 'service-not-allowed'
+          ? 'denied'
+          : 'error'
+        const messageKey = status === 'denied'
+          ? 'chatMessages.voiceDenied'
+          : error === 'no-speech'
+            ? 'chatMessages.voiceNoSpeech'
+            : error === 'network'
+              ? 'chatMessages.voiceNetworkError'
+              : 'chatMessages.voiceError'
+        setVoiceState(status)
+        setWorkbenchMessage(t(messageKey))
+      }
       recognitionRef.current = rec
-      setVoiceState('listening')
+      rec.start()
     } catch (err) {
-      console.warn('voice error:', err)
-      setVoiceState('idle')
+      const denied = err?.name === 'NotAllowedError' || err?.name === 'SecurityError'
+      setVoiceState(denied ? 'denied' : 'error')
+      setWorkbenchMessage(t(denied ? 'chatMessages.voiceDenied' : 'chatMessages.voiceError'))
     }
   }
 
   const handleEditMessage = useCallback((msgId, content) => {
+    if (isGenerating) return
     const idx = messages.findIndex((m) => m.id === msgId)
     if (idx === -1) return
     setInput(content)
-    dispatch({ type: 'TRUNCATE_MESSAGES', payload: idx })
-  }, [messages, dispatch])
+    setEditingMessageId(msgId)
+  }, [isGenerating, messages])
 
   // ★ #9: 重发 — 找到消息位置,截掉它之后的所有消息(含本条),
   //   再用本条文本走完整发送流程(经过 triggerSendFlow 才能跑完工具/计费/SSE)
   const handleRegenerate = useCallback((msgId) => {
+    if (isGenerating) return
     const currentMessages = state.sessions.find((s) => s.id === state.activeSessionId)?.messages ?? EMPTY_MESSAGES
     const idx = currentMessages.findIndex((m) => m.id === msgId)
     if (idx === -1) return
@@ -1103,14 +1347,15 @@ export default function ChatSplit() {
       resendText = currentMessages[prevUserIdx].content
     }
     if (resendText) triggerSendFlow(resendText)
-  }, [dispatch, state.activeSessionId, state.sessions, triggerSendFlow])
+  }, [dispatch, isGenerating, state.activeSessionId, state.sessions, triggerSendFlow])
 
   // ★ #10: 删除单条消息
   const handleDeleteMessage = useCallback((msgId) => {
+    if (isGenerating) return
     if (!msgId) return
     if (typeof window !== 'undefined' && !window.confirm('删除这条消息?')) return
     dispatch({ type: 'DELETE_MESSAGE', payload: msgId })
-  }, [dispatch])
+  }, [dispatch, isGenerating])
 
 
   const handlePermAllow = () => {
@@ -1147,51 +1392,19 @@ export default function ChatSplit() {
       <LeftRail />
 
       <div className="flex-1 flex flex-col min-w-0">
-        <ChatHeader
-          activeSession={activeSession}
-          messages={messages}
-          lastFailedPrompt={lastFailedPrompt}
-          modelOptions={modelOptions}
-          selectedModel={selectedModel}
-          hasTasks={tasks.length > 0}
-          showWorkbench={showCodingWorkbench}
-          onToggleWorkbench={() => {
-            if (state.previewArtifact) dispatch({ type: 'CLOSE_PREVIEW_ARTIFACT' })
-            setShowCodingWorkbench((visible) => !visible)
-          }}
-          onExport={(format = 'json') => {
-            if (!activeSession) return
-            exportSession(activeSession, format)
-            setWorkbenchMessage(format === 'md' ? '当前会话已导出为 Markdown。' : '当前会话已导出为 JSON。')
-          }}
-          onCompress={() => {
-            if (messages.length <= 8) { setWorkbenchMessage('当前上下文还不长，暂时不需要压缩。'); return }
-            dispatch({ type: 'COMPRESS_CURRENT_SESSION' })
-            setWorkbenchMessage('已压缩较早上下文，保留最近消息。')
-          }}
-          onRetry={() => { if (lastFailedPrompt) triggerSendFlow(lastFailedPrompt) }}
-          onModelChange={(val) => { setSelectedModel(val); writeStoredModel(val) }}
-          onManageModels={handleManageModels}
-          onNavigateTask={() => navigate('/task')}
-        />
-
-        {/* Feature 8: Todo 追踪 sticky strip */}
-        {Array.isArray(activeSession?.todos) && activeSession.todos.length > 0 && (
-          <TodoTracker
-            todos={activeSession.todos}
-            onClear={() => dispatch({ type: 'CLEAR_TODOS' })}
-          />
-        )}
-
         <ChatMessages
+          key={activeSessionId || '__draft__'}
           messages={messages}
           state={state}
           workbenchMessage={workbenchMessage}
+          showContextUsage={showContextUsage}
           showContextPanel={showContextPanel}
           setShowContextPanel={setShowContextPanel}
-          selectedModel={selectedModel}
+          selectedModel={effectiveSelectedModel}
+          contextWindow={selectedContextWindow}
+          toolSpecs={contextToolSpecs}
+          systemPrompt={contextSystemPrompts[state.activeSessionId || '__draft__'] || ''}
           isGenerating={isGenerating}
-          onExampleClick={(label) => triggerSendFlow(label)}
           onEditMessage={handleEditMessage}
           onRegenerateMessage={handleRegenerate}
           onDeleteMessage={handleDeleteMessage}
@@ -1226,7 +1439,7 @@ export default function ChatSplit() {
 
         {/* ★ 工具审批卡:紧贴输入框上方,在对话流里就能决策,不用切页面 */}
         {toolApproval.open && (
-          <div className="px-4 pb-2">
+          <div className="mx-auto w-full max-w-[872px] px-4 pb-2">
             <ToolApprovalCard
               open={toolApproval.open}
               request={toolApproval.request}
@@ -1236,14 +1449,31 @@ export default function ChatSplit() {
           </div>
         )}
 
-        {/* 权限档位:随时能改「要被问到什么程度」 */}
-        <div className="px-4 pb-1.5 flex items-center">
-          <PermissionModeSwitcher
-            mode={approvalSettings?.mode || 'normal'}
-            onChange={changeApprovalMode}
-            disabled={isGenerating}
-          />
-        </div>
+        {/* ★ 流被截断后的续写入口。
+            本地模型跑长回答时中断是常态,原来只有「整轮重发」一条路 ——
+            前面已经生成的内容全部作废,慢模型上代价极大。
+            这里把已有的部分作为上下文,让模型接着往下写。 */}
+        {resumeState && !isGenerating && (
+          <div className="mx-auto w-full max-w-[872px] px-4 pb-1.5">
+            <div className="flex items-center gap-2 text-xs border border-amber-500/40 bg-amber-500/5 rounded-md px-3 py-2">
+              <span className="flex-1 text-ink-soft">{t('toast.chatResumeHint')}</span>
+              <button
+                type="button"
+                onClick={handleResumeGeneration}
+                className="h-7 px-3 rounded-md bg-ember text-paper"
+              >
+                {t('toast.chatResumeButton')}
+              </button>
+              <button
+                type="button"
+                onClick={() => setResumeState(null)}
+                className="h-7 px-2 text-ink-fade hover:text-ink"
+              >
+                {t('toast.chatResumeDismiss')}
+              </button>
+            </div>
+          </div>
+        )}
 
         <ChatComposer
           input={input}
@@ -1251,29 +1481,21 @@ export default function ChatSplit() {
           onSend={handleSend}
           attachments={attachments}
           setAttachments={setAttachments}
-          showSlashMenu={showSlashMenu}
-          setShowSlashMenu={setShowSlashMenu}
-          selectedIndex={selectedIndex}
-          setSelectedIndex={setSelectedIndex}
           voiceState={voiceState}
-          setVoiceState={setVoiceState}
-          showContextPanel={showContextPanel}
-          setShowContextPanel={setShowContextPanel}
+          modelPickerOpen={showModelPicker}
+          modelOptions={modelOptions}
+          selectedModel={effectiveSelectedModel}
           isGenerating={isGenerating}
           onAbort={handleAbortTask}
-          messages={messages}
           onFileChange={handleFileChange}
           onVoiceClick={handleVoice}
-          onContextClick={() => setShowContextPanel((v) => !v)}
-          onQuickSkillClick={(skill) => {
-            if (skill.solid) { navigate('/skills'); return }
-            setInput(skill.command + ' ')
-          }}
+          onOpenModelPicker={() => setShowModelPicker(true)}
+          onCloseModelPicker={() => setShowModelPicker(false)}
+          onModelChange={setModelForActiveSession}
+          onManageModels={handleManageModels}
+          approvalMode={approvalSettings?.mode || 'normal'}
+          onApprovalModeChange={changeApprovalMode}
           handleKeyDown={handleKeyDown}
-          skills={runtimeSkills}
-          slashRegistry={slashRegistry}
-          onPickSlashCommand={(entry) => executeSlashEntry(entry, '')}
-          onCompleteSlashCommand={completeSlashEntry}
         />
       </div>
 
@@ -1283,8 +1505,6 @@ export default function ChatSplit() {
           onClose={() => dispatch({ type: 'CLOSE_PREVIEW_ARTIFACT' })}
           onMessage={setWorkbenchMessage}
         />
-      ) : showCodingWorkbench ? (
-        <CodingWorkbench onMessage={setWorkbenchMessage} />
       ) : null}
 
       <ApplyPatchApprovalModal

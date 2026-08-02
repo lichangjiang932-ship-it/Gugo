@@ -47,6 +47,7 @@ function clampStr(v, max) {
 
 export const VALID_CONFIDENCE = ['low', 'medium', 'high']
 export const VALID_BLOCKER_KINDS = ['missing_info', 'ambiguous_intent', 'permission', 'risk_decision', 'other']
+export const VALID_DIRECTORY_ACCESS_MODES = ['read_only', 'read_write']
 
 export function reflectTool({
   observation,
@@ -109,6 +110,54 @@ export function requestClarificationTool({
   }
 }
 
+export function requestDirectoryTool({
+  purpose,
+  access_mode = 'read_only',
+  suggested_path = null,
+} = {}) {
+  if (typeof purpose !== 'string' || !purpose.trim()) {
+    throw badReq('purpose 必填:说明为什么需要用户授权目录')
+  }
+  if (!VALID_DIRECTORY_ACCESS_MODES.includes(access_mode)) {
+    throw badReq(`access_mode 必须是 ${VALID_DIRECTORY_ACCESS_MODES.join('/')}`)
+  }
+  const normalizedPurpose = clampStr(purpose, MAX_SHORT).trim()
+  const suggestedPath = suggested_path ? clampStr(suggested_path, MAX_SHORT).trim() : null
+  return {
+    ok: true,
+    paused: true,
+    clarification: {
+      question: 'Please choose and authorize a directory so this task can continue.',
+      why: normalizedPurpose,
+      blocker_kind: 'permission',
+      request_type: 'directory',
+      access_mode,
+      suggested_path: suggestedPath || null,
+      purpose: normalizedPurpose,
+      timestamp: Date.now(),
+    },
+  }
+}
+
+export function sleepUntilTool({ wake_at, reason = null } = {}, { now = Date.now() } = {}) {
+  const wakeAt = typeof wake_at === 'number' ? wake_at : Date.parse(String(wake_at || ''))
+  if (!Number.isFinite(wakeAt)) throw badReq('wake_at must be a valid ISO date or Unix millisecond timestamp')
+  if (wakeAt <= now) throw badReq('wake_at must be in the future')
+  if (wakeAt - now > 366 * 24 * 60 * 60 * 1000) throw badReq('wake_at must be within 366 days')
+  return {
+    ok: true,
+    paused: true,
+    clarification: {
+      question: `Sleeping until ${new Date(wakeAt).toISOString()}`,
+      why: reason ? clampStr(reason, MAX_SHORT).trim() : null,
+      blocker_kind: 'scheduled_wake',
+      options: null,
+      wakeAt,
+      timestamp: now,
+    },
+  }
+}
+
 /* ─── tool spec + dispatcher ─── */
 
 export const AGENTIC_TOOL_SPECS = [
@@ -151,12 +200,45 @@ export const AGENTIC_TOOL_SPECS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'request_directory',
+      description: 'Pause this durable job and ask the user to choose and explicitly authorize a local directory. Use read_write when the task must create, edit, patch, rename, or delete files; use read_only only for inspection. Use this instead of guessing alternate subdirectories after a permission error. The same job resumes after authorization.',
+      parameters: {
+        type: 'object',
+        properties: {
+          purpose: { type: 'string', description: 'Why this task needs access to the directory.' },
+          access_mode: { type: 'string', enum: VALID_DIRECTORY_ACCESS_MODES, description: 'Request the least privilege needed. File-changing tasks require read_write; inspection-only tasks use read_only. Defaults to read_only.' },
+          suggested_path: { type: 'string', description: 'Optional path hint shown to the user; it is never authorized automatically.' },
+        },
+        required: ['purpose'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'sleep_until',
+      description: 'Pause this same durable job until a future time, then continue with the same conversation and tool state. Use this for follow-ups or waiting on an external condition; do not create a separate cron job.',
+      parameters: {
+        type: 'object',
+        properties: {
+          wake_at: { type: 'string', description: 'Future ISO-8601 date/time including timezone.' },
+          reason: { type: 'string', description: 'What to continue or check after waking.' },
+        },
+        required: ['wake_at'],
+      },
+    },
+  },
 ]
 
 export async function dispatchAgenticTool(name, args) {
   switch (name) {
     case 'reflect': return reflectTool(args || {})
     case 'request_clarification': return requestClarificationTool(args || {})
+    case 'request_directory': return requestDirectoryTool(args || {})
+    case 'sleep_until': return sleepUntilTool(args || {})
     default: throw new Error(`unknown agentic tool: ${name}`)
   }
 }

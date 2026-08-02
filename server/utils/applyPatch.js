@@ -39,6 +39,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { patchLimiter } from './rateLimiter.js'
+import { resolveAuthorizedLocalPath } from '../services/localFileAccessService.js'
 
 const MAX_PATCH_BYTES = 2 * 1024 * 1024
 const MAX_FILE_BYTES = 8 * 1024 * 1024
@@ -56,7 +57,15 @@ function badReq(msg, status = 400) {
   return err
 }
 
-function resolveInWorkspace(rawPath, { mustExist = false } = {}) {
+function resolveInWorkspace(rawPath, { mustExist = false, userId = null } = {}) {
+  if (userId) {
+    return resolveAuthorizedLocalPath({
+      userId,
+      rawPath,
+      write: true,
+      allowMissing: !mustExist,
+    })
+  }
   const root = getWorkspaceRoot()
   if (!rawPath || typeof rawPath !== 'string') throw badReq('path 非法')
   const absRaw = path.isAbsolute(rawPath) ? rawPath : path.resolve(root, rawPath)
@@ -83,7 +92,11 @@ function resolveInWorkspace(rawPath, { mustExist = false } = {}) {
   if (resolved !== rootReal && !resolved.startsWith(rootReal + path.sep)) {
     throw badReq(`路径越界: ${rawPath}`, 403)
   }
-  return resolved
+  return {
+    fullPath: resolved,
+    displayPath: toRelative(resolved),
+    source: 'workspace',
+  }
 }
 
 function toRelative(absPath) {
@@ -285,11 +298,12 @@ export async function applyPatchTool({ patch, dry_run = false, userId = null } =
   const plans = []
   for (const op of ops) {
     if (op.kind === 'add') {
-      const abs = resolveInWorkspace(op.path)
+      const resolved = resolveInWorkspace(op.path, { userId })
+      const abs = resolved.fullPath
       if (fs.existsSync(abs)) throw badReq(`Add File ${op.path}: 已存在,不能 add`, 409)
       plans.push({
         op: 'add',
-        path: op.path,
+        path: resolved.displayPath,
         abs,
         oldContent: null,
         newContent: op.content,
@@ -297,13 +311,14 @@ export async function applyPatchTool({ patch, dry_run = false, userId = null } =
         deletions: 0,
       })
     } else if (op.kind === 'delete') {
-      const abs = resolveInWorkspace(op.path, { mustExist: true })
+      const resolved = resolveInWorkspace(op.path, { mustExist: true, userId })
+      const abs = resolved.fullPath
       const stat = fs.statSync(abs)
       if (!stat.isFile()) throw badReq(`Delete File ${op.path}: 不是文件`)
       const oldContent = fs.readFileSync(abs, 'utf8')
       plans.push({
         op: 'delete',
-        path: op.path,
+        path: resolved.displayPath,
         abs,
         oldContent,
         newContent: null,
@@ -311,7 +326,8 @@ export async function applyPatchTool({ patch, dry_run = false, userId = null } =
         deletions: oldContent ? oldContent.split('\n').length - (oldContent.endsWith('\n') ? 1 : 0) : 0,
       })
     } else if (op.kind === 'update') {
-      const abs = resolveInWorkspace(op.path, { mustExist: true })
+      const resolved = resolveInWorkspace(op.path, { mustExist: true, userId })
+      const abs = resolved.fullPath
       const stat = fs.statSync(abs)
       if (!stat.isFile()) throw badReq(`Update File ${op.path}: 不是文件`)
       if (stat.size > MAX_FILE_BYTES) throw badReq(`Update File ${op.path}: 超过 ${MAX_FILE_BYTES} 字节`, 413)
@@ -319,14 +335,14 @@ export async function applyPatchTool({ patch, dry_run = false, userId = null } =
       const newContent = applyHunks(oldContent, op.hunks, op.path)
       const additions = op.hunks.reduce((s, h) => s + h.additions, 0)
       const deletions = op.hunks.reduce((s, h) => s + h.deletions, 0)
-      plans.push({ op: 'update', path: op.path, abs, oldContent, newContent, additions, deletions })
+      plans.push({ op: 'update', path: resolved.displayPath, abs, oldContent, newContent, additions, deletions })
     }
   }
 
   // 阶段 2:执行(或 dry-run)
   const changes = plans.map((p) => ({
     op: p.op,
-    path: toRelative(p.abs),
+    path: p.path,
     additions: p.additions,
     deletions: p.deletions,
     preview: makePreview(p),
@@ -364,7 +380,16 @@ export async function applyPatchTool({ patch, dry_run = false, userId = null } =
         // 回滚失败也继续,日志层面无能为力
       }
     }
-    throw new Error(`apply_patch 失败,已回滚: ${err.message}`, { cause: err })
+    const wrapped = new Error(`apply_patch 失败,已回滚: ${err.message}`, { cause: err })
+    const denied = ['EACCES', 'EPERM', 'EROFS'].includes(err?.code)
+    wrapped.code = denied ? 'FILESYSTEM_WRITE_DENIED' : (err?.code || 'APPLY_PATCH_WRITE_FAILED')
+    wrapped.statusCode = denied ? 403 : (err?.statusCode || 500)
+    wrapped.retryable = denied ? false : err?.retryable
+    wrapped.path = err?.path
+    if (denied) {
+      wrapped.hint = '宿主文件系统拒绝了写入；不要改试同一根目录下的其他子目录，请先修复该目录的读写授权或 Windows ACL。'
+    }
+    throw wrapped
   }
 }
 
@@ -429,7 +454,7 @@ export const APPLY_PATCH_TOOL_SPECS = [
   },
 ]
 
-export async function dispatchApplyPatchTool(name, args) {
+export async function dispatchApplyPatchTool(name, args, { userId = null } = {}) {
   if (name !== 'apply_patch') throw new Error(`unknown apply_patch tool: ${name}`)
-  return applyPatchTool(args || {})
+  return applyPatchTool({ ...(args || {}), userId })
 }

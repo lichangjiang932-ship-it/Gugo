@@ -1,6 +1,6 @@
-import { archiveSessionRemote } from './sessionClient.js'
-
-export const CORE_SLASH_COMMANDS = ['archive', 'clear', 'help', 'retry', 'search', 'title']
+export const CORE_SLASH_COMMANDS = [
+  'clear', 'context', 'help', 'model', 'permissions', 'status',
+]
 
 function textArg(args) {
   return typeof args === 'string' ? args.trim() : String(args?.text || '').trim()
@@ -8,7 +8,7 @@ function textArg(args) {
 
 function currentSession(ctx) {
   const state = ctx.getState?.() || ctx.state || {}
-  return (state.sessions || []).find((s) => s.id === state.activeSessionId) || null
+  return (state.sessions || []).find((session) => session.id === state.activeSessionId) || null
 }
 
 function dispatchResult(ctx, message) {
@@ -16,6 +16,10 @@ function dispatchResult(ctx, message) {
     ctx.dispatch({ type: 'RECEIVE_MESSAGE', payload: message })
   }
   return message
+}
+
+function modelName(option) {
+  return typeof option === 'string' ? option : option?.name
 }
 
 export function buildCoreSlashCommands(t) {
@@ -32,68 +36,59 @@ export function buildCoreSlashCommands(t) {
       },
     },
     {
-      name: 'retry',
-      description: tr('slash.commands.retry.description'),
-      handler: async (_args, ctx = {}) => {
-        const session = currentSession(ctx)
-        const messages = session?.messages || []
-        let userIndex = -1
-        for (let i = messages.length - 1; i >= 0; i -= 1) {
-          if (messages[i]?.role === 'user') {
-            userIndex = i
-            break
-          }
+      name: 'context',
+      description: tr('slash.commands.context.description'),
+      hint: '[show|hide|toggle]',
+      handler: async (args, ctx = {}) => {
+        const mode = textArg(args).toLowerCase() || 'toggle'
+        if (!['show', 'hide', 'toggle'].includes(mode)) {
+          return tr('slash.commands.context.invalid')
         }
-        if (userIndex < 0) return tr('slash.commands.retry.empty')
-        const content = String(messages[userIndex]?.content || '').trim()
-        if (!content) return tr('slash.commands.retry.empty')
-        ctx.dispatch?.({ type: 'TRUNCATE_MESSAGES', payload: userIndex })
-        ctx.triggerSendFlow?.(content)
-        return tr('slash.commands.retry.done')
+        const visible = mode === 'show'
+          ? true
+          : mode === 'hide'
+            ? false
+            : !ctx.contextUsageVisible
+        ctx.setContextUsage?.(visible)
+        return tr(visible ? 'slash.commands.context.shown' : 'slash.commands.context.hidden')
       },
     },
     {
-      name: 'title',
-      description: tr('slash.commands.title.description'),
-      hint: '<new>',
+      name: 'model',
+      description: tr('slash.commands.model.description'),
+      hint: '[name]',
       handler: async (args, ctx = {}) => {
-        const title = textArg(args)
-        if (!title) return tr('slash.commands.title.missing')
-        ctx.dispatch?.({ type: 'UPDATE_SESSION_TITLE', payload: title })
-        return tr('slash.commands.title.done').replace('{title}', title)
+        const requested = textArg(args)
+        if (!requested) {
+          ctx.openModelPicker?.()
+          return ''
+        }
+        const available = (ctx.modelOptions || []).map(modelName).filter(Boolean)
+        const match = available.find((name) => name.toLowerCase() === requested.toLowerCase())
+        if (!match) return tr('slash.commands.model.unknown').replace('{model}', requested)
+        ctx.setModel?.(match)
+        return tr('slash.commands.model.done').replace('{model}', match)
       },
     },
     {
-      name: 'search',
-      description: tr('slash.commands.search.description'),
-      hint: '<q>',
-      handler: async (args, ctx = {}) => {
-        const query = textArg(args)
-        const openSearch = ctx.openSessionSearch || ((q) => {
-          if (typeof window !== 'undefined') {
-            window.dispatchEvent(new CustomEvent('session-search:open', { detail: { query: q } }))
-          }
-        })
-        openSearch(query)
-        return query
-          ? tr('slash.commands.search.done').replace('{query}', query)
-          : tr('slash.commands.search.opened')
+      name: 'permissions',
+      description: tr('slash.commands.permissions.description'),
+      handler: async (_args, ctx = {}) => {
+        ctx.navigate?.('/permissions')
+        return tr('slash.commands.permissions.done')
       },
     },
     {
-      name: 'archive',
-      description: tr('slash.commands.archive.description'),
+      name: 'status',
+      description: tr('slash.commands.status.description'),
       handler: async (_args, ctx = {}) => {
         const state = ctx.getState?.() || ctx.state || {}
-        const sessionId = state.activeSessionId
-        if (!sessionId) return tr('slash.commands.archive.empty')
-        ctx.dispatch?.({ type: 'ARCHIVE_SESSION', payload: sessionId })
-        try {
-          await (ctx.archiveSessionRemote || archiveSessionRemote)(sessionId)
-        } catch {
-          // Local archive still keeps the UI state coherent when offline/anonymous.
-        }
-        return tr('slash.commands.archive.done')
+        const session = currentSession(ctx)
+        const running = (state.tasks || []).filter((task) => task.status === 'running').length
+        return tr('slash.commands.status.done')
+          .replace('{model}', ctx.selectedModel || tr('slash.commands.status.noModel'))
+          .replace('{messages}', String(session?.messages?.length || 0))
+          .replace('{running}', String(running))
       },
     },
     {
@@ -117,4 +112,3 @@ export function registerCoreSlashCommands(registry, { t } = {}) {
   }
   return registry
 }
-

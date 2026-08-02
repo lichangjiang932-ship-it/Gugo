@@ -6,20 +6,105 @@ import test from 'node:test'
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-job-tools-tests', String(process.pid))
 
 const { SERVER_TOOL_SPECS, runToolsLoop } = await import('../server/services/jobTools.js')
-const { createDefaultExecuteStep, JobRuntime } = await import('../server/services/jobRuntime.js')
+const {
+  createDefaultExecuteStep,
+  JobRuntime,
+  runPlanningExploration,
+  selectPlanningToolSpecs,
+} = await import('../server/services/jobRuntime.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 const TEST_USER = issueTestSession().userId
 
-test('SERVER_TOOL_SPECS exposes create_pptx / create_docx / create_xlsx', () => {
+test('SERVER_TOOL_SPECS exposes artifact, web, git mutation, and connected-app tools', () => {
   const names = SERVER_TOOL_SPECS.map((spec) => spec.function.name)
-  for (const required of ['create_pptx', 'create_docx', 'create_xlsx']) {
+  for (const required of [
+    'create_pptx',
+    'create_docx',
+    'create_xlsx',
+    'web_search',
+    'fetch_url',
+    'git_commit',
+    'git_push',
+    'git_rollback',
+    'connected_app_list',
+    'notion_search',
+    'github_get_file',
+  ]) {
     assert.ok(names.includes(required), `${required} missing from SERVER_TOOL_SPECS`)
   }
   for (const spec of SERVER_TOOL_SPECS) {
     assert.equal(spec.type, 'function')
     assert.ok(spec.function.parameters, `${spec.function.name} missing parameters`)
   }
+})
+
+test('planning exploration runs three isolated read-only explorers concurrently and synthesizes their findings', async () => {
+  const planningNames = selectPlanningToolSpecs('修复项目刷新').map((spec) => spec.function.name)
+  assert.ok(planningNames.includes('grep_code'))
+  assert.ok(planningNames.includes('read_file'))
+  assert.equal(planningNames.includes('write_file'), false)
+  assert.equal(planningNames.includes('bash_exec'), false)
+  assert.equal(planningNames.some((name) => name.startsWith('browser_')), false)
+
+  let rounds = 0
+  let activeFirstPasses = 0
+  let maxActiveFirstPasses = 0
+  const executed = []
+  const roles = new Set()
+  const exploration = await runPlanningExploration({
+    prompt: '修复项目刷新',
+    messages: [{ role: 'user', content: '先探索相关代码和验证入口' }],
+    userId: TEST_USER,
+    runModelWithTools: async ({ messages }) => {
+      rounds += 1
+      const toolResult = messages.find((message) => message.role === 'tool')
+      if (!toolResult) {
+        const rolePrompt = messages.find((message) => message.role === 'system' && message.content.includes('planning swarm'))?.content || ''
+        roles.add(rolePrompt)
+        activeFirstPasses += 1
+        maxActiveFirstPasses = Math.max(maxActiveFirstPasses, activeFirstPasses)
+        await new Promise((resolve) => setImmediate(resolve))
+        activeFirstPasses -= 1
+        return {
+          content: '',
+          toolCalls: [{ id: 'explore-1', name: 'grep_code', arguments: JSON.stringify({ pattern: 'refresh' }) }],
+        }
+      }
+      return { content: `已探索：${toolResult.content}`, toolCalls: [] }
+    },
+    executeTool: async ({ name, args }) => {
+      executed.push({ name, args })
+      return { ok: true, matches: ['src/router.js:10'] }
+    },
+    synthesizeModel: async ({ messages }) => {
+      const payload = JSON.parse(messages.at(-1).content)
+      assert.equal(payload.findings.length, 3)
+      assert.equal(new Set(payload.findings.map((item) => item.transcriptRef)).size, 3)
+      return payload.findings.map((item) => item.text).join('\n')
+    },
+  })
+  assert.equal(rounds, 6)
+  assert.equal(roles.size, 3)
+  assert.ok(maxActiveFirstPasses > 1)
+  assert.deepEqual(executed, Array.from({ length: 3 }, () => ({ name: 'grep_code', args: { pattern: 'refresh' } })))
+  assert.match(exploration, /src\\?\/router\.js|src\/router\.js/)
+})
+
+test('runToolsLoop re-evaluates artifact intent from current user messages even with explicit tool specs', async () => {
+  let visibleNames = []
+  await runToolsLoop({
+    job: { id: 'job-dynamic-intent', userId: TEST_USER, title: '整理讨论', prompt: '整理刚才的讨论' },
+    step: { id: 'step-dynamic-intent', kind: 'execute' },
+    messages: [{ role: 'user', content: '现在把它整理成 Word 文档' }],
+    toolSpecs: SERVER_TOOL_SPECS,
+    runModel: async ({ tools }) => {
+      visibleNames = tools.map((spec) => spec.function.name)
+      return { content: '可以生成 Word。', toolCalls: [] }
+    },
+  })
+  assert.ok(visibleNames.includes('create_docx'))
+  assert.equal(visibleNames.includes('create_pptx'), false)
 })
 
 test('runToolsLoop calls create_docx once, persists artifact, returns final text', async () => {
@@ -94,7 +179,7 @@ test('runToolsLoop stops at maxIters when model keeps calling tools', async () =
   const result = await runToolsLoop({
     job,
     step,
-    messages: [{ role: 'user', content: 'loop' }],
+    messages: [{ role: 'user', content: '反复生成 Word 文档 loop' }],
     runModel,
     executeTool: fakeExecute,
     maxIters: 3,
@@ -108,7 +193,8 @@ test('runToolsLoop stops at maxIters when model keeps calling tools', async () =
 
 test('runToolsLoop handles malformed tool args without throwing', async () => {
   let calls = 0
-  const runModel = async () => {
+  let toolResult = null
+  const runModel = async ({ messages }) => {
     calls += 1
     if (calls === 1) {
       return {
@@ -116,17 +202,69 @@ test('runToolsLoop handles malformed tool args without throwing', async () => {
         toolCalls: [{ id: 'c1', type: 'function', function: { name: 'create_pptx', arguments: '{not json' } }],
       }
     }
+    toolResult = messages.find((message) => message.role === 'tool') || null
     return { content: 'done', toolCalls: [] }
   }
   const job = { id: 'job-tools-3', userId: TEST_USER, title: 'bad args' }
   const step = { id: 'step-3', kind: 'execute' }
-  // create_pptx with empty slides should still succeed (artifactGen handles it)
+  let executeCount = 0
   const result = await runToolsLoop({
     job, step,
-    messages: [{ role: 'user', content: 'pptx' }],
+    messages: [{ role: 'user', content: '请生成一个测试用 pptx' }],
     runModel,
+    executeTool: async () => {
+      executeCount += 1
+      return { ok: true }
+    },
   })
   assert.equal(result.text, 'done')
+  assert.equal(executeCount, 0, '损坏参数绝不能静默变成 {} 后落到执行器')
+  assert.equal(JSON.parse(toolResult.content).code, 'invalid_tool_arguments')
+})
+
+test('job tool loop can execute connected_app_list with the job owner', async () => {
+  let calls = 0
+  let toolResult = null
+  const result = await runToolsLoop({
+    job: { id: 'job-connectors', userId: TEST_USER },
+    step: { id: 'step-connectors' },
+    messages: [{ role: 'user', content: '列出已连接应用' }],
+    runModel: async ({ messages }) => {
+      calls += 1
+      if (calls === 1) {
+        return { content: '', toolCalls: [{ id: 'apps-1', name: 'connected_app_list', arguments: '{}' }] }
+      }
+      toolResult = messages.find((message) => message.role === 'tool')?.content || ''
+      return { content: '已检查连接应用。', toolCalls: [] }
+    },
+  })
+  assert.equal(result.text, '已检查连接应用。')
+  assert.match(toolResult, /"ok":true/)
+})
+
+test('runToolsLoop 为缺失 id 的调用生成 id,并让结果严格配对', async () => {
+  let assistantCallId = null
+  let resultCallId = null
+  let invocations = 0
+  const result = await runToolsLoop({
+    job: { id: 'job-id-repair', userId: TEST_USER, title: 'id repair' },
+    step: { id: 'step-id-repair', kind: 'execute' },
+    messages: [{ role: 'user', content: 'read' }],
+    runModel: async ({ messages }) => {
+      invocations += 1
+      if (invocations === 1) {
+        return { content: '', toolCalls: [{ name: 'read_file', arguments: { path: 'README.md' } }] }
+      }
+      assistantCallId = messages.find((message) => message.role === 'assistant' && message.tool_calls)?.tool_calls[0]?.id
+      resultCallId = messages.find((message) => message.role === 'tool')?.tool_call_id
+      return { content: 'done', toolCalls: [] }
+    },
+    executeTool: async () => ({ ok: true, content: 'ok' }),
+  })
+
+  assert.equal(result.text, 'done')
+  assert.ok(assistantCallId)
+  assert.equal(resultCallId, assistantCallId)
 })
 
 test('jobRuntime end-to-end: model calling create_pptx persists artifact under job.userId', async () => {

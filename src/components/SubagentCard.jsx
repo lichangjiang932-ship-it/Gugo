@@ -22,15 +22,15 @@ export default function SubagentCard({ call }) {
   }
 
   return (
-    <div className="my-2 border border-violet-200/70 rounded-md bg-gradient-to-br from-violet-50 to-paper text-xs overflow-hidden">
+    <div className="my-1 overflow-hidden rounded-lg border border-ink/10 bg-paper/70 text-xs">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center gap-2 px-2.5 py-2 hover:bg-white/45 transition-colors"
+        className="flex w-full items-center gap-1.5 px-2.5 py-2 transition-colors hover:bg-paper-2/75"
       >
         {open ? <ChevronDown className="w-3 h-3 text-ink-fade shrink-0" /> : <ChevronRight className="w-3 h-3 text-ink-fade shrink-0" />}
-        <Bot className="w-3.5 h-3.5 text-violet-600 shrink-0" />
-        <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-violet-700 shrink-0">
+        <Bot className="w-3.5 h-3.5 text-ink-fade shrink-0" />
+        <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-fade shrink-0">
           Agent · {args.subagent_type || 'general'}
         </span>
         <span className="text-ink-soft truncate flex-1 text-left" title={label}>{label}</span>
@@ -40,7 +40,7 @@ export default function SubagentCard({ call }) {
         </span>
       </button>
       {open && (
-        <div className="border-t border-dashed border-violet-200/70 bg-white/55 p-2.5 space-y-2">
+        <div className="space-y-2 border-t border-ink/10 bg-paper-2/40 p-2.5">
           <div>
             <div className="font-mono text-[9px] uppercase tracking-wider text-ink-fade mb-1">Prompt</div>
             <pre className="text-[11px] leading-snug whitespace-pre-wrap break-all bg-paper p-2 rounded border border-ink-fade/20">

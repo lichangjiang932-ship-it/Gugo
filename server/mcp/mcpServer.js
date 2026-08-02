@@ -25,10 +25,8 @@ import {
   browserOpenUrl,
   browserScreenshot,
   browserSnapshot,
-  browserState,
   browserType,
   browserWait,
-  closeBrowserSession,
 } from '../adapters/browserAutomation.js'
 
 const PROTOCOL_VERSION = '2025-03-26'
@@ -62,7 +60,7 @@ const TOOLS = [
   },
   {
     name: 'connected_app_open',
-    description: 'Open a connected Browser app using its trusted provider ID.',
+    description: 'Use a persistently connected Browser app. Its visible managed session is restored automatically when needed.',
     inputSchema: { type: 'object', properties: { provider: { type: 'string' } }, required: ['provider'] },
   },
   {
@@ -108,11 +106,6 @@ const TOOLS = [
     name: 'browser_screenshot',
     description: 'Capture the current page as a PNG image.',
     inputSchema: { type: 'object', properties: { fullPage: { type: 'boolean' } } },
-  },
-  {
-    name: 'browser_close',
-    description: 'Close the isolated browser session.',
-    inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'notion_search',
@@ -211,14 +204,15 @@ async function callTool(userId, name, args = {}) {
     throw new Error('Browser is disabled in Access')
   }
   if (name === 'browser_open_url') {
-    assertBrowserAppUrlAccess({ userId, url: args.url })
-    return textResult(await browserOpenUrl({ userId, url: args.url }))
+    const connectedApp = assertBrowserAppUrlAccess({ userId, url: args.url })
+    const persistent = !!connectedApp || listConnectedBrowserApps({ userId }).length > 0
+    return textResult(await browserOpenUrl({ userId, url: args.url, headed: persistent }))
   }
   if (['browser_snapshot', 'browser_console', 'browser_click', 'browser_type', 'browser_wait', 'browser_screenshot'].includes(name)) {
     await assertBrowserSessionAppAccess({ userId })
   }
   if (name === 'browser_snapshot') return textResult(await browserSnapshot({ userId, maxText: args.maxText }))
-  if (name === 'browser_state') return textResult(await browserState({ userId }))
+  if (name === 'browser_state') return textResult(await assertBrowserSessionAppAccess({ userId }))
   if (name === 'browser_console') return textResult(await browserConsole({ userId, clear: args.clear }))
   if (name === 'browser_click') {
     const result = await browserClick({ userId, target: args.target })
@@ -239,7 +233,6 @@ async function callTool(userId, name, args = {}) {
     const image = await browserScreenshot({ userId, fullPage: args.fullPage })
     return { content: [{ type: 'image', data: image.data, mimeType: image.mimeType }] }
   }
-  if (name === 'browser_close') return textResult({ closed: closeBrowserSession(userId) })
   if (name === 'notion_search') return textResult(await searchNotion({ userId, query: args.query }))
   if (name === 'notion_fetch_page') return textResult(await fetchNotionPage({ userId, pageId: args.pageId }))
   if (name === 'github_search_repositories') return textResult(await searchGithubRepositories({ userId, query: args.query }))

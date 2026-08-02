@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react'
-import { useNavigate, useLocation } from 'react-router-dom'
-import { Link2, MessageSquare, Wrench, Settings, Sparkles, X, Search, MoreHorizontal, Archive, ArchiveRestore } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { useNavigate, useLocation } from '../lib/router.jsx'
+import { Archive, ArchiveRestore, ChevronUp, Link2, MoreHorizontal, Plus, Search, Settings, Wrench, X } from 'lucide-react'
 import { useAppContext } from '../store/AppContext'
 import {
   LOGIN_CODE_COUNTDOWN_SECONDS,
@@ -10,45 +10,10 @@ import {
 import { getAuthToken, loginWithPassword, sendLoginCode, verifyLoginCode } from '../lib/accountClient.js'
 import { settingsPathAfterLogin } from '../lib/settingsNavigation.js'
 import { archiveSessionRemote, unarchiveSessionRemote } from '../lib/sessionClient.js'
-import { visibleTabs } from '../lib/tabVisibility.js'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { useToast } from './Toast.jsx'
-import NotificationBell from './NotificationBell.jsx'
-import { ROUTE_READINESS } from '../config/routeReadiness.js'
+import BrandMark from './BrandMark.jsx'
 import { fetchPendingCount } from '../lib/approvalClient.js'
-
-// ★ #21: 提取会话最后消息的纯文本预览 (剥 markdown / 多模态 array / 工具卡)
-function getSessionPreview(session) {
-  const msgs = session?.messages
-  if (!Array.isArray(msgs) || msgs.length === 0) return ''
-  // 从尾向前找第一条有可视文本的消息 (跳过 tool_call / 纯 meta 卡)
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    const m = msgs[i]
-    let text = ''
-    if (typeof m?.content === 'string') text = m.content
-    else if (Array.isArray(m?.content)) {
-      // multimodal: 取所有 text 段
-      text = m.content
-        .filter((p) => p?.type === 'text' || typeof p?.text === 'string')
-        .map((p) => p.text || '')
-        .join(' ')
-    }
-    text = text.replace(/```[\s\S]*?```/g, '〔代码〕').replace(/[#*`>_~|]+/g, '').replace(/\s+/g, ' ').trim()
-    if (text) {
-      const prefix = m.role === 'user' ? '你: ' : (m.role === 'assistant' ? '' : '')
-      return prefix + text.slice(0, 60)
-    }
-  }
-  return ''
-}
-
-// ★ #22: 是否未读 — updatedAt > lastViewedAt 且不是当前会话
-function isSessionUnread(session, activeId) {
-  if (!session || session.id === activeId) return false
-  if (!session.updatedAt) return false
-  if (!session.lastViewedAt) return false  // 老数据无标记,不显示未读
-  return session.updatedAt > session.lastViewedAt
-}
 
 export default function LeftRail() {
   const navigate = useNavigate()
@@ -65,15 +30,30 @@ export default function LeftRail() {
   const [loginPassword, setLoginPassword] = useState('')
   const [loginCodeCountdown, setLoginCodeCountdown] = useState(0)
   const [loginTarget, setLoginTarget] = useState(null)
-  const [sessionFilter, setSessionFilter] = useState('active')
   const [openMenuId, setOpenMenuId] = useState(null)
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false)
+  const accountMenuRef = useRef(null)
 
   // ★ #25: 监听全局 Esc 清空搜索框 (preview 不开时才会派发)
   useEffect(() => {
-    const onEsc = () => setOpenMenuId(null)
+    const onEsc = () => {
+      setOpenMenuId(null)
+      setAccountMenuOpen(false)
+    }
     window.addEventListener('app:escape', onEsc)
     return () => window.removeEventListener('app:escape', onEsc)
   }, [])
+
+  useEffect(() => {
+    if (!accountMenuOpen) return undefined
+    const closeOutside = (event) => {
+      if (accountMenuRef.current && !accountMenuRef.current.contains(event.target)) {
+        setAccountMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', closeOutside)
+    return () => document.removeEventListener('mousedown', closeOutside)
+  }, [accountMenuOpen])
 
   useEffect(() => {
     const openLogin = (event) => {
@@ -121,44 +101,7 @@ export default function LeftRail() {
     }
   }, [location.pathname])
 
-  const settingsChildPaths = ['/task', '/permissions', '/memory', '/desk', '/agents', '/channels', '/mcp', '/history', '/approvals']
-  const navItems = [
-    { path: '/chat', icon: MessageSquare, label: t('nav.chat') },
-    { path: '/skills', icon: Wrench, label: t('nav.skills') },
-    { path: '/access', icon: Link2, label: t('access.title'), requiresLogin: true },
-    // ★ 审批不再占主导航:对话里的工具审批已经内联在聊天页,
-    // 这个页面只剩「无人值守的后台 job / cron 排队等批准」这一种低频场景,
-    // 按项目约定归到设置里的功能入口。待审时才在设置项上显示角标。
-    {
-      path: '/settings',
-      icon: Settings,
-      label: t('nav.settings'),
-      requiresLogin: true,
-      activePaths: settingsChildPaths,
-      badge: pendingApprovals,
-    },
-  ]
-
-  const allSessions = state.sessions
-  const activeSessions = allSessions.filter((s) => !s.archivedAt)
-  const archivedSessions = allSessions.filter((s) => !!s.archivedAt)
-  const tabsToShow = visibleTabs({
-    active: activeSessions.length,
-    archived: archivedSessions.length,
-    all: allSessions.length,
-  })
-  // 如果当前选中的 tab 被隐藏了，自动回退到 'active'
-  const effectiveFilter = tabsToShow.includes(sessionFilter) ? sessionFilter : 'active'
-  const sessions = allSessions.filter((session) => {
-    if (effectiveFilter === 'archived') return !!session.archivedAt
-    if (effectiveFilter === 'all') return true
-    return !session.archivedAt
-  })
-  const startOfToday = new Date().setHours(0, 0, 0, 0)
-  const startOfWeek = startOfToday - ((new Date().getDay() + 6) % 7) * 86400000
-  const todaySessions = sessions.filter((s) => s.createdAt >= startOfToday)
-  const weekSessions = sessions.filter((s) => s.createdAt >= startOfWeek && s.createdAt < startOfToday)
-  const earlierSessions = sessions.filter((s) => s.createdAt < startOfWeek)
+  const sessions = state.sessions.filter((session) => !session.archivedAt)
 
   const handleNewChat = () => {
     dispatch({ type: 'NEW_SESSION', payload: '新对话' })
@@ -166,6 +109,7 @@ export default function LeftRail() {
   }
 
   const handleNav = (item) => {
+    setAccountMenuOpen(false)
     if (item.requiresLogin && !getAuthToken()) {
       setLoginTarget(item.path)
       setShowLogin(true)
@@ -243,15 +187,11 @@ export default function LeftRail() {
     }
   }
 
-  const renderSessionGroup = (title, items) => {
+  const renderSessions = (items) => {
     if (!items.length) return null
     return (
-      <div className="mt-2">
-        <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">{title}</span>
-        <div className="flex flex-col gap-0.5 mt-1.5">
+      <div className="flex flex-col gap-0.5">
           {items.map((s, i) => {
-            const preview = getSessionPreview(s)
-            const unread = isSessionUnread(s, state.activeSessionId)
             const isActive = s.id === state.activeSessionId
             return (
             <div key={s.id ?? i} className="group relative flex items-center">
@@ -260,28 +200,11 @@ export default function LeftRail() {
                   dispatch({ type: 'SWITCH_SESSION', payload: s.id })
                   navigate('/chat')
                 }}
-                className={`flex-1 flex items-start gap-2 px-2 py-1.5 rounded-md text-[13px] transition-colors min-w-0 ${
-                  isActive ? 'bg-paper-2 border border-ink-fade/40 text-ink' : 'text-ink-soft hover:bg-paper-2/50'
+                className={`flex h-8 min-w-0 flex-1 items-center rounded-md px-2 text-left text-[13px] transition-colors ${
+                  isActive ? 'bg-paper-2 text-ink' : 'text-ink-soft hover:bg-paper-2/60'
                 }`}
               >
-                {/* ★ #22: 未读用 ember 实心点;已读 ghost 点;当前会话 ember */}
-                <div className={`w-1.5 h-1.5 rounded-full shrink-0 mt-1.5 ${
-                  isActive ? 'bg-ember' : (unread ? 'bg-ember' : 'bg-ink-ghost')
-                }`} />
-                <div className="flex-1 min-w-0 flex flex-col gap-0.5">
-                  <div className="flex items-center gap-1.5">
-                    <span className={`truncate ${unread ? 'font-medium text-ink' : ''}`}>{s.title}</span>
-                    {unread && (
-                      <span
-                        title="有新消息"
-                        className="shrink-0 inline-block w-1.5 h-1.5 rounded-full bg-ember"
-                      />
-                    )}
-                  </div>
-                  {preview && (
-                    <span className="text-[11px] text-ink-fade truncate text-left">{preview}</span>
-                  )}
-                </div>
+                <span className="truncate">{s.title}</span>
               </button>
               <button
                 onClick={(e) => {
@@ -291,7 +214,7 @@ export default function LeftRail() {
                   }
                 }}
                 title="删除会话"
-                className="opacity-0 group-hover:opacity-100 ml-1 p-1 rounded hover:bg-paper-2 text-ink-fade hover:text-ink transition-opacity shrink-0"
+                className="absolute right-7 opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-paper text-ink-fade hover:text-ink transition-opacity shrink-0"
               >
                 <X className="w-3 h-3" />
               </button>
@@ -301,7 +224,7 @@ export default function LeftRail() {
                   setOpenMenuId(openMenuId === s.id ? null : s.id)
                 }}
                 title={t('nav.sessionMenu')}
-                className="opacity-0 group-hover:opacity-100 ml-1 p-1 rounded hover:bg-paper-2 text-ink-fade hover:text-ink transition-opacity shrink-0"
+                className="absolute right-1 opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-paper text-ink-fade hover:text-ink transition-opacity shrink-0"
               >
                 <MoreHorizontal className="w-3 h-3" />
               </button>
@@ -323,137 +246,74 @@ export default function LeftRail() {
             </div>
             )
           })}
-        </div>
       </div>
     )
   }
 
   return (
     <>
-      <aside role="navigation" aria-label="主导航" className="w-[240px] h-full border-r border-dashed border-ink-fade/50 flex flex-col gap-3 p-4 bg-paper shrink-0 overflow-y-auto">
-        <div className="flex items-center justify-between mb-1">
+      <aside role="navigation" aria-label="主导航" className="flex h-full w-[248px] shrink-0 flex-col border-r border-ink/10 bg-paper p-3">
+        <div className="flex h-10 items-center px-1.5">
           <button onClick={() => navigate('/chat')} aria-label="回到首页" className="flex items-center gap-2">
-            <div data-accent-bg className="w-7 h-7 rounded-full border border-ink flex items-center justify-center bg-paper">
-              <Sparkles data-accent className="w-3.5 h-3.5 text-ember" />
-            </div>
+            <BrandMark className="h-7 w-7 text-ember" />
             <span className="font-display italic text-lg text-ink">Gugo</span>
           </button>
-          <NotificationBell />
         </div>
 
-        <button
-          onClick={handleNewChat}
-          className="flex items-center justify-between h-9 px-3 border border-ink/80 rounded-md bg-paper hover:bg-paper-2 transition-colors"
-        >
-          <span className="text-sm text-ink-soft">{t('nav.newChat')}</span>
-          <span className="font-mono text-[10px] text-ink-fade tracking-wider">Ctrl N</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={openSearch}
-          className="flex items-center justify-between h-8 px-2.5 border border-ink-fade/40 rounded-md bg-paper text-xs text-ink-soft hover:bg-paper-2 transition-colors"
-        >
-          <span className="inline-flex items-center gap-2 min-w-0">
-            <Search className="w-3.5 h-3.5 text-ink-fade" />
+        <div className="mt-2 flex flex-col gap-0.5">
+          <button onClick={handleNewChat} className="flex h-9 items-center gap-2.5 rounded-lg bg-ink px-3 text-sm text-paper transition-colors hover:bg-ink-soft">
+            <Plus className="h-4 w-4" />
+            <span>{t('nav.newChat')}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => handleNav({ path: '/skills' })}
+            className={`flex h-9 items-center gap-2.5 rounded-lg px-3 text-sm transition-colors ${location.pathname === '/skills' ? 'bg-paper-2 text-ink' : 'text-ink-soft hover:bg-paper-2/70'}`}
+          >
+            <Wrench className="h-4 w-4" />
+            <span>{t('nav.skills')}</span>
+          </button>
+          <button type="button" onClick={openSearch} className="flex h-9 items-center gap-2.5 rounded-lg px-3 text-sm text-ink-soft transition-colors hover:bg-paper-2/70">
+            <Search className="h-4 w-4" />
             <span className="truncate">{t('nav.searchPlaceholder')}</span>
-          </span>
-          <span className="font-mono text-[10px] text-ink-fade">Ctrl K</span>
-        </button>
+          </button>
+        </div>
 
-        <div className="flex flex-col gap-0.5 mt-1">
-          {navItems.map((item) => {
-            const isActive = location.pathname === item.path || item.activePaths?.includes(location.pathname)
-            // T7: readiness 角标——stable 返回 null（不渲染）
-            const readinessLevel = ROUTE_READINESS[item.path]
-            const showBadge = readinessLevel === 'preview' || readinessLevel === 'wip'
-            const readinessLabel = showBadge ? t(`routeReadiness.${readinessLevel}`) : null
-            return (
-              <button
-                key={item.path}
-                onClick={() => handleNav(item)}
-                className={`flex items-center gap-2.5 px-2.5 py-1.5 rounded-md text-sm transition-colors ${
-                  isActive
-                    ? 'bg-paper-2 border border-ink-fade/50 text-ink'
-                    : 'text-ink-soft hover:bg-paper-2/60'
-                }`}
-              >
-                <item.icon className="w-4 h-4" />
-                <span className="flex-1 text-left">{item.label}</span>
-                {item.badge > 0 ? (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-ember/15 text-ember font-mono">
-                    {item.badge > 99 ? '99+' : item.badge}
-                  </span>
-                ) : null}
-                {readinessLabel ? (
-                  <span
-                    className={`text-[10px] px-1.5 py-0.5 rounded ${
-                      readinessLevel === 'wip'
-                        ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
-                        : 'bg-paper-2 text-ink-fade'
-                    }`}
-                  >
-                    {readinessLabel}
-                  </span>
-                ) : null}
+        <div className="mt-3 min-h-0 flex-1 overflow-y-auto pr-0.5">
+          {sessions.length ? renderSessions(sessions) : (
+            <div className="px-3 py-8 text-center">
+              <p className="text-xs text-ink-fade">{t('nav.emptyTitle')}</p>
+              <p className="mt-1 text-[10px] text-ink-ghost">{t('nav.emptyHint')}</p>
+            </div>
+          )}
+        </div>
+
+        <div ref={accountMenuRef} className="relative border-t border-ink/10 pt-2">
+          {accountMenuOpen && (
+            <div className="absolute bottom-full left-0 right-0 z-30 mb-2 overflow-hidden rounded-xl border border-ink/15 bg-paper p-1.5 shadow-xl">
+              <button type="button" onClick={() => handleNav({ path: '/access', requiresLogin: true })} className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-sm text-ink-soft hover:bg-paper-2">
+                <Link2 className="h-4 w-4" />
+                <span>{t('access.title')}</span>
               </button>
-            )
-          })}
-        </div>
-
-        <div className={`grid gap-1 ${tabsToShow.length === 3 ? 'grid-cols-3' : tabsToShow.length === 2 ? 'grid-cols-2' : 'grid-cols-1'}`}>
-          {[
-            ['active', t('nav.filterActive'), activeSessions.length],
-            ['archived', t('nav.filterArchived'), archivedSessions.length],
-            ['all', t('nav.filterAll'), allSessions.length],
-          ]
-            .filter(([key]) => tabsToShow.includes(key))
-            .map(([key, label, count]) => {
-              // archived 非空时给个 (N) badge；active/all 在 archived 隐藏的情况下不强求 badge，
-              // 但 archived 显示时三者都标一下计数，方便看到分布。
-              const showBadge = tabsToShow.includes('archived') && typeof count === 'number'
-              return (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setSessionFilter(key)}
-                  className={`h-7 rounded-md text-[11px] transition-colors ${
-                    effectiveFilter === key
-                      ? 'bg-paper-2 border border-ink-fade/50 text-ink'
-                      : 'border border-transparent text-ink-fade hover:bg-paper-2/60 hover:text-ink-soft'
-                  }`}
-                >
-                  {label}{showBadge ? ` (${count})` : ''}
-                </button>
-              )
-            })}
-        </div>
-
-        {sessions.length ? (
-          <>
-            {renderSessionGroup(t('nav.groupToday'), todaySessions)}
-            {renderSessionGroup(t('nav.groupWeek'), weekSessions)}
-            {renderSessionGroup(t('nav.groupEarlier'), earlierSessions)}
-          </>
-        ) : (
-          <div className="mt-4 px-2 py-6 border border-dashed border-ink-fade/40 rounded-md text-center">
-            <p className="text-xs text-ink-fade">{t('nav.emptyTitle')}</p>
-            <p className="text-[10px] text-ink-ghost mt-1">{t('nav.emptyHint')}</p>
-          </div>
-        )}
-
-        <div className="flex-1" />
-
-        <div className="border-t border-dashed border-ink-fade/50 pt-3">
-          <div className="flex items-center gap-2.5">
-            <div className="w-6 h-6 rounded-full border border-ink flex items-center justify-center bg-paper shrink-0">
-              <span className="font-hand text-xs text-ink">{state.user.avatar || '本'}</span>
+              <button type="button" onClick={() => handleNav({ path: '/settings', requiresLogin: true })} className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-sm text-ink-soft hover:bg-paper-2">
+                <Settings className="h-4 w-4" />
+                <span className="flex-1 text-left">{t('nav.settings')}</span>
+                {pendingApprovals > 0 && <span className="rounded-full bg-ember px-1.5 text-[10px] text-paper">{pendingApprovals > 99 ? '99+' : pendingApprovals}</span>}
+              </button>
+              <button type="button" onClick={() => handleNav({ path: '/skills' })} className="flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-sm text-ink-soft hover:bg-paper-2">
+                <Wrench className="h-4 w-4" />
+                <span>{t('nav.skills')}</span>
+              </button>
             </div>
-            <div className="leading-tight flex-1 min-w-0">
-              <span className="text-xs text-ink truncate block">{state.user.name || '本地工作台'}</span>
-              <span className="font-mono text-[9px] tracking-wider text-ink-fade">LOCAL AI WORKBENCH</span>
-            </div>
-          </div>
+          )}
+          <button type="button" onClick={() => setAccountMenuOpen((open) => !open)} aria-expanded={accountMenuOpen} className="flex h-12 w-full items-center gap-2.5 rounded-xl px-2 text-left transition-colors hover:bg-paper-2">
+            <BrandMark className="h-8 w-8 shrink-0 text-ember" />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-medium text-ink">{state.user.name || t('settings.account')}</span>
+              {state.user.plan && <span className="block truncate text-[10px] text-ink-fade">{state.user.plan}</span>}
+            </span>
+            <ChevronUp className={`h-4 w-4 text-ink-fade transition-transform ${accountMenuOpen ? '' : 'rotate-180'}`} />
+          </button>
         </div>
       </aside>
 

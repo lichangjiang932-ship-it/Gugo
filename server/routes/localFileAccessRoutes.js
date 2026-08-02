@@ -21,6 +21,9 @@ function sendError(res, error) {
     error: {
       code: error?.code || 'LOCAL_FILE_ACCESS_ERROR',
       message: error?.message || '本地文件访问失败',
+      ...(error?.path ? { path: error.path } : {}),
+      ...(typeof error?.retryable === 'boolean' ? { retryable: error.retryable } : {}),
+      ...(error?.hint ? { hint: error.hint } : {}),
     },
   })
 }

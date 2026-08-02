@@ -77,6 +77,27 @@ export async function toggleIntegrationEnabledApi(id, enabled) {
   return jsonOk(resp)
 }
 
+export async function listIntegrationOAuthProvidersApi() {
+  const resp = await fetch('/api/integrations/oauth/providers', { headers: authHeaders() })
+  return jsonOk(resp)
+}
+
+export async function startIntegrationOAuthApi({ provider, integrationId } = {}) {
+  const resp = await fetch('/api/integrations/oauth/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ provider, integrationId }),
+  })
+  return jsonOk(resp)
+}
+
+export async function getIntegrationOAuthStatusApi(sessionId) {
+  const resp = await fetch(`/api/integrations/oauth/sessions/${encodeURIComponent(sessionId)}`, {
+    headers: authHeaders(),
+  })
+  return jsonOk(resp)
+}
+
 export async function connectBrowserAppApi(provider) {
   const resp = await fetch('/api/connectors/apps/connect', {
     method: 'POST',
@@ -111,6 +132,27 @@ export async function pollWechatQrcodeApi({ qrcodeId, integrationId, name, defau
 
 export async function getBridgeStatusApi() {
   const resp = await fetch('/api/bridge/status', { headers: authHeaders() })
+  return jsonOk(resp)
+}
+
+export async function listParkedBridgeMessagesApi({ status = 'parked', limit } = {}) {
+  const resp = await fetch(`/api/bridge/parked${qs({ status, limit })}`, { headers: authHeaders() })
+  return jsonOk(resp)
+}
+
+export async function allowParkedBridgeMessageApi(id) {
+  const resp = await fetch(`/api/bridge/parked/${encodeURIComponent(id)}/allow`, {
+    method: 'POST',
+    headers: authHeaders(),
+  })
+  return jsonOk(resp)
+}
+
+export async function rejectParkedBridgeMessageApi(id) {
+  const resp = await fetch(`/api/bridge/parked/${encodeURIComponent(id)}/reject`, {
+    method: 'POST',
+    headers: authHeaders(),
+  })
   return jsonOk(resp)
 }
 

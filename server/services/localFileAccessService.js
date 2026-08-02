@@ -35,6 +35,45 @@ function isInside(root, target) {
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))
 }
 
+function assertPathWritable(canonicalPath, stat) {
+  let descriptor = null
+  let probePath = canonicalPath
+  let createdProbe = false
+  try {
+    if (stat.isDirectory()) {
+      probePath = path.join(canonicalPath, `.gugo-write-probe-${crypto.randomUUID()}.tmp`)
+      descriptor = fs.openSync(probePath, 'wx')
+      createdProbe = true
+    } else {
+      descriptor = fs.openSync(canonicalPath, 'r+')
+    }
+    fs.closeSync(descriptor)
+    descriptor = null
+    if (createdProbe) {
+      fs.unlinkSync(probePath)
+      createdProbe = false
+    }
+  } catch (cause) {
+    if (descriptor != null) {
+      try { fs.closeSync(descriptor) } catch { /* best effort */ }
+    }
+    if (createdProbe) {
+      try { fs.unlinkSync(probePath) } catch { /* best effort */ }
+    }
+    const error = serviceError(
+      `所选路径无法写入（${cause?.code || 'WRITE_DENIED'}）：${canonicalPath}。`
+        + '授权未保存，请先检查 Windows 文件夹权限、只读属性或安全软件拦截。',
+      403,
+      'PATH_NOT_WRITABLE',
+    )
+    error.path = canonicalPath
+    error.retryable = false
+    error.hint = '同一根目录下改试 src、.tmp、output 不会解决；修复目录权限后再授权一次。'
+    error.cause = cause
+    throw error
+  }
+}
+
 function resolveTarget(rawPath, { allowMissing = false } = {}) {
   if (typeof rawPath !== 'string' || !rawPath.trim()) {
     throw serviceError('path 必填', 400, 'PATH_REQUIRED')
@@ -125,6 +164,7 @@ export function grantLocalPath({ userId, rootPath, accessMode = 'read_write', no
   if (!stat.isDirectory() && !stat.isFile()) {
     throw serviceError('仅支持普通文件或文件夹', 400, 'UNSUPPORTED_RESOURCE')
   }
+  if (accessMode === 'read_write') assertPathWritable(canonicalPath, stat)
 
   const db = getDb()
   const rows = getGrantRows(userId)
@@ -174,12 +214,37 @@ export function setAllFilesAccess({ userId, enabled, confirmation, now = Date.no
   return getLocalFileAccessStatus({ userId })
 }
 
-export function resolveAuthorizedLocalPath({ userId, rawPath, write = false, allowMissing = false }) {
+export function resolveAuthorizedLocalPath({
+  userId,
+  rawPath,
+  write = false,
+  allowMissing = false,
+  allowWorkspace = process.env.WORKSPACE_FS_ENABLED === '1',
+}) {
   const raw = typeof rawPath === 'string' ? rawPath.trim() : ''
   if (!raw) throw serviceError('path 必填', 400, 'PATH_REQUIRED')
-  const workspaceEnabled = process.env.WORKSPACE_FS_ENABLED === '1'
+  const workspaceEnabled = allowWorkspace === true
   if (!path.isAbsolute(raw) && !workspaceEnabled) {
-    throw serviceError('本地文件模式请使用已授权范围内的绝对路径', 403, 'ABSOLUTE_PATH_REQUIRED')
+    // ★ 报错要告诉模型「你能用什么」,而不只是「你不能用什么」。
+    //
+    // 原来只说「请使用已授权范围内的绝对路径」—— 模型不知道授权了哪些目录,
+    // 只能瞎猜或者放弃。实测日志里它连着试了 5 种路径写法全失败,
+    // 最后绕道用 read_file 硬啃,或者干脆改去生成 PPT 交差。
+    // 把已授权的根目录直接列出来,它下一次调用就能命中。
+    let hint = ''
+    try {
+      const roots = getGrantRows(userId).map((row) => row.root_path).filter(Boolean)
+      hint = roots.length
+        ? ` 当前已授权：${roots.slice(0, 5).join('、')}${roots.length > 5 ? ` 等 ${roots.length} 个` : ''}。请改用其中之一开头的绝对路径。`
+        : ' 当前没有任何已授权目录，请先在「设置 → 本地文件」里添加要访问的文件夹。'
+    } catch {
+      /* 取不到授权列表不影响报错本身 */
+    }
+    throw serviceError(
+      `本地文件模式请使用绝对路径（收到相对路径 "${raw}"）。${hint}`,
+      403,
+      'ABSOLUTE_PATH_REQUIRED',
+    )
   }
 
   const basePath = path.isAbsolute(raw) ? raw : path.resolve(workspaceRoot(), raw)

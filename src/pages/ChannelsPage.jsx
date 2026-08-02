@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link } from '../lib/router.jsx'
 import { Archive, Bot, ChevronDown, Hash, MessageCircle, MessageSquarePlus, Plus, Send, Settings, User, X } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
 import MentionsAutocomplete from '../components/MentionsAutocomplete.jsx'

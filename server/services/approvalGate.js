@@ -146,6 +146,7 @@ export async function requestApproval({
     mode: effectiveMode,
     permissionMode: settings.mode,
     rememberedTools: settings.rememberedTools,
+    rememberedGrants: settings.rememberedGrants,
   })
   // plan 档位:直接拒,不排队等人 —— 用户要的就是「只看不动」
   if (verdict.denied) return { proceed: false, reason: verdict.reason }
@@ -292,6 +293,24 @@ export function waitForDecision({ approvalId, signal = null, pollIntervalMs = PO
     // 可能在挂上等待之前就已被决策(极窄竞态窗口),先查一次
     check()
   })
+}
+
+/**
+ * Resume an approval that was already persisted before a process restart.
+ * A terminal DB decision is returned immediately; a still-pending record uses
+ * the same durable polling/wakeup path without creating a duplicate approval.
+ */
+export function resumePersistedApproval({ approvalId, signal = null } = {}) {
+  if (!approvalId) {
+    return Promise.resolve({
+      proceed: false,
+      reason: 'Missing persisted approval id',
+      systemFailure: true,
+      retryable: true,
+    })
+  }
+  const decision = terminalDecision(getApprovalById(approvalId))
+  return decision ? Promise.resolve(decision) : waitForDecision({ approvalId, signal })
 }
 
 /** 测试用:清空内存等待者,避免用例间串扰。 */

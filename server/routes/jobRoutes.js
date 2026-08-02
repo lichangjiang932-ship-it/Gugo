@@ -40,12 +40,26 @@ export async function handleJobRequest(req, res, runtime) {
     if (!userId) return unauthorized(res)
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
-      'Cache-Control': 'no-cache',
+      'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
     })
+    res.flushHeaders?.()
     sendSse(res, 'ready', { ok: true })
     const unsubscribe = runtime.subscribe(userId, (event) => sendSse(res, 'job_event', event))
-    req.on('close', unsubscribe)
+    const heartbeat = setInterval(() => {
+      if (!res.destroyed && !res.writableEnded) res.write(': keep-alive\n\n')
+    }, 15_000)
+    heartbeat.unref?.()
+    let cleanedUp = false
+    const cleanup = () => {
+      if (cleanedUp) return
+      cleanedUp = true
+      clearInterval(heartbeat)
+      unsubscribe()
+    }
+    req.on('close', cleanup)
+    res.on?.('close', cleanup)
     return
   }
 
@@ -80,6 +94,29 @@ export async function handleJobRequest(req, res, runtime) {
       return job
         ? sendJson(res, 200, { job })
         : sendJson(res, 404, { error: 'job not found' })
+    }
+
+    if (req.method === 'POST' && parts[3] === 'steer') {
+      const body = await readJson(req)
+      const content = String(body.content || '').trim()
+      if (!content) return sendJson(res, 400, { error: 'content is required' })
+      if (content.length > 20_000) {
+        return sendJson(res, 400, { error: 'content exceeds 20000 characters' })
+      }
+      const result = runtime.steerJob(jobId, { userId, content })
+      if (!result) return sendJson(res, 404, { error: 'job not found' })
+      if (!result.accepted) return sendJson(res, 409, result)
+      return sendJson(res, 202, result)
+    }
+
+    if (req.method === 'POST' && parts[3] === 'plan' && parts[4] === 'approve') {
+      const body = String(req.headers['content-type'] || '').includes('application/json')
+        ? await readJson(req)
+        : {}
+      const result = runtime.approvePlan(jobId, { userId, steps: body.steps ?? null })
+      if (!result) return sendJson(res, 404, { error: 'job not found' })
+      if (!result.approved) return sendJson(res, 409, result)
+      return sendJson(res, 200, result)
     }
 
     // 硬终止:调模块级 abortJob 打 AbortController.signal。

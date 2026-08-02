@@ -1,19 +1,37 @@
 import { randomUUID } from 'node:crypto'
 import { getDb } from '../db.js'
+import { openCredentialObject, sealCredentialObject } from '../utils/credentialVault.js'
 
 const PROVIDER_KEY_RE = /^[a-z][a-z0-9_-]{0,39}$/
 const REDACTED_VALUE = '••••••'
 
-function encode(value) {
-  return Buffer.from(JSON.stringify(value ?? {}), 'utf8').toString('base64')
-}
+const MODEL_SECRET_PURPOSE = 'model-provider-secret'
+const MODEL_HEADERS_PURPOSE = 'model-provider-headers'
 
-function decode(value, fallback = {}) {
+function decodeLegacy(value, fallback = {}) {
   try {
     return JSON.parse(Buffer.from(String(value || ''), 'base64').toString('utf8'))
   } catch {
     return fallback
   }
+}
+
+function readCredentialColumn(row, column, purpose) {
+  const decoded = openCredentialObject(row?.[column], {
+    purpose,
+    legacyDecoder: (raw) => decodeLegacy(raw, {}),
+  })
+  if (decoded.legacy && row?.id && Object.keys(decoded.value).length) {
+    const sql = column === 'secret_json'
+      ? 'UPDATE model_providers SET secret_json = ? WHERE id = ?'
+      : 'UPDATE model_providers SET headers_json = ? WHERE id = ?'
+    getDb().prepare(sql).run(sealCredentialObject(decoded.value, { purpose }), row.id)
+  }
+  return decoded.value
+}
+
+function writeCredential(value, purpose) {
+  return sealCredentialObject(value || {}, { purpose })
 }
 
 function parseModels(value) {
@@ -40,12 +58,36 @@ function normalizeHeaders(value) {
   return out
 }
 
+/** DB 里的 INTEGER 三态列 ↔ JS 的 true/false/null。NULL = 未设置,走自动推断。 */
+function readTribool(value) {
+  if (value === null || value === undefined) return null
+  return Number(value) !== 0
+}
+
+function writeTribool(value) {
+  if (value === null || value === undefined || value === '') return null
+  if (typeof value === 'boolean') return value ? 1 : 0
+  const text = String(value).trim().toLowerCase()
+  if (['1', 'true', 'yes', 'on'].includes(text)) return 1
+  if (['0', 'false', 'no', 'off'].includes(text)) return 0
+  return null
+}
+
+/** 可空正整数列。留空 = 用 endpointProfile 的默认值。 */
+function writeNullableInt(value) {
+  if (value === null || value === undefined || value === '') return null
+  const num = Number(value)
+  return Number.isFinite(num) && num > 0 ? Math.floor(num) : null
+}
+
+const VALID_KINDS = new Set(['ollama', 'lmstudio', 'llamacpp', 'vllm', 'openai-compatible'])
+
 function mapRow(row, { includeSecrets = false } = {}) {
   if (!row) return null
   let models
   try { models = JSON.parse(row.models_json || '[]') } catch { models = [] }
-  const secret = decode(row.secret_json)
-  const headers = decode(row.headers_json)
+  const secret = readCredentialColumn(row, 'secret_json', MODEL_SECRET_PURPOSE)
+  const headers = readCredentialColumn(row, 'headers_json', MODEL_HEADERS_PURPOSE)
   return {
     id: row.id,
     key: row.provider_key,
@@ -58,6 +100,16 @@ function mapRow(row, { includeSecrets = false } = {}) {
     hasApiKey: !!secret.apiKey,
     headers: includeSecrets ? headers : Object.fromEntries(Object.keys(headers).map((key) => [key, REDACTED_VALUE])),
     ...(includeSecrets ? { apiKey: secret.apiKey || '' } : {}),
+    // ★ v28:per-provider 能力与超时。全部可空,空 = 自动推断(endpointProfile.js)。
+    kind: row.kind || null,
+    contextWindow: row.context_window ?? null,
+    supportsTools: readTribool(row.supports_tools),
+    supportsStreaming: readTribool(row.supports_streaming),
+    supportsVision: readTribool(row.supports_vision),
+    firstTokenTimeoutMs: row.first_token_timeout_ms ?? null,
+    idleTimeoutMs: row.idle_timeout_ms ?? null,
+    failoverEnabled: readTribool(row.failover_enabled),
+    keepAlive: row.keep_alive || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -96,8 +148,8 @@ export function upsertModelProvider({ userId, provider = {} } = {}) {
   const existing = provider.id ? getRow(userId, provider.id) : null
   const sameKey = db.prepare('SELECT * FROM model_providers WHERE user_id = ? AND provider_key = ?').get(userId, key)
   if (sameKey && sameKey.id !== existing?.id) throw new Error(`Provider ID ${key} 已存在`)
-  const previousSecret = existing ? decode(existing.secret_json) : {}
-  const previousHeaders = existing ? decode(existing.headers_json) : {}
+  const previousSecret = existing ? readCredentialColumn(existing, 'secret_json', MODEL_SECRET_PURPOSE) : {}
+  const previousHeaders = existing ? readCredentialColumn(existing, 'headers_json', MODEL_HEADERS_PURPOSE) : {}
   const apiKey = String(provider.apiKey || '').trim() || previousSecret.apiKey || ''
   const submittedHeaders = provider.headers === undefined ? previousHeaders : normalizeHeaders(provider.headers)
   const headers = Object.fromEntries(Object.entries(submittedHeaders).map(([name, value]) => [
@@ -109,20 +161,50 @@ export function upsertModelProvider({ userId, provider = {} } = {}) {
   const enabled = provider.enabled !== false
   const isDefault = provider.isDefault === true || !db.prepare('SELECT 1 FROM model_providers WHERE user_id = ? LIMIT 1').get(userId)
 
+  // ★ v28 能力字段。未提交的字段沿用旧值(而不是清空)——
+  // 前端只改一个开关时不该把其它配置一起抹掉。
+  const pick = (field, column, writer) => (
+    provider[field] === undefined ? (existing?.[column] ?? null) : writer(provider[field])
+  )
+  const kindRaw = provider.kind === undefined
+    ? (existing?.kind ?? null)
+    : (VALID_KINDS.has(String(provider.kind)) ? String(provider.kind) : null)
+  const contextWindow = pick('contextWindow', 'context_window', writeNullableInt)
+  const supportsTools = pick('supportsTools', 'supports_tools', writeTribool)
+  const supportsStreaming = pick('supportsStreaming', 'supports_streaming', writeTribool)
+  const supportsVision = pick('supportsVision', 'supports_vision', writeTribool)
+  const firstTokenTimeoutMs = pick('firstTokenTimeoutMs', 'first_token_timeout_ms', writeNullableInt)
+  const idleTimeoutMs = pick('idleTimeoutMs', 'idle_timeout_ms', writeNullableInt)
+  const failoverEnabled = pick('failoverEnabled', 'failover_enabled', writeTribool)
+  const keepAlive = provider.keepAlive === undefined
+    ? (existing?.keep_alive ?? null)
+    : (String(provider.keepAlive || '').trim() || null)
+
   const tx = db.transaction(() => {
     if (isDefault) db.prepare('UPDATE model_providers SET is_default = 0 WHERE user_id = ?').run(userId)
     if (existing) {
       db.prepare(`UPDATE model_providers SET provider_key=?, label=?, base_url=?, secret_json=?, headers_json=?,
-        models_json=?, default_model=?, enabled=?, is_default=?, updated_at=? WHERE id=? AND user_id=?`).run(
-        key, label, baseUrl, encode({ apiKey }), encode(headers), JSON.stringify(models), defaultModel,
-        enabled ? 1 : 0, isDefault ? 1 : 0, now, id, userId,
+        models_json=?, default_model=?, enabled=?, is_default=?, updated_at=?,
+        kind=?, context_window=?, supports_tools=?, supports_streaming=?, supports_vision=?,
+        first_token_timeout_ms=?, idle_timeout_ms=?, failover_enabled=?, keep_alive=?
+        WHERE id=? AND user_id=?`).run(
+        key, label, baseUrl, writeCredential({ apiKey }, MODEL_SECRET_PURPOSE),
+        writeCredential(headers, MODEL_HEADERS_PURPOSE), JSON.stringify(models), defaultModel,
+        enabled ? 1 : 0, isDefault ? 1 : 0, now,
+        kindRaw, contextWindow, supportsTools, supportsStreaming, supportsVision,
+        firstTokenTimeoutMs, idleTimeoutMs, failoverEnabled, keepAlive,
+        id, userId,
       )
     } else {
       db.prepare(`INSERT INTO model_providers
-        (id,user_id,provider_key,label,base_url,secret_json,headers_json,models_json,default_model,enabled,is_default,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
-        id, userId, key, label, baseUrl, encode({ apiKey }), encode(headers), JSON.stringify(models),
+        (id,user_id,provider_key,label,base_url,secret_json,headers_json,models_json,default_model,enabled,is_default,created_at,updated_at,
+         kind,context_window,supports_tools,supports_streaming,supports_vision,first_token_timeout_ms,idle_timeout_ms,failover_enabled,keep_alive)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+        id, userId, key, label, baseUrl, writeCredential({ apiKey }, MODEL_SECRET_PURPOSE),
+        writeCredential(headers, MODEL_HEADERS_PURPOSE), JSON.stringify(models),
         defaultModel, enabled ? 1 : 0, isDefault ? 1 : 0, now, now,
+        kindRaw, contextWindow, supportsTools, supportsStreaming, supportsVision,
+        firstTokenTimeoutMs, idleTimeoutMs, failoverEnabled, keepAlive,
       )
     }
   })
@@ -163,9 +245,32 @@ export function buildUserModelEnv({ userId, env = process.env } = {}) {
     next[`${prefix}_API_KEY`] = provider.apiKey
     next[`${prefix}_MODELS`] = provider.models.join(',')
     if (Object.keys(provider.headers || {}).length) next[`${prefix}_HEADERS`] = JSON.stringify(provider.headers)
+    // ★ v28:把 per-provider 的能力/超时配置也铺进 env。
+    // modelProxy 的 profileForConfig 会按 baseUrl 找回来当 overrides 用。
+    // 用一个 JSON 串而不是十个变量,避免 env 命名爆炸。
+    const overrides = buildProviderOverrides(provider)
+    if (overrides) next[`${prefix}_PROFILE`] = overrides
   }
   const preferred = providers.find((provider) => provider.isDefault) || providers[0]
   next.MODEL_NAME = preferred.defaultModel
   next.MODEL_NAMES = providers.flatMap((provider) => provider.models).join(',')
   return next
+}
+
+/**
+ * 把 provider 上非空的能力字段收成一个 JSON 串。
+ * 全空就返回 null —— 不往 env 里塞没有信息量的 '{}'。
+ */
+function buildProviderOverrides(provider) {
+  const overrides = {}
+  if (provider.kind) overrides.kind = provider.kind
+  if (provider.contextWindow) overrides.contextWindow = provider.contextWindow
+  if (provider.supportsTools !== null) overrides.supportsTools = provider.supportsTools
+  if (provider.supportsStreaming !== null) overrides.supportsStreaming = provider.supportsStreaming
+  if (provider.supportsVision !== null) overrides.supportsVision = provider.supportsVision
+  if (provider.firstTokenTimeoutMs) overrides.firstTokenTimeoutMs = provider.firstTokenTimeoutMs
+  if (provider.idleTimeoutMs) overrides.idleTimeoutMs = provider.idleTimeoutMs
+  if (provider.failoverEnabled !== null) overrides.failoverEnabled = provider.failoverEnabled
+  if (provider.keepAlive) overrides.keepAlive = provider.keepAlive
+  return Object.keys(overrides).length ? JSON.stringify(overrides) : null
 }

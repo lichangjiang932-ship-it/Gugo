@@ -8,6 +8,14 @@ import { createTelegramBridgeAdapter } from '../adapters/social/telegramBridge.j
 import { createFeishuBridgeAdapter } from '../adapters/social/feishuBridge.js'
 import { createQQBridgeAdapter } from '../adapters/social/qqBridge.js'
 import { createWechatIlinkBridgeAdapter } from '../adapters/social/wechatIlinkBridge.js'
+import { createNotification } from './notificationsStore.js'
+import {
+  getBridgeContact,
+  getParkedBridgeMessage,
+  parkBridgeMessage,
+  setBridgeContactStatus,
+  transitionParkedBridgeMessage,
+} from './bridgeParkingStore.js'
 
 function newId() {
   return crypto.randomUUID?.() || `bridge-${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -35,6 +43,26 @@ function isImageAttachment(item) {
   const type = String(item?.type || '').toLowerCase()
   const mime = String(item?.mimeType || item?.mime || '').toLowerCase()
   return type === 'image' || mime.startsWith('image/')
+}
+
+function sanitizedInboundPayload(message) {
+  return {
+    text: cleanString(message.text),
+    isGroup: !!message.isGroup,
+    messageId: cleanString(message.messageId) || null,
+    attachments: (Array.isArray(message.attachments) ? message.attachments : [])
+      .slice(0, 20)
+      .map((item) => ({
+        type: cleanString(item?.type),
+        url: cleanString(item?.url) || null,
+        platformRef: cleanString(item?.platformRef) || null,
+        filename: cleanString(item?.filename) || null,
+        mimeType: cleanString(item?.mimeType || item?.mime) || null,
+        size: Number.isFinite(Number(item?.size)) ? Number(item.size) : null,
+        width: Number.isFinite(Number(item?.width)) ? Number(item.width) : null,
+        height: Number.isFinite(Number(item?.height)) ? Number(item.height) : null,
+      })),
+  }
 }
 
 async function noopDescribeAttachments() {
@@ -300,13 +328,51 @@ export function createSocialBridgeManager({
     const integration = integrations.get(integrationId)
     if (!integration) throw new Error('integration is not running')
     const userId = integrationUserId(integration)
+    const externalUserId = cleanString(message.externalUserId || message.userId || chatId)
+    const senderName = cleanString(message.senderName)
+    const config = integrationConfig(integration)
+    const contact = getBridgeContact({ userId, integrationId, provider, externalUserId })
+    const inboundPolicy = cleanString(config?.inboundPolicy || 'contacts')
+    const bypassParking = message.__bypassParking === true
+    if (!bypassParking && inboundPolicy !== 'open' && contact?.status !== 'allowed') {
+      if (contact?.status === 'blocked') {
+        return { ok: true, blocked: true, parked: false, replied: false }
+      }
+      const parked = parkBridgeMessage({
+        userId,
+        integrationId,
+        provider,
+        chatId,
+        externalUserId,
+        senderName,
+        payload: sanitizedInboundPayload(message),
+      })
+      try {
+        createNotification({
+          userId,
+          kind: 'approval',
+          title: `New ${platformLabel(provider)} contact`,
+          body: `${senderName || externalUserId} sent a message. Allow and deliver it?`,
+          link: `/access?bridgeParkingId=${encodeURIComponent(parked.id)}`,
+          data: {
+            bridgeParkingId: parked.id,
+            integrationId,
+            provider,
+            externalUserId,
+          },
+        })
+      } catch (error) {
+        console.error('[bridge] parking notification failed:', error?.stack || error)
+      }
+      return { ok: true, parked: true, parkingId: parked.id, replied: false }
+    }
     const bridgeSession = ensureBridgeSession({
       integration,
       provider,
       chatId,
       chatType: message.isGroup ? 'group' : 'dm',
-      externalUserId: cleanString(message.externalUserId || message.userId),
-      senderName: cleanString(message.senderName),
+      externalUserId,
+      senderName,
       isGroup: !!message.isGroup,
     })
     const text = await buildInboundText({
@@ -340,6 +406,78 @@ export function createSocialBridgeManager({
     }
   }
 
+  async function allowAndDeliver({ userId, parkingId } = {}) {
+    const parked = getParkedBridgeMessage({ userId, id: parkingId })
+    if (!parked) return null
+    if (parked.status === 'delivered') return { ok: true, parked, alreadyDelivered: true }
+    if (parked.status !== 'parked' && parked.status !== 'failed') {
+      return { ok: false, parked, error: `message is ${parked.status}` }
+    }
+    setBridgeContactStatus({
+      userId,
+      integrationId: parked.integrationId,
+      provider: parked.provider,
+      externalUserId: parked.externalUserId,
+      displayName: parked.senderName,
+      status: 'allowed',
+    })
+    const claimed = transitionParkedBridgeMessage({
+      userId,
+      id: parkingId,
+      from: parked.status,
+      to: 'delivering',
+    })
+    if (!claimed) return { ok: false, error: 'message state changed; refresh and retry' }
+    try {
+      const delivered = await receiveExternalMessage({
+        ...parked.payload,
+        integrationId: parked.integrationId,
+        provider: parked.provider,
+        chatId: parked.chatId,
+        externalUserId: parked.externalUserId,
+        senderName: parked.senderName,
+        __bypassParking: true,
+      })
+      const updated = transitionParkedBridgeMessage({
+        userId,
+        id: parkingId,
+        from: 'delivering',
+        to: 'delivered',
+      })
+      return { ok: true, delivered, parked: updated }
+    } catch (error) {
+      transitionParkedBridgeMessage({
+        userId,
+        id: parkingId,
+        from: 'delivering',
+        to: 'failed',
+        error: error?.message || String(error),
+      })
+      throw error
+    }
+  }
+
+  function rejectParked({ userId, parkingId } = {}) {
+    const parked = getParkedBridgeMessage({ userId, id: parkingId })
+    if (!parked) return null
+    if (parked.status !== 'parked') return { ok: false, parked, error: `message is ${parked.status}` }
+    setBridgeContactStatus({
+      userId,
+      integrationId: parked.integrationId,
+      provider: parked.provider,
+      externalUserId: parked.externalUserId,
+      displayName: parked.senderName,
+      status: 'blocked',
+    })
+    const updated = transitionParkedBridgeMessage({
+      userId,
+      id: parkingId,
+      from: 'parked',
+      to: 'rejected',
+    })
+    return { ok: true, parked: updated }
+  }
+
   function getStatus() {
     return [...adapters.entries()].map(([key, entry]) => {
       const [provider, integrationId] = key.split(':')
@@ -368,6 +506,8 @@ export function createSocialBridgeManager({
     stopIntegration,
     stopAll,
     receiveExternalMessage,
+    allowAndDeliver,
+    rejectParked,
     sendReply,
     getStatus,
   }

@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useAppContext } from '../store/AppContext'
 import { applyAccent, ACCENT_DEFAULT_HEX } from '../lib/themeAccent.js'
+import { normalizeThemeMode } from '../lib/themeMode.js'
 
 function getSystemTheme() {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
@@ -19,16 +20,17 @@ export default function ThemeWrapper({ children }) {
 
   useEffect(() => {
     const apply = () => {
-      if (state.theme === 'system') {
+      const theme = normalizeThemeMode(state.theme)
+      if (theme === 'system') {
         document.documentElement.dataset.theme = getSystemTheme()
       } else {
-        document.documentElement.dataset.theme = state.theme
+        document.documentElement.dataset.theme = theme
       }
     }
 
     apply()
 
-    if (state.theme === 'system') {
+    if (normalizeThemeMode(state.theme) === 'system') {
       const media = window.matchMedia('(prefers-color-scheme: dark)')
       media.addEventListener('change', apply)
       return () => media.removeEventListener('change', apply)

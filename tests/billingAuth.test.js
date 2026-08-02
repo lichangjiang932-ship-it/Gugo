@@ -10,6 +10,8 @@ import {
   getPublicAccount,
   rechargeAccount,
   estimateChatCost,
+  calculateChatCostFromUsage,
+  calculateModelCostUsd,
   chargeForModelUse,
   chargeForToolUse,
   getBillingDiagnostics,
@@ -144,6 +146,45 @@ test('model cost accepts multimodal message content', () => {
   })
 
   assert.equal(cost, 2)
+})
+
+test('completed calls are settled from real usage instead of the maximum-token estimate', () => {
+  const config = {
+    basePer1k: 10,
+    maxTokens: 16_384,
+    multipliers: { 'deepseek-v4-flash': 1, 'deepseek-v4-pro': 3 },
+  }
+  const usage = { promptTokens: 800, completionTokens: 200 }
+
+  assert.equal(calculateChatCostFromUsage({
+    modelName: 'deepseek-v4-flash',
+    usage,
+    config,
+  }), 10)
+  assert.equal(calculateChatCostFromUsage({
+    modelName: 'deepseek-v4-pro',
+    usage,
+    config,
+  }), 30)
+  assert.equal(calculateChatCostFromUsage({
+    modelName: 'deepseek-v4-flash',
+    usage: null,
+    config,
+  }), 0)
+})
+
+test('provider token rates calculate a dollar cost for the job hard cap', () => {
+  const cost = calculateModelCostUsd({
+    modelName: 'deepseek-v4-flash',
+    usage: { promptTokens: 2_000_000, completionTokens: 500_000 },
+    env: {
+      MODEL_USD_RATES: JSON.stringify({
+        'deepseek-v4-flash': { input: 0.1, output: 0.4 },
+      }),
+    },
+  })
+  assert.equal(cost, 0.4)
+  assert.equal(calculateModelCostUsd({ modelName: 'missing', usage: {}, env: {} }), 0)
 })
 
 test('billing and mail diagnostics are safe for browser display', () => {

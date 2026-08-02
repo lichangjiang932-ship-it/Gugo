@@ -1,6 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import JSZip from 'jszip'
+
+process.env.APP_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-agent-card-zip-'))
+
 const { createAppServer } = await import('../server/appServer.js')
 
 const { issueTestSession } = await import('./helpers/testAuth.js')
@@ -158,7 +164,7 @@ test('v0.10: zip 携带 avatar.png + skills/<id>/ 完整往返', async () => {
     const zip = await JSZip.loadAsync(buf)
     assert.ok(zip.file('avatar.png'), 'zip 应含 avatar.png')
     const manifest = JSON.parse(await zip.file('manifest.json').async('string'))
-    assert.equal(manifest.version, '0.2')
+    assert.equal(manifest.version, '0.3')
     assert.equal(manifest.avatarFile, 'avatar.png')
     assert.ok(Array.isArray(manifest.skills) && manifest.skills.includes(skillId), 'manifest.skills 应含装的 skill')
     assert.ok(zip.file(`skills/${skillId}/skill.json`), 'skills/<id>/skill.json 应存在')

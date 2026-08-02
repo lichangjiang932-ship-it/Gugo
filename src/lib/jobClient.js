@@ -44,6 +44,22 @@ export function cancelJob(jobId, { fetchImpl = fetch } = {}) {
   }))
 }
 
+export function steerJob(jobId, content, { fetchImpl = fetch } = {}) {
+  return readJsonResponse(fetchImpl(`/api/jobs/${encodeURIComponent(jobId)}/steer`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ content }),
+  }))
+}
+
+export function approveJobPlan(jobId, { steps = null, fetchImpl = fetch } = {}) {
+  return readJsonResponse(fetchImpl(`/api/jobs/${encodeURIComponent(jobId)}/plan/approve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ steps }),
+  }))
+}
+
 export function retryJob(jobId, { fetchImpl = fetch } = {}) {
   return readJsonResponse(fetchImpl(`/api/jobs/${encodeURIComponent(jobId)}/retry`, {
     method: 'POST',
@@ -58,15 +74,33 @@ export function retryStep(jobId, stepId, { fetchImpl = fetch } = {}) {
   }))
 }
 
-// SSE: EventSource 原生不支持 header。用 header token 先换一个 60s 一次性 ticket,
-// 再用 ?ticket= 连接,避免把 7 天 session token 放 URL query(落日志/Referer/历史)。
+// EventSource cannot send Authorization headers. Exchange the session token for
+// a short-lived, one-time ticket and get a fresh ticket after every disconnect.
 export function subscribeToJobEvents(
   onEvent,
-  { EventSourceImpl = globalThis.EventSource, fetchImpl = fetch } = {},
+  {
+    EventSourceImpl = globalThis.EventSource,
+    fetchImpl = fetch,
+    setTimeoutImpl = globalThis.setTimeout,
+    clearTimeoutImpl = globalThis.clearTimeout,
+    retryBaseMs = 1_000,
+    retryMaxMs = 15_000,
+    onConnectionChange = () => {},
+  } = {},
 ) {
   if (!EventSourceImpl) return () => {}
   let stream = null
   let closed = false
+  let retryTimer = null
+  let retryAttempt = 0
+
+  const reportConnection = (state, detail = {}) => {
+    try {
+      onConnectionChange({ state, ...detail })
+    } catch {
+      // Connection reporting must never break the stream lifecycle.
+    }
+  }
 
   const handler = (event) => {
     try {
@@ -76,42 +110,71 @@ export function subscribeToJobEvents(
     }
   }
 
-  const connect = (url) => {
-    if (closed) return
-    stream = new EventSourceImpl(url)
-    stream.addEventListener('job_event', handler)
+  const scheduleReconnect = () => {
+    if (closed || retryTimer != null) return
+    if (stream) {
+      stream.close()
+      stream = null
+    }
+    const delay = Math.min(retryMaxMs, retryBaseMs * (2 ** retryAttempt))
+    retryAttempt += 1
+    reportConnection('retrying', { delay })
+    retryTimer = setTimeoutImpl(() => {
+      retryTimer = null
+      connect()
+    }, delay)
   }
 
-  ;(async () => {
+  const openStream = (url) => {
+    if (closed) return
+    const nextStream = new EventSourceImpl(url)
+    stream = nextStream
+    nextStream.addEventListener('ready', () => {
+      if (closed || stream !== nextStream) return
+      retryAttempt = 0
+      reportConnection('open')
+    })
+    nextStream.addEventListener('job_event', handler)
+    nextStream.addEventListener('error', () => {
+      if (closed || stream !== nextStream) return
+      scheduleReconnect()
+    })
+  }
+
+  const connect = async () => {
+    if (closed) return
+    reportConnection('connecting')
     try {
-      const res = await fetchImpl('/api/jobs/stream-ticket', {
+      const response = await fetchImpl('/api/jobs/stream-ticket', {
         method: 'POST',
         headers: authHeaders(),
       })
-      if (res.ok) {
-        const { ticket } = await res.json()
-        if (ticket) {
-          connect(`/api/jobs/stream?ticket=${encodeURIComponent(ticket)}`)
-          return
-        }
-      }
+      if (!response.ok) throw new Error(`stream ticket request failed: ${response.status}`)
+      const { ticket } = await response.json()
+      if (!ticket) throw new Error('stream ticket missing')
+      openStream(`/api/jobs/stream?ticket=${encodeURIComponent(ticket)}`)
     } catch {
-      // 换 ticket 失败 → 退回无 ticket 连接(服务端会用 Authorization 头兜底,浏览器下会 401)
+      scheduleReconnect()
     }
-    connect('/api/jobs/stream')
-  })()
+  }
+
+  connect()
 
   return () => {
     closed = true
+    if (retryTimer != null) clearTimeoutImpl(retryTimer)
+    retryTimer = null
     if (stream) stream.close()
+    stream = null
+    reportConnection('closed')
   }
 }
 
-// 给前端 <a href> 下载用 — 拼上 query token 避免 EventSource/<a> 没法带 header 的问题
+// Append the auth token for browser download links, which cannot carry headers.
 export function withDownloadToken(url) {
   if (!url) return url
   const token = getAuthToken?.()
   if (!token) return url
-  const sep = url.includes('?') ? '&' : '?'
-  return `${url}${sep}token=${encodeURIComponent(token)}`
+  const separator = url.includes('?') ? '&' : '?'
+  return `${url}${separator}token=${encodeURIComponent(token)}`
 }

@@ -81,8 +81,37 @@ export function detectArtifactType(content = '') {
   return detectArtifactWithConfidence(content).type
 }
 
-export function shouldCollapseArtifactPreview(preview) {
-  return !!preview
+/**
+ * 是否把整条消息折叠成一张「文件卡」(不再渲染正文)。
+ *
+ * ★ 这里只该在**一种**情况下折叠:消息正文自身就是文件源码
+ * (模型直接吐了一整篇 HTML/markdown 当回复),渲染原始源码没有意义。
+ *
+ * 曾经的写法是 `!(replyText && sourceText && replyText !== sourceText)`,
+ * 它在「有产物但模型没写正文」时也返回 true —— 于是整条消息只剩一张卡,
+ * 模型说过的任何话、以及我们兜底合成的执行摘要,**全被吞掉**。
+ * 真实事故:用户让「优化买卖页面的按钮高亮」,屏幕上只出现一张 PPT 卡片,
+ * 没有一个字说明改了什么、改没改成。
+ *
+ * 现在的规则:
+ *   - 正文 === 源码 → 折叠。模型把整篇源码当回复吐出来了,
+ *     正文区渲染原始源码没有意义,也没有任何说明会被吞掉。
+ *   - 其余情况一律**不折叠**。尤其是「有产物但正文为空」——
+ *     那正是最需要显示兜底执行摘要的时候。
+ */
+export function shouldCollapseArtifactPreview(preview, { content = '', artifactSource = '' } = {}) {
+  if (!preview) return false
+  const replyText = String(content || '').trim()
+  const sourceText = String(artifactSource || '').trim()
+
+  // 正文自身就是源码 —— 折叠成卡片,没有说明会因此丢失。
+  // (包括嗅探出来的产物:没有独立 source,正文本身即源码。)
+  if (!sourceText) return true
+  if (replyText === sourceText) return true
+
+  // 有独立 source 且正文不是源码 → 正文要么是真的说明,
+  // 要么是空的(此时兜底摘要会填进来)。两种情况都必须显示正文区。
+  return false
 }
 
 /**
@@ -236,6 +265,125 @@ function injectBeforeCloseTag(documentHtml, tag, injection) {
   return `${documentHtml}\n${injection}`
 }
 
+// Generated previews run in an opaque-origin iframe, so the parent page cannot
+// repair near-white or heavily transparent text after it renders. This guard
+// measures the effective text/background contrast inside the sandbox and only
+// adjusts text that is effectively unreadable.
+const HTML_PREVIEW_READABILITY_GUARD = `(function(){
+  if (window.__ymaReadabilityGuard) return;
+  window.__ymaReadabilityGuard = true;
+  var MIN_CONTRAST = 2.65;
+  var SKIP = /^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE|SVG|PATH|CANVAS|IMG|VIDEO|AUDIO)$/;
+  function color(value) {
+    var match = String(value || '').match(/rgba?\\(\\s*([\\d.]+)[,\\s]+([\\d.]+)[,\\s]+([\\d.]+)(?:\\s*[,\\/]\\s*([\\d.]+))?\\s*\\)/i);
+    return match ? { r:+match[1], g:+match[2], b:+match[3], a:match[4] == null ? 1 : +match[4] } : null;
+  }
+  function mix(top, bottom, alpha) {
+    return { r:top.r*alpha+bottom.r*(1-alpha), g:top.g*alpha+bottom.g*(1-alpha), b:top.b*alpha+bottom.b*(1-alpha), a:1 };
+  }
+  function channel(value) {
+    value /= 255;
+    return value <= 0.03928 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+  }
+  function luminance(value) {
+    return 0.2126*channel(value.r) + 0.7152*channel(value.g) + 0.0722*channel(value.b);
+  }
+  function contrast(first, second) {
+    var a = luminance(first), b = luminance(second);
+    return (Math.max(a,b)+0.05)/(Math.min(a,b)+0.05);
+  }
+  function backgroundFor(element) {
+    var layers = [], node = element;
+    while (node && node.nodeType === 1) {
+      var parsed = color(getComputedStyle(node).backgroundColor);
+      if (parsed && parsed.a > 0) layers.push(parsed);
+      node = node.parentElement;
+    }
+    var result = { r:255, g:255, b:255, a:1 };
+    for (var index=layers.length-1; index>=0; index-=1) result = mix(layers[index], result, layers[index].a);
+    return result;
+  }
+  function hasDirectText(element) {
+    for (var index=0; index<element.childNodes.length; index+=1) {
+      var node = element.childNodes[index];
+      if (node.nodeType === 3 && node.textContent.trim()) return true;
+    }
+    return false;
+  }
+  function effectiveOpacity(element) {
+    var value = 1, culprit = null, node = element;
+    while (node && node.nodeType === 1) {
+      var current = parseFloat(getComputedStyle(node).opacity);
+      if (Number.isFinite(current)) {
+        value *= current;
+        if (current < 0.58 && !culprit) culprit = node;
+      }
+      node = node.parentElement;
+    }
+    return { value:value, culprit:culprit };
+  }
+  function repair(element) {
+    if (!element || SKIP.test(element.tagName) || !hasDirectText(element)) return;
+    var style = getComputedStyle(element);
+    if (style.display === 'none' || style.visibility === 'hidden') return;
+    var foreground = color(style.color);
+    if (!foreground) return;
+    var background = backgroundFor(element);
+    var opacity = effectiveOpacity(element);
+    var alpha = Math.max(0, Math.min(1, foreground.a * opacity.value));
+    if (contrast(mix(foreground, background, alpha), background) >= MIN_CONTRAST) return;
+    var darkBackground = luminance(background) < 0.42;
+    element.style.setProperty('color', darkBackground ? '#F3F4F6' : '#374151', 'important');
+    element.style.setProperty('text-shadow', 'none', 'important');
+    if (parseFloat(style.opacity) < 0.72) element.style.setProperty('opacity', '0.88', 'important');
+    if (opacity.culprit && opacity.culprit !== document.body && opacity.culprit !== document.documentElement) {
+      opacity.culprit.style.setProperty('opacity', '0.88', 'important');
+    }
+    element.setAttribute('data-yma-contrast-fixed', 'true');
+  }
+  function scan(root) {
+    var scope = root && root.nodeType === 1 ? root : document.body;
+    if (!scope) return;
+    repair(scope);
+    var elements = scope.querySelectorAll('*');
+    for (var index=0; index<elements.length; index+=1) repair(elements[index]);
+  }
+  var queued = false;
+  function schedule(root) {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(function(){ queued=false; scan(root || document.body); });
+  }
+  function start() {
+    schedule(document.body);
+    setTimeout(function(){ schedule(document.body); }, 180);
+    setTimeout(function(){ schedule(document.body); }, 700);
+    setTimeout(function(){ schedule(document.body); }, 1600);
+    if (window.MutationObserver && document.body) {
+      new MutationObserver(function(records){
+        for (var index=0; index<records.length; index+=1) {
+          for (var child=0; child<records[index].addedNodes.length; child+=1) {
+            var node = records[index].addedNodes[child];
+            if (node.nodeType === 1) { schedule(node); return; }
+          }
+        }
+      }).observe(document.body, { childList:true, subtree:true });
+    }
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once:true });
+  else start();
+})();`
+
+export function enhanceHtmlPreviewReadability(documentHtml = '') {
+  const doc = String(documentHtml || '')
+  if (!doc || doc.includes('data-yma-readability-guard')) return doc
+  return injectBeforeCloseTag(
+    doc,
+    'body',
+    `<script data-yma-readability-guard="true">${HTML_PREVIEW_READABILITY_GUARD.replace(/<\/script>/gi, '<\\/script>')}</script>`,
+  )
+}
+
 export function enhanceHtmlDeckDocument(documentHtml = '') {
   const doc = String(documentHtml || '')
   if (!isHtmlDeckLike(doc) || doc.includes('data-yma-deck-enhancer')) return doc
@@ -256,8 +404,10 @@ export function enhanceHtmlDeckDocument(documentHtml = '') {
  */
 export function buildHtmlDocument(htmlSource = '') {
   const src = String(htmlSource || '').trim()
-  if (/^\s*(?:<!doctype\s+html|<html[\s>])/i.test(src)) return enhanceHtmlDeckDocument(src)
-  return enhanceHtmlDeckDocument(`<!doctype html>
+  if (/^\s*(?:<!doctype\s+html|<html[\s>])/i.test(src)) {
+    return enhanceHtmlDeckDocument(enhanceHtmlPreviewReadability(src))
+  }
+  return enhanceHtmlDeckDocument(enhanceHtmlPreviewReadability(`<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
@@ -268,7 +418,7 @@ export function buildHtmlDocument(htmlSource = '') {
 <body>
 ${src}
 </body>
-</html>`)
+</html>`))
 }
 
 function escapeHtml(value = '') {
@@ -402,13 +552,15 @@ export function buildArtifactPreview({ content = '', meta = {} } = {}) {
     const officeType = shouldOfferOfficeExport(meta)
     if (officeType) resolvedType = officeType
   }
-  // 没有显式 meta 时, 按内容嗅探 fallback
+  // 没有显式 meta 时只嗅探网页/图形类预览。Office 文件必须来自本轮明确
+  // 的技能或 create_* 工具；不能因为普通回答用了多个分隔线/标题/表格，
+  // 就在流式输出中途突然把正文变成 PPT、Word 或 Excel。
   // ★ batchF P2b: 嗅探出来的 artifact 不再替代正文,只在正文下追加一个
   //   "在右侧打开预览" CTA;通过返回 inferred:true 让 ChatMessages 区分.
   // ★ batchG G4: 同时返回置信度,UI 可只对 ≥ ARTIFACT_AUTO_OPEN_CONFIDENCE 的命中弹右栏.
   if (!resolvedType) {
     const probe = detectArtifactWithConfidence(content)
-    if (probe.type) {
+    if (probe.type && !['pptx', 'docx', 'xlsx'].includes(probe.type)) {
       resolvedType = probe.type
       inferred = true
       confidence = probe.confidence

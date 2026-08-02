@@ -1,7 +1,7 @@
 import { useRef, useEffect, useState, useCallback, Suspense, lazy } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from '../../lib/router.jsx'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Sparkles } from 'lucide-react'
+import BrandMark from '../../components/BrandMark.jsx'
 
 // three / @react-three 是重点包（1MB+）— 延迟加载
 // CoverPage 其他内容不需要等 3D scene 准备好才能呈现。
@@ -131,11 +131,7 @@ export default function CoverPage() {
                   backdropFilter: 'blur(8px)',
                 }}
               >
-                <Sparkles
-                  size={24}
-                  style={{ color: '#E86A3C' }}
-                  strokeWidth={1.5}
-                />
+                <BrandMark className="w-11 h-11 text-ember" />
               </div>
             </motion.div>
 

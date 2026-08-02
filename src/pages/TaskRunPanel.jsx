@@ -1,20 +1,24 @@
-import { useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { Activity, CheckCircle2, Clock3, LayoutList, PauseCircle, RotateCcw, Eye } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate, useSearchParams } from '../lib/router.jsx'
+import { Activity, AlertTriangle, CheckCircle2, Clock3, LayoutList, PauseCircle, RotateCcw, Eye, FolderOpen, LoaderCircle, Send } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
 import TaskArtifactPreview from './TaskArtifactPreview.jsx'
 import { useToast } from '../components/Toast.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
 import {
+  approveJobPlan,
   cancelJob,
   createJob,
   getJob,
   listJobs,
   retryJob,
   retryStep,
+  steerJob,
   subscribeToJobEvents,
   withDownloadToken,
 } from '../lib/jobClient.js'
+import { authorizeRequestedDirectory } from '../lib/jobDirectoryRequest.js'
+import EditablePlanCard from '../components/EditablePlanCard.jsx'
 
 const FILTERS = [
   { key: 'all', label: '全部' },
@@ -66,19 +70,41 @@ function StepDot({ status }) {
   return <span className={`w-2.5 h-2.5 rounded-full ${cls}`} aria-hidden="true" />
 }
 
+function stepAcceptance(step) {
+  const acceptance = step?.input?.acceptance
+  if (Array.isArray(acceptance)) return acceptance.filter(Boolean)
+  return typeof acceptance === 'string' && acceptance.trim() ? [acceptance.trim()] : []
+}
+
 export default function TaskRunPanel() {
   const toast = useToast()
   const { t } = useT()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const linkedJobId = searchParams.get('job')
   const [prompt, setPrompt] = useState('')
   const [jobs, setJobs] = useState([])
-  const [selectedJobId, setSelectedJobId] = useState(null)
+  const [selectedJobId, setSelectedJobId] = useState(() => linkedJobId || null)
   const [selectedJob, setSelectedJob] = useState(null)
   const [selectedArtifact, setSelectedArtifact] = useState(null)
   const [activeFilter, setActiveFilter] = useState('all')
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  const [steering, setSteering] = useState('')
+  const [steeringSubmitting, setSteeringSubmitting] = useState(false)
+  const [planApproving, setPlanApproving] = useState(false)
+  const [directoryBusy, setDirectoryBusy] = useState('')
   const [error, setError] = useState('')
+  const selectedJobIdRef = useRef(selectedJobId)
+  const hasActiveJobsRef = useRef(false)
+
+  useEffect(() => {
+    selectedJobIdRef.current = selectedJobId
+  }, [selectedJobId])
+
+  useEffect(() => {
+    hasActiveJobsRef.current = jobs.some((job) => ACTIVE_STATUSES.has(job.status))
+  }, [jobs])
 
   useEffect(() => {
     let active = true
@@ -118,19 +144,85 @@ export default function TaskRunPanel() {
   }, [selectedJobId])
 
   useEffect(() => {
-    const unsub = subscribeToJobEvents(() => {
-      Promise.all([
+    let active = true
+    let refreshTimer = null
+    let fallbackTimer = null
+    let refreshing = false
+    let refreshQueued = false
+    let lastIdleRefreshAt = Date.now()
+
+    function scheduleRefresh(delay = 120) {
+      if (!active) return
+      refreshQueued = true
+      if (refreshTimer != null) return
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = null
+        refresh()
+      }, delay)
+    }
+
+    async function refresh() {
+      if (!active) return
+      if (refreshing) {
+        refreshQueued = true
+        return
+      }
+      refreshing = true
+      refreshQueued = false
+      const jobId = selectedJobIdRef.current
+      const [jobsResult, jobResult] = await Promise.allSettled([
         listJobs(),
-        selectedJobId ? getJob(selectedJobId) : Promise.resolve({ job: null }),
+        jobId ? getJob(jobId) : Promise.resolve({ job: null }),
       ])
-        .then(([jobsPayload, jobPayload]) => {
-          setJobs(jobsPayload.jobs)
-          if (jobPayload.job) setSelectedJob(jobPayload.job)
-        })
-        .catch((err) => setError(err.message))
-    })
-    return unsub
-  }, [selectedJobId])
+      if (active) {
+        if (jobsResult.status === 'fulfilled') setJobs(jobsResult.value.jobs)
+        if (
+          jobResult.status === 'fulfilled'
+          && jobResult.value.job
+          && jobId === selectedJobIdRef.current
+        ) {
+          setSelectedJob(jobResult.value.job)
+        }
+        if (jobsResult.status === 'rejected' && jobResult.status === 'rejected') {
+          setError(jobsResult.reason?.message || jobResult.reason?.message || '任务刷新失败')
+        }
+      }
+      refreshing = false
+      if (active && refreshQueued) scheduleRefresh(0)
+    }
+
+    const unsubscribe = subscribeToJobEvents(
+      () => scheduleRefresh(),
+      {
+        onConnectionChange: ({ state }) => {
+          if (state === 'open') scheduleRefresh(0)
+        },
+      },
+    )
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') scheduleRefresh(0)
+    }
+    const handleOnline = () => scheduleRefresh(0)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('online', handleOnline)
+    fallbackTimer = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return
+      const now = Date.now()
+      const shouldRefresh = hasActiveJobsRef.current || now - lastIdleRefreshAt >= 30_000
+      if (!shouldRefresh) return
+      if (!hasActiveJobsRef.current) lastIdleRefreshAt = now
+      scheduleRefresh(0)
+    }, 5_000)
+
+    return () => {
+      active = false
+      unsubscribe()
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('online', handleOnline)
+      if (refreshTimer != null) window.clearTimeout(refreshTimer)
+      if (fallbackTimer != null) window.clearInterval(fallbackTimer)
+    }
+  }, [])
 
   const visibleJobs = useMemo(
     () => jobs.filter((job) => filterJob(job, activeFilter)),
@@ -181,6 +273,107 @@ export default function TaskRunPanel() {
     const { job } = await retryStep(selectedJob.id, stepId)
     setSelectedJob(job)
     setJobs((current) => current.map((item) => item.id === job.id ? job : item))
+  }
+
+  async function handleSteer(event) {
+    event.preventDefault()
+    const content = steering.trim()
+    if (!selectedJob || !content || steeringSubmitting) return
+    setSteeringSubmitting(true)
+    setError('')
+    try {
+      const result = await steerJob(selectedJob.id, content)
+      setSteering('')
+      if (result.job) setSelectedJob(result.job)
+      toast.success({
+        title: t('taskSteering.queuedTitle'),
+        body: t('taskSteering.queuedBody'),
+      })
+    } catch (err) {
+      setError(err.message)
+      toast.error({ title: t('toast.jobSteerFailed'), body: err.message })
+    } finally {
+      setSteeringSubmitting(false)
+    }
+  }
+
+  async function handleApprovePlan(steps) {
+    if (!selectedJob || planApproving) return
+    setPlanApproving(true)
+    setError('')
+    try {
+      const result = await approveJobPlan(selectedJob.id, { steps })
+      if (result.job) setSelectedJob(result.job)
+      toast.success({
+        title: t('taskSteering.planApproved'),
+        body: t('taskSteering.planApprovedBody'),
+      })
+    } catch (err) {
+      setError(err.message)
+      toast.error({ title: t('toast.jobPlanApproveFailed'), body: err.message })
+    } finally {
+      setPlanApproving(false)
+    }
+  }
+
+  const finalStep = selectedJob?.steps?.find((step) => step.kind === 'finalize' && step.status === 'completed')
+  const verifyStep = selectedJob?.steps?.find((step) => step.kind === 'verify')
+  const finalEvidence = Array.isArray(finalStep?.output?.evidence)
+    ? finalStep.output.evidence
+    : Array.isArray(verifyStep?.output?.evidence)
+      ? verifyStep.output.evidence
+      : []
+  const latestSuspension = selectedJob?.status === 'waiting'
+    ? [...(selectedJob.events || [])]
+        .reverse()
+        .find((event) => event.type === 'plan_proposed' || event.type === 'awaiting_user')
+    : null
+
+  // ★ 交付诚实度:buildFinalOutput 已经算出 complete / issues,
+  //   但面板此前无论如何都画一个绿色对勾 + 「本次交付」。
+  //   信号产生了却没接到决策上 —— 正是 PPT 事故的同一个病根。
+  const finalIssues = Array.isArray(finalStep?.output?.issues) ? finalStep.output.issues : []
+  const finalIncomplete = finalStep?.output?.complete === false || finalIssues.length > 0
+  const pendingClarification = latestSuspension?.type === 'awaiting_user'
+    ? latestSuspension.payload?.clarification
+    : null
+  const pendingPlan = latestSuspension?.type === 'plan_proposed'
+    ? latestSuspension.payload?.plan
+    : null
+  const pendingDirectoryRequest = pendingClarification?.request_type === 'directory'
+    ? pendingClarification
+    : null
+
+  async function handleDirectoryAuthorization({ path, accessMode, usePicker = false }) {
+    if (!selectedJob || directoryBusy) return
+    setDirectoryBusy(usePicker ? 'picker' : 'grant')
+    setError('')
+    try {
+      const result = await authorizeRequestedDirectory({
+        jobId: selectedJob.id,
+        path,
+        accessMode,
+        purpose: pendingDirectoryRequest?.purpose || pendingDirectoryRequest?.why || '',
+        usePicker,
+      })
+      if (result.cancelled) {
+        toast.info({ title: t('taskSteering.directoryPickerCancelled') })
+        return
+      }
+      if (result.job) {
+        setSelectedJob(result.job)
+        setJobs((current) => current.map((item) => item.id === result.job.id ? result.job : item))
+      }
+      toast.success({
+        title: t('taskSteering.directoryGranted'),
+        body: result.path,
+      })
+    } catch (err) {
+      setError(err.message)
+      toast.error({ title: t('taskSteering.directoryGrantFailed'), body: err.message })
+    } finally {
+      setDirectoryBusy('')
+    }
   }
 
   return (
@@ -309,6 +502,24 @@ export default function TaskRunPanel() {
                       <p className="text-ink mt-1">{formatTime(selectedJob.updatedAt)}</p>
                     </div>
                   </div>
+                  {ACTIVE_STATUSES.has(selectedJob.status) && selectedJob.status !== 'cancel_requested' && !pendingPlan && (
+                    <form onSubmit={handleSteer} className="mt-4 flex gap-2 border-t border-dashed border-ink-fade/40 pt-4">
+                      <input
+                        value={steering}
+                        onChange={(event) => setSteering(event.target.value)}
+                        maxLength={20_000}
+                        placeholder={t('taskSteering.placeholder')}
+                        className="flex-1 h-10 px-3 rounded-md border border-ink/25 bg-paper outline-none focus:border-ember text-sm"
+                      />
+                      <button
+                        disabled={steeringSubmitting || !steering.trim()}
+                        className="h-10 px-4 rounded-md border border-ember/60 text-ember text-sm inline-flex items-center gap-1.5 disabled:opacity-50"
+                      >
+                        <Send className="w-4 h-4" />
+                        {steeringSubmitting ? t('taskSteering.sending') : t('taskSteering.send')}
+                      </button>
+                    </form>
+                  )}
                   {/* ★ job 级失败原因以前存了却从不显示,用户只能看到步骤级错误 ——
                       而「被澄清打断」「预算耗尽」这类原因只记在 job 上 */}
                   {selectedJob.error && (
@@ -328,7 +539,95 @@ export default function TaskRunPanel() {
                       </button>
                     </div>
                   )}
+                  {pendingDirectoryRequest ? (
+                    <DirectoryRequestCard
+                      key={pendingDirectoryRequest.timestamp || pendingDirectoryRequest.question}
+                      request={pendingDirectoryRequest}
+                      busy={directoryBusy}
+                      onAuthorize={handleDirectoryAuthorization}
+                      t={t}
+                    />
+                  ) : pendingClarification?.question && (
+                    <div className="mt-3 rounded-md border border-dashed border-sky-500/50 bg-sky-500/5 p-3">
+                      <p className="text-[11px] text-sky-700">{t('taskSteering.waitingTitle')}</p>
+                      <p className="text-sm text-ink mt-1">{pendingClarification.question}</p>
+                      {pendingClarification.why && (
+                        <p className="text-xs text-ink-soft mt-1">{pendingClarification.why}</p>
+                      )}
+                      {Array.isArray(pendingClarification.options) && pendingClarification.options.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {pendingClarification.options.map((option) => (
+                            <button
+                              key={option}
+                              type="button"
+                              onClick={() => setSteering(option)}
+                              className="px-2.5 py-1 rounded-md border border-sky-500/40 text-xs text-sky-800 hover:bg-sky-500/10"
+                            >
+                              {option}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {pendingPlan && (
+                    <EditablePlanCard
+                      key={(pendingPlan.steps || []).map((step) => `${step.id}:${step.title}`).join('|')}
+                      plan={pendingPlan}
+                      disabled={planApproving}
+                      onApprove={handleApprovePlan}
+                      t={t}
+                    />
+                  )}
                 </div>
+
+                {finalStep?.output && (
+                  <section className={`rounded-md border p-4 ${
+                    finalIncomplete
+                      ? 'border-amber-400/60 bg-amber-50/60'
+                      : 'border-ember/40 bg-ember-soft/40'
+                  }`}>
+                    <div className="flex items-center gap-2">
+                      {finalIncomplete
+                        ? <AlertTriangle className="w-4 h-4 text-amber-600" />
+                        : <CheckCircle2 className="w-4 h-4 text-ember" />}
+                      <h3 className="font-hand text-lg text-ink">
+                        {finalIncomplete ? '本次交付（未全部达成）' : '本次交付'}
+                      </h3>
+                    </div>
+                    {finalStep.output.summary && (
+                      <p className={`mt-2 text-sm font-medium ${finalIncomplete ? 'text-amber-800' : 'text-ink'}`}>
+                        {finalStep.output.summary}
+                      </p>
+                    )}
+                    {finalIssues.length > 0 && (
+                      <ul className="mt-2 space-y-1 border-l-2 border-amber-400 pl-3">
+                        {finalIssues.map((issue, index) => (
+                          <li key={index} className="text-xs leading-5 text-amber-800">{issue}</li>
+                        ))}
+                      </ul>
+                    )}
+                    {finalStep.output.text && (
+                      <div className="mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap break-words text-sm leading-6 text-ink-soft">
+                        {finalStep.output.text}
+                      </div>
+                    )}
+                    {finalEvidence.length > 0 && (
+                      <details className="mt-3 border-t border-dashed border-ink-fade/40 pt-3">
+                        <summary className="cursor-pointer text-xs font-medium text-ink">
+                          查看验收依据（{finalEvidence.length}）
+                        </summary>
+                        <div className="mt-2 space-y-2">
+                          {finalEvidence.map((item, index) => (
+                            <p key={`${index}-${item.slice(0, 24)}`} className="whitespace-pre-wrap break-words text-xs leading-5 text-ink-soft">
+                              {item}
+                            </p>
+                          ))}
+                        </div>
+                      </details>
+                    )}
+                  </section>
+                )}
 
                 <div className="grid grid-cols-[1.2fr_0.8fr] gap-4">
                   <section className="rounded-md border border-ink/20 p-4">
@@ -346,6 +645,14 @@ export default function TaskRunPanel() {
                           </div>
                           {step.error && <p className="text-xs text-red-600 mt-2">{step.error}</p>}
                           {step.output?.text && <p className="text-xs text-ink-soft mt-2">{step.output.text}</p>}
+                          {stepAcceptance(step).length > 0 && (
+                            <details className="mt-2 text-xs text-ink-fade">
+                              <summary className="cursor-pointer">验收标准</summary>
+                              <ul className="mt-1.5 ml-4 list-disc space-y-1">
+                                {stepAcceptance(step).map((item) => <li key={item}>{item}</li>)}
+                              </ul>
+                            </details>
+                          )}
                           {step.status === 'failed' && (
                             <button
                               onClick={() => handleRetryStep(step.id)}
@@ -436,6 +743,50 @@ export default function TaskRunPanel() {
           onClose={() => setSelectedArtifact(null)}
         />
       )}
+    </div>
+  )
+}
+
+export function DirectoryRequestCard({ request, busy, onAuthorize, t }) {
+  const [path, setPath] = useState(request.suggested_path || '')
+  const [accessMode, setAccessMode] = useState(request.access_mode === 'read_write' ? 'read_write' : 'read_only')
+  return (
+    <div className="mt-3 rounded-md border border-dashed border-sky-500/50 bg-sky-500/5 p-3" data-testid="directory-request-card">
+      <div className="flex items-start gap-2">
+        <FolderOpen className="mt-0.5 h-4 w-4 shrink-0 text-sky-700" />
+        <div className="min-w-0">
+          <p className="text-[11px] text-sky-700">{t('taskSteering.directoryRequestTitle')}</p>
+          <p className="mt-1 text-sm text-ink">{request.why || request.purpose || request.question}</p>
+        </div>
+      </div>
+      <div className="mt-3 flex flex-col gap-2 md:flex-row">
+        <input
+          value={path}
+          onChange={(event) => setPath(event.target.value)}
+          onKeyDown={(event) => { if (event.key === 'Enter' && path.trim() && !busy) onAuthorize({ path, accessMode, usePicker: false }) }}
+          placeholder={t('taskSteering.directoryPathPlaceholder')}
+          className="h-9 min-w-0 flex-1 rounded-md border border-sky-500/30 bg-paper px-3 font-mono text-xs text-ink outline-none focus:border-sky-600"
+        />
+        <select
+          value={accessMode}
+          onChange={(event) => setAccessMode(event.target.value)}
+          disabled={!!busy}
+          aria-label={t('taskSteering.directoryAccessMode')}
+          className="h-9 rounded-md border border-sky-500/30 bg-paper px-2 text-xs text-ink"
+        >
+          <option value="read_only">{t('taskSteering.directoryReadOnly')}</option>
+          <option value="read_write">{t('taskSteering.directoryReadWrite')}</option>
+        </select>
+        <button type="button" onClick={() => onAuthorize({ path, accessMode, usePicker: false })} disabled={!!busy || !path.trim()} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-sky-600/50 px-3 text-xs text-sky-800 disabled:opacity-40">
+          {busy === 'grant' && <LoaderCircle className="h-3.5 w-3.5 animate-spin" />}
+          {t('taskSteering.authorizeDirectory')}
+        </button>
+        <button type="button" onClick={() => onAuthorize({ path, accessMode, usePicker: true })} disabled={!!busy} className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md bg-sky-700 px-3 text-xs text-white disabled:opacity-40">
+          {busy === 'picker' ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <FolderOpen className="h-3.5 w-3.5" />}
+          {t('taskSteering.chooseDirectory')}
+        </button>
+      </div>
+      <p className="mt-2 text-[11px] text-ink-fade">{t('taskSteering.directorySecurityHint')}</p>
     </div>
   )
 }

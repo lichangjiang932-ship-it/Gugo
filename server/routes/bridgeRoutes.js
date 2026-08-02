@@ -4,6 +4,7 @@ import { authenticateRequest } from '../middleware.js'
 import { socialBridgeManager } from '../services/socialBridgeManager.js'
 import { getIntegrationCredentialsById, upsertIntegration } from '../services/integrationsStore.js'
 import { getWechatIlinkQrcode, pollWechatIlinkQrcode } from '../adapters/social/wechatIlinkBridge.js'
+import { getParkedBridgeMessage, listParkedBridgeMessages } from '../services/bridgeParkingStore.js'
 
 function clean(value) {
   return String(value ?? '').trim()
@@ -175,6 +176,34 @@ export function createBridgeRequestHandler({
 
       const userId = authenticate(req)
       if (!userId) return unauthorized(res)
+
+      if (req.method === 'GET' && url.pathname === '/api/bridge/parked') {
+        const status = clean(url.searchParams.get('status') || 'parked')
+        const allowed = new Set(['parked', 'delivering', 'delivered', 'rejected', 'failed', 'all'])
+        if (!allowed.has(status)) return sendJson(res, 400, { ok: false, error: 'invalid parked status' })
+        return sendJson(res, 200, {
+          ok: true,
+          messages: listParkedBridgeMessages({ userId, status, limit: url.searchParams.get('limit') }),
+        })
+      }
+
+      const parkingMatch = url.pathname.match(/^\/api\/bridge\/parked\/([^/]+)\/(allow|reject)$/)
+      if (req.method === 'POST' && parkingMatch) {
+        const parkingId = decodeURIComponent(parkingMatch[1])
+        const decision = parkingMatch[2]
+        const parked = getParkedBridgeMessage({ userId, id: parkingId })
+        if (!parked) return sendJson(res, 404, { ok: false, error: 'parked message not found' })
+        if (decision === 'allow') {
+          if (manager.startIntegration && !manager.hasIntegration?.(parked.integrationId)) {
+            const integration = getIntegrationCredentialsById({ id: parked.integrationId })
+            if (integration?.enabled) await manager.startIntegration(integration)
+          }
+          const result = await manager.allowAndDeliver({ userId, parkingId })
+          return sendJson(res, result?.ok === false ? 409 : 200, { ok: result?.ok !== false, result })
+        }
+        const result = manager.rejectParked({ userId, parkingId })
+        return sendJson(res, result?.ok === false ? 409 : 200, { ok: result?.ok !== false, result })
+      }
 
       if (req.method === 'GET' && url.pathname === '/api/bridge/status') {
         return sendJson(res, 200, { ok: true, status: manager.getStatus?.() || [] })

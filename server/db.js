@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 
-export const DB_SCHEMA_VERSION = 20
+export const DB_SCHEMA_VERSION = 28
 
 const DEFAULT_DATA_DIR = path.join(process.cwd(), 'server-data')
 
@@ -90,6 +90,14 @@ function runMigrations(db) {
   if (getSchemaVersionInternal(db) < 18) migrateToV18(db)
   if (getSchemaVersionInternal(db) < 19) migrateToV19(db)
   if (getSchemaVersionInternal(db) < 20) migrateToV20(db)
+  if (getSchemaVersionInternal(db) < 21) migrateToV21(db)
+  if (getSchemaVersionInternal(db) < 22) migrateToV22(db)
+  if (getSchemaVersionInternal(db) < 23) migrateToV23(db)
+  if (getSchemaVersionInternal(db) < 24) migrateToV24(db)
+  if (getSchemaVersionInternal(db) < 25) migrateToV25(db)
+  if (getSchemaVersionInternal(db) < 26) migrateToV26(db)
+  if (getSchemaVersionInternal(db) < 27) migrateToV27(db)
+  if (getSchemaVersionInternal(db) < 28) migrateToV28(db)
   runReasonixMigrations(db)
 }
 
@@ -950,6 +958,223 @@ function migrateToV20(db) {
     );
   `)
   setSchemaVersionInternal(db, 20)
+}
+
+/**
+ * v21: durable steering inbox for long-running jobs.
+ *
+ * Messages are leased at an engine iteration boundary and acknowledged only
+ * after the model has accepted the request. A restart returns outstanding
+ * leases to queued, so an in-flight user correction is never silently lost.
+ */
+function migrateToV21(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS job_steering_messages (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      content TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued'
+        CHECK (status IN ('queued','leased','consumed')),
+      lease_id TEXT,
+      leased_at INTEGER,
+      consumed_at INTEGER,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_job_steering_pending
+      ON job_steering_messages(job_id, status, created_at);
+    CREATE INDEX IF NOT EXISTS idx_job_steering_user
+      ON job_steering_messages(user_id, created_at DESC);
+  `)
+  setSchemaVersionInternal(db, 21)
+}
+
+/**
+ * Persist the active model/tool turn for a job step. Recovery uses this durable
+ * outbox instead of replaying the whole step after a process restart.
+ */
+function migrateToV22(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS job_turn_checkpoints (
+      step_id TEXT PRIMARY KEY REFERENCES job_steps(id) ON DELETE CASCADE,
+      job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      state_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_job_turn_checkpoints_job
+      ON job_turn_checkpoints(job_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_job_turn_checkpoints_user
+      ON job_turn_checkpoints(user_id, updated_at DESC);
+  `)
+  setSchemaVersionInternal(db, 22)
+}
+
+/** Durable self-wake timers for the same job/thread (not a new cron job). */
+function migrateToV23(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS job_wakeups (
+      job_id TEXT PRIMARY KEY REFERENCES jobs(id) ON DELETE CASCADE,
+      step_id TEXT NOT NULL REFERENCES job_steps(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      wake_at INTEGER NOT NULL,
+      reason TEXT,
+      status TEXT NOT NULL DEFAULT 'scheduled'
+        CHECK (status IN ('scheduled','fired','cancelled')),
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      fired_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_job_wakeups_due
+      ON job_wakeups(status, wake_at);
+    CREATE INDEX IF NOT EXISTS idx_job_wakeups_user
+      ON job_wakeups(user_id, status, wake_at);
+  `)
+  setSchemaVersionInternal(db, 23)
+}
+
+/** Park inbound bridge messages until the external sender is explicitly trusted. */
+function migrateToV24(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS bridge_contacts (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      integration_id TEXT NOT NULL REFERENCES integrations(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL,
+      external_user_id TEXT NOT NULL,
+      display_name TEXT,
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending','allowed','blocked')),
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      decided_at INTEGER,
+      PRIMARY KEY (user_id, integration_id, provider, external_user_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_bridge_contacts_user_status
+      ON bridge_contacts(user_id, status, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS bridge_parked_messages (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      integration_id TEXT NOT NULL REFERENCES integrations(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL,
+      external_chat_id TEXT NOT NULL,
+      external_user_id TEXT NOT NULL,
+      sender_name TEXT,
+      payload_json TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'parked'
+        CHECK (status IN ('parked','delivering','delivered','rejected','failed')),
+      error TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      decided_at INTEGER,
+      delivered_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_bridge_parked_user_status
+      ON bridge_parked_messages(user_id, status, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_bridge_parked_contact
+      ON bridge_parked_messages(user_id, integration_id, provider, external_user_id, status);
+  `)
+  setSchemaVersionInternal(db, 24)
+}
+
+/** Declarative persona manifest for agent capabilities and safe defaults. */
+function migrateToV25(db) {
+  if (!hasColumn(db, 'agents', 'persona_manifest_json')) {
+    db.exec('ALTER TABLE agents ADD COLUMN persona_manifest_json TEXT')
+  }
+  setSchemaVersionInternal(db, 25)
+}
+
+/** Durable, one-time OAuth handshakes for connector authorization across restarts. */
+function migrateToV26(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS integration_oauth_sessions (
+      id TEXT PRIMARY KEY,
+      state_hash TEXT NOT NULL UNIQUE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL,
+      integration_id TEXT REFERENCES integrations(id) ON DELETE SET NULL,
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending','exchanging','completed','failed','expired')),
+      code_verifier TEXT NOT NULL,
+      redirect_uri TEXT NOT NULL,
+      error TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      completed_at INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_integration_oauth_user
+      ON integration_oauth_sessions(user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_integration_oauth_expiry
+      ON integration_oauth_sessions(status, expires_at);
+  `)
+  setSchemaVersionInternal(db, 26)
+}
+
+/** Command tools remember a safe command prefix, never a tool-wide wildcard. */
+function migrateToV27(db) {
+  db.transaction(() => {
+    db.exec(`
+      CREATE TABLE approval_tool_grants_v27 (
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        tool_name TEXT NOT NULL,
+        command_prefix TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, tool_name, command_prefix)
+      );
+      INSERT INTO approval_tool_grants_v27 (user_id, tool_name, command_prefix, created_at)
+        SELECT user_id, tool_name, '', created_at
+          FROM approval_tool_grants
+         WHERE tool_name <> 'bash_exec';
+      DROP TABLE approval_tool_grants;
+      ALTER TABLE approval_tool_grants_v27 RENAME TO approval_tool_grants;
+    `)
+    setSchemaVersionInternal(db, 27)
+  })()
+}
+
+/**
+ * V28: per-provider 能力与超时配置。
+ *
+ * ★ 背景:超时、上下文窗口、是否支持工具/流式/视觉,原来全是**全局 env**,
+ * 一个用户同时接了 Ollama(8k 窗口、CPU 很慢)和 DeepSeek(128k、很快)时,
+ * 这些值只能取一个折中 —— 结果是两边都配不对:
+ *   - 按云端配 → 本地模型正在吐字就被超时砍断
+ *   - 按本地配 → 云端请求白等十分钟
+ *
+ * 这些列全部可空。空 = 走 server/utils/endpointProfile.js 的推断值,
+ * 所以老数据不需要任何回填,行为和升级前一致。
+ */
+function migrateToV28(db) {
+  db.transaction(() => {
+    const columns = [
+      // 端点类型:ollama / lmstudio / llamacpp / vllm / openai-compatible
+      // 空 = 从 URL 端口和主机名自动推断
+      ['kind', 'TEXT'],
+      // 模型真实上下文窗口。Ollama 可由 /api/show 自动探测填入
+      ['context_window', 'INTEGER'],
+      // 三态:1 支持 / 0 不支持 / NULL 按 kind 默认推断
+      ['supports_tools', 'INTEGER'],
+      ['supports_streaming', 'INTEGER'],
+      ['supports_vision', 'INTEGER'],
+      // 首 token 超时 / 两个 chunk 之间的空闲超时(毫秒)
+      ['first_token_timeout_ms', 'INTEGER'],
+      ['idle_timeout_ms', 'INTEGER'],
+      // 这个 provider 失败时允不允许切到别的 provider。
+      // 本地端点默认关(见 endpointProfile),避免「本地慢 → 偷偷切云端 → 扣积分」
+      ['failover_enabled', 'INTEGER'],
+      // Ollama keep_alive,如 '30m'。避免每次请求都重新加载模型权重
+      ['keep_alive', 'TEXT'],
+    ]
+    for (const [name, type] of columns) {
+      if (!hasColumn(db, 'model_providers', name)) {
+        db.exec(`ALTER TABLE model_providers ADD COLUMN ${name} ${type}`)
+      }
+    }
+    setSchemaVersionInternal(db, 28)
+  })()
 }
 
 /**

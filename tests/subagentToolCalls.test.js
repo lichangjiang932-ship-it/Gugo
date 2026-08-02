@@ -134,3 +134,206 @@ test('上游中途失败时降级为部分结果,而不是整个 run 失败', as
   assert.match(text, /探索中断/)
   assert.match(text, /已经查到的信息/)
 })
+
+test('同一轮的独立只读工具最多 4 路并行,结果仍按调用顺序回填', async () => {
+  let modelStep = 0
+  let active = 0
+  let maxActive = 0
+  const seenResults = []
+  const callModel = async ({ messages }) => {
+    modelStep += 1
+    if (modelStep === 1) {
+      return {
+        content: '',
+        toolCalls: [
+          { id: 'r1', function: { name: 'read_file', arguments: '{"path":"a"}' } },
+          { id: 'r2', function: { name: 'read_file', arguments: '{"path":"b"}' } },
+          { id: 'r3', function: { name: 'read_file', arguments: '{"path":"c"}' } },
+        ],
+      }
+    }
+    seenResults.push(...messages.filter((m) => m.role === 'tool').map((m) => JSON.parse(m.content).value))
+    return { content: 'done', toolCalls: [] }
+  }
+  const executeTool = async (_name, args) => {
+    active += 1
+    maxActive = Math.max(maxActive, active)
+    const delay = args.path === 'a' ? 30 : args.path === 'b' ? 10 : 1
+    await new Promise((resolve) => setTimeout(resolve, delay))
+    active -= 1
+    return { ok: true, value: args.path }
+  }
+
+  const text = await _testing.subagentToolsLoop({
+    messages: [{ role: 'user', content: 'parallel reads' }],
+    tools: SUBAGENT_TYPES.explore.tools,
+    userId: USER,
+    callModel,
+    executeTool,
+  })
+  assert.equal(text, 'done')
+  assert.equal(maxActive, 3)
+  assert.deepEqual(seenResults, ['a', 'b', 'c'])
+})
+
+test('含非只读工具的混合批次保持串行', async () => {
+  let modelStep = 0
+  let active = 0
+  let maxActive = 0
+  const callModel = async () => {
+    modelStep += 1
+    if (modelStep === 1) {
+      return {
+        content: '',
+        toolCalls: [
+          { id: 'm1', function: { name: 'read_file', arguments: '{"path":"a"}' } },
+          { id: 'm2', function: { name: 'reflect', arguments: '{"observation":"x","next_step":"done"}' } },
+        ],
+      }
+    }
+    return { content: 'done', toolCalls: [] }
+  }
+  const executeTool = async () => {
+    active += 1
+    maxActive = Math.max(maxActive, active)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    active -= 1
+    return { ok: true }
+  }
+
+  await _testing.subagentToolsLoop({
+    messages: [{ role: 'user', content: 'mixed calls' }],
+    tools: SUBAGENT_TYPES.general.tools,
+    userId: USER,
+    callModel,
+    executeTool,
+  })
+  assert.equal(maxActive, 1)
+})
+
+test('每用户超过 8 个运行槽时排队而不是 429,且等待可中止', async () => {
+  const limiterUser = `limiter-${Date.now()}`
+  const leases = Array.from({ length: _testing.MAX_CONCURRENT_PER_USER }, () => _testing.createSlotLease(limiterUser))
+  await Promise.all(leases.map((lease) => lease.acquire()))
+
+  const ninth = _testing.createSlotLease(limiterUser)
+  const ninthAcquired = ninth.acquire()
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  assert.deepEqual(_testing.getLimiterSnapshot(limiterUser), { active: 8, queued: 1 })
+
+  leases[0].release()
+  await ninthAcquired
+  assert.deepEqual(_testing.getLimiterSnapshot(limiterUser), { active: 8, queued: 0 })
+
+  const controller = new AbortController()
+  const cancelled = _testing.createSlotLease(limiterUser)
+  const cancelledAcquire = cancelled.acquire(controller.signal)
+  controller.abort()
+  await assert.rejects(cancelledAcquire, { name: 'AbortError' })
+  assert.deepEqual(_testing.getLimiterSnapshot(limiterUser), { active: 8, queued: 0 })
+
+  for (const lease of leases) lease.release()
+  ninth.release()
+  assert.deepEqual(_testing.getLimiterSnapshot(limiterUser), { active: 0, queued: 0 })
+})
+
+test('父代理等待嵌套任务时归还运行槽,8 个父任务不会互相死锁', async () => {
+  const limiterUser = `nested-${Date.now()}`
+  const parents = Array.from({ length: _testing.MAX_CONCURRENT_PER_USER }, () => _testing.createSlotLease(limiterUser))
+  await Promise.all(parents.map((lease) => lease.acquire()))
+
+  const nested = Promise.all(parents.map((parent) => _testing.withYieldedSlot(parent, null, async () => {
+    const child = _testing.createSlotLease(limiterUser)
+    await child.acquire()
+    child.release()
+    return 'done'
+  })))
+  const results = await Promise.race([
+    nested,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('nested slot handoff deadlocked')), 500)),
+  ])
+  assert.deepEqual(results, Array(8).fill('done'))
+  assert.deepEqual(_testing.getLimiterSnapshot(limiterUser), { active: 8, queued: 0 })
+
+  for (const lease of parents) lease.release()
+  assert.deepEqual(_testing.getLimiterSnapshot(limiterUser), { active: 0, queued: 0 })
+})
+
+test('整棵子代理树沿用调用方传入的同一预算对象', async () => {
+  const budget = {
+    calls: 0,
+    consume() {
+      this.calls += 1
+      return { ok: true }
+    },
+  }
+  let modelStep = 0
+  let observedBudget = null
+  const result = await _testing.subagentToolsLoop({
+    messages: [{ role: 'user', content: 'delegate' }],
+    tools: SUBAGENT_TYPES.general.tools,
+    userId: USER,
+    budget,
+    approveTool: async ({ args }) => ({ proceed: true, args }),
+    callModel: async () => {
+      modelStep += 1
+      if (modelStep === 1) return wireCall('Agent', { prompt: 'child', subagent_type: 'general' })
+      return { content: 'done', toolCalls: [] }
+    },
+    executeTool: async (_name, _args, options) => {
+      observedBudget = options.budget
+      return { ok: true }
+    },
+  })
+  assert.equal(result, 'done')
+  assert.equal(observedBudget, budget)
+  assert.ok(budget.calls >= 1)
+})
+
+test('审批只复用同一树内工具名和完整参数完全相同的人工批准', async () => {
+  const context = (await import('../server/services/subagentRuntime.js')).createSubagentApprovalContext()
+  let approvalRequests = 0
+  const approveTool = async ({ args }) => {
+    approvalRequests += 1
+    return { proceed: true, args, approvalId: `approval-${approvalRequests}` }
+  }
+  const request = (args) => _testing.requestTreeApproval({
+    context,
+    approveTool,
+    userId: USER,
+    toolName: 'write_file',
+    args,
+  })
+
+  const first = await request({ path: 'a.txt', content: 'same' })
+  const repeated = await request({ content: 'same', path: 'a.txt' })
+  await request({ path: 'a.txt', content: 'different' })
+  assert.equal(first.reused, undefined)
+  assert.equal(repeated.reused, true)
+  assert.equal(approvalRequests, 2, '不同完整参数必须重新审批')
+})
+
+test('自动放行和编辑后的审批都不会进入子代理审批缓存', async () => {
+  const { createSubagentApprovalContext } = await import('../server/services/subagentRuntime.js')
+  for (const gate of [
+    { proceed: true },
+    { proceed: true, approvalId: 'edited-1', edited: true, args: { path: 'edited.txt' } },
+  ]) {
+    const context = createSubagentApprovalContext()
+    let calls = 0
+    const approveTool = async () => {
+      calls += 1
+      return gate
+    }
+    const options = {
+      context,
+      approveTool,
+      userId: USER,
+      toolName: 'write_file',
+      args: { path: 'a.txt', content: 'x' },
+    }
+    await _testing.requestTreeApproval(options)
+    await _testing.requestTreeApproval(options)
+    assert.equal(calls, 2)
+  }
+})

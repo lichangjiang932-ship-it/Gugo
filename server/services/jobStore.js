@@ -124,6 +124,7 @@ export function updateJob(id, updates = {}, now = Date.now()) {
   const current = getJob(id)
   if (!current) return null
   const next = {
+    prompt: updates.prompt ?? current.prompt,
     status: updates.status ?? current.status,
     progress: updates.progress ?? current.progress,
     cancelRequested: updates.cancelRequested ?? current.cancelRequested,
@@ -133,9 +134,10 @@ export function updateJob(id, updates = {}, now = Date.now()) {
   }
   getDb().prepare(`
     UPDATE jobs
-    SET status = ?, progress = ?, cancel_requested = ?, updated_at = ?, started_at = ?, finished_at = ?, error = ?
+    SET prompt = ?, status = ?, progress = ?, cancel_requested = ?, updated_at = ?, started_at = ?, finished_at = ?, error = ?
     WHERE id = ?
   `).run(
+    next.prompt,
     next.status,
     next.progress,
     next.cancelRequested ? 1 : 0,
@@ -172,6 +174,46 @@ export function appendJobSteps(jobId, steps = [], now = Date.now()) {
     })
   })
   tx(steps)
+}
+
+export function replacePendingJobSteps(jobId, steps = [], now = Date.now()) {
+  const db = getDb()
+  const insert = db.prepare(`
+    INSERT INTO job_steps
+      (id, job_id, parent_step_id, title, kind, status, sort_order, input_json, created_at, updated_at)
+    VALUES
+      (@id, @jobId, @parentStepId, @title, @kind, @status, @sortOrder, @inputJson, @createdAt, @updatedAt)
+  `)
+  const tx = db.transaction((rows) => {
+    const immutable = db.prepare(`
+      SELECT COUNT(*) AS count
+        FROM job_steps
+       WHERE job_id = ?
+         AND kind <> 'plan'
+         AND status NOT IN ('queued', 'pending')
+    `).get(jobId)
+    if (immutable.count > 0) throw new Error('plan steps can no longer be edited after execution starts')
+    db.prepare(`
+      DELETE FROM job_steps
+       WHERE job_id = ?
+         AND kind <> 'plan'
+         AND status IN ('queued', 'pending')
+    `).run(jobId)
+    rows.forEach((step, index) => insert.run({
+      id: step.id,
+      jobId,
+      parentStepId: step.parentStepId || null,
+      title: step.title,
+      kind: step.kind,
+      status: step.status || 'queued',
+      sortOrder: step.sortOrder ?? index + 1,
+      inputJson: step.input == null ? null : JSON.stringify(step.input),
+      createdAt: now,
+      updatedAt: now,
+    }))
+  })
+  tx(steps)
+  return listJobSteps(jobId)
 }
 
 export function getJobStep(stepId) {

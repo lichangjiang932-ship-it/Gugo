@@ -98,8 +98,12 @@ class CdpClient {
     })
   }
 
+  isOpen() {
+    return this.ws?.readyState === WebSocket.OPEN
+  }
+
   request(method, params = {}, sessionId = null, timeoutMs = ACTION_TIMEOUT_MS) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return Promise.reject(new Error('浏览器未连接'))
+    if (!this.isOpen()) return Promise.reject(new Error('浏览器未连接'))
     const id = this.nextId++
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -115,6 +119,13 @@ class CdpClient {
     this.closing = true
     try { this.ws?.close() } catch { /* ignore */ }
   }
+}
+
+function isReusableSession(session, { headed = false } = {}) {
+  return !!session
+    && session.child?.exitCode === null
+    && session.client?.isOpen?.() === true
+    && (!headed || session.headless === false)
 }
 
 function launchProcess(executable, profileDir, { headless = true } = {}) {
@@ -200,7 +211,7 @@ async function createSession(userId, { headless = process.env.BROWSER_HEADLESS !
 async function getSession(userId, { headed = false } = {}) {
   if (!userId) throw new Error('userId required')
   const existing = sessions.get(userId)
-  if (existing && existing.child.exitCode === null && (!headed || existing.headless === false)) return existing
+  if (isReusableSession(existing, { headed })) return existing
   if (existing) closeBrowserSession(userId)
   return createSession(userId, { headless: headed ? false : process.env.BROWSER_HEADLESS !== '0' })
 }
@@ -226,8 +237,8 @@ async function waitForReady(session, timeoutMs = ACTION_TIMEOUT_MS) {
   throw new Error('等待页面加载超时')
 }
 
-export async function browserOpenUrl({ userId, url }) {
-  const session = await getSession(userId)
+export async function browserOpenUrl({ userId, url, headed = false }) {
+  const session = await getSession(userId, { headed })
   const targetUrl = validateUrl(url)
   const result = await session.client.request('Page.navigate', { url: targetUrl }, session.sessionId)
   if (result.errorText) throw new Error(result.errorText)
@@ -246,7 +257,7 @@ export async function browserConnectApp({ userId, url }) {
 
 export async function browserState({ userId }) {
   const session = sessions.get(userId)
-  if (!session || session.child.exitCode !== null) return { connected: false }
+  if (!isReusableSession(session)) return { connected: false }
   const page = await evaluate(session, `({
     url: location.href,
     title: document.title,
@@ -255,7 +266,7 @@ export async function browserState({ userId }) {
     scripts: [...document.scripts].map((script) => ({ src: script.src, type: script.type })),
     resources: performance.getEntriesByType('resource').map((entry) => entry.name).slice(-100),
   })`)
-  return { connected: true, ...page, createdAt: session.createdAt }
+  return { connected: true, headless: session.headless, ...page, createdAt: session.createdAt }
 }
 
 export async function browserSnapshot({ userId, maxText = 12000 } = {}) {
@@ -396,4 +407,4 @@ export function shutdownBrowsers() {
   for (const userId of [...sessions.keys()]) closeBrowserSession(userId)
 }
 
-export const _browserInternals = { findBrowserExecutable, validateUrl, profileDirectoryForUser }
+export const _browserInternals = { findBrowserExecutable, validateUrl, profileDirectoryForUser, isReusableSession }

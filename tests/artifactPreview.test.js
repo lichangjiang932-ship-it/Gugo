@@ -99,13 +99,45 @@ test('does not inject deck controls into ordinary html fragments', () => {
 })
 
 
-test('collapses inferred file previews into a single file card too', () => {
+test('ordinary structured text is never inferred as an Office file', () => {
   const preview = buildArtifactPreview({
     content: '| Metric | Value |\n| --- | --- |\n| Revenue | 120 |\n| Cost | 45 |\n| Margin | 75 |\n| Users | 300 |\n| Growth | 12% |',
     meta: {},
   })
 
-  assert.equal(preview.type, 'xlsx')
-  assert.equal(preview.inferred, true)
-  assert.equal(shouldCollapseArtifactPreview(preview), true)
+  assert.equal(preview, null)
+})
+
+test('multi-section prose never morphs into a pptx without explicit artifact metadata', () => {
+  const content = [
+    '# 调查结果',
+    '先说明根因。',
+    '---',
+    '# 修复方案',
+    '这里仍然是普通回答。',
+    '---',
+    '# 验证',
+    '测试通过。',
+    '---',
+    '# 结论',
+    '不要生成 PPT。',
+  ].join('\n')
+  assert.equal(buildArtifactPreview({ content, meta: {} }), null)
+})
+
+test('tool artifact keeps a separate final text explanation visible', () => {
+  const source = '# 修复结果\n\n---\n\n## 验证\n- 通过'
+  const preview = buildArtifactPreview({
+    content: source,
+    meta: { artifactType: 'pptx', artifactSource: source },
+  })
+
+  assert.equal(shouldCollapseArtifactPreview(preview, {
+    content: '已修复刷新和定时器问题，相关测试已通过。',
+    artifactSource: source,
+  }), false)
+  assert.equal(shouldCollapseArtifactPreview(preview, {
+    content: source,
+    artifactSource: source,
+  }), true)
 })

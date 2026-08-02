@@ -28,7 +28,7 @@ const NEVER_APPROVE = new Set([
   'reflect', 'request_clarification', 'manage_todos', 'read_file', 'list_directory',
   'grep_code', 'find_symbol', 'list_imports', 'git_status', 'git_diff', 'web_search',
   'browser_state', 'browser_snapshot', 'browser_console', 'browser_screenshot',
-  'browser_close', 'browser_wait', 'connected_app_list', 'notion_search',
+  'browser_wait', 'connected_app_list', 'notion_search',
   'notion_fetch_page', 'github_search_repositories', 'github_get_file',
   'create_pptx', 'create_docx', 'create_xlsx', 'create_react_component',
   'create_mermaid', 'create_chart', 'create_svg', 'create_html_app', 'run_project_check',
@@ -36,6 +36,36 @@ const NEVER_APPROVE = new Set([
 
 const EDIT_TOOLS = new Set(['write_file', 'edit_file', 'apply_patch'])
 const SAFE_HTTP = new Set(['GET', 'HEAD', 'OPTIONS'])
+
+export function normalizeCommandPrefix(value) {
+  return typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : ''
+}
+
+export function isSafeCommandPrefix(value) {
+  const raw = typeof value === 'string' ? value : ''
+  return !!raw.trim() && !(/[;&|><`\r\n]|\$\(/.test(raw))
+}
+
+export function buildClientRememberedGrant(name, args = {}) {
+  const toolName = String(name || '').trim()
+  if (toolName !== 'bash_exec') return { toolName, commandPrefix: '' }
+  if (!isSafeCommandPrefix(args?.command)) return null
+  return { toolName, commandPrefix: normalizeCommandPrefix(args.command) }
+}
+
+function matchesClientGrant(name, args, rememberedGrants) {
+  if (!Array.isArray(rememberedGrants)) return false
+  if (name !== 'bash_exec') {
+    return rememberedGrants.some((grant) => grant?.toolName === name && !grant?.commandPrefix)
+  }
+  if (!isSafeCommandPrefix(args?.command)) return false
+  const command = normalizeCommandPrefix(args.command)
+  return rememberedGrants.some((grant) => {
+    if (grant?.toolName !== name || !isSafeCommandPrefix(grant.commandPrefix)) return false
+    const prefix = normalizeCommandPrefix(grant.commandPrefix)
+    return command === prefix || command.startsWith(`${prefix} `)
+  })
+}
 
 function isOutsideWorkspace(p) {
   const s = String(p || '').trim()
@@ -47,7 +77,7 @@ function isOutsideWorkspace(p) {
  * 判断这次调用要不要在对话里问用户。
  * @returns {{ needsApproval:boolean, denied?:boolean, risk:string, reason:string|null }}
  */
-export function classifyClientTool(name, args = {}, { mode = 'normal', rememberedTools = [] } = {}) {
+export function classifyClientTool(name, args = {}, { mode = 'normal', rememberedTools = [], rememberedGrants = [] } = {}) {
   const tool = String(name || '').trim()
   const safeArgs = args && typeof args === 'object' ? args : {}
   // ★ 空工具名不能当成安全放行(fail-open)。身份不明 = 无法判定风险 = 拒绝。
@@ -69,7 +99,10 @@ export function classifyClientTool(name, args = {}, { mode = 'normal', remembere
     return { needsApproval: false, denied: true, risk, reason: '当前是计划模式(只读),不执行写操作。' }
   }
   if (mode === 'acceptEdits' && EDIT_TOOLS.has(tool)) return { needsApproval: false, risk, reason: null }
-  if (Array.isArray(rememberedTools) && rememberedTools.includes(tool)) {
+  if (tool !== 'bash_exec' && Array.isArray(rememberedTools) && rememberedTools.includes(tool)) {
+    return { needsApproval: false, risk, reason: null }
+  }
+  if (matchesClientGrant(tool, safeArgs, rememberedGrants)) {
     return { needsApproval: false, risk, reason: null }
   }
 

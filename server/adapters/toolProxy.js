@@ -25,6 +25,10 @@ import {
 } from './billingAuth.js'
 import { getSessionByToken } from '../db.js'
 import { dispatchHooks } from '../services/hooksService.js'
+import { loadModelConfig } from './modelProxy.js'
+import { buildUserModelEnv } from '../services/modelProviderStore.js'
+import { getRuntimeEnv } from '../utils/runtimeEnv.js'
+import { isLocalEndpoint } from '../utils/endpointProfile.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
 const SEARCH_TIMEOUT_MS = 12000
@@ -482,6 +486,24 @@ function checkToolRate(req) {
 
 // ★ batchF P1: 从 Authorization: Bearer <token> 抽 token,
 //   /api/tools/* 不允许匿名调用,前端必须先登录才能用搜索/抓取.
+/**
+ * 当前用户选中的模型是不是跑在本地/内网。
+ *
+ * 纯读、绝不抛 —— 任何一步失败就当作「不是本地」,回落到原来的计费行为,
+ * 宁可多收也不能因为这里报错把工具调用整个打挂。
+ */
+function isLocalModelSelected(token) {
+  try {
+    const session = token ? getSessionByToken(token) : null
+    const userId = session?.user_id || null
+    if (!userId) return false
+    const env = buildUserModelEnv({ userId, env: getRuntimeEnv() })
+    return isLocalEndpoint(loadModelConfig(env).baseUrl)
+  } catch {
+    return false
+  }
+}
+
 function authToken(req) {
   const auth = req.headers?.authorization || ''
   if (!auth.startsWith('Bearer ')) return ''
@@ -515,8 +537,14 @@ export async function handleToolProxyRequest(req, res) {
     sendJson(res, 429, { ok: false, error: `工具调用过于频繁,请 ${Math.ceil(rate.resetMs / 1000)}s 后再试` })
     return
   }
-  const cost = getToolCost()
-  if ((account?.credits ?? 0) < cost) {
+  // ★ 本地模型的工具调用不计费。
+  //
+  // 积分体系是为了覆盖云端 API 成本。用户用自己的显卡跑模型时,聊天本身
+  // 已经正确豁免了(modelProxy 的三处 isLocalModelEndpoint),但**工具调用
+  // 每次仍然扣 1 分** —— 于是「本地模型 + 积分不够」= agent 任务直接被 402 拦死,
+  // 明明整条链路一分钱上游成本都没有。这是本地用户遇到的最后一道计费墙。
+  const cost = isLocalModelSelected(token) ? 0 : getToolCost()
+  if (cost > 0 && (account?.credits ?? 0) < cost) {
     sendJson(res, 402, {
       ok: false,
       error: `积分不足,工具调用需要 ${cost} 积分,当前余额 ${account?.credits ?? 0}.请先充值.`,
@@ -569,8 +597,9 @@ export async function handleToolProxyRequest(req, res) {
     }
 
     // 只有真正成功才扣费;失败不扣,避免 SSRF 探测/上游不稳定还吃用户积分.
+    // cost 为 0(本地模型)时直接跳过,不写空账单.
     let billing = null
-    if (result?.ok !== false) {
+    if (result?.ok !== false && cost > 0) {
       try {
         const charged = chargeForToolUse({ token, toolName, cost })
         billing = {

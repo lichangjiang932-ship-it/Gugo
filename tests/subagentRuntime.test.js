@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 import { issueTestSession } from './helpers/testAuth.js'
 import {
   SUBAGENT_TYPES,
+  getSubagentRun,
+  runSubagentBatch,
   runSubagent,
   listSubagentTypes,
 } from '../server/services/subagentRuntime.js'
@@ -40,6 +42,7 @@ test('general type has full read-write tools', () => {
   assert.ok(names.includes('web_search'))
   assert.ok(names.includes('write_file'))
   assert.ok(names.includes('edit_file'))
+  assert.ok(names.includes('Agent'))
 })
 
 test('runSubagent requires userId and prompt', async () => {
@@ -62,4 +65,32 @@ test('runSubagent creates a DB record', async () => {
   const rows = db.prepare('SELECT * FROM subagent_runs WHERE user_id = ?').all(userId)
   assert.ok(rows.length >= 1, 'at least 1 subagent run should be recorded')
   assert.equal(rows[0].agent_type, 'general')
+})
+
+test('subagent swarm exposes team members with isolated transcripts', async () => {
+  const result = await runSubagentBatch({
+    userId,
+    request: {
+      team_name: 'review swarm',
+      tasks: [
+        { type: 'explore', role: 'frontend', prompt: 'inspect frontend' },
+        { type: 'plan', role: 'backend', prompt: 'inspect backend' },
+      ],
+    },
+    callModel: async ({ messages }) => ({
+      content: `done:${messages.find((message) => message.role === 'user')?.content}`,
+      toolCalls: [],
+    }),
+  })
+  assert.equal(result.parallel, true)
+  assert.equal(result.team.mode, 'swarm')
+  assert.deepEqual(result.team.members.map((member) => member.role), ['frontend', 'backend'])
+  const first = getSubagentRun({ userId, id: result.runs[0].id })
+  const second = getSubagentRun({ userId, id: result.runs[1].id })
+  assert.equal(first.team.id, result.team.id)
+  assert.equal(second.team.id, result.team.id)
+  assert.ok(first.transcript.some((event) => event.eventType === 'model_response'))
+  assert.match(first.resultText, /frontend/)
+  assert.doesNotMatch(first.resultText, /backend/)
+  assert.match(second.resultText, /backend/)
 })

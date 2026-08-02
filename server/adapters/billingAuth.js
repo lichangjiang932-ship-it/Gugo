@@ -367,7 +367,15 @@ export function chargeForToolUse({ token, toolName, cost, now = Date.now() }) {
 
 export function loadBillingConfig(env = process.env) {
   const basePer1k = Number(env.CREDIT_BASE_PER_1K_TOKENS ?? 10)
-  const maxTokens = Number(env.MODEL_MAX_TOKENS ?? 4096)
+  // ★ MODEL_MAX_TOKENS 现在默认「不限制」(0 / 未设置),但**计费预估仍然需要
+  // 一个有限数字**来预扣积分 —— 不能因为不限制输出就不预留额度。
+  // 用户显式配了上限就按它算,没配就用一个保守的估算值。
+  // 这个值只影响「预扣多少」,实际扣费在流结束后按真实 usage 结算。
+  const configured = Number(env.MODEL_MAX_TOKENS)
+  const estimateTokens = Number(env.CREDIT_ESTIMATE_OUTPUT_TOKENS ?? 4096)
+  const maxTokens = Number.isFinite(configured) && configured > 0
+    ? configured
+    : (Number.isFinite(estimateTokens) && estimateTokens > 0 ? estimateTokens : 4096)
   const defaultModel = env.MODEL_NAME?.trim() || ''
   const multipliers = {}
 
@@ -468,6 +476,36 @@ export function estimateChatCost({ modelName, messages, config }) {
   const multiplier = config.multipliers[modelName] || 1
   const baseCost = Math.max(1, Math.ceil((budgetTokens / 1000) * config.basePer1k))
   return Math.ceil(baseCost * multiplier)
+}
+
+/**
+ * 流结束后按上游真实 usage 结算。预估值只用于请求前余额校验，不能直接当账单。
+ * reasoning token 按 OpenAI 兼容协议计入 completion_tokens，因此自然包含在内。
+ */
+export function calculateChatCostFromUsage({ modelName, usage, config }) {
+  const promptTokens = Math.max(0, Number(usage?.promptTokens) || 0)
+  const completionTokens = Math.max(0, Number(usage?.completionTokens) || 0)
+  const totalTokens = promptTokens + completionTokens
+  if (!(totalTokens > 0)) return 0
+  const multiplier = config.multipliers[modelName] || 1
+  const baseCost = Math.max(1, Math.ceil((totalTokens / 1000) * config.basePer1k))
+  return Math.ceil(baseCost * multiplier)
+}
+
+export function calculateModelCostUsd({ modelName, usage, env = process.env }) {
+  let rates
+  try {
+    rates = JSON.parse(String(env.MODEL_USD_RATES || '{}'))
+  } catch {
+    return 0
+  }
+  const rate = rates?.[modelName]
+  if (!rate || typeof rate !== 'object') return 0
+  const inputRate = Math.max(0, Number(rate.input) || 0)
+  const outputRate = Math.max(0, Number(rate.output) || 0)
+  const promptTokens = Math.max(0, Number(usage?.promptTokens) || 0)
+  const completionTokens = Math.max(0, Number(usage?.completionTokens) || 0)
+  return (promptTokens * inputRate + completionTokens * outputRate) / 1_000_000
 }
 
 /* ── SMTP 邮件发送 ── */

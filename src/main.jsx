@@ -1,6 +1,6 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { HashRouter } from 'react-router-dom'
+import { HashRouter } from './lib/router.jsx'
 import { AppProvider } from './store/AppContext.jsx'
 import ThemeWrapper from './components/ThemeWrapper.jsx'
 import './index.css'

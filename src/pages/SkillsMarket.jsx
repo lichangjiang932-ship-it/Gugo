@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from '../lib/router.jsx'
 import { Plus, Search, Upload, X, Package, GitBranch as Github } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
 import { SKILLS } from '../data.js'
@@ -9,23 +9,8 @@ import { listPluginsApi, installPluginAsSkillApi } from '../lib/pluginClient.js'
 import { getSkillIcon } from '../lib/skillIcons.js'
 import { useToast } from '../components/Toast.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
-
-const CUSTOM_KEY = 'your-model-atelier:custom-skills:v1'
-
-function loadCustomSkills() {
-  if (typeof window === 'undefined') return []
-  try {
-    const raw = window.localStorage.getItem(CUSTOM_KEY)
-    return raw ? JSON.parse(raw) : []
-  } catch {
-    return []
-  }
-}
-
-function saveCustomSkills(skills) {
-  if (typeof window === 'undefined') return
-  window.localStorage.setItem(CUSTOM_KEY, JSON.stringify(skills))
-}
+import { listLocalSkills, mergeRuntimeSkills, saveLocalSkills } from '../lib/localSkills.js'
+import { getOfficialSkillPreset } from '../lib/skillPresets.js'
 
 export default function SkillsMarket() {
   const navigate = useNavigate()
@@ -34,10 +19,10 @@ export default function SkillsMarket() {
   const { t } = useT()
   const [query, setQuery] = useState('')
   const [activeFilter, setActiveFilter] = useState('全部')
-  const [customSkills, setCustomSkills] = useState(() => loadCustomSkills())
+  const [customSkills, setCustomSkills] = useState(() => listLocalSkills())
   const [runtimeSkills, setRuntimeSkills] = useState(SKILLS)
   const [showModal, setShowModal] = useState(false)
-  const [draft, setDraft] = useState({ id: '', name: '', desc: '', icon: '*', perms: '' })
+  const [draft, setDraft] = useState({ id: '', name: '', desc: '', systemPrompt: '', icon: '*', perms: '' })
   const [draftError, setDraftError] = useState('')
   const [importFiles, setImportFiles] = useState(null)
   const [importPreview, setImportPreview] = useState(null)
@@ -56,7 +41,10 @@ export default function SkillsMarket() {
   const searchRef = useRef(null)
   const folderInputRef = useRef(null)
 
-  const allSkills = useMemo(() => [...customSkills, ...runtimeSkills], [customSkills, runtimeSkills])
+  const allSkills = useMemo(
+    () => mergeRuntimeSkills(customSkills, runtimeSkills),
+    [customSkills, runtimeSkills],
+  )
 
   useEffect(() => {
     let active = true
@@ -127,7 +115,7 @@ export default function SkillsMarket() {
   }
 
   const handleCreateCustom = () => {
-    setDraft({ id: '', name: '', desc: '', icon: '*', perms: '' })
+    setDraft({ id: '', name: '', desc: '', systemPrompt: '', icon: '*', perms: '' })
     setDraftError('')
     setShowModal(true)
   }
@@ -135,8 +123,9 @@ export default function SkillsMarket() {
   const handleSaveCustom = () => {
     const id = draft.id.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-')
     const name = draft.name.trim()
-    if (!id || !name) {
-      setDraftError('请填写技能 ID 和名称。')
+    const systemPrompt = draft.systemPrompt.trim()
+    if (!id || !name || !systemPrompt) {
+      setDraftError('请填写技能 ID、名称和技能指令。')
       return
     }
     if (allSkills.some((s) => s.id === id)) {
@@ -148,6 +137,7 @@ export default function SkillsMarket() {
         id,
         name,
         desc: draft.desc.trim() || '自定义技能',
+        systemPrompt,
         icon: draft.icon.trim() || '*',
         perms: draft.perms.split(',').map((s) => s.trim()).filter(Boolean),
         recommended: false,
@@ -157,7 +147,7 @@ export default function SkillsMarket() {
       ...customSkills,
     ]
     setCustomSkills(next)
-    saveCustomSkills(next)
+    saveLocalSkills(next)
     setShowModal(false)
     setDraftError('')
   }
@@ -167,7 +157,7 @@ export default function SkillsMarket() {
     if (!confirm(`删除自定义技能 "${id}"？`)) return
     const next = customSkills.filter((s) => s.id !== id)
     setCustomSkills(next)
-    saveCustomSkills(next)
+    saveLocalSkills(next)
   }
 
   const handleFolderSelected = async (event) => {
@@ -240,6 +230,14 @@ export default function SkillsMarket() {
     } finally {
       setGithubInstalling(false)
     }
+  }
+
+  const openGithubImport = (presetId = null) => {
+    const preset = presetId ? getOfficialSkillPreset(presetId) : null
+    setGithubUrl(preset?.url || '')
+    setGithubError('')
+    setGithubSuccess(null)
+    setShowGithubPanel(true)
   }
 
   const openPluginPanel = async () => {
@@ -327,7 +325,15 @@ export default function SkillsMarket() {
               从 Plugin
             </button>
             <button
-              onClick={() => { setShowGithubPanel(true); setGithubError(''); setGithubSuccess(null) }}
+              onClick={() => openGithubImport('gsap')}
+              className="h-9 px-4 border border-ink/70 rounded-md font-hand text-sm flex items-center gap-1.5 hover:bg-paper-2 transition-colors"
+              title="greensock/gsap-skills"
+            >
+              <Github className="w-4 h-4" />
+              GSAP
+            </button>
+            <button
+              onClick={() => openGithubImport()}
               className="h-9 px-4 border border-ink/70 rounded-md font-hand text-sm flex items-center gap-1.5 hover:bg-paper-2 transition-colors"
               title="从 GitHub 仓库 URL 拉取技能"
             >
@@ -464,6 +470,19 @@ export default function SkillsMarket() {
                 />
               </label>
               <label className="flex flex-col gap-1">
+                <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">技能指令</span>
+                <textarea
+                  value={draft.systemPrompt}
+                  onChange={(e) => {
+                    setDraft({ ...draft, systemPrompt: e.target.value })
+                    setDraftError('')
+                  }}
+                  rows={5}
+                  placeholder="说明模型应如何工作、输出什么，以及必须遵守的约束"
+                  className="px-3 py-2 border border-ink/40 rounded-md bg-paper outline-none focus:border-ember resize-y"
+                />
+              </label>
+              <label className="flex flex-col gap-1">
                 <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">权限，逗号分隔</span>
                 <input
                   value={draft.perms}
@@ -482,7 +501,7 @@ export default function SkillsMarket() {
               </button>
               <button
                 onClick={handleSaveCustom}
-                disabled={!draft.id.trim() || !draft.name.trim()}
+                disabled={!draft.id.trim() || !draft.name.trim() || !draft.systemPrompt.trim()}
                 className="h-9 px-4 bg-ember text-paper rounded-md font-hand text-sm hover:bg-ember/90 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 创建

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from '../lib/router.jsx'
 import { Search, ChevronRight, Sparkles, Wand2, Plug, BookOpen } from 'lucide-react'
 import { useAppContext } from '../store/AppContext'
 import { listCommands, fuzzySearch } from '../lib/commandRegistry.js'

@@ -5,7 +5,7 @@
  * 「以后别问了」。以前只有一个 env 级开关,用户改不了,且每次都得重新点。
  */
 import { getDb } from '../db.js'
-import { DEFAULT_PERMISSION_MODE, PERMISSION_MODES } from '../utils/approvalPolicy.js'
+import { buildRememberedGrant, DEFAULT_PERMISSION_MODE, PERMISSION_MODES } from '../utils/approvalPolicy.js'
 
 export function getApprovalMode({ userId } = {}) {
   if (!userId) return DEFAULT_PERMISSION_MODE
@@ -30,21 +30,30 @@ export function setApprovalMode({ userId, mode } = {}) {
 export function listRememberedTools({ userId } = {}) {
   if (!userId) return []
   return getDb()
-    .prepare('SELECT tool_name FROM approval_tool_grants WHERE user_id = ? ORDER BY tool_name')
+    .prepare("SELECT tool_name FROM approval_tool_grants WHERE user_id = ? AND command_prefix = '' ORDER BY tool_name")
     .all(userId)
     .map((r) => r.tool_name)
 }
 
+export function listRememberedGrants({ userId } = {}) {
+  if (!userId) return []
+  return getDb()
+    .prepare('SELECT tool_name, command_prefix FROM approval_tool_grants WHERE user_id = ? ORDER BY tool_name, command_prefix')
+    .all(userId)
+    .map((row) => ({ toolName: row.tool_name, commandPrefix: row.command_prefix }))
+}
+
 /** 用户点了「总是允许这个工具」。幂等。 */
-export function rememberTool({ userId, toolName } = {}) {
+export function rememberTool({ userId, toolName, args = {} } = {}) {
   if (!userId) throw new Error('userId 必填')
   const name = String(toolName || '').trim()
+  const grant = buildRememberedGrant(name, args)
   if (!name) throw new Error('toolName 必填')
   getDb().prepare(`
-    INSERT INTO approval_tool_grants (user_id, tool_name, created_at)
-    VALUES (?, ?, ?)
-    ON CONFLICT(user_id, tool_name) DO NOTHING
-  `).run(userId, name, Date.now())
+    INSERT INTO approval_tool_grants (user_id, tool_name, command_prefix, created_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(user_id, tool_name, command_prefix) DO NOTHING
+  `).run(userId, grant.toolName, grant.commandPrefix, Date.now())
   return listRememberedTools({ userId })
 }
 
@@ -68,6 +77,7 @@ export function getApprovalSettings({ userId } = {}) {
   return {
     mode: getApprovalMode({ userId }),
     rememberedTools: listRememberedTools({ userId }),
+    rememberedGrants: listRememberedGrants({ userId }),
     modes: PERMISSION_MODES,
   }
 }

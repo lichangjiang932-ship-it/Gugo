@@ -126,22 +126,28 @@ async function startConnection(server) {
   return { transport, tools, resources, prompts, startedAt: Date.now() }
 }
 
-function registerToolsForConnection(userId, server, conn) {
+function buildRegisteredToolSpec(server, tool) {
   const sn = safeName(server.name)
-  for (const t of conn.tools) {
-    const toolName = `mcp__${sn}__${safeName(t.name)}`
+  const toolName = `mcp__${sn}__${safeName(tool.name)}`
+  return {
+    type: 'function',
+    function: {
+      name: toolName,
+      description: tool.description || `${server.name} - ${tool.name}`,
+      parameters: tool.inputSchema || { type: 'object', properties: {} },
+    },
+  }
+}
+
+function registerToolsForConnection(userId, server, conn) {
+  for (const tool of conn.tools) {
+    const spec = buildRegisteredToolSpec(server, tool)
+    const toolName = spec.function.name
     registerDynamicTool({
       name: toolName,
       origin: 'mcp',
       source: `${userId}:${server.id}`,
-      spec: {
-        type: 'function',
-        function: {
-          name: toolName,
-          description: t.description || `${server.name} - ${t.name}`,
-          parameters: t.inputSchema || { type: 'object', properties: {} },
-        },
-      },
+      spec,
     })
   }
 }
@@ -181,6 +187,32 @@ export async function ensureUserServers(userId) {
     }
   }
   return { connected, errors }
+}
+
+/**
+ * Return only the MCP tool specs owned by this user. The global dynamic
+ * registry exists for the chat catalog, but background jobs must not read it:
+ * another user's connection may have registered a tool with the same name.
+ */
+export async function listUserToolSpecs(userId, { connect = true } = {}) {
+  if (!userId) return { specs: [], errors: [] }
+  const connectionResult = connect
+    ? await ensureUserServers(userId)
+    : { connected: 0, errors: [] }
+  const map = getUserMap(userId)
+  const specsByName = new Map()
+  for (const server of listEnabledServers(userId)) {
+    const conn = map.get(server.id)
+    if (!conn?.transport?.isAlive?.()) continue
+    for (const tool of conn.tools || []) {
+      const spec = buildRegisteredToolSpec(server, tool)
+      specsByName.set(spec.function.name, spec)
+    }
+  }
+  const specs = [...specsByName.values()].sort((a, b) => (
+    a.function.name < b.function.name ? -1 : a.function.name > b.function.name ? 1 : 0
+  ))
+  return { specs, errors: connectionResult.errors || [] }
 }
 
 /**

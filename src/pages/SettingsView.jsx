@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from '../lib/router.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
 import {
   AlertTriangle,
@@ -7,10 +7,10 @@ import {
   BookOpen,
   Check,
   CheckCircle2,
+  Circle,
   Download,
   FileJson,
   HardDrive,
-  Hash,
   History,
   ListChecks,
   MessageSquare,
@@ -33,6 +33,7 @@ import IntegrationsPanel from '../components/IntegrationsPanel.jsx'
 import { ROUTE_READINESS } from '../config/routeReadiness.js'
 import { useAppContext } from '../store/AppContext'
 import { clearPersistedState } from '../store/AppContext.jsx'
+import { THEME_OPTIONS } from '../lib/themeMode.js'
 import { getAccount, getAuthToken, loginWithPassword, recharge, removeAccountPassword, sendLoginCode, setAccountPassword, setAuthToken, verifyLoginCode } from '../lib/accountClient.js'
 import {
   LOGIN_CODE_COUNTDOWN_SECONDS,
@@ -57,6 +58,7 @@ import {
 
 const SETTINGS_NAV = ['功能入口', '模型', '账户', '权限中心', '工具', '集成', '外观', '系统诊断', '数据 & 导出']
 const ACCENT_COLORS = ['#E86A3C', '#2E8FA3', '#A5C97A', '#D4A4FF']
+const THEME_ICONS = { dark: Moon, light: Sun, white: Circle, system: Monitor }
 
 const PERM_ICONS = {
   mic: Mic,
@@ -749,7 +751,6 @@ export default function SettingsView() {
       { path: '/memory', icon: BookOpen, title: t('nav.memory'), desc: '长期记忆、置顶记忆与 Agent 关联。' },
       { path: '/desk', icon: BookOpen, title: t('nav.desk') || '书桌', desc: '随手便笺、灵感、TODO；自动保存、置顶。' },
       { path: '/agents', icon: Users, title: '人物与性格', desc: '集中管理人物、性格提示词、技能和角色卡；聊天主页不再重复显示。' },
-      { path: '/channels', icon: Hash, title: t('nav.channels'), desc: '多 Agent 频道与协作消息流。' },
       { path: '/mcp', icon: Plug, title: t('nav.mcp'), desc: 'MCP 服务、工具、资源和 prompts。' },
       { path: '/history', icon: History, title: t('nav.history'), desc: '运行历史、生成记录和可追溯结果。' },
     ]
@@ -810,42 +811,45 @@ export default function SettingsView() {
         <div>
           <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">PERMISSIONS</span>
           <h1 className="font-hand text-[28px] text-ink mt-1.5">权限中心</h1>
-          <p className="text-sm text-ink-soft mt-1">这些开关只控制本地工作台的授权状态，会保存在浏览器本地。</p>
+          <p className="text-sm text-ink-soft mt-1">{t('settings.permissionsSubtitle')}</p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <Info label="已启用" value={`${enabledPermCount} / ${state.permissions.length}`} />
-          <Info label="保存位置" value="浏览器 localStorage" />
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <Info label={t('settings.workbenchPolicy')} value={`${enabledPermCount} / ${state.permissions.length}`} />
+          <Info label={t('settings.browserAuthorization')} value={t('permissionsDashboard.refresh')} />
+          <Info label={t('settings.dangerousTools')} value={t('permissionsDashboard.serverEnforced')} />
         </div>
 
-        <div className="flex flex-col gap-2">
-          {state.permissions.map((p) => (
-            <div key={p.id} className="p-3 border border-ink/20 rounded-md flex items-center gap-3 hover:border-ink/40 transition-colors">
-              <div className="w-9 h-9 rounded-full bg-paper-2 border border-ink-fade/40 flex items-center justify-center shrink-0">
-                <PermIcon id={p.id} className="w-4 h-4 text-ink-soft" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-sm text-ink truncate">{p.name}</div>
-                <div className="font-mono text-[9px] tracking-wider text-ink-fade">{p.code} · {p.scope}</div>
-              </div>
-              <button
-                onClick={async () => {
-                  if (p.id === 'notify' && !p.enabled && 'Notification' in window) {
-                    const result = await Notification.requestPermission()
-                    if (result !== 'granted') {
-                      return
-                    }
-                  }
-                  dispatch({ type: 'TOGGLE_PERM', payload: p.id })
-                }}
-                className={`relative w-10 h-6 rounded-full border transition-colors ${p.enabled ? 'bg-ember border-ember' : 'bg-paper-2 border-ink-fade/60'}`}
-                aria-label={`${p.enabled ? '关闭' : '开启'}${p.name}`}
-              >
-                <div className={`absolute top-0.5 w-4.5 h-4.5 rounded-full border bg-paper transition-all ${p.enabled ? 'left-[18px] border-ember' : 'left-0.5 border-ink-fade/60'}`} />
-              </button>
-            </div>
-          ))}
+        <div className="p-5 rounded-xl border border-ink/20 bg-gradient-to-br from-paper-2 to-paper flex flex-col md:flex-row md:items-center gap-4">
+          <div className="w-12 h-12 rounded-xl bg-ember-soft border border-ember/30 flex items-center justify-center shrink-0">
+            <ShieldCheck className="w-5 h-5 text-ember" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h2 className="text-base font-medium text-ink">{t('settings.permissionCardTitle')}</h2>
+            <p className="text-sm text-ink-soft mt-1 leading-relaxed">{t('settings.permissionCardDescription')}</p>
+          </div>
+          <button type="button" onClick={() => navigate('/permissions')} className="h-10 px-4 rounded-md bg-ink text-paper text-sm hover:bg-ink-soft shrink-0">
+            {t('settings.openPermissions')}
+          </button>
         </div>
+
+        <SettingsGroup title={t('settings.policySummary')}>
+          <p className="text-xs text-ink-fade">{t('settings.policySummaryHint')}</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            {state.permissions.map((p) => (
+              <div key={p.id} className="p-3 border border-ink-fade/30 rounded-md flex items-center gap-3 bg-paper">
+                <div className="w-8 h-8 rounded-md bg-paper-2 border border-ink-fade/40 flex items-center justify-center shrink-0">
+                  <PermIcon id={p.id} className="w-4 h-4 text-ink-soft" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm text-ink truncate">{p.name}</div>
+                  <div className="font-mono text-[9px] text-ink-fade">{p.code}</div>
+                </div>
+                <span className={`text-xs ${p.enabled ? 'text-emerald-600' : 'text-ink-fade'}`}>{p.enabled ? t('settings.policyAllowed') : t('settings.policyBlocked')}</span>
+              </div>
+            ))}
+          </div>
+        </SettingsGroup>
       </section>
     )
   }
@@ -856,24 +860,45 @@ export default function SettingsView() {
         <div>
           <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">APPEARANCE</span>
           <h1 className="font-hand text-[28px] text-ink mt-1.5">外观</h1>
+          <p className="text-sm text-ink-soft mt-1">{t('settings.appearanceSubtitle')}</p>
+        </div>
+
+        <div className="overflow-hidden rounded-2xl border border-ink/20 bg-paper shadow-sm">
+          <div className="h-9 px-4 flex items-center gap-1.5 border-b border-ink-fade/30 bg-paper-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-ember" />
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
+            <span className="ml-3 font-mono text-[9px] tracking-[0.18em] text-ink-fade uppercase">{t('settings.appearancePreview')}</span>
+          </div>
+          <div className="grid md:grid-cols-[150px_1fr] min-h-44">
+            <div className="hidden md:flex p-3 border-r border-ink-fade/30 bg-paper-2 flex-col gap-2">
+              <span className="h-7 rounded-md bg-ember text-paper text-xs flex items-center px-2">新对话</span>
+              <span className="h-6 rounded-md border border-ink-fade/30" />
+              <span className="h-6 rounded-md border border-ink-fade/20 w-4/5" />
+            </div>
+            <div className="p-5 flex flex-col gap-3 justify-center">
+              <div className="max-w-md p-3 rounded-xl rounded-tl-sm border border-ink/10 bg-paper-2 text-sm text-ink">{t('settings.appearancePreviewAssistant')}</div>
+              <div className="max-w-xs self-end p-3 rounded-xl rounded-tr-sm border border-ember/20 bg-ember-soft text-sm text-ink">{t('settings.appearancePreviewUser')}</div>
+              <div className="flex gap-2"><span className="h-8 px-3 rounded-md bg-ember text-paper text-xs inline-flex items-center">{t('settings.primaryAction')}</span><span className="h-8 px-3 rounded-md border border-ink-fade/50 text-xs text-ink-soft inline-flex items-center">{t('settings.secondaryAction')}</span></div>
+            </div>
+          </div>
         </div>
 
         <SettingsGroup title="主题">
           <div className="flex gap-2 flex-wrap">
-            {[
-              { key: 'dark', label: '深色', icon: Moon },
-              { key: 'light', label: '浅色', icon: Sun },
-              { key: 'system', label: '跟随系统', icon: Monitor },
-            ].map(({ key, label, icon: Icon }) => (
+            {THEME_OPTIONS.map(({ key, labelKey }) => {
+              const Icon = THEME_ICONS[key]
+              return (
               <button
                 key={key}
                 onClick={() => dispatch({ type: 'SET_THEME', payload: key })}
                 className={`h-9 px-3 rounded-md text-sm border transition-colors flex items-center gap-1.5 ${state.theme === key ? 'bg-ink text-paper border-ink' : 'border-ink-fade/60 text-ink-soft hover:border-ink-fade'}`}
               >
                 <Icon className="w-3.5 h-3.5" />
-                {label}
+                {t(labelKey)}
               </button>
-            ))}
+              )
+            })}
           </div>
         </SettingsGroup>
 

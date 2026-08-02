@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
 
 import {
   buildOpenAICompatibleRequest,
@@ -17,7 +18,62 @@ import {
   resetUsageStats,
   resolveModelConfigForModel,
   supportsStreamUsage,
+  streamOpenAICompatible,
 } from '../server/adapters/modelProxy.js'
+import { bindSseClientDisconnect } from '../server/adapters/sseLifecycle.js'
+
+test('SSE 只在真正断连时取消上游,正常 req.close 不误杀本地推理', () => {
+  const req = new EventEmitter()
+  const res = new EventEmitter()
+  res.writableEnded = false
+  let disconnects = 0
+  const dispose = bindSseClientDisconnect(req, res, () => { disconnects += 1 })
+
+  req.emit('close')
+  assert.equal(disconnects, 0, '正常读完请求体不能被当成客户端断连')
+  req.emit('aborted')
+  assert.equal(disconnects, 1)
+  res.emit('close')
+  assert.equal(disconnects, 1, '同一次断连只能取消一次')
+  dispose()
+})
+
+test('响应正常 end 后的 close 不取消已完成请求', () => {
+  const req = new EventEmitter()
+  const res = new EventEmitter()
+  res.writableEnded = true
+  let disconnects = 0
+  const dispose = bindSseClientDisconnect(req, res, () => { disconnects += 1 })
+  res.emit('close')
+  assert.equal(disconnects, 0)
+  dispose()
+})
+
+test('streamed tool inputs become ready before the canonical tool_calls batch', async () => {
+  const encoder = new TextEncoder()
+  const frames = [
+    { choices: [{ delta: { tool_calls: [{ index: 0, id: 'read-1', function: { name: 'read_file', arguments: '{"path":' } }] } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"README.md"}' } }] } }] },
+    { choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
+  ]
+  const body = new ReadableStream({
+    start(controller) {
+      for (const frame of frames) controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`))
+      controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+      controller.close()
+    },
+  })
+  const events = []
+  for await (const event of streamOpenAICompatible({
+    config: { baseUrl: 'https://example.test/v1', apiKey: 'x', modelName: 'test' },
+    messages: [{ role: 'user', content: 'read' }],
+    fetchImpl: async () => new Response(body, { status: 200 }),
+  })) events.push(event)
+
+  assert.deepEqual(events.map((event) => event.type), ['tool_call_ready', 'tool_calls'])
+  assert.deepEqual(JSON.parse(events[0].toolCall.arguments), { path: 'README.md' })
+  assert.equal(events[1].toolCalls[0].id, 'read-1')
+})
 
 test('normalizes OpenAI compatible base URLs to chat completions endpoint', () => {
   assert.equal(
@@ -186,7 +242,8 @@ test('resolves selected models to their provider endpoint and API key', () => {
     modelName: 'mimo-v2.5-pro',
     apiKey: 'sk-mimo',
     temperature: 0.7,
-    maxTokens: 4096,
+    // 0 = 不限制输出长度（不发 max_tokens 字段），见 parseMaxTokens
+    maxTokens: 0,
   })
 
   assert.deepEqual(resolveModelConfigForModel({ modelName: 'deepseek-v4-flash', env }), {
@@ -196,7 +253,8 @@ test('resolves selected models to their provider endpoint and API key', () => {
     modelName: 'deepseek-v4-flash',
     apiKey: 'sk-deepseek',
     temperature: 0.7,
-    maxTokens: 4096,
+    // 0 = 不限制输出长度（不发 max_tokens 字段），见 parseMaxTokens
+    maxTokens: 0,
   })
 })
 
@@ -512,6 +570,33 @@ test('思考内容不混进正文', () => {
   const text = delta.content || ''
   assert.equal(reasoning, '思考中')
   assert.equal(text, '', '思考阶段不该产生正文')
+})
+
+test('★ 思考超过硬顶必须取消上游并抛 REASONING_RUNAWAY', async () => {
+  const encoder = new TextEncoder()
+  let cancelled = false
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+        choices: [{ delta: { reasoning_content: '0123456789' } }],
+      })}\n\n`))
+      // 不主动 close：只有实现真的 cancel reader，测试才会正常退出。
+    },
+    cancel() { cancelled = true },
+  })
+
+  await assert.rejects(
+    async () => {
+      for await (const event of streamOpenAICompatible({
+        config: { baseUrl: 'https://example.test/v1', apiKey: 'x', modelName: 'thinking-model' },
+        messages: [{ role: 'user', content: 'hi' }],
+        fetchImpl: async () => new Response(body, { status: 200 }),
+        env: { MODEL_REASONING_MAX_CHARS: '5' },
+      })) { void event }
+    },
+    (error) => error?.code === 'REASONING_RUNAWAY',
+  )
+  assert.equal(cancelled, true, '必须取消响应流，不能让上游在后台继续计费')
 })
 
 // ───────────── 连续 system 消息会打挂 LM Studio ─────────────

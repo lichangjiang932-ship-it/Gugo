@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { isValidElement, memo, useState } from 'react'
+import { Check, Copy } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import rehypeHighlight from 'rehype-highlight'
-import { Check, Copy } from 'lucide-react'
 import FullscreenMediaModal from './FullscreenMediaModal.jsx'
+import { useT } from '../i18n/I18nProvider.jsx'
 
 /**
  * MarkdownRenderer —— 安全渲染 Markdown + 代码高亮
@@ -28,52 +29,53 @@ const sanitizeSchema = {
   },
 }
 
-// 从 react-markdown 传进来的 children（字符串 / 元素 / 数组嵌套）里递归抽出纯文本，
-// 供代码块「复制」按钮使用。highlight.js 会把代码拆成一堆 <span>，所以要递归。
-function extractText(node) {
-  if (node == null || node === false) return ''
+function nodeText(node) {
   if (typeof node === 'string' || typeof node === 'number') return String(node)
-  if (Array.isArray(node)) return node.map(extractText).join('')
-  if (typeof node === 'object' && node.props) return extractText(node.props.children)
+  if (Array.isArray(node)) return node.map(nodeText).join('')
+  if (isValidElement(node)) return nodeText(node.props.children)
   return ''
 }
 
-// 代码块：在 <pre> 外层包一层 relative 容器，右上角常驻一键复制按钮。
-// 常驻（非 hover-only）以保证触屏可达；hover/focus 时加深以示可点。
-function CodeBlock({ children, ...props }) {
+function CodeBlock({ children, streaming = false }) {
+  const { t } = useT()
   const [copied, setCopied] = useState(false)
-  const handleCopy = () => {
-    const text = extractText(children)
-    if (!navigator.clipboard?.writeText) return
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true)
-      window.setTimeout(() => setCopied(false), 1600)
-    }).catch(() => {})
+  const child = Array.isArray(children) ? children[0] : children
+  const className = isValidElement(child) ? child.props.className || '' : ''
+  const language = className.match(/language-([\w-]+)/)?.[1] || 'text'
+  const source = nodeText(child).replace(/\n$/, '')
+
+  const copy = async () => {
+    await navigator.clipboard?.writeText(source)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1600)
   }
+
   return (
-    <div className="relative group/code my-2">
-      <button
-        type="button"
-        onClick={handleCopy}
-        aria-label={copied ? '已复制' : '复制代码'}
-        title={copied ? '已复制' : '复制代码'}
-        className="absolute top-2 right-2 z-10 inline-flex items-center gap-1 h-6 px-2 rounded border border-ink-fade/40 bg-paper/90 text-[11px] text-ink-soft opacity-70 hover:opacity-100 hover:text-ink hover:border-ink-fade focus-visible:opacity-100 transition-opacity"
-      >
-        {copied ? <Check className="w-3 h-3 text-ember" /> : <Copy className="w-3 h-3" />}
-        {copied ? '已复制' : '复制'}
-      </button>
-      <pre className="bg-paper-2 border border-ink-fade/30 rounded-md p-3 pr-14 overflow-x-auto text-sm" {...props}>
-        {children}
-      </pre>
+    <div className="chat-code-block not-prose my-2.5 overflow-hidden rounded-md border border-ink/15 bg-paper-2">
+      <div className="flex h-7 items-center justify-between border-b border-ink/10 px-2.5">
+        <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-fade">{language}</span>
+        {!streaming && (
+          <button
+            type="button"
+            onClick={copy}
+            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-ink-fade transition-colors hover:bg-paper hover:text-ink"
+            aria-label={t('chatMessages.copyContent')}
+          >
+            {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
+            {t('chatMessages.copy')}
+          </button>
+        )}
+      </div>
+      <pre className="m-0 overflow-x-auto p-3 text-[12px] leading-5">{children}</pre>
     </div>
   )
 }
 
-export default function MarkdownRenderer({ children, className = '' }) {
+function MarkdownRenderer({ children, className = '', streaming = false }) {
   const [fullscreen, setFullscreen] = useState(null)
 
   return (
-    <div className={`prose prose-sm max-w-none ${className}`}>
+    <div className={`chat-markdown prose prose-sm max-w-none ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[
@@ -87,15 +89,13 @@ export default function MarkdownRenderer({ children, className = '' }) {
               {children}
             </a>
           ),
-          // 代码块容器（含右上角一键复制）
-          pre: ({ children, ...props }) => (
-            <CodeBlock {...props}>{children}</CodeBlock>
-          ),
+          // 代码块容器
+          pre: ({ children }) => <CodeBlock streaming={streaming}>{children}</CodeBlock>,
           // 内联代码
-          code: ({ inline, className, children, ...props }) => {
-            if (inline) {
+          code: ({ className, children, ...props }) => {
+            if (!className) {
               return (
-                <code className="bg-paper-2 px-1 py-0.5 rounded text-xs font-mono text-ember" {...props}>
+                <code className="rounded-md border border-ink/10 bg-paper-2 px-1.5 py-0.5 text-[0.86em] font-mono text-ember" {...props}>
                   {children}
                 </code>
               )
@@ -118,23 +118,23 @@ export default function MarkdownRenderer({ children, className = '' }) {
           ),
           // 引用块
           blockquote: ({ children, ...props }) => (
-            <blockquote className="border-l-2 border-ember pl-3 py-1 my-2 text-ink-soft italic" {...props}>
+            <blockquote className="my-2.5 rounded-r border-l-2 border-ember bg-ember-soft/30 py-1.5 pl-3 pr-2.5 text-ink-soft" {...props}>
               {children}
             </blockquote>
           ),
           // 表格
           table: ({ children, ...props }) => (
-            <table className="w-full text-sm border-collapse my-2" {...props}>
-              {children}
-            </table>
+            <div className="my-2.5 overflow-x-auto rounded-md border border-ink/15">
+              <table className="m-0 w-full border-collapse text-sm" {...props}>{children}</table>
+            </div>
           ),
           th: ({ children, ...props }) => (
-            <th className="border border-ink-fade/30 px-2 py-1 bg-paper-2 text-left font-semibold" {...props}>
+            <th className="border-b border-r border-ink/10 bg-paper-2 px-3 py-2 text-left font-semibold last:border-r-0" {...props}>
               {children}
             </th>
           ),
           td: ({ children, ...props }) => (
-            <td className="border border-ink-fade/30 px-2 py-1" {...props}>
+            <td className="border-b border-r border-ink/10 px-3 py-2 align-top last:border-r-0" {...props}>
               {children}
             </td>
           ),
@@ -152,3 +152,5 @@ export default function MarkdownRenderer({ children, className = '' }) {
     </div>
   )
 }
+
+export default memo(MarkdownRenderer)

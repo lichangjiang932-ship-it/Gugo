@@ -15,8 +15,9 @@ import {
   parseMarkdownDocument,
   parseSpreadsheetRows,
 } from '../../lib/officeExport.js'
-import { buildHtmlDocument, isHtmlDeckLike } from '../../lib/artifactPreview.js'
+import { buildHtmlDocument, enhanceHtmlPreviewReadability, isHtmlDeckLike } from '../../lib/artifactPreview.js'
 import { downloadHtmlDeckAsPptx } from '../../lib/htmlSlidesToPptx.js'
+import { useT } from '../../i18n/I18nProvider.jsx'
 
 function ArtifactIcon({ type }) {
   if (['html', 'html_multi', 'mermaid', 'chart', 'svg'].includes(type)) return <Globe className="w-4 h-4" />
@@ -27,6 +28,7 @@ function ArtifactIcon({ type }) {
 }
 
 function HtmlPreview({ html }) {
+  const { t } = useT()
   const srcDoc = useMemo(() => buildHtmlDocument(html), [html])
   const iframeRef = useRef(null)
   const isDeck = useMemo(() => isHtmlDeckLike(html), [html])
@@ -37,7 +39,7 @@ function HtmlPreview({ html }) {
     <div className="relative w-full h-full">
       <iframe
         ref={iframeRef}
-        title="HTML 预览"
+        title={t('chatPreview.htmlTitle')}
         // SECURITY: 只给 allow-scripts + allow-forms。绝不加 allow-same-origin —
         // srcdoc 文档默认是 opaque origin,加上后会让脚本访问父页 storage/cookie + 逃逸沙箱。
         // 工件页面如需调用外部 API,通过 postMessage 让父页代理。
@@ -53,17 +55,17 @@ function HtmlPreview({ html }) {
             type="button"
             onClick={() => sendDeckCommand('yma-deck-prev')}
             className="h-7 px-2 rounded-full text-xs text-ink-soft hover:bg-paper-2 hover:text-ember transition-colors"
-            title="上一页"
+            title={t('chatPreview.previousPage')}
           >
-            上一页
+            {t('chatPreview.previousPage')}
           </button>
           <button
             type="button"
             onClick={() => sendDeckCommand('yma-deck-next')}
             className="h-7 px-2 rounded-full text-xs text-ink-soft hover:bg-paper-2 hover:text-ember transition-colors"
-            title="下一页"
+            title={t('chatPreview.nextPage')}
           >
-            下一页
+            {t('chatPreview.nextPage')}
           </button>
         </div>
       )}
@@ -72,10 +74,11 @@ function HtmlPreview({ html }) {
 }
 
 function PptxPreview({ content }) {
+  const { t } = useT()
   const srcDoc = useMemo(() => buildHtmlPreview(content), [content])
   return (
     <iframe
-      title="PPT 预览"
+      title={t('chatPreview.pptTitle')}
       srcDoc={srcDoc}
       className="w-full h-full border-0"
       sandbox="allow-scripts allow-forms"
@@ -174,16 +177,25 @@ function SourceView({ content }) {
 //   把模型生成的单文件 React 组件放进 iframe,加载 React 18 + babel-standalone
 //   (内置 cdn,sandbox 仍是 allow-scripts only,不带 allow-same-origin),
 //   编译后挂载到 #root.编译错误捕获后写到页面顶部红条,方便用户自己 fix prompt.
-function buildReactSandboxDoc(code) {
+function escapeHtml(value) {
+  return String(value || '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+}
+
+function buildReactSandboxDoc(code, labels) {
   const safe = String(code || '')
     // 防止源里有 </script> 提前结束
     .replace(/<\/script>/gi, '<\\/script>')
-  return `<!doctype html>
-<html lang="zh-CN">
+  const safeLabels = JSON.stringify(labels).replaceAll('<', '\\u003c')
+  return enhanceHtmlPreviewReadability(`<!doctype html>
+<html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>React 沙箱</title>
+<title>${escapeHtml(labels.title)}</title>
 <script src="/sandbox/react.umd.js"></script>
 <script src="/sandbox/react-dom.umd.js"></script>
 <script src="/sandbox/babel.standalone.js"></script>
@@ -196,19 +208,20 @@ function buildReactSandboxDoc(code) {
 </head>
 <body>
 <div id="__err"></div>
-<div id="root"><div id="__loading">编译中…</div></div>
+<div id="root"><div id="__loading">${escapeHtml(labels.loading)}</div></div>
 <script id="__usercode" type="text/babel" data-presets="react,env" data-type="module">
 ${safe}
 </script>
 <script>
 (function(){
+  var labels = ${safeLabels};
   function showErr(msg){
     var box = document.getElementById('__err');
     box.textContent = String(msg);
     box.style.display = 'block';
   }
-  window.addEventListener('error', function(e){ showErr('运行错误: ' + (e?.error?.stack || e?.message || e)); });
-  window.addEventListener('unhandledrejection', function(e){ showErr('Promise 错误: ' + (e?.reason?.stack || e?.reason || e)); });
+  window.addEventListener('error', function(e){ showErr(labels.runtimeError + (e?.error?.stack || e?.message || e)); });
+  window.addEventListener('unhandledrejection', function(e){ showErr(labels.promiseError + (e?.reason?.stack || e?.reason || e)); });
 
   function boot(){
     try {
@@ -229,11 +242,11 @@ ${safe}
       var __default;
       // eslint-disable-next-line no-eval
       eval(compiled + '\\n;');
-      if (!__default) { showErr('未找到 export default 组件'); return; }
+      if (!__default) { showErr(labels.missingDefault); return; }
       var root = ReactDOM.createRoot(document.getElementById('root'));
       root.render(React.createElement(__default));
     } catch (err) {
-      showErr('编译/执行失败: ' + (err && err.stack ? err.stack : err));
+      showErr(labels.compileFailed + (err && err.stack ? err.stack : err));
     }
   }
   if (window.Babel) boot();
@@ -242,25 +255,35 @@ ${safe}
     var timer = setInterval(function(){
       t += 50;
       if (window.Babel) { clearInterval(timer); boot(); }
-      else if (t > 8000) { clearInterval(timer); showErr('依赖加载超时,请检查网络'); }
+      else if (t > 8000) { clearInterval(timer); showErr(labels.dependencyTimeout); }
     }, 50);
   }
 })();
 </script>
 </body>
-</html>`
+</html>`)
 }
 
 function ReactPreview({ code }) {
+  const { t } = useT()
   const [reloadTick, setReloadTick] = useState(0)
+  const labels = useMemo(() => ({
+    title: t('chatPreview.reactTitle'),
+    loading: t('chatPreview.reactLoading'),
+    runtimeError: t('chatPreview.runtimeError'),
+    promiseError: t('chatPreview.promiseError'),
+    missingDefault: t('chatPreview.missingDefault'),
+    compileFailed: t('chatPreview.compileFailed'),
+    dependencyTimeout: t('chatPreview.dependencyTimeout'),
+  }), [t])
   // reloadTick 是故意的依赖:用户点刷新时增 1,强制 useMemo 重算,iframe 重渲染
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const srcDoc = useMemo(() => buildReactSandboxDoc(code), [code, reloadTick])
+  const srcDoc = useMemo(() => buildReactSandboxDoc(code, labels), [code, labels, reloadTick])
   return (
     <div className="relative w-full h-full">
       <iframe
         key={reloadTick}
-        title="React 沙箱"
+        title={t('chatPreview.reactTitle')}
         srcDoc={srcDoc}
         // SECURITY: 只 allow-scripts + allow-forms,不开 allow-same-origin —
         //   组件无法访问父页 storage/cookie,iframe 沙箱视为 opaque origin.
@@ -271,7 +294,7 @@ function ReactPreview({ code }) {
       />
       <button
         onClick={() => setReloadTick((k) => k + 1)}
-        title="重新加载沙箱(清状态)"
+        title={t('chatPreview.reloadSandbox')}
         className="absolute top-2 right-2 w-8 h-8 rounded-md bg-paper-2/90 border border-ink-fade/40 text-ink-fade hover:text-ember hover:border-ember/60 flex items-center justify-center transition-colors backdrop-blur"
       >
         <RefreshCw className="w-3.5 h-3.5" />
@@ -281,6 +304,7 @@ function ReactPreview({ code }) {
 }
 
 export default function RightPreviewPane({ artifact, onClose, onMessage }) {
+  const { t } = useT()
   const [view, setView] = useState('preview') // 'preview' | 'source'
   const [downloading, setDownloading] = useState(false)
   const [premiumExporting, setPremiumExporting] = useState(false)
@@ -398,18 +422,18 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
             <button
               type="button"
               onClick={onClose}
-              aria-label="关闭预览"
+              aria-label={t('chatPreview.close')}
               className="absolute right-4 top-4 w-10 h-10 rounded-md border border-transparent bg-paper/80 hover:bg-ember/10 hover:text-ember hover:border-ember/30 transition-colors flex items-center justify-center text-ink-soft focus:outline-none focus:ring-2 focus:ring-ember/40"
-              title="关闭预览"
+              title={t('chatPreview.close')}
             >
               <X className="w-4 h-4" />
             </button>
           )}
           <FileText className="w-10 h-10 opacity-30" />
-          <p className="text-sm">暂不支持预览</p>
-          <p className="text-xs text-ink-fade/70 max-w-[200px] text-center">你可以下载原文件或切换源码视图查看</p>
+          <p className="text-sm">{t('chatPreview.unsupported')}</p>
+          <p className="text-xs text-ink-fade/70 max-w-[200px] text-center">{t('chatPreview.unsupportedHint')}</p>
           {onClose && (
-            <button onClick={onClose} className="mt-2 h-8 px-4 border border-ink-fade/30 rounded-md text-xs hover:border-ember/50 transition-colors">关闭面板</button>
+            <button onClick={onClose} className="mt-2 h-8 px-4 border border-ink-fade/30 rounded-md text-xs hover:border-ember/50 transition-colors">{t('chatPreview.closePanel')}</button>
           )}
         </motion.aside>
       </AnimatePresence>
@@ -480,7 +504,7 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
       }
     } catch (err) {
       // ★ #26: 统一通过外层 toast 通道,避免阻塞式 alert
-      onMessage?.(err.message || '导出失败')
+      onMessage?.(err.message || t('chatPreview.exportFailed'))
     } finally {
       setDownloading(false)
       setPremiumProgress('')
@@ -498,7 +522,7 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
         filename: buildPresentationFilename(title).replace('.pptx', '_editable.pptx'),
       })
     } catch (err) {
-      onMessage?.(err.message || '编辑版导出失败')
+      onMessage?.(err.message || t('chatPreview.editableExportFailed'))
     } finally {
       setPremiumExporting(false)
       setPremiumProgress('')
@@ -518,7 +542,7 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
         onProgress: (current, total) => setPremiumProgress(`${current}/${total}`),
       })
     } catch (err) {
-      onMessage?.(err.message || '转 PPTX 失败')
+      onMessage?.(err.message || t('chatPreview.pptxConvertFailed'))
     } finally {
       setPremiumExporting(false)
       setPremiumProgress('')
@@ -548,7 +572,7 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
         exit={{ x: 40, opacity: 0 }}
         transition={{ duration: 0.22, ease: 'easeOut' }}
         style={maximized ? undefined : { width: `${paneWidth}px` }}
-        className={`${
+        className={`chat-preview-pane ${
           maximized ? 'fixed inset-0 z-40 w-screen' : ''
         } bg-paper-2 flex flex-col border-l border-dashed border-ink-fade/50 overflow-hidden relative z-40`}
       >
@@ -557,7 +581,7 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
           <div
             onMouseDown={startResize}
             onDoubleClick={() => setPaneWidth(520)}
-            title="拖动调节宽度,双击重置"
+            title={t('chatPreview.resize')}
             className="absolute top-0 left-0 bottom-0 w-1.5 cursor-col-resize z-10 hover:bg-ember/30 transition-colors"
             aria-hidden="true"
           />
@@ -581,17 +605,17 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
           <div className="flex items-center gap-1 shrink-0">
             <button
               onClick={() => setMaximized((v) => !v)}
-              className="w-8 h-8 rounded-md hover:bg-paper-2 transition-colors flex items-center justify-center text-ink-fade hover:text-ink"
-              title={maximized ? '还原' : '最大化'}
+              className="chat-preview-maximize-toggle w-8 h-8 rounded-md hover:bg-paper-2 transition-colors flex items-center justify-center text-ink-fade hover:text-ink"
+              title={t(maximized ? 'chatPreview.restore' : 'chatPreview.maximize')}
             >
               {maximized ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
             </button>
             <button
               type="button"
               onClick={onClose}
-              aria-label="关闭预览"
+              aria-label={t('chatPreview.close')}
               className="w-10 h-10 rounded-md border border-transparent bg-paper/80 hover:bg-ember/10 hover:text-ember hover:border-ember/30 transition-colors flex items-center justify-center text-ink-soft focus:outline-none focus:ring-2 focus:ring-ember/40"
-              title="关闭预览"
+              title={t('chatPreview.close')}
             >
               <X className="w-4 h-4" />
             </button>
@@ -599,7 +623,7 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
         </div>
 
         {/* Tab bar */}
-        <div className="flex items-center justify-between gap-2 px-4 py-2 border-b border-ink-fade/20 bg-paper-2">
+        <div className="chat-preview-toolbar flex items-center justify-between gap-2 px-4 py-2 border-b border-ink-fade/20 bg-paper-2">
           <div className="inline-flex border border-ink-fade/40 rounded-md overflow-hidden text-[11px]">
             <button
               onClick={() => setView('preview')}
@@ -608,7 +632,7 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
               }`}
             >
               <Eye className="w-3 h-3" />
-              预览
+              {t('chatPreview.preview')}
             </button>
             <button
               onClick={() => setView('source')}
@@ -617,27 +641,27 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
               }`}
             >
               <Code className="w-3 h-3" />
-              源
+              {t('chatPreview.source')}
             </button>
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="chat-preview-toolbar-actions flex items-center gap-1.5">
             <button
               onClick={() => navigator.clipboard?.writeText(content)}
               className="h-7 px-2 rounded-md border border-ink-fade/40 text-ink-soft hover:bg-paper transition-colors inline-flex items-center gap-1 text-[11px]"
-              title="复制源内容"
+              title={t('chatPreview.copySource')}
             >
               <Copy className="w-3 h-3" />
-              复制
+              {t('chatPreview.copy')}
             </button>
             {preview.type === 'pptx' && (
               <button
                 onClick={handleEditablePptxDownload}
                 disabled={premiumExporting || downloading}
                 className="h-7 px-2 rounded-md border border-ink-fade/40 text-ink-soft hover:bg-paper hover:text-ember transition-colors inline-flex items-center gap-1 text-[11px] disabled:opacity-50"
-                title="导出轻量可编辑版（视觉效果低于默认高清版）"
+                title={t('chatPreview.editableTitle')}
               >
                 <Sparkles className="w-3 h-3" />
-                {premiumExporting ? `导出 ${premiumProgress}` : '编辑版'}
+                {premiumExporting ? t('chatPreview.exporting', { progress: premiumProgress }) : t('chatPreview.editable')}
               </button>
             )}
             {preview.type === 'html' && (
@@ -645,20 +669,22 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
                 onClick={handleHtmlToPptx}
                 disabled={premiumExporting || downloading}
                 className="h-7 px-2 rounded-md border border-ink-fade/40 text-ink-soft hover:bg-paper hover:text-ember transition-colors inline-flex items-center gap-1 text-[11px] disabled:opacity-50"
-                title="把 HTML 幻灯片转成可编辑 PPTX（每页截图 + 透明文本框）"
+                title={t('chatPreview.convertTitle')}
               >
                 <Presentation className="w-3 h-3" />
-                {premiumExporting ? `转换 ${premiumProgress}` : '转 PPTX'}
+                {premiumExporting ? t('chatPreview.converting', { progress: premiumProgress }) : t('chatPreview.convertPptx')}
               </button>
             )}
             <button
               onClick={handleDownload}
               disabled={downloading || premiumExporting}
               className="h-7 px-2.5 rounded-md bg-ember text-paper hover:bg-ember/90 transition-colors inline-flex items-center gap-1 text-[11px] disabled:opacity-50"
-              title={`下载 ${preview.filename}`}
+              title={t('chatPreview.download', { filename: preview.filename })}
             >
               <Download className="w-3 h-3" />
-              {downloading ? (premiumProgress ? `生成 ${premiumProgress}` : '生成中') : '下载高清'}
+              {downloading
+                ? (premiumProgress ? t('chatPreview.generating', { progress: premiumProgress }) : t('chatPreview.generatingShort'))
+                : t('chatPreview.downloadHd')}
             </button>
           </div>
         </div>

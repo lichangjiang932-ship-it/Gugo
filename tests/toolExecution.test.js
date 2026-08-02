@@ -1,8 +1,30 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { executeToolCall } from '../src/lib/tools/index.js'
+import { buildToolSpecs, executeToolCall, getBuiltinToolRuntimeStatus, listToolNames } from '../src/lib/tools/index.js'
 import { TOKEN_KEY } from '../src/lib/accountClient.js'
+
+test('所有向模型公开的内置工具都有真实执行器', () => {
+  const status = getBuiltinToolRuntimeStatus()
+  assert.deepEqual(status.missingExecutors, [])
+  assert.equal(buildToolSpecs(listToolNames()).length, listToolNames().length)
+})
+
+test('file artifact executors require an explicit per-turn grant', async () => {
+  const denied = await executeToolCall({
+    name: 'create_pptx',
+    arguments: JSON.stringify({ title: 'Unexpected', markdown: '# One' }),
+  })
+  assert.equal(denied.ok, false)
+  assert.equal(JSON.parse(denied.content).code, 'artifact_tool_not_requested')
+
+  const allowed = await executeToolCall({
+    name: 'create_pptx',
+    arguments: JSON.stringify({ title: 'Requested', markdown: '# One' }),
+  }, { allowedArtifactTools: new Set(['create_pptx']) })
+  assert.equal(allowed.ok, true)
+  assert.equal(allowed.artifact.type, 'pptx')
+})
 
 test('executeToolCall preserves backend tool billing for chat-level accounting', async () => {
   const originalFetch = globalThis.fetch
@@ -65,6 +87,23 @@ test('executeToolCall routes workspace read_file through authenticated fs endpoi
   } finally {
     globalThis.fetch = oldFetch
     globalThis.window = oldWindow
+  }
+})
+
+test('executeToolCall rejects malformed JSON before any backend call', async () => {
+  const originalFetch = globalThis.fetch
+  let fetchCalls = 0
+  globalThis.fetch = async () => {
+    fetchCalls += 1
+    throw new Error('should not fetch')
+  }
+  try {
+    const result = await executeToolCall({ name: 'web_search', arguments: '{"query":' })
+    assert.equal(result.ok, false)
+    assert.equal(JSON.parse(result.content).code, 'invalid_tool_arguments')
+    assert.equal(fetchCalls, 0)
+  } finally {
+    globalThis.fetch = originalFetch
   }
 })
 

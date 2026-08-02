@@ -46,6 +46,21 @@ function badReq(message, statusCode = 400) {
   return e
 }
 
+function mapWriteError(error, fullPath) {
+  if (!['EACCES', 'EPERM', 'EROFS'].includes(error?.code)) return error
+  const mapped = badReq(
+    `宿主文件系统拒绝写入（${error.code}）：${fullPath}。`
+      + '这不是文件名或子目录问题，在同一授权根目录下改试 src、.tmp、output 不会解决。',
+    403,
+  )
+  mapped.code = 'FILESYSTEM_WRITE_DENIED'
+  mapped.path = fullPath
+  mapped.retryable = false
+  mapped.hint = '请确认该目录已授予“读写”权限，并检查 Windows 文件夹 ACL、只读属性或安全软件拦截；权限变化后再重试一次。'
+  mapped.cause = error
+  return mapped
+}
+
 // per-user 工具 gate(功能补全):用户在权限中心关掉某工具后,后端入口也拒绝执行,
 // 不只靠前端不暴露(前端可被绕过)。userId 为空(系统/内部调用)不 gate。
 function assertToolPermitted(userId, toolName) {
@@ -59,6 +74,16 @@ function resolveForFileTool(rawPath, { userId = null, write = false, allowMissin
     throw badReq('WORKSPACE_FS_ENABLED=1 未启用,无法访问文件', 403)
   }
   return resolveAuthorizedLocalPath({ userId, rawPath, write, allowMissing })
+}
+
+export function resolveForShellCwd(rawPath, { userId = null } = {}) {
+  const requestedPath = rawPath == null || rawPath === '' ? getWorkspaceRoot() : rawPath
+  return resolveAuthorizedLocalPath({
+    userId,
+    rawPath: requestedPath,
+    write: false,
+    allowWorkspace: true,
+  })
 }
 
 // 把任意 path 字符串解析到 WORKSPACE_ROOT 下的绝对路径.防 traversal + symlink 逃逸.
@@ -92,11 +117,6 @@ export function resolveInWorkspace(rawPath, { allowMissing = false } = {}) {
     throw badReq('路径越出 workspace', 403)
   }
   return real
-}
-
-function toRelative(absPath) {
-  const rel = path.relative(getWorkspaceRoot(), absPath)
-  return rel.split(path.sep).join('/')
 }
 
 /* ── read_file ─────────────────────────────────────────────── */
@@ -177,8 +197,12 @@ export async function writeFileTool({ path: rawPath, content, userId = null }) {
   }
   const resolved = resolveForFileTool(rawPath, { userId, write: true, allowMissing: true })
   const full = resolved.fullPath
-  fs.mkdirSync(path.dirname(full), { recursive: true })
-  fs.writeFileSync(full, content, 'utf8')
+  try {
+    fs.mkdirSync(path.dirname(full), { recursive: true })
+    fs.writeFileSync(full, content, 'utf8')
+  } catch (error) {
+    throw mapWriteError(error, full)
+  }
   // ★ C-P2.4: 轻量可观测 — 总大小超阈值仅 warn,不阻断
   if (resolved.source === 'workspace') {
     try { checkWorkspaceSize(getWorkspaceRoot()) } catch { /* 巡检失败不影响写入 */ }
@@ -233,7 +257,11 @@ export async function editFileTool({
     next = orig.slice(0, idx) + new_string + orig.slice(idx + old_string.length)
     replacedCount = 1
   }
-  fs.writeFileSync(full, next, 'utf8')
+  try {
+    fs.writeFileSync(full, next, 'utf8')
+  } catch (error) {
+    throw mapWriteError(error, full)
+  }
   return {
     ok: true,
     path: resolved.displayPath,
@@ -266,8 +294,9 @@ export async function bashExecTool({ command, cwd: rawCwd, timeout_ms, userId = 
     throw badReq('bash_exec 限流:超过 30 次/分钟,请稍后重试', 429)
   }
 
-  const root = getWorkspaceRoot()
-  const cwd = rawCwd ? resolveInWorkspace(rawCwd) : root
+  const resolvedCwd = resolveForShellCwd(rawCwd, { userId })
+  const cwd = resolvedCwd.fullPath
+  const displayCwd = resolvedCwd.displayPath
   if (!fs.statSync(cwd).isDirectory()) throw badReq('cwd 不是目录')
 
   const timeout = Math.min(
@@ -291,7 +320,7 @@ export async function bashExecTool({ command, cwd: rawCwd, timeout_ms, userId = 
       windowsHide: true,
     }).then((r) => {
       const durationMs = Date.now() - startedAt
-      const auditArgs = { command, cwd: toRelative(cwd) }
+      const auditArgs = { command, cwd: displayCwd }
       if (r.timedOut) {
         if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'timeout', durationMs })
         resolve({
@@ -300,7 +329,7 @@ export async function bashExecTool({ command, cwd: rawCwd, timeout_ms, userId = 
           error: `命令超时(${timeout}ms),进程组已被清理`,
           stdout: r.stdout,
           stderr: r.stderr,
-          cwd: toRelative(cwd),
+          cwd: displayCwd,
         })
         return
       }
@@ -312,7 +341,7 @@ export async function bashExecTool({ command, cwd: rawCwd, timeout_ms, userId = 
           error: `输出超过 ${SHELL_MAX_OUTPUT} 字节,已截断并杀进程组`,
           stdout: r.stdout,
           stderr: r.stderr,
-          cwd: toRelative(cwd),
+          cwd: displayCwd,
         })
         return
       }
@@ -325,7 +354,7 @@ export async function bashExecTool({ command, cwd: rawCwd, timeout_ms, userId = 
           error: `命令退出码 ${r.code}${r.signal ? ` (signal=${r.signal})` : ''}`,
           stdout: r.stdout,
           stderr: r.stderr,
-          cwd: toRelative(cwd),
+          cwd: displayCwd,
         })
         return
       }
@@ -335,7 +364,7 @@ export async function bashExecTool({ command, cwd: rawCwd, timeout_ms, userId = 
         exitCode: 0,
         stdout: r.stdout,
         stderr: r.stderr,
-        cwd: toRelative(cwd),
+        cwd: displayCwd,
       })
     })
   })
@@ -368,7 +397,14 @@ export async function handleFsShellRequest(req, res) {
     sendJson(res, 200, result)
   } catch (err) {
     const status = err?.statusCode || 500
-    sendJson(res, status, { ok: false, error: err?.message || 'tool failed' })
+    sendJson(res, status, {
+      ok: false,
+      code: err?.code || 'FS_TOOL_FAILED',
+      error: err?.message || 'tool failed',
+      retryable: err?.retryable ?? ![401, 403, 404].includes(status),
+      ...(err?.path ? { path: err.path } : {}),
+      ...(err?.hint ? { hint: err.hint } : {}),
+    })
   }
 }
 
@@ -455,12 +491,12 @@ export const FS_SHELL_TOOL_SPECS = [
     type: 'function',
     function: {
       name: 'bash_exec',
-      description: '在 workspace 里跑 shell 命令(Windows 用 cmd.exe,其他用 /bin/sh).默认超时 60s,最长 5min,stdout+stderr 上限 1MB.敏感 env(API key/邮箱密码)已被屏蔽.',
+      description: '在 workspace 或用户已授权本地目录里跑 shell 命令(Windows 用 cmd.exe,其他用 /bin/sh).默认超时 60s,最长 5min,stdout+stderr 上限 1MB.敏感 env(API key/邮箱密码)已被屏蔽.',
       parameters: {
         type: 'object',
         properties: {
           command: { type: 'string', description: '完整命令字符串,例如 "ls -la src" 或 "npm test"' },
-          cwd: { type: 'string', description: '相对 workspace 的子目录,默认 workspace 根' },
+          cwd: { type: 'string', description: 'workspace 相对目录或用户已授权目录的绝对路径,默认 workspace 根' },
           timeout_ms: { type: 'integer', description: '超时毫秒数,默认 60000,最大 300000' },
         },
         required: ['command'],

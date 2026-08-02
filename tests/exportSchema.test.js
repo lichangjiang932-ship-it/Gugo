@@ -48,10 +48,10 @@ test('parseImport 接受 v1 sessions 包', () => {
 })
 
 test('parseImport 接受 v1 settings 包', () => {
-  const wrapped = wrapSettingsExport({ theme: 'dark', accentColor: '#fff' })
+  const wrapped = wrapSettingsExport({ theme: 'white', accentColor: '#fff' })
   const parsed = parseImport(JSON.stringify(wrapped))
   assert.equal(parsed.kind, 'settings')
-  assert.equal(parsed.payload.theme, 'dark')
+  assert.equal(parsed.payload.theme, 'white')
 })
 
 test('parseImport 兼容老版本裸 sessions 数组', () => {
@@ -99,6 +99,11 @@ test('parseImport 拒绝 settings 包但 payload 不是对象', () => {
 test('parseImport 拒绝 settings.theme 类型错误', () => {
   const wrong = { __schema: SETTINGS_SCHEMA, payload: { theme: 123 } }
   assert.throws(() => parseImport(JSON.stringify(wrong)), InvalidExportError)
+})
+
+test('parseImport 拒绝未知 settings.theme 值', () => {
+  const wrong = { __schema: SETTINGS_SCHEMA, payload: { theme: 'neon' } }
+  assert.throws(() => parseImport(JSON.stringify(wrong)), /不是受支持的主题/)
 })
 
 test('parseImport 拒绝 null 输入', () => {

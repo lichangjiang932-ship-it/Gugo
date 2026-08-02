@@ -7,7 +7,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { runToolsLoop } from '../server/services/jobTools.js'
-import { requestClarificationTool, reflectTool } from '../server/utils/agenticTools.js'
+import { requestClarificationTool, requestDirectoryTool, reflectTool } from '../server/utils/agenticTools.js'
 
 function makeFakeJob() {
   return { id: 'job-1', userId: 'u-1', steps: [] }
@@ -77,6 +77,28 @@ test('runToolsLoop: reflect 不中断,继续下一轮', async () => {
   assert.equal(result.paused, undefined, 'reflect 不应触发暂停')
   assert.equal(result.text, '完成')
   assert.equal(callCount, 2)
+})
+
+test('runToolsLoop: request_directory 立即挂起并保留最小权限请求', async () => {
+  const result = await runToolsLoop({
+    job: makeFakeJob(),
+    step: { id: 'step-directory' },
+    messages: [{ role: 'user', content: '读取我的报告' }],
+    runModel: async () => ({
+      content: '',
+      toolCalls: [{
+        id: 'directory-1',
+        function: { name: 'request_directory', arguments: JSON.stringify({ purpose: '读取报告' }) },
+      }],
+    }),
+    executeTool: async ({ name, args }) => {
+      assert.equal(name, 'request_directory')
+      return requestDirectoryTool(args)
+    },
+  })
+  assert.equal(result.paused, true)
+  assert.equal(result.clarification.request_type, 'directory')
+  assert.equal(result.clarification.access_mode, 'read_only')
 })
 
 test('runToolsLoop: budgetExceeded 触发停止', async () => {

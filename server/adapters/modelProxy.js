@@ -1,10 +1,10 @@
-import fs from 'node:fs'
-import path from 'node:path'
 import { z } from 'zod'
 import { readJson } from '../utils.js'
 import { authenticateRequest } from '../middleware.js'
 import {
   chargeForModelUse,
+  calculateChatCostFromUsage,
+  calculateModelCostUsd,
   estimateChatCost,
   getBillingDiagnostics,
   getMailDiagnostics,
@@ -22,14 +22,22 @@ import { ensureDefaultAgent, getAgent } from '../services/agentStore.js'
 import {
   buildIdentityBlock,
   buildIshikiBlock,
+  buildSafetyBlock,
   buildSkillsBlock,
   buildSessionsBlock,
   getPromptCompilerStats,
 } from '../services/promptCompiler.js'
-import { attachVisionDescriptions, hasVisionAssistConfigured } from './visionAssist.js'
+import { attachVisionDescriptions, hasVisionAssistConfigured, replaceUnsupportedVisionContent } from './visionAssist.js'
 import { logWarn } from '../utils/logger.js'
 import { withRetry } from '../utils/modelRetry.js'
+import { isLocalEndpoint, resolveEndpointProfile } from '../utils/endpointProfile.js'
 import { buildUserModelEnv } from '../services/modelProviderStore.js'
+import { scheduleAutoMemoryExtraction } from '../services/autoMemoryService.js'
+import { getRuntimeEnv } from '../utils/runtimeEnv.js'
+import { bindSseClientDisconnect, createEmptyModelResponseError } from './sseLifecycle.js'
+import { fetchWithEnvProxy } from './proxyFetch.js'
+
+export { getRuntimeEnv } from '../utils/runtimeEnv.js'
 
 // ★ #18: 消息格式 schema — 拒绝畸形 messages 入参,防 OpenAI 上游报 400 / 计费爆零
 const MESSAGE_SCHEMA = z.object({
@@ -67,34 +75,6 @@ function parseHeaders(raw = '') {
   }
 }
 
-function readEnvFile(cwd = process.cwd()) {
-  const envPath = path.join(cwd, '.env')
-  if (!fs.existsSync(envPath)) return {}
-
-  const entries = {}
-  const lines = fs.readFileSync(envPath, 'utf8').split(/\r?\n/)
-  for (const line of lines) {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#')) continue
-    const eq = trimmed.indexOf('=')
-    if (eq === -1) continue
-    const key = trimmed.slice(0, eq).trim()
-    let value = trimmed.slice(eq + 1).trim()
-    if (
-      (value.startsWith('"') && value.endsWith('"')) ||
-      (value.startsWith("'") && value.endsWith("'"))
-    ) {
-      value = value.slice(1, -1)
-    }
-    entries[key] = value
-  }
-  return entries
-}
-
-export function getRuntimeEnv(env = process.env) {
-  return { ...readEnvFile(), ...env }
-}
-
 export function getModelProviders(env = process.env) {
   const ids = parseCsv(env.MODEL_PROVIDERS)
   return ids.map((id) => {
@@ -105,8 +85,20 @@ export function getModelProviders(env = process.env) {
       apiKey: env[`${prefix}_API_KEY`]?.trim() || '',
       models: parseCsv(env[`${prefix}_MODELS`]),
       headers: parseHeaders(env[`${prefix}_HEADERS`]),
+      // ★ v28:per-provider 能力/超时覆盖(见 modelProviderStore.buildProviderOverrides)
+      profileOverrides: parseProfileOverrides(env[`${prefix}_PROFILE`]),
     }
   })
+}
+
+function parseProfileOverrides(raw) {
+  if (!raw) return {}
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
 }
 
 function findProviderForModel(modelName, env = process.env) {
@@ -121,11 +113,22 @@ function providerMissingFields(provider) {
   return missing
 }
 
+/** 解析输出 token 上限；0 表示不发送 max_tokens，使用模型自身上限。 */
+function parseMaxTokens(raw) {
+  const text = String(raw ?? '').trim()
+  // 未设置 → 默认不限制
+  if (!text) return 0
+  // 显式写 0 / unlimited / none → 不限制
+  if (['0', 'unlimited', 'none', 'inf', 'infinite'].includes(text.toLowerCase())) return 0
+  const value = Number(text)
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0
+}
+
 export function loadModelConfig(env = process.env) {
   const providers = getModelProviders(env)
   const missing = REQUIRED_ENV.filter((key) => !env[key]?.trim())
   const temperature = Number(env.MODEL_TEMPERATURE ?? 0.7)
-  const maxTokens = Number(env.MODEL_MAX_TOKENS ?? 4096)
+  const maxTokens = parseMaxTokens(env.MODEL_MAX_TOKENS)
 
   if (providers.length) {
     const modelName = env.MODEL_NAME?.trim() || providers.find((provider) => provider.models.length)?.models[0] || ''
@@ -140,8 +143,11 @@ export function loadModelConfig(env = process.env) {
       modelName,
       apiKey: provider?.apiKey || '',
       ...(Object.keys(provider?.headers || {}).length ? { headers: provider.headers } : {}),
+      ...(Object.keys(provider?.profileOverrides || {}).length
+        ? { profileOverrides: provider.profileOverrides }
+        : {}),
       temperature: Number.isFinite(temperature) ? temperature : 0.7,
-      maxTokens: Number.isFinite(maxTokens) ? maxTokens : 4096,
+      maxTokens,
     }
   }
 
@@ -153,7 +159,7 @@ export function loadModelConfig(env = process.env) {
     apiKey: env.MODEL_API_KEY?.trim() || '',
     ...(Object.keys(parseHeaders(env.MODEL_HEADERS)).length ? { headers: parseHeaders(env.MODEL_HEADERS) } : {}),
     temperature: Number.isFinite(temperature) ? temperature : 0.7,
-    maxTokens: Number.isFinite(maxTokens) ? maxTokens : 4096,
+    maxTokens,
   }
 }
 
@@ -174,6 +180,152 @@ export function resolveModelConfigForModel({ modelName, env = process.env } = {}
     modelName: selectedModel,
     apiKey: provider.apiKey,
     ...(Object.keys(provider.headers || {}).length ? { headers: provider.headers } : {}),
+    // 和 headers 同样的口径:没有内容就不带这个 key,
+    // 免得给每个 config 都挂一个空对象(也会打乱调用方的 deepEqual)。
+    ...(Object.keys(provider.profileOverrides || {}).length
+      ? { profileOverrides: provider.profileOverrides }
+      : {}),
+  }
+}
+
+export function isProviderFailoverError(error) {
+  if (error?.name === 'AbortError') return false
+  // ★ 我们自己造的超时**绝不**触发故障转移。
+  // 原来超时被转成 status 504,而 504 >= 500 判定为可转移 —— 于是
+  // 「本地模型首 token 慢」= 静默切云端 + 扣积分。AbortError 那道守卫
+  // 因为错误已经被改写成 504 而完全失效。
+  if (error?.code === 'MODEL_TIMEOUT') return false
+  // ★ 思考失控同理:换个 provider 重来一遍只会再烧一次钱,
+  // 而且大概率同样停不下来(问题在任务本身,不在这个 provider)。
+  if (error?.code === 'REASONING_RUNAWAY') return false
+  const status = Number(error?.status ?? error?.statusCode)
+  if (!Number.isFinite(status) || status <= 0) return true
+  return status === 408 || status === 429 || status >= 500
+}
+
+export function resolveModelFailoverConfigs({ modelName, env = process.env } = {}) {
+  const base = loadModelConfig(env)
+  const selectedModel = modelName?.trim() || base.modelName
+  const primary = resolveModelConfigForModel({ modelName: selectedModel, env })
+  const configs = [{ ...primary, providerId: findProviderForModel(selectedModel, env)?.id || 'default' }]
+
+  // ★ 是否允许「转移到一个**不同名**的模型」。默认 **不允许**。
+  //
+  // 事故:用户在 UI 里选了 deepseek-v4-flash(0.6× 计费),deepseek 那边
+  // 一个网络抖动就触发转移,而 mimo provider 不提供这个模型名,
+  // 于是回落到 provider.models[0] = mimo-v2.5 —— 换了个**厂商的另一个模型**
+  // 跑完并按它的价格扣费。用户看到的是「我选的 flash,账单却不是 flash」。
+  //
+  // 跨模型转移本质上是拿用户的钱替我们兜底可用性,必须显式开启。
+  // 同名模型在多个 provider 之间转移(镜像/中转站)是安全的,默认保留。
+  //
+  // 两种显式开启方式,任一即可:
+  //   - 全局 env MODEL_FAILOVER_CROSS_MODEL=1
+  //   - 在主 provider 的设置里**显式勾选** failoverEnabled
+  //     —— 用户在 UI 上主动打开,就是明确知道并接受会换模型。
+  //
+  // ⚠ 这里必须看 override 本身,而不是 profile.failoverEligible ——
+  // 后者对云端 provider **默认就是 true**(那只是"允许同名转移"的默认值,
+  // 不代表用户同意换模型)。用它判断等于这道防线对所有云端 provider 失效,
+  // 也就完全没修到事故本身。
+  const primaryOverrides = configs[0]?.profileOverrides || {}
+  // 默认严格粘滞：UI/调用方请求哪个模型，实际执行和账单里就只能出现同名模型。
+  // 即使某个 provider 遗留了 failoverEnabled=true，也不能越权换成更贵的 Pro。
+  const strictSelection = String(env.MODEL_STRICT_SELECTION ?? '1').trim() !== '0'
+  const crossModelOptIn = primaryOverrides.failoverEnabled === true
+    || primaryOverrides.failoverEnabled === 1
+  const allowCrossModel = !strictSelection && (
+    String(env.MODEL_FAILOVER_CROSS_MODEL || '').trim() === '1' || crossModelOptIn
+  )
+
+  for (const provider of getModelProviders(env)) {
+    if (providerMissingFields(provider).length) continue
+    const hasSameModel = provider.models.includes(selectedModel)
+    if (!hasSameModel && !allowCrossModel) continue
+    const candidateModel = hasSameModel ? selectedModel : provider.models[0]
+    if (!candidateModel) continue
+    configs.push({
+      ...base,
+      configured: true,
+      missing: [],
+      providerId: provider.id,
+      baseUrl: provider.baseUrl,
+      modelName: candidateModel,
+      apiKey: provider.apiKey,
+      ...(Object.keys(provider.headers || {}).length ? { headers: provider.headers } : {}),
+      ...(Object.keys(provider.profileOverrides || {}).length
+        ? { profileOverrides: provider.profileOverrides }
+        : {}),
+    })
+  }
+  const seen = new Set()
+  const deduped = configs.filter((config) => {
+    if (!config.configured) return false
+    const key = `${config.baseUrl}\u0000${config.modelName}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+
+  // ★ 主 provider 是本地端点时,**不返回任何备选**。
+  //
+  // 本地推理慢是常态(加载权重几十秒、CPU 1-3 tok/s),而慢会走到失败路径,
+  // 失败路径又会挨个尝试后面的 provider —— 结果就是「我明明选了本地模型,
+  // 却在用云端的额度」。用户既不知道换了模型(输出风格都变了),又被扣了积分。
+  //
+  // 想要这个行为的人可以在 provider 设置里显式打开 failover_enabled。
+  const primaryProfile = deduped.length ? profileForConfig(deduped[0], env) : null
+  if (primaryProfile && !primaryProfile.failoverEligible) return deduped.slice(0, 1)
+
+  return deduped
+}
+
+export async function runWithProviderFailover(configs, operation, { signal } = {}) {
+  let lastError = null
+  const attempted = []
+  for (let index = 0; index < configs.length; index += 1) {
+    const config = configs[index]
+    attempted.push(config.providerId || config.baseUrl)
+    try {
+      return await operation(config)
+    } catch (error) {
+      lastError = error
+      const hasNext = index + 1 < configs.length
+      if (!hasNext || signal?.aborted || !isProviderFailoverError(error)) throw error
+      logWarn('model.provider_failover', error, {
+        from: config.providerId || config.baseUrl,
+        to: configs[index + 1].providerId || configs[index + 1].baseUrl,
+        model: config.modelName,
+      })
+    }
+  }
+  if (lastError) {
+    lastError.attemptedProviders = attempted
+    throw lastError
+  }
+  throw new Error('没有可用的模型 provider')
+}
+
+export async function* streamWithProviderFailover(configs, createStream, { signal } = {}) {
+  for (let index = 0; index < configs.length; index += 1) {
+    const config = configs[index]
+    let emitted = false
+    try {
+      for await (const event of createStream(config)) {
+        emitted = true
+        yield { event, config }
+      }
+      return
+    } catch (error) {
+      const hasNext = index + 1 < configs.length
+      if (emitted || !hasNext || signal?.aborted || !isProviderFailoverError(error)) throw error
+      logWarn('model.provider_failover', error, {
+        from: config.providerId || config.baseUrl,
+        to: configs[index + 1].providerId || configs[index + 1].baseUrl,
+        model: config.modelName,
+        stream: true,
+      })
+    }
   }
 }
 
@@ -196,17 +348,53 @@ export function getToolMaxRounds(env = process.env) {
 export function hasVisionContent(messages = []) {
   return messages.some((message) =>
     Array.isArray(message?.content) &&
-    message.content.some((part) => part?.type === 'image_url' || part?.image_url)
+    message.content.some((part) => part?.type === 'image_url' || part?.type === 'input_image' || part?.image_url)
   )
 }
 
-export function supportsVisionModel(modelName = '', env = process.env) {
+// ★ DEFAULT_MODEL_CONTEXT_WINDOW / parseContextWindowMap 已移入
+// server/utils/endpointProfile.js —— 上下文窗口的解析(含按模型映射、
+// 本地/云端默认值、下限)现在只有那一处实现,避免两边漂移。
+
+export function getModelContextWindow({ modelName, userId, env = getRuntimeEnv() } = {}) {
+  const runtimeEnv = buildUserModelEnv({ userId, env })
+  const selectedModel = String(modelName || runtimeEnv.MODEL_NAME || '').trim()
+  const config = loadModelConfig(runtimeEnv)
+  // ★ 交给端点画像统一解析。
+  //
+  // 原来默认值是 1_000_000 —— 用户没配 MODEL_CONTEXT_WINDOWS 时,压缩阈值
+  // 被算成 80 万 token,对着一个 8k 窗口的本地模型**主动压缩永远不会触发**,
+  // 直接一头撞进上游的 400。而且原来还有 `>= 4096` 的硬下限,
+  // 真有 2k/4k 窗口的小模型也配不下去。
+  // 现在本地默认 8192、云端默认 128k,且允许配到 1024。
+  return resolveEndpointProfile({
+    baseUrl: config.baseUrl,
+    modelName: selectedModel,
+    env: runtimeEnv,
+  }).contextWindow
+}
+
+export function supportsVisionModel(modelName = '', env = process.env, baseUrl = '') {
   const configured = String(env.MODEL_NAMES_VISION || '')
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean)
-  if (!configured.length) return true
-  return configured.includes(modelName)
+  if (configured.length) return configured.includes(modelName)
+  // ★ 没配白名单时,原来是无条件 allow-all。对云端可以(主流模型都支持图),
+  // 但对本地端点是错的 —— 绝大多数本地跑的模型是纯文本的,喂图片进去
+  // 轻则忽略、重则 400,而用户完全不知道为什么。
+  // 想用本地视觉模型(llava / qwen-vl)的人在 MODEL_NAMES_VISION 里列出来即可。
+  if (baseUrl && isLocalEndpoint(baseUrl)) return false
+  return true
+}
+
+/**
+ * 这个模型能不能用 function calling。
+ * 口径和 supportsVisionModel 对齐:白名单一旦设置就是精确名单,
+ * 没设置则回落到端点画像的推断(见 endpointProfile.js 的 KIND_CAPABILITIES)。
+ */
+export function supportsToolsModel(modelName = '', env = process.env, baseUrl = '') {
+  return resolveEndpointProfile({ baseUrl, modelName, env }).supportsTools
 }
 
 export function getModelStatus(env = process.env) {
@@ -253,13 +441,40 @@ const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1]'
  * 本地推理不该计入。
  */
 export function isLocalModelEndpoint(baseUrl = '') {
-  const trimmed = String(baseUrl || '').trim()
-  if (!trimmed) return false
-  try {
-    return LOCAL_HOSTS.has(new URL(trimmed).hostname)
-  } catch {
-    return false
-  }
+  // ★ 判定逻辑已收敛到 server/utils/endpointProfile.js。
+  // 原来只认回环地址,于是局域网(192.168.x)/ Docker(172.17.x)/ Tailscale(100.64.x)
+  // 上的 Ollama 全部漏判 —— 按云端超时砍流、按云端计费扣积分、还允许 failover 到云端。
+  return isLocalEndpoint(baseUrl)
+}
+
+/**
+ * 拿一个 config 的端点画像。config 上带的 profileOverrides(来自 provider 设置 /
+ * 端点探测)优先级最高。所有超时/能力判断都该走这里,不要再各处硬编码常量。
+ */
+export function profileForConfig(config = {}, env = process.env) {
+  return resolveEndpointProfile({
+    baseUrl: config.baseUrl,
+    modelName: config.modelName,
+    env,
+    overrides: config.profileOverrides || {},
+  })
+}
+
+/**
+ * 造一个「我们自己的超时」错误。
+ *
+ * ★ 关键:**不设 status**。原来超时被伪装成 `status: 504`,而
+ * isProviderFailoverError 判定 `status >= 500` 可故障转移,于是
+ * 「本地模型慢一点」→ 静默切到云端 provider → 按云端价扣积分,
+ * 用户用自己的显卡却被扣钱且完全不知道换了模型。
+ * 同时 504 在 RETRYABLE_STATUS 里,导致对着单槽推理服务器重试 3 次,越重试越慢。
+ */
+export function modelTimeoutError(message, { phase = 'request', timeoutMs = 0 } = {}) {
+  const error = new Error(message)
+  error.code = 'MODEL_TIMEOUT'
+  error.timeoutPhase = phase
+  error.timeoutMs = timeoutMs
+  return error
 }
 
 function ensureApiVersionPath(trimmed) {
@@ -296,15 +511,18 @@ function safeErrorMessage(error) {
   return error?.message || '端点探测失败'
 }
 
-async function checkModelsEndpoint({ config, fetchImpl = fetch }) {
+async function checkModelsEndpoint({ config, fetchImpl = fetchWithEnvProxy, env = process.env }) {
   if (!config.configured) {
     return { checked: false, ok: false, reason: `缺少 ${config.missing.join(', ')}` }
   }
 
+  const profile = profileForConfig(config, env)
   const url = normalizeModelsUrl(config.baseUrl)
   const controller = new AbortController()
   const started = Date.now()
-  const timeout = setTimeout(() => controller.abort(), 8000)
+  // ★ 原来固定 8s。Ollama 冷启动 / 正在加载模型时必然超时,
+  // 用户看到的是「端点不可达」—— 其实服务好好的,只是慢。
+  const timeout = setTimeout(() => controller.abort(), profile.timeouts.probeMs)
   try {
     const headers = { ...(config.headers || {}) }
     if (config.apiKey && !headers.Authorization && !headers.authorization) {
@@ -346,7 +564,7 @@ async function checkModelsEndpoint({ config, fetchImpl = fetch }) {
   }
 }
 
-export async function getSystemDiagnostics({ env = process.env, fetchImpl = fetch, checkEndpoint = false } = {}) {
+export async function getSystemDiagnostics({ env = process.env, fetchImpl = fetchWithEnvProxy, checkEndpoint = false } = {}) {
   const config = loadModelConfig(env)
   const modelStatus = getModelStatus(env)
   const billing = getBillingDiagnostics(env)
@@ -435,11 +653,30 @@ function mergeLeadingSystemMessages(messages = []) {
 
   const merged = messages
     .slice(0, end)
-    .map((m) => (typeof m.content === 'string' ? m.content : ''))
+    // ★ 原来这里是 `typeof m.content === 'string' ? m.content : ''` + filter(Boolean),
+    // 于是 content 是数组形式(multimodal)的 system 消息会被**静默丢掉** ——
+    // 内容凭空消失,模型看不到那段指令,而且没有任何报错。
+    // 现在把数组里的文本段落提取出来,不丢内容。
+    .map((m) => systemContentToText(m?.content))
     .filter(Boolean)
     .join('\n\n')
 
   return [{ role: 'system', content: merged }, ...messages.slice(end)]
+}
+
+/** 把 system 消息的 content 归一成纯文本。字符串原样返回;数组提取其中的 text 段。 */
+function systemContentToText(content) {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .map((part) => {
+      if (typeof part === 'string') return part
+      if (part?.type === 'text' && typeof part.text === 'string') return part.text
+      if (typeof part?.text === 'string') return part.text
+      return ''
+    })
+    .filter(Boolean)
+    .join('\n')
 }
 
 function normalizeMessagesForOpenAI(messages = []) {
@@ -471,7 +708,17 @@ export function supportsStreamUsage(config, env = process.env) {
     || base.includes('openai.azure.com')
 }
 
-export function buildOpenAICompatibleRequest({ config, messages, stream = false, tools, toolChoice }) {  const model = config?.modelName
+export function buildOpenAICompatibleRequest({
+  config,
+  messages,
+  stream = false,
+  tools,
+  toolChoice,
+  env = process.env,
+  profile = null,
+}) {
+  const endpoint = profile || profileForConfig(config || {}, env)
+  const model = config?.modelName
   if (!model) throw new Error('请输入模型名称。')
   if (!Array.isArray(messages) || messages.length === 0) {
     throw new Error('消息不能为空。')
@@ -486,13 +733,28 @@ export function buildOpenAICompatibleRequest({ config, messages, stream = false,
     model,
     messages: normalizeMessagesForOpenAI(messages),
     temperature: config?.temperature ?? 0.7,
-    max_tokens: config?.maxTokens || 4096,
     stream,
   }
+  // ★ max_tokens 为 0/未设置 = 不限制 → **不发这个字段**,让模型用自己的上限。
+  // 发一个大数字不如不发:各家真实上限不同,填超了有些 provider 直接 400。
+  const outputCap = Number(config?.maxTokens)
+  if (Number.isFinite(outputCap) && outputCap > 0) {
+    body.max_tokens = outputCap
+  }
   // ★ 工具调用:仅当上游提供 tools 字段时才透传,避免不支持工具的模型报 400
-  if (Array.isArray(tools) && tools.length > 0) {
+  //
+  // 增加能力门控:端点画像说不支持 function calling 时(比如 llama.cpp 默认、
+  // 或用户在 provider 里显式关掉),**直接不发 tools**。原来无脑下发,
+  // 不支持的小模型直接 400,整轮报废且错误信息完全看不懂。
+  if (Array.isArray(tools) && tools.length > 0 && endpoint.supportsTools) {
     body.tools = tools
     if (toolChoice) body.tool_choice = toolChoice
+  }
+  // ★ Ollama keep_alive:不设的话默认 5 分钟就卸载模型,下次请求重新加载权重。
+  // 「本地模型延迟太大」有很大一部分就是反复冷加载 —— 常驻内存后首 token 从
+  // 几十秒降到亚秒级。非 Ollama 端点 keepAlive 为 null,不会带上这个字段。
+  if (endpoint.keepAlive) {
+    body.keep_alive = endpoint.keepAlive
   }
   // ★ 流式 usage:拿到才能算缓存命中率。同 tools 的口径,默认只对已知支持的端点开,
   // 不认识的端点保持沉默(有些实现见到未知字段直接 400)。可用 MODEL_STREAM_USAGE 强制。
@@ -612,12 +874,59 @@ export function extractUsage(data) {
   }
 }
 
+/**
+ * 给一次非流式上游请求套一个超时。
+ *
+ * ★ 两个要点:
+ *   1. 计时器必须在**每次尝试内部**起 —— 原来非流式 chat 的 timer 起在
+ *      withRetry 外面,3 次重试共用同一个 60s 预算,第 2 次尝试往往一开始
+ *      就已经没时间了。
+ *   2. 外部 signal(用户取消 / 客户端断开)和超时要能同时生效,
+ *      且要能区分:用户取消是 AbortError,超时是 MODEL_TIMEOUT。
+ */
+async function fetchWithTimeout(fetchImpl, url, init, { timeoutMs, externalSignal, phase = 'request' }) {
+  const controller = new AbortController()
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
+
+  let onExternalAbort = null
+  if (externalSignal) {
+    if (externalSignal.aborted) controller.abort()
+    else {
+      onExternalAbort = () => controller.abort()
+      externalSignal.addEventListener('abort', onExternalAbort, { once: true })
+    }
+  }
+
+  try {
+    return await fetchImpl(url, { ...init, signal: controller.signal })
+  } catch (error) {
+    if (timedOut && !externalSignal?.aborted) {
+      const err = modelTimeoutError(
+        `模型 ${Math.round(timeoutMs / 1000)} 秒内没有响应。本地模型可尝试调大 MODEL_BACKGROUND_TIMEOUT_MS，或确认服务未卡死。`,
+        { phase, timeoutMs },
+      )
+      err.cause = error
+      throw err
+    }
+    throw error
+  } finally {
+    clearTimeout(timer)
+    if (externalSignal && onExternalAbort) {
+      externalSignal.removeEventListener('abort', onExternalAbort)
+    }
+  }
+}
+
 export async function callBackgroundModel({
   messages,
   modelName,
   userId,
   env = getRuntimeEnv(),
-  fetchImpl = fetch,
+  fetchImpl = fetchWithEnvProxy,
   signal,
 } = {}) {
   const runtimeEnv = buildUserModelEnv({ userId, env })
@@ -630,36 +939,47 @@ export async function callBackgroundModel({
     config,
     env: runtimeEnv,
   })
-  const { url, init } = buildOpenAICompatibleRequest({
-    config: resolveModelConfigForModel({ modelName: selectedModel, env: runtimeEnv }),
-    messages,
-    stream: false,
-  })
-  // ★ Harness: 同 callBackgroundModelWithTools —— 瞬时故障退避重试,不让一次抖动杀掉整个 job
-  return withRetry(async () => {
-  const response = await fetchImpl(url, { ...init, signal })
-  const text = await response.text()
-  let data
-  try {
-    data = text ? JSON.parse(text) : null
-  } catch {
-    data = { raw: text }
-  }
-  if (!response.ok) {
-    const error = new Error(data?.error?.message || data?.message || response.statusText)
-    error.status = response.status
-    // 带上 Retry-After,withRetry 会优先尊重上游给的等待时长
-    error.retryAfter = response.headers?.get?.('retry-after') ?? null
-    throw error
-  }
-  recordUsage(selectedModel, extractUsage(data))
-  return parseOpenAICompatibleResponse(data)
-  }, {
-    signal,
-    onRetry: ({ attempt, delayMs, error }) => {
-      logWarn('model.retry', error, { attempt, delayMs, model: selectedModel })
-    },
-  })
+  const candidates = resolveModelFailoverConfigs({ modelName: selectedModel, env: runtimeEnv })
+  return runWithProviderFailover(candidates, async (candidate) => {
+    const profile = profileForConfig(candidate, runtimeEnv)
+    const { url, init } = buildOpenAICompatibleRequest({
+      config: candidate,
+      messages,
+      stream: false,
+      env: runtimeEnv,
+      profile,
+    })
+    return withRetry(async () => {
+      // ★ 原来这里完全没有超时 —— 一个挂死的本地端点会让 job 永远卡在
+      // running,不发事件、不发通知,只能重启进程。
+      const response = await fetchWithTimeout(fetchImpl, url, init, {
+        timeoutMs: profile.timeouts.backgroundMs,
+        externalSignal: signal,
+        phase: 'background',
+      })
+      const text = await response.text()
+      let data
+      try {
+        data = text ? JSON.parse(text) : null
+      } catch {
+        data = { raw: text }
+      }
+      if (!response.ok) {
+        const error = new Error(data?.error?.message || data?.message || response.statusText)
+        error.status = response.status
+        error.fromUpstream = true
+        error.retryAfter = response.headers?.get?.('retry-after') ?? null
+        throw error
+      }
+      recordUsage(candidate.modelName, extractUsage(data))
+      return parseOpenAICompatibleResponse(data)
+    }, {
+      signal,
+      onRetry: ({ attempt, delayMs, error }) => {
+        logWarn('model.retry', error, { attempt, delayMs, model: candidate.modelName, provider: candidate.providerId })
+      },
+    })
+  }, { signal })
 }
 
 /**
@@ -675,7 +995,7 @@ export async function callBackgroundModelWithTools({
   modelName,
   userId,
   env = getRuntimeEnv(),
-  fetchImpl = fetch,
+  fetchImpl = fetchWithEnvProxy,
   signal,
 } = {}) {
   const runtimeEnv = buildUserModelEnv({ userId, env })
@@ -688,51 +1008,94 @@ export async function callBackgroundModelWithTools({
     config,
     env: runtimeEnv,
   })
-  const { url, init } = buildOpenAICompatibleRequest({
-    config: resolveModelConfigForModel({ modelName: selectedModel, env: runtimeEnv }),
-    messages,
-    stream: false,
-    tools,
-    toolChoice,
-  })
-  // ★ Harness: 后台工具循环对上游只发一次的话,一个 429 就把整个 job 判死。
-  // 限流/5xx/网络抖动退避重试;4xx 业务错误立即失败,重试无意义。
-  return withRetry(async () => {
-    const response = await fetchImpl(url, { ...init, signal })
-    const text = await response.text()
-    let data
-    try {
-      data = text ? JSON.parse(text) : null
-    } catch {
-      data = { raw: text }
-    }
-    if (!response.ok) {
-      const error = new Error(data?.error?.message || data?.message || response.statusText)
-      error.status = response.status
-      error.retryAfter = response.headers?.get?.('retry-after') ?? null
-      throw error
-    }
-    recordUsage(selectedModel, extractUsage(data))
-    const msg = data?.choices?.[0]?.message || {}
-    return {
-      content: msg.content || '',
-      toolCalls: Array.isArray(msg.tool_calls) ? msg.tool_calls : [],
-    }
-  }, {
-    signal,
-    onRetry: ({ attempt, delayMs, error }) => {
-      logWarn('model.retry', error, { attempt, delayMs, model: selectedModel })
-    },
-  })
+  const candidates = resolveModelFailoverConfigs({ modelName: selectedModel, env: runtimeEnv })
+  return runWithProviderFailover(candidates, async (candidate) => {
+    const profile = profileForConfig(candidate, runtimeEnv)
+    const { url, init } = buildOpenAICompatibleRequest({
+      config: candidate,
+      messages,
+      stream: false,
+      tools,
+      toolChoice,
+      env: runtimeEnv,
+      profile,
+    })
+    return withRetry(async () => {
+      const response = await fetchWithTimeout(fetchImpl, url, init, {
+        timeoutMs: profile.timeouts.backgroundMs,
+        externalSignal: signal,
+        phase: 'background',
+      })
+      const text = await response.text()
+      let data
+      try {
+        data = text ? JSON.parse(text) : null
+      } catch {
+        data = { raw: text }
+      }
+      if (!response.ok) {
+        const error = new Error(data?.error?.message || data?.message || response.statusText)
+        error.status = response.status
+        error.code = data?.error?.code || data?.code || ''
+        error.type = data?.error?.type || data?.type || ''
+        error.fromUpstream = true
+        error.retryAfter = response.headers?.get?.('retry-after') ?? null
+        throw error
+      }
+      const usage = extractUsage(data)
+      recordUsage(candidate.modelName, usage)
+      const msg = data?.choices?.[0]?.message || {}
+      return {
+        content: msg.content || '',
+        toolCalls: Array.isArray(msg.tool_calls) ? msg.tool_calls : [],
+        usage,
+        modelName: candidate.modelName,
+        costUsd: calculateModelCostUsd({ modelName: candidate.modelName, usage, env: runtimeEnv }),
+      }
+    }, {
+      signal,
+      onRetry: ({ attempt, delayMs, error }) => {
+        logWarn('model.retry', error, { attempt, delayMs, model: candidate.modelName, provider: candidate.providerId })
+      },
+    })
+  }, { signal })
+}
+
+/**
+ * 这个错误是不是「上下文塞不下了」。
+ *
+ * ★ 原实现只认 status 400 + OpenAI 的错误文案。但本地推理服务器各说各话:
+ *   llama.cpp : "the request exceeds the available context size"
+ *   Ollama    : 各种泛化文案,有时还带 n_ctx
+ *   vLLM      : "This model's maximum context length is ..."
+ *   有些实现直接返 413(Payload Too Large)甚至 500,压根不是 400。
+ *
+ * 认不出来的后果很严重:contextCompactionRuntime 的三级恢复
+ * (主动压缩 → 强制压缩 → 裁剪最旧)**每一级都以这个判定为门**,
+ * 认不出就一级都不走,错误直接冒上去把 job 判 failed。
+ * 用户看到的是一句莫名其妙的 "Bad Request"。
+ */
+export function isContextLengthError(error) {
+  const detail = [error?.message, error?.code, error?.type].filter(Boolean).join(' ')
+  if (!detail) return false
+  const status = Number(error?.status)
+  // 413 一定是「请求体太大」;400/500 要看文案
+  const statusLooksRight = status === 400 || status === 413 || status === 500 || !Number.isFinite(status)
+  if (!statusLooksRight) return false
+  return /context_length|context window|context size|token.?limit|maximum context|reduce the length|too many tokens|exceeds?\s+the\s+(available\s+)?context|n_ctx|prompt is too long|kv cache|input is too long|too long for the model/i
+    .test(detail)
 }
 
 export function formatProxyError(error) {
   const msg = error?.message || ''
-  const code = error?.code || ''
+
+  // ★ 我们自己判定的超时。消息里已经带了阶段和建议(见 modelTimeoutError 调用点),
+  // 直接透出去比套一层泛化文案有用得多。
+  if (error?.code === 'MODEL_TIMEOUT') return msg || '模型请求超时。'
 
   // ★ 诊断增强: 400 错误可能是 token 溢出或参数真的无效
   if (error?.status === 400) {
-    if (/context_length|token.?limit|maximum context|reduce the length/i.test(msg + code)) {
+    if (isContextLengthError(error)) {
       return '内容超出模型最大上下文长度，请缩短消息或开启会话压缩。'
     }
     if (/invalid.*model|model.*not found/i.test(msg)) {
@@ -758,10 +1121,57 @@ function sendJson(res, statusCode, body) {
   res.end(JSON.stringify(body))
 }
 
-async function* streamOpenAICompatible({ config, messages, fetchImpl = fetch, tools, toolChoice, externalSignal }) {
-  const { url, init } = buildOpenAICompatibleRequest({ config, messages, stream: true, tools, toolChoice })
+/**
+ * 流式调用上游。
+ *
+ * ★ 超时策略从「整请求 120s」改成「首 token + idle 双轨」。
+ *
+ * 原来一个 setTimeout(120s) 管整个请求 —— 意味着一个健康的、正在稳定吐字的
+ * 本地模型,会在第 120 秒被拦腰砍断,用户看到半句话。CPU 推理 1-3 tok/s 时
+ * 两分钟连一段话都写不完,基本必然触发。
+ *
+ * 现在分两个计时器:
+ *   - 首 token 计时器:从发请求到第一个 chunk。本地默认 10 分钟(加载权重可能很久)。
+ *     收到第一个 chunk 后**立即清掉**,之后不再有任何整体上限。
+ *   - idle 计时器:每收到一个 chunk 就重置。含义是「N 秒一个字节都没有 = 真挂了」。
+ *     只要还在吐字,想吐多久吐多久。
+ */
+export async function* streamOpenAICompatible({
+  config,
+  messages,
+  fetchImpl = fetchWithEnvProxy,
+  tools,
+  toolChoice,
+  externalSignal,
+  env = process.env,
+  onFirstByte = null,
+}) {
+  const profile = profileForConfig(config, env)
+  const { url, init } = buildOpenAICompatibleRequest({ config, messages, stream: true, tools, toolChoice, profile })
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 120000)
+
+  let timedOutPhase = null
+  let timeoutMs = 0
+  let timer = null
+
+  const clearTimer = () => {
+    if (timer) {
+      clearTimeout(timer)
+      timer = null
+    }
+  }
+  const armTimer = (phase, ms) => {
+    clearTimer()
+    timeoutMs = ms
+    timer = setTimeout(() => {
+      timedOutPhase = phase
+      controller.abort()
+    }, ms)
+  }
+
+  // 阶段 1:等首个字节
+  armTimer('first_token', profile.timeouts.firstTokenMs)
+
   // ★ #38: 外部 (客户端断开) 触发 abort 时也立即放弃上游请求
   let onExternalAbort = null
   if (externalSignal) {
@@ -781,6 +1191,7 @@ async function* streamOpenAICompatible({ config, messages, fetchImpl = fetch, to
       const message = data?.error?.message || data?.message || text.slice(0, 240) || response.statusText
       const error = new Error(message)
       error.status = response.status
+      error.fromUpstream = true
       throw error
     }
 
@@ -791,12 +1202,30 @@ async function* streamOpenAICompatible({ config, messages, fetchImpl = fetch, to
     let buffer = ''
     // ★ tool_call 增量合并:OpenAI 流式协议每个 chunk 给 tool_calls[i].function.arguments 的片段,需要按 index 累加
     const toolCallAcc = new Map() // index -> { id, name, arguments }
+    const readyToolCallIndexes = new Set()
     let finishReason = null
+    // 思考累计字数 + 上限(0 = 不限)。见下面 REASONING_RUNAWAY 的注释。
+    let reasoningChars = 0
+    const reasoningCharLimit = (() => {
+      const raw = Number(env?.MODEL_REASONING_MAX_CHARS)
+      if (Number.isFinite(raw) && raw >= 0) return Math.floor(raw)
+      return 60_000
+    })()
     let lastUsage = null
+    let sawFirstChunk = false
 
     while (true) {
       const { done, value } = await reader.read()
       if (done) break
+      // ★ 收到数据 = 上游活着。首个 chunk 之后切到 idle 计时,
+      // 之后每个 chunk 都重置它 —— 「慢但在吐字」永远不会被砍。
+      if (!sawFirstChunk) {
+        sawFirstChunk = true
+        if (typeof onFirstByte === 'function') {
+          try { onFirstByte() } catch { /* 观测失败不影响流本身 */ }
+        }
+      }
+      armTimer('idle', profile.timeouts.idleMs)
       buffer += decoder.decode(value, { stream: true })
       const lines = buffer.split('\n')
       buffer = lines.pop() || ''
@@ -811,11 +1240,19 @@ async function* streamOpenAICompatible({ config, messages, fetchImpl = fetch, to
               .sort((a, b) => a[0] - b[0])
               .map(([, v]) => v)
             yield { type: 'tool_calls', toolCalls: calls, finishReason: finishReason || 'tool_calls', usage: lastUsage }
+          } else {
+            // 纯文本流:把 finish_reason 交出去(见下面 finish 帧的注释)
+            yield { type: 'finish', finishReason: finishReason || 'stop', usage: lastUsage }
           }
           return
         }
+        let chunk
         try {
-          const chunk = JSON.parse(payload)
+          chunk = JSON.parse(payload)
+        } catch {
+          // 只吞 JSON 解析失败。业务异常（尤其 REASONING_RUNAWAY）必须向外传播。
+          continue
+        }
           // ★ usage 帧的 choices 是空数组,必须在 !choice 守卫之前取,
           // 否则永远被 continue 跳过 —— 这正是以前命中率无法测量的原因。
           const chunkUsage = extractUsage(chunk)
@@ -832,7 +1269,33 @@ async function* streamOpenAICompatible({ config, messages, fetchImpl = fetch, to
           // 而 content 要等到 11.6 秒 —— 不透传的话这 11 秒屏幕上什么都没有,
           // 用户以为卡死了。字段名各家不一,三个都认。
           const reasoning = delta.reasoning_content || delta.reasoning || delta.thinking || ''
-          if (reasoning) yield { type: 'reasoning', delta: reasoning }
+          if (reasoning) {
+            reasoningChars += reasoning.length
+            // ★ 思考失控保护。
+            //
+            // 事故:一轮对话思考了 167644 字(≈84000 token),全部按输出计费,
+            // 最后还以 network error 收场 —— 钱花了,一个字的结论都没拿到。
+            // 推理模型在信息不足时(比如工具一直 404)会陷入"再想想"的循环,
+            // 它自己不会停,只能从外面掐。
+            //
+            // 到达上限就断开这次请求并明确报错,而不是继续烧钱等一个
+            // 可能永远不来的正文。
+            if (reasoningCharLimit > 0 && reasoningChars > reasoningCharLimit) {
+              const error = new Error(
+                `模型思考超过 ${Math.round(reasoningCharLimit / 1000)}k 字仍未给出正文，已中止以避免继续计费。`
+                + '通常是信息不足导致模型反复兜圈子（例如工具持续失败）。'
+                + '可以换一个非推理模型，或把任务拆小后重试。',
+              )
+              error.code = 'REASONING_RUNAWAY'
+              error.status = 0
+              // 仅 throw 不足以保证 undici 立即关闭上游响应；显式取消 reader 并
+              // abort fetch，避免模型在后台继续生成不可见但仍计费的思考 token。
+              try { await reader.cancel(error) } catch { /* best effort */ }
+              controller.abort(error)
+              throw error
+            }
+            yield { type: 'reasoning', delta: reasoning }
+          }
           // 文本增量
           const text = delta.content || choice.text || ''
           if (text) yield { type: 'text', delta: text }
@@ -845,11 +1308,19 @@ async function* streamOpenAICompatible({ config, messages, fetchImpl = fetch, to
               if (tc.function?.name) existing.name = tc.function.name
               if (tc.function?.arguments) existing.arguments += tc.function.arguments
               toolCallAcc.set(idx, existing)
+              // JSON 完整即允许调用方提前启动只读工具；最终仍会发 canonical
+              // tool_calls 帧，以便保持 assistant 上下文与结果顺序。
+              if (!readyToolCallIndexes.has(idx) && existing.id && existing.name && existing.arguments.trim()) {
+                try {
+                  JSON.parse(existing.arguments)
+                  readyToolCallIndexes.add(idx)
+                  yield { type: 'tool_call_ready', toolCall: { ...existing }, index: idx }
+                } catch {
+                  // 参数仍是分片，继续累积。
+                }
+              }
             }
           }
-        } catch {
-          // 忽略无法解析的行
-        }
       }
     }
     // 兜底:某些后端不发 [DONE]
@@ -859,8 +1330,30 @@ async function* streamOpenAICompatible({ config, messages, fetchImpl = fetch, to
         .map(([, v]) => v)
       yield { type: 'tool_calls', toolCalls: calls, finishReason: finishReason || 'tool_calls', usage: lastUsage }
     }
+    // ★ 纯文本流也要把 finish_reason 交出去。
+    //
+    // 原来 finishReason 只挂在 tool_calls 帧上 —— 一个**被 token 上限截断**的
+    // 文本流(finish_reason: 'length')和一个正常说完的流在前端完全无法区分。
+    // 推理模型尤其致命:思考就能吃掉几万 token,正文一个字都没生成就到顶了,
+    // 前端只看到「流正常结束但没有正文」,于是打出「模型未返回详细文字总结」。
+    // 真相是「输出预算被思考吃光了」,和「模型不想说」完全是两回事。
+    yield { type: 'finish', finishReason: finishReason || 'stop', usage: lastUsage }
+  } catch (error) {
+    if (error?.name === 'AbortError' && !externalSignal?.aborted) {
+      // ★ 不再伪装成 status 504 —— 见 modelTimeoutError 的注释。
+      // 504 会被 isProviderFailoverError 判定为可转移(静默切云端 + 扣钱),
+      // 也会被 modelRetry 判定为可重试(对着单槽推理服务器再打 3 次)。
+      const phase = timedOutPhase || 'request'
+      const hint = phase === 'first_token'
+        ? `模型 ${Math.round(timeoutMs / 1000)} 秒内没有返回第一个字。本地模型首次加载权重较慢，可尝试调大超时或先用 ollama run 预热模型。`
+        : `模型输出中断超过 ${Math.round(timeoutMs / 1000)} 秒，判定为连接已失效。`
+      const timeoutError = modelTimeoutError(hint, { phase, timeoutMs })
+      timeoutError.cause = error
+      throw timeoutError
+    }
+    throw error
   } finally {
-    clearTimeout(timeout)
+    clearTimer()
     // ★ #38: 清掉外部 signal 监听器,避免后续 abort 误触
     if (externalSignal && onExternalAbort) {
       externalSignal.removeEventListener('abort', onExternalAbort)
@@ -898,6 +1391,7 @@ export async function handleModelProxyRequest(req, res) {
     let messages = testMode
       ? [{ role: 'user', content: 'Reply with only: pong' }]
       : body.messages
+    let autoMemorySourceMessages = []
 
     // ★ #18: 校验 messages 形态;testMode 跳过 (内部硬编码)
     if (!testMode) {
@@ -915,7 +1409,7 @@ export async function handleModelProxyRequest(req, res) {
       config,
       env: runtimeEnv,
     })
-    if (!testMode && hasVisionContent(messages) && !supportsVisionModel(selectedModel, runtimeEnv)) {
+    if (!testMode && hasVisionContent(messages) && !supportsVisionModel(selectedModel, runtimeEnv, config.baseUrl)) {
       const sessionForAssist = session || (authToken(req) ? getSessionByToken(authToken(req)) : null)
       const userIdForAssist = sessionForAssist?.user_id || null
       if (hasVisionAssistConfigured({ userId: userIdForAssist, env: runtimeEnv })) {
@@ -931,21 +1425,17 @@ export async function handleModelProxyRequest(req, res) {
             res.setHeader('X-Vision-Assist-Failures', String(assistResult.failures.length))
           }
         } catch (assistErr) {
-          sendJson(res, 422, {
-            ok: false,
-            error: `视觉副驾调用失败，请检查配置：${assistErr.message || assistErr}`,
-            modelName: selectedModel,
-          })
-          return
+          logWarn('vision.assist', assistErr, { userId: userIdForAssist, modelName: selectedModel })
+          const fallback = replaceUnsupportedVisionContent({ messages, modelName: selectedModel })
+          messages = fallback.messages
+          res.setHeader('X-Vision-Fallback-Count', String(fallback.replacementCount))
+          res.setHeader('X-Vision-Fallback-Reason', 'assist_failed')
         }
       } else {
-        sendJson(res, 422, {
-          ok: false,
-          error: `当前模型 ${selectedModel} 未启用视觉输入。请切换到支持图片的模型，或在「设置 → 集成」中配置「视觉辅助副驾」让无视觉模型也能间接理解图片。`,
-          modelName: selectedModel,
-          visionAssistAvailable: false,
-        })
-        return
+        const fallback = replaceUnsupportedVisionContent({ messages, modelName: selectedModel })
+        messages = fallback.messages
+        res.setHeader('X-Vision-Fallback-Count', String(fallback.replacementCount))
+        res.setHeader('X-Vision-Fallback-Reason', 'assist_unavailable')
       }
     }
     const requestConfig = resolveModelConfigForModel({ modelName: selectedModel, env: runtimeEnv })
@@ -986,11 +1476,16 @@ export async function handleModelProxyRequest(req, res) {
           messages = promptHook.replacementArgs.messages
         }
       }
+      autoMemorySourceMessages = Array.isArray(messages)
+        ? messages.map((message) => ({ ...message }))
+        : []
     }
 
     // FreshCompact 风格：identity / ishiki / skills / sessions 分块编译为独立 system message。
     if (session?.user_id) {
       const compiledSystemMessages = []
+      const safety = buildSafetyBlock()
+      compiledSystemMessages.push({ role: 'system', content: safety.text })
       try {
         if (session?.user_id && getRuntimeEnv().AGENT_INJECT_ENABLED !== '0') {
           let agent = null
@@ -1091,63 +1586,175 @@ export async function handleModelProxyRequest(req, res) {
       }
     }
 
+    const requiresVision = hasVisionContent(messages)
+    const resolvedCandidates = resolveModelFailoverConfigs({ modelName: selectedModel, env: runtimeEnv })
+    const requestCandidates = resolvedCandidates.filter((candidate) =>
+      !requiresVision || supportsVisionModel(candidate.modelName, runtimeEnv, candidate.baseUrl)
+    )
+    if (!requestCandidates.length) requestCandidates.push(requestConfig)
+
+    // ★ 收尾调用需要独立、更大的输出预算。
+    //
+    // 默认情况下 max_tokens 已经不限制了(见 parseMaxTokens),这段只在
+    // 用户**显式配了**一个上限时起作用 —— 那种情况下收尾仍可能被
+    // 推理模型的「思考」吃光额度,所以给它临时抬高。
+    // (背景:实测有一次思考 93778 字,而当时 MODEL_MAX_TOKENS=4096。)
+    const boost = Number(body.maxTokensBoost)
+    if (Number.isFinite(boost) && boost > 0) {
+      for (const candidate of requestCandidates) {
+        const current = Number(candidate.maxTokens) || 0
+        // 已经是「不限制」(0)就别退化成一个有限值
+        if (current > 0) {
+          candidate.maxTokens = Math.max(current, Math.min(Math.floor(boost), 32_000))
+        }
+      }
+    }
+
     if (useStream && !testMode) {
       // SSE 流式响应
       res.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
+        // ★ nginx 之类的反代默认会缓冲上游响应,导致 SSE 攒够一块才下发 ——
+        // 表现为「等很久然后一次性刷出一大段」。这个头告诉 nginx 别缓冲。
+        'X-Accel-Buffering': 'no',
       })
+      // ★ 立刻把响应头刷出去。不刷的话 Node 会等到第一次 write 才发,
+      // 而首 token 可能要几十秒才来 —— 中间任何一层(反代 / 浏览器 / 公司网关)
+      // 看到一个几十秒没有任何字节的连接,都可能直接掐掉。
+      if (typeof res.flushHeaders === 'function') res.flushHeaders()
 
-      // ★ #38: 客户端断开 → abort 上游 fetch 避免空转烧 token
+      // 客户端真正断开时取消上游推理，避免本地模型继续占用 GPU。
       const sseAbort = new AbortController()
       let clientGone = false
-      const onClose = () => {
+      const disposeDisconnectListener = bindSseClientDisconnect(req, res, () => {
         clientGone = true
         sseAbort.abort()
-      }
-      req.on('close', onClose)
+      })
 
       const safeWrite = (payload) => {
         if (clientGone || res.writableEnded || res.destroyed) return false
         return res.write(payload)
       }
 
+      // ★ 心跳:每 15 秒发一个 SSE 注释帧。
+      //
+      // 注释帧(以 ':' 开头)按 SSE 规范会被客户端静默忽略,不会污染数据流,
+      // 但它是**真实字节**,足以让所有中间层认为连接是活的。
+      // 本地模型加载权重时可能几十秒没有任何输出,没有心跳的话这段静默期
+      // 就是「连接看起来死了」—— nginx 默认 60s 就断。
+      const heartbeat = setInterval(() => {
+        safeWrite(': keepalive\n\n')
+      }, 15_000)
+      // Node 的 timer 会拖住事件循环;心跳不该阻止进程退出
+      if (typeof heartbeat.unref === 'function') heartbeat.unref()
+
+      // ★ 先告诉前端「已连上,正在等模型」。
+      // 本地模型冷启动要几十秒才有第一个字,没有这一帧的话用户面对的是
+      // 完全空白的界面,只会以为卡死了。前端收到 phase 帧显示「模型加载中…」。
+      safeWrite(`data: ${JSON.stringify({ ok: true, phase: 'connecting' })}\n\n`)
+
       const started = Date.now()
       let streamUsage = null
+      let activeStreamModel = selectedModel
+      let activeEstimatedCost = estimatedCost
+      let activeProviderResolved = false
+      let assistantText = ''
+      let streamHadToolCalls = false
+      let streamFinishReason = null
+      let firstByteAt = 0
       try {
-        for await (const event of streamOpenAICompatible({
-          config: requestConfig,
-          messages,
-          tools: body.tools,
-          toolChoice: body.tool_choice,
-          externalSignal: sseAbort.signal,
-        })) {
+        for await (const { event, config: activeConfig } of streamWithProviderFailover(
+          requestCandidates,
+          (candidate) => streamOpenAICompatible({
+            config: candidate,
+            messages,
+            tools: body.tools,
+            toolChoice: body.tool_choice,
+            externalSignal: sseAbort.signal,
+            env: runtimeEnv,
+            onFirstByte: () => {
+              if (firstByteAt) return
+              firstByteAt = Date.now()
+              // 首字节到了 → 通知前端结束「模型加载中」状态,
+              // 顺带把首 token 延迟报上去(本地模型调优时这个数字最有用)。
+              safeWrite(`data: ${JSON.stringify({
+                ok: true,
+                phase: 'streaming',
+                firstTokenLatency: firstByteAt - started,
+              })}\n\n`)
+            },
+          }),
+          { signal: sseAbort.signal },
+        )) {
           if (clientGone) break
+          if (!activeProviderResolved) {
+            activeStreamModel = activeConfig.modelName
+            activeEstimatedCost = isLocalModelEndpoint(activeConfig.baseUrl)
+              ? 0
+              : estimateChatCost({
+                  modelName: activeStreamModel,
+                  messages,
+                  config: loadBillingConfig(getRuntimeEnv()),
+                })
+            if (account.credits < activeEstimatedCost) {
+              const creditError = new Error(`积分不足，需要 ${activeEstimatedCost} 积分，当前余额 ${account.credits}。请先充值。`)
+              creditError.statusCode = 402
+              throw creditError
+            }
+            activeProviderResolved = true
+          }
           if (event.type === 'text') {
+            assistantText = `${assistantText}${event.delta || ''}`.slice(0, 24_000)
             safeWrite(`data: ${JSON.stringify({ ok: true, delta: event.delta, latency: Date.now() - started })}\n\n`)
           } else if (event.type === 'reasoning') {
             // 思考过程单独一种帧型,前端折叠显示,不混进正文
             safeWrite(`data: ${JSON.stringify({ ok: true, reasoning: event.delta, latency: Date.now() - started })}\n\n`)
           } else if (event.type === 'tool_calls') {
+            streamHadToolCalls = true
             // 工具调用轮:usage 帧若已单独到达就不重复记,否则用终止帧带的兜底
             if (event.usage && !streamUsage) {
               streamUsage = event.usage
-              recordUsage(selectedModel, event.usage)
+              recordUsage(activeStreamModel, event.usage)
             }
             safeWrite(`data: ${JSON.stringify({ ok: true, toolCalls: event.toolCalls, finishReason: event.finishReason, latency: Date.now() - started })}\n\n`)
+          } else if (event.type === 'tool_call_ready') {
+            safeWrite(`data: ${JSON.stringify({ ok: true, toolCallReady: event.toolCall, toolCallIndex: event.index, latency: Date.now() - started })}\n\n`)
+          } else if (event.type === 'finish') {
+            // 纯文本轮的终止原因。不单独下发,记下来攒到 done 帧一起给,
+            // 让前端能区分「说完了」和「被 max_tokens 截断」。
+            streamFinishReason = event.finishReason || null
+            if (event.usage && !streamUsage) {
+              streamUsage = event.usage
+              recordUsage(activeStreamModel, event.usage)
+            }
           } else if (event.type === 'usage') {
             // 不单独下发,攒到 done 帧一起给,避免前端多处理一种帧型
             streamUsage = event.usage
-            recordUsage(selectedModel, event.usage)
+            recordUsage(activeStreamModel, event.usage)
           }
+        }
+        // HTTP/SSE 正常收尾不等于模型真的给了答复。部分本地 OpenAI 兼容层会
+        // 很快返回 finish_reason=stop，但 content 为空；旧逻辑仍发送 done，前端
+        // 就把空白消息标成「已完成」。工具调用是合法输出，纯 reasoning 不是给
+        // 用户的最终答复，因此只有正文或工具调用才能算本轮成功。
+        if (!clientGone && !assistantText.trim() && !streamHadToolCalls) {
+          throw createEmptyModelResponseError(streamFinishReason)
         }
         // 扣费 — 客户端断了就跳过,不收钱
         if (!clientGone) {
           let chargedBilling = null
           let billingError = null
+          const actualCost = streamUsage
+            ? calculateChatCostFromUsage({
+                modelName: activeStreamModel,
+                usage: streamUsage,
+                config: loadBillingConfig(getRuntimeEnv()),
+              })
+            : activeEstimatedCost
           try {
-            chargedBilling = chargeForModelUse({ token, modelName: selectedModel, cost: estimatedCost })
+            chargedBilling = chargeForModelUse({ token, modelName: activeStreamModel, cost: actualCost })
           } catch (chargeErr) {
             // 扣费失败(余额不够等)不阻断已经流出去的内容,但要告诉前端
             billingError = chargeErr.message
@@ -1170,8 +1777,11 @@ export async function handleModelProxyRequest(req, res) {
             latency: Date.now() - started,
             injectedMemoryIds,
             usage: streamUsage,
+            // ★ 'length' = 被 max_tokens 截断,不是模型说完了。
+            // 前端据此给出「输出预算用尽」而不是「模型不肯说话」。
+            finishReason: streamFinishReason,
             billing: {
-              creditsCharged: estimatedCost,
+              creditsCharged: actualCost,
               credits: chargedBilling?.user?.credits ?? null,
               error: billingError,
             },
@@ -1180,44 +1790,96 @@ export async function handleModelProxyRequest(req, res) {
       } catch (err) {
         // AbortError 来自客户端断开,不当成错误回写
         if (!clientGone && err?.name !== 'AbortError') {
-          safeWrite(`data: ${JSON.stringify({ ok: false, error: formatProxyError(err) })}\n\n`)
+          safeWrite(`data: ${JSON.stringify({
+            ok: false,
+            error: formatProxyError(err),
+            // 前端据此区分「我们判定超时」和「上游拒绝」,给不同的补救提示
+            code: err?.code || null,
+            timeoutPhase: err?.timeoutPhase || null,
+            // 已经吐出来的部分不该白丢 —— 前端可以据此显示「继续生成」
+            partial: assistantText ? true : false,
+          })}\n\n`)
         }
       } finally {
-        req.off('close', onClose)
+        clearInterval(heartbeat)
+        disposeDisconnectListener()
       }
       if (!res.writableEnded) res.end()
+      const autoMemorySessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : ''
+      if (!clientGone && !streamHadToolCalls && assistantText && session?.user_id && autoMemorySessionId) {
+        scheduleAutoMemoryExtraction({
+          userId: session.user_id,
+          sessionId: autoMemorySessionId,
+          agentId: injectedAgentId,
+          messages: autoMemorySourceMessages,
+          assistantText,
+          callModel: ({ messages: memoryMessages }) => callBackgroundModel({
+            messages: memoryMessages,
+            userId: session.user_id,
+          }),
+        })
+      }
       return
     }
 
     // 非流式响应（测试模式或前端未启用 stream）
     const started = Date.now()
-    const reply = await (async () => {
-      const { url, init } = buildOpenAICompatibleRequest({ config: requestConfig, messages })
-      const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 60000)
-      try {
-        const response = await fetch(url, { ...init, signal: controller.signal })
+    const completion = await runWithProviderFailover(requestCandidates, async (candidate) => {
+      const candidateCost = testMode || isLocalModelEndpoint(candidate.baseUrl)
+        ? 0
+        : estimateChatCost({ modelName: candidate.modelName, messages, config: loadBillingConfig(getRuntimeEnv()) })
+      if (!testMode && account.credits < candidateCost) {
+        const creditError = new Error(`积分不足，需要 ${candidateCost} 积分，当前余额 ${account.credits}。请先充值。`)
+        creditError.statusCode = 402
+        throw creditError
+      }
+      const candidateProfile = profileForConfig(candidate, runtimeEnv)
+      const { url, init } = buildOpenAICompatibleRequest({
+        config: candidate,
+        messages,
+        env: runtimeEnv,
+        profile: candidateProfile,
+      })
+      // ★ 计时器移到 withRetry **内部**(fetchWithTimeout 里每次尝试各起一个)。
+      // 原来 timer 起在外面,3 次重试共享同一个 60s 预算 —— 第 1 次尝试耗掉 55s,
+      // 后两次尝试根本没机会跑完就被同一个 controller 掐了。
+      const data = await withRetry(async () => {
+        const response = await fetchWithTimeout(fetchWithEnvProxy, url, init, {
+          timeoutMs: candidateProfile.timeouts.requestMs,
+          externalSignal: null,
+          phase: 'request',
+        })
         const text = await response.text()
-        let data = null
-        try { data = text ? JSON.parse(text) : null } catch { data = { raw: text } }
+        let parsed
+        try { parsed = text ? JSON.parse(text) : null } catch { parsed = { raw: text } }
         if (!response.ok) {
-          const message = data?.error?.message || data?.message || text.slice(0, 240) || response.statusText
+          const message = parsed?.error?.message || parsed?.message || text.slice(0, 240) || response.statusText
           const error = new Error(message)
           error.status = response.status
+          error.fromUpstream = true
+          error.retryAfter = response.headers?.get?.('retry-after') ?? null
           throw error
         }
-        // usage 只读不改返回类型 —— parseOpenAICompatibleResponse 返回裸字符串,
-        // 多处调用点直接当字符串用,不能在这里改形状。
-        recordUsage(selectedModel, extractUsage(data))
-        return parseOpenAICompatibleResponse(data)
-      } finally {
-        clearTimeout(timeout)
-      }
-    })()
+        return parsed
+      })
+      const usage = extractUsage(data)
+      recordUsage(candidate.modelName, usage)
+      const actualCost = usage
+        ? calculateChatCostFromUsage({
+            modelName: candidate.modelName,
+            usage,
+            config: loadBillingConfig(getRuntimeEnv()),
+          })
+        : candidateCost
+      return { reply: parseOpenAICompatibleResponse(data), modelName: candidate.modelName, cost: actualCost }
+    })
+    const reply = completion.reply
+    const responseModel = completion.modelName
+    const responseCost = completion.cost
 
     let billing = null
     if (!testMode) {
-      billing = chargeForModelUse({ token, modelName: selectedModel, cost: estimatedCost })
+      billing = chargeForModelUse({ token, modelName: responseModel, cost: responseCost })
       if (session?.user_id) {
         dispatchHooks({
           userId: session.user_id,
@@ -1233,11 +1895,25 @@ export async function handleModelProxyRequest(req, res) {
       ok: true,
       reply,
       latency: Date.now() - started,
-      creditsCharged: estimatedCost,
+      creditsCharged: responseCost,
       user: billing?.user,
       injectedMemoryIds,
       ...(testMode ? { compilerFingerprints } : {}),
     })
+    const autoMemorySessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : ''
+    if (!testMode && session?.user_id && reply && autoMemorySessionId) {
+      scheduleAutoMemoryExtraction({
+        userId: session.user_id,
+        sessionId: autoMemorySessionId,
+        agentId: injectedAgentId,
+        messages: autoMemorySourceMessages,
+        assistantText: reply,
+        callModel: ({ messages: memoryMessages }) => callBackgroundModel({
+          messages: memoryMessages,
+          userId: session.user_id,
+        }),
+      })
+    }
   } catch (error) {
     // ★ #36: 尊重 readJson 抛的 413 (request body too large)
     let status

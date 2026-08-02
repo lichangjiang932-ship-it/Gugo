@@ -9,14 +9,28 @@ lerna-debug.log*
 
 node_modules
 dist
+# 临时验证构建产物。原来只覆盖了 .verify-dist-* 和 .codex-build-check-*,
+# 于是 .codex-build-slash-* / .codex-theme-build-* 等 9 个目录一直以未跟踪状态
+# 躺在仓库根,每次 git status 都是一屏噪音。一网打尽。
+.verify-dist-*
+.verify-build-*
+.build-verify-*
+build-verify-*
+.codex-build-*
+.codex-theme-build-*
+.codex-verify-build-*
+.codex-*.log
 dist-ssr
 *.local
 server-data/
+.credentials.key
+*.credentials.key
 .artifacts/
 .env
 .env.*
 !.env.example
 .tmp/
+.npm-cache/
 
 # Editor directories and files
 .vscode/*

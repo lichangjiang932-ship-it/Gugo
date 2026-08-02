@@ -5,6 +5,7 @@ import { buildArtifactPreview } from '../src/lib/artifactPreview.js'
 import { buildToolSpecs, executeToolCall, listToolNames } from '../src/lib/tools/index.js'
 import { buildCompaction, validateToolCallChain } from '../server/services/compactionService.js'
 import { hasVisionContent, supportsVisionModel } from '../server/adapters/modelProxy.js'
+import { replaceUnsupportedVisionContent } from '../server/adapters/visionAssist.js'
 
 test('advanced artifact previews render mermaid, chart, svg, and multi-file html', () => {
   const mermaid = buildArtifactPreview({
@@ -91,4 +92,29 @@ test('vision helpers enforce MODEL_NAMES_VISION only when configured', () => {
   assert.equal(supportsVisionModel('text-model', {}), true)
   assert.equal(supportsVisionModel('text-model', { MODEL_NAMES_VISION: 'vision-model' }), false)
   assert.equal(supportsVisionModel('vision-model', { MODEL_NAMES_VISION: 'vision-model' }), true)
+})
+
+test('text-only model outbound view replaces image_url/input_image without mutating canonical history', () => {
+  const messages = [{
+    role: 'user',
+    content: [
+      { type: 'text', text: 'before' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } },
+      { type: 'text', text: 'between' },
+      { type: 'input_image', image_url: 'https://example.test/image.png' },
+      { type: 'text', text: 'after' },
+    ],
+  }]
+  const canonicalSnapshot = structuredClone(messages)
+  const result = replaceUnsupportedVisionContent({ messages, modelName: 'text-model' })
+
+  assert.equal(result.replacementCount, 2)
+  assert.deepEqual(messages, canonicalSnapshot)
+  assert.notEqual(result.messages, messages)
+  assert.deepEqual(result.messages[0].content.map((part) => part.type), ['text', 'text', 'text', 'text', 'text'])
+  assert.equal(result.messages[0].content[0].text, 'before')
+  assert.match(result.messages[0].content[1].text, /text-model does not accept vision input/)
+  assert.equal(result.messages[0].content[2].text, 'between')
+  assert.equal(result.messages[0].content[4].text, 'after')
+  assert.equal(hasVisionContent(result.messages), false)
 })

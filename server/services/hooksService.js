@@ -20,8 +20,23 @@ import { getDb } from '../db.js'
 import { randomUUID } from 'node:crypto'
 import { assertSafeOutboundUrl } from '../adapters/toolProxy.js'
 import { writeToolAudit } from '../utils/audit.js'
+import { openCredentialObject, sealCredentialObject } from '../utils/credentialVault.js'
 
 const ALLOWED_EVENTS = ['user_prompt_submit', 'pre_tool_use', 'post_tool_use', 'stop']
+const HOOK_HEADERS_PURPOSE = 'hook-headers'
+
+function readHookHeaders(row) {
+  if (!row?.headers_json) return null
+  const decoded = openCredentialObject(row.headers_json, {
+    purpose: HOOK_HEADERS_PURPOSE,
+    legacyDecoder: (raw) => safeParseJson(raw) || {},
+  })
+  if (decoded.legacy && row.id && Object.keys(decoded.value).length) {
+    getDb().prepare('UPDATE hooks SET headers_json = ? WHERE id = ?')
+      .run(sealCredentialObject(decoded.value, { purpose: HOOK_HEADERS_PURPOSE }), row.id)
+  }
+  return decoded.value
+}
 
 function row2hook(row) {
   if (!row) return null
@@ -33,7 +48,7 @@ function row2hook(row) {
     kind: row.kind,
     command: row.command || null,
     url: row.url || null,
-    headers: safeParseJson(row.headers_json) || null,
+    headers: readHookHeaders(row),
     enabled: !!row.enabled,
     blocking: !!row.blocking,
     timeoutMs: row.timeout_ms,
@@ -92,7 +107,9 @@ export function upsertHook({ id, userId, event, toolPattern, kind, command, url,
   const now = Date.now()
   const hookId = id || randomUUID()
   const cmdJson = kind === 'shell' ? JSON.stringify(command) : null
-  const headersJson = kind === 'http' && headers ? JSON.stringify(headers) : null
+  const headersJson = kind === 'http' && headers
+    ? sealCredentialObject(headers, { purpose: HOOK_HEADERS_PURPOSE })
+    : null
   const existing = db.prepare('SELECT id FROM hooks WHERE user_id = ? AND id = ?').get(userId, hookId)
   if (existing) {
     db.prepare(

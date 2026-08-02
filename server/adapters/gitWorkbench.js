@@ -3,6 +3,8 @@ import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { authenticateRequest } from '../middleware.js'
 import { readJson, sendJson } from '../utils.js'
+import { resolveAuthorizedLocalPath } from '../services/localFileAccessService.js'
+import { getRuntimeEnv } from '../utils/runtimeEnv.js'
 
 const MAX_OUTPUT = 1024 * 1024
 const DEFAULT_TIMEOUT = 60_000
@@ -15,19 +17,31 @@ function badReq(message, statusCode = 400) {
   return err
 }
 
-function workspaceRoot() {
-  return path.resolve(process.env.WORKSPACE_ROOT?.trim() || process.cwd())
+function workspaceRoot(env = getRuntimeEnv()) {
+  return path.resolve(env.WORKSPACE_ROOT?.trim() || process.cwd())
 }
 
-function requireGitEnabled() {
-  if (process.env.WORKSPACE_GIT_ENABLED !== '1') {
+function getRoot({ userId = null, cwd: rawCwd = null, env = getRuntimeEnv() } = {}) {
+  const requestedPath = rawCwd == null || rawCwd === '' ? workspaceRoot(env) : rawCwd
+  const resolved = resolveAuthorizedLocalPath({
+    userId,
+    rawPath: requestedPath,
+    write: false,
+    allowWorkspace: true,
+  })
+  if (!fs.statSync(resolved.fullPath).isDirectory()) throw badReq('cwd must be a directory')
+  return resolved.fullPath
+}
+
+function requireGitEnabled(env = getRuntimeEnv()) {
+  if (env.WORKSPACE_GIT_ENABLED !== '1') {
     throw badReq('WORKSPACE_GIT_ENABLED=1 未启用,无法使用 Git 工作台。在项目根目录的 .env 里加上这一行后重启服务。', 403)
   }
 }
 
-function requireMutationEnabled() {
-  requireGitEnabled()
-  if (process.env.WORKSPACE_GIT_MUTATION_ENABLED !== '1') {
+function requireMutationEnabled(env = getRuntimeEnv()) {
+  requireGitEnabled(env)
+  if (env.WORKSPACE_GIT_MUTATION_ENABLED !== '1') {
     throw badReq('WORKSPACE_GIT_MUTATION_ENABLED=1 未启用,无法 commit/push(只读的 status/diff 不受影响)。在 .env 里加上这一行后重启服务。', 403)
   }
 }
@@ -100,14 +114,14 @@ function parsePorcelain(stdout = '') {
   })
 }
 
-async function currentBranch() {
-  const branch = await runGit(['branch', '--show-current'], { rejectOnError: false })
+async function currentBranch(cwd) {
+  const branch = await runGit(['branch', '--show-current'], { cwd, rejectOnError: false })
   const name = branch.stdout.trim()
   return name || 'HEAD'
 }
 
-async function currentStatusFiles() {
-  const status = await runGit(['status', '--porcelain=v1', '-uall'])
+async function currentStatusFiles(cwd) {
+  const status = await runGit(['status', '--porcelain=v1', '-uall'], { cwd })
   return parsePorcelain(status.stdout)
 }
 
@@ -116,48 +130,58 @@ function clip(text, max = MAX_OUTPUT) {
   return value.length > max ? value.slice(0, max) + '\n...[truncated]' : value
 }
 
-export async function gitStatusTool() {
-  requireGitEnabled()
+export async function gitStatusTool({ cwd: rawCwd, userId = null } = {}) {
+  const env = getRuntimeEnv()
+  requireGitEnabled(env)
+  const root = getRoot({ userId, cwd: rawCwd, env })
   const [branch, filesResult] = await Promise.all([
-    currentBranch(),
-    currentStatusFiles(),
+    currentBranch(root),
+    currentStatusFiles(root),
   ])
   return {
     ok: true,
     branch,
-    root: workspaceRoot(),
+    root,
     clean: filesResult.length === 0,
     files: filesResult,
     porcelain: filesResult.map((f) => `${f.status} ${f.path}`).join('\n'),
   }
 }
 
-export async function gitDiffTool({ path: rawPath } = {}) {
-  requireGitEnabled()
+export async function gitDiffTool({ path: rawPath, cwd: rawCwd, staged = false, userId = null } = {}) {
+  const env = getRuntimeEnv()
+  requireGitEnabled(env)
+  const root = getRoot({ userId, cwd: rawCwd, env })
   const repoPath = normalizeRepoPath(rawPath)
   const args = ['diff', '--no-ext-diff', '--no-color']
+  if (staged) args.push('--cached')
   if (repoPath) args.push('--', repoPath)
-  const diff = await runGit(args, { rejectOnError: false })
+  const diff = await runGit(args, { cwd: root, rejectOnError: false })
   const statArgs = ['diff', '--stat', '--no-ext-diff', '--no-color']
+  if (staged) statArgs.push('--cached')
   if (repoPath) statArgs.push('--', repoPath)
-  const stat = await runGit(statArgs, { rejectOnError: false })
+  const stat = await runGit(statArgs, { cwd: root, rejectOnError: false })
   return {
     ok: diff.ok,
     path: repoPath || null,
+    staged: Boolean(staged),
     stat: clip(stat.stdout || stat.stderr, 80_000),
     diff: clip(diff.stdout || diff.stderr),
     exitCode: diff.exitCode,
   }
 }
 
-export async function runProjectCheckTool({ check } = {}) {
-  requireGitEnabled()
+export async function runProjectCheckTool({ check, cwd: rawCwd, userId = null } = {}) {
+  const env = getRuntimeEnv()
+  requireGitEnabled(env)
+  const root = getRoot({ userId, cwd: rawCwd, env })
   const name = String(check || '').trim()
   if (!ALLOWED_CHECKS.has(name)) {
     throw badReq('run_project_check only supports lint, test, build')
   }
   const command = npmCommandArgs(name)
   const result = await runFile(command.file, command.args, {
+    cwd: root,
     timeout: CHECK_TIMEOUT,
     rejectOnError: false,
   })
@@ -183,17 +207,19 @@ function validateSelectedFiles(files, statusFiles) {
   return [...new Set(selected)]
 }
 
-export async function gitCommitTool({ message, files } = {}) {
-  requireMutationEnabled()
+export async function gitCommitTool({ message, files, cwd: rawCwd, userId = null } = {}) {
+  const env = getRuntimeEnv()
+  requireMutationEnabled(env)
+  const root = getRoot({ userId, cwd: rawCwd, env })
   const msg = String(message || '').trim()
   if (msg.length < 3 || msg.length > 200) throw badReq('commit message must be 3-200 characters')
-  const statusFiles = await currentStatusFiles()
+  const statusFiles = await currentStatusFiles(root)
   const selected = validateSelectedFiles(files, statusFiles)
-  await runGit(['add', '--', ...selected])
-  const hasStaged = await runGit(['diff', '--cached', '--quiet', '--', ...selected], { rejectOnError: false })
+  await runGit(['add', '--', ...selected], { cwd: root })
+  const hasStaged = await runGit(['diff', '--cached', '--quiet', '--', ...selected], { cwd: root, rejectOnError: false })
   if (hasStaged.exitCode === 0) throw badReq('selected files have no staged changes')
-  const commit = await runGit(['commit', '-m', msg, '--', ...selected])
-  const hash = await runGit(['rev-parse', 'HEAD'])
+  const commit = await runGit(['commit', '-m', msg, '--', ...selected], { cwd: root })
+  const hash = await runGit(['rev-parse', 'HEAD'], { cwd: root })
   return {
     ok: true,
     commit: hash.stdout.trim(),
@@ -202,12 +228,14 @@ export async function gitCommitTool({ message, files } = {}) {
   }
 }
 
-export async function gitPushTool({ force = false } = {}) {
-  requireMutationEnabled()
+export async function gitPushTool({ force = false, cwd: rawCwd, userId = null } = {}) {
+  const env = getRuntimeEnv()
+  requireMutationEnabled(env)
+  const root = getRoot({ userId, cwd: rawCwd, env })
   if (force) throw badReq('force push is not allowed')
-  const branch = await currentBranch()
+  const branch = await currentBranch(root)
   if (!branch || branch === 'HEAD') throw badReq('cannot push detached HEAD')
-  const result = await runGit(['push', 'origin', branch], { rejectOnError: false })
+  const result = await runGit(['push', 'origin', branch], { cwd: root, rejectOnError: false })
   if (!result.ok) {
     const err = badReq(String(result.stderr || result.stdout || 'git push failed').trim(), 500)
     err.result = result
@@ -222,11 +250,56 @@ export async function gitPushTool({ force = false } = {}) {
   }
 }
 
-export async function dispatchGitTool(name, args) {
+export async function gitRollbackTool({ commit, cwd: rawCwd, userId = null } = {}) {
+  const env = getRuntimeEnv()
+  requireMutationEnabled(env)
+  const root = getRoot({ userId, cwd: rawCwd, env })
+  const expected = String(commit || '').trim()
+  if (!/^[0-9a-f]{7,40}$/i.test(expected)) {
+    throw badReq('rollback commit must be a 7-40 character hexadecimal hash')
+  }
+
+  const statusFiles = await currentStatusFiles(root)
+  if (statusFiles.length) {
+    throw badReq('rollback requires a clean working tree; commit or discard current changes first')
+  }
+
+  const headResult = await runGit(['rev-parse', 'HEAD'], { cwd: root })
+  const head = headResult.stdout.trim()
+  const expectedResult = await runGit(['rev-parse', '--verify', `${expected}^{commit}`], {
+    cwd: root,
+    rejectOnError: false,
+  })
+  const resolvedExpected = expectedResult.stdout.trim()
+  if (!expectedResult.ok || !resolvedExpected || resolvedExpected !== head) {
+    throw badReq('rollback is restricted to the current HEAD commit')
+  }
+
+  const reverted = await runGit(['revert', '--no-edit', head], { cwd: root, rejectOnError: false })
+  if (!reverted.ok) {
+    await runGit(['revert', '--abort'], { cwd: root, rejectOnError: false })
+    const err = badReq(String(reverted.stderr || reverted.stdout || 'git revert failed').trim(), 500)
+    err.result = reverted
+    throw err
+  }
+  const rollbackHead = await runGit(['rev-parse', 'HEAD'], { cwd: root })
+  return {
+    ok: true,
+    revertedCommit: head,
+    rollbackCommit: rollbackHead.stdout.trim(),
+    summary: reverted.stdout.trim(),
+  }
+}
+
+export async function dispatchGitTool(name, args, { userId = null } = {}) {
+  const argsWithUser = userId ? { ...(args || {}), userId } : (args || {})
   switch (name) {
-    case 'git_status': return gitStatusTool(args)
-    case 'git_diff': return gitDiffTool(args)
-    case 'run_project_check': return runProjectCheckTool(args)
+    case 'git_status': return gitStatusTool(argsWithUser)
+    case 'git_diff': return gitDiffTool(argsWithUser)
+    case 'run_project_check': return runProjectCheckTool(argsWithUser)
+    case 'git_commit': return gitCommitTool(argsWithUser)
+    case 'git_push': return gitPushTool(argsWithUser)
+    case 'git_rollback': return gitRollbackTool(argsWithUser)
     default: throw badReq(`unknown git tool: ${name}`, 404)
   }
 }
@@ -237,12 +310,14 @@ export async function handleGitWorkbenchRequest(req, res) {
   const url = new URL(req.url || '/', 'http://localhost')
   try {
     const body = await readJson(req)
+    const bodyWithUser = { ...body, userId: req.userId }
     let result
-    if (url.pathname === '/api/tools/git/status' || url.pathname === '/api/workbench/git/status') result = await gitStatusTool(body)
-    else if (url.pathname === '/api/tools/git/diff' || url.pathname === '/api/workbench/git/diff') result = await gitDiffTool(body)
-    else if (url.pathname === '/api/tools/check/run' || url.pathname === '/api/workbench/check/run') result = await runProjectCheckTool(body)
-    else if (url.pathname === '/api/workbench/git/commit') result = await gitCommitTool(body)
-    else if (url.pathname === '/api/workbench/git/push') result = await gitPushTool(body)
+    if (url.pathname === '/api/tools/git/status' || url.pathname === '/api/workbench/git/status') result = await gitStatusTool(bodyWithUser)
+    else if (url.pathname === '/api/tools/git/diff' || url.pathname === '/api/workbench/git/diff') result = await gitDiffTool(bodyWithUser)
+    else if (url.pathname === '/api/tools/check/run' || url.pathname === '/api/workbench/check/run') result = await runProjectCheckTool(bodyWithUser)
+    else if (url.pathname === '/api/workbench/git/commit') result = await gitCommitTool(bodyWithUser)
+    else if (url.pathname === '/api/workbench/git/push') result = await gitPushTool(bodyWithUser)
+    else if (url.pathname === '/api/workbench/git/rollback') result = await gitRollbackTool(bodyWithUser)
     else return sendJson(res, 404, { ok: false, error: 'not found' })
     return sendJson(res, 200, result)
   } catch (err) {
@@ -255,8 +330,11 @@ export const GIT_TOOL_SPECS = [
     type: 'function',
     function: {
       name: 'git_status',
-      description: 'Read git branch and workspace changed files. Read-only. Use before and after code edits.',
-      parameters: { type: 'object', properties: {} },
+      description: 'Read git branch and changed files from the workspace or a user-authorized repository. Read-only. Use before and after code edits.',
+      parameters: {
+        type: 'object',
+        properties: { cwd: { type: 'string', description: 'Optional workspace-relative or authorized absolute repository path.' } },
+      },
     },
   },
   {
@@ -266,7 +344,11 @@ export const GIT_TOOL_SPECS = [
       description: 'Read unified git diff for the whole workspace or one changed file. Read-only.',
       parameters: {
         type: 'object',
-        properties: { path: { type: 'string', description: 'Optional workspace-relative file path.' } },
+        properties: {
+          path: { type: 'string', description: 'Optional repository-relative file path.' },
+          staged: { type: 'boolean', description: 'When true, read the staged (cached) diff instead of the working-tree diff.' },
+          cwd: { type: 'string', description: 'Optional workspace-relative or authorized absolute repository path.' },
+        },
       },
     },
   },
@@ -277,8 +359,59 @@ export const GIT_TOOL_SPECS = [
       description: 'Run one allowed project verification command: lint, test, or build. Does not accept arbitrary shell.',
       parameters: {
         type: 'object',
-        properties: { check: { type: 'string', enum: ['lint', 'test', 'build'] } },
+        properties: {
+          check: { type: 'string', enum: ['lint', 'test', 'build'] },
+          cwd: { type: 'string', description: 'Optional workspace-relative or authorized absolute repository path.' },
+        },
         required: ['check'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'git_commit',
+      description: 'Commit only explicitly selected changed files. Requires WORKSPACE_GIT_MUTATION_ENABLED=1 and interactive approval.',
+      parameters: {
+        type: 'object',
+        properties: {
+          message: { type: 'string', minLength: 3, maxLength: 200 },
+          files: {
+            type: 'array',
+            minItems: 1,
+            items: { type: 'string', description: 'Repository-relative changed file path.' },
+          },
+          cwd: { type: 'string', description: 'Optional workspace-relative or authorized absolute repository path.' },
+        },
+        required: ['message', 'files'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'git_push',
+      description: 'Push the current branch to origin without force. Requires WORKSPACE_GIT_MUTATION_ENABLED=1 and interactive approval.',
+      parameters: {
+        type: 'object',
+        properties: {
+          cwd: { type: 'string', description: 'Optional workspace-relative or authorized absolute repository path.' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'git_rollback',
+      description: 'Safely roll back a failed committed change by reverting the current HEAD into a new commit. Never resets history or overwrites a dirty working tree.',
+      parameters: {
+        type: 'object',
+        properties: {
+          commit: { type: 'string', description: 'Expected current HEAD commit hash returned by git_commit.' },
+          cwd: { type: 'string', description: 'Optional workspace-relative or authorized absolute repository path.' },
+        },
+        required: ['commit'],
       },
     },
   },

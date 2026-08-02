@@ -14,6 +14,89 @@ const MAX_NAME_LEN = 80
 const MAX_MD_LEN = 32 * 1024     // 32KB / 卡片，够写一整篇 SOUL.md
 const MAX_AVATAR_LEN = 1024
 const MAX_TEMPLATE_LEN = 64
+const MAX_MANIFEST_IDS = 32
+const MAX_MANIFEST_ID_LEN = 64
+const MANIFEST_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/
+const PERMISSION_MODES = new Set(['normal', 'acceptEdits', 'plan', 'bypass'])
+
+export const DEFAULT_PERSONA_MANIFEST = Object.freeze({
+  version: 1,
+  capabilityIds: Object.freeze([]),
+  recommendedConnectorIds: Object.freeze([]),
+  defaultPermissionMode: 'normal',
+})
+
+function defaultPersonaManifest() {
+  return {
+    version: DEFAULT_PERSONA_MANIFEST.version,
+    capabilityIds: [],
+    recommendedConnectorIds: [],
+    defaultPermissionMode: DEFAULT_PERSONA_MANIFEST.defaultPermissionMode,
+  }
+}
+
+function normalizeManifestIds(value, field) {
+  if (value == null) return []
+  if (!Array.isArray(value)) throw new Error(`${field} must be an array`)
+  if (value.length > MAX_MANIFEST_IDS) throw new Error(`${field} exceeds ${MAX_MANIFEST_IDS} items`)
+  const result = []
+  const seen = new Set()
+  for (const item of value) {
+    if (typeof item !== 'string') throw new Error(`${field} entries must be strings`)
+    const id = item.trim()
+    if (!id || id.length > MAX_MANIFEST_ID_LEN || !MANIFEST_ID_RE.test(id)) {
+      throw new Error(`${field} contains invalid id: ${id || '(empty)'}`)
+    }
+    if (!seen.has(id)) {
+      seen.add(id)
+      result.push(id)
+    }
+  }
+  return result
+}
+
+export function normalizePersonaManifest(value) {
+  if (value == null || value === '') return defaultPersonaManifest()
+  if (typeof value !== 'object' || Array.isArray(value)) throw new Error('personaManifest must be an object')
+  if (value.version != null && value.version !== 1) throw new Error('personaManifest.version must be 1')
+  const defaultPermissionMode = value.defaultPermissionMode == null
+    ? 'normal'
+    : String(value.defaultPermissionMode).trim()
+  if (!PERMISSION_MODES.has(defaultPermissionMode)) {
+    throw new Error(`invalid defaultPermissionMode: ${defaultPermissionMode}`)
+  }
+  return {
+    version: 1,
+    capabilityIds: normalizeManifestIds(value.capabilityIds, 'capabilityIds'),
+    recommendedConnectorIds: normalizeManifestIds(value.recommendedConnectorIds, 'recommendedConnectorIds'),
+    defaultPermissionMode,
+  }
+}
+
+function parseStoredPersonaManifest(value) {
+  if (!value) return defaultPersonaManifest()
+  try {
+    return normalizePersonaManifest(JSON.parse(value))
+  } catch {
+    return defaultPersonaManifest()
+  }
+}
+
+export function buildPersonaManifestBlock(manifest) {
+  let normalized
+  try {
+    normalized = normalizePersonaManifest(manifest)
+  } catch {
+    normalized = defaultPersonaManifest()
+  }
+  const lines = []
+  if (normalized.capabilityIds.length) lines.push(`Declared capabilities: ${normalized.capabilityIds.join(', ')}`)
+  if (normalized.recommendedConnectorIds.length) lines.push(`Recommended connectors: ${normalized.recommendedConnectorIds.join(', ')}`)
+  if (normalized.defaultPermissionMode !== 'normal') {
+    lines.push(`Recommended permission mode: ${normalized.defaultPermissionMode} (recommendation only; never override the user's current permission setting)`)
+  }
+  return lines.length ? `## PERSONA MANIFEST\n${lines.join('\n')}` : ''
+}
 
 function newId() {
   return 'agt_' + crypto.randomBytes(9).toString('base64url')
@@ -28,6 +111,7 @@ function rowToAgent(row) {
     soulMd: row.soul_md,
     identityMd: row.identity_md,
     personaTemplate: row.persona_template || '',
+    personaManifest: parseStoredPersonaManifest(row.persona_manifest_json),
     avatarUrl: row.avatar_url || null,
     isDefault: !!row.is_default,
     createdAt: row.created_at,
@@ -76,13 +160,14 @@ export function getDefaultAgent({ userId }) {
   return rowToAgent(row)
 }
 
-export function createAgent({ userId, name, soulMd = '', identityMd = '', personaTemplate = '', avatarUrl = null, isDefault = false, now = Date.now() }) {
+export function createAgent({ userId, name, soulMd = '', identityMd = '', personaTemplate = '', personaManifest = null, avatarUrl = null, isDefault = false, now = Date.now() }) {
   if (!userId) throw new Error('userId required')
   const nm = clampStr(name, MAX_NAME_LEN, 'name').trim()
   if (!nm) throw new Error('name 不能为空')
   const soul = clampStr(soulMd, MAX_MD_LEN, 'soulMd')
   const ident = clampStr(identityMd, MAX_MD_LEN, 'identityMd')
   const persona = normalizePersonaTemplate(personaTemplate)
+  const manifest = normalizePersonaManifest(personaManifest)
   const avatar = avatarUrl == null ? null : clampStr(avatarUrl, MAX_AVATAR_LEN, 'avatarUrl')
   const db = getDb()
   const id = newId()
@@ -91,8 +176,8 @@ export function createAgent({ userId, name, soulMd = '', identityMd = '', person
       db.prepare('UPDATE agents SET is_default = 0 WHERE user_id = ? AND is_default = 1').run(userId)
     }
     db.prepare(
-      'INSERT INTO agents (id, user_id, name, soul_md, identity_md, persona_template, avatar_url, is_default, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-    ).run(id, userId, nm, soul, ident, persona || null, avatar, isDefault ? 1 : 0, now, now)
+      'INSERT INTO agents (id, user_id, name, soul_md, identity_md, persona_template, persona_manifest_json, avatar_url, is_default, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(id, userId, nm, soul, ident, persona || null, JSON.stringify(manifest), avatar, isDefault ? 1 : 0, now, now)
   })
   try {
     tx()
@@ -119,6 +204,8 @@ export function updateAgent({ userId, id, patch = {}, now = Date.now() }) {
   if ('identityMd' in patch) next.identityMd = clampStr(patch.identityMd, MAX_MD_LEN, 'identityMd')
   if ('personaTemplate' in patch) next.personaTemplate = normalizePersonaTemplate(patch.personaTemplate)
   if ('persona_template' in patch) next.personaTemplate = normalizePersonaTemplate(patch.persona_template)
+  if ('personaManifest' in patch) next.personaManifest = normalizePersonaManifest(patch.personaManifest)
+  if ('persona_manifest' in patch) next.personaManifest = normalizePersonaManifest(patch.persona_manifest)
   if ('avatarUrl' in patch) next.avatarUrl = patch.avatarUrl == null ? null : clampStr(patch.avatarUrl, MAX_AVATAR_LEN, 'avatarUrl')
   if ('isDefault' in patch) next.isDefault = !!patch.isDefault
   const db = getDb()
@@ -127,8 +214,8 @@ export function updateAgent({ userId, id, patch = {}, now = Date.now() }) {
       db.prepare('UPDATE agents SET is_default = 0 WHERE user_id = ? AND is_default = 1').run(userId)
     }
     db.prepare(
-      'UPDATE agents SET name = ?, soul_md = ?, identity_md = ?, persona_template = ?, avatar_url = ?, is_default = ?, updated_at = ? WHERE id = ? AND user_id = ?'
-    ).run(next.name, next.soulMd, next.identityMd, next.personaTemplate || null, next.avatarUrl, next.isDefault ? 1 : 0, now, id, userId)
+      'UPDATE agents SET name = ?, soul_md = ?, identity_md = ?, persona_template = ?, persona_manifest_json = ?, avatar_url = ?, is_default = ?, updated_at = ? WHERE id = ? AND user_id = ?'
+    ).run(next.name, next.soulMd, next.identityMd, next.personaTemplate || null, JSON.stringify(next.personaManifest), next.avatarUrl, next.isDefault ? 1 : 0, now, id, userId)
   })
   try {
     tx()
@@ -192,10 +279,12 @@ export function buildAgentSystemBlock(agent) {
   const soul = (agent.soulMd || '').trim()
   const identity = (agent.identityMd || '').trim()
   const personaPrompt = getAgentTemplateSystemPrompt(agent.personaTemplate || '', { lang: 'zh' }).trim()
-  if (!soul && !identity && !personaPrompt) return ''
+  const manifestBlock = buildPersonaManifestBlock(agent.personaManifest)
+  if (!soul && !identity && !personaPrompt && !manifestBlock) return ''
   parts.push(`# Agent: ${agent.name || 'Agent'}`)
   if (personaPrompt) parts.push('\n## PERSONA TEMPLATE\n' + personaPrompt)
   if (identity) parts.push('\n## IDENTITY\n' + identity)
+  if (manifestBlock) parts.push('\n' + manifestBlock)
   if (soul) parts.push('\n## SOUL\n' + soul)
   parts.push('\nFollow the persona above. Stay in character.')
   return parts.join('\n')
@@ -211,6 +300,7 @@ export function serializeAgentMarkdown(agent) {
     `name: ${JSON.stringify(agent.name || '')}`,
     `avatar_url: ${JSON.stringify(agent.avatarUrl || '')}`,
     `persona_template: ${JSON.stringify(agent.personaTemplate || '')}`,
+    `persona_manifest: ${JSON.stringify(normalizePersonaManifest(agent.personaManifest))}`,
     `exported_at: ${new Date().toISOString()}`,
     '---',
     '',
@@ -231,6 +321,7 @@ export function parseAgentMarkdown(text) {
   let name = ''
   let avatarUrl = null
   let personaTemplate = ''
+  let personaManifest = defaultPersonaManifest()
 
   const fmMatch = body.match(/^---\s*\n([\s\S]*?)\n---\s*\n/)
   if (fmMatch) {
@@ -246,6 +337,10 @@ export function parseAgentMarkdown(text) {
     const pt = fm.match(/^persona_template:\s*(.+)$/m)
     if (pt) {
       try { personaTemplate = JSON.parse(pt[1]) || '' } catch { personaTemplate = pt[1].trim() || '' }
+    }
+    const pm = fm.match(/^persona_manifest:\s*(.+)$/m)
+    if (pm) {
+      try { personaManifest = normalizePersonaManifest(JSON.parse(pm[1])) } catch { personaManifest = defaultPersonaManifest() }
     }
     body = body.slice(fmMatch[0].length)
   }
@@ -267,5 +362,5 @@ export function parseAgentMarkdown(text) {
   // fallback：全文当 soul
   if (!identityMd && !soulMd) soulMd = body.trim()
 
-  return { name, avatarUrl, personaTemplate, soulMd, identityMd }
+  return { name, avatarUrl, personaTemplate, personaManifest, soulMd, identityMd }
 }

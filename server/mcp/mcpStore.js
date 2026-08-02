@@ -1,39 +1,47 @@
 /**
- * Feature 1: mcp_servers 表 CRUD
- *
- * env_json / headers_json 应被 AES 加密。本 v1 简化:用 base64 obfuscation +
- * 注释提示运维不要把 DB 共享。后续如有 server/crypto.js 再切到 AES-GCM。
+ * MCP server CRUD.
+ * env_json and headers_json use the credential vault; legacy base64 rows
+ * migrate to AES-256-GCM on first read.
  */
 
 import { getDb } from '../db.js'
 import { randomUUID } from 'node:crypto'
+import { openCredentialObject, sealCredentialObject } from '../utils/credentialVault.js'
 
 const TRANSPORTS = ['stdio', 'sse', 'http']
+const MCP_ENV_PURPOSE = 'mcp-server-env'
+const MCP_HEADERS_PURPOSE = 'mcp-server-headers'
 
-function obfuscate(s) {
-  if (s == null) return null
-  return Buffer.from(String(s), 'utf8').toString('base64')
+function decodeLegacyCredential(raw) {
+  try {
+    const value = JSON.parse(Buffer.from(String(raw || ''), 'base64').toString('utf8'))
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  } catch {
+    return {}
+  }
 }
-function deobfuscate(s) {
-  if (s == null) return null
-  try { return Buffer.from(String(s), 'base64').toString('utf8') } catch { return null }
+
+function readCredentialColumn(row, column, purpose) {
+  const decoded = openCredentialObject(row?.[column], {
+    purpose,
+    legacyDecoder: decodeLegacyCredential,
+  })
+  if (decoded.legacy && row?.id && Object.keys(decoded.value).length) {
+    const sql = column === 'env_json'
+      ? 'UPDATE mcp_servers SET env_json = ? WHERE id = ?'
+      : 'UPDATE mcp_servers SET headers_json = ? WHERE id = ?'
+    getDb().prepare(sql).run(sealCredentialObject(decoded.value, { purpose }), row.id)
+  }
+  return decoded.value
 }
 
 function row2server(row) {
   if (!row) return null
   let argsArr = []
-  let env = {}
-  let headers = {}
   let autoApprove = []
   try { argsArr = row.args_json ? JSON.parse(row.args_json) : [] } catch { /* keep empty */ }
-  try {
-    const raw = deobfuscate(row.env_json)
-    env = raw ? JSON.parse(raw) : {}
-  } catch { /* keep empty */ }
-  try {
-    const raw = deobfuscate(row.headers_json)
-    headers = raw ? JSON.parse(raw) : {}
-  } catch { /* keep empty */ }
+  const env = readCredentialColumn(row, 'env_json', MCP_ENV_PURPOSE)
+  const headers = readCredentialColumn(row, 'headers_json', MCP_HEADERS_PURPOSE)
   try { autoApprove = row.auto_approve_json ? JSON.parse(row.auto_approve_json) : [] } catch { /* keep empty */ }
   return {
     id: row.id,
@@ -84,8 +92,8 @@ export function upsertServer({ id, userId, name, transport, command, args, env, 
   const now = Date.now()
   const serverId = id || randomUUID()
   const argsJson = JSON.stringify(Array.isArray(args) ? args : [])
-  const envJson = obfuscate(JSON.stringify(env || {}))
-  const headersJson = obfuscate(JSON.stringify(headers || {}))
+  const envJson = sealCredentialObject(env || {}, { purpose: MCP_ENV_PURPOSE })
+  const headersJson = sealCredentialObject(headers || {}, { purpose: MCP_HEADERS_PURPOSE })
   const autoApproveJson = JSON.stringify(Array.isArray(autoApprove) ? autoApprove : [])
 
   const existing = db.prepare('SELECT id FROM mcp_servers WHERE user_id = ? AND id = ?').get(userId, serverId)

@@ -80,6 +80,7 @@ export async function handleAgentRequest(req, res) {
         soulMd: body.soulMd || '',
         identityMd: body.identityMd || '',
         personaTemplate: body.personaTemplate || body.persona_template || '',
+        personaManifest: body.personaManifest || body.persona_manifest || null,
         avatarUrl: body.avatarUrl || null,
         isDefault: !!body.isDefault,
       })
@@ -97,6 +98,7 @@ export async function handleAgentRequest(req, res) {
         soulMd: parsed.soulMd,
         identityMd: parsed.identityMd,
         personaTemplate: parsed.personaTemplate || '',
+        personaManifest: parsed.personaManifest,
         avatarUrl: parsed.avatarUrl,
         isDefault: false,
       })
@@ -151,11 +153,12 @@ export async function handleAgentRequest(req, res) {
       // manifest.json: v0.2 格式 (加 avatar/skills 字段)
       zip.file('manifest.json', JSON.stringify({
         format: 'yma-agent-card',
-        version: '0.2',
+        version: '0.3',
         exportedAt: new Date().toISOString(),
         agent: {
           name: agent.name,
           personaTemplate: agent.personaTemplate || '',
+          personaManifest: agent.personaManifest,
           isDefault: false, // import 时不抢默认
           hasAvatar: !!agent.avatarUrl,
         },
@@ -233,6 +236,7 @@ export async function handleAgentRequest(req, res) {
           soulMd: parsed.soulMd,
           identityMd: parsed.identityMd,
           personaTemplate: parsed.personaTemplate || '',
+          personaManifest: manifest?.agent?.personaManifest || parsed.personaManifest,
           avatarUrl: finalAvatarUrl,
           isDefault: false,
         })

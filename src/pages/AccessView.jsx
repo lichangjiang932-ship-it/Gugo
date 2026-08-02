@@ -1,37 +1,74 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { CheckCircle2, LoaderCircle, Search, Settings2, Unplug } from 'lucide-react'
+import { Ban, CheckCircle2, Inbox, LoaderCircle, Search, Settings2, ShieldCheck, Unplug } from 'lucide-react'
 import LeftRail from '../components/LeftRail.jsx'
 import AccessConnectModal from '../components/AccessConnectModal.jsx'
+import AccessMcpConnectorCard from '../components/AccessMcpConnectorCard.jsx'
 import ConnectorBrandIcon from '../components/ConnectorBrandIcon.jsx'
-import { ACCESS_CATALOG, filterAccessCatalog } from '../lib/accessCatalog.js'
+import { ACCESS_CAPABILITY_LEVELS, filterAccessCatalog, getAccessCatalogCounts } from '../lib/accessCatalog.js'
 import {
+  allowParkedBridgeMessageApi,
   connectBrowserAppApi,
   deleteIntegrationApi,
   listIntegrationsApi,
+  listParkedBridgeMessagesApi,
   openConnectedBrowserAppApi,
+  rejectParkedBridgeMessageApi,
   toggleIntegrationEnabledApi,
   upsertIntegrationApi,
 } from '../lib/integrationsClient.js'
+import {
+  deleteMcpServerApi,
+  getMcpCatalogApi,
+  listMcpServersApi,
+} from '../lib/mcpClient.js'
+import { findInstalledMcpPreset } from '../lib/mcpPresets.js'
+import { installMcpPreset } from '../lib/mcpPresetInstaller.js'
 import { useT } from '../i18n/I18nProvider.jsx'
 
-const ACCESS_FILTERS = ['all', 'native', 'communication', 'productivity', 'creative', 'work']
+const ACCESS_FILTERS = [
+  { id: 'all', labelKey: 'access.filterAll' },
+  { id: ACCESS_CAPABILITY_LEVELS.NATIVE_API, labelKey: 'access.filterNativeApi' },
+  { id: ACCESS_CAPABILITY_LEVELS.MCP_SERVER, labelKey: 'access.filterMcp' },
+  { id: ACCESS_CAPABILITY_LEVELS.SOCIAL_BRIDGE, labelKey: 'access.filterSocialBridge' },
+  { id: ACCESS_CAPABILITY_LEVELS.BROWSER_SHORTCUT, labelKey: 'access.filterBrowserNative' },
+  { id: 'communication', labelKey: 'access.filterCommunication' },
+  { id: 'productivity', labelKey: 'access.filterProductivity' },
+  { id: 'creative', labelKey: 'access.filterCreative' },
+  { id: 'work', labelKey: 'access.filterWork' },
+]
 
 export default function AccessView() {
   const { t } = useT()
   const [integrations, setIntegrations] = useState([])
+  const [parkedMessages, setParkedMessages] = useState([])
+  const [mcpServers, setMcpServers] = useState([])
+  const [mcpRuntime, setMcpRuntime] = useState([])
   const [query, setQuery] = useState('')
   const [activeConnector, setActiveConnector] = useState(null)
   const [loading, setLoading] = useState(true)
   const [busyProvider, setBusyProvider] = useState('')
+  const [busyParkingId, setBusyParkingId] = useState('')
   const [error, setError] = useState('')
   const [activeFilter, setActiveFilter] = useState('all')
+  const highlightedParkingId = useMemo(() => {
+    if (typeof window === 'undefined') return ''
+    return new URLSearchParams(window.location.search).get('bridgeParkingId') || ''
+  }, [])
 
   const reload = useCallback(async () => {
     setLoading(true)
     setError('')
     try {
-      const data = await listIntegrationsApi()
-      setIntegrations(data.integrations || [])
+      const [integrationData, parkedData, mcpServerData, mcpCatalogData] = await Promise.all([
+        listIntegrationsApi(),
+        listParkedBridgeMessagesApi(),
+        listMcpServersApi(),
+        getMcpCatalogApi(),
+      ])
+      setIntegrations(integrationData.integrations || [])
+      setParkedMessages(parkedData.messages || [])
+      setMcpServers(mcpServerData.servers || [])
+      setMcpRuntime(mcpCatalogData.catalog || [])
     } catch (loadError) {
       setError(loadError.message || t('access.connectError'))
     } finally {
@@ -40,18 +77,25 @@ export default function AccessView() {
   }, [t])
 
   useEffect(() => {
+    if (!highlightedParkingId || loading) return
+    const target = document.getElementById(`bridge-parking-${highlightedParkingId}`)
+    target?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+  }, [highlightedParkingId, loading])
+
+  useEffect(() => {
     const timer = window.setTimeout(reload, 0)
     return () => window.clearTimeout(timer)
   }, [reload])
 
   const byProvider = useMemo(() => Object.fromEntries(integrations.map((item) => [item.provider, item])), [integrations])
   const visible = useMemo(() => filterAccessCatalog(query), [query])
-  const nativeConnectors = visible.filter((item) => item.kind === 'native' && (activeFilter === 'all' || activeFilter === 'native'))
-  const webConnectors = visible.filter((item) => item.kind === 'web' && (activeFilter === 'all' || item.category === activeFilter))
-  const enabledCount = ACCESS_CATALOG.filter((item) => {
-    const integration = byProvider[item.provider]
-    return item.provider === 'browser' ? integration?.enabled !== false : integration?.enabled === true
-  }).length
+  const filteredByCapability = visible.filter((item) => activeFilter === 'all'
+    || item.capabilityLevel === activeFilter
+    || item.category === activeFilter)
+  const nativeConnectors = filteredByCapability.filter((item) => item.kind === 'native')
+  const mcpConnectors = filteredByCapability.filter((item) => item.kind === 'mcp')
+  const webConnectors = filteredByCapability.filter((item) => item.kind === 'web')
+  const catalogCounts = useMemo(() => getAccessCatalogCounts(), [])
 
   const rememberIntegration = useCallback((integration) => {
     if (!integration) return
@@ -125,6 +169,64 @@ export default function AccessView() {
     setActiveConnector(null)
   }, [reload])
 
+  const installMcp = async (connector, existingServer) => {
+    setBusyProvider(connector.provider)
+    setError('')
+    try {
+      const installed = await installMcpPreset({
+        presetId: connector.presetId,
+        existingServer,
+      })
+      setMcpServers((items) => items.some((item) => item.id === installed.server.id)
+        ? items.map((item) => item.id === installed.server.id ? installed.server : item)
+        : [installed.server, ...items])
+      setMcpRuntime((items) => [
+        ...items.filter((item) => item.serverId !== installed.server.id),
+        installed.runtime,
+      ])
+    } catch (installError) {
+      if (installError.disabledServer) {
+        setMcpServers((items) => items.some((item) => item.id === installError.disabledServer.id)
+          ? items.map((item) => item.id === installError.disabledServer.id ? installError.disabledServer : item)
+          : [installError.disabledServer, ...items])
+      }
+      setError(installError.message === 'MCP_PRESET_MISSING'
+        ? t('access.mcpPresetMissing')
+        : (installError.message || t('access.connectError')))
+    } finally {
+      setBusyProvider('')
+    }
+  }
+
+  const removeMcp = async (connector, server) => {
+    if (!server) return
+    setBusyProvider(connector.provider)
+    setError('')
+    try {
+      await deleteMcpServerApi(server.id)
+      setMcpServers((items) => items.filter((item) => item.id !== server.id))
+      setMcpRuntime((items) => items.filter((item) => item.serverId !== server.id))
+    } catch (removeError) {
+      setError(removeError.message || t('access.connectError'))
+    } finally {
+      setBusyProvider('')
+    }
+  }
+
+  const decideParkedMessage = async (parkingId, decision) => {
+    setBusyParkingId(parkingId)
+    setError('')
+    try {
+      if (decision === 'allow') await allowParkedBridgeMessageApi(parkingId)
+      else await rejectParkedBridgeMessageApi(parkingId)
+      setParkedMessages((items) => items.filter((item) => item.id !== parkingId))
+    } catch (decisionError) {
+      setError(decisionError.message || t('access.inboundActionError'))
+    } finally {
+      setBusyParkingId('')
+    }
+  }
+
   return (
     <div className="h-screen flex bg-paper overflow-hidden">
       <LeftRail />
@@ -136,8 +238,25 @@ export default function AccessView() {
               <h1 className="font-hand text-[32px] text-ink mt-1">{t('access.title')}</h1>
               <p className="text-sm text-ink-soft mt-1 max-w-2xl">{t('access.subtitle')}</p>
             </div>
-            <div className="rounded-full border border-ink-fade/40 bg-paper-2 px-4 py-2 text-xs text-ink-soft">{t('access.summary').replace('{count}', String(enabledCount))}</div>
+            <div className="rounded-full border border-ink-fade/40 bg-paper-2 px-4 py-2 text-xs text-ink-soft" data-testid="access-catalog-summary">
+              {t('access.summary')
+                .replace('{api}', String(catalogCounts.api))
+                .replace('{mcp}', String(catalogCounts.mcp))
+                .replace('{bridges}', String(catalogCounts.bridges))
+                .replace('{shortcuts}', String(catalogCounts.shortcuts))}
+            </div>
           </header>
+
+          {!loading && parkedMessages.length > 0 && (
+            <BridgeInboundInbox
+              messages={parkedMessages}
+              busyId={busyParkingId}
+              highlightedId={highlightedParkingId}
+              onAllow={(id) => decideParkedMessage(id, 'allow')}
+              onReject={(id) => decideParkedMessage(id, 'reject')}
+              t={t}
+            />
+          )}
 
           <label className="relative block w-full mb-3">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-ink-fade" />
@@ -145,11 +264,13 @@ export default function AccessView() {
           </label>
           <div className="flex gap-2 mb-6 overflow-x-auto pb-1" aria-label={t('access.filterLabel')}>
             {ACCESS_FILTERS.map((filter) => (
-              <button key={filter} type="button" onClick={() => setActiveFilter(filter)} aria-pressed={activeFilter === filter} data-testid={`access-filter-${filter}`} className={`h-8 px-3 rounded-full border text-xs whitespace-nowrap transition-colors ${activeFilter === filter ? 'bg-ink text-paper border-ink' : 'bg-paper text-ink-soft border-ink-fade/40 hover:border-ink-fade'}`}>
-                {t(`access.filter${filter[0].toUpperCase()}${filter.slice(1)}`)}
+              <button key={filter.id} type="button" onClick={() => setActiveFilter(filter.id)} aria-pressed={activeFilter === filter.id} data-testid={`access-filter-${filter.id}`} className={`h-8 px-3 rounded-full border text-xs whitespace-nowrap transition-colors ${activeFilter === filter.id ? 'bg-ink text-paper border-ink' : 'bg-paper text-ink-soft border-ink-fade/40 hover:border-ink-fade'}`}>
+                {t(filter.labelKey)}
               </button>
             ))}
           </div>
+
+          <CapabilityLegend t={t} />
 
           {error && <div className="mb-5 p-3 rounded-lg border border-red-300 bg-red-50 text-sm text-red-700">{error}</div>}
           {loading ? <div className="h-52 flex items-center justify-center"><LoaderCircle className="w-6 h-6 animate-spin text-ember" /></div> : (
@@ -167,9 +288,11 @@ export default function AccessView() {
                         <div className="flex items-start gap-3">
                           <ConnectorBrandIcon connector={connector} />
                           <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <h3 className="font-medium text-ink">{connector.label}</h3>
-                              {isConnected && <span className="text-[10px] rounded-full px-2 py-0.5 bg-green-50 text-green-700 border border-green-200 inline-flex items-center gap-1"><CheckCircle2 className="w-3 h-3" />{t('access.connected')}</span>}
+                             <div className="flex items-center gap-2 flex-wrap">
+                               <h3 className="font-medium text-ink">{connector.label}</h3>
+                               <ConnectorCapabilityBadge capabilityLevel={connector.capabilityLevel} t={t} />
+                               <ConnectionMethodBadge method={connector.connectionMethod} t={t} />
+                                 {isConnected && <span className="text-[10px] rounded-full px-2 py-0.5 bg-green-50 text-green-700 border border-green-200 inline-flex items-center gap-1"><CheckCircle2 className="w-3 h-3" />{t('access.connected')}</span>}
                             </div>
                             <p className="text-xs leading-5 text-ink-soft mt-1">{t(connector.descriptionKey)}</p>
                           </div>
@@ -188,8 +311,30 @@ export default function AccessView() {
                 </ConnectorSection>
               )}
 
+              {mcpConnectors.length > 0 && (
+                <ConnectorSection title={t('access.mcpTitle')} hint={t('access.mcpHint')}>
+                  {mcpConnectors.map((connector) => {
+                    const server = findInstalledMcpPreset(mcpServers, connector.presetId)
+                    const runtime = server ? mcpRuntime.find((item) => item.serverId === server.id) : null
+                    return (
+                      <AccessMcpConnectorCard
+                        key={connector.provider}
+                        connector={connector}
+                        server={server}
+                        runtime={runtime}
+                        busy={busyProvider === connector.provider}
+                        badge={<ConnectorCapabilityBadge capabilityLevel={connector.capabilityLevel} t={t} />}
+                        onInstall={installMcp}
+                        onRemove={removeMcp}
+                        t={t}
+                      />
+                    )
+                  })}
+                </ConnectorSection>
+              )}
+
               {webConnectors.length > 0 && (
-                <ConnectorSection title={t('access.webTitle')} hint={t('access.webHint')}>
+                <ConnectorSection title={t('access.browserNativeTitle')} hint={t('access.browserNativeHint')}>
                   {webConnectors.map((connector) => {
                     const integration = byProvider[connector.provider]
                     const isConnected = !!integration
@@ -200,16 +345,18 @@ export default function AccessView() {
                         <div className="flex items-start gap-3">
                           <ConnectorBrandIcon connector={connector} />
                           <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <h3 className="font-medium text-ink">{connector.label}</h3>
-                              {isConnected && <span className="text-[10px] rounded-full px-2 py-0.5 bg-green-50 text-green-700 border border-green-200 inline-flex items-center gap-1"><CheckCircle2 className="w-3 h-3" />{t('access.connected')}</span>}
+                             <div className="flex items-center gap-2 flex-wrap">
+                               <h3 className="font-medium text-ink">{connector.label}</h3>
+                               <ConnectorCapabilityBadge capabilityLevel={connector.capabilityLevel} t={t} />
+                               <ConnectionMethodBadge method={connector.connectionMethod} t={t} />
+                                {isConnected && <span className="text-[10px] rounded-full px-2 py-0.5 bg-green-50 text-green-700 border border-green-200 inline-flex items-center gap-1"><CheckCircle2 className="w-3 h-3" />{t('access.persistentConnected')}</span>}
                             </div>
-                            <p className="text-xs leading-5 text-ink-soft mt-1">{t(isConnected ? 'access.webConnectedDesc' : 'access.webAppDesc')}</p>
+                            <p className="text-xs leading-5 text-ink-soft mt-1">{t(isConnected ? 'access.browserNativeConnectedDesc' : 'access.browserNativeAppDesc')}</p>
                           </div>
                         </div>
                         <div className="flex items-center justify-end gap-2 mt-4 pt-3 border-t border-dashed border-ink-fade/30">
                           {isConnected ? <>
-                            <button type="button" onClick={() => launchWebApp(connector)} disabled={busy || !enabled} className="h-8 px-3 rounded-md border border-ink-fade/40 hover:bg-paper-2 text-xs text-ink-soft disabled:opacity-40" aria-label={`${t('access.useApp')} ${connector.label}`} data-testid={`use-${connector.provider}`}>{busy ? <LoaderCircle className="w-3.5 h-3.5 animate-spin" /> : t('access.useApp')}</button>
+                            <button type="button" onClick={() => launchWebApp(connector)} disabled={busy || !enabled} className="h-8 px-3 rounded-md border border-ink-fade/40 hover:bg-paper-2 text-xs text-ink-soft disabled:opacity-40 inline-flex items-center gap-1.5" aria-label={`${t('access.open')} ${connector.label}`} data-testid={`use-${connector.provider}`}>{busy ? <LoaderCircle className="w-3.5 h-3.5 animate-spin" /> : t('access.open')}</button>
                             <button type="button" onClick={() => disconnect(connector)} disabled={busy} className="h-8 px-2 rounded-md hover:bg-red-50 text-ink-fade hover:text-red-600 disabled:opacity-40" aria-label={`${t('access.disconnect')} ${connector.label}`}><Unplug className="w-3.5 h-3.5" /></button>
                             <Toggle enabled={enabled} disabled={busy} onClick={() => toggle(connector)} label={`${connector.label} ${enabled ? t('access.enabled') : t('access.disabled')}`} />
                           </> : <button type="button" onClick={() => connectWeb(connector)} disabled={busy} className="h-8 min-w-20 px-4 rounded-md bg-ink text-paper text-xs hover:bg-ink-soft disabled:opacity-50 inline-flex items-center justify-center gap-1.5" aria-label={`${t('access.connect')} ${connector.label}`} data-testid={`connect-${connector.provider}`}>{busy && <LoaderCircle className="w-3.5 h-3.5 animate-spin" />}{busy ? t('access.connecting') : t('access.connect')}</button>}
@@ -220,7 +367,7 @@ export default function AccessView() {
                 </ConnectorSection>
               )}
 
-              {!nativeConnectors.length && !webConnectors.length && <div className="h-40 flex items-center justify-center text-sm text-ink-fade">{t('access.noMatch')}</div>}
+              {!nativeConnectors.length && !mcpConnectors.length && !webConnectors.length && <div className="h-40 flex items-center justify-center text-sm text-ink-fade">{t('access.noMatch')}</div>}
             </div>
           )}
         </div>
@@ -230,8 +377,152 @@ export default function AccessView() {
   )
 }
 
+export function BridgeInboundInbox({ messages, busyId, highlightedId, onAllow, onReject, t }) {
+  return (
+    <section className="mb-7 rounded-2xl border border-amber-300/70 bg-amber-50/60 p-4 shadow-sm" data-testid="bridge-inbound-inbox">
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-800"><Inbox className="h-4 w-4" /></span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <h2 className="font-hand text-xl text-ink">{t('access.inboundInboxTitle')}</h2>
+            {messages.length > 0 && <span className="rounded-full bg-amber-200/70 px-2 py-0.5 text-[10px] font-medium text-amber-900">{messages.length}</span>}
+          </div>
+          <p className="mt-0.5 text-xs leading-5 text-ink-soft">{t('access.inboundInboxHint')}</p>
+        </div>
+      </div>
+
+      {messages.length === 0 ? (
+        <div className="mt-4 rounded-xl border border-dashed border-amber-300/70 bg-paper/70 px-4 py-5 text-center text-xs text-ink-fade">{t('access.inboundEmpty')}</div>
+      ) : (
+        <div className="mt-4 space-y-3">
+          {messages.map((message) => {
+            const busy = busyId === message.id
+            const sender = message.senderName || message.externalUserId || t('access.unknownSender')
+            const text = message.payload?.text?.trim()
+            const attachmentCount = Array.isArray(message.payload?.attachments) ? message.payload.attachments.length : 0
+            return (
+              <article
+                id={`bridge-parking-${message.id}`}
+                key={message.id}
+                className={`rounded-xl border bg-paper p-4 transition-shadow ${highlightedId === message.id ? 'border-ember ring-2 ring-ember/25 shadow-md' : 'border-amber-200'}`}
+                data-testid={`bridge-parking-${message.id}`}
+              >
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <strong className="text-sm font-medium text-ink">{sender}</strong>
+                      <span className="rounded-full border border-ink-fade/30 bg-paper-2 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wide text-ink-fade">{message.provider}</span>
+                      <time dateTime={formatMessageDateTime(message.createdAt)} className="text-[10px] text-ink-fade">{formatMessageTime(message.createdAt)}</time>
+                    </div>
+                    <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-ink-soft">
+                      {text || t('access.attachmentMessage').replace('{count}', String(attachmentCount))}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap gap-2 sm:justify-end">
+                    <button type="button" disabled={busy} onClick={() => onReject(message.id)} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-red-200 px-3 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50">
+                      <Ban className="h-3.5 w-3.5" />{t('access.rejectSender')}
+                    </button>
+                    <button type="button" disabled={busy} onClick={() => onAllow(message.id)} className="inline-flex h-8 min-w-28 items-center justify-center gap-1.5 rounded-md bg-ink px-3 text-xs text-paper hover:bg-ink-soft disabled:opacity-50">
+                      {busy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
+                      {busy ? t('access.delivering') : t('access.allowAndDeliver')}
+                    </button>
+                  </div>
+                </div>
+              </article>
+            )
+          })}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function formatMessageTime(value) {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString()
+}
+
+function formatMessageDateTime(value) {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString()
+}
+
 function ConnectorSection({ title, hint, children }) {
   return <section><div className="mb-3"><h2 className="font-hand text-xl text-ink">{title}</h2><p className="text-xs text-ink-fade mt-0.5">{hint}</p></div><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{children}</div></section>
+}
+
+const CAPABILITY_PRESENTATION = Object.freeze({
+  [ACCESS_CAPABILITY_LEVELS.NATIVE_API]: {
+    labelKey: 'access.capabilityNativeApi',
+    hintKey: 'access.capabilityNativeApiHint',
+    className: 'border-blue-200 bg-blue-50 text-blue-700',
+  },
+  [ACCESS_CAPABILITY_LEVELS.MCP_SERVER]: {
+    labelKey: 'access.capabilityMcp',
+    hintKey: 'access.capabilityMcpHint',
+    className: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  },
+  [ACCESS_CAPABILITY_LEVELS.SOCIAL_BRIDGE]: {
+    labelKey: 'access.capabilitySocialBridge',
+    hintKey: 'access.capabilitySocialBridgeHint',
+    className: 'border-violet-200 bg-violet-50 text-violet-700',
+  },
+  [ACCESS_CAPABILITY_LEVELS.BROWSER_SHORTCUT]: {
+    labelKey: 'access.capabilityBrowserNative',
+    hintKey: 'access.capabilityBrowserNativeHint',
+    className: 'border-amber-200 bg-amber-50 text-amber-800',
+  },
+})
+
+export function ConnectorCapabilityBadge({ capabilityLevel, t }) {
+  const presentation = CAPABILITY_PRESENTATION[capabilityLevel]
+  if (!presentation) return null
+  return (
+    <span
+      className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium ${presentation.className}`}
+      data-testid={`connector-capability-${capabilityLevel}`}
+      data-capability-level={capabilityLevel}
+    >
+      {t(presentation.labelKey)}
+    </span>
+  )
+}
+
+const CONNECTION_METHOD_KEYS = Object.freeze({
+  built_in: 'access.methodBuiltIn',
+  oauth: 'access.methodOAuth',
+  qr: 'access.methodQr',
+  bot_token: 'access.methodBotToken',
+  app_credentials: 'access.methodAppCredentials',
+  mcp: 'access.methodMcp',
+  browser: 'access.methodBrowser',
+  qr_browser: 'access.methodQrBrowser',
+})
+
+export function ConnectionMethodBadge({ method, t }) {
+  const key = CONNECTION_METHOD_KEYS[method]
+  if (!key) return null
+  return (
+    <span className="inline-flex rounded-full border border-ink-fade/30 bg-paper-2 px-2 py-0.5 text-[10px] text-ink-soft" data-connection-method={method}>
+      {t(key)}
+    </span>
+  )
+}
+
+function CapabilityLegend({ t }) {
+  return (
+    <aside className="mb-7 rounded-xl border border-ink-fade/30 bg-paper-2/60 p-3" aria-label={t('access.capabilityLegend')} data-testid="access-capability-legend">
+      <p className="mb-2 text-[10px] font-mono uppercase tracking-[0.16em] text-ink-fade">{t('access.capabilityLegend')}</p>
+      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+        {Object.entries(CAPABILITY_PRESENTATION).map(([capabilityLevel, presentation]) => (
+          <div key={capabilityLevel} className="flex items-start gap-2 text-xs text-ink-soft">
+            <ConnectorCapabilityBadge capabilityLevel={capabilityLevel} t={t} />
+            <span className="leading-5">{t(presentation.hintKey)}</span>
+          </div>
+        ))}
+      </div>
+    </aside>
+  )
 }
 
 function Toggle({ enabled, onClick, disabled, label }) {

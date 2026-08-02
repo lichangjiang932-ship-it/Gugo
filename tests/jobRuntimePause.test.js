@@ -79,13 +79,18 @@ test('budget exceeded: exhausted job budget yields ok:false + budgetExceeded + r
   const step = { id: 'step-budget-1', kind: 'execute' }
   const result = await executeStep({ job, step })
 
-  assert.equal(modelCalls, 3, 'third tool call should blow the 2-call budget')
+  // 3 次是烧穿 2-call 预算需要的调用,第 4 次是**预算耗尽后的收尾调用**。
+  // ★ 那次收尾是有意加的:原来预算路径直接 return 空 finalText,
+  // 用户看到「任务跑了很久然后一个字都没有」—— 这正是「做到一半没后续」。
+  assert.equal(modelCalls, 4, '3 次烧穿预算 + 1 次收尾总结')
   assert.notEqual(result.ok, true, 'a budget-exceeded run must not report ok:true')
   assert.equal(result.ok, false)
   assert.equal(result.truncated, true)
   assert.equal(result.budgetExceeded, true)
   assert.equal(result.paused, false)
   assert.match(String(result.reason), /budget exceeded/i)
+  // 预算耗尽也必须给用户一句交代,绝不能是空文本
+  assert.ok(String(result.output?.text || '').trim().length > 0, '预算耗尽也要有文字交代')
 })
 
 test('normal completion still returns ok:true with the model text', async () => {

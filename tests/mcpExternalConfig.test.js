@@ -44,8 +44,15 @@ test('external MCP connection panel has complete five-language copy', () => {
   }
 })
 
-test('MCP server cards keep selection and actions as sibling buttons', () => {
+test('MCP server manager exposes presets, live catalog, and key-value configuration', () => {
   const source = fs.readFileSync(new URL('../src/pages/McpServersView.jsx', import.meta.url), 'utf8')
+  assert.match(source, /MCP_SERVER_PRESETS/)
+  assert.match(source, /choosePreset\(event\.target\.value\)/)
+  assert.match(source, /getMcpCatalogApi\(\)/)
+  assert.match(source, /parseKeyValueLines\(payload\.envText\)/)
+  assert.match(source, /parseKeyValueLines\(payload\.headersText\)/)
+  assert.match(source, /editing\.envText/)
+  assert.match(source, /editing\.headersText/)
   assert.match(source, /selectServer\(s\); test\(s\.id\)/)
   let depth = 0
   let maxDepth = 0

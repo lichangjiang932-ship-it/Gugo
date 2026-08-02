@@ -1,3 +1,5 @@
+import { detectArtifactIntent } from '../../shared/artifactIntent.js'
+
 export function parseSkillCommand(content = '') {
   const match = String(content).match(/^\/([a-z0-9_-]+)\s*(.*)$/i)
   if (!match) return { skillId: null, userPrompt: String(content || '') }
@@ -10,33 +12,29 @@ export function parseSkillCommand(content = '') {
 export function inferSkillIdFromPrompt(content = '') {
   const text = String(content || '').trim().toLowerCase()
   if (!text || text.startsWith('/')) return null
+  const wantsPptx = detectArtifactIntent(text).pptx
 
   // axippt：顶级 HTML PPT（咨询风/科技/禅意/政务等 8 种风格）
-  if (
+  if (wantsPptx && (
     /\baxi\b/i.test(text) ||
     /\baxippt\b/i.test(text) ||
     /顶级\s*ppt|咨询\s*风\s*ppt|高级\s*ppt|麦肯锡\s*ppt|bcg\s*ppt/i.test(text) ||
     /(咨询|科技|禅意|政务|杂志|像素).{0,4}(风|风格).{0,6}ppt/i.test(text)
-  ) {
+  )) {
     return 'axippt'
   }
 
   // htmlppt：通用 HTML PPT
-  if (
+  if (wantsPptx && (
     /\bhtml\s*ppt\b/i.test(text) ||
     /高级感\s*(?:html\s*)?ppt/i.test(text) ||
     /html\s*幻灯片/i.test(text)
-  ) {
+  )) {
     return 'htmlppt'
   }
 
   // ppt：原生 PPTX
-  if (
-    /\bpptx?\b/i.test(text) ||
-    /幻灯片|演示文稿|路演稿|汇报\s*ppt/i.test(text)
-  ) {
-    return 'ppt'
-  }
+  if (wantsPptx) return 'ppt'
 
   // webpage：高级感网页 / 落地页
   if (

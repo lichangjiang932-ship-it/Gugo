@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from '../lib/router.jsx'
 import { Bot, Search, User, X } from 'lucide-react'
 import { useAppContext } from '../store/AppContext.jsx'
 import { getAuthToken } from '../lib/accountClient.js'

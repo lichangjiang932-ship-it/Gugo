@@ -6,7 +6,20 @@ import test from 'node:test'
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-job-routes-tests', String(process.pid))
 
 const { createAppServer } = await import('../server/appServer.js')
+const { getJobRuntime, JobRuntime, setJobRuntimeForTesting } = await import('../server/services/jobRuntime.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
+
+// ★ 用 stub planner 替换真 planner。
+//
+// 这个用例测的是「路由的 CRUD 对不对」,不是「模型会怎么起标题」。
+// 原来走真 planner 意味着每次跑测试都要真打上游 API:单个用例 119 秒、
+// 需要配 key、而且断言会因为模型今天用中文明天用英文起标题而随机变红。
+setJobRuntimeForTesting(new JobRuntime({
+  planner: (prompt) => ({
+    title: String(prompt || '').slice(0, 200),
+    steps: [{ kind: 'execute', title: '执行', prompt }],
+  }),
+}))
 
 test('job routes create, fetch, and cancel jobs', async () => {
   const { token } = issueTestSession()
@@ -84,6 +97,49 @@ test('one user cannot fetch another user\'s job', async () => {
     })
     assert.equal(bobFetch.status, 404)
   } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
+})
+
+test('job event stream sends proxy-safe SSE headers and releases its subscription on disconnect', async () => {
+  const { token } = issueTestSession()
+  const runtime = getJobRuntime()
+  const listenersBefore = runtime.listeners.size
+  const server = createAppServer({ getEnv: () => ({}) })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const { port } = server.address()
+  const controller = new AbortController()
+
+  try {
+    const ticketResponse = await fetch(`http://127.0.0.1:${port}/api/jobs/stream-ticket`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    assert.equal(ticketResponse.status, 201)
+    const { ticket } = await ticketResponse.json()
+
+    const streamResponse = await fetch(
+      `http://127.0.0.1:${port}/api/jobs/stream?ticket=${encodeURIComponent(ticket)}`,
+      { signal: controller.signal },
+    )
+    assert.equal(streamResponse.status, 200)
+    assert.match(streamResponse.headers.get('content-type') || '', /text\/event-stream/)
+    assert.equal(streamResponse.headers.get('cache-control'), 'no-cache, no-transform')
+    assert.equal(streamResponse.headers.get('x-accel-buffering'), 'no')
+
+    const reader = streamResponse.body.getReader()
+    const firstChunk = await reader.read()
+    assert.match(new TextDecoder().decode(firstChunk.value), /event: ready[\s\S]*data: \{"ok":true\}/)
+    assert.equal(runtime.listeners.size, listenersBefore + 1)
+
+    controller.abort()
+    await reader.cancel().catch(() => {})
+    for (let attempt = 0; attempt < 20 && runtime.listeners.size !== listenersBefore; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+    assert.equal(runtime.listeners.size, listenersBefore)
+  } finally {
+    controller.abort()
     await new Promise((resolve) => server.close(resolve))
   }
 })

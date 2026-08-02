@@ -11,6 +11,8 @@ import {
   runProjectCheckTool,
   gitCommitTool,
   gitPushTool,
+  gitRollbackTool,
+  GIT_TOOL_SPECS,
 } from '../server/adapters/gitWorkbench.js'
 
 function git(cwd, args) {
@@ -57,7 +59,7 @@ function withEnv(vars, fn) {
 
 test('git_status requires WORKSPACE_GIT_ENABLED', async () => {
   const cwd = withTempRepo()
-  await withEnv({ WORKSPACE_ROOT: cwd, WORKSPACE_GIT_ENABLED: null }, async () => {
+  await withEnv({ WORKSPACE_ROOT: cwd, WORKSPACE_GIT_ENABLED: '0' }, async () => {
     await assert.rejects(() => gitStatusTool(), /WORKSPACE_GIT_ENABLED=1/)
   })
 })
@@ -76,6 +78,13 @@ test('git_status and git_diff report workspace changes', async () => {
     assert.equal(diff.ok, true)
     assert.match(diff.diff, /changed/)
     assert.doesNotMatch(diff.diff, /new file/)
+
+    git(cwd, ['add', 'README.md'])
+    const stagedDiff = await gitDiffTool({ path: 'README.md', staged: true })
+    assert.equal(stagedDiff.staged, true)
+    assert.match(stagedDiff.diff, /changed/)
+    const workingDiff = await gitDiffTool({ path: 'README.md' })
+    assert.equal(workingDiff.diff, '')
   })
 })
 
@@ -109,5 +118,50 @@ test('git_push rejects force push requests', async () => {
   const cwd = withTempRepo()
   await withEnv({ WORKSPACE_ROOT: cwd, WORKSPACE_GIT_ENABLED: '1', WORKSPACE_GIT_MUTATION_ENABLED: '1' }, async () => {
     await assert.rejects(() => gitPushTool({ force: true }), /force push is not allowed/)
+  })
+})
+
+test('git mutation tools are exposed to autonomous jobs', () => {
+  const names = new Set(GIT_TOOL_SPECS.map((spec) => spec.function.name))
+  assert.equal(names.has('git_commit'), true)
+  assert.equal(names.has('git_push'), true)
+  assert.equal(names.has('git_rollback'), true)
+})
+
+test('git_rollback reverts only the clean current HEAD without rewriting history', async () => {
+  const cwd = withTempRepo()
+  fs.writeFileSync(path.join(cwd, 'README.md'), 'hello\nchanged\n', 'utf8')
+  await withEnv({
+    WORKSPACE_ROOT: cwd,
+    WORKSPACE_GIT_ENABLED: '1',
+    WORKSPACE_GIT_MUTATION_ENABLED: '1',
+  }, async () => {
+    const committed = await gitCommitTool({ message: 'feat: change readme', files: ['README.md'] })
+    const rollback = await gitRollbackTool({ commit: committed.commit })
+    assert.equal(rollback.ok, true)
+    assert.equal(rollback.revertedCommit, committed.commit)
+    assert.notEqual(rollback.rollbackCommit, committed.commit)
+    assert.equal(
+      fs.readFileSync(path.join(cwd, 'README.md'), 'utf8').replace(/\r\n/g, '\n'),
+      'hello\n',
+    )
+    assert.match(git(cwd, ['log', '-1', '--pretty=%s']), /^Revert /)
+  })
+})
+
+test('git_rollback refuses dirty worktrees and non-HEAD commits', async () => {
+  const cwd = withTempRepo()
+  const initial = git(cwd, ['rev-parse', 'HEAD']).trim()
+  fs.writeFileSync(path.join(cwd, 'README.md'), 'hello\nchanged\n', 'utf8')
+  await withEnv({
+    WORKSPACE_ROOT: cwd,
+    WORKSPACE_GIT_ENABLED: '1',
+    WORKSPACE_GIT_MUTATION_ENABLED: '1',
+  }, async () => {
+    const committed = await gitCommitTool({ message: 'feat: change readme', files: ['README.md'] })
+    await assert.rejects(() => gitRollbackTool({ commit: initial }), /current HEAD/)
+    fs.writeFileSync(path.join(cwd, 'dirty.txt'), 'keep me\n', 'utf8')
+    await assert.rejects(() => gitRollbackTool({ commit: committed.commit }), /clean working tree/)
+    assert.equal(fs.readFileSync(path.join(cwd, 'dirty.txt'), 'utf8'), 'keep me\n')
   })
 })

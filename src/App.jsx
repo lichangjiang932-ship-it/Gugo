@@ -1,5 +1,5 @@
 import { Suspense, lazy } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useSearchParams } from './lib/router.jsx'
 
 import ErrorBoundary from './components/ErrorBoundary'
 import { I18nProvider } from './i18n/I18nProvider.jsx'
@@ -34,6 +34,11 @@ function Fallback() {
   )
 }
 
+function RoutedTaskRunPanel() {
+  const [searchParams] = useSearchParams()
+  return <TaskRunPanel key={searchParams.get('job') || ''} />
+}
+
 function App() {
   return (
     <I18nProvider>
@@ -50,7 +55,8 @@ function App() {
           <Route path="/skills" element={<SkillsMarket />} />
           <Route path="/permissions" element={<PermissionsDashboard />} />
           <Route path="/approvals" element={<RequireAuth><ApprovalsInbox /></RequireAuth>} />
-          <Route path="/task" element={<TaskRunPanel />} />
+          <Route path="/task" element={<RoutedTaskRunPanel />} />
+          <Route path="/tasks" element={<RoutedTaskRunPanel />} />
           <Route path="/history" element={<HistoryView />} />
           <Route path="/settings" element={<RequireAuth><SettingsView /></RequireAuth>} />
           <Route path="/memory" element={<RequireAuth><MemoryView /></RequireAuth>} />

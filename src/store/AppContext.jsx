@@ -2,6 +2,9 @@ import { createContext, useContext, useReducer, useEffect } from 'react'
 import { PERMISSIONS } from '../data.js'
 import { persistWithDegradation } from './persistDegradation.js'
 import { TASK_STATUS } from './taskStatus.js'
+import { withSessionModel } from '../lib/modelSelection.js'
+import { normalizeThemeMode } from '../lib/themeMode.js'
+import { backfillMessageTimestamps } from '../lib/messageTime.js'
 
 const STORAGE_KEY = 'your-model-atelier:state:v1'
 
@@ -72,9 +75,11 @@ function loadPersistedState() {
     for (const key of PERSIST_KEYS) {
       if (saved[key] !== undefined) merged[key] = saved[key]
     }
+    merged.theme = normalizeThemeMode(merged.theme)
     if (saved.toolsConfig && typeof saved.toolsConfig === 'object') {
       merged.toolsConfig = { ...base.toolsConfig, ...saved.toolsConfig }
     }
+    merged.sessions = backfillMessageTimestamps(merged.sessions)
     // 权限定义可能升级，按 id 合并保留 enabled 状态
     if (Array.isArray(saved.permissions)) {
       const enabledMap = new Map(saved.permissions.map((p) => [p.id, !!p.enabled]))
@@ -82,6 +87,19 @@ function loadPersistedState() {
         ...p,
         enabled: enabledMap.has(p.id) ? enabledMap.get(p.id) : p.enabled,
       }))
+    }
+    // ★ 清理孤儿任务。
+    //
+    // tasks 在 PERSIST_KEYS 里,而 RUNNING 状态只靠 setTimeout 调度的
+    // REMOVE_TASK 清掉 —— 生成到一半刷新页面,那个 timer 随页面一起没了,
+    // 任务就永远卡在「调用模型中」。刷新后没有任何东西在跑,
+    // 所以恢复出来的 running 一定是孤儿,标成中断而不是继续骗用户。
+    if (Array.isArray(merged.tasks)) {
+      merged.tasks = merged.tasks.map((task) => (
+        task?.status === 'running'
+          ? { ...task, status: 'cancelled', stepLabel: '已中断（页面刷新）' }
+          : task
+      ))
     }
     return merged
   } catch (err) {
@@ -159,6 +177,12 @@ function reducer(state, action) {
           s.id === sessionId ? { ...s, agentId: agentId || null, updatedAt: Date.now() } : s,
         ),
       }
+    }
+
+    case 'SET_SESSION_MODEL': {
+      const { sessionId, modelName } = action.payload || {}
+      const sessions = withSessionModel(state.sessions, sessionId, modelName)
+      return sessions === state.sessions ? state : { ...state, sessions }
     }
 
     case 'SWITCH_SESSION': {
@@ -379,7 +403,7 @@ function reducer(state, action) {
     }
 
     case 'SET_THEME': {
-      return { ...state, theme: action.payload }
+      return { ...state, theme: normalizeThemeMode(action.payload) }
     }
 
     case 'SET_ACCENT': {
@@ -452,10 +476,11 @@ function reducer(state, action) {
       const p = hasMode ? (raw.settings || {}) : raw
       const mode = hasMode && raw.mode === 'replace' ? 'replace' : 'merge'
       const next = { ...state }
-      const stringFields = ['theme', 'accentColor', 'fontSize', 'density']
+      const stringFields = ['accentColor', 'fontSize', 'density']
       for (const k of stringFields) {
         if (typeof p[k] === 'string') next[k] = p[k]
       }
+      if (typeof p.theme === 'string') next.theme = normalizeThemeMode(p.theme)
       if (typeof p.animationsEnabled === 'boolean') next.animationsEnabled = p.animationsEnabled
       if (typeof p.strongAccent === 'boolean') next.strongAccent = p.strongAccent
       if (Array.isArray(p.permissions)) {
@@ -735,16 +760,24 @@ export function AppProvider({ children }) {
 
   // 持久化：state 变化时把白名单字段写回 localStorage
   // 防容量炸弹:抓到 QuotaExceededError 走逐步降级策略,见 persistWithDegradation.
+  //
+  // ★ debounce 250ms。原来每次 state 变化都同步全量 JSON 序列化 ——
+  // 流式生成时每个 token 都会 dispatch 一次 APPEND_TO_LAST_MESSAGE,
+  // 于是一条长回复要把整个 state(所有会话 + 所有消息)序列化几千次。
+  // 本地模型吐字慢反而掩盖了这个问题,云端快模型上会明显掉帧。
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    const snapshot = {}
-    for (const key of PERSIST_KEYS) snapshot[key] = state[key]
-    const result = persistWithDegradation(snapshot, (k, v) => window.localStorage.setItem(k, v))
-    if (!result.ok) {
-      console.error('[AppContext] localStorage 完全不可写:', result.error)
-    } else if (result.level !== 'full') {
-      console.warn(`[AppContext] localStorage 容量告急,已降级到: ${result.level}`)
-    }
+    if (typeof window === 'undefined') return undefined
+    const timer = setTimeout(() => {
+      const snapshot = {}
+      for (const key of PERSIST_KEYS) snapshot[key] = state[key]
+      const result = persistWithDegradation(snapshot, (k, v) => window.localStorage.setItem(k, v))
+      if (!result.ok) {
+        console.error('[AppContext] localStorage 完全不可写:', result.error)
+      } else if (result.level !== 'full') {
+        console.warn(`[AppContext] localStorage 容量告急,已降级到: ${result.level}`)
+      }
+    }, 250)
+    return () => clearTimeout(timer)
   }, [state])
 
   return (

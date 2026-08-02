@@ -1,4 +1,11 @@
 import { injectEaFont, CJK_FONT } from './pptCore.js'
+import {
+  PRESENTATION_THEMES as THEMES,
+  buildPremiumThemeOverride,
+  resolvePresentationTheme,
+} from './presentationThemes.js'
+
+export { resolvePresentationTheme } from './presentationThemes.js'
 
 const MAX_BULLETS_PER_SLIDE = 5
 const MAX_BULLET_LENGTH = 80
@@ -9,74 +16,7 @@ const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.
 const SLIDE_W = 13.333
 const SLIDE_H = 7.5
 
-const THEMES = {
-  warm: {
-    id: 'warm',
-    paper: 'F4EFE5',
-    paper2: 'EAE2D2',
-    ink: '2A1F17',
-    inkSoft: '5E4F40',
-    inkFade: '8A7B68',
-    ember: 'E86A3C',
-    cyan: '2E8FA3',
-    white: 'FFFFFF',
-    skeleton: 'DBD2BE',
-    glowA: 'F6B26B',
-    glowB: 'F08A5D',
-  },
-  tech: {
-    id: 'tech',
-    paper: 'EEF2FF',
-    paper2: 'E0E7FF',
-    ink: '151A2D',
-    inkSoft: '334155',
-    inkFade: '64748B',
-    ember: '6366F1',
-    cyan: '06B6D4',
-    white: 'FFFFFF',
-    skeleton: 'CBD5E1',
-    glowA: '818CF8',
-    glowB: '22D3EE',
-  },
-  finance: {
-    id: 'finance',
-    paper: 'EEF7F1',
-    paper2: 'DDEFE4',
-    ink: '13261C',
-    inkSoft: '315141',
-    inkFade: '5F7D6B',
-    ember: '0F766E',
-    cyan: '65A30D',
-    white: 'FFFFFF',
-    skeleton: 'C6D8CC',
-    glowA: '34D399',
-    glowB: 'A3E635',
-  },
-  consumer: {
-    id: 'consumer',
-    paper: 'FFF1F2',
-    paper2: 'FFE4E6',
-    ink: '32121A',
-    inkSoft: '6B3240',
-    inkFade: '9F5D6F',
-    ember: 'F43F5E',
-    cyan: 'FB7185',
-    white: 'FFFFFF',
-    skeleton: 'F4C7CF',
-    glowA: 'FDA4AF',
-    glowB: 'FBCFE8',
-  },
-}
-
 let THEME = THEMES.warm
-
-export function resolvePresentationTheme(topic = '') {
-  const text = String(topic || '').toLowerCase()
-  if (/ai|saas|software|cloud|tech|digital|智能|科技|算法|平台/.test(text)) return THEMES.tech
-  if (/bank|finance|fund|insurance|wealth|金融|银行|保险|基金|投研/.test(text)) return THEMES.finance
-  if (/consumer|brand|retail|beauty|food|fashion|消费|品牌|零售|美妆|餐饮/.test(text)) return THEMES.consumer
-  return THEMES.warm
-}
 
 function addAmbientDecor(slide, pptx, index, { dense = false } = {}) {
   slide.addShape(pptx.ShapeType.ellipse, {
@@ -286,6 +226,24 @@ function chunkToSlide(lines, index) {
   }
 
   const rest = cleaned.slice(1)
+
+  if (type === 'content') {
+    const split = parseSplitColumns(rest)
+    if (split.left.title && split.right.title) {
+      return { title, type: 'split', index, leftColumn: split.left, rightColumn: split.right }
+    }
+    const processSteps = parseProcessSteps(rest)
+    const numberedSteps = rest.filter((line) => /^\d+[.、]\s*/.test(line)).length
+    if (numberedSteps >= 3 && processSteps.length >= 3) {
+      return { title, type: 'process', index, processSteps }
+    }
+    if (rest.some((line) => /^>\s*/.test(line))) {
+      return { title, type: 'quote', index, quote: parseQuote(rest.map((line) => line.replace(/^>\s*/, ''))) }
+    }
+    if (/^(?:\u7b2c[\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\d]+[\u7ae0\u8282\u90e8\u5206]|part\s+\d+|section\s+\d+)/i.test(title)) {
+      type = 'section'
+    }
+  }
 
   if (type === 'chart') {
     const chart = parseChartBlock(rest)
@@ -3541,6 +3499,9 @@ export function buildPremiumHtmlPreview(markdown, { responsive = false } = {}) {
   if (!slides.length) return ''
 
   const total = slides.length
+  const theme = resolvePresentationTheme(slides
+    .map((slide) => `${slide.title || ''} ${(slide.bullets || []).join(' ')}`)
+    .join(' '))
   const slideHtml = slides.map((slide, i) => buildPremiumSlideHtml(slide, i, total)).join('')
 
   return `<!doctype html>
@@ -3548,9 +3509,9 @@ export function buildPremiumHtmlPreview(markdown, { responsive = false } = {}) {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<style>${PREMIUM_CSS}${responsive ? PREMIUM_RESPONSIVE_CSS : ''}</style>
+<style>${PREMIUM_CSS}${buildPremiumThemeOverride(theme)}${responsive ? PREMIUM_RESPONSIVE_CSS : ''}</style>
 </head>
-<body>${slideHtml}</body>
+<body data-presentation-theme="${theme.id}">${slideHtml}</body>
 </html>`
 }
 

@@ -209,22 +209,49 @@ export function searchNodes({ userId, query }) {
   return { entities, relations, observations }
 }
 
-export function readGraph({ userId }) {
-  if (!userId) return { entities: [], relations: [], observations: [] }
+export const READ_GRAPH_DEFAULT_LIMIT = 200
+
+/**
+ * 读取用户的知识图谱。
+ *
+ * 实体数量可能超过单页上限,因此返回值带有分页元信息:
+ *   - totalEntities:该用户实体总数(不受 limit 影响)
+ *   - truncated:本次是否只返回了部分实体
+ * 调用方应检查 truncated,必要时用 offset 继续翻页,
+ * 而不是把结果当作完整图谱。
+ *
+ * 关系两端只要有一端落在本页实体内就会被返回(与 searchNodes 一致),
+ * 避免出现「实体在、关系却凭空消失」的割裂子图。
+ */
+export function readGraph({ userId, limit = READ_GRAPH_DEFAULT_LIMIT, offset = 0 } = {}) {
+  const empty = { entities: [], relations: [], observations: [], totalEntities: 0, truncated: false }
+  if (!userId) return empty
   const db = getDb()
+
+  const safeLimit = Math.max(1, Math.min(Number(limit) || READ_GRAPH_DEFAULT_LIMIT, 1000))
+  const safeOffset = Math.max(0, Number(offset) || 0)
+
+  const { count: totalEntities } = db.prepare(
+    'SELECT COUNT(*) AS count FROM entities WHERE user_id = ?'
+  ).get(userId)
+
   const entities = db.prepare(
-    'SELECT * FROM entities WHERE user_id = ? ORDER BY name LIMIT 200'
-  ).all(userId).map(rowToEntity)
+    'SELECT * FROM entities WHERE user_id = ? ORDER BY name LIMIT ? OFFSET ?'
+  ).all(userId, safeLimit, safeOffset).map(rowToEntity)
+
+  const truncated = safeOffset + entities.length < totalEntities
+  if (!entities.length) return { ...empty, totalEntities, truncated }
+
   const entityIds = entities.map((e) => e.id)
-  if (!entityIds.length) return { entities, relations: [], observations: [] }
   const placeholders = entityIds.map(() => '?').join(',')
   const relations = db.prepare(
-    `SELECT * FROM relations WHERE from_entity_id IN (${placeholders})`
-  ).all(...entityIds).map(rowToRelation)
+    `SELECT * FROM relations WHERE from_entity_id IN (${placeholders}) OR to_entity_id IN (${placeholders})`
+  ).all(...entityIds, ...entityIds).map(rowToRelation)
   const observations = db.prepare(
     `SELECT * FROM observations WHERE entity_id IN (${placeholders})`
   ).all(...entityIds).map(rowToObservation)
-  return { entities, relations, observations }
+
+  return { entities, relations, observations, totalEntities, truncated }
 }
 
 export function openNodes({ userId, names }) {

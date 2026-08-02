@@ -123,6 +123,22 @@ export function getApprovalById(id) {
   return mapApproval(getDb().prepare('SELECT * FROM pending_approvals WHERE id = ?').get(id))
 }
 
+export function getLatestJobApproval({ jobId, userId, stepId = null } = {}) {
+  if (!jobId || !userId) return null
+  const row = stepId
+    ? getDb().prepare(`
+        SELECT * FROM pending_approvals
+         WHERE job_id = ? AND user_id = ? AND step_id = ?
+         ORDER BY created_at DESC LIMIT 1
+      `).get(jobId, userId, stepId)
+    : getDb().prepare(`
+        SELECT * FROM pending_approvals
+         WHERE job_id = ? AND user_id = ?
+         ORDER BY created_at DESC LIMIT 1
+      `).get(jobId, userId)
+  return mapApproval(row)
+}
+
 export function listPendingApprovals({ userId, status = 'pending', limit = 100 } = {}) {
   if (!userId) return []
   const capped = Math.min(Math.max(Number(limit) || 100, 1), 500)
