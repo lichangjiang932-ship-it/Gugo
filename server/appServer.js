@@ -79,20 +79,20 @@ function send(res, statusCode, body, headers = {}) {
   res.end(body)
 }
 
-function serveStatic(req, res) {
+function serveStatic(req, res, staticDir = distDir) {
   const url = new URL(req.url, 'http://localhost')
   const decodedPath = decodeURIComponent(url.pathname)
   const requested = decodedPath === '/' ? '/index.html' : decodedPath
-  const filePath = path.normalize(path.join(distDir, requested))
+  const filePath = path.normalize(path.join(staticDir, requested))
 
-  if (!filePath.startsWith(distDir)) {
+  if (!filePath.startsWith(staticDir)) {
     send(res, 403, 'Forbidden', { 'Content-Type': 'text/plain; charset=utf-8' })
     return
   }
 
   const finalPath = fs.existsSync(filePath) && fs.statSync(filePath).isFile()
     ? filePath
-    : path.join(distDir, 'index.html')
+    : path.join(staticDir, 'index.html')
   const ext = path.extname(finalPath)
   const headers = {
     'Content-Type': MIME_TYPES[ext] || 'application/octet-stream',
@@ -180,7 +180,7 @@ function applyMiddlewares(handler) {
   }
 }
 
-function createRouter(getEnv = getRuntimeEnv) {
+function createRouter(getEnv = getRuntimeEnv, staticDir = distDir) {
   const jobRuntime = getJobRuntime()
   const cronScheduler = getCronScheduler()
   cronScheduler.start()
@@ -377,12 +377,12 @@ function createRouter(getEnv = getRuntimeEnv) {
   }
 
   // 静态文件
-  serveStatic(req, res)
+  serveStatic(req, res, staticDir)
   }
 }
 
-export function createAppServer({ getEnv = getRuntimeEnv } = {}) {
-  return http.createServer(applyMiddlewares(createRouter(getEnv)))
+export function createAppServer({ getEnv = getRuntimeEnv, staticDir = distDir } = {}) {
+  return http.createServer(applyMiddlewares(createRouter(getEnv, staticDir)))
 }
 
 // 旧 gracefulShutdown 已下沉到 server/core/lifecycle.js
