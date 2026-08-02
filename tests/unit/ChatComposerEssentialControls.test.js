@@ -14,6 +14,7 @@ test('chat composer keeps only essential input controls', () => {
   assert.match(composerSource, /<ModelPicker/)
   assert.match(composerSource, /<Mic/)
   assert.match(composerSource, /<Send/)
+  assert.doesNotMatch(composerSource, />Enter<\/span>/)
   assert.doesNotMatch(
     composerSource,
     /LocalFilesModal|local-files-chat-action|QUICK_SKILLS|SlashAutocomplete|onContextClick/,

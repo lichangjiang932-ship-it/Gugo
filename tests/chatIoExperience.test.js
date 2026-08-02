@@ -14,13 +14,12 @@ test('chat composer accepts pasted images and shows attachment errors', () => {
   assert.match(composerSource, /\{item\.error\}/)
 })
 
-test('chat drafts persist while typing and editing stays non-destructive until send', () => {
+test('chat drafts persist while typing and message actions stay copy-only', () => {
   assert.match(chatSource, /SET_SESSION_DRAFT[\s\S]{0,180}text: input/)
-  const editHandler = chatSource.match(/const handleEditMessage[\s\S]*?\}, \[isGenerating, messages\]\)/)?.[0] || ''
-  assert.match(editHandler, /if \(isGenerating\) return/)
-  assert.match(editHandler, /setEditingMessageId\(msgId\)/)
-  assert.doesNotMatch(editHandler, /TRUNCATE_MESSAGES/)
-  assert.match(chatSource, /triggerSendFlow\(content, currentAttachments, editIndex/)
+  assert.match(chatSource, /triggerSendFlow\(content, currentAttachments\)/)
+  assert.doesNotMatch(chatSource, /handleEditMessage|editingMessageId|handleRegenerate|handleDeleteMessage/)
+  assert.match(messagesSource, /navigator\.clipboard\?\.writeText\(msg\.content\)/)
+  assert.doesNotMatch(messagesSource, /onEditMessage|onRegenerateMessage|onDeleteMessage|<RefreshCw|<Trash2/)
 })
 
 test('streaming no longer reparses stable markdown or delays messages by history index', () => {
@@ -35,8 +34,6 @@ test('streaming assistant hides result actions until generation finishes', () =>
   assert.match(messagesSource, /!isGenerating && msg\.id !== generatingMessageId &&/)
   assert.match(messagesSource, /!msg\.meta\?\.streaming/)
   assert.match(messagesSource, /msg\.role === 'user'[\s\S]{0,1800}!isGenerating && !msg\.meta\?\.streaming/)
-  const regenerateHandler = chatSource.match(/const handleRegenerate[\s\S]*?\}, \[dispatch, isGenerating, state\.activeSessionId, state\.sessions, triggerSendFlow\]\)/)?.[0] || ''
-  assert.match(regenerateHandler, /if \(isGenerating\) return/)
   assert.match(messagesSource, /chat-message-actions/)
   assert.match(messagesSource, /<MarkdownRenderer[^>]*streaming=\{isGenerating \|\| !!msg\.meta\?\.streaming\}/)
   assert.match(markdownSource, /function CodeBlock\(\{ children, streaming = false \}\)/)
@@ -44,6 +41,17 @@ test('streaming assistant hides result actions until generation finishes', () =>
   assert.match(messagesSource, /const isMessageComplete = !isGenerating && !msg\.meta\?\.streaming/)
   assert.match(messagesSource, /const showArtifactPreview = !!artifactPreview && isMessageComplete/)
   assert.match(chatSource, /isGenerating=\{isGenerating\}/)
+})
+
+test('composer groups model and voice beside send without an Enter label', () => {
+  const controls = composerSource.match(/<div className="flex min-w-0 items-center gap-1\.5">[\s\S]*?\{isGenerating \? \(/)?.[0] || ''
+  assert.match(controls, /<ModelPicker/)
+  assert.match(controls, /<Mic/)
+  assert.doesNotMatch(composerSource, />Enter<\/span>/)
+})
+
+test('long-term memory remains internal instead of adding a disclosure after every answer', () => {
+  assert.doesNotMatch(messagesSource, /MemoryUsageDisclosure|getMemoriesByIdsApi|chatMessages\.memoryUsed/)
 })
 
 test('reasoning and tool traces remain collapsed until the user expands them', () => {

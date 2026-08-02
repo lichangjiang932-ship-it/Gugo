@@ -57,7 +57,7 @@ import {
 } from '../store/exportSchema.js'
 
 const SETTINGS_NAV = ['功能入口', '模型', '账户', '权限中心', '工具', '集成', '外观', '系统诊断', '数据 & 导出']
-const ACCENT_COLORS = ['#E86A3C', '#2E8FA3', '#A5C97A', '#D4A4FF']
+const ACCENT_COLORS = ['#E86A3C', '#D94A64', '#B45DE5', '#7459E8', '#3D6FE0', '#2E8FA3', '#23A68B', '#A5C97A', '#D4A4FF', '#D59B32']
 const THEME_ICONS = { dark: Moon, light: Sun, white: Circle, system: Monitor }
 
 const PERM_ICONS = {
@@ -903,7 +903,7 @@ export default function SettingsView() {
         </SettingsGroup>
 
         <SettingsGroup title="强调色">
-          <div className="flex gap-3">
+          <div className="flex flex-wrap gap-3">
             {ACCENT_COLORS.map((c) => (
               <button
                 key={c}

@@ -89,3 +89,17 @@ test('chat supporting panels preserve a readable transcript on narrow screens', 
   assert.match(styles, /@media \(max-width: 1023px\)[\s\S]*?\.chat-preview-pane[\s\S]*?position: fixed;[\s\S]*?width: 100vw !important;/)
   assert.match(styles, /\.chat-preview-toolbar,\s*\.chat-preview-toolbar-actions\s*\{\s*flex-wrap: wrap;/)
 })
+
+test('skills open details before use and appearance offers a broader accent palette', () => {
+  const skills = read('../src/pages/SkillsMarket.jsx')
+  const settings = read('../src/pages/SettingsView.jsx')
+
+  assert.match(skills, /const \[selectedSkill, setSelectedSkill\] = useState\(null\)/)
+  assert.match(skills, /role="dialog"/)
+  assert.match(skills, /handleUseSkill\(selectedSkill\)/)
+  assert.match(skills, /setSelectedSkill\(skill\)/)
+
+  const palette = settings.match(/const ACCENT_COLORS = \[([^\]]+)\]/)?.[1] || ''
+  assert.ok((palette.match(/#[0-9A-Fa-f]{6}/g) || []).length >= 8)
+  assert.match(settings, /flex flex-wrap gap-3/)
+})

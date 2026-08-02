@@ -103,7 +103,7 @@ export default function ModelPicker({
 
       {open && (
         <div
-          className="absolute bottom-full left-0 z-40 mb-2 w-[min(22rem,calc(100vw-3rem))] overflow-hidden rounded-lg border border-ink-fade/40 bg-paper shadow-xl"
+          className="absolute bottom-full right-0 z-40 mb-2 w-[min(22rem,calc(100vw-3rem))] overflow-hidden rounded-lg border border-ink-fade/40 bg-paper shadow-xl"
           data-testid="model-picker-panel"
         >
           <div className="border-b border-ink-fade/30 px-3 py-2.5">

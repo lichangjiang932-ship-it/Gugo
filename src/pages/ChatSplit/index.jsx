@@ -101,7 +101,6 @@ export default function ChatSplit() {
     return () => clearTimeout(t)
   }, [workbenchMessage])
   const [attachments, setAttachments] = useState([])
-  const [editingMessageId, setEditingMessageId] = useState(null)
   const [isGenerating, setIsGenerating] = useState(false)
   const [voiceState, setVoiceState] = useState('idle')
   const [showContextUsage, setShowContextUsage] = useState(readContextUsageVisible)
@@ -274,7 +273,6 @@ export default function ChatSplit() {
     newDraftVersionRef.current = state.newDraftVersion
     setInput('')
     setAttachments([])
-    setEditingMessageId(null)
     setWorkbenchMessage('')
   }, [state.newDraftVersion])
 
@@ -1163,27 +1161,19 @@ export default function ChatSplit() {
     const slashEntry = parsedSlash ? slashRegistry.getCommand(parsedSlash.name) : null
     if (slashEntry && slashEntry.kind !== 'skill') {
       setInput('')
-      setEditingMessageId(null)
       executeSlashEntry(slashEntry, parsedSlash.args)
       return
     }
     const currentAttachments = [...attachments]
     const content = typedContent || describeAttachmentPrompt(currentAttachments)
-    const editIndex = editingMessageId
-      ? messages.findIndex((message) => message.id === editingMessageId)
-      : -1
-    if (editIndex >= 0) {
-      dispatch({ type: 'TRUNCATE_MESSAGES', payload: editIndex })
-    }
-    setEditingMessageId(null)
     setInput('')
     setAttachments([])
     // 发送后顺手清掉本会话草稿,免得切走再回来还残留
     if (state.activeSessionId) {
       dispatch({ type: 'SET_SESSION_DRAFT', payload: { sessionId: state.activeSessionId, text: '' } })
     }
-    triggerSendFlow(content, currentAttachments, editIndex >= 0 ? editIndex : null)
-  }, [attachments, editingMessageId, input, messages, triggerSendFlow, state.activeSessionId, dispatch, slashRegistry, executeSlashEntry])
+    triggerSendFlow(content, currentAttachments)
+  }, [attachments, input, triggerSendFlow, state.activeSessionId, dispatch, slashRegistry, executeSlashEntry])
 
   // 从已有会话历史的截断处续写，不重发原问题。
   const handleResumeGeneration = useCallback(() => {
@@ -1205,15 +1195,9 @@ export default function ChatSplit() {
   }, [triggerSendFlow])
 
   const handleKeyDown = useCallback((e) => {
-    if (e.key === 'Escape' && editingMessageId) {
-      e.preventDefault()
-      setEditingMessageId(null)
-      setInput('')
-      return
-    }
     if (navigateInputHistory(e)) return
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
-  }, [editingMessageId, handleSend, navigateInputHistory])
+  }, [handleSend, navigateInputHistory])
 
   const handleExpandCompaction = useCallback(async (archiveId) => {
     if (!archiveId) return
@@ -1328,50 +1312,6 @@ export default function ChatSplit() {
     }
   }
 
-  const handleEditMessage = useCallback((msgId, content) => {
-    if (isGenerating) return
-    const idx = messages.findIndex((m) => m.id === msgId)
-    if (idx === -1) return
-    setInput(content)
-    setEditingMessageId(msgId)
-  }, [isGenerating, messages])
-
-  // ★ #9: 重发 — 找到消息位置,截掉它之后的所有消息(含本条),
-  //   再用本条文本走完整发送流程(经过 triggerSendFlow 才能跑完工具/计费/SSE)
-  const handleRegenerate = useCallback((msgId) => {
-    if (isGenerating) return
-    const currentMessages = state.sessions.find((s) => s.id === state.activeSessionId)?.messages ?? EMPTY_MESSAGES
-    const idx = currentMessages.findIndex((m) => m.id === msgId)
-    if (idx === -1) return
-    const target = currentMessages[idx]
-    // 用户消息: 截到本条之前 → 重发本条 (相当于编辑后不改直接发)
-    // 助手消息: 截到本条之前(含上一条 user 也保留) → 重发上一条 user 触发新回复
-    let resendText
-    if (target.role === 'user') {
-      dispatch({ type: 'TRUNCATE_MESSAGES', payload: idx })
-      resendText = target.content
-    } else {
-      // 找上一条 user
-      let prevUserIdx = -1
-      for (let i = idx - 1; i >= 0; i -= 1) {
-        if (currentMessages[i].role === 'user') { prevUserIdx = i; break }
-      }
-      if (prevUserIdx === -1) return
-      dispatch({ type: 'TRUNCATE_MESSAGES', payload: prevUserIdx })
-      resendText = currentMessages[prevUserIdx].content
-    }
-    if (resendText) triggerSendFlow(resendText)
-  }, [dispatch, isGenerating, state.activeSessionId, state.sessions, triggerSendFlow])
-
-  // ★ #10: 删除单条消息
-  const handleDeleteMessage = useCallback((msgId) => {
-    if (isGenerating) return
-    if (!msgId) return
-    if (typeof window !== 'undefined' && !window.confirm('删除这条消息?')) return
-    dispatch({ type: 'DELETE_MESSAGE', payload: msgId })
-  }, [dispatch, isGenerating])
-
-
   const handlePermAllow = () => {
     dispatch({ type: 'SET_PERM_REQUEST', payload: null })
     const pendingTask = [...state.tasks].reverse().find((t) => t.status === 'pending')
@@ -1419,9 +1359,6 @@ export default function ChatSplit() {
           toolSpecs={contextToolSpecs}
           systemPrompt={contextSystemPrompts[state.activeSessionId || '__draft__'] || ''}
           isGenerating={isGenerating}
-          onEditMessage={handleEditMessage}
-          onRegenerateMessage={handleRegenerate}
-          onDeleteMessage={handleDeleteMessage}
           onPermAllow={handlePermAllow}
           onPermDeny={handlePermDeny}
           onNavigatePermissions={() => navigate('/permissions')}

@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, FileText, BarChart3, LayoutList, ExternalLink, ChevronDown, RefreshCw, Trash2, Copy, Code2, Quote } from 'lucide-react'
+import { X, FileText, BarChart3, LayoutList, ExternalLink, ChevronDown, Copy, Code2, Quote } from 'lucide-react'
 import MarkdownRenderer from '../../components/MarkdownRenderer.jsx'
 import ToolCallCard from '../../components/ToolCallCard.jsx'
 import SubagentCard from '../../components/SubagentCard.jsx'
@@ -9,7 +9,6 @@ import ChoicePicker from '../../components/ChoicePicker.jsx'
 import { hasChoices, stripChoices } from '../../lib/choices.js'
 import { buildMessageTimeline } from '../../lib/messageTimeline.js'
 import { buildArtifactPreview, shouldCollapseArtifactPreview } from '../../lib/artifactPreview.js'
-import { getMemoriesByIdsApi } from '../../lib/memoryClient.js'
 import { estimateClientContextUsage } from '../../lib/contextUsage.js'
 import { formatMessageDateTime, formatMessageTime } from '../../lib/messageTime.js'
 import { DEFAULT_MESSAGE_WINDOW_SIZE, getExpandedWindowCount, getMessageWindow } from '../../lib/messageWindow.js'
@@ -44,67 +43,6 @@ function ArtifactOpenCard({ preview, onOpen, className = '' }) {
         <ExternalLink className="w-4 h-4 text-ink-fade group-hover:text-ember transition-colors" />
       </div>
     </button>
-  )
-}
-
-function MemoryUsageDisclosure({ ids = [] }) {
-  const { t } = useT()
-  const [open, setOpen] = useState(false)
-  const [items, setItems] = useState([])
-  const [loadedKey, setLoadedKey] = useState('')
-  const [error, setError] = useState(null)
-  const idsKey = ids.join(',')
-  const errorMessage = error?.key === idsKey ? error.message : ''
-
-  useEffect(() => {
-    if (!open || !ids.length || loadedKey === idsKey) return
-    let cancelled = false
-    getMemoriesByIdsApi(ids)
-      .then((data) => {
-        if (cancelled) return
-        setItems(Array.isArray(data.memories) ? data.memories : [])
-        setLoadedKey(idsKey)
-        setError(null)
-      })
-      .catch((err) => {
-        if (!cancelled) setError({ key: idsKey, message: err.message || t('chatMessages.memoryLoadFailed') })
-      })
-    return () => { cancelled = true }
-  }, [open, idsKey, loadedKey, ids, t])
-
-  if (!ids.length) return null
-
-  return (
-    <div className="mt-3 rounded-md border border-dashed border-ember/30 bg-ember-soft/30 px-3 py-2 text-xs text-ink-soft">
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        aria-expanded={open}
-        className="inline-flex items-center gap-1 text-ember hover:text-ink transition-colors"
-      >
-        <span aria-hidden="true">📌</span>
-        <span>{t('chatMessages.memoryUsed', { count: ids.length })}</span>
-        <span aria-hidden="true">{open ? '▴' : '▾'}</span>
-      </button>
-      {open && (
-        <div className="mt-2 space-y-2">
-          {errorMessage && <div className="text-red-500">{errorMessage}</div>}
-          {!errorMessage && loadedKey !== idsKey && <div className="text-ink-fade">{t('chatMessages.memoryLoading')}</div>}
-          {!errorMessage && loadedKey === idsKey && items.length === 0 && (
-            <div className="text-ink-fade">{t('chatMessages.memoryUnavailable')}</div>
-          )}
-          {!errorMessage && items.map((memory) => {
-            const preview = String(memory.body || '').replace(/\s+/g, ' ').trim().slice(0, 80)
-            return (
-              <div key={memory.id} className="rounded border border-ink-fade/20 bg-paper/70 px-2.5 py-2">
-                <div className="font-medium text-ink truncate">{memory.title}</div>
-                <div className="mt-1 text-ink-fade leading-relaxed">{preview}</div>
-              </div>
-            )
-          })}
-        </div>
-      )}
-    </div>
   )
 }
 
@@ -224,9 +162,6 @@ export default function ChatMessages({
   contextWindow = 1_000_000,
   toolSpecs = [],
   systemPrompt = '',
-  onEditMessage,
-  onRegenerateMessage,
-  onDeleteMessage,
   onPermAllow,
   onPermDeny,
   onNavigatePermissions,
@@ -582,9 +517,6 @@ export default function ChatMessages({
                   ) : (
                     <span className="whitespace-pre-wrap">{msg.content}</span>
                   )}
-                  {msg.role === 'assistant' && msg.meta?.injectedMemoryIds?.length > 0 && (
-                    <MemoryUsageDisclosure ids={msg.meta.injectedMemoryIds} />
-                  )}
                   {msg.role === 'user' && (
                     <div className="mt-1 flex min-h-3 items-center justify-end gap-3 text-[10px] text-ink-fade">
                       <span title={formatMessageDateTime(msg.timestamp, lang)}>
@@ -600,33 +532,6 @@ export default function ChatMessages({
                           <Copy className="w-3 h-3" />
                           {t('chatMessages.copy')}
                         </button>
-                        <button
-                          onClick={() => onEditMessage(msg.id, msg.content)}
-                          className="hover:text-ink transition-colors"
-                          title={t('chatMessages.editResend')}
-                        >
-                          {t('chatMessages.edit')}
-                        </button>
-                        {onRegenerateMessage && (
-                          <button
-                            onClick={() => onRegenerateMessage(msg.id)}
-                            className="inline-flex items-center gap-1 hover:text-ink transition-colors"
-                            title={t('chatMessages.resendMessage')}
-                          >
-                            <RefreshCw className="w-3 h-3" />
-                            {t('chatMessages.resend')}
-                          </button>
-                        )}
-                        {onDeleteMessage && (
-                          <button
-                            onClick={() => onDeleteMessage(msg.id)}
-                            className="inline-flex items-center gap-1 hover:text-red-500 transition-colors"
-                            title={t('chatMessages.deleteMessage')}
-                          >
-                            <Trash2 className="w-3 h-3" />
-                            {t('chatMessages.delete')}
-                          </button>
-                        )}
                       </div>
                       )}
                     </div>
@@ -667,26 +572,6 @@ export default function ChatMessages({
                           <Copy className="w-3 h-3" />
                           {t('chatMessages.copy')}
                         </button>
-                        {onRegenerateMessage && (
-                          <button
-                            onClick={() => onRegenerateMessage(msg.id)}
-                            className="inline-flex items-center gap-1 text-ink-fade hover:text-ink transition-colors"
-                            title={t('chatMessages.regenerateHint')}
-                          >
-                            <RefreshCw className="w-3 h-3" />
-                            {t('chatMessages.regenerate')}
-                          </button>
-                        )}
-                        {onDeleteMessage && (
-                          <button
-                            onClick={() => onDeleteMessage(msg.id)}
-                            className="inline-flex items-center gap-1 text-ink-fade hover:text-red-500 transition-colors"
-                            title={t('chatMessages.deleteMessage')}
-                          >
-                            <Trash2 className="w-3 h-3" />
-                            {t('chatMessages.delete')}
-                          </button>
-                        )}
                       </div>
                       )}
                     </div>
@@ -694,27 +579,6 @@ export default function ChatMessages({
                   {msg.role === 'assistant' && msg.meta?.failed && msg.meta?.type !== 'model_reply' && (
                     <div className="mt-3 pt-2 border-t border-dashed border-ember/40 flex flex-wrap items-center gap-2 text-[11px]">
                       <span className="text-ember">这条回复没能完成</span>
-                      <div className="flex-1" />
-                      {onRegenerateMessage && (
-                        <button
-                          onClick={() => onRegenerateMessage(msg.id)}
-                          className="inline-flex items-center gap-1 h-7 px-2.5 rounded-full border border-ember-line text-ember bg-ember-soft hover:bg-ember/20 transition-colors"
-                          title="重新生成这条回复"
-                        >
-                          <RefreshCw className="w-3 h-3" />
-                          重新生成
-                        </button>
-                      )}
-                      {onDeleteMessage && (
-                        <button
-                          onClick={() => onDeleteMessage(msg.id)}
-                          className="inline-flex items-center gap-1 text-ink-fade hover:text-red-500 transition-colors"
-                          title="删除本条"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                          删除
-                        </button>
-                      )}
                     </div>
                   )}
                   {msg.role === 'assistant' && msg.meta?.type === 'context_summary' && (

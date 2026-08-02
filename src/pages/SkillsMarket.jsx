@@ -38,6 +38,7 @@ export default function SkillsMarket() {
   const [pluginPanelLoading, setPluginPanelLoading] = useState(false)
   const [pluginPanelError, setPluginPanelError] = useState('')
   const [installingPluginId, setInstallingPluginId] = useState(null)
+  const [selectedSkill, setSelectedSkill] = useState(null)
   const searchRef = useRef(null)
   const folderInputRef = useRef(null)
 
@@ -87,13 +88,14 @@ export default function SkillsMarket() {
         e.preventDefault()
         searchRef.current?.focus()
       }
-      if (e.key === 'Escape' && showModal) {
-        setShowModal(false)
+      if (e.key === 'Escape') {
+        if (selectedSkill) setSelectedSkill(null)
+        else if (showModal) setShowModal(false)
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [showModal])
+  }, [selectedSkill, showModal])
 
   const filteredSkills = allSkills.filter((skill) => {
     const text = `${skill.id} ${skill.name} ${skill.desc} ${(skill.perms || []).join(' ')}`
@@ -110,7 +112,12 @@ export default function SkillsMarket() {
   })
 
   const handleSkillClick = (skill) => {
+    setSelectedSkill(skill)
+  }
+
+  const handleUseSkill = (skill) => {
     dispatch({ type: 'SET_DRAFT_INPUT', payload: `/${skill.id} ` })
+    setSelectedSkill(null)
     navigate('/chat')
   }
 
@@ -287,7 +294,7 @@ export default function SkillsMarket() {
             <h1 className="font-hand text-[30px] text-ink mt-1.5">
               技能库 <span className="font-display italic text-[26px] opacity-70"> / your toolkit.</span>
             </h1>
-            <p className="font-hand text-base text-ink-soft mt-1">点击技能会把 /命令 写入聊天输入框。</p>
+            <p className="font-hand text-base text-ink-soft mt-1">{t('nav.skillDetailsHint')}</p>
           </div>
           <div className="flex gap-2">
             <input
@@ -412,6 +419,74 @@ export default function SkillsMarket() {
           )}
         </div>
       </main>
+
+      {selectedSkill && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4"
+          onClick={() => setSelectedSkill(null)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="skill-detail-title"
+            className="flex max-h-[85vh] w-full max-w-xl flex-col overflow-hidden rounded-lg border border-ink/30 bg-paper shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-ink/15 px-5 py-4">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-ink-fade/50 bg-paper-2">
+                  {(() => {
+                    const Icon = getSkillIcon(selectedSkill.id)
+                    return <Icon className="h-5 w-5 text-ink-soft" />
+                  })()}
+                </div>
+                <div className="min-w-0">
+                  <h2 id="skill-detail-title" className="truncate font-hand text-xl text-ink">{selectedSkill.name}</h2>
+                  <div className="font-mono text-[10px] text-ink-fade">/{selectedSkill.id}</div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedSkill(null)}
+                className="rounded-md p-1 text-ink-fade hover:bg-paper-2 hover:text-ink"
+                aria-label={t('nav.skillDetails')}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4 text-sm">
+              <p className="leading-6 text-ink-soft">{selectedSkill.desc}</p>
+              {(selectedSkill.perms || []).length > 0 && (
+                <div>
+                  <div className="mb-2 text-xs font-medium text-ink">{t('nav.permissions')}</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {selectedSkill.perms.map((permission) => (
+                      <span key={permission} className="rounded-full border border-ink-fade/40 px-2 py-1 text-[11px] text-ink-soft">{permission}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {selectedSkill.systemPrompt && (
+                <div>
+                  <div className="mb-2 text-xs font-medium text-ink">{t('nav.skillInstructions')}</div>
+                  <div className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded-md border border-ink/15 bg-paper-2 p-3 text-xs leading-5 text-ink-soft">
+                    {selectedSkill.systemPrompt}
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end border-t border-ink/15 px-5 py-4">
+              <button
+                type="button"
+                onClick={() => handleUseSkill(selectedSkill)}
+                className="h-9 rounded-md bg-ink px-4 text-sm text-paper transition-colors hover:bg-ink-soft"
+              >
+                {t('nav.useSkill')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showModal && (
         <div className="fixed inset-0 bg-ink/40 flex items-center justify-center z-50 p-4" onClick={() => setShowModal(false)}>

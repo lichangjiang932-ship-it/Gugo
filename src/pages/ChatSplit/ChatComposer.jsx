@@ -224,6 +224,8 @@ export default function ChatComposer({
                 onChange={onApprovalModeChange}
                 disabled={isGenerating}
               />
+            </div>
+            <div className="flex min-w-0 items-center gap-1.5">
               <ModelPicker
                 open={modelPickerOpen}
                 modelOptions={modelOptions}
@@ -251,8 +253,6 @@ export default function ChatComposer({
               >
                 <Mic className="w-3.5 h-3.5" />
               </button>
-            </div>
-            <div className="flex items-center gap-2.5">
               {isGenerating ? (
                 <button
                   onClick={onAbort}
@@ -262,17 +262,14 @@ export default function ChatComposer({
                   {t('chatComposer.stop')}
                 </button>
               ) : (
-                <>
-                  <span className="hidden font-mono text-[9px] tracking-wider text-ink-fade sm:block">Enter</span>
-                  <button
-                    onClick={onSend}
-                    title={t('chatComposer.send')}
-                    aria-label={t('chatComposer.send')}
-                    className="w-8 h-8 rounded-full bg-ink flex items-center justify-center hover:bg-ink-soft transition-colors"
-                  >
-                    <Send className="w-3.5 h-3.5 text-paper" />
-                  </button>
-                </>
+                <button
+                  onClick={onSend}
+                  title={t('chatComposer.send')}
+                  aria-label={t('chatComposer.send')}
+                  className="w-8 h-8 rounded-full bg-ink flex items-center justify-center hover:bg-ink-soft transition-colors"
+                >
+                  <Send className="w-3.5 h-3.5 text-paper" />
+                </button>
               )}
             </div>
           </div>
