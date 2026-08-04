@@ -90,7 +90,6 @@ export async function handleMobileRequest(req, res) {
         user: {
           id: user.id,
           email: user.email,
-          credits: user.credits,
           hasPassword: !!user.password_hash,
           createdAt: user.created_at,
           updatedAt: user.updated_at,

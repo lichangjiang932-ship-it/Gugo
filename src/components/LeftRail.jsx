@@ -169,7 +169,6 @@ export default function LeftRail() {
           name: data.user.email.split('@')[0],
           email: data.user.email,
           avatar: '本',
-          plan: `${data.user.credits} 积分`,
         },
       })
       setShowLogin(false)
@@ -312,7 +311,7 @@ export default function LeftRail() {
             <BrandMark className="h-8 w-8 shrink-0 text-ember" />
             <span className="min-w-0 flex-1">
               <span className="block truncate text-sm font-medium text-ink">{state.user.name || t('settings.account')}</span>
-              {state.user.plan && <span className="block truncate text-[10px] text-ink-fade">{state.user.plan}</span>}
+              {state.user.email && <span className="block truncate text-[10px] text-ink-fade">{state.user.email}</span>}
             </span>
             <ChevronUp className={`h-4 w-4 text-ink-fade transition-transform ${accountMenuOpen ? '' : 'rotate-180'}`} />
           </button>

@@ -3,7 +3,6 @@ import {
   getAccount,
   getAuthToken,
   loginWithPassword,
-  recharge,
   removeAccountPassword,
   sendLoginCode,
   setAccountPassword,
@@ -50,7 +49,6 @@ export default function SettingsAccountPanel({ dispatch, search, t }) {
         name: data.user.email.split('@')[0],
         email: data.user.email,
         avatar: '本',
-        plan: `${data.user.credits} 积分`,
       },
     })
   }, [dispatch])
@@ -119,19 +117,6 @@ export default function SettingsAccountPanel({ dispatch, search, t }) {
     }
   }
 
-  const handleRecharge = async (packageId) => {
-    setAccountLoading(true)
-    setAccountMessage('')
-    try {
-      applyAccount(await recharge(packageId))
-      setAccountMessage('充值成功，积分已到账。')
-    } catch (error) {
-      setAccountMessage(error.message)
-    } finally {
-      setAccountLoading(false)
-    }
-  }
-
   const handleSetPassword = async (event) => {
     event.preventDefault()
     setPwdMessage('')
@@ -179,33 +164,23 @@ export default function SettingsAccountPanel({ dispatch, search, t }) {
     setAccountMessage('已退出登录。')
   }
 
-  const packages = account?.packages || [
-    { id: 'local-10', credits: 1000, label: '10 元' },
-    { id: 'local-50', credits: 5000, label: '50 元' },
-    { id: 'local-100', credits: 11000, label: '100 元' },
-    { id: 'local-300', credits: 36000, label: '300 元' },
-  ]
-
   return (
     <section className="flex flex-col gap-5 animate-float-up">
       <div>
-        <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">ACCOUNT & CREDITS</span>
+        <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">LOCAL ACCOUNT & SECURITY</span>
         <h1 className="font-hand text-[28px] text-ink mt-1.5">账户</h1>
-        <p className="text-sm text-ink-soft mt-1">邮箱验证码或密码登录；本地充值不会发起真实支付。</p>
+        <p className="text-sm text-ink-soft mt-1">使用本地账户保护个人配置、会话和工作区访问。</p>
       </div>
 
       {account?.user ? (
         <>
           <div className="p-4 border border-ink/30 rounded-md flex items-center justify-between gap-4">
-            <div><div className="text-base text-ink">{account.user.email}</div><div className="font-hand text-[34px] text-ember mt-1">{account.user.credits} 积分</div></div>
+            <div>
+              <div className="text-base text-ink">{account.user.email}</div>
+              <div className="mt-1 text-sm text-ink-fade">本地账户 · 已登录</div>
+            </div>
             <button onClick={handleLogout} className="h-9 px-4 border border-dashed border-ink-fade/60 rounded-md text-sm text-ink-soft hover:border-ink-fade">退出</button>
           </div>
-
-          <Group title="本地充值">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-              {packages.map((pack) => <button key={pack.id} onClick={() => handleRecharge(pack.id)} disabled={accountLoading} className="p-4 border border-ink/40 rounded-md hover:border-ember hover:bg-ember-soft/40 transition-colors disabled:opacity-50 text-left"><div className="font-hand text-xl text-ink">{pack.label}</div><div className="text-sm text-ember mt-1">+{pack.credits} 积分</div></button>)}
-            </div>
-          </Group>
 
           <Group title="登录密码">
             <p className="text-sm text-ink-soft mb-3">{account.user.hasPassword ? '已设置密码，可直接用邮箱和密码登录。' : '设置密码后可直接登录，邮箱验证码仍可用于找回密码。'}</p>
@@ -221,11 +196,6 @@ export default function SettingsAccountPanel({ dispatch, search, t }) {
             </form>
           </Group>
 
-          <Group title="最近账单">
-            <div className="flex flex-col gap-2">
-              {(account.ledger || []).length ? account.ledger.map((item) => <div key={item.id} className="flex items-center justify-between p-2 border border-ink-fade/30 rounded-md text-sm"><span className="text-ink-soft">{item.type === 'recharge' ? '充值' : `模型调用 · ${item.modelName || ''}`}</span><span className={item.credits > 0 ? 'text-ember' : 'text-ink'}>{item.credits > 0 ? '+' : ''}{item.credits}</span></div>) : <div className="text-sm text-ink-fade">暂无账单记录。</div>}
-            </div>
-          </Group>
         </>
       ) : (
         <div className="p-4 border border-ink/30 rounded-md flex flex-col gap-3 max-w-xl">

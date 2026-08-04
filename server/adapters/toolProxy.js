@@ -18,17 +18,9 @@ import dns from 'node:dns/promises'
 import net from 'node:net'
 import { URL as NodeURL } from 'node:url'
 import { readJson } from '../utils.js'
-import {
-  chargeForToolUse,
-  getPublicAccount,
-  getToolCost,
-} from './billingAuth.js'
+import { getPublicAccount } from './authAccount.js'
 import { getSessionByToken } from '../db.js'
 import { dispatchHooks } from '../services/hooksService.js'
-import { loadModelConfig } from './modelProxy.js'
-import { buildUserModelEnv } from '../services/modelProviderStore.js'
-import { getRuntimeEnv } from '../utils/runtimeEnv.js'
-import { isLocalEndpoint } from '../utils/endpointProfile.js'
 import { resolveClientId } from '../utils/loginGuard.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
@@ -498,24 +490,6 @@ function checkToolRate(req) {
 
 // ★ batchF P1: 从 Authorization: Bearer <token> 抽 token,
 //   /api/tools/* 不允许匿名调用,前端必须先登录才能用搜索/抓取.
-/**
- * 当前用户选中的模型是不是跑在本地/内网。
- *
- * 纯读、绝不抛 —— 任何一步失败就当作「不是本地」,回落到原来的计费行为,
- * 宁可多收也不能因为这里报错把工具调用整个打挂。
- */
-function isLocalModelSelected(token) {
-  try {
-    const session = token ? getSessionByToken(token) : null
-    const userId = session?.user_id || null
-    if (!userId) return false
-    const env = buildUserModelEnv({ userId, env: getRuntimeEnv() })
-    return isLocalEndpoint(loadModelConfig(env).baseUrl)
-  } catch {
-    return false
-  }
-}
-
 function authToken(req) {
   const auth = req.headers?.authorization || ''
   if (!auth.startsWith('Bearer ')) return ''
@@ -528,16 +502,14 @@ export async function handleToolProxyRequest(req, res) {
     return
   }
 
-  // ★ batchF P1: 鉴权 + 估算 + 余额检查.先做这三步再读 body 之外的逻辑,
-  //   未登录或余额不足直接拒绝,不消耗后端 outbound 配额.
+  // 先鉴权再进入限流和 outbound 工具逻辑。
   const token = authToken(req)
   if (!token) {
     sendJson(res, 401, { ok: false, error: '请先登录后再使用工具' })
     return
   }
-  let account
   try {
-    account = getPublicAccount({ token })
+    getPublicAccount({ token })
   } catch {
     sendJson(res, 401, { ok: false, error: '登录已失效,请重新登录' })
     return
@@ -549,23 +521,6 @@ export async function handleToolProxyRequest(req, res) {
     sendJson(res, 429, { ok: false, error: `工具调用过于频繁,请 ${Math.ceil(rate.resetMs / 1000)}s 后再试` })
     return
   }
-  // ★ 本地模型的工具调用不计费。
-  //
-  // 积分体系是为了覆盖云端 API 成本。用户用自己的显卡跑模型时,聊天本身
-  // 已经正确豁免了(modelProxy 的三处 isLocalModelEndpoint),但**工具调用
-  // 每次仍然扣 1 分** —— 于是「本地模型 + 积分不够」= agent 任务直接被 402 拦死,
-  // 明明整条链路一分钱上游成本都没有。这是本地用户遇到的最后一道计费墙。
-  const cost = isLocalModelSelected(token) ? 0 : getToolCost()
-  if (cost > 0 && (account?.credits ?? 0) < cost) {
-    sendJson(res, 402, {
-      ok: false,
-      error: `积分不足,工具调用需要 ${cost} 积分,当前余额 ${account?.credits ?? 0}.请先充值.`,
-      requiredCredits: cost,
-      credits: account?.credits ?? 0,
-    })
-    return
-  }
-
   const url = req.url || ''
   try {
     const body = await readJson(req)
@@ -608,21 +563,7 @@ export async function handleToolProxyRequest(req, res) {
       })
     }
 
-    // 只有真正成功才扣费;失败不扣,避免 SSRF 探测/上游不稳定还吃用户积分.
-    // cost 为 0(本地模型)时直接跳过,不写空账单.
-    let billing = null
-    if (result?.ok !== false && cost > 0) {
-      try {
-        const charged = chargeForToolUse({ token, toolName, cost })
-        billing = {
-          creditsCharged: cost,
-          credits: charged?.user?.credits ?? null,
-        }
-      } catch (err) {
-        billing = { error: err?.message || '扣费失败' }
-      }
-    }
-    sendJson(res, 200, { ...result, billing })
+    sendJson(res, 200, { ...result })
   } catch (err) {
     // ★ #36: 尊重 readJson 抛的 statusCode (e.g. 413)
     const status = err?.statusCode || 502

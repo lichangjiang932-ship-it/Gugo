@@ -186,18 +186,17 @@ test('loads a backend model catalog without exposing API keys', () => {
     MODEL_NAME: 'gpt-fast',
     MODEL_NAMES: 'gpt-fast,gpt-pro',
     MODEL_API_KEY: 'sk-test',
-    MODEL_PRICE_MULTIPLIERS: 'gpt-fast:1,gpt-pro:3',
   })
 
   assert.equal(status.configured, true)
   assert.deepEqual(status.models, [
-    { name: 'gpt-fast', multiplier: 1, active: true },
-    { name: 'gpt-pro', multiplier: 3, active: false },
+    { name: 'gpt-fast', active: true },
+    { name: 'gpt-pro', active: false },
   ])
   assert.equal(JSON.stringify(status).includes('sk-test'), false)
 })
 
-test('loads a multi-provider model catalog with per-model multipliers', () => {
+test('loads a multi-provider model catalog', () => {
   const env = {
     MODEL_PROVIDERS: 'deepseek,mimo',
     MODEL_PROVIDER_DEEPSEEK_BASE_URL: 'https://api.deepseek.com',
@@ -207,17 +206,16 @@ test('loads a multi-provider model catalog with per-model multipliers', () => {
     MODEL_PROVIDER_MIMO_API_KEY: 'sk-mimo',
     MODEL_PROVIDER_MIMO_MODELS: 'mimo-v2.5,mimo-v2.5-pro',
     MODEL_NAME: 'deepseek-v4-pro',
-    MODEL_PRICE_MULTIPLIERS: 'deepseek-v4-pro:3,deepseek-v4-flash:0.6,mimo-v2.5:1,mimo-v2.5-pro:3',
   }
 
   const status = getModelStatus(env)
 
   assert.equal(status.configured, true)
   assert.deepEqual(status.models, [
-    { name: 'deepseek-v4-pro', multiplier: 3, active: true, provider: 'deepseek' },
-    { name: 'deepseek-v4-flash', multiplier: 0.6, active: false, provider: 'deepseek' },
-    { name: 'mimo-v2.5', multiplier: 1, active: false, provider: 'mimo' },
-    { name: 'mimo-v2.5-pro', multiplier: 3, active: false, provider: 'mimo' },
+    { name: 'deepseek-v4-pro', active: true, provider: 'deepseek' },
+    { name: 'deepseek-v4-flash', active: false, provider: 'deepseek' },
+    { name: 'mimo-v2.5', active: false, provider: 'mimo' },
+    { name: 'mimo-v2.5-pro', active: false, provider: 'mimo' },
   ])
   assert.equal(JSON.stringify(status).includes('sk-deepseek'), false)
   assert.equal(JSON.stringify(status).includes('sk-mimo'), false)
@@ -258,16 +256,13 @@ test('resolves selected models to their provider endpoint and API key', () => {
   })
 })
 
-test('system diagnostics summarize model, billing, and mail without secrets', async () => {
+test('system diagnostics summarize model and mail without secrets', async () => {
   const diagnostics = await getSystemDiagnostics({
     env: {
       MODEL_BASE_URL: 'https://api.example.com/v1',
       MODEL_NAME: 'gpt-fast',
       MODEL_NAMES: 'gpt-fast,gpt-pro',
       MODEL_API_KEY: 'sk-secret-value',
-      MODEL_PRICE_MULTIPLIERS: 'gpt-fast:1,gpt-pro:3',
-      CREDIT_BASE_PER_1K_TOKENS: '12',
-      MODEL_MAX_TOKENS: '2048',
       MAIL_SERVER: 'smtp.qq.com',
       MAIL_PORT: '587',
       MAIL_USE_TLS: 'true',
@@ -280,8 +275,7 @@ test('system diagnostics summarize model, billing, and mail without secrets', as
   assert.equal(diagnostics.ok, true)
   assert.equal(diagnostics.model.configured, true)
   assert.equal(diagnostics.model.apiKeyConfigured, true)
-  assert.equal(diagnostics.billing.basePer1k, 12)
-  assert.equal(diagnostics.billing.multipliers['gpt-pro'], 3)
+  assert.equal('billing' in diagnostics, false)
   assert.equal(diagnostics.mail.configured, true)
   assert.equal(diagnostics.mail.server, 'smtp.qq.com')
   assert.equal(diagnostics.endpoint.checked, false)
@@ -518,11 +512,10 @@ test('非法 URL 不抛错(交给 fetch 自己报)', () => {
   assert.throws(() => normalizeOpenAICompatibleUrl(''), /请输入 Base URL/)
 })
 
-// ───────────── 本地模型不计费 ─────────────
-// 本地模型跑在用户自己电脑上,没有上游 API 成本,却照样按 token 扣积分 ——
-// 用自己的显卡还要付钱。积分是为了覆盖云端 API 开销,本地推理不该计入。
+// ───────────── 本地模型不产生上游 API 成本 ─────────────
+// 本地模型跑在用户自己的设备上,不应计入可选的上游 API 美元预算。
 
-test('★ 本地端点识别为免费', () => {
+test('★ 本地端点识别为无上游 API 成本', () => {
   for (const u of [
     'http://127.0.0.1:1234/v1',
     'http://localhost:11434/v1',
@@ -533,7 +526,7 @@ test('★ 本地端点识别为免费', () => {
   }
 })
 
-test('★ 云端端点仍然计费', () => {
+test('★ 云端端点仍可估算上游 API 成本', () => {
   for (const u of [
     'https://api.deepseek.com',
     'https://api.openai.com/v1',

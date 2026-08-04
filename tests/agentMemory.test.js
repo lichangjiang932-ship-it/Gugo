@@ -11,7 +11,7 @@ function tmpDir() {
 
 test('阶段 6: memory agent_id 过滤 — agent 专属 vs 全局', async () => {
   process.env.APP_DATA_DIR = tmpDir()
-  const auth = await import(`../server/adapters/billingAuth.js?am=${Date.now()}`)
+  const auth = await import(`../server/adapters/authAccount.js?am=${Date.now()}`)
   const issued = auth.issueEmailCode({ email: 'agentmem@example.com' })
   const u = auth.verifyEmailCode({ email: issued.email, code: issued.devCode }).user.id
 
@@ -86,7 +86,7 @@ test('记忆系统块标注新鲜度并声明当前消息优先', async () => {
 
 test('阶段 6: 删除 agent 后其记忆 agent_id SET NULL → 退回全局', async () => {
   process.env.APP_DATA_DIR = tmpDir()
-  const auth = await import(`../server/adapters/billingAuth.js?am2=${Date.now()}`)
+  const auth = await import(`../server/adapters/authAccount.js?am2=${Date.now()}`)
   const issued = auth.issueEmailCode({ email: 'agentmem2@example.com' })
   const u = auth.verifyEmailCode({ email: issued.email, code: issued.devCode }).user.id
 
@@ -114,7 +114,7 @@ function tmpDir2() {
 
 test('v0.8: listMemories agentFilter — all / __global__ / 具体 agentId', async () => {
   process.env.APP_DATA_DIR = tmpDir2()
-  const auth = await import(`../server/adapters/billingAuth.js?am3=${Date.now()}`)
+  const auth = await import(`../server/adapters/authAccount.js?am3=${Date.now()}`)
   const issued = auth.issueEmailCode({ email: 'agentmem3@example.com' })
   const u = auth.verifyEmailCode({ email: issued.email, code: issued.devCode }).user.id
 

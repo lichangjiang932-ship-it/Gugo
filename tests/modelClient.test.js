@@ -56,7 +56,7 @@ test('getSystemDiagnostics reads safe backend diagnostics with optional endpoint
   assert.equal(calls[0], '/api/system/diagnostics?check=1')
 })
 
-test('callModelThroughProxy returns billing-aware response from local proxy', async () => {
+test('callModelThroughProxy returns the model reply from the local proxy', async () => {
   const calls = []
   const fetchImpl = async () =>
     new Response(JSON.stringify({ reply: 'hello from model' }), {
@@ -126,14 +126,14 @@ test('streaming model calls surface backend SSE errors', async () => {
   }, /模型服务不可用/)
 })
 
-test('streaming yields billing event on done frame for tool-call charge accounting', async () => {
+test('streaming yields a completion event with final response metadata', async () => {
   const fetchImpl = async () =>
     new Response(
       new ReadableStream({
         start(controller) {
           const enc = new TextEncoder()
           controller.enqueue(enc.encode('data: {"ok":true,"delta":"hi"}\n\n'))
-          controller.enqueue(enc.encode('data: {"ok":true,"done":true,"latency":42,"injectedMemoryIds":["mem-1","mem-2"],"billing":{"creditsCharged":7,"credits":993,"error":null}}\n\n'))
+          controller.enqueue(enc.encode('data: {"ok":true,"done":true,"latency":42,"injectedMemoryIds":["mem-1","mem-2"],"finishReason":"stop"}\n\n'))
           controller.close()
         },
       }),
@@ -148,10 +148,9 @@ test('streaming yields billing event on done frame for tool-call charge accounti
     events.push(event)
   }
 
-  // 应有 text 帧 + billing 帧两条 (done 后流式终止,billing 帧必须在 return 之前 yield)
+  // 应有 text 帧 + complete 帧两条（done 后流式终止，complete 帧必须在 return 之前 yield）
   assert.deepEqual(events[0], { type: 'text', delta: 'hi' })
-  assert.equal(events[1].type, 'billing')
-  assert.equal(events[1].billing.creditsCharged, 7)
-  assert.equal(events[1].billing.credits, 993)
+  assert.equal(events[1].type, 'complete')
   assert.deepEqual(events[1].injectedMemoryIds, ['mem-1', 'mem-2'])
+  assert.equal(events[1].finishReason, 'stop')
 })

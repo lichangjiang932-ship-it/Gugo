@@ -4,8 +4,21 @@ import { join, normalize } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 const rawArgs = process.argv.slice(2)
+const coverageMode = rawArgs.includes('--coverage')
 const selectors = rawArgs.filter((arg) => !arg.startsWith('-'))
-const nodeArgs = rawArgs.filter((arg) => arg.startsWith('-') && arg !== '--run')
+const nodeArgs = rawArgs.filter((arg) => arg.startsWith('-') && arg !== '--run' && arg !== '--coverage')
+
+const coverageArgs = coverageMode
+  ? [
+      '--experimental-test-coverage',
+      `--test-coverage-lines=${process.env.COVERAGE_LINES || '40'}`,
+      `--test-coverage-functions=${process.env.COVERAGE_FUNCTIONS || '35'}`,
+      `--test-coverage-branches=${process.env.COVERAGE_BRANCHES || '60'}`,
+      '--test-coverage-include=server/**/*.js',
+      '--test-coverage-include=src/lib/**/*.js',
+      '--test-coverage-include=shared/**/*.js',
+    ]
+  : []
 
 function walk(dir) {
   const out = []
@@ -62,7 +75,7 @@ const isolatedFiles = files.filter(requiresNativeTransform)
 let failed = false
 
 if (batchFiles.length) {
-  const result = spawnSync(process.execPath, ['--test', ...nodeArgs, ...batchFiles], {
+  const result = spawnSync(process.execPath, ['--test', ...coverageArgs, ...nodeArgs, ...batchFiles], {
     stdio: 'inherit',
   })
   if ((result.status ?? 1) !== 0) failed = true

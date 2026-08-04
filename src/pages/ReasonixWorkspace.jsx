@@ -287,7 +287,7 @@ function EffortPanel() {
     <Section
       icon={Gauge}
       title="思考预算 (effort)"
-      subtitle="受 Reasonix /effort 启发：用一个旋钮决定每次对话最多走多少步、思考多深、烧多少积分。"
+      subtitle="受 Reasonix /effort 启发：用一个旋钮决定每次对话最多走多少步、思考多深。"
     >
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
         {levels.map(([id, preset]) => {
@@ -305,7 +305,7 @@ function EffortPanel() {
                 {active && <Sparkles className="w-4 h-4 text-ember" />}
               </div>
               <div className="text-xs text-ink-soft mt-2 font-mono">
-                {preset.maxSteps} 步 · 思考深度 {preset.reasoningDepth} · ×{preset.costRatio} 积分
+                {preset.maxSteps} 步 · 思考深度 {preset.reasoningDepth}
               </div>
             </button>
           )
@@ -333,7 +333,7 @@ function MetersPanel() {
     <Section
       icon={Activity}
       title="会话仪表盘"
-      subtitle="受 Reasonix dashboard 启发：每个会话的 token 用量、缓存命中率、消耗积分一览。需要主聊天接口接入后才会有数据。"
+      subtitle="受 Reasonix dashboard 启发：集中查看每个会话的调用次数、token 用量与缓存命中率。"
     >
       {err && <div className="mb-3 p-2 border border-ember/40 rounded-md text-sm text-ember bg-ember-soft/30">{err}</div>}
       {loading ? (
@@ -352,7 +352,6 @@ function MetersPanel() {
                 <th className="px-3 py-2 text-right font-normal">In</th>
                 <th className="px-3 py-2 text-right font-normal">Out</th>
                 <th className="px-3 py-2 text-right font-normal">缓存命中</th>
-                <th className="px-3 py-2 text-right font-normal">积分</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-ink-fade/20">
@@ -363,7 +362,6 @@ function MetersPanel() {
                   <td className="px-3 py-2 text-right font-mono">{m.tokensIn.toLocaleString()}</td>
                   <td className="px-3 py-2 text-right font-mono">{m.tokensOut.toLocaleString()}</td>
                   <td className="px-3 py-2 text-right font-mono">{(m.cacheHitRate * 100).toFixed(1)}%</td>
-                  <td className="px-3 py-2 text-right text-ember">-{m.costCredits}</td>
                 </tr>
               ))}
             </tbody>

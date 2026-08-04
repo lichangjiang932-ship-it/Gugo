@@ -243,7 +243,6 @@ function rowToMeter(row) {
     tokensIn: row.tokens_in,
     tokensOut: row.tokens_out,
     tokensCached: row.tokens_cached,
-    costCredits: row.cost_credits,
     turns: row.turns,
     cacheHitRate: Number(cacheHitRate.toFixed(4)),
     updatedAt: row.updated_at,
@@ -255,22 +254,22 @@ export function getSessionMeter({ userId, sessionId }) {
     .prepare('SELECT * FROM session_meters WHERE session_id = ? AND user_id = ?')
     .get(sessionId, userId)
   return row ? rowToMeter(row) : {
-    sessionId, tokensIn: 0, tokensOut: 0, tokensCached: 0, costCredits: 0, turns: 0, cacheHitRate: 0, updatedAt: 0,
+    sessionId, tokensIn: 0, tokensOut: 0, tokensCached: 0, turns: 0, cacheHitRate: 0, updatedAt: 0,
   }
 }
 
-export function bumpSessionMeter({ userId, sessionId, tokensIn = 0, tokensOut = 0, tokensCached = 0, costCredits = 0 }) {
+export function bumpSessionMeter({ userId, sessionId, tokensIn = 0, tokensOut = 0, tokensCached = 0 }) {
   const now = nowMs()
   const db = getDb()
   const existing = db.prepare('SELECT * FROM session_meters WHERE session_id = ? AND user_id = ?').get(sessionId, userId)
   if (existing) {
     db.prepare(
-      'UPDATE session_meters SET tokens_in = tokens_in + ?, tokens_out = tokens_out + ?, tokens_cached = tokens_cached + ?, cost_credits = cost_credits + ?, turns = turns + 1, updated_at = ? WHERE session_id = ? AND user_id = ?'
-    ).run(tokensIn, tokensOut, tokensCached, costCredits, now, sessionId, userId)
+      'UPDATE session_meters SET tokens_in = tokens_in + ?, tokens_out = tokens_out + ?, tokens_cached = tokens_cached + ?, turns = turns + 1, updated_at = ? WHERE session_id = ? AND user_id = ?'
+    ).run(tokensIn, tokensOut, tokensCached, now, sessionId, userId)
   } else {
     db.prepare(
-      'INSERT INTO session_meters (session_id, user_id, tokens_in, tokens_out, tokens_cached, cost_credits, turns, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)'
-    ).run(sessionId, userId, tokensIn, tokensOut, tokensCached, costCredits, now)
+      'INSERT INTO session_meters (session_id, user_id, tokens_in, tokens_out, tokens_cached, turns, updated_at) VALUES (?, ?, ?, ?, ?, 1, ?)'
+    ).run(sessionId, userId, tokensIn, tokensOut, tokensCached, now)
   }
   return getSessionMeter({ userId, sessionId })
 }

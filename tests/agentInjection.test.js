@@ -91,7 +91,7 @@ test('buildAgentSystemBlock: name 含潜在 prompt injection 不破坏 markdown 
 test('\u9636\u6bb5 5: agentId fallback \u9009\u62e9\u903b\u8f91\u7eaf\u51fd\u6570\u5957\u8def\uff08\u8de8\u7528\u6237/\u4e0d\u5b58\u5728/\u5408\u6cd5\u4e09\u79cd\uff09', async () => {
   const dir = tmpDir()
   process.env.APP_DATA_DIR = dir
-  const auth = await import(`../server/adapters/billingAuth.js?inj2=${Date.now()}`)
+  const auth = await import(`../server/adapters/authAccount.js?inj2=${Date.now()}`)
   const issued = auth.issueEmailCode({ email: 'inj-u1@example.com' })
   const u1 = auth.verifyEmailCode({ email: issued.email, code: issued.devCode }).user.id
   const issued2 = auth.issueEmailCode({ email: 'inj-u2@example.com' })

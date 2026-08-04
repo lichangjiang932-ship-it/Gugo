@@ -768,7 +768,7 @@ function migrateToV14(db) {
 
 /**
  * V15 (E2/E4 数据一致性 + 工具权限 gate) —— 远端 main 已占 v7~v14，本批顺延为 V15。
- *   - jobs.user_id 补 NOT NULL + REFERENCES users(id) ON DELETE CASCADE（计费核心链路）
+ *   - jobs.user_id 补 NOT NULL + REFERENCES users(id) ON DELETE CASCADE（账户归属链路）
  *   - job_steps.parent_step_id 补索引 (E4)
  *   - user_tool_permissions 表（功能补全：per-user 工具 gate）
  *
@@ -1164,7 +1164,7 @@ function migrateToV28(db) {
       ['first_token_timeout_ms', 'INTEGER'],
       ['idle_timeout_ms', 'INTEGER'],
       // 这个 provider 失败时允不允许切到别的 provider。
-      // 本地端点默认关(见 endpointProfile),避免「本地慢 → 偷偷切云端 → 扣积分」
+      // 本地端点默认关(见 endpointProfile),避免「本地慢 → 偷偷切云端」
       ['failover_enabled', 'INTEGER'],
       // Ollama keep_alive,如 '30m'。避免每次请求都重新加载模型权重
       ['keep_alive', 'TEXT'],
@@ -1421,12 +1421,12 @@ export function closeDb() {
 
 /* ── Users ── */
 
-export function createUser({ id, email, credits = 0, now = Date.now() }) {
+export function createUser({ id, email, now = Date.now() }) {
   const db = getDb()
   const stmt = db.prepare(
-    'INSERT INTO users (id, email, credits, created_at, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at, credits = excluded.credits'
+    'INSERT INTO users (id, email, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at'
   )
-  stmt.run(id, email, credits, now, now)
+  stmt.run(id, email, now, now)
   return getUserById(id)
 }
 
@@ -1457,22 +1457,6 @@ export function clearUserPassword({ id, now = Date.now() }) {
     'UPDATE users SET password_hash = NULL, password_salt = NULL, password_set_at = NULL, updated_at = ? WHERE id = ?'
   ).run(now, id)
   return getUserById(id)
-}
-
-export function updateUserCredits({ id, credits, now = Date.now() }) {
-  const db = getDb()
-  const stmt = db.prepare('UPDATE users SET credits = ?, updated_at = ? WHERE id = ?')
-  stmt.run(credits, now, id)
-  return getUserById(id)
-}
-
-export function deductUserCredits({ id, amount, now = Date.now() }) {
-  const db = getDb()
-  const stmt = db.prepare(
-    'UPDATE users SET credits = credits - ?, updated_at = ? WHERE id = ? AND credits >= ?'
-  )
-  const result = stmt.run(amount, now, id, amount)
-  return { changed: result.changes > 0, user: getUserById(id) }
 }
 
 /* ── User Tool Permissions (per-user 工具 gate) ── */
@@ -1579,25 +1563,6 @@ export function deleteExpiredCodes(now = Date.now()) {
   db.prepare('DELETE FROM login_codes WHERE expires_at < ?').run(now)
 }
 
-/* ── Ledger ── */
-
-export function addLedgerEntry({ id, userId, type, packageId, modelName, credits, balance, now = Date.now(), ignoreDuplicate = false }) {
-  const db = getDb()
-  const stmt = db.prepare(
-    `${ignoreDuplicate ? 'INSERT OR IGNORE' : 'INSERT'} INTO ledger (id, user_id, type, package_id, model_name, credits, balance, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-  )
-  stmt.run(id, userId, type, packageId || null, modelName || null, credits, balance, now)
-  return getLedgerForUser(userId)
-}
-
-export function getLedgerForUser(userId, limit = 50) {
-  const db = getDb()
-  const stmt = db.prepare(
-    'SELECT * FROM ledger WHERE user_id = ? ORDER BY created_at DESC LIMIT ?'
-  )
-  return stmt.all(userId, limit)
-}
-
 /* ── Rate Limits ── */
 
 export function checkRateLimit({ key, windowMs, maxRequests, now = Date.now() }) {
@@ -1644,25 +1609,31 @@ export function deleteExpiredRates(now = Date.now()) {
 export function migrateFromJson(store) {
   const db = getDb()
   const now = Date.now()
+  const insertUser = db.prepare(
+    'INSERT INTO users (id, email, credits, created_at, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at, credits = excluded.credits'
+  )
+  const insertLedger = db.prepare(
+    'INSERT OR IGNORE INTO ledger (id, user_id, type, package_id, model_name, credits, balance, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  )
   db.transaction(() => {
     for (const user of Object.values(store.users || {})) {
-      createUser({ id: user.id, email: user.email, credits: user.credits || 0, now: user.createdAt || now })
+      const createdAt = user.createdAt || now
+      insertUser.run(user.id, user.email, user.credits || 0, createdAt, createdAt)
     }
     for (const [token, userId] of Object.entries(store.sessions || {})) {
       createSession({ token, userId, now, ttlMs: TOKEN_TTL_MS })
     }
     for (const entry of store.ledger || []) {
-      addLedgerEntry({
-        id: entry.id,
-        userId: entry.userId,
-        type: entry.type,
-        packageId: entry.packageId,
-        modelName: entry.modelName,
-        credits: entry.credits,
-        balance: entry.balance,
-        now: entry.createdAt || now,
-        ignoreDuplicate: true,
-      })
+      insertLedger.run(
+        entry.id,
+        entry.userId,
+        entry.type,
+        entry.packageId || null,
+        entry.modelName || null,
+        entry.credits,
+        entry.balance,
+        entry.createdAt || now,
+      )
     }
   })()
 }

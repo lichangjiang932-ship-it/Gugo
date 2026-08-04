@@ -525,7 +525,6 @@ function toRun(row) {
     transcript: trace.filter((event) => event?.type === 'transcript'),
     tokensIn: row.tokens_in,
     tokensOut: row.tokens_out,
-    credits: row.credits,
     createdAt: row.created_at,
     finishedAt: row.finished_at,
   }

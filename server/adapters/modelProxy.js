@@ -1,16 +1,7 @@
 import { z } from 'zod'
 import { readJson } from '../utils.js'
 import { authenticateRequest } from '../middleware.js'
-import {
-  chargeForModelUse,
-  calculateChatCostFromUsage,
-  calculateModelCostUsd,
-  estimateChatCost,
-  getBillingDiagnostics,
-  getMailDiagnostics,
-  getPublicAccount,
-  loadBillingConfig,
-} from './billingAuth.js'
+import { getMailDiagnostics, getPublicAccount } from './authAccount.js'
 import { checkRateLimit, getSessionByToken } from '../db.js'
 import {
   selectActiveMemoriesForInjection,
@@ -45,7 +36,7 @@ import {
   isNativeProviderKind,
 } from './nativeModelProviders.js'
 import { extractUsage, parseModelProviderResponse } from './modelProviderResponse.js'
-import { getUsageStats, recordUsage } from './modelUsage.js'
+import { calculateModelCostUsd, getUsageStats, recordUsage } from './modelUsage.js'
 import { requestNonStreamingAsEvents } from './modelNonStreaming.js'
 
 export { extractUsage, parseModelProviderResponse, parseOpenAICompatibleResponse } from './modelProviderResponse.js'
@@ -53,7 +44,7 @@ export { getUsageStats, recordUsage, resetUsageStats } from './modelUsage.js'
 
 export { getRuntimeEnv } from '../utils/runtimeEnv.js'
 
-// ★ #18: 消息格式 schema — 拒绝畸形 messages 入参,防 OpenAI 上游报 400 / 计费爆零
+// ★ #18: 消息格式 schema — 拒绝畸形 messages 入参,避免无效上游请求
 const MESSAGE_SCHEMA = z.object({
   role: z.enum(['system', 'user', 'assistant', 'tool']),
   // content 可以是 string、null (assistant tool_calls 时)、或 multimodal array
@@ -206,10 +197,10 @@ export function isProviderFailoverError(error) {
   if (error?.name === 'AbortError') return false
   // ★ 我们自己造的超时**绝不**触发故障转移。
   // 原来超时被转成 status 504,而 504 >= 500 判定为可转移 —— 于是
-  // 「本地模型首 token 慢」= 静默切云端 + 扣积分。AbortError 那道守卫
+  // 「本地模型首 token 慢」不应触发静默切云端。AbortError 那道守卫
   // 因为错误已经被改写成 504 而完全失效。
   if (error?.code === 'MODEL_TIMEOUT') return false
-  // ★ 思考失控同理:换个 provider 重来一遍只会再烧一次钱,
+  // ★ 思考失控同理:换个 provider 重来一遍只会重复消耗资源,
   // 而且大概率同样停不下来(问题在任务本身,不在这个 provider)。
   if (error?.code === 'REASONING_RUNAWAY') return false
   const status = Number(error?.status ?? error?.statusCode)
@@ -225,12 +216,12 @@ export function resolveModelFailoverConfigs({ modelName, env = process.env } = {
 
   // ★ 是否允许「转移到一个**不同名**的模型」。默认 **不允许**。
   //
-  // 事故:用户在 UI 里选了 deepseek-v4-flash(0.6× 计费),deepseek 那边
+  // 事故:用户在 UI 里选了 deepseek-v4-flash,deepseek 那边
   // 一个网络抖动就触发转移,而 mimo provider 不提供这个模型名,
   // 于是回落到 provider.models[0] = mimo-v2.5 —— 换了个**厂商的另一个模型**
-  // 跑完并按它的价格扣费。用户看到的是「我选的 flash,账单却不是 flash」。
+  // 跑完。用户看到的是「我选的 flash,实际执行的却不是 flash」。
   //
-  // 跨模型转移本质上是拿用户的钱替我们兜底可用性,必须显式开启。
+  // 跨模型转移会改变输出与成本边界,必须显式开启。
   // 同名模型在多个 provider 之间转移(镜像/中转站)是安全的,默认保留。
   //
   // 两种显式开启方式,任一即可:
@@ -243,8 +234,8 @@ export function resolveModelFailoverConfigs({ modelName, env = process.env } = {
   // 不代表用户同意换模型)。用它判断等于这道防线对所有云端 provider 失效,
   // 也就完全没修到事故本身。
   const primaryOverrides = configs[0]?.profileOverrides || {}
-  // 默认严格粘滞：UI/调用方请求哪个模型，实际执行和账单里就只能出现同名模型。
-  // 即使某个 provider 遗留了 failoverEnabled=true，也不能越权换成更贵的 Pro。
+  // 默认严格粘滞：UI/调用方请求哪个模型，实际执行就只能使用同名模型。
+  // 即使某个 provider 遗留了 failoverEnabled=true，也不能越权换成另一个模型。
   const strictSelection = String(env.MODEL_STRICT_SELECTION ?? '1').trim() !== '0'
   const crossModelOptIn = primaryOverrides.failoverEnabled === true
     || primaryOverrides.failoverEnabled === 1
@@ -285,7 +276,7 @@ export function resolveModelFailoverConfigs({ modelName, env = process.env } = {
   //
   // 本地推理慢是常态(加载权重几十秒、CPU 1-3 tok/s),而慢会走到失败路径,
   // 失败路径又会挨个尝试后面的 provider —— 结果就是「我明明选了本地模型,
-  // 却在用云端的额度」。用户既不知道换了模型(输出风格都变了),又被扣了积分。
+  // 却在用云端资源」。用户不知道模型已经切换,输出风格也会突然变化。
   //
   // 想要这个行为的人可以在 provider 设置里显式打开 failover_enabled。
   const primaryProfile = deduped.length ? profileForConfig(deduped[0], env) : null
@@ -440,14 +431,12 @@ const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1', '[::1]'
 /**
  * 这个端点是不是跑在本机(Ollama / LM Studio 之类)。
  *
- * ★ 本地模型跑在用户自己的电脑上,不产生任何上游 API 费用 —— 却照样扣积分,
- * 用户明明用的是自己的显卡还要付钱。积分体系是为了覆盖云端 API 成本,
- * 本地推理不该计入。
+ * ★ 本地模型跑在用户自己的电脑上,其超时和故障转移策略应区别于云端 API。
  */
 export function isLocalModelEndpoint(baseUrl = '') {
   // ★ 判定逻辑已收敛到 server/utils/endpointProfile.js。
   // 原来只认回环地址,于是局域网(192.168.x)/ Docker(172.17.x)/ Tailscale(100.64.x)
-  // 上的 Ollama 全部漏判 —— 按云端超时砍流、按云端计费扣积分、还允许 failover 到云端。
+  // 上的 Ollama 全部漏判 —— 会按云端超时砍流,还可能错误地 failover 到云端。
   return isLocalEndpoint(baseUrl)
 }
 
@@ -469,8 +458,7 @@ export function profileForConfig(config = {}, env = process.env) {
  *
  * ★ 关键:**不设 status**。原来超时被伪装成 `status: 504`,而
  * isProviderFailoverError 判定 `status >= 500` 可故障转移,于是
- * 「本地模型慢一点」→ 静默切到云端 provider → 按云端价扣积分,
- * 用户用自己的显卡却被扣钱且完全不知道换了模型。
+ * 「本地模型慢一点」→ 静默切到云端 provider 会改变隐私与成本边界。
  * 同时 504 在 RETRYABLE_STATUS 里,导致对着单槽推理服务器重试 3 次,越重试越慢。
  */
 export function modelTimeoutError(message, { phase = 'request', timeoutMs = 0 } = {}) {
@@ -571,7 +559,6 @@ async function checkModelsEndpoint({ config, fetchImpl = fetchWithEnvProxy, env 
 export async function getSystemDiagnostics({ env = process.env, fetchImpl = fetchWithEnvProxy, checkEndpoint = false } = {}) {
   const config = loadModelConfig(env)
   const modelStatus = getModelStatus(env)
-  const billing = getBillingDiagnostics(env)
   const mail = getMailDiagnostics(env)
   const endpoint = checkEndpoint
     ? await checkModelsEndpoint({ config, fetchImpl })
@@ -585,7 +572,6 @@ export async function getSystemDiagnostics({ env = process.env, fetchImpl = fetc
       apiKeyConfigured: !!config.apiKey,
     },
     endpoint,
-    billing,
     mail,
     // 缓存可观测性:上游 token 命中率 + 本地 prompt block LRU 命中率。
     // 以前这两个数字都拿不到,任何前缀优化都无法验证效果。
@@ -606,11 +592,9 @@ export function getVisibleModels(env = process.env, defaultModel = '') {
     ? providerModelEntries.map((entry) => entry.name)
     : parseCsv(env.MODEL_NAMES || defaultModel)
   const uniqueNames = [...new Set(names.length ? names : [defaultModel].filter(Boolean))]
-  const billingConfig = loadBillingConfig({ ...env, MODEL_NAME: defaultModel })
   const providerByModel = new Map(providerModelEntries.map((entry) => [entry.name, entry.provider]))
   return uniqueNames.map((name) => ({
     name,
-    multiplier: billingConfig.multipliers[name] || 1,
     active: name === defaultModel,
     ...(providerByModel.has(name) ? { provider: providerByModel.get(name) } : {}),
   }))
@@ -1195,7 +1179,7 @@ export async function* streamOpenAICompatible({
               if (event.type === 'reasoning' && event.delta) {
                 reasoningChars += event.delta.length
                 if (reasoningCharLimit > 0 && reasoningChars > reasoningCharLimit) {
-                  const error = new Error(`模型思考超过 ${Math.round(reasoningCharLimit / 1000)}k 字仍未给出正文，已中止以避免继续计费。`)
+                  const error = new Error(`模型思考超过 ${Math.round(reasoningCharLimit / 1000)}k 字仍未给出正文，已中止以避免继续消耗资源。`)
                   error.code = 'REASONING_RUNAWAY'
                   try { await reader.cancel(error) } catch { /* best effort */ }
                   controller.abort(error)
@@ -1227,23 +1211,23 @@ export async function* streamOpenAICompatible({
             reasoningChars += reasoning.length
             // ★ 思考失控保护。
             //
-            // 事故:一轮对话思考了 167644 字(≈84000 token),全部按输出计费,
-            // 最后还以 network error 收场 —— 钱花了,一个字的结论都没拿到。
+            // 事故:一轮对话思考了 167644 字(≈84000 token),持续占用上游资源,
+            // 最后还以 network error 收场,一个字的结论都没拿到。
             // 推理模型在信息不足时(比如工具一直 404)会陷入"再想想"的循环,
             // 它自己不会停,只能从外面掐。
             //
-            // 到达上限就断开这次请求并明确报错,而不是继续烧钱等一个
+            // 到达上限就断开这次请求并明确报错,而不是继续消耗资源等一个
             // 可能永远不来的正文。
             if (reasoningCharLimit > 0 && reasoningChars > reasoningCharLimit) {
               const error = new Error(
-                `模型思考超过 ${Math.round(reasoningCharLimit / 1000)}k 字仍未给出正文，已中止以避免继续计费。`
+                `模型思考超过 ${Math.round(reasoningCharLimit / 1000)}k 字仍未给出正文，已中止以避免继续消耗资源。`
                 + '通常是信息不足导致模型反复兜圈子（例如工具持续失败）。'
                 + '可以换一个非推理模型，或把任务拆小后重试。',
               )
               error.code = 'REASONING_RUNAWAY'
               error.status = 0
               // 仅 throw 不足以保证 undici 立即关闭上游响应；显式取消 reader 并
-              // abort fetch，避免模型在后台继续生成不可见但仍计费的思考 token。
+              // abort fetch，避免模型在后台继续生成不可见的思考 token。
               try { await reader.cancel(error) } catch { /* best effort */ }
               controller.abort(error)
               throw error
@@ -1417,9 +1401,7 @@ export async function handleModelProxyRequest(req, res) {
       }
     }
     let token = ''
-    let estimatedCost = 0
     let injectedMemoryIds = []
-    let account = null
     let injectedAgentId = null
     let promptSystemBlockCount = 0
     const compilerFingerprints = {
@@ -1434,7 +1416,7 @@ export async function handleModelProxyRequest(req, res) {
     }
     if (!testMode) {
       token = authToken(req)
-      account = getPublicAccount({ token })
+      getPublicAccount({ token })
       session = token ? getSessionByToken(token) : null
 
       if (session?.user_id) {
@@ -1540,26 +1522,6 @@ export async function handleModelProxyRequest(req, res) {
         logWarn('memory.inject', err, { userId: session?.user_id })
       }
 
-      const billingConfig = loadBillingConfig(getRuntimeEnv())
-      // ★ 本地模型(Ollama / LM Studio)跑在用户自己电脑上,没有上游 API 成本,
-      // 不该扣积分。以前一律按 token 估算收费 —— 用自己的显卡还要付钱。
-      const localModel = isLocalModelEndpoint(requestConfig?.baseUrl)
-      estimatedCost = localModel
-        ? 0
-        : estimateChatCost({
-          modelName: selectedModel,
-          messages,
-          config: billingConfig,
-        })
-      if (account.credits < estimatedCost) {
-        sendJson(res, 402, {
-          ok: false,
-          error: `积分不足，需要 ${estimatedCost} 积分，当前余额 ${account.credits}。请先充值。`,
-          requiredCredits: estimatedCost,
-          credits: account.credits,
-        })
-        return
-      }
     }
 
     const requiresVision = hasVisionContent(messages)
@@ -1634,7 +1596,6 @@ export async function handleModelProxyRequest(req, res) {
       const started = Date.now()
       let streamUsage = null
       let activeStreamModel = selectedModel
-      let activeEstimatedCost = estimatedCost
       let activeProviderResolved = false
       let assistantText = ''
       let streamHadToolCalls = false
@@ -1667,18 +1628,6 @@ export async function handleModelProxyRequest(req, res) {
           if (clientGone) break
           if (!activeProviderResolved) {
             activeStreamModel = activeConfig.modelName
-            activeEstimatedCost = isLocalModelEndpoint(activeConfig.baseUrl)
-              ? 0
-              : estimateChatCost({
-                  modelName: activeStreamModel,
-                  messages,
-                  config: loadBillingConfig(getRuntimeEnv()),
-                })
-            if (account.credits < activeEstimatedCost) {
-              const creditError = new Error(`积分不足，需要 ${activeEstimatedCost} 积分，当前余额 ${account.credits}。请先充值。`)
-              creditError.statusCode = 402
-              throw creditError
-            }
             activeProviderResolved = true
           }
           if (event.type === 'text') {
@@ -1718,23 +1667,7 @@ export async function handleModelProxyRequest(req, res) {
         if (!clientGone && !assistantText.trim() && !streamHadToolCalls) {
           throw createEmptyModelResponseError(streamFinishReason)
         }
-        // 扣费 — 客户端断了就跳过,不收钱
         if (!clientGone) {
-          let chargedBilling = null
-          let billingError = null
-          const actualCost = streamUsage
-            ? calculateChatCostFromUsage({
-                modelName: activeStreamModel,
-                usage: streamUsage,
-                config: loadBillingConfig(getRuntimeEnv()),
-              })
-            : activeEstimatedCost
-          try {
-            chargedBilling = chargeForModelUse({ token, modelName: activeStreamModel, cost: actualCost })
-          } catch (chargeErr) {
-            // 扣费失败(余额不够等)不阻断已经流出去的内容,但要告诉前端
-            billingError = chargeErr.message
-          }
           if (session?.user_id) {
             dispatchHooks({
               userId: session.user_id,
@@ -1745,8 +1678,6 @@ export async function handleModelProxyRequest(req, res) {
               console.warn('[hooks] stop hook 失败 (stream):', err?.message || err)
             })
           }
-          // done 帧带上 billing,前端能在 stream 收尾时拿到本轮实际消耗,
-          // 用于工具调用循环里"多轮累计计费"显示.放一起避免被 done 后的 return 截断.
           safeWrite(`data: ${JSON.stringify({
             ok: true,
             done: true,
@@ -1756,11 +1687,6 @@ export async function handleModelProxyRequest(req, res) {
             // ★ 'length' = 被 max_tokens 截断,不是模型说完了。
             // 前端据此给出「输出预算用尽」而不是「模型不肯说话」。
             finishReason: streamFinishReason,
-            billing: {
-              creditsCharged: actualCost,
-              credits: chargedBilling?.user?.credits ?? null,
-              error: billingError,
-            },
           })}\n\n`)
         }
       } catch (err) {
@@ -1801,14 +1727,6 @@ export async function handleModelProxyRequest(req, res) {
     // 非流式响应（测试模式或前端未启用 stream）
     const started = Date.now()
     const completion = await runWithProviderFailover(requestCandidates, async (candidate) => {
-      const candidateCost = testMode || isLocalModelEndpoint(candidate.baseUrl)
-        ? 0
-        : estimateChatCost({ modelName: candidate.modelName, messages, config: loadBillingConfig(getRuntimeEnv()) })
-      if (!testMode && account.credits < candidateCost) {
-        const creditError = new Error(`积分不足，需要 ${candidateCost} 积分，当前余额 ${account.credits}。请先充值。`)
-        creditError.statusCode = 402
-        throw creditError
-      }
       const candidateProfile = profileForConfig(candidate, runtimeEnv)
       const { url, init } = buildModelProviderRequest({
         config: candidate,
@@ -1841,24 +1759,11 @@ export async function handleModelProxyRequest(req, res) {
       const parsed = parseModelProviderResponse(data, candidateProfile)
       const usage = parsed.usage
       recordUsage(candidate.modelName, usage)
-      const actualCost = usage
-        ? calculateChatCostFromUsage({
-            modelName: candidate.modelName,
-            usage,
-            config: loadBillingConfig(getRuntimeEnv()),
-          })
-        : candidateCost
       if (!parsed.content) throw new Error('模型返回为空，请检查模型名称或端点响应格式。')
-      return { reply: parsed.content, modelName: candidate.modelName, cost: actualCost }
+      return { reply: parsed.content, modelName: candidate.modelName }
     })
     const reply = completion.reply
-    const responseModel = completion.modelName
-    const responseCost = completion.cost
-
-    let billing = null
-    if (!testMode) {
-      billing = chargeForModelUse({ token, modelName: responseModel, cost: responseCost })
-      if (session?.user_id) {
+    if (!testMode && session?.user_id) {
         dispatchHooks({
           userId: session.user_id,
           event: 'stop',
@@ -1867,14 +1772,11 @@ export async function handleModelProxyRequest(req, res) {
         }).catch((err) => {
           console.warn('[hooks] stop hook 失败 (non-stream):', err?.message || err)
         })
-      }
     }
     sendJson(res, 200, {
       ok: true,
       reply,
       latency: Date.now() - started,
-      creditsCharged: responseCost,
-      user: billing?.user,
       injectedMemoryIds,
       ...(testMode ? { compilerFingerprints } : {}),
     })

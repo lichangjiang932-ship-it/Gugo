@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { getRuntimeEnv, modelProxyPlugin, handleSystemDiagnosticsRequest } from './server/adapters/modelProxy.js'
-import { handleAuthBillingRequest } from './server/adapters/billingAuth.js'
+import { handleAuthAccountRequest } from './server/adapters/authAccount.js'
 import { toolProxyPlugin } from './server/adapters/toolProxy.js'
 import { healthCheck } from './server/appServer.js'
 import { handleJobRequest } from './server/routes/jobRoutes.js'
@@ -40,17 +40,16 @@ import { handleMcpServerRequest } from './server/mcp/mcpServer.js'
 import { handleLocalFileAccessRequest } from './server/routes/localFileAccessRoutes.js'
 import { handleTurnEventRequest } from './server/routes/turnEventRoutes.js'
 
-function authBillingPlugin() {
+function authAccountPlugin() {
   return {
-    name: 'local-auth-billing',
+    name: 'local-auth-account',
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
         if (
           req.url?.startsWith('/api/auth/') ||
-          req.url?.startsWith('/api/account/') ||
-          req.url?.startsWith('/api/billing/')
+          req.url?.startsWith('/api/account/')
         ) {
-          handleAuthBillingRequest(req, res, getRuntimeEnv())
+          handleAuthAccountRequest(req, res, getRuntimeEnv())
           return
         }
         next()
@@ -259,7 +258,7 @@ const DEV_HOST = RUNTIME_ENV.SERVER_HOST || '127.0.0.1'
 const DEV_PORT = Number(RUNTIME_ENV.VITE_DEV_PORT || RUNTIME_ENV.SERVER_PORT || 5175)
 
 export default defineConfig({
-  plugins: [react(), authBillingPlugin(), modelProxyPlugin(), toolProxyPlugin(), fallbackApiPlugin()],
+  plugins: [react(), authAccountPlugin(), modelProxyPlugin(), toolProxyPlugin(), fallbackApiPlugin()],
   base: PUBLIC_BASE_PATH,
   server: {
     host: DEV_HOST,

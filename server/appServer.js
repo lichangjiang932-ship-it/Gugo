@@ -20,7 +20,7 @@ import {
   handleSystemDiagnosticsRequest,
   getModelStatus,
 } from './adapters/modelProxy.js'
-import { handleAuthBillingRequest } from './adapters/billingAuth.js'
+import { handleAuthAccountRequest } from './adapters/authAccount.js'
 import { handleToolProxyRequest } from './adapters/toolProxy.js'
 import { handleFsShellRequest } from './adapters/fsShellTools.js'
 import { handleGitWorkbenchRequest } from './adapters/gitWorkbench.js'
@@ -201,13 +201,12 @@ function createRouter(getEnv = getRuntimeEnv, staticDir = distDir) {
     return
   }
 
-  // 认证与计费
+  // 认证与账户
   if (
     req.url?.startsWith('/api/auth/') ||
-    req.url?.startsWith('/api/account/') ||
-    req.url?.startsWith('/api/billing/')
+    req.url?.startsWith('/api/account/')
   ) {
-    return handleAuthBillingRequest(req, res, getEnv())
+    return handleAuthAccountRequest(req, res, getEnv())
   }
 
   // 模型状态

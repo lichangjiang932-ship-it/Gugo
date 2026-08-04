@@ -13,7 +13,7 @@ async function setup() {
   process.env.APP_DATA_DIR = dir
   const dbMod = await import('../server/db.js')
   dbMod.closeDb()
-  const authMod = await import('../server/adapters/billingAuth.js')
+  const authMod = await import('../server/adapters/authAccount.js')
   const agentMod = await import('../server/services/agentStore.js')
   const store = await import('../server/services/channelStore.js')
   const issued = authMod.issueEmailCode({ email: `store-${Date.now()}-${Math.random()}@example.com` })

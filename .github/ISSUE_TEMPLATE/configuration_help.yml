@@ -1,0 +1,27 @@
+name: Configuration help
+description: Ask for help configuring a self-hosted installation
+title: "[Config]: "
+labels: ["support"]
+body:
+  - type: markdown
+    attributes:
+      value: Never paste API keys, tokens, `.env` contents, databases, or private logs.
+  - type: textarea
+    id: goal
+    attributes:
+      label: What are you trying to configure?
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Node.js version, deployment method, and provider type. Redact private values.
+    validations:
+      required: true
+  - type: textarea
+    id: attempted
+    attributes:
+      label: What have you tried?
+    validations:
+      required: true

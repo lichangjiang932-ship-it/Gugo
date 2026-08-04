@@ -13,11 +13,10 @@ import {
 import { logger, logWarn } from '../utils/logger.js'
 
 import {
+  getDb,
   getUserById,
   getUserByEmail,
   createUser,
-  updateUserCredits,
-  deductUserCredits,
   setUserPassword,
   clearUserPassword,
   getSessionByToken,
@@ -27,9 +26,6 @@ import {
   incrementLoginAttempts,
   deleteLoginCode,
   deleteExpiredCodes,
-  addLedgerEntry,
-  getLedgerForUser,
-  migrateFromJson,
   checkRateLimit,
 } from '../db.js'
 
@@ -43,14 +39,19 @@ function getStorePath() {
   return path.join(getDataDir(), 'app-data.json')
 }
 
-export const RECHARGE_PACKAGES = [
-  { id: 'local-10', amount: 10, credits: 1000, label: '10 元' },
-  { id: 'local-50', amount: 50, credits: 5000, label: '50 元' },
-  { id: 'local-100', amount: 100, credits: 11000, label: '100 元' },
-  { id: 'local-300', amount: 300, credits: 36000, label: '300 元' },
-]
-
 /* ── 旧 JSON 迁移 ── */
+
+function migrateAccountsFromJson(store) {
+  const now = Date.now()
+  getDb().transaction(() => {
+    for (const user of Object.values(store.users || {})) {
+      createUser({ id: user.id, email: user.email, now: user.createdAt || now })
+    }
+    for (const [token, userId] of Object.entries(store.sessions || {})) {
+      createSession({ token, userId, now })
+    }
+  })()
+}
 
 function maybeMigrateLegacy() {
   const storePath = getStorePath()
@@ -59,13 +60,13 @@ function maybeMigrateLegacy() {
   try {
     const raw = fs.readFileSync(storePath, 'utf8')
     const store = JSON.parse(raw)
-    migrateFromJson(store)
+    migrateAccountsFromJson(store)
     fs.writeFileSync(migratedFlag, JSON.stringify({ migratedAt: Date.now() }))
     // 保留原文件作为备份，不改名
-    if (process.env.NODE_ENV !== 'production') logger.info('[billingAuth] Migrated legacy JSON store to SQLite')
+    if (process.env.NODE_ENV !== 'production') logger.info('[authAccount] Migrated legacy accounts to SQLite')
   } catch (e) {
     // D4: 迁移失败属于需要排障的信号,生产也要 log(原来仅 dev warn)。
-    logWarn('billingAuth.legacyMigrate', e, { storePath })
+    logWarn('authAccount.legacyMigrate', e, { storePath })
   }
 }
 
@@ -95,7 +96,6 @@ function publicUser(user) {
   return {
     id: user.id,
     email: user.email,
-    credits: user.credits || 0,
     hasPassword: !!user.password_hash,
     createdAt: user.created_at,
     updatedAt: user.updated_at,
@@ -184,7 +184,7 @@ export function loginWithPassword({ email, password, now = Date.now() }) {
   clearPasswordFailures(normalized)
   const token = createToken()
   createSession({ token, userId: user.id, now, ttlMs: 7 * 24 * 60 * 60 * 1000 })
-  return { ok: true, token, user: publicUser(user), ledger: getLedgerForUser(user.id) }
+  return { ok: true, token, user: publicUser(user) }
 }
 
 function getUserByToken(token) {
@@ -264,14 +264,14 @@ export function verifyEmailCode({ email, code, now = Date.now() }) {
   const userId = crypto.createHash('sha256').update(normalized).digest('hex').slice(0, 24)
   let user = getUserById(userId)
   if (!user) {
-    user = createUser({ id: userId, email: normalized, credits: 0, now })
+    user = createUser({ id: userId, email: normalized, now })
   }
   deleteLoginCode(normalized)
 
   const token = createToken()
   createSession({ token, userId, now, ttlMs: 7 * 24 * 60 * 60 * 1000 }) // 7 天
 
-  return { ok: true, token, user: publicUser(user), ledger: getLedgerForUser(userId) }
+  return { ok: true, token, user: publicUser(user) }
 }
 
 export function getPublicAccount({ token }) {
@@ -279,133 +279,6 @@ export function getPublicAccount({ token }) {
   const user = getUserByToken(token)
   if (!user) throw new Error('请先登录')
   return publicUser(user)
-}
-
-export function rechargeAccount({ token, packageId, now = Date.now() }) {
-  ensureLegacyMigration()
-  const user = getUserByToken(token)
-  if (!user) throw new Error('请先登录')
-  const pack = RECHARGE_PACKAGES.find((item) => item.id === packageId)
-  if (!pack) throw new Error('充值套餐不存在')
-
-  const newCredits = (user.credits || 0) + pack.credits
-  updateUserCredits({ id: user.id, credits: newCredits, now })
-
-  addLedgerEntry({
-    id: crypto.randomUUID?.() || `led_${now}_${Math.random().toString(16).slice(2)}`,
-    userId: user.id,
-    type: 'recharge',
-    packageId,
-    amount: pack.amount,
-    credits: pack.credits,
-    balance: newCredits,
-    now,
-  })
-
-  return { ok: true, user: publicUser(getUserById(user.id)), ledger: getLedgerForUser(user.id) }
-}
-
-/**
- * D3: 统一扣费。chargeForModelUse / chargeForToolUse 原本逐行重复,
- * 只有 ledger 的 type 和 model_name 字段不同。这里抽出公共逻辑,行为零变化。
- *
- * @param {object} p
- * @param {string} p.token   会话 token
- * @param {string} p.type    ledger 入账类型('model_charge' | 'tool_charge')
- * @param {string} p.name    入账 model_name 字段(模型名或工具名)
- * @param {number} p.cost    扣减积分
- */
-function chargeCredits({ token, type, name, cost, now = Date.now() }) {
-  ensureLegacyMigration()
-  const user = getUserByToken(token)
-  if (!user) throw new Error('请先登录')
-  // ★ 免费请求(本地模型)直接返回,不写账本 —— 否则每轮都留一条
-  // credits: -0 的空记录,把真实消费记录淹掉。返回形状与正常路径一致。
-  if (!(cost > 0)) {
-    return { ok: true, user: publicUser(user), ledger: getLedgerForUser(user.id) }
-  }
-  if ((user.credits || 0) < cost) {
-    throw new Error(`积分不足，需要 ${cost} 积分，当前余额 ${user.credits || 0}`)
-  }
-
-  const result = deductUserCredits({ id: user.id, amount: cost, now })
-  if (!result.changed) {
-    throw new Error(`积分不足，需要 ${cost} 积分`)
-  }
-
-  addLedgerEntry({
-    id: crypto.randomUUID?.() || `led_${now}_${Math.random().toString(16).slice(2)}`,
-    userId: user.id,
-    type,
-    modelName: name,
-    credits: -cost,
-    balance: result.user.credits,
-    now,
-  })
-
-  return { ok: true, user: publicUser(result.user), ledger: getLedgerForUser(user.id) }
-}
-
-export function chargeForModelUse({ token, modelName, cost, now = Date.now() }) {
-  return chargeCredits({ token, type: 'model_charge', name: modelName, cost, now })
-}
-
-/* ── 计费配置 ── */
-
-// ★ batchF P1: 工具调用(搜索/抓取)也走鉴权和计费,
-//   防止未登录用户直接打 /api/tools/* 白嫖后端资源.
-//   固定费率,从 env CREDIT_TOOL_COST 读,默认 1 积分/次.
-export function getToolCost(env = process.env) {
-  const raw = Number(env.CREDIT_TOOL_COST)
-  if (!Number.isFinite(raw) || raw < 0) return 1
-  return raw
-}
-
-export function chargeForToolUse({ token, toolName, cost, now = Date.now() }) {
-  return chargeCredits({ token, type: 'tool_charge', name: toolName, cost, now })
-}
-
-export function loadBillingConfig(env = process.env) {
-  const basePer1k = Number(env.CREDIT_BASE_PER_1K_TOKENS ?? 10)
-  // ★ MODEL_MAX_TOKENS 现在默认「不限制」(0 / 未设置),但**计费预估仍然需要
-  // 一个有限数字**来预扣积分 —— 不能因为不限制输出就不预留额度。
-  // 用户显式配了上限就按它算,没配就用一个保守的估算值。
-  // 这个值只影响「预扣多少」,实际扣费在流结束后按真实 usage 结算。
-  const configured = Number(env.MODEL_MAX_TOKENS)
-  const estimateTokens = Number(env.CREDIT_ESTIMATE_OUTPUT_TOKENS ?? 4096)
-  const maxTokens = Number.isFinite(configured) && configured > 0
-    ? configured
-    : (Number.isFinite(estimateTokens) && estimateTokens > 0 ? estimateTokens : 4096)
-  const defaultModel = env.MODEL_NAME?.trim() || ''
-  const multipliers = {}
-
-  const raw = env.MODEL_PRICE_MULTIPLIERS || (defaultModel ? `${defaultModel}:1` : '')
-  for (const part of raw.split(',')) {
-    const [name, value] = part.split(':').map((s) => s?.trim())
-    if (!name) continue
-    const multiplier = Number(value || 1)
-    multipliers[name] = Number.isFinite(multiplier) && multiplier > 0 ? multiplier : 1
-  }
-  if (defaultModel && !multipliers[defaultModel]) multipliers[defaultModel] = 1
-
-  return {
-    basePer1k: Number.isFinite(basePer1k) && basePer1k > 0 ? basePer1k : 10,
-    maxTokens: Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : 4096,
-    multipliers,
-    defaultModel,
-  }
-}
-
-export function getBillingDiagnostics(env = process.env) {
-  const config = loadBillingConfig(env)
-  return {
-    ok: true,
-    basePer1k: config.basePer1k,
-    maxTokens: config.maxTokens,
-    defaultModel: config.defaultModel,
-    multipliers: config.multipliers,
-    packages: RECHARGE_PACKAGES,
-  }
 }
 
 export function getMailDiagnostics(env = process.env) {
@@ -424,88 +297,6 @@ export function getMailDiagnostics(env = process.env) {
     sender: env.MAIL_DEFAULT_SENDER || env.MAIL_USERNAME || '',
     devCodes: String(env.AUTH_DEV_CODES).toLowerCase() === 'true',
   }
-}
-
-/* ── Token 估算 ── */
-
-function contentToText(content) {
-  if (typeof content === 'string') return content
-  if (Array.isArray(content)) {
-    return content
-      .map((part) => {
-        if (typeof part === 'string') return part
-        if (part?.type === 'text') return part.text || ''
-        if (part?.type === 'image_url') return '[image]'
-        return JSON.stringify(part || '')
-      })
-      .join('\n')
-  }
-  return content ? JSON.stringify(content) : ''
-}
-
-function estimateImageTokensFromUrl(url = '') {
-  const text = String(url || '')
-  if (!text.startsWith('data:image/')) return 1000
-  const comma = text.indexOf(',')
-  const payload = comma >= 0 ? text.slice(comma + 1) : text
-  const approxBytes = Math.floor((payload.length * 3) / 4)
-  return Math.max(85, Math.ceil(approxBytes / 750))
-}
-
-function imageTokenCount(messages) {
-  let total = 0
-  for (const message of messages || []) {
-    if (!Array.isArray(message?.content)) continue
-    for (const part of message.content) {
-      if (part?.type === 'image_url') {
-        total += estimateImageTokensFromUrl(part.image_url?.url || '')
-      }
-    }
-  }
-  return total
-}
-
-function roughTokenCount(messages) {
-  const text = messages.map((m) => contentToText(m.content)).join('\n')
-  return Math.max(1, Math.ceil(text.length / 4) + imageTokenCount(messages))
-}
-
-export function estimateChatCost({ modelName, messages, config }) {
-  const inputTokens = roughTokenCount(messages)
-  const budgetTokens = inputTokens + config.maxTokens
-  const multiplier = config.multipliers[modelName] || 1
-  const baseCost = Math.max(1, Math.ceil((budgetTokens / 1000) * config.basePer1k))
-  return Math.ceil(baseCost * multiplier)
-}
-
-/**
- * 流结束后按上游真实 usage 结算。预估值只用于请求前余额校验，不能直接当账单。
- * reasoning token 按 OpenAI 兼容协议计入 completion_tokens，因此自然包含在内。
- */
-export function calculateChatCostFromUsage({ modelName, usage, config }) {
-  const promptTokens = Math.max(0, Number(usage?.promptTokens) || 0)
-  const completionTokens = Math.max(0, Number(usage?.completionTokens) || 0)
-  const totalTokens = promptTokens + completionTokens
-  if (!(totalTokens > 0)) return 0
-  const multiplier = config.multipliers[modelName] || 1
-  const baseCost = Math.max(1, Math.ceil((totalTokens / 1000) * config.basePer1k))
-  return Math.ceil(baseCost * multiplier)
-}
-
-export function calculateModelCostUsd({ modelName, usage, env = process.env }) {
-  let rates
-  try {
-    rates = JSON.parse(String(env.MODEL_USD_RATES || '{}'))
-  } catch {
-    return 0
-  }
-  const rate = rates?.[modelName]
-  if (!rate || typeof rate !== 'object') return 0
-  const inputRate = Math.max(0, Number(rate.input) || 0)
-  const outputRate = Math.max(0, Number(rate.output) || 0)
-  const promptTokens = Math.max(0, Number(usage?.promptTokens) || 0)
-  const completionTokens = Math.max(0, Number(usage?.completionTokens) || 0)
-  return (promptTokens * inputRate + completionTokens * outputRate) / 1_000_000
 }
 
 /* ── SMTP 邮件发送 ── */
@@ -657,7 +448,7 @@ function clientId(req, env = process.env) {
   return resolveClientId(req, env)
 }
 
-export async function handleAuthBillingRequest(req, res, env = process.env) {
+export async function handleAuthAccountRequest(req, res, env = process.env) {
   ensureLegacyMigration()
   try {
     const url = new URL(req.url, 'http://localhost')
@@ -718,21 +509,10 @@ export async function handleAuthBillingRequest(req, res, env = process.env) {
     if (req.method === 'GET' && url.pathname === '/api/account/me') {
       const token = authToken(req)
       const user = getPublicAccount({ token })
-      sendJson(res, 200, { ok: true, user, ledger: getLedgerForUser(user.id), packages: RECHARGE_PACKAGES })
+      sendJson(res, 200, { ok: true, user })
       return
     }
 
-    if (req.method === 'GET' && url.pathname === '/api/billing/packages') {
-      sendJson(res, 200, { ok: true, packages: RECHARGE_PACKAGES })
-      return
-    }
-
-    if (req.method === 'POST' && url.pathname === '/api/billing/recharge') {
-      const body = await readJson(req, { maxBytes: 256 * 1024 })
-      const result = rechargeAccount({ token: authToken(req), packageId: body.packageId })
-      sendJson(res, 200, { ...result, packages: RECHARGE_PACKAGES })
-      return
-    }
 
     sendJson(res, 404, { ok: false, error: '接口不存在' })
   } catch (error) {

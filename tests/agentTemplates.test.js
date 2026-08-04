@@ -59,7 +59,7 @@ test('agent with persona template injects MOOD into system block', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-yuan-'))
   process.env.APP_DATA_DIR = dir
   const suffix = `${Date.now()}_${Math.random()}`
-  const auth = await import(`../server/adapters/billingAuth.js?yuan=${suffix}`)
+  const auth = await import(`../server/adapters/authAccount.js?yuan=${suffix}`)
   const ag = await import(`../server/services/agentStore.js?yuan=${suffix}`)
 
   const issued = auth.issueEmailCode({ email: 'yuan@example.com' })

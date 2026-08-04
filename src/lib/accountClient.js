@@ -94,15 +94,3 @@ export async function getAccount({ fetchImpl = fetch } = {}) {
   })
   return parseResponse(response)
 }
-
-export async function recharge(packageId, { fetchImpl = fetch } = {}) {
-  const response = await fetchImpl('/api/billing/recharge', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${getAuthToken()}`,
-    },
-    body: JSON.stringify({ packageId }),
-  })
-  return parseResponse(response)
-}
