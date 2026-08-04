@@ -22,6 +22,23 @@ test('kind 按主机名推断,端口不标准也能认出来', () => {
   assert.equal(inferEndpointKind('http://ollama.internal:9999'), 'ollama')
   assert.equal(inferEndpointKind('http://lmstudio.lan:7777/v1'), 'lmstudio')
   assert.equal(inferEndpointKind('http://vllm-prod:3000/v1'), 'vllm')
+  assert.equal(inferEndpointKind('https://api.anthropic.com/v1'), 'anthropic')
+  assert.equal(inferEndpointKind('https://generativelanguage.googleapis.com/v1beta'), 'gemini')
+})
+
+test('Anthropic 与 Gemini 原生端点声明完整多模态和工具能力', () => {
+  for (const [baseUrl, kind] of [
+    ['https://api.anthropic.com/v1', 'anthropic'],
+    ['https://generativelanguage.googleapis.com/v1beta', 'gemini'],
+  ]) {
+    const profile = resolveEndpointProfile({ baseUrl, modelName: 'model', env: {} })
+    assert.equal(profile.kind, kind)
+    assert.equal(profile.supportsTools, true)
+    assert.equal(profile.supportsStreaming, true)
+    assert.equal(profile.supportsVision, true)
+    assert.equal(profile.supportsPdf, true)
+    assert.equal(profile.supportsParallelTools, true)
+  }
 })
 
 test('非法 URL 不抛,回落 openai-compatible', () => {
@@ -169,6 +186,54 @@ test('MODEL_NAMES_TOOLS 白名单一旦设置就是精确名单', () => {
     resolveEndpointProfile({ baseUrl: 'http://localhost:11434', modelName: 'gemma2', env }).supportsTools,
     false
   )
+})
+
+test('PDF 能力默认保守，仅官方 OpenAI 或显式白名单开启', () => {
+  const openai = resolveEndpointProfile({
+    baseUrl: 'https://api.openai.com/v1',
+    modelName: 'gpt-4.1',
+    env: {},
+  })
+  assert.equal(openai.supportsPdf, true)
+
+  const compatible = resolveEndpointProfile({
+    baseUrl: 'https://api.deepseek.com/v1',
+    modelName: 'deepseek-chat',
+    env: {},
+  })
+  assert.equal(compatible.supportsPdf, false)
+
+  const whitelisted = resolveEndpointProfile({
+    baseUrl: 'https://example.com/v1',
+    modelName: 'document-model',
+    env: { MODEL_NAMES_PDF: 'document-model' },
+  })
+  assert.equal(whitelisted.supportsPdf, true)
+
+  const forcedOff = resolveEndpointProfile({
+    baseUrl: 'https://api.openai.com/v1',
+    modelName: 'gpt-4.1',
+    env: {},
+    overrides: { supportsPdf: false },
+  })
+  assert.equal(forcedOff.supportsPdf, false)
+})
+
+test('并行工具能力可覆盖且不会在 tools 关闭时误开启', () => {
+  const openai = resolveEndpointProfile({
+    baseUrl: 'https://api.openai.com/v1',
+    modelName: 'gpt-4.1',
+    env: {},
+  })
+  assert.equal(openai.supportsParallelTools, true)
+
+  const toolsOff = resolveEndpointProfile({
+    baseUrl: 'https://api.openai.com/v1',
+    modelName: 'gpt-4.1',
+    env: {},
+    overrides: { supportsTools: false, supportsParallelTools: true },
+  })
+  assert.equal(toolsOff.supportsParallelTools, false)
 })
 
 test('本地端点默认不允许 failover —— 不许偷偷切到云端并扣钱', () => {

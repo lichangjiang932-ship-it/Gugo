@@ -1,5 +1,6 @@
 import { ChevronDown, Copy, Download, FileText, Maximize2, Table2 } from 'lucide-react'
 import { useState } from 'react'
+import { useT } from '../../i18n/I18nProvider.jsx'
 
 function ArtifactIcon({ type }) {
   if (type === 'xlsx') return <Table2 className="w-4 h-4" />
@@ -87,6 +88,7 @@ function SheetPreview({ preview }) {
 }
 
 export default function ArtifactPreview({ preview, content, downloading, onDownload, onCopySource, onExpand }) {
+  const { t } = useT()
   const [showSource, setShowSource] = useState(false)
 
   return (
@@ -106,19 +108,19 @@ export default function ArtifactPreview({ preview, content, downloading, onDownl
           onClick={onDownload}
           disabled={downloading}
           className="h-8 px-3 rounded-md border border-ember-line text-ember hover:bg-ember-soft transition-colors disabled:opacity-50 inline-flex items-center gap-1.5 text-xs"
-          title={`下载 ${preview.filename}`}
+          title={t('artifact.downloadTitle', { filename: preview.filename })}
         >
           <Download className="w-3.5 h-3.5" />
-          {downloading ? '生成中' : '下载'}
+          {downloading ? t('artifact.generating') : t('artifact.download')}
         </button>
         <button
           type="button"
           onClick={() => onExpand?.()}
           className="h-8 px-3 rounded-md border border-ink-fade/40 text-ink-soft hover:bg-paper hover:text-ember hover:border-ember/40 transition-colors inline-flex items-center gap-1.5 text-xs"
-          title="在面板中打开"
+          title={t('artifact.openPanel')}
         >
           <Maximize2 className="w-3.5 h-3.5" />
-          在面板中打开
+          {t('artifact.openPanel')}
         </button>
       </div>
 
@@ -134,14 +136,14 @@ export default function ArtifactPreview({ preview, content, downloading, onDownl
           className="inline-flex items-center gap-1 hover:text-ink transition-colors"
         >
           <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showSource ? 'rotate-180' : ''}`} />
-          源内容
+              {t('artifact.source')}
         </button>
         <button
           onClick={onCopySource}
           className="inline-flex items-center gap-1 hover:text-ink transition-colors"
         >
           <Copy className="w-3.5 h-3.5" />
-          复制
+              {t('artifact.copy')}
         </button>
       </div>
 

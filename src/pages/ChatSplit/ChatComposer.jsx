@@ -3,6 +3,7 @@ import FullscreenMediaModal from '../../components/FullscreenMediaModal.jsx'
 import PermissionModeSwitcher from '../../components/PermissionModeSwitcher.jsx'
 import { useT } from '../../i18n/I18nProvider.jsx'
 import ModelPicker from './ModelPicker.jsx'
+import SlashCommandMenu from './SlashCommandMenu.jsx'
 import {
   Paperclip,
   Mic,
@@ -12,6 +13,16 @@ import {
   FileText,
 } from 'lucide-react'
 import { getClipboardImageFiles } from '../../lib/chatAttachmentFiles.js'
+import { resolveSlashMenuKey } from '../../lib/slashMenuNavigation.js'
+
+function splitLeadingSkillCommand(value, skillIds = []) {
+  const raw = String(value || '')
+  const match = raw.match(/^\/([a-z0-9_-]+)\s([\s\S]*)$/i)
+  if (!match) return { command: '', body: raw }
+  const known = new Set((Array.isArray(skillIds) ? skillIds : []).map((id) => String(id).toLowerCase()))
+  if (!known.has(match[1].toLowerCase())) return { command: '', body: raw }
+  return { command: `/${match[1]}`, body: match[2] }
+}
 
 export default function ChatComposer({
   input,
@@ -34,6 +45,9 @@ export default function ChatComposer({
   approvalMode,
   onApprovalModeChange,
   handleKeyDown,
+  skillIds = [],
+  slashCommands = [],
+  onSlashCommandSelect,
 }) {
   const { t } = useT()
   const voiceLabel = {
@@ -45,6 +59,25 @@ export default function ChatComposer({
   }[voiceState] || t('chatMessages.voice')
   const textareaRef = useRef(null)
   const fileInputRef = useRef(null)
+  const composerSurfaceRef = useRef(null)
+  const slashListRef = useRef(null)
+  const [slashSelectedIndex, setSlashSelectedIndex] = useState(0)
+  const [slashMenuDismissed, setSlashMenuDismissed] = useState(false)
+  const skillCommand = splitLeadingSkillCommand(input, skillIds)
+  const slashMatch = String(input || '').match(/^\/([^\s/]*)$/i)
+  const slashMenuOpen = !!slashMatch && !slashMenuDismissed
+  const safeSlashIndex = Math.min(slashSelectedIndex, Math.max(0, slashCommands.length - 1))
+
+  useEffect(() => {
+    if (!slashMenuOpen) return undefined
+    const selected = slashListRef.current?.querySelector(`[data-slash-index="${safeSlashIndex}"]`)
+    selected?.scrollIntoView?.({ block: 'nearest' })
+    const dismissOnOutsidePointer = (event) => {
+      if (!composerSurfaceRef.current?.contains(event.target)) setSlashMenuDismissed(true)
+    }
+    window.addEventListener('pointerdown', dismissOnOutsidePointer)
+    return () => window.removeEventListener('pointerdown', dismissOnOutsidePointer)
+  }, [safeSlashIndex, slashMenuOpen])
   // ★ #21: input 被外部清空 (发送后) 也回弹到 1 行高度
   useEffect(() => {
     const ta = textareaRef.current
@@ -138,7 +171,19 @@ export default function ChatComposer({
           </span>
         </div>
       )}
-      <div className="mx-auto w-full max-w-[840px]">
+      <div ref={composerSurfaceRef} className="relative mx-auto w-full max-w-[840px]">
+        {slashMenuOpen && (
+          <SlashCommandMenu
+            items={slashCommands}
+            selectedIndex={safeSlashIndex}
+            listRef={slashListRef}
+            onHighlight={setSlashSelectedIndex}
+            onSelect={(entry) => {
+              setSlashMenuDismissed(true)
+              onSlashCommandSelect?.(entry)
+            }}
+          />
+        )}
         <div className="flex min-h-[104px] flex-col justify-between rounded-2xl border border-ink/15 bg-paper px-3.5 py-3 shadow-[0_8px_28px_rgb(var(--color-ink-rgb)/0.07)]">
           {attachments.length > 0 && (
             <div className="flex flex-wrap gap-2 mb-3">
@@ -178,18 +223,45 @@ export default function ChatComposer({
             </div>
           )}
           <div className="flex items-start gap-2 min-h-6">
+            {skillCommand.command && (
+              <span
+                data-testid="active-skill-command"
+                className="mt-0.5 inline-flex h-6 shrink-0 items-center rounded-md bg-ink px-2 font-mono text-xs font-medium text-paper shadow-sm"
+              >
+                {skillCommand.command}
+              </span>
+            )}
             <textarea
               ref={textareaRef}
-              value={input}
+              value={skillCommand.command ? skillCommand.body : input}
               onChange={(e) => {
-              setInput(e.target.value)
+              setSlashMenuDismissed(false)
+              setSlashSelectedIndex(0)
+              setInput(skillCommand.command ? `${skillCommand.command} ${e.target.value}` : e.target.value)
 
               // ★ #21: 自动撑高 textarea (1 ~ 8 行)
               const ta = e.target
               ta.style.height = 'auto'
               ta.style.height = Math.min(ta.scrollHeight, 24 * 8) + 'px'
-            }}
-              onKeyDown={handleKeyDown}
+              }}
+              onKeyDown={(e) => {
+                if (slashMenuOpen) {
+                  const action = resolveSlashMenuKey(e.key, safeSlashIndex, slashCommands.length)
+                  if (action.handled) {
+                    e.preventDefault()
+                    if (action.selectedIndex !== undefined) setSlashSelectedIndex(action.selectedIndex)
+                    if (action.dismiss) setSlashMenuDismissed(true)
+                    if (action.selectIndex !== undefined) onSlashCommandSelect?.(slashCommands[action.selectIndex])
+                    return
+                  }
+                }
+                if (skillCommand.command && !skillCommand.body && e.key === 'Backspace' && !e.nativeEvent?.isComposing) {
+                  e.preventDefault()
+                  setInput('')
+                  return
+                }
+                handleKeyDown(e)
+              }}
               onPaste={(e) => {
                 const images = getClipboardImageFiles(e.clipboardData)
                 if (!images.length) return

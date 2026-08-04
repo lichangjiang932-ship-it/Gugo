@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { checkRateLimit, getSessionByToken } from './db.js'
+import { getSessionByToken } from './db.js'
 import { logger } from './utils/logger.js'
 import { z } from 'zod'
 
@@ -165,43 +165,6 @@ export function requireAuth(req, res, next) {
 }
 
 /* ── Rate Limit ── */
-
-export function rateLimit({ keyPrefix, windowMs = 60000, maxRequests = 10 }) {
-  return async (req, res, next) => {
-    // 生产环境用 IP，本地环境用 token 或 IP
-    const clientId = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown'
-    const key = `${keyPrefix}:${clientId}`
-    const result = checkRateLimit({ key, windowMs, maxRequests })
-
-    res.setHeader('X-RateLimit-Limit', String(maxRequests))
-    res.setHeader('X-RateLimit-Remaining', String(result.remaining))
-    if (result.resetAt) {
-      res.setHeader('X-RateLimit-Reset', String(Math.ceil(result.resetAt / 1000)))
-    }
-
-    if (!result.allowed) {
-      res.writeHead(429, { 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ error: 'Too many requests. Please try again later.' }))
-      return
-    }
-    next()
-  }
-}
-
-/* ── 验证码发送限制 ── */
-
-export function loginCodeRateLimit(req, res, next) {
-  const clientId = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown'
-  const key = `login_code:${clientId}`
-  const result = checkRateLimit({ key, windowMs: 60 * 60 * 1000, maxRequests: 5 }) // 每小时 5 次
-
-  if (!result.allowed) {
-    res.writeHead(429, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ error: '发送验证码次数过多，请 1 小时后再试。' }))
-    return
-  }
-  next()
-}
 
 /* ── 输入校验 ── */
 

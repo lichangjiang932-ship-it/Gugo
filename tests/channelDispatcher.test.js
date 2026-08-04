@@ -8,7 +8,7 @@ function tmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-channel-dispatcher-'))
 }
 
-async function setup() {
+async function setup({ runSubagent } = {}) {
   process.env.APP_DATA_DIR = tmpDir()
   const dbMod = await import('../server/db.js')
   dbMod.closeDb()
@@ -25,14 +25,17 @@ async function setup() {
   dispatcher.configureChannelDispatcherForTests({
     runSubagent: (payload) => {
       calls.push(payload)
-      return new Promise(() => {})
+      return runSubagent ? runSubagent(payload) : new Promise(() => {})
     },
   })
   return { userId, agents: { hanako, ming }, store, dispatcher, calls }
 }
 
 test('dispatchUserMessage: mentions create N jobs', { concurrency: false }, async () => {
-  const { userId, agents, store, dispatcher, calls } = await setup()
+  const releases = []
+  const { userId, agents, store, dispatcher, calls } = await setup({
+    runSubagent: () => new Promise((resolve) => releases.push(resolve)),
+  })
   const channel = store.createChannel({
     userId,
     name: 'Crew',
@@ -41,7 +44,69 @@ test('dispatchUserMessage: mentions create N jobs', { concurrency: false }, asyn
   })
   const result = await dispatcher.dispatchUserMessage(channel.id, userId, '@Hanako @Ming help')
   assert.equal(result.jobIds.length, 2)
+  assert.equal(calls.length, 1)
+  releases[0]({ resultText: '' })
+  await new Promise((resolve) => setImmediate(resolve))
   assert.equal(calls.length, 2)
+  releases[1]({ resultText: '' })
+  await dispatcher.waitForChannelDispatcherIdleForTests({ userId, channelId: channel.id })
+})
+
+test('dispatchUserMessage: one channel preserves turn and reply order', { concurrency: false }, async () => {
+  const releases = []
+  const { userId, agents, store, dispatcher, calls } = await setup({
+    runSubagent: () => new Promise((resolve) => releases.push(resolve)),
+  })
+  const channel = store.createChannel({
+    userId,
+    name: 'Ordered Crew',
+    kind: 'group',
+    agentIds: [agents.hanako.id],
+    defaultAgentId: agents.hanako.id,
+  })
+
+  const [first, second] = await Promise.all([
+    dispatcher.dispatchUserMessage(channel.id, userId, 'first request'),
+    dispatcher.dispatchUserMessage(channel.id, userId, 'second request'),
+  ])
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].parentMessageId, first.messageId)
+  assert.doesNotMatch(calls[0].prompt, /second request/)
+
+  releases[0]({ resultText: 'first reply' })
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(calls.length, 2)
+  assert.equal(calls[1].parentMessageId, second.messageId)
+  assert.match(calls[1].prompt, /first reply/)
+
+  releases[1]({ resultText: '' })
+  await dispatcher.waitForChannelDispatcherIdleForTests({ userId, channelId: channel.id })
+})
+
+test('dispatchUserMessage: a failed queued turn does not block the next turn', { concurrency: false }, async () => {
+  let callCount = 0
+  const { userId, agents, store, dispatcher, calls } = await setup({
+    runSubagent: async () => {
+      callCount += 1
+      if (callCount === 1) throw new Error('first turn failed')
+      return { resultText: '' }
+    },
+  })
+  const channel = store.createChannel({
+    userId,
+    name: 'Resilient Crew',
+    kind: 'group',
+    agentIds: [agents.ming.id],
+    defaultAgentId: agents.ming.id,
+  })
+
+  await Promise.all([
+    dispatcher.dispatchUserMessage(channel.id, userId, 'will fail'),
+    dispatcher.dispatchUserMessage(channel.id, userId, 'must still run'),
+  ])
+  await dispatcher.waitForChannelDispatcherIdleForTests({ userId, channelId: channel.id })
+  assert.equal(calls.length, 2)
+  assert.match(calls[1].prompt, /must still run/)
 })
 
 test('dispatchUserMessage: no mention routes to default agent', { concurrency: false }, async () => {

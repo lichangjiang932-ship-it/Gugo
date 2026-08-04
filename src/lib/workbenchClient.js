@@ -41,3 +41,13 @@ export function commitWorkbenchChanges({ message, files }, options = {}) {
 export function pushWorkbenchBranch(options = {}) {
   return postJson('/api/workbench/git/push', {}, options)
 }
+
+export async function runWorkbenchTerminal({ command, cwd = '.' }, { fetchImpl = fetch } = {}) {
+  const response = await fetchImpl('/api/tools/shell/exec', {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify({ command, cwd }),
+  })
+  let payload
+  try { payload = await response.json() } catch { payload = {} }
+  if (!response.ok) throw new Error(payload?.error || `request failed: ${response.status}`)
+  return payload
+}

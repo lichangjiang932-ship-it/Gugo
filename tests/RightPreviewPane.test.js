@@ -7,7 +7,7 @@ const viteServer = await createServer({
   root: process.cwd(),
   appType: 'custom',
   plugins: [reactPlugin()],
-  server: { middlewareMode: true },
+  server: { middlewareMode: true, hmr: false },
 })
 
 await viteServer.ssrLoadModule('/tests/unit/RightPreviewPane.test.jsx')

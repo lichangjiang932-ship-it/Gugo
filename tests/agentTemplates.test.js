@@ -8,7 +8,7 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-agent-template-tests', String(process.pid))
+process.env.APP_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-agent-template-tests-'))
 
 const { createAppServer } = await import('../server/appServer.js')
 

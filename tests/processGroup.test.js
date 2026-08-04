@@ -50,6 +50,27 @@ test('runProcessWithGroup: 超时杀死 + timedOut=true', async () => {
   assert.ok(elapsed < 4_000, `应在 4s 内被杀,实际 ${elapsed}ms`)
 })
 
+test('runProcessWithGroup: AbortSignal 取消时杀死进程组', async () => {
+  const controller = new AbortController()
+  const t0 = Date.now()
+  const pending = runProcessWithGroup({
+    shellPath: node,
+    shellArgs: nodeArgs('setInterval(() => {}, 1_000)'),
+    cwd: process.cwd(),
+    env: process.env,
+    timeout: 10_000,
+    signal: controller.signal,
+  })
+  setTimeout(() => controller.abort(), 100)
+
+  const result = await pending
+  const elapsed = Date.now() - t0
+  assert.equal(result.aborted, true)
+  assert.equal(result.timedOut, false)
+  assert.equal(result.killed, true)
+  assert.ok(elapsed < 4_000, `取消后应在 4s 内退出,实际 ${elapsed}ms`)
+})
+
 if (isPosix) {
   test('runProcessWithGroup: 杀整个进程组(孙进程也被收)', async () => {
     // 启动 shell,它再 spawn 一个长 sleep 的孙进程并 echo 孙的 PID

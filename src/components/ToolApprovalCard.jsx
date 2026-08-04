@@ -92,6 +92,7 @@ export default function ToolApprovalCard({ open, request, onDecide, busy }) {
   const tone = RISK_TONE[risk] || RISK_TONE.low
   const Icon = TOOL_ICON[name] || AlertTriangle
   const main = headline(name, args)
+  const canRemember = name !== 'bash_exec'
 
   return (
     <div className={`rounded-md border ${tone.border} ${tone.bg} p-3.5`} data-testid="tool-approval-card">
@@ -140,15 +141,17 @@ export default function ToolApprovalCard({ open, request, onDecide, busy }) {
           <Check className="w-3.5 h-3.5" />
           {t('toolApproval.allowOnce')}
         </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => onDecide?.({ approved: true, remember: true })}
-          className="h-8 px-3 border border-emerald-500/60 rounded-md text-sm text-emerald-700 hover:bg-emerald-500/10 transition-colors flex items-center gap-1.5 disabled:opacity-50"
-        >
-          <CheckCheck className="w-3.5 h-3.5" />
-          {t('toolApproval.alwaysAllow')}
-        </button>
+        {canRemember && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onDecide?.({ approved: true, remember: true })}
+            className="h-8 px-3 border border-emerald-500/60 rounded-md text-sm text-emerald-700 hover:bg-emerald-500/10 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+          >
+            <CheckCheck className="w-3.5 h-3.5" />
+            {t('toolApproval.alwaysAllow')}
+          </button>
+        )}
         <button
           type="button"
           disabled={busy}

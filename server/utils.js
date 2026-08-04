@@ -10,21 +10,26 @@
  * @param {number} [opts.maxBytes=4*1024*1024] 默认 4MB
  * @returns {Promise<object>}
  */
-export async function readJson(req, { maxBytes = 4 * 1024 * 1024 } = {}) {
+export async function readJsonWithRaw(req, { maxBytes = 4 * 1024 * 1024 } = {}) {
   const chunks = []
   let total = 0
   for await (const chunk of req) {
-    total += chunk.length
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    total += buffer.length
     if (total > maxBytes) {
       const err = new Error(`request body exceeds ${maxBytes} bytes`)
       err.statusCode = 413
       throw err
     }
-    chunks.push(chunk)
+    chunks.push(buffer)
   }
   const raw = Buffer.concat(chunks).toString('utf8')
-  if (!raw.trim()) return {}
-  return JSON.parse(raw)
+  return { body: raw.trim() ? JSON.parse(raw) : {}, raw }
+}
+
+export async function readJson(req, options) {
+  const parsed = await readJsonWithRaw(req, options)
+  return parsed.body
 }
 
 /**

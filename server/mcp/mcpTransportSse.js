@@ -29,13 +29,14 @@ function isLoopbackHttpUrl(raw) {
 }
 
 export class SseTransport {
-  constructor({ url, headers = {}, label = 'mcp', timeoutMs = 30000 }) {
+  constructor({ url, headers = {}, getHeaders, label = 'mcp', timeoutMs = 30000 }) {
     if (!url || !/^https?:\/\//.test(url)) throw new Error('SSE transport 需要 http/https url')
     if (process.env.NODE_ENV === 'production' && !url.startsWith('https://') && !isLoopbackHttpUrl(url)) {
       throw new Error('生产环境 MCP SSE 必须 https')
     }
     this.url = url
     this.headers = headers
+    this.getHeaders = typeof getHeaders === 'function' ? getHeaders : null
     this.label = label
     this.timeoutMs = timeoutMs
     this.closed = false
@@ -55,6 +56,18 @@ export class SseTransport {
     return this._post(message).then(() => {}).catch((err) => this._emitError(err))
   }
 
+  async _headers() {
+    const dynamicHeaders = this.getHeaders ? await this.getHeaders() : {}
+    return {
+      'Content-Type': 'application/json',
+      Accept: 'application/json, text/event-stream',
+      'MCP-Protocol-Version': '2025-03-26',
+      ...(this.sessionId ? { 'MCP-Session-Id': this.sessionId } : {}),
+      ...(this.headers || {}),
+      ...(dynamicHeaders || {}),
+    }
+  }
+
   async request(message, { timeoutMs } = {}) {
     if (this.closed) throw new Error(`MCP "${this.label}" 已关闭`)
     const ctrl = new AbortController()
@@ -62,13 +75,7 @@ export class SseTransport {
     try {
       const resp = await fetch(this.url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json, text/event-stream',
-          'MCP-Protocol-Version': '2025-03-26',
-          ...(this.sessionId ? { 'MCP-Session-Id': this.sessionId } : {}),
-          ...(this.headers || {}),
-        },
+        headers: await this._headers(),
         body: JSON.stringify(message),
         signal: ctrl.signal,
       })
@@ -96,13 +103,7 @@ export class SseTransport {
     try {
       const resp = await fetch(this.url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json, text/event-stream',
-          'MCP-Protocol-Version': '2025-03-26',
-          ...(this.sessionId ? { 'MCP-Session-Id': this.sessionId } : {}),
-          ...(this.headers || {}),
-        },
+        headers: await this._headers(),
         body: JSON.stringify(message),
         signal: ctrl.signal,
       })

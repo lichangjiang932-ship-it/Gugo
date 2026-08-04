@@ -7,7 +7,9 @@ import {
   runSubagentBatch,
   runSubagent,
   listSubagentTypes,
+  _testing,
 } from '../server/services/subagentRuntime.js'
+import { createJobBudget } from '../server/utils/jobBudget.js'
 
 const { userId } = issueTestSession({ email: 'subagent-test@example.com' })
 
@@ -24,6 +26,49 @@ test('SUBAGENT_TYPES have system prompts and tool specs', () => {
     assert.ok(Array.isArray(type.tools), `${id} should have tools array`)
     assert.ok(type.tools.length > 0, `${id} should have at least one tool`)
   }
+})
+
+test('subagent model calls consume the shared hard budget and still return a wrap-up', async () => {
+  const budget = createJobBudget({
+    maxModelCalls: 1,
+    maxModelTokens: 100,
+    maxCostUsd: 1,
+  })
+  let providerCalls = 0
+  const result = await _testing.subagentToolsLoop({
+    messages: [
+      { role: 'system', content: 'Test subagent.' },
+      { role: 'user', content: 'Inspect one item.' },
+    ],
+    tools: [SUBAGENT_TYPES.explore.tools.find((tool) => tool.function.name === 'read_file')],
+    maxIters: 3,
+    userId,
+    budget,
+    approveTool: async ({ args }) => ({ proceed: true, args }),
+    executeTool: async () => ({ ok: true, content: 'evidence' }),
+    callModel: async () => {
+      providerCalls += 1
+      if (providerCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{ id: 'read-1', function: { name: 'read_file', arguments: '{"path":"a.txt"}' } }],
+          usage: { promptTokens: 10, completionTokens: 5 },
+          costUsd: 0.01,
+        }
+      }
+      return {
+        content: 'Budget wrap-up with evidence.',
+        toolCalls: [],
+        usage: { promptTokens: 5, completionTokens: 5 },
+        costUsd: 0.01,
+      }
+    },
+  })
+  assert.equal(result, 'Budget wrap-up with evidence.')
+  assert.equal(providerCalls, 2, 'one normal request plus one explicit wrap-up')
+  assert.equal(budget.snapshot().modelCalls, 2)
+  assert.equal(budget.snapshot().modelTokens, 25)
+  assert.equal(budget.snapshot().costUsd, 0.02)
 })
 
 test('explore and plan types have read-only tools', () => {

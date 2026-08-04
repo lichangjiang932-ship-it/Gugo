@@ -1,0 +1,416 @@
+import { normalizeModelContentForEndpoint } from '../utils/modelContentCapabilities.js'
+
+export const NATIVE_PROVIDER_KINDS = new Set(['anthropic', 'gemini'])
+
+export function isNativeProviderKind(kind = '') {
+  return NATIVE_PROVIDER_KINDS.has(String(kind || ''))
+}
+
+function json(value, fallback = {}) {
+  if (value && typeof value === 'object') return value
+  try { return JSON.parse(String(value || '')) } catch { return fallback }
+}
+
+function parseDataUrl(value = '') {
+  const match = String(value || '').match(/^data:([^;,]+)(?:;[^,]*)?;base64,(.+)$/is)
+  return match ? { mimeType: match[1], data: match[2] } : null
+}
+
+function normalizeBase(baseUrl = '') {
+  return String(baseUrl || '').trim().replace(/\/+$/, '')
+}
+
+function mergeAdjacent(messages = []) {
+  const merged = []
+  for (const message of messages) {
+    const previous = merged.at(-1)
+    if (previous?.role === message.role) previous.content.push(...message.content)
+    else merged.push({ ...message, content: [...message.content] })
+  }
+  return merged
+}
+
+function openAiParts(content) {
+  return Array.isArray(content) ? content : [{ type: 'text', text: String(content ?? '') }]
+}
+
+function jsonSafeToolResult(content) {
+  const seen = new WeakSet()
+  try {
+    const encoded = JSON.stringify(content ?? null, (_key, value) => {
+      if (typeof value === 'bigint') return String(value)
+      if (value instanceof Error) {
+        return { name: value.name, message: value.message, code: value.code, status: value.status }
+      }
+      if (value && typeof value === 'object') {
+        if (seen.has(value)) return '[Circular]'
+        seen.add(value)
+      }
+      return value
+    })
+    return encoded === undefined ? null : JSON.parse(encoded)
+  } catch {
+    return { error: 'tool_result_serialization_failed' }
+  }
+}
+
+function serializeToolResult(content) {
+  return typeof content === 'string' ? content : JSON.stringify(jsonSafeToolResult(content))
+}
+
+function geminiToolResult(content) {
+  let value = content
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value)
+    } catch {
+      return { result: value }
+    }
+  }
+  value = jsonSafeToolResult(value)
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value
+  return { result: value ?? null }
+}
+
+function anthropicPart(part) {
+  if (part?.type === 'text') return { type: 'text', text: String(part.text || '') }
+  if (part?.type === 'image_url') {
+    const source = parseDataUrl(part.image_url?.url)
+    return source ? { type: 'image', source: { type: 'base64', media_type: source.mimeType, data: source.data } } : null
+  }
+  if (part?.type === 'file') {
+    const source = parseDataUrl(part.file?.file_data)
+    return source ? { type: 'document', source: { type: 'base64', media_type: source.mimeType, data: source.data } } : null
+  }
+  return null
+}
+
+function anthropicMessages(messages = []) {
+  const system = []
+  const out = []
+  for (const message of messages) {
+    if (message?.role === 'system') {
+      const text = openAiParts(message.content).filter((part) => part?.type === 'text').map((part) => part.text).join('\n')
+      if (text) system.push(text)
+      continue
+    }
+    if (message?.role === 'tool') {
+      out.push({
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: String(message.tool_call_id || ''),
+          content: serializeToolResult(message.content),
+        }],
+      })
+      continue
+    }
+    const content = openAiParts(message?.content).map(anthropicPart).filter(Boolean)
+    if (message?.role === 'assistant' && Array.isArray(message.tool_calls)) {
+      for (const call of message.tool_calls) {
+        content.push({
+          type: 'tool_use',
+          id: String(call?.id || ''),
+          name: String(call?.function?.name || ''),
+          input: json(call?.function?.arguments, {}),
+        })
+      }
+    }
+    if (content.length) out.push({ role: message?.role === 'assistant' ? 'assistant' : 'user', content })
+  }
+  return { system: system.join('\n\n'), messages: mergeAdjacent(out) }
+}
+
+function anthropicToolChoice(toolChoice) {
+  if (toolChoice === 'required') return { type: 'any' }
+  if (toolChoice && typeof toolChoice === 'object' && toolChoice.function?.name) {
+    return { type: 'tool', name: toolChoice.function.name }
+  }
+  return { type: 'auto' }
+}
+
+function buildAnthropicRequest({ config, messages, stream, tools, toolChoice, profile }) {
+  const normalized = normalizeModelContentForEndpoint(messages, profile)
+  const converted = anthropicMessages(normalized)
+  const headers = {
+    'Content-Type': 'application/json',
+    'anthropic-version': '2023-06-01',
+    ...(config?.headers || {}),
+  }
+  if (config?.apiKey && !headers['x-api-key'] && !headers.Authorization) headers['x-api-key'] = config.apiKey
+  const body = {
+    model: config.modelName,
+    messages: converted.messages,
+    max_tokens: Number(config.maxTokens) > 0 ? Number(config.maxTokens) : 8192,
+    temperature: config.temperature ?? 0.7,
+    stream: !!stream,
+  }
+  if (converted.system) body.system = converted.system
+  if (Array.isArray(tools) && tools.length && profile.supportsTools && toolChoice !== 'none') {
+    body.tools = tools.map((tool) => ({
+      name: tool.function.name,
+      description: tool.function.description || '',
+      input_schema: tool.function.parameters || { type: 'object', properties: {} },
+    }))
+    body.tool_choice = anthropicToolChoice(toolChoice)
+  }
+  const base = normalizeBase(config.baseUrl)
+  const url = /\/v1\/messages$/i.test(base)
+    ? base
+    : `${base.replace(/\/v1$/i, '')}/v1/messages`
+  return { url, init: { method: 'POST', headers, body: JSON.stringify(body) } }
+}
+
+function geminiPart(part) {
+  if (part?.type === 'text') return { text: String(part.text || '') }
+  if (part?.type === 'image_url') {
+    const source = parseDataUrl(part.image_url?.url)
+    return source ? { inlineData: { mimeType: source.mimeType, data: source.data } } : null
+  }
+  if (part?.type === 'file') {
+    const source = parseDataUrl(part.file?.file_data)
+    return source ? { inlineData: { mimeType: source.mimeType, data: source.data } } : null
+  }
+  return null
+}
+
+function geminiMessages(messages = []) {
+  const system = []
+  const out = []
+  const toolNames = new Map()
+  for (const message of messages) {
+    if (message?.role === 'assistant' && Array.isArray(message.tool_calls)) {
+      for (const call of message.tool_calls) toolNames.set(call.id, call.function?.name || '')
+    }
+    if (message?.role === 'system') {
+      const text = openAiParts(message.content).filter((part) => part?.type === 'text').map((part) => part.text).join('\n')
+      if (text) system.push(text)
+      continue
+    }
+    if (message?.role === 'tool') {
+      const name = message.name || toolNames.get(message.tool_call_id) || 'tool'
+      out.push({
+        role: 'user',
+        content: [{ functionResponse: { name, response: geminiToolResult(message.content) } }],
+      })
+      continue
+    }
+    const content = openAiParts(message?.content).map(geminiPart).filter(Boolean)
+    if (message?.role === 'assistant' && Array.isArray(message.tool_calls)) {
+      for (const call of message.tool_calls) {
+        content.push({ functionCall: { name: call.function?.name || '', args: json(call.function?.arguments, {}) } })
+      }
+    }
+    if (content.length) out.push({ role: message?.role === 'assistant' ? 'model' : 'user', content })
+  }
+  return {
+    systemInstruction: system.length ? { parts: [{ text: system.join('\n\n') }] } : null,
+    contents: mergeAdjacent(out).map((message) => ({ role: message.role, parts: message.content })),
+  }
+}
+
+function geminiToolMode(toolChoice) {
+  if (toolChoice === 'none') return 'NONE'
+  if (toolChoice === 'required' || (toolChoice && typeof toolChoice === 'object')) return 'ANY'
+  return 'AUTO'
+}
+
+function buildGeminiRequest({ config, messages, stream, tools, toolChoice, profile }) {
+  const normalized = normalizeModelContentForEndpoint(messages, profile)
+  const converted = geminiMessages(normalized)
+  const headers = { 'Content-Type': 'application/json', ...(config?.headers || {}) }
+  if (config?.apiKey && !headers['x-goog-api-key'] && !headers.Authorization) headers['x-goog-api-key'] = config.apiKey
+  const body = {
+    contents: converted.contents,
+    generationConfig: { temperature: config.temperature ?? 0.7 },
+  }
+  if (converted.systemInstruction) body.systemInstruction = converted.systemInstruction
+  if (Number(config.maxTokens) > 0) body.generationConfig.maxOutputTokens = Number(config.maxTokens)
+  if (Array.isArray(tools) && tools.length && profile.supportsTools) {
+    body.tools = [{ functionDeclarations: tools.map((tool) => ({
+      name: tool.function.name,
+      description: tool.function.description || '',
+      parameters: tool.function.parameters || { type: 'object', properties: {} },
+    })) }]
+    body.toolConfig = { functionCallingConfig: { mode: geminiToolMode(toolChoice) } }
+    const allowed = toolChoice && typeof toolChoice === 'object' ? toolChoice.function?.name : ''
+    if (allowed) body.toolConfig.functionCallingConfig.allowedFunctionNames = [allowed]
+  }
+  const model = String(config.modelName || '').replace(/^models\//, '')
+  let base = normalizeBase(config.baseUrl).replace(/\/models(?:\/.*)?$/i, '')
+  try {
+    const url = new URL(base)
+    if (url.hostname === 'generativelanguage.googleapis.com' && (!url.pathname || url.pathname === '/')) {
+      base = `${base}/v1beta`
+    }
+  } catch { /* fetch 会报告非法 URL */ }
+  const action = stream ? 'streamGenerateContent?alt=sse' : 'generateContent'
+  return {
+    url: `${base}/models/${encodeURIComponent(model)}:${action}`,
+    init: { method: 'POST', headers, body: JSON.stringify(body) },
+  }
+}
+
+export function buildNativeProviderRequest(args = {}) {
+  if (args.profile?.kind === 'anthropic') return buildAnthropicRequest(args)
+  if (args.profile?.kind === 'gemini') return buildGeminiRequest(args)
+  throw new Error(`Unsupported native provider kind: ${args.profile?.kind || 'unknown'}`)
+}
+
+function commonUsage({ prompt = 0, completion = 0, total = 0, cached = 0 } = {}) {
+  const promptTokens = Number(prompt) || 0
+  const completionTokens = Number(completion) || 0
+  const cacheHitTokens = Number(cached) || 0
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens: Number(total) || promptTokens + completionTokens,
+    cacheHitTokens,
+    cacheMissTokens: Math.max(0, promptTokens - cacheHitTokens),
+  }
+}
+
+export function extractNativeProviderUsage(data, kind = '') {
+  if (kind === 'anthropic') {
+    const usage = data?.usage
+    if (!usage) return null
+    return commonUsage({
+      prompt: usage.input_tokens,
+      completion: usage.output_tokens,
+      cached: usage.cache_read_input_tokens,
+    })
+  }
+  if (kind === 'gemini') {
+    const usage = data?.usageMetadata
+    if (!usage) return null
+    return commonUsage({
+      prompt: usage.promptTokenCount,
+      completion: usage.candidatesTokenCount,
+      total: usage.totalTokenCount,
+      cached: usage.cachedContentTokenCount,
+    })
+  }
+  return null
+}
+
+function normalizedToolCall({ id, name, args }, index = 0) {
+  return {
+    id: String(id || `tool-${index}-${name || 'call'}`),
+    type: 'function',
+    function: { name: String(name || ''), arguments: JSON.stringify(args || {}) },
+  }
+}
+
+export function parseNativeProviderResponse(data, kind = '') {
+  if (kind === 'anthropic') {
+    const blocks = Array.isArray(data?.content) ? data.content : []
+    return {
+      content: blocks.filter((part) => part?.type === 'text').map((part) => part.text || '').join(''),
+      toolCalls: blocks.filter((part) => part?.type === 'tool_use').map((part, index) => normalizedToolCall({
+        id: part.id, name: part.name, args: part.input,
+      }, index)),
+      usage: extractNativeProviderUsage(data, kind),
+      finishReason: data?.stop_reason === 'max_tokens' ? 'length' : data?.stop_reason === 'tool_use' ? 'tool_calls' : 'stop',
+    }
+  }
+  const candidate = data?.candidates?.[0]
+  const parts = Array.isArray(candidate?.content?.parts) ? candidate.content.parts : []
+  return {
+    content: parts.filter((part) => typeof part?.text === 'string' && !part.thought).map((part) => part.text).join(''),
+    toolCalls: parts.filter((part) => part?.functionCall).map((part, index) => normalizedToolCall({
+      id: part.functionCall.id, name: part.functionCall.name, args: part.functionCall.args,
+    }, index)),
+    usage: extractNativeProviderUsage(data, kind),
+    finishReason: candidate?.finishReason === 'MAX_TOKENS' ? 'length' : 'stop',
+  }
+}
+
+export function createNativeProviderStreamState(kind = '') {
+  return { kind, toolCalls: new Map(), usage: null, finishReason: null, finished: false }
+}
+
+function mergeUsage(previous, current) {
+  if (!previous) return current
+  if (!current) return previous
+  const promptTokens = current.promptTokens || previous.promptTokens
+  const completionTokens = current.completionTokens || previous.completionTokens
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens: promptTokens + completionTokens,
+    cacheHitTokens: current.cacheHitTokens || previous.cacheHitTokens,
+    cacheMissTokens: current.cacheMissTokens || previous.cacheMissTokens,
+  }
+}
+
+function finishEvents(state) {
+  if (state.finished) return []
+  state.finished = true
+  const toolCalls = [...state.toolCalls.values()]
+  return toolCalls.length
+    ? [{ type: 'tool_calls', toolCalls, finishReason: 'tool_calls', usage: state.usage }]
+    : [{ type: 'finish', finishReason: state.finishReason || 'stop', usage: state.usage }]
+}
+
+export function consumeNativeProviderStreamPayload(data, state) {
+  const events = []
+  if (state.kind === 'anthropic') {
+    const usage = extractNativeProviderUsage({ usage: data?.message?.usage || data?.usage }, 'anthropic')
+    if (usage) {
+      state.usage = mergeUsage(state.usage, usage)
+      events.push({ type: 'usage', usage: state.usage })
+    }
+    if (data?.type === 'content_block_start' && data.content_block?.type === 'tool_use') {
+      state.toolCalls.set(data.index ?? state.toolCalls.size, {
+        id: data.content_block.id,
+        type: 'function',
+        function: { name: data.content_block.name, arguments: '' },
+      })
+    }
+    if (data?.type === 'content_block_delta') {
+      if (data.delta?.type === 'text_delta') events.push({ type: 'text', delta: data.delta.text || '' })
+      if (data.delta?.type === 'thinking_delta') events.push({ type: 'reasoning', delta: data.delta.thinking || '' })
+      if (data.delta?.type === 'input_json_delta') {
+        const call = state.toolCalls.get(data.index)
+        if (call) call.function.arguments += data.delta.partial_json || ''
+      }
+    }
+    if (data?.type === 'message_delta') {
+      state.finishReason = data.delta?.stop_reason === 'max_tokens'
+        ? 'length'
+        : data.delta?.stop_reason === 'tool_use' ? 'tool_calls' : 'stop'
+    }
+    if (data?.type === 'content_block_stop') {
+      const call = state.toolCalls.get(data.index)
+      if (call && call.function.arguments) events.push({ type: 'tool_call_ready', toolCall: { ...call, function: { ...call.function } }, index: data.index })
+    }
+    if (data?.type === 'message_stop') events.push(...finishEvents(state))
+    return events
+  }
+
+  const parsed = parseNativeProviderResponse(data, 'gemini')
+  if (parsed.usage) {
+    state.usage = mergeUsage(state.usage, parsed.usage)
+    events.push({ type: 'usage', usage: state.usage })
+  }
+  const parts = data?.candidates?.[0]?.content?.parts || []
+  for (const part of parts) {
+    if (part.thought && part.text) events.push({ type: 'reasoning', delta: part.text })
+    else if (part.text) events.push({ type: 'text', delta: part.text })
+  }
+  for (const call of parsed.toolCalls) {
+    const index = state.toolCalls.size
+    state.toolCalls.set(index, call)
+    events.push({ type: 'tool_call_ready', toolCall: call, index })
+  }
+  const reason = data?.candidates?.[0]?.finishReason
+  if (reason) {
+    state.finishReason = reason === 'MAX_TOKENS' ? 'length' : 'stop'
+    events.push(...finishEvents(state))
+  }
+  return events
+}
+
+export function finishNativeProviderStream(state) {
+  return finishEvents(state)
+}

@@ -13,6 +13,16 @@ const {
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 const TEST_USER = issueTestSession().userId
+const OTHER_USER = issueTestSession().userId
+
+async function waitFor(predicate, { timeoutMs = 2000 } = {}) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (predicate()) return
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+  throw new Error('timed out waiting for runtime condition')
+}
 
 /**
  * ★ 固定的 plan,替代真 planner。
@@ -114,6 +124,61 @@ test('runtime aborts an in-flight step when cancellation is requested', async ()
   assert.equal(loaded.steps[0].status, 'cancelled')
 })
 
+test('scheduler runs different jobs concurrently, prevents overlap, and refills freed capacity', async () => {
+  const started = []
+  const releases = new Map()
+  const executionCounts = new Map()
+  let active = 0
+  let maxActive = 0
+  const runtime = new JobRuntime({
+    tickMs: 5,
+    maxConcurrency: 2,
+    planner: (prompt) => ({
+      title: prompt,
+      steps: [{ kind: 'execute', title: 'execute once' }],
+    }),
+    executeStep: async ({ job }) => {
+      started.push(job.id)
+      executionCounts.set(job.id, (executionCounts.get(job.id) || 0) + 1)
+      active += 1
+      maxActive = Math.max(maxActive, active)
+      try {
+        await new Promise((resolve) => releases.set(job.id, resolve))
+        return { ok: true, output: { text: job.id } }
+      } finally {
+        active -= 1
+      }
+    },
+  })
+
+  const first = await runtime.createJob('first', { userId: TEST_USER })
+  const second = await runtime.createJob('second', { userId: OTHER_USER })
+  runtime.start()
+  let third = null
+
+  try {
+    await waitFor(() => started.length === 2)
+    assert.deepEqual(new Set(started), new Set([first.id, second.id]))
+    assert.equal(maxActive, 2)
+    assert.equal(executionCounts.get(first.id), 1)
+    assert.equal(executionCounts.get(second.id), 1)
+
+    third = await runtime.createJob('third', { userId: TEST_USER })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(started.includes(third.id), false, 'full capacity must not start a third job')
+
+    releases.get(first.id)()
+    await waitFor(() => started.includes(third.id))
+    assert.equal(executionCounts.get(first.id), 1, 'a running job must never overlap itself')
+    assert.equal(executionCounts.get(third.id), 1)
+    assert.equal(maxActive, 2)
+  } finally {
+    runtime.stop()
+    for (const release of releases.values()) release()
+    await waitFor(() => runtime.activeJobIds.size === 0)
+  }
+})
+
 test('recovery returns interrupted running work to queued', () => {
   const recovered = recoverInterruptedJobs([
     { id: 'job-1', status: 'running' },
@@ -123,6 +188,7 @@ test('recovery returns interrupted running work to queued', () => {
 })
 
 test('default executor turns generated text into a downloadable artifact', async () => {
+  const artifactId = `artifact-${process.pid}-${Date.now()}`
   const runtime = new JobRuntime({
     // 这个用例断言 step.output.text 等于模型原样返回的内容,
     // 所以不能用带 batch_item 的 stubPlanner —— 批量步骤会往 prompt 里
@@ -138,7 +204,7 @@ test('default executor turns generated text into a downloadable artifact', async
       enableServerTools: false,
       runModel: async ({ userPrompt }) => `结果：${userPrompt}`,
       createDocxImpl: async () => ({
-        id: 'artifact-1',
+        id: artifactId,
         type: 'docx',
         title: '任务结果',
         url: '/api/artifacts/result.docx',

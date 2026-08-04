@@ -3,6 +3,14 @@ import assert from 'node:assert/strict'
 import { buildToolSpecs, listToolNames } from '../src/lib/tools/index.js'
 import { TASK_STATUS, TOOL_CALL_STATUS, HISTORY_STATUS, isTaskStatus, isToolCallStatus } from '../src/store/taskStatus.js'
 
+test('buildToolSpecs canonicalizes equivalent tool sets by function name', () => {
+  const first = buildToolSpecs(['web_search', 'fetch_url', 'read_file'])
+  const second = buildToolSpecs(['read_file', 'web_search', 'fetch_url'])
+
+  assert.deepEqual(first, second)
+  assert.deepEqual(first.map((spec) => spec.function.name), ['fetch_url', 'read_file', 'web_search'])
+})
+
 test('TASK_STATUS 是 frozen', () => {
   assert.ok(Object.isFrozen(TASK_STATUS))
   assert.ok(Object.isFrozen(TOOL_CALL_STATUS))
@@ -65,5 +73,5 @@ test('chat tools expose Claude/Codex style workspace tools', () => {
   assert.ok(names.includes('edit_file'))
   assert.ok(names.includes('bash_exec'))
   const specs = buildToolSpecs(['read_file', 'write_file', 'edit_file', 'bash_exec'])
-  assert.deepEqual(specs.map((s) => s.function.name), ['read_file', 'write_file', 'edit_file', 'bash_exec'])
+  assert.deepEqual(specs.map((s) => s.function.name), ['bash_exec', 'edit_file', 'read_file', 'write_file'])
 })

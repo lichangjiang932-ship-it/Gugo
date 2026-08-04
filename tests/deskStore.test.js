@@ -32,7 +32,7 @@ async function makeUser(dir, email = 'desk@example.com') {
 
 test('deskStore: create / get / list / update / delete', { concurrency: false }, async () => {
   const dir = tmpDir()
-  const userId = await makeUser(dir, 'crud@desk.example')
+  const userId = await makeUser(dir, 'crud.desk@example.com')
   const { deskMod } = await freshModule(dir)
 
   const a = deskMod.createDeskNote({ userId, title: '提醒', body: '买牛奶' })
@@ -64,7 +64,7 @@ test('deskStore: create / get / list / update / delete', { concurrency: false },
 
 test('deskStore: pinned 排在前，更新顺序 updated_at desc', { concurrency: false }, async () => {
   const dir = tmpDir()
-  const userId = await makeUser(dir, 'sort@desk.example')
+  const userId = await makeUser(dir, 'sort.desk@example.com')
   const { deskMod } = await freshModule(dir)
 
   const n1 = deskMod.createDeskNote({ userId, title: 'A', now: 1000 })
@@ -80,7 +80,7 @@ test('deskStore: pinned 排在前，更新顺序 updated_at desc', { concurrency
 
 test('deskStore: agent 过滤 — agentId 与 null（未绑定）分别隔离', { concurrency: false }, async () => {
   const dir = tmpDir()
-  const userId = await makeUser(dir, 'agent@desk.example')
+  const userId = await makeUser(dir, 'agent.desk@example.com')
   const { deskMod, agMod } = await freshModule(dir)
 
   const agent = agMod.createAgent({ userId, name: 'X', soulMd: '## s', identityMd: '## i' })
@@ -102,8 +102,8 @@ test('deskStore: agent 过滤 — agentId 与 null（未绑定）分别隔离', 
 
 test('deskStore: 不同用户互不可见', { concurrency: false }, async () => {
   const dir = tmpDir()
-  const u1 = await makeUser(dir, 'u1@desk.example')
-  const u2 = await makeUser(dir, 'u2@desk.example')
+  const u1 = await makeUser(dir, 'u1.desk@example.com')
+  const u2 = await makeUser(dir, 'u2.desk@example.com')
   const { deskMod } = await freshModule(dir)
 
   const a = deskMod.createDeskNote({ userId: u1, title: 'u1-only' })

@@ -14,10 +14,12 @@ test('chat split keeps task details out of the main chat surface', () => {
 
 test('chat keeps a real abort action without exposing the task strip', () => {
   const chatSource = fs.readFileSync(new URL('../src/pages/ChatSplit/index.jsx', import.meta.url), 'utf8')
+  const viewSource = fs.readFileSync(new URL('../src/pages/ChatSplit/ChatSplitView.jsx', import.meta.url), 'utf8')
   const detailSource = fs.readFileSync(new URL('../src/pages/TaskRunPanel.jsx', import.meta.url), 'utf8')
 
   assert.match(chatSource, /const handleAbortTask = \(\) => abortCtrlRef\.current\?\.abort\(\)/)
   assert.match(chatSource, /onAbort=\{handleAbortTask\}/)
+  assert.match(viewSource, /onAbort=\{onAbort\}/)
   assert.doesNotMatch(chatSource, /onAbortTask=\{handleAbortTask\}/)
   assert.doesNotMatch(chatSource, /status:\s*'paused'/)
   assert.doesNotMatch(chatSource, /status:\s*'stopped'/)
@@ -29,13 +31,14 @@ test('chat keeps a real abort action without exposing the task strip', () => {
 
 test('chat task views avoid speculative numeric progress while a model request is running', () => {
   const chatSource = fs.readFileSync(new URL('../src/pages/ChatSplit/index.jsx', import.meta.url), 'utf8')
+  const serverTurnSource = fs.readFileSync(new URL('../src/pages/ChatSplit/serverTurnFlow.js', import.meta.url), 'utf8')
   const detailSource = fs.readFileSync(new URL('../src/pages/TaskRunPanel.jsx', import.meta.url), 'utf8')
 
   assert.doesNotMatch(chatSource, /progress:\s*10/)
   assert.doesNotMatch(chatSource, /chunkCount/)
   assert.doesNotMatch(chatSource, /nextProgress/)
-  assert.match(chatSource, /sawTextThisRound/)
-  assert.match(chatSource, /stepLabel:\s*'生成中'/)
+  assert.match(serverTurnSource, /sawAssistantText/)
+  assert.match(serverTurnSource, /stepLabel:\s*t\('chat\.serverTurn\.submit'\)/)
 
   assert.doesNotMatch(detailSource, /task\.progress/)
   assert.doesNotMatch(detailSource, /strokeDashoffset/)

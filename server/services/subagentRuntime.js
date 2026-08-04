@@ -14,27 +14,17 @@ import {
   callBackgroundModel,
   callBackgroundModelWithTools,
   getModelContextWindow,
-  isContextLengthError,
 } from '../adapters/modelProxy.js'
 
 import { fetchAndExtract, searchDuckDuckGo } from '../adapters/toolProxy.js'
 import { dispatchFsShellTool } from '../adapters/fsShellTools.js'
 import { CODE_SEARCH_TOOL_SPECS, dispatchCodeSearchTool } from '../utils/codeSearch.js'
 import { APPLY_PATCH_TOOL_SPECS, dispatchApplyPatchTool } from '../utils/applyPatch.js'
-import { AGENTIC_TOOL_SPECS, dispatchAgenticTool, isLoopPauseResult } from '../utils/agenticTools.js'
+import { AGENTIC_TOOL_SPECS, dispatchAgenticTool } from '../utils/agenticTools.js'
 import { MEMORY_TOOL_SPECS, dispatchMemoryTool } from '../utils/memoryTools.js'
 import { createJobBudget } from '../utils/jobBudget.js'
-import {
-  buildAssistantToolCallsMessage,
-  buildToolResultMessage,
-  createToolLoopGuard,
-  mapWithConcurrency,
-  normalizeToolCalls,
-  validateToolCall,
-} from '../utils/toolCallHarness.js'
-import { formatDeniedToolResult, requestApproval } from './approvalGate.js'
-import { callModelWithContextRecovery } from './contextCompactionRuntime.js'
-import { buildSafetyBlock, ensureSafetySystemMessages } from './promptCompiler.js'
+import { requestApproval } from './approvalGate.js'
+import { buildSafetyBlock } from './promptCompiler.js'
 import { getBuiltinSpec } from './toolRegistry.js'
 
 /** 读一个正整数 env,不合法就用默认值。 */
@@ -71,17 +61,6 @@ const SUBAGENT_MAX_ITERS = (() => {
   const raw = Number(process.env.SUBAGENT_MAX_ITERS)
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 1000
 })()
-const SUBAGENT_READ_CONCURRENCY = 4
-const PARALLEL_SAFE_SUBAGENT_TOOLS = new Set([
-  'web_search',
-  'fetch_url',
-  'list_directory',
-  'read_file',
-  'grep_code',
-  'find_symbol',
-  'list_imports',
-])
-
 function abortError() {
   const error = new Error('subagent run aborted while waiting for a concurrency slot')
   error.name = 'AbortError'
@@ -425,10 +404,6 @@ async function executeSubagentTool(toolName, args, {
  * @returns {Promise<string>} 最终文本回答
  */
 async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS, userId = null, sessionId = null, runId = null, depth = 0, callModel = callBackgroundModelWithTools, executeTool = executeSubagentTool, budget = null, approvalContext = null, slotLease = null, approveTool = requestApproval, onTranscriptEvent = null }) {
-  let currentMessages = ensureSafetySystemMessages([...messages])
-  const loopGuard = createToolLoopGuard()
-  // 子代理以前只有迭代次数上限,单轮却可发多个调用,并没有真正消费 jobBudget。
-  // 给每次独立运行一个硬预算,防止批量 tool_calls 绕过 maxIters。
   const effectiveBudget = budget || createJobBudget({ ...SUBAGENT_BUDGET })
   const effectiveApprovalContext = approvalContext || createSubagentApprovalContext()
   const contextWindow = getModelContextWindow({ userId })
@@ -436,194 +411,91 @@ async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_
     if (typeof onTranscriptEvent !== 'function') return
     onTranscriptEvent({ ...event, at: now() })
   }
-
-  const requestModel = async ({ messages: nextMessages = currentMessages, tools: nextTools = tools, ...options } = {}) => {
-    emitTranscript({ type: 'model_request', messageCount: nextMessages.length, toolCount: nextTools?.length || 0 })
-    const request = await callModelWithContextRecovery({
-      ...options,
-      messages: nextMessages,
-      tools: nextTools,
-      callModel,
-      isContextLengthError,
-      contextWindow,
-      signal,
+  // jobTools 会调度 Agent 工具；这里延迟加载可避免静态循环依赖，同时让
+  // 主任务、聊天和子代理共用同一套预算、guard、审批、并发与收尾语义。
+  const { runToolsLoop } = await import('./jobTools.js')
+  const loopJob = {
+    id: runId || sessionId || `subagent-${randomUUID()}`,
+    userId,
+    prompt: messages.findLast?.((message) => message?.role === 'user')?.content || '',
+    origin: 'subagent',
+  }
+  const loopStep = { id: runId || 'subagent-step' }
+  const result = await runToolsLoop({
+    job: loopJob,
+    step: loopStep,
+    messages,
+    toolSpecs: tools,
+    signal,
+    maxIters,
+    contextWindow,
+    runtimeBudget: effectiveBudget,
+    approvalContext: effectiveApprovalContext,
+    approvalOrigin: 'subagent',
+    approvalSessionId: sessionId,
+    enableToolHooks: false,
+    requestToolApproval: ({ toolName, args, signal: approvalSignal }) => requestTreeApproval({
+      context: effectiveApprovalContext,
+      approveTool,
       userId,
-      sessionId,
-      consumeBudget: (cost) => effectiveBudget.consume(cost),
-    })
-    if (nextMessages === currentMessages) currentMessages = request.messages
-    emitTranscript({
-      type: 'model_response',
-      content: boundedTranscriptValue(request.response?.content || ''),
-      toolCalls: (request.response?.toolCalls || []).map((call) => ({
-        id: call?.id || null,
-        name: call?.function?.name || call?.name || null,
-      })),
-    })
-    return request.response
-  }
-
-  const finalizePartial = async (reason) => {
-    currentMessages.push({
-      role: 'system',
-      content: `${reason}。请基于已有信息给出最终回答,不要进一步调用工具。`,
-    })
-    try {
-      const finalResponse = await requestModel({
-        messages: currentMessages,
-        tools,
-        toolChoice: 'none',
-      })
-      return finalResponse?.content || `(${reason})`
-    } catch (err) {
-      if (err?.name === 'AbortError') throw err
-      return `(${reason},且收尾总结失败:${err?.message || String(err)})`
-    }
-  }
-
-  for (let iter = 0; iter < maxIters; iter++) {
-    // ★ 上游调用失败(限流后重试仍失败、400、网络断)以前会直接冒到 runSubagent
-    // 的 catch,整个 run 标记 failed,前面查到的东西全丢。第一轮就失败确实没什么
-    // 可留的,但第二轮之后已经有工具结果了 —— 降级成部分结论比整个失败有用得多。
-    let response
-    try {
-      response = await requestModel({
-        messages: currentMessages,
-        tools,
-      })
-    } catch (err) {
-      if (err?.name === 'AbortError' || iter === 0) throw err
-      const collected = currentMessages
-        .filter((m) => m.role === 'tool')
-        .map((m) => m.content)
-        .join('\n')
-        .slice(0, 4000)
-      return `(探索中断:${err?.message || String(err)})\n\n已经查到的信息:\n${collected || '(无)'}`
-    }
-
-    const text = response?.content || ''
-    const rawToolCalls = response?.toolCalls || []
-
-    // 没有工具调用 → 这就是最终答案
-    if (!rawToolCalls.length) return text
-
-    const toolCalls = normalizeToolCalls(rawToolCalls)
-    currentMessages.push(buildAssistantToolCallsMessage(toolCalls, text))
-
-    let pausedClarif = null
-    let stopReason = null
-    const executeOne = async (call) => {
-      emitTranscript({ type: 'tool_start', toolCallId: call.id, name: call.name, args: boundedTranscriptValue(call.args) })
-      let result
-      let outcomeStopReason = null
-      let clarification = null
-      const guardDecision = loopGuard.before(call)
-      if (!guardDecision.ok) {
-        result = guardDecision.result
-        outcomeStopReason = guardDecision.reason
-      } else {
-        const isFree = ['reflect', 'request_clarification', 'request_directory', 'sleep_until'].includes(call.name)
-        if (!isFree) {
-          const consumed = effectiveBudget.consume(1)
-          if (!consumed.ok) {
-            result = { ok: false, code: 'tool_budget_exceeded', error: consumed.reason, retryable: false }
-            outcomeStopReason = consumed.reason
-          }
-        }
-
-        if (!result) {
-          const validationError = validateToolCall(call, tools)
-          if (validationError) result = validationError
-        }
-
-        if (!result) {
-          try {
-            // ★ 审批门控:子代理同样是无人值守路径,必须过门。
-            const gate = await requestTreeApproval({
-              context: effectiveApprovalContext,
-              approveTool,
-              userId,
-              origin: 'subagent',
-              toolName: call.name,
-              args: call.args,
-              signal,
-            })
-            if (!gate.proceed) {
-              result = formatDeniedToolResult(gate)
-            } else {
-              result = await executeTool(call.name, gate.args ?? call.args, {
-                userId,
-                depth,
-                parentRunId: runId,
-                parentSessionId: sessionId,
-                signal,
-                budget: effectiveBudget,
-                approvalContext: effectiveApprovalContext,
-                slotLease,
-                approveTool,
-              })
-              if (isLoopPauseResult(result)) clarification = result.clarification
-            }
-          } catch (err) {
-            result = { ok: false, error: err?.message || String(err) }
-          }
-        }
+      origin: 'subagent',
+      toolName,
+      args,
+      signal: approvalSignal,
+    }),
+    runModel: (request) => callModel(request),
+    executeTool: ({ name, args, signal: toolSignal, budget: loopBudget }) => executeTool(name, args, {
+      userId,
+      depth,
+      parentRunId: runId,
+      parentSessionId: sessionId,
+      signal: toolSignal,
+      budget: loopBudget,
+      approvalContext: effectiveApprovalContext,
+      slotLease,
+      approveTool,
+    }),
+    onModelPhase: (event) => {
+      if (event.phase === 'started') {
+        emitTranscript({ type: 'model_request', iteration: event.iteration, toolCount: tools?.length || 0 })
+      } else if (event.phase === 'completed') {
+        emitTranscript({
+          type: 'model_response',
+          content: boundedTranscriptValue(event.content || ''),
+          toolCalls: (event.toolCalls || []).map((call) => ({
+            id: call?.id || null,
+            name: call?.function?.name || call?.name || null,
+          })),
+          usage: event.usage || null,
+        })
+      } else if (event.phase === 'failed') {
+        emitTranscript({ type: 'model_error', error: event.error || 'model request failed' })
       }
-      emitTranscript({
-        type: 'tool_result',
-        toolCallId: call.id,
-        name: call.name,
-        ok: result?.ok !== false,
-        result: boundedTranscriptValue(result),
-      })
-      return { call, result, stopReason: outcomeStopReason, clarification }
-    }
+    },
+    onToolStarted: (call) => emitTranscript({
+      type: 'tool_start',
+      toolCallId: call.id,
+      name: call.name,
+      args: boundedTranscriptValue(call.args),
+    }),
+    onToolCompleted: (outcome) => emitTranscript({
+      type: 'tool_result',
+      toolCallId: outcome.call.id,
+      name: outcome.call.name,
+      ok: outcome.result?.ok !== false,
+      result: boundedTranscriptValue(outcome.result),
+    }),
+  })
 
-    const canRunInParallel = toolCalls.length > 1
-      && toolCalls.every((call) => PARALLEL_SAFE_SUBAGENT_TOOLS.has(call.name))
-
-    if (canRunInParallel) {
-      // 仅整批纯只读时并发；结果由 mapWithConcurrency 按原调用顺序返回，
-      // 因此回填给模型的 tool messages 仍与 assistant.tool_calls 一一对应。
-      const outcomes = await mapWithConcurrency(toolCalls, executeOne, {
-        concurrency: SUBAGENT_READ_CONCURRENCY,
-      })
-      for (const outcome of outcomes) {
-        currentMessages.push(buildToolResultMessage(outcome.call, outcome.result))
-        const progress = loopGuard.after(outcome.result)
-        if (!stopReason) stopReason = outcome.stopReason || (!progress.ok ? progress.reason : null)
-      }
-    } else {
-      for (let callIndex = 0; callIndex < toolCalls.length; callIndex += 1) {
-        const outcome = await executeOne(toolCalls[callIndex])
-        currentMessages.push(buildToolResultMessage(outcome.call, outcome.result))
-        const progress = loopGuard.after(outcome.result)
-        if (!stopReason) stopReason = outcome.stopReason || (!progress.ok ? progress.reason : null)
-        if (!pausedClarif && outcome.clarification) pausedClarif = outcome.clarification
-
-        if (stopReason || pausedClarif) {
-          for (const skipped of toolCalls.slice(callIndex + 1)) {
-            currentMessages.push(buildToolResultMessage(skipped, {
-              ok: false,
-              code: 'tool_execution_skipped',
-              error: stopReason || '当前轮已暂停',
-              retryable: false,
-            }))
-          }
-          break
-        }
-      }
-    }
-    if (pausedClarif) {
-      // ★ M3:子代理调 request_clarification → 中断并把问题当作最终输出返回
-      return `⚠ 需要澄清(${pausedClarif.blocker_kind}):${pausedClarif.question}` +
-        (pausedClarif.options ? `\n选项:${pausedClarif.options.join(' / ')}` : '') +
-        (pausedClarif.why ? `\n原因:${pausedClarif.why}` : '')
-    }
-    if (stopReason) return finalizePartial(`工具循环因无进展或预算限制停止:${stopReason}`)
+  if (result.paused && result.clarification) {
+    const clarification = result.clarification
+    return `⚠ 需要澄清(${clarification.blocker_kind}):${clarification.question}` +
+      (clarification.options ? `\n选项:${clarification.options.join(' / ')}` : '') +
+      (clarification.why ? `\n原因:${clarification.why}` : '')
   }
-
-  return finalizePartial(`你已经达到工具调用上限(${maxIters} 次)`)
+  return result.interrupted
+    ? String(result.text || '').replace(/^\(任务中断:/, '(探索中断:').replace('已经完成的部分:', '已经查到的信息:')
+    : result.text || ''
 }
 
 /* ─── DB CRUD ─── */

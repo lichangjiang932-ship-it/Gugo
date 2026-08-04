@@ -316,3 +316,33 @@ test('apply_patch: patch 非法/空拒绝', async () => {
   await assert.rejects(() => applyPatchTool({ patch: '' }), /必填/)
   await assert.rejects(() => applyPatchTool({ patch: 'nope' }), /Begin Patch/)
 })
+
+test('apply_patch rejects Add File through a workspace symlink', async (t) => {
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-patch-outside-'))
+  const link = path.join(tmpRoot, 'outside-link')
+  try {
+    try {
+      fs.symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir')
+    } catch (error) {
+      if (['EPERM', 'EACCES', 'ENOTSUP'].includes(error?.code)) {
+        t.skip(`symlink unavailable: ${error.code}`)
+        return
+      }
+      throw error
+    }
+
+    await assert.rejects(
+      () => applyPatchTool({
+        patch: `*** Begin Patch
+*** Add File: outside-link/escaped.txt
++blocked
+*** End Patch`,
+      }),
+      (error) => error?.statusCode === 403
+    )
+    assert.equal(fs.existsSync(path.join(outside, 'escaped.txt')), false)
+  } finally {
+    try { fs.unlinkSync(link) } catch { /* best effort */ }
+    fs.rmSync(outside, { recursive: true, force: true })
+  }
+})

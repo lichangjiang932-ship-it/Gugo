@@ -224,6 +224,16 @@ test("clearPromptCompilerCache('identity') leaves other block caches intact", ()
   assert.equal(after.ishiki.size, 1)
 })
 
+test('buildSessionsBlock does not cache a sessionId-only empty block', () => {
+  clearPromptCompilerCache('sessions')
+
+  assert.deepEqual(
+    buildSessionsBlock({ userId: 'u_prompt', sessionId: 's_empty' }),
+    { text: '', fingerprint: 'empty', sources: {} },
+  )
+  assert.deepEqual(getPromptCompilerStats().sessions, { hits: 0, misses: 0, size: 0 })
+})
+
 test.after(() => {
   try { fs.rmSync(process.env.APP_DATA_DIR, { recursive: true, force: true }) } catch { /* best effort */ }
 })

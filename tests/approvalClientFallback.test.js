@@ -80,3 +80,16 @@ test('HTTP 错误仍然抛出(由调用方 catch 后走默认档位)', async () 
 test('默认设置是最严档位,不能是 bypass', () => {
   assert.equal(DEFAULT_APPROVAL_SETTINGS.mode, 'normal')
 })
+
+test('risk overrides are retained and invalid risk classes are rejected', async () => {
+  const settings = await fetchApprovalSettings({
+    fetchImpl: async () => new Response(JSON.stringify({
+      mode: 'normal',
+      riskOverrides: [
+        { toolName: 'write_file', riskClass: 'write_local' },
+        { toolName: 'unknown', riskClass: 'root' },
+      ],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+  })
+  assert.deepEqual(settings.riskOverrides, [{ toolName: 'write_file', riskClass: 'write_local' }])
+})

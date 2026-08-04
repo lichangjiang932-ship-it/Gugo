@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Plus, Trash2, Save, Plug, Play, Zap, X, Terminal, Globe } from 'lucide-react'
+import { Plus, Trash2, Save, Plug, Play, Zap, X, Terminal, Globe, KeyRound } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
 import McpExternalConnectPanel from '../components/McpExternalConnectPanel.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
@@ -10,7 +10,10 @@ import {
   testMcpServerApi,
   connectMcpServerApi,
   disconnectMcpServerApi,
+  disconnectMcpOAuthApi,
   getMcpCatalogApi,
+  getMcpOAuthStatusApi,
+  startMcpOAuthApi,
 } from '../lib/mcpClient.js'
 import { createMcpServerFromPreset, MCP_SERVER_PRESETS } from '../lib/mcpPresets.js'
 import { parseKeyValueLines, serializeKeyValueLines } from '../lib/mcpKeyValue.js'
@@ -28,6 +31,11 @@ function emptyServer() {
     headers: {},
     enabled: true,
     autoApprove: [],
+    oauthClientId: '',
+    oauthClientSecret: '',
+    oauthScopes: '',
+    oauthAuthorizationEndpoint: '',
+    oauthTokenEndpoint: '',
   }
 }
 
@@ -36,6 +44,11 @@ function formFromServer(server) {
     ...server,
     envText: serializeKeyValueLines(server?.env),
     headersText: serializeKeyValueLines(server?.headers),
+    oauthClientId: server?.oauth?.clientId || '',
+    oauthClientSecret: '',
+    oauthScopes: (server?.oauth?.scopes || []).join(' '),
+    oauthAuthorizationEndpoint: server?.oauth?.authorizationEndpoint || '',
+    oauthTokenEndpoint: server?.oauth?.tokenEndpoint || '',
   }
 }
 
@@ -51,6 +64,7 @@ export default function McpServersView() {
   const [notice, setNotice] = useState('')
   const [fieldErrors, setFieldErrors] = useState({})
   const [presetChoice, setPresetChoice] = useState('')
+  const [oauthBusy, setOauthBusy] = useState(false)
   const externalEndpoint = `${window.location.origin}/mcp`
 
   const selectServer = (server) => {
@@ -75,6 +89,36 @@ export default function McpServersView() {
     const timer = window.setTimeout(() => { reload() }, 0)
     return () => window.clearTimeout(timer)
   }, [])
+
+  useEffect(() => {
+    const handleOAuthMessage = async (event) => {
+      if (event.origin !== window.location.origin || event.data?.type !== 'mcp-oauth-complete') return
+      if (!event.data.ok) {
+        setErr(event.data.message || t('mcp.oauthFailed'))
+        return
+      }
+      try {
+        const data = await getMcpOAuthStatusApi(event.data.serverId)
+        setServers((current) => current.map((server) => (
+          server.id === event.data.serverId ? { ...server, oauth: data.oauth } : server
+        )))
+        setEditing((current) => current?.id === event.data.serverId
+          ? {
+              ...current,
+              oauth: data.oauth,
+              oauthClientId: data.oauth?.clientId || current.oauthClientId,
+              oauthScopes: (data.oauth?.scopes || []).join(' '),
+            }
+          : current)
+        setErr('')
+        setNotice(t('mcp.oauthConnected'))
+      } catch (error) {
+        setErr(error.message)
+      }
+    }
+    window.addEventListener('message', handleOAuthMessage)
+    return () => window.removeEventListener('message', handleOAuthMessage)
+  }, [t])
 
   const save = async () => {
     if (!editing) return
@@ -153,6 +197,52 @@ export default function McpServersView() {
     } catch (e) { setErr(e.message) }
   }
 
+  const startOAuth = async () => {
+    if (!editing?.id) return
+    const popup = globalThis.open('', 'gugo-mcp-oauth', 'popup,width=640,height=760')
+    if (!popup) {
+      setErr(t('mcp.oauthPopupBlocked'))
+      return
+    }
+    setOauthBusy(true)
+    setErr('')
+    try {
+      const data = await startMcpOAuthApi(editing.id, {
+        clientId: editing.oauthClientId || undefined,
+        clientSecret: editing.oauthClientSecret || undefined,
+        scopes: editing.oauthScopes || undefined,
+        authorizationEndpoint: editing.oauthAuthorizationEndpoint || undefined,
+        tokenEndpoint: editing.oauthTokenEndpoint || undefined,
+      })
+      popup.location.replace(data.authorizationUrl)
+      popup.focus()
+    } catch (error) {
+      popup.close()
+      setErr(error.message)
+    } finally {
+      setOauthBusy(false)
+    }
+  }
+
+  const disconnectOAuth = async () => {
+    if (!editing?.id) return
+    setOauthBusy(true)
+    try {
+      await disconnectMcpOAuthApi(editing.id)
+      const oauth = { configured: false, connected: false }
+      setServers((current) => current.map((server) => (
+        server.id === editing.id ? { ...server, oauth } : server
+      )))
+      setEditing((current) => current ? { ...current, oauth, oauthClientSecret: '' } : current)
+      setNotice(t('mcp.oauthDisconnected'))
+      setErr('')
+    } catch (error) {
+      setErr(error.message)
+    } finally {
+      setOauthBusy(false)
+    }
+  }
+
   return (
     <div className="h-screen flex bg-paper overflow-hidden">
       <LeftRail />
@@ -207,6 +297,11 @@ export default function McpServersView() {
                   <div className="mt-1 flex gap-3 text-[10px] text-ink-fade">
                     <span>{t('mcp.toolCount', { count: runtime?.tools?.length || 0 })}</span>
                     <span>{t('mcp.credentialCount', { count: credentialCount })}</span>
+                    {s.oauth?.configured && (
+                      <span className={s.oauth.connected ? 'text-emerald-700' : 'text-amber-700'}>
+                        {t(s.oauth.connected ? 'mcp.oauthConnectedStatus' : 'mcp.oauthExpiredStatus')}
+                      </span>
+                    )}
                   </div>
                 </button>
                 <div className="px-4 pb-3 flex items-center gap-2">
@@ -275,6 +370,54 @@ export default function McpServersView() {
                     <Field label={t('mcp.headers')} error={fieldErrors.headers} hint={t('mcp.keyValueHint')}>
                       <textarea rows="4" value={editing.headersText || ''} onChange={(e) => { setEditing({ ...editing, headersText: e.target.value }); setFieldErrors((current) => ({ ...current, headers: '' })) }} className="w-full px-3 py-2 text-xs bg-paper-2 border border-ink/15 rounded-md outline-none focus:border-ember font-mono" placeholder={'Authorization=Bearer ...\nX-API-Key=...'} spellCheck="false" />
                     </Field>
+                    <div className="rounded-lg border border-ink/10 bg-paper-2/60 p-4 space-y-3">
+                      <div className="flex items-center gap-2">
+                        <KeyRound className="h-4 w-4 text-ember" />
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-semibold text-ink">{t('mcp.oauthTitle')}</div>
+                          <div className="text-[10px] text-ink-fade">{t('mcp.oauthHint')}</div>
+                        </div>
+                        {editing.oauth?.configured && (
+                          <span className={`rounded-full px-2 py-0.5 text-[10px] ${editing.oauth.connected ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+                            {t(editing.oauth.connected ? 'mcp.oauthConnectedStatus' : 'mcp.oauthExpiredStatus')}
+                          </span>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                        <Field label={t('mcp.oauthClientId')}>
+                          <input value={editing.oauthClientId || ''} onChange={(event) => setEditing({ ...editing, oauthClientId: event.target.value })} className="w-full h-9 px-3 text-xs bg-paper border border-ink/15 rounded-md outline-none focus:border-ember font-mono" placeholder={t('mcp.oauthClientIdPlaceholder')} />
+                        </Field>
+                        <Field label={t('mcp.oauthClientSecret')}>
+                          <input type="password" value={editing.oauthClientSecret || ''} onChange={(event) => setEditing({ ...editing, oauthClientSecret: event.target.value })} className="w-full h-9 px-3 text-xs bg-paper border border-ink/15 rounded-md outline-none focus:border-ember font-mono" placeholder={t('mcp.oauthOptional')} autoComplete="new-password" />
+                        </Field>
+                      </div>
+                      <Field label={t('mcp.oauthScopes')}>
+                        <input value={editing.oauthScopes || ''} onChange={(event) => setEditing({ ...editing, oauthScopes: event.target.value })} className="w-full h-9 px-3 text-xs bg-paper border border-ink/15 rounded-md outline-none focus:border-ember font-mono" placeholder="read write" />
+                      </Field>
+                      <details className="text-[10px] text-ink-fade">
+                        <summary className="cursor-pointer select-none">{t('mcp.oauthAdvanced')}</summary>
+                        <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                          <Field label={t('mcp.oauthAuthorizationEndpoint')}>
+                            <input value={editing.oauthAuthorizationEndpoint || ''} onChange={(event) => setEditing({ ...editing, oauthAuthorizationEndpoint: event.target.value })} className="w-full h-9 px-3 text-xs bg-paper border border-ink/15 rounded-md outline-none focus:border-ember font-mono" placeholder="https://auth.example.com/authorize" />
+                          </Field>
+                          <Field label={t('mcp.oauthTokenEndpoint')}>
+                            <input value={editing.oauthTokenEndpoint || ''} onChange={(event) => setEditing({ ...editing, oauthTokenEndpoint: event.target.value })} className="w-full h-9 px-3 text-xs bg-paper border border-ink/15 rounded-md outline-none focus:border-ember font-mono" placeholder="https://auth.example.com/token" />
+                          </Field>
+                        </div>
+                      </details>
+                      <div className="flex items-center gap-2">
+                        <button type="button" onClick={startOAuth} disabled={!editing.id || oauthBusy} className="h-8 px-3 bg-ink text-paper rounded-md text-xs hover:bg-ink/90 disabled:opacity-40 flex items-center gap-1.5">
+                          <KeyRound className="h-3.5 w-3.5" />
+                          {oauthBusy ? t('mcp.oauthWorking') : t('mcp.oauthConnect')}
+                        </button>
+                        {editing.oauth?.configured && (
+                          <button type="button" onClick={disconnectOAuth} disabled={oauthBusy} className="h-8 px-3 border border-ink/15 text-ink-soft rounded-md text-xs hover:bg-paper disabled:opacity-40">
+                            {t('mcp.oauthDisconnect')}
+                          </button>
+                        )}
+                        {!editing.id && <span className="text-[10px] text-ink-fade">{t('mcp.oauthSaveFirst')}</span>}
+                      </div>
+                    </div>
                   </>
                 )}
 

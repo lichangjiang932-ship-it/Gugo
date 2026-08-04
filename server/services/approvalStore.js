@@ -223,3 +223,15 @@ export function cancelApprovalsForJob({ jobId } = {}) {
   `).run({ jobId, now })
   return result.changes || 0
 }
+
+export function cancelApprovalsForTurn({ userId, sessionId, turnId } = {}) {
+  if (!userId || !sessionId || !turnId) return 0
+  const now = Date.now()
+  const result = getDb().prepare(`
+    UPDATE pending_approvals
+       SET status = 'cancelled', decided_at = @now, updated_at = @now
+     WHERE user_id = @userId AND origin = 'chat' AND session_id = @sessionId
+       AND step_id = @turnId AND status = 'pending'
+  `).run({ userId, sessionId, turnId, now })
+  return result.changes || 0
+}

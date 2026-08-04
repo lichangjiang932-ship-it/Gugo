@@ -15,6 +15,7 @@ dist
 .verify-dist-*
 .verify-build-*
 .build-verify-*
+.build-check-*
 build-verify-*
 .codex-build-*
 .codex-theme-build-*
@@ -31,6 +32,45 @@ server-data/
 !.env.example
 .tmp/
 .npm-cache/
+
+# Runtime/user content and local reports. Keep these root-scoped so test
+# fixtures in nested source directories can still be committed deliberately.
+/uploads/
+/attachments/
+/coverage/
+/tmp/
+/temp/
+
+# Local databases and sidecars must never be published from the repository root.
+/*.db
+/*.db-journal
+/*.db-wal
+/*.db-shm
+/*.sqlite
+/*.sqlite-journal
+/*.sqlite-wal
+/*.sqlite-shm
+/*.sqlite3
+/*.sqlite3-journal
+/*.sqlite3-wal
+/*.sqlite3-shm
+
+# Root-level certificate/private-key material and generated backup archives.
+/*.pem
+/*.key
+/*.p12
+/*.pfx
+/*.crt
+/*.cer
+/*.der
+/*.bak
+/*.backup
+/*.zip
+/*.7z
+/*.rar
+/*.tar
+/*.tar.gz
+/*.tgz
 
 # Editor directories and files
 .vscode/*

@@ -5,11 +5,12 @@
  */
 
 import assert from 'node:assert/strict'
+import { mkdtempSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-agent-routes-tests', String(process.pid))
+process.env.APP_DATA_DIR = mkdtempSync(path.join(os.tmpdir(), 'yma-agent-routes-tests-'))
 
 const { createAppServer } = await import('../server/appServer.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')

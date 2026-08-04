@@ -43,7 +43,7 @@ test('tool registry exposes canvas tools and Agent tool', () => {
     assert.ok(names.includes(name), `${name} should be registered`)
   }
   const specs = buildToolSpecs(['create_mermaid', 'create_chart', 'create_svg', 'create_html_app', 'Agent'])
-  assert.deepEqual(specs.map((spec) => spec.function.name), ['create_mermaid', 'create_chart', 'create_svg', 'create_html_app', 'Agent'])
+  assert.deepEqual(specs.map((spec) => spec.function.name), ['Agent', 'create_chart', 'create_html_app', 'create_mermaid', 'create_svg'])
 })
 
 test('artifact tools return collapsed preview artifacts and reject unsafe html apps', async () => {
@@ -92,6 +92,7 @@ test('vision helpers enforce MODEL_NAMES_VISION only when configured', () => {
   assert.equal(supportsVisionModel('text-model', {}), true)
   assert.equal(supportsVisionModel('text-model', { MODEL_NAMES_VISION: 'vision-model' }), false)
   assert.equal(supportsVisionModel('vision-model', { MODEL_NAMES_VISION: 'vision-model' }), true)
+  assert.equal(supportsVisionModel('vision-model', {}, 'https://example.test/v1', { supportsVision: false }), false)
 })
 
 test('text-only model outbound view replaces image_url/input_image without mutating canonical history', () => {

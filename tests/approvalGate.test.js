@@ -29,6 +29,7 @@ const {
   countPendingApprovals,
 } = await import('../server/services/approvalStore.js')
 const { listNotifications } = await import('../server/services/notificationsStore.js')
+const { rememberTool, setRiskOverride } = await import('../server/services/approvalSettingsStore.js')
 const { createJob } = await import('../server/services/jobStore.js')
 const { closeDb } = await import('../server/db.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
@@ -74,6 +75,59 @@ test('NEVER_APPROVE 工具(read_file)立即放行且不建行', async () => {
   assert.equal(result.proceed, true)
   assert.deepEqual(result.args, args)
   assert.equal(countPendingApprovals({ userId }), 0)
+})
+
+test("chat mode 'all' 自动放行只读 bash_exec 且不建审批行", async () => {
+  const { userId } = newUser('readonly-shell-chat')
+  const args = { command: 'git status' }
+  const result = await requestApproval({
+    userId,
+    origin: 'chat',
+    sessionId: 'session-readonly-shell',
+    toolName: 'bash_exec',
+    args,
+    mode: 'all',
+  })
+
+  assert.equal(result.proceed, true)
+  assert.deepEqual(result.args, args)
+  assert.equal(countPendingApprovals({ userId }), 0)
+})
+
+test('standing rule 直通时返回命中的目标作用域用于审计', async () => {
+  const { userId, jobId } = newUser('standing-audit')
+  rememberTool({ userId, toolName: 'slack_send_message', args: { channelId: 'C-ops', text: 'first' } })
+  const result = await requestApproval({
+    userId, origin: 'job', jobId, toolName: 'slack_send_message', args: { channelId: 'C-ops', text: 'later' }, mode: 'all',
+  })
+  assert.equal(result.proceed, true)
+  assert.deepEqual(result.authorization, {
+    kind: 'standing_rule', toolName: 'slack_send_message', scope: 'target:channelId=C-ops',
+  })
+  assert.equal(countPendingApprovals({ userId }), 0)
+})
+
+test('per-user read risk override 仅对所属用户免审并返回审计来源', async () => {
+  const owner = newUser('risk-owner')
+  const stranger = newUser('risk-stranger')
+  setRiskOverride({ userId: owner.userId, toolName: 'bash_exec', riskClass: 'read' })
+  const allowed = await requestApproval({
+    userId: owner.userId, origin: 'job', jobId: owner.jobId,
+    toolName: 'bash_exec', args: { command: 'npm test' }, mode: 'all',
+  })
+  assert.equal(allowed.proceed, true)
+  assert.deepEqual(allowed.authorization, {
+    kind: 'risk_override', toolName: 'bash_exec', riskClass: 'read',
+  })
+
+  const controller = new AbortController()
+  const pending = requestApproval({
+    userId: stranger.userId, origin: 'job', jobId: stranger.jobId,
+    toolName: 'bash_exec', args: { command: 'npm test' }, mode: 'all', signal: controller.signal,
+  })
+  await waitForPendingRow(stranger.userId)
+  controller.abort()
+  assert.equal((await pending).proceed, false)
 })
 
 test('无 userId(内部/系统调用)立即放行且不建行', async () => {
@@ -175,7 +229,7 @@ test('预先 abort 的 signal 立即返回', async () => {
   controller.abort()
   const result = await requestApproval({
     userId, origin: 'job', jobId, toolName: 'bash_exec',
-    args: { command: 'ls' }, mode: 'all', signal: controller.signal,
+    args: { command: 'npm test' }, mode: 'all', signal: controller.signal,
   })
   assert.equal(result.proceed, false)
 })
@@ -203,7 +257,7 @@ test('onPending 在开始等待之前带着已创建的审批触发', async () =
 test('releaseApprovalsForJob 作废该 job 的挂起审批,等待者返回 proceed:false', async () => {
   const { userId, jobId } = newUser('cancel')
   const pending = requestApproval({
-    userId, origin: 'job', jobId, toolName: 'bash_exec', args: { command: 'ls' }, mode: 'all',
+    userId, origin: 'job', jobId, toolName: 'bash_exec', args: { command: 'npm test' }, mode: 'all',
   })
 
   const row = await waitForPendingRow(userId)
@@ -219,7 +273,7 @@ test('releaseApprovalsForJob 作废该 job 的挂起审批,等待者返回 proce
 test('门控打开时为用户创建 kind=approval 的通知', async () => {
   const { userId, jobId } = newUser('notify')
   const pending = requestApproval({
-    userId, origin: 'job', jobId, toolName: 'bash_exec', args: { command: 'ls' }, mode: 'all',
+    userId, origin: 'job', jobId, toolName: 'bash_exec', args: { command: 'npm test' }, mode: 'all',
   })
 
   const row = await waitForPendingRow(userId)
@@ -236,7 +290,7 @@ test('门控打开时为用户创建 kind=approval 的通知', async () => {
 test('waitForDecision 直接调用:小 pollIntervalMs + releaseApproval 唤醒', async () => {
   const { userId, jobId } = newUser('waitdirect')
   const pending = requestApproval({
-    userId, origin: 'job', jobId, toolName: 'bash_exec', args: { command: 'ls' }, mode: 'all',
+    userId, origin: 'job', jobId, toolName: 'bash_exec', args: { command: 'npm test' }, mode: 'all',
   })
   const row = await waitForPendingRow(userId)
 

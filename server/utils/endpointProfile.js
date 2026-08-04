@@ -26,7 +26,7 @@ const KIND_BY_PORT = new Map([
   ['8000', 'vllm'],
 ])
 
-export const ENDPOINT_KINDS = ['ollama', 'lmstudio', 'llamacpp', 'vllm', 'openai-compatible']
+export const ENDPOINT_KINDS = ['ollama', 'lmstudio', 'llamacpp', 'vllm', 'anthropic', 'gemini', 'openai-compatible']
 
 /**
  * 云端默认超时 —— 沿用改造前的既有值,不动云端行为。
@@ -140,6 +140,8 @@ export function inferEndpointKind(baseUrl = '') {
   if (host.includes('lmstudio') || host.includes('lm-studio')) return 'lmstudio'
   if (host.includes('vllm')) return 'vllm'
   if (host.includes('llamacpp') || host.includes('llama-cpp')) return 'llamacpp'
+  if (host === 'api.anthropic.com' || host.endsWith('.anthropic.com')) return 'anthropic'
+  if (host === 'generativelanguage.googleapis.com' || host.endsWith('.generativelanguage.googleapis.com')) return 'gemini'
 
   const byPort = KIND_BY_PORT.get(String(url.port || ''))
   if (byPort) return byPort
@@ -158,11 +160,19 @@ export function inferEndpointKind(baseUrl = '') {
  *     默认给 false 更安全 —— 发了不支持的 tools 直接 400,整轮报废。
  */
 const KIND_CAPABILITIES = {
-  ollama: { supportsTools: true, supportsStreaming: true, supportsVision: false },
-  lmstudio: { supportsTools: true, supportsStreaming: true, supportsVision: false },
-  vllm: { supportsTools: true, supportsStreaming: true, supportsVision: false },
-  llamacpp: { supportsTools: false, supportsStreaming: true, supportsVision: false },
-  'openai-compatible': { supportsTools: true, supportsStreaming: true, supportsVision: true },
+  ollama: { supportsTools: true, supportsStreaming: true, supportsVision: false, supportsPdf: false, supportsParallelTools: false },
+  lmstudio: { supportsTools: true, supportsStreaming: true, supportsVision: false, supportsPdf: false, supportsParallelTools: false },
+  vllm: { supportsTools: true, supportsStreaming: true, supportsVision: false, supportsPdf: false, supportsParallelTools: false },
+  llamacpp: { supportsTools: false, supportsStreaming: true, supportsVision: false, supportsPdf: false, supportsParallelTools: false },
+  anthropic: { supportsTools: true, supportsStreaming: true, supportsVision: true, supportsPdf: true, supportsParallelTools: true },
+  gemini: { supportsTools: true, supportsStreaming: true, supportsVision: true, supportsPdf: true, supportsParallelTools: true },
+  'openai-compatible': { supportsTools: true, supportsStreaming: true, supportsVision: true, supportsPdf: false, supportsParallelTools: false },
+}
+
+function isNativeOpenAIEndpoint(baseUrl = '') {
+  const url = toHostname(baseUrl)
+  const hostname = String(url?.hostname || '').toLowerCase()
+  return hostname === 'api.openai.com'
 }
 
 function parseCsvSet(raw) {
@@ -257,7 +267,8 @@ function resolveTimeouts({ isLocal, env, overrides }) {
  *   kind: string, baseUrl: string, modelName: string, isLocal: boolean,
  *   timeouts: {probeMs:number, firstTokenMs:number, idleMs:number, requestMs:number, backgroundMs:number},
  *   contextWindow: number, supportsTools: boolean, supportsStreaming: boolean,
- *   supportsVision: boolean, failoverEligible: boolean, keepAlive: string|null,
+ *   supportsVision: boolean, supportsPdf: boolean, supportsParallelTools: boolean,
+ *   failoverEligible: boolean, keepAlive: string|null,
  * }}
  */
 export function resolveEndpointProfile({
@@ -291,6 +302,8 @@ export function resolveEndpointProfile({
   // 名单里的模型支持,不在名单里的不支持。没设置则回落到 kind 默认。
   const toolsWhitelist = parseCsvSet(safeEnv.MODEL_NAMES_TOOLS)
   const visionWhitelist = parseCsvSet(safeEnv.MODEL_NAMES_VISION)
+  const pdfWhitelist = parseCsvSet(safeEnv.MODEL_NAMES_PDF)
+  const parallelToolsWhitelist = parseCsvSet(safeEnv.MODEL_NAMES_PARALLEL_TOOLS)
 
   let supportsTools = tribool(safeOverrides.supportsTools)
   if (supportsTools === null) {
@@ -304,6 +317,21 @@ export function resolveEndpointProfile({
 
   let supportsStreaming = tribool(safeOverrides.supportsStreaming)
   if (supportsStreaming === null) supportsStreaming = caps.supportsStreaming
+
+  let supportsPdf = tribool(safeOverrides.supportsPdf)
+  if (supportsPdf === null) {
+    supportsPdf = pdfWhitelist.size
+      ? pdfWhitelist.has(selectedModel)
+      : (caps.supportsPdf || isNativeOpenAIEndpoint(baseUrl))
+  }
+
+  let supportsParallelTools = tribool(safeOverrides.supportsParallelTools)
+  if (supportsParallelTools === null) {
+    supportsParallelTools = parallelToolsWhitelist.size
+      ? parallelToolsWhitelist.has(selectedModel)
+      : (caps.supportsParallelTools || isNativeOpenAIEndpoint(baseUrl))
+  }
+  supportsParallelTools = supportsTools && supportsParallelTools
 
   // ---- failover ----
   // ★ 本地端点默认永不 failover。原来「本地慢 → 超时 → 伪装成 504 →
@@ -330,6 +358,8 @@ export function resolveEndpointProfile({
     supportsTools,
     supportsStreaming,
     supportsVision,
+    supportsPdf,
+    supportsParallelTools,
     failoverEligible,
     keepAlive,
   }

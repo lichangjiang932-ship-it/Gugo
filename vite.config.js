@@ -38,6 +38,7 @@ import { handleModelProviderRequest } from './server/routes/modelProviderRoutes.
 import { handleMobileRequest } from './server/routes/mobileRoutes.js'
 import { handleMcpServerRequest } from './server/mcp/mcpServer.js'
 import { handleLocalFileAccessRequest } from './server/routes/localFileAccessRoutes.js'
+import { handleTurnEventRequest } from './server/routes/turnEventRoutes.js'
 
 function authBillingPlugin() {
   return {
@@ -172,6 +173,10 @@ function fallbackApiPlugin() {
           handleReasonixRequest(req, res)
           return
         }
+        if (req.url?.startsWith('/api/turns')) {
+          handleTurnEventRequest(req, res)
+          return
+        }
         if (req.url === '/api/notifications' || req.url?.startsWith('/api/notifications/') || req.url?.startsWith('/api/notifications?')) {
           handleNotificationRequest(req, res)
           return
@@ -232,9 +237,8 @@ const PUBLIC_BASE_PATH = process.env.PUBLIC_BASE_PATH || '/'
 /**
  * ★ dev server 的 host/port 必须**固定**,而且要和 `npm run serve`(生产)一致。
  *
- * 背景:登录 token 和**全部对话记录**都存在 localStorage 里
- * (`your-model-atelier:auth-token` / `your-model-atelier:state:v1`),
- * 而 localStorage 是按 **origin**(协议+主机+端口)隔离的。
+ * 背景:登录 token 和轻量偏好存在 localStorage,会话与历史存在 IndexedDB,
+ * 两者都按 **origin**(协议+主机+端口)隔离。
  *
  * 以前 vite 没配 server,`npm run dev` 落在默认的 localhost:5173,
  * 手动加 `--host 127.0.0.1 --port 5175` 又落在另一个 origin ——

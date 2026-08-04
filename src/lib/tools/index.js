@@ -20,51 +20,10 @@ import { z } from 'zod'
 //   ChatSplit chunk 里本就包含这两个模块.
 import { parseMarkdownSlides } from '../presentationExport.js'
 import { parseMarkdownDocument, parseSpreadsheetRows } from '../officeExport.js'
-import { askToolApproval, buildClientRememberedGrant, classifyClientTool } from '../toolApproval.js'
+import { askDirectoryApproval } from '../toolApproval.js'
 import { translateKey } from '../../i18n/translations.js'
 
 const FILE_ARTIFACT_TOOL_NAMES = new Set(['create_pptx', 'create_docx', 'create_xlsx'])
-
-/**
- * 审批档位 + 「总是允许」清单的进程内缓存。
- * 工具调用是高频路径,不能每次都打一次 HTTP;由 ChatSplit 在挂载和设置变更时刷新。
- */
-let approvalSettingsCache = { mode: 'normal', rememberedTools: [], rememberedGrants: [] }
-
-export function setCachedApprovalSettings(settings) {
-  if (!settings || typeof settings !== 'object') return
-  approvalSettingsCache = {
-    mode: settings.mode || 'normal',
-    rememberedTools: Array.isArray(settings.rememberedTools) ? settings.rememberedTools : [],
-    rememberedGrants: Array.isArray(settings.rememberedGrants) ? settings.rememberedGrants : [],
-  }
-}
-
-export function getCachedApprovalSettings() {
-  return approvalSettingsCache
-}
-
-/** 用户点了「总是允许」后本地立即生效,不等服务端回包(服务端已在 decide 时落库)。 */
-function rememberToolLocally(name, args) {
-  const grant = buildClientRememberedGrant(name, args)
-  if (!grant) return
-  if (name === 'bash_exec') {
-    const exists = approvalSettingsCache.rememberedGrants.some((item) =>
-      item?.toolName === grant.toolName && item?.commandPrefix === grant.commandPrefix)
-    if (!exists) {
-      approvalSettingsCache = {
-        ...approvalSettingsCache,
-        rememberedGrants: [...approvalSettingsCache.rememberedGrants, grant],
-      }
-    }
-  } else if (!approvalSettingsCache.rememberedTools.includes(name)) {
-    approvalSettingsCache = {
-      ...approvalSettingsCache,
-      rememberedTools: [...approvalSettingsCache.rememberedTools, name],
-      rememberedGrants: [...approvalSettingsCache.rememberedGrants, grant],
-    }
-  }
-}
 
 // ★ #18: 工具参数 zod schema — 模型可能给出脏数据,先校验再执行
 const TOOL_ARG_SCHEMAS = {
@@ -583,6 +542,14 @@ const TOOL_SPECS = {
 const READ_ONLY_MODE_TOOLS = new Set(['web_search', 'fetch_url', 'list_directory', 'read_file', 'git_status', 'git_diff', 'manage_todos', 'Agent'])
 const CODE_MODE_TOOLS = ['list_directory', 'read_file', 'write_file', 'edit_file', 'bash_exec', 'git_status', 'git_diff', 'run_project_check', 'manage_todos', 'Agent']
 
+function sortToolSpecsByName(specs = []) {
+  return [...specs].sort((a, b) => {
+    const aName = String(a?.function?.name || '')
+    const bName = String(b?.function?.name || '')
+    return aName < bName ? -1 : aName > bName ? 1 : 0
+  })
+}
+
 export function resolveToolsForMode(toolsConfig = {}, mode = 'chat') {
   const enabled = Object.entries(toolsConfig || {})
     .filter(([, on]) => !!on)
@@ -617,7 +584,7 @@ export function buildToolSpecs(enabledNames) {
         : `[tools] 未知工具被忽略: ${name}`)
     }
   }
-  return list
+  return sortToolSpecsByName(list)
 }
 
 export function listToolNames() {
@@ -662,10 +629,16 @@ export async function buildToolSpecsAsync({ enabledBuiltinNames, mode = 'chat' }
     return name.startsWith('mcp__') || name.startsWith('skill__') || !TOOL_SPECS[name]
   })
   // 排除已经在 builtin 里出现的同名
-  return [...builtin, ...dynamic]
+  return sortToolSpecsByName([...builtin, ...dynamic])
 }
 
 /* ── 执行器 ── */
+
+function responseErrorMessage(data, fallback) {
+  if (typeof data?.error === 'string' && data.error) return data.error
+  if (typeof data?.error?.message === 'string' && data.error.message) return data.error.message
+  return fallback
+}
 
 async function callJson(url, body, { method = 'POST' } = {}) {
   const headers = { 'Content-Type': 'application/json' }
@@ -680,9 +653,9 @@ async function callJson(url, body, { method = 'POST' } = {}) {
   let data
   try { data = text ? JSON.parse(text) : {} } catch { data = { raw: text } }
   if (!resp.ok || data?.ok === false) {
-    const err = new Error(data?.error || `HTTP ${resp.status}`)
+    const err = new Error(responseErrorMessage(data, `HTTP ${resp.status}`))
     err.status = resp.status
-    err.code = data?.code
+    err.code = data?.error?.code || data?.code
     err.retryable = data?.retryable
     err.path = data?.path
     err.hint = data?.hint
@@ -705,7 +678,7 @@ async function callWorkspaceJson(url, body) {
   let data
   try { data = text ? JSON.parse(text) : {} } catch { data = { raw: text } }
   if (!resp.ok) {
-    let message = data?.error || `HTTP ${resp.status}`
+    let message = responseErrorMessage(data, `HTTP ${resp.status}`)
     // ★ 404 且响应体不是 JSON → 是**路由本身没注册**,不是资源不存在。
     //
     // 真实事故:dev server 漏注册 /api/tools/code/,模型每次调 grep_code
@@ -719,10 +692,12 @@ async function callWorkspaceJson(url, body) {
     }
     const err = new Error(message)
     err.status = resp.status
-    err.code = data?.code
+    err.code = data?.error?.code || data?.code
     err.retryable = data?.retryable
     err.path = data?.path
     err.hint = data?.hint
+    err.suggestGrantPath = data?.suggestGrantPath
+    err.requiredAccessMode = data?.requiredAccessMode
     throw err
   }
   return data
@@ -821,9 +796,7 @@ async function execListImports(args) {
   return { content: JSON.stringify(data) }
 }
 async function execApplyPatch(args) {
-  // 审批已在 executeToolCall 的统一闸口做过(含 dry_run diff 预览),
-  // 这里不再单独弹窗 —— 以前那条路径只覆盖 apply_patch,而且
-  // localStorage 的 apply_patch.auto_approve 是个能一键全放行的后门。
+  // 客户端只获取预览并转发执行请求。风险裁决、授权范围与审计均由服务端处理。
   const preview = await callWorkspaceJson('/api/tools/code/apply-patch', { ...args, dry_run: true })
   if (preview?.ok === false) {
     return { ok: false, content: JSON.stringify(preview) }
@@ -1302,48 +1275,6 @@ export async function executeToolCall(call, options = {}) {  const { maxRetries 
     parsedArgs = parsed.data
   }
 
-  // ★ 审批闸口:所有前端工具调用的唯一入口,决策就在对话里做,不用切页面。
-  // 对齐 Claude Code —— 允许一次 / 总是允许这个工具 / 拒绝。
-  // 注意这只是前端先拦一道(可被绕过),服务端仍会独立判定,不是安全边界。
-  {
-    const settings = getCachedApprovalSettings()
-    const verdict = classifyClientTool(name, parsedArgs, settings)
-    if (verdict.denied) {
-      return { ok: false, content: JSON.stringify({ error: verdict.reason, denied: true }) }
-    }
-    if (verdict.needsApproval) {
-      // apply_patch 先跑 dry_run 拿 diff 预览,让用户看到到底要改什么
-      let preview = null
-      if (name === 'apply_patch') {
-        try {
-          const dry = await callWorkspaceJson('/api/tools/code/apply-patch', { ...parsedArgs, dry_run: true })
-          if (dry?.ok === false) return { ok: false, content: JSON.stringify(dry) }
-          preview = dry?.changes || null
-        } catch {
-          preview = null
-        }
-      }
-      const decision = await askToolApproval({
-        name,
-        args: parsedArgs,
-        risk: verdict.risk,
-        reason: verdict.reason,
-        preview,
-      })
-      if (!decision.approved) {
-        return {
-          ok: false,
-          content: JSON.stringify({
-            ok: false,
-            rejected: true,
-            error: decision.reason || '用户拒绝了这次调用',
-          }),
-        }
-      }
-      if (decision.remember) rememberToolLocally(name, parsedArgs)
-    }
-  }
-
   // ★ #24: 失败重试 — 网络/反爬瞬时错误自动重试 (最多 maxRetries 次,指数退避)
   let lastErr
   let usedAttempts = 0
@@ -1360,6 +1291,42 @@ export async function executeToolCall(call, options = {}) {  const { maxRetries 
       return { ok, content, billing, artifact, todos, attempts: attempt + 1 }
     } catch (err) {
       lastErr = err
+      if (err?.code === 'PATH_NOT_AUTHORIZED') {
+        const decision = await askDirectoryApproval({
+          name,
+          args: parsedArgs,
+          path: err.path || parsedArgs?.path || null,
+          suggestGrantPath: err.suggestGrantPath || err.path || parsedArgs?.path || null,
+          requiredAccessMode: err.requiredAccessMode
+            || (['write_file', 'edit_file', 'apply_patch'].includes(name) ? 'read_write' : 'read_only'),
+        })
+        if (!decision.approved) {
+          const denied = new Error(decision.reason || 'The user denied directory authorization.')
+          denied.code = 'PATH_AUTHORIZATION_REJECTED'
+          denied.status = 403
+          denied.retryable = false
+          denied.path = err.path
+          lastErr = denied
+          break
+        }
+
+        // The grant UI resolves only after persistence. Retry this exact
+        // operation once; a second failure is final and must not reopen the
+        // authorization prompt or enter the generic retry loop.
+        usedAttempts += 1
+        try {
+          const output = await fn(parsedArgs)
+          const ok = output && typeof output === 'object' && typeof output.ok === 'boolean' ? output.ok : true
+          const content = typeof output === 'string' ? output : output.content
+          const billing = typeof output === 'string' ? null : output.billing
+          const artifact = typeof output === 'string' ? null : (output.artifact || null)
+          const todos = typeof output === 'string' ? null : (output.todos || null)
+          return { ok, content, billing, artifact, todos, attempts: usedAttempts }
+        } catch (retryError) {
+          lastErr = retryError
+          break
+        }
+      }
       const msg = err?.message || String(err)
       // 不可重试:参数校验类错误 / 沙箱策略拒绝
       let nonRetriable = /参数|不能为空|invalid|required|沙箱/i.test(msg)

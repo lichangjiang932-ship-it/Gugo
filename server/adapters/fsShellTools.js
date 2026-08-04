@@ -26,6 +26,7 @@ import { isToolPermittedForUser } from '../db.js'
 import { authenticateRequest } from '../middleware.js'
 import { readJson, sendJson } from '../utils.js'
 import { resolveAuthorizedLocalPath } from '../services/localFileAccessService.js'
+import { assertWorkspaceCapability } from '../services/workspaceTrustService.js'
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024 // 5 MB read/write upper bound
 const SHELL_DEFAULT_TIMEOUT_MS = 60 * 1000
@@ -70,20 +71,32 @@ function assertToolPermitted(userId, toolName) {
 }
 
 function resolveForFileTool(rawPath, { userId = null, write = false, allowMissing = false } = {}) {
-  if (!userId && !isFsEnabled()) {
+  if (!isFsEnabled()) {
     throw badReq('WORKSPACE_FS_ENABLED=1 未启用,无法访问文件', 403)
   }
-  return resolveAuthorizedLocalPath({ userId, rawPath, write, allowMissing })
+  const resolved = resolveAuthorizedLocalPath({ userId, rawPath, write, allowMissing })
+  assertWorkspaceCapability({
+    userId,
+    rootPath: resolved.rootPath || getWorkspaceRoot(),
+    capability: write ? 'fileSystemWrite' : 'fileSystem',
+  })
+  return resolved
 }
 
 export function resolveForShellCwd(rawPath, { userId = null } = {}) {
   const requestedPath = rawPath == null || rawPath === '' ? getWorkspaceRoot() : rawPath
-  return resolveAuthorizedLocalPath({
+  const resolved = resolveAuthorizedLocalPath({
     userId,
     rawPath: requestedPath,
-    write: false,
+    write: true,
     allowWorkspace: true,
   })
+  assertWorkspaceCapability({
+    userId,
+    rootPath: resolved.rootPath || getWorkspaceRoot(),
+    capability: 'shell',
+  })
+  return resolved
 }
 
 // 把任意 path 字符串解析到 WORKSPACE_ROOT 下的绝对路径.防 traversal + symlink 逃逸.
@@ -273,7 +286,7 @@ export async function editFileTool({
 
 /* ── bash_exec ─────────────────────────────────────────────── */
 
-export async function bashExecTool({ command, cwd: rawCwd, timeout_ms, userId = null }) {
+export async function bashExecTool({ command, cwd: rawCwd, timeout_ms, userId = null, signal = null }) {
   assertToolPermitted(userId, 'bash_exec')
   if (!isShellEnabled()) {
     throw badReq('WORKSPACE_SHELL_ENABLED=1 未启用,无法执行 shell 命令', 403)
@@ -318,9 +331,22 @@ export async function bashExecTool({ command, cwd: rawCwd, timeout_ms, userId = 
       timeout,
       maxBuffer: SHELL_MAX_OUTPUT,
       windowsHide: true,
+      signal,
     }).then((r) => {
       const durationMs = Date.now() - startedAt
       const auditArgs = { command, cwd: displayCwd }
+      if (r.aborted) {
+        if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'cancelled', durationMs })
+        resolve({
+          ok: false,
+          cancelled: true,
+          error: '命令已取消，进程组已清理',
+          stdout: r.stdout,
+          stderr: r.stderr,
+          cwd: displayCwd,
+        })
+        return
+      }
       if (r.timedOut) {
         if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'timeout', durationMs })
         resolve({
@@ -404,20 +430,22 @@ export async function handleFsShellRequest(req, res) {
       retryable: err?.retryable ?? ![401, 403, 404].includes(status),
       ...(err?.path ? { path: err.path } : {}),
       ...(err?.hint ? { hint: err.hint } : {}),
+      ...(err?.suggestGrantPath ? { suggestGrantPath: err.suggestGrantPath } : {}),
+      ...(err?.requiredAccessMode ? { requiredAccessMode: err.requiredAccessMode } : {}),
     })
   }
 }
 
 // 给 jobTools/jobRuntime 共用:统一 dispatcher,直接函数调用,不经 HTTP.
 // userId 可选(内部 job/subagent 传进来),有则落 audit
-export async function dispatchFsShellTool(name, args, { userId = null } = {}) {
+export async function dispatchFsShellTool(name, args, { userId = null, signal = null } = {}) {
   const argsWithUser = userId ? { ...args, userId } : args
   switch (name) {
     case 'list_directory': return listDirectoryTool(argsWithUser)
     case 'read_file': return readFileTool(argsWithUser)
     case 'write_file': return writeFileTool(argsWithUser)
     case 'edit_file': return editFileTool(argsWithUser)
-    case 'bash_exec': return bashExecTool(argsWithUser)
+    case 'bash_exec': return bashExecTool({ ...argsWithUser, signal })
     default: throw new Error(`unknown fsShell tool: ${name}`)
   }
 }

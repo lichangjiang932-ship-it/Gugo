@@ -1,6 +1,7 @@
 import { getAuthToken } from './accountClient.js'
 
 export const RISK_LEVELS = ['high', 'medium', 'low']
+export const TOOL_RISK_CLASSES = ['read', 'write_local', 'exec', 'external']
 
 function authHeaders() {
   const token = getAuthToken?.()
@@ -60,6 +61,7 @@ export const DEFAULT_APPROVAL_SETTINGS = Object.freeze({
   mode: 'normal',
   rememberedTools: [],
   rememberedGrants: [],
+  riskOverrides: [],
   modes: PERMISSION_MODES,
 })
 
@@ -74,6 +76,9 @@ function normalizeSettings(data) {
     mode: PERMISSION_MODES.includes(data.mode) ? data.mode : 'normal',
     rememberedTools: Array.isArray(data.rememberedTools) ? data.rememberedTools : [],
     rememberedGrants: Array.isArray(data.rememberedGrants) ? data.rememberedGrants : [],
+    riskOverrides: Array.isArray(data.riskOverrides)
+      ? data.riskOverrides.filter((item) => item?.toolName && TOOL_RISK_CLASSES.includes(item.riskClass))
+      : [],
     modes: Array.isArray(data.modes) && data.modes.length ? data.modes : PERMISSION_MODES,
   }
 }

@@ -28,6 +28,7 @@ import { pathToFileURL } from 'node:url'
 import JSZip from 'jszip'
 import { authenticateRequest } from '../middleware.js'
 import { getArtifactByFilename } from './jobStore.js'
+import { getTurnArtifactByFilename } from './turnArtifactStore.js'
 import {
   HEAD_FONT, BODY_FONT, CJK_FONT,
   PREMIUM_THEMES, resolvePremiumTheme,
@@ -957,7 +958,7 @@ function resolvePreviewArtifactPath(input, userId) {
     throw withStatus(400, 'artifactPath must be inside the artifact directory')
   }
 
-  const dbArtifact = getArtifactByFilename(path.basename(full))
+  const dbArtifact = getArtifactByFilename(path.basename(full)) || getTurnArtifactByFilename(path.basename(full))
   if (dbArtifact?.userId && dbArtifact.userId !== userId) {
     throw withStatus(404, 'artifact not found')
   }
@@ -1054,7 +1055,7 @@ export function handleArtifactDownload(req, res) {
   if (!userId) { res.statusCode = 401; res.end('Unauthorized'); return }
 
   // Ownership:artifact 的 user_id 必须匹配
-  const artifact = getArtifactByFilename(filename)
+  const artifact = getArtifactByFilename(filename) || getTurnArtifactByFilename(filename)
   if (!artifact) { res.statusCode = 404; res.end('not found'); return }
   if (artifact.userId !== userId) {
     // 不暴露存在性,统一 404

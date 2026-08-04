@@ -15,7 +15,9 @@ async function parseResponse(response) {
 
 export function getAuthToken() {
   if (typeof window === 'undefined') return ''
-  return window.localStorage.getItem(TOKEN_KEY) || ''
+  return window.sessionStorage?.getItem(TOKEN_KEY)
+    || window.localStorage.getItem(TOKEN_KEY)
+    || ''
 }
 
 export function isLoggedInLocally() {
@@ -25,7 +27,10 @@ export function isLoggedInLocally() {
 export function setAuthToken(token) {
   if (typeof window === 'undefined') return
   if (token) window.localStorage.setItem(TOKEN_KEY, token)
-  else window.localStorage.removeItem(TOKEN_KEY)
+  else {
+    window.localStorage.removeItem(TOKEN_KEY)
+    window.sessionStorage?.removeItem(TOKEN_KEY)
+  }
 }
 
 export async function sendLoginCode(email, { fetchImpl = fetch } = {}) {

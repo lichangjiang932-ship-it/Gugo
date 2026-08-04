@@ -56,6 +56,7 @@ import { handleModelProviderRequest } from './routes/modelProviderRoutes.js'
 import { handleBrowserRequest } from './routes/browserRoutes.js'
 import { handleConnectorRequest } from './routes/connectorRoutes.js'
 import { handleLocalFileAccessRequest } from './routes/localFileAccessRoutes.js'
+import { handleTurnEventRequest } from './routes/turnEventRoutes.js'
 import { handleMcpServerRequest } from './mcp/mcpServer.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -79,26 +80,26 @@ function send(res, statusCode, body, headers = {}) {
   res.end(body)
 }
 
-function serveStatic(req, res) {
+function serveStatic(req, res, staticDir = distDir) {
   const url = new URL(req.url, 'http://localhost')
   const decodedPath = decodeURIComponent(url.pathname)
   const requested = decodedPath === '/' ? '/index.html' : decodedPath
-  const filePath = path.normalize(path.join(distDir, requested))
+  const filePath = path.normalize(path.join(staticDir, requested))
 
-  if (!filePath.startsWith(distDir)) {
+  if (!filePath.startsWith(staticDir)) {
     send(res, 403, 'Forbidden', { 'Content-Type': 'text/plain; charset=utf-8' })
     return
   }
 
   const finalPath = fs.existsSync(filePath) && fs.statSync(filePath).isFile()
     ? filePath
-    : path.join(distDir, 'index.html')
+    : path.join(staticDir, 'index.html')
   const ext = path.extname(finalPath)
   const headers = {
     'Content-Type': MIME_TYPES[ext] || 'application/octet-stream',
   }
 
-  if (path.basename(finalPath) === 'index.html') {
+  if (ext === '.html') {
     const nonce = res.locals?.cspNonce
     const html = fs.readFileSync(finalPath, 'utf8')
       .replace(/<script(?![^>]*\bnonce=)/g, `<script nonce="${nonce}"`)
@@ -180,7 +181,7 @@ function applyMiddlewares(handler) {
   }
 }
 
-function createRouter(getEnv = getRuntimeEnv) {
+function createRouter(getEnv = getRuntimeEnv, staticDir = distDir) {
   const jobRuntime = getJobRuntime()
   const cronScheduler = getCronScheduler()
   cronScheduler.start()
@@ -376,13 +377,17 @@ function createRouter(getEnv = getRuntimeEnv) {
     return handleReasonixRequest(req, res)
   }
 
+  if (req.url?.startsWith('/api/turns')) {
+    return handleTurnEventRequest(req, res)
+  }
+
   // 静态文件
-  serveStatic(req, res)
+  serveStatic(req, res, staticDir)
   }
 }
 
-export function createAppServer({ getEnv = getRuntimeEnv } = {}) {
-  return http.createServer(applyMiddlewares(createRouter(getEnv)))
+export function createAppServer({ getEnv = getRuntimeEnv, staticDir = distDir } = {}) {
+  return http.createServer(applyMiddlewares(createRouter(getEnv, staticDir)))
 }
 
 // 旧 gracefulShutdown 已下沉到 server/core/lifecycle.js
@@ -391,10 +396,11 @@ function gracefulShutdownProxy(server) {
   gracefulShutdown(server)
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+export function startAppServer() {
   if (!fs.existsSync(path.join(distDir, 'index.html'))) {
     console.error('dist/index.html 不存在，请先运行 npm run build。')
-    process.exit(1)
+    process.exitCode = 1
+    return null
   }
 
   const env = getRuntimeEnv()
@@ -419,4 +425,9 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
 
   process.on('SIGTERM', () => gracefulShutdownProxy(server))
   process.on('SIGINT', () => gracefulShutdownProxy(server))
+  return server
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  startAppServer()
 }

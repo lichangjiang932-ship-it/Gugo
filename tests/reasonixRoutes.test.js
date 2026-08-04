@@ -93,7 +93,7 @@ test('todo: lifecycle + status filter + user isolation', async () => {
     assert.throws(() => rxMod.updateTodo({ userId, id: t2.id, patch: { status: 'bogus' } }), /status/)
 
     // 隔离
-    const issued = authMod.issueEmailCode({ email: 'b@x.com' })
+    const issued = authMod.issueEmailCode({ email: 'reasonix.other@example.com' })
     const other = authMod.verifyEmailCode({ email: issued.email, code: issued.devCode })
     assert.equal(rxMod.listTodos({ userId: other.user.id }).length, 0)
     assert.throws(() => rxMod.updateTodo({ userId: other.user.id, id: t1.id, patch: { status: 'done' } }), /不存在/)

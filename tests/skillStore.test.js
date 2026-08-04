@@ -1,16 +1,24 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-skill-store-tests', String(process.pid))
+const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-skill-store-tests-'))
+process.env.APP_DATA_DIR = TMP_DIR
 
 const {
   getImportedSkill,
   installSkill,
   listImportedSkills,
 } = await import('../server/services/skillStore.js')
+const { closeDb } = await import('../server/db.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
+
+test.after(() => {
+  try { closeDb() } catch { /* already closed */ }
+  try { fs.rmSync(TMP_DIR, { recursive: true, force: true }) } catch { /* best effort */ }
+})
 
 test('skill store persists imported skill metadata and prompt asset', () => {
   const { userId } = issueTestSession()

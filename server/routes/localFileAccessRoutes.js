@@ -3,9 +3,11 @@ import {
   getLocalFileAccessStatus,
   grantLocalPath,
   pickLocalDirectory,
+  resolveAuthorizedLocalPath,
   revokeLocalPath,
   setAllFilesAccess,
 } from '../services/localFileAccessService.js'
+import { setWorkspaceTrust } from '../services/workspaceTrustService.js'
 import { readJson } from '../utils.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
@@ -71,6 +73,31 @@ export async function handleLocalFileAccessRequest(req, res) {
         confirmation: body.confirmation,
       })
       return sendJson(res, 200, { ok: true, ...status })
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/local-files/workspace-trust') {
+      const body = await readJson(req)
+      const trusted = body.trusted === true
+      let rootPath = body.path
+      if (trusted) {
+        const resolved = resolveAuthorizedLocalPath({
+          userId,
+          rawPath: rootPath,
+          allowWorkspace: true,
+        })
+        rootPath = resolved.fullPath
+      }
+      const trust = setWorkspaceTrust({
+        userId,
+        rootPath,
+        trusted,
+        confirmation: body.confirmation,
+      })
+      return sendJson(res, 200, {
+        ok: true,
+        trust,
+        ...getLocalFileAccessStatus({ userId }),
+      })
     }
 
     if (req.method === 'POST' && url.pathname === '/api/local-files/pick-directory') {

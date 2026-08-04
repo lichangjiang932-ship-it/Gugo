@@ -46,6 +46,71 @@ const RULES = [
   { re: ENV_EXFIL_RE, reason: '导出 env 到外部(可能泄露密钥)' },
 ]
 
+const SIMPLE_READ_COMMANDS = new Set([
+  'pwd', 'ls', 'dir', 'tree', 'cat', 'type', 'head', 'tail', 'wc', 'stat', 'file',
+  'du', 'df', 'where', 'which', 'whoami', 'uname', 'echo',
+])
+const GIT_READ_SUBCOMMANDS = new Set(['status', 'diff', 'log', 'show', 'blame', 'grep', 'rev-parse', 'ls-files', 'ls-tree'])
+const NPM_READ_SUBCOMMANDS = new Set(['list', 'ls', 'view', 'outdated', 'why', 'explain'])
+const SHELL_META_RE = /[;&|><`\r\n]|\$\(/
+const GIT_WRITE_OR_EXEC_OPTIONS = new Set([
+  '--output', '--ext-diff', '--textconv', '--open-files-in-pager',
+])
+
+function tokenTargetsOutsideWorkspace(token) {
+  const source = String(token || '')
+  const values = [source]
+  const equalsAt = source.indexOf('=')
+  if (equalsAt >= 0) values.push(source.slice(equalsAt + 1))
+  return values.some((value) => (
+    /^(?:~(?:[\\/]|$)|[a-zA-Z]:[\\/]|[\\/])/.test(value)
+    || /(^|[\\/])\.\.(?:[\\/]|$)/.test(value)
+    || /^(?:\$[A-Za-z_][A-Za-z0-9_]*|%[^%]+%)(?:[\\/]|$)/.test(value)
+  ))
+}
+
+function hasGitWriteOrExecOption(tokens) {
+  return tokens.slice(2).some((token) => {
+    if (token === '-O' || token.startsWith('-O')) return true
+    const normalized = String(token).toLowerCase()
+    return GIT_WRITE_OR_EXEC_OPTIONS.has(normalized)
+      || [...GIT_WRITE_OR_EXEC_OPTIONS].some((option) => normalized.startsWith(`${option}=`))
+  })
+}
+
+/**
+ * Conservative command-level read-only classifier. This is an approval UX
+ * hint, not a sandbox: anything ambiguous remains exec/high-risk.
+ */
+export function isReadOnlyShellCommand(command) {
+  if (typeof command !== 'string') return false
+  const source = command.trim()
+  if (!source || SHELL_META_RE.test(source)) return false
+  const tokens = source.match(/"[^"]*"|'[^']*'|\S+/g)?.map((token) => token.replace(/^(?:"|')|(?:"|')$/g, '')) || []
+  if (!tokens.length || tokens.some(tokenTargetsOutsideWorkspace)) return false
+  const executable = String(tokens[0]).toLowerCase().replace(/\.exe$/, '')
+  if (SIMPLE_READ_COMMANDS.has(executable)) {
+    if (executable === 'file' && tokens.slice(1).some((token) => token === '-C' || token === '--compile')) return false
+    return true
+  }
+  if (executable === 'date' || executable === 'hostname') {
+    return tokens.length === 1 || (tokens.length === 2 && ['--help', '--version'].includes(tokens[1]))
+  }
+  if (executable === 'rg') return !tokens.some((token) => token === '--pre' || token.startsWith('--pre='))
+  if (executable === 'git') {
+    if (tokens.length === 2 && tokens[1] === '--version') return true
+    return GIT_READ_SUBCOMMANDS.has(String(tokens[1] || '').toLowerCase()) && !hasGitWriteOrExecOption(tokens)
+  }
+  if (executable === 'npm') {
+    if (tokens.length === 2 && ['--version', '-v'].includes(tokens[1])) return true
+    return NPM_READ_SUBCOMMANDS.has(String(tokens[1] || '').toLowerCase())
+  }
+  if (['node', 'python', 'python3', 'ruby', 'perl'].includes(executable)) {
+    return tokens.length === 2 && ['--version', '-v', '-V'].includes(tokens[1])
+  }
+  return false
+}
+
 /**
  * @returns {null | { reason: string }} null 表示放行
  */

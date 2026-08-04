@@ -11,7 +11,7 @@ import {
   getPublicAccount,
   loadBillingConfig,
 } from './billingAuth.js'
-import { getSessionByToken } from '../db.js'
+import { checkRateLimit, getSessionByToken } from '../db.js'
 import {
   selectActiveMemoriesForInjection,
   buildMemorySystemBlock,
@@ -36,6 +36,20 @@ import { scheduleAutoMemoryExtraction } from '../services/autoMemoryService.js'
 import { getRuntimeEnv } from '../utils/runtimeEnv.js'
 import { bindSseClientDisconnect, createEmptyModelResponseError } from './sseLifecycle.js'
 import { fetchWithEnvProxy } from './proxyFetch.js'
+import { normalizeModelContentForEndpoint } from '../utils/modelContentCapabilities.js'
+import {
+  buildNativeProviderRequest,
+  consumeNativeProviderStreamPayload,
+  createNativeProviderStreamState,
+  finishNativeProviderStream,
+  isNativeProviderKind,
+} from './nativeModelProviders.js'
+import { extractUsage, parseModelProviderResponse } from './modelProviderResponse.js'
+import { getUsageStats, recordUsage } from './modelUsage.js'
+import { requestNonStreamingAsEvents } from './modelNonStreaming.js'
+
+export { extractUsage, parseModelProviderResponse, parseOpenAICompatibleResponse } from './modelProviderResponse.js'
+export { getUsageStats, recordUsage, resetUsageStats } from './modelUsage.js'
 
 export { getRuntimeEnv } from '../utils/runtimeEnv.js'
 
@@ -374,18 +388,8 @@ export function getModelContextWindow({ modelName, userId, env = getRuntimeEnv()
   }).contextWindow
 }
 
-export function supportsVisionModel(modelName = '', env = process.env, baseUrl = '') {
-  const configured = String(env.MODEL_NAMES_VISION || '')
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean)
-  if (configured.length) return configured.includes(modelName)
-  // ★ 没配白名单时,原来是无条件 allow-all。对云端可以(主流模型都支持图),
-  // 但对本地端点是错的 —— 绝大多数本地跑的模型是纯文本的,喂图片进去
-  // 轻则忽略、重则 400,而用户完全不知道为什么。
-  // 想用本地视觉模型(llava / qwen-vl)的人在 MODEL_NAMES_VISION 里列出来即可。
-  if (baseUrl && isLocalEndpoint(baseUrl)) return false
-  return true
+export function supportsVisionModel(modelName = '', env = process.env, baseUrl = '', overrides = {}) {
+  return resolveEndpointProfile({ baseUrl, modelName, env, overrides }).supportsVision
 }
 
 /**
@@ -731,7 +735,7 @@ export function buildOpenAICompatibleRequest({
 
   const body = {
     model,
-    messages: normalizeMessagesForOpenAI(messages),
+    messages: normalizeModelContentForEndpoint(normalizeMessagesForOpenAI(messages), endpoint),
     temperature: config?.temperature ?? 0.7,
     stream,
   }
@@ -749,6 +753,7 @@ export function buildOpenAICompatibleRequest({
   if (Array.isArray(tools) && tools.length > 0 && endpoint.supportsTools) {
     body.tools = tools
     if (toolChoice) body.tool_choice = toolChoice
+    if (endpoint.supportsParallelTools) body.parallel_tool_calls = true
   }
   // ★ Ollama keep_alive:不设的话默认 5 分钟就卸载模型,下次请求重新加载权重。
   // 「本地模型延迟太大」有很大一部分就是反复冷加载 —— 常驻内存后首 token 从
@@ -772,106 +777,12 @@ export function buildOpenAICompatibleRequest({
   }
 }
 
-/**
- * 进程内 usage 聚合。用于回答「缓存命中率是多少」——改前改后能对比,
- * 否则任何前缀优化都是盲改。故意不落库:这是运维观测指标,不是业务数据。
- */
-const usageTotals = {
-  requests: 0,
-  promptTokens: 0,
-  completionTokens: 0,
-  cacheHitTokens: 0,
-  cacheMissTokens: 0,
-  byModel: new Map(),
-}
-
-export function recordUsage(modelName, usage) {
-  if (!usage) return
-  usageTotals.requests += 1
-  usageTotals.promptTokens += usage.promptTokens || 0
-  usageTotals.completionTokens += usage.completionTokens || 0
-  usageTotals.cacheHitTokens += usage.cacheHitTokens || 0
-  usageTotals.cacheMissTokens += usage.cacheMissTokens || 0
-  const key = String(modelName || 'unknown')
-  const m = usageTotals.byModel.get(key) || { requests: 0, promptTokens: 0, cacheHitTokens: 0, cacheMissTokens: 0 }
-  m.requests += 1
-  m.promptTokens += usage.promptTokens || 0
-  m.cacheHitTokens += usage.cacheHitTokens || 0
-  m.cacheMissTokens += usage.cacheMissTokens || 0
-  usageTotals.byModel.set(key, m)
-}
-
-function hitRate(hit, total) {
-  return total > 0 ? Number(((hit / total) * 100).toFixed(2)) : null
-}
-
-export function getUsageStats() {
-  const cacheable = usageTotals.cacheHitTokens + usageTotals.cacheMissTokens
-  return {
-    requests: usageTotals.requests,
-    promptTokens: usageTotals.promptTokens,
-    completionTokens: usageTotals.completionTokens,
-    cacheHitTokens: usageTotals.cacheHitTokens,
-    cacheMissTokens: usageTotals.cacheMissTokens,
-    // null 表示上游没回 usage(端点不支持或未开 stream_options),不是 0%
-    cacheHitRatePercent: hitRate(usageTotals.cacheHitTokens, cacheable),
-    byModel: Object.fromEntries(
-      [...usageTotals.byModel.entries()].map(([name, m]) => [
-        name,
-        { ...m, cacheHitRatePercent: hitRate(m.cacheHitTokens, m.cacheHitTokens + m.cacheMissTokens) },
-      ]),
-    ),
+export function buildModelProviderRequest(args = {}) {
+  const profile = args.profile || profileForConfig(args.config || {}, args.env)
+  if (isNativeProviderKind(profile.kind)) {
+    return buildNativeProviderRequest({ ...args, profile })
   }
-}
-
-export function resetUsageStats() {
-  usageTotals.requests = 0
-  usageTotals.promptTokens = 0
-  usageTotals.completionTokens = 0
-  usageTotals.cacheHitTokens = 0
-  usageTotals.cacheMissTokens = 0
-  usageTotals.byModel.clear()
-}
-
-export function parseOpenAICompatibleResponse(data) {
-  const reply =
-    data?.choices?.[0]?.message?.content ||
-    data?.choices?.[0]?.text ||
-    data?.output?.text ||
-    data?.result
-
-  if (!reply) throw new Error('模型返回为空，请检查模型名称或端点响应格式。')
-  return reply
-}
-
-/**
- * 从上游响应里抽 token usage,顺带归一化各家的缓存命中字段。
- *
- * 故意不并进 parseOpenAICompatibleResponse —— 那个函数返回裸字符串,
- * 有 3 处调用点直接当字符串用(含 HTTP response 序列化),改返回类型会渲染成
- * "[object Object]"。这里单独取,纯读、只用可选链、绝不 throw。
- *
- *   DeepSeek : prompt_cache_hit_tokens / prompt_cache_miss_tokens
- *   OpenAI   : prompt_tokens_details.cached_tokens
- */
-export function extractUsage(data) {
-  const u = data?.usage
-  if (!u || typeof u !== 'object') return null
-  const promptTokens = Number(u.prompt_tokens) || 0
-  const cacheHitTokens = Number(
-    u.prompt_cache_hit_tokens ?? u.prompt_tokens_details?.cached_tokens ?? 0,
-  ) || 0
-  // DeepSeek 直接给 miss;OpenAI 只给 cached,miss 由 prompt - cached 推出
-  const cacheMissTokens = Number(
-    u.prompt_cache_miss_tokens ?? Math.max(0, promptTokens - cacheHitTokens),
-  ) || 0
-  return {
-    promptTokens,
-    completionTokens: Number(u.completion_tokens) || 0,
-    totalTokens: Number(u.total_tokens) || 0,
-    cacheHitTokens,
-    cacheMissTokens,
-  }
+  return buildOpenAICompatibleRequest({ ...args, profile })
 }
 
 /**
@@ -942,7 +853,7 @@ export async function callBackgroundModel({
   const candidates = resolveModelFailoverConfigs({ modelName: selectedModel, env: runtimeEnv })
   return runWithProviderFailover(candidates, async (candidate) => {
     const profile = profileForConfig(candidate, runtimeEnv)
-    const { url, init } = buildOpenAICompatibleRequest({
+    const { url, init } = buildModelProviderRequest({
       config: candidate,
       messages,
       stream: false,
@@ -971,8 +882,10 @@ export async function callBackgroundModel({
         error.retryAfter = response.headers?.get?.('retry-after') ?? null
         throw error
       }
-      recordUsage(candidate.modelName, extractUsage(data))
-      return parseOpenAICompatibleResponse(data)
+      const parsed = parseModelProviderResponse(data, profile)
+      recordUsage(candidate.modelName, parsed.usage)
+      if (!parsed.content) throw new Error('模型返回为空，请检查模型名称或端点响应格式。')
+      return parsed.content
     }, {
       signal,
       onRetry: ({ attempt, delayMs, error }) => {
@@ -1011,7 +924,7 @@ export async function callBackgroundModelWithTools({
   const candidates = resolveModelFailoverConfigs({ modelName: selectedModel, env: runtimeEnv })
   return runWithProviderFailover(candidates, async (candidate) => {
     const profile = profileForConfig(candidate, runtimeEnv)
-    const { url, init } = buildOpenAICompatibleRequest({
+    const { url, init } = buildModelProviderRequest({
       config: candidate,
       messages,
       stream: false,
@@ -1042,12 +955,12 @@ export async function callBackgroundModelWithTools({
         error.retryAfter = response.headers?.get?.('retry-after') ?? null
         throw error
       }
-      const usage = extractUsage(data)
+      const parsed = parseModelProviderResponse(data, profile)
+      const usage = parsed.usage
       recordUsage(candidate.modelName, usage)
-      const msg = data?.choices?.[0]?.message || {}
       return {
-        content: msg.content || '',
-        toolCalls: Array.isArray(msg.tool_calls) ? msg.tool_calls : [],
+        content: parsed.content,
+        toolCalls: parsed.toolCalls,
         usage,
         modelName: candidate.modelName,
         costUsd: calculateModelCostUsd({ modelName: candidate.modelName, usage, env: runtimeEnv }),
@@ -1147,7 +1060,23 @@ export async function* streamOpenAICompatible({
   onFirstByte = null,
 }) {
   const profile = profileForConfig(config, env)
-  const { url, init } = buildOpenAICompatibleRequest({ config, messages, stream: true, tools, toolChoice, profile })
+  if (!profile.supportsStreaming) {
+    yield* requestNonStreamingAsEvents({
+      config,
+      messages,
+      fetchImpl,
+      tools,
+      toolChoice,
+      externalSignal,
+      env,
+      profile,
+      onFirstByte,
+      buildRequest: buildModelProviderRequest,
+      createTimeoutError: modelTimeoutError,
+    })
+    return
+  }
+  const { url, init } = buildModelProviderRequest({ config, messages, stream: true, tools, toolChoice, profile })
   const controller = new AbortController()
 
   let timedOutPhase = null
@@ -1203,6 +1132,9 @@ export async function* streamOpenAICompatible({
     // ★ tool_call 增量合并:OpenAI 流式协议每个 chunk 给 tool_calls[i].function.arguments 的片段,需要按 index 累加
     const toolCallAcc = new Map() // index -> { id, name, arguments }
     const readyToolCallIndexes = new Set()
+    const nativeStreamState = isNativeProviderKind(profile.kind)
+      ? createNativeProviderStreamState(profile.kind)
+      : null
     let finishReason = null
     // 思考累计字数 + 上限(0 = 不限)。见下面 REASONING_RUNAWAY 的注释。
     let reasoningChars = 0
@@ -1234,6 +1166,10 @@ export async function* streamOpenAICompatible({
         if (!trimmed.startsWith('data: ')) continue
         const payload = trimmed.slice(6)
         if (payload === '[DONE]') {
+          if (nativeStreamState) {
+            for (const event of finishNativeProviderStream(nativeStreamState)) yield event
+            return
+          }
           // 流末尾:把累积的 tool_calls 一次性吐出
           if (toolCallAcc.size > 0) {
             const calls = [...toolCallAcc.entries()]
@@ -1253,6 +1189,24 @@ export async function* streamOpenAICompatible({
           // 只吞 JSON 解析失败。业务异常（尤其 REASONING_RUNAWAY）必须向外传播。
           continue
         }
+          if (nativeStreamState) {
+            const nativeEvents = consumeNativeProviderStreamPayload(chunk, nativeStreamState)
+            for (const event of nativeEvents) {
+              if (event.type === 'reasoning' && event.delta) {
+                reasoningChars += event.delta.length
+                if (reasoningCharLimit > 0 && reasoningChars > reasoningCharLimit) {
+                  const error = new Error(`模型思考超过 ${Math.round(reasoningCharLimit / 1000)}k 字仍未给出正文，已中止以避免继续计费。`)
+                  error.code = 'REASONING_RUNAWAY'
+                  try { await reader.cancel(error) } catch { /* best effort */ }
+                  controller.abort(error)
+                  throw error
+                }
+              }
+              yield event
+            }
+            if (nativeStreamState.finished) return
+            continue
+          }
           // ★ usage 帧的 choices 是空数组,必须在 !choice 守卫之前取,
           // 否则永远被 continue 跳过 —— 这正是以前命中率无法测量的原因。
           const chunkUsage = extractUsage(chunk)
@@ -1323,6 +1277,10 @@ export async function* streamOpenAICompatible({
           }
       }
     }
+    if (nativeStreamState) {
+      for (const event of finishNativeProviderStream(nativeStreamState)) yield event
+      return
+    }
     // 兜底:某些后端不发 [DONE]
     if (toolCallAcc.size > 0) {
       const calls = [...toolCallAcc.entries()]
@@ -1373,8 +1331,27 @@ export async function handleModelProxyRequest(req, res) {
   }
 
   try {
-    const body = await readJson(req)
+    const testMode = req.url?.startsWith('/api/model/test')
     const requestUserId = authenticateRequest(req)
+    if (testMode && !requestUserId) {
+      sendJson(res, 401, { ok: false, error: 'Unauthorized' })
+      return
+    }
+    if (testMode) {
+      const maxRequests = Math.max(1, Math.min(60, Number(process.env.MODEL_TEST_RATE_MAX) || 10))
+      const rate = checkRateLimit({
+        key: `model_test:${requestUserId}`,
+        windowMs: 60 * 1000,
+        maxRequests,
+      })
+      res.setHeader('X-RateLimit-Limit', String(maxRequests))
+      res.setHeader('X-RateLimit-Remaining', String(rate.remaining))
+      if (!rate.allowed) {
+        sendJson(res, 429, { ok: false, error: 'Too many model test requests' })
+        return
+      }
+    }
+    const body = await readJson(req)
     const runtimeEnv = buildUserModelEnv({ userId: requestUserId, env: getRuntimeEnv() })
     const config = loadModelConfig(runtimeEnv)
     if (!config.configured) {
@@ -1386,7 +1363,6 @@ export async function handleModelProxyRequest(req, res) {
       return
     }
 
-    const testMode = req.url?.startsWith('/api/model/test')
     const useStream = body.stream === true
     let messages = testMode
       ? [{ role: 'user', content: 'Reply with only: pong' }]
@@ -1409,7 +1385,9 @@ export async function handleModelProxyRequest(req, res) {
       config,
       env: runtimeEnv,
     })
-    if (!testMode && hasVisionContent(messages) && !supportsVisionModel(selectedModel, runtimeEnv, config.baseUrl)) {
+    const requestConfig = resolveModelConfigForModel({ modelName: selectedModel, env: runtimeEnv })
+    const requestProfile = profileForConfig(requestConfig, runtimeEnv)
+    if (!testMode && hasVisionContent(messages) && !requestProfile.supportsVision) {
       const sessionForAssist = session || (authToken(req) ? getSessionByToken(authToken(req)) : null)
       const userIdForAssist = sessionForAssist?.user_id || null
       if (hasVisionAssistConfigured({ userId: userIdForAssist, env: runtimeEnv })) {
@@ -1438,8 +1416,6 @@ export async function handleModelProxyRequest(req, res) {
         res.setHeader('X-Vision-Fallback-Reason', 'assist_unavailable')
       }
     }
-    const requestConfig = resolveModelConfigForModel({ modelName: selectedModel, env: runtimeEnv })
-
     let token = ''
     let estimatedCost = 0
     let injectedMemoryIds = []
@@ -1589,7 +1565,7 @@ export async function handleModelProxyRequest(req, res) {
     const requiresVision = hasVisionContent(messages)
     const resolvedCandidates = resolveModelFailoverConfigs({ modelName: selectedModel, env: runtimeEnv })
     const requestCandidates = resolvedCandidates.filter((candidate) =>
-      !requiresVision || supportsVisionModel(candidate.modelName, runtimeEnv, candidate.baseUrl)
+      !requiresVision || profileForConfig(candidate, runtimeEnv).supportsVision
     )
     if (!requestCandidates.length) requestCandidates.push(requestConfig)
 
@@ -1834,7 +1810,7 @@ export async function handleModelProxyRequest(req, res) {
         throw creditError
       }
       const candidateProfile = profileForConfig(candidate, runtimeEnv)
-      const { url, init } = buildOpenAICompatibleRequest({
+      const { url, init } = buildModelProviderRequest({
         config: candidate,
         messages,
         env: runtimeEnv,
@@ -1862,7 +1838,8 @@ export async function handleModelProxyRequest(req, res) {
         }
         return parsed
       })
-      const usage = extractUsage(data)
+      const parsed = parseModelProviderResponse(data, candidateProfile)
+      const usage = parsed.usage
       recordUsage(candidate.modelName, usage)
       const actualCost = usage
         ? calculateChatCostFromUsage({
@@ -1871,7 +1848,8 @@ export async function handleModelProxyRequest(req, res) {
             config: loadBillingConfig(getRuntimeEnv()),
           })
         : candidateCost
-      return { reply: parseOpenAICompatibleResponse(data), modelName: candidate.modelName, cost: actualCost }
+      if (!parsed.content) throw new Error('模型返回为空，请检查模型名称或端点响应格式。')
+      return { reply: parsed.content, modelName: candidate.modelName, cost: actualCost }
     })
     const reply = completion.reply
     const responseModel = completion.modelName

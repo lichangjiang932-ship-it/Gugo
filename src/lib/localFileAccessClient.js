@@ -17,6 +17,8 @@ async function parse(response) {
     error.path = data?.error?.path
     error.retryable = data?.error?.retryable
     error.hint = data?.error?.hint
+    error.suggestGrantPath = data?.error?.suggestGrantPath
+    error.requiredAccessMode = data?.error?.requiredAccessMode
     throw error
   }
   return data
@@ -48,6 +50,18 @@ export async function setAllFilesAccessApi(enabled) {
     body: JSON.stringify({
       enabled,
       confirmation: enabled ? 'ALLOW_ALL_LOCAL_FILES' : undefined,
+    }),
+  }))
+}
+
+export async function setWorkspaceTrustApi({ path, trusted }) {
+  return parse(await fetch('/api/local-files/workspace-trust', {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify({
+      path,
+      trusted,
+      confirmation: trusted ? 'TRUST_WORKSPACE_CONFIG' : undefined,
     }),
   }))
 }

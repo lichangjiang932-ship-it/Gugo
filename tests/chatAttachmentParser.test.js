@@ -24,3 +24,27 @@ test('chat attachment parser returns localized unsupported-format errors', async
   assert.equal(attachment.kind, 'file')
   assert.equal(attachment.error, 'unsupported-localized')
 })
+
+test('chat attachment parser keeps PDF data and extracted text together', async () => {
+  const OriginalFileReader = globalThis.FileReader
+  globalThis.FileReader = class {
+    readAsDataURL() {
+      this.result = 'data:application/pdf;base64,JVBERg=='
+      this.onload()
+    }
+  }
+  try {
+    const source = new TextEncoder().encode('%PDF-1.4\nBT (Hello PDF) Tj ET')
+    const [attachment] = await parseChatAttachments([{
+      name: 'report.pdf',
+      size: source.byteLength,
+      type: 'application/pdf',
+      arrayBuffer: async () => source.buffer,
+    }])
+    assert.equal(attachment.kind, 'pdf')
+    assert.equal(attachment.dataUrl, 'data:application/pdf;base64,JVBERg==')
+    assert.match(attachment.text, /Hello PDF/)
+  } finally {
+    globalThis.FileReader = OriginalFileReader
+  }
+})

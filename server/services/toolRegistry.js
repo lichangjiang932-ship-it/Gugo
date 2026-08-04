@@ -1,4 +1,6 @@
 import { MEMORY_TOOL_SPECS } from '../utils/memoryTools.js'
+import { normalizeToolRiskMetadata } from '../utils/toolRiskMetadata.js'
+import { isReadOnlyShellCommand } from '../utils/bashGuard.js'
 /**
  * 服务端工具注册表（底座 A）
  *
@@ -476,6 +478,18 @@ const READ_ONLY_MODE_TOOLS = new Set([
   'request_clarification',
   'Agent',
 ])
+const BUILTIN_CONCURRENCY_SAFE_TOOLS = new Set([
+  'web_search',
+  'fetch_url',
+  'list_directory',
+  'read_file',
+  'grep_code',
+  'find_symbol',
+  'list_imports',
+  'git_status',
+  'git_diff',
+  'connected_app_list',
+])
 const CODE_MODE_TOOLS = [
   'read_file',
   'write_file',
@@ -497,9 +511,9 @@ const CODE_MODE_TOOLS = [
 // origin: 'mcp' | 'skill' | 'subagent'
 const dynamicTools = new Map()
 
-export function registerDynamicTool({ name, origin, source = null, spec, exec = null }) {
+export function registerDynamicTool({ name, origin, source = null, spec, exec = null, metadata = null }) {
   if (!name || !spec) throw new Error('registerDynamicTool 缺少 name/spec')
-  dynamicTools.set(name, { origin, source, spec, exec })
+  dynamicTools.set(name, { origin, source, spec, exec, metadata: normalizeToolRiskMetadata(metadata, { origin }) })
 }
 
 export function unregisterDynamicTool(name) {
@@ -525,13 +539,33 @@ export function getDynamicTool(name) {
   return dynamicTools.get(name) || null
 }
 
+export function getToolMetadata(name, { args = {} } = {}) {
+  const dynamic = getDynamicTool(name)
+  if (dynamic?.metadata) return dynamic.metadata
+  if (!getBuiltinSpec(name)) return normalizeToolRiskMetadata(null, { origin: 'unknown' })
+  const isReadOnly = name === 'bash_exec'
+    ? isReadOnlyShellCommand(args?.command)
+    : READ_ONLY_MODE_TOOLS.has(name)
+  const riskClass = isReadOnly
+    ? 'read'
+    : (['write_file', 'edit_file', 'apply_patch', 'multi_edit'].includes(name) ? 'write_local'
+        : name === 'bash_exec' ? 'exec' : 'external')
+  return normalizeToolRiskMetadata({
+    riskClass,
+    isReadOnly,
+    isConcurrencySafe: (name === 'bash_exec' && isReadOnly) || BUILTIN_CONCURRENCY_SAFE_TOOLS.has(name),
+    interruptBehavior: isReadOnly ? 'cancel' : 'block',
+    isDestructive: !isReadOnly,
+  }, { origin: 'builtin' })
+}
+
 export function listAllSpecs() {
   const out = []
   for (const [name, spec] of Object.entries(BUILTIN_SPECS)) {
-    out.push({ origin: 'builtin', source: null, name, tool: spec })
+    out.push({ origin: 'builtin', source: null, name, tool: spec, metadata: getToolMetadata(name) })
   }
   for (const [name, info] of dynamicTools) {
-    out.push({ origin: info.origin, source: info.source, name, tool: info.spec })
+    out.push({ origin: info.origin, source: info.source, name, tool: info.spec, metadata: info.metadata })
   }
   // ★ 缓存: 按 name 稳定排序后再返回。dynamicTools 是 Map,按插入序迭代 ——
   // MCP / 连接器的注册顺序随进程重启和连接时序变化,工具列表一抖,
@@ -556,9 +590,7 @@ export function resolveSpecsForMode(mode = 'chat', { subagentWhitelist = null } 
   const all = listAllSpecs()
   if (mode === 'plan') {
     return all.filter((s) => {
-      if (s.origin === 'builtin') return READ_ONLY_MODE_TOOLS.has(s.name)
-      // 动态工具：MCP 类的 readOnly hint 来自 source 注册时；这里默认放过
-      return false
+      return s.metadata?.isReadOnly === true
     })
   }
   if (mode === 'code') {

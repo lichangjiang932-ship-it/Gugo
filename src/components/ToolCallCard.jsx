@@ -1,5 +1,6 @@
 import { memo, useState } from 'react'
 import { Search, Globe, ChevronDown, ChevronRight, CheckCircle2, XCircle, Loader2, FileText, Presentation, Table2, Code2, PieChart, Image, Bot, FolderOpen, FileEdit, Terminal, GitBranch, Diff, CheckSquare, Layers } from 'lucide-react'
+import { useT } from '../i18n/I18nProvider.jsx'
 
 const ICONS = {
   web_search: Search,
@@ -60,11 +61,23 @@ function summarizeArgs(name, argsJson) {
   return JSON.stringify(args).slice(0, 80)
 }
 
+function authorizationLabel(authorization, t) {
+  if (!authorization || typeof authorization !== 'object') return ''
+  if (authorization.kind === 'standing_rule') {
+    return authorization.scope
+      ? t('permissionsDashboard.authorizationStandingScope', { scope: authorization.scope })
+      : t('permissionsDashboard.authorizationStanding')
+  }
+  return authorization.kind ? t('permissionsDashboard.authorizationKind', { kind: authorization.kind }) : ''
+}
+
 function ToolCallCard({ call }) {
+  const { t } = useT()
   const [open, setOpen] = useState(false)
   const Icon = ICONS[call.name] || Search
   const label = LABELS[call.name] || call.name
   const summary = summarizeArgs(call.name, call.arguments)
+  const authorization = authorizationLabel(call.approvalAuthorization, t)
 
   let statusIcon = <Loader2 className="w-3.5 h-3.5 animate-spin text-ember" />
   let statusText = '执行中'
@@ -95,6 +108,11 @@ function ToolCallCard({ call }) {
           <span className="text-[10px]">{statusText}</span>
         </span>
       </button>
+      {authorization && (
+        <div className="border-t border-emerald-600/15 bg-emerald-50/60 px-2.5 py-1 font-mono text-[9px] text-emerald-700" title={authorization}>
+          {authorization}
+        </div>
+      )}
       {open && (
         <div className="space-y-1.5 border-t border-ink/10 bg-paper-2/40 p-2.5">
           <div>

@@ -5,6 +5,7 @@ import { authenticateRequest } from '../middleware.js'
 import { readJson, sendJson } from '../utils.js'
 import { resolveAuthorizedLocalPath } from '../services/localFileAccessService.js'
 import { getRuntimeEnv } from '../utils/runtimeEnv.js'
+import { assertWorkspaceCapability } from '../services/workspaceTrustService.js'
 
 const MAX_OUTPUT = 1024 * 1024
 const DEFAULT_TIMEOUT = 60_000
@@ -21,15 +22,29 @@ function workspaceRoot(env = getRuntimeEnv()) {
   return path.resolve(env.WORKSPACE_ROOT?.trim() || process.cwd())
 }
 
-function getRoot({ userId = null, cwd: rawCwd = null, env = getRuntimeEnv() } = {}) {
+function getRoot({
+  userId = null,
+  cwd: rawCwd = null,
+  env = getRuntimeEnv(),
+  write = false,
+  capabilities = ['git'],
+} = {}) {
   const requestedPath = rawCwd == null || rawCwd === '' ? workspaceRoot(env) : rawCwd
   const resolved = resolveAuthorizedLocalPath({
     userId,
     rawPath: requestedPath,
-    write: false,
+    write,
     allowWorkspace: true,
   })
   if (!fs.statSync(resolved.fullPath).isDirectory()) throw badReq('cwd must be a directory')
+  for (const capability of capabilities) {
+    assertWorkspaceCapability({
+      userId,
+      rootPath: resolved.rootPath || resolved.fullPath,
+      capability,
+      env,
+    })
+  }
   return resolved.fullPath
 }
 
@@ -174,7 +189,7 @@ export async function gitDiffTool({ path: rawPath, cwd: rawCwd, staged = false, 
 export async function runProjectCheckTool({ check, cwd: rawCwd, userId = null } = {}) {
   const env = getRuntimeEnv()
   requireGitEnabled(env)
-  const root = getRoot({ userId, cwd: rawCwd, env })
+  const root = getRoot({ userId, cwd: rawCwd, env, write: true, capabilities: ['git', 'shell'] })
   const name = String(check || '').trim()
   if (!ALLOWED_CHECKS.has(name)) {
     throw badReq('run_project_check only supports lint, test, build')
@@ -210,7 +225,7 @@ function validateSelectedFiles(files, statusFiles) {
 export async function gitCommitTool({ message, files, cwd: rawCwd, userId = null } = {}) {
   const env = getRuntimeEnv()
   requireMutationEnabled(env)
-  const root = getRoot({ userId, cwd: rawCwd, env })
+  const root = getRoot({ userId, cwd: rawCwd, env, write: true, capabilities: ['gitMutation'] })
   const msg = String(message || '').trim()
   if (msg.length < 3 || msg.length > 200) throw badReq('commit message must be 3-200 characters')
   const statusFiles = await currentStatusFiles(root)
@@ -231,7 +246,7 @@ export async function gitCommitTool({ message, files, cwd: rawCwd, userId = null
 export async function gitPushTool({ force = false, cwd: rawCwd, userId = null } = {}) {
   const env = getRuntimeEnv()
   requireMutationEnabled(env)
-  const root = getRoot({ userId, cwd: rawCwd, env })
+  const root = getRoot({ userId, cwd: rawCwd, env, write: true, capabilities: ['gitMutation'] })
   if (force) throw badReq('force push is not allowed')
   const branch = await currentBranch(root)
   if (!branch || branch === 'HEAD') throw badReq('cannot push detached HEAD')
@@ -253,7 +268,7 @@ export async function gitPushTool({ force = false, cwd: rawCwd, userId = null } 
 export async function gitRollbackTool({ commit, cwd: rawCwd, userId = null } = {}) {
   const env = getRuntimeEnv()
   requireMutationEnabled(env)
-  const root = getRoot({ userId, cwd: rawCwd, env })
+  const root = getRoot({ userId, cwd: rawCwd, env, write: true, capabilities: ['gitMutation'] })
   const expected = String(commit || '').trim()
   if (!/^[0-9a-f]{7,40}$/i.test(expected)) {
     throw badReq('rollback commit must be a 7-40 character hexadecimal hash')
@@ -321,7 +336,18 @@ export async function handleGitWorkbenchRequest(req, res) {
     else return sendJson(res, 404, { ok: false, error: 'not found' })
     return sendJson(res, 200, result)
   } catch (err) {
-    return sendJson(res, err?.statusCode || 500, { ok: false, error: err?.message || 'git workbench failed', result: err?.result })
+    const status = err?.statusCode || 500
+    return sendJson(res, status, {
+      ok: false,
+      code: err?.code || 'GIT_WORKBENCH_FAILED',
+      error: err?.message || 'git workbench failed',
+      retryable: err?.retryable ?? ![401, 403, 404].includes(status),
+      result: err?.result,
+      ...(err?.path ? { path: err.path } : {}),
+      ...(err?.hint ? { hint: err.hint } : {}),
+      ...(err?.suggestGrantPath ? { suggestGrantPath: err.suggestGrantPath } : {}),
+      ...(err?.requiredAccessMode ? { requiredAccessMode: err.requiredAccessMode } : {}),
+    })
   }
 }
 

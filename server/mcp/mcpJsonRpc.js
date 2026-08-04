@@ -49,12 +49,20 @@ export function buildToolsListRequest() {
   return { jsonrpc: '2.0', id: nextRequestId(), method: 'tools/list', params: {} }
 }
 
-export function buildToolsCallRequest(name, args) {
+export function buildToolsCallRequest(name, args, { idempotencyKey, toolCallId } = {}) {
+  const meta = {
+    ...(idempotencyKey ? { 'gugo/idempotencyKey': idempotencyKey } : {}),
+    ...(toolCallId ? { 'gugo/toolCallId': toolCallId } : {}),
+  }
   return {
     jsonrpc: '2.0',
     id: nextRequestId(),
     method: 'tools/call',
-    params: { name, arguments: args || {} },
+    params: {
+      name,
+      arguments: args || {},
+      ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}),
+    },
   }
 }
 

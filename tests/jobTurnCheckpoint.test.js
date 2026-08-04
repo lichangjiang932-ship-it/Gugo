@@ -32,27 +32,67 @@ function call(id, name, args, checkpointStatus = 'pending') {
 }
 
 test('v22 checkpoint store is durable and isolated by job, step, and user', () => {
+  const jobId = `checkpoint-job-${process.pid}-${Date.now()}`
+  const stepId = `checkpoint-step-${process.pid}-${Date.now()}`
   assert.equal(getSchemaVersion(), DB_SCHEMA_VERSION)
-  createJob({ id: 'checkpoint-job', userId: alice, title: 'resume', prompt: 'resume' })
-  appendJobSteps('checkpoint-job', [{ id: 'checkpoint-step', title: 'step', kind: 'execute' }])
+  createJob({ id: jobId, userId: alice, title: 'resume', prompt: 'resume' })
+  appendJobSteps(jobId, [{ id: stepId, title: 'step', kind: 'execute' }])
 
   const saved = saveJobTurnCheckpoint({
-    jobId: 'checkpoint-job',
-    stepId: 'checkpoint-step',
+    jobId,
+    stepId,
     userId: alice,
     state: { messages: [{ role: 'user', content: 'verbatim' }], toolCalls: [] },
   })
   assert.equal(saved.state.version, 1)
   assert.equal(saved.state.messages[0].content, 'verbatim')
-  assert.equal(getJobTurnCheckpoint({ jobId: 'checkpoint-job', stepId: 'checkpoint-step', userId: bob }), null)
+  assert.equal(getJobTurnCheckpoint({ jobId, stepId, userId: bob }), null)
   assert.equal(saveJobTurnCheckpoint({
-    jobId: 'checkpoint-job',
-    stepId: 'checkpoint-step',
+    jobId,
+    stepId,
     userId: bob,
     state: { messages: [] },
   }), null)
-  assert.equal(deleteJobTurnCheckpoint({ jobId: 'checkpoint-job', stepId: 'checkpoint-step', userId: bob }), 0)
-  assert.ok(getJobTurnCheckpoint({ jobId: 'checkpoint-job', stepId: 'checkpoint-step', userId: alice }))
+  assert.equal(deleteJobTurnCheckpoint({ jobId, stepId, userId: bob }), 0)
+  assert.ok(getJobTurnCheckpoint({ jobId, stepId, userId: alice }))
+})
+
+test('new tool calls persist and receive a stable idempotency key', async () => {
+  const savedStates = []
+  const executions = []
+  let modelCalls = 0
+
+  const result = await runToolsLoop({
+    job: { id: 'fresh-key-job', userId: alice },
+    step: { id: 'fresh-key-step' },
+    messages: [{ role: 'user', content: 'read once' }],
+    saveCheckpoint: async (state) => {
+      savedStates.push(structuredClone(state))
+      return { state }
+    },
+    executeTool: async ({ toolCallId, idempotencyKey }) => {
+      executions.push({ toolCallId, idempotencyKey })
+      return { ok: true }
+    },
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'fresh-read',
+            function: { name: 'read_file', arguments: '{"path":"README.md"}' },
+          }],
+        }
+      }
+      return { content: 'done', toolCalls: [] }
+    },
+  })
+
+  const expectedKey = 'job:fresh-key-job:step:fresh-key-step:tool:fresh-read'
+  assert.equal(result.text, 'done')
+  assert.deepEqual(executions, [{ toolCallId: 'fresh-read', idempotencyKey: expectedKey }])
+  assert.equal(savedStates.find((state) => state.toolCalls.length > 0).toolCalls[0].idempotencyKey, expectedKey)
 })
 
 test('resume executes only unanswered read calls and keeps canonical tool-result order', async () => {
@@ -89,8 +129,8 @@ test('resume executes only unanswered read calls and keeps canonical tool-result
       checkpoint = structuredClone(state)
       return { state: checkpoint }
     },
-    executeTool: async ({ args }) => {
-      executed.push(args.path)
+    executeTool: async ({ args, toolCallId, idempotencyKey }) => {
+      executed.push({ path: args.path, toolCallId, idempotencyKey })
       return { ok: true, path: args.path }
     },
     runModel: async ({ messages }) => {
@@ -101,7 +141,11 @@ test('resume executes only unanswered read calls and keeps canonical tool-result
   })
 
   assert.equal(result.text, 'resumed')
-  assert.deepEqual(executed, ['pending.txt'])
+  assert.deepEqual(executed, [{
+    path: 'pending.txt',
+    toolCallId: 'read-pending',
+    idempotencyKey: 'job:resume-read-job:step:resume-read-step:tool:read-pending',
+  }])
   assert.equal(modelCalls, 1, 'the persisted model turn must not be requested again')
   assert.deepEqual(toolResultIds, ['read-done', 'read-pending'])
   assert.equal(checkpoint.final.text, 'resumed')
@@ -127,6 +171,7 @@ test('resume never replays a side-effecting call left in executing state', async
   }
   let executeCount = 0
   let toolResult = null
+  const savedStates = []
 
   const result = await runToolsLoop({
     job: { id: 'resume-write-job', userId: alice },
@@ -135,6 +180,7 @@ test('resume never replays a side-effecting call left in executing state', async
     loadCheckpoint: async () => ({ state: checkpoint }),
     saveCheckpoint: async (state) => {
       checkpoint = structuredClone(state)
+      savedStates.push(checkpoint)
       return { state: checkpoint }
     },
     executeTool: async () => {
@@ -151,6 +197,65 @@ test('resume never replays a side-effecting call left in executing state', async
   assert.equal(executeCount, 0)
   assert.equal(toolResult.code, 'tool_execution_outcome_unknown')
   assert.equal(toolResult.requiresUserVerification, true)
+  assert.equal(
+    savedStates.find((state) => state.toolCalls.length > 0).toolCalls[0].idempotencyKey,
+    'job:resume-write-job:step:resume-write-step:tool:write-uncertain',
+  )
+})
+
+test('an explicitly idempotent executor safely resumes an executing call with the same key and args', async () => {
+  const expectedKey = 'job:idempotent-job:step:idempotent-step:tool:write-retry'
+  let checkpoint = {
+    messages: [
+      { role: 'user', content: 'write once' },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'write-retry',
+          type: 'function',
+          function: { name: 'write_file', arguments: '{"path":"original.txt","content":"once"}' },
+        }],
+      },
+    ],
+    toolCalls: [{
+      ...call('write-retry', 'write_file', { path: 'original.txt', content: 'once' }, 'executing'),
+      checkpointApprovalId: 'approval-resolved',
+      checkpointExecutionArgs: { path: 'hook-rewritten.txt', content: 'once' },
+      idempotencyKey: expectedKey,
+    }],
+    artifactIds: [],
+    iterations: 0,
+  }
+  const executions = []
+  const executeTool = async ({ args, toolCallId, idempotencyKey }) => {
+    executions.push({ args, toolCallId, idempotencyKey })
+    return { ok: true, path: args.path }
+  }
+  executeTool.supportsIdempotentResume = ({ name, idempotencyKey }) => (
+    name === 'write_file' && idempotencyKey === expectedKey
+  )
+
+  const result = await runToolsLoop({
+    job: { id: 'idempotent-job', userId: alice },
+    step: { id: 'idempotent-step' },
+    messages: [],
+    loadCheckpoint: async () => ({ state: checkpoint }),
+    saveCheckpoint: async (state) => {
+      checkpoint = structuredClone(state)
+      return { state: checkpoint }
+    },
+    executeTool,
+    runModel: async () => ({ content: 'resumed safely', toolCalls: [] }),
+  })
+
+  assert.equal(result.text, 'resumed safely')
+  assert.deepEqual(executions, [{
+    args: { path: 'hook-rewritten.txt', content: 'once' },
+    toolCallId: 'write-retry',
+    idempotencyKey: expectedKey,
+  }])
+  assert.equal(checkpoint.final.text, 'resumed safely')
 })
 
 test('a final response checkpoint returns without another model request', async () => {

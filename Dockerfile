@@ -26,6 +26,7 @@ COPY package*.json ./
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY server ./server
+COPY shared ./shared
 COPY .env.example .env.example
 
 # Data volume mount point
@@ -42,4 +43,4 @@ COPY scripts/healthcheck.js ./scripts/healthcheck.js
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
   CMD node scripts/healthcheck.js
 
-CMD ["node", "server/appServer.js"]
+CMD ["node", "server/start.js"]

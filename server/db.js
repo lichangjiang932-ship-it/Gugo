@@ -1,8 +1,13 @@
 import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
+import {
+  LATEST_SCHEMA_VERSION,
+  hasColumn,
+  runSchemaMigrations,
+} from './migrations/index.js'
 
-export const DB_SCHEMA_VERSION = 28
+export const DB_SCHEMA_VERSION = LATEST_SCHEMA_VERSION
 
 const DEFAULT_DATA_DIR = path.join(process.cwd(), 'server-data')
 
@@ -36,11 +41,6 @@ export function getDb() {
   return _db
 }
 
-function hasColumn(db, table, column) {
-  const rows = db.prepare(`PRAGMA table_info(${table})`).all()
-  return rows.some((row) => row.name === column)
-}
-
 function ensureUserPasswordColumns(db) {
   if (!hasColumn(db, 'users', 'password_hash')) {
     db.exec('ALTER TABLE users ADD COLUMN password_hash TEXT')
@@ -53,51 +53,52 @@ function ensureUserPasswordColumns(db) {
   }
 }
 
-function getSchemaVersionInternal(db) {
-  const row = db.prepare('SELECT value FROM meta WHERE key = ?').get('schema_version')
-  return row ? Number(row.value) : 0
-}
-
 function setSchemaVersionInternal(db, version) {
   db.prepare(
     'INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
   ).run('schema_version', String(version))
 }
 
+// Historical definitions remain inline to avoid destabilizing existing upgrade
+// paths, while the shared registry owns ordering and version advancement.
+const LEGACY_SCHEMA_MIGRATIONS = [
+  migrateToV2,
+  migrateToV3,
+  migrateToV4,
+  migrateToV5,
+  migrateToV6,
+  migrateToV7,
+  migrateToV8,
+  migrateToV9,
+  migrateToV10,
+  migrateToV11,
+  migrateToV12,
+  migrateToV13,
+  migrateToV14,
+  migrateToV15,
+  migrateToV16,
+  migrateToV17,
+  migrateToV18,
+  migrateToV19,
+  migrateToV20,
+  migrateToV21,
+  migrateToV22,
+  migrateToV23,
+  migrateToV24,
+  migrateToV25,
+  migrateToV26,
+  migrateToV27,
+  migrateToV28,
+  migrateToV29,
+  migrateToV30,
+].map((up, index) => ({ version: index + 2, up }))
 function runMigrations(db) {
   // ★ 防御性：某些旧 DB 直接从更高版本起步（meta.schema_version=13 但 users 表是 v0 的样子），
   // 导致 v3 的 ALTER TABLE 永远不会重跑，setUserPassword 会抛 "no such column: password_hash"。
   // 这里独立于 schema_version 检查，缺什么列就补什么列，重复执行安全。
   ensureUserPasswordColumns(db)
   ensureUserToolPermissionsTable(db)
-  const version = getSchemaVersionInternal(db)
-  if (version < 2) migrateToV2(db)
-  if (getSchemaVersionInternal(db) < 3) migrateToV3(db)
-  if (getSchemaVersionInternal(db) < 4) migrateToV4(db)
-  if (getSchemaVersionInternal(db) < 5) migrateToV5(db)
-  if (getSchemaVersionInternal(db) < 6) migrateToV6(db)
-  if (getSchemaVersionInternal(db) < 7) migrateToV7(db)
-  if (getSchemaVersionInternal(db) < 8) migrateToV8(db)
-  if (getSchemaVersionInternal(db) < 9) migrateToV9(db)
-  if (getSchemaVersionInternal(db) < 10) migrateToV10(db)
-  if (getSchemaVersionInternal(db) < 11) migrateToV11(db)
-  if (getSchemaVersionInternal(db) < 12) migrateToV12(db)
-  if (getSchemaVersionInternal(db) < 13) migrateToV13(db)
-  if (getSchemaVersionInternal(db) < 14) migrateToV14(db)
-  if (getSchemaVersionInternal(db) < 15) migrateToV15(db)
-  if (getSchemaVersionInternal(db) < 16) migrateToV16(db)
-  if (getSchemaVersionInternal(db) < 17) migrateToV17(db)
-  if (getSchemaVersionInternal(db) < 18) migrateToV18(db)
-  if (getSchemaVersionInternal(db) < 19) migrateToV19(db)
-  if (getSchemaVersionInternal(db) < 20) migrateToV20(db)
-  if (getSchemaVersionInternal(db) < 21) migrateToV21(db)
-  if (getSchemaVersionInternal(db) < 22) migrateToV22(db)
-  if (getSchemaVersionInternal(db) < 23) migrateToV23(db)
-  if (getSchemaVersionInternal(db) < 24) migrateToV24(db)
-  if (getSchemaVersionInternal(db) < 25) migrateToV25(db)
-  if (getSchemaVersionInternal(db) < 26) migrateToV26(db)
-  if (getSchemaVersionInternal(db) < 27) migrateToV27(db)
-  if (getSchemaVersionInternal(db) < 28) migrateToV28(db)
+  runSchemaMigrations(db, { legacyMigrations: LEGACY_SCHEMA_MIGRATIONS })
   runReasonixMigrations(db)
 }
 
@@ -1176,10 +1177,9 @@ function migrateToV28(db) {
     setSchemaVersionInternal(db, 28)
   })()
 }
-
-/**
- * 重建 notifications 表,把 kind 的 CHECK 放宽到含 'approval'。数据全量搬迁。
- */
+function migrateToV29(db) { db.exec(`CREATE TABLE IF NOT EXISTS turn_events (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, session_id TEXT NOT NULL REFERENCES sessions(token) ON DELETE CASCADE, turn_id TEXT NOT NULL, sequence INTEGER NOT NULL, type TEXT NOT NULL, payload_json TEXT NOT NULL DEFAULT '{}', created_at INTEGER NOT NULL, UNIQUE(user_id, session_id, turn_id, sequence)); CREATE INDEX IF NOT EXISTS idx_turn_events_replay ON turn_events(user_id, session_id, turn_id, sequence);`); setSchemaVersionInternal(db, 29) }
+function migrateToV30(db) { db.exec(`CREATE TABLE IF NOT EXISTS turn_artifacts (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, session_id TEXT NOT NULL REFERENCES sessions(token) ON DELETE CASCADE, turn_id TEXT NOT NULL, type TEXT NOT NULL, title TEXT NOT NULL, url TEXT NOT NULL, filename TEXT NOT NULL, created_at INTEGER NOT NULL); CREATE INDEX IF NOT EXISTS idx_turn_artifacts_turn ON turn_artifacts(user_id, session_id, turn_id, created_at); CREATE UNIQUE INDEX IF NOT EXISTS idx_turn_artifacts_filename ON turn_artifacts(filename);`); setSchemaVersionInternal(db, 30) }
+/** 重建 notifications 表,把 kind 的 CHECK 放宽到含 'approval'。 */
 function widenNotificationKinds(db) {
   const sql = db
     .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='notifications'")

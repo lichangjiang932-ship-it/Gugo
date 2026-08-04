@@ -249,7 +249,7 @@ function loadArchive({ userId, recentMessages }) {
 export function buildSessionsBlock({ userId, sessionId, recentMessages = [] } = {}) {
   const normalizedMessages = (Array.isArray(recentMessages) ? recentMessages : []).slice(-64).map(normalizeRecentMessage)
   const archive = loadArchive({ userId, recentMessages: Array.isArray(recentMessages) ? recentMessages : [] })
-  if (!sessionId && !normalizedMessages.length && !archive?.summaryText) return EMPTY_RESULT
+  if (!normalizedMessages.length && !archive?.summaryText) return EMPTY_RESULT
 
   const normalizedArchive = archive
     ? {

@@ -26,6 +26,18 @@ const SENSITIVE_KEY_PATTERNS = [
 ]
 
 const REDACTED = '[REDACTED]'
+const OMITTED_FOR_STORAGE = '[OMITTED: local storage capacity]'
+const BULKY_CACHE_KEYS = new Set([
+  'base64',
+  'binary',
+  'bytes',
+  'dataUrl',
+  'data_url',
+  'previewHtml',
+  'raw',
+  'rawData',
+  'thumbnailDataUrl',
+])
 
 export function sanitizeForPersist(value, depth = 0) {
   // 防御性深度限制,避免环引用 / 异常深结构爆栈
@@ -46,6 +58,37 @@ export function sanitizeForPersist(value, depth = 0) {
 const isQuotaError = (err) =>
   err && (err.name === 'QuotaExceededError' || err.code === 22 || err.code === 1014 || /quota/i.test(err.message || ''))
 
+function compactCachePayload(value, depth = 0) {
+  if (depth > 12 || value == null || typeof value !== 'object') return value
+  if (Array.isArray(value)) return value.map((entry) => compactCachePayload(entry, depth + 1))
+  const next = {}
+  for (const [key, entry] of Object.entries(value)) {
+    if (BULKY_CACHE_KEYS.has(key) && (typeof entry === 'string' ? entry.length > 1024 : entry != null)) {
+      next[key] = OMITTED_FOR_STORAGE
+    } else if (key === 'reasoning' && typeof entry === 'string' && entry.length > 8_000) {
+      next[key] = `${entry.slice(0, 8_000)}\n${OMITTED_FOR_STORAGE}`
+    } else if (key === 'result' && typeof entry === 'string' && entry.length > 16_000) {
+      next[key] = `${entry.slice(0, 16_000)}\n${OMITTED_FOR_STORAGE}`
+    } else {
+      next[key] = compactCachePayload(entry, depth + 1)
+    }
+  }
+  return next
+}
+
+export function compactSnapshotMetadata(snapshot) {
+  return {
+    ...snapshot,
+    sessions: (snapshot.sessions || []).map((session) => ({
+      ...session,
+      messages: (session.messages || []).map((message) => ({
+        ...message,
+        ...(message.meta ? { meta: compactCachePayload(message.meta) } : {}),
+      })),
+    })),
+  }
+}
+
 export function persistWithDegradation(snapshot, setItem, storageKey = DEFAULT_STORAGE_KEY) {
   // ★ #35: 入口先做一遍敏感字段 redact
   let payload = sanitizeForPersist(snapshot)
@@ -55,35 +98,13 @@ export function persistWithDegradation(snapshot, setItem, storageKey = DEFAULT_S
   } catch (err) { if (!isQuotaError(err)) return { ok: false, level: 'error', error: err } }
 
   try {
-    payload = {
-      ...payload,
-      sessions: (payload.sessions || []).map((s) => ({
-        ...s,
-        messages: Array.isArray(s.messages) && s.messages.length > 50 ? s.messages.slice(-50) : s.messages,
-      })),
-    }
+    payload = compactSnapshotMetadata(payload)
     setItem(storageKey, JSON.stringify(payload))
-    return { ok: true, level: 'truncated-messages' }
-  } catch (err) { if (!isQuotaError(err)) return { ok: false, level: 'error', error: err } }
-
-  try {
-    const sessions = (payload.sessions || []).slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 5)
-    payload = { ...payload, sessions }
-    setItem(storageKey, JSON.stringify(payload))
-    return { ok: true, level: 'recent-sessions-only' }
-  } catch (err) { if (!isQuotaError(err)) return { ok: false, level: 'error', error: err } }
-
-  try {
-    payload = { ...payload, history: [] }
-    setItem(storageKey, JSON.stringify(payload))
-    return { ok: true, level: 'no-history' }
-  } catch (err) { if (!isQuotaError(err)) return { ok: false, level: 'error', error: err } }
-
-  try {
-    const minimal = { ...payload, sessions: [], history: [], tasks: [] }
-    setItem(storageKey, JSON.stringify(minimal))
-    return { ok: true, level: 'minimal' }
+    return { ok: true, level: 'compact-metadata', requiresUserAction: true }
   } catch (err) {
-    return { ok: false, level: 'error', error: err }
+    if (!isQuotaError(err)) return { ok: false, level: 'error', error: err }
+    // A failed setItem leaves the previous complete snapshot intact. Do not replace it
+    // with a transcript that silently drops messages or entire sessions.
+    return { ok: false, level: 'quota', error: err, requiresUserAction: true }
   }
 }

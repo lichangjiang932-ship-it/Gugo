@@ -39,6 +39,23 @@ test('阶段 6: memory agent_id 过滤 — agent 专属 vs 全局', async () => 
   const pickedNone = mem.selectActiveMemoriesForInjection({ userId: u })
   const titlesN = pickedNone.memories.map((m) => m.title)
   assert.deepStrictEqual(titlesN, ['global'])
+
+  const tied = [
+    pickedNone.memories[0],
+    mem.upsertMemory({ userId: u, type: 'user', title: 'global-tie-a', body: 'tie a' }),
+    mem.upsertMemory({ userId: u, type: 'user', title: 'global-tie-b', body: 'tie b' }),
+  ]
+  const tiedIds = tied.map((memory) => memory.id)
+  const expectedIds = [...tiedIds].sort()
+  mem.touchMemoryUsage(u, tiedIds)
+  const firstStableSelection = mem.selectActiveMemoriesForInjection({ userId: u }).memories
+  const firstStableOrder = firstStableSelection.map((memory) => memory.id)
+  mem.touchMemoryUsage(u, [...tiedIds].reverse())
+  const secondStableSelection = mem.selectActiveMemoriesForInjection({ userId: u }).memories
+  const secondStableOrder = secondStableSelection.map((memory) => memory.id)
+  assert.deepStrictEqual(firstStableOrder, expectedIds)
+  assert.deepStrictEqual(secondStableOrder, expectedIds)
+  assert.equal(mem.buildMemorySystemBlock(firstStableSelection), mem.buildMemorySystemBlock(secondStableSelection))
 })
 
 test('阶段 6: DB schema migration 干净，memories.agent_id 列存在', async () => {
@@ -49,6 +66,22 @@ test('阶段 6: DB schema migration 干净，memories.agent_id 列存在', async
   assert.ok(cols.includes('agent_id'), 'memories.agent_id 必须存在')
   const ver = db.prepare("SELECT value FROM meta WHERE key='schema_version'").get()
   assert.equal(Number(ver.value), dbMod.DB_SCHEMA_VERSION)
+})
+
+test('记忆系统块标注新鲜度并声明当前消息优先', async () => {
+  const mem = await import(`../server/services/memoryStore.js?fresh=${Date.now()}`)
+  const now = Date.UTC(2026, 7, 3)
+  const block = mem.buildMemorySystemBlock([
+    { type: 'user', title: '近期偏好', body: '近期内容', updatedAt: now - 5 * 24 * 60 * 60 * 1000 },
+    { type: 'project', title: '旧项目', body: '旧内容', updatedAt: now - 200 * 24 * 60 * 60 * 1000 },
+    { type: 'reference', title: '未知来源', body: '未知内容', updatedAt: null },
+  ], { now })
+
+  assert.match(block, /当前用户消息优先/)
+  assert.match(block, /近期偏好.*新鲜度：近期/)
+  assert.match(block, /旧项目.*新鲜度：陈旧，使用前核实/)
+  assert.match(block, /未知来源.*新鲜度：时间未知，使用前核实/)
+  assert.equal(mem.classifyMemoryFreshness(now - 40 * 24 * 60 * 60 * 1000, { now }).level, 'aging')
 })
 
 test('阶段 6: 删除 agent 后其记忆 agent_id SET NULL → 退回全局', async () => {

@@ -61,6 +61,30 @@ export async function disconnectMcpServerApi(id) {
   return jsonOk(resp)
 }
 
+export async function startMcpOAuthApi(id, config = {}) {
+  const resp = await fetch(`/api/mcp/servers/${encodeURIComponent(id)}/oauth/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(config),
+  })
+  return jsonOk(resp)
+}
+
+export async function getMcpOAuthStatusApi(id) {
+  const resp = await fetch(`/api/mcp/servers/${encodeURIComponent(id)}/oauth/status`, {
+    headers: authHeaders(),
+  })
+  return jsonOk(resp)
+}
+
+export async function disconnectMcpOAuthApi(id) {
+  const resp = await fetch(`/api/mcp/servers/${encodeURIComponent(id)}/oauth`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  })
+  return jsonOk(resp)
+}
+
 export async function getMcpCatalogApi() {
   const resp = await fetch('/api/mcp/catalog', { headers: authHeaders() })
   return jsonOk(resp)

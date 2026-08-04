@@ -8,6 +8,7 @@
  * 两者并存:先过静态开关(fsShellTools.assertToolPermitted),再过本策略。
  */
 import { checkBashCommandDanger } from './bashGuard.js'
+import { createHash } from 'node:crypto'
 
 export const APPROVAL_MODES = Object.freeze(['off', 'unattended', 'all'])
 export const DEFAULT_APPROVAL_MODE = 'unattended'
@@ -97,7 +98,11 @@ const NEVER = new Set(NEVER_APPROVE_TOOLS)
 const WRITE_INTENT_RE = /(^|_)(create|update|delete|remove|write|send|post|put|patch|publish|merge|close|comment|reply|invite|archive|move|rename|upload|execute|run|approve|pay|order|schedule)(_|$)/i
 
 const SAFE_HTTP_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
-const COMMAND_SCOPED_TOOLS = new Set(['bash_exec'])
+const SHELL_TOOLS = new Set(['bash_exec'])
+const TARGET_KEYS = Object.freeze([
+  'to', 'recipient', 'recipientEmail', 'email', 'channelId', 'channel', 'conversationId',
+  'repository', 'repo', 'owner', 'url', 'path', 'target', 'resourceId', 'id',
+])
 
 export function normalizeCommandPrefix(value) {
   return typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : ''
@@ -108,31 +113,46 @@ export function isSafeCommandPrefix(value) {
   return !!raw.trim() && !(/[;&|><`\r\n]|\$\(/.test(raw))
 }
 
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`
+  }
+  return JSON.stringify(value ?? null)
+}
+
+function normalizedTarget(args = {}) {
+  const safeArgs = args && typeof args === 'object' ? args : {}
+  const patchPaths = Array.isArray(safeArgs.changes)
+    ? safeArgs.changes.map((change) => str(change?.path).trim()).filter(Boolean).sort()
+    : []
+  if (patchPaths.length) return `target:paths=${patchPaths.join('|')}`
+  for (const key of TARGET_KEYS) {
+    const value = safeArgs[key]
+    if (typeof value === 'string' && value.trim()) return `target:${key}=${value.trim()}`
+    if (typeof value === 'number' && Number.isFinite(value)) return `target:${key}=${value}`
+  }
+  const fingerprint = createHash('sha256').update(stableJson(safeArgs)).digest('hex').slice(0, 24)
+  return `args:${fingerprint}`
+}
+
 export function buildRememberedGrant(toolName, args = {}) {
   const name = str(toolName).trim()
   if (!name) throw new Error('toolName is required')
-  if (!COMMAND_SCOPED_TOOLS.has(name)) return { toolName: name, commandPrefix: '' }
-  const raw = str(args?.command)
-  if (!isSafeCommandPrefix(raw)) {
-    throw new Error('This shell command cannot be remembered because it contains chaining, redirection, substitution, or a newline')
-  }
-  return { toolName: name, commandPrefix: normalizeCommandPrefix(raw) }
+  if (SHELL_TOOLS.has(name)) throw new Error('Shell tools cannot be remembered; approve each execution explicitly')
+  return { toolName: name, commandPrefix: normalizedTarget(args) }
 }
 
 export function matchesRememberedGrant(toolName, args = {}, grants = []) {
+  return !!findRememberedGrant(toolName, args, grants)
+}
+
+export function findRememberedGrant(toolName, args = {}, grants = []) {
   const name = str(toolName).trim()
-  if (!name || !Array.isArray(grants)) return false
-  if (!COMMAND_SCOPED_TOOLS.has(name)) {
-    return grants.some((grant) => grant?.toolName === name && !grant?.commandPrefix)
-  }
-  const raw = str(args?.command)
-  if (!isSafeCommandPrefix(raw)) return false
-  const command = normalizeCommandPrefix(raw)
-  return grants.some((grant) => {
-    if (grant?.toolName !== name || !isSafeCommandPrefix(grant.commandPrefix)) return false
-    const prefix = normalizeCommandPrefix(grant.commandPrefix)
-    return command === prefix || command.startsWith(`${prefix} `)
-  })
+  if (!name || !Array.isArray(grants)) return null
+  if (SHELL_TOOLS.has(name)) return null
+  const expected = buildRememberedGrant(name, args).commandPrefix
+  return grants.find((grant) => grant?.toolName === name && grant?.commandPrefix === expected) || null
 }
 
 function higher(a, b) {
@@ -179,7 +199,6 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
   const permissionMode = PERMISSION_MODES.includes(opts.permissionMode)
     ? opts.permissionMode
     : DEFAULT_PERMISSION_MODE
-  const remembered = Array.isArray(opts.rememberedTools) ? opts.rememberedTools : []
   const rememberedGrants = Array.isArray(opts.rememberedGrants) ? opts.rememberedGrants : []
   const safeArgs = args && typeof args === 'object' ? args : {}
 
@@ -209,6 +228,13 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
   let risk = APPROVAL_REQUIRED_TOOLS[name]
   let reason = null
 
+  const metadata = opts.metadata && typeof opts.metadata === 'object' ? opts.metadata : null
+  if (metadata) {
+    if (metadata.requiresApproval === false || metadata.riskClass === 'read') return { needsApproval: false, risk: 'low', reason: null }
+    risk = metadata.riskClass === 'exec' ? 'high' : 'medium'
+    reason = metadata.reason || (metadata.riskClass === 'write_local' ? '修改本地数据' : metadata.riskClass === 'exec' ? '执行外部工具' : '调用可能产生副作用的外部工具')
+  }
+
   if (!risk) {
     // 未知/动态工具(MCP、插件):名字像写操作就拦,读操作放行
     if (WRITE_INTENT_RE.test(name)) {
@@ -236,9 +262,18 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
   }
 
   // 用户对这个工具点过「总是允许」
-  if (name !== 'bash_exec' && remembered.includes(name)) return { needsApproval: false, risk, reason: null }
-  if (matchesRememberedGrant(name, safeArgs, rememberedGrants)) {
-    return { needsApproval: false, risk, reason: null }
+  const rememberedGrant = findRememberedGrant(name, safeArgs, rememberedGrants)
+  if (rememberedGrant) {
+    return {
+      needsApproval: false,
+      risk,
+      reason: null,
+      authorization: {
+        kind: 'standing_rule',
+        toolName: name,
+        scope: rememberedGrant.commandPrefix || '',
+      },
+    }
   }
 
   // ── 参数敏感度加权 ──

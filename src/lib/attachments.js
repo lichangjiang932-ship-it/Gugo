@@ -1,5 +1,5 @@
 export function formatAttachmentForPrompt(attachment) {
-  if (attachment.kind === 'text') {
+  if (attachment.kind === 'text' || attachment.kind === 'pdf') {
     return `\n\n[附件: ${attachment.name}, ${attachment.sizeKB} KB]\n\`\`\`\n${attachment.text}\n\`\`\``
   }
   const ext = attachment.name.split('.').pop()?.toLowerCase()
@@ -10,17 +10,24 @@ export function formatAttachmentForPrompt(attachment) {
 
 export function buildUserContentWithAttachments(prompt, attachments = []) {
   const textAttachments = attachments
-    .filter((item) => item.kind !== 'image')
+    .filter((item) => item.kind !== 'image' && item.kind !== 'pdf')
     .map(formatAttachmentForPrompt)
     .join('')
   const text = `${prompt || '请分析附件内容。'}${textAttachments}`
   const images = attachments.filter((item) => item.kind === 'image' && item.dataUrl)
-  if (!images.length) return text
+  const pdfs = attachments.filter((item) => item.kind === 'pdf')
+  if (!images.length && !pdfs.length) return text
   return [
     { type: 'text', text },
     ...images.map((item) => ({
       type: 'image_url',
       image_url: { url: item.dataUrl },
+    })),
+    ...pdfs.map((item) => ({
+      type: 'yma_pdf',
+      filename: item.name,
+      file_data: item.dataUrl,
+      fallback_text: formatAttachmentForPrompt(item).trim(),
     })),
   ]
 }

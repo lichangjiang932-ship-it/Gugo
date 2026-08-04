@@ -11,6 +11,8 @@ const definitions = [
   ['browser_screenshot', 'Capture the current page as PNG.', { fullPage: { type: 'boolean' } }, []],
 ]
 
+const MUTATING_TOOLS = new Set(['browser_open_url', 'browser_click', 'browser_type'])
+
 export function registerBrowserTools() {
   unregisterByOrigin('browser')
   for (const [name, description, properties, required] of definitions) {
@@ -18,6 +20,7 @@ export function registerBrowserTools() {
       name,
       origin: 'browser',
       source: 'local',
+      metadata: { riskClass: MUTATING_TOOLS.has(name) ? 'external' : 'read' },
       spec: { type: 'function', function: { name, description, parameters: { type: 'object', properties, required } } },
     })
   }

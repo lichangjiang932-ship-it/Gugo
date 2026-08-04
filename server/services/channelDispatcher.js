@@ -14,9 +14,35 @@ import { newSubagentRunId, runSubagent } from './subagentRuntime.js'
 const MAX_AGENT_CHAIN_DEPTH = 3
 
 let runtime = { runSubagent }
+const channelTurnQueues = new Map()
 
 export function configureChannelDispatcherForTests(nextRuntime = {}) {
   runtime = { runSubagent: nextRuntime.runSubagent || runSubagent }
+  channelTurnQueues.clear()
+}
+
+function channelQueueKey(userId, channelId) {
+  return `${userId}:${channelId}`
+}
+
+function enqueueChannelTurn({ userId, channelId }, task) {
+  const key = channelQueueKey(userId, channelId)
+  const previous = channelTurnQueues.get(key) || Promise.resolve()
+  let tracked
+  const run = previous.then(task)
+  tracked = run
+    .catch((err) => {
+      console.error('[channelDispatcher] queued agent turn failed:', err?.stack || err)
+    })
+    .finally(() => {
+      if (channelTurnQueues.get(key) === tracked) channelTurnQueues.delete(key)
+    })
+  channelTurnQueues.set(key, tracked)
+  return tracked
+}
+
+export function waitForChannelDispatcherIdleForTests({ userId, channelId }) {
+  return channelTurnQueues.get(channelQueueKey(userId, channelId)) || Promise.resolve()
 }
 
 function channelOwner(channelId) {
@@ -81,22 +107,54 @@ function buildPrompt({ channel, targetAgent, sourceMessage, cleanedText, recentM
   ].filter(Boolean).join('\n\n')
 }
 
+function mergeQueuedTranscript(snapshot, currentMessages) {
+  const transcript = [...snapshot]
+  const seen = new Set(transcript.map((message) => message.id))
+  for (const message of currentMessages) {
+    if (seen.has(message.id) || message.senderKind !== 'agent') continue
+    const parentIndex = transcript.findIndex((item) => item.id === message.parentMessageId)
+    if (parentIndex < 0) continue
+    let insertAt = parentIndex + 1
+    while (
+      insertAt < transcript.length
+      && transcript[insertAt].senderKind === 'agent'
+      && transcript[insertAt].parentMessageId === message.parentMessageId
+    ) insertAt += 1
+    transcript.splice(insertAt, 0, message)
+    seen.add(message.id)
+  }
+  return transcript.slice(-10)
+}
+
 function runAgentTurn({ userId, channelId, targetAgent, sourceMessage, cleanedText, fromAgentId = null }) {
-  const channel = getChannel({ userId, channelId })
-  if (!channel) return null
-  const recentMessages = listMessages({ userId, channelId, limit: 10 })
+  if (!getChannel({ userId, channelId })) return null
   const id = newSubagentRunId()
-  const prompt = buildPrompt({ channel, targetAgent, sourceMessage, cleanedText, recentMessages, fromAgentId })
-  const promise = runtime.runSubagent({
-    id,
-    userId,
-    type: 'general',
-    prompt,
-    description: `channel:${channel.name} -> ${targetAgent.name}`,
-    parentSessionId: `channel:${channelId}`,
-    parentMessageId: sourceMessage.id,
-  })
-  Promise.resolve(promise).then((run) => {
+  const queuedTranscript = listMessages({ userId, channelId, limit: 10 })
+  enqueueChannelTurn({ userId, channelId }, async () => {
+    const channel = getChannel({ userId, channelId })
+    const currentTarget = channel?.agents?.find((agent) => agent.id === targetAgent.id)
+    if (!channel || !currentTarget) return
+    const recentMessages = mergeQueuedTranscript(
+      queuedTranscript,
+      listMessages({ userId, channelId, limit: 50 }),
+    )
+    const prompt = buildPrompt({
+      channel,
+      targetAgent: currentTarget,
+      sourceMessage,
+      cleanedText,
+      recentMessages,
+      fromAgentId,
+    })
+    const run = await runtime.runSubagent({
+      id,
+      userId,
+      type: 'general',
+      prompt,
+      description: `channel:${channel.name} -> ${currentTarget.name}`,
+      parentSessionId: `channel:${channelId}`,
+      parentMessageId: sourceMessage.id,
+    })
     const resultText = String(run?.resultText || run?.result_text || '').trim()
     if (!resultText) return
     const latestChannel = getChannel({ userId, channelId })
@@ -106,22 +164,18 @@ function runAgentTurn({ userId, channelId, targetAgent, sourceMessage, cleanedTe
       userId,
       channelId,
       senderKind: 'agent',
-      senderId: targetAgent.id,
+      senderId: currentTarget.id,
       content: resultText,
       mentions: parsed.mentions,
       parentMessageId: sourceMessage.id,
     })
-    dispatchAgentMessage({
+    await dispatchAgentMessage({
       channelId,
       userId,
-      fromAgentId: targetAgent.id,
+      fromAgentId: currentTarget.id,
       text: resultText,
       parentMessageId: agentMessage.id,
-    }).catch((err) => {
-      console.error('[channelDispatcher] chained agent dispatch failed:', err?.stack || err)
     })
-  }).catch((err) => {
-    console.error('[channelDispatcher] subagent run failed:', err?.stack || err)
   })
   return id
 }

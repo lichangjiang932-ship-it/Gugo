@@ -40,6 +40,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { patchLimiter } from './rateLimiter.js'
 import { resolveAuthorizedLocalPath } from '../services/localFileAccessService.js'
+import { assertWorkspaceCapability } from '../services/workspaceTrustService.js'
 
 const MAX_PATCH_BYTES = 2 * 1024 * 1024
 const MAX_FILE_BYTES = 8 * 1024 * 1024
@@ -58,13 +59,35 @@ function badReq(msg, status = 400) {
 }
 
 function resolveInWorkspace(rawPath, { mustExist = false, userId = null } = {}) {
+  if (!userId) {
+    try {
+      return resolveAuthorizedLocalPath({
+        userId: null,
+        rawPath,
+        write: true,
+        allowMissing: !mustExist,
+        allowWorkspace: true,
+      })
+    } catch (error) {
+      if (error?.code === 'PATH_NOT_AUTHORIZED') {
+        throw badReq(`\u8def\u5f84\u8d8a\u754c: ${rawPath}`, 403)
+      }
+      throw error
+    }
+  }
   if (userId) {
-    return resolveAuthorizedLocalPath({
+    const resolved = resolveAuthorizedLocalPath({
       userId,
       rawPath,
       write: true,
       allowMissing: !mustExist,
     })
+    assertWorkspaceCapability({
+      userId,
+      rootPath: resolved.rootPath || getWorkspaceRoot(),
+      capability: 'fileSystemWrite',
+    })
+    return resolved
   }
   const root = getWorkspaceRoot()
   if (!rawPath || typeof rawPath !== 'string') throw badReq('path 非法')
@@ -106,6 +129,20 @@ function toRelative(absPath) {
   } catch {
     return absPath
   }
+}
+
+function sameResolvedPath(left, right) {
+  const a = path.normalize(left)
+  const b = path.normalize(right)
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+}
+
+function revalidatePlanPath(plan, { userId, mustExist = plan.op !== 'add' } = {}) {
+  const resolved = resolveInWorkspace(plan.rawPath, { mustExist, userId })
+  if (!sameResolvedPath(resolved.fullPath, plan.abs)) {
+    throw badReq(`path changed after validation: ${plan.rawPath}`, 409)
+  }
+  return resolved.fullPath
 }
 
 /* ─── parser ─── */
@@ -303,6 +340,7 @@ export async function applyPatchTool({ patch, dry_run = false, userId = null } =
       if (fs.existsSync(abs)) throw badReq(`Add File ${op.path}: 已存在,不能 add`, 409)
       plans.push({
         op: 'add',
+        rawPath: op.path,
         path: resolved.displayPath,
         abs,
         oldContent: null,
@@ -318,6 +356,7 @@ export async function applyPatchTool({ patch, dry_run = false, userId = null } =
       const oldContent = fs.readFileSync(abs, 'utf8')
       plans.push({
         op: 'delete',
+        rawPath: op.path,
         path: resolved.displayPath,
         abs,
         oldContent,
@@ -335,7 +374,7 @@ export async function applyPatchTool({ patch, dry_run = false, userId = null } =
       const newContent = applyHunks(oldContent, op.hunks, op.path)
       const additions = op.hunks.reduce((s, h) => s + h.additions, 0)
       const deletions = op.hunks.reduce((s, h) => s + h.deletions, 0)
-      plans.push({ op: 'update', path: resolved.displayPath, abs, oldContent, newContent, additions, deletions })
+      plans.push({ op: 'update', rawPath: op.path, path: resolved.displayPath, abs, oldContent, newContent, additions, deletions })
     }
   }
 
@@ -356,16 +395,17 @@ export async function applyPatchTool({ patch, dry_run = false, userId = null } =
   const undoStack = []
   try {
     for (const p of plans) {
+      const abs = revalidatePlanPath(p, { userId })
       if (p.op === 'add') {
-        fs.mkdirSync(path.dirname(p.abs), { recursive: true })
-        fs.writeFileSync(p.abs, p.newContent, 'utf8')
-        undoStack.push({ op: 'add', abs: p.abs })
+        fs.mkdirSync(path.dirname(abs), { recursive: true })
+        fs.writeFileSync(abs, p.newContent, 'utf8')
+        undoStack.push({ op: 'add', rawPath: p.rawPath, abs })
       } else if (p.op === 'delete') {
-        fs.unlinkSync(p.abs)
-        undoStack.push({ op: 'delete', abs: p.abs, oldContent: p.oldContent })
+        fs.unlinkSync(abs)
+        undoStack.push({ op: 'delete', rawPath: p.rawPath, abs, oldContent: p.oldContent })
       } else if (p.op === 'update') {
-        fs.writeFileSync(p.abs, p.newContent, 'utf8')
-        undoStack.push({ op: 'update', abs: p.abs, oldContent: p.oldContent })
+        fs.writeFileSync(abs, p.newContent, 'utf8')
+        undoStack.push({ op: 'update', rawPath: p.rawPath, abs, oldContent: p.oldContent })
       }
     }
     return { ok: true, dry_run: false, total: plans.length, changes }
@@ -373,9 +413,10 @@ export async function applyPatchTool({ patch, dry_run = false, userId = null } =
     // 回滚
     for (const u of undoStack.reverse()) {
       try {
-        if (u.op === 'add') fs.unlinkSync(u.abs)
-        else if (u.op === 'delete') fs.writeFileSync(u.abs, u.oldContent, 'utf8')
-        else if (u.op === 'update') fs.writeFileSync(u.abs, u.oldContent, 'utf8')
+        const abs = revalidatePlanPath(u, { userId, mustExist: u.op !== 'delete' })
+        if (u.op === 'add') fs.unlinkSync(abs)
+        else if (u.op === 'delete') fs.writeFileSync(abs, u.oldContent, 'utf8')
+        else if (u.op === 'update') fs.writeFileSync(abs, u.oldContent, 'utf8')
       } catch {
         // 回滚失败也继续,日志层面无能为力
       }

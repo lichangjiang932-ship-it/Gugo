@@ -1,12 +1,21 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-toolperm-routes-tests', String(process.pid))
+const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-toolperm-routes-tests-'))
+process.env.APP_DATA_DIR = tempDir
+process.env.APP_DB_PATH = path.join(tempDir, 'app.db')
 
 const { createAppServer } = await import('../server/appServer.js')
+const { closeDb } = await import('../server/db.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
+
+test.after(() => {
+  closeDb()
+  fs.rmSync(tempDir, { recursive: true, force: true })
+})
 
 async function withServer(fn) {
   const server = createAppServer({ getEnv: () => ({}) })

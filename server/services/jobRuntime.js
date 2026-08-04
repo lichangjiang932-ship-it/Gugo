@@ -53,6 +53,7 @@ import {
   shouldCompileDocx,
   withStableStepIds,
 } from './jobWorkflow.js'
+import { createJobRuntimeScheduler } from './jobRuntimeScheduler.js'
 
 const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled'])
 // ★ 注意:awaiting_approval 故意不在这里。等人的 job 崩溃恢复时若被重排成 queued,
@@ -547,14 +548,20 @@ export class JobRuntime {
     }),
     executeStep = createDefaultExecuteStep(),
     tickMs = 250,
+    maxConcurrency = process.env.JOB_RUNTIME_CONCURRENCY,
   } = {}) {
     this.planner = planner
     this.executeStep = executeStep
-    this.tickMs = tickMs
-    this.timer = null
     // listeners 改成 Map<listener, userId>;userId === null 表示无过滤(给内部/测试用)。
     this.listeners = new Map()
     this.activeControllers = new Map()
+    this.activeJobIds = new Set()
+    this.scheduler = createJobRuntimeScheduler({
+      tickMs,
+      maxConcurrency,
+      runOneTick: () => this.runOneTick(),
+      onError: (error) => console.error('[jobs] tick failed:', error?.stack || error),
+    })
     // jobId → userId 缓存,避免每次 emit 都查 DB;recover/createJob 时写入。
     this.jobUserCache = new Map()
     this.recover()
@@ -649,26 +656,11 @@ export class JobRuntime {
   }
 
   start() {
-    if (this.timer) return
-    const tick = async () => {
-      try {
-        await this.runOneTick()
-      } catch (error) {
-        console.error('[jobs] tick failed:', error?.stack || error)
-      }
-      if (this.timer) {
-        this.timer = setTimeout(tick, this.tickMs)
-        this.timer.unref()
-      }
-    }
-    this.timer = setTimeout(tick, this.tickMs)
-    this.timer.unref()
+    this.scheduler.start()
   }
 
   stop() {
-    if (!this.timer) return
-    clearTimeout(this.timer)
-    this.timer = null
+    this.scheduler.stop()
   }
 
   async createJob(prompt, { userId } = {}) {
@@ -971,8 +963,15 @@ export class JobRuntime {
       }))
     }
     const jobs = listRecoverableJobs()
-    const job = jobs.find((candidate) => !SUSPENDED_JOB_STATUSES.has(candidate.status))
+    const runnableJobs = jobs.filter((candidate) => (
+      !SUSPENDED_JOB_STATUSES.has(candidate.status) && !this.activeJobIds.has(candidate.id)
+    ))
+    const job = runnableJobs.find((candidate) => candidate.status === 'cancel_requested')
+      || runnableJobs.find((candidate) => candidate.status === 'queued')
+      || runnableJobs[0]
     if (!job) return false
+    this.activeJobIds.add(job.id)
+    try {
 
     if (job.cancelRequested || job.status === 'cancel_requested') {
       for (const step of listJobSteps(job.id)) {
@@ -1346,6 +1345,9 @@ export class JobRuntime {
     }
 
     return true
+    } finally {
+      this.activeJobIds.delete(job.id)
+    }
   }
 
   async drain({ maxTicks = 1000 } = {}) {

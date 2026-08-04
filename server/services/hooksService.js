@@ -16,14 +16,48 @@
  */
 
 import { execFile } from 'node:child_process'
+import path from 'node:path'
 import { getDb } from '../db.js'
 import { randomUUID } from 'node:crypto'
-import { assertSafeOutboundUrl } from '../adapters/toolProxy.js'
+import { assertSafeOutboundUrl, fetchSafe } from '../adapters/toolProxy.js'
 import { writeToolAudit } from '../utils/audit.js'
 import { openCredentialObject, sealCredentialObject } from '../utils/credentialVault.js'
 
 const ALLOWED_EVENTS = ['user_prompt_submit', 'pre_tool_use', 'post_tool_use', 'stop']
 const HOOK_HEADERS_PURPOSE = 'hook-headers'
+
+function sameExecutable(left, right) {
+  const a = path.normalize(left)
+  const b = path.normalize(right)
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
+}
+
+function shellCommandAllowlist(env = process.env) {
+  return String(env.HOOKS_SHELL_ALLOWED_COMMANDS || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function assertShellCommandAllowed(command, env = process.env) {
+  if (env.HOOKS_SHELL_ENABLED !== '1') {
+    throw new Error('shell hook is disabled')
+  }
+  const executable = String(command?.[0] || '').trim()
+  const allowed = shellCommandAllowlist(env)
+  if (!executable || !allowed.length) {
+    throw new Error('shell hook executable must be listed in HOOKS_SHELL_ALLOWED_COMMANDS')
+  }
+  const executableBase = path.basename(executable)
+  const accepted = allowed.some((entry) => {
+    if (path.isAbsolute(entry) || entry.includes('/') || entry.includes('\\')) {
+      if (!path.isAbsolute(executable)) return false
+      return sameExecutable(path.resolve(executable), path.resolve(entry))
+    }
+    return sameExecutable(executableBase, entry)
+  })
+  if (!accepted) throw new Error(`shell hook executable is not allowed: ${executableBase}`)
+}
 
 function readHookHeaders(row) {
   if (!row?.headers_json) return null
@@ -100,9 +134,7 @@ export function upsertHook({ id, userId, event, toolPattern, kind, command, url,
   if (kind === 'http' && process.env.NODE_ENV === 'production' && !url.startsWith('https://')) {
     throw new Error('生产环境 hook url 必须 https')
   }
-  if (kind === 'shell' && process.env.HOOKS_SHELL_ENABLED !== '1') {
-    throw new Error('shell hook 已禁用 (设置 HOOKS_SHELL_ENABLED=1 启用)')
-  }
+  if (kind === 'shell') assertShellCommandAllowed(command)
   const db = getDb()
   const now = Date.now()
   const hookId = id || randomUUID()
@@ -165,31 +197,33 @@ function runShell({ argv, timeoutMs, cwd }) {
 }
 
 async function runHttp({ url, headers, body, timeoutMs }) {
-  const ctrl = new AbortController()
-  const t = setTimeout(() => ctrl.abort(), Math.max(500, Math.min(60000, timeoutMs || 5000)))
+  let target
   try {
-    let safeUrl
-    try {
-      safeUrl = await assertSafeOutboundUrl(url)
-    } catch (err) {
-      return { ok: false, error: `ssrf_blocked: ${err?.message || String(err)}` }
-    }
-    if (safeUrl.protocol !== 'https:') return { ok: false, error: 'http_required_https' }
-    const resp = await fetch(url, {
+    target = await assertSafeOutboundUrl(url)
+  } catch (err) {
+    return { ok: false, error: `ssrf_blocked: ${err?.message || String(err)}` }
+  }
+  if (target.protocol !== 'https:') return { ok: false, error: 'http_required_https' }
+  try {
+    const payload = JSON.stringify(body)
+    const resp = await fetchSafe({
+      url: target.toString(),
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...(headers || {}) },
-      body: JSON.stringify(body),
-      signal: ctrl.signal,
+      body: payload,
+      timeoutMs: Math.max(500, Math.min(60000, timeoutMs || 5000)),
+      maxRedirects: 3,
+      requireHttps: true,
     })
-    const text = await resp.text()
+    const text = String(resp.body || '')
     let data
     try { data = text ? JSON.parse(text) : {} } catch { data = { raw: text } }
-    if (!resp.ok) return { allow: true, error: `HTTP ${resp.status}: ${data?.error || text.slice(0, 200)}` }
+    if (resp.status < 200 || resp.status >= 300) {
+      return { allow: true, error: `HTTP ${resp.status}: ${data?.error || text.slice(0, 200)}` }
+    }
     return data
   } catch (err) {
-    return { allow: true, error: err?.message || String(err) }
-  } finally {
-    clearTimeout(t)
+    return { ok: false, error: `ssrf_blocked: ${err?.message || String(err)}` }
   }
 }
 
@@ -199,8 +233,10 @@ async function executeOne(hook, payload) {
   try {
     if (hook.kind === 'shell') {
       const argv = Array.isArray(hook.command) ? hook.command : safeParseJson(hook.command) || []
+      assertShellCommandAllowed(argv)
       const fullArgv = [...argv, JSON.stringify(payload)]
-      outcome = await runShell({ argv: fullArgv, timeoutMs: hook.timeoutMs })
+      const cwd = path.resolve(process.env.WORKSPACE_ROOT?.trim() || process.cwd())
+      outcome = await runShell({ argv: fullArgv, timeoutMs: hook.timeoutMs, cwd })
     } else {
       outcome = await runHttp({ url: hook.url, headers: hook.headers, body: payload, timeoutMs: hook.timeoutMs })
     }
@@ -215,7 +251,7 @@ async function executeOne(hook, payload) {
     toolName: `${hook.event}:${payload.tool || '-'}`,
     serverId: hook.id,
     args: payload,
-    status: outcome?.allow === false ? 'denied' : 'ok',
+    status: outcome?.allow === false ? 'denied' : (outcome?.error ? 'error' : 'ok'),
     durationMs: duration,
   })
   return outcome
@@ -277,3 +313,5 @@ export async function testHook({ userId, id }) {
   }
   return await executeOne(hook, stub)
 }
+
+export const _hooksInternals = { assertShellCommandAllowed, shellCommandAllowlist }

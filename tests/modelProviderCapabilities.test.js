@@ -26,8 +26,8 @@ function newUser(email) {
   return id
 }
 
-test('schema 已推到 v28', () => {
-  assert.ok(DB_SCHEMA_VERSION >= 28)
+test('schema 已推到 v33', () => {
+  assert.ok(DB_SCHEMA_VERSION >= 33)
 })
 
 test('v28 能力字段能存能取,留空的保持 null(= 自动推断)', () => {
@@ -42,6 +42,7 @@ test('v28 能力字段能存能取,留空的保持 null(= 自动推断)', () => 
       defaultModel: 'qwen2.5:7b',
       contextWindow: 32768,
       supportsTools: true,
+      supportsPdf: true,
       firstTokenTimeoutMs: 900_000,
       keepAlive: '2h',
       // supportsVision / supportsStreaming / idleTimeoutMs / failoverEnabled 不传
@@ -49,6 +50,7 @@ test('v28 能力字段能存能取,留空的保持 null(= 自动推断)', () => 
   })
   assert.equal(saved.contextWindow, 32768)
   assert.equal(saved.supportsTools, true)
+  assert.equal(saved.supportsPdf, true)
   assert.equal(saved.firstTokenTimeoutMs, 900_000)
   assert.equal(saved.keepAlive, '2h')
   // 没传的必须是 null,不能被当成 false —— null 才会走自动推断
@@ -70,6 +72,7 @@ test('只改一个字段时,其它能力配置不被抹掉', () => {
       defaultModel: 'm1',
       contextWindow: 8192,
       supportsTools: false,
+      supportsPdf: false,
     },
   })
   // 只改 label,完全不提交能力字段
@@ -80,6 +83,7 @@ test('只改一个字段时,其它能力配置不被抹掉', () => {
   assert.equal(updated.label, 'P1 改名')
   assert.equal(updated.contextWindow, 8192, '未提交的字段不该被清空')
   assert.equal(updated.supportsTools, false)
+  assert.equal(updated.supportsPdf, false)
 })
 
 test('能力配置一路传到 endpointProfile —— 这是整条链路的意义所在', () => {
@@ -95,6 +99,8 @@ test('能力配置一路传到 endpointProfile —— 这是整条链路的意�
       isDefault: true,
       contextWindow: 32768,
       supportsTools: false,
+      supportsStreaming: false,
+      supportsVision: true,
       idleTimeoutMs: 45_000,
       keepAlive: '1h',
     },
@@ -105,6 +111,8 @@ test('能力配置一路传到 endpointProfile —— 这是整条链路的意�
 
   assert.equal(profile.contextWindow, 32768, 'provider 配的窗口要压过默认值')
   assert.equal(profile.supportsTools, false, '关掉工具支持后就不该再下发 tools')
+  assert.equal(profile.supportsStreaming, false, '关闭流式后聊天路径必须走非流式上游适配')
+  assert.equal(profile.supportsVision, true, 'provider 显式视觉能力必须压过本地端点默认值')
   assert.equal(profile.timeouts.idleMs, 45_000)
   assert.equal(profile.keepAlive, '1h')
   assert.equal(profile.isLocal, true)

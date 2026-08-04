@@ -9,16 +9,17 @@
  *   - 循环最多 maxIters 轮,防失控
  */
 import { appendJobArtifact } from './jobStore.js'
+import { appendTurnArtifact } from './turnArtifactStore.js'
 import { createDocx, createPptx, createXlsx } from './artifactGen.js'
 import { FS_SHELL_TOOL_SPECS, dispatchFsShellTool } from '../adapters/fsShellTools.js'
 import { GIT_TOOL_SPECS, dispatchGitTool } from '../adapters/gitWorkbench.js'
 import { CODE_SEARCH_TOOL_SPECS, dispatchCodeSearchTool } from '../utils/codeSearch.js'
 import { APPLY_PATCH_TOOL_SPECS, dispatchApplyPatchTool } from '../utils/applyPatch.js'
 import { AGENTIC_TOOL_SPECS, dispatchAgenticTool, isLoopPauseResult } from '../utils/agenticTools.js'
-import { getBuiltinSpec } from './toolRegistry.js'
+import { getBuiltinSpec, getToolMetadata } from './toolRegistry.js'
 import { CONNECTOR_TOOL_NAMES, CONNECTOR_TOOL_SPECS, executeConnectorTool } from './connectorTools.js'
 import { MEMORY_TOOL_SPECS, dispatchMemoryTool } from '../utils/memoryTools.js'
-import { attachJobBudget, getJobBudget, createJobBudget } from '../utils/jobBudget.js'
+import { attachJobBudget, getJobBudget, createJobBudget, runWithModelBudget } from '../utils/jobBudget.js'
 import { formatDeniedToolResult, requestApproval, resumePersistedApproval } from './approvalGate.js'
 import { writeToolAudit } from '../utils/audit.js'
 import { isContextLengthError } from '../adapters/modelProxy.js'
@@ -55,18 +56,20 @@ const MAX_ITERS = (() => {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 2000
 })()
 const JOB_READ_CONCURRENCY = 4
-const PARALLEL_SAFE_JOB_TOOLS = new Set([
-  'list_directory',
-  'read_file',
-  'grep_code',
-  'find_symbol',
-  'list_imports',
-  'git_status',
-  'git_diff',
-  'web_search',
-  'fetch_url',
-  'connected_app_list',
-])
+
+function persistGeneratedArtifact({ artifact, args, job, step }) {
+  const common = {
+    id: artifact.id,
+    userId: job.userId,
+    type: artifact.type,
+    title: artifact.title || args.title,
+    url: artifact.url,
+    filename: artifact.filename,
+  }
+  return job?.origin === 'chat'
+    ? appendTurnArtifact({ ...common, sessionId: job.sessionId, turnId: job.id })
+    : appendJobArtifact({ ...common, jobId: job.id, stepId: step?.id || null })
+}
 
 /**
  * 4 个内置工具的 OpenAI function-calling spec。
@@ -261,7 +264,18 @@ export function selectJobToolSpecs({ prompt = '', skillId = undefined, specs = S
 /**
  * 执行单个工具调用 → 落盘 artifact → appendJobArtifact → 返回给模型的简短结果。
  */
-async function executeServerTool({ name, args, job, step, signal, budget, approvalContext, allowedArtifactTools }) {
+async function executeServerTool({
+  name,
+  args,
+  job,
+  step,
+  signal,
+  budget,
+  approvalContext,
+  allowedArtifactTools,
+  toolCallId,
+  idempotencyKey,
+}) {
   if (isFileArtifactTool(name) && !allowedArtifactTools?.has(name)) {
     return {
       ok: false,
@@ -295,51 +309,29 @@ async function executeServerTool({ name, args, job, step, signal, budget, approv
       brand: args.brand,
       slides: args.slides || [],
     })
-    appendJobArtifact({
-      id: artifact.id,
-      jobId: job.id,
-      userId: job.userId,
-      stepId: step.id,
-      type: artifact.type,
-      title: artifact.title || args.title,
-      url: artifact.url,
-      filename: artifact.filename,
-    })
+    persistGeneratedArtifact({ artifact, args, job, step })
     return { ok: true, artifactId: artifact.id, filename: artifact.filename, url: artifact.url }
   }
   if (name === 'create_docx') {
     const artifact = await createDocx({ title: args.title, paragraphs: args.paragraphs || [] })
-    appendJobArtifact({
-      id: artifact.id,
-      jobId: job.id,
-      userId: job.userId,
-      stepId: step.id,
-      type: artifact.type,
-      title: artifact.title || args.title,
-      url: artifact.url,
-      filename: artifact.filename,
-    })
+    persistGeneratedArtifact({ artifact, args, job, step })
     return { ok: true, artifactId: artifact.id, filename: artifact.filename, url: artifact.url }
   }
   if (name === 'create_xlsx') {
     const artifact = await createXlsx({ title: args.title, sheets: args.sheets || [] })
-    appendJobArtifact({
-      id: artifact.id,
-      jobId: job.id,
-      userId: job.userId,
-      stepId: step.id,
-      type: artifact.type,
-      title: artifact.title || args.title,
-      url: artifact.url,
-      filename: artifact.filename,
-    })
+    persistGeneratedArtifact({ artifact, args, job, step })
     return { ok: true, artifactId: artifact.id, filename: artifact.filename, url: artifact.url }
   }
   // fs/shell 工具不落 artifact,执行结果直接回给模型.
   // 任意 fsShellTools 抛错(包括 env 未启用 / 路径越界)都返回 {ok:false,error}.
   if (['read_file', 'write_file', 'edit_file', 'bash_exec'].includes(name)) {
     try {
-      return await dispatchFsShellTool(name, args || {}, { userId: job?.userId || null })
+      return await dispatchFsShellTool(name, args || {}, {
+        userId: job?.userId || null,
+        signal,
+        toolCallId,
+        idempotencyKey,
+      })
     } catch (err) {
       return {
         ok: false,
@@ -400,7 +392,11 @@ async function executeServerTool({ name, args, job, step, signal, budget, approv
   }
   if (['git_status', 'git_diff', 'run_project_check', 'git_commit', 'git_push', 'git_rollback'].includes(name)) {
     try {
-      return await dispatchGitTool(name, args || {}, { userId: job?.userId || null })
+      return await dispatchGitTool(name, args || {}, {
+        userId: job?.userId || null,
+        toolCallId,
+        idempotencyKey,
+      })
     } catch (err) {
       return { ok: false, error: err?.message || String(err) }
     }
@@ -425,11 +421,19 @@ async function executeServerTool({ name, args, job, step, signal, budget, approv
     }
   }
   if (CONNECTOR_TOOL_NAMES.includes(name)) {
-    return executeConnectorTool(name, args || {}, { userId: job?.userId || null })
+    return executeConnectorTool(name, args || {}, {
+      userId: job?.userId || null,
+      toolCallId,
+      idempotencyKey,
+    })
   }
   if (name.startsWith('browser_')) {
     try {
-      const result = await executeBrowserTool(name, args || {}, { userId: job?.userId || null })
+      const result = await executeBrowserTool(name, args || {}, {
+        userId: job?.userId || null,
+        toolCallId,
+        idempotencyKey,
+      })
       return result && typeof result === 'object' ? { ok: true, ...result } : { ok: true, result }
     } catch (err) {
       return { ok: false, error: err?.message || String(err) }
@@ -441,6 +445,8 @@ async function executeServerTool({ name, args, job, step, signal, budget, approv
         userId: job?.userId || null,
         fullToolName: name,
         args: args || {},
+        toolCallId,
+        idempotencyKey,
       })
       if (result && typeof result === 'object' && !Array.isArray(result)) {
         return { ok: !result.isError, ...result }
@@ -451,6 +457,16 @@ async function executeServerTool({ name, args, job, step, signal, budget, approv
     }
   }
   return { ok: false, error: `unknown tool: ${name}` }
+}
+
+export function buildJobToolIdempotencyKey({ jobId, stepId, toolCallId }) {
+  return `job:${String(jobId || 'unknown')}:step:${String(stepId || 'unknown')}:tool:${String(toolCallId || 'unknown')}`
+}
+
+function supportsIdempotentResume(executor, callContext) {
+  const capability = executor?.supportsIdempotentResume
+  if (typeof capability === 'function') return capability(callContext) === true
+  return capability === true
 }
 
 /**
@@ -482,6 +498,17 @@ export async function runToolsLoop({
   saveCheckpoint = null,
   contextWindow = undefined,
   toolSpecs = undefined,
+  approvalOrigin = 'job',
+  approvalSessionId = null,
+  approvalMode = null,
+  runtimeBudget = null,
+  approvalContext = null,
+  requestToolApproval = requestApproval,
+  enableToolHooks = true,
+  onModelPhase = null,
+  onToolCall = null,
+  onToolStarted = null,
+  onToolCompleted = null,
 }) {
   // 文件产物工具按本次任务意图裁剪。同一份 spec 既喂给模型,也用于 validateToolCall ——
   // 这样"模型看不到"和"调了也会被拒"是同一个事实,不会两边漂移。
@@ -512,7 +539,14 @@ export async function runToolsLoop({
   let finalText = ''
   let iter = Math.max(0, Number(restoredState?.iterations) || 0)
   let checkpointCalls = Array.isArray(restoredState?.toolCalls)
-    ? restoredState.toolCalls.map((call) => ({ ...call }))
+    ? restoredState.toolCalls.map((call) => ({
+        ...call,
+        idempotencyKey: call.idempotencyKey || buildJobToolIdempotencyKey({
+          jobId: job?.id,
+          stepId: step?.id,
+          toolCallId: call.id,
+        }),
+      }))
     : null
 
   if (restoredState?.final?.text != null) {
@@ -552,14 +586,19 @@ export async function runToolsLoop({
         initialCostUsd: restoredState.budget.costUsd,
       }
     : undefined
-  const budget = job
+  const budget = runtimeBudget || (job
     ? (getJobBudget(job) || attachJobBudget(job, restoredBudget))
-    : createJobBudget(restoredBudget)
-  const subagentApprovalContext = createSubagentApprovalContext()
+    : createJobBudget(restoredBudget))
+  const subagentApprovalContext = approvalContext || createSubagentApprovalContext()
   // 预算测试/小预算任务应优先报告 budgetExceeded；第 5 次相同调用再判无进展。
   const loopGuard = createToolLoopGuard({ maxRepeatedCalls: 4 })
 
   for (; iter < maxIters; iter += 1) {
+    if (signal?.aborted) {
+      const error = new Error('Turn cancelled')
+      error.name = 'AbortError'
+      throw error
+    }
     let steeringLeaseId = null
     let toolCalls
 
@@ -584,18 +623,15 @@ export async function runToolsLoop({
       }
 
       let modelResult
-      const modelStartedAt = Date.now()
       try {
-        const callBudget = budget.consumeModelCall?.() || { ok: true }
-        if (!callBudget.ok) {
-          const budgetError = new Error(callBudget.reason)
-          budgetError.code = 'MODEL_BUDGET_EXCEEDED'
-          throw budgetError
-        }
+        if (typeof onModelPhase === 'function') await onModelPhase({ phase: 'started', iteration: iter })
         const request = await callModelWithContextRecovery({
           messages: convo,
           tools: activeToolSpecs,
-          callModel: runModel,
+          callModel: (modelRequest) => runWithModelBudget(
+            budget,
+            () => runModel(modelRequest),
+          ),
           isContextLengthError,
           contextWindow,
           signal,
@@ -605,14 +641,18 @@ export async function runToolsLoop({
         })
         convo.splice(0, convo.length, ...request.messages)
         modelResult = request.response
-        const usageBudget = budget.trackModelUsage?.(modelResult?.usage, modelResult?.costUsd) || { ok: true }
-        if (!usageBudget.ok) {
-          const budgetError = new Error(usageBudget.reason)
-          budgetError.code = 'MODEL_BUDGET_EXCEEDED'
-          budgetError.partialModelResult = modelResult
-          throw budgetError
-        }
+        if (typeof onModelPhase === 'function') await onModelPhase({
+          phase: 'completed',
+          iteration: iter,
+          content: modelResult?.content || '',
+          toolCalls: modelResult?.toolCalls || [],
+          usage: modelResult?.usage || null,
+          modelName: modelResult?.modelName || null,
+        })
       } catch (error) {
+        if (typeof onModelPhase === 'function') await onModelPhase({
+          phase: 'failed', iteration: iter, error: error?.message || String(error),
+        })
         if (steeringLeaseId && typeof releaseSteering === 'function') {
           await releaseSteering(steeringLeaseId)
         }
@@ -632,8 +672,35 @@ export async function runToolsLoop({
             .filter(Boolean)
             .join('\n')
             .slice(0, 4000)
+          let wrapUpText = ''
+          try {
+            const wrapUpRequest = await callModelWithContextRecovery({
+              messages: [
+                ...convo,
+                {
+                  role: 'system',
+                  content: `模型预算已用尽(${error.message})。请基于目前已有的信息给出最终回答，不要再调用任何工具。`,
+                },
+              ],
+              tools: [],
+              callModel: (modelRequest) => runWithModelBudget(
+                budget,
+                () => runModel(modelRequest),
+                { allowOverBudget: true },
+              ),
+              isContextLengthError,
+              contextWindow,
+              signal,
+              userId: job?.userId || null,
+              sessionId: job?.id && step?.id ? `job:${job.id}:${step.id}` : null,
+              toolChoice: 'none',
+            })
+            wrapUpText = wrapUpRequest.response?.content || ''
+          } catch (wrapUpError) {
+            if (wrapUpError?.name === 'AbortError') throw wrapUpError
+          }
           return {
-            text: `(模型预算已用尽:${error.message})\n\n已经完成的部分:\n${collected || error.partialModelResult?.content || '(无)'}`,
+            text: wrapUpText || `(模型预算已用尽:${error.message})\n\n已经完成的部分:\n${collected || error.partialModelResult?.content || '(无)'}`,
             artifactIds,
             iterations: iter + 1,
             budgetExceeded: true,
@@ -657,8 +724,6 @@ export async function runToolsLoop({
           reason: error?.message || String(error),
         }
       }
-      // 把等模型的时间从墙钟预算里扣掉 —— 本地模型慢不该消耗「干活时间」配额
-      budget.trackModelMs?.(Date.now() - modelStartedAt)
       const { content, toolCalls: rawToolCalls } = modelResult
 
       if (!rawToolCalls || rawToolCalls.length === 0) {
@@ -682,9 +747,17 @@ export async function runToolsLoop({
       // 这样无 id 的调用也能保证 assistant.tool_calls 与 tool_call_id 严格配对。
       checkpointCalls = normalizeToolCalls(rawToolCalls).map((call) => ({
         ...call,
+        idempotencyKey: buildJobToolIdempotencyKey({
+          jobId: job?.id,
+          stepId: step?.id,
+          toolCallId: call.id,
+        }),
         checkpointStatus: 'pending',
         checkpointApprovalId: null,
       }))
+      if (typeof onToolCall === 'function') {
+        for (const call of checkpointCalls) await onToolCall(call)
+      }
       toolCalls = checkpointCalls
       convo.push(buildAssistantToolCallsMessage(toolCalls, content))
       try {
@@ -711,6 +784,12 @@ export async function runToolsLoop({
     }
 
     const executeOne = async (call, { durableExecution = true } = {}) => {
+      if (signal?.aborted) {
+        const error = new Error('Turn cancelled')
+        error.name = 'AbortError'
+        throw error
+      }
+      if (typeof onToolStarted === 'function') await onToolStarted(call)
       const { name, args } = call
       // ★ M3.5:预算检查(reflect/request_clarification 不计,鼓励复盘与澄清)
       const isFree = name === 'reflect' || name === 'request_clarification' || name === 'request_directory' || name === 'sleep_until'
@@ -719,7 +798,18 @@ export async function runToolsLoop({
       let outcomeNoProgressReason = null
       let clarification = null
       let artifactId = null
-      if (call.checkpointStatus === 'executing' && !PARALLEL_SAFE_JOB_TOOLS.has(name)) {
+      const idempotentResume = call.checkpointStatus === 'executing'
+        && supportsIdempotentResume(executeTool, {
+          name,
+          args: call.checkpointExecutionArgs ?? args,
+          job,
+          step,
+          toolCallId: call.id,
+          idempotencyKey: call.idempotencyKey,
+        })
+      if (call.checkpointStatus === 'executing'
+        && !getToolMetadata(name, { args }).isConcurrencySafe
+        && !idempotentResume) {
         // We cannot prove whether a side effect committed before the process
         // stopped. Never replay it automatically: report the uncertainty to
         // the model so it can verify state or ask the user how to proceed.
@@ -777,11 +867,19 @@ export async function runToolsLoop({
               const resumingApproval = call.checkpointStatus === 'awaiting_approval' && call.checkpointApprovalId
               let effectiveArgs = args
               let gate = null
-              if (resumingApproval) {
+              if (idempotentResume) {
+                effectiveArgs = call.checkpointExecutionArgs ?? effectiveArgs
+                gate = {
+                  proceed: true,
+                  args: effectiveArgs,
+                  approvalId: call.checkpointApprovalId || null,
+                  resumedIdempotentExecution: true,
+                }
+              } else if (resumingApproval) {
                 gate = await resumePersistedApproval({ approvalId: call.checkpointApprovalId, signal })
                 effectiveArgs = gate.args ?? effectiveArgs
               } else {
-                if (job?.userId) {
+                if (enableToolHooks && job?.userId) {
                   const preHook = await dispatchHooks({
                     userId: job.userId,
                     event: 'pre_tool_use',
@@ -810,14 +908,16 @@ export async function runToolsLoop({
                   )
                   if (hookValidationError) result = hookValidationError
                 }
-                if (!result) gate = await requestApproval({
+                if (!result) gate = await requestToolApproval({
                     userId: job?.userId || null,
-                    origin: 'job',
-                    jobId: job?.id || null,
-                    stepId: step?.id || null,
+                    origin: approvalOrigin,
+                    jobId: approvalOrigin === 'chat' ? null : job?.id || null,
+                    stepId: approvalOrigin === 'chat' ? job?.id || null : step?.id || null,
+                    sessionId: approvalSessionId,
                     toolName: name,
                     args: effectiveArgs,
                     signal,
+                    mode: approvalMode,
                     onPending: async (approval) => {
                       await markCall(call, {
                         checkpointStatus: 'awaiting_approval',
@@ -832,10 +932,20 @@ export async function runToolsLoop({
               } else if (gate) {
                 const executionArgs = gate.args ?? effectiveArgs
                 rememberApprovedSubagentCall(subagentApprovalContext, name, executionArgs, gate)
+                const executionMetadata = getToolMetadata(name, { args: executionArgs })
+                // `block` means a cancellation request must not interrupt a tool that has
+                // already started: an aborted shell/browser operation can leave partial
+                // side effects.  Use a per-call shield signal, then let the outer loop
+                // observe the original aborted signal at the next execution boundary.
+                const executionSignal = executionMetadata.interruptBehavior === 'block'
+                  ? new AbortController().signal
+                  : signal
                 if (durableExecution) {
                   await markCall(call, {
                     checkpointStatus: 'executing',
                     checkpointApprovalId: gate.approvalId || call.checkpointApprovalId || null,
+                    checkpointExecutionArgs: executionArgs,
+                    idempotencyKey: call.idempotencyKey,
                   })
                 }
                 result = await executeTool({
@@ -843,8 +953,10 @@ export async function runToolsLoop({
                   args: executionArgs,
                   job,
                   step,
-                  signal,
+                  signal: executionSignal,
                   budget,
+                  toolCallId: call.id,
+                  idempotencyKey: call.idempotencyKey,
                   approvalContext: subagentApprovalContext,
                   allowedArtifactTools: new Set(
                     activeToolSpecs
@@ -852,9 +964,12 @@ export async function runToolsLoop({
                       .filter((toolName) => isFileArtifactTool(toolName)),
                   ),
                 })
+                if (gate.authorization && result && typeof result === 'object') {
+                  result = { ...result, approvalAuthorization: gate.authorization }
+                }
                 artifactId = result?.artifactId || null
                 if (isLoopPauseResult(result)) clarification = result.clarification
-                if (job?.userId) {
+                if (enableToolHooks && job?.userId) {
                   try {
                     await dispatchHooks({
                       userId: job.userId,
@@ -870,7 +985,7 @@ export async function runToolsLoop({
                   }
                 }
               }
-              if (gate?.approvalId && typeof onApprovalResolved === 'function') {
+              if (gate?.approvalId && !gate.resumedIdempotentExecution && typeof onApprovalResolved === 'function') {
                 await onApprovalResolved(gate)
               }
             } catch (err) {
@@ -904,10 +1019,11 @@ export async function runToolsLoop({
         checkpointResult: outcome.result,
         checkpointArtifactId: outcome.artifactId || null,
       })
+      if (typeof onToolCompleted === 'function') await onToolCompleted(outcome)
     }
 
     const canRunInParallel = toolCalls.length > 1
-      && toolCalls.every((call) => PARALLEL_SAFE_JOB_TOOLS.has(call.name))
+      && toolCalls.every((call) => getToolMetadata(call.name, { args: call.args }).isConcurrencySafe)
 
     if (canRunInParallel) {
       // 只有整批工具都已明确列入纯只读白名单时才并发。mapWithConcurrency
@@ -982,7 +1098,11 @@ export async function runToolsLoop({
               },
             ],
             tools: [],
-            callModel: runModel,
+            callModel: (modelRequest) => runWithModelBudget(
+              budget,
+              () => runModel(modelRequest),
+              { allowOverBudget: true },
+            ),
             isContextLengthError,
             contextWindow,
             signal,
@@ -1032,7 +1152,11 @@ export async function runToolsLoop({
             },
           ],
           tools: [],
-          callModel: runModel,
+          callModel: (modelRequest) => runWithModelBudget(
+            budget,
+            () => runModel(modelRequest),
+            { allowOverBudget: true },
+          ),
           isContextLengthError,
           contextWindow,
           signal,
@@ -1070,7 +1194,11 @@ export async function runToolsLoop({
           },
         ],
         tools: [],
-        callModel: runModel,
+        callModel: (modelRequest) => runWithModelBudget(
+          budget,
+          () => runModel(modelRequest),
+          { allowOverBudget: true },
+        ),
         isContextLengthError,
         contextWindow,
         signal,

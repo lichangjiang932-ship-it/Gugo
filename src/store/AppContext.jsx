@@ -1,34 +1,42 @@
-import { createContext, useContext, useReducer, useEffect } from 'react'
+import { createContext, useCallback, useContext, useReducer, useEffect, useRef, useState } from 'react'
 import { PERMISSIONS } from '../data.js'
-import { persistWithDegradation } from './persistDegradation.js'
+import { persistWithDegradation, sanitizeForPersist } from './persistDegradation.js'
 import { TASK_STATUS } from './taskStatus.js'
 import { withSessionModel } from '../lib/modelSelection.js'
 import { normalizeThemeMode } from '../lib/themeMode.js'
 import { backfillMessageTimestamps } from '../lib/messageTime.js'
+import {
+  buildSyncMetadata,
+  markConvergedMetadata,
+  mergePersistedSnapshots,
+  persistedSnapshotsEqual,
+  readPersistedPayload,
+  withSyncMetadata,
+} from './stateSync.js'
+import {
+  LEGACY_STATE_STORAGE_KEY,
+  PERSIST_KEYS,
+  STATE_SYNC_CHANNEL_NAME,
+  STATE_SYNC_SIGNAL_KEY,
+  clearLocalPersistence,
+  publishStateSyncSignal,
+  readBootstrapPayloads,
+  readStateSyncSignal,
+  removeLegacySnapshot,
+  selectPersistedSnapshot,
+  writeLightweightSnapshot,
+  writeStateClearEpoch,
+} from './appStatePersistence.js'
+import {
+  clearPersistedSnapshot,
+  readPersistedSnapshot,
+  writePersistedSnapshot,
+} from './indexedDbPersistence.js'
 
-const STORAGE_KEY = 'your-model-atelier:state:v1'
+const TAB_INSTANCE_ID = globalThis.crypto?.randomUUID?.() || `tab-${Date.now()}-${Math.random().toString(36).slice(2)}`
+const ACTIVE_PERSISTENCE_CONTROLLERS = new Set()
 
 // ── 哪些字段需要持久化（避免把临时 UI 状态也存了）──
-const PERSIST_KEYS = [
-  'user',
-  'isLoggedIn',
-  'sessions',
-  'activeSessionId',
-  'tasks',
-  'history',
-  'permissions',
-  'theme',
-  'accentColor',
-  'strongAccent',
-  'fontSize',
-  'density',
-  'animationsEnabled',
-  'skillConfigs',
-  'toolsConfig',
-  'agentMode',
-  'sessionDrafts',
-]
-
 function createInitialState() {
   return {
     user: { name: null, email: null, avatar: null, plan: null, joinedAt: null, totalCalls: 0 },
@@ -55,61 +63,72 @@ function createInitialState() {
     // #13 切会话保草稿:每个 sessionId → 该会话当前未发送的输入文本
     // 不放进 sessions[].draft 是为了切会话只 dispatch 一个轻动作,不动整棵 sessions 树
     sessionDrafts: {},
+    persistenceNotice: null,
   }
 }
 
-function loadPersistedState() {
-  if (typeof window === 'undefined') return createInitialState()
-  let raw
-  try {
-    raw = window.localStorage.getItem(STORAGE_KEY)
-  } catch (err) {
-    // Safari 隐私模式 / 禁用 storage 直接抛 SecurityError
-    console.warn('[AppContext] localStorage 不可读,以默认状态启动:', err?.name || err)
-    return createInitialState()
+function normalizePersistedFields(saved, { cancelRunningTasks = false } = {}) {
+  const base = createInitialState()
+  const normalized = {}
+  for (const key of PERSIST_KEYS) {
+    if (saved?.[key] !== undefined) normalized[key] = saved[key]
   }
-  if (!raw) return createInitialState()
+  if (normalized.theme !== undefined) normalized.theme = normalizeThemeMode(normalized.theme)
+  if (saved?.toolsConfig && typeof saved.toolsConfig === 'object') {
+    normalized.toolsConfig = { ...base.toolsConfig, ...saved.toolsConfig }
+  }
+  if (normalized.sessions !== undefined) normalized.sessions = backfillMessageTimestamps(normalized.sessions)
+  if (Array.isArray(saved?.permissions)) {
+    const enabledMap = new Map(saved.permissions.map((permission) => [permission.id, !!permission.enabled]))
+    normalized.permissions = base.permissions.map((permission) => ({
+      ...permission,
+      enabled: enabledMap.has(permission.id) ? enabledMap.get(permission.id) : permission.enabled,
+    }))
+  }
+  if (cancelRunningTasks && Array.isArray(normalized.tasks)) {
+    normalized.tasks = normalized.tasks.map((task) => (
+      task?.status === 'running'
+        ? { ...task, status: 'cancelled', stepLabel: '已中断（页面刷新）' }
+        : task
+    ))
+  }
+  return normalized
+}
+
+function getLocalStorage() {
+  if (typeof window === 'undefined') return null
   try {
-    const saved = JSON.parse(raw)
-    const base = createInitialState()
-    const merged = { ...base }
-    for (const key of PERSIST_KEYS) {
-      if (saved[key] !== undefined) merged[key] = saved[key]
-    }
-    merged.theme = normalizeThemeMode(merged.theme)
-    if (saved.toolsConfig && typeof saved.toolsConfig === 'object') {
-      merged.toolsConfig = { ...base.toolsConfig, ...saved.toolsConfig }
-    }
-    merged.sessions = backfillMessageTimestamps(merged.sessions)
-    // 权限定义可能升级，按 id 合并保留 enabled 状态
-    if (Array.isArray(saved.permissions)) {
-      const enabledMap = new Map(saved.permissions.map((p) => [p.id, !!p.enabled]))
-      merged.permissions = base.permissions.map((p) => ({
-        ...p,
-        enabled: enabledMap.has(p.id) ? enabledMap.get(p.id) : p.enabled,
-      }))
-    }
-    // ★ 清理孤儿任务。
-    //
-    // tasks 在 PERSIST_KEYS 里,而 RUNNING 状态只靠 setTimeout 调度的
-    // REMOVE_TASK 清掉 —— 生成到一半刷新页面,那个 timer 随页面一起没了,
-    // 任务就永远卡在「调用模型中」。刷新后没有任何东西在跑,
-    // 所以恢复出来的 running 一定是孤儿,标成中断而不是继续骗用户。
-    if (Array.isArray(merged.tasks)) {
-      merged.tasks = merged.tasks.map((task) => (
-        task?.status === 'running'
-          ? { ...task, status: 'cancelled', stepLabel: '已中断（页面刷新）' }
-          : task
-      ))
-    }
-    return merged
-  } catch (err) {
-    console.warn('[AppContext] failed to load persisted state:', err)
-    return createInitialState()
+    return window.localStorage
+  } catch (error) {
+    console.warn('[AppContext] localStorage unavailable:', error?.name || error)
+    return null
   }
 }
 
-const initialState = loadPersistedState()
+function readBootstrapState() {
+  const base = createInitialState()
+  const storage = getLocalStorage()
+  if (!storage) return base
+  try {
+    const bootstrap = readBootstrapPayloads(storage, 0)
+    const saved = bootstrap.settings?.snapshot || bootstrap.legacy?.snapshot
+    return saved ? { ...base, ...normalizePersistedFields(saved) } : base
+  } catch (error) {
+    console.warn('[AppContext] failed to read bootstrap state:', error?.name || error)
+    return base
+  }
+}
+
+function completeSnapshot(saved, options) {
+  const base = createInitialState()
+  return selectPersistedSnapshot({ ...base, ...normalizePersistedFields(saved, options) })
+}
+
+function indexedDbNoticeResult(result) {
+  if (result?.ok) return { ok: true, level: 'full' }
+  if (result?.status === 'quota') return { ok: false, level: 'quota', error: result.error }
+  return { ok: false, level: 'error', error: result?.error }
+}
 
 function reducer(state, action) {
   switch (action.type) {
@@ -275,10 +294,11 @@ function reducer(state, action) {
           ? action.payload
           : action.payload?.content ?? ''
       const meta = typeof action.payload === 'object' ? action.payload?.meta ?? null : null
-      if (!state.activeSessionId) return state
+      const targetSessionId = action.payload?.sessionId || state.activeSessionId
+      if (!targetSessionId) return state
 
       const assistantMsg = {
-        id: crypto.randomUUID?.() ?? `${Date.now() + 1}-a`,
+        id: action.payload?.id || crypto.randomUUID?.() || `${Date.now() + 1}-a`,
         role: 'assistant',
         content,
         meta,
@@ -288,7 +308,7 @@ function reducer(state, action) {
       return {
         ...state,
         sessions: state.sessions.map((s) =>
-          s.id === state.activeSessionId
+          s.id === targetSessionId
             ? { ...s, messages: [...s.messages, assistantMsg], updatedAt: Date.now() }
             : s
         ),
@@ -541,18 +561,21 @@ function reducer(state, action) {
     // ★ 推理模型的思考过程。单独存进 meta.reasoning,绝不混进 content ——
     // 它不是回答,不该进正文,也不该被当成上下文发回给模型。
     case 'APPEND_REASONING_TO_LAST_MESSAGE': {
-      if (!state.activeSessionId) return state
+      const targetSessionId = action.sessionId || state.activeSessionId
+      if (!targetSessionId) return state
       const delta = action.payload ?? ''
       if (!delta) return state
       return {
         ...state,
         sessions: state.sessions.map((s) => {
-          if (s.id !== state.activeSessionId || s.messages.length === 0) return s
+          if (s.id !== targetSessionId || s.messages.length === 0) return s
           const msgs = [...s.messages]
-          const last = msgs[msgs.length - 1]
+          const messageIndex = action.messageId ? msgs.findIndex((message) => message.id === action.messageId) : msgs.length - 1
+          if (messageIndex < 0) return s
+          const last = msgs[messageIndex]
           if (last.role !== 'assistant') return s
           const meta = last.meta || {}
-          msgs[msgs.length - 1] = {
+          msgs[messageIndex] = {
             ...last,
             meta: { ...meta, reasoning: (meta.reasoning || '') + delta },
           }
@@ -562,32 +585,38 @@ function reducer(state, action) {
     }
 
     case 'APPEND_TO_LAST_MESSAGE': {
-      if (!state.activeSessionId) return state
+      const targetSessionId = action.sessionId || state.activeSessionId
+      if (!targetSessionId) return state
       const delta = action.payload ?? ''
       return {
         ...state,
         sessions: state.sessions.map((s) => {
-          if (s.id !== state.activeSessionId || s.messages.length === 0) return s
+          if (s.id !== targetSessionId || s.messages.length === 0) return s
           const msgs = [...s.messages]
-          const last = msgs[msgs.length - 1]
+          const messageIndex = action.messageId ? msgs.findIndex((message) => message.id === action.messageId) : msgs.length - 1
+          if (messageIndex < 0) return s
+          const last = msgs[messageIndex]
           if (last.role !== 'assistant') return s
-          msgs[msgs.length - 1] = { ...last, content: last.content + delta }
+          msgs[messageIndex] = { ...last, content: last.content + delta }
           return { ...s, messages: msgs, updatedAt: Date.now() }
         }),
       }
     }
 
     case 'UPDATE_LAST_MESSAGE_META': {
-      if (!state.activeSessionId) return state
+      const targetSessionId = action.sessionId || state.activeSessionId
+      if (!targetSessionId) return state
       const meta = action.payload ?? {}
       return {
         ...state,
         sessions: state.sessions.map((s) => {
-          if (s.id !== state.activeSessionId || s.messages.length === 0) return s
+          if (s.id !== targetSessionId || s.messages.length === 0) return s
           const msgs = [...s.messages]
-          const last = msgs[msgs.length - 1]
+          const messageIndex = action.messageId ? msgs.findIndex((message) => message.id === action.messageId) : msgs.length - 1
+          if (messageIndex < 0) return s
+          const last = msgs[messageIndex]
           if (last.role !== 'assistant') return s
-          msgs[msgs.length - 1] = { ...last, meta: { ...last.meta, ...meta } }
+          msgs[messageIndex] = { ...last, meta: { ...last.meta, ...meta } }
           return { ...s, messages: msgs, updatedAt: Date.now() }
         }),
       }
@@ -717,16 +746,19 @@ function reducer(state, action) {
     }
 
     case 'APPEND_TOOL_CALL_TO_LAST_MESSAGE': {
-      // payload: { id, name, arguments, status: 'running'|'success'|'error', result, error }
-      if (!state.activeSessionId) return state
+      // payload: { id, name, arguments, status, result, error, approvalAuthorization }
+      const targetSessionId = action.sessionId || state.activeSessionId
+      if (!targetSessionId) return state
       const entry = action.payload
       if (!entry) return state
       return {
         ...state,
         sessions: state.sessions.map((s) => {
-          if (s.id !== state.activeSessionId || s.messages.length === 0) return s
+          if (s.id !== targetSessionId || s.messages.length === 0) return s
           const msgs = [...s.messages]
-          const last = msgs[msgs.length - 1]
+          const messageIndex = action.messageId ? msgs.findIndex((message) => message.id === action.messageId) : msgs.length - 1
+          if (messageIndex < 0) return s
+          const last = msgs[messageIndex]
           if (last.role !== 'assistant') return s
           const existingMeta = last.meta || {}
           const existingCalls = Array.isArray(existingMeta.toolCalls) ? existingMeta.toolCalls : []
@@ -742,10 +774,29 @@ function reducer(state, action) {
             nextCalls = existingCalls.slice()
             nextCalls[idx] = { ...nextCalls[idx], ...entry }
           }
-          msgs[msgs.length - 1] = { ...last, meta: { ...existingMeta, toolCalls: nextCalls } }
+          msgs[messageIndex] = { ...last, meta: { ...existingMeta, toolCalls: nextCalls } }
           return { ...s, messages: msgs, updatedAt: Date.now() }
         }),
       }
+    }
+
+    case 'MERGE_EXTERNAL_STATE': {
+      const payload = action.payload || {}
+      let changed = false
+      const next = { ...state }
+      for (const key of PERSIST_KEYS) {
+        if (payload[key] !== undefined && payload[key] !== state[key]) {
+          next[key] = payload[key]
+          changed = true
+        }
+      }
+      return changed ? next : state
+    }
+
+    case 'SET_PERSISTENCE_NOTICE': {
+      const notice = action.payload || null
+      if (state.persistenceNotice?.level === notice?.level) return state
+      return { ...state, persistenceNotice: notice }
     }
 
     default:
@@ -755,8 +806,458 @@ function reducer(state, action) {
 
 const AppContext = createContext(null)
 
+function reportPersistenceResult(dispatch, result) {
+  if (result.ok && result.level === 'full') {
+    dispatch({ type: 'SET_PERSISTENCE_NOTICE', payload: null })
+  } else if (result.level === 'compact-metadata') {
+    dispatch({ type: 'SET_PERSISTENCE_NOTICE', payload: { level: 'compact-metadata' } })
+  } else if (result.level === 'quota') {
+    dispatch({ type: 'SET_PERSISTENCE_NOTICE', payload: { level: 'quota' } })
+  } else if (!result.ok) {
+    dispatch({ type: 'SET_PERSISTENCE_NOTICE', payload: { level: 'unavailable' } })
+  }
+}
+
 export function AppProvider({ children }) {
-  const [state, dispatch] = useReducer(reducer, initialState)
+  const [state, dispatch] = useReducer(reducer, undefined, readBootstrapState)
+  const [hydrated, setHydrated] = useState(typeof window === 'undefined')
+  const stateRef = useRef(state)
+  const tabIdRef = useRef(TAB_INSTANCE_ID)
+  const lastSnapshotRef = useRef(selectPersistedSnapshot(state))
+  const syncMetaRef = useRef({})
+  const skipPersistSnapshotRef = useRef(null)
+  const backendRef = useRef('hydrating')
+  const hydrationPromiseRef = useRef(null)
+  const pendingWriteRef = useRef(null)
+  const writeLoopRef = useRef(null)
+  const clearGenerationRef = useRef(0)
+  const lastClearedAtRef = useRef(0)
+  const channelRef = useRef(null)
+  const mountedRef = useRef(true)
+
+  const publishChange = useCallback((type, payload, writtenAt = Date.now()) => {
+    const message = { type, source: tabIdRef.current, writtenAt, payload }
+    try {
+      channelRef.current?.postMessage(message)
+    } catch (error) {
+      console.warn('[AppContext] BroadcastChannel publish failed:', error?.name || error)
+    }
+    const storage = getLocalStorage()
+    if (storage) {
+      try {
+        publishStateSyncSignal(storage, tabIdRef.current, writtenAt, type)
+      } catch (error) {
+        console.warn('[AppContext] storage sync signal failed:', error?.name || error)
+      }
+    }
+  }, [])
+
+  const persistToLegacy = useCallback((snapshot, meta, { broadcast = true } = {}) => {
+    const storage = getLocalStorage()
+    if (!storage) {
+      const result = { ok: false, level: 'error', error: new Error('localStorage unavailable') }
+      if (mountedRef.current) reportPersistenceResult(dispatch, result)
+      return result
+    }
+    const payload = sanitizeForPersist(withSyncMetadata(snapshot, meta))
+    const result = persistWithDegradation(payload, (key, value) => storage.setItem(key, value))
+    if (mountedRef.current) reportPersistenceResult(dispatch, result)
+    if (result.ok) {
+      lastSnapshotRef.current = snapshot
+      syncMetaRef.current = meta
+      if (broadcast) publishChange('updated', payload, meta.writtenAt)
+    }
+    return result
+  }, [publishChange])
+
+  const updateLocalMirrorAfterIndexedDbCommit = useCallback((payload) => {
+    const storage = getLocalStorage()
+    if (!storage) return
+    try {
+      // Free the legacy full snapshot first so the small settings mirror cannot fail just
+      // because the old value already consumes the localStorage quota.
+      removeLegacySnapshot(storage)
+    } catch (error) {
+      console.warn('[AppContext] legacy snapshot cleanup failed:', error?.name || error)
+    }
+    try {
+      writeLightweightSnapshot(storage, payload)
+    } catch (error) {
+      console.warn('[AppContext] lightweight settings write failed:', error?.name || error)
+    }
+  }, [])
+
+  function enqueueIndexedDbWrite(snapshot, meta) {
+    pendingWriteRef.current = {
+      snapshot,
+      meta,
+      generation: clearGenerationRef.current,
+    }
+    if (writeLoopRef.current) return writeLoopRef.current
+
+    const loop = (async () => {
+      while (pendingWriteRef.current) {
+        const item = pendingWriteRef.current
+        pendingWriteRef.current = null
+        if (item.generation !== clearGenerationRef.current) continue
+
+        const payload = sanitizeForPersist(withSyncMetadata(item.snapshot, item.meta))
+        const result = await writePersistedSnapshot(payload)
+        if (item.generation !== clearGenerationRef.current) continue
+
+        if (!result.ok) {
+          console.warn('[AppContext] IndexedDB write failed; falling back to localStorage:', result.error?.name || result.status)
+          backendRef.current = 'localstorage'
+          persistToLegacy(item.snapshot, item.meta)
+          continue
+        }
+
+        lastSnapshotRef.current = item.snapshot
+        syncMetaRef.current = item.meta
+        updateLocalMirrorAfterIndexedDbCommit(payload)
+        if (mountedRef.current) reportPersistenceResult(dispatch, indexedDbNoticeResult(result))
+        publishChange('updated', payload, item.meta.writtenAt)
+      }
+    })().catch((error) => {
+      console.error('[AppContext] persistence queue failed:', error)
+    }).finally(() => {
+      writeLoopRef.current = null
+      if (pendingWriteRef.current) enqueueIndexedDbWrite(
+        pendingWriteRef.current.snapshot,
+        pendingWriteRef.current.meta,
+      )
+    })
+    writeLoopRef.current = loop
+    return loop
+  }
+
+  const loadHydratedPersistence = useCallback(async () => {
+    const storage = getLocalStorage()
+    let bootstrap = { settings: null, legacy: null, clearedAt: 0 }
+    if (storage) {
+      try {
+        bootstrap = readBootstrapPayloads(storage, 0)
+      } catch (error) {
+        console.warn('[AppContext] bootstrap payload read failed:', error?.name || error)
+      }
+    }
+
+    const clearedAt = Number(bootstrap.clearedAt) || 0
+    lastClearedAtRef.current = Math.max(lastClearedAtRef.current, clearedAt)
+    if (clearedAt > 0) {
+      const writtenBeforeClear = (entry) => entry && (Number(entry.meta?.writtenAt) || 0) <= clearedAt
+      if (writtenBeforeClear(bootstrap.settings)) bootstrap.settings = null
+      if (writtenBeforeClear(bootstrap.legacy)) bootstrap.legacy = null
+    }
+
+    let durable = await readPersistedSnapshot()
+    let migrationFailed = false
+    if (durable.ok && durable.payload && clearedAt > 0) {
+      try {
+        const candidate = readPersistedPayload(durable.payload, durable.updatedAt || 0)
+        if ((Number(candidate.meta?.writtenAt) || 0) <= clearedAt) {
+          const staleClear = await clearPersistedSnapshot()
+          if (!staleClear.ok && staleClear.status !== 'unavailable') {
+            console.warn('[AppContext] stale IndexedDB snapshot cleanup failed:', staleClear.error?.name || staleClear.status)
+          }
+          durable = { ...durable, payload: null, updatedAt: null }
+        }
+      } catch {
+        // The normal parsing path below reports malformed snapshots and tries fallbacks.
+      }
+    }
+    const hasMigrationMarker = bootstrap.settings?.snapshot?.__persistence?.durableStore === 'indexeddb'
+    if (durable.ok && !durable.payload && !bootstrap.legacy && hasMigrationMarker) {
+      // Another tab may have committed IndexedDB and removed the legacy key between our two reads.
+      durable = await readPersistedSnapshot()
+    }
+
+    if (durable.ok && durable.payload) {
+      try {
+        const parsed = readPersistedPayload(durable.payload, durable.updatedAt || 0)
+        const durableSnapshot = completeSnapshot({ ...(bootstrap.settings?.snapshot || {}), ...parsed.snapshot })
+
+        if (bootstrap.legacy) {
+          const legacySnapshot = completeSnapshot({
+            ...bootstrap.legacy.snapshot,
+            ...(bootstrap.settings?.snapshot || {}),
+          })
+          const reconciled = mergePersistedSnapshots(
+            durableSnapshot,
+            parsed.meta,
+            legacySnapshot,
+            bootstrap.legacy.meta,
+          )
+          const previousSnapshot = reconciled.snapshot
+          const snapshot = completeSnapshot(previousSnapshot, { cancelRunningTasks: true })
+          const meta = persistedSnapshotsEqual(snapshot, previousSnapshot)
+            ? reconciled.meta
+            : buildSyncMetadata(snapshot, previousSnapshot, reconciled.meta, { source: tabIdRef.current })
+          const payload = sanitizeForPersist(withSyncMetadata(snapshot, meta))
+          const committed = await writePersistedSnapshot(payload)
+          if (committed.ok) {
+            updateLocalMirrorAfterIndexedDbCommit(payload)
+            return {
+              backend: 'indexeddb',
+              snapshot,
+              previousSnapshot: snapshot,
+              meta,
+              skipInitialWrite: true,
+            }
+          }
+
+          // The legacy snapshot may contain changes newer than the stale IndexedDB record.
+          // Preserve the reconciled union in the fallback store instead of selecting old IDB.
+          persistToLegacy(snapshot, meta, { broadcast: false })
+          return {
+            backend: 'localstorage',
+            snapshot,
+            previousSnapshot: snapshot,
+            meta,
+            skipInitialWrite: true,
+          }
+        }
+
+        const previousSnapshot = durableSnapshot
+        const snapshot = completeSnapshot(durableSnapshot, { cancelRunningTasks: true })
+        return {
+          backend: 'indexeddb',
+          snapshot,
+          previousSnapshot,
+          meta: parsed.meta,
+          skipInitialWrite: persistedSnapshotsEqual(snapshot, previousSnapshot),
+        }
+      } catch (error) {
+        console.warn('[AppContext] invalid IndexedDB snapshot; trying legacy data:', error)
+      }
+    }
+
+    if (durable.ok && bootstrap.legacy) {
+      const combined = { ...bootstrap.legacy.snapshot, ...(bootstrap.settings?.snapshot || {}) }
+      const previousSnapshot = completeSnapshot(combined)
+      const snapshot = completeSnapshot(combined, { cancelRunningTasks: true })
+      const meta = buildSyncMetadata(snapshot, previousSnapshot, bootstrap.legacy.meta, {
+        source: tabIdRef.current,
+      })
+      const payload = sanitizeForPersist(withSyncMetadata(snapshot, meta))
+      const migrated = await writePersistedSnapshot(payload)
+      if (migrated.ok) {
+        updateLocalMirrorAfterIndexedDbCommit(payload)
+        return {
+          backend: 'indexeddb',
+          snapshot,
+          previousSnapshot: snapshot,
+          meta,
+          skipInitialWrite: true,
+        }
+      }
+      console.warn('[AppContext] IndexedDB migration failed; preserving legacy snapshot:', migrated.error?.name || migrated.status)
+      migrationFailed = true
+    }
+
+    const fallback = bootstrap.legacy || bootstrap.settings
+    const combined = fallback?.snapshot || {}
+    const previousSnapshot = completeSnapshot(combined)
+    const snapshot = completeSnapshot(combined, { cancelRunningTasks: true })
+    return {
+      backend: durable.ok && !migrationFailed ? 'indexeddb' : 'localstorage',
+      snapshot,
+      previousSnapshot,
+      meta: fallback?.meta || {},
+      skipInitialWrite: persistedSnapshotsEqual(snapshot, previousSnapshot),
+      unavailable: !durable.ok && !storage,
+    }
+  }, [persistToLegacy, updateLocalMirrorAfterIndexedDbCommit])
+
+  function applyRemotePayload(payload, fallbackTimestamp = Date.now()) {
+    let remote
+    try {
+      remote = readPersistedPayload(payload, fallbackTimestamp)
+    } catch {
+      return
+    }
+    if (remote.meta.source && remote.meta.source === tabIdRef.current) return
+    const remoteWrittenAt = Number(remote.meta.writtenAt) || Number(fallbackTimestamp) || 0
+    if (lastClearedAtRef.current > 0 && remoteWrittenAt <= lastClearedAtRef.current) return
+
+    const currentSnapshot = selectPersistedSnapshot(stateRef.current)
+    const normalizedRemote = completeSnapshot(remote.snapshot)
+    const merged = mergePersistedSnapshots(
+      currentSnapshot,
+      syncMetaRef.current,
+      normalizedRemote,
+      remote.meta,
+      { preserveLocalFields: ['activeSessionId'] },
+    )
+    const stateChanged = !persistedSnapshotsEqual(currentSnapshot, merged.snapshot)
+    const needsConvergenceWrite = !persistedSnapshotsEqual(normalizedRemote, merged.snapshot, ['activeSessionId'])
+
+    lastSnapshotRef.current = merged.snapshot
+    syncMetaRef.current = merged.meta
+    if (stateChanged) {
+      skipPersistSnapshotRef.current = merged.snapshot
+      stateRef.current = { ...stateRef.current, ...merged.snapshot }
+      dispatch({ type: 'MERGE_EXTERNAL_STATE', payload: merged.snapshot })
+    }
+    if (needsConvergenceWrite) {
+      const convergenceMeta = markConvergedMetadata(merged.meta, tabIdRef.current)
+      if (backendRef.current === 'indexeddb') {
+        enqueueIndexedDbWrite(merged.snapshot, convergenceMeta)
+      } else {
+        persistToLegacy(merged.snapshot, convergenceMeta)
+      }
+    }
+  }
+
+  async function applyExternalClear(writtenAt = Date.now()) {
+    const requestedClearAt = Number(writtenAt) || Date.now()
+    lastClearedAtRef.current = Math.max(lastClearedAtRef.current, requestedClearAt)
+    clearGenerationRef.current += 1
+    pendingWriteRef.current = null
+    while (writeLoopRef.current) await writeLoopRef.current
+    // A write already in flight when the clear signal arrived may have landed after the sender's delete.
+    const durableResult = await clearPersistedSnapshot()
+    if (!durableResult.ok && durableResult.status !== 'unavailable') {
+      console.warn('[AppContext] external IndexedDB clear failed:', durableResult.error?.name || durableResult.status)
+      if (mountedRef.current) reportPersistenceResult(dispatch, { ok: false, level: 'error', error: durableResult.error })
+    }
+    const storage = getLocalStorage()
+    if (storage) {
+      try {
+        clearLocalPersistence(storage, { preserveClearEpoch: true })
+      } catch (error) {
+        console.warn('[AppContext] local clear failed:', error?.name || error)
+      }
+    }
+    const previousSnapshot = selectPersistedSnapshot(stateRef.current)
+    const resetSnapshot = selectPersistedSnapshot(createInitialState())
+    const clearMeta = buildSyncMetadata(resetSnapshot, previousSnapshot, syncMetaRef.current, {
+      source: tabIdRef.current,
+      now: lastClearedAtRef.current,
+    })
+    lastClearedAtRef.current = Math.max(lastClearedAtRef.current, clearMeta.writtenAt)
+    if (storage) {
+      try {
+        writeStateClearEpoch(storage, lastClearedAtRef.current)
+      } catch (error) {
+        console.warn('[AppContext] clear epoch write failed:', error?.name || error)
+      }
+    }
+    lastSnapshotRef.current = resetSnapshot
+    syncMetaRef.current = clearMeta
+    skipPersistSnapshotRef.current = resetSnapshot
+    stateRef.current = { ...stateRef.current, ...resetSnapshot }
+    dispatch({ type: 'MERGE_EXTERNAL_STATE', payload: resetSnapshot })
+  }
+
+  useEffect(() => {
+    mountedRef.current = true
+    let active = true
+    if (!hydrationPromiseRef.current) hydrationPromiseRef.current = loadHydratedPersistence()
+    hydrationPromiseRef.current.then((result) => {
+      if (!active) return
+      backendRef.current = result.backend
+      lastSnapshotRef.current = result.previousSnapshot
+      syncMetaRef.current = result.meta
+      skipPersistSnapshotRef.current = result.skipInitialWrite ? result.snapshot : null
+      stateRef.current = { ...stateRef.current, ...result.snapshot }
+      dispatch({ type: 'MERGE_EXTERNAL_STATE', payload: result.snapshot })
+      if (result.unavailable) {
+        dispatch({ type: 'SET_PERSISTENCE_NOTICE', payload: { level: 'unavailable' } })
+      }
+      setHydrated(true)
+    }).catch((error) => {
+      if (!active) return
+      console.error('[AppContext] persistence hydration failed:', error)
+      backendRef.current = 'localstorage'
+      dispatch({ type: 'SET_PERSISTENCE_NOTICE', payload: { level: 'unavailable' } })
+      setHydrated(true)
+    })
+    return () => {
+      active = false
+      mountedRef.current = false
+    }
+    // StrictMode reuses the same hydration promise across its effect replay.
+  }, [loadHydratedPersistence])
+
+  useEffect(() => {
+    const controller = {
+      async prepareClear() {
+        clearGenerationRef.current += 1
+        pendingWriteRef.current = null
+        while (writeLoopRef.current) await writeLoopRef.current
+      },
+      publishClear(writtenAt) {
+        const resetSnapshot = selectPersistedSnapshot(createInitialState())
+        const clearMeta = buildSyncMetadata(
+          resetSnapshot,
+          selectPersistedSnapshot(stateRef.current),
+          syncMetaRef.current,
+          { source: tabIdRef.current, now: writtenAt },
+        )
+        lastClearedAtRef.current = Math.max(lastClearedAtRef.current, clearMeta.writtenAt)
+        lastSnapshotRef.current = resetSnapshot
+        syncMetaRef.current = clearMeta
+        skipPersistSnapshotRef.current = resetSnapshot
+        publishChange('cleared', null, lastClearedAtRef.current)
+      },
+    }
+    ACTIVE_PERSISTENCE_CONTROLLERS.add(controller)
+    return () => ACTIVE_PERSISTENCE_CONTROLLERS.delete(controller)
+  }, [publishChange])
+
+  useEffect(() => {
+    if (!hydrated || typeof window === 'undefined') return undefined
+
+    let channel = null
+    if (typeof BroadcastChannel === 'function') {
+      try {
+        channel = new BroadcastChannel(STATE_SYNC_CHANNEL_NAME)
+        channelRef.current = channel
+        channel.onmessage = (event) => {
+          const message = event.data
+          if (!message || message.source === tabIdRef.current) return
+          if (message.type === 'cleared') {
+            void applyExternalClear(message.writtenAt)
+          } else if (message.type === 'updated' && message.payload) {
+            applyRemotePayload(message.payload, message.writtenAt)
+          }
+        }
+      } catch (error) {
+        console.warn('[AppContext] BroadcastChannel unavailable:', error?.name || error)
+      }
+    }
+
+    const onStorage = (event) => {
+      if (event.storageArea && event.storageArea !== getLocalStorage()) return
+      if (event.key === LEGACY_STATE_STORAGE_KEY) {
+        // A null value is migration cleanup, never an implicit data-clear command.
+        if (event.newValue) applyRemotePayload(event.newValue, Date.now())
+        return
+      }
+      if (event.key !== STATE_SYNC_SIGNAL_KEY || !event.newValue) return
+      const signal = readStateSyncSignal(event.newValue)
+      if (!signal || signal.source === tabIdRef.current) return
+      if (signal.type === 'cleared') {
+        void applyExternalClear(signal.writtenAt)
+        return
+      }
+      void readPersistedSnapshot().then((remote) => {
+        if (remote.ok && remote.payload) applyRemotePayload(remote.payload, remote.updatedAt || signal.writtenAt)
+      })
+    }
+    window.addEventListener('storage', onStorage)
+    return () => {
+      window.removeEventListener('storage', onStorage)
+      channel?.close()
+      if (channelRef.current === channel) channelRef.current = null
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrated])
+
+  useEffect(() => {
+    stateRef.current = state
+  }, [state])
 
   // 持久化：state 变化时把白名单字段写回 localStorage
   // 防容量炸弹:抓到 QuotaExceededError 走逐步降级策略,见 persistWithDegradation.
@@ -766,33 +1267,69 @@ export function AppProvider({ children }) {
   // 于是一条长回复要把整个 state(所有会话 + 所有消息)序列化几千次。
   // 本地模型吐字慢反而掩盖了这个问题,云端快模型上会明显掉帧。
   useEffect(() => {
-    if (typeof window === 'undefined') return undefined
+    if (!hydrated || typeof window === 'undefined') return undefined
     const timer = setTimeout(() => {
-      const snapshot = {}
-      for (const key of PERSIST_KEYS) snapshot[key] = state[key]
-      const result = persistWithDegradation(snapshot, (k, v) => window.localStorage.setItem(k, v))
+      const snapshot = selectPersistedSnapshot(stateRef.current)
+      if (skipPersistSnapshotRef.current && persistedSnapshotsEqual(snapshot, skipPersistSnapshotRef.current)) {
+        skipPersistSnapshotRef.current = null
+        return
+      }
+      skipPersistSnapshotRef.current = null
+      const syncMeta = buildSyncMetadata(snapshot, lastSnapshotRef.current, syncMetaRef.current, {
+        source: tabIdRef.current,
+        now: Math.max(Date.now(), lastClearedAtRef.current + 1),
+      })
+      if (backendRef.current === 'indexeddb') {
+        enqueueIndexedDbWrite(snapshot, syncMeta)
+        return
+      }
+      const result = persistWithDegradation(withSyncMetadata(snapshot, syncMeta), (key, value) => window.localStorage.setItem(key, value))
+      reportPersistenceResult(dispatch, result)
       if (!result.ok) {
         console.error('[AppContext] localStorage 完全不可写:', result.error)
-      } else if (result.level !== 'full') {
-        console.warn(`[AppContext] localStorage 容量告急,已降级到: ${result.level}`)
+      } else {
+        lastSnapshotRef.current = snapshot
+        syncMetaRef.current = syncMeta
       }
     }, 250)
     return () => clearTimeout(timer)
-  }, [state])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrated, state.user, state.isLoggedIn, state.sessions, state.activeSessionId, state.tasks, state.history, state.permissions, state.theme, state.accentColor, state.strongAccent, state.fontSize, state.density, state.animationsEnabled, state.skillConfigs, state.toolsConfig, state.agentMode, state.sessionDrafts])
 
   return (
     <AppContext.Provider value={{ state, dispatch }}>
-      {children}
+      {hydrated ? children : null}
     </AppContext.Provider>
   )
 }
 
 // 暴露给外部（如 SettingsView "清空全部数据"）调用
 // eslint-disable-next-line react-refresh/only-export-components
-export function clearPersistedState() {
+export async function clearPersistedState() {
   if (typeof window === 'undefined') return { ok: true }
   try {
-    window.localStorage.removeItem(STORAGE_KEY)
+    const controllers = [...ACTIVE_PERSISTENCE_CONTROLLERS]
+    await Promise.all(controllers.map((controller) => controller.prepareClear()))
+    const durableResult = await clearPersistedSnapshot()
+    const storage = getLocalStorage()
+    if (!durableResult.ok && durableResult.status !== 'unavailable') {
+      return { ok: false, reason: durableResult.error?.message || durableResult.status }
+    }
+    if (!durableResult.ok && !storage) {
+      return { ok: false, reason: durableResult.error?.message || durableResult.status }
+    }
+    if (storage) clearLocalPersistence(storage)
+    const writtenAt = Date.now()
+    if (controllers.length) {
+      for (const controller of controllers) controller.publishClear(writtenAt)
+    } else {
+      if (storage) publishStateSyncSignal(storage, TAB_INSTANCE_ID, writtenAt, 'cleared')
+      if (typeof BroadcastChannel === 'function') {
+        const channel = new BroadcastChannel(STATE_SYNC_CHANNEL_NAME)
+        channel.postMessage({ type: 'cleared', source: TAB_INSTANCE_ID, writtenAt, payload: null })
+        channel.close()
+      }
+    }
     return { ok: true }
   } catch (err) {
     // Safari 隐私模式 / 用户禁用 storage / iframe 跨源限制 → SecurityError

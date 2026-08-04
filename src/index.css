@@ -257,7 +257,8 @@ html[data-density="loose"] {
 
 /* Hover-only controls need a direct touch target on phones and tablets. */
 @media (hover: none), (pointer: coarse) {
-  .chat-message-actions {
+  .chat-message-actions,
+  .chat-message-meta {
     opacity: 1;
     pointer-events: auto;
   }

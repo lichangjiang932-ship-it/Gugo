@@ -6,8 +6,8 @@ import { lookup, translations } from '../src/i18n/translations.js'
 test('chat page keeps Coding Workbench and task actions out of the conversation chrome', () => {
   const source = fs.readFileSync(new URL('../src/pages/ChatSplit/index.jsx', import.meta.url), 'utf8')
   assert.doesNotMatch(source, /CodingWorkbench|showCodingWorkbench|<ChatHeader/)
-  const settings = fs.readFileSync(new URL('../src/pages/SettingsView.jsx', import.meta.url), 'utf8')
-  assert.match(settings, /path: '\/agents'.*人物与性格/)
+  const settingsPanels = fs.readFileSync(new URL('../src/components/settings/SettingsSecondaryPanels.jsx', import.meta.url), 'utf8')
+  assert.match(settingsPanels, /\['\/agents', Users,/)
 })
 
 test('chat composer removes local-file and quick-skill clutter', () => {
@@ -46,7 +46,8 @@ test('model management has a dedicated settings page and refreshes the chat mode
 test('unused phone, hooks, cron, and global-shortcut routes are not exposed', () => {
   const app = fs.readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8')
   const settings = fs.readFileSync(new URL('../src/pages/SettingsView.jsx', import.meta.url), 'utf8')
-  assert.doesNotMatch(app, /GlobalShortcuts|CommandPalette|SkillCommandsSync|MobileKeysView|HooksView|CronJobsPage/)
+  assert.doesNotMatch(app, /GlobalShortcuts|SkillCommandsSync|MobileKeysView|HooksView|CronJobsPage/)
+  assert.match(app, /<CommandPalette \/>/)
   assert.doesNotMatch(app, /path="\/(?:mobile-keys|hooks|cron)"/)
   assert.doesNotMatch(settings, /path: '\/(?:mobile-keys|hooks|cron)'/)
   assert.doesNotMatch(settings, /function renderShortcuts/)

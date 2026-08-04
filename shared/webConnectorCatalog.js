@@ -1,11 +1,18 @@
-const app = (provider, label, brandColor, webUrl, category, searchTerms, capability) => Object.freeze({
+const BROWSER_SHORTCUT_CAPABILITY = 'Opens this service in the managed browser; no provider-specific API or tools are included.'
+const NO_PROVIDER_TOOLS = Object.freeze([])
+
+const app = (provider, label, brandColor, webUrl, category, searchTerms, intendedCapability) => Object.freeze({
   provider,
   label,
   brandColor,
   webUrl,
   category,
   searchTerms,
-  capability,
+  capability: BROWSER_SHORTCUT_CAPABILITY,
+  intendedCapability,
+  capabilityLevel: 'browser_shortcut',
+  integrationDepth: 'browser_navigation_only',
+  providerSpecificTools: NO_PROVIDER_TOOLS,
 })
 
 export const WEB_CONNECTOR_CATALOG = Object.freeze([

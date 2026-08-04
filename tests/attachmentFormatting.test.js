@@ -55,3 +55,18 @@ test('falls back to an attachment analysis prompt when only files are provided',
 
   assert.equal(content, '请分析附件内容。\n\n[附件: archive.zip, 12.4 KB, 类型: application/zip（二进制文件，无法直接读取内容）]')
 })
+
+test('PDF 同时保留原始数据与本地文本回退', () => {
+  const content = buildUserContentWithAttachments('请总结', [{
+    kind: 'pdf',
+    name: 'report.pdf',
+    sizeKB: '4.2',
+    dataUrl: 'data:application/pdf;base64,JVBERg==',
+    text: '本地提取的 PDF 正文',
+  }])
+
+  assert.equal(content[0].type, 'text')
+  assert.equal(content[1].type, 'yma_pdf')
+  assert.equal(content[1].file_data, 'data:application/pdf;base64,JVBERg==')
+  assert.match(content[1].fallback_text, /本地提取的 PDF 正文/)
+})
