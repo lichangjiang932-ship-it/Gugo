@@ -1,6 +1,10 @@
 # ---- build stage ----
 FROM node:20-alpine AS builder
 WORKDIR /app
+# Alpine/musl releases may not have a better-sqlite3 prebuild. Reuse the Node
+# headers already present in the official image instead of downloading headers
+# from unofficial-builds.nodejs.org during node-gyp fallback compilation.
+ENV npm_config_nodedir=/usr/local
 # better-sqlite3 是原生模块,Alpine 默认无 python/g++,要自己装
 RUN apk add --no-cache python3 make g++
 COPY package*.json ./
@@ -11,6 +15,7 @@ RUN npm run build
 # ---- deps stage: 单独编译 prod deps,把 native 二进制带到 runtime ----
 FROM node:20-alpine AS deps
 WORKDIR /app
+ENV npm_config_nodedir=/usr/local
 RUN apk add --no-cache python3 make g++
 COPY package*.json ./
 RUN npm ci --omit=dev
