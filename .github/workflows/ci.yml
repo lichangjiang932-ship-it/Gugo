@@ -82,6 +82,9 @@ jobs:
       - name: Fail on high or critical production vulnerabilities
         run: npm audit --omit=dev --audit-level=high
 
+      - name: Verify production dependency licenses
+        run: npm run licenses
+
   secret-scan:
     name: secret scan
     runs-on: ubuntu-latest

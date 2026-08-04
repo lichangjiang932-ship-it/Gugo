@@ -143,6 +143,11 @@ seed/                Built-in skill assets
 Read [CONTRIBUTING.md](CONTRIBUTING.md) and the
 [Code of Conduct](CODE_OF_CONDUCT.md) before opening a pull request.
 
+See [CHANGELOG.md](CHANGELOG.md) for release history and
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for vendored assets and
+production dependency license provenance.
+
 ## License
 
-Gugo is released under the [MIT License](LICENSE).
+Gugo is released under the [MIT License](LICENSE). Third-party components
+remain subject to their respective licenses and copyright notices.

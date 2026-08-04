@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing semantic version tag to release (for example v0.10.0)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run licenses
+      - run: npm run build
+
+      - name: Verify tag matches package version
+        shell: bash
+        run: |
+          test "$RELEASE_TAG" = "v$(node -p "require('./package.json').version")"
+
+      - name: Package browser distribution
+        shell: bash
+        run: tar -czf "gugo-${RELEASE_TAG#v}-web.tar.gz" dist
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$RELEASE_TAG" "gugo-${RELEASE_TAG#v}-web.tar.gz" --verify-tag --generate-notes

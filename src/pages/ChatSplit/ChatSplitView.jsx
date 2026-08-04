@@ -116,6 +116,7 @@ export default function ChatSplitView({
           onPermDeny={onPermDeny}
           onNavigatePermissions={onNavigatePermissions}
           onQuoteSelection={onQuoteSelection}
+          onPromptSelect={setInput}
           onOpenInPreview={onOpenInPreview}
           onExpandCompaction={onExpandCompaction}
         />

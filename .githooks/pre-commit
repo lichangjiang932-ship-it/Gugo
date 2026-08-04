@@ -10,6 +10,14 @@
 
 set -e
 
+if command -v gitleaks >/dev/null 2>&1; then
+  gitleaks git --staged --redact --no-banner .
+else
+  echo "pre-commit: gitleaks is not installed; CI will run the full history scan."
+fi
+
+npm run licenses
+
 if git diff --cached --unified=0 | grep -E "^\+.*=\s*['\"]\*\*\*['\"]" > /dev/null; then
   echo "pre-commit: detected '= ***' assignment in staged diff."
   echo "   secret-redaction tool likely overwrote a literal. Review:"

@@ -7,8 +7,8 @@
 ═══════════════════════════════════════
 - **71 个图表模板**：`/api/skills/ppt-master/templates/charts/<name>.svg` — 完整索引见 `charts_index.json`
   - 主类：area_chart, bar_chart, donut_chart, funnel_chart, gantt_chart, line_chart, pie_chart, radar_chart, scatter_chart, stacked_bar_chart, heatmap_chart, treemap_chart, sankey_chart, waterfall_chart, gauge_chart, bubble_chart, kpi_cards, comparison_table, consulting_table, fishbone_diagram, mindmap_horizontal, swot_matrix, bcg_matrix, value_chain, porter_five_forces, agenda_list, chevron_process, circular_stages, timeline, layered_architecture …
-- **17 套布局风格**：`/api/skills/ppt-master/templates/layouts/<style>/` — 每套含 cover/toc/chapter/content/ending 5 个 SVG + `design_spec.md` 色板字体规范
-  - anthropic（科技深色）、google_style（谷歌简洁）、government_blue / government_red（政务）、academic_defense（学术）、medical_university（医学）、pixel_retro（像素复古）、psychology_attachment（心理治疗）、ai_ops（电信 AI）、china_telecom_template、中国电建_常规/现代、中汽研_商务/常规/现代、招商银行、重庆大学
+- **7 套通用布局风格**：`/api/skills/ppt-master/templates/layouts/<style>/` — 每套含 cover/toc/chapter/content/ending 5 个 SVG + `design_spec.md` 色板字体规范
+  - `government_blue` / `government_red`（政务）、`academic_defense`（学术）、`medical_university`（医学）、`pixel_retro`（像素复古）、`psychology_attachment`（心理）、`ai_ops`（运维科技）
 - **640 个 chunk-filled 图标**：`/api/skills/ppt-master/templates/icons/chunk-filled/<name>.svg` — 厚重描边风格的现代图标
 - **角色规范**：`references/strategist.md`（策略师）、`references/executor-base.md` / `executor-consultant.md` / `executor-general.md`（执行者）、`references/shared-standards.md`（视觉规范）、`references/image-layout-patterns.md`（图文布局）
 
@@ -21,7 +21,7 @@
 用中文输出一份**简短**的设计计划：
 
 1. **主题定调**：一句话点题
-2. **风格选择**：从 17 套布局中**指名**一个（如 `anthropic`、`government_blue`、`google_style`），并说为什么匹配
+2. **风格选择**：从 7 套通用布局中**指名**一个（如 `government_blue`、`academic_defense`、`pixel_retro`），并说为什么匹配
 3. **配色锁定**：3 色 hex（primary / accent / neutral-bg）—— 从对应布局的 `design_spec.md` 取色，不要自己发明
 4. **字体锁定**：标题字体 + 正文字体（系统字体栈）
 5. **页面清单**：5–15 页，每页一行 `P{N}. {标题} — {1 句要点} | 用 {图表/布局模式}`
