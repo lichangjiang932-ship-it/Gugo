@@ -1,0 +1,3 @@
+# Historical false positive: an empty MODEL_API_KEY assignment in the
+# operations guide was joined with the following environment-variable name.
+c93fd0c74f8240cd03ac5661941974039b72a090:docs/OPERATION_GUIDE.md:generic-api-key:75
