@@ -1,19 +1,15 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Plus, Trash2, Save, Pin, Search, BookOpen, X, Users } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
 import { useActiveAgent } from '../agents/activeAgentContext.js'
+import { useT } from '../i18n/I18nProvider.jsx'
 import {
   listMemoriesApi,
   upsertMemoryApi,
   deleteMemoryApi,
 } from '../lib/memoryClient.js'
 
-const TYPES = [
-  { id: 'user', label: '用户', hint: '关于用户的长期事实（角色、偏好）' },
-  { id: 'feedback', label: '反馈', hint: '校正过的工作方式，下次重复' },
-  { id: 'project', label: '项目', hint: '项目背景、约束、决策' },
-  { id: 'reference', label: '引用', hint: '用户指定要记住的资料片段' },
-]
+const TYPE_IDS = ['user', 'feedback', 'project', 'reference']
 
 function emptyMemory() {
   return {
@@ -28,7 +24,12 @@ function emptyMemory() {
 }
 
 export default function MemoryView() {
+  const { t } = useT()
   const { agents, activeAgentId } = useActiveAgent()
+  const types = TYPE_IDS.map((id) => {
+    const [label, hint] = t(`memory.types.${id}`)
+    return { id, label, hint }
+  })
   const [memories, setMemories] = useState([])
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
@@ -44,23 +45,23 @@ export default function MemoryView() {
     return m
   }, [agents])
 
-  const reload = async () => {
+  const reload = useCallback(async () => {
     setLoading(true)
     setErr('')
     try {
       const data = await listMemoriesApi()
       setMemories(data.memories || [])
     } catch (e) {
-      setErr(e.message || '加载失败')
+      setErr(e.message || t('memory.loadFailed'))
     } finally {
       setLoading(false)
     }
-  }
+  }, [t])
 
   useEffect(() => {
     const timer = window.setTimeout(() => { reload() }, 0)
     return () => window.clearTimeout(timer)
-  }, [])
+  }, [reload])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
@@ -91,7 +92,7 @@ export default function MemoryView() {
       setEditing(null)
       await reload()
     } catch (e) {
-      setErr(e.message || '保存失败')
+      setErr(e.message || t('memory.saveFailed'))
     } finally {
       setSaving(false)
     }
@@ -99,13 +100,13 @@ export default function MemoryView() {
 
   const handleDelete = async (id) => {
     if (!id) return
-    if (!window.confirm('删除这条记忆?不可撤销。')) return
+    if (!window.confirm(t('memory.confirmDelete'))) return
     try {
       await deleteMemoryApi(id)
       if (editing?.id === id) setEditing(null)
       await reload()
     } catch (e) {
-      setErr(e.message || '删除失败')
+      setErr(e.message || t('memory.deleteFailed'))
     }
   }
 
@@ -118,8 +119,8 @@ export default function MemoryView() {
         <div className="px-6 py-4 border-b border-ink/10 flex items-center gap-3">
           <BookOpen className="w-5 h-5 text-ember" />
           <div className="flex-1">
-            <div className="text-base font-semibold text-ink">记忆中心</div>
-            <div className="text-[11px] text-ink-fade">长期记住的用户偏好、反馈、项目背景；会注入到每次对话</div>
+            <div className="text-base font-semibold text-ink">{t('memory.title')}</div>
+            <div className="text-[11px] text-ink-fade">{t('memory.subtitle')}</div>
           </div>
           <button
             type="button"
@@ -127,21 +128,21 @@ export default function MemoryView() {
             className="h-8 px-3 bg-ember text-paper rounded-md text-xs hover:bg-ember/90 flex items-center gap-1"
           >
             <Plus className="w-3.5 h-3.5" />
-            新增
+            {t('memory.add')}
           </button>
         </div>
 
         {/* Filters */}
         <div className="px-6 py-3 flex items-center gap-3 border-b border-ink/5 flex-wrap">
           <div className="flex items-center gap-1.5 border border-ink/15 rounded-md overflow-hidden text-[11px]">
-            <FilterChip active={filterType === 'all'} onClick={() => setFilterType('all')}>全部</FilterChip>
-            {TYPES.map((t) => (
+            <FilterChip active={filterType === 'all'} onClick={() => setFilterType('all')}>{t('memory.all')}</FilterChip>
+            {types.map((type) => (
               <FilterChip
-                key={t.id}
-                active={filterType === t.id}
-                onClick={() => setFilterType(t.id)}
+                key={type.id}
+                active={filterType === type.id}
+                onClick={() => setFilterType(type.id)}
               >
-                {t.label}
+                {type.label}
               </FilterChip>
             ))}
           </div>
@@ -153,10 +154,10 @@ export default function MemoryView() {
               onChange={(e) => setFilterAgent(e.target.value)}
               className="h-7 px-2 text-[11px] bg-paper-2 border border-ink/15 rounded-md outline-none focus:border-ember"
             >
-              <option value="all">所有 agent</option>
-              <option value="__global__">仅全局</option>
+              <option value="all">{t('memory.allAgents')}</option>
+              <option value="__global__">{t('memory.globalOnly')}</option>
               {agents.map((a) => (
-                <option key={a.id} value={a.id}>仅 {a.name}</option>
+                <option key={a.id} value={a.id}>{t('memory.agentOnly', { name: a.name })}</option>
               ))}
             </select>
           </div>
@@ -165,7 +166,7 @@ export default function MemoryView() {
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="搜索标题或内容…"
+              placeholder={t('memory.search')}
               className="w-full h-8 pl-8 pr-3 text-xs bg-paper-2 border border-ink/15 rounded-md outline-none focus:border-ember"
             />
           </div>
@@ -175,11 +176,11 @@ export default function MemoryView() {
         <div className="flex-1 flex min-h-0">
           {/* List */}
           <div className="w-[360px] border-r border-ink/10 overflow-auto">
-            {loading && <div className="p-4 text-sm text-ink-fade">加载中…</div>}
+            {loading && <div className="p-4 text-sm text-ink-fade">{t('memory.loading')}</div>}
             {err && <div className="p-4 text-sm text-rose-700">{err}</div>}
             {!loading && filtered.length === 0 && (
               <div className="p-6 text-center text-sm text-ink-fade">
-                还没有记忆，点击「新增」开始。
+                {t('memory.empty')}
               </div>
             )}
             {filtered.map((m) => (
@@ -213,65 +214,65 @@ export default function MemoryView() {
           <div className="flex-1 overflow-auto">
             {!editing ? (
               <div className="h-full flex items-center justify-center text-sm text-ink-fade">
-                左侧选择记忆，或点「新增」创建一条
+                {t('memory.selectHint')}
               </div>
             ) : (
               <div className="max-w-[720px] mx-auto px-8 py-6 space-y-4">
                 <div className="flex items-center justify-between">
                   <div className="text-sm font-semibold text-ink">
-                    {editing.id ? '编辑记忆' : '新建记忆'}
+                    {editing.id ? t('memory.editTitle') : t('memory.newTitle')}
                   </div>
                   <button
                     type="button"
                     onClick={() => setEditing(null)}
                     className="text-ink-fade hover:text-ink"
-                    title="关闭"
+                    title={t('memory.close')}
                   >
                     <X className="w-4 h-4" />
                   </button>
                 </div>
 
                 <div>
-                  <label className="block text-[11px] text-ink-fade mb-1.5">类型</label>
+                  <label className="block text-[11px] text-ink-fade mb-1.5">{t('memory.type')}</label>
                   <div className="flex gap-1.5">
-                    {TYPES.map((t) => (
+                    {types.map((type) => (
                       <button
-                        key={t.id}
+                        key={type.id}
                         type="button"
-                        onClick={() => setEditing({ ...editing, type: t.id })}
+                        onClick={() => setEditing({ ...editing, type: type.id })}
                         className={`px-3 py-1 text-xs rounded-md border transition-colors ${
-                          editing.type === t.id
+                          editing.type === type.id
                             ? 'bg-ember text-paper border-ember'
                             : 'bg-paper-2 border-ink/15 text-ink-soft hover:border-ember/50'
                         }`}
-                        title={t.hint}
+                        title={type.hint}
                       >
-                        {t.label}
+                        {type.label}
                       </button>
                     ))}
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-[11px] text-ink-fade mb-1.5">标题</label>
+                  <label className="block text-[11px] text-ink-fade mb-1.5">{t('memory.titleLabel')}</label>
                   <input
                     value={editing.title}
                     onChange={(e) => setEditing({ ...editing, title: e.target.value })}
-                    placeholder="一句话描述这条记忆"
+                    placeholder={t('memory.titlePlaceholder')}
                     className="w-full h-9 px-3 text-sm bg-paper-2 border border-ink/15 rounded-md outline-none focus:border-ember"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-[11px] text-ink-fade mb-1.5">内容 (markdown)</label>
+                  <label className="block text-[11px] text-ink-fade mb-1.5">{t('memory.bodyLabel')}</label>
                   <textarea
                     value={editing.body}
                     onChange={(e) => setEditing({ ...editing, body: e.target.value })}
                     rows={10}
-                    placeholder={'比如:\n用户偏好用 TypeScript + Vite,不喜欢冗长注释。\n相关: [[design-style]]'}
+                    placeholder={t('memory.bodyPlaceholder')}
                     className="w-full px-3 py-2 text-sm bg-paper-2 border border-ink/15 rounded-md outline-none focus:border-ember font-mono"
                   />
-                  <div className="text-[10px] text-ink-fade mt-1">支持 [[slug]] 形式链接其他记忆</div>
+                  <div className="text-[10px] text-ink-fade mt-1">{t('memory.linkHint')}</div>
                 </div>
 
                 <label className="flex items-center gap-2 text-xs text-ink-soft cursor-pointer">
@@ -281,26 +282,26 @@ export default function MemoryView() {
                     onChange={(e) => setEditing({ ...editing, pinned: e.target.checked })}
                   />
                   <Pin className="w-3.5 h-3.5" />
-                  置顶（优先注入到模型上下文）
+                  {t('memory.pinned')}
                 </label>
 
                 {/* v0.8 绑定到 agent */}
                 <div>
                   <label className="block text-[11px] text-ink-fade mb-1.5 flex items-center gap-1">
-                    <Users className="w-3 h-3" />绑定到 agent
+                    <Users className="w-3 h-3" />{t('memory.bindAgent')}
                   </label>
                   <select
                     value={editing.agentId || ''}
                     onChange={(e) => setEditing({ ...editing, agentId: e.target.value || null })}
                     className="w-full h-8 px-2 text-xs bg-paper-2 border border-ink/15 rounded-md outline-none focus:border-ember"
                   >
-                    <option value="">全局（所有 agent 可见）</option>
+                    <option value="">{t('memory.globalAgent')}</option>
                     {agents.map((a) => (
-                      <option key={a.id} value={a.id}>{a.name}{a.id === activeAgentId ? '（当前）' : ''}</option>
+                      <option key={a.id} value={a.id}>{a.name}{a.id === activeAgentId ? t('memory.current') : ''}</option>
                     ))}
                   </select>
                   <div className="text-[10px] text-ink-fade mt-1">
-                    选“全局”则任何 agent 谈话都能看到；选具体 agent 则仅该 agent 生效。
+                    {t('memory.agentHint')}
                   </div>
                 </div>
 
@@ -312,7 +313,7 @@ export default function MemoryView() {
                     className="h-8 px-4 bg-ember text-paper rounded-md text-xs hover:bg-ember/90 disabled:opacity-50 flex items-center gap-1"
                   >
                     <Save className="w-3.5 h-3.5" />
-                    {saving ? '保存中…' : '保存'}
+                    {saving ? t('memory.saving') : t('memory.save')}
                   </button>
                   {editing.id && (
                     <button
@@ -321,7 +322,7 @@ export default function MemoryView() {
                       className="h-8 px-3 border border-rose-300 text-rose-700 rounded-md text-xs hover:bg-rose-50 flex items-center gap-1"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
-                      删除
+                      {t('memory.delete')}
                     </button>
                   )}
                 </div>

@@ -42,7 +42,9 @@ export function upsertSession({
   if (!id) throw new Error('session id is required')
   if (!userId) throw new Error('user id is required')
   const db = getDb()
-  const row = db.prepare('SELECT token, created_at FROM sessions WHERE token = ? AND user_id = ?').get(id, userId)
+  const owner = db.prepare('SELECT token, user_id, created_at FROM sessions WHERE token = ?').get(id)
+  if (owner && owner.user_id !== userId) throw new Error('session not found')
+  const row = owner?.user_id === userId ? owner : null
   const finalCreatedAt = row?.created_at || createdAt
   db.prepare(`
     INSERT INTO sessions (token, id, user_id, title, expires_at, created_at, updated_at, last_viewed_at, archived_at)
@@ -53,6 +55,7 @@ export function upsertSession({
       updated_at = excluded.updated_at,
       last_viewed_at = COALESCE(excluded.last_viewed_at, sessions.last_viewed_at),
       archived_at = excluded.archived_at
+    WHERE sessions.user_id = excluded.user_id
   `).run(id, id, userId, title, Number.MAX_SAFE_INTEGER, finalCreatedAt, updatedAt, lastViewedAt, archivedAt)
   return getSession({ userId, sessionId: id })
 }
@@ -146,6 +149,26 @@ export function upsertMessage({
     createdAt,
     updatedAt,
   }
+}
+
+export function listMessages({ userId, sessionId, limit = 500 } = {}) {
+  if (!userId || !sessionId) return []
+  const safeLimit = Math.min(2000, Math.max(1, Number(limit) || 500))
+  return getDb().prepare(`
+    SELECT id, session_id, user_id, role, content, created_at, updated_at
+    FROM messages
+    WHERE user_id = ? AND session_id = ?
+    ORDER BY created_at ASC, rowid ASC
+    LIMIT ?
+  `).all(userId, sessionId, safeLimit).map((row) => ({
+    id: row.id,
+    sessionId: row.session_id,
+    userId: row.user_id,
+    role: row.role,
+    content: row.content,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }))
 }
 
 export function deleteMessage({ userId, messageId }) {

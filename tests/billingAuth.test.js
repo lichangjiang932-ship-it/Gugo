@@ -202,9 +202,9 @@ test('billing and mail diagnostics are safe for browser display', () => {
     MAIL_SERVER: 'smtp.qq.com',
     MAIL_PORT: '587',
     MAIL_USE_TLS: 'true',
-    MAIL_USERNAME: 'person@qq.com',
+    MAIL_USERNAME: 'person@example.com',
     MAIL_PASSWORD: 'secret-auth-code',
-    MAIL_DEFAULT_SENDER: 'person@qq.com',
+    MAIL_DEFAULT_SENDER: 'person@example.com',
     AUTH_DEV_CODES: 'false',
   })
   assert.equal(mail.configured, true)

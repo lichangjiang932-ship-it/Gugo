@@ -18,6 +18,13 @@ import { WEB_CONNECTOR_CATALOG } from '../../shared/webConnectorCatalog.js'
 import { openCredentialObject, sealCredentialObject } from '../utils/credentialVault.js'
 
 const INTEGRATION_SECRET_PURPOSE = 'integration-secret'
+const NATIVE_CONNECTOR_TOOLS = Object.freeze({
+  notion: Object.freeze(['notion_search', 'notion_fetch_page']),
+  github: Object.freeze(['github_search_repositories', 'github_get_file']),
+  google_drive: Object.freeze(['google_drive_search', 'google_drive_get_file']),
+  slack: Object.freeze(['slack_list_channels', 'slack_read_channel']),
+})
+const BROWSER_CONNECTOR_TOOLS = Object.freeze(['connected_app_list', 'connected_app_open'])
 
 function newId() {
   return crypto.randomUUID?.() || `integration-${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -122,7 +129,11 @@ const PROVIDER_REGISTRY = {
   telegram: {
     kind: 'social',
     label: 'Telegram',
-    fields: { config: ['botUsername', 'mode', 'defaultAgentId'], secret: ['botToken'] },
+    fields: {
+      config: ['botUsername', 'mode', 'defaultAgentId'],
+      secret: ['botToken'],
+      optional: { secret: ['webhookSecret'] },
+    },
     test: testTelegram,
   },
   slack: {
@@ -152,12 +163,29 @@ const PROVIDER_REGISTRY = {
 }
 
 export function listProviderRegistry() {
-  return Object.entries(PROVIDER_REGISTRY).map(([provider, meta]) => ({
-    provider,
-    kind: meta.kind,
-    label: meta.label,
-    fields: meta.fields,
-  }))
+  return Object.entries(PROVIDER_REGISTRY).map(([provider, meta]) => {
+    const nativeTools = NATIVE_CONNECTOR_TOOLS[provider]
+    const browserShortcut = meta.kind === 'browser_app' || provider === 'browser'
+    const capabilityLevel = nativeTools
+      ? 'native_api'
+      : (browserShortcut ? 'browser_shortcut' : (meta.kind === 'social' ? 'social_bridge' : null))
+    return {
+      provider,
+      kind: meta.kind,
+      label: meta.label,
+      fields: meta.fields,
+      capabilityLevel,
+      integrationDepth: nativeTools
+        ? 'provider_api'
+        : (browserShortcut ? 'browser_navigation_only' : (meta.kind === 'social' ? 'provider_bridge' : null)),
+      providerSpecificTools: nativeTools ? [...nativeTools] : [],
+      availableTools: nativeTools
+        ? [...nativeTools]
+        : (meta.kind === 'browser_app'
+            ? ['connected_app_open']
+            : (provider === 'browser' ? [...BROWSER_CONNECTOR_TOOLS] : [])),
+    }
+  })
 }
 
 function parseJson(value, fallback) {

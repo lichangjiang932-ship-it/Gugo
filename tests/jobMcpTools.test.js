@@ -15,6 +15,7 @@ const {
 } = await import('../server/mcp/mcpManager.js')
 const { runToolsLoop } = await import('../server/services/jobTools.js')
 const { setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
+const { getDynamicTool } = await import('../server/services/toolRegistry.js')
 
 async function readJson(req) {
   const chunks = []
@@ -23,8 +24,10 @@ async function readJson(req) {
 }
 
 async function startFakeMcpServer() {
+  const messages = []
   const server = http.createServer(async (req, res) => {
     const message = await readJson(req)
+    messages.push(message)
     if (message.id === undefined) {
       res.writeHead(202)
       res.end()
@@ -65,6 +68,7 @@ async function startFakeMcpServer() {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   return {
     server,
+    messages,
     url: `http://127.0.0.1:${server.address().port}/mcp`,
   }
 }
@@ -87,10 +91,21 @@ test('autonomous jobs receive and execute only the current user MCP tools', asyn
   setApprovalMode({ userId: owner, mode: 'bypass' })
 
   try {
-    const { specs, errors } = await listUserToolSpecs(owner)
+    let { specs, errors } = await listUserToolSpecs(owner)
     assert.deepEqual(errors, [])
     assert.deepEqual(specs.map((spec) => spec.function.name), ['mcp__devtools__inspect_page'])
+    assert.equal(getDynamicTool('mcp__devtools__inspect_page').metadata.requiresApproval, true)
     assert.deepEqual((await listUserToolSpecs(otherUser)).specs, [])
+
+    disconnectServer(owner, configured.id)
+    upsertServer({
+      ...configured,
+      userId: owner,
+      autoApprove: ['inspect_page'],
+    })
+    ;({ specs, errors } = await listUserToolSpecs(owner))
+    assert.deepEqual(errors, [])
+    assert.equal(getDynamicTool('mcp__devtools__inspect_page').metadata.requiresApproval, false)
 
     let invocations = 0
     let observedToolResult = ''
@@ -118,6 +133,11 @@ test('autonomous jobs receive and execute only the current user MCP tools', asyn
 
     assert.equal(result.text, 'Inspection complete.')
     assert.match(observedToolResult, /inspected:https:\/\/example\.com/)
+    const toolRequest = fake.messages.find((message) => message.method === 'tools/call')
+    assert.deepEqual(toolRequest.params._meta, {
+      'gugo/idempotencyKey': 'job:job-mcp:step:step-mcp:tool:mcp-call-1',
+      'gugo/toolCallId': 'mcp-call-1',
+    })
   } finally {
     disconnectServer(owner, configured.id)
     shutdownAll()

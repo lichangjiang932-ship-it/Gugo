@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { getDb } from '../db.js'
+import { getWorkspaceTrustStatus } from './workspaceTrustService.js'
 
 const execFileAsync = promisify(execFile)
 const MAX_GRANTS = 64
@@ -18,6 +19,10 @@ function serviceError(message, statusCode = 400, code = 'LOCAL_FILE_ACCESS_ERROR
 
 function workspaceRoot() {
   return path.resolve(process.env.WORKSPACE_ROOT?.trim() || process.cwd())
+}
+
+function sharedWorkspaceTrusted() {
+  return process.env.WORKSPACE_SHARED_TRUSTED === '1'
 }
 
 function realPath(input) {
@@ -128,13 +133,22 @@ export function getLocalFileAccessStatus({ userId }) {
   const settings = getSettingsRow(userId)
   const grants = getGrantRows(userId).map(mapGrant)
   const workspaceEnabled = process.env.WORKSPACE_FS_ENABLED === '1'
+  const root = workspaceEnabled ? workspaceRoot() : null
   return {
     allFilesEnabled: !!settings?.all_files_enabled,
     grants,
     workspace: {
       enabled: workspaceEnabled,
-      path: workspaceEnabled ? workspaceRoot() : null,
+      path: root,
+      sharedTrusted: workspaceEnabled && sharedWorkspaceTrusted(),
+      requiresUserGrant: workspaceEnabled && !sharedWorkspaceTrusted(),
+      trust: root ? getWorkspaceTrustStatus({ userId, rootPath: root }) : null,
     },
+    // Return policy status for every authorized directory, including untrusted
+    // ones, so the UI can show the actual read/write/shell/git boundary.
+    trustedWorkspaces: grants
+      .filter((grant) => grant.resourceType === 'directory')
+      .map((grant) => getWorkspaceTrustStatus({ userId, rootPath: grant.path })),
     runtime: {
       platform: process.platform,
       pickerAvailable: ['win32', 'darwin', 'linux'].includes(process.platform),
@@ -224,6 +238,7 @@ export function resolveAuthorizedLocalPath({
   const raw = typeof rawPath === 'string' ? rawPath.trim() : ''
   if (!raw) throw serviceError('path 必填', 400, 'PATH_REQUIRED')
   const workspaceEnabled = allowWorkspace === true
+  const workspaceTrusted = workspaceEnabled && (!userId || sharedWorkspaceTrusted())
   if (!path.isAbsolute(raw) && !workspaceEnabled) {
     // ★ 报错要告诉模型「你能用什么」,而不只是「你不能用什么」。
     //
@@ -251,7 +266,7 @@ export function resolveAuthorizedLocalPath({
   const target = resolveTarget(basePath, { allowMissing })
   const checkedPath = target.exists ? target.fullPath : target.anchorPath
 
-  if (workspaceEnabled) {
+  if (workspaceTrusted) {
     const root = realPath(workspaceRoot())
     if (isInside(root, checkedPath)) {
       return {

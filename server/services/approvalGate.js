@@ -12,6 +12,7 @@
  */
 import {
   cancelApprovalsForJob,
+  cancelApprovalsForTurn,
   createPendingApproval,
   expireStaleApprovals,
   getApprovalById,
@@ -19,6 +20,7 @@ import {
 import { createNotification } from './notificationsStore.js'
 import { getApprovalSettings } from './approvalSettingsStore.js'
 import { classifyToolRisk, resolveApprovalMode, resolveApprovalTimeoutMs } from '../utils/approvalPolicy.js'
+import { getToolMetadata } from './toolRegistry.js'
 
 /** approvalId → Set<resolve>。同进程决策时立刻唤醒等待者。 */
 const waiters = new Map()
@@ -51,6 +53,12 @@ export function releaseApprovalsForJob(jobId) {
   if (!jobId) return 0
   const changed = cancelApprovalsForJob({ jobId })
   // 唤醒所有等待者:它们各自去 DB 读状态,读到 cancelled 就返回 proceed:false
+  for (const id of [...waiters.keys()]) notifyWaiters(id)
+  return changed
+}
+
+export function releaseApprovalsForTurn({ userId, sessionId, turnId } = {}) {
+  const changed = cancelApprovalsForTurn({ userId, sessionId, turnId })
   for (const id of [...waiters.keys()]) notifyWaiters(id)
   return changed
 }
@@ -135,22 +143,41 @@ export async function requestApproval({
 
   const effectiveMode = mode || resolveApprovalMode()
   // 用户档位 + 「总是允许」清单。读失败不阻断,退回最严格的默认(normal/空)。
-  let settings = { mode: undefined, rememberedTools: [] }
+  let settings = { mode: undefined, rememberedTools: [], rememberedGrants: [], riskOverrides: [] }
   try {
     settings = getApprovalSettings({ userId })
   } catch (err) {
     console.error('[approval] 读取用户档位失败,按默认最严处理:', err?.stack || err)
   }
+  const riskOverride = settings.riskOverrides?.find((item) => item?.toolName === toolName) || null
+  const dynamicMetadata = getToolMetadata(toolName, { args })
+  const metadata = riskOverride
+    ? {
+        ...(dynamicMetadata || {}),
+        riskClass: riskOverride.riskClass,
+        requiresApproval: riskOverride.riskClass === 'read' ? false : true,
+        reason: `用户风险覆盖: ${riskOverride.riskClass}`,
+      }
+    : dynamicMetadata
   const verdict = classifyToolRisk(toolName, args, {
     origin,
     mode: effectiveMode,
     permissionMode: settings.mode,
     rememberedTools: settings.rememberedTools,
     rememberedGrants: settings.rememberedGrants,
+    metadata,
   })
   // plan 档位:直接拒,不排队等人 —— 用户要的就是「只看不动」
   if (verdict.denied) return { proceed: false, reason: verdict.reason }
-  if (!verdict.needsApproval) return { proceed: true, args }
+  if (!verdict.needsApproval) {
+    return {
+      proceed: true,
+      args,
+      authorization: verdict.authorization || (riskOverride
+        ? { kind: 'risk_override', toolName, riskClass: riskOverride.riskClass }
+        : null),
+    }
+  }
 
   let approval
   try {

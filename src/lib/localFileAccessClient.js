@@ -54,6 +54,18 @@ export async function setAllFilesAccessApi(enabled) {
   }))
 }
 
+export async function setWorkspaceTrustApi({ path, trusted }) {
+  return parse(await fetch('/api/local-files/workspace-trust', {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify({
+      path,
+      trusted,
+      confirmation: trusted ? 'TRUST_WORKSPACE_CONFIG' : undefined,
+    }),
+  }))
+}
+
 export async function pickLocalDirectoryApi() {
   return parse(await fetch('/api/local-files/pick-directory', {
     method: 'POST',

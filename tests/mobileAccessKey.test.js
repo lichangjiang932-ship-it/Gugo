@@ -31,7 +31,7 @@ async function makeUser(dir, email = 'mak@example.com') {
 
 test('mobileAccessKey: create 返回 rawKey 一次，verify 命中', { concurrency: false }, async () => {
   const dir = tmpDir()
-  const userId = await makeUser(dir, 'create@mak.example')
+  const userId = await makeUser(dir, 'create.mak@example.com')
   const { makMod } = await freshModule(dir)
 
   const { record, rawKey } = makMod.createMobileKey({ userId, label: '手机' })
@@ -55,7 +55,7 @@ test('mobileAccessKey: create 返回 rawKey 一次，verify 命中', { concurren
 
 test('mobileAccessKey: revoke 后 verify 失败，但 list 仍可见', { concurrency: false }, async () => {
   const dir = tmpDir()
-  const userId = await makeUser(dir, 'revoke@mak.example')
+  const userId = await makeUser(dir, 'revoke.mak@example.com')
   const { makMod } = await freshModule(dir)
 
   const { record, rawKey } = makMod.createMobileKey({ userId })
@@ -72,7 +72,7 @@ test('mobileAccessKey: revoke 后 verify 失败，但 list 仍可见', { concurr
 
 test('mobileAccessKey: 过期 key verify 失败', { concurrency: false }, async () => {
   const dir = tmpDir()
-  const userId = await makeUser(dir, 'expire@mak.example')
+  const userId = await makeUser(dir, 'expire.mak@example.com')
   const { makMod } = await freshModule(dir)
 
   const past = Date.now() - 1000
@@ -82,7 +82,7 @@ test('mobileAccessKey: 过期 key verify 失败', { concurrency: false }, async 
 
 test('mobileAccessKey: 错误 key / 空 key 安全拒绝', { concurrency: false }, async () => {
   const dir = tmpDir()
-  await makeUser(dir, 'bad@mak.example')
+  await makeUser(dir, 'bad.mak@example.com')
   const { makMod } = await freshModule(dir)
 
   assert.equal(makMod.verifyAccessKey(''), null)
@@ -93,8 +93,8 @@ test('mobileAccessKey: 错误 key / 空 key 安全拒绝', { concurrency: false 
 
 test('mobileAccessKey: 不同用户互不可见', { concurrency: false }, async () => {
   const dir = tmpDir()
-  const u1 = await makeUser(dir, 'u1@mak.example')
-  const u2 = await makeUser(dir, 'u2@mak.example')
+  const u1 = await makeUser(dir, 'u1.mak@example.com')
+  const u2 = await makeUser(dir, 'u2.mak@example.com')
   const { makMod } = await freshModule(dir)
 
   const { record } = makMod.createMobileKey({ userId: u1 })

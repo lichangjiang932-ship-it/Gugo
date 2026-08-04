@@ -15,9 +15,9 @@ test('voice recognition supports standard and Chromium constructors without a se
   assert.equal(getSpeechRecognitionConstructor({ webkitSpeechRecognition: ChromiumRecognition }), ChromiumRecognition)
   assert.equal(getSpeechRecognitionConstructor({}), null)
 
-  const chatSource = fs.readFileSync(new URL('../src/pages/ChatSplit/index.jsx', import.meta.url), 'utf8')
-  assert.match(chatSource, /getSpeechRecognitionConstructor\(window\)/)
-  assert.doesNotMatch(chatSource, /getUserMedia\(/)
+  const voiceSource = fs.readFileSync(new URL('../src/pages/ChatSplit/useVoiceRecognition.js', import.meta.url), 'utf8')
+  assert.match(voiceSource, /getSpeechRecognitionConstructor\(window\)/)
+  assert.doesNotMatch(voiceSource, /getUserMedia\(/)
 })
 
 test('voice recognition maps UI languages and combines final and interim speech', () => {

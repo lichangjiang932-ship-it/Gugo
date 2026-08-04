@@ -4,7 +4,7 @@ import { parseSchedule } from './cronScheduler.js'
 
 export const CRON_JOB_KINDS = new Set(['heartbeat', 'cron'])
 export const CRON_SCHEDULE_TYPES = new Set(['at', 'every', 'cron'])
-export const CRON_EXEC_TYPES = new Set(['agent_session', 'direct_notify', 'plugin_action'])
+export const CRON_EXEC_TYPES = new Set(['agent_session', 'direct_notify'])
 
 export const HEARTBEAT_MIN_INTERVAL_MS = 5 * 60 * 1000
 
@@ -88,8 +88,11 @@ function normalizeInput(input = {}, existing = null, now = Date.now()) {
   if (!CRON_JOB_KINDS.has(next.kind)) throw new Error('kind must be heartbeat or cron')
   if (!CRON_SCHEDULE_TYPES.has(next.scheduleType)) throw new Error('scheduleType must be at, every, or cron')
   if (!next.scheduleValue) throw new Error('scheduleValue is required')
+  if (next.execType === 'plugin_action') {
+    throw new Error('plugin_action is unavailable because no executable plugin action handler is registered')
+  }
   if (!CRON_EXEC_TYPES.has(next.execType)) {
-    throw new Error('execType must be agent_session, direct_notify, or plugin_action')
+    throw new Error('execType must be agent_session or direct_notify')
   }
 
   if (next.kind === 'heartbeat') {

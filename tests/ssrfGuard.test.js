@@ -4,7 +4,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert'
-import { isUnsafeIp, assertSafeOutboundUrl } from '../server/adapters/toolProxy.js'
+import { isUnsafeIp, assertSafeOutboundUrl, fetchSafe } from '../server/adapters/toolProxy.js'
 
 /* ── isUnsafeIp ── */
 
@@ -99,4 +99,36 @@ test('assertSafeOutboundUrl: 直接 IP 形式回填 lockedIp 复用同一次审�
 test('assertSafeOutboundUrl: 非法 URL 拒绝', async () => {
   await assert.rejects(() => assertSafeOutboundUrl('not a url'), /url/)
   await assert.rejects(() => assertSafeOutboundUrl(''), /url/)
+})
+
+test('fetchSafe revalidates every redirect before making the next request', async () => {
+  const validated = []
+  const requested = []
+  await assert.rejects(
+    () => fetchSafe({
+      url: 'https://public.example/start',
+      validateUrl: async (raw) => {
+        validated.push(raw)
+        if (raw.includes('169.254.169.254')) throw new Error('blocked private redirect')
+        const target = new URL(raw)
+        target.lockedIp = '203.0.113.10'
+        return target
+      },
+      requestImpl: async ({ url }) => {
+        requested.push(url)
+        return {
+          status: 302,
+          headers: { location: 'http://169.254.169.254/latest/meta-data/' },
+          body: '',
+          _redirectTo: 'http://169.254.169.254/latest/meta-data/',
+        }
+      },
+    }),
+    /blocked private redirect/,
+  )
+  assert.deepEqual(validated, [
+    'https://public.example/start',
+    'http://169.254.169.254/latest/meta-data/',
+  ])
+  assert.deepEqual(requested, ['https://public.example/start'])
 })

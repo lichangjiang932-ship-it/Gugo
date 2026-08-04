@@ -29,6 +29,7 @@ import { loadModelConfig } from './modelProxy.js'
 import { buildUserModelEnv } from '../services/modelProviderStore.js'
 import { getRuntimeEnv } from '../utils/runtimeEnv.js'
 import { isLocalEndpoint } from '../utils/endpointProfile.js'
+import { resolveClientId } from '../utils/loginGuard.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
 const SEARCH_TIMEOUT_MS = 12000
@@ -205,14 +206,25 @@ function safeRequest({ url, method = 'GET', headers = {}, body, timeoutMs = 1200
  * 安全外发请求:先解析+审核 URL,再带 lockedIp 直连.
  * 自动跟随最多 3 次重定向(每次重新审核).
  */
-async function fetchSafe({ url, method = 'GET', headers = {}, body, timeoutMs = 12000, maxRedirects = 3 }) {
+export async function fetchSafe({
+  url,
+  method = 'GET',
+  headers = {},
+  body,
+  timeoutMs = 12000,
+  maxRedirects = 3,
+  requireHttps = false,
+  validateUrl = assertSafeOutboundUrl,
+  requestImpl = safeRequest,
+}) {
   let current = url
   for (let i = 0; i <= maxRedirects; i += 1) {
-    const target = await assertSafeOutboundUrl(current)
+    const target = await validateUrl(current)
+    if (requireHttps && target.protocol !== 'https:') throw new Error('outbound request requires https')
     // ★ C-P2.2: 复用 assertSafeOutboundUrl 已审核并返回的具体 IP,不再独立解析一次
     //   (消除审核与使用之间的 DNS rebinding 窗口)。
     const lockedIp = net.isIP(target.hostname) ? target.hostname : target.lockedIp || null
-    const resp = await safeRequest({
+    const resp = await requestImpl({
       url: target.toString(),
       method,
       headers: { ...headers, Host: target.host },
@@ -471,7 +483,7 @@ const TOOL_RATE_WINDOW_MS = 60 * 1000
 const TOOL_RATE_MAX = Number(process.env.TOOL_RATE_MAX || 20)
 
 function checkToolRate(req) {
-  const id = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown'
+  const id = resolveClientId(req)
   const now = Date.now()
   const arr = TOOL_RATE.get(id) || []
   // 剔除窗口外

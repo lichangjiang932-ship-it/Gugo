@@ -21,6 +21,7 @@ import {
   forgetTool,
   getApprovalSettings,
   rememberTool,
+  setRiskOverride,
   setApprovalMode,
 } from '../services/approvalSettingsStore.js'
 import { releaseApproval } from '../services/approvalGate.js'
@@ -97,6 +98,13 @@ export async function handleApprovalRequest(req, res) {
       // 允许一次请求里同时改档位和撤销某个「总是允许」
       if (body?.forgetTool) forgetTool({ userId, toolName: String(body.forgetTool) })
       if (body?.clearRemembered) clearRememberedTools({ userId })
+      if (body?.riskOverride && typeof body.riskOverride === 'object') {
+        setRiskOverride({
+          userId,
+          toolName: body.riskOverride.toolName,
+          riskClass: body.riskOverride.riskClass,
+        })
+      }
       return sendJson(res, 200, getApprovalSettings({ userId }))
     }
 

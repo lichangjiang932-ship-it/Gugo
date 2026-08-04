@@ -6,6 +6,7 @@ import test from 'node:test'
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-hooks-service-tests', String(process.pid))
 
 const {
+  _hooksInternals,
   dispatchHooks,
   testHook,
   upsertHook,
@@ -73,4 +74,23 @@ test('dispatchHooks does not throw when a blocking http hook is SSRF-blocked', a
   })
 
   assert.equal(result.allow, true)
+})
+
+test('shell hooks require an explicit executable allowlist', () => {
+  const previousEnabled = process.env.HOOKS_SHELL_ENABLED
+  const previousAllowed = process.env.HOOKS_SHELL_ALLOWED_COMMANDS
+  process.env.HOOKS_SHELL_ENABLED = '1'
+  process.env.HOOKS_SHELL_ALLOWED_COMMANDS = process.execPath
+  try {
+    assert.doesNotThrow(() => _hooksInternals.assertShellCommandAllowed([process.execPath, '-e', '']))
+    assert.throws(
+      () => _hooksInternals.assertShellCommandAllowed(['definitely-not-allowed', '--version']),
+      /not allowed/,
+    )
+  } finally {
+    if (previousEnabled == null) delete process.env.HOOKS_SHELL_ENABLED
+    else process.env.HOOKS_SHELL_ENABLED = previousEnabled
+    if (previousAllowed == null) delete process.env.HOOKS_SHELL_ALLOWED_COMMANDS
+    else process.env.HOOKS_SHELL_ALLOWED_COMMANDS = previousAllowed
+  }
 })

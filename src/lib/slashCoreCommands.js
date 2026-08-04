@@ -1,6 +1,31 @@
+import { SLASH_ACTION_COPY } from '../i18n/translations.js'
+
 export const CORE_SLASH_COMMANDS = [
-  'clear', 'context', 'help', 'model', 'permissions', 'status',
+  'mcp', 'side', 'init', 'compact', 'feedback', 'continue', 'pet', 'new', 'status', 'goals', 'plan',
 ]
+
+function localeCopy(lang) {
+  const value = String(lang || 'en').toLowerCase()
+  if (value.startsWith('zh-tw') || value.startsWith('zh-hk')) return SLASH_ACTION_COPY['zh-TW']
+  if (value.startsWith('zh')) return SLASH_ACTION_COPY.zh
+  if (value.startsWith('ja')) return SLASH_ACTION_COPY.ja
+  if (value.startsWith('ko')) return SLASH_ACTION_COPY.ko
+  return SLASH_ACTION_COPY.en
+}
+
+function localized(lang) {
+  const local = localeCopy(lang)
+  return {
+    ...local,
+    notices: { ...SLASH_ACTION_COPY.en.notices, ...(local.notices || {}) },
+    prompts: { ...SLASH_ACTION_COPY.en.prompts, ...(local.prompts || {}) },
+    statusPanel: { ...SLASH_ACTION_COPY.en.statusPanel, ...(local.statusPanel || {}) },
+    mcpPanel: { ...SLASH_ACTION_COPY.en.mcpPanel, ...(local.mcpPanel || {}) },
+    feedbackPanel: { ...SLASH_ACTION_COPY.en.feedbackPanel, ...(local.feedbackPanel || {}) },
+    goalsPanel: { ...SLASH_ACTION_COPY.en.goalsPanel, ...(local.goalsPanel || {}) },
+    petGreeting: local.petGreeting || SLASH_ACTION_COPY.en.petGreeting,
+  }
+}
 
 function textArg(args) {
   return typeof args === 'string' ? args.trim() : String(args?.text || '').trim()
@@ -11,104 +36,99 @@ function currentSession(ctx) {
   return (state.sessions || []).find((session) => session.id === state.activeSessionId) || null
 }
 
-function dispatchResult(ctx, message) {
-  if (message && ctx.dispatch) {
-    ctx.dispatch({ type: 'RECEIVE_MESSAGE', payload: message })
-  }
-  return message
+function command(name, copy, handler, extra = {}) {
+  return { name, description: copy[name][1], handler, meta: { displayName: copy[name][0] }, ...extra }
 }
 
-function modelName(option) {
-  return typeof option === 'string' ? option : option?.name
+function createId(ctx) {
+  return ctx.createId?.() || globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
-export function buildCoreSlashCommands(t) {
-  const tr = typeof t === 'function' ? t : (key) => key
-  return [
-    {
-      name: 'clear',
-      description: tr('slash.commands.clear.description'),
-      handler: async (_args, ctx = {}) => {
-        const confirm = ctx.confirm || ((message) => (typeof window === 'undefined' ? true : window.confirm(message)))
-        if (!confirm(tr('slash.confirmClear'))) return ''
-        ctx.dispatch?.({ type: 'CLEAR_CURRENT_SESSION' })
-        return tr('slash.commands.clear.done')
-      },
-    },
-    {
-      name: 'context',
-      description: tr('slash.commands.context.description'),
-      hint: '[show|hide|toggle]',
-      handler: async (args, ctx = {}) => {
-        const mode = textArg(args).toLowerCase() || 'toggle'
-        if (!['show', 'hide', 'toggle'].includes(mode)) {
-          return tr('slash.commands.context.invalid')
-        }
-        const visible = mode === 'show'
-          ? true
-          : mode === 'hide'
-            ? false
-            : !ctx.contextUsageVisible
-        ctx.setContextUsage?.(visible)
-        return tr(visible ? 'slash.commands.context.shown' : 'slash.commands.context.hidden')
-      },
-    },
-    {
-      name: 'model',
-      description: tr('slash.commands.model.description'),
-      hint: '[name]',
-      handler: async (args, ctx = {}) => {
-        const requested = textArg(args)
-        if (!requested) {
-          ctx.openModelPicker?.()
-          return ''
-        }
-        const available = (ctx.modelOptions || []).map(modelName).filter(Boolean)
-        const match = available.find((name) => name.toLowerCase() === requested.toLowerCase())
-        if (!match) return tr('slash.commands.model.unknown').replace('{model}', requested)
-        ctx.setModel?.(match)
-        return tr('slash.commands.model.done').replace('{model}', match)
-      },
-    },
-    {
-      name: 'permissions',
-      description: tr('slash.commands.permissions.description'),
-      handler: async (_args, ctx = {}) => {
-        ctx.navigate?.('/permissions')
-        return tr('slash.commands.permissions.done')
-      },
-    },
-    {
-      name: 'status',
-      description: tr('slash.commands.status.description'),
-      handler: async (_args, ctx = {}) => {
-        const state = ctx.getState?.() || ctx.state || {}
-        const session = currentSession(ctx)
-        const running = (state.tasks || []).filter((task) => task.status === 'running').length
-        return tr('slash.commands.status.done')
-          .replace('{model}', ctx.selectedModel || tr('slash.commands.status.noModel'))
-          .replace('{messages}', String(session?.messages?.length || 0))
-          .replace('{running}', String(running))
-      },
-    },
-    {
-      name: 'help',
-      description: tr('slash.commands.help.description'),
-      handler: async (_args, ctx = {}) => {
-        const commands = ctx.registry?.listCommands?.() || []
-        const lines = commands.map((cmd) => {
-          const hint = cmd.hint ? ` ${cmd.hint}` : ''
-          return `/${cmd.name}${hint} - ${cmd.description}`
-        })
-        return dispatchResult(ctx, `${tr('slash.helpTitle')}\n\n${lines.join('\n')}`)
-      },
-    },
+export function buildCoreSlashCommands(_t, lang = 'en') {
+  const copy = localized(lang)
+  const commands = [
+    command('mcp', copy, async (_args, ctx = {}) => {
+      ctx.openMcp?.()
+      return ''
+    }),
+    command('side', copy, async (_args, ctx = {}) => {
+      ctx.openSideChat?.()
+      return copy.notices.side
+    }),
+    command('init', copy, async (_args, ctx = {}) => {
+      await ctx.triggerSendFlow?.(copy.prompts.init)
+      return copy.notices.init
+    }),
+    command('compact', copy, async (_args, ctx = {}) => {
+      const session = currentSession(ctx)
+      if (!session || (session.messages || []).length <= 8) return copy.notices.compactEmpty
+      ctx.dispatch?.({ type: 'COMPRESS_CURRENT_SESSION' })
+      return copy.notices.compact
+    }),
+    command('feedback', copy, async (args, ctx = {}) => {
+      const value = textArg(args)
+      if (!value) {
+        ctx.openFeedback?.()
+        return ''
+      }
+      ctx.recordFeedback?.(value)
+      return copy.notices.feedback
+    }, { hint: '<feedback>' }),
+    command('continue', copy, async (_args, ctx = {}) => {
+      const session = currentSession(ctx)
+      if (!session) return copy.notices.noSession
+      const id = createId(ctx)
+      const carried = (session.messages || []).slice(-8).map((message) => {
+        const role = message.role === 'user' ? 'User' : 'Assistant'
+        return `${role}: ${String(message.content || '').slice(0, 1200)}`
+      }).join('\n\n')
+      ctx.dispatch?.({ type: 'NEW_SESSION', payload: { id, title: `${session.title || copy.new[0]} · ${copy.continue[0]}` } })
+      ctx.dispatch?.({ type: 'SET_SESSION_DRAFT', payload: { sessionId: id, text: `Continue from this prior context:\n\n${carried}\n\n` } })
+      ctx.navigate?.('/chat')
+      return copy.notices.continue
+    }),
+    command('pet', copy, async (_args, ctx = {}) => {
+      ctx.togglePet?.()
+      return ''
+    }),
+    command('new', copy, async (_args, ctx = {}) => {
+      ctx.dispatch?.({ type: 'START_NEW_DRAFT' })
+      ctx.navigate?.('/chat')
+      return copy.notices.new
+    }),
+    command('status', copy, async (_args, ctx = {}) => {
+      ctx.openStatus?.()
+      return ''
+    }),
+    command('goals', copy, async (args, ctx = {}) => {
+      const goal = textArg(args)
+      if (!goal) {
+        ctx.openGoals?.()
+        return ''
+      }
+      let session = currentSession(ctx)
+      if (!session) {
+        const id = createId(ctx)
+        ctx.dispatch?.({ type: 'NEW_SESSION', payload: { id, title: copy.goals[0] } })
+        session = { id, todos: [] }
+      }
+      const todos = [...(session.todos || []), { id: createId(ctx), text: goal, done: false }]
+      ctx.dispatch?.({ type: 'SET_TODOS', payload: { sessionId: session.id, todos } })
+      return copy.notices.goal.replace('{goal}', goal)
+    }, { hint: '<goal>' }),
+    command('plan', copy, async (_args, ctx = {}) => {
+      await ctx.setApprovalMode?.('plan')
+      return copy.notices.plan
+    }),
   ]
+  return commands.map((entry, order) => ({ ...entry, meta: { ...entry.meta, order } }))
 }
 
-export function registerCoreSlashCommands(registry, { t } = {}) {
-  for (const cmd of buildCoreSlashCommands(t)) {
-    registry.register(cmd, 'core')
-  }
+export function registerCoreSlashCommands(registry, { t, lang } = {}) {
+  for (const entry of buildCoreSlashCommands(t, lang)) registry.register(entry, 'core')
   return registry
+}
+
+export function getSlashActionCopy(lang) {
+  return localized(lang)
 }

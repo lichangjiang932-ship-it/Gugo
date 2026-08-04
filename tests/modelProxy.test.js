@@ -674,3 +674,51 @@ test('合并时跳过非字符串 content,不产生 undefined', () => {
   assert.equal(body.messages[0].content, 'ok')
   assert.ok(!String(body.messages[0].content).includes('undefined'))
 })
+
+test('PDF 内容块按端点能力在原生 file 与文本回退之间切换', () => {
+  const messages = [{
+    role: 'user',
+    content: [{
+      type: 'yma_pdf',
+      filename: 'report.pdf',
+      file_data: 'data:application/pdf;base64,JVBERg==',
+      fallback_text: '[附件: report.pdf]\n本地提取正文',
+    }],
+  }]
+
+  const nativeBody = JSON.parse(buildOpenAICompatibleRequest({
+    config: { baseUrl: 'https://api.openai.com/v1', modelName: 'gpt-4.1' },
+    messages,
+    profile: { supportsTools: true, supportsPdf: true, supportsParallelTools: true, keepAlive: null },
+  }).init.body)
+  assert.equal(nativeBody.messages[0].content[0].type, 'file')
+  assert.equal(nativeBody.messages[0].content[0].file.filename, 'report.pdf')
+
+  const fallbackBody = JSON.parse(buildOpenAICompatibleRequest({
+    config: { baseUrl: 'https://example.test/v1', modelName: 'text-model' },
+    messages,
+    profile: { supportsTools: true, supportsPdf: false, supportsParallelTools: false, keepAlive: null },
+  }).init.body)
+  assert.equal(fallbackBody.messages[0].content[0].type, 'text')
+  assert.match(fallbackBody.messages[0].content[0].text, /本地提取正文/)
+  assert.equal(JSON.stringify(fallbackBody).includes('yma_pdf'), false)
+})
+
+test('parallel_tool_calls 仅对明确支持的端点下发', () => {
+  const tools = [{ type: 'function', function: { name: 'read_file', parameters: { type: 'object' } } }]
+  const supported = JSON.parse(buildOpenAICompatibleRequest({
+    config: { baseUrl: 'https://api.openai.com/v1', modelName: 'gpt-4.1' },
+    messages: [{ role: 'user', content: 'hi' }],
+    tools,
+    profile: { supportsTools: true, supportsPdf: true, supportsParallelTools: true, keepAlive: null },
+  }).init.body)
+  assert.equal(supported.parallel_tool_calls, true)
+
+  const conservative = JSON.parse(buildOpenAICompatibleRequest({
+    config: { baseUrl: 'https://example.test/v1', modelName: 'm' },
+    messages: [{ role: 'user', content: 'hi' }],
+    tools,
+    profile: { supportsTools: true, supportsPdf: false, supportsParallelTools: false, keepAlive: null },
+  }).init.body)
+  assert.equal(Object.hasOwn(conservative, 'parallel_tool_calls'), false)
+})

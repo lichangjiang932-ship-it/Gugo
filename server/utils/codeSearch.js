@@ -18,6 +18,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { sanitizeChildEnv } from './sensitiveEnv.js'
 import { resolveAuthorizedLocalPath } from '../services/localFileAccessService.js'
+import { assertWorkspaceCapability } from '../services/workspaceTrustService.js'
 
 const RG_BIN = process.env.RG_BIN || 'rg'
 const RG_TIMEOUT_MS = 15_000
@@ -50,6 +51,11 @@ function resolveInWorkspace(rawPath, { userId = null } = {}) {
   if (userId) {
     // 与 read_file / list_directory 完全同一条授权路径,避免两套口径打架
     const resolved = resolveAuthorizedLocalPath({ userId, rawPath: rawPath || '.', write: false })
+    assertWorkspaceCapability({
+      userId,
+      rootPath: resolved.rootPath || getWorkspaceRoot(),
+      capability: 'fileSystem',
+    })
     return resolved.fullPath
   }
   const root = getWorkspaceRoot()

@@ -64,6 +64,28 @@ test('all approval endpoints reject unauthenticated requests', async () => {
   assert.equal((await decide.json()).error.code, 'unauthorized')
 })
 
+test('approval settings persist isolated risk overrides and allow clearing them', async () => {
+  const owner = issueTestSession({ email: 'approval-risk-owner@example.com' })
+  const stranger = issueTestSession({ email: 'approval-risk-stranger@example.com' })
+  const saved = await fetch(`${origin}/api/approvals/settings`, {
+    method: 'POST',
+    headers: headers(owner.token),
+    body: JSON.stringify({ riskOverride: { toolName: 'custom_lookup', riskClass: 'read' } }),
+  })
+  assert.equal(saved.status, 200)
+  assert.deepEqual((await saved.json()).riskOverrides, [{ toolName: 'custom_lookup', riskClass: 'read' }])
+
+  const strangerSettings = await fetch(`${origin}/api/approvals/settings`, { headers: headers(stranger.token) })
+  assert.deepEqual((await strangerSettings.json()).riskOverrides, [])
+
+  const cleared = await fetch(`${origin}/api/approvals/settings`, {
+    method: 'POST',
+    headers: headers(owner.token),
+    body: JSON.stringify({ riskOverride: { toolName: 'custom_lookup', riskClass: null } }),
+  })
+  assert.deepEqual((await cleared.json()).riskOverrides, [])
+})
+
 test('pending approval shows up in list, count and detail', async () => {
   const alice = issueTestSession({ email: 'approval-list-alice@example.com' })
   const created = seed(alice.userId)

@@ -7,6 +7,8 @@
 import { getDb } from '../db.js'
 import { buildRememberedGrant, DEFAULT_PERMISSION_MODE, PERMISSION_MODES } from '../utils/approvalPolicy.js'
 
+const RISK_CLASSES = new Set(['read', 'write_local', 'exec', 'external'])
+
 export function getApprovalMode({ userId } = {}) {
   if (!userId) return DEFAULT_PERMISSION_MODE
   const row = getDb()
@@ -30,7 +32,7 @@ export function setApprovalMode({ userId, mode } = {}) {
 export function listRememberedTools({ userId } = {}) {
   if (!userId) return []
   return getDb()
-    .prepare("SELECT tool_name FROM approval_tool_grants WHERE user_id = ? AND command_prefix = '' ORDER BY tool_name")
+    .prepare('SELECT DISTINCT tool_name FROM approval_tool_grants WHERE user_id = ? ORDER BY tool_name')
     .all(userId)
     .map((r) => r.tool_name)
 }
@@ -72,12 +74,40 @@ export function clearRememberedTools({ userId } = {}) {
   return []
 }
 
+export function listRiskOverrides({ userId } = {}) {
+  if (!userId) return []
+  return getDb()
+    .prepare('SELECT tool_name, risk_class FROM user_tool_risk_overrides WHERE user_id = ? ORDER BY tool_name')
+    .all(userId)
+    .map((row) => ({ toolName: row.tool_name, riskClass: row.risk_class }))
+}
+
+export function setRiskOverride({ userId, toolName, riskClass } = {}) {
+  if (!userId) throw new Error('userId 必填')
+  const name = String(toolName || '').trim()
+  if (!name) throw new Error('toolName 必填')
+  if (riskClass === null || riskClass === undefined || riskClass === '') {
+    getDb().prepare('DELETE FROM user_tool_risk_overrides WHERE user_id = ? AND tool_name = ?').run(userId, name)
+    return listRiskOverrides({ userId })
+  }
+  const normalized = String(riskClass).trim()
+  if (!RISK_CLASSES.has(normalized)) throw new Error(`非法 riskClass: ${normalized}`)
+  const now = Date.now()
+  getDb().prepare(`
+    INSERT INTO user_tool_risk_overrides (user_id, tool_name, risk_class, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(user_id, tool_name) DO UPDATE SET risk_class = excluded.risk_class, updated_at = excluded.updated_at
+  `).run(userId, name, normalized, now, now)
+  return listRiskOverrides({ userId })
+}
+
 /** 一次拿齐,供 approvalGate 和前端使用。 */
 export function getApprovalSettings({ userId } = {}) {
   return {
     mode: getApprovalMode({ userId }),
     rememberedTools: listRememberedTools({ userId }),
     rememberedGrants: listRememberedGrants({ userId }),
+    riskOverrides: listRiskOverrides({ userId }),
     modes: PERMISSION_MODES,
   }
 }

@@ -18,6 +18,7 @@ const { runToolsLoop } = await import('../server/services/jobTools.js')
 const { releaseApproval, _resetWaiters } = await import('../server/services/approvalGate.js')
 const { listPendingApprovals, decideApproval } = await import('../server/services/approvalStore.js')
 const { createJob } = await import('../server/services/jobStore.js')
+const { rememberTool } = await import('../server/services/approvalSettingsStore.js')
 const { closeDb } = await import('../server/db.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
@@ -47,7 +48,7 @@ function decideAndRelease({ userId, id, decision, editedArgs = null }) {
 }
 
 /** 第一轮要 bash_exec,第二轮纯文本收尾。 */
-function makeRunModel({ finalText, command = 'rm -rf /tmp/whatever', seenMessages = [] }) {
+function makeRunModel({ finalText, command = 'rm -rf /tmp/whatever', toolName = 'bash_exec', toolArgs = null, seenMessages = [] }) {
   let turns = 0
   return async ({ messages }) => {
     turns += 1
@@ -56,9 +57,9 @@ function makeRunModel({ finalText, command = 'rm -rf /tmp/whatever', seenMessage
       return {
         content: '',
         toolCalls: [{
-          id: 'call-bash-1',
+          id: `call-${toolName}-1`,
           type: 'function',
-          function: { name: 'bash_exec', arguments: JSON.stringify({ command }) },
+          function: { name: toolName, arguments: JSON.stringify(toolArgs || { command }) },
         }],
       }
     }
@@ -218,4 +219,24 @@ test('NEVER_APPROVE: create_docx 直通,不产生任何 pending 行', async () =
     0,
     '普通产出物不应产生任何审批记录',
   )
+})
+
+test('standing rule 命中来源写入 tool 结果供事件与卡片审计', async () => {
+  const { userId } = issueTestSession({ email: 'approval-standing-audit@example.com' })
+  rememberTool({ userId, toolName: 'slack_send_message', args: { channelId: 'C-ops', text: 'first' } })
+  const seenMessages = []
+  const result = await runToolsLoop({
+    job: makeJob({ id: 'job-approval-standing', userId, title: 'standing audit' }),
+    step: { id: 'step-approval-standing', kind: 'execute' },
+    messages: [{ role: 'user', content: '发送通知' }],
+    runModel: makeRunModel({ finalText: '通知完成。', toolName: 'slack_send_message', toolArgs: { channelId: 'C-ops', text: 'later' }, seenMessages }),
+    executeTool: async () => ({ ok: true, stdout: 'passed' }),
+  })
+  assert.equal(result.text, '通知完成。')
+  const toolMessage = seenMessages[1].find((message) => message.role === 'tool')
+  const payload = JSON.parse(toolMessage.content)
+  assert.deepEqual(payload.approvalAuthorization, {
+    kind: 'standing_rule', toolName: 'slack_send_message', scope: 'target:channelId=C-ops',
+  })
+  assert.equal(listPendingApprovals({ userId, status: 'all' }).length, 0)
 })

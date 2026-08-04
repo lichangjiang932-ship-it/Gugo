@@ -39,7 +39,7 @@ const r = await createPptx({
       text: '过去 6 个月，我们用 1/3 的人完成了原计划 2 倍的事情',
       source: '某 SaaS 公司 CTO',
     }},
-    { title: 'Q&A', layout: 'end', bullets: ['contact@gugo.example'] },
+    { title: 'Q&A', layout: 'end', bullets: ['contact@example.com'] },
   ],
 })
 console.log('生成:', r.fullPath, `${(r.byteLength/1024).toFixed(1)} KB · ${r.slideCount} 页`)

@@ -34,6 +34,7 @@ import {
   unregisterByOrigin,
 } from '../services/toolRegistry.js'
 import { writeToolAudit } from '../utils/audit.js'
+import { getMcpOAuthHeaders } from './mcpOAuth.js'
 
 const DEFAULT_ALLOWED_COMMANDS = ['npx', 'node', 'uvx', 'python', 'python3']
 
@@ -62,7 +63,7 @@ function getUserMap(userId) {
   return userConnections.get(userId)
 }
 
-async function startConnection(server) {
+async function startConnection(userId, server) {
   let transport
   if (server.transport === 'stdio') {
     if (!stdioEnabled()) throw new Error('MCP stdio 已被环境禁用 (MCP_STDIO_ENABLED=0)')
@@ -83,6 +84,7 @@ async function startConnection(server) {
     transport = new SseTransport({
       url: server.url,
       headers: server.headers || {},
+      getHeaders: () => getMcpOAuthHeaders(userId, server.id),
       label: server.name,
     })
     transport.start()
@@ -139,6 +141,21 @@ function buildRegisteredToolSpec(server, tool) {
   }
 }
 
+function buildMcpRiskMetadata(server, tool, toolName) {
+  const autoApprove = Array.isArray(server.autoApprove)
+    && (server.autoApprove.includes(tool.name) || server.autoApprove.includes(toolName))
+  const readOnly = tool.annotations?.readOnlyHint === true && tool.annotations?.destructiveHint !== true
+  return {
+    riskClass: readOnly ? 'read' : 'external',
+    requiresApproval: autoApprove ? false : !readOnly,
+    isReadOnly: readOnly,
+    isConcurrencySafe: readOnly,
+    interruptBehavior: readOnly ? 'cancel' : 'block',
+    isDestructive: tool.annotations?.destructiveHint !== false && !readOnly,
+    reason: readOnly ? null : `MCP: ${server.name}`,
+  }
+}
+
 function registerToolsForConnection(userId, server, conn) {
   for (const tool of conn.tools) {
     const spec = buildRegisteredToolSpec(server, tool)
@@ -148,6 +165,7 @@ function registerToolsForConnection(userId, server, conn) {
       origin: 'mcp',
       source: `${userId}:${server.id}`,
       spec,
+      metadata: buildMcpRiskMetadata(server, tool, toolName),
     })
   }
 }
@@ -167,7 +185,7 @@ export async function ensureServerConnected(userId, server) {
     try { map.get(server.id).transport?.stop?.() } catch { /* ignore */ }
     unregisterToolsForServer(userId, server.id)
   }
-  const conn = await startConnection(server)
+  const conn = await startConnection(userId, server)
   map.set(server.id, conn)
   registerToolsForConnection(userId, server, conn)
   return conn
@@ -218,7 +236,7 @@ export async function listUserToolSpecs(userId, { connect = true } = {}) {
 /**
  * 解析工具名 mcp__<server>__<tool>，找到对应连接，发 tools/call。
  */
-export async function callTool({ userId, fullToolName, args }) {
+export async function callTool({ userId, fullToolName, args, idempotencyKey, toolCallId }) {
   const m = fullToolName.match(/^mcp__([a-zA-Z0-9_]+)__(.+)$/)
   if (!m) throw new Error(`非 MCP 工具名: ${fullToolName}`)
   const wantedServerSafeName = m[1]
@@ -244,7 +262,10 @@ export async function callTool({ userId, fullToolName, args }) {
   let status = 'ok'
   let result
   try {
-    result = await conn.transport.request(buildToolsCallRequest(toolName, args), { timeoutMs: 60000 })
+    result = await conn.transport.request(
+      buildToolsCallRequest(toolName, args, { idempotencyKey, toolCallId }),
+      { timeoutMs: 60000 },
+    )
   } catch (err) {
     status = 'error'
     throw err
@@ -267,8 +288,8 @@ export async function callTool({ userId, fullToolName, args }) {
 /**
  * 测试连接：临时拉起、握手、列工具，立即关掉，返回能力描述。
  */
-export async function testServer(server) {
-  const conn = await startConnection(server)
+export async function testServer(userId, server) {
+  const conn = await startConnection(userId, server)
   try {
     return {
       tools: conn.tools.map((t) => ({ name: t.name, description: t.description })),

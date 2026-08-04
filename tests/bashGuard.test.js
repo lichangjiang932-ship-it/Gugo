@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { checkBashCommandDanger } from '../server/utils/bashGuard.js'
+import { checkBashCommandDanger, isReadOnlyShellCommand } from '../server/utils/bashGuard.js'
 
 function blocked(cmd, expectedSubstring = null) {
   const r = checkBashCommandDanger(cmd)
@@ -96,4 +96,22 @@ test('handles empty/non-string input', () => {
   assert.equal(checkBashCommandDanger('   '), null)
   assert.equal(checkBashCommandDanger(null), null)
   assert.equal(checkBashCommandDanger(123), null)
+})
+
+test('classifies only conservative shell reads as read-only', () => {
+  for (const command of [
+    'pwd', 'ls -la src', 'ls "src/pages"', 'rg TODO src', 'git status --short',
+    'git diff -- src', 'git --version', 'npm list', 'npm --version', 'node --version',
+  ]) {
+    assert.equal(isReadOnlyShellCommand(command), true, command)
+  }
+  for (const command of [
+    'cat /etc/passwd', 'cat "/etc/passwd"', 'cat ../secret', 'cat "../secret"',
+    'cat src/../../secret', 'cat "$HOME/secret"', 'ls | grep src', 'rg --pre cat TODO',
+    'git checkout main', 'git diff --output=changes.patch', 'git log --output history.txt',
+    'git diff --ext-diff', 'git grep -Oless TODO', 'file --compile magic', 'date --set tomorrow',
+    'hostname replacement', 'npm test', 'node -e "process.exit()"', 'echo x > file.txt',
+  ]) {
+    assert.equal(isReadOnlyShellCommand(command), false, command)
+  }
 })

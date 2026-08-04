@@ -1,10 +1,11 @@
 import QRCode from 'qrcode'
-import { readJson, sendJson } from '../utils.js'
+import { readJson, readJsonWithRaw, sendJson } from '../utils.js'
 import { authenticateRequest } from '../middleware.js'
 import { socialBridgeManager } from '../services/socialBridgeManager.js'
 import { getIntegrationCredentialsById, upsertIntegration } from '../services/integrationsStore.js'
 import { getWechatIlinkQrcode, pollWechatIlinkQrcode } from '../adapters/social/wechatIlinkBridge.js'
 import { getParkedBridgeMessage, listParkedBridgeMessages } from '../services/bridgeParkingStore.js'
+import { verifyBridgeWebhook } from '../utils/webhookVerification.js'
 
 function clean(value) {
   return String(value ?? '').trim()
@@ -151,6 +152,8 @@ export function createBridgeRequestHandler({
   authenticate = authenticateRequest,
   getWechatQrcode = getWechatIlinkQrcode,
   pollWechatQrcode = pollWechatIlinkQrcode,
+  getIntegration = getIntegrationCredentialsById,
+  verifyWebhook = verifyBridgeWebhook,
 } = {}) {
   return async function handleBridgeRequest(req, res) {
     const url = new URL(req.url, 'http://localhost')
@@ -160,14 +163,21 @@ export function createBridgeRequestHandler({
       if (req.method === 'POST' && parts[0] === 'api' && parts[1] === 'bridge' && parts[2] === 'webhook') {
         const provider = clean(parts[3])
         const integrationId = decodeURIComponent(parts[4] || '')
-        const body = await readJson(req, { maxBytes: 8 * 1024 * 1024 })
+        const { body, raw } = await readJsonWithRaw(req, { maxBytes: 8 * 1024 * 1024 })
+        const integration = getIntegration({ id: integrationId })
+        verifyWebhook({
+          provider,
+          headers: req.headers,
+          rawBody: raw,
+          body,
+          integration,
+        })
         if (provider === 'feishu' && body.challenge) {
           return sendJson(res, 200, { challenge: body.challenge })
         }
         const message = normalizeWebhook(provider, body, integrationId)
         if (!message.chatId) return sendJson(res, 400, { ok: false, error: 'chatId missing' })
         if (manager.startIntegration && !manager.hasIntegration?.(integrationId)) {
-          const integration = getIntegrationCredentialsById({ id: integrationId })
           if (integration?.enabled) await manager.startIntegration(integration)
         }
         const result = await manager.receiveExternalMessage(message)

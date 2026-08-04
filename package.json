@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.10.0",
   "engines": {
-    "node": ">=20.0.0"
+    "node": "^20.19.0 || ^22.13.0 || >=24.0.0"
   },
   "type": "module",
   "bin": {
@@ -16,7 +16,7 @@
     "test": "node scripts/run-tests.js",
     "i18n:check": "node --test tests/i18nHardcoded.test.js tests/i18n.test.js",
     "debt:check": "node --test tests/codeDebt.test.js",
-    "serve": "node server/appServer.js",
+    "serve": "node server/start.js",
     "hub": "node server/hub/index.js",
     "local": "npm run build && npm run serve",
     "preview": "vite preview --configLoader runner",

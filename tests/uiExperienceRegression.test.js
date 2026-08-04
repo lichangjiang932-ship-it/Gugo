@@ -47,6 +47,7 @@ test('chat output defaults to a compact layout with optional context usage', () 
 test('chat chrome stays focused on conversations and essential composer controls', () => {
   const rail = read('../src/components/LeftRail.jsx')
   const chat = read('../src/pages/ChatSplit/index.jsx')
+  const chatView = read('../src/pages/ChatSplit/ChatSplitView.jsx')
   const messages = read('../src/pages/ChatSplit/ChatMessages.jsx')
   const composer = read('../src/pages/ChatSplit/ChatComposer.jsx')
 
@@ -67,7 +68,7 @@ test('chat chrome stays focused on conversations and essential composer controls
   assert.match(sessionMenu, /<X className=/)
   assert.match(sessionMenu, /setOpenMenuId\(null\)/)
 
-  assert.doesNotMatch(chat, /<ChatHeader|<TodoTracker|<CodingWorkbench/)
+  assert.doesNotMatch(`${chat}\n${chatView}`, /<ChatHeader|<TodoTracker|<CodingWorkbench/)
   assert.doesNotMatch(chat, /if \(!state\.activeSessionId\) \{\s*dispatch\(\{ type: 'NEW_SESSION'/)
   assert.match(chat, /if \(!activeSession\) \{[\s\S]*?type: 'NEW_SESSION'/)
   assert.match(chat, /const handleSend[\s\S]*?if \(!typedContent && attachments\.length === 0\) return/)
@@ -92,7 +93,7 @@ test('chat supporting panels preserve a readable transcript on narrow screens', 
 
 test('skills open details before use and appearance offers a broader accent palette', () => {
   const skills = read('../src/pages/SkillsMarket.jsx')
-  const settings = read('../src/pages/SettingsView.jsx')
+  const settings = read('../src/components/settings/SettingsSecondaryPanels.jsx')
 
   assert.match(skills, /const \[selectedSkill, setSelectedSkill\] = useState\(null\)/)
   assert.match(skills, /role="dialog"/)

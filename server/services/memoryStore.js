@@ -13,6 +13,9 @@ import { getDb } from '../db.js'
 import { randomUUID } from 'node:crypto'
 
 const ALLOWED_TYPES = ['user', 'feedback', 'project', 'reference']
+const DAY_MS = 24 * 60 * 60 * 1000
+const AGING_MEMORY_MS = 30 * DAY_MS
+const STALE_MEMORY_MS = 180 * DAY_MS
 
 function normalizeSlug(s) {
   return String(s || '')
@@ -170,11 +173,27 @@ export function selectActiveMemoriesForInjection({ userId, tokenCap = 800, agent
   return { memories: out, totalChars: charsUsed }
 }
 
-export function buildMemorySystemBlock(memories) {
+export function classifyMemoryFreshness(updatedAt, { now = Date.now() } = {}) {
+  const timestamp = Number(updatedAt)
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return { level: 'unknown', label: '时间未知，使用前核实' }
+  const ageMs = Math.max(0, Number(now) - timestamp)
+  if (ageMs > STALE_MEMORY_MS) return { level: 'stale', label: '陈旧，使用前核实' }
+  if (ageMs > AGING_MEMORY_MS) return { level: 'aging', label: '较旧，注意核实' }
+  return { level: 'recent', label: '近期' }
+}
+
+export function buildMemorySystemBlock(memories, { now = Date.now() } = {}) {
   if (!memories?.length) return ''
-  const parts = ['# 用户长期记忆 (memories)', '以下是模型应记住的用户偏好、项目背景、反馈与参考资料。优先于一般对话上下文。\n']
+  const parts = [
+    '# 用户长期记忆 (memories)',
+    '以下是用户偏好、项目背景、反馈与参考资料。当前用户消息优先；与当前消息冲突或标记为较旧/陈旧/时间未知的内容，必须先核实再使用。\n',
+  ]
   for (const m of memories) {
-    parts.push(`## [${m.type}] ${m.title}`)
+    const freshness = classifyMemoryFreshness(m.updatedAt, { now })
+    const updated = Number.isFinite(Number(m.updatedAt)) && Number(m.updatedAt) > 0
+      ? new Date(Number(m.updatedAt)).toISOString().slice(0, 10)
+      : '未知日期'
+    parts.push(`## [${m.type}] ${m.title}（更新：${updated}；新鲜度：${freshness.label}）`)
     parts.push(m.body)
     parts.push('')
   }

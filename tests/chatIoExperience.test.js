@@ -5,6 +5,7 @@ import test from 'node:test'
 const composerSource = fs.readFileSync(new URL('../src/pages/ChatSplit/ChatComposer.jsx', import.meta.url), 'utf8')
 const messagesSource = fs.readFileSync(new URL('../src/pages/ChatSplit/ChatMessages.jsx', import.meta.url), 'utf8')
 const chatSource = fs.readFileSync(new URL('../src/pages/ChatSplit/index.jsx', import.meta.url), 'utf8')
+const chatViewSource = fs.readFileSync(new URL('../src/pages/ChatSplit/ChatSplitView.jsx', import.meta.url), 'utf8')
 const markdownSource = fs.readFileSync(new URL('../src/components/MarkdownRenderer.jsx', import.meta.url), 'utf8')
 const toolCardSource = fs.readFileSync(new URL('../src/components/ToolCallCard.jsx', import.meta.url), 'utf8')
 const stylesSource = fs.readFileSync(new URL('../src/index.css', import.meta.url), 'utf8')
@@ -41,7 +42,7 @@ test('streaming assistant hides result actions until generation finishes', () =>
   assert.match(markdownSource, /!streaming && \(/)
   assert.match(messagesSource, /const isMessageComplete = !isGenerating && !msg\.meta\?\.streaming/)
   assert.match(messagesSource, /const showArtifactPreview = !!artifactPreview && isMessageComplete/)
-  assert.match(chatSource, /isGenerating=\{isGenerating\}/)
+  assert.match(chatViewSource, /isGenerating=\{isGenerating\}/)
 })
 
 test('composer groups model and voice beside send without an Enter label', () => {
@@ -56,7 +57,8 @@ test('selected slash skill renders as a dark tag inside the composer', () => {
   assert.match(composerSource, /data-testid="active-skill-command"/)
   assert.match(composerSource, /bg-ink[\s\S]{0,120}text-paper/)
   assert.match(composerSource, /value=\{skillCommand\.command \? skillCommand\.body : input\}/)
-  assert.match(chatSource, /skillIds=\{runtimeSkills\.map\(\(skill\) => skill\.id\)\}/)
+  assert.match(chatSource, /runtimeSkillIds=\{runtimeSkills\.map\(\(skill\) => skill\.id\)\}/)
+  assert.match(chatViewSource, /skillIds=\{runtimeSkillIds\}/)
 })
 
 test('long-term memory remains internal instead of adding a disclosure after every answer', () => {

@@ -80,7 +80,7 @@ function writeNullableInt(value) {
   return Number.isFinite(num) && num > 0 ? Math.floor(num) : null
 }
 
-const VALID_KINDS = new Set(['ollama', 'lmstudio', 'llamacpp', 'vllm', 'openai-compatible'])
+const VALID_KINDS = new Set(['ollama', 'lmstudio', 'llamacpp', 'vllm', 'anthropic', 'gemini', 'openai-compatible'])
 
 function mapRow(row, { includeSecrets = false } = {}) {
   if (!row) return null
@@ -106,6 +106,7 @@ function mapRow(row, { includeSecrets = false } = {}) {
     supportsTools: readTribool(row.supports_tools),
     supportsStreaming: readTribool(row.supports_streaming),
     supportsVision: readTribool(row.supports_vision),
+    supportsPdf: readTribool(row.supports_pdf),
     firstTokenTimeoutMs: row.first_token_timeout_ms ?? null,
     idleTimeoutMs: row.idle_timeout_ms ?? null,
     failoverEnabled: readTribool(row.failover_enabled),
@@ -173,6 +174,7 @@ export function upsertModelProvider({ userId, provider = {} } = {}) {
   const supportsTools = pick('supportsTools', 'supports_tools', writeTribool)
   const supportsStreaming = pick('supportsStreaming', 'supports_streaming', writeTribool)
   const supportsVision = pick('supportsVision', 'supports_vision', writeTribool)
+  const supportsPdf = pick('supportsPdf', 'supports_pdf', writeTribool)
   const firstTokenTimeoutMs = pick('firstTokenTimeoutMs', 'first_token_timeout_ms', writeNullableInt)
   const idleTimeoutMs = pick('idleTimeoutMs', 'idle_timeout_ms', writeNullableInt)
   const failoverEnabled = pick('failoverEnabled', 'failover_enabled', writeTribool)
@@ -185,25 +187,25 @@ export function upsertModelProvider({ userId, provider = {} } = {}) {
     if (existing) {
       db.prepare(`UPDATE model_providers SET provider_key=?, label=?, base_url=?, secret_json=?, headers_json=?,
         models_json=?, default_model=?, enabled=?, is_default=?, updated_at=?,
-        kind=?, context_window=?, supports_tools=?, supports_streaming=?, supports_vision=?,
+        kind=?, context_window=?, supports_tools=?, supports_streaming=?, supports_vision=?, supports_pdf=?,
         first_token_timeout_ms=?, idle_timeout_ms=?, failover_enabled=?, keep_alive=?
         WHERE id=? AND user_id=?`).run(
         key, label, baseUrl, writeCredential({ apiKey }, MODEL_SECRET_PURPOSE),
         writeCredential(headers, MODEL_HEADERS_PURPOSE), JSON.stringify(models), defaultModel,
         enabled ? 1 : 0, isDefault ? 1 : 0, now,
-        kindRaw, contextWindow, supportsTools, supportsStreaming, supportsVision,
+        kindRaw, contextWindow, supportsTools, supportsStreaming, supportsVision, supportsPdf,
         firstTokenTimeoutMs, idleTimeoutMs, failoverEnabled, keepAlive,
         id, userId,
       )
     } else {
       db.prepare(`INSERT INTO model_providers
         (id,user_id,provider_key,label,base_url,secret_json,headers_json,models_json,default_model,enabled,is_default,created_at,updated_at,
-         kind,context_window,supports_tools,supports_streaming,supports_vision,first_token_timeout_ms,idle_timeout_ms,failover_enabled,keep_alive)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+         kind,context_window,supports_tools,supports_streaming,supports_vision,supports_pdf,first_token_timeout_ms,idle_timeout_ms,failover_enabled,keep_alive)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
         id, userId, key, label, baseUrl, writeCredential({ apiKey }, MODEL_SECRET_PURPOSE),
         writeCredential(headers, MODEL_HEADERS_PURPOSE), JSON.stringify(models),
         defaultModel, enabled ? 1 : 0, isDefault ? 1 : 0, now, now,
-        kindRaw, contextWindow, supportsTools, supportsStreaming, supportsVision,
+        kindRaw, contextWindow, supportsTools, supportsStreaming, supportsVision, supportsPdf,
         firstTokenTimeoutMs, idleTimeoutMs, failoverEnabled, keepAlive,
       )
     }
@@ -268,6 +270,7 @@ function buildProviderOverrides(provider) {
   if (provider.supportsTools !== null) overrides.supportsTools = provider.supportsTools
   if (provider.supportsStreaming !== null) overrides.supportsStreaming = provider.supportsStreaming
   if (provider.supportsVision !== null) overrides.supportsVision = provider.supportsVision
+  if (provider.supportsPdf !== null) overrides.supportsPdf = provider.supportsPdf
   if (provider.firstTokenTimeoutMs) overrides.firstTokenTimeoutMs = provider.firstTokenTimeoutMs
   if (provider.idleTimeoutMs) overrides.idleTimeoutMs = provider.idleTimeoutMs
   if (provider.failoverEnabled !== null) overrides.failoverEnabled = provider.failoverEnabled

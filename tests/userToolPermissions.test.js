@@ -14,6 +14,8 @@ const {
   isToolPermittedForUser,
 } = await import('../server/db.js')
 const { writeFileTool } = await import('../server/adapters/fsShellTools.js')
+const { grantLocalPath } = await import('../server/services/localFileAccessService.js')
+const { setWorkspaceTrust } = await import('../server/services/workspaceTrustService.js')
 
 function freshUser(id) {
   return createUser({ id, email: `${id}@example.com`, credits: 0 })
@@ -73,6 +75,10 @@ test('backend tool entry rejects a tool disabled by the user (gate, not just UI)
   process.env.WORKSPACE_FS_ENABLED = '1'
   try {
     freshUser('gated')
+    grantLocalPath({ userId: 'gated', rootPath: workspace, accessMode: 'read_write' })
+    setWorkspaceTrust({
+      userId: 'gated', rootPath: workspace, trusted: true, confirmation: 'TRUST_WORKSPACE_CONFIG',
+    })
     setUserToolPermission({ userId: 'gated', toolName: 'write_file', enabled: false })
     await assert.rejects(
       () => writeFileTool({ path: 'blocked.txt', content: 'x', userId: 'gated' }),
@@ -80,6 +86,10 @@ test('backend tool entry rejects a tool disabled by the user (gate, not just UI)
     )
     // a different user (no override) can still write
     freshUser('free')
+    grantLocalPath({ userId: 'free', rootPath: workspace, accessMode: 'read_write' })
+    setWorkspaceTrust({
+      userId: 'free', rootPath: workspace, trusted: true, confirmation: 'TRUST_WORKSPACE_CONFIG',
+    })
     const ok = await writeFileTool({ path: 'ok.txt', content: 'y', userId: 'free' })
     assert.equal(ok.ok, true)
   } finally {

@@ -9,7 +9,12 @@ process.env.APP_DB_PATH = path.join(dir, 'app.db')
 
 const { closeDb, createUser } = await import('../server/db.js')
 const { WEB_CONNECTOR_CATALOG } = await import('../shared/webConnectorCatalog.js')
-const { getIntegrationByProvider, isIntegrationEnabled, upsertIntegration } = await import('../server/services/integrationsStore.js')
+const {
+  getIntegrationByProvider,
+  isIntegrationEnabled,
+  listProviderRegistry,
+  upsertIntegration,
+} = await import('../server/services/integrationsStore.js')
 const {
   assertBrowserAppUrlAccess,
   connectBrowserApp,
@@ -74,8 +79,32 @@ test('Browser app connection uses the trusted catalog URL and stays user-scoped'
   })
   assert.equal(connectCalls[0].url, 'https://mail.google.com/')
   assert.equal(connected.integration.kind, 'browser_app')
+  assert.equal(connected.app.capabilityLevel, 'browser_shortcut')
+  assert.equal(connected.app.integrationDepth, 'browser_navigation_only')
+  assert.deepEqual(connected.app.providerSpecificTools, [])
+  assert.deepEqual(connected.app.availableTools, ['connected_app_open'])
+  assert.match(connected.app.capability, /no provider-specific API or tools/i)
   assert.deepEqual(listConnectedBrowserApps({ userId: 'u-connectors' }).map((item) => item.provider), ['web_gmail'])
   assert.deepEqual(listConnectedBrowserApps({ userId: 'u-connectors-other' }), [])
+})
+
+test('provider registry distinguishes native APIs from managed-browser shortcuts', () => {
+  const providers = listProviderRegistry()
+  const nativeApis = providers
+    .filter((provider) => provider.capabilityLevel === 'native_api')
+    .map((provider) => provider.provider)
+    .sort()
+  assert.deepEqual(nativeApis, ['github', 'google_drive', 'notion', 'slack'])
+
+  const browserApps = providers.filter((provider) => provider.kind === 'browser_app')
+  assert.equal(browserApps.length, WEB_CONNECTOR_CATALOG.length)
+  assert.ok(browserApps.every((provider) => provider.capabilityLevel === 'browser_shortcut'))
+  assert.ok(browserApps.every((provider) => provider.integrationDepth === 'browser_navigation_only'))
+  assert.ok(browserApps.every((provider) => provider.providerSpecificTools.length === 0))
+  assert.ok(browserApps.every((provider) => provider.availableTools.join(',') === 'connected_app_open'))
+
+  const browser = providers.find((provider) => provider.provider === 'browser')
+  assert.deepEqual(browser.availableTools, ['connected_app_list', 'connected_app_open'])
 })
 
 test('connected app open rejects unconnected apps and never accepts a client URL', async () => {

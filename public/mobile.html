@@ -12,6 +12,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <meta name="theme-color" content="#1a1a1a" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'" />
     <title>Gugo · 手机登录</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <style>
@@ -94,57 +95,6 @@
       <div class="footer">Gugo · mobile gateway</div>
     </div>
 
-    <script>
-      (function () {
-        var form = document.getElementById('form')
-        var input = document.getElementById('key')
-        var btn = document.getElementById('submit')
-        var msg = document.getElementById('msg')
-        // 与主应用 accountClient 保持一致的 localStorage key
-        var TOKEN_KEY = 'your-model-atelier:auth-token'
-
-        function show(kind, text) {
-          msg.className = 'msg ' + kind
-          msg.textContent = text
-          msg.style.display = 'block'
-        }
-
-        form.addEventListener('submit', function (ev) {
-          ev.preventDefault()
-          var rawKey = (input.value || '').trim()
-          if (!rawKey) { show('err', '请输入 access key'); return }
-
-          btn.disabled = true
-          btn.textContent = '正在验证…'
-          msg.style.display = 'none'
-
-          fetch('/api/mobile/handshake', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ key: rawKey }),
-          })
-            .then(function (resp) { return resp.json().then(function (data) { return { status: resp.status, data: data } }) })
-            .then(function (r) {
-              if (!r.data || r.data.ok === false) {
-                throw new Error((r.data && r.data.error) || ('HTTP ' + r.status))
-              }
-              try { localStorage.setItem(TOKEN_KEY, r.data.token) } catch (_) {}
-              try {
-                if (r.data.user) localStorage.setItem('your-model-atelier:auth-user', JSON.stringify(r.data.user))
-              } catch (_) {}
-              show('ok', '登录成功，正在跳转到聊天…')
-              window.setTimeout(function () { window.location.href = '/chat' }, 600)
-            })
-            .catch(function (err) {
-              show('err', (err && err.message) || '验证失败，请检查 key')
-              btn.disabled = false
-              btn.textContent = '登录'
-            })
-        })
-
-        // 软键盘体验：聚焦后清空旧 placeholder
-        input.addEventListener('focus', function () { msg.style.display = 'none' })
-      })()
-    </script>
+    <script src="/mobile.js"></script>
   </body>
 </html>

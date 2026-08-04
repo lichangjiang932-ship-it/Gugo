@@ -10,13 +10,15 @@
 import { randomBytes } from 'node:crypto'
 import { readJson } from '../utils.js'
 import { authenticateRequest } from '../middleware.js'
+import { resolveClientId } from '../utils/loginGuard.js'
+import { hashArgs, writeToolAudit } from '../utils/audit.js'
 import {
   listMobileKeys,
   createMobileKey,
   revokeMobileKey,
   verifyAccessKey,
 } from '../services/mobileAccessKeyStore.js'
-import { createSession, getUserById } from '../db.js'
+import { checkRateLimit, createSession, getUserById } from '../db.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
 
@@ -29,6 +31,17 @@ function unauthorized(res) {
   sendJson(res, 401, { ok: false, error: '请先登录' })
 }
 
+function auditHandshake({ clientId, userId = null, keyId = null, status }) {
+  writeToolAudit({
+    userId: userId || `mobile-anonymous:${hashArgs(clientId) || 'unknown'}`,
+    origin: 'mobile',
+    toolName: 'mobile_handshake',
+    serverId: keyId,
+    args: { clientId },
+    status,
+  })
+}
+
 export async function handleMobileRequest(req, res) {
   const url = new URL(req.url, 'http://localhost')
   const pathname = url.pathname
@@ -36,15 +49,41 @@ export async function handleMobileRequest(req, res) {
   try {
     // 公共：handshake 不需要 bearer，凭 access key 换 token
     if (req.method === 'POST' && pathname === '/api/mobile/handshake') {
+      const clientId = resolveClientId(req)
+      const maxRequests = Math.max(1, Math.min(60, Number(process.env.MOBILE_HANDSHAKE_RATE_MAX) || 10))
+      const windowMs = 15 * 60 * 1000
+      const rate = checkRateLimit({
+        key: `mobile_handshake:${clientId}`,
+        windowMs,
+        maxRequests,
+      })
+      res.setHeader?.('X-RateLimit-Limit', String(maxRequests))
+      res.setHeader?.('X-RateLimit-Remaining', String(rate.remaining))
+      if (!rate.allowed) {
+        const retryAfter = Math.max(1, Math.ceil((rate.resetAt - Date.now()) / 1000))
+        res.setHeader?.('Retry-After', String(retryAfter))
+        auditHandshake({ clientId, status: 'denied' })
+        return sendJson(res, 429, { ok: false, error: '握手失败次数过多，请稍后再试' })
+      }
       const body = await readJson(req)
       const rawKey = body?.key
-      if (!rawKey) return sendJson(res, 400, { ok: false, error: '缺少 key' })
+      if (!rawKey) {
+        auditHandshake({ clientId, status: 'denied' })
+        return sendJson(res, 400, { ok: false, error: '缺少 key' })
+      }
       const result = verifyAccessKey(rawKey)
-      if (!result) return sendJson(res, 401, { ok: false, error: 'key 无效或已过期' })
+      if (!result) {
+        auditHandshake({ clientId, status: 'denied' })
+        return sendJson(res, 401, { ok: false, error: 'key 无效或已过期' })
+      }
       const user = getUserById(result.userId)
-      if (!user) return sendJson(res, 401, { ok: false, error: '账户不存在' })
+      if (!user) {
+        auditHandshake({ clientId, userId: result.userId, keyId: result.keyId, status: 'denied' })
+        return sendJson(res, 401, { ok: false, error: '账户不存在' })
+      }
       const token = 'tkn_' + randomBytes(24).toString('hex')
       createSession({ token, userId: user.id })
+      auditHandshake({ clientId, userId: user.id, keyId: result.keyId, status: 'ok' })
       return sendJson(res, 200, {
         ok: true,
         token,

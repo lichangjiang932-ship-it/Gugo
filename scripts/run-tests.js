@@ -44,7 +44,11 @@ const files = selectors.length
 // Run only that small group without an extra test worker; normal JavaScript
 // tests keep their fast batched execution.
 const viteWrapperTests = new Set([
+  normalize('tests/ChatComposerSlashMenu.test.js'),
+  normalize('tests/ChatStatusCard.test.js'),
   normalize('tests/RightPreviewPane.test.js'),
+  normalize('tests/RightWorkbench.test.js'),
+  normalize('tests/SlashInlinePanelHost.test.js'),
   normalize('tests/slashAutocompleteComponent.test.js'),
 ])
 

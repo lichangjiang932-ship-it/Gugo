@@ -41,8 +41,9 @@ function withTempRepo() {
 }
 
 function withEnv(vars, fn) {
+  const effectiveVars = { WORKSPACE_SHARED_TRUSTED: '1', ...vars }
   const old = {}
-  for (const [key, value] of Object.entries(vars)) {
+  for (const [key, value] of Object.entries(effectiveVars)) {
     old[key] = process.env[key]
     if (value == null) delete process.env[key]
     else process.env[key] = value
@@ -90,7 +91,7 @@ test('git_status and git_diff report workspace changes', async () => {
 
 test('run_project_check only allows lint/test/build scripts', async () => {
   const cwd = withTempRepo()
-  await withEnv({ WORKSPACE_ROOT: cwd, WORKSPACE_GIT_ENABLED: '1' }, async () => {
+  await withEnv({ WORKSPACE_ROOT: cwd, WORKSPACE_GIT_ENABLED: '1', WORKSPACE_SHELL_ENABLED: '1' }, async () => {
     const lint = await runProjectCheckTool({ check: 'lint' })
     assert.equal(lint.ok, true)
     assert.match(lint.stdout, /lint-ok/)

@@ -64,8 +64,8 @@ test('snapshot 能还原进度 —— 重启后接着算而不是从零开始', 
   const snap = budget.snapshot()
   assert.equal(snap.used, 4)
   assert.equal(snap.modelMs, 3_000)
-  // elapsed = 已过去 5s - 其中 3s 在等模型 = 2s 干活
-  assert.equal(snap.elapsed, 2_000)
+  // initialElapsedMs 是 snapshot().elapsed 保存的净工作时长，不含模型等待。
+  assert.equal(snap.elapsed, 5_000)
 })
 
 /* ------------------------------------------------------------------ *

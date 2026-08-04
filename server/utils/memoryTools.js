@@ -3,7 +3,7 @@
  *
  * 背景:记忆注入(selectActiveMemoriesForInjection)一直是通的,但**没人写**——
  * 只有 Memory 管理页能手动加。于是模型在同一个上下文里也像没有记忆:
- * 你告诉它「项目在 D:\destok\money」「这个项目用 Python + FastAPI」,
+ * 你告诉它「项目在 /path/to/money」「这个项目用 Python + FastAPI」,
  * 下一轮它照样不知道。Claude Code / Codex 都有这个能力。
  *
  * 设计取舍:

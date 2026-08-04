@@ -61,7 +61,11 @@ export async function parseChatAttachments(files, options = {}) {
       } else if (isExcelFile(file)) {
         attachments.push({ ...base, kind: 'text', text: clampTextToBytes(await readExcelAsText(file), messages.excelTooLong) })
       } else if (isPdfFile(file)) {
-        attachments.push({ ...base, kind: 'text', text: await extractPdfText(file) })
+        const [dataUrl, text] = await Promise.all([
+          readFileAsDataUrl(file),
+          extractPdfText(file),
+        ])
+        attachments.push({ ...base, kind: 'pdf', dataUrl, text })
       } else if (isDocxFile(file)) {
         attachments.push({ ...base, kind: 'text', text: clampTextToBytes(await extractDocxText(file), messages.wordTooLong) })
       } else if (isPptxFile(file)) {

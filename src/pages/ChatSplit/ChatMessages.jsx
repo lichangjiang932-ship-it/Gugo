@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, FileText, BarChart3, LayoutList, ExternalLink, ChevronDown, Copy, Code2, Quote } from 'lucide-react'
+import { X, FileText, BarChart3, LayoutList, ExternalLink, ChevronDown, Copy, Code2, Quote, Download } from 'lucide-react'
 import MarkdownRenderer from '../../components/MarkdownRenderer.jsx'
 import ToolCallCard from '../../components/ToolCallCard.jsx'
 import SubagentCard from '../../components/SubagentCard.jsx'
@@ -13,6 +13,23 @@ import { estimateClientContextUsage } from '../../lib/contextUsage.js'
 import { formatMessageDateTime, formatMessageTime } from '../../lib/messageTime.js'
 import { DEFAULT_MESSAGE_WINDOW_SIZE, getExpandedWindowCount, getMessageWindow } from '../../lib/messageWindow.js'
 import { useT } from '../../i18n/I18nProvider.jsx'
+import { withDownloadToken } from '../../lib/jobClient.js'
+
+function ServerArtifactCards({ artifacts = [] }) {
+  if (!Array.isArray(artifacts) || artifacts.length === 0) return null
+  return <div className="mt-3 space-y-2" data-testid="server-turn-artifacts">{artifacts.map((artifact) => (
+    <a
+      key={artifact.id || artifact.url}
+      href={withDownloadToken(artifact.url)}
+      download={artifact.filename || ''}
+      className="flex items-center gap-3 rounded-md border border-ink-fade/30 bg-paper p-3 transition-colors hover:border-ember/60"
+    >
+      <span className="flex h-9 w-9 items-center justify-center rounded-md bg-ember-soft text-ember"><FileText className="h-4 w-4" /></span>
+      <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-ink">{artifact.filename || artifact.title || 'artifact'}</span><span className="block text-xs text-ink-fade">{artifact.type || 'file'}</span></span>
+      <Download className="h-4 w-4 text-ink-fade" />
+    </a>
+  ))}</div>
+}
 
 function ArtifactOpenCard({ preview, onOpen, className = '' }) {
   const { t } = useT()
@@ -506,6 +523,7 @@ export default function ChatMessages({
                             className="mt-3"
                           />
                         )}
+                        <ServerArtifactCards artifacts={msg.meta?.serverArtifacts} />
                       </>
                     )
                   ) : (
@@ -556,7 +574,11 @@ export default function ChatMessages({
                         )}
                       </div>
                       {msg.meta?.type === 'model_reply' && typeof msg.meta.creditsCharged === 'number' && msg.meta.creditsCharged > 0 && (
-                        <span title={t('chatMessages.credits', { value: msg.meta.creditsCharged })}>
+                        <span
+                          data-testid="assistant-message-credits"
+                          className="chat-message-meta opacity-0 pointer-events-none transition-opacity group-hover/message:opacity-100 group-hover/message:pointer-events-auto group-focus-within/message:opacity-100 group-focus-within/message:pointer-events-auto"
+                          title={t('chatMessages.credits', { value: msg.meta.creditsCharged })}
+                        >
                           {t('chatMessages.credits', { value: msg.meta.creditsCharged })}
                           {typeof msg.meta.creditsBalance === 'number' && (
                             <span className="text-ink-fade/70"> · {t('chatMessages.balance', { value: msg.meta.creditsBalance })}</span>
@@ -564,7 +586,7 @@ export default function ChatMessages({
                         </span>
                       )}
                       {msg.meta?.type === 'model_reply' && msg.meta.billingError && (
-                        <span className="text-red-500" title={msg.meta.billingError}>{t('chatMessages.billingFailed')}</span>
+                        <span className="chat-message-meta text-red-500 opacity-0 pointer-events-none transition-opacity group-hover/message:opacity-100 group-hover/message:pointer-events-auto group-focus-within/message:opacity-100 group-focus-within/message:pointer-events-auto" title={msg.meta.billingError}>{t('chatMessages.billingFailed')}</span>
                       )}
                       <div className="flex-1" />
                       {/* ★ #19: 删除 shouldOfferPptxExport/shouldOfferOfficeExport 双路径,

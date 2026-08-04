@@ -9,15 +9,18 @@ const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-local-file-access-'))
 const grantedDir = path.join(tempDir, 'granted')
 const outsideDir = path.join(tempDir, 'outside')
 const executionRepo = path.join(tempDir, 'execution-repo')
+const workspaceDir = path.join(tempDir, 'workspace')
 fs.mkdirSync(grantedDir)
 fs.mkdirSync(outsideDir)
 fs.mkdirSync(executionRepo)
+fs.mkdirSync(workspaceDir)
 fs.writeFileSync(path.join(grantedDir, 'note.txt'), 'hello local files', 'utf8')
 fs.writeFileSync(path.join(outsideDir, 'secret.txt'), 'outside', 'utf8')
 fs.writeFileSync(path.join(executionRepo, 'tracked.txt'), 'repo file', 'utf8')
+fs.writeFileSync(path.join(workspaceDir, 'workspace.txt'), 'workspace file', 'utf8')
 execFileSync('git', ['init'], { cwd: executionRepo, stdio: 'ignore' })
 process.env.APP_DB_PATH = path.join(tempDir, 'app.db')
-delete process.env.WORKSPACE_FS_ENABLED
+process.env.WORKSPACE_FS_ENABLED = '1'
 
 const { closeDb, createUser } = await import('../server/db.js')
 const {
@@ -26,6 +29,7 @@ const {
   revokeLocalPath,
   setAllFilesAccess,
 } = await import('../server/services/localFileAccessService.js')
+const { setWorkspaceTrust } = await import('../server/services/workspaceTrustService.js')
 const { bashExecTool, editFileTool, listDirectoryTool, readFileTool, writeFileTool } = await import('../server/adapters/fsShellTools.js')
 const { dispatchGitTool } = await import('../server/adapters/gitWorkbench.js')
 const { applyPatchTool } = await import('../server/utils/applyPatch.js')
@@ -33,6 +37,28 @@ const { applyPatchTool } = await import('../server/utils/applyPatch.js')
 createUser({ id: 'local-user-a', email: 'local-a@example.com' })
 createUser({ id: 'local-user-b', email: 'local-b@example.com' })
 createUser({ id: 'execution-user', email: 'execution@example.com' })
+createUser({ id: 'readonly-execution-user', email: 'readonly-execution@example.com' })
+createUser({ id: 'workspace-user-a', email: 'workspace-a@example.com' })
+createUser({ id: 'workspace-user-b', email: 'workspace-b@example.com' })
+
+setWorkspaceTrust({
+  userId: 'local-user-a',
+  rootPath: grantedDir,
+  trusted: true,
+  confirmation: 'TRUST_WORKSPACE_CONFIG',
+})
+setWorkspaceTrust({
+  userId: 'execution-user',
+  rootPath: executionRepo,
+  trusted: true,
+  confirmation: 'TRUST_WORKSPACE_CONFIG',
+})
+setWorkspaceTrust({
+  userId: 'readonly-execution-user',
+  rootPath: executionRepo,
+  trusted: true,
+  confirmation: 'TRUST_WORKSPACE_CONFIG',
+})
 
 test.after(() => {
   closeDb()
@@ -84,6 +110,56 @@ test('read-only grants block writes and can be upgraded to read-write', async ()
   )
 })
 
+test('the global filesystem switch cannot be bypassed by a per-user grant', async () => {
+  const saved = process.env.WORKSPACE_FS_ENABLED
+  grantLocalPath({ userId: 'local-user-a', rootPath: grantedDir, accessMode: 'read_only' })
+  process.env.WORKSPACE_FS_ENABLED = '0'
+  try {
+    await assert.rejects(
+      () => readFileTool({ userId: 'local-user-a', path: path.join(grantedDir, 'note.txt') }),
+      /WORKSPACE_FS_ENABLED=1/,
+    )
+  } finally {
+    process.env.WORKSPACE_FS_ENABLED = saved
+  }
+})
+
+test('shared workspace requires a per-user grant unless explicitly trusted', async () => {
+  const saved = {
+    WORKSPACE_ROOT: process.env.WORKSPACE_ROOT,
+    WORKSPACE_FS_ENABLED: process.env.WORKSPACE_FS_ENABLED,
+    WORKSPACE_SHARED_TRUSTED: process.env.WORKSPACE_SHARED_TRUSTED,
+  }
+  process.env.WORKSPACE_ROOT = workspaceDir
+  process.env.WORKSPACE_FS_ENABLED = '1'
+  delete process.env.WORKSPACE_SHARED_TRUSTED
+  grantLocalPath({ userId: 'workspace-user-a', rootPath: workspaceDir, accessMode: 'read_only' })
+
+  try {
+    const authorized = await readFileTool({ userId: 'workspace-user-a', path: 'workspace.txt' })
+    assert.equal(authorized.scope, 'grant')
+    await assert.rejects(
+      () => readFileTool({ userId: 'workspace-user-b', path: 'workspace.txt' }),
+      (error) => {
+        assert.equal(error.code, 'PATH_NOT_AUTHORIZED')
+        assert.equal(error.requiredAccessMode, 'read_only')
+        return true
+      },
+    )
+    assert.equal(getLocalFileAccessStatus({ userId: 'workspace-user-b' }).workspace.requiresUserGrant, true)
+
+    process.env.WORKSPACE_SHARED_TRUSTED = '1'
+    const shared = await readFileTool({ userId: 'workspace-user-b', path: 'workspace.txt' })
+    assert.equal(shared.scope, 'workspace')
+    assert.equal(getLocalFileAccessStatus({ userId: 'workspace-user-b' }).workspace.sharedTrusted, true)
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+})
+
 test('unauthorized path errors declare the least access mode required', async () => {
   await assert.rejects(
     () => readFileTool({ userId: 'local-user-b', path: path.join(outsideDir, 'secret.txt') }),
@@ -129,7 +205,7 @@ test('authorized directories work as shell cwd and git repository roots', async 
   process.env.WORKSPACE_ROOT = outsideDir
   process.env.WORKSPACE_SHELL_ENABLED = '1'
   process.env.WORKSPACE_GIT_ENABLED = '1'
-  grantLocalPath({ userId: 'execution-user', rootPath: executionRepo, accessMode: 'read_only' })
+  grantLocalPath({ userId: 'execution-user', rootPath: executionRepo, accessMode: 'read_write' })
 
   try {
     const shell = await bashExecTool({
@@ -146,11 +222,68 @@ test('authorized directories work as shell cwd and git repository roots', async 
 
     await assert.rejects(
       () => bashExecTool({ userId: 'local-user-b', cwd: executionRepo, command: process.platform === 'win32' ? 'cd' : 'pwd' }),
-      /未获得读取授权/
+      /未获得写入授权/
     )
     await assert.rejects(
       () => dispatchGitTool('git_status', { cwd: executionRepo }, { userId: 'local-user-b' }),
       /未获得读取授权/
+    )
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+})
+
+test('read-only grants cannot authorize shell, project scripts, or git mutations', async () => {
+  const saved = {
+    WORKSPACE_ROOT: process.env.WORKSPACE_ROOT,
+    WORKSPACE_SHELL_ENABLED: process.env.WORKSPACE_SHELL_ENABLED,
+    WORKSPACE_GIT_ENABLED: process.env.WORKSPACE_GIT_ENABLED,
+    WORKSPACE_GIT_MUTATION_ENABLED: process.env.WORKSPACE_GIT_MUTATION_ENABLED,
+  }
+  process.env.WORKSPACE_ROOT = outsideDir
+  process.env.WORKSPACE_SHELL_ENABLED = '1'
+  process.env.WORKSPACE_GIT_ENABLED = '1'
+  process.env.WORKSPACE_GIT_MUTATION_ENABLED = '1'
+  grantLocalPath({ userId: 'readonly-execution-user', rootPath: executionRepo, accessMode: 'read_only' })
+
+  const requiresWrite = (error) => {
+    assert.equal(error.code, 'PATH_NOT_AUTHORIZED')
+    assert.equal(error.requiredAccessMode, 'read_write')
+    return true
+  }
+  try {
+    const status = await dispatchGitTool(
+      'git_status',
+      { cwd: executionRepo },
+      { userId: 'readonly-execution-user' },
+    )
+    assert.equal(status.ok, true)
+    await assert.rejects(
+      () => bashExecTool({
+        userId: 'readonly-execution-user',
+        cwd: executionRepo,
+        command: process.platform === 'win32' ? 'cd' : 'pwd',
+      }),
+      requiresWrite,
+    )
+    await assert.rejects(
+      () => dispatchGitTool(
+        'run_project_check',
+        { cwd: executionRepo, check: 'test' },
+        { userId: 'readonly-execution-user' },
+      ),
+      requiresWrite,
+    )
+    await assert.rejects(
+      () => dispatchGitTool(
+        'git_commit',
+        { cwd: executionRepo, message: 'test commit', files: ['tracked.txt'] },
+        { userId: 'readonly-execution-user' },
+      ),
+      requiresWrite,
     )
   } finally {
     for (const [key, value] of Object.entries(saved)) {

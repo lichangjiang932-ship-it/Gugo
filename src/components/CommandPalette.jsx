@@ -4,6 +4,7 @@ import { Search, ChevronRight, Sparkles, Wand2, Plug, BookOpen } from 'lucide-re
 import { useAppContext } from '../store/AppContext'
 import { listCommands, fuzzySearch } from '../lib/commandRegistry.js'
 import { getRecentCommands, recordCommandUse } from '../lib/commandHistory.js'
+import { useT } from '../i18n/I18nProvider.jsx'
 
 function KindIcon({ kind }) {
   if (kind === 'skill') return <Sparkles className="w-3.5 h-3.5" />
@@ -13,6 +14,7 @@ function KindIcon({ kind }) {
 }
 
 export default function CommandPalette() {
+  const { t } = useT()
   const navigate = useNavigate()
   const { state, dispatch } = useAppContext()
   const [open, setOpen] = useState(false)
@@ -89,7 +91,7 @@ export default function CommandPalette() {
           window.dispatchEvent(new CustomEvent('command-palette:prefill', { detail: ret }))
         }
       } catch (err) {
-        setMessage(err?.message || 'Command failed')
+        setMessage(err?.message || t('errors.unknown'))
       }
     }
   }
@@ -126,7 +128,8 @@ export default function CommandPalette() {
             value={query}
             onChange={(e) => { setQuery(e.target.value); setSelectedIdx(0) }}
             onKeyDown={handleKeyDown}
-            placeholder="Search commands, skills, and MCP prompts"
+            placeholder={`${t('slash.menuLabel')}…`}
+            aria-label={t('slash.menuLabel')}
             className="flex-1 bg-transparent outline-none text-sm text-ink placeholder:text-ink-fade"
           />
           <kbd className="font-mono text-[10px] text-ink-fade border border-ink/15 rounded px-1.5 py-0.5">Esc</kbd>
@@ -134,7 +137,7 @@ export default function CommandPalette() {
 
         <div ref={listRef} className="max-h-[400px] overflow-auto py-1">
           {filtered.length === 0 ? (
-            <div className="px-4 py-6 text-center text-sm text-ink-fade">No matching commands</div>
+            <div className="px-4 py-6 text-center text-sm text-ink-fade">{t('slash.noMatches')}</div>
           ) : (
             filtered.map(({ cmd }, idx) => (
               <button
@@ -168,8 +171,8 @@ export default function CommandPalette() {
         </div>
 
         <div className="flex items-center gap-3 px-4 py-2 border-t border-ink/10 text-[10px] text-ink-fade bg-paper-2/50">
-          <span><kbd className="font-mono">??</kbd> Navigate</span>
-          <span><kbd className="font-mono">Enter</kbd> Run</span>
+          <span><kbd className="font-mono">↑↓</kbd> {t('slash.navigate')}</span>
+          <span><kbd className="font-mono">Enter</kbd> {t('slash.select')}</span>
           <span className="ml-auto">{filtered.length} / {allCommands.length}</span>
         </div>
       </div>

@@ -78,6 +78,35 @@ export function releaseJobBudget(jobId) {
   if (jobId) BUDGET_BY_ID.delete(String(jobId))
 }
 
+function modelBudgetError(reason, partialModelResult) {
+  const error = new Error(reason || 'model budget exceeded')
+  error.code = 'MODEL_BUDGET_EXCEEDED'
+  if (partialModelResult !== undefined) error.partialModelResult = partialModelResult
+  return error
+}
+
+/** Account for one real provider request, including context-recovery retries. */
+export async function runWithModelBudget(budget, run, {
+  allowOverBudget = false,
+  now = () => Date.now(),
+} = {}) {
+  if (typeof run !== 'function') throw new Error('run is required')
+  const callStatus = budget?.consumeModelCall?.({ allowOverBudget }) || { ok: true }
+  if (!allowOverBudget && !callStatus.ok) throw modelBudgetError(callStatus.reason)
+  const startedAt = now()
+  let result
+  try {
+    result = await run()
+  } finally {
+    budget?.trackModelMs?.(Math.max(0, now() - startedAt))
+  }
+  const usageStatus = budget?.trackModelUsage?.(result?.usage, result?.costUsd) || { ok: true }
+  if (!allowOverBudget && !usageStatus.ok) {
+    throw modelBudgetError(usageStatus.reason, result)
+  }
+  return result
+}
+
 export function createJobBudget({
   maxTotalCalls = DEFAULT_MAX_CALLS,
   maxWallMs = DEFAULT_MAX_WALL_MS,
@@ -92,10 +121,14 @@ export function createJobBudget({
   initialCostUsd = 0,
   now = () => Date.now(),
 } = {}) {
-  const startedAt = now() - Math.max(0, Number(initialElapsedMs) || 0)
+  const initialWorkingMs = Math.max(0, Number(initialElapsedMs) || 0)
   let used = Math.max(0, Number(initialUsed) || 0)
   // 花在等模型上的时间。从墙钟里扣掉 —— 见 trackModelMs。
   let modelMs = Math.max(0, Number(initialModelMs) || 0)
+  // `initialElapsedMs` comes from snapshot().elapsed and therefore already
+  // excludes model wait time. Rewind both counters so restoring a checkpoint
+  // does not subtract the historical model time a second time.
+  const startedAt = now() - initialWorkingMs - modelMs
   let modelCalls = Math.max(0, Number(initialModelCalls) || 0)
   let modelTokens = Math.max(0, Number(initialModelTokens) || 0)
   let costUsd = Math.max(0, Number(initialCostUsd) || 0)
@@ -128,7 +161,19 @@ export function createJobBudget({
       const value = Number(ms)
       if (Number.isFinite(value) && value > 0) modelMs += value
     },
-    consumeModelCall() {
+    consumeModelCall({ allowOverBudget = false } = {}) {
+      const current = modelLimitStatus()
+      if (!allowOverBudget && !current.ok) {
+        return { ...current, modelCalls, remaining: Math.max(0, maxModelCalls - modelCalls) }
+      }
+      if (!allowOverBudget && maxModelCalls > 0 && modelCalls >= maxModelCalls) {
+        return {
+          ok: false,
+          reason: `model call budget exceeded (${modelCalls}/${maxModelCalls})`,
+          modelCalls,
+          remaining: 0,
+        }
+      }
       modelCalls += 1
       return { ...modelLimitStatus(), modelCalls, remaining: Math.max(0, maxModelCalls - modelCalls) }
     },

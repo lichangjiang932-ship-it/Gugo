@@ -9,7 +9,7 @@ import path from 'node:path'
  *
  * 背景:记忆注入(selectActiveMemoriesForInjection)一直是通的,但**没人写** ——
  * 只有 Memory 管理页能手动加。于是模型在同一个上下文里也像没有记忆:
- * 用户说了「项目在 D:\destok\money」,下一轮它照样不知道。
+ * 用户说了「项目在 /path/to/money」,下一轮它照样不知道。
  */
 
 process.env.APP_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-memtools-'))
@@ -35,13 +35,13 @@ test('工具规格结构合法', () => {
 })
 
 test('★ 写入的记忆下一轮会被注入回来', () => {
-  const out = write('money 项目路径', String.raw`D:\destok\money,Python + FastAPI`)
+  const out = write('money 项目路径', '/path/to/money,Python + FastAPI')
   assert.equal(out.ok, true)
 
   const picked = selectActiveMemoriesForInjection({ userId: USER, tokenCap: 800 })
   const found = picked.memories.find((m) => m.title === 'money 项目路径')
   assert.ok(found, '写进去的记忆必须能被注入路径取到 —— 否则等于没记')
-  assert.match(found.body, /destok/)
+  assert.match(found.body, /\/path\/to\/money/)
 })
 
 test('★ 同标题覆盖而不是堆重复条目', () => {

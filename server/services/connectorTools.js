@@ -42,38 +42,43 @@ export const CONNECTOR_TOOL_SPECS = Object.freeze(definitions.map(([name, descri
 
 export const CONNECTOR_TOOL_NAMES = Object.freeze(CONNECTOR_TOOL_SPECS.map((spec) => spec.function.name))
 
-export async function executeConnectorTool(name, args = {}, { userId, fetchImpl, env } = {}) {
+export async function executeConnectorTool(
+  name,
+  args = {},
+  { userId, fetchImpl, env, idempotencyKey, toolCallId } = {},
+) {
   if (!userId) return { ok: false, error: 'connector tools require userId' }
+  const executionContext = { idempotencyKey, toolCallId }
   try {
     if (name === 'connected_app_list') {
-      return { ok: true, apps: listConnectedBrowserApps({ userId }) }
+      return { ok: true, apps: listConnectedBrowserApps({ userId, ...executionContext }) }
     }
     if (name === 'connected_app_open') {
-      return { ok: true, ...(await openConnectedBrowserApp({ userId, provider: args.provider })) }
+      return { ok: true, ...(await openConnectedBrowserApp({ userId, provider: args.provider, ...executionContext })) }
     }
     if (name === 'notion_search') {
-      return { ok: true, ...(await searchNotion({ userId, query: args.query })) }
+      return { ok: true, ...(await searchNotion({ userId, query: args.query, ...executionContext })) }
     }
     if (name === 'notion_fetch_page') {
-      return { ok: true, ...(await fetchNotionPage({ userId, pageId: args.pageId })) }
+      return { ok: true, ...(await fetchNotionPage({ userId, pageId: args.pageId, ...executionContext })) }
     }
     if (name === 'github_search_repositories') {
-      return { ok: true, ...(await searchGithubRepositories({ userId, query: args.query })) }
+      return { ok: true, ...(await searchGithubRepositories({ userId, query: args.query, ...executionContext })) }
     }
     if (name === 'github_get_file') {
-      return { ok: true, ...(await getGithubFile({ userId, ...args, fetchImpl })) }
+      return { ok: true, ...(await getGithubFile({ userId, ...args, fetchImpl, ...executionContext })) }
     }
     if (name === 'slack_list_channels') {
-      return { ok: true, ...(await listSlackChannels({ userId, ...args, fetchImpl })) }
+      return { ok: true, ...(await listSlackChannels({ userId, ...args, fetchImpl, ...executionContext })) }
     }
     if (name === 'slack_read_channel') {
-      return { ok: true, ...(await readSlackChannel({ userId, ...args, fetchImpl })) }
+      return { ok: true, ...(await readSlackChannel({ userId, ...args, fetchImpl, ...executionContext })) }
     }
     if (name === 'google_drive_search') {
-      return { ok: true, ...(await searchGoogleDrive({ userId, ...args, fetchImpl, env })) }
+      return { ok: true, ...(await searchGoogleDrive({ userId, ...args, fetchImpl, env, ...executionContext })) }
     }
     if (name === 'google_drive_get_file') {
-      return { ok: true, ...(await getGoogleDriveFile({ userId, ...args, fetchImpl, env })) }
+      return { ok: true, ...(await getGoogleDriveFile({ userId, ...args, fetchImpl, env, ...executionContext })) }
     }
     return { ok: false, error: `unknown connector tool: ${name}` }
   } catch (error) {
@@ -89,6 +94,7 @@ export function registerConnectorTools() {
       name,
       origin: 'connector',
       source: name.split('_')[0],
+      metadata: { riskClass: name === 'connected_app_open' ? 'external' : 'read' },
       spec,
       exec: (args, context) => executeConnectorTool(name, args, context),
     })

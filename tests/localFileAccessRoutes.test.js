@@ -9,7 +9,8 @@ const allowedDir = path.join(tempDir, 'allowed')
 fs.mkdirSync(allowedDir)
 fs.writeFileSync(path.join(allowedDir, 'route.txt'), 'route access', 'utf8')
 process.env.APP_DATA_DIR = tempDir
-delete process.env.WORKSPACE_FS_ENABLED
+const previousFsEnabled = process.env.WORKSPACE_FS_ENABLED
+process.env.WORKSPACE_FS_ENABLED = '1'
 const previousGitEnabled = process.env.WORKSPACE_GIT_ENABLED
 process.env.WORKSPACE_GIT_ENABLED = '1'
 
@@ -27,6 +28,8 @@ test.after(async () => {
   fs.rmSync(tempDir, { recursive: true, force: true })
   if (previousGitEnabled === undefined) delete process.env.WORKSPACE_GIT_ENABLED
   else process.env.WORKSPACE_GIT_ENABLED = previousGitEnabled
+  if (previousFsEnabled === undefined) delete process.env.WORKSPACE_FS_ENABLED
+  else process.env.WORKSPACE_FS_ENABLED = previousFsEnabled
 })
 
 function headers(token) {

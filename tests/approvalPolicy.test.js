@@ -98,12 +98,13 @@ test('bash_exec: missing / non-string command does not throw', () => {
   }
 })
 
-test('bash_exec remembered grants match only a safe command prefix', () => {
-  const grant = buildRememberedGrant('bash_exec', { command: 'git status' })
-  assert.deepEqual(grant, { toolName: 'bash_exec', commandPrefix: 'git status' })
-  assert.equal(matchesRememberedGrant('bash_exec', { command: 'git status --short' }, [grant]), true)
-  assert.equal(matchesRememberedGrant('bash_exec', { command: 'git statusx' }, [grant]), false)
-  assert.equal(matchesRememberedGrant('bash_exec', { command: 'rm -rf /' }, [grant]), false)
+test('bash_exec can never create or consume a standing rule', () => {
+  assert.throws(
+    () => buildRememberedGrant('bash_exec', { command: 'git status' }),
+    /Shell tools cannot be remembered/,
+  )
+  const legacyGrant = { toolName: 'bash_exec', commandPrefix: 'git status' }
+  assert.equal(matchesRememberedGrant('bash_exec', { command: 'git status' }, [legacyGrant]), false)
 })
 
 test('bash_exec remembered grants reject shell operators and ignore legacy tool-wide grants', () => {
@@ -127,12 +128,12 @@ test('bash_exec remembered grants reject shell operators and ignore legacy tool-
   assert.equal(verdict.needsApproval, true)
 })
 
-test('bash_exec remembered prefix bypasses approval only for matching safe commands', () => {
+test('bash_exec legacy remembered prefixes never bypass approval', () => {
   const rememberedGrants = [{ toolName: 'bash_exec', commandPrefix: 'git status' }]
   assert.equal(classifyToolRisk('bash_exec', { command: 'git status --short' }, {
     ...JOB,
     rememberedGrants,
-  }).needsApproval, false)
+  }).needsApproval, true)
   assert.equal(classifyToolRisk('bash_exec', { command: 'git status && rm -rf /' }, {
     ...JOB,
     rememberedGrants,
@@ -245,6 +246,56 @@ test('unknown read-ish tools are not gated', () => {
     const out = classifyToolRisk(name, {}, JOB)
     assert.deepEqual(out, { needsApproval: false, risk: 'low', reason: null }, `${name} should pass`)
   }
+})
+
+test('external remembered grants are bound to the exact semantic target', () => {
+  const grant = buildRememberedGrant('slack_send_message', { channelId: 'C-ops', text: 'first' })
+  assert.deepEqual(grant, { toolName: 'slack_send_message', commandPrefix: 'target:channelId=C-ops' })
+  assert.equal(classifyToolRisk('slack_send_message', { channelId: 'C-ops', text: 'later' }, {
+    ...JOB, rememberedGrants: [grant],
+  }).needsApproval, false)
+  assert.equal(classifyToolRisk('slack_send_message', { channelId: 'C-finance', text: 'later' }, {
+    ...JOB, rememberedGrants: [grant],
+  }).needsApproval, true)
+})
+
+test('legacy tool-wide grants no longer bypass target-scoped approval', () => {
+  const verdict = classifyToolRisk('slack_send_message', { channelId: 'C-ops', text: 'hello' }, {
+    ...JOB,
+    rememberedTools: ['slack_send_message'],
+    rememberedGrants: [{ toolName: 'slack_send_message', commandPrefix: '' }],
+  })
+  assert.equal(verdict.needsApproval, true)
+})
+
+test('target-scoped remembered grants report the standing rule used for authorization', () => {
+  const args = { channelId: 'C-ops', text: 'hello' }
+  const grant = buildRememberedGrant('slack_send_message', args)
+  const verdict = classifyToolRisk('slack_send_message', args, {
+    ...JOB,
+    rememberedGrants: [grant],
+  })
+  assert.equal(verdict.needsApproval, false)
+  assert.deepEqual(verdict.authorization, {
+    kind: 'standing_rule', toolName: 'slack_send_message', scope: 'target:channelId=C-ops',
+  })
+})
+
+test('tools without a semantic target use an exact non-sensitive argument fingerprint', () => {
+  const grant = buildRememberedGrant('publish_report', { payload: { title: 'A', body: 'secret' } })
+  assert.match(grant.commandPrefix, /^args:[a-f0-9]{24}$/)
+  assert.equal(matchesRememberedGrant('publish_report', { payload: { body: 'secret', title: 'A' } }, [grant]), true)
+  assert.equal(matchesRememberedGrant('publish_report', { payload: { title: 'B', body: 'secret' } }, [grant]), false)
+  assert.doesNotMatch(grant.commandPrefix, /secret/)
+})
+
+test('explicit dynamic-tool metadata overrides unsafe name guessing', () => {
+  assert.deepEqual(classifyToolRisk('read_user_data', {}, {
+    ...JOB, metadata: { riskClass: 'external', requiresApproval: true },
+  }), { needsApproval: true, risk: 'medium', reason: '调用可能产生副作用的外部工具' })
+  assert.deepEqual(classifyToolRisk('odd_remote_name', {}, {
+    ...JOB, metadata: { riskClass: 'read', requiresApproval: false },
+  }), { needsApproval: false, risk: 'low', reason: null })
 })
 
 test('git mutation tools always require high-risk approval', () => {

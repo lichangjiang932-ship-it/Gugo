@@ -18,6 +18,7 @@ const savedEnv = {
   WORKSPACE_ROOT: process.env.WORKSPACE_ROOT,
   WORKSPACE_FS_ENABLED: process.env.WORKSPACE_FS_ENABLED,
   WORKSPACE_SHELL_ENABLED: process.env.WORKSPACE_SHELL_ENABLED,
+  WORKSPACE_SHARED_TRUSTED: process.env.WORKSPACE_SHARED_TRUSTED,
 }
 
 before(() => {
@@ -37,6 +38,7 @@ beforeEach(() => {
   // 每个 test 默认关闭闸门;需要时 test 内显式打开
   delete process.env.WORKSPACE_FS_ENABLED
   delete process.env.WORKSPACE_SHELL_ENABLED
+  process.env.WORKSPACE_SHARED_TRUSTED = '1'
 })
 
 test('fs 默认禁用:WORKSPACE_FS_ENABLED 未设时,所有 fs 操作返回 403', async () => {
@@ -140,6 +142,24 @@ test('bash_exec:超时返回 timedOut', async () => {
   const result = await bashExecTool({ command: cmd, timeout_ms: 1000 })
   assert.equal(result.ok, false)
   assert.equal(result.timedOut, true)
+})
+
+test('bash_exec: AbortSignal 取消后清理进程并返回 cancelled', async () => {
+  process.env.WORKSPACE_SHELL_ENABLED = '1'
+  const controller = new AbortController()
+  const cmd = process.platform === 'win32'
+    ? 'ping -n 20 127.0.0.1'
+    : 'sleep 10'
+  const startedAt = Date.now()
+  const pending = bashExecTool({ command: cmd, timeout_ms: 10_000, signal: controller.signal })
+  setTimeout(() => controller.abort(), 100)
+
+  const result = await pending
+  const elapsed = Date.now() - startedAt
+  assert.equal(result.ok, false)
+  assert.equal(result.cancelled, true)
+  assert.equal(result.timedOut, undefined)
+  assert.ok(elapsed < 4_000, `取消后应在 4s 内退出,实际 ${elapsed}ms`)
 })
 
 test('bash_exec:敏感 env 被屏蔽传给子进程', async () => {

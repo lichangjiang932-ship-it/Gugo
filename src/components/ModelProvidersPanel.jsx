@@ -19,7 +19,7 @@ const LOCAL_PRESETS = Object.freeze([
   { id: 'vllm', key: 'vllm', label: 'vLLM', baseUrl: 'http://127.0.0.1:8000/v1', kind: 'vllm' },
 ])
 
-const KIND_OPTIONS = ['', 'ollama', 'lmstudio', 'llamacpp', 'vllm', 'openai-compatible']
+const KIND_OPTIONS = ['', 'ollama', 'lmstudio', 'llamacpp', 'vllm', 'anthropic', 'gemini', 'openai-compatible']
 
 /** 三态能力开关:'' = 自动推断 / '1' = 支持 / '0' = 不支持 */
 const TRIBOOL_VALUES = ['', '1', '0']
@@ -29,7 +29,7 @@ function emptyProvider() {
     id: '', key: '', label: '', baseUrl: '', apiKey: '', modelsText: '', defaultModel: '',
     headersText: '', enabled: true, isDefault: false,
     // v28 能力字段,全部留空 = 自动检测
-    kind: '', contextWindow: '', supportsTools: '', supportsStreaming: '', supportsVision: '',
+    kind: '', contextWindow: '', supportsTools: '', supportsStreaming: '', supportsVision: '', supportsPdf: '',
     firstTokenTimeoutMs: '', idleTimeoutMs: '', failoverEnabled: '', keepAlive: '',
   }
 }
@@ -64,6 +64,7 @@ function toEditor(provider) {
     supportsTools: triboolToSelect(provider.supportsTools),
     supportsStreaming: triboolToSelect(provider.supportsStreaming),
     supportsVision: triboolToSelect(provider.supportsVision),
+    supportsPdf: triboolToSelect(provider.supportsPdf),
     firstTokenTimeoutMs: provider.firstTokenTimeoutMs ?? '',
     idleTimeoutMs: provider.idleTimeoutMs ?? '',
     failoverEnabled: triboolToSelect(provider.failoverEnabled),
@@ -151,6 +152,7 @@ export default function ModelProvidersPanel({ onChanged }) {
         supportsTools: selectToTribool(editing.supportsTools),
         supportsStreaming: selectToTribool(editing.supportsStreaming),
         supportsVision: selectToTribool(editing.supportsVision),
+        supportsPdf: selectToTribool(editing.supportsPdf),
         firstTokenTimeoutMs: numberOrNull(editing.firstTokenTimeoutMs),
         idleTimeoutMs: numberOrNull(editing.idleTimeoutMs),
         failoverEnabled: selectToTribool(editing.failoverEnabled),
@@ -318,6 +320,8 @@ export default function ModelProvidersPanel({ onChanged }) {
               <span>{diagnostics.profile.kind}</span>
               <span>{t('modelProviders.contextWindow')}: {diagnostics.profile.contextWindow}</span>
               <span>{t('modelProviders.supportsTools')}: {diagnostics.profile.supportsTools ? t('modelProviders.capYes') : t('modelProviders.capNo')}</span>
+              <span>{t('modelProviders.supportsPdf')}: {diagnostics.profile.supportsPdf ? t('modelProviders.capYes') : t('modelProviders.capNo')}</span>
+              <span>{t('modelProviders.supportsParallelTools')}: {diagnostics.profile.supportsParallelTools ? t('modelProviders.capYes') : t('modelProviders.capNo')}</span>
               <span>{t('modelProviders.firstTokenTimeout')}: {diagnostics.profile.firstTokenTimeoutMs}</span>
               {diagnostics.profile.keepAlive && <span>{t('modelProviders.keepAlive')}: {diagnostics.profile.keepAlive}</span>}
             </div>
@@ -387,10 +391,11 @@ export default function ModelProvidersPanel({ onChanged }) {
                   <input type="number" min="1024" value={editing.contextWindow} onChange={(e) => setEditing({ ...editing, contextWindow: e.target.value })} placeholder="8192" />
                 </Field>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                 <TriboolField label={t('modelProviders.supportsTools')} value={editing.supportsTools} onChange={(value) => setEditing({ ...editing, supportsTools: value })} t={t} />
                 <TriboolField label={t('modelProviders.supportsStreaming')} value={editing.supportsStreaming} onChange={(value) => setEditing({ ...editing, supportsStreaming: value })} t={t} />
                 <TriboolField label={t('modelProviders.supportsVision')} value={editing.supportsVision} onChange={(value) => setEditing({ ...editing, supportsVision: value })} t={t} />
+                <TriboolField label={t('modelProviders.supportsPdf')} value={editing.supportsPdf} onChange={(value) => setEditing({ ...editing, supportsPdf: value })} t={t} />
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <Field label={t('modelProviders.firstTokenTimeout')}>

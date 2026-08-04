@@ -18,6 +18,9 @@ test('task notifications deep-link to the routed task and legacy plural links re
 
   assert.match(runtimeSource, /`\/task\?job=\$\{encodeURIComponent\(job\.id\)\}`/)
   assert.doesNotMatch(runtimeSource, /`\/tasks\?job=/)
-  assert.match(appSource, /path="\/tasks" element=\{<RoutedTaskRunPanel \/>\}/)
+  assert.match(
+    appSource,
+    /path="\/tasks" element=\{<RequireAuth><RoutedTaskRunPanel \/><\/RequireAuth>\}/,
+  )
 })
 

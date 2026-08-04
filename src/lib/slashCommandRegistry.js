@@ -139,6 +139,14 @@ export class SlashCommandRegistry {
     return Array.from(this.commands.values())
       .filter((entry) => matchesQuery(entry, query))
       .sort((a, b) => {
+        const aOrder = Number(a.meta?.order)
+        const bOrder = Number(b.meta?.order)
+        const aPinned = Number.isFinite(aOrder)
+        const bPinned = Number.isFinite(bOrder)
+        if (aPinned || bPinned) {
+          if (aPinned && bPinned && aOrder !== bOrder) return aOrder - bOrder
+          if (aPinned !== bPinned) return aPinned ? -1 : 1
+        }
         const ar = recentRank.has(a.name) ? recentRank.get(a.name) : Infinity
         const br = recentRank.has(b.name) ? recentRank.get(b.name) : Infinity
         if (ar !== br) return ar - br

@@ -29,7 +29,20 @@ export function runProcessWithGroup({
   timeout = 60_000,
   maxBuffer = 1 * 1024 * 1024,
   windowsHide = true,
+  signal = null,
 }) {
+  if (signal?.aborted) {
+    return Promise.resolve({
+      stdout: '',
+      stderr: '',
+      code: null,
+      signal: null,
+      timedOut: false,
+      killed: false,
+      truncated: false,
+      aborted: true,
+    })
+  }
   return new Promise((resolve) => {
     const isWin = process.platform === 'win32'
     const child = spawn(shellPath, shellArgs, {
@@ -45,10 +58,12 @@ export function runProcessWithGroup({
     let stderrBuf = ''
     let truncated = false
     let timedOut = false
+    let aborted = false
     let killed = false
     let settled = false
     let killTimer = null
     let sigkillTimer = null
+    let abortListener = null
 
     const stopBuffering = () => {
       try { child.stdout?.destroy() } catch { /* noop */ }
@@ -76,6 +91,10 @@ export function runProcessWithGroup({
     function killTree(signal) {
       if (settled || child.pid == null) return
       killed = true
+      // Descendants can inherit the root process' stdout/stderr handles. On
+      // Windows that keeps ChildProcess `close` pending even after cmd.exe was
+      // killed, so stop reading before terminating the tree.
+      stopBuffering()
       try {
         if (isWin) {
           // Windows 下用 taskkill 杀进程树
@@ -94,17 +113,34 @@ export function runProcessWithGroup({
       } catch { /* 进程可能已退出 */ }
     }
 
+    const scheduleForceKill = () => {
+      if (sigkillTimer) clearTimeout(sigkillTimer)
+      sigkillTimer = setTimeout(() => killTree('SIGKILL'), GRACE_MS)
+    }
+
+    if (signal) {
+      abortListener = () => {
+        if (settled || aborted) return
+        aborted = true
+        killTree('SIGTERM')
+        scheduleForceKill()
+      }
+      signal.addEventListener('abort', abortListener, { once: true })
+      if (signal.aborted) abortListener()
+    }
+
     killTimer = setTimeout(() => {
       timedOut = true
       killTree('SIGTERM')
-      sigkillTimer = setTimeout(() => killTree('SIGKILL'), GRACE_MS)
+      scheduleForceKill()
     }, timeout)
 
-    const finalize = (code, signal) => {
+    const finalize = (code, exitSignal) => {
       if (settled) return
       settled = true
       if (killTimer) clearTimeout(killTimer)
       if (sigkillTimer) clearTimeout(sigkillTimer)
+      if (abortListener) signal?.removeEventListener('abort', abortListener)
       // ★ Lens-2 fix: 不再无条件给已退出 child 的 pgid 再发 SIGTERM
       // 原因:child.pid 在 close 后可能被 OS 复用,主动 kill(-pid) 会误杀别人。
       // 只在 timedOut 路径杀进程组(那时仍然 alive,killTree 内已处理)。
@@ -115,10 +151,11 @@ export function runProcessWithGroup({
         stdout: stdoutBuf,
         stderr: stderrBuf,
         code: typeof code === 'number' ? code : null,
-        signal: signal || null,
+        signal: exitSignal || null,
         timedOut,
         killed,
         truncated,
+        aborted,
       })
     }
 

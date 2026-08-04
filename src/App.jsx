@@ -2,12 +2,14 @@ import { Suspense, lazy } from 'react'
 import { Routes, Route, Navigate, useSearchParams } from './lib/router.jsx'
 
 import ErrorBoundary from './components/ErrorBoundary'
-import { I18nProvider } from './i18n/I18nProvider.jsx'
+import { I18nProvider, useT } from './i18n/I18nProvider.jsx'
 import { ActiveAgentProvider } from './agents/ActiveAgentProvider.jsx'
 import RequireAuth from './components/RequireAuth'
 import SessionSearchModal from './components/SessionSearchModal'
 import { ToastProvider } from './components/Toast.jsx'
 import PreviewBanner from './components/PreviewBanner.jsx'
+import StoragePersistenceNotice from './components/StoragePersistenceNotice.jsx'
+import CommandPalette from './components/CommandPalette.jsx'
 
 const CoverPage = lazy(() => import('./pages/CoverPage'))
 const ChatSplit = lazy(() => import('./pages/ChatSplit'))
@@ -26,10 +28,11 @@ const ChannelsPage = lazy(() => import('./pages/ChannelsPage'))
 const AccessView = lazy(() => import('./pages/AccessView'))
 
 function Fallback() {
+  const { t } = useT()
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center gap-4 text-stone-400" role="status" aria-label="页面加载中">
+    <div className="min-h-screen flex flex-col items-center justify-center gap-4 text-stone-400" role="status" aria-label={t('memory.loading')}>
       <div className="w-8 h-8 rounded-full border-2 border-ember/30 border-t-ember animate-spin" />
-      <span className="text-sm tracking-wide">加载中…</span>
+      <span className="text-sm tracking-wide">{t('memory.loading')}</span>
     </div>
   )
 }
@@ -45,6 +48,8 @@ function App() {
     <ToastProvider>
     <ActiveAgentProvider>
     <ErrorBoundary>
+      <StoragePersistenceNotice />
+      <CommandPalette />
       <SessionSearchModal />
       <Suspense fallback={<Fallback />}>
         <main>
@@ -52,12 +57,12 @@ function App() {
           <Routes>
           <Route path="/" element={<CoverPage />} />
           <Route path="/chat" element={<ChatSplit />} />
-          <Route path="/skills" element={<SkillsMarket />} />
-          <Route path="/permissions" element={<PermissionsDashboard />} />
+          <Route path="/skills" element={<RequireAuth><SkillsMarket /></RequireAuth>} />
+          <Route path="/permissions" element={<RequireAuth><PermissionsDashboard /></RequireAuth>} />
           <Route path="/approvals" element={<RequireAuth><ApprovalsInbox /></RequireAuth>} />
-          <Route path="/task" element={<RoutedTaskRunPanel />} />
-          <Route path="/tasks" element={<RoutedTaskRunPanel />} />
-          <Route path="/history" element={<HistoryView />} />
+          <Route path="/task" element={<RequireAuth><RoutedTaskRunPanel /></RequireAuth>} />
+          <Route path="/tasks" element={<RequireAuth><RoutedTaskRunPanel /></RequireAuth>} />
+          <Route path="/history" element={<RequireAuth><HistoryView /></RequireAuth>} />
           <Route path="/settings" element={<RequireAuth><SettingsView /></RequireAuth>} />
           <Route path="/memory" element={<RequireAuth><MemoryView /></RequireAuth>} />
           <Route path="/desk" element={<RequireAuth><DeskView /></RequireAuth>} />

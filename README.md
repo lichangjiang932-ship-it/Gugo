@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/Node.js-20-10b981?logo=node.js" alt="Node 20" />
   <img src="https://img.shields.io/badge/SQLite-WAL-2e8fa3" alt="SQLite WAL" />
   <img src="https://img.shields.io/badge/Vite-8-ec4899?logo=vite" alt="Vite 8" />
-  <img src="https://img.shields.io/badge/tests-853%20passing-success" alt="tests" />
+  <img src="https://img.shields.io/badge/tests-CI%20passing-success" alt="tests" />
   <img src="https://img.shields.io/badge/release-v0.10.0-blue" alt="v0.10.0" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT" />
 </p>
@@ -119,7 +119,7 @@
 
 技术栈：React 19 · Vite 8 · Tailwind CSS 3 · Framer Motion · Three.js · Node.js 20 · better-sqlite3 · JSDOM · JSZip · Zod · PPTXGenJS · @e965/xlsx
 
-规模：~17,000 行代码 · 153 个测试文件 · **853 个测试用例**（v0.10.0） · 零后端框架依赖
+规模：持续增长的自动化测试套件 · Windows/Linux CI · 零后端框架依赖
 
 ---
 
@@ -147,6 +147,8 @@
 
 ## 快速开始
 
+第一次安装或准备长期运行，请先阅读 [《Gugo 操作手册》](./docs/OPERATION_GUIDE.md)。手册包含环境要求、配置、开发/生产/Docker 启动、首次登录、备份恢复、升级、安全注意事项和常见故障处理。
+
 ```bash
 git clone https://github.com/lichangjiang932-ship-it/your-model-atelier.git
 cd your-model-atelier
@@ -169,7 +171,9 @@ docker compose up -d
 
 Browser 工具需要 Node.js 22+ 和已安装的 Edge/Chrome。默认自动探测浏览器，也可在 `.env` 设置 `BROWSER_EXECUTABLE_PATH`；仅受限 CI/沙箱环境才使用 `BROWSER_NO_SANDBOX=1`。
 
-登录后从左侧「连接」进入 Access 中心（Hash 路由为 `/#/access`）：32 个 Browser 应用负责广覆盖；Notion、GitHub、Slack 与 Google Drive 提供可被 agent 结构化调用的原生连接，并支持 OAuth 一键授权（配置 `APP_PUBLIC_URL` 与对应 OAuth Client 环境变量），未配置时仍可手工填 token；飞书使用企业自建应用的 App ID / App Secret；个人微信使用二维码扫码。OAuth 握手使用一次性 state、PKCE（GitHub/Google Drive）与 10 分钟持久会话，凭据探测成功后才启用；GitHub 默认仅请求 `read:user`，Slack 默认仅请求公开频道读取范围，Google Drive 默认仅请求 `drive.readonly`，额外 scope 必须通过对应 `*_OAUTH_SCOPES` 显式开启。Google Drive access token 到期后会使用服务端保存的 refresh token 自动续期。凭据只保存在服务端，返回前端时会脱敏。连接成功后，Notion、GitHub、Slack、Google Drive 与 Browser 工具会同时出现在站内聊天工具和对外 MCP 的工具列表中。
+登录后从左侧「连接」进入 Access 中心（Hash 路由为 `/#/access`）。目录中的 Browser 应用是打开对应网站的浏览器入口，不代表原生 API 集成；Notion、GitHub、Slack 与 Google Drive 才提供可被 agent 结构化调用的原生连接，并支持 OAuth 一键授权（配置 `APP_PUBLIC_URL` 与对应 OAuth Client 环境变量），未配置时仍可手工填 token。飞书使用企业自建应用的 App ID / App Secret，个人微信使用二维码扫码。OAuth 握手使用一次性 state、PKCE（GitHub/Google Drive）与 10 分钟持久会话，凭据探测成功后才启用；GitHub 默认仅请求 `read:user`，Slack 默认仅请求公开频道读取范围，Google Drive 默认仅请求 `drive.readonly`，额外 scope 必须通过对应 `*_OAUTH_SCOPES` 显式开启。Google Drive access token 到期后会使用服务端保存的 refresh token 自动续期。凭据只保存在服务端，返回前端时会脱敏。
+
+MCP OAuth 的 pending state 加密持久化并原子单次消费，服务重启不会中断 10 分钟内的授权。反向代理部署必须设置 `APP_PUBLIC_URL`；默认不会采信 `Host` 或 `X-Forwarded-*` 来生成回调地址，只有代理已清除外部伪造头时才可设置 `TRUST_PROXY=1`。自定义 bridge webhook 必须用时间戳参与 HMAC 签名，并会拒绝超过 5 分钟的请求与重复投递；请求头和签名格式见 [配置说明](docs/CONFIGURATION.md)。
 
 连接器 token、模型 API key 与自定义模型请求头使用 AES-256-GCM 加密后再写入数据库。默认会在数据库旁原子生成权限受限的 `.credentials.key`；生产环境可用 `CREDENTIAL_ENCRYPTION_KEY` 注入 32 字节主密钥，或用 `CREDENTIAL_KEY_PATH` 指定密钥文件。请把数据库和密钥分开备份；密钥丢失后密文无法恢复。旧版本的 JSON/base64 凭据会在首次读取时自动迁移为密文。
 
@@ -213,12 +217,18 @@ Cherry Studio 选择 `Streamable HTTP`，URL 填上述 `/mcp` 地址，并添加
 | `WORKSPACE_SHELL_ENABLED` | 否 | Shell 工具开关 | `0` |
 | `WORKSPACE_GIT_ENABLED` | 否 | Git 工具开关 | `0` |
 | `WORKSPACE_ROOT` | 否 | 工作区根目录 | `process.cwd()` |
+| `WORKSPACE_SHARED_TRUSTED` | 否 | 单机可信环境跳过逐用户工作区信任 | `0` |
+| `APP_PUBLIC_URL` | 否 | OAuth 回调使用的固定公网 origin | — |
+| `TRUST_PROXY` | 否 | 信任反向代理转发头（代理必须先清洗） | `0` |
 | `MCP_STDIO_ALLOWED_COMMANDS` | 否 | MCP stdio 命令白名单 | `npx,node,uvx,…` |
 | `MCP_SERVER_ENABLED` | 否 | 开启对外 `/mcp` Streamable HTTP Server | `1` |
 | `MCP_RATE_LIMIT_PER_MINUTE` | 否 | `/mcp` 每来源 IP 每分钟请求上限 | `300` |
 | `MCP_MAX_BODY_BYTES` | 否 | `/mcp` 单请求最大字节数 | `1048576` |
 | `APPROVAL_MODE` | 否 | 审批门控范围：`off` / `unattended` / `all` | `unattended` |
 | `APPROVAL_TIMEOUT_MS` | 否 | 审批超时（超时视同拒绝） | `86400000` |
+| `TURN_EVENT_RETENTION_DAYS` | 否 | 服务端聊天事件整轮保留天数 | `30` |
+| `TURN_EVENT_MAX_TERMINAL_TURNS_PER_USER` | 否 | 每用户最多保留的终态轮次事件 | `1000` |
+| `TURN_EVENT_CLEANUP_INTERVAL_MS` | 否 | 聊天事件保留清理检查间隔（毫秒） | `300000` |
 | `APP_DATA_DIR` | 否 | 数据目录 | `server-data/` |
 | `APP_DB_PATH` | 否 | SQLite 路径 | `server-data/app.db` |
 | `PORT` | 否 | HTTP 端口 | `5175` |
@@ -226,6 +236,8 @@ Cherry Studio 选择 `Streamable HTTP`，URL 填上述 `/mcp` 地址，并添加
 完整列表见 `.env.example`。
 
 > ⚠ **Shell 信任模型**：开启 `WORKSPACE_SHELL_ENABLED=1` 等同于**完全信任**能调用 `bash_exec` 的用户——该用户可在 server 进程权限下执行任意命令。`server/utils/bashGuard.js` 的危险命令黑名单**只防手滑 / prompt-injection 一行 payload，不是安全边界**（变量拼接 / base64 管道 / `python -c` / `$()` 命令替换均可平凡绕过）。若需对不可信用户开放 shell，必须上 OS 级隔离（容器 / nsjail / seccomp），不要依赖黑名单。启动期会打一条 warn 提醒。
+
+目录授权默认只开放读取；写入、Shell 与 Git 还需要用户显式信任该工作区，并始终受上述全局开关限制。`WORKSPACE_SHARED_TRUSTED=1` 仅适用于单机可信用户，不是安全沙箱。
 
 ---
 
@@ -237,7 +249,7 @@ npm run build    # 生产构建
 npm run serve    # 仅启动后端（需先 build）
 npm run local    # build + 启动
 npm run lint     # ESLint
-npm test         # 853 测试
+npm test         # 全量自动化测试
 ```
 
 ---
@@ -265,7 +277,7 @@ your-model-atelier/
 │   └── store/             # 状态 + 持久化
 ├── skill-packs/           # 可分发的 skill 包
 ├── seed/                  # 系统 skill 静态种子
-├── tests/                 # 153 个测试文件
+├── tests/                 # 自动化测试
 ├── docs/
 │   ├── REFOUND_PLAN.md    # 重构路线图
 │   └── superpowers/

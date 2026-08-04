@@ -8,6 +8,7 @@ const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-job-hooks-'))
 process.env.APP_DATA_DIR = TMP_DIR
 process.env.APPROVAL_MODE = 'off'
 process.env.HOOKS_SHELL_ENABLED = '1'
+process.env.HOOKS_SHELL_ALLOWED_COMMANDS = process.execPath
 
 const { runToolsLoop } = await import('../server/services/jobTools.js')
 const { JobRuntime } = await import('../server/services/jobRuntime.js')

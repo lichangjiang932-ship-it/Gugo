@@ -7,7 +7,9 @@ import path from 'node:path'
 
 process.env.APP_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-model-proxy-compiler-'))
 
+let mockRequests = 0
 const mockModel = http.createServer((req, res) => {
+  mockRequests += 1
   req.resume()
   req.on('end', () => {
     res.writeHead(200, { 'Content-Type': 'application/json' })
@@ -66,6 +68,53 @@ test('testMode model request returns compiler fingerprints and isolates soul cha
     assert.notEqual(third.compilerFingerprints.ishiki, first.compilerFingerprints.ishiki)
   } finally {
     await new Promise((resolve) => server.close(resolve))
+  }
+})
+
+test('model test rejects anonymous requests before contacting the upstream model', async () => {
+  const server = createAppServer({ getEnv: () => ({}) })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const baseUrl = `http://127.0.0.1:${server.address().port}`
+  const before = mockRequests
+  try {
+    const response = await fetch(`${baseUrl}/api/model/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    assert.equal(response.status, 401)
+    assert.equal(mockRequests, before)
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
+})
+
+test('model test rate limits authenticated callers', async () => {
+  const previous = process.env.MODEL_TEST_RATE_MAX
+  process.env.MODEL_TEST_RATE_MAX = '2'
+  const { token } = issueTestSession()
+  const server = createAppServer({ getEnv: () => ({}) })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const baseUrl = `http://127.0.0.1:${server.address().port}`
+  try {
+    for (let i = 0; i < 2; i += 1) {
+      const response = await fetch(`${baseUrl}/api/model/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: '{}',
+      })
+      assert.equal(response.status, 200)
+    }
+    const blocked = await fetch(`${baseUrl}/api/model/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: '{}',
+    })
+    assert.equal(blocked.status, 429)
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+    if (previous == null) delete process.env.MODEL_TEST_RATE_MAX
+    else process.env.MODEL_TEST_RATE_MAX = previous
   }
 })
 

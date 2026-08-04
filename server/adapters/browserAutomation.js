@@ -3,6 +3,7 @@ import crypto from 'node:crypto'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { sanitizeChildEnv } from '../utils/sensitiveEnv.js'
+import { assertSafeOutboundUrl } from './toolProxy.js'
 
 const sessions = new Map()
 const START_TIMEOUT_MS = 15000
@@ -33,10 +34,11 @@ function assertEnabled() {
   }
 }
 
-function validateUrl(raw) {
+async function validateUrl(raw) {
   let url
   try { url = new URL(String(raw || '')) } catch { throw new Error('请输入有效 URL') }
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Browser 仅允许 http/https URL')
+  await assertSafeOutboundUrl(url.href)
   return url.href
 }
 
@@ -238,8 +240,8 @@ async function waitForReady(session, timeoutMs = ACTION_TIMEOUT_MS) {
 }
 
 export async function browserOpenUrl({ userId, url, headed = false }) {
+  const targetUrl = await validateUrl(url)
   const session = await getSession(userId, { headed })
-  const targetUrl = validateUrl(url)
   const result = await session.client.request('Page.navigate', { url: targetUrl }, session.sessionId)
   if (result.errorText) throw new Error(result.errorText)
   await waitForReady(session)
@@ -247,8 +249,8 @@ export async function browserOpenUrl({ userId, url, headed = false }) {
 }
 
 export async function browserConnectApp({ userId, url }) {
+  const targetUrl = await validateUrl(url)
   const session = await getSession(userId, { headed: true })
-  const targetUrl = validateUrl(url)
   const result = await session.client.request('Page.navigate', { url: targetUrl }, session.sessionId)
   if (result.errorText) throw new Error(result.errorText)
   await waitForReady(session)

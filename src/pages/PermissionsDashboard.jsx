@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
-import { Mic, Bell, HardDrive, Database, Camera, RefreshCw, Pause, Terminal, FilePen, FileText } from 'lucide-react'
+import { Mic, Bell, HardDrive, Database, Camera, RefreshCw, Pause, Terminal, FilePen, FileText, ShieldCheck } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { useAppContext } from '../store/AppContext'
@@ -15,6 +15,8 @@ import {
   fetchToolPermissions,
   setToolPermission,
 } from '../lib/toolPermissionClient'
+import { getLocalFileAccessApi, setWorkspaceTrustApi } from '../lib/localFileAccessClient.js'
+import RiskOverridesPanel from '../components/RiskOverridesPanel.jsx'
 
 // 5 个固定能力。Key 来自 i18n permissionsDashboard 域。
 const ITEMS = [
@@ -91,6 +93,9 @@ export default function PermissionsDashboard() {
   // 后端权威的 per-user 工具 gate（显式覆盖 map: { toolName: false }）；默认放行。
   const [toolOverrides, setToolOverrides] = useState({})
   const [toolError, setToolError] = useState(null)
+  const [localFiles, setLocalFiles] = useState(null)
+  const [localFileError, setLocalFileError] = useState(null)
+  const [trustBusyPath, setTrustBusyPath] = useState('')
 
   useEffect(() => {
     let alive = true
@@ -99,6 +104,32 @@ export default function PermissionsDashboard() {
       .catch((err) => { if (alive) setToolError(err.message) })
     return () => { alive = false }
   }, [])
+
+  const refreshLocalFiles = useCallback(async () => {
+    try {
+      setLocalFiles(await getLocalFileAccessApi())
+      setLocalFileError(null)
+    } catch (error) {
+      setLocalFileError(error?.message || t('localFiles.workspaceTrustLoadFailed'))
+    }
+  }, [t])
+
+  useEffect(() => {
+    Promise.resolve().then(refreshLocalFiles)
+  }, [refreshLocalFiles])
+
+  const changeWorkspaceTrust = async (rootPath, trusted) => {
+    setTrustBusyPath(rootPath)
+    try {
+      const status = await setWorkspaceTrustApi({ path: rootPath, trusted })
+      setLocalFiles(status)
+      setLocalFileError(null)
+    } catch (error) {
+      setLocalFileError(error?.message || t('localFiles.workspaceTrustFailed'))
+    } finally {
+      setTrustBusyPath('')
+    }
+  }
 
   // 某工具是否启用：无显式覆盖 → 默认开；显式 false → 关。
   const isToolEnabled = (id) => toolOverrides[id] !== false
@@ -272,6 +303,69 @@ export default function PermissionsDashboard() {
                   onToggle={() => dispatch({ type: 'TOGGLE_PERM', payload: permission.id })}
                   label={`${permission.enabled ? t('permissionsDashboard.disable') : t('permissionsDashboard.enable')} ${permission.name}`}
                 />
+              </div>
+            )
+          })}
+        </div>
+
+        <RiskOverridesPanel />
+
+        <div className="mb-2 flex items-baseline gap-2">
+          <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">WORKSPACE TRUST</span>
+          <span className="font-hand text-base text-ink-soft">{t('localFiles.workspaceTrustManage')}</span>
+        </div>
+        <p className="mb-2 text-xs text-ink-fade">{t('localFiles.workspaceTrustManageHint')}</p>
+        {localFileError && (
+          <div className="mb-3 rounded-md border border-dashed border-ember/60 px-4 py-2.5 text-sm text-ember">
+            {localFileError}
+          </div>
+        )}
+        <div className="mb-6 overflow-hidden rounded-md border border-ink/30">
+          {(localFiles?.grants || []).filter((grant) => grant.resourceType === 'directory').length === 0 ? (
+            <div className="px-4 py-5 text-sm text-ink-fade">{t('localFiles.workspaceTrustEmpty')}</div>
+          ) : (localFiles?.grants || []).filter((grant) => grant.resourceType === 'directory').map((grant, index, grants) => {
+            const trust = (localFiles?.trustedWorkspaces || []).find((item) => (
+              String(item.rootPath || '').toLowerCase() === String(grant.path || '').toLowerCase()
+            ))
+            const trusted = !!trust?.trusted
+            const effective = trust?.effective
+            return (
+              <div
+                key={grant.id}
+                className={`flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center ${index < grants.length - 1 ? 'border-b border-dashed border-ink-fade/40' : ''}`}
+              >
+                <div className="flex min-w-0 flex-1 items-start gap-3">
+                  <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md border ${trusted ? 'border-emerald-500/40 bg-emerald-50 text-emerald-700' : 'border-ink-fade/50 bg-paper-2 text-ink-fade'}`}>
+                    <ShieldCheck className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="truncate font-mono text-xs text-ink" title={grant.path}>{grant.path}</div>
+                    <div className="mt-1 text-xs text-ink-fade">
+                      {trusted ? t('localFiles.workspaceTrusted') : t('localFiles.workspaceTrustOff')}
+                      {trusted && trust?.config?.present === false ? ` · ${t('localFiles.workspaceConfigMissing')}` : ''}
+                      {trusted && trust?.config?.valid === false ? ` · ${trust.config.error?.message || t('localFiles.workspaceConfigInvalid')}` : ''}
+                    </div>
+                    {effective && (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {Object.entries(effective).map(([name, enabled]) => (
+                          <span key={name} className={`rounded border px-1.5 py-0.5 font-mono text-[9px] ${enabled ? 'border-emerald-500/30 text-emerald-700' : 'border-ink-fade/40 text-ink-fade line-through'}`}>
+                            {name}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => changeWorkspaceTrust(grant.path, !trusted)}
+                  disabled={trustBusyPath === grant.path || !grant.available}
+                  className={`h-8 shrink-0 rounded-md border px-3 text-xs transition-colors disabled:opacity-50 ${trusted ? 'border-ink-fade/60 text-ink-soft hover:text-ink' : 'border-emerald-600/40 text-emerald-700 hover:bg-emerald-50'}`}
+                >
+                  {trustBusyPath === grant.path
+                    ? t('localFiles.workspaceTrustWorking')
+                    : trusted ? t('localFiles.workspaceUntrustAction') : t('localFiles.workspaceTrustAction')}
+                </button>
               </div>
             )
           })}
