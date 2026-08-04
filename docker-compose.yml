@@ -1,10 +1,18 @@
 services:
   app:
     build: .
+    # 默认仅宿主机可访问。只有同时设置 AUTH_MODE=multi_user 时，
+    # 才应把 DOCKER_BIND_ADDRESS 改为 0.0.0.0 暴露到局域网/公网。
     ports:
-      - "${SERVER_PORT:-5173}:${SERVER_PORT:-5173}"
+      - "${DOCKER_BIND_ADDRESS:-127.0.0.1}:${SERVER_PORT:-5173}:${SERVER_PORT:-5173}"
     env_file:
       - .env
+    environment:
+      # 容器内部必须监听所有接口；宿主机暴露范围由上面的端口绑定控制。
+      SERVER_HOST: 0.0.0.0
+      # 让应用按 Docker 实际发布到宿主机的地址执行 local 认证安全检查。
+      GUGO_DOCKER: "1"
+      DOCKER_BIND_ADDRESS: "${DOCKER_BIND_ADDRESS:-127.0.0.1}"
     volumes:
       - app-data:/app/server-data
     restart: unless-stopped

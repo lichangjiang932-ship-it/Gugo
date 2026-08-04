@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import http from 'node:http'
+import { isIP } from 'node:net'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { getDbStatus } from './db.js'
@@ -20,7 +21,7 @@ import {
   handleSystemDiagnosticsRequest,
   getModelStatus,
 } from './adapters/modelProxy.js'
-import { handleAuthAccountRequest } from './adapters/authAccount.js'
+import { handleAuthAccountRequest, resolveAuthMode } from './adapters/authAccount.js'
 import { handleToolProxyRequest } from './adapters/toolProxy.js'
 import { handleFsShellRequest } from './adapters/fsShellTools.js'
 import { handleGitWorkbenchRequest } from './adapters/gitWorkbench.js'
@@ -154,11 +155,11 @@ export function healthCheckFull(req, res, getEnv = getRuntimeEnv) {
   }))
 }
 
-export function healthCheck(req, res, getEnv = getRuntimeEnv) {
-  const env = (() => { try { return getEnv() } catch { return process.env } })()
+export function healthCheck(req, res) {
   const db = getDbStatus()
-  const model = getModelStatus(env)
-  const overallOk = db.ok && model.configured
+  // This is a liveness check. A fresh local install must stay healthy while
+  // the user opens Settings and configures the first model provider.
+  const overallOk = db.ok
   const status = overallOk ? 200 : 503
   res.writeHead(status, { 'Content-Type': 'application/json' })
   res.end(JSON.stringify({
@@ -166,6 +167,63 @@ export function healthCheck(req, res, getEnv = getRuntimeEnv) {
     time: Date.now(),
     version: readVersion(),
   }))
+}
+
+export function isLoopbackBindAddress(value) {
+  let address = String(value || '').trim().toLowerCase()
+  if (address.startsWith('[') && address.endsWith(']')) address = address.slice(1, -1)
+  if (address === 'localhost' || address === 'localhost.') return true
+  if (isIP(address) === 4) return Number(address.split('.')[0]) === 127
+  if (isIP(address) !== 6) return false
+  try {
+    return new URL(`http://[${address}]/`).hostname === '[::1]'
+  } catch {
+    return false
+  }
+}
+
+export function resolveEffectiveExposureAddress(env = process.env, listenerHost) {
+  // The application must listen on 0.0.0.0 inside a container, while Docker's
+  // published host address is the real network boundary. The marker is set by
+  // docker-compose.yml so a stray DOCKER_BIND_ADDRESS cannot weaken direct runs.
+  if (String(env.GUGO_DOCKER || '').trim() === '1') {
+    return String(env.DOCKER_BIND_ADDRESS || '127.0.0.1').trim()
+  }
+  return String(listenerHost || env.SERVER_HOST || '127.0.0.1').trim()
+}
+
+export function getLocalAuthExposurePolicy(env = process.env, { listenerHost } = {}) {
+  const authMode = resolveAuthMode(env)
+  const bindAddress = resolveEffectiveExposureAddress(env, listenerHost)
+  const exposed = authMode === 'local' && !isLoopbackBindAddress(bindAddress)
+  const override = String(env.ALLOW_INSECURE_LOCAL_AUTH || '').trim() === '1'
+  return {
+    authMode,
+    bindAddress,
+    exposed,
+    override,
+    allowed: !exposed || override,
+  }
+}
+
+export function enforceLocalAuthExposurePolicy(
+  env = process.env,
+  { listenerHost, surface = 'application server', warn = (message) => logger.warn(message) } = {},
+) {
+  const policy = getLocalAuthExposurePolicy(env, { listenerHost })
+  if (!policy.exposed) return policy
+
+  if (policy.override) {
+    warn(`[SECURITY][auth] HIGH RISK: ${surface} is running AUTH_MODE=local on non-loopback address ${policy.bindAddress}. Every network client can obtain the local owner session because ALLOW_INSECURE_LOCAL_AUTH=1 is set.`)
+    return policy
+  }
+
+  const error = new Error(
+    `[auth] Refusing to start ${surface}: AUTH_MODE=local cannot bind to non-loopback address ${policy.bindAddress}. `
+    + 'Use AUTH_MODE=multi_user for LAN/public access. Set ALLOW_INSECURE_LOCAL_AUTH=1 only if you explicitly accept unauthenticated remote access.',
+  )
+  error.code = 'INSECURE_LOCAL_AUTH_BIND'
+  throw error
 }
 
 function applyMiddlewares(handler) {
@@ -405,6 +463,8 @@ export function startAppServer() {
   const env = getRuntimeEnv()
   const host = env.SERVER_HOST || '127.0.0.1'
   const port = Number(env.SERVER_PORT || 5173)
+
+  enforceLocalAuthExposurePolicy(env, { listenerHost: host })
 
   // ★ 启动时由 lifecycle.bootstrap 统一编排 (包含 seedSystemSkills 等)
   bootstrap()

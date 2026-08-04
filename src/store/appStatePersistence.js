@@ -8,8 +8,6 @@ export const STATE_CLEAR_EPOCH_KEY = 'your-model-atelier:last-clear:v1'
 export const STATE_SYNC_CHANNEL_NAME = 'your-model-atelier:state-sync'
 
 export const PERSIST_KEYS = Object.freeze([
-  'user',
-  'isLoggedIn',
   'sessions',
   'activeSessionId',
   'tasks',
@@ -28,8 +26,6 @@ export const PERSIST_KEYS = Object.freeze([
 ])
 
 export const LIGHTWEIGHT_PERSIST_KEYS = Object.freeze([
-  'user',
-  'isLoggedIn',
   'activeSessionId',
   'permissions',
   'theme',

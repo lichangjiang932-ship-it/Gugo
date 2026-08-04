@@ -102,6 +102,79 @@ function publicUser(user) {
   }
 }
 
+const LOCAL_OWNER_META_KEY = 'local_auth_owner_user_id'
+const LOCAL_USER_ID = 'local-default'
+const LOCAL_USER_EMAIL = 'local@gugo.invalid'
+const LOCAL_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000
+
+export function resolveAuthMode(env = process.env) {
+  const raw = String(env.AUTH_MODE || 'local').trim().toLowerCase()
+  if (!raw || raw === 'local') return 'local'
+  if (['multi_user', 'multi-user', 'multiuser'].includes(raw)) return 'multi_user'
+  throw new Error('AUTH_MODE must be local or multi_user')
+}
+
+function rememberLocalOwner(userId) {
+  getDb().prepare(
+    'INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+  ).run(LOCAL_OWNER_META_KEY, userId)
+}
+
+function resolveLocalOwner({ token, env, now }) {
+  const configuredId = String(env.LOCAL_USER_ID || '').trim()
+  if (configuredId) {
+    const configured = getUserById(configuredId)
+    if (!configured) throw new Error(`LOCAL_USER_ID does not exist: ${configuredId}`)
+    rememberLocalOwner(configured.id)
+    return configured
+  }
+
+  const storedOwnerId = getDb().prepare('SELECT value FROM meta WHERE key = ?').get(LOCAL_OWNER_META_KEY)?.value
+  const storedOwner = storedOwnerId ? getUserById(storedOwnerId) : null
+  if (storedOwner) return storedOwner
+
+  // Only an unclaimed installation may adopt an existing authenticated user.
+  // Once the owner is stored, tokens from other legacy accounts cannot flip it.
+  const tokenUser = token ? getUserByToken(token) : null
+  if (tokenUser) {
+    rememberLocalOwner(tokenUser.id)
+    return tokenUser
+  }
+
+  const users = getDb().prepare('SELECT * FROM users ORDER BY created_at ASC, id ASC').all()
+  const owner = users.length === 1
+    ? users[0]
+    : (getUserById(LOCAL_USER_ID) || getUserByEmail(LOCAL_USER_EMAIL) || createUser({
+        id: LOCAL_USER_ID,
+        email: LOCAL_USER_EMAIL,
+        now,
+      }))
+  rememberLocalOwner(owner.id)
+  return owner
+}
+
+export function bootstrapAuth({ token = '', env = process.env, now = Date.now() } = {}) {
+  ensureLegacyMigration()
+  const mode = resolveAuthMode(env)
+  if (mode === 'multi_user') {
+    const user = token ? getUserByToken(token) : null
+    return user
+      ? { ok: true, mode, authenticated: true, user: publicUser(user) }
+      : { ok: true, mode, authenticated: false }
+  }
+
+  const user = resolveLocalOwner({ token, env, now })
+  const suppliedSession = token ? getSessionByToken(token) : null
+  const reusableToken = suppliedSession?.user_id === user.id
+    ? token
+    : getDb().prepare(
+        'SELECT token FROM sessions WHERE user_id = ? AND expires_at > ? ORDER BY created_at DESC LIMIT 1'
+      ).get(user.id, now)?.token
+  const sessionToken = reusableToken || createToken()
+  createSession({ token: sessionToken, userId: user.id, now, ttlMs: LOCAL_SESSION_TTL_MS })
+  return { ok: true, mode, authenticated: true, token: sessionToken, user: publicUser(user) }
+}
+
 /* ── 密码 ── */
 
 const PWD_ITERATIONS = 120000
@@ -452,6 +525,11 @@ export async function handleAuthAccountRequest(req, res, env = process.env) {
   ensureLegacyMigration()
   try {
     const url = new URL(req.url, 'http://localhost')
+
+    if (req.method === 'POST' && url.pathname === '/api/auth/bootstrap') {
+      sendJson(res, 200, bootstrapAuth({ token: authToken(req), env }))
+      return
+    }
 
     if (req.method === 'POST' && url.pathname === '/api/auth/send-code') {
       const body = await readJson(req, { maxBytes: 256 * 1024 })

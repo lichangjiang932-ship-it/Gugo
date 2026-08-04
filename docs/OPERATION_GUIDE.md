@@ -23,7 +23,7 @@ git --version
 
 - Edge 或 Chrome：仅 Browser 自动化需要。
 - Docker 与 Docker Compose：仅容器部署需要。
-- SMTP 邮箱：公网或多人使用时必须配置；纯本地开发可在页面显示验证码。
+- SMTP 邮箱：仅 `AUTH_MODE=multi_user` 需要；局域网、公网或多人使用时必须配置，默认本机模式不需要。
 - Python、C/C++ 构建工具：通常不需要；若 `better-sqlite3` 没有适配当前平台的预编译包，npm 会提示安装本地编译工具。
 
 ## 2. 获取与安装
@@ -54,16 +54,23 @@ Copy-Item .env.example .env
 
 ## 3. 最小配置
 
-打开 `.env`，至少确认以下项目。模板中的 API Key 是占位符，不能直接使用。
+打开 `.env`。默认配置就是本机单用户免登录模式：
+
+```dotenv
+AUTH_MODE=local
+SERVER_HOST=127.0.0.1
+SERVER_PORT=5175
+```
+
+启动后打开“设置 → 模型”，添加自己的 OpenAI 兼容、Anthropic、Gemini、Ollama 或 LM Studio Provider。Gugo 不附带可用的模型 API Key，使用者必须自行配置。Provider 的 API Key 会加密保存在服务端。
+
+如果需要服务端默认模型或无界面后台任务，也可在 `.env` 中配置：
 
 ```dotenv
 MODEL_BASE_URL=https://api.example.com/v1
 MODEL_NAME=your-model-name
 MODEL_NAMES=your-model-name
 MODEL_API_KEY=replace-with-your-real-key
-
-SERVER_HOST=127.0.0.1
-SERVER_PORT=5175
 ```
 
 本地 Ollama 示例：
@@ -78,15 +85,16 @@ OLLAMA_KEEP_ALIVE=30m
 
 说明：
 
-- `MODEL_NAME` 必须与上游真实模型名一致。
+- 上述模型变量均为示例，不是项目附赠的账号或密钥；`MODEL_NAME` 必须与上游真实模型名一致。
 - 不同服务对 `/v1` 的要求不同，请以供应商文档为准。
-- 登录后也可在“设置 → 模型”添加用户级 Provider；但服务端 `/api/health` 的就绪判断仍依赖默认模型环境配置。
-- 本机仅自己使用时保留 `SERVER_HOST=127.0.0.1`。要从局域网访问才改为 `0.0.0.0`，并同时配置防火墙、认证和可信网络边界。
+- 默认本地模式无需登录，可直接在“设置 → 模型”添加 Provider。公开的 `/api/health` 只检查服务和数据库存活，不依赖模型配置；模型就绪状态请看需认证的 `/api/health/full` 或“设置 → 系统诊断”。
+- 本机仅自己使用时必须保留 `AUTH_MODE=local` 与 `SERVER_HOST=127.0.0.1`。要从局域网或公网访问，必须先改为 `AUTH_MODE=multi_user` 并配置 SMTP，再修改监听地址，同时配置防火墙；公网还必须使用 HTTPS 和可信反向代理。
 
 ### 常用配置
 
 | 配置 | 默认/建议 | 用途 |
 |---|---|---|
+| `AUTH_MODE` | `local` | `local` 本机免登录；`multi_user` 启用邮箱/密码登录和用户隔离 |
 | `SERVER_HOST` | 模板为 `127.0.0.1` | HTTP 监听地址 |
 | `SERVER_PORT` | 模板为 `5175` | 开发和生产共用端口；无配置时生产代码回退到 `5173` |
 | `APP_DATA_DIR` | `server-data/` | SQLite、运行时配置、默认凭据密钥和浏览器 Profile |
@@ -120,9 +128,9 @@ JSON 运行时配置只接受大写环境变量风格的非敏感标量。API Ke
 npm run dev
 ```
 
-打开 `http://127.0.0.1:5175`。`npm run dev` 不只是前端 HMR：Vite 中间件同时挂载了认证、模型、工具、任务和其他后端 API。
+打开 `http://127.0.0.1:5175`。默认本地模式会自动进入工作台，无需注册或登录。`npm run dev` 不只是前端 HMR：Vite 中间件同时挂载了认证、模型、工具、任务和其他后端 API。
 
-开发与生产应尽量使用相同的协议、主机和端口。浏览器登录状态与偏好位于 localStorage，会话正文位于 IndexedDB；它们都按 Origin 隔离。`localhost` 和 `127.0.0.1` 也是两个不同 Origin，混用时会看起来像“登录和历史丢失”。
+开发与生产应尽量使用相同的协议、主机和端口。多用户登录 token 与轻量偏好位于 localStorage，会话正文位于 IndexedDB；它们都按 Origin 隔离。`localhost` 和 `127.0.0.1` 也是两个不同 Origin，混用时会看起来像“偏好或历史丢失”。
 
 ### 本机生产模式
 
@@ -151,6 +159,8 @@ npm run local
 docker compose up -d --build
 docker compose logs -f app
 ```
+
+Compose 默认只在宿主机 `127.0.0.1` 发布端口，容器内部监听地址由 Compose 固定为 `0.0.0.0`。如果确实需要跨设备访问，请先在 `.env` 设置 `AUTH_MODE=multi_user` 并配置 SMTP，然后再设置 `DOCKER_BIND_ADDRESS=0.0.0.0`。不得把默认 `local` 模式直接暴露到局域网或公网。
 
 停止与重启：
 
@@ -195,19 +205,19 @@ Windows PowerShell：
 Invoke-WebRequest http://127.0.0.1:5175/api/health
 ```
 
-数据库可用且默认模型已配置时返回 HTTP 200；缺少模型配置时即使网页能打开，也会返回 503。登录后可在“设置 → 系统诊断”查看更完整的模型和服务状态。
+`/api/health` 是公开的 liveness 检查：服务和数据库可用时返回 HTTP 200，即使尚未配置任何模型也不会因此返回 503。模型 Provider、邮件和其他详细就绪状态请通过需认证的 `/api/health/full` 或“设置 → 系统诊断”查看；默认本地模式会自动建立本地会话，无需手工登录。
 
 ## 5. 首次使用
 
 1. 始终使用同一个地址打开应用，例如 `http://127.0.0.1:5175`。
-2. 进入“设置 → 账户”，输入邮箱并获取验证码。
-3. 本地未配置 SMTP 时，验证码会直接显示在页面/API 响应中；生产环境必须配置 SMTP，并保持 `AUTH_DEV_CODES=false`。
-4. 验证码登录后可设置登录密码，之后也可继续使用邮箱验证码。
-5. 进入“设置 → 模型”，检查默认模型；需要时新增 OpenAI 兼容、Anthropic、Gemini、Ollama 或 LM Studio Provider，并运行检测。
-6. 进入“设置 → 系统诊断”，执行模型连接测试。
-7. 如需本地文件、Shell 或 Git，在 `.env` 中只开启必要的全局能力，并在界面中授权、信任具体工作区。
-8. 新建一次普通对话确认流式输出正常，再测试工具调用。
-9. 进入“设置 → 数据 & 导出”导出一次会话备份，确认自己的备份流程可用。
+2. 默认 `AUTH_MODE=local` 会自动进入工作台，无需注册、邮箱或密码。
+3. 进入“设置 → 模型”，新增自己的 OpenAI 兼容、Anthropic、Gemini、Ollama 或 LM Studio Provider，并运行检测。
+4. 进入“设置 → 系统诊断”，执行模型连接测试。
+5. 如需本地文件、Shell 或 Git，在 `.env` 中只开启必要的全局能力，并在界面中授权、信任具体工作区。
+6. 新建一次普通对话确认流式输出正常，再测试工具调用。
+7. 进入“设置 → 数据 & 导出”导出一次会话备份，确认自己的备份流程可用。
+
+只有局域网、公网或多人部署才启用 `AUTH_MODE=multi_user`。启用后必须配置 SMTP；首次用户通过邮箱验证码登录，可再设置密码。没有 SMTP 的验证码回显仅用于回环地址上的开发调试，禁止暴露到网络。
 
 ## 6. 日常开发与检查
 
@@ -234,7 +244,7 @@ Gugo 同时使用服务端存储和浏览器存储，二者必须分别备份。
 4. 安全备份 `.env` 或部署平台的环境变量。
 5. 如果使用 `CREDENTIAL_KEY_PATH` 或 `CREDENTIAL_ENCRYPTION_KEY`，单独安全备份密钥。密钥丢失后，数据库中的模型和连接器密文无法恢复。
 
-默认情况下，`server-data/.credentials.key` 已包含在整个数据目录备份中。备份文件含登录信息、Token 和凭据密文，应加密保存并限制读取权限。
+默认情况下，`server-data/.credentials.key` 已包含在整个数据目录备份中。备份文件含本地所有者信息、会话 Token 和凭据密文；多用户模式还包含登录信息。应加密保存并限制读取权限。
 
 Docker 示例：
 
@@ -297,9 +307,9 @@ npm run serve
 
 开发服务器使用 `strictPort`，不会静默换端口。通常是另一个实例仍在运行：直接打开现有地址，或先用 `Ctrl+C`/进程管理器停止旧实例。不要为了绕过冲突随意改端口，否则浏览器会切到另一套 Origin 存储。
 
-### 网页能打开，但健康检查返回 503
+### 网页能打开，但 `/api/health` 返回 503
 
-`/api/health` 同时检查数据库与默认模型配置。确认 `.env` 中 `MODEL_BASE_URL`、`MODEL_NAME`、`MODEL_API_KEY` 已填写真实值，并从仓库根目录启动。登录后再到“设置 → 系统诊断”运行端点测试。
+`/api/health` 不检查模型配置；503 表示服务初始化或 SQLite 数据库不可用。检查服务日志、`APP_DATA_DIR` / `APP_DB_PATH` 权限、磁盘空间和数据库迁移错误，并确认从仓库根目录启动。模型 API 是否可用请进入“设置 → 系统诊断”，或使用已认证请求访问 `/api/health/full`。
 
 ### 模型返回 401、404 或没有流式输出
 
@@ -308,11 +318,11 @@ npm run serve
 - 在“设置 → 模型”正确标记流式、工具、视觉和 PDF 能力；不确定时先使用自动检测。
 - 本地模型很慢时提高首字和空闲超时，不要误开跨模型故障转移。
 
-### 登录验证码收不到
+### 多用户模式下收不到登录验证码
 
-本地开发未配置 SMTP 时，验证码会显示在页面中。生产环境检查 `MAIL_SERVER`、`MAIL_PORT`、`MAIL_USERNAME`、`MAIL_PASSWORD`、`MAIL_DEFAULT_SENDER`、TLS/SSL 设置和服务日志。未配置 SMTP 会把验证码放入响应，不适合公网部署。
+先确认已显式设置 `AUTH_MODE=multi_user`。回环地址上的开发环境未配置 SMTP 时，验证码会显示在页面中；局域网或生产环境必须检查 `MAIL_SERVER`、`MAIL_PORT`、`MAIL_USERNAME`、`MAIL_PASSWORD`、`MAIL_DEFAULT_SENDER`、TLS/SSL 设置和服务日志。未配置 SMTP 会把验证码放入响应，禁止用于任何网络暴露部署。
 
-### 登录状态或历史突然为空
+### 登录状态、偏好或历史突然为空
 
 确认是否从 `127.0.0.1` 换成了 `localhost`，或修改了端口、协议、域名、浏览器 Profile。它们属于不同 Origin，数据没有自动迁移。回到原地址或从之前导出的备份恢复。
 
@@ -336,13 +346,14 @@ npm run serve
 docker compose logs app
 ```
 
-健康检查会在数据库或默认模型未就绪时失败。确认 `.env` 已传入容器、`SERVER_PORT` 映射一致、模型配置不是模板占位符，并检查数据卷权限。
+容器健康检查只依赖服务与数据库 liveness，不要求模型已配置。确认 `.env` 已传入容器、`SERVER_PORT` 映射一致，并检查启动日志、数据卷权限、磁盘空间和 SQLite 迁移错误；模型就绪状态另在“设置 → 系统诊断”或 `/api/health/full` 查看。
 
 ## 10. 安全注意事项
 
+- `AUTH_MODE=local` 没有网络访问控制，只能用于绑定 `127.0.0.1` 的可信本机。局域网或公网部署必须使用 `AUTH_MODE=multi_user`；Docker 还需显式设置 `DOCKER_BIND_ADDRESS=0.0.0.0` 才会对外发布。
 - Gugo 的 Shell 工具不是安全沙箱。`WORKSPACE_SHELL_ENABLED=1` 表示受信用户可用服务器进程权限执行命令；只应在单机、可信用户环境开启。
 - 未信任工作区默认只读。不要为了省事在多人或公网部署中设置 `WORKSPACE_SHARED_TRUSTED=1`。
-- 公网部署必须使用 HTTPS、SMTP、强密码、反向代理限流与防火墙，并设置固定 `APP_PUBLIC_URL`。
+- 局域网部署必须配置 SMTP、防火墙和可信网络边界；公网部署还必须使用 HTTPS、强密码、反向代理限流，并设置固定 `APP_PUBLIC_URL`。
 - 只有反向代理已经清除客户端伪造的转发头时才设置 `TRUST_PROXY=1`。
 - 生产环境建议使用 `APPROVAL_MODE=all`；`off` 会让高风险工具不经人工确认直接执行。
 - 保持 `MCP_STDIO_ENABLED=0`、`HOOKS_SHELL_ENABLED=0`，除非明确需要并配置了最小命令白名单。

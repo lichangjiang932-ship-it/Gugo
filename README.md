@@ -3,7 +3,7 @@
 **简体中文** | [English](README.en.md)
 
 > 本地/内网可用的 Web AI 工作台 — Agent · Skill · Memory · Tool · Subagent · Job  
-> 开浏览器就用，无需安装客户端。
+> 默认本机单用户免登录，开浏览器即可使用；模型 API 由使用者自行配置。
 
 <p align="center">
   <img src="https://img.shields.io/badge/React-19-6366f1?logo=react" alt="React 19" />
@@ -25,7 +25,7 @@
 |---|---|---|---|
 | 形态 | Web（浏览器即用） | Electron 桌面 | CLI |
 | 部署 | 单 Node 进程 + SQLite | 多端打包 | 终端 |
-| 多用户 | 内建（user_id 隔离 + 邮箱密码登录） | 单机 | 单机 |
+| 使用模式 | 默认本机单用户免登录；可选多用户认证与隔离 | 单机 | 单机 |
 | Artifact 实时预览 | PPT / Word / Excel / React / HTML Deck | 不支持 | 不支持 |
 | 知识图谱 | entity / relation / observation 三要素 + 图搜索 | 无 | 无 |
 | 后台作业 | 完整生命周期（创建/入队/重试/取消/步骤追踪） | 简化 | 无 |
@@ -146,17 +146,19 @@
 
 ## 快速开始
 
-第一次安装或准备长期运行，请先阅读 [《Gugo 操作手册》](./docs/OPERATION_GUIDE.md)。手册包含环境要求、配置、开发/生产/Docker 启动、首次登录、备份恢复、升级、安全注意事项和常见故障处理。
+第一次安装或准备长期运行，请先阅读 [《Gugo 操作手册》](./docs/OPERATION_GUIDE.md)。手册包含环境要求、模型配置、开发/生产/Docker 启动、可选多用户认证、备份恢复、升级、安全注意事项和常见故障处理。
 
 ```bash
 git clone https://github.com/lichangjiang932-ship-it/your-model-atelier.git
 cd your-model-atelier
 npm install
-cp .env.example .env   # 配置 MODEL_BASE_URL / MODEL_NAME / MODEL_API_KEY
+cp .env.example .env   # 默认 AUTH_MODE=local，仅本机免登录使用
 npm run dev            # 前端 HMR（默认 :5175）
 # 或：
 npm run local          # 生产模式：build + 启动 Node server
 ```
+
+打开 `http://127.0.0.1:5175`，无需注册或登录。进入「设置 → 模型」添加自己的 OpenAI 兼容、Anthropic、Gemini、Ollama 或 LM Studio Provider；项目不附带可用的模型 API Key。也可以在 `.env` 中配置服务端默认模型。
 
 Docker：
 
@@ -164,13 +166,15 @@ Docker：
 docker compose up -d
 ```
 
+Compose 默认只把端口绑定到宿主机 `127.0.0.1`。若要从局域网或公网访问，必须先设置 `AUTH_MODE=multi_user` 并配置 SMTP，再显式设置 `DOCKER_BIND_ADDRESS=0.0.0.0`；公网还必须使用 HTTPS 与可信反向代理。
+
 ### 自定义模型与外部 MCP 应用
 
-登录后在「设置 → 系统诊断 → 自定义模型 Provider」新增 OpenAI 兼容端点。模型配置会自动用于聊天、诊断、后台任务和子代理；留空 API Key 可保留原密钥。
+默认本地模式下可直接在「设置 → 模型」新增模型 Provider。模型配置会自动用于聊天、诊断、后台任务和子代理；留空 API Key 可保留原密钥。启用 `AUTH_MODE=multi_user` 后，各用户登录后分别配置自己的 Provider。
 
 Browser 工具需要 Node.js 22+ 和已安装的 Edge/Chrome。默认自动探测浏览器，也可在 `.env` 设置 `BROWSER_EXECUTABLE_PATH`；仅受限 CI/沙箱环境才使用 `BROWSER_NO_SANDBOX=1`。
 
-登录后从左侧「连接」进入 Access 中心（Hash 路由为 `/#/access`）。目录中的 Browser 应用是打开对应网站的浏览器入口，不代表原生 API 集成；Notion、GitHub、Slack 与 Google Drive 才提供可被 agent 结构化调用的原生连接，并支持 OAuth 一键授权（配置 `APP_PUBLIC_URL` 与对应 OAuth Client 环境变量），未配置时仍可手工填 token。飞书使用企业自建应用的 App ID / App Secret，个人微信使用二维码扫码。OAuth 握手使用一次性 state、PKCE（GitHub/Google Drive）与 10 分钟持久会话，凭据探测成功后才启用；GitHub 默认仅请求 `read:user`，Slack 默认仅请求公开频道读取范围，Google Drive 默认仅请求 `drive.readonly`，额外 scope 必须通过对应 `*_OAUTH_SCOPES` 显式开启。Google Drive access token 到期后会使用服务端保存的 refresh token 自动续期。凭据只保存在服务端，返回前端时会脱敏。
+从左侧「连接」进入 Access 中心（Hash 路由为 `/#/access`）。目录中的 Browser 应用是打开对应网站的浏览器入口，不代表原生 API 集成；Notion、GitHub、Slack 与 Google Drive 才提供可被 agent 结构化调用的原生连接，并支持 OAuth 一键授权（配置 `APP_PUBLIC_URL` 与对应 OAuth Client 环境变量），未配置时仍可手工填 token。飞书使用企业自建应用的 App ID / App Secret，个人微信使用二维码扫码。OAuth 握手使用一次性 state、PKCE（GitHub/Google Drive）与 10 分钟持久会话，凭据探测成功后才启用；GitHub 默认仅请求 `read:user`，Slack 默认仅请求公开频道读取范围，Google Drive 默认仅请求 `drive.readonly`，额外 scope 必须通过对应 `*_OAUTH_SCOPES` 显式开启。Google Drive access token 到期后会使用服务端保存的 refresh token 自动续期。凭据只保存在服务端，返回前端时会脱敏。
 
 MCP OAuth 的 pending state 加密持久化并原子单次消费，服务重启不会中断 10 分钟内的授权。反向代理部署必须设置 `APP_PUBLIC_URL`；默认不会采信 `Host` 或 `X-Forwarded-*` 来生成回调地址，只有代理已清除外部伪造头时才可设置 `TRUST_PROXY=1`。自定义 bridge webhook 必须用时间戳参与 HMAC 签名，并会拒绝超过 5 分钟的请求与重复投递；请求头和签名格式见 [配置说明](docs/CONFIGURATION.md)。
 
@@ -206,11 +210,12 @@ Cherry Studio 选择 `Streamable HTTP`，URL 填上述 `/mcp` 地址，并添加
 
 | 变量 | 必填 | 说明 | 默认值 |
 |---|---|---|---|
-| `MODEL_BASE_URL` | 是 | OpenAI 兼容 API 地址 | — |
-| `MODEL_NAME` | 是 | 默认模型名 | — |
-| `MODEL_API_KEY` | 是 | API key | — |
+| `AUTH_MODE` | 否 | `local` 本机免登录；`multi_user` 启用登录与用户隔离 | `local` |
+| `MODEL_BASE_URL` | 否 | 服务端默认模型 API 地址；也可在设置页按用户配置 | — |
+| `MODEL_NAME` | 否 | 服务端默认模型名 | — |
+| `MODEL_API_KEY` | 否 | 服务端默认模型 API Key | — |
 | `MODEL_NAMES_VISION` | 否 | 视觉模型名（逗号分隔） | — |
-| `MAIL_SERVER/MAIL_PORT/MAIL_USERNAME/MAIL_PASSWORD` | 否 | 邮箱服务（缺省时开发模式返回验证码） | — |
+| `MAIL_SERVER/MAIL_PORT/MAIL_USERNAME/MAIL_PASSWORD` | 多用户部署必填 | 邮箱验证码服务；本地模式不需要 | — |
 | `WORKSPACE_FS_ENABLED` | 否 | 文件系统工具开关 | `0` |
 | `WORKSPACE_SHELL_ENABLED` | 否 | Shell 工具开关 | `0` |
 | `WORKSPACE_GIT_ENABLED` | 否 | Git 工具开关 | `0` |
@@ -230,8 +235,12 @@ Cherry Studio 选择 `Streamable HTTP`，URL 填上述 `/mcp` 地址，并添加
 | `APP_DATA_DIR` | 否 | 数据目录 | `server-data/` |
 | `APP_DB_PATH` | 否 | SQLite 路径 | `server-data/app.db` |
 | `SERVER_PORT` | 否 | HTTP 端口 | `.env.example` 为 `5175`，未配置时服务端回退 `5173` |
+| `SERVER_HOST` | 否 | 服务监听地址；本机模式保持回环地址 | `127.0.0.1` |
+| `DOCKER_BIND_ADDRESS` | 否 | Compose 在宿主机发布端口的地址 | `127.0.0.1` |
 
 完整列表见 `.env.example`。
+
+> ⚠ `AUTH_MODE=local` 不提供网络访问控制，只适合绑定 `127.0.0.1` 的可信本机。任何局域网或公网监听都必须使用 `AUTH_MODE=multi_user`；公网还需要 HTTPS、SMTP、防火墙和反向代理限流。
 
 > ⚠ **Shell 信任模型**：开启 `WORKSPACE_SHELL_ENABLED=1` 等同于**完全信任**能调用 `bash_exec` 的用户——该用户可在 server 进程权限下执行任意命令。`server/utils/bashGuard.js` 的危险命令黑名单**只防手滑 / prompt-injection 一行 payload，不是安全边界**（变量拼接 / base64 管道 / `python -c` / `$()` 命令替换均可平凡绕过）。若需对不可信用户开放 shell，必须上 OS 级隔离（容器 / nsjail / seccomp），不要依赖黑名单。启动期会打一条 warn 提醒。
 

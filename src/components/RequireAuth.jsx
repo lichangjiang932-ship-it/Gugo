@@ -7,6 +7,7 @@ import { useAppContext } from '../store/AppContext'
 
 export default function RequireAuth({ children }) {
   const { state } = useAppContext()
+  if (!state.authReady) return null
   if (!state.isLoggedIn) {
     return <Navigate to="/chat" replace />
   }

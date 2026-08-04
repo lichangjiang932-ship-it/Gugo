@@ -160,9 +160,9 @@ export default function SettingsView() {
       case SETTINGS_TAB_MODELS:
         return renderModels()
       case '系统诊断':
-        return <SettingsDiagnosticsPanel diagnostics={diagnostics} message={diagnosticsMessage} loading={diagnosticsLoading} onRefresh={refreshDiagnostics} onTest={testModel} />
+        return <SettingsDiagnosticsPanel authMode={state.authMode} diagnostics={diagnostics} message={diagnosticsMessage} loading={diagnosticsLoading} onConfigureModels={() => setActiveNav(SETTINGS_TAB_MODELS)} onRefresh={refreshDiagnostics} onTest={testModel} t={t} />
       case SETTINGS_TAB_ACCOUNT:
-        return <SettingsAccountPanel dispatch={dispatch} search={location.search} t={t} />
+        return <SettingsAccountPanel authMode={state.authMode} dispatch={dispatch} search={location.search} t={t} />
       case '权限中心':
         return <SettingsPermissionsPanel navigate={navigate} t={t} state={state} enabledPermCount={enabledPermCount} />
       case '工具':
@@ -174,7 +174,7 @@ export default function SettingsView() {
       case '数据 & 导出':
         return <SettingsDataExport state={state} dispatch={dispatch} storageBytes={storageEstimate.usage} storageQuota={storageEstimate.quota} onStorageChanged={refreshStorage} />
       default:
-        return <SettingsAccountPanel dispatch={dispatch} search={location.search} t={t} />
+        return <SettingsAccountPanel authMode={state.authMode} dispatch={dispatch} search={location.search} t={t} />
     }
   }
 
