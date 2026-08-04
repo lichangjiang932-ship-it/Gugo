@@ -37,8 +37,6 @@ test('lightweight local snapshot excludes sessions and other large state', () =>
   }
   assert.deepEqual(selectPersistedSnapshot(snapshot).sessions, snapshot.sessions)
   assert.deepEqual(selectLightweightSnapshot(snapshot), {
-    user: snapshot.user,
-    isLoggedIn: undefined,
     activeSessionId: undefined,
     permissions: undefined,
     theme: 'dark',

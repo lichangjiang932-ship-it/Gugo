@@ -1,4 +1,24 @@
 export const TOKEN_KEY = 'your-model-atelier:auth-token'
+let memoryToken = ''
+
+function safeStorage(name) {
+  try { return window?.[name] || null } catch { return null }
+}
+
+function readToken(storage) {
+  try { return storage?.getItem(TOKEN_KEY) || '' } catch { return '' }
+}
+
+function writeToken(storage, token) {
+  if (!storage) return false
+  try {
+    if (token) storage?.setItem(TOKEN_KEY, token)
+    else storage?.removeItem(TOKEN_KEY)
+    return true
+  } catch {
+    return false
+  }
+}
 
 async function parseResponse(response) {
   let data
@@ -15,8 +35,9 @@ async function parseResponse(response) {
 
 export function getAuthToken() {
   if (typeof window === 'undefined') return ''
-  return window.sessionStorage?.getItem(TOKEN_KEY)
-    || window.localStorage.getItem(TOKEN_KEY)
+  return memoryToken
+    || readToken(safeStorage('sessionStorage'))
+    || readToken(safeStorage('localStorage'))
     || ''
 }
 
@@ -26,11 +47,78 @@ export function isLoggedInLocally() {
 
 export function setAuthToken(token) {
   if (typeof window === 'undefined') return
-  if (token) window.localStorage.setItem(TOKEN_KEY, token)
-  else {
-    window.localStorage.removeItem(TOKEN_KEY)
-    window.sessionStorage?.removeItem(TOKEN_KEY)
+  memoryToken = token || ''
+  const localStorage = safeStorage('localStorage')
+  const sessionStorage = safeStorage('sessionStorage')
+  if (token) {
+    if (writeToken(localStorage, token)) writeToken(sessionStorage, '')
+    else writeToken(sessionStorage, token)
+  } else {
+    writeToken(localStorage, '')
+    writeToken(sessionStorage, '')
   }
+}
+
+// A storage event is delivered only to the other tabs. Keep the in-memory
+// token in those tabs aligned with localStorage before they re-bootstrap.
+export function syncAuthTokenFromStorage(token) {
+  if (typeof window === 'undefined') return
+  memoryToken = token || ''
+  writeToken(safeStorage('localStorage'), token || '')
+  writeToken(safeStorage('sessionStorage'), '')
+}
+
+export async function bootstrapAuth({ fetchImpl = fetch, signal } = {}) {
+  const token = getAuthToken()
+  const response = await fetchImpl('/api/auth/bootstrap', {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    signal,
+  })
+  const data = await parseResponse(response)
+  if (data.mode === 'local' && data.authenticated && data.token) {
+    setAuthToken(data.token)
+  } else if (data.mode === 'multi_user' && !data.authenticated && token) {
+    setAuthToken('')
+  }
+  return data
+}
+
+function waitForRetry(delayMs, signal) {
+  if (!delayMs) return Promise.resolve()
+  return new Promise((resolve, reject) => {
+    const finish = () => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }
+    const timer = setTimeout(finish, delayMs)
+    if (!signal) return
+    const onAbort = () => {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', onAbort)
+      reject(signal.reason || new DOMException('Aborted', 'AbortError'))
+    }
+    if (signal.aborted) onAbort()
+    else signal.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+export async function bootstrapAuthWithRetry({
+  fetchImpl = fetch,
+  signal,
+  retryDelays = [0, 250, 750, 2000],
+} = {}) {
+  let lastError
+  for (const delayMs of retryDelays) {
+    await waitForRetry(delayMs, signal)
+    try {
+      return await bootstrapAuth({ fetchImpl, signal })
+    } catch (error) {
+      if (signal?.aborted) throw error
+      lastError = error
+    }
+  }
+  throw lastError || new Error('Authentication bootstrap failed')
 }
 
 export async function sendLoginCode(email, { fetchImpl = fetch } = {}) {

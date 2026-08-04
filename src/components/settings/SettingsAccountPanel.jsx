@@ -25,7 +25,7 @@ function Group({ title, children }) {
   )
 }
 
-export default function SettingsAccountPanel({ dispatch, search, t }) {
+export default function SettingsAccountPanel({ authMode = 'multi_user', dispatch, search, t }) {
   const [loginEmail, setLoginEmail] = useState('')
   const [loginCode, setLoginCode] = useState('')
   const [loginPassword, setLoginPassword] = useState('')
@@ -162,6 +162,22 @@ export default function SettingsAccountPanel({ dispatch, search, t }) {
     setAccount(null)
     dispatch({ type: 'LOGOUT' })
     setAccountMessage('已退出登录。')
+  }
+
+  if (authMode === 'local') {
+    return (
+      <section className="flex flex-col gap-5 animate-float-up">
+        <div>
+          <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">LOCAL MODE</span>
+          <h1 className="font-hand text-[28px] text-ink mt-1.5">{t('settings.account')}</h1>
+          <p className="text-sm text-ink-soft mt-1">{t('settings.localAuthDescription')}</p>
+        </div>
+        <Group title={t('settings.localAuthTitle')}>
+          <p className="text-sm text-ink-soft">{t('settings.localAuthHint')}</p>
+          <p className="text-xs text-ink-fade"><code>AUTH_MODE=multi_user</code></p>
+        </Group>
+      </section>
+    )
   }
 
   return (

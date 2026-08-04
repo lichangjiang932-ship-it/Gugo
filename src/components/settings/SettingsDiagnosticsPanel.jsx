@@ -27,10 +27,22 @@ function Group({ title, children }) {
   )
 }
 
-export default function SettingsDiagnosticsPanel({ diagnostics, message, loading, onRefresh, onTest }) {
+export default function SettingsDiagnosticsPanel({
+  authMode = 'multi_user',
+  diagnostics,
+  message,
+  loading,
+  onConfigureModels,
+  onRefresh,
+  onTest,
+  t,
+}) {
   const model = diagnostics?.model
   const endpoint = diagnostics?.endpoint
   const mail = diagnostics?.mail
+  const localModelNeedsConfiguration = authMode === 'local'
+    && diagnostics
+    && model?.configured === false
 
   return (
     <section className="flex flex-col gap-5 animate-float-up">
@@ -38,7 +50,11 @@ export default function SettingsDiagnosticsPanel({ diagnostics, message, loading
         <div>
           <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">SYSTEM DIAGNOSTICS</span>
           <h1 className="font-hand text-[28px] text-ink mt-1.5">系统诊断</h1>
-          <p className="text-sm text-ink-soft mt-1">读取后端配置的安全状态；API Key 和邮箱授权码不会返回浏览器。</p>
+          <p className="text-sm text-ink-soft mt-1">
+            {authMode === 'local'
+              ? t('settings.localAuthDescription')
+              : '读取后端配置的安全状态；API Key 和邮箱授权码不会返回浏览器。'}
+          </p>
         </div>
         <div className="flex gap-2">
           <button onClick={() => onRefresh()} disabled={loading} className="h-9 px-3 border border-ink/70 rounded-md text-sm text-ink hover:bg-paper-2 transition-colors flex items-center gap-1.5 disabled:opacity-50">
@@ -49,6 +65,15 @@ export default function SettingsDiagnosticsPanel({ diagnostics, message, loading
           </button>
         </div>
       </div>
+
+      {localModelNeedsConfiguration ? (
+        <div className="p-4 border border-ember-line rounded-md bg-ember-soft flex flex-col items-start gap-3">
+          <p className="text-sm text-ember">{t('settings.localAuthHint')}</p>
+          <button type="button" onClick={onConfigureModels} className="h-9 px-4 bg-ember text-paper rounded-md text-sm hover:bg-ember/90 transition-colors">
+            {t('modelProviders.manage')}
+          </button>
+        </div>
+      ) : null}
 
       <Group title="模型服务">
         <div className="flex flex-wrap gap-2">
@@ -74,19 +99,21 @@ export default function SettingsDiagnosticsPanel({ diagnostics, message, loading
         </div>
       </Group>
 
-      <Group title="邮箱登录">
-        <div className="flex flex-wrap gap-2">
-          <StatusPill ok={mail?.configured} label={mail?.configured ? 'SMTP 已配置' : 'SMTP 未完整配置'} />
-          <StatusPill ok={!mail?.devCodes} label={mail?.devCodes ? '会显示开发验证码' : '真实邮箱验证码'} />
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <Info label="SMTP Server" value={mail?.server || '未配置'} />
-          <Info label="SMTP Port" value={String(mail?.port ?? '未配置')} />
-          <Info label="TLS/SSL" value={`TLS ${mail?.useTls ? '开' : '关'} / SSL ${mail?.useSsl ? '开' : '关'}`} />
-          <Info label="Sender" value={mail?.sender || '未配置'} />
-        </div>
-        {mail?.missing?.length ? <div className="p-3 border border-ember-line rounded-md bg-ember-soft text-sm text-ember">缺少邮箱变量：{mail.missing.join(', ')}</div> : null}
-      </Group>
+      {authMode !== 'local' ? (
+        <Group title="邮箱登录">
+          <div className="flex flex-wrap gap-2">
+            <StatusPill ok={mail?.configured} label={mail?.configured ? 'SMTP 已配置' : 'SMTP 未完整配置'} />
+            <StatusPill ok={!mail?.devCodes} label={mail?.devCodes ? '会显示开发验证码' : '真实邮箱验证码'} />
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <Info label="SMTP Server" value={mail?.server || '未配置'} />
+            <Info label="SMTP Port" value={String(mail?.port ?? '未配置')} />
+            <Info label="TLS/SSL" value={`TLS ${mail?.useTls ? '开' : '关'} / SSL ${mail?.useSsl ? '开' : '关'}`} />
+            <Info label="Sender" value={mail?.sender || '未配置'} />
+          </div>
+          {mail?.missing?.length ? <div className="p-3 border border-ember-line rounded-md bg-ember-soft text-sm text-ember">缺少邮箱变量：{mail.missing.join(', ')}</div> : null}
+        </Group>
+      ) : null}
       {message && <div className="p-3 border border-ink-fade/40 rounded-md text-sm text-ink-soft bg-paper-2">{message}</div>}
     </section>
   )

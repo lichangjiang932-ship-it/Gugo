@@ -57,13 +57,14 @@ export default function LeftRail() {
 
   useEffect(() => {
     const openLogin = (event) => {
+      if (state.authMode === 'local') return
       setLoginTarget(event.detail?.path || null)
       setLoginMessage(event.detail?.message || '请先登录账户')
       setShowLogin(true)
     }
     window.addEventListener('auth:required', openLogin)
     return () => window.removeEventListener('auth:required', openLogin)
-  }, [])
+  }, [state.authMode])
 
   useEffect(() => {
     if (loginCodeCountdown <= 0) return undefined
@@ -110,7 +111,7 @@ export default function LeftRail() {
 
   const handleNav = (item) => {
     setAccountMenuOpen(false)
-    if (item.requiresLogin && !getAuthToken()) {
+    if (item.requiresLogin && !getAuthToken() && state.authMode !== 'local') {
       setLoginTarget(item.path)
       setShowLogin(true)
       setLoginMessage('请先登录账户')
@@ -318,7 +319,7 @@ export default function LeftRail() {
         </div>
       </aside>
 
-      {showLogin && (
+      {showLogin && state.authMode !== 'local' && (
         <div className="fixed inset-0 z-50 bg-ink/35 flex items-center justify-center p-4">
           <div className="w-full max-w-md bg-paper border border-ink rounded-md p-5 flex flex-col gap-4 shadow-xl">
             <div className="flex items-center justify-between">

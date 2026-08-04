@@ -15,7 +15,9 @@ function serviceError(message, statusCode = 400, code = 'WORKSPACE_TRUST_ERROR')
 }
 
 function realPath(input) {
-  return fs.realpathSync.native ? fs.realpathSync.native(input) : fs.realpathSync(input)
+  // Match local-file authorization so Windows short/long aliases use the
+  // same stable representation everywhere.
+  return fs.realpathSync(input)
 }
 
 function samePath(left, right) {

@@ -4,6 +4,7 @@ import path from 'node:path'
 import os from 'node:os'
 
 import {
+  bootstrapAuth,
   buildSendCodeResponse,
   getMailDiagnostics,
   getPublicAccount,
@@ -12,7 +13,7 @@ import {
   sendEmailCode,
   verifyEmailCode,
 } from '../server/adapters/authAccount.js'
-import { getDb } from '../server/db.js'
+import { createSession, createUser, getDb } from '../server/db.js'
 
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-tests', String(process.pid))
 
@@ -21,11 +22,12 @@ function cleanDb() {
   for (const table of ['ledger', 'sessions', 'login_codes', 'users']) {
     db.prepare(`DELETE FROM ${table}`).run()
   }
+  db.prepare("DELETE FROM meta WHERE key = 'local_auth_owner_user_id'").run()
 }
 
-function createReq({ url, token = '' }) {
+function createReq({ url, token = '', method = 'GET' }) {
   return {
-    method: 'GET',
+    method,
     url,
     headers: token ? { authorization: `Bearer ${token}` } : {},
     socket: { remoteAddress: '127.0.0.1' },
@@ -43,6 +45,54 @@ function createRes() {
 
 test.beforeEach(cleanDb)
 test.after(cleanDb)
+
+test('default local mode bootstraps one reusable internal session', async () => {
+  const now = Date.now()
+  const first = bootstrapAuth({ env: {}, now })
+  const second = bootstrapAuth({ env: {}, now: now + 1 })
+
+  assert.equal(first.mode, 'local')
+  assert.equal(first.authenticated, true)
+  assert.match(first.token, /^tkn_/)
+  assert.equal(second.token, first.token)
+  assert.equal(second.user.id, first.user.id)
+  assert.equal(getDb().prepare('SELECT COUNT(*) AS count FROM users').get().count, 1)
+  assert.equal(getDb().prepare('SELECT COUNT(*) AS count FROM sessions').get().count, 1)
+
+  const res = createRes()
+  await handleAuthAccountRequest(createReq({ url: '/api/account/me', token: first.token }), res)
+  assert.equal(res.statusCode, 200)
+})
+
+test('multi-user mode never creates an anonymous session', () => {
+  const result = bootstrapAuth({ env: { AUTH_MODE: 'multi_user' } })
+  assert.deepEqual(result, { ok: true, mode: 'multi_user', authenticated: false })
+  assert.equal(getDb().prepare('SELECT COUNT(*) AS count FROM users').get().count, 0)
+  assert.equal(getDb().prepare('SELECT COUNT(*) AS count FROM sessions').get().count, 0)
+})
+
+test('local mode adopts a sole legacy user and cannot be flipped by another token', () => {
+  const now = Date.now()
+  createUser({ id: 'owner', email: 'owner@example.com', now })
+  const adopted = bootstrapAuth({ env: {}, now })
+  assert.equal(adopted.user.id, 'owner')
+
+  createUser({ id: 'other', email: 'other@example.com', now })
+  createSession({ token: 'other-token', userId: 'other', now })
+  const afterOtherToken = bootstrapAuth({ token: 'other-token', env: {}, now: now + 1 })
+  assert.equal(afterOtherToken.user.id, 'owner')
+  assert.equal(afterOtherToken.token, adopted.token)
+})
+
+test('multi-user bootstrap restores only a valid existing session', () => {
+  const now = Date.now()
+  createUser({ id: 'member', email: 'member@example.com', now })
+  createSession({ token: 'member-token', userId: 'member', now })
+  const result = bootstrapAuth({ token: 'member-token', env: { AUTH_MODE: 'multi_user' }, now })
+  assert.equal(result.authenticated, true)
+  assert.equal(result.user.id, 'member')
+  assert.equal('token' in result, false)
+})
 
 test('email code login creates an account without billing data', () => {
   const issued = issueEmailCode({ email: 'person@example.com', code: '123456' })

@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 import { getRuntimeEnv, modelProxyPlugin, handleSystemDiagnosticsRequest } from './server/adapters/modelProxy.js'
 import { handleAuthAccountRequest } from './server/adapters/authAccount.js'
 import { toolProxyPlugin } from './server/adapters/toolProxy.js'
-import { healthCheck } from './server/appServer.js'
+import { enforceLocalAuthExposurePolicy, healthCheck } from './server/appServer.js'
 import { handleJobRequest } from './server/routes/jobRoutes.js'
 import { handleSkillRequest } from './server/routes/skillRoutes.js'
 import { handleArtifactDownload } from './server/services/artifactGen.js'
@@ -53,6 +53,24 @@ function authAccountPlugin() {
           return
         }
         next()
+      })
+    },
+  }
+}
+
+function localAuthExposureGuardPlugin() {
+  return {
+    name: 'local-auth-exposure-guard',
+    enforce: 'pre',
+    configureServer(server) {
+      const configuredHost = server.config.server.host
+      const listenerHost = configuredHost === true
+        ? '0.0.0.0'
+        : (configuredHost || DEV_HOST)
+      enforceLocalAuthExposurePolicy(RUNTIME_ENV, {
+        listenerHost,
+        surface: 'Vite development server',
+        warn: (message) => server.config.logger.warn(message),
       })
     },
   }
@@ -258,7 +276,7 @@ const DEV_HOST = RUNTIME_ENV.SERVER_HOST || '127.0.0.1'
 const DEV_PORT = Number(RUNTIME_ENV.VITE_DEV_PORT || RUNTIME_ENV.SERVER_PORT || 5175)
 
 export default defineConfig({
-  plugins: [react(), authAccountPlugin(), modelProxyPlugin(), toolProxyPlugin(), fallbackApiPlugin()],
+  plugins: [localAuthExposureGuardPlugin(), react(), authAccountPlugin(), modelProxyPlugin(), toolProxyPlugin(), fallbackApiPlugin()],
   base: PUBLIC_BASE_PATH,
   server: {
     host: DEV_HOST,

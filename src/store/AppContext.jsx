@@ -3,6 +3,11 @@ import { PERMISSIONS } from '../data.js'
 import { persistWithDegradation, sanitizeForPersist } from './persistDegradation.js'
 import { TASK_STATUS } from './taskStatus.js'
 import { withSessionModel } from '../lib/modelSelection.js'
+import {
+  TOKEN_KEY,
+  bootstrapAuthWithRetry,
+  syncAuthTokenFromStorage,
+} from '../lib/accountClient.js'
 import { normalizeThemeMode } from '../lib/themeMode.js'
 import { backfillMessageTimestamps } from '../lib/messageTime.js'
 import {
@@ -41,6 +46,8 @@ function createInitialState() {
   return {
     user: { name: null, email: null, avatar: null, plan: null, joinedAt: null, totalCalls: 0 },
     isLoggedIn: false,
+    authMode: 'unknown',
+    authReady: false,
     sessions: [],
     activeSessionId: null,
     tasks: [],
@@ -159,6 +166,36 @@ function reducer(state, action) {
         isLoggedIn: false,
       }
     }
+
+    case 'AUTH_BOOTSTRAP': {
+      const payload = action.payload || {}
+      const authenticated = payload.authenticated === true && !!payload.user
+      return {
+        ...state,
+        authMode: payload.mode || 'unknown',
+        authReady: true,
+        isLoggedIn: authenticated,
+        user: authenticated
+          ? {
+              name: payload.user.email?.split('@')[0] || null,
+              email: payload.user.email || null,
+              avatar: null,
+              plan: null,
+              joinedAt: payload.user.createdAt || Date.now(),
+              totalCalls: 0,
+            }
+          : { name: null, email: null, avatar: null, plan: null, joinedAt: null, totalCalls: 0 },
+      }
+    }
+
+    case 'AUTH_BOOTSTRAP_FAILED':
+      return {
+        ...state,
+        authMode: 'unknown',
+        authReady: true,
+        isLoggedIn: false,
+        user: { name: null, email: null, avatar: null, plan: null, joinedAt: null, totalCalls: 0 },
+      }
 
     case 'NEW_SESSION': {
       const title = action.payload?.title ?? action.payload ?? `新会话 ${new Date().toLocaleTimeString()}`
@@ -828,6 +865,8 @@ export function AppProvider({ children }) {
   const skipPersistSnapshotRef = useRef(null)
   const backendRef = useRef('hydrating')
   const hydrationPromiseRef = useRef(null)
+  const authBootstrapPromiseRef = useRef(null)
+  const authBootstrapGenerationRef = useRef(0)
   const pendingWriteRef = useRef(null)
   const writeLoopRef = useRef(null)
   const clearGenerationRef = useRef(0)
@@ -849,6 +888,28 @@ export function AppProvider({ children }) {
       } catch (error) {
         console.warn('[AppContext] storage sync signal failed:', error?.name || error)
       }
+    }
+  }, [])
+
+  const refreshAuth = useCallback(async ({ signal, retryDelays } = {}) => {
+    const generation = ++authBootstrapGenerationRef.current
+    const request = bootstrapAuthWithRetry({ signal, retryDelays })
+    authBootstrapPromiseRef.current = request
+    try {
+      const result = await request
+      if (mountedRef.current && generation === authBootstrapGenerationRef.current) {
+        dispatch({ type: 'AUTH_BOOTSTRAP', payload: result })
+      }
+      return result
+    } catch (error) {
+      if (signal?.aborted) return null
+      if (mountedRef.current && generation === authBootstrapGenerationRef.current) {
+        console.warn('[AppContext] auth bootstrap failed:', error?.message || error)
+        dispatch({ type: 'AUTH_BOOTSTRAP_FAILED' })
+      }
+      return null
+    } finally {
+      if (authBootstrapPromiseRef.current === request) authBootstrapPromiseRef.current = null
     }
   }, [])
 
@@ -1181,6 +1242,18 @@ export function AppProvider({ children }) {
   }, [loadHydratedPersistence])
 
   useEffect(() => {
+    if (!hydrated) return undefined
+    const controller = new AbortController()
+    void refreshAuth({ signal: controller.signal })
+    const retryWhenOnline = () => void refreshAuth({ retryDelays: [0, 250, 750] })
+    window.addEventListener('online', retryWhenOnline)
+    return () => {
+      controller.abort()
+      window.removeEventListener('online', retryWhenOnline)
+    }
+  }, [hydrated, refreshAuth])
+
+  useEffect(() => {
     const controller = {
       async prepareClear() {
         clearGenerationRef.current += 1
@@ -1230,6 +1303,11 @@ export function AppProvider({ children }) {
 
     const onStorage = (event) => {
       if (event.storageArea && event.storageArea !== getLocalStorage()) return
+      if (event.key === TOKEN_KEY) {
+        syncAuthTokenFromStorage(event.newValue)
+        void refreshAuth({ retryDelays: [0, 250, 750] })
+        return
+      }
       if (event.key === LEGACY_STATE_STORAGE_KEY) {
         // A null value is migration cleanup, never an implicit data-clear command.
         if (event.newValue) applyRemotePayload(event.newValue, Date.now())
@@ -1253,7 +1331,7 @@ export function AppProvider({ children }) {
       if (channelRef.current === channel) channelRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hydrated])
+  }, [hydrated, refreshAuth])
 
   useEffect(() => {
     stateRef.current = state
@@ -1298,7 +1376,7 @@ export function AppProvider({ children }) {
 
   return (
     <AppContext.Provider value={{ state, dispatch }}>
-      {hydrated ? children : null}
+      {hydrated && state.authReady ? children : null}
     </AppContext.Provider>
   )
 }
