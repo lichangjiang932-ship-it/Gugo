@@ -462,8 +462,8 @@ function migrateToV8(db) {
  * A4: Chat sessions archive state + cross-session message search.
  *
  * The existing `sessions` table stores auth sessions. To keep old auth rows and tests intact,
- * chat rows reuse `token` as the stable session id and only rows with a non-null `title`
- * are treated as chat sessions by the session store.
+ * chat rows reuse `token` as the stable session id. Auth rows keep both `id`
+ * and `title` null; chat rows have at least a stable `id`, even without a title.
  */
 function migrateToV9(db) {
   if (!hasColumn(db, 'sessions', 'id')) {
@@ -1506,28 +1506,35 @@ const TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
 export function createSession({ token, userId, now = Date.now(), ttlMs = TOKEN_TTL_MS }) {
   const db = getDb()
   // 清理过期 session
-  db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(now)
+  db.prepare('DELETE FROM sessions WHERE id IS NULL AND title IS NULL AND expires_at < ?').run(now)
   const stmt = db.prepare(
-    'INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(token) DO UPDATE SET expires_at = excluded.expires_at'
+    `INSERT INTO sessions (token, user_id, expires_at, created_at)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(token) DO UPDATE SET expires_at = excluded.expires_at
+     WHERE sessions.id IS NULL AND sessions.title IS NULL AND sessions.user_id = excluded.user_id`
   )
-  stmt.run(token, userId, now + ttlMs, now)
+  const result = stmt.run(token, userId, now + ttlMs, now)
+  if (result.changes !== 1) throw new Error('session token already exists')
   return { token, userId, expiresAt: now + ttlMs }
 }
 
 export function getSessionByToken(token, now = Date.now()) {
   const db = getDb()
-  const stmt = db.prepare('SELECT * FROM sessions WHERE token = ? AND expires_at > ?')
+  const stmt = db.prepare(`
+    SELECT * FROM sessions
+    WHERE token = ? AND id IS NULL AND title IS NULL AND expires_at > ?
+  `)
   return stmt.get(token, now) || null
 }
 
 export function deleteSession(token) {
   const db = getDb()
-  db.prepare('DELETE FROM sessions WHERE token = ?').run(token)
+  db.prepare('DELETE FROM sessions WHERE token = ? AND id IS NULL AND title IS NULL').run(token)
 }
 
 export function deleteExpiredSessions(now = Date.now()) {
   const db = getDb()
-  db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(now)
+  db.prepare('DELETE FROM sessions WHERE id IS NULL AND title IS NULL AND expires_at < ?').run(now)
 }
 
 /* ── Login Codes ── */

@@ -7,11 +7,11 @@ import test from 'node:test'
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-turn-engine-'))
 process.env.APP_DATA_DIR = tempDir
 
-const { closeDb, createUser } = await import('../server/db.js')
+const { closeDb, createUser, getDb } = await import('../server/db.js')
 const { decideApproval } = await import('../server/services/approvalStore.js')
 const { releaseApproval } = await import('../server/services/approvalGate.js')
 const { TurnEngine } = await import('../server/services/TurnEngine.js')
-const { listMessages, upsertSession } = await import('../server/services/sessionStore.js')
+const { listMessages, upsertMessage, upsertSession } = await import('../server/services/sessionStore.js')
 const { appendTurnEvent, listTurnEvents } = await import('../server/services/turnEventStore.js')
 const { createTurnEvent } = await import('../shared/turnEvents.js')
 
@@ -215,4 +215,142 @@ test('TurnEngine creates a missing owned session but cannot claim another user s
     engine.startTurn({ userId, sessionId: 'owned-by-other', turnId: 'turn-cross-user', content: 'claim' }),
     /session not found/,
   )
+})
+
+test('TurnEngine claims one legacy local chat and all session-scoped records atomically', async () => {
+  const db = getDb()
+  const legacyUserId = 'turn-engine-legacy-local'
+  const sessionId = 'turn-engine-legacy-session'
+  createUser({ id: legacyUserId, email: 'turn-engine-legacy-local@example.com' })
+  upsertSession({ id: sessionId, userId: legacyUserId, title: 'Legacy local chat' })
+  upsertMessage({
+    id: 'legacy-message',
+    userId: legacyUserId,
+    sessionId,
+    role: 'user',
+    content: 'legacy history',
+    createdAt: 1,
+  })
+  appendTurnEvent({
+    userId: legacyUserId,
+    event: createTurnEvent({
+      id: 'legacy-event', sessionId, turnId: 'legacy-complete-turn', sequence: 0,
+      type: 'turn.completed', payload: {}, createdAt: 2,
+    }),
+  })
+  db.prepare(`
+    INSERT INTO turn_artifacts
+      (id, user_id, session_id, turn_id, type, title, url, filename, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run('legacy-artifact', legacyUserId, sessionId, 'legacy-complete-turn', 'file', 'Legacy', '/legacy', 'legacy-claim.txt', 2)
+  db.prepare(`
+    INSERT INTO pending_approvals
+      (id, user_id, origin, session_id, tool_name, args_json, risk, status, created_at, updated_at)
+    VALUES (?, ?, 'chat', ?, 'write_file', '{}', 'medium', 'pending', ?, ?)
+  `).run('legacy-approval', legacyUserId, sessionId, 2, 2)
+  db.prepare(`
+    INSERT INTO session_meters (session_id, user_id, updated_at)
+    VALUES (?, ?, ?)
+  `).run(sessionId, legacyUserId, 2)
+  db.prepare(`
+    INSERT INTO compaction_archive
+      (id, user_id, session_id, replaced_message_count, archived_messages_json, summary_text, created_at)
+    VALUES (?, ?, ?, 1, '[]', 'legacy summary', ?)
+  `).run('legacy-archive', legacyUserId, sessionId, 2)
+  db.prepare(`
+    INSERT INTO memories
+      (id, user_id, type, title, slug, body, frontmatter_json, pinned,
+       source_session_id, source_message_id, created_at, updated_at)
+    VALUES (?, ?, 'project', 'Legacy memory', 'legacy-memory', 'body', '{}', 0, ?, ?, ?, ?)
+  `).run('legacy-memory', legacyUserId, sessionId, 'legacy-message', 2, 2)
+  db.prepare(`
+    INSERT INTO subagent_runs
+      (id, user_id, parent_session_id, parent_message_id, agent_type, prompt, status, created_at)
+    VALUES (?, ?, ?, ?, 'general', 'legacy prompt', 'completed', ?)
+  `).run('legacy-subagent', legacyUserId, sessionId, 'legacy-message', 2)
+  db.prepare(`
+    INSERT INTO meta (key, value) VALUES ('local_auth_owner_user_id', ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `).run(userId)
+
+  const engine = new TurnEngine({
+    runLoop: async () => ({ text: 'claimed', artifactIds: [], iterations: 0 }),
+  })
+  await engine.startTurn({
+    userId,
+    sessionId,
+    turnId: 'turn-local-claim',
+    content: 'continue legacy chat',
+    authMode: 'local',
+  })
+  await engine.waitForTurn({ userId, sessionId, turnId: 'turn-local-claim' })
+
+  assert.equal(db.prepare('SELECT user_id FROM sessions WHERE token = ?').get(sessionId).user_id, userId)
+  for (const [table, id] of [
+    ['messages', 'legacy-message'],
+    ['turn_events', 'legacy-event'],
+    ['turn_artifacts', 'legacy-artifact'],
+    ['pending_approvals', 'legacy-approval'],
+    ['compaction_archive', 'legacy-archive'],
+    ['memories', 'legacy-memory'],
+    ['subagent_runs', 'legacy-subagent'],
+  ]) {
+    assert.equal(db.prepare(`SELECT user_id FROM ${table} WHERE id = ?`).get(id).user_id, userId)
+  }
+  assert.equal(db.prepare('SELECT user_id FROM session_meters WHERE session_id = ?').get(sessionId).user_id, userId)
+  assert.equal(db.prepare('SELECT status FROM pending_approvals WHERE id = ?').get('legacy-approval').status, 'cancelled')
+  assert.equal(engine.getTurn({ userId, sessionId, turnId: 'turn-local-claim' }).status, 'completed')
+})
+
+test('TurnEngine never claims another user chat in multi-user mode', async () => {
+  const db = getDb()
+  const legacyUserId = 'turn-engine-multi-owner'
+  const sessionId = 'turn-engine-multi-session'
+  createUser({ id: legacyUserId, email: 'turn-engine-multi-owner@example.com' })
+  upsertSession({ id: sessionId, userId: legacyUserId, title: 'Multi-user chat' })
+  db.prepare(`
+    INSERT INTO meta (key, value) VALUES ('local_auth_owner_user_id', ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `).run(userId)
+
+  const engine = new TurnEngine({ runLoop: async () => ({ text: 'must not run' }) })
+  await assert.rejects(
+    engine.startTurn({
+      userId,
+      sessionId,
+      turnId: 'turn-multi-no-claim',
+      content: 'do not claim',
+      authMode: 'multi_user',
+    }),
+    (error) => error?.code === 'SESSION_NOT_FOUND' && error?.status === 404,
+  )
+  assert.equal(db.prepare('SELECT user_id FROM sessions WHERE token = ?').get(sessionId).user_id, legacyUserId)
+})
+
+test('TurnEngine claims a legacy local session before resuming an unfinished turn', async () => {
+  const db = getDb()
+  const legacyUserId = 'turn-engine-resume-owner'
+  const sessionId = 'turn-engine-resume-session'
+  const turnId = 'turn-engine-legacy-resume'
+  createUser({ id: legacyUserId, email: 'turn-engine-resume-owner@example.com' })
+  upsertSession({ id: sessionId, userId: legacyUserId, title: 'Resume legacy chat' })
+  appendTurnEvent({
+    userId: legacyUserId,
+    event: createTurnEvent({
+      id: 'legacy-resume-start', sessionId, turnId, sequence: 0,
+      type: 'turn.started', payload: { content: 'resume me', modelName: null }, createdAt: 1,
+    }),
+  })
+  db.prepare(`
+    INSERT INTO meta (key, value) VALUES ('local_auth_owner_user_id', ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value
+  `).run(userId)
+
+  const engine = new TurnEngine({
+    runLoop: async () => ({ text: 'resumed', artifactIds: [], iterations: 0 }),
+  })
+  await engine.resumeTurn({ userId, sessionId, turnId, authMode: 'local' })
+  await engine.waitForTurn({ userId, sessionId, turnId })
+  assert.equal(engine.getTurn({ userId, sessionId, turnId }).status, 'completed')
+  assert.equal(db.prepare('SELECT user_id FROM sessions WHERE token = ?').get(sessionId).user_id, userId)
 })

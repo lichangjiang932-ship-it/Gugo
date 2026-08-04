@@ -3,7 +3,14 @@ import { callBackgroundModelWithTools } from '../adapters/modelProxy.js'
 import { createTurnEvent } from '../../shared/turnEvents.js'
 import { releaseApprovalsForTurn } from './approvalGate.js'
 import { runToolsLoop, SERVER_TOOL_SPECS } from './jobTools.js'
-import { getSession, listMessages, upsertMessage, upsertSession } from './sessionStore.js'
+import {
+  claimLocalChatSession,
+  getSession,
+  listMessages,
+  SessionOwnershipError,
+  upsertMessage,
+  upsertSession,
+} from './sessionStore.js'
 import { appendTurnEvent, getLastTurnEvent, listTurnEvents } from './turnEventStore.js'
 import { resolveApprovalMode } from '../utils/approvalPolicy.js'
 
@@ -48,6 +55,7 @@ export class TurnEngine {
     lastEvent = getLastTurnEvent,
     replayEvents = listTurnEvents,
     readSession = getSession,
+    claimSession = claimLocalChatSession,
     writeSession = upsertSession,
     readMessages = listMessages,
     writeMessage = upsertMessage,
@@ -58,7 +66,7 @@ export class TurnEngine {
   } = {}) {
     this.deps = {
       runLoop, runModel, executeTool, appendEvent, lastEvent, replayEvents,
-      readSession, writeSession, readMessages, writeMessage, idFactory, now, toolSpecs,
+      readSession, claimSession, writeSession, readMessages, writeMessage, idFactory, now, toolSpecs,
       readApprovalMode,
     }
     this.active = new Map()
@@ -75,21 +83,38 @@ export class TurnEngine {
     } : null
   }
 
-  async startTurn({ userId, sessionId, turnId = this.deps.idFactory(), content, modelName = null, history = [] }) {
+  async startTurn({
+    userId,
+    sessionId,
+    turnId = this.deps.idFactory(),
+    content,
+    modelName = null,
+    history = [],
+    authMode = null,
+  }) {
     const text = String(content || '').trim()
     if (!userId) throw new TurnEngineError('UNAUTHORIZED', 'Unauthorized', 401)
     if (!sessionId) throw new TurnEngineError('SESSION_REQUIRED', 'sessionId is required')
     if (!text) throw new TurnEngineError('CONTENT_REQUIRED', 'content is required')
-    if (!this.deps.readSession({ userId, sessionId })) {
+    let session = this.deps.readSession({ userId, sessionId })
+    if (!session && authMode === 'local') {
+      session = this.#claimLegacySession({ userId, sessionId, authMode })
+    }
+    if (!session) {
       try {
-        this.deps.writeSession({
+        session = this.deps.writeSession({
           id: sessionId,
           userId,
           title: text.slice(0, 80) || 'Untitled',
           createdAt: this.deps.now(),
         })
-      } catch {
-        throw new TurnEngineError('SESSION_NOT_FOUND', 'session not found', 404)
+      } catch (error) {
+        if (error instanceof SessionOwnershipError || error?.code === 'SESSION_OWNERSHIP_CONFLICT') {
+          throw new TurnEngineError('SESSION_NOT_FOUND', 'session not found', 404)
+        }
+        const wrapped = new TurnEngineError('SESSION_CREATE_FAILED', 'failed to create session', 500)
+        wrapped.cause = error
+        throw wrapped
       }
     }
     const existing = this.deps.lastEvent({ userId, sessionId, turnId })
@@ -128,7 +153,10 @@ export class TurnEngine {
     return this.getTurn({ userId, sessionId, turnId })
   }
 
-  async resumeTurn({ userId, sessionId, turnId }) {
+  async resumeTurn({ userId, sessionId, turnId, authMode = null }) {
+    if (!this.deps.readSession({ userId, sessionId }) && authMode === 'local') {
+      this.#claimLegacySession({ userId, sessionId, authMode })
+    }
     const key = activeKey(userId, sessionId, turnId)
     if (this.active.has(key)) return this.getTurn({ userId, sessionId, turnId })
     const started = this.deps.lastEvent({ userId, sessionId, turnId, type: 'turn.started' })
@@ -147,7 +175,10 @@ export class TurnEngine {
     return this.getTurn({ userId, sessionId, turnId })
   }
 
-  async cancelTurn({ userId, sessionId, turnId }) {
+  async cancelTurn({ userId, sessionId, turnId, authMode = null }) {
+    if (!this.deps.readSession({ userId, sessionId }) && authMode === 'local') {
+      this.#claimLegacySession({ userId, sessionId, authMode })
+    }
     const key = activeKey(userId, sessionId, turnId)
     const running = this.active.get(key)
     if (running) {
@@ -166,6 +197,16 @@ export class TurnEngine {
 
   waitForTurn({ userId, sessionId, turnId }) {
     return this.active.get(activeKey(userId, sessionId, turnId))?.promise || Promise.resolve()
+  }
+
+  #claimLegacySession({ userId, sessionId, authMode }) {
+    try {
+      return this.deps.claimSession({ userId, sessionId, authMode })
+    } catch (error) {
+      const wrapped = new TurnEngineError('SESSION_CLAIM_FAILED', 'failed to claim legacy session', 500)
+      wrapped.cause = error
+      throw wrapped
+    }
   }
 
   #createEmitter({ userId, sessionId, turnId, sequence }) {

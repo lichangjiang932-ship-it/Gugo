@@ -167,9 +167,11 @@ export function bootstrapAuth({ token = '', env = process.env, now = Date.now() 
   const suppliedSession = token ? getSessionByToken(token) : null
   const reusableToken = suppliedSession?.user_id === user.id
     ? token
-    : getDb().prepare(
-        'SELECT token FROM sessions WHERE user_id = ? AND expires_at > ? ORDER BY created_at DESC LIMIT 1'
-      ).get(user.id, now)?.token
+    : getDb().prepare(`
+        SELECT token FROM sessions
+        WHERE user_id = ? AND id IS NULL AND title IS NULL AND expires_at > ?
+        ORDER BY created_at DESC LIMIT 1
+      `).get(user.id, now)?.token
   const sessionToken = reusableToken || createToken()
   createSession({ token: sessionToken, userId: user.id, now, ttlMs: LOCAL_SESSION_TTL_MS })
   return { ok: true, mode, authenticated: true, token: sessionToken, user: publicUser(user) }

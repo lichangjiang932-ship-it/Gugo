@@ -1,4 +1,5 @@
 import { authenticateRequest } from '../middleware.js'
+import { resolveAuthMode } from '../adapters/authAccount.js'
 import { readJson, sendJson } from '../utils.js'
 import { getTurnEngine, TurnEngineError } from '../services/TurnEngine.js'
 import { listTurnEvents, subscribeTurnEvents } from '../services/turnEventStore.js'
@@ -30,7 +31,12 @@ function sendError(res, error) {
   })
 }
 
-export async function handleTurnEventRequest(req, res, engine = getTurnEngine()) {
+export async function handleTurnEventRequest(
+  req,
+  res,
+  engine = getTurnEngine(),
+  { env = process.env } = {},
+) {
   const userId = authenticateRequest(req)
   if (!userId) return sendJson(res, 401, { error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } })
   const url = new URL(req.url, 'http://localhost')
@@ -114,6 +120,7 @@ export async function handleTurnEventRequest(req, res, engine = getTurnEngine())
         content: body.content,
         modelName: body.modelName || null,
         history: body.history,
+        authMode: resolveAuthMode(env),
       })
       return sendJson(res, 202, { turn })
     }
@@ -129,7 +136,12 @@ export async function handleTurnEventRequest(req, res, engine = getTurnEngine())
       if (req.method === 'POST' && (parts[3] === 'cancel' || parts[3] === 'resume')) {
         const body = await readJson(req)
         const action = parts[3] === 'cancel' ? 'cancelTurn' : 'resumeTurn'
-        const turn = await engine[action]({ userId, sessionId: body.sessionId, turnId })
+        const turn = await engine[action]({
+          userId,
+          sessionId: body.sessionId,
+          turnId,
+          authMode: resolveAuthMode(env),
+        })
         return sendJson(res, parts[3] === 'resume' ? 202 : 200, { turn })
       }
     }

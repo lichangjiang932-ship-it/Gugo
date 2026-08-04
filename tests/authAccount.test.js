@@ -13,7 +13,8 @@ import {
   sendEmailCode,
   verifyEmailCode,
 } from '../server/adapters/authAccount.js'
-import { createSession, createUser, getDb } from '../server/db.js'
+import { createSession, createUser, getDb, getSessionByToken } from '../server/db.js'
+import { upsertSession } from '../server/services/sessionStore.js'
 
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-tests', String(process.pid))
 
@@ -62,6 +63,33 @@ test('default local mode bootstraps one reusable internal session', async () => 
   const res = createRes()
   await handleAuthAccountRequest(createReq({ url: '/api/account/me', token: first.token }), res)
   assert.equal(res.statusCode, 200)
+})
+
+test('chat ids never authenticate or replace the reusable local auth token', () => {
+  const now = Date.now()
+  const first = bootstrapAuth({ env: {}, now })
+  upsertSession({
+    id: 'local-chat-id',
+    userId: first.user.id,
+    title: 'Local chat',
+    createdAt: now + 1,
+  })
+
+  assert.equal(getSessionByToken('local-chat-id', now + 2), null)
+  assert.throws(
+    () => createSession({ token: 'local-chat-id', userId: first.user.id, now: now + 2 }),
+    /session token already exists/,
+  )
+  assert.throws(
+    () => upsertSession({ id: first.token, userId: first.user.id, title: 'Not a chat' }),
+    /session not found/,
+  )
+
+  const second = bootstrapAuth({ token: 'local-chat-id', env: {}, now: now + 3 })
+  assert.equal(second.token, first.token)
+  assert.equal(getSessionByToken(first.token, now + 3)?.user_id, first.user.id)
+  const chat = getDb().prepare('SELECT title, user_id FROM sessions WHERE token = ?').get('local-chat-id')
+  assert.deepEqual(chat, { title: 'Local chat', user_id: first.user.id })
 })
 
 test('multi-user mode never creates an anonymous session', () => {

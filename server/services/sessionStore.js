@@ -1,5 +1,25 @@
 import { getDb } from '../db.js'
 
+const LOCAL_OWNER_META_KEY = 'local_auth_owner_user_id'
+const SESSION_SCOPED_TABLES = [
+  ['messages', 'session_id'],
+  ['turn_events', 'session_id'],
+  ['turn_artifacts', 'session_id'],
+  ['pending_approvals', 'session_id'],
+  ['session_meters', 'session_id'],
+  ['compaction_archive', 'session_id'],
+  ['memories', 'source_session_id'],
+  ['subagent_runs', 'parent_session_id'],
+]
+
+export class SessionOwnershipError extends Error {
+  constructor(message = 'session not found') {
+    super(message)
+    this.name = 'SessionOwnershipError'
+    this.code = 'SESSION_OWNERSHIP_CONFLICT'
+  }
+}
+
 function clampLimit(limit, { fallback = 50, max = 100 } = {}) {
   const value = Number(limit)
   if (!Number.isFinite(value) || value <= 0) return fallback
@@ -42,8 +62,9 @@ export function upsertSession({
   if (!id) throw new Error('session id is required')
   if (!userId) throw new Error('user id is required')
   const db = getDb()
-  const owner = db.prepare('SELECT token, user_id, created_at FROM sessions WHERE token = ?').get(id)
-  if (owner && owner.user_id !== userId) throw new Error('session not found')
+  const owner = db.prepare('SELECT token, id, user_id, title, created_at FROM sessions WHERE token = ?').get(id)
+  const ownerIsAuthSession = owner && owner.id === null && owner.title === null
+  if (owner && (ownerIsAuthSession || owner.user_id !== userId)) throw new SessionOwnershipError()
   const row = owner?.user_id === userId ? owner : null
   const finalCreatedAt = row?.created_at || createdAt
   db.prepare(`
@@ -60,12 +81,52 @@ export function upsertSession({
   return getSession({ userId, sessionId: id })
 }
 
+/**
+ * Claim one legacy chat for the selected local-auth owner. This deliberately
+ * does not merge whole users because providers and agents may exist on both.
+ */
+export function claimLocalChatSession({ userId, sessionId, authMode, now = Date.now() }) {
+  if (authMode !== 'local' || !userId || !sessionId) return null
+  const db = getDb()
+  const localOwner = db.prepare('SELECT value FROM meta WHERE key = ?').get(LOCAL_OWNER_META_KEY)?.value
+  if (localOwner !== userId) return null
+
+  return db.transaction(() => {
+    const session = db.prepare(`
+      SELECT token, user_id
+      FROM sessions
+      WHERE token = ? AND (id IS NOT NULL OR title IS NOT NULL)
+    `).get(sessionId)
+    if (!session) return null
+    if (session.user_id === userId) return getSession({ userId, sessionId })
+
+    db.prepare(`
+      UPDATE pending_approvals
+      SET status = 'cancelled', updated_at = ?
+      WHERE user_id = ? AND session_id = ? AND origin = 'chat' AND status = 'pending'
+    `).run(now, session.user_id, sessionId)
+    for (const [table, sessionColumn] of SESSION_SCOPED_TABLES) {
+      db.prepare(`
+        UPDATE ${table}
+        SET user_id = ?
+        WHERE user_id = ? AND ${sessionColumn} = ?
+      `).run(userId, session.user_id, sessionId)
+    }
+    const claimed = db.prepare(`
+      UPDATE sessions
+      SET user_id = ?, updated_at = ?
+      WHERE token = ? AND user_id = ? AND (id IS NOT NULL OR title IS NOT NULL)
+    `).run(userId, now, sessionId, session.user_id)
+    return claimed.changes === 1 ? getSession({ userId, sessionId }) : null
+  })()
+}
+
 export function getSession({ userId, sessionId }) {
   if (!userId || !sessionId) return null
   const row = getDb().prepare(`
     SELECT token, id, title, created_at, updated_at, last_viewed_at, archived_at
     FROM sessions
-    WHERE user_id = ? AND token = ? AND title IS NOT NULL
+    WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
   `).get(userId, sessionId)
   return mapSession(row)
 }
@@ -73,7 +134,7 @@ export function getSession({ userId, sessionId }) {
 export function listSessions({ userId, archived = 'false', limit = 100, offset = 0 } = {}) {
   if (!userId) return []
   const filter = normalizeArchivedFilter(archived)
-  const clauses = ['user_id = @userId', 'title IS NOT NULL']
+  const clauses = ['user_id = @userId', '(id IS NOT NULL OR title IS NOT NULL)']
   if (filter === 'true') clauses.push('archived_at IS NOT NULL')
   if (filter === 'false') clauses.push('archived_at IS NULL')
   const rows = getDb().prepare(`
@@ -95,7 +156,7 @@ export function archiveSession({ userId, sessionId, now = Date.now() }) {
   const result = getDb().prepare(`
     UPDATE sessions
     SET archived_at = COALESCE(archived_at, ?), updated_at = ?
-    WHERE user_id = ? AND token = ? AND title IS NOT NULL
+    WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
   `).run(now, now, userId, sessionId)
   if (!result.changes) return null
   return getSession({ userId, sessionId })
@@ -106,7 +167,7 @@ export function unarchiveSession({ userId, sessionId, now = Date.now() }) {
   const result = getDb().prepare(`
     UPDATE sessions
     SET archived_at = NULL, updated_at = ?
-    WHERE user_id = ? AND token = ? AND title IS NOT NULL
+    WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
   `).run(now, userId, sessionId)
   if (!result.changes) return null
   return getSession({ userId, sessionId })
@@ -128,7 +189,7 @@ export function upsertMessage({
   const db = getDb()
   const session = db.prepare(`
     SELECT title FROM sessions
-    WHERE user_id = ? AND token = ? AND title IS NOT NULL
+    WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
   `).get(userId, sessionId)
   if (!session) throw new Error('session not found')
   db.prepare(`

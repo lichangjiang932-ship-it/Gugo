@@ -135,7 +135,10 @@ export function appendTurnEvent({ userId, event }) {
   if (!userId) throw new Error('user id is required')
   const value = parseTurnEvent(event)
   const db = getDb()
-  const session = db.prepare('SELECT token FROM sessions WHERE user_id = ? AND token = ?').get(userId, value.sessionId)
+  const session = db.prepare(`
+    SELECT token FROM sessions
+    WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
+  `).get(userId, value.sessionId)
   if (!session) throw new Error('session not found')
   const inserted = db.prepare(`INSERT OR IGNORE INTO turn_events
     (id, user_id, session_id, turn_id, sequence, type, payload_json, created_at)

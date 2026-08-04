@@ -1,9 +1,13 @@
 #!/usr/bin/env node
-import { readdirSync, statSync } from 'node:fs'
+import { mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join, normalize } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 const rawArgs = process.argv.slice(2)
+const testDataRoot = mkdtempSync(join(tmpdir(), 'yma-test-run-'))
+const testEnv = { ...process.env, YMA_TEST_DATA_ROOT: testDataRoot }
+const testSetupArgs = ['--import', './scripts/testEnvironment.mjs']
 const coverageMode = rawArgs.includes('--coverage')
 const selectors = rawArgs.filter((arg) => !arg.startsWith('-'))
 const nodeArgs = rawArgs.filter((arg) => arg.startsWith('-') && arg !== '--run' && arg !== '--coverage')
@@ -75,8 +79,15 @@ const isolatedFiles = files.filter(requiresNativeTransform)
 let failed = false
 
 if (batchFiles.length) {
-  const result = spawnSync(process.execPath, ['--test', ...coverageArgs, ...nodeArgs, ...batchFiles], {
+  const result = spawnSync(process.execPath, [
+    ...testSetupArgs,
+    '--test',
+    ...coverageArgs,
+    ...nodeArgs,
+    ...batchFiles,
+  ], {
     stdio: 'inherit',
+    env: testEnv,
   })
   if ((result.status ?? 1) !== 0) failed = true
 }
@@ -94,11 +105,13 @@ for (const file of isolatedFiles) {
       ? ['--import', './scripts/jsxRegister.mjs']
       : []
     const result = spawnSync(process.execPath, [
+      ...testSetupArgs,
       ...loaderArgs,
       ...nodeArgs,
       file,
     ], {
       stdio: 'inherit',
+      env: testEnv,
     })
 
     if (result.status === 0) {
@@ -113,4 +126,5 @@ for (const file of isolatedFiles) {
   if (!passed) failed = true
 }
 
+rmSync(testDataRoot, { recursive: true, force: true })
 process.exit(failed ? 1 : 0)

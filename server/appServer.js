@@ -435,7 +435,7 @@ function createRouter(getEnv = getRuntimeEnv, staticDir = distDir) {
   }
 
   if (req.url?.startsWith('/api/turns')) {
-    return handleTurnEventRequest(req, res)
+    return handleTurnEventRequest(req, res, undefined, { env: getEnv() })
   }
 
   // 静态文件
