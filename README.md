@@ -300,6 +300,8 @@ your-model-atelier/
 
 报告安全问题见 [SECURITY.md](./SECURITY.md)，行为准则见 [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)。
 
+版本记录见 [CHANGELOG.md](./CHANGELOG.md)，vendored 浏览器资源和运行时依赖的许可证来源见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
+
 ---
 
 ## 致谢与启发
@@ -316,4 +318,4 @@ your-model-atelier/
 
 ## License
 
-MIT
+[MIT](./LICENSE)。第三方组件仍适用各自的许可证与版权声明。

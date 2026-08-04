@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, FileText, BarChart3, LayoutList, ExternalLink, ChevronDown, Copy, Code2, Quote, Download } from 'lucide-react'
+import { X, FileText, BarChart3, LayoutList, ExternalLink, ChevronDown, Copy, Code2, Quote, Download, Sparkles, Presentation, Sheet, ListChecks } from 'lucide-react'
 import MarkdownRenderer from '../../components/MarkdownRenderer.jsx'
 import ToolCallCard from '../../components/ToolCallCard.jsx'
 import SubagentCard from '../../components/SubagentCard.jsx'
@@ -60,6 +60,49 @@ function ArtifactOpenCard({ preview, onOpen, className = '' }) {
         <ExternalLink className="w-4 h-4 text-ink-fade group-hover:text-ember transition-colors" />
       </div>
     </button>
+  )
+}
+
+const STARTER_PROMPTS = [
+  { key: 'weeklyReport', icon: FileText },
+  { key: 'salesExcel', icon: Sheet },
+  { key: 'productPpt', icon: Presentation },
+  { key: 'workPlan', icon: ListChecks },
+]
+
+function NewConversationWelcome({ onPromptSelect }) {
+  const { t } = useT()
+  return (
+    <section
+      className="flex min-h-[420px] flex-1 flex-col items-center justify-center py-10"
+      aria-labelledby="new-conversation-title"
+      data-testid="new-conversation-welcome"
+    >
+      <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-2xl border border-ember/25 bg-ember-soft text-ember shadow-sm">
+        <Sparkles className="h-6 w-6" aria-hidden="true" />
+      </div>
+      <h1 id="new-conversation-title" className="font-hand text-2xl text-ink sm:text-3xl">
+        {t('chatMessages.emptyTitle')}
+      </h1>
+      <p className="mt-2 max-w-md text-center text-sm leading-6 text-ink-soft">
+        {t('chatMessages.emptyHint')}
+      </p>
+      <div className="mt-7 grid w-full max-w-[680px] gap-2.5 sm:grid-cols-2">
+        {STARTER_PROMPTS.map(({ key, icon: Icon }) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => onPromptSelect?.(t(`chatMessages.${key}`))}
+            className="group flex min-h-16 items-center gap-3 rounded-xl border border-ink/10 bg-paper-2/50 px-4 py-3 text-left text-sm leading-5 text-ink-soft transition-all hover:-translate-y-0.5 hover:border-ember/45 hover:bg-paper hover:text-ink hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/50"
+          >
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-paper text-ember ring-1 ring-ink/10 transition-colors group-hover:bg-ember-soft">
+              <Icon className="h-4 w-4" aria-hidden="true" />
+            </span>
+            <span>{t(`chatMessages.${key}`)}</span>
+          </button>
+        ))}
+      </div>
+    </section>
   )
 }
 
@@ -179,6 +222,7 @@ export default function ChatMessages({
   onOpenInPreview,
   onExpandCompaction,
   onQuoteSelection,
+  onPromptSelect,
 }) {
   const { t, lang } = useT()
   const hasMessages = messages.length > 0
@@ -654,7 +698,7 @@ export default function ChatMessages({
               )}
             </AnimatePresence>
           </>
-        ) : <div className="min-h-0 flex-1" aria-hidden="true" />}
+        ) : <NewConversationWelcome onPromptSelect={onPromptSelect} />}
       </div>
       {/* #11 浮动「回到底部」按钮 — 离底超过 80px 才显示 */}
       {!atBottom && messages.length > 0 && (

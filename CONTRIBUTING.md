@@ -25,11 +25,16 @@ git clone https://github.com/lichangjiang932-ship-it/your-model-atelier.git
 cd your-model-atelier
 npm ci
 cp .env.example .env
+npm run hooks:install
 npm run dev
 ```
 
 Use a non-production model credential in your local `.env`. The file is
 ignored by Git.
+
+The pre-commit hook runs the production dependency license check and uses
+Gitleaks for staged secret scanning when Gitleaks is installed. CI always runs
+the complete dependency audit and repository-history secret scan.
 
 ## Branches and commits
 

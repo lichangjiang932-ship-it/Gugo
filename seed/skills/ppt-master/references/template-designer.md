@@ -364,10 +364,14 @@ This section describes downstream reuse. The `Template_Designer` role itself is 
 
 ```
 templates/layouts/
-├── google_style/      # Google Material Design style
 ├── academic_defense/  # Academic defense style
-└── 招商银行/          # China Merchants Bank brand style
+├── government_blue/   # Government briefing style
+└── pixel_retro/       # Pixel-inspired general style
 ```
+
+The open-source distribution contains general-purpose templates only. Customer,
+company, institution, and trademark-bearing templates must be kept in a private
+asset pack and must not be copied into this repository.
 
 ---
 

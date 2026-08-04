@@ -35,6 +35,8 @@
     "test:coverage": "node scripts/run-tests.js --coverage",
     "i18n:check": "node --test tests/i18nHardcoded.test.js tests/i18n.test.js",
     "debt:check": "node --test tests/codeDebt.test.js",
+    "licenses": "node scripts/check-licenses.mjs",
+    "hooks:install": "git config core.hooksPath .githooks",
     "serve": "node server/start.js",
     "hub": "node server/hub/index.js",
     "local": "npm run build && npm run serve",
