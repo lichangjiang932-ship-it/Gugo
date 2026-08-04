@@ -5,7 +5,7 @@ import test from 'node:test'
 test('router returns async handlers so errorBoundary can observe rejected promises', () => {
   const source = fs.readFileSync(new URL('../server/appServer.js', import.meta.url), 'utf8')
 
-  assert.match(source, /return handleAuthBillingRequest\(req, res, \w+\(\)\)/)
+  assert.match(source, /return handleAuthAccountRequest\(req, res, \w+\(\)\)/)
   assert.match(source, /return handleModelStatusRequest\(req, res\)/)
   assert.match(source, /return handleSystemDiagnosticsRequest\(req, res\)/)
   assert.match(source, /return handleModelProxyRequest\(req, res\)/)

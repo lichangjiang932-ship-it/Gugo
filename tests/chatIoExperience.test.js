@@ -80,7 +80,7 @@ test('message time, model, and latency reveal with copy actions on hover or focu
   assert.match(assistantMeta, /formatMessageTime\(msg\.timestamp, lang\)/)
   assert.match(assistantMeta, /chatMessages\.model/)
   assert.match(assistantMeta, /chatMessages\.latency/)
-  assert.doesNotMatch(assistantMeta, /chatMessages\.credits/)
+  assert.doesNotMatch(assistantMeta, /creditsCharged|creditsBalance|billingError/)
   assert.match(stylesSource, /@media \(hover: none\), \(pointer: coarse\)[\s\S]*?\.chat-message-actions,\s*\.chat-message-meta\s*\{[\s\S]*?opacity:\s*1;[\s\S]*?pointer-events:\s*auto;/)
 })
 

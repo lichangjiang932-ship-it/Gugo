@@ -30,7 +30,6 @@ function Group({ title, children }) {
 export default function SettingsDiagnosticsPanel({ diagnostics, message, loading, onRefresh, onTest }) {
   const model = diagnostics?.model
   const endpoint = diagnostics?.endpoint
-  const billing = diagnostics?.billing
   const mail = diagnostics?.mail
 
   return (
@@ -69,14 +68,9 @@ export default function SettingsDiagnosticsPanel({ diagnostics, message, loading
         {endpoint?.remoteModels?.length ? <div className="flex flex-wrap gap-1.5">{endpoint.remoteModels.map((name) => <span key={name} className="px-2 py-1 rounded border border-ink-fade/40 text-xs text-ink-soft bg-paper">{name}</span>)}</div> : null}
       </Group>
 
-      <Group title="模型列表与积分倍率">
+      <Group title="可用模型">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-          {(model?.models || []).map((item) => <div key={item.name} className="p-3 border border-ink-fade/30 rounded-md flex items-center justify-between"><span className="text-sm text-ink">{item.name}</span><span className="font-mono text-xs text-ember">x{item.multiplier}</span></div>)}
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <Info label="每 1K Token 基准" value={`${billing?.basePer1k ?? '-'} 积分`} />
-          <Info label="计费 Max Tokens" value={String(billing?.maxTokens ?? '-')} />
-          <Info label="充值套餐" value={`${billing?.packages?.length ?? 0} 个`} />
+          {(model?.models || []).map((item) => <div key={item.name} className="p-3 border border-ink-fade/30 rounded-md"><span className="text-sm text-ink">{item.name}</span></div>)}
         </div>
       </Group>
 

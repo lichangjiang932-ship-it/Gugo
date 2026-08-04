@@ -9,7 +9,7 @@
  */
 
 // ★ batchF P1: /api/tools/* 现在强制鉴权,前端必须带 token,
-//   否则未登录用户能直接调搜索/抓取消耗后端资源(也消耗别人的免费额度).
+//   否则未登录用户能直接调用搜索/抓取并消耗后端资源。
 import { getAuthToken } from '../accountClient.js'
 
 import { z } from 'zod'
@@ -714,7 +714,6 @@ async function execWebSearch(args) {
       query,
       results: (data.results || []).map((r) => ({ title: r.title, url: r.url, snippet: r.snippet })),
     }),
-    billing: data.billing || null,
   }
 }
 
@@ -729,7 +728,6 @@ async function execFetchUrl(args) {
       truncated: !!data.truncated,
       markdown: data.markdown || '',
     }),
-    billing: data.billing || null,
   }
 }
 
@@ -1284,11 +1282,10 @@ export async function executeToolCall(call, options = {}) {  const { maxRetries 
       const output = await fn(parsedArgs)
       const ok = output && typeof output === 'object' && typeof output.ok === 'boolean' ? output.ok : true
       const content = typeof output === 'string' ? output : output.content
-      const billing = typeof output === 'string' ? null : output.billing
       const artifact = typeof output === 'string' ? null : (output.artifact || null)
       // Feature 8: manage_todos 返回的 todos 字段直传 caller,用于 dispatch SET_TODOS
       const todos = typeof output === 'string' ? null : (output.todos || null)
-      return { ok, content, billing, artifact, todos, attempts: attempt + 1 }
+      return { ok, content, artifact, todos, attempts: attempt + 1 }
     } catch (err) {
       lastErr = err
       if (err?.code === 'PATH_NOT_AUTHORIZED') {
@@ -1318,10 +1315,9 @@ export async function executeToolCall(call, options = {}) {  const { maxRetries 
           const output = await fn(parsedArgs)
           const ok = output && typeof output === 'object' && typeof output.ok === 'boolean' ? output.ok : true
           const content = typeof output === 'string' ? output : output.content
-          const billing = typeof output === 'string' ? null : output.billing
           const artifact = typeof output === 'string' ? null : (output.artifact || null)
           const todos = typeof output === 'string' ? null : (output.todos || null)
-          return { ok, content, billing, artifact, todos, attempts: usedAttempts }
+          return { ok, content, artifact, todos, attempts: usedAttempts }
         } catch (retryError) {
           lastErr = retryError
           break

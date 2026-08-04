@@ -9,7 +9,7 @@ process.env.APP_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-social
 async function setup({ runText = 'agent reply', describeAttachments = null, inboundPolicy = 'open' } = {}) {
   const dbMod = await import('../server/db.js')
   dbMod.closeDb()
-  const authMod = await import('../server/adapters/billingAuth.js')
+  const authMod = await import('../server/adapters/authAccount.js')
   const agentMod = await import('../server/services/agentStore.js')
   const integrationsMod = await import('../server/services/integrationsStore.js')
   const dispatcher = await import('../server/services/channelDispatcher.js')

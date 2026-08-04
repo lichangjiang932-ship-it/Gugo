@@ -4,7 +4,7 @@ import { z } from 'zod'
 // ★ #18: SSE chunk schema — 后端可能返回畸形 JSON,先验证再消费
 // 后端发的所有 chunk 形态:
 //   { ok: false, error }                       — 错误
-//   { done: true, billing?, injectedMemoryIds? } — 流结束
+//   { done: true, injectedMemoryIds?, finishReason? } — 流结束
 //   { toolCalls: [...], finishReason? }        — 工具调用帧
 //   { delta: string }                          — 文本增量
 const SSE_CHUNK_SCHEMA = z.union([
@@ -18,7 +18,6 @@ const SSE_CHUNK_SCHEMA = z.union([
   }),
   z.object({
     done: z.literal(true),
-    billing: z.any().optional(),
     injectedMemoryIds: z.array(z.string()).optional(),
     // 'length' = 被 max_tokens 截断;'stop' = 模型自己说完了
     finishReason: z.string().nullable().optional(),
@@ -131,13 +130,13 @@ export async function callModelThroughProxy({ messages, modelName, agentId, fetc
   })
   const data = await parseProxyResponse(response)
   if (!data?.reply) throw new Error('模型返回为空。')
-  return data
+  return { reply: data.reply }
 }
 
 /**
  * ★ #8: 异步生成会话标题 — 用首句喂模型 8 字内总结。
  * 失败/空返回时返回 null,让调用方 fallback 到截断。
- * 不计入工具调用 / 计费(后端可按需 free pass,本期前端只做调用)。
+ * 不计入用户发起的工具调用统计（本期前端只负责调用）。
  */
 export async function summarizeSessionTitle({ firstUserContent, modelName, fetchImpl = fetch, signal }) {
   const text = String(firstUserContent || '').trim()
@@ -160,7 +159,7 @@ export async function summarizeSessionTitle({ firstUserContent, modelName, fetch
           { role: 'user', content: text.slice(0, 600) },
         ],
         modelName,
-        purpose: 'title', // 给后端一个标记,可按需做计费豁免
+      purpose: 'title', // 给后端一个标记，便于区分标题摘要与普通对话
       }),
       signal,
     })
@@ -321,11 +320,10 @@ export async function* callModelThroughProxyStream({ messages, modelName, agentI
             error.partialText = partialText
             throw error
           }
-          // done 帧可能带 billing / memory ids,让上层在 return 前完成收尾 meta.
-          if (chunk.billing || chunk.injectedMemoryIds || chunk.finishReason) {
+          // done 帧可能带 memory ids / finishReason,让上层在 return 前完成收尾 meta.
+          if (chunk.injectedMemoryIds || chunk.finishReason) {
             yield {
-              type: 'billing',
-              billing: chunk.billing,
+              type: 'complete',
               injectedMemoryIds: chunk.injectedMemoryIds || [],
               // ★ 'length' 说明是被 token 上限砍断的,不是模型不想说。
               finishReason: chunk.finishReason || null,

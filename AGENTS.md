@@ -289,7 +289,7 @@ adapters 层用 `profileForConfig(config, env)` 拿画像。
 
 ### 12.3 超时错误**不准带 `status`**
 
-用 `modelTimeoutError()` 造，它给 `code: 'MODEL_TIMEOUT'` 但不给 status。原因：曾经把超时伪装成 `status: 504`，而 `isProviderFailoverError` 判定 `>= 500` 可转移 —— 结果「本地模型慢了一下」= **静默切到云端 provider + 按云端价扣积分**，用户既不知道换了模型也不知道为什么被扣钱。
+用 `modelTimeoutError()` 造，它给 `code: 'MODEL_TIMEOUT'` 但不给 status。原因：曾经把超时伪装成 `status: 504`，而 `isProviderFailoverError` 判定 `>= 500` 可转移 —— 结果「本地模型慢了一下」= **静默切到云端 provider 并产生意外的上游 API 成本**，用户既不知道换了模型，也无法控制预算。
 
 同理 `modelRetry.js` 里 `MODEL_TIMEOUT` 不重试：对着单槽推理服务器重试 3 次只会更慢。
 
@@ -317,9 +317,9 @@ adapters 层用 `profileForConfig(config, env)` 拿画像。
 
 `isContextLengthError` 要认各家的说法（llama.cpp 说 `exceeds the available context size`、有的返 413/500），别只认 OpenAI 那套文案。
 
-### 12.9 本地模型不计费
+### 12.9 本地模型不产生上游 API 成本
 
-聊天和**工具调用**都要豁免（`toolProxy.js` 那处曾经漏掉，导致积分不够时本地 agent 任务直接 402）。`isLocalEndpoint` 认回环 + RFC1918 私网段 + Tailscale + `.local`/`.lan`，别只认 `127.0.0.1`。
+本地端点不应计入可选的上游 API 美元成本预算。`isLocalEndpoint` 认回环 + RFC1918 私网段 + Tailscale + `.local`/`.lan`，别只认 `127.0.0.1`。
 
 ### 12.10 不准给「工作量」设紧上限
 

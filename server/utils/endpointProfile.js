@@ -86,7 +86,7 @@ function toHostname(baseUrl) {
  *   - 局域网另一台机器上的 Ollama(192.168.x.x)—— 家用最常见的部署
  *   - Docker 容器互访(172.17-31.x.x)
  *   - Tailscale / ZeroTier 组网(100.64.0.0/10)
- * 漏判的后果是:按云端超时砍流、按云端计费扣积分、允许 failover 到云端。
+ * 漏判的后果是:按云端超时砍流,并可能错误地 failover 到云端。
  */
 function isPrivateIPv4(hostname) {
   const parts = hostname.split('.')
@@ -111,7 +111,7 @@ function isPrivateIPv6(hostname) {
 
 /**
  * 这个端点是不是「自己人」—— 本机、局域网、或私有组网。
- * 是的话:不计费、给慷慨超时、不允许静默 failover 到云端。
+ * 是的话:给更宽松的超时,且不允许静默 failover 到云端。
  */
 export function isLocalEndpoint(baseUrl = '') {
   const url = toHostname(baseUrl)
@@ -335,7 +335,7 @@ export function resolveEndpointProfile({
 
   // ---- failover ----
   // ★ 本地端点默认永不 failover。原来「本地慢 → 超时 → 伪装成 504 →
-  // 被判定为可故障转移 → 静默切到云端 provider → 按云端价扣积分」,
+  // 被判定为可故障转移 → 静默切到云端 provider,改变隐私与成本边界」,
   // 用户用自己的显卡却被扣钱,而且完全不知道换了模型。
   // 想要这个行为的人可以在 provider 设置里显式打开。
   const failoverOverride = tribool(safeOverrides.failoverEnabled)

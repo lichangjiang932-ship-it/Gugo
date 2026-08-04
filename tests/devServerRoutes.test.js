@@ -25,7 +25,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 /**
  * dev 侧除了 fallbackApiPlugin,还有几个专用插件也在处理路由:
  *   - modelProxyPlugin  → /api/model/*
- *   - authBillingPlugin → /api/auth/*、/api/account/*、/api/billing/*
+ *   - authAccountPlugin → /api/auth/*、/api/account/*
  * 这些前缀在 fallbackApiPlugin 里看不到字面量，但确实被处理了，不算漏。
  *
  * ⚠ 注意这里**故意不包含** '/api/tools'。toolProxyPlugin 只兜住
@@ -37,7 +37,6 @@ const DEV_HANDLED_BY_PLUGIN = [
   '/api/model',
   '/api/auth',
   '/api/account',
-  '/api/billing',
   '/api/health',
   // toolProxy 处理的通用网络工具，逐个点名，不用通配
   '/api/tools/search',

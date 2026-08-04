@@ -60,11 +60,13 @@ test('right workbench exposes files, side chat, browser, and terminal tools', ()
   assert.match(workbench, /message\?\.meta\?\.artifactSource \|\| message\?\.content/)
 })
 
-test('message cost and balance follow the same hover reveal behavior as copy actions', () => {
+test('assistant metadata keeps model and latency details without account balance UI', () => {
   const messages = read('../src/pages/ChatSplit/ChatMessages.jsx')
 
-  assert.match(messages, /data-testid="assistant-message-credits"/)
-  assert.match(messages, /assistant-message-credits"[\s\S]*?opacity-0 pointer-events-none[\s\S]*?group-hover\/message:opacity-100/)
+  assert.match(messages, /data-testid="assistant-message-meta"/)
+  assert.match(messages, /chatMessages\.model/)
+  assert.match(messages, /chatMessages\.latency/)
+  assert.doesNotMatch(messages, /creditsCharged|creditsBalance|billingError/)
   assert.match(messages, /group-focus-within\/message:opacity-100/)
 })
 

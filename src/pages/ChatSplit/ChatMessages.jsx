@@ -573,21 +573,6 @@ export default function ChatMessages({
                           <span>{t('chatMessages.latency', { value: msg.meta.latency })}</span>
                         )}
                       </div>
-                      {msg.meta?.type === 'model_reply' && typeof msg.meta.creditsCharged === 'number' && msg.meta.creditsCharged > 0 && (
-                        <span
-                          data-testid="assistant-message-credits"
-                          className="chat-message-meta opacity-0 pointer-events-none transition-opacity group-hover/message:opacity-100 group-hover/message:pointer-events-auto group-focus-within/message:opacity-100 group-focus-within/message:pointer-events-auto"
-                          title={t('chatMessages.credits', { value: msg.meta.creditsCharged })}
-                        >
-                          {t('chatMessages.credits', { value: msg.meta.creditsCharged })}
-                          {typeof msg.meta.creditsBalance === 'number' && (
-                            <span className="text-ink-fade/70"> · {t('chatMessages.balance', { value: msg.meta.creditsBalance })}</span>
-                          )}
-                        </span>
-                      )}
-                      {msg.meta?.type === 'model_reply' && msg.meta.billingError && (
-                        <span className="chat-message-meta text-red-500 opacity-0 pointer-events-none transition-opacity group-hover/message:opacity-100 group-hover/message:pointer-events-auto group-focus-within/message:opacity-100 group-focus-within/message:pointer-events-auto" title={msg.meta.billingError}>{t('chatMessages.billingFailed')}</span>
-                      )}
                       <div className="flex-1" />
                       {/* ★ #19: 删除 shouldOfferPptxExport/shouldOfferOfficeExport 双路径,
                           artifact 卡片走 RightPreviewPane 自带的导出,卡不出 artifact 时也不再单独显示导出按钮(避免内容嗅探不一致). */}

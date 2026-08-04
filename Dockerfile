@@ -27,6 +27,8 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY server ./server
 COPY shared ./shared
+COPY seed ./seed
+COPY plugins ./plugins
 COPY .env.example .env.example
 
 # Data volume mount point

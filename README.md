@@ -1,5 +1,7 @@
 # Gugo
 
+**简体中文** | [English](README.en.md)
+
 > 本地/内网可用的 Web AI 工作台 — Agent · Skill · Memory · Tool · Subagent · Job  
 > 开浏览器就用，无需安装客户端。
 
@@ -8,7 +10,7 @@
   <img src="https://img.shields.io/badge/Node.js-20-10b981?logo=node.js" alt="Node 20" />
   <img src="https://img.shields.io/badge/SQLite-WAL-2e8fa3" alt="SQLite WAL" />
   <img src="https://img.shields.io/badge/Vite-8-ec4899?logo=vite" alt="Vite 8" />
-  <img src="https://img.shields.io/badge/tests-CI%20passing-success" alt="tests" />
+  <a href="https://github.com/lichangjiang932-ship-it/your-model-atelier/actions/workflows/ci.yml"><img src="https://github.com/lichangjiang932-ship-it/your-model-atelier/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" /></a>
   <img src="https://img.shields.io/badge/release-v0.10.0-blue" alt="v0.10.0" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT" />
 </p>
@@ -23,12 +25,12 @@
 |---|---|---|---|
 | 形态 | Web（浏览器即用） | Electron 桌面 | CLI |
 | 部署 | 单 Node 进程 + SQLite | 多端打包 | 终端 |
-| 多用户 | 内建（user_id 隔离 + 邮箱密码登录 + 积分） | 单机 | 单机 |
+| 多用户 | 内建（user_id 隔离 + 邮箱密码登录） | 单机 | 单机 |
 | Artifact 实时预览 | PPT / Word / Excel / React / HTML Deck | 不支持 | 不支持 |
 | 知识图谱 | entity / relation / observation 三要素 + 图搜索 | 无 | 无 |
 | 后台作业 | 完整生命周期（创建/入队/重试/取消/步骤追踪） | 简化 | 无 |
 | MCP | stdio + SSE | 是 | 是 |
-| 子代理 | 隔离子代理 + 工具白名单 | 是 | 是 |
+| 子代理 | 独立上下文 + 工具白名单 | 是 | 是 |
 | Skill 系统 | 内置 + 可导入 + 内置 SQLite 系统库 | 是 | 是 |
 | 3D 沉浸式入口 | Three.js 粒子封面页 | 无 | 无 |
 | 独立 Hub | 已实现（`HUB_ENABLED=1`） | 是 | 无 |
@@ -42,7 +44,7 @@
 ### Agent 工作台
 - 多模型流式 SSE 输出 · 工具调用循环 · `[[choice:...]]` 结构化选项交互
 - 12 + N 种内置技能（PPT 大师 / 网页生成 / 调研 / 翻译 / 代码审查 / 项目规划 …）
-- 子代理（explore / plan / general）隔离运行，独立工具循环和上下文压缩
+- 子代理（explore / plan / general）在独立上下文中运行，拥有独立工具循环和上下文压缩
 
 ### Artifact 渲染（差异化亮点）
 - PPT：layout 控制（cover / section / kpi / chart / statement / split / process / quote / bullets / end）
@@ -93,20 +95,20 @@
 浏览器 (React SPA)
    │
    ├── /api/* ──→ Node.js HTTP Server（零框架）
-   │      ├── modelProxy.js      ─ OpenAI 兼容代理 + SSE 流
-   │      ├── billingAuth.js     ─ 鉴权 / 密码 / 验证码 / 积分
-   │      ├── jobRuntime.js      ─ 后台作业编排
-   │      ├── subagentRuntime.js ─ 隔离子代理
-   │      ├── skillRegistry.js   ─ 技能系统 + seed
-   │      ├── memoryRoutes.js    ─ 记忆中心
-   │      ├── knowledgeGraph.js  ─ 三要素图
+   │      ├── adapters/modelProxy.js      ─ OpenAI 兼容代理 + SSE 流
+   │      ├── adapters/authAccount.js     ─ 鉴权 / 密码 / 验证码
+   │      ├── services/jobRuntime.js      ─ 后台作业编排
+   │      ├── services/subagentRuntime.js ─ 独立上下文子代理
+   │      ├── services/skillRegistry.js   ─ 技能系统 + seed
+   │      ├── services/memoryStore.js     ─ 记忆中心
+   │      ├── services/knowledgeGraph.js  ─ 三要素图
    │      ├── mcp/               ─ MCP 客户端
-   │      ├── hooksRoutes.js     ─ pre/post tool use hooks
-   │      ├── compactionRoutes.js─ 上下文压缩
-   │      └── reasonixRoutes.js  ─ 钉记忆/TODO/effort
+   │      ├── routes/hooksRoutes.js       ─ pre/post tool use hooks
+   │      ├── routes/compactionRoutes.js  ─ 上下文压缩
+   │      └── routes/reasonixRoutes.js    ─ 钉记忆/TODO/effort
    │
    └── SQLite (WAL, better-sqlite3)
-        ├── users / sessions / ledger / verify_codes
+        ├── users / sessions / verify_codes
         ├── jobs / job_steps / job_artifacts / job_events
         ├── skills / skill_assets / mcp_servers / hooks
         ├── memories / memory_links / pinned_memories / todos
@@ -125,7 +127,7 @@
 
 ## 路线图
 
-详细进度看 [PROGRESS.md](./PROGRESS.md)，发布历史看 [CHANGELOG.md](./CHANGELOG.md)。
+公开路线与问题跟踪见 [GitHub Issues](https://github.com/lichangjiang932-ship-it/your-model-atelier/issues)，发布记录见 [GitHub Releases](https://github.com/lichangjiang932-ship-it/your-model-atelier/releases)。
 
 **已完成**：
 - [x] **v0.5**：plugin SDK 真消费 + agent-template
@@ -133,15 +135,12 @@
 - [x] **v0.7**：跨标签页 storage 同步 + Templates 弹层 preview + import 撞名重命名
 - [x] **v0.8**：Memory 管理视图加 agent 绑定 UI（filter chip / list badge / editor select）
 - [x] **v0.9**：Agent 角色卡 zip 导出/导入（对齐 openhanako）
+- [x] Cron / 调度层（配置和行为见 [调度文档](docs/SCHEDULING.md)）
 
-**进行中 / 下一步**（按 ROI 排，详见 PROGRESS.md）：
-- [ ] Skills 安装机制（plugin 接 `skill-bundle` type）
-- [ ] prompt-template plugin 接 chat slash command
-- [ ] PPT 视觉升级（gradient cover/section + 更多 chart 类型）
-- [ ] 多 agent 频道 / 互调（@agent 委派）
-- [ ] Cron / 调度层（轻提醒 vs 重任务）
+后续计划以 [GitHub Issues](https://github.com/lichangjiang932-ship-it/your-model-atelier/issues)
+和 Milestones 中的公开条目为准，避免在 README 中维护容易过期的内部清单。
 
-历史架构重构进度：[docs/REFOUND_PLAN.md](./docs/REFOUND_PLAN.md)
+参与开发前请阅读 [CONTRIBUTING.md](./CONTRIBUTING.md) 与 [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)。
 
 ---
 
@@ -211,8 +210,7 @@ Cherry Studio 选择 `Streamable HTTP`，URL 填上述 `/mcp` 地址，并添加
 | `MODEL_NAME` | 是 | 默认模型名 | — |
 | `MODEL_API_KEY` | 是 | API key | — |
 | `MODEL_NAMES_VISION` | 否 | 视觉模型名（逗号分隔） | — |
-| `MODEL_MULTIPLIER` | 否 | 积分倍率 | `1.0` |
-| `SMTP_HOST/PORT/USER/PASS` | 否 | 邮箱服务（缺省时控制台打码） | — |
+| `MAIL_SERVER/MAIL_PORT/MAIL_USERNAME/MAIL_PASSWORD` | 否 | 邮箱服务（缺省时开发模式返回验证码） | — |
 | `WORKSPACE_FS_ENABLED` | 否 | 文件系统工具开关 | `0` |
 | `WORKSPACE_SHELL_ENABLED` | 否 | Shell 工具开关 | `0` |
 | `WORKSPACE_GIT_ENABLED` | 否 | Git 工具开关 | `0` |
@@ -231,7 +229,7 @@ Cherry Studio 选择 `Streamable HTTP`，URL 填上述 `/mcp` 地址，并添加
 | `TURN_EVENT_CLEANUP_INTERVAL_MS` | 否 | 聊天事件保留清理检查间隔（毫秒） | `300000` |
 | `APP_DATA_DIR` | 否 | 数据目录 | `server-data/` |
 | `APP_DB_PATH` | 否 | SQLite 路径 | `server-data/app.db` |
-| `PORT` | 否 | HTTP 端口 | `5175` |
+| `SERVER_PORT` | 否 | HTTP 端口 | `.env.example` 为 `5175`，未配置时服务端回退 `5173` |
 
 完整列表见 `.env.example`。
 
@@ -258,20 +256,19 @@ npm test         # 全量自动化测试
 
 ```
 your-model-atelier/
-├── server/                # Node.js 后端 (8000+ 行)
+├── server/                # Node.js HTTP 服务与 SQLite 数据层
 │   ├── appServer.js       # HTTP 入口
-│   ├── db.js              # SQLite + migration v1→v4 + reasonix
-│   ├── middleware.js      # 安全头 / CORS / CSP / 鉴权
-│   ├── modelProxy.js      # OpenAI 兼容代理 + SSE
-│   ├── billingAuth.js     # 验证码 + 密码 + 积分
-│   ├── jobRuntime.js      # 后台作业 + 工具循环
-│   ├── subagentRuntime.js # 隔离子代理
-│   ├── knowledgeGraph.js  # 图谱 CRUD
-│   ├── seedSystemSkills.js# 系统技能种子
-│   ├── mcp/               # MCP 客户端
-│   └── reasonixRoutes.js  # 钉记忆/TODO/effort
+│   ├── db.js              # SQLite schema 与版本迁移
+│   ├── middleware.js      # 安全头 / CORS / CSP
+│   ├── adapters/          # 模型、鉴权、浏览器与工具适配器
+│   ├── routes/            # HTTP API 路由
+│   ├── services/          # Job、子代理、记忆、调度与集成服务
+│   ├── migrations/        # 独立版本的数据库迁移
+│   ├── utils/             # 路径、网络与安全通用工具
+│   └── mcp/               # MCP 客户端与服务端
+├── shared/                # 前后端共享的事件契约
 ├── src/
-│   ├── pages/             # 11 个页面（含 3D CoverPage、ChatSplit）
+│   ├── pages/             # 页面与工作区视图
 │   ├── components/        # 可复用组件
 │   ├── lib/               # 客户端 / 工具 / 解析器
 │   └── store/             # 状态 + 持久化
@@ -279,10 +276,11 @@ your-model-atelier/
 ├── seed/                  # 系统 skill 静态种子
 ├── tests/                 # 自动化测试
 ├── docs/
-│   ├── REFOUND_PLAN.md    # 重构路线图
-│   └── superpowers/
+│   ├── CONFIGURATION.md   # 配置参考
+│   ├── OPERATION_GUIDE.md # 部署与运维
+│   └── SCHEDULING.md      # Cron / 调度说明
 └── .github/workflows/
-    └── ci.yml             # PR / push 自动跑 lint + test + build
+    └── ci.yml             # 测试、覆盖率、安全扫描与镜像构建
 ```
 
 ---

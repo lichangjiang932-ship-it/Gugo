@@ -1,7 +1,7 @@
 /**
  * Test helper:为后台作业/技能等需要鉴权的路由签发一个有效 session token。
  *
- * 实现策略:复用生产 billingAuth 的 issueEmailCode → verifyEmailCode 流程,
+ * 实现策略:复用生产 authAccount 的 issueEmailCode → verifyEmailCode 流程,
  * 这样测试拿到的 token 与真实登录走同一条路径,不需要单独维护「测试模式」分支。
  *
  * 用法:
@@ -9,7 +9,7 @@
  *   const { token, userId } = issueTestSession({ email: 'user@example.com' })
  *   fetch(url, { headers: { Authorization: `Bearer ${token}` } })
  */
-import { issueEmailCode, verifyEmailCode } from '../../server/adapters/billingAuth.js'
+import { issueEmailCode, verifyEmailCode } from '../../server/adapters/authAccount.js'
 
 let counter = 0
 

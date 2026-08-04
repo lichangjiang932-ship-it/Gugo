@@ -324,7 +324,7 @@ function findHunkPosition(lines, oldLines, fromIdx) {
 
 export async function applyPatchTool({ patch, dry_run = false, userId = null } = {}) {
   if (typeof patch !== 'string' || !patch.trim()) throw badReq('patch 必填')
-  // ★ M3.5:限流(dry_run 不计费)
+  // ★ M3.5:限流(dry_run 不计入调用额度)
   if (!dry_run && userId && !patchLimiter.tryConsume(userId, 'apply_patch')) {
     throw badReq('apply_patch 限流:超过 60 次/分钟', 429)
   }

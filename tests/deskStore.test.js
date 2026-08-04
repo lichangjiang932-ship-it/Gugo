@@ -17,7 +17,7 @@ function tmpDir() {
 async function freshModule(dir) {
   process.env.APP_DATA_DIR = dir
   const dbMod = await import(`../server/db.js?desk=${Date.now()}_${Math.random()}`)
-  const authMod = await import(`../server/adapters/billingAuth.js?desk=${Date.now()}_${Math.random()}`)
+  const authMod = await import(`../server/adapters/authAccount.js?desk=${Date.now()}_${Math.random()}`)
   const deskMod = await import(`../server/services/deskStore.js?desk=${Date.now()}_${Math.random()}`)
   const agMod = await import(`../server/services/agentStore.js?desk=${Date.now()}_${Math.random()}`)
   return { dbMod, authMod, deskMod, agMod }

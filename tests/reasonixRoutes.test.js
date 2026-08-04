@@ -12,7 +12,7 @@ function tmpDir() {
 async function freshModule(dir) {
   process.env.APP_DATA_DIR = dir
   const dbMod = await import('../server/db.js')
-  const authMod = await import(`../server/adapters/billingAuth.js?rx=${Date.now()}_${Math.random()}`)
+  const authMod = await import(`../server/adapters/authAccount.js?rx=${Date.now()}_${Math.random()}`)
   const rxMod = await import(`../server/routes/reasonixRoutes.js?rx=${Date.now()}_${Math.random()}`)
   return { dbMod, authMod, rxMod }
 }
@@ -125,15 +125,15 @@ test('session meter: bump and cache hit rate', async () => {
   const { dir, userId } = await makeUser()
   try {
     const { rxMod } = await freshModule(dir)
-    const m1 = rxMod.bumpSessionMeter({ userId, sessionId: 's1', tokensIn: 1000, tokensOut: 200, tokensCached: 800, costCredits: 5 })
+  const m1 = rxMod.bumpSessionMeter({ userId, sessionId: 's1', tokensIn: 1000, tokensOut: 200, tokensCached: 800 })
     assert.equal(m1.turns, 1)
     assert.equal(m1.tokensIn, 1000)
     assert.ok(Math.abs(m1.cacheHitRate - 800 / 1200) < 0.001)
 
-    const m2 = rxMod.bumpSessionMeter({ userId, sessionId: 's1', tokensIn: 500, tokensOut: 100, tokensCached: 480, costCredits: 2 })
+  const m2 = rxMod.bumpSessionMeter({ userId, sessionId: 's1', tokensIn: 500, tokensOut: 100, tokensCached: 480 })
     assert.equal(m2.turns, 2)
     assert.equal(m2.tokensIn, 1500)
-    assert.equal(m2.costCredits, 7)
+  assert.equal('costCredits' in m2, false)
 
     const recents = rxMod.listRecentMeters({ userId })
     assert.equal(recents.length, 1)

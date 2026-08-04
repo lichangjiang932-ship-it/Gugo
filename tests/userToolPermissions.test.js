@@ -18,7 +18,7 @@ const { grantLocalPath } = await import('../server/services/localFileAccessServi
 const { setWorkspaceTrust } = await import('../server/services/workspaceTrustService.js')
 
 function freshUser(id) {
-  return createUser({ id, email: `${id}@example.com`, credits: 0 })
+  return createUser({ id, email: `${id}@example.com` })
 }
 
 test.beforeEach(() => {

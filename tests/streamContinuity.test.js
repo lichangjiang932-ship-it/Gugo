@@ -221,9 +221,9 @@ test('★ 有正文时 finish_reason=length 必须透传 —— 否则「被截�
       dataFrame({ ok: true, done: true, finishReason: 'length' }),
     ]),
   }))
-  const billing = events.find((e) => e.type === 'billing')
-  assert.ok(billing, 'done 帧应产生一个带 finishReason 的事件')
-  assert.equal(billing.finishReason, 'length')
+  const complete = events.find((e) => e.type === 'complete')
+  assert.ok(complete, 'done 帧应产生一个带 finishReason 的事件')
+  assert.equal(complete.finishReason, 'length')
 })
 
 test('正常结束时 finishReason 是 stop,不误报截断', async () => {
@@ -234,6 +234,6 @@ test('正常结束时 finishReason 是 stop,不误报截断', async () => {
       dataFrame({ ok: true, done: true, finishReason: 'stop' }),
     ]),
   }))
-  const billing = events.find((e) => e.type === 'billing')
-  assert.equal(billing?.finishReason, 'stop')
+  const complete = events.find((e) => e.type === 'complete')
+  assert.equal(complete?.finishReason, 'stop')
 })

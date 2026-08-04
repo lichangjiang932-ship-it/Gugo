@@ -26,7 +26,7 @@ test('file artifact executors require an explicit per-turn grant', async () => {
   assert.equal(allowed.artifact.type, 'pptx')
 })
 
-test('executeToolCall preserves backend tool billing for chat-level accounting', async () => {
+test('executeToolCall returns normalized content from authenticated web search', async () => {
   const originalFetch = globalThis.fetch
   const originalWindow = globalThis.window
   globalThis.window = {
@@ -42,7 +42,6 @@ test('executeToolCall preserves backend tool billing for chat-level accounting',
     return new Response(JSON.stringify({
       ok: true,
       results: [{ title: 'Result', url: 'https://example.com', snippet: 'Snippet' }],
-      billing: { creditsCharged: 2, credits: 998 },
     }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
@@ -56,7 +55,8 @@ test('executeToolCall preserves backend tool billing for chat-level accounting',
     })
 
     assert.equal(result.ok, true)
-    assert.deepEqual(result.billing, { creditsCharged: 2, credits: 998 })
+    assert.match(result.content, /Result/)
+    assert.match(result.content, /https:\/\/example\.com/)
   } finally {
     globalThis.fetch = originalFetch
     globalThis.window = originalWindow

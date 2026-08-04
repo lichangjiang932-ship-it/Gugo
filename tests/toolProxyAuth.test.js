@@ -6,9 +6,8 @@ import os from 'node:os'
 import { handleToolProxyRequest } from '../server/adapters/toolProxy.js'
 import {
   issueEmailCode,
-  rechargeAccount,
   verifyEmailCode,
-} from '../server/adapters/billingAuth.js'
+} from '../server/adapters/authAccount.js'
 import { getDb } from '../server/db.js'
 
 // 每个测试进程使用独立数据库目录，避免并行测试冲突
@@ -82,8 +81,6 @@ test('unauthenticated tool requests do not consume the authenticated rate bucket
     email: 'rate-user@example.com',
     code: issueEmailCode({ email: 'rate-user@example.com', code: '333333' }).devCode,
   })
-  rechargeAccount({ token, packageId: 'local-10' })
-
   const res = createRes()
   await handleToolProxyRequest(createReq({ ip, token }), res)
 
@@ -99,8 +96,6 @@ test('tool rate limit ignores forged X-Forwarded-For unless TRUST_PROXY is enabl
       email: 'rate-forwarded-user@example.com',
       code: issueEmailCode({ email: 'rate-forwarded-user@example.com', code: '444444' }).devCode,
     })
-    rechargeAccount({ token, packageId: 'local-10' })
-
     const socketIp = '198.51.100.77'
     for (let i = 0; i < 20; i += 1) {
       const res = createRes()

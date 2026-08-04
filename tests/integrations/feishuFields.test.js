@@ -8,7 +8,7 @@ import path from 'node:path'
 process.env.APP_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-feishu-fields-'))
 
 const { listProviderRegistry, upsertIntegration } = await import('../../server/services/integrationsStore.js')
-const authMod = await import('../../server/adapters/billingAuth.js')
+const authMod = await import('../../server/adapters/authAccount.js')
 
 test('feishu provider: 必填字段简化到 appId + appSecret', () => {
   const providers = listProviderRegistry()
