@@ -26,7 +26,11 @@ function sharedWorkspaceTrusted() {
 }
 
 function realPath(input) {
-  return fs.realpathSync.native ? fs.realpathSync.native(input) : fs.realpathSync(input)
+  // Keep one canonical representation across Node APIs on Windows. The
+  // native variant expands 8.3 aliases (for example RUNNER~1) while the
+  // regular variant preserves the representation returned by os.tmpdir().
+  // Mixing the two makes an already-authorized path appear different.
+  return fs.realpathSync(input)
 }
 
 function samePath(left, right) {
