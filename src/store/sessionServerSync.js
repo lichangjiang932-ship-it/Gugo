@@ -110,6 +110,7 @@ export function createSessionMutationDispatcher({
   applyServerAction,
   replaceMessages,
   deleteSession,
+  resolveSessionMetadata = null,
   onError = () => {},
 }) {
   const queues = new Map()
@@ -123,7 +124,11 @@ export function createSessionMutationDispatcher({
     const initialState = getState()
     const sessionId = resolveSessionMutationTarget(initialState, action)
     const initialSession = initialState?.sessions?.find((candidate) => candidate.id === sessionId)
-    if (!sessionId || !isServerBackedSession(initialSession)) {
+    if (!sessionId || !initialSession) {
+      dispatchImmediate(action)
+      return undefined
+    }
+    if (!isServerBackedSession(initialSession) && typeof resolveSessionMetadata !== 'function') {
       dispatchImmediate(action)
       return undefined
     }
@@ -131,6 +136,23 @@ export function createSessionMutationDispatcher({
     const previous = queues.get(sessionId) || Promise.resolve()
     const operation = previous.catch(() => false).then(async () => {
       try {
+        const currentSession = getState()?.sessions?.find((candidate) => candidate.id === sessionId)
+        if (currentSession && !isServerBackedSession(currentSession)) {
+          const metadata = await resolveSessionMetadata({ sessionId })
+          if (!metadata) {
+            dispatchImmediate(action)
+            return true
+          }
+          if (!Number.isInteger(metadata.revision)) {
+            const error = new Error('Session metadata is missing a valid revision')
+            error.code = 'INVALID_SESSION_REVISION'
+            throw error
+          }
+          applyServerAction({
+            type: 'APPLY_SERVER_SESSION_METADATA',
+            payload: { sessionId, session: metadata },
+          })
+        }
         const plan = projectSessionMutation({
           state: getState(),
           action,

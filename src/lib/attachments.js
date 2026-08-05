@@ -38,3 +38,15 @@ export function describeAttachmentPrompt(attachments = []) {
   const suffix = attachments.length > 4 ? ` 等 ${attachments.length} 个附件` : ''
   return `请分析附件：${names}${suffix}`
 }
+
+export function buildUserDisplayContent(prompt, attachments = []) {
+  const content = typeof prompt === 'string' ? prompt : String(prompt || '')
+  const items = Array.isArray(attachments) ? attachments : []
+  if (!items.length) return content
+  const labels = items.map((item) => {
+    const name = String(item?.name || 'attachment')
+    const size = Number.isFinite(Number(item?.sizeKB)) ? Number(item.sizeKB) : 0
+    return `[\u9644\u4ef6: ${name}, ${size} KB]`
+  }).join('\n')
+  return content ? `${content}\n\n${labels}` : labels
+}

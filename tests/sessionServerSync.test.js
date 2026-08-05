@@ -61,6 +61,16 @@ function testReducer(state, action) {
       serverRevision: revision,
     }))
   }
+  if (action.type === 'APPLY_SERVER_SESSION_METADATA') {
+    const { sessionId, session: metadata } = action.payload
+    return replaceSession(state, sessionId, (session) => ({
+      ...session,
+      serverRevision: metadata.revision,
+      ...(Object.prototype.hasOwnProperty.call(metadata, 'archivedAt')
+        ? { archivedAt: metadata.archivedAt }
+        : {}),
+    }))
+  }
   return state
 }
 
@@ -228,6 +238,43 @@ test('local-only sessions retain immediate reducer behavior', () => {
 
   const result = dispatch({ type: 'CLEAR_CURRENT_SESSION' })
   assert.equal(result, undefined)
+  assert.deepEqual(state.sessions[0].messages, [])
+  assert.equal(remoteCalls, 0)
+})
+
+test('upgraded sessions probe server revision before replacing messages', async () => {
+  let state = createState({ synced: false })
+  const requests = []
+  const dispatch = createSessionMutationDispatcher({
+    getState: () => state,
+    reduceState: testReducer,
+    dispatchImmediate: (action) => { state = testReducer(state, action) },
+    applyServerAction: (action) => { state = testReducer(state, action) },
+    resolveSessionMetadata: async () => ({ id: 's1', revision: 7 }),
+    replaceMessages: async (request) => { requests.push(request); return { revision: 8 } },
+    deleteSession: async () => ({ ok: true }),
+  })
+
+  await dispatch({ type: 'CLEAR_CURRENT_SESSION' })
+  assert.equal(requests[0].expectedRevision, 7)
+  assert.deepEqual(requests[0].messages, [])
+  assert.equal(state.sessions[0].serverRevision, 8)
+})
+
+test('unknown sessions fall back to local mutation only after a server 404 probe', async () => {
+  let state = createState({ synced: false })
+  let remoteCalls = 0
+  const dispatch = createSessionMutationDispatcher({
+    getState: () => state,
+    reduceState: testReducer,
+    dispatchImmediate: (action) => { state = testReducer(state, action) },
+    applyServerAction: (action) => { state = testReducer(state, action) },
+    resolveSessionMetadata: async () => null,
+    replaceMessages: async () => { remoteCalls += 1; return { revision: 1 } },
+    deleteSession: async () => { remoteCalls += 1; return { ok: true } },
+  })
+
+  await dispatch({ type: 'CLEAR_CURRENT_SESSION' })
   assert.deepEqual(state.sessions[0].messages, [])
   assert.equal(remoteCalls, 0)
 })

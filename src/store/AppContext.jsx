@@ -39,6 +39,7 @@ import {
 } from './indexedDbPersistence.js'
 import {
   deleteSessionRemote,
+  getSessionMetadataRemote,
   replaceSessionMessagesRemote,
 } from '../lib/sessionClient.js'
 import {
@@ -317,7 +318,7 @@ function reducer(state, action) {
       if (!state.activeSessionId) return state
 
       const userMsg = {
-        id: crypto.randomUUID?.() ?? `${Date.now()}-u`,
+        id: payload?.id || crypto.randomUUID?.() || `${Date.now()}-u`,
         role: 'user',
         content,
         timestamp: Date.now(),
@@ -373,6 +374,27 @@ function reducer(state, action) {
             messages: mergeServerSessionMessages(session.messages, snapshot.messages),
             serverRevision: revision,
             updatedAt: Math.max(Number(session.updatedAt) || 0, revision),
+          }
+        }),
+      }
+    }
+
+    case 'APPLY_SERVER_SESSION_METADATA': {
+      const { sessionId, session: metadata } = action.payload || {}
+      const revision = Number(metadata?.revision)
+      if (!sessionId || !Number.isInteger(revision)) return state
+      return {
+        ...state,
+        sessions: state.sessions.map((session) => {
+          if (session.id !== sessionId) return session
+          if (Number.isInteger(session.serverRevision) && revision < session.serverRevision) return session
+          return {
+            ...session,
+            ...(Object.prototype.hasOwnProperty.call(metadata, 'archivedAt')
+              ? { archivedAt: metadata.archivedAt }
+              : {}),
+            serverRevision: revision,
+            updatedAt: Math.max(Number(session.updatedAt) || 0, Number(metadata.updatedAt) || 0),
           }
         }),
       }
@@ -950,6 +972,7 @@ export function AppProvider({ children }) {
       deleteSession: ({ sessionId, expectedRevision }) => (
         deleteSessionRemote(sessionId, { expectedRevision })
       ),
+      resolveSessionMetadata: ({ sessionId }) => getSessionMetadataRemote(sessionId),
       onError: (error, { action, sessionId }) => {
         console.warn(
           `[AppContext] ${action.type} server session sync failed for ${sessionId}:`,

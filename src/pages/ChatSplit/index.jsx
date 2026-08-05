@@ -2,7 +2,7 @@ import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { useNavigate } from '../../lib/router.jsx'
 import { useAppContext } from '../../store/AppContext'
 import { SKILLS } from '../../data.js'
-import { describeAttachmentPrompt } from '../../lib/attachments.js'
+import { buildUserDisplayContent, describeAttachmentPrompt } from '../../lib/attachments.js'
 import { getModelStatus, summarizeSessionTitle } from '../../lib/modelClient.js'
 import { buildToolSpecs } from '../../lib/tools/index.js'
 import { SERVER_TURN_TOOL_TOGGLE_NAMES } from '../../lib/serverToolConfig.js'
@@ -27,7 +27,7 @@ import { parseChatAttachments } from '../../lib/chatAttachmentParser.js'
 import { readContextUsageVisible, readDesktopPetVisible, readWorkbenchOpen, writeContextUsageVisible, writeDesktopPetVisible, writeWorkbenchOpen } from '../../lib/chatUiPreferences.js'
 import useChatApprovals from './useChatApprovals.js'
 import useDirectoryApproval from './useDirectoryApproval.js'
-import { runServerChatTurn } from './serverTurnFlow.js'
+import { buildServerTurnMessageIds, runServerChatTurn } from './serverTurnFlow.js'
 import { serializeServerTurnHistory } from './serverTurnHistory.js'
 import useServerTurnResume from './useServerTurnResume.js'
 import useVoiceRecognition from './useVoiceRecognition.js'
@@ -352,7 +352,11 @@ export default function ChatSplit() {
         ? (activeSession?.messages || [])
         : (activeSession?.messages || []).slice(0, historyLimit)
       const historyMessages = serializeServerTurnHistory(sourceMessages)
-      dispatch({ type: 'SEND_MESSAGE', payload: { content, attachments: explicitAttachments } })
+      const turnId = crypto.randomUUID?.() ?? `turn-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      const turnMessageIds = buildServerTurnMessageIds(turnId)
+      const turnAttachments = explicitAttachments ?? attachments
+      const displayContent = buildUserDisplayContent(content, turnAttachments)
+      dispatch({ type: 'SEND_MESSAGE', payload: { id: turnMessageIds.userId, content: displayContent } })
       setWorkbenchMessage('')
 
       const isFreshSession = activeSession && (
@@ -408,6 +412,7 @@ export default function ChatSplit() {
         agentId: effectiveAgentId,
         attachments,
         content,
+        displayContent,
         dispatch,
         explicitAttachments,
         historyMessages,
@@ -428,6 +433,7 @@ export default function ChatSplit() {
         toast,
         toolApprovalResolveRef,
         toolsConfig: state.toolsConfig,
+        turnId,
         userPrompt,
       })
 

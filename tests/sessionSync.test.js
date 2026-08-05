@@ -21,6 +21,9 @@ const {
   upsertSession,
 } = await import('../server/services/sessionStore.js')
 const { appendTurnEvent } = await import('../server/services/turnEventStore.js')
+const { expandStoredMessages } = await import('../server/services/turnMessageContext.js')
+const { normalizeSessionMessagesForServer } = await import('../src/lib/sessionClient.js')
+const { normalizeServerSessionSnapshot } = await import('../src/lib/turnClient.js')
 const { createTurnEvent } = await import('../shared/turnEvents.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
@@ -143,6 +146,71 @@ test('CAS replacement preserves stored model context and rejects a stale revisio
     }),
     (error) => error instanceof SessionRevisionConflictError && error.currentRevision === result.revision,
   )
+})
+
+test('imported tool results survive snapshot editing and full-session replacement', { concurrency: false }, () => {
+  const { userId } = issueTestSession({ email: 'session-imported-tools@example.com' })
+  const sessionId = 'session-imported-tools'
+  upsertSession({ id: sessionId, userId, title: 'Imported tools', createdAt: 1, updatedAt: 1 })
+  upsertMessage({
+    id: 'unrelated-user', userId, sessionId, role: 'user', content: 'delete me', createdAt: 1,
+  })
+  upsertMessage({
+    id: 'imported-assistant',
+    userId,
+    sessionId,
+    role: 'assistant',
+    content: 'I read the file.',
+    modelContext: {
+      toolCalls: [{
+        id: 'imported-read-1',
+        type: 'function',
+        function: { name: 'read_file', arguments: '{"path":"README.md"}' },
+      }],
+    },
+    createdAt: 2,
+  })
+  upsertMessage({
+    id: 'imported-tool-result',
+    userId,
+    sessionId,
+    role: 'tool',
+    content: '{"ok":true,"content":"README contents"}',
+    modelContext: { toolCallId: 'imported-read-1', name: 'read_file' },
+    createdAt: 3,
+  })
+  upsertMessage({
+    id: 'keep-user', userId, sessionId, role: 'user', content: 'keep me', createdAt: 4,
+  })
+
+  const before = getSessionSnapshot({ userId, sessionId })
+  const browserSnapshot = normalizeServerSessionSnapshot({ ...before, complete: true })
+  const assistant = browserSnapshot.messages.find((message) => message.id === 'imported-assistant')
+  assert.equal(assistant.meta.toolTrace[1].tool_call_id, 'imported-read-1')
+  assert.match(assistant.meta.toolTrace[1].content, /README contents/)
+
+  const editedMessages = browserSnapshot.messages.filter((message) => message.id !== 'unrelated-user')
+  replaceSessionMessages({
+    userId,
+    sessionId,
+    expectedRevision: before.revision,
+    now: 10,
+    messages: normalizeSessionMessagesForServer(editedMessages),
+  })
+
+  const stored = listMessages({ userId, sessionId })
+  assert.deepEqual(stored.map((message) => message.id), ['imported-assistant', 'keep-user'])
+  assert.equal(stored[0].modelContext.toolCalls, undefined)
+  assert.equal(stored[0].modelContext.toolTrace[1].tool_call_id, 'imported-read-1')
+
+  const expanded = expandStoredMessages(stored)
+  const calls = expanded.filter((message) => message.role === 'assistant' && message.tool_calls)
+  const results = expanded.filter((message) => message.role === 'tool')
+  assert.equal(calls.length, 1)
+  assert.equal(results.length, 1)
+  assert.equal(calls[0].tool_calls[0].id, 'imported-read-1')
+  assert.equal(results[0].tool_call_id, 'imported-read-1')
+  assert.match(results[0].content, /README contents/)
 })
 
 test('session mutation routes return 409 for stale revisions and active turns', { concurrency: false }, async () => {

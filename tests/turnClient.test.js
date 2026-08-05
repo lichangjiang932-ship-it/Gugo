@@ -4,6 +4,7 @@ import { createTurnEvent } from '../shared/turnEvents.js'
 import {
   dispatchTurnEvent,
   fetchServerSessionSnapshot,
+  normalizeServerSessionSnapshot,
   reconnectDelayForAttempt,
   replayServerTurn,
   runServerTurn,
@@ -338,6 +339,45 @@ test('fetchServerSessionSnapshot aggregates every page before normalizing messag
   assert.equal(snapshot.revision, 7)
   assert.deepEqual(snapshot.messages.map((message) => message.id), ['m1', 'm2', 'm3'])
   assert.equal(snapshot.messages[1].meta.serverAuthoritative, true)
+})
+
+test('server snapshot pairs imported tool calls and supplies explicit unavailable results', () => {
+  const snapshot = normalizeServerSessionSnapshot({
+    complete: true,
+    messages: [{
+      id: 'imported-assistant',
+      role: 'assistant',
+      content: 'I used two tools.',
+      createdAt: 1,
+      modelContext: {
+        toolCalls: [
+          { id: 'call-found', type: 'function', function: { name: 'read_file', arguments: '{"path":"README.md"}' } },
+          { id: 'call-missing', type: 'function', function: { name: 'grep', arguments: '{"query":"TODO"}' } },
+        ],
+      },
+    }, {
+      id: 'imported-tool-result',
+      role: 'tool',
+      content: '{"ok":true,"content":"README"}',
+      createdAt: 2,
+      modelContext: { toolCallId: 'call-found', name: 'read_file' },
+    }],
+  })
+
+  assert.equal(snapshot.messages.length, 1)
+  const trace = snapshot.messages[0].meta.toolTrace
+  assert.deepEqual(trace[0].tool_calls.map((call) => call.id), ['call-found', 'call-missing'])
+  assert.equal(trace[1].tool_call_id, 'call-found')
+  assert.match(trace[1].content, /README/)
+  assert.equal(trace[2].tool_call_id, 'call-missing')
+  assert.match(trace[2].content, /tool_result_unavailable/)
+  assert.deepEqual(
+    snapshot.messages[0].meta.toolCalls.map(({ id, status }) => ({ id, status })),
+    [
+      { id: 'call-found', status: 'success' },
+      { id: 'call-missing', status: 'error' },
+    ],
+  )
 })
 
 test('fetchServerSessionSnapshot retries from offset zero when page revisions differ', async () => {

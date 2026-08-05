@@ -35,6 +35,12 @@ export function buildServerToolsConfig(toolsConfig = {}) {
   }
 }
 
+export function buildServerTurnMessageIds(turnId) {
+  const normalized = String(turnId || '').trim()
+  if (!normalized) throw new Error('turnId is required')
+  return { userId: `${normalized}:user`, assistantId: `${normalized}:assistant` }
+}
+
 function appendArtifact(artifact, artifacts, dispatchMessage) {
   const filename = artifact.filename || 'artifact'
   const type = filename.includes('.') ? filename.split('.').pop().toLowerCase() : 'file'
@@ -48,6 +54,7 @@ export async function runServerChatTurn({
   agentId,
   attachments,
   content,
+  displayContent,
   dispatch,
   explicitAttachments,
   historyMessages,
@@ -68,6 +75,7 @@ export async function runServerChatTurn({
   toast,
   toolApprovalResolveRef,
   toolsConfig,
+  turnId,
   userPrompt,
 }) {
   const controller = new AbortController()
@@ -78,7 +86,7 @@ export async function runServerChatTurn({
   const serverArtifacts = []
   let sawAssistantText = false
   const initialArtifactType = artifactTypeForSkill(skillId)
-  const assistantMessageId = crypto.randomUUID?.() ?? `${Date.now() + 1}-a`
+  const { assistantId: assistantMessageId } = buildServerTurnMessageIds(turnId)
   const messageTarget = { sessionId, messageId: assistantMessageId }
   const dispatchMessage = (type, payload) => dispatch({ type, payload, ...messageTarget })
   dispatch({
@@ -103,8 +111,9 @@ export async function runServerChatTurn({
     const { terminal, sessionSnapshot } = await runServerTurn({
       sessionId,
       content: serverContent,
-      displayContent: content,
+      displayContent,
       modelName,
+      turnId,
       history: historyMessages,
       agentId,
       skillIds: skillId ? [skillId] : [],

@@ -130,8 +130,15 @@ export default function LeftRail() {
     dispatch({ type: archived ? 'UNARCHIVE_SESSION' : 'ARCHIVE_SESSION', payload: session.id })
     if (!getAuthToken()) return
     try {
-      if (archived) await unarchiveSessionRemote(session.id)
-      else await archiveSessionRemote(session.id)
+      const result = archived
+        ? await unarchiveSessionRemote(session.id)
+        : await archiveSessionRemote(session.id)
+      if (result?.session) {
+        dispatch({
+          type: 'APPLY_SERVER_SESSION_METADATA',
+          payload: { sessionId: session.id, session: result.session },
+        })
+      }
     } catch (error) {
       if (/session not found/i.test(error.message || '')) return
       dispatch({ type: archived ? 'ARCHIVE_SESSION' : 'UNARCHIVE_SESSION', payload: session.id })

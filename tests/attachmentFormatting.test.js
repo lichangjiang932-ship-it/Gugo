@@ -3,8 +3,16 @@ import assert from 'node:assert/strict'
 
 import {
   buildUserContentWithAttachments,
+  buildUserDisplayContent,
   formatAttachmentForPrompt,
 } from '../src/lib/attachments.js'
+
+test('builds the same durable display text used by local and server messages', () => {
+  assert.equal(
+    buildUserDisplayContent('Review', [{ name: 'notes.md', sizeKB: 1.2 }]),
+    'Review\n\n[附件: notes.md, 1.2 KB]',
+  )
+})
 
 test('formats text attachments as bounded prompt context', () => {
   const formatted = formatAttachmentForPrompt({

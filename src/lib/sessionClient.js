@@ -137,6 +137,23 @@ export async function unarchiveSessionRemote(sessionId, { fetchImpl = fetch } = 
   return parseResponse(response)
 }
 
+export async function getSessionMetadataRemote(sessionId, { fetchImpl = fetch } = {}) {
+  const response = await fetchImpl(
+    `/api/sessions/${encodeURIComponent(sessionId)}/snapshot?limit=1&offset=0`,
+    { headers: authHeaders() },
+  )
+  if (response.status === 404) return null
+  const result = await parseResponse(response)
+  const snapshot = result?.snapshot
+  if (!snapshot?.session || !Number.isInteger(snapshot.revision)) {
+    const error = new Error('Session metadata request returned an invalid revision')
+    error.name = 'SessionRequestError'
+    error.code = 'INVALID_SESSION_REVISION'
+    throw error
+  }
+  return { ...snapshot.session, revision: snapshot.revision }
+}
+
 export async function replaceSessionMessagesRemote(
   sessionId,
   { expectedRevision, messages, fetchImpl = fetch } = {},

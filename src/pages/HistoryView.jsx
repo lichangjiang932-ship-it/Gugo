@@ -147,8 +147,15 @@ export default function HistoryView() {
     dispatch({ type: next, payload: item.id })
     try {
       if (getAuthToken()) {
-        if (isArchived) await unarchiveSessionRemote(item.id)
-        else await archiveSessionRemote(item.id)
+        const result = isArchived
+          ? await unarchiveSessionRemote(item.id)
+          : await archiveSessionRemote(item.id)
+        if (result?.session) {
+          dispatch({
+            type: 'APPLY_SERVER_SESSION_METADATA',
+            payload: { sessionId: item.id, session: result.session },
+          })
+        }
       }
     } catch (error) {
       if (!/session not found/i.test(error?.message || '')) {

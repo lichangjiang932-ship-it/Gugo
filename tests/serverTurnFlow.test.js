@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { buildServerToolsConfig } from '../src/pages/ChatSplit/serverTurnFlow.js'
+import { buildServerToolsConfig, buildServerTurnMessageIds } from '../src/pages/ChatSplit/serverTurnFlow.js'
 
 test('buildServerToolsConfig converts boolean switches into stable explicit lists', () => {
   assert.deepEqual(buildServerToolsConfig({
@@ -25,4 +25,12 @@ test('buildServerToolsConfig converts boolean switches into stable explicit list
 test('buildServerToolsConfig tolerates missing and malformed state', () => {
   assert.deepEqual(buildServerToolsConfig(), { enabled: [], disabled: [] })
   assert.deepEqual(buildServerToolsConfig(null), { enabled: [], disabled: [] })
+})
+
+test('server turn message ids share the durable turn id and reject missing ids', () => {
+  assert.deepEqual(buildServerTurnMessageIds('turn-1'), {
+    userId: 'turn-1:user',
+    assistantId: 'turn-1:assistant',
+  })
+  assert.throws(() => buildServerTurnMessageIds('  '), /turnId is required/)
 })
