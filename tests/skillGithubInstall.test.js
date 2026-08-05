@@ -294,3 +294,17 @@ test('fetchSkillPackFromGithub rejects paths outside the requested skill folder'
   assert.equal(result.ok, false)
   assert.match(result.reason, /越界路径/)
 })
+
+test('S1: extractDirectoryEntries detects truncated contents responses', () => {
+  // 普通目录 → 数组
+  assert.deepEqual(__test.extractDirectoryEntries([
+    { path: 'a.txt', type: 'file' },
+  ]).map((e) => e.path), ['a.txt'])
+  // 截断响应 { truncated: true, content: [...] } → 仍返回条目数组（调用方靠 truncated 判断拒绝）
+  const truncated = __test.extractDirectoryEntries({ truncated: true, content: [{ path: 'a.txt' }] })
+  assert.ok(Array.isArray(truncated))
+  // 非目录结构 → null
+  assert.equal(__test.extractDirectoryEntries({ type: 'file', name: 'x' }), null)
+  assert.equal(__test.extractDirectoryEntries(null), null)
+  assert.equal(__test.extractDirectoryEntries('not-an-object'), null)
+})

@@ -612,3 +612,52 @@ test('TurnEngine claims a legacy local session before resuming an unfinished tur
   assert.equal(engine.getTurn({ userId, sessionId, turnId }).status, 'completed')
   assert.equal(db.prepare('SELECT user_id FROM sessions WHERE token = ?').get(sessionId).user_id, userId)
 })
+
+test('I1: startTurn resolves /skill-prefix when caller omits skillIds', async () => {
+  let promptRequest = null
+  const engine = createTestEngine({
+    preparePromptContext: async (request) => {
+      promptRequest = request
+      return { messages: [], effectiveAgentId: null, skillIds: request.skillIds, memoryIds: [] }
+    },
+    runLoop: async () => ({ text: 'done', artifactIds: [], iterations: 0 }),
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId: 'turn-skill-prefix',
+    content: '/connector-operator 帮我查 GitHub 仓库',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId: 'turn-skill-prefix' })
+
+  const started = events('turn-skill-prefix').find((event) => event.type === 'turn.started')
+  assert.deepEqual(started.payload.skillIds, ['connector-operator'])
+  // 模型上下文应剥离前缀，展示层保留原话
+  assert.equal(promptRequest.query, '帮我查 GitHub 仓库')
+  assert.deepEqual(promptRequest.skillIds, ['connector-operator'])
+  assert.equal(started.payload.displayContent, '/connector-operator 帮我查 GitHub 仓库')
+
+  // 显式传了 skillIds 时不覆盖
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId: 'turn-skill-explicit',
+    content: '/ppt-master 做演示',
+    skillIds: ['skill-review'],
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId: 'turn-skill-explicit' })
+  const startedExplicit = events('turn-skill-explicit').find((event) => event.type === 'turn.started')
+  assert.deepEqual(startedExplicit.payload.skillIds, ['skill-review'])
+
+  // 无前缀的普通文本不误解析
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId: 'turn-no-prefix',
+    content: '帮我看看这个项目结构',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId: 'turn-no-prefix' })
+  const startedPlain = events('turn-no-prefix').find((event) => event.type === 'turn.started')
+  assert.deepEqual(startedPlain.payload.skillIds, [])
+})

@@ -325,6 +325,17 @@ function relativeSkillPath(parsed, repoPath) {
   return normalized.startsWith(prefix) ? normalized.slice(prefix.length) : null
 }
 
+/**
+ * 从 GitHub contents API 响应中提取目录条目数组。
+ * 普通目录返回数组；截断的大目录返回 { truncated: true, content: [...] }。
+ * 非目录/异常结构返回 null（调用方据此区分"截断"与"不是目录"）。
+ */
+function extractDirectoryEntries(value) {
+  if (Array.isArray(value)) return value
+  if (Array.isArray(value?.content)) return value.content
+  return null
+}
+
 function serializeResource(bytes, filePath) {
   const extension = path.posix.extname(filePath).toLowerCase()
   let text = null
@@ -356,9 +367,17 @@ async function collectResourceFiles(parsed, revision, options) {
       const listing = await fetchJson(apiUrl, { ...options, deadlineAt })
       if (!listing.ok && listing.status === 404 && relativeDirectory === root) break
       if (!listing.ok) return { ok: false, reason: `读取 GitHub 目录失败: ${relativeDirectory} (${listing.reason || listing.status})` }
-      if (!Array.isArray(listing.value)) return { ok: false, reason: `GitHub 资源路径不是目录: ${relativeDirectory}` }
+      const directoryEntries = extractDirectoryEntries(listing.value)
+      if (directoryEntries == null) {
+        // GitHub contents API 对超过 1000 项的大目录返回 { truncated: true, content: [...] }。
+        // 必须显式拒绝而非静默取部分内容，否则出现"安装成功但内容不全"。
+        const truncated = listing.value?.truncated === true || listing.value?.content?.truncated === true
+        return truncated
+          ? { ok: false, reason: `GitHub 目录超过 1000 项被截断，安装会不完整: ${relativeDirectory}` }
+          : { ok: false, reason: `GitHub 资源路径不是目录: ${relativeDirectory}` }
+      }
 
-      const entries = [...listing.value].sort((a, b) => String(a?.path || '').localeCompare(String(b?.path || '')))
+      const entries = [...directoryEntries].sort((a, b) => String(a?.path || '').localeCompare(String(b?.path || '')))
       for (const entry of entries) {
         const relativePath = relativeSkillPath(parsed, entry?.path)
         if (!relativePath || !(relativePath === root || relativePath.startsWith(`${root}/`))) {
@@ -527,6 +546,7 @@ export const __test = Object.freeze({
   buildApiUrl,
   buildRawUrl,
   detectLicenseText,
+  extractDirectoryEntries,
   fetchRawFile,
   normalizeRepoPath,
   serializeResource,

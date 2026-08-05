@@ -121,3 +121,33 @@ test('seed package validation rejects unsupported binary files and package overf
     fs.rmSync(seedRoot, { recursive: true, force: true })
   }
 })
+
+test('S4: user-owned skill id shadows system seed without UNIQUE conflict', () => {
+  const seedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-seed-conflict-'))
+  const db = createSeedDb()
+  try {
+    // 用户先导入了同名技能（user_id 非 NULL）
+    db.prepare(`INSERT INTO skills
+      (id, user_id, name, description, version, icon, permissions_json, created_at, updated_at)
+      VALUES ('demo-skill', 'user-1', 'User owned', 'Mine', '1', 'user', '[]', 1, 1)`).run()
+    db.prepare(`INSERT INTO skill_assets (skill_id, path, content)
+      VALUES ('demo-skill', 'prompts/system.md', 'user copy')`).run()
+
+    writeSeedSkill(seedRoot)
+    const [result] = seedSystemSkills({ seedRoot, db, silent: true })
+
+    // 优雅跳过，不抛 error、不覆盖用户技能
+    assert.equal(result.status, 'conflict')
+    assert.match(result.reason, /已被用户导入占用/)
+    const row = db.prepare('SELECT user_id, name FROM skills WHERE id = ?').get('demo-skill')
+    assert.equal(row.user_id, 'user-1')
+    assert.equal(row.name, 'User owned')
+    assert.equal(
+      db.prepare("SELECT content FROM skill_assets WHERE skill_id = ? AND path = 'prompts/system.md'").get('demo-skill').content,
+      'user copy',
+    )
+  } finally {
+    db.close()
+    fs.rmSync(seedRoot, { recursive: true, force: true })
+  }
+})

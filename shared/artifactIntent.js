@@ -4,6 +4,24 @@ const SKILL_ARTIFACT_TOOL = Object.freeze({
   excel: 'create_xlsx',
 })
 
+// 常见 PPT/文档/表格类技能 ID → 文件工具映射。技能前缀（如 /ppt-master 做演示）
+// 在 skillId 无法精确命中时按关键词判定，而"做演示"这类短指令没有 artifact 名词，
+// 会漏解锁；这里把已知技能 ID 显式归类，前缀命中即解锁对应工具。
+const SKILL_ID_ALIASES = Object.freeze({
+  ppt: ['ppt', 'ppt-master', 'axippt', 'htmlppt', 'guizang-ppt'],
+  doc: ['doc', 'write-doc'],
+  excel: ['excel', 'analyze-excel'],
+})
+
+export function resolveArtifactToolForSkillId(skillId) {
+  const id = String(skillId || '').toLowerCase()
+  if (SKILL_ARTIFACT_TOOL[id]) return SKILL_ARTIFACT_TOOL[id]
+  for (const [kind, aliases] of Object.entries(SKILL_ID_ALIASES)) {
+    if (aliases.includes(id)) return SKILL_ARTIFACT_TOOL[kind]
+  }
+  return null
+}
+
 const ARTIFACT_TERMS = Object.freeze({
   pptx: /\bpptx?\b|\.pptx?\b|power\s*point|幻灯片|演示文稿|演示稿|路演稿|slide\s*deck|\bslides?\b/gi,
   docx: /\bdocx?\b|\.docx?\b|\bword\b|word\s*文档|文档|报告|会议纪要|纪要|周报|合同|简历|document|report|minutes/gi,
@@ -61,7 +79,7 @@ export function hasExplicitArtifactRequest(prompt = '', type) {
 export function detectArtifactIntent(prompt = '', { skillId = undefined } = {}) {
   const text = String(prompt || '')
   const resolvedSkill = skillId === undefined ? parseArtifactSkillId(text) : skillId
-  const skillTool = resolvedSkill ? SKILL_ARTIFACT_TOOL[String(resolvedSkill).toLowerCase()] || null : null
+  const skillTool = resolvedSkill ? resolveArtifactToolForSkillId(resolvedSkill) : null
   return {
     pptx: skillTool === 'create_pptx' || hasExplicitArtifactRequest(text, 'pptx'),
     docx: skillTool === 'create_docx' || hasExplicitArtifactRequest(text, 'docx'),

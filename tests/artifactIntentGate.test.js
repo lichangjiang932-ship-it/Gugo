@@ -40,6 +40,21 @@ test('explicit ppt request unlocks only create_pptx', () => {
   assert.ok(!names.includes('create_xlsx'))
 })
 
+test('ppt-family skill prefixes unlock create_pptx even without artifact nouns', () => {
+  // S6 回归：/ppt-master 做演示 没有 "PPT/幻灯片" 关键词，但技能前缀必须解锁
+  for (const prompt of [
+    '/ppt-master 做演示',
+    '/axippt 帮我做科技风演示',
+    '/htmlppt 生成网页',
+    '/guizang-ppt 做分享',
+  ]) {
+    assert.equal(detectArtifactIntent(prompt).pptx, true, prompt)
+    assert.equal(detectArtifactIntent(prompt).docx, false, prompt)
+  }
+  // 非文件类技能前缀不得解锁
+  assert.equal(detectArtifactIntent('/connector-operator 帮我查 GitHub').pptx, false)
+})
+
 test('negative and diagnostic PPT mentions never authorize PPT generation', () => {
   for (const prompt of [
     '不要生成 PPT，只在聊天里回答',

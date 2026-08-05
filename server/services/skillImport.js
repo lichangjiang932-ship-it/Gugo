@@ -60,6 +60,11 @@ function validatePackFiles(files) {
     if (typeof content !== 'string') {
       return { ok: false, reason: `技能包文件必须是文本或 Base64 字符串: ${filePath}` }
     }
+    // 与 seed 加载器一致：内容禁止混入控制字节，避免损坏/恶意包把控制字符
+    // 写入 skill_assets 并作为 system 提示词注入。
+    if (hasInvalidTextControls(content)) {
+      return { ok: false, reason: `技能包文件包含非法控制字符: ${filePath}` }
+    }
     const fileBytes = Buffer.byteLength(content, 'utf8')
     if (fileBytes > SKILL_PACK_LIMITS.maxFileBytes) {
       return { ok: false, reason: `技能包文件过大: ${filePath}` }
@@ -71,6 +76,14 @@ function validatePackFiles(files) {
     normalized[filePath] = content
   }
   return { ok: true, files: normalized, totalBytes }
+}
+
+function hasInvalidTextControls(content) {
+  for (let index = 0; index < content.length; index += 1) {
+    const code = content.charCodeAt(index)
+    if (code < 32 && code !== 9 && code !== 10 && code !== 13) return true
+  }
+  return false
 }
 
 export function resolveImportedSkillId(baseId, existingIds = []) {

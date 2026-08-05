@@ -209,6 +209,18 @@ function upsertSystemSkill(db, skillPackage) {
         manifest.id,
       )
     } else {
+      // PRIMARY KEY 是全局唯一 id：用户可能已经导入了同名技能（user_id 非 NULL）。
+      // 此时直接 INSERT 会抛 UNIQUE 冲突导致整个 seed 报 error；改为优雅跳过，
+      // 用户删除自己的同名技能后，下次启动再安装系统版本。
+      const owned = db.prepare('SELECT id FROM skills WHERE id = ? AND user_id IS NOT NULL').get(manifest.id)
+      if (owned) {
+        return {
+          id: manifest.id,
+          status: 'conflict',
+          version: manifest.version,
+          reason: `id 已被用户导入占用，跳过系统种子安装: ${manifest.id}`,
+        }
+      }
       db.prepare(
         'INSERT INTO skills (id, user_id, name, description, version, icon, permissions_json, created_at, updated_at) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?)'
       ).run(
@@ -228,7 +240,9 @@ function upsertSystemSkill(db, skillPackage) {
     )
     for (const file of files) insertAsset.run(manifest.id, file.relPath, file.content)
   })
-  tx()
+  const earlyExit = tx()
+  // 事务内 conflict 分支提前返回了结果（用户占用了该 id），不再落到 installed
+  if (earlyExit) return earlyExit
 
   return {
     id: manifest.id,

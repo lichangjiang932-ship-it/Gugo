@@ -61,6 +61,10 @@ function safeName(s) {
  */
 const userConnections = new Map() // userId → Map<serverId, Connection>
 
+// 正在建立的连接：`${userId}:${serverId}` → Promise<Connection>。
+// 用于 ensureServerConnected 的 in-flight 去重，防止并发 miss 重复 spawn。
+const inFlightConnections = new Map()
+
 let idleSweepTimer = null
 
 function idleTimeoutMs(env = process.env) {
@@ -207,16 +211,35 @@ export async function ensureServerConnected(userId, server) {
   if (map.has(server.id) && map.get(server.id).transport?.isAlive?.()) {
     return touchConnection(map.get(server.id))
   }
-  // 重新连
-  if (map.has(server.id)) {
-    try { map.get(server.id).transport?.stop?.() } catch { /* ignore */ }
-    unregisterToolsForServer(userId, server.id)
+  // in-flight 去重：并发 miss（如两个工具调用同时触发）共享同一次连接建立，
+  // 避免重复 spawn stdio 子进程 / 重复建立 SSE，导致前一个连接泄漏。
+  const pendingKey = `${userId}:${server.id}`
+  const inFlight = inFlightConnections.get(pendingKey)
+  if (inFlight) {
+    try {
+      return await inFlight
+    } catch {
+      // 等待方等到的连接失败了，允许它自己重试一次
+    }
   }
-  const conn = await startConnection(userId, server)
-  map.set(server.id, conn)
-  registerToolsForConnection(userId, server, conn)
-  ensureIdleSweeper()
-  return conn
+  const connecting = (async () => {
+    try {
+      // 重新连
+      if (map.has(server.id)) {
+        try { map.get(server.id).transport?.stop?.() } catch { /* ignore */ }
+        unregisterToolsForServer(userId, server.id)
+      }
+      const conn = await startConnection(userId, server)
+      map.set(server.id, conn)
+      registerToolsForConnection(userId, server, conn)
+      ensureIdleSweeper()
+      return conn
+    } finally {
+      inFlightConnections.delete(pendingKey)
+    }
+  })()
+  inFlightConnections.set(pendingKey, connecting)
+  return connecting
 }
 
 export async function ensureUserServers(userId) {

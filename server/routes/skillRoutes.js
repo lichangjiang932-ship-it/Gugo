@@ -58,7 +58,13 @@ export async function handleSkillRequest(req, res) {
   m = url.pathname.match(/^\/api\/skills\/([a-z0-9_-]+)\/assets\/(.+)$/i)
   if (req.method === 'GET' && m) {
     const [, skillId, rawAssetPath] = m
-    const assetPath = decodeURIComponent(rawAssetPath).replace(/\\/g, '/')
+    let assetPath
+    try {
+      assetPath = decodeURIComponent(rawAssetPath).replace(/\\/g, '/')
+    } catch {
+      // 非法 % 序列（如 %zz）会让 decodeURIComponent 抛 URIError，按 400 处理而非 500
+      return sendJson(res, 400, { error: 'bad path encoding' })
+    }
     if (assetPath.includes('..')) return sendJson(res, 400, { error: 'bad path' })
     const skill = getImportedSkill(skillId, { userId })
     if (!skill) return sendJson(res, 404, { error: 'skill not found' })

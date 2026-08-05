@@ -78,3 +78,11 @@ test('validator rejects oversized prompt and total package payloads', () => {
   assert.match(validateSkillPack(files).reason, /总大小/)
 })
 
+test('S2: validator rejects files containing control characters', () => {
+  // 与 seed 加载器一致：控制字节（如 \x00、\x1b）不得混入技能内容
+  assert.match(validateSkillPack(validPack({ 'prompts/system.md': 'ok\u0000inject' })).reason, /控制字符/)
+  assert.match(validateSkillPack(validPack({ 'assets/script.js': 'var x = 1;\u0007bell' })).reason, /控制字符/)
+  // 合法空白（tab / LF / CR）放行
+  assert.equal(validateSkillPack(validPack({ 'prompts/system.md': 'line 1\n\tline 2\r\nline 3' })).ok, true)
+})
+

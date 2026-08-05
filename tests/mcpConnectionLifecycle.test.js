@@ -118,3 +118,18 @@ test('logout disconnects only the current user MCP connections', async () => {
   assert.equal(getDynamicTool('mcp__Logout_Server__ping', { userId: 'mcp-logout-user' }), null)
   assert.ok(getDynamicTool('mcp__Other_Server__ping', { userId: 'mcp-other-user' }))
 })
+
+test('M1: concurrent ensureServerConnected calls share a single connection', async () => {
+  createUser({ id: 'mcp-inflight-user', email: 'mcp-inflight@example.com' })
+  const server = addServer('mcp-inflight-user', 'mcp-inflight-server', 'Inflight Server')
+
+  // 并发 miss：两个调用同时触发，必须共享同一次 startConnection，不能 spawn 两个进程
+  const [a, b] = await Promise.all([
+    ensureServerConnected('mcp-inflight-user', server),
+    ensureServerConnected('mcp-inflight-user', server),
+  ])
+
+  assert.equal(a, b, '并发调用应返回同一个 connection 实例')
+  assert.equal(getUserCatalog('mcp-inflight-user')[0].connected, true)
+  assert.ok(getDynamicTool('mcp__Inflight_Server__ping', { userId: 'mcp-inflight-user' }))
+})

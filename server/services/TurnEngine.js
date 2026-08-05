@@ -68,6 +68,22 @@ function normalizeOptionalId(value, maxLength = 256) {
   return normalized ? normalized.slice(0, maxLength) : null
 }
 
+/**
+ * I1：turn 链路服务端解析 `/技能前缀`（与 job 链路 resolveJobSkillContext 同规则）。
+ * 调用方（前端/移动端/API）不显式传 skillIds 时，从 content 首词解析技能 ID。
+ * 只在"确实带 /前缀"时返回，避免把普通文本误当技能。
+ */
+function resolveSkillPrefixFromContent(content, skillIds) {
+  const normalized = normalizeIds(skillIds)
+  if (normalized.length) return { skillIds: normalized, content }
+  const match = String(content || '').trim().match(/^\/([a-z0-9_-]+)(?:\s|$)/i)
+  if (!match) return { skillIds: normalized, content }
+  return {
+    skillIds: [match[1].toLowerCase()],
+    content: String(content || '').trim().slice(match[0].length).trim(),
+  }
+}
+
 function importedMessageContext(message, sourceRole) {
   if (sourceRole === 'assistant' && Array.isArray(message?.tool_calls)) {
     return { version: 1, toolCalls: message.tool_calls }
@@ -145,8 +161,12 @@ export class TurnEngine {
     toolsConfig = null,
     authMode = null,
   }) {
-    const text = String(content || '').trim()
-    const displayText = String(displayContent ?? content ?? '').trim() || text
+    const rawText = String(content || '').trim()
+    // I1：调用方未显式传 skillIds 时，服务端解析 `/技能前缀`（对齐 job 链路）。
+    // 模型上下文使用剥离前缀后的正文，展示层保留用户原话。
+    const resolvedSkill = resolveSkillPrefixFromContent(rawText, skillIds)
+    const text = resolvedSkill.content
+    const displayText = String(displayContent ?? rawText ?? '').trim() || text
     if (!userId) throw new TurnEngineError('UNAUTHORIZED', 'Unauthorized', 401)
     if (!sessionId) throw new TurnEngineError('SESSION_REQUIRED', 'sessionId is required')
     if (!text) throw new TurnEngineError('CONTENT_REQUIRED', 'content is required')
@@ -181,7 +201,7 @@ export class TurnEngine {
 
       const createdAt = this.deps.now()
       const normalizedAgentId = normalizeOptionalId(agentId)
-      const normalizedSkillIds = normalizeIds(skillIds)
+      const normalizedSkillIds = normalizeIds(resolvedSkill.skillIds)
       const normalizedToolsConfig = normalizeServerToolsConfig(toolsConfig)
       const existingMessages = this.deps.readMessages({ userId, sessionId, limit: 1 })
       const safeHistory = existingMessages.length === 0 && Array.isArray(history) ? history.slice() : []

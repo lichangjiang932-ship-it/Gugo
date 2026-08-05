@@ -226,3 +226,41 @@ test('imported skills cannot shadow a built-in runtime skill id', async () => {
     await new Promise((resolve) => server.close(resolve))
   }
 })
+
+test('S3: malformed percent-encoding in asset path returns 400 not 500', async () => {
+  const owner = issueTestSession()
+  const server = createAppServer({ getEnv: () => ({}) })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const { port } = server.address()
+
+  try {
+    const baseId = 'bad-encoding-' + process.pid
+    const files = {
+      'skill.json': JSON.stringify({
+        id: baseId,
+        name: 'Bad encoding',
+        description: 'S3 regression',
+        version: '1.0.0',
+        icon: '!',
+        permissions: [],
+      }),
+      'prompts/system.md': 'content',
+    }
+    const importedResponse = await fetch('http://127.0.0.1:' + port + '/api/skills/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + owner.token },
+      body: JSON.stringify({ files }),
+    })
+    assert.equal(importedResponse.status, 201)
+    const imported = await importedResponse.json()
+
+    // 非法 % 序列（%zz 不是合法 hex）过去会让 decodeURIComponent 抛 URIError → 500
+    const badPath = 'http://127.0.0.1:' + port + '/api/skills/' + encodeURIComponent(imported.skill.id) + '/assets/%zz%gg'
+    const response = await fetch(badPath, { headers: { Authorization: 'Bearer ' + owner.token } })
+    assert.equal(response.status, 400)
+    const body = await response.json()
+    assert.match(body.error, /bad path/i)
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
+})
