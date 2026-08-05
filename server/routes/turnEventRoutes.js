@@ -8,6 +8,7 @@ const TERMINAL_EVENTS = new Set(['turn.completed', 'turn.cancelled', 'turn.faile
 const DEFAULT_STREAM_POLL_INTERVAL_MS = 1_000
 const MIN_STREAM_POLL_INTERVAL_MS = 100
 const MAX_STREAM_POLL_INTERVAL_MS = 30_000
+const MAX_TURN_RUN_BODY_BYTES = 16 * 1024 * 1024
 
 export function resolveTurnEventStreamPollInterval(env = process.env) {
   const parsed = Number(env?.TURN_EVENT_STREAM_POLL_INTERVAL_MS)
@@ -139,7 +140,10 @@ export async function handleTurnEventRequest(
     }
 
     if (req.method === 'POST' && url.pathname === '/api/turns/run') {
-      const body = await readJson(req)
+      // The first server-owned turn may import the complete legacy browser
+      // transcript. Keep this endpoint larger than ordinary JSON routes while
+      // retaining a finite cap against accidental or hostile payloads.
+      const body = await readJson(req, { maxBytes: MAX_TURN_RUN_BODY_BYTES })
       const turn = await engine.startTurn({
         userId,
         sessionId: body.sessionId,

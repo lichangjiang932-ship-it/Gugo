@@ -4,7 +4,8 @@ import { useAppContext } from '../../store/AppContext'
 import { SKILLS } from '../../data.js'
 import { describeAttachmentPrompt } from '../../lib/attachments.js'
 import { getModelStatus, summarizeSessionTitle } from '../../lib/modelClient.js'
-import { buildToolSpecs, resolveToolsForMode } from '../../lib/tools/index.js'
+import { buildToolSpecs } from '../../lib/tools/index.js'
+import { SERVER_TURN_TOOL_TOGGLE_NAMES } from '../../lib/serverToolConfig.js'
 import { readStoredModel, resolveInitialModel, resolveSessionModel, writeStoredModel } from '../../lib/modelSelection.js'
 import { isLoggedInLocally } from '../../lib/accountClient.js'
 import { useActiveAgent } from '../../agents/activeAgentContext.js'
@@ -22,12 +23,12 @@ import { useToast } from '../../components/Toast.jsx'
 import { useT } from '../../i18n/I18nProvider.jsx'
 import { recordLocalChatFeedback } from '../../lib/localChatFeedback.js'
 import { fetchCompactionArchive } from '../../lib/compactionClient.js'
-import { trimHistoryWithHysteresis } from '../../lib/historyWindow.js'
 import { parseChatAttachments } from '../../lib/chatAttachmentParser.js'
 import { readContextUsageVisible, readDesktopPetVisible, readWorkbenchOpen, writeContextUsageVisible, writeDesktopPetVisible, writeWorkbenchOpen } from '../../lib/chatUiPreferences.js'
 import useChatApprovals from './useChatApprovals.js'
 import useDirectoryApproval from './useDirectoryApproval.js'
 import { runServerChatTurn } from './serverTurnFlow.js'
+import { serializeServerTurnHistory } from './serverTurnHistory.js'
 import useServerTurnResume from './useServerTurnResume.js'
 import useVoiceRecognition from './useVoiceRecognition.js'
 
@@ -107,7 +108,9 @@ export default function ChatSplit() {
 
   const contextToolSpecs = useMemo(() => {
     try {
-      return buildToolSpecs(resolveToolsForMode(state.toolsConfig || {}))
+      return buildToolSpecs(
+        SERVER_TURN_TOOL_TOGGLE_NAMES.filter((name) => state.toolsConfig?.[name] === true),
+      )
     } catch {
       return []
     }
@@ -348,17 +351,7 @@ export default function ChatSplit() {
       const sourceMessages = historyLimit == null
         ? (activeSession?.messages || [])
         : (activeSession?.messages || []).slice(0, historyLimit)
-      const eligible = sourceMessages
-        .filter((m) => m.role === 'user' || m.role === 'assistant' || m.role === 'tool')
-      const historyMessages = trimHistoryWithHysteresis(eligible)
-        .map((m) => {
-          let content = typeof m.content === 'string' ? m.content : ''
-          // tool 消息通常有大量 JSON，截断
-          if (m.role === 'tool' && content.length > 2000) {
-            content = content.slice(0, 2000) + `\n${t('chatReliability.truncated')}`
-          }
-          return { role: m.role, content, name: m.name || undefined, tool_call_id: m.tool_call_id || undefined }
-        })
+      const historyMessages = serializeServerTurnHistory(sourceMessages)
       dispatch({ type: 'SEND_MESSAGE', payload: { content, attachments: explicitAttachments } })
       setWorkbenchMessage('')
 

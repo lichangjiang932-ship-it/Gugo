@@ -4,7 +4,6 @@ const TOOLS = [
   { id: 'create_pptx', name: '生成 PPT 文件', desc: '直接生成可预览、可下载的 PPTX 卡片。' },
   { id: 'create_docx', name: '生成 Word 文件', desc: '直接产出 DOCX 文档或报告。' },
   { id: 'create_xlsx', name: '生成 Excel 文件', desc: '直接产出 XLSX 表格。' },
-  { id: 'create_react_component', name: 'React 预览工件', desc: '生成可交互的单文件 React 原型。' },
   { id: 'list_directory', name: '浏览本地目录', desc: '列出已授权工作区或本地文件夹的内容。' },
   { id: 'read_file', name: '读取本地文件', desc: '读取已授权路径内的 UTF-8 文件。' },
   { id: 'write_file', name: '写入本地文件', desc: '在已获读写授权的路径内创建或覆盖文件。' },

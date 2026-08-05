@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { callBackgroundModelWithTools } from '../adapters/modelProxy.js'
+import { callBackgroundModel, callBackgroundModelWithTools } from '../adapters/modelProxy.js'
 import { createTurnEvent } from '../../shared/turnEvents.js'
 import { releaseApprovalsForTurn } from './approvalGate.js'
 import { runToolLoop, SERVER_TOOL_SPECS } from './toolLoopRuntime.js'
@@ -20,6 +20,7 @@ import {
 } from './turnMessageContext.js'
 import { prepareTurnPromptContext } from './turnPromptContext.js'
 import { normalizeServerToolsConfig, resolveTurnToolSpecs } from './turnToolSpecs.js'
+import { scheduleAutoMemoryExtraction } from './autoMemoryService.js'
 
 const TERMINAL_TYPES = new Set(['turn.completed', 'turn.cancelled', 'turn.failed'])
 
@@ -34,6 +35,10 @@ export class TurnEngineError extends Error {
 
 function activeKey(userId, sessionId, turnId) {
   return `${userId}\u0000${sessionId}\u0000${turnId}`
+}
+
+function sessionKey(userId, sessionId) {
+  return `${userId}\u0000${sessionId}`
 }
 
 function finalClarificationText(result) {
@@ -96,14 +101,17 @@ export class TurnEngine {
     readApprovalMode = resolveApprovalMode,
     preparePromptContext = prepareTurnPromptContext,
     resolveToolSpecs = resolveTurnToolSpecs,
+    scheduleMemoryExtraction = scheduleAutoMemoryExtraction,
+    runMemoryModel = callBackgroundModel,
     env = process.env,
   } = {}) {
     this.deps = {
       runLoop, runModel, executeTool, appendEvent, lastEvent, replayEvents,
       readSession, claimSession, writeSession, readMessages, writeMessage, idFactory, now, toolSpecs,
-      readApprovalMode, preparePromptContext, resolveToolSpecs, env,
+      readApprovalMode, preparePromptContext, resolveToolSpecs, scheduleMemoryExtraction, runMemoryModel, env,
     }
     this.active = new Map()
+    this.startingSessions = new Map()
   }
 
   getTurn({ userId, sessionId, turnId }) {
@@ -115,6 +123,13 @@ export class TurnEngine {
       status: publicStatus(last, this.active.has(key)),
       lastEvent: last,
     } : null
+  }
+
+  hasActiveSession({ userId, sessionId } = {}) {
+    if (!userId || !sessionId) return false
+    if (this.startingSessions.has(sessionKey(userId, sessionId))) return true
+    const prefix = `${userId}\u0000${sessionId}\u0000`
+    return [...this.active.keys()].some((key) => key.startsWith(prefix))
   }
 
   async startTurn({
@@ -135,81 +150,89 @@ export class TurnEngine {
     if (!userId) throw new TurnEngineError('UNAUTHORIZED', 'Unauthorized', 401)
     if (!sessionId) throw new TurnEngineError('SESSION_REQUIRED', 'sessionId is required')
     if (!text) throw new TurnEngineError('CONTENT_REQUIRED', 'content is required')
-    let session = this.deps.readSession({ userId, sessionId })
-    if (!session && authMode === 'local') {
-      session = this.#claimLegacySession({ userId, sessionId, authMode })
-    }
-    if (!session) {
-      try {
-        session = this.deps.writeSession({
-          id: sessionId,
-          userId,
-          title: displayText.slice(0, 80) || 'Untitled',
-          createdAt: this.deps.now(),
-        })
-      } catch (error) {
-        if (error instanceof SessionOwnershipError || error?.code === 'SESSION_OWNERSHIP_CONFLICT') {
-          throw new TurnEngineError('SESSION_NOT_FOUND', 'session not found', 404)
-        }
-        const wrapped = new TurnEngineError('SESSION_CREATE_FAILED', 'failed to create session', 500)
-        wrapped.cause = error
-        throw wrapped
+    const startingKey = sessionKey(userId, sessionId)
+    this.startingSessions.set(startingKey, (this.startingSessions.get(startingKey) || 0) + 1)
+    try {
+      let session = this.deps.readSession({ userId, sessionId })
+      if (!session && authMode === 'local') {
+        session = this.#claimLegacySession({ userId, sessionId, authMode })
       }
-    }
-    const existing = this.deps.lastEvent({ userId, sessionId, turnId })
-    if (existing) {
-      throw new TurnEngineError('TURN_EXISTS', 'turn already exists; use resume', 409)
-    }
+      if (!session) {
+        try {
+          session = this.deps.writeSession({
+            id: sessionId,
+            userId,
+            title: displayText.slice(0, 80) || 'Untitled',
+            createdAt: this.deps.now(),
+          })
+        } catch (error) {
+          if (error instanceof SessionOwnershipError || error?.code === 'SESSION_OWNERSHIP_CONFLICT') {
+            throw new TurnEngineError('SESSION_NOT_FOUND', 'session not found', 404)
+          }
+          const wrapped = new TurnEngineError('SESSION_CREATE_FAILED', 'failed to create session', 500)
+          wrapped.cause = error
+          throw wrapped
+        }
+      }
+      const existing = this.deps.lastEvent({ userId, sessionId, turnId })
+      if (existing) {
+        throw new TurnEngineError('TURN_EXISTS', 'turn already exists; use resume', 409)
+      }
 
-    const createdAt = this.deps.now()
-    const normalizedAgentId = normalizeOptionalId(agentId)
-    const normalizedSkillIds = normalizeIds(skillIds)
-    const normalizedToolsConfig = normalizeServerToolsConfig(toolsConfig)
-    const existingMessages = this.deps.readMessages({ userId, sessionId, limit: 1 })
-    const safeHistory = existingMessages.length === 0 && Array.isArray(history) ? history.slice(-200) : []
-    safeHistory.forEach((message, index) => {
-      const sourceRole = ['user', 'assistant', 'system', 'tool'].includes(message?.role) ? message.role : null
-      const role = sourceRole === 'tool' && !message?.tool_call_id ? 'system' : sourceRole
-      if (!role || typeof message?.content !== 'string') return
+      const createdAt = this.deps.now()
+      const normalizedAgentId = normalizeOptionalId(agentId)
+      const normalizedSkillIds = normalizeIds(skillIds)
+      const normalizedToolsConfig = normalizeServerToolsConfig(toolsConfig)
+      const existingMessages = this.deps.readMessages({ userId, sessionId, limit: 1 })
+      const safeHistory = existingMessages.length === 0 && Array.isArray(history) ? history.slice() : []
+      safeHistory.forEach((message, index) => {
+        const sourceRole = ['user', 'assistant', 'system', 'tool'].includes(message?.role) ? message.role : null
+        const role = sourceRole === 'tool' && !message?.tool_call_id ? 'system' : sourceRole
+        if (!role || typeof message?.content !== 'string') return
+        this.deps.writeMessage({
+          id: `${turnId}:history:${index}`,
+          userId,
+          sessionId,
+          role,
+          modelContext: importedMessageContext(message, sourceRole),
+          content: sourceRole === 'tool' ? `[历史工具结果]\n${message.content}` : message.content,
+          createdAt: createdAt - safeHistory.length + index,
+          updatedAt: createdAt,
+        })
+      })
       this.deps.writeMessage({
-        id: `${turnId}:history:${index}`,
+        id: `${turnId}:user`, userId, sessionId, role: 'user', content: displayText,
+        modelContext: { version: 1, turnId },
+        createdAt, updatedAt: createdAt,
+      })
+      const emitter = this.#createEmitter({ userId, sessionId, turnId, sequence: 0 })
+      await emitter('turn.started', {
+        content: text,
+        displayContent: displayText,
+        modelName: modelName || null,
+        agentId: normalizedAgentId,
+        skillIds: normalizedSkillIds,
+        toolsConfig: normalizedToolsConfig,
+        userMessageId: `${turnId}:user`,
+        importedHistoryCount: safeHistory.length,
+      })
+      this.#schedule({
         userId,
         sessionId,
-        role,
-        modelContext: importedMessageContext(message, sourceRole),
-        content: sourceRole === 'tool' ? `[历史工具结果]\n${message.content}` : message.content,
-        createdAt: createdAt - safeHistory.length + index,
-        updatedAt: createdAt,
+        turnId,
+        content: text,
+        modelName,
+        agentId: normalizedAgentId,
+        skillIds: normalizedSkillIds,
+        toolsConfig: normalizedToolsConfig,
+        emitter,
       })
-    })
-    this.deps.writeMessage({
-      id: `${turnId}:user`, userId, sessionId, role: 'user', content: displayText,
-      modelContext: { version: 1, turnId },
-      createdAt, updatedAt: createdAt,
-    })
-    const emitter = this.#createEmitter({ userId, sessionId, turnId, sequence: 0 })
-    await emitter('turn.started', {
-      content: text,
-      displayContent: displayText,
-      modelName: modelName || null,
-      agentId: normalizedAgentId,
-      skillIds: normalizedSkillIds,
-      toolsConfig: normalizedToolsConfig,
-      userMessageId: `${turnId}:user`,
-      importedHistoryCount: safeHistory.length,
-    })
-    this.#schedule({
-      userId,
-      sessionId,
-      turnId,
-      content: text,
-      modelName,
-      agentId: normalizedAgentId,
-      skillIds: normalizedSkillIds,
-      toolsConfig: normalizedToolsConfig,
-      emitter,
-    })
-    return this.getTurn({ userId, sessionId, turnId })
+      return this.getTurn({ userId, sessionId, turnId })
+    } finally {
+      const remainingStarts = (this.startingSessions.get(startingKey) || 1) - 1
+      if (remainingStarts > 0) this.startingSessions.set(startingKey, remainingStarts)
+      else this.startingSessions.delete(startingKey)
+    }
   }
 
   async resumeTurn({ userId, sessionId, turnId, authMode = null }) {
@@ -425,6 +448,21 @@ export class TurnEngine {
         clarification: result?.clarification || null,
         interrupted: !!result?.interrupted,
       })
+      try {
+        this.deps.scheduleMemoryExtraction({
+          userId,
+          sessionId,
+          agentId: promptContext.effectiveAgentId || agentId || null,
+          messages: historyMessages,
+          assistantText: text,
+          callModel: ({ messages: memoryMessages }) => this.deps.runMemoryModel({
+            messages: memoryMessages,
+            userId,
+          }),
+        })
+      } catch {
+        // Automatic memory extraction is best-effort and must not change turn completion.
+      }
     } catch (error) {
       if (signal.aborted || error?.name === 'AbortError') {
         await emitter('turn.cancelled', { reason: error?.message || 'Cancelled by user' })

@@ -9,6 +9,11 @@ test('buildServerToolsConfig converts boolean switches into stable explicit list
     read_file: true,
     bash_exec: false,
     web_search: true,
+    create_react_component: true,
+    create_mermaid: false,
+    create_chart: true,
+    create_svg: true,
+    create_html_app: true,
     ignored: 'true',
     empty: null,
   }), {

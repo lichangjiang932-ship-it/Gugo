@@ -3,6 +3,7 @@ import { buildLocalPathEvidenceInstruction, buildLocalPathToolInstruction } from
 import { dispatchTurnEvent, runServerTurn } from '../../lib/turnClient.js'
 import { TASK_STATUS, HISTORY_STATUS } from '../../store/taskStatus.js'
 import { artifactTypeForSkill, buildChatFailureMessage, getVisibleModelErrorMessage } from '../../lib/chatFlowGuards.js'
+import { isServerTurnToolToggle } from '../../lib/serverToolConfig.js'
 
 export function isUserStopped(error) {
   return error?.name === 'AbortError' || error?.code === 'USER_STOPPED'
@@ -24,7 +25,7 @@ export function buildServerToolsConfig(toolsConfig = {}) {
   const disabled = new Set()
   for (const [rawName, value] of Object.entries(toolsConfig || {})) {
     const name = String(rawName || '').trim()
-    if (!name) continue
+    if (!isServerTurnToolToggle(name)) continue
     if (value === true) enabled.add(name)
     else if (value === false) disabled.add(name)
   }

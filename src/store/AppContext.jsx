@@ -37,6 +37,14 @@ import {
   readPersistedSnapshot,
   writePersistedSnapshot,
 } from './indexedDbPersistence.js'
+import {
+  deleteSessionRemote,
+  replaceSessionMessagesRemote,
+} from '../lib/sessionClient.js'
+import {
+  createSessionMutationDispatcher,
+  mergeServerSessionMessages,
+} from './sessionServerSync.js'
 
 const TAB_INSTANCE_ID = globalThis.crypto?.randomUUID?.() || `tab-${Date.now()}-${Math.random().toString(36).slice(2)}`
 const ACTIVE_PERSISTENCE_CONTROLLERS = new Set()
@@ -362,11 +370,45 @@ function reducer(state, action) {
           if (session.id !== sessionId || revision < (Number(session.serverRevision) || 0)) return session
           return {
             ...session,
-            messages: snapshot.messages,
+            messages: mergeServerSessionMessages(session.messages, snapshot.messages),
             serverRevision: revision,
             updatedAt: Math.max(Number(session.updatedAt) || 0, revision),
           }
         }),
+      }
+    }
+
+    case 'APPLY_SERVER_SESSION_MESSAGES': {
+      const { sessionId, messages, revision } = action.payload || {}
+      if (!sessionId || !Array.isArray(messages) || !Number.isInteger(revision)) return state
+      return {
+        ...state,
+        sessions: state.sessions.map((session) => {
+          if (session.id !== sessionId) return session
+          if (Number.isInteger(session.serverRevision) && revision < session.serverRevision) return session
+          return {
+            ...session,
+            messages,
+            serverRevision: revision,
+            updatedAt: Math.max(Number(session.updatedAt) || 0, revision),
+          }
+        }),
+      }
+    }
+
+    case 'APPLY_SERVER_SESSION_DELETE': {
+      const sessionId = action.payload?.sessionId
+      if (!sessionId) return state
+      const sessions = state.sessions.filter((session) => session.id !== sessionId)
+      const sessionDrafts = { ...(state.sessionDrafts || {}) }
+      delete sessionDrafts[sessionId]
+      return {
+        ...state,
+        sessions,
+        activeSessionId: state.activeSessionId === sessionId
+          ? sessions[0]?.id ?? null
+          : state.activeSessionId,
+        sessionDrafts,
       }
     }
 
@@ -891,6 +933,36 @@ export function AppProvider({ children }) {
   const lastClearedAtRef = useRef(0)
   const channelRef = useRef(null)
   const mountedRef = useRef(true)
+  const sessionMutationDispatchRef = useRef(null)
+
+  if (!sessionMutationDispatchRef.current) {
+    sessionMutationDispatchRef.current = createSessionMutationDispatcher({
+      getState: () => stateRef.current,
+      reduceState: reducer,
+      dispatchImmediate: dispatch,
+      applyServerAction: (action) => {
+        stateRef.current = reducer(stateRef.current, action)
+        dispatch(action)
+      },
+      replaceMessages: ({ sessionId, expectedRevision, messages }) => (
+        replaceSessionMessagesRemote(sessionId, { expectedRevision, messages })
+      ),
+      deleteSession: ({ sessionId, expectedRevision }) => (
+        deleteSessionRemote(sessionId, { expectedRevision })
+      ),
+      onError: (error, { action, sessionId }) => {
+        console.warn(
+          `[AppContext] ${action.type} server session sync failed for ${sessionId}:`,
+          error?.code || error?.message || error,
+        )
+      },
+    })
+  }
+
+  const contextDispatch = useCallback(
+    (action) => sessionMutationDispatchRef.current(action),
+    [],
+  )
 
   const publishChange = useCallback((type, payload, writtenAt = Date.now()) => {
     const message = { type, source: tabIdRef.current, writtenAt, payload }
@@ -1393,7 +1465,7 @@ export function AppProvider({ children }) {
   }, [hydrated, state.user, state.isLoggedIn, state.sessions, state.activeSessionId, state.tasks, state.history, state.permissions, state.theme, state.accentColor, state.strongAccent, state.fontSize, state.density, state.animationsEnabled, state.skillConfigs, state.toolsConfig, state.agentMode, state.sessionDrafts])
 
   return (
-    <AppContext.Provider value={{ state, dispatch }}>
+    <AppContext.Provider value={{ state, dispatch: contextDispatch }}>
       {hydrated && state.authReady ? children : null}
     </AppContext.Provider>
   )

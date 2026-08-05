@@ -4,8 +4,9 @@ import { migrateToV33 } from './v33ProviderRiskOverrides.js'
 import { migrateToV34 } from './v34TurnEventRetention.js'
 import { migrateToV35 } from './v35SecurityState.js'
 import { migrateToV36 } from './v36MessageModelContext.js'
+import { migrateToV37 } from './v37SessionRevision.js'
 
-export { migrateToV31, migrateToV32, migrateToV33, migrateToV34, migrateToV35, migrateToV36 }
+export { migrateToV31, migrateToV32, migrateToV33, migrateToV34, migrateToV35, migrateToV36, migrateToV37 }
 
 /**
  * V2-V30 stay in db.js for upgrade compatibility. New migrations are registered
@@ -18,6 +19,7 @@ export const schemaMigrations = Object.freeze([
   { version: 34, up: migrateToV34 },
   { version: 35, up: migrateToV35 },
   { version: 36, up: migrateToV36 },
+  { version: 37, up: migrateToV37 },
 ])
 
 export const LATEST_SCHEMA_VERSION = schemaMigrations.at(-1)?.version || 30

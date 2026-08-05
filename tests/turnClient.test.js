@@ -3,6 +3,7 @@ import test from 'node:test'
 import { createTurnEvent } from '../shared/turnEvents.js'
 import {
   dispatchTurnEvent,
+  fetchServerSessionSnapshot,
   reconnectDelayForAttempt,
   replayServerTurn,
   runServerTurn,
@@ -293,4 +294,70 @@ test('dispatchTurnEvent maps tool and approval events to existing chat actions',
   )
   assert.equal(artifacts[0].filename, 'a.docx')
   assert.equal(approvals[0].id, 'p1')
+})
+
+test('fetchServerSessionSnapshot aggregates every page before normalizing messages', async () => {
+  const urls = []
+  const pages = [
+    {
+      session: { id: 'session/with spaces' },
+      messages: [
+        { id: 'm1', role: 'user', content: 'first', createdAt: 1 },
+        { id: 'm2', role: 'assistant', content: 'second', createdAt: 2, modelContext: {} },
+      ],
+      revision: 7,
+      totalMessages: 3,
+      offset: 0,
+      nextOffset: 2,
+      complete: false,
+    },
+    {
+      session: { id: 'session/with spaces' },
+      messages: [{ id: 'm3', role: 'user', content: 'third', createdAt: 3 }],
+      revision: 7,
+      totalMessages: 3,
+      offset: 2,
+      nextOffset: null,
+      complete: true,
+    },
+  ]
+  const snapshot = await fetchServerSessionSnapshot({
+    sessionId: 'session/with spaces',
+    pageSize: 2,
+    fetchImpl: async (url) => {
+      urls.push(String(url))
+      return response({ snapshot: pages.shift() })
+    },
+  })
+
+  assert.deepEqual(urls, [
+    '/api/sessions/session%2Fwith%20spaces/snapshot?limit=2&offset=0',
+    '/api/sessions/session%2Fwith%20spaces/snapshot?limit=2&offset=2',
+  ])
+  assert.equal(snapshot.complete, true)
+  assert.equal(snapshot.revision, 7)
+  assert.deepEqual(snapshot.messages.map((message) => message.id), ['m1', 'm2', 'm3'])
+  assert.equal(snapshot.messages[1].meta.serverAuthoritative, true)
+})
+
+test('fetchServerSessionSnapshot retries from offset zero when page revisions differ', async () => {
+  const pages = [
+    { messages: [{ id: 'stale-1', role: 'user', content: 'old', createdAt: 1 }], revision: 10, totalMessages: 2, nextOffset: 1, complete: false },
+    { messages: [{ id: 'new-2', role: 'assistant', content: 'new', createdAt: 2 }], revision: 11, totalMessages: 2, nextOffset: null, complete: true },
+    { messages: [{ id: 'new-1', role: 'user', content: 'new', createdAt: 1 }], revision: 11, totalMessages: 2, nextOffset: 1, complete: false },
+    { messages: [{ id: 'new-2', role: 'assistant', content: 'new', createdAt: 2 }], revision: 11, totalMessages: 2, nextOffset: null, complete: true },
+  ]
+  const offsets = []
+  const snapshot = await fetchServerSessionSnapshot({
+    sessionId: 's-revision',
+    pageSize: 1,
+    fetchImpl: async (url) => {
+      offsets.push(new URL(String(url), 'http://localhost').searchParams.get('offset'))
+      return response({ snapshot: pages.shift() })
+    },
+  })
+
+  assert.deepEqual(offsets, ['0', '1', '0', '1'])
+  assert.equal(snapshot.revision, 11)
+  assert.deepEqual(snapshot.messages.map((message) => message.id), ['new-1', 'new-2'])
 })

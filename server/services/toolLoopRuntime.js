@@ -44,6 +44,10 @@ import { executeBrowserTool } from './browserToolExecutor.js'
 import { fetchAndExtract, searchDuckDuckGo } from '../adapters/toolProxy.js'
 import { dispatchHooks } from './hooksService.js'
 
+const FS_SHELL_TOOL_NAMES = new Set(
+  FS_SHELL_TOOL_SPECS.map((spec) => String(spec?.function?.name || '')).filter(Boolean),
+)
+
 // 死循环护栏,不是工作预算。后台任务无人盯着,不能真的无限跑 ——
 // 但真正的收敛是 jobBudget(累积调用数 + 挂钟时间),那个和成本线性相关。
 //
@@ -326,7 +330,7 @@ async function executeServerTool({
   }
   // fs/shell 工具不落 artifact,执行结果直接回给模型.
   // 任意 fsShellTools 抛错(包括 env 未启用 / 路径越界)都返回 {ok:false,error}.
-  if (['read_file', 'write_file', 'edit_file', 'bash_exec'].includes(name)) {
+  if (FS_SHELL_TOOL_NAMES.has(name)) {
     try {
       return await dispatchFsShellTool(name, args || {}, {
         userId: job?.userId || null,

@@ -20,6 +20,23 @@ export class SessionOwnershipError extends Error {
   }
 }
 
+export class SessionRevisionConflictError extends Error {
+  constructor(currentRevision) {
+    super('session revision conflict')
+    this.name = 'SessionRevisionConflictError'
+    this.code = 'SESSION_REVISION_CONFLICT'
+    this.currentRevision = Number(currentRevision) || 0
+  }
+}
+
+export class SessionMutationValidationError extends Error {
+  constructor(message) {
+    super(message)
+    this.name = 'SessionMutationValidationError'
+    this.code = 'INVALID_SESSION_MUTATION'
+  }
+}
+
 function clampLimit(limit, { fallback = 50, max = 100 } = {}) {
   const value = Number(limit)
   if (!Number.isFinite(value) || value <= 0) return fallback
@@ -47,6 +64,7 @@ function mapSession(row) {
     updatedAt: row.updated_at || row.created_at,
     lastViewedAt: row.last_viewed_at || null,
     archivedAt: row.archived_at || null,
+    revision: Number(row.revision) || 0,
   }
 }
 
@@ -75,7 +93,8 @@ export function upsertSession({
       title = excluded.title,
       updated_at = excluded.updated_at,
       last_viewed_at = COALESCE(excluded.last_viewed_at, sessions.last_viewed_at),
-      archived_at = excluded.archived_at
+      archived_at = excluded.archived_at,
+      revision = sessions.revision + 1
     WHERE sessions.user_id = excluded.user_id
   `).run(id, id, userId, title, Number.MAX_SAFE_INTEGER, finalCreatedAt, updatedAt, lastViewedAt, archivedAt)
   return getSession({ userId, sessionId: id })
@@ -94,6 +113,59 @@ function parseModelContext(value) {
 function serializeModelContext(value) {
   if (!value || typeof value !== 'object') return '{}'
   return JSON.stringify(value)
+}
+
+function normalizeExpectedRevision(value) {
+  const revision = Number(value)
+  if (!Number.isSafeInteger(revision) || revision < 0) {
+    throw new SessionMutationValidationError('expectedRevision must be a non-negative integer')
+  }
+  return revision
+}
+
+function normalizeMessageContent(value) {
+  if (typeof value === 'string') return value
+  if (value == null) return ''
+  try { return JSON.stringify(value) } catch { return String(value) }
+}
+
+function normalizeReplacementMessages(messages, existingContexts, now) {
+  if (!Array.isArray(messages)) {
+    throw new SessionMutationValidationError('messages must be an array')
+  }
+  if (messages.length > 50_000) {
+    throw new SessionMutationValidationError('messages exceeds the 50000 item limit')
+  }
+  const ids = new Set()
+  return messages.map((message, index) => {
+    const id = String(message?.id || '').trim()
+    const role = String(message?.role || '').trim()
+    if (!id || id.length > 512) {
+      throw new SessionMutationValidationError(`messages[${index}].id is invalid`)
+    }
+    if (ids.has(id)) {
+      throw new SessionMutationValidationError(`duplicate message id: ${id}`)
+    }
+    ids.add(id)
+    if (!['user', 'assistant', 'system', 'tool'].includes(role)) {
+      throw new SessionMutationValidationError(`messages[${index}].role is invalid`)
+    }
+    const createdAtValue = Number(message?.createdAt)
+    const updatedAtValue = Number(message?.updatedAt)
+    const createdAt = Number.isFinite(createdAtValue) ? Math.floor(createdAtValue) : now + index
+    const updatedAt = Number.isFinite(updatedAtValue) ? Math.floor(updatedAtValue) : createdAt
+    const providedContext = message?.modelContext && typeof message.modelContext === 'object'
+      ? serializeModelContext(message.modelContext)
+      : null
+    return {
+      id,
+      role,
+      content: normalizeMessageContent(message?.content),
+      modelContextJson: providedContext || existingContexts.get(id) || '{}',
+      createdAt,
+      updatedAt,
+    }
+  })
 }
 
 function mapMessage(row) {
@@ -152,7 +224,7 @@ export function claimLocalChatSession({ userId, sessionId, authMode, now = Date.
 export function getSession({ userId, sessionId }) {
   if (!userId || !sessionId) return null
   const row = getDb().prepare(`
-    SELECT token, id, title, created_at, updated_at, last_viewed_at, archived_at
+    SELECT token, id, title, created_at, updated_at, last_viewed_at, archived_at, revision
     FROM sessions
     WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
   `).get(userId, sessionId)
@@ -166,7 +238,7 @@ export function listSessions({ userId, archived = 'false', limit = 100, offset =
   if (filter === 'true') clauses.push('archived_at IS NOT NULL')
   if (filter === 'false') clauses.push('archived_at IS NULL')
   const rows = getDb().prepare(`
-    SELECT token, id, title, created_at, updated_at, last_viewed_at, archived_at
+    SELECT token, id, title, created_at, updated_at, last_viewed_at, archived_at, revision
     FROM sessions
     WHERE ${clauses.join(' AND ')}
     ORDER BY COALESCE(updated_at, created_at) DESC
@@ -183,7 +255,7 @@ export function archiveSession({ userId, sessionId, now = Date.now() }) {
   if (!userId || !sessionId) return null
   const result = getDb().prepare(`
     UPDATE sessions
-    SET archived_at = COALESCE(archived_at, ?), updated_at = ?
+    SET archived_at = COALESCE(archived_at, ?), updated_at = ?, revision = revision + 1
     WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
   `).run(now, now, userId, sessionId)
   if (!result.changes) return null
@@ -194,7 +266,7 @@ export function unarchiveSession({ userId, sessionId, now = Date.now() }) {
   if (!userId || !sessionId) return null
   const result = getDb().prepare(`
     UPDATE sessions
-    SET archived_at = NULL, updated_at = ?
+    SET archived_at = NULL, updated_at = ?, revision = revision + 1
     WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
   `).run(now, userId, sessionId)
   if (!result.changes) return null
@@ -266,46 +338,151 @@ export function upsertMessage({
   }
 }
 
-export function listMessages({ userId, sessionId, limit = 500, recent = false } = {}) {
+export function listMessages({ userId, sessionId, limit = 500, offset = 0, recent = false } = {}) {
   if (!userId || !sessionId) return []
   const safeLimit = Math.min(2000, Math.max(1, Number(limit) || 500))
+  const safeOffset = clampOffset(offset)
   const order = recent ? 'DESC' : 'ASC'
   const rows = getDb().prepare(`
     SELECT id, session_id, user_id, role, content, model_context_json, created_at, updated_at, rowid
     FROM messages
     WHERE user_id = ? AND session_id = ?
     ORDER BY created_at ${order}, rowid ${order}
-    LIMIT ?
-  `).all(userId, sessionId, safeLimit)
+    LIMIT ? OFFSET ?
+  `).all(userId, sessionId, safeLimit, safeOffset)
   if (recent) rows.reverse()
   return rows.map(mapMessage)
 }
 
-export function getSessionSnapshot({ userId, sessionId, limit = 2000 } = {}) {
-  const session = getSession({ userId, sessionId })
-  if (!session) return null
-  const safeLimit = Math.min(2000, Math.max(1, Number(limit) || 2000))
-  const totalMessages = getDb().prepare(`
-    SELECT COUNT(*) AS count
-    FROM messages
-    WHERE user_id = ? AND session_id = ?
-  `).get(userId, sessionId).count
-  const messages = listMessages({ userId, sessionId, limit: safeLimit })
-  const revision = messages.reduce(
-    (latest, message) => Math.max(latest, Number(message.updatedAt) || 0),
-    Number(session.updatedAt) || Number(session.createdAt) || 0,
-  )
-  return {
-    session,
-    messages,
-    revision,
-    totalMessages,
-    complete: messages.length === totalMessages,
-  }
+export function getSessionSnapshot({ userId, sessionId, limit = 2000, offset = 0 } = {}) {
+  const db = getDb()
+  return db.transaction(() => {
+    const session = getSession({ userId, sessionId })
+    if (!session) return null
+    const safeLimit = Math.min(2000, Math.max(1, Number(limit) || 2000))
+    const safeOffset = clampOffset(offset)
+    const totalMessages = db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM messages
+      WHERE user_id = ? AND session_id = ?
+    `).get(userId, sessionId).count
+    const messages = listMessages({ userId, sessionId, limit: safeLimit, offset: safeOffset })
+    const complete = safeOffset + messages.length >= totalMessages
+    return {
+      session,
+      messages,
+      revision: session.revision,
+      totalMessages,
+      complete,
+      nextOffset: complete ? null : safeOffset + messages.length,
+    }
+  })()
+}
+
+export function replaceSessionMessages({
+  userId,
+  sessionId,
+  expectedRevision,
+  messages,
+  now = Date.now(),
+} = {}) {
+  if (!userId || !sessionId) return null
+  const revision = normalizeExpectedRevision(expectedRevision)
+  const db = getDb()
+  return db.transaction(() => {
+    const session = db.prepare(`
+      SELECT token, title, revision
+      FROM sessions
+      WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
+    `).get(userId, sessionId)
+    if (!session) return null
+    if (Number(session.revision) !== revision) {
+      throw new SessionRevisionConflictError(session.revision)
+    }
+
+    const existingContexts = new Map(db.prepare(`
+      SELECT id, model_context_json
+      FROM messages
+      WHERE user_id = ? AND session_id = ?
+    `).all(userId, sessionId).map((row) => [row.id, row.model_context_json || '{}']))
+    const normalized = normalizeReplacementMessages(messages, existingContexts, now)
+    db.prepare('DELETE FROM messages WHERE user_id = ? AND session_id = ?').run(userId, sessionId)
+    const insert = db.prepare(`
+      INSERT INTO messages
+        (id, session_id, user_id, role, content, session_title, model_context_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    for (const message of normalized) {
+      insert.run(
+        message.id,
+        sessionId,
+        userId,
+        message.role,
+        message.content,
+        session.title || '',
+        message.modelContextJson,
+        message.createdAt,
+        message.updatedAt,
+      )
+    }
+    db.prepare(`
+      UPDATE sessions
+      SET updated_at = ?, revision = revision + 1
+      WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
+    `).run(now, userId, sessionId)
+    const current = db.prepare('SELECT revision FROM sessions WHERE user_id = ? AND token = ?')
+      .get(userId, sessionId)
+    return {
+      revision: Number(current.revision) || 0,
+      totalMessages: normalized.length,
+    }
+  })()
+}
+
+export function deleteSession({ userId, sessionId, expectedRevision } = {}) {
+  if (!userId || !sessionId) return null
+  const revision = normalizeExpectedRevision(expectedRevision)
+  const db = getDb()
+  return db.transaction(() => {
+    const session = db.prepare(`
+      SELECT token, revision
+      FROM sessions
+      WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
+    `).get(userId, sessionId)
+    if (!session) return null
+    if (Number(session.revision) !== revision) {
+      throw new SessionRevisionConflictError(session.revision)
+    }
+
+    db.prepare(`
+      UPDATE memories
+      SET source_session_id = NULL, source_message_id = NULL
+      WHERE user_id = ? AND source_session_id = ?
+    `).run(userId, sessionId)
+    db.prepare(`
+      UPDATE subagent_runs
+      SET parent_session_id = NULL, parent_message_id = NULL
+      WHERE user_id = ? AND parent_session_id = ?
+    `).run(userId, sessionId)
+    for (const table of ['pending_approvals', 'session_meters', 'compaction_archive']) {
+      db.prepare(`DELETE FROM ${table} WHERE user_id = ? AND session_id = ?`).run(userId, sessionId)
+    }
+    const result = db.prepare(`
+      DELETE FROM sessions
+      WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
+    `).run(userId, sessionId)
+    return result.changes === 1 ? { deleted: true, previousRevision: revision } : null
+  })()
 }
 
 export function deleteMessage({ userId, messageId }) {
   if (!userId || !messageId) return false
-  const result = getDb().prepare('DELETE FROM messages WHERE user_id = ? AND id = ?').run(userId, messageId)
-  return result.changes > 0
+  const db = getDb()
+  return db.transaction(() => {
+    const row = db.prepare('SELECT session_id FROM messages WHERE user_id = ? AND id = ?')
+      .get(userId, messageId)
+    if (!row) return false
+    const result = db.prepare('DELETE FROM messages WHERE user_id = ? AND id = ?').run(userId, messageId)
+    return result.changes > 0
+  })()
 }

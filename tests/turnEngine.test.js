@@ -28,6 +28,10 @@ function events(turnId, requestedUser = userId) {
   return listTurnEvents({ requestedUser, userId: requestedUser, sessionId: 'turn-engine-session', turnId, limit: 2000 })
 }
 
+function createTestEngine(options = {}) {
+  return new TurnEngine({ scheduleMemoryExtraction: () => {}, ...options })
+}
+
 async function waitUntil(predicate, timeoutMs = 3000) {
   const started = Date.now()
   while (Date.now() - started < timeoutMs) {
@@ -38,8 +42,157 @@ async function waitUntil(predicate, timeoutMs = 3000) {
   throw new Error('timed out waiting for turn state')
 }
 
+test('TurnEngine reports a session active while startTurn is awaiting turn.started persistence', async () => {
+  const sessionId = 'turn-engine-active-session'
+  upsertSession({ id: sessionId, userId, title: 'Active session' })
+  let releaseStarted
+  let startedObserved
+  let releaseLoop
+  const startedGate = new Promise((resolve) => { releaseStarted = resolve })
+  const observed = new Promise((resolve) => { startedObserved = resolve })
+  const loopGate = new Promise((resolve) => { releaseLoop = resolve })
+  const engine = createTestEngine({
+    appendEvent: async (args) => {
+      if (args.event.type === 'turn.started') {
+        startedObserved()
+        await startedGate
+      }
+      return appendTurnEvent(args)
+    },
+    runLoop: () => loopGate,
+    scheduleMemoryExtraction: () => {},
+  })
+
+  const starting = engine.startTurn({
+    userId,
+    sessionId,
+    turnId: 'turn-active-window',
+    content: 'keep the session reserved',
+  })
+  await observed
+  assert.equal(engine.hasActiveSession({ userId, sessionId }), true)
+  assert.equal(engine.hasActiveSession({ userId: 'another-user', sessionId }), false)
+
+  releaseStarted()
+  await starting
+  assert.equal(engine.hasActiveSession({ userId, sessionId }), true)
+  releaseLoop({ text: 'done', artifactIds: [], iterations: 0 })
+  await engine.waitForTurn({ userId, sessionId, turnId: 'turn-active-window' })
+  assert.equal(engine.hasActiveSession({ userId, sessionId }), false)
+})
+
+test('TurnEngine releases the starting-session reservation when turn.started persistence fails', async () => {
+  const sessionId = 'turn-engine-start-failure'
+  upsertSession({ id: sessionId, userId, title: 'Start failure' })
+  const engine = createTestEngine({
+    appendEvent: async () => { throw new Error('event store unavailable') },
+    runLoop: async () => ({ text: 'must not run' }),
+  })
+
+  await assert.rejects(
+    engine.startTurn({ userId, sessionId, turnId: 'turn-start-failure', content: 'start' }),
+    /event store unavailable/,
+  )
+  assert.equal(engine.hasActiveSession({ userId, sessionId }), false)
+})
+
+test('TurnEngine imports every browser history message with structured tool context', async () => {
+  const sessionId = 'turn-engine-full-history'
+  const turnId = 'turn-full-history'
+  upsertSession({ id: sessionId, userId, title: 'Full history' })
+  const history = Array.from({ length: 205 }, (_, index) => ({
+    role: index % 2 === 0 ? 'user' : 'assistant',
+    content: `history-${index}`,
+  }))
+  history.push({
+    role: 'assistant',
+    content: 'I read the file.',
+    tool_calls: [{
+      id: 'imported-read-1',
+      type: 'function',
+      function: { name: 'read_file', arguments: '{"path":"README.md"}' },
+    }],
+  })
+  history.push({
+    role: 'tool',
+    tool_call_id: 'imported-read-1',
+    name: 'read_file',
+    content: '{"ok":true,"content":"README"}',
+  })
+  let loopMessages = null
+  const engine = createTestEngine({
+    preparePromptContext: async () => ({ messages: [], effectiveAgentId: null, skillIds: [], memoryIds: [] }),
+    runLoop: async (options) => {
+      loopMessages = options.messages
+      return { text: 'history imported', artifactIds: [], iterations: 0 }
+    },
+    scheduleMemoryExtraction: () => {},
+  })
+
+  await engine.startTurn({ userId, sessionId, turnId, content: 'continue', history })
+  await engine.waitForTurn({ userId, sessionId, turnId })
+
+  const stored = listMessages({ userId, sessionId, limit: 500 })
+  assert.equal(stored.length, history.length + 2)
+  assert.equal(stored[0].content, 'history-0')
+  const importedAssistant = stored.find((message) => message.content === 'I read the file.')
+  assert.equal(importedAssistant.modelContext.toolCalls[0].id, 'imported-read-1')
+  const loopAssistant = loopMessages.find((message) => message.tool_calls?.[0]?.id === 'imported-read-1')
+  const loopTool = loopMessages.find((message) => message.tool_call_id === 'imported-read-1')
+  assert.equal(loopAssistant.tool_calls[0].function.name, 'read_file')
+  assert.match(loopTool.content, /README/)
+  const started = listTurnEvents({
+    requestedUser: userId,
+    userId,
+    sessionId,
+    turnId,
+    limit: 2000,
+  }).find((event) => event.type === 'turn.started')
+  assert.equal(started.payload.importedHistoryCount, history.length)
+})
+
+test('TurnEngine schedules automatic memory extraction after completion without making it blocking', async () => {
+  const sessionId = 'turn-engine-auto-memory'
+  const turnId = 'turn-auto-memory'
+  upsertSession({ id: sessionId, userId, title: 'Auto memory' })
+  let scheduled = null
+  let memoryModelRequest = null
+  const engine = createTestEngine({
+    preparePromptContext: async () => ({
+      messages: [], effectiveAgentId: 'resolved-agent', skillIds: [], memoryIds: [],
+    }),
+    runLoop: async () => ({ text: 'I will remember that.', artifactIds: [], iterations: 0 }),
+    scheduleMemoryExtraction: (options) => {
+      scheduled = options
+      throw new Error('scheduler unavailable')
+    },
+    runMemoryModel: async (request) => {
+      memoryModelRequest = request
+      return '{"memories":[]}'
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId,
+    turnId,
+    content: 'Remember that this project uses SQLite.',
+    agentId: 'requested-agent',
+  })
+  await engine.waitForTurn({ userId, sessionId, turnId })
+
+  assert.equal(engine.getTurn({ userId, sessionId, turnId }).status, 'completed')
+  assert.equal(scheduled.userId, userId)
+  assert.equal(scheduled.sessionId, sessionId)
+  assert.equal(scheduled.agentId, 'resolved-agent')
+  assert.equal(scheduled.assistantText, 'I will remember that.')
+  assert.equal(scheduled.messages.at(-1).content, 'Remember that this project uses SQLite.')
+  assert.equal(await scheduled.callModel({ messages: [{ role: 'user', content: 'extract' }] }), '{"memories":[]}')
+  assert.equal(memoryModelRequest.userId, userId)
+})
+
 test('TurnEngine owns a text turn and persists the final assistant message', async () => {
-  const engine = new TurnEngine({
+  const engine = createTestEngine({
     runModel: async () => ({ content: '服务端完成。', toolCalls: [], modelName: 'stub' }),
   })
   await engine.startTurn({
@@ -56,7 +209,7 @@ test('TurnEngine owns a text turn and persists the final assistant message', asy
 
 test('TurnEngine uses the runtime approval mode while preserving chat origin', async () => {
   let loopOptions = null
-  const engine = new TurnEngine({
+  const engine = createTestEngine({
     readApprovalMode: () => 'unattended',
     runLoop: async (options) => {
       loopOptions = options
@@ -88,7 +241,7 @@ test('TurnEngine persists and applies agent, skill, memory, and tools context', 
     { type: 'function', function: { name: 'read_file', parameters: { type: 'object' } } },
     { type: 'function', function: { name: 'bash_exec', parameters: { type: 'object' } } },
   ]
-  const engine = new TurnEngine({
+  const engine = createTestEngine({
     toolSpecs: baseSpecs,
     preparePromptContext: async (request) => {
       promptRequest = request
@@ -160,7 +313,7 @@ test('TurnEngine restores persisted prompt and tool context on resume', async ()
   let promptRequest = null
   let toolRequest = null
   let loopOptions = null
-  const engine = new TurnEngine({
+  const engine = createTestEngine({
     preparePromptContext: (request) => {
       promptRequest = request
       return { messages: [], effectiveAgentId: request.agentId, skillIds: request.skillIds, memoryIds: [] }
@@ -188,7 +341,7 @@ test('TurnEngine restores persisted prompt and tool context on resume', async ()
 test('TurnEngine runs a multi-round tool call and records its lifecycle', async () => {
   let modelCalls = 0
   let executions = 0
-  const engine = new TurnEngine({
+  const engine = createTestEngine({
     runModel: async () => {
       modelCalls += 1
       if (modelCalls === 1) {
@@ -218,7 +371,7 @@ test('TurnEngine runs a multi-round tool call and records its lifecycle', async 
 test('TurnEngine pauses at approval and resumes after the persisted decision', async () => {
   let modelCalls = 0
   let executions = 0
-  const engine = new TurnEngine({
+  const engine = createTestEngine({
     readApprovalMode: () => 'all',
     runModel: async () => {
       modelCalls += 1
@@ -250,7 +403,7 @@ test('TurnEngine pauses at approval and resumes after the persisted decision', a
 })
 
 test('TurnEngine aborts an active model request with an explicit cancelled event', async () => {
-  const engine = new TurnEngine({
+  const engine = createTestEngine({
     runModel: ({ signal }) => new Promise((resolve, reject) => {
       signal.addEventListener('abort', () => {
         const error = new Error('aborted')
@@ -298,7 +451,7 @@ test('TurnEngine resumes a durable completed tool call without executing it twic
     }),
   })
   let executions = 0
-  const engine = new TurnEngine({
+  const engine = createTestEngine({
     runModel: async () => ({ content: '从断点完成。', toolCalls: [] }),
     executeTool: async () => { executions += 1; return { ok: true } },
   })
@@ -312,7 +465,7 @@ test('TurnEngine resumes a durable completed tool call without executing it twic
 test('TurnEngine creates a missing owned session but cannot claim another user session id', async () => {
   createUser({ id: 'turn-engine-other', email: 'turn-engine-other@example.com' })
   upsertSession({ id: 'owned-by-other', userId: 'turn-engine-other', title: 'Other' })
-  const engine = new TurnEngine({ runModel: async () => ({ content: 'ok', toolCalls: [] }) })
+  const engine = createTestEngine({ runModel: async () => ({ content: 'ok', toolCalls: [] }) })
   await engine.startTurn({ userId, sessionId: 'created-by-engine', turnId: 'turn-created-session', content: 'create' })
   await engine.waitForTurn({ userId, sessionId: 'created-by-engine', turnId: 'turn-created-session' })
   assert.equal(engine.getTurn({ userId, sessionId: 'created-by-engine', turnId: 'turn-created-session' }).status, 'completed')
@@ -378,7 +531,7 @@ test('TurnEngine claims one legacy local chat and all session-scoped records ato
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
   `).run(userId)
 
-  const engine = new TurnEngine({
+  const engine = createTestEngine({
     runLoop: async () => ({ text: 'claimed', artifactIds: [], iterations: 0 }),
   })
   await engine.startTurn({
@@ -418,7 +571,7 @@ test('TurnEngine never claims another user chat in multi-user mode', async () =>
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
   `).run(userId)
 
-  const engine = new TurnEngine({ runLoop: async () => ({ text: 'must not run' }) })
+  const engine = createTestEngine({ runLoop: async () => ({ text: 'must not run' }) })
   await assert.rejects(
     engine.startTurn({
       userId,
@@ -451,7 +604,7 @@ test('TurnEngine claims a legacy local session before resuming an unfinished tur
     ON CONFLICT(key) DO UPDATE SET value = excluded.value
   `).run(userId)
 
-  const engine = new TurnEngine({
+  const engine = createTestEngine({
     runLoop: async () => ({ text: 'resumed', artifactIds: [], iterations: 0 }),
   })
   await engine.resumeTurn({ userId, sessionId, turnId, authMode: 'local' })

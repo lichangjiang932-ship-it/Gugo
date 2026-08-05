@@ -44,16 +44,11 @@ test('every NEVER_APPROVE_TOOLS entry is never gated (regression guard)', () => 
   }
 })
 
-test('create_* artifact tools and run_project_check are whitelisted by name', () => {
+test('server-executable artifact tools and run_project_check are whitelisted by name', () => {
   const artifactTools = [
     'create_pptx',
     'create_docx',
     'create_xlsx',
-    'create_react_component',
-    'create_mermaid',
-    'create_chart',
-    'create_svg',
-    'create_html_app',
     'run_project_check',
   ]
   for (const name of artifactTools) {
