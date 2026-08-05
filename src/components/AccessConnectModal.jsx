@@ -13,7 +13,10 @@ import { createPoller } from '../lib/wechatQrPoller.js'
 import { openOAuthAuthorizationWindow } from '../lib/oauthPopup.js'
 import { manualIntegrationValues } from '../lib/accessManualCredentials.js'
 
-const EMPTY = Object.freeze({ workspace: '', account: '', token: '', appId: '', appSecret: '', botUsername: '' })
+const EMPTY = Object.freeze({
+  workspace: '', account: '', token: '', appId: '', appSecret: '', botUsername: '',
+  user: '', from: '', password: '', smtpHost: '', smtpPort: '', imapHost: '', imapPort: '',
+})
 
 export default function AccessConnectModal({ connector, integration, onClose, onConnected, t }) {
   const [form, setForm] = useState(() => ({
@@ -22,9 +25,16 @@ export default function AccessConnectModal({ connector, integration, onClose, on
     account: integration?.config?.account || '',
     appId: integration?.config?.appId || '',
     botUsername: integration?.config?.botUsername || '',
+    user: integration?.config?.user || '',
+    from: integration?.config?.from || '',
+    smtpHost: integration?.config?.smtpHost || '',
+    smtpPort: integration?.config?.smtpPort || '',
+    imapHost: integration?.config?.imapHost || '',
+    imapPort: integration?.config?.imapPort || '',
   }))
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
+  const [oauthHelp, setOauthHelp] = useState(false)
   const [qr, setQr] = useState(null)
   const [qrStatus, setQrStatus] = useState('')
   const [oauthSessionId, setOauthSessionId] = useState('')
@@ -123,6 +133,7 @@ export default function AccessConnectModal({ connector, integration, onClose, on
       setOauthSessionId(data.session.id)
     } catch (error) {
       setBusy(false)
+      setOauthHelp(error.code === 'OAUTH_NOT_CONFIGURED')
       setMessage(error.code === 'OAUTH_NOT_CONFIGURED'
         ? t('access.oauthNotConfigured')
         : (error.message || t('access.oauthFailed')))
@@ -195,11 +206,32 @@ export default function AccessConnectModal({ connector, integration, onClose, on
                 </div>
               </>
             )}
+            {oauthHelp && (
+              <details className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900" data-testid="oauth-help">
+                <summary className="cursor-pointer font-medium">{t('access.oauthHelpToggle')}</summary>
+                <p className="mt-2">{t('access.oauthHelpBody')}</p>
+                <a href="https://github.com/lichangjiang932-ship-it/your-model-atelier/blob/main/docs/CONFIGURATION.md" target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 underline">{t('access.oauthHelpDoc')}<ExternalLink className="w-3 h-3" /></a>
+              </details>
+            )}
             {(connector.provider === 'notion' || connector.provider === 'slack') && <TextField label={t('access.workspace')} value={form.workspace} onChange={(value) => set('workspace', value)} />}
             {(connector.provider === 'github' || connector.provider === 'google_drive') && <TextField label={t('access.account')} value={form.account} onChange={(value) => set('account', value)} />}
             {connector.provider === 'feishu' && <TextField label={t('access.appId')} value={form.appId} onChange={(value) => set('appId', value)} required />}
             {connector.provider === 'telegram' && <TextField label={t('access.botUsername')} value={form.botUsername} onChange={(value) => set('botUsername', value)} />}
             {connector.provider === 'qq' && <TextField label={t('access.appId')} value={form.appId} onChange={(value) => set('appId', value)} required />}
+            {connector.provider === 'qq_mail' && <>
+              <TextField type="email" label={t('access.mailUser')} value={form.user} onChange={(value) => set('user', value)} />
+              <TextField type="email" label={t('access.mailFrom')} value={form.from} onChange={(value) => set('from', value)} />
+              <div className="grid grid-cols-[minmax(0,1fr)_96px] gap-3">
+                <TextField label={t('access.smtpHost')} value={form.smtpHost} onChange={(value) => set('smtpHost', value)} placeholder="smtp.qq.com" />
+                <TextField type="number" label={t('access.smtpPort')} value={form.smtpPort} onChange={(value) => set('smtpPort', value)} placeholder="465" />
+              </div>
+              <div className="grid grid-cols-[minmax(0,1fr)_96px] gap-3">
+                <TextField label={t('access.imapHost')} value={form.imapHost} onChange={(value) => set('imapHost', value)} placeholder="imap.qq.com" />
+                <TextField type="number" label={t('access.imapPort')} value={form.imapPort} onChange={(value) => set('imapPort', value)} placeholder="993" />
+              </div>
+              <TextField type="password" label={t('access.mailPassword')} value={form.password} onChange={(value) => set('password', value)} placeholder={passwordPlaceholder} />
+              <p className="-mt-2 text-[11px] leading-4 text-ink-fade">{t('access.qqMailPasswordHint')}</p>
+            </>}
             {['notion', 'github', 'google_drive', 'slack'].includes(connector.provider) && <TextField type="password" label={t('access.token')} value={form.token} onChange={(value) => set('token', value)} placeholder={passwordPlaceholder} required={!integration} />}
             {connector.provider === 'feishu' && <TextField type="password" label={t('access.appSecret')} value={form.appSecret} onChange={(value) => set('appSecret', value)} placeholder={passwordPlaceholder} required={!integration} />}
             {connector.provider === 'telegram' && <TextField type="password" label={t('access.botToken')} value={form.token} onChange={(value) => set('token', value)} placeholder={passwordPlaceholder} required={!integration} />}

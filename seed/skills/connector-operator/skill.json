@@ -1,0 +1,12 @@
+{
+  "id": "connector-operator",
+  "name": "Connector Operator · 连接器操作员",
+  "description": "指导 Agent 正确使用 Access 中心已连接的原生连接器与受管浏览器应用：Notion 搜索/读页、GitHub 搜仓库/读文件、Slack 频道/消息、Google Drive 文件、QQ 邮箱收发、Browser 应用代操作。覆盖连接状态检查、作用域限制、错误处理与隐私纪律。",
+  "version": "1.0.0",
+  "icon": "🔌",
+  "permissions": ["读取已连接服务", "发送消息（仅经用户确认）"],
+  "source": {
+    "type": "builtin",
+    "license": "MIT"
+  }
+}

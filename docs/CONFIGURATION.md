@@ -115,6 +115,31 @@ MCP OAuth 的 32 字节随机 state 只以 SHA-256 摘要保存；PKCE verifier 
 SQLite，10 分钟后过期，并在 callback 时原子单次消费。因此服务重启不会丢失正在进行的授权，
 同一 state 也不能重复使用。
 
+## 连接器 OAuth 一键授权
+
+「连接」页的 Notion / GitHub / Slack / Google Drive 支持 OAuth 一键授权（可选；不配置时仍可
+手工填写 token）。启用步骤：
+
+1. **设置公网地址**：`.env` 中配置 `APP_PUBLIC_URL`（如 `http://localhost:5175` 或
+   `https://atelier.example.com`），回调地址只使用该 origin；
+2. **到各平台创建 OAuth Client**，回调地址填
+   `{APP_PUBLIC_URL}/api/integrations/oauth/callback/{provider}`（provider 为
+   `github` / `notion` / `slack` / `google_drive`）；
+3. **在 `.env` 填写 Client 凭据**（见下表），重启服务；
+4. 回到「连接」页对应卡片，点「使用 OAuth 一键授权」即可。
+
+| 服务 | 环境变量 | 默认 scope |
+|---|---|---|
+| GitHub | `GITHUB_OAUTH_CLIENT_ID` / `GITHUB_OAUTH_CLIENT_SECRET` | `read:user` |
+| Notion | `NOTION_OAUTH_CLIENT_ID` / `NOTION_OAUTH_CLIENT_SECRET` | 无（按集成授权） |
+| Slack | `SLACK_OAUTH_CLIENT_ID` / `SLACK_OAUTH_CLIENT_SECRET` | `channels:read,channels:history` |
+| Google Drive | `GOOGLE_DRIVE_OAUTH_CLIENT_ID` / `GOOGLE_DRIVE_OAUTH_CLIENT_SECRET` | `drive.readonly` |
+
+需要更多权限时，用对应 `*_OAUTH_SCOPES` 环境变量显式覆盖（如
+`GOOGLE_DRIVE_OAUTH_SCOPES=https://www.googleapis.com/auth/drive`）。GitHub 使用 PKCE，
+Google Drive 使用 PKCE + refresh token 自动续期。凭据只保存在服务端，返回前端时脱敏。
+OAuth 未配置时，卡片会显示说明并继续支持手工填写令牌。
+
 ## 自定义 bridge webhook 签名
 
 `webhook`、`wechat` 和 `wechat_personal` provider 的请求必须携带：

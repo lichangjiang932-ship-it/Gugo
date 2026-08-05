@@ -174,7 +174,7 @@ Compose 默认只把端口绑定到宿主机 `127.0.0.1`。若要从局域网或
 
 Browser 工具需要 Node.js 22+ 和已安装的 Edge/Chrome。默认自动探测浏览器，也可在 `.env` 设置 `BROWSER_EXECUTABLE_PATH`；仅受限 CI/沙箱环境才使用 `BROWSER_NO_SANDBOX=1`。
 
-从左侧「连接」进入 Access 中心（Hash 路由为 `/#/access`）。目录中的 Browser 应用是打开对应网站的浏览器入口，不代表原生 API 集成；Notion、GitHub、Slack 与 Google Drive 才提供可被 agent 结构化调用的原生连接，并支持 OAuth 一键授权（配置 `APP_PUBLIC_URL` 与对应 OAuth Client 环境变量），未配置时仍可手工填 token。飞书使用企业自建应用的 App ID / App Secret，个人微信使用二维码扫码。OAuth 握手使用一次性 state、PKCE（GitHub/Google Drive）与 10 分钟持久会话，凭据探测成功后才启用；GitHub 默认仅请求 `read:user`，Slack 默认仅请求公开频道读取范围，Google Drive 默认仅请求 `drive.readonly`，额外 scope 必须通过对应 `*_OAUTH_SCOPES` 显式开启。Google Drive access token 到期后会使用服务端保存的 refresh token 自动续期。凭据只保存在服务端，返回前端时会脱敏。
+从左侧「连接」进入 Access 中心（Hash 路由为 `/#/access`）。目录中的 Browser 应用是打开对应网站的浏览器入口，不代表原生 API 集成；Notion、GitHub、Slack 与 Google Drive 才提供可被 agent 结构化调用的原生连接，并支持 OAuth 一键授权（配置 `APP_PUBLIC_URL` 与对应 OAuth Client 环境变量），未配置时仍可手工填 token。飞书使用企业自建应用的 App ID / App Secret，个人微信使用二维码扫码。OAuth 握手使用一次性 state、PKCE（GitHub/Google Drive）与 10 分钟持久会话，凭据探测成功后才启用；GitHub 默认仅请求 `read:user`，Slack 默认仅请求公开频道读取范围，Google Drive 默认仅请求 `drive.readonly`，额外 scope 必须通过对应 `*_OAUTH_SCOPES` 显式开启。Google Drive access token 到期后会使用服务端保存的 refresh token 自动续期。凭据只保存在服务端，返回前端时会脱敏。Access 中心还提供常用 MCP Server 的一键安装预设（Chrome DevTools、Fetch、Sequential Thinking、Memory、Playwright），装完即可在对话中直接调用其工具。
 
 MCP OAuth 的 pending state 加密持久化并原子单次消费，服务重启不会中断 10 分钟内的授权。反向代理部署必须设置 `APP_PUBLIC_URL`；默认不会采信 `Host` 或 `X-Forwarded-*` 来生成回调地址，只有代理已清除外部伪造头时才可设置 `TRUST_PROXY=1`。自定义 bridge webhook 必须用时间戳参与 HMAC 签名，并会拒绝超过 5 分钟的请求与重复投递；请求头和签名格式见 [配置说明](docs/CONFIGURATION.md)。
 

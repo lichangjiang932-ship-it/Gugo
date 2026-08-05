@@ -4,9 +4,9 @@ import { ACCESS_CAPABILITY_LEVELS, ACCESS_CATALOG, MCP_ACCESS, NATIVE_ACCESS, WE
 import { findWebConnectorsForUrl, getWebConnector, isWebConnectorProvider } from '../shared/webConnectorCatalog.js'
 
 test('access catalog separates native connectors from popular Browser apps', () => {
-  assert.equal(NATIVE_ACCESS.length, 9)
+  assert.equal(NATIVE_ACCESS.length, 10)
   assert.ok(WEB_ACCESS.length >= 30)
-  assert.equal(MCP_ACCESS.length, 1)
+  assert.equal(MCP_ACCESS.length, 5)
   assert.equal(ACCESS_CATALOG.length, NATIVE_ACCESS.length + MCP_ACCESS.length + WEB_ACCESS.length)
   assert.ok(WEB_ACCESS.every((item) => /^https:\/\//.test(item.webUrl)))
   assert.equal(new Set(ACCESS_CATALOG.map((item) => item.provider)).size, ACCESS_CATALOG.length)
@@ -24,7 +24,7 @@ test('access catalog exposes an honest capability level for every entry', () => 
   assert.ok(ACCESS_CATALOG.every((item) => knownLevels.has(item.capabilityLevel)))
   assert.deepEqual(
     NATIVE_ACCESS.filter((item) => item.capabilityLevel === ACCESS_CAPABILITY_LEVELS.NATIVE_API).map((item) => item.provider),
-    ['notion', 'github', 'google_drive', 'slack'],
+    ['notion', 'github', 'google_drive', 'slack', 'qq_mail'],
   )
   assert.deepEqual(
     NATIVE_ACCESS.filter((item) => item.capabilityLevel === ACCESS_CAPABILITY_LEVELS.SOCIAL_BRIDGE).map((item) => item.provider),
@@ -36,10 +36,11 @@ test('access catalog exposes an honest capability level for every entry', () => 
 })
 
 test('access catalog reports APIs, MCP servers, bridges, and browser fallbacks separately', () => {
-  assert.deepEqual(getAccessCatalogCounts(), { api: 4, mcp: 1, bridges: 4, shortcuts: 30 })
+  assert.deepEqual(getAccessCatalogCounts(), { api: 5, mcp: 5, bridges: 4, shortcuts: 30 })
 })
 
 test('access catalog searches aliases and exposes a shared trusted provider lookup', () => {
+  assert.equal(filterAccessCatalog('smtp').some((item) => item.provider === 'qq_mail'), true)
   assert.equal(filterAccessCatalog('邮箱').some((item) => item.provider === 'web_gmail'), true)
   assert.equal(filterAccessCatalog('jira').length, 1)
   assert.equal(filterAccessCatalog('google mcp').some((item) => item.provider === 'mcp_chrome_devtools'), true)

@@ -6,7 +6,7 @@ import { lookup, translations } from '../src/i18n/translations.js'
 
 test('Chrome DevTools MCP preset uses the official stdio package', () => {
   const preset = createMcpServerFromPreset('chrome-devtools')
-  assert.equal(MCP_SERVER_PRESETS.length, 2)
+  assert.equal(MCP_SERVER_PRESETS.length, 6)
   assert.equal(preset.name, 'chrome_devtools')
   assert.equal(preset.transport, 'stdio')
   assert.equal(preset.command, 'npx')
@@ -14,6 +14,26 @@ test('Chrome DevTools MCP preset uses the official stdio package', () => {
   assert.equal(preset.enabled, true)
   assert.equal(getMcpServerPreset('chrome-devtools')?.publisher, 'Google')
   assert.equal(getMcpServerPreset('chrome-devtools')?.official, true)
+})
+
+test('New official one-click presets (fetch / sequential-thinking / memory / playwright) are well-formed', () => {
+  const expectations = [
+    ['fetch', 'fetch', ['-y', '@modelcontextprotocol/server-fetch']],
+    ['sequential-thinking', 'sequential_thinking', ['-y', '@modelcontextprotocol/server-sequential-thinking']],
+    ['memory', 'memory', ['-y', '@modelcontextprotocol/server-memory']],
+    ['playwright', 'playwright', ['-y', '@playwright/mcp@latest']],
+  ]
+  for (const [id, name, args] of expectations) {
+    const preset = createMcpServerFromPreset(id)
+    assert.ok(preset, `${id} preset resolves`)
+    assert.equal(preset.name, name)
+    assert.equal(preset.transport, 'stdio')
+    assert.equal(preset.command, 'npx')
+    assert.deepEqual(preset.args, args)
+    assert.equal(preset.enabled, true)
+    assert.equal(getMcpServerPreset(id)?.official, true)
+    assert.notEqual(getMcpServerPreset(id)?.showInAccess, false, `${id} should appear in Access`)
+  }
 })
 
 test('Filesystem preset stays available in advanced MCP setup without duplicating Access', () => {
@@ -39,6 +59,14 @@ test('Chrome DevTools MCP preset and Access installer have complete five-languag
   for (const lang of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
     assert.ok(lookup(translations[lang], 'mcp.chromeDevtoolsPreset'))
     for (const key of ['access.filterMcp', 'access.mcpTitle', 'access.capabilityMcp', 'access.chromeDevtoolsMcpDesc', 'access.installMcp', 'access.mcpReady']) {
+      assert.ok(lookup(translations[lang], key), `${lang} missing ${key}`)
+    }
+  }
+})
+
+test('New MCP presets ship five-language descriptions', () => {
+  for (const lang of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
+    for (const key of ['access.fetchMcpDesc', 'access.fetchMcpHint', 'access.sequentialThinkingMcpDesc', 'access.sequentialThinkingMcpHint', 'access.memoryMcpDesc', 'access.memoryMcpHint', 'access.playwrightMcpDesc', 'access.playwrightMcpHint']) {
       assert.ok(lookup(translations[lang], key), `${lang} missing ${key}`)
     }
   }

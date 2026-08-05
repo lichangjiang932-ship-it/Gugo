@@ -56,14 +56,14 @@ const t = (key) => ({
   'access.workspace': '工作区',
 }[key] || key)
 
-async function renderModal(dom, onConnected) {
+async function renderModal(dom, onConnected, options = {}) {
   const rootElement = dom.window.document.getElementById('root')
   const root = createRoot(rootElement)
   await act(async () => {
     root.render(
       <AccessConnectModal
-        connector={connector}
-        integration={integration}
+        connector={options.connector || connector}
+        integration={Object.prototype.hasOwnProperty.call(options, 'integration') ? options.integration : integration}
         onClose={() => {}}
         onConnected={onConnected}
         t={t}
@@ -135,7 +135,7 @@ test('只有明确探测成功才启用连接', async () => {
   globalThis.fetch = originalFetch
 })
 
-test('Slack and Google Drive manual fallback map tokens to provider secret fields', () => {
+test('manual credentials map provider fields without exposing secrets in config', () => {
   assert.deepEqual(manualIntegrationValues('slack', {
     workspace: 'Atelier',
     token: 'xoxb-manual',
@@ -164,4 +164,82 @@ test('Slack and Google Drive manual fallback map tokens to provider secret field
     config: { appId: 'qq-app' },
     secret: { appSecret: 'qq-secret' },
   })
+  assert.deepEqual(manualIntegrationValues('qq_mail', {
+    user: 'reader@qq.com',
+    from: 'Reader <reader@qq.com>',
+    smtpHost: 'smtp.qq.com',
+    smtpPort: '465',
+    imapHost: 'imap.qq.com',
+    imapPort: '993',
+    password: 'mail-authorization-code',
+  }), {
+    config: {
+      user: 'reader@qq.com',
+      from: 'Reader <reader@qq.com>',
+      smtpHost: 'smtp.qq.com',
+      smtpPort: 465,
+      imapHost: 'imap.qq.com',
+      imapPort: 993,
+    },
+    secret: { password: 'mail-authorization-code' },
+  })
+  assert.deepEqual(manualIntegrationValues('qq_mail', {}), { config: {}, secret: {} })
+})
+
+test('QQ Mail form allows local MAIL_* fallback and shows secure placeholders', async () => {
+  const dom = setupDom()
+  const { root, rootElement } = await renderModal(dom, () => {}, {
+    connector: { provider: 'qq_mail', label: 'QQ Mail', hintKey: 'access.qqMailHint' },
+    integration: null,
+  })
+
+  try {
+    const inputs = Array.from(rootElement.querySelectorAll('input'))
+    assert.equal(inputs.every((input) => input.value === ''), true)
+    const placeholders = inputs.map((input) => input.placeholder)
+    assert.ok(placeholders.includes('smtp.qq.com'))
+    assert.ok(placeholders.includes('465'))
+    assert.ok(placeholders.includes('imap.qq.com'))
+    assert.ok(placeholders.includes('993'))
+    assert.equal(rootElement.querySelectorAll('input[type="password"]').length, 1)
+    assert.match(rootElement.textContent, /access\.qqMailPasswordHint/)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('OAuth 未配置时展示如何启用 OAuth 的折叠引导', async () => {
+  const dom = setupDom()
+  const requests = []
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (url) => {
+    requests.push(String(url))
+    return jsonResponse({
+      ok: false,
+      code: 'OAUTH_NOT_CONFIGURED',
+      error: 'OAuth is not configured on this server',
+    })
+  }
+  const { root, rootElement } = await renderModal(dom, () => {}, {
+    connector: { provider: 'notion', label: 'Notion', hintKey: 'access.notionHint', oauth: true },
+  })
+
+  try {
+    const oauthButton = rootElement.querySelector('form button[type="button"]')
+    assert.ok(oauthButton, 'OAuth 按钮应渲染')
+    await act(async () => {
+      oauthButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    assert.ok(requests.some((url) => url.includes('/api/integrations/oauth/start')))
+    const help = rootElement.querySelector('[data-testid="oauth-help"]')
+    assert.ok(help, 'OAUTH_NOT_CONFIGURED 时应渲染配置引导')
+    assert.match(help.textContent, /oauthHelpToggle/)
+    assert.match(help.textContent, /oauthHelpBody/)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+    globalThis.fetch = originalFetch
+  }
 })
