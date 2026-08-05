@@ -41,10 +41,16 @@ beforeEach(() => {
   process.env.WORKSPACE_SHARED_TRUSTED = '1'
 })
 
-test('fs 默认禁用:WORKSPACE_FS_ENABLED 未设时,所有 fs 操作返回 403', async () => {
-  await assert.rejects(() => readFileTool({ path: 'anything.txt' }), /WORKSPACE_FS_ENABLED/)
-  await assert.rejects(() => writeFileTool({ path: 'a.txt', content: 'hi' }), /WORKSPACE_FS_ENABLED/)
-  await assert.rejects(() => editFileTool({ path: 'a.txt', old_string: 'x', new_string: 'y' }), /WORKSPACE_FS_ENABLED/)
+test('fs 默认禁用:WORKSPACE_FS_ENABLED 未设时,工作区路径被拒', async () => {
+  // 未开启全局开关时，工作区来源一律拒绝（显式授权的本地路径除外，
+  // 见 localFileAccessService 测试）。
+  // 无 userId 的相对路径先被「需绝对路径」拦截。
+  await assert.rejects(() => readFileTool({ path: 'anything.txt' }), /绝对路径/)
+  await assert.rejects(() => writeFileTool({ path: 'a.txt', content: 'hi' }), /绝对路径/)
+  await assert.rejects(() => editFileTool({ path: 'a.txt', old_string: 'x', new_string: 'y' }), /绝对路径/)
+  // 绝对路径无 userId 也走授权判定 → 未授权/不存在即拒绝，不因开关而放行
+  const inside = path.join(workspace, 'inside.txt')
+  await assert.rejects(() => readFileTool({ path: inside }), /未获得读取授权|越出 workspace|绝对路径|路径不存在/)
 })
 
 test('shell 默认禁用:WORKSPACE_SHELL_ENABLED 未设时,bash_exec 返回 403', async () => {

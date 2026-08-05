@@ -71,15 +71,20 @@ function assertToolPermitted(userId, toolName) {
 }
 
 function resolveForFileTool(rawPath, { userId = null, write = false, allowMissing = false } = {}) {
-  if (!isFsEnabled()) {
-    throw badReq('WORKSPACE_FS_ENABLED=1 未启用,无法访问文件', 403)
-  }
+  // 先按「本地文件授权」解析：用户显式授权的路径（grant / all_files）是独立的
+  // 信任边界，不应被全局 WORKSPACE_FS_ENABLED 开关短路——授权行为本身已经
+  // 是用户的明确同意。只有落到 workspace 来源的路径才需要全局开关 + 工作区信任。
   const resolved = resolveAuthorizedLocalPath({ userId, rawPath, write, allowMissing })
-  assertWorkspaceCapability({
-    userId,
-    rootPath: resolved.rootPath || getWorkspaceRoot(),
-    capability: write ? 'fileSystemWrite' : 'fileSystem',
-  })
+  if (resolved.source === 'workspace') {
+    if (!isFsEnabled()) {
+      throw badReq('WORKSPACE_FS_ENABLED=1 未启用,无法访问工作区文件', 403)
+    }
+    assertWorkspaceCapability({
+      userId,
+      rootPath: resolved.rootPath || getWorkspaceRoot(),
+      capability: write ? 'fileSystemWrite' : 'fileSystem',
+    })
+  }
   return resolved
 }
 

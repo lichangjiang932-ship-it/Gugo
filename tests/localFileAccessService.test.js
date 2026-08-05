@@ -110,14 +110,21 @@ test('read-only grants block writes and can be upgraded to read-write', async ()
   )
 })
 
-test('the global filesystem switch cannot be bypassed by a per-user grant', async () => {
+test('explicit per-user grants work without the global filesystem switch', async () => {
+  // 修复：用户显式授权的本地路径是独立信任边界，不应被全局 WORKSPACE_FS_ENABLED
+  // 开关短路——授权本身就是用户的明确同意（本地文件授权 UI 可见且可审计）。
   const saved = process.env.WORKSPACE_FS_ENABLED
   grantLocalPath({ userId: 'local-user-a', rootPath: grantedDir, accessMode: 'read_only' })
   process.env.WORKSPACE_FS_ENABLED = '0'
   try {
+    const read = await readFileTool({ userId: 'local-user-a', path: path.join(grantedDir, 'note.txt') })
+    assert.equal(read.ok, true)
+    assert.equal(read.scope, 'grant')
+    assert.equal(read.content, 'hello local files')
+    // 未授权路径依旧完全拒绝（安全边界不变）
     await assert.rejects(
-      () => readFileTool({ userId: 'local-user-a', path: path.join(grantedDir, 'note.txt') }),
-      /WORKSPACE_FS_ENABLED=1/,
+      () => readFileTool({ userId: 'local-user-b', path: path.join(grantedDir, 'note.txt') }),
+      /未获得读取授权/,
     )
   } finally {
     process.env.WORKSPACE_FS_ENABLED = saved

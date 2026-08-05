@@ -104,6 +104,14 @@ LOCAL_USER_ID=existing-user-id
 `WORKSPACE_SHARED_TRUSTED=1` 会把工作区视为对所有用户已信任，只适用于单机、可信用户环境。
 它不是执行沙箱，也不应在不可信用户可访问的部署中开启。
 
+### 本地文件授权与全局开关的关系
+
+`WORKSPACE_FS_ENABLED` 只约束**工作区根目录**（`WORKSPACE_ROOT`）内的路径访问。在
+「设置 → 本地文件」里**显式授权的目录**是独立的信任边界：授权行为本身就是用户的明确同意，
+读取/写入这些已授权路径**不依赖** `WORKSPACE_FS_ENABLED` 全局开关。未授权的路径（无论是否在
+工作区内）仍然完全拒绝。这样本机单用户使用时不强制开全局开关，也能让模型访问已授权的
+本地项目（例如 `D:\destok\money`）。
+
 ## OAuth 公网地址与反向代理
 
 生产环境应显式设置 `APP_PUBLIC_URL=https://atelier.example.com`，MCP OAuth 回调地址只使用该 origin。

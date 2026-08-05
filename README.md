@@ -216,7 +216,7 @@ Cherry Studio 选择 `Streamable HTTP`，URL 填上述 `/mcp` 地址，并添加
 | `MODEL_API_KEY` | 否 | 服务端默认模型 API Key | — |
 | `MODEL_NAMES_VISION` | 否 | 视觉模型名（逗号分隔） | — |
 | `MAIL_SERVER/MAIL_PORT/MAIL_USERNAME/MAIL_PASSWORD` | 多用户部署必填 | 邮箱验证码服务；本地模式不需要 | — |
-| `WORKSPACE_FS_ENABLED` | 否 | 文件系统工具开关 | `0` |
+| `WORKSPACE_FS_ENABLED` | 否 | 工作区文件工具开关；在「本地文件」显式授权的路径不受此开关限制 | `0` |
 | `WORKSPACE_SHELL_ENABLED` | 否 | Shell 工具开关 | `0` |
 | `WORKSPACE_GIT_ENABLED` | 否 | Git 工具开关 | `0` |
 | `WORKSPACE_ROOT` | 否 | 工作区根目录 | `process.cwd()` |
