@@ -185,8 +185,9 @@ export function buildPresentationPlannerPrompt(topic = '', { skillId = 'ppt' } =
   const blueprint = buildSlideBlueprint(template, slideCount)
   const library = PRESENTATION_TEMPLATES.map((item) => `${item.id}=${item.label}`).join('; ')
   const syntaxRule = skillId === 'htmlppt'
-    ? 'Use exactly one top-level section per planned page. Keep data-slide numbers continuous and expose window.__ymaDeck navigation.'
+    ? 'Use exactly one top-level section per planned page. Keep data-slide numbers continuous, render every page on a fixed 16:9 canvas, keep primary content inside an equal 6% horizontal / 8% vertical safe area, and expose window.__ymaDeck navigation.'
     : 'Use exactly one Markdown slide per planned page. The second line of every slide must be the planned <!-- type --> tag.'
 
   return `\n\n## Template library planner\n- Template library: ${library}\n- Selected template: ${template.id} (${template.label})\n- Visual theme: ${template.theme}\n- Strict slide count: ${blueprint.length}\n- Do not add, remove, merge, or reorder pages unless the user explicitly asks.\n- ${syntaxRule}\n- Every non-cover/end page must contain real argument depth: claim; evidence/mechanism/impact; metric or tradeoff.\n\n### Page-by-page blueprint\n${blueprint.map((item) => formatBlueprintLine(item, skillId)).join('\n')}\n\n### Content density rules\n- Write from the slot intent, not from a generic outline.\n- Each content card must include a causal mechanism, proof point, risk, or action implication.\n- If a factual metric is unknown, mark it as replaceable data instead of inventing a source.\n- Avoid decorative filler such as "future outlook" unless the slot asks for a roadmap or closing thesis.`
+    + (skillId === 'htmlppt' ? `\n- Use at least 64px for the deck title, 48px for slide titles, 28px for subheads, and 22px for body copy on the 1920×1080 canvas.\n- Never duplicate visible text with pseudo-elements, text-shadow, filters, or stacked DOM copies; decorations may not overlap the primary copy.` : '')
 }

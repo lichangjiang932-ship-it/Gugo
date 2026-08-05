@@ -35,6 +35,14 @@ test('translations 包含 zh / en / ja / ko / zh-TW 五种语言', () => {
   )
 })
 
+test('QQ Mail local environment fallback is explained in all five languages', () => {
+  for (const lang of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
+    const hint = translations[lang]?.access?.qqMailPasswordHint || ''
+    assert.match(hint, /MAIL_\*/)
+    assert.ok(hint.length >= 20, `${lang} QQ Mail hint is incomplete`)
+  }
+})
+
 test('新增语言 ja/ko/zh-TW 的 key 与 zh 完全对称', () => {
   const zhKeys = leafKeys(translations.zh).sort()
   for (const lang of ['ja', 'ko', 'zh-TW']) {

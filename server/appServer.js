@@ -295,7 +295,7 @@ function createRouter(getEnv = getRuntimeEnv, staticDir = distDir) {
   }
 
   if (req.url?.startsWith('/api/connectors/')) {
-    return handleConnectorRequest(req, res)
+    return handleConnectorRequest(req, res, { env: getEnv() })
   }
 
   if (req.url?.startsWith('/api/local-files')) {

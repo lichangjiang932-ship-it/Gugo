@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, FileText, BarChart3, LayoutList, ExternalLink, ChevronDown, Copy, Code2, Quote, Download, Sparkles, Presentation, Sheet, ListChecks } from 'lucide-react'
+import { X, FileText, BarChart3, LayoutList, ExternalLink, ChevronDown, Copy, Code2, Quote, Download, Presentation, Sheet, ListChecks } from 'lucide-react'
 import MarkdownRenderer from '../../components/MarkdownRenderer.jsx'
 import ToolCallCard from '../../components/ToolCallCard.jsx'
 import SubagentCard from '../../components/SubagentCard.jsx'
@@ -40,7 +40,7 @@ function ArtifactOpenCard({ preview, onOpen, className = '' }) {
       data-testid="artifact-open-card"
       onClick={onOpen}
       className={`group w-full text-left rounded-md border border-ink-fade/30 bg-paper hover:border-ember/60 hover:shadow-sm transition-all p-3 flex items-center gap-3 ${className}`}
-      title={t('chatMessages.openPreviewTitle')}
+      title={`${preview.label} · ${t('chatPreview.preview')}`}
     >
       <div className="w-10 h-10 rounded-md bg-ember-soft border border-ember/30 flex items-center justify-center text-ember shrink-0">
         {preview.type === 'pptx' && <BarChart3 className="w-5 h-5" />}
@@ -56,7 +56,7 @@ function ArtifactOpenCard({ preview, onOpen, className = '' }) {
         <div className="text-xs text-ink-fade truncate">{preview.summary}</div>
       </div>
       <div className="shrink-0 inline-flex items-center gap-1.5">
-        <span className="text-[11px] text-ink-fade group-hover:text-ember transition-colors hidden sm:inline">{t('chatMessages.openOnRight')}</span>
+        <span className="text-[11px] text-ink-fade group-hover:text-ember transition-colors hidden sm:inline">{t('chatPreview.preview')}</span>
         <ExternalLink className="w-4 h-4 text-ink-fade group-hover:text-ember transition-colors" />
       </div>
     </button>
@@ -70,6 +70,29 @@ const STARTER_PROMPTS = [
   { key: 'workPlan', icon: ListChecks },
 ]
 
+function AtelierMark() {
+  return (
+    <div
+      data-testid="atelier-mark"
+      className="mb-6 flex h-16 w-16 items-center justify-center rounded-[22px] bg-ink text-paper shadow-[0_16px_40px_rgb(var(--color-ink-rgb)/0.18)] ring-1 ring-paper/20"
+      aria-hidden="true"
+    >
+      <svg viewBox="0 0 56 56" className="h-10 w-10" fill="none">
+        <path d="M38.5 17.5A15 15 0 1 0 41 31H29" stroke="currentColor" strokeWidth="4.5" strokeLinecap="round" />
+        <path d="M41 31v9" stroke="currentColor" strokeWidth="4.5" strokeLinecap="round" />
+        <circle cx="42.5" cy="13.5" r="3.5" className="fill-ember" />
+      </svg>
+    </div>
+  )
+}
+
+function splitUserSkillCommand(content = '') {
+  const raw = String(content || '')
+  const match = raw.match(/^\/([a-z0-9_-]+)(?:\s+([\s\S]*))?$/i)
+  if (!match) return { command: '', body: raw }
+  return { command: `/${match[1]}`, body: match[2] || '' }
+}
+
 function NewConversationWelcome({ onPromptSelect }) {
   const { t } = useT()
   return (
@@ -78,9 +101,7 @@ function NewConversationWelcome({ onPromptSelect }) {
       aria-labelledby="new-conversation-title"
       data-testid="new-conversation-welcome"
     >
-      <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-2xl border border-ember/25 bg-ember-soft text-ember shadow-sm">
-        <Sparkles className="h-6 w-6" aria-hidden="true" />
-      </div>
+      <AtelierMark />
       <h1 id="new-conversation-title" className="font-hand text-2xl text-ink sm:text-3xl">
         {t('chatMessages.emptyTitle')}
       </h1>
@@ -493,6 +514,7 @@ export default function ChatMessages({
                 content: msg.content,
                 artifactSource: msg.meta?.artifactSource,
               })
+              const userSkillCommand = msg.role === 'user' ? splitUserSkillCommand(msg.content) : null
 
               return (
               <motion.div
@@ -573,9 +595,21 @@ export default function ChatMessages({
                   ) : (
                     <div
                       data-testid="user-message-bubble"
-                      className="chat-user-message max-w-full rounded-2xl rounded-br-md border border-ink/10 bg-paper-2 px-3.5 py-2 text-[14px] leading-6 shadow-[0_1px_2px_rgb(var(--color-ink-rgb)/0.03)]"
+                      className={`chat-user-message max-w-full rounded-2xl rounded-br-md border bg-paper-2 px-3.5 py-2 text-[14px] leading-6 ${
+                        userSkillCommand?.command ? 'chat-user-skill-message border-ink/20' : 'border-ink/10'
+                      }`}
                     >
-                      <span className="whitespace-pre-wrap">{msg.content}</span>
+                      {userSkillCommand?.command && (
+                        <span
+                          data-testid="sent-skill-command"
+                          className="mb-1.5 inline-flex h-6 items-center rounded-md bg-ink px-2 font-mono text-xs font-medium leading-none text-paper shadow-sm"
+                        >
+                          {userSkillCommand.command}
+                        </span>
+                      )}
+                      <span className={`whitespace-pre-wrap ${userSkillCommand?.command ? 'block text-ink' : ''}`}>
+                        {userSkillCommand?.command ? userSkillCommand.body : msg.content}
+                      </span>
                     </div>
                   )}
                   {msg.role === 'user' && (

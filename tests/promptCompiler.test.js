@@ -12,9 +12,11 @@ const {
   buildSafetyBlock,
   ensureSafetySystemMessages,
   buildSkillsBlock,
+  buildSkillsBlockFromPrepared,
   buildSessionsBlock,
   clearPromptCompilerCache,
   getPromptCompilerStats,
+  SKILL_PROMPT_LIMITS,
 } = await import('../server/services/promptCompiler.js')
 const { buildAgentSystemBlock } = await import('../server/services/agentStore.js')
 const { createCompactionArchive } = await import('../server/services/compactionService.js')
@@ -113,6 +115,21 @@ test('buildSkillsBlock returns empty for unknown skillIds', () => {
     buildSkillsBlock({ userId: 'u_prompt', agentId: 'agt_1', skillIds: ['not-a-skill'] }),
     { text: '', fingerprint: 'empty', sources: {} },
   )
+})
+
+test('prepared skill prompts and the combined skills block obey safety budgets', () => {
+  clearPromptCompilerCache('skills')
+  const oversized = '界'.repeat(SKILL_PROMPT_LIMITS.maxPromptBytes)
+  const block = buildSkillsBlockFromPrepared({
+    userId: 'u_budget',
+    skills: [
+      { id: 'large-a', name: 'Large A', systemPrompt: oversized },
+      { id: 'large-b', name: 'Large B', systemPrompt: oversized },
+      { id: 'large-c', name: 'Large C', systemPrompt: oversized },
+    ],
+  })
+  assert.ok(Buffer.byteLength(block.text, 'utf8') <= SKILL_PROMPT_LIMITS.maxBlockBytes)
+  assert.match(block.text, /safety budget/)
 })
 
 test('buildSessionsBlock includes sessionId and recentMessages in fingerprint', () => {

@@ -494,6 +494,7 @@ const CONNECTION_METHOD_KEYS = Object.freeze({
   qr: 'access.methodQr',
   bot_token: 'access.methodBotToken',
   app_credentials: 'access.methodAppCredentials',
+  mail_password: 'access.methodMailPassword',
   mcp: 'access.methodMcp',
   browser: 'access.methodBrowser',
   qr_browser: 'access.methodQrBrowser',

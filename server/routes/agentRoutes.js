@@ -37,9 +37,9 @@ import {
   listImportedSkills,
   getImportedSkill,
   installSkill,
-  listAllSkillIds,
 } from '../services/skillStore.js'
 import { resolveImportedSkillId } from '../services/skillImport.js'
+import { listAllRuntimeSkillIds } from '../services/skillRegistry.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
 
@@ -295,7 +295,7 @@ export async function handleAgentRequest(req, res) {
             continue
           }
           // 全库唯一 ID dedup
-          const finalId = resolveImportedSkillId(meta.id, listAllSkillIds())
+          const finalId = resolveImportedSkillId(meta.id, listAllRuntimeSkillIds())
           // 重写 skill.json 里的 id 为 finalId (保 skill_assets 与装后读取一致)
           const rewroteFiles = { ...files }
           rewroteFiles['skill.json'] = JSON.stringify({ ...meta, id: finalId }, null, 2)

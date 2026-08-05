@@ -36,7 +36,7 @@ function HtmlPreview({ html }) {
     iframeRef.current?.contentWindow?.postMessage({ type }, '*')
   }
   return (
-    <div className="relative w-full h-full">
+    <div className={`relative w-full h-full ${isDeck ? 'html-deck-stage' : ''}`}>
       <iframe
         ref={iframeRef}
         title={t('chatPreview.htmlTitle')}
@@ -47,7 +47,7 @@ function HtmlPreview({ html }) {
         // 可选:再加 referrerpolicy 防泄漏来源
         referrerPolicy="no-referrer"
         srcDoc={srcDoc}
-        className="w-full h-full border-0 bg-white"
+        className={isDeck ? 'html-deck-frame border-0 bg-white' : 'w-full h-full border-0 bg-white'}
       />
       {isDeck && (
         <div className="absolute left-3 bottom-3 z-10 flex items-center gap-1 rounded-full border border-ink-fade/30 bg-paper/85 p-1 shadow-sm backdrop-blur">
@@ -71,6 +71,11 @@ function HtmlPreview({ html }) {
       )}
     </div>
   )
+}
+
+function isPresentationArtifact(artifact) {
+  const preview = artifact?.preview
+  return preview?.type === 'pptx' || (preview?.type === 'html' && isHtmlDeckLike(preview.html || ''))
 }
 
 function PptxPreview({ content }) {
@@ -309,7 +314,7 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
   const [downloading, setDownloading] = useState(false)
   const [premiumExporting, setPremiumExporting] = useState(false)
   const [premiumProgress, setPremiumProgress] = useState('')
-  const [maximized, setMaximized] = useState(false)
+  const [maximized, setMaximized] = useState(() => isPresentationArtifact(artifact))
   // ★ #24: 可拖拽宽度,持久化到 localStorage
   const [paneWidth, setPaneWidth] = useState(() => {
     try {
@@ -397,6 +402,7 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
       previousArtifactKey.current = key
       setView('preview')
       setDownloading(false)
+      setMaximized(isPresentationArtifact(artifact))
     }
   }, [artifact])
 
@@ -573,8 +579,8 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
         transition={{ duration: 0.22, ease: 'easeOut' }}
         style={maximized ? undefined : { width: `${paneWidth}px` }}
         className={`chat-preview-pane ${
-          maximized ? 'fixed inset-0 z-40 w-screen' : ''
-        } bg-paper-2 flex flex-col border-l border-dashed border-ink-fade/50 overflow-hidden relative z-40`}
+          maximized ? 'chat-preview-pane-maximized fixed inset-0 w-screen' : 'relative'
+        } z-40 bg-paper-2 flex flex-col border-l border-dashed border-ink-fade/50 overflow-hidden`}
       >
         {/* ★ #24: 左边缘拖拽 handle (最大化时隐藏) */}
         {!maximized && (

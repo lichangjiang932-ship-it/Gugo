@@ -166,6 +166,23 @@ function activateSlide(allSlides, target) {
   return () => restore.forEach((fn) => fn())
 }
 
+export function collectEditableTextNodes(slide) {
+  if (!slide?.querySelectorAll) return []
+  const blockSelector = 'h1,h2,h3,h4,p,li,blockquote'
+  const detailSelector = '.kpi-num,.kpi-label,.kpi-unit,.kpi-delta,.section-num,.toc-num,.pager,.tag,.badge,.subtitle,.caption,.eyebrow'
+  const blockNodes = Array.from(slide.querySelectorAll(blockSelector))
+    .filter((node) => (node.textContent || '').trim())
+  const leafBlocks = blockNodes.filter((node) => !blockNodes.some((other) => (
+    other !== node
+    && node.contains(other)
+    && (other.textContent || '').replace(/\s+/g, ' ').trim() === (node.textContent || '').replace(/\s+/g, ' ').trim()
+  )))
+  const detailNodes = Array.from(slide.querySelectorAll(detailSelector))
+    .filter((node) => (node.textContent || '').trim())
+    .filter((node) => !leafBlocks.some((block) => block === node || block.contains(node)))
+  return [...leafBlocks, ...detailNodes].filter((node, index, all) => all.indexOf(node) === index)
+}
+
 // 从 slide DOM 抓出"主要可编辑文本"层,按 iframe 像素返回 EMU-friendly 比例.
 // 必须在 installTextWipeStylesheet 之前调用,否则 computedStyle.color 拿到的是
 // 透明色而非 deck 原配色.
@@ -173,29 +190,9 @@ function extractEditableText(slide) {
   const rectSlide = slide.getBoundingClientRect()
   const win = slide.ownerDocument.defaultView
   const out = []
-  // 大类:标题/正文/列表/KPI/章节号/单位/强调 inline
-  const selectors = [
-    'h1', 'h2', 'h3', 'h4',
-    'p', 'li',
-    '.kpi-num', '.kpi-label', '.kpi-unit', '.kpi-delta',
-    '.section-num', '.toc-num', '.pager',
-    '.tag', '.badge', '.subtitle', '.caption', '.eyebrow',
-    'strong', 'em', 'blockquote', 'cite',
-  ]
-  // 优先小颗粒(inline 元素的精确位置/颜色),最后才退回大块(p/li)
-  for (const sel of selectors) {
-    const nodes = Array.from(slide.querySelectorAll(sel))
-    for (const node of nodes) {
-      // 跳过容器节点 — 只接受真正承载文字的叶子,避免 <p><strong>x</strong> y</p>
-      // 同时把整段 p 也抓上重影.
-      const childElements = Array.from(node.children).filter((c) => c.nodeType === 1)
-      const hasTextOnly = childElements.length === 0 ||
-        childElements.every((c) => !c.textContent?.trim())
-      // 大块容器(p/li/h)即便有子元素也保留(承载整段文字 fallback),
-      // 但 inline 元素(strong/em/span)如果嵌套含子元素就跳过避免重复.
-      const isInline = ['strong', 'em', 'span', 'cite'].includes(node.tagName.toLowerCase())
-      if (isInline && !hasTextOnly) continue
-
+  // 每段文字只映射到一个文本框。strong/em 等行内节点由父级段落承载，
+  // 避免父子文本框同时覆盖同一串文字造成肉眼可见的重影。
+  for (const node of collectEditableTextNodes(slide)) {
       const text = (node.textContent || '').replace(/\s+/g, ' ').trim()
       if (!text) continue
       const rect = node.getBoundingClientRect()
@@ -234,7 +231,6 @@ function extractEditableText(slide) {
         color: hex,
         tag: node.tagName.toLowerCase(),
       })
-    }
   }
   // 去重:同文本同位置只保留一次(深层节点 + 父节点都会命中)
   const seen = new Set()

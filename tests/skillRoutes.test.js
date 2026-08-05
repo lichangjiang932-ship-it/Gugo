@@ -97,3 +97,132 @@ test('one user cannot list another user\'s imported skills', async () => {
     await new Promise((resolve) => server.close(resolve))
   }
 })
+
+test('anonymous callers cannot read private skill manifests or assets', async () => {
+  const owner = issueTestSession()
+  const server = createAppServer({ getEnv: () => ({}) })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const { port } = server.address()
+
+  try {
+    const baseId = `private-read-${process.pid}`
+    const files = {
+      'skill.json': JSON.stringify({
+        id: baseId,
+        name: 'Private read boundary',
+        description: 'Must require its owner session.',
+        version: '1.0.0',
+        icon: 'lock',
+        permissions: [],
+      }),
+      'prompts/system.md': 'private prompt content',
+    }
+    const importedResponse = await fetch(`http://127.0.0.1:${port}/api/skills/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${owner.token}` },
+      body: JSON.stringify({ files }),
+    })
+    assert.equal(importedResponse.status, 201)
+    const imported = await importedResponse.json()
+    const encodedId = encodeURIComponent(imported.skill.id)
+
+    const ownerManifest = await fetch(`http://127.0.0.1:${port}/api/skills/${encodedId}/manifest`, {
+      headers: { Authorization: `Bearer ${owner.token}` },
+    })
+    assert.equal(ownerManifest.status, 200)
+    const ownerAsset = await fetch(`http://127.0.0.1:${port}/api/skills/${encodedId}/assets/prompts%2Fsystem.md`, {
+      headers: { Authorization: `Bearer ${owner.token}` },
+    })
+    assert.equal(ownerAsset.status, 200)
+    assert.match(ownerAsset.headers.get('cache-control') || '', /^private\b/)
+
+    const anonymousManifest = await fetch(`http://127.0.0.1:${port}/api/skills/${encodedId}/manifest`)
+    assert.equal(anonymousManifest.status, 404)
+    const anonymousAsset = await fetch(`http://127.0.0.1:${port}/api/skills/${encodedId}/assets/prompts%2Fsystem.md`)
+    assert.equal(anonymousAsset.status, 404)
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
+})
+
+test('different users importing the same skill id receive globally unique ids', async () => {
+  const alice = issueTestSession()
+  const bob = issueTestSession()
+  const server = createAppServer({ getEnv: () => ({}) })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const { port } = server.address()
+
+  try {
+    const baseId = `shared-id-${process.pid}`
+    const files = {
+      'skill.json': JSON.stringify({
+        id: baseId,
+        name: 'Global id collision fixture',
+        description: 'Both users import this package.',
+        version: '1.0.0',
+        icon: 'copy',
+        permissions: [],
+      }),
+      'prompts/system.md': 'collision-safe prompt',
+    }
+    const importFor = async (token) => {
+      const response = await fetch(`http://127.0.0.1:${port}/api/skills/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ files }),
+      })
+      assert.equal(response.status, 201)
+      return response.json()
+    }
+
+    const aliceImport = await importFor(alice.token)
+    const bobImport = await importFor(bob.token)
+    assert.equal(aliceImport.skill.id, baseId)
+    assert.equal(bobImport.skill.id, `${baseId}-2`)
+
+    const aliceList = await fetch(`http://127.0.0.1:${port}/api/skills`, {
+      headers: { Authorization: `Bearer ${alice.token}` },
+    }).then((response) => response.json())
+    const bobList = await fetch(`http://127.0.0.1:${port}/api/skills`, {
+      headers: { Authorization: `Bearer ${bob.token}` },
+    }).then((response) => response.json())
+    assert.equal(aliceList.skills.some((skill) => skill.id === baseId), true)
+    assert.equal(aliceList.skills.some((skill) => skill.id === `${baseId}-2`), false)
+    assert.equal(bobList.skills.some((skill) => skill.id === baseId), false)
+    assert.equal(bobList.skills.some((skill) => skill.id === `${baseId}-2`), true)
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
+})
+
+test('imported skills cannot shadow a built-in runtime skill id', async () => {
+  const { token } = issueTestSession()
+  const server = createAppServer({ getEnv: () => ({}) })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const { port } = server.address()
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/skills/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        files: {
+          'skill.json': JSON.stringify({
+            id: 'ppt',
+            name: 'Shadow attempt',
+            description: 'Must not replace the built-in PPT skill.',
+            version: '1.0.0',
+            icon: 'P',
+            permissions: [],
+          }),
+          'prompts/system.md': 'Do not shadow the built-in skill.',
+        },
+      }),
+    })
+    assert.equal(response.status, 201)
+    const imported = await response.json()
+    assert.match(imported.skill.id, /^ppt-\d+$/)
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
+})

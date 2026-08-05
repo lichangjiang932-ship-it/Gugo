@@ -190,6 +190,46 @@ test('v0.10: zip 携带 avatar.png + skills/<id>/ 完整往返', async () => {
   })
 })
 
+test('agent card skill import cannot shadow a built-in runtime skill id', async () => {
+  const owner = issueTestSession()
+  const target = issueTestSession()
+  await withServer(async (base) => {
+    const created = await fetch(`${base}/api/agents`, {
+      method: 'POST',
+      headers: H(owner.token, { 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ name: `CollisionCard-${Date.now()}`, soulMd: 'collision fixture' }),
+    })
+    const agentId = (await created.json()).agent.id
+    const exported = await fetch(`${base}/api/agents/${agentId}/export.zip?skills=0`, {
+      headers: H(owner.token),
+    })
+    const zip = await JSZip.loadAsync(Buffer.from(await exported.arrayBuffer()))
+    zip.file('skills/ppt/skill.json', JSON.stringify({
+      id: 'ppt',
+      name: 'Agent card collision fixture',
+      description: 'Must not shadow built-in PPT.',
+      version: '1.0.0',
+      icon: 'P',
+      permissions: [],
+    }))
+    zip.file('skills/ppt/prompts/system.md', 'collision fixture prompt')
+    const archive = await zip.generateAsync({ type: 'nodebuffer' })
+
+    const imported = await fetch(`${base}/api/agents/import.zip?overrideName=CollisionCardImported-${Date.now()}`, {
+      method: 'POST',
+      headers: H(target.token, { 'Content-Type': 'application/zip' }),
+      body: archive,
+    })
+    assert.equal(imported.status, 200)
+    assert.equal((await imported.json()).skillsImported, 1)
+
+    const skills = await fetch(`${base}/api/skills`, { headers: H(target.token) }).then((response) => response.json())
+    const collision = skills.skills.find((skill) => skill.name === 'Agent card collision fixture')
+    assert.ok(collision)
+    assert.match(collision.id, /^ppt-\d+$/)
+  })
+})
+
 test('v0.10: ?avatar=0 + ?skills=0 抑制对应导出', async () => {
   const { token } = issueTestSession()
   await withServer(async (base) => {

@@ -5,11 +5,14 @@ import {
   getGithubFile,
   listSlackChannels,
   listConnectedBrowserApps,
+  listQqMailMessages,
   openConnectedBrowserApp,
+  readQqMailMessage,
   readSlackChannel,
   searchGoogleDrive,
   searchGithubRepositories,
   searchNotion,
+  sendQqMailMessage,
 } from './connectorService.js'
 
 const definitions = [
@@ -33,6 +36,18 @@ const definitions = [
   ['google_drive_get_file', 'Read metadata and text content from a Google Drive file by ID.', {
     fileId: { type: 'string' },
   }, ['fileId']],
+  ['qq_mail_list_recent', 'List recent messages from the connected QQ Mail inbox.', {
+    limit: { type: 'number' },
+  }, []],
+  ['qq_mail_read', 'Read one QQ Mail message by its IMAP UID.', {
+    uid: { type: 'string' },
+  }, ['uid']],
+  ['qq_mail_send', 'Send an email through the connected QQ Mail account.', {
+    to: { oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }] },
+    subject: { type: 'string' },
+    text: { type: 'string' },
+    html: { type: 'string' },
+  }, ['to', 'subject']],
 ]
 
 export const CONNECTOR_TOOL_SPECS = Object.freeze(definitions.map(([name, description, properties, required]) => ({
@@ -45,7 +60,7 @@ export const CONNECTOR_TOOL_NAMES = Object.freeze(CONNECTOR_TOOL_SPECS.map((spec
 export async function executeConnectorTool(
   name,
   args = {},
-  { userId, fetchImpl, env, idempotencyKey, toolCallId } = {},
+  { userId, fetchImpl, env, mailClient, idempotencyKey, toolCallId } = {},
 ) {
   if (!userId) return { ok: false, error: 'connector tools require userId' }
   const executionContext = { idempotencyKey, toolCallId }
@@ -80,6 +95,15 @@ export async function executeConnectorTool(
     if (name === 'google_drive_get_file') {
       return { ok: true, ...(await getGoogleDriveFile({ userId, ...args, fetchImpl, env, ...executionContext })) }
     }
+    if (name === 'qq_mail_list_recent') {
+      return { ok: true, ...(await listQqMailMessages({ userId, ...args, env, mailClient, ...executionContext })) }
+    }
+    if (name === 'qq_mail_read') {
+      return { ok: true, ...(await readQqMailMessage({ userId, ...args, env, mailClient, ...executionContext })) }
+    }
+    if (name === 'qq_mail_send') {
+      return { ok: true, ...(await sendQqMailMessage({ userId, ...args, env, mailClient, ...executionContext })) }
+    }
     return { ok: false, error: `unknown connector tool: ${name}` }
   } catch (error) {
     return { ok: false, error: error?.message || String(error) }
@@ -94,7 +118,7 @@ export function registerConnectorTools() {
       name,
       origin: 'connector',
       source: name.split('_')[0],
-      metadata: { riskClass: name === 'connected_app_open' ? 'external' : 'read' },
+      metadata: { riskClass: ['connected_app_open', 'qq_mail_send'].includes(name) ? 'external' : 'read' },
       spec,
       exec: (args, context) => executeConnectorTool(name, args, context),
     })

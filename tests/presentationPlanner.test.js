@@ -50,4 +50,7 @@ test('planner prompt injects a strict page-by-page slot plan for ppt and htmlppt
   assert.match(htmlPrompt, /Selected template: technology/)
   assert.match(htmlPrompt, /section class="slide/)
   assert.match(htmlPrompt, /data-slide="3"/)
+  assert.match(htmlPrompt, /fixed 16:9 canvas/)
+  assert.match(htmlPrompt, /64px for the deck title/)
+  assert.match(htmlPrompt, /Never duplicate visible text/)
 })

@@ -326,6 +326,22 @@ test("mode 'unattended' passes chat origin but gates job / subagent", () => {
   }
 })
 
+test('QQ Mail send always requires a per-call decision in unattended chat', () => {
+  const args = { to: 'recipient@example.com', subject: 'Status', text: 'Done' }
+  const grant = buildRememberedGrant('qq_mail_send', args)
+  const cases = [
+    { origin: 'chat', mode: 'unattended' },
+    { origin: 'chat', mode: 'unattended', metadata: { riskClass: 'read', requiresApproval: false } },
+    { origin: 'chat', mode: 'unattended', rememberedGrants: [grant] },
+  ]
+  for (const options of cases) {
+    const verdict = classifyToolRisk('qq_mail_send', args, options)
+    assert.equal(verdict.needsApproval, true)
+    assert.equal(verdict.risk, 'medium')
+    assert.equal(verdict.reason, '发送外部邮件')
+  }
+})
+
 test("mode 'all' gates chat origin too", () => {
   for (const origin of ['chat', 'job', 'subagent']) {
     const out = classifyToolRisk('bash_exec', { command: 'ls' }, { origin, mode: 'all' })

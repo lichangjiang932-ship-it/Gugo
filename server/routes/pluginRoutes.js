@@ -13,7 +13,7 @@ import { getPlugin, listPlugins } from '../plugins/pluginRegistry.js'
 import { runTransformer } from '../plugins/pluginSandbox.js'
 import { authenticateRequest } from '../middleware.js'
 import { installPluginAsSkill } from '../services/pluginToSkill.js'
-import { listAllSkillIds } from '../services/skillStore.js'
+import { listAllRuntimeSkillIds } from '../services/skillRegistry.js'
 import { readJson, sendJson } from '../utils.js'
 
 const ENTRY_PREVIEW_LIMIT = 50 * 1024
@@ -110,7 +110,7 @@ export async function handlePluginRequest(req, res) {
   if (installMatch && req.method === 'POST') {
     const userId = authenticateRequest(req)
     if (!userId) return sendJson(res, 401, { error: 'Unauthorized' })
-    const existingIds = listAllSkillIds()
+    const existingIds = listAllRuntimeSkillIds()
     const result = installPluginAsSkill({ pluginId: installMatch[1], userId, existingIds })
     if (!result.ok) {
       const status = /not found/i.test(result.reason) ? 404

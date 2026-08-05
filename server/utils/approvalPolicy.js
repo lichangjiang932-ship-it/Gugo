@@ -52,7 +52,12 @@ export const APPROVAL_REQUIRED_TOOLS = Object.freeze({
   browser_open_url: 'low',
   // 连接器:打开外部应用
   connected_app_open: 'low',
+  qq_mail_send: 'medium',
 })
+
+// Sending mail is an irreversible external side effect. Keep it as a
+// per-call decision even when interactive chat normally runs unattended.
+const ALWAYS_CONFIRM_TOOLS = new Set(['qq_mail_send'])
 
 /** 一望即知无副作用的读类工具,永不审批(白名单优先于上表)。 */
 export const NEVER_APPROVE_TOOLS = Object.freeze([
@@ -196,6 +201,7 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
     : DEFAULT_PERMISSION_MODE
   const rememberedGrants = Array.isArray(opts.rememberedGrants) ? opts.rememberedGrants : []
   const safeArgs = args && typeof args === 'object' ? args : {}
+  const alwaysConfirm = ALWAYS_CONFIRM_TOOLS.has(name)
 
   if (mode === 'off') return { needsApproval: false, risk: 'low', reason: null }
   // ★ 空工具名不能当成「安全」放行 —— 那是 fail-open。
@@ -216,7 +222,7 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
   if (permissionMode === 'bypass') return { needsApproval: false, risk: 'low', reason: null }
 
   // unattended 模式:交互式聊天不拦(前端已有 apply_patch 弹窗),只拦无人值守路径
-  if (mode === 'unattended' && origin === 'chat') {
+  if (mode === 'unattended' && origin === 'chat' && !alwaysConfirm) {
     return { needsApproval: false, risk: 'low', reason: null }
   }
 
@@ -225,7 +231,9 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
 
   const metadata = opts.metadata && typeof opts.metadata === 'object' ? opts.metadata : null
   if (metadata) {
-    if (metadata.requiresApproval === false || metadata.riskClass === 'read') return { needsApproval: false, risk: 'low', reason: null }
+    if (!alwaysConfirm && (metadata.requiresApproval === false || metadata.riskClass === 'read')) {
+      return { needsApproval: false, risk: 'low', reason: null }
+    }
     risk = metadata.riskClass === 'exec' ? 'high' : 'medium'
     reason = metadata.reason || (metadata.riskClass === 'write_local' ? '修改本地数据' : metadata.riskClass === 'exec' ? '执行外部工具' : '调用可能产生副作用的外部工具')
   }
@@ -258,7 +266,7 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
 
   // 用户对这个工具点过「总是允许」
   const rememberedGrant = findRememberedGrant(name, safeArgs, rememberedGrants)
-  if (rememberedGrant) {
+  if (rememberedGrant && !alwaysConfirm) {
     return {
       needsApproval: false,
       risk,
@@ -299,6 +307,8 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
     reason = '在已登录的浏览器会话中代为操作'
   } else if (name === 'browser_open_url' || name === 'connected_app_open') {
     reason = '打开外部应用'
+  } else if (name === 'qq_mail_send') {
+    reason = '发送外部邮件'
   }
 
   return { needsApproval: true, risk, reason }

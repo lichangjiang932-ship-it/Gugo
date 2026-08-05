@@ -71,7 +71,7 @@ test('tool artifact renders final explanation and file card together', async () 
     assert.match(rootElement.textContent, /修复量化交易平台\.pptx/)
     assert.match(rootElement.textContent, /上下文（估算）/)
   assert.match(rootElement.textContent, /1,000,000/)
-    assert.ok(rootElement.querySelector('button[title="在右侧预览面板打开"]'))
+    assert.ok(rootElement.querySelector('[data-testid="artifact-open-card"]'))
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

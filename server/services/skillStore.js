@@ -64,7 +64,7 @@ export function getImportedSkill(id, { userId } = {}) {
   const skill = mapSkill(row)
   if (!skill) return null
   // skill.userId === null ⇒ 全站共享 (内置系统技能), 任何用户都可读
-  if (skill.userId && userId && skill.userId !== userId) return null
+  if (skill.userId && skill.userId !== userId) return null
   const assets = getDb()
     .prepare('SELECT path, content FROM skill_assets WHERE skill_id = ? ORDER BY path ASC')
     .all(id)
@@ -83,7 +83,7 @@ export function listImportedSkills({ userId } = {}) {
       .map(mapSkill)
   }
   return getDb()
-    .prepare('SELECT * FROM skills ORDER BY created_at DESC')
+    .prepare('SELECT * FROM skills WHERE user_id IS NULL ORDER BY created_at DESC')
     .all()
     .map(mapSkill)
 }

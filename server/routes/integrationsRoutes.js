@@ -31,7 +31,7 @@ function statusForError(err) {
 async function refreshBridgeIntegration(integration) {
   if (!integration || integration.kind !== 'social') return
   try {
-    const full = getIntegrationCredentialsById({ id: integration.id })
+    const full = getIntegrationCredentialsById({ userId: integration.userId, id: integration.id })
     if (full?.enabled) await socialBridgeManager.startIntegration(full)
     else await socialBridgeManager.stopIntegration(integration.id, integration.provider)
   } catch (err) {
@@ -182,13 +182,13 @@ export async function handleIntegrationsRequest(req, res, { env = process.env, f
 
     if (req.method === 'POST' && parts.length === 4 && parts[3] === 'test') {
       const id = decodeURIComponent(parts[2])
-      const result = await testIntegration({ userId, id })
+      const result = await testIntegration({ userId, id, env })
       return sendJson(res, 200, { ok: true, result })
     }
 
     if (req.method === 'DELETE' && parts.length === 3) {
       const id = decodeURIComponent(parts[2])
-      const integration = getIntegrationCredentialsById({ id })
+      const integration = getIntegrationCredentialsById({ userId, id })
       const removed = deleteIntegration({ userId, id })
       if (removed) await socialBridgeManager.stopIntegration(id, integration?.provider)
       if (removed && (integration?.kind === 'browser_app' || integration?.provider === 'browser')) {

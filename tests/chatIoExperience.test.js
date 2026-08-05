@@ -61,6 +61,13 @@ test('selected slash skill renders as a dark tag inside the composer', () => {
   assert.match(chatViewSource, /skillIds=\{runtimeSkillIds\}/)
 })
 
+test('sent slash skill keeps its tag and depth in the user message', () => {
+  assert.match(messagesSource, /function splitUserSkillCommand/)
+  assert.match(messagesSource, /data-testid="sent-skill-command"/)
+  assert.match(messagesSource, /chat-user-skill-message/)
+  assert.match(stylesSource, /\.chat-user-skill-message[\s\S]*?box-shadow:/)
+})
+
 test('long-term memory remains internal instead of adding a disclosure after every answer', () => {
   assert.doesNotMatch(messagesSource, /MemoryUsageDisclosure|getMemoriesByIdsApi|chatMessages\.memoryUsed/)
 })

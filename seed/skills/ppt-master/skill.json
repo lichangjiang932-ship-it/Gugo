@@ -4,6 +4,12 @@
   "description": "源自 hugohe3/ppt-master 的多角色 PPT 生成工作流。内置 71 个图表 SVG 模板、17 套布局风格（咨询/科技/政务/医学/像素等）、640 个 chunk-filled 图标。生成 16:9 高级感 HTML 演示，可一键打印为 PDF。",
   "version": "1.0.0",
   "icon": "🎨",
+  "disabled": true,
+  "disabledReason": "Bundled snapshot is incomplete and contains unresolved script, template, and workflow references. Keep quarantined until reference-integrity validation passes.",
+  "source": {
+    "url": "https://github.com/hugohe3/ppt-master",
+    "license": "MIT"
+  },
   "permissions": ["内容生成", "模板读取"],
   "templates": {
     "charts": "templates/charts",

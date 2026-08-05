@@ -205,7 +205,7 @@ export function createBridgeRequestHandler({
         if (!parked) return sendJson(res, 404, { ok: false, error: 'parked message not found' })
         if (decision === 'allow') {
           if (manager.startIntegration && !manager.hasIntegration?.(parked.integrationId)) {
-            const integration = getIntegrationCredentialsById({ id: parked.integrationId })
+            const integration = getIntegrationCredentialsById({ userId, id: parked.integrationId })
             if (integration?.enabled) await manager.startIntegration(integration)
           }
           const result = await manager.allowAndDeliver({ userId, parkingId })
@@ -242,7 +242,7 @@ export function createBridgeRequestHandler({
             },
             secret: { botToken: result.botToken },
           })
-          const full = getIntegrationCredentialsById({ id: integration.id })
+          const full = getIntegrationCredentialsById({ userId, id: integration.id })
           if (full?.enabled) await manager.startIntegration?.(full)
           return sendJson(res, 200, { ok: true, status: result.status, integration })
         }

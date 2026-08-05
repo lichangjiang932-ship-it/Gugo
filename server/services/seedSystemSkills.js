@@ -1,12 +1,9 @@
 /**
- * 系统级技能播种：把 seed/skills/<id>/ 目录树灌进 SQLite。
- *
- * 设计：
- * - user_id = NULL ⇒ 全站共享（"内置"语义）
- * - 二进制安全：所有文件按文本读，SVG / MD / JSON 都是文本，符合现有 skill_assets.content TEXT 约束
- * - 幂等：每次启动重新比对版本号；版本不变就跳过
- * - 调用方式：server 启动时自动跑；也可 `node server/seedSystemSkills.js` 手动跑
+ * Seed repository-owned skills into SQLite.
+ * Packages are validated and decoded completely before the transaction starts,
+ * so an invalid package can never replace a previously working installation.
  */
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -16,53 +13,186 @@ import { logger } from '../utils/logger.js'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 export const SYSTEM_SKILLS_SEED_ROOT = path.resolve(__dirname, '../../seed/skills')
 
-// 容易超 SQLite row 大小的极端 SVG 文件做一下 sanity 限制（实际我们的素材最大 ~40KB，没问题）
-const MAX_ASSET_BYTES = 2 * 1024 * 1024 // 2MB / file
+export const SYSTEM_SKILL_SEED_LIMITS = Object.freeze({
+  maxFileBytes: 2 * 1024 * 1024,
+  maxTotalBytes: 16 * 1024 * 1024,
+  maxFiles: 2048,
+})
+
+const TEXT_EXTENSIONS = new Set([
+  '.css', '.csv', '.html', '.htm', '.js', '.json', '.jsonc', '.jsx', '.md',
+  '.mjs', '.cjs', '.ps1', '.py', '.sh', '.svg', '.toml', '.ts', '.tsx',
+  '.txt', '.xml', '.yaml', '.yml',
+])
+
+function hasInvalidTextControls(content) {
+  for (let index = 0; index < content.length; index += 1) {
+    const code = content.charCodeAt(index)
+    if (code < 32 && code !== 9 && code !== 10 && code !== 13) return true
+  }
+  return false
+}
+
+function seedError(code, message) {
+  const error = new Error(message)
+  error.code = code
+  return error
+}
+
+function normalizeLimits(overrides = {}) {
+  const positive = (value, fallback) => {
+    const parsed = Number(value)
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : fallback
+  }
+  return {
+    maxFileBytes: positive(overrides.maxFileBytes, SYSTEM_SKILL_SEED_LIMITS.maxFileBytes),
+    maxTotalBytes: positive(overrides.maxTotalBytes, SYSTEM_SKILL_SEED_LIMITS.maxTotalBytes),
+    maxFiles: positive(overrides.maxFiles, SYSTEM_SKILL_SEED_LIMITS.maxFiles),
+  }
+}
 
 function walk(dir, prefix = '') {
   const entries = []
-  for (const name of fs.readdirSync(dir)) {
-    const full = path.join(dir, name)
-    const rel = prefix ? `${prefix}/${name}` : name
-    const stat = fs.statSync(full)
-    if (stat.isDirectory()) {
-      entries.push(...walk(full, rel))
-    } else {
-      entries.push({ relPath: rel, fullPath: full, size: stat.size })
+  const children = fs.readdirSync(dir, { withFileTypes: true })
+    .sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+  for (const entry of children) {
+    const fullPath = path.join(dir, entry.name)
+    const relPath = prefix ? `${prefix}/${entry.name}` : entry.name
+    if (entry.isSymbolicLink()) {
+      throw seedError('SEED_SKILL_SYMLINK', `seed skill cannot contain symbolic links: ${relPath}`)
     }
+    if (entry.isDirectory()) entries.push(...walk(fullPath, relPath))
+    else if (entry.isFile()) entries.push({ relPath, fullPath, size: fs.statSync(fullPath).size })
   }
   return entries
 }
 
-function loadManifest(skillDir) {
-  const manifestPath = path.join(skillDir, 'skill.json')
-  if (!fs.existsSync(manifestPath)) {
-    throw new Error(`seed skill 缺少 skill.json: ${skillDir}`)
+function decodeTextFile(file) {
+  const extension = path.extname(file.relPath).toLowerCase()
+  if (!TEXT_EXTENSIONS.has(extension)) {
+    throw seedError('SEED_SKILL_NON_TEXT_FILE', `seed skill file type is not allowed: ${file.relPath}`)
   }
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'))
-  for (const k of ['id', 'name', 'description', 'version', 'icon']) {
-    if (!manifest[k]) throw new Error(`skill.json 缺少字段 ${k}: ${manifestPath}`)
+  const bytes = fs.readFileSync(file.fullPath)
+  let content
+  try {
+    content = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+  } catch {
+    throw seedError('SEED_SKILL_INVALID_UTF8', `seed skill file is not valid UTF-8: ${file.relPath}`)
   }
-  return manifest
+  if (hasInvalidTextControls(content)) {
+    throw seedError('SEED_SKILL_BINARY_CONTENT', `seed skill file contains binary control bytes: ${file.relPath}`)
+  }
+  return { ...file, content }
 }
 
-function upsertSystemSkill(db, skillDir, manifest) {
-  const now = Date.now()
-  const existing = db.prepare(
-    'SELECT version FROM skills WHERE id = ? AND user_id IS NULL'
-  ).get(manifest.id)
+function validateManifest(manifest, manifestPath) {
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
+    throw seedError('SEED_SKILL_INVALID_MANIFEST', `invalid skill.json: ${manifestPath}`)
+  }
+  for (const key of ['id', 'name', 'description', 'version', 'icon']) {
+    if (typeof manifest[key] !== 'string' || !manifest[key].trim()) {
+      throw seedError('SEED_SKILL_INVALID_MANIFEST', `skill.json missing field ${key}: ${manifestPath}`)
+    }
+  }
+}
 
-  if (existing && existing.version === manifest.version) {
-    return { id: manifest.id, status: 'unchanged', version: manifest.version }
+function hashField(hash, value) {
+  const bytes = Buffer.from(String(value), 'utf8')
+  hash.update(String(bytes.length)).update(':').update(bytes)
+}
+
+function metadataForHash(manifest) {
+  return JSON.stringify({
+    id: manifest.id,
+    name: manifest.name,
+    description: manifest.description,
+    version: manifest.version,
+    icon: manifest.icon,
+    permissions: Array.isArray(manifest.permissions) ? manifest.permissions : [],
+  })
+}
+
+export function computeSystemSkillContentHash(manifest, files) {
+  const hash = crypto.createHash('sha256')
+  hashField(hash, 'yma-system-skill-package-v1')
+  hashField(hash, metadataForHash(manifest))
+  for (const file of [...files].sort((a, b) => String(a.relPath).localeCompare(String(b.relPath)))) {
+    hashField(hash, file.relPath)
+    hashField(hash, file.content)
+  }
+  return hash.digest('hex')
+}
+
+export function loadSeedSkillPackage(skillDir, limitOverrides = {}) {
+  const limits = normalizeLimits(limitOverrides)
+  const discovered = walk(skillDir)
+  if (discovered.length > limits.maxFiles) {
+    throw seedError('SEED_SKILL_TOO_MANY_FILES', `seed skill has ${discovered.length} files; limit is ${limits.maxFiles}`)
+  }
+  let totalBytes = 0
+  for (const file of discovered) {
+    if (file.size > limits.maxFileBytes) {
+      throw seedError('SEED_SKILL_FILE_TOO_LARGE', `seed skill file exceeds ${limits.maxFileBytes} bytes: ${file.relPath}`)
+    }
+    totalBytes += file.size
+    if (totalBytes > limits.maxTotalBytes) {
+      throw seedError('SEED_SKILL_PACKAGE_TOO_LARGE', `seed skill package exceeds ${limits.maxTotalBytes} bytes`)
+    }
   }
 
-  const files = walk(skillDir).filter((f) => {
-    if (f.size > MAX_ASSET_BYTES) {
-      console.warn(`[seed] 跳过超大文件 ${f.relPath} (${f.size} bytes)`)
-      return false
-    }
-    return true
-  })
+  const files = discovered.map(decodeTextFile)
+  const manifestFile = files.find((file) => file.relPath === 'skill.json')
+  if (!manifestFile) throw seedError('SEED_SKILL_MISSING_MANIFEST', `seed skill missing skill.json: ${skillDir}`)
+  let manifest
+  try {
+    manifest = JSON.parse(manifestFile.content)
+  } catch {
+    throw seedError('SEED_SKILL_INVALID_MANIFEST', `invalid skill.json JSON: ${manifestFile.fullPath}`)
+  }
+  validateManifest(manifest, manifestFile.fullPath)
+  return {
+    manifest,
+    files,
+    totalBytes,
+    contentHash: computeSystemSkillContentHash(manifest, files),
+  }
+}
+
+function parsePermissions(value) {
+  try {
+    const parsed = JSON.parse(value || '[]')
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function storedContentHash(db, row) {
+  if (!row) return null
+  const files = db.prepare(
+    'SELECT path, content FROM skill_assets WHERE skill_id = ? ORDER BY path ASC'
+  ).all(row.id).map((asset) => ({ relPath: asset.path, content: asset.content }))
+  return computeSystemSkillContentHash({
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    version: row.version,
+    icon: row.icon,
+    permissions: parsePermissions(row.permissions_json),
+  }, files)
+}
+
+function upsertSystemSkill(db, skillPackage) {
+  const { manifest, files, contentHash } = skillPackage
+  const now = Date.now()
+  const existing = db.prepare(
+    'SELECT id, name, description, version, icon, permissions_json FROM skills WHERE id = ? AND user_id IS NULL'
+  ).get(manifest.id)
+  const previousHash = storedContentHash(db, existing)
+
+  if (existing && previousHash === contentHash) {
+    return { id: manifest.id, status: 'unchanged', version: manifest.version, contentHash }
+  }
 
   const tx = db.transaction(() => {
     if (existing) {
@@ -76,7 +206,7 @@ function upsertSystemSkill(db, skillDir, manifest) {
         manifest.icon,
         JSON.stringify(manifest.permissions || []),
         now,
-        manifest.id
+        manifest.id,
       )
     } else {
       db.prepare(
@@ -89,18 +219,14 @@ function upsertSystemSkill(db, skillDir, manifest) {
         manifest.icon,
         JSON.stringify(manifest.permissions || []),
         now,
-        now
+        now,
       )
     }
 
-    const ins = db.prepare(
+    const insertAsset = db.prepare(
       'INSERT INTO skill_assets (skill_id, path, content) VALUES (?, ?, ?)'
     )
-    for (const f of files) {
-      // 文本读取；非 UTF8 文件遇到时再考虑 base64 包装
-      const content = fs.readFileSync(f.fullPath, 'utf8')
-      ins.run(manifest.id, f.relPath, content)
-    }
+    for (const file of files) insertAsset.run(manifest.id, file.relPath, file.content)
   })
   tx()
 
@@ -108,38 +234,65 @@ function upsertSystemSkill(db, skillDir, manifest) {
     id: manifest.id,
     status: existing ? 'updated' : 'installed',
     version: manifest.version,
+    contentHash,
+    previousHash,
     files: files.length,
   }
 }
 
-export function seedSystemSkills({ silent = false } = {}) {
-  if (!fs.existsSync(SYSTEM_SKILLS_SEED_ROOT)) {
+function disableSystemSkill(db, manifest) {
+  const existing = db.prepare(
+    'SELECT id FROM skills WHERE id = ? AND user_id IS NULL'
+  ).get(manifest.id)
+  if (existing) {
+    db.transaction(() => {
+      db.prepare('DELETE FROM skill_assets WHERE skill_id = ?').run(manifest.id)
+      db.prepare('DELETE FROM skills WHERE id = ? AND user_id IS NULL').run(manifest.id)
+    })()
+  }
+  return {
+    id: manifest.id,
+    status: 'disabled',
+    version: manifest.version,
+    removed: Boolean(existing),
+    reason: typeof manifest.disabledReason === 'string' ? manifest.disabledReason : '',
+  }
+}
+
+export function seedSystemSkills({
+  silent = false,
+  seedRoot = SYSTEM_SKILLS_SEED_ROOT,
+  db,
+  limits,
+} = {}) {
+  if (!fs.existsSync(seedRoot)) {
     if (!silent) logger.info('[seed] no seed/skills directory, skip')
     return []
   }
-  const db = getDb()
-  const skillDirs = fs.readdirSync(SYSTEM_SKILLS_SEED_ROOT)
-    .map((name) => path.join(SYSTEM_SKILLS_SEED_ROOT, name))
-    .filter((p) => fs.statSync(p).isDirectory())
+  const targetDb = db || getDb()
+  const skillDirs = fs.readdirSync(seedRoot)
+    .map((name) => path.join(seedRoot, name))
+    .filter((candidate) => fs.statSync(candidate).isDirectory())
 
   const results = []
   for (const dir of skillDirs) {
     try {
-      const manifest = loadManifest(dir)
-      const result = upsertSystemSkill(db, dir, manifest)
+      const skillPackage = loadSeedSkillPackage(dir, limits)
+      const result = skillPackage.manifest.disabled === true
+        ? disableSystemSkill(targetDb, skillPackage.manifest)
+        : upsertSystemSkill(targetDb, skillPackage)
       results.push(result)
       if (!silent) {
         logger.info(`[seed] ${result.id} v${result.version}: ${result.status}${result.files ? ` (${result.files} files)` : ''}`)
       }
-    } catch (err) {
-      console.error(`[seed] failed for ${dir}:`, err.message)
-      results.push({ dir, status: 'error', error: err.message })
+    } catch (error) {
+      if (!silent) logger.error(`[seed] failed for ${dir}:`, error.message)
+      results.push({ dir, status: 'error', code: error.code || 'SEED_SKILL_ERROR', error: error.message })
     }
   }
   return results
 }
 
-// 允许 CLI 直接执行：node server/seedSystemSkills.js
 if (import.meta.url === `file://${process.argv[1]}`) {
   const results = seedSystemSkills()
   logger.info('\n[seed] done:', JSON.stringify(results, null, 2))

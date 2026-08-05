@@ -1,5 +1,5 @@
 import { SKILLS } from '../../src/data.js'
-import { getImportedSkill, listImportedSkills } from './skillStore.js'
+import { getImportedSkill, listAllSkillIds, listImportedSkills } from './skillStore.js'
 
 function mapBuiltInSkill(skill) {
   return {
@@ -55,4 +55,11 @@ export function getRuntimeSkill(id, { userId } = {}) {
 
 export function listRuntimeSkillIds({ userId } = {}) {
   return listRuntimeSkills({ userId }).map((skill) => skill.id)
+}
+
+export function listAllRuntimeSkillIds() {
+  return [...new Set([
+    ...SKILLS.map((skill) => skill.id),
+    ...listAllSkillIds(),
+  ])]
 }

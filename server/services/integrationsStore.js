@@ -16,6 +16,7 @@ import crypto from 'node:crypto'
 import { getDb } from '../db.js'
 import { WEB_CONNECTOR_CATALOG } from '../../shared/webConnectorCatalog.js'
 import { openCredentialObject, sealCredentialObject } from '../utils/credentialVault.js'
+import { testQqMailCredentials } from './mailProtocolClient.js'
 
 const INTEGRATION_SECRET_PURPOSE = 'integration-secret'
 const NATIVE_CONNECTOR_TOOLS = Object.freeze({
@@ -23,6 +24,7 @@ const NATIVE_CONNECTOR_TOOLS = Object.freeze({
   github: Object.freeze(['github_search_repositories', 'github_get_file']),
   google_drive: Object.freeze(['google_drive_search', 'google_drive_get_file']),
   slack: Object.freeze(['slack_list_channels', 'slack_read_channel']),
+  qq_mail: Object.freeze(['qq_mail_list_recent', 'qq_mail_read', 'qq_mail_send']),
 })
 const BROWSER_CONNECTOR_TOOLS = Object.freeze(['connected_app_list', 'connected_app_open'])
 
@@ -75,6 +77,20 @@ const PROVIDER_REGISTRY = {
       { key: 'refreshToken', label: 'OAuth refresh token', location: 'secret', type: 'password', optional: true },
     ],
     test: testGoogleDrive,
+  },
+  qq_mail: {
+    kind: 'connector',
+    label: 'QQ Mail',
+    fields: [
+      { key: 'user', label: 'QQ email address', location: 'config', optional: true },
+      { key: 'from', label: 'Sender address', location: 'config', optional: true },
+      { key: 'smtpHost', label: 'SMTP host', location: 'config', optional: true, defaultValue: 'smtp.qq.com' },
+      { key: 'smtpPort', label: 'SMTP port', location: 'config', optional: true, type: 'number', defaultValue: 465 },
+      { key: 'imapHost', label: 'IMAP host', location: 'config', optional: true, defaultValue: 'imap.qq.com' },
+      { key: 'imapPort', label: 'IMAP port', location: 'config', optional: true, type: 'number', defaultValue: 993 },
+      { key: 'password', label: 'QQ Mail authorization code', location: 'secret', type: 'password', optional: true },
+    ],
+    test: testQqMailCredentials,
   },
   // === IM / 社交（kind='social'）===
   feishu: {
@@ -215,6 +231,10 @@ function maskSecret(secret) {
   for (const [key, val] of Object.entries(secret || {})) {
     if (val == null || val === '') { out[key] = { present: false }; continue }
     const str = String(val)
+    if (/password|authorization.?code/i.test(key)) {
+      out[key] = { present: true }
+      continue
+    }
     out[key] = {
       present: true,
       preview: str.length <= 6 ? '*'.repeat(str.length) : `${str.slice(0, 2)}***${str.slice(-2)}`,
@@ -279,9 +299,9 @@ export function listEnabledIntegrationCredentials({ kind = 'social' } = {}) {
   return rows.map(row2integrationCredentials)
 }
 
-export function getIntegrationCredentialsById({ id }) {
-  if (!id) return null
-  const row = getDb().prepare('SELECT * FROM integrations WHERE id = ?').get(id)
+export function getIntegrationCredentialsById({ userId, id }) {
+  if (!userId || !id) return null
+  const row = getDb().prepare('SELECT * FROM integrations WHERE user_id = ? AND id = ?').get(userId, id)
   return row2integrationCredentials(row)
 }
 
@@ -391,13 +411,20 @@ export function deleteIntegration({ userId, id }) {
   return true
 }
 
-export async function testProviderCredentials({ provider, config = {}, secret = {}, fetchImpl = fetch }) {
+export async function testProviderCredentials({
+  provider,
+  config = {},
+  secret = {},
+  fetchImpl = fetch,
+  env = process.env,
+  mailClient,
+}) {
   const meta = PROVIDER_REGISTRY[provider]
   if (!meta) throw badRequest(`unknown provider: ${provider}`)
-  return meta.test({ config, secret, fetchImpl })
+  return meta.test({ config, secret, fetchImpl, env, mailClient })
 }
 
-export async function testIntegration({ userId, id, fetchImpl = fetch }) {
+export async function testIntegration({ userId, id, fetchImpl = fetch, env = process.env, mailClient }) {
   const integration = getIntegration({ userId, id })
   if (!integration) throw notFound('integration not found')
   const meta = PROVIDER_REGISTRY[integration.provider]
@@ -411,6 +438,8 @@ export async function testIntegration({ userId, id, fetchImpl = fetch }) {
       config: creds.config,
       secret: creds.secret,
       fetchImpl,
+      env,
+      mailClient,
     })
   } catch (err) {
     result = { ok: false, message: err?.message || '未知错误' }

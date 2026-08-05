@@ -94,7 +94,7 @@ test('provider registry distinguishes native APIs from managed-browser shortcuts
     .filter((provider) => provider.capabilityLevel === 'native_api')
     .map((provider) => provider.provider)
     .sort()
-  assert.deepEqual(nativeApis, ['github', 'google_drive', 'notion', 'slack'])
+  assert.deepEqual(nativeApis, ['github', 'google_drive', 'notion', 'qq_mail', 'slack'])
 
   const browserApps = providers.filter((provider) => provider.kind === 'browser_app')
   assert.equal(browserApps.length, WEB_CONNECTOR_CATALOG.length)

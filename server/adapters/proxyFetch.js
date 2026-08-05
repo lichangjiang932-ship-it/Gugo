@@ -36,7 +36,14 @@ function getProxyAgent(env = process.env) {
   if (proxyAgent) {
     void proxyAgent.close().catch(() => {})
   }
-  proxyAgent = new EnvHttpProxyAgent()
+  const httpProxy = envValue(env, 'HTTP_PROXY', 'http_proxy')
+  const httpsProxy = envValue(env, 'HTTPS_PROXY', 'https_proxy') || httpProxy
+  const noProxy = envValue(env, 'NO_PROXY', 'no_proxy')
+  proxyAgent = new EnvHttpProxyAgent({
+    httpProxy: httpProxy || undefined,
+    httpsProxy: httpsProxy || undefined,
+    noProxy,
+  })
   proxySignature = signature
   return proxyAgent
 }
@@ -46,15 +53,15 @@ function getProxyAgent(env = process.env) {
  * Local/private model servers always stay direct, and test/runtime fetch
  * overrides keep taking precedence over the native implementation.
  */
-export function fetchWithEnvProxy(input, init = {}) {
+export function fetchWithEnvProxy(input, init = {}, env = process.env) {
   if (globalThis.fetch !== nativeFetch) {
     return globalThis.fetch(input, init)
   }
-  if (!shouldUseEnvProxy(input)) {
+  if (!shouldUseEnvProxy(input, env)) {
     return nativeFetch(input, init)
   }
   return undiciFetch(input, {
     ...init,
-    dispatcher: getProxyAgent(),
+    dispatcher: getProxyAgent(env),
   })
 }

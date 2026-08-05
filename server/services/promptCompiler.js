@@ -6,6 +6,10 @@ import { buildPersonaManifestBlock } from './agentStore.js'
 
 const BLOCK_TYPES = ['identity', 'ishiki', 'skills', 'sessions']
 const CACHE_LIMIT = 64
+export const SKILL_PROMPT_LIMITS = Object.freeze({
+  maxPromptBytes: 96 * 1024,
+  maxBlockBytes: 256 * 1024,
+})
 const EMPTY_RESULT = Object.freeze({ text: '', fingerprint: 'empty', sources: {} })
 const UNTRUSTED_CONTENT_SAFETY_TEXT = [
   '# Untrusted Content Safety Contract',
@@ -152,13 +156,35 @@ export function buildIshikiBlock({ agent } = {}) {
   })
 }
 
+function truncateUtf8(value, maxBytes, marker = '') {
+  const text = String(value || '')
+  if (Buffer.byteLength(text, 'utf8') <= maxBytes) return { text, truncated: false }
+  const markerBytes = Buffer.byteLength(marker, 'utf8')
+  const budget = Math.max(0, maxBytes - markerBytes)
+  const characters = []
+  let bytes = 0
+  for (const character of text) {
+    const size = Buffer.byteLength(character, 'utf8')
+    if (bytes + size > budget) break
+    characters.push(character)
+    bytes += size
+  }
+  return { text: characters.join('') + marker, truncated: true }
+}
+
 function normalizeSkill(skill) {
+  const prompt = truncateUtf8(
+    skill.systemPrompt || '',
+    SKILL_PROMPT_LIMITS.maxPromptBytes,
+    '\n\n[Skill prompt truncated by safety budget]',
+  )
   return {
     id: skill.id,
     name: skill.name || '',
     description: skill.description || skill.desc || '',
     permissions: Array.isArray(skill.permissions) ? [...skill.permissions].sort() : [],
-    systemPrompt: skill.systemPrompt || '',
+    systemPrompt: prompt.text,
+    promptTruncated: prompt.truncated,
   }
 }
 
@@ -203,7 +229,12 @@ export function buildSkillsBlockFromPrepared({ userId, agentId = null, skills = 
       if (skill.systemPrompt) lines.push('', skill.systemPrompt.trim())
       return lines.join('\n')
     })
-    return ['# Skills', ...sections].join('\n\n')
+    const rendered = ['# Skills', ...sections].join('\n\n')
+    return truncateUtf8(
+      rendered,
+      SKILL_PROMPT_LIMITS.maxBlockBytes,
+      '\n\n[Additional skill content omitted by safety budget]',
+    ).text
   })
 }
 

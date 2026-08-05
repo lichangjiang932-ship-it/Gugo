@@ -8,6 +8,13 @@ import {
   upsertIntegration,
 } from './integrationsStore.js'
 import { getOAuthAccessToken } from './integrationOAuthService.js'
+import {
+  allowQqMailEnvCredentials,
+  listImapMessages,
+  readImapMessage,
+  resolveQqMailSettings,
+  sendSmtpMessage,
+} from './mailProtocolClient.js'
 
 function connectorError(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode })
@@ -21,6 +28,49 @@ function credentials(userId, provider) {
   const value = getEnabledIntegrationCredentials({ userId, provider })
   if (!value) throw connectorError(`${provider} is not connected or is disabled`, 409)
   return value
+}
+
+function qqMailSettings(userId, env) {
+  const { config, secret } = credentials(userId, 'qq_mail')
+  return resolveQqMailSettings({
+    config,
+    secret,
+    env,
+    allowEnvCredentials: allowQqMailEnvCredentials(env),
+  })
+}
+
+export async function listQqMailMessages({
+  userId,
+  limit = 20,
+  env = process.env,
+  mailClient = {},
+} = {}) {
+  const settings = qqMailSettings(userId, env)
+  return (mailClient.listMessages || listImapMessages)(settings, { limit })
+}
+
+export async function readQqMailMessage({
+  userId,
+  uid,
+  env = process.env,
+  mailClient = {},
+} = {}) {
+  const settings = qqMailSettings(userId, env)
+  return (mailClient.readMessage || readImapMessage)(settings, { uid })
+}
+
+export async function sendQqMailMessage({
+  userId,
+  to,
+  subject,
+  text,
+  html,
+  env = process.env,
+  mailClient = {},
+} = {}) {
+  const settings = qqMailSettings(userId, env)
+  return (mailClient.sendMessage || sendSmtpMessage)(settings, { to, subject, text, html })
 }
 
 function browserApp(provider) {

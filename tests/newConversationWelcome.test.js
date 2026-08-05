@@ -17,6 +17,8 @@ test('new conversations render an actionable localized welcome state', () => {
   assert.match(messagesSource, /chatMessages\.emptyTitle/)
   assert.match(messagesSource, /chatMessages\.emptyHint/)
   assert.match(messagesSource, /onPromptSelect\?\./)
+  assert.match(messagesSource, /data-testid="atelier-mark"/)
+  assert.doesNotMatch(messagesSource, /<Sparkles className="h-6 w-6"/)
   assert.doesNotMatch(messagesSource, /<div className="min-h-0 flex-1" aria-hidden="true" \/>/)
   assert.match(viewSource, /onPromptSelect=\{setInput\}/)
 })

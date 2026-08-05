@@ -15,20 +15,32 @@ function setupDom() {
   globalThis.HTMLElement = dom.window.HTMLElement
   globalThis.SVGElement = dom.window.SVGElement
   globalThis.MouseEvent = dom.window.MouseEvent
+  globalThis.PointerEvent = dom.window.MouseEvent
   globalThis.localStorage = dom.window.localStorage
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
   Object.defineProperty(globalThis, 'navigator', {
     configurable: true,
     value: dom.window.navigator,
   })
+  Object.defineProperty(dom.window, 'innerWidth', { configurable: true, writable: true, value: 1024 })
   return dom
 }
 
-test('right workbench renders vertical actions and opens generated files', async () => {
+function pointerEvent(dom, type, values) {
+  const event = new dom.window.Event(type, { bubbles: true, cancelable: true })
+  for (const [key, value] of Object.entries(values)) {
+    Object.defineProperty(event, key, { configurable: true, value })
+  }
+  return event
+}
+
+test('right workbench renders compact tabs, persists width, and opens generated files', async () => {
   const dom = setupDom()
+  dom.window.localStorage.setItem('yma:right-workbench-width', '520')
   const rootElement = dom.window.document.getElementById('root')
   const root = createRoot(rootElement)
   const opened = []
+  const selectedTabs = []
 
   try {
     await act(async () => {
@@ -52,7 +64,7 @@ test('right workbench renders vertical actions and opens generated files', async
             },
           }]}
           activeTab="files"
-          onTabChange={() => {}}
+          onTabChange={(tab) => selectedTabs.push(tab)}
           onClose={() => {}}
           onOpenArtifact={(artifact) => opened.push(artifact)}
           onSendMessage={() => {}}
@@ -63,9 +75,56 @@ test('right workbench renders vertical actions and opens generated files', async
 
     const navigation = rootElement.querySelector('[data-testid="workbench-navigation"]')
     assert.ok(navigation)
-    assert.match(navigation.className, /flex-col/)
+    assert.match(navigation.className, /grid-cols-4/)
     assert.equal(navigation.querySelectorAll(':scope > button').length, 4)
+    assert.equal(navigation.querySelector('[aria-current="page"] span.truncate').textContent, '相关文件')
     assert.equal(rootElement.querySelector('[data-testid="workbench-file-count"]').textContent, '2')
+    const resizeHandle = rootElement.querySelector('[data-testid="workbench-resize-handle"]')
+    assert.ok(resizeHandle)
+    assert.equal(resizeHandle.getAttribute('aria-orientation'), 'vertical')
+    assert.equal(resizeHandle.getAttribute('aria-valuemax'), '704')
+    const panel = rootElement.querySelector('[data-testid="right-workbench"]')
+    assert.equal(panel.style.width, '520px')
+    assert.equal(dom.window.localStorage.getItem('yma:right-workbench-width'), '520')
+
+    await act(async () => {
+      navigation.querySelectorAll(':scope > button')[1].dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+    })
+    assert.deepEqual(selectedTabs, ['chat'])
+
+    resizeHandle.setPointerCapture = () => {}
+    await act(async () => {
+      resizeHandle.dispatchEvent(pointerEvent(dom, 'pointerdown', { pointerId: 3, clientX: 600, button: 2 }))
+      dom.window.dispatchEvent(pointerEvent(dom, 'pointermove', { pointerId: 3, clientX: 500 }))
+      dom.window.dispatchEvent(pointerEvent(dom, 'pointerup', { pointerId: 3, clientX: 500 }))
+    })
+    assert.equal(panel.style.width, '520px', 'secondary pointer button must not resize the panel')
+
+    await act(async () => {
+      resizeHandle.dispatchEvent(pointerEvent(dom, 'pointerdown', { pointerId: 4, clientX: 600, button: 0 }))
+      assert.equal(dom.window.document.activeElement, resizeHandle)
+      dom.window.dispatchEvent(pointerEvent(dom, 'pointermove', { pointerId: 4, clientX: 500 }))
+      dom.window.dispatchEvent(pointerEvent(dom, 'pointerup', { pointerId: 4, clientX: 500 }))
+    })
+    assert.equal(panel.style.width, '620px')
+    assert.equal(dom.window.localStorage.getItem('yma:right-workbench-width'), '620')
+
+    await act(async () => {
+      resizeHandle.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }))
+    })
+    assert.equal(panel.style.width, '644px')
+
+    await act(async () => {
+      resizeHandle.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Home', bubbles: true }))
+    })
+    assert.equal(panel.style.width, '440px')
+    assert.equal(dom.window.localStorage.getItem('yma:right-workbench-width'), '440')
+
+    dom.window.innerWidth = 690
+    await act(async () => dom.window.dispatchEvent(new dom.window.Event('resize')))
+    assert.equal(panel.style.width, '370px')
+    assert.equal(resizeHandle.getAttribute('aria-valuenow'), '370')
+    assert.equal(resizeHandle.getAttribute('aria-valuemax'), '370')
 
     const serverArtifactLink = rootElement.querySelector('[data-testid="workbench-files"] a[download="analysis.xlsx"]')
     assert.ok(serverArtifactLink)

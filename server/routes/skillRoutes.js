@@ -1,7 +1,7 @@
 import { authenticateRequest } from '../middleware.js'
 import { installValidatedSkillPack } from '../services/skillImport.js'
 import { installSkillFromGithubUrl } from '../services/skillGithubInstall.js'
-import { listRuntimeSkillIds, listRuntimeSkills } from '../services/skillRegistry.js'
+import { listAllRuntimeSkillIds, listRuntimeSkills } from '../services/skillRegistry.js'
 import { getImportedSkill } from '../services/skillStore.js'
 import { readJson, sendJson } from '../utils.js'
 
@@ -17,10 +17,10 @@ function pickMime(p) {
   return (m && ASSET_MIME[m[0].toLowerCase()]) || 'text/plain; charset=utf-8'
 }
 
-function sendAsset(res, content, assetPath) {
+function sendAsset(res, content, assetPath, { publicCache = false } = {}) {
   res.writeHead(200, {
     'Content-Type': pickMime(assetPath),
-    'Cache-Control': 'public, max-age=3600',
+    'Cache-Control': `${publicCache ? 'public' : 'private'}, max-age=3600`,
   })
   res.end(content)
 }
@@ -64,14 +64,14 @@ export async function handleSkillRequest(req, res) {
     if (!skill) return sendJson(res, 404, { error: 'skill not found' })
     const content = skill.files[assetPath]
     if (content == null) return sendJson(res, 404, { error: 'asset not found' })
-    return sendAsset(res, content, assetPath)
+    return sendAsset(res, content, assetPath, { publicCache: skill.userId == null })
   }
 
   if (req.method === 'POST' && url.pathname === '/api/skills/import') {
     const body = await readJson(req)
     const result = installValidatedSkillPack({
       files: body.files || {},
-      existingIds: listRuntimeSkillIds({ userId }),
+      existingIds: listAllRuntimeSkillIds(),
       userId,
     })
     if (!result.ok) return sendJson(res, 400, { error: result.reason })
@@ -86,7 +86,7 @@ export async function handleSkillRequest(req, res) {
       url: body.url,
       userId,
       installFn: installValidatedSkillPack,
-      listExistingIdsFn: listRuntimeSkillIds,
+      listExistingIdsFn: listAllRuntimeSkillIds,
     })
     if (!result.ok) return sendJson(res, 400, { error: result.reason })
     return sendJson(res, 201, {
@@ -94,6 +94,9 @@ export async function handleSkillRequest(req, res) {
       source: result.source,
       repo: result.repo,
       subpath: result.subpath,
+      revision: result.revision,
+      license: result.license,
+      sourceUrl: result.sourceUrl,
     })
   }
 

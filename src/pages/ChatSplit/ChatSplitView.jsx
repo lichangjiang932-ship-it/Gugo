@@ -215,10 +215,19 @@ export default function ChatSplitView({
           onOpenArtifact={onOpenArtifact}
           onSendMessage={onWorkbenchSend}
           isGenerating={isGenerating}
+          statusMessage={workbenchMessage}
         />
       )}
 
-      {desktopPetVisible && <DesktopPet onClose={onCloseDesktopPet} />}
+      {desktopPetVisible && (
+        <DesktopPet
+          onClose={onCloseDesktopPet}
+          isGenerating={isGenerating}
+          messages={messages}
+          tasks={tasks}
+          toolApproval={toolApproval}
+        />
+      )}
 
       {previewArtifact ? (
         <RightPreviewPane artifact={previewArtifact} onClose={onClosePreview} onMessage={onPreviewMessage} />

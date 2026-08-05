@@ -45,4 +45,8 @@ test('skill store persists imported skill metadata and prompt asset', () => {
   const other = issueTestSession()
   assert.equal(getImportedSkill('writer', { userId: other.userId }), null)
   assert.equal(listImportedSkills({ userId: other.userId }).length, 0)
+
+  // Anonymous callers may read only repository-owned system skills.
+  assert.equal(getImportedSkill('writer'), null)
+  assert.equal(listImportedSkills().some((skill) => skill.id === 'writer'), false)
 })

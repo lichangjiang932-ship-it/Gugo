@@ -29,6 +29,7 @@ export const NATIVE_ACCESS = Object.freeze([
   native('wechat_personal', '微信 / WeChat', '#07C160', 'access.wechatDesc', 'access.wechatHint', ACCESS_CAPABILITY_LEVELS.SOCIAL_BRIDGE, { connectionMethod: 'qr' }),
   native('telegram', 'Telegram Bot', '#229ED9', 'access.telegramDesc', 'access.telegramHint', ACCESS_CAPABILITY_LEVELS.SOCIAL_BRIDGE, { connectionMethod: 'bot_token', setupUrl: 'https://t.me/BotFather' }),
   native('qq', 'QQ Bot', '#12B7F5', 'access.qqDesc', 'access.qqHint', ACCESS_CAPABILITY_LEVELS.SOCIAL_BRIDGE, { connectionMethod: 'app_credentials', setupUrl: 'https://q.qq.com/' }),
+  native('qq_mail', 'QQ Mail', '#12B7F5', 'access.qqMailDesc', 'access.qqMailHint', ACCESS_CAPABILITY_LEVELS.NATIVE_API, { connectionMethod: 'mail_password', category: 'communication', searchTerms: 'mail email qq smtp imap', setupUrl: 'https://service.mail.qq.com/detail/0/75' }),
 ])
 
 export const MCP_ACCESS = Object.freeze(MCP_SERVER_PRESETS

@@ -266,6 +266,36 @@ html[data-density="loose"] {
 
 .chat-user-message {
   background-image: linear-gradient(135deg, rgb(var(--color-paper-rgb) / 0.32), transparent 72%);
+  box-shadow: 0 1px 2px rgb(var(--color-ink-rgb) / 0.03);
+}
+
+.chat-user-skill-message {
+  background-image:
+    linear-gradient(135deg, rgb(var(--color-ember-rgb) / 0.09), transparent 58%),
+    linear-gradient(180deg, rgb(var(--color-paper-rgb) / 0.7), rgb(var(--color-paper-2-rgb) / 0.96));
+  box-shadow:
+    0 10px 28px rgb(var(--color-ink-rgb) / 0.09),
+    inset 0 1px 0 rgb(var(--color-paper-rgb) / 0.9);
+}
+
+.html-deck-stage {
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  padding: clamp(0.75rem, 2vw, 2rem);
+  background:
+    radial-gradient(circle at 50% 45%, rgb(var(--color-paper-rgb) / 0.96), transparent 58%),
+    rgb(var(--color-ink-rgb) / 0.055);
+}
+
+.html-deck-frame {
+  display: block;
+  width: min(100%, calc((100vh - 10rem) * 16 / 9));
+  height: auto;
+  max-height: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 0.4rem;
+  box-shadow: 0 24px 70px rgb(var(--color-ink-rgb) / 0.2);
 }
 
 .chat-markdown {
