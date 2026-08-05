@@ -202,6 +202,19 @@ test('account endpoint omits legacy credits, ledger, and packages', async () => 
   assert.equal('packages' in payload, false)
 })
 
+test('logout revokes the current authentication session', async () => {
+  const issued = issueEmailCode({ email: 'logout@example.com', code: '123456' })
+  const { token } = verifyEmailCode({ email: issued.email, code: issued.devCode })
+  const res = createRes()
+  await handleAuthAccountRequest(createReq({
+    url: '/api/auth/logout',
+    token,
+    method: 'POST',
+  }), res)
+  assert.equal(res.statusCode, 200)
+  assert.equal(getSessionByToken(token), null)
+})
+
 test('authentication does not overwrite a legacy database balance', () => {
   const issued = issueEmailCode({ email: 'legacy-balance@example.com', code: '123456' })
   const first = verifyEmailCode({ email: issued.email, code: issued.devCode })

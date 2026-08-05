@@ -1,4 +1,3 @@
-import { getSkillSystemPrompt } from '../../data.js'
 import { buildUserContentWithAttachments } from '../../lib/attachments.js'
 import { buildLocalPathEvidenceInstruction, buildLocalPathToolInstruction } from '../../lib/localPathPreflight.js'
 import { dispatchTurnEvent, runServerTurn } from '../../lib/turnClient.js'
@@ -20,6 +19,21 @@ function serializeServerTurnContent(content, t) {
   }).filter(Boolean).join('\n\n')
 }
 
+export function buildServerToolsConfig(toolsConfig = {}) {
+  const enabled = new Set()
+  const disabled = new Set()
+  for (const [rawName, value] of Object.entries(toolsConfig || {})) {
+    const name = String(rawName || '').trim()
+    if (!name) continue
+    if (value === true) enabled.add(name)
+    else if (value === false) disabled.add(name)
+  }
+  return {
+    enabled: [...enabled].sort(),
+    disabled: [...disabled].sort(),
+  }
+}
+
 function appendArtifact(artifact, artifacts, dispatchMessage) {
   const filename = artifact.filename || 'artifact'
   const type = filename.includes('.') ? filename.split('.').pop().toLowerCase() : 'file'
@@ -30,6 +44,7 @@ function appendArtifact(artifact, artifacts, dispatchMessage) {
 
 export async function runServerChatTurn({
   abortCtrlRef,
+  agentId,
   attachments,
   content,
   dispatch,
@@ -40,19 +55,18 @@ export async function runServerChatTurn({
   probeLocalPathAccess,
   requestServerToolApproval,
   resolveToolApproval,
-  runtimeSkills,
   sessionId,
   setContextSystemPrompts,
   setIsGenerating,
   setToolApproval,
   skill,
-  skillConfigs,
   skillId,
   taskId,
   taskName,
   t,
   toast,
   toolApprovalResolveRef,
+  toolsConfig,
   userPrompt,
 }) {
   const controller = new AbortController()
@@ -75,28 +89,26 @@ export async function runServerChatTurn({
     payload: { id: assistantMessageId, sessionId, content: '', meta: { skillId, artifactType: initialArtifactType, artifactTitle: initialArtifactType ? taskName : undefined, streaming: true } },
   })
   try {
-    const skillPrompt = skillId
-      ? getSkillSystemPrompt(skillId, skillConfigs, runtimeSkills, { userPrompt, split: true })
-      : ''
     const localPathInstruction = buildLocalPathToolInstruction(localPathAccess.paths, localPathAccess.accessMode)
     const localPathEvidence = await probeLocalPathAccess(localPathAccess)
     const localPathEvidenceInstruction = buildLocalPathEvidenceInstruction(localPathEvidence)
-    const promptParts = typeof skillPrompt === 'string'
-      ? [skillPrompt]
-      : [skillPrompt?.base, skillPrompt?.perTurn]
     const serverContent = [
-      ...promptParts,
       localPathInstruction,
       localPathEvidenceInstruction,
       serializeServerTurnContent(buildUserContentWithAttachments(userPrompt || content, explicitAttachments || attachments), t),
     ].filter(Boolean).join('\n\n')
-    setContextSystemPrompts((current) => ({ ...current, [sessionId || '__draft__']: promptParts.filter(Boolean).join('\n\n') }))
+    setContextSystemPrompts((current) => ({ ...current, [sessionId || '__draft__']: '' }))
 
-    const { terminal } = await runServerTurn({
+    const { terminal, sessionSnapshot } = await runServerTurn({
       sessionId,
       content: serverContent,
+      displayContent: content,
       modelName,
       history: historyMessages,
+      agentId,
+      skillIds: skillId ? [skillId] : [],
+      syncSessionSnapshot: true,
+      toolsConfig: buildServerToolsConfig(toolsConfig),
       signal: controller.signal,
       onStarted: (turn) => dispatchMessage('UPDATE_LAST_MESSAGE_META', { serverTurnId: turn.turnId, serverLastSequence: -1 }),
       onConnectionState: ({ status, attempt, maxAttempts }) => {
@@ -130,6 +142,9 @@ export async function runServerChatTurn({
     }
     if (!sawAssistantText && terminal.payload?.text) dispatchMessage('APPEND_TO_LAST_MESSAGE', terminal.payload.text)
     dispatchMessage('UPDATE_LAST_MESSAGE_META', { type: 'model_reply', modelName: modelName || 'backend-default', latency: Date.now() - startedAt, streaming: false, serverArtifacts })
+    if (sessionSnapshot) {
+      dispatch({ type: 'APPLY_SERVER_SESSION_SNAPSHOT', payload: { sessionId, snapshot: sessionSnapshot } })
+    }
     dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: TASK_STATUS.COMPLETED, stepLabel: t('chat.serverTurn.completed') } } })
     setTimeout(() => dispatch({ type: 'REMOVE_TASK', payload: taskId }), 5000)
     dispatch({ type: 'ADD_HISTORY', payload: { name: taskName, skill: skill?.name || t('chat.serverTurn.generalChat'), status: HISTORY_STATUS.SUCCESS, detail: content.slice(0, 60), state: t('chat.serverTurn.completed'), date: Date.now() } })

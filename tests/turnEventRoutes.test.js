@@ -14,7 +14,9 @@ const { appendTurnEvent } = await import('../server/services/turnEventStore.js')
 const { createTurnEvent } = await import('../shared/turnEvents.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
-const server = createAppServer({ getEnv: () => ({}) })
+const server = createAppServer({
+  getEnv: () => ({ TURN_EVENT_STREAM_POLL_INTERVAL_MS: '100' }),
+})
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
 const origin = `http://127.0.0.1:${server.address().port}`
 
@@ -194,6 +196,43 @@ test('turn event endpoint is read-only and replays ordered server events', async
   assert.match(frames, /id: 1/)
   assert.match(frames, /event: turn_event/)
   assert.match(frames, /"type":"turn.completed"/)
+})
+
+test('turn event stream polls cross-instance database writes without duplicating local events', async () => {
+  const user = issueTestSession({ email: 'turn-route-cross-instance@example.com' })
+  const sessionId = 'session-route-cross-instance'
+  const turnId = 'turn-route-cross-instance'
+  upsertSession({ id: sessionId, userId: user.userId, title: 'Cross-instance turn' })
+
+  const stream = await fetch(
+    `${origin}/api/turns/stream?sessionId=${sessionId}&turnId=${turnId}`,
+    { headers: auth(user.token) },
+  )
+  assert.equal(stream.status, 200)
+
+  appendTurnEvent({
+    userId: user.userId,
+    event: createTurnEvent({
+      id: 'cross-instance-local', sessionId, turnId, sequence: 0,
+      type: 'turn.started', payload: {}, createdAt: Date.now(),
+    }),
+  })
+
+  // Writing the row directly simulates an event committed by another Node.js
+  // instance, whose process-local subscribers cannot notify this SSE handler.
+  getDb().prepare(`
+    INSERT INTO turn_events
+      (id, user_id, session_id, turn_id, sequence, type, payload_json, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    'cross-instance-remote', user.userId, sessionId, turnId, 1,
+    'turn.completed', '{}', Date.now() + 1,
+  )
+
+  const frames = await stream.text()
+  assert.equal(frames.match(/"id":"cross-instance-local"/g)?.length, 1)
+  assert.equal(frames.match(/"id":"cross-instance-remote"/g)?.length, 1)
+  assert.ok(frames.indexOf('cross-instance-local') < frames.indexOf('cross-instance-remote'))
 })
 
 test('turn event replay is isolated per user', async () => {

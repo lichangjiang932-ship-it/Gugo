@@ -16,12 +16,12 @@ import {
 } from './jobStore.js'
 import { createDocx } from './artifactGen.js'
 import { callBackgroundModel, callBackgroundModelWithTools, formatProxyError, getModelContextWindow } from '../adapters/modelProxy.js'
-import { getRuntimeSkill } from './skillRegistry.js'
-import { runToolsLoop, selectJobToolSpecs, SERVER_TOOL_SPECS } from './jobTools.js'
+import { runToolLoop, selectToolSpecs, SERVER_TOOL_SPECS } from './toolLoopRuntime.js'
 import { listUserToolSpecs } from '../mcp/mcpManager.js'
 import { listRegisteredBrowserToolSpecs } from './browserTools.js'
 import { allowedArtifactTools } from './artifactIntent.js'
 import { ensureSafetySystemMessages } from './promptCompiler.js'
+import { injectJobPromptContext, resolveJobSkillContext } from './jobPromptContext.js'
 import { createNotification } from './notificationsStore.js'
 import { releaseApprovalsForJob } from './approvalGate.js'
 import { dispatchHooks } from './hooksService.js'
@@ -92,7 +92,7 @@ function newId(prefix) {
 }
 
 export function selectPlanningToolSpecs(prompt = '') {
-  return selectJobToolSpecs({ prompt }).filter((spec) =>
+  return selectToolSpecs({ prompt }).filter((spec) =>
     PLANNING_READ_ONLY_TOOLS.has(spec?.function?.name)
   )
 }
@@ -148,7 +148,7 @@ export async function runPlanningExploration({
       },
       ...baseMessages.map((message) => ({ ...message })),
     ]
-    const result = await runToolsLoop({
+    const result = await runToolLoop({
       job: planningJob,
       step: { id: newId(`planning-${role.id}`), kind: 'execute' },
       messages: roleMessages,
@@ -223,21 +223,13 @@ export async function runPlanningExploration({
   }
 }
 
-function parseSkillPrompt(prompt = '') {
-  const match = String(prompt).match(/^\/([a-z0-9_-]+)\s*(.*)$/i)
-  if (!match) return { skillId: null, userPrompt: String(prompt || '').trim() }
-  return {
-    skillId: match[1],
-    userPrompt: match[2].trim(),
-  }
-}
-
 export function createDefaultExecuteStep({
   runModel = async ({ messages, signal, userId }) => callBackgroundModel({ messages, signal, userId }),
   runModelWithTools = async ({ messages, tools, signal, userId }) =>
     callBackgroundModelWithTools({ messages, tools, signal, userId }),
   createDocxImpl = createDocx,
   enableServerTools = true,
+  preparePromptContext,
 } = {}) {
   return async function defaultExecuteStep({
     job,
@@ -287,17 +279,15 @@ export function createDefaultExecuteStep({
       }
     }
 
-    const { skillId, userPrompt } = parseSkillPrompt(job.prompt)
-    const skill = skillId ? getRuntimeSkill(skillId, { userId: job.userId }) : null
+    const { skillId, userPrompt, skill } = resolveJobSkillContext({ prompt: job.prompt, userId: job.userId })
     const messages = ensureSafetySystemMessages([])
-    if (skill?.systemPrompt) messages.push({ role: 'system', content: skill.systemPrompt })
 
     // ★ 产物意图决定提示词分支(2026-07-31 事故修复)。
     //   以前这段提示词无条件注入 —— 修 bug 的任务里也常驻 7 条「PPT 必守规则」
     //   外加一句「不要把内容写成纯文本回答」,等于在推模型把中期汇报做成 PPT。
     //   现在:用户没要文件,就一个字都不提文件工具;要了哪种,才注入哪种的规则。
     const artifactTools = allowedArtifactTools(job.prompt, { skillId })
-    const staticJobToolSpecs = selectJobToolSpecs({
+    const staticJobToolSpecs = selectToolSpecs({
       prompt: job.prompt,
       skillId,
       specs: SERVER_TOOL_SPECS,
@@ -383,6 +373,7 @@ export function createDefaultExecuteStep({
     const finalPrompt = step.kind === 'verify'
       ? buildVerificationPrompt(job, step)
       : `${userPrompt || job.prompt}${promptSuffix}`
+    injectJobPromptContext({ messages, job, skill, skillId, query: finalPrompt, preparePromptContext })
     messages.push({ role: 'user', content: finalPrompt })
 
     if (enableServerTools) {
@@ -392,7 +383,7 @@ export function createDefaultExecuteStep({
         && step?.id
         && getJobRow(job.id, { userId: job.userId })
       )
-      const result = await runToolsLoop({
+      const result = await runToolLoop({
         job,
         step,
         messages,
@@ -418,7 +409,7 @@ export function createDefaultExecuteStep({
       // 静默丢掉 → 被澄清打断或预算耗尽的截断运行会上报 ok:true 假装成功。
       // 现在如实透传,截断就是截断。
       //
-      // interrupted = 模型调用中途出错但已有部分成果(jobTools 的降级路径)。
+      // interrupted = the model failed after partial progress; the shared loop returned a safe partial result.
       // 同样算截断,但**不算 failed** —— 用户能看到已经做完的部分。
       const truncated = !!(result.paused || result.budgetExceeded || result.noProgress || result.interrupted)
       return {

@@ -1,6 +1,8 @@
 import { randomBytes } from 'node:crypto'
 import { getSessionByToken } from './db.js'
 import { logger } from './utils/logger.js'
+import { resolveClientId } from './utils/loginGuard.js'
+import { createRateLimiter } from './utils/rateLimiter.js'
 import { z } from 'zod'
 
 /* ── CORS ── */
@@ -165,6 +167,77 @@ export function requireAuth(req, res, next) {
 }
 
 /* ── Rate Limit ── */
+
+function positiveInt(value, fallback) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : fallback
+}
+
+function requestRateLimitIdentity(req, env) {
+  const auth = req.headers?.authorization
+  if (auth?.startsWith('Bearer ')) {
+    const token = auth.slice(7)
+    const session = getSessionByToken(token)
+    if (session?.user_id) return `user:${session.user_id}`
+  }
+  return `client:${resolveClientId(req, env)}`
+}
+
+export function createApiRateLimitMiddleware({ env = process.env, now } = {}) {
+  const readPerMinute = positiveInt(env.API_RATE_LIMIT_READ_PER_MINUTE, 600)
+  const writePerMinute = positiveInt(env.API_RATE_LIMIT_WRITE_PER_MINUTE, 180)
+  const anonymousPerMinute = positiveInt(env.API_RATE_LIMIT_ANONYMOUS_PER_MINUTE, 120)
+  const readLimiter = createRateLimiter({
+    capacity: readPerMinute,
+    refillPerMin: readPerMinute,
+    burstCap: Math.min(readPerMinute, positiveInt(env.API_RATE_LIMIT_READ_BURST, 120)),
+    now,
+  })
+  const writeLimiter = createRateLimiter({
+    capacity: writePerMinute,
+    refillPerMin: writePerMinute,
+    burstCap: Math.min(writePerMinute, positiveInt(env.API_RATE_LIMIT_WRITE_BURST, 60)),
+    now,
+  })
+  const anonymousLimiter = createRateLimiter({
+    capacity: anonymousPerMinute,
+    refillPerMin: anonymousPerMinute,
+    burstCap: Math.min(anonymousPerMinute, positiveInt(env.API_RATE_LIMIT_ANONYMOUS_BURST, 30)),
+    now,
+  })
+
+  if (env.NODE_ENV !== 'test' && !env.VITEST && !env.NODE_TEST_CONTEXT) {
+    readLimiter.startSweep()
+    writeLimiter.startSweep()
+    anonymousLimiter.startSweep()
+  }
+
+  const middleware = (req, res, next) => {
+    if (req.method === 'OPTIONS' || !req.url?.startsWith('/api/')) {
+      next()
+      return
+    }
+    const identity = requestRateLimitIdentity(req, env)
+    const authenticated = identity.startsWith('user:')
+    const isRead = req.method === 'GET' || req.method === 'HEAD'
+    const limiter = authenticated ? (isRead ? readLimiter : writeLimiter) : anonymousLimiter
+    const bucket = isRead ? 'read' : 'write'
+    if (limiter.tryConsume(identity, bucket)) {
+      next()
+      return
+    }
+    res.setHeader('Retry-After', '60')
+    res.writeHead(429, { 'Content-Type': 'application/json; charset=utf-8' })
+    res.end(JSON.stringify({ error: { code: 'RATE_LIMITED', message: 'Too many requests' } }))
+  }
+
+  middleware.close = () => {
+    readLimiter.stopSweep()
+    writeLimiter.stopSweep()
+    anonymousLimiter.stopSweep()
+  }
+  return middleware
+}
 
 /* ── 输入校验 ── */
 

@@ -80,6 +80,111 @@ test('TurnEngine uses the runtime approval mode while preserving chat origin', a
   assert.equal(loopOptions.job.origin, 'chat')
 })
 
+test('TurnEngine persists and applies agent, skill, memory, and tools context', async () => {
+  let promptRequest = null
+  let toolRequest = null
+  let loopOptions = null
+  const baseSpecs = [
+    { type: 'function', function: { name: 'read_file', parameters: { type: 'object' } } },
+    { type: 'function', function: { name: 'bash_exec', parameters: { type: 'object' } } },
+  ]
+  const engine = new TurnEngine({
+    toolSpecs: baseSpecs,
+    preparePromptContext: async (request) => {
+      promptRequest = request
+      return {
+        messages: [
+          { role: 'system', content: '# Skill\nreview carefully' },
+          { role: 'system', content: '# Memory\nproject uses SQLite' },
+        ],
+        effectiveAgentId: 'agent-resolved',
+        skillIds: ['skill-review'],
+        memoryIds: ['memory-1'],
+      }
+    },
+    resolveToolSpecs: async (request) => {
+      toolRequest = request
+      return baseSpecs.filter((spec) => spec.function.name !== 'bash_exec')
+    },
+    runLoop: async (options) => {
+      loopOptions = options
+      return { text: 'context applied', artifactIds: [], iterations: 0 }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId: 'turn-context',
+    content: 'use memory and review skill',
+    agentId: ' agent-input ',
+    skillIds: [' skill-review ', 'skill-review'],
+    toolsConfig: { enabled: ['read_file'], disabled: ['bash_exec'] },
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId: 'turn-context' })
+
+  const started = events('turn-context').find((event) => event.type === 'turn.started')
+  assert.equal(started.payload.agentId, 'agent-input')
+  assert.deepEqual(started.payload.skillIds, ['skill-review'])
+  assert.deepEqual(started.payload.toolsConfig, { enabled: ['read_file'], disabled: ['bash_exec'] })
+  assert.equal(promptRequest.agentId, 'agent-input')
+  assert.deepEqual(promptRequest.skillIds, ['skill-review'])
+  assert.equal(promptRequest.query, 'use memory and review skill')
+  assert.deepEqual(toolRequest.toolsConfig, { enabled: ['read_file'], disabled: ['bash_exec'] })
+  assert.equal(loopOptions.messages[0].content, '# Skill\nreview carefully')
+  assert.equal(loopOptions.messages[1].content, '# Memory\nproject uses SQLite')
+  assert.deepEqual(loopOptions.toolSpecs.map((spec) => spec.function.name), ['read_file'])
+  assert.equal(loopOptions.skillId, 'skill-review')
+  assert.equal(loopOptions.job.agentId, 'agent-resolved')
+})
+
+test('TurnEngine restores persisted prompt and tool context on resume', async () => {
+  const turnId = 'turn-context-resume'
+  appendTurnEvent({
+    userId,
+    event: createTurnEvent({
+      id: 'context-resume-start',
+      sessionId: 'turn-engine-session',
+      turnId,
+      sequence: 0,
+      type: 'turn.started',
+      payload: {
+        content: 'resume context',
+        agentId: 'agent-resume',
+        skillIds: ['skill-resume'],
+        toolsConfig: { enabled: [], disabled: ['bash_exec'] },
+      },
+      createdAt: 1,
+    }),
+  })
+  let promptRequest = null
+  let toolRequest = null
+  let loopOptions = null
+  const engine = new TurnEngine({
+    preparePromptContext: (request) => {
+      promptRequest = request
+      return { messages: [], effectiveAgentId: request.agentId, skillIds: request.skillIds, memoryIds: [] }
+    },
+    resolveToolSpecs: (request) => {
+      toolRequest = request
+      return request.baseSpecs
+    },
+    runLoop: async (options) => {
+      loopOptions = options
+      return { text: 'resumed context', artifactIds: [], iterations: 0 }
+    },
+  })
+
+  await engine.resumeTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  assert.equal(promptRequest.agentId, 'agent-resume')
+  assert.deepEqual(promptRequest.skillIds, ['skill-resume'])
+  assert.deepEqual(toolRequest.toolsConfig, { enabled: [], disabled: ['bash_exec'] })
+  assert.equal(loopOptions.skillId, 'skill-resume')
+  assert.equal(loopOptions.job.agentId, 'agent-resume')
+})
+
 test('TurnEngine runs a multi-round tool call and records its lifecycle', async () => {
   let modelCalls = 0
   let executions = 0

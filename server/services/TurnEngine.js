@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { callBackgroundModelWithTools } from '../adapters/modelProxy.js'
 import { createTurnEvent } from '../../shared/turnEvents.js'
 import { releaseApprovalsForTurn } from './approvalGate.js'
-import { runToolsLoop, SERVER_TOOL_SPECS } from './jobTools.js'
+import { runToolLoop, SERVER_TOOL_SPECS } from './toolLoopRuntime.js'
 import {
   claimLocalChatSession,
   getSession,
@@ -13,6 +13,13 @@ import {
 } from './sessionStore.js'
 import { appendTurnEvent, getLastTurnEvent, listTurnEvents } from './turnEventStore.js'
 import { resolveApprovalMode } from '../utils/approvalPolicy.js'
+import {
+  buildAssistantModelContext,
+  collectToolCallIds,
+  expandStoredMessages,
+} from './turnMessageContext.js'
+import { prepareTurnPromptContext } from './turnPromptContext.js'
+import { normalizeServerToolsConfig, resolveTurnToolSpecs } from './turnToolSpecs.js'
 
 const TERMINAL_TYPES = new Set(['turn.completed', 'turn.cancelled', 'turn.failed'])
 
@@ -46,9 +53,33 @@ function publicStatus(lastEvent, running = false) {
   return 'paused'
 }
 
+function normalizeIds(values, limit = 32) {
+  return [...new Set((Array.isArray(values) ? values : []).map(String).map((value) => value.trim()).filter(Boolean))]
+    .slice(0, limit)
+}
+
+function normalizeOptionalId(value, maxLength = 256) {
+  const normalized = String(value || '').trim()
+  return normalized ? normalized.slice(0, maxLength) : null
+}
+
+function importedMessageContext(message, sourceRole) {
+  if (sourceRole === 'assistant' && Array.isArray(message?.tool_calls)) {
+    return { version: 1, toolCalls: message.tool_calls }
+  }
+  if (sourceRole === 'tool' && message?.tool_call_id) {
+    return {
+      version: 1,
+      toolCallId: String(message.tool_call_id),
+      name: message?.name ? String(message.name) : null,
+    }
+  }
+  return null
+}
+
 export class TurnEngine {
   constructor({
-    runLoop = runToolsLoop,
+    runLoop = runToolLoop,
     runModel = callBackgroundModelWithTools,
     executeTool,
     appendEvent = appendTurnEvent,
@@ -63,11 +94,14 @@ export class TurnEngine {
     now = Date.now,
     toolSpecs = SERVER_TOOL_SPECS,
     readApprovalMode = resolveApprovalMode,
+    preparePromptContext = prepareTurnPromptContext,
+    resolveToolSpecs = resolveTurnToolSpecs,
+    env = process.env,
   } = {}) {
     this.deps = {
       runLoop, runModel, executeTool, appendEvent, lastEvent, replayEvents,
       readSession, claimSession, writeSession, readMessages, writeMessage, idFactory, now, toolSpecs,
-      readApprovalMode,
+      readApprovalMode, preparePromptContext, resolveToolSpecs, env,
     }
     this.active = new Map()
   }
@@ -88,11 +122,16 @@ export class TurnEngine {
     sessionId,
     turnId = this.deps.idFactory(),
     content,
+    displayContent = null,
     modelName = null,
     history = [],
+    agentId = null,
+    skillIds = [],
+    toolsConfig = null,
     authMode = null,
   }) {
     const text = String(content || '').trim()
+    const displayText = String(displayContent ?? content ?? '').trim() || text
     if (!userId) throw new TurnEngineError('UNAUTHORIZED', 'Unauthorized', 401)
     if (!sessionId) throw new TurnEngineError('SESSION_REQUIRED', 'sessionId is required')
     if (!text) throw new TurnEngineError('CONTENT_REQUIRED', 'content is required')
@@ -105,7 +144,7 @@ export class TurnEngine {
         session = this.deps.writeSession({
           id: sessionId,
           userId,
-          title: text.slice(0, 80) || 'Untitled',
+          title: displayText.slice(0, 80) || 'Untitled',
           createdAt: this.deps.now(),
         })
       } catch (error) {
@@ -123,33 +162,53 @@ export class TurnEngine {
     }
 
     const createdAt = this.deps.now()
+    const normalizedAgentId = normalizeOptionalId(agentId)
+    const normalizedSkillIds = normalizeIds(skillIds)
+    const normalizedToolsConfig = normalizeServerToolsConfig(toolsConfig)
     const existingMessages = this.deps.readMessages({ userId, sessionId, limit: 1 })
     const safeHistory = existingMessages.length === 0 && Array.isArray(history) ? history.slice(-200) : []
     safeHistory.forEach((message, index) => {
       const sourceRole = ['user', 'assistant', 'system', 'tool'].includes(message?.role) ? message.role : null
-      const role = sourceRole === 'tool' ? 'system' : sourceRole
+      const role = sourceRole === 'tool' && !message?.tool_call_id ? 'system' : sourceRole
       if (!role || typeof message?.content !== 'string') return
       this.deps.writeMessage({
         id: `${turnId}:history:${index}`,
         userId,
         sessionId,
         role,
+        modelContext: importedMessageContext(message, sourceRole),
         content: sourceRole === 'tool' ? `[历史工具结果]\n${message.content}` : message.content,
         createdAt: createdAt - safeHistory.length + index,
         updatedAt: createdAt,
       })
     })
     this.deps.writeMessage({
-      id: `${turnId}:user`, userId, sessionId, role: 'user', content: text, createdAt, updatedAt: createdAt,
+      id: `${turnId}:user`, userId, sessionId, role: 'user', content: displayText,
+      modelContext: { version: 1, turnId },
+      createdAt, updatedAt: createdAt,
     })
     const emitter = this.#createEmitter({ userId, sessionId, turnId, sequence: 0 })
     await emitter('turn.started', {
       content: text,
+      displayContent: displayText,
       modelName: modelName || null,
+      agentId: normalizedAgentId,
+      skillIds: normalizedSkillIds,
+      toolsConfig: normalizedToolsConfig,
       userMessageId: `${turnId}:user`,
       importedHistoryCount: safeHistory.length,
     })
-    this.#schedule({ userId, sessionId, turnId, content: text, modelName, emitter })
+    this.#schedule({
+      userId,
+      sessionId,
+      turnId,
+      content: text,
+      modelName,
+      agentId: normalizedAgentId,
+      skillIds: normalizedSkillIds,
+      toolsConfig: normalizedToolsConfig,
+      emitter,
+    })
     return this.getTurn({ userId, sessionId, turnId })
   }
 
@@ -170,6 +229,9 @@ export class TurnEngine {
       turnId,
       content: String(started.payload.content || ''),
       modelName: started.payload.modelName || null,
+      agentId: normalizeOptionalId(started.payload.agentId),
+      skillIds: normalizeIds(started.payload.skillIds),
+      toolsConfig: normalizeServerToolsConfig(started.payload.toolsConfig),
       emitter,
     })
     return this.getTurn({ userId, sessionId, turnId })
@@ -232,25 +294,78 @@ export class TurnEngine {
     entry.promise.catch(() => {})
   }
 
-  async #execute({ userId, sessionId, turnId, content, modelName, emitter }, signal) {
+  async #execute({
+    userId,
+    sessionId,
+    turnId,
+    content,
+    modelName,
+    agentId,
+    skillIds,
+    toolsConfig,
+    emitter,
+  }, signal) {
     const checkpoint = this.deps.lastEvent({ userId, sessionId, turnId, type: 'turn.checkpoint' })
-    const messages = this.deps.readMessages({ userId, sessionId }).map(({ role, content: body }) => ({
-      role,
-      content: body,
-    }))
+    const storedMessages = this.deps.readMessages({ userId, sessionId, limit: 500, recent: true })
+      .map((message) => message.id === `${turnId}:user`
+        ? { ...message, content }
+        : message)
+    const historyMessages = expandStoredMessages(storedMessages)
+    let promptContext = { messages: [], effectiveAgentId: agentId, skillIds, memoryIds: [] }
+    try {
+      promptContext = await this.deps.preparePromptContext({
+        userId,
+        agentId,
+        skillIds,
+        sessionId,
+        recentMessages: storedMessages,
+        query: content,
+        env: this.deps.env,
+      }) || promptContext
+    } catch {
+      // Optional memory/agent/skill context must never prevent a turn from running.
+    }
+    const messages = [
+      ...(Array.isArray(promptContext.messages) ? promptContext.messages : []),
+      ...historyMessages,
+    ]
+    let resolvedToolSpecs = this.deps.toolSpecs
+    try {
+      const resolved = await this.deps.resolveToolSpecs({
+        userId,
+        baseSpecs: this.deps.toolSpecs,
+        toolsConfig,
+      })
+      if (Array.isArray(resolved)) resolvedToolSpecs = resolved
+    } catch {
+      // MCP/browser discovery is optional; retain the built-in tool set on failure.
+    }
+    const activeSkillId = normalizeIds(promptContext.skillIds).at(0) || normalizeIds(skillIds).at(0) || null
+    const baselineToolCallIds = collectToolCallIds(messages)
+    let checkpointMessages = checkpoint?.payload?.state?.messages || []
     try {
       const result = await this.deps.runLoop({
-        job: { id: turnId, userId, sessionId, origin: 'chat', prompt: content, title: content.slice(0, 120) },
+        job: {
+          id: turnId,
+          userId,
+          sessionId,
+          agentId: promptContext.effectiveAgentId || agentId || null,
+          origin: 'chat',
+          prompt: content,
+          title: content.slice(0, 120),
+        },
         step: { id: turnId, kind: 'chat' },
         messages,
         signal,
-        toolSpecs: this.deps.toolSpecs,
+        toolSpecs: resolvedToolSpecs,
+        skillId: activeSkillId,
         executeTool: this.deps.executeTool,
         approvalOrigin: 'chat',
         approvalSessionId: sessionId,
         approvalMode: this.deps.readApprovalMode(),
         loadCheckpoint: async () => checkpoint?.payload?.state || null,
         saveCheckpoint: async (state) => {
+          checkpointMessages = Array.isArray(state?.messages) ? state.messages : checkpointMessages
           await emitter('turn.checkpoint', { state })
           return true
         },
@@ -292,6 +407,14 @@ export class TurnEngine {
       const completedAt = this.deps.now()
       this.deps.writeMessage({
         id: `${turnId}:assistant`, userId, sessionId, role: 'assistant', content: text,
+        modelContext: buildAssistantModelContext({
+          turnId,
+          checkpointMessages,
+          baselineToolCallIds,
+          artifactIds: result?.artifactIds || [],
+          iterations: result?.iterations || 0,
+          paused: !!result?.paused,
+        }),
         createdAt: completedAt, updatedAt: completedAt,
       })
       await emitter('turn.completed', {

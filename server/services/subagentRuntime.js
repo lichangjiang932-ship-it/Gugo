@@ -26,6 +26,7 @@ import { createJobBudget } from '../utils/jobBudget.js'
 import { requestApproval } from './approvalGate.js'
 import { buildSafetyBlock } from './promptCompiler.js'
 import { getBuiltinSpec } from './toolRegistry.js'
+import { normalizePromptContextIds, prepareOptionalPromptContext } from './optionalPromptContext.js'
 
 /** 读一个正整数 env,不合法就用默认值。 */
 function envInt(name, fallback) {
@@ -413,7 +414,7 @@ async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_
   }
   // jobTools 会调度 Agent 工具；这里延迟加载可避免静态循环依赖，同时让
   // 主任务、聊天和子代理共用同一套预算、guard、审批、并发与收尾语义。
-  const { runToolsLoop } = await import('./jobTools.js')
+  const { runToolLoop } = await import('./toolLoopRuntime.js')
   const loopJob = {
     id: runId || sessionId || `subagent-${randomUUID()}`,
     userId,
@@ -421,7 +422,7 @@ async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_
     origin: 'subagent',
   }
   const loopStep = { id: runId || 'subagent-step' }
-  const result = await runToolsLoop({
+  const result = await runToolLoop({
     job: loopJob,
     step: loopStep,
     messages,
@@ -570,7 +571,9 @@ function normalizeSubagentTasks(request = {}) {
     if (!prompt) throw new Error(`subagent task ${index + 1} requires prompt`)
     if (prompt.length > 20_000) throw new Error(`subagent task ${index + 1} prompt exceeds 20000 characters`)
     const role = String(task?.role || description).trim().slice(0, 120)
-    return { type, prompt, description, role }
+    const agentId = String(task?.agentId || task?.agent_id || request?.agentId || request?.agent_id || '').trim() || null
+    const skillIds = normalizePromptContextIds(task?.skillIds || task?.skill_ids || request?.skillIds || request?.skill_ids)
+    return { type, prompt, description, role, agentId, skillIds }
   })
 }
 
@@ -586,6 +589,7 @@ export async function runSubagentBatch({
   approveTool = requestApproval,
   callModel = undefined,
   executeTool = undefined,
+  preparePromptContext,
 } = {}) {
   if (!userId) throw new Error('userId is required')
   if (depth >= MAX_SUBAGENT_DEPTH) {
@@ -610,6 +614,8 @@ export async function runSubagentBatch({
     type: task.type,
     prompt: task.prompt,
     description: task.description,
+    agentId: task.agentId,
+    skillIds: task.skillIds,
     team: { ...team, role: task.role, memberIndex: tasks.indexOf(task) },
     parentSessionId,
     parentMessageId,
@@ -620,6 +626,7 @@ export async function runSubagentBatch({
     approveTool,
     callModel,
     executeTool,
+    preparePromptContext,
   })))
   const runs = settled.map((result, index) => result.status === 'fulfilled'
     ? {
@@ -670,6 +677,8 @@ export async function runSubagent({
   type = 'general',
   prompt,
   description = '',
+  agentId = null,
+  skillIds = [],
   team = null,
   parentSessionId = null,
   parentMessageId = null,
@@ -681,6 +690,7 @@ export async function runSubagent({
   callModel = callBackgroundModelWithTools,
   executeTool = executeSubagentTool,
   approveTool = requestApproval,
+  preparePromptContext,
 } = {}) {
   if (!userId) throw new Error('userId is required')
   if (!prompt || !String(prompt).trim()) throw new Error('prompt is required')
@@ -703,8 +713,19 @@ export async function runSubagent({
   try {
     insertRun({ id, userId, type, prompt, parentSessionId, parentMessageId, trace })
     const { system, tools } = SUBAGENT_TYPES[type]
+    const promptContextMessages = prepareOptionalPromptContext({
+      preparePromptContext,
+      input: {
+        userId,
+        agentId,
+        skillIds: normalizePromptContextIds(skillIds),
+        query: String(prompt).trim(),
+      },
+      scope: 'subagent.prompt',
+    }).messages
     const messages = [
       { role: 'system', content: buildSafetyBlock().text },
+      ...promptContextMessages,
       {
         role: 'system',
         content: type === 'general'

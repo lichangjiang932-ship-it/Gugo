@@ -1,11 +1,8 @@
 /**
- * 前端工具规格(OpenAI tool schema)和本地执行器(把 tool_call 路由到对应 fetch)。
+ * 前端工具目录和本地端点客户端。
  *
- * 流程:
- *   1) 前端把 buildToolSpecs(enabled) 塞进 chat 请求的 `tools` 字段
- *   2) 后端透传给上游模型,模型返回 tool_calls
- *   3) 前端 executeToolCall(call) 调本地 /api/tools/* 拿结果
- *   4) 把 { role: 'tool', tool_call_id, content } 追加到 messages,再发一轮
+ * 聊天工具循环由服务端 turn engine 负责；这里的规格用于上下文面板展示，
+ * executeToolCall 仍用于发送前的本地路径授权探测及独立工具客户端。
  */
 
 // ★ batchF P1: /api/tools/* 现在强制鉴权,前端必须带 token,
@@ -589,47 +586,6 @@ export function buildToolSpecs(enabledNames) {
 
 export function listToolNames() {
   return Object.keys(TOOL_SPECS)
-}
-
-/**
- * Feature 1: 拉服务端 /api/tools/specs 取得当前模式的完整工具列表
- *   - builtin: 服务端镜像了 TOOL_SPECS
- *   - mcp: McpManager 在连接时注入的动态工具
- *   - skill: 后续 feature
- * 返回 [{type:'function', function:{name, description, parameters}}]
- *
- * 失败时返回空数组（caller 应该 fallback 到本地 buildToolSpecs(enabledNames)）。
- */
-export async function fetchToolSpecsFromServer(mode = 'chat') {
-  try {
-    const params = new URLSearchParams()
-    if (mode) params.set('mode', mode)
-    const resp = await fetch(`/api/tools/specs?${params.toString()}`)
-    if (!resp.ok) return []
-    const data = await resp.json()
-    if (!data?.ok || !Array.isArray(data.specs)) return []
-    return data.specs.map((s) => s.tool).filter(Boolean)
-  } catch {
-    return []
-  }
-}
-
-/**
- * Feature 1: 合并 builtin 启用工具 + 服务端动态工具 (mcp/skill/subagent)
- * builtin 工具的开关由 toolsConfig 控制；MCP 工具一旦 server enabled 就默认开启。
- */
-export async function buildToolSpecsAsync({ enabledBuiltinNames, mode = 'chat' }) {
-  const builtin = buildToolSpecs(enabledBuiltinNames || [])
-  const serverList = await fetchToolSpecsFromServer(mode)
-  const seen = new Set(builtin.map((t) => t.function?.name))
-  const dynamic = serverList.filter((t) => {
-    const name = t.function?.name
-    if (!name || seen.has(name)) return false
-    // 只补充非 builtin 部分（mcp__* / skill 等）
-    return name.startsWith('mcp__') || name.startsWith('skill__') || !TOOL_SPECS[name]
-  })
-  // 排除已经在 builtin 里出现的同名
-  return sortToolSpecsByName([...builtin, ...dynamic])
 }
 
 /* ── 执行器 ── */

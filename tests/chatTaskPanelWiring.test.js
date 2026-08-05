@@ -43,3 +43,11 @@ test('chat task views avoid speculative numeric progress while a model request i
   assert.doesNotMatch(detailSource, /task\.progress/)
   assert.doesNotMatch(detailSource, /strokeDashoffset/)
 })
+
+test('chat forwards the persisted tool switches to the server turn flow', () => {
+  const chatSource = fs.readFileSync(new URL('../src/pages/ChatSplit/index.jsx', import.meta.url), 'utf8')
+  const serverTurnSource = fs.readFileSync(new URL('../src/pages/ChatSplit/serverTurnFlow.js', import.meta.url), 'utf8')
+
+  assert.match(chatSource, /toolsConfig:\s*state\.toolsConfig/)
+  assert.match(serverTurnSource, /toolsConfig:\s*buildServerToolsConfig\(toolsConfig\)/)
+})

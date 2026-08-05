@@ -293,6 +293,54 @@ test('manual step completion persists verification evidence', () => {
   assert.ok(completed.events.some((event) => event.type === 'step_completed'))
 })
 
+test('default executor injects background skill and memory context without blocking on context failure', async () => {
+  let capturedMessages = []
+  let contextInput = null
+  const executeStep = createDefaultExecuteStep({
+    enableServerTools: false,
+    preparePromptContext: (input) => {
+      contextInput = input
+      return {
+        messages: [
+          { role: 'system', content: '# Skills\nwriter instructions' },
+          { role: 'system', content: '# Long-term memory\nproject fact' },
+        ],
+        skillIds: ['writer'],
+      }
+    },
+    runModel: async ({ messages }) => {
+      capturedMessages = messages
+      return 'done'
+    },
+  })
+  await executeStep({
+    job: { userId: TEST_USER, title: 'context job', prompt: '/writer draft release notes', steps: [] },
+    step: { kind: 'execute' },
+    signal: new AbortController().signal,
+  })
+  assert.deepEqual(contextInput.skillIds, ['writer'])
+  assert.equal(contextInput.query, 'draft release notes')
+  assert.ok(capturedMessages.some((message) => message.content.includes('writer instructions')))
+  assert.ok(capturedMessages.some((message) => message.content.includes('project fact')))
+
+  let fallbackCalled = false
+  const fallback = createDefaultExecuteStep({
+    enableServerTools: false,
+    preparePromptContext: () => { throw new Error('memory unavailable') },
+    runModel: async () => {
+      fallbackCalled = true
+      return 'fallback'
+    },
+  })
+  const result = await fallback({
+    job: { userId: TEST_USER, title: 'fallback job', prompt: 'keep running', steps: [] },
+    step: { kind: 'execute' },
+    signal: new AbortController().signal,
+  })
+  assert.equal(fallbackCalled, true)
+  assert.equal(result.output.text, 'fallback')
+})
+
 test('non-document tasks are not forced into a Word artifact', async () => {
   let docxCalls = 0
   const runtime = new JobRuntime({

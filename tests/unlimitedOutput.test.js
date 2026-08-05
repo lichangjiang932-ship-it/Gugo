@@ -3,8 +3,7 @@ import assert from 'node:assert/strict'
 
 import { buildOpenAICompatibleRequest, loadModelConfig } from '../server/adapters/modelProxy.js'
 import { createJobBudget } from '../server/utils/jobBudget.js'
-import { clipChatToolContent } from '../src/lib/chatFlowGuards.js'
-import { DEFAULT_TOOL_OUTPUT_CHARS } from '../server/utils/toolCallHarness.js'
+import { DEFAULT_TOOL_OUTPUT_CHARS, serializeToolResult } from '../server/utils/toolCallHarness.js'
 
 /* ------------------------------------------------------------------ *
  * max_tokens：不限制 = 不发字段
@@ -88,16 +87,15 @@ test('调用次数上限仍然是硬收敛点', () => {
 
 test('工具结果上限已放宽到 24000 —— 读个大文件不再被砍掉大半', () => {
   assert.ok(DEFAULT_TOOL_OUTPUT_CHARS >= 24_000, `实际 ${DEFAULT_TOOL_OUTPUT_CHARS}`)
-  // 一个 20000 字符的文件内容应该完整通过
   const content = 'x'.repeat(20_000)
-  assert.equal(clipChatToolContent(content), content)
+  assert.equal(JSON.parse(serializeToolResult({ content })).content, content)
 })
 
 test('超过上限时仍然截断,且结果仍是合法 JSON(不切成语法残片)', () => {
   const huge = 'y'.repeat(60_000)
-  const clipped = clipChatToolContent(huge)
+  const clipped = serializeToolResult({ content: huge })
   assert.ok(clipped.length < huge.length, '超长内容仍要截断')
   const parsed = JSON.parse(clipped)
   assert.equal(parsed.truncated, true)
-  assert.equal(parsed.originalChars, 60_000)
+  assert.ok(parsed.originalChars >= 60_000)
 })

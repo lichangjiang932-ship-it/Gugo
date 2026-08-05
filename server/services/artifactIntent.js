@@ -9,7 +9,7 @@
  *     3. 判断「用户要不要文件」的关键词散落在 jobWorkflow 和前端两处,各判各的。
  *
  * 这里把「用户到底要不要文件产物」收敛成唯一判断源,同时驱动三个决策点:
- *   - jobTools.selectJobToolSpecs  → 模型压根看不到不该用的工具(硬约束)
+ *   - toolLoopRuntime.selectToolSpecs → the model never sees disallowed artifact tools
  *   - jobRuntime 系统提示词分支     → 不给代码任务注入 PPT 排版规则(软约束)
  *   - jobWorkflow.shouldCompileDocx → finalize 自动编译走同一套关键词
  *

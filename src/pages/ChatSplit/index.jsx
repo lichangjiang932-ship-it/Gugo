@@ -412,6 +412,7 @@ export default function ChatSplit() {
 
       await runServerChatTurn({
         abortCtrlRef,
+        agentId: effectiveAgentId,
         attachments,
         content,
         dispatch,
@@ -422,19 +423,18 @@ export default function ChatSplit() {
         probeLocalPathAccess,
         requestServerToolApproval,
         resolveToolApproval,
-        runtimeSkills,
         sessionId,
         setContextSystemPrompts,
         setIsGenerating,
         setToolApproval,
         skill,
-        skillConfigs: state.skillConfigs,
         skillId,
         taskId,
         taskName,
         t,
         toast,
         toolApprovalResolveRef,
+        toolsConfig: state.toolsConfig,
         userPrompt,
       })
 
@@ -442,7 +442,7 @@ export default function ChatSplit() {
     // ★ #27: 细粒度 deps,只收 triggerSendFlow body 里实际读的字段;
     //         避免依赖整个 state 导致每次 sessionDrafts/tasks 变都重建 callback
     [attachments, directoryApprovalResolveRef, dispatch, ensureLocalPathAccess, probeLocalPathAccess, isGenerating, modelOptions, selectedModel, setToolApproval, toolApprovalResolveRef, runtimeSkills, effectiveAgentId, requestServerToolApproval, resolveToolApproval, toast, t,
-      state.activeSessionId, state.sessions, state.skillConfigs]
+      state.activeSessionId, state.sessions, state.skillConfigs, state.toolsConfig]
   )
 
   useServerTurnResume({

@@ -81,6 +81,34 @@ export function upsertSession({
   return getSession({ userId, sessionId: id })
 }
 
+function parseModelContext(value) {
+  if (!value) return null
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0 ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function serializeModelContext(value) {
+  if (!value || typeof value !== 'object') return '{}'
+  return JSON.stringify(value)
+}
+
+function mapMessage(row) {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    userId: row.user_id,
+    role: row.role,
+    content: row.content,
+    modelContext: parseModelContext(row.model_context_json),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
 /**
  * Claim one legacy chat for the selected local-auth owner. This deliberately
  * does not merge whole users because providers and agents may exist on both.
@@ -179,6 +207,7 @@ export function upsertMessage({
   sessionId,
   role,
   content = '',
+  modelContext = null,
   createdAt = Date.now(),
   updatedAt = createdAt,
 }) {
@@ -192,44 +221,87 @@ export function upsertMessage({
     WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
   `).get(userId, sessionId)
   if (!session) throw new Error('session not found')
-  db.prepare(`
-    INSERT INTO messages (id, session_id, user_id, role, content, session_title, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
-      role = excluded.role,
-      content = excluded.content,
-      session_title = excluded.session_title,
-      updated_at = excluded.updated_at
-  `).run(id, sessionId, userId, role, String(content ?? ''), session.title || '', createdAt, updatedAt)
+  const serializedContext = serializeModelContext(modelContext)
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO messages
+        (id, session_id, user_id, role, content, session_title, model_context_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        role = excluded.role,
+        content = excluded.content,
+        session_title = excluded.session_title,
+        model_context_json = excluded.model_context_json,
+        updated_at = excluded.updated_at
+      WHERE messages.user_id = excluded.user_id AND messages.session_id = excluded.session_id
+    `).run(
+      id,
+      sessionId,
+      userId,
+      role,
+      String(content ?? ''),
+      session.title || '',
+      serializedContext,
+      createdAt,
+      updatedAt,
+    )
+    db.prepare(`
+      UPDATE sessions
+      SET updated_at = CASE
+        WHEN COALESCE(updated_at, 0) < ? THEN ?
+        ELSE updated_at
+      END
+      WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
+    `).run(updatedAt, updatedAt, userId, sessionId)
+  })()
   return {
     id,
     sessionId,
     userId,
     role,
     content: String(content ?? ''),
+    modelContext: parseModelContext(serializedContext),
     createdAt,
     updatedAt,
   }
 }
 
-export function listMessages({ userId, sessionId, limit = 500 } = {}) {
+export function listMessages({ userId, sessionId, limit = 500, recent = false } = {}) {
   if (!userId || !sessionId) return []
   const safeLimit = Math.min(2000, Math.max(1, Number(limit) || 500))
-  return getDb().prepare(`
-    SELECT id, session_id, user_id, role, content, created_at, updated_at
+  const order = recent ? 'DESC' : 'ASC'
+  const rows = getDb().prepare(`
+    SELECT id, session_id, user_id, role, content, model_context_json, created_at, updated_at, rowid
     FROM messages
     WHERE user_id = ? AND session_id = ?
-    ORDER BY created_at ASC, rowid ASC
+    ORDER BY created_at ${order}, rowid ${order}
     LIMIT ?
-  `).all(userId, sessionId, safeLimit).map((row) => ({
-    id: row.id,
-    sessionId: row.session_id,
-    userId: row.user_id,
-    role: row.role,
-    content: row.content,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  }))
+  `).all(userId, sessionId, safeLimit)
+  if (recent) rows.reverse()
+  return rows.map(mapMessage)
+}
+
+export function getSessionSnapshot({ userId, sessionId, limit = 2000 } = {}) {
+  const session = getSession({ userId, sessionId })
+  if (!session) return null
+  const safeLimit = Math.min(2000, Math.max(1, Number(limit) || 2000))
+  const totalMessages = getDb().prepare(`
+    SELECT COUNT(*) AS count
+    FROM messages
+    WHERE user_id = ? AND session_id = ?
+  `).get(userId, sessionId).count
+  const messages = listMessages({ userId, sessionId, limit: safeLimit })
+  const revision = messages.reduce(
+    (latest, message) => Math.max(latest, Number(message.updatedAt) || 0),
+    Number(session.updatedAt) || Number(session.createdAt) || 0,
+  )
+  return {
+    session,
+    messages,
+    revision,
+    totalMessages,
+    complete: messages.length === totalMessages,
+  }
 }
 
 export function deleteMessage({ userId, messageId }) {

@@ -11,6 +11,7 @@ import {
   errorBoundary,
   requestLogger,
   requireAuth,
+  createApiRateLimitMiddleware,
 } from './middleware.js'
 import { bootstrap, gracefulShutdown } from './core/lifecycle.js'
 
@@ -226,13 +227,15 @@ export function enforceLocalAuthExposurePolicy(
   throw error
 }
 
-function applyMiddlewares(handler) {
+function applyMiddlewares(handler, apiRateLimitMiddleware) {
   return (req, res) => {
     // 顺序：CORS → 安全头 → 日志 → 错误边界 → 业务逻辑
     corsMiddleware(req, res, () => {
       securityHeaders(req, res, () => {
         requestLogger(req, res, () => {
-          errorBoundary(req, res, () => handler(req, res))
+          apiRateLimitMiddleware(req, res, () => {
+            errorBoundary(req, res, () => handler(req, res))
+          })
         })
       })
     })
@@ -444,7 +447,11 @@ function createRouter(getEnv = getRuntimeEnv, staticDir = distDir) {
 }
 
 export function createAppServer({ getEnv = getRuntimeEnv, staticDir = distDir } = {}) {
-  return http.createServer(applyMiddlewares(createRouter(getEnv, staticDir)))
+  const env = { ...process.env, ...(getEnv() || {}) }
+  const apiRateLimitMiddleware = createApiRateLimitMiddleware({ env })
+  const server = http.createServer(applyMiddlewares(createRouter(getEnv, staticDir), apiRateLimitMiddleware))
+  server.once('close', () => apiRateLimitMiddleware.close())
+  return server
 }
 
 // 旧 gracefulShutdown 已下沉到 server/core/lifecycle.js

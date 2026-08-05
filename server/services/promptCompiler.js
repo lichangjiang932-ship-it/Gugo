@@ -162,25 +162,41 @@ function normalizeSkill(skill) {
   }
 }
 
-export function buildSkillsBlock({ userId, agentId = null, skillIds = [] } = {}) {
-  const normalizedIds = [...new Set((Array.isArray(skillIds) ? skillIds : []).map(String).filter(Boolean))].sort()
-  if (!normalizedIds.length) return EMPTY_RESULT
+function normalizeSkillIds(skillIds) {
+  return [...new Set((Array.isArray(skillIds) ? skillIds : []).map(String).filter(Boolean))].sort()
+}
 
+/**
+ * 在 caller 层解析用户可见技能。这样 turn/job/subagent 可以先完成 DB 读取，
+ * 再把稳定的纯数据交给 prompt compiler，避免编译阶段隐式查询。
+ */
+export function prepareSkillsForPrompt({ userId, skillIds = [] } = {}) {
+  const normalizedIds = normalizeSkillIds(skillIds)
+  if (!normalizedIds.length) return []
   const skillsById = new Map(listRuntimeSkills({ userId }).map((skill) => [skill.id, normalizeSkill(skill)]))
-  const skills = normalizedIds.map((id) => skillsById.get(id)).filter(Boolean)
-  if (!skills.length) return EMPTY_RESULT
+  return normalizedIds.map((id) => skillsById.get(id)).filter(Boolean)
+}
 
-  // 指纹只包含最终文本真正使用的字段。userId / agentId / 未命中的 skillId
-  // 不会出现在提示词里，把它们算进去只会让相同技能块无法跨会话复用。
-  const input = { skills }
+export function buildSkillsBlockFromPrepared({ userId, agentId = null, skills = [] } = {}) {
+  const normalized = [...new Map(
+    (Array.isArray(skills) ? skills : [])
+      .filter((skill) => skill?.id)
+      .map((skill) => {
+        const value = normalizeSkill(skill)
+        return [String(value.id), value]
+      }),
+  ).values()].sort((a, b) => String(a.id).localeCompare(String(b.id)))
+  if (!normalized.length) return EMPTY_RESULT
+
+  const input = { skills: normalized }
   const sources = {
     userId: userId || null,
     agentId: agentId || null,
-    skillIds: skills.map((skill) => skill.id),
+    skillIds: normalized.map((skill) => skill.id),
     fields: ['id', 'name', 'description', 'permissions', 'systemPrompt'],
   }
   return cachedBuild('skills', input, sources, () => {
-    const sections = skills.map((skill) => {
+    const sections = normalized.map((skill) => {
       const lines = [`## ${skill.name || skill.id} (${skill.id})`]
       if (skill.description) lines.push(skill.description)
       if (skill.permissions.length) lines.push(`Permissions: ${skill.permissions.join(', ')}`)
@@ -188,6 +204,19 @@ export function buildSkillsBlock({ userId, agentId = null, skillIds = [] } = {})
       return lines.join('\n')
     })
     return ['# Skills', ...sections].join('\n\n')
+  })
+}
+
+export function buildSkillsBlock({ userId, agentId = null, skillIds = [], preparedSkills } = {}) {
+  const normalizedIds = [...new Set((Array.isArray(skillIds) ? skillIds : []).map(String).filter(Boolean))].sort()
+  if (preparedSkills === undefined && !normalizedIds.length) return EMPTY_RESULT
+  const skills = preparedSkills === undefined
+    ? prepareSkillsForPrompt({ userId, skillIds: normalizedIds })
+    : preparedSkills
+  return buildSkillsBlockFromPrepared({
+    userId,
+    agentId,
+    skills,
   })
 }
 

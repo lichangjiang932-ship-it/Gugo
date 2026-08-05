@@ -352,6 +352,24 @@ function reducer(state, action) {
       }
     }
 
+    case 'APPLY_SERVER_SESSION_SNAPSHOT': {
+      const { sessionId, snapshot } = action.payload || {}
+      if (!sessionId || snapshot?.complete !== true || !Array.isArray(snapshot.messages)) return state
+      const revision = Math.max(0, Number(snapshot.revision) || 0)
+      return {
+        ...state,
+        sessions: state.sessions.map((session) => {
+          if (session.id !== sessionId || revision < (Number(session.serverRevision) || 0)) return session
+          return {
+            ...session,
+            messages: snapshot.messages,
+            serverRevision: revision,
+            updatedAt: Math.max(Number(session.updatedAt) || 0, revision),
+          }
+        }),
+      }
+    }
+
     case 'CLEAR_CURRENT_SESSION': {
       if (!state.activeSessionId) return state
       return {

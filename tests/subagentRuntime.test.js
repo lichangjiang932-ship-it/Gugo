@@ -112,6 +112,46 @@ test('runSubagent creates a DB record', async () => {
   assert.equal(rows[0].agent_type, 'general')
 })
 
+test('subagent injects optional skill and memory context and degrades when preparation fails', async () => {
+  let capturedMessages = []
+  let contextInput = null
+  const run = await runSubagent({
+    userId,
+    type: 'explore',
+    prompt: 'inspect memory pipeline',
+    agentId: 'agent-context',
+    skillIds: ['review'],
+    preparePromptContext: (input) => {
+      contextInput = input
+      return {
+        messages: [
+          { role: 'system', content: '# Skills\nreview carefully' },
+          { role: 'system', content: '# Long-term memory\nknown constraint' },
+        ],
+      }
+    },
+    callModel: async ({ messages }) => {
+      capturedMessages = messages
+      return { content: 'done', toolCalls: [] }
+    },
+  })
+  assert.equal(run.status, 'completed')
+  assert.equal(contextInput.agentId, 'agent-context')
+  assert.deepEqual(contextInput.skillIds, ['review'])
+  assert.ok(capturedMessages.some((message) => message.content.includes('review carefully')))
+  assert.ok(capturedMessages.some((message) => message.content.includes('known constraint')))
+
+  const degraded = await runSubagent({
+    userId,
+    type: 'explore',
+    prompt: 'continue without memory',
+    preparePromptContext: () => { throw new Error('context unavailable') },
+    callModel: async () => ({ content: 'still completed', toolCalls: [] }),
+  })
+  assert.equal(degraded.status, 'completed')
+  assert.equal(degraded.resultText, 'still completed')
+})
+
 test('subagent swarm exposes team members with isolated transcripts', async () => {
   const result = await runSubagentBatch({
     userId,

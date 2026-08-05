@@ -46,6 +46,7 @@ export default function useServerTurnResume({
       resume: true,
       afterSequence: Number.isInteger(message.meta?.serverLastSequence) ? message.meta.serverLastSequence : -1,
       signal: controller.signal,
+      syncSessionSnapshot: true,
       onConnectionState: ({ status, attempt, maxAttempts }) => {
         if (status === 'reconnecting') {
           dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { stepLabel: t('chat.serverTurn.reconnecting', { attempt, max: maxAttempts }) } } })
@@ -71,7 +72,7 @@ export default function useServerTurnResume({
         })
         dispatchMessage('UPDATE_LAST_MESSAGE_META', { serverLastSequence: event.sequence })
       },
-    }).then(({ terminal }) => {
+    }).then(({ terminal, sessionSnapshot }) => {
       if (terminal.type === 'turn.failed') throw new Error(terminal.payload?.message || 'Server turn failed')
       if (terminal.type === 'turn.cancelled') {
         const error = new Error('Generation stopped')
@@ -80,6 +81,12 @@ export default function useServerTurnResume({
       }
       if (!sawAssistantText && !message.content && terminal.payload?.text) dispatchMessage('APPEND_TO_LAST_MESSAGE', terminal.payload.text)
       dispatchMessage('UPDATE_LAST_MESSAGE_META', { streaming: false, serverArtifacts })
+      if (sessionSnapshot) {
+        dispatch({
+          type: 'APPLY_SERVER_SESSION_SNAPSHOT',
+          payload: { sessionId: session.id, snapshot: sessionSnapshot },
+        })
+      }
       dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: TASK_STATUS.COMPLETED, stepLabel: t('chat.serverTurn.resumed') } } })
     }).catch((error) => {
       const stopped = isUserStopped(error)

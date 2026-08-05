@@ -21,6 +21,7 @@ import {
   clearUserPassword,
   getSessionByToken,
   createSession,
+  deleteSession,
   createLoginCode,
   getLoginCode,
   incrementLoginAttempts,
@@ -28,6 +29,7 @@ import {
   deleteExpiredCodes,
   checkRateLimit,
 } from '../db.js'
+import { disconnectUser as disconnectMcpUser } from '../mcp/mcpManager.js'
 
 const DEFAULT_DATA_DIR = path.join(process.cwd(), 'server-data')
 
@@ -562,6 +564,15 @@ export async function handleAuthAccountRequest(req, res, env = process.env) {
       }
       const result = loginWithPassword({ email: body.email, password: body.password })
       sendJson(res, 200, result)
+      return
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/auth/logout') {
+      const token = authToken(req)
+      const session = token ? getSessionByToken(token) : null
+      if (token) deleteSession(token)
+      if (session?.user_id) disconnectMcpUser(session.user_id)
+      sendJson(res, 200, { ok: true })
       return
     }
 

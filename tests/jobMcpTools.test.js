@@ -94,7 +94,8 @@ test('autonomous jobs receive and execute only the current user MCP tools', asyn
     let { specs, errors } = await listUserToolSpecs(owner)
     assert.deepEqual(errors, [])
     assert.deepEqual(specs.map((spec) => spec.function.name), ['mcp__devtools__inspect_page'])
-    assert.equal(getDynamicTool('mcp__devtools__inspect_page').metadata.requiresApproval, true)
+    assert.equal(getDynamicTool('mcp__devtools__inspect_page', { userId: owner }).metadata.requiresApproval, true)
+    assert.equal(getDynamicTool('mcp__devtools__inspect_page', { userId: otherUser }), null)
     assert.deepEqual((await listUserToolSpecs(otherUser)).specs, [])
 
     disconnectServer(owner, configured.id)
@@ -105,7 +106,7 @@ test('autonomous jobs receive and execute only the current user MCP tools', asyn
     })
     ;({ specs, errors } = await listUserToolSpecs(owner))
     assert.deepEqual(errors, [])
-    assert.equal(getDynamicTool('mcp__devtools__inspect_page').metadata.requiresApproval, false)
+    assert.equal(getDynamicTool('mcp__devtools__inspect_page', { userId: owner }).metadata.requiresApproval, false)
 
     let invocations = 0
     let observedToolResult = ''

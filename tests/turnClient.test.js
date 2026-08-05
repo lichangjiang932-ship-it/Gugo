@@ -6,6 +6,7 @@ import {
   reconnectDelayForAttempt,
   replayServerTurn,
   runServerTurn,
+  startServerTurn,
 } from '../src/lib/turnClient.js'
 
 function response(body, status = 200) {
@@ -24,6 +25,32 @@ function sseResponse(events) {
   })
   return { ok: true, status: 200, body, json: async () => ({}) }
 }
+
+test('startServerTurn sends a canonical explicit tools configuration', async () => {
+  let requestBody = null
+  await startServerTurn({
+    sessionId: 's-tools',
+    content: 'use configured tools',
+    agentId: ' agent-primary ',
+    skillIds: [' skill-review ', 'skill-review', '', 42],
+    toolsConfig: {
+      enabled: ['write_file', ' read_file ', 'write_file', '', 42],
+      disabled: ['bash_exec', 'write_file', 'bash_exec', null],
+    },
+    fetchImpl: async (url, options) => {
+      assert.equal(url, '/api/turns/run')
+      requestBody = JSON.parse(options.body)
+      return response({ turn: { sessionId: 's-tools', turnId: 't-tools', status: 'running' } }, 202)
+    },
+  })
+
+  assert.deepEqual(requestBody.toolsConfig, {
+    enabled: ['read_file'],
+    disabled: ['bash_exec', 'write_file'],
+  })
+  assert.equal(requestBody.agentId, 'agent-primary')
+  assert.deepEqual(requestBody.skillIds, ['skill-review'])
+})
 
 test('runServerTurn starts once, consumes SSE events, and stops at terminal', async () => {
   const urls = []

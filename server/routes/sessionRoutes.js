@@ -1,6 +1,11 @@
 import { authenticateRequest } from '../middleware.js'
 import { sendJson } from '../utils.js'
-import { archiveSession, listSessions, unarchiveSession } from '../services/sessionStore.js'
+import {
+  archiveSession,
+  getSessionSnapshot,
+  listSessions,
+  unarchiveSession,
+} from '../services/sessionStore.js'
 import { searchMessages } from '../services/sessionSearchService.js'
 
 function unauthorized(res) {
@@ -37,6 +42,17 @@ export async function handleSessionRequest(req, res) {
       offset: url.searchParams.get('offset') || 0,
     })
     return sendJson(res, 200, { sessions })
+  }
+
+  if (req.method === 'GET' && parts[0] === 'api' && parts[1] === 'sessions' && parts[2] && parts[3] === 'snapshot') {
+    const snapshot = getSessionSnapshot({
+      userId,
+      sessionId: decodeURIComponent(parts[2]),
+      limit: url.searchParams.get('limit') || 2000,
+    })
+    return snapshot
+      ? sendJson(res, 200, { snapshot })
+      : sendJson(res, 404, { error: { code: 'SESSION_NOT_FOUND', message: 'session not found' } })
   }
 
   if (req.method === 'POST' && parts[0] === 'api' && parts[1] === 'sessions' && parts[2] && parts[3] === 'archive') {

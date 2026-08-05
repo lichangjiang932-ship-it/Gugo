@@ -152,6 +152,19 @@ export async function loginWithPassword({ email, password, fetchImpl = fetch }) 
   return data
 }
 
+export async function logoutAccount({ fetchImpl = fetch } = {}) {
+  const token = getAuthToken()
+  try {
+    const response = await fetchImpl('/api/auth/logout', {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    return await parseResponse(response)
+  } finally {
+    setAuthToken('')
+  }
+}
+
 export async function setAccountPassword({ currentPassword, newPassword, fetchImpl = fetch }) {
   const response = await fetchImpl('/api/account/password', {
     method: 'POST',

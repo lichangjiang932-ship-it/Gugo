@@ -1,6 +1,7 @@
 import { MEMORY_TOOL_SPECS } from '../utils/memoryTools.js'
 import { normalizeToolRiskMetadata } from '../utils/toolRiskMetadata.js'
 import { isReadOnlyShellCommand } from '../utils/bashGuard.js'
+import { authenticateRequest } from '../middleware.js'
 /**
  * 服务端工具注册表（底座 A）
  *
@@ -509,38 +510,81 @@ const CODE_MODE_TOOLS = [
 
 // 动态注册的工具表：name → { origin, source, spec, exec? }
 // origin: 'mcp' | 'skill' | 'subagent'
-const dynamicTools = new Map()
+const globalDynamicTools = new Map()
+const userDynamicTools = new Map()
 
-export function registerDynamicTool({ name, origin, source = null, spec, exec = null, metadata = null }) {
+function normalizeUserScope(userId) {
+  const normalized = String(userId || '').trim()
+  return normalized || null
+}
+
+function getDynamicToolMap(userId, { create = false } = {}) {
+  const scope = normalizeUserScope(userId)
+  if (!scope) return globalDynamicTools
+  let scoped = userDynamicTools.get(scope)
+  if (!scoped && create) {
+    scoped = new Map()
+    userDynamicTools.set(scope, scoped)
+  }
+  return scoped || null
+}
+
+export function registerDynamicTool({ name, origin, source = null, spec, exec = null, metadata = null, userId = null }) {
   if (!name || !spec) throw new Error('registerDynamicTool 缺少 name/spec')
-  dynamicTools.set(name, { origin, source, spec, exec, metadata: normalizeToolRiskMetadata(metadata, { origin }) })
+  getDynamicToolMap(userId, { create: true }).set(name, {
+    origin,
+    source,
+    spec,
+    exec,
+    metadata: normalizeToolRiskMetadata(metadata, { origin }),
+  })
 }
 
-export function unregisterDynamicTool(name) {
-  return dynamicTools.delete(name)
+export function unregisterDynamicTool(name, { userId = null } = {}) {
+  const map = getDynamicToolMap(userId)
+  if (!map) return false
+  const removed = map.delete(name)
+  const scope = normalizeUserScope(userId)
+  if (scope && map.size === 0) userDynamicTools.delete(scope)
+  return removed
 }
 
-export function unregisterByOrigin(origin, sourceMatch = null) {
+export function unregisterByOrigin(origin, sourceMatch = null, { userId = null } = {}) {
+  const map = getDynamicToolMap(userId)
+  if (!map) return 0
   const toRemove = []
-  for (const [name, info] of dynamicTools) {
+  for (const [name, info] of map) {
     if (info.origin !== origin) continue
     if (sourceMatch && info.source !== sourceMatch) continue
     toRemove.push(name)
   }
-  toRemove.forEach((n) => dynamicTools.delete(n))
+  toRemove.forEach((n) => map.delete(n))
+  const scope = normalizeUserScope(userId)
+  if (scope && map.size === 0) userDynamicTools.delete(scope)
   return toRemove.length
+}
+
+export function unregisterUserDynamicTools(userId) {
+  const scope = normalizeUserScope(userId)
+  if (!scope) return 0
+  const map = userDynamicTools.get(scope)
+  if (!map) return 0
+  const removed = map.size
+  userDynamicTools.delete(scope)
+  return removed
 }
 
 export function getBuiltinSpec(name) {
   return BUILTIN_SPECS[name] || null
 }
 
-export function getDynamicTool(name) {
-  return dynamicTools.get(name) || null
+export function getDynamicTool(name, { userId = null } = {}) {
+  const scoped = getDynamicToolMap(userId)
+  return scoped?.get(name) || globalDynamicTools.get(name) || null
 }
 
-export function getToolMetadata(name, { args = {} } = {}) {
-  const dynamic = getDynamicTool(name)
+export function getToolMetadata(name, { args = {}, userId = null } = {}) {
+  const dynamic = getDynamicTool(name, { userId })
   if (dynamic?.metadata) return dynamic.metadata
   if (!getBuiltinSpec(name)) return normalizeToolRiskMetadata(null, { origin: 'unknown' })
   const isReadOnly = name === 'bash_exec'
@@ -559,12 +603,17 @@ export function getToolMetadata(name, { args = {} } = {}) {
   }, { origin: 'builtin' })
 }
 
-export function listAllSpecs() {
+export function listAllSpecs({ userId = null } = {}) {
   const out = []
   for (const [name, spec] of Object.entries(BUILTIN_SPECS)) {
     out.push({ origin: 'builtin', source: null, name, tool: spec, metadata: getToolMetadata(name) })
   }
-  for (const [name, info] of dynamicTools) {
+  const visibleDynamic = new Map(globalDynamicTools)
+  const scoped = getDynamicToolMap(userId)
+  if (scoped && scoped !== globalDynamicTools) {
+    for (const [name, info] of scoped) visibleDynamic.set(name, info)
+  }
+  for (const [name, info] of visibleDynamic) {
     out.push({ origin: info.origin, source: info.source, name, tool: info.spec, metadata: info.metadata })
   }
   // ★ 缓存: 按 name 稳定排序后再返回。dynamicTools 是 Map,按插入序迭代 ——
@@ -586,8 +635,8 @@ export function listAllSpecs() {
  *   - code              → builtin 中的 CODE_MODE_TOOLS + 所有 dynamic
  *   - subagent:<type>   → 由 subagentRegistry 给出白名单（这里只看 builtin 列表）
  */
-export function resolveSpecsForMode(mode = 'chat', { subagentWhitelist = null } = {}) {
-  const all = listAllSpecs()
+export function resolveSpecsForMode(mode = 'chat', { subagentWhitelist = null, userId = null } = {}) {
+  const all = listAllSpecs({ userId })
   if (mode === 'plan') {
     return all.filter((s) => {
       return s.metadata?.isReadOnly === true
@@ -626,7 +675,8 @@ export function handleToolSpecsRequest(req, res) {
   try {
     const url = new URL(req.url, 'http://localhost')
     const mode = url.searchParams.get('mode') || 'chat'
-    const specs = resolveSpecsForMode(mode)
+    const userId = authenticateRequest(req)
+    const specs = resolveSpecsForMode(mode, { userId })
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' })
     res.end(JSON.stringify({ ok: true, mode, specs }))
   } catch (err) {

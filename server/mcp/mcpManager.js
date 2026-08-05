@@ -37,6 +37,9 @@ import { writeToolAudit } from '../utils/audit.js'
 import { getMcpOAuthHeaders } from './mcpOAuth.js'
 
 const DEFAULT_ALLOWED_COMMANDS = ['npx', 'node', 'uvx', 'python', 'python3']
+const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000
+const MIN_IDLE_SWEEP_MS = 30 * 1000
+const MAX_IDLE_SWEEP_MS = 5 * 60 * 1000
 
 function getAllowedCommands() {
   const raw = (process.env.MCP_STDIO_ALLOWED_COMMANDS || '').trim()
@@ -57,6 +60,28 @@ function safeName(s) {
  *   Connection: { server, transport, tools, resources?, prompts?, status, lastError, startedAt }
  */
 const userConnections = new Map() // userId → Map<serverId, Connection>
+
+let idleSweepTimer = null
+
+function idleTimeoutMs(env = process.env) {
+  const parsed = Number(env.MCP_IDLE_TIMEOUT_MS)
+  if (!Number.isFinite(parsed)) return DEFAULT_IDLE_TIMEOUT_MS
+  return Math.max(0, Math.trunc(parsed))
+}
+
+function touchConnection(conn, now = Date.now()) {
+  if (conn) conn.lastUsedAt = now
+  return conn
+}
+
+function ensureIdleSweeper() {
+  if (idleSweepTimer) return
+  const timeoutMs = idleTimeoutMs()
+  if (timeoutMs <= 0) return
+  const intervalMs = Math.min(MAX_IDLE_SWEEP_MS, Math.max(MIN_IDLE_SWEEP_MS, Math.floor(timeoutMs / 2)))
+  idleSweepTimer = setInterval(() => sweepIdleConnections(), intervalMs)
+  idleSweepTimer.unref?.()
+}
 
 function getUserMap(userId) {
   if (!userConnections.has(userId)) userConnections.set(userId, new Map())
@@ -125,7 +150,8 @@ async function startConnection(userId, server) {
     prompts = Array.isArray(result?.prompts) ? result.prompts : []
   } catch { /* not supported */ }
 
-  return { transport, tools, resources, prompts, startedAt: Date.now() }
+  const startedAt = Date.now()
+  return { transport, tools, resources, prompts, startedAt, lastUsedAt: startedAt }
 }
 
 function buildRegisteredToolSpec(server, tool) {
@@ -164,6 +190,7 @@ function registerToolsForConnection(userId, server, conn) {
       name: toolName,
       origin: 'mcp',
       source: `${userId}:${server.id}`,
+      userId,
       spec,
       metadata: buildMcpRiskMetadata(server, tool, toolName),
     })
@@ -171,14 +198,14 @@ function registerToolsForConnection(userId, server, conn) {
 }
 
 function unregisterToolsForServer(userId, serverId) {
-  unregisterByOrigin('mcp', `${userId}:${serverId}`)
+  unregisterByOrigin('mcp', `${userId}:${serverId}`, { userId })
 }
 
 export async function ensureServerConnected(userId, server) {
   if (!server?.enabled) return null
   const map = getUserMap(userId)
   if (map.has(server.id) && map.get(server.id).transport?.isAlive?.()) {
-    return map.get(server.id)
+    return touchConnection(map.get(server.id))
   }
   // 重新连
   if (map.has(server.id)) {
@@ -188,6 +215,7 @@ export async function ensureServerConnected(userId, server) {
   const conn = await startConnection(userId, server)
   map.set(server.id, conn)
   registerToolsForConnection(userId, server, conn)
+  ensureIdleSweeper()
   return conn
 }
 
@@ -252,6 +280,7 @@ export async function callTool({ userId, fullToolName, args, idempotencyKey, too
   if (!conn || !conn.transport?.isAlive?.()) {
     conn = await ensureServerConnected(userId, server)
   }
+  touchConnection(conn)
   if (!conn) throw new Error(`MCP server "${server.name}" 未启用`)
 
   // 找原始 tool 名（恢复 safeName 前的名字）
@@ -324,6 +353,7 @@ export async function readResource({ userId, serverId, uri }) {
   const server = getServer(userId, serverId)
   if (!server) throw new Error('server 不存在')
   const conn = await ensureServerConnected(userId, server)
+  touchConnection(conn)
   return await conn.transport.request(buildResourceReadRequest(uri), { timeoutMs: 30000 })
 }
 
@@ -331,6 +361,7 @@ export async function getPrompt({ userId, serverId, name, args }) {
   const server = getServer(userId, serverId)
   if (!server) throw new Error('server 不存在')
   const conn = await ensureServerConnected(userId, server)
+  touchConnection(conn)
   return await conn.transport.request(buildPromptGetRequest(name, args), { timeoutMs: 15000 })
 }
 
@@ -342,10 +373,46 @@ export function disconnectServer(userId, serverId) {
   try { conn.transport.stop() } catch { /* ignore */ }
   map.delete(serverId)
   unregisterToolsForServer(userId, serverId)
+  if (map.size === 0) userConnections.delete(userId)
   return true
 }
 
+export function disconnectUser(userId) {
+  const map = userConnections.get(userId)
+  if (!map) {
+    unregisterByOrigin('mcp', null, { userId })
+    return 0
+  }
+  let disconnected = 0
+  for (const [serverId, conn] of map) {
+    try { conn.transport.stop() } catch { /* ignore */ }
+    unregisterToolsForServer(userId, serverId)
+    disconnected += 1
+  }
+  map.clear()
+  userConnections.delete(userId)
+  unregisterByOrigin('mcp', null, { userId })
+  return disconnected
+}
+
+export function sweepIdleConnections({ now = Date.now(), timeoutMs = idleTimeoutMs() } = {}) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return 0
+  const expired = []
+  for (const [userId, map] of userConnections) {
+    for (const [serverId, conn] of map) {
+      const lastUsedAt = Number(conn.lastUsedAt || conn.startedAt || 0)
+      if (now - lastUsedAt >= timeoutMs) expired.push([userId, serverId])
+    }
+  }
+  for (const [userId, serverId] of expired) disconnectServer(userId, serverId)
+  return expired.length
+}
+
 export function shutdownAll() {
+  if (idleSweepTimer) {
+    clearInterval(idleSweepTimer)
+    idleSweepTimer = null
+  }
   for (const [userId, map] of userConnections) {
     for (const [serverId, conn] of map) {
       try { conn.transport.stop() } catch { /* ignore */ }

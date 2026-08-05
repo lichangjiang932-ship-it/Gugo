@@ -16,6 +16,10 @@
 
 import { getDb } from '../db.js'
 import crypto from 'node:crypto'
+import { traverseMemoryLinks } from './memoryStore.js'
+
+const MAX_TRAVERSAL_DEPTH = 5
+const MAX_TRAVERSAL_NODES = 250
 
 function newId() {
   return crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -270,4 +274,167 @@ export function openNodes({ userId, names }) {
     results.push({ ...entity, relations, observations })
   }
   return results
+}
+
+function boundedInteger(value, fallback, min, max) {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.max(min, Math.min(Math.trunc(parsed), max))
+}
+
+function loadTraversalSeeds({ db, userId, startIds, startNames, limit }) {
+  const seeds = []
+  if (startIds.length) {
+    const placeholders = startIds.map(() => '?').join(',')
+    seeds.push(...db.prepare(
+      `SELECT * FROM entities WHERE user_id = ? AND id IN (${placeholders})
+       ORDER BY name, id LIMIT ?`
+    ).all(userId, ...startIds, limit).map(rowToEntity))
+  }
+  if (startNames.length && seeds.length < limit) {
+    const placeholders = startNames.map(() => '?').join(',')
+    seeds.push(...db.prepare(
+      `SELECT * FROM entities WHERE user_id = ? AND name IN (${placeholders})
+       ORDER BY name, id LIMIT ?`
+    ).all(userId, ...startNames, limit - seeds.length).map(rowToEntity))
+  }
+  return [...new Map(seeds.map((entity) => [entity.id, entity])).values()].slice(0, limit)
+}
+
+function loadFrontierRelations({ db, userId, frontier, direction, limit }) {
+  if (!frontier.length) return []
+  const placeholders = frontier.map(() => '?').join(',')
+  if (direction === 'outgoing') {
+    return db.prepare(
+      `SELECT * FROM relations WHERE user_id = ? AND from_entity_id IN (${placeholders})
+       ORDER BY created_at, id LIMIT ?`
+    ).all(userId, ...frontier, limit).map(rowToRelation)
+  }
+  if (direction === 'incoming') {
+    return db.prepare(
+      `SELECT * FROM relations WHERE user_id = ? AND to_entity_id IN (${placeholders})
+       ORDER BY created_at, id LIMIT ?`
+    ).all(userId, ...frontier, limit).map(rowToRelation)
+  }
+  return db.prepare(
+    `SELECT * FROM relations WHERE user_id = ?
+     AND (from_entity_id IN (${placeholders}) OR to_entity_id IN (${placeholders}))
+     ORDER BY created_at, id LIMIT ?`
+  ).all(userId, ...frontier, ...frontier, limit).map(rowToRelation)
+}
+
+function neighborIds(relations, frontier, direction) {
+  const frontierSet = new Set(frontier)
+  const ids = []
+  for (const relation of relations) {
+    if (direction !== 'incoming' && frontierSet.has(relation.from)) ids.push(relation.to)
+    if (direction !== 'outgoing' && frontierSet.has(relation.to)) ids.push(relation.from)
+  }
+  return [...new Set(ids)]
+}
+
+function loadEntitiesById({ db, userId, ids }) {
+  if (!ids.length) return []
+  const placeholders = ids.map(() => '?').join(',')
+  return db.prepare(
+    `SELECT * FROM entities WHERE user_id = ? AND id IN (${placeholders}) ORDER BY name, id`
+  ).all(userId, ...ids).map(rowToEntity)
+}
+
+function loadObservationsForEntities({ db, entityIds }) {
+  if (!entityIds.length) return []
+  const placeholders = entityIds.map(() => '?').join(',')
+  return db.prepare(
+    `SELECT * FROM observations WHERE entity_id IN (${placeholders}) ORDER BY created_at, id`
+  ).all(...entityIds).map(rowToObservation)
+}
+
+/**
+ * 从一组实体开始做有界多跳遍历。深度和节点数同时受硬上限约束，
+ * 返回的关系只包含最终节点集合内部的边，避免悬空端点和跨用户泄漏。
+ */
+export function traverseGraph({
+  userId,
+  startIds = [],
+  startNames = [],
+  maxDepth = 2,
+  maxNodes = 100,
+  direction = 'both',
+  includeObservations = true,
+} = {}) {
+  const empty = {
+    entities: [],
+    relations: [],
+    observations: [],
+    depthByEntityId: {},
+    truncated: false,
+  }
+  if (!userId) return empty
+  const safeDepth = boundedInteger(maxDepth, 2, 0, MAX_TRAVERSAL_DEPTH)
+  const safeNodes = boundedInteger(maxNodes, 100, 1, MAX_TRAVERSAL_NODES)
+  const safeDirection = ['outgoing', 'incoming', 'both'].includes(direction) ? direction : 'both'
+  const ids = [...new Set((Array.isArray(startIds) ? startIds : []).map(String).filter(Boolean))].slice(0, safeNodes)
+  const names = [...new Set((Array.isArray(startNames) ? startNames : []).map(String).map((name) => name.trim()).filter(Boolean))].slice(0, safeNodes)
+  if (!ids.length && !names.length) return empty
+
+  const db = getDb()
+  const seeds = loadTraversalSeeds({ db, userId, startIds: ids, startNames: names, limit: safeNodes })
+  if (!seeds.length) return empty
+  const entitiesById = new Map(seeds.map((entity) => [entity.id, entity]))
+  const depthByEntityId = new Map(seeds.map((entity) => [entity.id, 0]))
+  const relationsById = new Map()
+  let frontier = seeds.map((entity) => entity.id)
+  let truncated = seeds.length >= safeNodes && (ids.length + names.length) > seeds.length
+
+  for (let depth = 0; depth < safeDepth && frontier.length; depth += 1) {
+    const remaining = safeNodes - entitiesById.size
+    if (remaining <= 0) {
+      truncated = true
+      break
+    }
+    const relationLimit = Math.min(Math.max(remaining * 12, 64), 2000)
+    const relations = loadFrontierRelations({
+      db,
+      userId,
+      frontier,
+      direction: safeDirection,
+      limit: relationLimit,
+    })
+    for (const relation of relations) relationsById.set(relation.id, relation)
+    const candidates = neighborIds(relations, frontier, safeDirection)
+      .filter((id) => !entitiesById.has(id))
+    const loaded = loadEntitiesById({ db, userId, ids: candidates })
+    const next = []
+    for (const entity of loaded) {
+      if (entitiesById.size >= safeNodes) {
+        truncated = true
+        continue
+      }
+      entitiesById.set(entity.id, entity)
+      depthByEntityId.set(entity.id, depth + 1)
+      next.push(entity.id)
+    }
+    frontier = next
+  }
+
+  const included = new Set(entitiesById.keys())
+  const relations = [...relationsById.values()].filter((relation) => (
+    included.has(relation.from) && included.has(relation.to)
+  ))
+  const entityIds = [...entitiesById.keys()]
+  return {
+    entities: [...entitiesById.values()],
+    relations,
+    observations: includeObservations ? loadObservationsForEntities({ db, entityIds }) : [],
+    depthByEntityId: Object.fromEntries(depthByEntityId),
+    truncated,
+  }
+}
+
+/**
+ * 把 memories + memory_links 作为知识图谱的记忆子图读取。
+ * 具体遍历与 agent 可见性由 memoryStore 统一实现。
+ */
+export function traverseMemoryGraph(options = {}) {
+  return traverseMemoryLinks(options)
 }

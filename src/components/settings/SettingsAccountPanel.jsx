@@ -3,6 +3,7 @@ import {
   getAccount,
   getAuthToken,
   loginWithPassword,
+  logoutAccount,
   removeAccountPassword,
   sendLoginCode,
   setAccountPassword,
@@ -157,8 +158,12 @@ export default function SettingsAccountPanel({ authMode = 'multi_user', dispatch
     }
   }
 
-  const handleLogout = () => {
-    setAuthToken('')
+  const handleLogout = async () => {
+    try {
+      await logoutAccount()
+    } catch {
+      setAuthToken('')
+    }
     setAccount(null)
     dispatch({ type: 'LOGOUT' })
     setAccountMessage('已退出登录。')

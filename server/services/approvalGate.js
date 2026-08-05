@@ -150,7 +150,7 @@ export async function requestApproval({
     console.error('[approval] 读取用户档位失败,按默认最严处理:', err?.stack || err)
   }
   const riskOverride = settings.riskOverrides?.find((item) => item?.toolName === toolName) || null
-  const dynamicMetadata = getToolMetadata(toolName, { args })
+  const dynamicMetadata = getToolMetadata(toolName, { args, userId })
   const metadata = riskOverride
     ? {
         ...(dynamicMetadata || {}),

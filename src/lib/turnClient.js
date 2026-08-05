@@ -72,6 +72,32 @@ function streamTruncatedError() {
   return error
 }
 
+function normalizeToolNames(names) {
+  if (!Array.isArray(names)) return []
+  return [...new Set(names
+    .filter((name) => typeof name === 'string')
+    .map((name) => name.trim())
+    .filter(Boolean))]
+    .sort()
+}
+
+export function normalizeToolsConfig(toolsConfig) {
+  const disabled = normalizeToolNames(toolsConfig?.disabled)
+  const disabledSet = new Set(disabled)
+  const enabled = normalizeToolNames(toolsConfig?.enabled)
+    .filter((name) => !disabledSet.has(name))
+  return { enabled, disabled }
+}
+
+function normalizeContextIds(values, limit = 32) {
+  if (!Array.isArray(values)) return []
+  return [...new Set(values
+    .filter((value) => typeof value === 'string')
+    .map((value) => value.trim())
+    .filter(Boolean))]
+    .slice(0, limit)
+}
+
 function parseSseFrame(frame) {
   let eventType = 'message'
   const data = []
@@ -110,14 +136,107 @@ export async function streamServerTurnEvents({ sessionId, turnId, after = -1, si
   return terminal
 }
 
-export async function startServerTurn({ sessionId, content, modelName, turnId, history, signal, fetchImpl = fetch }) {
+export async function startServerTurn({
+  sessionId,
+  content,
+  displayContent,
+  modelName,
+  turnId,
+  history,
+  agentId,
+  skillIds,
+  toolsConfig,
+  signal,
+  fetchImpl = fetch,
+}) {
+  const normalizedAgentId = typeof agentId === 'string' ? agentId.trim() || null : null
   const response = await fetchImpl('/api/turns/run', {
     method: 'POST',
     headers: headers(true),
-    body: JSON.stringify({ sessionId, content, modelName, turnId, history }),
+    body: JSON.stringify({
+      sessionId,
+      content,
+      displayContent,
+      modelName,
+      turnId,
+      history,
+      agentId: normalizedAgentId,
+      skillIds: normalizeContextIds(skillIds),
+      toolsConfig: normalizeToolsConfig(toolsConfig),
+    }),
     signal,
   })
   return (await parseResponse(response)).turn
+}
+
+function parseToolResult(content) {
+  try { return JSON.parse(content) } catch { return null }
+}
+
+function toolCallsFromContext(context) {
+  const calls = []
+  const byId = new Map()
+  for (const message of Array.isArray(context?.toolTrace) ? context.toolTrace : []) {
+    if (message?.role === 'assistant' && Array.isArray(message.tool_calls)) {
+      for (const call of message.tool_calls) {
+        const entry = {
+          id: call?.id,
+          name: call?.function?.name || '',
+          arguments: call?.function?.arguments || '{}',
+          status: TOOL_CALL_STATUS.RUNNING,
+        }
+        if (!entry.id) continue
+        calls.push(entry)
+        byId.set(entry.id, entry)
+      }
+    } else if (message?.role === 'tool') {
+      const entry = byId.get(message.tool_call_id)
+      if (!entry) continue
+      const parsed = parseToolResult(message.content)
+      entry.status = parsed?.ok === false ? TOOL_CALL_STATUS.ERROR : TOOL_CALL_STATUS.SUCCESS
+      entry.result = String(message.content || '')
+      entry.error = parsed?.ok === false ? parsed?.error || 'Tool call failed' : undefined
+      entry.approvalAuthorization = parsed?.approvalAuthorization || null
+    }
+  }
+  return calls
+}
+
+export function normalizeServerSessionSnapshot(snapshot) {
+  if (!snapshot || snapshot.complete !== true) return null
+  return {
+    ...snapshot,
+    messages: (snapshot.messages || [])
+      .filter((message) => message.role === 'user' || message.role === 'assistant')
+      .map((message) => {
+        const toolCalls = message.role === 'assistant'
+          ? toolCallsFromContext(message.modelContext)
+          : []
+        return {
+          id: message.id,
+          role: message.role,
+          content: message.content,
+          timestamp: message.createdAt,
+          ...(message.role === 'assistant' ? {
+            meta: {
+              serverTurnId: message.modelContext?.turnId || null,
+              streaming: false,
+              serverAuthoritative: true,
+              toolCalls,
+            },
+          } : {}),
+        }
+      }),
+  }
+}
+
+export async function fetchServerSessionSnapshot({ sessionId, signal, fetchImpl = fetch }) {
+  const response = await fetchImpl(`/api/sessions/${encodeURIComponent(sessionId)}/snapshot`, {
+    headers: headers(),
+    signal,
+  })
+  const body = await parseResponse(response)
+  return normalizeServerSessionSnapshot(body.snapshot)
 }
 
 export async function replayServerTurn({ sessionId, turnId, after = -1, limit = 500, signal, fetchImpl = fetch }) {
@@ -154,8 +273,12 @@ export async function resumeServerTurnRequest({ sessionId, turnId, signal, fetch
 export async function runServerTurn({
   sessionId,
   content,
+  displayContent,
   modelName,
   history,
+  agentId,
+  skillIds,
+  toolsConfig,
   turnId,
   resume = false,
   afterSequence = -1,
@@ -166,6 +289,7 @@ export async function runServerTurn({
   reconnectMaxDelayMs = DEFAULT_RECONNECT_MAX_DELAY_MS,
   reconnectMaxAttempts = DEFAULT_RECONNECT_MAX_ATTEMPTS,
   onConnectionState,
+  syncSessionSnapshot = false,
   fetchImpl = fetch,
 }) {
   const requestedTurnId = turnId || globalThis.crypto?.randomUUID?.() || `turn-${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -192,7 +316,19 @@ export async function runServerTurn({
   try {
     const turn = resume
       ? await resumeServerTurnRequest({ sessionId, turnId: requestedTurnId, signal, fetchImpl })
-      : await startServerTurn({ sessionId, content, modelName, turnId: requestedTurnId, history, signal, fetchImpl })
+      : await startServerTurn({
+          sessionId,
+          content,
+          displayContent,
+          modelName,
+          turnId: requestedTurnId,
+          history,
+          agentId,
+          skillIds,
+          toolsConfig,
+          signal,
+          fetchImpl,
+        })
     activeTurnId = turn.turnId
     await onStarted?.(turn)
     if (TERMINAL_EVENTS.has(turn.lastEvent?.type) && turn.lastEvent.sequence <= after) {
@@ -246,7 +382,16 @@ export async function runServerTurn({
         await waitForReconnect(delayMs, signal)
       }
     }
-    return { turnId: activeTurnId, terminal, lastSequence: after }
+    let sessionSnapshot = null
+    if (syncSessionSnapshot && terminal?.type === 'turn.completed') {
+      try {
+        sessionSnapshot = await fetchServerSessionSnapshot({ sessionId, signal, fetchImpl })
+      } catch {
+        // The completed server turn remains authoritative and replayable even
+        // when this best-effort browser convergence request is unavailable.
+      }
+    }
+    return { turnId: activeTurnId, terminal, lastSequence: after, sessionSnapshot }
   } finally {
     signal?.removeEventListener('abort', requestCancel)
   }

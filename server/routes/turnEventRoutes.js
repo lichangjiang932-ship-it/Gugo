@@ -5,6 +5,15 @@ import { getTurnEngine, TurnEngineError } from '../services/TurnEngine.js'
 import { listTurnEvents, subscribeTurnEvents } from '../services/turnEventStore.js'
 
 const TERMINAL_EVENTS = new Set(['turn.completed', 'turn.cancelled', 'turn.failed'])
+const DEFAULT_STREAM_POLL_INTERVAL_MS = 1_000
+const MIN_STREAM_POLL_INTERVAL_MS = 100
+const MAX_STREAM_POLL_INTERVAL_MS = 30_000
+
+export function resolveTurnEventStreamPollInterval(env = process.env) {
+  const parsed = Number(env?.TURN_EVENT_STREAM_POLL_INTERVAL_MS)
+  if (!Number.isFinite(parsed)) return DEFAULT_STREAM_POLL_INTERVAL_MS
+  return Math.min(MAX_STREAM_POLL_INTERVAL_MS, Math.max(MIN_STREAM_POLL_INTERVAL_MS, Math.floor(parsed)))
+}
 
 function sendSse(res, event, data, id = null) {
   if (id !== null) res.write(`id: ${id}\n`)
@@ -13,6 +22,7 @@ function sendSse(res, event, data, id = null) {
 }
 
 function parseAfter(value) {
+  if (value === null || value === undefined || value === '') return -1
   const parsed = Number(value)
   return Number.isFinite(parsed) ? Math.floor(parsed) : -1
 }
@@ -54,11 +64,13 @@ export async function handleTurnEventRequest(
       let closed = false
       const pending = []
       let heartbeat = null
+      let databasePoll = null
       let unsubscribe = () => {}
       const cleanup = () => {
         if (closed) return
         closed = true
         if (heartbeat) clearInterval(heartbeat)
+        if (databasePoll) clearInterval(databasePoll)
         unsubscribe()
       }
       const sendEvent = (event) => {
@@ -90,6 +102,21 @@ export async function handleTurnEventRequest(
       replaying = false
       pending.sort((a, b) => a.sequence - b.sequence).forEach(sendEvent)
       if (!closed) {
+        // The in-memory subscription only observes events appended by this
+        // process. Polling the shared database keeps SSE streams live when a
+        // different application instance owns the turn. sendEvent's sequence
+        // cursor merges both sources without emitting an event twice.
+        databasePoll = setInterval(() => {
+          if (closed) return
+          try {
+            const events = listTurnEvents({ userId, sessionId, turnId, after: lastSequence, limit: 2000 })
+            for (const event of events) sendEvent(event)
+          } catch {
+            // A transient database read failure should not tear down a stream;
+            // the next interval retries from the last delivered sequence.
+          }
+        }, resolveTurnEventStreamPollInterval(env))
+        databasePoll.unref?.()
         heartbeat = setInterval(() => {
           if (!res.destroyed && !res.writableEnded) res.write(': keepalive\n\n')
         }, 15_000)
@@ -118,8 +145,12 @@ export async function handleTurnEventRequest(
         sessionId: body.sessionId,
         turnId: body.turnId || undefined,
         content: body.content,
+        displayContent: body.displayContent,
         modelName: body.modelName || null,
         history: body.history,
+        agentId: body.agentId || null,
+        skillIds: body.skillIds,
+        toolsConfig: body.toolsConfig,
         authMode: resolveAuthMode(env),
       })
       return sendJson(res, 202, { turn })
