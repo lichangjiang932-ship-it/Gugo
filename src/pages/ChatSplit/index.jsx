@@ -11,6 +11,7 @@ import { isLoggedInLocally } from '../../lib/accountClient.js'
 import { useActiveAgent } from '../../agents/activeAgentContext.js'
 import { listSkills } from '../../lib/skillClient.js'
 import { listLocalSkills, mergeRuntimeSkills } from '../../lib/localSkills.js'
+import { presentSkillCollection } from '../../lib/skillPresentation.js'
 import { listPromptTemplatesApi, getPromptTemplateContentApi, renderPromptTemplate } from '../../lib/pluginClient.js'
 import { createSlashCommandRegistry, normalizeSlashCommandName, parseSlashCommandInput } from '../../lib/slashCommandRegistry.js'
 import { CORE_SLASH_COMMANDS, getSlashActionCopy, registerCoreSlashCommands } from '../../lib/slashCoreCommands.js'
@@ -49,6 +50,10 @@ export default function ChatSplit() {
   const [modelOptions, setModelOptions] = useState([])
   const [selectedModel, setSelectedModel] = useState('')
   const [runtimeSkills, setRuntimeSkills] = useState(() => mergeRuntimeSkills(listLocalSkills(), SKILLS))
+  const presentedRuntimeSkills = useMemo(
+    () => presentSkillCollection(runtimeSkills, lang),
+    [runtimeSkills, lang],
+  )
   // Phase 2 S4: prompt-template plugins 仍可通过手动输入 slash 命令调用
   const [promptTemplates, setPromptTemplates] = useState([])
   const [workbenchMessage, setWorkbenchMessage] = useState('')
@@ -156,7 +161,7 @@ export default function ChatSplit() {
   const slashRegistry = useMemo(() => {
     const registry = createSlashCommandRegistry()
     registerCoreSlashCommands(registry, { t, lang })
-    for (const skill of runtimeSkills || []) {
+    for (const skill of presentedRuntimeSkills) {
       if (!skill?.id) continue
       if (skill.runnable === false) continue
       if (state.skillConfigs?.[skill.id]?.enabled === false) continue
@@ -200,7 +205,7 @@ export default function ChatSplit() {
       }, 'plugin')
     }
     return registry
-  }, [promptTemplates, runtimeSkills, state.skillConfigs, t, lang])
+  }, [promptTemplates, presentedRuntimeSkills, state.skillConfigs, t, lang])
 
   useEffect(() => {
     let cancelled = false

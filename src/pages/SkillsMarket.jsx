@@ -11,13 +11,14 @@ import { useToast } from '../components/Toast.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { listLocalSkills, mergeRuntimeSkills, saveLocalSkills } from '../lib/localSkills.js'
 import { getOfficialSkillPreset } from '../lib/skillPresets.js'
-import { getPresentedSkill } from '../lib/skillPresentation.js'
+import { describeSkillRequirements, getSkillDetailCopy, presentSkillCollection } from '../lib/skillPresentation.js'
 
 export default function SkillsMarket() {
   const navigate = useNavigate()
   const { dispatch } = useAppContext()
   const toast = useToast()
   const { t, lang } = useT()
+  const skillDetailCopy = useMemo(() => getSkillDetailCopy(lang), [lang])
   const [query, setQuery] = useState('')
   const [activeFilter, setActiveFilter] = useState('全部')
   const [customSkills, setCustomSkills] = useState(() => listLocalSkills())
@@ -44,7 +45,7 @@ export default function SkillsMarket() {
   const folderInputRef = useRef(null)
 
   const allSkills = useMemo(
-    () => mergeRuntimeSkills(customSkills, runtimeSkills).map((skill) => getPresentedSkill(skill, lang)),
+    () => presentSkillCollection(mergeRuntimeSkills(customSkills, runtimeSkills), lang),
     [customSkills, runtimeSkills, lang],
   )
 
@@ -412,7 +413,12 @@ export default function SkillsMarket() {
               </div>
               <div>
                 <div className="font-hand text-[17px] leading-tight text-ink">{skill.name}</div>
-                <div className="text-sm text-ink-soft mt-0.5">{skill.desc}</div>
+                {(skill.pluginName || skill.originalName) && (
+                  <div className="mt-1 truncate font-mono text-[9px] tracking-wide text-ink-fade">
+                    {[skill.pluginName, skill.originalName].filter(Boolean).join(' · ')}
+                  </div>
+                )}
+                <div className="mt-1 text-sm leading-5 text-ink-soft">{skill.desc}</div>
               </div>
               <div className="flex flex-wrap gap-1 mt-auto">
                 {(skill.perms || []).map((p) => (
@@ -467,7 +473,27 @@ export default function SkillsMarket() {
               </button>
             </div>
             <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4 text-sm">
-              <p className="leading-6 text-ink-soft">{selectedSkill.desc}</p>
+              <div>
+                <div className="mb-2 text-xs font-medium text-ink">{skillDetailCopy.overview}</div>
+                <p className="leading-6 text-ink-soft">{selectedSkill.desc}</p>
+              </div>
+              <div>
+                <div className="mb-2 text-xs font-medium text-ink">{skillDetailCopy.usage}</div>
+                <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 rounded-md border border-ink/15 bg-paper-2 p-3 text-xs">
+                  <dt className="text-ink-fade">{skillDetailCopy.command}</dt>
+                  <dd className="min-w-0 break-all font-mono text-ink-soft">/{selectedSkill.id} {skillDetailCopy.promptPlaceholder}</dd>
+                  {selectedSkill.originalName && (
+                    <>
+                      <dt className="text-ink-fade">{skillDetailCopy.originalName}</dt>
+                      <dd className="min-w-0 break-words font-mono text-ink-soft">{selectedSkill.originalName}</dd>
+                    </>
+                  )}
+                  <dt className="text-ink-fade">{skillDetailCopy.requirements}</dt>
+                  <dd className="min-w-0 space-y-1 text-ink-soft">
+                    {describeSkillRequirements(selectedSkill, lang).map((requirement) => <div key={requirement}>{requirement}</div>)}
+                  </dd>
+                </dl>
+              </div>
               {selectedSkill.runnable === false && (
                 <div className="rounded-md border border-ember-line bg-ember-soft/30 p-3 text-xs leading-5 text-ember">
                   {t('skillsMarket.incompatibleHint')}

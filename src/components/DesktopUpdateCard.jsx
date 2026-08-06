@@ -28,16 +28,22 @@ export default function DesktopUpdateCard() {
   const ready = update.status === 'ready'
   const installing = update.status === 'installing'
   const error = update.status === 'error'
+  const passive = update.status === 'checking' || update.status === 'current'
 
   return (
-    <section className="mb-2 rounded-xl border border-ink/10 bg-paper-2/80 p-3 shadow-sm" aria-live="polite">
+    <section
+      className={`mb-2 rounded-xl border p-3 shadow-sm ${passive ? 'border-ink/10 bg-paper-2' : 'border-ember/35 bg-ember/10 ring-1 ring-ember/10'}`}
+      aria-live="polite"
+      aria-atomic="true"
+      data-desktop-update-notice="primary"
+    >
       <div className="flex items-start gap-2.5">
-        <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-ember/10 text-ember">
+        <span className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${passive ? 'bg-ink/5 text-ink-soft' : 'bg-ember text-paper shadow-sm'}`}>
           {ready || installing ? <RotateCw className={`h-3.5 w-3.5 ${installing ? 'animate-spin' : ''}`} /> : <Download className="h-3.5 w-3.5" />}
         </span>
         <div className="min-w-0 flex-1">
-          <div className="text-xs font-medium text-ink">{t(`desktopUpdate.${update.status}`)}</div>
-          {update.version && <div className="mt-0.5 text-[10px] text-ink-fade">v{update.version}</div>}
+          <div className={`text-xs font-semibold ${passive ? 'text-ink' : 'text-ember'}`}>{t(`desktopUpdate.${update.status}`)}</div>
+          {update.version && <div className="mt-0.5 text-[10px] font-medium text-ink-soft">Gugo v{update.version}</div>}
         </div>
       </div>
       {downloading && (
@@ -51,9 +57,9 @@ export default function DesktopUpdateCard() {
           </div>
         </div>
       )}
-      {ready && <button type="button" onClick={() => window.gugoDesktop.installUpdate()} className="mt-2.5 h-8 w-full rounded-lg bg-ink text-xs text-paper hover:bg-ink-soft">{t('desktopUpdate.restartInstall')}</button>}
+      {ready && <button type="button" onClick={() => window.gugoDesktop.installUpdate()} className="mt-2.5 h-9 w-full rounded-lg bg-ember text-xs font-semibold text-paper shadow-sm transition-colors hover:bg-ember/90">{t('desktopUpdate.restartInstall')}</button>}
       {installing && <div className="mt-2 text-[10px] leading-4 text-ink-fade">{t('desktopUpdate.installingHint')}</div>}
-      {error && <button type="button" onClick={() => window.gugoDesktop.checkForUpdates()} className="mt-2 flex h-8 w-full items-center justify-center gap-1.5 rounded-lg border border-ink/15 text-xs text-ink-soft hover:bg-paper"><RefreshCw className="h-3 w-3" />{t('desktopUpdate.retry')}</button>}
+      {error && <button type="button" onClick={() => window.gugoDesktop.checkForUpdates()} className="mt-2 flex h-9 w-full items-center justify-center gap-1.5 rounded-lg border border-ember/30 bg-paper text-xs font-medium text-ember hover:bg-ember/5"><RefreshCw className="h-3 w-3" />{t('desktopUpdate.retry')}</button>}
     </section>
   )
 }

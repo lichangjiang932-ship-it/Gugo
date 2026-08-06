@@ -298,7 +298,6 @@ export default function LeftRail() {
           )}
         </div>
 
-        <DesktopUpdateCard />
         <div ref={accountMenuRef} className="relative border-t border-ink/10 pt-2">
           {accountMenuOpen && (
             <div className="absolute bottom-full left-0 right-0 z-30 mb-2 overflow-hidden rounded-xl border border-ink/15 bg-paper p-1.5 shadow-xl">
@@ -317,6 +316,7 @@ export default function LeftRail() {
               </button>
             </div>
           )}
+          <DesktopUpdateCard />
           <button type="button" onClick={() => setAccountMenuOpen((open) => !open)} aria-expanded={accountMenuOpen} className="flex h-12 w-full items-center gap-2.5 rounded-xl px-2 text-left transition-colors hover:bg-paper-2">
             <BrandMark className="h-8 w-8 shrink-0 text-ember" />
             <span className="min-w-0 flex-1">

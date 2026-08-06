@@ -45,3 +45,17 @@ test('version tags publish a Windows installer and updater metadata through GitH
   assert.match(workflow, /\.Name -eq 'latest\.yml'/)
   assert.match(workflow, /contents:\s*write/)
 })
+
+test('desktop update notice is the primary message directly above the account card', () => {
+  const rail = read('src/components/LeftRail.jsx')
+  const card = read('src/components/DesktopUpdateCard.jsx')
+  const accountRegion = rail.indexOf('ref={accountMenuRef}')
+  const updateNotice = rail.indexOf('<DesktopUpdateCard />', accountRegion)
+  const accountButton = rail.indexOf('aria-expanded={accountMenuOpen}', accountRegion)
+
+  assert.ok(accountRegion >= 0)
+  assert.ok(updateNotice > accountRegion)
+  assert.ok(accountButton > updateNotice)
+  assert.match(card, /data-desktop-update-notice="primary"/)
+  assert.match(card, /border-ember\/35 bg-ember\/10/)
+})
