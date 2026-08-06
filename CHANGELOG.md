@@ -6,6 +6,12 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-08-06
+
+### Fixed
+
+- Made the connector skill frontmatter test accept both LF and CRLF checkouts on Windows runners.
+
 ## [0.10.1] - 2026-08-06
 
 ### Changed
@@ -36,6 +42,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Provider, MCP, memory, job, subagent, connector, and workspace tool support.
 - Local-first single-user mode with optional multi-user authentication.
 
-[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.1...HEAD
+[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.2...HEAD
+[0.10.2]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.2
 [0.10.1]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.1
 [0.10.0]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.0

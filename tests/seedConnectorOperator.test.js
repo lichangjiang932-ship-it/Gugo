@@ -50,7 +50,7 @@ test('connector-operator seed skill manifest is complete', () => {
 
 test('connector-operator SKILL.md has frontmatter with a trigger description', () => {
   const skillMd = fs.readFileSync(path.join(SKILL_DIR, 'SKILL.md'), 'utf8')
-  assert.match(skillMd, /^---\nname: connector-operator/, 'SKILL.md must start with name frontmatter')
+  assert.match(skillMd, /^---\r?\nname: connector-operator/, 'SKILL.md must start with name frontmatter')
   assert.match(skillMd, /description: >/, 'SKILL.md frontmatter must include a description block')
 })
 
