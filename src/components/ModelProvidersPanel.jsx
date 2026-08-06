@@ -25,10 +25,10 @@ const CLOUD_PRESETS = Object.freeze([
   { id: 'gemini', key: 'gemini', label: 'Google Gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', models: ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.1-pro'], kind: 'gemini' },
   { id: 'deepseek', key: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com', models: ['deepseek-v4', 'deepseek-chat', 'deepseek-reasoner'], kind: 'openai-compatible' },
   { id: 'openrouter', key: 'openrouter', label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', models: ['openai/gpt-5.6-sol', 'anthropic/claude-opus-4.8', 'google/gemini-3.1-pro'], kind: 'openai-compatible' },
-  { id: 'qwen', key: 'qwen', label: '阿里云通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', models: ['qwen3.5-max', 'qwen3.5-plus', 'qwen3.5-flash'], kind: 'openai-compatible' },
-  { id: 'siliconflow', key: 'siliconflow', label: '硅基流动', baseUrl: 'https://api.siliconflow.cn/v1', models: ['deepseek-ai/DeepSeek-V4', 'Qwen/Qwen3.5-397B-A17B', 'moonshotai/Kimi-K2.5'], kind: 'openai-compatible' },
+  { id: 'qwen', key: 'qwen', labelKey: 'providerQwen', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', models: ['qwen3.5-max', 'qwen3.5-plus', 'qwen3.5-flash'], kind: 'openai-compatible' },
+  { id: 'siliconflow', key: 'siliconflow', labelKey: 'providerSiliconFlow', baseUrl: 'https://api.siliconflow.cn/v1', models: ['deepseek-ai/DeepSeek-V4', 'Qwen/Qwen3.5-397B-A17B', 'moonshotai/Kimi-K2.5'], kind: 'openai-compatible' },
   { id: 'moonshot', key: 'moonshot', label: 'Moonshot Kimi', baseUrl: 'https://api.moonshot.cn/v1', models: ['kimi-k2.5', 'kimi-k2-thinking', 'moonshot-v1-128k'], kind: 'openai-compatible' },
-  { id: 'zhipu', key: 'zhipu', label: '智谱 GLM', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', models: ['glm-5', 'glm-5-flash', 'glm-4.6v'], kind: 'openai-compatible' },
+  { id: 'zhipu', key: 'zhipu', labelKey: 'providerZhipu', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', models: ['glm-5', 'glm-5-flash', 'glm-4.6v'], kind: 'openai-compatible' },
   { id: 'xai', key: 'xai', label: 'xAI Grok', baseUrl: 'https://api.x.ai/v1', models: ['grok-4.1', 'grok-4.1-fast', 'grok-4-fast'], kind: 'openai-compatible' },
   { id: 'groq', key: 'groq', label: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', models: ['openai/gpt-oss-120b', 'moonshotai/kimi-k2-instruct-0905', 'llama-3.3-70b-versatile'], kind: 'openai-compatible' },
   { id: 'mistral', key: 'mistral', label: 'Mistral AI', baseUrl: 'https://api.mistral.ai/v1', models: ['mistral-large-latest', 'magistral-medium-latest', 'codestral-latest'], kind: 'openai-compatible' },
@@ -129,6 +129,7 @@ export default function ModelProvidersPanel({ onChanged }) {
   const modelsReady = Boolean(editing?.modelsText?.split(/[\n,]/).some((model) => model.trim()))
   const canSave = Boolean(editing?.baseUrl?.trim() && modelsReady
     && (isLocalPreset || editing?.presetId === 'custom' || editing?.apiKey?.trim() || editing?.hasApiKey))
+  const presetLabel = (preset) => preset.labelKey ? t(`modelProviders.${preset.labelKey}`) : preset.label
 
   const notifyChanged = () => {
     onChanged?.()
@@ -240,7 +241,7 @@ export default function ModelProvidersPanel({ onChanged }) {
       ...current,
       presetId: preset.id,
       key: current.id ? current.key : preset.key,
-      label: current.id ? current.label : preset.label,
+      label: current.id ? current.label : presetLabel(preset),
       baseUrl: preset.baseUrl,
       kind: preset.kind || '',
       modelsText: preset.models?.join('\n') || current.modelsText,
@@ -385,7 +386,7 @@ export default function ModelProvidersPanel({ onChanged }) {
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {CLOUD_PRESETS.map((preset) => (
                   <button key={preset.id} type="button" onClick={() => applyPreset(preset)} className={`min-h-12 rounded-lg border px-3 py-2 text-left text-xs transition-colors ${editing.presetId === preset.id ? 'border-ember bg-ember-soft/30 text-ink' : 'border-ink/15 bg-paper hover:border-ink/40 text-ink-soft'}`}>
-                    {preset.label}
+                    {presetLabel(preset)}
                   </button>
                 ))}
               </div>
