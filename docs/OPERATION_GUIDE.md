@@ -29,8 +29,8 @@ git --version
 ## 2. 获取与安装
 
 ```bash
-git clone https://github.com/lichangjiang932-ship-it/your-model-atelier.git
-cd your-model-atelier
+git clone https://github.com/lichangjiang932-ship-it/Gugo.git
+cd Gugo
 npm ci
 ```
 

@@ -292,7 +292,7 @@ export default function SkillsMarket() {
       <main className="flex-1 p-8 overflow-y-auto">
         <div className="flex items-end justify-between mb-6 gap-4">
           <div>
-            <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">SKILLS · ATELIER</span>
+            <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">SKILLS · GUGO</span>
             <h1 className="font-hand text-[30px] text-ink mt-1.5">
               技能库 <span className="font-display italic text-[26px] opacity-70"> / your toolkit.</span>
             </h1>

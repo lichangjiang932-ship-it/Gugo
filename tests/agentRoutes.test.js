@@ -87,13 +87,13 @@ test('Agent 路由：POST 创建 → GET 列表 → PATCH 更新 → DELETE 删�
   })
 })
 
-test('GET /api/agents/default 首次自动 seed 默认 Atelier', async () => {
+test('GET /api/agents/default 首次自动 seed 默认 Gugo', async () => {
   const { token } = issueTestSession()
   await withServer(async (base) => {
     const res = await fetch(`${base}/api/agents/default`, { headers: authHeaders(token) })
     assert.equal(res.status, 200)
     const body = await res.json()
-    assert.equal(body.agent.name, 'Atelier')
+    assert.equal(body.agent.name, 'Gugo')
     assert.equal(body.agent.isDefault, true)
     assert.match(body.agent.soulMd, /SOUL/)
   })

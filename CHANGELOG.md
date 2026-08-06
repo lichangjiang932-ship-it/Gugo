@@ -6,6 +6,13 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-08-06
+
+### Changed
+
+- Renamed the public project, repository, package, and desktop update source to Gugo.
+- Published the Windows desktop installer through the public GitHub Releases channel.
+
 ### Added
 
 - Access 中心新增 4 个官方 MCP 一键安装预设（Fetch / Sequential Thinking / Memory / Playwright），与既有 Chrome DevTools 预设并列，装完即可在对话中调用其工具。
@@ -29,5 +36,6 @@ follow [Semantic Versioning](https://semver.org/).
 - Provider, MCP, memory, job, subagent, connector, and workspace tool support.
 - Local-first single-user mode with optional multi-user authentication.
 
-[Unreleased]: https://github.com/lichangjiang932-ship-it/your-model-atelier/compare/v0.10.0...HEAD
-[0.10.0]: https://github.com/lichangjiang932-ship-it/your-model-atelier/releases/tag/v0.10.0
+[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.1
+[0.10.0]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.0

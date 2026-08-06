@@ -3,15 +3,15 @@ import { readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync } from 'n
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-const HELP = `yma-cli — server-first CLI for Gugo
+const HELP = `gugo — server-first CLI for Gugo (legacy alias: yma-cli)
 
 Usage:
-  yma-cli login --email <email>
-  yma-cli verify --email <email> --code <code>
-  yma-cli session list [--archived true|false|all]
-  yma-cli agent list
-  yma-cli skill list
-  yma-cli --help
+  gugo login --email <email>
+  gugo verify --email <email> --code <code>
+  gugo session list [--archived true|false|all]
+  gugo agent list
+  gugo skill list
+  gugo --help
 
 Environment:
   SERVER_PORT   server port (default 5173)
@@ -68,7 +68,7 @@ function baseUrl() {
 function requireToken() {
   const token = readToken()
   if (!token) {
-    process.stderr.write('Not logged in. Run: yma-cli login --email <email>\n')
+    process.stderr.write('Not logged in. Run: gugo login --email <email>\n')
     process.exit(2)
   }
   return token
@@ -118,7 +118,7 @@ async function cmdLogin(flags) {
   if (res?.devCode) {
     process.stdout.write(`devCode: ${res.devCode}\n`)
   }
-  process.stdout.write(`Next: yma-cli verify --email ${email} --code <code>\n`)
+  process.stdout.write(`Next: gugo verify --email ${email} --code <code>\n`)
 }
 
 async function cmdVerify(flags) {

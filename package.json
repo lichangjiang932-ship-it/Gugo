@@ -1,17 +1,18 @@
 {
-  "name": "your-model-atelier",
+  "name": "gugo",
   "private": true,
-  "version": "0.10.0",
-  "description": "Self-hosted browser-based AI workspace for agents, tools, memory, jobs, and MCP.",
+  "version": "0.10.1",
+  "description": "Self-hosted AI workspace for browser and Windows desktop with agents, tools, memory, jobs, and MCP.",
+  "author": "lichangjiang932-ship-it",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/lichangjiang932-ship-it/your-model-atelier.git"
+    "url": "git+https://github.com/lichangjiang932-ship-it/Gugo.git"
   },
   "bugs": {
-    "url": "https://github.com/lichangjiang932-ship-it/your-model-atelier/issues"
+    "url": "https://github.com/lichangjiang932-ship-it/Gugo/issues"
   },
-  "homepage": "https://github.com/lichangjiang932-ship-it/your-model-atelier#readme",
+  "homepage": "https://github.com/lichangjiang932-ship-it/Gugo#readme",
   "keywords": [
     "ai-agent",
     "self-hosted",
@@ -26,6 +27,7 @@
   "type": "module",
   "main": "desktop/main.js",
   "bin": {
+    "gugo": "./bin/yma-cli.js",
     "yma-cli": "./bin/yma-cli.js"
   },
   "scripts": {

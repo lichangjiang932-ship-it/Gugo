@@ -210,7 +210,7 @@ export default function AccessConnectModal({ connector, integration, onClose, on
               <details className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900" data-testid="oauth-help">
                 <summary className="cursor-pointer font-medium">{t('access.oauthHelpToggle')}</summary>
                 <p className="mt-2">{t('access.oauthHelpBody')}</p>
-                <a href="https://github.com/lichangjiang932-ship-it/your-model-atelier/blob/main/docs/CONFIGURATION.md" target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 underline">{t('access.oauthHelpDoc')}<ExternalLink className="w-3 h-3" /></a>
+                <a href="https://github.com/lichangjiang932-ship-it/Gugo/blob/main/docs/CONFIGURATION.md" target="_blank" rel="noreferrer" className="mt-2 inline-flex items-center gap-1 underline">{t('access.oauthHelpDoc')}<ExternalLink className="w-3 h-3" /></a>
               </details>
             )}
             {(connector.provider === 'notion' || connector.provider === 'slack') && <TextField label={t('access.workspace')} value={form.workspace} onChange={(value) => set('workspace', value)} />}

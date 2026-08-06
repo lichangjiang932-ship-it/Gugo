@@ -94,7 +94,7 @@ test('agentStore: ensureDefaultAgent 幂等', { concurrency: false }, async () =
   const { agMod } = await freshModule(dir)
 
   const a = agMod.ensureDefaultAgent({ userId })
-  assert.equal(a.name, 'Atelier')
+  assert.equal(a.name, 'Gugo')
   assert.equal(a.isDefault, true)
   assert.ok(a.soulMd.length > 0)
 

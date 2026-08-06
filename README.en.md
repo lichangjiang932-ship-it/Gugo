@@ -2,9 +2,9 @@
 
 [简体中文](README.md) | **English**
 
-Gugo is a self-hosted, browser-based AI workspace for agents, tools, memory,
-background jobs, subagents, MCP integrations, and generated artifacts. It runs
-as a React single-page application backed by a Node.js HTTP server and SQLite.
+Gugo is a self-hosted AI workspace for agents, tools, memory, background jobs,
+subagents, MCP integrations, and generated artifacts. It is available as both
+a browser application and a Windows Electron desktop app, backed by Node.js and SQLite.
 
 The default `local` mode is single-user and requires no sign-up or login. Bring
 your own model endpoint and API key in Settings after startup.
@@ -24,6 +24,7 @@ your own model endpoint and API key in Settings after startup.
 - MCP client and authenticated Streamable HTTP MCP server
 - Native Notion, GitHub, Slack, and Google Drive connectors, plus browser shortcuts
 - SQLite WAL storage, optional multi-user ownership checks, and encrypted connector secrets
+- Windows installer and automatic updates through [GitHub Releases](https://github.com/lichangjiang932-ship-it/Gugo/releases)
 - No built-in payment, recharge, credit, or usage-billing system
 
 The browser application catalog contains website shortcuts. Only connectors
@@ -39,8 +40,8 @@ explicitly documented as native integrations expose structured API tools.
 ## Quick start
 
 ```bash
-git clone https://github.com/lichangjiang932-ship-it/your-model-atelier.git
-cd your-model-atelier
+git clone https://github.com/lichangjiang932-ship-it/Gugo.git
+cd Gugo
 npm ci
 cp .env.example .env
 ```

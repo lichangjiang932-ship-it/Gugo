@@ -13,7 +13,7 @@ request, discussion, or chat log.
 
 Use GitHub's private vulnerability reporting page:
 
-https://github.com/lichangjiang932-ship-it/your-model-atelier/security/advisories/new
+https://github.com/lichangjiang932-ship-it/Gugo/security/advisories/new
 
 Include the affected version or commit, deployment assumptions, reproduction
 steps, impact, and any suggested mitigation. Remove API keys, tokens, personal

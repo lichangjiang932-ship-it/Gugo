@@ -2,16 +2,16 @@
 
 **简体中文** | [English](README.en.md)
 
-> 本地/内网可用的 Web AI 工作台 — Agent · Skill · Memory · Tool · Subagent · Job  
-> 默认本机单用户免登录，开浏览器即可使用；模型 API 由使用者自行配置。
+> 本地/内网可用的 Web + Windows 桌面 AI 工作台 — Agent · Skill · Memory · Tool · Subagent · Job
+> 默认本机单用户免登录，可通过浏览器或桌面应用使用；模型 API 由使用者自行配置。
 
 <p align="center">
   <img src="https://img.shields.io/badge/React-19-6366f1?logo=react" alt="React 19" />
   <img src="https://img.shields.io/badge/Node.js-20-10b981?logo=node.js" alt="Node 20" />
   <img src="https://img.shields.io/badge/SQLite-WAL-2e8fa3" alt="SQLite WAL" />
   <img src="https://img.shields.io/badge/Vite-8-ec4899?logo=vite" alt="Vite 8" />
-  <a href="https://github.com/lichangjiang932-ship-it/your-model-atelier/actions/workflows/ci.yml"><img src="https://github.com/lichangjiang932-ship-it/your-model-atelier/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" /></a>
-  <img src="https://img.shields.io/badge/release-v0.10.0-blue" alt="v0.10.0" />
+  <a href="https://github.com/lichangjiang932-ship-it/Gugo/actions/workflows/ci.yml"><img src="https://github.com/lichangjiang932-ship-it/Gugo/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" /></a>
+  <img src="https://img.shields.io/badge/release-v0.10.1-blue" alt="v0.10.1" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT" />
 </p>
 
@@ -19,11 +19,13 @@
 
 ## 这是什么
 
-一个**完整的 Web AI Agent 平台**，跟你熟悉的 Claude Code、Cursor、Cherry Studio、LobeChat、openhanako 是同一品类，但走 **Web 路线**（浏览器即用，没有 .dmg / .exe / .AppImage）。
+一个**完整的 AI Agent 工作平台**，跟你熟悉的 Claude Code、Cursor、Cherry Studio、LobeChat、openhanako 是同一品类，同时提供浏览器版本和 Windows Electron 桌面应用。
+
+Windows 安装包与自动更新元数据见 [GitHub Releases](https://github.com/lichangjiang932-ship-it/Gugo/releases)。
 
 | 维度 | Gugo | openhanako | Claude Code |
 |---|---|---|---|
-| 形态 | Web（浏览器即用） | Electron 桌面 | CLI |
+| 形态 | Web（浏览器即用）+ Windows Electron 桌面 | Electron 桌面 | CLI |
 | 部署 | 单 Node 进程 + SQLite | 多端打包 | 终端 |
 | 使用模式 | 默认本机单用户免登录；可选多用户认证与隔离 | 单机 | 单机 |
 | Artifact 实时预览 | PPT / Word / Excel / React / HTML Deck | 不支持 | 不支持 |
@@ -127,7 +129,7 @@
 
 ## 路线图
 
-公开路线与问题跟踪见 [GitHub Issues](https://github.com/lichangjiang932-ship-it/your-model-atelier/issues)，发布记录见 [GitHub Releases](https://github.com/lichangjiang932-ship-it/your-model-atelier/releases)。
+公开路线与问题跟踪见 [GitHub Issues](https://github.com/lichangjiang932-ship-it/Gugo/issues)，发布记录见 [GitHub Releases](https://github.com/lichangjiang932-ship-it/Gugo/releases)。
 
 **已完成**：
 - [x] **v0.5**：plugin SDK 真消费 + agent-template
@@ -137,7 +139,7 @@
 - [x] **v0.9**：Agent 角色卡 zip 导出/导入（对齐 openhanako）
 - [x] Cron / 调度层（配置和行为见 [调度文档](docs/SCHEDULING.md)）
 
-后续计划以 [GitHub Issues](https://github.com/lichangjiang932-ship-it/your-model-atelier/issues)
+后续计划以 [GitHub Issues](https://github.com/lichangjiang932-ship-it/Gugo/issues)
 和 Milestones 中的公开条目为准，避免在 README 中维护容易过期的内部清单。
 
 参与开发前请阅读 [CONTRIBUTING.md](./CONTRIBUTING.md) 与 [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)。
@@ -149,8 +151,8 @@
 第一次安装或准备长期运行，请先阅读 [《Gugo 操作手册》](./docs/OPERATION_GUIDE.md)。手册包含环境要求、模型配置、开发/生产/Docker 启动、可选多用户认证、备份恢复、升级、安全注意事项和常见故障处理。
 
 ```bash
-git clone https://github.com/lichangjiang932-ship-it/your-model-atelier.git
-cd your-model-atelier
+git clone https://github.com/lichangjiang932-ship-it/Gugo.git
+cd Gugo
 npm install
 cp .env.example .env   # 默认 AUTH_MODE=local，仅本机免登录使用
 npm run dev            # 前端 HMR（默认 :5175）
@@ -264,7 +266,7 @@ npm test         # 全量自动化测试
 ## 目录结构
 
 ```
-your-model-atelier/
+Gugo/
 ├── server/                # Node.js HTTP 服务与 SQLite 数据层
 │   ├── appServer.js       # HTTP 入口
 │   ├── db.js              # SQLite schema 与版本迁移

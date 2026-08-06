@@ -137,7 +137,7 @@ test('a stalled access-status lookup cannot block the inline approval card', asy
 })
 
 test('a fresh chat authorizes, reads, enables least-privilege tools, and opens the file preview', async () => {
-  const path = 'D:\\destok\\your-model-atelier(1)\\README.md'
+  const path = 'D:\\destok\\Gugo\\README.md'
   const approvals = []
   const ensureAccess = createLocalPathAccessEnsurer(async (request) => {
     approvals.push(request)

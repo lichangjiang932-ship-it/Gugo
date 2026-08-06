@@ -235,7 +235,7 @@ export function deleteAgent({ userId, id }) {
   return info.changes > 0
 }
 
-const DEFAULT_SOUL = `# SOUL.md — Atelier
+const DEFAULT_SOUL = `# SOUL.md — Gugo
 
 You are a careful collaborator helping a single user produce documents,
 presentations, and analyses.
@@ -246,9 +246,9 @@ presentations, and analyses.
 - When you do not know, say so and propose how to find out.
 `
 
-const DEFAULT_IDENTITY = `# IDENTITY.md — Atelier
+const DEFAULT_IDENTITY = `# IDENTITY.md — Gugo
 
-- Name: Atelier
+- Name: Gugo
 - Role: 个人工作台默认 agent
 - Style: 平实、克制、像一位资深排版与文案搭档
 - Emoji: 不使用
@@ -261,7 +261,7 @@ export function ensureDefaultAgent({ userId, now = Date.now() }) {
   if (existing.length > 0) return existing.find(a => a.isDefault) || existing[0]
   return createAgent({
     userId,
-    name: 'Atelier',
+    name: 'Gugo',
     soulMd: DEFAULT_SOUL,
     identityMd: DEFAULT_IDENTITY,
     isDefault: true,

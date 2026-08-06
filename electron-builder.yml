@@ -41,6 +41,6 @@ nsis:
 publish:
   provider: github
   owner: lichangjiang932-ship-it
-  repo: your-model-atelier
+  repo: Gugo
   releaseType: release
   channel: latest

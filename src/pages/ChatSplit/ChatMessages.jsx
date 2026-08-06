@@ -70,10 +70,10 @@ const STARTER_PROMPTS = [
   { key: 'workPlan', icon: ListChecks },
 ]
 
-function AtelierMark() {
+function GugoMark() {
   return (
     <div
-      data-testid="atelier-mark"
+      data-testid="gugo-mark"
       className="mb-6 flex h-16 w-16 items-center justify-center rounded-[22px] bg-ink text-paper shadow-[0_16px_40px_rgb(var(--color-ink-rgb)/0.18)] ring-1 ring-paper/20"
       aria-hidden="true"
     >
@@ -101,7 +101,7 @@ function NewConversationWelcome({ onPromptSelect }) {
       aria-labelledby="new-conversation-title"
       data-testid="new-conversation-welcome"
     >
-      <AtelierMark />
+      <GugoMark />
       <h1 id="new-conversation-title" className="font-hand text-2xl text-ink sm:text-3xl">
         {t('chatMessages.emptyTitle')}
       </h1>

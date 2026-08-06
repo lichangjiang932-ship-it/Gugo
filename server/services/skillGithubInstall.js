@@ -99,7 +99,7 @@ function buildApiUrl(parsed, suffix, query = {}) {
 function requestHeaders({ env = process.env, accept = 'application/vnd.github+json' } = {}) {
   const headers = {
     Accept: accept,
-    'User-Agent': 'your-model-atelier/skill-importer',
+    'User-Agent': 'Gugo/skill-importer',
     'X-GitHub-Api-Version': '2022-11-28',
   }
   const token = String(env?.GITHUB_TOKEN || env?.GH_TOKEN || '').trim()

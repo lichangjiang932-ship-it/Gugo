@@ -502,7 +502,7 @@ async function testGithub({ secret, fetchImpl }) {
       headers: {
         Accept: 'application/vnd.github+json',
         Authorization: `Bearer ${token}`,
-        'User-Agent': 'your-model-atelier',
+        'User-Agent': 'Gugo',
         'X-GitHub-Api-Version': '2022-11-28',
       },
     },

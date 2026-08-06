@@ -114,7 +114,7 @@ LOCAL_USER_ID=existing-user-id
 
 ## OAuth 公网地址与反向代理
 
-生产环境应显式设置 `APP_PUBLIC_URL=https://atelier.example.com`，MCP OAuth 回调地址只使用该 origin。
+生产环境应显式设置 `APP_PUBLIC_URL=https://gugo.example.com`，MCP OAuth 回调地址只使用该 origin。
 未配置时，服务使用 `SERVER_HOST`/`SERVER_PORT` 构造本机地址，并忽略请求中的 `Host`、
 `X-Forwarded-Host` 和 `X-Forwarded-Proto`。只有受信反向代理已经清除客户端伪造的转发头时，
 才可设置 `TRUST_PROXY=1`。
@@ -129,7 +129,7 @@ SQLite，10 分钟后过期，并在 callback 时原子单次消费。因此服�
 手工填写 token）。启用步骤：
 
 1. **设置公网地址**：`.env` 中配置 `APP_PUBLIC_URL`（如 `http://localhost:5175` 或
-   `https://atelier.example.com`），回调地址只使用该 origin；
+   `https://gugo.example.com`），回调地址只使用该 origin；
 2. **到各平台创建 OAuth Client**，回调地址填
    `{APP_PUBLIC_URL}/api/integrations/oauth/callback/{provider}`（provider 为
    `github` / `notion` / `slack` / `google_drive`）；
