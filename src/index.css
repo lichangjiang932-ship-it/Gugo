@@ -444,22 +444,6 @@ html[data-theme="dark"] .chat-code-block .hljs-function { color: #d2a8ff; }
   -webkit-tap-highlight-color: transparent;
 }
 
-.desktop-pet-handle::before {
-  position: absolute;
-  inset: 0.45rem;
-  border-radius: 1rem;
-  background: currentColor;
-  content: '';
-  opacity: 0.075;
-  filter: blur(7px);
-}
-
-.desktop-pet[data-status="thinking"] .desktop-pet-handle::before,
-.desktop-pet[data-status="tool"] .desktop-pet-handle::before,
-.desktop-pet[data-status="completed"] .desktop-pet-handle::before {
-  animation: desktop-pet-aura 1.6s ease-in-out infinite;
-}
-
 .desktop-pet-handle:focus-visible {
   outline: 2px solid currentColor;
   outline-offset: 3px;
@@ -528,7 +512,6 @@ html[data-theme="dark"] .chat-code-block .hljs-function { color: #d2a8ff; }
 }
 
 .desktop-pet[data-dragging="true"] .desktop-pet-sprite,
-.desktop-pet[data-dragging="true"] .desktop-pet-handle::before,
 .desktop-pet[data-dragging="true"] .desktop-pet-bubble {
   animation-play-state: paused !important;
 }
@@ -536,11 +519,6 @@ html[data-theme="dark"] .chat-code-block .hljs-function { color: #d2a8ff; }
 @keyframes desktop-pet-report-in {
   from { opacity: 0; transform: translateY(4px) scale(0.96); }
   to { opacity: 1; transform: translateY(0) scale(1); }
-}
-
-@keyframes desktop-pet-aura {
-  0%, 100% { opacity: 0.055; transform: scale(0.92); }
-  50% { opacity: 0.14; transform: scale(1.06); }
 }
 
 @keyframes desktop-pet-idle-bob {
@@ -574,7 +552,6 @@ html[data-theme="dark"] .chat-code-block .hljs-function { color: #d2a8ff; }
 @media (prefers-reduced-motion: reduce) {
   .desktop-pet,
   .desktop-pet-handle,
-  .desktop-pet-handle::before,
   .desktop-pet-bubble,
   .desktop-pet-sprite {
     animation: none !important;

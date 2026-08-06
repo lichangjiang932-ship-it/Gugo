@@ -87,6 +87,9 @@ function configureDesktopRuntime() {
   })
 
   process.env.NODE_ENV = 'production'
+  // A packaged app can be installed next to a source checkout. Never treat a
+  // neighbouring developer .env as the desktop user's model configuration.
+  process.env.GUGO_LOAD_DOTENV = '0'
   process.env.GUGO_SQLITE_DRIVER = 'node'
   process.env.SERVER_HOST = '127.0.0.1'
   process.env.SERVER_PORT = String(port)
@@ -150,7 +153,7 @@ function createMainWindow() {
     minWidth: 1024,
     minHeight: 700,
     show: false,
-    backgroundColor: '#111111',
+    backgroundColor: '#ffffff',
     autoHideMenuBar: true,
     webPreferences: {
       preload: preloadPath,

@@ -13,6 +13,6 @@ export function isThemeMode(value) {
   return typeof value === 'string' && THEME_MODE_SET.has(value)
 }
 
-export function normalizeThemeMode(value, fallback = 'system') {
-  return isThemeMode(value) ? value : (isThemeMode(fallback) ? fallback : 'system')
+export function normalizeThemeMode(value, fallback = 'white') {
+  return isThemeMode(value) ? value : (isThemeMode(fallback) ? fallback : 'white')
 }

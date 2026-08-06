@@ -84,14 +84,15 @@ export function readRuntimeEnvFile(cwd = process.cwd()) {
   return entries
 }
 
-export function getRuntimeEnv(env = process.env, { cwd = process.cwd() } = {}) {
+export function getRuntimeEnv(env = process.env, { cwd = process.cwd(), loadDotEnv = true } = {}) {
   const paths = resolveRuntimeConfigPaths({ cwd, env })
   const user = readRuntimeConfigFile(paths.user)
   const project = readRuntimeConfigFile(paths.project)
   const explicit = paths.explicit && ![paths.user, paths.project].includes(paths.explicit)
     ? readRuntimeConfigFile(paths.explicit)
     : {}
-  return { ...user, ...project, ...explicit, ...readRuntimeEnvFile(cwd), ...env }
+  const dotenv = loadDotEnv && env.GUGO_LOAD_DOTENV !== '0' ? readRuntimeEnvFile(cwd) : {}
+  return { ...user, ...project, ...explicit, ...dotenv, ...env }
 }
 
 export function applyRuntimeConfig({ cwd = process.cwd(), env = process.env } = {}) {
