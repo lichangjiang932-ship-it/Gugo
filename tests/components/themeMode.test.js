@@ -14,10 +14,10 @@ test('theme modes include a distinct white option', () => {
   )
 })
 
-test('invalid persisted theme values fall back to system', () => {
+test('invalid persisted theme values fall back to white', () => {
   assert.equal(isThemeMode('unknown'), false)
-  assert.equal(normalizeThemeMode('unknown'), 'system')
-  assert.equal(normalizeThemeMode(null), 'system')
+  assert.equal(normalizeThemeMode('unknown'), 'white')
+  assert.equal(normalizeThemeMode(null), 'white')
 })
 
 test('white theme defines pure-white surface and neutral contrast tokens', () => {

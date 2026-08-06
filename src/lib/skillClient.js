@@ -1,3 +1,5 @@
+import { authHeaders } from './agentClient.js'
+
 async function readJsonResponse(responsePromise) {
   const response = await responsePromise
   if (!response.ok) {
@@ -13,13 +15,13 @@ async function readJsonResponse(responsePromise) {
 }
 
 export function listSkills({ fetchImpl = fetch } = {}) {
-  return readJsonResponse(fetchImpl('/api/skills'))
+  return readJsonResponse(fetchImpl('/api/skills', { headers: authHeaders() }))
 }
 
 export function importSkillPack(files, { fetchImpl = fetch } = {}) {
   return readJsonResponse(fetchImpl('/api/skills/import', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
     body: JSON.stringify({ files }),
   }))
 }
@@ -27,7 +29,7 @@ export function importSkillPack(files, { fetchImpl = fetch } = {}) {
 export function importSkillFromGithubUrl(url, { fetchImpl = fetch } = {}) {
   return readJsonResponse(fetchImpl('/api/skills/import-github', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
     body: JSON.stringify({ url }),
   }))
 }

@@ -63,3 +63,12 @@ test('runtime JSON rejects secrets and non-scalar values', () => {
   fs.writeFileSync(objectPath, JSON.stringify({ NESTED_VALUE: { enabled: true } }))
   assert.throws(() => readRuntimeConfigFile(objectPath), /must be a scalar/)
 })
+
+test('runtime env can disable cwd dotenv for packaged desktop isolation', () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-desktop-env-'))
+  fs.writeFileSync(path.join(cwd, '.env'), 'MODEL_PROVIDERS=deepseek,mimo\nMODEL_NAME=deepseek-chat\n')
+
+  const runtime = getRuntimeEnv({ GUGO_LOAD_DOTENV: '0' }, { cwd })
+  assert.equal(runtime.MODEL_PROVIDERS, undefined)
+  assert.equal(runtime.MODEL_NAME, undefined)
+})

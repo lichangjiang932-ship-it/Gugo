@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, FileText, BarChart3, LayoutList, ExternalLink, ChevronDown, Copy, Code2, Quote, Download, Presentation, Sheet, ListChecks } from 'lucide-react'
+import { X, FileText, BarChart3, LayoutList, ExternalLink, ChevronDown, Copy, Code2, Quote, Download, Presentation, Sheet, ListChecks, ArrowUpRight } from 'lucide-react'
 import MarkdownRenderer from '../../components/MarkdownRenderer.jsx'
 import ToolCallCard from '../../components/ToolCallCard.jsx'
 import SubagentCard from '../../components/SubagentCard.jsx'
@@ -64,10 +64,10 @@ function ArtifactOpenCard({ preview, onOpen, className = '' }) {
 }
 
 const STARTER_PROMPTS = [
-  { key: 'weeklyReport', icon: FileText },
-  { key: 'salesExcel', icon: Sheet },
-  { key: 'productPpt', icon: Presentation },
-  { key: 'workPlan', icon: ListChecks },
+  { key: 'weeklyReport', icon: FileText, tone: 'text-sky-700 bg-sky-50 ring-sky-100' },
+  { key: 'salesExcel', icon: Sheet, tone: 'text-emerald-700 bg-emerald-50 ring-emerald-100' },
+  { key: 'productPpt', icon: Presentation, tone: 'text-violet-700 bg-violet-50 ring-violet-100' },
+  { key: 'workPlan', icon: ListChecks, tone: 'text-amber-700 bg-amber-50 ring-amber-100' },
 ]
 
 function GugoMark() {
@@ -108,18 +108,22 @@ function NewConversationWelcome({ onPromptSelect }) {
       <p className="mt-2 max-w-md text-center text-sm leading-6 text-ink-soft">
         {t('chatMessages.emptyHint')}
       </p>
-      <div className="mt-7 grid w-full max-w-[680px] gap-2.5 sm:grid-cols-2">
-        {STARTER_PROMPTS.map(({ key, icon: Icon }) => (
+      <div className="mt-8 grid w-full max-w-[760px] gap-3 sm:grid-cols-2">
+        {STARTER_PROMPTS.map(({ key, icon: Icon, tone }, index) => (
           <button
             key={key}
             type="button"
             onClick={() => onPromptSelect?.(t(`chatMessages.${key}`))}
-            className="group flex min-h-16 items-center gap-3 rounded-xl border border-ink/10 bg-paper-2/50 px-4 py-3 text-left text-sm leading-5 text-ink-soft transition-all hover:-translate-y-0.5 hover:border-ember/45 hover:bg-paper hover:text-ink hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/50"
+            className="group relative flex min-h-[84px] items-center gap-4 overflow-hidden rounded-2xl border border-ink/[0.08] bg-paper px-4 py-4 text-left text-sm leading-5 text-ink-soft shadow-[0_1px_0_rgb(var(--color-ink-rgb)/0.03)] transition-all hover:-translate-y-0.5 hover:border-ink/15 hover:text-ink hover:shadow-[0_12px_30px_rgb(var(--color-ink-rgb)/0.08)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/40"
           >
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-paper text-ember ring-1 ring-ink/10 transition-colors group-hover:bg-ember-soft">
-              <Icon className="h-4 w-4" aria-hidden="true" />
+            <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ring-1 transition-transform group-hover:scale-105 ${tone}`}>
+              <Icon className="h-[18px] w-[18px]" aria-hidden="true" />
             </span>
-            <span>{t(`chatMessages.${key}`)}</span>
+            <span className="min-w-0 flex-1">
+              <span className="mb-0.5 block font-mono text-[10px] tracking-[0.16em] text-ink-fade">0{index + 1}</span>
+              <span className="block font-medium text-ink">{t(`chatMessages.${key}`)}</span>
+            </span>
+            <ArrowUpRight className="h-4 w-4 shrink-0 text-ink-fade/60 transition-all group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:text-ember" aria-hidden="true" />
           </button>
         ))}
       </div>

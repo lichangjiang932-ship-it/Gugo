@@ -220,7 +220,7 @@ export default function DesktopPet({
         onKeyDown={handleKeyDown}
         aria-label={t('desktopPet.handle', { status: statusLabel })}
         title={t('desktopPet.handle', { status: statusLabel })}
-        className={`desktop-pet-handle relative flex touch-none items-center justify-center rounded-[1.4rem] border border-ink/10 bg-paper/95 text-current shadow-[0_12px_34px_rgb(var(--color-ink-rgb)/0.18)] transition-[transform,box-shadow] hover:-translate-y-0.5 hover:shadow-[0_16px_38px_rgb(var(--color-ink-rgb)/0.22)] active:translate-y-0 ${dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+        className={`desktop-pet-handle relative flex touch-none items-center justify-center bg-transparent p-0 text-current transition-transform hover:-translate-y-0.5 active:translate-y-0 ${dragging ? 'cursor-grabbing' : 'cursor-grab'}`}
       >
         <PetSprite status={status.kind} />
         <span className={`absolute bottom-1.5 right-1.5 h-3 w-3 rounded-full border-2 border-paper ${STATUS_DOT_CLASS[status.kind]}`} aria-hidden="true" />
