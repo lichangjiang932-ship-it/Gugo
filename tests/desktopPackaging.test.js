@@ -30,6 +30,11 @@ test('NSIS package includes server runtime dependencies and updater metadata', (
   assert.match(config, /provider:\s*github/)
   assert.match(config, /repo:\s*Gugo/)
   assert.match(config, /channel:\s*latest/)
+  assert.match(main, /sendUpdateStatus\('installing'\)/)
+  assert.match(main, /bytesPerSecond:\s*Number\(progress\.bytesPerSecond/)
+  assert.match(main, /transferred:\s*Number\(progress\.transferred/)
+  assert.match(main, /total:\s*Number\(progress\.total/)
+  assert.doesNotMatch(main, /showMessageBox/)
 })
 
 test('version tags publish a Windows installer and updater metadata through GitHub Releases', () => {

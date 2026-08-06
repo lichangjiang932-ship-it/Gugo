@@ -14,10 +14,11 @@ test('chat failure copy does not blame env config for a generic invalid request'
   assert.doesNotMatch(text, /MODEL_API_KEY/)
 })
 
-test('chat failure copy keeps the admin hint for configuration failures', () => {
+test('chat failure copy directs users to model settings for configuration failures', () => {
   const text = buildChatFailureMessage('后端模型未配置：缺少 MODEL_BASE_URL。')
   assert.match(text, /MODEL_BASE_URL/)
-  assert.match(text, /请联系管理员/)
+  assert.match(text, /设置 → 模型/)
+  assert.doesNotMatch(text, /请联系管理员/)
 })
 
 test('artifact type mapping keeps current skill previews', () => {

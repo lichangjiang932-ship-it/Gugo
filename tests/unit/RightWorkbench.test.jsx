@@ -75,7 +75,7 @@ test('right workbench renders compact tabs, persists width, and opens generated 
 
     const navigation = rootElement.querySelector('[data-testid="workbench-navigation"]')
     assert.ok(navigation)
-    assert.match(navigation.className, /grid-cols-4/)
+    assert.match(navigation.className, /flex/)
     assert.equal(navigation.querySelectorAll(':scope > button').length, 4)
     assert.equal(navigation.querySelector('[aria-current="page"] span.truncate').textContent, '相关文件')
     assert.equal(rootElement.querySelector('[data-testid="workbench-file-count"]').textContent, '2')
@@ -117,8 +117,8 @@ test('right workbench renders compact tabs, persists width, and opens generated 
     await act(async () => {
       resizeHandle.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Home', bubbles: true }))
     })
-    assert.equal(panel.style.width, '440px')
-    assert.equal(dom.window.localStorage.getItem('yma:right-workbench-width'), '440')
+    assert.equal(panel.style.width, '420px')
+    assert.equal(dom.window.localStorage.getItem('yma:right-workbench-width'), '420')
 
     dom.window.innerWidth = 690
     await act(async () => dom.window.dispatchEvent(new dom.window.Event('resize')))

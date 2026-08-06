@@ -24,7 +24,7 @@ export function buildChatFailureMessage(message = '') {
   const detail = String(message || '模型代理调用失败。')
   const base = `\n\n模型调用失败：${detail}`
   if (CONFIG_ERROR_PATTERNS.some((pattern) => pattern.test(detail))) {
-    return `${base}\n\n请联系管理员检查后端 .env 中的 MODEL_BASE_URL、MODEL_NAME 和 MODEL_API_KEY。`
+    return `${base}\n\n请前往“设置 → 模型”选择模型服务并保存 API Key；自定义部署也可以在高级配置中填写接口地址和模型名称。`
   }
   return base
 }

@@ -62,6 +62,14 @@ const SKILLS_MARKET_TRANSLATIONS = {
   'zh-TW': { recommended: '精選', incompatibleHint: '目前環境無法直接執行此技能；補齊所需 App、MCP 或執行環境後才能啟用。', pluginSource: '外掛來源', plugin: '外掛', publisher: '發佈者', license: '授權條款', localSource: '本機鏡像', unavailable: '暫不可用', compatibility: { ready: '可直接執行', 'needs-app': '需要 App', 'needs-mcp': '需要 MCP', 'needs-runtime': '需要執行環境' } },
 }
 
+const DESKTOP_UPDATE_TRANSLATIONS = {
+  zh: { checking: '正在检查更新', available: '发现新版本，准备下载', downloading: '正在下载更新', ready: '更新已准备好', installing: '正在重启安装', current: '当前已是最新版本', error: '更新遇到问题', restartInstall: '重启并安装', installingHint: '正在保存状态并启动安装程序，请稍候。', retry: '重新检查' },
+  en: { checking: 'Checking for updates', available: 'Update found, preparing download', downloading: 'Downloading update', ready: 'Update ready', installing: 'Restarting to install', current: 'You are up to date', error: 'Update failed', restartInstall: 'Restart and install', installingHint: 'Saving state and starting the installer. Please wait.', retry: 'Check again' },
+  ja: { checking: '更新を確認中', available: '新しいバージョンをダウンロードします', downloading: '更新をダウンロード中', ready: '更新の準備ができました', installing: '再起動してインストール中', current: '最新バージョンです', error: '更新に失敗しました', restartInstall: '再起動してインストール', installingHint: '状態を保存してインストーラーを起動しています。', retry: '再確認' },
+  ko: { checking: '업데이트 확인 중', available: '새 버전을 다운로드합니다', downloading: '업데이트 다운로드 중', ready: '업데이트 준비 완료', installing: '재시작하여 설치 중', current: '최신 버전입니다', error: '업데이트 실패', restartInstall: '재시작 및 설치', installingHint: '상태를 저장하고 설치 프로그램을 시작하고 있습니다.', retry: '다시 확인' },
+  'zh-TW': { checking: '正在檢查更新', available: '發現新版本，準備下載', downloading: '正在下載更新', ready: '更新已準備好', installing: '正在重新啟動安裝', current: '目前已是最新版本', error: '更新遇到問題', restartInstall: '重新啟動並安裝', installingHint: '正在儲存狀態並啟動安裝程式，請稍候。', retry: '重新檢查' },
+}
+
 const CHAT_SURFACE_TRANSLATIONS = {
   zh: {
     workbench: WORKBENCH_TRANSLATIONS.zh,
@@ -661,6 +669,7 @@ const SETTINGS_DATA_EXPORT_TRANSLATIONS = {
 
 export const translations = {
   zh: {
+    desktopUpdate: DESKTOP_UPDATE_TRANSLATIONS.zh,
     skillsMarket: SKILLS_MARKET_TRANSLATIONS.zh,
     storageNotice: STORAGE_NOTICE_TRANSLATIONS.zh,
     settingsDataExport: SETTINGS_DATA_EXPORT_TRANSLATIONS.zh,
@@ -676,6 +685,7 @@ export const translations = {
       title: '自定义模型 Provider', subtitle: '配置 OpenAI 兼容、Anthropic 或 Gemini 原生端点，API Key 仅保存在服务端。', add: '新增', saved: '已保存模型配置。',
       confirmDelete: '删除这个模型 Provider？', testing: '正在测试端点…', testOk: '端点可用，延迟', default: '默认', test: '测试',
       empty: '尚未配置自定义 Provider，将继续使用服务端 .env。', editor: '模型 Provider 配置', name: '显示名称', keepSecret: '留空保留原 Key',
+      chooseProvider: '选择模型服务', custom: '自定义接口', advanced: '高级自定义配置', apiKeyRequired: '请填写所选模型服务的 API Key。', apiKeyPlaceholder: '粘贴 API Key，密钥仅保存在本机服务端', localDetectHint: '请先启动本地模型服务，再点击下方“检测模型”；系统会自动填入已安装模型。',
       models: '模型列表（每行或逗号分隔）', defaultModel: '默认模型', headers: '自定义 Headers JSON（可选）', enabled: '启用', makeDefault: '设为默认', save: '保存', navTitle: '模型', navSubtitle: '管理 OpenAI 兼容、Anthropic、Gemini 与本地模型。', localPreset: '本地模型快速配置', optional: '可选', localNoKey: 'Ollama / LM Studio 可留空', discover: '检测模型', detecting: '正在检测…', discovered: '已检测到 {count} 个模型。', noModels: '端点可达，但没有返回模型列表。', manage: '管理模型',
       capsTitle: '能力与超时（留空＝自动检测）', capsHint: '本地模型建议留空，系统会按端点类型和探测结果自动判断。',
       kind: '端点类型', kindAuto: '自动识别', contextWindow: '上下文窗口（token）',
@@ -1135,6 +1145,7 @@ export const translations = {
     },
   },
   en: {
+    desktopUpdate: DESKTOP_UPDATE_TRANSLATIONS.en,
     skillsMarket: SKILLS_MARKET_TRANSLATIONS.en,
     storageNotice: STORAGE_NOTICE_TRANSLATIONS.en,
     settingsDataExport: SETTINGS_DATA_EXPORT_TRANSLATIONS.en,
@@ -1150,6 +1161,7 @@ export const translations = {
       title: 'Custom model providers', subtitle: 'Configure OpenAI-compatible, native Anthropic, or native Gemini endpoints. API keys stay on the server.', add: 'Add', saved: 'Model provider saved.',
       confirmDelete: 'Delete this model provider?', testing: 'Testing endpoint…', testOk: 'Endpoint is available, latency', default: 'Default', test: 'Test',
       empty: 'No custom provider yet. Server environment settings remain active.', editor: 'Model provider settings', name: 'Display name', keepSecret: 'leave blank to keep current key',
+      chooseProvider: 'Choose a model service', custom: 'Custom endpoint', advanced: 'Advanced custom settings', apiKeyRequired: 'Enter the API key for the selected model service.', apiKeyPlaceholder: 'Paste API key; it is stored only by the local server', localDetectHint: 'Start the local model service, then select Detect models below to fill installed models automatically.',
       models: 'Models (one per line or comma-separated)', defaultModel: 'Default model', headers: 'Custom Headers JSON (optional)', enabled: 'Enabled', makeDefault: 'Make default', save: 'Save', navTitle: 'Models', navSubtitle: 'Manage OpenAI-compatible, Anthropic, Gemini, and local models.', localPreset: 'Quick local setup', optional: 'optional', localNoKey: 'Leave blank for Ollama / LM Studio', discover: 'Detect models', detecting: 'Detecting…', discovered: 'Found {count} models.', noModels: 'The endpoint is reachable but returned no models.', manage: 'Manage models',
       capsTitle: 'Capabilities & timeouts (leave blank to auto-detect)', capsHint: 'Leave blank for local models — values are inferred from the endpoint type and probe results.',
       kind: 'Endpoint type', kindAuto: 'Auto-detect', contextWindow: 'Context window (tokens)',
@@ -1609,6 +1621,7 @@ export const translations = {
     },
   },
   ja: {
+    desktopUpdate: DESKTOP_UPDATE_TRANSLATIONS.ja,
     skillsMarket: SKILLS_MARKET_TRANSLATIONS.ja,
     storageNotice: STORAGE_NOTICE_TRANSLATIONS.ja,
     settingsDataExport: SETTINGS_DATA_EXPORT_TRANSLATIONS.ja,
@@ -1624,6 +1637,7 @@ export const translations = {
       title: 'カスタムモデル Provider', subtitle: 'OpenAI 互換、Anthropic、Gemini のネイティブエンドポイントを設定します。API Key はサーバー内に保存されます。', add: '追加', saved: 'モデル設定を保存しました。',
       confirmDelete: 'このモデル Provider を削除しますか？', testing: '接続をテスト中…', testOk: '接続成功、遅延', default: '既定', test: 'テスト',
       empty: 'カスタム Provider は未設定です。サーバーの環境設定を使用します。', editor: 'モデル Provider 設定', name: '表示名', keepSecret: '空欄なら現在の Key を保持',
+      chooseProvider: 'モデルサービスを選択', custom: 'カスタムエンドポイント', advanced: '詳細なカスタム設定', apiKeyRequired: '選択したモデルサービスの API Key を入力してください。', apiKeyPlaceholder: 'API Key を貼り付け（ローカルサーバーのみに保存）', localDetectHint: 'ローカルモデルサービスを起動し、下の「モデルを検出」を選択してください。',
       models: 'モデル一覧（1行またはカンマ区切り）', defaultModel: '既定モデル', headers: 'カスタム Headers JSON（任意）', enabled: '有効', makeDefault: '既定にする', save: '保存', navTitle: 'モデル', navSubtitle: 'OpenAI 互換、Anthropic、Gemini、ローカルモデルを管理します。', localPreset: 'ローカルモデルのクイック設定', optional: '任意', localNoKey: 'Ollama / LM Studio は空欄可', discover: 'モデルを検出', detecting: '検出中…', discovered: '{count} 個のモデルを検出しました。', noModels: '接続できましたがモデル一覧が空です。', manage: 'モデル管理',
       capsTitle: '機能とタイムアウト（空欄＝自動検出）', capsHint: 'ローカルモデルは空欄推奨。エンドポイント種別と検出結果から自動判定します。',
       kind: 'エンドポイント種別', kindAuto: '自動検出', contextWindow: 'コンテキスト長（token）',
@@ -2083,6 +2097,7 @@ export const translations = {
     },
   },
   ko: {
+    desktopUpdate: DESKTOP_UPDATE_TRANSLATIONS.ko,
     skillsMarket: SKILLS_MARKET_TRANSLATIONS.ko,
     storageNotice: STORAGE_NOTICE_TRANSLATIONS.ko,
     settingsDataExport: SETTINGS_DATA_EXPORT_TRANSLATIONS.ko,
@@ -2098,6 +2113,7 @@ export const translations = {
       title: '사용자 지정 모델 Provider', subtitle: 'OpenAI 호환, Anthropic 또는 Gemini 네이티브 엔드포인트를 설정합니다. API Key는 서버에만 저장됩니다.', add: '추가', saved: '모델 설정을 저장했습니다.',
       confirmDelete: '이 모델 Provider를 삭제할까요?', testing: '엔드포인트 테스트 중…', testOk: '엔드포인트 사용 가능, 지연', default: '기본값', test: '테스트',
       empty: '사용자 지정 Provider가 없습니다. 서버 환경 설정을 계속 사용합니다.', editor: '모델 Provider 설정', name: '표시 이름', keepSecret: '비워 두면 기존 Key 유지',
+      chooseProvider: '모델 서비스 선택', custom: '사용자 지정 엔드포인트', advanced: '고급 사용자 지정 설정', apiKeyRequired: '선택한 모델 서비스의 API Key를 입력하세요.', apiKeyPlaceholder: 'API Key 붙여넣기(로컬 서버에만 저장)', localDetectHint: '로컬 모델 서비스를 시작한 뒤 아래의 모델 감지를 선택하세요.',
       models: '모델 목록(줄 또는 쉼표로 구분)', defaultModel: '기본 모델', headers: '사용자 지정 Headers JSON(선택)', enabled: '사용', makeDefault: '기본값으로 설정', save: '저장', navTitle: '모델', navSubtitle: 'OpenAI 호환, Anthropic, Gemini 및 로컬 모델을 관리합니다.', localPreset: '로컬 모델 빠른 설정', optional: '선택', localNoKey: 'Ollama / LM Studio는 비워 둘 수 있음', discover: '모델 감지', detecting: '감지 중…', discovered: '{count}개 모델을 찾았습니다.', noModels: '엔드포인트는 연결되지만 모델 목록이 비어 있습니다.', manage: '모델 관리',
       capsTitle: '기능 및 타임아웃 (비워두면 자동 감지)', capsHint: '로컬 모델은 비워두는 것을 권장합니다. 엔드포인트 유형과 탐지 결과로 자동 판단합니다.',
       kind: '엔드포인트 유형', kindAuto: '자동 감지', contextWindow: '컨텍스트 길이 (token)',
@@ -2557,6 +2573,7 @@ export const translations = {
     },
   },
   'zh-TW': {
+    desktopUpdate: DESKTOP_UPDATE_TRANSLATIONS['zh-TW'],
     skillsMarket: SKILLS_MARKET_TRANSLATIONS['zh-TW'],
     storageNotice: STORAGE_NOTICE_TRANSLATIONS['zh-TW'],
     settingsDataExport: SETTINGS_DATA_EXPORT_TRANSLATIONS['zh-TW'],
@@ -2572,6 +2589,7 @@ export const translations = {
       title: '自訂模型 Provider', subtitle: '設定 OpenAI 相容、Anthropic 或 Gemini 原生端點，API Key 僅保存在伺服器端。', add: '新增', saved: '已儲存模型設定。',
       confirmDelete: '刪除這個模型 Provider？', testing: '正在測試端點…', testOk: '端點可用，延遲', default: '預設', test: '測試',
       empty: '尚未設定自訂 Provider，將繼續使用伺服器 .env。', editor: '模型 Provider 設定', name: '顯示名稱', keepSecret: '留空保留原 Key',
+      chooseProvider: '選擇模型服務', custom: '自訂接口', advanced: '進階自訂設定', apiKeyRequired: '請填寫所選模型服務的 API Key。', apiKeyPlaceholder: '貼上 API Key，密鑰只保存在本機伺服器', localDetectHint: '請先啟動本機模型服務，再點擊下方「偵測模型」。',
       models: '模型清單（每行或逗號分隔）', defaultModel: '預設模型', headers: '自訂 Headers JSON（選填）', enabled: '啟用', makeDefault: '設為預設', save: '儲存', navTitle: '模型', navSubtitle: '管理 OpenAI 相容、Anthropic、Gemini 與本機模型。', localPreset: '本機模型快速設定', optional: '選填', localNoKey: 'Ollama / LM Studio 可留空', discover: '偵測模型', detecting: '偵測中…', discovered: '已偵測到 {count} 個模型。', noModels: '端點可連線，但未回傳模型清單。', manage: '管理模型',
       capsTitle: '能力與逾時（留空＝自動偵測）', capsHint: '本機模型建議留空，系統會依端點類型與偵測結果自動判斷。',
       kind: '端點類型', kindAuto: '自動識別', contextWindow: '上下文長度（token）',

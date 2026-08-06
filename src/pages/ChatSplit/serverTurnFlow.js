@@ -1,5 +1,4 @@
 import { buildUserContentWithAttachments } from '../../lib/attachments.js'
-import { buildLocalFilePreviewArtifact } from '../../lib/localPathAccessFlow.js'
 import { buildLocalPathEvidenceInstruction, buildLocalPathToolInstruction, resolveLocalPathToolNames } from '../../lib/localPathPreflight.js'
 import { dispatchTurnEvent, runServerTurn } from '../../lib/turnClient.js'
 import { TASK_STATUS, HISTORY_STATUS } from '../../store/taskStatus.js'
@@ -128,8 +127,6 @@ export async function runServerChatTurn({
       signal: controller.signal,
     })
     const localPathEvidenceInstruction = buildLocalPathEvidenceInstruction(localPathEvidence)
-    const localFilePreview = buildLocalFilePreviewArtifact(localPathEvidence, { messageId: assistantMessageId })
-    if (localFilePreview) dispatch({ type: 'OPEN_PREVIEW_ARTIFACT', payload: localFilePreview })
     const serverContent = [
       localPathInstruction,
       localPathEvidenceInstruction,

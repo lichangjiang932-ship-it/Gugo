@@ -14,6 +14,7 @@ import { useT } from '../i18n/I18nProvider.jsx'
 import { useToast } from './Toast.jsx'
 import BrandMark from './BrandMark.jsx'
 import { fetchPendingCount } from '../lib/approvalClient.js'
+import DesktopUpdateCard from './DesktopUpdateCard.jsx'
 
 export default function LeftRail() {
   const navigate = useNavigate()
@@ -297,6 +298,7 @@ export default function LeftRail() {
           )}
         </div>
 
+        <DesktopUpdateCard />
         <div ref={accountMenuRef} className="relative border-t border-ink/10 pt-2">
           {accountMenuOpen && (
             <div className="absolute bottom-full left-0 right-0 z-30 mb-2 overflow-hidden rounded-xl border border-ink/15 bg-paper p-1.5 shadow-xl">

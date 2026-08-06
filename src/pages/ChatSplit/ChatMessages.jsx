@@ -109,18 +109,17 @@ function NewConversationWelcome({ onPromptSelect }) {
         {t('chatMessages.emptyHint')}
       </p>
       <div className="mt-8 grid w-full max-w-[760px] gap-3 sm:grid-cols-2">
-        {STARTER_PROMPTS.map(({ key, icon: Icon, tone }, index) => (
+        {STARTER_PROMPTS.map(({ key, icon: Icon, tone }) => (
           <button
             key={key}
             type="button"
             onClick={() => onPromptSelect?.(t(`chatMessages.${key}`))}
-            className="group relative flex min-h-[84px] items-center gap-4 overflow-hidden rounded-2xl border border-ink/[0.08] bg-paper px-4 py-4 text-left text-sm leading-5 text-ink-soft shadow-[0_1px_0_rgb(var(--color-ink-rgb)/0.03)] transition-all hover:-translate-y-0.5 hover:border-ink/15 hover:text-ink hover:shadow-[0_12px_30px_rgb(var(--color-ink-rgb)/0.08)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/40"
+            className="group relative flex min-h-[104px] items-center gap-5 overflow-hidden rounded-[22px] border border-ink/[0.08] bg-paper px-5 py-5 text-left text-[15px] leading-6 text-ink-soft shadow-[0_1px_0_rgb(var(--color-ink-rgb)/0.03)] transition-all hover:-translate-y-0.5 hover:border-ink/15 hover:text-ink hover:shadow-[0_12px_30px_rgb(var(--color-ink-rgb)/0.08)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/40"
           >
-            <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ring-1 transition-transform group-hover:scale-105 ${tone}`}>
-              <Icon className="h-[18px] w-[18px]" aria-hidden="true" />
+            <span className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl ring-1 transition-transform group-hover:scale-105 ${tone}`}>
+              <Icon className="h-6 w-6" aria-hidden="true" />
             </span>
             <span className="min-w-0 flex-1">
-              <span className="mb-0.5 block font-mono text-[10px] tracking-[0.16em] text-ink-fade">0{index + 1}</span>
               <span className="block font-medium text-ink">{t(`chatMessages.${key}`)}</span>
             </span>
             <ArrowUpRight className="h-4 w-4 shrink-0 text-ink-fade/60 transition-all group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:text-ember" aria-hidden="true" />

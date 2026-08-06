@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { CheckCircle2, Pencil, Plus, RefreshCw, Save, Server, Trash2, X } from 'lucide-react'
+import { CheckCircle2, ChevronDown, Cloud, Pencil, Plus, RefreshCw, Save, Server, Trash2, X } from 'lucide-react'
 import { useT } from '../i18n/I18nProvider.jsx'
 import {
   deleteModelProvider,
@@ -11,13 +11,30 @@ import {
 } from '../lib/modelClient.js'
 
 const LOCAL_PRESETS = Object.freeze([
-  { id: 'ollama', key: 'ollama', label: 'Ollama', baseUrl: 'http://127.0.0.1:11434/v1', kind: 'ollama' },
-  { id: 'lm-studio', key: 'lm-studio', label: 'LM Studio', baseUrl: 'http://127.0.0.1:1234/v1', kind: 'lmstudio' },
+  { id: 'ollama', key: 'ollama', label: 'Ollama', baseUrl: 'http://127.0.0.1:11434/v1', kind: 'ollama', local: true },
+  { id: 'lm-studio', key: 'lm-studio', label: 'LM Studio', baseUrl: 'http://127.0.0.1:1234/v1', kind: 'lmstudio', local: true },
   // llama.cpp 默认不声明支持 tools —— 它的 server 支不支持取决于启动参数和
   // chat template,发了不支持的 tools 会整轮 400。留 kind 让后端按保守值推断。
-  { id: 'llamacpp', key: 'llamacpp', label: 'llama.cpp', baseUrl: 'http://127.0.0.1:8080/v1', kind: 'llamacpp' },
-  { id: 'vllm', key: 'vllm', label: 'vLLM', baseUrl: 'http://127.0.0.1:8000/v1', kind: 'vllm' },
+  { id: 'llamacpp', key: 'llamacpp', label: 'llama.cpp', baseUrl: 'http://127.0.0.1:8080/v1', kind: 'llamacpp', local: true },
+  { id: 'vllm', key: 'vllm', label: 'vLLM', baseUrl: 'http://127.0.0.1:8000/v1', kind: 'vllm', local: true },
 ])
+
+const CLOUD_PRESETS = Object.freeze([
+  { id: 'openai', key: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', models: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'], kind: 'openai-compatible' },
+  { id: 'anthropic', key: 'anthropic', label: 'Anthropic Claude', baseUrl: 'https://api.anthropic.com', models: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5'], kind: 'anthropic' },
+  { id: 'gemini', key: 'gemini', label: 'Google Gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', models: ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.1-pro'], kind: 'gemini' },
+  { id: 'deepseek', key: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com', models: ['deepseek-v4', 'deepseek-chat', 'deepseek-reasoner'], kind: 'openai-compatible' },
+  { id: 'openrouter', key: 'openrouter', label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', models: ['openai/gpt-5.6-sol', 'anthropic/claude-opus-4.8', 'google/gemini-3.1-pro'], kind: 'openai-compatible' },
+  { id: 'qwen', key: 'qwen', label: '阿里云通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', models: ['qwen3.5-max', 'qwen3.5-plus', 'qwen3.5-flash'], kind: 'openai-compatible' },
+  { id: 'siliconflow', key: 'siliconflow', label: '硅基流动', baseUrl: 'https://api.siliconflow.cn/v1', models: ['deepseek-ai/DeepSeek-V4', 'Qwen/Qwen3.5-397B-A17B', 'moonshotai/Kimi-K2.5'], kind: 'openai-compatible' },
+  { id: 'moonshot', key: 'moonshot', label: 'Moonshot Kimi', baseUrl: 'https://api.moonshot.cn/v1', models: ['kimi-k2.5', 'kimi-k2-thinking', 'moonshot-v1-128k'], kind: 'openai-compatible' },
+  { id: 'zhipu', key: 'zhipu', label: '智谱 GLM', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', models: ['glm-5', 'glm-5-flash', 'glm-4.6v'], kind: 'openai-compatible' },
+  { id: 'xai', key: 'xai', label: 'xAI Grok', baseUrl: 'https://api.x.ai/v1', models: ['grok-4.1', 'grok-4.1-fast', 'grok-4-fast'], kind: 'openai-compatible' },
+  { id: 'groq', key: 'groq', label: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', models: ['openai/gpt-oss-120b', 'moonshotai/kimi-k2-instruct-0905', 'llama-3.3-70b-versatile'], kind: 'openai-compatible' },
+  { id: 'mistral', key: 'mistral', label: 'Mistral AI', baseUrl: 'https://api.mistral.ai/v1', models: ['mistral-large-latest', 'magistral-medium-latest', 'codestral-latest'], kind: 'openai-compatible' },
+])
+
+const PROVIDER_PRESETS = Object.freeze([...CLOUD_PRESETS, ...LOCAL_PRESETS])
 
 const KIND_OPTIONS = ['', 'ollama', 'lmstudio', 'llamacpp', 'vllm', 'anthropic', 'gemini', 'openai-compatible']
 
@@ -26,7 +43,7 @@ const TRIBOOL_VALUES = ['', '1', '0']
 
 function emptyProvider() {
   return {
-    id: '', key: '', label: '', baseUrl: '', apiKey: '', modelsText: '', defaultModel: '',
+    id: '', key: '', label: '', baseUrl: '', apiKey: '', modelsText: '', defaultModel: '', presetId: '',
     headersText: '', enabled: true, isDefault: false,
     // v28 能力字段,全部留空 = 自动检测
     kind: '', contextWindow: '', supportsTools: '', supportsStreaming: '', supportsVision: '', supportsPdf: '',
@@ -54,8 +71,10 @@ function numberOrNull(value) {
 }
 
 function toEditor(provider) {
+  const matchedPreset = PROVIDER_PRESETS.find((preset) => preset.baseUrl === provider.baseUrl)
   return {
     ...provider,
+    presetId: matchedPreset?.id || 'custom',
     apiKey: '',
     modelsText: (provider.models || []).join('\n'),
     headersText: '',
@@ -104,6 +123,12 @@ export default function ModelProvidersPanel({ onChanged }) {
   const [message, setMessage] = useState('')
   const [detecting, setDetecting] = useState(false)
   const [diagnostics, setDiagnostics] = useState(null)
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  const selectedPreset = editing ? PROVIDER_PRESETS.find((preset) => preset.id === editing.presetId) : null
+  const isLocalPreset = selectedPreset?.local === true
+  const modelsReady = Boolean(editing?.modelsText?.split(/[\n,]/).some((model) => model.trim()))
+  const canSave = Boolean(editing?.baseUrl?.trim() && modelsReady
+    && (isLocalPreset || editing?.presetId === 'custom' || editing?.apiKey?.trim() || editing?.hasApiKey))
 
   const notifyChanged = () => {
     onChanged?.()
@@ -133,6 +158,10 @@ export default function ModelProvidersPanel({ onChanged }) {
     setMessage('')
     try {
       const models = editing.modelsText.split(/[\n,]/).map((item) => item.trim()).filter(Boolean)
+      const preset = PROVIDER_PRESETS.find((item) => item.id === editing.presetId)
+      if (preset && !preset.local && !editing.apiKey.trim() && !editing.hasApiKey) {
+        throw new Error(t('modelProviders.apiKeyRequired'))
+      }
       let headers
       if (editing.headersText.trim()) headers = JSON.parse(editing.headersText)
       await saveModelProvider({
@@ -209,11 +238,16 @@ export default function ModelProvidersPanel({ onChanged }) {
   const applyPreset = (preset) => {
     setEditing((current) => ({
       ...current,
+      presetId: preset.id,
       key: current.id ? current.key : preset.key,
-      label: current.label || preset.label,
+      label: current.id ? current.label : preset.label,
       baseUrl: preset.baseUrl,
       kind: preset.kind || '',
+      modelsText: preset.models?.join('\n') || current.modelsText,
+      defaultModel: preset.models?.[0] || current.defaultModel,
+      isDefault: true,
     }))
+    setShowAdvanced(false)
     setMessage('')
   }
 
@@ -266,7 +300,7 @@ export default function ModelProvidersPanel({ onChanged }) {
           <div className="text-sm font-semibold text-ink">{t('modelProviders.title')}</div>
           <div className="text-xs text-ink-fade mt-0.5">{t('modelProviders.subtitle')}</div>
         </div>
-        <button type="button" onClick={() => setEditing(emptyProvider())} className="h-8 px-3 bg-ink text-paper rounded-md text-xs flex items-center gap-1">
+        <button type="button" onClick={() => { setEditing(emptyProvider()); setShowAdvanced(false) }} className="h-8 px-3 bg-ink text-paper rounded-md text-xs flex items-center gap-1">
           <Plus className="w-3.5 h-3.5" />{t('modelProviders.add')}
         </button>
       </div>
@@ -282,7 +316,7 @@ export default function ModelProvidersPanel({ onChanged }) {
             <div className="text-[11px] text-ink-fade truncate mt-1">{provider.baseUrl} · {(provider.models || []).join(', ')}</div>
           </div>
           <button type="button" disabled={busy} onClick={() => test(provider)} className="text-xs text-ember hover:underline">{t('modelProviders.test')}</button>
-          <button type="button" onClick={() => setEditing(toEditor(provider))} className="p-1 text-ink-fade hover:text-ink"><Pencil className="w-3.5 h-3.5" /></button>
+          <button type="button" onClick={() => { setEditing(toEditor(provider)); setShowAdvanced(false) }} className="p-1 text-ink-fade hover:text-ink"><Pencil className="w-3.5 h-3.5" /></button>
           <button type="button" onClick={() => remove(provider)} className="p-1 text-rose-700"><Trash2 className="w-3.5 h-3.5" /></button>
         </div>
       ))}
@@ -346,25 +380,60 @@ export default function ModelProvidersPanel({ onChanged }) {
             </div>
             {/* 只有表单区滚动,长内容不会把标题和保存按钮顶出视口 */}
             <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 flex flex-col gap-3">
-            <div className="flex flex-col gap-2 p-3 rounded-md border border-ink-fade/30 bg-paper-2">
-              <span className="text-xs text-ink-soft">{t('modelProviders.localPreset')}</span>
-              <div className="flex flex-wrap gap-2">
-                {LOCAL_PRESETS.map((preset) => (
-                  <button key={preset.id} type="button" onClick={() => applyPreset(preset)} className="h-8 px-3 rounded-md border border-ink-fade/50 bg-paper text-xs text-ink hover:border-ink">
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center gap-2 text-xs font-medium text-ink"><Cloud className="h-4 w-4 text-ember" />{t('modelProviders.chooseProvider')}</div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {CLOUD_PRESETS.map((preset) => (
+                  <button key={preset.id} type="button" onClick={() => applyPreset(preset)} className={`min-h-12 rounded-lg border px-3 py-2 text-left text-xs transition-colors ${editing.presetId === preset.id ? 'border-ember bg-ember-soft/30 text-ink' : 'border-ink/15 bg-paper hover:border-ink/40 text-ink-soft'}`}>
                     {preset.label}
                   </button>
                 ))}
               </div>
+              <div className="text-[11px] font-medium text-ink-soft">{t('modelProviders.localPreset')}</div>
+              <div className="flex flex-wrap gap-2">
+                {LOCAL_PRESETS.map((preset) => (
+                  <button key={preset.id} type="button" onClick={() => applyPreset(preset)} className={`h-8 px-3 rounded-md border text-xs ${editing.presetId === preset.id ? 'border-ember bg-ember-soft/30 text-ink' : 'border-ink-fade/50 bg-paper text-ink hover:border-ink'}`}>
+                    {preset.label}
+                  </button>
+                ))}
+                <button type="button" onClick={() => { setEditing({ ...emptyProvider(), presetId: 'custom' }); setShowAdvanced(true) }} className={`h-8 px-3 rounded-md border text-xs ${editing.presetId === 'custom' ? 'border-ember bg-ember-soft/30' : 'border-ink-fade/50 bg-paper'}`}>
+                  {t('modelProviders.custom')}
+                </button>
+              </div>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <Field label="Provider ID"><input disabled={!!editing.id} value={editing.key} onChange={(e) => setEditing({ ...editing, key: e.target.value.toLowerCase() })} placeholder="my-provider" /></Field>
-              <Field label={t('modelProviders.name')}><input value={editing.label} onChange={(e) => setEditing({ ...editing, label: e.target.value })} placeholder="My Provider" /></Field>
-            </div>
-            <Field label="Base URL"><input value={editing.baseUrl} onChange={(e) => setEditing({ ...editing, baseUrl: e.target.value })} placeholder="https://api.example.com/v1" /></Field>
-            <Field label={`API Key · ${t('modelProviders.optional')}${editing.hasApiKey ? ` (${t('modelProviders.keepSecret')})` : ''}`}><input type="password" value={editing.apiKey} onChange={(e) => setEditing({ ...editing, apiKey: e.target.value })} placeholder={editing.hasApiKey ? '••••••••' : t('modelProviders.localNoKey')} /></Field>
-            <Field label={t('modelProviders.models')}><textarea rows="4" value={editing.modelsText} onChange={(e) => setEditing({ ...editing, modelsText: e.target.value })} placeholder={'model-a\nmodel-b'} /></Field>
-            <Field label={t('modelProviders.defaultModel')}><input value={editing.defaultModel} onChange={(e) => setEditing({ ...editing, defaultModel: e.target.value })} placeholder="model-a" /></Field>
-            <Field label={t('modelProviders.headers')}><textarea rows="3" value={editing.headersText} onChange={(e) => setEditing({ ...editing, headersText: e.target.value })} placeholder={'{"X-Custom-Header":"value"}'} /></Field>
+
+            {editing.presetId && editing.presetId !== 'custom' && (
+              <div className="rounded-xl border border-ink/10 bg-paper-2 p-4 flex flex-col gap-3">
+                <div className="text-sm font-medium text-ink">{editing.label}</div>
+                {!LOCAL_PRESETS.some((preset) => preset.id === editing.presetId) && (
+                  <Field label={`API Key${editing.hasApiKey ? ` · ${t('modelProviders.keepSecret')}` : ''}`}>
+                    <input type="password" value={editing.apiKey} onChange={(e) => setEditing({ ...editing, apiKey: e.target.value })} placeholder={editing.hasApiKey ? '••••••••' : t('modelProviders.apiKeyPlaceholder')} autoFocus />
+                  </Field>
+                )}
+                {editing.modelsText && (
+                  <Field label={t('modelProviders.defaultModel')}>
+                    <select value={editing.defaultModel} onChange={(e) => setEditing({ ...editing, defaultModel: e.target.value })}>
+                      {editing.modelsText.split(/[\n,]/).map((model) => model.trim()).filter(Boolean).map((model) => <option key={model} value={model}>{model}</option>)}
+                    </select>
+                  </Field>
+                )}
+                {LOCAL_PRESETS.some((preset) => preset.id === editing.presetId) && <div className="text-xs text-ink-fade">{t('modelProviders.localDetectHint')}</div>}
+              </div>
+            )}
+
+            <button type="button" onClick={() => setShowAdvanced((value) => !value)} className="flex items-center gap-2 text-xs text-ink-soft hover:text-ink self-start">
+              <ChevronDown className={`h-4 w-4 transition-transform ${showAdvanced ? 'rotate-180' : ''}`} />{t('modelProviders.advanced')}
+            </button>
+
+            {showAdvanced && <div className="flex flex-col gap-3 rounded-xl border border-ink/15 p-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <Field label="Provider ID"><input disabled={!!editing.id} value={editing.key} onChange={(e) => setEditing({ ...editing, key: e.target.value.toLowerCase() })} placeholder="my-provider" /></Field>
+                <Field label={t('modelProviders.name')}><input value={editing.label} onChange={(e) => setEditing({ ...editing, label: e.target.value })} placeholder="My Provider" /></Field>
+              </div>
+              <Field label="Base URL"><input value={editing.baseUrl} onChange={(e) => setEditing({ ...editing, baseUrl: e.target.value })} placeholder="https://api.example.com/v1" /></Field>
+              {(editing.presetId === 'custom' || LOCAL_PRESETS.some((preset) => preset.id === editing.presetId)) && <Field label={`API Key · ${t('modelProviders.optional')}${editing.hasApiKey ? ` (${t('modelProviders.keepSecret')})` : ''}`}><input type="password" value={editing.apiKey} onChange={(e) => setEditing({ ...editing, apiKey: e.target.value })} placeholder={editing.hasApiKey ? '••••••••' : t('modelProviders.localNoKey')} /></Field>}
+              <Field label={t('modelProviders.models')}><textarea rows="3" value={editing.modelsText} onChange={(e) => setEditing({ ...editing, modelsText: e.target.value })} placeholder={'model-a\nmodel-b'} /></Field>
+              <Field label={t('modelProviders.headers')}><textarea rows="3" value={editing.headersText} onChange={(e) => setEditing({ ...editing, headersText: e.target.value })} placeholder={'{"X-Custom-Header":"value"}'} /></Field>
 
             {/* ★ 能力与超时。全部留空 = 自动检测(endpointProfile.js 按端点类型推断)。
                 这些原来只有全局 env 一份,同时接本地和云端时必然有一边配不对:
@@ -422,6 +491,8 @@ export default function ModelProvidersPanel({ onChanged }) {
               <div className="text-[11px] text-ink-fade">{t('modelProviders.failoverHint')}</div>
             </div>
 
+            </div>}
+
             <div className="flex gap-4 text-xs text-ink-soft">
               <label><input type="checkbox" checked={editing.enabled} onChange={(e) => setEditing({ ...editing, enabled: e.target.checked })} /> {t('modelProviders.enabled')}</label>
               <label><input type="checkbox" checked={editing.isDefault} onChange={(e) => setEditing({ ...editing, isDefault: e.target.checked })} /> {t('modelProviders.makeDefault')}</label>
@@ -429,8 +500,8 @@ export default function ModelProvidersPanel({ onChanged }) {
             </div>
             {/* 操作栏固定在底部,表单再长也点得到保存 */}
             <div className="flex justify-end gap-2 shrink-0 px-5 py-4 border-t border-ink/10 bg-paper">
-              <button type="button" disabled={busy || detecting || !editing.baseUrl.trim()} onClick={discover} className="h-9 px-4 border border-ink/50 text-ink rounded-md text-sm flex items-center gap-1 disabled:opacity-40"><RefreshCw className={`w-4 h-4 ${detecting ? 'animate-spin' : ''}`} />{detecting ? t('modelProviders.detecting') : t('modelProviders.discover')}</button>
-              <button type="button" disabled={busy || detecting} onClick={save} className="h-9 px-4 bg-ember text-paper rounded-md text-sm flex items-center gap-1 disabled:opacity-40"><Save className="w-4 h-4" />{t('modelProviders.save')}</button>
+              {(isLocalPreset || editing.presetId === 'custom') && <button type="button" disabled={busy || detecting || !editing.baseUrl.trim()} onClick={discover} className="h-9 px-4 border border-ink/50 text-ink rounded-md text-sm flex items-center gap-1 disabled:opacity-40"><RefreshCw className={`w-4 h-4 ${detecting ? 'animate-spin' : ''}`} />{detecting ? t('modelProviders.detecting') : t('modelProviders.discover')}</button>}
+              <button type="button" disabled={busy || detecting || !canSave} onClick={save} className="h-9 px-4 bg-ember text-paper rounded-md text-sm flex items-center gap-1 disabled:opacity-40"><Save className="w-4 h-4" />{t('modelProviders.save')}</button>
             </div>
           </div>
         </div>,

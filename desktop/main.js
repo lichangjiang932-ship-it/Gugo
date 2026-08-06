@@ -18,34 +18,17 @@ const { autoUpdater } = updaterPackage
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const preloadPath = path.join(__dirname, 'preload.cjs')
 const UPDATE_INTERVAL_MS = 15 * 60 * 1000
-const UPDATE_COPY = {
-  zh: { title: 'Gugo 更新已就绪', detail: '新版本 {version} 已下载。是否立即重启并完成更新？', install: '立即重启更新', later: '稍后' },
-  en: { title: 'Gugo update ready', detail: 'Version {version} is downloaded. Restart now to finish updating?', install: 'Restart and update', later: 'Later' },
-  ja: { title: 'Gugo の更新準備が完了しました', detail: 'バージョン {version} をダウンロードしました。今すぐ再起動して更新しますか？', install: '再起動して更新', later: '後で' },
-  ko: { title: 'Gugo 업데이트 준비 완료', detail: '버전 {version} 다운로드가 완료되었습니다. 지금 다시 시작하여 업데이트할까요?', install: '다시 시작 및 업데이트', later: '나중에' },
-  'zh-TW': { title: 'Gugo 更新已就緒', detail: '新版本 {version} 已下載。是否立即重新啟動並完成更新？', install: '立即重啟更新', later: '稍後' },
-}
 
 let mainWindow = null
 let backendServer = null
 let gracefulShutdown = null
 let applicationOrigin = null
 let updateReady = false
-let updatePromptOpen = false
 let allowQuit = false
 let shutdownPromise = null
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) app.quit()
-
-function localizedUpdateCopy() {
-  const locale = String(app.getLocale() || 'zh').toLowerCase()
-  if (locale.startsWith('zh-tw') || locale.startsWith('zh-hk')) return UPDATE_COPY['zh-TW']
-  if (locale.startsWith('ja')) return UPDATE_COPY.ja
-  if (locale.startsWith('ko')) return UPDATE_COPY.ko
-  if (locale.startsWith('en')) return UPDATE_COPY.en
-  return UPDATE_COPY.zh
-}
 
 function sendUpdateStatus(status, details = {}) {
   if (!mainWindow || mainWindow.isDestroyed()) return
@@ -193,30 +176,11 @@ function registerDesktopIpc() {
   ipcMain.handle('desktop:install-update', (event) => {
     assertTrustedIpc(event)
     if (!updateReady) return { ready: false }
-    autoUpdater.quitAndInstall(false, true)
+    sendUpdateStatus('installing')
+    allowQuit = true
+    setImmediate(() => autoUpdater.quitAndInstall(false, true))
     return { ready: true }
   })
-}
-
-async function promptForDownloadedUpdate(info) {
-  if (updatePromptOpen || !mainWindow || mainWindow.isDestroyed()) return
-  updatePromptOpen = true
-  const copy = localizedUpdateCopy()
-  try {
-    const result = await dialog.showMessageBox(mainWindow, {
-      type: 'info',
-      title: copy.title,
-      message: copy.title,
-      detail: copy.detail.replace('{version}', info.version || ''),
-      buttons: [copy.install, copy.later],
-      defaultId: 0,
-      cancelId: 1,
-      noLink: true,
-    })
-    if (result.response === 0) autoUpdater.quitAndInstall(false, true)
-  } finally {
-    updatePromptOpen = false
-  }
 }
 
 function configureAutoUpdates() {
@@ -228,12 +192,16 @@ function configureAutoUpdates() {
   autoUpdater.on('update-available', (info) => sendUpdateStatus('available', { version: info.version }))
   autoUpdater.on('update-not-available', () => sendUpdateStatus('current'))
   autoUpdater.on('download-progress', (progress) => {
-    sendUpdateStatus('downloading', { percent: Math.round(progress.percent || 0) })
+    sendUpdateStatus('downloading', {
+      percent: Number(progress.percent || 0),
+      bytesPerSecond: Number(progress.bytesPerSecond || 0),
+      transferred: Number(progress.transferred || 0),
+      total: Number(progress.total || 0),
+    })
   })
   autoUpdater.on('update-downloaded', (info) => {
     updateReady = true
     sendUpdateStatus('ready', { version: info.version })
-    void promptForDownloadedUpdate(info)
   })
   autoUpdater.on('error', (error) => sendUpdateStatus('error', { message: error?.message || 'update failed' }))
 

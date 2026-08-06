@@ -87,7 +87,7 @@ export default function SettingsDiagnosticsPanel({
           <Info label="Temperature" value={String(model?.temperature ?? '未配置')} />
           <Info label="Max Tokens" value={String(model?.maxTokens ?? '未配置')} />
         </div>
-        {model?.missing?.length ? <div className="p-3 border border-ember-line rounded-md bg-ember-soft text-sm text-ember">缺少环境变量：{model.missing.join(', ')}</div> : null}
+        {model?.missing?.length ? <div className="p-3 border border-ember-line rounded-md bg-ember-soft text-sm text-ember">尚未完成模型配置。请前往“模型”页面选择服务并保存 API Key。</div> : null}
         <button onClick={onTest} disabled={loading || !model?.configured} className="h-9 px-4 border border-ink/70 rounded-md text-sm text-ink hover:bg-paper-2 transition-colors disabled:opacity-50 self-start">测试后端模型</button>
         {endpoint?.checked && !endpoint.ok ? <div className="p-3 border border-ember-line rounded-md bg-ember-soft text-sm text-ember">{endpoint.error || endpoint.reason}</div> : null}
         {endpoint?.remoteModels?.length ? <div className="flex flex-wrap gap-1.5">{endpoint.remoteModels.map((name) => <span key={name} className="px-2 py-1 rounded border border-ink-fade/40 text-xs text-ink-soft bg-paper">{name}</span>)}</div> : null}

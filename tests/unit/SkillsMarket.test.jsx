@@ -129,7 +129,9 @@ test('自定义技能创建后持久化可执行指令并立即出现在技能�
 
     const skillCards = [...rootElement.querySelectorAll('button[data-skill-id]')]
     assert.equal(skillCards[0].dataset.skillId, 'codex-superpowers-debugging')
-    assert.match(skillCards[0].textContent, /精选/)
+    assert.doesNotMatch(skillCards[0].textContent, /精选/)
+    assert.match(skillCards[0].textContent, /系统化调试/)
+    assert.match(skillCards[0].textContent, /基于证据定位根因/)
 
     await click(dom, act, skillCards[0])
     const curatedDialog = rootElement.querySelector('[role="dialog"]')
@@ -146,7 +148,7 @@ test('自定义技能创建后持久化可执行指令并立即出现在技能�
     await click(dom, act, curatedDialog.parentElement)
 
     const blockedSkill = [...rootElement.querySelectorAll('button')]
-      .find((button) => button.textContent.includes('Needs Runtime Skill'))
+      .find((button) => button.textContent.includes('运行时技能'))
     assert.ok(blockedSkill)
     assert.match(blockedSkill.textContent, /需要运行时/)
     await click(dom, act, blockedSkill)

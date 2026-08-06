@@ -11,12 +11,13 @@ import { useToast } from '../components/Toast.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { listLocalSkills, mergeRuntimeSkills, saveLocalSkills } from '../lib/localSkills.js'
 import { getOfficialSkillPreset } from '../lib/skillPresets.js'
+import { getPresentedSkill } from '../lib/skillPresentation.js'
 
 export default function SkillsMarket() {
   const navigate = useNavigate()
   const { dispatch } = useAppContext()
   const toast = useToast()
-  const { t } = useT()
+  const { t, lang } = useT()
   const [query, setQuery] = useState('')
   const [activeFilter, setActiveFilter] = useState('全部')
   const [customSkills, setCustomSkills] = useState(() => listLocalSkills())
@@ -43,8 +44,8 @@ export default function SkillsMarket() {
   const folderInputRef = useRef(null)
 
   const allSkills = useMemo(
-    () => mergeRuntimeSkills(customSkills, runtimeSkills),
-    [customSkills, runtimeSkills],
+    () => mergeRuntimeSkills(customSkills, runtimeSkills).map((skill) => getPresentedSkill(skill, lang)),
+    [customSkills, runtimeSkills, lang],
   )
 
   useEffect(() => {
@@ -292,11 +293,7 @@ export default function SkillsMarket() {
       <main className="flex-1 p-8 overflow-y-auto">
         <div className="flex items-end justify-between mb-6 gap-4">
           <div>
-            <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">SKILLS · GUGO</span>
-            <h1 className="font-hand text-[30px] text-ink mt-1.5">
-              技能库 <span className="font-display italic text-[26px] opacity-70"> / your toolkit.</span>
-            </h1>
-            <p className="font-hand text-base text-ink-soft mt-1">{t('nav.skillDetailsHint')}</p>
+            <h1 className="font-hand text-[30px] text-ink">技能库</h1>
           </div>
           <div className="flex gap-2">
             <input
@@ -405,11 +402,6 @@ export default function SkillsMarket() {
                   })()}
                 </div>
                 <div className="flex flex-wrap items-center justify-end gap-1">
-                  {skill.recommended && (
-                    <span className="rounded-full border border-ember/30 bg-ember-soft/30 px-1.5 py-0.5 font-mono text-[9px] tracking-wider text-ember">
-                      {t('skillsMarket.recommended')}
-                    </span>
-                  )}
                   {skill.compatibility && (
                     <span className="font-mono text-[9px] tracking-wider text-ink-fade">
                       {t(`skillsMarket.compatibility.${skill.compatibility}`)}

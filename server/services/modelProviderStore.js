@@ -254,6 +254,10 @@ export function buildUserModelEnv({ userId, env = process.env } = {}) {
     if (overrides) next[`${prefix}_PROFILE`] = overrides
   }
   const preferred = providers.find((provider) => provider.isDefault) || providers[0]
+  // 同时提供旧式单 Provider 字段。部分后台/插件调用方仍只识别这三个字段；
+  // 保存到数据库的 Provider 必须对它们同样可见，不能逼用户再维护一份 .env。
+  next.MODEL_BASE_URL = preferred.baseUrl
+  next.MODEL_API_KEY = preferred.apiKey
   next.MODEL_NAME = preferred.defaultModel
   next.MODEL_NAMES = providers.flatMap((provider) => provider.models).join(',')
   return next

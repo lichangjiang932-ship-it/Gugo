@@ -14,6 +14,7 @@ const {
   listModelProviders,
   upsertModelProvider,
 } = await import('../server/services/modelProviderStore.js')
+const { callBackgroundModel } = await import('../server/adapters/modelProxy.js')
 
 test.after(() => {
   closeDb()
@@ -46,6 +47,8 @@ test('model providers are user-scoped, redacted and converted to runtime env', (
 
   const env = buildUserModelEnv({ userId: 'u-model-1', env: {} })
   assert.equal(env.MODEL_NAME, 'beta')
+  assert.equal(env.MODEL_BASE_URL, 'https://models.example.com/v1')
+  assert.equal(env.MODEL_API_KEY, 'sk-secret')
   assert.equal(env.MODEL_PROVIDER_CUSTOM_OPENAI_API_KEY, 'sk-secret')
   assert.equal(env.MODEL_PROVIDER_CUSTOM_OPENAI_MODELS, 'alpha,beta')
   assert.equal(JSON.parse(env.MODEL_PROVIDER_CUSTOM_OPENAI_HEADERS)['X-Tenant'], 'atelier')
@@ -81,7 +84,44 @@ test('local model provider works without an API key', () => {
   const env = buildUserModelEnv({ userId: 'u-model-local', env: {} })
   assert.equal(env.MODEL_PROVIDER_OLLAMA_API_KEY, '')
   assert.equal(env.MODEL_PROVIDER_OLLAMA_BASE_URL, 'http://127.0.0.1:11434/v1')
+  assert.equal(env.MODEL_BASE_URL, 'http://127.0.0.1:11434/v1')
+  assert.equal(env.MODEL_API_KEY, '')
   assert.equal(env.MODEL_NAME, 'qwen3:8b')
+})
+
+test('saved provider is directly usable by background model calls without .env model fields', async () => {
+  createUser({ id: 'u-model-background', email: 'model-background@example.com' })
+  upsertModelProvider({
+    userId: 'u-model-background',
+    provider: {
+      key: 'saved-cloud',
+      label: 'Saved Cloud',
+      baseUrl: 'https://models.example.test/v1',
+      apiKey: 'saved-secret',
+      models: ['saved-model'],
+      defaultModel: 'saved-model',
+      enabled: true,
+      isDefault: true,
+    },
+  })
+
+  let request
+  const reply = await callBackgroundModel({
+    userId: 'u-model-background',
+    env: {},
+    messages: [{ role: 'user', content: 'hello' }],
+    fetchImpl: async (url, init) => {
+      request = { url, init }
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: 'saved provider works' } }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    },
+  })
+
+  assert.equal(reply, 'saved provider works')
+  assert.equal(request.url, 'https://models.example.test/v1/chat/completions')
+  assert.equal(request.init.headers.Authorization, 'Bearer saved-secret')
+  assert.equal(JSON.parse(request.init.body).model, 'saved-model')
 })
 
 test('model provider validation rejects unsafe identifiers and protocols', () => {
