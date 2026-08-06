@@ -434,3 +434,150 @@ html[data-theme="dark"] .chat-code-block .hljs-function { color: #d2a8ff; }
   color: #fff !important;
   border-color: var(--accent) !important;
 }
+
+/* Desktop pet: every work state has a distinct code-native pose. */
+.desktop-pet {
+  transition: color 180ms ease;
+}
+
+.desktop-pet-handle {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.desktop-pet-handle::before {
+  position: absolute;
+  inset: 0.45rem;
+  border-radius: 1rem;
+  background: currentColor;
+  content: '';
+  opacity: 0.075;
+  filter: blur(7px);
+}
+
+.desktop-pet[data-status="thinking"] .desktop-pet-handle::before,
+.desktop-pet[data-status="tool"] .desktop-pet-handle::before,
+.desktop-pet[data-status="completed"] .desktop-pet-handle::before {
+  animation: desktop-pet-aura 1.6s ease-in-out infinite;
+}
+
+.desktop-pet-handle:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 3px;
+}
+
+.desktop-pet-bubble {
+  width: max-content;
+  min-width: min(11rem, calc(100vw - 2rem));
+  max-width: min(16rem, calc(100vw - 2rem));
+  animation: desktop-pet-report-in 180ms ease-out both;
+}
+
+.desktop-pet-bubble::after {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background: rgb(var(--color-paper-rgb));
+  content: '';
+  transform: rotate(45deg);
+}
+
+.desktop-pet-bubble-above::after {
+  bottom: -6px;
+  border-right: 1px solid rgb(var(--color-ink-rgb) / 0.1);
+  border-bottom: 1px solid rgb(var(--color-ink-rgb) / 0.1);
+}
+
+.desktop-pet-bubble-below::after {
+  top: -6px;
+  border-top: 1px solid rgb(var(--color-ink-rgb) / 0.1);
+  border-left: 1px solid rgb(var(--color-ink-rgb) / 0.1);
+}
+
+.desktop-pet-bubble-right::after {
+  left: 30px;
+}
+
+.desktop-pet-bubble-left::after {
+  right: 30px;
+}
+
+.desktop-pet-sprite {
+  border-radius: 0.6rem;
+  filter: drop-shadow(0 4px 8px rgb(var(--color-ink-rgb) / 0.16));
+}
+
+/* Codex 精灵表动画由 DesktopPet.jsx 的帧定时器驱动；这里只做轻微浮动润色 */
+.desktop-pet[data-status="idle"] .desktop-pet-sprite {
+  animation: desktop-pet-idle-bob 3.8s ease-in-out infinite;
+}
+
+.desktop-pet[data-status="thinking"] .desktop-pet-sprite {
+  animation: desktop-pet-thinking-bob 1.15s ease-in-out infinite;
+}
+
+.desktop-pet[data-status="tool"] .desktop-pet-sprite {
+  animation: desktop-pet-work-bob 700ms ease-in-out infinite;
+}
+
+.desktop-pet[data-status="completed"] .desktop-pet-sprite {
+  animation: desktop-pet-celebrate-hop 2.2s ease-in-out infinite;
+}
+
+.desktop-pet[data-status="failed"] .desktop-pet-sprite {
+  animation: desktop-pet-failed-shake 2.8s ease-in-out infinite;
+}
+
+.desktop-pet[data-dragging="true"] .desktop-pet-sprite,
+.desktop-pet[data-dragging="true"] .desktop-pet-handle::before,
+.desktop-pet[data-dragging="true"] .desktop-pet-bubble {
+  animation-play-state: paused !important;
+}
+
+@keyframes desktop-pet-report-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes desktop-pet-aura {
+  0%, 100% { opacity: 0.055; transform: scale(0.92); }
+  50% { opacity: 0.14; transform: scale(1.06); }
+}
+
+@keyframes desktop-pet-idle-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-2px); }
+}
+
+@keyframes desktop-pet-thinking-bob {
+  0%, 100% { transform: translateY(1px) rotate(-1deg); }
+  50% { transform: translateY(-2px) rotate(1deg); }
+}
+
+@keyframes desktop-pet-work-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(1px); }
+}
+
+@keyframes desktop-pet-celebrate-hop {
+  0%, 12%, 48%, 100% { transform: translateY(0) rotate(0); }
+  24% { transform: translateY(-7px) rotate(-3deg); }
+  36% { transform: translateY(-3px) rotate(3deg); }
+}
+
+@keyframes desktop-pet-failed-shake {
+  0%, 8%, 20%, 100% { transform: translate(0, 2px) rotate(0); }
+  11% { transform: translate(-2px, 2px) rotate(-2deg); }
+  14% { transform: translate(2px, 2px) rotate(2deg); }
+  17% { transform: translate(-1px, 2px) rotate(-1deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .desktop-pet,
+  .desktop-pet-handle,
+  .desktop-pet-handle::before,
+  .desktop-pet-bubble,
+  .desktop-pet-sprite {
+    animation: none !important;
+    transition-duration: 0.01ms !important;
+  }
+}

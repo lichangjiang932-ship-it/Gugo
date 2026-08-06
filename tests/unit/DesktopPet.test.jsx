@@ -49,6 +49,7 @@ function pointerEvent(dom, type, values) {
 test('desktop pet derives idle, thinking, tool, completed, and failed work states', () => {
   assert.equal(deriveDesktopPetStatus().kind, 'idle')
   assert.equal(deriveDesktopPetStatus({ isGenerating: true }).kind, 'thinking')
+  assert.equal(deriveDesktopPetStatus({ tasks: [{ status: 'running' }] }).kind, 'thinking')
   assert.deepEqual(
     deriveDesktopPetStatus({
       isGenerating: true,
@@ -57,6 +58,13 @@ test('desktop pet derives idle, thinking, tool, completed, and failed work state
     { kind: 'tool', tool: 'read_file' },
   )
   assert.equal(deriveDesktopPetStatus({ tasks: [{ status: 'completed' }] }).kind, 'completed')
+  assert.equal(
+    deriveDesktopPetStatus({
+      tasks: [{ status: 'cancelled' }],
+      messages: [{ role: 'assistant', meta: { streaming: false } }],
+    }).kind,
+    'idle',
+  )
   assert.equal(
     deriveDesktopPetStatus({
       isGenerating: true,
@@ -75,13 +83,47 @@ test('desktop pet status and accessibility copy exists in all supported language
     assert.equal(typeof copy.handle, 'string')
     assert.equal(typeof copy.unknownTool, 'string')
     assert.deepEqual(Object.keys(copy.status).sort(), expectedStatuses)
+    assert.deepEqual(Object.keys(copy.activity).sort(), expectedStatuses)
     assert.match(copy.status.tool, /\{tool\}/)
   }
 })
 
 test('desktop pet position clamp keeps the handle inside the viewport', () => {
-  assert.deepEqual(clampDesktopPetPosition({ x: -100, y: 999 }, { width: 320, height: 240 }), { x: 16, y: 168 })
+  assert.deepEqual(clampDesktopPetPosition({ x: -100, y: 999 }, { width: 320, height: 240 }), { x: 16, y: 152 })
   assert.deepEqual(clampDesktopPetPosition({ x: 90, y: 80 }, { width: 320, height: 240 }), { x: 90, y: 80 })
+})
+
+test('desktop pet supports keyboard movement and persists the new position', async () => {
+  const dom = setupDom()
+  dom.window.localStorage.setItem(DESKTOP_PET_POSITION_KEY, JSON.stringify({ x: 40, y: 40 }))
+  dom.window.localStorage.setItem('lang', 'en')
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+
+  try {
+    await act(async () => {
+      root.render(
+        <I18nProvider>
+          <DesktopPet onClose={() => {}} />
+        </I18nProvider>,
+      )
+    })
+
+    const pet = rootElement.querySelector('[data-testid="desktop-pet"]')
+    const handle = rootElement.querySelector('[data-testid="desktop-pet-handle"]')
+    await act(async () => {
+      handle.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }))
+      handle.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'ArrowDown', shiftKey: true, bubbles: true }))
+    })
+
+    assert.equal(pet.style.left, '48px')
+    assert.equal(pet.style.top, '64px')
+    assert.deepEqual(JSON.parse(dom.window.localStorage.getItem(DESKTOP_PET_POSITION_KEY)), { x: 48, y: 64 })
+    assert.match(handle.getAttribute('aria-label'), /arrow keys/i)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
 })
 
 test('desktop pet supports pointer dragging, persistence, resize clamping, and click suppression', async () => {
@@ -109,8 +151,15 @@ test('desktop pet supports pointer dragging, persistence, resize clamping, and c
     assert.equal(pet.style.left, '120px')
     assert.equal(pet.style.top, '100px')
     assert.equal(rootElement.querySelector('[role="status"]').getAttribute('aria-live'), 'polite')
-    assert.equal(rootElement.querySelector('[data-testid="desktop-pet-status"]').textContent, 'Thinking')
-    assert.match(handle.getAttribute('aria-label'), /Thinking.*Drag to move/)
+    assert.match(rootElement.querySelector('[data-testid="desktop-pet-status"]').textContent, /^Thinking/)
+    assert.match(rootElement.querySelector('[data-testid="desktop-pet-status"]').textContent, /working out the next step/i)
+    assert.equal(rootElement.querySelector('[role="status"]').getAttribute('aria-atomic'), 'true')
+    // Codex 精灵表播放器：thinking 状态渲染精灵表容器，背景图指向 pets/boba
+    const sprite = rootElement.querySelector('.desktop-pet-sprite')
+    assert.ok(sprite)
+    assert.match(sprite.style.backgroundImage, /pets\/boba\/spritesheet\.webp/)
+    assert.equal(pet.dataset.status, 'thinking')
+    assert.match(handle.getAttribute('aria-label'), /Thinking.*Drag.*arrow keys/i)
 
     await act(async () => {
       root.render(
@@ -124,7 +173,9 @@ test('desktop pet supports pointer dragging, persistence, resize clamping, and c
       )
     })
     assert.equal(pet.dataset.status, 'tool')
-    assert.equal(rootElement.querySelector('[data-testid="desktop-pet-status"]').textContent, 'Using read_file')
+    assert.match(rootElement.querySelector('[data-testid="desktop-pet-status"]').textContent, /^Using read_file/)
+    // tool 状态仍渲染同一个精灵表容器（帧行由 data-status 驱动）
+    assert.equal(rootElement.querySelector('.desktop-pet-sprite') !== null, true)
 
     handle.setPointerCapture = () => {}
     handle.releasePointerCapture = () => {}
@@ -149,8 +200,9 @@ test('desktop pet supports pointer dragging, persistence, resize clamping, and c
     dom.window.innerWidth = 180
     dom.window.innerHeight = 150
     await act(async () => dom.window.dispatchEvent(new dom.window.Event('resize')))
-    assert.equal(pet.style.left, '108px')
-    assert.equal(pet.style.top, '78px')
+    assert.equal(pet.style.left, '92px')
+    assert.equal(pet.style.top, '62px')
+    assert.ok(rootElement.querySelector('[data-testid="desktop-pet-status"]').classList.contains('right-0'))
 
     await act(async () => {
       handle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }))

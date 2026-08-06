@@ -1,7 +1,9 @@
+import { TASK_STATUS, TOOL_CALL_STATUS } from '../../store/taskStatus.js'
+
 export const DESKTOP_PET_POSITION_KEY = 'yma:chat:desktop-pet-position'
 
 const EDGE_GAP = 16
-const PET_SIZE = 56
+const PET_SIZE = 72
 
 export function desktopPetViewport() {
   if (typeof window === 'undefined') return { width: 1024, height: 768 }
@@ -65,20 +67,22 @@ export function deriveDesktopPetStatus({ isGenerating = false, messages = [], ta
   const task = taskList.at?.(-1) || taskList[taskList.length - 1] || null
   const assistant = latestAssistant(messages)
   const calls = Array.isArray(assistant?.meta?.toolCalls) ? assistant.meta.toolCalls : []
-  const activeCall = [...calls].reverse().find((call) => call?.status === 'running')
-  const failedCall = [...calls].reverse().find((call) => call?.status === 'error')
+  const activeCall = [...calls].reverse().find((call) => call?.status === TOOL_CALL_STATUS.RUNNING)
+  const failedCall = [...calls].reverse().find((call) => call?.status === TOOL_CALL_STATUS.ERROR)
+  const activelyWorking = isGenerating || task?.status === TASK_STATUS.RUNNING
 
-  if (task?.status === 'failed' || assistant?.meta?.failed || (!isGenerating && failedCall)) {
+  if (task?.status === TASK_STATUS.FAILED || assistant?.meta?.failed || (!activelyWorking && failedCall)) {
     return { kind: 'failed' }
   }
-  if (isGenerating && (toolApproval?.open || activeCall)) {
+  if (task?.status === TASK_STATUS.CANCELLED) return { kind: 'idle' }
+  if (activelyWorking && (toolApproval?.open || activeCall)) {
     return {
       kind: 'tool',
       tool: toolApproval?.request?.name || toolApproval?.request?.toolName || activeCall?.name || '',
     }
   }
-  if (isGenerating) return { kind: 'thinking' }
-  if (task?.status === 'completed' || (assistant && assistant.meta?.streaming === false)) {
+  if (activelyWorking) return { kind: 'thinking' }
+  if (task?.status === TASK_STATUS.COMPLETED || (assistant && assistant.meta?.streaming === false)) {
     return { kind: 'completed' }
   }
   return { kind: 'idle' }
