@@ -21,8 +21,9 @@ test('chat failure copy keeps the admin hint for configuration failures', () => 
 })
 
 test('artifact type mapping keeps current skill previews', () => {
-  assert.equal(artifactTypeForSkill('htmlppt'), 'html')
-  assert.equal(artifactTypeForSkill('ppt'), 'pptx')
+  for (const skillId of ['ppt', 'htmlppt', 'axippt', 'ppt-master', 'guizang-ppt']) {
+    assert.equal(artifactTypeForSkill(skillId), 'pptx')
+  }
   assert.equal(artifactTypeForSkill('doc'), 'docx')
   assert.equal(artifactTypeForSkill('unknown'), undefined)
 })

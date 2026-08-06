@@ -1,5 +1,6 @@
 import { buildUserContentWithAttachments } from '../../lib/attachments.js'
-import { buildLocalPathEvidenceInstruction, buildLocalPathToolInstruction } from '../../lib/localPathPreflight.js'
+import { buildLocalFilePreviewArtifact } from '../../lib/localPathAccessFlow.js'
+import { buildLocalPathEvidenceInstruction, buildLocalPathToolInstruction, resolveLocalPathToolNames } from '../../lib/localPathPreflight.js'
 import { dispatchTurnEvent, runServerTurn } from '../../lib/turnClient.js'
 import { TASK_STATUS, HISTORY_STATUS } from '../../store/taskStatus.js'
 import { artifactTypeForSkill, buildChatFailureMessage, getVisibleModelErrorMessage } from '../../lib/chatFlowGuards.js'
@@ -7,6 +8,26 @@ import { isServerTurnToolToggle } from '../../lib/serverToolConfig.js'
 
 export function isUserStopped(error) {
   return error?.name === 'AbortError' || error?.code === 'USER_STOPPED'
+}
+
+export async function collectLocalPathEvidence({ localPathAccess, probeLocalPathAccess, signal }) {
+  if (typeof probeLocalPathAccess !== 'function') return []
+  try {
+    const results = await probeLocalPathAccess(localPathAccess, { signal })
+    return Array.isArray(results) ? results : []
+  } catch (error) {
+    if (isUserStopped(error)) throw error
+    const paths = Array.isArray(localPathAccess?.paths) ? localPathAccess.paths : []
+    return paths.map((path) => ({
+      path,
+      tool: 'local_path_probe',
+      ok: false,
+      content: JSON.stringify({
+        code: 'LOCAL_PATH_PROBE_FAILED',
+        error: error?.message || String(error),
+      }),
+    }))
+  }
 }
 
 function serializeServerTurnContent(content, t) {
@@ -20,7 +41,7 @@ function serializeServerTurnContent(content, t) {
   }).filter(Boolean).join('\n\n')
 }
 
-export function buildServerToolsConfig(toolsConfig = {}) {
+export function buildServerToolsConfig(toolsConfig = {}, localPathAccess = {}) {
   const enabled = new Set()
   const disabled = new Set()
   for (const [rawName, value] of Object.entries(toolsConfig || {})) {
@@ -29,10 +50,12 @@ export function buildServerToolsConfig(toolsConfig = {}) {
     if (value === true) enabled.add(name)
     else if (value === false) disabled.add(name)
   }
-  return {
-    enabled: [...enabled].sort(),
-    disabled: [...disabled].sort(),
+  const effectiveEnabled = resolveLocalPathToolNames(enabled, localPathAccess)
+  for (const name of effectiveEnabled) {
+    enabled.add(name)
+    disabled.delete(name)
   }
+  return { enabled: [...enabled].sort(), disabled: [...disabled].sort() }
 }
 
 export function buildServerTurnMessageIds(turnId) {
@@ -99,8 +122,14 @@ export async function runServerChatTurn({
   })
   try {
     const localPathInstruction = buildLocalPathToolInstruction(localPathAccess.paths, localPathAccess.accessMode)
-    const localPathEvidence = await probeLocalPathAccess(localPathAccess)
+    const localPathEvidence = await collectLocalPathEvidence({
+      localPathAccess,
+      probeLocalPathAccess,
+      signal: controller.signal,
+    })
     const localPathEvidenceInstruction = buildLocalPathEvidenceInstruction(localPathEvidence)
+    const localFilePreview = buildLocalFilePreviewArtifact(localPathEvidence, { messageId: assistantMessageId })
+    if (localFilePreview) dispatch({ type: 'OPEN_PREVIEW_ARTIFACT', payload: localFilePreview })
     const serverContent = [
       localPathInstruction,
       localPathEvidenceInstruction,
@@ -118,7 +147,7 @@ export async function runServerChatTurn({
       agentId,
       skillIds: skillId ? [skillId] : [],
       syncSessionSnapshot: true,
-      toolsConfig: buildServerToolsConfig(toolsConfig),
+      toolsConfig: buildServerToolsConfig(toolsConfig, localPathAccess),
       signal: controller.signal,
       onStarted: (turn) => dispatchMessage('UPDATE_LAST_MESSAGE_META', { serverTurnId: turn.turnId, serverLastSequence: -1 }),
       onConnectionState: ({ status, attempt, maxAttempts }) => {

@@ -109,3 +109,42 @@ test('runToolsLoop keeps mixed read, write, and shell batches strictly serial', 
   assert.deepEqual(executionOrder, expected)
   assert.deepEqual(resultOrder, expected)
 })
+
+test('runToolsLoop shares an 8k context budget across concurrent tool results', async () => {
+  let modelTurns = 0
+  let resultMessages = []
+
+  const result = await runToolsLoop({
+    job: { id: 'job-read-context-budget', userId: TEST_USER, title: 'bounded parallel reads' },
+    step: { id: 'step-read-context-budget', kind: 'execute' },
+    messages: [{ role: 'user', content: 'Read four files.' }],
+    contextWindow: 8_192,
+    runModel: async ({ messages }) => {
+      modelTurns += 1
+      if (modelTurns === 1) {
+        return {
+          content: '',
+          toolCalls: [
+            toolCall('bounded-1', 'read_file', { path: 'one.txt' }),
+            toolCall('bounded-2', 'read_file', { path: 'two.txt' }),
+            toolCall('bounded-3', 'read_file', { path: 'three.txt' }),
+            toolCall('bounded-4', 'read_file', { path: 'four.txt' }),
+          ],
+        }
+      }
+      resultMessages = messages.filter((message) => message.role === 'tool')
+      return { content: 'done', toolCalls: [] }
+    },
+    executeTool: async ({ args }) => ({
+      ok: true,
+      path: args.path,
+      content: 'x'.repeat(30_000),
+    }),
+  })
+
+  assert.equal(result.text, 'done')
+  assert.equal(resultMessages.length, 4)
+  assert.equal(resultMessages.every((message) => message.content.length <= 1_536), true)
+  assert.equal(resultMessages.reduce((total, message) => total + message.content.length, 0) <= 6_144, true)
+  assert.equal(resultMessages.every((message) => JSON.parse(message.content).truncated === true), true)
+})

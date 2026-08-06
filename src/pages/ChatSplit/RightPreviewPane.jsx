@@ -507,6 +507,18 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
           URL.revokeObjectURL(url)
           a.remove()
         }, 100)
+      } else if (preview.type === 'text') {
+        const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = preview.filename
+        document.body.appendChild(a)
+        a.click()
+        setTimeout(() => {
+          URL.revokeObjectURL(url)
+          a.remove()
+        }, 100)
       }
     } catch (err) {
       // ★ #26: 统一通过外层 toast 通道,避免阻塞式 alert
@@ -706,6 +718,7 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
               {preview.type === 'docx' && <DocxPreview blocks={preview.blocks} title={preview.title} />}
               {preview.type === 'xlsx' && <XlsxPreview rows={preview.rows} />}
               {preview.type === 'react' && <ReactPreview code={content} />}
+              {preview.type === 'text' && <SourceView content={content} />}
             </>
           )}
         </div>

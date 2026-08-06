@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import { getAgentTemplateSystemPrompt } from './agentTemplates.js'
-import { listRuntimeSkills } from './skillRegistry.js'
+import { getRuntimeSkill } from './skillRegistry.js'
 import { getCompactionArchive } from './compactionService.js'
 import { buildPersonaManifestBlock } from './agentStore.js'
 
@@ -199,8 +199,10 @@ function normalizeSkillIds(skillIds) {
 export function prepareSkillsForPrompt({ userId, skillIds = [] } = {}) {
   const normalizedIds = normalizeSkillIds(skillIds)
   if (!normalizedIds.length) return []
-  const skillsById = new Map(listRuntimeSkills({ userId }).map((skill) => [skill.id, normalizeSkill(skill)]))
-  return normalizedIds.map((id) => skillsById.get(id)).filter(Boolean)
+  return normalizedIds
+    .map((id) => getRuntimeSkill(id, { userId }))
+    .filter(Boolean)
+    .map(normalizeSkill)
 }
 
 export function buildSkillsBlockFromPrepared({ userId, agentId = null, skills = [] } = {}) {
@@ -290,7 +292,10 @@ function transcriptMessage(message, index) {
 
 function findArchiveId(recentMessages) {
   for (let index = recentMessages.length - 1; index >= 0; index -= 1) {
-    const id = recentMessages[index]?.meta?.archiveId || recentMessages[index]?.meta?.compactionArchiveId
+    const message = recentMessages[index]
+    const id = message?.meta?.archiveId
+      || message?.meta?.compactionArchiveId
+      || message?.modelContext?.compactionArchiveId
     if (id) return id
   }
   return null
@@ -306,9 +311,17 @@ function loadArchive({ userId, recentMessages }) {
   }
 }
 
-export function buildSessionsBlock({ userId, sessionId, recentMessages = [] } = {}) {
-  const normalizedMessages = (Array.isArray(recentMessages) ? recentMessages : []).slice(-64).map(normalizeRecentMessage)
-  const archive = loadArchive({ userId, recentMessages: Array.isArray(recentMessages) ? recentMessages : [] })
+export function buildSessionsBlock({
+  userId,
+  sessionId,
+  recentMessages = [],
+  includeRecentTranscript = true,
+} = {}) {
+  const sourceMessages = Array.isArray(recentMessages) ? recentMessages : []
+  const normalizedMessages = includeRecentTranscript
+    ? sourceMessages.slice(-64).map(normalizeRecentMessage)
+    : []
+  const archive = loadArchive({ userId, recentMessages: sourceMessages })
   if (!normalizedMessages.length && !archive?.summaryText) return EMPTY_RESULT
 
   const normalizedArchive = archive
@@ -324,8 +337,10 @@ export function buildSessionsBlock({ userId, sessionId, recentMessages = [] } = 
   const sources = {
     userId: userId || null,
     sessionId: sessionId || null,
-    archiveId: normalizedArchive?.id || null,
-    fields: ['sessionId', 'recentMessages', 'compactionArchive.summaryText'],
+    archiveId: archive?.id || null,
+    fields: includeRecentTranscript
+      ? ['sessionId', 'recentMessages', 'compactionArchive.summaryText']
+      : ['sessionId', 'compactionArchive.summaryText'],
   }
   return cachedBuild('sessions', input, sources, () => {
     const sections = ['# Session Context']

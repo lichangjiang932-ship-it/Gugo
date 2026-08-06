@@ -25,6 +25,7 @@ import { warnShellTrust } from '../utils/bashGuard.js'
 import { registerBrowserTools } from '../services/browserTools.js'
 import { registerConnectorTools } from '../services/connectorTools.js'
 import { shutdownBrowsers } from '../adapters/browserAutomation.js'
+import { initCodexPluginSkills } from '../adapters/codexPluginSkills.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULT_PLUGIN_ROOT = path.resolve(__dirname, '../../plugins')
@@ -50,6 +51,11 @@ export function bootstrap({ silent = process.env.NODE_ENV === 'production' } = {
   } catch (err) {
     // 加载失败绝不阻塞主进程启动
     console.error('[server] initPlugins failed:', err.message)
+  }
+  try {
+    initCodexPluginSkills()
+  } catch (err) {
+    console.error('[server] initCodexPluginSkills failed:', err.message)
   }
   // 视觉副驾 resolver：让 modelProxy 能按 userId 拉 DB 里的副驾配置
   try {

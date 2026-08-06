@@ -116,6 +116,7 @@ export default function SkillsMarket() {
   }
 
   const handleUseSkill = (skill) => {
+    if (skill?.runnable === false) return
     dispatch({ type: 'SET_DRAFT_INPUT', payload: `/${skill.id} ` })
     setSelectedSkill(null)
     navigate('/chat')
@@ -401,6 +402,9 @@ export default function SkillsMarket() {
                     return <Icon className="w-5 h-5 text-ink-fade" />
                   })()}
                 </div>
+                {skill.compatibility && (
+                  <span className="font-mono text-[9px] tracking-wider text-ink-fade">{skill.compatibility}</span>
+                )}
                 {skill.custom && <span className="font-mono text-[9px] tracking-wider text-ink-fade">{skill.imported ? '已导入' : '自定义'}</span>}
               </div>
               <div>
@@ -443,6 +447,9 @@ export default function SkillsMarket() {
                 <div className="min-w-0">
                   <h2 id="skill-detail-title" className="truncate font-hand text-xl text-ink">{selectedSkill.name}</h2>
                   <div className="font-mono text-[10px] text-ink-fade">/{selectedSkill.id}</div>
+                  {selectedSkill.compatibility && (
+                    <div className="font-mono text-[10px] text-ink-fade">{selectedSkill.compatibility}</div>
+                  )}
                 </div>
               </div>
               <button
@@ -479,7 +486,8 @@ export default function SkillsMarket() {
               <button
                 type="button"
                 onClick={() => handleUseSkill(selectedSkill)}
-                className="h-9 rounded-md bg-ink px-4 text-sm text-paper transition-colors hover:bg-ink-soft"
+                disabled={selectedSkill.runnable === false}
+                className="h-9 rounded-md bg-ink px-4 text-sm text-paper transition-colors hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {t('nav.useSkill')}
               </button>

@@ -49,5 +49,5 @@ test('chat forwards the persisted tool switches to the server turn flow', () => 
   const serverTurnSource = fs.readFileSync(new URL('../src/pages/ChatSplit/serverTurnFlow.js', import.meta.url), 'utf8')
 
   assert.match(chatSource, /toolsConfig:\s*state\.toolsConfig/)
-  assert.match(serverTurnSource, /toolsConfig:\s*buildServerToolsConfig\(toolsConfig\)/)
+  assert.match(serverTurnSource, /toolsConfig:\s*buildServerToolsConfig\(toolsConfig,\s*localPathAccess\)/)
 })

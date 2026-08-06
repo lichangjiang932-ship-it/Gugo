@@ -10,6 +10,7 @@ const { getDb } = await import('../server/db.js')
 const { listMemories, upsertMemory } = await import('../server/services/memoryStore.js')
 const {
   extractAndStoreAutoMemories,
+  isTransientRuntimeMemoryCandidate,
   shouldExtractAutoMemory,
 } = await import('../server/services/autoMemoryService.js')
 
@@ -81,4 +82,43 @@ test('simple greetings and secret-bearing turns never invoke extraction', async 
   })
   assert.equal(result.attempted, false)
   assert.equal(calls, 0)
+})
+
+test('runtime capability and authorization state never becomes durable auto memory', async () => {
+  assert.equal(isTransientRuntimeMemoryCandidate({
+    title: 'Filesystem_Constraint',
+    body: 'Access via list_directory and read_file is unavailable because WORKSPACE_FS_ENABLED is not enabled.',
+  }), true)
+  assert.equal(isTransientRuntimeMemoryCandidate({
+    title: 'User_Path_Auth',
+    body: 'User explicitly authorized read-only access to D:\\destok\\money.',
+  }), true)
+  assert.equal(isTransientRuntimeMemoryCandidate({
+    title: 'Project path',
+    body: 'The project is located at D:\\destok\\money.',
+  }), false)
+
+  const before = listMemories({ userId: USER_ID }).length
+  const result = await extractAndStoreAutoMemories({
+    userId: USER_ID,
+    messages: [{ role: 'user', content: 'Read D:\\destok\\money and remember the stable project details.' }],
+    assistantText: 'The current filesystem tool failed because its runtime flag is disabled.',
+    callModel: async () => JSON.stringify({ memories: [
+      {
+        type: 'project',
+        title: 'Filesystem_Constraint',
+        body: 'The local filesystem tool is unavailable, so the user must paste file contents.',
+        confidence: 0.99,
+      },
+      {
+        type: 'project',
+        title: 'money project path',
+        body: 'The project is located at D:\\destok\\money.',
+        confidence: 0.95,
+      },
+    ] }),
+  })
+
+  assert.deepEqual(result.stored.map((memory) => memory.title), ['money project path'])
+  assert.equal(listMemories({ userId: USER_ID }).length, before + 1)
 })

@@ -10,6 +10,15 @@ import { logWarn } from '../utils/logger.js'
 const DEFAULT_TOKEN_CAP = 800
 const DEFAULT_LINK_DEPTH = 1
 const DEFAULT_LINK_NODES = 24
+const VERIFIED_FILESYSTEM_SUCCESS = /\[VERIFIED LOCAL FILESYSTEM ACCESS\][\s\S]*?Succeeded:\s*yes\b/i
+const FILESYSTEM_STATE_MEMORY = /WORKSPACE_FS_ENABLED|list_directory|read_file|local\s+file(?:system)?|file\s*system|filesystem|本地文件|文件系统/i
+const NEGATIVE_AVAILABILITY = /unavailable|not\s+enabled|disabled|cannot|can't|inaccessible|deterministic\s+failure|无法|不可访问|未启用|失败/i
+
+export function memoryContradictsVerifiedFilesystem(memory, query = '') {
+  if (!VERIFIED_FILESYSTEM_SUCCESS.test(String(query || ''))) return false
+  const text = [memory?.type, memory?.title, memory?.body].filter(Boolean).join('\n')
+  return FILESYSTEM_STATE_MEMORY.test(text) && NEGATIVE_AVAILABILITY.test(text)
+}
 
 function memoryBlockChars(memory) {
   return `### ${memory?.type || 'reference'}: ${memory?.title || ''}\n${memory?.body || ''}\n`.length
@@ -40,6 +49,7 @@ function emptyContext({ query = '', error = null } = {}) {
       error: error ? String(error?.message || error) : null,
       query: String(query || ''),
       linkedCount: 0,
+      suppressedMemoryIds: [],
       linkTruncated: false,
       touched: false,
       touchFailed: false,
@@ -115,7 +125,12 @@ export function prepareMemoryInjectionContext({
   }
 
   const deduped = [...new Map([...seeds, ...linked].map((memory) => [memory.id, memory])).values()]
-  const fitted = fitMemories(deduped, tokenCap)
+  // Runtime evidence is fresher than durable memory. In particular, a memory
+  // captured during an earlier disabled-filesystem run must not override a
+  // successful grant + probe from the current turn.
+  const suppressedMemories = deduped.filter((memory) => memoryContradictsVerifiedFilesystem(memory, query))
+  const candidates = deduped.filter((memory) => !memoryContradictsVerifiedFilesystem(memory, query))
+  const fitted = fitMemories(candidates, tokenCap)
   const freshness = fitted.memories.map((memory) => ({
     id: memory.id,
     ...classifyMemoryFreshness(memory.updatedAt, { now }),
@@ -158,6 +173,7 @@ export function prepareMemoryInjectionContext({
       error: null,
       query: String(query || ''),
       linkedCount: memories.filter((memory) => !seeds.some((seed) => seed.id === memory.id)).length,
+      suppressedMemoryIds: suppressedMemories.map((memory) => memory.id),
       linkTruncated,
       touched,
       touchFailed,

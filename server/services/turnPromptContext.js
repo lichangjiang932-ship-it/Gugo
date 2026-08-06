@@ -73,6 +73,7 @@ export function prepareTurnPromptContext({
   skillIds = [],
   sessionId = null,
   recentMessages = [],
+  includeRecentTranscript = true,
   query = '',
   env = process.env,
 } = {}, dependencies = {}) {
@@ -106,6 +107,7 @@ export function prepareTurnPromptContext({
     userId,
     sessionId,
     recentMessages,
+    includeRecentTranscript,
   }), warn)
   for (const block of [identity, ishiki, skills, sessions]) {
     if (block?.text) blocks.push({ role: 'system', content: block.text })

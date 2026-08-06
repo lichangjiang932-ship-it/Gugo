@@ -104,6 +104,9 @@ test('explicit document wording authorizes DOCX without weakening negative guard
 
 test('slash skill unlocks its matching artifact tool', () => {
   assert.equal(parseSkillIdFromPrompt('/ppt 讲讲量子计算'), 'ppt')
+  for (const alias of ['htmlppt', 'axippt', 'ppt-master', 'guizang-ppt']) {
+    assert.equal(parseSkillIdFromPrompt(`/${alias} 做演示`), 'ppt')
+  }
   const names = nameOf(selectJobToolSpecs({ prompt: '/excel 汇总季度数据', skillId: 'excel' }))
   assert.ok(names.includes('create_xlsx'))
   assert.ok(!names.includes('create_pptx'))

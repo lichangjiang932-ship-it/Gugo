@@ -26,6 +26,7 @@ import { isContextLengthError } from '../adapters/modelProxy.js'
 import { callModelWithContextRecovery } from './contextCompactionRuntime.js'
 import { ensureSafetySystemMessages } from './promptCompiler.js'
 import { allowedArtifactTools, isFileArtifactTool } from './artifactIntent.js'
+import { selectChatToolSpecs } from './chatToolSelection.js'
 import {
   createSubagentApprovalContext,
   rememberApprovedSubagentCall,
@@ -37,6 +38,7 @@ import {
   createToolLoopGuard,
   mapWithConcurrency,
   normalizeToolCalls,
+  resolveToolResultMaxChars,
   validateToolCall,
 } from '../utils/toolCallHarness.js'
 import { callTool as callMcpTool } from '../mcp/mcpManager.js'
@@ -254,18 +256,96 @@ export const SERVER_TOOL_SPECS = [
  * @param {string} [opts.prompt]  用户原始提示词(保留 `/ppt` 前缀)
  * @param {string|null} [opts.skillId] 已解析的技能 id;不传则从 prompt 解析
  * @param {Array} [opts.specs]    待裁剪的 spec 列表,默认全量
+ * @param {string} [opts.origin]  chat 仅暴露当前 turn 明确需要的工具;Job 保持完整能力
  * @returns {Array} 过滤后的 spec 列表
  */
-export function selectJobToolSpecs({ prompt = '', skillId = undefined, specs = SERVER_TOOL_SPECS } = {}) {
+export function selectJobToolSpecs({ prompt = '', skillId = undefined, specs = SERVER_TOOL_SPECS, origin = '' } = {}) {
   const allowed = allowedArtifactTools(prompt, { skillId })
-  return specs.filter((spec) => {
+  const artifactFiltered = specs.filter((spec) => {
     const name = spec?.function?.name
     if (!name) return false
     return !isFileArtifactTool(name) || allowed.has(name)
   })
+  return origin === 'chat'
+    ? selectChatToolSpecs({ prompt, skillId, specs: artifactFiltered })
+    : artifactFiltered
 }
 
 export const selectToolSpecs = selectJobToolSpecs
+
+const DIRECTORY_REVIEW_GUARD_MARKER = '[DIRECTORY REVIEW REPRESENTATIVE READ REQUIRED]'
+const DIRECTORY_REVIEW_INTENT = /read|inspect|review|understand|analy[sz]e|research|check|\u9605\u8bfb|\u8bfb\u53d6|\u5ba1\u67e5|\u7406\u89e3|\u4e86\u89e3|\u5206\u6790|\u7814\u7a76|\u68c0\u67e5/i
+const TEXT_FILE = /\.(?:md|mdx|txt|json|ya?ml|toml|ini|cfg|conf|js|mjs|cjs|jsx|ts|tsx|py|rb|go|rs|java|kt|kts|cs|php|sh|ps1|bat|cmd|xml|gradle|properties)$/i
+const SENSITIVE_FILE = /(?:^\.|secret|credential|token|password|passwd|id_rsa|private[_-]?key)/i
+
+function joinLocalPath(root, name) {
+  const separator = String(root || '').includes('\\') ? '\\' : '/'
+  return `${String(root || '').replace(/[\\/]+$/u, '')}${separator}${name}`
+}
+
+function pickRepresentativeFiles(entries = []) {
+  const files = entries
+    .filter((entry) => entry?.type === 'file' && typeof entry?.name === 'string')
+    .map((entry) => entry.name)
+    .filter((name) => name && !/[\\/]/u.test(name) && !SENSITIVE_FILE.test(name))
+  const selected = []
+  const pick = (...patterns) => {
+    for (const pattern of patterns) {
+      const found = files.find((name) => pattern.test(name) && !selected.includes(name))
+      if (!found) continue
+      selected.push(found)
+      return
+    }
+  }
+  pick(/^readme(?:\.[^.]+)?$/i, /^manual(?:\.[^.]+)?$/i, /^usage(?:\.[^.]+)?$/i, /^contributing(?:\.[^.]+)?$/i)
+  pick(/^(?:package\.json|pyproject\.toml|requirements(?:-[^.]+)?\.txt|cargo\.toml|go\.mod|composer\.json|pom\.xml|build\.gradle|settings\.gradle)$/i)
+  pick(/^main(?:\.[^.]+)$/i, /^start(?:\.[^.]+)$/i, /^app(?:\.[^.]+)$/i, /^server(?:\.[^.]+)$/i, /^index(?:\.[^.]+)$/i, /^dashboard(?:\.[^.]+)$/i)
+  for (const name of files) {
+    if (selected.length >= 3) break
+    if (!selected.includes(name) && TEXT_FILE.test(name)) selected.push(name)
+  }
+  return selected.slice(0, 3)
+}
+
+function buildRepresentativeReadCalls(content, turnId) {
+  const calls = []
+  const blockPattern = /Path:\s*([^\r\n]+)\r?\nTool:\s*list_directory\r?\nSucceeded:\s*yes\r?\n(\{[^\r\n]+\})/giu
+  for (const match of String(content || '').matchAll(blockPattern)) {
+    let listing
+    try {
+      listing = JSON.parse(match[2])
+    } catch {
+      continue
+    }
+    const root = String(listing?.path || match[1] || '').trim()
+    if (!root || !Array.isArray(listing?.entries)) continue
+    for (const name of pickRepresentativeFiles(listing.entries)) {
+      if (calls.length >= 3) break
+      const suffix = String(turnId || 'turn').replace(/[^A-Za-z0-9_-]/g, '').slice(-24)
+      calls.push({
+        id: `local-project-read-${suffix}-${calls.length + 1}`,
+        type: 'function',
+        function: {
+          name: 'read_file',
+          arguments: JSON.stringify({ path: joinLocalPath(root, name) }),
+        },
+      })
+    }
+    if (calls.length >= 3) break
+  }
+  return calls
+}
+
+function successfulReadFileInMessages(messages = []) {
+  return messages.some((message) => {
+    if (message?.role !== 'tool' || message?.name !== 'read_file') return false
+    try {
+      return JSON.parse(String(message.content || '{}'))?.ok === true
+    } catch {
+      return false
+    }
+  })
+}
 
 /**
  * 执行单个工具调用 → 落盘 artifact → appendJobArtifact → 返回给模型的简短结果。
@@ -513,6 +593,8 @@ export async function runToolsLoop({
   requestToolApproval = requestApproval,
   enableToolHooks = true,
   onModelPhase = null,
+  onModelDelta = null,
+  onReasoningDelta = null,
   onToolCall = null,
   onToolStarted = null,
   onToolCompleted = null,
@@ -520,20 +602,37 @@ export async function runToolsLoop({
   // 文件产物工具按本次任务意图裁剪。同一份 spec 既喂给模型,也用于 validateToolCall ——
   // 这样"模型看不到"和"调了也会被拒"是同一个事实,不会两边漂移。
   //
-  // 意图文本取 job.prompt + 本轮 user 消息:jobRuntime 走的是 job.prompt,
+  // 意图文本取 job.prompt + 最后一条 user 消息:jobRuntime 走的是 job.prompt,
   // 但直接调 runToolsLoop(子任务、测试、未来的其他入口)只有 messages,
   // 只看 job.prompt 会把用户明写的「整理成 Word 文档」误判成无产物需求。
+  // 不能扫描完整历史:旧轮次请求过 PPT 后,普通后续轮会永久携带 create_pptx
+  // schema,既增加 token,也会诱导模型继续生成已经结束的产物。
+  const currentUserMessage = (Array.isArray(messages) ? messages : [])
+    .findLast((message) => message?.role === 'user' && typeof message.content === 'string')
   const intentText = [
     job?.prompt || '',
-    ...(Array.isArray(messages) ? messages : [])
-      .filter((m) => m?.role === 'user')
-      .map((m) => (typeof m.content === 'string' ? m.content : '')),
+    currentUserMessage?.content || '',
   ].join('\n')
   const activeToolSpecs = selectJobToolSpecs({
     prompt: intentText,
     skillId,
     specs: Array.isArray(toolSpecs) ? toolSpecs : SERVER_TOOL_SPECS,
+    origin: job?.origin,
   })
+  const representativeReadCalls = buildRepresentativeReadCalls(job?.prompt, job?.id)
+  const requiresRepresentativeRead = job?.origin === 'chat'
+    && DIRECTORY_REVIEW_INTENT.test(String(job?.userPrompt || ''))
+    && activeToolSpecs.some((spec) => spec?.function?.name === 'read_file')
+    && representativeReadCalls.length > 0
+  const recoverySessionId = job?.origin === 'chat' && job?.sessionId
+    ? String(job.sessionId)
+    : job?.id && step?.id
+      ? `job:${job.id}:${step.id}`
+      : null
+  // Automatic tool rounds must never wait for extra map/reduce model calls
+  // merely to prepare their next request. Explicit compaction can still request
+  // a semantic summary; automatic recovery uses the deterministic archive.
+  const semanticSummary = false
   const restored = typeof loadCheckpoint === 'function' ? await loadCheckpoint() : null
   const restoredState = restored?.state && typeof restored.state === 'object'
     ? restored.state
@@ -543,7 +642,13 @@ export async function runToolsLoop({
   const convo = ensureSafetySystemMessages(
     Array.isArray(restoredState?.messages) ? [...restoredState.messages] : [...messages],
   )
+  let representativeReadsInjected = Boolean(restoredState?.completionGuards?.representativeReadsInjected)
+    || convo.some((message) => message?.role === 'system' && String(message?.content || '').includes(DIRECTORY_REVIEW_GUARD_MARKER))
+  let hasSuccessfulRepresentativeRead = successfulReadFileInMessages(convo)
   const artifactIds = Array.isArray(restoredState?.artifactIds) ? [...restoredState.artifactIds] : []
+  let recovery = restoredState?.recovery?.archiveId
+    ? { archiveId: String(restoredState.recovery.archiveId) }
+    : null
   let finalText = ''
   let iter = Math.max(0, Number(restoredState?.iterations) || 0)
   let checkpointCalls = Array.isArray(restoredState?.toolCalls)
@@ -563,8 +668,14 @@ export async function runToolsLoop({
       artifactIds,
       iterations: Math.max(1, Number(restoredState.final.iterations) || iter || 1),
       resumed: true,
+      recovery,
     }
   }
+
+  let injectRepresentativeReadsBeforeModel = requiresRepresentativeRead
+    && !hasSuccessfulRepresentativeRead
+    && !representativeReadsInjected
+    && !checkpointCalls?.length
 
   const persistTurn = async ({ final = null } = {}) => {
     if (typeof saveCheckpoint !== 'function') return
@@ -574,6 +685,8 @@ export async function runToolsLoop({
       artifactIds,
       iterations: iter,
       budget: budget.snapshot?.() || null,
+      recovery,
+      completionGuards: { representativeReadsInjected },
       final,
     })
     if (saved === false || saved === null) throw new Error('Failed to persist job turn checkpoint')
@@ -610,6 +723,35 @@ export async function runToolsLoop({
     let steeringLeaseId = null
     let toolCalls
 
+    if (injectRepresentativeReadsBeforeModel) {
+      representativeReadsInjected = true
+      injectRepresentativeReadsBeforeModel = false
+      convo.push({
+        role: 'system',
+        content: [
+          DIRECTORY_REVIEW_GUARD_MARKER,
+          'A directory listing is discovery evidence only.',
+          'The runtime is reading representative documentation, configuration, and entrypoint files through the authorized read_file tool before the first model call.',
+          'Base the answer on the returned file contents and report any concrete read errors truthfully.',
+        ].join(' '),
+      })
+      checkpointCalls = normalizeToolCalls(representativeReadCalls).map((call) => ({
+        ...call,
+        idempotencyKey: buildJobToolIdempotencyKey({
+          jobId: job?.id,
+          stepId: step?.id,
+          toolCallId: call.id,
+        }),
+        checkpointStatus: 'pending',
+        checkpointApprovalId: null,
+      }))
+      if (typeof onToolCall === 'function') {
+        for (const call of checkpointCalls) await onToolCall(call)
+      }
+      convo.push(buildAssistantToolCallsMessage(checkpointCalls, ''))
+      await persistTurn()
+    }
+
     if (checkpointCalls?.length) {
       // The model response was already made durable before the previous process
       // stopped. Resume its unanswered calls without asking the model again.
@@ -633,6 +775,7 @@ export async function runToolsLoop({
       let modelResult
       try {
         if (typeof onModelPhase === 'function') await onModelPhase({ phase: 'started', iteration: iter })
+        let streamedText = false
         const request = await callModelWithContextRecovery({
           messages: convo,
           tools: activeToolSpecs,
@@ -642,13 +785,46 @@ export async function runToolsLoop({
           ),
           isContextLengthError,
           contextWindow,
+          semanticSummary,
           signal,
           userId: job?.userId || null,
-          sessionId: job?.id && step?.id ? `job:${job.id}:${step.id}` : null,
+          sessionId: recoverySessionId,
           consumeBudget: (cost) => budget.consume(cost),
+          onTextDelta: async (text, metadata = {}) => {
+            if (!text) return
+            streamedText = true
+            if (typeof onModelDelta === 'function') {
+              await onModelDelta({ text, iteration: iter, modelName: metadata.modelName || null })
+            }
+          },
+          onReasoningDelta: async (text, metadata = {}) => {
+            if (!text || typeof onReasoningDelta !== 'function') return
+            await onReasoningDelta({ text, iteration: iter, modelName: metadata.modelName || null })
+          },
         })
         convo.splice(0, convo.length, ...request.messages)
+        if (request.recovery?.archiveId) {
+          recovery = { archiveId: String(request.recovery.archiveId) }
+        }
         modelResult = request.response
+        const returnedToolCalls = Array.isArray(modelResult?.toolCalls) ? modelResult.toolCalls : []
+        if (requiresRepresentativeRead
+          && !hasSuccessfulRepresentativeRead
+          && !representativeReadsInjected
+          && returnedToolCalls.length === 0
+          && iter + 1 < maxIters) {
+          representativeReadsInjected = true
+          convo.push({
+            role: 'system',
+            content: [
+              DIRECTORY_REVIEW_GUARD_MARKER,
+              'The previous answer tried to finish from a directory listing alone, so it was discarded.',
+              'The runtime is now reading representative documentation, configuration, and entrypoint files through the authorized read_file tool.',
+              'Base the next answer on the returned file contents and report any concrete read errors truthfully.',
+            ].join(' '),
+          })
+          modelResult = { ...modelResult, content: '', toolCalls: representativeReadCalls }
+        }
         if (typeof onModelPhase === 'function') await onModelPhase({
           phase: 'completed',
           iteration: iter,
@@ -657,6 +833,13 @@ export async function runToolsLoop({
           usage: modelResult?.usage || null,
           modelName: modelResult?.modelName || null,
         })
+        if (!streamedText && modelResult?.content && typeof onModelDelta === 'function') {
+          await onModelDelta({
+            text: modelResult.content,
+            iteration: iter,
+            modelName: modelResult?.modelName || null,
+          })
+        }
       } catch (error) {
         if (typeof onModelPhase === 'function') await onModelPhase({
           phase: 'failed', iteration: iter, error: error?.message || String(error),
@@ -698,11 +881,15 @@ export async function runToolsLoop({
               ),
               isContextLengthError,
               contextWindow,
+              semanticSummary,
               signal,
               userId: job?.userId || null,
-              sessionId: job?.id && step?.id ? `job:${job.id}:${step.id}` : null,
+              sessionId: recoverySessionId,
               toolChoice: 'none',
             })
+            if (wrapUpRequest.recovery?.archiveId) {
+              recovery = { archiveId: String(wrapUpRequest.recovery.archiveId) }
+            }
             wrapUpText = wrapUpRequest.response?.content || ''
           } catch (wrapUpError) {
             if (wrapUpError?.name === 'AbortError') throw wrapUpError
@@ -713,6 +900,7 @@ export async function runToolsLoop({
             iterations: iter + 1,
             budgetExceeded: true,
             reason: error.message,
+            recovery,
           }
         }
         if (error?.name === 'AbortError' || iter === 0) throw error
@@ -730,6 +918,7 @@ export async function runToolsLoop({
           iterations: iter + 1,
           interrupted: true,
           reason: error?.message || String(error),
+          recovery,
         }
       }
       const { content, toolCalls: rawToolCalls } = modelResult
@@ -1016,9 +1205,21 @@ export async function runToolsLoop({
       }
     }
 
+    const pendingToolResultCount = Math.max(
+      1,
+      toolCalls.filter((call) => call.checkpointStatus !== 'completed').length,
+    )
+    const toolResultMaxChars = resolveToolResultMaxChars({
+      contextWindow,
+      resultCount: pendingToolResultCount,
+    })
+
     const recordOutcome = async (outcome) => {
       if (outcome.artifactId) artifactIds.push(outcome.artifactId)
-      convo.push(buildToolResultMessage(outcome.call, outcome.result))
+      if (outcome.call?.name === 'read_file' && outcome.result?.ok === true) {
+        hasSuccessfulRepresentativeRead = true
+      }
+      convo.push(buildToolResultMessage(outcome.call, outcome.result, { maxChars: toolResultMaxChars }))
       const progress = loopGuard.after(outcome.result)
       if (!noProgressReason) {
         noProgressReason = outcome.noProgressReason || (!progress.ok ? progress.reason : null)
@@ -1119,11 +1320,15 @@ export async function runToolsLoop({
             ),
             isContextLengthError,
             contextWindow,
+            semanticSummary,
             signal,
             userId: job?.userId || null,
-            sessionId: job?.id && step?.id ? `job:${job.id}:${step.id}` : null,
+            sessionId: recoverySessionId,
             toolChoice: 'none',
           })
+          if (wrapUpRequest.recovery?.archiveId) {
+            recovery = { archiveId: String(wrapUpRequest.recovery.archiveId) }
+          }
           finalText = wrapUpRequest.response?.content || ''
         } catch {
           writeToolAudit?.({
@@ -1143,6 +1348,7 @@ export async function runToolsLoop({
         iterations: iter + 1,
         budgetExceeded: true,
         reason: budgetExceeded,
+        recovery,
       }
     }
     if (pausedByClarification) {
@@ -1153,6 +1359,7 @@ export async function runToolsLoop({
         iterations: iter + 1,
         paused: true,
         clarification: pausedByClarification,
+        recovery,
       }
     }
     if (noProgressReason) {
@@ -1173,12 +1380,16 @@ export async function runToolsLoop({
           ),
           isContextLengthError,
           contextWindow,
+          semanticSummary,
           signal,
           userId: job?.userId || null,
-          sessionId: job?.id && step?.id ? `job:${job.id}:${step.id}` : null,
+          sessionId: recoverySessionId,
           consumeBudget: (cost) => budget.consume(cost),
           toolChoice: 'none',
         })
+        if (wrapUpRequest.recovery?.archiveId) {
+          recovery = { archiveId: String(wrapUpRequest.recovery.archiveId) }
+        }
         const wrapUp = wrapUpRequest.response
         finalText = wrapUp?.content || ''
       } catch {
@@ -1190,6 +1401,7 @@ export async function runToolsLoop({
         iterations: iter + 1,
         noProgress: true,
         reason: noProgressReason,
+        recovery,
       }
     }
   }
@@ -1215,12 +1427,16 @@ export async function runToolsLoop({
         ),
         isContextLengthError,
         contextWindow,
+        semanticSummary,
         signal,
         userId: job?.userId || null,
-        sessionId: job?.id && step?.id ? `job:${job.id}:${step.id}` : null,
+        sessionId: recoverySessionId,
         consumeBudget: (cost) => budget.consume(cost),
         toolChoice: 'none',
       })
+      if (wrapUpRequest.recovery?.archiveId) {
+        recovery = { archiveId: String(wrapUpRequest.recovery.archiveId) }
+      }
       const wrapUp = wrapUpRequest.response
       finalText = wrapUp?.content || ''
     } catch {
@@ -1239,7 +1455,7 @@ export async function runToolsLoop({
     }
   }
 
-  return { text: finalText, artifactIds, iterations: Math.min(iter + 1, maxIters) }
+  return { text: finalText, artifactIds, iterations: Math.min(iter + 1, maxIters), recovery }
 }
 
 export const runToolLoop = runToolsLoop

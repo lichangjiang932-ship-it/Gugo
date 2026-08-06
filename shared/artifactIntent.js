@@ -1,3 +1,19 @@
+export const PPT_SKILL_ID_ALIASES = Object.freeze([
+  'ppt',
+  'ppt-master',
+  'axippt',
+  'htmlppt',
+  'guizang-ppt',
+])
+
+const PPT_SKILL_ID_ALIAS_SET = new Set(PPT_SKILL_ID_ALIASES)
+
+export function canonicalizeSkillId(skillId) {
+  const value = String(skillId ?? '').trim()
+  if (!value) return null
+  return PPT_SKILL_ID_ALIAS_SET.has(value.toLowerCase()) ? 'ppt' : value
+}
+
 const SKILL_ARTIFACT_TOOL = Object.freeze({
   ppt: 'create_pptx',
   doc: 'create_docx',
@@ -8,13 +24,12 @@ const SKILL_ARTIFACT_TOOL = Object.freeze({
 // 在 skillId 无法精确命中时按关键词判定，而"做演示"这类短指令没有 artifact 名词，
 // 会漏解锁；这里把已知技能 ID 显式归类，前缀命中即解锁对应工具。
 const SKILL_ID_ALIASES = Object.freeze({
-  ppt: ['ppt', 'ppt-master', 'axippt', 'htmlppt', 'guizang-ppt'],
   doc: ['doc', 'write-doc'],
   excel: ['excel', 'analyze-excel'],
 })
 
 export function resolveArtifactToolForSkillId(skillId) {
-  const id = String(skillId || '').toLowerCase()
+  const id = String(canonicalizeSkillId(skillId) || '').toLowerCase()
   if (SKILL_ARTIFACT_TOOL[id]) return SKILL_ARTIFACT_TOOL[id]
   for (const [kind, aliases] of Object.entries(SKILL_ID_ALIASES)) {
     if (aliases.includes(id)) return SKILL_ARTIFACT_TOOL[kind]
@@ -41,7 +56,7 @@ const SKILL_PREFIX = /^\/([a-z0-9_-]+)(?:\s|$)/i
 
 export function parseArtifactSkillId(prompt = '') {
   const match = String(prompt || '').trim().match(SKILL_PREFIX)
-  return match ? match[1].toLowerCase() : null
+  return match ? canonicalizeSkillId(match[1]) : null
 }
 
 function occurrenceIsExplicitRequest(text, match) {

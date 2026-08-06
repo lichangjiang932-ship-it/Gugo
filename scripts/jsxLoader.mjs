@@ -5,9 +5,10 @@
  * 而且 node 本身不认 .jsx —— 结果这些测试从来没在 npm test 里跑过。
  * 一个渲染期就会炸的组件(比如 import 了 lucide 里不存在的图标)能一路绿灯合进去。
  *
- * 用 rolldown 自带的 transform 把 JSX 编成 JS,不新增依赖。
+ * 用纯 JavaScript 的 sucrase 把 JSX 编成 JS，避免 Windows 下
+ * rolldown 原生 binding 在测试进程退出阶段偶发访问冲突。
  */
-import { transform } from 'rolldown/experimental'
+import { transform } from 'sucrase'
 import { readFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -35,8 +36,11 @@ export async function resolve(specifier, context, nextResolve) {
 export async function load(url, context, nextLoad) {
   if (!url.endsWith('.jsx')) return nextLoad(url, context)
   const source = await readFile(fileURLToPath(url), 'utf8')
-  const result = await transform(fileURLToPath(url), source, {
-    jsx: { runtime: 'automatic' },
+  const result = transform(source, {
+    transforms: ['jsx'],
+    jsxRuntime: 'automatic',
+    production: true,
+    filePath: fileURLToPath(url),
   })
   return { format: 'module', shortCircuit: true, source: result.code }
 }

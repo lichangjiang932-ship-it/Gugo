@@ -13,8 +13,8 @@ function isReactComponent(value) {
   return false
 }
 
-test('getSkillIcon 为内置 14 个 skill 都返回一个 React 组件', () => {
-  assert.equal(SKILLS.length, 14, 'SKILLS 应当是 14 项')
+test('getSkillIcon 为内置 12 个 skill 都返回一个 React 组件', () => {
+  assert.equal(SKILLS.length, 12, 'SKILLS 应当是 12 项')
   for (const skill of SKILLS) {
     const Icon = getSkillIcon(skill.id)
     assert.ok(

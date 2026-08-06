@@ -24,8 +24,8 @@ async function parse(response) {
   return data
 }
 
-export async function getLocalFileAccessApi() {
-  return parse(await fetch('/api/local-files', { headers: authHeaders() }))
+export async function getLocalFileAccessApi({ signal } = {}) {
+  return parse(await fetch('/api/local-files', { headers: authHeaders(), signal }))
 }
 
 export async function grantLocalPathApi({ path, accessMode }) {

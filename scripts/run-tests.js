@@ -98,6 +98,21 @@ function isWindowsNativeCrash(result) {
     || result.signal === 'SIGSEGV'
 }
 
+function hasTapFailure(result) {
+  const output = [result.stdout, result.stderr]
+    .filter(Boolean)
+    .map((chunk) => chunk.toString('utf8'))
+    .join('\n')
+
+  return /^\s*not ok\b/m.test(output)
+    || /^\s*# fail\s+[1-9]\d*\s*$/m.test(output)
+}
+
+function forwardCapturedOutput(result) {
+  if (result.stdout?.length) process.stdout.write(result.stdout)
+  if (result.stderr?.length) process.stderr.write(result.stderr)
+}
+
 for (const file of isolatedFiles) {
   let passed = false
   for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -110,15 +125,16 @@ for (const file of isolatedFiles) {
       ...nodeArgs,
       file,
     ], {
-      stdio: 'inherit',
+      stdio: ['inherit', 'pipe', 'pipe'],
       env: testEnv,
     })
+    forwardCapturedOutput(result)
 
     if (result.status === 0) {
       passed = true
       break
     }
-    if (!isWindowsNativeCrash(result) || attempt === 3) break
+    if (hasTapFailure(result) || !isWindowsNativeCrash(result) || attempt === 3) break
     console.warn(
       `[run-tests] native transform crashed for ${file}; retrying (${attempt + 1}/3)`,
     )

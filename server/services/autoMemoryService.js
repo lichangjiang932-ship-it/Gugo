@@ -4,6 +4,8 @@ import { logWarn } from '../utils/logger.js'
 const ALLOWED_TYPES = new Set(['user', 'feedback', 'project', 'reference'])
 const MAX_MEMORIES_PER_TURN = 3
 const MIN_CONFIDENCE = 0.78
+const RUNTIME_CAPABILITY_SUBJECT = /(?:workspace[_\s-]*fs(?:[_\s-]*enabled)?|local\s+(?:file(?:system)?|path)|file(?:system)?\s+(?:access|permission)|list_directory|read_file|tool\s+(?:access|availability|permission)|permission|authori[sz](?:e|ed|ation)|grant|runtime|environment\s+variable|env(?:ironment)?\s+setting|\u672c\u5730\u6587\u4ef6(?:\u7cfb\u7edf)?|\u6587\u4ef6\u7cfb\u7edf|\u5de5\u5177|\u6743\u9650|\u6388\u6743|\u8fd0\u884c\u65f6|\u73af\u5883\u53d8\u91cf)/iu
+const RUNTIME_CAPABILITY_STATE = /(?:unavailable|available|disabled|enabled|not\s+enabled|cannot|can't|failed|failure|timeout|timed\s+out|denied|allowed|read[-\s]*only|read\s+and\s+write|must\s+(?:paste|provide)|\u4e0d\u53ef\u7528|\u53ef\u7528|\u672a\u542f\u7528|\u5df2\u542f\u7528|\u7981\u7528|\u65e0\u6cd5|\u4e0d\u80fd|\u5931\u8d25|\u8d85\u65f6|\u62d2\u7edd|\u5141\u8bb8|\u5df2\u6388\u6743|\u53ea\u8bfb|\u8bfb\u5199|\u7c98\u8d34|\u63d0\u4f9b\u6587\u672c)/iu
 const SIMPLE_GREETING = /^(?:hi|hello|hey|你好|您好|嗨|谢谢|多谢|ok|okay)[.!！。?？\s]*$/iu
 const SENSITIVE_VALUE = /(?:-----BEGIN [A-Z ]*PRIVATE KEY-----|\bBearer\s+[A-Za-z0-9._~-]{12,}|\bsk-[A-Za-z0-9_-]{12,}|(?:api[_ -]?key|password|passwd|secret|access[_ -]?token|refresh[_ -]?token)\s*[:=]\s*\S+)/iu
 
@@ -52,6 +54,11 @@ function normalizeForMatch(value) {
   return String(value || '').trim().toLocaleLowerCase().replace(/\s+/g, ' ')
 }
 
+export function isTransientRuntimeMemoryCandidate(candidate) {
+  const text = `${String(candidate?.title || '')}\n${String(candidate?.body || '')}`
+  return RUNTIME_CAPABILITY_SUBJECT.test(text) && RUNTIME_CAPABILITY_STATE.test(text)
+}
+
 function normalizedCandidate(candidate) {
   const type = String(candidate?.type || '').trim()
   const title = String(candidate?.title || '').trim().slice(0, 120)
@@ -60,6 +67,9 @@ function normalizedCandidate(candidate) {
   if (!ALLOWED_TYPES.has(type) || !title || !body) return null
   if (!Number.isFinite(confidence) || confidence < MIN_CONFIDENCE || confidence > 1) return null
   if (SENSITIVE_VALUE.test(`${title}\n${body}`)) return null
+  // Runtime capabilities and grants are not durable facts. Persisting them can
+  // override fresh tool evidence after the environment or authorization changes.
+  if (isTransientRuntimeMemoryCandidate({ title, body })) return null
   return { type, title, body, confidence }
 }
 
@@ -91,6 +101,7 @@ export async function extractAndStoreAutoMemories({
           'Return JSON only: {"memories":[{"type":"user|feedback|project|reference","title":"short stable key","body":"one or two factual sentences","confidence":0.0}]}',
           'Return an empty array for transient requests, task progress, guesses, public facts that can be re-fetched, or information useful only in this turn.',
           'Keep explicit user preferences, stable identity facts, project paths/technology/constraints, repeated corrections, and user-provided reference facts.',
+          'Never store runtime tool availability, filesystem or connector capability, permission/grant state, environment-variable state, transient errors/timeouts, or instructions caused by a failed tool call.',
           'Never store passwords, API keys, tokens, private keys, financial credentials, health secrets, or other sensitive authentication material.',
           `Emit at most ${MAX_MEMORIES_PER_TURN} memories and only when confidence is at least ${MIN_CONFIDENCE}.`,
         ].join(' '),

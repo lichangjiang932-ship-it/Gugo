@@ -77,7 +77,16 @@ test('自定义技能创建后持久化可执行指令并立即出现在技能�
     import('../../src/store/AppContext.jsx'),
   ])
   const originalFetch = globalThis.fetch
-  globalThis.fetch = async () => new Response(JSON.stringify({ skills: [] }), {
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    skills: [{
+      id: 'needs-runtime-skill',
+      name: 'Needs Runtime Skill',
+      desc: 'Requires a resource resolver',
+      perms: [],
+      runnable: false,
+      compatibility: 'needs-runtime',
+    }],
+  }), {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
   })
@@ -97,8 +106,20 @@ test('自定义技能创建后持久化可执行指令并立即出现在技能�
           </I18nProvider>
         </HashRouter>,
       )
-      await Promise.resolve()
+      await new Promise((resolve) => setTimeout(resolve, 0))
     })
+
+    const blockedSkill = [...rootElement.querySelectorAll('button')]
+      .find((button) => button.textContent.includes('Needs Runtime Skill'))
+    assert.ok(blockedSkill)
+    assert.match(blockedSkill.textContent, /needs-runtime/)
+    await click(dom, act, blockedSkill)
+
+    const detailDialog = rootElement.querySelector('[role="dialog"]')
+    assert.ok(detailDialog)
+    assert.match(detailDialog.textContent, /needs-runtime/)
+    assert.ok(detailDialog.querySelector('button:disabled'))
+    await click(dom, act, detailDialog.parentElement)
 
     const customButton = [...rootElement.querySelectorAll('button')]
       .find((button) => button.textContent.trim() === '自定义')

@@ -187,6 +187,30 @@ test('buildSessionsBlock reads compaction archive summary from recent message ar
   assert.match(block.text, /Archived summary text/)
 })
 
+test('buildSessionsBlock can retain the compacted archive without mirroring recent transcript', () => {
+  clearPromptCompilerCache('sessions')
+  const archive = createCompactionArchive({
+    userId: 'u_archive_only',
+    sessionId: 's_archive_only',
+    archivedMessages: [],
+    summaryText: 'Stable archive summary',
+  })
+  const block = buildSessionsBlock({
+    userId: 'u_archive_only',
+    sessionId: 's_archive_only',
+    recentMessages: [{
+      role: 'user',
+      content: 'do not mirror this recent message',
+      meta: { archiveId: archive.id },
+    }],
+    includeRecentTranscript: false,
+  })
+
+  assert.match(block.text, /Stable archive summary/)
+  assert.doesNotMatch(block.text, /Recent Transcript/)
+  assert.doesNotMatch(block.text, /do not mirror this recent message/)
+})
+
 test('identity and ishiki blocks merge back to the legacy agent system block', () => {
   clearPromptCompilerCache()
   const fullAgent = agent({ personaTemplate: 'hanako' })

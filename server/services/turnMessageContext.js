@@ -166,6 +166,7 @@ export function buildAssistantModelContext({
   artifactIds = [],
   iterations = 0,
   paused = false,
+  compactionArchiveId = null,
 } = {}) {
   return {
     version: 1,
@@ -176,6 +177,7 @@ export function buildAssistantModelContext({
     artifactIds: Array.isArray(artifactIds) ? artifactIds.map(String) : [],
     iterations: Math.max(0, Number(iterations) || 0),
     paused: !!paused,
+    ...(compactionArchiveId ? { compactionArchiveId: String(compactionArchiveId) } : {}),
   }
 }
 

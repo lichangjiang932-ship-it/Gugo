@@ -6,13 +6,11 @@
 
 import {
   Presentation,
-  Monitor,
   FileText,
   Table,
   Mail,
   Calculator,
   Globe,
-  PieChart,
   Code2,
   ClipboardCheck,
   Beaker,
@@ -24,9 +22,7 @@ import {
 
 export const SKILL_ICONS = {
   ppt: Presentation,
-  htmlppt: Monitor,
   webpage: Globe,
-  axippt: PieChart,
   doc: FileText,
   excel: Table,
   mail: Mail,

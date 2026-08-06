@@ -38,4 +38,5 @@ export async function resolveTurnToolSpecs({ userId, baseSpecs = [], toolsConfig
     if (name) merged.set(name, spec)
   }
   return applyServerToolsConfig([...merged.values()], toolsConfig)
+    .sort((left, right) => String(left?.function?.name || '').localeCompare(String(right?.function?.name || ''), 'en'))
 }

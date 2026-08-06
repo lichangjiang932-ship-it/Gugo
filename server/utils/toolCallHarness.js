@@ -15,13 +15,43 @@ import { randomUUID } from 'node:crypto'
  * ★ 6000 → 24000 并可配。6000 字符 ≈ 1500 token,一个稍大的源文件读回来
  * 就被砍掉大半 —— 模型基于残缺内容做判断,结论自然不可靠,
  * 而它并不知道自己看到的是截断过的。
- * 现代模型上下文普遍 128k+,这个上限完全没必要卡这么死。
- * 真正防上下文溢出的是 contextCompactionRuntime 的自动压缩。
+ * 这个值只控制单个结果的上限；工具循环还会在下一次模型请求前，
+ * 按真实上下文窗口为同批结果分配总预算。
  */
 export const DEFAULT_TOOL_OUTPUT_CHARS = (() => {
   const raw = Number(process.env.TOOL_OUTPUT_MAX_CHARS)
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 24_000
 })()
+
+const MIN_TOOL_OUTPUT_CHARS = 500
+// Reserve most of the model window for instructions, history, tool-call
+// protocol, and the next answer. At 0.75 chars per context token, four tool
+// results in an 8k window share about 6k characters, while a 128k window still
+// preserves the existing 24k-per-result ceiling for the same batch.
+export const TOOL_OUTPUT_CONTEXT_CHARS_PER_TOKEN = 0.75
+
+export function resolveToolResultMaxChars({
+  contextWindow,
+  resultCount = 1,
+  maxChars = DEFAULT_TOOL_OUTPUT_CHARS,
+} = {}) {
+  const count = Math.max(1, Math.floor(Number(resultCount) || 1))
+  const perResultCeiling = Math.max(
+    MIN_TOOL_OUTPUT_CHARS,
+    Math.floor(Number(maxChars) || DEFAULT_TOOL_OUTPUT_CHARS),
+  )
+  const window = Number(contextWindow)
+  if (!Number.isFinite(window) || window <= 0) return perResultCeiling
+
+  const batchBudget = Math.max(
+    MIN_TOOL_OUTPUT_CHARS * count,
+    Math.floor(window * TOOL_OUTPUT_CONTEXT_CHARS_PER_TOKEN),
+  )
+  return Math.max(
+    MIN_TOOL_OUTPUT_CHARS,
+    Math.min(perResultCeiling, Math.floor(batchBudget / count)),
+  )
+}
 
 function isPlainObject(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
@@ -239,7 +269,7 @@ function safeStringify(value) {
 
 /** 始终返回合法 JSON；超长结果变为带长度和预览的说明对象。 */
 export function serializeToolResult(value, { maxChars = DEFAULT_TOOL_OUTPUT_CHARS } = {}) {
-  const limit = Math.max(500, Number(maxChars) || DEFAULT_TOOL_OUTPUT_CHARS)
+  const limit = Math.max(MIN_TOOL_OUTPUT_CHARS, Number(maxChars) || DEFAULT_TOOL_OUTPUT_CHARS)
   const json = safeStringify(value) ?? 'null'
   if (json.length <= limit) return json
 

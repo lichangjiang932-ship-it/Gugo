@@ -26,8 +26,9 @@ test('local paths are authorized before the model call and receive a tool-use in
   assert.ok(serverCall > preflight)
   assert.match(serverTurn, /buildLocalPathToolInstruction\(localPathAccess\.paths, localPathAccess\.accessMode\)/)
   assert.match(chat, /directoryRequestCancelled/)
-  assert.match(serverTurn, /await probeLocalPathAccess\(localPathAccess\)/)
-  assert.ok(serverTurn.indexOf('await probeLocalPathAccess(localPathAccess)') < serverTurn.indexOf('await runServerTurn({'))
+  assert.match(serverTurn, /await collectLocalPathEvidence\(\{/)
+  assert.match(serverTurn, /signal: controller\.signal/)
+  assert.ok(serverTurn.indexOf('await collectLocalPathEvidence({') < serverTurn.indexOf('await runServerTurn({'))
 })
 
 test('right workbench toggle leaves the navigation rail mounted', () => {

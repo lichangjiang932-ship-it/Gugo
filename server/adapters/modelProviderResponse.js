@@ -3,13 +3,25 @@ import {
   parseNativeProviderResponse,
 } from './nativeModelProviders.js'
 
+export function stripEmbeddedReasoning(value) {
+  const text = String(value || '')
+  if (!text) return ''
+  const closingTag = '</think>'
+  const closeAt = text.toLowerCase().lastIndexOf(closingTag)
+  if (closeAt >= 0) {
+    const answer = text.slice(closeAt + closingTag.length).trimStart()
+    if (answer) return answer
+  }
+  return text
+}
+
 export function parseOpenAICompatibleResponse(data) {
   const reply = data?.choices?.[0]?.message?.content
     || data?.choices?.[0]?.text
     || data?.output?.text
     || data?.result
   if (!reply) throw new Error('模型返回为空，请检查模型名称或端点响应格式。')
-  return reply
+  return stripEmbeddedReasoning(reply)
 }
 
 export function extractUsage(data) {
@@ -31,10 +43,13 @@ export function extractUsage(data) {
 }
 
 export function parseModelProviderResponse(data, profile = {}) {
-  if (isNativeProviderKind(profile.kind)) return parseNativeProviderResponse(data, profile.kind)
+  if (isNativeProviderKind(profile.kind)) {
+    const parsed = parseNativeProviderResponse(data, profile.kind)
+    return { ...parsed, content: stripEmbeddedReasoning(parsed?.content) }
+  }
   const message = data?.choices?.[0]?.message || {}
   return {
-    content: message.content || data?.choices?.[0]?.text || data?.output?.text || data?.result || '',
+    content: stripEmbeddedReasoning(message.content || data?.choices?.[0]?.text || data?.output?.text || data?.result || ''),
     toolCalls: Array.isArray(message.tool_calls) ? message.tool_calls : [],
     usage: extractUsage(data),
     finishReason: data?.choices?.[0]?.finish_reason || null,

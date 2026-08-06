@@ -9,11 +9,20 @@ test('skill commands preserve hyphenated imported skill ids', () => {
   })
 })
 
+test('legacy ppt commands resolve to the single canonical ppt skill', () => {
+  for (const alias of ['ppt', 'htmlppt', 'axippt', 'ppt-master', 'guizang-ppt']) {
+    assert.deepEqual(parseSkillCommand(`/${alias} draft a launch deck`), {
+      skillId: 'ppt',
+      userPrompt: 'draft a launch deck',
+    })
+  }
+})
+
 test('infers built-in ppt skills from natural language prompts', () => {
   assert.equal(inferSkillIdFromPrompt('make a 5 page product intro ppt'), 'ppt')
   assert.equal(inferSkillIdFromPrompt('\u5e2e\u6211\u505a\u4e00\u4e2a5\u9875\u4ea7\u54c1\u4ecb\u7ecdPPT'), 'ppt')
-  assert.equal(inferSkillIdFromPrompt('make a premium html ppt'), 'htmlppt')
-  assert.equal(inferSkillIdFromPrompt('\u505a\u4e00\u4e2a\u9ad8\u7ea7\u611f html ppt'), 'htmlppt')
+  assert.equal(inferSkillIdFromPrompt('make a premium html ppt'), 'ppt')
+  assert.equal(inferSkillIdFromPrompt('\u505a\u4e00\u4e2a\u9ad8\u7ea7\u611f html ppt'), 'ppt')
   assert.equal(inferSkillIdFromPrompt('just chat with me'), null)
   assert.equal(inferSkillIdFromPrompt('为什么云端模型可以，你是我的本地模型好不好'), null)
 })

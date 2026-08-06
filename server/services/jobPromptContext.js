@@ -1,10 +1,11 @@
 import { getRuntimeSkill } from './skillRegistry.js'
 import { prepareOptionalPromptContext } from './optionalPromptContext.js'
+import { canonicalizeSkillId } from '../../shared/artifactIntent.js'
 
 export function resolveJobSkillContext({ prompt = '', userId = null } = {}) {
   const text = String(prompt || '')
   const match = text.match(/^\/([a-z0-9_-]+)\s*(.*)$/i)
-  const skillId = match?.[1] || null
+  const skillId = match ? canonicalizeSkillId(match[1]) : null
   const userPrompt = match ? match[2].trim() : text.trim()
   return {
     skillId,

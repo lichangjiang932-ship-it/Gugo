@@ -5,6 +5,7 @@ import {
   enforceLocalAuthExposurePolicy,
   getLocalAuthExposurePolicy,
   isLoopbackBindAddress,
+  RUNTIME_KERNEL_REVISION,
   resolveEffectiveExposureAddress,
 } from '../server/appServer.js'
 
@@ -76,8 +77,9 @@ test('GET /api/health stays healthy while the first model is being configured', 
     assert.equal(res.headers.get('content-type')?.includes('application/json'), true)
     assert.equal(typeof body.version, 'string', 'version 必须是字符串')
     assert.ok(body.version.length > 0, 'version 不能为空')
+    assert.equal(body.kernelRevision, RUNTIME_KERNEL_REVISION)
     assert.equal(typeof body.time, 'number')
-    assert.deepEqual(Object.keys(body).sort(), ['ok', 'time', 'version'])
+    assert.deepEqual(Object.keys(body).sort(), ['kernelRevision', 'ok', 'time', 'version'])
     assert.equal(body.db, undefined)
     assert.equal(body.model, undefined)
     assert.equal(body.uptimeSec, undefined)

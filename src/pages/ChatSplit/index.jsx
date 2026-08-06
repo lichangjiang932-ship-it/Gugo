@@ -3,7 +3,7 @@ import { useNavigate } from '../../lib/router.jsx'
 import { useAppContext } from '../../store/AppContext'
 import { SKILLS } from '../../data.js'
 import { buildUserDisplayContent, describeAttachmentPrompt } from '../../lib/attachments.js'
-import { getModelStatus, summarizeSessionTitle } from '../../lib/modelClient.js'
+import { getModelStatus } from '../../lib/modelClient.js'
 import { buildToolSpecs } from '../../lib/tools/index.js'
 import { SERVER_TURN_TOOL_TOGGLE_NAMES } from '../../lib/serverToolConfig.js'
 import { readStoredModel, resolveInitialModel, resolveSessionModel, writeStoredModel } from '../../lib/modelSelection.js'
@@ -158,6 +158,7 @@ export default function ChatSplit() {
     registerCoreSlashCommands(registry, { t, lang })
     for (const skill of runtimeSkills || []) {
       if (!skill?.id) continue
+      if (skill.runnable === false) continue
       if (state.skillConfigs?.[skill.id]?.enabled === false) continue
       const name = normalizeSlashCommandName(skill.id)
       if (!name || CORE_SLASH_COMMANDS.includes(name)) continue
@@ -366,25 +367,18 @@ export default function ChatSplit() {
         || activeSession.title.startsWith('新会话')
       )
       if (isFreshSession) {
-        // ★ #8: 立即兜底用截断, 让用户看到响应; 然后异步用 AI 覆盖一次
+        // Keep first-turn startup deterministic. A competing AI title request can
+        // occupy a single-concurrency endpoint before the actual chat/tool turn.
         const fallback = content.slice(0, 18).trim() || t('chatReliability.newConversation')
         const initialTitle = fallback.length > 15 ? fallback.slice(0, 15) + '…' : fallback
-        const sessionIdSnapshot = sessionId
         dispatch({ type: 'UPDATE_SESSION_TITLE_FOR', payload: { sessionId, title: initialTitle } })
-        // fire-and-forget — 拿到 AI 标题后再 dispatch 一次
-        // 不在回调里读取闭包 state, 完全依赖 reducer 做 onlyIfMatches 校验,
-        // 避免闭包 state 陈旧导致误判。
-        summarizeSessionTitle({ firstUserContent: content, modelName })
-          .then((aiTitle) => {
-            if (!aiTitle) return
-            dispatch({ type: 'UPDATE_SESSION_TITLE_FOR', payload: { sessionId: sessionIdSnapshot, title: aiTitle, onlyIfMatches: initialTitle } })
-          })
-          .catch(() => {/* fallback 已经显示了 */})
       }
 
       const parsedSkill = parseSkillCommand(content)
       const requestedSkillId = parsedSkill.skillId || inferSkillIdFromPrompt(content)
-      const requestedSkill = requestedSkillId ? runtimeSkills.find((s) => s.id === requestedSkillId) : null
+      const requestedSkill = requestedSkillId
+        ? runtimeSkills.find((candidate) => candidate.id === requestedSkillId && candidate.runnable !== false)
+        : null
       const skill = requestedSkill && state.skillConfigs?.[requestedSkill.id]?.enabled !== false
         ? requestedSkill
         : null
@@ -720,7 +714,7 @@ export default function ChatSplit() {
       onWorkbenchToggle={() => setWorkbenchOpen((open) => !open)}
       previewArtifact={state.previewArtifact}
       resumeAvailable={!!resumeState}
-      runtimeSkillIds={runtimeSkills.map((skill) => skill.id)}
+      runtimeSkillIds={runtimeSkills.filter((skill) => skill.runnable !== false).map((skill) => skill.id)}
       selectedModel={effectiveSelectedModel}
       setAttachments={setAttachments}
       setInput={setInput}

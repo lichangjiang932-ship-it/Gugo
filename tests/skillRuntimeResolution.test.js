@@ -27,6 +27,17 @@ test('ppt skill prompt appends a topic-specific presentation blueprint', () => {
   assert.match(prompt, /Strict slide count: 5/)
 })
 
+test('legacy presentation ids resolve the canonical ppt prompt and planner', () => {
+  const canonical = getSkillSystemPrompt('ppt', {}, [], {
+    userPrompt: '做一个 5 页技术演示',
+  })
+  for (const alias of ['htmlppt', 'axippt', 'ppt-master', 'guizang-ppt']) {
+    assert.equal(getSkillSystemPrompt(alias, {}, [], {
+      userPrompt: '做一个 5 页技术演示',
+    }), canonical)
+  }
+})
+
 test('chat split loads runtime skills instead of filtering only hard-coded skills', () => {
   const source = fs.readFileSync(new URL('../src/pages/ChatSplit/index.jsx', import.meta.url), 'utf8')
   const serverTurn = fs.readFileSync(new URL('../src/pages/ChatSplit/serverTurnFlow.js', import.meta.url), 'utf8')
@@ -41,6 +52,7 @@ test('chat split loads runtime skills instead of filtering only hard-coded skill
   assert.doesNotMatch(serverTurn, /getSkillSystemPrompt/)
   assert.match(turnEngine, /prepareTurnPromptContext/)
   assert.match(source, /enabled !== false/)
+  assert.match(source, /runnable !== false/)
 })
 
 test('chat composer checks runtime skills before styling a slash command', () => {

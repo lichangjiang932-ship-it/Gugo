@@ -258,6 +258,7 @@ export async function compactForModel({
   tools = [],
   contextWindow = DEFAULT_CONTEXT_WINDOW,
   force = false,
+  semanticSummary = false,
   callModel,
   signal,
   userId = null,
@@ -284,14 +285,26 @@ export async function compactForModel({
   if (!result.ok || !result.compacted || result.replacedMessageCount === 0) {
     return { messages, compacted: false, estimatedTokens, threshold, error: result.error || null }
   }
-  const semantic = await addSemanticCompactionSummary({
-    result,
-    callModel,
-    contextWindow,
-    signal,
-    userId,
-    consumeBudget,
-  })
+  const semantic = semanticSummary
+    ? await addSemanticCompactionSummary({
+        result,
+        callModel,
+        contextWindow,
+        signal,
+        userId,
+        consumeBudget,
+      })
+    : {
+        result,
+        telemetry: {
+          attempted: false,
+          used: false,
+          modelCalls: 0,
+          batchCount: 0,
+          truncatedMessageCount: 0,
+          fallbackReason: 'disabled_for_automatic_compaction',
+        },
+      }
   result = semantic.result
   const archive = archiveCompaction(result, { userId, sessionId })
   if (archive) {
@@ -347,6 +360,7 @@ export async function callModelWithContextRecovery({
   callModel,
   isContextLengthError,
   contextWindow = DEFAULT_CONTEXT_WINDOW,
+  semanticSummary = false,
   signal,
   userId = null,
   sessionId = null,
@@ -358,6 +372,7 @@ export async function callModelWithContextRecovery({
     messages,
     tools,
     contextWindow,
+    semanticSummary,
     callModel,
     signal,
     userId,
@@ -376,6 +391,7 @@ export async function callModelWithContextRecovery({
     tools,
     contextWindow,
     force: true,
+    semanticSummary,
     callModel,
     signal,
     userId,

@@ -275,6 +275,9 @@ const RUNTIME_ENV = getRuntimeEnv()
 const DEV_HOST = RUNTIME_ENV.SERVER_HOST || '127.0.0.1'
 const DEV_PORT = Number(RUNTIME_ENV.VITE_DEV_PORT || RUNTIME_ENV.SERVER_PORT || 5175)
 
+// Server-side middleware imports are loaded with the Vite config; changing
+// them requires this config-restart path rather than client-only HMR.
+
 export default defineConfig({
   plugins: [localAuthExposureGuardPlugin(), react(), authAccountPlugin(), modelProxyPlugin(), toolProxyPlugin(), fallbackApiPlugin()],
   base: PUBLIC_BASE_PATH,

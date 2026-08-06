@@ -1,6 +1,7 @@
+import { canonicalizeSkillId } from '../../shared/artifactIntent.js'
+
 const SKILL_ARTIFACT_TYPES = {
   ppt: 'pptx',
-  htmlppt: 'html',
   doc: 'docx',
   excel: 'xlsx',
 }
@@ -16,7 +17,7 @@ const CONFIG_ERROR_PATTERNS = [
 ]
 
 export function artifactTypeForSkill(skillId) {
-  return SKILL_ARTIFACT_TYPES[skillId] || undefined
+  return SKILL_ARTIFACT_TYPES[canonicalizeSkillId(skillId)] || undefined
 }
 
 export function buildChatFailureMessage(message = '') {

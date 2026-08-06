@@ -24,6 +24,11 @@ test('chat drafts persist while typing and message actions stay copy-only', () =
   assert.doesNotMatch(messagesSource, /onEditMessage|onRegenerateMessage|onDeleteMessage|<RefreshCw|<Trash2/)
 })
 
+test('fresh sessions use a deterministic local title without a competing model request', () => {
+  assert.match(chatSource, /UPDATE_SESSION_TITLE_FOR/)
+  assert.doesNotMatch(chatSource, /summarizeSessionTitle/)
+})
+
 test('streaming no longer reparses stable markdown or delays messages by history index', () => {
   assert.doesNotMatch(messagesSource, /delay:\s*i\s*\*/)
   assert.match(markdownSource, /export default memo\(MarkdownRenderer\)/)
@@ -57,7 +62,7 @@ test('selected slash skill renders as a dark tag inside the composer', () => {
   assert.match(composerSource, /data-testid="active-skill-command"/)
   assert.match(composerSource, /bg-ink[\s\S]{0,120}text-paper/)
   assert.match(composerSource, /value=\{skillCommand\.command \? skillCommand\.body : input\}/)
-  assert.match(chatSource, /runtimeSkillIds=\{runtimeSkills\.map\(\(skill\) => skill\.id\)\}/)
+  assert.match(chatSource, /runtimeSkillIds=\{runtimeSkills\.filter\(\(skill\) => skill\.runnable !== false\)\.map\(\(skill\) => skill\.id\)\}/)
   assert.match(chatViewSource, /skillIds=\{runtimeSkillIds\}/)
 })
 

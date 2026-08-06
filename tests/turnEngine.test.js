@@ -12,6 +12,8 @@ const { decideApproval } = await import('../server/services/approvalStore.js')
 const { releaseApproval } = await import('../server/services/approvalGate.js')
 const { TurnEngine } = await import('../server/services/TurnEngine.js')
 const { listMessages, upsertMessage, upsertSession } = await import('../server/services/sessionStore.js')
+const { createCompactionArchive } = await import('../server/services/compactionService.js')
+const { prepareTurnPromptContext } = await import('../server/services/turnPromptContext.js')
 const { appendTurnEvent, listTurnEvents } = await import('../server/services/turnEventStore.js')
 const { createTurnEvent } = await import('../shared/turnEvents.js')
 
@@ -31,6 +33,49 @@ function events(turnId, requestedUser = userId) {
 function createTestEngine(options = {}) {
   return new TurnEngine({ scheduleMemoryExtraction: () => {}, ...options })
 }
+
+test('TurnEngine restores a persisted compaction archive on the next chat turn', async () => {
+  const sessionId = 'turn-engine-compaction-session'
+  const summaryText = 'Persisted archive summary for the next chat turn.'
+  upsertSession({ id: sessionId, userId, title: 'Compaction continuity' })
+  const preparedContexts = []
+  let loopCalls = 0
+  let archiveId = null
+  const engine = createTestEngine({
+    preparePromptContext: async (request) => {
+      const prepared = prepareTurnPromptContext(request)
+      preparedContexts.push(prepared)
+      return prepared
+    },
+    runLoop: async () => {
+      loopCalls += 1
+      if (loopCalls === 1) {
+        const archive = createCompactionArchive({
+          userId,
+          sessionId,
+          archivedMessages: [{ role: 'user', content: 'Earlier context' }],
+          summaryText,
+        })
+        archiveId = archive.id
+        return { text: 'First reply', artifactIds: [], iterations: 1, recovery: { archiveId } }
+      }
+      return { text: 'Second reply', artifactIds: [], iterations: 1 }
+    },
+  })
+
+  await engine.startTurn({ userId, sessionId, turnId: 'turn-compaction-first', content: 'First turn' })
+  await engine.waitForTurn({ userId, sessionId, turnId: 'turn-compaction-first' })
+  const firstAssistant = listMessages({ userId, sessionId, limit: 100 })
+    .find((message) => message.id === 'turn-compaction-first:assistant')
+  assert.equal(firstAssistant.modelContext.compactionArchiveId, archiveId)
+
+  await engine.startTurn({ userId, sessionId, turnId: 'turn-compaction-second', content: 'Second turn' })
+  await engine.waitForTurn({ userId, sessionId, turnId: 'turn-compaction-second' })
+  assert.match(
+    preparedContexts[1].messages.map((message) => message.content).join('\n'),
+    /Persisted archive summary for the next chat turn\./,
+  )
+})
 
 async function waitUntil(predicate, timeoutMs = 3000) {
   const started = Date.now()
@@ -237,6 +282,7 @@ test('TurnEngine persists and applies agent, skill, memory, and tools context', 
   let promptRequest = null
   let toolRequest = null
   let loopOptions = null
+  let contextWindowRequest = null
   const baseSpecs = [
     { type: 'function', function: { name: 'read_file', parameters: { type: 'object' } } },
     { type: 'function', function: { name: 'bash_exec', parameters: { type: 'object' } } },
@@ -259,6 +305,10 @@ test('TurnEngine persists and applies agent, skill, memory, and tools context', 
       toolRequest = request
       return baseSpecs.filter((spec) => spec.function.name !== 'bash_exec')
     },
+    getContextWindow: (request) => {
+      contextWindowRequest = request
+      return 8192
+    },
     runLoop: async (options) => {
       loopOptions = options
       return { text: 'context applied', artifactIds: [], iterations: 0 }
@@ -270,6 +320,7 @@ test('TurnEngine persists and applies agent, skill, memory, and tools context', 
     sessionId: 'turn-engine-session',
     turnId: 'turn-context',
     content: 'use memory and review skill',
+    modelName: 'context-model',
     agentId: ' agent-input ',
     skillIds: [' skill-review ', 'skill-review'],
     toolsConfig: { enabled: ['read_file'], disabled: ['bash_exec'] },
@@ -283,12 +334,16 @@ test('TurnEngine persists and applies agent, skill, memory, and tools context', 
   assert.equal(promptRequest.agentId, 'agent-input')
   assert.deepEqual(promptRequest.skillIds, ['skill-review'])
   assert.equal(promptRequest.query, 'use memory and review skill')
+  assert.equal(promptRequest.includeRecentTranscript, false)
   assert.deepEqual(toolRequest.toolsConfig, { enabled: ['read_file'], disabled: ['bash_exec'] })
   assert.equal(loopOptions.messages[0].content, '# Skill\nreview carefully')
   assert.equal(loopOptions.messages[1].content, '# Memory\nproject uses SQLite')
   assert.deepEqual(loopOptions.toolSpecs.map((spec) => spec.function.name), ['read_file'])
   assert.equal(loopOptions.skillId, 'skill-review')
   assert.equal(loopOptions.job.agentId, 'agent-resolved')
+  assert.equal(loopOptions.contextWindow, 8192)
+  assert.equal(contextWindowRequest.userId, userId)
+  assert.equal(contextWindowRequest.modelName, 'context-model')
 })
 
 test('TurnEngine restores persisted prompt and tool context on resume', async () => {
@@ -637,6 +692,18 @@ test('I1: startTurn resolves /skill-prefix when caller omits skillIds', async ()
   assert.equal(promptRequest.query, '帮我查 GitHub 仓库')
   assert.deepEqual(promptRequest.skillIds, ['connector-operator'])
   assert.equal(started.payload.displayContent, '/connector-operator 帮我查 GitHub 仓库')
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId: 'turn-legacy-ppt-prefix',
+    content: '/htmlppt 做一份产品演示',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId: 'turn-legacy-ppt-prefix' })
+  const startedLegacyPpt = events('turn-legacy-ppt-prefix').find((event) => event.type === 'turn.started')
+  assert.deepEqual(startedLegacyPpt.payload.skillIds, ['ppt'])
+  assert.deepEqual(promptRequest.skillIds, ['ppt'])
+  assert.equal(promptRequest.query, '做一份产品演示')
 
   // 显式传了 skillIds 时不覆盖
   await engine.startTurn({

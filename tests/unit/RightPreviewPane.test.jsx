@@ -154,3 +154,24 @@ test('RightPreviewPane shows a clickable X when preview is unavailable', async (
     await cleanup()
   }
 })
+
+test('RightPreviewPane renders local text files in the preview tab', async () => {
+  const { rootEl, cleanup } = await renderPane(() => {}, {
+    messageId: 'msg-file',
+    content: 'alpha\nbeta',
+    preview: {
+      type: 'text',
+      title: 'notes.txt',
+      label: 'FILE',
+      summary: '2 lines',
+      filename: 'notes.txt',
+    },
+  })
+
+  try {
+    assert.match(rootEl.textContent, /notes\.txt/)
+    assert.match(rootEl.querySelector('pre')?.textContent || '', /alpha\nbeta/)
+  } finally {
+    await cleanup()
+  }
+})

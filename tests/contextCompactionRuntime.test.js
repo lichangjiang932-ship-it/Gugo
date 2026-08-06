@@ -50,6 +50,30 @@ test('proactive waterline compacts before the engine model request', async () =>
   assert.match(sentMessages.find((message) => message?.meta?.compaction)?.content || '', /User direction/)
 })
 
+test('automatic compaction never makes hidden semantic-summary model calls', async () => {
+  const messages = Array.from({ length: 30 }, (_, index) => ({
+    role: index % 2 ? 'assistant' : 'user',
+    content: `${index}:${'x'.repeat(1200)}`,
+  }))
+  const requests = []
+  const result = await callModelWithContextRecovery({
+    messages,
+    tools: TOOLS,
+    contextWindow: 4096,
+    isContextLengthError: () => false,
+    callModel: async (request) => {
+      requests.push(request)
+      return { content: 'done', toolCalls: [] }
+    },
+  })
+
+  assert.equal(result.response.content, 'done')
+  assert.equal(requests.length, 1, 'automatic recovery must not block on extra map/reduce calls')
+  assert.equal(requests[0].tools.length, 1)
+  assert.equal(result.recovery.semanticSummary.modelCalls, 0)
+  assert.equal(result.recovery.semanticSummary.fallbackReason, 'disabled_for_automatic_compaction')
+})
+
 test('400 recovery force-compacts once, then trims oldest 10% for the final retry', async () => {
   const messages = Array.from({ length: 40 }, (_, index) => ({
     role: index % 2 ? 'assistant' : 'user',

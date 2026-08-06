@@ -2,6 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { SKILLS } from '../src/data.js'
+import { canonicalizeSkillId } from '../shared/artifactIntent.js'
 
 function promptOf(id) {
   const skill = SKILLS.find((item) => item.id === id)
@@ -9,12 +10,10 @@ function promptOf(id) {
   return skill.systemPrompt
 }
 
-test('htmlppt prompt asks for varied visual systems rather than one fixed dark style', () => {
-  const prompt = promptOf('htmlppt')
-  assert.match(prompt, /视觉系统/)
-  assert.match(prompt, /Across the deck, use at least 4 visual element families/)
-  assert.match(prompt, /no more than 2 primary decorative families/)
-  assert.match(prompt, /连续页面不能长得一样/)
+test('built-in catalog exposes one canonical presentation skill', () => {
+  const presentationSkills = SKILLS.filter((skill) => canonicalizeSkillId(skill.id) === 'ppt')
+  assert.deepEqual(presentationSkills.map((skill) => skill.id), ['ppt'])
+  assert.equal(presentationSkills[0].recommended, true)
 })
 
 test('ppt prompts require exportable slide structure and no useless tail text', () => {
@@ -32,22 +31,15 @@ test('ppt prompt requires evidence-rich content instead of thin bullets', () => 
   assert.match(prompt, /不要空泛形容词/)
 })
 
-test('htmlppt prompt requires single-file offline deck with conversion hooks', () => {
-  const prompt = promptOf('htmlppt')
-  assert.match(prompt, /单文件零外部依赖/)
-  assert.match(prompt, /禁止外链 CSS、JS、字体、图片、CDN/)
-  assert.match(prompt, /data-slide="N"/)
-  assert.match(prompt, /window\.__ymaDeck/)
-  assert.match(prompt, /yma-deck-next/)
-})
-
-test('htmlppt prompt protects a centered 16:9 safe area and forbids text ghosting', () => {
-  const prompt = promptOf('htmlppt')
-  assert.match(prompt, /fixed `16:9` canvas/)
+test('canonical ppt prompt enforces renderer-neutral visual quality', () => {
+  const prompt = promptOf('ppt')
+  assert.match(prompt, /fixed 16:9 canvas/)
   assert.match(prompt, /6% horizontal and 8% vertical safe area/)
-  assert.match(prompt, /22px for body copy/)
-  assert.match(prompt, /Never apply text-shadow/)
-  assert.match(prompt, /no more than 2 primary decorative families/)
+  assert.match(prompt, /deliberate type hierarchy/)
+  assert.match(prompt, /Vary the composition every 2-3 pages/)
+  assert.match(prompt, /editable text/)
+  assert.match(prompt, /Never duplicate visible text layers or apply text-shadow/)
+  assert.match(prompt, /absence of clipping or ghosting/)
 })
 
 test('every built-in skill is unique, bounded, language-aware, and fact-safe', () => {
@@ -57,15 +49,6 @@ test('every built-in skill is unique, bounded, language-aware, and fact-safe', (
     assert.match(skill.systemPrompt, /Match the user's language/)
     assert.match(skill.systemPrompt, /Never invent measurements, citations, people, dates, credentials, or completed actions/)
   }
-})
-
-test('legacy Axi PPT is a compatibility alias of the verified HTML PPT flow', () => {
-  const skill = SKILLS.find((item) => item.id === 'axippt')
-  assert.equal(skill.aliasFor, 'htmlppt')
-  assert.equal(skill.recommended, false)
-  assert.match(skill.systemPrompt, /Axi compatibility preset/)
-  assert.match(skill.systemPrompt, /fixed `16:9` canvas/)
-  assert.doesNotMatch(skill.systemPrompt, /PHASE 1|plan IN CHINESE|picsum\.photos/)
 })
 
 test('web, document, spreadsheet, and mail skills describe honest artifact boundaries', () => {

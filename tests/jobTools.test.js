@@ -13,8 +13,48 @@ const {
   selectPlanningToolSpecs,
 } = await import('../server/services/jobRuntime.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
+const { getDb } = await import('../server/db.js')
 
 const TEST_USER = issueTestSession().userId
+
+test('chat compaction uses the real session id and checkpoints its archive recovery', async () => {
+  const sessionId = 'chat-compaction-real-session'
+  const checkpoints = []
+  const result = await runToolsLoop({
+    job: {
+      id: 'chat-compaction-turn',
+      userId: TEST_USER,
+      sessionId,
+      origin: 'chat',
+      title: 'Continue a long chat',
+      prompt: 'Continue',
+    },
+    step: { id: 'chat-compaction-turn', kind: 'chat' },
+    messages: Array.from({ length: 12 }, (_, index) => ({
+      role: index % 2 ? 'assistant' : 'user',
+      content: `long message ${index} ${'x'.repeat(400)}`,
+    })),
+    contextWindow: 512,
+    toolSpecs: [],
+    runModel: async ({ messages }) => ({
+      content: messages.some((message) => /evidence digest|archived conversation/i.test(message?.content || ''))
+        ? 'Compaction evidence digest.'
+        : 'Done after compaction.',
+      toolCalls: [],
+    }),
+    saveCheckpoint: async (state) => {
+      checkpoints.push(structuredClone(state))
+      return true
+    },
+  })
+
+  assert.ok(result.recovery?.archiveId)
+  assert.equal(checkpoints.at(-1).recovery.archiveId, result.recovery.archiveId)
+  assert.equal(
+    getDb().prepare('SELECT session_id FROM compaction_archive WHERE id = ?').get(result.recovery.archiveId).session_id,
+    sessionId,
+  )
+})
 
 test('SERVER_TOOL_SPECS exposes artifact, web, git mutation, and connected-app tools', () => {
   const names = SERVER_TOOL_SPECS.map((spec) => spec.function.name)
@@ -105,6 +145,123 @@ test('runToolsLoop re-evaluates artifact intent from current user messages even 
   })
   assert.ok(visibleNames.includes('create_docx'))
   assert.equal(visibleNames.includes('create_pptx'), false)
+})
+
+test('chat directory review reads representative files before accepting a filename-only final', async () => {
+  const listing = JSON.stringify({
+    ok: true,
+    path: 'D:\\demo',
+    entries: [
+      { name: '.env', type: 'file' },
+      { name: 'dashboard.py', type: 'file' },
+      { name: 'MANUAL.md', type: 'file' },
+      { name: 'README.md', type: 'file' },
+      { name: 'package.json', type: 'file' },
+      { name: 'main.py', type: 'file' },
+      { name: 'logo.png', type: 'file' },
+    ],
+  })
+  const prompt = [
+    '[VERIFIED LOCAL FILESYSTEM ACCESS]',
+    'Path: D:\\demo',
+    'Tool: list_directory',
+    'Succeeded: yes',
+    listing,
+  ].join('\n')
+  let modelCalls = 0
+  const executed = []
+  const completedModelText = []
+
+  const result = await runToolsLoop({
+    job: {
+      id: 'directory-review-turn',
+      userId: TEST_USER,
+      origin: 'chat',
+      sessionId: 'directory-review-session',
+      prompt,
+      userPrompt: 'Read and understand D:\\demo as a project',
+    },
+    step: { id: 'directory-review-turn', kind: 'chat' },
+    messages: [{ role: 'user', content: prompt }],
+    maxIters: 4,
+    runModel: async ({ messages }) => {
+      modelCalls += 1
+      assert.equal(messages.filter((message) => message.role === 'tool' && message.name === 'read_file').length, 3)
+      return { content: 'Grounded in representative file contents.', toolCalls: [] }
+    },
+    executeTool: async ({ name, args }) => {
+      executed.push({ name, path: args.path })
+      return { ok: true, path: args.path, content: `contents of ${args.path}` }
+    },
+    onModelPhase: async ({ phase, content }) => {
+      if (phase === 'completed') completedModelText.push(content)
+    },
+  })
+
+  assert.equal(result.text, 'Grounded in representative file contents.')
+  assert.equal(modelCalls, 1)
+  assert.deepEqual(executed, [
+    { name: 'read_file', path: 'D:\\demo\\README.md' },
+    { name: 'read_file', path: 'D:\\demo\\package.json' },
+    { name: 'read_file', path: 'D:\\demo\\main.py' },
+  ])
+  assert.deepEqual(completedModelText, ['Grounded in representative file contents.'])
+})
+
+test('chat directory listing request does not trigger representative project reads', async () => {
+  const listing = JSON.stringify({
+    ok: true,
+    path: 'D:\\demo',
+    entries: [{ name: 'README.md', type: 'file' }],
+  })
+  let modelCalls = 0
+  let executeCalls = 0
+  const result = await runToolsLoop({
+    job: {
+      id: 'directory-list-turn',
+      userId: TEST_USER,
+      origin: 'chat',
+      sessionId: 'directory-list-session',
+      prompt: `Path: D:\\demo\nTool: list_directory\nSucceeded: yes\n${listing}`,
+      userPrompt: 'List the files in D:\\demo',
+    },
+    step: { id: 'directory-list-turn', kind: 'chat' },
+    messages: [{ role: 'user', content: 'List the files in D:\\demo' }],
+    runModel: async () => {
+      modelCalls += 1
+      return { content: 'Here is the directory listing.', toolCalls: [] }
+    },
+    executeTool: async () => {
+      executeCalls += 1
+      return { ok: true }
+    },
+  })
+
+  assert.equal(result.text, 'Here is the directory listing.')
+  assert.equal(modelCalls, 1)
+  assert.equal(executeCalls, 0)
+})
+
+test('runToolsLoop does not carry artifact intent over from older user history', async () => {
+  let visibleNames = []
+  await runToolsLoop({
+    job: { id: 'job-current-intent', userId: TEST_USER, title: '修复代码', prompt: '修复当前代码问题' },
+    step: { id: 'step-current-intent', kind: 'execute' },
+    messages: [
+      { role: 'user', content: '先生成一份产品发布 PPT' },
+      { role: 'assistant', content: 'PPT 已完成。' },
+      { role: 'user', content: '现在只修复登录页的空指针错误' },
+    ],
+    toolSpecs: SERVER_TOOL_SPECS,
+    runModel: async ({ tools }) => {
+      visibleNames = tools.map((spec) => spec.function.name)
+      return { content: '已修复。', toolCalls: [] }
+    },
+  })
+
+  assert.equal(visibleNames.includes('create_pptx'), false)
+  assert.equal(visibleNames.includes('create_docx'), false)
+  assert.equal(visibleNames.includes('create_xlsx'), false)
 })
 
 test('runToolsLoop calls create_docx once, persists artifact, returns final text', async () => {

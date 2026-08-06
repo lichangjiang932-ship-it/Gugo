@@ -7,6 +7,7 @@ import {
   mapWithConcurrency,
   normalizeToolCalls,
   parseToolArguments,
+  resolveToolResultMaxChars,
   serializeToolResult,
   validateToolCall,
 } from '../server/utils/toolCallHarness.js'
@@ -99,4 +100,11 @@ test('mapWithConcurrency 保持结果顺序并限制并发数', async () => {
 
   assert.deepEqual(result, [0, 1, 2, 3])
   assert.equal(maxActive, 2)
+})
+
+test('tool result batch budget follows the context window without penalizing large-window models', () => {
+  assert.equal(resolveToolResultMaxChars({ contextWindow: 8_192, resultCount: 4 }), 1_536)
+  assert.equal(resolveToolResultMaxChars({ contextWindow: 32_768, resultCount: 4 }), 6_144)
+  assert.equal(resolveToolResultMaxChars({ contextWindow: 128_000, resultCount: 4 }), 24_000)
+  assert.equal(resolveToolResultMaxChars({ contextWindow: undefined, resultCount: 4 }), 24_000)
 })

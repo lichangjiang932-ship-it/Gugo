@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { callBackgroundModel, callBackgroundModelWithTools } from '../adapters/modelProxy.js'
+import { callBackgroundModel, callStreamingModelWithTools, getModelContextWindow } from '../adapters/modelProxy.js'
 import { createTurnEvent } from '../../shared/turnEvents.js'
+import { canonicalizeSkillId } from '../../shared/artifactIntent.js'
 import { releaseApprovalsForTurn } from './approvalGate.js'
 import { runToolLoop, SERVER_TOOL_SPECS } from './toolLoopRuntime.js'
 import {
@@ -59,7 +60,9 @@ function publicStatus(lastEvent, running = false) {
 }
 
 function normalizeIds(values, limit = 32) {
-  return [...new Set((Array.isArray(values) ? values : []).map(String).map((value) => value.trim()).filter(Boolean))]
+  return [...new Set((Array.isArray(values) ? values : [])
+    .map(canonicalizeSkillId)
+    .filter(Boolean))]
     .slice(0, limit)
 }
 
@@ -101,7 +104,7 @@ function importedMessageContext(message, sourceRole) {
 export class TurnEngine {
   constructor({
     runLoop = runToolLoop,
-    runModel = callBackgroundModelWithTools,
+    runModel = callStreamingModelWithTools,
     executeTool,
     appendEvent = appendTurnEvent,
     lastEvent = getLastTurnEvent,
@@ -119,12 +122,14 @@ export class TurnEngine {
     resolveToolSpecs = resolveTurnToolSpecs,
     scheduleMemoryExtraction = scheduleAutoMemoryExtraction,
     runMemoryModel = callBackgroundModel,
+    getContextWindow = getModelContextWindow,
     env = process.env,
   } = {}) {
     this.deps = {
       runLoop, runModel, executeTool, appendEvent, lastEvent, replayEvents,
       readSession, claimSession, writeSession, readMessages, writeMessage, idFactory, now, toolSpecs,
       readApprovalMode, preparePromptContext, resolveToolSpecs, scheduleMemoryExtraction, runMemoryModel, env,
+      getContextWindow,
     }
     this.active = new Map()
     this.startingSessions = new Map()
@@ -241,6 +246,7 @@ export class TurnEngine {
         sessionId,
         turnId,
         content: text,
+        displayContent: displayText,
         modelName,
         agentId: normalizedAgentId,
         skillIds: normalizedSkillIds,
@@ -271,6 +277,7 @@ export class TurnEngine {
       sessionId,
       turnId,
       content: String(started.payload.content || ''),
+      displayContent: String(started.payload.displayContent || started.payload.content || ''),
       modelName: started.payload.modelName || null,
       agentId: normalizeOptionalId(started.payload.agentId),
       skillIds: normalizeIds(started.payload.skillIds),
@@ -342,6 +349,7 @@ export class TurnEngine {
     sessionId,
     turnId,
     content,
+    displayContent,
     modelName,
     agentId,
     skillIds,
@@ -362,6 +370,7 @@ export class TurnEngine {
         skillIds,
         sessionId,
         recentMessages: storedMessages,
+        includeRecentTranscript: false,
         query: content,
         env: this.deps.env,
       }) || promptContext
@@ -386,6 +395,16 @@ export class TurnEngine {
     const activeSkillId = normalizeIds(promptContext.skillIds).at(0) || normalizeIds(skillIds).at(0) || null
     const baselineToolCallIds = collectToolCallIds(messages)
     let checkpointMessages = checkpoint?.payload?.state?.messages || []
+    let contextWindow
+    try {
+      contextWindow = this.deps.getContextWindow({
+        userId,
+        modelName: modelName || undefined,
+        env: this.deps.env,
+      })
+    } catch {
+      // Endpoint metadata is advisory; model execution remains available if discovery fails.
+    }
     try {
       const result = await this.deps.runLoop({
         job: {
@@ -395,10 +414,12 @@ export class TurnEngine {
           agentId: promptContext.effectiveAgentId || agentId || null,
           origin: 'chat',
           prompt: content,
+          userPrompt: displayContent || content,
           title: content.slice(0, 120),
         },
         step: { id: turnId, kind: 'chat' },
         messages,
+        contextWindow,
         signal,
         toolSpecs: resolvedToolSpecs,
         skillId: activeSkillId,
@@ -415,9 +436,14 @@ export class TurnEngine {
         runModel: async (request) => this.deps.runModel({
           ...request, userId, modelName: modelName || undefined,
         }),
-        onModelPhase: async ({ phase, iteration, content: delta, usage, modelName: activeModel, error }) => {
+        onModelPhase: async ({ phase, iteration, usage, modelName: activeModel, error }) => {
           await emitter('model.phase', { phase, iteration, usage, modelName: activeModel, error })
-          if (delta) await emitter('assistant.delta', { text: delta, iteration })
+        },
+        onModelDelta: async ({ text: delta, iteration, modelName: activeModel }) => {
+          await emitter('assistant.delta', { text: delta, iteration, modelName: activeModel })
+        },
+        onReasoningDelta: async ({ text: delta, iteration, modelName: activeModel }) => {
+          await emitter('reasoning.delta', { text: delta, iteration, modelName: activeModel })
         },
         onToolCall: async (call) => emitter('tool.call', {
           toolCallId: call.id, name: call.name, args: call.args,
@@ -457,6 +483,7 @@ export class TurnEngine {
           artifactIds: result?.artifactIds || [],
           iterations: result?.iterations || 0,
           paused: !!result?.paused,
+          compactionArchiveId: result?.recovery?.archiveId || null,
         }),
         createdAt: completedAt, updatedAt: completedAt,
       })

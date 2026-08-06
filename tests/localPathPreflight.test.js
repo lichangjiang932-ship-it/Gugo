@@ -14,6 +14,14 @@ test('extracts quoted Windows paths including spaces without partial duplicates'
   assert.deepEqual(extractLocalAbsolutePaths('\u8bf7\u8bfb\u53d6 "D:\\destok\\My Project"'), ['D:\\destok\\My Project'])
 })
 
+test('keeps balanced parentheses inside Windows paths and strips sentence closers only', () => {
+  assert.deepEqual(
+    extractLocalAbsolutePaths('\u8bf7\u8bfb\u53d6 D:\\destok\\your-model-atelier(1)\\README.md\u3002'),
+    ['D:\\destok\\your-model-atelier(1)\\README.md'],
+  )
+  assert.deepEqual(extractLocalAbsolutePaths('\u8bf7\u8bfb\u53d6 D:\\demo\\README.md)'), ['D:\\demo\\README.md'])
+})
+
 test('extracts UNC and common Unix absolute paths while ignoring URLs and relative paths', () => {
   assert.deepEqual(
     extractLocalAbsolutePaths('\u8bfb\u53d6 \\\\server\\share\\repo \u548c /home/user/repo\uff0c\u5ffd\u7565 https://example.com/a \u548c src/app.js'),
@@ -57,6 +65,8 @@ test('file grants require exact matches and all-files bypasses individual grants
 test('authorized-path instruction requires real file tool use', () => {
   const instruction = buildLocalPathToolInstruction(['D:\\destok\\money'])
   assert.match(instruction, /list_directory/)
+  assert.match(instruction, /directory listing is discovery evidence/i)
+  assert.match(instruction, /never infer file contents from names alone/i)
   assert.match(instruction, /must not claim/i)
   assert.match(instruction, /D:\\destok\\money/)
 })
@@ -77,4 +87,6 @@ test('verified filesystem evidence forbids unsupported local-access claims', () 
   assert.match(instruction, /VERIFIED LOCAL FILESYSTEM ACCESS/)
   assert.match(instruction, /README\.md/)
   assert.match(instruction, /Do not answer that local access is unavailable/)
+  assert.match(instruction, /call read_file for representative documentation/i)
+  assert.match(instruction, /do not guess from filenames/i)
 })

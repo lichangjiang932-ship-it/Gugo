@@ -64,6 +64,7 @@ import { handleMcpServerRequest } from './mcp/mcpServer.js'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
 const distDir = path.join(rootDir, 'dist')
+export const RUNTIME_KERNEL_REVISION = '2026-08-06-local-path-v3'
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -144,6 +145,7 @@ export function healthCheckFull(req, res, getEnv = getRuntimeEnv) {
   res.end(JSON.stringify({
     ok: overallOk,
     version: readVersion(),
+    kernelRevision: RUNTIME_KERNEL_REVISION,
     uptimeSec: Math.round(process.uptime()),
     time: Date.now(),
     db,
@@ -167,6 +169,7 @@ export function healthCheck(req, res) {
     ok: overallOk,
     time: Date.now(),
     version: readVersion(),
+    kernelRevision: RUNTIME_KERNEL_REVISION,
   }))
 }
 

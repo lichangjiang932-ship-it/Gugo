@@ -1,4 +1,6 @@
 import { SKILLS } from '../../src/data.js'
+import { canonicalizeSkillId, PPT_SKILL_ID_ALIASES } from '../../shared/artifactIntent.js'
+import { getCodexPluginSkill, listCodexPluginSkills } from '../adapters/codexPluginSkills.js'
 import { getImportedSkill, listAllSkillIds, listImportedSkills } from './skillStore.js'
 
 function mapBuiltInSkill(skill) {
@@ -43,14 +45,29 @@ function mapImportedSkill(skill) {
  * 导入技能必须带 userId 才会被附加进列表——避免跨用户泄漏。
  */
 export function listRuntimeSkills({ userId } = {}) {
-  return [
+  const primary = [
     ...SKILLS.map(mapBuiltInSkill),
-    ...listImportedSkills({ userId }).map(mapImportedSkill),
+    ...listImportedSkills({ userId })
+      .filter((skill) => canonicalizeSkillId(skill.id) === skill.id)
+      .map(mapImportedSkill),
+  ]
+  const primaryIds = new Set(primary.map((skill) => skill.id))
+  return [
+    ...primary,
+    ...listCodexPluginSkills().filter((skill) => !primaryIds.has(skill.id)),
   ]
 }
 
 export function getRuntimeSkill(id, { userId } = {}) {
-  return listRuntimeSkills({ userId }).find((skill) => skill.id === id) || null
+  const canonicalId = canonicalizeSkillId(id)
+  const primary = [
+    ...SKILLS.map(mapBuiltInSkill),
+    ...listImportedSkills({ userId })
+      .filter((skill) => canonicalizeSkillId(skill.id) === skill.id)
+      .map(mapImportedSkill),
+  ].find((skill) => skill.id === canonicalId)
+  if (primary) return primary
+  return getCodexPluginSkill(canonicalId, { runnableOnly: true, loadPrompt: true })
 }
 
 export function listRuntimeSkillIds({ userId } = {}) {
@@ -60,6 +77,8 @@ export function listRuntimeSkillIds({ userId } = {}) {
 export function listAllRuntimeSkillIds() {
   return [...new Set([
     ...SKILLS.map((skill) => skill.id),
+    ...PPT_SKILL_ID_ALIASES,
     ...listAllSkillIds(),
+    ...listCodexPluginSkills().map((skill) => skill.id),
   ])]
 }

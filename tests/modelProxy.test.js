@@ -4,8 +4,10 @@ import { EventEmitter } from 'node:events'
 
 import {
   buildOpenAICompatibleRequest,
+  callStreamingModelWithTools,
   extractUsage,
   formatProxyError,
+  getModelContextWindow,
   getModelStatus,
   getSystemDiagnostics,
   getToolMaxRounds,
@@ -17,6 +19,7 @@ import {
   recordUsage,
   resetUsageStats,
   resolveModelConfigForModel,
+  stripEmbeddedReasoning,
   supportsStreamUsage,
   streamOpenAICompatible,
 } from '../server/adapters/modelProxy.js'
@@ -73,6 +76,49 @@ test('streamed tool inputs become ready before the canonical tool_calls batch', 
   assert.deepEqual(events.map((event) => event.type), ['tool_call_ready', 'tool_calls'])
   assert.deepEqual(JSON.parse(events[0].toolCall.arguments), { path: 'README.md' })
   assert.equal(events[1].toolCalls[0].id, 'read-1')
+})
+
+test('chat tool-loop streaming forwards deltas and returns canonical tool calls', async () => {
+  const encoder = new TextEncoder()
+  const frames = [
+    { choices: [{ delta: { reasoning_content: 'checking files' } }] },
+    { choices: [{ delta: { content: 'Grounded answer.' } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 0, id: 'read-1', function: { name: 'read_file', arguments: '{"path":' } }] } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"README.md"}' } }] } }] },
+    { choices: [{ delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } },
+  ]
+  const body = new ReadableStream({
+    start(controller) {
+      for (const frame of frames) controller.enqueue(encoder.encode(`data: ${JSON.stringify(frame)}\n\n`))
+      controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+      controller.close()
+    },
+  })
+  const textDeltas = []
+  const reasoningDeltas = []
+  const result = await callStreamingModelWithTools({
+    messages: [{ role: 'user', content: 'read' }],
+    tools: [],
+    env: {
+      MODEL_BASE_URL: 'https://api.example.test/v1',
+      MODEL_API_KEY: 'test-key',
+      MODEL_NAME: 'test-model',
+    },
+    fetchImpl: async () => new Response(body, { status: 200 }),
+    onTextDelta: async (delta) => textDeltas.push(delta),
+    onReasoningDelta: async (delta) => reasoningDeltas.push(delta),
+  })
+
+  assert.deepEqual(textDeltas, ['Grounded answer.'])
+  assert.deepEqual(reasoningDeltas, ['checking files'])
+  assert.equal(result.content, 'Grounded answer.')
+  assert.deepEqual(result.toolCalls, [{
+    id: 'read-1',
+    type: 'function',
+    function: { name: 'read_file', arguments: '{"path":"README.md"}' },
+  }])
+  assert.equal(result.finishReason, 'tool_calls')
+  assert.equal(result.usage.totalTokens, 15)
 })
 
 test('normalizes OpenAI compatible base URLs to chat completions endpoint', () => {
@@ -254,6 +300,33 @@ test('resolves selected models to their provider endpoint and API key', () => {
     // 0 = 不限制输出长度（不发 max_tokens 字段），见 parseMaxTokens
     maxTokens: 0,
   })
+})
+
+test('resolves context windows from the selected provider and its profile override', () => {
+  const env = {
+    MODEL_PROVIDERS: 'local,cloud,tuned',
+    MODEL_PROVIDER_LOCAL_BASE_URL: 'http://127.0.0.1:11434/v1',
+    MODEL_PROVIDER_LOCAL_MODELS: 'local-default',
+    MODEL_PROVIDER_LOCAL_PROFILE: JSON.stringify({ contextWindow: 16_384 }),
+    MODEL_PROVIDER_CLOUD_BASE_URL: 'https://api.example.com/v1',
+    MODEL_PROVIDER_CLOUD_MODELS: 'cloud-model',
+    MODEL_PROVIDER_TUNED_BASE_URL: 'https://tuned.example.com/v1',
+    MODEL_PROVIDER_TUNED_MODELS: 'tuned-model',
+    MODEL_PROVIDER_TUNED_PROFILE: JSON.stringify({ contextWindow: 65_536 }),
+    MODEL_CONTEXT_WINDOWS: JSON.stringify({ 'tuned-model': 32_768 }),
+    MODEL_NAME: 'local-default',
+  }
+
+  assert.equal(
+    getModelContextWindow({ modelName: 'cloud-model', env }),
+    128_000,
+    'the selected cloud provider must not inherit the default local provider override',
+  )
+  assert.equal(
+    getModelContextWindow({ modelName: 'tuned-model', env }),
+    65_536,
+    'the selected provider profile override must win over global model mappings',
+  )
 })
 
 test('system diagnostics summarize model and mail without secrets', async () => {
@@ -563,6 +636,18 @@ test('思考内容不混进正文', () => {
   const text = delta.content || ''
   assert.equal(reasoning, '思考中')
   assert.equal(text, '', '思考阶段不该产生正文')
+})
+
+test('embedded think traces are stripped even when the opening tag is missing', () => {
+  assert.equal(
+    stripEmbeddedReasoning('stale internal transcript\n</think>\nFinal grounded answer.'),
+    'Final grounded answer.',
+  )
+  assert.equal(
+    stripEmbeddedReasoning('<think>private reasoning</think>Public answer.'),
+    'Public answer.',
+  )
+  assert.equal(stripEmbeddedReasoning('Normal answer without reasoning tags.'), 'Normal answer without reasoning tags.')
 })
 
 test('★ 思考超过硬顶必须取消上游并抛 REASONING_RUNAWAY', async () => {

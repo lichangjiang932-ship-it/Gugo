@@ -35,11 +35,11 @@ import {
   finishNativeProviderStream,
   isNativeProviderKind,
 } from './nativeModelProviders.js'
-import { extractUsage, parseModelProviderResponse } from './modelProviderResponse.js'
+import { extractUsage, parseModelProviderResponse, stripEmbeddedReasoning } from './modelProviderResponse.js'
 import { calculateModelCostUsd, getUsageStats, recordUsage } from './modelUsage.js'
 import { requestNonStreamingAsEvents } from './modelNonStreaming.js'
 
-export { extractUsage, parseModelProviderResponse, parseOpenAICompatibleResponse } from './modelProviderResponse.js'
+export { extractUsage, parseModelProviderResponse, parseOpenAICompatibleResponse, stripEmbeddedReasoning } from './modelProviderResponse.js'
 export { getUsageStats, recordUsage, resetUsageStats } from './modelUsage.js'
 
 export { getRuntimeEnv } from '../utils/runtimeEnv.js'
@@ -177,6 +177,7 @@ export function resolveModelConfigForModel({ modelName, env = process.env } = {}
   const missing = providerMissingFields(provider)
   const baseWithoutHeaders = { ...base }
   delete baseWithoutHeaders.headers
+  delete baseWithoutHeaders.profileOverrides
   return {
     ...baseWithoutHeaders,
     configured: missing.length === 0,
@@ -364,7 +365,7 @@ export function hasVisionContent(messages = []) {
 export function getModelContextWindow({ modelName, userId, env = getRuntimeEnv() } = {}) {
   const runtimeEnv = buildUserModelEnv({ userId, env })
   const selectedModel = String(modelName || runtimeEnv.MODEL_NAME || '').trim()
-  const config = loadModelConfig(runtimeEnv)
+  const config = resolveModelConfigForModel({ modelName: selectedModel, env: runtimeEnv })
   // ★ 交给端点画像统一解析。
   //
   // 原来默认值是 1_000_000 —— 用户没配 MODEL_CONTEXT_WINDOWS 时,压缩阈值
@@ -376,6 +377,7 @@ export function getModelContextWindow({ modelName, userId, env = getRuntimeEnv()
     baseUrl: config.baseUrl,
     modelName: selectedModel,
     env: runtimeEnv,
+    overrides: config.profileOverrides || {},
   }).contextWindow
 }
 
@@ -956,6 +958,114 @@ export async function callBackgroundModelWithTools({
       },
     })
   }, { signal })
+}
+
+function canonicalStreamToolCalls(toolCalls = []) {
+  return (Array.isArray(toolCalls) ? toolCalls : []).map((call) => {
+    const fn = call?.function && typeof call.function === 'object' ? call.function : {}
+    const rawArguments = fn.arguments ?? call?.arguments ?? '{}'
+    let argumentsText
+    if (typeof rawArguments === 'string') argumentsText = rawArguments
+    else {
+      try { argumentsText = JSON.stringify(rawArguments ?? {}) } catch { argumentsText = '{}' }
+    }
+    return {
+      ...(call?.id ? { id: call.id } : {}),
+      type: call?.type || 'function',
+      function: {
+        name: String(fn.name || call?.name || ''),
+        arguments: argumentsText,
+      },
+    }
+  })
+}
+
+/**
+ * Chat tool-loop model call with the same stable result shape as
+ * callBackgroundModelWithTools, but backed by the provider streaming adapter.
+ *
+ * Text and reasoning are delivered while the provider is still generating;
+ * the canonical tool_calls batch is retained until the stream finishes so the
+ * durable tool-loop checkpoint remains identical to the non-streaming path.
+ */
+export async function callStreamingModelWithTools({
+  messages,
+  tools,
+  toolChoice,
+  modelName,
+  userId,
+  env = getRuntimeEnv(),
+  fetchImpl = fetchWithEnvProxy,
+  signal,
+  onTextDelta,
+  onReasoningDelta,
+} = {}) {
+  const runtimeEnv = buildUserModelEnv({ userId, env })
+  const config = loadModelConfig(runtimeEnv)
+  if (!config.configured) {
+    throw new Error(`后台任务缺少模型配置：${config.missing.join(', ')}`)
+  }
+  const selectedModel = pickAllowedModel({
+    requestedModel: modelName,
+    config,
+    env: runtimeEnv,
+  })
+  const candidates = resolveModelFailoverConfigs({ modelName: selectedModel, env: runtimeEnv })
+  let activeConfig = candidates[0] || null
+  let content = ''
+  let reasoningChars = 0
+  let toolCalls = []
+  let usage = null
+  let finishReason = null
+
+  for await (const streamed of streamWithProviderFailover(
+    candidates,
+    (candidate) => streamOpenAICompatible({
+      config: candidate,
+      messages,
+      fetchImpl,
+      tools,
+      toolChoice,
+      externalSignal: signal,
+      env: runtimeEnv,
+    }),
+    { signal },
+  )) {
+    activeConfig = streamed.config
+    const event = streamed.event
+    if (event?.usage) usage = event.usage
+    if (event?.finishReason) finishReason = event.finishReason
+
+    if (event?.type === 'text' && event.delta) {
+      const delta = String(event.delta)
+      content += delta
+      if (typeof onTextDelta === 'function') {
+        await onTextDelta(delta, { modelName: activeConfig.modelName })
+      }
+    } else if (event?.type === 'reasoning' && event.delta) {
+      const delta = String(event.delta)
+      reasoningChars += delta.length
+      if (typeof onReasoningDelta === 'function') {
+        await onReasoningDelta(delta, { modelName: activeConfig.modelName })
+      }
+    } else if (event?.type === 'tool_calls') {
+      toolCalls = canonicalStreamToolCalls(event.toolCalls)
+    }
+  }
+
+  const resolvedConfig = activeConfig || config
+  const cleanedContent = stripEmbeddedReasoning(content)
+  recordUsage(resolvedConfig.modelName, usage)
+  return {
+    content: cleanedContent,
+    toolCalls,
+    usage,
+    finishReason,
+    modelName: resolvedConfig.modelName,
+    costUsd: calculateModelCostUsd({ modelName: resolvedConfig.modelName, usage, env: runtimeEnv }),
+    streamed: true,
+    reasoningChars,
+  }
 }
 
 /**
