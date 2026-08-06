@@ -137,3 +137,53 @@ test('root parsing and classification do not inspect the current working directo
   assert.equal(classifyCodexSkill().compatibility, 'ready')
   assert.equal(classifyCodexSkill({ manifest: { apps: './.app.json', mcpServers: './mcp.json' } }).compatibility, 'needs-app')
 })
+
+test('curated plugins expose trusted provenance without making incompatible skills runnable', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-curated-plugins-'))
+  try {
+    writePlugin(root, 'superpowers', {
+      license: 'MIT',
+      repository: 'https://github.com/obra/superpowers.git',
+      homepage: 'https://github.com/obra/superpowers/',
+      author: { name: 'Jesse Vincent' },
+      apps: './app.json',
+    })
+    writePlugin(root, 'build-web-apps', {
+      license: 'MIT',
+      repository: 'javascript:alert(1)',
+    })
+    writePlugin(root, 'ordinary-plugin', {
+      license: 'Apache-2.0',
+      repository: { url: 'https://github.com/example/ordinary.git' },
+    })
+
+    const discovery = initCodexPluginSkills({ roots: [root] })
+    const superpowers = discovery.skills.find((skill) => skill.pluginId === 'superpowers')
+    assert.ok(superpowers)
+    assert.equal(superpowers.recommended, true)
+    assert.equal(superpowers.runnable, false)
+    assert.equal(superpowers.compatibility, 'needs-app')
+    assert.equal(superpowers.repository, 'https://github.com/obra/superpowers.git')
+    assert.equal(superpowers.homepage, 'https://github.com/obra/superpowers')
+    assert.equal(superpowers.license, 'MIT')
+    assert.equal(superpowers.publisher, 'Jesse Vincent')
+
+    const buildWebApps = discovery.skills.find((skill) => skill.pluginId === 'build-web-apps')
+    assert.equal(buildWebApps.recommended, false)
+    assert.equal(buildWebApps.repository, '')
+
+    const ordinary = discovery.plugins.find((plugin) => plugin.id === 'ordinary-plugin')
+    assert.equal(ordinary.recommended, false)
+    assert.equal(ordinary.repository, 'https://github.com/example/ordinary.git')
+    assert.deepEqual(ordinary.source, {
+      type: 'codex-plugin',
+      directory: 'openai-plugins/plugins/ordinary-plugin',
+      rootName: path.basename(root),
+    })
+    assert.equal(discovery.plugins[0].id, 'superpowers')
+    assert.equal(discovery.skills[0].pluginId, 'superpowers')
+  } finally {
+    _resetCodexPluginSkillsForTests()
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})

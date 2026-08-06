@@ -47,11 +47,19 @@ const WORKBENCH_TRANSLATIONS = {
 }
 
 const DESKTOP_PET_TRANSLATIONS = {
-  zh: { close: '隐藏桌面宠物', handle: '桌面宠物：{status}。拖动可移动，点击可切换状态气泡', unknownTool: '工具', status: { idle: '空闲，随时可以开始', thinking: '正在思考', tool: '正在使用 {tool}', completed: '工作已完成', failed: '任务遇到问题' } },
-  en: { close: 'Hide desktop pet', handle: 'Desktop pet: {status}. Drag to move; click to toggle the status bubble', unknownTool: 'a tool', status: { idle: 'Idle and ready', thinking: 'Thinking', tool: 'Using {tool}', completed: 'Work completed', failed: 'The task ran into a problem' } },
-  ja: { close: 'デスクトップペットを隠す', handle: 'デスクトップペット：{status}。ドラッグで移動、クリックで状態表示を切り替えます', unknownTool: 'ツール', status: { idle: '待機中・いつでも開始できます', thinking: '考えています', tool: '{tool} を使用中', completed: '作業が完了しました', failed: 'タスクで問題が発生しました' } },
-  ko: { close: '데스크톱 펫 숨기기', handle: '데스크톱 펫: {status}. 드래그하여 이동하고 클릭하여 상태 표시를 전환합니다', unknownTool: '도구', status: { idle: '대기 중 · 언제든 시작 가능', thinking: '생각하는 중', tool: '{tool} 사용 중', completed: '작업 완료', failed: '작업에 문제가 발생했습니다' } },
-  'zh-TW': { close: '隱藏桌面寵物', handle: '桌面寵物：{status}。拖曳可移動，點擊可切換狀態氣泡', unknownTool: '工具', status: { idle: '閒置中，隨時可以開始', thinking: '正在思考', tool: '正在使用 {tool}', completed: '工作已完成', failed: '任務遇到問題' } },
+  zh: { close: '隐藏桌面宠物', handle: '桌面宠物：{status}。拖动或方向键可移动，点击可切换状态气泡', unknownTool: '工具', status: { idle: '空闲，随时可以开始', thinking: '正在思考', tool: '正在使用 {tool}', completed: '工作已完成', failed: '任务遇到问题' }, activity: { idle: '我会在这里待命', thinking: '正在整理思路和下一步', tool: '正在执行工具操作', completed: '结果已经准备好，可以查看了', failed: '请查看对话中的错误详情' } },
+  en: { close: 'Hide desktop pet', handle: 'Desktop pet: {status}. Drag or use arrow keys to move; click to toggle the status bubble', unknownTool: 'a tool', status: { idle: 'Idle and ready', thinking: 'Thinking', tool: 'Using {tool}', completed: 'Work completed', failed: 'The task ran into a problem' }, activity: { idle: 'Standing by for your next request', thinking: 'Working out the next step', tool: 'Running a tool operation', completed: 'The result is ready to review', failed: 'Check the conversation for error details' } },
+  ja: { close: 'デスクトップペットを隠す', handle: 'デスクトップペット：{status}。ドラッグまたは矢印キーで移動、クリックで状態表示を切り替えます', unknownTool: 'ツール', status: { idle: '待機中・いつでも開始できます', thinking: '考えています', tool: '{tool} を使用中', completed: '作業が完了しました', failed: 'タスクで問題が発生しました' }, activity: { idle: '次の依頼を待っています', thinking: '次の手順を整理しています', tool: 'ツール操作を実行しています', completed: '結果を確認できます', failed: '会話内のエラー詳細を確認してください' } },
+  ko: { close: '데스크톱 펫 숨기기', handle: '데스크톱 펫: {status}. 드래그하거나 방향키로 이동하고 클릭하여 상태 표시를 전환합니다', unknownTool: '도구', status: { idle: '대기 중 · 언제든 시작 가능', thinking: '생각하는 중', tool: '{tool} 사용 중', completed: '작업 완료', failed: '작업에 문제가 발생했습니다' }, activity: { idle: '다음 요청을 기다리고 있어요', thinking: '다음 단계를 정리하고 있어요', tool: '도구 작업을 실행하고 있어요', completed: '결과를 확인할 수 있어요', failed: '대화에서 오류 세부 정보를 확인하세요' } },
+  'zh-TW': { close: '隱藏桌面寵物', handle: '桌面寵物：{status}。拖曳或方向鍵可移動，點擊可切換狀態氣泡', unknownTool: '工具', status: { idle: '閒置中，隨時可以開始', thinking: '正在思考', tool: '正在使用 {tool}', completed: '工作已完成', failed: '任務遇到問題' }, activity: { idle: '我會在這裡待命', thinking: '正在整理思路和下一步', tool: '正在執行工具操作', completed: '結果已準備好，可以查看了', failed: '請查看對話中的錯誤詳情' } },
+}
+
+const SKILLS_MARKET_TRANSLATIONS = {
+  zh: { recommended: '精选', incompatibleHint: '当前环境无法直接运行此技能；补齐所需 App、MCP 或运行时后才能启用。', pluginSource: '插件来源', plugin: '插件', publisher: '发布者', license: '许可证', localSource: '本地镜像', unavailable: '暂不可用', compatibility: { ready: '可直接运行', 'needs-app': '需要 App', 'needs-mcp': '需要 MCP', 'needs-runtime': '需要运行时' } },
+  en: { recommended: 'Featured', incompatibleHint: 'This skill cannot run in the current environment. Add its required app, MCP server, or runtime to enable it.', pluginSource: 'Plugin source', plugin: 'Plugin', publisher: 'Publisher', license: 'License', localSource: 'Local mirror', unavailable: 'Unavailable', compatibility: { ready: 'Ready', 'needs-app': 'Needs app', 'needs-mcp': 'Needs MCP', 'needs-runtime': 'Needs runtime' } },
+  ja: { recommended: 'おすすめ', incompatibleHint: '現在の環境ではこのスキルを実行できません。必要な App、MCP、またはランタイムを追加してください。', pluginSource: 'プラグインの提供元', plugin: 'プラグイン', publisher: '提供者', license: 'ライセンス', localSource: 'ローカルミラー', unavailable: '利用不可', compatibility: { ready: '実行可能', 'needs-app': 'App が必要', 'needs-mcp': 'MCP が必要', 'needs-runtime': 'ランタイムが必要' } },
+  ko: { recommended: '추천', incompatibleHint: '현재 환경에서는 이 스킬을 실행할 수 없습니다. 필요한 App, MCP 또는 런타임을 추가하세요.', pluginSource: '플러그인 출처', plugin: '플러그인', publisher: '게시자', license: '라이선스', localSource: '로컬 미러', unavailable: '사용 불가', compatibility: { ready: '실행 가능', 'needs-app': 'App 필요', 'needs-mcp': 'MCP 필요', 'needs-runtime': '런타임 필요' } },
+  'zh-TW': { recommended: '精選', incompatibleHint: '目前環境無法直接執行此技能；補齊所需 App、MCP 或執行環境後才能啟用。', pluginSource: '外掛來源', plugin: '外掛', publisher: '發佈者', license: '授權條款', localSource: '本機鏡像', unavailable: '暫不可用', compatibility: { ready: '可直接執行', 'needs-app': '需要 App', 'needs-mcp': '需要 MCP', 'needs-runtime': '需要執行環境' } },
 }
 
 const CHAT_SURFACE_TRANSLATIONS = {
@@ -653,6 +661,7 @@ const SETTINGS_DATA_EXPORT_TRANSLATIONS = {
 
 export const translations = {
   zh: {
+    skillsMarket: SKILLS_MARKET_TRANSLATIONS.zh,
     storageNotice: STORAGE_NOTICE_TRANSLATIONS.zh,
     settingsDataExport: SETTINGS_DATA_EXPORT_TRANSLATIONS.zh,
     ...RELIABILITY_VIEW_TRANSLATIONS.zh,
@@ -1126,6 +1135,7 @@ export const translations = {
     },
   },
   en: {
+    skillsMarket: SKILLS_MARKET_TRANSLATIONS.en,
     storageNotice: STORAGE_NOTICE_TRANSLATIONS.en,
     settingsDataExport: SETTINGS_DATA_EXPORT_TRANSLATIONS.en,
     ...RELIABILITY_VIEW_TRANSLATIONS.en,
@@ -1599,6 +1609,7 @@ export const translations = {
     },
   },
   ja: {
+    skillsMarket: SKILLS_MARKET_TRANSLATIONS.ja,
     storageNotice: STORAGE_NOTICE_TRANSLATIONS.ja,
     settingsDataExport: SETTINGS_DATA_EXPORT_TRANSLATIONS.ja,
     ...RELIABILITY_VIEW_TRANSLATIONS.ja,
@@ -2072,6 +2083,7 @@ export const translations = {
     },
   },
   ko: {
+    skillsMarket: SKILLS_MARKET_TRANSLATIONS.ko,
     storageNotice: STORAGE_NOTICE_TRANSLATIONS.ko,
     settingsDataExport: SETTINGS_DATA_EXPORT_TRANSLATIONS.ko,
     ...RELIABILITY_VIEW_TRANSLATIONS.ko,
@@ -2545,6 +2557,7 @@ export const translations = {
     },
   },
   'zh-TW': {
+    skillsMarket: SKILLS_MARKET_TRANSLATIONS['zh-TW'],
     storageNotice: STORAGE_NOTICE_TRANSLATIONS['zh-TW'],
     settingsDataExport: SETTINGS_DATA_EXPORT_TRANSLATIONS['zh-TW'],
     ...RELIABILITY_VIEW_TRANSLATIONS['zh-TW'],

@@ -91,28 +91,41 @@ export function bootstrap({ silent = process.env.NODE_ENV === 'production' } = {
 export function gracefulShutdown(server, { silent = process.env.NODE_ENV === 'production', exit = true } = {}) {
   if (!silent) logger.info('\n[lifecycle] shutdown signal received')
 
-  let done = false
-  const finish = (code) => {
-    if (done) return
-    done = true
-    if (!silent) logger.info('[lifecycle] shutdown complete')
-    if (exit) process.exit(code)
-  }
+  return new Promise((resolve) => {
+    let done = false
+    let timeoutId = null
+    const finish = (code) => {
+      if (done) return
+      done = true
+      if (timeoutId) clearTimeout(timeoutId)
+      if (!silent) logger.info('[lifecycle] shutdown complete')
+      resolve(code)
+      if (exit) process.exit(code)
+    }
+    const closeRuntime = () => {
+      if (!silent) logger.info('[lifecycle] http server closed')
+      try { closeCronScheduler() } catch { /* ignore */ }
+      try { closeJobRuntime() } catch { /* ignore */ }
+      try { socialBridgeManager.stopAll() } catch { /* ignore */ }
+      try { shutdownBrowsers() } catch { /* ignore */ }
+      try { shutdownMcpAll() } catch { /* ignore */ }
+      try { closeDb() } catch { /* ignore */ }
+      if (!silent) logger.info('[lifecycle] db closed')
+      finish(0)
+    }
 
-  server.close(() => {
-    if (!silent) logger.info('[lifecycle] http server closed')
-    try { closeCronScheduler() } catch { /* ignore */ }
-    try { closeJobRuntime() } catch { /* ignore */ }
-    try { socialBridgeManager.stopAll() } catch { /* ignore */ }
-    try { shutdownBrowsers() } catch { /* ignore */ }
-    try { shutdownMcpAll() } catch { /* ignore */ }
-    try { closeDb() } catch { /* ignore */ }
-    if (!silent) logger.info('[lifecycle] db closed')
-    finish(0)
+    timeoutId = setTimeout(() => {
+      if (done) return
+      console.error('[lifecycle] forced exit (timeout)')
+      finish(1)
+    }, SHUTDOWN_TIMEOUT_MS)
+    timeoutId.unref?.()
+
+    try {
+      if (server && typeof server.close === 'function') server.close(closeRuntime)
+      else closeRuntime()
+    } catch {
+      closeRuntime()
+    }
   })
-
-  setTimeout(() => {
-    console.error('[lifecycle] forced exit (timeout)')
-    finish(1)
-  }, SHUTDOWN_TIMEOUT_MS)
 }

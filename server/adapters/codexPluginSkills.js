@@ -24,6 +24,15 @@ export const CODEX_SKILL_COMPATIBILITY = Object.freeze([
   'needs-runtime',
 ])
 
+export const RECOMMENDED_CODEX_PLUGINS = Object.freeze({
+  'build-web-apps': 'https://github.com/openai/plugins',
+  coderabbit: 'https://github.com/coderabbitai/codex-plugin',
+  'game-studio': 'https://github.com/openai/plugins',
+  'plugin-eval': 'https://github.com/openai/plugins',
+  remotion: 'https://github.com/remotion-dev/remotion',
+  superpowers: 'https://github.com/obra/superpowers',
+})
+
 const MAX_MANIFEST_BYTES = 256 * 1024
 const MAX_SKILL_BYTES = 512 * 1024
 const MAX_SKILL_METADATA_BYTES = 64 * 1024
@@ -82,7 +91,11 @@ function cloneSkill(skill) {
 }
 
 function clonePlugin(plugin) {
-  return { ...plugin, requirements: cloneRequirements(plugin.requirements) }
+  return {
+    ...plugin,
+    requirements: cloneRequirements(plugin.requirements),
+    source: plugin.source ? { ...plugin.source } : null,
+  }
 }
 
 function discoveryError(code, target, message) {
@@ -219,6 +232,43 @@ function slug(value, fallback = 'skill') {
     .replace(/[^a-z0-9_-]+/g, '-')
     .replace(/^-+|-+$/g, '')
   return normalized || fallback
+}
+
+function boundedText(value, maxLength = 2_000) {
+  return typeof value === 'string' ? value.trim().slice(0, maxLength) : ''
+}
+
+function safeWebUrl(value) {
+  const raw = typeof value === 'string'
+    ? value
+    : value && typeof value === 'object' && typeof value.url === 'string'
+      ? value.url
+      : ''
+  try {
+    const parsed = new URL(raw.trim())
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? parsed.href.replace(/\/$/, '') : ''
+  } catch {
+    return ''
+  }
+}
+
+function canonicalRepository(value) {
+  return safeWebUrl(value).replace(/\.git$/i, '').toLowerCase()
+}
+
+function pluginMetadata(manifest, pluginId) {
+  const repository = safeWebUrl(manifest.repository)
+  const license = boundedText(manifest.license, 120)
+  const homepage = safeWebUrl(manifest.homepage || manifest.interface?.websiteURL)
+  const publisher = boundedText(
+    typeof manifest.author === 'string' ? manifest.author : manifest.author?.name,
+    120,
+  ) || boundedText(manifest.interface?.developerName, 120)
+  const expectedRepository = RECOMMENDED_CODEX_PLUGINS[pluginId]
+  const recommended = license.toUpperCase() === 'MIT'
+    && !!expectedRepository
+    && canonicalRepository(repository) === canonicalRepository(expectedRepository)
+  return { homepage, license, publisher, recommended, repository }
 }
 
 function stableSkillId(pluginId, skillId, sourceKey) {
@@ -399,6 +449,7 @@ function adaptSkill({ manifest, pluginRoot, skillPath, sourceRoot, seenIds, erro
   const displayName = String(meta.name || rawSkillId).trim().slice(0, 120) || id
   const description = String(meta.description || meta.desc || manifest.description || displayName).trim().slice(0, 2_000)
   const pluginName = String(manifest.interface?.displayName || manifest.name).trim().slice(0, 120)
+  const metadata = pluginMetadata(manifest, pluginId)
   seenIds.add(id)
   const skill = {
     id,
@@ -408,7 +459,7 @@ function adaptSkill({ manifest, pluginRoot, skillPath, sourceRoot, seenIds, erro
     icon: '🧩',
     permissions: [],
     perms: [],
-    recommended: false,
+    recommended: metadata.recommended,
     custom: false,
     imported: false,
     external: true,
@@ -421,6 +472,10 @@ function adaptSkill({ manifest, pluginRoot, skillPath, sourceRoot, seenIds, erro
     version: String(manifest.version || '0.0.0').slice(0, 64),
     pluginId,
     pluginName,
+    homepage: metadata.homepage,
+    license: metadata.license,
+    publisher: metadata.publisher,
+    repository: metadata.repository,
     source: {
       type: 'codex-plugin',
       pluginId,
@@ -474,14 +529,26 @@ export function discoverCodexPluginSkills({
       const loaded = loadManifest(manifestPath, sourceRoot, result.errors)
       if (!loaded) continue
       const { manifest, pluginRoot } = loaded
+      const pluginId = slug(manifest.name, 'plugin')
+      const metadata = pluginMetadata(manifest, pluginId)
       const pluginClassification = classifyCodexSkill({ manifest, pluginRoot, skillDir: pluginRoot })
       const plugin = {
-        id: slug(manifest.name, 'plugin'),
+        id: pluginId,
         name: String(manifest.interface?.displayName || manifest.name).trim().slice(0, 120),
         version: String(manifest.version || '0.0.0').slice(0, 64),
         description: String(manifest.description || '').slice(0, 2_000),
+        homepage: metadata.homepage,
+        license: metadata.license,
+        publisher: metadata.publisher,
+        recommended: metadata.recommended,
+        repository: metadata.repository,
         compatibility: pluginClassification.compatibility,
         requirements: pluginClassification.requirements,
+        source: {
+          type: 'codex-plugin',
+          directory: path.relative(sourceRoot, pluginRoot).replace(/\\/g, '/'),
+          rootName: path.basename(sourceRoot),
+        },
       }
       result.plugins.push(plugin)
       for (const skillRoot of resolveSkillRoots(pluginRoot, manifest, result.errors)) {
@@ -493,8 +560,10 @@ export function discoverCodexPluginSkills({
       }
     }
   }
-  result.plugins.sort((left, right) => left.id.localeCompare(right.id))
-  result.skills.sort((left, right) => left.id.localeCompare(right.id))
+  result.plugins.sort((left, right) => Number(right.recommended) - Number(left.recommended)
+    || left.id.localeCompare(right.id))
+  result.skills.sort((left, right) => Number(right.recommended) - Number(left.recommended)
+    || left.id.localeCompare(right.id))
   return result
 }
 

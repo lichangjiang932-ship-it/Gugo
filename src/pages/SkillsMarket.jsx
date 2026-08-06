@@ -98,7 +98,7 @@ export default function SkillsMarket() {
   }, [selectedSkill, showModal])
 
   const filteredSkills = allSkills.filter((skill) => {
-    const text = `${skill.id} ${skill.name} ${skill.desc} ${(skill.perms || []).join(' ')}`
+    const text = `${skill.id} ${skill.name} ${skill.desc} ${skill.pluginName || ''} ${skill.publisher || ''} ${skill.license || ''} ${(skill.perms || []).join(' ')}`
     const matchesSearch = !query.trim() || text.toLowerCase().includes(query.trim().toLowerCase())
     const matchesFilter =
       activeFilter === '全部'
@@ -109,7 +109,8 @@ export default function SkillsMarket() {
         ? skill.custom
         : skill.perms?.includes(activeFilter)
     return matchesSearch && matchesFilter
-  })
+  }).sort((left, right) => Number(Boolean(right.recommended)) - Number(Boolean(left.recommended))
+    || String(left.name || left.id).localeCompare(String(right.name || right.id)))
 
   const handleSkillClick = (skill) => {
     setSelectedSkill(skill)
@@ -376,6 +377,7 @@ export default function SkillsMarket() {
           {filteredSkills.map((skill) => (
             <button
               key={skill.id}
+              data-skill-id={skill.id}
               onClick={() => handleSkillClick(skill)}
               className={`relative p-4 border rounded-md text-left flex flex-col gap-2.5 hover:shadow-md transition-shadow ${
                 skill.custom ? 'border-ink/40 border-dashed bg-paper-2' : 'border-ink/30 hover:border-ink/60'
@@ -402,9 +404,18 @@ export default function SkillsMarket() {
                     return <Icon className="w-5 h-5 text-ink-fade" />
                   })()}
                 </div>
-                {skill.compatibility && (
-                  <span className="font-mono text-[9px] tracking-wider text-ink-fade">{skill.compatibility}</span>
-                )}
+                <div className="flex flex-wrap items-center justify-end gap-1">
+                  {skill.recommended && (
+                    <span className="rounded-full border border-ember/30 bg-ember-soft/30 px-1.5 py-0.5 font-mono text-[9px] tracking-wider text-ember">
+                      {t('skillsMarket.recommended')}
+                    </span>
+                  )}
+                  {skill.compatibility && (
+                    <span className="font-mono text-[9px] tracking-wider text-ink-fade">
+                      {t(`skillsMarket.compatibility.${skill.compatibility}`)}
+                    </span>
+                  )}
+                </div>
                 {skill.custom && <span className="font-mono text-[9px] tracking-wider text-ink-fade">{skill.imported ? '已导入' : '自定义'}</span>}
               </div>
               <div>
@@ -448,7 +459,9 @@ export default function SkillsMarket() {
                   <h2 id="skill-detail-title" className="truncate font-hand text-xl text-ink">{selectedSkill.name}</h2>
                   <div className="font-mono text-[10px] text-ink-fade">/{selectedSkill.id}</div>
                   {selectedSkill.compatibility && (
-                    <div className="font-mono text-[10px] text-ink-fade">{selectedSkill.compatibility}</div>
+                    <div className="font-mono text-[10px] text-ink-fade">
+                      {t(`skillsMarket.compatibility.${selectedSkill.compatibility}`)}
+                    </div>
                   )}
                 </div>
               </div>
@@ -463,6 +476,53 @@ export default function SkillsMarket() {
             </div>
             <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4 text-sm">
               <p className="leading-6 text-ink-soft">{selectedSkill.desc}</p>
+              {selectedSkill.runnable === false && (
+                <div className="rounded-md border border-ember-line bg-ember-soft/30 p-3 text-xs leading-5 text-ember">
+                  {t('skillsMarket.incompatibleHint')}
+                </div>
+              )}
+              {selectedSkill.codexPlugin && (
+                <div>
+                  <div className="mb-2 text-xs font-medium text-ink">{t('skillsMarket.pluginSource')}</div>
+                  <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 rounded-md border border-ink/15 bg-paper-2 p-3 text-xs">
+                    <dt className="text-ink-fade">{t('skillsMarket.plugin')}</dt>
+                    <dd className="min-w-0 break-words text-ink-soft">{selectedSkill.pluginName || selectedSkill.pluginId}</dd>
+                    {selectedSkill.publisher && (
+                      <>
+                        <dt className="text-ink-fade">{t('skillsMarket.publisher')}</dt>
+                        <dd className="min-w-0 break-words text-ink-soft">{selectedSkill.publisher}</dd>
+                      </>
+                    )}
+                    {selectedSkill.license && (
+                      <>
+                        <dt className="text-ink-fade">{t('skillsMarket.license')}</dt>
+                        <dd className="min-w-0 break-words text-ink-soft">{selectedSkill.license}</dd>
+                      </>
+                    )}
+                    {selectedSkill.source?.rootName && (
+                      <>
+                        <dt className="text-ink-fade">{t('skillsMarket.localSource')}</dt>
+                        <dd className="min-w-0 break-words font-mono text-ink-soft">{selectedSkill.source.rootName}</dd>
+                      </>
+                    )}
+                    {selectedSkill.repository && (
+                      <>
+                        <dt className="text-ink-fade">GitHub</dt>
+                        <dd className="min-w-0 break-all">
+                          <a
+                            href={selectedSkill.repository}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-ember underline decoration-ember/40 underline-offset-2"
+                          >
+                            {selectedSkill.repository}
+                          </a>
+                        </dd>
+                      </>
+                    )}
+                  </dl>
+                </div>
+              )}
               {(selectedSkill.perms || []).length > 0 && (
                 <div>
                   <div className="mb-2 text-xs font-medium text-ink">{t('nav.permissions')}</div>
@@ -489,7 +549,7 @@ export default function SkillsMarket() {
                 disabled={selectedSkill.runnable === false}
                 className="h-9 rounded-md bg-ink px-4 text-sm text-paper transition-colors hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-40"
               >
-                {t('nav.useSkill')}
+                {selectedSkill.runnable === false ? t('skillsMarket.unavailable') : t('nav.useSkill')}
               </button>
             </div>
           </div>

@@ -1,0 +1,46 @@
+appId: com.gugo.atelier
+productName: Gugo
+artifactName: Gugo-Setup-${version}-${arch}.${ext}
+asar: true
+npmRebuild: false
+compression: normal
+directories:
+  output: release
+files:
+  - dist/**/*
+  - server/**/*
+  - shared/**/*
+  - seed/**/*
+  - plugins/**/*
+  - skill-packs/**/*
+  - src/data.js
+  - src/lib/pptCore.js
+  - src/lib/presentationPlanner.js
+  - desktop/main.js
+  - desktop/preload.cjs
+  - desktop/runtime.js
+  - desktop/security.js
+  - package.json
+win:
+  executableName: Gugo
+  target:
+    - target: nsis
+      arch:
+        - x64
+  requestedExecutionLevel: asInvoker
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: Gugo
+  uninstallDisplayName: Gugo
+  deleteAppDataOnUninstall: false
+  runAfterFinish: true
+publish:
+  provider: github
+  owner: lichangjiang932-ship-it
+  repo: your-model-atelier
+  releaseType: release
+  channel: latest

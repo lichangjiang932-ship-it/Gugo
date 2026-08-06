@@ -9,6 +9,7 @@ lerna-debug.log*
 
 node_modules
 dist
+/release/
 # 临时验证构建产物。原来只覆盖了 .verify-dist-* 和 .codex-build-check-*,
 # 于是 .codex-build-slash-* / .codex-theme-build-* 等 9 个目录一直以未跟踪状态
 # 躺在仓库根,每次 git status 都是一屏噪音。一网打尽。

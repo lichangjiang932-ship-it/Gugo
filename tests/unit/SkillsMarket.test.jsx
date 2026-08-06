@@ -78,14 +78,32 @@ test('自定义技能创建后持久化可执行指令并立即出现在技能�
   ])
   const originalFetch = globalThis.fetch
   globalThis.fetch = async () => new Response(JSON.stringify({
-    skills: [{
-      id: 'needs-runtime-skill',
-      name: 'Needs Runtime Skill',
-      desc: 'Requires a resource resolver',
-      perms: [],
-      runnable: false,
-      compatibility: 'needs-runtime',
-    }],
+    skills: [
+      {
+        id: 'needs-runtime-skill',
+        name: 'Needs Runtime Skill',
+        desc: 'Requires a resource resolver',
+        perms: [],
+        runnable: false,
+        compatibility: 'needs-runtime',
+      },
+      {
+        id: 'codex-superpowers-debugging',
+        name: 'Systematic Debugging',
+        desc: 'Debug with evidence.',
+        perms: [],
+        runnable: true,
+        compatibility: 'ready',
+        codexPlugin: true,
+        recommended: true,
+        pluginId: 'superpowers',
+        pluginName: 'Superpowers',
+        publisher: 'Jesse Vincent',
+        license: 'MIT',
+        repository: 'https://github.com/obra/superpowers',
+        source: { rootName: 'openai-plugins' },
+      },
+    ],
   }), {
     status: 200,
     headers: { 'Content-Type': 'application/json' },
@@ -109,15 +127,34 @@ test('自定义技能创建后持久化可执行指令并立即出现在技能�
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
 
+    const skillCards = [...rootElement.querySelectorAll('button[data-skill-id]')]
+    assert.equal(skillCards[0].dataset.skillId, 'codex-superpowers-debugging')
+    assert.match(skillCards[0].textContent, /精选/)
+
+    await click(dom, act, skillCards[0])
+    const curatedDialog = rootElement.querySelector('[role="dialog"]')
+    assert.ok(curatedDialog)
+    assert.match(curatedDialog.textContent, /Superpowers/)
+    assert.match(curatedDialog.textContent, /Jesse Vincent/)
+    assert.match(curatedDialog.textContent, /MIT/)
+    assert.match(curatedDialog.textContent, /openai-plugins/)
+    assert.equal(
+      curatedDialog.querySelector('a[href="https://github.com/obra/superpowers"]')?.getAttribute('rel'),
+      'noreferrer',
+    )
+    assert.equal(curatedDialog.querySelector('button:disabled'), null)
+    await click(dom, act, curatedDialog.parentElement)
+
     const blockedSkill = [...rootElement.querySelectorAll('button')]
       .find((button) => button.textContent.includes('Needs Runtime Skill'))
     assert.ok(blockedSkill)
-    assert.match(blockedSkill.textContent, /needs-runtime/)
+    assert.match(blockedSkill.textContent, /需要运行时/)
     await click(dom, act, blockedSkill)
 
     const detailDialog = rootElement.querySelector('[role="dialog"]')
     assert.ok(detailDialog)
-    assert.match(detailDialog.textContent, /needs-runtime/)
+    assert.match(detailDialog.textContent, /需要运行时/)
+    assert.match(detailDialog.textContent, /当前环境无法直接运行/)
     assert.ok(detailDialog.querySelector('button:disabled'))
     await click(dom, act, detailDialog.parentElement)
 
