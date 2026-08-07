@@ -15,11 +15,50 @@ export function stripEmbeddedReasoning(value) {
   return text
 }
 
+function textFromContent(value) {
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) {
+    return value.map((item) => textFromContent(item)).filter(Boolean).join('')
+  }
+  if (!value || typeof value !== 'object') return ''
+  if (typeof value.text === 'string') return value.text
+  if (typeof value.value === 'string') return value.value
+  if (typeof value.content === 'string' || Array.isArray(value.content)) {
+    return textFromContent(value.content)
+  }
+  return ''
+}
+
+/**
+ * OpenAI-compatible servers agree on the request shape more often than they
+ * agree on the response shape. Keep every text extraction path here so model
+ * diagnostics, background jobs and chat all interpret a provider identically.
+ */
+export function extractModelResponseText(data) {
+  const message = data?.choices?.[0]?.message
+  const candidates = [
+    message?.content,
+    message?.text,
+    data?.choices?.[0]?.text,
+    data?.output_text,
+    data?.output?.text,
+    data?.output,
+    data?.content,
+    data?.response,
+    data?.generated_text,
+    data?.answer,
+    data?.result,
+    data?.raw,
+  ]
+  for (const candidate of candidates) {
+    const text = textFromContent(candidate)
+    if (text) return text
+  }
+  return ''
+}
+
 export function parseOpenAICompatibleResponse(data) {
-  const reply = data?.choices?.[0]?.message?.content
-    || data?.choices?.[0]?.text
-    || data?.output?.text
-    || data?.result
+  const reply = extractModelResponseText(data)
   if (!reply) throw new Error('模型返回为空，请检查模型名称或端点响应格式。')
   return stripEmbeddedReasoning(reply)
 }
@@ -49,7 +88,7 @@ export function parseModelProviderResponse(data, profile = {}) {
   }
   const message = data?.choices?.[0]?.message || {}
   return {
-    content: stripEmbeddedReasoning(message.content || data?.choices?.[0]?.text || data?.output?.text || data?.result || ''),
+    content: stripEmbeddedReasoning(extractModelResponseText(data)),
     toolCalls: Array.isArray(message.tool_calls) ? message.tool_calls : [],
     usage: extractUsage(data),
     finishReason: data?.choices?.[0]?.finish_reason || null,

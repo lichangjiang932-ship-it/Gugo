@@ -78,6 +78,27 @@ test('streamed tool inputs become ready before the canonical tool_calls batch', 
   assert.equal(events[1].toolCalls[0].id, 'read-1')
 })
 
+test('stream parser accepts SSE data fields without a space after the colon', async () => {
+  const encoder = new TextEncoder()
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode('data:{"choices":[{"delta":{"content":"pong"}}]}\n\n'))
+      controller.enqueue(encoder.encode('data:[DONE]\n\n'))
+      controller.close()
+    },
+  })
+  const events = []
+  for await (const event of streamOpenAICompatible({
+    config: { baseUrl: 'https://example.test/v1', apiKey: 'x', modelName: 'test' },
+    messages: [{ role: 'user', content: 'ping' }],
+    fetchImpl: async () => new Response(body, { status: 200 }),
+  })) events.push(event)
+
+  assert.equal(events[0].type, 'text')
+  assert.equal(events[0].delta, 'pong')
+  assert.equal(events.at(-1).type, 'finish')
+})
+
 test('chat tool-loop streaming forwards deltas and returns canonical tool calls', async () => {
   const encoder = new TextEncoder()
   const frames = [

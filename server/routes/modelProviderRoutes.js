@@ -32,7 +32,11 @@ function buildProviderTestEnv(provider) {
     MODEL_PROVIDER_SELECTED_HEADERS: JSON.stringify(provider.headers || {}),
     MODEL_NAME: provider.defaultModel,
     MODEL_TEMPERATURE: '0',
-    MODEL_MAX_TOKENS: '32',
+    // Thinking models can spend the first 100+ tokens exclusively in
+    // reasoning_content. A 32-token probe therefore reported a healthy LM
+    // Studio/Qwen endpoint as an empty response. Keep the probe bounded while
+    // leaving enough room for a short final answer.
+    MODEL_MAX_TOKENS: '512',
   }
 }
 

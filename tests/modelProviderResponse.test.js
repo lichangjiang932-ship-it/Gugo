@@ -1,7 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { parseModelProviderResponse } from '../server/adapters/modelProxy.js'
+import {
+  parseModelProviderResponse,
+  parseOpenAICompatibleResponse,
+} from '../server/adapters/modelProxy.js'
 
 test('parseModelProviderResponse removes complete embedded think blocks from compatible responses', () => {
   const parsed = parseModelProviderResponse({
@@ -39,4 +42,16 @@ test('parseModelProviderResponse removes orphaned closing think traces from nati
   assert.equal(parsed.content.includes('</think>'), false)
   assert.equal(parsed.finishReason, 'stop')
   assert.equal(parsed.usage.totalTokens, 13)
+})
+
+test('compatible response parsing accepts content arrays and Responses-style output', () => {
+  assert.equal(parseOpenAICompatibleResponse({
+    choices: [{ message: { content: [{ type: 'text', text: 'array reply' }] } }],
+  }), 'array reply')
+
+  assert.equal(parseModelProviderResponse({
+    output: [{ type: 'message', content: [{ type: 'output_text', text: 'responses reply' }] }],
+  }).content, 'responses reply')
+
+  assert.equal(parseModelProviderResponse({ raw: 'plain text reply' }).content, 'plain text reply')
 })

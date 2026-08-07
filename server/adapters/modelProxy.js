@@ -1257,8 +1257,11 @@ export async function* streamOpenAICompatible({
       buffer = lines.pop() || ''
       for (const line of lines) {
         const trimmed = line.trim()
-        if (!trimmed.startsWith('data: ')) continue
-        const payload = trimmed.slice(6)
+        // The SSE spec permits both `data:value` and `data: value`. LM Studio,
+        // llama.cpp and small compatibility proxies do not all choose the same
+        // spelling, so requiring the space can silently discard every token.
+        if (!trimmed.startsWith('data:')) continue
+        const payload = trimmed.slice(5).trimStart()
         if (payload === '[DONE]') {
           if (nativeStreamState) {
             for (const event of finishNativeProviderStream(nativeStreamState)) yield event

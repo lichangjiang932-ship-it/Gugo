@@ -176,6 +176,7 @@ test('provider test calls the selected provider chat endpoint even when it is di
     assert.equal(receivedAuthorization, null)
     assert.equal(receivedBody.model, 'qwen3:8b')
     assert.equal(receivedBody.messages[0].content, 'Reply with only: pong')
+    assert.equal(receivedBody.max_tokens, 512)
   } finally {
     await new Promise((resolve) => modelServer.close(resolve))
   }
