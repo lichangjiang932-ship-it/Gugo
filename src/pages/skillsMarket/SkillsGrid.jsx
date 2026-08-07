@@ -1,4 +1,4 @@
-import { Plus, Trash2 } from 'lucide-react'
+import { Trash2 } from 'lucide-react'
 import { getSkillIconPresentation } from '../../lib/skillIcons.js'
 
 export default function SkillsGrid({ skills, onSelect, onDelete, t }) {
@@ -18,23 +18,14 @@ export default function SkillsGrid({ skills, onSelect, onDelete, t }) {
               onClick={() => onSelect(skill)}
               className="absolute inset-0 z-0 rounded-[18px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/50 focus-visible:ring-inset"
               aria-label={detailLabel}
+              data-skill-open
             />
-            <div className="pointer-events-none relative z-10 flex items-center gap-3 pr-10">
+            <div className="pointer-events-none relative z-10 flex items-center gap-3">
               <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ring-1 ring-inset ${iconClassName}`} data-skill-icon>
                 <Icon className="h-[22px] w-[22px]" strokeWidth={1.9} aria-hidden="true" />
               </div>
               <h2 className="min-w-0 truncate text-[15px] font-semibold leading-5 text-ink" title={skill.name}>{skill.name}</h2>
             </div>
-            <button
-              type="button"
-              onClick={() => onSelect(skill)}
-              className="absolute right-4 top-4 z-20 flex h-9 w-9 items-center justify-center rounded-xl bg-ink/[0.045] text-ink-soft transition-colors hover:bg-ink/10 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/50"
-              aria-hidden="true"
-              tabIndex={-1}
-              data-skill-action="details"
-            >
-              <Plus className="h-[18px] w-[18px]" strokeWidth={1.8} aria-hidden="true" />
-            </button>
             <p className="pointer-events-none relative z-10 mt-4 line-clamp-2 min-h-11 text-[13px] leading-[1.65] text-ink-soft" title={skill.desc}>{skill.desc}</p>
             {skill.localCustom && (
               <button

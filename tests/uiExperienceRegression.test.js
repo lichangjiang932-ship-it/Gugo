@@ -115,7 +115,8 @@ test('skills open details before use and appearance offers a broader accent pale
   assert.match(skillDetail, /role="dialog"/)
   assert.match(skills, /onUse=\{market\.useSelectedSkill\}/)
   assert.match(skillGrid, /onClick=\{\(\) => onSelect\(skill\)\}/)
-  assert.match(skillGrid, /data-skill-action="details"/)
+  assert.match(skillGrid, /data-skill-open/)
+  assert.doesNotMatch(skillGrid, /data-skill-action="details"/)
   assert.doesNotMatch(skillGrid, /skill\.categoryLabel|skill\.compatibility|skill\.pluginName|skill\.perms/)
 
   const palette = settings.match(/const ACCENT_COLORS = \[([^\]]+)\]/)?.[1] || ''

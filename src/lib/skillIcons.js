@@ -109,6 +109,8 @@ function skillSearchText(skillOrId) {
     skillOrId.capabilityKey,
     ...(Array.isArray(skillOrId.perms) ? skillOrId.perms : []),
   ].filter(Boolean).join(' ')
+    .replace(/[_./:-]+/g, ' ')
+    .replace(/([a-z\d])([A-Z])/g, '$1 $2')
 }
 
 function findSemanticIcon(skillOrId) {

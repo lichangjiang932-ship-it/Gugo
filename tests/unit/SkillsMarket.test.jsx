@@ -146,11 +146,12 @@ test('自定义技能创建后持久化可执行指令并立即出现在技能�
     assert.match(skillCards[0].textContent, /系统化调试/)
     assert.match(skillCards[0].textContent, /基于证据定位根因/)
     assert.equal(skillCards[0].querySelectorAll('[data-skill-icon]').length, 1)
-    assert.equal(skillCards[0].querySelectorAll('[data-skill-action="details"]').length, 1)
+    assert.equal(skillCards[0].querySelectorAll('[data-skill-action="details"]').length, 0)
+    assert.equal(skillCards[0].querySelectorAll('[data-skill-open]').length, 1)
     assert.doesNotMatch(skillCards[0].textContent, /Superpowers|开发与测试|已就绪/)
     assert.equal(rootElement.querySelector('[data-skill-id="codex-obscure-runtime"]'), null)
 
-    await click(dom, act, skillCards[0].querySelector('[data-skill-action="details"]'))
+    await click(dom, act, skillCards[0].querySelector('[data-skill-open]'))
     const curatedDialog = rootElement.querySelector('[role="dialog"]')
     assert.ok(curatedDialog)
     assert.match(curatedDialog.textContent, /Superpowers/)
@@ -170,7 +171,7 @@ test('自定义技能创建后持久化可执行指令并立即出现在技能�
     assert.ok(blockedSkill)
     assert.match(blockedSkill.textContent, /依赖额外运行环境/)
     assert.doesNotMatch(blockedSkill.textContent, /当前环境无法直接运行/)
-    await click(dom, act, blockedSkill.querySelector('[data-skill-action="details"]'))
+    await click(dom, act, blockedSkill.querySelector('[data-skill-open]'))
 
     const detailDialog = rootElement.querySelector('[role="dialog"]')
     assert.ok(detailDialog)

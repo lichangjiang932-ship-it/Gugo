@@ -51,3 +51,7 @@ test('插件与自定义技能按完整元数据获得稳定的语义图标', ()
   assert.equal(first.Icon, second.Icon)
   assert.equal(first.className, second.className)
 })
+
+test('underscored custom skill ids keep their semantic icon', () => {
+  assert.equal(getSkillIcon({ id: 'presentation_builder' }), Presentation)
+})

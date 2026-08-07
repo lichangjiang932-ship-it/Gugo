@@ -6,6 +6,13 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.11] - 2026-08-08
+
+### Fixed
+
+- Removed the remaining top-right affordance from skill cards while preserving
+  full-card keyboard and pointer access to skill details.
+
 ## [0.10.10] - 2026-08-07
 
 ### Changed
