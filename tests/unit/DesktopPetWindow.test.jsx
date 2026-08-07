@@ -40,7 +40,7 @@ function setupDom() {
   return dom
 }
 
-test('standalone desktop pet releases pointer capture on blur and opens the native close menu', async () => {
+test('standalone desktop pet keeps fast drags alive and always releases the pointer', async () => {
   const dom = setupDom()
   const dragMessages = []
   let mainCancel = null
@@ -78,36 +78,91 @@ test('standalone desktop pet releases pointer capture on blur and opens the nati
 
     await act(async () => {
       pet.dispatchEvent(pointerEvent(dom, 'pointerdown', {
-        pointerId: 7, pointerType: 'mouse', button: 0, screenX: 100, screenY: 100,
+        pointerId: 7, pointerType: 'mouse', button: 0, buttons: 1, screenX: 100, screenY: 100,
       }))
     })
-    assert.equal(capturedPointer, null, 'a simple click must not capture the system pointer')
+    assert.equal(capturedPointer, 7, 'capture must begin on pointer-down before a fast drag leaves the tiny window')
     assert.equal(dragMessages.at(-1).phase, 'start')
 
     await act(async () => {
       pet.dispatchEvent(pointerEvent(dom, 'pointermove', {
-        pointerId: 7, pointerType: 'mouse', button: 0, screenX: 112, screenY: 108,
+        pointerId: 7, pointerType: 'mouse', button: 0, buttons: 1, screenX: 102, screenY: 102,
       }))
     })
-    assert.equal(capturedPointer, 7, 'capture begins only after the drag threshold')
+    assert.equal(dragMessages.filter(({ phase }) => phase === 'move').length, 0, 'the click threshold still prevents accidental moves')
+
+    await act(async () => {
+      pet.dispatchEvent(pointerEvent(dom, 'pointermove', {
+        pointerId: 7, pointerType: 'mouse', button: 0, buttons: 1, screenX: 112, screenY: 108,
+      }))
+    })
     assert.equal(dragMessages.at(-1).phase, 'move')
 
+    capturedPointer = null
+    await act(async () => {
+      pet.dispatchEvent(pointerEvent(dom, 'lostpointercapture', {
+        pointerId: 7, pointerType: 'mouse', buttons: 1, screenX: 112, screenY: 108,
+      }))
+    })
+    assert.equal(dragMessages.at(-1).phase, 'move', 'moving the Electron window must not be mistaken for mouse-up')
+
+    await act(async () => {
+      pet.dispatchEvent(pointerEvent(dom, 'pointermove', {
+        pointerId: 7, pointerType: 'mouse', button: 0, buttons: 1, screenX: 140, screenY: 125,
+      }))
+    })
+    assert.equal(capturedPointer, 7, 'capture is restored after Chromium drops it during a window move')
+    assert.equal(dragMessages.filter(({ phase }) => phase === 'move').length, 2)
+
+    await act(async () => {
+      pet.dispatchEvent(pointerEvent(dom, 'pointerup', {
+        pointerId: 7, pointerType: 'mouse', button: 0, buttons: 0, screenX: 140, screenY: 125,
+      }))
+    })
+    assert.equal(capturedPointer, null, 'mouse-up must release capture so other windows remain clickable')
+    assert.equal(releaseCount, 1)
+    assert.equal(dragMessages.at(-1).phase, 'end')
+
+    await act(async () => pet.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })))
+    assert.equal(pet.dataset.reacting, 'false', 'finishing a drag must suppress its synthetic click')
+
+    await act(async () => {
+      pet.dispatchEvent(pointerEvent(dom, 'pointerdown', {
+        pointerId: 8, pointerType: 'mouse', button: 0, buttons: 1, screenX: 30, screenY: 30,
+      }))
+      pet.dispatchEvent(pointerEvent(dom, 'pointerup', {
+        pointerId: 8, pointerType: 'mouse', button: 0, buttons: 0, screenX: 30, screenY: 30,
+      }))
+      pet.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    assert.equal(pet.dataset.reacting, 'true', 'a normal click after dragging must still play the pet interaction')
+
+    await act(async () => {
+      pet.dispatchEvent(pointerEvent(dom, 'pointerdown', {
+        pointerId: 9, pointerType: 'mouse', button: 0, buttons: 1, screenX: 40, screenY: 40,
+      }))
+      pet.dispatchEvent(pointerEvent(dom, 'pointermove', {
+        pointerId: 9, pointerType: 'mouse', button: 0, buttons: 1, screenX: 52, screenY: 40,
+      }))
+    })
+    assert.equal(capturedPointer, 9)
     await act(async () => dom.window.dispatchEvent(new dom.window.Event('blur')))
     assert.equal(capturedPointer, null)
-    assert.equal(releaseCount, 1)
+    assert.equal(releaseCount, 3)
     assert.equal(dragMessages.at(-1).phase, 'end')
 
     await act(async () => {
       pet.dispatchEvent(pointerEvent(dom, 'pointerdown', {
-        pointerId: 9, pointerType: 'mouse', button: 0, screenX: 40, screenY: 40,
+        pointerId: 11, pointerType: 'mouse', button: 0, buttons: 1, screenX: 60, screenY: 60,
       }))
       pet.dispatchEvent(pointerEvent(dom, 'pointermove', {
-        pointerId: 9, pointerType: 'mouse', button: 0, screenX: 52, screenY: 40,
+        pointerId: 11, pointerType: 'mouse', button: 0, buttons: 1, screenX: 72, screenY: 60,
       }))
     })
-    assert.equal(capturedPointer, 9)
+    assert.equal(capturedPointer, 11)
     await act(async () => mainCancel())
     assert.equal(capturedPointer, null, 'the Electron main-process fallback must release renderer capture')
+    assert.equal(releaseCount, 4)
     assert.equal(dragMessages.at(-1).phase, 'end')
 
     const menuEvent = new dom.window.MouseEvent('contextmenu', {

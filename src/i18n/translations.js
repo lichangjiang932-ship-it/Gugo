@@ -146,6 +146,12 @@ const CHAT_SURFACE_TRANSLATIONS = {
   },
 }
 
+Object.assign(CHAT_SURFACE_TRANSLATIONS.zh.chatPreview, { loadingFile: '正在读取文件…', previewFailed: '文件预览失败' })
+Object.assign(CHAT_SURFACE_TRANSLATIONS.en.chatPreview, { loadingFile: 'Loading file…', previewFailed: 'File preview failed' })
+Object.assign(CHAT_SURFACE_TRANSLATIONS.ja.chatPreview, { loadingFile: 'ファイルを読み込み中…', previewFailed: 'ファイルのプレビューに失敗しました' })
+Object.assign(CHAT_SURFACE_TRANSLATIONS.ko.chatPreview, { loadingFile: '파일을 불러오는 중…', previewFailed: '파일 미리보기 실패' })
+Object.assign(CHAT_SURFACE_TRANSLATIONS['zh-TW'].chatPreview, { loadingFile: '正在讀取檔案…', previewFailed: '檔案預覽失敗' })
+
 const FEATURE_PAGE_TRANSLATIONS = {
   zh: {
     chatMessages: {

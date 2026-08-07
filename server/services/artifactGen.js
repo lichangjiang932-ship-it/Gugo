@@ -45,18 +45,95 @@ function ensureArtifactDir() {
   return ARTIFACT_DIR
 }
 
-function newArtifactPath(ext) {
+const ARTIFACT_FALLBACK_NAMES = Object.freeze({
+  pptx: 'presentation',
+  docx: 'document',
+  xlsx: 'spreadsheet',
+  png: 'image',
+  jpg: 'image',
+  webp: 'image',
+})
+
+const FORBIDDEN_FILENAME_CHARACTERS = new Set(['<', '>', ':', '"', '/', '\\', '|', '?', '*'])
+
+function hasUnsafeFilenameCharacter(value) {
+  return Array.from(String(value || '')).some((character) => {
+    const code = character.codePointAt(0)
+    return code <= 31 || code === 127 || FORBIDDEN_FILENAME_CHARACTERS.has(character)
+  })
+}
+
+function replaceUnsafeFilenameCharacters(value) {
+  return Array.from(String(value || ''), (character) => {
+    const code = character.codePointAt(0)
+    return code <= 31 || code === 127 || FORBIDDEN_FILENAME_CHARACTERS.has(character) ? ' ' : character
+  }).join('')
+}
+
+function cleanArtifactTitle(title, ext) {
+  const fallback = ARTIFACT_FALLBACK_NAMES[ext] || 'artifact'
+  let value = String(title || fallback)
+    .normalize('NFKC')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\b(?:tool[_ -]?call|create_(?:pptx|docx|xlsx))\b[\s\S]*$/i, ' ')
+    .replace(new RegExp(`\\.${ext}$`, 'i'), '')
+    .replace(/^(?:请|請|帮我|幫我|请帮我|請幫我|please\s+)?(?:生成|產生|创建|建立|制作|製作|导出|匯出|create|generate|export)(?:一份|一个|一個|a|an)?\s*/i, '')
+    .replace(/^(?:基于|基於|根据|根據)(?:已获取的|已取得的|上述|以上)?\s*/i, '')
+    .replace(/(?:现在|現在|并|並|然后|然後)?\s*(?:生成|產生|创建|建立|制作|製作|导出|匯出|create|generate|export)(?:一份|一个|一個)?\s*(?:PPTX?|Word|DOCX?|Excel|XLSX?|文档|文件|文檔|檔案|演示文稿|簡報|表格)?\s*$/i, '')
+  value = replaceUnsafeFilenameCharacters(value)
+    .replace(/[，。；：！？、,;:!]+/g, ' ')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[.\s_-]+|[.\s_-]+$/g, '')
+
+  value = Array.from(value || fallback).slice(0, 64).join('').replace(/[.\s_-]+$/g, '') || fallback
+  if (/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(value)) value = `file-${value}`
+  return value
+}
+
+export function buildArtifactFilename(title, extension) {
+  const ext = String(extension || '').replace(/^\./, '').toLowerCase()
+  if (!/^[a-z0-9]{1,12}$/.test(ext)) throw new Error('invalid artifact extension')
+  return `${cleanArtifactTitle(title, ext)}.${ext}`
+}
+
+function artifactNameExists(filename) {
+  if (fs.existsSync(path.join(ensureArtifactDir(), filename))) return true
+  try {
+    return !!(getArtifactByFilename(filename) || getTurnArtifactByFilename(filename))
+  } catch {
+    return false
+  }
+}
+
+function newArtifactPath(title, ext) {
   ensureArtifactDir()
   const id = crypto.randomBytes(8).toString('hex')
-  const filename = `${Date.now()}-${id}.${ext}`
-  return { id, filename, fullPath: path.join(ARTIFACT_DIR, filename), url: `/api/artifacts/${filename}` }
+  const preferred = buildArtifactFilename(title, ext)
+  const parsed = path.parse(preferred)
+  for (let suffix = 1; suffix <= 10_000; suffix += 1) {
+    const filename = suffix === 1 ? preferred : `${parsed.name}-${suffix}${parsed.ext}`
+    if (artifactNameExists(filename)) continue
+    const fullPath = path.join(ARTIFACT_DIR, filename)
+    try {
+      const fd = fs.openSync(fullPath, 'wx')
+      fs.closeSync(fd)
+      return { id, filename, fullPath, url: `/api/artifacts/${encodeURIComponent(filename)}` }
+    } catch (error) {
+      if (error?.code === 'EEXIST') continue
+      throw error
+    }
+  }
+  throw new Error('could not allocate a unique artifact filename')
 }
 
 export function createImageArtifact({ title = 'generated-image', buffer, mimeType = 'image/png' } = {}) {
   const extension = mimeType === 'image/jpeg' ? 'jpg' : mimeType === 'image/webp' ? 'webp' : 'png'
-  const artifactPath = newArtifactPath(extension)
   const bytes = Buffer.from(buffer || [])
   if (!bytes.length) throw new Error('image buffer is empty')
+  const artifactPath = newArtifactPath(title, extension)
   fs.writeFileSync(artifactPath.fullPath, bytes)
   return { ...artifactPath, type: 'image', title: String(title || 'generated-image').slice(0, 200) }
 }
@@ -711,7 +788,7 @@ export async function createPptx({ title = 'Presentation', subtitle = '', theme:
   const injected = await injectEaFont(buffer, CJK_FONT)
   buffer = Buffer.isBuffer(injected) ? injected : Buffer.from(injected)
 
-  const a = newArtifactPath('pptx')
+  const a = newArtifactPath(title, 'pptx')
   fs.writeFileSync(a.fullPath, buffer)
   return { ...a, type: 'pptx', title, slideCount: slides.length, byteLength: buffer.length, themeName: explicit ? themeName : undefined }
 }
@@ -808,7 +885,7 @@ export async function createDocx({ title = 'Document', paragraphs = [] } = {}) {
 </w:document>`,
   )
   const buffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
-  const a = newArtifactPath('docx')
+  const a = newArtifactPath(title, 'docx')
   fs.writeFileSync(a.fullPath, buffer)
   return { ...a, type: 'docx', title, paragraphCount: paragraphs.length, byteLength: buffer.length }
 }
@@ -903,7 +980,7 @@ ${validSheets.map((s, i) => `    <sheet name="${escapeXml(s.name)}" sheetId="${i
   })
 
   const buffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
-  const a = newArtifactPath('xlsx')
+  const a = newArtifactPath(title, 'xlsx')
   fs.writeFileSync(a.fullPath, buffer)
   const totalRows = validSheets.reduce((sum, s) => sum + s.rows.length, 0)
   return { ...a, type: 'xlsx', title, sheetCount: validSheets.length, rowCount: totalRows, byteLength: buffer.length }
@@ -911,8 +988,103 @@ ${validSheets.map((s, i) => `    <sheet name="${escapeXml(s.name)}" sheetId="${i
 
 /* ────────────────────────── 静态服务 ────────────────────────── */
 
-const SAFE_NAME = /^[\w.-]+\.(pptx|docx|xlsx)$/
-const PREVIEW_NAME = /^[\w.-]+\.pptx$/
+function isSafeArtifactFilename(filename) {
+  const value = String(filename || '')
+  return value.length > 0 && value.length <= 240 &&
+    value === path.basename(value) && value !== '.' && value !== '..' &&
+    !hasUnsafeFilenameCharacter(value) &&
+    /^\.[a-z0-9]{1,12}$/i.test(path.extname(value))
+}
+
+const ARTIFACT_CONTENT_TYPES = Object.freeze({
+  pdf: 'application/pdf',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  xls: 'application/vnd.ms-excel',
+  xlsm: 'application/vnd.ms-excel.sheet.macroEnabled.12',
+  xlsb: 'application/vnd.ms-excel.sheet.binary.macroEnabled.12',
+  ods: 'application/vnd.oasis.opendocument.spreadsheet',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  bmp: 'image/bmp',
+  avif: 'image/avif',
+  svg: 'image/svg+xml',
+  html: 'text/html; charset=utf-8',
+  htm: 'text/html; charset=utf-8',
+  txt: 'text/plain; charset=utf-8',
+  md: 'text/markdown; charset=utf-8',
+  markdown: 'text/markdown; charset=utf-8',
+  json: 'application/json; charset=utf-8',
+  xml: 'application/xml; charset=utf-8',
+  csv: 'text/csv; charset=utf-8',
+  js: 'text/javascript; charset=utf-8',
+  jsx: 'text/javascript; charset=utf-8',
+  ts: 'text/plain; charset=utf-8',
+  tsx: 'text/plain; charset=utf-8',
+  css: 'text/css; charset=utf-8',
+  py: 'text/x-python; charset=utf-8',
+  java: 'text/plain; charset=utf-8',
+  c: 'text/plain; charset=utf-8',
+  cpp: 'text/plain; charset=utf-8',
+  h: 'text/plain; charset=utf-8',
+  go: 'text/plain; charset=utf-8',
+  rs: 'text/plain; charset=utf-8',
+  sh: 'text/plain; charset=utf-8',
+  ps1: 'text/plain; charset=utf-8',
+  yaml: 'text/yaml; charset=utf-8',
+  yml: 'text/yaml; charset=utf-8',
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  m4a: 'audio/mp4',
+  aac: 'audio/aac',
+  ogg: 'audio/ogg',
+  oga: 'audio/ogg',
+  flac: 'audio/flac',
+  opus: 'audio/ogg',
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+  mov: 'video/quicktime',
+  m4v: 'video/mp4',
+  ogv: 'video/ogg',
+})
+
+function artifactContentType(filename) {
+  const ext = path.extname(filename).slice(1).toLowerCase()
+  return ARTIFACT_CONTENT_TYPES[ext] || 'application/octet-stream'
+}
+
+function artifactContentDisposition(kind, filename) {
+  const ext = path.extname(filename)
+  const asciiStem = path.basename(filename, ext)
+    .normalize('NFKD')
+    .replace(/[^\x20-\x7e]+/g, '-')
+    .replace(/["\\;]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '') || 'artifact'
+  const ascii = `${asciiStem}${ext.replace(/[^.a-z0-9]/gi, '')}`
+  const encoded = encodeURIComponent(filename).replace(/['()*]/g, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)
+  return `${kind}; filename="${ascii}"; filename*=UTF-8''${encoded}`
+}
+
+function parseArtifactRange(header, size) {
+  const match = String(header || '').match(/^bytes=(\d*)-(\d*)$/)
+  if (!match) return null
+  let start = match[1] ? Number(match[1]) : null
+  let end = match[2] ? Number(match[2]) : null
+  if (start == null && end != null) {
+    start = Math.max(0, size - end)
+    end = size - 1
+  } else {
+    start = start ?? 0
+    end = end == null ? size - 1 : Math.min(end, size - 1)
+  }
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || start >= size) return null
+  return { start, end }
+}
 
 function withStatus(statusCode, message) {
   const err = new Error(message)
@@ -944,7 +1116,7 @@ function filenameFromArtifactPath(input) {
   } catch {
     // fall through to filename/path handling
   }
-  if (PREVIEW_NAME.test(raw)) return raw
+  if (isSafeArtifactFilename(raw) && path.extname(raw).toLowerCase() === '.pptx') return raw
   return ''
 }
 
@@ -1048,8 +1220,9 @@ export function handleArtifactDownload(req, res) {
   const url = req.url || ''
   const m = url.match(/^\/api\/artifacts\/([^?#]+)/)
   if (!m) { res.statusCode = 404; res.end('not found'); return }
-  const filename = decodeURIComponent(m[1])
-  if (!SAFE_NAME.test(filename)) { res.statusCode = 400; res.end('bad filename'); return }
+  let filename = ''
+  try { filename = decodeURIComponent(m[1]) } catch { /* rejected below */ }
+  if (!isSafeArtifactFilename(filename)) { res.statusCode = 400; res.end('bad filename'); return }
 
   // 鉴权:Header 优先,query token 兜底(浏览器 <a> 下载没法带 Authorization 头)
   let userId = authenticateRequest(req)
@@ -1081,20 +1254,36 @@ export function handleArtifactDownload(req, res) {
   }
   if (!full.startsWith(fs.realpathSync(ARTIFACT_DIR) + path.sep)) { res.statusCode = 400; res.end('bad filename'); return }
   if (!fs.existsSync(full)) { res.statusCode = 404; res.end('not found'); return }
-  const ext = path.extname(filename).slice(1)
-  const ct =
-    ext === 'pptx'
-      ? 'application/vnd.openxmlformats-officedocument.presentationml.presentation'
-      : ext === 'docx'
-        ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-        : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-  res.writeHead(200, {
-    'Content-Type': ct,
-    'Content-Disposition': `attachment; filename="${filename}"`,
-    'Content-Length': fs.statSync(full).size,
+  const requestUrl = new URL(req.url, 'http://localhost')
+  const preview = requestUrl.searchParams.get('preview') === '1'
+  const contentType = artifactContentType(filename)
+  const size = fs.statSync(full).size
+  const requestedRange = req.headers.range
+  const range = requestedRange ? parseArtifactRange(requestedRange, size) : null
+  if (requestedRange && !range) {
+    res.writeHead(416, { 'Content-Range': `bytes */${size}`, 'Accept-Ranges': 'bytes' })
+    res.end()
+    return
+  }
+  const headers = {
+    'Content-Type': contentType,
+    'Content-Disposition': artifactContentDisposition(preview ? 'inline' : 'attachment', filename),
+    'Content-Length': range ? range.end - range.start + 1 : size,
     'Cache-Control': 'no-store',
-  })
-  const stream = fs.createReadStream(full)
+    'Accept-Ranges': 'bytes',
+    'X-Content-Type-Options': 'nosniff',
+    'Cross-Origin-Resource-Policy': 'same-origin',
+  }
+  if (preview && contentType === 'application/pdf') headers['X-Frame-Options'] = 'SAMEORIGIN'
+  if (range) headers['Content-Range'] = `bytes ${range.start}-${range.end}/${size}`
+  if (preview && /^text\/html/i.test(contentType)) {
+    headers['Content-Security-Policy'] = "sandbox allow-scripts allow-forms; default-src 'none'; img-src 'self' data: blob: https: http:; media-src 'self' data: blob: https: http:; style-src 'unsafe-inline' https:; font-src data: https:; script-src 'unsafe-inline' https:"
+  } else if (preview && /^image\/svg\+xml/i.test(contentType)) {
+    headers['Content-Security-Policy'] = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+  }
+  res.writeHead(range ? 206 : 200, headers)
+  if (req.method === 'HEAD') { res.end(); return }
+  const stream = fs.createReadStream(full, range || undefined)
   stream.on('error', (err) => {
     console.error('[artifactGen] read stream error:', err?.message)
     if (!res.headersSent) {

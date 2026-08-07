@@ -20,6 +20,18 @@ function sendDrag(phase, event = {}) {
   })
 }
 
+function captureActivePointer(drag) {
+  if (!drag || typeof drag.target?.setPointerCapture !== 'function') return false
+  try {
+    drag.target.setPointerCapture(drag.pointerId)
+    drag.captured = typeof drag.target.hasPointerCapture !== 'function'
+      || drag.target.hasPointerCapture(drag.pointerId)
+  } catch {
+    drag.captured = false
+  }
+  return drag.captured
+}
+
 export default function DesktopPetWindow() {
   const { t } = useT()
   const [state, setState] = useState({ visible: true, status: { kind: 'idle', tool: '' } })
@@ -124,13 +136,11 @@ export default function DesktopPetWindow() {
     const cancelWhenHidden = () => {
       if (document.visibilityState !== 'visible') cancel()
     }
-    const root = document.documentElement
     window.addEventListener('pointerup', finishPointer, true)
     window.addEventListener('pointercancel', finishPointer, true)
     window.addEventListener('mouseup', finishMouse, true)
     window.addEventListener('blur', cancel)
     window.addEventListener('pagehide', cancel)
-    root?.addEventListener('mouseleave', cancel)
     document.addEventListener('visibilitychange', cancelWhenHidden)
     const unsubscribeMain = window.gugoDesktop?.onPetDragCancel?.(cancel)
     return () => {
@@ -139,7 +149,6 @@ export default function DesktopPetWindow() {
       window.removeEventListener('mouseup', finishMouse, true)
       window.removeEventListener('blur', cancel)
       window.removeEventListener('pagehide', cancel)
-      root?.removeEventListener('mouseleave', cancel)
       document.removeEventListener('visibilitychange', cancelWhenHidden)
       unsubscribeMain?.()
       cancel()
@@ -149,7 +158,7 @@ export default function DesktopPetWindow() {
   const handlePointerDown = (event) => {
     if (event.pointerType === 'mouse' && event.button !== 0) return
     finishActiveDrag(null, { cancelled: true })
-    dragRef.current = {
+    const drag = {
       pointerId: event.pointerId,
       startX: event.screenX,
       startY: event.screenY,
@@ -157,27 +166,40 @@ export default function DesktopPetWindow() {
       captured: false,
       target: event.currentTarget,
     }
+    dragRef.current = drag
+    // Capture before the pointer can outrun this tiny transparent window. Waiting
+    // for the drag threshold loses fast drags at the window edge on Windows.
+    captureActivePointer(drag)
     sendDrag('start', event)
   }
 
   const handlePointerMove = (event) => {
     const drag = dragRef.current
     if (!drag || drag.pointerId !== event.pointerId) return
+    if (event.pointerType === 'mouse' && Number.isFinite(event.buttons) && (event.buttons & 1) === 0) {
+      finishActiveDrag(event, { cancelled: false })
+      return
+    }
+    // Moving a frameless BrowserWindow can make Chromium drop capture. Re-acquire
+    // it on the next event instead of mistaking that transition for mouse-up.
+    if (!drag.captured) captureActivePointer(drag)
     const distance = Math.hypot(event.screenX - drag.startX, event.screenY - drag.startY)
     if (!drag.moved && distance < DRAG_THRESHOLD) return
-    if (!drag.moved) {
-      drag.moved = true
-      try {
-        drag.target?.setPointerCapture?.(drag.pointerId)
-        drag.captured = typeof drag.target?.hasPointerCapture !== 'function'
-          || drag.target.hasPointerCapture(drag.pointerId)
-      } catch { /* dragging remains usable without OS pointer capture */ }
-    }
+    drag.moved = true
     sendDrag('move', event)
   }
 
   const finishPointer = (event) => {
     finishActiveDrag(event, { cancelled: event.type !== 'pointerup' })
+  }
+
+  const handleLostPointerCapture = (event) => {
+    const drag = dragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    drag.captured = false
+    if (event.pointerType === 'mouse' && Number.isFinite(event.buttons) && (event.buttons & 1) === 0) {
+      finishActiveDrag(event, { cancelled: false, releaseCapture: false })
+    }
   }
 
   const handleClick = (event) => {
@@ -219,8 +241,7 @@ export default function DesktopPetWindow() {
       onPointerMove={handlePointerMove}
       onPointerUp={finishPointer}
       onPointerCancel={finishPointer}
-      onPointerLeave={(event) => finishActiveDrag(event, { cancelled: true })}
-      onLostPointerCapture={(event) => finishActiveDrag(event, { cancelled: true, releaseCapture: false })}
+      onLostPointerCapture={handleLostPointerCapture}
       onContextMenu={handleContextMenu}
     >
       {preferences.customImage ? (

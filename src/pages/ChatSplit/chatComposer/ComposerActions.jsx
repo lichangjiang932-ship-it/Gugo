@@ -23,7 +23,7 @@ export default function ComposerActions({
   voiceState,
 }) {
   return (
-    <div className="mt-2.5 flex items-center justify-between gap-3">
+    <div data-testid="chat-composer-actions" className="mt-2.5 flex items-center justify-between gap-3">
       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
         <input
           type="file"

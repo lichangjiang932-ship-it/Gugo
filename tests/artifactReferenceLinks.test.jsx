@@ -37,7 +37,49 @@ test('generated file names render as highlighted links and open the right-pane p
     assert.match(link.textContent, /calculator\.html/)
     assert.match(link.className, /bg-ember-soft/)
     await act(async () => link.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
-    assert.equal(opened[0].preview.filename, 'calculator.html')
+    assert.equal(opened[0].directFile.filename, 'calculator.html')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('an inline generated-file link keeps narration, opens the real file, and suppresses the duplicate card', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const opened = []
+  const msg = {
+    id: 'inline-docx-message',
+    role: 'assistant',
+    content: '文档已经生成，可直接查看：[项目总结.docx](/api/artifacts/%E9%A1%B9%E7%9B%AE%E6%80%BB%E7%BB%93.docx)',
+    timestamp: Date.now(),
+    meta: {
+      artifactType: 'docx',
+      artifactTitle: '项目总结',
+      serverArtifacts: [{ id: 'docx-1', filename: '项目总结.docx', type: 'docx', url: '/api/artifacts/%E9%A1%B9%E7%9B%AE%E6%80%BB%E7%BB%93.docx' }],
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <MessageRow
+        msg={msg}
+        rowKey={msg.id}
+        generatingMessageId=""
+        isGenerating={false}
+        lang="zh"
+        onOpenArtifact={(artifact) => opened.push(artifact)}
+        t={(key) => key}
+      />,
+    ))
+    assert.match(rootElement.textContent, /文档已经生成，可直接查看/)
+    assert.equal(rootElement.querySelectorAll('[data-testid="artifact-open-card"]').length, 0)
+    const inlineLink = rootElement.querySelector('a[href*="api/artifacts"]')
+    assert.ok(inlineLink)
+    await act(async () => inlineLink.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })))
+    assert.equal(opened.length, 1)
+    assert.equal(opened[0].directFile.filename, '项目总结.docx')
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

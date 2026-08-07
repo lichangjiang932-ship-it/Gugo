@@ -15,7 +15,7 @@ process.env.ARTIFACT_DIR = TMP
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-artifact-tests', String(process.pid))
 
 const { createAppServer } = await import('../server/appServer.js')
-const { createPptx, createDocx, createXlsx, getArtifactDir } = await import('../server/services/artifactGen.js')
+const { buildArtifactFilename, createPptx, createDocx, createXlsx, getArtifactDir } = await import('../server/services/artifactGen.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 async function loadPptxZip(result) {
@@ -200,6 +200,15 @@ test('createXlsx 全空 sheets 报错', async () => {
 test('artifact 文件名格式安全(只含字母数字-.)', async () => {
   const r = await createPptx({ title: 'x', slides: [{ title: 'a', bullets: [] }] })
   assert.match(r.filename, /^[\w.-]+\.pptx$/, '文件名应只含安全字符')
+})
+
+test('artifact filenames use the document title and increment duplicate names', async () => {
+  assert.equal(buildArtifactFilename('项目总结', 'docx'), '项目总结.docx')
+  const first = await createDocx({ title: '项目总结', paragraphs: [{ text: '第一版' }] })
+  const second = await createDocx({ title: '项目总结', paragraphs: [{ text: '第二版' }] })
+  assert.equal(first.filename, '项目总结.docx')
+  assert.equal(second.filename, '项目总结-2.docx')
+  assert.doesNotMatch(first.filename, /\d{10,}|[a-f0-9]{16}|tool[_-]?call/i)
 })
 
 test('generated artifacts are downloadable from /api/artifacts/* with auth', async () => {

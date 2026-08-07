@@ -71,7 +71,7 @@ function CodeBlock({ children, streaming = false }) {
   )
 }
 
-function MarkdownRenderer({ children, className = '', streaming = false }) {
+function MarkdownRenderer({ children, className = '', onLinkClick, streaming = false }) {
   const [fullscreen, setFullscreen] = useState(null)
 
   return (
@@ -85,7 +85,9 @@ function MarkdownRenderer({ children, className = '', streaming = false }) {
         components={{
           // 自定义链接：强制新标签页打开 + noopener
           a: ({ href, children, ...props }) => (
-            <a href={href} target="_blank" rel="noopener noreferrer" {...props}>
+            <a href={href} target="_blank" rel="noopener noreferrer" onClick={(event) => {
+              if (onLinkClick?.(href, event)) event.preventDefault()
+            }} {...props}>
               {children}
             </a>
           ),

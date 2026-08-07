@@ -1,17 +1,19 @@
 import { BarChart3, Code2, Download, ExternalLink, FileText, LayoutList } from 'lucide-react'
 import { useT } from '../../../i18n/I18nProvider.jsx'
-import { buildArtifactReferenceIdentity, buildServerArtifactReferences } from '../../../lib/artifactReferences.js'
+import { artifactHasInlineLink, artifactReferenceOpenPayload, buildArtifactReferenceIdentity, buildServerArtifactReferences } from '../../../lib/artifactReferences.js'
 import { withDownloadToken } from '../../../lib/jobClient.js'
 
 export function ArtifactReferenceLinks({ msg, preview, onOpen }) {
   const source = String(msg?.meta?.artifactSource || msg?.content || '')
-  const references = buildServerArtifactReferences({
+  const allReferences = buildServerArtifactReferences({
     artifacts: msg?.meta?.serverArtifacts,
     content: source,
     messageId: msg?.id,
     preview,
   })
-  if (preview && !references.some((reference) => reference.previewArtifact)) {
+  const references = allReferences.filter((reference) => !artifactHasInlineLink(msg?.content, reference))
+  const previewAlreadyRepresented = allReferences.some((reference) => reference.previewArtifact)
+  if (preview && !previewAlreadyRepresented && !artifactHasInlineLink(msg?.content, preview)) {
     const identity = buildArtifactReferenceIdentity({ filename: preview.filename, messageId: msg?.id, type: preview.type })
     references.unshift({
       id: `${msg?.id || 'artifact'}-preview`,
@@ -24,18 +26,7 @@ export function ArtifactReferenceLinks({ msg, preview, onOpen }) {
   if (references.length === 0) return null
 
   const openReference = (reference) => {
-    const artifact = reference.previewArtifact || {
-      messageId: String(msg?.id || ''),
-      content: '',
-      preview: null,
-      directFile: {
-        id: reference.id,
-        filename: reference.filename,
-        title: reference.title,
-        type: reference.type,
-        url: reference.url,
-      },
-    }
+    const artifact = artifactReferenceOpenPayload(reference, msg?.id)
     onOpen?.(artifact)
   }
 

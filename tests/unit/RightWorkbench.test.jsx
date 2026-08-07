@@ -130,14 +130,21 @@ test('right workbench renders compact tabs, persists width, and opens generated 
     assert.ok(serverArtifactLink)
     assert.match(serverArtifactLink.href, /\/api\/artifacts\/turn\/artifact-1\/download/)
 
-    const fileButton = rootElement.querySelector('[data-testid="workbench-files"] button')
+    const fileButtons = [...rootElement.querySelectorAll('[data-testid="workbench-files"] button')]
+    const directFileButton = fileButtons.find((button) => button.textContent.includes('analysis.xlsx'))
+    assert.ok(directFileButton)
+    await act(async () => {
+      directFileButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    assert.equal(opened[0].directFile.filename, 'analysis.xlsx')
+
+    const fileButton = fileButtons.find((button) => button.textContent.includes('Quarterly-report.docx'))
     assert.ok(fileButton)
-    assert.match(fileButton.textContent, /Quarterly-report\.docx/)
     await act(async () => {
       fileButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }))
     })
-    assert.equal(opened.length, 1)
-    assert.equal(opened[0].preview.filename, 'Quarterly-report.docx')
+    assert.equal(opened.length, 2)
+    assert.equal(opened[1].preview.filename, 'Quarterly-report.docx')
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

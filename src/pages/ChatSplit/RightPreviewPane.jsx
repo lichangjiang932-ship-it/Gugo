@@ -1,8 +1,10 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { FileText, X } from 'lucide-react'
 import { useT } from '../../i18n/I18nProvider.jsx'
+import { withArtifactPreviewMode } from '../../lib/directFilePreview.js'
 import { withDownloadToken } from '../../lib/jobClient.js'
 import PreviewBody from './preview/PreviewBody.jsx'
+import DirectFilePreview from './preview/DirectFilePreview.jsx'
 import { DirectFileToolbar, PreviewHeader, PreviewToolbar } from './preview/PreviewChrome.jsx'
 import useArtifactExports from './preview/useArtifactExports.js'
 import usePreviewPaneState, {
@@ -26,22 +28,18 @@ function DirectFilePane({ file, pane, onClose, t }) {
   const extension = String(filename.split('.').pop() || '').toLowerCase()
   const rawType = String(file?.type || extension || 'file').toLowerCase()
   const type = rawType.includes('/') ? (extension || rawType.split('/').pop()) : rawType
-  const url = file?.url ? withDownloadToken(file.url) : ''
-  const isImage = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(type)
-  const isFrame = ['pdf', 'html', 'htm'].includes(type)
+  const downloadUrl = file?.url ? withDownloadToken(file.url) : ''
+  const previewUrl = withArtifactPreviewMode(downloadUrl)
   const preview = { type, filename }
   return (
     <PreviewShell pane={pane} onClose={onClose} t={t} testId="direct-file-pane" shellKey="direct-file-pane">
       <PreviewHeader preview={preview} maximized={pane.maximized} setMaximized={pane.setMaximized} onClose={onClose} t={t} />
-      <DirectFileToolbar filename={filename} type={type} summary={file?.summary || file?.mimeType || ''} url={url} t={t} />
-      <div className={`chat-direct-file-content min-h-0 flex-1 ${isImage ? 'overflow-auto p-5' : 'overflow-hidden'}`} data-testid="direct-file-content">
-        {url && isImage && <div className="flex min-h-full min-w-full items-center justify-center"><img src={url} alt={filename} className="block max-h-full max-w-full rounded-sm object-contain shadow-sm" /></div>}
-        {url && isFrame && <iframe src={url} title={filename} sandbox="allow-scripts allow-forms" referrerPolicy="no-referrer" className="block h-full w-full border-0 bg-white" />}
-        {(!url || (!isImage && !isFrame)) && (
+      <DirectFileToolbar filename={filename} type={type} summary={file?.summary || file?.mimeType || ''} url={downloadUrl} t={t} />
+      <div className="chat-direct-file-content min-h-0 flex-1 overflow-hidden" data-testid="direct-file-content">
+        {previewUrl ? <DirectFilePreview file={{ ...file, filename, type }} url={previewUrl} t={t} /> : (
           <div className="flex h-full min-h-[320px] flex-col items-center justify-center gap-3 p-6 text-center">
-            <span className="flex h-14 w-14 items-center justify-center rounded-2xl border border-ink/10 bg-paper text-ink-fade shadow-sm"><FileText className="h-6 w-6" /></span>
+            <FileText className="h-10 w-10 text-ink-fade" />
             <p className="max-w-xs text-sm font-medium text-ink-soft">{filename}</p>
-            <p className="max-w-xs text-xs leading-relaxed text-ink-fade">{t('chatPreview.unsupportedHint')}</p>
           </div>
         )}
       </div>
