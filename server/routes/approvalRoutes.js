@@ -26,6 +26,7 @@ import {
 } from '../services/approvalSettingsStore.js'
 import { releaseApproval } from '../services/approvalGate.js'
 import { getJobRuntime } from '../services/jobRuntime.js'
+import { createStreamTicket, consumeStreamTicket } from '../utils/streamTicket.js'
 
 const VALID_DECISIONS = new Set(['approve', 'deny', 'edit'])
 const VALID_STATUS_FILTERS = new Set(['pending', 'approved', 'denied', 'edited', 'expired', 'cancelled', 'all'])
@@ -52,15 +53,18 @@ export async function handleApprovalRequest(req, res) {
   const url = new URL(req.url, 'http://localhost')
   const { pathname } = url
 
+  if (req.method === 'POST' && pathname === '/api/approvals/stream-ticket') {
+    const userId = authenticateRequest(req)
+    if (!userId) return unauthorized(res)
+    return sendJson(res, 201, { ticket: createStreamTicket(userId), expiresIn: 60 })
+  }
+
   // SSE 放在鉴权之前:EventSource 不能带 header,允许 ?token= 兜底(与 notifications 一致)
   if (req.method === 'GET' && pathname === '/api/approvals/stream') {
     let userId = authenticateRequest(req)
     if (!userId) {
-      const queryToken = url.searchParams.get('token')
-      if (queryToken) {
-        req.headers.authorization = `Bearer ${queryToken}`
-        userId = authenticateRequest(req)
-      }
+      const ticket = url.searchParams.get('ticket')
+      if (ticket) userId = consumeStreamTicket(ticket)
     }
     if (!userId) return unauthorized(res)
     res.writeHead(200, {

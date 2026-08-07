@@ -8,16 +8,42 @@ import {
   upsertIntegration,
 } from './integrationsStore.js'
 import { getOAuthAccessToken } from './integrationOAuthService.js'
+import { fetchConnectorJson } from './connectorHttp.js'
 import {
   allowQqMailEnvCredentials,
   listImapMessages,
   readImapMessage,
+  resolveMailSettings,
   resolveQqMailSettings,
   sendSmtpMessage,
 } from './mailProtocolClient.js'
 
 function connectorError(message, statusCode = 400) {
   return Object.assign(new Error(message), { statusCode })
+}
+
+function mailSettings(userId, provider, env) {
+  const normalizedProvider = clean(provider || 'custom_mail', 80)
+  const { config, secret } = credentials(userId, normalizedProvider)
+  return resolveMailSettings({
+    provider: normalizedProvider,
+    config,
+    secret,
+    env,
+    allowEnvCredentials: allowQqMailEnvCredentials(env),
+  })
+}
+
+export async function listMailMessages({ userId, provider = 'custom_mail', limit = 20, env = process.env, mailClient = {} } = {}) {
+  return (mailClient.listMessages || listImapMessages)(mailSettings(userId, provider, env), { limit })
+}
+
+export async function readMailMessage({ userId, provider = 'custom_mail', uid, env = process.env, mailClient = {} } = {}) {
+  return (mailClient.readMessage || readImapMessage)(mailSettings(userId, provider, env), { uid })
+}
+
+export async function sendMailMessage({ userId, provider = 'custom_mail', to, subject, text, html, env = process.env, mailClient = {} } = {}) {
+  return (mailClient.sendMessage || sendSmtpMessage)(mailSettings(userId, provider, env), { to, subject, text, html })
 }
 
 function clean(value, max = 500) {
@@ -223,18 +249,9 @@ export async function ensureConnectedBrowserAppSession({
 }
 
 async function apiJson(url, init = {}, fetchImpl = fetch) {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 15_000)
-  try {
-    const response = await fetchImpl(url, { ...init, signal: controller.signal })
-    const text = await response.text()
-    let data = null
-    try { data = text ? JSON.parse(text) : null } catch { data = { raw: text } }
-    if (!response.ok) throw connectorError(data?.message || `HTTP ${response.status}`, response.status)
-    return data
-  } finally {
-    clearTimeout(timer)
-  }
+  const { response, data } = await fetchConnectorJson(url, init, { fetchImpl })
+  if (!response.ok) throw connectorError(data?.message || data?.error?.message || `HTTP ${response.status}`, response.status)
+  return data
 }
 
 function notionHeaders(token) {
@@ -281,6 +298,22 @@ export async function fetchNotionPage({ userId, pageId, fetchImpl = fetch }) {
     apiJson(`https://api.notion.com/v1/blocks/${id}/children?page_size=100`, { headers }, fetchImpl),
   ])
   return { page, blocks: children?.results || [], hasMore: !!children?.has_more }
+}
+
+export async function appendNotionParagraphs({ userId, pageId, paragraphs = [], fetchImpl = fetch }) {
+  const { secret } = credentials(userId, 'notion')
+  const id = notionId(pageId)
+  const children = (Array.isArray(paragraphs) ? paragraphs : [])
+    .map((text) => clean(text, 2_000)).filter(Boolean).slice(0, 100)
+    .map((text) => ({
+      object: 'block', type: 'paragraph',
+      paragraph: { rich_text: [{ type: 'text', text: { content: text } }] },
+    }))
+  if (!children.length) throw connectorError('paragraphs are required')
+  const data = await apiJson(`https://api.notion.com/v1/blocks/${id}/children`, {
+    method: 'PATCH', headers: notionHeaders(secret.token), body: JSON.stringify({ children }),
+  }, fetchImpl)
+  return { blocks: data?.results || [], hasMore: !!data?.has_more }
 }
 
 function githubHeaders(token) {
@@ -336,6 +369,20 @@ export async function getGithubFile({ userId, owner, repo, path, ref = '', fetch
     ? Buffer.from(data.content.replace(/\s/g, ''), 'base64').toString('utf8')
     : ''
   return { type: data?.type || 'file', path: data?.path || path, sha: data?.sha || '', content }
+}
+
+export async function createGithubIssue({ userId, owner, repo, title, body = '', fetchImpl = fetch }) {
+  const { secret } = credentials(userId, 'github')
+  const safeOwner = githubPart(owner, 'owner')
+  const safeRepo = githubPart(repo, 'repository')
+  const issueTitle = clean(title, 256)
+  if (!issueTitle) throw connectorError('title is required')
+  const data = await apiJson(`https://api.github.com/repos/${safeOwner}/${safeRepo}/issues`, {
+    method: 'POST',
+    headers: { ...githubHeaders(secret.token), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: issueTitle, body: clean(body, 60_000) }),
+  }, fetchImpl)
+  return { issue: { number: data.number, title: data.title, state: data.state, url: data.html_url } }
 }
 
 function slackHeaders(token) {
@@ -396,6 +443,18 @@ export async function readSlackChannel({ userId, channelId, limit = 50, fetchImp
     hasMore: !!data.has_more,
     nextCursor: data.response_metadata?.next_cursor || '',
   }
+}
+
+export async function sendSlackMessage({ userId, channelId, text, threadTs = null, fetchImpl = fetch }) {
+  const { secret } = credentials(userId, 'slack')
+  const message = clean(text, 40_000)
+  if (!message) throw connectorError('text is required')
+  const data = assertSlackResponse(await apiJson('https://slack.com/api/chat.postMessage', {
+    method: 'POST',
+    headers: { ...slackHeaders(secret.botToken), 'Content-Type': 'application/json; charset=utf-8' },
+    body: JSON.stringify({ channel: slackChannelId(channelId), text: message, ...(threadTs ? { thread_ts: clean(threadTs, 32) } : {}) }),
+  }, fetchImpl))
+  return { message: { channel: data.channel, ts: data.ts, text: data.message?.text || message } }
 }
 
 function driveHeaders(token) {
@@ -504,4 +563,20 @@ export async function getGoogleDriveFile({ userId, fileId, fetchImpl = fetch, en
     return { file, ...(await apiText(url, { headers }, fetchImpl)) }
   }
   return { file, content: '', truncated: false, binary: true }
+}
+
+export async function createGoogleDriveTextFile({ userId, name, content, mimeType = 'text/plain', fetchImpl = fetch, env = process.env }) {
+  const token = await getOAuthAccessToken({ userId, provider: 'google_drive', fetchImpl, env })
+  const filename = clean(name, 240)
+  if (!filename) throw connectorError('name is required')
+  const boundary = `gugo-${Date.now().toString(36)}`
+  const body = [
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name: filename })}\r\n`,
+    `--${boundary}\r\nContent-Type: ${clean(mimeType, 100) || 'text/plain'}\r\n\r\n${clean(content, 500_000)}\r\n`,
+    `--${boundary}--`,
+  ].join('')
+  const data = await apiJson('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,mimeType,webViewLink', {
+    method: 'POST', headers: { ...driveHeaders(token), 'Content-Type': `multipart/related; boundary=${boundary}` }, body,
+  }, fetchImpl)
+  return { file: publicDriveFile(data) }
 }

@@ -95,7 +95,7 @@ test('陌生消息 Inbox 在空状态和投递中禁用操作', async () => {
     await act(async () => {
       root.render(<BridgeInboundInbox messages={[]} busyId="" highlightedId="" onAllow={() => {}} onReject={() => {}} t={t} />)
     })
-    assert.match(rootElement.textContent, /没有等待处理的陌生消息/)
+    assert.equal(rootElement.textContent, '')
 
     await act(async () => {
       root.render(

@@ -46,7 +46,16 @@ function selectKeys(source, keys) {
 }
 
 export function selectPersistedSnapshot(state) {
-  return selectKeys(state, PERSIST_KEYS)
+  const snapshot = selectKeys(state, PERSIST_KEYS)
+  // The server is the sole durable source for migrated chat transcripts.
+  // Keep legacy/local-only sessions intact, but do not duplicate complete
+  // server-backed histories into IndexedDB and reconcile two sources later.
+  snapshot.sessions = (Array.isArray(snapshot.sessions) ? snapshot.sessions : []).map((session) => (
+    Number.isInteger(session?.serverRevision)
+      ? { ...session, messages: [] }
+      : session
+  ))
+  return snapshot
 }
 
 export function selectLightweightSnapshot(snapshot) {

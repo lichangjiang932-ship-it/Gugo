@@ -16,15 +16,36 @@ import crypto from 'node:crypto'
 import { getDb } from '../db.js'
 import { WEB_CONNECTOR_CATALOG } from '../../shared/webConnectorCatalog.js'
 import { openCredentialObject, sealCredentialObject } from '../utils/credentialVault.js'
-import { testQqMailCredentials } from './mailProtocolClient.js'
+import { testMailCredentials, testQqMailCredentials } from './mailProtocolClient.js'
 
 const INTEGRATION_SECRET_PURPOSE = 'integration-secret'
 const NATIVE_CONNECTOR_TOOLS = Object.freeze({
-  notion: Object.freeze(['notion_search', 'notion_fetch_page']),
-  github: Object.freeze(['github_search_repositories', 'github_get_file']),
-  google_drive: Object.freeze(['google_drive_search', 'google_drive_get_file']),
-  slack: Object.freeze(['slack_list_channels', 'slack_read_channel']),
+  notion: Object.freeze(['notion_search', 'notion_fetch_page', 'notion_append_paragraphs']),
+  github: Object.freeze(['github_search_repositories', 'github_get_file', 'github_create_issue']),
+  google_drive: Object.freeze(['google_drive_search', 'google_drive_get_file', 'google_drive_create_text_file', 'google_sheets_read_range', 'google_sheets_append_rows', 'google_sheets_update_range']),
+  slack: Object.freeze(['slack_list_channels', 'slack_read_channel', 'slack_send_message']),
+  jira: Object.freeze(['jira_search_issues', 'jira_create_issue', 'jira_update_issue']),
+  linear: Object.freeze(['linear_search_issues', 'linear_create_issue', 'linear_update_issue']),
+  trello: Object.freeze(['trello_list_cards', 'trello_create_card', 'trello_update_card']),
+  google_calendar: Object.freeze(['google_calendar_list_events', 'google_calendar_create_event', 'google_calendar_update_event']),
+  gitlab: Object.freeze(['gitlab_list_issues', 'gitlab_create_issue', 'gitlab_update_issue']),
+  asana: Object.freeze(['asana_list_project_tasks', 'asana_create_task', 'asana_update_task']),
+  clickup: Object.freeze(['clickup_list_tasks', 'clickup_create_task', 'clickup_update_task']),
+  airtable: Object.freeze(['airtable_list_records', 'airtable_create_record', 'airtable_update_record']),
+  monday: Object.freeze(['monday_list_items', 'monday_create_item', 'monday_update_item']),
+  hubspot: Object.freeze(['hubspot_list_tickets', 'hubspot_create_ticket', 'hubspot_update_ticket']),
+  zendesk: Object.freeze(['zendesk_search_tickets', 'zendesk_create_ticket', 'zendesk_update_ticket']),
+  todoist: Object.freeze(['todoist_list_tasks', 'todoist_create_task', 'todoist_update_task']),
+  dropbox: Object.freeze(['dropbox_list_files', 'dropbox_create_text_file', 'dropbox_update_text_file']),
+  onedrive: Object.freeze(['onedrive_list_files', 'onedrive_create_text_file', 'onedrive_update_text_file', 'microsoft_teams_list_channels', 'microsoft_teams_read_channel_messages', 'microsoft_teams_send_channel_message']),
+  confluence: Object.freeze(['confluence_search_pages', 'confluence_create_page', 'confluence_update_page']),
+  salesforce: Object.freeze(['salesforce_query_records', 'salesforce_create_record', 'salesforce_update_record']),
   qq_mail: Object.freeze(['qq_mail_list_recent', 'qq_mail_read', 'qq_mail_send']),
+  gmail: Object.freeze(['mail_list_recent', 'mail_read', 'mail_send']),
+  outlook: Object.freeze(['mail_list_recent', 'mail_read', 'mail_send']),
+  exchange: Object.freeze(['mail_list_recent', 'mail_read', 'mail_send']),
+  custom_mail: Object.freeze(['mail_list_recent', 'mail_read', 'mail_send']),
+  discord: Object.freeze(['discord_list_channels', 'discord_read_messages', 'discord_send_message']),
 })
 const BROWSER_CONNECTOR_TOOLS = Object.freeze(['connected_app_list', 'connected_app_open'])
 
@@ -78,6 +99,89 @@ const PROVIDER_REGISTRY = {
     ],
     test: testGoogleDrive,
   },
+  google_calendar: {
+    kind: 'connector',
+    label: 'Google Calendar',
+    fields: [
+      { key: 'account', label: 'Account', location: 'config', optional: true },
+      { key: 'token', label: 'OAuth access token', location: 'secret', type: 'password' },
+    ],
+    test: testGoogleCalendar,
+  },
+  jira: {
+    kind: 'connector',
+    label: 'Jira Cloud',
+    fields: [
+      { key: 'siteUrl', label: 'Jira site URL', location: 'config' },
+      { key: 'email', label: 'Atlassian account email', location: 'config' },
+      { key: 'token', label: 'Jira API token', location: 'secret', type: 'password' },
+    ],
+    test: testJira,
+  },
+  linear: {
+    kind: 'connector',
+    label: 'Linear',
+    fields: [{ key: 'token', label: 'Personal API key', location: 'secret', type: 'password' }],
+    test: testLinear,
+  },
+  trello: {
+    kind: 'connector',
+    label: 'Trello',
+    fields: [
+      { key: 'apiKey', label: 'API key', location: 'config' },
+      { key: 'token', label: 'User token', location: 'secret', type: 'password' },
+    ],
+    test: testTrello,
+  },
+  gitlab: {
+    kind: 'connector', label: 'GitLab',
+    fields: [{ key: 'baseUrl', label: 'API URL', location: 'config', optional: true }, { key: 'token', label: 'Personal access token', location: 'secret', type: 'password' }],
+    test: testGitlab,
+  },
+  asana: {
+    kind: 'connector', label: 'Asana', fields: [{ key: 'token', label: 'Personal access token', location: 'secret', type: 'password' }], test: testAsana,
+  },
+  clickup: {
+    kind: 'connector', label: 'ClickUp', fields: [{ key: 'token', label: 'Personal API token', location: 'secret', type: 'password' }], test: testClickup,
+  },
+  airtable: {
+    kind: 'connector', label: 'Airtable', fields: [{ key: 'token', label: 'Personal access token', location: 'secret', type: 'password' }], test: testAirtable,
+  },
+  monday: {
+    kind: 'connector', label: 'monday.com', fields: [{ key: 'token', label: 'Personal API token', location: 'secret', type: 'password' }], test: testMonday,
+  },
+  hubspot: {
+    kind: 'connector', label: 'HubSpot', fields: [{ key: 'token', label: 'Private app access token', location: 'secret', type: 'password' }], test: testHubspot,
+  },
+  zendesk: {
+    kind: 'connector', label: 'Zendesk', fields: [
+      { key: 'subdomain', label: 'Zendesk subdomain', location: 'config' },
+      { key: 'email', label: 'Agent email', location: 'config' },
+      { key: 'token', label: 'API token', location: 'secret', type: 'password' },
+    ], test: testZendesk,
+  },
+  todoist: {
+    kind: 'connector', label: 'Todoist', fields: [{ key: 'token', label: 'API token', location: 'secret', type: 'password' }], test: testTodoist,
+  },
+  dropbox: {
+    kind: 'connector', label: 'Dropbox', fields: [{ key: 'token', label: 'OAuth access token', location: 'secret', type: 'password' }], test: testDropbox,
+  },
+  onedrive: {
+    kind: 'connector', label: 'OneDrive', fields: [{ key: 'token', label: 'Microsoft Graph access token', location: 'secret', type: 'password' }], test: testOneDrive,
+  },
+  confluence: {
+    kind: 'connector', label: 'Confluence Cloud', fields: [
+      { key: 'siteUrl', label: 'Atlassian site URL', location: 'config' },
+      { key: 'email', label: 'Atlassian account email', location: 'config' },
+      { key: 'token', label: 'API token', location: 'secret', type: 'password' },
+    ], test: testConfluence,
+  },
+  salesforce: {
+    kind: 'connector', label: 'Salesforce', fields: [
+      { key: 'instanceUrl', label: 'Instance URL', location: 'config' },
+      { key: 'token', label: 'OAuth access token', location: 'secret', type: 'password' },
+    ], test: testSalesforce,
+  },
   qq_mail: {
     kind: 'connector',
     label: 'QQ Mail',
@@ -92,6 +196,25 @@ const PROVIDER_REGISTRY = {
     ],
     test: testQqMailCredentials,
   },
+  ...Object.fromEntries([
+    ['gmail', 'Gmail'],
+    ['outlook', 'Outlook'],
+    ['exchange', 'Exchange'],
+    ['custom_mail', 'Custom Mail'],
+  ].map(([provider, label]) => [provider, {
+    kind: 'connector',
+    label,
+    fields: [
+      { key: 'user', label: 'Email address', location: 'config' },
+      { key: 'from', label: 'Sender address', location: 'config', optional: true },
+      { key: 'smtpHost', label: 'SMTP host', location: 'config', optional: provider !== 'custom_mail' },
+      { key: 'smtpPort', label: 'SMTP port', location: 'config', optional: true, type: 'number' },
+      { key: 'imapHost', label: 'IMAP host', location: 'config', optional: provider !== 'custom_mail' },
+      { key: 'imapPort', label: 'IMAP port', location: 'config', optional: true, type: 'number' },
+      { key: 'password', label: 'App password', location: 'secret', type: 'password' },
+    ],
+    test: (options) => testMailCredentials({ provider, ...options }),
+  }])),
   // === IM / 社交（kind='social'）===
   feishu: {
     kind: 'social',
@@ -526,6 +649,155 @@ async function testGoogleDrive({ secret, fetchImpl }) {
     ok: true,
     message: `Connected to Google Drive ${data.user.emailAddress || data.user.displayName || ''}`.trim(),
   }
+}
+
+async function testGoogleCalendar({ secret, fetchImpl }) {
+  const token = secret?.token?.trim()
+  if (!token) return { ok: false, message: 'Missing Google Calendar access token' }
+  const { ok, status, data } = await jsonFetch({
+    fetchImpl,
+    url: 'https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=1',
+    init: { headers: { Authorization: `Bearer ${token}` } },
+  })
+  if (!ok) return { ok: false, message: `Google Calendar ${status}: ${data?.error?.message || 'authentication failed'}` }
+  return { ok: true, message: 'Connected to Google Calendar' }
+}
+
+async function testJira({ config, secret, fetchImpl }) {
+  const siteUrl = config?.siteUrl?.trim().replace(/\/+$/, '')
+  const email = config?.email?.trim()
+  const token = secret?.token?.trim()
+  if (!siteUrl || !email || !token) return { ok: false, message: 'Missing Jira site URL, email, or API token' }
+  if (!/^https:\/\//i.test(siteUrl)) return { ok: false, message: 'Jira site URL must use HTTPS' }
+  const { ok, status, data } = await jsonFetch({
+    fetchImpl,
+    url: `${siteUrl}/rest/api/3/myself`,
+    init: { headers: { Authorization: `Basic ${Buffer.from(`${email}:${token}`).toString('base64')}`, Accept: 'application/json' } },
+  })
+  if (!ok || !data?.accountId) return { ok: false, message: `Jira ${status}: ${data?.errorMessages?.join?.('; ') || data?.message || 'authentication failed'}` }
+  return { ok: true, message: `Connected to Jira as ${data.displayName || email}` }
+}
+
+async function testLinear({ secret, fetchImpl }) {
+  const token = secret?.token?.trim()
+  if (!token) return { ok: false, message: 'Missing Linear API key' }
+  const { ok, status, data } = await jsonFetch({
+    fetchImpl,
+    url: 'https://api.linear.app/graphql',
+    init: { method: 'POST', headers: { Authorization: token, 'Content-Type': 'application/json' }, body: JSON.stringify({ query: '{ viewer { id name email } }' }) },
+  })
+  if (!ok || data?.errors?.length || !data?.data?.viewer?.id) return { ok: false, message: `Linear ${status}: ${data?.errors?.[0]?.message || 'authentication failed'}` }
+  return { ok: true, message: `Connected to Linear as ${data.data.viewer.name || data.data.viewer.email || 'user'}` }
+}
+
+async function testTrello({ config, secret, fetchImpl }) {
+  const apiKey = config?.apiKey?.trim()
+  const token = secret?.token?.trim()
+  if (!apiKey || !token) return { ok: false, message: 'Missing Trello API key or token' }
+  const url = new URL('https://api.trello.com/1/members/me')
+  url.searchParams.set('key', apiKey)
+  url.searchParams.set('token', token)
+  url.searchParams.set('fields', 'id,username,fullName')
+  const { ok, status, data } = await jsonFetch({ fetchImpl, url })
+  if (!ok || !data?.id) return { ok: false, message: `Trello ${status}: ${data?.message || 'authentication failed'}` }
+  return { ok: true, message: `Connected to Trello as ${data.fullName || data.username}` }
+}
+
+async function testGitlab({ config, secret, fetchImpl }) {
+  const token = secret?.token?.trim()
+  const baseUrl = (config?.baseUrl?.trim() || 'https://gitlab.com/api/v4').replace(/\/+$/, '')
+  if (!token) return { ok: false, message: 'Missing GitLab personal access token' }
+  if (!/^https:\/\//i.test(baseUrl)) return { ok: false, message: 'GitLab API URL must use HTTPS' }
+  const { ok, status, data } = await jsonFetch({ fetchImpl, url: `${baseUrl}/user`, init: { headers: { 'PRIVATE-TOKEN': token } } })
+  if (!ok || !data?.id) return { ok: false, message: `GitLab ${status}: ${data?.message || 'authentication failed'}` }
+  return { ok: true, message: `Connected to GitLab as ${data.username || data.name}` }
+}
+
+async function testAsana({ secret, fetchImpl }) {
+  const token = secret?.token?.trim()
+  if (!token) return { ok: false, message: 'Missing Asana personal access token' }
+  const { ok, status, data } = await jsonFetch({ fetchImpl, url: 'https://app.asana.com/api/1.0/users/me', init: { headers: { Authorization: `Bearer ${token}` } } })
+  if (!ok || !data?.data?.gid) return { ok: false, message: `Asana ${status}: ${data?.errors?.[0]?.message || 'authentication failed'}` }
+  return { ok: true, message: `Connected to Asana as ${data.data.name || data.data.email}` }
+}
+
+async function testClickup({ secret, fetchImpl }) {
+  const token = secret?.token?.trim()
+  if (!token) return { ok: false, message: 'Missing ClickUp API token' }
+  const { ok, status, data } = await jsonFetch({ fetchImpl, url: 'https://api.clickup.com/api/v2/user', init: { headers: { Authorization: token } } })
+  if (!ok || !data?.user?.id) return { ok: false, message: `ClickUp ${status}: ${data?.err || 'authentication failed'}` }
+  return { ok: true, message: `Connected to ClickUp as ${data.user.username || data.user.email}` }
+}
+
+async function testAirtable({ secret, fetchImpl }) {
+  const token = secret?.token?.trim()
+  if (!token) return { ok: false, message: 'Missing Airtable personal access token' }
+  const { ok, status, data } = await jsonFetch({ fetchImpl, url: 'https://api.airtable.com/v0/meta/whoami', init: { headers: { Authorization: `Bearer ${token}` } } })
+  if (!ok || !data?.id) return { ok: false, message: `Airtable ${status}: ${data?.error?.message || 'authentication failed'}` }
+  return { ok: true, message: `Connected to Airtable as ${data.email || data.id}` }
+}
+
+async function testMonday({ secret, fetchImpl }) {
+  const token = secret?.token?.trim()
+  if (!token) return { ok: false, message: 'Missing monday.com API token' }
+  const { ok, status, data } = await jsonFetch({ fetchImpl, url: 'https://api.monday.com/v2', init: { method: 'POST', headers: { Authorization: token, 'Content-Type': 'application/json', 'API-Version': '2025-04' }, body: JSON.stringify({ query: '{ me { id name email } }' }) } })
+  if (!ok || data?.errors?.length || !data?.data?.me?.id) return { ok: false, message: `monday.com ${status}: ${data?.errors?.[0]?.message || 'authentication failed'}` }
+  return { ok: true, message: `Connected to monday.com as ${data.data.me.name || data.data.me.email}` }
+}
+
+async function testBearerEndpoint({ provider, secret, fetchImpl, url, validate, label = provider, method = 'GET', body }) {
+  const token = secret?.token?.trim()
+  if (!token) return { ok: false, message: `Missing ${label} access token` }
+  const { ok, status, data } = await jsonFetch({ fetchImpl, url, init: { method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) } })
+  if (!ok || !validate(data)) return { ok: false, message: `${label} ${status}: ${data?.error?.message || data?.message || 'authentication failed'}` }
+  return { ok: true, message: `Connected to ${label}` }
+}
+
+function testHubspot({ secret, fetchImpl }) {
+  return testBearerEndpoint({ provider: 'hubspot', secret, fetchImpl, url: 'https://api.hubapi.com/account-info/v3/details', validate: (data) => !!(data?.portalId || data?.accountType), label: 'HubSpot' })
+}
+
+async function testZendesk({ config, secret, fetchImpl }) {
+  const subdomain = config?.subdomain?.trim()?.replace(/[^a-z0-9-]/gi, '')
+  const email = config?.email?.trim()
+  const token = secret?.token?.trim()
+  if (!subdomain || !email || !token) return { ok: false, message: 'Missing Zendesk subdomain, email, or API token' }
+  const { ok, status, data } = await jsonFetch({ fetchImpl, url: `https://${subdomain}.zendesk.com/api/v2/users/me.json`, init: { headers: { Authorization: `Basic ${Buffer.from(`${email}/token:${token}`).toString('base64')}` } } })
+  if (!ok || !data?.user?.id) return { ok: false, message: `Zendesk ${status}: ${data?.error || 'authentication failed'}` }
+  return { ok: true, message: `Connected to Zendesk as ${data.user.name || email}` }
+}
+
+function testTodoist({ secret, fetchImpl }) {
+  return testBearerEndpoint({ provider: 'todoist', secret, fetchImpl, url: 'https://api.todoist.com/rest/v2/projects', validate: Array.isArray, label: 'Todoist' })
+}
+
+function testDropbox({ secret, fetchImpl }) {
+  return testBearerEndpoint({ provider: 'dropbox', secret, fetchImpl, url: 'https://api.dropboxapi.com/2/users/get_current_account', validate: (data) => !!data?.account_id, label: 'Dropbox', method: 'POST' })
+}
+
+function testOneDrive({ secret, fetchImpl }) {
+  return testBearerEndpoint({ provider: 'onedrive', secret, fetchImpl, url: 'https://graph.microsoft.com/v1.0/me/drive', validate: (data) => !!data?.id, label: 'OneDrive' })
+}
+
+async function testConfluence({ config, secret, fetchImpl }) {
+  const siteUrl = config?.siteUrl?.trim()?.replace(/\/+$/, '')
+  const email = config?.email?.trim()
+  const token = secret?.token?.trim()
+  if (!siteUrl || !email || !token) return { ok: false, message: 'Missing Confluence site URL, email, or API token' }
+  if (!/^https:\/\//i.test(siteUrl)) return { ok: false, message: 'Confluence site URL must use HTTPS' }
+  const { ok, status, data } = await jsonFetch({ fetchImpl, url: `${siteUrl}/wiki/api/v2/spaces?limit=1`, init: { headers: { Authorization: `Basic ${Buffer.from(`${email}:${token}`).toString('base64')}` } } })
+  if (!ok || !Array.isArray(data?.results)) return { ok: false, message: `Confluence ${status}: ${data?.message || 'authentication failed'}` }
+  return { ok: true, message: 'Connected to Confluence Cloud' }
+}
+
+async function testSalesforce({ config, secret, fetchImpl }) {
+  const instanceUrl = config?.instanceUrl?.trim()?.replace(/\/+$/, '')
+  const token = secret?.token?.trim()
+  if (!instanceUrl || !token) return { ok: false, message: 'Missing Salesforce instance URL or access token' }
+  if (!/^https:\/\//i.test(instanceUrl)) return { ok: false, message: 'Salesforce instance URL must use HTTPS' }
+  const { ok, status, data } = await jsonFetch({ fetchImpl, url: `${instanceUrl}/services/data/v61.0/limits`, init: { headers: { Authorization: `Bearer ${token}` } } })
+  if (!ok || typeof data !== 'object') return { ok: false, message: `Salesforce ${status}: ${data?.[0]?.message || 'authentication failed'}` }
+  return { ok: true, message: 'Connected to Salesforce' }
 }
 
 async function testFeishu({ config, secret, fetchImpl }) {

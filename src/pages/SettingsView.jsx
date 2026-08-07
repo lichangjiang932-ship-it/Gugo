@@ -9,6 +9,7 @@ import {
   SettingsFeatureHub,
   SettingsIntegrationsPanel,
   SettingsPermissionsPanel,
+  SettingsPetPanel,
 } from '../components/settings/SettingsSecondaryPanels.jsx'
 import SettingsToolsPanel from '../components/settings/SettingsToolsPanel.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
@@ -30,6 +31,7 @@ const SETTINGS_NAV = [
   '工具',
   '集成',
   '外观',
+  '宠物',
   '系统诊断',
   '数据 & 导出',
 ]
@@ -143,6 +145,7 @@ export default function SettingsView() {
       case '工具': return t('settings.tools')
       case '集成': return t('settings.integrations')
       case '外观': return t('settings.appearance')
+      case '宠物': return t('settings.pet')
       case '系统诊断': return t('settings.systemDiagnostics')
       case '数据 & 导出': return t('settings.dataExport')
       default: return item
@@ -171,6 +174,8 @@ export default function SettingsView() {
         return <SettingsIntegrationsPanel navigate={navigate} t={t} />
       case '外观':
         return <SettingsAppearancePanel t={t} state={state} dispatch={dispatch} />
+      case '宠物':
+        return <SettingsPetPanel t={t} />
       case '数据 & 导出':
         return <SettingsDataExport state={state} dispatch={dispatch} storageBytes={storageEstimate.usage} storageQuota={storageEstimate.quota} onStorageChanged={refreshStorage} />
       default:

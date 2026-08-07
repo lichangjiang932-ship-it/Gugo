@@ -51,6 +51,18 @@ test('lightweight local snapshot excludes sessions and other large state', () =>
   })
 })
 
+test('server-backed sessions persist metadata without duplicating transcript messages', () => {
+  const snapshot = selectPersistedSnapshot({
+    sessions: [
+      { id: 'server', serverRevision: 7, messages: [{ id: 'm1', content: 'server copy' }] },
+      { id: 'legacy', messages: [{ id: 'm2', content: 'local only' }] },
+    ],
+  })
+  assert.deepEqual(snapshot.sessions[0].messages, [])
+  assert.equal(snapshot.sessions[0].serverRevision, 7)
+  assert.equal(snapshot.sessions[1].messages[0].content, 'local only')
+})
+
 test('bootstrap reads new settings and a legacy full snapshot independently', () => {
   const storage = createStorage([
     [SETTINGS_STORAGE_KEY, JSON.stringify({ theme: 'dark' })],

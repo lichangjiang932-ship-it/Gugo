@@ -59,7 +59,9 @@ import { handleBrowserRequest } from './routes/browserRoutes.js'
 import { handleConnectorRequest } from './routes/connectorRoutes.js'
 import { handleLocalFileAccessRequest } from './routes/localFileAccessRoutes.js'
 import { handleTurnEventRequest } from './routes/turnEventRoutes.js'
+import { handleMediaRequest } from './routes/mediaRoutes.js'
 import { handleMcpServerRequest } from './mcp/mcpServer.js'
+import { attachTurnWebSocketServer } from './services/turnWebSocket.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const rootDir = path.resolve(__dirname, '..')
@@ -305,6 +307,10 @@ function createRouter(getEnv = getRuntimeEnv, staticDir = distDir) {
     return handleLocalFileAccessRequest(req, res)
   }
 
+  if (req.url?.startsWith('/api/media/')) {
+    return handleMediaRequest(req, res)
+  }
+
   // 工具 spec 列表(底座 A) — 在更具体的 /api/tools/* 路由之前匹配,GET 公共端点
   if (req.url?.startsWith('/api/tools/specs')) {
     return handleToolSpecsRequest(req, res)
@@ -453,6 +459,7 @@ export function createAppServer({ getEnv = getRuntimeEnv, staticDir = distDir } 
   const env = { ...process.env, ...(getEnv() || {}) }
   const apiRateLimitMiddleware = createApiRateLimitMiddleware({ env })
   const server = http.createServer(applyMiddlewares(createRouter(getEnv, staticDir), apiRateLimitMiddleware))
+  attachTurnWebSocketServer(server)
   server.once('close', () => apiRateLimitMiddleware.close())
   return server
 }

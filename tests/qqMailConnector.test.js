@@ -24,6 +24,7 @@ const {
 } = await import('../server/services/connectorService.js')
 const {
   _mailInternals,
+  probeSmtp,
   resolveQqMailSettings,
   sendSmtpMessage,
   testQqMailCredentials,
@@ -82,6 +83,20 @@ test('QQ Mail user connectors never inherit process credentials or connect to cu
     }),
     /SMTP host must be smtp\.qq\.com/,
   )
+})
+
+test('mail protocol rejects private SMTP targets before opening a socket', async () => {
+  let connected = false
+  await assert.rejects(
+    probeSmtp({
+      smtpHost: '127.0.0.1', smtpPort: 465, smtpSecure: true,
+      timeoutMs: 100, user: 'user@example.com', password: 'secret',
+    }, {
+      tlsConnect: () => { connected = true; throw new Error('must not connect') },
+    }),
+    /private|loopback/i,
+  )
+  assert.equal(connected, false)
 })
 
 test('local auth QQ Mail connectors inherit MAIL_* settings for tests and operations', async () => {

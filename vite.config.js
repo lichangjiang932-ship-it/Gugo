@@ -39,6 +39,7 @@ import { handleMobileRequest } from './server/routes/mobileRoutes.js'
 import { handleMcpServerRequest } from './server/mcp/mcpServer.js'
 import { handleLocalFileAccessRequest } from './server/routes/localFileAccessRoutes.js'
 import { handleTurnEventRequest } from './server/routes/turnEventRoutes.js'
+import { handleMediaRequest } from './server/routes/mediaRoutes.js'
 
 function authAccountPlugin() {
   return {
@@ -104,6 +105,10 @@ function fallbackApiPlugin() {
         }
         if (req.url?.startsWith('/api/local-files')) {
           handleLocalFileAccessRequest(req, res)
+          return
+        }
+        if (req.url?.startsWith('/api/media/')) {
+          handleMediaRequest(req, res)
           return
         }
         if (req.url?.startsWith('/api/model/providers')) {

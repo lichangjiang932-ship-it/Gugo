@@ -223,20 +223,20 @@ test('NEVER_APPROVE: create_docx 直通,不产生任何 pending 行', async () =
 
 test('standing rule 命中来源写入 tool 结果供事件与卡片审计', async () => {
   const { userId } = issueTestSession({ email: 'approval-standing-audit@example.com' })
-  rememberTool({ userId, toolName: 'slack_send_message', args: { channelId: 'C-ops', text: 'first' } })
+  rememberTool({ userId, toolName: 'publish_report', args: { channelId: 'C-ops', text: 'first' } })
   const seenMessages = []
   const result = await runToolsLoop({
     job: makeJob({ id: 'job-approval-standing', userId, title: 'standing audit' }),
     step: { id: 'step-approval-standing', kind: 'execute' },
     messages: [{ role: 'user', content: '发送通知' }],
-    runModel: makeRunModel({ finalText: '通知完成。', toolName: 'slack_send_message', toolArgs: { channelId: 'C-ops', text: 'later' }, seenMessages }),
+    runModel: makeRunModel({ finalText: '通知完成。', toolName: 'publish_report', toolArgs: { channelId: 'C-ops', text: 'later' }, seenMessages }),
     executeTool: async () => ({ ok: true, stdout: 'passed' }),
   })
   assert.equal(result.text, '通知完成。')
   const toolMessage = seenMessages[1].find((message) => message.role === 'tool')
   const payload = JSON.parse(toolMessage.content)
   assert.deepEqual(payload.approvalAuthorization, {
-    kind: 'standing_rule', toolName: 'slack_send_message', scope: 'target:channelId=C-ops',
+    kind: 'standing_rule', toolName: 'publish_report', scope: 'target:channelId=C-ops',
   })
   assert.equal(listPendingApprovals({ userId, status: 'all' }).length, 0)
 })

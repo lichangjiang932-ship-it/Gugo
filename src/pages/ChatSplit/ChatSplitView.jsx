@@ -219,7 +219,7 @@ export default function ChatSplitView({
         />
       )}
 
-      {desktopPetVisible && (
+      {desktopPetVisible && !window.gugoDesktop?.isDesktop && (
         <DesktopPet
           onClose={onCloseDesktopPet}
           isGenerating={isGenerating}

@@ -5,6 +5,7 @@ import {
   backoffDelayMs,
   isRetryableError,
   parseRetryAfterMs,
+  parseRetryDelayMs,
   withRetry,
 } from '../server/utils/modelRetry.js'
 
@@ -38,6 +39,13 @@ test('4xx 业务错误与主动取消不重试', () => {
   assert.equal(isRetryableError(undefined), false)
 })
 
+test('没有状态码的上游瞬时错误也可恢复，但普通业务错误不会误重试', () => {
+  for (const message of ['fetch failed', 'provider is overloaded', 'resource exhausted', 'socket connection was closed']) {
+    assert.equal(isRetryableError(new Error(message)), true, message)
+  }
+  assert.equal(isRetryableError(new Error('model not found')), false)
+})
+
 test('退避是指数增长且带抖动,并封顶', () => {
   // rand 固定为 1 时取到该轮上界
   const upper = (attempt) => backoffDelayMs(attempt, { baseMs: 500, maxMs: 8000, rand: () => 1 })
@@ -60,6 +68,11 @@ test('parseRetryAfterMs 支持秒数与 HTTP-date', () => {
   for (const bad of [null, undefined, '', '  ', 'not-a-date']) {
     assert.equal(parseRetryAfterMs(bad), null)
   }
+})
+
+test('retry-after-ms 优先于 retry-after 秒数', () => {
+  assert.equal(parseRetryDelayMs({ retryAfterMs: '1250', retryAfter: '9' }), 1250)
+  assert.equal(parseRetryDelayMs({ headers: { get: (name) => name === 'retry-after-ms' ? '750' : '4' } }), 750)
 })
 
 test('withRetry 在瞬时故障后成功 —— 一个 429 不该杀掉整个 job', async () => {

@@ -157,6 +157,13 @@ test('manual credentials map provider fields without exposing secrets in config'
     config: { botUsername: 'atelier_bot', mode: 'polling' },
     secret: { botToken: '123:telegram' },
   })
+  assert.deepEqual(manualIntegrationValues('discord', {
+    appId: 'discord-app',
+    token: 'discord-token',
+  }), {
+    config: { applicationId: 'discord-app' },
+    secret: { botToken: 'discord-token' },
+  })
   assert.deepEqual(manualIntegrationValues('qq', {
     appId: 'qq-app',
     appSecret: 'qq-secret',

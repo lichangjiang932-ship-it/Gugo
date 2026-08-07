@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
+import { readSourceTree } from './sourceTree.js'
 import {
   getSkillEffectiveConfig,
   getSkillSystemPrompt,
@@ -39,7 +40,7 @@ test('legacy presentation ids resolve the canonical ppt prompt and planner', () 
 })
 
 test('chat split loads runtime skills instead of filtering only hard-coded skills', () => {
-  const source = fs.readFileSync(new URL('../src/pages/ChatSplit/index.jsx', import.meta.url), 'utf8')
+  const source = readSourceTree('../src/pages/ChatSplit/')
   const serverTurn = fs.readFileSync(new URL('../src/pages/ChatSplit/serverTurnFlow.js', import.meta.url), 'utf8')
   const turnEngine = fs.readFileSync(new URL('../server/services/TurnEngine.js', import.meta.url), 'utf8')
   assert.match(source, /listSkills/)
@@ -56,7 +57,7 @@ test('chat split loads runtime skills instead of filtering only hard-coded skill
 })
 
 test('chat composer checks runtime skills before styling a slash command', () => {
-  const source = fs.readFileSync(new URL('../src/pages/ChatSplit/ChatComposer.jsx', import.meta.url), 'utf8')
+  const source = readSourceTree('../src/pages/ChatSplit/chatComposer/') + fs.readFileSync(new URL('../src/pages/ChatSplit/ChatComposer.jsx', import.meta.url), 'utf8')
   assert.match(source, /skillIds/)
   assert.match(source, /splitLeadingSkillCommand/)
   assert.match(source, /data-testid="active-skill-command"/)

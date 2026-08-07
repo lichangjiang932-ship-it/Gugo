@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import net from 'node:net'
 import tls from 'node:tls'
+import { pinnedLookup, resolvePublicHost } from '../utils/outboundNetworkGuard.js'
 
 const DEFAULT_TIMEOUT_MS = 15_000
 const DEFAULT_OPERATION_TIMEOUT_MS = 45_000
@@ -12,6 +13,13 @@ const QQ_SMTP_HOST = 'smtp.qq.com'
 const QQ_IMAP_HOST = 'imap.qq.com'
 const QQ_SMTP_PORTS = new Set([465, 587])
 const QQ_IMAP_PORT = 993
+const MAIL_PROVIDER_PRESETS = Object.freeze({
+  qq_mail: { smtpHost: QQ_SMTP_HOST, smtpPort: 465, imapHost: QQ_IMAP_HOST, imapPort: 993 },
+  gmail: { smtpHost: 'smtp.gmail.com', smtpPort: 465, imapHost: 'imap.gmail.com', imapPort: 993 },
+  outlook: { smtpHost: 'smtp.office365.com', smtpPort: 587, imapHost: 'outlook.office365.com', imapPort: 993 },
+  exchange: { smtpPort: 587, imapPort: 993 },
+  custom_mail: { smtpPort: 465, imapPort: 993 },
+})
 
 function mailError(message, statusCode = 400, code = 'MAIL_CONNECTOR_ERROR') {
   return Object.assign(new Error(message), { statusCode, code })
@@ -181,6 +189,59 @@ export function resolveQqMailSettings({
   }
 }
 
+export function resolveMailSettings({
+  provider = 'custom_mail',
+  config = {},
+  secret = {},
+  env = process.env,
+  allowEnvCredentials = false,
+} = {}) {
+  if (provider === 'qq_mail') {
+    return resolveQqMailSettings({ config, secret, env, allowEnvCredentials })
+  }
+  const preset = MAIL_PROVIDER_PRESETS[provider] || MAIL_PROVIDER_PRESETS.custom_mail
+  const credentialEnv = allowEnvCredentials ? env : {}
+  const smtpHost = validateHost(firstValue(
+    config.smtpHost, config.host, credentialEnv.MAIL_HOST, credentialEnv.MAIL_SERVER, preset.smtpHost,
+  ), 'SMTP host').toLowerCase()
+  const imapHost = validateHost(firstValue(
+    config.imapHost, credentialEnv.MAIL_IMAP_HOST, preset.imapHost,
+  ), 'IMAP host').toLowerCase()
+  const smtpPort = parsePort(firstValue(config.smtpPort, config.port, credentialEnv.MAIL_PORT), preset.smtpPort, 'SMTP port')
+  const imapPort = parsePort(firstValue(config.imapPort, credentialEnv.MAIL_IMAP_PORT), preset.imapPort, 'IMAP port')
+  const user = validateEmail(firstValue(
+    config.user, config.account, credentialEnv.MAIL_USER, credentialEnv.MAIL_USERNAME,
+  ), 'MAIL_USER')
+  const password = String(firstValue(
+    secret.password, secret.authorizationCode, credentialEnv.MAIL_PASSWORD,
+  ) || '')
+  if (!password) throw mailError('MAIL_PASSWORD is required (use an app password when the provider requires one)')
+  if (password.length > 512 || hasAsciiControl(password)) throw mailError('MAIL_PASSWORD is invalid')
+  const from = validateEmail(firstValue(
+    config.from, credentialEnv.MAIL_FROM, credentialEnv.MAIL_DEFAULT_SENDER, user,
+  ), 'MAIL_FROM')
+  const smtpSecure = parseBoolean(config.smtpSecure, smtpPort === 465)
+  const smtpStartTls = parseBoolean(config.smtpStartTls, !smtpSecure && smtpPort === 587)
+  const imapSecure = parseBoolean(config.imapSecure, imapPort === 993)
+  if (!smtpSecure && !smtpStartTls) throw mailError('SMTP must use implicit TLS or STARTTLS')
+  if (!imapSecure) throw mailError('IMAP must use TLS')
+  return {
+    provider,
+    smtpHost,
+    smtpPort,
+    smtpSecure,
+    smtpStartTls,
+    imapHost,
+    imapPort,
+    imapSecure,
+    user,
+    password,
+    from,
+    timeoutMs: DEFAULT_TIMEOUT_MS,
+    operationTimeoutMs: DEFAULT_OPERATION_TIMEOUT_MS,
+  }
+}
+
 function waitForSocket(socket, eventName, timeoutMs) {
   if ((eventName === 'connect' && !socket.connecting) || (eventName === 'secureConnect' && socket.authorized)) {
     return Promise.resolve()
@@ -204,9 +265,11 @@ function waitForSocket(socket, eventName, timeoutMs) {
 async function openSocket({ host, port, secure, timeoutMs }, dependencies = {}) {
   const tlsConnect = dependencies.tlsConnect || tls.connect
   const netConnect = dependencies.netConnect || net.connect
+  const { lockedIp } = await resolvePublicHost(host, { lookup: dependencies.lookupHost })
+  const lookup = pinnedLookup(lockedIp)
   const socket = secure
-    ? tlsConnect({ host, port, servername: host, rejectUnauthorized: true })
-    : netConnect({ host, port })
+    ? tlsConnect({ host, port, servername: host, rejectUnauthorized: true, lookup })
+    : netConnect({ host, port, lookup })
   try {
     await waitForSocket(socket, secure ? 'secureConnect' : 'connect', timeoutMs)
   } catch (error) {
@@ -816,6 +879,25 @@ export async function testQqMailCredentials({ config = {}, secret = {}, env = pr
         secret.password,
         secret.authorizationCode,
         env.MAIL_PASSWORD,
+      ])}`,
+    }
+  }
+}
+
+export async function testMailCredentials({ provider = 'custom_mail', config = {}, secret = {}, env = process.env, mailClient = {} } = {}) {
+  let settings
+  try {
+    settings = resolveMailSettings({ provider, config, secret, env, allowEnvCredentials: false })
+    await (mailClient.probeSmtp || probeSmtp)(settings)
+    await (mailClient.probeImap || probeImap)(settings)
+    return { ok: true, message: `${provider} SMTP and IMAP connected for ${settings.user}` }
+  } catch (error) {
+    return {
+      ok: false,
+      message: `${provider} connection failed: ${safeErrorMessage(error, [
+        settings?.password,
+        secret.password,
+        secret.authorizationCode,
       ])}`,
     }
   }

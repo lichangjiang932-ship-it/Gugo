@@ -70,9 +70,38 @@ const DESKTOP_UPDATE_TRANSLATIONS = {
   'zh-TW': { checking: '正在檢查更新', available: '發現新版本，準備下載', downloading: '正在下載更新', ready: '更新已準備好', installing: '正在重新啟動安裝', current: '目前已是最新版本', error: '更新遇到問題', restartInstall: '重新啟動並安裝', installingHint: '正在儲存狀態並啟動安裝程式，請稍候。', retry: '重新檢查' },
 }
 
+const LEFT_RAIL_LOGIN_TRANSLATIONS = {
+  zh: { title: '登录账户', passwordMode: '密码登录', codeMode: '邮箱验证码', email: '邮箱', password: '密码', code: '验证码', passwordPlaceholder: '输入密码', codePlaceholder: '6 位数字', submit: '登录并继续', codeSent: '验证码已发送，请查看邮箱。', devCode: '验证码：{code}', close: '关闭登录窗口' },
+  en: { title: 'Sign in', passwordMode: 'Password', codeMode: 'Email code', email: 'Email', password: 'Password', code: 'Verification code', passwordPlaceholder: 'Enter password', codePlaceholder: '6-digit code', submit: 'Sign in and continue', codeSent: 'The verification code was sent. Check your inbox.', devCode: 'Verification code: {code}', close: 'Close sign-in window' },
+  ja: { title: 'ログイン', passwordMode: 'パスワード', codeMode: 'メール認証コード', email: 'メール', password: 'パスワード', code: '認証コード', passwordPlaceholder: 'パスワードを入力', codePlaceholder: '6桁のコード', submit: 'ログインして続行', codeSent: '認証コードを送信しました。メールを確認してください。', devCode: '認証コード：{code}', close: 'ログイン画面を閉じる' },
+  ko: { title: '로그인', passwordMode: '비밀번호', codeMode: '이메일 인증 코드', email: '이메일', password: '비밀번호', code: '인증 코드', passwordPlaceholder: '비밀번호 입력', codePlaceholder: '6자리 코드', submit: '로그인하고 계속', codeSent: '인증 코드를 보냈습니다. 이메일을 확인하세요.', devCode: '인증 코드: {code}', close: '로그인 창 닫기' },
+  'zh-TW': { title: '登入帳戶', passwordMode: '密碼登入', codeMode: '電子郵件驗證碼', email: '電子郵件', password: '密碼', code: '驗證碼', passwordPlaceholder: '輸入密碼', codePlaceholder: '6 位數字', submit: '登入並繼續', codeSent: '驗證碼已傳送，請查看信箱。', devCode: '驗證碼：{code}', close: '關閉登入視窗' },
+}
+
+const SKILLS_MARKET_UI_TRANSLATIONS = {
+  zh: {
+    title: '技能库', all: '全部', custom: '自定义', search: '搜索技能 · Ctrl K', importPack: '导入技能包', fromPlugin: '从 Plugin', fromGithub: '从 GitHub', empty: '没有找到匹配的技能', imported: '已导入', deleteCustom: '删除自定义技能', newCustom: '新建自定义技能', commandId: 'ID · 命令名', name: '名称', icon: '图标', description: '描述', instructions: '技能指令', permissions: '权限（逗号分隔）', namePlaceholder: '我的技能', descriptionPlaceholder: '一句话说明这个技能', instructionsPlaceholder: '说明模型应如何工作、输出什么，以及必须遵守的约束', permissionsPlaceholder: '内容生成, 内容分析', requiredFields: '请填写技能 ID、名称和技能指令。', duplicateId: '技能 ID “{id}” 已存在。', customDescription: '自定义技能', deleteConfirm: '删除自定义技能“{id}”？', missingPrompt: '缺少 prompts/system.md', readFailed: '技能包读取失败', importing: '导入中…', confirmImport: '确认导入', version: '版本', promptPreview: '提示词预览', githubTitle: '从 GitHub 导入技能', githubHint: '粘贴 GitHub 仓库或子目录 URL。支持原生 skill.json + prompts/system.md，也支持带 YAML frontmatter 的 SKILL.md。', githubUrlRequired: '请输入 GitHub 仓库 URL', installFailed: '安装失败', installed: '已安装', fetching: '拉取中…', fetchInstall: '拉取并安装', pluginTitle: '从 Plugin 安装为 Skill', pluginsLoadFailed: '无法加载 Plugin', noPlugins: '未发现可安装的 skill-bundle Plugin。', install: '安装', installing: '安装中…',
+  },
+  en: {
+    title: 'Skills', all: 'All', custom: 'Custom', search: 'Search skills · Ctrl K', importPack: 'Import skill pack', fromPlugin: 'From Plugin', fromGithub: 'From GitHub', empty: 'No matching skills found', imported: 'Imported', deleteCustom: 'Delete custom skill', newCustom: 'New custom skill', commandId: 'ID · command', name: 'Name', icon: 'Icon', description: 'Description', instructions: 'Skill instructions', permissions: 'Permissions (comma-separated)', namePlaceholder: 'My skill', descriptionPlaceholder: 'Describe this skill in one sentence', instructionsPlaceholder: 'Explain how the model should work, what to output, and which constraints it must follow', permissionsPlaceholder: 'Content generation, Content analysis', requiredFields: 'Enter the skill ID, name, and instructions.', duplicateId: 'Skill ID “{id}” already exists.', customDescription: 'Custom skill', deleteConfirm: 'Delete custom skill “{id}”?', missingPrompt: 'prompts/system.md is missing', readFailed: 'Could not read the skill pack', importing: 'Importing…', confirmImport: 'Confirm import', version: 'Version', promptPreview: 'Prompt preview', githubTitle: 'Import skill from GitHub', githubHint: 'Paste a GitHub repository or subdirectory URL. Native skill.json + prompts/system.md and SKILL.md with YAML frontmatter are supported.', githubUrlRequired: 'Enter a GitHub repository URL', installFailed: 'Installation failed', installed: 'Installed', fetching: 'Fetching…', fetchInstall: 'Fetch and install', pluginTitle: 'Install Plugin as Skill', pluginsLoadFailed: 'Could not load Plugins', noPlugins: 'No installable skill-bundle Plugins were found.', install: 'Install', installing: 'Installing…',
+  },
+  ja: {},
+  ko: {},
+  'zh-TW': {
+    title: '技能庫', all: '全部', custom: '自訂', search: '搜尋技能 · Ctrl K', importPack: '匯入技能包', fromPlugin: '從 Plugin', fromGithub: '從 GitHub', empty: '找不到符合的技能', imported: '已匯入', deleteCustom: '刪除自訂技能', newCustom: '新增自訂技能', commandId: 'ID · 命令名稱', name: '名稱', icon: '圖示', description: '描述', instructions: '技能指令', permissions: '權限（逗號分隔）', namePlaceholder: '我的技能', descriptionPlaceholder: '用一句話說明這個技能', instructionsPlaceholder: '說明模型應如何工作、輸出什麼，以及必須遵守的限制', permissionsPlaceholder: '內容生成, 內容分析', requiredFields: '請填寫技能 ID、名稱和技能指令。', duplicateId: '技能 ID「{id}」已存在。', customDescription: '自訂技能', deleteConfirm: '刪除自訂技能「{id}」？', missingPrompt: '缺少 prompts/system.md', readFailed: '技能包讀取失敗', importing: '匯入中…', confirmImport: '確認匯入', version: '版本', promptPreview: '提示詞預覽', githubTitle: '從 GitHub 匯入技能', githubHint: '貼上 GitHub 儲存庫或子目錄 URL。支援原生 skill.json + prompts/system.md，也支援含 YAML frontmatter 的 SKILL.md。', githubUrlRequired: '請輸入 GitHub 儲存庫 URL', installFailed: '安裝失敗', installed: '已安裝', fetching: '擷取中…', fetchInstall: '擷取並安裝', pluginTitle: '從 Plugin 安裝為 Skill', pluginsLoadFailed: '無法載入 Plugin', noPlugins: '找不到可安裝的 skill-bundle Plugin。', install: '安裝', installing: '安裝中…',
+  },
+}
+
+Object.assign(SKILLS_MARKET_UI_TRANSLATIONS.zh, { create: '创建', close: '关闭', cancel: '取消', loading: '加载中…' })
+Object.assign(SKILLS_MARKET_UI_TRANSLATIONS.en, { create: 'Create', close: 'Close', cancel: 'Cancel', loading: 'Loading…' })
+Object.assign(SKILLS_MARKET_UI_TRANSLATIONS['zh-TW'], { create: '建立', close: '關閉', cancel: '取消', loading: '載入中…' })
+SKILLS_MARKET_UI_TRANSLATIONS.ja = SKILLS_MARKET_UI_TRANSLATIONS.en
+SKILLS_MARKET_UI_TRANSLATIONS.ko = SKILLS_MARKET_UI_TRANSLATIONS.en
+
 const CHAT_SURFACE_TRANSLATIONS = {
   zh: {
     workbench: WORKBENCH_TRANSLATIONS.zh,
+    leftRailLogin: LEFT_RAIL_LOGIN_TRANSLATIONS.zh,
     desktopPet: DESKTOP_PET_TRANSLATIONS.zh,
     chatComposer: { allSkills: '全部技能', dropFiles: '松开以上传文件', fullDisk: '全盘', viewImage: '点击查看大图', removeAttachment: '移除附件', clearAttachments: '清空附件', placeholder: '输入指令，或 / 调用技能…', attachment: '附件', context: '上下文 · {count}', stop: '停止', send: '发送' },
     chatPreview: { htmlTitle: 'HTML 预览', previousPage: '上一页', nextPage: '下一页', pptTitle: 'PPT 预览', reactTitle: 'React 沙箱', reactLoading: '编译中…', runtimeError: '运行错误：', promiseError: 'Promise 错误：', missingDefault: '未找到 export default 组件', compileFailed: '编译/执行失败：', dependencyTimeout: '依赖加载超时，请检查网络', reloadSandbox: '重新加载沙箱（清状态）', close: '关闭预览', unsupported: '暂不支持预览', unsupportedHint: '你可以下载原文件或切换源码视图查看', closePanel: '关闭面板', exportFailed: '导出失败', editableExportFailed: '编辑版导出失败', pptxConvertFailed: '转 PPTX 失败', resize: '拖动调节宽度，双击重置', restore: '还原', maximize: '最大化', preview: '预览', source: '源码', copySource: '复制源内容', copy: '复制', editableTitle: '导出轻量可编辑版（视觉效果低于默认高清版）', exporting: '导出 {progress}', editable: '编辑版', convertTitle: '把 HTML 幻灯片转成可编辑 PPTX（每页截图 + 透明文本框）', converting: '转换 {progress}', convertPptx: '转 PPTX', download: '下载 {filename}', generating: '生成 {progress}', generatingShort: '生成中', downloadHd: '下载高清' },
@@ -81,6 +110,7 @@ const CHAT_SURFACE_TRANSLATIONS = {
   },
   en: {
     workbench: WORKBENCH_TRANSLATIONS.en,
+    leftRailLogin: LEFT_RAIL_LOGIN_TRANSLATIONS.en,
     desktopPet: DESKTOP_PET_TRANSLATIONS.en,
     chatComposer: { allSkills: 'All skills', dropFiles: 'Drop files to upload', fullDisk: 'All files', viewImage: 'View full image', removeAttachment: 'Remove attachment', clearAttachments: 'Clear attachments', placeholder: 'Enter a prompt, or use / for skills…', attachment: 'Attach', context: 'Context · {count}', stop: 'Stop', send: 'Send' },
     chatPreview: { htmlTitle: 'HTML preview', previousPage: 'Previous', nextPage: 'Next', pptTitle: 'Presentation preview', reactTitle: 'React sandbox', reactLoading: 'Compiling…', runtimeError: 'Runtime error: ', promiseError: 'Promise error: ', missingDefault: 'No export default component found', compileFailed: 'Compile/runtime failed: ', dependencyTimeout: 'Dependency loading timed out. Check your network.', reloadSandbox: 'Reload sandbox (reset state)', close: 'Close preview', unsupported: 'Preview is not supported yet', unsupportedHint: 'Download the original file or switch to source view.', closePanel: 'Close panel', exportFailed: 'Export failed', editableExportFailed: 'Editable export failed', pptxConvertFailed: 'PPTX conversion failed', resize: 'Drag to resize; double-click to reset', restore: 'Restore', maximize: 'Maximize', preview: 'Preview', source: 'Source', copySource: 'Copy source', copy: 'Copy', editableTitle: 'Export a lightweight editable version (lower fidelity than HD)', exporting: 'Exporting {progress}', editable: 'Editable', convertTitle: 'Convert HTML slides to editable PPTX with text overlays', converting: 'Converting {progress}', convertPptx: 'To PPTX', download: 'Download {filename}', generating: 'Generating {progress}', generatingShort: 'Generating', downloadHd: 'Download HD' },
@@ -89,6 +119,7 @@ const CHAT_SURFACE_TRANSLATIONS = {
   },
   ja: {
     workbench: WORKBENCH_TRANSLATIONS.ja,
+    leftRailLogin: LEFT_RAIL_LOGIN_TRANSLATIONS.ja,
     desktopPet: DESKTOP_PET_TRANSLATIONS.ja,
     chatComposer: { allSkills: 'すべてのスキル', dropFiles: 'ドロップしてアップロード', fullDisk: '全ファイル', viewImage: '画像を拡大表示', removeAttachment: '添付を削除', clearAttachments: '添付をすべて削除', placeholder: '指示を入力、または / でスキルを呼び出す…', attachment: '添付', context: 'コンテキスト · {count}', stop: '停止', send: '送信' },
     chatPreview: { htmlTitle: 'HTML プレビュー', previousPage: '前へ', nextPage: '次へ', pptTitle: 'PPT プレビュー', reactTitle: 'React サンドボックス', reactLoading: 'コンパイル中…', runtimeError: '実行エラー：', promiseError: 'Promise エラー：', missingDefault: 'export default コンポーネントが見つかりません', compileFailed: 'コンパイル／実行失敗：', dependencyTimeout: '依存関係の読み込みがタイムアウトしました。', reloadSandbox: 'サンドボックスを再読み込み', close: 'プレビューを閉じる', unsupported: 'まだプレビューできません', unsupportedHint: '元ファイルをダウンロードするか、ソース表示に切り替えてください。', closePanel: 'パネルを閉じる', exportFailed: 'エクスポート失敗', editableExportFailed: '編集可能版の出力に失敗', pptxConvertFailed: 'PPTX 変換に失敗', resize: 'ドラッグで幅を変更、ダブルクリックでリセット', restore: '元に戻す', maximize: '最大化', preview: 'プレビュー', source: 'ソース', copySource: 'ソースをコピー', copy: 'コピー', editableTitle: '軽量な編集可能版を出力', exporting: '出力中 {progress}', editable: '編集可能版', convertTitle: 'HTML スライドを編集可能な PPTX に変換', converting: '変換中 {progress}', convertPptx: 'PPTX に変換', download: '{filename} をダウンロード', generating: '生成中 {progress}', generatingShort: '生成中', downloadHd: '高画質版をダウンロード' },
@@ -97,6 +128,7 @@ const CHAT_SURFACE_TRANSLATIONS = {
   },
   ko: {
     workbench: WORKBENCH_TRANSLATIONS.ko,
+    leftRailLogin: LEFT_RAIL_LOGIN_TRANSLATIONS.ko,
     desktopPet: DESKTOP_PET_TRANSLATIONS.ko,
     chatComposer: { allSkills: '모든 스킬', dropFiles: '놓아서 업로드', fullDisk: '전체 파일', viewImage: '큰 이미지 보기', removeAttachment: '첨부 삭제', clearAttachments: '첨부 모두 지우기', placeholder: '지시를 입력하거나 / 로 스킬 호출…', attachment: '첨부', context: '컨텍스트 · {count}', stop: '중지', send: '보내기' },
     chatPreview: { htmlTitle: 'HTML 미리보기', previousPage: '이전', nextPage: '다음', pptTitle: 'PPT 미리보기', reactTitle: 'React 샌드박스', reactLoading: '컴파일 중…', runtimeError: '실행 오류: ', promiseError: 'Promise 오류: ', missingDefault: 'export default 컴포넌트를 찾지 못했습니다', compileFailed: '컴파일/실행 실패: ', dependencyTimeout: '종속성 로딩 시간이 초과되었습니다.', reloadSandbox: '샌드박스 다시 로드', close: '미리보기 닫기', unsupported: '아직 미리보기를 지원하지 않습니다', unsupportedHint: '원본 파일을 다운로드하거나 소스 보기로 전환하세요.', closePanel: '패널 닫기', exportFailed: '내보내기 실패', editableExportFailed: '편집본 내보내기 실패', pptxConvertFailed: 'PPTX 변환 실패', resize: '드래그하여 너비 조절, 더블 클릭하여 초기화', restore: '복원', maximize: '최대화', preview: '미리보기', source: '소스', copySource: '소스 복사', copy: '복사', editableTitle: '가벼운 편집 가능 버전 내보내기', exporting: '내보내는 중 {progress}', editable: '편집본', convertTitle: 'HTML 슬라이드를 편집 가능한 PPTX로 변환', converting: '변환 중 {progress}', convertPptx: 'PPTX로 변환', download: '{filename} 다운로드', generating: '생성 중 {progress}', generatingShort: '생성 중', downloadHd: '고화질 다운로드' },
@@ -105,6 +137,7 @@ const CHAT_SURFACE_TRANSLATIONS = {
   },
   'zh-TW': {
     workbench: WORKBENCH_TRANSLATIONS['zh-TW'],
+    leftRailLogin: LEFT_RAIL_LOGIN_TRANSLATIONS['zh-TW'],
     desktopPet: DESKTOP_PET_TRANSLATIONS['zh-TW'],
     chatComposer: { allSkills: '全部技能', dropFiles: '放開以上傳檔案', fullDisk: '全碟', viewImage: '點擊檢視大圖', removeAttachment: '移除附件', clearAttachments: '清空附件', placeholder: '輸入指令，或用 / 呼叫技能…', attachment: '附件', context: '上下文 · {count}', stop: '停止', send: '傳送' },
     chatPreview: { htmlTitle: 'HTML 預覽', previousPage: '上一頁', nextPage: '下一頁', pptTitle: 'PPT 預覽', reactTitle: 'React 沙箱', reactLoading: '編譯中…', runtimeError: '執行錯誤：', promiseError: 'Promise 錯誤：', missingDefault: '找不到 export default 元件', compileFailed: '編譯／執行失敗：', dependencyTimeout: '相依套件載入逾時，請檢查網路', reloadSandbox: '重新載入沙箱（清除狀態）', close: '關閉預覽', unsupported: '暫不支援預覽', unsupportedHint: '你可以下載原始檔或切換到原始碼檢視。', closePanel: '關閉面板', exportFailed: '匯出失敗', editableExportFailed: '可編輯版匯出失敗', pptxConvertFailed: '轉換 PPTX 失敗', resize: '拖曳調整寬度，雙擊重設', restore: '還原', maximize: '最大化', preview: '預覽', source: '原始碼', copySource: '複製原始內容', copy: '複製', editableTitle: '匯出輕量可編輯版（視覺效果低於預設高清版）', exporting: '匯出 {progress}', editable: '編輯版', convertTitle: '將 HTML 投影片轉成可編輯 PPTX', converting: '轉換 {progress}', convertPptx: '轉 PPTX', download: '下載 {filename}', generating: '產生 {progress}', generatingShort: '產生中', downloadHd: '下載高清版' },
@@ -179,7 +212,7 @@ const ACCESS_TRANSLATIONS = {
     connect: '连接', connecting: '连接中', useApp: '使用', open: '打开', configure: '配置', disconnect: '断开连接', enabled: '已启用', disabled: '已停用', cancel: '取消', saveAndTest: '保存并测试', connectError: '连接失败', manageInAccess: '前往连接中心', manageHint: '社交、办公与 Browser 应用统一在连接中心管理，避免重复配置。', webAppDesc: 'Browser 快捷入口：在本机网站中登录后由模型辅助操作，不是专用 API。', webConnectedDesc: 'Browser 快捷入口已就绪；模型通过本机网页会话辅助操作，不会获得专用 API。', filterLabel: '连接器分类', filterAll: '全部', filterNative: '原生连接', filterNativeApi: '原生 API', filterSocialBridge: '社交消息桥', filterBrowserShortcut: 'Browser 快捷入口', filterCommunication: '通讯', filterProductivity: '文件与办公', filterCreative: '设计创作', filterWork: '项目管理',
     browserDesc: '打开网页、点击、输入、截图并读取页面。', notionDesc: '搜索并读取共享给集成的 Notion 页面。', githubDesc: '搜索仓库并读取代码和文件。', feishuDesc: '通过飞书机器人接收与回复消息。', wechatDesc: '扫码连接个人微信消息桥。',
     browserHint: 'Browser 在本机 Edge 或 Chrome 中运行，不上传浏览器配置。', notionHint: '创建一个 Notion Integration，并把需要访问的页面共享给它。', githubHint: '建议使用可随时撤销、只授予所需仓库的 Fine-grained PAT。', feishuHint: '在飞书开放平台创建企业自建应用，复制 App ID 和 App Secret。', wechatHint: '使用微信扫码授权个人微信消息桥。',
-    googleDriveDesc: '搜索并读取 Google Drive 中授权可见的文件。', slackDesc: '列出频道并读取 Slack 中的近期消息。', googleDriveHint: 'OAuth 默认只请求 Drive 只读权限，也可手工填入访问令牌。', slackHint: 'OAuth 默认只读取公开频道列表与历史消息，额外范围需由管理员显式配置。', telegramDesc: '通过 Telegram Bot 在手机端收发对话。', telegramHint: '在 BotFather 创建机器人并粘贴 Bot Token；连接后会持续轮询新消息。', qqDesc: '通过 QQ 开放平台机器人收发消息。', qqHint: '在 QQ 开放平台创建机器人应用并填写 App ID 与 App Secret。', qqMailDesc: '通过 SMTP 发信并通过 IMAP 读取 QQ 邮箱。', qqMailHint: '填写 QQ 邮箱账号和授权码；授权码不是 QQ 登录密码。', whatsappBrowserDesc: '扫码登录 WhatsApp Web，并保持受管 Browser 会话供模型调用。不是官方 Bot API。',
+    googleDriveDesc: '搜索并读取 Google Drive 文件，也可向 Google Sheets 追加数据行。', slackDesc: '列出频道并读取 Slack 中的近期消息。', googleDriveHint: 'OAuth 令牌需要 Drive 权限；写入表格时还需 Google Sheets 范围。', slackHint: 'OAuth 默认只读取公开频道列表与历史消息，额外范围需由管理员显式配置。', discordDesc: '通过 Discord Bot API 向指定频道发送消息。', discordHint: '在 Discord Developer Portal 创建 Bot，并填写 Application ID 与 Bot Token。', telegramDesc: '通过 Telegram Bot 在手机端收发对话。', telegramHint: '在 BotFather 创建机器人并粘贴 Bot Token；连接后会持续轮询新消息。', qqDesc: '通过 QQ 开放平台机器人收发消息。', qqHint: '在 QQ 开放平台创建机器人应用并填写 App ID 与 App Secret。', qqMailDesc: '通过 SMTP 发信并通过 IMAP 读取 QQ 邮箱。', qqMailHint: '填写 QQ 邮箱账号和授权码；授权码不是 QQ 登录密码。', whatsappBrowserDesc: '扫码登录 WhatsApp Web，并保持受管 Browser 会话供模型调用。不是官方 Bot API。',
     workspace: '工作区名称（可选）', account: '账号名称（可选）', token: '访问令牌', appId: 'App ID', appSecret: 'App Secret', botUsername: 'Bot 用户名（可选）', botToken: 'Bot Token', botTokenOptional: 'Bot Token（可选）', mailUser: 'QQ 邮箱账号', mailFrom: '默认发件人（可选）', smtpHost: 'SMTP 服务器', smtpPort: 'SMTP 端口', imapHost: 'IMAP 服务器', imapPort: 'IMAP 端口', mailPassword: '邮箱授权码', qqMailPasswordHint: '请在 QQ 邮箱开启 SMTP/IMAP。本机 AUTH_MODE=local 可留空并使用服务器 MAIL_*；多用户模式必须填写。', secretKept: '留空保留现有密钥', openSetup: '打开官方配置页面', qrLoading: '正在生成二维码…', qrWaiting: '请使用微信扫码确认', wechatUnavailable: '个人微信 iLink 服务暂不可用，请检查网络或代理后重试。',
     oauthConnect: '使用 OAuth 一键授权', oauthConnecting: '等待授权…', oauthManualFallback: '或手工填写令牌', oauthFailed: 'OAuth 授权失败', oauthPopupBlocked: '浏览器拦截了授权窗口，请允许弹窗后重试。', oauthNotConfigured: '服务器尚未配置此连接器的 OAuth；请暂时使用下方令牌方式。',
     oauthHelpTitle: '如何启用 OAuth 一键授权', oauthHelpBody: '在 .env 中设置 APP_PUBLIC_URL 为公网可访问地址，并为对应服务配置 OAuth Client（如 GITHUB_OAUTH_CLIENT_ID / GITHUB_OAUTH_CLIENT_SECRET）。配置完成后重启服务，此处即会出现一键授权按钮。', oauthHelpDoc: '查看配置文档', oauthHelpToggle: '如何启用 OAuth？',
@@ -194,7 +227,7 @@ const ACCESS_TRANSLATIONS = {
     connect: 'Connect', connecting: 'Connecting', useApp: 'Use', open: 'Open', configure: 'Configure', disconnect: 'Disconnect', enabled: 'Enabled', disabled: 'Disabled', cancel: 'Cancel', saveAndTest: 'Save & test', connectError: 'Connection failed', manageInAccess: 'Open Connections', manageHint: 'Manage social, productivity, and Browser apps in one place without duplicate setup.', webAppDesc: 'Browser shortcut: sign in to the local website for assisted operation; no dedicated API is provided.', webConnectedDesc: 'Browser shortcut ready. The model assists through the local web session, not a dedicated API.', filterLabel: 'Connector categories', filterAll: 'All', filterNative: 'Native', filterNativeApi: 'Native API', filterSocialBridge: 'Social bridge', filterBrowserShortcut: 'Browser shortcut', filterCommunication: 'Communication', filterProductivity: 'Files & productivity', filterCreative: 'Design', filterWork: 'Project management',
     browserDesc: 'Open pages, click, type, capture screenshots, and read content.', notionDesc: 'Search and read Notion pages shared with the integration.', githubDesc: 'Search repositories and read code or files.', feishuDesc: 'Receive and reply to messages through a Feishu bot.', wechatDesc: 'Connect the personal WeChat message bridge by QR code.',
     browserHint: 'Browser runs in local Edge or Chrome and never uploads your browser profile.', notionHint: 'Create a Notion integration and share the pages it should access.', githubHint: 'Use a revocable fine-grained PAT limited to the repositories you need.', feishuHint: 'Create an internal app in Feishu Open Platform and copy its App ID and App Secret.', wechatHint: 'Scan with WeChat to authorize the personal message bridge.',
-    googleDriveDesc: 'Search and read files visible to the authorized Google Drive account.', slackDesc: 'List channels and read recent Slack messages.', googleDriveHint: 'OAuth requests Drive read-only access by default; a manual access token also works.', slackHint: 'OAuth reads public channel metadata and history by default; admins must explicitly add broader scopes.', telegramDesc: 'Send and receive mobile conversations through a Telegram bot.', telegramHint: 'Create a bot with BotFather and paste its Bot Token. New messages are polled continuously while connected.', qqDesc: 'Send and receive messages through a QQ Open Platform bot.', qqHint: 'Create a bot app in QQ Open Platform and enter its App ID and App Secret.', qqMailDesc: 'Send mail over SMTP and read your QQ mailbox over IMAP.', qqMailHint: 'Enter your QQ Mail account and authorization code, not your QQ login password.', whatsappBrowserDesc: 'Scan to sign in to WhatsApp Web and keep a managed Browser session callable by the model. This is not the official Bot API.',
+    googleDriveDesc: 'Search and read Google Drive files, and append rows to Google Sheets.', slackDesc: 'List channels and read recent Slack messages.', googleDriveHint: 'The OAuth token needs Drive access and the Google Sheets scope for spreadsheet writes.', slackHint: 'OAuth reads public channel metadata and history by default; admins must explicitly add broader scopes.', discordDesc: 'Send messages to selected channels through the Discord Bot API.', discordHint: 'Create a bot in the Discord Developer Portal and enter its Application ID and Bot Token.', telegramDesc: 'Send and receive mobile conversations through a Telegram bot.', telegramHint: 'Create a bot with BotFather and paste its Bot Token. New messages are polled continuously while connected.', qqDesc: 'Send and receive messages through a QQ Open Platform bot.', qqHint: 'Create a bot app in QQ Open Platform and enter its App ID and App Secret.', qqMailDesc: 'Send mail over SMTP and read your QQ mailbox over IMAP.', qqMailHint: 'Enter your QQ Mail account and authorization code, not your QQ login password.', whatsappBrowserDesc: 'Scan to sign in to WhatsApp Web and keep a managed Browser session callable by the model. This is not the official Bot API.',
     workspace: 'Workspace name (optional)', account: 'Account name (optional)', token: 'Access token', appId: 'App ID', appSecret: 'App Secret', botUsername: 'Bot username (optional)', botToken: 'Bot Token', botTokenOptional: 'Bot Token (optional)', mailUser: 'QQ Mail account', mailFrom: 'Default sender (optional)', smtpHost: 'SMTP host', smtpPort: 'SMTP port', imapHost: 'IMAP host', imapPort: 'IMAP port', mailPassword: 'Mail authorization code', qqMailPasswordHint: 'Enable SMTP/IMAP in QQ Mail. In local AUTH_MODE, leave fields blank to use server MAIL_*; multi-user mode requires per-connection values.', secretKept: 'Leave blank to keep the saved secret', openSetup: 'Open official setup page', qrLoading: 'Generating QR code…', qrWaiting: 'Scan and confirm in WeChat', wechatUnavailable: 'The personal WeChat iLink service is unavailable. Check your network or proxy and try again.',
     oauthConnect: 'Connect with OAuth', oauthConnecting: 'Waiting for authorization…', oauthManualFallback: 'or enter a token manually', oauthFailed: 'OAuth authorization failed', oauthPopupBlocked: 'The authorization window was blocked. Allow pop-ups and try again.', oauthNotConfigured: 'OAuth is not configured for this connector on the server. Use the token form below for now.',
     oauthHelpTitle: 'How to enable one-click OAuth', oauthHelpBody: 'Set APP_PUBLIC_URL in .env to a publicly reachable origin and configure an OAuth Client for the service (e.g. GITHUB_OAUTH_CLIENT_ID / GITHUB_OAUTH_CLIENT_SECRET). Restart the server after configuration and the one-click authorize button will appear here.', oauthHelpDoc: 'View configuration docs', oauthHelpToggle: 'How do I enable OAuth?',
@@ -209,7 +242,7 @@ const ACCESS_TRANSLATIONS = {
     connect: '接続', connecting: '接続中', useApp: '使用', open: '開く', configure: '設定', disconnect: '切断', enabled: '有効', disabled: '無効', cancel: 'キャンセル', saveAndTest: '保存してテスト', connectError: '接続に失敗しました', manageInAccess: '接続センターを開く', manageHint: 'ソーシャル、業務、Browser アプリを一か所で管理します。', webAppDesc: 'Browser ショートカット：ローカルの Web サイトにログインして操作を支援します。専用 API ではありません。', webConnectedDesc: 'Browser ショートカットの準備ができました。専用 API ではなくローカル Web セッションを使用します。', filterLabel: 'コネクター分類', filterAll: 'すべて', filterNative: 'ネイティブ', filterNativeApi: 'Native API', filterSocialBridge: 'Social bridge', filterBrowserShortcut: 'Browser shortcut', filterCommunication: 'コミュニケーション', filterProductivity: 'ファイルと業務', filterCreative: 'デザイン', filterWork: 'プロジェクト管理',
     browserDesc: 'ページを開く、クリック、入力、スクリーンショット、内容の読み取り。', notionDesc: '共有された Notion ページを検索・閲覧します。', githubDesc: 'リポジトリを検索し、コードやファイルを読み取ります。', feishuDesc: 'Feishu ボットでメッセージを送受信します。', wechatDesc: 'QR コードで個人 WeChat メッセージブリッジを接続します。',
     browserHint: 'Browser はローカルの Edge または Chrome で動作します。', notionHint: 'Notion Integration を作成し、アクセスするページを共有してください。', githubHint: '必要なリポジトリだけに限定した Fine-grained PAT を使用してください。', feishuHint: 'Feishu Open Platform で社内アプリを作成し、App ID と Secret を取得します。', wechatHint: 'WeChat でスキャンしてメッセージブリッジを承認します。',
-    googleDriveDesc: '許可された Google Drive ファイルを検索して読み取ります。', slackDesc: 'チャンネル一覧と最近の Slack メッセージを読み取ります。', googleDriveHint: 'OAuth は既定で Drive の読み取り専用権限だけを要求します。', slackHint: 'OAuth は既定で公開チャンネルの一覧と履歴だけを読み取ります。', telegramDesc: 'Telegram Bot を通じてスマートフォンから会話を送受信します。', telegramHint: 'BotFather で Bot を作成し、Bot Token を貼り付けます。接続中は新着メッセージを継続取得します。', qqDesc: 'QQ Open Platform Bot を通じてメッセージを送受信します。', qqHint: 'QQ Open Platform で Bot アプリを作成し、App ID と App Secret を入力します。', qqMailDesc: 'SMTP で送信し、IMAP で QQ メールを読み取ります。', qqMailHint: 'QQ メールのアカウントと認証コードを入力します。QQ のログインパスワードではありません。', whatsappBrowserDesc: 'QR コードで WhatsApp Web にログインし、管理対象 Browser セッションをモデルから呼び出せる状態に保ちます。公式 Bot API ではありません。',
+    googleDriveDesc: 'Google Drive ファイルを検索・読み取り、Google Sheets に行を追加します。', slackDesc: 'チャンネル一覧と最近の Slack メッセージを読み取ります。', googleDriveHint: 'OAuth トークンには Drive 権限と、表への書き込み用 Google Sheets スコープが必要です。', slackHint: 'OAuth は既定で公開チャンネルの一覧と履歴だけを読み取ります。', discordDesc: 'Discord Bot API を通じて指定チャンネルにメッセージを送信します。', discordHint: 'Discord Developer Portal で Bot を作成し、Application ID と Bot Token を入力します。', telegramDesc: 'Telegram Bot を通じてスマートフォンから会話を送受信します。', telegramHint: 'BotFather で Bot を作成し、Bot Token を貼り付けます。接続中は新着メッセージを継続取得します。', qqDesc: 'QQ Open Platform Bot を通じてメッセージを送受信します。', qqHint: 'QQ Open Platform で Bot アプリを作成し、App ID と App Secret を入力します。', qqMailDesc: 'SMTP で送信し、IMAP で QQ メールを読み取ります。', qqMailHint: 'QQ メールのアカウントと認証コードを入力します。QQ のログインパスワードではありません。', whatsappBrowserDesc: 'QR コードで WhatsApp Web にログインし、管理対象 Browser セッションをモデルから呼び出せる状態に保ちます。公式 Bot API ではありません。',
     workspace: 'ワークスペース名（任意）', account: 'アカウント名（任意）', token: 'アクセストークン', appId: 'App ID', appSecret: 'App Secret', botUsername: 'Bot ユーザー名（任意）', botToken: 'Bot Token', botTokenOptional: 'Bot Token（任意）', mailUser: 'QQ メールアカウント', mailFrom: '既定の送信者（任意）', smtpHost: 'SMTP ホスト', smtpPort: 'SMTP ポート', imapHost: 'IMAP ホスト', imapPort: 'IMAP ポート', mailPassword: 'メール認証コード', qqMailPasswordHint: 'QQ メールで SMTP/IMAP を有効にしてください。ローカル AUTH_MODE では空欄でサーバーの MAIL_* を使用でき、マルチユーザーでは入力が必須です。', secretKept: '空欄で保存済みの秘密情報を保持', openSetup: '公式設定ページを開く', qrLoading: 'QR コードを生成中…', qrWaiting: 'WeChat でスキャンして確認してください', wechatUnavailable: '個人 WeChat iLink サービスを利用できません。ネットワークまたはプロキシを確認して再試行してください。',
     oauthConnect: 'OAuth で接続', oauthConnecting: '認証を待っています…', oauthManualFallback: 'またはトークンを手動入力', oauthFailed: 'OAuth 認証に失敗しました', oauthPopupBlocked: '認証ウィンドウがブロックされました。ポップアップを許可して再試行してください。', oauthNotConfigured: 'このコネクターの OAuth はサーバーで未設定です。下のトークン方式を使用してください。',
     oauthHelpTitle: 'OAuth 一括認証を有効にする方法', oauthHelpBody: '.env の APP_PUBLIC_URL に公開到達可能な URL を設定し、対象サービスの OAuth Client を構成します（例: GITHUB_OAUTH_CLIENT_ID / GITHUB_OAUTH_CLIENT_SECRET）。構成後にサーバーを再起動すると、ここに一括認証ボタンが表示されます。', oauthHelpDoc: '設定ドキュメントを表示', oauthHelpToggle: 'OAuth を有効にするには？',
@@ -224,7 +257,7 @@ const ACCESS_TRANSLATIONS = {
     connect: '연결', connecting: '연결 중', useApp: '사용', open: '열기', configure: '설정', disconnect: '연결 해제', enabled: '사용', disabled: '중지', cancel: '취소', saveAndTest: '저장 및 테스트', connectError: '연결 실패', manageInAccess: '연결 센터 열기', manageHint: '소셜, 업무 및 Browser 앱을 한 곳에서 관리합니다.', webAppDesc: 'Browser 바로가기: 로컬 웹사이트에 로그인하여 작업을 지원하며 전용 API는 제공하지 않습니다.', webConnectedDesc: 'Browser 바로가기 준비 완료. 전용 API가 아닌 로컬 웹 세션을 사용합니다.', filterLabel: '커넥터 분류', filterAll: '전체', filterNative: '기본 연결', filterNativeApi: 'Native API', filterSocialBridge: 'Social bridge', filterBrowserShortcut: 'Browser shortcut', filterCommunication: '커뮤니케이션', filterProductivity: '파일 및 업무', filterCreative: '디자인', filterWork: '프로젝트 관리',
     browserDesc: '페이지 열기, 클릭, 입력, 스크린샷 및 콘텐츠 읽기.', notionDesc: '공유된 Notion 페이지를 검색하고 읽습니다.', githubDesc: '저장소를 검색하고 코드와 파일을 읽습니다.', feishuDesc: 'Feishu 봇으로 메시지를 받고 답합니다.', wechatDesc: 'QR 코드로 개인 WeChat 메시지 브리지를 연결합니다.',
     browserHint: 'Browser는 로컬 Edge 또는 Chrome에서 실행됩니다.', notionHint: 'Notion Integration을 만들고 접근할 페이지를 공유하세요.', githubHint: '필요한 저장소만 허용한 Fine-grained PAT를 사용하세요.', feishuHint: 'Feishu Open Platform에서 사내 앱을 만들고 App ID와 Secret을 복사하세요.', wechatHint: 'WeChat으로 스캔하여 메시지 브리지를 승인하세요.',
-    googleDriveDesc: '승인된 Google Drive 파일을 검색하고 읽습니다.', slackDesc: '채널 목록과 최근 Slack 메시지를 읽습니다.', googleDriveHint: 'OAuth는 기본적으로 Drive 읽기 전용 권한만 요청합니다.', slackHint: 'OAuth는 기본적으로 공개 채널 목록과 기록만 읽습니다.', telegramDesc: 'Telegram Bot을 통해 모바일에서 대화를 주고받습니다.', telegramHint: 'BotFather에서 봇을 만들고 Bot Token을 입력하세요. 연결 중에는 새 메시지를 계속 확인합니다.', qqDesc: 'QQ Open Platform 봇을 통해 메시지를 주고받습니다.', qqHint: 'QQ Open Platform에서 봇 앱을 만들고 App ID와 App Secret을 입력하세요.', qqMailDesc: 'SMTP로 메일을 보내고 IMAP으로 QQ 메일함을 읽습니다.', qqMailHint: 'QQ 메일 계정과 인증 코드를 입력하세요. QQ 로그인 비밀번호가 아닙니다.', whatsappBrowserDesc: 'QR로 WhatsApp Web에 로그인하고 모델이 호출할 수 있는 관리형 Browser 세션을 유지합니다. 공식 Bot API는 아닙니다.',
+    googleDriveDesc: 'Google Drive 파일을 검색하고 읽으며 Google Sheets에 행을 추가합니다.', slackDesc: '채널 목록과 최근 Slack 메시지를 읽습니다.', googleDriveHint: 'OAuth 토큰에는 Drive 권한과 스프레드시트 쓰기용 Google Sheets 범위가 필요합니다.', slackHint: 'OAuth는 기본적으로 공개 채널 목록과 기록만 읽습니다.', discordDesc: 'Discord Bot API를 통해 지정한 채널에 메시지를 보냅니다.', discordHint: 'Discord Developer Portal에서 봇을 만들고 Application ID와 Bot Token을 입력하세요.', telegramDesc: 'Telegram Bot을 통해 모바일에서 대화를 주고받습니다.', telegramHint: 'BotFather에서 봇을 만들고 Bot Token을 입력하세요. 연결 중에는 새 메시지를 계속 확인합니다.', qqDesc: 'QQ Open Platform 봇을 통해 메시지를 주고받습니다.', qqHint: 'QQ Open Platform에서 봇 앱을 만들고 App ID와 App Secret을 입력하세요.', qqMailDesc: 'SMTP로 메일을 보내고 IMAP으로 QQ 메일함을 읽습니다.', qqMailHint: 'QQ 메일 계정과 인증 코드를 입력하세요. QQ 로그인 비밀번호가 아닙니다.', whatsappBrowserDesc: 'QR로 WhatsApp Web에 로그인하고 모델이 호출할 수 있는 관리형 Browser 세션을 유지합니다. 공식 Bot API는 아닙니다.',
     workspace: '워크스페이스 이름(선택)', account: '계정 이름(선택)', token: '액세스 토큰', appId: 'App ID', appSecret: 'App Secret', botUsername: 'Bot 사용자 이름(선택)', botToken: 'Bot Token', botTokenOptional: 'Bot Token(선택)', mailUser: 'QQ 메일 계정', mailFrom: '기본 발신자(선택)', smtpHost: 'SMTP 호스트', smtpPort: 'SMTP 포트', imapHost: 'IMAP 호스트', imapPort: 'IMAP 포트', mailPassword: '메일 인증 코드', qqMailPasswordHint: 'QQ 메일에서 SMTP/IMAP을 켜세요. 로컬 AUTH_MODE에서는 비워 두면 서버 MAIL_*를 사용하며, 다중 사용자 모드에서는 직접 입력해야 합니다.', secretKept: '비워 두면 저장된 비밀 유지', openSetup: '공식 설정 페이지 열기', qrLoading: 'QR 코드 생성 중…', qrWaiting: 'WeChat에서 스캔하고 확인하세요', wechatUnavailable: '개인 WeChat iLink 서비스를 사용할 수 없습니다. 네트워크 또는 프록시를 확인한 후 다시 시도하세요.',
     oauthConnect: 'OAuth로 연결', oauthConnecting: '인증 대기 중…', oauthManualFallback: '또는 토큰 직접 입력', oauthFailed: 'OAuth 인증 실패', oauthPopupBlocked: '인증 창이 차단되었습니다. 팝업을 허용한 후 다시 시도하세요.', oauthNotConfigured: '서버에 이 커넥터의 OAuth가 설정되지 않았습니다. 아래 토큰 방식을 사용하세요.',
     oauthHelpTitle: 'OAuth 원클릭 인증 활성화 방법', oauthHelpBody: '.env의 APP_PUBLIC_URL에 공개 접근 가능한 주소를 설정하고 해당 서비스의 OAuth Client를 구성하세요(예: GITHUB_OAUTH_CLIENT_ID / GITHUB_OAUTH_CLIENT_SECRET). 구성 후 서버를 재시작하면 여기에 원클릭 인증 버튼이 표시됩니다.', oauthHelpDoc: '구성 문서 보기', oauthHelpToggle: 'OAuth를 활성화하려면?',
@@ -239,7 +272,7 @@ const ACCESS_TRANSLATIONS = {
     connect: '連接', connecting: '連接中', useApp: '使用', open: '開啟', configure: '設定', disconnect: '中斷連接', enabled: '已啟用', disabled: '已停用', cancel: '取消', saveAndTest: '儲存並測試', connectError: '連接失敗', manageInAccess: '前往連接中心', manageHint: '社交、辦公與 Browser 應用程式統一在連接中心管理。', webAppDesc: 'Browser 快捷入口：在本機網站登入後由模型協助操作，不是專用 API。', webConnectedDesc: 'Browser 快捷入口已就緒；模型透過本機網頁工作階段協助操作，不會取得專用 API。', filterLabel: '連接器分類', filterAll: '全部', filterNative: '原生連接', filterNativeApi: '原生 API', filterSocialBridge: '社交訊息橋接', filterBrowserShortcut: 'Browser 快捷入口', filterCommunication: '通訊', filterProductivity: '檔案與辦公', filterCreative: '設計創作', filterWork: '專案管理',
     browserDesc: '開啟網頁、點擊、輸入、截圖並讀取頁面。', notionDesc: '搜尋並讀取分享給整合的 Notion 頁面。', githubDesc: '搜尋儲存庫並讀取程式碼與檔案。', feishuDesc: '透過飛書機器人接收與回覆訊息。', wechatDesc: '掃碼連接個人微信訊息橋接。',
     browserHint: 'Browser 在本機 Edge 或 Chrome 中執行，不會上傳瀏覽器設定。', notionHint: '建立 Notion Integration，並分享需要存取的頁面。', githubHint: '建議使用可撤銷、只授權所需儲存庫的 Fine-grained PAT。', feishuHint: '在飛書開放平台建立企業自建應用，複製 App ID 與 App Secret。', wechatHint: '使用微信掃碼授權個人訊息橋接。',
-    googleDriveDesc: '搜尋並讀取獲授權可見的 Google Drive 檔案。', slackDesc: '列出頻道並讀取近期 Slack 訊息。', googleDriveHint: 'OAuth 預設只要求 Drive 唯讀權限。', slackHint: 'OAuth 預設只讀取公開頻道清單與歷史訊息。', telegramDesc: '透過 Telegram Bot 在手機端收發對話。', telegramHint: '在 BotFather 建立機器人並貼上 Bot Token；連接期間會持續擷取新訊息。', qqDesc: '透過 QQ 開放平台機器人收發訊息。', qqHint: '在 QQ 開放平台建立機器人應用程式並填入 App ID 與 App Secret。', qqMailDesc: '透過 SMTP 寄信並透過 IMAP 讀取 QQ 信箱。', qqMailHint: '填入 QQ 信箱帳號與授權碼；授權碼不是 QQ 登入密碼。', whatsappBrowserDesc: '掃碼登入 WhatsApp Web，並保持受管 Browser 工作階段供模型呼叫。這不是官方 Bot API。',
+    googleDriveDesc: '搜尋並讀取 Google Drive 檔案，也可向 Google Sheets 追加資料列。', slackDesc: '列出頻道並讀取近期 Slack 訊息。', googleDriveHint: 'OAuth 權杖需要 Drive 權限；寫入試算表時還需要 Google Sheets 範圍。', slackHint: 'OAuth 預設只讀取公開頻道清單與歷史訊息。', discordDesc: '透過 Discord Bot API 向指定頻道傳送訊息。', discordHint: '在 Discord Developer Portal 建立 Bot，並填入 Application ID 與 Bot Token。', telegramDesc: '透過 Telegram Bot 在手機端收發對話。', telegramHint: '在 BotFather 建立機器人並貼上 Bot Token；連接期間會持續擷取新訊息。', qqDesc: '透過 QQ 開放平台機器人收發訊息。', qqHint: '在 QQ 開放平台建立機器人應用程式並填入 App ID 與 App Secret。', qqMailDesc: '透過 SMTP 寄信並透過 IMAP 讀取 QQ 信箱。', qqMailHint: '填入 QQ 信箱帳號與授權碼；授權碼不是 QQ 登入密碼。', whatsappBrowserDesc: '掃碼登入 WhatsApp Web，並保持受管 Browser 工作階段供模型呼叫。這不是官方 Bot API。',
     workspace: '工作區名稱（選填）', account: '帳號名稱（選填）', token: '存取權杖', appId: 'App ID', appSecret: 'App Secret', botUsername: 'Bot 使用者名稱（選填）', botToken: 'Bot Token', botTokenOptional: 'Bot Token（選填）', mailUser: 'QQ 信箱帳號', mailFrom: '預設寄件者（選填）', smtpHost: 'SMTP 伺服器', smtpPort: 'SMTP 連接埠', imapHost: 'IMAP 伺服器', imapPort: 'IMAP 連接埠', mailPassword: '信箱授權碼', qqMailPasswordHint: '請在 QQ 信箱啟用 SMTP/IMAP。本機 AUTH_MODE=local 可留空使用伺服器 MAIL_*；多使用者模式必須填寫。', secretKept: '留空保留現有密鑰', openSetup: '開啟官方設定頁面', qrLoading: '正在產生二維碼…', qrWaiting: '請使用微信掃碼確認', wechatUnavailable: '個人微信 iLink 服務暫時無法使用，請檢查網路或代理後重試。',
     oauthConnect: '使用 OAuth 一鍵授權', oauthConnecting: '等待授權…', oauthManualFallback: '或手動填寫權杖', oauthFailed: 'OAuth 授權失敗', oauthPopupBlocked: '瀏覽器阻擋了授權視窗，請允許彈出視窗後重試。', oauthNotConfigured: '伺服器尚未設定此連接器的 OAuth；請暫時使用下方權杖方式。',
     oauthHelpTitle: '如何啟用 OAuth 一鍵授權', oauthHelpBody: '在 .env 中設定 APP_PUBLIC_URL 為公開可達地址，並為對應服務設定 OAuth Client（如 GITHUB_OAUTH_CLIENT_ID / GITHUB_OAUTH_CLIENT_SECRET）。設定完成後重新啟動服務，此處即會出現一鍵授權按鈕。', oauthHelpDoc: '檢視設定文件', oauthHelpToggle: '如何啟用 OAuth？',
@@ -247,6 +280,45 @@ const ACCESS_TRANSLATIONS = {
     methodBuiltIn: '內建', methodOAuth: 'OAuth', methodQr: '掃碼連接', methodBotToken: 'Bot Token', methodAppCredentials: '應用程式憑據', methodMailPassword: '信箱授權碼', methodMcp: 'MCP', methodBrowser: 'Browser 登入', methodQrBrowser: '掃碼 · Browser',
     capabilityLegend: '能力類型說明', capabilityNativeApi: 'Native API', capabilityNativeApiHint: '透過後端專用介面讀取服務資料。', capabilitySocialBridge: 'Social bridge', capabilitySocialBridgeHint: '收發社交平台訊息，不等同完整平台 API。', capabilityBrowserShortcut: 'Browser shortcut', capabilityBrowserShortcutHint: '使用本機網頁工作階段協助操作，不提供專用 API。',
   },
+}
+
+const GENERIC_MAIL_TRANSLATIONS = {
+  zh: { mailDesc: '通过安全的 SMTP 发信，并通过 IMAP 读取邮箱。', mailHint: '填写邮箱账号和应用专用密码；常见服务的服务器地址可自动补全。' },
+  en: { mailDesc: 'Send mail securely over SMTP and read mail over IMAP.', mailHint: 'Enter the email address and app password; common provider server addresses are filled automatically.' },
+  ja: { mailDesc: '安全な SMTP で送信し、IMAP でメールを読み取ります。', mailHint: 'メールアドレスとアプリパスワードを入力してください。主要サービスの設定は自動補完されます。' },
+  ko: { mailDesc: '안전한 SMTP로 메일을 보내고 IMAP으로 읽습니다.', mailHint: '이메일 주소와 앱 비밀번호를 입력하세요. 주요 서비스 설정은 자동으로 채워집니다.' },
+  'zh-TW': { mailDesc: '透過安全的 SMTP 寄信，並透過 IMAP 讀取信箱。', mailHint: '填入信箱帳號與應用程式密碼；常見服務的伺服器設定會自動補全。' },
+}
+for (const [locale, copy] of Object.entries(GENERIC_MAIL_TRANSLATIONS)) Object.assign(ACCESS_TRANSLATIONS[locale], copy)
+
+const PROJECT_CONNECTOR_TRANSLATIONS = {
+  googleCalendarDesc: 'Create and update events through the Google Calendar API.',
+  googleCalendarHint: 'Use an OAuth access token with permission to manage calendar events.',
+  jiraDesc: 'Create and update Jira Cloud issues.',
+  jiraHint: 'Enter your Atlassian site URL, account email, and API token.',
+  linearDesc: 'Create and update issues in Linear teams.',
+  linearHint: 'Create a personal API key in Linear settings.',
+  trelloDesc: 'Create and update cards in Trello lists.',
+  trelloHint: 'Enter a Trello API key and user token.',
+  siteUrl: 'Site URL',
+  accountEmail: 'Account email',
+  apiKey: 'API key',
+  gitlabDesc: 'Create and update issues in GitLab projects.', gitlabHint: 'Use a personal access token with API scope; self-hosted API URLs are supported.',
+  asanaDesc: 'Create and update tasks in Asana workspaces.', asanaHint: 'Create a personal access token in the Asana developer console.',
+  clickupDesc: 'Create and update tasks in ClickUp lists.', clickupHint: 'Copy a personal API token from ClickUp app settings.',
+  airtableDesc: 'Create and update records in Airtable bases.', airtableHint: 'Create a scoped personal access token for the required bases.',
+  mondayDesc: 'Create and update items on monday.com boards.', mondayHint: 'Copy a personal API token from the monday.com developer section.',
+  hubspotDesc: 'Create and update tickets in HubSpot CRM.', hubspotHint: 'Create a private app token with ticket write scopes.',
+  zendeskDesc: 'Create and update support tickets in Zendesk.', zendeskHint: 'Enter the Zendesk subdomain, agent email, and API token.',
+  todoistDesc: 'Create and update tasks in Todoist.', todoistHint: 'Copy the API token from Todoist developer settings.',
+  dropboxDesc: 'Create and overwrite text files in Dropbox.', dropboxHint: 'Use an OAuth token with file content write access.',
+  onedriveDesc: 'Create and overwrite text files in OneDrive.', onedriveHint: 'Use a Microsoft Graph token with Files.ReadWrite permission.',
+  confluenceDesc: 'Create and update pages in Confluence Cloud.', confluenceHint: 'Enter the Atlassian site URL, email, and API token.',
+  salesforceDesc: 'Create and update Salesforce records.', salesforceHint: 'Enter the instance URL and an OAuth access token.',
+  instanceUrl: 'Instance URL',
+}
+for (const locale of Object.keys(ACCESS_TRANSLATIONS)) {
+  Object.assign(ACCESS_TRANSLATIONS[locale], PROJECT_CONNECTOR_TRANSLATIONS)
 }
 
 const ACCESS_MCP_TRANSLATIONS = {
@@ -670,7 +742,7 @@ const SETTINGS_DATA_EXPORT_TRANSLATIONS = {
 export const translations = {
   zh: {
     desktopUpdate: DESKTOP_UPDATE_TRANSLATIONS.zh,
-    skillsMarket: SKILLS_MARKET_TRANSLATIONS.zh,
+    skillsMarket: { ...SKILLS_MARKET_TRANSLATIONS.zh, ...SKILLS_MARKET_UI_TRANSLATIONS.zh },
     storageNotice: STORAGE_NOTICE_TRANSLATIONS.zh,
     settingsDataExport: SETTINGS_DATA_EXPORT_TRANSLATIONS.zh,
     ...RELIABILITY_VIEW_TRANSLATIONS.zh,
@@ -748,6 +820,7 @@ export const translations = {
       systemDiagnostics: '系统诊断',
       account: '账户',
       appearance: '外观',
+      pet: '宠物', petSubtitle: '自定义独立桌面宠物；Gugo 最小化后仍会显示。', petImage: '宠物图片', petImageHint: '支持最大 4 MB 的透明 PNG、WebP 和 GIF。', petImageError: { invalidType: '请选择 PNG、WebP 或 GIF 图片。', tooLarge: '宠物图片不能超过 4 MB。' }, petChoose: '选择图片', petSize: '宠物大小', petPreview: '自定义桌面宠物预览', petDefault: '当前使用默认宠物', petSaved: '宠物已保存，桌面窗口会自动更新。', petReadFailed: '无法读取这张图片。', petReset: '恢复默认宠物', petResetDone: '已恢复默认宠物。',
       theme: '主题',
       themeDark: '深色',
       themeLight: '浅色',
@@ -1146,7 +1219,7 @@ export const translations = {
   },
   en: {
     desktopUpdate: DESKTOP_UPDATE_TRANSLATIONS.en,
-    skillsMarket: SKILLS_MARKET_TRANSLATIONS.en,
+    skillsMarket: { ...SKILLS_MARKET_TRANSLATIONS.en, ...SKILLS_MARKET_UI_TRANSLATIONS.en },
     storageNotice: STORAGE_NOTICE_TRANSLATIONS.en,
     settingsDataExport: SETTINGS_DATA_EXPORT_TRANSLATIONS.en,
     ...RELIABILITY_VIEW_TRANSLATIONS.en,
@@ -1224,6 +1297,7 @@ export const translations = {
       systemDiagnostics: 'System diagnostics',
       account: 'Account',
       appearance: 'Appearance',
+      pet: 'Pet', petSubtitle: 'Customize the independent desktop pet, which remains visible when Gugo is minimized.', petImage: 'Pet image', petImageHint: 'Transparent PNG, WebP, and GIF files up to 4 MB are supported.', petImageError: { invalidType: 'Choose a PNG, WebP, or GIF image.', tooLarge: 'The pet image must be 4 MB or smaller.' }, petChoose: 'Choose image', petSize: 'Pet size', petPreview: 'Custom desktop pet preview', petDefault: 'Using the default pet', petSaved: 'Pet saved. The desktop window will update automatically.', petReadFailed: 'This image could not be read.', petReset: 'Restore default pet', petResetDone: 'The default pet has been restored.',
       theme: 'Theme',
       themeDark: 'Dark',
       themeLight: 'Light',
@@ -1622,7 +1696,7 @@ export const translations = {
   },
   ja: {
     desktopUpdate: DESKTOP_UPDATE_TRANSLATIONS.ja,
-    skillsMarket: SKILLS_MARKET_TRANSLATIONS.ja,
+    skillsMarket: { ...SKILLS_MARKET_TRANSLATIONS.ja, ...SKILLS_MARKET_UI_TRANSLATIONS.ja },
     storageNotice: STORAGE_NOTICE_TRANSLATIONS.ja,
     settingsDataExport: SETTINGS_DATA_EXPORT_TRANSLATIONS.ja,
     ...RELIABILITY_VIEW_TRANSLATIONS.ja,
@@ -1700,6 +1774,7 @@ export const translations = {
       systemDiagnostics: 'システム診断',
       account: 'アカウント',
       appearance: '外観',
+      pet: 'ペット', petSubtitle: 'Gugoを最小化しても表示されるデスクトップペットを設定します。', petImage: 'ペット画像', petImageHint: '4 MBまでのPNG、WebP、GIFに対応します。', petImageError: { invalidType: 'PNG、WebP、GIF画像を選択してください。', tooLarge: '画像は4 MB以下にしてください。' }, petChoose: '画像を選択', petSize: 'ペットのサイズ', petPreview: 'ペットのプレビュー', petDefault: '標準ペットを使用中', petSaved: 'ペットを保存しました。', petReadFailed: '画像を読み込めません。', petReset: '標準に戻す', petResetDone: '標準ペットに戻しました。',
       theme: 'テーマ',
       themeDark: 'ダーク',
       themeLight: 'ライト',
@@ -2098,7 +2173,7 @@ export const translations = {
   },
   ko: {
     desktopUpdate: DESKTOP_UPDATE_TRANSLATIONS.ko,
-    skillsMarket: SKILLS_MARKET_TRANSLATIONS.ko,
+    skillsMarket: { ...SKILLS_MARKET_TRANSLATIONS.ko, ...SKILLS_MARKET_UI_TRANSLATIONS.ko },
     storageNotice: STORAGE_NOTICE_TRANSLATIONS.ko,
     settingsDataExport: SETTINGS_DATA_EXPORT_TRANSLATIONS.ko,
     ...RELIABILITY_VIEW_TRANSLATIONS.ko,
@@ -2176,6 +2251,7 @@ export const translations = {
       systemDiagnostics: '시스템 진단',
       account: '계정',
       appearance: '모양',
+      pet: '펫', petSubtitle: 'Gugo를 최소화해도 표시되는 데스크톱 펫을 설정합니다.', petImage: '펫 이미지', petImageHint: '최대 4MB의 PNG, WebP, GIF를 지원합니다.', petImageError: { invalidType: 'PNG, WebP 또는 GIF 이미지를 선택하세요.', tooLarge: '이미지는 4MB 이하여야 합니다.' }, petChoose: '이미지 선택', petSize: '펫 크기', petPreview: '펫 미리보기', petDefault: '기본 펫 사용 중', petSaved: '펫을 저장했습니다.', petReadFailed: '이미지를 읽을 수 없습니다.', petReset: '기본값 복원', petResetDone: '기본 펫으로 복원했습니다.',
       theme: '테마',
       themeDark: '다크',
       themeLight: '라이트',
@@ -2574,7 +2650,7 @@ export const translations = {
   },
   'zh-TW': {
     desktopUpdate: DESKTOP_UPDATE_TRANSLATIONS['zh-TW'],
-    skillsMarket: SKILLS_MARKET_TRANSLATIONS['zh-TW'],
+    skillsMarket: { ...SKILLS_MARKET_TRANSLATIONS['zh-TW'], ...SKILLS_MARKET_UI_TRANSLATIONS['zh-TW'] },
     storageNotice: STORAGE_NOTICE_TRANSLATIONS['zh-TW'],
     settingsDataExport: SETTINGS_DATA_EXPORT_TRANSLATIONS['zh-TW'],
     ...RELIABILITY_VIEW_TRANSLATIONS['zh-TW'],
@@ -2652,6 +2728,7 @@ export const translations = {
       systemDiagnostics: '系統診斷',
       account: '帳戶',
       appearance: '外觀',
+      pet: '寵物', petSubtitle: '自訂桌面寵物；Gugo 最小化後仍會顯示。', petImage: '寵物圖片', petImageHint: '支援最大 4 MB 的 PNG、WebP 與 GIF。', petImageError: { invalidType: '請選擇 PNG、WebP 或 GIF 圖片。', tooLarge: '寵物圖片不可超過 4 MB。' }, petChoose: '選擇圖片', petSize: '寵物大小', petPreview: '寵物預覽', petDefault: '目前使用預設寵物', petSaved: '寵物已儲存。', petReadFailed: '無法讀取圖片。', petReset: '恢復預設寵物', petResetDone: '已恢復預設寵物。',
       theme: '主題',
       themeDark: '深色',
       themeLight: '淺色',

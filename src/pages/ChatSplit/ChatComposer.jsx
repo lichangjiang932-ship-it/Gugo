@@ -1,16 +1,11 @@
 import { useRef, useEffect, useState } from 'react'
 import FullscreenMediaModal from '../../components/FullscreenMediaModal.jsx'
-import PermissionModeSwitcher from '../../components/PermissionModeSwitcher.jsx'
 import { useT } from '../../i18n/I18nProvider.jsx'
-import ModelPicker from './ModelPicker.jsx'
 import SlashCommandMenu from './SlashCommandMenu.jsx'
+import ComposerActions from './chatComposer/ComposerActions.jsx'
+import ComposerAttachments from './chatComposer/ComposerAttachments.jsx'
 import {
   Paperclip,
-  Mic,
-  Send,
-  Pause,
-  X,
-  FileText,
 } from 'lucide-react'
 import { getClipboardImageFiles } from '../../lib/chatAttachmentFiles.js'
 import { resolveSlashMenuKey } from '../../lib/slashMenuNavigation.js'
@@ -185,43 +180,7 @@ export default function ChatComposer({
           />
         )}
         <div className="flex min-h-[104px] flex-col justify-between rounded-2xl border border-ink/15 bg-paper px-3.5 py-3 shadow-[0_8px_28px_rgb(var(--color-ink-rgb)/0.07)]">
-          {attachments.length > 0 && (
-            <div className="flex flex-wrap gap-2 mb-3">
-              {attachments.map((item) => (
-                <div key={item.id} className="flex flex-wrap items-center gap-2 px-2 py-1.5 rounded-md border border-ink-fade/40 bg-paper-2 text-xs text-ink-soft max-w-[280px]">
-                  {item.kind === 'image' && item.dataUrl ? (
-                    <img
-                      src={item.dataUrl}
-                      alt={item.name}
-                      className="w-7 h-7 object-cover rounded border border-ink-fade/30 cursor-zoom-in"
-                      onClick={() => setFullscreenSrc({ src: item.dataUrl, alt: item.name })}
-                      title={t('chatComposer.viewImage')}
-                    />
-                  ) : (
-                    <FileText className="w-4 h-4 text-ink-fade shrink-0" />
-                  )}
-                  <span className="min-w-0 flex-1 truncate">{item.name} · {item.sizeKB}KB</span>
-                  {item.error && <span className="text-ember" title={item.error}>!</span>}
-                  <button
-                    type="button"
-                    onClick={() => setAttachments((current) => current.filter((a) => a.id !== item.id))}
-                    className="text-ink-fade hover:text-ink"
-                    title={t('chatComposer.removeAttachment')}
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                  {item.error && <p className="w-full text-[10px] leading-4 text-rose-700">{item.error}</p>}
-                </div>
-              ))}
-              <button
-                type="button"
-                onClick={() => setAttachments([])}
-                className="px-2 py-1.5 rounded-md border border-dashed border-ink-fade/50 text-xs text-ink-fade hover:text-ink"
-              >
-                {t('chatComposer.clearAttachments')}
-              </button>
-            </div>
-          )}
+          <ComposerAttachments attachments={attachments} onClear={() => setAttachments([])} onOpenImage={setFullscreenSrc} onRemove={(id) => setAttachments((current) => current.filter((item) => item.id !== id))} t={t} />
           <div className="flex items-start gap-2 min-h-6">
             {skillCommand.command && (
               <span
@@ -273,78 +232,26 @@ export default function ChatComposer({
               rows={1}
             />
           </div>
-          <div className="mt-2.5 flex items-center justify-between gap-3">
-            <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-              <input
-                type="file"
-                multiple
-                accept="image/*,.txt,.md,.json,.csv,.xml,.yml,.yaml,.log,.js,.jsx,.ts,.tsx,.css,.html,.xlsx,.xls,.xlsm,.ods,.docx,.doc,.pptx,.ppt,.pdf,.zip,.epub,.rtf"
-                ref={fileInputRef}
-                className="hidden"
-                onChange={onFileChange}
-              />
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                title={t('chatComposer.attachment')}
-                aria-label={t('chatComposer.attachment')}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-ink-fade transition-colors hover:bg-ink-ghost hover:text-ink-soft"
-              >
-                <Paperclip className="w-3.5 h-3.5" />
-              </button>
-              <PermissionModeSwitcher
-                mode={approvalMode}
-                onChange={onApprovalModeChange}
-                disabled={isGenerating}
-              />
-            </div>
-            <div className="flex min-w-0 items-center gap-1.5">
-              <ModelPicker
-                open={modelPickerOpen}
-                modelOptions={modelOptions}
-                selectedModel={selectedModel}
-                onOpen={onOpenModelPicker}
-                onClose={onCloseModelPicker}
-                onSelect={onModelChange}
-                onManage={onManageModels}
-              />
-              <button
-                type="button"
-                onClick={onVoiceClick}
-                disabled={voiceState === 'requesting'}
-                aria-pressed={voiceState === 'listening'}
-                aria-label={voiceLabel}
-                title={voiceLabel}
-                className={
-                  'inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors disabled:cursor-wait ' +
-                  (voiceState === 'listening'
-                    ? 'bg-ember-soft text-ember animate-pulse'
-                    : ['unsupported', 'denied', 'error'].includes(voiceState)
-                    ? 'text-ink-fade'
-                    : 'text-ink-fade hover:bg-ink-ghost hover:text-ink-soft')
-                }
-              >
-                <Mic className="w-3.5 h-3.5" />
-              </button>
-              {isGenerating ? (
-                <button
-                  onClick={onAbort}
-                  className="h-8 px-3 rounded-full bg-ember text-paper text-xs font-medium hover:bg-ember/90 transition-colors flex items-center gap-1"
-                >
-                  <Pause className="w-3.5 h-3.5" />
-                  {t('chatComposer.stop')}
-                </button>
-              ) : (
-                <button
-                  onClick={onSend}
-                  title={t('chatComposer.send')}
-                  aria-label={t('chatComposer.send')}
-                  className="w-8 h-8 rounded-full bg-ink flex items-center justify-center hover:bg-ink-soft transition-colors"
-                >
-                  <Send className="w-3.5 h-3.5 text-paper" />
-                </button>
-              )}
-            </div>
-          </div>
+          <ComposerActions
+            approvalMode={approvalMode}
+            fileInputRef={fileInputRef}
+            isGenerating={isGenerating}
+            modelOptions={modelOptions}
+            modelPickerOpen={modelPickerOpen}
+            onAbort={onAbort}
+            onApprovalModeChange={onApprovalModeChange}
+            onCloseModelPicker={onCloseModelPicker}
+            onFileChange={onFileChange}
+            onManageModels={onManageModels}
+            onModelChange={onModelChange}
+            onOpenModelPicker={onOpenModelPicker}
+            onSend={onSend}
+            onVoiceClick={onVoiceClick}
+            selectedModel={selectedModel}
+            t={t}
+            voiceLabel={voiceLabel}
+            voiceState={voiceState}
+          />
         </div>
       </div>
       {fullscreenSrc && (

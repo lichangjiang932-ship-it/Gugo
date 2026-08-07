@@ -54,7 +54,8 @@ import {
   withStableStepIds,
 } from './jobWorkflow.js'
 import { createJobRuntimeScheduler } from './jobRuntimeScheduler.js'
-
+import { createJobExecutionLeaseCoordinator } from './jobExecutionLeaseRuntime.js'
+import { releaseJobBudget } from '../utils/jobBudget.js'
 const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled'])
 // ★ 注意:awaiting_approval 故意不在这里。等人的 job 崩溃恢复时若被重排成 queued,
 // 会把已经批准执行过的动作重跑一遍(发消息/改日历这类不可撤销动作尤其危险)。
@@ -547,6 +548,7 @@ export class JobRuntime {
     this.listeners = new Map()
     this.activeControllers = new Map()
     this.activeJobIds = new Set()
+    this.executionLeases = createJobExecutionLeaseCoordinator()
     this.scheduler = createJobRuntimeScheduler({
       tickMs,
       maxConcurrency,
@@ -957,11 +959,15 @@ export class JobRuntime {
     const runnableJobs = jobs.filter((candidate) => (
       !SUSPENDED_JOB_STATUSES.has(candidate.status) && !this.activeJobIds.has(candidate.id)
     ))
-    const job = runnableJobs.find((candidate) => candidate.status === 'cancel_requested')
-      || runnableJobs.find((candidate) => candidate.status === 'queued')
-      || runnableJobs[0]
+    const candidates = [
+      ...runnableJobs.filter((candidate) => candidate.status === 'cancel_requested'),
+      ...runnableJobs.filter((candidate) => candidate.status === 'queued'),
+      ...runnableJobs.filter((candidate) => !['cancel_requested', 'queued'].includes(candidate.status)),
+    ]
+    const job = candidates.find((candidate) => this.executionLeases.claim(candidate.id))
     if (!job) return false
     this.activeJobIds.add(job.id)
+    const releaseExecutionLease = this.executionLeases.hold(job.id)
     try {
 
     if (job.cancelRequested || job.status === 'cancel_requested') {
@@ -1337,7 +1343,10 @@ export class JobRuntime {
 
     return true
     } finally {
+      releaseExecutionLease()
       this.activeJobIds.delete(job.id)
+      const finalJob = getJobRow(job.id)
+      if (finalJob && TERMINAL_JOB_STATUSES.has(finalJob.status)) releaseJobBudget(job.id)
     }
   }
 

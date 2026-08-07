@@ -10,14 +10,14 @@
  */
 import { appendJobArtifact } from './jobStore.js'
 import { appendTurnArtifact } from './turnArtifactStore.js'
-import { createDocx, createPptx, createXlsx } from './artifactGen.js'
+import { createDocx, createImageArtifact, createPptx, createXlsx } from './artifactGen.js'
 import { FS_SHELL_TOOL_SPECS, dispatchFsShellTool } from '../adapters/fsShellTools.js'
 import { GIT_TOOL_SPECS, dispatchGitTool } from '../adapters/gitWorkbench.js'
 import { CODE_SEARCH_TOOL_SPECS, dispatchCodeSearchTool } from '../utils/codeSearch.js'
 import { APPLY_PATCH_TOOL_SPECS, dispatchApplyPatchTool } from '../utils/applyPatch.js'
 import { AGENTIC_TOOL_SPECS, dispatchAgenticTool, isLoopPauseResult } from '../utils/agenticTools.js'
 import { getBuiltinSpec, getToolMetadata } from './toolRegistry.js'
-import { CONNECTOR_TOOL_NAMES, CONNECTOR_TOOL_SPECS, executeConnectorTool } from './connectorTools.js'
+import { CONNECTOR_TOOL_NAMES, CONNECTOR_TOOL_SPECS, CONNECTOR_WRITE_TOOL_NAMES, executeConnectorTool } from './connectorTools.js'
 import { MEMORY_TOOL_SPECS, dispatchMemoryTool } from '../utils/memoryTools.js'
 import { attachJobBudget, getJobBudget, createJobBudget, runWithModelBudget } from '../utils/jobBudget.js'
 import { formatDeniedToolResult, requestApproval, resumePersistedApproval } from './approvalGate.js'
@@ -45,6 +45,7 @@ import { callTool as callMcpTool } from '../mcp/mcpManager.js'
 import { executeBrowserTool } from './browserToolExecutor.js'
 import { fetchAndExtract, searchDuckDuckGo } from '../adapters/toolProxy.js'
 import { dispatchHooks } from './hooksService.js'
+import { generateImage } from './mediaModelService.js'
 
 const FS_SHELL_TOOL_NAMES = new Set(
   FS_SHELL_TOOL_SPECS.map((spec) => String(spec?.function?.name || '')).filter(Boolean),
@@ -82,6 +83,24 @@ function persistGeneratedArtifact({ artifact, args, job, step }) {
  * 与前端 src/lib/tools/index.js 同名同语义,便于双端文档一致。
  */
 export const SERVER_TOOL_SPECS = [
+  {
+    type: 'function',
+    function: {
+      name: 'generate_image',
+      description: 'Generate a raster image with the user-configured OpenAI-compatible image model and save it as an artifact.',
+      parameters: {
+        type: 'object',
+        properties: {
+          prompt: { type: 'string' },
+          title: { type: 'string' },
+          model: { type: 'string' },
+          providerKey: { type: 'string' },
+          size: { type: 'string', enum: ['1024x1024', '1024x1536', '1536x1024'] },
+        },
+        required: ['prompt'],
+      },
+    },
+  },
   {
     type: 'function',
     function: {
@@ -380,6 +399,22 @@ async function executeServerTool({
       return { ok: false, error: err?.message || String(err) }
     }
   }
+  if (name === 'generate_image') {
+    const generated = await generateImage({ userId: job.userId, ...args })
+    const artifact = createImageArtifact({
+      title: args.title || args.prompt,
+      buffer: generated.buffer,
+      mimeType: generated.mimeType,
+    })
+    persistGeneratedArtifact({ artifact, args, job, step })
+    return {
+      ok: true,
+      artifactId: artifact.id,
+      filename: artifact.filename,
+      url: artifact.url,
+      revisedPrompt: generated.revisedPrompt,
+    }
+  }
   if (name === 'fetch_url') {
     try {
       return await fetchAndExtract({ url: args?.url })
@@ -544,6 +579,10 @@ async function executeServerTool({
   }
   return { ok: false, error: `unknown tool: ${name}` }
 }
+
+executeServerTool.supportsIdempotentResume = ({ name, idempotencyKey } = {}) => (
+  Boolean(idempotencyKey) && CONNECTOR_WRITE_TOOL_NAMES.includes(name)
+)
 
 export function buildJobToolIdempotencyKey({ jobId, stepId, toolCallId }) {
   return `job:${String(jobId || 'unknown')}:step:${String(stepId || 'unknown')}:tool:${String(toolCallId || 'unknown')}`

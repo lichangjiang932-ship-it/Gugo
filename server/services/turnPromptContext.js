@@ -8,6 +8,7 @@ import {
 } from './promptCompiler.js'
 import { prepareMemoryInjectionContext } from './memoryContextService.js'
 import { logWarn } from '../utils/logger.js'
+import { readWorkspaceInstructions } from './workspaceInstructions.js'
 
 function normalizeIds(values, limit = 32) {
   return [...new Set((Array.isArray(values) ? values : []).map(String).map((value) => value.trim()).filter(Boolean))]
@@ -39,6 +40,7 @@ export function prepareBackgroundPromptContext({
   const prepareSkills = dependencies.prepareSkillsForPrompt || prepareSkillsForPrompt
   const prepareMemory = dependencies.prepareMemoryInjectionContext || prepareMemoryInjectionContext
   const warn = dependencies.logWarn || logWarn
+  const readInstructions = dependencies.readWorkspaceInstructions || readWorkspaceInstructions
   const normalizedSkillIds = normalizeIds(skillIds)
   const effectiveAgentId = agentId ? String(agentId) : null
   const preparedSkills = safeStep('background skill context failed', [], () => (
@@ -57,6 +59,8 @@ export function prepareBackgroundPromptContext({
     tokenCap: Number.isFinite(tokenCap) ? tokenCap : 800,
   }), warn)
   const messages = []
+  const instructions = safeStep('workspace instructions failed', null, () => readInstructions({ env }), warn)
+  if (instructions?.text) messages.push({ role: 'system', content: instructions.text })
   if (skills?.text) messages.push({ role: 'system', content: skills.text })
   if (memory?.text) messages.push({ role: 'system', content: memory.text })
   return {
@@ -82,6 +86,7 @@ export function prepareTurnPromptContext({
   const prepareSkills = dependencies.prepareSkillsForPrompt || prepareSkillsForPrompt
   const prepareMemory = dependencies.prepareMemoryInjectionContext || prepareMemoryInjectionContext
   const warn = dependencies.logWarn || logWarn
+  const readInstructions = dependencies.readWorkspaceInstructions || readWorkspaceInstructions
   const normalizedSkillIds = normalizeIds(skillIds)
 
   let agent = null
@@ -96,6 +101,8 @@ export function prepareTurnPromptContext({
   ), warn)
 
   const blocks = []
+  const instructions = safeStep('workspace instructions failed', null, () => readInstructions({ env }), warn)
+  if (instructions?.text) blocks.push({ role: 'system', content: instructions.text })
   const identity = safeStep('identity block failed', null, () => buildIdentityBlock({ agent }), warn)
   const ishiki = safeStep('ishiki block failed', null, () => buildIshikiBlock({ agent }), warn)
   const skills = safeStep('skills block failed', null, () => buildSkillsBlockFromPrepared({

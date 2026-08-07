@@ -46,17 +46,21 @@ test('external MCP connection panel has complete five-language copy', () => {
 
 test('MCP server manager exposes presets, live catalog, and key-value configuration', () => {
   const source = fs.readFileSync(new URL('../src/pages/McpServersView.jsx', import.meta.url), 'utf8')
+  const controller = fs.readFileSync(new URL('../src/pages/mcp/useMcpServersController.js', import.meta.url), 'utf8')
+  const editor = fs.readFileSync(new URL('../src/pages/mcp/McpServerEditor.jsx', import.meta.url), 'utf8')
+  const serverList = fs.readFileSync(new URL('../src/pages/mcp/McpServerList.jsx', import.meta.url), 'utf8')
+  const combined = `${source}\n${controller}\n${editor}\n${serverList}`
   assert.match(source, /MCP_SERVER_PRESETS/)
   assert.match(source, /choosePreset\(event\.target\.value\)/)
-  assert.match(source, /getMcpCatalogApi\(\)/)
-  assert.match(source, /parseKeyValueLines\(payload\.envText\)/)
-  assert.match(source, /parseKeyValueLines\(payload\.headersText\)/)
-  assert.match(source, /editing\.envText/)
-  assert.match(source, /editing\.headersText/)
-  assert.match(source, /selectServer\(s\); test\(s\.id\)/)
+  assert.match(controller, /getMcpCatalogApi\(\)/)
+  assert.match(controller, /parseKeyValueLines\(payload\.envText\)/)
+  assert.match(controller, /parseKeyValueLines\(payload\.headersText\)/)
+  assert.match(editor, /editing\.envText/)
+  assert.match(editor, /editing\.headersText/)
+  assert.match(serverList, /selectServer\(server\); controller\.test\(server\.id\)/)
   let depth = 0
   let maxDepth = 0
-  for (const match of source.matchAll(/<\/?button\b[^>]*>/g)) {
+  for (const match of combined.matchAll(/<\/?button\b[^>]*>/g)) {
     depth += match[0].startsWith('</') ? -1 : 1
     maxDepth = Math.max(maxDepth, depth)
   }

@@ -9,7 +9,7 @@
 
 **Gugo**（yma）—— 浏览器即用的本地/内网 Web AI 工作台。React 19 SPA + Node.js HTTP（**零框架**） + SQLite（better-sqlite3, WAL）。和 Claude Code / Cursor / Cherry Studio / openhanako 同品类，但走 Web 路线。
 
-当前：v0.10.0 · DB schema **v13** · ~17,000 行 · **106 个 test 文件**（npm test 跑 572 用例）· 零后端框架依赖。
+当前：v0.10.6 · DB schema **v39** · **257 个 test 文件**（npm test 跑 1663+ 用例）· 零后端框架依赖。
 
 ---
 
@@ -17,13 +17,13 @@
 
 ### 2.1 沟通方式（中文项目，回话也用中文）
 
-- **只给结果，别给过程**。不要"我做了 1/2/3..."，不要"主要变化"，不要"下一步建议"。merge 完一行话："✅ 合 main，572/572。"
+- **只给结果，别给过程**。不要"我做了 1/2/3..."，不要"主要变化"，不要"下一步建议"。merge 完只汇报当前真实测试数。
 - **能用表就用表**，别写散段。状态汇报固定格式：
 
   ```
   | 批 | 状态 | 备注 |
   |---|---|---|
-  | C1 | ✅ 合 main | 572/572 |
+  | C1 | ✅ 合 main | 全量测试通过 |
   | C2 | 🔄 跑中 | feat/c2-xxx |
   ```
 
@@ -131,7 +131,7 @@ scripts/
 
 ```bash
 npm run lint          # ESLint，必须 --max-warnings 0 通过
-npm test              # node:test，572 用例必须全绿
+npm test              # node:test，全量用例必须全绿
 npm run build         # vite build，生成 dist/
 npm run dev           # vite HMR :5175
 npm run serve         # 仅启动 node 后端（需先 build）

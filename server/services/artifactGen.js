@@ -52,6 +52,15 @@ function newArtifactPath(ext) {
   return { id, filename, fullPath: path.join(ARTIFACT_DIR, filename), url: `/api/artifacts/${filename}` }
 }
 
+export function createImageArtifact({ title = 'generated-image', buffer, mimeType = 'image/png' } = {}) {
+  const extension = mimeType === 'image/jpeg' ? 'jpg' : mimeType === 'image/webp' ? 'webp' : 'png'
+  const artifactPath = newArtifactPath(extension)
+  const bytes = Buffer.from(buffer || [])
+  if (!bytes.length) throw new Error('image buffer is empty')
+  fs.writeFileSync(artifactPath.fullPath, bytes)
+  return { ...artifactPath, type: 'image', title: String(title || 'generated-image').slice(0, 200) }
+}
+
 
 /* ════════════════════════ PPTX (premium) ════════════════════════ */
 // fonts / themes / shape helper / normalizeBullets 均来自 src/lib/pptCore.js

@@ -143,7 +143,7 @@ export async function requestApproval({
 
   const effectiveMode = mode || resolveApprovalMode()
   // 用户档位 + 「总是允许」清单。读失败不阻断,退回最严格的默认(normal/空)。
-  let settings = { mode: undefined, rememberedTools: [], rememberedGrants: [], riskOverrides: [] }
+  let settings = { mode: undefined, rememberedGrants: [], riskOverrides: [] }
   try {
     settings = getApprovalSettings({ userId })
   } catch (err) {
@@ -163,7 +163,6 @@ export async function requestApproval({
     origin,
     mode: effectiveMode,
     permissionMode: settings.mode,
-    rememberedTools: settings.rememberedTools,
     rememberedGrants: settings.rememberedGrants,
     metadata,
   })

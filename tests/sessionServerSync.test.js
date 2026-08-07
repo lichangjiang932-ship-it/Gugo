@@ -162,6 +162,22 @@ test('server snapshots replace canonical text while retaining local rendering me
   assert.equal(merged[0].meta.serverAuthoritative, true)
 })
 
+test('a lagging server snapshot cannot erase optimistic messages from the active turn', () => {
+  const localMessages = [
+    { id: 'turn-1:user', role: 'user', content: 'hello', timestamp: 10, meta: { pendingServerSync: true } },
+    { id: 'turn-1:assistant', role: 'assistant', content: '', timestamp: 11, meta: { streaming: true } },
+  ]
+  assert.deepEqual(
+    mergeServerSessionMessages(localMessages, []).map((message) => message.id),
+    ['turn-1:user', 'turn-1:assistant'],
+  )
+  const merged = mergeServerSessionMessages(localMessages, [{
+    id: 'turn-1:user', role: 'user', content: 'hello', timestamp: 10,
+  }])
+  assert.equal(merged[0].meta?.pendingServerSync, undefined)
+  assert.equal(merged[1].id, 'turn-1:assistant')
+})
+
 test('server-backed mutations are pessimistic and serialized with the latest revision', async () => {
   let state = createState()
   const requests = []

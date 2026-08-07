@@ -9,6 +9,7 @@
  */
 import { checkBashCommandDanger } from './bashGuard.js'
 import { createHash } from 'node:crypto'
+import { CONNECTOR_WRITE_TOOL_SET } from '../../shared/connectorWriteTools.js'
 
 export const APPROVAL_MODES = Object.freeze(['off', 'unattended', 'all'])
 export const DEFAULT_APPROVAL_MODE = 'unattended'
@@ -57,7 +58,7 @@ export const APPROVAL_REQUIRED_TOOLS = Object.freeze({
 
 // Sending mail is an irreversible external side effect. Keep it as a
 // per-call decision even when interactive chat normally runs unattended.
-const ALWAYS_CONFIRM_TOOLS = new Set(['qq_mail_send'])
+const ALWAYS_CONFIRM_TOOLS = CONNECTOR_WRITE_TOOL_SET
 
 /** 一望即知无副作用的读类工具,永不审批(白名单优先于上表)。 */
 export const NEVER_APPROVE_TOOLS = Object.freeze([
@@ -186,7 +187,7 @@ export function resolveApprovalTimeoutMs(env = process.env) {
  * @param {string} [options.origin] 'job' | 'subagent' | 'chat'
  * @param {string} [options.mode]   env 级审批模式,默认读 env
  * @param {string} [options.permissionMode] 用户档位 normal|acceptEdits|plan|bypass
- * @param {string[]} [options.rememberedTools] 用户点过「总是允许」的工具名
+ * @param {object[]} [options.rememberedGrants] 参数范围化的常驻授权规则
  * @returns {{ needsApproval: boolean, risk: 'low'|'medium'|'high', reason: string|null, denied?: boolean }}
  */
 export function classifyToolRisk(toolName, args = {}, options = {}) {
@@ -226,8 +227,8 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
     return { needsApproval: false, risk: 'low', reason: null }
   }
 
-  let risk = APPROVAL_REQUIRED_TOOLS[name]
-  let reason = null
+  let risk = APPROVAL_REQUIRED_TOOLS[name] || (alwaysConfirm ? 'medium' : undefined)
+  let reason = alwaysConfirm ? '\u5916\u90e8\u5de5\u5177\u7684\u5199\u64cd\u4f5c' : null
 
   const metadata = opts.metadata && typeof opts.metadata === 'object' ? opts.metadata : null
   if (metadata) {

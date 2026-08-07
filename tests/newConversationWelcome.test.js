@@ -1,11 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import { readSourceTree } from './sourceTree.js'
 
-const messagesSource = fs.readFileSync(
-  new URL('../src/pages/ChatSplit/ChatMessages.jsx', import.meta.url),
-  'utf8',
-)
+const messagesSource = readSourceTree('../src/pages/ChatSplit/chatMessages/')
 const viewSource = fs.readFileSync(
   new URL('../src/pages/ChatSplit/ChatSplitView.jsx', import.meta.url),
   'utf8',

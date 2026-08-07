@@ -3,13 +3,14 @@ import fs from 'node:fs'
 import test from 'node:test'
 
 test('task center uses backend job client instead of transient app tasks', () => {
-  const source = fs.readFileSync(new URL('../src/pages/TaskRunPanel.jsx', import.meta.url), 'utf8')
-  assert.match(source, /createJob/)
-  assert.match(source, /listJobs/)
-  assert.match(source, /cancelJob/)
-  assert.match(source, /subscribeToJobEvents/)
-  assert.match(source, /useSearchParams/)
-  assert.doesNotMatch(source, /state\.tasks/)
+  const pageSource = fs.readFileSync(new URL('../src/pages/TaskRunPanel.jsx', import.meta.url), 'utf8')
+  const controllerSource = fs.readFileSync(new URL('../src/pages/taskRun/useTaskRunController.js', import.meta.url), 'utf8')
+  assert.match(controllerSource, /createJob/)
+  assert.match(controllerSource, /listJobs/)
+  assert.match(controllerSource, /cancelJob/)
+  assert.match(controllerSource, /subscribeToJobEvents/)
+  assert.match(pageSource, /useSearchParams/)
+  assert.doesNotMatch(`${pageSource}\n${controllerSource}`, /state\.tasks/)
 })
 
 test('task notifications deep-link to the routed task and legacy plural links remain supported', () => {

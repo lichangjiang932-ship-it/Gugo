@@ -248,7 +248,7 @@ async function dispatch(userId, message) {
     return rpcResult(id, {
       protocolVersion: PROTOCOL_VERSION,
       capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: 'Gugo', version: '0.10.2' },
+        serverInfo: { name: 'Gugo', version: '0.10.5' },
       instructions: 'Use yma_chat for the configured model and browser_* tools for isolated browser automation.',
     })
   }

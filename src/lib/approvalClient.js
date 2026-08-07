@@ -30,6 +30,35 @@ export async function fetchPendingCount({ fetchImpl = fetch } = {}) {
   return data.count || 0
 }
 
+export function subscribeToApprovalEvents(onApproval, {
+  fetchImpl = fetch,
+  EventSourceImpl = globalThis.EventSource,
+} = {}) {
+  let source = null
+  let closed = false
+  const connect = async () => {
+    if (!EventSourceImpl) return
+    try {
+      const response = await fetchImpl('/api/approvals/stream-ticket', {
+        method: 'POST',
+        headers: authHeaders(),
+      })
+      if (!response.ok || closed) return
+      const { ticket } = await response.json()
+      if (!ticket || closed) return
+      source = new EventSourceImpl(`/api/approvals/stream?ticket=${encodeURIComponent(ticket)}`)
+      source.addEventListener('approval', onApproval)
+    } catch {
+      // REST refresh remains available when realtime transport is unavailable.
+    }
+  }
+  connect()
+  return () => {
+    closed = true
+    try { source?.close() } catch { /* noop */ }
+  }
+}
+
 export async function fetchApproval(id, { fetchImpl = fetch } = {}) {
   const res = await fetchImpl(`/api/approvals/${encodeURIComponent(id)}`, { headers: authHeaders() })
   const data = await parse(res)

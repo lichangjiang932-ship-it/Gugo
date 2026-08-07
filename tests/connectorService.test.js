@@ -94,7 +94,11 @@ test('provider registry distinguishes native APIs from managed-browser shortcuts
     .filter((provider) => provider.capabilityLevel === 'native_api')
     .map((provider) => provider.provider)
     .sort()
-  assert.deepEqual(nativeApis, ['github', 'google_drive', 'notion', 'qq_mail', 'slack'])
+  assert.deepEqual(nativeApis, [
+    'airtable', 'asana', 'clickup', 'confluence', 'custom_mail', 'discord', 'dropbox', 'exchange', 'github',
+    'gitlab', 'gmail', 'google_calendar', 'google_drive', 'hubspot', 'jira', 'linear', 'monday',
+    'notion', 'onedrive', 'outlook', 'qq_mail', 'salesforce', 'slack', 'todoist', 'trello', 'zendesk',
+  ])
 
   const browserApps = providers.filter((provider) => provider.kind === 'browser_app')
   assert.equal(browserApps.length, WEB_CONNECTOR_CATALOG.length)

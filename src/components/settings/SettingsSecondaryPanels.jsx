@@ -1,7 +1,9 @@
-import { BookOpen, Check, Circle, History, ListChecks, Mic, Monitor, Moon, Plug, Shield, ShieldCheck, Sun, Users } from 'lucide-react'
+import { BookOpen, Check, Circle, History, ImagePlus, ListChecks, Mic, Monitor, Moon, Plug, RotateCcw, Shield, ShieldCheck, Sun, Users } from 'lucide-react'
+import { useState } from 'react'
 import IntegrationsPanel from '../IntegrationsPanel.jsx'
 import { ROUTE_READINESS } from '../../config/routeReadiness.js'
 import { THEME_OPTIONS } from '../../lib/themeMode.js'
+import { readDesktopPetPreferences, validateDesktopPetImage, writeDesktopPetPreferences } from '../../lib/desktopPetPreferences.js'
 
 const ACCENT_COLORS = ['#E86A3C', '#D94A64', '#B45DE5', '#7459E8', '#3D6FE0', '#2E8FA3', '#23A68B', '#A5C97A', '#D4A4FF', '#D59B32']
 const THEME_ICONS = { dark: Moon, light: Sun, white: Circle, system: Monitor }
@@ -35,6 +37,26 @@ export function SettingsPermissionsPanel({ navigate, t, state, enabledPermCount 
 
 export function SettingsAppearancePanel({ t, state, dispatch }) {
   return <section className="flex flex-col gap-5 animate-float-up"><div><span className="font-mono text-[9px] tracking-[0.22em] text-ink-fade">APPEARANCE</span><h1 className="font-hand text-[28px] text-ink mt-1.5">{t('settings.appearance')}</h1><p className="text-sm text-ink-soft mt-1">{t('settings.appearanceSubtitle')}</p></div><div className="rounded-2xl border border-ink/20 bg-paper p-5 flex flex-col gap-3"><div className="max-w-md p-3 rounded-xl bg-paper-2 text-sm text-ink">{t('settings.appearancePreviewAssistant')}</div><div className="max-w-xs self-end p-3 rounded-xl bg-ember-soft text-sm text-ink">{t('settings.appearancePreviewUser')}</div></div><Group title="主题"><div className="flex gap-2 flex-wrap">{THEME_OPTIONS.map(({ key, labelKey }) => { const Icon = THEME_ICONS[key]; return <button key={key} onClick={() => dispatch({ type: 'SET_THEME', payload: key })} className={`h-9 px-3 rounded-md text-sm border flex items-center gap-1.5 ${state.theme === key ? 'bg-ink text-paper border-ink' : 'border-ink-fade/60 text-ink-soft'}`}><Icon className="w-3.5 h-3.5" />{t(labelKey)}</button> })}</div></Group><Group title="强调色"><div className="flex flex-wrap gap-3">{ACCENT_COLORS.map((color) => <button key={color} onClick={() => dispatch({ type: 'SET_ACCENT', payload: color })} className="w-8 h-8 rounded-full relative" style={{ background: color, border: state.accentColor === color ? '2px solid var(--color-ink)' : '1px solid var(--color-ink-fade)' }} aria-label={`设置强调色 ${color}`}>{state.accentColor === color && <Check className="w-4 h-4 text-white absolute inset-0 m-auto" />}</button>)}</div><div className="flex items-center justify-between"><span className="text-sm text-ink">强色调模式</span><Toggle enabled={!!state.strongAccent} onClick={() => dispatch({ type: 'SET_STRONG_ACCENT', payload: !state.strongAccent })} /></div></Group><Group title="字体大小"><Segmented value={state.fontSize} options={[['small', '小'], ['medium', '中'], ['large', '大']]} onChange={(value) => dispatch({ type: 'SET_FONT_SIZE', payload: value })} /></Group><Group title="界面密度"><Segmented value={state.density} options={[['compact', '紧凑'], ['comfortable', '舒适'], ['loose', '宽松']]} onChange={(value) => dispatch({ type: 'SET_DENSITY', payload: value })} /></Group><Group title="动画效果"><Toggle enabled={state.animationsEnabled} onClick={() => dispatch({ type: 'SET_ANIMATIONS', payload: !state.animationsEnabled })} /></Group></section>
+}
+
+export function SettingsPetPanel({ t }) {
+  const [preferences, setPreferences] = useState(readDesktopPetPreferences)
+  const [message, setMessage] = useState('')
+  const update = (next) => {
+    const value = { ...preferences, ...next }
+    writeDesktopPetPreferences(value)
+    setPreferences(value)
+  }
+  const selectImage = (event) => {
+    const file = event.target.files?.[0]
+    const error = validateDesktopPetImage(file)
+    if (error) { setMessage(t(`settings.petImageError.${error}`)); return }
+    const reader = new FileReader()
+    reader.onload = () => { update({ customImage: String(reader.result || '') }); setMessage(t('settings.petSaved')) }
+    reader.onerror = () => setMessage(t('settings.petReadFailed'))
+    reader.readAsDataURL(file)
+  }
+  return <section className="flex flex-col gap-5 animate-float-up"><div><span className="font-mono text-[9px] tracking-[0.22em] text-ink-fade">DESKTOP PET</span><h1 className="font-hand text-[28px] text-ink mt-1.5">{t('settings.pet')}</h1><p className="text-sm text-ink-soft mt-1">{t('settings.petSubtitle')}</p></div><div className="grid gap-4 md:grid-cols-[220px_1fr]"><div className="min-h-56 rounded-2xl border border-ink/15 bg-paper-2 grid place-items-center overflow-hidden">{preferences.customImage ? <img src={preferences.customImage} alt={t('settings.petPreview')} className="max-w-40 max-h-40 object-contain" style={{ transform: `scale(${preferences.scale})` }} /> : <div className="text-center text-ink-fade"><ImagePlus className="w-10 h-10 mx-auto" /><span className="mt-2 block text-xs">{t('settings.petDefault')}</span></div>}</div><div className="flex flex-col gap-4"><Group title={t('settings.petImage')}><p className="text-xs text-ink-fade">{t('settings.petImageHint')}</p><label className="h-10 px-4 rounded-md bg-ink text-paper text-sm inline-flex items-center gap-2 self-start cursor-pointer"><ImagePlus className="w-4 h-4" />{t('settings.petChoose')}<input type="file" accept="image/png,image/webp,image/gif" className="sr-only" onChange={selectImage} /></label></Group><Group title={t('settings.petSize')}><input aria-label={t('settings.petSize')} type="range" min="0.6" max="1.8" step="0.1" value={preferences.scale} onChange={(event) => update({ scale: Number(event.target.value) })} /><span className="text-xs text-ink-fade">{Math.round(preferences.scale * 100)}%</span></Group><button type="button" onClick={() => { update({ customImage: '', scale: 1 }); setMessage(t('settings.petResetDone')) }} className="h-9 px-3 border border-ink/20 rounded-md text-sm text-ink-soft flex items-center gap-2 self-start"><RotateCcw className="w-4 h-4" />{t('settings.petReset')}</button>{message && <p role="status" className="text-xs text-ink-soft">{message}</p>}</div></div></section>
 }
 
 export function SettingsIntegrationsPanel({ navigate, t }) {

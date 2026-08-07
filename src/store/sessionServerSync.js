@@ -38,7 +38,9 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
       .filter((message) => message?.id)
       .map((message) => [message.id, message]),
   )
-  return (Array.isArray(serverMessages) ? serverMessages : []).map((serverMessage) => {
+  const serverIds = new Set()
+  const mergedMessages = (Array.isArray(serverMessages) ? serverMessages : []).map((serverMessage) => {
+    if (serverMessage?.id) serverIds.add(serverMessage.id)
     const localMessage = localById.get(serverMessage?.id)
     if (!localMessage) return serverMessage
     const serverMeta = serverMessage?.meta && typeof serverMessage.meta === 'object'
@@ -57,6 +59,7 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
     }
     if (Object.keys(serverMeta).length || Object.keys(localMeta).length) {
       merged.meta = { ...serverMeta, ...localMeta }
+      delete merged.meta.pendingServerSync
       if (serverMessage.role === 'assistant') {
         merged.meta.serverTurnId = serverMeta.serverTurnId ?? localMeta.serverTurnId ?? null
         merged.meta.streaming = false
@@ -65,6 +68,13 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
     }
     return merged
   })
+  const pendingLocal = (Array.isArray(localMessages) ? localMessages : []).filter((message) => (
+    message?.id && !serverIds.has(message.id)
+    && (message?.meta?.pendingServerSync === true || message?.meta?.streaming === true)
+  ))
+  return [...mergedMessages, ...pendingLocal].sort((left, right) => (
+    Number(left?.timestamp || 0) - Number(right?.timestamp || 0)
+  ))
 }
 
 function bindActionToSession(action, sessionId) {

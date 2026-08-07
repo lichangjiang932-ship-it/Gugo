@@ -5,10 +5,11 @@ import { importSkillFromGithubUrl, importSkillPack, listSkills } from '../src/li
 import { TOKEN_KEY } from '../src/lib/accountClient.js'
 
 test('skills page exposes folder import flow', () => {
-  const source = fs.readFileSync(new URL('../src/pages/SkillsMarket.jsx', import.meta.url), 'utf8')
-  assert.match(source, /webkitdirectory/)
-  assert.match(source, /importSkillPack/)
-  assert.match(source, /导入技能包/)
+  const toolbarSource = fs.readFileSync(new URL('../src/pages/skillsMarket/SkillsToolbar.jsx', import.meta.url), 'utf8')
+  const hookSource = fs.readFileSync(new URL('../src/pages/skillsMarket/useSkillsMarket.js', import.meta.url), 'utf8')
+  assert.match(toolbarSource, /webkitdirectory/)
+  assert.match(hookSource, /importSkillPack/)
+  assert.match(toolbarSource, /skillsMarket\.importPack/)
 })
 
 test('all skill API calls include the current authentication token', async () => {
@@ -35,4 +36,3 @@ test('all skill API calls include the current authentication token', async () =>
     globalThis.window = previousWindow
   }
 })
-

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
+import { readSourceTree } from './sourceTree.js'
 import {
   describeSkillRequirements,
   getPresentedSkill,
@@ -63,7 +64,7 @@ test('skill collection merges identical plugin copies and disambiguates real tit
 })
 
 test('skill library, slash menu, and command palette share presented metadata', () => {
-  const chat = fs.readFileSync(new URL('../src/pages/ChatSplit/index.jsx', import.meta.url), 'utf8')
+  const chat = readSourceTree('../src/pages/ChatSplit/')
   const commands = fs.readFileSync(new URL('../src/components/SkillCommandsSync.jsx', import.meta.url), 'utf8')
 
   assert.match(chat, /presentSkillCollection\(runtimeSkills, lang\)/)

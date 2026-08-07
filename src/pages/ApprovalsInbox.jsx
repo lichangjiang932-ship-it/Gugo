@@ -3,7 +3,7 @@ import { motion } from 'framer-motion'
 import { RefreshCw, ShieldAlert, Check, X, Pencil, Terminal, FilePen, FileText, Globe, MousePointerClick } from 'lucide-react'
 import LeftRail from '../components/LeftRail'
 import { useT } from '../i18n/I18nProvider.jsx'
-import { decideApproval, fetchApprovals } from '../lib/approvalClient'
+import { decideApproval, fetchApprovals, subscribeToApprovalEvents } from '../lib/approvalClient'
 
 const RISK_TONE = {
   high: { dot: 'bg-red-500', text: 'text-red-600', border: 'border-red-500/40' },
@@ -180,8 +180,7 @@ export default function ApprovalsInbox() {
     Promise.resolve().then(refresh)
     let source
     try {
-      source = new EventSource('/api/approvals/stream')
-      source.addEventListener('approval', refresh)
+      source = { close: subscribeToApprovalEvents(refresh) }
     } catch {
       // SSE 不可用时退化为手动刷新,不阻断页面
     }

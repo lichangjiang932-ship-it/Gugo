@@ -16,7 +16,9 @@ import { manualIntegrationValues } from '../lib/accessManualCredentials.js'
 const EMPTY = Object.freeze({
   workspace: '', account: '', token: '', appId: '', appSecret: '', botUsername: '',
   user: '', from: '', password: '', smtpHost: '', smtpPort: '', imapHost: '', imapPort: '',
+  siteUrl: '', email: '', apiKey: '', baseUrl: '', subdomain: '', instanceUrl: '',
 })
+const MAIL_PROVIDERS = new Set(['qq_mail', 'gmail', 'outlook', 'exchange', 'custom_mail'])
 
 export default function AccessConnectModal({ connector, integration, onClose, onConnected, t }) {
   const [form, setForm] = useState(() => ({
@@ -31,6 +33,12 @@ export default function AccessConnectModal({ connector, integration, onClose, on
     smtpPort: integration?.config?.smtpPort || '',
     imapHost: integration?.config?.imapHost || '',
     imapPort: integration?.config?.imapPort || '',
+    siteUrl: integration?.config?.siteUrl || '',
+    email: integration?.config?.email || '',
+    apiKey: integration?.config?.apiKey || '',
+    baseUrl: integration?.config?.baseUrl || '',
+    subdomain: integration?.config?.subdomain || '',
+    instanceUrl: integration?.config?.instanceUrl || '',
   }))
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
@@ -214,27 +222,34 @@ export default function AccessConnectModal({ connector, integration, onClose, on
               </details>
             )}
             {(connector.provider === 'notion' || connector.provider === 'slack') && <TextField label={t('access.workspace')} value={form.workspace} onChange={(value) => set('workspace', value)} />}
-            {(connector.provider === 'github' || connector.provider === 'google_drive') && <TextField label={t('access.account')} value={form.account} onChange={(value) => set('account', value)} />}
+            {['github', 'google_drive', 'google_calendar'].includes(connector.provider) && <TextField label={t('access.account')} value={form.account} onChange={(value) => set('account', value)} />}
+            {['jira', 'confluence'].includes(connector.provider) && <><TextField label={t('access.siteUrl')} value={form.siteUrl} onChange={(value) => set('siteUrl', value)} placeholder="https://team.atlassian.net" required /><TextField type="email" label={t('access.accountEmail')} value={form.email} onChange={(value) => set('email', value)} required /></>}
+            {connector.provider === 'trello' && <TextField label={t('access.apiKey')} value={form.apiKey} onChange={(value) => set('apiKey', value)} required />}
+            {connector.provider === 'gitlab' && <TextField label="API URL" value={form.baseUrl} onChange={(value) => set('baseUrl', value)} placeholder="https://gitlab.com/api/v4" />}
+            {connector.provider === 'zendesk' && <><TextField label="Zendesk subdomain" value={form.subdomain} onChange={(value) => set('subdomain', value)} placeholder="company" required /><TextField type="email" label={t('access.accountEmail')} value={form.email} onChange={(value) => set('email', value)} required /></>}
+            {connector.provider === 'salesforce' && <TextField label={t('access.instanceUrl')} value={form.instanceUrl} onChange={(value) => set('instanceUrl', value)} placeholder="https://company.my.salesforce.com" required />}
             {connector.provider === 'feishu' && <TextField label={t('access.appId')} value={form.appId} onChange={(value) => set('appId', value)} required />}
             {connector.provider === 'telegram' && <TextField label={t('access.botUsername')} value={form.botUsername} onChange={(value) => set('botUsername', value)} />}
+            {connector.provider === 'discord' && <TextField label={t('access.appId')} value={form.appId} onChange={(value) => set('appId', value)} />}
             {connector.provider === 'qq' && <TextField label={t('access.appId')} value={form.appId} onChange={(value) => set('appId', value)} required />}
-            {connector.provider === 'qq_mail' && <>
+            {MAIL_PROVIDERS.has(connector.provider) && <>
               <TextField type="email" label={t('access.mailUser')} value={form.user} onChange={(value) => set('user', value)} />
               <TextField type="email" label={t('access.mailFrom')} value={form.from} onChange={(value) => set('from', value)} />
               <div className="grid grid-cols-[minmax(0,1fr)_96px] gap-3">
-                <TextField label={t('access.smtpHost')} value={form.smtpHost} onChange={(value) => set('smtpHost', value)} placeholder="smtp.qq.com" />
+                <TextField label={t('access.smtpHost')} value={form.smtpHost} onChange={(value) => set('smtpHost', value)} placeholder={connector.provider === 'qq_mail' ? 'smtp.qq.com' : (connector.provider === 'custom_mail' ? 'smtp.example.com' : '')} />
                 <TextField type="number" label={t('access.smtpPort')} value={form.smtpPort} onChange={(value) => set('smtpPort', value)} placeholder="465" />
               </div>
               <div className="grid grid-cols-[minmax(0,1fr)_96px] gap-3">
-                <TextField label={t('access.imapHost')} value={form.imapHost} onChange={(value) => set('imapHost', value)} placeholder="imap.qq.com" />
+                <TextField label={t('access.imapHost')} value={form.imapHost} onChange={(value) => set('imapHost', value)} placeholder={connector.provider === 'qq_mail' ? 'imap.qq.com' : (connector.provider === 'custom_mail' ? 'imap.example.com' : '')} />
                 <TextField type="number" label={t('access.imapPort')} value={form.imapPort} onChange={(value) => set('imapPort', value)} placeholder="993" />
               </div>
               <TextField type="password" label={t('access.mailPassword')} value={form.password} onChange={(value) => set('password', value)} placeholder={passwordPlaceholder} />
               <p className="-mt-2 text-[11px] leading-4 text-ink-fade">{t('access.qqMailPasswordHint')}</p>
             </>}
-            {['notion', 'github', 'google_drive', 'slack'].includes(connector.provider) && <TextField type="password" label={t('access.token')} value={form.token} onChange={(value) => set('token', value)} placeholder={passwordPlaceholder} required={!integration} />}
+            {['notion', 'github', 'google_drive', 'google_calendar', 'jira', 'linear', 'trello', 'gitlab', 'asana', 'clickup', 'airtable', 'monday', 'hubspot', 'zendesk', 'todoist', 'dropbox', 'onedrive', 'confluence', 'salesforce', 'slack'].includes(connector.provider) && <TextField type="password" label={t('access.token')} value={form.token} onChange={(value) => set('token', value)} placeholder={passwordPlaceholder} required={!integration} />}
             {connector.provider === 'feishu' && <TextField type="password" label={t('access.appSecret')} value={form.appSecret} onChange={(value) => set('appSecret', value)} placeholder={passwordPlaceholder} required={!integration} />}
             {connector.provider === 'telegram' && <TextField type="password" label={t('access.botToken')} value={form.token} onChange={(value) => set('token', value)} placeholder={passwordPlaceholder} required={!integration} />}
+            {connector.provider === 'discord' && <TextField type="password" label={t('access.botToken')} value={form.token} onChange={(value) => set('token', value)} placeholder={passwordPlaceholder} required={!integration} />}
             {connector.provider === 'qq' && <TextField type="password" label={t('access.appSecret')} value={form.appSecret} onChange={(value) => set('appSecret', value)} placeholder={passwordPlaceholder} required={!integration} />}
             {connector.provider === 'qq' && <TextField type="password" label={t('access.botTokenOptional')} value={form.token} onChange={(value) => set('token', value)} placeholder={passwordPlaceholder} />}
             {connector.setupUrl && <a href={connector.setupUrl} target="_blank" rel="noreferrer" className="text-xs text-ember hover:underline inline-flex items-center gap-1">{t('access.openSetup')}<ExternalLink className="w-3 h-3" /></a>}

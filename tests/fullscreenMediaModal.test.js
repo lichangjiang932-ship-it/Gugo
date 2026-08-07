@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
+import { readSourceTree } from './sourceTree.js'
 
 const componentPath = new URL('../src/components/FullscreenMediaModal.jsx', import.meta.url)
 const composerPath = new URL('../src/pages/ChatSplit/ChatComposer.jsx', import.meta.url)
@@ -57,7 +58,7 @@ test('FullscreenMediaModal accepts list/index for prev/next navigation', () => {
 })
 
 test('ChatComposer wires image attachment thumbnail to FullscreenMediaModal', () => {
-  const source = fs.readFileSync(composerPath, 'utf8')
+  const source = fs.readFileSync(composerPath, 'utf8') + readSourceTree('../src/pages/ChatSplit/chatComposer/')
   assert.match(source, /FullscreenMediaModal/)
   assert.match(source, /setFullscreenSrc/)
   assert.match(source, /cursor-zoom-in/)

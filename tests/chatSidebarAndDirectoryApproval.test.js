@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
+import { readSourceTree } from './sourceTree.js'
 
 import { readWorkbenchOpen, writeWorkbenchOpen } from '../src/lib/chatUiPreferences.js'
 
@@ -17,7 +18,8 @@ test('directory authorization is rendered inline above the composer', () => {
 })
 
 test('local paths are authorized before the model call and receive a tool-use instruction', () => {
-  const chat = read('../src/pages/ChatSplit/index.jsx')
+  const chat = read('../src/pages/ChatSplit/useChatSendFlow.js')
+  const directoryApproval = read('../src/pages/ChatSplit/useDirectoryApproval.js')
   const serverTurn = read('../src/pages/ChatSplit/serverTurnFlow.js')
   const preflight = chat.indexOf('await ensureLocalPathAccess(content)')
   const serverCall = chat.indexOf('await runServerChatTurn({', preflight)
@@ -25,14 +27,15 @@ test('local paths are authorized before the model call and receive a tool-use in
   assert.ok(preflight > 0)
   assert.ok(serverCall > preflight)
   assert.match(serverTurn, /buildLocalPathToolInstruction\(localPathAccess\.paths, localPathAccess\.accessMode\)/)
-  assert.match(chat, /directoryRequestCancelled/)
+  assert.match(directoryApproval, /directoryApprovalResolveRef\.current\?\.\(\{ approved: false \}\)/)
+  assert.match(chat, /if \(!localPathAccess\.proceed\) return/)
   assert.match(serverTurn, /await collectLocalPathEvidence\(\{/)
   assert.match(serverTurn, /signal: controller\.signal/)
   assert.ok(serverTurn.indexOf('await collectLocalPathEvidence({') < serverTurn.indexOf('await runServerTurn({'))
 })
 
 test('right workbench toggle leaves the navigation rail mounted', () => {
-  const chat = read('../src/pages/ChatSplit/index.jsx')
+  const chat = readSourceTree('../src/pages/ChatSplit/')
   const view = read('../src/pages/ChatSplit/ChatSplitView.jsx')
 
   assert.match(chat, /const \[workbenchOpen, setWorkbenchOpen\] = useState\(readWorkbenchOpen\)/)
@@ -64,7 +67,7 @@ test('right workbench exposes files, side chat, browser, and terminal tools', ()
 })
 
 test('assistant metadata keeps model and latency details without account balance UI', () => {
-  const messages = read('../src/pages/ChatSplit/ChatMessages.jsx')
+  const messages = readSourceTree('../src/pages/ChatSplit/chatMessages/')
 
   assert.match(messages, /data-testid="assistant-message-meta"/)
   assert.match(messages, /chatMessages\.model/)
@@ -74,9 +77,9 @@ test('assistant metadata keeps model and latency details without account balance
 })
 
 test('typing slash opens an inline command menu above the composer', () => {
-  const composer = read('../src/pages/ChatSplit/ChatComposer.jsx')
+  const composer = readSourceTree('../src/pages/ChatSplit/chatComposer/') + read('../src/pages/ChatSplit/ChatComposer.jsx')
   const menu = read('../src/pages/ChatSplit/SlashCommandMenu.jsx')
-  const chat = read('../src/pages/ChatSplit/index.jsx')
+  const chat = readSourceTree('../src/pages/ChatSplit/')
 
   assert.match(composer, /data-testid="slash-command-menu"|<SlashCommandMenu/)
   assert.match(composer, /resolveSlashMenuKey\(e\.key/)

@@ -18,6 +18,15 @@ const RETRYABLE_CODES = new Set([
   'ENOTFOUND', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET', 'UND_ERR_HEADERS_TIMEOUT',
 ])
 
+const RETRYABLE_MESSAGE_PATTERNS = [
+  /rate[-_ ]?limit|too many requests|resource exhausted/i,
+  /overloaded|service unavailable|internal server error|provider returned error/i,
+  /fetch failed|network error|connection (?:error|lost|refused)|socket (?:connection )?(?:hang up|was closed|closed)/i,
+  /econnreset|eai_again|enotfound|upstream connect|reset before headers/i,
+  /(?:request|response|connection|network|stream|read) (?:timeout|timed out)/i,
+  /try (?:your )?request again|retry (?:your )?request/i,
+]
+
 export const DEFAULT_MAX_ATTEMPTS = 3
 export const DEFAULT_BASE_DELAY_MS = 500
 export const DEFAULT_MAX_DELAY_MS = 8_000
@@ -46,6 +55,8 @@ export function isRetryableError(err) {
   if (err.code && RETRYABLE_CODES.has(err.code)) return true
   // fetch 的网络层失败通常是裸 TypeError('fetch failed'),带 cause
   if (err.cause?.code && RETRYABLE_CODES.has(err.cause.code)) return true
+  const message = [err.message, err.cause?.message, err.responseBody].filter(Boolean).join(' ')
+  if (RETRYABLE_MESSAGE_PATTERNS.some((pattern) => pattern.test(message))) return true
   return false
 }
 
@@ -81,6 +92,15 @@ export function parseRetryAfterMs(headerValue, now = Date.now()) {
   const at = Date.parse(raw)
   if (Number.isNaN(at)) return null
   return Math.max(0, at - now)
+}
+
+export function parseRetryDelayMs(err, now = Date.now()) {
+  const milliseconds = err?.retryAfterMs ?? err?.headers?.get?.('retry-after-ms')
+  if (milliseconds != null && String(milliseconds).trim() !== '') {
+    const parsed = Number.parseFloat(String(milliseconds))
+    if (Number.isFinite(parsed)) return Math.max(0, parsed)
+  }
+  return parseRetryAfterMs(err?.retryAfter ?? err?.headers?.get?.('retry-after'), now)
 }
 
 const sleep = (ms, signal) => new Promise((resolve, reject) => {
@@ -123,7 +143,7 @@ export async function withRetry(fn, {
       lastError = err
       const isLast = attempt === attempts - 1
       if (isLast || !isRetryableError(err) || signal?.aborted) throw err
-      const retryAfter = parseRetryAfterMs(err.retryAfter ?? err.headers?.get?.('retry-after'))
+      const retryAfter = parseRetryDelayMs(err)
       const delayMs = retryAfter != null
         ? Math.min(retryAfter, maxMs)
         : backoffDelayMs(attempt, { baseMs, maxMs, rand })

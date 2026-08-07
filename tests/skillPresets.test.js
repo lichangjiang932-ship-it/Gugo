@@ -15,8 +15,9 @@ test('GSAP official skill preset points to the requested upstream repository', (
   assert.equal(getOfficialSkillPreset('missing'), null)
 })
 
-test('Skills market exposes the GSAP preset through the existing GitHub importer', () => {
-  const source = fs.readFileSync(new URL('../src/pages/SkillsMarket.jsx', import.meta.url), 'utf8')
-  assert.match(source, /openGithubImport\('gsap'\)/)
-  assert.match(source, /getOfficialSkillPreset/)
+test('Skills market exposes the GSAP preset through the GitHub importer', () => {
+  const toolbarSource = fs.readFileSync(new URL('../src/pages/skillsMarket/SkillsToolbar.jsx', import.meta.url), 'utf8')
+  const hookSource = fs.readFileSync(new URL('../src/pages/skillsMarket/useSkillsMarket.js', import.meta.url), 'utf8')
+  assert.match(toolbarSource, /openGithub\('gsap'\)/)
+  assert.match(hookSource, /getOfficialSkillPreset/)
 })

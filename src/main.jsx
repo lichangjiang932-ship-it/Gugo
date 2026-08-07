@@ -5,8 +5,14 @@ import { AppProvider } from './store/AppContext.jsx'
 import ThemeWrapper from './components/ThemeWrapper.jsx'
 import './index.css'
 import App from './App.jsx'
+import DesktopPetWindow from './pages/ChatSplit/DesktopPetWindow.jsx'
+import { I18nProvider } from './i18n/I18nProvider.jsx'
 
-createRoot(document.getElementById('root')).render(
+const isDesktopPetWindow = new URLSearchParams(window.location.search).get('gugoPet') === '1'
+
+createRoot(document.getElementById('root')).render(isDesktopPetWindow ? (
+  <StrictMode><I18nProvider><DesktopPetWindow /></I18nProvider></StrictMode>
+) : (
   <StrictMode>
     <HashRouter>
       <AppProvider>
@@ -15,5 +21,5 @@ createRoot(document.getElementById('root')).render(
         </ThemeWrapper>
       </AppProvider>
     </HashRouter>
-  </StrictMode>,
-)
+  </StrictMode>
+))

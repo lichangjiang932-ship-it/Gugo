@@ -96,13 +96,13 @@ test("chat mode 'all' 自动放行只读 bash_exec 且不建审批行", async ()
 
 test('standing rule 直通时返回命中的目标作用域用于审计', async () => {
   const { userId, jobId } = newUser('standing-audit')
-  rememberTool({ userId, toolName: 'slack_send_message', args: { channelId: 'C-ops', text: 'first' } })
+  rememberTool({ userId, toolName: 'publish_report', args: { channelId: 'C-ops', text: 'first' } })
   const result = await requestApproval({
-    userId, origin: 'job', jobId, toolName: 'slack_send_message', args: { channelId: 'C-ops', text: 'later' }, mode: 'all',
+    userId, origin: 'job', jobId, toolName: 'publish_report', args: { channelId: 'C-ops', text: 'later' }, mode: 'all',
   })
   assert.equal(result.proceed, true)
   assert.deepEqual(result.authorization, {
-    kind: 'standing_rule', toolName: 'slack_send_message', scope: 'target:channelId=C-ops',
+    kind: 'standing_rule', toolName: 'publish_report', scope: 'target:channelId=C-ops',
   })
   assert.equal(countPendingApprovals({ userId }), 0)
 })

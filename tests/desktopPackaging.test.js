@@ -37,6 +37,20 @@ test('NSIS package includes server runtime dependencies and updater metadata', (
   assert.doesNotMatch(main, /showMessageBox/)
 })
 
+test('desktop pet uses an independent transparent always-on-top window', () => {
+  const main = read('desktop/main.js')
+  const preload = read('desktop/preload.cjs')
+  assert.match(main, /function createPetWindow/)
+  assert.match(main, /transparent:\s*true/)
+  assert.match(main, /alwaysOnTop:\s*true/)
+  assert.match(main, /skipTaskbar:\s*true/)
+  assert.match(main, /frame:\s*false/)
+  assert.match(main, /setAlwaysOnTop\(true, 'floating'\)/)
+  assert.match(main, /if \(!mainWindow && applicationOrigin\)/)
+  assert.match(preload, /setPetVisible/)
+  assert.match(preload, /updatePetStatus/)
+})
+
 test('version tags publish a Windows installer and updater metadata through GitHub Releases', () => {
   const workflow = read('.github/workflows/release.yml')
   assert.match(workflow, /runs-on:\s*windows-latest/)
@@ -47,7 +61,7 @@ test('version tags publish a Windows installer and updater metadata through GitH
 })
 
 test('desktop update notice is the primary message directly above the account card', () => {
-  const rail = read('src/components/LeftRail.jsx')
+  const rail = read('src/components/leftRail/AccountArea.jsx')
   const card = read('src/components/DesktopUpdateCard.jsx')
   const accountRegion = rail.indexOf('ref={accountMenuRef}')
   const updateNotice = rail.indexOf('<DesktopUpdateCard />', accountRegion)

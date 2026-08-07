@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
+import { readSourceTree } from './sourceTree.js'
 
 test('chat split keeps task details out of the main chat surface', () => {
-  const source = fs.readFileSync(new URL('../src/pages/ChatSplit/index.jsx', import.meta.url), 'utf8')
+  const source = readSourceTree('../src/pages/ChatSplit/')
 
   assert.doesNotMatch(source, /const tasks = state\.tasks/)
   assert.doesNotMatch(source, /hasTasks=\{tasks\.length > 0\}/)
@@ -13,12 +14,12 @@ test('chat split keeps task details out of the main chat surface', () => {
 })
 
 test('chat keeps a real abort action without exposing the task strip', () => {
-  const chatSource = fs.readFileSync(new URL('../src/pages/ChatSplit/index.jsx', import.meta.url), 'utf8')
+  const chatSource = readSourceTree('../src/pages/ChatSplit/')
+  const chatEntrySource = fs.readFileSync(new URL('../src/pages/ChatSplit/index.jsx', import.meta.url), 'utf8')
   const viewSource = fs.readFileSync(new URL('../src/pages/ChatSplit/ChatSplitView.jsx', import.meta.url), 'utf8')
   const detailSource = fs.readFileSync(new URL('../src/pages/TaskRunPanel.jsx', import.meta.url), 'utf8')
 
-  assert.match(chatSource, /const handleAbortTask = \(\) => abortCtrlRef\.current\?\.abort\(\)/)
-  assert.match(chatSource, /onAbort=\{handleAbortTask\}/)
+  assert.match(chatEntrySource, /onAbort=\{\(\) => abortCtrlRef\.current\?\.abort\(\)\}/)
   assert.match(viewSource, /onAbort=\{onAbort\}/)
   assert.doesNotMatch(chatSource, /onAbortTask=\{handleAbortTask\}/)
   assert.doesNotMatch(chatSource, /status:\s*'paused'/)
@@ -30,7 +31,7 @@ test('chat keeps a real abort action without exposing the task strip', () => {
 })
 
 test('chat task views avoid speculative numeric progress while a model request is running', () => {
-  const chatSource = fs.readFileSync(new URL('../src/pages/ChatSplit/index.jsx', import.meta.url), 'utf8')
+  const chatSource = readSourceTree('../src/pages/ChatSplit/')
   const serverTurnSource = fs.readFileSync(new URL('../src/pages/ChatSplit/serverTurnFlow.js', import.meta.url), 'utf8')
   const detailSource = fs.readFileSync(new URL('../src/pages/TaskRunPanel.jsx', import.meta.url), 'utf8')
 
@@ -45,7 +46,7 @@ test('chat task views avoid speculative numeric progress while a model request i
 })
 
 test('chat forwards the persisted tool switches to the server turn flow', () => {
-  const chatSource = fs.readFileSync(new URL('../src/pages/ChatSplit/index.jsx', import.meta.url), 'utf8')
+  const chatSource = readSourceTree('../src/pages/ChatSplit/')
   const serverTurnSource = fs.readFileSync(new URL('../src/pages/ChatSplit/serverTurnFlow.js', import.meta.url), 'utf8')
 
   assert.match(chatSource, /toolsConfig:\s*state\.toolsConfig/)

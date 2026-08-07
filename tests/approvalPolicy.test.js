@@ -20,6 +20,7 @@ const {
   isSafeCommandPrefix,
   matchesRememberedGrant,
 } = await import('../server/utils/approvalPolicy.js')
+const { CONNECTOR_WRITE_TOOL_NAMES } = await import('../shared/connectorWriteTools.js')
 
 const JOB = { origin: 'job', mode: 'unattended' }
 
@@ -243,12 +244,12 @@ test('unknown read-ish tools are not gated', () => {
   }
 })
 
-test('external remembered grants are bound to the exact semantic target', () => {
+test('connector writes cannot be bypassed by remembered grants', () => {
   const grant = buildRememberedGrant('slack_send_message', { channelId: 'C-ops', text: 'first' })
   assert.deepEqual(grant, { toolName: 'slack_send_message', commandPrefix: 'target:channelId=C-ops' })
   assert.equal(classifyToolRisk('slack_send_message', { channelId: 'C-ops', text: 'later' }, {
     ...JOB, rememberedGrants: [grant],
-  }).needsApproval, false)
+  }).needsApproval, true)
   assert.equal(classifyToolRisk('slack_send_message', { channelId: 'C-finance', text: 'later' }, {
     ...JOB, rememberedGrants: [grant],
   }).needsApproval, true)
@@ -263,17 +264,15 @@ test('legacy tool-wide grants no longer bypass target-scoped approval', () => {
   assert.equal(verdict.needsApproval, true)
 })
 
-test('target-scoped remembered grants report the standing rule used for authorization', () => {
+test('connector writes ignore target-scoped remembered grants', () => {
   const args = { channelId: 'C-ops', text: 'hello' }
   const grant = buildRememberedGrant('slack_send_message', args)
   const verdict = classifyToolRisk('slack_send_message', args, {
     ...JOB,
     rememberedGrants: [grant],
   })
-  assert.equal(verdict.needsApproval, false)
-  assert.deepEqual(verdict.authorization, {
-    kind: 'standing_rule', toolName: 'slack_send_message', scope: 'target:channelId=C-ops',
-  })
+  assert.equal(verdict.needsApproval, true)
+  assert.equal(verdict.authorization, undefined)
 })
 
 test('tools without a semantic target use an exact non-sensitive argument fingerprint', () => {
@@ -339,6 +338,15 @@ test('QQ Mail send always requires a per-call decision in unattended chat', () =
     assert.equal(verdict.needsApproval, true)
     assert.equal(verdict.risk, 'medium')
     assert.equal(verdict.reason, '发送外部邮件')
+  }
+})
+
+test('every connector write requires approval in unattended chat', () => {
+  assert.equal(CONNECTOR_WRITE_TOOL_NAMES.length, 42)
+  for (const name of CONNECTOR_WRITE_TOOL_NAMES) {
+    const verdict = classifyToolRisk(name, {}, { origin: 'chat', mode: 'unattended' })
+    assert.equal(verdict.needsApproval, true, `${name} bypassed approval`)
+    assert.equal(verdict.risk, 'medium', name)
   }
 })
 

@@ -1,10 +1,16 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
+import { readSourceTree } from './sourceTree.js'
 
-const composerSource = fs.readFileSync(new URL('../src/pages/ChatSplit/ChatComposer.jsx', import.meta.url), 'utf8')
-const messagesSource = fs.readFileSync(new URL('../src/pages/ChatSplit/ChatMessages.jsx', import.meta.url), 'utf8')
-const chatSource = fs.readFileSync(new URL('../src/pages/ChatSplit/index.jsx', import.meta.url), 'utf8')
+const composerSource = readSourceTree('../src/pages/ChatSplit/chatComposer/') + fs.readFileSync(new URL('../src/pages/ChatSplit/ChatComposer.jsx', import.meta.url), 'utf8')
+const messagesSource = readSourceTree('../src/pages/ChatSplit/chatMessages/') + fs.readFileSync(new URL('../src/pages/ChatSplit/ChatMessages.jsx', import.meta.url), 'utf8')
+const chatSource = readSourceTree('../src/pages/ChatSplit/')
+const chatEntrySource = fs.readFileSync(new URL('../src/pages/ChatSplit/index.jsx', import.meta.url), 'utf8')
+const lifecycleSource = fs.readFileSync(new URL('../src/pages/ChatSplit/useChatSessionLifecycle.js', import.meta.url), 'utf8')
+const messageListSource = fs.readFileSync(new URL('../src/pages/ChatSplit/ChatMessages.jsx', import.meta.url), 'utf8')
+const messageRowSource = fs.readFileSync(new URL('../src/pages/ChatSplit/chatMessages/MessageRow.jsx', import.meta.url), 'utf8')
+const activityTracesSource = fs.readFileSync(new URL('../src/pages/ChatSplit/chatMessages/ActivityTraces.jsx', import.meta.url), 'utf8')
 const chatViewSource = fs.readFileSync(new URL('../src/pages/ChatSplit/ChatSplitView.jsx', import.meta.url), 'utf8')
 const markdownSource = fs.readFileSync(new URL('../src/components/MarkdownRenderer.jsx', import.meta.url), 'utf8')
 const toolCardSource = fs.readFileSync(new URL('../src/components/ToolCallCard.jsx', import.meta.url), 'utf8')
@@ -17,10 +23,11 @@ test('chat composer accepts pasted images and shows attachment errors', () => {
 })
 
 test('chat drafts persist while typing and message actions stay copy-only', () => {
-  assert.match(chatSource, /SET_SESSION_DRAFT[\s\S]{0,180}text: input/)
-  assert.match(chatSource, /triggerSendFlow\(content, currentAttachments\)/)
+  assert.match(lifecycleSource, /SET_SESSION_DRAFT[\s\S]{0,180}text: input/)
+  assert.match(chatEntrySource, /triggerSendFlow\(typedContent \|\| describeAttachmentPrompt\(currentAttachments\), currentAttachments\)/)
   assert.doesNotMatch(chatSource, /handleEditMessage|editingMessageId|handleRegenerate|handleDeleteMessage/)
-  assert.match(messagesSource, /navigator\.clipboard\?\.writeText\(msg\.content\)/)
+  assert.match(messageRowSource, /<CopyButton content=\{msg\.content\}/)
+  assert.match(messageRowSource, /navigator\.clipboard\?\.writeText\(content\)/)
   assert.doesNotMatch(messagesSource, /onEditMessage|onRegenerateMessage|onDeleteMessage|<RefreshCw|<Trash2/)
 })
 
@@ -36,17 +43,16 @@ test('streaming no longer reparses stable markdown or delays messages by history
 })
 
 test('streaming assistant hides result actions until generation finishes', () => {
-  assert.match(messagesSource, /isGenerating = false/)
-  assert.match(messagesSource, /const generatingMessageId = isGenerating/)
-  assert.match(messagesSource, /!isGenerating && msg\.id !== generatingMessageId &&/)
-  assert.match(messagesSource, /!msg\.meta\?\.streaming/)
-  assert.match(messagesSource, /msg\.role === 'user'[\s\S]{0,1800}!isGenerating && !msg\.meta\?\.streaming/)
-  assert.match(messagesSource, /chat-message-actions/)
-  assert.match(messagesSource, /<MarkdownRenderer[^>]*streaming=\{isGenerating \|\| !!msg\.meta\?\.streaming\}/)
+  assert.match(messageListSource, /isGenerating = false/)
+  assert.match(messageListSource, /const generatingMessageId = isGenerating/)
+  assert.match(messageRowSource, /!isGenerating && msg\.id !== generatingMessageId && !msg\.meta\?\.streaming/)
+  assert.match(messageRowSource, /function UserMeta[\s\S]*?!isGenerating && !msg\.meta\?\.streaming/)
+  assert.match(messageRowSource, /chat-message-actions/)
+  assert.match(messageRowSource, /<MarkdownRenderer[^>]*streaming=\{isGenerating \|\| !!msg\.meta\?\.streaming\}/)
   assert.match(markdownSource, /function CodeBlock\(\{ children, streaming = false \}\)/)
   assert.match(markdownSource, /!streaming && \(/)
-  assert.match(messagesSource, /const isMessageComplete = !isGenerating && !msg\.meta\?\.streaming/)
-  assert.match(messagesSource, /const showArtifactPreview = !!artifactPreview && isMessageComplete/)
+  assert.match(messageRowSource, /const isMessageComplete = !isGenerating && !msg\.meta\?\.streaming/)
+  assert.match(messageRowSource, /const showArtifactPreview = !!artifactPreview && isMessageComplete/)
   assert.match(chatViewSource, /isGenerating=\{isGenerating\}/)
 })
 
@@ -78,12 +84,13 @@ test('long-term memory remains internal instead of adding a disclosure after eve
 })
 
 test('message time, model, and latency reveal with copy actions on hover or focus', () => {
-  const userTime = messagesSource.match(/data-testid="user-message-time"[\s\S]*?<\/span>/)?.[0] || ''
-  const assistantMeta = messagesSource.match(/data-testid="assistant-message-meta"[\s\S]*?<\/div>/)?.[0] || ''
+  const userTime = messageRowSource.match(/data-testid="user-message-time"[\s\S]*?<\/span>/)?.[0] || ''
+  const assistantMeta = messageRowSource.match(/data-testid="assistant-message-meta"[\s\S]*?<\/div>/)?.[0] || ''
 
   for (const revealable of [userTime, assistantMeta]) {
     assert.match(revealable, /chat-message-meta/)
-    assert.match(revealable, /opacity-0 pointer-events-none/)
+    assert.match(revealable, /opacity-0/)
+    assert.match(revealable, /pointer-events-none/)
     assert.match(revealable, /group-hover\/message:opacity-100/)
     assert.match(revealable, /group-focus-within\/message:opacity-100/)
   }
@@ -97,20 +104,22 @@ test('message time, model, and latency reveal with copy actions on hover or focu
 })
 
 test('user message time and copy actions sit outside the compact bubble', () => {
-  const bubble = messagesSource.match(/data-testid="user-message-bubble"[\s\S]*?<\/div>/)?.[0] || ''
+  const bubble = messageRowSource.match(/data-testid="user-message-bubble"[\s\S]*?<\/div>/)?.[0] || ''
   assert.match(bubble, /chat-user-message/)
   assert.match(bubble, /px-3\.5 py-2/)
   assert.doesNotMatch(bubble, /user-message-time|chat-message-actions/)
-  assert.match(messagesSource, /max-w-\[min\(720px,86%\)\] flex flex-col items-end/)
-  assert.match(messagesSource, /mt-1 flex h-4[\s\S]{0,120}leading-none/)
+  assert.match(messageRowSource, /flex max-w-\[min\(720px,86%\)\] flex-col items-end/)
+  assert.match(messageRowSource, /mt-1 flex h-4[\s\S]{0,160}leading-none/)
 })
 
 test('reasoning and tool traces remain collapsed until the user expands them', () => {
-  const reasoningTrace = messagesSource.match(/function ReasoningTrace[\s\S]*?(?=\nfunction ToolCallTrace)/)?.[0] || ''
-  const toolCallTrace = messagesSource.match(/function ToolCallTrace[\s\S]*?(?=\nexport default)/)?.[0] || ''
+  const reasoningTrace = activityTracesSource.match(/function ReasoningTrace[\s\S]*?(?=\nexport function ToolCallTrace)/)?.[0] || ''
+  const toolCallTrace = activityTracesSource.match(/function ToolCallTrace[\s\S]*$/)?.[0] || ''
 
-  assert.match(reasoningTrace, /const expanded = manual === true/)
-  assert.match(toolCallTrace, /const expanded = open/)
+  assert.match(reasoningTrace, /useState\(false\)/)
+  assert.match(toolCallTrace, /useState\(false\)/)
+  assert.match(reasoningTrace, /aria-expanded=\{expanded\}/)
+  assert.match(toolCallTrace, /aria-expanded=\{expanded\}/)
   assert.doesNotMatch(reasoningTrace, /chatMessages\.clickExpand/)
   assert.doesNotMatch(toolCallTrace, /chatMessages\.clickExpand/)
 })

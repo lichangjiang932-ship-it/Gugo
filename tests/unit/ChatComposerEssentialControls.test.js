@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
+import { readSourceTree } from '../sourceTree.js'
 
-const composerSource = fs.readFileSync(
+const composerSource = readSourceTree('../src/pages/ChatSplit/chatComposer/') + fs.readFileSync(
   new URL('../../src/pages/ChatSplit/ChatComposer.jsx', import.meta.url),
   'utf8',
 )
