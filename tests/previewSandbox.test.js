@@ -35,7 +35,7 @@ test('presentation artifacts open in an immersive fixed-ratio canvas', () => {
   assert.match(source, /function isPresentationArtifact/)
   assert.match(source, /useState\(\(\) => isPresentationArtifact\(artifact\)\)/)
   assert.match(source, /setMaximized\(isPresentationArtifact\(artifact\)\)/)
-  assert.match(source, /maximized \? 'chat-preview-pane-maximized fixed inset-0 w-screen' : 'relative'/)
+  assert.match(source, /maximized \? 'chat-preview-pane-maximized fixed inset-0 w-screen' : 'relative shrink-0'/)
   assert.match(source, /html-deck-stage/)
   assert.match(source, /html-deck-frame/)
   assert.match(styles, /\.html-deck-frame[\s\S]*?aspect-ratio:\s*16\s*\/\s*9/)

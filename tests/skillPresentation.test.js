@@ -6,7 +6,9 @@ import {
   describeSkillRequirements,
   getPresentedSkill,
   getSkillDetailCopy,
+  organizeSkillCatalog,
   presentSkillCollection,
+  selectDefaultSkillCatalog,
 } from '../src/lib/skillPresentation.js'
 
 const present = (name, desc = 'Use this skill for professional work.') => getPresentedSkill({
@@ -61,6 +63,52 @@ test('skill collection merges identical plugin copies and disambiguates real tit
   assert.equal(new Set(presented.map((skill) => skill.name)).size, 3)
   assert.ok(presented.some((skill) => skill.name.includes('Codex Security')))
   assert.ok(presented.some((skill) => skill.name.includes('Vercel')))
+})
+
+test('skill library keeps one canonical presentation capability and preserves user-installed skills', () => {
+  const presented = organizeSkillCatalog([
+    { id: 'openai-presentations', name: 'Presentations', desc: 'Create slide decks.', codexPlugin: true, runnable: true },
+    { id: 'ppt', name: '制作 PPT', desc: '生成可编辑演示文稿。', runnable: true, recommended: true },
+    { id: 'slides', name: 'Slides', desc: 'Another built-in slide generator.', codexPlugin: true, runnable: true },
+    { id: 'my-presentation', name: '我的路演模板', desc: '用户安装的演示技能。', custom: true, imported: true, runnable: true },
+  ], 'zh')
+
+  assert.deepEqual(presented.map((skill) => skill.id).sort(), ['my-presentation', 'ppt'])
+  assert.equal(presented.find((skill) => skill.id === 'ppt')?.capabilityKey, 'presentation')
+  assert.equal(presented.find((skill) => skill.id === 'ppt')?.categoryLabel, '办公创作')
+  assert.equal(presented.find((skill) => skill.id === 'my-presentation')?.categoryLabel, '我的技能')
+})
+
+test('skill library merges duplicate official names and sorts categories deterministically', () => {
+  const input = [
+    { id: 'plugin-b-review', name: 'code-review', desc: 'Second review copy.', codexPlugin: true, runnable: true },
+    { id: 'mail', name: '邮件起草', desc: '起草专业邮件。', runnable: true },
+    { id: 'review', name: '代码审查', desc: '检查代码变更。', runnable: true },
+    { id: 'plugin-a-review', name: 'code-review', desc: 'First review copy.', codexPlugin: true, runnable: true },
+  ]
+  const first = organizeSkillCatalog(input, 'zh')
+  const second = organizeSkillCatalog([...input].reverse(), 'zh')
+
+  assert.deepEqual(first.map((skill) => skill.id), ['review', 'mail'])
+  assert.deepEqual(second.map((skill) => skill.id), ['review', 'mail'])
+  assert.deepEqual(first.map((skill) => skill.categoryLabel), ['开发与测试', '沟通协作'])
+})
+
+test('default skill library stays compact while retaining user skills and common plugin capabilities', () => {
+  const catalog = organizeSkillCatalog([
+    { id: 'ppt', name: '制作 PPT', desc: '制作演示文稿。', runnable: true },
+    { id: 'codex-superpowers-systematic-debugging', name: 'systematic-debugging', desc: 'Debug with evidence.', codexPlugin: true, runnable: true, recommended: true },
+    { id: 'codex-obscure-runtime', name: 'obscure-runtime', desc: 'A specialized plugin skill.', codexPlugin: true, runnable: true, recommended: true },
+    { id: 'my-imported-skill', name: '我的导入技能', desc: '用户自己的技能。', custom: true, imported: true, runnable: true },
+  ], 'zh')
+  const defaults = selectDefaultSkillCatalog(catalog)
+
+  assert.deepEqual(defaults.map((skill) => skill.id), [
+    'ppt',
+    'codex-superpowers-systematic-debugging',
+    'my-imported-skill',
+  ])
+  assert.ok(catalog.some((skill) => skill.id === 'codex-obscure-runtime'), 'full catalog must keep non-default skills searchable')
 })
 
 test('skill library, slash menu, and command palette share presented metadata', () => {

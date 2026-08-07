@@ -11,6 +11,15 @@ contextBridge.exposeInMainWorld('gugoDesktop', Object.freeze({
   checkForUpdates: () => ipcRenderer.invoke('desktop:check-for-updates'),
   installUpdate: () => ipcRenderer.invoke('desktop:install-update'),
   setPetVisible: (visible) => ipcRenderer.invoke('desktop:set-pet-visible', visible === true),
+  resizePetWindow: ({ customImage = false, scale = 1 } = {}) => ipcRenderer.invoke('desktop:resize-pet-window', {
+    customImage: customImage === true,
+    scale: Number(scale),
+  }),
+  dragPetWindow: ({ phase = '', screenX = 0, screenY = 0 } = {}) => ipcRenderer.send('desktop:pet-drag', {
+    phase: String(phase),
+    screenX: Number(screenX),
+    screenY: Number(screenY),
+  }),
   updatePetStatus: (status) => ipcRenderer.invoke('desktop:update-pet-status', status),
   getPetState: () => ipcRenderer.invoke('desktop:get-pet-state'),
   hidePet: () => ipcRenderer.invoke('desktop:hide-pet'),

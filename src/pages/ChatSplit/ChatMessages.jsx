@@ -22,6 +22,7 @@ export default function ChatMessages({
   onPermAllow,
   onPermDeny,
   onNavigatePermissions,
+  onOpenArtifact,
   onOpenInPreview,
   onExpandCompaction,
   onQuoteSelection,
@@ -80,6 +81,7 @@ export default function ChatMessages({
                 isGenerating={isGenerating}
                 lang={lang}
                 onExpandCompaction={onExpandCompaction}
+                onOpenArtifact={onOpenArtifact}
                 onOpenInPreview={onOpenInPreview}
                 t={t}
               />

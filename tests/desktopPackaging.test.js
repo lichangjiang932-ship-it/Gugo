@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
+import {
+  DEFAULT_DESKTOP_PET_LAYOUT,
+  resolveDesktopPetLayout,
+} from '../shared/desktopPetLayout.js'
 
 const read = (relativePath) => fs.readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8')
 
@@ -94,7 +98,57 @@ test('desktop pet uses an independent transparent always-on-top window', () => {
   assert.match(main, /setAlwaysOnTop\(true, 'floating'\)/)
   assert.match(main, /if \(!mainWindow && applicationOrigin\)/)
   assert.match(preload, /setPetVisible/)
+  assert.match(preload, /resizePetWindow/)
+  assert.match(preload, /dragPetWindow/)
   assert.match(preload, /updatePetStatus/)
+})
+
+test('desktop pet window hugs the visible sprite and scales with custom pets', () => {
+  assert.deepEqual(DEFAULT_DESKTOP_PET_LAYOUT, {
+    contentWidth: 73,
+    contentHeight: 79,
+    windowWidth: 73,
+    windowHeight: 79,
+    scale: 1,
+  })
+  assert.deepEqual(resolveDesktopPetLayout({ scale: 0.1 }), {
+    contentWidth: 44,
+    contentHeight: 47,
+    windowWidth: 44,
+    windowHeight: 47,
+    scale: 0.6,
+  })
+  assert.deepEqual(resolveDesktopPetLayout({ customImage: true, scale: 9 }), {
+    contentWidth: 173,
+    contentHeight: 173,
+    windowWidth: 173,
+    windowHeight: 173,
+    scale: 1.8,
+  })
+})
+
+test('desktop pet animation updates one sprite layer without full React repaint flicker', () => {
+  const main = read('desktop/main.js')
+  const preload = read('desktop/preload.cjs')
+  const renderer = read('src/pages/ChatSplit/DesktopPetWindow.jsx')
+  const css = read('src/index.css')
+  const standaloneCss = css.slice(css.indexOf('html:has(.pet-window-root)'))
+
+  assert.match(main, /desktop:resize-pet-window/)
+  assert.match(main, /desktop:pet-drag/)
+  assert.match(main, /window\.setPosition\(next\.x, next\.y, false\)/)
+  assert.match(main, /DEFAULT_DESKTOP_PET_LAYOUT\.windowWidth/)
+  assert.match(main, /petState\.status\.kind === kind && petState\.status\.tool === tool/)
+  assert.match(preload, /desktop:resize-pet-window/)
+  assert.match(renderer, /spriteRef\.current/)
+  assert.match(renderer, /sprite\.style\.backgroundPositionX/)
+  assert.match(renderer, /playInteraction/)
+  assert.match(renderer, /dragPetWindow/)
+  assert.match(renderer, /data-reacting/)
+  assert.doesNotMatch(renderer, /setFrame|pet-window-copy|pet-window-close/)
+  assert.match(standaloneCss, /\.pet-window-root\s*\{[\s\S]*?padding:\s*0;/)
+  assert.match(standaloneCss, /-webkit-app-region:\s*no-drag/)
+  assert.doesNotMatch(standaloneCss, /drop-shadow|filter\s*:/)
 })
 
 test('version tags publish a Windows installer and updater metadata through GitHub Releases', () => {

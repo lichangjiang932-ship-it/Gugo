@@ -103,6 +103,19 @@ test('自定义技能创建后持久化可执行指令并立即出现在技能�
         repository: 'https://github.com/obra/superpowers',
         source: { rootName: 'openai-plugins' },
       },
+      {
+        id: 'codex-obscure-runtime',
+        name: 'Obscure Runtime',
+        desc: 'A specialized plugin skill that stays in the full catalog.',
+        perms: [],
+        runnable: true,
+        compatibility: 'ready',
+        codexPlugin: true,
+        external: true,
+        recommended: true,
+        pluginId: 'specialized-tools',
+        pluginName: 'Specialized Tools',
+      },
     ],
   }), {
     status: 200,
@@ -132,6 +145,7 @@ test('自定义技能创建后持久化可执行指令并立即出现在技能�
     assert.doesNotMatch(skillCards[0].textContent, /精选/)
     assert.match(skillCards[0].textContent, /系统化调试/)
     assert.match(skillCards[0].textContent, /基于证据定位根因/)
+    assert.equal(rootElement.querySelector('[data-skill-id="codex-obscure-runtime"]'), null)
 
     await click(dom, act, skillCards[0])
     const curatedDialog = rootElement.querySelector('[role="dialog"]')
@@ -159,6 +173,19 @@ test('自定义技能创建后持久化可执行指令并立即出现在技能�
     assert.match(detailDialog.textContent, /当前环境无法直接运行/)
     assert.ok(detailDialog.querySelector('button:disabled'))
     await click(dom, act, detailDialog.parentElement)
+
+    const searchInput = rootElement.querySelector('input[placeholder="搜索技能 · Ctrl K"]')
+    assert.ok(searchInput)
+    await enterValue(dom, act, searchInput, 'obscure runtime')
+    assert.ok(rootElement.querySelector('[data-skill-id="codex-obscure-runtime"]'))
+    await enterValue(dom, act, searchInput, '')
+    assert.equal(rootElement.querySelector('[data-skill-id="codex-obscure-runtime"]'), null)
+
+    const allFilter = [...rootElement.querySelectorAll('button')]
+      .find((button) => button.textContent.trim().startsWith('全部 ·'))
+    assert.ok(allFilter)
+    await click(dom, act, allFilter)
+    assert.ok(rootElement.querySelector('[data-skill-id="codex-obscure-runtime"]'))
 
     const customButton = [...rootElement.querySelectorAll('button')]
       .find((button) => button.textContent.trim() === '自定义')

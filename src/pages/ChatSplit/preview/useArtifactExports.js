@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { buildPresentationFilename, downloadPptxFromMarkdown, downloadPremiumPptx, parseMarkdownSlides } from '../../../lib/presentationExport.js'
 import { buildOfficeFilename, downloadDocxFromMarkdown, downloadXlsxFromMarkdown, parseMarkdownDocument, parseSpreadsheetRows } from '../../../lib/officeExport.js'
-import { buildHtmlDocument } from '../../../lib/artifactPreview.js'
+import { buildHtmlDocument, isHtmlDeckLike } from '../../../lib/artifactPreview.js'
 import { downloadHtmlDeckAsPptx } from '../../../lib/htmlSlidesToPptx.js'
 
 function downloadBlob(content, type, filename) {
@@ -35,7 +35,9 @@ export default function useArtifactExports({ preview, content, onMessage, t }) {
         const rows = parseSpreadsheetRows(content)
         const title = rows[0]?.find((cell) => String(cell || '').trim()) || preview.title
         await downloadXlsxFromMarkdown(content, { title, filename: buildOfficeFilename(title, 'xlsx') })
-      } else if (['html', 'html_multi', 'mermaid', 'chart'].includes(preview.type)) downloadBlob(buildHtmlDocument(preview.html), 'text/html;charset=utf-8', preview.filename)
+      } else if (['html', 'html_multi'].includes(preview.type)) downloadBlob(buildHtmlDocument(preview.html), 'text/html;charset=utf-8', preview.filename)
+      else if (preview.type === 'mermaid') downloadBlob(content, 'text/plain;charset=utf-8', preview.filename)
+      else if (preview.type === 'chart') downloadBlob(content, 'application/json;charset=utf-8', preview.filename)
       else if (preview.type === 'svg') downloadBlob(content, 'image/svg+xml;charset=utf-8', preview.filename)
       else if (preview.type === 'react') downloadBlob(content, 'text/jsx;charset=utf-8', preview.filename)
       else if (preview.type === 'text') downloadBlob(content, 'text/plain;charset=utf-8', preview.filename)
@@ -53,7 +55,7 @@ export default function useArtifactExports({ preview, content, onMessage, t }) {
     finally { setPremiumExporting(false); setPremiumProgress('') }
   }
   const handleHtmlToPptx = async () => {
-    if (preview.type !== 'html') return
+    if (preview.type !== 'html' || !isHtmlDeckLike(preview.html || '')) return
     setPremiumExporting(true)
     try {
       const title = (preview.title || preview.filename || 'presentation').replace(/\.html$/i, '')

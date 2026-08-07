@@ -30,8 +30,11 @@ export default function SkillsGrid({ skills, onSelect, onDelete, t }) {
               <div className="w-9 h-9 rounded-lg border border-ink-fade/60 flex items-center justify-center bg-paper">
                 <Icon className="w-5 h-5 text-ink-fade" />
               </div>
-              {skill.compatibility && <span className="font-mono text-[9px] tracking-wider text-ink-fade">{t(`skillsMarket.compatibility.${skill.compatibility}`)}</span>}
-              {skill.custom && <span className="font-mono text-[9px] tracking-wider text-ink-fade">{t(skill.imported ? 'skillsMarket.imported' : 'skillsMarket.custom')}</span>}
+              <div className="flex flex-wrap justify-end gap-1">
+                {skill.categoryLabel && <span className="rounded-full bg-ink/[0.05] px-2 py-1 font-mono text-[9px] tracking-wider text-ink-fade">{skill.categoryLabel}</span>}
+                {skill.compatibility && <span className="font-mono text-[9px] tracking-wider text-ink-fade">{t(`skillsMarket.compatibility.${skill.compatibility}`)}</span>}
+                {skill.custom && <span className="font-mono text-[9px] tracking-wider text-ink-fade">{t(skill.imported ? 'skillsMarket.imported' : 'skillsMarket.custom')}</span>}
+              </div>
             </div>
             <div>
               <div className="font-hand text-[17px] leading-tight text-ink">{skill.name}</div>

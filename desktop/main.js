@@ -16,6 +16,10 @@ import {
   resolveDesktopPort,
   waitForDesktopRuntimeFiles,
 } from './runtime.js'
+import {
+  DEFAULT_DESKTOP_PET_LAYOUT,
+  resolveDesktopPetLayout,
+} from '../shared/desktopPetLayout.js'
 
 const { autoUpdater } = updaterPackage
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -31,6 +35,7 @@ let updateReady = false
 let allowQuit = false
 let shutdownPromise = null
 let petState = { visible: false, status: { kind: 'idle', tool: '' } }
+let petDragState = null
 
 function clampPetBounds(bounds) {
   const display = screen.getDisplayMatching(bounds)
@@ -256,7 +261,12 @@ function createMainWindow() {
 function createPetWindow() {
   if (petWindow && !petWindow.isDestroyed()) return petWindow
   const stored = app.getPath('userData')
-  const defaultBounds = { x: 80, y: 80, width: 340, height: 190 }
+  const defaultBounds = {
+    x: 80,
+    y: 80,
+    width: DEFAULT_DESKTOP_PET_LAYOUT.windowWidth,
+    height: DEFAULT_DESKTOP_PET_LAYOUT.windowHeight,
+  }
   let bounds = defaultBounds
   try {
     const saved = JSON.parse(readFileSync(path.join(stored, 'pet-window.json'), 'utf8'))
@@ -284,6 +294,7 @@ function createPetWindow() {
       sandbox: true,
       webSecurity: true,
       webviewTag: false,
+      backgroundThrottling: false,
     },
   })
   window.setAlwaysOnTop(true, 'floating')
@@ -315,6 +326,38 @@ function applyPetVisibility(visible) {
 function assertTrustedIpc(event) {
   const sourceUrl = event.senderFrame?.url || event.sender?.getURL()
   if (!isTrustedNavigation(sourceUrl, applicationOrigin)) throw new Error('untrusted desktop IPC sender')
+}
+
+function handlePetDrag(event, payload = {}) {
+  assertTrustedIpc(event)
+  const window = petWindow
+  if (!window || window.isDestroyed()) return
+  const phase = String(payload?.phase || '')
+  const screenX = Number(payload?.screenX)
+  const screenY = Number(payload?.screenY)
+
+  if (phase === 'end') {
+    petDragState = null
+    return
+  }
+  if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return
+  if (phase === 'start') {
+    petDragState = {
+      senderId: event.sender.id,
+      startX: screenX,
+      startY: screenY,
+      origin: window.getBounds(),
+    }
+    return
+  }
+  const drag = petDragState
+  if (phase !== 'move' || !drag || drag.senderId !== event.sender.id) return
+  const next = clampPetBounds({
+    ...drag.origin,
+    x: Math.round(drag.origin.x + screenX - drag.startX),
+    y: Math.round(drag.origin.y + screenY - drag.startY),
+  })
+  window.setPosition(next.x, next.y, false)
 }
 
 function registerDesktopIpc() {
@@ -354,10 +397,29 @@ function registerDesktopIpc() {
     applyPetVisibility(visible)
     return { visible: petState.visible }
   })
+  ipcMain.on('desktop:pet-drag', handlePetDrag)
+  ipcMain.handle('desktop:resize-pet-window', (event, preferences) => {
+    assertTrustedIpc(event)
+    const layout = resolveDesktopPetLayout(preferences)
+    const window = petWindow
+    if (!window || window.isDestroyed()) return layout
+    const current = window.getBounds()
+    if (current.width === layout.windowWidth && current.height === layout.windowHeight) return layout
+    const next = clampPetBounds({
+      x: Math.round(current.x + (current.width - layout.windowWidth) / 2),
+      y: current.y + current.height - layout.windowHeight,
+      width: layout.windowWidth,
+      height: layout.windowHeight,
+    })
+    window.setBounds(next)
+    return layout
+  })
   ipcMain.handle('desktop:update-pet-status', (event, status) => {
     assertTrustedIpc(event)
     const kind = ['idle', 'thinking', 'tool', 'completed', 'failed'].includes(status?.kind) ? status.kind : 'idle'
-    petState = { ...petState, status: { kind, tool: String(status?.tool || '').slice(0, 80) } }
+    const tool = kind === 'tool' ? String(status?.tool || '').slice(0, 80) : ''
+    if (petState.status.kind === kind && petState.status.tool === tool) return petState.status
+    petState = { ...petState, status: { kind, tool } }
     sendPetState()
     return petState.status
   })

@@ -6,6 +6,28 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.9] - 2026-08-07
+
+### Added
+
+- Added a compact transparent desktop-pet window that stays visible outside the
+  main application, follows task status, supports custom pets, and reacts to
+  clicks and dragging.
+- Added inline generated-file references that open supported files directly in
+  the right workbench.
+
+### Changed
+
+- Simplified and organized the built-in skill library while preserving user
+  installed and user-created skills.
+- Improved right-workbench resizing, scrolling, and artifact-specific actions.
+
+### Fixed
+
+- Fixed desktop-pet white space and animation flicker.
+- Fixed session action menus remaining open after clicking elsewhere.
+- Removed presentation-only export actions from ordinary HTML previews.
+
 ## [0.10.2] - 2026-08-06
 
 ### Fixed
@@ -42,7 +64,8 @@ follow [Semantic Versioning](https://semver.org/).
 - Provider, MCP, memory, job, subagent, connector, and workspace tool support.
 - Local-first single-user mode with optional multi-user authentication.
 
-[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.2...HEAD
+[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.9...HEAD
+[0.10.9]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.9
 [0.10.2]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.2
 [0.10.1]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.1
 [0.10.0]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.0

@@ -117,6 +117,7 @@ export default function ChatSplitView({
           onNavigatePermissions={onNavigatePermissions}
           onQuoteSelection={onQuoteSelection}
           onPromptSelect={setInput}
+          onOpenArtifact={onOpenArtifact}
           onOpenInPreview={onOpenInPreview}
           onExpandCompaction={onExpandCompaction}
         />
