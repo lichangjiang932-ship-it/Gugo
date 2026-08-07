@@ -7,7 +7,7 @@ import { hasChoices, stripChoices } from '../../../lib/choices.js'
 import { buildMessageTimeline } from '../../../lib/messageTimeline.js'
 import { buildArtifactPreview, shouldCollapseArtifactPreview } from '../../../lib/artifactPreview.js'
 import { formatMessageDateTime, formatMessageTime } from '../../../lib/messageTime.js'
-import { ArtifactOpenCard, ServerArtifactCards } from './ArtifactCards.jsx'
+import { ArtifactReferenceLinks } from './ArtifactCards.jsx'
 import { ReasoningTrace, ToolCallTrace } from './ActivityTraces.jsx'
 import { splitUserSkillCommand } from './messageContent.js'
 
@@ -18,6 +18,7 @@ export default function MessageRow({
   isGenerating,
   lang,
   onExpandCompaction,
+  onOpenArtifact,
   onOpenInPreview,
   t,
 }) {
@@ -32,6 +33,9 @@ export default function MessageRow({
     artifactSource: msg.meta?.artifactSource,
   })
   const userSkillCommand = msg.role === 'user' ? splitUserSkillCommand(msg.content) : null
+  const openArtifact = onOpenArtifact || ((artifact) => {
+    if (artifact?.preview) onOpenInPreview?.(msg, artifact.preview)
+  })
 
   return (
     <motion.div
@@ -58,13 +62,14 @@ export default function MessageRow({
         )}
         {msg.role === 'assistant' ? (
           collapseArtifact ? (
-            <ArtifactOpenCard preview={artifactPreview} onOpen={() => onOpenInPreview?.(msg, artifactPreview)} />
+            <ArtifactReferenceLinks msg={msg} preview={artifactPreview} onOpen={openArtifact} />
           ) : (
             <AssistantContent
               artifactPreview={artifactPreview}
               isGenerating={isGenerating}
               isMessageComplete={isMessageComplete}
               msg={msg}
+              onOpenArtifact={openArtifact}
               onOpenInPreview={onOpenInPreview}
               showArtifactPreview={showArtifactPreview}
             />
@@ -100,7 +105,7 @@ export default function MessageRow({
   )
 }
 
-function AssistantContent({ artifactPreview, isGenerating, isMessageComplete, msg, onOpenInPreview, showArtifactPreview }) {
+function AssistantContent({ artifactPreview, isGenerating, isMessageComplete, msg, onOpenArtifact, showArtifactPreview }) {
   return (
     <>
       <div data-quotable="true">
@@ -120,8 +125,9 @@ function AssistantContent({ artifactPreview, isGenerating, isMessageComplete, ms
           }))}
         />
       )}
-      {showArtifactPreview && <ArtifactOpenCard preview={artifactPreview} onOpen={() => onOpenInPreview?.(msg, artifactPreview)} className="mt-3" />}
-      <ServerArtifactCards artifacts={msg.meta?.serverArtifacts} />
+      {isMessageComplete && (showArtifactPreview || msg.meta?.serverArtifacts?.length > 0) && (
+        <ArtifactReferenceLinks msg={msg} preview={artifactPreview} onOpen={onOpenArtifact} />
+      )}
     </>
   )
 }

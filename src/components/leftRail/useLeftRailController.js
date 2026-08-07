@@ -13,12 +13,13 @@ export default function useLeftRailController({ authMode, dispatch, location, na
   const [pendingApprovals, setPendingApprovals] = useState(0)
   const accountMenuRef = useRef(null)
   const updateLogin = useCallback((patch) => setLogin((current) => ({ ...current, ...patch })), [])
+  const closeSessionMenu = useCallback(() => setOpenMenuId(null), [])
 
   useEffect(() => {
-    const onEscape = () => { setOpenMenuId(null); setAccountMenuOpen(false) }
+    const onEscape = () => { closeSessionMenu(); setAccountMenuOpen(false) }
     window.addEventListener('app:escape', onEscape)
     return () => window.removeEventListener('app:escape', onEscape)
-  }, [])
+  }, [closeSessionMenu])
 
   useEffect(() => {
     if (!accountMenuOpen) return undefined
@@ -53,6 +54,7 @@ export default function useLeftRailController({ authMode, dispatch, location, na
   }, [location.pathname])
 
   const navigateItem = (item) => {
+    closeSessionMenu()
     setAccountMenuOpen(false)
     if (item.requiresLogin && !getAuthToken() && authMode !== 'local') { updateLogin({ open: true, target: item.path, message: t('errors.loginRequired') }); return }
     navigate(item.path)
@@ -81,5 +83,5 @@ export default function useLeftRailController({ authMode, dispatch, location, na
     finally { updateLogin({ loading: false }) }
   }
 
-  return { accountMenuOpen, accountMenuRef, login, openMenuId, pendingApprovals, navigateItem, sendCode, setAccountMenuOpen, setOpenMenuId, updateLogin, verify }
+  return { accountMenuOpen, accountMenuRef, closeSessionMenu, login, openMenuId, pendingApprovals, navigateItem, sendCode, setAccountMenuOpen, setOpenMenuId, updateLogin, verify }
 }

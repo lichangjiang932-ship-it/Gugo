@@ -1,6 +1,61 @@
 import { BarChart3, Code2, Download, ExternalLink, FileText, LayoutList } from 'lucide-react'
 import { useT } from '../../../i18n/I18nProvider.jsx'
+import { buildServerArtifactReferences } from '../../../lib/artifactReferences.js'
 import { withDownloadToken } from '../../../lib/jobClient.js'
+
+export function ArtifactReferenceLinks({ msg, preview, onOpen }) {
+  const source = String(msg?.meta?.artifactSource || msg?.content || '')
+  const references = buildServerArtifactReferences({
+    artifacts: msg?.meta?.serverArtifacts,
+    content: source,
+    messageId: msg?.id,
+    preview,
+  })
+  if (preview && !references.some((reference) => reference.previewArtifact)) {
+    references.unshift({
+      id: `${msg?.id || 'artifact'}-preview`,
+      filename: preview.filename,
+      type: preview.type,
+      previewArtifact: { messageId: String(msg?.id || ''), content: source, preview },
+    })
+  }
+  if (references.length === 0) return null
+
+  const openReference = (reference) => {
+    const artifact = reference.previewArtifact || {
+      messageId: String(msg?.id || ''),
+      content: '',
+      preview: null,
+      directFile: {
+        id: reference.id,
+        filename: reference.filename,
+        title: reference.title,
+        type: reference.type,
+        url: reference.url,
+      },
+    }
+    onOpen?.(artifact)
+  }
+
+  return (
+    <div className="mt-3 flex flex-wrap gap-2" data-testid="artifact-reference-links">
+      {references.map((reference) => (
+        <button
+          key={reference.id || reference.url || reference.filename}
+          type="button"
+          data-testid="artifact-open-card"
+          onClick={() => openReference(reference)}
+          className="inline-flex max-w-full items-center gap-2 rounded-md border border-ember/30 bg-ember-soft px-2.5 py-1.5 text-left text-sm font-medium text-ember transition-colors hover:border-ember/60 hover:bg-ember/10"
+          title={reference.filename}
+        >
+          <FileText className="h-4 w-4 shrink-0" />
+          <span className="truncate">{reference.filename}</span>
+          <ExternalLink className="h-3.5 w-3.5 shrink-0 opacity-70" />
+        </button>
+      ))}
+    </div>
+  )
+}
 
 export function ServerArtifactCards({ artifacts = [] }) {
   if (!Array.isArray(artifacts) || artifacts.length === 0) return null

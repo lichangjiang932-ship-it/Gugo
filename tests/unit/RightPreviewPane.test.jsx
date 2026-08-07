@@ -175,3 +175,25 @@ test('RightPreviewPane renders local text files in the preview tab', async () =>
     await cleanup()
   }
 })
+
+test('RightPreviewPane opens a direct generated file in the right pane', async () => {
+  const { rootEl, cleanup } = await renderPane(() => {}, {
+    messageId: 'msg-direct-file',
+    content: '',
+    preview: null,
+    directFile: {
+      id: 'file-1',
+      filename: 'report.docx',
+      type: 'docx',
+      url: '',
+    },
+  })
+
+  try {
+    assert.ok(rootEl.querySelector('[data-testid="direct-file-pane"]'))
+    assert.match(rootEl.textContent, /report\.docx/)
+    assert.ok(rootEl.querySelector('[data-testid="direct-file-content"]'))
+  } finally {
+    await cleanup()
+  }
+})

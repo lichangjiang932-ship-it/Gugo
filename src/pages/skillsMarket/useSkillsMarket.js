@@ -4,7 +4,7 @@ import { importSkillPack, importSkillFromGithubUrl, listSkills } from '../../lib
 import { installPluginAsSkillApi, listPluginsApi } from '../../lib/pluginClient.js'
 import { listLocalSkills, mergeRuntimeSkills, saveLocalSkills } from '../../lib/localSkills.js'
 import { getOfficialSkillPreset } from '../../lib/skillPresets.js'
-import { presentSkillCollection } from '../../lib/skillPresentation.js'
+import { organizeSkillCatalog, selectDefaultSkillCatalog } from '../../lib/skillPresentation.js'
 
 const FILTER_ALL = 'all'
 const FILTER_RECOMMENDED = 'recommended'
@@ -13,7 +13,7 @@ const EMPTY_DRAFT = { id: '', name: '', desc: '', systemPrompt: '', icon: '*', p
 
 export function useSkillsMarket({ lang, t, toast, onUseSkill }) {
   const [query, setQuery] = useState('')
-  const [activeFilter, setActiveFilter] = useState(FILTER_ALL)
+  const [activeFilter, setActiveFilter] = useState(FILTER_RECOMMENDED)
   const [customSkills, setCustomSkills] = useState(() => listLocalSkills())
   const [runtimeSkills, setRuntimeSkills] = useState(SKILLS)
   const [selectedSkill, setSelectedSkill] = useState(null)
@@ -27,9 +27,11 @@ export function useSkillsMarket({ lang, t, toast, onUseSkill }) {
   const folderInputRef = useRef(null)
 
   const allSkills = useMemo(
-    () => presentSkillCollection(mergeRuntimeSkills(customSkills, runtimeSkills), lang),
+    () => organizeSkillCatalog(mergeRuntimeSkills(customSkills, runtimeSkills), lang),
     [customSkills, runtimeSkills, lang],
   )
+  const defaultSkills = useMemo(() => selectDefaultSkillCatalog(allSkills), [allSkills])
+  const defaultSkillIds = useMemo(() => new Set(defaultSkills.map((skill) => skill.id)), [defaultSkills])
 
   useEffect(() => {
     let active = true
@@ -57,28 +59,32 @@ export function useSkillsMarket({ lang, t, toast, onUseSkill }) {
   }, [customModal, selectedSkill])
 
   const filterDefs = useMemo(() => {
-    const counts = {}
-    allSkills.forEach((skill) => skill.perms?.forEach((permission) => {
-      counts[permission] = (counts[permission] || 0) + 1
-    }))
+    const categories = new Map()
+    allSkills.forEach((skill) => {
+      if (skill.custom || !skill.categoryKey) return
+      const current = categories.get(skill.categoryKey) || { key: skill.categoryKey, label: skill.categoryLabel, count: 0 }
+      categories.set(skill.categoryKey, { ...current, count: current.count + 1 })
+    })
+    const customCount = allSkills.filter((skill) => skill.custom).length
     return [
+      { key: FILTER_RECOMMENDED, label: t('skillsMarket.recommended'), count: defaultSkills.length },
       { key: FILTER_ALL, label: t('skillsMarket.all'), count: allSkills.length },
-      ...Object.entries(counts).map(([key, count]) => ({ key, label: key, count })),
-      { key: FILTER_RECOMMENDED, label: t('skillsMarket.recommended'), count: allSkills.filter((skill) => skill.recommended).length },
-      ...(customSkills.length ? [{ key: FILTER_CUSTOM, label: t('skillsMarket.custom'), count: customSkills.length }] : []),
+      ...categories.values(),
+      ...(customCount ? [{ key: FILTER_CUSTOM, label: t('skillsMarket.custom'), count: customCount }] : []),
     ]
-  }, [allSkills, customSkills.length, t])
+  }, [allSkills, defaultSkills.length, t])
 
   const filteredSkills = useMemo(() => allSkills.filter((skill) => {
-    const text = `${skill.id} ${skill.name} ${skill.desc} ${skill.pluginName || ''} ${skill.publisher || ''} ${skill.license || ''} ${(skill.perms || []).join(' ')}`
-    const matchesSearch = !query.trim() || text.toLowerCase().includes(query.trim().toLowerCase())
-    const matchesFilter = activeFilter === FILTER_ALL
-      || (activeFilter === FILTER_RECOMMENDED && skill.recommended)
+    const text = `${skill.id} ${skill.name} ${skill.desc} ${skill.pluginName || ''} ${skill.publisher || ''} ${skill.license || ''} ${(skill.perms || []).join(' ')}`.toLowerCase()
+    const normalizedQuery = query.trim().toLowerCase()
+    const matchesSearch = !normalizedQuery || normalizedQuery.split(/\s+/).every((token) => text.includes(token))
+    const matchesFilter = Boolean(normalizedQuery)
+      || activeFilter === FILTER_ALL
+      || (activeFilter === FILTER_RECOMMENDED && defaultSkillIds.has(skill.id))
       || (activeFilter === FILTER_CUSTOM && skill.custom)
-      || skill.perms?.includes(activeFilter)
+      || skill.categoryKey === activeFilter
     return matchesSearch && matchesFilter
-  }).sort((left, right) => Number(Boolean(right.recommended)) - Number(Boolean(left.recommended))
-    || String(left.name || left.id).localeCompare(String(right.name || right.id))), [activeFilter, allSkills, query])
+  }), [activeFilter, allSkills, defaultSkillIds, query])
 
   const openCustomModal = () => {
     setDraft(EMPTY_DRAFT)

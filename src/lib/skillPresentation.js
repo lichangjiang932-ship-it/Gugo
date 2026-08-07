@@ -153,6 +153,173 @@ function preferSkill(left, right) {
   return left
 }
 
+const CATALOG_CATEGORY_ORDER = Object.freeze([
+  'office',
+  'development',
+  'analysis',
+  'communication',
+  'productivity',
+  'custom',
+])
+
+const CATALOG_CATEGORY_COPY = Object.freeze({
+  zh: { office: '办公创作', development: '开发与测试', analysis: '分析与研究', communication: '沟通协作', productivity: '通用效率', custom: '我的技能' },
+  en: { office: 'Office & creation', development: 'Development & testing', analysis: 'Analysis & research', communication: 'Communication', productivity: 'Productivity', custom: 'My skills' },
+  ja: { office: '文書・制作', development: '開発・テスト', analysis: '分析・調査', communication: 'コミュニケーション', productivity: '生産性', custom: 'マイスキル' },
+  ko: { office: '문서 및 제작', development: '개발 및 테스트', analysis: '분석 및 조사', communication: '커뮤니케이션', productivity: '생산성', custom: '내 스킬' },
+  'zh-TW': { office: '辦公創作', development: '開發與測試', analysis: '分析與研究', communication: '溝通協作', productivity: '通用效率', custom: '我的技能' },
+})
+
+const CATALOG_CAPABILITIES = Object.freeze([
+  { key: 'presentation', canonicalId: 'ppt', aliases: /(?:^|[-_\s])(pptx?|powerpoint|presentations?|slides?|slide-deck|pitch-deck)(?:$|[-_\s])/i },
+  { key: 'document', canonicalId: 'doc', aliases: /^(?:doc|docs|document|documents|word|write-doc)$/i },
+  { key: 'spreadsheet', canonicalId: 'excel', aliases: /^(?:excel|xlsx|spreadsheet|spreadsheets|analyze-excel)$/i },
+  { key: 'code-review', canonicalId: 'review', aliases: /^(?:review|code-review|code-reviewer)$/i },
+  { key: 'translation', canonicalId: 'translate', aliases: /^(?:translate|translation|translator)$/i },
+  { key: 'research', canonicalId: 'research', aliases: /^(?:research|deep-research|researcher)$/i },
+  { key: 'planning', canonicalId: 'plan', aliases: /^(?:plan|planning|project-planning)$/i },
+])
+
+const DEFAULT_PLUGIN_SKILL_IDENTITIES = Object.freeze([
+  'brainstorming',
+  'frontend-app-builder',
+  'frontend-testing-debugging',
+  'react-best-practices',
+  'systematic-debugging',
+  'test-driven-development',
+  'verification-before-completion',
+  'writing-plans',
+])
+
+function catalogLanguage(lang) {
+  if (CATALOG_CATEGORY_COPY[lang]) return lang
+  return String(lang || '').startsWith('zh') ? 'zh' : 'en'
+}
+
+function isUserManagedSkill(skill) {
+  return Boolean(
+    skill?.custom
+    || skill?.localCustom
+    || skill?.imported
+    || skill?.userId
+    || skill?.user_id,
+  )
+}
+
+function catalogIdentity(skill) {
+  const value = typeof skill === 'string'
+    ? skill
+    : skill?.originalName || skill?.id || skill?.name || ''
+  return String(value)
+    .normalize('NFKC')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, '-')
+    .replace(/-+/g, '-')
+}
+
+function capabilityForSkill(skill) {
+  const values = [skill?.id, skill?.originalName, skill?.name]
+    .map((value) => String(value || '').trim().toLowerCase())
+    .filter(Boolean)
+  return CATALOG_CAPABILITIES.find((definition) => values.some((value) => definition.aliases.test(value))) || null
+}
+
+function catalogPreferenceScore(skill, capability) {
+  let score = 0
+  if (skill?.id === capability?.canonicalId) score += 1_000
+  if (skill?.runnable !== false) score += 100
+  if (!skill?.codexPlugin && !skill?.external) score += 40
+  if (skill?.system) score += 20
+  if (skill?.recommended) score += 10
+  return score
+}
+
+function preferCatalogCanonical(left, right, capability) {
+  const delta = catalogPreferenceScore(right, capability) - catalogPreferenceScore(left, capability)
+  if (delta !== 0) return delta > 0 ? right : left
+  return String(left.id).localeCompare(String(right.id)) <= 0 ? left : right
+}
+
+function categoryForSkill(skill, capability) {
+  if (isUserManagedSkill(skill)) return 'custom'
+  if (['presentation', 'document', 'spreadsheet'].includes(capability?.key)) return 'office'
+  const identity = `${skill?.id || ''} ${skill?.originalName || ''} ${skill?.name || ''}`.toLowerCase()
+  if (/ppt|slide|presentation|document|word|excel|spreadsheet|webpage|design|image|video/.test(identity)) return 'office'
+  if (/code|review|develop|debug|test|react|frontend|backend|git|database|security/.test(identity)) return 'development'
+  if (/research|analysis|finance|data|metric|evaluate|audit/.test(identity)) return 'analysis'
+  if (/mail|message|connector|slack|discord|meeting|calendar|communication/.test(identity)) return 'communication'
+  return 'productivity'
+}
+
+export function compareSkillCatalogEntries(left, right) {
+  const leftCategory = CATALOG_CATEGORY_ORDER.indexOf(left?.categoryKey)
+  const rightCategory = CATALOG_CATEGORY_ORDER.indexOf(right?.categoryKey)
+  const categoryDelta = (leftCategory < 0 ? CATALOG_CATEGORY_ORDER.length : leftCategory)
+    - (rightCategory < 0 ? CATALOG_CATEGORY_ORDER.length : rightCategory)
+  if (categoryDelta !== 0) return categoryDelta
+  const recommendedDelta = Number(Boolean(right?.recommended)) - Number(Boolean(left?.recommended))
+  if (recommendedDelta !== 0) return recommendedDelta
+  return String(left?.name || left?.id || '').localeCompare(String(right?.name || right?.id || ''))
+    || String(left?.id || '').localeCompare(String(right?.id || ''))
+}
+
+/**
+ * Build the compact skill-library catalog without changing runtime skill ids.
+ * User-created/imported skills are never merged; only repository/system/plugin
+ * entries compete for a canonical display slot.
+ */
+export function organizeSkillCatalog(skills, lang = 'zh') {
+  const presented = presentSkillCollection(skills, lang)
+  const catalog = []
+  const canonicalIndexes = new Map()
+
+  for (const skill of presented) {
+    const capability = capabilityForSkill(skill)
+    const protectedUserSkill = isUserManagedSkill(skill)
+    const identity = catalogIdentity(skill)
+    const key = protectedUserSkill
+      ? null
+      : capability?.key
+        ? `capability:${capability.key}`
+        : identity
+          ? `name:${identity}`
+          : null
+    const decorated = { ...skill, capabilityKey: capability?.key || null }
+
+    if (!key || !canonicalIndexes.has(key)) {
+      if (key) canonicalIndexes.set(key, catalog.length)
+      catalog.push(decorated)
+      continue
+    }
+    const index = canonicalIndexes.get(key)
+    catalog[index] = preferCatalogCanonical(catalog[index], decorated, capability)
+  }
+
+  const copy = CATALOG_CATEGORY_COPY[catalogLanguage(lang)]
+  return catalog.map((skill) => {
+    const capability = capabilityForSkill(skill)
+    const categoryKey = categoryForSkill(skill, capability)
+    return { ...skill, categoryKey, categoryLabel: copy[categoryKey] }
+  }).sort(compareSkillCatalogEntries)
+}
+
+function isDefaultPluginSkill(skill) {
+  if (!skill?.codexPlugin || skill?.runnable === false) return false
+  const identities = [skill.id, skill.originalName, skill.name].map(catalogIdentity)
+  return DEFAULT_PLUGIN_SKILL_IDENTITIES.some((expected) => (
+    identities.some((identity) => identity === expected || identity.endsWith(`-${expected}`))
+  ))
+}
+
+export function selectDefaultSkillCatalog(skills) {
+  return (Array.isArray(skills) ? skills : []).filter((skill) => (
+    isUserManagedSkill(skill)
+    || (!skill?.codexPlugin && !skill?.external)
+    || isDefaultPluginSkill(skill)
+  ))
+}
+
 export function presentSkillCollection(skills, lang = 'zh') {
   const deduped = []
   const semanticIndexes = new Map()
