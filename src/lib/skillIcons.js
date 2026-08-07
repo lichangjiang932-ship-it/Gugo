@@ -1,28 +1,33 @@
-// 技能 id → Lucide 图标组件.新增技能时在这里加一条即可,
-// ChatComposer / SkillsMarket 等消费方都从这里读,避免两份重复定义脱钩.
-//
-// 取图标请用 getSkillIcon(id) —— 它对未知/自定义 skill 会回退到 Wrench,
-// 避免消费方还要写 SKILL_ICONS[id] || Fallback 的散逻辑.
-
+// 技能图标的单一来源。内置技能走显式映射，插件与自定义技能按完整元数据
+// 做稳定的语义匹配；未命中时才回退到通用工具图标。
 import {
-  Presentation,
-  FileText,
-  Table,
-  Mail,
-  Calculator,
-  Globe,
-  Code2,
-  ClipboardCheck,
+  BarChart3,
   Beaker,
-  Languages,
-  Search,
-  ListChecks,
-  Bug,
   Blocks,
+  BookOpenText,
   Brain,
+  Bug,
+  Calculator,
+  CalendarDays,
+  ClipboardCheck,
+  Code2,
+  Database,
+  FileText,
+  Globe,
+  Image,
+  Languages,
+  ListChecks,
+  Mail,
+  MessageSquare,
+  Music2,
   Network,
+  Palette,
   PlugZap,
+  Presentation,
+  Search,
   ShieldCheck,
+  Table,
+  Video,
   Wrench,
 } from 'lucide-react'
 
@@ -51,19 +56,85 @@ export const SKILL_ICONS = {
 
 export const SKILL_ICON_FALLBACK = Wrench
 
-export function getSkillIcon(id) {
-  if (SKILL_ICONS[id]) return SKILL_ICONS[id]
-  const value = String(id || '')
-  if (/debug|diagnos|troubleshoot/i.test(value)) return Bug
-  if (/review|audit|quality/i.test(value)) return ClipboardCheck
-  if (/test|verify|validation/i.test(value)) return Beaker
-  if (/plan|task|execut/i.test(value)) return ListChecks
-  if (/brainstorm|design|creative/i.test(value)) return Brain
-  if (/plugin|extension/i.test(value)) return PlugZap
-  if (/parallel|dispatch|agent/i.test(value)) return Network
-  if (/connect|browser|web/i.test(value)) return Blocks
-  if (/document|doc|write|report/i.test(value)) return FileText
-  if (/sheet|excel|data|table|analysis/i.test(value)) return Table
-  if (/slide|ppt|presentation/i.test(value)) return Presentation
-  return SKILL_ICON_FALLBACK
+const SEMANTIC_ICON_RULES = [
+  { key: 'presentation', match: /\b(pptx?|powerpoint|presentations?|slides?|deck)\b/i, icon: Presentation, tone: 'violet' },
+  { key: 'spreadsheet', match: /\b(excel|xlsx|spreadsheet|sheets?|table|csv)\b/i, icon: Table, tone: 'emerald' },
+  { key: 'document', match: /\b(document|docs?|word|writer|writing|report|markdown|pdf|book)\b/i, icon: FileText, tone: 'blue' },
+  { key: 'mail', match: /\b(mail|email|smtp|imap|gmail|outlook)\b/i, icon: Mail, tone: 'rose' },
+  { key: 'calendar', match: /\b(calendar|schedule|event|meeting)\b/i, icon: CalendarDays, tone: 'amber' },
+  { key: 'message', match: /\b(slack|discord|message|chat|communication)\b/i, icon: MessageSquare, tone: 'cyan' },
+  { key: 'finance', match: /\b(finance|financial|accounting|stock|market|fund|invoice|budget)\b/i, icon: Calculator, tone: 'amber' },
+  { key: 'database', match: /\b(database|postgres|sql|supabase|storage)\b/i, icon: Database, tone: 'emerald' },
+  { key: 'analytics', match: /\b(analysis|analytics|metric|chart|dashboard|data)\b/i, icon: BarChart3, tone: 'cyan' },
+  { key: 'debug', match: /\b(debug|diagnos|troubleshoot|fix)\w*\b/i, icon: Bug, tone: 'rose' },
+  { key: 'review', match: /\b(review|audit|quality|evaluate|verification)\w*\b/i, icon: ClipboardCheck, tone: 'indigo' },
+  { key: 'test', match: /\b(test|validation|playtest)\w*\b/i, icon: Beaker, tone: 'emerald' },
+  { key: 'code', match: /\b(code|coding|developer|development|frontend|backend|react|typescript|javascript|git)\b/i, icon: Code2, tone: 'indigo' },
+  { key: 'web', match: /\b(browser|web|website|html|access)\b/i, icon: Globe, tone: 'blue' },
+  { key: 'translation', match: /\b(translate|translation|language|localization|i18n)\b/i, icon: Languages, tone: 'cyan' },
+  { key: 'research', match: /\b(search|research|discover|knowledge)\b/i, icon: Search, tone: 'blue' },
+  { key: 'planning', match: /\b(plan|planning|task|execute|workflow|productivity)\w*\b/i, icon: ListChecks, tone: 'violet' },
+  { key: 'creative', match: /\b(brainstorm|design|creative|idea|brand)\w*\b/i, icon: Palette, tone: 'rose' },
+  { key: 'image', match: /\b(image|photo|ocr|vision|sprite|graphic)\b/i, icon: Image, tone: 'rose' },
+  { key: 'video', match: /\b(video|remotion|film|movie)\b/i, icon: Video, tone: 'violet' },
+  { key: 'audio', match: /\b(audio|music|speech|voice|sound)\b/i, icon: Music2, tone: 'amber' },
+  { key: 'knowledge', match: /\b(guide|handbook|learning|education|tutorial)\b/i, icon: BookOpenText, tone: 'blue' },
+  { key: 'plugin', match: /\b(plugin|extension|bundle)\b/i, icon: PlugZap, tone: 'amber' },
+  { key: 'agent', match: /\b(parallel|dispatch|agent|subagent|team)\b/i, icon: Network, tone: 'violet' },
+  { key: 'connector', match: /\b(connect|connector|integration|mcp)\b/i, icon: Blocks, tone: 'cyan' },
+  { key: 'security', match: /\b(security|shield|privacy|permission|risk)\b/i, icon: ShieldCheck, tone: 'emerald' },
+]
+
+const ICON_TONE_CLASSES = Object.freeze({
+  amber: 'bg-amber-500/10 text-amber-600 ring-amber-500/15',
+  blue: 'bg-blue-500/10 text-blue-600 ring-blue-500/15',
+  cyan: 'bg-cyan-500/10 text-cyan-600 ring-cyan-500/15',
+  emerald: 'bg-emerald-500/10 text-emerald-600 ring-emerald-500/15',
+  indigo: 'bg-indigo-500/10 text-indigo-600 ring-indigo-500/15',
+  rose: 'bg-rose-500/10 text-rose-600 ring-rose-500/15',
+  violet: 'bg-violet-500/10 text-violet-600 ring-violet-500/15',
+  neutral: 'bg-ink/[0.06] text-ink-soft ring-ink/10',
+})
+
+function skillSearchText(skillOrId) {
+  if (typeof skillOrId === 'string') return skillOrId
+  if (!skillOrId || typeof skillOrId !== 'object') return ''
+  return [
+    skillOrId.id,
+    skillOrId.name,
+    skillOrId.originalName,
+    skillOrId.desc,
+    skillOrId.description,
+    skillOrId.categoryKey,
+    skillOrId.capabilityKey,
+    ...(Array.isArray(skillOrId.perms) ? skillOrId.perms : []),
+  ].filter(Boolean).join(' ')
+}
+
+function findSemanticIcon(skillOrId) {
+  const id = typeof skillOrId === 'string' ? skillOrId : skillOrId?.id
+  if (id && SKILL_ICONS[id]) return { icon: SKILL_ICONS[id], tone: semanticToneForId(id) }
+  const text = skillSearchText(skillOrId)
+  return SEMANTIC_ICON_RULES.find((rule) => rule.match.test(text)) || null
+}
+
+function semanticToneForId(id) {
+  return ({
+    ppt: 'violet', webpage: 'blue', doc: 'blue', excel: 'emerald', mail: 'rose', finance: 'amber',
+    code: 'indigo', review: 'indigo', test: 'emerald', translate: 'cyan', research: 'blue', plan: 'violet',
+  })[id] || 'neutral'
+}
+
+export function getSkillIcon(skillOrId) {
+  return findSemanticIcon(skillOrId)?.icon || SKILL_ICON_FALLBACK
+}
+
+export function getSkillIconPresentation(skillOrId) {
+  const match = findSemanticIcon(skillOrId)
+  const tone = match?.tone || 'neutral'
+  return {
+    Icon: match?.icon || SKILL_ICON_FALLBACK,
+    tone,
+    className: ICON_TONE_CLASSES[tone] || ICON_TONE_CLASSES.neutral,
+  }
 }

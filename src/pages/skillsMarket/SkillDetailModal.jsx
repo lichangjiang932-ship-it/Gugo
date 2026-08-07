@@ -1,21 +1,20 @@
 import { createElement } from 'react'
 import { X } from 'lucide-react'
-import { getSkillIcon } from '../../lib/skillIcons.js'
+import { getSkillIconPresentation } from '../../lib/skillIcons.js'
 import { describeSkillRequirements } from '../../lib/skillPresentation.js'
 
 export default function SkillDetailModal({ skill, copy, lang, onClose, onUse, t }) {
   if (!skill) return null
-  const icon = createElement(getSkillIcon(skill.id), { className: 'h-5 w-5 text-ink-soft' })
+  const { Icon, className: iconClassName } = getSkillIconPresentation(skill)
+  const icon = createElement(Icon, { className: 'h-6 w-6', strokeWidth: 1.9, 'aria-hidden': true })
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4" onClick={onClose}>
       <div role="dialog" aria-modal="true" aria-labelledby="skill-detail-title" className="flex max-h-[85vh] w-full max-w-xl flex-col overflow-hidden rounded-lg border border-ink/30 bg-paper shadow-xl" onClick={(event) => event.stopPropagation()}>
-        <div className="flex items-start justify-between gap-4 border-b border-ink/15 px-5 py-4">
+        <div className="flex items-center justify-between gap-4 border-b border-ink/10 px-6 py-5">
           <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-ink-fade/50 bg-paper-2">{icon}</div>
+            <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl ring-1 ring-inset ${iconClassName}`}>{icon}</div>
             <div className="min-w-0">
-              <h2 id="skill-detail-title" className="truncate font-hand text-xl text-ink">{skill.name}</h2>
-              <div className="font-mono text-[10px] text-ink-fade">/{skill.id}</div>
-              {skill.compatibility && <div className="font-mono text-[10px] text-ink-fade">{t(`skillsMarket.compatibility.${skill.compatibility}`)}</div>}
+              <h2 id="skill-detail-title" className="truncate text-lg font-semibold text-ink">{skill.name}</h2>
             </div>
           </div>
           <button type="button" onClick={onClose} className="rounded-md p-1 text-ink-fade hover:bg-paper-2 hover:text-ink" aria-label={t('nav.skillDetails')}><X className="h-4 w-4" /></button>

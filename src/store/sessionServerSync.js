@@ -32,6 +32,12 @@ export function isServerBackedSession(session) {
   return Number.isInteger(session?.serverRevision)
 }
 
+export function needsServerSessionSnapshot(session, hydratedRevision) {
+  return isServerBackedSession(session)
+    && (!Array.isArray(session.messages) || session.messages.length === 0)
+    && hydratedRevision !== session.serverRevision
+}
+
 export function mergeServerSessionMessages(localMessages, serverMessages) {
   const localById = new Map(
     (Array.isArray(localMessages) ? localMessages : [])
@@ -54,7 +60,9 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
       ...localMessage,
       id: serverMessage.id,
       role: serverMessage.role,
-      content: serverMessage.content,
+      // A completed snapshot should be authoritative, but an unexpectedly empty
+      // assistant row must not erase text already received over the live stream.
+      content: serverMessage.content || localMessage.content || '',
       timestamp: serverMessage.timestamp ?? localMessage.timestamp,
     }
     if (Object.keys(serverMeta).length || Object.keys(localMeta).length) {
@@ -120,12 +128,63 @@ export function createSessionMutationDispatcher({
   applyServerAction,
   replaceMessages,
   deleteSession,
+  canFetchSessionSnapshot = () => true,
+  fetchSessionSnapshot = null,
   resolveSessionMetadata = null,
   onError = () => {},
 }) {
   const queues = new Map()
+  const snapshotRequests = new Map()
+  const hydratedRevisions = new Map()
+
+  const hydrateSessionSnapshot = (session, action) => {
+    if (typeof fetchSessionSnapshot !== 'function' || !canFetchSessionSnapshot()) return undefined
+    const sessionId = session?.id
+    const revision = session?.serverRevision
+    if (!needsServerSessionSnapshot(session, hydratedRevisions.get(sessionId))) return undefined
+
+    const pending = snapshotRequests.get(sessionId)
+    if (pending?.revision === revision) return pending.promise
+
+    const operation = Promise.resolve()
+      .then(() => fetchSessionSnapshot({ sessionId }))
+      .then((snapshot) => {
+        if (snapshot?.complete !== true || !Array.isArray(snapshot.messages) || !Number.isInteger(snapshot.revision)) {
+          const error = new Error('Server returned an invalid complete session snapshot')
+          error.code = 'INVALID_SESSION_SNAPSHOT'
+          throw error
+        }
+        if (snapshot.messages.length === 0) hydratedRevisions.set(sessionId, snapshot.revision)
+        else hydratedRevisions.delete(sessionId)
+        applyServerAction({
+          type: 'APPLY_SERVER_SESSION_SNAPSHOT',
+          payload: { sessionId, snapshot },
+        })
+        return true
+      })
+      .catch((error) => {
+        onError(error, { action, sessionId })
+        return false
+      })
+
+    const tracked = operation.finally(() => {
+      if (snapshotRequests.get(sessionId)?.promise === tracked) snapshotRequests.delete(sessionId)
+    })
+    snapshotRequests.set(sessionId, { revision, promise: tracked })
+    return tracked
+  }
 
   return function dispatchWithSessionSync(action) {
+    if (action?.type === 'SWITCH_SESSION' || action?.type === 'HYDRATE_SERVER_SESSION') {
+      const sessionId = typeof action.payload === 'string' ? action.payload : action.payload?.sessionId
+      const storedSession = getState()?.sessions?.find((candidate) => candidate.id === sessionId)
+      const session = action.type === 'HYDRATE_SERVER_SESSION' && Number.isInteger(action.payload?.revision)
+        ? { ...(storedSession || {}), id: sessionId, serverRevision: action.payload.revision, messages: [] }
+        : storedSession
+      if (action.type === 'SWITCH_SESSION') dispatchImmediate(action)
+      return session ? hydrateSessionSnapshot(session, action) : undefined
+    }
+
     if (!isServerSessionMutation(action)) {
       dispatchImmediate(action)
       return undefined

@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron')
 const UPDATE_STATUS_CHANNEL = 'desktop:update-status'
 const PET_STATE_CHANNEL = 'desktop:pet-state'
 const PET_VISIBILITY_CHANNEL = 'desktop:pet-visibility'
+const PET_DRAG_CANCEL_CHANNEL = 'desktop:pet-drag-cancel'
 
 contextBridge.exposeInMainWorld('gugoDesktop', Object.freeze({
   isDesktop: true,
@@ -23,6 +24,7 @@ contextBridge.exposeInMainWorld('gugoDesktop', Object.freeze({
   updatePetStatus: (status) => ipcRenderer.invoke('desktop:update-pet-status', status),
   getPetState: () => ipcRenderer.invoke('desktop:get-pet-state'),
   hidePet: () => ipcRenderer.invoke('desktop:hide-pet'),
+  showPetMenu: () => ipcRenderer.invoke('desktop:show-pet-menu'),
   onPetState(callback) {
     if (typeof callback !== 'function') return () => {}
     const listener = (_event, state) => callback(state)
@@ -34,6 +36,12 @@ contextBridge.exposeInMainWorld('gugoDesktop', Object.freeze({
     const listener = (_event, visible) => callback(visible)
     ipcRenderer.on(PET_VISIBILITY_CHANNEL, listener)
     return () => ipcRenderer.removeListener(PET_VISIBILITY_CHANNEL, listener)
+  },
+  onPetDragCancel(callback) {
+    if (typeof callback !== 'function') return () => {}
+    const listener = () => callback()
+    ipcRenderer.on(PET_DRAG_CANCEL_CHANNEL, listener)
+    return () => ipcRenderer.removeListener(PET_DRAG_CANCEL_CHANNEL, listener)
   },
   onUpdateStatus(callback) {
     if (typeof callback !== 'function') return () => {}

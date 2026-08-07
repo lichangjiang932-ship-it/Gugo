@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow, dialog, ipcMain, screen, session, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, screen, session, shell } from 'electron'
 import updaterPackage from 'electron-updater'
 import {
   isSafeExternalUrl,
@@ -36,6 +36,38 @@ let allowQuit = false
 let shutdownPromise = null
 let petState = { visible: false, status: { kind: 'idle', tool: '' } }
 let petDragState = null
+
+function cancelPetDrag({ notifyRenderer = true } = {}) {
+  const drag = petDragState
+  petDragState = null
+  if (!drag || !notifyRenderer || !petWindow || petWindow.isDestroyed()) return
+  petWindow.webContents.send('desktop:pet-drag-cancel')
+}
+
+function hideDesktopPet() {
+  cancelPetDrag()
+  applyPetVisibility(false)
+  mainWindow?.webContents.send('desktop:pet-visibility', false)
+}
+
+function desktopPetCloseLabel(locale = app.getLocale()) {
+  const language = String(locale || '').toLowerCase()
+  if (language.startsWith('zh')) return '关闭宠物'
+  if (language.startsWith('ja')) return 'ペットを閉じる'
+  if (language.startsWith('ko')) return '펫 닫기'
+  return 'Close pet'
+}
+
+function showDesktopPetMenu() {
+  const window = petWindow
+  if (!window || window.isDestroyed() || !window.isVisible()) return false
+  cancelPetDrag()
+  Menu.buildFromTemplate([{
+    label: desktopPetCloseLabel(),
+    click: hideDesktopPet,
+  }]).popup({ window })
+  return true
+}
 
 function clampPetBounds(bounds) {
   const display = screen.getDisplayMatching(bounds)
@@ -282,6 +314,7 @@ function createPetWindow() {
     backgroundColor: '#00000000',
     alwaysOnTop: true,
     skipTaskbar: true,
+    focusable: false,
     resizable: false,
     maximizable: false,
     minimizable: false,
@@ -299,12 +332,19 @@ function createPetWindow() {
   })
   window.setAlwaysOnTop(true, 'floating')
   secureWebContents(window.webContents)
+  window.on('blur', () => cancelPetDrag())
+  window.on('hide', () => cancelPetDrag())
   window.on('moved', () => {
     const next = clampPetBounds(window.getBounds())
     if (next.x !== window.getBounds().x || next.y !== window.getBounds().y) window.setBounds(next)
     void import('node:fs/promises').then(({ writeFile }) => writeFile(path.join(stored, 'pet-window.json'), JSON.stringify({ x: next.x, y: next.y }))).catch(() => {})
   })
-  window.on('closed', () => { if (petWindow === window) petWindow = null })
+  window.on('closed', () => {
+    cancelPetDrag({ notifyRenderer: false })
+    if (petWindow === window) petWindow = null
+  })
+  window.webContents.on('render-process-gone', () => cancelPetDrag({ notifyRenderer: false }))
+  window.webContents.on('destroyed', () => cancelPetDrag({ notifyRenderer: false }))
   window.webContents.on('did-finish-load', sendPetState)
   petWindow = window
   void window.loadURL(`${applicationOrigin}/?gugoPet=1`)
@@ -314,6 +354,7 @@ function createPetWindow() {
 function applyPetVisibility(visible) {
   petState = { ...petState, visible: visible === true }
   if (!petState.visible) {
+    cancelPetDrag()
     petWindow?.hide()
     return
   }
@@ -331,13 +372,13 @@ function assertTrustedIpc(event) {
 function handlePetDrag(event, payload = {}) {
   assertTrustedIpc(event)
   const window = petWindow
-  if (!window || window.isDestroyed()) return
+  if (!window || window.isDestroyed() || event.sender !== window.webContents) return
   const phase = String(payload?.phase || '')
   const screenX = Number(payload?.screenX)
   const screenY = Number(payload?.screenY)
 
   if (phase === 'end') {
-    petDragState = null
+    cancelPetDrag({ notifyRenderer: false })
     return
   }
   if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return
@@ -398,6 +439,11 @@ function registerDesktopIpc() {
     return { visible: petState.visible }
   })
   ipcMain.on('desktop:pet-drag', handlePetDrag)
+  ipcMain.handle('desktop:show-pet-menu', (event) => {
+    assertTrustedIpc(event)
+    if (!petWindow || petWindow.isDestroyed() || event.sender !== petWindow.webContents) return { shown: false }
+    return { shown: showDesktopPetMenu() }
+  })
   ipcMain.handle('desktop:resize-pet-window', (event, preferences) => {
     assertTrustedIpc(event)
     const layout = resolveDesktopPetLayout(preferences)
@@ -429,8 +475,7 @@ function registerDesktopIpc() {
   })
   ipcMain.handle('desktop:hide-pet', (event) => {
     assertTrustedIpc(event)
-    applyPetVisibility(false)
-    mainWindow?.webContents.send('desktop:pet-visibility', false)
+    hideDesktopPet()
     return { visible: false }
   })
 }

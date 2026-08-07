@@ -1,6 +1,6 @@
 import { BarChart3, Code2, Download, ExternalLink, FileText, LayoutList } from 'lucide-react'
 import { useT } from '../../../i18n/I18nProvider.jsx'
-import { buildServerArtifactReferences } from '../../../lib/artifactReferences.js'
+import { buildArtifactReferenceIdentity, buildServerArtifactReferences } from '../../../lib/artifactReferences.js'
 import { withDownloadToken } from '../../../lib/jobClient.js'
 
 export function ArtifactReferenceLinks({ msg, preview, onOpen }) {
@@ -12,11 +12,13 @@ export function ArtifactReferenceLinks({ msg, preview, onOpen }) {
     preview,
   })
   if (preview && !references.some((reference) => reference.previewArtifact)) {
+    const identity = buildArtifactReferenceIdentity({ filename: preview.filename, messageId: msg?.id, type: preview.type })
     references.unshift({
       id: `${msg?.id || 'artifact'}-preview`,
+      identity,
       filename: preview.filename,
       type: preview.type,
-      previewArtifact: { messageId: String(msg?.id || ''), content: source, preview },
+      previewArtifact: { messageId: String(msg?.id || ''), artifactIdentity: identity, content: source, preview },
     })
   }
   if (references.length === 0) return null
@@ -41,7 +43,7 @@ export function ArtifactReferenceLinks({ msg, preview, onOpen }) {
     <div className="mt-3 flex flex-wrap gap-2" data-testid="artifact-reference-links">
       {references.map((reference) => (
         <button
-          key={reference.id || reference.url || reference.filename}
+          key={reference.identity || reference.id || reference.url || reference.filename}
           type="button"
           data-testid="artifact-open-card"
           onClick={() => openReference(reference)}

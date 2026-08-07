@@ -358,10 +358,12 @@ export function describeSkillRequirements(skill, lang = 'zh') {
   const copy = getSkillDetailCopy(lang)
   const requirements = skill?.requirements || {}
   const items = []
-  if (requirements.app) items.push(copy.requiresApp)
-  if (requirements.mcp) items.push(copy.requiresMcp)
+  if (requirements.app || skill?.compatibility === 'needs-app') items.push(copy.requiresApp)
+  if (requirements.mcp || skill?.compatibility === 'needs-mcp') items.push(copy.requiresMcp)
   if (Array.isArray(requirements.runtime) && requirements.runtime.length) {
     items.push(`${copy.requiresRuntime}：${requirements.runtime.join('、')}`)
+  } else if (skill?.compatibility === 'needs-runtime') {
+    items.push(copy.requiresRuntime)
   }
   return items.length ? items : [copy.ready]
 }

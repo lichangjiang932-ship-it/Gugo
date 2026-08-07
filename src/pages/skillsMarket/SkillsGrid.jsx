@@ -1,53 +1,57 @@
-import { X } from 'lucide-react'
-import { getSkillIcon } from '../../lib/skillIcons.js'
+import { Plus, Trash2 } from 'lucide-react'
+import { getSkillIconPresentation } from '../../lib/skillIcons.js'
 
 export default function SkillsGrid({ skills, onSelect, onDelete, t }) {
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3.5">
+    <div className="grid grid-cols-[repeat(auto-fill,minmax(min(238px,100%),1fr))] gap-4">
       {skills.map((skill) => {
-        const Icon = getSkillIcon(skill.id)
+        const { Icon, className: iconClassName } = getSkillIconPresentation(skill)
+        const detailLabel = `${t('nav.skillDetails')}: ${skill.name}`
         return (
-          <button
-            type="button"
+          <article
             key={skill.id}
             data-skill-id={skill.id}
-            onClick={() => onSelect(skill)}
-            className={`relative p-4 border rounded-md text-left flex flex-col gap-2.5 hover:shadow-md transition-shadow ${skill.custom ? 'border-ink/40 border-dashed bg-paper-2' : 'border-ink/30 hover:border-ink/60'}`}
+            className="group relative min-h-[154px] overflow-hidden rounded-[18px] border border-ink/10 bg-paper px-5 py-4 shadow-[0_1px_2px_rgb(0_0_0/0.03)] transition duration-200 hover:-translate-y-0.5 hover:border-ink/20 hover:shadow-[0_12px_30px_rgb(0_0_0/0.07)] focus-within:border-ink/25 focus-within:shadow-[0_12px_30px_rgb(0_0_0/0.07)]"
           >
+            <button
+              type="button"
+              onClick={() => onSelect(skill)}
+              className="absolute inset-0 z-0 rounded-[18px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/50 focus-visible:ring-inset"
+              aria-label={detailLabel}
+            />
+            <div className="pointer-events-none relative z-10 flex items-center gap-3 pr-10">
+              <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ring-1 ring-inset ${iconClassName}`} data-skill-icon>
+                <Icon className="h-[22px] w-[22px]" strokeWidth={1.9} aria-hidden="true" />
+              </div>
+              <h2 className="min-w-0 truncate text-[15px] font-semibold leading-5 text-ink" title={skill.name}>{skill.name}</h2>
+            </div>
+            <button
+              type="button"
+              onClick={() => onSelect(skill)}
+              className="absolute right-4 top-4 z-20 flex h-9 w-9 items-center justify-center rounded-xl bg-ink/[0.045] text-ink-soft transition-colors hover:bg-ink/10 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/50"
+              aria-hidden="true"
+              tabIndex={-1}
+              data-skill-action="details"
+            >
+              <Plus className="h-[18px] w-[18px]" strokeWidth={1.8} aria-hidden="true" />
+            </button>
+            <p className="pointer-events-none relative z-10 mt-4 line-clamp-2 min-h-11 text-[13px] leading-[1.65] text-ink-soft" title={skill.desc}>{skill.desc}</p>
             {skill.localCustom && (
-              <span
-                role="button"
-                tabIndex={0}
+              <button
+                type="button"
                 onClick={(event) => onDelete(event, skill.id)}
-                onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onDelete(event, skill.id) }}
-                className="absolute top-2 right-2 w-5 h-5 rounded-full hover:bg-ink/10 flex items-center justify-center text-ink-fade hover:text-ink"
+                className="absolute bottom-2.5 right-3 z-20 flex h-8 w-8 items-center justify-center rounded-lg text-ink-fade opacity-0 transition hover:bg-ink/[0.06] hover:text-ink group-hover:opacity-100 focus:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/50"
                 title={t('skillsMarket.deleteCustom')}
+                aria-label={t('skillsMarket.deleteCustom')}
+                data-skill-action="delete"
               >
-                <X className="w-3 h-3" />
-              </span>
+                <Trash2 className="h-4 w-4" aria-hidden="true" />
+              </button>
             )}
-            <div className="flex items-start justify-between gap-2">
-              <div className="w-9 h-9 rounded-lg border border-ink-fade/60 flex items-center justify-center bg-paper">
-                <Icon className="w-5 h-5 text-ink-fade" />
-              </div>
-              <div className="flex flex-wrap justify-end gap-1">
-                {skill.categoryLabel && <span className="rounded-full bg-ink/[0.05] px-2 py-1 font-mono text-[9px] tracking-wider text-ink-fade">{skill.categoryLabel}</span>}
-                {skill.compatibility && <span className="font-mono text-[9px] tracking-wider text-ink-fade">{t(`skillsMarket.compatibility.${skill.compatibility}`)}</span>}
-                {skill.custom && <span className="font-mono text-[9px] tracking-wider text-ink-fade">{t(skill.imported ? 'skillsMarket.imported' : 'skillsMarket.custom')}</span>}
-              </div>
-            </div>
-            <div>
-              <div className="font-hand text-[17px] leading-tight text-ink">{skill.name}</div>
-              {(skill.pluginName || skill.originalName) && <div className="mt-1 truncate font-mono text-[9px] tracking-wide text-ink-fade">{[skill.pluginName, skill.originalName].filter(Boolean).join(' · ')}</div>}
-              <div className="mt-1 text-sm leading-5 text-ink-soft">{skill.desc}</div>
-            </div>
-            <div className="flex flex-wrap gap-1 mt-auto">
-              {(skill.perms || []).map((permission) => <span key={permission} className="font-mono text-[9px] tracking-wider text-ink-fade">· {permission}</span>)}
-            </div>
-          </button>
+          </article>
         )
       })}
-      {skills.length === 0 && <div className="col-span-full text-center py-16 text-ink-fade text-sm">{t('skillsMarket.empty')}</div>}
+      {skills.length === 0 && <div className="col-span-full py-16 text-center text-sm text-ink-fade">{t('skillsMarket.empty')}</div>}
     </div>
   )
 }

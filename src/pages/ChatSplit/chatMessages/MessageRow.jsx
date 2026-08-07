@@ -25,8 +25,11 @@ export default function MessageRow({
   const artifactPreview = msg.role === 'assistant' && (msg.meta?.artifactSource || msg.content)
     ? buildArtifactPreview({ content: msg.meta?.artifactSource || msg.content, meta: msg.meta || {} })
     : null
-  const isMessageComplete = !isGenerating && !msg.meta?.streaming
   const isCurrentStreamingMessage = msg.id === generatingMessageId || !!msg.meta?.streaming
+  // A new turn must not make completed artifact messages look "streaming" again.
+  // Their collapsed source/link presentation is part of the message itself, not
+  // global chat generation state.
+  const isMessageComplete = !isCurrentStreamingMessage
   const showArtifactPreview = !!artifactPreview && isMessageComplete
   const collapseArtifact = showArtifactPreview && shouldCollapseArtifactPreview(artifactPreview, {
     content: msg.content,
@@ -57,16 +60,18 @@ export default function MessageRow({
             <span>{t('chatMessages.reasoningActive')}</span>
           </div>
         )}
-        {msg.role === 'assistant' && collapseArtifact && Array.isArray(msg.meta?.toolCalls) && msg.meta.toolCalls.length > 0 && (
-          <ToolCallTrace calls={msg.meta.toolCalls} />
-        )}
         {msg.role === 'assistant' ? (
           collapseArtifact ? (
-            <ArtifactReferenceLinks msg={msg} preview={artifactPreview} onOpen={openArtifact} />
+            <CollapsedArtifactContent
+              artifactPreview={artifactPreview}
+              msg={msg}
+              onOpenArtifact={openArtifact}
+              t={t}
+            />
           ) : (
             <AssistantContent
               artifactPreview={artifactPreview}
-              isGenerating={isGenerating}
+              isCurrentStreamingMessage={isCurrentStreamingMessage}
               isMessageComplete={isMessageComplete}
               msg={msg}
               onOpenArtifact={openArtifact}
@@ -105,7 +110,7 @@ export default function MessageRow({
   )
 }
 
-function AssistantContent({ artifactPreview, isGenerating, isMessageComplete, msg, onOpenArtifact, showArtifactPreview }) {
+function AssistantContent({ artifactPreview, isCurrentStreamingMessage, isMessageComplete, msg, onOpenArtifact, showArtifactPreview }) {
   return (
     <>
       <div data-quotable="true">
@@ -113,7 +118,7 @@ function AssistantContent({ artifactPreview, isGenerating, isMessageComplete, ms
         {buildMessageTimeline(stripChoices(msg.content), msg.meta?.toolCalls).map((segment, index) => (
           segment.kind === 'tools'
             ? <ToolCallTrace key={`tool-${index}`} calls={segment.calls} />
-            : <MarkdownRenderer key={`text-${index}`} streaming={isGenerating || !!msg.meta?.streaming}>{segment.text}</MarkdownRenderer>
+            : <MarkdownRenderer key={`text-${index}`} streaming={isCurrentStreamingMessage}>{segment.text}</MarkdownRenderer>
         ))}
       </div>
       {msg.meta?.streaming && <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-ember/80 align-middle" aria-hidden="true" />}
@@ -128,6 +133,21 @@ function AssistantContent({ artifactPreview, isGenerating, isMessageComplete, ms
       {isMessageComplete && (showArtifactPreview || msg.meta?.serverArtifacts?.length > 0) && (
         <ArtifactReferenceLinks msg={msg} preview={artifactPreview} onOpen={onOpenArtifact} />
       )}
+    </>
+  )
+}
+
+function CollapsedArtifactContent({ artifactPreview, msg, onOpenArtifact, t }) {
+  return (
+    <>
+      <div className="chat-assistant-message text-[15px] leading-7" data-quotable="true">
+        <ReasoningTrace text={msg.meta?.reasoning || ''} streaming={false} />
+        {Array.isArray(msg.meta?.toolCalls) && msg.meta.toolCalls.length > 0 && (
+          <ToolCallTrace calls={msg.meta.toolCalls} />
+        )}
+        <p>{t('chat.serverTurn.completed')}</p>
+      </div>
+      <ArtifactReferenceLinks msg={msg} preview={artifactPreview} onOpen={onOpenArtifact} />
     </>
   )
 }

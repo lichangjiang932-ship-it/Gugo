@@ -5,6 +5,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import { ArtifactReferenceLinks } from '../src/pages/ChatSplit/chatMessages/ArtifactCards.jsx'
+import MessageRow from '../src/pages/ChatSplit/chatMessages/MessageRow.jsx'
 
 function setupDom() {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { url: 'http://localhost/' })
@@ -37,6 +38,43 @@ test('generated file names render as highlighted links and open the right-pane p
     assert.match(link.className, /bg-ember-soft/)
     await act(async () => link.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
     assert.equal(opened[0].preview.filename, 'calculator.html')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('a completed artifact keeps its narration and file link while a later reply is generating', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const msg = {
+    id: 'completed-artifact-message',
+    role: 'assistant',
+    content: '<!doctype html><html><body><h1>Calculator source</h1></body></html>',
+    timestamp: Date.now(),
+    meta: {
+      streaming: false,
+      serverArtifacts: [{ id: 'file-1', filename: 'calculator.html', type: 'html', url: '/api/artifacts/file-1' }],
+    },
+  }
+  const t = (key) => key === 'chat.serverTurn.completed' ? '已完成' : key
+
+  try {
+    await act(async () => root.render(
+      <MessageRow
+        msg={msg}
+        rowKey={msg.id}
+        generatingMessageId="newer-assistant-message"
+        isGenerating
+        lang="zh"
+        t={t}
+      />,
+    ))
+    assert.match(rootElement.textContent, /已完成/)
+    assert.match(rootElement.textContent, /calculator\.html/)
+    assert.doesNotMatch(rootElement.textContent, /Calculator source/)
+    assert.ok(rootElement.querySelector('[data-testid="artifact-open-card"]'))
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

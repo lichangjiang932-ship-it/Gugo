@@ -19,6 +19,17 @@ function replaceSession(state, sessionId, update) {
 
 function testReducer(state, action) {
   const activeId = state.activeSessionId
+  if (action.type === 'SWITCH_SESSION') {
+    return { ...state, activeSessionId: action.payload }
+  }
+  if (action.type === 'APPLY_SERVER_SESSION_SNAPSHOT') {
+    const { sessionId, snapshot } = action.payload
+    return replaceSession(state, sessionId, (session) => (
+      snapshot.revision < (Number(session.serverRevision) || 0)
+        ? session
+        : { ...session, messages: snapshot.messages, serverRevision: snapshot.revision }
+    ))
+  }
   if (action.type === 'CLEAR_CURRENT_SESSION') {
     return replaceSession(state, activeId, (session) => ({ ...session, messages: [] }))
   }
@@ -160,6 +171,116 @@ test('server snapshots replace canonical text while retaining local rendering me
   assert.equal(merged[0].meta.serverTurnId, 'turn-1')
   assert.equal(merged[0].meta.streaming, false)
   assert.equal(merged[0].meta.serverAuthoritative, true)
+})
+
+test('an empty completion snapshot cannot erase assistant text already received from the stream', () => {
+  const [merged] = mergeServerSessionMessages(
+    [{ id: 'assistant-1', role: 'assistant', content: 'Done. Your file is ready.', meta: { streaming: true } }],
+    [{ id: 'assistant-1', role: 'assistant', content: '', meta: { streaming: false, serverAuthoritative: true } }],
+  )
+
+  assert.equal(merged.content, 'Done. Your file is ready.')
+  assert.equal(merged.meta.streaming, false)
+})
+
+test('selecting an empty server-backed session hydrates its transcript once per revision', async () => {
+  let state = {
+    activeSessionId: null,
+    sessions: [{ id: 's1', serverRevision: 7, messages: [] }],
+  }
+  let finishSnapshot
+  let snapshotRequests = 0
+  const pendingSnapshot = new Promise((resolve) => { finishSnapshot = resolve })
+  const dispatch = createSessionMutationDispatcher({
+    getState: () => state,
+    reduceState: testReducer,
+    dispatchImmediate: (action) => { state = testReducer(state, action) },
+    applyServerAction: (action) => { state = testReducer(state, action) },
+    fetchSessionSnapshot: async () => {
+      snapshotRequests += 1
+      return pendingSnapshot
+    },
+    replaceMessages: async () => ({ revision: 8 }),
+    deleteSession: async () => ({ ok: true }),
+  })
+
+  const first = dispatch({ type: 'SWITCH_SESSION', payload: 's1' })
+  const second = dispatch({ type: 'SWITCH_SESSION', payload: 's1' })
+  await new Promise((resolve) => setImmediate(resolve))
+
+  assert.equal(state.activeSessionId, 's1')
+  assert.equal(snapshotRequests, 1)
+  assert.deepEqual(state.sessions[0].messages, [])
+
+  finishSnapshot({
+    complete: true,
+    revision: 7,
+    messages: [{ id: 'm1', role: 'user', content: 'restored' }],
+  })
+  assert.deepEqual(await Promise.all([first, second]), [true, true])
+  assert.equal(state.sessions[0].messages[0].content, 'restored')
+
+  assert.equal(dispatch({ type: 'SWITCH_SESSION', payload: 's1' }), undefined)
+  assert.equal(snapshotRequests, 1)
+
+  state = replaceSession(state, 's1', (session) => ({ ...session, messages: [] }))
+  assert.equal(await dispatch({
+    type: 'HYDRATE_SERVER_SESSION',
+    payload: { sessionId: 's1', revision: 7 },
+  }), true)
+  assert.equal(snapshotRequests, 2)
+  assert.equal(state.sessions[0].messages[0].content, 'restored')
+})
+
+test('startup hydration restores the active transcript without dispatching a session switch', async () => {
+  let state = {
+    activeSessionId: 's1',
+    sessions: [{ id: 's1', serverRevision: 3, messages: [] }],
+  }
+  const immediateActions = []
+  const dispatch = createSessionMutationDispatcher({
+    getState: () => state,
+    reduceState: testReducer,
+    dispatchImmediate: (action) => {
+      immediateActions.push(action.type)
+      state = testReducer(state, action)
+    },
+    applyServerAction: (action) => { state = testReducer(state, action) },
+    fetchSessionSnapshot: async () => ({
+      complete: true,
+      revision: 3,
+      messages: [{ id: 'm1', role: 'assistant', content: 'ready on launch' }],
+    }),
+    replaceMessages: async () => ({ revision: 4 }),
+    deleteSession: async () => ({ ok: true }),
+  })
+
+  assert.equal(await dispatch({ type: 'HYDRATE_SERVER_SESSION', payload: 's1' }), true)
+  assert.deepEqual(immediateActions, [])
+  assert.equal(state.activeSessionId, 's1')
+  assert.equal(state.sessions[0].messages[0].content, 'ready on launch')
+})
+
+test('session selection does not request a server snapshot without authentication', () => {
+  let state = {
+    activeSessionId: null,
+    sessions: [{ id: 's1', serverRevision: 2, messages: [] }],
+  }
+  let snapshotRequests = 0
+  const dispatch = createSessionMutationDispatcher({
+    getState: () => state,
+    reduceState: testReducer,
+    dispatchImmediate: (action) => { state = testReducer(state, action) },
+    applyServerAction: (action) => { state = testReducer(state, action) },
+    canFetchSessionSnapshot: () => false,
+    fetchSessionSnapshot: async () => { snapshotRequests += 1; return null },
+    replaceMessages: async () => ({ revision: 3 }),
+    deleteSession: async () => ({ ok: true }),
+  })
+
+  assert.equal(dispatch({ type: 'SWITCH_SESSION', payload: 's1' }), undefined)
+  assert.equal(state.activeSessionId, 's1')
+  assert.equal(snapshotRequests, 0)
 })
 
 test('a lagging server snapshot cannot erase optimistic messages from the active turn', () => {

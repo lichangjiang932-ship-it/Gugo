@@ -133,4 +133,5 @@ test('skill details explain invocation and runtime requirements in every UI lang
     '需要 MCP 服务',
     '需要额外运行资源：references',
   ])
+  assert.deepEqual(describeSkillRequirements({ compatibility: 'needs-runtime' }, 'zh'), ['需要额外运行资源'])
 })

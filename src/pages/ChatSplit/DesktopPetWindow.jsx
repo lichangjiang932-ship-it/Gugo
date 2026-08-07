@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { readDesktopPetPreferences } from '../../lib/desktopPetPreferences.js'
 import { useT } from '../../i18n/I18nProvider.jsx'
 import { resolveDesktopPetLayout } from '../../../shared/desktopPetLayout.js'
@@ -11,6 +11,14 @@ const FRAME_INTERVAL_MS = 110
 const DRAG_THRESHOLD = 5
 const INTERACTION_ROWS = [3, 8, 2]
 const INTERACTION_DURATION_MS = 1_100
+
+function sendDrag(phase, event = {}) {
+  window.gugoDesktop?.dragPetWindow?.({
+    phase,
+    screenX: Number(event?.screenX) || 0,
+    screenY: Number(event?.screenY) || 0,
+  })
+}
 
 export default function DesktopPetWindow() {
   const { t } = useT()
@@ -89,20 +97,65 @@ export default function DesktopPetWindow() {
     reactionTimerRef.current = window.setTimeout(() => setReactionRow(null), INTERACTION_DURATION_MS)
   }
 
-  const sendDrag = (phase, event) => window.gugoDesktop?.dragPetWindow?.({
-    phase,
-    screenX: event.screenX,
-    screenY: event.screenY,
-  })
+  const finishActiveDrag = useCallback((event, { cancelled = false, releaseCapture = true } = {}) => {
+    const drag = dragRef.current
+    if (!drag) return false
+    const pointerId = Number(event?.pointerId)
+    if (Number.isFinite(pointerId) && pointerId !== drag.pointerId) return false
+
+    // Clear first: releasePointerCapture may synchronously emit lostpointercapture.
+    dragRef.current = null
+    if (releaseCapture && drag.captured) {
+      try {
+        const stillCaptured = typeof drag.target?.hasPointerCapture !== 'function'
+          || drag.target.hasPointerCapture(drag.pointerId)
+        if (stillCaptured) drag.target?.releasePointerCapture?.(drag.pointerId)
+      } catch { /* the capture was already released by Chromium */ }
+    }
+    suppressClickRef.current = !cancelled && drag.moved
+    sendDrag('end', event)
+    return true
+  }, [])
+
+  useEffect(() => {
+    const finishPointer = (event) => finishActiveDrag(event, { cancelled: event.type !== 'pointerup' })
+    const finishMouse = (event) => finishActiveDrag(event, { cancelled: false })
+    const cancel = () => finishActiveDrag(null, { cancelled: true })
+    const cancelWhenHidden = () => {
+      if (document.visibilityState !== 'visible') cancel()
+    }
+    const root = document.documentElement
+    window.addEventListener('pointerup', finishPointer, true)
+    window.addEventListener('pointercancel', finishPointer, true)
+    window.addEventListener('mouseup', finishMouse, true)
+    window.addEventListener('blur', cancel)
+    window.addEventListener('pagehide', cancel)
+    root?.addEventListener('mouseleave', cancel)
+    document.addEventListener('visibilitychange', cancelWhenHidden)
+    const unsubscribeMain = window.gugoDesktop?.onPetDragCancel?.(cancel)
+    return () => {
+      window.removeEventListener('pointerup', finishPointer, true)
+      window.removeEventListener('pointercancel', finishPointer, true)
+      window.removeEventListener('mouseup', finishMouse, true)
+      window.removeEventListener('blur', cancel)
+      window.removeEventListener('pagehide', cancel)
+      root?.removeEventListener('mouseleave', cancel)
+      document.removeEventListener('visibilitychange', cancelWhenHidden)
+      unsubscribeMain?.()
+      cancel()
+    }
+  }, [finishActiveDrag])
 
   const handlePointerDown = (event) => {
     if (event.pointerType === 'mouse' && event.button !== 0) return
-    event.currentTarget.setPointerCapture?.(event.pointerId)
+    finishActiveDrag(null, { cancelled: true })
     dragRef.current = {
       pointerId: event.pointerId,
       startX: event.screenX,
       startY: event.screenY,
       moved: false,
+      captured: false,
+      target: event.currentTarget,
     }
     sendDrag('start', event)
   }
@@ -112,17 +165,19 @@ export default function DesktopPetWindow() {
     if (!drag || drag.pointerId !== event.pointerId) return
     const distance = Math.hypot(event.screenX - drag.startX, event.screenY - drag.startY)
     if (!drag.moved && distance < DRAG_THRESHOLD) return
-    drag.moved = true
+    if (!drag.moved) {
+      drag.moved = true
+      try {
+        drag.target?.setPointerCapture?.(drag.pointerId)
+        drag.captured = typeof drag.target?.hasPointerCapture !== 'function'
+          || drag.target.hasPointerCapture(drag.pointerId)
+      } catch { /* dragging remains usable without OS pointer capture */ }
+    }
     sendDrag('move', event)
   }
 
   const finishPointer = (event) => {
-    const drag = dragRef.current
-    if (!drag || drag.pointerId !== event.pointerId) return
-    event.currentTarget.releasePointerCapture?.(event.pointerId)
-    suppressClickRef.current = drag.moved
-    sendDrag('end', event)
-    dragRef.current = null
+    finishActiveDrag(event, { cancelled: event.type !== 'pointerup' })
   }
 
   const handleClick = (event) => {
@@ -138,6 +193,12 @@ export default function DesktopPetWindow() {
     if (!['Enter', ' '].includes(event.key)) return
     event.preventDefault()
     playInteraction()
+  }
+
+  const handleContextMenu = (event) => {
+    event.preventDefault()
+    finishActiveDrag(null, { cancelled: true })
+    window.gugoDesktop?.showPetMenu?.().catch?.(() => {})
   }
 
   const statusLabel = kind === 'tool'
@@ -158,6 +219,9 @@ export default function DesktopPetWindow() {
       onPointerMove={handlePointerMove}
       onPointerUp={finishPointer}
       onPointerCancel={finishPointer}
+      onPointerLeave={(event) => finishActiveDrag(event, { cancelled: true })}
+      onLostPointerCapture={(event) => finishActiveDrag(event, { cancelled: true, releaseCapture: false })}
+      onContextMenu={handleContextMenu}
     >
       {preferences.customImage ? (
         <img
