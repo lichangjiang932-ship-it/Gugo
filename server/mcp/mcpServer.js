@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module'
 import { readJson } from '../utils.js'
 import { authenticateRequest } from '../middleware.js'
 import { checkRateLimit } from '../db.js'
@@ -30,6 +31,7 @@ import {
 } from '../adapters/browserAutomation.js'
 
 const PROTOCOL_VERSION = '2025-03-26'
+const PACKAGE_VERSION = createRequire(import.meta.url)('../../package.json').version
 const JSON_HEADERS = {
   'Content-Type': 'application/json; charset=utf-8',
   'MCP-Protocol-Version': PROTOCOL_VERSION,
@@ -248,7 +250,7 @@ async function dispatch(userId, message) {
     return rpcResult(id, {
       protocolVersion: PROTOCOL_VERSION,
       capabilities: { tools: { listChanged: false } },
-        serverInfo: { name: 'Gugo', version: '0.10.5' },
+      serverInfo: { name: 'Gugo', version: PACKAGE_VERSION },
       instructions: 'Use yma_chat for the configured model and browser_* tools for isolated browser automation.',
     })
   }

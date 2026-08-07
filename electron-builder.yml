@@ -14,6 +14,7 @@ files:
   - plugins/**/*
   - skill-packs/**/*
   - src/data.js
+  - src/data/**/*
   - src/lib/pptCore.js
   - src/lib/presentationPlanner.js
   - desktop/main.js

@@ -15,18 +15,40 @@ export function stripEmbeddedReasoning(value) {
   return text
 }
 
-function textFromContent(value) {
+export function extractModelContentText(value) {
   if (typeof value === 'string') return value
   if (Array.isArray(value)) {
-    return value.map((item) => textFromContent(item)).filter(Boolean).join('')
+    return value.map((item) => extractModelContentText(item)).filter(Boolean).join('')
   }
   if (!value || typeof value !== 'object') return ''
   if (typeof value.text === 'string') return value.text
   if (typeof value.value === 'string') return value.value
   if (typeof value.content === 'string' || Array.isArray(value.content)) {
-    return textFromContent(value.content)
+    return extractModelContentText(value.content)
   }
   return ''
+}
+
+/**
+ * Some OpenAI-compatible servers report request failures inside an HTTP 200
+ * JSON/SSE payload. Surface that upstream error instead of later misreporting
+ * the response as an empty successful completion.
+ */
+export function extractModelResponseError(data) {
+  if (!data || typeof data !== 'object') return null
+  const raw = data.error ?? (data.type === 'error' ? data : null)
+  if (!raw) return null
+  const detail = raw && typeof raw === 'object' ? raw : {}
+  const message = typeof raw === 'string'
+    ? raw
+    : detail.message || detail.error?.message || data.message || 'Model provider returned an error.'
+  const error = new Error(String(message))
+  error.code = detail.code || data.code || 'MODEL_UPSTREAM_ERROR'
+  error.type = detail.type || data.type || ''
+  const status = Number(detail.status ?? detail.status_code ?? data.status ?? data.status_code)
+  if (Number.isFinite(status) && status >= 400) error.status = status
+  error.fromUpstream = true
+  return error
 }
 
 /**
@@ -51,13 +73,15 @@ export function extractModelResponseText(data) {
     data?.raw,
   ]
   for (const candidate of candidates) {
-    const text = textFromContent(candidate)
+    const text = extractModelContentText(candidate)
     if (text) return text
   }
   return ''
 }
 
 export function parseOpenAICompatibleResponse(data) {
+  const responseError = extractModelResponseError(data)
+  if (responseError) throw responseError
   const reply = extractModelResponseText(data)
   if (!reply) throw new Error('模型返回为空，请检查模型名称或端点响应格式。')
   return stripEmbeddedReasoning(reply)
@@ -82,6 +106,8 @@ export function extractUsage(data) {
 }
 
 export function parseModelProviderResponse(data, profile = {}) {
+  const responseError = extractModelResponseError(data)
+  if (responseError) throw responseError
   if (isNativeProviderKind(profile.kind)) {
     const parsed = parseNativeProviderResponse(data, profile.kind)
     return { ...parsed, content: stripEmbeddedReasoning(parsed?.content) }

@@ -25,6 +25,27 @@ import {
 } from '../server/adapters/modelProxy.js'
 import { bindSseClientDisconnect } from '../server/adapters/sseLifecycle.js'
 
+function streamedResponse(chunks, contentType = 'text/event-stream') {
+  const encoder = new TextEncoder()
+  const body = new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk))
+      controller.close()
+    },
+  })
+  return new Response(body, { status: 200, headers: { 'content-type': contentType } })
+}
+
+async function collectCompatibleStream(chunks, contentType) {
+  const events = []
+  for await (const event of streamOpenAICompatible({
+    config: { baseUrl: 'https://example.test/v1', apiKey: 'x', modelName: 'test' },
+    messages: [{ role: 'user', content: 'ping' }],
+    fetchImpl: async () => streamedResponse(chunks, contentType),
+  })) events.push(event)
+  return events
+}
+
 test('SSE 只在真正断连时取消上游,正常 req.close 不误杀本地推理', () => {
   const req = new EventEmitter()
   const res = new EventEmitter()
@@ -96,6 +117,61 @@ test('stream parser accepts SSE data fields without a space after the colon', as
 
   assert.equal(events[0].type, 'text')
   assert.equal(events[0].delta, 'pong')
+  assert.equal(events.at(-1).type, 'finish')
+})
+
+test('stream parser surfaces provider error payloads returned inside HTTP 200 SSE', async () => {
+  const payload = JSON.stringify({
+    error: { message: 'Unable to generate parser for this template', code: 'template_error' },
+  })
+  await assert.rejects(
+    async () => collectCompatibleStream([`data: ${payload}\n\n`]),
+    (error) => {
+      assert.equal(error.message, 'Unable to generate parser for this template')
+      assert.equal(error.code, 'template_error')
+      assert.equal(error.fromUpstream, true)
+      return true
+    },
+  )
+})
+
+test('stream parser consumes a final SSE data frame without a trailing newline', async () => {
+  const payload = JSON.stringify({
+    choices: [{ delta: { content: 'tail reply' }, finish_reason: 'stop' }],
+  })
+  const events = await collectCompatibleStream([`data: ${payload}`])
+
+  assert.equal(events[0].type, 'text')
+  assert.equal(events[0].delta, 'tail reply')
+  assert.equal(events.at(-1).type, 'finish')
+  assert.equal(events.at(-1).finishReason, 'stop')
+})
+
+test('stream request falls back to non-stream parsing for an application/json response', async () => {
+  const payload = JSON.stringify({
+    choices: [{ message: { content: 'single JSON reply' }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: 4, completion_tokens: 3, total_tokens: 7 },
+  })
+  const events = await collectCompatibleStream([payload], 'application/json; charset=utf-8')
+
+  assert.deepEqual(events.map((event) => event.type), ['usage', 'text', 'finish'])
+  assert.equal(events[1].delta, 'single JSON reply')
+  assert.equal(events[2].finishReason, 'stop')
+  assert.equal(events[2].usage.totalTokens, 7)
+})
+
+test('stream parser flattens array delta content without leaking object coercion', async () => {
+  const payload = JSON.stringify({
+    choices: [{
+      delta: { content: [{ type: 'text', text: 'array' }, { type: 'output_text', text: ' reply' }] },
+      finish_reason: 'stop',
+    }],
+  })
+  const events = await collectCompatibleStream([`data: ${payload}\n\ndata: [DONE]\n\n`])
+
+  assert.equal(events[0].type, 'text')
+  assert.equal(events[0].delta, 'array reply')
+  assert.equal(typeof events[0].delta, 'string')
   assert.equal(events.at(-1).type, 'finish')
 })
 

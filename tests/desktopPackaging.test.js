@@ -23,6 +23,8 @@ test('NSIS package includes server runtime dependencies and updater metadata', (
   assert.match(config, /target:\s*nsis/)
   assert.match(config, /productName:\s*Gugo/)
   assert.match(config, /src\/data\.js/)
+  assert.match(config, /^\s*-\s+src\/data\/\*\*\/\*\s*$/m)
+  assert.equal(fs.existsSync(new URL('../src/data/skillCatalog.js', import.meta.url)), true)
   assert.match(config, /src\/lib\/pptCore\.js/)
   assert.match(config, /src\/lib\/presentationPlanner\.js/)
   assert.match(config, /npmRebuild:\s*false/)
@@ -35,6 +37,50 @@ test('NSIS package includes server runtime dependencies and updater metadata', (
   assert.match(main, /transferred:\s*Number\(progress\.transferred/)
   assert.match(main, /total:\s*Number\(progress\.total/)
   assert.doesNotMatch(main, /showMessageBox/)
+})
+
+test('desktop backend startup survives installer ENOENT races and child spawn errors', () => {
+  const main = read('desktop/main.js')
+  const start = main.indexOf('async function startBundledServer()')
+  const end = main.indexOf('async function resolveApplicationUrl()', start)
+  const startup = main.slice(start, end)
+  const pathGuard = startup.indexOf('await waitForDesktopRuntimeFiles(')
+  const spawnCall = startup.indexOf('spawn(')
+
+  assert.ok(start >= 0 && end > start, 'startBundledServer should remain inspectable')
+  assert.ok(pathGuard >= 0, 'installed runtime files must be checked before spawning')
+  assert.ok(spawnCall > pathGuard, 'spawn must run only after the installer replacement window closes')
+  assert.match(startup, /child\.on\('error',[\s\S]*spawnError\s*=\s*error/)
+  assert.match(startup, /if \(spawnError\)[\s\S]*spawnError\.code === 'ENOENT'[\s\S]*startInProcessBundledServer/)
+})
+
+test('desktop update stops the backend before handing control to NSIS', () => {
+  const main = read('desktop/main.js')
+  const start = main.indexOf("ipcMain.handle('desktop:install-update'")
+  const end = main.indexOf("ipcMain.handle('desktop:set-pet-visible'", start)
+  const handler = main.slice(start, end)
+  const stopBackend = handler.indexOf('await stopBackend()')
+  const allowQuit = handler.indexOf('allowQuit = true')
+  const install = handler.indexOf('autoUpdater.quitAndInstall(false, false)')
+
+  assert.ok(start >= 0 && end > start, 'desktop update handler should remain inspectable')
+  assert.match(handler, /async\s*\(event\)/)
+  assert.ok(stopBackend >= 0, 'the backend must be stopped explicitly')
+  assert.ok(allowQuit > stopBackend, 'quit bypass can only be enabled after backend shutdown')
+  assert.ok(install > allowQuit, 'NSIS can start only after shutdown state is committed')
+  assert.doesNotMatch(main, /quitAndInstall\(false,\s*true\)/)
+})
+
+test('desktop shuts down the in-process fallback server before quitting', () => {
+  const main = read('desktop/main.js')
+  const start = main.indexOf('async function stopBackend()')
+  const end = main.indexOf('if (hasSingleInstanceLock)', start)
+  const stop = main.slice(start, end)
+
+  assert.match(main, /backendServer\s*=\s*server/)
+  assert.match(stop, /const server = backendServer/)
+  assert.match(stop, /gracefulShutdown\(server, \{ exit: false \}\)/)
+  assert.match(main, /if \(allowQuit \|\| \(!backendProcess && !backendServer\)\) return/)
 })
 
 test('desktop pet uses an independent transparent always-on-top window', () => {

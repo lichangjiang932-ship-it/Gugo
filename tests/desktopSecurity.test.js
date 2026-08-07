@@ -12,6 +12,7 @@ import {
   resolveDesktopDataPaths,
   resolveDesktopPluginRoots,
   resolveDesktopPort,
+  waitForDesktopRuntimeFiles,
 } from '../desktop/runtime.js'
 
 test('desktop dev URL only accepts loopback HTTP origins', () => {
@@ -71,4 +72,50 @@ test('desktop plugin discovery only returns existing, de-duplicated roots', () =
     path.resolve('D:/destok/codex-plugins'),
     path.resolve('C:/Users/test/codex-plugins'),
   ])
+})
+
+test('desktop runtime tolerates a short installer file-replacement window', async () => {
+  const executablePath = 'D:/Apps/Gugo/Gugo.exe'
+  const entryPath = 'D:/Apps/Gugo/resources/app.asar/server/start.js'
+  const waited = []
+  let replacementFinished = false
+
+  await waitForDesktopRuntimeFiles({
+    executablePath,
+    entryPath,
+    existsSync: (candidate) => replacementFinished
+      && (candidate === executablePath || candidate === entryPath),
+    delays: [25, 50],
+    sleep: async (delay) => {
+      waited.push(delay)
+      replacementFinished = true
+    },
+  })
+
+  assert.deepEqual(waited, [25])
+})
+
+test('desktop runtime reports a recoverable ENOENT when installed files stay missing', async () => {
+  const executablePath = 'D:/Apps/Gugo/Gugo.exe'
+  const entryPath = 'D:/Apps/Gugo/resources/app.asar/server/start.js'
+  const waited = []
+
+  await assert.rejects(
+    waitForDesktopRuntimeFiles({
+      executablePath,
+      entryPath,
+      existsSync: () => false,
+      delays: [25, 50, 100],
+      sleep: async (delay) => { waited.push(delay) },
+    }),
+    (error) => {
+      assert.equal(error?.code, 'ENOENT')
+      assert.match(error?.message || '', /安装文件不完整/)
+      assert.match(error?.message || '', /重新安装或修复 Gugo/)
+      assert.deepEqual(error?.missingPaths, [executablePath, entryPath])
+      return true
+    },
+  )
+
+  assert.deepEqual(waited, [25, 50, 100])
 })

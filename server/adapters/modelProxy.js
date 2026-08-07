@@ -35,9 +35,16 @@ import {
   finishNativeProviderStream,
   isNativeProviderKind,
 } from './nativeModelProviders.js'
-import { extractUsage, parseModelProviderResponse, stripEmbeddedReasoning } from './modelProviderResponse.js'
+import {
+  extractModelContentText,
+  extractModelResponseError,
+  extractUsage,
+  parseModelProviderResponse,
+  stripEmbeddedReasoning,
+} from './modelProviderResponse.js'
 import { calculateModelCostUsd, getUsageStats, recordUsage } from './modelUsage.js'
 import { requestNonStreamingAsEvents } from './modelNonStreaming.js'
+import { readJsonModelResponseEvents, readModelSseLines } from './modelResponseStream.js'
 
 export { extractUsage, parseModelProviderResponse, parseOpenAICompatibleResponse, stripEmbeddedReasoning } from './modelProviderResponse.js'
 export { getUsageStats, recordUsage, resetUsageStats } from './modelUsage.js'
@@ -1218,11 +1225,12 @@ export async function* streamOpenAICompatible({
       throw error
     }
 
+    const jsonEvents = await readJsonModelResponseEvents(response, profile, { onFirstByte })
+    if (jsonEvents) { yield* jsonEvents; return }
+
     const reader = response.body?.getReader()
     if (!reader) throw new Error('无法读取流式响应')
 
-    const decoder = new TextDecoder()
-    let buffer = ''
     // ★ tool_call 增量合并:OpenAI 流式协议每个 chunk 给 tool_calls[i].function.arguments 的片段,需要按 index 累加
     const toolCallAcc = new Map() // index -> { id, name, arguments }
     const readyToolCallIndexes = new Set()
@@ -1238,24 +1246,10 @@ export async function* streamOpenAICompatible({
       return 60_000
     })()
     let lastUsage = null
-    let sawFirstChunk = false
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      // ★ 收到数据 = 上游活着。首个 chunk 之后切到 idle 计时,
-      // 之后每个 chunk 都重置它 —— 「慢但在吐字」永远不会被砍。
-      if (!sawFirstChunk) {
-        sawFirstChunk = true
-        if (typeof onFirstByte === 'function') {
-          try { onFirstByte() } catch { /* 观测失败不影响流本身 */ }
-        }
-      }
-      armTimer('idle', profile.timeouts.idleMs)
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
-      for (const line of lines) {
+    for await (const line of readModelSseLines(reader, {
+      onFirstByte,
+      onChunk: () => armTimer('idle', profile.timeouts.idleMs),
+    })) {
         const trimmed = line.trim()
         // The SSE spec permits both `data:value` and `data: value`. LM Studio,
         // llama.cpp and small compatibility proxies do not all choose the same
@@ -1286,6 +1280,8 @@ export async function* streamOpenAICompatible({
           // 只吞 JSON 解析失败。业务异常（尤其 REASONING_RUNAWAY）必须向外传播。
           continue
         }
+          const responseError = extractModelResponseError(chunk)
+          if (responseError) throw responseError
           if (nativeStreamState) {
             const nativeEvents = consumeNativeProviderStreamPayload(chunk, nativeStreamState)
             for (const event of nativeEvents) {
@@ -1348,7 +1344,9 @@ export async function* streamOpenAICompatible({
             yield { type: 'reasoning', delta: reasoning }
           }
           // 文本增量
-          const text = delta.content || choice.text || ''
+          const text = extractModelContentText(delta.content)
+            || extractModelContentText(choice.text)
+            || extractModelContentText(choice.message?.content)
           if (text) yield { type: 'text', delta: text }
           // 工具调用增量
           if (Array.isArray(delta.tool_calls)) {
@@ -1372,7 +1370,6 @@ export async function* streamOpenAICompatible({
               }
             }
           }
-      }
     }
     if (nativeStreamState) {
       for (const event of finishNativeProviderStream(nativeStreamState)) yield event

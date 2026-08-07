@@ -7,6 +7,7 @@ import test from 'node:test'
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-mcp-server-'))
 process.env.APP_DB_PATH = path.join(dir, 'app.db')
+const packageVersion = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
 
 const { closeDb, createUser } = await import('../server/db.js')
 const { createMobileKey } = await import('../server/services/mobileAccessKeyStore.js')
@@ -44,6 +45,7 @@ test('streamable HTTP MCP server initializes and lists tools with an access key'
   assert.equal(initialized.status, 200)
   const initBody = await initialized.json()
   assert.equal(initBody.result.serverInfo.name, 'Gugo')
+  assert.equal(initBody.result.serverInfo.version, packageVersion)
   assert.equal(initBody.result.protocolVersion, '2025-03-26')
 
   const listed = await fetch(baseUrl, {

@@ -35,6 +35,7 @@ server-data/
 !.env.example
 .tmp/
 .npm-cache/
+/.electron-builder-cache/
 
 # Runtime/user content and local reports. Keep these root-scoped so test
 # fixtures in nested source directories can still be committed deliberately.

@@ -2,6 +2,41 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 export const DEFAULT_DESKTOP_PORT = 5180
+export const DESKTOP_RUNTIME_RETRY_DELAYS_MS = Object.freeze([250, 500, 1_000])
+
+const sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs))
+
+/**
+ * electron-updater may briefly replace the installed executable while NSIS is
+ * completing an update. Treat that window as recoverable, but fail with a
+ * user-facing error when the executable or bundled server really is missing.
+ */
+export async function waitForDesktopRuntimeFiles({
+  executablePath,
+  entryPath,
+  existsSync = fs.existsSync,
+  delays = DESKTOP_RUNTIME_RETRY_DELAYS_MS,
+  sleep: wait = sleep,
+} = {}) {
+  const required = [
+    ['executable', executablePath],
+    ['server entry', entryPath],
+  ].filter(([, candidate]) => typeof candidate === 'string' && candidate.trim())
+
+  let missing = []
+  for (let attempt = 0; attempt <= delays.length; attempt += 1) {
+    missing = required.filter(([, candidate]) => !existsSync(candidate))
+    if (missing.length === 0) return { executablePath, entryPath }
+    if (attempt === delays.length) break
+    await wait(Math.max(0, Number(delays[attempt]) || 0))
+  }
+
+  const missingPaths = missing.map(([, candidate]) => candidate)
+  const error = new Error(`Gugo 安装文件不完整，缺少：${missingPaths.join('；')}。请重新安装或修复 Gugo。`)
+  error.code = 'ENOENT'
+  error.missingPaths = missingPaths
+  throw error
+}
 
 export function resolveDesktopPort(value) {
   const port = Number(value ?? DEFAULT_DESKTOP_PORT)

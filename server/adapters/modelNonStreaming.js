@@ -1,5 +1,24 @@
 import { parseModelProviderResponse } from './modelProviderResponse.js'
 
+export function* modelProviderResponseEvents(data, profile) {
+  const parsed = parseModelProviderResponse(data, profile)
+  if (parsed.usage) yield { type: 'usage', usage: parsed.usage }
+  if (parsed.content) yield { type: 'text', delta: parsed.content }
+  if (parsed.toolCalls.length) {
+    for (const [index, toolCall] of parsed.toolCalls.entries()) {
+      yield { type: 'tool_call_ready', toolCall, index }
+    }
+    yield {
+      type: 'tool_calls',
+      toolCalls: parsed.toolCalls,
+      finishReason: parsed.finishReason || 'tool_calls',
+      usage: parsed.usage,
+    }
+    return
+  }
+  yield { type: 'finish', finishReason: parsed.finishReason || 'stop', usage: parsed.usage }
+}
+
 async function fetchTextWithTimeout(fetchImpl, url, init, {
   timeoutMs,
   externalSignal,
@@ -90,20 +109,5 @@ export async function* requestNonStreamingAsEvents({
     throw error
   }
 
-  const parsed = parseModelProviderResponse(data, profile)
-  if (parsed.usage) yield { type: 'usage', usage: parsed.usage }
-  if (parsed.content) yield { type: 'text', delta: parsed.content }
-  if (parsed.toolCalls.length) {
-    for (const [index, toolCall] of parsed.toolCalls.entries()) {
-      yield { type: 'tool_call_ready', toolCall, index }
-    }
-    yield {
-      type: 'tool_calls',
-      toolCalls: parsed.toolCalls,
-      finishReason: parsed.finishReason || 'tool_calls',
-      usage: parsed.usage,
-    }
-    return
-  }
-  yield { type: 'finish', finishReason: parsed.finishReason || 'stop', usage: parsed.usage }
+  yield* modelProviderResponseEvents(data, profile)
 }

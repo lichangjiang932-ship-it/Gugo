@@ -14,6 +14,7 @@ import {
   resolveDesktopDataPaths,
   resolveDesktopPluginRoots,
   resolveDesktopPort,
+  waitForDesktopRuntimeFiles,
 } from './runtime.js'
 
 const { autoUpdater } = updaterPackage
@@ -24,6 +25,7 @@ const UPDATE_INTERVAL_MS = 15 * 60 * 1000
 let mainWindow = null
 let petWindow = null
 let backendProcess = null
+let backendServer = null
 let applicationOrigin = null
 let updateReady = false
 let allowQuit = false
@@ -102,20 +104,81 @@ function configureDesktopRuntime() {
   return port
 }
 
+async function startInProcessBundledServer(origin, startupCause) {
+  console.warn('[desktop] child server unavailable; using in-process fallback:', startupCause?.message)
+  const { applyRuntimeConfig } = await import('../server/utils/runtimeEnv.js')
+  applyRuntimeConfig()
+  const { startAppServer } = await import('../server/appServer.js')
+  const server = startAppServer()
+  if (!server) {
+    throw new Error('Gugo 应用服务无法启动，请重新安装或修复 Gugo。', { cause: startupCause })
+  }
+
+  backendServer = server
+  let serverError = null
+  const rememberServerError = (error) => { serverError = error }
+  server.on('error', rememberServerError)
+
+  try {
+    const deadline = Date.now() + 60_000
+    while (Date.now() < deadline) {
+      if (serverError) throw serverError
+      try {
+        const response = await fetch(`${origin}/api/health`, { signal: AbortSignal.timeout(1_500) })
+        if (response.ok) {
+          server.off('error', rememberServerError)
+          return origin
+        }
+      } catch (error) {
+        if (serverError) throw serverError
+        if (error?.name !== 'TimeoutError' && error?.name !== 'TypeError') throw error
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200))
+    }
+    throw new Error('Gugo 应用服务启动超时。')
+  } catch (error) {
+    server.off('error', rememberServerError)
+    if (backendServer === server) backendServer = null
+    try {
+      const { gracefulShutdown } = await import('../server/core/lifecycle.js')
+      await gracefulShutdown(server, { exit: false })
+    } catch { /* preserve the original startup error */ }
+    throw error
+  }
+}
+
 async function startBundledServer() {
   const port = configureDesktopRuntime()
   const origin = `http://127.0.0.1:${port}`
-  const entry = path.join(app.getAppPath(), 'server', 'start.js')
+  const appPath = app.getAppPath()
+  const entry = path.join(appPath, 'server', 'start.js')
+  try {
+    await waitForDesktopRuntimeFiles({ executablePath: process.execPath, entryPath: entry })
+  } catch (error) {
+    const entryMissing = error?.missingPaths?.includes(entry)
+    if (error?.code === 'ENOENT' && !entryMissing) return startInProcessBundledServer(origin, error)
+    throw error
+  }
   const child = spawn(process.execPath, [entry], {
-    cwd: app.getAppPath(),
+    cwd: appPath,
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   backendProcess = child
   let startupError = ''
+  let spawnError = null
   child.stderr?.on('data', (chunk) => {
     startupError = `${startupError}${String(chunk)}`.slice(-4_000)
+  })
+  // Spawn failures are emitted asynchronously. Keeping a listener attached
+  // prevents updater ENOENT races from becoming uncaught Electron errors.
+  child.on('error', (error) => {
+    spawnError = error
+    if (backendProcess === child) backendProcess = null
+    if (applicationOrigin) {
+      sendUpdateStatus('backend-error', { message: error?.message || '本地服务启动失败' })
+    }
   })
   child.once('exit', (code, signal) => {
     if (backendProcess === child) backendProcess = null
@@ -126,6 +189,10 @@ async function startBundledServer() {
 
   const deadline = Date.now() + 60_000
   while (Date.now() < deadline) {
+    if (spawnError) {
+      if (spawnError.code === 'ENOENT') return startInProcessBundledServer(origin, spawnError)
+      throw spawnError
+    }
     if (child.exitCode !== null) {
       throw new Error(startupError.trim() || `应用服务启动失败（退出码 ${child.exitCode}）`)
     }
@@ -135,7 +202,7 @@ async function startBundledServer() {
     } catch { /* server is still starting */ }
     await new Promise((resolve) => setTimeout(resolve, 200))
   }
-  child.kill()
+  if (child.exitCode === null && !spawnError) child.kill()
   throw new Error('应用服务启动超时。')
 }
 
@@ -261,12 +328,25 @@ function registerDesktopIpc() {
     await autoUpdater.checkForUpdates()
     return { supported: true }
   })
-  ipcMain.handle('desktop:install-update', (event) => {
+  ipcMain.handle('desktop:install-update', async (event) => {
     assertTrustedIpc(event)
     if (!updateReady) return { ready: false }
     sendUpdateStatus('installing')
-    allowQuit = true
-    setImmediate(() => autoUpdater.quitAndInstall(false, true))
+    try {
+      await stopBackend()
+      allowQuit = true
+      setImmediate(() => {
+        try {
+          autoUpdater.quitAndInstall(false, false)
+        } catch (error) {
+          allowQuit = false
+          sendUpdateStatus('error', { message: error?.message || '更新安装失败' })
+        }
+      })
+    } catch (error) {
+      sendUpdateStatus('error', { message: error?.message || '无法停止本地服务' })
+      return { ready: false, error: error?.message || 'backend shutdown failed' }
+    }
     return { ready: true }
   })
   ipcMain.handle('desktop:set-pet-visible', (event, visible) => {
@@ -330,14 +410,23 @@ async function launch() {
 
 async function stopBackend() {
   const child = backendProcess
+  const server = backendServer
   backendProcess = null
-  if (!child || child.exitCode !== null) return
-  child.kill('SIGTERM')
-  await Promise.race([
-    once(child, 'exit'),
-    new Promise((resolve) => setTimeout(resolve, 5_000)),
-  ])
-  if (child.exitCode === null) child.kill('SIGKILL')
+  backendServer = null
+
+  if (child && child.exitCode === null) {
+    child.kill('SIGTERM')
+    await Promise.race([
+      once(child, 'exit').catch(() => {}),
+      new Promise((resolve) => setTimeout(resolve, 5_000)),
+    ])
+    if (child.exitCode === null) child.kill('SIGKILL')
+  }
+
+  if (server) {
+    const { gracefulShutdown } = await import('../server/core/lifecycle.js')
+    await gracefulShutdown(server, { exit: false })
+  }
 }
 
 if (hasSingleInstanceLock) {
@@ -367,7 +456,7 @@ if (hasSingleInstanceLock) {
   })
 
   app.on('before-quit', (event) => {
-    if (allowQuit || !backendProcess) return
+    if (allowQuit || (!backendProcess && !backendServer)) return
     event.preventDefault()
     if (!shutdownPromise) {
       shutdownPromise = stopBackend().finally(() => {
