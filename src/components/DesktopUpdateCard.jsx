@@ -9,7 +9,7 @@ function formatBytes(value) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
-export default function DesktopUpdateCard() {
+export default function DesktopUpdateCard({ compact = false }) {
   const { t } = useT()
   const [update, setUpdate] = useState(null)
 
@@ -29,6 +29,30 @@ export default function DesktopUpdateCard() {
   const installing = update.status === 'installing'
   const error = update.status === 'error'
   const passive = update.status === 'checking' || update.status === 'current'
+  const statusLabel = t(`desktopUpdate.${update.status}`)
+
+  if (compact) {
+    const icon = ready || installing
+      ? <RotateCw className={`h-3.5 w-3.5 ${installing ? 'animate-spin' : ''}`} />
+      : error
+        ? <RefreshCw className="h-3.5 w-3.5" />
+        : <Download className="h-3.5 w-3.5" />
+    const indicatorClass = passive
+      ? 'bg-ink/5 text-ink-soft'
+      : 'bg-ember/[0.12] text-ember ring-1 ring-ember/20'
+    const action = ready
+      ? () => window.gugoDesktop.installUpdate()
+      : error
+        ? () => window.gugoDesktop.checkForUpdates()
+        : null
+    return <section className="mb-1 flex justify-center" aria-live="polite" aria-atomic="true" data-desktop-update-notice="compact">
+      {action ? <button type="button" onClick={action} title={statusLabel} aria-label={statusLabel} className={`relative flex h-9 w-9 items-center justify-center rounded-lg ${indicatorClass}`}>
+        {icon}<span aria-hidden="true" className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-ember" />
+      </button> : <span role="status" title={statusLabel} aria-label={statusLabel} className={`relative flex h-9 w-9 items-center justify-center rounded-lg ${indicatorClass}`}>
+        {icon}{!passive && <span aria-hidden="true" className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-ember" />}
+      </span>}
+    </section>
+  }
 
   return (
     <section
@@ -42,7 +66,7 @@ export default function DesktopUpdateCard() {
           {ready || installing ? <RotateCw className={`h-3.5 w-3.5 ${installing ? 'animate-spin' : ''}`} /> : <Download className="h-3.5 w-3.5" />}
         </span>
         <div className="min-w-0 flex-1">
-          <div className={`text-xs font-semibold ${passive ? 'text-ink' : 'text-ember'}`}>{t(`desktopUpdate.${update.status}`)}</div>
+          <div className={`text-xs font-semibold ${passive ? 'text-ink' : 'text-ember'}`}>{statusLabel}</div>
           {update.version && <div className="mt-0.5 text-[10px] font-medium text-ink-soft">Gugo v{update.version}</div>}
         </div>
       </div>

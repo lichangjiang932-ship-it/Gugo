@@ -66,11 +66,13 @@ test('chat chrome stays focused on conversations and essential composer controls
   assert.doesNotMatch(rail, /groupSessionsByDay|formatSessionGroupDate|formatMessageTime/)
   assert.match(rail, /dispatch\(\{ type: 'START_NEW_DRAFT' \}\)/)
   assert.doesNotMatch(rail, /handleNewChat[\s\S]*?dispatch\(\{ type: 'NEW_SESSION'/)
+  const sessionMenuStart = sessions.indexOf('{isMenuOpen && <div')
+  assert.notEqual(sessionMenuStart, -1)
   const sessionRowBeforeMenu = sessions.slice(
-    sessions.indexOf('<div key={session.id ?? index}'),
-    sessions.indexOf('{openMenuId === session.id &&'),
+    sessions.indexOf('return <div'),
+    sessionMenuStart,
   )
-  const sessionMenu = sessions.slice(sessions.indexOf('{openMenuId === session.id &&'))
+  const sessionMenu = sessions.slice(sessionMenuStart)
   assert.doesNotMatch(sessionRowBeforeMenu, /DELETE_SESSION|<X className=/)
   assert.match(sessionMenu, /onDelete\(session\)/)
   assert.match(sessionMenu, /<X className=/)
@@ -113,6 +115,8 @@ test('skills open details before use and appearance offers a broader accent pale
   assert.match(skillDetail, /role="dialog"/)
   assert.match(skills, /onUse=\{market\.useSelectedSkill\}/)
   assert.match(skillGrid, /onClick=\{\(\) => onSelect\(skill\)\}/)
+  assert.match(skillGrid, /data-skill-action="details"/)
+  assert.doesNotMatch(skillGrid, /skill\.categoryLabel|skill\.compatibility|skill\.pluginName|skill\.perms/)
 
   const palette = settings.match(/const ACCENT_COLORS = \[([^\]]+)\]/)?.[1] || ''
   assert.ok((palette.match(/#[0-9A-Fa-f]{6}/g) || []).length >= 8)

@@ -34,6 +34,7 @@ function MenuHarness({ calls }) {
       sessions={sessions}
       activeSessionId="session-one"
       openMenuId={openMenuId}
+      onMenuOpen={setOpenMenuId}
       onMenuToggle={(id) => setOpenMenuId((current) => current === id ? null : id)}
       onMenuClose={() => setOpenMenuId(null)}
       onOpen={(id) => calls.opened.push(id)}
@@ -133,6 +134,53 @@ test('app escape event still dismisses an open session menu', async () => {
 
     await act(async () => window.dispatchEvent(new dom.window.CustomEvent('app:escape')))
     assert.equal(rootElement.querySelector('[data-testid="controller-menu-state"]').textContent, 'closed')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('right click opens the shared session menu at the pointer and Escape closes it', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const calls = { opened: [], archived: [], deleted: [] }
+
+  try {
+    await act(async () => root.render(<MenuHarness calls={calls} />))
+    await act(async () => {
+      findButton(rootElement, 'Session two').dispatchEvent(new dom.window.MouseEvent('contextmenu', {
+        bubbles: true,
+        clientX: 140,
+        clientY: 90,
+      }))
+    })
+
+    const menu = rootElement.querySelector('[role="menu"]')
+    assert.ok(menu)
+    assert.equal(menu.style.left, '140px')
+    assert.equal(menu.style.top, '90px')
+    assert.equal(menu.querySelector('[role="menuitem"]'), document.activeElement)
+    assert.equal(findButton(rootElement, 'Session two').hasAttribute('aria-haspopup'), false)
+
+    await act(async () => menu.dispatchEvent(new dom.window.KeyboardEvent('keydown', { bubbles: true, key: 'ArrowDown' })))
+    assert.match(document.activeElement.textContent, /nav\.deleteSession/)
+    await act(async () => menu.dispatchEvent(new dom.window.KeyboardEvent('keydown', { bubbles: true, key: 'Home' })))
+    assert.match(document.activeElement.textContent, /nav\.archiveSession/)
+
+    await act(async () => findButton(rootElement, 'nav.archiveSession').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.deepEqual(calls.archived, ['session-two'])
+
+    await act(async () => document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { bubbles: true, key: 'Escape' })))
+    assert.equal(rootElement.querySelector('[role="menu"]'), null)
+    assert.deepEqual(calls.opened, [])
+
+    await act(async () => findButton(rootElement, 'Session one').dispatchEvent(new dom.window.KeyboardEvent('keydown', {
+      bubbles: true,
+      key: 'F10',
+      shiftKey: true,
+    })))
+    assert.ok(rootElement.querySelector('[role="menu"]'))
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  buildArtifactReferenceIdentity,
   buildServerArtifactReferences,
   normalizeArtifactReferenceType,
 } from '../src/lib/artifactReferences.js'
@@ -33,4 +34,20 @@ test('unmatched generated files still produce a stable direct-file reference', (
   assert.equal(reference.type, 'zip')
   assert.equal(reference.previewArtifact, null)
   assert.equal(reference.id, '/api/artifacts/archive')
+})
+
+test('artifact identity stays stable across streamed preview and persisted server artifact objects', () => {
+  const streamedIdentity = buildArtifactReferenceIdentity({
+    filename: 'calculator.html',
+    messageId: 'message-1',
+    type: 'html',
+  })
+  const [persisted] = buildServerArtifactReferences({
+    artifacts: [{ id: 'server-file-9', filename: 'calculator.html', type: 'html', url: '/api/artifacts/server-file-9' }],
+    messageId: 'message-1',
+    preview: { type: 'html', filename: 'calculator.html' },
+  })
+
+  assert.equal(persisted.identity, streamedIdentity)
+  assert.equal(persisted.previewArtifact.artifactIdentity, streamedIdentity)
 })

@@ -94,6 +94,7 @@ test('desktop pet uses an independent transparent always-on-top window', () => {
   assert.match(main, /transparent:\s*true/)
   assert.match(main, /alwaysOnTop:\s*true/)
   assert.match(main, /skipTaskbar:\s*true/)
+  assert.match(main, /focusable:\s*false/)
   assert.match(main, /frame:\s*false/)
   assert.match(main, /setAlwaysOnTop\(true, 'floating'\)/)
   assert.match(main, /if \(!mainWindow && applicationOrigin\)/)
@@ -101,6 +102,13 @@ test('desktop pet uses an independent transparent always-on-top window', () => {
   assert.match(preload, /resizePetWindow/)
   assert.match(preload, /dragPetWindow/)
   assert.match(preload, /updatePetStatus/)
+  assert.match(preload, /showPetMenu/)
+  assert.match(preload, /onPetDragCancel/)
+  assert.match(main, /Menu\.buildFromTemplate/)
+  assert.match(main, /desktop:show-pet-menu/)
+  assert.match(main, /mainWindow\?\.webContents\.send\('desktop:pet-visibility', false\)/)
+  const hidePet = main.slice(main.indexOf('function hideDesktopPet()'), main.indexOf('function desktopPetCloseLabel'))
+  assert.doesNotMatch(hidePet, /app\.quit|mainWindow\?\.close|mainWindow\.close/)
 })
 
 test('desktop pet window hugs the visible sprite and scales with custom pets', () => {
@@ -144,6 +152,14 @@ test('desktop pet animation updates one sprite layer without full React repaint 
   assert.match(renderer, /sprite\.style\.backgroundPositionX/)
   assert.match(renderer, /playInteraction/)
   assert.match(renderer, /dragPetWindow/)
+  assert.match(renderer, /onLostPointerCapture/)
+  assert.match(renderer, /addEventListener\('blur', cancel\)/)
+  assert.match(renderer, /addEventListener\('mouseleave', cancel\)/)
+  assert.match(renderer, /onPetDragCancel/)
+  assert.ok(
+    renderer.indexOf('setPointerCapture') > renderer.indexOf('if (!drag.moved && distance < DRAG_THRESHOLD) return'),
+    'a simple click must not acquire OS-level pointer capture',
+  )
   assert.match(renderer, /data-reacting/)
   assert.doesNotMatch(renderer, /setFrame|pet-window-copy|pet-window-close/)
   assert.match(standaloneCss, /\.pet-window-root\s*\{[\s\S]*?padding:\s*0;/)
@@ -164,7 +180,7 @@ test('desktop update notice is the primary message directly above the account ca
   const rail = read('src/components/leftRail/AccountArea.jsx')
   const card = read('src/components/DesktopUpdateCard.jsx')
   const accountRegion = rail.indexOf('ref={accountMenuRef}')
-  const updateNotice = rail.indexOf('<DesktopUpdateCard />', accountRegion)
+  const updateNotice = rail.indexOf('<DesktopUpdateCard compact={compact} />', accountRegion)
   const accountButton = rail.indexOf('aria-expanded={accountMenuOpen}', accountRegion)
 
   assert.ok(accountRegion >= 0)

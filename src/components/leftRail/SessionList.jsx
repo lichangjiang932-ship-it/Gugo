@@ -1,42 +1,186 @@
-import { useEffect, useRef } from 'react'
-import { Archive, ArchiveRestore, MoreHorizontal, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Archive, ArchiveRestore, ChevronDown, MoreHorizontal, X } from 'lucide-react'
+import { groupSessions, timestampOf } from './sessionListUtils.js'
 
-export default function SessionList({ sessions, activeSessionId, openMenuId, onMenuToggle, onMenuClose, onOpen, onArchiveToggle, onDelete, t }) {
+const CONTEXT_MENU_WIDTH = 176
+const CONTEXT_MENU_HEIGHT = 82
+const VIEWPORT_MARGIN = 8
+const LOCALES = { zh: 'zh-CN', en: 'en-US', ja: 'ja-JP', ko: 'ko-KR', 'zh-TW': 'zh-TW' }
+
+function contextMenuPosition(event) {
+  const bounds = event.currentTarget.getBoundingClientRect()
+  const desiredLeft = event.clientX || bounds.left + 12
+  const desiredTop = event.clientY || bounds.top + 12
+  return {
+    left: Math.max(VIEWPORT_MARGIN, Math.min(desiredLeft, window.innerWidth - CONTEXT_MENU_WIDTH - VIEWPORT_MARGIN)),
+    top: Math.max(VIEWPORT_MARGIN, Math.min(desiredTop, window.innerHeight - CONTEXT_MENU_HEIGHT - VIEWPORT_MARGIN)),
+  }
+}
+
+function sessionMeta(session, isActive, lang, t, showDate = false) {
+  const time = timestampOf(session)
+  const parts = []
+  if (isActive) parts.push(t('nav.filterActive'))
+  const messageCount = Number(session?.totalMessages ?? session?.messages?.length ?? 0)
+  if (messageCount > 0) parts.push(t('history.messageCount', { count: messageCount }))
+  if (time) {
+    const date = new Date(time)
+    const options = showDate
+      ? { ...(date.getFullYear() === new Date().getFullYear() ? {} : { year: 'numeric' }), month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }
+      : { hour: '2-digit', minute: '2-digit', hour12: false }
+    parts.push(new Intl.DateTimeFormat(LOCALES[lang] || LOCALES.en, options).format(time))
+  }
+  return parts.join(' · ')
+}
+
+function moveMenuFocus(event) {
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+  const items = [...event.currentTarget.querySelectorAll('[role="menuitem"]:not(:disabled)')]
+  if (!items.length) return
+  event.preventDefault()
+  const current = items.indexOf(document.activeElement)
+  if (event.key === 'Home') items[0].focus()
+  else if (event.key === 'End') items.at(-1).focus()
+  else if (event.key === 'ArrowDown') items[(current + 1 + items.length) % items.length].focus()
+  else items[(current - 1 + items.length) % items.length].focus()
+}
+
+export default function SessionList({
+  sessions,
+  activeSessionId,
+  openMenuId,
+  onMenuOpen,
+  onMenuToggle,
+  onMenuClose,
+  onOpen,
+  onArchiveToggle,
+  onDelete,
+  lang = 'zh',
+  t,
+}) {
   const menuRef = useRef(null)
-  const menuTriggerRef = useRef(null)
+  const menuOriginRef = useRef(null)
+  const [contextMenu, setContextMenu] = useState(null)
+  const [expanded, setExpanded] = useState(true)
+  const grouped = useMemo(() => groupSessions(sessions), [sessions])
 
   useEffect(() => {
     if (openMenuId == null) return undefined
     const closeOutside = (event) => {
-      if (menuRef.current?.contains(event.target) || menuTriggerRef.current?.contains(event.target)) return
+      if (menuRef.current?.contains(event.target) || menuOriginRef.current?.contains(event.target)) return
       onMenuClose()
     }
+    const closeOnEscape = (event) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      onMenuClose()
+      menuOriginRef.current?.focus?.()
+    }
     document.addEventListener('pointerdown', closeOutside)
-    return () => document.removeEventListener('pointerdown', closeOutside)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOutside)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
   }, [onMenuClose, openMenuId])
 
-  if (!sessions.length) {
-    return <div className="px-3 py-8 text-center"><p className="text-xs text-ink-fade">{t('nav.emptyTitle')}</p><p className="mt-1 text-[10px] text-ink-ghost">{t('nav.emptyHint')}</p></div>
-  }
+  useEffect(() => {
+    if (openMenuId == null) return
+    menuRef.current?.querySelector('[role="menuitem"]')?.focus()
+  }, [openMenuId, contextMenu])
 
-  return <div className="flex flex-col gap-0.5">{sessions.map((session, index) => {
+  const renderSession = (session, index, showDate = false) => {
     const isActive = session.id === activeSessionId
-    return <div key={session.id ?? index} className="group relative flex items-center">
-      <button onClick={() => { onMenuClose(); onOpen(session.id) }} className={`flex h-8 min-w-0 flex-1 items-center rounded-md px-2 text-left text-[13px] transition-colors ${isActive ? 'bg-paper-2 text-ink' : 'text-ink-soft hover:bg-paper-2/60'}`}>
-        <span className="truncate">{session.title}</span>
+    const isMenuOpen = openMenuId === session.id
+    const contextPosition = contextMenu?.sessionId === session.id ? contextMenu : null
+    const menuId = `session-actions-${session.id}`
+    const metadata = sessionMeta(session, isActive, lang, t, showDate)
+    return <div
+      key={session.id ?? index}
+      className={`group relative flex min-h-12 items-stretch rounded-lg transition-colors ${isActive ? 'bg-ink/[0.065]' : 'hover:bg-ink/[0.04]'}`}
+      onContextMenu={(event) => {
+        if (menuRef.current?.contains(event.target)) return
+        event.preventDefault()
+        event.stopPropagation()
+        menuOriginRef.current = event.currentTarget.querySelector('[data-session-open]')
+        setContextMenu({ sessionId: session.id, ...contextMenuPosition(event) })
+        onMenuOpen(session.id)
+      }}
+    >
+      {isActive && <span aria-hidden="true" className="absolute inset-y-2 left-0 w-0.5 rounded-r-full bg-ember" />}
+      <button
+        type="button"
+        data-session-open
+        onClick={() => { onMenuClose(); onOpen(session.id) }}
+        onKeyDown={(event) => {
+          if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return
+          event.preventDefault()
+          event.stopPropagation()
+          menuOriginRef.current = event.currentTarget
+          setContextMenu({ sessionId: session.id, ...contextMenuPosition(event) })
+          onMenuOpen(session.id)
+        }}
+        aria-current={isActive ? 'page' : undefined}
+        aria-keyshortcuts="Shift+F10"
+        className="min-w-0 flex-1 rounded-lg py-1.5 pl-2.5 pr-8 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/25"
+      >
+        <span className={`block truncate text-[13px] leading-[18px] ${isActive ? 'font-medium text-ink' : 'text-ink-soft'}`}>{session.title}</span>
+        {metadata && <span className="mt-0.5 block truncate text-[10px] leading-4 text-ink-fade">{metadata}</span>}
       </button>
-      <button ref={openMenuId === session.id ? menuTriggerRef : null} onClick={(event) => { event.stopPropagation(); onMenuToggle(session.id) }} title={t('nav.sessionMenu')} className="absolute right-1 shrink-0 rounded p-1 text-ink-fade opacity-0 transition-opacity hover:bg-paper hover:text-ink group-hover:opacity-100">
-        <MoreHorizontal className="h-3 w-3" />
+      <button
+        type="button"
+        ref={isMenuOpen && !contextPosition ? menuOriginRef : null}
+        onClick={(event) => {
+          event.stopPropagation()
+          setContextMenu(null)
+          menuOriginRef.current = event.currentTarget
+          onMenuToggle(session.id)
+        }}
+        title={t('nav.sessionMenu')}
+        aria-label={t('nav.sessionMenu')}
+        aria-haspopup="menu"
+        aria-expanded={isMenuOpen}
+        aria-controls={isMenuOpen ? menuId : undefined}
+        className={`absolute right-1.5 top-2 rounded-md p-1 text-ink-fade transition-opacity hover:bg-paper hover:text-ink focus:opacity-100 focus:outline-none ${isMenuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+      >
+        <MoreHorizontal className="h-3.5 w-3.5" />
       </button>
-      {openMenuId === session.id && <div ref={menuRef} className="absolute right-0 top-7 z-20 min-w-32 rounded-md border border-ink-fade/40 bg-paper p-1 shadow-lg">
-        <button type="button" onClick={(event) => { event.stopPropagation(); onArchiveToggle(session) }} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs text-ink-soft hover:bg-paper-2">
-          {session.archivedAt ? <ArchiveRestore className="h-3 w-3" /> : <Archive className="h-3 w-3" />}
+      {isMenuOpen && <div
+        ref={menuRef}
+        id={menuId}
+        role="menu"
+        aria-label={t('nav.sessionMenu')}
+        onKeyDown={moveMenuFocus}
+        style={contextPosition ? { left: contextPosition.left, top: contextPosition.top } : undefined}
+        className={`${contextPosition ? 'fixed' : 'absolute right-0 top-9'} z-50 min-w-44 rounded-lg border border-ink/10 bg-paper p-1.5 shadow-xl`}
+      >
+        <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); onArchiveToggle(session) }} className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
+          {session.archivedAt ? <ArchiveRestore className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}
           {session.archivedAt ? t('nav.unarchiveSession') : t('nav.archiveSession')}
         </button>
-        <button type="button" onClick={(event) => { event.stopPropagation(); onDelete(session) }} className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-xs text-ink-soft hover:bg-paper-2">
-          <X className="h-3 w-3" />{t('nav.deleteSession')}
+        <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); onDelete(session) }} className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
+          <X className="h-3.5 w-3.5" />{t('nav.deleteSession')}
         </button>
       </div>}
     </div>
-  })}</div>
+  }
+
+  const groupDefinitions = [
+    ['today', t('nav.groupToday')],
+    ['yesterday', t('nav.groupYesterday')],
+    ['week', t('nav.groupWeek')],
+    ['earlier', t('nav.groupEarlier')],
+  ]
+
+  return <section aria-label={t('nav.history')}>
+    <button type="button" onClick={() => { onMenuClose(); setExpanded((value) => !value) }} aria-expanded={expanded} className="mb-1 flex h-7 w-full items-center gap-1 rounded-md px-1.5 text-[11px] font-medium text-ink-fade hover:bg-ink/[0.035] hover:text-ink-soft">
+      <ChevronDown className={`h-3 w-3 transition-transform ${expanded ? '' : '-rotate-90'}`} />
+      <span className="flex-1 text-left">{t('nav.history')}</span>
+      <span className="tabular-nums text-ink-ghost">{sessions.length}</span>
+    </button>
+    {expanded && (sessions.length ? <div className="space-y-2.5">{groupDefinitions.map(([key, label]) => grouped[key].length > 0 && <div key={key}>
+      <div className="mb-0.5 px-2 text-[10px] font-medium text-ink-ghost">{label}</div>
+      <div className="flex flex-col gap-0.5">{grouped[key].map((session, index) => renderSession(session, index, key === 'earlier'))}</div>
+    </div>)}</div> : <div className="px-3 py-8 text-center"><p className="text-xs text-ink-fade">{t('nav.emptyTitle')}</p><p className="mt-1 text-[10px] text-ink-ghost">{t('nav.emptyHint')}</p></div>)}
+  </section>
 }

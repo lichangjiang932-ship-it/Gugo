@@ -373,7 +373,51 @@ html[data-density="loose"] {
 /* Keep the conversation readable when a preview is opened on tablets or phones.
  * On desktop it remains a resizable adjacent pane; on narrower screens it becomes
  * an overlay instead of consuming the chat column. */
+.chat-preview-pane {
+  min-height: 0;
+  container: chat-preview / inline-size;
+  box-shadow: -10px 0 28px rgb(var(--color-ink-rgb) / 0.045);
+}
+
+.chat-preview-backdrop {
+  pointer-events: none;
+  background: transparent;
+}
+
+.chat-preview-resize-handle::after {
+  position: absolute;
+  inset-block: 0;
+  left: 50%;
+  width: 1px;
+  background: rgb(var(--color-ink-rgb) / 0.1);
+  content: '';
+  transition: width 140ms ease, background-color 140ms ease;
+}
+
+.chat-preview-resize-handle:hover::after,
+.chat-preview-resize-handle:focus-visible::after {
+  width: 2px;
+  background: var(--color-ember);
+}
+
+.chat-preview-scroll-region,
+.chat-direct-file-content,
+.chat-document-stage {
+  background:
+    radial-gradient(circle at 50% 20%, rgb(var(--color-paper-rgb) / 0.82), transparent 52%),
+    rgb(var(--color-ink-rgb) / 0.035);
+}
+
+.chat-preview-active-tab {
+  box-shadow: 0 1px 2px rgb(var(--color-ink-rgb) / 0.06);
+}
+
 @media (max-width: 1023px) {
+  .chat-preview-backdrop {
+    pointer-events: auto;
+    background: rgb(var(--color-ink-rgb) / 0.2);
+  }
+
   .chat-preview-pane {
     position: fixed;
     inset: 0;
@@ -397,7 +441,23 @@ html[data-density="loose"] {
   flex-wrap: wrap;
 }
 
+@container chat-preview (max-width: 680px) {
+  .chat-preview-action-label {
+    display: none;
+  }
+
+  .chat-preview-compact-action {
+    width: 2rem;
+    padding-inline: 0;
+  }
+}
+
 @media (max-width: 480px) {
+  .chat-preview-tabbar,
+  .chat-preview-toolbar {
+    padding-inline: 0.625rem;
+  }
+
   .chat-preview-toolbar {
     align-items: stretch;
   }

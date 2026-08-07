@@ -1,9 +1,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { Wrench } from 'lucide-react'
+import { FileText, Mail, Presentation, Wrench } from 'lucide-react'
 import { SKILLS } from '../../src/data.js'
-import { getSkillIcon, SKILL_ICONS } from '../../src/lib/skillIcons.js'
+import { getSkillIcon, getSkillIconPresentation, SKILL_ICONS } from '../../src/lib/skillIcons.js'
 
 // lucide-react 图标是 React.forwardRef 对象（{ $$typeof, render }），
 // 也可能是普通函数组件。两种都接受。
@@ -38,4 +38,16 @@ test('getSkillIcon 对未知 id 回退到 Wrench', () => {
   assert.equal(getSkillIcon(''), Wrench)
   assert.equal(getSkillIcon(undefined), Wrench)
   assert.equal(getSkillIcon(null), Wrench)
+})
+
+test('插件与自定义技能按完整元数据获得稳定的语义图标', () => {
+  assert.equal(getSkillIcon({ id: 'third-party-writer', name: 'Word 文档生成' }), FileText)
+  assert.equal(getSkillIcon({ id: 'enterprise-message', desc: '通过 IMAP/SMTP 收发邮件' }), Mail)
+  assert.equal(getSkillIcon({ id: 'deck-studio', originalName: 'presentation-builder' }), Presentation)
+  assert.equal(getSkillIcon({ id: 'unknown_id_xxx', name: '未分类能力' }), Wrench)
+
+  const first = getSkillIconPresentation({ id: 'deck-studio', name: 'Slides' })
+  const second = getSkillIconPresentation({ id: 'deck-studio', name: 'Slides' })
+  assert.equal(first.Icon, second.Icon)
+  assert.equal(first.className, second.className)
 })

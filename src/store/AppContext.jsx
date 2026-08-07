@@ -42,7 +42,7 @@ export function AppProvider({ children }) {
   const lastClearedAtRef = useRef(0)
   const channelRef = useRef(null)
   const mountedRef = useRef(true)
-  const contextDispatch = useSessionMutationDispatch({ dispatch, reducer, stateRef })
+  const contextDispatch = useSessionMutationDispatch({ dispatch, reducer, state, stateRef })
 
   const publishChange = useStateSyncPublisher({ channelRef, tabIdRef })
 

@@ -48,10 +48,10 @@ test('streaming assistant hides result actions until generation finishes', () =>
   assert.match(messageRowSource, /!isGenerating && msg\.id !== generatingMessageId && !msg\.meta\?\.streaming/)
   assert.match(messageRowSource, /function UserMeta[\s\S]*?!isGenerating && !msg\.meta\?\.streaming/)
   assert.match(messageRowSource, /chat-message-actions/)
-  assert.match(messageRowSource, /<MarkdownRenderer[^>]*streaming=\{isGenerating \|\| !!msg\.meta\?\.streaming\}/)
+  assert.match(messageRowSource, /<MarkdownRenderer[^>]*streaming=\{isCurrentStreamingMessage\}/)
   assert.match(markdownSource, /function CodeBlock\(\{ children, streaming = false \}\)/)
   assert.match(markdownSource, /!streaming && \(/)
-  assert.match(messageRowSource, /const isMessageComplete = !isGenerating && !msg\.meta\?\.streaming/)
+  assert.match(messageRowSource, /const isMessageComplete = !isCurrentStreamingMessage/)
   assert.match(messageRowSource, /const showArtifactPreview = !!artifactPreview && isMessageComplete/)
   assert.match(chatViewSource, /isGenerating=\{isGenerating\}/)
 })
@@ -122,4 +122,20 @@ test('reasoning and tool traces remain collapsed until the user expands them', (
   assert.match(toolCallTrace, /aria-expanded=\{expanded\}/)
   assert.doesNotMatch(reasoningTrace, /chatMessages\.clickExpand/)
   assert.doesNotMatch(toolCallTrace, /chatMessages\.clickExpand/)
+})
+
+test('reasoning character count stays quiet until hover or keyboard focus', () => {
+  const reasoningTrace = activityTracesSource.match(/function ReasoningTrace[\s\S]*?(?=\nexport function ToolCallTrace)/)?.[0] || ''
+  assert.match(reasoningTrace, /aria-label=/)
+  assert.match(reasoningTrace, /opacity-0/)
+  assert.match(reasoningTrace, /group-hover\/reasoning:opacity-100/)
+  assert.match(reasoningTrace, /group-focus-visible\/reasoning:opacity-100/)
+})
+
+test('completed artifact rows do not revert to streaming source when a later message generates', () => {
+  assert.match(messageRowSource, /const isCurrentStreamingMessage = msg\.id === generatingMessageId \|\| !!msg\.meta\?\.streaming/)
+  assert.match(messageRowSource, /const isMessageComplete = !isCurrentStreamingMessage/)
+  assert.match(messageRowSource, /function CollapsedArtifactContent/)
+  assert.match(messageRowSource, /chat\.serverTurn\.completed/)
+  assert.match(messageRowSource, /<ArtifactReferenceLinks msg=\{msg\}/)
 })

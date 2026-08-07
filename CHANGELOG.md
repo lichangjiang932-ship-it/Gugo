@@ -6,6 +6,26 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.10] - 2026-08-07
+
+### Changed
+
+- Redesigned the skill library with consistent semantic icons, concise localized
+  descriptions, uniform cards, and a single unobtrusive details action.
+- Reworked the left sidebar around a compact Codex-style hierarchy with a
+  persistent collapsed mode, grouped conversation history, clearer active
+  states, and improved session metadata.
+- Refined generated-file references and the right workbench so file output keeps
+  its narrative context and opens consistently without preview-state resets.
+
+### Fixed
+
+- Restored conversation history immediately on the first desktop launch.
+- Improved session context-menu dismissal and keyboard interaction.
+- Fixed desktop-pet pointer capture, dragging, interaction, and right-click close
+  behavior outside the main application window.
+- Reduced visual noise in reasoning metadata and ordinary HTML previews.
+
 ## [0.10.9] - 2026-08-07
 
 ### Added
@@ -64,7 +84,8 @@ follow [Semantic Versioning](https://semver.org/).
 - Provider, MCP, memory, job, subagent, connector, and workspace tool support.
 - Local-first single-user mode with optional multi-user authentication.
 
-[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.9...HEAD
+[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.10...HEAD
+[0.10.10]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.10
 [0.10.9]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.9
 [0.10.2]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.2
 [0.10.1]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.1
