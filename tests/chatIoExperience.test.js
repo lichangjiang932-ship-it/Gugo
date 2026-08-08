@@ -50,11 +50,13 @@ test('streaming no longer reparses stable markdown or delays messages by history
   assert.match(toolCardSource, /export default memo\(ToolCallCard\)/)
 })
 
-test('streaming assistant hides result actions until generation finishes', () => {
+test('only the streaming assistant hides copy actions while completed messages remain copyable', () => {
   assert.match(messageListSource, /isGenerating = false/)
   assert.match(messageListSource, /const generatingMessageId = isGenerating/)
-  assert.match(messageRowSource, /!isGenerating && msg\.id !== generatingMessageId && !msg\.meta\?\.streaming/)
-  assert.match(messageRowSource, /function UserMeta[\s\S]*?!isGenerating && !msg\.meta\?\.streaming/)
+  assert.match(messageRowSource, /<AssistantMeta[\s\S]*?isCurrentStreamingMessage=\{isCurrentStreamingMessage\}/)
+  assert.match(messageRowSource, /function AssistantMeta[\s\S]*?!isCurrentStreamingMessage &&/)
+  assert.match(messageRowSource, /function UserMeta[\s\S]*?!msg\.meta\?\.streaming &&/)
+  assert.doesNotMatch(messageRowSource, /function (?:UserMeta|AssistantMeta)\([^)]*isGenerating/)
   assert.match(messageRowSource, /chat-message-actions/)
   assert.match(messageRowSource, /<MarkdownRenderer[^>]*streaming=\{isCurrentStreamingMessage\}/)
   assert.match(markdownSource, /function CodeBlock\(\{ children, streaming = false \}\)/)

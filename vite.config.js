@@ -40,6 +40,7 @@ import { handleMcpServerRequest } from './server/mcp/mcpServer.js'
 import { handleLocalFileAccessRequest } from './server/routes/localFileAccessRoutes.js'
 import { handleTurnEventRequest } from './server/routes/turnEventRoutes.js'
 import { handleMediaRequest } from './server/routes/mediaRoutes.js'
+import { attachTurnWebSocketServer } from './server/services/turnWebSocket.js'
 
 function authAccountPlugin() {
   return {
@@ -73,6 +74,18 @@ function localAuthExposureGuardPlugin() {
         surface: 'Vite development server',
         warn: (message) => server.config.logger.warn(message),
       })
+    },
+  }
+}
+
+function turnRealtimePlugin() {
+  return {
+    name: 'turn-realtime-websocket',
+    configureServer(server) {
+      if (!server.httpServer) {
+        throw new Error('Vite HTTP server is unavailable for /api/realtime')
+      }
+      attachTurnWebSocketServer(server.httpServer)
     },
   }
 }
@@ -284,7 +297,7 @@ const DEV_PORT = Number(RUNTIME_ENV.VITE_DEV_PORT || RUNTIME_ENV.SERVER_PORT || 
 // them requires this config-restart path rather than client-only HMR.
 
 export default defineConfig({
-  plugins: [localAuthExposureGuardPlugin(), react(), authAccountPlugin(), modelProxyPlugin(), toolProxyPlugin(), fallbackApiPlugin()],
+  plugins: [localAuthExposureGuardPlugin(), turnRealtimePlugin(), react(), authAccountPlugin(), modelProxyPlugin(), toolProxyPlugin(), fallbackApiPlugin()],
   base: PUBLIC_BASE_PATH,
   server: {
     host: DEV_HOST,

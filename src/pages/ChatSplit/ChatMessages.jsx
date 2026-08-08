@@ -78,7 +78,6 @@ export default function ChatMessages({
                 msg={msg}
                 rowKey={msg.id ?? hiddenCount + index}
                 generatingMessageId={generatingMessageId}
-                isGenerating={isGenerating}
                 lang={lang}
                 onExpandCompaction={onExpandCompaction}
                 onOpenArtifact={onOpenArtifact}

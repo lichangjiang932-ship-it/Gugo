@@ -36,6 +36,8 @@ export async function runServerTurn({
   syncSessionSnapshot = false,
   fetchImpl = fetch,
   webSocketFactory = defaultWebSocketFactory,
+  webSocketConnectTimeoutMs,
+  webSocketSubscribeTimeoutMs,
 }) {
   const requestedTurnId = turnId || globalThis.crypto?.randomUUID?.() || `turn-${Date.now()}-${Math.random().toString(36).slice(2)}`
   let activeTurnId = requestedTurnId
@@ -43,6 +45,7 @@ export async function runServerTurn({
   let terminal = null
   let cancelling = false
   let reconnectAttempts = 0
+  let webSocketDisabled = false
   const deliverEvent = async (event) => {
     // SSE reconnects and the replay endpoint may overlap. Only events that the
     // consumer has acknowledged can advance the durable cursor, and an event
@@ -96,10 +99,20 @@ export async function runServerTurn({
             }
           },
         }
-        try {
-          terminal = await streamServerTurnEventsWebSocket({ ...streamArgs, webSocketFactory })
-        } catch (webSocketError) {
-          if (signal?.aborted || webSocketError?.name === 'AbortError') throw webSocketError
+        if (!webSocketDisabled) {
+          try {
+            terminal = await streamServerTurnEventsWebSocket({
+              ...streamArgs,
+              webSocketFactory,
+              connectTimeoutMs: webSocketConnectTimeoutMs,
+              subscribeTimeoutMs: webSocketSubscribeTimeoutMs,
+            })
+          } catch (webSocketError) {
+            if (signal?.aborted || webSocketError?.name === 'AbortError') throw webSocketError
+            webSocketDisabled = true
+          }
+        }
+        if (!terminal) {
           terminal = await streamServerTurnEvents({ ...streamArgs, fetchImpl })
         }
       } catch (error) {

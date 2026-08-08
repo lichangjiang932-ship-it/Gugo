@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createTurnEvent } from '../shared/turnEvents.js'
+import { setAuthToken } from '../src/lib/accountClient.js'
 import {
   dispatchTurnEvent,
   fetchServerSessionSnapshot,
@@ -9,6 +10,7 @@ import {
   replayServerTurn,
   runServerTurn,
   startServerTurn,
+  streamServerTurnEventsWebSocket,
 } from '../src/lib/turnClient.js'
 
 function response(body, status = 200) {
@@ -27,6 +29,199 @@ function sseResponse(events) {
   })
   return { ok: true, status: 200, body, json: async () => ({}) }
 }
+
+class FakeWebSocket {
+  static OPEN = 1
+
+  OPEN = FakeWebSocket.OPEN
+
+  readyState = 0
+
+  listeners = new Map()
+
+  sent = []
+
+  closed = false
+
+  addEventListener(type, listener) {
+    const listeners = this.listeners.get(type) || []
+    listeners.push(listener)
+    this.listeners.set(type, listeners)
+  }
+
+  emit(type, value = {}) {
+    if (type === 'open') this.readyState = FakeWebSocket.OPEN
+    for (const listener of this.listeners.get(type) || []) listener(value)
+  }
+
+  send(value) {
+    this.sent.push(value)
+  }
+
+  close() {
+    this.closed = true
+    this.readyState = 3
+  }
+}
+
+async function withWebSocketAuth(run) {
+  const previousWindow = globalThis.window
+  if (previousWindow === undefined) globalThis.window = {}
+  setAuthToken('test-token')
+  try {
+    return await run()
+  } finally {
+    setAuthToken('')
+    if (previousWindow === undefined) delete globalThis.window
+  }
+}
+
+test('WebSocket turn stream times out while connecting and closes the socket', async () => {
+  await withWebSocketAuth(async () => {
+    const socket = new FakeWebSocket()
+    await assert.rejects(
+      streamServerTurnEventsWebSocket({
+        sessionId: 's-connect-timeout',
+        turnId: 't-connect-timeout',
+        connectTimeoutMs: 5,
+        webSocketFactory: () => socket,
+      }),
+      (error) => error.code === 'TURN_WEBSOCKET_CONNECT_TIMEOUT' && error.name !== 'AbortError',
+    )
+    assert.equal(socket.closed, true)
+  })
+})
+
+test('WebSocket turn stream times out without a subscription acknowledgement', async () => {
+  await withWebSocketAuth(async () => {
+    const socket = new FakeWebSocket()
+    const stream = streamServerTurnEventsWebSocket({
+      sessionId: 's-subscribe-timeout',
+      turnId: 't-subscribe-timeout',
+      connectTimeoutMs: 100,
+      subscribeTimeoutMs: 5,
+      webSocketFactory: () => socket,
+    })
+    socket.emit('open')
+    await assert.rejects(
+      stream,
+      (error) => error.code === 'TURN_WEBSOCKET_SUBSCRIBE_TIMEOUT' && error.name !== 'AbortError',
+    )
+    assert.deepEqual(JSON.parse(socket.sent[0]), {
+      type: 'subscribe.turn',
+      sessionId: 's-subscribe-timeout',
+      turnId: 't-subscribe-timeout',
+      after: -1,
+    })
+    assert.equal(socket.closed, true)
+  })
+})
+
+test('WebSocket acknowledgement clears the subscription timeout and allows terminal delivery', async () => {
+  await withWebSocketAuth(async () => {
+    const socket = new FakeWebSocket()
+    const stream = streamServerTurnEventsWebSocket({
+      sessionId: 's-ack',
+      turnId: 't-ack',
+      connectTimeoutMs: 100,
+      subscribeTimeoutMs: 5,
+      webSocketFactory: () => socket,
+    })
+    socket.emit('open')
+    socket.emit('message', { data: JSON.stringify({ type: 'subscribed.turn', sessionId: 's-ack', turnId: 't-ack' }) })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    socket.emit('message', { data: JSON.stringify({
+      type: 'turn.event',
+      event: createTurnEvent({ id: 'ws-done', sessionId: 's-ack', turnId: 't-ack', sequence: 0, type: 'turn.completed', createdAt: 1 }),
+    }) })
+    const terminal = await stream
+    assert.equal(terminal.id, 'ws-done')
+  })
+})
+
+test('first WebSocket turn event also clears the subscription timeout', async () => {
+  await withWebSocketAuth(async () => {
+    const socket = new FakeWebSocket()
+    const stream = streamServerTurnEventsWebSocket({
+      sessionId: 's-event',
+      turnId: 't-event',
+      connectTimeoutMs: 100,
+      subscribeTimeoutMs: 5,
+      webSocketFactory: () => socket,
+    })
+    socket.emit('open')
+    socket.emit('message', { data: JSON.stringify({
+      type: 'turn.event',
+      event: createTurnEvent({ id: 'ws-start', sessionId: 's-event', turnId: 't-event', sequence: 0, type: 'turn.started', createdAt: 1 }),
+    }) })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    socket.emit('message', { data: JSON.stringify({
+      type: 'turn.event',
+      event: createTurnEvent({ id: 'ws-event-done', sessionId: 's-event', turnId: 't-event', sequence: 1, type: 'turn.completed', createdAt: 2 }),
+    }) })
+    const terminal = await stream
+    assert.equal(terminal.id, 'ws-event-done')
+  })
+})
+
+test('WebSocket terminal delivery completes before an immediate close is treated as truncated', async () => {
+  await withWebSocketAuth(async () => {
+    const socket = new FakeWebSocket()
+    let releaseDelivery
+    let markDeliveryStarted
+    const deliveryStarted = new Promise((resolve) => { markDeliveryStarted = resolve })
+    const deliveryBlocked = new Promise((resolve) => { releaseDelivery = resolve })
+    const stream = streamServerTurnEventsWebSocket({
+      sessionId: 's-close-race',
+      turnId: 't-close-race',
+      connectTimeoutMs: 100,
+      subscribeTimeoutMs: 100,
+      webSocketFactory: () => socket,
+      onEvent: async () => {
+        markDeliveryStarted()
+        await deliveryBlocked
+      },
+    })
+    let settled = false
+    stream.then(() => { settled = true }, () => { settled = true })
+    const completed = createTurnEvent({
+      id: 'ws-close-race-done',
+      sessionId: 's-close-race',
+      turnId: 't-close-race',
+      sequence: 0,
+      type: 'turn.completed',
+      createdAt: 1,
+    })
+
+    socket.emit('open')
+    socket.emit('message', { data: JSON.stringify({ type: 'turn.event', event: completed }) })
+    socket.emit('close')
+    await deliveryStarted
+    await Promise.resolve()
+    assert.equal(settled, false)
+    releaseDelivery()
+
+    const terminal = await stream
+    assert.equal(terminal.id, completed.id)
+  })
+})
+
+test('WebSocket protocol errors fail immediately without waiting for acknowledgement timeout', async () => {
+  await withWebSocketAuth(async () => {
+    const socket = new FakeWebSocket()
+    const stream = streamServerTurnEventsWebSocket({
+      sessionId: 's-protocol-error',
+      turnId: 't-protocol-error',
+      connectTimeoutMs: 100,
+      subscribeTimeoutMs: 60_000,
+      webSocketFactory: () => socket,
+    })
+    socket.emit('open')
+    socket.emit('message', { data: JSON.stringify({ type: 'error', code: 'TURN_SUBSCRIBE_FAILED' }) })
+    await assert.rejects(stream, (error) => error.code === 'TURN_SUBSCRIBE_FAILED')
+    assert.equal(socket.closed, true)
+  })
+})
 
 test('startServerTurn sends a canonical explicit tools configuration', async () => {
   let requestBody = null
@@ -74,6 +269,54 @@ test('runServerTurn starts once, consumes SSE events, and stops at terminal', as
   assert.deepEqual(seen, ['turn.started', 'assistant.delta', 'turn.completed'])
   assert.match(urls[1], /^\/api\/turns\/stream\?.*after=-1/)
   assert.equal(urls.some((url) => String(url).startsWith('/api/turns/events?')), false)
+})
+
+test('runServerTurn keeps using SSE after an unacknowledged WebSocket fails', async () => {
+  await withWebSocketAuth(async () => {
+    const sockets = []
+    let sseCalls = 0
+    const seen = []
+    const fetchImpl = async (url) => {
+      if (url === '/api/turns/run') {
+        return response({ turn: { sessionId: 's-ws-fallback', turnId: 't-ws-fallback', status: 'running' } }, 202)
+      }
+      if (String(url).startsWith('/api/turns/events?')) return response({ events: [] })
+      if (String(url).startsWith('/api/turns/stream?')) {
+        sseCalls += 1
+        if (sseCalls === 1) return sseResponse([])
+        return sseResponse([createTurnEvent({
+          id: 'sse-fallback-done',
+          sessionId: 's-ws-fallback',
+          turnId: 't-ws-fallback',
+          sequence: 0,
+          type: 'turn.completed',
+          createdAt: 1,
+        })])
+      }
+      throw new Error(`Unexpected URL: ${url}`)
+    }
+
+    const result = await runServerTurn({
+      sessionId: 's-ws-fallback',
+      content: 'hello',
+      fetchImpl,
+      reconnectDelayMs: 0,
+      webSocketConnectTimeoutMs: 100,
+      webSocketSubscribeTimeoutMs: 5,
+      webSocketFactory: () => {
+        const socket = new FakeWebSocket()
+        sockets.push(socket)
+        queueMicrotask(() => socket.emit('open'))
+        return socket
+      },
+      onEvent: (event) => seen.push(event.type),
+    })
+
+    assert.equal(result.terminal.id, 'sse-fallback-done')
+    assert.equal(sockets.length, 1)
+    assert.equal(sseCalls, 2)
+    assert.deepEqual(seen, ['turn.completed'])
+  })
 })
 
 test('runServerTurn resumes from the persisted sequence', async () => {
