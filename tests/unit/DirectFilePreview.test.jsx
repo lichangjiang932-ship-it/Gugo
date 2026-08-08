@@ -51,6 +51,29 @@ test('native image, audio, and video previews expose loading and failure states'
   }
 })
 
+test('direct HTML files use the sandboxed artifact preview URL instead of srcdoc', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  try {
+    await act(async () => root.render(
+      <DirectFilePreview
+        file={{ filename: 'interactive.html', type: 'html' }}
+        url="/api/artifacts/interactive.html?token=test&preview=1"
+        t={(key) => key}
+      />,
+    ))
+    const frame = rootElement.querySelector('iframe')
+    assert.ok(frame)
+    assert.equal(frame.getAttribute('src'), '/api/artifacts/interactive.html?token=test&preview=1')
+    assert.equal(frame.getAttribute('srcdoc'), null)
+    assert.equal(frame.getAttribute('sandbox'), 'allow-scripts allow-forms')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
 test('direct-file toolbar always keeps the independent download fallback', async () => {
   const dom = setupDom()
   const rootElement = dom.window.document.getElementById('root')

@@ -25,7 +25,7 @@ import { writeToolAudit } from '../utils/audit.js'
 import { isContextLengthError } from '../adapters/modelProxy.js'
 import { callModelWithContextRecovery } from './contextCompactionRuntime.js'
 import { ensureSafetySystemMessages } from './promptCompiler.js'
-import { allowedArtifactTools, isFileArtifactTool } from './artifactIntent.js'
+import { allowedArtifactTools, isFileArtifactTool, parseSkillIdFromPrompt } from './artifactIntent.js'
 import { selectChatToolSpecs } from './chatToolSelection.js'
 import {
   createSubagentApprovalContext,
@@ -44,7 +44,8 @@ import {
 import { extractTextToolCalls } from '../utils/textToolCalls.js'
 import { callTool as callMcpTool } from '../mcp/mcpManager.js'
 import { executeBrowserTool } from './browserToolExecutor.js'
-import { fetchAndExtract, searchDuckDuckGo } from '../adapters/toolProxy.js'
+import { fetchAndExtract } from '../adapters/toolProxy.js'
+import { searchWeb } from './webSearchService.js'
 import { dispatchHooks } from './hooksService.js'
 import { generateImage } from './mediaModelService.js'
 
@@ -64,6 +65,16 @@ const MAX_ITERS = (() => {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 2000
 })()
 const JOB_READ_CONCURRENCY = 4
+const ARTIFACT_DELIVERY_GUARD_MARKER = '[PERSISTED ARTIFACT DELIVERY REQUIRED]'
+const MAX_ARTIFACT_DELIVERY_RETRIES = 1
+const EXPLICIT_LOCAL_DIRECTORY_CONTEXT = /\[LOCAL PATH (?:ACCESS|REFERENCE)|\[VERIFIED LOCAL FILESYSTEM ACCESS\]|(?:^|[\s"'`])(?:[a-z]:[\\/]|\\\\[^\\\s]+\\[^\\\s]+|\/(?:home|users|workspace|mnt|tmp)\/)|(?:save|write|export).{0,40}(?:folder|directory|desktop)|(?:\u4fdd\u5b58|\u5199\u5165|\u5bfc\u51fa).{0,20}(?:\u76ee\u5f55|\u6587\u4ef6\u5939|\u684c\u9762)/im
+
+function artifactDeliveryError(expectedTools) {
+  const names = [...expectedTools].join(', ')
+  const error = new Error(`The requested file was not created. The model must successfully call: ${names}.`)
+  error.code = 'ARTIFACT_NOT_CREATED'
+  return error
+}
 
 function persistGeneratedArtifact({ artifact, args, job, step }) {
   const common = {
@@ -407,12 +418,13 @@ async function executeServerTool({
   }
   if (name === 'web_search') {
     try {
-      return await searchDuckDuckGo({
+      return await searchWeb({
+        userId: job.userId,
         query: args?.query,
         maxResults: args?.max_results ?? args?.maxResults,
       })
     } catch (err) {
-      return { ok: false, error: err?.message || String(err) }
+      return { ok: false, code: err?.code || 'WEB_SEARCH_ERROR', error: err?.message || String(err) }
     }
   }
   if (name === 'generate_image') {
@@ -701,12 +713,43 @@ export async function runToolsLoop({
     job?.prompt || '',
     currentUserMessage?.content || '',
   ].join('\n')
-  const activeToolSpecs = selectJobToolSpecs({
+  const selectedToolSpecs = selectJobToolSpecs({
     prompt: intentText,
     skillId,
     specs: Array.isArray(toolSpecs) ? toolSpecs : SERVER_TOOL_SPECS,
     origin: job?.origin,
   })
+  const explicitSkillId = skillId
+    || parseSkillIdFromPrompt(currentUserMessage?.content || '')
+    || parseSkillIdFromPrompt(job?.prompt || '')
+  const skillArtifactTools = explicitSkillId
+    ? allowedArtifactTools('', { skillId: explicitSkillId })
+    : new Set()
+  // A slash artifact skill is the delivery contract for this run. Keep the
+  // completion guard on that one generator; content words such as "report"
+  // must not silently add DOCX to a /webpage job. Without an artifact skill,
+  // explicit multi-file requests still require every requested generator.
+  const requestedArtifactTools = skillArtifactTools.size > 0
+    ? skillArtifactTools
+    : allowedArtifactTools(intentText, { skillId })
+  const selectedToolNames = new Set(selectedToolSpecs.map((spec) => spec?.function?.name).filter(Boolean))
+  const expectedArtifactTools = new Set(
+    [...requestedArtifactTools].filter((name) => selectedToolNames.has(name)),
+  )
+  // Verify/finalize/plan steps inherit the original job prompt, so they still
+  // mention the requested format. Their job is to inspect or summarize the
+  // artifact already produced by execute/batch_item, not manufacture a second
+  // copy. Chat and delivery steps keep the strict persisted-file contract.
+  const artifactDeliveryStep = !['plan', 'verify', 'finalize'].includes(String(step?.kind || ''))
+  const requiresPersistedArtifact = expectedArtifactTools.size > 0 && artifactDeliveryStep
+  // A standalone Gugo artifact is written to the managed artifact store. It
+  // never needs access to an arbitrary user folder. Hiding request_directory
+  // here prevents a model from pausing /webpage or Office generation for an
+  // unrelated filesystem permission. Explicit local-path delivery still keeps
+  // the directory request tool available.
+  const activeToolSpecs = requiresPersistedArtifact && !EXPLICIT_LOCAL_DIRECTORY_CONTEXT.test(intentText)
+    ? selectedToolSpecs.filter((spec) => spec?.function?.name !== 'request_directory')
+    : selectedToolSpecs
   const representativeReadCalls = buildRepresentativeReadCalls(job?.prompt, job?.id)
   const requiresRepresentativeRead = job?.origin === 'chat'
     && DIRECTORY_REVIEW_INTENT.test(String(job?.userPrompt || ''))
@@ -734,6 +777,19 @@ export async function runToolsLoop({
     || convo.some((message) => message?.role === 'system' && String(message?.content || '').includes(DIRECTORY_REVIEW_GUARD_MARKER))
   let hasSuccessfulRepresentativeRead = successfulReadFileInMessages(convo)
   const artifactIds = Array.isArray(restoredState?.artifactIds) ? [...restoredState.artifactIds] : []
+  let artifactDeliveryRetries = Math.max(0, Number(restoredState?.completionGuards?.artifactDeliveryRetries) || 0)
+  const deliveredArtifactTools = new Set(
+    Array.isArray(restoredState?.completionGuards?.deliveredArtifactTools)
+      ? restoredState.completionGuards.deliveredArtifactTools.filter((name) => expectedArtifactTools.has(name))
+      : [],
+  )
+  const missingArtifactTools = () => [...expectedArtifactTools].filter((name) => !deliveredArtifactTools.has(name))
+  const hasRequiredArtifacts = () => !requiresPersistedArtifact || missingArtifactTools().length === 0
+  const assertRequiredArtifacts = () => {
+    if (!requiresPersistedArtifact) return
+    const missing = missingArtifactTools()
+    if (missing.length > 0) throw artifactDeliveryError(missing)
+  }
   let recovery = restoredState?.recovery?.archiveId
     ? { archiveId: String(restoredState.recovery.archiveId) }
     : null
@@ -750,7 +806,7 @@ export async function runToolsLoop({
       }))
     : null
 
-  if (restoredState?.final?.text != null) {
+  if (restoredState?.final?.text != null && hasRequiredArtifacts()) {
     return {
       text: String(restoredState.final.text),
       artifactIds,
@@ -774,7 +830,11 @@ export async function runToolsLoop({
       iterations: iter,
       budget: budget.snapshot?.() || null,
       recovery,
-      completionGuards: { representativeReadsInjected },
+      completionGuards: {
+        representativeReadsInjected,
+        artifactDeliveryRetries,
+        deliveredArtifactTools: [...deliveredArtifactTools],
+      },
       final,
     })
     if (saved === false || saved === null) throw new Error('Failed to persist job turn checkpoint')
@@ -880,6 +940,10 @@ export async function runToolsLoop({
           consumeBudget: (cost) => budget.consume(cost),
           onTextDelta: async (text, metadata = {}) => {
             if (!text) return
+            // Do not leak a model's "copy this code into a file" fallback into
+            // the chat while a real file artifact is still required. The final
+            // narration streams normally after the generator succeeds.
+            if (!hasRequiredArtifacts()) return
             streamedText = true
             if (typeof onModelDelta === 'function') {
               await onModelDelta({ text, iteration: iter, modelName: metadata.modelName || null })
@@ -931,7 +995,10 @@ export async function runToolsLoop({
           usage: modelResult?.usage || null,
           modelName: modelResult?.modelName || null,
         })
-        if (!streamedText && modelResult?.content && typeof onModelDelta === 'function') {
+        if (!streamedText
+          && modelResult?.content
+          && hasRequiredArtifacts()
+          && typeof onModelDelta === 'function') {
           await onModelDelta({
             text: modelResult.content,
             iteration: iter,
@@ -992,6 +1059,7 @@ export async function runToolsLoop({
           } catch (wrapUpError) {
             if (wrapUpError?.name === 'AbortError') throw wrapUpError
           }
+          assertRequiredArtifacts()
           return {
             text: wrapUpText || `(模型预算已用尽:${error.message})\n\n已经完成的部分:\n${collected || error.partialModelResult?.content || '(无)'}`,
             artifactIds,
@@ -1010,6 +1078,7 @@ export async function runToolsLoop({
           .join('\n')
           .slice(0, 4000)
 
+        assertRequiredArtifacts()
         return {
           text: `(任务中断:${error?.message || String(error)})\n\n已经完成的部分:\n${collected || '(无)'}`,
           artifactIds,
@@ -1022,6 +1091,27 @@ export async function runToolsLoop({
       const { content, toolCalls: rawToolCalls } = modelResult
 
       if (!rawToolCalls || rawToolCalls.length === 0) {
+        if (!hasRequiredArtifacts()) {
+          const canRetry = artifactDeliveryRetries < MAX_ARTIFACT_DELIVERY_RETRIES && iter + 1 < maxIters
+          const missing = missingArtifactTools()
+          if (!canRetry) throw artifactDeliveryError(missing)
+          artifactDeliveryRetries += 1
+          if (content) convo.push({ role: 'assistant', content })
+          convo.push({
+            role: 'system',
+            content: [
+              ARTIFACT_DELIVERY_GUARD_MARKER,
+              'The user requested a real downloadable file, but the previous response did not create one.',
+              `Call each missing artifact generator now: ${missing.join(', ')}.`,
+              'Do not ask for a directory, do not print source code as the deliverable, and do not claim completion until the tool returns artifactId.',
+            ].join(' '),
+          })
+          await persistTurn()
+          if (steeringLeaseId && typeof acknowledgeSteering === 'function') {
+            await acknowledgeSteering(steeringLeaseId)
+          }
+          continue
+        }
         finalText = content || ''
         convo.push({ role: 'assistant', content: finalText })
         try {
@@ -1318,6 +1408,9 @@ export async function runToolsLoop({
 
     const recordOutcome = async (outcome) => {
       if (outcome.artifactId) artifactIds.push(outcome.artifactId)
+      if (outcome.artifactId && expectedArtifactTools.has(outcome.call?.name)) {
+        deliveredArtifactTools.add(outcome.call.name)
+      }
       if (outcome.call?.name === 'read_file' && outcome.result?.ok === true) {
         hasSuccessfulRepresentativeRead = true
       }
@@ -1444,6 +1537,7 @@ export async function runToolsLoop({
           finalText = ''
         }
       }
+      assertRequiredArtifacts()
       return {
         text: finalText || `(任务预算已用尽:${budgetExceeded}。上面的工具结果可能已包含部分进展,可以点「重试」从断点继续。)`,
         artifactIds,
@@ -1497,6 +1591,7 @@ export async function runToolsLoop({
       } catch {
         finalText = ''
       }
+      assertRequiredArtifacts()
       return {
         text: finalText || `(工具循环已停止：${noProgressReason})`,
         artifactIds,
@@ -1557,6 +1652,7 @@ export async function runToolsLoop({
     }
   }
 
+  assertRequiredArtifacts()
   return { text: finalText, artifactIds, iterations: Math.min(iter + 1, maxIters), recovery }
 }
 

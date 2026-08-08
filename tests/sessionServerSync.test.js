@@ -173,6 +173,32 @@ test('server snapshots replace canonical text while retaining local rendering me
   assert.equal(merged[0].meta.serverAuthoritative, true)
 })
 
+test('server snapshot artifacts replace empty or partial local artifact lists', () => {
+  const serverArtifacts = [
+    { id: 'artifact-1', filename: 'report.docx', url: '/api/artifacts/report.docx' },
+    { id: 'artifact-2', filename: 'table.xlsx', url: '/api/artifacts/table.xlsx' },
+  ]
+
+  for (const localArtifacts of [[], [serverArtifacts[0]]]) {
+    const [merged] = mergeServerSessionMessages(
+      [{
+        id: 'assistant-1',
+        role: 'assistant',
+        content: 'done',
+        meta: { streaming: false, serverArtifacts: localArtifacts },
+      }],
+      [{
+        id: 'assistant-1',
+        role: 'assistant',
+        content: 'done',
+        meta: { serverAuthoritative: true, serverArtifacts },
+      }],
+    )
+
+    assert.deepEqual(merged.meta.serverArtifacts, serverArtifacts)
+  }
+})
+
 test('an empty completion snapshot cannot erase assistant text already received from the stream', () => {
   const [merged] = mergeServerSessionMessages(
     [{ id: 'assistant-1', role: 'assistant', content: 'Done. Your file is ready.', meta: { streaming: true } }],

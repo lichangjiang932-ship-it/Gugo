@@ -10,7 +10,7 @@ process.env.ARTIFACT_DIR = path.join(tempDir, 'artifacts')
 
 const { closeDb, createUser } = await import('../server/db.js')
 const { TurnEngine } = await import('../server/services/TurnEngine.js')
-const { upsertSession } = await import('../server/services/sessionStore.js')
+const { getSessionSnapshot, upsertSession } = await import('../server/services/sessionStore.js')
 const { getTurnArtifactByFilename, listTurnArtifacts } = await import('../server/services/turnArtifactStore.js')
 
 createUser({ id: 'artifact-user', email: 'turn-artifact@example.com' })
@@ -46,6 +46,14 @@ test('chat TurnEngine persists generated files without a jobs-table foreign key'
   assert.equal(artifacts[0].type, 'docx')
   assert.equal(getTurnArtifactByFilename(artifacts[0].filename).userId, 'artifact-user')
   assert.deepEqual(listTurnArtifacts({ userId: 'other-user', sessionId: 'artifact-session', turnId: 'artifact-turn' }), [])
+  const assistant = getSessionSnapshot({ userId: 'artifact-user', sessionId: 'artifact-session' })
+    .messages.find((message) => message.id === 'artifact-turn:assistant')
+  assert.deepEqual(assistant.artifacts.map(({ id, filename, type, url }) => ({ id, filename, type, url })), [{
+    id: artifacts[0].id,
+    filename: artifacts[0].filename,
+    type: 'docx',
+    url: artifacts[0].url,
+  }])
 })
 
 test('/webpage creates a persisted self-contained HTML artifact for preview', async () => {

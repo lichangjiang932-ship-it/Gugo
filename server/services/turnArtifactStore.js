@@ -32,6 +32,13 @@ export function listTurnArtifacts({ userId, sessionId, turnId }) {
     .all(userId, sessionId, turnId).map(mapArtifact)
 }
 
+export function listSessionTurnArtifacts({ userId, sessionId }) {
+  if (!userId || !sessionId) return []
+  return getDb().prepare(`SELECT * FROM turn_artifacts
+    WHERE user_id = ? AND session_id = ? ORDER BY created_at ASC`)
+    .all(userId, sessionId).map(mapArtifact)
+}
+
 export function getTurnArtifactByFilename(filename) {
   if (!filename) return null
   return mapArtifact(getDb().prepare('SELECT * FROM turn_artifacts WHERE filename = ?').get(filename))

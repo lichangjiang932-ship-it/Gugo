@@ -6,8 +6,8 @@ import CompactionPill from '../../../components/CompactionPill.jsx'
 import ChoicePicker from '../../../components/ChoicePicker.jsx'
 import { hasChoices, stripChoices } from '../../../lib/choices.js'
 import { buildMessageTimeline } from '../../../lib/messageTimeline.js'
-import { buildArtifactPreview, shouldCollapseArtifactPreview } from '../../../lib/artifactPreview.js'
-import { artifactHasInlineLink, artifactReferenceOpenPayload, buildServerArtifactReferences, findArtifactReferenceByHref } from '../../../lib/artifactReferences.js'
+import { shouldCollapseArtifactPreview } from '../../../lib/artifactPreview.js'
+import { artifactHasInlineReference, artifactReferenceOpenPayload, buildMessageArtifactPreview, buildServerArtifactReferences, findArtifactReferenceByHref } from '../../../lib/artifactReferences.js'
 import { formatMessageDateTime, formatMessageTime } from '../../../lib/messageTime.js'
 import { copyTextToClipboard } from '../../../lib/clipboard.js'
 import { ArtifactReferenceLinks } from './ArtifactCards.jsx'
@@ -24,9 +24,7 @@ export default function MessageRow({
   onOpenInPreview,
   t,
 }) {
-  const artifactPreview = msg.role === 'assistant' && (msg.meta?.artifactSource || msg.content)
-    ? buildArtifactPreview({ content: msg.meta?.artifactSource || msg.content, meta: msg.meta || {} })
-    : null
+  const artifactPreview = buildMessageArtifactPreview(msg)
   const isCurrentStreamingMessage = msg.id === generatingMessageId || !!msg.meta?.streaming
   // A new turn must not make completed artifact messages look "streaming" again.
   // Their collapsed source/link presentation is part of the message itself, not
@@ -39,8 +37,8 @@ export default function MessageRow({
     messageId: msg.id,
     preview: artifactPreview,
   })
-  const hasInlineArtifactLink = serverArtifactReferences.some((reference) => artifactHasInlineLink(msg.content, reference))
-  const collapseArtifact = showArtifactPreview && !hasInlineArtifactLink && shouldCollapseArtifactPreview(artifactPreview, {
+  const hasInlineArtifactReference = serverArtifactReferences.some((reference) => artifactHasInlineReference(msg.content, reference))
+  const collapseArtifact = showArtifactPreview && !hasInlineArtifactReference && shouldCollapseArtifactPreview(artifactPreview, {
     content: msg.content,
     artifactSource: msg.meta?.artifactSource,
   })
@@ -138,7 +136,7 @@ function AssistantContent({ artifactPreview, isCurrentStreamingMessage, isMessag
         {buildMessageTimeline(stripChoices(msg.content), msg.meta?.toolCalls).map((segment, index) => (
           segment.kind === 'tools'
             ? <ToolCallTrace key={`tool-${index}`} calls={segment.calls} />
-            : <MarkdownRenderer key={`text-${index}`} streaming={isCurrentStreamingMessage} onLinkClick={openInlineArtifact}>{segment.text}</MarkdownRenderer>
+            : <MarkdownRenderer key={`text-${index}`} artifactReferences={artifactReferences} streaming={isCurrentStreamingMessage} onLinkClick={openInlineArtifact}>{segment.text}</MarkdownRenderer>
         ))}
       </div>
       {msg.meta?.streaming && <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-ember/80 align-middle" aria-hidden="true" />}

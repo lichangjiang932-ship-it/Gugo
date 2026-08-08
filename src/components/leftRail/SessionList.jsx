@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Archive, ArchiveRestore, ChevronDown, MoreHorizontal, X } from 'lucide-react'
+import { Archive, ArchiveRestore, ChevronDown, MoreHorizontal, Pin, PinOff, X } from 'lucide-react'
 import { sortSessions } from './sessionListUtils.js'
 
 const CONTEXT_MENU_WIDTH = 176
-const CONTEXT_MENU_HEIGHT = 82
+const CONTEXT_MENU_HEIGHT = 122
 const VIEWPORT_MARGIN = 8
 
 function contextMenuPosition(event) {
@@ -36,6 +36,7 @@ export default function SessionList({
   onMenuToggle,
   onMenuClose,
   onOpen,
+  onPinToggle,
   onArchiveToggle,
   onDelete,
   t,
@@ -134,6 +135,10 @@ export default function SessionList({
         style={contextPosition ? { left: contextPosition.left, top: contextPosition.top } : undefined}
         className={`${contextPosition ? 'fixed' : 'absolute right-0 top-9'} z-50 min-w-44 rounded-lg border border-ink/10 bg-paper p-1.5 shadow-xl`}
       >
+        <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); onPinToggle(session) }} className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
+          {session.pinnedAt ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
+          {session.pinnedAt ? t('nav.unpinSession') : t('nav.pinSession')}
+        </button>
         <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); onArchiveToggle(session) }} className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
           {session.archivedAt ? <ArchiveRestore className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}
           {session.archivedAt ? t('nav.unarchiveSession') : t('nav.archiveSession')}

@@ -20,6 +20,10 @@ import {
   DEFAULT_DESKTOP_PET_LAYOUT,
   resolveDesktopPetLayout,
 } from '../shared/desktopPetLayout.js'
+import {
+  createDesktopPetDragSession,
+  resolveDesktopPetDragMove,
+} from './petDrag.js'
 
 const { autoUpdater } = updaterPackage
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -383,33 +387,36 @@ function handlePetDrag(event, payload = {}) {
   const window = petWindow
   if (!window || window.isDestroyed() || event.sender !== window.webContents) return
   const phase = String(payload?.phase || '')
-  const screenX = Number(payload?.screenX)
-  const screenY = Number(payload?.screenY)
 
   if (phase === 'end') {
     cancelPetDrag({ notifyRenderer: false })
     return
   }
-  if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return
   if (phase === 'start') {
-    petDragState = {
+    petDragState = createDesktopPetDragSession({
       senderId: event.sender.id,
-      startX: screenX,
-      startY: screenY,
-      origin: window.getBounds(),
-    }
+      cursor: screen.getCursorScreenPoint(),
+      bounds: window.getBounds(),
+    })
     return
   }
   const drag = petDragState
   if (phase !== 'move' || !drag || drag.senderId !== event.sender.id) return
+  const move = resolveDesktopPetDragMove(drag, screen.getCursorScreenPoint())
+  if (!move.accepted) {
+    // The renderer can receive synthetic pointer movement when its transparent
+    // BrowserWindow is composited. If the OS cursor never moved, end the pending
+    // gesture so it cannot acquire a global pointer capture and swallow clicks.
+    if (!drag.moved && move.reason === 'stationary') cancelPetDrag()
+    return
+  }
+  petDragState = move.session
   // Do not clamp while the user is dragging. Clamping against the display
   // currently containing the window pins it to that monitor and prevents the
-  // cursor from ever crossing onto an adjacent display.
-  const next = {
-    x: Math.round(drag.origin.x + screenX - drag.startX),
-    y: Math.round(drag.origin.y + screenY - drag.startY),
-  }
-  window.setPosition(next.x, next.y, false)
+  // cursor from ever crossing onto an adjacent display. Reapplying the frozen
+  // width and height also prevents a resize/drag feedback loop from expanding
+  // the transparent hit area.
+  window.setBounds(move.bounds, false)
 }
 
 function registerDesktopIpc() {
@@ -464,7 +471,8 @@ function registerDesktopIpc() {
     assertTrustedIpc(event)
     const layout = resolveDesktopPetLayout(preferences)
     const window = petWindow
-    if (!window || window.isDestroyed()) return layout
+    if (!window || window.isDestroyed() || event.sender !== window.webContents) return layout
+    cancelPetDrag()
     const current = window.getBounds()
     if (current.width === layout.windowWidth && current.height === layout.windowHeight) return layout
     const next = clampPetBounds({

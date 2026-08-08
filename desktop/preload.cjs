@@ -17,10 +17,8 @@ contextBridge.exposeInMainWorld('gugoDesktop', Object.freeze({
     customImage: customImage === true,
     scale: Number(scale),
   }),
-  dragPetWindow: ({ phase = '', screenX = 0, screenY = 0 } = {}) => ipcRenderer.send('desktop:pet-drag', {
+  dragPetWindow: ({ phase = '' } = {}) => ipcRenderer.send('desktop:pet-drag', {
     phase: String(phase),
-    screenX: Number(screenX),
-    screenY: Number(screenY),
   }),
   updatePetStatus: (status) => ipcRenderer.invoke('desktop:update-pet-status', status),
   getPetState: () => ipcRenderer.invoke('desktop:get-pet-state'),

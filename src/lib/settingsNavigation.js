@@ -1,6 +1,7 @@
 export const SETTINGS_TAB_FEATURES = '功能入口'
 export const SETTINGS_TAB_ACCOUNT = '账户'
 export const SETTINGS_TAB_MODELS = '模型'
+export const SETTINGS_TAB_WEB_SEARCH = 'web-search'
 
 export function settingsPathAfterLogin(user = null) {
   return user?.hasPassword === false
@@ -14,6 +15,7 @@ export function resolveSettingsNavFromSearch(search = '') {
     const tab = params.get('tab')
     if (tab === 'account') return SETTINGS_TAB_ACCOUNT
     if (tab === 'models') return SETTINGS_TAB_MODELS
+    if (tab === 'web-search') return SETTINGS_TAB_WEB_SEARCH
     return SETTINGS_TAB_FEATURES
   } catch {
     return SETTINGS_TAB_FEATURES

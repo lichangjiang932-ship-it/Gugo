@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   buildArtifactReferenceIdentity,
+  buildMessageArtifactPreview,
   buildServerArtifactReferences,
   normalizeArtifactReferenceType,
 } from '../src/lib/artifactReferences.js'
@@ -50,4 +51,56 @@ test('artifact identity stays stable across streamed preview and persisted serve
 
   assert.equal(persisted.identity, streamedIdentity)
   assert.equal(persisted.previewArtifact.artifactIdentity, streamedIdentity)
+})
+
+test('failed managed file turns never turn narration into fake previews', () => {
+  for (const [skillId, artifactType] of [
+    ['webpage', 'html'],
+    ['ppt', 'pptx'],
+    ['doc', 'docx'],
+    ['excel', 'xlsx'],
+  ]) {
+    assert.equal(buildMessageArtifactPreview({
+      role: 'assistant',
+      content: 'The file was not created. Copy this answer into a new file yourself.',
+      meta: { skillId, artifactType, failed: true, streaming: false },
+    }), null, `${artifactType} failure text must not become an artifact`)
+  }
+})
+
+test('managed file skill aliases cannot turn failure prose into previews', () => {
+  for (const skillId of ['html', 'website', 'write-doc', 'analyze-excel', 'ppt-master']) {
+    assert.equal(buildMessageArtifactPreview({
+      role: 'assistant',
+      content: 'Generation failed. Copy this text into a file yourself.',
+      meta: { skillId },
+    }), null, `${skillId} must require verifiable artifact evidence`)
+  }
+})
+
+test('managed file labels require real source or persisted bytes', () => {
+  assert.equal(buildMessageArtifactPreview({
+    role: 'assistant',
+    content: 'Save the code above as landing-page.html.',
+    meta: { skillId: 'webpage', artifactType: 'html' },
+  }), null)
+
+  const rawHtml = buildMessageArtifactPreview({
+    role: 'assistant',
+    content: '<!doctype html><html><head><title>Landing</title></head><body><main>Ready</main></body></html>',
+    meta: { skillId: 'webpage', artifactType: 'html' },
+  })
+  assert.equal(rawHtml.type, 'html')
+  assert.equal(rawHtml.inferred, true)
+
+  const sourcedDoc = buildMessageArtifactPreview({
+    role: 'assistant',
+    content: 'The document is ready.',
+    meta: {
+      skillId: 'doc',
+      artifactType: 'docx',
+      artifactSource: '# Report\n\n## Result\n\nComplete.',
+    },
+  })
+  assert.equal(sourcedDoc.type, 'docx')
 })

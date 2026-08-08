@@ -17,8 +17,8 @@ test('schema migration registry is contiguous and owns the latest version', () =
   }))
   const plan = createSchemaMigrationPlan(legacy)
 
-  assert.deepEqual(plan.map(({ version }) => version), Array.from({ length: 38 }, (_, index) => index + 2))
-  assert.equal(LATEST_SCHEMA_VERSION, 39)
+  assert.deepEqual(plan.map(({ version }) => version), Array.from({ length: 40 }, (_, index) => index + 2))
+  assert.equal(LATEST_SCHEMA_VERSION, 41)
   assert.equal(DB_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
   assert.equal(schemaMigrations.at(-1).version, LATEST_SCHEMA_VERSION)
 })
@@ -69,6 +69,10 @@ test('schema migration registry upgrades a v30 database through every registered
       db.prepare('PRAGMA table_info(sessions)').all().some((row) => row.name === 'revision'),
       true,
     )
+    assert.equal(
+      db.prepare('PRAGMA table_info(sessions)').all().some((row) => row.name === 'pinned_at'),
+      true,
+    )
     for (const table of [
       'mcp_oauth_credentials',
       'workspace_trust',
@@ -76,6 +80,7 @@ test('schema migration registry upgrades a v30 database through every registered
       'mcp_oauth_pending_authorizations',
       'webhook_replay_guard',
       'connector_idempotency',
+      'web_search_configs',
     ]) {
       assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table), table)
     }

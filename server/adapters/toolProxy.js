@@ -7,7 +7,7 @@
  *   - 保留对 outbound 请求的速率/超时/UA 控制
  *
  * 当前支持的工具:
- *   - web_search(query, max_results?) 走 DuckDuckGo HTML 端点(无 key) + Bing 兜底
+ *   - web_search(query, max_results?) 走当前用户在“联网搜索”中配置的服务
  *   - fetch_url(url) 抓正文 + 转 markdown(jsdom + 朴素正文提取)
  */
 
@@ -21,6 +21,7 @@ import { readJson } from '../utils.js'
 import { getPublicAccount } from './authAccount.js'
 import { getSessionByToken } from '../db.js'
 import { dispatchHooks } from '../services/hooksService.js'
+import { searchWeb } from '../services/webSearchService.js'
 import { resolveClientId } from '../utils/loginGuard.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
@@ -551,7 +552,11 @@ export async function handleToolProxyRequest(req, res) {
     }
 
     if (toolName === 'web_search') {
-      result = await searchDuckDuckGo({ query: toolArgs.query, maxResults: toolArgs.maxResults })
+      result = await searchWeb({
+        userId,
+        query: toolArgs.query,
+        maxResults: toolArgs.max_results ?? toolArgs.maxResults,
+      })
     } else {
       result = await fetchAndExtract({ url: toolArgs.url })
     }

@@ -12,6 +12,7 @@ import {
   SettingsPetPanel,
 } from '../components/settings/SettingsSecondaryPanels.jsx'
 import SettingsToolsPanel from '../components/settings/SettingsToolsPanel.jsx'
+import SettingsWebSearchPanel from '../components/settings/SettingsWebSearchPanel.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { useLocation, useNavigate } from '../lib/router.jsx'
 import { getSystemDiagnostics, testModelEndpoint } from '../lib/modelClient.js'
@@ -19,6 +20,7 @@ import {
   resolveSettingsNavFromSearch,
   SETTINGS_TAB_ACCOUNT,
   SETTINGS_TAB_MODELS,
+  SETTINGS_TAB_WEB_SEARCH,
 } from '../lib/settingsNavigation.js'
 import { useAppContext } from '../store/AppContext'
 import { estimatePersistedSnapshotBytes } from '../store/indexedDbPersistence.js'
@@ -26,6 +28,7 @@ import { estimatePersistedSnapshotBytes } from '../store/indexedDbPersistence.js
 const SETTINGS_NAV = [
   '功能入口',
   SETTINGS_TAB_MODELS,
+  SETTINGS_TAB_WEB_SEARCH,
   SETTINGS_TAB_ACCOUNT,
   '权限中心',
   '工具',
@@ -140,6 +143,7 @@ export default function SettingsView() {
     switch (item) {
       case '功能入口': return '功能入口'
       case SETTINGS_TAB_MODELS: return t('modelProviders.navTitle')
+      case SETTINGS_TAB_WEB_SEARCH: return t('webSearch.title')
       case SETTINGS_TAB_ACCOUNT: return t('settings.account')
       case '权限中心': return t('nav.permissions')
       case '工具': return t('settings.tools')
@@ -162,6 +166,8 @@ export default function SettingsView() {
         return <SettingsFeatureHub navigate={navigate} t={t} />
       case SETTINGS_TAB_MODELS:
         return renderModels()
+      case SETTINGS_TAB_WEB_SEARCH:
+        return <SettingsWebSearchPanel t={t} />
       case '系统诊断':
         return <SettingsDiagnosticsPanel authMode={state.authMode} diagnostics={diagnostics} message={diagnosticsMessage} loading={diagnosticsLoading} onConfigureModels={() => setActiveNav(SETTINGS_TAB_MODELS)} onRefresh={refreshDiagnostics} onTest={testModel} t={t} />
       case SETTINGS_TAB_ACCOUNT:

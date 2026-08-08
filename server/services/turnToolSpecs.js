@@ -1,5 +1,6 @@
 import { listUserToolSpecs } from '../mcp/mcpManager.js'
 import { listRegisteredBrowserToolSpecs } from './browserTools.js'
+import { isWebSearchReady } from './webSearchService.js'
 
 function normalizeNames(values, limit = 256) {
   return [...new Set((Array.isArray(values) ? values : []).map(String).map((name) => name.trim()).filter(Boolean))]
@@ -22,7 +23,12 @@ export function applyServerToolsConfig(specs, toolsConfig) {
   })
 }
 
-export async function resolveTurnToolSpecs({ userId, baseSpecs = [], toolsConfig } = {}) {
+export async function resolveTurnToolSpecs({
+  userId,
+  baseSpecs = [],
+  toolsConfig,
+  webSearchReady = isWebSearchReady({ userId }),
+} = {}) {
   let mcpSpecs = []
   try {
     const result = await listUserToolSpecs(userId)
@@ -37,6 +43,10 @@ export async function resolveTurnToolSpecs({ userId, baseSpecs = [], toolsConfig
     const name = String(spec?.function?.name || '')
     if (name) merged.set(name, spec)
   }
-  return applyServerToolsConfig([...merged.values()], toolsConfig)
+  const readySpecs = [...merged.values()].filter((spec) => {
+    const name = String(spec?.function?.name || '')
+    return name !== 'web_search' || webSearchReady === true
+  })
+  return applyServerToolsConfig(readySpecs, toolsConfig)
     .sort((left, right) => String(left?.function?.name || '').localeCompare(String(right?.function?.name || ''), 'en'))
 }

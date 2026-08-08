@@ -60,6 +60,7 @@ import { handleConnectorRequest } from './routes/connectorRoutes.js'
 import { handleLocalFileAccessRequest } from './routes/localFileAccessRoutes.js'
 import { handleTurnEventRequest } from './routes/turnEventRoutes.js'
 import { handleMediaRequest } from './routes/mediaRoutes.js'
+import { handleWebSearchRequest } from './routes/webSearchRoutes.js'
 import { handleMcpServerRequest } from './mcp/mcpServer.js'
 import { attachTurnWebSocketServer } from './services/turnWebSocket.js'
 
@@ -309,6 +310,10 @@ function createRouter(getEnv = getRuntimeEnv, staticDir = distDir) {
 
   if (req.url?.startsWith('/api/media/')) {
     return handleMediaRequest(req, res)
+  }
+
+  if (req.url?.startsWith('/api/web-search')) {
+    return handleWebSearchRequest(req, res)
   }
 
   // 工具 spec 列表(底座 A) — 在更具体的 /api/tools/* 路由之前匹配,GET 公共端点

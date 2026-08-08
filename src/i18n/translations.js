@@ -750,8 +750,27 @@ const SETTINGS_DATA_EXPORT_TRANSLATIONS = {
   },
 }
 
+const WEB_SEARCH_TRANSLATIONS = {
+  zh: {
+    title: '联网搜索', subtitle: '配置一个搜索服务，让模型能查询最新网页信息并返回来源。', security: 'API Key 仅发送到 Gugo 后端，并使用本机凭据保险箱加密；不会写入浏览器存储或日志。', enabled: '启用联网搜索', provider: '搜索服务', providerHint: '预设只需填写 API Key；Google Custom Search 还需填写搜索引擎 ID。', presetBadge: '预设模板', customBadge: '自定义 REST', getApiKey: '获取 API Key', apiKey: 'API Key', apiKeyPlaceholder: '粘贴 API Key', secretKept: '已安全保存；留空保持不变', googleCx: '搜索引擎 ID（cx）', customHint: '可以在模板中使用 {query}、{maxResults}、{apiKey} 变量。自定义地址会拦截私网、回环和云元数据目标。', baseUrl: 'Base URL', method: '请求方法', queryParam: '查询参数名', headersTemplate: 'Headers（JSON）', bodyTemplate: 'Body（JSON）', resultPath: '结果数组路径', titlePath: '标题路径', urlPath: 'URL 路径', snippetPath: '摘要路径', placeholders: '可用变量：{query} · {maxResults} · {apiKey}', saved: '联网搜索配置已保存。', saveAndTest: '保存并测试', testing: '正在测试…', testSuccess: '连接成功，测试返回 {count} 条结果。', failed: '操作失败：{message}', lastTestOk: '最近测试成功', lastTestFailed: '最近测试失败', clear: '清除配置', clearConfirm: '清除联网搜索配置和已保存的 API Key？', cleared: '联网搜索配置已清除。',
+  },
+  en: {
+    title: 'Web search', subtitle: 'Configure a search service so models can retrieve current web information with sources.', security: 'The API key is sent only to the Gugo backend and encrypted in the local credential vault. It is never stored in browser storage or logs.', enabled: 'Enable web search', provider: 'Search provider', providerHint: 'Presets require only an API key. Google Custom Search also requires a search engine ID.', presetBadge: 'Preset', customBadge: 'Custom REST', getApiKey: 'Get an API key', apiKey: 'API key', apiKeyPlaceholder: 'Paste API key', secretKept: 'Saved securely; leave blank to keep it', googleCx: 'Search engine ID (cx)', customHint: 'Use {query}, {maxResults}, and {apiKey} placeholders. Private, loopback, and cloud metadata targets are blocked.', baseUrl: 'Base URL', method: 'HTTP method', queryParam: 'Query parameter', headersTemplate: 'Headers (JSON)', bodyTemplate: 'Body (JSON)', resultPath: 'Results array path', titlePath: 'Title path', urlPath: 'URL path', snippetPath: 'Snippet path', placeholders: 'Available placeholders: {query} · {maxResults} · {apiKey}', saved: 'Web search configuration saved.', saveAndTest: 'Save and test', testing: 'Testing…', testSuccess: 'Connected. The test returned {count} result(s).', failed: 'Operation failed: {message}', lastTestOk: 'Last test succeeded', lastTestFailed: 'Last test failed', clear: 'Clear configuration', clearConfirm: 'Clear the web search configuration and saved API key?', cleared: 'Web search configuration cleared.',
+  },
+  ja: {
+    title: 'ウェブ検索', subtitle: '検索サービスを設定し、モデルが出典付きの最新ウェブ情報を取得できるようにします。', security: 'API キーは Gugo バックエンドだけに送信され、ローカル資格情報保管庫で暗号化されます。ブラウザー保存領域やログには保存されません。', enabled: 'ウェブ検索を有効化', provider: '検索サービス', providerHint: 'プリセットは API キーのみ必要です。Google Custom Search には検索エンジン ID も必要です。', presetBadge: 'プリセット', customBadge: 'カスタム REST', getApiKey: 'API キーを取得', apiKey: 'API キー', apiKeyPlaceholder: 'API キーを貼り付け', secretKept: '安全に保存済み。空欄で維持', googleCx: '検索エンジン ID（cx）', customHint: '{query}、{maxResults}、{apiKey} を使用できます。プライベート、ループバック、クラウドメタデータ宛先は拒否されます。', baseUrl: 'Base URL', method: 'HTTP メソッド', queryParam: 'クエリパラメーター', headersTemplate: 'Headers（JSON）', bodyTemplate: 'Body（JSON）', resultPath: '結果配列のパス', titlePath: 'タイトルのパス', urlPath: 'URL のパス', snippetPath: '要約のパス', placeholders: '使用可能：{query} · {maxResults} · {apiKey}', saved: 'ウェブ検索設定を保存しました。', saveAndTest: '保存してテスト', testing: 'テスト中…', testSuccess: '接続成功。{count} 件の結果を取得しました。', failed: '操作に失敗しました：{message}', lastTestOk: '前回のテストは成功', lastTestFailed: '前回のテストは失敗', clear: '設定を消去', clearConfirm: 'ウェブ検索設定と保存済み API キーを消去しますか？', cleared: 'ウェブ検索設定を消去しました。',
+  },
+  ko: {
+    title: '웹 검색', subtitle: '검색 서비스를 설정하여 모델이 출처와 함께 최신 웹 정보를 가져오도록 합니다.', security: 'API 키는 Gugo 백엔드로만 전송되고 로컬 자격 증명 보관소에서 암호화됩니다. 브라우저 저장소나 로그에는 저장되지 않습니다.', enabled: '웹 검색 사용', provider: '검색 서비스', providerHint: '프리셋은 API 키만 필요합니다. Google Custom Search는 검색 엔진 ID도 필요합니다.', presetBadge: '프리셋', customBadge: '사용자 지정 REST', getApiKey: 'API 키 받기', apiKey: 'API 키', apiKeyPlaceholder: 'API 키 붙여넣기', secretKept: '안전하게 저장됨. 비워 두면 유지', googleCx: '검색 엔진 ID(cx)', customHint: '{query}, {maxResults}, {apiKey} 자리표시자를 사용할 수 있습니다. 사설망, 루프백 및 클라우드 메타데이터 대상은 차단됩니다.', baseUrl: 'Base URL', method: 'HTTP 메서드', queryParam: '쿼리 매개변수', headersTemplate: 'Headers(JSON)', bodyTemplate: 'Body(JSON)', resultPath: '결과 배열 경로', titlePath: '제목 경로', urlPath: 'URL 경로', snippetPath: '요약 경로', placeholders: '사용 가능: {query} · {maxResults} · {apiKey}', saved: '웹 검색 설정을 저장했습니다.', saveAndTest: '저장 및 테스트', testing: '테스트 중…', testSuccess: '연결 성공. 테스트에서 {count}개 결과를 반환했습니다.', failed: '작업 실패: {message}', lastTestOk: '최근 테스트 성공', lastTestFailed: '최근 테스트 실패', clear: '설정 지우기', clearConfirm: '웹 검색 설정과 저장된 API 키를 지울까요?', cleared: '웹 검색 설정을 지웠습니다.',
+  },
+  'zh-TW': {
+    title: '聯網搜尋', subtitle: '設定搜尋服務，讓模型取得附帶來源的最新網頁資訊。', security: 'API Key 僅傳送至 Gugo 後端，並由本機憑證保險庫加密；不會寫入瀏覽器儲存或日誌。', enabled: '啟用聯網搜尋', provider: '搜尋服務', providerHint: '預設只需填寫 API Key；Google Custom Search 還需搜尋引擎 ID。', presetBadge: '預設範本', customBadge: '自訂 REST', getApiKey: '取得 API Key', apiKey: 'API Key', apiKeyPlaceholder: '貼上 API Key', secretKept: '已安全儲存；留空保持不變', googleCx: '搜尋引擎 ID（cx）', customHint: '可使用 {query}、{maxResults}、{apiKey} 佔位符。私網、回環與雲端中繼資料目標會被阻擋。', baseUrl: 'Base URL', method: '請求方法', queryParam: '查詢參數名稱', headersTemplate: 'Headers（JSON）', bodyTemplate: 'Body（JSON）', resultPath: '結果陣列路徑', titlePath: '標題路徑', urlPath: 'URL 路徑', snippetPath: '摘要路徑', placeholders: '可用佔位符：{query} · {maxResults} · {apiKey}', saved: '聯網搜尋設定已儲存。', saveAndTest: '儲存並測試', testing: '正在測試…', testSuccess: '連線成功，測試傳回 {count} 筆結果。', failed: '操作失敗：{message}', lastTestOk: '最近測試成功', lastTestFailed: '最近測試失敗', clear: '清除設定', clearConfirm: '清除聯網搜尋設定和已儲存的 API Key？', cleared: '聯網搜尋設定已清除。',
+  },
+}
+
 export const translations = {
   zh: {
+    webSearch: WEB_SEARCH_TRANSLATIONS.zh,
     desktopUpdate: DESKTOP_UPDATE_TRANSLATIONS.zh,
     skillsMarket: { ...SKILLS_MARKET_TRANSLATIONS.zh, ...SKILLS_MARKET_UI_TRANSLATIONS.zh },
     storageNotice: STORAGE_NOTICE_TRANSLATIONS.zh,
@@ -814,6 +833,8 @@ export const translations = {
       searchResults: '搜索结果',
       searchNoMatch: '未找到匹配会话',
       sessionMenu: '会话菜单',
+      pinSession: '置顶会话',
+      unpinSession: '取消置顶',
       archiveSession: '归档会话',
       unarchiveSession: '取消归档',
       deleteSession: '删除会话',
@@ -1229,6 +1250,7 @@ export const translations = {
     },
   },
   en: {
+    webSearch: WEB_SEARCH_TRANSLATIONS.en,
     desktopUpdate: DESKTOP_UPDATE_TRANSLATIONS.en,
     skillsMarket: { ...SKILLS_MARKET_TRANSLATIONS.en, ...SKILLS_MARKET_UI_TRANSLATIONS.en },
     storageNotice: STORAGE_NOTICE_TRANSLATIONS.en,
@@ -1291,6 +1313,8 @@ export const translations = {
       searchResults: 'Results',
       searchNoMatch: 'No matching sessions',
       sessionMenu: 'Session menu',
+      pinSession: 'Pin conversation',
+      unpinSession: 'Unpin conversation',
       archiveSession: 'Archive session',
       unarchiveSession: 'Unarchive',
       deleteSession: 'Delete conversation',
@@ -1706,6 +1730,7 @@ export const translations = {
     },
   },
   ja: {
+    webSearch: WEB_SEARCH_TRANSLATIONS.ja,
     desktopUpdate: DESKTOP_UPDATE_TRANSLATIONS.ja,
     skillsMarket: { ...SKILLS_MARKET_TRANSLATIONS.ja, ...SKILLS_MARKET_UI_TRANSLATIONS.ja },
     storageNotice: STORAGE_NOTICE_TRANSLATIONS.ja,
@@ -1768,6 +1793,8 @@ export const translations = {
       searchResults: '検索結果',
       searchNoMatch: '一致するセッションが見つかりません',
       sessionMenu: 'セッションメニュー',
+      pinSession: '会話をピン留め',
+      unpinSession: 'ピン留めを解除',
       archiveSession: 'セッションをアーカイブ',
       unarchiveSession: 'アーカイブ解除',
       deleteSession: '会話を削除',
@@ -2183,6 +2210,7 @@ export const translations = {
     },
   },
   ko: {
+    webSearch: WEB_SEARCH_TRANSLATIONS.ko,
     desktopUpdate: DESKTOP_UPDATE_TRANSLATIONS.ko,
     skillsMarket: { ...SKILLS_MARKET_TRANSLATIONS.ko, ...SKILLS_MARKET_UI_TRANSLATIONS.ko },
     storageNotice: STORAGE_NOTICE_TRANSLATIONS.ko,
@@ -2245,6 +2273,8 @@ export const translations = {
       searchResults: '검색 결과',
       searchNoMatch: '일치하는 세션이 없습니다',
       sessionMenu: '세션 메뉴',
+      pinSession: '대화 고정',
+      unpinSession: '고정 해제',
       archiveSession: '세션 보관',
       unarchiveSession: '보관 해제',
       deleteSession: '대화 삭제',
@@ -2660,6 +2690,7 @@ export const translations = {
     },
   },
   'zh-TW': {
+    webSearch: WEB_SEARCH_TRANSLATIONS['zh-TW'],
     desktopUpdate: DESKTOP_UPDATE_TRANSLATIONS['zh-TW'],
     skillsMarket: { ...SKILLS_MARKET_TRANSLATIONS['zh-TW'], ...SKILLS_MARKET_UI_TRANSLATIONS['zh-TW'] },
     storageNotice: STORAGE_NOTICE_TRANSLATIONS['zh-TW'],
@@ -2722,6 +2753,8 @@ export const translations = {
       searchResults: '搜尋結果',
       searchNoMatch: '未找到符合的會話',
       sessionMenu: '會話選單',
+      pinSession: '置頂會話',
+      unpinSession: '取消置頂',
       archiveSession: '封存會話',
       unarchiveSession: '取消封存',
       deleteSession: '刪除會話',

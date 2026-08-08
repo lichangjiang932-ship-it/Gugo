@@ -1,4 +1,5 @@
 import { getDb } from '../db.js'
+import { listSessionTurnArtifacts } from './turnArtifactStore.js'
 
 const LOCAL_OWNER_META_KEY = 'local_auth_owner_user_id'
 const SESSION_SCOPED_TABLES = [
@@ -64,6 +65,7 @@ function mapSession(row) {
     updatedAt: row.updated_at || row.created_at,
     lastViewedAt: row.last_viewed_at || null,
     archivedAt: row.archived_at || null,
+    pinnedAt: row.pinned_at ?? null,
     revision: Number(row.revision) || 0,
   }
 }
@@ -224,7 +226,7 @@ export function claimLocalChatSession({ userId, sessionId, authMode, now = Date.
 export function getSession({ userId, sessionId }) {
   if (!userId || !sessionId) return null
   const row = getDb().prepare(`
-    SELECT token, id, title, created_at, updated_at, last_viewed_at, archived_at, revision
+    SELECT token, id, title, created_at, updated_at, last_viewed_at, archived_at, pinned_at, revision
     FROM sessions
     WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
   `).get(userId, sessionId)
@@ -238,10 +240,14 @@ export function listSessions({ userId, archived = 'false', limit = 100, offset =
   if (filter === 'true') clauses.push('archived_at IS NOT NULL')
   if (filter === 'false') clauses.push('archived_at IS NULL')
   const rows = getDb().prepare(`
-    SELECT token, id, title, created_at, updated_at, last_viewed_at, archived_at, revision
+    SELECT token, id, title, created_at, updated_at, last_viewed_at, archived_at, pinned_at, revision
     FROM sessions
     WHERE ${clauses.join(' AND ')}
-    ORDER BY COALESCE(updated_at, created_at) DESC
+    ORDER BY
+      CASE WHEN pinned_at IS NULL THEN 1 ELSE 0 END ASC,
+      pinned_at DESC,
+      CASE WHEN pinned_at IS NULL THEN COALESCE(updated_at, created_at) ELSE 0 END DESC,
+      token ASC
     LIMIT @limit OFFSET @offset
   `).all({
     userId,
@@ -269,6 +275,28 @@ export function unarchiveSession({ userId, sessionId, now = Date.now() }) {
     SET archived_at = NULL, updated_at = ?, revision = revision + 1
     WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
   `).run(now, userId, sessionId)
+  if (!result.changes) return null
+  return getSession({ userId, sessionId })
+}
+
+export function pinSession({ userId, sessionId, now = Date.now() }) {
+  if (!userId || !sessionId) return null
+  const result = getDb().prepare(`
+    UPDATE sessions
+    SET pinned_at = COALESCE(pinned_at, ?), revision = revision + 1
+    WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
+  `).run(now, userId, sessionId)
+  if (!result.changes) return null
+  return getSession({ userId, sessionId })
+}
+
+export function unpinSession({ userId, sessionId }) {
+  if (!userId || !sessionId) return null
+  const result = getDb().prepare(`
+    UPDATE sessions
+    SET pinned_at = NULL, revision = revision + 1
+    WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
+  `).run(userId, sessionId)
   if (!result.changes) return null
   return getSession({ userId, sessionId })
 }
@@ -366,7 +394,33 @@ export function getSessionSnapshot({ userId, sessionId, limit = 2000, offset = 0
       FROM messages
       WHERE user_id = ? AND session_id = ?
     `).get(userId, sessionId).count
+    const artifactsByTurn = new Map()
+    for (const artifact of listSessionTurnArtifacts({ userId, sessionId })) {
+      const entries = artifactsByTurn.get(artifact.turnId) || []
+      entries.push({
+        id: artifact.id,
+        type: artifact.type,
+        title: artifact.title,
+        url: artifact.url,
+        filename: artifact.filename,
+        createdAt: artifact.createdAt,
+      })
+      artifactsByTurn.set(artifact.turnId, entries)
+    }
     const messages = listMessages({ userId, sessionId, limit: safeLimit, offset: safeOffset })
+      .map((message) => {
+        const turnId = String(message?.modelContext?.turnId || '')
+        if (!turnId) return message
+        const artifacts = artifactsByTurn.get(turnId) || []
+        if (!artifacts.length) return message
+        const requestedIds = Array.isArray(message.modelContext?.artifactIds)
+          ? new Set(message.modelContext.artifactIds.map(String))
+          : null
+        const matched = requestedIds?.size
+          ? artifacts.filter((artifact) => requestedIds.has(String(artifact.id)))
+          : artifacts
+        return matched.length ? { ...message, artifacts: matched } : message
+      })
     const complete = safeOffset + messages.length >= totalMessages
     return {
       session,

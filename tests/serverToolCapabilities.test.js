@@ -57,12 +57,21 @@ test('resolveTurnToolSpecs removes explicitly disabled builtins after merging to
       enabled: ['read_file', 'web_search'],
       disabled: ['list_directory', 'read_file', 'bash_exec'],
     },
+    webSearchReady: true,
   })
   const names = namesOf(resolved)
   assert.equal(names.includes('list_directory'), false)
   assert.equal(names.includes('read_file'), false, 'disabled must win over enabled')
   assert.equal(names.includes('bash_exec'), false)
   assert.equal(names.includes('web_search'), true)
+})
+
+test('resolveTurnToolSpecs exposes web search only when dedicated configuration is ready', async () => {
+  const baseSpecs = [getBuiltinSpec('web_search'), getBuiltinSpec('fetch_url')]
+  const hidden = await resolveTurnToolSpecs({ userId: 'search-unconfigured', baseSpecs, webSearchReady: false })
+  const visible = await resolveTurnToolSpecs({ userId: 'search-configured', baseSpecs, webSearchReady: true })
+  assert.deepEqual(namesOf(hidden), ['fetch_url'])
+  assert.deepEqual(namesOf(visible), ['fetch_url', 'web_search'])
 })
 
 test('list_directory advertised by the server has a real executor', async () => {

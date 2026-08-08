@@ -1,5 +1,4 @@
 const TOOLS = [
-  { id: 'web_search', name: '网页搜索', desc: '让模型通过 DuckDuckGo 查询最新信息（返回 title/url/snippet）。' },
   { id: 'fetch_url', name: '抓取链接', desc: '让模型把页面正文抓回来转 markdown 阅读。' },
   { id: 'create_pptx', name: '生成 PPT 文件', desc: '直接生成可预览、可下载的 PPTX 卡片。' },
   { id: 'create_docx', name: '生成 Word 文件', desc: '直接产出 DOCX 文档或报告。' },

@@ -3,7 +3,9 @@ import test from 'node:test'
 import {
   deleteSessionRemote,
   normalizeSessionMessagesForServer,
+  pinSessionRemote,
   replaceSessionMessagesRemote,
+  unpinSessionRemote,
 } from '../src/lib/sessionClient.js'
 
 function response(body, status = 200) {
@@ -42,6 +44,23 @@ test('deleteSessionRemote includes the expected revision in its request body', a
   assert.equal(request.url, '/api/sessions/session%2Fone')
   assert.equal(request.options.method, 'DELETE')
   assert.deepEqual(JSON.parse(request.options.body), { expectedRevision: 9 })
+})
+
+test('session pin clients use encoded user-scoped endpoints', async () => {
+  const requests = []
+  const fetchImpl = async (url, options) => {
+    requests.push({ url, options })
+    return response({ ok: true, session: { id: 'session/one' } })
+  }
+
+  await pinSessionRemote('session/one', { fetchImpl })
+  await unpinSessionRemote('session/one', { fetchImpl })
+
+  assert.deepEqual(requests.map(({ url }) => url), [
+    '/api/sessions/session%2Fone/pin',
+    '/api/sessions/session%2Fone/unpin',
+  ])
+  assert.ok(requests.every(({ options }) => options.method === 'POST'))
 })
 
 test('session mutation clients preserve structured conflict errors', async () => {

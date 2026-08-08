@@ -12,12 +12,8 @@ const DRAG_THRESHOLD = 5
 const INTERACTION_ROWS = [3, 8, 2]
 const INTERACTION_DURATION_MS = 1_100
 
-function sendDrag(phase, event = {}) {
-  window.gugoDesktop?.dragPetWindow?.({
-    phase,
-    screenX: Number(event?.screenX) || 0,
-    screenY: Number(event?.screenY) || 0,
-  })
+function sendDrag(phase) {
+  window.gugoDesktop?.dragPetWindow?.({ phase })
 }
 
 function captureActivePointer(drag) {
@@ -125,7 +121,7 @@ export default function DesktopPetWindow() {
       } catch { /* the capture was already released by Chromium */ }
     }
     suppressClickRef.current = !cancelled && drag.moved
-    sendDrag('end', event)
+    sendDrag('end')
     return true
   }, [])
 
@@ -167,8 +163,8 @@ export default function DesktopPetWindow() {
     finishActiveDrag(null, { cancelled: true })
     const drag = {
       pointerId: event.pointerId,
-      startX: event.screenX,
-      startY: event.screenY,
+      startX: event.clientX,
+      startY: event.clientY,
       moved: false,
       captured: false,
       target: event.currentTarget,
@@ -187,7 +183,10 @@ export default function DesktopPetWindow() {
     event.preventDefault()
     // Moving a frameless BrowserWindow can make Chromium drop capture. Re-acquire
     // it on the next event instead of mistaking that transition for mouse-up.
-    const distance = Math.hypot(event.screenX - drag.startX, event.screenY - drag.startY)
+    // client coordinates stay stable while the transparent BrowserWindow is
+    // being composited. screen coordinates can shift on mixed-DPI displays and
+    // falsely turn a long press into an endless self-propelled drag.
+    const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY)
     if (!drag.moved && distance < DRAG_THRESHOLD) return
     if (!drag.moved) {
       drag.moved = true
