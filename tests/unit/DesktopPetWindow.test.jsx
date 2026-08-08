@@ -9,7 +9,12 @@ import DesktopPetWindow from '../../src/pages/ChatSplit/DesktopPetWindow.jsx'
 
 function pointerEvent(dom, type, values) {
   const event = new dom.window.Event(type, { bubbles: true, cancelable: true })
-  for (const [key, value] of Object.entries(values)) {
+  const coordinates = {
+    clientX: values.clientX ?? values.screenX,
+    clientY: values.clientY ?? values.screenY,
+    ...values,
+  }
+  for (const [key, value] of Object.entries(coordinates)) {
     Object.defineProperty(event, key, { configurable: true, value })
   }
   return event
@@ -83,6 +88,15 @@ test('standalone desktop pet keeps fast drags alive and always releases the poin
     })
     assert.equal(capturedPointer, null, 'a click must not capture the pointer or block other applications')
     assert.equal(dragMessages.at(-1).phase, 'start')
+
+    await act(async () => {
+      pet.dispatchEvent(pointerEvent(dom, 'pointermove', {
+        pointerId: 7, pointerType: 'mouse', button: 0, buttons: 1,
+        screenX: 180, screenY: 170, clientX: 100, clientY: 100,
+      }))
+    })
+    assert.equal(dragMessages.filter(({ phase }) => phase === 'move').length, 0, 'window-coordinate drift must not move a held pet')
+    assert.equal(capturedPointer, null, 'a stationary long press must never capture the pointer')
 
     await act(async () => {
       pet.dispatchEvent(pointerEvent(dom, 'pointermove', {

@@ -9,6 +9,7 @@ import {
   verifyEmailCode,
 } from '../server/adapters/authAccount.js'
 import { getDb } from '../server/db.js'
+import { configureWebSearch } from '../server/services/webSearchService.js'
 
 // 每个测试进程使用独立数据库目录，避免并行测试冲突
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-tests', String(process.pid))
@@ -25,6 +26,7 @@ function createReq({
   token = '',
   ip = '203.0.113.10',
   forwardedFor = ip,
+  body = {},
 } = {}) {
   let sent = false
   return {
@@ -38,7 +40,7 @@ function createReq({
     async *[Symbol.asyncIterator]() {
       if (sent) return
       sent = true
-      yield Buffer.from('{}')
+      yield Buffer.from(JSON.stringify(body))
     },
   }
 }
@@ -118,4 +120,18 @@ test('tool rate limit ignores forged X-Forwarded-For unless TRUST_PROXY is enabl
     if (previous == null) delete process.env.TRUST_PROXY
     else process.env.TRUST_PROXY = previous
   }
+})
+
+test('legacy web search endpoint uses the user-scoped dedicated configuration', async () => {
+  const { token, user } = verifyEmailCode({
+    email: 'legacy-search-user@example.com',
+    code: issueEmailCode({ email: 'legacy-search-user@example.com', code: '555555' }).devCode,
+  })
+  configureWebSearch({ userId: user.id, provider: 'brave', enabled: false, apiKey: 'search-key', config: {} })
+  const res = createRes()
+  await handleToolProxyRequest(createReq({
+    url: '/api/tools/search', token, ip: '198.51.100.90', body: { query: 'latest' },
+  }), res)
+  assert.equal(res.statusCode, 400)
+  assert.match(JSON.parse(res.body).error, /联网搜索已关闭/)
 })

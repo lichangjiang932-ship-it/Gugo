@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { PanelLeftClose, PanelLeftOpen, Plus, Search, Wrench } from 'lucide-react'
 import { useLocation, useNavigate } from '../lib/router.jsx'
 import { useAppContext } from '../store/AppContext'
-import { archiveSessionRemote, unarchiveSessionRemote } from '../lib/sessionClient.js'
+import { archiveSessionRemote, pinSessionRemote, unarchiveSessionRemote, unpinSessionRemote } from '../lib/sessionClient.js'
 import { getAuthToken } from '../lib/accountClient.js'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { useToast } from './Toast.jsx'
@@ -75,6 +75,21 @@ export default function LeftRail() {
       toast.error({ title: t('errors.saveFailed'), body: error.message })
     }
   }
+  const handlePinToggle = async (session) => {
+    controller.setOpenMenuId(null)
+    const previousPinnedAt = session.pinnedAt || null
+    const nextPinnedAt = previousPinnedAt ? null : Date.now()
+    dispatch({ type: 'SET_SESSION_PIN', payload: { sessionId: session.id, pinnedAt: nextPinnedAt } })
+    if (!getAuthToken()) return
+    try {
+      const result = previousPinnedAt ? await unpinSessionRemote(session.id) : await pinSessionRemote(session.id)
+      if (result?.session) dispatch({ type: 'APPLY_SERVER_SESSION_METADATA', payload: { sessionId: session.id, session: result.session } })
+    } catch (error) {
+      if (/session not found/i.test(error.message || '')) return
+      dispatch({ type: 'SET_SESSION_PIN', payload: { sessionId: session.id, pinnedAt: previousPinnedAt } })
+      toast.error({ title: t('errors.saveFailed'), body: error.message })
+    }
+  }
 
   const navButton = (Icon, label, onClick, active = false) => <button type="button" onClick={onClick} title={collapsed ? label : undefined} aria-label={label} className={`flex h-9 w-full items-center rounded-lg text-[13px] transition-colors ${collapsed ? 'justify-center px-0' : 'gap-2.5 px-2.5'} ${active ? 'bg-ink/[0.065] font-medium text-ink' : 'text-ink-soft hover:bg-ink/[0.045] hover:text-ink'}`}><Icon className="h-4 w-4 shrink-0" />{!collapsed && <span className="truncate">{label}</span>}</button>
 
@@ -92,7 +107,7 @@ export default function LeftRail() {
         {navButton(Wrench, t('nav.skills'), () => { closeMobileRail(); controller.navigateItem({ path: '/skills' }) }, location.pathname === '/skills')}
       </div>
 
-      {!collapsed && <div className="mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-0.5"><SessionList sessions={sessions} activeSessionId={state.activeSessionId} openMenuId={controller.openMenuId} onMenuOpen={controller.setOpenMenuId} onMenuToggle={(id) => controller.setOpenMenuId(controller.openMenuId === id ? null : id)} onMenuClose={controller.closeSessionMenu} onOpen={handleOpenSession} onArchiveToggle={handleArchiveToggle} onDelete={handleDelete} lang={lang} t={t} /></div>}
+      {!collapsed && <div className="mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-0.5"><SessionList sessions={sessions} activeSessionId={state.activeSessionId} openMenuId={controller.openMenuId} onMenuOpen={controller.setOpenMenuId} onMenuToggle={(id) => controller.setOpenMenuId(controller.openMenuId === id ? null : id)} onMenuClose={controller.closeSessionMenu} onOpen={handleOpenSession} onPinToggle={handlePinToggle} onArchiveToggle={handleArchiveToggle} onDelete={handleDelete} lang={lang} t={t} /></div>}
       {collapsed && <div className="min-h-0 flex-1" />}
       <AccountArea compact={collapsed} accountMenuOpen={controller.accountMenuOpen} accountMenuRef={controller.accountMenuRef} user={state.user} pendingApprovals={controller.pendingApprovals} onToggle={() => { controller.closeSessionMenu(); controller.setAccountMenuOpen((open) => !open) }} onNavigate={(item) => { closeMobileRail(); controller.navigateItem(item) }} t={t} />
     </aside>

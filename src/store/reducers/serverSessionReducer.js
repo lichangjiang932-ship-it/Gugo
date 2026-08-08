@@ -13,6 +13,9 @@ export function reduceServerSessionState(state, action) {
           return {
             ...session,
             messages: mergeServerSessionMessages(session.messages, snapshot.messages),
+            ...(Object.prototype.hasOwnProperty.call(snapshot.session || {}, 'pinnedAt')
+              ? { pinnedAt: snapshot.session.pinnedAt }
+              : {}),
             serverRevision: revision,
             updatedAt: Math.max(Number(session.updatedAt) || 0, revision),
           }
@@ -33,6 +36,9 @@ export function reduceServerSessionState(state, action) {
             ...session,
             ...(Object.prototype.hasOwnProperty.call(metadata, 'archivedAt')
               ? { archivedAt: metadata.archivedAt }
+              : {}),
+            ...(Object.prototype.hasOwnProperty.call(metadata, 'pinnedAt')
+              ? { pinnedAt: metadata.pinnedAt }
               : {}),
             serverRevision: revision,
             updatedAt: Math.max(Number(session.updatedAt) || 0, Number(metadata.updatedAt) || 0),

@@ -31,7 +31,7 @@ export function createInitialState() {
     skillConfigs: {},
     agentMode: 'chat',
     previewArtifact: null,
-    toolsConfig: { web_search: false, fetch_url: false, create_pptx: true, create_docx: true, create_xlsx: true, create_react_component: true, create_mermaid: true, create_chart: true, create_svg: true, create_html_app: true, Agent: true, list_directory: false, read_file: false, write_file: false, edit_file: false, bash_exec: false, git_status: false, git_diff: false, run_project_check: false, manage_todos: true },
+    toolsConfig: { fetch_url: false, create_pptx: true, create_docx: true, create_xlsx: true, create_react_component: true, create_mermaid: true, create_chart: true, create_svg: true, create_html_app: true, Agent: true, list_directory: false, read_file: false, write_file: false, edit_file: false, bash_exec: false, git_status: false, git_diff: false, run_project_check: false, manage_todos: true },
     sessionDrafts: {},
     persistenceNotice: null,
   }

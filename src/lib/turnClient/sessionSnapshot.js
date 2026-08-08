@@ -125,6 +125,9 @@ export function normalizeServerSessionSnapshot(snapshot) {
         const toolCalls = message.role === 'assistant'
           ? toolCallsFromContext({ toolTrace })
           : []
+        const serverArtifacts = message.role === 'assistant' && Array.isArray(message?.artifacts)
+          ? message.artifacts.filter((artifact) => artifact?.id && artifact?.url && artifact?.filename)
+          : []
         return {
           id: message.id,
           role: message.role,
@@ -137,6 +140,7 @@ export function normalizeServerSessionSnapshot(snapshot) {
               serverAuthoritative: true,
               toolCalls,
               ...(toolTrace.length ? { toolTrace } : {}),
+              ...(serverArtifacts.length ? { serverArtifacts } : {}),
             },
           } : {}),
         }

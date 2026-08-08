@@ -5,6 +5,10 @@ import {
   DEFAULT_DESKTOP_PET_LAYOUT,
   resolveDesktopPetLayout,
 } from '../shared/desktopPetLayout.js'
+import {
+  createDesktopPetDragSession,
+  resolveDesktopPetDragMove,
+} from '../desktop/petDrag.js'
 
 const read = (relativePath) => fs.readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8')
 
@@ -34,6 +38,7 @@ test('NSIS package includes server runtime dependencies and updater metadata', (
   assert.equal(fs.existsSync(new URL('../src/data/skillCatalog.js', import.meta.url)), true)
   assert.match(config, /src\/lib\/pptCore\.js/)
   assert.match(config, /src\/lib\/presentationPlanner\.js/)
+  assert.match(config, /^\s*-\s+desktop\/petDrag\.js\s*$/m)
   assert.match(config, /npmRebuild:\s*false/)
   assert.match(config, /^\s*icon:\s*build\/icon\.ico\s*$/m)
   assert.match(config, /^\s*installerIcon:\s*build\/icon\.ico\s*$/m)
@@ -163,7 +168,7 @@ test('desktop pet animation updates one sprite layer without full React repaint 
 
   assert.match(main, /desktop:resize-pet-window/)
   assert.match(main, /desktop:pet-drag/)
-  assert.match(main, /window\.setPosition\(next\.x, next\.y, false\)/)
+  assert.match(main, /window\.setBounds\(move\.bounds, false\)/)
   assert.match(main, /DEFAULT_DESKTOP_PET_LAYOUT\.windowWidth/)
   assert.match(main, /petState\.status\.kind === kind && petState\.status\.tool === tool/)
   assert.match(preload, /desktop:resize-pet-window/)
@@ -194,8 +199,30 @@ test('desktop pet drag can cross monitor boundaries without being clamped', () =
   const dragHandler = main.slice(start, end)
 
   assert.ok(start >= 0 && end > start)
-  assert.match(dragHandler, /window\.setPosition\(next\.x, next\.y, false\)/)
+  assert.match(dragHandler, /screen\.getCursorScreenPoint\(\)/)
+  assert.match(dragHandler, /window\.setBounds\(move\.bounds, false\)/)
   assert.doesNotMatch(dragHandler, /clampPetBounds/, 'dragging must remain free across the virtual desktop')
+})
+
+test('desktop pet drag ignores synthetic movement and keeps a fixed hit area', () => {
+  const session = createDesktopPetDragSession({
+    senderId: 7,
+    cursor: { x: 400, y: 300 },
+    bounds: { x: 360, y: 260, width: 73, height: 79 },
+  })
+  assert.ok(session)
+
+  const stationary = resolveDesktopPetDragMove(session, { x: 400, y: 300 })
+  assert.equal(stationary.accepted, false)
+  assert.equal(stationary.reason, 'stationary')
+
+  const moved = resolveDesktopPetDragMove(session, { x: 460, y: 330 })
+  assert.equal(moved.accepted, true)
+  assert.deepEqual(moved.bounds, { x: 420, y: 290, width: 73, height: 79 })
+
+  const returned = resolveDesktopPetDragMove(moved.session, { x: 400, y: 300 })
+  assert.equal(returned.accepted, true)
+  assert.deepEqual(returned.bounds, { x: 360, y: 260, width: 73, height: 79 })
 })
 
 test('version tags publish a Windows installer and updater metadata through GitHub Releases', () => {

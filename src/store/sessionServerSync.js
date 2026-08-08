@@ -72,6 +72,13 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
         merged.meta.serverTurnId = serverMeta.serverTurnId ?? localMeta.serverTurnId ?? null
         merged.meta.streaming = false
         merged.meta.serverAuthoritative = true
+        // A completed snapshot is the source of truth for persisted files.
+        // Keep local artifacts only when an older server response does not
+        // expose the field at all; an explicit server list must replace an
+        // empty or partial list left behind by a missed live tool event.
+        if (Object.hasOwn(serverMeta, 'serverArtifacts')) {
+          merged.meta.serverArtifacts = serverMeta.serverArtifacts
+        }
       }
     }
     return merged

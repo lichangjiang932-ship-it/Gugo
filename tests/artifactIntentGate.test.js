@@ -9,6 +9,7 @@ import {
 } from '../server/services/artifactIntent.js'
 import { runToolsLoop, SERVER_TOOL_SPECS, selectJobToolSpecs } from '../server/services/jobTools.js'
 import { buildFinalOutput, shouldCompileDocx } from '../server/services/jobWorkflow.js'
+import { validateHtmlArtifactSource } from '../server/services/artifactGen.js'
 
 const nameOf = (specs) => specs.map((s) => s?.function?.name)
 
@@ -120,6 +121,25 @@ test('slash skill unlocks its matching artifact tool', () => {
   assert.ok(!webpageNames.includes('create_pptx'))
 })
 
+test('slash artifact skills stay locked to one generator unless multiple file formats are explicit', () => {
+  assert.deepEqual(
+    detectArtifactIntent('/webpage build a website for a quarterly report'),
+    { pptx: false, docx: false, xlsx: false, html: true },
+  )
+  assert.deepEqual(
+    detectArtifactIntent('/doc create a report with a spreadsheet-style table'),
+    { pptx: false, docx: true, xlsx: false, html: false },
+  )
+  assert.deepEqual(
+    detectArtifactIntent('/ppt present the quarterly report'),
+    { pptx: true, docx: false, xlsx: false, html: false },
+  )
+  assert.deepEqual(
+    [...allowedArtifactTools('/webpage build a website and also export a Word document')].sort(),
+    ['create_docx', 'create_html_app'],
+  )
+})
+
 test('text tool protocol from a local model becomes a real webpage artifact call', async () => {
   const deltas = []
   const executions = []
@@ -156,6 +176,286 @@ test('text tool protocol from a local model becomes a real webpage artifact call
   assert.deepEqual(result.artifactIds, ['html-artifact-1'])
   assert.equal(result.text, '网页已生成。')
   assert.equal(deltas.join('').includes('<tool_call>'), false)
+})
+
+test('webpage delivery retries natural-language fallback until a real artifact exists', async () => {
+  const deltas = []
+  const executions = []
+  const visibleToolNames = []
+  let modelCalls = 0
+  const result = await runToolsLoop({
+    job: { id: 'webpage-delivery-guard', userId: 'intent-user', origin: 'chat', prompt: '/webpage build a product page' },
+    step: { id: 'webpage-delivery-guard', kind: 'chat' },
+    messages: [{ role: 'user', content: '/webpage build a product page' }],
+    skillId: 'webpage',
+    toolSpecs: SERVER_TOOL_SPECS,
+    enableToolHooks: false,
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    onModelDelta: async ({ text }) => deltas.push(text),
+    executeTool: async ({ name, args }) => {
+      executions.push({ name, args })
+      return { ok: true, artifactId: 'guarded-html-1', filename: 'product.html', url: '/api/artifacts/product.html' }
+    },
+    runModel: async ({ messages, tools }) => {
+      modelCalls += 1
+      visibleToolNames.push(tools.map((tool) => tool.function.name))
+      if (modelCalls === 1) {
+        return { content: 'Copy this HTML into a new file and save it as product.html.', toolCalls: [] }
+      }
+      if (modelCalls === 2) {
+        assert.ok(messages.some((message) => String(message.content || '').includes('[PERSISTED ARTIFACT DELIVERY REQUIRED]')))
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'guarded-html-call',
+            function: {
+              name: 'create_html_app',
+              arguments: JSON.stringify({
+                title: 'Product',
+                html: '<!doctype html><html><body><main>Product</main></body></html>',
+              }),
+            },
+          }],
+        }
+      }
+      return { content: 'The webpage is ready.', toolCalls: [] }
+    },
+  })
+
+  assert.equal(modelCalls, 3)
+  assert.equal(executions.length, 1)
+  assert.equal(executions[0].name, 'create_html_app')
+  assert.deepEqual(result.artifactIds, ['guarded-html-1'])
+  assert.equal(result.text, 'The webpage is ready.')
+  assert.equal(deltas.join(''), 'The webpage is ready.')
+  assert.equal(visibleToolNames[0].includes('request_directory'), false)
+})
+
+test('webpage delivery rejects handoff prose disguised as HTML and accepts the corrected tool call', async () => {
+  const executions = []
+  let modelCalls = 0
+  const fakeHtml = `<!doctype html><html><body><main><p>
+    网页代码已生成。复制上面的完整代码，新建文件并粘贴保存为 product.html，然后双击用浏览器打开。
+  </p></main></body></html>`
+  const realHtml = '<!doctype html><html><body><main><h1>Product</h1><section><p>Fast and reliable.</p></section></main></body></html>'
+
+  const result = await runToolsLoop({
+    job: { id: 'webpage-invalid-html-retry', userId: 'intent-user', origin: 'chat', prompt: '/webpage build a product page' },
+    step: { id: 'webpage-invalid-html-retry', kind: 'chat' },
+    messages: [{ role: 'user', content: '/webpage build a product page' }],
+    skillId: 'webpage',
+    toolSpecs: SERVER_TOOL_SPECS,
+    enableToolHooks: false,
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    executeTool: async ({ name, args }) => {
+      executions.push({ name, html: args.html })
+      try {
+        validateHtmlArtifactSource(args.html)
+      } catch (error) {
+        return { ok: false, code: 'invalid_html_artifact', error: error.message }
+      }
+      return { ok: true, artifactId: 'real-html-artifact', filename: 'product.html', url: '/api/artifacts/product.html' }
+    },
+    runModel: async ({ messages }) => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'fake-html-call',
+            function: { name: 'create_html_app', arguments: JSON.stringify({ title: 'Product', html: fakeHtml }) },
+          }],
+        }
+      }
+      if (modelCalls === 2) {
+        assert.ok(messages.some((message) => (
+          message.role === 'tool' && String(message.content || '').includes('delivery instructions')
+        )))
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'real-html-call',
+            function: { name: 'create_html_app', arguments: JSON.stringify({ title: 'Product', html: realHtml }) },
+          }],
+        }
+      }
+      return { content: 'The real webpage is ready.', toolCalls: [] }
+    },
+  })
+
+  assert.equal(modelCalls, 3)
+  assert.deepEqual(executions.map(({ name }) => name), ['create_html_app', 'create_html_app'])
+  assert.deepEqual(result.artifactIds, ['real-html-artifact'])
+  assert.equal(result.text, 'The real webpage is ready.')
+})
+
+test('webpage slash skill does not require a docx for quarterly report content', async () => {
+  const executions = []
+  let modelCalls = 0
+  const prompt = '/webpage build a website for a quarterly report'
+  const result = await runToolsLoop({
+    job: { id: 'webpage-quarterly-report', userId: 'intent-user', origin: 'chat', prompt },
+    step: { id: 'webpage-quarterly-report', kind: 'chat' },
+    messages: [{ role: 'user', content: prompt }],
+    skillId: 'webpage',
+    toolSpecs: SERVER_TOOL_SPECS,
+    enableToolHooks: false,
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    executeTool: async ({ name }) => {
+      executions.push(name)
+      return { ok: true, artifactId: 'quarterly-html', filename: 'quarterly-report.html', url: '/api/artifacts/quarterly-report.html' }
+    },
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'quarterly-html-call',
+            function: {
+              name: 'create_html_app',
+              arguments: JSON.stringify({
+                title: 'Quarterly report',
+                html: '<!doctype html><html><body><main>Quarterly report</main></body></html>',
+              }),
+            },
+          }],
+        }
+      }
+      return { content: 'The quarterly report website is ready.', toolCalls: [] }
+    },
+  })
+
+  assert.equal(modelCalls, 2)
+  assert.deepEqual(executions, ['create_html_app'])
+  assert.deepEqual(result.artifactIds, ['quarterly-html'])
+  assert.equal(result.text, 'The quarterly report website is ready.')
+})
+
+test('a multi-file request without a slash skill still requires every requested artifact', async () => {
+  const executions = []
+  let modelCalls = 0
+  const prompt = 'Create a Word document and export an Excel spreadsheet'
+  const result = await runToolsLoop({
+    job: { id: 'multi-artifact-request', userId: 'intent-user', origin: 'chat', prompt },
+    step: { id: 'multi-artifact-request', kind: 'chat' },
+    messages: [{ role: 'user', content: prompt }],
+    toolSpecs: SERVER_TOOL_SPECS,
+    enableToolHooks: false,
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    executeTool: async ({ name }) => {
+      executions.push(name)
+      return {
+        ok: true,
+        artifactId: `${name}-artifact`,
+        filename: name === 'create_docx' ? 'summary.docx' : 'summary.xlsx',
+      }
+    },
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [
+            {
+              id: 'multi-docx-call',
+              function: {
+                name: 'create_docx',
+                arguments: JSON.stringify({ title: 'Summary', paragraphs: [{ text: 'Summary' }] }),
+              },
+            },
+            {
+              id: 'multi-xlsx-call',
+              function: {
+                name: 'create_xlsx',
+                arguments: JSON.stringify({ title: 'Summary', sheets: [{ name: 'Data', rows: [['Item'], ['Value']] }] }),
+              },
+            },
+          ],
+        }
+      }
+      return { content: 'Both files are ready.', toolCalls: [] }
+    },
+  })
+
+  assert.equal(modelCalls, 2)
+  assert.deepEqual(executions.sort(), ['create_docx', 'create_xlsx'])
+  assert.deepEqual(result.artifactIds.sort(), ['create_docx-artifact', 'create_xlsx-artifact'])
+  assert.equal(result.text, 'Both files are ready.')
+})
+
+for (const delivery of [
+  { label: 'HTML', skillId: 'webpage', prompt: '/webpage build a product page' },
+  { label: 'PPTX', skillId: 'ppt', prompt: '/ppt build a product deck' },
+  { label: 'DOCX', skillId: 'doc', prompt: '/doc build a product brief' },
+  { label: 'XLSX', skillId: 'excel', prompt: '/excel build a product table' },
+]) {
+  test(`${delivery.label} delivery fails explicitly instead of completing with a fake preview`, async () => {
+    await assert.rejects(
+      runToolsLoop({
+        job: { id: `${delivery.skillId}-delivery-failure`, userId: 'intent-user', origin: 'chat', prompt: delivery.prompt },
+        step: { id: `${delivery.skillId}-delivery-failure`, kind: 'chat' },
+        messages: [{ role: 'user', content: delivery.prompt }],
+        skillId: delivery.skillId,
+        toolSpecs: SERVER_TOOL_SPECS,
+        maxIters: 2,
+        enableToolHooks: false,
+        runModel: async () => ({ content: 'The requested file is ready. Save this answer locally.', toolCalls: [] }),
+      }),
+      (error) => error?.code === 'ARTIFACT_NOT_CREATED',
+    )
+  })
+}
+
+test('an image artifact cannot satisfy a webpage delivery requirement', async () => {
+  const deltas = []
+  const executions = []
+  let modelCalls = 0
+  const result = await runToolsLoop({
+    job: { id: 'webpage-image-bypass', userId: 'intent-user', origin: 'chat', prompt: '/webpage build a product page' },
+    step: { id: 'webpage-image-bypass', kind: 'chat' },
+    messages: [{ role: 'user', content: '/webpage build a product page' }],
+    skillId: 'webpage',
+    toolSpecs: SERVER_TOOL_SPECS,
+    enableToolHooks: false,
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    onModelDelta: async ({ text }) => deltas.push(text),
+    executeTool: async ({ name }) => {
+      executions.push(name)
+      return name === 'generate_image'
+        ? { ok: true, artifactId: 'image-artifact', filename: 'hero.png', url: '/api/artifacts/hero.png' }
+        : { ok: true, artifactId: 'html-artifact', filename: 'product.html', url: '/api/artifacts/product.html' }
+    },
+    runModel: async ({ messages }) => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{ id: 'hero-call', function: { name: 'generate_image', arguments: JSON.stringify({ prompt: 'hero' }) } }],
+        }
+      }
+      if (modelCalls === 2) return { content: 'The webpage is ready.', toolCalls: [] }
+      if (modelCalls === 3) {
+        assert.ok(messages.some((message) => String(message.content || '').includes('create_html_app')))
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'html-after-image',
+            function: {
+              name: 'create_html_app',
+              arguments: JSON.stringify({ title: 'Product', html: '<!doctype html><html><body><main>Product</main></body></html>' }),
+            },
+          }],
+        }
+      }
+      return { content: 'The real webpage is ready.', toolCalls: [] }
+    },
+  })
+
+  assert.deepEqual(executions, ['generate_image', 'create_html_app'])
+  assert.deepEqual(result.artifactIds, ['image-artifact', 'html-artifact'])
+  assert.equal(result.text, 'The real webpage is ready.')
+  assert.equal(deltas.join(''), 'The real webpage is ready.')
 })
 
 test('text tool protocol ids stay unique across model iterations', async () => {
@@ -241,6 +541,15 @@ test('ppt intent suppresses the looser docx keywords', () => {
   const intent = detectArtifactIntent('生成 PPT 并导出')
   assert.equal(intent.pptx, true)
   assert.equal(intent.docx, false, '「导出」不该在已有 pptx 意图时再触发 docx')
+  assert.deepEqual(detectArtifactIntent('Make a PPT report'), {
+    pptx: true, docx: false, xlsx: false, html: false,
+  })
+  assert.deepEqual(detectArtifactIntent('做一份 PPT 汇报'), {
+    pptx: true, docx: false, xlsx: false, html: false,
+  })
+  assert.deepEqual(detectArtifactIntent('同时生成 PPT 以及 Word 文档'), {
+    pptx: true, docx: true, xlsx: false, html: false,
+  })
   assert.equal(shouldCompileDocx('生成 PPT 并导出'), false)
 })
 
@@ -251,15 +560,35 @@ test('artifact expectation is false for plain code work', () => {
 
 test('prebuilt tool specs do not short-circuit intent re-evaluation', async () => {
   let visibleNames = []
+  let modelCalls = 0
   await runToolsLoop({
     job: { id: 'intent-recheck', userId: 'intent-user', prompt: '先分析数据' },
     step: { id: 'intent-step' },
     messages: [{ role: 'user', content: '改为整理成 Word 文档并下载' }],
     toolSpecs: SERVER_TOOL_SPECS,
     runModel: async ({ tools }) => {
+      modelCalls += 1
       visibleNames = nameOf(tools)
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'intent-docx',
+            function: {
+              name: 'create_docx',
+              arguments: JSON.stringify({ title: 'Analysis', paragraphs: [{ text: 'done' }] }),
+            },
+          }],
+        }
+      }
       return { content: 'done', toolCalls: [] }
     },
+    executeTool: async () => ({
+      ok: true,
+      artifactId: 'intent-docx-artifact',
+      filename: 'analysis.docx',
+      url: '/api/artifacts/analysis.docx',
+    }),
   })
   assert.ok(visibleNames.includes('create_docx'))
   assert.ok(!visibleNames.includes('create_pptx'))

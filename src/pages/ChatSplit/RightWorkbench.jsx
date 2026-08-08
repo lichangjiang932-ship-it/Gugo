@@ -12,8 +12,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { buildArtifactPreview } from '../../lib/artifactPreview.js'
-import { normalizeArtifactReferenceType } from '../../lib/artifactReferences.js'
+import { buildMessageArtifactPreview, normalizeArtifactReferenceType } from '../../lib/artifactReferences.js'
 import { runWorkbenchTerminal } from '../../lib/workbenchClient.js'
 import { useT } from '../../i18n/I18nProvider.jsx'
 import { withDownloadToken } from '../../lib/jobClient.js'
@@ -50,8 +49,8 @@ function collectArtifacts(messages) {
         }))
       : []
     const source = message?.meta?.artifactSource || message?.content
-    if (!source) return direct
-    const preview = buildArtifactPreview({ content: source, meta: message.meta })
+    const preview = buildMessageArtifactPreview(message)
+    if (!preview) return direct
     const previewType = preview && normalizeArtifactReferenceType({ type: preview.type, filename: preview.filename })
     const hasPersistedPreview = previewType && direct.some((artifact) => normalizeArtifactReferenceType(artifact) === previewType)
     return preview && !hasPersistedPreview ? [...direct, { id: message.id || `artifact-${index}`, messageId: message.id, content: source, preview }] : direct

@@ -6,7 +6,6 @@
  * must not be sent as if the server could run them.
  */
 export const SERVER_TURN_TOOL_TOGGLE_NAMES = Object.freeze([
-  'web_search',
   'fetch_url',
   'create_pptx',
   'create_docx',

@@ -137,6 +137,22 @@ export async function unarchiveSessionRemote(sessionId, { fetchImpl = fetch } = 
   return parseResponse(response)
 }
 
+export async function pinSessionRemote(sessionId, { fetchImpl = fetch } = {}) {
+  const response = await fetchImpl(`/api/sessions/${encodeURIComponent(sessionId)}/pin`, {
+    method: 'POST',
+    headers: authHeaders(),
+  })
+  return parseResponse(response)
+}
+
+export async function unpinSessionRemote(sessionId, { fetchImpl = fetch } = {}) {
+  const response = await fetchImpl(`/api/sessions/${encodeURIComponent(sessionId)}/unpin`, {
+    method: 'POST',
+    headers: authHeaders(),
+  })
+  return parseResponse(response)
+}
+
 export async function getSessionMetadataRemote(sessionId, { fetchImpl = fetch } = {}) {
   const response = await fetchImpl(
     `/api/sessions/${encodeURIComponent(sessionId)}/snapshot?limit=1&offset=0`,

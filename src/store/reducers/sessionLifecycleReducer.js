@@ -14,6 +14,7 @@ export function reduceSessionLifecycleState(state, action) {
         messages: [],
         createdAt: now,
         updatedAt: now,
+        pinnedAt: null,
         agentId, // \u9636\u6bb5 6：session sticky agent。null \u8868\u793a\u8ddf\u968f\u5168\u5c40 active agent
       }
       return {
@@ -102,6 +103,17 @@ export function reduceSessionLifecycleState(state, action) {
         sessions: state.sessions.map((s) =>
           s.id === id ? { ...s, archivedAt: null, updatedAt: now } : s
         ),
+      }
+    }
+
+    case 'SET_SESSION_PIN': {
+      const { sessionId, pinnedAt } = action.payload || {}
+      if (!sessionId) return state
+      return {
+        ...state,
+        sessions: state.sessions.map((session) => (
+          session.id === sessionId ? { ...session, pinnedAt: pinnedAt ?? null } : session
+        )),
       }
     }
 

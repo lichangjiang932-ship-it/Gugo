@@ -6,6 +6,27 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.14] - 2026-08-08
+
+### Added
+
+- Added pinned conversations and six configurable web-search provider templates
+  with connection testing and server-side secret handling.
+
+### Changed
+
+- Generated files are now linked directly in assistant narration, open in the
+  right workbench, and suppress duplicate artifact cards below the response.
+- Session snapshots now restore persisted artifacts so HTML, Office, and other
+  supported files remain available after streaming completes or a chat reloads.
+
+### Fixed
+
+- Hardened HTML and Office preview routing while preserving the selected file
+  across turn updates and session recovery.
+- Stabilized desktop-pet dragging by ignoring synthetic stationary movement,
+  preserving fixed transparent-window bounds, and releasing pointer capture.
+
 ## [0.10.13] - 2026-08-08
 
 ### Added
@@ -142,7 +163,9 @@ follow [Semantic Versioning](https://semver.org/).
 - Provider, MCP, memory, job, subagent, connector, and workspace tool support.
 - Local-first single-user mode with optional multi-user authentication.
 
-[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.12...HEAD
+[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.14...HEAD
+[0.10.14]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.14
+[0.10.13]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.13
 [0.10.12]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.12
 [0.10.11]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.11
 [0.10.10]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.10

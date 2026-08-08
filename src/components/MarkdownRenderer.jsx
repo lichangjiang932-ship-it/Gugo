@@ -6,6 +6,7 @@ import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import rehypeHighlight from 'rehype-highlight'
 import FullscreenMediaModal from './FullscreenMediaModal.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
+import { findArtifactReferenceByHref, remarkArtifactReferences } from '../lib/artifactReferences.js'
 import { copyTextToClipboard } from '../lib/clipboard.js'
 
 /**
@@ -83,26 +84,39 @@ function CodeBlock({ children, streaming = false }) {
   )
 }
 
-function MarkdownRenderer({ children, className = '', onLinkClick, streaming = false }) {
+function MarkdownRenderer({ artifactReferences = [], children, className = '', onLinkClick, streaming = false }) {
   const [fullscreen, setFullscreen] = useState(null)
 
   return (
     <div className={`chat-markdown prose prose-sm max-w-none ${className}`}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, [remarkArtifactReferences, { references: artifactReferences }]]}
         rehypePlugins={[
           [rehypeSanitize, sanitizeSchema],
           rehypeHighlight,
         ]}
         components={{
           // 自定义链接：强制新标签页打开 + noopener
-          a: ({ href, children, ...props }) => (
-            <a href={href} target="_blank" rel="noopener noreferrer" onClick={(event) => {
-              if (onLinkClick?.(href, event)) event.preventDefault()
-            }} {...props}>
-              {children}
-            </a>
-          ),
+          a: ({ href, children, ...props }) => {
+            const isArtifactReference = Boolean(findArtifactReferenceByHref(artifactReferences, href))
+            const anchorProps = { ...props }
+            delete anchorProps.node
+            return (
+              <a
+                {...anchorProps}
+                href={href}
+                target="_blank"
+                rel="noopener noreferrer"
+                data-testid={isArtifactReference ? 'inline-artifact-link' : undefined}
+                className={isArtifactReference ? 'font-semibold text-ember decoration-ember/45 underline-offset-4 hover:decoration-ember' : anchorProps.className}
+                onClick={(event) => {
+                  if (onLinkClick?.(href, event)) event.preventDefault()
+                }}
+              >
+                {children}
+              </a>
+            )
+          },
           // 代码块容器
           pre: ({ children }) => <CodeBlock streaming={streaming}>{children}</CodeBlock>,
           // 内联代码

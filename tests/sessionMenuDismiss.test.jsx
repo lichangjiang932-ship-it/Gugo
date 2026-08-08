@@ -38,6 +38,7 @@ function MenuHarness({ calls, sourceSessions = sessions }) {
       onMenuToggle={(id) => setOpenMenuId((current) => current === id ? null : id)}
       onMenuClose={() => setOpenMenuId(null)}
       onOpen={(id) => calls.opened.push(id)}
+      onPinToggle={(session) => calls.pinned?.push(session.id)}
       onArchiveToggle={(session) => calls.archived.push(session.id)}
       onDelete={(session) => calls.deleted.push(session.id)}
       t={(key) => key}
@@ -69,7 +70,7 @@ test('session menu closes on an outside pointer without swallowing menu item cli
   const dom = setupDom()
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
-  const calls = { opened: [], archived: [], deleted: [] }
+  const calls = { opened: [], pinned: [], archived: [], deleted: [] }
 
   try {
     await act(async () => root.render(<MenuHarness calls={calls} />))
@@ -97,7 +98,7 @@ test('session history keeps one compact title-only list without time groups or t
   const dom = setupDom()
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
-  const calls = { opened: [], archived: [], deleted: [] }
+  const calls = { opened: [], pinned: [], archived: [], deleted: [] }
   const datedSessions = sessions.map((session, index) => ({
     ...session,
     totalMessages: index + 7,
@@ -124,7 +125,7 @@ test('session menu trigger toggles cleanly and switching sessions dismisses the 
   const dom = setupDom()
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
-  const calls = { opened: [], archived: [], deleted: [] }
+  const calls = { opened: [], pinned: [], archived: [], deleted: [] }
 
   try {
     await act(async () => root.render(<MenuHarness calls={calls} />))
@@ -171,7 +172,7 @@ test('right click opens the shared session menu at the pointer and Escape closes
   const dom = setupDom()
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
-  const calls = { opened: [], archived: [], deleted: [] }
+  const calls = { opened: [], pinned: [], archived: [], deleted: [] }
 
   try {
     await act(async () => root.render(<MenuHarness calls={calls} />))
@@ -190,11 +191,16 @@ test('right click opens the shared session menu at the pointer and Escape closes
     assert.equal(menu.querySelector('[role="menuitem"]'), document.activeElement)
     assert.equal(findButton(rootElement, 'Session two').hasAttribute('aria-haspopup'), false)
 
+    assert.match(document.activeElement.textContent, /nav\.pinSession/)
     await act(async () => menu.dispatchEvent(new dom.window.KeyboardEvent('keydown', { bubbles: true, key: 'ArrowDown' })))
+    assert.match(document.activeElement.textContent, /nav\.archiveSession/)
+    await act(async () => menu.dispatchEvent(new dom.window.KeyboardEvent('keydown', { bubbles: true, key: 'End' })))
     assert.match(document.activeElement.textContent, /nav\.deleteSession/)
     await act(async () => menu.dispatchEvent(new dom.window.KeyboardEvent('keydown', { bubbles: true, key: 'Home' })))
-    assert.match(document.activeElement.textContent, /nav\.archiveSession/)
+    assert.match(document.activeElement.textContent, /nav\.pinSession/)
 
+    await act(async () => findButton(rootElement, 'nav.pinSession').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.deepEqual(calls.pinned, ['session-two'])
     await act(async () => findButton(rootElement, 'nav.archiveSession').dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
     assert.deepEqual(calls.archived, ['session-two'])
 

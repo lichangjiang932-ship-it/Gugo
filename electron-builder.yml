@@ -18,6 +18,7 @@ files:
   - src/lib/pptCore.js
   - src/lib/presentationPlanner.js
   - desktop/main.js
+  - desktop/petDrag.js
   - desktop/preload.cjs
   - desktop/runtime.js
   - desktop/security.js

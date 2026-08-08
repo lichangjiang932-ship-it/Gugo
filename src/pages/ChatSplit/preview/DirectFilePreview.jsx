@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { AlertCircle, FileText, LoaderCircle } from 'lucide-react'
 import MarkdownRenderer from '../../../components/MarkdownRenderer.jsx'
 import { classifyDirectFile, loadDirectFilePreview } from '../../../lib/directFilePreview.js'
-import { DocxPreview, HtmlPreview, PptxPreview, SourceView, XlsxPreview } from './ArtifactRenderers.jsx'
+import { DocxPreview, PptxPreview, SourceView, XlsxPreview } from './ArtifactRenderers.jsx'
 
 export default function DirectFilePreview({ file, url, t }) {
   const filename = String(file?.filename || '')
@@ -11,7 +11,7 @@ export default function DirectFilePreview({ file, url, t }) {
   const mimeType = String(file?.mimeType || '')
   const previewFile = useMemo(() => ({ filename, title, type, mimeType }), [filename, mimeType, title, type])
   const kind = classifyDirectFile(previewFile)
-  const needsFetch = !['pdf', 'image', 'audio', 'video', 'unsupported'].includes(kind)
+  const needsFetch = !['pdf', 'image', 'audio', 'video', 'html', 'unsupported'].includes(kind)
   const requestKey = `${kind}:${url}:${filename}:${mimeType}`
   const [loadState, setLoadState] = useState(() => ({ key: '', preview: null, error: '' }))
 
@@ -38,7 +38,7 @@ export default function DirectFilePreview({ file, url, t }) {
   if (loading) return <PreviewStatus icon={<LoaderCircle className="h-6 w-6 animate-spin" />} text={t('chatPreview.loadingFile')} />
   if (error) return <PreviewStatus icon={<AlertCircle className="h-6 w-6" />} text={t('chatPreview.previewFailed')} detail={error} />
   if (['image', 'pdf', 'audio', 'video'].includes(preview.kind)) return <NativeFilePreview key={`${preview.kind}:${url}`} kind={preview.kind} file={file} url={url} t={t} />
-  if (preview.kind === 'html') return <HtmlPreview html={preview.html} />
+  if (preview.kind === 'html') return <InteractiveHtmlFilePreview key={`html:${url}`} file={file} url={url} t={t} />
   if (preview.kind === 'docx') return <DocxPreview blocks={preview.blocks || []} title={preview.title} />
   if (preview.kind === 'pptx') return <PptxPreview content={preview.content || ''} />
   if (preview.kind === 'xlsx') return <WorkbookPreview sheets={preview.sheets || []} />
@@ -46,6 +46,25 @@ export default function DirectFilePreview({ file, url, t }) {
   if (preview.kind === 'markdown') return <div className="h-full overflow-auto bg-paper px-6 py-5"><MarkdownRenderer>{preview.text}</MarkdownRenderer></div>
   if (['json', 'xml', 'code', 'text'].includes(preview.kind)) return <SourceView content={preview.text || ''} />
   return <PreviewStatus icon={<FileText className="h-6 w-6" />} text={file.filename || file.title || 'artifact'} detail={t('chatPreview.unsupportedHint')} />
+}
+
+function InteractiveHtmlFilePreview({ file, t, url }) {
+  const [status, setStatus] = useState('loading')
+  return (
+    <div className="relative h-full min-h-0 bg-white">
+      <iframe
+        src={url}
+        title={file.filename || file.title || t('chatPreview.htmlTitle')}
+        sandbox="allow-scripts allow-forms"
+        referrerPolicy="no-referrer"
+        onLoad={() => setStatus('ready')}
+        onError={() => setStatus('failed')}
+        className={`${status === 'failed' ? 'hidden' : 'block'} h-full w-full border-0 bg-white`}
+      />
+      {status === 'loading' && <div className="absolute inset-0 flex items-center justify-center bg-paper-2/90"><PreviewStatus icon={<LoaderCircle className="h-6 w-6 animate-spin" />} text={t('chatPreview.loadingFile')} /></div>}
+      {status === 'failed' && <PreviewStatus icon={<AlertCircle className="h-6 w-6" />} text={t('chatPreview.previewFailed')} detail={t('chatPreview.unsupportedHint')} />}
+    </div>
+  )
 }
 
 function NativeFilePreview({ file, kind, t, url }) {

@@ -623,6 +623,34 @@ test('server snapshot pairs imported tool calls and supplies explicit unavailabl
   )
 })
 
+test('server snapshot restores persisted turn artifacts into assistant rendering metadata', () => {
+  const snapshot = normalizeServerSessionSnapshot({
+    complete: true,
+    messages: [{
+      id: 'turn-1:assistant',
+      role: 'assistant',
+      content: 'The webpage is ready.',
+      createdAt: 1,
+      modelContext: { turnId: 'turn-1', artifactIds: ['html-1'] },
+      artifacts: [{
+        id: 'html-1',
+        type: 'html',
+        title: 'Landing page',
+        filename: 'landing.html',
+        url: '/api/artifacts/landing.html',
+      }],
+    }],
+  })
+
+  assert.deepEqual(snapshot.messages[0].meta.serverArtifacts, [{
+    id: 'html-1',
+    type: 'html',
+    title: 'Landing page',
+    filename: 'landing.html',
+    url: '/api/artifacts/landing.html',
+  }])
+})
+
 test('fetchServerSessionSnapshot retries from offset zero when page revisions differ', async () => {
   const pages = [
     { messages: [{ id: 'stale-1', role: 'user', content: 'old', createdAt: 1 }], revision: 10, totalMessages: 2, nextOffset: 1, complete: false },

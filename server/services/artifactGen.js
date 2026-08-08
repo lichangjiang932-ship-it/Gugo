@@ -149,7 +149,37 @@ function normalizeHtmlArtifactSource(value) {
   return (fenced ? fenced[1] : raw).trim()
 }
 
-function assertSafeHtmlArtifact(source) {
+const HTML_DELIVERY_INSTRUCTION_PATTERNS = Object.freeze([
+  /(?:网页|页面|html)(?:\s*代码)?(?:已经|已)?(?:生成|完成|准备好)|(?:html|webpage|page)(?:\s+code)?\s+(?:is\s+)?(?:ready|generated|complete)/i,
+  /(?:复制|拷贝)[^。！？\n]{0,48}(?:代码|源码)|copy[^.!?\n]{0,48}(?:code|source)/i,
+  /(?:新建|创建)[^。！？\n]{0,32}(?:文件|\.html)|create[^.!?\n]{0,32}(?:file|\.html)/i,
+  /(?:粘贴|貼上)[^。！？\n]{0,32}(?:保存|存储)|(?:保存|另存)[^。！？\n]{0,48}(?:\.html|html\s*文件)|paste[^.!?\n]{0,32}save|save[^.!?\n]{0,48}(?:\.html|as\s+html)/i,
+  /(?:双击|浏览器)[^。！？\n]{0,48}(?:打开|预览)|(?:double[- ]?click|open)[^.!?\n]{0,48}(?:browser|locally)/i,
+])
+
+function visibleHtmlText(source) {
+  return String(source || '')
+    .replace(/<!--[\s\S]*?-->/g, ' ')
+    .replace(/<(?:style|script)\b[^>]*>[\s\S]*?<\/(?:style|script)\s*>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&(?:nbsp|ensp|emsp|thinsp);/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function assertHtmlIsPageContent(source) {
+  const visibleText = visibleHtmlText(source)
+  const instructionSignals = HTML_DELIVERY_INSTRUCTION_PATTERNS
+    .filter((pattern) => pattern.test(visibleText))
+    .length
+  const structuralTags = (source.match(/<(?:h[1-6]|main|section|article|nav|header|footer|form|button|input|select|textarea|canvas|svg|table|ul|ol|li|img|video|audio|p)\b/gi) || []).length
+  const looksLikeShortHandoff = visibleText.length <= 2_000 && structuralTags <= 3 && instructionSignals >= 2
+  if (instructionSignals >= 4 || looksLikeShortHandoff) {
+    throw new Error('html contains file-delivery instructions instead of the requested webpage content')
+  }
+}
+
+export function validateHtmlArtifactSource(source) {
   const html = normalizeHtmlArtifactSource(source)
   if (!html) throw new Error('html is required')
   if (Buffer.byteLength(html, 'utf8') > MAX_HTML_ARTIFACT_BYTES) {
@@ -168,6 +198,7 @@ function assertSafeHtmlArtifact(source) {
   if (blocked.some((pattern) => pattern.test(html))) {
     throw new Error('html artifact must be self-contained and cannot load external scripts, styles, frames, or network requests')
   }
+  assertHtmlIsPageContent(html)
   return html
 }
 
@@ -188,7 +219,7 @@ function inlineHtmlFiles(files = {}) {
 }
 
 export function createHtmlArtifact({ title = 'Webpage', html, files } = {}) {
-  const source = assertSafeHtmlArtifact(html || inlineHtmlFiles(files))
+  const source = validateHtmlArtifactSource(html || inlineHtmlFiles(files))
   const artifactPath = newArtifactPath(title, 'html')
   fs.writeFileSync(artifactPath.fullPath, source, 'utf8')
   return {

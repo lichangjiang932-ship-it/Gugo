@@ -133,18 +133,41 @@ test('planning exploration runs three isolated read-only explorers concurrently 
 
 test('runToolsLoop re-evaluates artifact intent from current user messages even with explicit tool specs', async () => {
   let visibleNames = []
-  await runToolsLoop({
+  let modelCalls = 0
+  const result = await runToolsLoop({
     job: { id: 'job-dynamic-intent', userId: TEST_USER, title: '整理讨论', prompt: '整理刚才的讨论' },
     step: { id: 'step-dynamic-intent', kind: 'execute' },
     messages: [{ role: 'user', content: '现在把它整理成 Word 文档' }],
     toolSpecs: SERVER_TOOL_SPECS,
     runModel: async ({ tools }) => {
+      modelCalls += 1
       visibleNames = tools.map((spec) => spec.function.name)
-      return { content: '可以生成 Word。', toolCalls: [] }
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'dynamic-docx',
+            function: {
+              name: 'create_docx',
+              arguments: JSON.stringify({ title: '讨论整理', paragraphs: [{ text: '结论' }] }),
+            },
+          }],
+        }
+      }
+      return { content: 'Word 文档已生成。', toolCalls: [] }
     },
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    enableToolHooks: false,
+    executeTool: async () => ({
+      ok: true,
+      artifactId: 'dynamic-docx-artifact',
+      filename: '讨论整理.docx',
+      url: '/api/artifacts/dynamic-docx-artifact',
+    }),
   })
   assert.ok(visibleNames.includes('create_docx'))
   assert.equal(visibleNames.includes('create_pptx'), false)
+  assert.deepEqual(result.artifactIds, ['dynamic-docx-artifact'])
 })
 
 test('chat directory review reads representative files before accepting a filename-only final', async () => {
@@ -348,7 +371,7 @@ test('runToolsLoop stops at maxIters when model keeps calling tools', async () =
   assert.ok(result.text, '达到迭代上限时应有收尾说明,不能是空字符串')
 })
 
-test('runToolsLoop handles malformed tool args without throwing', async () => {
+test('runToolsLoop rejects malformed artifact args without executing or claiming delivery', async () => {
   let calls = 0
   let toolResult = null
   const runModel = async ({ messages }) => {
@@ -365,16 +388,19 @@ test('runToolsLoop handles malformed tool args without throwing', async () => {
   const job = { id: 'job-tools-3', userId: TEST_USER, title: 'bad args' }
   const step = { id: 'step-3', kind: 'execute' }
   let executeCount = 0
-  const result = await runToolsLoop({
-    job, step,
-    messages: [{ role: 'user', content: '请生成一个测试用 pptx' }],
-    runModel,
-    executeTool: async () => {
-      executeCount += 1
-      return { ok: true }
-    },
-  })
-  assert.equal(result.text, 'done')
+  await assert.rejects(
+    runToolsLoop({
+      job, step,
+      messages: [{ role: 'user', content: '请生成一个测试用 pptx' }],
+      runModel,
+      maxIters: 2,
+      executeTool: async () => {
+        executeCount += 1
+        return { ok: true }
+      },
+    }),
+    (error) => error?.code === 'ARTIFACT_NOT_CREATED',
+  )
   assert.equal(executeCount, 0, '损坏参数绝不能静默变成 {} 后落到执行器')
   assert.equal(JSON.parse(toolResult.content).code, 'invalid_tool_arguments')
 })

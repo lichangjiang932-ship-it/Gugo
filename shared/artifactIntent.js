@@ -57,6 +57,19 @@ const META_AFTER = /^[^。！？!?\n]{0,12}(?:问题|bug|逻辑|代码|工具|�
 const GLOBAL_DENIAL = /(?:没有|没|未)(?:有)?(?:让|要求|叫|授权)[^。！？!?\n]{0,18}(?:生成|制作|创建|输出|导出|变成|转成)|(?:i\s+did(?:\s+not|n't)|without\s+me)\s+(?:ask|request|authoriz)[^.!?\n]{0,24}(?:creat|generat|mak|export)/i
 const SKILL_PREFIX = /^\/([a-z0-9_-]+)(?:\s|$)/i
 
+// A slash artifact skill is a delivery contract, not merely another keyword.
+// Keep it on its own generator unless the prompt clearly asks for an
+// additional *file format*. This prevents content phrases such as
+// "/webpage ... quarterly report" from silently turning one webpage into both
+// HTML and DOCX, while still allowing "/webpage ... and a Word document".
+const ADDITIONAL_ARTIFACT_CUE = /(?:\b(?:also|and|plus|both|too|as\s+well\s+as|along\s+with|additionally|separately)\b|\u540c\u65f6|\u53e6\u5916|\u53e6\u52a0|\u4ee5\u53ca|\u5e76\u4e14|\u518d(?:\u751f\u6210|\u521b\u5efa|\u5236\u4f5c|\u5bfc\u51fa)|\u5404(?:\u751f\u6210|\u521b\u5efa|\u5236\u4f5c|\u5bfc\u51fa)?(?:\u4e00|1)\u4efd)/i
+const STRONG_ARTIFACT_FORMAT = Object.freeze({
+  pptx: /\bpptx?\b|\.pptx?\b|power\s*point|slide\s*deck|\u5e7b\u706f\u7247|\u6f14\u793a\u6587\u7a3f/i,
+  docx: /\bdocx?\b|\.docx?\b|\bword\b|word\s*document|\u0057\u006f\u0072\u0064\s*\u6587\u6863|\u6587\u6863/i,
+  xlsx: /\bxlsx?\b|\.xlsx?\b|\bexcel\b|spread\s*sheet|\u5de5\u4f5c\u7c3f|\u7535\u5b50\u8868\u683c/i,
+  html: /\bhtml?\b|\.html?\b|\bweb\s*page\b|\bwebsite\b|\blanding\s*page\b|\u7f51\u9875|\u7f51\u7ad9|\u843d\u5730\u9875/i,
+})
+
 export function parseArtifactSkillId(prompt = '') {
   const match = String(prompt || '').trim().match(SKILL_PREFIX)
   return match ? canonicalizeSkillId(match[1]) : null
@@ -98,10 +111,24 @@ export function detectArtifactIntent(prompt = '', { skillId = undefined } = {}) 
   const text = String(prompt || '')
   const resolvedSkill = skillId === undefined ? parseArtifactSkillId(text) : skillId
   const skillTool = resolvedSkill ? resolveArtifactToolForSkillId(resolvedSkill) : null
+  const explicitPptx = hasExplicitArtifactRequest(text, 'pptx')
+  const explicitDocx = hasExplicitArtifactRequest(text, 'docx')
+  const allowAdditionalFormat = (type) => Boolean(
+    ADDITIONAL_ARTIFACT_CUE.test(text)
+      && STRONG_ARTIFACT_FORMAT[type]?.test(text)
+      && hasExplicitArtifactRequest(text, type),
+  )
+  const pptx = skillTool === 'create_pptx' || (skillTool ? allowAdditionalFormat('pptx') : explicitPptx)
   return {
-    pptx: skillTool === 'create_pptx' || hasExplicitArtifactRequest(text, 'pptx'),
-    docx: skillTool === 'create_docx' || hasExplicitArtifactRequest(text, 'docx'),
-    xlsx: skillTool === 'create_xlsx' || hasExplicitArtifactRequest(text, 'xlsx'),
-    html: skillTool === 'create_html_app' || hasExplicitArtifactRequest(text, 'html'),
+    pptx,
+    // "PPT report" / "PPT 汇报" describes the deck's purpose; it is not a
+    // second Word deliverable. Once PPT intent is explicit, require both a
+    // multi-deliverable cue and a strong Word/DOCX term before adding DOCX.
+    docx: skillTool === 'create_docx'
+      || (skillTool
+        ? allowAdditionalFormat('docx')
+        : explicitDocx && (!pptx || allowAdditionalFormat('docx'))),
+    xlsx: skillTool === 'create_xlsx' || (skillTool ? allowAdditionalFormat('xlsx') : hasExplicitArtifactRequest(text, 'xlsx')),
+    html: skillTool === 'create_html_app' || (skillTool ? allowAdditionalFormat('html') : hasExplicitArtifactRequest(text, 'html')),
   }
 }

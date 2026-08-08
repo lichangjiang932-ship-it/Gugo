@@ -16,7 +16,8 @@ import {
   getModelContextWindow,
 } from '../adapters/modelProxy.js'
 
-import { fetchAndExtract, searchDuckDuckGo } from '../adapters/toolProxy.js'
+import { fetchAndExtract } from '../adapters/toolProxy.js'
+import { searchWeb } from './webSearchService.js'
 import { dispatchFsShellTool } from '../adapters/fsShellTools.js'
 import { CODE_SEARCH_TOOL_SPECS, dispatchCodeSearchTool } from '../utils/codeSearch.js'
 import { APPLY_PATCH_TOOL_SPECS, dispatchApplyPatchTool } from '../utils/applyPatch.js'
@@ -353,7 +354,7 @@ async function executeSubagentTool(toolName, args, {
 } = {}) {
   switch (toolName) {
     case 'web_search':
-      return searchDuckDuckGo({ query: args.query, maxResults: args.maxResults })
+      return searchWeb({ userId, query: args.query, maxResults: args.max_results ?? args.maxResults })
     case 'fetch_url':
       return fetchAndExtract({ url: args.url })
     case 'read_file':

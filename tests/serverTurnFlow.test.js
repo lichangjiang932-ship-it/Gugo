@@ -8,7 +8,7 @@ test('buildServerToolsConfig converts boolean switches into stable explicit list
     write_file: false,
     read_file: true,
     bash_exec: false,
-    web_search: true,
+    web_search: false,
     create_react_component: true,
     create_mermaid: false,
     create_chart: true,
@@ -17,9 +17,13 @@ test('buildServerToolsConfig converts boolean switches into stable explicit list
     ignored: 'true',
     empty: null,
   }), {
-    enabled: ['read_file', 'web_search'],
+    enabled: ['read_file'],
     disabled: ['bash_exec', 'write_file'],
   })
+})
+
+test('web search is controlled only by its dedicated settings page', () => {
+  assert.deepEqual(buildServerToolsConfig({ web_search: false }), { enabled: [], disabled: [] })
 })
 
 test('buildServerToolsConfig tolerates missing and malformed state', () => {

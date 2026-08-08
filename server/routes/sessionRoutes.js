@@ -6,10 +6,12 @@ import {
   deleteSession,
   getSessionSnapshot,
   listSessions,
+  pinSession,
   replaceSessionMessages,
   SessionMutationValidationError,
   SessionRevisionConflictError,
   unarchiveSession,
+  unpinSession,
 } from '../services/sessionStore.js'
 import { searchMessages } from '../services/sessionSearchService.js'
 
@@ -132,6 +134,20 @@ export async function handleSessionRequest(req, res, engine = getTurnEngine()) {
     return session
       ? sendJson(res, 200, { ok: true, session })
       : sendJson(res, 404, { error: 'session not found' })
+  }
+
+  if (req.method === 'POST' && parts[0] === 'api' && parts[1] === 'sessions' && parts[2] && parts[3] === 'pin') {
+    const session = pinSession({ userId, sessionId: decodeURIComponent(parts[2]) })
+    return session
+      ? sendJson(res, 200, { ok: true, session })
+      : sendJson(res, 404, { error: { code: 'SESSION_NOT_FOUND', message: 'session not found' } })
+  }
+
+  if (req.method === 'POST' && parts[0] === 'api' && parts[1] === 'sessions' && parts[2] && parts[3] === 'unpin') {
+    const session = unpinSession({ userId, sessionId: decodeURIComponent(parts[2]) })
+    return session
+      ? sendJson(res, 200, { ok: true, session })
+      : sendJson(res, 404, { error: { code: 'SESSION_NOT_FOUND', message: 'session not found' } })
   }
 
   return sendJson(res, 404, { error: 'not found' })
