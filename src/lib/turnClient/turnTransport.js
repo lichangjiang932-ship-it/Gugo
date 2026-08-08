@@ -6,6 +6,8 @@ export const DEFAULT_RECONNECT_MAX_ATTEMPTS = 8
 export const DEFAULT_RECONNECT_MAX_DELAY_MS = 10_000
 export const DEFAULT_SNAPSHOT_PAGE_SIZE = 500
 export const DEFAULT_SNAPSHOT_REVISION_ATTEMPTS = 3
+export const DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS = 10_000
+export const DEFAULT_WEBSOCKET_SUBSCRIBE_TIMEOUT_MS = 10_000
 
 export function headers(json = false) {
   const token = getAuthToken()
@@ -142,6 +144,17 @@ export function defaultWebSocketFactory(url, protocols) {
   return new window.WebSocket(url, protocols)
 }
 
+function webSocketTimeoutError(code, message) {
+  const error = new Error(message)
+  error.code = code
+  return error
+}
+
+function timeoutDelay(value, fallback) {
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? Math.max(0, numeric) : fallback
+}
+
 export function streamServerTurnEventsWebSocket({
   sessionId,
   turnId,
@@ -149,6 +162,8 @@ export function streamServerTurnEventsWebSocket({
   signal,
   onEvent,
   webSocketFactory = defaultWebSocketFactory,
+  connectTimeoutMs = DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS,
+  subscribeTimeoutMs = DEFAULT_WEBSOCKET_SUBSCRIBE_TIMEOUT_MS,
 }) {
   const token = getAuthToken()
   if (!token || typeof webSocketFactory !== 'function') return Promise.reject(new Error('WebSocket unavailable'))
@@ -160,7 +175,21 @@ export function streamServerTurnEventsWebSocket({
   return new Promise((resolve, reject) => {
     let settled = false
     let chain = Promise.resolve()
-    const cleanup = () => signal?.removeEventListener('abort', onAbort)
+    let connectTimer = null
+    let subscribeTimer = null
+    const clearConnectTimer = () => {
+      if (connectTimer !== null) clearTimeout(connectTimer)
+      connectTimer = null
+    }
+    const clearSubscribeTimer = () => {
+      if (subscribeTimer !== null) clearTimeout(subscribeTimer)
+      subscribeTimer = null
+    }
+    const cleanup = () => {
+      clearConnectTimer()
+      clearSubscribeTimer()
+      signal?.removeEventListener('abort', onAbort)
+    }
     const finish = (error, terminal) => {
       if (settled) return
       settled = true
@@ -170,22 +199,64 @@ export function streamServerTurnEventsWebSocket({
       else resolve(terminal)
     }
     const onAbort = () => finish(abortError())
+    const finishAfterPendingEvents = (error) => {
+      chain = chain.then(() => {
+        if (!settled) finish(error)
+      }).catch(finish)
+    }
     signal?.addEventListener('abort', onAbort, { once: true })
     socket.addEventListener('open', () => {
-      socket.send(JSON.stringify({ type: 'subscribe.turn', sessionId, turnId, after }))
+      if (settled) return
+      clearConnectTimer()
+      try {
+        socket.send(JSON.stringify({ type: 'subscribe.turn', sessionId, turnId, after }))
+      } catch (error) {
+        finish(error)
+        return
+      }
+      subscribeTimer = setTimeout(() => finish(webSocketTimeoutError(
+        'TURN_WEBSOCKET_SUBSCRIBE_TIMEOUT',
+        'WebSocket turn subscription acknowledgement timed out',
+      )), timeoutDelay(subscribeTimeoutMs, DEFAULT_WEBSOCKET_SUBSCRIBE_TIMEOUT_MS))
     })
     socket.addEventListener('message', (message) => {
+      let frame
+      try {
+        frame = JSON.parse(String(message.data || '{}'))
+      } catch (error) {
+        finishAfterPendingEvents(error)
+        return
+      }
+      if (frame.type === 'subscribed.turn') {
+        if (frame.sessionId === sessionId && frame.turnId === turnId) clearSubscribeTimer()
+        return
+      }
+      if (frame.type === 'error') {
+        const error = new Error(frame.message || 'WebSocket turn subscription failed')
+        error.code = String(frame.code || 'TURN_WEBSOCKET_ERROR')
+        finishAfterPendingEvents(error)
+        return
+      }
+      if (frame.type !== 'turn.event') return
+      clearSubscribeTimer()
+      let event
+      try {
+        event = parseTurnEvent(frame.event)
+      } catch (error) {
+        finishAfterPendingEvents(error)
+        return
+      }
       chain = chain.then(async () => {
-        const frame = JSON.parse(String(message.data || '{}'))
-        if (frame.type !== 'turn.event') return
-        const event = parseTurnEvent(frame.event)
         await onEvent?.(event)
         if (TERMINAL_EVENTS.has(event.type)) finish(null, event)
       }).catch(finish)
     })
-    socket.addEventListener('error', () => finish(new Error('WebSocket connection failed')))
-    socket.addEventListener('close', () => {
-      if (!settled) finish(streamTruncatedError())
-    })
+    socket.addEventListener('error', () => finishAfterPendingEvents(new Error('WebSocket connection failed')))
+    socket.addEventListener('close', () => finishAfterPendingEvents(streamTruncatedError()))
+    connectTimer = setTimeout(() => finish(webSocketTimeoutError(
+      'TURN_WEBSOCKET_CONNECT_TIMEOUT',
+      'WebSocket connection timed out',
+    )), timeoutDelay(connectTimeoutMs, DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS))
+    if (signal?.aborted) onAbort()
   })
 }

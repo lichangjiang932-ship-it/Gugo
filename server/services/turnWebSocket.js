@@ -20,6 +20,67 @@ function tokenFromRequest(request) {
   return url.searchParams.get('token') || (bearer ? bearer.slice(7) : null)
 }
 
+export function pollTurnSubscriptions({
+  subscriptions,
+  userId,
+  deliver,
+  listEvents = listTurnEvents,
+  onError = (error, subscription) => console.error(
+    `[realtime] failed to poll turn ${subscription.turnId}:`,
+    error?.stack || error,
+  ),
+}) {
+  for (const subscription of subscriptions.values()) {
+    try {
+      const events = listEvents({
+        userId,
+        sessionId: subscription.sessionId,
+        turnId: subscription.turnId,
+        after: subscription.cursor,
+        limit: 2_000,
+      })
+      for (const event of events) deliver(subscription, event)
+    } catch (error) {
+      onError?.(error, subscription)
+    }
+  }
+}
+
+export function subscribeTurnSubscription({
+  subscriptions,
+  key,
+  userId,
+  sessionId,
+  turnId,
+  after,
+  deliver,
+  subscribe = subscribeTurnEvents,
+  listEvents = listTurnEvents,
+}) {
+  const previous = subscriptions.get(key)
+  previous?.unsubscribe()
+  subscriptions.delete(key)
+  const subscription = { sessionId, turnId, cursor: after, unsubscribe: () => {} }
+  try {
+    // Subscribe before replaying the durable log. The cursor makes the
+    // local callback, replay, and cross-process poll idempotent while also
+    // closing the old replay/subscribe race window.
+    subscription.unsubscribe = subscribe(
+      { userId, sessionId, turnId },
+      (event) => deliver(subscription, event),
+    )
+    subscriptions.set(key, subscription)
+    for (const event of listEvents({ userId, sessionId, turnId, after, limit: 2_000 })) {
+      deliver(subscription, event)
+    }
+    return subscription
+  } catch (error) {
+    try { subscription.unsubscribe() } catch { /* best-effort cleanup */ }
+    if (subscriptions.get(key) === subscription) subscriptions.delete(key)
+    throw error
+  }
+}
+
 export function attachTurnWebSocketServer(server) {
   const webSocketServer = new WebSocketServer({ noServer: true })
 
@@ -47,16 +108,7 @@ export function attachTurnWebSocketServer(server) {
       send(socket, { type: 'turn.event', event })
     }
     const pollSubscriptions = () => {
-      for (const subscription of subscriptions.values()) {
-        const events = listTurnEvents({
-          userId: request.userId,
-          sessionId: subscription.sessionId,
-          turnId: subscription.turnId,
-          after: subscription.cursor,
-          limit: 2_000,
-        })
-        for (const event of events) deliver(subscription, event)
-      }
+      pollTurnSubscriptions({ subscriptions, userId: request.userId, deliver })
     }
     const pollTimer = setInterval(pollSubscriptions, CROSS_PROCESS_POLL_MS)
     pollTimer.unref?.()
@@ -82,18 +134,21 @@ export function attachTurnWebSocketServer(server) {
           return
         }
         const key = `${sessionId}\u0000${turnId}`
-        subscriptions.get(key)?.unsubscribe()
-        const subscription = { sessionId, turnId, cursor: after, unsubscribe: () => {} }
-        // Subscribe before replaying the durable log. The cursor makes the
-        // local callback, replay, and cross-process poll idempotent while also
-        // closing the old replay/subscribe race window.
-        subscription.unsubscribe = subscribeTurnEvents(
-          { userId: request.userId, sessionId, turnId },
-          (event) => deliver(subscription, event),
-        )
-        subscriptions.set(key, subscription)
-        for (const event of listTurnEvents({ userId: request.userId, sessionId, turnId, after, limit: 2_000 })) {
-          deliver(subscription, event)
+        try {
+          subscribeTurnSubscription({
+            subscriptions,
+            key,
+            userId: request.userId,
+            sessionId,
+            turnId,
+            after,
+            deliver,
+          })
+        } catch (error) {
+          console.error(`[realtime] failed to subscribe turn ${turnId}:`, error?.stack || error)
+          send(socket, { type: 'error', code: 'TURN_SUBSCRIBE_FAILED', sessionId, turnId })
+          try { socket.close(1011, 'Turn subscription failed') } catch { /* already closed */ }
+          return
         }
         send(socket, { type: 'subscribed.turn', sessionId, turnId })
         return

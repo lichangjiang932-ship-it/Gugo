@@ -78,10 +78,15 @@ test('tool artifact renders final explanation and file card together', async () 
   }
 })
 
-test('streaming assistant does not render completed result actions', async () => {
+test('generation only hides actions for the streaming assistant and completed messages still copy', async () => {
   const dom = setupDom()
   const rootElement = dom.window.document.getElementById('root')
   const root = createRoot(rootElement)
+  const copiedTexts = []
+  Object.defineProperty(dom.window.navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText: async (text) => copiedTexts.push(text) },
+  })
   const callbacks = {
     onExampleClick: () => {},
     onEditMessage: () => {},
@@ -106,6 +111,12 @@ test('streaming assistant does not render completed result actions', async () =>
       artifactSource: '<!doctype html><html><body>partial</body></html>',
     },
   }
+  const completedAssistantMessage = {
+    id: 'assistant-complete',
+    role: 'assistant',
+    content: 'A completed answer remains copyable.',
+    meta: { type: 'model_reply', streaming: false },
+  }
   const userMessage = {
     id: 'user-before-stream',
     role: 'user',
@@ -116,7 +127,7 @@ test('streaming assistant does not render completed result actions', async () =>
   await act(async () => {
     root.render(
       <ChatMessages
-        messages={[userMessage, message]}
+        messages={[completedAssistantMessage, userMessage, message]}
         state={{ permRequest: null }}
         workbenchMessage=""
         showContextUsage={false}
@@ -130,15 +141,22 @@ test('streaming assistant does not render completed result actions', async () =>
   })
 
   try {
-    assert.equal(rootElement.querySelector('[data-testid="assistant-message-actions"]'), null)
-    assert.equal(rootElement.querySelector('.chat-message-actions'), null)
+    assert.equal(rootElement.querySelectorAll('[data-testid="assistant-message-actions"]').length, 1)
+    assert.equal(rootElement.querySelectorAll('.chat-message-actions').length, 2)
     assert.equal(rootElement.querySelector('.chat-code-block button'), null)
     assert.equal(rootElement.querySelector('[data-testid="artifact-open-card"]'), null)
+    const activeCopyButtons = rootElement.querySelectorAll('.chat-message-actions button')
+    await act(async () => {
+      activeCopyButtons[0].click()
+      activeCopyButtons[1].click()
+      await Promise.resolve()
+    })
+    assert.deepEqual(copiedTexts, [completedAssistantMessage.content, userMessage.content])
 
     await act(async () => {
       root.render(
         <ChatMessages
-          messages={[userMessage, { ...message, meta: { ...message.meta, streaming: false } }]}
+          messages={[completedAssistantMessage, userMessage, { ...message, meta: { ...message.meta, streaming: false } }]}
           state={{ permRequest: null }}
           workbenchMessage=""
           showContextUsage={false}
@@ -151,8 +169,8 @@ test('streaming assistant does not render completed result actions', async () =>
       )
     })
 
-    assert.ok(rootElement.querySelector('[data-testid="assistant-message-actions"]'))
-    assert.ok(rootElement.querySelector('.chat-message-actions'))
+    assert.equal(rootElement.querySelectorAll('[data-testid="assistant-message-actions"]').length, 2)
+    assert.equal(rootElement.querySelectorAll('.chat-message-actions').length, 3)
     assert.ok(rootElement.querySelector('.chat-code-block button'))
     assert.ok(rootElement.querySelector('[data-testid="artifact-open-card"]'))
     const userBubble = rootElement.querySelector('[data-testid="user-message-bubble"]')

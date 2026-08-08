@@ -18,7 +18,6 @@ export default function MessageRow({
   msg,
   rowKey,
   generatingMessageId,
-  isGenerating,
   lang,
   onExpandCompaction,
   onOpenArtifact,
@@ -93,12 +92,11 @@ export default function MessageRow({
           <UserContent command={userSkillCommand} content={msg.content} />
         )}
         {msg.role === 'user' && (
-          <UserMeta isGenerating={isGenerating} lang={lang} msg={msg} t={t} />
+          <UserMeta lang={lang} msg={msg} t={t} />
         )}
         {msg.role === 'assistant' && (
           <AssistantMeta
-            generatingMessageId={generatingMessageId}
-            isGenerating={isGenerating}
+            isCurrentStreamingMessage={isCurrentStreamingMessage}
             lang={lang}
             msg={msg}
             showArtifactPreview={showArtifactPreview}
@@ -183,11 +181,11 @@ function UserContent({ command, content }) {
   )
 }
 
-function UserMeta({ isGenerating, lang, msg, t }) {
+function UserMeta({ lang, msg, t }) {
   return (
     <div className="mt-1 flex h-4 items-center justify-end gap-3 pr-1 text-[10px] leading-none text-ink-fade">
       <span data-testid="user-message-time" className="chat-message-meta pointer-events-none opacity-0 transition-opacity group-hover/message:pointer-events-auto group-hover/message:opacity-100 group-focus-within/message:pointer-events-auto group-focus-within/message:opacity-100" title={formatMessageDateTime(msg.timestamp, lang)}>{formatMessageTime(msg.timestamp, lang)}</span>
-      {!isGenerating && !msg.meta?.streaming && (
+      {!msg.meta?.streaming && (
         <div className="chat-message-actions pointer-events-none flex items-center gap-3 opacity-0 transition-opacity group-hover/message:pointer-events-auto group-hover/message:opacity-100 group-focus-within/message:pointer-events-auto group-focus-within/message:opacity-100">
           <CopyButton content={msg.content} t={t} />
         </div>
@@ -196,7 +194,7 @@ function UserMeta({ isGenerating, lang, msg, t }) {
   )
 }
 
-function AssistantMeta({ generatingMessageId, isGenerating, lang, msg, showArtifactPreview, t }) {
+function AssistantMeta({ isCurrentStreamingMessage, lang, msg, showArtifactPreview, t }) {
   return (
     <div className={`${showArtifactPreview ? 'mt-2 px-2' : 'mt-4'} flex flex-wrap items-center gap-2 text-[11px] text-ink-fade/85`}>
       <div data-testid="assistant-message-meta" className="chat-message-meta pointer-events-none flex items-center gap-2 opacity-0 transition-opacity group-hover/message:pointer-events-auto group-hover/message:opacity-100 group-focus-within/message:pointer-events-auto group-focus-within/message:opacity-100">
@@ -205,7 +203,7 @@ function AssistantMeta({ generatingMessageId, isGenerating, lang, msg, showArtif
         {msg.meta?.type === 'model_reply' && msg.meta.latency !== undefined && <span>{t('chatMessages.latency', { value: msg.meta.latency })}</span>}
       </div>
       <div className="flex-1" />
-      {!isGenerating && msg.id !== generatingMessageId && !msg.meta?.streaming && (
+      {!isCurrentStreamingMessage && (
         <div data-testid="assistant-message-actions" className="chat-message-actions pointer-events-none ml-auto flex items-center gap-2 opacity-0 transition-opacity group-hover/message:pointer-events-auto group-hover/message:opacity-100 group-focus-within/message:pointer-events-auto group-focus-within/message:opacity-100">
           <CopyButton content={msg.content} t={t} />
         </div>

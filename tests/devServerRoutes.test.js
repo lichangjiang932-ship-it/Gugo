@@ -112,6 +112,13 @@ test('几个关键前缀必须在两边都存在(回归哨兵)', () => {
   }
 })
 
+test('vite dev server mounts the production realtime turn WebSocket', () => {
+  const source = readFileSync(join(ROOT, 'vite.config.js'), 'utf8')
+  assert.match(source, /import\s*\{\s*attachTurnWebSocketServer\s*\}\s*from\s*['"]\.\/server\/services\/turnWebSocket\.js['"]/)
+  assert.match(source, /function turnRealtimePlugin\(\)[\s\S]*?configureServer\(server\)[\s\S]*?attachTurnWebSocketServer\(server\.httpServer\)/)
+  assert.match(source, /plugins:\s*\[[^\]]*turnRealtimePlugin\(\)/)
+})
+
 test('vite.config.js 真的 import 了这些 handler(不能只写 if 不导入)', () => {
   const source = readFileSync(join(ROOT, 'vite.config.js'), 'utf8')
   for (const name of [
