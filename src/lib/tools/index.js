@@ -14,7 +14,7 @@
 import { askDirectoryApproval } from '../toolApproval.js'
 import { translateKey } from '../../i18n/translations.js'
 
-const FILE_ARTIFACT_TOOL_NAMES = new Set(['create_pptx', 'create_docx', 'create_xlsx'])
+const FILE_ARTIFACT_TOOL_NAMES = new Set(['create_pptx', 'create_docx', 'create_xlsx', 'create_html_app'])
 
 // \u2605 #18: \u5de5\u5177\u53c2\u6570 zod schema \u2014 \u6a21\u578b\u53ef\u80fd\u7ed9\u51fa\u810f\u6570\u636e,\u5148\u6821\u9a8c\u518d\u6267\u884c
 import { EXECUTORS } from './builtinExecutors.js'

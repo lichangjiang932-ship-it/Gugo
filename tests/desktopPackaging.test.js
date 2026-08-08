@@ -17,6 +17,9 @@ test('desktop package keeps Electron isolated from renderer content', () => {
   assert.match(main, /sandbox:\s*true/)
   assert.match(main, /webviewTag:\s*false/)
   assert.match(main, /assertTrustedIpc/)
+  assert.match(main, /desktop:write-clipboard-text/)
+  assert.match(main, /clipboard\.writeText/)
+  assert.match(preload, /writeClipboardText/)
   assert.match(appServer, /process\.argv\[1\]\s*&&/)
   assert.doesNotMatch(preload, /exposeInMainWorld\([^)]*ipcRenderer/)
 })
@@ -109,6 +112,7 @@ test('desktop pet uses an independent transparent always-on-top window', () => {
   assert.match(main, /focusable:\s*false/)
   assert.match(main, /frame:\s*false/)
   assert.match(main, /setAlwaysOnTop\(true, 'floating'\)/)
+  assert.match(main, /window\.setMovable\(true\)/)
   assert.match(main, /if \(!mainWindow && applicationOrigin\)/)
   assert.match(preload, /setPetVisible/)
   assert.match(preload, /resizePetWindow/)
@@ -121,6 +125,9 @@ test('desktop pet uses an independent transparent always-on-top window', () => {
   assert.match(main, /mainWindow\?\.webContents\.send\('desktop:pet-visibility', false\)/)
   const hidePet = main.slice(main.indexOf('function hideDesktopPet()'), main.indexOf('function desktopPetCloseLabel'))
   assert.doesNotMatch(hidePet, /app\.quit|mainWindow\?\.close|mainWindow\.close/)
+  const visibility = main.slice(main.indexOf('function applyPetVisibility'), main.indexOf('function assertTrustedIpc'))
+  assert.match(visibility, /window\.destroy\(\)/, 'hiding must destroy a renderer that may still own pointer capture')
+  assert.doesNotMatch(visibility, /petWindow\?\.hide\(\)/, 'a hidden captured renderer must never be reused')
 })
 
 test('desktop pet window hugs the visible sprite and scales with custom pets', () => {
@@ -168,13 +175,27 @@ test('desktop pet animation updates one sprite layer without full React repaint 
   assert.match(renderer, /addEventListener\('blur', cancel\)/)
   assert.match(renderer, /onPetDragCancel/)
   const pointerDown = renderer.slice(renderer.indexOf('const handlePointerDown'), renderer.indexOf('const handlePointerMove'))
-  assert.match(pointerDown, /captureActivePointer\(drag\)/)
+  assert.doesNotMatch(pointerDown, /captureActivePointer\(drag\)/, 'a click must not capture the OS pointer')
+  const pointerMoveStart = renderer.indexOf('const handlePointerMove')
+  const pointerMove = renderer.slice(pointerMoveStart, renderer.indexOf('const finishPointer', pointerMoveStart))
+  assert.match(pointerMove, /captureActivePointer\(drag\)/, 'capture starts only after a real drag')
   assert.doesNotMatch(renderer, /onPointerLeave=/)
   assert.match(renderer, /data-reacting/)
   assert.doesNotMatch(renderer, /setFrame|pet-window-copy|pet-window-close/)
   assert.match(standaloneCss, /\.pet-window-root\s*\{[\s\S]*?padding:\s*0;/)
   assert.match(standaloneCss, /-webkit-app-region:\s*no-drag/)
   assert.doesNotMatch(standaloneCss, /drop-shadow|filter\s*:/)
+})
+
+test('desktop pet drag can cross monitor boundaries without being clamped', () => {
+  const main = read('desktop/main.js')
+  const start = main.indexOf('function handlePetDrag')
+  const end = main.indexOf('function registerDesktopIpc', start)
+  const dragHandler = main.slice(start, end)
+
+  assert.ok(start >= 0 && end > start)
+  assert.match(dragHandler, /window\.setPosition\(next\.x, next\.y, false\)/)
+  assert.doesNotMatch(dragHandler, /clampPetBounds/, 'dragging must remain free across the virtual desktop')
 })
 
 test('version tags publish a Windows installer and updater metadata through GitHub Releases', () => {

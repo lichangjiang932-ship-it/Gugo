@@ -115,18 +115,19 @@ export const ARTIFACT_TOOL_SPECS = {
     type: 'function',
     function: {
       name: 'create_html_app',
-      description: 'Create a multi-file HTML artifact. Provide index.html plus optional styles.css/app.js; it is collapsed into one previewable file card.',
+      description: 'Create a self-contained HTML artifact. Prefer one complete document in html; files.index.html remains supported for compatibility.',
       parameters: {
         type: 'object',
         properties: {
           title: { type: 'string' },
+          html: { type: 'string', description: 'Complete single-file HTML with inline CSS and JavaScript.' },
           files: {
             type: 'object',
             description: 'Map of filename to text content. Must include index.html. External script/link tags are rejected.',
             additionalProperties: { type: 'string' },
           },
         },
-        required: ['title', 'files'],
+        required: ['title'],
       },
     },
   },

@@ -60,7 +60,7 @@ test('artifact tools return collapsed preview artifacts and reject unsafe html a
       title: 'Unsafe',
       files: { 'index.html': '<script src="https://example.com/app.js"></script>' },
     }),
-  }, { maxRetries: 0 })
+  }, { maxRetries: 0, allowedArtifactTools: new Set(['create_html_app']) })
   assert.equal(unsafe.ok, false)
   assert.match(unsafe.content, /external scripts/)
 })

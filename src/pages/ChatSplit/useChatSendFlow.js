@@ -5,6 +5,7 @@ import { readStoredModel, resolveInitialModel, resolveSessionModel } from '../..
 import { inferSkillIdFromPrompt, parseSkillCommand } from '../../lib/skillCommands.js'
 import { buildServerTurnMessageIds, runServerChatTurn } from './serverTurnFlow.js'
 import { serializeServerTurnHistory } from './serverTurnHistory.js'
+import { hasTurnRun } from './turnRunRegistry.js'
 
 export default function useChatSendFlow({
   abortCtrlRef,
@@ -18,16 +19,14 @@ export default function useChatSendFlow({
   modelOptions,
   probeLocalPathAccess,
   requestServerToolApproval,
-  resolveToolApproval,
+  resolveToolApprovalForOwner,
   runtimeSkills,
   selectedModel,
   setContextSystemPrompts,
-  setIsGenerating,
-  setToolApproval,
   state,
   t,
   toast,
-  toolApprovalResolveRef,
+  clearToolApprovalForOwner,
 }) {
   return useCallback(async (content, explicitAttachments = null, historyLimit = null) => {
     if (isGenerating || directoryApprovalResolveRef.current) return
@@ -39,6 +38,7 @@ export default function useChatSendFlow({
       abortSessionIdRef.current = sessionId
       dispatch({ type: 'NEW_SESSION', payload: { id: sessionId, title: activeSession.title, agentId: effectiveAgentId || null } })
     }
+    if (hasTurnRun(sessionId)) return
     const modelName = resolveSessionModel(modelOptions, {
       sessionModel: activeSession.modelName,
       selectedModel,
@@ -84,18 +84,16 @@ export default function useChatSendFlow({
       modelName,
       probeLocalPathAccess,
       requestServerToolApproval,
-      resolveToolApproval,
+      resolveToolApprovalForOwner,
       sessionId,
       setContextSystemPrompts,
-      setIsGenerating,
-      setToolApproval,
+      clearToolApprovalForOwner,
       skill,
       skillId: skill?.id || null,
       taskId,
       taskName: skill?.name || t('chatReliability.generalTask'),
       t,
       toast,
-      toolApprovalResolveRef,
       toolsConfig: state.toolsConfig,
       turnId,
       userPrompt: parsedSkill.skillId && skill ? parsedSkill.userPrompt : content,
@@ -103,7 +101,7 @@ export default function useChatSendFlow({
   }, [
     abortCtrlRef, abortSessionIdRef, attachments, directoryApprovalResolveRef, dispatch, effectiveAgentId,
     ensureLocalPathAccess, isGenerating, modelOptions, probeLocalPathAccess, requestServerToolApproval,
-    resolveToolApproval, runtimeSkills, selectedModel, setContextSystemPrompts, setIsGenerating, setToolApproval,
-    state.activeSessionId, state.sessions, state.skillConfigs, state.toolsConfig, t, toast, toolApprovalResolveRef,
+    resolveToolApprovalForOwner, runtimeSkills, selectedModel, setContextSystemPrompts, clearToolApprovalForOwner,
+    state.activeSessionId, state.sessions, state.skillConfigs, state.toolsConfig, t, toast,
   ])
 }

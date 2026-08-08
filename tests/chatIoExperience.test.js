@@ -27,13 +27,21 @@ test('chat drafts persist while typing and message actions stay copy-only', () =
   assert.match(chatEntrySource, /triggerSendFlow\(typedContent \|\| describeAttachmentPrompt\(currentAttachments\), currentAttachments\)/)
   assert.doesNotMatch(chatSource, /handleEditMessage|editingMessageId|handleRegenerate|handleDeleteMessage/)
   assert.match(messageRowSource, /<CopyButton content=\{msg\.content\}/)
-  assert.match(messageRowSource, /navigator\.clipboard\?\.writeText\(content\)/)
+  assert.match(messageRowSource, /copyTextToClipboard\(content\)/)
+  assert.match(messageRowSource, /chatMessages\.copied/)
   assert.doesNotMatch(messagesSource, /onEditMessage|onRegenerateMessage|onDeleteMessage|<RefreshCw|<Trash2/)
 })
 
 test('fresh sessions use a deterministic local title without a competing model request', () => {
   assert.match(chatSource, /UPDATE_SESSION_TITLE_FOR/)
   assert.doesNotMatch(chatSource, /summarizeSessionTitle/)
+})
+
+test('leaving chat detaches the view without cancelling the active server turn', () => {
+  assert.doesNotMatch(lifecycleSource, /abortCtrlRef\.current\?\.abort\(\)/)
+  assert.match(lifecycleSource, /getTurnRun\(state\.activeSessionId\)/)
+  assert.match(lifecycleSource, /subscribeTurnRuns\(syncActiveTurn\)/)
+  assert.match(chatEntrySource, /cancelTurnRun\(activeSessionId\)/)
 })
 
 test('streaming no longer reparses stable markdown or delays messages by history index', () => {
@@ -112,12 +120,13 @@ test('user message time and copy actions sit outside the compact bubble', () => 
   assert.match(messageRowSource, /mt-1 flex h-4[\s\S]{0,160}leading-none/)
 })
 
-test('reasoning and tool traces remain collapsed until the user expands them', () => {
+test('reasoning stays collapsed while running tool traces open as a compact timeline', () => {
   const reasoningTrace = activityTracesSource.match(/function ReasoningTrace[\s\S]*?(?=\nexport function ToolCallTrace)/)?.[0] || ''
   const toolCallTrace = activityTracesSource.match(/function ToolCallTrace[\s\S]*$/)?.[0] || ''
 
   assert.match(reasoningTrace, /useState\(false\)/)
-  assert.match(toolCallTrace, /useState\(false\)/)
+  assert.match(toolCallTrace, /useState\(\(\) => calls\.some/)
+  assert.match(toolCallTrace, /chat-tool-list/)
   assert.match(reasoningTrace, /aria-expanded=\{expanded\}/)
   assert.match(toolCallTrace, /aria-expanded=\{expanded\}/)
   assert.doesNotMatch(reasoningTrace, /chatMessages\.clickExpand/)

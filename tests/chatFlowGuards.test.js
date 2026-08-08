@@ -26,6 +26,7 @@ test('artifact type mapping keeps current skill previews', () => {
     assert.equal(artifactTypeForSkill(skillId), 'pptx')
   }
   assert.equal(artifactTypeForSkill('doc'), 'docx')
+  assert.equal(artifactTypeForSkill('webpage'), 'html')
   assert.equal(artifactTypeForSkill('unknown'), undefined)
 })
 

@@ -4,6 +4,7 @@ const SKILL_ARTIFACT_TYPES = {
   ppt: 'pptx',
   doc: 'docx',
   excel: 'xlsx',
+  webpage: 'html',
 }
 
 const CONFIG_ERROR_PATTERNS = [

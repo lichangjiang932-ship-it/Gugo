@@ -6,6 +6,7 @@ import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import rehypeHighlight from 'rehype-highlight'
 import FullscreenMediaModal from './FullscreenMediaModal.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
+import { copyTextToClipboard } from '../lib/clipboard.js'
 
 /**
  * MarkdownRenderer —— 安全渲染 Markdown + 代码高亮
@@ -38,17 +39,27 @@ function nodeText(node) {
 
 function CodeBlock({ children, streaming = false }) {
   const { t } = useT()
-  const [copied, setCopied] = useState(false)
+  const [copyState, setCopyState] = useState('idle')
   const child = Array.isArray(children) ? children[0] : children
   const className = isValidElement(child) ? child.props.className || '' : ''
   const language = className.match(/language-([\w-]+)/)?.[1] || 'text'
   const source = nodeText(child).replace(/\n$/, '')
 
   const copy = async () => {
-    await navigator.clipboard?.writeText(source)
-    setCopied(true)
-    window.setTimeout(() => setCopied(false), 1600)
+    try {
+      await copyTextToClipboard(source)
+      setCopyState('copied')
+    } catch {
+      setCopyState('error')
+    }
+    window.setTimeout(() => setCopyState('idle'), 1600)
   }
+
+  const copyLabel = copyState === 'copied'
+    ? t('chatMessages.copied')
+    : copyState === 'error'
+      ? t('chatMessages.copyFailed')
+      : t('chatMessages.copy')
 
   return (
     <div className="chat-code-block not-prose my-2.5 overflow-hidden rounded-md border border-ink/15 bg-paper-2">
@@ -58,11 +69,12 @@ function CodeBlock({ children, streaming = false }) {
           <button
             type="button"
             onClick={copy}
-            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-ink-fade transition-colors hover:bg-paper hover:text-ink"
-            aria-label={t('chatMessages.copyContent')}
+            className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] transition-colors hover:bg-paper hover:text-ink ${copyState === 'error' ? 'text-rose-700' : 'text-ink-fade'}`}
+            aria-label={copyState === 'idle' ? t('chatMessages.copyContent') : copyLabel}
+            aria-live="polite"
           >
-            {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
-            {t('chatMessages.copy')}
+            {copyState === 'copied' ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
+            {copyLabel}
           </button>
         )}
       </div>

@@ -3,19 +3,18 @@ import { dispatchTurnEvent, runServerTurn } from '../../lib/turnClient.js'
 import { TASK_STATUS } from '../../store/taskStatus.js'
 import { buildChatFailureMessage, getVisibleModelErrorMessage } from '../../lib/chatFlowGuards.js'
 import { isUserStopped } from './serverTurnFlow.js'
+import { hasTurnRun, registerTurnRun, unregisterTurnRun } from './turnRunRegistry.js'
 
 export default function useServerTurnResume({
   abortCtrlRef,
+  clearToolApprovalForOwner,
   dispatch,
   requestServerToolApproval,
-  resolveToolApproval,
+  resolveToolApprovalForOwner,
   resumingTurnIdsRef,
-  setIsGenerating,
-  setToolApproval,
   stateActiveSessionId,
   stateRef,
   t,
-  toolApprovalResolveRef,
 }) {
   useEffect(() => {
     if (abortCtrlRef.current) return
@@ -23,13 +22,22 @@ export default function useServerTurnResume({
     const session = current.sessions.find((item) => item.id === current.activeSessionId)
     const message = [...(session?.messages || [])].reverse().find((item) => item.role === 'assistant')
     const turnId = message?.meta?.serverTurnId
-    if (!session?.id || !turnId || !message.meta?.streaming || resumingTurnIdsRef.current.has(turnId)) return
+    if (!session?.id || !turnId || !message.meta?.streaming || resumingTurnIdsRef.current.has(turnId) || hasTurnRun(session.id, turnId)) return
 
     resumingTurnIdsRef.current.add(turnId)
     const controller = new AbortController()
-    controller.signal.addEventListener('abort', () => resolveToolApproval({ approved: false }), { once: true })
+    const owner = { sessionId: session.id, turnId }
+    controller.signal.addEventListener('abort', () => {
+      resolveToolApprovalForOwner(owner, { approved: false })
+    }, { once: true })
+    try {
+      registerTurnRun({ sessionId: session.id, turnId, controller })
+    } catch (error) {
+      resumingTurnIdsRef.current.delete(turnId)
+      if (error?.code !== 'SESSION_TURN_ALREADY_RUNNING') console.error('Failed to register resumed turn', error)
+      return
+    }
     abortCtrlRef.current = controller
-    setIsGenerating(true)
     const taskId = `resume-${turnId}`
     const serverArtifacts = [...(message.meta?.serverArtifacts || [])]
     const messageTarget = { sessionId: session.id, messageId: message.id }
@@ -60,7 +68,7 @@ export default function useServerTurnResume({
           dispatch,
           taskId,
           messageTarget,
-          onApproval: requestServerToolApproval,
+          onApproval: (request) => requestServerToolApproval(request, owner),
           onArtifact: (artifact) => {
             const filename = artifact.filename || 'artifact'
             const type = filename.includes('.') ? filename.split('.').pop().toLowerCase() : 'file'
@@ -99,11 +107,10 @@ export default function useServerTurnResume({
       dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: stopped ? TASK_STATUS.CANCELLED : TASK_STATUS.FAILED, stepLabel: stopped ? t('chat.serverTurn.cancelled') : t('chat.serverTurn.resumeFailed') } } })
     }).finally(() => {
       resumingTurnIdsRef.current.delete(turnId)
-      toolApprovalResolveRef.current = null
-      setToolApproval({ open: false, request: null, busy: false })
-      setIsGenerating(false)
-      abortCtrlRef.current = null
+      clearToolApprovalForOwner(owner)
+      unregisterTurnRun({ sessionId: session.id, turnId, controller })
+      if (abortCtrlRef.current === controller) abortCtrlRef.current = null
       setTimeout(() => dispatch({ type: 'REMOVE_TASK', payload: taskId }), 5000)
     })
-  }, [abortCtrlRef, dispatch, requestServerToolApproval, resolveToolApproval, resumingTurnIdsRef, setIsGenerating, setToolApproval, stateActiveSessionId, stateRef, t, toolApprovalResolveRef])
+  }, [abortCtrlRef, clearToolApprovalForOwner, dispatch, requestServerToolApproval, resolveToolApprovalForOwner, resumingTurnIdsRef, stateActiveSessionId, stateRef, t])
 }

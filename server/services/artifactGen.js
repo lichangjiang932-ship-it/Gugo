@@ -26,6 +26,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { pathToFileURL } from 'node:url'
 import JSZip from 'jszip'
+import { HTML_ARTIFACT_RESPONSE_CSP } from '../../shared/htmlArtifactPolicy.js'
 import { authenticateRequest } from '../middleware.js'
 import { getArtifactByFilename } from './jobStore.js'
 import { getTurnArtifactByFilename } from './turnArtifactStore.js'
@@ -49,6 +50,7 @@ const ARTIFACT_FALLBACK_NAMES = Object.freeze({
   pptx: 'presentation',
   docx: 'document',
   xlsx: 'spreadsheet',
+  html: 'webpage',
   png: 'image',
   jpg: 'image',
   webp: 'image',
@@ -136,6 +138,65 @@ export function createImageArtifact({ title = 'generated-image', buffer, mimeTyp
   const artifactPath = newArtifactPath(title, extension)
   fs.writeFileSync(artifactPath.fullPath, bytes)
   return { ...artifactPath, type: 'image', title: String(title || 'generated-image').slice(0, 200) }
+}
+
+const MAX_HTML_ARTIFACT_BYTES = 2 * 1024 * 1024
+const HTML_FENCE = /^\s*```(?:html)?\s*([\s\S]*?)\s*```\s*$/i
+
+function normalizeHtmlArtifactSource(value) {
+  const raw = String(value || '')
+  const fenced = raw.match(HTML_FENCE)
+  return (fenced ? fenced[1] : raw).trim()
+}
+
+function assertSafeHtmlArtifact(source) {
+  const html = normalizeHtmlArtifactSource(source)
+  if (!html) throw new Error('html is required')
+  if (Buffer.byteLength(html, 'utf8') > MAX_HTML_ARTIFACT_BYTES) {
+    throw new Error('html artifact exceeds the 2 MB limit')
+  }
+  if (!/<(?:!doctype\s+html|html|head|body|main|section)\b/i.test(html)) {
+    throw new Error('html must contain a complete HTML document')
+  }
+  const blocked = [
+    /<script\b[^>]*\bsrc\s*=/i,
+    /<link\b[^>]*\brel\s*=\s*["']?stylesheet["']?[^>]*\bhref\s*=/i,
+    /<iframe\b/i,
+    /\b(?:fetch|XMLHttpRequest|WebSocket)\s*\(/i,
+    /javascript\s*:/i,
+  ]
+  if (blocked.some((pattern) => pattern.test(html))) {
+    throw new Error('html artifact must be self-contained and cannot load external scripts, styles, frames, or network requests')
+  }
+  return html
+}
+
+function inlineHtmlFiles(files = {}) {
+  const index = files && typeof files === 'object' ? files['index.html'] : ''
+  let html = normalizeHtmlArtifactSource(index)
+  const css = String(files?.['styles.css'] || '').trim()
+  const js = String(files?.['app.js'] || '').trim()
+  if (css) {
+    const style = `<style>\n${css}\n</style>`
+    html = /<\/head\s*>/i.test(html) ? html.replace(/<\/head\s*>/i, `${style}\n</head>`) : `${style}\n${html}`
+  }
+  if (js) {
+    const script = `<script>\n${js}\n</script>`
+    html = /<\/body\s*>/i.test(html) ? html.replace(/<\/body\s*>/i, `${script}\n</body>`) : `${html}\n${script}`
+  }
+  return html
+}
+
+export function createHtmlArtifact({ title = 'Webpage', html, files } = {}) {
+  const source = assertSafeHtmlArtifact(html || inlineHtmlFiles(files))
+  const artifactPath = newArtifactPath(title, 'html')
+  fs.writeFileSync(artifactPath.fullPath, source, 'utf8')
+  return {
+    ...artifactPath,
+    type: 'html',
+    title: String(title || 'Webpage').slice(0, 200),
+    byteLength: Buffer.byteLength(source, 'utf8'),
+  }
 }
 
 
@@ -1277,7 +1338,7 @@ export function handleArtifactDownload(req, res) {
   if (preview && contentType === 'application/pdf') headers['X-Frame-Options'] = 'SAMEORIGIN'
   if (range) headers['Content-Range'] = `bytes ${range.start}-${range.end}/${size}`
   if (preview && /^text\/html/i.test(contentType)) {
-    headers['Content-Security-Policy'] = "sandbox allow-scripts allow-forms; default-src 'none'; img-src 'self' data: blob: https: http:; media-src 'self' data: blob: https: http:; style-src 'unsafe-inline' https:; font-src data: https:; script-src 'unsafe-inline' https:"
+    headers['Content-Security-Policy'] = HTML_ARTIFACT_RESPONSE_CSP
   } else if (preview && /^image\/svg\+xml/i.test(contentType)) {
     headers['Content-Security-Policy'] = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:"
   }

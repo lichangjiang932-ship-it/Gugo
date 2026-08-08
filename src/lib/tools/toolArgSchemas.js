@@ -51,8 +51,9 @@ export const TOOL_ARG_SCHEMAS = {
   }),
   create_html_app: z.object({
     title: z.string().min(1).max(200),
-    files: z.record(z.string(), z.string()).refine((files) => !!files['index.html'], { message: 'files must include index.html' }),
-  }),
+    html: z.string().min(1).max(2000000).optional(),
+    files: z.record(z.string(), z.string()).optional(),
+  }).refine((value) => !!value.html || !!value.files?.['index.html'], { message: 'html or files.index.html is required' }),
   Agent: z.object({
     subagent_type: z.enum(['explore', 'plan', 'general']).optional(),
     prompt: z.string().min(1).max(20000).optional(),

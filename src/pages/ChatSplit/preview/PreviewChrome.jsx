@@ -16,6 +16,7 @@ import {
   X,
 } from 'lucide-react'
 import { getArtifactToolbarActions } from './artifactToolbar.js'
+import { copyTextToClipboard } from '../../../lib/clipboard.js'
 
 export function ArtifactIcon({ type }) {
   if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(type)) return <FileImage className="h-4 w-4" />
@@ -61,7 +62,7 @@ export function PreviewToolbar({ preview, content, view, setView, exports, t }) 
           <Tab active={view === 'source'} onClick={() => setView('source')} icon={<Code className="h-3.5 w-3.5" />} label={t('chatPreview.source')} bordered />
         </div>
         {actions.canCopy && (
-          <ActionButton onClick={() => navigator.clipboard?.writeText(content)} icon={<Copy className="h-3.5 w-3.5" />} label={t('chatPreview.copy')} compact />
+          <ActionButton onClick={() => copyTextToClipboard(content).catch(() => {})} icon={<Copy className="h-3.5 w-3.5" />} label={t('chatPreview.copy')} compact />
         )}
         {actions.canExportEditablePptx && (
           <ActionButton onClick={exports.handleEditablePptxDownload} disabled={exports.premiumExporting || exports.downloading} icon={<Sparkles className="h-3.5 w-3.5" />} label={exports.premiumExporting ? t('chatPreview.exporting', { progress: exports.premiumProgress }) : t('chatPreview.editable')} compact />

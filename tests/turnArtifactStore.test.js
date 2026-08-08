@@ -47,3 +47,46 @@ test('chat TurnEngine persists generated files without a jobs-table foreign key'
   assert.equal(getTurnArtifactByFilename(artifacts[0].filename).userId, 'artifact-user')
   assert.deepEqual(listTurnArtifacts({ userId: 'other-user', sessionId: 'artifact-session', turnId: 'artifact-turn' }), [])
 })
+
+test('/webpage creates a persisted self-contained HTML artifact for preview', async () => {
+  let calls = 0
+  const engine = new TurnEngine({
+    runModel: async () => {
+      calls += 1
+      return calls === 1
+        ? {
+            content: '',
+            toolCalls: [{
+              id: 'html-call',
+              function: {
+                name: 'create_html_app',
+                arguments: JSON.stringify({
+                  title: '本地模型介绍',
+                  html: '<!doctype html><html lang="zh-CN"><head><style>body{font-family:sans-serif}</style></head><body><main>本地模型介绍</main></body></html>',
+                }),
+              },
+            }],
+          }
+        : { content: '网页已生成。', toolCalls: [] }
+    },
+  })
+  await engine.startTurn({
+    userId: 'artifact-user',
+    sessionId: 'artifact-session',
+    turnId: 'webpage-artifact-turn',
+    content: '/webpage 帮我生成一个网页来介绍本地模型',
+    skillIds: ['webpage'],
+  })
+  await engine.waitForTurn({
+    userId: 'artifact-user', sessionId: 'artifact-session', turnId: 'webpage-artifact-turn',
+  })
+
+  const artifacts = listTurnArtifacts({
+    userId: 'artifact-user', sessionId: 'artifact-session', turnId: 'webpage-artifact-turn',
+  })
+  assert.equal(artifacts.length, 1)
+  assert.equal(artifacts[0].type, 'html')
+  assert.match(artifacts[0].filename, /\.html$/)
+  const saved = fs.readFileSync(path.join(process.env.ARTIFACT_DIR, artifacts[0].filename), 'utf8')
+  assert.match(saved, /<main>本地模型介绍<\/main>/)
+})

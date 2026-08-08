@@ -27,6 +27,7 @@ import useChatRuntimeCatalog from './useChatRuntimeCatalog.js'
 import useChatSessionLifecycle from './useChatSessionLifecycle.js'
 import useChatSendFlow from './useChatSendFlow.js'
 import useSlashCommandExecution from './useSlashCommandExecution.js'
+import { cancelTurnRun } from './turnRunRegistry.js'
 
 const EMPTY_MESSAGES = []
 
@@ -80,22 +81,20 @@ export default function ChatSplit() {
   const { handleVoice, voiceState } = useVoiceRecognition({ dispatch, input, lang, permissions: state.permissions, setInput, setMessage: setWorkbenchMessage, t })
   const { abortSessionIdRef, inputRef } = useChatSessionLifecycle({
     abortCtrlRef, desktopPetVisible, dispatch, input, isGenerating, messages, setAttachments, setDesktopPetVisible,
-    setInput, setWorkbenchMessage, showContextUsage, state, toolApproval: approvals.toolApproval,
-    toolApprovalResolveRef: approvals.toolApprovalResolveRef, workbenchOpen,
+    setInput, setIsGenerating, setWorkbenchMessage, showContextUsage, state, toolApproval: approvals.toolApproval,
+    workbenchOpen,
   })
   const triggerSendFlow = useChatSendFlow({
     abortCtrlRef, abortSessionIdRef, attachments, directoryApprovalResolveRef: directory.directoryApprovalResolveRef,
     dispatch, effectiveAgentId, ensureLocalPathAccess: directory.ensureLocalPathAccess, isGenerating, modelOptions,
     probeLocalPathAccess: directory.probeLocalPathAccess, requestServerToolApproval: approvals.requestServerToolApproval,
-    resolveToolApproval: approvals.resolveToolApproval, runtimeSkills, selectedModel, setContextSystemPrompts,
-    setIsGenerating, setToolApproval: approvals.setToolApproval, state, t, toast,
-    toolApprovalResolveRef: approvals.toolApprovalResolveRef,
+    resolveToolApprovalForOwner: approvals.resolveToolApprovalForOwner, runtimeSkills, selectedModel, setContextSystemPrompts,
+    clearToolApprovalForOwner: approvals.clearToolApprovalForOwner, state, t, toast,
   })
   useServerTurnResume({
     abortCtrlRef, dispatch, requestServerToolApproval: approvals.requestServerToolApproval,
-    resolveToolApproval: approvals.resolveToolApproval, resumingTurnIdsRef, setIsGenerating,
-    setToolApproval: approvals.setToolApproval, stateActiveSessionId: state.activeSessionId, stateRef, t,
-    toolApprovalResolveRef: approvals.toolApprovalResolveRef,
+    resolveToolApprovalForOwner: approvals.resolveToolApprovalForOwner, resumingTurnIdsRef,
+    clearToolApprovalForOwner: approvals.clearToolApprovalForOwner, stateActiveSessionId: state.activeSessionId, stateRef, t,
   })
   const executeSlashEntry = useSlashCommandExecution({
     changeApprovalMode: approvals.changeApprovalMode, dispatch, navigate, setDesktopPetVisible, setInput,
@@ -124,6 +123,9 @@ export default function ChatSplit() {
     if (state.activeSessionId) dispatch({ type: 'SET_SESSION_DRAFT', payload: { sessionId: state.activeSessionId, text: '' } })
     triggerSendFlow(typedContent || describeAttachmentPrompt(currentAttachments), currentAttachments)
   }, [attachments, directory.directoryApproval.open, dispatch, executeSlashEntry, input, slashRegistry, state.activeSessionId, triggerSendFlow])
+  const handleAbort = useCallback(() => {
+    cancelTurnRun(activeSessionId)
+  }, [activeSessionId])
   useEffect(() => {
     const handler = (event) => {
       const { choiceId, choiceTitle } = event.detail || {}
@@ -175,7 +177,7 @@ export default function ChatSplit() {
       attachments={attachments} contextSystemPrompt={contextSystemPrompts[state.activeSessionId || '__draft__'] || ''}
       contextToolSpecs={contextToolSpecs} contextWindow={selectedContextWindow} desktopPetVisible={desktopPetVisible}
       directoryApproval={directory.directoryApproval} input={input} isGenerating={isGenerating} messages={messages}
-      modelOptions={modelOptions} onAbort={() => abortCtrlRef.current?.abort()} onApprovalModeChange={approvals.changeApprovalMode}
+      modelOptions={modelOptions} onAbort={handleAbort} onApprovalModeChange={approvals.changeApprovalMode}
       onAuthorizeDirectory={directory.authorizeDirectory} onCloseDesktopPet={() => setDesktopPetVisible(false)}
       onCloseInlinePanel={() => setSlashInlinePanel(null)} onCloseModelPicker={() => setShowModelPicker(false)}
       onClosePreview={() => dispatch({ type: 'CLOSE_PREVIEW_ARTIFACT' })} onCloseWorkbench={() => setWorkbenchOpen(false)}

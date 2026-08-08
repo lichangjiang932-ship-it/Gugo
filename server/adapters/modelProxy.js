@@ -42,6 +42,7 @@ import {
   parseModelProviderResponse,
   stripEmbeddedReasoning,
 } from './modelProviderResponse.js'
+import { createTextToolCallDeltaFilter, extractTextToolCalls } from '../utils/textToolCalls.js'
 import { calculateModelCostUsd, getUsageStats, recordUsage } from './modelUsage.js'
 import { requestNonStreamingAsEvents } from './modelNonStreaming.js'
 import { readJsonModelResponseEvents, readModelSseLines } from './modelResponseStream.js'
@@ -949,11 +950,12 @@ export async function callBackgroundModelWithTools({
         throw error
       }
       const parsed = parseModelProviderResponse(data, profile)
+      const compatibilityCall = parsed.toolCalls?.length ? null : extractTextToolCalls(parsed.content)
       const usage = parsed.usage
       recordUsage(candidate.modelName, usage)
       return {
-        content: parsed.content,
-        toolCalls: parsed.toolCalls,
+        content: compatibilityCall?.detected ? compatibilityCall.content : parsed.content,
+        toolCalls: compatibilityCall?.toolCalls?.length ? compatibilityCall.toolCalls : parsed.toolCalls,
         usage,
         modelName: candidate.modelName,
         costUsd: calculateModelCostUsd({ modelName: candidate.modelName, usage, env: runtimeEnv }),
@@ -1024,6 +1026,7 @@ export async function callStreamingModelWithTools({
   let toolCalls = []
   let usage = null
   let finishReason = null
+  const textToolCallFilter = createTextToolCallDeltaFilter()
 
   for await (const streamed of streamWithProviderFailover(
     candidates,
@@ -1047,7 +1050,8 @@ export async function callStreamingModelWithTools({
       const delta = String(event.delta)
       content += delta
       if (typeof onTextDelta === 'function') {
-        await onTextDelta(delta, { modelName: activeConfig.modelName })
+        const visibleDelta = textToolCallFilter.push(delta)
+        if (visibleDelta) await onTextDelta(visibleDelta, { modelName: activeConfig.modelName })
       }
     } else if (event?.type === 'reasoning' && event.delta) {
       const delta = String(event.delta)
@@ -1062,10 +1066,17 @@ export async function callStreamingModelWithTools({
 
   const resolvedConfig = activeConfig || config
   const cleanedContent = stripEmbeddedReasoning(content)
+  const compatibilityCall = toolCalls.length ? null : extractTextToolCalls(cleanedContent)
+  const filteredContent = compatibilityCall?.detected ? compatibilityCall.content : cleanedContent
+  const filteredToolCalls = compatibilityCall?.toolCalls?.length ? compatibilityCall.toolCalls : toolCalls
+  if (typeof onTextDelta === 'function') {
+    const tail = textToolCallFilter.finish({ discardProtocol: Boolean(compatibilityCall?.detected) })
+    if (tail) await onTextDelta(tail, { modelName: resolvedConfig.modelName })
+  }
   recordUsage(resolvedConfig.modelName, usage)
   return {
-    content: cleanedContent,
-    toolCalls,
+    content: filteredContent,
+    toolCalls: filteredToolCalls,
     usage,
     finishReason,
     modelName: resolvedConfig.modelName,

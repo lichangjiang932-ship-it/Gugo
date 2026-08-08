@@ -4,6 +4,7 @@ import { dispatchTurnEvent, runServerTurn } from '../../lib/turnClient.js'
 import { TASK_STATUS, HISTORY_STATUS } from '../../store/taskStatus.js'
 import { artifactTypeForSkill, buildChatFailureMessage, getVisibleModelErrorMessage } from '../../lib/chatFlowGuards.js'
 import { isServerTurnToolToggle } from '../../lib/serverToolConfig.js'
+import { registerTurnRun, unregisterTurnRun } from './turnRunRegistry.js'
 
 export function isUserStopped(error) {
   return error?.name === 'AbortError' || error?.code === 'USER_STOPPED'
@@ -84,26 +85,27 @@ export async function runServerChatTurn({
   modelName,
   probeLocalPathAccess,
   requestServerToolApproval,
-  resolveToolApproval,
+  resolveToolApprovalForOwner,
   sessionId,
   setContextSystemPrompts,
-  setIsGenerating,
-  setToolApproval,
   skill,
   skillId,
   taskId,
   taskName,
   t,
   toast,
-  toolApprovalResolveRef,
+  clearToolApprovalForOwner,
   toolsConfig,
   turnId,
   userPrompt,
 }) {
   const controller = new AbortController()
-  controller.signal.addEventListener('abort', () => resolveToolApproval({ approved: false }), { once: true })
+  const owner = { sessionId, turnId }
+  controller.signal.addEventListener('abort', () => {
+    resolveToolApprovalForOwner(owner, { approved: false })
+  }, { once: true })
+  registerTurnRun({ sessionId, turnId, controller })
   abortCtrlRef.current = controller
-  setIsGenerating(true)
   const startedAt = Date.now()
   const serverArtifacts = []
   let sawAssistantText = false
@@ -160,7 +162,7 @@ export async function runServerChatTurn({
           dispatch,
           taskId,
           messageTarget,
-          onApproval: requestServerToolApproval,
+          onApproval: (request) => requestServerToolApproval(request, owner),
           onArtifact: (artifact) => appendArtifact(artifact, serverArtifacts, dispatchMessage),
         })
         dispatchMessage('UPDATE_LAST_MESSAGE_META', { serverLastSequence: event.sequence })
@@ -198,9 +200,8 @@ export async function runServerChatTurn({
     }
     setTimeout(() => dispatch({ type: 'REMOVE_TASK', payload: taskId }), 5000)
   } finally {
-    toolApprovalResolveRef.current = null
-    setToolApproval({ open: false, request: null, busy: false })
-    setIsGenerating(false)
-    abortCtrlRef.current = null
+    clearToolApprovalForOwner(owner)
+    unregisterTurnRun({ sessionId, turnId, controller })
+    if (abortCtrlRef.current === controller) abortCtrlRef.current = null
   }
 }

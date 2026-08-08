@@ -350,6 +350,21 @@ html[data-density="loose"] {
   background: rgb(var(--color-paper-2-rgb) / 0.34);
 }
 
+.chat-tool-list {
+  position: relative;
+}
+
+.chat-tool-list::before {
+  position: absolute;
+  top: 0.75rem;
+  bottom: 0.75rem;
+  left: 0.86rem;
+  width: 1px;
+  content: "";
+  background: rgb(var(--color-ink-rgb) / 0.08);
+  pointer-events: none;
+}
+
 .chat-activity-panel > button:focus-visible,
 .chat-context-bar:focus-visible {
   outline: 2px solid var(--color-ember);

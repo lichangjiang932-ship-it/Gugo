@@ -1,5 +1,5 @@
 import { useId, useState } from 'react'
-import { ChevronDown } from 'lucide-react'
+import { CheckCircle2, ChevronDown, Loader2, XCircle } from 'lucide-react'
 import ToolCallCard from '../../../components/ToolCallCard.jsx'
 import SubagentCard from '../../../components/SubagentCard.jsx'
 import { useT } from '../../../i18n/I18nProvider.jsx'
@@ -15,9 +15,12 @@ export function ReasoningTrace({ text = '', streaming = false }) {
 
 export function ToolCallTrace({ calls = [] }) {
   const { t } = useT()
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = useState(() => calls.some((call) => call.status === 'running'))
   const panelId = useId()
   const failed = calls.filter((call) => call.status === 'error').length
   const running = calls.filter((call) => call.status === 'running').length
-  return <div className="chat-activity-panel mb-2 overflow-hidden"><button type="button" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded} aria-controls={panelId} className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-paper-2/55"><ChevronDown className={`w-3 h-3 text-ink-fade transition-transform ${expanded ? '' : '-rotate-90'}`} /><span className="font-mono text-[10px] tracking-wider uppercase text-ink-fade">{t('chatMessages.execution')}</span><span className="text-xs text-ink-soft">{running > 0 ? t('chatMessages.runningSteps', { count: calls.length }) : t('chatMessages.steps', { count: calls.length })}{failed > 0 && <span className="text-red-600 ml-1.5">{t('chatMessages.failedSteps', { count: failed })}</span>}</span></button>{expanded && <div id={panelId} className="border-t border-ink/10 px-2 py-1.5">{calls.map((call) => call.name === 'Agent' ? <SubagentCard key={call.id} call={call} /> : <ToolCallCard key={call.id} call={call} />)}<div className="mt-1 border-t border-dashed border-ink-fade/25 px-1 pt-1 font-mono text-[9px] text-ink-fade">{t('chatMessages.answerFollows')}</div></div>}</div>
+  const completed = calls.length - running
+  const StatusIcon = running > 0 ? Loader2 : failed > 0 ? XCircle : CheckCircle2
+  const statusClass = running > 0 ? 'text-ember animate-spin' : failed > 0 ? 'text-red-600' : 'text-emerald-600'
+  return <div className="chat-activity-panel mb-2 overflow-hidden"><button type="button" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded} aria-controls={panelId} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-paper-2/55"><StatusIcon className={`h-3.5 w-3.5 shrink-0 ${statusClass}`} /><span className="text-xs font-medium text-ink-soft">{t('chatMessages.execution')}</span><span className="min-w-0 flex-1 truncate text-xs text-ink-fade">{running > 0 ? t('chatMessages.runningSteps', { count: calls.length }) : t('chatMessages.steps', { count: calls.length })}{failed > 0 && <span className="ml-1.5 text-red-600">{t('chatMessages.failedSteps', { count: failed })}</span>}</span><span className="text-[10px] tabular-nums text-ink-fade">{completed}/{calls.length}</span><ChevronDown className={`h-3 w-3 shrink-0 text-ink-fade transition-transform ${expanded ? '' : '-rotate-90'}`} /></button>{expanded && <div id={panelId} className="chat-tool-list px-1 py-1">{calls.map((call) => call.name === 'Agent' ? <SubagentCard key={call.id} call={call} /> : <ToolCallCard key={call.id} call={call} />)}</div>}</div>
 }

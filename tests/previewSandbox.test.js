@@ -12,6 +12,15 @@ test('artifact preview iframes do not allow modal popups by default', () => {
   assert.doesNotMatch(source, /allow-modals/)
 })
 
+test('task HTML previews fetch source outside the sandbox and never put download tokens in iframe URLs', () => {
+  const source = fs.readFileSync(new URL('../src/pages/TaskArtifactPreview.jsx', import.meta.url), 'utf8')
+
+  assert.match(source, /loadArtifactPreviewHtml\(artifactUrl/)
+  assert.match(source, /srcDoc=\{previewHtml\}/)
+  assert.match(source, /sandbox="allow-scripts"/)
+  assert.doesNotMatch(source, /<iframe[\s\S]*?src=\{downloadUrl\}/)
+})
+
 test('React artifact previews apply the shared readability guard', () => {
   const source = fs.readFileSync(new URL('../src/pages/ChatSplit/RightPreviewPane.jsx', import.meta.url), 'utf8') + previewSource()
 

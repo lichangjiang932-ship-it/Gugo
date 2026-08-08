@@ -4,11 +4,13 @@ import {
   cancelJob,
   createJob,
   getJob,
+  loadArtifactPreviewHtml,
   listJobs,
   retryJob,
   retryStep,
   subscribeToJobEvents,
 } from '../src/lib/jobClient.js'
+import { setAuthToken } from '../src/lib/accountClient.js'
 
 test('job client uses expected endpoints', async () => {
   const calls = []
@@ -36,6 +38,39 @@ test('job client uses expected endpoints', async () => {
     '/api/jobs/job-1/retry',
     '/api/jobs/job-1/steps/step-1/retry',
   ])
+})
+
+test('HTML artifact previews use an auth header without exposing the session token in the URL', async () => {
+  const previousWindow = globalThis.window
+  globalThis.window = { localStorage: null, sessionStorage: null }
+  setAuthToken('long-lived-secret')
+  const calls = []
+  try {
+    const html = await loadArtifactPreviewHtml('/api/artifacts/demo.html?token=stale-secret', {
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init })
+        return { ok: true, status: 200, text: async () => '<!doctype html><p>safe</p>' }
+      },
+    })
+    assert.equal(html, '<!doctype html><p>safe</p>')
+    assert.equal(calls[0].url, '/api/artifacts/demo.html?preview=1')
+    assert.equal(calls[0].init.headers.Authorization, 'Bearer long-lived-secret')
+    assert.doesNotMatch(calls[0].url, /token=/)
+  } finally {
+    setAuthToken('')
+    globalThis.window = previousWindow
+  }
+})
+
+test('HTML artifact previews reject cross-origin URLs before forwarding credentials', async () => {
+  let fetched = false
+  await assert.rejects(
+    loadArtifactPreviewHtml('https://attacker.invalid/demo.html', {
+      fetchImpl: async () => { fetched = true },
+    }),
+    /same-origin/,
+  )
+  assert.equal(fetched, false)
 })
 
 test('subscribeToJobEvents exchanges a one-time ticket and connects with ?ticket=', async () => {
