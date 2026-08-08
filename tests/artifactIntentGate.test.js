@@ -20,6 +20,7 @@ test('code task cannot even see file-artifact tools', () => {
   assert.ok(!names.includes('create_pptx'), 'create_pptx 必须对代码任务不可见')
   assert.ok(!names.includes('create_docx'))
   assert.ok(!names.includes('create_xlsx'))
+  assert.ok(!names.includes('create_html_app'))
   // 非文件类工具一个都不能被误伤
   const nonArtifact = nameOf(SERVER_TOOL_SPECS).filter((n) => !isFileArtifactTool(n))
   for (const n of nonArtifact) assert.ok(names.includes(n), `${n} 被误过滤`)
@@ -110,6 +111,88 @@ test('slash skill unlocks its matching artifact tool', () => {
   const names = nameOf(selectJobToolSpecs({ prompt: '/excel 汇总季度数据', skillId: 'excel' }))
   assert.ok(names.includes('create_xlsx'))
   assert.ok(!names.includes('create_pptx'))
+
+  const webpageNames = nameOf(selectJobToolSpecs({
+    prompt: '/webpage 帮我生成一个网页来介绍本地模型',
+    skillId: 'webpage',
+  }))
+  assert.ok(webpageNames.includes('create_html_app'))
+  assert.ok(!webpageNames.includes('create_pptx'))
+})
+
+test('text tool protocol from a local model becomes a real webpage artifact call', async () => {
+  const deltas = []
+  const executions = []
+  let modelCalls = 0
+  const result = await runToolsLoop({
+    job: { id: 'webpage-text-protocol', userId: 'intent-user', origin: 'chat', prompt: '/webpage 帮我生成一个网页' },
+    step: { id: 'webpage-text-protocol', kind: 'chat' },
+    messages: [{ role: 'user', content: '/webpage 帮我生成一个网页' }],
+    skillId: 'webpage',
+    toolSpecs: SERVER_TOOL_SPECS,
+    enableToolHooks: false,
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    onModelDelta: async ({ text }) => deltas.push(text),
+    executeTool: async ({ name, args }) => {
+      executions.push({ name, args })
+      return { ok: true, artifactId: 'html-artifact-1', filename: 'local-model.html', url: '/api/artifacts/local-model.html' }
+    },
+    runModel: async ({ messages }) => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '<tool_call>{"name":"create_html_app","arguments":{"title":"本地模型","html":"<!doctype html><html><body><main>完成</main></body></html>"}}</tool_call>',
+          toolCalls: [],
+        }
+      }
+      assert.ok(messages.some((message) => message.role === 'tool' && message.name === 'create_html_app'))
+      return { content: '网页已生成。', toolCalls: [] }
+    },
+  })
+
+  assert.equal(executions.length, 1)
+  assert.equal(executions[0].name, 'create_html_app')
+  assert.match(executions[0].args.html, /<main>完成<\/main>/)
+  assert.deepEqual(result.artifactIds, ['html-artifact-1'])
+  assert.equal(result.text, '网页已生成。')
+  assert.equal(deltas.join('').includes('<tool_call>'), false)
+})
+
+test('text tool protocol ids stay unique across model iterations', async () => {
+  const executions = []
+  let modelCalls = 0
+  const result = await runToolsLoop({
+    job: { id: 'local-text-turn', userId: 'intent-user', origin: 'chat', prompt: '搜索两次并总结' },
+    step: { id: 'local-text-step', kind: 'chat' },
+    messages: [{ role: 'user', content: '搜索两次并总结' }],
+    toolSpecs: SERVER_TOOL_SPECS,
+    enableToolHooks: false,
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    executeTool: async ({ name, args, toolCallId, idempotencyKey }) => {
+      executions.push({ name, args, toolCallId, idempotencyKey })
+      return { ok: true, results: [] }
+    },
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls <= 2) {
+        return {
+          content: `<tool_call>{"name":"web_search","arguments":{"query":"round-${modelCalls}"}}</tool_call>`,
+          toolCalls: [],
+        }
+      }
+      return { content: '两轮搜索均已完成。', toolCalls: [] }
+    },
+  })
+
+  assert.equal(result.text, '两轮搜索均已完成。')
+  assert.equal(executions.length, 2)
+  assert.deepEqual(executions.map((entry) => entry.toolCallId), [
+    'text-tool-local-text-turn-i1-c1',
+    'text-tool-local-text-turn-i2-c1',
+  ])
+  assert.equal(new Set(executions.map((entry) => entry.idempotencyKey)).size, 2)
+  assert.match(executions[0].idempotencyKey, /text-tool-local-text-turn-i1-c1$/)
+  assert.match(executions[1].idempotencyKey, /text-tool-local-text-turn-i2-c1$/)
 })
 
 test('environment flags cannot disable the artifact safety gate', () => {

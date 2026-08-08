@@ -136,11 +136,16 @@ export default function DesktopPetWindow() {
     const cancelWhenHidden = () => {
       if (document.visibilityState !== 'visible') cancel()
     }
+    const cancelPendingLeave = () => {
+      if (dragRef.current && !dragRef.current.moved) cancel()
+    }
+    const root = document.documentElement
     window.addEventListener('pointerup', finishPointer, true)
     window.addEventListener('pointercancel', finishPointer, true)
     window.addEventListener('mouseup', finishMouse, true)
     window.addEventListener('blur', cancel)
     window.addEventListener('pagehide', cancel)
+    root?.addEventListener('mouseleave', cancelPendingLeave)
     document.addEventListener('visibilitychange', cancelWhenHidden)
     const unsubscribeMain = window.gugoDesktop?.onPetDragCancel?.(cancel)
     return () => {
@@ -149,6 +154,7 @@ export default function DesktopPetWindow() {
       window.removeEventListener('mouseup', finishMouse, true)
       window.removeEventListener('blur', cancel)
       window.removeEventListener('pagehide', cancel)
+      root?.removeEventListener('mouseleave', cancelPendingLeave)
       document.removeEventListener('visibilitychange', cancelWhenHidden)
       unsubscribeMain?.()
       cancel()
@@ -157,6 +163,7 @@ export default function DesktopPetWindow() {
 
   const handlePointerDown = (event) => {
     if (event.pointerType === 'mouse' && event.button !== 0) return
+    event.preventDefault()
     finishActiveDrag(null, { cancelled: true })
     const drag = {
       pointerId: event.pointerId,
@@ -167,9 +174,6 @@ export default function DesktopPetWindow() {
       target: event.currentTarget,
     }
     dragRef.current = drag
-    // Capture before the pointer can outrun this tiny transparent window. Waiting
-    // for the drag threshold loses fast drags at the window edge on Windows.
-    captureActivePointer(drag)
     sendDrag('start', event)
   }
 
@@ -180,12 +184,20 @@ export default function DesktopPetWindow() {
       finishActiveDrag(event, { cancelled: false })
       return
     }
+    event.preventDefault()
     // Moving a frameless BrowserWindow can make Chromium drop capture. Re-acquire
     // it on the next event instead of mistaking that transition for mouse-up.
-    if (!drag.captured) captureActivePointer(drag)
     const distance = Math.hypot(event.screenX - drag.startX, event.screenY - drag.startY)
     if (!drag.moved && distance < DRAG_THRESHOLD) return
-    drag.moved = true
+    if (!drag.moved) {
+      drag.moved = true
+      // A simple click must never capture the OS pointer. Capture only after
+      // the drag threshold has been crossed, then keep it for cross-window
+      // motion until pointer-up/blur/cancel releases it.
+      captureActivePointer(drag)
+    } else if (!drag.captured) {
+      captureActivePointer(drag)
+    }
     sendDrag('move', event)
   }
 

@@ -64,8 +64,15 @@ test('artifact preview responses are inline, range-aware, Unicode-safe, and sand
     assert.match(download.headers.get('content-disposition') || '', /^attachment;/)
 
     const html = await fetch(`${origin}${htmlUrl}?preview=1`, { method: 'HEAD', headers })
-    assert.match(html.headers.get('content-security-policy') || '', /^sandbox allow-scripts allow-forms;/)
-    assert.doesNotMatch(html.headers.get('content-security-policy') || '', /allow-same-origin/)
+    const htmlCsp = html.headers.get('content-security-policy') || ''
+    assert.match(htmlCsp, /^sandbox allow-scripts;/)
+    assert.doesNotMatch(htmlCsp, /allow-(?:same-origin|forms)/)
+    assert.match(htmlCsp, /connect-src 'none'/)
+    assert.match(htmlCsp, /form-action 'none'/)
+    assert.match(htmlCsp, /img-src data: blob:/)
+    assert.match(htmlCsp, /media-src data: blob:/)
+    assert.match(htmlCsp, /font-src data:/)
+    assert.doesNotMatch(htmlCsp, /https?:/)
   } finally {
     await new Promise((resolve) => server.close(resolve))
   }

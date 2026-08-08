@@ -1,6 +1,7 @@
-import { useState } from 'react'
-import { X, Download, FileText, Table2, Presentation, Code2, Globe, Loader2 } from 'lucide-react'
-import { withDownloadToken } from '../lib/jobClient.js'
+import { useEffect, useState } from 'react'
+import { AlertCircle, Code2, Download, FileText, Globe, Loader2, Presentation, Table2, X } from 'lucide-react'
+import { applyHtmlArtifactDocumentPolicy } from '../../shared/htmlArtifactPolicy.js'
+import { loadArtifactPreviewHtml, withDownloadToken } from '../lib/jobClient.js'
 import { useT } from '../i18n/I18nProvider.jsx'
 
 function TypeIcon({ type }) {
@@ -12,23 +13,33 @@ function TypeIcon({ type }) {
   return <FileText className="w-4 h-4" />
 }
 
-/**
- * TaskRunPanel 专用预览面板。
- * 服务端落盘的 artifact 只有 url(无内联 source),所以策略:
- *   - html: iframe 直接加载 url(带 query token),sandbox 限制脚本
- *   - 其它(pptx/docx/xlsx): 不强求预览,渲染元数据卡片 + 醒目的下载按钮
- * 不复用 ChatSplit/RightPreviewPane — 它依赖 artifact.preview.source。
- */
 export default function TaskArtifactPreview({ artifact, onClose }) {
   const { t } = useT()
-  // artifact 切换会用 key 强制 remount,所以这里 useState(true) 初始 + iframe onLoad 翻 false 就够,
-  // 不需要 effect(否则触发 react-hooks/set-state-in-effect)。
-  const [loading, setLoading] = useState(true)
+  const artifactUrl = String(artifact?.url || '')
+  const isInlineHtml = artifact?.type === 'html'
+  const requestKey = `${artifact?.id || ''}:${artifactUrl}`
+  const [loadState, setLoadState] = useState(() => ({ key: '', html: '', error: '' }))
+  const [loadedKey, setLoadedKey] = useState('')
+
+  useEffect(() => {
+    if (!isInlineHtml || !artifactUrl) return undefined
+    const controller = new AbortController()
+    loadArtifactPreviewHtml(artifactUrl, { signal: controller.signal }).then((source) => {
+      if (!controller.signal.aborted) setLoadState({ key: requestKey, html: source, error: '' })
+    }).catch((cause) => {
+      if (!controller.signal.aborted) setLoadState({ key: requestKey, html: '', error: cause?.message || String(cause) })
+    })
+    return () => controller.abort()
+  }, [artifactUrl, isInlineHtml, requestKey])
+
+  const currentLoadState = loadState.key === requestKey ? loadState : null
+  const previewHtml = currentLoadState?.html ? applyHtmlArtifactDocumentPolicy(currentLoadState.html) : ''
+  const previewError = isInlineHtml && (!artifactUrl || currentLoadState?.error)
+  const loading = isInlineHtml && !previewError && (!previewHtml || loadedKey !== requestKey)
 
   if (!artifact) return null
 
   const downloadUrl = withDownloadToken(artifact.url)
-  const isInlineHtml = artifact.type === 'html'
 
   return (
     <aside
@@ -53,6 +64,7 @@ export default function TaskArtifactPreview({ artifact, onClose }) {
           {t('artifact.download')}
         </a>
         <button
+          type="button"
           onClick={onClose}
           className="h-8 w-8 inline-flex items-center justify-center rounded-md border border-ink/20 text-ink-soft"
           aria-label={t('artifact.close')}
@@ -61,18 +73,22 @@ export default function TaskArtifactPreview({ artifact, onClose }) {
         </button>
       </header>
 
-      <div className="flex-1 min-h-0 overflow-hidden">
-        {isInlineHtml ? (
+      <div className="relative flex-1 min-h-0 overflow-hidden">
+        {isInlineHtml && previewHtml ? (
           <iframe
             title={t('artifact.previewTitle', { title: artifact.title || '' })}
-            src={downloadUrl}
-            // SECURITY: 与 ChatSplit/RightPreviewPane 同款 — 不加 allow-same-origin
-            sandbox="allow-scripts allow-forms"
+            srcDoc={previewHtml}
+            sandbox="allow-scripts"
             referrerPolicy="no-referrer"
             className="w-full h-full border-0 bg-white"
-            onLoad={() => setLoading(false)}
+            onLoad={() => setLoadedKey(requestKey)}
           />
-        ) : (
+        ) : previewError ? (
+          <div className="h-full flex flex-col items-center justify-center gap-3 p-8 text-center text-ink-soft" role="status">
+            <AlertCircle className="w-5 h-5 text-ink-fade" />
+            <p className="text-sm">{t('chatPreview.previewFailed')}</p>
+          </div>
+        ) : !isInlineHtml ? (
           <div className="h-full flex flex-col items-center justify-center gap-3 p-8 text-center text-ink-soft">
             <TypeIcon type={artifact.type} />
             <p className="text-sm">
@@ -90,9 +106,9 @@ export default function TaskArtifactPreview({ artifact, onClose }) {
               {t('artifact.download')} {artifact.filename || ''}
             </a>
           </div>
-        )}
-        {loading && isInlineHtml && (
-          <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+        ) : null}
+        {loading && (
+          <div className="absolute inset-0 pointer-events-none flex items-center justify-center bg-paper/70">
             <Loader2 className="w-5 h-5 animate-spin text-ink-fade" />
           </div>
         )}

@@ -9,7 +9,7 @@
 
 **Gugo**（yma）—— 浏览器即用的本地/内网 Web AI 工作台。React 19 SPA + Node.js HTTP（**零框架**） + SQLite（better-sqlite3, WAL）。和 Claude Code / Cursor / Cherry Studio / openhanako 同品类，但走 Web 路线。
 
-当前：v0.10.9 · DB schema **v39** · **298 个 test 文件**（npm test 跑 1663+ 用例）· 零后端框架依赖。
+当前：v0.10.13 · DB schema **v39** · **306 个 test 文件**（npm test 跑 1695+ 用例）· 零后端框架依赖。
 
 ---
 

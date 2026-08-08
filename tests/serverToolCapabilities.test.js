@@ -21,7 +21,6 @@ const CLIENT_ONLY_PREVIEW_TOOLS = [
   'create_mermaid',
   'create_chart',
   'create_svg',
-  'create_html_app',
 ]
 
 function namesOf(specs) {
@@ -43,6 +42,11 @@ test('retired client-only preview tools are not advertised as server capabilitie
     assert.equal(serverNames.has(name), false, `${name} must not be exposed by SERVER_TOOL_SPECS`)
     assert.equal(getBuiltinSpec(name), null, `${name} must not be exposed by the server registry`)
   }
+})
+
+test('HTML artifact generation is an executable server capability', () => {
+  const serverNames = new Set(namesOf(SERVER_TOOL_SPECS))
+  assert.equal(serverNames.has('create_html_app'), true)
 })
 
 test('resolveTurnToolSpecs removes explicitly disabled builtins after merging tools', async () => {

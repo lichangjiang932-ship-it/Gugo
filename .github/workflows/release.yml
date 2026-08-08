@@ -15,7 +15,17 @@ permissions:
   contents: write
 
 jobs:
+  ci:
+    name: Required CI gates
+    uses: ./.github/workflows/ci.yml
+    with:
+      checkout_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+    permissions:
+      contents: read
+      pull-requests: read
+
   release:
+    needs: ci
     runs-on: windows-latest
     env:
       RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
@@ -32,10 +42,8 @@ jobs:
           cache: npm
 
       - run: npm ci
-      - run: npm run lint
-      - run: npm test
-      - run: npm run licenses
       - run: npm run build
+      - run: npm run desktop:check
 
       - name: Verify tag matches package version
         shell: pwsh
@@ -49,12 +57,19 @@ jobs:
         shell: pwsh
         run: |
           $version = node -p "require('./package.json').version"
-          tar -czf "gugo-$version-web.tar.gz" dist
+          node scripts/release/package-web.mjs --output-dir .artifacts/web
+          tar -C .artifacts/web -czf "gugo-$version-web.tar.gz" "gugo-$version-web"
+
+      - name: Verify browser distribution in an isolated directory
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          scripts/release/verify-web-release.ps1 -ArchivePath "gugo-$version-web.tar.gz"
 
       - name: Package Windows desktop installer
         run: npm run desktop:package
 
-      - name: Create GitHub Release
+      - name: Create or update GitHub Release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -73,4 +88,13 @@ jobs:
             throw 'Auto-update metadata latest.yml was not generated'
           }
           $assets = @($webAsset) + @($desktopAssets)
-          gh release create $env:RELEASE_TAG @assets --verify-tag --generate-notes
+          gh release view $env:RELEASE_TAG --json tagName *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:RELEASE_TAG @assets --clobber
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to update GitHub Release assets' }
+            gh release edit $env:RELEASE_TAG --draft=false --prerelease=false
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to publish the existing GitHub Release' }
+          } else {
+            gh release create $env:RELEASE_TAG @assets --verify-tag --generate-notes
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to create GitHub Release' }
+          }

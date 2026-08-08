@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow, dialog, ipcMain, Menu, screen, session, shell } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen, session, shell } from 'electron'
 import updaterPackage from 'electron-updater'
 import {
   isSafeExternalUrl,
@@ -24,6 +24,7 @@ import {
 const { autoUpdater } = updaterPackage
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const preloadPath = path.join(__dirname, 'preload.cjs')
+const appIconPath = path.join(__dirname, '..', 'build', 'icon.ico')
 const UPDATE_INTERVAL_MS = 15 * 60 * 1000
 
 let mainWindow = null
@@ -45,7 +46,6 @@ function cancelPetDrag({ notifyRenderer = true } = {}) {
 }
 
 function hideDesktopPet() {
-  cancelPetDrag()
   applyPetVisibility(false)
   mainWindow?.webContents.send('desktop:pet-visibility', false)
 }
@@ -271,6 +271,7 @@ function createMainWindow() {
     show: false,
     backgroundColor: '#ffffff',
     autoHideMenuBar: true,
+    icon: appIconPath,
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -320,6 +321,7 @@ function createPetWindow() {
     minimizable: false,
     fullscreenable: false,
     hasShadow: false,
+    icon: appIconPath,
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -331,12 +333,12 @@ function createPetWindow() {
     },
   })
   window.setAlwaysOnTop(true, 'floating')
+  window.setMovable(true)
   secureWebContents(window.webContents)
   window.on('blur', () => cancelPetDrag())
   window.on('hide', () => cancelPetDrag())
   window.on('moved', () => {
-    const next = clampPetBounds(window.getBounds())
-    if (next.x !== window.getBounds().x || next.y !== window.getBounds().y) window.setBounds(next)
+    const next = window.getBounds()
     void import('node:fs/promises').then(({ writeFile }) => writeFile(path.join(stored, 'pet-window.json'), JSON.stringify({ x: next.x, y: next.y }))).catch(() => {})
   })
   window.on('closed', () => {
@@ -354,10 +356,17 @@ function createPetWindow() {
 function applyPetVisibility(visible) {
   petState = { ...petState, visible: visible === true }
   if (!petState.visible) {
-    cancelPetDrag()
-    petWindow?.hide()
+    const window = petWindow
+    cancelPetDrag({ notifyRenderer: false })
+    // A hidden Chromium window can retain pointer capture on Windows. Reusing
+    // that renderer makes the next pet impossible to drag and can swallow
+    // clicks intended for other applications. Destroying the tiny independent
+    // window releases the OS capture deterministically; the next show creates
+    // a fresh renderer while preserving the saved desktop position.
+    if (window && !window.isDestroyed()) window.destroy()
     return
   }
+  cancelPetDrag({ notifyRenderer: false })
   const window = createPetWindow()
   if (window.webContents.isLoading()) window.once('ready-to-show', () => window.showInactive())
   else window.showInactive()
@@ -393,15 +402,22 @@ function handlePetDrag(event, payload = {}) {
   }
   const drag = petDragState
   if (phase !== 'move' || !drag || drag.senderId !== event.sender.id) return
-  const next = clampPetBounds({
-    ...drag.origin,
+  // Do not clamp while the user is dragging. Clamping against the display
+  // currently containing the window pins it to that monitor and prevents the
+  // cursor from ever crossing onto an adjacent display.
+  const next = {
     x: Math.round(drag.origin.x + screenX - drag.startX),
     y: Math.round(drag.origin.y + screenY - drag.startY),
-  })
+  }
   window.setPosition(next.x, next.y, false)
 }
 
 function registerDesktopIpc() {
+  ipcMain.handle('desktop:write-clipboard-text', (event, value) => {
+    assertTrustedIpc(event)
+    clipboard.writeText(String(value ?? ''))
+    return { copied: true }
+  })
   ipcMain.handle('desktop:get-version', (event) => {
     assertTrustedIpc(event)
     return app.getVersion()
@@ -485,6 +501,10 @@ function configureAutoUpdates() {
 
   autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = true
+  // Community builds are currently unsigned: keep publisherName absent so the updater
+  // uses GitHub HTTPS plus latest.yml SHA-512 integrity checks without a false signer claim.
+  autoUpdater.allowPrerelease = false
+  autoUpdater.allowDowngrade = false
   autoUpdater.on('checking-for-update', () => sendUpdateStatus('checking'))
   autoUpdater.on('update-available', (info) => sendUpdateStatus('available', { version: info.version }))
   autoUpdater.on('update-not-available', () => sendUpdateStatus('current'))

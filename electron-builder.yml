@@ -21,15 +21,19 @@ files:
   - desktop/preload.cjs
   - desktop/runtime.js
   - desktop/security.js
+  - build/icon.ico
   - package.json
 win:
   executableName: Gugo
+  icon: build/icon.ico
   target:
     - target: nsis
       arch:
         - x64
   requestedExecutionLevel: asInvoker
 nsis:
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true

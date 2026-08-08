@@ -158,7 +158,9 @@ async function execCreateSvg(args) {
 
 async function execCreateHtmlApp(args) {
   const title = String(args.title || 'html-app').trim().slice(0, 200) || 'html-app'
-  const files = args.files && typeof args.files === 'object' ? args.files : {}
+  const files = args.html
+    ? { 'index.html': String(args.html) }
+    : args.files && typeof args.files === 'object' ? args.files : {}
   if (!files['index.html']) throw new Error('files must include index.html')
   const safeFiles = {}
   for (const [name, value] of Object.entries(files)) {

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { writeContextUsageVisible, writeDesktopPetVisible, writeWorkbenchOpen } from '../../lib/chatUiPreferences.js'
 import { deriveDesktopPetStatus } from './desktopPetState.js'
+import { getTurnRun, subscribeTurnRuns } from './turnRunRegistry.js'
 
 export default function useChatSessionLifecycle({
   abortCtrlRef,
@@ -11,12 +12,12 @@ export default function useChatSessionLifecycle({
   messages,
   setAttachments,
   setDesktopPetVisible,
+  setIsGenerating,
   setInput,
   setWorkbenchMessage,
   showContextUsage,
   state,
   toolApproval,
-  toolApprovalResolveRef,
   workbenchOpen,
 }) {
   const abortSessionIdRef = useRef(state.activeSessionId)
@@ -46,13 +47,15 @@ export default function useChatSessionLifecycle({
     return () => window.clearTimeout(timer)
   }, [dispatch, setInput, state.draftInput])
   useEffect(() => {
-    if (abortSessionIdRef.current !== state.activeSessionId) {
-      abortSessionIdRef.current = state.activeSessionId
-      toolApprovalResolveRef.current?.({ approved: false })
-      abortCtrlRef.current?.abort()
+    abortSessionIdRef.current = state.activeSessionId
+    const syncActiveTurn = () => {
+      const run = getTurnRun(state.activeSessionId)
+      abortCtrlRef.current = run?.controller || null
+      setIsGenerating(Boolean(run))
     }
-  }, [abortCtrlRef, state.activeSessionId, toolApprovalResolveRef])
-  useEffect(() => () => abortCtrlRef.current?.abort(), [abortCtrlRef])
+    syncActiveTurn()
+    return subscribeTurnRuns(syncActiveTurn)
+  }, [abortCtrlRef, setIsGenerating, state.activeSessionId])
   useEffect(() => {
     const previousId = previousSessionIdRef.current
     const nextId = state.activeSessionId

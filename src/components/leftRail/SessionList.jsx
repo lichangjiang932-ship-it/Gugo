@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Archive, ArchiveRestore, ChevronDown, MoreHorizontal, X } from 'lucide-react'
-import { groupSessions } from './sessionListUtils.js'
+import { sortSessions } from './sessionListUtils.js'
 
 const CONTEXT_MENU_WIDTH = 176
 const CONTEXT_MENU_HEIGHT = 82
@@ -44,7 +44,7 @@ export default function SessionList({
   const menuOriginRef = useRef(null)
   const [contextMenu, setContextMenu] = useState(null)
   const [expanded, setExpanded] = useState(true)
-  const grouped = useMemo(() => groupSessions(sessions), [sessions])
+  const orderedSessions = useMemo(() => sortSessions(sessions), [sessions])
 
   useEffect(() => {
     if (openMenuId == null) return undefined
@@ -145,21 +145,11 @@ export default function SessionList({
     </div>
   }
 
-  const groupDefinitions = [
-    ['today', t('nav.groupToday')],
-    ['yesterday', t('nav.groupYesterday')],
-    ['week', t('nav.groupWeek')],
-    ['earlier', t('nav.groupEarlier')],
-  ]
-
   return <section aria-label={t('nav.history')}>
     <button type="button" onClick={() => { onMenuClose(); setExpanded((value) => !value) }} aria-expanded={expanded} className="mb-1 flex h-7 w-full items-center gap-1 rounded-md px-1.5 text-[11px] font-medium text-ink-fade hover:bg-ink/[0.035] hover:text-ink-soft">
       <ChevronDown className={`h-3 w-3 transition-transform ${expanded ? '' : '-rotate-90'}`} />
       <span className="flex-1 text-left">{t('nav.history')}</span>
     </button>
-    {expanded && (sessions.length ? <div className="space-y-2.5">{groupDefinitions.map(([key, label]) => grouped[key].length > 0 && <div key={key}>
-      <div className="mb-0.5 px-2 text-[10px] font-medium text-ink-ghost">{label}</div>
-      <div className="flex flex-col gap-0.5">{grouped[key].map((session, index) => renderSession(session, index))}</div>
-    </div>)}</div> : <div className="px-3 py-8 text-center"><p className="text-xs text-ink-fade">{t('nav.emptyTitle')}</p><p className="mt-1 text-[10px] text-ink-ghost">{t('nav.emptyHint')}</p></div>)}
+    {expanded && (orderedSessions.length ? <div className="flex flex-col gap-0.5">{orderedSessions.map((session, index) => renderSession(session, index))}</div> : <div className="px-3 py-8 text-center"><p className="text-xs text-ink-fade">{t('nav.emptyTitle')}</p><p className="mt-1 text-[10px] text-ink-ghost">{t('nav.emptyHint')}</p></div>)}
   </section>
 }

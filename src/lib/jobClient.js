@@ -74,6 +74,29 @@ export function retryStep(jobId, stepId, { fetchImpl = fetch } = {}) {
   }))
 }
 
+function authenticatedArtifactUrl(value) {
+  const raw = String(value || '').trim()
+  if (!raw) throw new Error('artifact URL is required')
+  const baseOrigin = globalThis.location?.origin || 'http://localhost'
+  const parsed = new URL(raw, baseOrigin)
+  if (parsed.origin !== baseOrigin || !parsed.pathname.startsWith('/api/artifacts/')) {
+    throw new Error('artifact preview URL must be same-origin')
+  }
+  parsed.searchParams.delete('token')
+  parsed.searchParams.set('preview', '1')
+  return `${parsed.pathname}${parsed.search}`
+}
+
+export async function loadArtifactPreviewHtml(url, { fetchImpl = fetch, signal } = {}) {
+  const response = await fetchImpl(authenticatedArtifactUrl(url), {
+    headers: authHeaders(),
+    credentials: 'same-origin',
+    signal,
+  })
+  if (!response.ok) throw new Error(`artifact preview request failed: ${response.status}`)
+  return response.text()
+}
+
 // EventSource cannot send Authorization headers. Exchange the session token for
 // a short-lived, one-time ticket and get a fresh ticket after every disconnect.
 export function subscribeToJobEvents(

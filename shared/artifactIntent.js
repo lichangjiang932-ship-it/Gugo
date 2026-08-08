@@ -18,6 +18,7 @@ const SKILL_ARTIFACT_TOOL = Object.freeze({
   ppt: 'create_pptx',
   doc: 'create_docx',
   excel: 'create_xlsx',
+  webpage: 'create_html_app',
 })
 
 // 常见 PPT/文档/表格类技能 ID → 文件工具映射。技能前缀（如 /ppt-master 做演示）
@@ -26,6 +27,7 @@ const SKILL_ARTIFACT_TOOL = Object.freeze({
 const SKILL_ID_ALIASES = Object.freeze({
   doc: ['doc', 'write-doc'],
   excel: ['excel', 'analyze-excel'],
+  webpage: ['webpage', 'html', 'website'],
 })
 
 export function resolveArtifactToolForSkillId(skillId) {
@@ -41,6 +43,7 @@ const ARTIFACT_TERMS = Object.freeze({
   pptx: /\bpptx?\b|\.pptx?\b|power\s*point|幻灯片|演示文稿|演示稿|路演稿|slide\s*deck|\bslides?\b/gi,
   docx: /\bdocx?\b|\.docx?\b|\bword\b|word\s*文档|文档|报告|会议纪要|纪要|周报|合同|简历|document|report|minutes/gi,
   xlsx: /\bxlsx?\b|\.xlsx?\b|\bexcel\b|工作簿|电子表格|spread\s*sheet/gi,
+  html: /\bhtml?\b|\.html?\b|\bweb\s*page\b|\bwebsite\b|\blanding\s*page\b|网页|网站|落地页/gi,
 })
 
 const BEFORE_ACTION = /(?:帮我|请|麻烦|给我|我要|我需要|我想要|希望|来(?:一|个|份|套)?|写|编写|撰写|做|制作|生成|创建|输出|导出|整理成|转换成|转成|改成|做成|设计|起草|重做|重制|修改|编辑|更新|优化|润色|make|create|generate|build|produce|export|convert|design|draft|prepare|write|revise|edit|update|redesign|give\s+me|i\s+(?:want|need))[^。！？!?\n]{0,32}$/i
@@ -99,5 +102,6 @@ export function detectArtifactIntent(prompt = '', { skillId = undefined } = {}) 
     pptx: skillTool === 'create_pptx' || hasExplicitArtifactRequest(text, 'pptx'),
     docx: skillTool === 'create_docx' || hasExplicitArtifactRequest(text, 'docx'),
     xlsx: skillTool === 'create_xlsx' || hasExplicitArtifactRequest(text, 'xlsx'),
+    html: skillTool === 'create_html_app' || hasExplicitArtifactRequest(text, 'html'),
   }
 }

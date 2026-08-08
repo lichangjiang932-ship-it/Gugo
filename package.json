@@ -1,7 +1,7 @@
 {
   "name": "gugo",
   "private": true,
-  "version": "0.10.12",
+  "version": "0.10.13",
   "description": "Self-hosted AI workspace for browser and Windows desktop with agents, tools, memory, jobs, and MCP.",
   "author": "lichangjiang932-ship-it",
   "license": "MIT",
@@ -33,6 +33,7 @@
   "scripts": {
     "dev": "vite --configLoader runner",
     "build": "vite build --configLoader runner",
+    "audit:prod": "node scripts/audit-production.mjs",
     "lint": "eslint .",
     "test": "node scripts/run-tests.js",
     "test:coverage": "node scripts/run-tests.js --coverage",
@@ -57,7 +58,6 @@
     "@e965/xlsx": "^0.20.3",
     "@react-three/fiber": "^9.6.1",
     "@react-three/postprocessing": "^3.0.4",
-    "@tailwindcss/typography": "^0.5.19",
     "better-sqlite3": "^12.10.0",
     "electron-updater": "^6.8.9",
     "framer-motion": "^12.38.0",
@@ -81,6 +81,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@tailwindcss/typography": "^0.5.19",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
@@ -99,6 +100,7 @@
   "overrides": {
     "brace-expansion": "5.0.9",
     "minimatch": "10.2.6",
+    "nanoid": "3.3.17",
     "undici": "7.29.0"
   }
 }

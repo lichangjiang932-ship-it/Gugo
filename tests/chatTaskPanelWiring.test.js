@@ -19,7 +19,8 @@ test('chat keeps a real abort action without exposing the task strip', () => {
   const viewSource = fs.readFileSync(new URL('../src/pages/ChatSplit/ChatSplitView.jsx', import.meta.url), 'utf8')
   const detailSource = fs.readFileSync(new URL('../src/pages/TaskRunPanel.jsx', import.meta.url), 'utf8')
 
-  assert.match(chatEntrySource, /onAbort=\{\(\) => abortCtrlRef\.current\?\.abort\(\)\}/)
+  assert.match(chatEntrySource, /cancelTurnRun\(activeSessionId\)/)
+  assert.match(chatEntrySource, /onAbort=\{handleAbort\}/)
   assert.match(viewSource, /onAbort=\{onAbort\}/)
   assert.doesNotMatch(chatSource, /onAbortTask=\{handleAbortTask\}/)
   assert.doesNotMatch(chatSource, /status:\s*'paused'/)

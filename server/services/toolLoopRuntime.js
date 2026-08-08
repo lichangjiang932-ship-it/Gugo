@@ -10,7 +10,7 @@
  */
 import { appendJobArtifact } from './jobStore.js'
 import { appendTurnArtifact } from './turnArtifactStore.js'
-import { createDocx, createImageArtifact, createPptx, createXlsx } from './artifactGen.js'
+import { createDocx, createHtmlArtifact, createImageArtifact, createPptx, createXlsx } from './artifactGen.js'
 import { FS_SHELL_TOOL_SPECS, dispatchFsShellTool } from '../adapters/fsShellTools.js'
 import { GIT_TOOL_SPECS, dispatchGitTool } from '../adapters/gitWorkbench.js'
 import { CODE_SEARCH_TOOL_SPECS, dispatchCodeSearchTool } from '../utils/codeSearch.js'
@@ -41,6 +41,7 @@ import {
   resolveToolResultMaxChars,
   validateToolCall,
 } from '../utils/toolCallHarness.js'
+import { extractTextToolCalls } from '../utils/textToolCalls.js'
 import { callTool as callMcpTool } from '../mcp/mcpManager.js'
 import { executeBrowserTool } from './browserToolExecutor.js'
 import { fetchAndExtract, searchDuckDuckGo } from '../adapters/toolProxy.js'
@@ -238,6 +239,21 @@ export const SERVER_TOOL_SPECS = [
           },
         },
         required: ['title', 'sheets'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_html_app',
+      description: 'Create a polished, self-contained HTML webpage artifact that opens in Gugo preview. Use this instead of write_file or apply_patch when the user asks for a webpage artifact. Put the complete document in html; external scripts, styles, frames, and network requests are rejected.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', description: 'Short human-readable page title and filename stem.' },
+          html: { type: 'string', description: 'Complete single-file HTML document with inline CSS and optional inline JavaScript.' },
+        },
+        required: ['title', 'html'],
       },
     },
   },
@@ -443,6 +459,11 @@ async function executeServerTool({
     persistGeneratedArtifact({ artifact, args, job, step })
     return { ok: true, artifactId: artifact.id, filename: artifact.filename, url: artifact.url }
   }
+  if (name === 'create_html_app') {
+    const artifact = createHtmlArtifact({ title: args.title, html: args.html, files: args.files })
+    persistGeneratedArtifact({ artifact, args, job, step })
+    return { ok: true, artifactId: artifact.id, filename: artifact.filename, url: artifact.url }
+  }
   // fs/shell 工具不落 artifact,执行结果直接回给模型.
   // 任意 fsShellTools 抛错(包括 env 未启用 / 路径越界)都返回 {ok:false,error}.
   if (FS_SHELL_TOOL_NAMES.has(name)) {
@@ -586,6 +607,34 @@ executeServerTool.supportsIdempotentResume = ({ name, idempotencyKey } = {}) => 
 
 export function buildJobToolIdempotencyKey({ jobId, stepId, toolCallId }) {
   return `job:${String(jobId || 'unknown')}:step:${String(stepId || 'unknown')}:tool:${String(toolCallId || 'unknown')}`
+}
+
+function textToolCallScope(value) {
+  return String(value || 'turn')
+    .replace(/[^A-Za-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64) || 'turn'
+}
+
+/**
+ * Local chat templates often restart their synthetic call ids at
+ * `text-tool-1` for every model response. Scope only those compatibility ids
+ * before checkpointing so later tool rounds cannot overwrite the first UI row
+ * or reuse the same connector idempotency key. The scope is deterministic, so
+ * a persisted turn remains stable across process restarts.
+ */
+export function scopeTextToolCallIds(rawCalls, { turnId, iteration = 0 } = {}) {
+  if (!Array.isArray(rawCalls)) return []
+  const scope = textToolCallScope(turnId)
+  const round = Math.max(0, Math.floor(Number(iteration) || 0)) + 1
+  return rawCalls.map((call, index) => {
+    const id = String(call?.id || '')
+    if (!/^text-tool-\d+$/i.test(id)) return call
+    return {
+      ...call,
+      id: `text-tool-${scope}-i${round}-c${index + 1}`,
+    }
+  })
 }
 
 function supportsIdempotentResume(executor, callContext) {
@@ -846,6 +895,16 @@ export async function runToolsLoop({
           recovery = { archiveId: String(request.recovery.archiveId) }
         }
         modelResult = request.response
+        if (!Array.isArray(modelResult?.toolCalls) || modelResult.toolCalls.length === 0) {
+          const compatibilityCall = extractTextToolCalls(modelResult?.content)
+          if (compatibilityCall.detected) {
+            modelResult = {
+              ...modelResult,
+              content: compatibilityCall.content,
+              toolCalls: compatibilityCall.toolCalls,
+            }
+          }
+        }
         const returnedToolCalls = Array.isArray(modelResult?.toolCalls) ? modelResult.toolCalls : []
         if (requiresRepresentativeRead
           && !hasSuccessfulRepresentativeRead
@@ -981,7 +1040,11 @@ export async function runToolsLoop({
 
       // 唯一 id、参数 JSON 和简写/wire 形状都在公共 harness 里归一化。
       // 这样无 id 的调用也能保证 assistant.tool_calls 与 tool_call_id 严格配对。
-      checkpointCalls = normalizeToolCalls(rawToolCalls).map((call) => ({
+      const scopedToolCalls = scopeTextToolCallIds(rawToolCalls, {
+        turnId: job?.id || step?.id,
+        iteration: iter,
+      })
+      checkpointCalls = normalizeToolCalls(scopedToolCalls).map((call) => ({
         ...call,
         idempotencyKey: buildJobToolIdempotencyKey({
           jobId: job?.id,

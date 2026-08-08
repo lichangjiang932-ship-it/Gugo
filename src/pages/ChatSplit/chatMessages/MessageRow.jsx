@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion'
-import { Copy } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Check, Copy } from 'lucide-react'
 import MarkdownRenderer from '../../../components/MarkdownRenderer.jsx'
 import CompactionPill from '../../../components/CompactionPill.jsx'
 import ChoicePicker from '../../../components/ChoicePicker.jsx'
@@ -8,6 +9,7 @@ import { buildMessageTimeline } from '../../../lib/messageTimeline.js'
 import { buildArtifactPreview, shouldCollapseArtifactPreview } from '../../../lib/artifactPreview.js'
 import { artifactHasInlineLink, artifactReferenceOpenPayload, buildServerArtifactReferences, findArtifactReferenceByHref } from '../../../lib/artifactReferences.js'
 import { formatMessageDateTime, formatMessageTime } from '../../../lib/messageTime.js'
+import { copyTextToClipboard } from '../../../lib/clipboard.js'
 import { ArtifactReferenceLinks } from './ArtifactCards.jsx'
 import { ReasoningTrace, ToolCallTrace } from './ActivityTraces.jsx'
 import { splitUserSkillCommand } from './messageContent.js'
@@ -213,9 +215,37 @@ function AssistantMeta({ generatingMessageId, isGenerating, lang, msg, showArtif
 }
 
 function CopyButton({ content, t }) {
+  const [copyState, setCopyState] = useState('idle')
+  const resetTimerRef = useRef(null)
+
+  useEffect(() => () => window.clearTimeout(resetTimerRef.current), [])
+
+  const copy = async () => {
+    try {
+      await copyTextToClipboard(content)
+      setCopyState('copied')
+    } catch {
+      setCopyState('error')
+    }
+    window.clearTimeout(resetTimerRef.current)
+    resetTimerRef.current = window.setTimeout(() => setCopyState('idle'), 1600)
+  }
+
+  const label = copyState === 'copied'
+    ? t('chatMessages.copied')
+    : copyState === 'error'
+      ? t('chatMessages.copyFailed')
+      : t('chatMessages.copy')
+
   return (
-    <button onClick={() => navigator.clipboard?.writeText(content)} className="inline-flex items-center gap-1 text-ink-fade transition-colors hover:text-ink" title={t('chatMessages.copyContent')}>
-      <Copy className="h-3 w-3" />{t('chatMessages.copy')}
+    <button
+      type="button"
+      onClick={copy}
+      className={`inline-flex items-center gap-1 transition-colors hover:text-ink ${copyState === 'error' ? 'text-rose-700' : 'text-ink-fade'}`}
+      title={copyState === 'idle' ? t('chatMessages.copyContent') : label}
+      aria-live="polite"
+    >
+      {copyState === 'copied' ? <Check className="h-3 w-3 text-emerald-600" /> : <Copy className="h-3 w-3" />}{label}
     </button>
   )
 }

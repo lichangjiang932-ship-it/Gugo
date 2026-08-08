@@ -81,7 +81,7 @@ test('standalone desktop pet keeps fast drags alive and always releases the poin
         pointerId: 7, pointerType: 'mouse', button: 0, buttons: 1, screenX: 100, screenY: 100,
       }))
     })
-    assert.equal(capturedPointer, 7, 'capture must begin on pointer-down before a fast drag leaves the tiny window')
+    assert.equal(capturedPointer, null, 'a click must not capture the pointer or block other applications')
     assert.equal(dragMessages.at(-1).phase, 'start')
 
     await act(async () => {
@@ -90,6 +90,7 @@ test('standalone desktop pet keeps fast drags alive and always releases the poin
       }))
     })
     assert.equal(dragMessages.filter(({ phase }) => phase === 'move').length, 0, 'the click threshold still prevents accidental moves')
+    assert.equal(capturedPointer, null)
 
     await act(async () => {
       pet.dispatchEvent(pointerEvent(dom, 'pointermove', {
@@ -97,6 +98,7 @@ test('standalone desktop pet keeps fast drags alive and always releases the poin
       }))
     })
     assert.equal(dragMessages.at(-1).phase, 'move')
+    assert.equal(capturedPointer, 7, 'capture starts only after the pointer has become a real drag')
 
     capturedPointer = null
     await act(async () => {
@@ -148,7 +150,7 @@ test('standalone desktop pet keeps fast drags alive and always releases the poin
     assert.equal(capturedPointer, 9)
     await act(async () => dom.window.dispatchEvent(new dom.window.Event('blur')))
     assert.equal(capturedPointer, null)
-    assert.equal(releaseCount, 3)
+    assert.equal(releaseCount, 2)
     assert.equal(dragMessages.at(-1).phase, 'end')
 
     await act(async () => {
@@ -162,7 +164,7 @@ test('standalone desktop pet keeps fast drags alive and always releases the poin
     assert.equal(capturedPointer, 11)
     await act(async () => mainCancel())
     assert.equal(capturedPointer, null, 'the Electron main-process fallback must release renderer capture')
-    assert.equal(releaseCount, 4)
+    assert.equal(releaseCount, 3)
     assert.equal(dragMessages.at(-1).phase, 'end')
 
     const menuEvent = new dom.window.MouseEvent('contextmenu', {
