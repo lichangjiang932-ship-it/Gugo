@@ -24,6 +24,7 @@ import {
 const { autoUpdater } = updaterPackage
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const preloadPath = path.join(__dirname, 'preload.cjs')
+const appIconPath = path.join(__dirname, '..', 'build', 'icon.ico')
 const UPDATE_INTERVAL_MS = 15 * 60 * 1000
 
 let mainWindow = null
@@ -271,6 +272,7 @@ function createMainWindow() {
     show: false,
     backgroundColor: '#ffffff',
     autoHideMenuBar: true,
+    icon: appIconPath,
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -320,6 +322,7 @@ function createPetWindow() {
     minimizable: false,
     fullscreenable: false,
     hasShadow: false,
+    icon: appIconPath,
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -485,6 +488,10 @@ function configureAutoUpdates() {
 
   autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = true
+  // Community builds are currently unsigned: keep publisherName absent so the updater
+  // uses GitHub HTTPS plus latest.yml SHA-512 integrity checks without a false signer claim.
+  autoUpdater.allowPrerelease = false
+  autoUpdater.allowDowngrade = false
   autoUpdater.on('checking-for-update', () => sendUpdateStatus('checking'))
   autoUpdater.on('update-available', (info) => sendUpdateStatus('available', { version: info.version }))
   autoUpdater.on('update-not-available', () => sendUpdateStatus('current'))

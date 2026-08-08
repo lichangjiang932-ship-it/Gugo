@@ -6,6 +6,31 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.13] - 2026-08-08
+
+### Added
+
+- Added branded Gugo icons to the desktop app, floating pet window, Windows
+  executable, NSIS installer, and uninstaller.
+- Added a complete Web release archive with the server, runtime data, locked
+  production dependencies, setup instructions, and an isolated health check.
+
+### Changed
+
+- Release builds now wait for the full Linux/Windows test, coverage, dependency,
+  secret-scan, and Docker CI matrix before publishing.
+- GitHub Release publishing is now safely repeatable and replaces partial or
+  stale assets when a workflow is rerun.
+- Desktop updates accept stable releases only and explicitly disallow downgrades.
+
+### Security
+
+- Moved build-only Tailwind typography packages out of the production runtime
+  dependency graph and pinned the fixed Nano ID release.
+- Added a strict production audit gate for the two currently unpatched,
+  unreachable `image-size` advisories inherited from PPTXGenJS; exceptions are
+  version-locked and expire automatically on 2026-11-06.
+
 ## [0.10.12] - 2026-08-08
 
 ### Added
