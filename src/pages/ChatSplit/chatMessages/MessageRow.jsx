@@ -6,6 +6,7 @@ import ChoicePicker from '../../../components/ChoicePicker.jsx'
 import { hasChoices, stripChoices } from '../../../lib/choices.js'
 import { buildMessageTimeline } from '../../../lib/messageTimeline.js'
 import { buildArtifactPreview, shouldCollapseArtifactPreview } from '../../../lib/artifactPreview.js'
+import { artifactHasInlineLink, artifactReferenceOpenPayload, buildServerArtifactReferences, findArtifactReferenceByHref } from '../../../lib/artifactReferences.js'
 import { formatMessageDateTime, formatMessageTime } from '../../../lib/messageTime.js'
 import { ArtifactReferenceLinks } from './ArtifactCards.jsx'
 import { ReasoningTrace, ToolCallTrace } from './ActivityTraces.jsx'
@@ -31,7 +32,14 @@ export default function MessageRow({
   // global chat generation state.
   const isMessageComplete = !isCurrentStreamingMessage
   const showArtifactPreview = !!artifactPreview && isMessageComplete
-  const collapseArtifact = showArtifactPreview && shouldCollapseArtifactPreview(artifactPreview, {
+  const serverArtifactReferences = buildServerArtifactReferences({
+    artifacts: msg.meta?.serverArtifacts,
+    content: String(msg.meta?.artifactSource || msg.content || ''),
+    messageId: msg.id,
+    preview: artifactPreview,
+  })
+  const hasInlineArtifactLink = serverArtifactReferences.some((reference) => artifactHasInlineLink(msg.content, reference))
+  const collapseArtifact = showArtifactPreview && !hasInlineArtifactLink && shouldCollapseArtifactPreview(artifactPreview, {
     content: msg.content,
     artifactSource: msg.meta?.artifactSource,
   })
@@ -111,6 +119,18 @@ export default function MessageRow({
 }
 
 function AssistantContent({ artifactPreview, isCurrentStreamingMessage, isMessageComplete, msg, onOpenArtifact, showArtifactPreview }) {
+  const artifactReferences = buildServerArtifactReferences({
+    artifacts: msg.meta?.serverArtifacts,
+    content: String(msg.meta?.artifactSource || msg.content || ''),
+    messageId: msg.id,
+    preview: artifactPreview,
+  })
+  const openInlineArtifact = (href) => {
+    const reference = findArtifactReferenceByHref(artifactReferences, href)
+    if (!reference) return false
+    onOpenArtifact?.(artifactReferenceOpenPayload(reference, msg.id))
+    return true
+  }
   return (
     <>
       <div data-quotable="true">
@@ -118,7 +138,7 @@ function AssistantContent({ artifactPreview, isCurrentStreamingMessage, isMessag
         {buildMessageTimeline(stripChoices(msg.content), msg.meta?.toolCalls).map((segment, index) => (
           segment.kind === 'tools'
             ? <ToolCallTrace key={`tool-${index}`} calls={segment.calls} />
-            : <MarkdownRenderer key={`text-${index}`} streaming={isCurrentStreamingMessage}>{segment.text}</MarkdownRenderer>
+            : <MarkdownRenderer key={`text-${index}`} streaming={isCurrentStreamingMessage} onLinkClick={openInlineArtifact}>{segment.text}</MarkdownRenderer>
         ))}
       </div>
       {msg.meta?.streaming && <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-ember/80 align-middle" aria-hidden="true" />}

@@ -27,11 +27,11 @@ function setupDom() {
   return dom
 }
 
-function MenuHarness({ calls }) {
+function MenuHarness({ calls, sourceSessions = sessions }) {
   const [openMenuId, setOpenMenuId] = useState('session-one')
   return <>
     <SessionList
-      sessions={sessions}
+      sessions={sourceSessions}
       activeSessionId="session-one"
       openMenuId={openMenuId}
       onMenuOpen={setOpenMenuId}
@@ -87,6 +87,33 @@ test('session menu closes on an outside pointer without swallowing menu item cli
       rootElement.querySelector('[data-testid="outside"]').dispatchEvent(new dom.window.Event('pointerdown', { bubbles: true }))
     })
     assert.equal(findButton(rootElement, 'nav.archiveSession'), undefined)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('session history keeps only titles and time groups without per-session metadata or totals', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const calls = { opened: [], archived: [], deleted: [] }
+  const datedSessions = sessions.map((session, index) => ({
+    ...session,
+    totalMessages: index + 7,
+    updatedAt: new Date(Date.now() - index * 60_000).toISOString(),
+  }))
+
+  try {
+    await act(async () => root.render(<MenuHarness calls={calls} sourceSessions={datedSessions} />))
+    const historyToggle = findButton(rootElement, 'nav.history')
+    const sessionButtons = rootElement.querySelectorAll('[data-session-open]')
+
+    assert.equal(historyToggle.textContent.trim(), 'nav.history')
+    assert.equal(sessionButtons[0].textContent.trim(), 'Session one')
+    assert.equal(sessionButtons[1].textContent.trim(), 'Session two')
+    assert.match(rootElement.textContent, /nav\.groupToday/)
+    assert.doesNotMatch(rootElement.textContent, /nav\.filterActive|history\.messageCount|\d{2}:\d{2}/)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

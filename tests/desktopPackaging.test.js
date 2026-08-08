@@ -152,14 +152,12 @@ test('desktop pet animation updates one sprite layer without full React repaint 
   assert.match(renderer, /sprite\.style\.backgroundPositionX/)
   assert.match(renderer, /playInteraction/)
   assert.match(renderer, /dragPetWindow/)
-  assert.match(renderer, /onLostPointerCapture/)
+  assert.match(renderer, /onLostPointerCapture=\{handleLostPointerCapture\}/)
   assert.match(renderer, /addEventListener\('blur', cancel\)/)
-  assert.match(renderer, /addEventListener\('mouseleave', cancel\)/)
   assert.match(renderer, /onPetDragCancel/)
-  assert.ok(
-    renderer.indexOf('setPointerCapture') > renderer.indexOf('if (!drag.moved && distance < DRAG_THRESHOLD) return'),
-    'a simple click must not acquire OS-level pointer capture',
-  )
+  const pointerDown = renderer.slice(renderer.indexOf('const handlePointerDown'), renderer.indexOf('const handlePointerMove'))
+  assert.match(pointerDown, /captureActivePointer\(drag\)/)
+  assert.doesNotMatch(renderer, /onPointerLeave=/)
   assert.match(renderer, /data-reacting/)
   assert.doesNotMatch(renderer, /setFrame|pet-window-copy|pet-window-close/)
   assert.match(standaloneCss, /\.pet-window-root\s*\{[\s\S]*?padding:\s*0;/)

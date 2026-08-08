@@ -6,6 +6,32 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.12] - 2026-08-08
+
+### Added
+
+- Added unified right-pane previews for PDF, images and SVG, HTML, Markdown,
+  text and code, JSON, XML, CSV/TSV, DOCX, XLS/XLSX/ODS, PPTX, audio, and
+  video files, with an independent download fallback.
+
+### Changed
+
+- Generated artifacts now use readable semantic filenames with safe numeric
+  suffixes for duplicates.
+- Generated-file links in assistant narration now open the persisted file in
+  the right pane without repeating the same file card below the response.
+- Simplified conversation history rows to retain titles and time groups without
+  per-session timestamps, message counts, or aggregate totals.
+
+### Fixed
+
+- Made the full composer surface focus the text input while preserving model,
+  permission, attachment, voice, and send controls.
+- Kept fast desktop-pet drags alive across Electron window movement and reliably
+  released pointer input after dragging, hiding, or losing focus.
+- Added inline, range-aware, Unicode-safe artifact responses and explicit MIME
+  types for current browser and media formats.
+
 ## [0.10.11] - 2026-08-08
 
 ### Fixed
@@ -91,7 +117,9 @@ follow [Semantic Versioning](https://semver.org/).
 - Provider, MCP, memory, job, subagent, connector, and workspace tool support.
 - Local-first single-user mode with optional multi-user authentication.
 
-[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.10...HEAD
+[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.12...HEAD
+[0.10.12]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.12
+[0.10.11]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.11
 [0.10.10]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.10
 [0.10.9]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.9
 [0.10.2]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.2

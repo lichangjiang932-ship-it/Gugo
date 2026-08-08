@@ -10,6 +10,8 @@ import {
 import { getClipboardImageFiles } from '../../lib/chatAttachmentFiles.js'
 import { resolveSlashMenuKey } from '../../lib/slashMenuNavigation.js'
 
+const COMPOSER_INTERACTIVE_SELECTOR = 'button, input, textarea, select, option, a, label, [role="button"], [role="menuitem"], [role="option"], [contenteditable="true"]'
+
 function splitLeadingSkillCommand(value, skillIds = []) {
   const raw = String(value || '')
   const match = raw.match(/^\/([a-z0-9_-]+)\s([\s\S]*)$/i)
@@ -179,7 +181,14 @@ export default function ChatComposer({
             }}
           />
         )}
-        <div className="flex min-h-[104px] flex-col justify-between rounded-2xl border border-ink/15 bg-paper px-3.5 py-3 shadow-[0_8px_28px_rgb(var(--color-ink-rgb)/0.07)]">
+        <div
+          data-testid="chat-composer-surface"
+          onClick={(event) => {
+            if (event.defaultPrevented || event.target?.closest?.(COMPOSER_INTERACTIVE_SELECTOR)) return
+            textareaRef.current?.focus()
+          }}
+          className="flex min-h-[104px] flex-col justify-between rounded-2xl border border-ink/15 bg-paper px-3.5 py-3 shadow-[0_8px_28px_rgb(var(--color-ink-rgb)/0.07)]"
+        >
           <ComposerAttachments attachments={attachments} onClear={() => setAttachments([])} onOpenImage={setFullscreenSrc} onRemove={(id) => setAttachments((current) => current.filter((item) => item.id !== id))} t={t} />
           <div className="flex items-start gap-2 min-h-6">
             {skillCommand.command && (
