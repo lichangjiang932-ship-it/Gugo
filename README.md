@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/SQLite-WAL-2e8fa3" alt="SQLite WAL" />
   <img src="https://img.shields.io/badge/Vite-8-ec4899?logo=vite" alt="Vite 8" />
   <a href="https://github.com/lichangjiang932-ship-it/Gugo/actions/workflows/ci.yml"><img src="https://github.com/lichangjiang932-ship-it/Gugo/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" /></a>
-  <img src="https://img.shields.io/badge/release-v0.10.14-blue" alt="v0.10.14" />
+  <img src="https://img.shields.io/badge/release-v0.10.15-blue" alt="v0.10.15" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT" />
 </p>
 
@@ -219,7 +219,8 @@ Cherry Studio 选择 `Streamable HTTP`，URL 填上述 `/mcp` 地址，并添加
 | `MODEL_NAMES_VISION` | 否 | 视觉模型名（逗号分隔） | — |
 | `MAIL_SERVER/MAIL_PORT/MAIL_USERNAME/MAIL_PASSWORD` | 多用户部署必填 | 邮箱验证码服务；本地模式不需要 | — |
 | `WORKSPACE_FS_ENABLED` | 否 | 工作区文件工具开关；在「本地文件」显式授权的路径不受此开关限制 | `0` |
-| `WORKSPACE_SHELL_ENABLED` | 否 | Shell 工具开关 | `0` |
+| `WORKSPACE_SHELL_ENABLED` | 否 | 共享 `WORKSPACE_ROOT` 的 Shell 工具开关 | `0` |
+| `LOCAL_CODE_EXECUTION_ENABLED` | 否 | 用户授权 `read_write` 目录的代码执行开关；本机回环模式默认开启，远程/多人默认关闭 | 自动 |
 | `WORKSPACE_GIT_ENABLED` | 否 | Git 工具开关 | `0` |
 | `WORKSPACE_ROOT` | 否 | 工作区根目录 | `process.cwd()` |
 | `WORKSPACE_SHARED_TRUSTED` | 否 | 单机可信环境跳过逐用户工作区信任 | `0` |
@@ -244,9 +245,9 @@ Cherry Studio 选择 `Streamable HTTP`，URL 填上述 `/mcp` 地址，并添加
 
 > ⚠ `AUTH_MODE=local` 不提供网络访问控制，只适合绑定 `127.0.0.1` 的可信本机。任何局域网或公网监听都必须使用 `AUTH_MODE=multi_user`；公网还需要 HTTPS、SMTP、防火墙和反向代理限流。
 
-> ⚠ **Shell 信任模型**：开启 `WORKSPACE_SHELL_ENABLED=1` 等同于**完全信任**能调用 `bash_exec` 的用户——该用户可在 server 进程权限下执行任意命令。`server/utils/bashGuard.js` 的危险命令黑名单**只防手滑 / prompt-injection 一行 payload，不是安全边界**（变量拼接 / base64 管道 / `python -c` / `$()` 命令替换均可平凡绕过）。若需对不可信用户开放 shell，必须上 OS 级隔离（容器 / nsjail / seccomp），不要依赖黑名单。启动期会打一条 warn 提醒。
+> ⚠ **Shell 信任模型**：开启共享工作区的 `WORKSPACE_SHELL_ENABLED=1`，或在本机回环模式下把目录以 `read_write` 授权给代码执行，都等同于**完全信任**能调用 `bash_exec` 的用户——该用户可在 server 进程权限下执行命令。`server/utils/bashGuard.js` 的危险命令黑名单**只防手滑 / prompt-injection 一行 payload，不是安全边界**（变量拼接 / base64 管道 / `python -c` / `$()` 命令替换均可平凡绕过）。若需对不可信用户开放 Shell，必须上 OS 级隔离（容器 / nsjail / seccomp），不要依赖黑名单。
 
-目录授权默认只开放读取；写入、Shell 与 Git 还需要用户显式信任该工作区，并始终受上述全局开关限制。`WORKSPACE_SHARED_TRUSTED=1` 仅适用于单机可信用户，不是安全沙箱。
+共享工作区的写入、Shell 与 Git 需要用户信任，并受相应全局开关限制。独立的本地文件授权中，只有明确授予 `read_write` 的目录可用于代码执行；单文件、只读和“全部文件”授权都不会获得 Shell 权限。写入型 Shell 命令仍逐次审批。`WORKSPACE_SHARED_TRUSTED=1` 仅适用于单机可信用户，不是安全沙箱。
 
 ---
 

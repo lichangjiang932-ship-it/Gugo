@@ -1,13 +1,36 @@
+function applyStreamCursor(message, action) {
+  if (!Number.isInteger(action.serverSequence)) return { ignored: false, meta: message.meta || {} }
+  const meta = message.meta || {}
+  if (action.serverTurnId && meta.serverTurnId && action.serverTurnId !== meta.serverTurnId) {
+    return { ignored: true, meta }
+  }
+  if (Number.isInteger(meta.serverLastSequence) && action.serverSequence <= meta.serverLastSequence) {
+    return { ignored: true, meta }
+  }
+  return {
+    ignored: false,
+    meta: {
+      ...meta,
+      ...(action.serverTurnId ? { serverTurnId: action.serverTurnId } : {}),
+      serverLastSequence: action.serverSequence,
+    },
+  }
+}
+
 export function reduceMessageState(state, action) {
   switch (action.type) {
     case 'SEND_MESSAGE': {
       const payload = action.payload
-      let content = typeof payload === 'string' ? payload : payload?.content ?? ''
+      const content = typeof payload === 'string' ? payload : payload?.content ?? ''
       const msgAttachments = typeof payload === 'string' ? [] : payload?.attachments || []
-      if (msgAttachments.length > 0) {
-        const attachmentInfo = msgAttachments.map((a) => `[\u9644\u4ef6: ${a.name}, ${a.sizeKB} KB]`).join('\n')
-        content = content ? `${content}\n\n${attachmentInfo}` : `\u8bf7\u5206\u6790\u9644\u4ef6：${msgAttachments.map((a) => a.name).join('、')}`
-      }
+      const safeAttachments = msgAttachments.filter((item) => item?.id).map((item) => ({
+        id: String(item.id),
+        name: String(item.name || 'attachment').split(/[\\/]/).pop(),
+        mimeType: String(item.mimeType || 'application/octet-stream'),
+        size: Math.max(0, Number(item.size) || 0),
+        sha256: String(item.sha256 || ''),
+        downloadUrl: String(item.downloadUrl || ''),
+      }))
       const targetSessionId = payload?.sessionId || state.activeSessionId
       if (!targetSessionId) return state
 
@@ -15,6 +38,7 @@ export function reduceMessageState(state, action) {
         id: payload?.id || crypto.randomUUID?.() || `${Date.now()}-u`,
         role: 'user',
         content,
+        attachments: safeAttachments,
         meta: { pendingServerSync: true },
         timestamp: Date.now(),
       }
@@ -26,6 +50,51 @@ export function reduceMessageState(state, action) {
             ? { ...s, messages: [...s.messages, userMsg], updatedAt: Date.now() }
             : s
         ),
+      }
+    }
+
+    case 'INSERT_STEERING_MESSAGE': {
+      const payload = action.payload || {}
+      const targetSessionId = payload.sessionId || state.activeSessionId
+      const content = String(payload.content || '').trim()
+      const id = String(payload.id || '').trim()
+      const clientRequestId = String(payload.clientRequestId || '').trim()
+      if (!targetSessionId || !content || !id || !clientRequestId) return state
+
+      return {
+        ...state,
+        sessions: state.sessions.map((session) => {
+          if (session.id !== targetSessionId) return session
+          const duplicate = session.messages.some((message) => (
+            message.id === id
+              || message?.meta?.steeringClientRequestId === clientRequestId
+          ))
+          if (duplicate) return session
+          let assistantIndex = payload.beforeMessageId
+            ? session.messages.findIndex((message) => message.id === payload.beforeMessageId)
+            : -1
+          if (assistantIndex < 0) {
+            assistantIndex = session.messages.findLastIndex((message) => (
+              message?.role === 'assistant'
+                && message?.meta?.serverTurnId === payload.turnId
+            ))
+          }
+          if (assistantIndex < 0) return session
+          const messages = [...session.messages]
+          messages.splice(assistantIndex, 0, {
+            id,
+            role: 'user',
+            content,
+            meta: {
+              pendingServerSync: true,
+              steering: true,
+              steeringClientRequestId: clientRequestId,
+              serverTurnId: payload.turnId || null,
+            },
+            timestamp: Number(payload.createdAt) || Date.now(),
+          })
+          return { ...session, messages, updatedAt: Date.now() }
+        }),
       }
     }
 
@@ -56,11 +125,36 @@ export function reduceMessageState(state, action) {
       }
     }
 
+    case 'RESET_LAST_MESSAGE_STREAM': {
+      const targetSessionId = action.sessionId || state.activeSessionId
+      if (!targetSessionId) return state
+      return {
+        ...state,
+        sessions: state.sessions.map((session) => {
+          if (session.id !== targetSessionId || session.messages.length === 0) return session
+          const messages = [...session.messages]
+          const messageIndex = action.messageId
+            ? messages.findIndex((message) => message.id === action.messageId)
+            : messages.length - 1
+          if (messageIndex < 0 || messages[messageIndex].role !== 'assistant') return session
+          const message = messages[messageIndex]
+          const cursor = applyStreamCursor(message, action)
+          if (cursor.ignored) return session
+          messages[messageIndex] = {
+            ...message,
+            content: String(action.payload?.content || ''),
+            meta: { ...cursor.meta, reasoning: String(action.payload?.reasoning || '') },
+          }
+          return { ...session, messages, updatedAt: Date.now() }
+        }),
+      }
+    }
+
     case 'APPEND_REASONING_TO_LAST_MESSAGE': {
       const targetSessionId = action.sessionId || state.activeSessionId
       if (!targetSessionId) return state
       const delta = action.payload ?? ''
-      if (!delta) return state
+      if (!delta && !Number.isInteger(action.serverSequence)) return state
       return {
         ...state,
         sessions: state.sessions.map((s) => {
@@ -70,10 +164,11 @@ export function reduceMessageState(state, action) {
           if (messageIndex < 0) return s
           const last = msgs[messageIndex]
           if (last.role !== 'assistant') return s
-          const meta = last.meta || {}
+          const cursor = applyStreamCursor(last, action)
+          if (cursor.ignored) return s
           msgs[messageIndex] = {
             ...last,
-            meta: { ...meta, reasoning: (meta.reasoning || '') + delta },
+            meta: { ...cursor.meta, reasoning: (cursor.meta.reasoning || '') + delta },
           }
           return { ...s, messages: msgs, updatedAt: Date.now() }
         }),
@@ -93,7 +188,9 @@ export function reduceMessageState(state, action) {
           if (messageIndex < 0) return s
           const last = msgs[messageIndex]
           if (last.role !== 'assistant') return s
-          msgs[messageIndex] = { ...last, content: last.content + delta }
+          const cursor = applyStreamCursor(last, action)
+          if (cursor.ignored) return s
+          msgs[messageIndex] = { ...last, content: (last.content || '') + delta, meta: cursor.meta }
           return { ...s, messages: msgs, updatedAt: Date.now() }
         }),
       }
@@ -112,7 +209,9 @@ export function reduceMessageState(state, action) {
           if (messageIndex < 0) return s
           const last = msgs[messageIndex]
           if (last.role !== 'assistant') return s
-          msgs[messageIndex] = { ...last, meta: { ...last.meta, ...meta } }
+          const cursor = applyStreamCursor(last, action)
+          if (cursor.ignored) return s
+          msgs[messageIndex] = { ...last, meta: { ...cursor.meta, ...meta } }
           return { ...s, messages: msgs, updatedAt: Date.now() }
         }),
       }

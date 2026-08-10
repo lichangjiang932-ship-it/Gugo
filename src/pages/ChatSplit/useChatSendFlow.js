@@ -1,5 +1,5 @@
 import { useCallback } from 'react'
-import { buildUserDisplayContent } from '../../lib/attachments.js'
+import { serializeAttachmentReferences } from '../../lib/attachmentClient.js'
 import { isLoggedInLocally } from '../../lib/accountClient.js'
 import { readStoredModel, resolveInitialModel, resolveSessionModel } from '../../lib/modelSelection.js'
 import { inferSkillIdFromPrompt, parseSkillCommand } from '../../lib/skillCommands.js'
@@ -52,8 +52,9 @@ export default function useChatSendFlow({
     const turnId = crypto.randomUUID?.() ?? `turn-${Date.now()}-${Math.random().toString(36).slice(2)}`
     const turnMessageIds = buildServerTurnMessageIds(turnId)
     const turnAttachments = explicitAttachments ?? attachments
-    const displayContent = buildUserDisplayContent(content, turnAttachments)
-    dispatch({ type: 'SEND_MESSAGE', payload: { id: turnMessageIds.userId, sessionId, content: displayContent } })
+    const attachmentReferences = serializeAttachmentReferences(turnAttachments)
+    const displayContent = typeof content === 'string' ? content : String(content || '')
+    dispatch({ type: 'SEND_MESSAGE', payload: { id: turnMessageIds.userId, sessionId, content: displayContent, attachments: attachmentReferences } })
 
     if (activeSession.title === t('chatReliability.newConversation') || activeSession.title.startsWith(t('chatReliability.newSession'))) {
       const fallback = content.slice(0, 18).trim() || t('chatReliability.newConversation')
@@ -70,6 +71,11 @@ export default function useChatSendFlow({
     }
     const localPathAccess = await ensureLocalPathAccess(content)
     if (!localPathAccess.proceed) return
+    const intentMode = state.agentMode === 'code'
+      ? 'execute'
+      : state.agentMode === 'plan'
+        ? 'answer'
+        : 'auto'
     const taskId = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
     await runServerChatTurn({
       abortCtrlRef,
@@ -80,6 +86,7 @@ export default function useChatSendFlow({
       dispatch,
       explicitAttachments,
       historyMessages,
+      intentMode,
       localPathAccess,
       modelName,
       probeLocalPathAccess,
@@ -102,6 +109,6 @@ export default function useChatSendFlow({
     abortCtrlRef, abortSessionIdRef, attachments, directoryApprovalResolveRef, dispatch, effectiveAgentId,
     ensureLocalPathAccess, isGenerating, modelOptions, probeLocalPathAccess, requestServerToolApproval,
     resolveToolApprovalForOwner, runtimeSkills, selectedModel, setContextSystemPrompts, clearToolApprovalForOwner,
-    state.activeSessionId, state.sessions, state.skillConfigs, state.toolsConfig, t, toast,
+    state.activeSessionId, state.agentMode, state.sessions, state.skillConfigs, state.toolsConfig, t, toast,
   ])
 }

@@ -6,6 +6,7 @@ import { createRoot } from 'react-dom/client'
 
 import { ArtifactReferenceLinks } from '../src/pages/ChatSplit/chatMessages/ArtifactCards.jsx'
 import MessageRow from '../src/pages/ChatSplit/chatMessages/MessageRow.jsx'
+import { mergeServerSessionMessages } from '../src/store/sessionServerSync.js'
 
 function setupDom() {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { url: 'http://localhost/' })
@@ -199,6 +200,129 @@ test('similar names and fenced-code filenames do not become inline artifact link
     ))
     assert.equal(rootElement.querySelectorAll('[data-testid="inline-artifact-link"]').length, 0)
     assert.equal(rootElement.querySelectorAll('[data-testid="artifact-open-card"]').length, 1)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('a paused assistant message renders a camelCase directory request inline', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const authorizations = []
+  const msg = {
+    id: 'paused-directory-message',
+    role: 'assistant',
+    content: '',
+    timestamp: Date.now(),
+    meta: {
+      paused: true,
+      serverTurnId: 'turn-paused',
+      serverClarification: {
+        requestType: 'directory',
+        accessMode: 'read_write',
+        suggestedPath: 'D:\\destok',
+        purpose: '需要写入结果文件',
+      },
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <MessageRow
+        msg={msg}
+        rowKey={msg.id}
+        generatingMessageId=""
+        lang="zh"
+        onAuthorizeDirectoryRequest={(decision) => authorizations.push(decision)}
+        t={(key) => key}
+      />,
+    ))
+
+    const card = rootElement.querySelector('[data-testid="directory-request-card"]')
+    assert.ok(card)
+    assert.equal(card.querySelector('input').value, 'D:\\destok')
+    assert.equal(card.querySelector('select').value, 'read_write')
+    const grantButton = [...card.querySelectorAll('button')]
+      .find((button) => button.textContent.includes('taskSteering.authorizeDirectory'))
+    await act(async () => {
+      grantButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      await Promise.resolve()
+    })
+    assert.equal(authorizations.length, 1)
+    assert.equal(authorizations[0].message, msg)
+    assert.deepEqual({
+      path: authorizations[0].path,
+      accessMode: authorizations[0].accessMode,
+      usePicker: authorizations[0].usePicker,
+    }, {
+      path: 'D:\\destok',
+      accessMode: 'read_write',
+      usePicker: false,
+    })
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('a paused server snapshot survives stale local metadata and renders its inline directory card', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const [msg] = mergeServerSessionMessages(
+    [{
+      id: 'turn-paused:assistant',
+      role: 'assistant',
+      content: 'Please choose and authorize a directory so this task can continue.',
+      timestamp: 1,
+      meta: {
+        streaming: true,
+        serverTurnId: 'turn-paused',
+        serverLastSequence: 6,
+        serverConnectionState: 'connected',
+        serverClarification: null,
+      },
+    }],
+    [{
+      id: 'turn-paused:assistant',
+      role: 'assistant',
+      content: 'Please choose and authorize a directory so this task can continue.',
+      timestamp: 1,
+      meta: {
+        streaming: false,
+        paused: true,
+        serverTurnId: 'turn-paused',
+        serverLastSequence: 7,
+        serverConnectionState: 'paused',
+        serverClarification: {
+          request_type: 'directory',
+          access_mode: 'read_write',
+          suggested_path: 'D:\\destok',
+          purpose: 'Write the completed PDF and PNG preview.',
+        },
+      },
+    }],
+  )
+
+  try {
+    await act(async () => root.render(
+      <MessageRow
+        msg={msg}
+        rowKey={msg.id}
+        generatingMessageId=""
+        lang="en"
+        onAuthorizeDirectoryRequest={() => {}}
+        t={(key) => key}
+      />,
+    ))
+
+    const card = rootElement.querySelector('[data-testid="directory-request-card"]')
+    assert.ok(card)
+    assert.equal(card.querySelector('input').value, 'D:\\destok')
+    assert.equal(card.querySelector('select').value, 'read_write')
+    assert.match(card.textContent, /Write the completed PDF and PNG preview\./)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

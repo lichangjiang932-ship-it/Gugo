@@ -8,5 +8,5 @@ test('chat task cleanup timers do not accumulate in a retained ref', () => {
 
   assert.doesNotMatch(`${controller}\n${serverTurn}`, /taskTimersRef/)
   const cleanupTimers = serverTurn.match(/setTimeout\(\(\) => dispatch\(\{ type: 'REMOVE_TASK', payload: taskId \}\), 5000\)/g) || []
-  assert.equal(cleanupTimers.length, 2, 'completed and failed turns both schedule task cleanup')
+  assert.equal(cleanupTimers.length, 3, 'paused, completed, and failed turns all schedule task cleanup')
 })

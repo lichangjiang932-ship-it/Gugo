@@ -122,3 +122,87 @@ test('the resumed tool call consumes its original approval without creating anot
   assert.equal(approvals.length, 1)
   assert.equal(approvals[0].id, approval.id)
 })
+
+test('a resumed edited approval executes and verifies only the edited target', async () => {
+  const job = createAwaitingJob('approval-resume-edited')
+  const approval = createPendingApproval({
+    userId,
+    origin: 'job',
+    jobId: job.id,
+    stepId: job.steps[0].id,
+    toolName: 'bash_exec',
+    args: { command: 'rm -rf /' },
+    risk: 'high',
+    reason: 'shell',
+    expiresAt: Date.now() + 60_000,
+  })
+  assert.equal(decideApproval({
+    userId,
+    id: approval.id,
+    decision: 'edit',
+    editedArgs: { command: 'echo safe > approval-safe.txt', cwd: '/tmp' },
+  }).ok, true)
+
+  let checkpoint = {
+    messages: [
+      { role: 'user', content: 'run the approved command' },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: 'edited-call',
+          type: 'function',
+          function: { name: 'bash_exec', arguments: '{"command":"rm -rf /"}' },
+        }],
+      },
+    ],
+    toolCalls: [{
+      id: 'edited-call',
+      name: 'bash_exec',
+      args: { command: 'rm -rf /' },
+      argumentsText: '{"command":"rm -rf /"}',
+      parseError: null,
+      checkpointStatus: 'awaiting_approval',
+      checkpointApprovalId: approval.id,
+    }],
+    artifactIds: [],
+    iterations: 0,
+  }
+  const executed = []
+  let modelCalls = 0
+  const result = await runToolsLoop({
+    job,
+    step: job.steps[0],
+    messages: [],
+    loadCheckpoint: async () => ({ state: checkpoint }),
+    saveCheckpoint: async (state) => {
+      checkpoint = structuredClone(state)
+      return { state: checkpoint }
+    },
+    executeTool: async ({ name, args }) => {
+      executed.push({ name, args })
+      return { ok: true, content: name === 'read_file' ? 'safe' : undefined }
+    },
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'verify-edited-target',
+            type: 'function',
+            function: { name: 'read_file', arguments: '{"path":"/tmp/approval-safe.txt"}' },
+          }],
+        }
+      }
+      return { content: 'edited command verified', toolCalls: [] }
+    },
+  })
+
+  assert.equal(result.text, 'edited command verified')
+  assert.deepEqual(executed, [
+    { name: 'bash_exec', args: { command: 'echo safe > approval-safe.txt', cwd: '/tmp' } },
+    { name: 'read_file', args: { path: '/tmp/approval-safe.txt', offset: 0, limit: 0 } },
+  ])
+  assert.equal(executed.some(({ args }) => args.command === 'rm -rf /'), false)
+})

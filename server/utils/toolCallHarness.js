@@ -73,6 +73,234 @@ function toolError(code, error, extra = {}) {
   }
 }
 
+const RETRYABLE_HTTP_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504])
+const MAX_ERROR_TEXT_CHARS = 2_000
+
+function safeErrorText(value, fallback = '') {
+  let text = String(value ?? fallback).slice(0, MAX_ERROR_TEXT_CHARS)
+  // Tool/provider errors can contain request headers or URLs. Preserve the
+  // actionable message while ensuring credentials never enter checkpoints,
+  // turn events, model context, or the browser state.
+  text = text
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/giu, 'Bearer [REDACTED]')
+    .replace(/\b(?:sk|ghp|github_pat)-?[A-Za-z0-9_-]{12,}\b/giu, '[REDACTED]')
+    .replace(/\b(api[_ -]?key|access[_ -]?token|refresh[_ -]?token|token|password|passwd|secret)\s*[:=]\s*[^\s,;]+/giu, '$1=[REDACTED]')
+    .replace(/([?&](?:api[_-]?key|access[_-]?token|token|password|secret)=)[^&#\s]+/giu, '$1[REDACTED]')
+  return text
+}
+
+function normalizedStatus(value) {
+  const status = Number(value)
+  return Number.isInteger(status) && status >= 100 && status <= 599 ? status : null
+}
+
+/** Convert a thrown provider/adapter error into the public tool-result shape. */
+export function normalizeToolError(error, {
+  fallbackCode = 'tool_execution_failed',
+  fallbackMessage = 'Tool execution failed.',
+} = {}) {
+  const source = error && typeof error === 'object' ? error : {}
+  const status = normalizedStatus(source.status ?? source.statusCode)
+  const retryable = typeof source.retryable === 'boolean'
+    ? source.retryable
+    : RETRYABLE_HTTP_STATUSES.has(status)
+  const code = safeErrorText(source.code || fallbackCode, fallbackCode).slice(0, 160)
+  const message = safeErrorText(source.message || error || fallbackMessage, fallbackMessage)
+  const hint = source.hint == null ? '' : safeErrorText(source.hint)
+  const errorPath = source.path == null ? '' : safeErrorText(source.path)
+  const suggestGrantPath = source.suggestGrantPath == null
+    ? ''
+    : safeErrorText(source.suggestGrantPath)
+  const requiredAccessMode = ['read_only', 'read_write'].includes(source.requiredAccessMode)
+    ? source.requiredAccessMode
+    : ''
+  const causeCode = source.cause && typeof source.cause === 'object'
+    ? safeErrorText(source.cause.code || '').slice(0, 160)
+    : ''
+  return {
+    ok: false,
+    code,
+    error: message,
+    retryable,
+    ...(status ? { status } : {}),
+    ...(hint ? { hint } : {}),
+    ...(errorPath ? { path: errorPath } : {}),
+    ...(suggestGrantPath ? { suggestGrantPath } : {}),
+    ...(requiredAccessMode ? { requiredAccessMode } : {}),
+    // A cause code is useful for routing, but nested messages/stacks are not
+    // exposed because they frequently contain response bodies or credentials.
+    ...(causeCode ? { cause: { code: causeCode } } : {}),
+  }
+}
+
+const NON_SUBSTANTIVE_TOOL_NAMES = new Set([
+  'manage_todos',
+  'reflect',
+  'request_clarification',
+  'request_directory',
+  'sleep_until',
+])
+
+/**
+ * Tool executors share one explicit result contract. Legacy `{ error }`
+ * objects remain failures, while empty or ambiguous values must never be
+ * mistaken for successful execution.
+ */
+export function normalizeToolResult(result) {
+  if (isPlainObject(result)) {
+    if (result.ok === true) return result
+    if (result.ok === false || result.error) {
+      const normalized = normalizeToolError({
+        code: result.code,
+        message: result.error,
+        status: result.status ?? result.statusCode,
+        retryable: result.retryable,
+        hint: result.hint,
+        cause: result.cause,
+      })
+      return {
+        ...result,
+        ...normalized,
+        ...(result.statusCode != null && normalized.status == null ? { statusCode: result.statusCode } : {}),
+      }
+    }
+  }
+
+  return toolError(
+    'tool_result_invalid',
+    'Tool executor returned an invalid result. Expected an object with ok: true or ok: false.',
+    { retryable: false },
+  )
+}
+
+export function isSafeToolRetry(metadata) {
+  if (!metadata || typeof metadata !== 'object') return false
+  if (metadata.isReadOnly === true) return true
+  // External writes are never replayed automatically, even when their API
+  // accepts an idempotency key. Their outcome can be visible to other people.
+  return metadata.isIdempotent === true
+    && metadata.riskClass !== 'external'
+    && metadata.isDestructive !== true
+}
+
+function abortError(signal) {
+  const error = new Error('Tool execution cancelled')
+  error.name = 'AbortError'
+  if (signal?.reason !== undefined) error.cause = signal.reason
+  return error
+}
+
+async function abortableDelay(ms, signal) {
+  if (signal?.aborted) throw abortError(signal)
+  if (!(ms > 0)) return
+  await new Promise((resolve, reject) => {
+    const finish = (callback, value) => {
+      clearTimeout(timer)
+      signal?.removeEventListener?.('abort', onAbort)
+      callback(value)
+    }
+    const timer = setTimeout(() => finish(resolve), ms)
+    const onAbort = () => {
+      finish(reject, abortError(signal))
+    }
+    signal?.addEventListener?.('abort', onAbort, { once: true })
+  })
+}
+
+/**
+ * Execute one already-approved tool with conservative transient retries.
+ * Validation, approval, hooks, and audit remain outside this function and are
+ * therefore not repeated. Only read-only or explicitly idempotent local tools
+ * qualify; external writes and destructive tools always receive one attempt.
+ */
+export async function executeToolWithRetry({
+  execute,
+  metadata,
+  signal,
+  maxAttempts = 3,
+  baseDelayMs = 120,
+  delay = abortableDelay,
+} = {}) {
+  const attemptsLimit = isSafeToolRetry(metadata)
+    ? Math.max(1, Math.min(3, Math.floor(Number(maxAttempts) || 1)))
+    : 1
+  let result = null
+  for (let attempt = 1; attempt <= attemptsLimit; attempt += 1) {
+    if (signal?.aborted) throw abortError(signal)
+    try {
+      result = normalizeToolResult(await execute({ attempt }))
+    } catch (error) {
+      if (signal?.aborted || error?.name === 'AbortError') throw error
+      result = normalizeToolError(error)
+    }
+    if (result.ok === true) return attempt > 1 ? { ...result, attempts: attempt } : result
+    if (result.retryable !== true || attempt >= attemptsLimit) {
+      return attempt > 1 ? { ...result, attempts: attempt } : result
+    }
+    const waitMs = Math.max(0, Number(baseDelayMs) || 0) * (2 ** (attempt - 1))
+    await delay(waitMs, signal)
+  }
+  return result
+}
+
+export function isSubstantiveToolCall(call) {
+  const name = String(call?.name || '').trim()
+  return Boolean(name) && !NON_SUBSTANTIVE_TOOL_NAMES.has(name)
+}
+
+/**
+ * Repair only structurally truncated JSON objects. This deliberately refuses
+ * to guess unfinished strings, values, keys, paths, commands, or trailing
+ * commas; it may only append missing `}` / `]` tokens after a complete value.
+ */
+export function repairTruncatedJsonObject(rawText) {
+  const text = String(rawText ?? '').trim()
+  if (!text.startsWith('{')) return null
+
+  const expectedClosers = []
+  let inString = false
+  let escaped = false
+  for (const character of text) {
+    if (inString) {
+      if (escaped) {
+        escaped = false
+      } else if (character === '\\') {
+        escaped = true
+      } else if (character === '"') {
+        inString = false
+      }
+      continue
+    }
+
+    if (character === '"') {
+      inString = true
+    } else if (character === '{') {
+      expectedClosers.push('}')
+    } else if (character === '[') {
+      expectedClosers.push(']')
+    } else if (character === '}' || character === ']') {
+      if (expectedClosers.pop() !== character) return null
+    }
+  }
+
+  if (inString || escaped || expectedClosers.length === 0) return null
+  const lastCharacter = text.at(-1)
+  if (!lastCharacter || [':', ',', '{', '['].includes(lastCharacter)) return null
+
+  const repairedText = text + [...expectedClosers].reverse().join('')
+  try {
+    const args = JSON.parse(repairedText)
+    if (!isPlainObject(args)) return null
+    return {
+      args,
+      argumentsText: repairedText,
+      addedClosers: expectedClosers.length,
+    }
+  } catch {
+    return null
+  }
+}
+
 export function parseToolArguments(rawArguments) {
   if (rawArguments == null || rawArguments === '') {
     return { ok: true, args: {}, argumentsText: '{}' }
@@ -113,6 +341,18 @@ export function parseToolArguments(rawArguments) {
     }
     return { ok: true, args: parsed, argumentsText: text }
   } catch (error) {
+    const repaired = repairTruncatedJsonObject(text)
+    if (repaired) {
+      return {
+        ok: true,
+        args: repaired.args,
+        argumentsText: repaired.argumentsText,
+        repair: {
+          kind: 'closed_truncated_json',
+          addedClosers: repaired.addedClosers,
+        },
+      }
+    }
     return {
       ok: false,
       args: null,
@@ -129,7 +369,7 @@ export function parseToolArguments(rawArguments) {
 /**
  * 统一 wire / 简写两种形状，并保证每个调用都有唯一 id。
  */
-export function normalizeToolCalls(rawCalls, { idFactory = createCallId } = {}) {
+export function normalizeToolCalls(rawCalls, { idFactory = createCallId, toolSpecs = [] } = {}) {
   if (!Array.isArray(rawCalls)) return []
   const usedIds = new Set()
 
@@ -143,14 +383,97 @@ export function normalizeToolCalls(rawCalls, { idFactory = createCallId } = {}) 
 
     const name = String(raw.function?.name || raw.name || '').trim()
     const parsed = parseToolArguments(raw.function?.arguments ?? raw.arguments)
-    return {
+    return applyToolSchemaDefaults({
       id,
       name,
       args: parsed.args,
       argumentsText: parsed.argumentsText,
+      argumentRepair: parsed.repair || null,
       parseError: parsed.ok ? null : parsed.error,
-    }
+    }, toolSpecs)
   })
+}
+
+function cloneSchemaValue(value, depth = 0) {
+  if (depth > 12) return value
+  if (Array.isArray(value)) return value.map((item) => cloneSchemaValue(item, depth + 1))
+  if (isPlainObject(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, cloneSchemaValue(item, depth + 1)]),
+    )
+  }
+  return value
+}
+
+function applySchemaDefaults(value, schema, path = '$', depth = 0) {
+  if (!schema || typeof schema !== 'object' || depth > 12) {
+    return { value, applied: [] }
+  }
+
+  let nextValue = value
+  const applied = []
+  if (nextValue === undefined && Object.hasOwn(schema, 'default')) {
+    nextValue = cloneSchemaValue(schema.default)
+    applied.push(path)
+  }
+
+  // Defaults inside anyOf/oneOf are intentionally ignored: choosing a branch
+  // would infer model intent. Only unambiguous property defaults are applied.
+  if (isPlainObject(nextValue)) {
+    const properties = isPlainObject(schema.properties) ? schema.properties : {}
+    let output = nextValue
+    for (const [key, childSchema] of Object.entries(properties)) {
+      const childPath = `${path}.${key}`
+      const hasValue = Object.hasOwn(nextValue, key)
+      if (!hasValue && !Object.hasOwn(childSchema || {}, 'default')) continue
+      const child = applySchemaDefaults(
+        hasValue ? nextValue[key] : undefined,
+        childSchema,
+        childPath,
+        depth + 1,
+      )
+      if (child.applied.length === 0) continue
+      if (output === nextValue) output = { ...nextValue }
+      output[key] = child.value
+      applied.push(...child.applied)
+    }
+    nextValue = output
+  } else if (Array.isArray(nextValue) && schema.items && typeof schema.items === 'object') {
+    let output = nextValue
+    for (let index = 0; index < nextValue.length; index += 1) {
+      const child = applySchemaDefaults(
+        nextValue[index],
+        schema.items,
+        `${path}[${index}]`,
+        depth + 1,
+      )
+      if (child.applied.length === 0) continue
+      if (output === nextValue) output = [...nextValue]
+      output[index] = child.value
+      applied.push(...child.applied)
+    }
+    nextValue = output
+  }
+
+  return { value: nextValue, applied }
+}
+
+/**
+ * Apply only defaults explicitly declared by a tool's JSON Schema. Required
+ * business values such as paths and commands are never guessed.
+ */
+export function applyToolSchemaDefaults(call, toolSpecs = []) {
+  if (!call || call.parseError || !isPlainObject(call.args)) return call
+  const spec = toolSpecs.find((item) => item?.function?.name === call.name)
+  if (!spec) return call
+  const result = applySchemaDefaults(call.args, spec.function?.parameters)
+  if (result.applied.length === 0) return call
+  return {
+    ...call,
+    args: result.value,
+    argumentsText: safeStringify(result.value),
+    argumentDefaults: result.applied,
+  }
 }
 
 function typeMatches(value, type) {
@@ -166,8 +489,21 @@ function typeMatches(value, type) {
   }
 }
 
+function addSchemaIssue(issues, message) {
+  if (issues.length < 8) issues.push(message)
+}
+
 function validateSchema(value, schema, path, issues, depth = 0) {
   if (!schema || typeof schema !== 'object' || issues.length >= 8 || depth > 12) return
+
+  if (Array.isArray(schema.anyOf) && schema.anyOf.length > 0) {
+    const matched = schema.anyOf.some((candidate) => {
+      const candidateIssues = []
+      validateSchema(value, candidate, path, candidateIssues, depth + 1)
+      return candidateIssues.length === 0
+    })
+    if (!matched) addSchemaIssue(issues, `${path} 不符合任一允许的参数形状`)
+  }
 
   if (Array.isArray(schema.oneOf) && schema.oneOf.length > 0) {
     const matched = schema.oneOf.some((candidate) => {
@@ -175,27 +511,74 @@ function validateSchema(value, schema, path, issues, depth = 0) {
       validateSchema(value, candidate, path, candidateIssues, depth + 1)
       return candidateIssues.length === 0
     })
-    if (!matched) issues.push(`${path} 不符合任一允许的参数形状`)
-    return
+    if (!matched) addSchemaIssue(issues, `${path} 不符合任一允许的参数形状`)
   }
 
   if (schema.type && !typeMatches(value, schema.type)) {
-    issues.push(`${path} 应为 ${schema.type}`)
+    addSchemaIssue(issues, `${path} 应为 ${schema.type}`)
     return
   }
   if (Array.isArray(schema.enum) && !schema.enum.includes(value)) {
-    issues.push(`${path} 必须是 ${schema.enum.join(' / ')} 之一`)
+    addSchemaIssue(issues, `${path} 必须是 ${schema.enum.join(' / ')} 之一`)
     return
   }
 
-  if (schema.type === 'object' && isPlainObject(value)) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    if (Number.isFinite(schema.minimum) && value < schema.minimum) {
+      addSchemaIssue(issues, `${path} 不能小于 ${schema.minimum}`)
+    }
+    if (Number.isFinite(schema.maximum) && value > schema.maximum) {
+      addSchemaIssue(issues, `${path} 不能大于 ${schema.maximum}`)
+    }
+  }
+
+  if (typeof value === 'string') {
+    if (Number.isInteger(schema.minLength) && value.length < schema.minLength) {
+      addSchemaIssue(issues, `${path} 长度不能小于 ${schema.minLength}`)
+    }
+    if (Number.isInteger(schema.maxLength) && value.length > schema.maxLength) {
+      addSchemaIssue(issues, `${path} 长度不能大于 ${schema.maxLength}`)
+    }
+    if (typeof schema.pattern === 'string') {
+      try {
+        if (!new RegExp(schema.pattern, 'u').test(value)) {
+          addSchemaIssue(issues, `${path} 不符合要求的格式`)
+        }
+      } catch {
+        addSchemaIssue(issues, `${path} 的 pattern 定义无效`)
+      }
+    }
+  }
+
+  if (Array.isArray(value)) {
+    if (Number.isInteger(schema.minItems) && value.length < schema.minItems) {
+      addSchemaIssue(issues, `${path} 至少需要 ${schema.minItems} 项`)
+    }
+    if (Number.isInteger(schema.maxItems) && value.length > schema.maxItems) {
+      addSchemaIssue(issues, `${path} 最多允许 ${schema.maxItems} 项`)
+    }
+  }
+
+  const objectSchema = schema.type === 'object'
+    || Array.isArray(schema.required)
+    || (schema.properties && typeof schema.properties === 'object')
+    || schema.additionalProperties === false
+  if (objectSchema && isPlainObject(value)) {
     for (const key of schema.required || []) {
-      if (!(key in value)) issues.push(`${path}.${key} 为必填参数`)
+      if (!Object.hasOwn(value, key)) addSchemaIssue(issues, `${path}.${key} 为必填参数`)
     }
-    for (const [key, child] of Object.entries(schema.properties || {})) {
-      if (key in value) validateSchema(value[key], child, `${path}.${key}`, issues, depth + 1)
+    const properties = schema.properties && typeof schema.properties === 'object'
+      ? schema.properties
+      : {}
+    for (const [key, child] of Object.entries(properties)) {
+      if (Object.hasOwn(value, key)) validateSchema(value[key], child, `${path}.${key}`, issues, depth + 1)
     }
-  } else if (schema.type === 'array' && Array.isArray(value)) {
+    if (schema.additionalProperties === false) {
+      for (const key of Object.keys(value)) {
+        if (!Object.hasOwn(properties, key)) addSchemaIssue(issues, `${path}.${key} 是未允许的额外参数`)
+      }
+    }
+  } else if (Array.isArray(value) && (schema.type === 'array' || schema.items)) {
     value.slice(0, 200).forEach((item, index) => {
       validateSchema(item, schema.items, `${path}[${index}]`, issues, depth + 1)
     })
@@ -375,18 +758,28 @@ export function createToolLoopGuard({
   maxRepeatedCalls = 3,
   maxConsecutiveErrors = 6,
   maxAuthoringErrors = 20,
+  // Different arguments do not count as progress when the same executor keeps
+  // failing. Model-authored JSON/schema errors remain governed separately.
+  maxSameToolFailures = 4,
 } = {}) {
-  const counts = new Map()
+  const seenSignatures = new Set()
+  const failedToolCounts = new Map()
   let consecutiveErrors = 0
   let consecutiveAuthoringErrors = 0
+  let lastSignature = null
+  let repeatedCallStreak = 0
 
   return {
     before(call) {
       const signature = callSignature(call)
-      const count = (counts.get(signature) || 0) + 1
-      counts.set(signature, count)
-      if (count > maxRepeatedCalls) {
-        const reason = `同一工具调用已重复 ${count} 次，未取得新进展`
+      seenSignatures.add(signature)
+      if (signature === lastSignature) repeatedCallStreak += 1
+      else {
+        lastSignature = signature
+        repeatedCallStreak = 1
+      }
+      if (repeatedCallStreak > maxRepeatedCalls) {
+        const reason = `同一工具调用已连续重复 ${repeatedCallStreak} 次，未取得新进展`
         return {
           ok: false,
           reason,
@@ -417,15 +810,22 @@ export function createToolLoopGuard({
       }
       return { ok: true }
     },
-    after(result) {
-      const failed = result?.ok === false || (result?.error && result?.ok !== true)
+    after(result, call = null) {
+      const normalized = normalizeToolResult(result)
+      const failed = normalized.ok === false
       if (!failed) {
-        consecutiveErrors = 0
-        consecutiveAuthoringErrors = 0
+        // Reflection, planning, waiting, and clarification do not prove that
+        // a failed execution path made progress. Keep the real error streak.
+        if (!call || isSubstantiveToolCall(call)) {
+          consecutiveErrors = 0
+          consecutiveAuthoringErrors = 0
+          lastSignature = null
+          repeatedCallStreak = 0
+        }
         return { ok: true }
       }
       // 参数写错走单独的、宽松得多的计数器,不污染真实执行失败的熔断
-      if (isModelAuthoringError(result)) {
+      if (isModelAuthoringError(normalized)) {
         consecutiveAuthoringErrors += 1
         if (consecutiveAuthoringErrors >= maxAuthoringErrors) {
           return { ok: false, reason: `模型已连续 ${consecutiveAuthoringErrors} 次写出不合法的工具参数` }
@@ -438,8 +838,39 @@ export function createToolLoopGuard({
       }
       return { ok: true }
     },
+    afterCall(call, result) {
+      const name = String(call?.name || '').trim()
+      if (!name) return { ok: true }
+      const normalized = normalizeToolResult(result)
+      const failed = normalized.ok === false
+      if (!failed) {
+        // Success only proves recovery for this exact executor. In particular,
+        // a reflect/request/sleep result must not erase another tool's history.
+        if (isSubstantiveToolCall(call)) failedToolCounts.delete(name)
+        return { ok: true }
+      }
+      if (isModelAuthoringError(normalized)) return { ok: true }
+      const count = (failedToolCounts.get(name) || 0) + 1
+      failedToolCounts.set(name, count)
+      if (count < maxSameToolFailures) return { ok: true }
+      const reason = `工具 ${name} 已使用不同参数失败 ${count} 次，未取得新进展`
+      return {
+        ok: false,
+        reason,
+        result: toolError('tool_no_progress', reason, {
+          retryable: false,
+          hint: '停止继续猜测参数；请基于已有结果简短收尾，或明确说明唯一缺失条件。',
+        }),
+      }
+    },
     snapshot() {
-      return { consecutiveErrors, consecutiveAuthoringErrors, uniqueCalls: counts.size }
+      return {
+        consecutiveErrors,
+        consecutiveAuthoringErrors,
+        uniqueCalls: seenSignatures.size,
+        repeatedCallStreak,
+        failedTools: Object.fromEntries(failedToolCounts),
+      }
     },
   }
 }

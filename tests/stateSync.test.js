@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  TOOLS_CONFIG_SCHEMA_VERSION,
+  completeSnapshot,
+} from '../src/store/appStateBootstrap.js'
+import {
   buildSyncMetadata,
   markConvergedMetadata,
   mergePersistedSnapshots,
@@ -50,4 +54,23 @@ test('state sync preserves tab-local selection and converges after one union wri
   const second = mergePersistedSnapshots(right, rightMeta, first.snapshot, convergenceMeta, { preserveLocalFields: ['activeSessionId'] })
   assert.equal(second.snapshot.activeSessionId, 'right')
   assert.equal(persistedSnapshotsEqual(first.snapshot, second.snapshot, ['activeSessionId']), true)
+})
+
+test('cross-tab normalization migrates legacy execution defaults without overriding newer explicit disables', () => {
+  const migratedRemote = completeSnapshot({ toolsConfig: { bash_exec: false, run_project_check: false } })
+  assert.equal(migratedRemote.toolsConfig.bash_exec, true)
+  assert.equal(migratedRemote.toolsConfig.run_project_check, true)
+  assert.equal(migratedRemote.toolsConfigSchemaVersion, TOOLS_CONFIG_SCHEMA_VERSION)
+
+  const explicitLocal = completeSnapshot({
+    toolsConfigSchemaVersion: TOOLS_CONFIG_SCHEMA_VERSION,
+    toolsConfig: { bash_exec: false, run_project_check: false },
+  })
+  const remoteMeta = buildSyncMetadata(migratedRemote, {}, {}, { source: 'legacy-tab', now: 10 })
+  const localMeta = buildSyncMetadata(explicitLocal, {}, {}, { source: 'current-tab', now: 20 })
+  const merged = mergePersistedSnapshots(explicitLocal, localMeta, migratedRemote, remoteMeta)
+
+  assert.equal(merged.snapshot.toolsConfig.bash_exec, false)
+  assert.equal(merged.snapshot.toolsConfig.run_project_check, false)
+  assert.equal(merged.snapshot.toolsConfigSchemaVersion, TOOLS_CONFIG_SCHEMA_VERSION)
 })

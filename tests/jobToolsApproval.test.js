@@ -1,8 +1,8 @@
 /**
  * 证明审批门控真的拦在 runToolsLoop 里面(server/services/jobTools.js)。
  *
- * 关键点:executeTool 用注入的假实现,绝不真跑 shell;runModel 第一轮返回
- * 一个 bash_exec tool call,第二轮返回纯文本收尾。
+ * 关键点:executeTool 用注入的假实现,绝不真跑 shell;需要验证的用例由
+ * runModel 依次返回 bash_exec、同目标 read_file,再用纯文本收尾。
  */
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
@@ -47,8 +47,15 @@ function decideAndRelease({ userId, id, decision, editedArgs = null }) {
   return res
 }
 
-/** 第一轮要 bash_exec,第二轮纯文本收尾。 */
-function makeRunModel({ finalText, command = 'rm -rf /tmp/whatever', toolName = 'bash_exec', toolArgs = null, seenMessages = [] }) {
+/** 第一轮调用目标工具;传入 verifyPath 时第二轮读回同一目标,随后纯文本收尾。 */
+function makeRunModel({
+  finalText,
+  command = 'rm -rf /tmp/whatever',
+  toolName = 'bash_exec',
+  toolArgs = null,
+  verifyPath = null,
+  seenMessages = [],
+}) {
   let turns = 0
   return async ({ messages }) => {
     turns += 1
@@ -60,6 +67,16 @@ function makeRunModel({ finalText, command = 'rm -rf /tmp/whatever', toolName = 
           id: `call-${toolName}-1`,
           type: 'function',
           function: { name: toolName, arguments: JSON.stringify(toolArgs || { command }) },
+        }],
+      }
+    }
+    if (turns === 2 && verifyPath) {
+      return {
+        content: '',
+        toolCalls: [{
+          id: 'call-read-file-verification',
+          type: 'function',
+          function: { name: 'read_file', arguments: JSON.stringify({ path: verifyPath }) },
         }],
       }
     }
@@ -85,7 +102,11 @@ test('INTERCEPTION: bash_exec 在批准前不会到达 executeTool', async () =>
     job: makeJob({ id: 'job-approval-1', userId, title: 'gated' }),
     step: { id: 'step-approval-1', kind: 'execute' },
     messages: [{ role: 'user', content: '删点东西' }],
-    runModel: makeRunModel({ finalText: '已执行。' }),
+    runModel: makeRunModel({
+      finalText: '已执行。',
+      command: 'echo approved > approval-output.txt',
+      verifyPath: 'approval-output.txt',
+    }),
     executeTool: fakeExecute,
   })
 
@@ -98,9 +119,11 @@ test('INTERCEPTION: bash_exec 在批准前不会到达 executeTool', async () =>
   decideAndRelease({ userId, id: pending.id, decision: 'approve' })
 
   const result = await loop
-  assert.equal(calls.length, 1, '批准后 executeTool 应当且仅当执行一次')
+  assert.equal(calls.length, 2, '批准后应执行一次写命令并读回验证一次')
   assert.equal(calls[0].name, 'bash_exec')
-  assert.equal(calls[0].args.command, 'rm -rf /tmp/whatever')
+  assert.equal(calls[0].args.command, 'echo approved > approval-output.txt')
+  assert.equal(calls[1].name, 'read_file')
+  assert.equal(calls[1].args.path, 'approval-output.txt')
   assert.equal(result.text, '已执行。')
   assert.equal(listPendingApprovals({ userId, status: 'pending' }).length, 0)
 })
@@ -117,7 +140,11 @@ test('EDITED ARGS: 改写后的参数才是 executeTool 收到的参数', async 
     job: makeJob({ id: 'job-approval-2', userId, title: 'edited' }),
     step: { id: 'step-approval-2', kind: 'execute' },
     messages: [{ role: 'user', content: '跑个命令' }],
-    runModel: makeRunModel({ finalText: '改写后已执行。', command: 'rm -rf /' }),
+    runModel: makeRunModel({
+      finalText: '改写后已执行。',
+      command: 'rm -rf /',
+      verifyPath: '/tmp/approval-safe.txt',
+    }),
     executeTool: fakeExecute,
   })
 
@@ -128,14 +155,16 @@ test('EDITED ARGS: 改写后的参数才是 executeTool 收到的参数', async 
     userId,
     id: pending.id,
     decision: 'edit',
-    editedArgs: { command: 'echo safe', cwd: '/tmp' },
+    editedArgs: { command: 'echo safe > approval-safe.txt', cwd: '/tmp' },
   })
 
   const result = await loop
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0].args.command, 'echo safe', 'executeTool 必须收到改写后的命令')
+  assert.equal(calls.length, 2, '改写后的命令应执行一次并读回验证一次')
+  assert.equal(calls[0].args.command, 'echo safe > approval-safe.txt', 'executeTool 必须收到改写后的命令')
   assert.equal(calls[0].args.cwd, '/tmp')
   assert.notEqual(calls[0].args.command, 'rm -rf /')
+  assert.equal(calls[1].name, 'read_file')
+  assert.equal(calls[1].args.path, '/tmp/approval-safe.txt')
   assert.equal(result.text, '改写后已执行。')
 })
 

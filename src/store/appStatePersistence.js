@@ -20,6 +20,7 @@ export const PERSIST_KEYS = Object.freeze([
   'density',
   'animationsEnabled',
   'skillConfigs',
+  'toolsConfigSchemaVersion',
   'toolsConfig',
   'agentMode',
   'sessionDrafts',
@@ -35,6 +36,7 @@ export const LIGHTWEIGHT_PERSIST_KEYS = Object.freeze([
   'density',
   'animationsEnabled',
   'skillConfigs',
+  'toolsConfigSchemaVersion',
   'toolsConfig',
   'agentMode',
 ])
@@ -45,6 +47,28 @@ function selectKeys(source, keys) {
   return selected
 }
 
+function selectActiveTurnStub(messages) {
+  const active = [...(Array.isArray(messages) ? messages : [])].reverse().find((message) => (
+    message?.id
+    && message.role === 'assistant'
+    && message.meta?.streaming === true
+    && typeof message.meta?.serverTurnId === 'string'
+    && message.meta.serverTurnId.trim()
+  ))
+  if (!active) return []
+  return [{
+    id: String(active.id),
+    role: 'assistant',
+    content: '',
+    timestamp: Number(active.timestamp) || 0,
+    meta: {
+      streaming: true,
+      serverTurnId: active.meta.serverTurnId,
+      serverLastSequence: -1,
+    },
+  }]
+}
+
 export function selectPersistedSnapshot(state) {
   const snapshot = selectKeys(state, PERSIST_KEYS)
   // The server is the sole durable source for migrated chat transcripts.
@@ -52,7 +76,10 @@ export function selectPersistedSnapshot(state) {
   // server-backed histories into IndexedDB and reconcile two sources later.
   snapshot.sessions = (Array.isArray(snapshot.sessions) ? snapshot.sessions : []).map((session) => (
     Number.isInteger(session?.serverRevision)
-      ? { ...session, messages: [] }
+      ? {
+        ...session,
+        messages: selectActiveTurnStub(session.messages),
+      }
       : session
   ))
   return snapshot

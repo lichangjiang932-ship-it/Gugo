@@ -117,6 +117,58 @@ export const WORKSPACE_TOOL_SPECS = {
       },
     },
   },
+  grep_code: {
+    type: 'function',
+    function: {
+      name: 'grep_code',
+      description: 'Search file contents with ripgrep inside the workspace or a user-authorized local directory. Supports regex, glob, file-type, case, and whole-word filtering and returns structured matches with locations and context.',
+      parameters: {
+        type: 'object',
+        properties: {
+          pattern: { type: 'string', description: 'Search pattern. Regular expressions are supported.' },
+          path: { type: 'string', description: 'Optional workspace-relative path or authorized absolute directory. Defaults to the workspace root.' },
+          glob: { type: 'string', description: 'Optional glob filter, for example "*.tsx" or "src/**/*.js".' },
+          file_type: { type: 'string', description: 'Optional ripgrep file type, for example "ts", "py", or "go".' },
+          case_sensitive: { type: 'boolean', description: 'Use case-sensitive matching. Defaults to smart-case matching.' },
+          word: { type: 'boolean', description: 'Match whole words only.' },
+          max_results: { type: 'integer', minimum: 1, maximum: 500, description: 'Maximum matches to return. Defaults to 50.' },
+        },
+        required: ['pattern'],
+      },
+    },
+  },
+  find_symbol: {
+    type: 'function',
+    function: {
+      name: 'find_symbol',
+      description: 'Locate function, class, or constant definitions in the workspace or a user-authorized local directory. Supports JavaScript, TypeScript, Python, Go, Rust, and Java and returns declarations rather than references.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Symbol name. Must be a valid identifier.' },
+          kind: { type: 'string', enum: ['all', 'function', 'class', 'const'], description: 'Definition kind. Defaults to all.' },
+          language: { type: 'string', description: 'Optional ripgrep file type used to restrict the search.' },
+          path: { type: 'string', description: 'Optional workspace-relative path or authorized absolute directory. Defaults to the workspace root.' },
+          max_results: { type: 'integer', minimum: 1, maximum: 100, description: 'Maximum definitions to return. Defaults to 20.' },
+        },
+        required: ['name'],
+      },
+    },
+  },
+  list_imports: {
+    type: 'function',
+    function: {
+      name: 'list_imports',
+      description: 'Read the beginning of one workspace or user-authorized file and extract import, require, and use statements as structured dependency records.',
+      parameters: {
+        type: 'object',
+        properties: {
+          file: { type: 'string', description: 'Workspace-relative or authorized absolute file path.' },
+        },
+        required: ['file'],
+      },
+    },
+  },
   apply_patch: {
     type: 'function',
     function: {
@@ -136,13 +188,14 @@ export const WORKSPACE_TOOL_SPECS = {
     type: 'function',
     function: {
       name: 'bash_exec',
-      description: 'Run a shell command inside the configured workspace or a user-authorized local directory. Use for tests/builds/inspection; output is capped and secrets are masked server-side.',
+      description: 'Run a shell command inside the configured workspace or a user-authorized local directory. In Windows commands, always wrap every absolute path in double quotes, even when it contains no spaces. Use for tests/builds/inspection; output is capped and secrets are masked server-side. When it creates or changes files, list every intended path in expected_outputs so the runtime can verify them.',
       parameters: {
         type: 'object',
         properties: {
           command: { type: 'string', description: 'Command string, e.g. npm test or git diff --stat.' },
           cwd: { type: 'string', description: 'Optional workspace-relative or authorized absolute working directory.' },
           timeout_ms: { type: 'integer', description: 'Timeout in milliseconds, 1000-300000.' },
+          expected_outputs: { type: 'array', items: { type: 'string' }, description: 'Files this command is expected to create or modify; omit for read-only commands.' },
         },
         required: ['command'],
       },

@@ -21,7 +21,10 @@ const {
   upsertSession,
 } = await import('../server/services/sessionStore.js')
 const { appendTurnEvent } = await import('../server/services/turnEventStore.js')
-const { expandStoredMessages } = await import('../server/services/turnMessageContext.js')
+const {
+  expandStoredMessages,
+  materializeManagedAttachmentMessages,
+} = await import('../server/services/turnMessageContext.js')
 const { normalizeSessionMessagesForServer } = await import('../src/lib/sessionClient.js')
 const { normalizeServerSessionSnapshot } = await import('../src/lib/turnClient.js')
 const { createTurnEvent } = await import('../shared/turnEvents.js')
@@ -211,6 +214,96 @@ test('imported tool results survive snapshot editing and full-session replacemen
   assert.equal(calls[0].tool_calls[0].id, 'imported-read-1')
   assert.equal(results[0].tool_call_id, 'imported-read-1')
   assert.match(results[0].content, /README contents/)
+})
+
+test('managed attachments stay lightweight in history and materialize only for a model request', async () => {
+  const stored = [{
+    id: 'attachment-user',
+    role: 'user',
+    content: '/vision Summarize the diagram.',
+    modelContext: {
+      modelContent: 'Summarize the diagram.',
+      attachments: [{
+        id: 'attachment-1',
+        name: 'diagram.png',
+        mimeType: 'image/png',
+        size: 12,
+        sha256: 'abc123',
+        uri: 'attachment://attachment-1',
+        downloadUrl: '/api/attachments/attachment-1/content',
+        fullPath: 'must-not-leak',
+      }],
+    },
+  }]
+
+  const history = expandStoredMessages(stored)
+  assert.equal(history[0].content, 'Summarize the diagram.')
+  assert.deepEqual(history[0].managedAttachments, [{
+    id: 'attachment-1',
+    name: 'diagram.png',
+    mimeType: 'image/png',
+    size: 12,
+    sha256: 'abc123',
+    uri: 'attachment://attachment-1',
+    downloadUrl: '/api/attachments/attachment-1/content',
+  }])
+  assert.doesNotMatch(JSON.stringify(history), /fullPath|base64,/)
+
+  const preparedCalls = []
+  const providerMessages = await materializeManagedAttachmentMessages(history, {
+    userId: 'user-1',
+    sessionId: 'session-1',
+    prepareAttachments: async (input) => {
+      preparedCalls.push(input)
+      return {
+        content: [
+          { type: 'text', text: input.text },
+          { type: 'image_url', image_url: { url: 'data:image/png;base64,aW1hZ2U=' } },
+        ],
+      }
+    },
+  })
+
+  assert.deepEqual(preparedCalls, [{
+    userId: 'user-1',
+    sessionId: 'session-1',
+    attachmentIds: ['attachment-1'],
+    text: 'Summarize the diagram.',
+  }])
+  assert.match(JSON.stringify(providerMessages), /base64,/)
+  assert.equal('managedAttachments' in providerMessages[0], false)
+  assert.doesNotMatch(JSON.stringify(history), /base64,/)
+})
+
+test('server snapshots restore user attachments from persisted model context', () => {
+  const snapshot = normalizeServerSessionSnapshot({
+    complete: true,
+    messages: [{
+      id: 'attachment-user',
+      role: 'user',
+      content: 'Read this file.',
+      createdAt: 1,
+      modelContext: {
+        attachments: [{
+          id: 'attachment-2',
+          name: 'folder\\report.pdf',
+          mimeType: 'application/pdf',
+          size: 2048,
+          sha256: 'pdf-hash',
+          downloadUrl: '/api/attachments/attachment-2/content',
+        }],
+      },
+    }],
+  })
+
+  assert.deepEqual(snapshot.messages[0].attachments, [{
+    id: 'attachment-2',
+    name: 'report.pdf',
+    mimeType: 'application/pdf',
+    size: 2048,
+    sha256: 'pdf-hash',
+    downloadUrl: '/api/attachments/attachment-2/content',
+  }])
 })
 
 test('session mutation routes return 409 for stale revisions and active turns', { concurrency: false }, async () => {

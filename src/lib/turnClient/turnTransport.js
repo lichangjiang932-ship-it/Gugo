@@ -1,7 +1,9 @@
-import { parseTurnEvent } from '../../../shared/turnEvents.js'
+import { parseTurnActivity, parseTurnEvent } from '../../../shared/turnEvents.js'
 import { getAuthToken } from '../accountClient.js'
 
-export const TERMINAL_EVENTS = new Set(['turn.completed', 'turn.cancelled', 'turn.failed'])
+// `turn.paused` ends the current client subscription while remaining resumable
+// on the server after the user supplies the requested clarification/permission.
+export const TERMINAL_EVENTS = new Set(['turn.completed', 'turn.paused', 'turn.cancelled', 'turn.failed'])
 export const DEFAULT_RECONNECT_MAX_ATTEMPTS = 8
 export const DEFAULT_RECONNECT_MAX_DELAY_MS = 10_000
 export const DEFAULT_SNAPSHOT_PAGE_SIZE = 500
@@ -75,6 +77,13 @@ export function streamTruncatedError() {
   return error
 }
 
+function streamInterruptedError(event) {
+  const error = new Error(event?.payload?.message || 'Turn execution was interrupted and can be resumed')
+  error.code = event?.payload?.code || 'TURN_INTERRUPTED'
+  error.retryable = event?.payload?.retryable !== false
+  return error
+}
+
 function normalizeToolNames(names) {
   if (!Array.isArray(names)) return []
   return [...new Set(names
@@ -112,7 +121,15 @@ function parseSseFrame(frame) {
   return { eventType, data: data.join('\n') }
 }
 
-export async function streamServerTurnEvents({ sessionId, turnId, after = -1, signal, onEvent, fetchImpl = fetch }) {
+export async function streamServerTurnEvents({
+  sessionId,
+  turnId,
+  after = -1,
+  signal,
+  onEvent,
+  onActivity,
+  fetchImpl = fetch,
+}) {
   const query = new URLSearchParams({ sessionId, turnId, after: String(after) })
   const response = await fetchImpl(`/api/turns/stream?${query}`, { headers: headers(), signal })
   if (!response.ok) await parseResponse(response)
@@ -128,10 +145,18 @@ export async function streamServerTurnEvents({ sessionId, turnId, after = -1, si
     buffer = frames.pop() || ''
     for (const rawFrame of frames) {
       const frame = parseSseFrame(rawFrame)
+      if (frame?.eventType === 'turn_activity') {
+        await onActivity?.(parseTurnActivity(JSON.parse(frame.data)))
+        continue
+      }
       if (frame?.eventType !== 'turn_event') continue
       const event = parseTurnEvent(JSON.parse(frame.data))
       await onEvent?.(event)
       if (TERMINAL_EVENTS.has(event.type)) terminal = event
+      else if (event.type === 'turn.interrupted') {
+        try { await reader.cancel() } catch { /* stream may already be closed */ }
+        throw streamInterruptedError(event)
+      }
     }
     if (chunk.done) break
   }
@@ -161,6 +186,7 @@ export function streamServerTurnEventsWebSocket({
   after = -1,
   signal,
   onEvent,
+  onActivity,
   webSocketFactory = defaultWebSocketFactory,
   connectTimeoutMs = DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS,
   subscribeTimeoutMs = DEFAULT_WEBSOCKET_SUBSCRIBE_TIMEOUT_MS,
@@ -237,6 +263,20 @@ export function streamServerTurnEventsWebSocket({
         finishAfterPendingEvents(error)
         return
       }
+      if (frame.type === 'turn.activity') {
+        clearSubscribeTimer()
+        let activity
+        try {
+          activity = parseTurnActivity(frame.activity)
+        } catch (error) {
+          finishAfterPendingEvents(error)
+          return
+        }
+        chain = chain.then(async () => {
+          await onActivity?.(activity)
+        }).catch(finish)
+        return
+      }
       if (frame.type !== 'turn.event') return
       clearSubscribeTimer()
       let event
@@ -249,6 +289,7 @@ export function streamServerTurnEventsWebSocket({
       chain = chain.then(async () => {
         await onEvent?.(event)
         if (TERMINAL_EVENTS.has(event.type)) finish(null, event)
+        else if (event.type === 'turn.interrupted') finish(streamInterruptedError(event))
       }).catch(finish)
     })
     socket.addEventListener('error', () => finishAfterPendingEvents(new Error('WebSocket connection failed')))

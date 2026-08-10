@@ -18,6 +18,7 @@ export function normalizeToolRiskMetadata(metadata, { origin = 'dynamic' } = {})
     ? (value.readOnly == null ? riskClass === TOOL_RISK_CLASSES.READ : value.readOnly === true)
     : value.isReadOnly === true
   const isConcurrencySafe = value.isConcurrencySafe == null ? isReadOnly : value.isConcurrencySafe === true
+  const isIdempotent = value.isIdempotent == null ? isReadOnly : value.isIdempotent === true
   const interruptBehavior = INTERRUPT_BEHAVIORS.has(value.interruptBehavior)
     ? value.interruptBehavior
     : (isReadOnly ? 'cancel' : 'block')
@@ -30,6 +31,7 @@ export function normalizeToolRiskMetadata(metadata, { origin = 'dynamic' } = {})
     isReadOnly,
     readOnly: isReadOnly,
     isConcurrencySafe,
+    isIdempotent,
     interruptBehavior,
     isDestructive,
     getPath: typeof value.getPath === 'function' ? value.getPath : defaultGetPath,

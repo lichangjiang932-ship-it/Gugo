@@ -13,7 +13,8 @@ import { TASK_STATUS } from '../../store/taskStatus.js'
 import { persistSlashGoals } from '../../lib/slashGoals.js'
 import { recordLocalChatFeedback } from '../../lib/localChatFeedback.js'
 import { fetchCompactionArchive } from '../../lib/compactionClient.js'
-import { parseChatAttachments } from '../../lib/chatAttachmentParser.js'
+import { attachmentSendState, createPendingChatAttachment, prepareChatAttachment } from '../../lib/chatAttachmentUpload.js'
+import { authorizeChatDirectoryRequest } from '../../lib/chatDirectoryRequest.js'
 import { readContextUsageVisible, readDesktopPetVisible, readWorkbenchOpen } from '../../lib/chatUiPreferences.js'
 import { useToast } from '../../components/Toast.jsx'
 import { useT } from '../../i18n/I18nProvider.jsx'
@@ -26,8 +27,10 @@ import useVoiceRecognition from './useVoiceRecognition.js'
 import useChatRuntimeCatalog from './useChatRuntimeCatalog.js'
 import useChatSessionLifecycle from './useChatSessionLifecycle.js'
 import useChatSendFlow from './useChatSendFlow.js'
+import useTurnSteering from './useTurnSteering.js'
 import useSlashCommandExecution from './useSlashCommandExecution.js'
 import { cancelTurnRun } from './turnRunRegistry.js'
+import { buildServerTurnResumeMeta, isResumeNudge, resolvePendingDirectorySend } from './pausedTurnResume.js'
 
 const EMPTY_MESSAGES = []
 
@@ -65,6 +68,16 @@ export default function ChatSplit() {
   const activeSessionId = activeSession?.id || null
   const effectiveAgentId = activeSession?.agentId || globalActiveAgentId || null
   const messages = activeSession?.messages ?? EMPTY_MESSAGES
+  const latestServerAssistant = [...messages].reverse().find((message) => message?.role === 'assistant' && message?.meta?.serverTurnId)
+  const serverResumeSignal = [
+    activeSessionId || '',
+    latestServerAssistant?.id || '',
+    latestServerAssistant?.meta?.serverTurnId || '',
+    latestServerAssistant?.meta?.streaming ? 'streaming' : 'idle',
+    latestServerAssistant?.meta?.serverConnectionState || '',
+    latestServerAssistant?.meta?.serverLastSequence ?? '',
+    latestServerAssistant?.meta?.serverResumeResolution ? 'resolution' : '',
+  ].join(':')
   const navigateInputHistory = useInputHistory({ messages, input, setInput, sessionId: activeSessionId })
   const contextToolSpecs = useMemo(() => {
     try { return buildToolSpecs(SERVER_TURN_TOOL_TOGGLE_NAMES.filter((name) => state.toolsConfig?.[name] === true)) }
@@ -91,10 +104,64 @@ export default function ChatSplit() {
     resolveToolApprovalForOwner: approvals.resolveToolApprovalForOwner, runtimeSkills, selectedModel, setContextSystemPrompts,
     clearToolApprovalForOwner: approvals.clearToolApprovalForOwner, state, t, toast,
   })
+  const showPendingDirectoryGuidance = useCallback((content = '') => {
+    const current = stateRef.current
+    const session = current.sessions.find((item) => item.id === current.activeSessionId)
+    const pending = resolvePendingDirectorySend(session?.messages)
+    if (!pending) return false
+    setWorkbenchMessage(t(pending.state === 'resuming'
+      ? 'chatSteering.directoryResumePending'
+      : 'chatSteering.directoryAuthorizationRequired'))
+    if (isResumeNudge(content)) {
+      setInput('')
+      dispatch({ type: 'SET_SESSION_DRAFT', payload: { sessionId: current.activeSessionId, text: '' } })
+    }
+    window.requestAnimationFrame?.(() => {
+      const row = document.getElementById(`message-${pending.message.id}`)
+      row?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+      row?.querySelector?.('[data-testid="directory-request-card"] input')?.focus?.()
+    })
+    return true
+  }, [dispatch, t])
+  const handleAuthorizeDirectoryRequest = useCallback(async ({
+    message,
+    path,
+    accessMode,
+    usePicker = false,
+  }) => {
+    const sessionId = stateRef.current.activeSessionId
+    const turnId = message?.meta?.serverTurnId
+    const clarification = message?.meta?.serverClarification || {}
+    const result = await authorizeChatDirectoryRequest({
+      sessionId,
+      turnId,
+      pausedSequence: message?.meta?.serverLastSequence,
+      path,
+      accessMode,
+      usePicker,
+      purpose: clarification.purpose || clarification.why || '',
+    })
+    if (result.cancelled) {
+      toast.info({ title: t('taskSteering.directoryPickerCancelled') })
+      return result
+    }
+    dispatch({
+      type: 'UPDATE_LAST_MESSAGE_META',
+      sessionId,
+      messageId: message.id,
+      payload: buildServerTurnResumeMeta(result.resolution),
+    })
+    toast.success({ title: t('taskSteering.directoryGranted'), body: result.path })
+    return result
+  }, [dispatch, t, toast])
+  const steerActiveTurn = useTurnSteering({
+    dispatch, inputRef, setInput, setWorkbenchMessage, stateRef, t,
+  })
   useServerTurnResume({
     abortCtrlRef, dispatch, requestServerToolApproval: approvals.requestServerToolApproval,
     resolveToolApprovalForOwner: approvals.resolveToolApprovalForOwner, resumingTurnIdsRef,
-    clearToolApprovalForOwner: approvals.clearToolApprovalForOwner, stateActiveSessionId: state.activeSessionId, stateRef, t,
+    clearToolApprovalForOwner: approvals.clearToolApprovalForOwner, stateActiveSessionId: state.activeSessionId,
+    stateResumeSignal: serverResumeSignal, stateTurnRunActive: isGenerating, stateRef, t,
   })
   const executeSlashEntry = useSlashCommandExecution({
     changeApprovalMode: approvals.changeApprovalMode, dispatch, navigate, setDesktopPetVisible, setInput,
@@ -110,10 +177,28 @@ export default function ChatSplit() {
     writeStoredModel(normalized)
     if (activeSessionId) dispatch({ type: 'SET_SESSION_MODEL', payload: { sessionId: activeSessionId, modelName: normalized } })
   }, [activeSessionId, dispatch, setSelectedModel])
-  const handleSend = useCallback(() => {
-    if (directory.directoryApproval.open) return
+  const handleSend = useCallback(async () => {
     const typedContent = input.trim()
     if (!typedContent && attachments.length === 0) return
+    if (showPendingDirectoryGuidance(typedContent)) return
+    if (isGenerating) {
+      if (!typedContent) {
+        setWorkbenchMessage(t('chatSteering.textOnly'))
+        return
+      }
+      await steerActiveTurn(typedContent)
+      return
+    }
+    if (directory.directoryApproval.open) return
+    const attachmentState = attachmentSendState(attachments)
+    if (attachmentState.uploading) {
+      setWorkbenchMessage(t('chatAttachments.waitingForUploads'))
+      return
+    }
+    if (attachmentState.failed) {
+      setWorkbenchMessage(t('chatAttachments.removeFailed'))
+      return
+    }
     const parsedSlash = parseSlashCommandInput(typedContent)
     const slashEntry = parsedSlash ? slashRegistry.getCommand(parsedSlash.name) : null
     if (slashEntry && slashEntry.kind !== 'skill') { setInput(''); executeSlashEntry(slashEntry, parsedSlash.args); return }
@@ -122,7 +207,7 @@ export default function ChatSplit() {
     setAttachments([])
     if (state.activeSessionId) dispatch({ type: 'SET_SESSION_DRAFT', payload: { sessionId: state.activeSessionId, text: '' } })
     triggerSendFlow(typedContent || describeAttachmentPrompt(currentAttachments), currentAttachments)
-  }, [attachments, directory.directoryApproval.open, dispatch, executeSlashEntry, input, slashRegistry, state.activeSessionId, triggerSendFlow])
+  }, [attachments, directory.directoryApproval.open, dispatch, executeSlashEntry, input, isGenerating, showPendingDirectoryGuidance, slashRegistry, state.activeSessionId, steerActiveTurn, t, triggerSendFlow])
   const handleAbort = useCallback(() => {
     cancelTurnRun(activeSessionId)
   }, [activeSessionId])
@@ -142,15 +227,41 @@ export default function ChatSplit() {
     const files = Array.from(event.target.files || [])
     event.target.value = ''
     if (!files.length) return
-    const next = await parseChatAttachments(files, {
-      existingImageCount: attachments.filter((item) => item.kind === 'image').length,
-      messages: Object.fromEntries(['imageLimit', 'imageTooLarge', 'compressedTooLarge', 'excelTooLong', 'wordTooLong', 'pptTooLong', 'textTooLong', 'unsupportedFormat', 'readFailed'].map((key) => [key, t(`chatAttachments.${key}`)])),
-    })
-    setAttachments((current) => {
-      const merged = [...current, ...next]
-      setWorkbenchMessage(merged.length > 8 ? t('chatAttachments.maxCountNotice', { count: merged.length - 8 }) : t('chatAttachments.addedNotice', { count: next.length }))
-      return merged.slice(0, 8)
-    })
+    const available = Math.max(0, 8 - attachments.length)
+    const accepted = files.slice(0, available)
+    if (!accepted.length) {
+      setWorkbenchMessage(t('chatAttachments.maxCountNotice', { count: files.length }))
+      return
+    }
+    let targetSessionId = state.activeSessionId
+    if (!targetSessionId) {
+      targetSessionId = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+      dispatch({
+        type: 'NEW_SESSION',
+        payload: { id: targetSessionId, title: t('chatReliability.newConversation'), agentId: effectiveAgentId || null },
+      })
+    }
+    const pending = accepted.map(createPendingChatAttachment)
+    setAttachments((current) => [...current, ...pending].slice(0, 8))
+    setWorkbenchMessage(t('chatAttachments.uploading'))
+    const parserMessages = Object.fromEntries(['imageLimit', 'imageTooLarge', 'compressedTooLarge', 'excelTooLong', 'wordTooLong', 'pptTooLong', 'textTooLong', 'unsupportedFormat', 'readFailed'].map((key) => [key, t(`chatAttachments.${key}`)]))
+    const existingImageCount = attachments.filter((item) => item.kind === 'image').length
+    const prepared = await Promise.all(accepted.map(async (file, index) => ({
+      pendingId: pending[index].id,
+      result: await prepareChatAttachment(file, pending[index], {
+        sessionId: targetSessionId,
+        parserOptions: {
+          existingImageCount: existingImageCount + accepted.slice(0, index).filter((item) => item.type.startsWith('image/')).length,
+          messages: parserMessages,
+        },
+      }),
+    })))
+    const byPendingId = new Map(prepared.map((item) => [item.pendingId, item.result]))
+    setAttachments((current) => current.map((item) => byPendingId.get(item.id) || item))
+    const failed = prepared.filter((item) => item.result.uploadStatus === 'error').length
+    if (failed) setWorkbenchMessage(t('chatAttachments.uploadFailedCount', { count: failed }))
+    else if (files.length > accepted.length) setWorkbenchMessage(t('chatAttachments.maxCountNotice', { count: files.length - accepted.length }))
+    else setWorkbenchMessage(t('chatAttachments.addedNotice', { count: prepared.length }))
   }
   const handleExpandCompaction = async (archiveId) => {
     if (!archiveId) return
@@ -178,6 +289,7 @@ export default function ChatSplit() {
       contextToolSpecs={contextToolSpecs} contextWindow={selectedContextWindow} desktopPetVisible={desktopPetVisible}
       directoryApproval={directory.directoryApproval} input={input} isGenerating={isGenerating} messages={messages}
       modelOptions={modelOptions} onAbort={handleAbort} onApprovalModeChange={approvals.changeApprovalMode}
+      onAuthorizeDirectoryRequest={handleAuthorizeDirectoryRequest}
       onAuthorizeDirectory={directory.authorizeDirectory} onCloseDesktopPet={() => setDesktopPetVisible(false)}
       onCloseInlinePanel={() => setSlashInlinePanel(null)} onCloseModelPicker={() => setShowModelPicker(false)}
       onClosePreview={() => dispatch({ type: 'CLOSE_PREVIEW_ARTIFACT' })} onCloseWorkbench={() => setWorkbenchOpen(false)}
@@ -193,7 +305,13 @@ export default function ChatSplit() {
       onOpenModelPicker={() => setShowModelPicker(true)} onPermAllow={handlePermAllow}
       onPermDeny={() => { dispatch({ type: 'SET_PERM_REQUEST', payload: null }); dispatch({ type: 'RECEIVE_MESSAGE', payload: t('chatReliability.permissionDenied') }) }}
       onPreviewMessage={setWorkbenchMessage} onQuoteSelection={(text) => { const quoted = String(text || '').split('\n').map((line) => `> ${line}`).join('\n'); const current = inputRef.current || ''; dispatch({ type: 'SET_DRAFT_INPUT', payload: current ? `${quoted}\n\n${current}` : `${quoted}\n\n` }) }}
-      onResume={() => { if (resumeState) { setResumeState(null); triggerSendFlow(t('chatReliability.continuePrompt')) } }}
+      onResume={() => {
+        if (!resumeState) return
+        const prompt = t('chatReliability.continuePrompt')
+        if (showPendingDirectoryGuidance(prompt)) return
+        setResumeState(null)
+        triggerSendFlow(prompt)
+      }}
       onSend={handleSend} onSlashCommandSelect={executeSlashEntry}
       onSubmitFeedback={(value) => recordLocalChatFeedback(value, stateRef.current.activeSessionId)}
       onToolApproval={approvals.resolveToolApproval} onVoiceClick={handleVoice} onWorkbenchSend={triggerSendFlow}

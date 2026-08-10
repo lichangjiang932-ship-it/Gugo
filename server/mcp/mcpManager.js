@@ -180,6 +180,7 @@ function buildMcpRiskMetadata(server, tool, toolName) {
     requiresApproval: autoApprove ? false : !readOnly,
     isReadOnly: readOnly,
     isConcurrencySafe: readOnly,
+    isIdempotent: readOnly || tool.annotations?.idempotentHint === true,
     interruptBehavior: readOnly ? 'cancel' : 'block',
     isDestructive: tool.annotations?.destructiveHint !== false && !readOnly,
     reason: readOnly ? null : `MCP: ${server.name}`,
@@ -287,7 +288,7 @@ export async function listUserToolSpecs(userId, { connect = true } = {}) {
 /**
  * 解析工具名 mcp__<server>__<tool>，找到对应连接，发 tools/call。
  */
-export async function callTool({ userId, fullToolName, args, idempotencyKey, toolCallId }) {
+export async function callTool({ userId, fullToolName, args, idempotencyKey, toolCallId, signal }) {
   const m = fullToolName.match(/^mcp__([a-zA-Z0-9_]+)__(.+)$/)
   if (!m) throw new Error(`非 MCP 工具名: ${fullToolName}`)
   const wantedServerSafeName = m[1]
@@ -316,7 +317,7 @@ export async function callTool({ userId, fullToolName, args, idempotencyKey, too
   try {
     result = await conn.transport.request(
       buildToolsCallRequest(toolName, args, { idempotencyKey, toolCallId }),
-      { timeoutMs: 60000 },
+      { timeoutMs: 60000, signal },
     )
   } catch (err) {
     status = 'error'

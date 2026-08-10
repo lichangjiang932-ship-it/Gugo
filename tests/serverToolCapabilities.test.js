@@ -12,6 +12,8 @@ process.env.WORKSPACE_FS_ENABLED = '1'
 process.env.WORKSPACE_SHARED_TRUSTED = '1'
 
 const { SERVER_TURN_TOOL_TOGGLE_NAMES } = await import('../src/lib/serverToolConfig.js')
+const { WORKSPACE_TOOL_SPECS } = await import('../src/lib/tools/workspaceToolSpecs.js')
+const { FS_SHELL_TOOL_SPECS } = await import('../server/adapters/fsShellTools.js')
 const { runToolsLoop, SERVER_TOOL_SPECS } = await import('../server/services/toolLoopRuntime.js')
 const { getBuiltinSpec } = await import('../server/services/toolRegistry.js')
 const { resolveTurnToolSpecs } = await import('../server/services/turnToolSpecs.js')
@@ -66,12 +68,103 @@ test('resolveTurnToolSpecs removes explicitly disabled builtins after merging to
   assert.equal(names.includes('web_search'), true)
 })
 
+test('writable turns retain read-only verification tools despite legacy client defaults', async () => {
+  const specs = await resolveTurnToolSpecs({
+    userId: null,
+    baseSpecs: SERVER_TOOL_SPECS,
+    toolsConfig: {
+      enabled: ['bash_exec', 'write_file'],
+      disabled: ['edit_file', 'list_directory', 'read_file'],
+    },
+    enabledConnectorTools: [],
+    webSearchReady: false,
+  })
+  const names = specs.map((spec) => spec?.function?.name)
+
+  assert.ok(names.includes('write_file'))
+  assert.ok(names.includes('read_file'))
+  assert.ok(names.includes('list_directory'))
+  assert.equal(names.includes('edit_file'), false, 'an explicitly disabled write tool stays disabled')
+})
+
+test('every bash_exec spec tells models to quote Windows absolute paths', () => {
+  const fsShellSpec = FS_SHELL_TOOL_SPECS.find((spec) => spec?.function?.name === 'bash_exec')
+  const descriptions = [
+    fsShellSpec?.function?.description,
+    getBuiltinSpec('bash_exec')?.function?.description,
+    WORKSPACE_TOOL_SPECS.bash_exec?.function?.description,
+  ]
+
+  for (const description of descriptions) {
+    assert.match(description || '', /Windows/i)
+    assert.match(description || '', /(?:double quotes|双引号)/i)
+    assert.match(description || '', /(?:every absolute path|每个绝对路径)/i)
+  }
+})
+
 test('resolveTurnToolSpecs exposes web search only when dedicated configuration is ready', async () => {
   const baseSpecs = [getBuiltinSpec('web_search'), getBuiltinSpec('fetch_url')]
   const hidden = await resolveTurnToolSpecs({ userId: 'search-unconfigured', baseSpecs, webSearchReady: false })
   const visible = await resolveTurnToolSpecs({ userId: 'search-configured', baseSpecs, webSearchReady: true })
   assert.deepEqual(namesOf(hidden), ['fetch_url'])
   assert.deepEqual(namesOf(visible), ['fetch_url', 'web_search'])
+})
+
+test('resolveTurnToolSpecs advertises only connector tools backed by enabled integrations', async () => {
+  const readFile = getBuiltinSpec('read_file')
+  const github = SERVER_TOOL_SPECS.find((spec) => spec?.function?.name === 'github_search_repositories')
+  const dropbox = SERVER_TOOL_SPECS.find((spec) => spec?.function?.name === 'dropbox_list_files')
+  const resolved = await resolveTurnToolSpecs({
+    userId: 'connector-filter-test',
+    baseSpecs: [readFile, github, dropbox],
+    enabledConnectorTools: ['github_search_repositories'],
+    webSearchReady: false,
+  })
+  assert.deepEqual(namesOf(resolved), ['github_search_repositories', 'read_file'])
+})
+
+test('resolveTurnToolSpecs canonicalizes equivalent schema object order for prompt caching', async () => {
+  const schemaA = {
+    type: 'function',
+    function: {
+      name: 'stable_schema_tool',
+      description: 'Stable schema',
+      parameters: {
+        type: 'object',
+        properties: {
+          beta: { description: 'second', type: 'string' },
+          alpha: { type: 'integer', description: 'first' },
+        },
+        required: ['alpha', 'beta'],
+      },
+    },
+  }
+  const schemaB = {
+    function: {
+      parameters: {
+        required: ['alpha', 'beta'],
+        properties: {
+          alpha: { description: 'first', type: 'integer' },
+          beta: { type: 'string', description: 'second' },
+        },
+        type: 'object',
+      },
+      description: 'Stable schema',
+      name: 'stable_schema_tool',
+    },
+    type: 'function',
+  }
+  const resolve = (spec) => resolveTurnToolSpecs({
+    userId: 'stable-schema-user',
+    baseSpecs: [spec],
+    enabledConnectorTools: [],
+    webSearchReady: false,
+  })
+
+  const [first, second] = await Promise.all([resolve(schemaA), resolve(schemaB)])
+  const firstSpec = first.find((spec) => spec.function.name === 'stable_schema_tool')
+  const secondSpec = second.find((spec) => spec.function.name === 'stable_schema_tool')
+  assert.equal(JSON.stringify(firstSpec), JSON.stringify(secondSpec))
 })
 
 test('list_directory advertised by the server has a real executor', async () => {

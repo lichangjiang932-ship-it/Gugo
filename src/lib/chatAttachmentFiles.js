@@ -15,13 +15,38 @@ export function dataUrlByteLength(dataUrl = '') {
   return Math.floor((payload.length * 3) / 4)
 }
 
-export function getClipboardImageFiles(clipboardData) {
+export function getClipboardFiles(clipboardData) {
   const itemFiles = Array.from(clipboardData?.items || [])
-    .filter((item) => item.kind === 'file' && String(item.type || '').startsWith('image/'))
+    .filter((item) => item.kind === 'file')
     .map((item) => item.getAsFile?.())
     .filter(Boolean)
-  if (itemFiles.length) return itemFiles
-  return Array.from(clipboardData?.files || [])
+  const fallbackFiles = Array.from(clipboardData?.files || []).filter(Boolean)
+  if (!itemFiles.length) return fallbackFiles
+  if (!fallbackFiles.length) return itemFiles
+
+  const identity = (file) => [file.name, file.type, file.size, file.lastModified]
+    .map((value) => String(value ?? ''))
+    .join('\0')
+  const represented = new Map()
+  for (const file of itemFiles) {
+    const key = identity(file)
+    represented.set(key, (represented.get(key) || 0) + 1)
+  }
+  const merged = [...itemFiles]
+  for (const file of fallbackFiles) {
+    const key = identity(file)
+    const remaining = represented.get(key) || 0
+    if (remaining > 0) {
+      represented.set(key, remaining - 1)
+    } else {
+      merged.push(file)
+    }
+  }
+  return merged
+}
+
+export function getClipboardImageFiles(clipboardData) {
+  return getClipboardFiles(clipboardData)
     .filter((file) => String(file.type || '').startsWith('image/'))
 }
 

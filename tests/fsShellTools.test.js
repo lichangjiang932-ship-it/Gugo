@@ -3,6 +3,7 @@ import test, { before, after, beforeEach } from 'node:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { deflateSync } from 'node:zlib'
 
 import {
   readFileTool,
@@ -11,10 +12,15 @@ import {
   bashExecTool,
   resolveInWorkspace,
 } from '../server/adapters/fsShellTools.js'
+import { closeDb, createUser } from '../server/db.js'
+import { grantLocalPath } from '../server/services/localFileAccessService.js'
+import { setWorkspaceTrust } from '../server/services/workspaceTrustService.js'
 
 // 每个测试自带 workspace 临时目录 + env 闸门管理.
 let workspace
+let authorizedWorkspace
 const savedEnv = {
+  APP_DB_PATH: process.env.APP_DB_PATH,
   WORKSPACE_ROOT: process.env.WORKSPACE_ROOT,
   WORKSPACE_FS_ENABLED: process.env.WORKSPACE_FS_ENABLED,
   WORKSPACE_SHELL_ENABLED: process.env.WORKSPACE_SHELL_ENABLED,
@@ -23,15 +29,19 @@ const savedEnv = {
 
 before(() => {
   workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'fsshell-'))
+  authorizedWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), 'fsshell-authorized-'))
+  process.env.APP_DB_PATH = path.join(workspace, 'fsshell-test.db')
   process.env.WORKSPACE_ROOT = workspace
 })
 
 after(() => {
+  closeDb()
   for (const k of Object.keys(savedEnv)) {
     if (savedEnv[k] === undefined) delete process.env[k]
     else process.env[k] = savedEnv[k]
   }
   try { fs.rmSync(workspace, { recursive: true, force: true }) } catch { /* noop */ }
+  try { fs.rmSync(authorizedWorkspace, { recursive: true, force: true }) } catch { /* noop */ }
 })
 
 beforeEach(() => {
@@ -88,12 +98,90 @@ test('read_file:offset/limit 切片正确', async () => {
   assert.equal(result.returnedLines, 2)
 })
 
+test('read_file:本地 PDF 返回提取文本而不是 UTF-8 二进制内容', async () => {
+  process.env.WORKSPACE_FS_ENABLED = '1'
+  const pdf = [
+    '%PDF-1.4',
+    '1 0 obj << /Type /Page >> endobj',
+    'BT',
+    '(Quarterly revenue grew 42 percent.) Tj',
+    'ET',
+    '%%EOF',
+  ].join('\n')
+  fs.writeFileSync(path.join(workspace, 'report.pdf'), Buffer.from(pdf, 'latin1'))
+
+  const result = await readFileTool({ path: 'report.pdf' })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.mimeType, 'application/pdf')
+  assert.equal(result.extractionStatus, 'text')
+  assert.equal(result.requiresVision, false)
+  assert.match(result.content, /Quarterly revenue grew 42 percent\./)
+  assert.doesNotMatch(result.content, /%PDF-1\.4/)
+})
+
+test('read_file:提取 FlateDecode PDF 正文且不会把文档元数据当正文', async () => {
+  process.env.WORKSPACE_FS_ENABLED = '1'
+  const stream = deflateSync(Buffer.from('BT (Compressed PDF body 2026) Tj ET', 'latin1'))
+  const pdf = Buffer.concat([
+    Buffer.from(`%PDF-1.4\n1 0 obj << /Length ${stream.length} /Filter /FlateDecode >>\nstream\n`, 'latin1'),
+    stream,
+    Buffer.from('\nendstream\nendobj\n/Producer (Metadata Only 123)\n%%EOF', 'latin1'),
+  ])
+  fs.writeFileSync(path.join(workspace, 'compressed.pdf'), pdf)
+
+  const result = await readFileTool({ path: 'compressed.pdf' })
+
+  assert.equal(result.extractionStatus, 'text')
+  assert.match(result.content, /Compressed PDF body 2026/)
+  assert.doesNotMatch(result.content, /Metadata Only 123/)
+})
+
+test('read_file:扫描或无正文 PDF 返回 no_text 且要求视觉处理', async () => {
+  process.env.WORKSPACE_FS_ENABLED = '1'
+  fs.writeFileSync(
+    path.join(workspace, 'scan.pdf'),
+    Buffer.from('%PDF-1.4\n/Producer (Acme PDF Generator 123)\n%%EOF', 'latin1'),
+  )
+
+  const result = await readFileTool({ path: 'scan.pdf' })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.extractionStatus, 'no_text')
+  assert.equal(result.requiresVision, true)
+  assert.doesNotMatch(result.content, /Acme PDF Generator 123/)
+})
+
+test('read_file:通过 PDF 文件签名识别无扩展名的授权文件', async () => {
+  process.env.WORKSPACE_FS_ENABLED = '1'
+  fs.writeFileSync(
+    path.join(workspace, 'report.bin'),
+    Buffer.from('%PDF-1.4\nBT (Magic PDF body) Tj ET\n%%EOF', 'latin1'),
+  )
+
+  const result = await readFileTool({ path: 'report.bin' })
+
+  assert.equal(result.mimeType, 'application/pdf')
+  assert.equal(result.extractionStatus, 'text')
+  assert.match(result.content, /Magic PDF body/)
+})
+
 test('write_file:启用后能创建新文件,父目录自动 mkdir', async () => {
   process.env.WORKSPACE_FS_ENABLED = '1'
   const result = await writeFileTool({ path: 'sub/dir/new.txt', content: 'hello' })
   assert.equal(result.ok, true)
   assert.equal(fs.readFileSync(path.join(workspace, 'sub/dir/new.txt'), 'utf8'), 'hello')
   assert.equal(result.bytes, 5)
+  assert.deepEqual(result.changes, [{ path: 'sub/dir/new.txt', additions: 1, deletions: 0 }])
+})
+
+test('write_file line stats exclude unchanged prefix and suffix lines', async () => {
+  process.env.WORKSPACE_FS_ENABLED = '1'
+  fs.writeFileSync(path.join(workspace, 'rewrite.txt'), 'keep\nold\ntail\n', 'utf8')
+
+  const result = await writeFileTool({ path: 'rewrite.txt', content: 'keep\nnew\ntail\n' })
+
+  assert.deepEqual(result.changes, [{ path: 'rewrite.txt', additions: 1, deletions: 1 }])
 })
 
 test('edit_file:唯一 old_string 替换成功', async () => {
@@ -121,6 +209,7 @@ test('edit_file:replace_all 替换全部', async () => {
   assert.equal(result.ok, true)
   assert.equal(result.replacedCount, 3)
   assert.equal(fs.readFileSync(path.join(workspace, 'all.txt'), 'utf8'), 'A b A b A')
+  assert.deepEqual(result.changes, [{ path: 'all.txt', additions: 1, deletions: 1 }])
 })
 
 test('edit_file:old_string 不存在,拒绝', async () => {
@@ -134,10 +223,185 @@ test('edit_file:old_string 不存在,拒绝', async () => {
 
 test('bash_exec:启用后能跑简单命令', async () => {
   process.env.WORKSPACE_SHELL_ENABLED = '1'
-  const result = await bashExecTool({ command: process.platform === 'win32' ? 'echo hi' : 'echo hi' })
+  const result = await bashExecTool({ command: 'echo hi', expected_outputs: [] })
   assert.equal(result.ok, true)
   assert.equal(result.exitCode, 0)
   assert.match(result.stdout, /hi/)
+  assert.equal('verifiedOutputs' in result, false, '空 expected_outputs 不改变只读命令返回结构')
+  assert.equal('changedPaths' in result, false)
+})
+
+test('bash_exec:expected_outputs 验证新建二进制文件并返回真实 changedPaths', async () => {
+  process.env.WORKSPACE_SHELL_ENABLED = '1'
+  fs.writeFileSync(path.join(workspace, 'fresh-source.bin'), Buffer.from([0, 255, 1, 2]))
+  const result = await bashExecTool({
+    command: process.platform === 'win32'
+      ? 'copy /y fresh-source.bin fresh.bin > nul'
+      : 'cp fresh-source.bin fresh.bin',
+    expected_outputs: ['fresh.bin'],
+  })
+
+  assert.equal(result.ok, true, JSON.stringify(result))
+  assert.equal(result.exitCode, 0)
+  assert.deepEqual(result.changedPaths, ['fresh.bin'])
+  assert.deepEqual(result.unverifiedOutputs, [])
+  assert.equal(result.verifiedOutputs[0].status, 'created')
+  assert.equal(result.verifiedOutputs[0].type, 'file')
+  assert.equal(result.verifiedOutputs[0].size, 4)
+  assert.deepEqual([...fs.readFileSync(path.join(workspace, 'fresh.bin'))], [0, 255, 1, 2])
+})
+
+test('bash_exec:同尺寸二进制内容变化通过内容指纹验证', async () => {
+  process.env.WORKSPACE_SHELL_ENABLED = '1'
+  fs.writeFileSync(path.join(workspace, 'same-size.bin'), Buffer.from([1, 2, 3, 4]))
+  fs.writeFileSync(path.join(workspace, 'replacement.bin'), Buffer.from([4, 3, 2, 1]))
+  const result = await bashExecTool({
+    command: process.platform === 'win32'
+      ? 'copy /y replacement.bin same-size.bin > nul'
+      : 'cp replacement.bin same-size.bin',
+    expected_outputs: ['same-size.bin'],
+  })
+
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.changedPaths, ['same-size.bin'])
+  assert.equal(result.verifiedOutputs[0].status, 'modified')
+  assert.equal(result.verifiedOutputs[0].contentChanged, true)
+  assert.equal(result.verifiedOutputs[0].sizeChanged, false)
+})
+
+test('bash_exec:目录 expected_output 递归识别新增二进制内容', async () => {
+  process.env.WORKSPACE_SHELL_ENABLED = '1'
+  fs.mkdirSync(path.join(workspace, 'generated-dir'))
+  fs.writeFileSync(path.join(workspace, 'nested-source.bin'), Buffer.from([9, 8, 7]))
+  const result = await bashExecTool({
+    command: process.platform === 'win32'
+      ? 'copy /y nested-source.bin generated-dir\\nested.bin > nul'
+      : 'cp nested-source.bin generated-dir/nested.bin',
+    expected_outputs: ['generated-dir'],
+  })
+
+  assert.equal(result.ok, true)
+  assert.deepEqual(result.changedPaths, ['generated-dir'])
+  assert.equal(result.verifiedOutputs[0].type, 'directory')
+  assert.equal(result.verifiedOutputs[0].contentChanged, true)
+})
+
+test('bash_exec:预存但未变化的 expected_output 不会被误报成功', async () => {
+  process.env.WORKSPACE_SHELL_ENABLED = '1'
+  fs.writeFileSync(path.join(workspace, 'stale.txt'), 'already here', 'utf8')
+  const result = await bashExecTool({ command: 'echo verification-probe', expected_outputs: ['stale.txt'] })
+
+  assert.equal(result.ok, false)
+  assert.equal(result.exitCode, 0)
+  assert.equal(result.code, 'EXPECTED_OUTPUT_VERIFICATION_FAILED')
+  assert.equal(result.verificationFailed, true)
+  assert.match(result.stdout, /verification-probe/)
+  assert.deepEqual(result.verifiedOutputs, [])
+  assert.equal(result.unverifiedOutputs[0].status, 'unchanged')
+  assert.deepEqual(result.changedPaths, [])
+})
+
+test('bash_exec:非零退出仍保留进程输出与已发生的 expected_output 变化', async () => {
+  process.env.WORKSPACE_SHELL_ENABLED = '1'
+  const command = process.platform === 'win32'
+    ? 'echo partial>partial.txt & echo deliberate-failure 1>&2 & exit /b 7'
+    : 'printf partial > partial.txt; printf deliberate-failure >&2; exit 7'
+  const result = await bashExecTool({ command, expected_outputs: ['partial.txt'] })
+
+  assert.equal(result.ok, false)
+  assert.equal(result.exitCode, 7)
+  assert.match(result.stderr, /deliberate-failure/)
+  assert.deepEqual(result.changedPaths, ['partial.txt'])
+  assert.equal(result.verifiedOutputs[0].status, 'created')
+})
+
+test('bash_exec:相对 expected_output 按 effective cwd 解析且不能越出授权边界', async () => {
+  process.env.WORKSPACE_SHELL_ENABLED = '1'
+  fs.mkdirSync(path.join(workspace, 'effective-cwd'))
+  await assert.rejects(
+    () => bashExecTool({
+      cwd: 'effective-cwd',
+      command: 'echo should-not-run > sentinel.txt',
+      expected_outputs: ['../../escaped.txt'],
+    }),
+    /越出 workspace|未获得写入授权/,
+  )
+  assert.equal(fs.existsSync(path.join(workspace, 'effective-cwd', 'sentinel.txt')), false)
+})
+
+test('bash_exec:用户授权目录内的相对 expected_output 使用实际 cwd 验证', async () => {
+  process.env.WORKSPACE_SHELL_ENABLED = '1'
+  const userId = 'fs-shell-output-user'
+  createUser({ id: userId, email: 'fs-shell-output@example.com' })
+  grantLocalPath({ userId, rootPath: authorizedWorkspace, accessMode: 'read_write' })
+  setWorkspaceTrust({
+    userId,
+    rootPath: authorizedWorkspace,
+    trusted: true,
+    confirmation: 'TRUST_WORKSPACE_CONFIG',
+  })
+  fs.writeFileSync(path.join(authorizedWorkspace, 'authorized-source.bin'), Buffer.from([6, 5, 4]))
+  const result = await bashExecTool({
+    userId,
+    cwd: authorizedWorkspace,
+    command: process.platform === 'win32'
+      ? 'copy /y authorized-source.bin authorized.bin > nul'
+      : 'cp authorized-source.bin authorized.bin',
+    expected_outputs: ['authorized.bin'],
+  })
+
+  const expectedPath = path.join(fs.realpathSync(authorizedWorkspace), 'authorized.bin')
+  assert.equal(result.ok, true)
+  assert.equal(result.cwd, fs.realpathSync(authorizedWorkspace))
+  assert.deepEqual(result.changedPaths, [expectedPath])
+  assert.equal(result.verifiedOutputs[0].scope, 'grant')
+})
+
+test('bash_exec: Windows preserves quoted absolute paths when cwd contains parentheses', {
+  skip: process.platform !== 'win32',
+}, async () => {
+  const userId = 'fs-shell-parentheses-user'
+  const specialWorkspace = path.join(authorizedWorkspace, 'directory (1)')
+  const outputPath = path.join(specialWorkspace, 'parentheses-output.txt')
+  fs.mkdirSync(specialWorkspace, { recursive: true })
+  createUser({ id: userId, email: 'fs-shell-parentheses@example.com' })
+  grantLocalPath({ userId, rootPath: specialWorkspace, accessMode: 'read_write' })
+
+  const result = await bashExecTool({
+    userId,
+    cwd: specialWorkspace,
+    command: `echo parentheses-ok > "${outputPath}"`,
+    expected_outputs: [outputPath],
+  })
+
+  assert.equal(result.ok, true, JSON.stringify(result))
+  assert.equal(result.exitCode, 0)
+  assert.equal(fs.readFileSync(outputPath, 'utf8').trim(), 'parentheses-ok')
+  assert.deepEqual(result.changedPaths, [outputPath])
+})
+
+test('bash_exec: Windows rejects an unquoted parenthesized absolute path with an actionable error', {
+  skip: process.platform !== 'win32',
+}, async () => {
+  process.env.WORKSPACE_SHELL_ENABLED = '1'
+  const specialWorkspace = path.join(workspace, 'unquoted-directory(1)')
+  const inputPath = path.join(specialWorkspace, 'input.txt')
+  fs.mkdirSync(specialWorkspace, { recursive: true })
+  fs.writeFileSync(inputPath, 'input', 'utf8')
+
+  await assert.rejects(
+    () => bashExecTool({
+      cwd: specialWorkspace,
+      command: `type ${inputPath}`,
+      expected_outputs: [],
+    }),
+    (error) => {
+      assert.equal(error?.code, 'SHELL_PATH_QUOTING_REQUIRED')
+      assert.equal(error?.statusCode, 400)
+      assert.match(error?.hint || '', /双引号/)
+      return true
+    },
+  )
 })
 
 test('bash_exec:超时返回 timedOut', async () => {

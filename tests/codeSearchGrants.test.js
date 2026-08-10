@@ -14,7 +14,9 @@ import path from 'node:path'
 
 const tmpData = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-cs-grants-'))
 process.env.APP_DATA_DIR = tmpData
-process.env.WORKSPACE_FS_ENABLED = '1'
+// A user grant is an independent trust boundary. Shared-workspace access may
+// stay disabled while the explicitly granted directory remains searchable.
+process.env.WORKSPACE_FS_ENABLED = '0'
 
 const { getDb } = await import('../server/db.js')
 const { grantLocalPath } = await import('../server/services/localFileAccessService.js')

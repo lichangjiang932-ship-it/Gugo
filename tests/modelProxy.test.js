@@ -120,6 +120,61 @@ test('stream parser accepts SSE data fields without a space after the colon', as
   assert.equal(events.at(-1).type, 'finish')
 })
 
+test('stream parser drives Ollama NDJSON text, reasoning, and tools through the real loop', async () => {
+  const events = await collectCompatibleStream([
+    `${JSON.stringify({ message: { thinking: 'checking files', content: '' }, done: false })}\n`,
+    `${JSON.stringify({
+      message: {
+        content: 'Ready.',
+        tool_calls: [{ function: { name: 'read_file', arguments: { path: 'README.md' } } }],
+      },
+      done: true,
+      done_reason: 'tool_calls',
+      prompt_eval_count: 8,
+      eval_count: 3,
+    })}\n`,
+  ], 'application/x-ndjson')
+
+  assert.equal(events.find((event) => event.type === 'reasoning')?.delta, 'checking files')
+  assert.equal(events.find((event) => event.type === 'text')?.delta, 'Ready.')
+  assert.deepEqual(JSON.parse(events.find((event) => event.type === 'tool_call_ready').toolCall.arguments), {
+    path: 'README.md',
+  })
+  assert.equal(events.find((event) => event.type === 'tool_calls').toolCalls[0].name, 'read_file')
+  assert.equal(events.find((event) => event.type === 'usage').usage.totalTokens, 11)
+})
+
+test('stream parser drives Responses API output and function arguments through the real loop', async () => {
+  const frames = [
+    { type: 'response.output_text.delta', delta: 'Working.' },
+    {
+      type: 'response.output_item.added',
+      output_index: 1,
+      item: { type: 'function_call', id: 'fc_9', call_id: 'call_9', name: 'write_file', arguments: '' },
+    },
+    {
+      type: 'response.function_call_arguments.done',
+      output_index: 1,
+      item_id: 'fc_9',
+      arguments: { path: 'site.html', content: '<h1>ok</h1>' },
+    },
+    {
+      type: 'response.completed',
+      response: { status: 'completed', usage: { input_tokens: 5, output_tokens: 2, total_tokens: 7 } },
+    },
+  ]
+  const events = await collectCompatibleStream(
+    frames.map((frame) => `event: message\ndata: ${JSON.stringify(frame)}\n\n`),
+  )
+
+  assert.equal(events.find((event) => event.type === 'text')?.delta, 'Working.')
+  const ready = events.find((event) => event.type === 'tool_call_ready')
+  assert.equal(ready.toolCall.id, 'call_9')
+  assert.deepEqual(JSON.parse(ready.toolCall.arguments), { path: 'site.html', content: '<h1>ok</h1>' })
+  assert.equal(events.find((event) => event.type === 'tool_calls').finishReason, 'tool_calls')
+  assert.equal(events.find((event) => event.type === 'usage').usage.totalTokens, 7)
+})
+
 test('stream parser surfaces provider error payloads returned inside HTTP 200 SSE', async () => {
   const payload = JSON.stringify({
     error: { message: 'Unable to generate parser for this template', code: 'template_error' },
@@ -193,6 +248,8 @@ test('chat tool-loop streaming forwards deltas and returns canonical tool calls'
   })
   const textDeltas = []
   const reasoningDeltas = []
+  const readyCalls = []
+  let modelCallResolved = false
   const result = await callStreamingModelWithTools({
     messages: [{ role: 'user', content: 'read' }],
     tools: [],
@@ -204,10 +261,20 @@ test('chat tool-loop streaming forwards deltas and returns canonical tool calls'
     fetchImpl: async () => new Response(body, { status: 200 }),
     onTextDelta: async (delta) => textDeltas.push(delta),
     onReasoningDelta: async (delta) => reasoningDeltas.push(delta),
+    onToolCallReady: async (call, metadata) => {
+      assert.equal(modelCallResolved, false, 'readiness must arrive before the canonical response resolves')
+      readyCalls.push({ call, metadata })
+    },
   })
+  modelCallResolved = true
 
   assert.deepEqual(textDeltas, ['Grounded answer.'])
   assert.deepEqual(reasoningDeltas, ['checking files'])
+  assert.equal(readyCalls.length, 1)
+  assert.equal(readyCalls[0].call.id, 'read-1')
+  assert.equal(readyCalls[0].call.function.name, 'read_file')
+  assert.deepEqual(JSON.parse(readyCalls[0].call.function.arguments), { path: 'README.md' })
+  assert.equal(readyCalls[0].metadata.modelName, 'test-model')
   assert.equal(result.content, 'Grounded answer.')
   assert.deepEqual(result.toolCalls, [{
     id: 'read-1',
@@ -772,6 +839,50 @@ test('★ 思考超过硬顶必须取消上游并抛 REASONING_RUNAWAY', async (
     (error) => error?.code === 'REASONING_RUNAWAY',
   )
   assert.equal(cancelled, true, '必须取消响应流，不能让上游在后台继续计费')
+})
+
+test('execution turns use the tighter reasoning ceiling without shrinking ordinary answer turns', async () => {
+  const reasoningFrame = `data: ${JSON.stringify({
+    choices: [{ delta: { reasoning_content: '0123456789' } }],
+  })}\n\n`
+  const doneFrame = 'data: [DONE]\n\n'
+  const fetchImpl = async () => streamedResponse([reasoningFrame, doneFrame])
+  const config = {
+    baseUrl: 'https://example.test/v1',
+    apiKey: 'x',
+    modelName: 'thinking-model',
+  }
+  const env = {
+    MODEL_REASONING_MAX_CHARS: '100',
+    MODEL_EXECUTION_REASONING_MAX_CHARS: '5',
+  }
+
+  await assert.rejects(
+    async () => {
+      for await (const event of streamOpenAICompatible({
+        config,
+        messages: [{ role: 'user', content: 'create the requested file' }],
+        tools: [{ type: 'function', function: { name: 'write_file', parameters: { type: 'object' } } }],
+        toolChoice: 'auto',
+        fetchImpl,
+        env,
+      })) { void event }
+    },
+    (error) => error?.code === 'REASONING_RUNAWAY',
+  )
+
+  const events = []
+  for await (const event of streamOpenAICompatible({
+    config,
+    messages: [{ role: 'user', content: 'explain the concept' }],
+    tools: [],
+    toolChoice: 'none',
+    fetchImpl,
+    env,
+  })) events.push(event)
+
+  assert.equal(events.some((event) => event.type === 'reasoning'), true)
+  assert.equal(events.at(-1)?.type, 'finish')
 })
 
 // ───────────── 连续 system 消息会打挂 LM Studio ─────────────

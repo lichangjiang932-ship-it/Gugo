@@ -70,7 +70,10 @@ test('budget exceeded: exhausted job budget yields ok:false + budgetExceeded + r
       modelCalls += 1
       // 用一个不存在的工具:预算在 executeTool 之前就 consume,
       // 所以不会真的产生副作用,但仍然吃掉预算。
-      return { content: '', toolCalls: [toolCall(`c${modelCalls}`, 'no_such_tool', {})] }
+      return {
+        content: '',
+        toolCalls: [toolCall(`c${modelCalls}`, 'no_such_tool', { attempt: modelCalls })],
+      }
     },
   })
 
@@ -93,14 +96,14 @@ test('budget exceeded: exhausted job budget yields ok:false + budgetExceeded + r
   assert.ok(String(result.output?.text || '').trim().length > 0, '预算耗尽也要有文字交代')
 })
 
-test('normal completion still returns ok:true with the model text', async () => {
+test('non-execution completion still returns ok:true with the model text', async () => {
   const userId = issueTestSession({ email: `pause-happy-${process.pid}@example.com` }).userId
   const executeStep = createDefaultExecuteStep({
     runModelWithTools: async () => ({ content: '第一行\n第二行', toolCalls: [] }),
   })
 
   const job = makeJob('job-happy-1', userId, '简单问答')
-  const step = { id: 'step-happy-1', kind: 'execute' }
+  const step = { id: 'step-happy-1', kind: 'verify' }
   const result = await executeStep({ job, step })
 
   assert.equal(result.ok, true)

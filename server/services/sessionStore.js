@@ -1,5 +1,6 @@
 import { getDb } from '../db.js'
 import { listSessionTurnArtifacts } from './turnArtifactStore.js'
+import { deleteManagedAttachmentsForSession } from './managedAttachmentStore.js'
 
 const LOCAL_OWNER_META_KEY = 'local_auth_owner_user_id'
 const SESSION_SCOPED_TABLES = [
@@ -497,7 +498,7 @@ export function deleteSession({ userId, sessionId, expectedRevision } = {}) {
   if (!userId || !sessionId) return null
   const revision = normalizeExpectedRevision(expectedRevision)
   const db = getDb()
-  return db.transaction(() => {
+  const result = db.transaction(() => {
     const session = db.prepare(`
       SELECT token, revision
       FROM sessions
@@ -527,6 +528,16 @@ export function deleteSession({ userId, sessionId, expectedRevision } = {}) {
     `).run(userId, sessionId)
     return result.changes === 1 ? { deleted: true, previousRevision: revision } : null
   })()
+  if (result?.deleted) {
+    try {
+      deleteManagedAttachmentsForSession({ userId, sessionId })
+    } catch (error) {
+      // The session deletion is already committed. Keep the API result truthful;
+      // the attachment maintenance pass will retry any filesystem cleanup.
+      console.warn('[attachments] failed to clean deleted session:', error?.message || error)
+    }
+  }
+  return result
 }
 
 export function deleteMessage({ userId, messageId }) {

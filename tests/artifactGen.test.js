@@ -303,7 +303,11 @@ test('generated artifacts are downloadable from /api/artifacts/* with auth', asy
       if (detail.job.status === 'completed' || detail.job.status === 'failed') break
       await new Promise((res) => setTimeout(res, 50))
     }
-    assert.equal(detail.job.status, 'completed', `job status: ${detail?.job?.status}`)
+    assert.equal(
+      detail.job.status,
+      'completed',
+      `job status: ${detail?.job?.status}; error: ${detail?.job?.error || 'none'}; steps: ${JSON.stringify(detail?.job?.steps || [])}`,
+    )
     assert.ok(detail.job.artifacts && detail.job.artifacts.length > 0, '应生成至少一个 artifact')
     const artifactUrl = detail.job.artifacts[0].url
 

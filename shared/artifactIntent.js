@@ -19,6 +19,7 @@ const SKILL_ARTIFACT_TOOL = Object.freeze({
   doc: 'create_docx',
   excel: 'create_xlsx',
   webpage: 'create_html_app',
+  image: 'generate_image',
 })
 
 // 常见 PPT/文档/表格类技能 ID → 文件工具映射。技能前缀（如 /ppt-master 做演示）
@@ -28,6 +29,7 @@ const SKILL_ID_ALIASES = Object.freeze({
   doc: ['doc', 'write-doc'],
   excel: ['excel', 'analyze-excel'],
   webpage: ['webpage', 'html', 'website'],
+  image: ['image', 'imagegen', 'image-gen'],
 })
 
 export function resolveArtifactToolForSkillId(skillId) {
@@ -44,6 +46,7 @@ const ARTIFACT_TERMS = Object.freeze({
   docx: /\bdocx?\b|\.docx?\b|\bword\b|word\s*文档|文档|报告|会议纪要|纪要|周报|合同|简历|document|report|minutes/gi,
   xlsx: /\bxlsx?\b|\.xlsx?\b|\bexcel\b|工作簿|电子表格|spread\s*sheet/gi,
   html: /\bhtml?\b|\.html?\b|\bweb\s*page\b|\bwebsite\b|\blanding\s*page\b|网页|网站|落地页/gi,
+  image: /\bimages?\b|\bpictures?\b|\bphotos?\b|\billustrations?\b|\bposters?\b|\bcover\s+art\b|\bhero\s+art\b|\u56fe\u7247|\u56fe\u50cf|\u63d2\u56fe|\u914d\u56fe|\u6d77\u62a5|\u5c01\u9762\u56fe/gi,
 })
 
 const BEFORE_ACTION = /(?:帮我|请|麻烦|给我|我要|我需要|我想要|希望|来(?:一|个|份|套)?|写|编写|撰写|做|制作|生成|创建|输出|导出|整理成|转换成|转成|改成|做成|设计|起草|重做|重制|修改|编辑|更新|优化|润色|make|create|generate|build|produce|export|convert|design|draft|prepare|write|revise|edit|update|redesign|give\s+me|i\s+(?:want|need))[^。！？!?\n]{0,32}$/i
@@ -55,6 +58,12 @@ const CAPABILITY_QUESTION = /(?:能不能|能否|可以不可以|是否可以|�
 const NEGATION_AFTER = /^[^。！？!?\n]{0,10}(?:不要|不用|不需要|禁止|别|无需|不可|不能|do\s+not|don't|dont|never|not\s+needed)/i
 const META_AFTER = /^[^。！？!?\n]{0,12}(?:问题|bug|逻辑|代码|工具|为什么|为何|自动生成|误生成|被生成|乱生成|随意生成|problem|issue|bug|logic|tool)/i
 const GLOBAL_DENIAL = /(?:没有|没|未)(?:有)?(?:让|要求|叫|授权)[^。！？!?\n]{0,18}(?:生成|制作|创建|输出|导出|变成|转成)|(?:i\s+did(?:\s+not|n't)|without\s+me)\s+(?:ask|request|authoriz)[^.!?\n]{0,24}(?:creat|generat|mak|export)/i
+// “请报告真实 exitCode / report the test result” asks the assistant to
+// state execution evidence in chat. `报告` / `report` is a verb there, not
+// a request for a downloadable Word document. Explicit authoring phrases
+// (生成报告 / write a report) remain eligible for DOCX.
+const RESULT_REPORT_OBJECT = /^[\s:：]*(?:(?:the\s+)?(?:real|actual|current|final|latest|specific)\s+|(?:真实|实际|当前|最终|最新|具体|本次)\s*)?(?:(?:test|check|verification|execution)\s+|(?:测试|检查|验证|执行)\s*)?(?:exit\s*code|exitcode|stdout|stderr|status|results?|progress|outcome|error|reason|findings?|退出码|结果|状态|进度|错误|异常|原因|结论|输出)/i
+const ARTIFACT_PRODUCTION_BEFORE = /(?:写(?:一|1)?份|编写|撰写|制作|生成|创建|导出|整理成|转换成|make|create|generate|produce|export|draft|prepare|write)(?:[^。！？?!\n]{0,24})$/i
 const SKILL_PREFIX = /^\/([a-z0-9_-]+)(?:\s|$)/i
 
 // A slash artifact skill is a delivery contract, not merely another keyword.
@@ -68,6 +77,7 @@ const STRONG_ARTIFACT_FORMAT = Object.freeze({
   docx: /\bdocx?\b|\.docx?\b|\bword\b|word\s*document|\u0057\u006f\u0072\u0064\s*\u6587\u6863|\u6587\u6863/i,
   xlsx: /\bxlsx?\b|\.xlsx?\b|\bexcel\b|spread\s*sheet|\u5de5\u4f5c\u7c3f|\u7535\u5b50\u8868\u683c/i,
   html: /\bhtml?\b|\.html?\b|\bweb\s*page\b|\bwebsite\b|\blanding\s*page\b|\u7f51\u9875|\u7f51\u7ad9|\u843d\u5730\u9875/i,
+  image: /\bimages?\b|\bpictures?\b|\bphotos?\b|\billustrations?\b|\bposters?\b|\u56fe\u7247|\u56fe\u50cf|\u63d2\u56fe|\u914d\u56fe|\u6d77\u62a5|\u5c01\u9762\u56fe/i,
 })
 
 export function parseArtifactSkillId(prompt = '') {
@@ -80,7 +90,10 @@ function occurrenceIsExplicitRequest(text, match) {
   const after = text.slice(match.index + match[0].length, match.index + match[0].length + 32)
   const identifierPrefix = text.slice(Math.max(0, match.index - 16), match.index)
 
-  if (/create[_-]$/i.test(identifierPrefix)) return false
+  if (/(?:create|generate)[_-]$/i.test(identifierPrefix)) return false
+  if (/^(?:报告|report)$/i.test(match[0])
+    && RESULT_REPORT_OBJECT.test(after)
+    && !ARTIFACT_PRODUCTION_BEFORE.test(before)) return false
   if (DIRECT_NEGATION.test(before) || NEGATION_AFTER.test(after)) return false
   if (AUTO_OR_ACCIDENTAL.test(before) || CAPABILITY_QUESTION.test(before)) return false
 
@@ -113,6 +126,7 @@ export function detectArtifactIntent(prompt = '', { skillId = undefined } = {}) 
   const skillTool = resolvedSkill ? resolveArtifactToolForSkillId(resolvedSkill) : null
   const explicitPptx = hasExplicitArtifactRequest(text, 'pptx')
   const explicitDocx = hasExplicitArtifactRequest(text, 'docx')
+  const explicitImage = hasExplicitArtifactRequest(text, 'image')
   const allowAdditionalFormat = (type) => Boolean(
     ADDITIONAL_ARTIFACT_CUE.test(text)
       && STRONG_ARTIFACT_FORMAT[type]?.test(text)
@@ -130,5 +144,6 @@ export function detectArtifactIntent(prompt = '', { skillId = undefined } = {}) 
         : explicitDocx && (!pptx || allowAdditionalFormat('docx'))),
     xlsx: skillTool === 'create_xlsx' || (skillTool ? allowAdditionalFormat('xlsx') : hasExplicitArtifactRequest(text, 'xlsx')),
     html: skillTool === 'create_html_app' || (skillTool ? allowAdditionalFormat('html') : hasExplicitArtifactRequest(text, 'html')),
+    image: skillTool === 'generate_image' || (skillTool ? allowAdditionalFormat('image') : explicitImage),
   }
 }

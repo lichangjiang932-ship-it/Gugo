@@ -10,13 +10,20 @@ const grantedDir = path.join(tempDir, 'granted')
 const outsideDir = path.join(tempDir, 'outside')
 const executionRepo = path.join(tempDir, 'execution-repo')
 const workspaceDir = path.join(tempDir, 'workspace')
+const grantLookupDir = path.join(tempDir, 'grant-lookup')
+const grantLookupChildDir = path.join(grantLookupDir, 'nested', 'output')
 fs.mkdirSync(grantedDir)
 fs.mkdirSync(outsideDir)
 fs.mkdirSync(executionRepo)
 fs.mkdirSync(workspaceDir)
+fs.mkdirSync(grantLookupChildDir, { recursive: true })
 fs.writeFileSync(path.join(grantedDir, 'note.txt'), 'hello local files', 'utf8')
 fs.writeFileSync(path.join(outsideDir, 'secret.txt'), 'outside', 'utf8')
 fs.writeFileSync(path.join(executionRepo, 'tracked.txt'), 'repo file', 'utf8')
+fs.writeFileSync(path.join(executionRepo, 'check.js'), "console.log('authorized-check-ok')\n", 'utf8')
+fs.writeFileSync(path.join(executionRepo, 'package.json'), JSON.stringify({
+  scripts: { test: 'node check.js' },
+}), 'utf8')
 fs.writeFileSync(path.join(workspaceDir, 'workspace.txt'), 'workspace file', 'utf8')
 execFileSync('git', ['init'], { cwd: executionRepo, stdio: 'ignore' })
 process.env.APP_DB_PATH = path.join(tempDir, 'app.db')
@@ -24,6 +31,7 @@ process.env.WORKSPACE_FS_ENABLED = '1'
 
 const { closeDb, createUser } = await import('../server/db.js')
 const {
+  findAuthorizedDirectoryGrant,
   getLocalFileAccessStatus,
   grantLocalPath,
   revokeLocalPath,
@@ -40,6 +48,9 @@ createUser({ id: 'execution-user', email: 'execution@example.com' })
 createUser({ id: 'readonly-execution-user', email: 'readonly-execution@example.com' })
 createUser({ id: 'workspace-user-a', email: 'workspace-a@example.com' })
 createUser({ id: 'workspace-user-b', email: 'workspace-b@example.com' })
+createUser({ id: 'grant-lookup-user', email: 'grant-lookup@example.com' })
+createUser({ id: 'file-grant-user', email: 'file-grant@example.com' })
+createUser({ id: 'all-files-grant-user', email: 'all-files-grant@example.com' })
 
 setWorkspaceTrust({
   userId: 'local-user-a',
@@ -235,6 +246,89 @@ test('authorized directories work as shell cwd and git repository roots', async 
       () => dispatchGitTool('git_status', { cwd: executionRepo }, { userId: 'local-user-b' }),
       /未获得读取授权/
     )
+  } finally {
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+})
+
+test('directory grant lookup enforces mode, ancestry, and explicit directory scope', () => {
+  grantLocalPath({
+    userId: 'grant-lookup-user',
+    rootPath: grantLookupDir,
+    accessMode: 'read_only',
+  })
+  assert.equal(findAuthorizedDirectoryGrant({
+    userId: 'grant-lookup-user',
+    rawPath: grantLookupChildDir,
+    accessMode: 'read_write',
+  }), null)
+  assert.equal(findAuthorizedDirectoryGrant({
+    userId: 'grant-lookup-user',
+    rawPath: grantLookupChildDir,
+    accessMode: 'read_only',
+  })?.path, fs.realpathSync(grantLookupDir))
+
+  grantLocalPath({
+    userId: 'grant-lookup-user',
+    rootPath: grantLookupDir,
+    accessMode: 'read_write',
+  })
+  const inherited = findAuthorizedDirectoryGrant({
+    userId: 'grant-lookup-user',
+    rawPath: grantLookupChildDir,
+    accessMode: 'read_write',
+  })
+  assert.equal(inherited?.resourceType, 'directory')
+  assert.equal(inherited?.path, fs.realpathSync(grantLookupDir))
+
+  grantLocalPath({
+    userId: 'file-grant-user',
+    rootPath: path.join(grantedDir, 'note.txt'),
+    accessMode: 'read_write',
+  })
+  assert.equal(findAuthorizedDirectoryGrant({
+    userId: 'file-grant-user',
+    rawPath: path.join(grantedDir, 'note.txt'),
+    accessMode: 'read_write',
+  }), null)
+
+  setAllFilesAccess({
+    userId: 'all-files-grant-user',
+    enabled: true,
+    confirmation: 'ALLOW_ALL_LOCAL_FILES',
+  })
+  assert.equal(findAuthorizedDirectoryGrant({
+    userId: 'all-files-grant-user',
+    rawPath: grantLookupChildDir,
+    accessMode: 'read_write',
+  }), null)
+})
+
+test('authorized local directories run project checks while the Git workspace is disabled', async () => {
+  const saved = {
+    WORKSPACE_ROOT: process.env.WORKSPACE_ROOT,
+    WORKSPACE_SHELL_ENABLED: process.env.WORKSPACE_SHELL_ENABLED,
+    WORKSPACE_GIT_ENABLED: process.env.WORKSPACE_GIT_ENABLED,
+    LOCAL_CODE_EXECUTION_ENABLED: process.env.LOCAL_CODE_EXECUTION_ENABLED,
+  }
+  process.env.WORKSPACE_ROOT = outsideDir
+  process.env.WORKSPACE_SHELL_ENABLED = '0'
+  process.env.WORKSPACE_GIT_ENABLED = '0'
+  process.env.LOCAL_CODE_EXECUTION_ENABLED = '1'
+  grantLocalPath({ userId: 'execution-user', rootPath: executionRepo, accessMode: 'read_write' })
+
+  try {
+    const result = await dispatchGitTool(
+      'run_project_check',
+      { cwd: executionRepo, check: 'test' },
+      { userId: 'execution-user' },
+    )
+    assert.equal(result.ok, true)
+    assert.equal(result.check, 'test')
+    assert.match(result.stdout, /authorized-check-ok/)
   } finally {
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[key]

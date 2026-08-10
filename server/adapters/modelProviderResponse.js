@@ -26,7 +26,59 @@ export function extractModelContentText(value) {
   if (typeof value.content === 'string' || Array.isArray(value.content)) {
     return extractModelContentText(value.content)
   }
+  if (typeof value.output_text === 'string') return value.output_text
+  if (value.message && typeof value.message === 'object') return extractModelContentText(value.message)
   return ''
+}
+
+export function stringifyToolArguments(value) {
+  if (typeof value === 'string') return value
+  if (value === undefined || value === null) return ''
+  const seen = new WeakSet()
+  try {
+    return JSON.stringify(value, (_key, item) => {
+      if (typeof item === 'bigint') return String(item)
+      if (item && typeof item === 'object') {
+        if (seen.has(item)) return '[Circular]'
+        seen.add(item)
+      }
+      return item
+    })
+  } catch {
+    return '{}'
+  }
+}
+
+export function normalizeCompatibleToolCall(call, index = 0) {
+  const fn = call?.function && typeof call.function === 'object' ? call.function : call || {}
+  const name = String(fn.name || call?.name || '')
+  const id = String(call?.call_id || call?.id || `call-${index}-${name || 'tool'}`)
+  return {
+    id,
+    type: 'function',
+    function: {
+      name,
+      arguments: stringifyToolArguments(fn.arguments ?? call?.arguments),
+    },
+  }
+}
+
+export function extractCompatibleToolCalls(data) {
+  const calls = []
+  const message = data?.choices?.[0]?.message
+  const append = (items) => {
+    if (!Array.isArray(items)) return
+    for (const item of items) calls.push(item)
+  }
+  append(message?.tool_calls)
+  if (message?.function_call) calls.push(message.function_call)
+  append(data?.message?.tool_calls)
+  if (data?.message?.function_call) calls.push(data.message.function_call)
+  append(data?.tool_calls)
+  for (const item of Array.isArray(data?.output) ? data.output : []) {
+    if (item?.type === 'function_call') calls.push(item)
+  }
+  return calls.map(normalizeCompatibleToolCall)
 }
 
 /**
@@ -62,6 +114,8 @@ export function extractModelResponseText(data) {
     message?.content,
     message?.text,
     data?.choices?.[0]?.text,
+    data?.message?.content,
+    data?.message?.text,
     data?.output_text,
     data?.output?.text,
     data?.output,
@@ -71,6 +125,7 @@ export function extractModelResponseText(data) {
     data?.answer,
     data?.result,
     data?.raw,
+    data?.token,
   ]
   for (const candidate of candidates) {
     const text = extractModelContentText(candidate)
@@ -88,19 +143,25 @@ export function parseOpenAICompatibleResponse(data) {
 }
 
 export function extractUsage(data) {
-  const usage = data?.usage
-  if (!usage || typeof usage !== 'object') return null
-  const promptTokens = Number(usage.prompt_tokens) || 0
+  const usageSource = data?.usage ?? data?.response?.usage
+  const usage = usageSource && typeof usageSource === 'object' ? usageSource : null
+  const hasOllamaUsage = Number.isFinite(Number(data?.prompt_eval_count)) || Number.isFinite(Number(data?.eval_count))
+  if (!usage && !hasOllamaUsage) return null
+  const promptTokens = Number(usage?.prompt_tokens ?? usage?.input_tokens ?? data?.prompt_eval_count) || 0
+  const completionTokens = Number(usage?.completion_tokens ?? usage?.output_tokens ?? data?.eval_count) || 0
   const cacheHitTokens = Number(
-    usage.prompt_cache_hit_tokens ?? usage.prompt_tokens_details?.cached_tokens ?? 0,
+    usage?.prompt_cache_hit_tokens
+      ?? usage?.prompt_tokens_details?.cached_tokens
+      ?? usage?.input_tokens_details?.cached_tokens
+      ?? 0,
   ) || 0
   return {
     promptTokens,
-    completionTokens: Number(usage.completion_tokens) || 0,
-    totalTokens: Number(usage.total_tokens) || 0,
+    completionTokens,
+    totalTokens: Number(usage?.total_tokens) || promptTokens + completionTokens,
     cacheHitTokens,
     cacheMissTokens: Number(
-      usage.prompt_cache_miss_tokens ?? Math.max(0, promptTokens - cacheHitTokens),
+      usage?.prompt_cache_miss_tokens ?? Math.max(0, promptTokens - cacheHitTokens),
     ) || 0,
   }
 }
@@ -112,11 +173,17 @@ export function parseModelProviderResponse(data, profile = {}) {
     const parsed = parseNativeProviderResponse(data, profile.kind)
     return { ...parsed, content: stripEmbeddedReasoning(parsed?.content) }
   }
-  const message = data?.choices?.[0]?.message || {}
+  const toolCalls = extractCompatibleToolCalls(data)
+  const rawFinishReason = data?.choices?.[0]?.finish_reason
+    || data?.done_reason
+    || data?.stop_reason
+    || null
   return {
     content: stripEmbeddedReasoning(extractModelResponseText(data)),
-    toolCalls: Array.isArray(message.tool_calls) ? message.tool_calls : [],
+    toolCalls,
     usage: extractUsage(data),
-    finishReason: data?.choices?.[0]?.finish_reason || null,
+    finishReason: toolCalls.length || rawFinishReason === 'function_call'
+      ? 'tool_calls'
+      : rawFinishReason,
   }
 }

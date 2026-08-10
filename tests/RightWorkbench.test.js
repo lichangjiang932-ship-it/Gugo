@@ -7,7 +7,7 @@ const viteServer = await createServer({
   root: process.cwd(),
   appType: 'custom',
   plugins: [reactPlugin()],
-  server: { middlewareMode: true, hmr: false },
+  server: { middlewareMode: true, hmr: false, ws: false },
 })
 
 await viteServer.ssrLoadModule('/tests/unit/RightWorkbench.test.jsx')

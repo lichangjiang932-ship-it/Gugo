@@ -1,9 +1,11 @@
 // Claude-Code 风格的 fs / shell 工具集.让模型在 chat 里能 read_file / write_file
 // / edit_file / bash_exec.全部经过路径沙箱 + 大小上限 + 鉴权.
 //
-// 安全闸门(默认全部关闭):
+// 安全闸门:
 //   - WORKSPACE_FS_ENABLED=1     启用 read/write/edit
-//   - WORKSPACE_SHELL_ENABLED=1  启用 bash_exec
+//   - WORKSPACE_SHELL_ENABLED=1  启用共享 workspace 的 bash_exec
+//   - 本机 local + loopback 下，用户 read_write grant 默认允许 bash_exec
+//   - LOCAL_CODE_EXECUTION_ENABLED=0 可关闭本地授权目录代码执行
 //   - WORKSPACE_ROOT=<absolute path>  工作目录,默认 process.cwd().
 //     所有路径都 resolve 到这里下,realpath 检查防 symlink 逃逸.
 //
@@ -16,22 +18,40 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import { sanitizeChildEnv } from '../utils/sensitiveEnv.js'
+import {
+  buildCodeExecutionEnv,
+  codeExecutionFailureHint,
+  inferCodeExecutionOutputPaths,
+} from '../utils/codeExecutionRuntime.js'
 import { runProcessWithGroup } from '../utils/processGroup.js'
 import { bashLimiter, writeLimiter } from '../utils/rateLimiter.js'
 import { writeToolAudit } from '../utils/audit.js'
-import { checkBashCommandDanger } from '../utils/bashGuard.js'
+import {
+  checkBashCommandDanger,
+  checkShellPathSyntax,
+  extractAbsoluteShellPaths,
+} from '../utils/bashGuard.js'
 import { checkWorkspaceSize } from '../utils/workspaceSize.js'
 import { isToolPermittedForUser } from '../db.js'
 import { authenticateRequest } from '../middleware.js'
 import { readJson, sendJson } from '../utils.js'
-import { resolveAuthorizedLocalPath } from '../services/localFileAccessService.js'
+import {
+  isLocalCodeExecutionEnabled,
+  resolveAuthorizedLocalPath,
+} from '../services/localFileAccessService.js'
 import { assertWorkspaceCapability } from '../services/workspaceTrustService.js'
+import {
+  extractManagedAttachmentContent,
+  extractPdfBufferContent,
+} from '../services/managedAttachmentContent.js'
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024 // 5 MB read/write upper bound
 const SHELL_DEFAULT_TIMEOUT_MS = 60 * 1000
 const SHELL_MAX_TIMEOUT_MS = 5 * 60 * 1000
 const SHELL_MAX_OUTPUT = 1 * 1024 * 1024 // 1 MB combined stdout+stderr cap
+const SHELL_MAX_EXPECTED_OUTPUTS = 64
 
 function getWorkspaceRoot() {
   const raw = process.env.WORKSPACE_ROOT?.trim()
@@ -96,11 +116,31 @@ export function resolveForShellCwd(rawPath, { userId = null } = {}) {
     write: true,
     allowWorkspace: true,
   })
-  assertWorkspaceCapability({
-    userId,
-    rootPath: resolved.rootPath || getWorkspaceRoot(),
-    capability: 'shell',
-  })
+  const rootPath = resolved.rootPath || getWorkspaceRoot()
+  if (resolved.source === 'workspace') {
+    if (!isShellEnabled()) {
+      const error = badReq('共享工作区 Shell 未启用；请设置 WORKSPACE_SHELL_ENABLED=1', 403)
+      error.code = 'WORKSPACE_SHELL_DISABLED'
+      throw error
+    }
+    assertWorkspaceCapability({ userId, rootPath, capability: 'shell' })
+  } else if (resolved.source === 'grant') {
+    if (!isLocalCodeExecutionEnabled()) {
+      const error = badReq('本地代码执行已被 LOCAL_CODE_EXECUTION_ENABLED=0 关闭', 403)
+      error.code = 'LOCAL_CODE_EXECUTION_DISABLED'
+      throw error
+    }
+    if (!userId) {
+      const error = badReq('本地代码执行必须绑定已登录用户和已授权目录', 403)
+      error.code = 'USER_REQUIRED'
+      throw error
+    }
+  } else {
+    const error = badReq('代码执行必须使用用户明确授权的读写目录；全文件访问不会隐式授予 Shell 权限', 403)
+    error.code = 'SHELL_DIRECTORY_GRANT_REQUIRED'
+    error.requiredAccessMode = 'read_write'
+    throw error
+  }
   return resolved
 }
 
@@ -144,10 +184,39 @@ export async function readFileTool({ path: rawPath, offset = 0, limit = 0, userI
   const full = resolved.fullPath
   const stat = fs.statSync(full)
   if (stat.isDirectory()) throw badReq('路径是目录,不是文件', 400)
+  if (resolved.source === 'attachment') {
+    const extracted = await extractManagedAttachmentContent({ userId, id: resolved.attachmentId })
+    const all = extracted.text
+    const lines = all.split('\n')
+    const o = Math.max(0, Math.floor(Number(offset) || 0))
+    const l = Math.max(0, Math.floor(Number(limit) || 0))
+    const slice = l > 0 ? lines.slice(o, o + l) : lines.slice(o)
+    return {
+      ok: true,
+      path: resolved.displayPath,
+      scope: resolved.source,
+      size: stat.size,
+      mimeType: resolved.attachment.mimeType,
+      sha256: resolved.attachment.sha256,
+      extractionStatus: extracted.extractionStatus,
+      requiresVision: extracted.requiresVision,
+      truncated: extracted.truncated,
+      totalLines: lines.length,
+      offset: o,
+      returnedLines: slice.length,
+      content: slice.join('\n'),
+    }
+  }
   if (stat.size > MAX_FILE_BYTES) {
     throw badReq(`文件过大(${stat.size} 字节,上限 ${MAX_FILE_BYTES})`, 413)
   }
-  const all = fs.readFileSync(full, 'utf8')
+  const buffer = fs.readFileSync(full)
+  const isPdf = path.extname(full).toLowerCase() === '.pdf'
+    || buffer.subarray(0, 5).toString('ascii') === '%PDF-'
+  const extracted = isPdf ? extractPdfBufferContent(buffer) : null
+  const all = isPdf
+    ? extracted.text || '[PDF 文件未提取到可读文本；文件可能是扫描件或使用了压缩/自定义字体。]'
+    : buffer.toString('utf8')
   const lines = all.split('\n')
   const o = Math.max(0, Math.floor(Number(offset) || 0))
   const l = Math.max(0, Math.floor(Number(limit) || 0))
@@ -157,6 +226,11 @@ export async function readFileTool({ path: rawPath, offset = 0, limit = 0, userI
     path: resolved.displayPath,
     scope: resolved.source,
     size: stat.size,
+    ...(isPdf ? {
+      mimeType: extracted.mimeType,
+      extractionStatus: extracted.extractionStatus,
+      requiresVision: extracted.requiresVision,
+    } : {}),
     totalLines: lines.length,
     offset: o,
     returnedLines: slice.length,
@@ -202,6 +276,77 @@ export async function listDirectoryTool({ path: rawPath, limit = 200, userId = n
 
 /* ── write_file ────────────────────────────────────────────── */
 
+function contentLineCount(value) {
+  const text = String(value || '')
+  if (!text) return 0
+  const lines = text.split(/\r?\n/u).length
+  return lines - (/\r?\n$/u.test(text) ? 1 : 0)
+}
+
+function contentLines(value) {
+  const text = String(value || '')
+  if (!text) return []
+  const lines = text.split(/\r?\n/u)
+  if (/\r?\n$/u.test(text)) lines.pop()
+  return lines
+}
+
+/**
+ * Count a shortest line-level edit script, matching the additions/deletions
+ * users see in a normal source diff. Common prefixes/suffixes are removed
+ * first; a bounded Myers search prevents an adversarial full-file rewrite
+ * from consuming unbounded CPU and falls back to one middle replacement.
+ */
+function lineChangeStats(previous, next) {
+  const before = contentLines(previous)
+  const after = contentLines(next)
+  let start = 0
+  while (start < before.length && start < after.length && before[start] === after[start]) start += 1
+  let beforeEnd = before.length
+  let afterEnd = after.length
+  while (beforeEnd > start && afterEnd > start && before[beforeEnd - 1] === after[afterEnd - 1]) {
+    beforeEnd -= 1
+    afterEnd -= 1
+  }
+  const left = before.slice(start, beforeEnd)
+  const right = after.slice(start, afterEnd)
+  const n = left.length
+  const m = right.length
+  if (n === 0 || m === 0) return { additions: m, deletions: n }
+
+  const max = n + m
+  const maxDistance = Math.min(max, 4096)
+  const offset = maxDistance + 1
+  const frontier = new Int32Array((maxDistance * 2) + 3)
+  frontier.fill(-1)
+  frontier[offset + 1] = 0
+  for (let distance = 0; distance <= maxDistance; distance += 1) {
+    for (let diagonal = -distance; diagonal <= distance; diagonal += 2) {
+      const index = offset + diagonal
+      let x
+      if (diagonal === -distance
+        || (diagonal !== distance && frontier[index - 1] < frontier[index + 1])) {
+        x = frontier[index + 1]
+      } else {
+        x = frontier[index - 1] + 1
+      }
+      let y = x - diagonal
+      while (x < n && y < m && left[x] === right[y]) {
+        x += 1
+        y += 1
+      }
+      frontier[index] = x
+      if (x >= n && y >= m) {
+        return {
+          additions: (distance - n + m) / 2,
+          deletions: (distance + n - m) / 2,
+        }
+      }
+    }
+  }
+  return { additions: m, deletions: n }
+}
+
 export async function writeFileTool({ path: rawPath, content, userId = null }) {
   assertToolPermitted(userId, 'write_file')
   // ★ M3.5:写类限流
@@ -215,6 +360,17 @@ export async function writeFileTool({ path: rawPath, content, userId = null }) {
   }
   const resolved = resolveForFileTool(rawPath, { userId, write: true, allowMissing: true })
   const full = resolved.fullPath
+  let previousContent = null
+  let previousContentKnown = false
+  try {
+    if (fs.existsSync(full) && fs.statSync(full).isFile()) {
+      previousContent = fs.readFileSync(full, 'utf8')
+    }
+    previousContentKnown = true
+  } catch {
+    // Progress metadata must not turn a permitted write into a failure. If the
+    // previous state is unreadable, omit line counts and keep the real write.
+  }
   try {
     fs.mkdirSync(path.dirname(full), { recursive: true })
     fs.writeFileSync(full, content, 'utf8')
@@ -225,7 +381,13 @@ export async function writeFileTool({ path: rawPath, content, userId = null }) {
   if (resolved.source === 'workspace') {
     try { checkWorkspaceSize(getWorkspaceRoot()) } catch { /* 巡检失败不影响写入 */ }
   }
-  return { ok: true, path: resolved.displayPath, scope: resolved.source, bytes }
+  const changes = previousContentKnown ? [{
+    path: resolved.displayPath,
+    ...(previousContent == null
+      ? { additions: contentLineCount(content), deletions: 0 }
+      : lineChangeStats(previousContent, content)),
+  }] : []
+  return { ok: true, path: resolved.displayPath, scope: resolved.source, bytes, changes }
 }
 
 /* ── edit_file (字符串精确替换) ────────────────────────────── */
@@ -286,16 +448,276 @@ export async function editFileTool({
     scope: resolved.source,
     replacedCount,
     deltaBytes: Buffer.byteLength(next, 'utf8') - Buffer.byteLength(orig, 'utf8'),
+    changes: [{ path: resolved.displayPath, ...lineChangeStats(orig, next) }],
   }
 }
 
 /* ── bash_exec ─────────────────────────────────────────────── */
 
-export async function bashExecTool({ command, cwd: rawCwd, timeout_ms, userId = null, signal = null }) {
-  assertToolPermitted(userId, 'bash_exec')
-  if (!isShellEnabled()) {
-    throw badReq('WORKSPACE_SHELL_ENABLED=1 未启用,无法执行 shell 命令', 403)
+function outputEntryType(stat) {
+  if (stat.isFile()) return 'file'
+  if (stat.isDirectory()) return 'directory'
+  if (stat.isSymbolicLink()) return 'symlink'
+  return 'other'
+}
+
+function hashFileContent(fullPath) {
+  return new Promise((resolve, reject) => {
+    const hash = createHash('sha256')
+    const stream = fs.createReadStream(fullPath)
+    stream.on('data', (chunk) => hash.update(chunk))
+    stream.once('error', reject)
+    stream.once('end', () => resolve(hash.digest('hex')))
+  })
+}
+
+async function hashDirectoryTree(rootPath) {
+  const treeHash = createHash('sha256')
+
+  async function visit(fullPath, relativePath) {
+    const stat = await fs.promises.lstat(fullPath)
+    const type = outputEntryType(stat)
+    treeHash.update(JSON.stringify([
+      relativePath.split(path.sep).join('/'),
+      type,
+      stat.size,
+      stat.mtimeMs,
+    ]))
+    treeHash.update('\0')
+
+    if (type === 'directory') {
+      const entries = await fs.promises.readdir(fullPath)
+      entries.sort((left, right) => left.localeCompare(right))
+      for (const entry of entries) {
+        await visit(path.join(fullPath, entry), path.join(relativePath, entry))
+      }
+      return
+    }
+    if (type === 'file') {
+      treeHash.update(await hashFileContent(fullPath))
+      treeHash.update('\0')
+      return
+    }
+    if (type === 'symlink') {
+      treeHash.update(await fs.promises.readlink(fullPath))
+      treeHash.update('\0')
+    }
   }
+
+  await visit(rootPath, '')
+  return treeHash.digest('hex')
+}
+
+async function snapshotExpectedOutput(fullPath) {
+  let stat
+  try {
+    stat = await fs.promises.lstat(fullPath)
+  } catch (error) {
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return { exists: false }
+    throw error
+  }
+
+  const type = outputEntryType(stat)
+  let contentHash = null
+  if (type === 'file') contentHash = await hashFileContent(fullPath)
+  else if (type === 'directory') contentHash = await hashDirectoryTree(fullPath)
+  else if (type === 'symlink') contentHash = createHash('sha256')
+    .update(await fs.promises.readlink(fullPath))
+    .digest('hex')
+
+  return {
+    exists: true,
+    type,
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+    contentHash,
+  }
+}
+
+async function prepareExpectedOutputs(rawOutputs, { cwd, userId }) {
+  if (rawOutputs == null) return []
+  if (!Array.isArray(rawOutputs)) throw badReq('expected_outputs 必须是路径数组')
+  if (rawOutputs.length > SHELL_MAX_EXPECTED_OUTPUTS) {
+    throw badReq(`expected_outputs 最多 ${SHELL_MAX_EXPECTED_OUTPUTS} 项`, 413)
+  }
+
+  const targets = []
+  const seen = new Set()
+  for (const rawOutput of rawOutputs) {
+    if (typeof rawOutput !== 'string' || !rawOutput.trim()) {
+      throw badReq('expected_outputs 中的每一项都必须是非空路径')
+    }
+    const declaredPath = rawOutput.trim()
+    const requestedPath = path.isAbsolute(declaredPath)
+      ? declaredPath
+      : path.resolve(cwd, declaredPath)
+    const resolved = resolveAuthorizedLocalPath({
+      userId,
+      rawPath: requestedPath,
+      write: true,
+      allowMissing: true,
+      allowWorkspace: true,
+    })
+    const dedupeKey = process.platform === 'win32'
+      ? path.normalize(resolved.fullPath).toLowerCase()
+      : path.normalize(resolved.fullPath)
+    if (seen.has(dedupeKey)) continue
+    seen.add(dedupeKey)
+
+    let before
+    try {
+      before = await snapshotExpectedOutput(resolved.fullPath)
+    } catch (error) {
+      const wrapped = badReq(`无法在命令执行前读取 expected_outputs: ${declaredPath}`)
+      wrapped.code = 'EXPECTED_OUTPUT_SNAPSHOT_FAILED'
+      wrapped.cause = error
+      throw wrapped
+    }
+    targets.push({
+      declaredPath,
+      fullPath: resolved.fullPath,
+      path: resolved.displayPath,
+      scope: resolved.source,
+      before,
+    })
+  }
+  return targets
+}
+
+function changedOutputRecord(target, after, status) {
+  const before = target.before
+  return {
+    path: target.path,
+    declaredPath: target.declaredPath,
+    scope: target.scope,
+    status,
+    type: after.type,
+    size: after.size,
+    modifiedAt: after.mtimeMs,
+    contentChanged: before.exists && before.contentHash !== after.contentHash,
+    sizeChanged: before.exists && before.size !== after.size,
+    mtimeChanged: before.exists && before.mtimeMs !== after.mtimeMs,
+    typeChanged: before.exists && before.type !== after.type,
+  }
+}
+
+async function verifyExpectedOutputs(targets) {
+  const verifiedOutputs = []
+  const unverifiedOutputs = []
+
+  for (const target of targets) {
+    let after
+    try {
+      after = await snapshotExpectedOutput(target.fullPath)
+    } catch (error) {
+      unverifiedOutputs.push({
+        path: target.path,
+        declaredPath: target.declaredPath,
+        scope: target.scope,
+        status: 'inaccessible',
+        error: error?.message || String(error),
+      })
+      continue
+    }
+
+    if (!after.exists) {
+      unverifiedOutputs.push({
+        path: target.path,
+        declaredPath: target.declaredPath,
+        scope: target.scope,
+        status: 'missing',
+        existedBefore: target.before.exists,
+      })
+      continue
+    }
+    if (!target.before.exists) {
+      verifiedOutputs.push(changedOutputRecord(target, after, 'created'))
+      continue
+    }
+
+    const changed = target.before.type !== after.type
+      || target.before.size !== after.size
+      || target.before.mtimeMs !== after.mtimeMs
+      || target.before.contentHash !== after.contentHash
+    if (changed) {
+      verifiedOutputs.push(changedOutputRecord(
+        target,
+        after,
+        target.before.type === after.type ? 'modified' : 'replaced',
+      ))
+    } else {
+      unverifiedOutputs.push({
+        path: target.path,
+        declaredPath: target.declaredPath,
+        scope: target.scope,
+        status: 'unchanged',
+        existedBefore: true,
+        type: after.type,
+        size: after.size,
+        modifiedAt: after.mtimeMs,
+      })
+    }
+  }
+
+  return {
+    verifiedOutputs,
+    unverifiedOutputs,
+    changedPaths: verifiedOutputs.map((output) => output.path),
+  }
+}
+
+function sameOrInside(rootPath, candidatePath) {
+  const root = path.normalize(rootPath)
+  const candidate = path.normalize(candidatePath)
+  const relative = path.relative(root, candidate)
+  return relative === ''
+    || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))
+}
+
+function assertShellCommandPathsAuthorized(command, { userId, expectedTargets }) {
+  const pathSyntax = checkShellPathSyntax(command)
+  if (pathSyntax) {
+    const error = badReq(
+      `命令路径被安全策略拦截：${pathSyntax.reason}`,
+      pathSyntax.statusCode || 403,
+    )
+    error.code = pathSyntax.code || 'SHELL_PATH_POLICY_DENIED'
+    if (pathSyntax.path) error.path = pathSyntax.path
+    if (pathSyntax.hint) error.hint = pathSyntax.hint
+    throw error
+  }
+
+  for (const rawPath of extractAbsoluteShellPaths(command)) {
+    const absolutePath = path.resolve(rawPath)
+    const declaredOutput = expectedTargets.some((target) => sameOrInside(target.fullPath, absolutePath))
+    try {
+      resolveAuthorizedLocalPath({
+        userId,
+        rawPath: absolutePath,
+        write: declaredOutput,
+        allowMissing: declaredOutput,
+        allowWorkspace: true,
+      })
+    } catch (cause) {
+      const error = badReq(`命令引用了未授权路径：${rawPath}`, 403)
+      error.code = 'SHELL_PATH_NOT_AUTHORIZED'
+      error.path = rawPath
+      error.requiredAccessMode = declaredOutput ? 'read_write' : 'read_only'
+      error.cause = cause
+      throw error
+    }
+  }
+}
+
+export async function bashExecTool({
+  command,
+  cwd: rawCwd,
+  timeout_ms,
+  expected_outputs,
+  userId = null,
+  signal = null,
+}) {
+  assertToolPermitted(userId, 'bash_exec')
   if (typeof command !== 'string' || !command.trim()) throw badReq('command 必填')
   if (command.length > 10_000) throw badReq('command 过长', 413)
 
@@ -316,6 +738,14 @@ export async function bashExecTool({ command, cwd: rawCwd, timeout_ms, userId = 
   const cwd = resolvedCwd.fullPath
   const displayCwd = resolvedCwd.displayPath
   if (!fs.statSync(cwd).isDirectory()) throw badReq('cwd 不是目录')
+  const expectedTargets = await prepareExpectedOutputs(expected_outputs, { cwd, userId })
+  const inferredTargets = expectedTargets.length === 0
+    ? await prepareExpectedOutputs(inferCodeExecutionOutputPaths(command), { cwd, userId })
+    : []
+  assertShellCommandPathsAuthorized(command, {
+    userId,
+    expectedTargets: [...expectedTargets, ...inferredTargets],
+  })
 
   const timeout = Math.min(
     Math.max(Number(timeout_ms) || SHELL_DEFAULT_TIMEOUT_MS, 1000),
@@ -326,79 +756,124 @@ export async function bashExecTool({ command, cwd: rawCwd, timeout_ms, userId = 
   const shellPath = isWin ? (process.env.COMSPEC || 'cmd.exe') : '/bin/sh'
   const shellArgs = isWin ? ['/d', '/s', '/c', command] : ['-c', command]
   const startedAt = Date.now()
-
-  return new Promise((resolve) => {
-    runProcessWithGroup({
-      shellPath,
-      shellArgs,
-      cwd,
-      env: sanitizeChildEnv(),
-      timeout,
-      maxBuffer: SHELL_MAX_OUTPUT,
-      windowsHide: true,
-      signal,
-    }).then((r) => {
-      const durationMs = Date.now() - startedAt
-      const auditArgs = { command, cwd: displayCwd }
-      if (r.aborted) {
-        if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'cancelled', durationMs })
-        resolve({
-          ok: false,
-          cancelled: true,
-          error: '命令已取消，进程组已清理',
-          stdout: r.stdout,
-          stderr: r.stderr,
-          cwd: displayCwd,
-        })
-        return
-      }
-      if (r.timedOut) {
-        if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'timeout', durationMs })
-        resolve({
-          ok: false,
-          timedOut: true,
-          error: `命令超时(${timeout}ms),进程组已被清理`,
-          stdout: r.stdout,
-          stderr: r.stderr,
-          cwd: displayCwd,
-        })
-        return
-      }
-      if (r.truncated) {
-        if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'truncated', durationMs })
-        resolve({
-          ok: false,
-          truncated: true,
-          error: `输出超过 ${SHELL_MAX_OUTPUT} 字节,已截断并杀进程组`,
-          stdout: r.stdout,
-          stderr: r.stderr,
-          cwd: displayCwd,
-        })
-        return
-      }
-      if (r.code !== 0) {
-        if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'error', durationMs })
-        resolve({
-          ok: false,
-          exitCode: r.code,
-          signal: r.signal,
-          error: `命令退出码 ${r.code}${r.signal ? ` (signal=${r.signal})` : ''}`,
-          stdout: r.stdout,
-          stderr: r.stderr,
-          cwd: displayCwd,
-        })
-        return
-      }
-      if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'ok', durationMs })
-      resolve({
-        ok: true,
-        exitCode: 0,
-        stdout: r.stdout,
-        stderr: r.stderr,
-        cwd: displayCwd,
-      })
-    })
+  const r = await runProcessWithGroup({
+    shellPath,
+    shellArgs,
+    cwd,
+    env: buildCodeExecutionEnv(sanitizeChildEnv()),
+    timeout,
+    maxBuffer: SHELL_MAX_OUTPUT,
+    windowsHide: true,
+    // Node's default Windows argv quoting rewrites embedded quotes in the
+    // command passed to cmd.exe. Preserve the command exactly so quoted paths
+    // containing characters such as parentheses remain valid.
+    windowsVerbatimArguments: isWin,
+    signal,
   })
+  const durationMs = Date.now() - startedAt
+  const auditArgs = {
+    command,
+    cwd: displayCwd,
+    ...(expectedTargets.length > 0
+      ? { expected_outputs: expectedTargets.map((target) => target.path) }
+      : {}),
+  }
+  const outputVerification = expectedTargets.length > 0
+    ? await verifyExpectedOutputs(expectedTargets)
+    : null
+  const inferredVerification = inferredTargets.length > 0
+    ? await verifyExpectedOutputs(inferredTargets)
+    : null
+  const inferredChanges = inferredVerification?.changedPaths?.length > 0
+    ? {
+        verifiedOutputs: inferredVerification.verifiedOutputs,
+        changedPaths: inferredVerification.changedPaths,
+      }
+    : null
+  const verificationFields = outputVerification || inferredChanges || {}
+  const failureHint = codeExecutionFailureHint(command, {
+    platform: process.platform,
+    stderr: r.stderr,
+  })
+
+  if (r.aborted) {
+    if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'cancelled', durationMs })
+    return {
+      ok: false,
+      cancelled: true,
+      error: '命令已取消，进程组已清理',
+      stdout: r.stdout,
+      stderr: r.stderr,
+      cwd: displayCwd,
+      ...(failureHint ? { hint: failureHint } : {}),
+      ...verificationFields,
+    }
+  }
+  if (r.timedOut) {
+    if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'timeout', durationMs })
+    return {
+      ok: false,
+      timedOut: true,
+      error: `命令超时(${timeout}ms),进程组已被清理`,
+      stdout: r.stdout,
+      stderr: r.stderr,
+      cwd: displayCwd,
+      ...(failureHint ? { hint: failureHint } : {}),
+      ...verificationFields,
+    }
+  }
+  if (r.truncated) {
+    if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'truncated', durationMs })
+    return {
+      ok: false,
+      truncated: true,
+      error: `输出超过 ${SHELL_MAX_OUTPUT} 字节,已截断并杀进程组`,
+      stdout: r.stdout,
+      stderr: r.stderr,
+      cwd: displayCwd,
+      ...verificationFields,
+    }
+  }
+  if (r.code !== 0) {
+    if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'error', durationMs })
+    return {
+      ok: false,
+      exitCode: r.code,
+      signal: r.signal,
+      error: `命令退出码 ${r.code}${r.signal ? ` (signal=${r.signal})` : ''}`,
+      stdout: r.stdout,
+      stderr: r.stderr,
+      cwd: displayCwd,
+      ...verificationFields,
+    }
+  }
+  if (outputVerification?.unverifiedOutputs.length > 0) {
+    if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'error', durationMs })
+    const failures = outputVerification.unverifiedOutputs
+      .map((output) => `${output.path} (${output.status})`)
+      .join('、')
+    return {
+      ok: false,
+      exitCode: 0,
+      code: 'EXPECTED_OUTPUT_VERIFICATION_FAILED',
+      verificationFailed: true,
+      retryable: true,
+      error: `命令退出成功，但 expected_outputs 未创建或未发生变化：${failures}`,
+      stdout: r.stdout,
+      stderr: r.stderr,
+      cwd: displayCwd,
+      ...verificationFields,
+    }
+  }
+  if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'ok', durationMs })
+  return {
+    ok: true,
+    exitCode: 0,
+    stdout: r.stdout,
+    stderr: r.stderr,
+    cwd: displayCwd,
+    ...verificationFields,
+  }
 }
 
 /* ── HTTP handler (用于 /api/tools/fs/* 和 /api/tools/shell/*) ── */
@@ -466,7 +941,7 @@ export const FS_SHELL_TOOL_SPECS = [
         type: 'object',
         properties: {
           path: { type: 'string', description: '文件夹路径。可使用工作区相对路径或已授权的绝对路径。' },
-          limit: { type: 'integer', description: '最多返回多少项，默认 200，最大 500。' },
+          limit: { type: 'integer', default: 200, description: '最多返回多少项，默认 200，最大 500。' },
         },
         required: ['path'],
       },
@@ -481,8 +956,8 @@ export const FS_SHELL_TOOL_SPECS = [
         type: 'object',
         properties: {
           path: { type: 'string', description: '工作区相对路径，或用户已授权范围内的绝对路径。' },
-          offset: { type: 'integer', description: '起始行号(从 0),可选' },
-          limit: { type: 'integer', description: '读取行数,0 表示读到末尾' },
+          offset: { type: 'integer', default: 0, description: '起始行号(从 0),可选' },
+          limit: { type: 'integer', default: 0, description: '读取行数,0 表示读到末尾' },
         },
         required: ['path'],
       },
@@ -514,7 +989,7 @@ export const FS_SHELL_TOOL_SPECS = [
           path: { type: 'string' },
           old_string: { type: 'string', description: '要被替换的原字符串(精确,含空白和缩进)' },
           new_string: { type: 'string', description: '替换后的新字符串' },
-          replace_all: { type: 'boolean', description: '为 true 时替换全部出现,默认 false 且要求唯一' },
+          replace_all: { type: 'boolean', default: false, description: '为 true 时替换全部出现,默认 false 且要求唯一' },
         },
         required: ['path', 'old_string', 'new_string'],
       },
@@ -524,13 +999,14 @@ export const FS_SHELL_TOOL_SPECS = [
     type: 'function',
     function: {
       name: 'bash_exec',
-      description: '在 workspace 或用户已授权本地目录里跑 shell 命令(Windows 用 cmd.exe,其他用 /bin/sh).默认超时 60s,最长 5min,stdout+stderr 上限 1MB.敏感 env(API key/邮箱密码)已被屏蔽.',
+      description: '在 workspace 或用户已授权的本地读写目录里跑 shell 命令，可调用已安装的 Python、Node 和 PowerShell（Windows 用 cmd.exe,其他用 /bin/sh）。Windows 不要使用 tail/grep/sed/awk 等 Unix 管道；改用原生命令或 powershell -NoProfile -Command。生成 PDF/PNG 等需要多行或较长 Python 时，不要把脚本塞进 python -c；先用 write_file 写 UTF-8 .py，再用 bash_exec 运行。命令中的绝对路径会逐一校验授权；Windows command 中的每个绝对路径始终用双引号包裹（即使不含空格）。Python/Node/PowerShell 必须在 expected_outputs 声明最终产物。默认超时 60s,最长 5min,stdout+stderr 上限 1MB,敏感 env 已屏蔽。',
       parameters: {
         type: 'object',
         properties: {
           command: { type: 'string', description: '完整命令字符串,例如 "ls -la src" 或 "npm test"' },
           cwd: { type: 'string', description: 'workspace 相对目录或用户已授权目录的绝对路径,默认 workspace 根' },
-          timeout_ms: { type: 'integer', description: '超时毫秒数,默认 60000,最大 300000' },
+          timeout_ms: { type: 'integer', default: 60000, description: '超时毫秒数,默认 60000,最大 300000' },
+          expected_outputs: { type: 'array', default: [], items: { type: 'string' }, description: '命令预期创建或修改的文件路径;只读命令留空.' },
         },
         required: ['command'],
       },

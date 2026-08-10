@@ -19,6 +19,7 @@
 
 /** 会写出可下载文件的工具。默认对模型不可见。 */
 export const FILE_ARTIFACT_TOOLS = Object.freeze([
+  'generate_image',
   'create_pptx',
   'create_docx',
   'create_xlsx',
@@ -41,7 +42,7 @@ export function parseSkillIdFromPrompt(prompt = '') {
  * @param {string} prompt 用户原始提示词(保留 `/ppt` 这类前缀)
  * @param {object} [options]
  * @param {string|null} [options.skillId] 已解析出的技能 id;不传则从 prompt 自行解析
- * @returns {{pptx:boolean, docx:boolean, xlsx:boolean, html:boolean}}
+ * @returns {{pptx:boolean, docx:boolean, xlsx:boolean, html:boolean, image:boolean}}
  */
 export function detectArtifactIntent(prompt = '', { skillId = undefined } = {}) {
   return detectSharedArtifactIntent(prompt, { skillId })
@@ -60,6 +61,7 @@ export function allowedArtifactTools(prompt = '', options = {}) {
   if (intent.docx) allowed.add('create_docx')
   if (intent.xlsx) allowed.add('create_xlsx')
   if (intent.html) allowed.add('create_html_app')
+  if (intent.image) allowed.add('generate_image')
   return allowed
 }
 
@@ -70,5 +72,5 @@ export function isFileArtifactTool(name) {
 /** 用户是否要了任何一种文件产物。用于 finalize 阶段的交付对账。 */
 export function expectsFileArtifact(prompt = '', options = {}) {
   const intent = detectArtifactIntent(prompt, options)
-  return intent.pptx || intent.docx || intent.xlsx || intent.html
+  return intent.pptx || intent.docx || intent.xlsx || intent.html || intent.image
 }

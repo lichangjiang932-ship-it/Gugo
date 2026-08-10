@@ -117,13 +117,14 @@ const BUILTIN_SPECS = {
     type: 'function',
     function: {
       name: 'bash_exec',
-      description: 'Run a shell command inside the configured workspace or a user-authorized local directory.',
+      description: 'Run a shell command inside the configured workspace or a user-authorized local directory. In Windows commands, always wrap every absolute path in double quotes, even when it contains no spaces. When it creates or changes files, list every intended path in expected_outputs so the runtime can verify them.',
       parameters: {
         type: 'object',
         properties: {
           command: { type: 'string' },
           cwd: { type: 'string', description: 'Optional workspace-relative or authorized absolute working directory.' },
           timeout_ms: { type: 'integer' },
+          expected_outputs: { type: 'array', items: { type: 'string' }, description: 'Files this command is expected to create or modify; omit for read-only commands.' },
         },
         required: ['command'],
       },
@@ -237,12 +238,12 @@ const BUILTIN_SPECS = {
                 prompt: { type: 'string' },
                 description: { type: 'string' },
               },
-              required: ['subagent_type', 'prompt', 'description'],
+              required: ['subagent_type', 'prompt'],
             },
           },
         },
         anyOf: [
-          { required: ['subagent_type', 'prompt', 'description'] },
+          { required: ['subagent_type', 'prompt'] },
           { required: ['tasks'] },
         ],
       },
@@ -399,6 +400,7 @@ const BUILTIN_SPECS = {
 }
 
 const READ_ONLY_MODE_TOOLS = new Set([
+  'list_directory',
   'web_search',
   'fetch_url',
   'read_file',

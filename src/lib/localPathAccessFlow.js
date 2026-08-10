@@ -1,5 +1,11 @@
 import { getLocalFileAccessApi } from './localFileAccessClient.js'
-import { buildLocalPathPreflight, isLocalPathAuthorized } from './localPathPreflight.js'
+import {
+  buildLocalPathPreflight,
+  isLocalPathAuthorized,
+  localPathResourceType,
+  resolveLocalPathResources,
+  resolveLocalPathReadEvidence,
+} from './localPathPreflight.js'
 import { getAuthToken } from './accountClient.js'
 
 export const DEFAULT_LOCAL_PATH_PROBE_TIMEOUT_MS = 4000
@@ -146,7 +152,7 @@ export function createLocalPathAccessEnsurer(requestDirectoryApproval, {
 } = {}) {
   return async function ensureLocalPathAccess(content) {
     const request = buildLocalPathPreflight(content)
-    if (!request.paths.length) return { proceed: true, ...request }
+    if (!request.paths.length) return { proceed: true, ...request, resources: [] }
 
     let status = null
     try {
@@ -174,7 +180,11 @@ export function createLocalPathAccessEnsurer(requestDirectoryApproval, {
         }],
       }
     }
-    return { proceed: true, ...request }
+    return {
+      proceed: true,
+      ...request,
+      resources: resolveLocalPathResources(request.paths, status || {}),
+    }
   }
 }
 
@@ -189,14 +199,17 @@ export function createLocalPathAccessProbe(lang, {
     const paths = Array.isArray(localPathAccess?.paths) ? localPathAccess.paths.slice(0, 3) : []
     return Promise.all(paths.map((path, index) => runWithProbeDeadline(path, async (probeSignal) => {
       const options = { maxRetries: 0, lang, signal: probeSignal, suppressDirectoryApproval: true }
-      const listResult = await execute({
-        id: `local-path-list-${index}`,
-        name: 'list_directory',
-        arguments: JSON.stringify({ path, limit: 200 }),
-      }, options)
-      if (listResult.ok) return { path, tool: 'list_directory', ok: true, content: listResult.content }
-      if (shouldStopAfterListFailure(listResult)) {
-        return { path, tool: 'list_directory', ok: false, content: listResult.content }
+      let listResult = null
+      if (localPathResourceType(localPathAccess, path) !== 'file') {
+        listResult = await execute({
+          id: `local-path-list-${index}`,
+          name: 'list_directory',
+          arguments: JSON.stringify({ path, limit: 200 }),
+        }, options)
+        if (listResult.ok) return { path, tool: 'list_directory', ok: true, content: listResult.content }
+        if (shouldStopAfterListFailure(listResult)) {
+          return { path, tool: 'list_directory', ok: false, content: listResult.content }
+        }
       }
 
       const readResult = await execute({
@@ -204,7 +217,10 @@ export function createLocalPathAccessProbe(lang, {
         name: 'read_file',
         arguments: JSON.stringify({ path, offset: 0, limit: 240 }),
       }, options)
-      if (readResult.ok) return { path, tool: 'read_file', ok: true, content: readResult.content }
+      if (readResult.ok) return buildReadFileProbeResult(path, readResult)
+      if (!listResult) {
+        return { path, tool: 'read_file', ok: false, content: readResult.content }
+      }
       return {
         path,
         tool: 'local_path_probe',
@@ -227,28 +243,57 @@ function parseProbeContent(value) {
   }
 }
 
+function buildReadFileProbeResult(path, readResult) {
+  const base = {
+    path,
+    tool: 'read_file',
+    ok: true,
+    content: readResult.content,
+    ...(typeof readResult.mimeType === 'string' ? { mimeType: readResult.mimeType } : {}),
+    ...(typeof readResult.extractionStatus === 'string' ? { extractionStatus: readResult.extractionStatus } : {}),
+    ...(typeof readResult.requiresVision === 'boolean' ? { requiresVision: readResult.requiresVision } : {}),
+    ...(typeof readResult.truncated === 'boolean' ? { truncated: readResult.truncated } : {}),
+  }
+  const read = resolveLocalPathReadEvidence(base)
+  return {
+    ...base,
+    ...(read.mimeType ? { mimeType: read.mimeType } : {}),
+    ...(read.extractionStatus ? { extractionStatus: read.extractionStatus } : {}),
+    ...(read.requiresVision !== null ? { requiresVision: read.requiresVision } : {}),
+    ...(read.truncated ? { truncated: true } : {}),
+  }
+}
+
 export function buildLocalFilePreviewArtifact(results, { messageId = '' } = {}) {
   const successful = (Array.isArray(results) ? results : []).filter((item) => item?.ok !== false)
   const fileResult = successful.find((item) => item?.tool === 'read_file')
   const filePayload = fileResult ? parseProbeContent(fileResult.content) : null
-  if (filePayload && typeof filePayload.content === 'string') {
+  const fileEvidence = fileResult ? resolveLocalPathReadEvidence(fileResult) : null
+  const canPreviewFile = filePayload
+    && typeof filePayload.content === 'string'
+    && fileEvidence?.contentExtracted
+  if (canPreviewFile) {
     const filePath = String(filePayload.path || fileResult.path || '').trim()
     const filename = filePath.split(/[\\/]/u).filter(Boolean).at(-1) || 'local-file.txt'
     const returnedLines = Math.max(0, Number(filePayload.returnedLines) || filePayload.content.split('\n').length)
     const totalLines = Math.max(returnedLines, Number(filePayload.totalLines) || returnedLines)
+    const truncated = fileEvidence?.truncated === true || returnedLines < totalLines
     return {
       messageId: String(messageId || ''),
       content: filePayload.content,
       preview: {
         type: 'text',
         title: filename,
-        label: 'FILE',
+        label: fileEvidence?.isPdf ? 'PDF' : 'FILE',
         summary: returnedLines < totalLines
           ? [returnedLines, totalLines].join('/') + ' lines'
-          : totalLines + ' lines',
+          : `${totalLines} lines${truncated ? ' (truncated)' : ''}`,
         filename,
         path: filePath,
-        truncated: returnedLines < totalLines,
+        truncated,
+        ...(fileEvidence?.mimeType ? { mimeType: fileEvidence.mimeType } : {}),
+        ...(fileEvidence?.extractionStatus ? { extractionStatus: fileEvidence.extractionStatus } : {}),
+        ...(fileEvidence?.requiresVision !== null ? { requiresVision: fileEvidence.requiresVision } : {}),
       },
     }
   }

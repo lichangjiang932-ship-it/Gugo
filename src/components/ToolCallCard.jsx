@@ -66,7 +66,8 @@ function summarizeArgs(name, argsJson, t) {
   if (name === 'fetch_url') return args.url || '(空)'
   if (name === 'read_file' || name === 'write_file' || name === 'edit_file') return args.path || '(空)'
   if (name === 'list_directory') return args.path || t('chatMessages.toolCurrentWorkspace')
-  if (name === 'grep_code' || name === 'find_symbol') return args.query || args.symbol || t('chatMessages.toolUnspecified')
+  if (name === 'grep_code') return args.pattern || t('chatMessages.toolUnspecified')
+  if (name === 'find_symbol') return args.name || t('chatMessages.toolUnspecified')
   if (name === 'multi_edit') return `${(args.edits || []).length} 个编辑`
   if (name === 'apply_patch') return t('chatMessages.toolFileCount', { count: String(args.patch || '').match(/^\*\*\* (?:Add|Update|Delete) File:/gm)?.length || 0 })
   if (name === 'bash_exec') return String(args.command || '').replace(/\s+/g, ' ').slice(0, 96) || '(空)'
@@ -101,6 +102,14 @@ function ToolCallCard({ call }) {
   const label = LABEL_KEYS[call.name] ? t(LABEL_KEYS[call.name]) : (LABELS[call.name] || call.name)
   const summary = summarizeArgs(call.name, call.arguments, t)
   const authorization = authorizationLabel(call.approvalAuthorization, t)
+  const errorFacts = call.status === 'error'
+    ? [...new Set([
+        call.errorCode,
+        Number.isInteger(Number(call.errorStatus)) ? `HTTP ${Number(call.errorStatus)}` : '',
+        Number.isInteger(Number(call.attempts)) && Number(call.attempts) > 0 ? `${Number(call.attempts)}×` : '',
+        call.retryable ? t('taskCenter.retry') : '',
+      ].filter(Boolean))]
+    : []
 
   let statusIcon = <Loader2 className="w-3.5 h-3.5 animate-spin text-ember" />
   let statusText = t('chatMessages.toolRunning')
@@ -146,8 +155,22 @@ function ToolCallCard({ call }) {
             <div>
               <div className="font-mono text-[9px] uppercase tracking-wider text-ink-fade mb-1">{call.status === 'error' ? t('chatMessages.toolError') : t('chatMessages.toolResult')}</div>
               <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md bg-ink/[0.035] p-2 text-[10px] leading-4 text-ink-soft">
-                {formatDetails(call.status === 'error' ? call.error : call.result, call.status === 'error' ? t('chatMessages.toolUnknownError') : t('chatMessages.toolEmptyResult'))}
+                {formatDetails(call.status === 'error' ? (call.result || call.error) : call.result, call.status === 'error' ? t('chatMessages.toolUnknownError') : t('chatMessages.toolEmptyResult'))}
               </pre>
+            </div>
+          )}
+          {call.status === 'error' && (errorFacts.length > 0 || call.errorHint) && (
+            <div className="space-y-1.5">
+              {errorFacts.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {errorFacts.map((fact) => (
+                    <span key={fact} className="rounded bg-red-50 px-1.5 py-0.5 font-mono text-[9px] text-red-700">{fact}</span>
+                  ))}
+                </div>
+              )}
+              {call.errorHint && (
+                <div className="rounded-md bg-amber-50 px-2 py-1.5 text-[10px] leading-4 text-amber-900">{call.errorHint}</div>
+              )}
             </div>
           )}
         </div>

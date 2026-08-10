@@ -6,8 +6,9 @@ import {
   callModelWithContextRecovery,
   estimateContextTokens,
   getAutoCompactionThreshold,
+  trimOldestContext,
 } from '../server/services/contextCompactionRuntime.js'
-import { buildCompaction } from '../server/services/compactionService.js'
+import { buildCompaction, validateToolCallChain } from '../server/services/compactionService.js'
 
 const TOOLS = [{
   type: 'function',
@@ -100,6 +101,77 @@ test('400 recovery force-compacts once, then trims oldest 10% for the final retr
   assert.ok(mainRequestSizes[1] < mainRequestSizes[0], 'forced compaction must reduce the retry payload')
   assert.ok(mainRequestSizes[2] < mainRequestSizes[1], 'last retry must trim the oldest context')
   assert.equal(result.recovery.trimmed, true)
+})
+
+test('overflow trimming preserves the latest user objective and latest tool chain', () => {
+  const staleObjective = { role: 'user', content: 'An obsolete request from an earlier turn.' }
+  const activeObjective = { role: 'user', content: 'Create the requested deliverable exactly as specified.' }
+  const latestCall = {
+    role: 'assistant',
+    content: '',
+    tool_calls: [{ id: 'latest-read', type: 'function', function: { name: 'read_file', arguments: '{"path":"result.txt"}' } }],
+  }
+  const latestResult = { role: 'tool', tool_call_id: 'latest-read', name: 'read_file', content: '{"ok":true}' }
+  const messages = [
+    { role: 'system', content: 'system' },
+    staleObjective,
+    ...Array.from({ length: 12 }, (_, index) => ({
+      role: index % 2 ? 'assistant' : 'user',
+      content: `old ${index}`,
+    })),
+    activeObjective,
+    latestCall,
+    latestResult,
+  ]
+
+  const trimmed = trimOldestContext(messages, 0.75)
+
+  assert.ok(!trimmed.includes(staleObjective), 'an obsolete earliest user request may be trimmed')
+  assert.ok(trimmed.includes(activeObjective), 'the latest user objective must remain verbatim')
+  assert.ok(trimmed.includes(latestCall), 'the latest assistant tool call must remain')
+  assert.ok(trimmed.includes(latestResult), 'the matching latest tool result must remain')
+  assert.equal(validateToolCallChain(trimmed).ok, true)
+})
+
+test('third-stage recovery keeps the latest objective when forced compaction is refused', async () => {
+  const staleObjective = 'Explain an unrelated topic from an earlier turn.'
+  const objective = 'Build the webpage now and verify every requested step.'
+  const latestCall = {
+    role: 'assistant',
+    content: '',
+    tool_calls: [{ id: 'latest-write', type: 'function', function: { name: 'write_file', arguments: '{"path":"index.html"}' } }],
+  }
+  const latestResult = { role: 'tool', tool_call_id: 'latest-write', name: 'write_file', content: '{"ok":true}' }
+  const requests = []
+  const result = await callModelWithContextRecovery({
+    messages: [
+      { role: 'system', content: 'system' },
+      { role: 'user', content: staleObjective },
+      { role: 'tool', tool_call_id: 'orphaned-old-call', content: 'invalid old chain' },
+      ...Array.from({ length: 12 }, (_, index) => ({
+        role: index % 2 ? 'assistant' : 'user',
+        content: `history ${index}`,
+      })),
+      { role: 'user', content: objective },
+      latestCall,
+      latestResult,
+    ],
+    tools: TOOLS,
+    contextWindow: 1_000_000,
+    isContextLengthError: (error) => error?.code === 'context_length_exceeded',
+    callModel: async ({ messages: outbound }) => {
+      requests.push(outbound)
+      if (requests.length < 3) throw contextError()
+      return { content: 'recovered with objective', toolCalls: [] }
+    },
+  })
+
+  const finalRequest = requests.at(-1)
+  assert.equal(result.response.content, 'recovered with objective')
+  assert.ok(finalRequest.some((message) => message?.role === 'user' && message.content === objective))
+  assert.ok(finalRequest.includes(latestCall))
+  assert.ok(finalRequest.includes(latestResult))
+  assert.equal(validateToolCallChain(finalRequest).ok, true)
 })
 
 test('semantic compaction map-reduces large archives, preserves user text, audits, and consumes budget', async () => {

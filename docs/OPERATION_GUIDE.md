@@ -103,7 +103,8 @@ OLLAMA_KEEP_ALIVE=30m
 | `APPROVAL_MODE` | `unattended` | `off`、`unattended` 或 `all` |
 | `WORKSPACE_ROOT` | 仓库启动目录 | 文件、Shell 和 Git 工具允许访问的根目录 |
 | `WORKSPACE_FS_ENABLED` | `0` | 开启工作区文件工具 |
-| `WORKSPACE_SHELL_ENABLED` | `0` | 开启 Shell；等同授予服务器进程权限 |
+| `WORKSPACE_SHELL_ENABLED` | `0` | 开启共享 `WORKSPACE_ROOT` 的 Shell；等同授予服务器进程权限 |
+| `LOCAL_CODE_EXECUTION_ENABLED` | 本机回环模式为 `1`，其余为 `0` | 控制用户已授权 `read_write` 目录中的代码执行；显式 `0` 可关闭 |
 | `WORKSPACE_GIT_ENABLED` | `0` | 开启 Git 读取工具 |
 | `WORKSPACE_GIT_MUTATION_ENABLED` | `0` | 允许 Git 写操作 |
 | `APP_PUBLIC_URL` | 空 | 生产 OAuth 回调的固定公网 Origin |
@@ -213,7 +214,7 @@ Invoke-WebRequest http://127.0.0.1:5175/api/health
 2. 默认 `AUTH_MODE=local` 会自动进入工作台，无需注册、邮箱或密码。
 3. 进入“设置 → 模型”，新增自己的 OpenAI 兼容、Anthropic、Gemini、Ollama 或 LM Studio Provider，并运行检测。
 4. 进入“设置 → 系统诊断”，执行模型连接测试。
-5. 如需本地文件、Shell 或 Git，在 `.env` 中只开启必要的全局能力，并在界面中授权、信任具体工作区。
+5. 本机代码执行只需在界面中明确授予目标目录 `read_write`；共享工作区 Shell 或 Git 仍需在 `.env` 中开启必要的全局能力并信任对应工作区。
 6. 新建一次普通对话确认流式输出正常，再测试工具调用。
 7. 进入“设置 → 数据 & 导出”导出一次会话备份，确认自己的备份流程可用。
 
@@ -351,7 +352,7 @@ docker compose logs app
 ## 10. 安全注意事项
 
 - `AUTH_MODE=local` 没有网络访问控制，只能用于绑定 `127.0.0.1` 的可信本机。局域网或公网部署必须使用 `AUTH_MODE=multi_user`；Docker 还需显式设置 `DOCKER_BIND_ADDRESS=0.0.0.0` 才会对外发布。
-- Gugo 的 Shell 工具不是安全沙箱。`WORKSPACE_SHELL_ENABLED=1` 表示受信用户可用服务器进程权限执行命令；只应在单机、可信用户环境开启。
+- Gugo 的 Shell 工具不是安全沙箱。共享工作区的 `WORKSPACE_SHELL_ENABLED=1`，以及本机回环模式下对 `read_write` 目录默认开放的代码执行，都允许受信用户用服务器进程权限运行命令；不要向不可信用户开放。
 - 未信任工作区默认只读。不要为了省事在多人或公网部署中设置 `WORKSPACE_SHARED_TRUSTED=1`。
 - 局域网部署必须配置 SMTP、防火墙和可信网络边界；公网部署还必须使用 HTTPS、强密码、反向代理限流，并设置固定 `APP_PUBLIC_URL`。
 - 只有反向代理已经清除客户端伪造的转发头时才设置 `TRUST_PROXY=1`。

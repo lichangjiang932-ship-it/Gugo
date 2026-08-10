@@ -34,6 +34,108 @@ test('successful read probe becomes a visible, bounded local-file preview', () =
   })
 })
 
+test('PDF no_text probe preserves extraction metadata without creating a readable preview', async () => {
+  const path = 'D:\\demo\\scan.pdf'
+  const probe = createLocalPathAccessProbe('zh', {
+    execute: async (call) => call.name === 'list_directory'
+      ? { ok: false, content: JSON.stringify({ error: 'not a directory' }) }
+      : {
+          ok: true,
+          content: JSON.stringify({
+            ok: true,
+            path,
+            mimeType: 'application/pdf',
+            extractionStatus: 'no_text',
+            requiresVision: true,
+            content: '[PDF bytes available; no readable text extracted]',
+          }),
+        },
+  })
+
+  const [result] = await probe({ paths: [path], accessMode: 'read_only' })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.mimeType, 'application/pdf')
+  assert.equal(result.extractionStatus, 'no_text')
+  assert.equal(result.requiresVision, true)
+  assert.equal(buildLocalFilePreviewArtifact([result]), null)
+})
+
+test('PDF text probe keeps extracted body in a typed text preview', () => {
+  const path = 'D:\\demo\\report.pdf'
+  const artifact = buildLocalFilePreviewArtifact([{
+    path,
+    tool: 'read_file',
+    ok: true,
+    mimeType: 'application/pdf',
+    extractionStatus: 'text',
+    requiresVision: false,
+    content: JSON.stringify({
+      ok: true,
+      path,
+      mimeType: 'application/pdf',
+      extractionStatus: 'text',
+      requiresVision: false,
+      content: 'Quarterly revenue grew 42%.',
+      returnedLines: 1,
+      totalLines: 1,
+      truncated: true,
+    }),
+  }], { messageId: 'turn-pdf:assistant' })
+
+  assert.equal(artifact.content, 'Quarterly revenue grew 42%.')
+  assert.deepEqual(artifact.preview, {
+    type: 'text',
+    title: 'report.pdf',
+    label: 'PDF',
+    summary: '1 lines (truncated)',
+    filename: 'report.pdf',
+    path,
+    truncated: true,
+    mimeType: 'application/pdf',
+    extractionStatus: 'text',
+    requiresVision: false,
+  })
+})
+
+test('conflicting PDF extraction metadata fails closed', () => {
+  const path = 'D:\\demo\\conflict.pdf'
+  const artifact = buildLocalFilePreviewArtifact([{
+    path,
+    tool: 'read_file',
+    ok: true,
+    mimeType: 'application/pdf',
+    extractionStatus: 'text',
+    requiresVision: false,
+    content: JSON.stringify({
+      ok: true,
+      path,
+      mimeType: 'application/pdf',
+      extractionStatus: 'no_text',
+      requiresVision: true,
+      content: 'This must not be previewed.',
+    }),
+  }])
+
+  assert.equal(artifact, null)
+})
+
+test('conflicting non-PDF success flags do not create a preview', () => {
+  const path = 'D:\\demo\\failed.txt'
+  const artifact = buildLocalFilePreviewArtifact([{
+    path,
+    tool: 'read_file',
+    ok: true,
+    content: JSON.stringify({
+      ok: false,
+      path,
+      content: 'This failed payload must not be previewed.',
+    }),
+  }])
+
+  assert.equal(artifact, null)
+})
+
 test('directory probes open a bounded text preview while failed reads remain hidden', () => {
   const artifact = buildLocalFilePreviewArtifact([{
     path: 'D:\\demo',
@@ -161,19 +263,23 @@ test('a fresh chat authorizes, reads, enables least-privilege tools, and opens t
     write_file: false,
     edit_file: false,
   }, access), {
-    enabled: ['list_directory', 'read_file'],
-    disabled: ['edit_file', 'write_file'],
+    enabled: ['read_file'],
+    disabled: ['edit_file', 'list_directory', 'write_file'],
   })
 
+  const calls = []
   const probe = createLocalPathAccessProbe('zh', {
-    execute: async (call) => call.name === 'list_directory'
-      ? { ok: false, content: JSON.stringify({ error: 'not a directory' }) }
-      : {
-          ok: true,
-          content: JSON.stringify({ path, content: '# Fresh chat', returnedLines: 1, totalLines: 1 }),
-        },
+    execute: async (call) => {
+      calls.push(call)
+      return {
+        ok: true,
+        content: JSON.stringify({ path, content: '# Fresh chat', returnedLines: 1, totalLines: 1 }),
+      }
+    },
   })
   const artifact = buildLocalFilePreviewArtifact(await probe(access), { messageId: 'fresh:assistant' })
+  assert.deepEqual(calls.map((call) => call.name), ['read_file'])
+  assert.equal(JSON.parse(calls[0].arguments).path, path)
   assert.equal(artifact.messageId, 'fresh:assistant')
   assert.equal(artifact.preview.path, path)
   assert.equal(artifact.preview.title, 'README.md')

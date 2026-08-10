@@ -8,7 +8,6 @@ import {
   createCompactionArchive,
   isValidSemanticCompactionSummary,
   replaceCompactionSummary,
-  validateToolCallChain,
 } from './compactionService.js'
 import { writeToolAudit } from '../utils/audit.js'
 import { logWarn } from '../utils/logger.js'
@@ -333,8 +332,52 @@ export function trimOldestContext(messages = [], fraction = 0.1) {
   const system = messages.filter((message) => message?.role === 'system')
   const nonSystem = messages.filter((message) => message?.role !== 'system')
   if (nonSystem.length <= 1) return messages
-  const removeCount = Math.max(1, Math.ceil(nonSystem.length * fraction))
-  const kept = nonSystem.slice(removeCount)
+
+  // The most recent user message is the active objective for this turn. The
+  // final overflow fallback may discard stale goals, but must retain the
+  // request that the current tool work is actually trying to satisfy.
+  const protectedIndexes = new Set()
+  let latestUserIndex = -1
+  for (let index = nonSystem.length - 1; index >= 0; index -= 1) {
+    if (nonSystem[index]?.role === 'user') {
+      latestUserIndex = index
+      break
+    }
+  }
+  if (latestUserIndex >= 0) protectedIndexes.add(latestUserIndex)
+
+  // Keep the latest tool-call message and all of its matching results as one
+  // unit.  Cutting through this boundary either breaks the provider protocol
+  // or removes the most recent verified working state.
+  let latestToolCallIndex = -1
+  for (let index = nonSystem.length - 1; index >= 0; index -= 1) {
+    const message = nonSystem[index]
+    if (message?.role === 'assistant' && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+      latestToolCallIndex = index
+      break
+    }
+  }
+  if (latestToolCallIndex >= 0) {
+    protectedIndexes.add(latestToolCallIndex)
+    const latestToolCallIds = new Set(
+      nonSystem[latestToolCallIndex].tool_calls.map((call) => call?.id).filter(Boolean),
+    )
+    for (let index = latestToolCallIndex + 1; index < nonSystem.length; index += 1) {
+      const message = nonSystem[index]
+      if (message?.role === 'tool' && latestToolCallIds.has(message.tool_call_id)) {
+        protectedIndexes.add(index)
+      }
+    }
+  }
+
+  const requestedRemoveCount = Math.max(1, Math.ceil(nonSystem.length * fraction))
+  const removableIndexes = nonSystem
+    .map((_, index) => index)
+    .filter((index) => !protectedIndexes.has(index))
+    .slice(0, requestedRemoveCount)
+  if (removableIndexes.length === 0) return messages
+  const removedIndexes = new Set(removableIndexes)
+  const kept = nonSystem.filter((_, index) => !removedIndexes.has(index))
   const seen = new Set()
   const repaired = []
   for (const message of kept) {
@@ -349,9 +392,9 @@ export function trimOldestContext(messages = [], fraction = 0.1) {
   }
   const trimmed = [...system, {
     role: 'system',
-    content: `Context overflow recovery removed the oldest ${removeCount} non-system message(s). Continue from the preserved summary and recent history.`,
+    content: `Context overflow recovery removed the oldest ${removedIndexes.size} non-system message(s). The latest user objective and latest tool state were preserved.`,
   }, ...repaired]
-  return validateToolCallChain(trimmed).ok ? trimmed : [...system, ...repaired.filter((message) => message?.role !== 'tool')]
+  return trimmed
 }
 
 export async function callModelWithContextRecovery({

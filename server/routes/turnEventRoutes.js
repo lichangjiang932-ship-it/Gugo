@@ -3,8 +3,14 @@ import { resolveAuthMode } from '../adapters/authAccount.js'
 import { readJson, sendJson } from '../utils.js'
 import { getTurnEngine, TurnEngineError } from '../services/TurnEngine.js'
 import { listTurnEvents, subscribeTurnEvents } from '../services/turnEventStore.js'
+import { subscribeTurnActivities } from '../services/turnActivityBus.js'
+import { TurnSteeringError } from '../services/turnSteeringStore.js'
 
-const TERMINAL_EVENTS = new Set(['turn.completed', 'turn.cancelled', 'turn.failed'])
+// An interruption ends this transport attempt, but the persisted turn remains
+// non-terminal so a later resume can continue from its durable checkpoint.
+const STREAM_END_EVENTS = new Set([
+  'turn.completed', 'turn.paused', 'turn.cancelled', 'turn.failed', 'turn.interrupted',
+])
 const DEFAULT_STREAM_POLL_INTERVAL_MS = 1_000
 const MIN_STREAM_POLL_INTERVAL_MS = 100
 const MAX_STREAM_POLL_INTERVAL_MS = 30_000
@@ -33,7 +39,9 @@ function routeParts(pathname) {
 }
 
 function sendError(res, error) {
-  const status = error instanceof TurnEngineError ? error.status : 400
+  const status = error instanceof TurnEngineError || error instanceof TurnSteeringError
+    ? error.status
+    : 400
   return sendJson(res, status, {
     error: {
       code: error?.code || 'INVALID_TURN_REQUEST',
@@ -64,29 +72,42 @@ export async function handleTurnEventRequest(
       let replaying = true
       let closed = false
       const pending = []
+      const pendingActivities = []
       let heartbeat = null
       let databasePoll = null
-      let unsubscribe = () => {}
+      let unsubscribeEvents = () => {}
+      let unsubscribeActivities = () => {}
       const cleanup = () => {
         if (closed) return
         closed = true
         if (heartbeat) clearInterval(heartbeat)
         if (databasePoll) clearInterval(databasePoll)
-        unsubscribe()
+        unsubscribeEvents()
+        unsubscribeActivities()
       }
       const sendEvent = (event) => {
         if (closed || event.sequence <= lastSequence) return
         lastSequence = event.sequence
         sendSse(res, 'turn_event', event, event.sequence)
-        if (TERMINAL_EVENTS.has(event.type)) {
+        if (STREAM_END_EVENTS.has(event.type)) {
           cleanup()
           res.end()
         }
       }
+      const sendActivity = (activity) => {
+        if (closed) return
+        // Live activities are intentionally id-less and do not move the
+        // durable sequence cursor used for replay/reconnect.
+        sendSse(res, 'turn_activity', activity)
+      }
 
-      unsubscribe = subscribeTurnEvents({ userId, sessionId, turnId }, (event) => {
+      unsubscribeEvents = subscribeTurnEvents({ userId, sessionId, turnId }, (event) => {
         if (replaying) pending.push(event)
         else sendEvent(event)
+      })
+      unsubscribeActivities = subscribeTurnActivities({ userId, sessionId, turnId }, (activity) => {
+        if (replaying) pendingActivities.push(activity)
+        else sendActivity(activity)
       })
       res.writeHead(200, {
         'Content-Type': 'text/event-stream; charset=utf-8',
@@ -102,6 +123,7 @@ export async function handleTurnEventRequest(
       for (const event of replay) sendEvent(event)
       replaying = false
       pending.sort((a, b) => a.sequence - b.sequence).forEach(sendEvent)
+      pendingActivities.forEach(sendActivity)
       if (!closed) {
         // The in-memory subscription only observes events appended by this
         // process. Polling the shared database keeps SSE streams live when a
@@ -155,6 +177,8 @@ export async function handleTurnEventRequest(
         agentId: body.agentId || null,
         skillIds: body.skillIds,
         toolsConfig: body.toolsConfig,
+        intentMode: body.intentMode,
+        attachments: body.attachments,
         authMode: resolveAuthMode(env),
       })
       return sendJson(res, 202, { turn })
@@ -168,13 +192,26 @@ export async function handleTurnEventRequest(
           ? sendJson(res, 200, { turn })
           : sendJson(res, 404, { error: { code: 'TURN_NOT_FOUND', message: 'turn not found' } })
       }
-      if (req.method === 'POST' && (parts[3] === 'cancel' || parts[3] === 'resume')) {
+      if (req.method === 'POST' && parts[3] === 'steer' && parts.length === 4) {
+        const body = await readJson(req)
+        const steering = await engine.steerTurn({
+          userId,
+          sessionId: body.sessionId,
+          turnId,
+          content: body.content,
+          clientRequestId: body.clientRequestId,
+          authMode: resolveAuthMode(env),
+        })
+        return sendJson(res, 202, { steering })
+      }
+      if (req.method === 'POST' && (parts[3] === 'cancel' || parts[3] === 'resume') && parts.length === 4) {
         const body = await readJson(req)
         const action = parts[3] === 'cancel' ? 'cancelTurn' : 'resumeTurn'
         const turn = await engine[action]({
           userId,
           sessionId: body.sessionId,
           turnId,
+          ...(parts[3] === 'resume' ? { resolution: body.resolution ?? null } : {}),
           authMode: resolveAuthMode(env),
         })
         return sendJson(res, parts[3] === 'resume' ? 202 : 200, { turn })

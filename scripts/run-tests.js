@@ -66,7 +66,6 @@ const viteWrapperTests = new Set([
   normalize('tests/RightPreviewPane.test.js'),
   normalize('tests/RightWorkbench.test.js'),
   normalize('tests/SlashInlinePanelHost.test.js'),
-  normalize('tests/slashAutocompleteComponent.test.js'),
 ])
 
 function requiresNativeTransform(file) {

@@ -100,11 +100,19 @@ export function releaseJobSteeringLease({ jobId, userId, leaseId } = {}) {
   `).run(jobId, userId, leaseId).changes
 }
 
-/** Internal startup recovery: no user input is involved in the target set. */
-export function releaseAllJobSteeringLeases() {
+/**
+ * Internal startup recovery. Steering held by a live execution lease belongs
+ * to another process and must not be made visible to a second model loop.
+ */
+export function releaseAllJobSteeringLeases({ now = Date.now() } = {}) {
   return getDb().prepare(`
     UPDATE job_steering_messages
     SET status = 'queued', lease_id = NULL, leased_at = NULL
     WHERE status = 'leased'
-  `).run().changes
+      AND NOT EXISTS (
+        SELECT 1 FROM job_execution_leases AS lease
+        WHERE lease.job_id = job_steering_messages.job_id
+          AND lease.expires_at > ?
+      )
+  `).run(now).changes
 }

@@ -124,6 +124,111 @@ test('request_directory: 拒绝空用途和非法读写模式', () => {
   assert.throws(() => requestDirectoryTool({ purpose: '输出文件', access_mode: 'all_files' }), /access_mode/)
 })
 
+test('request_directory: an existing sufficient directory grant continues without pausing', async () => {
+  const result = await dispatchAgenticTool('request_directory', {
+    purpose: 'Write and render the requested PDF.',
+    access_mode: 'read_write',
+    suggested_path: 'D:\\Reports',
+  }, {
+    userId: 'authorized-user',
+    resolveDirectoryGrant: ({ userId, rawPath, accessMode }) => {
+      assert.equal(userId, 'authorized-user')
+      assert.equal(rawPath, 'D:\\Reports')
+      assert.equal(accessMode, 'read_write')
+      return { path: 'D:\\Reports', accessMode: 'read_write' }
+    },
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.paused, false)
+  assert.equal(result.already_authorized, true)
+  assert.deepEqual(result.authorization, {
+    path: 'D:\\Reports',
+    resource_type: 'directory',
+    access_mode: 'read_write',
+  })
+  assert.equal(isLoopPauseResult(result), false)
+})
+
+test('request_directory: explanatory suffixes are removed only from the suggested path', () => {
+  const lookedUpPaths = []
+  const result = requestDirectoryTool({
+    purpose: 'Create an output file.',
+    access_mode: 'read_write',
+    suggested_path: 'D:\\foo\uFF08\u4ECE\u672A\u6388\u6743\uFF09\u3002',
+  }, {
+    userId: 'suggestion-user',
+    directoryPathExists: () => false,
+    resolveDirectoryGrant: ({ rawPath }) => {
+      lookedUpPaths.push(rawPath)
+      return null
+    },
+  })
+
+  assert.equal(result.paused, true)
+  assert.equal(result.clarification.suggested_path, 'D:\\foo')
+  assert.deepEqual(lookedUpPaths, ['D:\\foo'])
+})
+
+test('request_directory: authorization notes followed by Chinese action prose are removed', () => {
+  const cases = [
+    [
+      'D:\\gugo-pdf-fill-e2e2-20260810-1415\uFF08\u4ECE\u672A\u6388\u6743\uFF09\u4E2D\u8F93\u51FA',
+      'D:\\gugo-pdf-fill-e2e2-20260810-1415',
+    ],
+    ['D:\\draft\uFF08\u5C1A\u672A\u6388\u6743\uFF09\u4E2D\u521B\u5EFA\u586B\u5199\u540E\u7684 PDF', 'D:\\draft'],
+    ['D:\\render\uFF08\u9700\u8981\u6388\u6743\uFF09\u5185\u751F\u6210\u9884\u89C8\u56FE\u3002', 'D:\\render'],
+  ]
+
+  for (const [suggestedPath, expected] of cases) {
+    const result = requestDirectoryTool({
+      purpose: 'Create output files.',
+      access_mode: 'read_write',
+      suggested_path: suggestedPath,
+    }, {
+      directoryPathExists: () => false,
+    })
+    assert.equal(result.clarification.suggested_path, expected)
+  }
+})
+
+test('request_directory: real or ordinary parenthesized directory names are preserved', () => {
+  const existing = 'D:\\archive\uFF08\u4ECE\u672A\u6388\u6743\uFF09\u4E2D\u8F93\u51FA'
+  const existingResult = requestDirectoryTool({
+    purpose: 'Read an existing directory.',
+    suggested_path: existing,
+  }, {
+    directoryPathExists: (candidate) => candidate === existing,
+  })
+  const ordinaryResult = requestDirectoryTool({
+    purpose: 'Read an archive.',
+    suggested_path: 'D:\\Reports (2026).',
+  }, {
+    directoryPathExists: () => false,
+  })
+  const ordinaryWithActionResult = requestDirectoryTool({
+    purpose: 'Create a report.',
+    suggested_path: 'D:\\Reports\uFF082026\uFF09\u4E2D\u8F93\u51FA\u6587\u4EF6',
+  }, {
+    directoryPathExists: () => false,
+  })
+
+  assert.equal(existingResult.clarification.suggested_path, existing)
+  assert.equal(ordinaryResult.clarification.suggested_path, 'D:\\Reports (2026)')
+  assert.equal(ordinaryWithActionResult.clarification.suggested_path, 'D:\\Reports\uFF082026\uFF09')
+})
+
+test('request_directory: English authorization notes are removed from suggestions', () => {
+  const result = requestDirectoryTool({
+    purpose: 'Create an output file.',
+    suggested_path: 'D:\\output (not authorized).',
+  }, {
+    directoryPathExists: () => false,
+  })
+
+  assert.equal(result.clarification.suggested_path, 'D:\\output')
+})
+
 test('request_directory spec tells models to request read_write for file changes', () => {
   const spec = AGENTIC_TOOL_SPECS.find((item) => item.function.name === 'request_directory')
   assert.match(spec.function.description, /create, edit, patch, rename, or delete files/)

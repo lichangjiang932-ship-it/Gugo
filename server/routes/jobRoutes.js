@@ -148,8 +148,15 @@ export async function handleJobRequest(req, res, runtime) {
       const stepId = decodeURIComponent(parts[4])
       const step = runtime.getJob(jobId, { userId })?.steps?.find((s) => s.id === stepId)
       if (!step) return sendJson(res, 404, { error: 'step not found' })
-      runtime.completeStep(jobId, stepId, { userId, evidence: body.evidence || [] })
-      return sendJson(res, 200, { ok: true })
+      try {
+        runtime.completeStep(jobId, stepId, { userId, evidence: body.evidence ?? [] })
+        return sendJson(res, 200, { ok: true })
+      } catch (error) {
+        if (error?.statusCode === 422 && String(error?.code || '').startsWith('JOB_COMPLETION_EVIDENCE_')) {
+          return sendJson(res, 422, { error: error.message, code: error.code })
+        }
+        throw error
+      }
     }
 
     // ★ 结构化计划: 创建含风险/目标/验收标准的计划

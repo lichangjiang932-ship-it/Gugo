@@ -104,3 +104,82 @@ test('stream failover only switches before the first emitted event', async () =>
     }
   }, /late failure/)
 })
+
+test('stream retries a transient failure on the same provider only before its first event', async () => {
+  const attempts = []
+  async function* transient(config) {
+    attempts.push(config.providerId)
+    if (attempts.length === 1) {
+      throw Object.assign(new Error('temporarily overloaded'), { status: 503 })
+    }
+    yield 'recovered text'
+  }
+
+  const received = []
+  for await (const item of streamWithProviderFailover([
+    { providerId: 'primary', modelName: 'local-model' },
+    { providerId: 'backup', modelName: 'local-model' },
+  ], transient, {
+    maxAttemptsPerProvider: 2,
+    retrySleepImpl: async () => {},
+  })) received.push(item)
+
+  assert.deepEqual(attempts, ['primary', 'primary'])
+  assert.deepEqual(received, [{
+    event: 'recovered text',
+    config: { providerId: 'primary', modelName: 'local-model' },
+  }])
+})
+
+test('stream never retries or fails over after output has started', async () => {
+  const attempts = []
+  async function* lateFailure(config) {
+    attempts.push(config.providerId)
+    yield 'visible prefix'
+    throw Object.assign(new Error('connection lost after output'), { status: 503 })
+  }
+
+  const received = []
+  await assert.rejects(async () => {
+    for await (const item of streamWithProviderFailover([
+      { providerId: 'primary' },
+      { providerId: 'backup' },
+    ], lateFailure, {
+      maxAttemptsPerProvider: 3,
+      retrySleepImpl: async () => {},
+    })) received.push(item)
+  }, /connection lost after output/)
+
+  assert.deepEqual(attempts, ['primary'])
+  assert.deepEqual(received, [{ event: 'visible prefix', config: { providerId: 'primary' } }])
+})
+
+test('breaking stream consumption closes the active provider iterator exactly once', async () => {
+  let returnCalls = 0
+  let nextCalls = 0
+  const source = {
+    [Symbol.asyncIterator]() {
+      return {
+        async next() {
+          nextCalls += 1
+          return { done: false, value: `chunk-${nextCalls}` }
+        },
+        async return() {
+          returnCalls += 1
+          return { done: true }
+        },
+      }
+    },
+  }
+
+  for await (const item of streamWithProviderFailover(
+    [{ providerId: 'primary' }],
+    () => source,
+  )) {
+    assert.equal(item.event, 'chunk-1')
+    break
+  }
+
+  assert.equal(nextCalls, 1)
+  assert.equal(returnCalls, 1)
+})

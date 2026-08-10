@@ -129,6 +129,40 @@ test('重复调用熔断不受影响', () => {
   assert.equal(fourth.result.code, 'repeated_tool_call')
 })
 
+test('同一工具不断更换错误参数也会被判定为无进展', () => {
+  const guard = createToolLoopGuard({ maxSameToolFailures: 3, maxConsecutiveErrors: 99 })
+  for (let index = 0; index < 2; index += 1) {
+    const verdict = guard.afterCall(
+      { name: 'read_file', args: { path: `missing-${index}.txt` } },
+      { ok: false, error: 'ENOENT' },
+    )
+    assert.equal(verdict.ok, true)
+  }
+  const stopped = guard.afterCall(
+    { name: 'read_file', args: { path: 'missing-final.txt' } },
+    { ok: false, error: 'ENOENT' },
+  )
+  assert.equal(stopped.ok, false)
+  assert.match(stopped.reason, /read_file/)
+})
+
+test('跨参数熔断不抢占小模型的参数自纠错预算且真实成功会重置计数', () => {
+  const guard = createToolLoopGuard({ maxSameToolFailures: 3, maxAuthoringErrors: 20 })
+  for (let index = 0; index < 10; index += 1) {
+    assert.equal(guard.afterCall(
+      { name: 'read_file', args: { path: `attempt-${index}` } },
+      { ok: false, code: 'tool_arguments_validation_failed', error: 'bad path shape' },
+    ).ok, true)
+  }
+  guard.afterCall({ name: 'read_file', args: { path: 'missing-a' } }, { ok: false, error: 'ENOENT' })
+  guard.afterCall({ name: 'read_file', args: { path: 'missing-b' } }, { ok: false, error: 'ENOENT' })
+  assert.equal(guard.afterCall({ name: 'read_file', args: { path: 'found.txt' } }, { ok: true, data: [] }).ok, true)
+  assert.equal(guard.afterCall(
+    { name: 'read_file', args: { path: 'missing-c' } },
+    { ok: false, error: 'ENOENT' },
+  ).ok, true, 'a successful result from the same tool must reset its stale failure count')
+})
+
 /* ------------------------------------------------------------------ *
  * 集成:预算耗尽 / 模型报错都不能空手而归
  * ------------------------------------------------------------------ */
@@ -136,7 +170,7 @@ test('重复调用熔断不受影响', () => {
 const os = await import('node:os')
 const path = await import('node:path')
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-continuity-tests', String(process.pid))
-const { runToolsLoop } = await import('../server/services/jobTools.js')
+const { runToolsLoop, SERVER_TOOL_SPECS } = await import('../server/services/jobTools.js')
 const { attachJobBudget } = await import('../server/utils/jobBudget.js')
 
 function fakeReadTool() {
@@ -175,6 +209,7 @@ test('预算耗尽时必须给出收尾总结,绝不返回空文本', async () =
   })
 
   assert.equal(result.budgetExceeded, true, '应该确实是预算耗尽路径')
+  assert.equal(result.incomplete, true)
   // ★ 这是整个批次最关键的一条断言:
   // 原实现在这条路径上直接 return finalText,而 finalText 必然是 '' ——
   // 用户看到「任务跑了很久然后一个字都没有」,即「做到一半没后续」。
@@ -260,4 +295,88 @@ test('用户主动取消不被降级吞掉 —— AbortError 必须继续上抛'
     }),
     (error) => error.name === 'AbortError',
   )
+})
+
+test('托管附件优先使用本地读取且不暴露云盘发现或目录授权工具', async () => {
+  const wantedNames = new Set(['read_file', 'request_directory', 'dropbox_list_files', 'google_drive_search'])
+  const toolSpecs = SERVER_TOOL_SPECS.filter((item) => wantedNames.has(item?.function?.name))
+  let observed
+  const result = await runToolsLoop({
+    job: {
+      id: 'job-managed-attachment',
+      userId: 'attachment-user',
+      origin: 'chat',
+      prompt: '分析我上传的报告',
+      hasManagedAttachments: true,
+      managedAttachments: [{ uri: 'attachment://report-id', name: 'report.pdf' }],
+    },
+    step: { id: 'step-managed-attachment', kind: 'chat' },
+    messages: [{ role: 'user', content: '[GUGO_MANAGED_ATTACHMENT id="report-id" uri="attachment://report-id" name="report.pdf"]' }],
+    toolSpecs,
+    maxIters: 1,
+    enableToolHooks: false,
+    runModel: async (request) => {
+      observed = request
+      return { content: '已分析上传文件', toolCalls: [] }
+    },
+  })
+  const names = observed.tools.map((item) => item.function.name)
+  assert.ok(names.includes('read_file'))
+  assert.equal(names.includes('request_directory'), false)
+  assert.equal(names.includes('dropbox_list_files'), false)
+  assert.equal(names.includes('google_drive_search'), false)
+  assert.match(observed.messages.map((item) => item.content || '').join('\n'), /attachment:\/\/report-id/)
+  assert.equal(result.text, '已分析上传文件')
+})
+
+test('编号步骤要求直接执行，且无工具证据时不能接受模型凭空声称完成', async () => {
+  let observedMessages = []
+  const result = await runToolsLoop({
+    job: { id: 'job-direct-execution', userId: null, origin: 'chat', prompt: '1. 创建文件\n2. 写入内容\n3. 检查结果' },
+    step: { id: 'step-direct-execution', kind: 'chat' },
+    messages: [{ role: 'user', content: '1. 创建文件\n2. 写入内容\n3. 检查结果' }],
+    toolSpecs: [],
+    maxIters: 1,
+    enableToolHooks: false,
+    runModel: async ({ messages }) => {
+      observedMessages = messages
+      return { content: '已完成', toolCalls: [] }
+    },
+  })
+  const systemText = observedMessages.filter((item) => item.role === 'system').map((item) => item.content).join('\n')
+  assert.match(systemText, /\[DIRECT EXECUTION REQUIRED\]/)
+  assert.match(systemText, /Do not merely print a script/)
+  assert.equal(result.incomplete, true)
+  assert.equal(result.reason, 'execution_evidence_missing')
+  assert.match(result.text, /尚未完成|实际执行结果/)
+})
+
+test('不同参数反复失败会快速收尾并保留最终回复', async () => {
+  const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
+  let calls = 0
+  const result = await runToolsLoop({
+    job: { id: 'job-changing-arguments', userId: null, origin: 'chat', prompt: '读取目标文件' },
+    step: { id: 'step-changing-arguments', kind: 'chat' },
+    messages: [{ role: 'user', content: '读取目标文件' }],
+    toolSpecs: [readFile],
+    maxIters: 20,
+    enableToolHooks: false,
+    runModel: async ({ toolChoice }) => {
+      calls += 1
+      if (toolChoice === 'none') return { content: '未找到文件；请确认唯一的文件名。', toolCalls: [] }
+      return {
+        content: '',
+        toolCalls: [{
+          id: `read-${calls}`,
+          type: 'function',
+          function: { name: 'read_file', arguments: JSON.stringify({ path: `missing-${calls}.txt` }) },
+        }],
+      }
+    },
+    executeTool: async () => ({ ok: false, code: 'ENOENT', error: 'not found' }),
+  })
+  assert.equal(result.noProgress, true)
+  assert.equal(result.incomplete, true)
+  assert.equal(result.text, '未找到文件；请确认唯一的文件名。')
+  assert.equal(calls, 5, '四次失败后只允许一次无工具收尾调用')
 })

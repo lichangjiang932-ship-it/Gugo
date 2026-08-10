@@ -36,7 +36,6 @@ import {
   isNativeProviderKind,
 } from './nativeModelProviders.js'
 import {
-  extractModelContentText,
   extractModelResponseError,
   extractUsage,
   parseModelProviderResponse,
@@ -45,7 +44,14 @@ import {
 import { createTextToolCallDeltaFilter, extractTextToolCalls } from '../utils/textToolCalls.js'
 import { calculateModelCostUsd, getUsageStats, recordUsage } from './modelUsage.js'
 import { requestNonStreamingAsEvents } from './modelNonStreaming.js'
-import { readJsonModelResponseEvents, readModelSseLines } from './modelResponseStream.js'
+import {
+  createCompatibleModelStreamState,
+  decodeModelStreamLine,
+  normalizeCompatibleModelStreamPayload,
+  readJsonModelResponseEvents,
+  readModelSseLines,
+} from './modelResponseStream.js'
+import { streamWithProviderFallback } from '../utils/modelStreamFailover.js'
 
 export { extractUsage, parseModelProviderResponse, parseOpenAICompatibleResponse, stripEmbeddedReasoning } from './modelProviderResponse.js'
 export { getUsageStats, recordUsage, resetUsageStats } from './modelUsage.js'
@@ -320,27 +326,22 @@ export async function runWithProviderFailover(configs, operation, { signal } = {
   throw new Error('没有可用的模型 provider')
 }
 
-export async function* streamWithProviderFailover(configs, createStream, { signal } = {}) {
-  for (let index = 0; index < configs.length; index += 1) {
-    const config = configs[index]
-    let emitted = false
-    try {
-      for await (const event of createStream(config)) {
-        emitted = true
-        yield { event, config }
-      }
-      return
-    } catch (error) {
-      const hasNext = index + 1 < configs.length
-      if (emitted || !hasNext || signal?.aborted || !isProviderFailoverError(error)) throw error
-      logWarn('model.provider_failover', error, {
-        from: config.providerId || config.baseUrl,
-        to: configs[index + 1].providerId || configs[index + 1].baseUrl,
-        model: config.modelName,
-        stream: true,
-      })
-    }
-  }
+export async function* streamWithProviderFailover(configs, createStream, {
+  ...options
+} = {}) {
+  yield* streamWithProviderFallback(configs, createStream, {
+    ...options,
+    isFailoverError: isProviderFailoverError,
+    onRetry: ({ attempt, delayMs, error, config }) => logWarn('model.stream_retry', error, {
+      attempt, delayMs, provider: config.providerId || config.baseUrl, model: config.modelName,
+    }),
+    onFailover: ({ error, config, nextConfig }) => logWarn('model.provider_failover', error, {
+      from: config.providerId || config.baseUrl,
+      to: nextConfig.providerId || nextConfig.baseUrl,
+      model: config.modelName,
+      stream: true,
+    }),
+  })
 }
 
 export function getToolMaxRounds(env = process.env) {
@@ -1008,6 +1009,7 @@ export async function callStreamingModelWithTools({
   signal,
   onTextDelta,
   onReasoningDelta,
+  onToolCallReady,
 } = {}) {
   const runtimeEnv = buildUserModelEnv({ userId, env })
   const config = loadModelConfig(runtimeEnv)
@@ -1058,6 +1060,17 @@ export async function callStreamingModelWithTools({
       reasoningChars += delta.length
       if (typeof onReasoningDelta === 'function') {
         await onReasoningDelta(delta, { modelName: activeConfig.modelName })
+      }
+    } else if (event?.type === 'tool_call_ready') {
+      // This is activity evidence only. The canonical tool_calls batch remains
+      // buffered until the provider finishes, so checkpointing and execution
+      // still happen exactly once through the normal tool-loop path.
+      const readyCall = canonicalStreamToolCalls([event.toolCall])[0]
+      if (readyCall?.function?.name && typeof onToolCallReady === 'function') {
+        await onToolCallReady(readyCall, {
+          index: event.index,
+          modelName: activeConfig.modelName,
+        })
       }
     } else if (event?.type === 'tool_calls') {
       toolCalls = canonicalStreamToolCalls(event.toolCalls)
@@ -1248,26 +1261,33 @@ export async function* streamOpenAICompatible({
     const nativeStreamState = isNativeProviderKind(profile.kind)
       ? createNativeProviderStreamState(profile.kind)
       : null
+    const compatibleStreamState = createCompatibleModelStreamState()
     let finishReason = null
     // 思考累计字数 + 上限(0 = 不限)。见下面 REASONING_RUNAWAY 的注释。
     let reasoningChars = 0
     const reasoningCharLimit = (() => {
-      const raw = Number(env?.MODEL_REASONING_MAX_CHARS)
+      const executionWithTools = Array.isArray(tools)
+        && tools.length > 0
+        && String(toolChoice || '').toLowerCase() !== 'none'
+      const configured = executionWithTools
+        ? (env?.MODEL_EXECUTION_REASONING_MAX_CHARS ?? env?.MODEL_REASONING_MAX_CHARS)
+        : env?.MODEL_REASONING_MAX_CHARS
+      const raw = Number(configured)
       if (Number.isFinite(raw) && raw >= 0) return Math.floor(raw)
-      return 60_000
+      // Execution turns should act before they spend an entire response
+      // re-deriving plans or layout arithmetic. The tool loop can recover this
+      // bounded abort with a direct-action prompt; ordinary answer turns keep
+      // the larger ceiling for genuinely long reasoning.
+      return executionWithTools ? 20_000 : 60_000
     })()
     let lastUsage = null
     for await (const line of readModelSseLines(reader, {
       onFirstByte,
       onChunk: () => armTimer('idle', profile.timeouts.idleMs),
     })) {
-        const trimmed = line.trim()
-        // The SSE spec permits both `data:value` and `data: value`. LM Studio,
-        // llama.cpp and small compatibility proxies do not all choose the same
-        // spelling, so requiring the space can silently discard every token.
-        if (!trimmed.startsWith('data:')) continue
-        const payload = trimmed.slice(5).trimStart()
-        if (payload === '[DONE]') {
+        const decoded = decodeModelStreamLine(line)
+        if (!decoded) continue
+        if (decoded.done) {
           if (nativeStreamState) {
             for (const event of finishNativeProviderStream(nativeStreamState)) yield event
             return
@@ -1284,103 +1304,73 @@ export async function* streamOpenAICompatible({
           }
           return
         }
-        let chunk
-        try {
-          chunk = JSON.parse(payload)
-        } catch {
-          // 只吞 JSON 解析失败。业务异常（尤其 REASONING_RUNAWAY）必须向外传播。
+        const chunk = decoded.data
+        const responseError = extractModelResponseError(chunk)
+        if (responseError) throw responseError
+        if (nativeStreamState) {
+          const nativeEvents = consumeNativeProviderStreamPayload(chunk, nativeStreamState)
+          for (const event of nativeEvents) {
+            if (event.type === 'reasoning' && event.delta) {
+              reasoningChars += event.delta.length
+              if (reasoningCharLimit > 0 && reasoningChars > reasoningCharLimit) {
+                const error = new Error(`模型思考超过 ${Math.round(reasoningCharLimit / 1000)}k 字仍未给出正文，已中止以避免继续消耗资源。`)
+                error.code = 'REASONING_RUNAWAY'
+                try { await reader.cancel(error) } catch { /* best effort */ }
+                controller.abort(error)
+                throw error
+              }
+            }
+            yield event
+          }
+          if (nativeStreamState.finished) return
           continue
         }
-          const responseError = extractModelResponseError(chunk)
-          if (responseError) throw responseError
-          if (nativeStreamState) {
-            const nativeEvents = consumeNativeProviderStreamPayload(chunk, nativeStreamState)
-            for (const event of nativeEvents) {
-              if (event.type === 'reasoning' && event.delta) {
-                reasoningChars += event.delta.length
-                if (reasoningCharLimit > 0 && reasoningChars > reasoningCharLimit) {
-                  const error = new Error(`模型思考超过 ${Math.round(reasoningCharLimit / 1000)}k 字仍未给出正文，已中止以避免继续消耗资源。`)
-                  error.code = 'REASONING_RUNAWAY'
-                  try { await reader.cancel(error) } catch { /* best effort */ }
-                  controller.abort(error)
-                  throw error
-                }
-              }
-              yield event
-            }
-            if (nativeStreamState.finished) return
-            continue
+
+        // 所有 OpenAI-compatible 变体统一归一化。除了标准 choices，还覆盖
+        // Ollama NDJSON、Responses API、LM Studio/llama.cpp 裸 message/token。
+        const frame = normalizeCompatibleModelStreamPayload(chunk, compatibleStreamState)
+        const chunkUsage = extractUsage(chunk)
+        if (chunkUsage) {
+          lastUsage = chunkUsage
+          yield { type: 'usage', usage: chunkUsage }
+        }
+        if (frame.finishReason) finishReason = frame.finishReason
+        if (frame.reasoning) {
+          reasoningChars += frame.reasoning.length
+          if (reasoningCharLimit > 0 && reasoningChars > reasoningCharLimit) {
+            const error = new Error(
+              `模型思考超过 ${Math.round(reasoningCharLimit / 1000)}k 字仍未给出正文，已中止以避免继续消耗资源。`
+              + '通常是信息不足导致模型反复兜圈子（例如工具持续失败）。'
+              + '可以换一个非推理模型，或把任务拆小后重试。',
+            )
+            error.code = 'REASONING_RUNAWAY'
+            try { await reader.cancel(error) } catch { /* best effort */ }
+            controller.abort(error)
+            throw error
           }
-          // ★ usage 帧的 choices 是空数组,必须在 !choice 守卫之前取,
-          // 否则永远被 continue 跳过 —— 这正是以前命中率无法测量的原因。
-          const chunkUsage = extractUsage(chunk)
-          if (chunkUsage) {
-            lastUsage = chunkUsage
-            yield { type: 'usage', usage: chunkUsage }
-          }
-          const choice = chunk?.choices?.[0]
-          if (!choice) continue
-          const delta = choice.delta || {}
-          if (choice.finish_reason) finishReason = choice.finish_reason
-          // ★ 推理模型(qwen3.5 / DeepSeek-R1 / 各类 thinking 模型)在给出正文前
-          // 会先吐一大段思考。实测 LM Studio 上 reasoning_content 339ms 就开始来了,
-          // 而 content 要等到 11.6 秒 —— 不透传的话这 11 秒屏幕上什么都没有,
-          // 用户以为卡死了。字段名各家不一,三个都认。
-          const reasoning = delta.reasoning_content || delta.reasoning || delta.thinking || ''
-          if (reasoning) {
-            reasoningChars += reasoning.length
-            // ★ 思考失控保护。
-            //
-            // 事故:一轮对话思考了 167644 字(≈84000 token),持续占用上游资源,
-            // 最后还以 network error 收场,一个字的结论都没拿到。
-            // 推理模型在信息不足时(比如工具一直 404)会陷入"再想想"的循环,
-            // 它自己不会停,只能从外面掐。
-            //
-            // 到达上限就断开这次请求并明确报错,而不是继续消耗资源等一个
-            // 可能永远不来的正文。
-            if (reasoningCharLimit > 0 && reasoningChars > reasoningCharLimit) {
-              const error = new Error(
-                `模型思考超过 ${Math.round(reasoningCharLimit / 1000)}k 字仍未给出正文，已中止以避免继续消耗资源。`
-                + '通常是信息不足导致模型反复兜圈子（例如工具持续失败）。'
-                + '可以换一个非推理模型，或把任务拆小后重试。',
-              )
-              error.code = 'REASONING_RUNAWAY'
-              error.status = 0
-              // 仅 throw 不足以保证 undici 立即关闭上游响应；显式取消 reader 并
-              // abort fetch，避免模型在后台继续生成不可见的思考 token。
-              try { await reader.cancel(error) } catch { /* best effort */ }
-              controller.abort(error)
-              throw error
-            }
-            yield { type: 'reasoning', delta: reasoning }
-          }
-          // 文本增量
-          const text = extractModelContentText(delta.content)
-            || extractModelContentText(choice.text)
-            || extractModelContentText(choice.message?.content)
-          if (text) yield { type: 'text', delta: text }
-          // 工具调用增量
-          if (Array.isArray(delta.tool_calls)) {
-            for (const tc of delta.tool_calls) {
-              const idx = tc.index ?? 0
-              const existing = toolCallAcc.get(idx) || { id: '', name: '', arguments: '' }
-              if (tc.id) existing.id = tc.id
-              if (tc.function?.name) existing.name = tc.function.name
-              if (tc.function?.arguments) existing.arguments += tc.function.arguments
-              toolCallAcc.set(idx, existing)
-              // JSON 完整即允许调用方提前启动只读工具；最终仍会发 canonical
-              // tool_calls 帧，以便保持 assistant 上下文与结果顺序。
-              if (!readyToolCallIndexes.has(idx) && existing.id && existing.name && existing.arguments.trim()) {
-                try {
-                  JSON.parse(existing.arguments)
-                  readyToolCallIndexes.add(idx)
-                  yield { type: 'tool_call_ready', toolCall: { ...existing }, index: idx }
-                } catch {
-                  // 参数仍是分片，继续累积。
-                }
-              }
+          yield { type: 'reasoning', delta: frame.reasoning }
+        }
+        if (frame.text) yield { type: 'text', delta: frame.text }
+        for (const delta of frame.toolCallDeltas) {
+          const idx = delta.index ?? 0
+          const existing = toolCallAcc.get(idx) || { id: '', name: '', arguments: '' }
+          if (delta.id) existing.id = delta.id
+          if (delta.name) existing.name = delta.name
+          if (delta.argumentsMode === 'replace') existing.arguments = delta.arguments
+          else if (delta.arguments) existing.arguments += delta.arguments
+          if (!existing.id && existing.name) existing.id = `call-${idx}-${existing.name}`
+          toolCallAcc.set(idx, existing)
+          if (!readyToolCallIndexes.has(idx) && existing.name && existing.arguments.trim()) {
+            try {
+              JSON.parse(existing.arguments)
+              readyToolCallIndexes.add(idx)
+              yield { type: 'tool_call_ready', toolCall: { ...existing }, index: idx }
+            } catch {
+              // 参数仍是分片，继续累积。
             }
           }
+        }
+        if (frame.terminal) break
     }
     if (nativeStreamState) {
       for (const event of finishNativeProviderStream(nativeStreamState)) yield event
@@ -1392,6 +1382,7 @@ export async function* streamOpenAICompatible({
         .sort((a, b) => a[0] - b[0])
         .map(([, v]) => v)
       yield { type: 'tool_calls', toolCalls: calls, finishReason: finishReason || 'tool_calls', usage: lastUsage }
+      return
     }
     // ★ 纯文本流也要把 finish_reason 交出去。
     //

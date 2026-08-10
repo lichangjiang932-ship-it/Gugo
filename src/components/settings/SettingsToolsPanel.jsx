@@ -7,7 +7,7 @@ const TOOLS = [
   { id: 'read_file', name: '读取本地文件', desc: '读取已授权路径内的 UTF-8 文件。' },
   { id: 'write_file', name: '写入本地文件', desc: '在已获读写授权的路径内创建或覆盖文件。' },
   { id: 'edit_file', name: '编辑本地文件', desc: '在已获读写授权的路径内精确替换文件内容。' },
-  { id: 'bash_exec', name: '执行 Shell 命令', desc: '运行测试、构建或检查命令；服务端还需显式启用。' },
+  { id: 'bash_exec', name: '执行代码与命令', desc: '在已授权的读写目录中运行 Python、Node、PowerShell 和项目命令；写入型命令每次仍需确认。' },
   { id: 'git_status', name: 'Git 状态', desc: '只读查看工作区的 git status。' },
   { id: 'git_diff', name: 'Git 差异', desc: '只读查看 unified diff。' },
   { id: 'run_project_check', name: '项目检查', desc: '仅允许运行 lint、test 或 build。' },

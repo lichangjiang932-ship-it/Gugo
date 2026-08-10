@@ -68,9 +68,12 @@ export class SseTransport {
     }
   }
 
-  async request(message, { timeoutMs } = {}) {
+  async request(message, { timeoutMs, signal } = {}) {
     if (this.closed) throw new Error(`MCP "${this.label}" 已关闭`)
+    if (signal?.aborted) throw signal.reason || new DOMException('MCP request cancelled', 'AbortError')
     const ctrl = new AbortController()
+    const abortFromCaller = () => ctrl.abort(signal.reason)
+    signal?.addEventListener?.('abort', abortFromCaller, { once: true })
     const t = setTimeout(() => ctrl.abort(), timeoutMs || this.timeoutMs)
     try {
       const resp = await fetch(this.url, {
@@ -92,8 +95,12 @@ export class SseTransport {
       const data = text ? JSON.parse(text) : {}
       if (data.error) throw new Error(data.error.message || 'MCP error')
       return data.result
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason || error
+      throw error
     } finally {
       clearTimeout(t)
+      signal?.removeEventListener?.('abort', abortFromCaller)
     }
   }
 

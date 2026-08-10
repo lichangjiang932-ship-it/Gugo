@@ -12,6 +12,7 @@ const { WEB_CONNECTOR_CATALOG } = await import('../shared/webConnectorCatalog.js
 const {
   getIntegrationByProvider,
   isIntegrationEnabled,
+  listEnabledIntegrationToolNames,
   listProviderRegistry,
   upsertIntegration,
 } = await import('../server/services/integrationsStore.js')
@@ -29,6 +30,7 @@ createUser({ id: 'u-connectors', email: 'connectors@example.com' })
 createUser({ id: 'u-connectors-other', email: 'connectors-other@example.com' })
 createUser({ id: 'u-connectors-all', email: 'connectors-all@example.com' })
 createUser({ id: 'u-connectors-persistent', email: 'connectors-persistent@example.com' })
+createUser({ id: 'u-connector-tool-visibility', email: 'connector-tool-visibility@example.com' })
 
 test.after(() => {
   closeDb()
@@ -61,6 +63,26 @@ test('GitHub connector decodes repository file content', async () => {
     },
   })
   assert.equal(result.content, '# Demo')
+})
+
+test('enabled integration tool visibility is user-scoped and excludes disabled providers', () => {
+  upsertIntegration({
+    userId: 'u-connector-tool-visibility',
+    provider: 'github',
+    enabled: true,
+    secret: { token: 'github-visible' },
+  })
+  upsertIntegration({
+    userId: 'u-connector-tool-visibility',
+    provider: 'dropbox',
+    enabled: false,
+    secret: { token: 'dropbox-hidden' },
+  })
+  const names = listEnabledIntegrationToolNames({ userId: 'u-connector-tool-visibility' })
+  assert.ok(names.includes('github_search_repositories'))
+  assert.ok(names.includes('github_get_file'))
+  assert.equal(names.includes('dropbox_list_files'), false)
+  assert.deepEqual(listEnabledIntegrationToolNames({ userId: 'u-connectors-other' }), [])
 })
 
 test('Browser defaults on and respects the saved Access toggle', () => {

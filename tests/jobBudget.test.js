@@ -17,6 +17,25 @@ test('model token budget stops the job after real usage crosses the hard cap', (
   assert.equal(budget.consumeModelCall().ok, false, 'no further model call may start')
 })
 
+test('cached prompt tokens are not charged repeatedly against the model token budget', () => {
+  const budget = createJobBudget({
+    maxModelCalls: 10,
+    maxModelTokens: 100,
+    maxCostUsd: 10,
+  })
+
+  assert.equal(budget.consumeModelCall().ok, true)
+  const status = budget.trackModelUsage({
+    promptTokens: 90,
+    completionTokens: 20,
+    cacheHitTokens: 80,
+    cacheMissTokens: 10,
+  }, 0.01)
+
+  assert.equal(status.ok, true)
+  assert.equal(budget.snapshot().modelTokens, 30)
+})
+
 test('model dollar budget stops the job after reported provider cost crosses the cap', () => {
   const budget = createJobBudget({
     maxModelCalls: 10,

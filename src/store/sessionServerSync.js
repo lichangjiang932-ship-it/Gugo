@@ -32,9 +32,16 @@ export function isServerBackedSession(session) {
   return Number.isInteger(session?.serverRevision)
 }
 
+export function needsServerTranscriptHydration(session) {
+  if (!isServerBackedSession(session)) return false
+  const messages = Array.isArray(session.messages) ? session.messages : []
+  return messages.length === 0 || messages.every((message) => (
+    message?.meta?.pendingServerSync === true || message?.meta?.streaming === true
+  ))
+}
+
 export function needsServerSessionSnapshot(session, hydratedRevision) {
-  return isServerBackedSession(session)
-    && (!Array.isArray(session.messages) || session.messages.length === 0)
+  return needsServerTranscriptHydration(session)
     && hydratedRevision !== session.serverRevision
 }
 
@@ -69,15 +76,56 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
       merged.meta = { ...serverMeta, ...localMeta }
       delete merged.meta.pendingServerSync
       if (serverMessage.role === 'assistant') {
+        const recoveryStub = serverMeta.serverRecoveryStub === true
         merged.meta.serverTurnId = serverMeta.serverTurnId ?? localMeta.serverTurnId ?? null
-        merged.meta.streaming = false
-        merged.meta.serverAuthoritative = true
+        merged.meta.streaming = recoveryStub
+        merged.meta.serverAuthoritative = !recoveryStub
+        if (recoveryStub) merged.meta.serverRecoveryStub = true
+        else delete merged.meta.serverRecoveryStub
         // A completed snapshot is the source of truth for persisted files.
         // Keep local artifacts only when an older server response does not
         // expose the field at all; an explicit server list must replace an
         // empty or partial list left behind by a missed live tool event.
         if (Object.hasOwn(serverMeta, 'serverArtifacts')) {
           merged.meta.serverArtifacts = serverMeta.serverArtifacts
+        }
+
+        const serverPauseSequence = Number.isInteger(serverMeta.serverLastSequence)
+          ? serverMeta.serverLastSequence
+          : null
+        const localSequence = Number.isInteger(localMeta.serverLastSequence)
+          ? localMeta.serverLastSequence
+          : null
+        const localResumeInFlight = localMeta.directoryAuthorizationPending === true
+          || localMeta.serverResumeResolution != null
+        const localHasNewerTurnState = serverPauseSequence !== null
+          && localSequence !== null
+          && localSequence > serverPauseSequence
+
+        if (serverMeta.paused === true && (localResumeInFlight || localHasNewerTurnState)) {
+          // A snapshot may race with the user's authorization or with newer
+          // streamed events. Retain that newer local lifecycle state. While an
+          // authorization is in flight, the server clarification is still the
+          // canonical request shown by the busy inline card.
+          merged.meta.streaming = localMeta.streaming === true
+          if (localResumeInFlight
+            && localMeta.serverClarification == null
+            && serverMeta.serverClarification != null) {
+            merged.meta.serverClarification = serverMeta.serverClarification
+          }
+        } else if (serverMeta.paused === true) {
+          // Persisted pause state is authoritative over stale live metadata.
+          // In particular, a local `serverClarification: null` must not erase
+          // the directory request before MessageRow can render its inline card.
+          merged.meta.paused = true
+          merged.meta.streaming = false
+          merged.meta.serverConnectionState = serverMeta.serverConnectionState || 'paused'
+          merged.meta.serverClarification = serverMeta.serverClarification ?? null
+          merged.meta.directoryAuthorizationPending = false
+          merged.meta.serverResumeResolution = null
+          if (serverPauseSequence !== null) {
+            merged.meta.serverLastSequence = serverPauseSequence
+          }
         }
       }
     }

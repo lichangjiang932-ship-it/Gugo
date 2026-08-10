@@ -20,6 +20,35 @@
 import { spawn } from 'node:child_process'
 
 const GRACE_MS = 2_000
+const WINDOWS_TREE_HANDLE_DRAIN_MS = 250
+const WINDOWS_TREE_KILL_TIMEOUT_MS = 6_000
+
+function windowsPowerShellPath() {
+  const systemRoot = String(process.env.SystemRoot || process.env.WINDIR || '').trim()
+  return systemRoot
+    ? `${systemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`
+    : 'powershell.exe'
+}
+
+function windowsTreeKillScript(pid) {
+  const rootPid = Math.max(1, Math.floor(Number(pid) || 0))
+  return [
+    '$ErrorActionPreference = "SilentlyContinue"',
+    `$rootPid = ${rootPid}`,
+    '$rows = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId)',
+    '$targetIds = [System.Collections.Generic.HashSet[int]]::new()',
+    '[void] $targetIds.Add($rootPid)',
+    '$changed = $true',
+    'while ($changed) { $changed = $false; foreach ($row in $rows) { $processId = [int] $row.ProcessId; $parentId = [int] $row.ParentProcessId; if ($targetIds.Contains($parentId) -and $targetIds.Add($processId)) { $changed = $true } } }',
+    '& taskkill.exe /pid $rootPid /t /f *> $null',
+    '$descendantIds = @($targetIds | Where-Object { $_ -ne $rootPid })',
+    'if ($descendantIds.Count -gt 0) { Stop-Process -Id $descendantIds -Force }',
+    'Stop-Process -Id $rootPid -Force',
+    '$deadline = [DateTime]::UtcNow.AddSeconds(4)',
+    'do { $alive = @($targetIds | Where-Object { Get-Process -Id $_ }); if ($alive.Count -eq 0) { exit 0 }; Start-Sleep -Milliseconds 50 } while ([DateTime]::UtcNow -lt $deadline)',
+    'exit 1',
+  ].join('; ')
+}
 
 export function runProcessWithGroup({
   shellPath,
@@ -29,6 +58,7 @@ export function runProcessWithGroup({
   timeout = 60_000,
   maxBuffer = 1 * 1024 * 1024,
   windowsHide = true,
+  windowsVerbatimArguments = false,
   signal = null,
 }) {
   if (signal?.aborted) {
@@ -49,6 +79,7 @@ export function runProcessWithGroup({
       cwd,
       env,
       windowsHide,
+      windowsVerbatimArguments,
       // ★ POSIX:detached=true → 子进程成为新进程组 leader,pgid === child.pid
       detached: !isWin,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -64,6 +95,8 @@ export function runProcessWithGroup({
     let killTimer = null
     let sigkillTimer = null
     let abortListener = null
+    let finalizing = false
+    let windowsTreeKillPromise = null
 
     const stopBuffering = () => {
       try { child.stdout?.destroy() } catch { /* noop */ }
@@ -97,15 +130,80 @@ export function runProcessWithGroup({
       stopBuffering()
       try {
         if (isWin) {
-          // Windows 下用 taskkill 杀进程树
-          spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true }).on('error', () => {})
-          // Restricted Windows environments can delay or block taskkill. Ensure
-          // the root process still obeys the caller's timeout.
-          const fallback = setTimeout(() => {
-            if (settled) return
+          // `taskkill /T` may still be walking descendants after cmd.exe has
+          // emitted `close`. Track the helper and make finalization wait for it;
+          // otherwise callers can observe a cancelled command while a child is
+          // still holding the working directory open.
+          if (!windowsTreeKillPromise) {
+            windowsTreeKillPromise = new Promise((resolveTreeKill) => {
+              let finished = false
+              let hardStop = null
+              const finish = () => {
+                if (finished) return
+                finished = true
+                if (hardStop) clearTimeout(hardStop)
+                resolveTreeKill()
+              }
+              let killer = null
+              let fallbackActive = false
+              try {
+                // Snapshot descendants before killing the root. taskkill /T
+                // alone races with short-lived cmd.exe wrappers: if the root
+                // exits first, its Node/Python child becomes an orphan and
+                // keeps cwd locked until natural exit. The PowerShell helper
+                // captures the entire PID tree first, then tree-kills and
+                // independently terminates every captured descendant.
+                killer = spawn(windowsPowerShellPath(), [
+                  '-NoLogo',
+                  '-NoProfile',
+                  '-NonInteractive',
+                  '-Command',
+                  windowsTreeKillScript(child.pid),
+                ], {
+                  windowsHide: true,
+                  stdio: 'ignore',
+                })
+                killer.once('error', () => {
+                  fallbackActive = true
+                  try {
+                    const fallbackKiller = spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
+                      windowsHide: true,
+                      stdio: 'ignore',
+                    })
+                    fallbackKiller.once('error', finish)
+                    fallbackKiller.once('close', finish)
+                  } catch {
+                    try { child.kill('SIGKILL') } catch { /* process may already be gone */ }
+                    finish()
+                  }
+                })
+                killer.once('close', () => {
+                  if (!fallbackActive) finish()
+                })
+              } catch {
+                try { child.kill('SIGKILL') } catch { /* process may already be gone */ }
+                finish()
+              }
+              // Never let a broken process-enumeration helper make
+              // cancellation hang indefinitely.
+              if (!finished) {
+                hardStop = setTimeout(() => {
+                  try { killer?.kill('SIGKILL') } catch { /* helper may already be gone */ }
+                  try {
+                    spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], {
+                      windowsHide: true,
+                      stdio: 'ignore',
+                    }).unref()
+                  } catch { /* fallback unavailable */ }
+                  try { child.kill('SIGKILL') } catch { /* process may already be gone */ }
+                  finish()
+                }, WINDOWS_TREE_KILL_TIMEOUT_MS)
+                hardStop.unref?.()
+              }
+            })
+          } else if (signal === 'SIGKILL') {
             try { child.kill('SIGKILL') } catch { /* process may already be gone */ }
-          }, 250)
-          fallback.unref?.()
+          }
         } else {
           // 负 pid → kill 整个进程组
           process.kill(-child.pid, signal)
@@ -135,12 +233,22 @@ export function runProcessWithGroup({
       scheduleForceKill()
     }, timeout)
 
-    const finalize = (code, exitSignal) => {
-      if (settled) return
-      settled = true
+    const finalize = async (code, exitSignal) => {
+      if (settled || finalizing) return
+      finalizing = true
       if (killTimer) clearTimeout(killTimer)
       if (sigkillTimer) clearTimeout(sigkillTimer)
       if (abortListener) signal?.removeEventListener('abort', abortListener)
+      if (isWin && killed && windowsTreeKillPromise) {
+        await windowsTreeKillPromise
+        // Even after every captured PID is gone, Windows can retain a closing
+        // cwd handle for a few scheduler ticks. Keep a short bounded drain
+        // before exposing cancellation as complete.
+        await new Promise((resolveDrain) => {
+          setTimeout(resolveDrain, WINDOWS_TREE_HANDLE_DRAIN_MS)
+        })
+      }
+      settled = true
       // ★ Lens-2 fix: 不再无条件给已退出 child 的 pgid 再发 SIGTERM
       // 原因:child.pid 在 close 后可能被 OS 复用,主动 kill(-pid) 会误杀别人。
       // 只在 timedOut 路径杀进程组(那时仍然 alive,killTree 内已处理)。
@@ -161,9 +269,9 @@ export function runProcessWithGroup({
 
     child.on('error', (err) => {
       // spawn 本身失败(命令不存在等)
-      finalize(null, null)
       stderrBuf = (stderrBuf || '') + (err?.message || String(err))
+      void finalize(null, null)
     })
-    child.on('close', (code, signal) => finalize(code, signal))
+    child.on('close', (code, signal) => { void finalize(code, signal) })
   })
 }

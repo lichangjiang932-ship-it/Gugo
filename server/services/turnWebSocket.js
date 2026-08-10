@@ -1,6 +1,7 @@
 import { WebSocketServer } from 'ws'
 import { getSessionByToken } from '../db.js'
 import { listTurnEvents, subscribeTurnEvents } from './turnEventStore.js'
+import { subscribeTurnActivities } from './turnActivityBus.js'
 import { decideApproval, getPendingApproval } from './approvalStore.js'
 import { releaseApproval } from './approvalGate.js'
 import { getJobRuntime } from './jobRuntime.js'
@@ -54,20 +55,36 @@ export function subscribeTurnSubscription({
   turnId,
   after,
   deliver,
+  deliverActivity = () => {},
   subscribe = subscribeTurnEvents,
+  subscribeActivities = subscribeTurnActivities,
   listEvents = listTurnEvents,
 }) {
   const previous = subscriptions.get(key)
   previous?.unsubscribe()
   subscriptions.delete(key)
-  const subscription = { sessionId, turnId, cursor: after, unsubscribe: () => {} }
+  let unsubscribeEvents = () => {}
+  let unsubscribeActivities = () => {}
+  const subscription = {
+    sessionId,
+    turnId,
+    cursor: after,
+    unsubscribe: () => {
+      unsubscribeEvents()
+      unsubscribeActivities()
+    },
+  }
   try {
     // Subscribe before replaying the durable log. The cursor makes the
     // local callback, replay, and cross-process poll idempotent while also
     // closing the old replay/subscribe race window.
-    subscription.unsubscribe = subscribe(
+    unsubscribeEvents = subscribe(
       { userId, sessionId, turnId },
       (event) => deliver(subscription, event),
+    )
+    unsubscribeActivities = subscribeActivities(
+      { userId, sessionId, turnId },
+      (activity) => deliverActivity(subscription, activity),
     )
     subscriptions.set(key, subscription)
     for (const event of listEvents({ userId, sessionId, turnId, after, limit: 2_000 })) {
@@ -107,6 +124,9 @@ export function attachTurnWebSocketServer(server) {
       subscription.cursor = event.sequence
       send(socket, { type: 'turn.event', event })
     }
+    const deliverActivity = (_subscription, activity) => {
+      if (activity) send(socket, { type: 'turn.activity', activity })
+    }
     const pollSubscriptions = () => {
       pollTurnSubscriptions({ subscriptions, userId: request.userId, deliver })
     }
@@ -143,6 +163,7 @@ export function attachTurnWebSocketServer(server) {
             turnId,
             after,
             deliver,
+            deliverActivity,
           })
         } catch (error) {
           console.error(`[realtime] failed to subscribe turn ${turnId}:`, error?.stack || error)

@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto'
+import path from 'node:path'
 import { callBackgroundModel, callStreamingModelWithTools, getModelContextWindow } from '../adapters/modelProxy.js'
-import { createTurnEvent } from '../../shared/turnEvents.js'
+import { createTurnActivity, createTurnEvent } from '../../shared/turnEvents.js'
 import { canonicalizeSkillId } from '../../shared/artifactIntent.js'
 import { releaseApprovalsForTurn } from './approvalGate.js'
 import { runToolLoop, SERVER_TOOL_SPECS } from './toolLoopRuntime.js'
 import {
   claimLocalChatSession,
+  deleteMessage,
   getSession,
   listMessages,
   SessionOwnershipError,
@@ -13,17 +15,107 @@ import {
   upsertSession,
 } from './sessionStore.js'
 import { appendTurnEvent, getLastTurnEvent, listTurnEvents } from './turnEventStore.js'
+import { publishTurnActivity } from './turnActivityBus.js'
 import { resolveApprovalMode } from '../utils/approvalPolicy.js'
 import {
   buildAssistantModelContext,
   collectToolCallIds,
   expandStoredMessages,
+  materializeManagedAttachmentMessages,
 } from './turnMessageContext.js'
 import { prepareTurnPromptContext } from './turnPromptContext.js'
-import { normalizeServerToolsConfig, resolveTurnToolSpecs } from './turnToolSpecs.js'
+import {
+  applyDirectoryAuthorizationToolsConfig,
+  normalizeServerToolsConfig,
+  restoreDirectoryAuthorizationToolSpecs,
+  resolveTurnToolSpecs,
+} from './turnToolSpecs.js'
 import { scheduleAutoMemoryExtraction } from './autoMemoryService.js'
+import {
+  bindManagedAttachmentsToMessage,
+  validateManagedAttachmentsForTurn,
+} from './managedAttachmentStore.js'
+import { prepareManagedAttachmentsForModel } from './managedAttachmentContent.js'
+import { createTurnExecutionLeaseCoordinator } from './turnExecutionLeaseRuntime.js'
+import {
+  acknowledgeAppliedTurnSteering,
+  acknowledgeTurnSteering,
+  claimTurnSteering,
+  enqueueTurnSteering,
+  releaseTurnSteeringLease,
+  releaseTurnSteeringLeasesForTurn,
+} from './turnSteeringStore.js'
+import { normalizeTurnIntentMode } from '../utils/executionIntent.js'
+import { getLocalFileAccessStatus } from './localFileAccessService.js'
 
 const TERMINAL_TYPES = new Set(['turn.completed', 'turn.cancelled', 'turn.failed'])
+const STREAM_DELTA_TYPES = ['assistant.delta', 'reasoning.delta']
+const TURN_RESOLUTION_MARKER = '[TURN_RESOLUTION:'
+
+function replayPersistedTurnEvents(replayEvents, scope) {
+  if (typeof replayEvents !== 'function') return []
+  const events = []
+  let after = -1
+  while (true) {
+    const page = replayEvents({ ...scope, after, limit: 2000 })
+    if (!Array.isArray(page) || page.length === 0) break
+    const fresh = page
+      .filter((event) => Number.isInteger(event?.sequence) && event.sequence > after)
+      .sort((left, right) => left.sequence - right.sequence)
+    if (fresh.length === 0) break
+    events.push(...fresh)
+    const nextAfter = fresh.at(-1).sequence
+    if (nextAfter <= after) break
+    after = nextAfter
+    if (page.length < 2000) break
+  }
+  return events
+}
+
+function confirmedStreamPrefix(events, checkpointSequence) {
+  let assistantText = ''
+  let reasoningText = ''
+  for (const event of events) {
+    if (event.sequence > checkpointSequence) break
+    if (event.type === 'turn.attempt' && event.payload?.resetStreaming) {
+      assistantText = String(event.payload.assistantText || '')
+      reasoningText = String(event.payload.reasoningText || '')
+    } else if (event.type === 'assistant.delta') {
+      assistantText += String(event.payload?.text || '')
+    } else if (event.type === 'reasoning.delta') {
+      reasoningText += String(event.payload?.text || '')
+    }
+  }
+  return { assistantText, reasoningText }
+}
+
+function recoveryAttemptAfterCheckpoint(replayEvents, scope, checkpoint) {
+  const events = replayPersistedTurnEvents(replayEvents, scope)
+  const checkpointSequence = Number.isInteger(checkpoint?.sequence) ? checkpoint.sequence : -1
+  const terminalAfterCheckpoint = events.some((event) => (
+    TERMINAL_TYPES.has(event.type) && event.sequence > checkpointSequence
+  ))
+  if (terminalAfterCheckpoint) return null
+
+  const previousStream = events
+    .filter((event) => STREAM_DELTA_TYPES.includes(event.type) && event.sequence > checkpointSequence)
+    .at(-1)
+  if (!previousStream) return null
+
+  const previousAttempt = events.filter((event) => event.type === 'turn.attempt').at(-1)
+  const previousAttemptNumber = Number(previousAttempt?.payload?.attempt)
+  const prefix = confirmedStreamPrefix(events, checkpointSequence)
+  return {
+    attempt: Number.isInteger(previousAttemptNumber) && previousAttemptNumber > 0
+      ? previousAttemptNumber + 1
+      : 2,
+    reason: checkpoint ? 'checkpoint_resume' : 'turn_resume',
+    resetStreaming: true,
+    checkpointSequence: checkpoint?.sequence ?? null,
+    previousStreamSequence: previousStream.sequence,
+    ...prefix,
+  }
+}
 
 export class TurnEngineError extends Error {
   constructor(code, message, status = 400) {
@@ -49,12 +141,163 @@ function finalClarificationText(result) {
   return String(clarification?.question || clarification?.message || '需要你补充信息后才能继续。')
 }
 
+function isRecord(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function normalizeResolutionPath(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  const normalized = path.resolve(raw).replace(/[\\/]+$/, '').replace(/\\/g, '/')
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized
+}
+
+function normalizeTurnResolution(value) {
+  if (!isRecord(value)) {
+    throw new TurnEngineError('TURN_RESOLUTION_INVALID', 'resolution must be a structured object', 400)
+  }
+  const pausedSequence = Number(value.paused_sequence ?? value.pausedSequence)
+  if (!Number.isInteger(pausedSequence) || pausedSequence < 0) {
+    throw new TurnEngineError(
+      'TURN_RESOLUTION_SEQUENCE_REQUIRED',
+      'resolution must include the pending turn.paused sequence',
+      400,
+    )
+  }
+  const type = String(value.type || '').trim()
+  const rawPath = String(value.path || '').trim()
+  const resourceType = String(value.resource_type || value.resourceType || '').trim()
+  const directoryResolution = type === 'directory_authorization'
+    || resourceType === 'directory'
+    || !!rawPath
+  if (directoryResolution) {
+    const accessMode = String(value.access_mode || value.accessMode || '').trim()
+    if (type && type !== 'directory_authorization') {
+      throw new TurnEngineError('TURN_RESOLUTION_INVALID', 'directory resolution type must be directory_authorization', 400)
+    }
+    if (value.approved !== true) {
+      throw new TurnEngineError('TURN_RESOLUTION_NOT_APPROVED', 'directory authorization must be explicitly approved', 400)
+    }
+    if (!rawPath || (!path.win32.isAbsolute(rawPath) && !path.posix.isAbsolute(rawPath))) {
+      throw new TurnEngineError('TURN_RESOLUTION_PATH_REQUIRED', 'directory authorization requires an absolute path', 400)
+    }
+    if (!['read_only', 'read_write'].includes(accessMode)) {
+      throw new TurnEngineError('TURN_RESOLUTION_ACCESS_MODE_INVALID', 'directory authorization requires read_only or read_write access_mode', 400)
+    }
+    return {
+      type: 'directory_authorization',
+      approved: true,
+      path: rawPath,
+      access_mode: accessMode,
+      resource_type: 'directory',
+      paused_sequence: pausedSequence,
+      ...(String(value.purpose || '').trim() ? { purpose: String(value.purpose).trim() } : {}),
+    }
+  }
+  const response = String(value.response ?? value.answer ?? value.content ?? '').trim()
+  if (!response) {
+    throw new TurnEngineError('TURN_RESOLUTION_RESPONSE_REQUIRED', 'clarification resolution requires a response', 400)
+  }
+  return { type: type || 'clarification_response', response, paused_sequence: pausedSequence }
+}
+
+function validateResolutionForPause(resolution, pausedEvent) {
+  if (resolution.paused_sequence !== pausedEvent.sequence) {
+    throw new TurnEngineError(
+      'TURN_RESOLUTION_STALE',
+      'resolution does not match the latest pending pause',
+      409,
+    )
+  }
+  const clarification = pausedEvent.payload?.clarification
+  const requestType = isRecord(clarification)
+    ? String(clarification.request_type || clarification.requestType || '').trim()
+    : ''
+  const directoryRequest = requestType === 'directory'
+  const directoryResolution = resolution.type === 'directory_authorization'
+  if (directoryRequest !== directoryResolution) {
+    throw new TurnEngineError(
+      'TURN_RESOLUTION_TYPE_MISMATCH',
+      'resolution type does not match the pending clarification',
+      409,
+    )
+  }
+  if (!directoryRequest) return
+  const requiredMode = String(
+    clarification.access_mode || clarification.accessMode || 'read_only',
+  ).trim()
+  if (resolution.access_mode !== requiredMode) {
+    throw new TurnEngineError(
+      'TURN_RESOLUTION_ACCESS_MODE_MISMATCH',
+      'directory resolution access mode does not match the pending request',
+      409,
+    )
+  }
+}
+
+function hasSufficientDirectoryGrant(grants, resolution) {
+  const expectedPath = normalizeResolutionPath(resolution.path)
+  return (Array.isArray(grants) ? grants : []).some((grant) => {
+    if (grant?.resourceType !== 'directory') return false
+    if (grant.available === false) return false
+    if (normalizeResolutionPath(grant.path) !== expectedPath) return false
+    return resolution.access_mode !== 'read_write' || grant.accessMode === 'read_write'
+  })
+}
+
+function turnResolutionPrompt(resolution, pausedSequence) {
+  const marker = `${TURN_RESOLUTION_MARKER}${pausedSequence}]`
+  if (resolution.type === 'directory_authorization') {
+    return [
+      marker,
+      'The requested local directory authorization is already persisted and verified.',
+      `Continue the original task using the exact authorized path ${JSON.stringify(resolution.path)} with ${resolution.access_mode} access.`,
+      'Do not call request_directory again for this same path and access mode.',
+      'If a later operation fails, handle the concrete new error instead of treating this verified grant as missing.',
+    ].join(' ')
+  }
+  return [
+    marker,
+    `The user answered the pending clarification: ${JSON.stringify(resolution.response)}.`,
+    'Continue the original task from the durable checkpoint and do not repeat the same clarification request.',
+  ].join(' ')
+}
+
+function checkpointStateForResolution(state, resumeContext) {
+  if (!isRecord(state) || !resumeContext?.resolution) return state || null
+  const marker = `${TURN_RESOLUTION_MARKER}${resumeContext.pausedSequence}]`
+  const messages = Array.isArray(state.messages) ? state.messages.map((message) => ({ ...message })) : []
+  const resolutionRole = resumeContext.resolution.type === 'directory_authorization' ? 'system' : 'user'
+  if (!messages.some((message) => (
+    message?.role === resolutionRole && String(message?.content || '').includes(marker)
+  ))) {
+    messages.push({
+      role: resolutionRole,
+      content: turnResolutionPrompt(resumeContext.resolution, resumeContext.pausedSequence),
+    })
+  }
+  const restored = { ...state, messages }
+  if (isRecord(restored.final) && restored.final.paused === true) delete restored.final
+  return restored
+}
+
+function pauseState(events) {
+  const paused = events.filter((event) => event.type === 'turn.paused').at(-1) || null
+  if (!paused) return { paused: null, resumed: null, pending: false }
+  const resumed = events
+    .filter((event) => event.type === 'turn.resumed' && event.sequence > paused.sequence)
+    .at(-1) || null
+  return { paused, resumed, pending: !resumed }
+}
+
 function publicStatus(lastEvent, running = false) {
-  if (running) return 'running'
   if (!lastEvent) return 'not_found'
+  if (lastEvent.type === 'turn.paused') return 'paused'
+  if (running) return 'running'
   if (lastEvent.type === 'turn.completed') return 'completed'
   if (lastEvent.type === 'turn.cancelled') return 'cancelled'
   if (lastEvent.type === 'turn.failed') return 'failed'
+  if (lastEvent.type === 'turn.interrupted') return 'interrupted'
   if (lastEvent.type === 'approval.required') return 'awaiting_approval'
   return 'paused'
 }
@@ -69,6 +312,83 @@ function normalizeIds(values, limit = 32) {
 function normalizeOptionalId(value, maxLength = 256) {
   const normalized = String(value || '').trim()
   return normalized ? normalized.slice(0, maxLength) : null
+}
+
+function abortError(code, message) {
+  return Object.assign(new Error(message), { name: 'AbortError', code })
+}
+
+function isExplicitTurnCancellation(signal, error) {
+  if (signal?.aborted) return true
+  const codes = [error?.code, error?.cause?.code, signal?.reason?.code]
+    .map((value) => String(value || '').trim().toUpperCase())
+  return codes.includes('TURN_CANCEL_REQUESTED') || codes.includes('USER_STOPPED')
+}
+
+function normalizeArtifactIds(values) {
+  return [...new Set((Array.isArray(values) ? values : [])
+    .map((value) => String(value || '').trim())
+    .filter(Boolean))]
+}
+
+function normalizeFailure(error, {
+  code = 'TURN_FAILED',
+  message = 'Turn execution failed',
+  retryable,
+} = {}) {
+  const normalizedCode = String(error?.code || code || 'TURN_FAILED').trim() || 'TURN_FAILED'
+  const normalizedMessage = String(error?.message || error?.reason || message || 'Turn execution failed').trim()
+    || 'Turn execution failed'
+  const rawStatus = Number(error?.status ?? error?.statusCode)
+  const status = Number.isInteger(rawStatus) && rawStatus >= 100 && rawStatus <= 599
+    ? rawStatus
+    : null
+  const inferredRetryable = status !== null
+    ? status === 408 || status === 409 || status === 425 || status === 429 || status >= 500
+    : error?.name === 'AbortError' || /(?:TIMEOUT|TEMPORAR|UNAVAILABLE|INTERRUPT)/i.test(normalizedCode)
+  const failure = {
+    code: normalizedCode,
+    message: normalizedMessage,
+    retryable: typeof error?.retryable === 'boolean'
+      ? error.retryable
+      : (typeof retryable === 'boolean' ? retryable : inferredRetryable),
+  }
+  if (status !== null) failure.status = status
+  if (error?.hint) failure.hint = String(error.hint)
+  const attempts = Number(error?.attempts)
+  if (Number.isInteger(attempts) && attempts > 0) failure.attempts = attempts
+  return failure
+}
+
+function isTemporaryTurnEvidence(message, turnId) {
+  return message?.id === `${turnId}:assistant`
+    && message?.modelContext?.turnEvidence === true
+}
+
+function lostTurnLease(signal, error = null) {
+  return error?.code === 'TURN_LEASE_LOST' || signal?.reason?.code === 'TURN_LEASE_LOST'
+}
+
+function normalizeAttachmentIds(values) {
+  const normalized = [...new Set((Array.isArray(values) ? values : [])
+    .map((value) => typeof value === 'object' ? value?.id : value)
+    .map((value) => String(value || '').trim())
+    .filter(Boolean))]
+  if (normalized.length > 32) {
+    throw new TurnEngineError('ATTACHMENT_COUNT_EXCEEDED', '单次最多使用 32 个附件', 400)
+  }
+  return normalized
+}
+
+function attachmentTurnError(error) {
+  if (error instanceof TurnEngineError) return error
+  const wrapped = new TurnEngineError(
+    error?.code || 'ATTACHMENT_INVALID',
+    error?.message || '附件不可用',
+    error?.statusCode || 400,
+  )
+  wrapped.cause = error
+  return wrapped
 }
 
 /**
@@ -107,6 +427,7 @@ export class TurnEngine {
     runModel = callStreamingModelWithTools,
     executeTool,
     appendEvent = appendTurnEvent,
+    publishActivity = publishTurnActivity,
     lastEvent = getLastTurnEvent,
     replayEvents = listTurnEvents,
     readSession = getSession,
@@ -114,6 +435,7 @@ export class TurnEngine {
     writeSession = upsertSession,
     readMessages = listMessages,
     writeMessage = upsertMessage,
+    removeMessage = deleteMessage,
     idFactory = randomUUID,
     now = Date.now,
     toolSpecs = SERVER_TOOL_SPECS,
@@ -123,13 +445,27 @@ export class TurnEngine {
     scheduleMemoryExtraction = scheduleAutoMemoryExtraction,
     runMemoryModel = callBackgroundModel,
     getContextWindow = getModelContextWindow,
+    readFileAccessStatus = getLocalFileAccessStatus,
+    validateAttachments = validateManagedAttachmentsForTurn,
+    bindAttachments = bindManagedAttachmentsToMessage,
+    prepareAttachments = prepareManagedAttachmentsForModel,
+    executionLeases = createTurnExecutionLeaseCoordinator(),
+    enqueueSteering = enqueueTurnSteering,
+    claimSteering = claimTurnSteering,
+    acknowledgeSteering = acknowledgeTurnSteering,
+    acknowledgeAppliedSteering = acknowledgeAppliedTurnSteering,
+    releaseSteering = releaseTurnSteeringLease,
+    releaseStaleSteering = releaseTurnSteeringLeasesForTurn,
     env = process.env,
   } = {}) {
     this.deps = {
-      runLoop, runModel, executeTool, appendEvent, lastEvent, replayEvents,
+      runLoop, runModel, executeTool, appendEvent, publishActivity, lastEvent, replayEvents,
       readSession, claimSession, writeSession, readMessages, writeMessage, idFactory, now, toolSpecs,
       readApprovalMode, preparePromptContext, resolveToolSpecs, scheduleMemoryExtraction, runMemoryModel, env,
-      getContextWindow,
+      getContextWindow, readFileAccessStatus, validateAttachments, bindAttachments, prepareAttachments,
+      removeMessage, executionLeases,
+      enqueueSteering, claimSteering, acknowledgeSteering, acknowledgeAppliedSteering,
+      releaseSteering, releaseStaleSteering,
     }
     this.active = new Map()
     this.startingSessions = new Map()
@@ -138,19 +474,46 @@ export class TurnEngine {
   getTurn({ userId, sessionId, turnId }) {
     const key = activeKey(userId, sessionId, turnId)
     const last = this.deps.lastEvent({ userId, sessionId, turnId })
+    let running = this.active.has(key)
+    if (!running) {
+      try { running = !!this.deps.executionLeases.isActive({ userId, sessionId, turnId }) } catch { /* advisory */ }
+    }
     return last ? {
       sessionId,
       turnId,
-      status: publicStatus(last, this.active.has(key)),
+      status: publicStatus(last, running),
       lastEvent: last,
     } : null
+  }
+
+  steerTurn({
+    userId,
+    sessionId,
+    turnId,
+    content,
+    clientRequestId,
+    authMode = null,
+  } = {}) {
+    if (!userId) throw new TurnEngineError('UNAUTHORIZED', 'Unauthorized', 401)
+    if (!this.deps.readSession({ userId, sessionId }) && authMode === 'local') {
+      this.#claimLegacySession({ userId, sessionId, authMode })
+    }
+    return this.deps.enqueueSteering({
+      userId,
+      sessionId,
+      turnId,
+      content,
+      clientRequestId,
+      now: this.deps.now(),
+    })
   }
 
   hasActiveSession({ userId, sessionId } = {}) {
     if (!userId || !sessionId) return false
     if (this.startingSessions.has(sessionKey(userId, sessionId))) return true
     const prefix = `${userId}\u0000${sessionId}\u0000`
-    return [...this.active.keys()].some((key) => key.startsWith(prefix))
+    if ([...this.active.keys()].some((key) => key.startsWith(prefix))) return true
+    try { return !!this.deps.executionLeases.hasActiveSession({ userId, sessionId }) } catch { return false }
   }
 
   async startTurn({
@@ -164,13 +527,16 @@ export class TurnEngine {
     agentId = null,
     skillIds = [],
     toolsConfig = null,
+    intentMode = 'auto',
+    attachments = [],
     authMode = null,
   }) {
     const rawText = String(content || '').trim()
+    const normalizedAttachmentIds = normalizeAttachmentIds(attachments)
     // I1：调用方未显式传 skillIds 时，服务端解析 `/技能前缀`（对齐 job 链路）。
     // 模型上下文使用剥离前缀后的正文，展示层保留用户原话。
     const resolvedSkill = resolveSkillPrefixFromContent(rawText, skillIds)
-    const text = resolvedSkill.content
+    const text = resolvedSkill.content || (normalizedAttachmentIds.length ? '请分析附件内容。' : '')
     const displayText = String(displayContent ?? rawText ?? '').trim() || text
     if (!userId) throw new TurnEngineError('UNAUTHORIZED', 'Unauthorized', 401)
     if (!sessionId) throw new TurnEngineError('SESSION_REQUIRED', 'sessionId is required')
@@ -208,14 +574,27 @@ export class TurnEngine {
       const normalizedAgentId = normalizeOptionalId(agentId)
       const normalizedSkillIds = normalizeIds(resolvedSkill.skillIds)
       const normalizedToolsConfig = normalizeServerToolsConfig(toolsConfig)
+      const normalizedIntentMode = normalizeTurnIntentMode(intentMode)
+      let managedAttachments = []
+      try {
+        managedAttachments = this.deps.validateAttachments({
+          userId,
+          sessionId,
+          attachmentIds: normalizedAttachmentIds,
+        })
+      } catch (error) {
+        throw attachmentTurnError(error)
+      }
       const existingMessages = this.deps.readMessages({ userId, sessionId, limit: 1 })
       const safeHistory = existingMessages.length === 0 && Array.isArray(history) ? history.slice() : []
+      const stagedMessageIds = []
       safeHistory.forEach((message, index) => {
         const sourceRole = ['user', 'assistant', 'system', 'tool'].includes(message?.role) ? message.role : null
         const role = sourceRole === 'tool' && !message?.tool_call_id ? 'system' : sourceRole
         if (!role || typeof message?.content !== 'string') return
+        const historyMessageId = `${turnId}:history:${index}`
         this.deps.writeMessage({
-          id: `${turnId}:history:${index}`,
+          id: historyMessageId,
           userId,
           sessionId,
           role,
@@ -224,23 +603,50 @@ export class TurnEngine {
           createdAt: createdAt - safeHistory.length + index,
           updatedAt: createdAt,
         })
+        stagedMessageIds.push(historyMessageId)
       })
+      const userMessageId = `${turnId}:user`
       this.deps.writeMessage({
-        id: `${turnId}:user`, userId, sessionId, role: 'user', content: displayText,
-        modelContext: { version: 1, turnId },
+        id: userMessageId, userId, sessionId, role: 'user', content: displayText,
+        modelContext: { version: 1, turnId, modelContent: text, attachments: managedAttachments },
         createdAt, updatedAt: createdAt,
       })
+      stagedMessageIds.push(userMessageId)
+      const rollbackStagedMessages = () => {
+        for (const messageId of stagedMessageIds.reverse()) {
+          try { this.deps.removeMessage({ userId, messageId }) } catch { /* best-effort compensation */ }
+        }
+      }
+      try {
+        this.deps.bindAttachments({
+          userId,
+          sessionId,
+          messageId: `${turnId}:user`,
+          attachmentIds: normalizedAttachmentIds,
+          now: createdAt,
+        })
+      } catch (error) {
+        rollbackStagedMessages()
+        throw attachmentTurnError(error)
+      }
       const emitter = this.#createEmitter({ userId, sessionId, turnId, sequence: 0 })
-      await emitter('turn.started', {
-        content: text,
-        displayContent: displayText,
-        modelName: modelName || null,
-        agentId: normalizedAgentId,
-        skillIds: normalizedSkillIds,
-        toolsConfig: normalizedToolsConfig,
-        userMessageId: `${turnId}:user`,
-        importedHistoryCount: safeHistory.length,
-      })
+      try {
+        await emitter('turn.started', {
+          content: text,
+          displayContent: displayText,
+          modelName: modelName || null,
+          agentId: normalizedAgentId,
+          skillIds: normalizedSkillIds,
+          toolsConfig: normalizedToolsConfig,
+          intentMode: normalizedIntentMode,
+          userMessageId,
+          attachments: managedAttachments,
+          importedHistoryCount: safeHistory.length,
+        })
+      } catch (error) {
+        rollbackStagedMessages()
+        throw error
+      }
       this.#schedule({
         userId,
         sessionId,
@@ -251,6 +657,7 @@ export class TurnEngine {
         agentId: normalizedAgentId,
         skillIds: normalizedSkillIds,
         toolsConfig: normalizedToolsConfig,
+        intentMode: normalizedIntentMode,
         emitter,
       })
       return this.getTurn({ userId, sessionId, turnId })
@@ -261,18 +668,110 @@ export class TurnEngine {
     }
   }
 
-  async resumeTurn({ userId, sessionId, turnId, authMode = null }) {
+  async resumeTurn(scope) {
+    const outcome = await this.recoverTurn(scope)
+    return outcome.turn
+  }
+
+  /**
+   * Startup recovery needs to distinguish "another process owns the lease"
+   * from "this process scheduled the turn". The public resume response stays
+   * unchanged; this explicit outcome is only used by durable recovery workers.
+   */
+  async recoverTurn({ userId, sessionId, turnId, resolution = null, authMode = null }) {
     if (!this.deps.readSession({ userId, sessionId }) && authMode === 'local') {
       this.#claimLegacySession({ userId, sessionId, authMode })
     }
     const key = activeKey(userId, sessionId, turnId)
-    if (this.active.has(key)) return this.getTurn({ userId, sessionId, turnId })
     const started = this.deps.lastEvent({ userId, sessionId, turnId, type: 'turn.started' })
     if (!started) throw new TurnEngineError('TURN_NOT_FOUND', 'turn not found', 404)
-    const last = this.deps.lastEvent({ userId, sessionId, turnId })
-    if (TERMINAL_TYPES.has(last?.type)) return this.getTurn({ userId, sessionId, turnId })
+    let last = this.deps.lastEvent({ userId, sessionId, turnId })
+    if (TERMINAL_TYPES.has(last?.type)) {
+      return {
+        turn: this.getTurn({ userId, sessionId, turnId }),
+        scheduled: false,
+        locallyActive: false,
+        terminal: true,
+      }
+    }
+    const scope = { userId, sessionId, turnId }
+    const persistedEvents = replayPersistedTurnEvents(this.deps.replayEvents, scope)
+    const pause = pauseState(persistedEvents)
+    const normalizedResolution = resolution == null ? null : normalizeTurnResolution(resolution)
+    let resumeContext = pause.resumed ? {
+      resolution: pause.resumed.payload.resolution,
+      pausedSequence: pause.resumed.payload.pausedSequence,
+    } : null
+    const running = this.active.get(key)
+
+    if (pause.pending) {
+      if (!normalizedResolution) {
+        return {
+          turn: { ...this.getTurn(scope), status: 'paused' },
+          scheduled: false,
+          locallyActive: false,
+          terminal: false,
+          paused: true,
+        }
+      }
+      validateResolutionForPause(normalizedResolution, pause.paused)
+      if (normalizedResolution.type === 'directory_authorization') {
+        let grants
+        try {
+          grants = this.deps.readFileAccessStatus({ userId })?.grants || []
+        } catch (error) {
+          const wrapped = new TurnEngineError(
+            'TURN_DIRECTORY_GRANT_CHECK_FAILED',
+            'failed to verify the persisted directory authorization',
+            500,
+          )
+          wrapped.cause = error
+          throw wrapped
+        }
+        if (!hasSufficientDirectoryGrant(grants, normalizedResolution)) {
+          throw new TurnEngineError(
+            'TURN_DIRECTORY_GRANT_NOT_FOUND',
+            'the requested directory authorization is not persisted for this user',
+            403,
+          )
+        }
+      }
+      const resumeEmitter = this.#createEmitter({
+        userId,
+        sessionId,
+        turnId,
+        sequence: last.sequence + 1,
+      })
+      const resumedEvent = await resumeEmitter('turn.resumed', {
+        resolution: normalizedResolution,
+        pausedSequence: pause.paused.sequence,
+      })
+      resumeContext = {
+        resolution: normalizedResolution,
+        pausedSequence: pause.paused.sequence,
+      }
+      last = resumedEvent
+      if (running?.promise) await running.promise
+      last = this.deps.lastEvent({ userId, sessionId, turnId }) || last
+      if (TERMINAL_TYPES.has(last?.type)) {
+        return {
+          turn: this.getTurn(scope),
+          scheduled: false,
+          locallyActive: false,
+          terminal: true,
+        }
+      }
+    } else if (running) {
+      return {
+        turn: this.getTurn(scope),
+        scheduled: false,
+        locallyActive: true,
+        terminal: false,
+      }
+    }
+
     const emitter = this.#createEmitter({ userId, sessionId, turnId, sequence: last.sequence + 1 })
-    this.#schedule({
+    const scheduled = this.#schedule({
       userId,
       sessionId,
       turnId,
@@ -282,9 +781,16 @@ export class TurnEngine {
       agentId: normalizeOptionalId(started.payload.agentId),
       skillIds: normalizeIds(started.payload.skillIds),
       toolsConfig: normalizeServerToolsConfig(started.payload.toolsConfig),
+      intentMode: normalizeTurnIntentMode(started.payload.intentMode),
+      resumeContext,
       emitter,
     })
-    return this.getTurn({ userId, sessionId, turnId })
+    return {
+      turn: this.getTurn({ userId, sessionId, turnId }),
+      scheduled,
+      locallyActive: scheduled || this.active.has(key),
+      terminal: false,
+    }
   }
 
   async cancelTurn({ userId, sessionId, turnId, authMode = null }) {
@@ -293,14 +799,22 @@ export class TurnEngine {
     }
     const key = activeKey(userId, sessionId, turnId)
     const running = this.active.get(key)
+    const scope = { userId, sessionId, turnId }
     if (running) {
-      running.controller.abort()
+      try { this.deps.executionLeases.requestCancellation(scope) } catch { /* local abort still applies */ }
+      running.controller.abort(abortError('TURN_CANCEL_REQUESTED', 'Cancelled by user'))
       releaseApprovalsForTurn({ userId, sessionId, turnId })
       return { ...this.getTurn({ userId, sessionId, turnId }), status: 'cancelling' }
     }
     const last = this.deps.lastEvent({ userId, sessionId, turnId })
     if (!last) throw new TurnEngineError('TURN_NOT_FOUND', 'turn not found', 404)
     if (TERMINAL_TYPES.has(last.type)) return this.getTurn({ userId, sessionId, turnId })
+    let cancellationRequested = false
+    try { cancellationRequested = this.deps.executionLeases.requestCancellation(scope) } catch { /* fall through */ }
+    if (cancellationRequested) {
+      releaseApprovalsForTurn({ userId, sessionId, turnId })
+      return { ...this.getTurn({ userId, sessionId, turnId }), status: 'cancelling' }
+    }
     const emit = this.#createEmitter({ userId, sessionId, turnId, sequence: last.sequence + 1 })
     await emit('turn.cancelled', { reason: 'Cancelled by user' })
     releaseApprovalsForTurn({ userId, sessionId, turnId })
@@ -323,25 +837,43 @@ export class TurnEngine {
 
   #createEmitter({ userId, sessionId, turnId, sequence }) {
     let nextSequence = sequence
-    return async (type, payload = {}) => {
-      const event = createTurnEvent({
-        id: this.deps.idFactory(), sessionId, turnId, sequence: nextSequence, type,
-        payload, createdAt: this.deps.now(),
+    let appendQueue = Promise.resolve()
+    return (type, payload = {}, { beforeAppend } = {}) => {
+      const pending = appendQueue.then(async () => {
+        const event = createTurnEvent({
+          id: this.deps.idFactory(), sessionId, turnId, sequence: nextSequence, type,
+          payload, createdAt: this.deps.now(),
+        })
+        await beforeAppend?.(event)
+        const stored = await this.deps.appendEvent({ userId, event })
+        nextSequence += 1
+        return stored
       })
-      nextSequence += 1
-      return this.deps.appendEvent({ userId, event })
+      // A failed append must reject its own caller without permanently
+      // poisoning the per-turn queue used by later failure/terminal events.
+      appendQueue = pending.catch(() => {})
+      return pending
     }
   }
 
   #schedule(context) {
     const key = activeKey(context.userId, context.sessionId, context.turnId)
+    if (this.active.has(key)) return false
+    const scope = { userId: context.userId, sessionId: context.sessionId, turnId: context.turnId }
+    if (!this.deps.executionLeases.claim(scope)) return false
     const controller = new AbortController()
-    const entry = { controller, promise: null }
+    const releaseLease = this.deps.executionLeases.hold(scope, controller)
+    const entry = { controller, promise: null, releaseLease }
     this.active.set(key, entry)
     entry.promise = Promise.resolve()
       .then(() => this.#execute(context, controller.signal))
-      .finally(() => this.active.delete(key))
+      .finally(() => {
+        try { releaseLease?.() } finally {
+          if (this.active.get(key) === entry) this.active.delete(key)
+        }
+      })
     entry.promise.catch(() => {})
+    return true
   }
 
   async #execute({
@@ -354,13 +886,51 @@ export class TurnEngine {
     agentId,
     skillIds,
     toolsConfig,
+    intentMode,
+    resumeContext,
     emitter,
   }, signal) {
+    if (signal.aborted) {
+      if (!lostTurnLease(signal)) await emitter('turn.cancelled', { reason: signal.reason?.message || 'Cancelled by user' })
+      return
+    }
     const checkpoint = this.deps.lastEvent({ userId, sessionId, turnId, type: 'turn.checkpoint' })
+    const restoredCheckpointState = checkpointStateForResolution(checkpoint?.payload?.state, resumeContext)
+    const steeringOwnerId = normalizeOptionalId(this.deps.executionLeases.ownerId)
+    const steeringScope = { userId, sessionId, turnId, ownerId: steeringOwnerId }
+    if (steeringOwnerId) {
+      const appliedSteeringIds = Array.isArray(checkpoint?.payload?.state?.appliedSteeringIds)
+        ? checkpoint.payload.state.appliedSteeringIds
+        : []
+      this.deps.acknowledgeAppliedSteering({
+        ...steeringScope,
+        steeringIds: appliedSteeringIds,
+        now: this.deps.now(),
+      })
+      this.deps.releaseStaleSteering({ ...steeringScope, now: this.deps.now() })
+    }
+    let pendingRecoveryAttempt = recoveryAttemptAfterCheckpoint(
+      this.deps.replayEvents,
+      { userId, sessionId, turnId },
+      checkpoint,
+    )
     const storedMessages = this.deps.readMessages({ userId, sessionId, limit: 500, recent: true })
+      .filter((message) => !isTemporaryTurnEvidence(message, turnId))
+      .filter((message) => !(
+        message?.id === `${turnId}:assistant`
+          && message?.modelContext?.paused === true
+      ))
+      .filter((message) => !(
+        message?.modelContext?.liveSteering === true
+          && message?.modelContext?.turnId === turnId
+      ))
       .map((message) => message.id === `${turnId}:user`
         ? { ...message, content }
         : message)
+    const currentUserMessage = storedMessages.find((message) => message.id === `${turnId}:user`)
+    const managedAttachments = Array.isArray(currentUserMessage?.modelContext?.attachments)
+      ? currentUserMessage.modelContext.attachments
+      : []
     const historyMessages = expandStoredMessages(storedMessages)
     let promptContext = { messages: [], effectiveAgentId: agentId, skillIds, memoryIds: [] }
     try {
@@ -381,12 +951,25 @@ export class TurnEngine {
       ...(Array.isArray(promptContext.messages) ? promptContext.messages : []),
       ...historyMessages,
     ]
+    const effectiveToolsConfig = applyDirectoryAuthorizationToolsConfig(
+      toolsConfig,
+      resumeContext?.resolution,
+    )
+    const effectiveIntentMode = resumeContext?.resolution?.type === 'directory_authorization'
+      && resumeContext.resolution.access_mode === 'read_write'
+      ? 'execute'
+      : normalizeTurnIntentMode(intentMode)
     let resolvedToolSpecs = this.deps.toolSpecs
     try {
+      const authorizationAwareBaseSpecs = restoreDirectoryAuthorizationToolSpecs(
+        this.deps.toolSpecs,
+        resumeContext?.resolution,
+        SERVER_TOOL_SPECS,
+      )
       const resolved = await this.deps.resolveToolSpecs({
         userId,
-        baseSpecs: this.deps.toolSpecs,
-        toolsConfig,
+        baseSpecs: authorizationAwareBaseSpecs,
+        toolsConfig: effectiveToolsConfig,
       })
       if (Array.isArray(resolved)) resolvedToolSpecs = resolved
     } catch {
@@ -394,7 +977,38 @@ export class TurnEngine {
     }
     const activeSkillId = normalizeIds(promptContext.skillIds).at(0) || normalizeIds(skillIds).at(0) || null
     const baselineToolCallIds = collectToolCallIds(messages)
-    let checkpointMessages = checkpoint?.payload?.state?.messages || []
+    let checkpointMessages = restoredCheckpointState?.messages || []
+    let checkpointArtifactIds = normalizeArtifactIds(restoredCheckpointState?.artifactIds)
+    let checkpointIterations = Math.max(0, Number(restoredCheckpointState?.iterations) || 0)
+    let streamedAssistantText = String(pendingRecoveryAttempt?.assistantText || '')
+    const persistTurnEvidence = ({ state, text, artifactIds, iterations, error = null }) => {
+      const evidenceText = String(text || '').trim() || error?.message || 'Turn execution did not complete.'
+      const evidenceArtifacts = normalizeArtifactIds(artifactIds)
+      const evidenceIterations = Math.max(0, Number(iterations) || 0)
+      const writtenAt = this.deps.now()
+      this.deps.writeMessage({
+        id: `${turnId}:assistant`,
+        userId,
+        sessionId,
+        role: 'assistant',
+        content: evidenceText,
+        modelContext: {
+          ...buildAssistantModelContext({
+            turnId,
+            checkpointMessages,
+            baselineToolCallIds,
+            artifactIds: evidenceArtifacts,
+            iterations: evidenceIterations,
+          }),
+          turnEvidence: true,
+          evidenceState: state,
+          ...(error ? { error } : {}),
+        },
+        createdAt: writtenAt,
+        updatedAt: writtenAt,
+      })
+      return evidenceText
+    }
     let contextWindow
     try {
       contextWindow = this.deps.getContextWindow({
@@ -416,10 +1030,13 @@ export class TurnEngine {
           prompt: content,
           userPrompt: displayContent || content,
           title: content.slice(0, 120),
+          managedAttachments,
+          hasManagedAttachments: managedAttachments.length > 0,
         },
         step: { id: turnId, kind: 'chat' },
         messages,
         contextWindow,
+        intentMode: effectiveIntentMode,
         signal,
         toolSpecs: resolvedToolSpecs,
         skillId: activeSkillId,
@@ -427,23 +1044,101 @@ export class TurnEngine {
         approvalOrigin: 'chat',
         approvalSessionId: sessionId,
         approvalMode: this.deps.readApprovalMode(),
-        loadCheckpoint: async () => checkpoint?.payload?.state || null,
+        claimSteering: steeringOwnerId
+          ? async () => this.deps.claimSteering({
+              ...steeringScope,
+              now: this.deps.now(),
+            })
+          : null,
+        acknowledgeSteering: steeringOwnerId
+          ? async (leaseId) => this.deps.acknowledgeSteering({
+              ...steeringScope,
+              leaseId,
+              now: this.deps.now(),
+            })
+          : null,
+        releaseSteering: steeringOwnerId
+          ? async (leaseId) => this.deps.releaseSteering({
+              ...steeringScope,
+              leaseId,
+              now: this.deps.now(),
+            })
+          : null,
+        beforeFinalCompletion: steeringOwnerId
+          ? async () => {
+              const decision = this.deps.executionLeases.closeSteeringInbox({ userId, sessionId, turnId })
+              if (!decision?.closed && decision?.reason !== 'pending') {
+                throw abortError('TURN_LEASE_LOST', 'Turn execution lease was lost before completion')
+              }
+              return decision
+            }
+          : null,
+        loadCheckpoint: async () => restoredCheckpointState || null,
         saveCheckpoint: async (state) => {
           checkpointMessages = Array.isArray(state?.messages) ? state.messages : checkpointMessages
+          checkpointArtifactIds = normalizeArtifactIds(state?.artifactIds ?? checkpointArtifactIds)
+          checkpointIterations = Math.max(0, Number(state?.iterations) || checkpointIterations)
           await emitter('turn.checkpoint', { state })
           return true
         },
-        runModel: async (request) => this.deps.runModel({
-          ...request, userId, modelName: modelName || undefined,
-        }),
+        runModel: async (request) => {
+          if (pendingRecoveryAttempt) {
+            const attempt = pendingRecoveryAttempt
+            pendingRecoveryAttempt = null
+            streamedAssistantText = String(attempt.assistantText || '')
+            await emitter('turn.attempt', attempt)
+          }
+          const providerMessages = await materializeManagedAttachmentMessages(request.messages, {
+            userId,
+            sessionId,
+            prepareAttachments: this.deps.prepareAttachments,
+          })
+          const inheritedToolCallReady = request.onToolCallReady
+          return this.deps.runModel({
+            ...request,
+            messages: providerMessages,
+            userId,
+            modelName: modelName || undefined,
+            onToolCallReady: async (call, metadata = {}) => {
+              if (typeof inheritedToolCallReady === 'function') {
+                await inheritedToolCallReady(call, metadata)
+              }
+              const toolName = String(call?.function?.name || call?.name || '').trim()
+              if (!toolName) return
+              await this.deps.publishActivity({
+                userId,
+                activity: createTurnActivity({
+                  sessionId,
+                  turnId,
+                  kind: 'tool_call_ready',
+                  toolName,
+                  modelName: metadata.modelName || null,
+                  createdAt: this.deps.now(),
+                }),
+              })
+            },
+          })
+        },
         onModelPhase: async ({ phase, iteration, usage, modelName: activeModel, error }) => {
           await emitter('model.phase', { phase, iteration, usage, modelName: activeModel, error })
         },
         onModelDelta: async ({ text: delta, iteration, modelName: activeModel }) => {
+          streamedAssistantText += String(delta || '')
           await emitter('assistant.delta', { text: delta, iteration, modelName: activeModel })
         },
         onReasoningDelta: async ({ text: delta, iteration, modelName: activeModel }) => {
           await emitter('reasoning.delta', { text: delta, iteration, modelName: activeModel })
+        },
+        onProgress: async ({ completed, total, iteration, filesChanged, additions, deletions, phase } = {}) => {
+          await emitter('turn.progress', {
+            ...(completed !== undefined ? { completed } : {}),
+            ...(total !== undefined ? { total } : {}),
+            ...(iteration !== undefined ? { iteration } : {}),
+            ...(filesChanged !== undefined ? { filesChanged } : {}),
+            ...(additions !== undefined ? { additions } : {}),
+            ...(deletions !== undefined ? { deletions } : {}),
+            ...(phase !== undefined ? { phase } : {}),
+          })
         },
         onToolCall: async (call) => emitter('tool.call', {
           toolCallId: call.id, name: call.name, args: call.args,
@@ -451,10 +1146,23 @@ export class TurnEngine {
         onToolStarted: async (call) => emitter('tool.started', {
           toolCallId: call.id, name: call.name,
         }),
-        onToolCompleted: async (outcome) => emitter('tool.completed', {
-          toolCallId: outcome.call.id, name: outcome.call.name, result: outcome.result,
-          artifactId: outcome.artifactId || null,
-        }),
+        onToolCompleted: async (outcome) => {
+          const failure = outcome.result?.ok === false ? {
+            code: String(outcome.result.code || 'tool_execution_failed'),
+            message: String(outcome.result.error || 'Tool execution failed.'),
+            retryable: outcome.result.retryable === true,
+            ...(Number.isInteger(outcome.result.status) ? { status: outcome.result.status } : {}),
+            ...(outcome.result.hint ? { hint: String(outcome.result.hint) } : {}),
+            ...(Number.isInteger(outcome.result.attempts) ? { attempts: outcome.result.attempts } : {}),
+          } : null
+          return emitter('tool.completed', {
+            toolCallId: outcome.call.id, name: outcome.call.name,
+            args: outcome.executionArgs ?? outcome.call.args,
+            result: outcome.result,
+            error: failure,
+            artifactId: outcome.artifactId || null,
+          })
+        },
         onApprovalPending: async (approval) => emitter('approval.required', {
           approvalId: approval.id, toolName: approval.toolName, args: approval.args,
           risk: approval.risk, reason: approval.reason, expiresAt: approval.expiresAt,
@@ -463,16 +1171,106 @@ export class TurnEngine {
           approvalId: decision.approvalId || null,
           proceed: !!decision.proceed,
           edited: !!decision.edited,
+          args: decision.args ?? null,
           reason: decision.reason || null,
         }),
       })
       if (signal.aborted) {
+        if (lostTurnLease(signal)) return
         await emitter('turn.cancelled', { reason: 'Cancelled by user' })
         return
       }
-      const text = result?.paused
-        ? finalClarificationText(result)
-        : String(result?.text || '(任务已结束，但模型没有返回文本。)')
+      if (result?.interrupted) {
+        const artifactIds = normalizeArtifactIds(result.artifactIds ?? checkpointArtifactIds)
+        const iterations = Math.max(0, Number(result.iterations) || checkpointIterations)
+        const partialText = String(result.text || streamedAssistantText || '')
+        persistTurnEvidence({
+          state: 'interrupted',
+          text: partialText,
+          artifactIds,
+          iterations,
+          error: normalizeFailure({
+            code: result.code,
+            message: result.reason,
+            retryable: true,
+          }, { code: 'MODEL_CALL_INTERRUPTED', retryable: true }),
+        })
+        await emitter('turn.interrupted', {
+          code: String(result.code || 'MODEL_CALL_INTERRUPTED'),
+          message: String(result.reason || 'Model execution was interrupted after tool progress'),
+          retryable: true,
+          text: partialText,
+          artifactIds,
+          iterations,
+        })
+        return
+      }
+      if (result?.incomplete) {
+        const failure = normalizeFailure({
+          code: 'TURN_INCOMPLETE',
+          message: result.reason
+            ? `Turn did not complete: ${result.reason}`
+            : 'Turn did not complete',
+          retryable: true,
+          hint: 'Retry the turn or use a model with the required tool capabilities.',
+        }, { retryable: true })
+        const partialText = String(result.text || streamedAssistantText || '')
+        const artifactIds = normalizeArtifactIds(result.artifactIds ?? checkpointArtifactIds)
+        const iterations = Math.max(0, Number(result.iterations) || checkpointIterations)
+        persistTurnEvidence({
+          state: 'failed',
+          text: partialText,
+          artifactIds,
+          iterations,
+          error: failure,
+        })
+        await emitter('turn.failed', {
+          code: failure.code,
+          message: failure.message,
+          error: failure,
+          partialText,
+          artifactIds,
+          iterations,
+        })
+        return
+      }
+      if (result?.paused) {
+        const text = finalClarificationText(result)
+        const clarification = isRecord(result.clarification) || typeof result.clarification === 'string'
+          ? result.clarification
+          : { question: text, blocker_kind: 'missing_info' }
+        const artifactIds = normalizeArtifactIds(result.artifactIds ?? checkpointArtifactIds)
+        const iterations = Math.max(0, Number(result.iterations) || checkpointIterations)
+        await emitter('turn.paused', { text, clarification, artifactIds, iterations }, {
+          beforeAppend: (pausedEvent) => {
+            const pausedAt = this.deps.now()
+            this.deps.writeMessage({
+              id: `${turnId}:assistant`,
+              userId,
+              sessionId,
+              role: 'assistant',
+              content: text,
+              modelContext: {
+                ...buildAssistantModelContext({
+                  turnId,
+                  checkpointMessages,
+                  baselineToolCallIds,
+                  artifactIds,
+                  iterations,
+                  paused: true,
+                  compactionArchiveId: result?.recovery?.archiveId || null,
+                }),
+                clarification,
+                pausedSequence: pausedEvent.sequence,
+              },
+              createdAt: pausedAt,
+              updatedAt: pausedAt,
+            })
+          },
+        })
+        return
+      }
+      const text = String(result?.text || '(任务已结束，但模型没有返回文本。)')
       const completedAt = this.deps.now()
       this.deps.writeMessage({
         id: `${turnId}:assistant`, userId, sessionId, role: 'assistant', content: text,
@@ -482,7 +1280,6 @@ export class TurnEngine {
           baselineToolCallIds,
           artifactIds: result?.artifactIds || [],
           iterations: result?.iterations || 0,
-          paused: !!result?.paused,
           compactionArchiveId: result?.recovery?.archiveId || null,
         }),
         createdAt: completedAt, updatedAt: completedAt,
@@ -491,9 +1288,6 @@ export class TurnEngine {
         text,
         artifactIds: result?.artifactIds || [],
         iterations: result?.iterations || 0,
-        paused: !!result?.paused,
-        clarification: result?.clarification || null,
-        interrupted: !!result?.interrupted,
       })
       try {
         this.deps.scheduleMemoryExtraction({
@@ -511,13 +1305,33 @@ export class TurnEngine {
         // Automatic memory extraction is best-effort and must not change turn completion.
       }
     } catch (error) {
-      if (signal.aborted || error?.name === 'AbortError') {
+      if (lostTurnLease(signal, error)) return
+      if (isExplicitTurnCancellation(signal, error)) {
         await emitter('turn.cancelled', { reason: error?.message || 'Cancelled by user' })
         return
       }
+      const failure = normalizeFailure(error)
+      const partialText = String(error?.partialText || error?.text || streamedAssistantText || '')
+      const artifactIds = normalizeArtifactIds(error?.artifactIds ?? checkpointArtifactIds)
+      const iterations = Math.max(0, Number(error?.iterations) || checkpointIterations)
+      try {
+        persistTurnEvidence({
+          state: 'failed',
+          text: partialText,
+          artifactIds,
+          iterations,
+          error: failure,
+        })
+      } catch {
+        // The durable event remains the source of truth if message persistence fails.
+      }
       await emitter('turn.failed', {
-        code: error?.code || 'TURN_FAILED',
-        message: error?.message || String(error),
+        code: failure.code,
+        message: failure.message,
+        error: failure,
+        partialText,
+        artifactIds,
+        iterations,
       })
     }
   }

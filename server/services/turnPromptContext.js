@@ -102,7 +102,6 @@ export function prepareTurnPromptContext({
 
   const blocks = []
   const instructions = safeStep('workspace instructions failed', null, () => readInstructions({ env }), warn)
-  if (instructions?.text) blocks.push({ role: 'system', content: instructions.text })
   const identity = safeStep('identity block failed', null, () => buildIdentityBlock({ agent }), warn)
   const ishiki = safeStep('ishiki block failed', null, () => buildIshikiBlock({ agent }), warn)
   const skills = safeStep('skills block failed', null, () => buildSkillsBlockFromPrepared({
@@ -128,6 +127,10 @@ export function prepareTurnPromptContext({
     tokenCap: Number.isFinite(tokenCap) ? tokenCap : 800,
   }), warn)
   if (memory.text) blocks.push({ role: 'system', content: memory.text })
+  // Keep the four compiled blocks as one stable prefix. Workspace instructions
+  // may change independently while a task is running, so placing them before
+  // identity would invalidate the provider-side prefix cache for every block.
+  if (instructions?.text) blocks.push({ role: 'system', content: instructions.text })
 
   return {
     messages: blocks,

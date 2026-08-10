@@ -6,6 +6,7 @@ import { readJson, sendJson } from '../utils.js'
 import { resolveAuthorizedLocalPath } from '../services/localFileAccessService.js'
 import { getRuntimeEnv } from '../utils/runtimeEnv.js'
 import { assertWorkspaceCapability } from '../services/workspaceTrustService.js'
+import { resolveForShellCwd } from './fsShellTools.js'
 
 const MAX_OUTPUT = 1024 * 1024
 const DEFAULT_TIMEOUT = 60_000
@@ -187,13 +188,13 @@ export async function gitDiffTool({ path: rawPath, cwd: rawCwd, staged = false, 
 }
 
 export async function runProjectCheckTool({ check, cwd: rawCwd, userId = null } = {}) {
-  const env = getRuntimeEnv()
-  requireGitEnabled(env)
-  const root = getRoot({ userId, cwd: rawCwd, env, write: true, capabilities: ['git', 'shell'] })
   const name = String(check || '').trim()
   if (!ALLOWED_CHECKS.has(name)) {
     throw badReq('run_project_check only supports lint, test, build')
   }
+  const resolvedCwd = resolveForShellCwd(rawCwd, { userId })
+  const root = resolvedCwd.fullPath
+  if (!fs.statSync(root).isDirectory()) throw badReq('cwd must be a directory')
   const command = npmCommandArgs(name)
   const result = await runFile(command.file, command.args, {
     cwd: root,
