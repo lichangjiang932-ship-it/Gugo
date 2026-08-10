@@ -250,8 +250,13 @@ export function buildCodeExecutionEnv(
   if (!selected?.pythonPath || !selected?.pipPath) return env
 
   const key = pathKey(env, platform)
-  const pythonDirectory = path.dirname(selected.pythonPath)
-  const pipDirectory = path.dirname(selected.pipPath)
+  // Tests and remote runners may assemble an environment for a target OS
+  // different from the host OS. Parse the selected runtime paths with the
+  // target platform's path rules so Windows paths do not collapse to `.` on
+  // Linux (and vice versa).
+  const targetPath = platform === 'win32' ? path.win32 : path.posix
+  const pythonDirectory = targetPath.dirname(selected.pythonPath)
+  const pipDirectory = targetPath.dirname(selected.pipPath)
   const nextPath = dedupePaths(
     [pythonDirectory, pipDirectory, ...pathEntries(env, platform)],
     platform,
