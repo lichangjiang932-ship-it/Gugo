@@ -62,8 +62,9 @@ export default function useChatSessionLifecycle({
     if (previousId === nextId) return
     if (previousId) dispatch({ type: 'SET_SESSION_DRAFT', payload: { sessionId: previousId, text: inputRef.current } })
     setInput((state.sessionDrafts || {})[nextId] || '')
+    setAttachments([])
     previousSessionIdRef.current = nextId
-  }, [dispatch, setInput, state.activeSessionId, state.sessionDrafts])
+  }, [dispatch, setAttachments, setInput, state.activeSessionId, state.sessionDrafts])
   useEffect(() => {
     if (!state.activeSessionId) return undefined
     const timer = window.setTimeout(() => dispatch({ type: 'SET_SESSION_DRAFT', payload: { sessionId: state.activeSessionId, text: input } }), 250)

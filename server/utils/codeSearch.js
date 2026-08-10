@@ -51,11 +51,13 @@ function resolveInWorkspace(rawPath, { userId = null } = {}) {
   if (userId) {
     // 与 read_file / list_directory 完全同一条授权路径,避免两套口径打架
     const resolved = resolveAuthorizedLocalPath({ userId, rawPath: rawPath || '.', write: false })
-    assertWorkspaceCapability({
-      userId,
-      rootPath: resolved.rootPath || getWorkspaceRoot(),
-      capability: 'fileSystem',
-    })
+    if (resolved.source === 'workspace') {
+      assertWorkspaceCapability({
+        userId,
+        rootPath: resolved.rootPath || getWorkspaceRoot(),
+        capability: 'fileSystem',
+      })
+    }
     return resolved.fullPath
   }
   const root = getWorkspaceRoot()
@@ -599,9 +601,9 @@ export const CODE_SEARCH_TOOL_SPECS = [
           path: { type: 'string', description: '搜索范围,默认 workspace 根' },
           glob: { type: 'string', description: 'glob 过滤,例如 "*.tsx" 或 "src/**/*.js"' },
           file_type: { type: 'string', description: 'rg 内置类型别名,例如 "ts"/"py"/"go"/"rust"' },
-          case_sensitive: { type: 'boolean', description: '默认 false(smart-case)' },
-          word: { type: 'boolean', description: '是否整词匹配,默认 false' },
-          max_results: { type: 'integer', description: '最大返回数,默认 50,上限 500' },
+          case_sensitive: { type: 'boolean', default: false, description: '默认 false(smart-case)' },
+          word: { type: 'boolean', default: false, description: '是否整词匹配,默认 false' },
+          max_results: { type: 'integer', default: 50, description: '最大返回数,默认 50,上限 500' },
         },
         required: ['pattern'],
       },
@@ -616,10 +618,10 @@ export const CODE_SEARCH_TOOL_SPECS = [
         type: 'object',
         properties: {
           name: { type: 'string', description: '符号名(必须是合法标识符)' },
-          kind: { type: 'string', enum: ['all', 'function', 'class', 'const'], description: '默认 all' },
+          kind: { type: 'string', enum: ['all', 'function', 'class', 'const'], default: 'all', description: '默认 all' },
           language: { type: 'string', description: 'rg 类型别名,如 "ts" 只在 TypeScript 里找' },
           path: { type: 'string', description: '搜索范围,默认 workspace 根' },
-          max_results: { type: 'integer', description: '最大返回数,默认 20,上限 100' },
+          max_results: { type: 'integer', default: 20, description: '最大返回数,默认 20,上限 100' },
         },
         required: ['name'],
       },

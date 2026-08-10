@@ -64,5 +64,13 @@ export default function useDirectoryApproval({ lang, t, toast }) {
   const ensureLocalPathAccess = useMemo(() => createLocalPathAccessEnsurer(requestDirectoryApproval), [requestDirectoryApproval])
   const probeLocalPathAccess = useMemo(() => createLocalPathAccessProbe(lang), [lang])
 
-  return { authorizeDirectory, directoryApproval, directoryApprovalResolveRef, ensureLocalPathAccess, probeLocalPathAccess, resolveDirectoryApproval }
+  return {
+    authorizeDirectory,
+    directoryApproval,
+    directoryApprovalResolveRef,
+    ensureLocalPathAccess,
+    probeLocalPathAccess,
+    requestDirectoryApproval,
+    resolveDirectoryApproval,
+  }
 }

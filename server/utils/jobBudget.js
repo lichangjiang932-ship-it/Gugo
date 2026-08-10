@@ -180,7 +180,15 @@ export function createJobBudget({
     trackModelUsage(usage = {}, reportedCostUsd = 0) {
       const promptTokens = Math.max(0, Number(usage?.promptTokens) || 0)
       const completionTokens = Math.max(0, Number(usage?.completionTokens) || 0)
-      modelTokens += promptTokens + completionTokens
+      // Cached prompt tokens are historical context that the provider reused;
+      // charging the full prompt again on every agent iteration makes a long
+      // tool loop exhaust its token budget even when almost all input was a
+      // cache hit. Cost remains guarded independently by maxCostUsd.
+      const cacheHitTokens = Math.min(
+        promptTokens,
+        Math.max(0, Number(usage?.cacheHitTokens) || 0),
+      )
+      modelTokens += Math.max(0, promptTokens - cacheHitTokens) + completionTokens
       const nextCost = Number(reportedCostUsd)
       if (Number.isFinite(nextCost) && nextCost > 0) costUsd += nextCost
       return { ...modelLimitStatus(), modelTokens, costUsd }

@@ -31,6 +31,12 @@
  *     推到 SSE 上让前端弹"用户输入框"
  */
 
+import { sanitizeSuggestedDirectoryPath } from '../../shared/suggestedDirectoryPath.js'
+import {
+  findAuthorizedDirectoryGrant,
+  isExistingLocalDirectory,
+} from '../services/localFileAccessService.js'
+
 const MAX_TEXT = 4000
 const MAX_SHORT = 600
 
@@ -114,6 +120,10 @@ export function requestDirectoryTool({
   purpose,
   access_mode = 'read_only',
   suggested_path = null,
+} = {}, {
+  userId = null,
+  resolveDirectoryGrant = findAuthorizedDirectoryGrant,
+  directoryPathExists = isExistingLocalDirectory,
 } = {}) {
   if (typeof purpose !== 'string' || !purpose.trim()) {
     throw badReq('purpose 必填:说明为什么需要用户授权目录')
@@ -122,7 +132,35 @@ export function requestDirectoryTool({
     throw badReq(`access_mode 必须是 ${VALID_DIRECTORY_ACCESS_MODES.join('/')}`)
   }
   const normalizedPurpose = clampStr(purpose, MAX_SHORT).trim()
-  const suggestedPath = suggested_path ? clampStr(suggested_path, MAX_SHORT).trim() : null
+  const rawSuggestedPath = suggested_path ? clampStr(suggested_path, MAX_SHORT).trim() : ''
+  const suggestedPath = sanitizeSuggestedDirectoryPath(rawSuggestedPath, {
+    pathExists: directoryPathExists,
+  }) || null
+  if (userId && suggestedPath && typeof resolveDirectoryGrant === 'function') {
+    let existingGrant = null
+    try {
+      existingGrant = resolveDirectoryGrant({
+        userId,
+        rawPath: suggestedPath,
+        accessMode: access_mode,
+      })
+    } catch {
+      // Authorization lookup failures fail closed by keeping the pause flow.
+    }
+    if (existingGrant) {
+      return {
+        ok: true,
+        paused: false,
+        already_authorized: true,
+        authorization: {
+          path: existingGrant.path,
+          resource_type: 'directory',
+          access_mode: existingGrant.accessMode,
+        },
+        message: `Directory access is already authorized for ${existingGrant.path}. Continue the original task without requesting authorization again.`,
+      }
+    }
+  }
   return {
     ok: true,
     paused: true,
@@ -183,7 +221,7 @@ export const AGENTIC_TOOL_SPECS = [
     type: 'function',
     function: {
       name: 'request_clarification',
-      description: '★ 遇到歧义/缺信息/需用户授权/有风险决策时调它,而不是编造或瞎选.调用后当轮 toolsLoop 会停下来,等用户回答了再继续.不要用它问"你想要什么"这种宽泛问题,问具体可决策的细节.options 给 2-5 个选项可显著加速回复.',
+      description: '★ 遇到歧义/缺信息/需用户授权/有风险决策时调它,而不是编造或瞎选.调用后当轮 toolsLoop 会停下来,等用户回答了再继续.不要用它问"你想要什么"这种宽泛问题,问具体可决策的细节.options 给 2-5 个选项可显著加速回复.工具列表是当前轮次能力的唯一事实来源:不要用此工具声称已列出的执行、写入或搜索工具不存在;参数校验失败时应修正参数并重试.',
       parameters: {
         type: 'object',
         properties: {
@@ -209,7 +247,7 @@ export const AGENTIC_TOOL_SPECS = [
         type: 'object',
         properties: {
           purpose: { type: 'string', description: 'Why this task needs access to the directory.' },
-          access_mode: { type: 'string', enum: VALID_DIRECTORY_ACCESS_MODES, description: 'Request the least privilege needed. File-changing tasks require read_write; inspection-only tasks use read_only. Defaults to read_only.' },
+          access_mode: { type: 'string', enum: VALID_DIRECTORY_ACCESS_MODES, default: 'read_only', description: 'Request the least privilege needed. File-changing tasks require read_write; inspection-only tasks use read_only. Defaults to read_only.' },
           suggested_path: { type: 'string', description: 'Optional path hint shown to the user; it is never authorized automatically.' },
         },
         required: ['purpose'],
@@ -233,11 +271,11 @@ export const AGENTIC_TOOL_SPECS = [
   },
 ]
 
-export async function dispatchAgenticTool(name, args) {
+export async function dispatchAgenticTool(name, args, context = {}) {
   switch (name) {
     case 'reflect': return reflectTool(args || {})
     case 'request_clarification': return requestClarificationTool(args || {})
-    case 'request_directory': return requestDirectoryTool(args || {})
+    case 'request_directory': return requestDirectoryTool(args || {}, context)
     case 'sleep_until': return sleepUntilTool(args || {})
     default: throw new Error(`unknown agentic tool: ${name}`)
   }

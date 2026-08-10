@@ -32,6 +32,10 @@ const CHMOD_777_ROOT_RE = /\bchmod\s+-R\s+777\s+(\/|~|\$HOME|\/etc|\/usr|\/var)/
 const SSH_KEY_EXFIL_RE = /\b(cat|less|more|head|tail|xxd|base64|od)\s[^|;&]*(\.ssh\/id_[a-z0-9]+(?![a-z0-9.])|\.aws\/credentials|\.gnupg\/[a-z]*sec|\.docker\/config\.json)/
 // env exfil:只拦"导到文件"或"管道到出口命令"，不拦 env | grep 这种本地过滤
 const ENV_EXFIL_RE = /\b(env|printenv|set)\s*(>|>>|\|\s*(curl|wget|nc|ncat|socat|ssh|scp|rsync|bash|sh|zsh|python|node|ruby|perl|telnet))/
+const WINDOWS_DEVICE_PATH_RE = /(?:^|[\s"'=,(])\\\\(?:[.?]\\|globalroot\\)/i
+const DYNAMIC_PATH_RE = /(?:~[\\/]|%[^%\r\n]+%[\\/]|\$env:[A-Za-z_][A-Za-z0-9_]*[\\/]|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?[\\/])/i
+const PARENT_PATH_RE = /(?:^|[\\/\s"'=,(])\.\.(?:[\\/\s"'),;]|$)/
+const UNQUOTED_WINDOWS_PAREN_PATH_RE = /(?:^|[\s=,(])((?:[A-Za-z]:[\\/]|\\\\)[^\s"'<>|;&,]*\([^()\s"'<>|;&,]*\)(?=[^\s"'<>|;&,)])[^\s"'<>|;&,]*)/i
 
 const RULES = [
   { re: FORK_BOMB_RE, reason: 'fork bomb' },
@@ -121,6 +125,64 @@ export function checkBashCommandDanger(command) {
   if (!trimmed) return null
   for (const rule of RULES) {
     if (rule.re.test(trimmed)) return { reason: rule.reason }
+  }
+  return null
+}
+
+function cleanPathCandidate(value) {
+  return String(value || '').trim().replace(/[),]+$/u, '')
+}
+
+/**
+ * Extract literal absolute paths from a shell command so the caller can run
+ * every one through the same per-user local-file authorization service used
+ * by read_file/write_file. This is deliberately conservative and is an
+ * application-level guard, not an OS sandbox.
+ */
+export function extractAbsoluteShellPaths(command, { platform = process.platform } = {}) {
+  const source = String(command || '')
+  const found = []
+  const patterns = platform === 'win32'
+    ? [
+        /["']((?:[A-Za-z]:[\\/]|\\\\)[^"'\r\n]+?)["']/g,
+        /(?:^|[\s=,(])((?:[A-Za-z]:[\\/]|\\\\)[^\s"'<>|;&,)]+)/g,
+      ]
+    : [
+        /["'](\/[^"'\r\n]+?)["']/g,
+        /(?:^|[\s=,(])(\/[^\s"'<>|;&,)]+)/g,
+      ]
+  for (const pattern of patterns) {
+    for (const match of source.matchAll(pattern)) {
+      const candidate = cleanPathCandidate(match[1])
+      if (candidate) found.push(candidate)
+    }
+  }
+  const normalize = (value) => platform === 'win32' ? value.toLowerCase() : value
+  return [...new Map(found.map((value) => [normalize(value), value])).values()]
+}
+
+/**
+ * Reject path expressions that cannot be resolved and authorized before the
+ * child process starts. Literal absolute paths are allowed and validated by
+ * fsShellTools; dynamic/home/device paths and parent traversal are not.
+ */
+export function checkShellPathSyntax(command, { platform = process.platform } = {}) {
+  if (typeof command !== 'string' || !command.trim()) return null
+  if (WINDOWS_DEVICE_PATH_RE.test(command)) return { reason: '不允许访问 Windows 设备路径' }
+  if (DYNAMIC_PATH_RE.test(command)) return { reason: '路径必须使用可预检的字面量，不能使用环境变量或主目录展开' }
+  if (PARENT_PATH_RE.test(command)) return { reason: '命令路径不能包含父目录跳转（..）' }
+  if (platform === 'win32') {
+    const unquoted = command.replace(/"[^"\r\n]*"|'[^'\r\n]*'/g, (value) => ' '.repeat(value.length))
+    const match = UNQUOTED_WINDOWS_PAREN_PATH_RE.exec(unquoted)
+    if (match) {
+      return {
+        reason: 'Windows 绝对路径包含未加引号的括号',
+        code: 'SHELL_PATH_QUOTING_REQUIRED',
+        statusCode: 400,
+        path: match[1],
+        hint: '请用双引号完整包裹 Windows command 中的每个绝对路径，即使路径不含空格。',
+      }
+    }
   }
   return null
 }

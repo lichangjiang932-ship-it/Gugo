@@ -413,6 +413,31 @@ export function listIntegrations({ userId, kind = null } = {}) {
   return rows.map(row2integration)
 }
 
+/**
+ * Return only connector tools backed by an enabled integration for this user.
+ * Keeping this lookup next to the provider registry prevents the turn runtime
+ * from advertising credentials/capabilities that do not actually exist.
+ */
+export function listEnabledIntegrationToolNames({ userId } = {}) {
+  if (!userId) return []
+  const names = new Set()
+  for (const integration of listIntegrations({ userId })) {
+    if (!integration.enabled) continue
+    const nativeTools = NATIVE_CONNECTOR_TOOLS[integration.provider]
+    if (nativeTools) {
+      for (const name of nativeTools) names.add(name)
+      continue
+    }
+    const meta = PROVIDER_REGISTRY[integration.provider]
+    if (integration.provider === 'browser') {
+      for (const name of BROWSER_CONNECTOR_TOOLS) names.add(name)
+    } else if (meta?.kind === 'browser_app') {
+      names.add('connected_app_open')
+    }
+  }
+  return [...names].sort((left, right) => left.localeCompare(right, 'en'))
+}
+
 export function listEnabledIntegrationCredentials({ kind = 'social' } = {}) {
   const rows = getDb().prepare(`
     SELECT * FROM integrations

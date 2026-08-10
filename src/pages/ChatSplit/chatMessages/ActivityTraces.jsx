@@ -6,11 +6,50 @@ import { useT } from '../../../i18n/I18nProvider.jsx'
 
 export function ReasoningTrace({ text = '', streaming = false }) {
   const { t } = useT()
-  const [expanded, setExpanded] = useState(false)
-  const panelId = useId()
-  if (!text) return null
-  const detail = streaming ? t('chatMessages.reasoningActive') : t('chatMessages.characters', { count: text.length })
-  return <div className="chat-activity-panel mb-2 overflow-hidden"><button type="button" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded} aria-controls={panelId} aria-label={`${t('chatMessages.reasoning')} · ${detail}`} className="group/reasoning flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-paper-2/55"><ChevronDown className={`w-3 h-3 text-cyan transition-transform ${expanded ? '' : '-rotate-90'}`} /><span className="font-mono text-[10px] tracking-wider uppercase text-ink-fade">{t('chatMessages.reasoning')}</span><span aria-hidden="true" className="text-xs text-ink-soft opacity-0 transition-opacity group-hover/reasoning:opacity-100 group-focus-visible/reasoning:opacity-100">{detail}</span>{streaming && <span className="inline-flex items-center gap-1" role="status" aria-live="polite"><span className="inline-block h-1.5 w-1.5 rounded-full bg-cyan animate-pulse" aria-hidden="true" /><span className="sr-only">{t('chatMessages.reasoningActive')}</span></span>}</button>{expanded && <div id={panelId} className="border-t border-ink/10 px-3 py-2"><pre className="max-h-56 overflow-y-auto whitespace-pre-wrap break-words font-sans text-xs leading-5 text-ink-soft">{text}</pre></div>}</div>
+  // Providers can stream very large private reasoning payloads. Rendering that
+  // payload makes the answer harder to follow and can freeze long chats. Keep
+  // only a compact live status; verified tool activity remains visible below.
+  if (!text || !streaming) return null
+  return <div className="mb-2 inline-flex items-center gap-2 rounded-md bg-paper-2/70 px-2.5 py-1.5 text-xs text-ink-soft" role="status" aria-live="polite"><Loader2 className="h-3.5 w-3.5 animate-spin text-cyan" aria-hidden="true" /><span>{t('chatMessages.reasoningActive')}</span></div>
+}
+
+function nonNegativeInteger(value) {
+  return Number.isInteger(value) && value >= 0
+}
+
+export function ProgressTrace({ progress = null }) {
+  const { t } = useT()
+  if (!progress || typeof progress !== 'object') return null
+
+  const details = []
+  if (progress.phase) details.push(t('chatMessages.progressPhase', { phase: progress.phase }))
+  if (nonNegativeInteger(progress.completed) && nonNegativeInteger(progress.total)) {
+    details.push(t('chatMessages.progressSteps', { completed: progress.completed, total: progress.total }))
+  } else if (nonNegativeInteger(progress.completed)) {
+    details.push(t('chatMessages.progressCompleted', { completed: progress.completed }))
+  } else if (nonNegativeInteger(progress.total)) {
+    details.push(t('chatMessages.progressTotal', { total: progress.total }))
+  }
+  if (nonNegativeInteger(progress.iteration)) {
+    details.push(t('chatMessages.progressIteration', { iteration: progress.iteration }))
+  }
+  if (nonNegativeInteger(progress.filesChanged)) {
+    details.push(t('chatMessages.progressFiles', { count: progress.filesChanged }))
+  }
+  if (nonNegativeInteger(progress.additions) || nonNegativeInteger(progress.deletions)) {
+    details.push(t('chatMessages.progressChanges', {
+      additions: nonNegativeInteger(progress.additions) ? progress.additions : 0,
+      deletions: nonNegativeInteger(progress.deletions) ? progress.deletions : 0,
+    }))
+  }
+  if (!details.length) return null
+
+  return (
+    <div data-testid="turn-progress" className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-ink/10 pt-2 font-mono text-[10px] leading-4 text-ink-fade" role="status" aria-live="polite">
+      <span className="font-sans font-medium uppercase tracking-wide text-ink-soft">{t('chatMessages.progressLabel')}</span>
+      {details.map((detail) => <span key={detail}>{detail}</span>)}
+    </div>
+  )
 }
 
 export function ToolCallTrace({ calls = [] }) {

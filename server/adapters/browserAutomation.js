@@ -2,12 +2,42 @@ import fs from 'node:fs'
 import crypto from 'node:crypto'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
+import WebSocket from 'ws'
 import { sanitizeChildEnv } from '../utils/sensitiveEnv.js'
 import { assertSafeOutboundUrl } from './toolProxy.js'
 
 const sessions = new Map()
 const START_TIMEOUT_MS = 15000
 const ACTION_TIMEOUT_MS = 15000
+
+function abortError(signal) {
+  if (signal?.reason instanceof Error) return signal.reason
+  return Object.assign(new Error('Browser action cancelled'), { name: 'AbortError' })
+}
+
+function throwIfAborted(signal) {
+  if (signal?.aborted) throw abortError(signal)
+}
+
+function abortableDelay(ms, signal = null) {
+  throwIfAborted(signal)
+  return new Promise((resolve, reject) => {
+    let timer = null
+    const cleanup = () => {
+      if (timer) clearTimeout(timer)
+      signal?.removeEventListener?.('abort', onAbort)
+    }
+    const onAbort = () => {
+      cleanup()
+      reject(abortError(signal))
+    }
+    timer = setTimeout(() => {
+      cleanup()
+      resolve()
+    }, Math.max(0, Number(ms) || 0))
+    signal?.addEventListener?.('abort', onAbort, { once: true })
+  })
+}
 
 function findBrowserExecutable(env = process.env) {
   const configured = String(env.BROWSER_EXECUTABLE_PATH || '').trim()
@@ -29,9 +59,6 @@ function findBrowserExecutable(env = process.env) {
 
 function assertEnabled() {
   if (process.env.BROWSER_ENABLED === '0') throw new Error('Browser 工具已禁用（BROWSER_ENABLED=0）')
-  if (typeof globalThis.WebSocket !== 'function') {
-    throw new Error('Browser 工具需要 Node.js 22+ 的内置 WebSocket 支持')
-  }
 }
 
 async function validateUrl(raw) {
@@ -61,12 +88,33 @@ class CdpClient {
     this.closing = false
   }
 
-  async connect() {
+  async connect({ signal = null } = {}) {
+    throwIfAborted(signal)
     this.ws = new WebSocket(this.url)
     await new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('连接浏览器 DevTools 超时')), START_TIMEOUT_MS)
-      this.ws.addEventListener('open', () => { clearTimeout(timer); resolve() }, { once: true })
-      this.ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('无法连接浏览器 DevTools')) }, { once: true })
+      let settled = false
+      const finish = (callback, value) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        signal?.removeEventListener?.('abort', onAbort)
+        this.ws?.removeEventListener?.('open', onOpen)
+        this.ws?.removeEventListener?.('error', onError)
+        callback(value)
+      }
+      const onOpen = () => finish(resolve)
+      const onError = () => finish(reject, new Error('无法连接浏览器 DevTools'))
+      const onAbort = () => {
+        try { this.ws?.close() } catch { /* best effort */ }
+        finish(reject, abortError(signal))
+      }
+      const timer = setTimeout(
+        () => finish(reject, new Error('连接浏览器 DevTools 超时')),
+        START_TIMEOUT_MS,
+      )
+      this.ws.addEventListener('open', onOpen, { once: true })
+      this.ws.addEventListener('error', onError, { once: true })
+      signal?.addEventListener?.('abort', onAbort, { once: true })
     })
     this.ws.addEventListener('message', (event) => {
       let message
@@ -104,16 +152,32 @@ class CdpClient {
     return this.ws?.readyState === WebSocket.OPEN
   }
 
-  request(method, params = {}, sessionId = null, timeoutMs = ACTION_TIMEOUT_MS) {
+  request(method, params = {}, sessionId = null, timeoutMs = ACTION_TIMEOUT_MS, signal = null) {
+    if (signal?.aborted) return Promise.reject(abortError(signal))
     if (!this.isOpen()) return Promise.reject(new Error('浏览器未连接'))
     const id = this.nextId++
     return new Promise((resolve, reject) => {
+      const cleanup = () => signal?.removeEventListener?.('abort', onAbort)
+      const resolvePending = (value) => { cleanup(); resolve(value) }
+      const rejectPending = (error) => { cleanup(); reject(error) }
+      const onAbort = () => {
+        this.pending.delete(id)
+        clearTimeout(timer)
+        rejectPending(abortError(signal))
+      }
       const timer = setTimeout(() => {
         this.pending.delete(id)
-        reject(new Error(`Browser action timeout: ${method}`))
+        rejectPending(new Error(`Browser action timeout: ${method}`))
       }, timeoutMs)
-      this.pending.set(id, { resolve, reject, timer, method })
-      this.ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }))
+      this.pending.set(id, { resolve: resolvePending, reject: rejectPending, timer, method })
+      signal?.addEventListener?.('abort', onAbort, { once: true })
+      try {
+        this.ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }))
+      } catch (error) {
+        this.pending.delete(id)
+        clearTimeout(timer)
+        rejectPending(error)
+      }
     })
   }
 
@@ -130,7 +194,8 @@ function isReusableSession(session, { headed = false } = {}) {
     && (!headed || session.headless === false)
 }
 
-function launchProcess(executable, profileDir, { headless = true } = {}) {
+function launchProcess(executable, profileDir, { headless = true, signal = null } = {}) {
+  throwIfAborted(signal)
   return new Promise((resolve, reject) => {
     const args = [
       ...(headless ? ['--headless=new'] : ['--start-maximized']),
@@ -153,27 +218,39 @@ function launchProcess(executable, profileDir, { headless = true } = {}) {
       env: sanitizeChildEnv(),
     })
     let stderr = ''
+    let settled = false
+    const finish = (callback, value) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      signal?.removeEventListener?.('abort', onAbort)
+      callback(value)
+    }
+    const onAbort = () => {
+      try { child.kill() } catch { /* best effort */ }
+      finish(reject, abortError(signal))
+    }
     const timer = setTimeout(() => {
       try { child.kill() } catch { /* ignore */ }
-      reject(new Error('启动本机浏览器超时'))
+      finish(reject, new Error('启动本机浏览器超时'))
     }, START_TIMEOUT_MS)
+    signal?.addEventListener?.('abort', onAbort, { once: true })
     child.stderr.setEncoding('utf8')
     child.stderr.on('data', (chunk) => {
       stderr = (stderr + chunk).slice(-20000)
       const match = stderr.match(/DevTools listening on (ws:\/\/[^\s]+)/)
       if (!match) return
-      clearTimeout(timer)
-      resolve({ child, websocketUrl: match[1] })
+      finish(resolve, { child, websocketUrl: match[1] })
     })
-    child.once('error', (error) => { clearTimeout(timer); reject(error) })
+    child.once('error', (error) => finish(reject, error))
     child.once('exit', (code) => {
-      clearTimeout(timer)
-      if (!/DevTools listening on/.test(stderr)) reject(new Error(`浏览器启动失败（exit ${code}）`))
+      if (!/DevTools listening on/.test(stderr)) finish(reject, new Error(`浏览器启动失败（exit ${code}）`))
     })
   })
 }
 
-async function createSession(userId, { headless = process.env.BROWSER_HEADLESS !== '0' } = {}) {
+async function createSession(userId, { headless = process.env.BROWSER_HEADLESS !== '0', signal = null } = {}) {
+  throwIfAborted(signal)
   assertEnabled()
   const executable = findBrowserExecutable()
   if (!executable) throw new Error('未找到 Edge/Chrome；可用 BROWSER_EXECUTABLE_PATH 指定路径')
@@ -181,25 +258,25 @@ async function createSession(userId, { headless = process.env.BROWSER_HEADLESS !
   let child
   let client
   try {
-    const launched = await launchProcess(executable, profileDir, { headless })
+    const launched = await launchProcess(executable, profileDir, { headless, signal })
     child = launched.child
     const debuggerBase = launched.websocketUrl
       .replace(/^ws:/, 'http:')
       .replace(/\/devtools\/browser\/.*$/, '')
-    const targetsResponse = await fetch(`${debuggerBase}/json/list`)
+    const targetsResponse = await fetch(`${debuggerBase}/json/list`, { signal })
     if (!targetsResponse.ok) throw new Error(`读取浏览器 Target 失败: HTTP ${targetsResponse.status}`)
     const targets = await targetsResponse.json()
     const pageTarget = targets.find((target) => target.type === 'page' && target.webSocketDebuggerUrl)
     if (!pageTarget) throw new Error('浏览器未创建 Page Target')
     client = new CdpClient(pageTarget.webSocketDebuggerUrl)
-    await client.connect()
+    await client.connect({ signal })
     const session = { userId, executable, profileDir, child, client, targetId: pageTarget.id, sessionId: null, headless, createdAt: Date.now() }
     child.once('exit', () => sessions.delete(userId))
     await Promise.all([
-      client.request('Page.enable', {}, session.sessionId),
-      client.request('Runtime.enable', {}, session.sessionId),
-      client.request('Log.enable', {}, session.sessionId),
-      client.request('Network.enable', {}, session.sessionId),
+      client.request('Page.enable', {}, session.sessionId, ACTION_TIMEOUT_MS, signal),
+      client.request('Runtime.enable', {}, session.sessionId, ACTION_TIMEOUT_MS, signal),
+      client.request('Log.enable', {}, session.sessionId, ACTION_TIMEOUT_MS, signal),
+      client.request('Network.enable', {}, session.sessionId, ACTION_TIMEOUT_MS, signal),
     ])
     sessions.set(userId, session)
     return session
@@ -210,54 +287,58 @@ async function createSession(userId, { headless = process.env.BROWSER_HEADLESS !
   }
 }
 
-async function getSession(userId, { headed = false } = {}) {
+async function getSession(userId, { headed = false, signal = null } = {}) {
+  throwIfAborted(signal)
   if (!userId) throw new Error('userId required')
   const existing = sessions.get(userId)
   if (isReusableSession(existing, { headed })) return existing
   if (existing) closeBrowserSession(userId)
-  return createSession(userId, { headless: headed ? false : process.env.BROWSER_HEADLESS !== '0' })
+  return createSession(userId, { headless: headed ? false : process.env.BROWSER_HEADLESS !== '0', signal })
 }
 
-async function evaluate(session, expression) {
+async function evaluate(session, expression, signal = null) {
   const result = await session.client.request('Runtime.evaluate', {
     expression,
     awaitPromise: true,
     returnByValue: true,
     userGesture: true,
-  }, session.sessionId)
+  }, session.sessionId, ACTION_TIMEOUT_MS, signal)
   if (result.exceptionDetails) throw new Error(result.exceptionDetails.text || '页面脚本执行失败')
   return result.result?.value
 }
 
-async function waitForReady(session, timeoutMs = ACTION_TIMEOUT_MS) {
+async function waitForReady(session, timeoutMs = ACTION_TIMEOUT_MS, signal = null) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    const ready = await evaluate(session, 'document.readyState')
+    const ready = await evaluate(session, 'document.readyState', signal)
     if (ready === 'complete' || ready === 'interactive') return
-    await new Promise((resolve) => setTimeout(resolve, 100))
+    await abortableDelay(100, signal)
   }
   throw new Error('等待页面加载超时')
 }
 
-export async function browserOpenUrl({ userId, url, headed = false }) {
+export async function browserOpenUrl({ userId, url, headed = false, signal = null }) {
   const targetUrl = await validateUrl(url)
-  const session = await getSession(userId, { headed })
-  const result = await session.client.request('Page.navigate', { url: targetUrl }, session.sessionId)
+  throwIfAborted(signal)
+  const session = await getSession(userId, { headed, signal })
+  const result = await session.client.request('Page.navigate', { url: targetUrl }, session.sessionId, ACTION_TIMEOUT_MS, signal)
   if (result.errorText) throw new Error(result.errorText)
-  await waitForReady(session)
-  return browserState({ userId })
+  await waitForReady(session, ACTION_TIMEOUT_MS, signal)
+  return browserState({ userId, signal })
 }
 
-export async function browserConnectApp({ userId, url }) {
+export async function browserConnectApp({ userId, url, signal = null }) {
   const targetUrl = await validateUrl(url)
-  const session = await getSession(userId, { headed: true })
-  const result = await session.client.request('Page.navigate', { url: targetUrl }, session.sessionId)
+  throwIfAborted(signal)
+  const session = await getSession(userId, { headed: true, signal })
+  const result = await session.client.request('Page.navigate', { url: targetUrl }, session.sessionId, ACTION_TIMEOUT_MS, signal)
   if (result.errorText) throw new Error(result.errorText)
-  await waitForReady(session)
-  return browserState({ userId })
+  await waitForReady(session, ACTION_TIMEOUT_MS, signal)
+  return browserState({ userId, signal })
 }
 
-export async function browserState({ userId }) {
+export async function browserState({ userId, signal = null }) {
+  throwIfAborted(signal)
   const session = sessions.get(userId)
   if (!isReusableSession(session)) return { connected: false }
   const page = await evaluate(session, `({
@@ -267,12 +348,12 @@ export async function browserState({ userId }) {
     rootChildren: document.getElementById('root')?.childElementCount ?? null,
     scripts: [...document.scripts].map((script) => ({ src: script.src, type: script.type })),
     resources: performance.getEntriesByType('resource').map((entry) => entry.name).slice(-100),
-  })`)
+  })`, signal)
   return { connected: true, headless: session.headless, ...page, createdAt: session.createdAt }
 }
 
-export async function browserSnapshot({ userId, maxText = 12000 } = {}) {
-  const session = await getSession(userId)
+export async function browserSnapshot({ userId, maxText = 12000, signal = null } = {}) {
+  const session = await getSession(userId, { signal })
   const limit = Math.max(1000, Math.min(50000, Number(maxText) || 12000))
   return evaluate(session, `(() => {
     const clean = (value) => String(value || '').replace(/\\s+/g, ' ').trim()
@@ -285,11 +366,12 @@ export async function browserSnapshot({ userId, maxText = 12000 } = {}) {
         return '[ref=' + ref + '] <' + el.tagName.toLowerCase() + '> ' + JSON.stringify(label).slice(0, 240)
       })
     return { url: location.href, title: document.title, text: clean(document.body?.innerText).slice(0, ${limit}), elements: nodes }
-  })()`)
+  })()`, signal)
 }
 
-export async function browserConsole({ userId, clear = false } = {}) {
-  const session = await getSession(userId)
+export async function browserConsole({ userId, clear = false, signal = null } = {}) {
+  const session = await getSession(userId, { signal })
+  throwIfAborted(signal)
   const entries = session.client.events.map((event) => {
     if (event.method === 'Network.loadingFailed') {
       const params = event.params || {}
@@ -340,16 +422,16 @@ function elementExpression(refOrSelector, action) {
   })()`
 }
 
-export async function browserClick({ userId, target }) {
-  const session = await getSession(userId)
-  const result = await evaluate(session, elementExpression(target, `el.scrollIntoView({block:'center'}); el.click(); return {ok:true}`))
+export async function browserClick({ userId, target, signal = null }) {
+  const session = await getSession(userId, { signal })
+  const result = await evaluate(session, elementExpression(target, `el.scrollIntoView({block:'center'}); el.click(); return {ok:true}`), signal)
   if (!result?.ok) throw new Error(result?.error || '点击失败')
-  await new Promise((resolve) => setTimeout(resolve, 250))
-  return browserState({ userId })
+  await abortableDelay(250, signal)
+  return browserState({ userId, signal })
 }
 
-export async function browserType({ userId, target, text, submit = false }) {
-  const session = await getSession(userId)
+export async function browserType({ userId, target, text, submit = false, signal = null }) {
+  const session = await getSession(userId, { signal })
   const value = JSON.stringify(String(text ?? ''))
   const result = await evaluate(session, elementExpression(target, `
     el.focus(); const value = ${value};
@@ -358,32 +440,32 @@ export async function browserType({ userId, target, text, submit = false }) {
     el.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText', data:value})); el.dispatchEvent(new Event('change', {bubbles:true}));
     ${submit ? "el.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',bubbles:true})); el.form?.requestSubmit?.()" : ''}
     return {ok:true}
-  `))
+  `), signal)
   if (!result?.ok) throw new Error(result?.error || '输入失败')
   return { ok: true }
 }
 
-export async function browserWait({ userId, ms = 500, target = '' }) {
-  const session = await getSession(userId)
+export async function browserWait({ userId, ms = 500, target = '', signal = null }) {
+  const session = await getSession(userId, { signal })
   const delay = Math.max(0, Math.min(10000, Number(ms) || 0))
   if (!target) {
-    await new Promise((resolve) => setTimeout(resolve, delay))
-    return browserState({ userId })
+    await abortableDelay(delay, signal)
+    return browserState({ userId, signal })
   }
   const deadline = Date.now() + Math.max(delay, 1000)
   while (Date.now() < deadline) {
-    const found = await evaluate(session, elementExpression(target, 'return {ok:true}'))
+    const found = await evaluate(session, elementExpression(target, 'return {ok:true}'), signal)
     if (found?.ok) return { ok: true, target }
-    await new Promise((resolve) => setTimeout(resolve, 100))
+    await abortableDelay(100, signal)
   }
   throw new Error(`等待元素超时: ${target}`)
 }
 
-export async function browserScreenshot({ userId, fullPage = false } = {}) {
-  const session = await getSession(userId)
+export async function browserScreenshot({ userId, fullPage = false, signal = null } = {}) {
+  const session = await getSession(userId, { signal })
   let clip
   if (fullPage) {
-    const metrics = await session.client.request('Page.getLayoutMetrics', {}, session.sessionId)
+    const metrics = await session.client.request('Page.getLayoutMetrics', {}, session.sessionId, ACTION_TIMEOUT_MS, signal)
     const size = metrics.cssContentSize || metrics.contentSize
     if (size) clip = { x: 0, y: 0, width: Math.min(size.width, 8000), height: Math.min(size.height, 16000), scale: 1 }
   }
@@ -392,7 +474,7 @@ export async function browserScreenshot({ userId, fullPage = false } = {}) {
     fromSurface: true,
     captureBeyondViewport: !!fullPage,
     ...(clip ? { clip } : {}),
-  }, session.sessionId, 30000)
+  }, session.sessionId, 30000, signal)
   return { mimeType: 'image/png', data: result.data, bytes: Buffer.byteLength(result.data || '', 'base64') }
 }
 
@@ -409,4 +491,11 @@ export function shutdownBrowsers() {
   for (const userId of [...sessions.keys()]) closeBrowserSession(userId)
 }
 
-export const _browserInternals = { findBrowserExecutable, validateUrl, profileDirectoryForUser, isReusableSession }
+export const _browserInternals = {
+  CdpClient,
+  abortableDelay,
+  findBrowserExecutable,
+  validateUrl,
+  profileDirectoryForUser,
+  isReusableSession,
+}

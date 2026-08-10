@@ -242,6 +242,92 @@ test('default executor forwards cancellation signals to the model runner', async
   assert.equal(receivedSignal, controller.signal)
 })
 
+test('default executor maps an incomplete tool loop to a truncated failed step result', async () => {
+  let modelCalls = 0
+  const executeStep = createDefaultExecuteStep({
+    runModelWithTools: async () => {
+      modelCalls += 1
+      return { content: 'The requested fix is complete.', toolCalls: [] }
+    },
+  })
+
+  const result = await executeStep({
+    job: {
+      id: 'job-incomplete-tool-loop',
+      userId: null,
+      title: 'Fix login',
+      prompt: 'Fix login.js and verify the result.',
+      steps: [],
+    },
+    step: { id: 'step-incomplete-tool-loop', kind: 'execute' },
+    signal: new AbortController().signal,
+  })
+
+  assert.equal(modelCalls, 2)
+  assert.equal(result.ok, false)
+  assert.equal(result.truncated, true)
+  assert.equal(result.incomplete, true)
+  assert.equal(result.reason, 'execution_evidence_missing')
+})
+
+test('execute steps require real tool evidence even when the prompt verb is not in the heuristic list', async () => {
+  let modelCalls = 0
+  const executeStep = createDefaultExecuteStep({
+    runModelWithTools: async () => {
+      modelCalls += 1
+      return { content: 'The release checklist is reconciled.', toolCalls: [] }
+    },
+  })
+
+  const result = await executeStep({
+    job: {
+      id: 'job-explicit-execute-contract',
+      userId: null,
+      title: 'Release checklist reconciliation',
+      prompt: 'Release checklist reconciliation.',
+      steps: [],
+    },
+    step: { id: 'step-explicit-execute-contract', kind: 'execute' },
+    signal: new AbortController().signal,
+  })
+
+  assert.equal(modelCalls, 2)
+  assert.equal(result.ok, false)
+  assert.equal(result.incomplete, true)
+  assert.equal(result.reason, 'execution_evidence_missing')
+  assert.doesNotMatch(result.output.text, /is reconciled/i)
+})
+
+test('default executor does not deny generic file and shell capabilities when no Office generator matches', async () => {
+  let capturedMessages = []
+  const executeStep = createDefaultExecuteStep({
+    runModelWithTools: async ({ messages }) => {
+      capturedMessages = messages
+      return { content: 'No execution yet.', toolCalls: [] }
+    },
+  })
+
+  await executeStep({
+    job: {
+      id: 'job-generic-file-capability-prompt',
+      userId: null,
+      title: 'Update PDF',
+      prompt: '将 Task 1 写入 D:\\desktop\\answer.pdf。',
+      steps: [],
+    },
+    step: { id: 'step-generic-file-capability-prompt', kind: 'execute' },
+    signal: new AbortController().signal,
+  })
+
+  const systemText = capturedMessages
+    .filter((message) => message.role === 'system')
+    .map((message) => message.content)
+    .join('\n')
+  assert.doesNotMatch(systemText, /系统也没有给你生成文件的工具/)
+  assert.match(systemText, /以本轮实际工具列表为准/)
+  assert.match(systemText, /Shell/)
+})
+
 test('structured plans are normalized into runnable steps', async () => {
   const executed = []
   const runtime = new JobRuntime({
@@ -282,15 +368,75 @@ test('manual step completion persists verification evidence', () => {
 
   let completed
   for (const step of job.steps) {
+    const evidence = step.kind === 'execute'
+      ? [{ type: 'tool_result', summary: 'Work executed', toolCallId: `tool-${step.id}`, ok: true }]
+      : step.kind === 'verify'
+        ? [{ type: 'check', summary: 'npm test passed', command: 'npm test', exitCode: 0 }]
+        : []
     completed = runtime.completeStep(job.id, step.id, {
       userId: TEST_USER,
-      evidence: step.kind === 'verify' ? ['npm test 通过'] : [],
+      evidence,
     })
   }
 
   assert.equal(completed.status, 'completed')
-  assert.deepEqual(completed.steps.find((step) => step.kind === 'verify').output.evidence, ['npm test 通过'])
+  assert.deepEqual(completed.steps.find((step) => step.kind === 'verify').output.evidence, [{
+    type: 'check',
+    summary: 'npm test passed',
+    command: 'npm test',
+    ok: true,
+    exitCode: 0,
+  }])
   assert.ok(completed.events.some((event) => event.type === 'step_completed'))
+})
+
+test('manual execution completion rejects missing evidence without changing job state', () => {
+  const runtime = new JobRuntime()
+  const job = runtime.createPlan({
+    userId: TEST_USER,
+    title: 'Evidence required',
+    prompt: 'Execute and verify work',
+    steps: [{ id: 'work', title: 'Execute work', kind: 'execute' }],
+  })
+  const step = job.steps.find((item) => item.kind === 'execute')
+  const eventsBefore = job.events.length
+
+  assert.throws(
+    () => runtime.completeStep(job.id, step.id, { userId: TEST_USER, evidence: [] }),
+    (error) => error?.code === 'JOB_COMPLETION_EVIDENCE_REQUIRED',
+  )
+  assert.throws(
+    () => runtime.completeStep(job.id, step.id, { userId: TEST_USER, evidence: ['done'] }),
+    (error) => error?.code === 'JOB_COMPLETION_EVIDENCE_INVALID',
+  )
+
+  const unchanged = runtime.getJob(job.id, { userId: TEST_USER })
+  assert.equal(unchanged.status, 'queued')
+  assert.equal(unchanged.progress, 0)
+  assert.equal(unchanged.steps.find((item) => item.id === step.id).status, 'queued')
+  assert.equal(unchanged.events.length, eventsBefore)
+})
+
+test('manual plan and prose completion remain compatible without evidence', () => {
+  const runtime = new JobRuntime()
+  const job = runtime.createPlan({
+    userId: TEST_USER,
+    title: 'Compatible plan',
+    prompt: 'Plan before execution',
+    steps: [
+      { id: 'plan-only', title: 'Plan work', kind: 'plan' },
+      { id: 'chat-only', title: 'Explain work', kind: 'chat' },
+    ],
+  })
+  const planStep = job.steps.find((item) => item.kind === 'plan')
+  const chatStep = job.steps.find((item) => item.kind === 'chat')
+
+  runtime.completeStep(job.id, planStep.id, { userId: TEST_USER })
+  const updated = runtime.completeStep(job.id, chatStep.id, { userId: TEST_USER })
+  for (const stepId of [planStep.id, chatStep.id]) {
+    assert.equal(updated.steps.find((item) => item.id === stepId).status, 'completed')
+    assert.deepEqual(updated.steps.find((item) => item.id === stepId).output.evidence, [])
+  }
 })
 
 test('default executor injects background skill and memory context without blocking on context failure', async () => {

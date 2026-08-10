@@ -97,9 +97,10 @@ LOCAL_USER_ID=existing-user-id
 ## 工作区信任
 
 `WORKSPACE_FS_ENABLED`、`WORKSPACE_SHELL_ENABLED`、`WORKSPACE_GIT_ENABLED` 和
-`WORKSPACE_GIT_MUTATION_ENABLED` 是服务端能力上限。目录被用户授权后，未信任状态只允许读取；
-文件写入、Shell 与 Git 默认拒绝。用户显式信任目录后，`.gugo/config.json` 才会被读取，且其中的
-`fileSystem`、`fileSystemWrite`、`shell`、`git`、`gitMutation` 只能进一步收紧全局开关。
+`WORKSPACE_GIT_MUTATION_ENABLED` 是共享工作区根目录（`WORKSPACE_ROOT`）的服务端能力上限。
+工作区未信任时只允许读取；文件写入、Shell 与 Git 默认拒绝。用户显式信任工作区后，
+`.gugo/config.json` 才会被读取，且其中的 `fileSystem`、`fileSystemWrite`、`shell`、`git`、
+`gitMutation` 只能进一步收紧全局开关。
 
 `WORKSPACE_SHARED_TRUSTED=1` 会把工作区视为对所有用户已信任，只适用于单机、可信用户环境。
 它不是执行沙箱，也不应在不可信用户可访问的部署中开启。
@@ -111,6 +112,16 @@ LOCAL_USER_ID=existing-user-id
 读取/写入这些已授权路径**不依赖** `WORKSPACE_FS_ENABLED` 全局开关。未授权的路径（无论是否在
 工作区内）仍然完全拒绝。这样本机单用户使用时不强制开全局开关，也能让模型访问已授权的
 本地项目（例如 `D:\destok\money`）。
+
+代码执行遵循更严格的规则：只有用户明确授予 `read_write` 的**目录**能成为本地 Shell 工作目录；
+单个文件、`read_only` 授权和“全部文件”访问都不会隐式获得执行权限。在 `AUTH_MODE=local` 且
+`SERVER_HOST` 为回环地址时，这类目录默认可运行 Python、Node、PowerShell 和项目命令，无需再设置
+`WORKSPACE_SHELL_ENABLED` 或工作区信任。`multi_user` 或非回环监听默认关闭，只有显式设置
+`LOCAL_CODE_EXECUTION_ENABLED=1` 才会开启；设为 `0` 可在本机模式下也彻底关闭。写入型 Shell
+命令始终需要单次审批，不能建立永久放行规则。
+
+本地代码执行和共享工作区 Shell 都不是 OS 级沙箱。若服务会被不可信用户访问，应保持代码执行
+关闭，或部署到容器/nsjail/seccomp 等真正的隔离环境中。
 
 ## OAuth 公网地址与反向代理
 

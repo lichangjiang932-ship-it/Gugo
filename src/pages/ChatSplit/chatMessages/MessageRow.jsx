@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion'
 import { useEffect, useRef, useState } from 'react'
-import { Check, Copy } from 'lucide-react'
+import { Check, Copy, FileText } from 'lucide-react'
 import MarkdownRenderer from '../../../components/MarkdownRenderer.jsx'
 import CompactionPill from '../../../components/CompactionPill.jsx'
 import ChoicePicker from '../../../components/ChoicePicker.jsx'
@@ -11,8 +11,9 @@ import { artifactHasInlineReference, artifactReferenceOpenPayload, buildMessageA
 import { formatMessageDateTime, formatMessageTime } from '../../../lib/messageTime.js'
 import { copyTextToClipboard } from '../../../lib/clipboard.js'
 import { ArtifactReferenceLinks } from './ArtifactCards.jsx'
-import { ReasoningTrace, ToolCallTrace } from './ActivityTraces.jsx'
+import { ProgressTrace, ReasoningTrace, ToolCallTrace } from './ActivityTraces.jsx'
 import { splitUserSkillCommand } from './messageContent.js'
+import DirectoryRequestCard from '../../taskRun/DirectoryRequestCard.jsx'
 
 export default function MessageRow({
   msg,
@@ -20,12 +21,28 @@ export default function MessageRow({
   generatingMessageId,
   lang,
   onExpandCompaction,
+  onAuthorizeDirectoryRequest,
   onOpenArtifact,
   onOpenInPreview,
   t,
 }) {
+  const serverClarification = msg.meta?.serverClarification
+  const isDirectoryRequest = (serverClarification?.request_type || serverClarification?.requestType) === 'directory'
+  const directoryRequestKey = [
+    msg.meta?.serverTurnId || '',
+    msg.meta?.serverLastSequence ?? '',
+    serverClarification?.timestamp ?? '',
+    serverClarification?.suggested_path || serverClarification?.suggestedPath || '',
+    serverClarification?.access_mode || serverClarification?.accessMode || '',
+  ].join(':')
   const artifactPreview = buildMessageArtifactPreview(msg)
   const isCurrentStreamingMessage = msg.id === generatingMessageId || !!msg.meta?.streaming
+  const modelActivity = msg.meta?.modelActivity?.kind === 'tool_call_ready'
+    ? msg.meta.modelActivity
+    : null
+  const liveStatusLabel = modelActivity
+    ? t('chatMessages.toolCallReady', { name: modelActivity.toolName })
+    : t('chatMessages.reasoningActive')
   // A new turn must not make completed artifact messages look "streaming" again.
   // Their collapsed source/link presentation is part of the message itself, not
   // global chat generation state.
@@ -62,9 +79,9 @@ export default function MessageRow({
           ? 'chat-assistant-message w-full max-w-[840px] text-[15px] leading-7'
           : 'flex max-w-[min(720px,86%)] flex-col items-end'}>
         {msg.role === 'assistant' && !collapseArtifact && isCurrentStreamingMessage && (
-          <div className="mb-2 flex items-center gap-2 text-[11px] text-ink-fade" role="status" aria-live="polite">
+          <div data-testid={modelActivity ? 'model-activity' : undefined} className="mb-2 flex items-center gap-2 text-[11px] text-ink-fade" role="status" aria-live="polite">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-ember" aria-hidden="true" />
-            <span>{t('chatMessages.reasoningActive')}</span>
+            <span>{liveStatusLabel}</span>
           </div>
         )}
         {msg.role === 'assistant' ? (
@@ -87,7 +104,15 @@ export default function MessageRow({
             />
           )
         ) : (
-          <UserContent command={userSkillCommand} content={msg.content} />
+          <UserContent attachments={msg.attachments} command={userSkillCommand} content={msg.content} />
+        )}
+        {msg.role === 'assistant' && isDirectoryRequest && (
+          <InlineDirectoryRequestCard
+            key={directoryRequestKey}
+            msg={msg}
+            onAuthorize={onAuthorizeDirectoryRequest}
+            t={t}
+          />
         )}
         {msg.role === 'user' && (
           <UserMeta lang={lang} msg={msg} t={t} />
@@ -140,6 +165,7 @@ function AssistantContent({ artifactPreview, isCurrentStreamingMessage, isMessag
         ))}
       </div>
       {msg.meta?.streaming && <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-ember/80 align-middle" aria-hidden="true" />}
+      <ProgressTrace progress={msg.meta?.progress} />
       {hasChoices(msg.content) && isMessageComplete && (
         <ChoicePicker
           text={msg.content}
@@ -164,18 +190,56 @@ function CollapsedArtifactContent({ artifactPreview, msg, onOpenArtifact, t }) {
           <ToolCallTrace calls={msg.meta.toolCalls} />
         )}
         <p>{t('chat.serverTurn.completed')}</p>
+        <ProgressTrace progress={msg.meta?.progress} />
       </div>
       <ArtifactReferenceLinks msg={msg} preview={artifactPreview} onOpen={onOpenArtifact} />
     </>
   )
 }
 
-function UserContent({ command, content }) {
+function UserContent({ attachments, command, content }) {
+  const files = Array.isArray(attachments) ? attachments : []
   return (
     <div data-testid="user-message-bubble" className={`chat-user-message max-w-full rounded-2xl rounded-br-md border bg-paper-2 px-3.5 py-2 text-[14px] leading-6 ${command?.command ? 'chat-user-skill-message border-ink/20' : 'border-ink/10'}`}>
       {command?.command && <span data-testid="sent-skill-command" className="mb-1.5 inline-flex h-6 items-center rounded-md bg-ink px-2 font-mono text-xs font-medium leading-none text-paper shadow-sm">{command.command}</span>}
-      <span className={`whitespace-pre-wrap ${command?.command ? 'block text-ink' : ''}`}>{command?.command ? command.body : content}</span>
+      {(command?.command ? command.body : content) && <span className={`whitespace-pre-wrap ${command?.command ? 'block text-ink' : ''}`}>{command?.command ? command.body : content}</span>}
+      {files.length > 0 && <div className={`${content ? 'mt-2' : ''} flex flex-wrap gap-1.5`} data-testid="user-message-attachments">
+        {files.map((file) => <span key={file.id} className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-ink/10 bg-paper px-2 py-1 text-xs text-ink-soft">
+          <FileText className="h-3.5 w-3.5 shrink-0 text-ink-fade" />
+          <span className="truncate">{file.name}</span>
+        </span>)}
+      </div>}
     </div>
+  )
+}
+
+function InlineDirectoryRequestCard({ msg, onAuthorize, t }) {
+  const [busy, setBusy] = useState('')
+  const [error, setError] = useState('')
+  const request = msg.meta?.serverClarification || {}
+  const pending = msg.meta?.directoryAuthorizationPending === true
+
+  const authorize = async (decision) => {
+    if (pending || busy || typeof onAuthorize !== 'function') return
+    setBusy(decision.usePicker ? 'picker' : 'grant')
+    setError('')
+    try {
+      await onAuthorize({ message: msg, ...decision })
+    } catch (reason) {
+      setError(reason?.message || t('taskSteering.directoryGrantFailed'))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  return (
+    <DirectoryRequestCard
+      request={request}
+      busy={pending ? 'grant' : busy}
+      error={error || msg.meta?.directoryAuthorizationError || ''}
+      onAuthorize={authorize}
+      t={t}
+    />
   )
 }
 

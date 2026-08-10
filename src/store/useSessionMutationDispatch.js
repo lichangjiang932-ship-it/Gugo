@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from 'react'
 import { getAuthToken } from '../lib/accountClient.js'
 import { deleteSessionRemote, getSessionMetadataRemote, replaceSessionMessagesRemote } from '../lib/sessionClient.js'
 import { fetchServerSessionSnapshot } from '../lib/turnClient.js'
-import { createSessionMutationDispatcher } from './sessionServerSync.js'
+import { createSessionMutationDispatcher, needsServerTranscriptHydration } from './sessionServerSync.js'
 
 export default function useSessionMutationDispatch({ dispatch, reducer, state, stateRef }) {
   const dispatcherRef = useRef(null)
@@ -27,8 +27,7 @@ export default function useSessionMutationDispatch({ dispatch, reducer, state, s
   const activeSession = state.sessions.find((session) => session.id === state.activeSessionId)
   const hydrationSessionId = state.authReady
     && state.isLoggedIn
-    && Number.isInteger(activeSession?.serverRevision)
-    && (!Array.isArray(activeSession.messages) || activeSession.messages.length === 0)
+    && needsServerTranscriptHydration(activeSession)
     ? activeSession.id
     : null
   const hydrationRevision = hydrationSessionId ? activeSession.serverRevision : null

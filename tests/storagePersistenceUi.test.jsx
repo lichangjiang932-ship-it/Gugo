@@ -42,7 +42,7 @@ const viteServer = await createServer({
   root: fileURLToPath(new URL('..', import.meta.url)),
   appType: 'custom',
   plugins: [dependencyStubs, reactPlugin()],
-  server: { middlewareMode: true, hmr: false },
+  server: { middlewareMode: true, hmr: false, ws: false },
 })
 
 await viteServer.ssrLoadModule('/tests/storagePersistenceUi.spec.jsx')

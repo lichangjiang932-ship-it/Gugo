@@ -1,4 +1,4 @@
-import { Mic, Paperclip, Pause, Send } from 'lucide-react'
+import { Mic, Paperclip, Send, Square } from 'lucide-react'
 import PermissionModeSwitcher from '../../../components/PermissionModeSwitcher.jsx'
 import ModelPicker from '../ModelPicker.jsx'
 
@@ -16,12 +16,15 @@ export default function ComposerActions({
   onModelChange,
   onOpenModelPicker,
   onSend,
+  sendDisabled,
   onVoiceClick,
   selectedModel,
   t,
   voiceLabel,
   voiceState,
 }) {
+  const primaryActionLabel = t(isGenerating ? 'chatComposer.stop' : 'chatComposer.send')
+
   return (
     <div data-testid="chat-composer-actions" className="mt-2.5 flex items-center justify-between gap-3">
       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
@@ -51,15 +54,19 @@ export default function ComposerActions({
         >
           <Mic className="h-3.5 w-3.5" />
         </button>
-        {isGenerating ? (
-          <button onClick={onAbort} className="flex h-8 items-center gap-1 rounded-full bg-ember px-3 text-xs font-medium text-paper transition-colors hover:bg-ember/90">
-            <Pause className="h-3.5 w-3.5" />{t('chatComposer.stop')}
-          </button>
-        ) : (
-          <button onClick={onSend} title={t('chatComposer.send')} aria-label={t('chatComposer.send')} className="flex h-8 w-8 items-center justify-center rounded-full bg-ink transition-colors hover:bg-ink-soft">
-            <Send className="h-3.5 w-3.5 text-paper" />
-          </button>
-        )}
+        <button
+          type="button"
+          data-testid="composer-primary-action"
+          onClick={isGenerating ? onAbort : onSend}
+          disabled={!isGenerating && sendDisabled}
+          title={primaryActionLabel}
+          aria-label={primaryActionLabel}
+          className={`flex h-8 w-8 items-center justify-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${isGenerating ? 'bg-ember hover:bg-ember/90' : 'bg-ink hover:bg-ink-soft'}`}
+        >
+          {isGenerating
+            ? <Square className="h-3.5 w-3.5 fill-current text-paper" />
+            : <Send className="h-3.5 w-3.5 text-paper" />}
+        </button>
       </div>
     </div>
   )

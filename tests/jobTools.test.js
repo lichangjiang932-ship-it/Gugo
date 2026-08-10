@@ -92,12 +92,16 @@ test('planning exploration runs three isolated read-only explorers concurrently 
   let maxActiveFirstPasses = 0
   const executed = []
   const roles = new Set()
+  let executionGuardSeen = false
   const exploration = await runPlanningExploration({
     prompt: '修复项目刷新',
     messages: [{ role: 'user', content: '先探索相关代码和验证入口' }],
     userId: TEST_USER,
     runModelWithTools: async ({ messages }) => {
       rounds += 1
+      executionGuardSeen ||= messages.some((message) => (
+        message.role === 'system' && message.content.includes('[DIRECT EXECUTION REQUIRED]')
+      ))
       const toolResult = messages.find((message) => message.role === 'tool')
       if (!toolResult) {
         const rolePrompt = messages.find((message) => message.role === 'system' && message.content.includes('planning swarm'))?.content || ''
@@ -125,9 +129,13 @@ test('planning exploration runs three isolated read-only explorers concurrently 
     },
   })
   assert.equal(rounds, 6)
+  assert.equal(executionGuardSeen, false)
   assert.equal(roles.size, 3)
   assert.ok(maxActiveFirstPasses > 1)
-  assert.deepEqual(executed, Array.from({ length: 3 }, () => ({ name: 'grep_code', args: { pattern: 'refresh' } })))
+  assert.deepEqual(executed, Array.from({ length: 3 }, () => ({
+    name: 'grep_code',
+    args: { pattern: 'refresh', case_sensitive: false, word: false, max_results: 50 },
+  })))
   assert.match(exploration, /src\\?\/router\.js|src\/router\.js/)
 })
 

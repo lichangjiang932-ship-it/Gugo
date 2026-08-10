@@ -21,12 +21,12 @@ export const AGENT_TOOL_SPECS = {
                 prompt: { type: 'string' },
                 description: { type: 'string' },
               },
-              required: ['subagent_type', 'prompt', 'description'],
+              required: ['subagent_type', 'prompt'],
             },
           },
         },
         anyOf: [
-          { required: ['subagent_type', 'prompt', 'description'] },
+          { required: ['subagent_type', 'prompt'] },
           { required: ['tasks'] },
         ],
       },
@@ -56,6 +56,57 @@ export const AGENT_TOOL_SPECS = {
           },
         },
         required: ['todos'],
+      },
+    },
+  },
+  reflect: {
+    type: 'function',
+    function: {
+      name: 'reflect',
+      description: 'Record a concise, observable reflection after a meaningful task step. State what happened and the concrete next step; this tool has no external side effects.',
+      parameters: {
+        type: 'object',
+        properties: {
+          observation: { type: 'string', description: 'Facts observed from the preceding action or tool result.' },
+          what_worked: { type: 'string', description: 'Optional effective approach or useful result.' },
+          what_didnt: { type: 'string', description: 'Optional failed approach or unexpected result.' },
+          next_step: { type: 'string', description: 'Concrete next action, or "done" when the task is complete.' },
+          confidence: { type: 'string', enum: ['low', 'medium', 'high'] },
+        },
+        required: ['observation', 'next_step'],
+      },
+    },
+  },
+  request_clarification: {
+    type: 'function',
+    function: {
+      name: 'request_clarification',
+      description: 'Pause the current tool loop and ask the user a specific question when indispensable information, intent, permission, or a risk decision is missing. Do not use it to claim that an available tool is unavailable.',
+      parameters: {
+        type: 'object',
+        properties: {
+          question: { type: 'string', description: 'A concrete, decision-ready question for the user.' },
+          why: { type: 'string', description: 'Optional explanation of why the answer is required.' },
+          blocker_kind: { type: 'string', enum: ['missing_info', 'ambiguous_intent', 'permission', 'risk_decision', 'other'] },
+          options: { type: 'array', maxItems: 8, items: { type: 'string' }, description: 'Optional concise answer choices.' },
+        },
+        required: ['question'],
+      },
+    },
+  },
+  remember: {
+    type: 'function',
+    function: {
+      name: 'remember',
+      description: 'Store a durable fact that will be useful across conversations, such as a user preference, project convention, recurring correction, or stable reference. Reusing a title updates the existing memory.',
+      parameters: {
+        type: 'object',
+        properties: {
+          type: { type: 'string', enum: ['user', 'feedback', 'project', 'reference'], description: 'Memory category.' },
+          title: { type: 'string', description: 'Short stable title. An existing memory with the same title is updated.' },
+          body: { type: 'string', description: 'The durable fact in one or two concise sentences.' },
+        },
+        required: ['type', 'title', 'body'],
       },
     },
   },

@@ -4,6 +4,7 @@ import { useT } from '../i18n/I18nProvider.jsx'
 import { useAppContext } from '../store/AppContext'
 import {
   BrowserPermissionSection,
+  CodeExecutionStatusSection,
   PermissionStats,
   ToolGateSection,
   WorkbenchPolicySection,
@@ -25,6 +26,7 @@ export default function PermissionsDashboard() {
         </div>
         <PermissionStats controller={controller} t={t} />
         <WorkbenchPolicySection appState={appState} dispatch={dispatch} t={t} />
+        <CodeExecutionStatusSection controller={controller} t={t} />
         <WorkspaceTrustSection controller={controller} t={t} />
         <ToolGateSection controller={controller} t={t} />
         <BrowserPermissionSection controller={controller} t={t} />

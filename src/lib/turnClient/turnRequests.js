@@ -5,12 +5,14 @@ export async function startServerTurn({
   sessionId,
   content,
   displayContent,
+  attachments,
   modelName,
   turnId,
   history,
   agentId,
   skillIds,
   toolsConfig,
+  intentMode,
   signal,
   fetchImpl = fetch,
 }) {
@@ -22,12 +24,14 @@ export async function startServerTurn({
       sessionId,
       content,
       displayContent,
+      attachments: Array.isArray(attachments) ? attachments : [],
       modelName,
       turnId,
       history,
       agentId: normalizedAgentId,
       skillIds: normalizeContextIds(skillIds),
       toolsConfig: normalizeToolsConfig(toolsConfig),
+      intentMode: ['answer', 'execute'].includes(intentMode) ? intentMode : 'auto',
     }),
     signal,
   })
@@ -46,20 +50,47 @@ export async function replayServerTurn({ sessionId, turnId, after = -1, limit = 
   return (body.events || []).map(parseTurnEvent)
 }
 
-export async function cancelServerTurn({ sessionId, turnId, fetchImpl = fetch }) {
-  const response = await fetchImpl(`/api/turns/${encodeURIComponent(turnId)}/cancel`, {
-    method: 'POST',
-    headers: headers(true),
-    body: JSON.stringify({ sessionId }),
+export async function getServerTurn({ sessionId, turnId, signal, fetchImpl = fetch }) {
+  const query = new URLSearchParams({ sessionId })
+  const response = await fetchImpl(`/api/turns/${encodeURIComponent(turnId)}?${query}`, {
+    headers: headers(),
+    signal,
   })
   return (await parseResponse(response)).turn
 }
 
-export async function resumeServerTurnRequest({ sessionId, turnId, signal, fetchImpl = fetch }) {
-  const response = await fetchImpl(`/api/turns/${encodeURIComponent(turnId)}/resume`, {
+export async function cancelServerTurn({ sessionId, turnId, signal, fetchImpl = fetch }) {
+  const response = await fetchImpl(`/api/turns/${encodeURIComponent(turnId)}/cancel`, {
     method: 'POST',
     headers: headers(true),
     body: JSON.stringify({ sessionId }),
+    signal,
+  })
+  return (await parseResponse(response)).turn
+}
+
+export async function steerServerTurn({
+  sessionId,
+  turnId,
+  content,
+  clientRequestId,
+  signal,
+  fetchImpl = fetch,
+}) {
+  const response = await fetchImpl(`/api/turns/${encodeURIComponent(turnId)}/steer`, {
+    method: 'POST',
+    headers: headers(true),
+    body: JSON.stringify({ sessionId, content, clientRequestId }),
+    signal,
+  })
+  return (await parseResponse(response)).steering
+}
+
+export async function resumeServerTurnRequest({ sessionId, turnId, resolution, signal, fetchImpl = fetch }) {
+  const response = await fetchImpl(`/api/turns/${encodeURIComponent(turnId)}/resume`, {
+    method: 'POST',
+    headers: headers(true),
+    body: JSON.stringify({ sessionId, ...(resolution ? { resolution } : {}) }),
     signal,
   })
   return (await parseResponse(response)).turn

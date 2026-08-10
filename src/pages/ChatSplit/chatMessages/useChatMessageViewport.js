@@ -1,6 +1,21 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { DEFAULT_MESSAGE_WINDOW_SIZE, getExpandedWindowCount, getMessageWindow } from '../../../lib/messageWindow.js'
 
+function directoryRequestKey(messages) {
+  const message = messages[messages.length - 1]
+  const request = message?.meta?.serverClarification
+  const requestType = request?.request_type || request?.requestType
+  if (message?.role !== 'assistant' || requestType !== 'directory') return ''
+  return [
+    message.id || '',
+    message.meta?.serverTurnId || '',
+    message.meta?.serverLastSequence ?? '',
+    request.timestamp ?? '',
+    request.suggested_path || request.suggestedPath || '',
+    request.access_mode || request.accessMode || '',
+  ].join(':')
+}
+
 export default function useChatMessageViewport({ messages, onQuoteSelection }) {
   const [visibleCount, setVisibleCount] = useState(DEFAULT_MESSAGE_WINDOW_SIZE)
   const { hiddenCount, visibleMessages } = getMessageWindow(messages, visibleCount)
@@ -8,7 +23,9 @@ export default function useChatMessageViewport({ messages, onQuoteSelection }) {
   const scrollRef = useRef(null)
   const containerRef = useRef(null)
   const [atBottom, setAtBottom] = useState(true)
+  const atBottomRef = useRef(true)
   const lastCountRef = useRef(messages.length)
+  const lastDirectoryRequestKeyRef = useRef(directoryRequestKey(messages))
   const pendingScrollRestoreRef = useRef(null)
 
   useLayoutEffect(() => {
@@ -26,20 +43,30 @@ export default function useChatMessageViewport({ messages, onQuoteSelection }) {
   useEffect(() => {
     const element = scrollRef.current
     if (!element) return undefined
-    const onScroll = () => setAtBottom(element.scrollHeight - element.scrollTop - element.clientHeight < 80)
+    const onScroll = () => {
+      const nextAtBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 80
+      atBottomRef.current = nextAtBottom
+      setAtBottom(nextAtBottom)
+    }
     element.addEventListener('scroll', onScroll, { passive: true })
     onScroll()
     return () => element.removeEventListener('scroll', onScroll)
   }, [])
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = scrollRef.current
     if (!element) return
     const grew = messages.length > lastCountRef.current
     const lastMessage = messages[messages.length - 1]
     const streaming = lastMessage?.role === 'assistant' && lastMessage?.meta?.streaming
-    if ((grew || streaming) && atBottom) element.scrollTop = element.scrollHeight
+    const nextDirectoryRequestKey = directoryRequestKey(messages)
+    const directoryRequestAppeared = !!nextDirectoryRequestKey
+      && nextDirectoryRequestKey !== lastDirectoryRequestKeyRef.current
+    if ((grew || streaming || directoryRequestAppeared) && atBottomRef.current) {
+      element.scrollTop = element.scrollHeight
+    }
     lastCountRef.current = messages.length
-  }, [messages, atBottom])
+    lastDirectoryRequestKeyRef.current = nextDirectoryRequestKey
+  }, [messages])
   useEffect(() => {
     if (typeof window === 'undefined' || !window.location.hash.startsWith('#message-')) return undefined
     const targetId = decodeURIComponent(window.location.hash.slice(1))

@@ -25,6 +25,7 @@ export default function ChatSplitView({
   modelOptions,
   onAbort,
   onApprovalModeChange,
+  onAuthorizeDirectoryRequest,
   onAuthorizeDirectory,
   onCloseDesktopPet,
   onCloseInlinePanel,
@@ -114,6 +115,7 @@ export default function ChatSplitView({
           isGenerating={isGenerating}
           onPermAllow={onPermAllow}
           onPermDeny={onPermDeny}
+          onAuthorizeDirectoryRequest={onAuthorizeDirectoryRequest}
           onNavigatePermissions={onNavigatePermissions}
           onQuoteSelection={onQuoteSelection}
           onPromptSelect={setInput}

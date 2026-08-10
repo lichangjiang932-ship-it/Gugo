@@ -59,6 +59,17 @@ export function saveJobTurnCheckpoint({ jobId, stepId, userId, state, now = Date
   return getJobTurnCheckpoint({ jobId, stepId, userId })
 }
 
+export function makeJobTurnCheckpointResumable({ jobId, stepId, userId } = {}) {
+  const checkpoint = getJobTurnCheckpoint({ jobId, stepId, userId })
+  if (!checkpoint?.state?.final) return checkpoint
+  return saveJobTurnCheckpoint({
+    jobId,
+    stepId,
+    userId,
+    state: { ...checkpoint.state, final: null },
+  })
+}
+
 export function deleteJobTurnCheckpoint({ jobId, stepId, userId } = {}) {
   if (!jobId || !stepId || !userId) return 0
   return getDb().prepare(`

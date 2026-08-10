@@ -228,6 +228,7 @@ test('an explicitly idempotent executor safely resumes an executing call with th
     iterations: 0,
   }
   const executions = []
+  let modelCalls = 0
   const executeTool = async ({ args, toolCallId, idempotencyKey }) => {
     executions.push({ args, toolCallId, idempotencyKey })
     return { ok: true, path: args.path }
@@ -246,15 +247,34 @@ test('an explicitly idempotent executor safely resumes an executing call with th
       return { state: checkpoint }
     },
     executeTool,
-    runModel: async () => ({ content: 'resumed safely', toolCalls: [] }),
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'verify-write-retry',
+            type: 'function',
+            function: { name: 'read_file', arguments: '{"path":"hook-rewritten.txt"}' },
+          }],
+        }
+      }
+      return { content: 'resumed safely', toolCalls: [] }
+    },
   })
 
   assert.equal(result.text, 'resumed safely')
-  assert.deepEqual(executions, [{
+  assert.deepEqual(executions[0], {
     args: { path: 'hook-rewritten.txt', content: 'once' },
     toolCallId: 'write-retry',
     idempotencyKey: expectedKey,
-  }])
+  })
+  assert.deepEqual(executions[1]?.args, {
+    path: 'hook-rewritten.txt',
+    offset: 0,
+    limit: 0,
+  })
+  assert.equal(executions[1]?.toolCallId, 'verify-write-retry')
   assert.equal(checkpoint.final.text, 'resumed safely')
 })
 
@@ -280,6 +300,47 @@ test('a final response checkpoint returns without another model request', async 
   })
   assert.equal(result.text, 'already final')
   assert.deepEqual(result.artifactIds, ['artifact-1'])
+  assert.equal(modelCalls, 0)
+})
+
+test('a failed terminal checkpoint restores its exact outcome without rerunning the model', async () => {
+  let modelCalls = 0
+  const result = await runToolsLoop({
+    job: {
+      id: 'resume-incomplete-job',
+      userId: alice,
+      prompt: 'Fix the project and verify it.',
+    },
+    step: { id: 'resume-incomplete-step', kind: 'execute' },
+    messages: [],
+    loadCheckpoint: async () => ({
+      state: {
+        messages: [{ role: 'assistant', content: 'Budget exhausted after partial work.' }],
+        toolCalls: [],
+        artifactIds: ['artifact-partial'],
+        iterations: 4,
+        completionGuards: { executionEvidenceObserved: false },
+        final: {
+          text: 'Budget exhausted after partial work.',
+          iterations: 4,
+          incomplete: true,
+          budgetExceeded: true,
+          reason: 'tool call budget exceeded',
+        },
+      },
+    }),
+    runModel: async () => {
+      modelCalls += 1
+      return { content: 'duplicate', toolCalls: [] }
+    },
+  })
+
+  assert.equal(result.text, 'Budget exhausted after partial work.')
+  assert.equal(result.incomplete, true)
+  assert.equal(result.budgetExceeded, true)
+  assert.equal(result.reason, 'tool call budget exceeded')
+  assert.deepEqual(result.artifactIds, ['artifact-partial'])
+  assert.equal(result.resumed, true)
   assert.equal(modelCalls, 0)
 })
 

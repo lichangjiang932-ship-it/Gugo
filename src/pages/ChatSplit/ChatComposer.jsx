@@ -7,7 +7,8 @@ import ComposerAttachments from './chatComposer/ComposerAttachments.jsx'
 import {
   Paperclip,
 } from 'lucide-react'
-import { getClipboardImageFiles } from '../../lib/chatAttachmentFiles.js'
+import { getClipboardFiles } from '../../lib/chatAttachmentFiles.js'
+import { attachmentSendState } from '../../lib/chatAttachmentUpload.js'
 import { resolveSlashMenuKey } from '../../lib/slashMenuNavigation.js'
 
 const COMPOSER_INTERACTIVE_SELECTOR = 'button, input, textarea, select, option, a, label, [role="button"], [role="menuitem"], [role="option"], [contenteditable="true"]'
@@ -64,6 +65,7 @@ export default function ChatComposer({
   const slashMatch = String(input || '').match(/^\/([^\s/]*)$/i)
   const slashMenuOpen = !!slashMatch && !slashMenuDismissed
   const safeSlashIndex = Math.min(slashSelectedIndex, Math.max(0, slashCommands.length - 1))
+  const attachmentState = attachmentSendState(attachments)
 
   useEffect(() => {
     if (!slashMenuOpen) return undefined
@@ -231,10 +233,10 @@ export default function ChatComposer({
                 handleKeyDown(e)
               }}
               onPaste={(e) => {
-                const images = getClipboardImageFiles(e.clipboardData)
-                if (!images.length) return
+                const files = getClipboardFiles(e.clipboardData)
+                if (!files.length) return
                 e.preventDefault()
-                onFileChange?.({ target: { files: images, value: '' } })
+                onFileChange?.({ target: { files, value: '' } })
               }}
             placeholder={t('chatComposer.placeholder')}
               className="w-full min-w-0 bg-transparent outline-none text-sm text-ink placeholder:text-ink-soft/80 resize-none flex-1 leading-6 max-h-48 overflow-y-auto"
@@ -255,6 +257,7 @@ export default function ChatComposer({
             onModelChange={onModelChange}
             onOpenModelPicker={onOpenModelPicker}
             onSend={onSend}
+            sendDisabled={attachmentState.uploading || attachmentState.failed}
             onVoiceClick={onVoiceClick}
             selectedModel={selectedModel}
             t={t}

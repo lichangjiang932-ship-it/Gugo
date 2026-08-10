@@ -1,6 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { checkBashCommandDanger, isReadOnlyShellCommand } from '../server/utils/bashGuard.js'
+import {
+  checkBashCommandDanger,
+  checkShellPathSyntax,
+  isReadOnlyShellCommand,
+} from '../server/utils/bashGuard.js'
 
 function blocked(cmd, expectedSubstring = null) {
   const r = checkBashCommandDanger(cmd)
@@ -96,6 +100,25 @@ test('handles empty/non-string input', () => {
   assert.equal(checkBashCommandDanger('   '), null)
   assert.equal(checkBashCommandDanger(null), null)
   assert.equal(checkBashCommandDanger(123), null)
+})
+
+test('requires quotes for obvious Windows absolute paths containing parentheses', () => {
+  const issue = checkShellPathSyntax(
+    'python D:\\destok\\your-model-atelier(1)\\scripts\\render.py',
+    { platform: 'win32' },
+  )
+  assert.equal(issue?.code, 'SHELL_PATH_QUOTING_REQUIRED')
+  assert.equal(issue?.statusCode, 400)
+  assert.match(issue?.hint || '', /双引号/)
+
+  assert.equal(checkShellPathSyntax(
+    'python "D:\\destok\\your-model-atelier(1)\\scripts\\render.py"',
+    { platform: 'win32' },
+  ), null)
+  assert.equal(checkShellPathSyntax(
+    '(type C:\\Windows\\win.ini) & echo ok',
+    { platform: 'win32' },
+  ), null)
 })
 
 test('classifies only conservative shell reads as read-only', () => {

@@ -89,10 +89,105 @@ function toolCallsFromContext(context) {
       entry.status = parsed?.ok === false ? TOOL_CALL_STATUS.ERROR : TOOL_CALL_STATUS.SUCCESS
       entry.result = String(message.content || '')
       entry.error = parsed?.ok === false ? parsed?.error || 'Tool call failed' : undefined
+      entry.errorCode = parsed?.ok === false && parsed?.code ? String(parsed.code) : undefined
+      entry.errorStatus = parsed?.ok === false && Number.isInteger(parsed?.status)
+        ? parsed.status
+        : undefined
+      entry.retryable = parsed?.ok === false ? parsed?.retryable === true : undefined
+      entry.errorHint = parsed?.ok === false && parsed?.hint ? String(parsed.hint) : undefined
+      entry.attempts = parsed?.ok === false && Number.isInteger(parsed?.attempts)
+        ? parsed.attempts
+        : undefined
       entry.approvalAuthorization = parsed?.approvalAuthorization || null
     }
   }
   return calls
+}
+
+function turnEvidenceMeta(message) {
+  const context = message?.modelContext && typeof message.modelContext === 'object'
+    ? message.modelContext
+    : {}
+  const state = context.turnEvidence === true ? String(context.evidenceState || '') : ''
+  if (state !== 'failed' && state !== 'interrupted') return {}
+
+  const failure = context.error && typeof context.error === 'object' ? context.error : null
+  const artifactIds = [...new Set((Array.isArray(context.artifactIds) ? context.artifactIds : [])
+    .map((id) => String(id || '').trim())
+    .filter(Boolean))]
+  const iterations = Number.isInteger(context.iterations) && context.iterations >= 0
+    ? context.iterations
+    : undefined
+
+  return {
+    ...(state === 'failed' ? { failed: true } : { interrupted: true }),
+    serverFailure: failure,
+    serverPartialText: String(message?.content || ''),
+    serverArtifactIds: artifactIds,
+    ...(iterations !== undefined ? { serverIterations: iterations } : {}),
+  }
+}
+
+function pausedTurnMeta(message) {
+  const context = message?.modelContext && typeof message.modelContext === 'object'
+    ? message.modelContext
+    : {}
+  if (context.paused !== true) return {}
+
+  const clarification = context.clarification
+    && typeof context.clarification === 'object'
+    && !Array.isArray(context.clarification)
+    ? { ...context.clarification }
+    : null
+  const pausedSequence = Number(context.pausedSequence ?? context.paused_sequence)
+
+  return {
+    paused: true,
+    serverConnectionState: 'paused',
+    serverClarification: clarification,
+    directoryAuthorizationPending: false,
+    serverResumeResolution: null,
+    ...(Number.isInteger(pausedSequence) && pausedSequence >= 0
+      ? { serverLastSequence: pausedSequence }
+      : {}),
+  }
+}
+
+function activeTurnRecoveryStub(rawMessages) {
+  const assistantTurnIds = new Set()
+  let latestCanonicalUser = null
+  let latestTimestamp = 0
+
+  for (const message of rawMessages) {
+    latestTimestamp = Math.max(
+      latestTimestamp,
+      Number(message?.updatedAt ?? message?.createdAt) || 0,
+    )
+    const turnId = String(message?.modelContext?.turnId || '').trim()
+    if (!turnId) continue
+    if (message.role === 'assistant') {
+      assistantTurnIds.add(turnId)
+      continue
+    }
+    if (message.role === 'user' && String(message.id || '') === `${turnId}:user`) {
+      latestCanonicalUser = { message, turnId }
+    }
+  }
+
+  if (!latestCanonicalUser || assistantTurnIds.has(latestCanonicalUser.turnId)) return null
+  const { message, turnId } = latestCanonicalUser
+  return {
+    id: `${turnId}:assistant`,
+    role: 'assistant',
+    content: '',
+    timestamp: latestTimestamp || Number(message.updatedAt ?? message.createdAt) || 0,
+    meta: {
+      serverTurnId: turnId,
+      serverLastSequence: -1,
+      serverRecoveryStub: true,
+      streaming: true,
+    },
+  }
 }
 
 export function normalizeServerSessionSnapshot(snapshot) {
@@ -110,41 +205,75 @@ export function normalizeServerSessionSnapshot(snapshot) {
     resultRows.set(callId, entries)
   })
   const consumedRows = new Set()
+  const messages = rawMessages
+    .map((message, index) => ({ message, index }))
+    .filter(({ message }) => message.role === 'user' || message.role === 'assistant')
+    .map(({ message, index: messageIndex }) => {
+      const steeringClientRequestId = message.role === 'user'
+        ? String(
+            message?.modelContext?.steeringClientRequestId
+              || message?.modelContext?.clientRequestId
+              || '',
+          ).trim()
+        : ''
+      const explicitTrace = Array.isArray(message?.modelContext?.toolTrace)
+        ? message.modelContext.toolTrace.map((entry) => ({ ...entry }))
+        : []
+      const toolTrace = message.role === 'assistant' && explicitTrace.length === 0
+        ? importedToolTrace(message, messageIndex, resultRows, consumedRows)
+        : explicitTrace
+      const toolCalls = message.role === 'assistant'
+        ? toolCallsFromContext({ toolTrace })
+        : []
+      const serverArtifacts = message.role === 'assistant' && Array.isArray(message?.artifacts)
+        ? message.artifacts.filter((artifact) => artifact?.id && artifact?.url && artifact?.filename)
+        : []
+      const storedAttachments = message?.attachments ?? message?.modelContext?.attachments
+      const attachments = message.role === 'user' && Array.isArray(storedAttachments)
+        ? storedAttachments.filter((attachment) => attachment?.id).map((attachment) => ({
+            id: String(attachment.id),
+            name: String(attachment.name || 'attachment').split(/[\\/]/).pop(),
+            mimeType: String(attachment.mimeType || 'application/octet-stream'),
+            size: Math.max(0, Number(attachment.size) || 0),
+            sha256: String(attachment.sha256 || ''),
+            downloadUrl: String(attachment.downloadUrl || ''),
+          }))
+        : []
+      return {
+        id: message.id || (steeringClientRequestId ? `steer:${steeringClientRequestId}` : undefined),
+        role: message.role,
+        content: message.content,
+        timestamp: message.createdAt,
+        ...(attachments.length ? { attachments } : {}),
+        ...(steeringClientRequestId ? {
+          meta: {
+            steering: true,
+            steeringClientRequestId,
+            serverTurnId: message.modelContext?.turnId || null,
+            serverAuthoritative: true,
+          },
+        } : {}),
+        ...(message.role === 'assistant' ? {
+          meta: {
+            serverTurnId: message.modelContext?.turnId || null,
+            streaming: false,
+            serverAuthoritative: true,
+            toolCalls,
+            ...(toolTrace.length ? { toolTrace } : {}),
+            ...(serverArtifacts.length ? { serverArtifacts } : {}),
+            ...turnEvidenceMeta(message),
+            ...pausedTurnMeta(message),
+          },
+        } : {}),
+      }
+    })
+  const recoveryStub = activeTurnRecoveryStub(rawMessages)
+  if (recoveryStub && !messages.some((message) => message.id === recoveryStub.id)) {
+    messages.push(recoveryStub)
+  }
   return {
     ...snapshot,
-    messages: rawMessages
-      .map((message, index) => ({ message, index }))
-      .filter(({ message }) => message.role === 'user' || message.role === 'assistant')
-      .map(({ message, index: messageIndex }) => {
-        const explicitTrace = Array.isArray(message?.modelContext?.toolTrace)
-          ? message.modelContext.toolTrace.map((entry) => ({ ...entry }))
-          : []
-        const toolTrace = message.role === 'assistant' && explicitTrace.length === 0
-          ? importedToolTrace(message, messageIndex, resultRows, consumedRows)
-          : explicitTrace
-        const toolCalls = message.role === 'assistant'
-          ? toolCallsFromContext({ toolTrace })
-          : []
-        const serverArtifacts = message.role === 'assistant' && Array.isArray(message?.artifacts)
-          ? message.artifacts.filter((artifact) => artifact?.id && artifact?.url && artifact?.filename)
-          : []
-        return {
-          id: message.id,
-          role: message.role,
-          content: message.content,
-          timestamp: message.createdAt,
-          ...(message.role === 'assistant' ? {
-            meta: {
-              serverTurnId: message.modelContext?.turnId || null,
-              streaming: false,
-              serverAuthoritative: true,
-              toolCalls,
-              ...(toolTrace.length ? { toolTrace } : {}),
-              ...(serverArtifacts.length ? { serverArtifacts } : {}),
-            },
-          } : {}),
-        }
-      }),
+    messages,
   }
 }
 

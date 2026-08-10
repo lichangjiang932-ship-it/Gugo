@@ -2,6 +2,15 @@ import { getDb } from '../db.js'
 
 export const DEFAULT_JOB_EXECUTION_LEASE_MS = 30_000
 
+function mapLease(row) {
+  return row ? {
+    jobId: row.job_id,
+    ownerId: row.owner_id,
+    acquiredAt: row.acquired_at,
+    expiresAt: row.expires_at,
+  } : null
+}
+
 export function claimJobExecutionLease({
   jobId,
   ownerId,
@@ -45,6 +54,46 @@ export function releaseJobExecutionLease({ jobId, ownerId } = {}) {
   return getDb().prepare(
     'DELETE FROM job_execution_leases WHERE job_id = ? AND owner_id = ?',
   ).run(jobId, ownerId).changes === 1
+}
+
+export function getJobExecutionLease({ jobId } = {}) {
+  if (!jobId) return null
+  return mapLease(getDb().prepare(
+    'SELECT * FROM job_execution_leases WHERE job_id = ?',
+  ).get(jobId))
+}
+
+export function isJobExecutionLeaseActive({ jobId } = {}, now = Date.now()) {
+  const lease = getJobExecutionLease({ jobId })
+  return !!lease && lease.expiresAt > now
+}
+
+export function ownsJobExecutionLease({ jobId, ownerId } = {}, now = Date.now()) {
+  if (!jobId || !ownerId) return false
+  return !!getDb().prepare(`
+    SELECT 1 FROM job_execution_leases
+    WHERE job_id = ? AND owner_id = ? AND expires_at > ?
+  `).get(jobId, ownerId, now)
+}
+
+/**
+ * Fence a durable state transition with the current execution lease. The
+ * ownership check and callback run in one SQLite transaction, so a replacement
+ * process cannot claim the job between the check and the write.
+ */
+export function runWithJobExecutionLease({ jobId, ownerId } = {}, callback, now = Date.now()) {
+  if (!jobId || !ownerId || typeof callback !== 'function') {
+    return { owned: false, value: undefined }
+  }
+  const db = getDb()
+  return db.transaction(() => {
+    const owned = db.prepare(`
+      SELECT 1 FROM job_execution_leases
+      WHERE job_id = ? AND owner_id = ? AND expires_at > ?
+    `).get(jobId, ownerId, now)
+    if (!owned) return { owned: false, value: undefined }
+    return { owned: true, value: callback() }
+  }).immediate()
 }
 
 export function pruneExpiredJobExecutionLeases(now = Date.now()) {

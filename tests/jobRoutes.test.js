@@ -143,3 +143,56 @@ test('job event stream sends proxy-safe SSE headers and releases its subscriptio
     await new Promise((resolve) => server.close(resolve))
   }
 })
+
+test('manual completion route rejects empty evidence for execution steps', async () => {
+  const { token, userId } = issueTestSession()
+  const runtime = getJobRuntime()
+  const job = runtime.createPlan({
+    userId,
+    title: 'Route evidence gate',
+    prompt: 'Execute route work',
+    steps: [{ id: 'work', title: 'Execute work', kind: 'execute' }],
+  })
+  const step = job.steps.find((item) => item.kind === 'execute')
+  const server = createAppServer({ getEnv: () => ({}) })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const { port } = server.address()
+  const url = `http://127.0.0.1:${port}/api/jobs/${job.id}/steps/${encodeURIComponent(step.id)}/complete`
+  const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
+
+  try {
+    const missing = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ evidence: [] }),
+    })
+    assert.equal(missing.status, 422)
+    assert.equal((await missing.json()).code, 'JOB_COMPLETION_EVIDENCE_REQUIRED')
+
+    const unstructured = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ evidence: ['done'] }),
+    })
+    assert.equal(unstructured.status, 422)
+    assert.equal((await unstructured.json()).code, 'JOB_COMPLETION_EVIDENCE_INVALID')
+    assert.equal(runtime.getJob(job.id, { userId }).steps.find((item) => item.id === step.id).status, 'queued')
+
+    const accepted = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        evidence: [{
+          type: 'tool_result',
+          summary: 'Execution completed successfully',
+          toolCallId: 'route-tool-call',
+          ok: true,
+        }],
+      }),
+    })
+    assert.equal(accepted.status, 200)
+    assert.equal(runtime.getJob(job.id, { userId }).steps.find((item) => item.id === step.id).status, 'completed')
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
+})

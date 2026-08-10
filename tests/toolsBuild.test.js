@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildToolSpecs, listToolNames } from '../src/lib/tools/index.js'
+import { buildToolSpecs, getBuiltinToolRuntimeStatus, listToolNames } from '../src/lib/tools/index.js'
 import { TASK_STATUS, TOOL_CALL_STATUS, HISTORY_STATUS, isTaskStatus, isToolCallStatus } from '../src/store/taskStatus.js'
 
 test('buildToolSpecs canonicalizes equivalent tool sets by function name', () => {
@@ -9,6 +9,30 @@ test('buildToolSpecs canonicalizes equivalent tool sets by function name', () =>
 
   assert.deepEqual(first, second)
   assert.deepEqual(first.map((spec) => spec.function.name), ['fetch_url', 'read_file', 'web_search'])
+})
+
+test('every built-in executor and model-facing spec has a matching counterpart', () => {
+  assert.deepEqual(getBuiltinToolRuntimeStatus(), {
+    missingExecutors: [],
+    missingSpecs: [],
+  })
+})
+
+test('code-search and agent-support executors are exposed with their canonical arguments', () => {
+  const expectedRequired = {
+    grep_code: ['pattern'],
+    find_symbol: ['name'],
+    list_imports: ['file'],
+    reflect: ['observation', 'next_step'],
+    request_clarification: ['question'],
+    remember: ['type', 'title', 'body'],
+  }
+  const specs = buildToolSpecs(Object.keys(expectedRequired))
+
+  assert.deepEqual(specs.map((spec) => spec.function.name), Object.keys(expectedRequired).sort())
+  for (const spec of specs) {
+    assert.deepEqual(spec.function.parameters.required, expectedRequired[spec.function.name])
+  }
 })
 
 test('TASK_STATUS 是 frozen', () => {

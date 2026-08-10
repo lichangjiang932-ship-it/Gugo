@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import { createServer } from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -11,7 +12,10 @@ const { createAppServer } = await import('../server/appServer.js')
 const { closeDb, createUser, getDb } = await import('../server/db.js')
 const { upsertSession } = await import('../server/services/sessionStore.js')
 const { appendTurnEvent } = await import('../server/services/turnEventStore.js')
-const { createTurnEvent } = await import('../shared/turnEvents.js')
+const { publishTurnActivity } = await import('../server/services/turnActivityBus.js')
+const { handleTurnEventRequest } = await import('../server/routes/turnEventRoutes.js')
+const { TurnSteeringError } = await import('../server/services/turnSteeringStore.js')
+const { createTurnActivity, createTurnEvent } = await import('../shared/turnEvents.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 const server = createAppServer({
@@ -27,6 +31,19 @@ test.after(async () => {
 })
 
 function auth(token) { return { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }
+
+async function withTurnRouteEngine(engine, callback) {
+  const routeServer = createServer((req, res) => {
+    void handleTurnEventRequest(req, res, engine, { env: { AUTH_MODE: 'multi_user' } })
+  })
+  await new Promise((resolve) => routeServer.listen(0, '127.0.0.1', resolve))
+  const routeOrigin = `http://127.0.0.1:${routeServer.address().port}`
+  try {
+    return await callback(routeOrigin)
+  } finally {
+    await new Promise((resolve) => routeServer.close(resolve))
+  }
+}
 
 function createLegacyTurn({ ownerId, sessionId, turnId, terminal = false }) {
   createUser({ id: ownerId, email: `${ownerId}@example.com` })
@@ -53,6 +70,85 @@ test('turn event endpoints require authentication', async () => {
   assert.equal((await fetch(`${origin}/api/turns/events?sessionId=s&turnId=t`)).status, 401)
   assert.equal((await fetch(`${origin}/api/turns/stream?sessionId=s&turnId=t`)).status, 401)
   assert.equal((await fetch(`${origin}/api/turns/events`, { method: 'POST', body: '{}' })).status, 401)
+  assert.equal((await fetch(`${origin}/api/turns/t/steer`, { method: 'POST', body: '{}' })).status, 401)
+})
+
+test('turn steering route preserves validation, ownership, conflict, and idempotency semantics', async () => {
+  const user = issueTestSession({ email: 'turn-route-steering@example.com' })
+  const requests = []
+  const acceptedByRequestId = new Map()
+  let cancellationCalls = 0
+  const engine = {
+    async steerTurn(input) {
+      requests.push(input)
+      if (!input.content) {
+        throw new TurnSteeringError(
+          'TURN_STEERING_CONTENT_REQUIRED',
+          'steering content is required',
+        )
+      }
+      if (input.content === 'missing') {
+        throw new TurnSteeringError('TURN_NOT_FOUND', 'turn not found', 404)
+      }
+      if (input.content === 'closed') {
+        throw new TurnSteeringError('TURN_STEERING_INBOX_CLOSED', 'turn is finishing', 409)
+      }
+      const previous = acceptedByRequestId.get(input.clientRequestId)
+      if (previous) return previous
+      const steering = {
+        id: `steering-${acceptedByRequestId.size + 1}`,
+        turnId: input.turnId,
+        clientRequestId: input.clientRequestId,
+        content: input.content,
+        status: 'queued',
+      }
+      acceptedByRequestId.set(input.clientRequestId, steering)
+      return steering
+    },
+    cancelTurn() {
+      cancellationCalls += 1
+      throw new Error('steering must not cancel the active turn')
+    },
+  }
+
+  await withTurnRouteEngine(engine, async (routeOrigin) => {
+    const endpoint = `${routeOrigin}/api/turns/turn-steering-route/steer`
+    const post = (body, headers = auth(user.token)) => fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    })
+
+    const unauthorized = await post({ sessionId: 's', content: 'hello', clientRequestId: 'u' }, {})
+    assert.equal(unauthorized.status, 401)
+
+    const invalid = await post({ sessionId: 's', clientRequestId: 'invalid' })
+    assert.equal(invalid.status, 400)
+    assert.equal((await invalid.json()).error.code, 'TURN_STEERING_CONTENT_REQUIRED')
+
+    const missing = await post({ sessionId: 's', content: 'missing', clientRequestId: 'missing' })
+    assert.equal(missing.status, 404)
+    assert.equal((await missing.json()).error.code, 'TURN_NOT_FOUND')
+
+    const closed = await post({ sessionId: 's', content: 'closed', clientRequestId: 'closed' })
+    assert.equal(closed.status, 409)
+    assert.equal((await closed.json()).error.code, 'TURN_STEERING_INBOX_CLOSED')
+
+    const payload = { sessionId: 's', content: 'continue with this', clientRequestId: 'request-1' }
+    const accepted = await post(payload)
+    assert.equal(accepted.status, 202)
+    const first = (await accepted.json()).steering
+    assert.equal(first.id, 'steering-1')
+
+    const replayed = await post(payload)
+    assert.equal(replayed.status, 202)
+    assert.deepEqual((await replayed.json()).steering, first)
+  })
+
+  assert.equal(cancellationCalls, 0)
+  assert.equal(requests.length, 5, 'unauthorized requests must not reach the turn engine')
+  assert.equal(requests.at(-1).userId, user.userId)
+  assert.equal(requests.at(-1).authMode, 'multi_user')
 })
 
 test('a chat session id cannot be used as a bearer token', async () => {
@@ -196,6 +292,94 @@ test('turn event endpoint is read-only and replays ordered server events', async
   assert.match(frames, /id: 1/)
   assert.match(frames, /event: turn_event/)
   assert.match(frames, /"type":"turn.completed"/)
+})
+
+test('turn activity is live-only, id-less, and does not consume the durable cursor', async () => {
+  const user = issueTestSession({ email: 'turn-route-activity@example.com' })
+  const sessionId = 'session-route-activity'
+  const turnId = 'turn-route-activity'
+  upsertSession({ id: sessionId, userId: user.userId, title: 'Activity turn' })
+
+  const stream = await fetch(
+    `${origin}/api/turns/stream?sessionId=${sessionId}&turnId=${turnId}&after=-1`,
+    { headers: auth(user.token) },
+  )
+  publishTurnActivity({
+    userId: user.userId,
+    activity: createTurnActivity({
+      sessionId,
+      turnId,
+      kind: 'tool_call_ready',
+      toolName: 'bash_exec',
+      modelName: 'stub-model',
+      createdAt: Date.now(),
+    }),
+  })
+  appendTurnEvent({
+    userId: user.userId,
+    event: createTurnEvent({
+      id: 'activity-terminal', sessionId, turnId, sequence: 0,
+      type: 'turn.completed', payload: {}, createdAt: Date.now() + 1,
+    }),
+  })
+
+  const frames = await stream.text()
+  const parsedFrames = frames.split(/\r?\n\r?\n/).filter(Boolean)
+  const activityFrame = parsedFrames.find((frame) => frame.includes('event: turn_activity'))
+  const durableFrame = parsedFrames.find((frame) => frame.includes('"id":"activity-terminal"'))
+  assert.ok(activityFrame)
+  assert.doesNotMatch(activityFrame, /^id:/m)
+  assert.match(activityFrame, /"kind":"tool_call_ready"/)
+  assert.match(durableFrame, /^id: 0$/m)
+
+  const replay = await fetch(
+    `${origin}/api/turns/events?sessionId=${sessionId}&turnId=${turnId}`,
+    { headers: auth(user.token) },
+  )
+  assert.deepEqual((await replay.json()).events.map((event) => event.id), ['activity-terminal'])
+})
+
+test('turn event stream closes an interrupted attempt while keeping it resumable', async () => {
+  const user = issueTestSession({ email: 'turn-route-interrupted@example.com' })
+  const sessionId = 'session-route-interrupted'
+  const turnId = 'turn-route-interrupted'
+  upsertSession({ id: sessionId, userId: user.userId, title: 'Interrupted route turn' })
+  appendTurnEvent({
+    userId: user.userId,
+    event: createTurnEvent({
+      id: `${turnId}:started`, sessionId, turnId, sequence: 0,
+      type: 'turn.started', payload: { content: 'recover me' }, createdAt: 1,
+    }),
+  })
+  appendTurnEvent({
+    userId: user.userId,
+    event: createTurnEvent({
+      id: `${turnId}:interrupted`, sessionId, turnId, sequence: 1,
+      type: 'turn.interrupted',
+      payload: {
+        code: 'MODEL_HTTP_503',
+        message: 'upstream unavailable',
+        retryable: true,
+        text: '',
+        artifactIds: [],
+        iterations: 2,
+      },
+      createdAt: 2,
+    }),
+  })
+
+  const stream = await fetch(
+    `${origin}/api/turns/stream?sessionId=${sessionId}&turnId=${turnId}&after=0`,
+    { headers: auth(user.token) },
+  )
+  const frames = await stream.text()
+  assert.match(frames, /"type":"turn.interrupted"/)
+
+  const status = await fetch(
+    `${origin}/api/turns/${turnId}?sessionId=${sessionId}`,
+    { headers: auth(user.token) },
+  )
+  assert.equal((await status.json()).turn.status, 'interrupted')
 })
 
 test('turn event stream polls cross-instance database writes without duplicating local events', async () => {

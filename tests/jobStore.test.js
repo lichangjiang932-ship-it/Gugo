@@ -9,7 +9,9 @@ const {
   appendJobArtifact,
   appendJobEvent,
   appendJobSteps,
+  completeJobStep,
   createJob,
+  getJobStep,
   getJobWithChildren,
   listJobArtifacts,
   listJobEvents,
@@ -59,4 +61,56 @@ test('job store persists parent job, child steps, events, and artifacts', () => 
   const other = issueTestSession()
   assert.equal(listJobs({ userId: other.userId }).length, 0)
   assert.equal(getJobWithChildren(jobId, { userId: other.userId }), null)
+})
+
+test('job store requires structured evidence for manually completed execution steps', () => {
+  const { userId } = issueTestSession()
+  const suffix = `evidence-${process.pid}-${Date.now()}`
+  const jobId = `job-${suffix}`
+  const executeStepId = `step-execute-${suffix}`
+  const batchStepId = `step-batch-${suffix}`
+  const verifyStepId = `step-verify-${suffix}`
+  const planStepId = `step-plan-${suffix}`
+  createJob({ id: jobId, userId, title: 'Evidence gate', prompt: 'Complete work', status: 'queued' })
+  appendJobSteps(jobId, [
+    { id: executeStepId, title: 'Execute work', kind: 'execute' },
+    { id: batchStepId, title: 'Execute batch item', kind: 'batch_item' },
+    { id: verifyStepId, title: 'Verify work', kind: 'verify' },
+    { id: planStepId, title: 'Plan work', kind: 'plan' },
+  ])
+
+  for (const stepId of [executeStepId, batchStepId, verifyStepId]) {
+    assert.throws(
+      () => completeJobStep(stepId),
+      (error) => error?.code === 'JOB_COMPLETION_EVIDENCE_REQUIRED' && error?.statusCode === 422,
+    )
+    assert.equal(getJobStep(stepId).status, 'queued')
+  }
+
+  assert.throws(
+    () => completeJobStep(executeStepId, { evidence: ['npm test passed'] }),
+    (error) => error?.code === 'JOB_COMPLETION_EVIDENCE_INVALID',
+  )
+  assert.equal(getJobStep(executeStepId).status, 'queued')
+
+  const completed = completeJobStep(executeStepId, {
+    evidence: [{
+      type: 'check',
+      summary: 'Targeted tests passed',
+      command: 'npm test -- target',
+      exitCode: 0,
+    }],
+  })
+  assert.equal(completed.status, 'completed')
+  assert.deepEqual(completed.output.evidence, [{
+    type: 'check',
+    summary: 'Targeted tests passed',
+    command: 'npm test -- target',
+    ok: true,
+    exitCode: 0,
+  }])
+
+  const plan = completeJobStep(planStepId)
+  assert.equal(plan.status, 'completed')
+  assert.deepEqual(plan.output.evidence, [])
 })

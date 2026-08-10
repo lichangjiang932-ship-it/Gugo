@@ -7,6 +7,7 @@ const composerSource = readSourceTree('../src/pages/ChatSplit/chatComposer/') + 
 const messagesSource = readSourceTree('../src/pages/ChatSplit/chatMessages/') + fs.readFileSync(new URL('../src/pages/ChatSplit/ChatMessages.jsx', import.meta.url), 'utf8')
 const chatSource = readSourceTree('../src/pages/ChatSplit/')
 const chatEntrySource = fs.readFileSync(new URL('../src/pages/ChatSplit/index.jsx', import.meta.url), 'utf8')
+const composerActionsSource = fs.readFileSync(new URL('../src/pages/ChatSplit/chatComposer/ComposerActions.jsx', import.meta.url), 'utf8')
 const lifecycleSource = fs.readFileSync(new URL('../src/pages/ChatSplit/useChatSessionLifecycle.js', import.meta.url), 'utf8')
 const messageListSource = fs.readFileSync(new URL('../src/pages/ChatSplit/ChatMessages.jsx', import.meta.url), 'utf8')
 const messageRowSource = fs.readFileSync(new URL('../src/pages/ChatSplit/chatMessages/MessageRow.jsx', import.meta.url), 'utf8')
@@ -16,14 +17,16 @@ const markdownSource = fs.readFileSync(new URL('../src/components/MarkdownRender
 const toolCardSource = fs.readFileSync(new URL('../src/components/ToolCallCard.jsx', import.meta.url), 'utf8')
 const stylesSource = fs.readFileSync(new URL('../src/index.css', import.meta.url), 'utf8')
 
-test('chat composer accepts pasted images and shows attachment errors', () => {
+test('chat composer accepts pasted files and shows managed upload state', () => {
   assert.match(composerSource, /onPaste=/)
-  assert.match(composerSource, /getClipboardImageFiles/)
-  assert.match(composerSource, /\{item\.error\}/)
+  assert.match(composerSource, /getClipboardFiles/)
+  assert.match(composerSource, /item\.uploadStatus === 'uploading'/)
+  assert.match(composerSource, /item\.uploadStatus === 'error'/)
 })
 
 test('chat drafts persist while typing and message actions stay copy-only', () => {
   assert.match(lifecycleSource, /SET_SESSION_DRAFT[\s\S]{0,180}text: input/)
+  assert.match(lifecycleSource, /previousId === nextId[\s\S]{0,320}setAttachments\(\[\]\)/)
   assert.match(chatEntrySource, /triggerSendFlow\(typedContent \|\| describeAttachmentPrompt\(currentAttachments\), currentAttachments\)/)
   assert.doesNotMatch(chatSource, /handleEditMessage|editingMessageId|handleRegenerate|handleDeleteMessage/)
   assert.match(messageRowSource, /<CopyButton content=\{msg\.content\}/)
@@ -66,11 +69,29 @@ test('only the streaming assistant hides copy actions while completed messages r
   assert.match(chatViewSource, /isGenerating=\{isGenerating\}/)
 })
 
-test('composer groups model and voice beside send without an Enter label', () => {
-  const controls = composerSource.match(/<div className="flex min-w-0 items-center gap-1\.5">[\s\S]*?\{isGenerating \? \(/)?.[0] || ''
-  assert.match(controls, /<ModelPicker/)
-  assert.match(controls, /<Mic/)
+test('composer uses one stable primary button for send and stop', () => {
+  assert.match(composerActionsSource, /<ModelPicker/)
+  assert.match(composerActionsSource, /<Mic/)
+  assert.match(composerActionsSource, /const primaryActionLabel = t\(isGenerating \? 'chatComposer\.stop' : 'chatComposer\.send'\)/)
+  assert.match(composerActionsSource, /onClick=\{isGenerating \? onAbort : onSend\}/)
+  assert.match(composerActionsSource, /disabled=\{!isGenerating && sendDisabled\}/)
+  assert.match(composerActionsSource, /\{isGenerating[\s\S]*?<Square[\s\S]*?<Send/)
+  assert.doesNotMatch(composerActionsSource, /chatComposer\.steer|<Pause/)
   assert.doesNotMatch(composerSource, />Enter<\/span>/)
+})
+
+test('transient tool readiness is visible in the streaming assistant without creating a tool trace', () => {
+  assert.match(messageRowSource, /msg\.meta\?\.modelActivity\?\.kind === 'tool_call_ready'/)
+  assert.match(messageRowSource, /chatMessages\.toolCallReady/)
+  assert.match(messageRowSource, /data-testid=\{modelActivity \? 'model-activity'/)
+})
+
+test('tool failures expose status, retryability, attempts, and recovery hints', () => {
+  assert.match(toolCardSource, /call\.errorCode/)
+  assert.match(toolCardSource, /call\.errorStatus/)
+  assert.match(toolCardSource, /call\.retryable/)
+  assert.match(toolCardSource, /call\.attempts/)
+  assert.match(toolCardSource, /call\.errorHint/)
 })
 
 test('selected slash skill renders as a dark tag inside the composer', () => {
@@ -122,25 +143,24 @@ test('user message time and copy actions sit outside the compact bubble', () => 
   assert.match(messageRowSource, /mt-1 flex h-4[\s\S]{0,160}leading-none/)
 })
 
-test('reasoning stays collapsed while running tool traces open as a compact timeline', () => {
+test('reasoning stays a compact live status while tool traces remain inspectable', () => {
   const reasoningTrace = activityTracesSource.match(/function ReasoningTrace[\s\S]*?(?=\nexport function ToolCallTrace)/)?.[0] || ''
   const toolCallTrace = activityTracesSource.match(/function ToolCallTrace[\s\S]*$/)?.[0] || ''
 
-  assert.match(reasoningTrace, /useState\(false\)/)
+  assert.match(reasoningTrace, /if \(!text \|\| !streaming\) return null/)
+  assert.match(reasoningTrace, /role="status"/)
+  assert.doesNotMatch(reasoningTrace, /<pre/)
   assert.match(toolCallTrace, /useState\(\(\) => calls\.some/)
   assert.match(toolCallTrace, /chat-tool-list/)
-  assert.match(reasoningTrace, /aria-expanded=\{expanded\}/)
   assert.match(toolCallTrace, /aria-expanded=\{expanded\}/)
-  assert.doesNotMatch(reasoningTrace, /chatMessages\.clickExpand/)
   assert.doesNotMatch(toolCallTrace, /chatMessages\.clickExpand/)
 })
 
-test('reasoning character count stays quiet until hover or keyboard focus', () => {
+test('reasoning does not expose raw text or character counts', () => {
   const reasoningTrace = activityTracesSource.match(/function ReasoningTrace[\s\S]*?(?=\nexport function ToolCallTrace)/)?.[0] || ''
-  assert.match(reasoningTrace, /aria-label=/)
-  assert.match(reasoningTrace, /opacity-0/)
-  assert.match(reasoningTrace, /group-hover\/reasoning:opacity-100/)
-  assert.match(reasoningTrace, /group-focus-visible\/reasoning:opacity-100/)
+  assert.doesNotMatch(reasoningTrace, /text\.length/)
+  assert.doesNotMatch(reasoningTrace, /chatMessages\.characters/)
+  assert.doesNotMatch(reasoningTrace, /\{text\}/)
 })
 
 test('completed artifact rows do not revert to streaming source when a later message generates', () => {

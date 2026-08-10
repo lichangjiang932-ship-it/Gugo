@@ -22,6 +22,7 @@ export default function ChatMessages({
   onPermAllow,
   onPermDeny,
   onNavigatePermissions,
+  onAuthorizeDirectoryRequest,
   onOpenArtifact,
   onOpenInPreview,
   onExpandCompaction,
@@ -79,6 +80,7 @@ export default function ChatMessages({
                 rowKey={msg.id ?? hiddenCount + index}
                 generatingMessageId={generatingMessageId}
                 lang={lang}
+                onAuthorizeDirectoryRequest={onAuthorizeDirectoryRequest}
                 onExpandCompaction={onExpandCompaction}
                 onOpenArtifact={onOpenArtifact}
                 onOpenInPreview={onOpenInPreview}

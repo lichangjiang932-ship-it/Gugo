@@ -108,7 +108,10 @@ test('runToolsLoop: budgetExceeded 触发停止', async () => {
     n++
     return {
       content: '',
-      toolCalls: [{ id: `c${n}`, function: { name: 'echo_tool', arguments: '{}' } }],
+      toolCalls: [{
+        id: `c${n}`,
+        function: { name: 'echo_tool', arguments: JSON.stringify({ attempt: n }) },
+      }],
     }
   }
   const fakeExecute = async () => ({ ok: true })

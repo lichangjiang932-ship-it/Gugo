@@ -91,11 +91,21 @@ test('git_status and git_diff report workspace changes', async () => {
 
 test('run_project_check only allows lint/test/build scripts', async () => {
   const cwd = withTempRepo()
-  await withEnv({ WORKSPACE_ROOT: cwd, WORKSPACE_GIT_ENABLED: '1', WORKSPACE_SHELL_ENABLED: '1' }, async () => {
+  await withEnv({ WORKSPACE_ROOT: cwd, WORKSPACE_GIT_ENABLED: '0', WORKSPACE_SHELL_ENABLED: '1' }, async () => {
     const lint = await runProjectCheckTool({ check: 'lint' })
     assert.equal(lint.ok, true)
     assert.match(lint.stdout, /lint-ok/)
     await assert.rejects(() => runProjectCheckTool({ check: 'start' }), /only supports lint, test, build/)
+  })
+})
+
+test('run_project_check requires shell authorization instead of the Git gate', async () => {
+  const cwd = withTempRepo()
+  await withEnv({ WORKSPACE_ROOT: cwd, WORKSPACE_GIT_ENABLED: '1', WORKSPACE_SHELL_ENABLED: '0' }, async () => {
+    await assert.rejects(
+      () => runProjectCheckTool({ check: 'test' }),
+      (error) => error?.code === 'WORKSPACE_SHELL_DISABLED',
+    )
   })
 })
 

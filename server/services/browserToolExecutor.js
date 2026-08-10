@@ -13,11 +13,11 @@ import {
 export async function executeBrowserTool(
   name,
   args = {},
-  { userId, idempotencyKey, toolCallId } = {},
+  { userId, idempotencyKey, toolCallId, signal = null } = {},
 ) {
   if (!String(name || '').startsWith('browser_')) throw new Error(`Unknown browser tool: ${name}`)
   if (!userId) throw new Error('Browser tool requires a userId')
-  const executionContext = { idempotencyKey, toolCallId }
+  const executionContext = { idempotencyKey, toolCallId, signal }
   if (!isIntegrationEnabled({ userId, provider: 'browser', defaultEnabled: true })) {
     throw new Error('Browser is disabled in Access')
   }

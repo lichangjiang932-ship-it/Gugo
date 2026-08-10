@@ -4,6 +4,8 @@ import {
   createSessionMutationDispatcher,
   isServerSessionMutation,
   mergeServerSessionMessages,
+  needsServerSessionSnapshot,
+  needsServerTranscriptHydration,
   projectSessionMutation,
   resolveSessionMutationTarget,
 } from '../src/store/sessionServerSync.js'
@@ -199,6 +201,103 @@ test('server snapshot artifacts replace empty or partial local artifact lists', 
   }
 })
 
+test('a paused server snapshot keeps its directory request when local streaming metadata is stale', () => {
+  const clarification = {
+    question: 'Please choose and authorize a directory so this task can continue.',
+    request_type: 'directory',
+    access_mode: 'read_write',
+    suggested_path: 'D:\\destok',
+  }
+  const [merged] = mergeServerSessionMessages(
+    [{
+      id: 'turn-1:assistant',
+      role: 'assistant',
+      content: 'Please choose and authorize a directory so this task can continue.',
+      meta: {
+        streaming: true,
+        serverTurnId: 'turn-1',
+        serverLastSequence: 6,
+        serverConnectionState: 'connected',
+        serverClarification: null,
+      },
+    }],
+    [{
+      id: 'turn-1:assistant',
+      role: 'assistant',
+      content: 'Please choose and authorize a directory so this task can continue.',
+      meta: {
+        streaming: false,
+        paused: true,
+        serverTurnId: 'turn-1',
+        serverLastSequence: 7,
+        serverConnectionState: 'paused',
+        serverClarification: clarification,
+        directoryAuthorizationPending: false,
+        serverResumeResolution: null,
+      },
+    }],
+  )
+
+  assert.equal(merged.meta.paused, true)
+  assert.equal(merged.meta.streaming, false)
+  assert.equal(merged.meta.serverConnectionState, 'paused')
+  assert.equal(merged.meta.serverLastSequence, 7)
+  assert.deepEqual(merged.meta.serverClarification, clarification)
+  assert.equal(merged.meta.serverClarification.request_type, 'directory')
+})
+
+test('a paused snapshot does not roll an in-flight directory authorization back to waiting', () => {
+  const resolution = {
+    type: 'directory_authorization',
+    path: 'D:\\destok',
+    access_mode: 'read_write',
+    paused_sequence: 7,
+  }
+  const [merged] = mergeServerSessionMessages(
+    [{
+      id: 'turn-1:assistant',
+      role: 'assistant',
+      content: 'Please choose and authorize a directory so this task can continue.',
+      meta: {
+        streaming: true,
+        paused: false,
+        serverTurnId: 'turn-1',
+        serverLastSequence: 7,
+        serverConnectionState: 'reconnecting',
+        serverClarification: null,
+        directoryAuthorizationPending: true,
+        serverResumeResolution: resolution,
+      },
+    }],
+    [{
+      id: 'turn-1:assistant',
+      role: 'assistant',
+      content: 'Please choose and authorize a directory so this task can continue.',
+      meta: {
+        streaming: false,
+        paused: true,
+        serverTurnId: 'turn-1',
+        serverLastSequence: 7,
+        serverConnectionState: 'paused',
+        serverClarification: {
+          request_type: 'directory',
+          access_mode: 'read_write',
+          suggested_path: 'D:\\destok',
+        },
+        directoryAuthorizationPending: false,
+        serverResumeResolution: null,
+      },
+    }],
+  )
+
+  assert.equal(merged.meta.streaming, true)
+  assert.equal(merged.meta.paused, false)
+  assert.equal(merged.meta.serverConnectionState, 'reconnecting')
+  assert.equal(merged.meta.directoryAuthorizationPending, true)
+  assert.deepEqual(merged.meta.serverResumeResolution, resolution)
+  assert.equal(merged.meta.serverClarification.request_type, 'directory')
+})
+
 test('an empty completion snapshot cannot erase assistant text already received from the stream', () => {
   const [merged] = mergeServerSessionMessages(
     [{ id: 'assistant-1', role: 'assistant', content: 'Done. Your file is ready.', meta: { streaming: true } }],
@@ -207,6 +306,57 @@ test('an empty completion snapshot cannot erase assistant text already received 
 
   assert.equal(merged.content, 'Done. Your file is ready.')
   assert.equal(merged.meta.streaming, false)
+})
+
+test('recovery stubs stay resumable until a real server assistant replaces them', () => {
+  const local = [{
+    id: 'turn-1:assistant',
+    role: 'assistant',
+    content: 'partial',
+    meta: { streaming: true, serverTurnId: 'turn-1', serverLastSequence: 7 },
+  }]
+  const [recoverable] = mergeServerSessionMessages(local, [{
+    id: 'turn-1:assistant',
+    role: 'assistant',
+    content: '',
+    meta: {
+      streaming: true,
+      serverTurnId: 'turn-1',
+      serverLastSequence: -1,
+      serverRecoveryStub: true,
+    },
+  }])
+  assert.equal(recoverable.content, 'partial')
+  assert.equal(recoverable.meta.streaming, true)
+  assert.equal(recoverable.meta.serverLastSequence, 7)
+  assert.equal(recoverable.meta.serverRecoveryStub, true)
+
+  const [completed] = mergeServerSessionMessages([recoverable], [{
+    id: 'turn-1:assistant',
+    role: 'assistant',
+    content: 'complete',
+    meta: { streaming: false, serverTurnId: 'turn-1', serverAuthoritative: true },
+  }])
+  assert.equal(completed.content, 'complete')
+  assert.equal(completed.meta.streaming, false)
+  assert.equal(completed.meta.serverRecoveryStub, undefined)
+})
+
+test('a server session containing only an active-turn stub still requires transcript hydration', () => {
+  const session = {
+    id: 's1',
+    serverRevision: 7,
+    messages: [{
+      id: 'turn-1:assistant',
+      role: 'assistant',
+      content: '',
+      meta: { streaming: true, serverTurnId: 'turn-1', serverLastSequence: -1 },
+    }],
+  }
+  assert.equal(needsServerTranscriptHydration(session), true)
+  assert.equal(needsServerSessionSnapshot(session, null), true)
+  assert.equal(needsServerSessionSnapshot(session, 7), false)
+  assert.equal(needsServerTranscriptHydration({ ...session, messages: [{ id: 'history', role: 'user' }] }), false)
 })
 
 test('selecting an empty server-backed session hydrates its transcript once per revision', async () => {

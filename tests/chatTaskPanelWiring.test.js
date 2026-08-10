@@ -39,7 +39,10 @@ test('chat task views avoid speculative numeric progress while a model request i
   assert.doesNotMatch(chatSource, /progress:\s*10/)
   assert.doesNotMatch(chatSource, /chunkCount/)
   assert.doesNotMatch(chatSource, /nextProgress/)
-  assert.match(serverTurnSource, /sawAssistantText/)
+  assert.match(serverTurnSource, /let currentAssistantText = ''/)
+  assert.match(serverTurnSource, /currentAssistantText = String\(event\.payload\?\.assistantText \|\| ''\)/)
+  assert.match(serverTurnSource, /currentAssistantText \+= String\(event\.payload\.text\)/)
+  assert.match(serverTurnSource, /if \(!currentAssistantText && terminal\.payload\?\.text\) dispatchMessage\('APPEND_TO_LAST_MESSAGE', terminal\.payload\.text\)/)
   assert.match(serverTurnSource, /stepLabel:\s*t\('chat\.serverTurn\.submit'\)/)
 
   assert.doesNotMatch(detailSource, /task\.progress/)
@@ -51,5 +54,5 @@ test('chat forwards the persisted tool switches to the server turn flow', () => 
   const serverTurnSource = fs.readFileSync(new URL('../src/pages/ChatSplit/serverTurnFlow.js', import.meta.url), 'utf8')
 
   assert.match(chatSource, /toolsConfig:\s*state\.toolsConfig/)
-  assert.match(serverTurnSource, /toolsConfig:\s*buildServerToolsConfig\(toolsConfig,\s*localPathAccess\)/)
+  assert.match(serverTurnSource, /toolsConfig:\s*buildServerToolsConfig\(toolsConfig,\s*localPathAccess,\s*historyMessages\)/)
 })

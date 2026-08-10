@@ -87,3 +87,17 @@ test('notification HTTP errors reach transport error handlers', async () => {
     assert.match(errors[0], /MCP HTTP 401: bad token/)
   })
 })
+
+test('Streamable HTTP request observes an explicit cancellation signal', async () => {
+  await withServer(async (_req, res) => {
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    res.end('{}')
+  }, async (url) => {
+    const controller = new AbortController()
+    const reason = Object.assign(new Error('user stopped'), { name: 'AbortError', code: 'TURN_CANCEL_REQUESTED' })
+    const transport = new SseTransport({ url })
+    const pending = transport.request({ jsonrpc: '2.0', id: 9, method: 'tools/call' }, { signal: controller.signal })
+    controller.abort(reason)
+    await assert.rejects(pending, (error) => error === reason)
+  })
+})

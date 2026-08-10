@@ -113,6 +113,7 @@ export class StdioTransport {
         const entry = this.pending.get(msg.id)
         this.pending.delete(msg.id)
         clearTimeout(entry.timer)
+        entry.cleanup?.()
         if (msg.error) {
           entry.reject(new Error(msg.error.message || 'MCP error'))
         } else {
@@ -148,6 +149,7 @@ export class StdioTransport {
   _rejectAll(err) {
     for (const [, entry] of this.pending) {
       clearTimeout(entry.timer)
+      entry.cleanup?.()
       try { entry.reject(err) } catch { /* ignore */ }
     }
     this.pending.clear()
@@ -169,23 +171,36 @@ export class StdioTransport {
   /**
    * 发请求 + 等待 id 对应的响应，超时拒绝。
    */
-  request(message, { timeoutMs = 30000 } = {}) {
+  request(message, { timeoutMs = 30000, signal } = {}) {
     if (message.id === undefined) {
       return this.send(message)
     }
+    if (signal?.aborted) return Promise.reject(signal.reason || new DOMException('MCP request cancelled', 'AbortError'))
     const id = message.id
     return new Promise((resolve, reject) => {
+      const onAbort = () => {
+        const entry = this.pending.get(id)
+        if (!entry) return
+        this.pending.delete(id)
+        clearTimeout(entry.timer)
+        signal?.removeEventListener?.('abort', onAbort)
+        this.send({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: id, reason: 'cancelled' } }).catch(() => {})
+        reject(signal.reason || new DOMException('MCP request cancelled', 'AbortError'))
+      }
       const timer = setTimeout(() => {
         if (this.pending.has(id)) {
           this.pending.delete(id)
+          signal?.removeEventListener?.('abort', onAbort)
           reject(new Error(`MCP "${this.label}" 请求超时 (${message.method})`))
         }
       }, timeoutMs)
-      this.pending.set(id, { resolve, reject, timer })
+      this.pending.set(id, { resolve, reject, timer, cleanup: () => signal?.removeEventListener?.('abort', onAbort) })
+      signal?.addEventListener?.('abort', onAbort, { once: true })
       this.send(message).catch((err) => {
         if (this.pending.has(id)) {
           this.pending.delete(id)
           clearTimeout(timer)
+          signal?.removeEventListener?.('abort', onAbort)
           reject(err)
         }
       })

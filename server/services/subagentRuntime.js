@@ -374,7 +374,7 @@ async function executeSubagentTool(toolName, args, {
     case 'request_clarification':
     case 'request_directory':
     case 'sleep_until':
-      return dispatchAgenticTool(toolName, args)
+      return dispatchAgenticTool(toolName, args, { userId })
     case 'Agent':
       return withYieldedSlot(slotLease, signal, () => runSubagentBatch({
           userId,

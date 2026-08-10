@@ -30,7 +30,8 @@ test('turn WebSocket polling isolates a failed subscription and continues delive
 
 test('turn WebSocket subscription cleans up when the initial durable replay fails', () => {
   let previousUnsubscribes = 0
-  let newUnsubscribes = 0
+  let eventUnsubscribes = 0
+  let activityUnsubscribes = 0
   const key = 'session-1\u0000turn-1'
   const subscriptions = new Map([[
     key,
@@ -46,12 +47,14 @@ test('turn WebSocket subscription cleans up when the initial durable replay fail
     turnId: 'turn-1',
     after: -1,
     deliver: () => {},
-    subscribe: () => () => { newUnsubscribes += 1 },
+    subscribe: () => () => { eventUnsubscribes += 1 },
+    subscribeActivities: () => () => { activityUnsubscribes += 1 },
     listEvents: () => { throw failure },
   }), failure)
 
   assert.equal(previousUnsubscribes, 1)
-  assert.equal(newUnsubscribes, 1)
+  assert.equal(eventUnsubscribes, 1)
+  assert.equal(activityUnsubscribes, 1)
   assert.equal(subscriptions.has(key), false)
 })
 
@@ -73,4 +76,55 @@ test('turn WebSocket subscription leaves no stale entry when listener setup fail
   }), failure)
 
   assert.equal(subscriptions.has(key), false)
+})
+
+test('turn WebSocket subscription cleans up durable listener when activity setup fails', () => {
+  const key = 'session-activity-fail\u0000turn-activity-fail'
+  const subscriptions = new Map()
+  const failure = new Error('activity listener unavailable')
+  let eventUnsubscribes = 0
+
+  assert.throws(() => subscribeTurnSubscription({
+    subscriptions,
+    key,
+    userId: 'user-1',
+    sessionId: 'session-activity-fail',
+    turnId: 'turn-activity-fail',
+    after: -1,
+    deliver: () => {},
+    subscribe: () => () => { eventUnsubscribes += 1 },
+    subscribeActivities: () => { throw failure },
+    listEvents: () => [],
+  }), failure)
+
+  assert.equal(eventUnsubscribes, 1)
+  assert.equal(subscriptions.has(key), false)
+})
+
+test('turn WebSocket activity delivery does not advance the durable cursor', () => {
+  const key = 'session-activity\u0000turn-activity'
+  const subscriptions = new Map()
+  let activityListener = null
+  const activities = []
+  const subscription = subscribeTurnSubscription({
+    subscriptions,
+    key,
+    userId: 'user-1',
+    sessionId: 'session-activity',
+    turnId: 'turn-activity',
+    after: 7,
+    deliver: () => {},
+    deliverActivity: (current, activity) => activities.push([current.cursor, activity.toolName]),
+    subscribe: () => () => {},
+    subscribeActivities: (_scope, listener) => {
+      activityListener = listener
+      return () => {}
+    },
+    listEvents: () => [],
+  })
+
+  activityListener({ toolName: 'bash_exec' })
+  assert.equal(subscription.cursor, 7)
+  assert.deepEqual(activities, [[7, 'bash_exec']])
+  subscription.unsubscribe()
 })

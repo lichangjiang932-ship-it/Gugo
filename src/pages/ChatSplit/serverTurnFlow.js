@@ -1,10 +1,35 @@
-import { buildUserContentWithAttachments } from '../../lib/attachments.js'
+import { serializeAttachmentReferences } from '../../lib/attachmentClient.js'
 import { buildLocalPathEvidenceInstruction, buildLocalPathToolInstruction, resolveLocalPathToolNames } from '../../lib/localPathPreflight.js'
-import { dispatchTurnEvent, runServerTurn } from '../../lib/turnClient.js'
+import { dispatchTurnActivity, dispatchTurnEvent, runServerTurn } from '../../lib/turnClient.js'
+import { createTurnFailureError } from '../../lib/turnClient/turnEventDispatch.js'
 import { TASK_STATUS, HISTORY_STATUS } from '../../store/taskStatus.js'
 import { artifactTypeForSkill, buildChatFailureMessage, getVisibleModelErrorMessage } from '../../lib/chatFlowGuards.js'
 import { isServerTurnToolToggle } from '../../lib/serverToolConfig.js'
 import { registerTurnRun, unregisterTurnRun } from './turnRunRegistry.js'
+
+const CODE_EXECUTION_CONTINUITY_TOOLS = new Set([
+  'list_directory',
+  'read_file',
+  'write_file',
+  'edit_file',
+  'run_project_check',
+])
+
+const MUTATION_TOOL_NAMES = ['write_file', 'edit_file']
+const READBACK_VERIFICATION_TOOL_NAMES = ['list_directory', 'read_file']
+
+function successfulHistoryToolNames(historyMessages = []) {
+  const names = new Set()
+  for (const message of Array.isArray(historyMessages) ? historyMessages : []) {
+    if (message?.role !== 'tool') continue
+    const name = String(message?.name || '').trim()
+    if (!CODE_EXECUTION_CONTINUITY_TOOLS.has(name)) continue
+    let result = null
+    try { result = JSON.parse(String(message.content || '')) } catch { /* non-JSON evidence is not trusted */ }
+    if (result?.ok === true) names.add(name)
+  }
+  return names
+}
 
 export function isUserStopped(error) {
   return error?.name === 'AbortError' || error?.code === 'USER_STOPPED'
@@ -41,7 +66,7 @@ function serializeServerTurnContent(content, t) {
   }).filter(Boolean).join('\n\n')
 }
 
-export function buildServerToolsConfig(toolsConfig = {}, localPathAccess = {}) {
+export function buildServerToolsConfig(toolsConfig = {}, localPathAccess = {}, historyMessages = []) {
   const enabled = new Set()
   const disabled = new Set()
   for (const [rawName, value] of Object.entries(toolsConfig || {})) {
@@ -50,10 +75,32 @@ export function buildServerToolsConfig(toolsConfig = {}, localPathAccess = {}) {
     if (value === true) enabled.add(name)
     else if (value === false) disabled.add(name)
   }
+  // A follow-up execution turn receives the preceding tool transcript. Keep
+  // tools that already succeeded in that transcript available while code
+  // execution remains enabled; otherwise the model sees a valid prior
+  // write_file call and the next turn rejects the same call as unknown. Path
+  // grants and write access are still enforced independently by the server.
+  if (enabled.has('bash_exec') && !disabled.has('bash_exec')) {
+    for (const name of successfulHistoryToolNames(historyMessages)) {
+      enabled.add(name)
+      disabled.delete(name)
+    }
+  }
   const effectiveEnabled = resolveLocalPathToolNames(enabled, localPathAccess)
   for (const name of effectiveEnabled) {
     enabled.add(name)
     disabled.delete(name)
+  }
+  // A turn that can mutate files must also be able to verify those mutations.
+  // This matters most on execution follow-ups: write_file may be restored from
+  // successful history while the persisted UI defaults still mark both read
+  // tools disabled. Without this dependency the model can write successfully,
+  // then receives unknown_tool for the mandatory readback/directory check.
+  if (MUTATION_TOOL_NAMES.some((name) => enabled.has(name) && !disabled.has(name))) {
+    for (const name of READBACK_VERIFICATION_TOOL_NAMES) {
+      enabled.add(name)
+      disabled.delete(name)
+    }
   }
   return { enabled: [...enabled].sort(), disabled: [...disabled].sort() }
 }
@@ -81,6 +128,7 @@ export async function runServerChatTurn({
   dispatch,
   explicitAttachments,
   historyMessages,
+  intentMode,
   localPathAccess,
   modelName,
   probeLocalPathAccess,
@@ -108,7 +156,7 @@ export async function runServerChatTurn({
   abortCtrlRef.current = controller
   const startedAt = Date.now()
   const serverArtifacts = []
-  let sawAssistantText = false
+  let currentAssistantText = ''
   const initialArtifactType = artifactTypeForSkill(skillId)
   const { assistantId: assistantMessageId } = buildServerTurnMessageIds(turnId)
   const messageTarget = { sessionId, messageId: assistantMessageId }
@@ -119,20 +167,37 @@ export async function runServerChatTurn({
   })
   dispatch({
     type: 'RECEIVE_MESSAGE',
-    payload: { id: assistantMessageId, sessionId, content: '', meta: { skillId, artifactType: initialArtifactType, artifactTitle: initialArtifactType ? taskName : undefined, streaming: true } },
+    payload: {
+      id: assistantMessageId,
+      sessionId,
+      content: '',
+      meta: {
+        skillId,
+        artifactType: initialArtifactType,
+        artifactTitle: initialArtifactType ? taskName : undefined,
+        streaming: true,
+        serverTurnId: turnId,
+        serverLastSequence: -1,
+      },
+    },
   })
   try {
-    const localPathInstruction = buildLocalPathToolInstruction(localPathAccess.paths, localPathAccess.accessMode)
+    const localPathInstruction = buildLocalPathToolInstruction(
+      localPathAccess.paths,
+      localPathAccess.accessMode,
+      localPathAccess.resources,
+    )
     const localPathEvidence = await collectLocalPathEvidence({
       localPathAccess,
       probeLocalPathAccess,
       signal: controller.signal,
     })
     const localPathEvidenceInstruction = buildLocalPathEvidenceInstruction(localPathEvidence)
+    const attachmentReferences = serializeAttachmentReferences(explicitAttachments || attachments)
     const serverContent = [
       localPathInstruction,
       localPathEvidenceInstruction,
-      serializeServerTurnContent(buildUserContentWithAttachments(userPrompt || content, explicitAttachments || attachments), t),
+      serializeServerTurnContent(userPrompt || content, t),
     ].filter(Boolean).join('\n\n')
     setContextSystemPrompts((current) => ({ ...current, [sessionId || '__draft__']: '' }))
 
@@ -140,37 +205,55 @@ export async function runServerChatTurn({
       sessionId,
       content: serverContent,
       displayContent,
+      attachments: attachmentReferences,
       modelName,
       turnId,
       history: historyMessages,
       agentId,
       skillIds: skillId ? [skillId] : [],
+      intentMode,
       syncSessionSnapshot: true,
-      toolsConfig: buildServerToolsConfig(toolsConfig, localPathAccess),
+      toolsConfig: buildServerToolsConfig(toolsConfig, localPathAccess, historyMessages),
       signal: controller.signal,
       onStarted: (turn) => dispatchMessage('UPDATE_LAST_MESSAGE_META', { serverTurnId: turn.turnId, serverLastSequence: -1 }),
       onConnectionState: ({ status, attempt, maxAttempts }) => {
         if (status === 'reconnecting') {
+          dispatchMessage('UPDATE_LAST_MESSAGE_META', { serverConnectionState: 'reconnecting', modelActivity: null })
           dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { stepLabel: t('chat.serverTurn.reconnecting', { attempt, max: maxAttempts }) } } })
         } else if (status === 'connected') {
+          dispatchMessage('UPDATE_LAST_MESSAGE_META', { serverConnectionState: 'connected', modelActivity: null })
           dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { stepLabel: t('chat.serverTurn.reconnected') } } })
+        } else if (status === 'cancelling') {
+          dispatchMessage('UPDATE_LAST_MESSAGE_META', { serverConnectionState: 'cancelling', modelActivity: null })
+          dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { stepLabel: t('taskCenter.statuses.cancel_requested') } } })
         }
       },
+      onActivity: (activity) => dispatchTurnActivity(activity, { dispatch, taskId, messageTarget }),
       onEvent: async (event) => {
-        if (event.type === 'assistant.delta' && event.payload?.text) sawAssistantText = true
-        await dispatchTurnEvent(event, {
+        if (event.type === 'turn.attempt' && event.payload?.resetStreaming) {
+          currentAssistantText = String(event.payload?.assistantText || '')
+        }
+        else if (event.type === 'assistant.delta' && event.payload?.text) {
+          currentAssistantText += String(event.payload.text)
+        }
+        const dispatchResult = await dispatchTurnEvent(event, {
           dispatch,
           taskId,
           messageTarget,
           onApproval: (request) => requestServerToolApproval(request, owner),
           onArtifact: (artifact) => appendArtifact(artifact, serverArtifacts, dispatchMessage),
         })
-        dispatchMessage('UPDATE_LAST_MESSAGE_META', { serverLastSequence: event.sequence })
+        if (!dispatchResult?.cursorCommitted) {
+          dispatchMessage('UPDATE_LAST_MESSAGE_META', { serverLastSequence: event.sequence })
+        }
       },
     })
     if (terminal.type === 'turn.failed') {
-      const error = new Error(terminal.payload?.message || 'Server turn failed')
-      error.code = terminal.payload?.code || 'TURN_FAILED'
+      const error = createTurnFailureError(terminal.payload)
+      if (!currentAssistantText && error.partialText) {
+        dispatchMessage('APPEND_TO_LAST_MESSAGE', error.partialText)
+        currentAssistantText = error.partialText
+      }
       throw error
     }
     if (terminal.type === 'turn.cancelled') {
@@ -178,27 +261,81 @@ export async function runServerChatTurn({
       error.name = 'AbortError'
       throw error
     }
-    if (!sawAssistantText && terminal.payload?.text) dispatchMessage('APPEND_TO_LAST_MESSAGE', terminal.payload.text)
-    dispatchMessage('UPDATE_LAST_MESSAGE_META', { type: 'model_reply', modelName: modelName || 'backend-default', latency: Date.now() - startedAt, streaming: false, serverArtifacts })
+    if (terminal.type === 'turn.paused') {
+      if (!currentAssistantText && terminal.payload?.text) {
+        dispatchMessage('APPEND_TO_LAST_MESSAGE', terminal.payload.text)
+        currentAssistantText = terminal.payload.text
+      }
+      dispatchMessage('UPDATE_LAST_MESSAGE_META', {
+        type: 'model_reply',
+        modelName: modelName || 'backend-default',
+        latency: Date.now() - startedAt,
+        streaming: false,
+        paused: true,
+        serverArtifacts,
+        serverConnectionState: 'paused',
+        serverClarification: terminal.payload?.clarification || null,
+      })
+      dispatch({
+        type: 'UPDATE_TASK',
+        payload: {
+          id: taskId,
+          updates: {
+            status: TASK_STATUS.PENDING,
+            stepLabel: terminal.payload?.clarification?.question || t('chat.serverTurn.resumeDetail'),
+          },
+        },
+      })
+      setTimeout(() => dispatch({ type: 'REMOVE_TASK', payload: taskId }), 5000)
+      return { paused: true, clarification: terminal.payload?.clarification || null }
+    }
+    if (!currentAssistantText && terminal.payload?.text) dispatchMessage('APPEND_TO_LAST_MESSAGE', terminal.payload.text)
+    dispatchMessage('UPDATE_LAST_MESSAGE_META', {
+      type: 'model_reply',
+      modelName: modelName || 'backend-default',
+      latency: Date.now() - startedAt,
+      streaming: false,
+      paused: false,
+      serverClarification: null,
+      directoryAuthorizationPending: false,
+      serverResumeResolution: null,
+      serverArtifacts,
+      serverConnectionState: null,
+    })
     if (sessionSnapshot) {
       dispatch({ type: 'APPLY_SERVER_SESSION_SNAPSHOT', payload: { sessionId, snapshot: sessionSnapshot } })
     }
     dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: TASK_STATUS.COMPLETED, stepLabel: t('chat.serverTurn.completed') } } })
     setTimeout(() => dispatch({ type: 'REMOVE_TASK', payload: taskId }), 5000)
     dispatch({ type: 'ADD_HISTORY', payload: { name: taskName, skill: skill?.name || t('chat.serverTurn.generalChat'), status: HISTORY_STATUS.SUCCESS, detail: content.slice(0, 60), state: t('chat.serverTurn.completed'), date: Date.now() } })
+    return {
+      terminal,
+      sessionSnapshot,
+      paused: terminal.payload?.paused === true,
+      clarification: terminal.payload?.clarification || null,
+    }
   } catch (error) {
     if (isUserStopped(error)) {
       dispatchMessage('APPEND_TO_LAST_MESSAGE', `\n\n${t('chat.serverTurn.stoppedMarker')}`)
-      dispatchMessage('UPDATE_LAST_MESSAGE_META', { streaming: false, serverArtifacts })
+      dispatchMessage('UPDATE_LAST_MESSAGE_META', { streaming: false, serverArtifacts, serverConnectionState: null })
       dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: TASK_STATUS.CANCELLED, stepLabel: t('chat.serverTurn.cancelled') } } })
     } else {
       const message = getVisibleModelErrorMessage(error, t)
       dispatchMessage('APPEND_TO_LAST_MESSAGE', buildChatFailureMessage(message))
-      dispatchMessage('UPDATE_LAST_MESSAGE_META', { streaming: false, failed: true, serverArtifacts })
+      dispatchMessage('UPDATE_LAST_MESSAGE_META', {
+        streaming: false,
+        failed: true,
+        serverArtifacts,
+        serverConnectionState: null,
+        serverFailure: error.serverFailure || null,
+        serverPartialText: error.partialText || '',
+        serverArtifactIds: Array.isArray(error.artifactIds) ? error.artifactIds : [],
+      })
       dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: TASK_STATUS.FAILED, stepLabel: t('chat.serverTurn.failed') } } })
       toast.error({ title: t('toast.chatSendFailed'), body: message })
     }
     setTimeout(() => dispatch({ type: 'REMOVE_TASK', payload: taskId }), 5000)
+    return { failed: true, error }
   } finally {
     clearToolApprovalForOwner(owner)
     unregisterTurnRun({ sessionId, turnId, controller })

@@ -1,6 +1,6 @@
 import { useCallback, useEffect } from 'react'
 import { sanitizeForPersist } from './persistDegradation.js'
-import { completeSnapshot, getLocalStorage } from './appStateBootstrap.js'
+import { completeSnapshot, getLocalStorage, needsToolsConfigSchemaMigration } from './appStateBootstrap.js'
 import { readBootstrapPayloads } from './appStatePersistence.js'
 import { clearPersistedSnapshot, readPersistedSnapshot, writePersistedSnapshot } from './indexedDbPersistence.js'
 import {
@@ -45,7 +45,9 @@ export default function usePersistenceHydration(options) {
     if (durable.ok && durable.payload) {
       try {
         const parsed = readPersistedPayload(durable.payload, durable.updatedAt || 0)
-        const durableSnapshot = completeSnapshot({ ...(bootstrap.settings?.snapshot || {}), ...parsed.snapshot })
+        const durableSource = { ...(bootstrap.settings?.snapshot || {}), ...parsed.snapshot }
+        const durableNeedsToolsConfigMigration = needsToolsConfigSchemaMigration(durableSource)
+        const durableSnapshot = completeSnapshot(durableSource)
         if (bootstrap.legacy) {
           const legacySnapshot = completeSnapshot({ ...bootstrap.legacy.snapshot, ...(bootstrap.settings?.snapshot || {}) })
           const reconciled = mergePersistedSnapshots(durableSnapshot, parsed.meta, legacySnapshot, bootstrap.legacy.meta)
@@ -63,7 +65,13 @@ export default function usePersistenceHydration(options) {
         }
         const previousSnapshot = durableSnapshot
         const snapshot = completeSnapshot(durableSnapshot, { cancelRunningTasks: true })
-        return { backend: 'indexeddb', snapshot, previousSnapshot, meta: parsed.meta, skipInitialWrite: persistedSnapshotsEqual(snapshot, previousSnapshot) }
+        return {
+          backend: 'indexeddb',
+          snapshot,
+          previousSnapshot,
+          meta: parsed.meta,
+          skipInitialWrite: !durableNeedsToolsConfigMigration && persistedSnapshotsEqual(snapshot, previousSnapshot),
+        }
       } catch (error) { console.warn('[AppContext] invalid IndexedDB snapshot; trying legacy data:', error) }
     }
     if (durable.ok && bootstrap.legacy) {
@@ -82,9 +90,17 @@ export default function usePersistenceHydration(options) {
     }
     const fallback = bootstrap.legacy || bootstrap.settings
     const combined = fallback?.snapshot || {}
+    const needsToolsConfigMigration = needsToolsConfigSchemaMigration(combined)
     const previousSnapshot = completeSnapshot(combined)
     const snapshot = completeSnapshot(combined, { cancelRunningTasks: true })
-    return { backend: durable.ok && !migrationFailed ? 'indexeddb' : 'localstorage', snapshot, previousSnapshot, meta: fallback?.meta || {}, skipInitialWrite: persistedSnapshotsEqual(snapshot, previousSnapshot), unavailable: !durable.ok && !storage }
+    return {
+      backend: durable.ok && !migrationFailed ? 'indexeddb' : 'localstorage',
+      snapshot,
+      previousSnapshot,
+      meta: fallback?.meta || {},
+      skipInitialWrite: !needsToolsConfigMigration && persistedSnapshotsEqual(snapshot, previousSnapshot),
+      unavailable: !durable.ok && !storage,
+    }
   }, [lastClearedAtRef, persistToLegacy, tabIdRef, updateLocalMirrorAfterIndexedDbCommit])
 
   useEffect(() => {

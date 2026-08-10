@@ -26,6 +26,7 @@ import { registerBrowserTools } from '../services/browserTools.js'
 import { registerConnectorTools } from '../services/connectorTools.js'
 import { shutdownBrowsers } from '../adapters/browserAutomation.js'
 import { initCodexPluginSkills } from '../adapters/codexPluginSkills.js'
+import { closeTurnRecoveryRuntime, startTurnRecoveryRuntime } from '../services/turnRecoveryRuntime.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULT_PLUGIN_ROOT = path.resolve(__dirname, '../../plugins')
@@ -76,6 +77,11 @@ export function bootstrap({ silent = process.env.NODE_ENV === 'production' } = {
   } catch (err) {
     console.error('[server] start social bridge failed:', err.message)
   }
+  try {
+    startTurnRecoveryRuntime()
+  } catch (err) {
+    console.error('[server] start turn recovery failed:', err.message)
+  }
   if (!silent) logger.info('[lifecycle] bootstrap complete')
   return {}
 }
@@ -105,6 +111,7 @@ export function gracefulShutdown(server, { silent = process.env.NODE_ENV === 'pr
     const closeRuntime = () => {
       if (!silent) logger.info('[lifecycle] http server closed')
       try { closeCronScheduler() } catch { /* ignore */ }
+      try { closeTurnRecoveryRuntime() } catch { /* ignore */ }
       try { closeJobRuntime() } catch { /* ignore */ }
       try { socialBridgeManager.stopAll() } catch { /* ignore */ }
       try { shutdownBrowsers() } catch { /* ignore */ }

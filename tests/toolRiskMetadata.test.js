@@ -30,6 +30,12 @@ test('explicit read-only metadata is preserved', () => {
 })
 
 test('builtin metadata derives shell read-only and path semantics per call', () => {
+  const directory = getToolMetadata('list_directory', { args: { path: '.' } })
+  assert.equal(directory.riskClass, 'read')
+  assert.equal(directory.isReadOnly, true)
+  assert.equal(directory.isConcurrencySafe, true)
+  assert.equal(directory.requiresApproval, false)
+
   const read = getToolMetadata('bash_exec', { args: { command: 'git status', cwd: 'src' } })
   assert.equal(read.riskClass, 'read')
   assert.equal(read.isReadOnly, true)

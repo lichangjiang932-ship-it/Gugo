@@ -6,6 +6,30 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.15] - 2026-08-10
+
+### Added
+
+- Added guarded local code execution for explicitly authorized read-write
+  directories, including Python runtime discovery and real PDF/image workflows.
+- Added managed chat attachments plus durable turn leases, checkpoints, recovery,
+  steering, cancellation, and structured tool progress events.
+
+### Changed
+
+- Tool loops now repair safe truncated JSON, validate schemas, retry eligible
+  read-only failures, schedule parallel reads, reflect on repeated failures, and
+  require real execution and verification evidence before claiming completion.
+- Chat activity now separates narrative, tool calls, results, and measured file
+  progress while keeping send and stop on one primary composer button.
+
+### Fixed
+
+- Inline directory authorization now opens reliably and resumes the same turn
+  automatically with the authorized read, write, listing, and execution tools.
+- Hardened Windows absolute-path parsing, authorization propagation, turn replay,
+  provider streaming compatibility, and final mutation-verification guards.
+
 ## [0.10.14] - 2026-08-08
 
 ### Added
@@ -163,7 +187,8 @@ follow [Semantic Versioning](https://semver.org/).
 - Provider, MCP, memory, job, subagent, connector, and workspace tool support.
 - Local-first single-user mode with optional multi-user authentication.
 
-[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.14...HEAD
+[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.15...HEAD
+[0.10.15]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.15
 [0.10.14]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.14
 [0.10.13]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.13
 [0.10.12]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.12

@@ -4,11 +4,31 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { getDb } from '../db.js'
+import { getRuntimeEnv } from '../utils/runtimeEnv.js'
 import { getWorkspaceTrustStatus } from './workspaceTrustService.js'
+import { resolveManagedAttachmentPath } from './managedAttachmentStore.js'
 
 const execFileAsync = promisify(execFile)
 const MAX_GRANTS = 64
 const PICKER_TIMEOUT_MS = 2 * 60 * 1000
+
+function isLoopbackHost(value) {
+  const host = String(value || '').trim().toLowerCase().replace(/^\[|\]$/g, '')
+  return host === 'localhost' || host === '::1' || /^127(?:\.\d{1,3}){3}$/.test(host)
+}
+
+/**
+ * Local code execution is available by default only for the desktop-style
+ * single-user deployment bound to loopback. Multi-user or remotely bound
+ * servers must opt in explicitly with LOCAL_CODE_EXECUTION_ENABLED=1.
+ */
+export function isLocalCodeExecutionEnabled(env = getRuntimeEnv()) {
+  if (env.LOCAL_CODE_EXECUTION_ENABLED === '1') return true
+  if (env.LOCAL_CODE_EXECUTION_ENABLED === '0') return false
+  const authMode = String(env.AUTH_MODE || 'local').trim().toLowerCase()
+  const serverHost = String(env.SERVER_HOST || '127.0.0.1').trim()
+  return authMode === 'local' && isLoopbackHost(serverHost)
+}
 
 function serviceError(message, statusCode = 400, code = 'LOCAL_FILE_ACCESS_ERROR') {
   const error = new Error(message)
@@ -157,7 +177,55 @@ export function getLocalFileAccessStatus({ userId }) {
       platform: process.platform,
       pickerAvailable: ['win32', 'darwin', 'linux'].includes(process.platform),
       hostFileSystem: true,
+      localCodeExecutionEnabled: isLocalCodeExecutionEnabled(),
     },
+  }
+}
+
+/**
+ * Return the persisted directory grant that already satisfies a concrete
+ * request_directory call. This deliberately ignores all-files access and
+ * exact-file grants: shell/code execution requires an explicit read_write
+ * directory grant, and a file grant cannot authorize sibling outputs.
+ */
+export function findAuthorizedDirectoryGrant({
+  userId,
+  rawPath,
+  accessMode = 'read_only',
+} = {}) {
+  if (!userId || typeof rawPath !== 'string' || !rawPath.trim()) return null
+  if (!['read_only', 'read_write'].includes(accessMode)) return null
+  if (!path.isAbsolute(rawPath.trim())) return null
+
+  let target
+  try {
+    target = resolveTarget(rawPath.trim(), { allowMissing: true })
+  } catch {
+    return null
+  }
+  const checkedPath = target.exists ? target.fullPath : target.anchorPath
+  if (!checkedPath) return null
+
+  const row = getGrantRows(userId).find((grant) => {
+    if (grant.resource_type !== 'directory') return false
+    if (accessMode === 'read_write' && grant.access_mode !== 'read_write') return false
+    try {
+      if (!fs.existsSync(grant.root_path)) return false
+      return isInside(grant.root_path, checkedPath)
+    } catch {
+      return false
+    }
+  })
+  return row ? mapGrant(row) : null
+}
+
+export function isExistingLocalDirectory(rawPath) {
+  if (typeof rawPath !== 'string' || !rawPath.trim() || !path.isAbsolute(rawPath.trim())) return false
+  try {
+    const target = resolveTarget(rawPath.trim())
+    return fs.statSync(target.fullPath).isDirectory()
+  } catch {
+    return false
   }
 }
 
@@ -241,6 +309,8 @@ export function resolveAuthorizedLocalPath({
 }) {
   const raw = typeof rawPath === 'string' ? rawPath.trim() : ''
   if (!raw) throw serviceError('path 必填', 400, 'PATH_REQUIRED')
+  const managedAttachment = resolveManagedAttachmentPath({ userId, rawPath: raw, write })
+  if (managedAttachment) return managedAttachment
   const workspaceEnabled = allowWorkspace === true
   const workspaceTrusted = workspaceEnabled && (!userId || sharedWorkspaceTrusted())
   if (!path.isAbsolute(raw) && !workspaceEnabled) {

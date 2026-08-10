@@ -12,6 +12,18 @@ import { buildFinalOutput, shouldCompileDocx } from '../server/services/jobWorkf
 import { validateHtmlArtifactSource } from '../server/services/artifactGen.js'
 
 const nameOf = (specs) => specs.map((s) => s?.function?.name)
+const ARTIFACT_GENERATOR_NAMES = [
+  'create_docx',
+  'create_html_app',
+  'create_pptx',
+  'create_xlsx',
+  'generate_image',
+]
+
+function forgedArtifactArgs(name) {
+  if (name === 'generate_image') return { prompt: 'An unrelated verification image' }
+  return { title: 'Unrequested artifact', paragraphs: [{ text: 'Must not be generated' }] }
+}
 
 // ── 事故回归:代码任务不该看得见 create_pptx ────────────────────────────
 
@@ -104,6 +116,270 @@ test('explicit document wording authorizes DOCX without weakening negative guard
   }
 })
 
+test('explicit image production unlocks only generate_image', () => {
+  assert.deepEqual(
+    [...allowedArtifactTools('生成一张产品海报图片')],
+    ['generate_image'],
+  )
+  assert.equal(detectArtifactIntent('why did generate_image run?').image, false)
+})
+
+test('chat project-check turn does not inherit artifact generators from an older Word request', async () => {
+  const currentPrompt = 'Run only run_project_check and report whether the project tests pass.'
+  let visibleNames = []
+  let modelCalls = 0
+  const executions = []
+
+  const result = await runToolsLoop({
+    job: {
+      id: 'chat-project-check-after-word',
+      userId: 'intent-user',
+      origin: 'chat',
+      prompt: currentPrompt,
+      userPrompt: currentPrompt,
+    },
+    step: { id: 'chat-project-check-after-word', kind: 'chat' },
+    messages: [
+      { role: 'user', content: 'Create a Word document with the release notes.' },
+      { role: 'assistant', content: 'The Word document is ready.' },
+      { role: 'user', content: currentPrompt },
+    ],
+    intentMode: 'execute',
+    toolSpecs: SERVER_TOOL_SPECS,
+    enableToolHooks: false,
+    runModel: async ({ tools }) => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        visibleNames = nameOf(tools)
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'project-check-only',
+            type: 'function',
+            function: { name: 'run_project_check', arguments: JSON.stringify({ check: 'test' }) },
+          }],
+        }
+      }
+      return { content: 'Project checks passed.', toolCalls: [] }
+    },
+    executeTool: async ({ name }) => {
+      executions.push(name)
+      return { ok: true, check: 'test', exitCode: 0, stdout: 'passed', stderr: '' }
+    },
+  })
+
+  assert.ok(visibleNames.includes('run_project_check'))
+  for (const name of ARTIFACT_GENERATOR_NAMES) {
+    assert.equal(visibleNames.includes(name), false, `${name} leaked into a project-check-only turn`)
+  }
+  assert.deepEqual(executions, ['run_project_check'])
+  assert.deepEqual(result.artifactIds, [])
+})
+
+for (const generatorName of ['create_docx', 'generate_image']) {
+  test(`chat project-check turn rejects forged ${generatorName} before execution`, async () => {
+    const currentPrompt = 'Run only run_project_check and report whether the project tests pass.'
+    const outcomes = []
+    let attempted = false
+    let executorCalls = 0
+
+    await runToolsLoop({
+      job: {
+        id: `chat-forged-${generatorName}`,
+        userId: 'intent-user',
+        origin: 'chat',
+        prompt: currentPrompt,
+        userPrompt: currentPrompt,
+      },
+      step: { id: `chat-forged-${generatorName}`, kind: 'chat' },
+      messages: [{ role: 'user', content: currentPrompt }],
+      intentMode: 'execute',
+      toolSpecs: SERVER_TOOL_SPECS,
+      maxIters: 1,
+      enableToolHooks: false,
+      requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+      runModel: async ({ toolChoice }) => {
+        if (toolChoice === 'none' || attempted) return { content: 'The forged call was rejected.', toolCalls: [] }
+        attempted = true
+        return {
+          content: '',
+          toolCalls: [{
+            id: `forged-${generatorName}`,
+            type: 'function',
+            function: {
+              name: generatorName,
+              arguments: JSON.stringify(forgedArtifactArgs(generatorName)),
+            },
+          }],
+        }
+      },
+      executeTool: async () => {
+        executorCalls += 1
+        return { ok: true, artifactId: `unexpected-${generatorName}` }
+      },
+      onToolCompleted: async (outcome) => outcomes.push(outcome),
+    })
+
+    assert.equal(executorCalls, 0)
+    assert.equal(outcomes.length, 1)
+    assert.equal(outcomes[0].result?.ok, false)
+    assert.equal(outcomes[0].result?.code, 'artifact_tool_not_requested')
+    assert.equal(outcomes[0].artifactId, null)
+  })
+}
+
+for (const stepKind of ['plan', 'verify', 'finalize']) {
+  test(`${stepKind} step neither exposes nor executes artifact generators from the original Word prompt`, async () => {
+    const outcomes = []
+    const executions = []
+    let visibleNames = []
+    let attempted = false
+
+    await runToolsLoop({
+      job: {
+        id: `${stepKind}-word-scope`,
+        userId: 'intent-user',
+        origin: 'job',
+        prompt: 'Create a Word document with the quarterly report.',
+      },
+      step: { id: `${stepKind}-word-scope`, kind: stepKind, input: { acceptance: [] } },
+      messages: [{
+        role: 'user',
+        content: 'Original task: Create a Word document with the quarterly report. Inspect and report verification evidence only.',
+      }],
+      intentMode: 'execute',
+      executionGuardMode: 'read_only_exploration',
+      toolSpecs: SERVER_TOOL_SPECS,
+      maxIters: 1,
+      enableToolHooks: false,
+      requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+      runModel: async ({ tools, toolChoice }) => {
+        if (toolChoice === 'none' || attempted) return { content: `${stepKind} complete.`, toolCalls: [] }
+        attempted = true
+        visibleNames = nameOf(tools)
+        return {
+          content: '',
+          toolCalls: ['create_docx', 'generate_image'].map((name) => ({
+            id: `${stepKind}-forged-${name}`,
+            type: 'function',
+            function: { name, arguments: JSON.stringify(forgedArtifactArgs(name)) },
+          })),
+        }
+      },
+      executeTool: async ({ name }) => {
+        executions.push(name)
+        return { ok: true, artifactId: `unexpected-${stepKind}-${name}` }
+      },
+      onToolCompleted: async (outcome) => outcomes.push(outcome),
+    })
+
+    assert.ok(visibleNames.includes('run_project_check'))
+    for (const name of ARTIFACT_GENERATOR_NAMES) {
+      assert.equal(visibleNames.includes(name), false, `${name} leaked into the ${stepKind} step`)
+    }
+    assert.deepEqual(executions, [])
+    assert.deepEqual(outcomes.map((outcome) => outcome.result?.code), [
+      'artifact_tool_not_requested',
+      'artifact_tool_not_requested',
+    ])
+    assert.ok(outcomes.every((outcome) => outcome.artifactId === null))
+  })
+}
+
+test('verify checkpoint resume rejects pending artifact generators before execution', async () => {
+  const currentPrompt = 'Original task: Create a Word document. Resume verification and report evidence only.'
+  const pendingCalls = ['create_docx', 'generate_image'].map((name) => ({
+    id: `checkpoint-${name}`,
+    name,
+    args: forgedArtifactArgs(name),
+    argumentsText: JSON.stringify(forgedArtifactArgs(name)),
+    parseError: null,
+    checkpointStatus: 'pending',
+    checkpointApprovalId: null,
+  }))
+  const checkpoint = {
+    messages: [
+      { role: 'user', content: currentPrompt },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: pendingCalls.map((call) => ({
+          id: call.id,
+          type: 'function',
+          function: { name: call.name, arguments: call.argumentsText },
+        })),
+      },
+    ],
+    toolCalls: pendingCalls,
+    artifactIds: [],
+    iterations: 0,
+  }
+  const outcomes = []
+  let executorCalls = 0
+  let modelCalls = 0
+
+  const result = await runToolsLoop({
+    job: {
+      id: 'verify-artifact-checkpoint',
+      userId: 'intent-user',
+      origin: 'job',
+      prompt: 'Create a Word document.',
+    },
+    step: { id: 'verify-artifact-checkpoint', kind: 'verify', input: { acceptance: [] } },
+    messages: [{ role: 'user', content: currentPrompt }],
+    intentMode: 'execute',
+    executionGuardMode: 'read_only_exploration',
+    toolSpecs: SERVER_TOOL_SPECS,
+    maxIters: 2,
+    enableToolHooks: false,
+    loadCheckpoint: async () => ({ state: checkpoint }),
+    saveCheckpoint: async () => true,
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    executeTool: async () => {
+      executorCalls += 1
+      return { ok: true, artifactId: 'unexpected-checkpoint-artifact' }
+    },
+    onToolCompleted: async (outcome) => outcomes.push(outcome),
+    runModel: async ({ messages }) => {
+      modelCalls += 1
+      const codes = messages
+        .filter((message) => message.role === 'tool')
+        .map((message) => JSON.parse(message.content).code)
+      assert.deepEqual(codes, ['artifact_tool_not_requested', 'artifact_tool_not_requested'])
+      return { content: 'Checkpoint artifact calls were rejected.', toolCalls: [] }
+    },
+  })
+
+  assert.equal(executorCalls, 0)
+  assert.equal(modelCalls, 1)
+  assert.deepEqual(outcomes.map((outcome) => outcome.result?.code), [
+    'artifact_tool_not_requested',
+    'artifact_tool_not_requested',
+  ])
+  assert.ok(outcomes.every((outcome) => outcome.artifactId === null))
+  assert.deepEqual(result.artifactIds, [])
+})
+
+test('reporting execution evidence is not mistaken for a DOCX request', () => {
+  for (const prompt of [
+    '请报告真实 exitCode；不要只口头说明。',
+    '然后报告测试结果和 stdout。',
+    '请报告当前状态与错误原因。',
+    'Please report the actual exit code and test result.',
+  ]) {
+    assert.equal(detectArtifactIntent(prompt).docx, false, prompt)
+    assert.equal(allowedArtifactTools(prompt).has('create_docx'), false, prompt)
+  }
+
+  for (const prompt of [
+    '请生成一份测试报告',
+    '写一份报告说明测试结果',
+    'Create a report of the actual exit code',
+  ]) {
+    assert.equal(detectArtifactIntent(prompt).docx, true, prompt)
+  }
+})
+
 test('slash skill unlocks its matching artifact tool', () => {
   assert.equal(parseSkillIdFromPrompt('/ppt 讲讲量子计算'), 'ppt')
   for (const alias of ['htmlppt', 'axippt', 'ppt-master', 'guizang-ppt']) {
@@ -124,15 +400,15 @@ test('slash skill unlocks its matching artifact tool', () => {
 test('slash artifact skills stay locked to one generator unless multiple file formats are explicit', () => {
   assert.deepEqual(
     detectArtifactIntent('/webpage build a website for a quarterly report'),
-    { pptx: false, docx: false, xlsx: false, html: true },
+    { pptx: false, docx: false, xlsx: false, html: true, image: false },
   )
   assert.deepEqual(
     detectArtifactIntent('/doc create a report with a spreadsheet-style table'),
-    { pptx: false, docx: true, xlsx: false, html: false },
+    { pptx: false, docx: true, xlsx: false, html: false, image: false },
   )
   assert.deepEqual(
     detectArtifactIntent('/ppt present the quarterly report'),
-    { pptx: true, docx: false, xlsx: false, html: false },
+    { pptx: true, docx: false, xlsx: false, html: false, image: false },
   )
   assert.deepEqual(
     [...allowedArtifactTools('/webpage build a website and also export a Word document')].sort(),
@@ -411,10 +687,11 @@ test('an image artifact cannot satisfy a webpage delivery requirement', async ()
   const deltas = []
   const executions = []
   let modelCalls = 0
+  const prompt = '/webpage build a product page and also create a hero image'
   const result = await runToolsLoop({
-    job: { id: 'webpage-image-bypass', userId: 'intent-user', origin: 'chat', prompt: '/webpage build a product page' },
+    job: { id: 'webpage-image-bypass', userId: 'intent-user', origin: 'chat', prompt },
     step: { id: 'webpage-image-bypass', kind: 'chat' },
-    messages: [{ role: 'user', content: '/webpage build a product page' }],
+    messages: [{ role: 'user', content: prompt }],
     skillId: 'webpage',
     toolSpecs: SERVER_TOOL_SPECS,
     enableToolHooks: false,
@@ -542,13 +819,13 @@ test('ppt intent suppresses the looser docx keywords', () => {
   assert.equal(intent.pptx, true)
   assert.equal(intent.docx, false, '「导出」不该在已有 pptx 意图时再触发 docx')
   assert.deepEqual(detectArtifactIntent('Make a PPT report'), {
-    pptx: true, docx: false, xlsx: false, html: false,
+    pptx: true, docx: false, xlsx: false, html: false, image: false,
   })
   assert.deepEqual(detectArtifactIntent('做一份 PPT 汇报'), {
-    pptx: true, docx: false, xlsx: false, html: false,
+    pptx: true, docx: false, xlsx: false, html: false, image: false,
   })
   assert.deepEqual(detectArtifactIntent('同时生成 PPT 以及 Word 文档'), {
-    pptx: true, docx: true, xlsx: false, html: false,
+    pptx: true, docx: true, xlsx: false, html: false, image: false,
   })
   assert.equal(shouldCompileDocx('生成 PPT 并导出'), false)
 })

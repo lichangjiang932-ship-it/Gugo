@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  TOOLS_CONFIG_SCHEMA_VERSION,
+  needsToolsConfigSchemaMigration,
+  normalizePersistedFields,
+} from '../src/store/appStateBootstrap.js'
+import {
   LEGACY_STATE_STORAGE_KEY,
   SETTINGS_STORAGE_KEY,
   STATE_CLEAR_EPOCH_KEY,
@@ -46,6 +51,7 @@ test('lightweight local snapshot excludes sessions and other large state', () =>
     density: undefined,
     animationsEnabled: undefined,
     skillConfigs: undefined,
+    toolsConfigSchemaVersion: undefined,
     toolsConfig: undefined,
     agentMode: undefined,
   })
@@ -61,6 +67,76 @@ test('server-backed sessions persist metadata without duplicating transcript mes
   assert.deepEqual(snapshot.sessions[0].messages, [])
   assert.equal(snapshot.sessions[0].serverRevision, 7)
   assert.equal(snapshot.sessions[1].messages[0].content, 'local only')
+})
+
+test('legacy execution defaults migrate by schema version while v2 explicit disables are preserved', () => {
+  assert.equal(needsToolsConfigSchemaMigration({ toolsConfig: { bash_exec: false, run_project_check: false } }), true)
+  const legacy = normalizePersistedFields({ toolsConfig: { bash_exec: false, run_project_check: false } })
+  assert.equal(legacy.toolsConfig.bash_exec, true)
+  assert.equal(legacy.toolsConfig.run_project_check, true)
+  assert.equal(legacy.toolsConfigSchemaVersion, TOOLS_CONFIG_SCHEMA_VERSION)
+
+  const v1 = normalizePersistedFields({
+    toolsConfigSchemaVersion: 1,
+    toolsConfig: { bash_exec: false, run_project_check: false },
+  })
+  assert.equal(needsToolsConfigSchemaMigration({
+    toolsConfigSchemaVersion: 1,
+    toolsConfig: { bash_exec: false, run_project_check: false },
+  }), true)
+  assert.equal(v1.toolsConfig.bash_exec, false)
+  assert.equal(v1.toolsConfig.run_project_check, true)
+
+  const explicit = normalizePersistedFields({
+    toolsConfigSchemaVersion: TOOLS_CONFIG_SCHEMA_VERSION,
+    toolsConfig: { bash_exec: false, run_project_check: false },
+  })
+  assert.equal(needsToolsConfigSchemaMigration(explicit), false)
+  assert.equal(explicit.toolsConfig.bash_exec, false)
+  assert.equal(explicit.toolsConfig.run_project_check, false)
+  assert.equal(explicit.toolsConfigSchemaVersion, TOOLS_CONFIG_SCHEMA_VERSION)
+})
+
+test('server-backed persistence keeps one redacted active-turn stub for crash recovery', () => {
+  const snapshot = selectPersistedSnapshot({
+    sessions: [{
+      id: 'server',
+      serverRevision: 8,
+      messages: [
+        { id: 'history', role: 'assistant', content: 'durable server history' },
+        { id: 'orphan', role: 'assistant', content: 'orphan', meta: { streaming: true } },
+        {
+          id: 'active-1',
+          role: 'assistant',
+          content: 'SECRET partial answer',
+          timestamp: 10,
+          meta: { streaming: true, serverTurnId: 'turn-1', serverLastSequence: 40, reasoning: 'SECRET reasoning' },
+        },
+        {
+          id: 'active-2',
+          role: 'assistant',
+          content: 'LATEST secret',
+          timestamp: 20,
+          meta: {
+            streaming: true,
+            serverTurnId: 'turn-2',
+            serverLastSequence: 99,
+            toolCalls: [{ result: 'SECRET tool result' }],
+            serverArtifacts: [{ filename: 'SECRET.docx' }],
+          },
+        },
+      ],
+    }],
+  })
+
+  assert.deepEqual(snapshot.sessions[0].messages, [{
+    id: 'active-2',
+    role: 'assistant',
+    content: '',
+    timestamp: 20,
+    meta: { streaming: true, serverTurnId: 'turn-2', serverLastSequence: -1 },
+  }])
+  assert.doesNotMatch(JSON.stringify(snapshot), /SECRET|\.docx/)
 })
 
 test('bootstrap reads new settings and a legacy full snapshot independently', () => {
@@ -88,8 +164,13 @@ test('writing settings never places session content in localStorage', () => {
 
 test('lightweight settings are redacted and bootstrap tolerates blocked localStorage reads', () => {
   const storage = createStorage()
-  writeLightweightSnapshot(storage, { toolsConfig: { apiKey: 'must-not-persist', enabled: true } })
-  assert.equal(JSON.parse(storage.values.get(SETTINGS_STORAGE_KEY)).toolsConfig.apiKey, '[REDACTED]')
+  writeLightweightSnapshot(storage, {
+    toolsConfigSchemaVersion: TOOLS_CONFIG_SCHEMA_VERSION,
+    toolsConfig: { apiKey: 'must-not-persist', enabled: true },
+  })
+  const stored = JSON.parse(storage.values.get(SETTINGS_STORAGE_KEY))
+  assert.equal(stored.toolsConfig.apiKey, '[REDACTED]')
+  assert.equal(stored.toolsConfigSchemaVersion, TOOLS_CONFIG_SCHEMA_VERSION)
   const blocked = { getItem() { throw Object.assign(new Error('blocked'), { name: 'SecurityError' }) } }
   assert.deepEqual(readBootstrapPayloads(blocked), { settings: null, legacy: null, clearedAt: 0 })
 })

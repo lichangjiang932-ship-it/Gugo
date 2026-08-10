@@ -7,6 +7,14 @@ import {
   selectPersistedSnapshot,
 } from './appStatePersistence.js'
 
+export const TOOLS_CONFIG_SCHEMA_VERSION = 2
+
+export function needsToolsConfigSchemaMigration(saved) {
+  if (!saved?.toolsConfig || typeof saved.toolsConfig !== 'object') return false
+  const savedSchemaVersion = Number(saved.toolsConfigSchemaVersion) || 0
+  return savedSchemaVersion < TOOLS_CONFIG_SCHEMA_VERSION
+}
+
 export function createInitialState() {
   return {
     user: { name: null, email: null, avatar: null, plan: null, joinedAt: null, totalCalls: 0 },
@@ -31,7 +39,8 @@ export function createInitialState() {
     skillConfigs: {},
     agentMode: 'chat',
     previewArtifact: null,
-    toolsConfig: { fetch_url: false, create_pptx: true, create_docx: true, create_xlsx: true, create_react_component: true, create_mermaid: true, create_chart: true, create_svg: true, create_html_app: true, Agent: true, list_directory: false, read_file: false, write_file: false, edit_file: false, bash_exec: false, git_status: false, git_diff: false, run_project_check: false, manage_todos: true },
+    toolsConfigSchemaVersion: TOOLS_CONFIG_SCHEMA_VERSION,
+    toolsConfig: { fetch_url: false, create_pptx: true, create_docx: true, create_xlsx: true, create_react_component: true, create_mermaid: true, create_chart: true, create_svg: true, create_html_app: true, Agent: true, list_directory: false, read_file: false, write_file: false, edit_file: false, bash_exec: true, git_status: false, git_diff: false, run_project_check: true, manage_todos: true },
     sessionDrafts: {},
     persistenceNotice: null,
   }
@@ -42,7 +51,15 @@ export function normalizePersistedFields(saved, { cancelRunningTasks = false } =
   const normalized = {}
   for (const key of PERSIST_KEYS) if (saved?.[key] !== undefined) normalized[key] = saved[key]
   if (normalized.theme !== undefined) normalized.theme = normalizeThemeMode(normalized.theme)
-  if (saved?.toolsConfig && typeof saved.toolsConfig === 'object') normalized.toolsConfig = { ...base.toolsConfig, ...saved.toolsConfig }
+  if (saved?.toolsConfig && typeof saved.toolsConfig === 'object') {
+    normalized.toolsConfig = { ...base.toolsConfig, ...saved.toolsConfig }
+    const savedSchemaVersion = Number(saved.toolsConfigSchemaVersion) || 0
+    if (savedSchemaVersion < 1) {
+      normalized.toolsConfig.bash_exec = true
+    }
+    if (savedSchemaVersion < 2) normalized.toolsConfig.run_project_check = true
+  }
+  normalized.toolsConfigSchemaVersion = TOOLS_CONFIG_SCHEMA_VERSION
   if (normalized.sessions !== undefined) normalized.sessions = backfillMessageTimestamps(normalized.sessions)
   if (Array.isArray(saved?.permissions)) {
     const enabledMap = new Map(saved.permissions.map((permission) => [permission.id, !!permission.enabled]))

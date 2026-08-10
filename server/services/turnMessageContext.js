@@ -4,6 +4,7 @@ const MAX_TOOL_RESULT_CHARS = 8_000
 const MAX_TURN_TOOL_CONTEXT_CHARS = 96_000
 const MAX_SESSION_TOOL_CONTEXT_CHARS = 128_000
 const MAX_TOOL_GROUPS_PER_TURN = 16
+const MAX_MANAGED_ATTACHMENTS_PER_MESSAGE = 32
 
 function jsonLength(value) {
   try { return JSON.stringify(value).length } catch { return Number.MAX_SAFE_INTEGER }
@@ -122,11 +123,48 @@ export function extractTurnToolTrace(messages, { excludedCallIds = new Set() } =
   return retained
 }
 
+function normalizeManagedAttachmentRefs(values) {
+  const refs = []
+  const seen = new Set()
+  for (const value of Array.isArray(values) ? values : []) {
+    const id = String(value?.id || '').trim()
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    refs.push({
+      id,
+      name: String(value?.name || 'attachment').split(/[\\/]/).pop(),
+      mimeType: String(value?.mimeType || 'application/octet-stream'),
+      size: Math.max(0, Number(value?.size) || 0),
+      sha256: String(value?.sha256 || ''),
+      uri: String(value?.uri || `attachment://${id}`),
+      downloadUrl: String(value?.downloadUrl || ''),
+    })
+    if (refs.length >= MAX_MANAGED_ATTACHMENTS_PER_MESSAGE) break
+  }
+  return refs
+}
+
+function textContent(value) {
+  if (typeof value === 'string') return value
+  if (!Array.isArray(value)) return String(value ?? '')
+  return value
+    .filter((part) => part?.type === 'text' && typeof part.text === 'string')
+    .map((part) => part.text)
+    .join('\n')
+}
+
 function storedMessageToWire(message) {
-  const wire = { role: message.role, content: String(message.content ?? '') }
   const context = message.modelContext && typeof message.modelContext === 'object'
     ? message.modelContext
     : null
+  const wire = {
+    role: message.role,
+    content: String(context?.modelContent ?? message.content ?? ''),
+  }
+  const managedAttachments = message.role === 'user'
+    ? normalizeManagedAttachmentRefs(context?.attachments)
+    : []
+  if (managedAttachments.length) wire.managedAttachments = managedAttachments
   if (message.role === 'assistant' && Array.isArray(context?.toolCalls)) {
     wire.tool_calls = context.toolCalls.map(normalizeCall).filter(Boolean)
   }
@@ -135,6 +173,41 @@ function storedMessageToWire(message) {
     if (context?.name) wire.name = String(context.name)
   }
   return wire
+}
+
+/**
+ * Materialize managed attachment references only for the provider request.
+ * The tool loop and its checkpoints keep the original lightweight messages,
+ * while the returned copy may contain extracted text or inline media.
+ */
+export async function materializeManagedAttachmentMessages(messages, {
+  userId,
+  sessionId,
+  prepareAttachments,
+} = {}) {
+  const materialized = []
+  for (const source of Array.isArray(messages) ? messages : []) {
+    const { managedAttachments: rawRefs, ...wire } = source || {}
+    const refs = normalizeManagedAttachmentRefs(rawRefs)
+    if (wire.role !== 'user' || refs.length === 0) {
+      materialized.push({ ...wire })
+      continue
+    }
+    if (typeof prepareAttachments !== 'function') {
+      throw new TypeError('prepareAttachments is required for managed attachment messages')
+    }
+    const prepared = await prepareAttachments({
+      userId,
+      sessionId,
+      attachmentIds: refs.map((attachment) => attachment.id),
+      text: textContent(wire.content),
+    })
+    materialized.push({
+      ...wire,
+      content: prepared?.content ?? wire.content,
+    })
+  }
+  return materialized
 }
 
 export function expandStoredMessages(messages) {
