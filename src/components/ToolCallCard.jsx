@@ -1,5 +1,5 @@
-import { memo, useState } from 'react'
-import { Search, Globe, ChevronDown, ChevronRight, CheckCircle2, XCircle, Loader2, FileText, Presentation, Table2, Code2, PieChart, Image, Bot, FolderOpen, FileEdit, Terminal, GitBranch, Diff, CheckSquare, Layers, Wrench } from 'lucide-react'
+import { memo } from 'react'
+import { Search, Globe, ChevronDown, CheckCircle2, XCircle, Loader2, FileText, Presentation, Table2, Code2, PieChart, Image, Bot, FolderOpen, FileEdit, Terminal, GitBranch, Diff, CheckSquare, Layers, Wrench } from 'lucide-react'
 import { useT } from '../i18n/I18nProvider.jsx'
 
 const ICONS = {
@@ -29,50 +29,48 @@ const ICONS = {
   manage_todos: CheckSquare,
 }
 
-const LABELS = {
-  web_search: '网页搜索',
-  fetch_url: '抓取链接',
-  create_pptx: '生成 PPT',
-  create_docx: '生成 Word',
-  create_xlsx: '生成 Excel',
-  create_react_component: 'React 组件',
-  create_mermaid: '流程图',
-  create_chart: '图表',
-  create_svg: 'SVG 图形',
-  create_html_app: 'HTML 应用',
-  Agent: '子代理',
-  read_file: '读取文件',
-  write_file: '写入文件',
-  edit_file: '编辑文件',
-  multi_edit: '批量编辑',
-  bash_exec: '终端命令',
-  git_status: 'Git 状态',
-  git_diff: 'Git 差异',
-  run_project_check: '项目检查',
-  manage_todos: '任务管理',
-}
-
 const LABEL_KEYS = {
+  web_search: 'chatMessages.toolWebSearch',
+  fetch_url: 'chatMessages.toolFetchUrl',
+  create_pptx: 'chatMessages.toolCreatePptx',
+  create_docx: 'chatMessages.toolCreateDocx',
+  create_xlsx: 'chatMessages.toolCreateXlsx',
+  create_react_component: 'chatMessages.toolCreateReactComponent',
+  create_mermaid: 'chatMessages.toolCreateMermaid',
+  create_chart: 'chatMessages.toolCreateChart',
+  create_svg: 'chatMessages.toolCreateSvg',
+  create_html_app: 'chatMessages.toolCreateHtmlApp',
+  Agent: 'chatMessages.toolAgent',
+  read_file: 'chatMessages.toolReadFile',
+  write_file: 'chatMessages.toolWriteFile',
+  edit_file: 'chatMessages.toolEditFile',
+  multi_edit: 'chatMessages.toolMultiEdit',
   apply_patch: 'chatMessages.toolApplyPatch',
   list_directory: 'chatMessages.toolListDirectory',
   grep_code: 'chatMessages.toolGrepCode',
   find_symbol: 'chatMessages.toolFindSymbol',
+  bash_exec: 'chatMessages.toolBashExec',
+  git_status: 'chatMessages.toolGitStatus',
+  git_diff: 'chatMessages.toolGitDiff',
+  run_project_check: 'chatMessages.toolRunProjectCheck',
+  manage_todos: 'chatMessages.toolManageTodos',
 }
 
 function summarizeArgs(name, argsJson, t) {
   let args = {}
   try { args = JSON.parse(argsJson || '{}') } catch { /* noop */ }
-  if (name === 'web_search') return args.query || '(空)'
-  if (name === 'fetch_url') return args.url || '(空)'
-  if (name === 'read_file' || name === 'write_file' || name === 'edit_file') return args.path || '(空)'
+  const empty = t('chatMessages.toolEmptyValue')
+  if (name === 'web_search') return args.query || empty
+  if (name === 'fetch_url') return args.url || empty
+  if (name === 'read_file' || name === 'write_file' || name === 'edit_file') return args.path || empty
   if (name === 'list_directory') return args.path || t('chatMessages.toolCurrentWorkspace')
   if (name === 'grep_code') return args.pattern || t('chatMessages.toolUnspecified')
   if (name === 'find_symbol') return args.name || t('chatMessages.toolUnspecified')
-  if (name === 'multi_edit') return `${(args.edits || []).length} 个编辑`
+  if (name === 'multi_edit') return t('chatMessages.toolEditCount', { count: (args.edits || []).length })
   if (name === 'apply_patch') return t('chatMessages.toolFileCount', { count: String(args.patch || '').match(/^\*\*\* (?:Add|Update|Delete) File:/gm)?.length || 0 })
-  if (name === 'bash_exec') return String(args.command || '').replace(/\s+/g, ' ').slice(0, 96) || '(空)'
-  if (name === 'Agent') return args.subagent_type ? `${args.subagent_type}: ${(args.description || '').slice(0, 40)}` : '(空)'
-  if (name && name.startsWith('create_')) return args.title || '(空)'
+  if (name === 'bash_exec') return String(args.command || '').replace(/\s+/g, ' ').slice(0, 96) || empty
+  if (name === 'Agent') return args.subagent_type ? `${args.subagent_type}: ${(args.description || '').slice(0, 40)}` : empty
+  if (name && name.startsWith('create_')) return args.title || empty
   const compact = JSON.stringify(args)
   return compact === '{}' ? t('chatMessages.toolNoArguments') : compact.slice(0, 96)
 }
@@ -95,11 +93,10 @@ function authorizationLabel(authorization, t) {
   return authorization.kind ? t('permissionsDashboard.authorizationKind', { kind: authorization.kind }) : ''
 }
 
-function ToolCallCard({ call }) {
+function ToolCallCard({ call, stepNumber }) {
   const { t } = useT()
-  const [open, setOpen] = useState(false)
   const Icon = ICONS[call.name] || Wrench
-  const label = LABEL_KEYS[call.name] ? t(LABEL_KEYS[call.name]) : (LABELS[call.name] || call.name)
+  const label = LABEL_KEYS[call.name] ? t(LABEL_KEYS[call.name]) : (call.name || t('chatMessages.toolUnknown'))
   const summary = summarizeArgs(call.name, call.arguments, t)
   const authorization = authorizationLabel(call.approvalAuthorization, t)
   const errorFacts = call.status === 'error'
@@ -111,71 +108,74 @@ function ToolCallCard({ call }) {
       ].filter(Boolean))]
     : []
 
-  let statusIcon = <Loader2 className="w-3.5 h-3.5 animate-spin text-ember" />
+  let StatusIcon = Loader2
   let statusText = t('chatMessages.toolRunning')
-  let statusColor = 'text-ember'
   if (call.status === 'success') {
-    statusIcon = <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+    StatusIcon = CheckCircle2
     statusText = t('chatMessages.toolCompleted')
-    statusColor = 'text-emerald-700'
   } else if (call.status === 'error') {
-    statusIcon = <XCircle className="w-3.5 h-3.5 text-red-600" />
+    StatusIcon = XCircle
     statusText = t('chatMessages.toolFailed')
-    statusColor = 'text-red-700'
   }
 
+  const resultValue = call.status === 'error' ? (call.result || call.error) : call.result
+  const resultFallback = call.status === 'error' ? t('chatMessages.toolUnknownError') : t('chatMessages.toolEmptyResult')
+
   return (
-    <div className="my-1 text-xs" data-testid="tool-call-step" data-status={call.status || 'running'}>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="group flex w-full items-center gap-2 rounded-md px-1.5 py-1.5 transition-colors hover:bg-paper-2/70"
-      >
-        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-ink/[0.05]"><Icon className="h-3 w-3 text-ink-fade" /></span>
-        <span className={`shrink-0 text-[11px] font-medium ${statusColor}`}>{statusText}</span>
-        <span className="shrink-0 text-[11px] text-ink-soft">{label}</span>
-        <span className="min-w-0 flex-1 truncate text-left text-[11px] text-ink-fade" title={summary}>{summary}</span>
-        {statusIcon}
-        {open ? <ChevronDown className="h-3 w-3 shrink-0 text-ink-fade" /> : <ChevronRight className="h-3 w-3 shrink-0 text-ink-fade opacity-60 group-hover:opacity-100" />}
-      </button>
-      {authorization && (
-        <div className="ml-7 px-1 pb-1 text-[10px] text-emerald-700" title={authorization}>
-          {authorization}
-        </div>
-      )}
-      {open && (
-        <div className="ml-7 space-y-2 border-l border-ink/10 py-1 pl-3 pr-1">
-          <div>
-            <div className="font-mono text-[9px] uppercase tracking-wider text-ink-fade mb-1">{t('chatMessages.toolArguments')}</div>
-            <pre className="max-h-44 overflow-auto whitespace-pre-wrap break-words rounded-md bg-ink/[0.035] p-2 text-[10px] leading-4 text-ink-soft">
-              {formatDetails(call.arguments, t('chatMessages.toolNoArguments'))}
-            </pre>
-          </div>
+    <article
+      className="chat-tool-step"
+      data-testid="tool-call-step"
+      data-status={call.status || 'running'}
+      role="listitem"
+    >
+      <div className="chat-tool-step-marker" aria-label={t('chatMessages.stepNumber', { number: stepNumber })}>
+        {stepNumber}
+      </div>
+      <div className="chat-tool-step-body">
+        <header className="chat-tool-step-header">
+          <span className="chat-tool-icon"><Icon aria-hidden="true" /></span>
+          <span className="chat-tool-label">{label}</span>
+          <span className="chat-tool-summary" title={summary}>{summary}</span>
+          <span className="chat-tool-status">
+            <StatusIcon className={call.status === 'running' ? 'animate-spin' : ''} aria-hidden="true" />
+            <span>{statusText}</span>
+          </span>
+        </header>
+
+        {authorization && <div className="chat-tool-authorization" title={authorization}>{authorization}</div>}
+
+        <div className="chat-tool-details-row">
+          <details className="chat-tool-details">
+            <summary>
+              <ChevronDown aria-hidden="true" />
+              <span>{t('chatMessages.toolArguments')}</span>
+            </summary>
+            <pre tabIndex="0">{formatDetails(call.arguments, t('chatMessages.toolNoArguments'))}</pre>
+          </details>
+
           {call.status !== 'running' && (
-            <div>
-              <div className="font-mono text-[9px] uppercase tracking-wider text-ink-fade mb-1">{call.status === 'error' ? t('chatMessages.toolError') : t('chatMessages.toolResult')}</div>
-              <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md bg-ink/[0.035] p-2 text-[10px] leading-4 text-ink-soft">
-                {formatDetails(call.status === 'error' ? (call.result || call.error) : call.result, call.status === 'error' ? t('chatMessages.toolUnknownError') : t('chatMessages.toolEmptyResult'))}
-              </pre>
-            </div>
-          )}
-          {call.status === 'error' && (errorFacts.length > 0 || call.errorHint) && (
-            <div className="space-y-1.5">
-              {errorFacts.length > 0 && (
-                <div className="flex flex-wrap gap-1">
-                  {errorFacts.map((fact) => (
-                    <span key={fact} className="rounded bg-red-50 px-1.5 py-0.5 font-mono text-[9px] text-red-700">{fact}</span>
-                  ))}
-                </div>
-              )}
-              {call.errorHint && (
-                <div className="rounded-md bg-amber-50 px-2 py-1.5 text-[10px] leading-4 text-amber-900">{call.errorHint}</div>
-              )}
-            </div>
+            <details className="chat-tool-details" open={call.status === 'error'}>
+              <summary>
+                <ChevronDown aria-hidden="true" />
+                <span>{call.status === 'error' ? t('chatMessages.toolError') : t('chatMessages.toolResult')}</span>
+              </summary>
+              <pre tabIndex="0">{formatDetails(resultValue, resultFallback)}</pre>
+            </details>
           )}
         </div>
-      )}
-    </div>
+
+        {call.status === 'error' && (errorFacts.length > 0 || call.errorHint) && (
+          <div className="chat-tool-error-context">
+            {errorFacts.length > 0 && (
+              <div className="chat-tool-error-facts">
+                {errorFacts.map((fact) => <span key={fact}>{fact}</span>)}
+              </div>
+            )}
+            {call.errorHint && <div className="chat-tool-error-hint">{call.errorHint}</div>}
+          </div>
+        )}
+      </div>
+    </article>
   )
 }
 

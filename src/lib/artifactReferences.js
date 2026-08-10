@@ -104,15 +104,28 @@ export function findArtifactReferenceByHref(references = [], href = '') {
   return references.find((reference) => artifactReferenceMatchesHref(reference, href)) || null
 }
 
+function localFileHrefMatchesReference(href, reference) {
+  const raw = String(href || '').trim()
+  const filename = String(reference?.filename || reference?.title || '').trim().toLowerCase()
+  if (!raw || !filename) return false
+  let decoded = raw
+  try { decoded = decodeURIComponent(raw) } catch { /* compare the original href */ }
+  const localPath = /^(?:file:\/\/|[a-z]:[\\/]|\.\.?[\\/])/i.test(decoded)
+  if (!localPath) return false
+  const targetName = decoded.replace(/[?#].*$/, '').split(/[\\/]/).pop()?.toLowerCase() || ''
+  return targetName === filename
+}
+
 export function artifactHasInlineLink(content = '', artifact = {}) {
   const markdown = String(content || '')
   const filename = String(artifact.filename || artifact.title || '').trim().toLowerCase()
-  const links = /\[([^\]]*)\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)|<((?:https?:\/\/|\/)[^>]+)>/g
+  const links = /\[([^\]]*)\]\(\s*(?:<([^>]+)>|([^\s)]+))(?:\s+["'][^"']*["'])?\s*\)|<((?:https?:\/\/|\/)[^>]+)>/g
   let match
   while ((match = links.exec(markdown)) !== null) {
     const label = String(match[1] || '').trim().toLowerCase()
-    const href = match[2] || match[3] || ''
+    const href = match[2] || match[3] || match[4] || ''
     if (artifactReferenceMatchesHref(artifact, href)) return true
+    if (label === filename && localFileHrefMatchesReference(href, artifact)) return true
     if (!artifact.url && filename && label === filename) return true
   }
   return false
@@ -238,6 +251,16 @@ function persistedReferenceForBareAutolink(node, references, markdownSource) {
   )) || null
 }
 
+function persistedReferenceForLocalFileLink(node, references) {
+  if (node?.type !== 'link') return null
+  const label = markdownNodeText(node).trim().toLowerCase()
+  if (!label) return null
+  return references.find((reference) => {
+    const filename = String(reference.filename || reference.title || '').trim().toLowerCase()
+    return filename === label && localFileHrefMatchesReference(node.url, reference)
+  }) || null
+}
+
 function linkArtifactNodes(parent, references, markdownSource) {
   if (!Array.isArray(parent?.children)) return
   parent.children = parent.children.flatMap((node) => {
@@ -251,6 +274,8 @@ function linkArtifactNodes(parent, references, markdownSource) {
       if (!reference) return [node]
       return [{ type: 'link', url: reference.url, children: [node] }]
     }
+    const localFileReference = persistedReferenceForLocalFileLink(node, references)
+    if (localFileReference) return [{ ...node, url: localFileReference.url }]
     const bareAutolinkReference = persistedReferenceForBareAutolink(node, references, markdownSource)
     if (bareAutolinkReference) return [{ ...node, url: bareAutolinkReference.url }]
     if (!NON_LINKABLE_MARKDOWN_NODES.has(node?.type)) linkArtifactNodes(node, references, markdownSource)

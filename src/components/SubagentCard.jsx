@@ -1,62 +1,63 @@
-import { useState } from 'react'
-import { Bot, ChevronDown, ChevronRight, CheckCircle2, Loader2, XCircle } from 'lucide-react'
+import { Bot, ChevronDown, CheckCircle2, Loader2, XCircle } from 'lucide-react'
+import { useT } from '../i18n/I18nProvider.jsx'
 
 function parseJson(value, fallback = {}) {
   try { return JSON.parse(value || '{}') } catch { return fallback }
 }
 
-export default function SubagentCard({ call }) {
-  const [open, setOpen] = useState(false)
+function formatValue(value, fallback) {
+  if (value == null || value === '') return fallback
+  if (typeof value === 'string') return value
+  try { return JSON.stringify(value, null, 2) } catch { return String(value) }
+}
+
+export default function SubagentCard({ call, stepNumber }) {
+  const { t } = useT()
   const args = parseJson(call.arguments)
   const result = parseJson(call.result, null)
-  const label = args.description || args.prompt || 'Sub-agent'
+  const label = args.description || args.prompt || t('chatMessages.subagentFallback')
 
-  let statusIcon = <Loader2 className="w-3.5 h-3.5 animate-spin text-violet-600" />
-  let statusText = 'running'
+  let StatusIcon = Loader2
+  let statusText = t('chatMessages.toolRunning')
   if (call.status === 'success') {
-    statusIcon = <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-    statusText = 'completed'
+    StatusIcon = CheckCircle2
+    statusText = t('chatMessages.toolCompleted')
   } else if (call.status === 'error') {
-    statusIcon = <XCircle className="w-3.5 h-3.5 text-red-600" />
-    statusText = 'failed'
+    StatusIcon = XCircle
+    statusText = t('chatMessages.toolFailed')
   }
 
+  const resultValue = call.status === 'error'
+    ? (call.error || t('chatMessages.toolUnknownError'))
+    : (result?.result ?? call.result)
+
   return (
-    <div className="my-1 overflow-hidden rounded-lg border border-ink/10 bg-paper/70 text-xs">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-1.5 px-2.5 py-2 transition-colors hover:bg-paper-2/75"
-      >
-        {open ? <ChevronDown className="w-3 h-3 text-ink-fade shrink-0" /> : <ChevronRight className="w-3 h-3 text-ink-fade shrink-0" />}
-        <Bot className="w-3.5 h-3.5 text-ink-fade shrink-0" />
-        <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-fade shrink-0">
-          Agent · {args.subagent_type || 'general'}
-        </span>
-        <span className="text-ink-soft truncate flex-1 text-left" title={label}>{label}</span>
-        <span className="flex items-center gap-1 shrink-0 text-ink-soft">
-          {statusIcon}
-          <span className="text-[11px]">{statusText}</span>
-        </span>
-      </button>
-      {open && (
-        <div className="space-y-2 border-t border-ink/10 bg-paper-2/40 p-2.5">
-          <div>
-            <div className="font-mono text-[9px] uppercase tracking-wider text-ink-fade mb-1">Prompt</div>
-            <pre className="text-[11px] leading-snug whitespace-pre-wrap break-all bg-paper p-2 rounded border border-ink-fade/20">
-              {args.prompt || ''}
-            </pre>
-          </div>
+    <article className="chat-tool-step chat-subagent-step" data-testid="tool-call-step" data-status={call.status || 'running'} role="listitem">
+      <div className="chat-tool-step-marker" aria-label={t('chatMessages.stepNumber', { number: stepNumber })}>{stepNumber}</div>
+      <div className="chat-tool-step-body">
+        <header className="chat-tool-step-header">
+          <span className="chat-tool-icon"><Bot aria-hidden="true" /></span>
+          <span className="chat-tool-label">{t('chatMessages.subagentType', { type: args.subagent_type || t('chatMessages.subagentGeneral') })}</span>
+          <span className="chat-tool-summary" title={label}>{label}</span>
+          <span className="chat-tool-status">
+            <StatusIcon className={call.status === 'running' ? 'animate-spin' : ''} aria-hidden="true" />
+            <span>{statusText}</span>
+          </span>
+        </header>
+
+        <div className="chat-tool-details-row">
+          <details className="chat-tool-details">
+            <summary><ChevronDown aria-hidden="true" /><span>{t('chatMessages.subagentPrompt')}</span></summary>
+            <pre tabIndex="0">{formatValue(args.prompt, t('chatMessages.toolEmptyResult'))}</pre>
+          </details>
           {call.status !== 'running' && (
-            <div>
-              <div className="font-mono text-[9px] uppercase tracking-wider text-ink-fade mb-1">Result</div>
-              <pre className="text-[11px] leading-snug whitespace-pre-wrap break-all bg-paper p-2 rounded border border-ink-fade/20 max-h-60 overflow-auto">
-                {call.status === 'error' ? (call.error || 'Unknown error') : (result?.result || call.result || '')}
-              </pre>
-            </div>
+            <details className="chat-tool-details" open={call.status === 'error'}>
+              <summary><ChevronDown aria-hidden="true" /><span>{t('chatMessages.subagentResult')}</span></summary>
+              <pre tabIndex="0">{formatValue(resultValue, t('chatMessages.toolEmptyResult'))}</pre>
+            </details>
           )}
         </div>
-      )}
-    </div>
+      </div>
+    </article>
   )
 }

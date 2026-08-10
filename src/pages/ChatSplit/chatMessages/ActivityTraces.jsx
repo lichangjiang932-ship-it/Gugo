@@ -17,49 +17,117 @@ function nonNegativeInteger(value) {
   return Number.isInteger(value) && value >= 0
 }
 
+const PROGRESS_PHASE_KEYS = {
+  tool_completed: 'chatMessages.progressPhaseToolCompleted',
+  batch_completed: 'chatMessages.progressPhaseBatchCompleted',
+  verify: 'chatMessages.progressPhaseVerify',
+  editing: 'chatMessages.progressPhaseEditing',
+}
+
+function readablePhase(phase, t) {
+  const value = String(phase || '').trim()
+  if (!value) return ''
+  const key = PROGRESS_PHASE_KEYS[value]
+  return key ? t(key) : value.replace(/[_-]+/g, ' ')
+}
+
 export function ProgressTrace({ progress = null }) {
   const { t } = useT()
   if (!progress || typeof progress !== 'object') return null
 
   const details = []
-  if (progress.phase) details.push(t('chatMessages.progressPhase', { phase: progress.phase }))
+  if (progress.phase) {
+    details.push({
+      key: 'phase',
+      label: t('chatMessages.progressPhase', { phase: readablePhase(progress.phase, t) }),
+      title: String(progress.phase),
+    })
+  }
   if (nonNegativeInteger(progress.completed) && nonNegativeInteger(progress.total)) {
-    details.push(t('chatMessages.progressSteps', { completed: progress.completed, total: progress.total }))
+    details.push({ key: 'steps', label: t('chatMessages.progressSteps', { completed: progress.completed, total: progress.total }) })
   } else if (nonNegativeInteger(progress.completed)) {
-    details.push(t('chatMessages.progressCompleted', { completed: progress.completed }))
+    details.push({ key: 'completed', label: t('chatMessages.progressCompleted', { completed: progress.completed }) })
   } else if (nonNegativeInteger(progress.total)) {
-    details.push(t('chatMessages.progressTotal', { total: progress.total }))
+    details.push({ key: 'total', label: t('chatMessages.progressTotal', { total: progress.total }) })
   }
   if (nonNegativeInteger(progress.iteration)) {
-    details.push(t('chatMessages.progressIteration', { iteration: progress.iteration }))
+    details.push({ key: 'iteration', label: t('chatMessages.progressIteration', { iteration: progress.iteration }) })
   }
   if (nonNegativeInteger(progress.filesChanged)) {
-    details.push(t('chatMessages.progressFiles', { count: progress.filesChanged }))
+    details.push({ key: 'files', label: t('chatMessages.progressFiles', { count: progress.filesChanged }) })
   }
   if (nonNegativeInteger(progress.additions) || nonNegativeInteger(progress.deletions)) {
-    details.push(t('chatMessages.progressChanges', {
-      additions: nonNegativeInteger(progress.additions) ? progress.additions : 0,
-      deletions: nonNegativeInteger(progress.deletions) ? progress.deletions : 0,
-    }))
+    details.push({
+      key: 'changes',
+      label: t('chatMessages.progressChanges', {
+        additions: nonNegativeInteger(progress.additions) ? progress.additions : 0,
+        deletions: nonNegativeInteger(progress.deletions) ? progress.deletions : 0,
+      }),
+    })
   }
   if (!details.length) return null
 
   return (
-    <div data-testid="turn-progress" className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-ink/10 pt-2 font-mono text-[10px] leading-4 text-ink-fade" role="status" aria-live="polite">
-      <span className="font-sans font-medium uppercase tracking-wide text-ink-soft">{t('chatMessages.progressLabel')}</span>
-      {details.map((detail) => <span key={detail}>{detail}</span>)}
+    <div data-testid="turn-progress" className="chat-progress-trace" role="status" aria-live="polite">
+      <span className="chat-progress-label">{t('chatMessages.progressLabel')}</span>
+      <div className="chat-progress-chips">
+        {details.map((detail) => (
+          <span key={detail.key} className={`chat-progress-chip chat-progress-chip-${detail.key}`} title={detail.title}>
+            {detail.label}
+          </span>
+        ))}
+      </div>
     </div>
   )
 }
 
 export function ToolCallTrace({ calls = [] }) {
   const { t } = useT()
-  const [expanded, setExpanded] = useState(() => calls.some((call) => call.status === 'running'))
+  const normalizedCalls = Array.isArray(calls) ? calls : []
+  const [expanded, setExpanded] = useState(() => normalizedCalls.some((call) => call.status === 'running'))
   const panelId = useId()
-  const failed = calls.filter((call) => call.status === 'error').length
-  const running = calls.filter((call) => call.status === 'running').length
-  const completed = calls.length - running
+  if (normalizedCalls.length === 0) return null
+
+  const failed = normalizedCalls.filter((call) => call.status === 'error').length
+  const running = normalizedCalls.filter((call) => call.status === 'running').length
+  const completed = normalizedCalls.length - running
   const StatusIcon = running > 0 ? Loader2 : failed > 0 ? XCircle : CheckCircle2
   const statusClass = running > 0 ? 'text-ember animate-spin' : failed > 0 ? 'text-red-600' : 'text-emerald-600'
-  return <div className="chat-activity-panel mb-2 overflow-hidden"><button type="button" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded} aria-controls={panelId} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-paper-2/55"><StatusIcon className={`h-3.5 w-3.5 shrink-0 ${statusClass}`} /><span className="text-xs font-medium text-ink-soft">{t('chatMessages.execution')}</span><span className="min-w-0 flex-1 truncate text-xs text-ink-fade">{running > 0 ? t('chatMessages.runningSteps', { count: calls.length }) : t('chatMessages.steps', { count: calls.length })}{failed > 0 && <span className="ml-1.5 text-red-600">{t('chatMessages.failedSteps', { count: failed })}</span>}</span><span className="text-[10px] tabular-nums text-ink-fade">{completed}/{calls.length}</span><ChevronDown className={`h-3 w-3 shrink-0 text-ink-fade transition-transform ${expanded ? '' : '-rotate-90'}`} /></button>{expanded && <div id={panelId} className="chat-tool-list px-1 py-1">{calls.map((call) => call.name === 'Agent' ? <SubagentCard key={call.id} call={call} /> : <ToolCallCard key={call.id} call={call} />)}</div>}</div>
+  const stateLabel = running > 0
+    ? t('chatMessages.runningSteps', { count: running })
+    : failed > 0
+      ? t('chatMessages.failedSteps', { count: failed })
+      : t('chatMessages.steps', { count: normalizedCalls.length })
+
+  return (
+    <section className="chat-activity-panel" aria-label={t('chatMessages.execution')}>
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        aria-expanded={expanded}
+        aria-controls={panelId}
+        aria-label={t('chatMessages.executionToggle', {
+          state: expanded ? t('chatMessages.collapse') : t('chatMessages.expand'),
+          completed,
+          total: normalizedCalls.length,
+        })}
+        className="chat-activity-summary"
+      >
+        <StatusIcon className={`chat-activity-status h-4 w-4 ${statusClass}`} aria-hidden="true" />
+        <span className="chat-activity-title">{t('chatMessages.execution')}</span>
+        <span className="chat-activity-state" data-status={running > 0 ? 'running' : failed > 0 ? 'error' : 'success'}>
+          {stateLabel}
+        </span>
+        <span className="chat-activity-count">{t('chatMessages.executionSummary', { completed, total: normalizedCalls.length })}</span>
+        <ChevronDown className={`chat-activity-chevron h-3.5 w-3.5 ${expanded ? '' : '-rotate-90'}`} aria-hidden="true" />
+      </button>
+      {expanded && (
+        <div id={panelId} className="chat-tool-list" role="list">
+          {normalizedCalls.map((call, index) => call.name === 'Agent'
+            ? <SubagentCard key={call.id} call={call} stepNumber={index + 1} />
+            : <ToolCallCard key={call.id} call={call} stepNumber={index + 1} />)}
+        </div>
+      )}
+    </section>
+  )
 }

@@ -206,6 +206,92 @@ test('similar names and fenced-code filenames do not become inline artifact link
   }
 })
 
+test('a generated filename inside a Windows path with spaces and Chinese opens inline', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const opened = []
+  const msg = {
+    id: 'windows-local-output-message',
+    role: 'assistant',
+    content: '已创建：D:\\本地 输出\\填写后 答题卡.pdf，并完成逐页检查。',
+    timestamp: Date.now(),
+    meta: {
+      serverArtifacts: [{
+        id: 'local-pdf-1',
+        filename: '填写后 答题卡.pdf',
+        type: 'pdf',
+        url: '/api/artifacts/%E5%A1%AB%E5%86%99%E5%90%8E%20%E7%AD%94%E9%A2%98%E5%8D%A1.pdf',
+      }],
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <MessageRow
+        msg={msg}
+        rowKey={msg.id}
+        generatingMessageId=""
+        lang="zh"
+        onOpenArtifact={(artifact) => opened.push(artifact)}
+        t={(key) => key}
+      />,
+    ))
+    const link = rootElement.querySelector('[data-testid="inline-artifact-link"]')
+    assert.ok(link)
+    assert.equal(link.textContent, '填写后 答题卡.pdf')
+    assert.equal(rootElement.querySelectorAll('[data-testid="artifact-open-card"]').length, 0)
+    await act(async () => link.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })))
+    assert.equal(opened[0].directFile.filename, '填写后 答题卡.pdf')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('an explicit Markdown link to a local Windows output is rewritten to the persisted artifact', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const opened = []
+  const msg = {
+    id: 'windows-local-markdown-link',
+    role: 'assistant',
+    content: '下载：[填写后 答题卡.pdf](<D:\\本地 输出\\填写后 答题卡.pdf>)',
+    timestamp: Date.now(),
+    meta: {
+      serverArtifacts: [{
+        id: 'local-pdf-markdown',
+        filename: '填写后 答题卡.pdf',
+        type: 'pdf',
+        url: '/api/artifacts/%E5%A1%AB%E5%86%99%E5%90%8E%20%E7%AD%94%E9%A2%98%E5%8D%A1.pdf',
+      }],
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <MessageRow
+        msg={msg}
+        rowKey={msg.id}
+        generatingMessageId=""
+        lang="zh"
+        onOpenArtifact={(artifact) => opened.push(artifact)}
+        t={(key) => key}
+      />,
+    ))
+    const link = rootElement.querySelector('[data-testid="inline-artifact-link"]')
+    assert.ok(link)
+    assert.match(link.getAttribute('href'), /^\/api\/artifacts\//)
+    assert.equal(rootElement.querySelectorAll('[data-testid="artifact-open-card"]').length, 0)
+    await act(async () => link.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })))
+    assert.equal(opened[0].directFile.filename, '填写后 答题卡.pdf')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
 test('a paused assistant message renders a camelCase directory request inline', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')

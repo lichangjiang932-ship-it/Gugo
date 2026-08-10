@@ -10,7 +10,7 @@ process.env.APP_DB_PATH = path.join(dir, 'app.db')
 process.env.CREDENTIAL_KEY_PATH = path.join(dir, '.credentials.key')
 
 const { closeDb, createUser, getDb } = await import('../server/db.js')
-const { isCredentialEnvelope } = await import('../server/utils/credentialVault.js')
+const { isCredentialEnvelope, sealCredentialObject } = await import('../server/utils/credentialVault.js')
 const { getWebSearchConfig } = await import('../server/services/webSearchConfigStore.js')
 const {
   configureWebSearch,
@@ -120,4 +120,92 @@ test('unconfigured and disabled users receive explicit errors', async () => {
   await assert.rejects(searchWeb({ userId: 'search-bob', query: 'latest' }), (error) => error.code === 'WEB_SEARCH_NOT_CONFIGURED')
   configureWebSearch({ userId: 'search-bob', provider: 'brave', enabled: false, apiKey: 'key', config: {} })
   await assert.rejects(searchWeb({ userId: 'search-bob', query: 'latest' }), (error) => error.code === 'WEB_SEARCH_DISABLED')
+})
+
+test('multiple API configurations stay encrypted and fall back in saved order', async () => {
+  const saved = configureWebSearch({
+    userId: 'search-alice', enabled: true, strategy: 'fallback',
+    connections: [
+      { id: 'first', provider: 'tavily', enabled: true, apiKey: 'first-secret', config: {} },
+      { id: 'second', provider: 'brave', enabled: true, apiKey: 'second-secret', config: {} },
+    ],
+  })
+  assert.deepEqual(saved.connections.map(({ id, provider, apiKeyPresent }) => ({ id, provider, apiKeyPresent })), [
+    { id: 'first', provider: 'tavily', apiKeyPresent: true },
+    { id: 'second', provider: 'brave', apiKeyPresent: true },
+  ])
+  assert.equal(JSON.stringify(saved).includes('first-secret'), false)
+  assert.equal(JSON.stringify(saved).includes('second-secret'), false)
+
+  const row = getDb().prepare('SELECT config_json, secret_json FROM web_search_configs WHERE user_id = ?').get('search-alice')
+  assert.equal(JSON.parse(row.config_json).version, 2)
+  assert.equal(row.secret_json.includes('first-secret'), false)
+  assert.equal(row.secret_json.includes('second-secret'), false)
+
+  const requested = []
+  const result = await searchWeb({
+    userId: 'search-alice', query: 'fallback test',
+    fetchImpl: async (url) => {
+      requested.push(String(url))
+      if (String(url).includes('tavily.com')) {
+        return new Response(JSON.stringify({ error: 'temporary outage' }), { status: 503 })
+      }
+      return new Response(JSON.stringify({ web: { results: [{ title: 'Fallback', url: 'https://example.com/fallback', description: 'ok' }] } }))
+    },
+  })
+  assert.equal(result.provider, 'brave')
+  assert.equal(result.connectionId, 'second')
+  assert.deepEqual(result.attemptedProviders, ['tavily', 'brave'])
+  assert.equal(requested.length, 2)
+
+  const reordered = configureWebSearch({
+    userId: 'search-alice', enabled: true,
+    connections: [
+      { id: 'second', provider: 'brave', enabled: true, config: {} },
+      { id: 'first', provider: 'tavily', enabled: false, config: {} },
+    ],
+  })
+  assert.deepEqual(reordered.connections.map((item) => [item.id, item.apiKeyPresent]), [['second', true], ['first', true]])
+  const reorderedResult = await searchWeb({
+    userId: 'search-alice', query: 'preserved keys',
+    fetchImpl: async () => new Response(JSON.stringify({ web: { results: [{ title: 'Primary', url: 'https://example.com/primary', description: 'ok' }] } })),
+  })
+  assert.equal(reorderedResult.provider, 'brave')
+  assert.deepEqual(reorderedResult.attemptedProviders, ['brave'])
+})
+
+test('legacy single-provider rows and secrets are exposed through the new connection list', () => {
+  configureWebSearch({ userId: 'search-alice', provider: 'brave', enabled: true, apiKey: 'temporary', config: {} })
+  getDb().prepare(`UPDATE web_search_configs
+    SET provider = ?, config_json = ?, secret_json = ?
+    WHERE user_id = ?`).run(
+    'serper',
+    '{}',
+    sealCredentialObject({ apiKey: 'legacy-secret' }, { purpose: 'web-search-secret' }),
+    'search-alice',
+  )
+  const migrated = getWebSearchConfig({ userId: 'search-alice' })
+  assert.equal(migrated.version, 2)
+  assert.equal(migrated.provider, 'serper')
+  assert.deepEqual(migrated.connections, [{ id: 'primary', provider: 'serper', enabled: true, config: {}, apiKeyPresent: true }])
+  assert.equal(JSON.stringify(migrated).includes('legacy-secret'), false)
+  assert.equal(isWebSearchReady({ userId: 'search-alice' }), true)
+})
+
+test('upstream errors cannot echo a configured API key', async () => {
+  configureWebSearch({
+    userId: 'search-alice', provider: 'tavily', enabled: true, apiKey: 'do-not-echo-this-key', config: {},
+  })
+  await assert.rejects(
+    searchWeb({
+      userId: 'search-alice', query: 'redaction',
+      fetchImpl: async () => new Response(
+        JSON.stringify({ error: 'invalid credential do-not-echo-this-key' }),
+        { status: 401, headers: { 'Content-Type': 'application/json' } },
+      ),
+    }),
+    (error) => error.code === 'WEB_SEARCH_UPSTREAM_ERROR'
+      && error.message.includes('[REDACTED]')
+      && !error.message.includes('do-not-echo-this-key'),
+  )
 })

@@ -225,6 +225,42 @@ const FEATURE_PAGE_TRANSLATIONS = {
   },
 }
 
+Object.assign(FEATURE_PAGE_TRANSLATIONS.zh.chatMessages, {
+  progressPhaseToolCompleted: '工具已完成', progressPhaseBatchCompleted: '本批次已完成', progressPhaseVerify: '验证中', progressPhaseEditing: '编辑中',
+  executionSummary: '{completed}/{total}', executionToggle: '{state}执行过程，已完成 {completed}/{total} 步', expand: '展开', collapse: '收起', stepNumber: '第 {number} 步',
+  toolEmptyValue: '（空）', toolEditCount: '{count} 个编辑', toolUnknown: '工具',
+  toolWebSearch: '网页搜索', toolFetchUrl: '抓取链接', toolCreatePptx: '生成 PPT', toolCreateDocx: '生成 Word', toolCreateXlsx: '生成 Excel', toolCreateReactComponent: 'React 组件', toolCreateMermaid: '流程图', toolCreateChart: '图表', toolCreateSvg: 'SVG 图形', toolCreateHtmlApp: 'HTML 应用', toolAgent: '子代理', toolReadFile: '读取文件', toolWriteFile: '写入文件', toolEditFile: '编辑文件', toolMultiEdit: '批量编辑', toolBashExec: '运行命令', toolGitStatus: 'Git 状态', toolGitDiff: 'Git 差异', toolRunProjectCheck: '项目检查', toolManageTodos: '任务管理',
+  subagentFallback: '子代理', subagentType: '代理 · {type}', subagentGeneral: '通用', subagentPrompt: '任务说明', subagentResult: '结果',
+})
+Object.assign(FEATURE_PAGE_TRANSLATIONS.en.chatMessages, {
+  progressPhaseToolCompleted: 'Tool completed', progressPhaseBatchCompleted: 'Batch completed', progressPhaseVerify: 'Verifying', progressPhaseEditing: 'Editing',
+  executionSummary: '{completed}/{total}', executionToggle: '{state} execution, {completed} of {total} steps completed', expand: 'Expand', collapse: 'Collapse', stepNumber: 'Step {number}',
+  toolEmptyValue: '(empty)', toolEditCount: '{count} edits', toolUnknown: 'Tool',
+  toolWebSearch: 'Search web', toolFetchUrl: 'Fetch URL', toolCreatePptx: 'Create PowerPoint', toolCreateDocx: 'Create Word document', toolCreateXlsx: 'Create Excel workbook', toolCreateReactComponent: 'React component', toolCreateMermaid: 'Mermaid diagram', toolCreateChart: 'Chart', toolCreateSvg: 'SVG graphic', toolCreateHtmlApp: 'HTML app', toolAgent: 'Sub-agent', toolReadFile: 'Read file', toolWriteFile: 'Write file', toolEditFile: 'Edit file', toolMultiEdit: 'Batch edit', toolBashExec: 'Run command', toolGitStatus: 'Git status', toolGitDiff: 'Git diff', toolRunProjectCheck: 'Project check', toolManageTodos: 'Manage tasks',
+  subagentFallback: 'Sub-agent', subagentType: 'Agent · {type}', subagentGeneral: 'general', subagentPrompt: 'Prompt', subagentResult: 'Result',
+})
+Object.assign(FEATURE_PAGE_TRANSLATIONS.ja.chatMessages, {
+  progressPhaseToolCompleted: 'ツール完了', progressPhaseBatchCompleted: 'バッチ完了', progressPhaseVerify: '検証中', progressPhaseEditing: '編集中',
+  executionSummary: '{completed}/{total}', executionToggle: '実行過程を{state}、{completed}/{total} ステップ完了', expand: '展開', collapse: '折りたたむ', stepNumber: 'ステップ {number}',
+  toolEmptyValue: '（空）', toolEditCount: '{count} 件の編集', toolUnknown: 'ツール',
+  toolWebSearch: 'Web 検索', toolFetchUrl: 'URL を取得', toolCreatePptx: 'PowerPoint を作成', toolCreateDocx: 'Word を作成', toolCreateXlsx: 'Excel を作成', toolCreateReactComponent: 'React コンポーネント', toolCreateMermaid: 'Mermaid 図', toolCreateChart: 'グラフ', toolCreateSvg: 'SVG 図形', toolCreateHtmlApp: 'HTML アプリ', toolAgent: 'サブエージェント', toolReadFile: 'ファイルを読む', toolWriteFile: 'ファイルを書く', toolEditFile: 'ファイルを編集', toolMultiEdit: '一括編集', toolBashExec: 'コマンドを実行', toolGitStatus: 'Git 状態', toolGitDiff: 'Git 差分', toolRunProjectCheck: 'プロジェクト検証', toolManageTodos: 'タスク管理',
+  subagentFallback: 'サブエージェント', subagentType: 'エージェント · {type}', subagentGeneral: '汎用', subagentPrompt: '指示', subagentResult: '結果',
+})
+Object.assign(FEATURE_PAGE_TRANSLATIONS.ko.chatMessages, {
+  progressPhaseToolCompleted: '도구 완료', progressPhaseBatchCompleted: '일괄 작업 완료', progressPhaseVerify: '검증 중', progressPhaseEditing: '편집 중',
+  executionSummary: '{completed}/{total}', executionToggle: '실행 과정을 {state}, {completed}/{total}단계 완료', expand: '펼치기', collapse: '접기', stepNumber: '{number}단계',
+  toolEmptyValue: '(비어 있음)', toolEditCount: '편집 {count}개', toolUnknown: '도구',
+  toolWebSearch: '웹 검색', toolFetchUrl: 'URL 가져오기', toolCreatePptx: 'PowerPoint 만들기', toolCreateDocx: 'Word 만들기', toolCreateXlsx: 'Excel 만들기', toolCreateReactComponent: 'React 컴포넌트', toolCreateMermaid: 'Mermaid 다이어그램', toolCreateChart: '차트', toolCreateSvg: 'SVG 그래픽', toolCreateHtmlApp: 'HTML 앱', toolAgent: '하위 에이전트', toolReadFile: '파일 읽기', toolWriteFile: '파일 쓰기', toolEditFile: '파일 편집', toolMultiEdit: '일괄 편집', toolBashExec: '명령 실행', toolGitStatus: 'Git 상태', toolGitDiff: 'Git 차이', toolRunProjectCheck: '프로젝트 검사', toolManageTodos: '작업 관리',
+  subagentFallback: '하위 에이전트', subagentType: '에이전트 · {type}', subagentGeneral: '일반', subagentPrompt: '지시문', subagentResult: '결과',
+})
+Object.assign(FEATURE_PAGE_TRANSLATIONS['zh-TW'].chatMessages, {
+  progressPhaseToolCompleted: '工具已完成', progressPhaseBatchCompleted: '本批次已完成', progressPhaseVerify: '驗證中', progressPhaseEditing: '編輯中',
+  executionSummary: '{completed}/{total}', executionToggle: '{state}執行過程，已完成 {completed}/{total} 步', expand: '展開', collapse: '收合', stepNumber: '第 {number} 步',
+  toolEmptyValue: '（空）', toolEditCount: '{count} 個編輯', toolUnknown: '工具',
+  toolWebSearch: '網頁搜尋', toolFetchUrl: '擷取連結', toolCreatePptx: '產生 PPT', toolCreateDocx: '產生 Word', toolCreateXlsx: '產生 Excel', toolCreateReactComponent: 'React 元件', toolCreateMermaid: '流程圖', toolCreateChart: '圖表', toolCreateSvg: 'SVG 圖形', toolCreateHtmlApp: 'HTML 應用', toolAgent: '子代理', toolReadFile: '讀取檔案', toolWriteFile: '寫入檔案', toolEditFile: '編輯檔案', toolMultiEdit: '批次編輯', toolBashExec: '執行命令', toolGitStatus: 'Git 狀態', toolGitDiff: 'Git 差異', toolRunProjectCheck: '專案檢查', toolManageTodos: '任務管理',
+  subagentFallback: '子代理', subagentType: '代理 · {type}', subagentGeneral: '通用', subagentPrompt: '任務說明', subagentResult: '結果',
+})
+
 const ACCESS_TRANSLATIONS = {
   zh: {
     eyebrow: 'ACCESS', title: '连接', subtitle: '连接 Browser 和常用应用，让模型能安全地读取、搜索和处理你的内容。', summary: '{api} 个原生 API · {bridges} 个社交桥 · {shortcuts} 个本机浏览器直连（非 API）',
@@ -783,9 +819,37 @@ const WEB_SEARCH_TRANSLATIONS = {
   },
 }
 
+const WEB_SEARCH_MULTI_TRANSLATIONS = {
+  zh: {
+    fallbackHint: '可配置多个搜索 API。模型会按这里的顺序调用；当前一个不可用时自动尝试下一个。',
+    addApi: '添加 API', priority: '优先级 {index}', keySaved: '密钥已保存', keyMissing: '待填写密钥',
+    moveUp: '提高优先级', moveDown: '降低优先级', removeApi: '移除 API', apiSettings: 'API 配置', useThisApi: '启用此 API',
+  },
+  en: {
+    fallbackHint: 'Configure multiple search APIs. The model uses this order and automatically tries the next API when one fails.',
+    addApi: 'Add API', priority: 'Priority {index}', keySaved: 'Key saved', keyMissing: 'Key needed',
+    moveUp: 'Move up', moveDown: 'Move down', removeApi: 'Remove API', apiSettings: 'API settings', useThisApi: 'Use this API',
+  },
+  ja: {
+    fallbackHint: '複数の検索 API を設定できます。モデルはこの順序で呼び出し、失敗時は次の API を自動的に試します。',
+    addApi: 'API を追加', priority: '優先度 {index}', keySaved: 'キー保存済み', keyMissing: 'キー未入力',
+    moveUp: '優先度を上げる', moveDown: '優先度を下げる', removeApi: 'API を削除', apiSettings: 'API 設定', useThisApi: 'この API を使用',
+  },
+  ko: {
+    fallbackHint: '여러 검색 API를 구성할 수 있습니다. 모델은 이 순서로 호출하며 실패하면 다음 API를 자동으로 시도합니다.',
+    addApi: 'API 추가', priority: '우선순위 {index}', keySaved: '키 저장됨', keyMissing: '키 필요',
+    moveUp: '우선순위 올리기', moveDown: '우선순위 내리기', removeApi: 'API 제거', apiSettings: 'API 설정', useThisApi: '이 API 사용',
+  },
+  'zh-TW': {
+    fallbackHint: '可設定多個搜尋 API。模型會依此順序呼叫；目前一個無法使用時會自動嘗試下一個。',
+    addApi: '新增 API', priority: '優先順序 {index}', keySaved: '金鑰已儲存', keyMissing: '待填寫金鑰',
+    moveUp: '提高優先順序', moveDown: '降低優先順序', removeApi: '移除 API', apiSettings: 'API 設定', useThisApi: '啟用此 API',
+  },
+}
+
 export const translations = {
   zh: {
-    webSearch: WEB_SEARCH_TRANSLATIONS.zh,
+    webSearch: { ...WEB_SEARCH_TRANSLATIONS.zh, ...WEB_SEARCH_MULTI_TRANSLATIONS.zh },
     desktopUpdate: DESKTOP_UPDATE_TRANSLATIONS.zh,
     skillsMarket: { ...SKILLS_MARKET_TRANSLATIONS.zh, ...SKILLS_MARKET_UI_TRANSLATIONS.zh },
     storageNotice: STORAGE_NOTICE_TRANSLATIONS.zh,
@@ -1265,7 +1329,7 @@ export const translations = {
     },
   },
   en: {
-    webSearch: WEB_SEARCH_TRANSLATIONS.en,
+    webSearch: { ...WEB_SEARCH_TRANSLATIONS.en, ...WEB_SEARCH_MULTI_TRANSLATIONS.en },
     desktopUpdate: DESKTOP_UPDATE_TRANSLATIONS.en,
     skillsMarket: { ...SKILLS_MARKET_TRANSLATIONS.en, ...SKILLS_MARKET_UI_TRANSLATIONS.en },
     storageNotice: STORAGE_NOTICE_TRANSLATIONS.en,
@@ -1745,7 +1809,7 @@ export const translations = {
     },
   },
   ja: {
-    webSearch: WEB_SEARCH_TRANSLATIONS.ja,
+    webSearch: { ...WEB_SEARCH_TRANSLATIONS.ja, ...WEB_SEARCH_MULTI_TRANSLATIONS.ja },
     desktopUpdate: DESKTOP_UPDATE_TRANSLATIONS.ja,
     skillsMarket: { ...SKILLS_MARKET_TRANSLATIONS.ja, ...SKILLS_MARKET_UI_TRANSLATIONS.ja },
     storageNotice: STORAGE_NOTICE_TRANSLATIONS.ja,
@@ -2225,7 +2289,7 @@ export const translations = {
     },
   },
   ko: {
-    webSearch: WEB_SEARCH_TRANSLATIONS.ko,
+    webSearch: { ...WEB_SEARCH_TRANSLATIONS.ko, ...WEB_SEARCH_MULTI_TRANSLATIONS.ko },
     desktopUpdate: DESKTOP_UPDATE_TRANSLATIONS.ko,
     skillsMarket: { ...SKILLS_MARKET_TRANSLATIONS.ko, ...SKILLS_MARKET_UI_TRANSLATIONS.ko },
     storageNotice: STORAGE_NOTICE_TRANSLATIONS.ko,
@@ -2705,7 +2769,7 @@ export const translations = {
     },
   },
   'zh-TW': {
-    webSearch: WEB_SEARCH_TRANSLATIONS['zh-TW'],
+    webSearch: { ...WEB_SEARCH_TRANSLATIONS['zh-TW'], ...WEB_SEARCH_MULTI_TRANSLATIONS['zh-TW'] },
     desktopUpdate: DESKTOP_UPDATE_TRANSLATIONS['zh-TW'],
     skillsMarket: { ...SKILLS_MARKET_TRANSLATIONS['zh-TW'], ...SKILLS_MARKET_UI_TRANSLATIONS['zh-TW'] },
     storageNotice: STORAGE_NOTICE_TRANSLATIONS['zh-TW'],

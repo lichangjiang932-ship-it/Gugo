@@ -35,6 +35,39 @@ function createTestEngine(options = {}) {
   return new TurnEngine({ scheduleMemoryExtraction: () => {}, ...options })
 }
 
+test('TurnEngine emits every artifact produced by one completed local tool call', async () => {
+  const localArtifacts = [
+    { id: 'local-pdf-1', filename: '填写后 答题卡.pdf', type: 'pdf', url: '/api/artifacts/local-pdf-1' },
+    { id: 'local-png-1', filename: '第 1 页.png', type: 'png', url: '/api/artifacts/local-png-1' },
+  ]
+  const engine = createTestEngine({
+    runLoop: async ({ onToolCompleted }) => {
+      await onToolCompleted({
+        call: { id: 'local-shell-call', name: 'bash_exec', args: { command: 'python fill.py' } },
+        result: { ok: true, artifacts: localArtifacts },
+        artifactId: localArtifacts[0].id,
+        artifacts: localArtifacts,
+      })
+      return { text: '文件已生成。', artifactIds: localArtifacts.map((artifact) => artifact.id), iterations: 1 }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId: 'turn-local-multi-artifact',
+    content: '生成填写后的 PDF 和 PNG。',
+  })
+  await engine.waitForTurn({
+    userId, sessionId: 'turn-engine-session', turnId: 'turn-local-multi-artifact',
+  })
+
+  const completed = events('turn-local-multi-artifact')
+    .find((event) => event.type === 'tool.completed')
+  assert.deepEqual(completed.payload.artifacts, localArtifacts)
+  assert.equal(completed.payload.artifactId, 'local-pdf-1')
+})
+
 test('TurnEngine rejects more than 32 attachments instead of silently dropping files', async () => {
   const engine = createTestEngine({ runLoop: async () => ({ text: 'must not run' }) })
   await assert.rejects(

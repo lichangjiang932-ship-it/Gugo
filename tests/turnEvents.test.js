@@ -190,6 +190,32 @@ test('tool completed events use a strict structured failure payload', () => {
   }))
 })
 
+test('tool completed events accept strict multi-artifact output metadata', () => {
+  const event = createTurnEvent({
+    id: 'tool-multi-artifact', sessionId: 's1', turnId: 't1', sequence: 7,
+    type: 'tool.completed',
+    payload: {
+      toolCallId: 'shell-1',
+      name: 'bash_exec',
+      artifactId: 'pdf-1',
+      artifacts: [
+        { id: 'pdf-1', filename: '填写后 答题卡.pdf', type: 'pdf', url: '/api/artifacts/pdf-1' },
+        { id: 'png-1', filename: '第 1 页.png', type: 'png', url: '/api/artifacts/png-1', title: '第一页' },
+      ],
+    },
+    createdAt: 8,
+  })
+  assert.deepEqual(event.payload.artifacts.map((artifact) => artifact.id), ['pdf-1', 'png-1'])
+  assert.throws(() => createTurnEvent({
+    ...event,
+    id: 'tool-multi-artifact-drift',
+    payload: {
+      ...event.payload,
+      artifacts: [{ ...event.payload.artifacts[0], localPath: 'D:\\private\\answer.pdf' }],
+    },
+  }))
+})
+
 test('turn progress events require bounded structured progress', () => {
   const event = createTurnEvent({
     id: 'progress-1', sessionId: 's1', turnId: 't1', sequence: 7,

@@ -24,15 +24,23 @@ export async function handleWebSearchRequest(req, res, { fetchImpl = fetch } = {
       const body = await readJson(req)
       const config = configureWebSearch({
         userId,
-        provider: body.provider,
         enabled: body.enabled !== false,
-        config: body.config,
-        ...(Object.hasOwn(body, 'apiKey') ? { apiKey: body.apiKey } : {}),
+        ...(Array.isArray(body.connections)
+          ? { connections: body.connections, strategy: body.strategy }
+          : {
+              provider: body.provider,
+              config: body.config,
+              ...(Object.hasOwn(body, 'apiKey') ? { apiKey: body.apiKey } : {}),
+            }),
       })
       return sendJson(res, 200, { ok: true, config })
     }
     if (req.method === 'POST' && parts[2] === 'test') {
-      return sendJson(res, 200, { ok: true, result: await testWebSearch({ userId, fetchImpl }) })
+      const body = await readJson(req)
+      return sendJson(res, 200, {
+        ok: true,
+        result: await testWebSearch({ userId, connectionId: body.connectionId, fetchImpl }),
+      })
     }
     if (req.method === 'DELETE' && parts.length === 2) {
       return sendJson(res, 200, { ok: true, removed: deleteWebSearchConfig({ userId }) })

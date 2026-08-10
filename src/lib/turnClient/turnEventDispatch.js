@@ -146,12 +146,18 @@ export async function dispatchTurnEvent(event, { dispatch, taskId, onApproval, o
         approvalAuthorization: payload.result?.approvalAuthorization || null,
       },
     })
-    if (payload.artifactId || payload.result?.artifactId) onArtifact?.({
-      id: payload.artifactId || payload.result.artifactId,
-      name: payload.name,
-      filename: payload.result?.filename || '',
-      url: payload.result?.url || '',
-    })
+    const completedArtifacts = Array.isArray(payload.artifacts) && payload.artifacts.length > 0
+      ? payload.artifacts
+      : Array.isArray(payload.result?.artifacts) && payload.result.artifacts.length > 0
+        ? payload.result.artifacts
+        : payload.artifactId || payload.result?.artifactId
+          ? [{
+              id: payload.artifactId || payload.result.artifactId,
+              filename: payload.result?.filename || '',
+              url: payload.result?.url || '',
+            }]
+          : []
+    for (const artifact of completedArtifacts) onArtifact?.({ ...artifact, name: payload.name })
   } else if (event.type === 'approval.required') {
     dispatch?.({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { stepLabel: 'Waiting for approval' } } })
     await onApproval?.({

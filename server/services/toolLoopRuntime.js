@@ -8,10 +8,12 @@
  *   - 每次工具调用产物立刻 appendJobArtifact 进 jobStore(归属 job.userId)
  *   - 循环最多 maxIters 轮,防失控
  */
+import fs from 'node:fs'
+import path from 'node:path'
 import { appendJobArtifact } from './jobStore.js'
 import { appendTurnArtifact } from './turnArtifactStore.js'
-import { createDocx, createHtmlArtifact, createImageArtifact, createPptx, createXlsx } from './artifactGen.js'
-import { FS_SHELL_TOOL_SPECS, dispatchFsShellTool } from '../adapters/fsShellTools.js'
+import { createDocx, createHtmlArtifact, createImageArtifact, createLocalFileArtifact, createPptx, createXlsx } from './artifactGen.js'
+import { FS_SHELL_TOOL_SPECS, dispatchFsShellTool, resolveInWorkspace } from '../adapters/fsShellTools.js'
 import { GIT_TOOL_SPECS, dispatchGitTool } from '../adapters/gitWorkbench.js'
 import { CODE_SEARCH_TOOL_SPECS, dispatchCodeSearchTool } from '../utils/codeSearch.js'
 import { APPLY_PATCH_TOOL_SPECS, dispatchApplyPatchTool } from '../utils/applyPatch.js'
@@ -1287,6 +1289,51 @@ export function selectJobToolSpecs({
     })
   }
   return artifactFiltered
+}
+
+function localArtifactCandidates(call, result) {
+  if (call?.name === 'write_file') {
+    return [{ path: result?.path || call?.args?.path, scope: result?.scope }]
+  }
+  if (call?.name !== 'bash_exec') return []
+  return (Array.isArray(result?.verifiedOutputs) ? result.verifiedOutputs : [])
+    .filter((output) => output?.type === 'file')
+}
+
+function resolveLocalArtifactSource(candidate, call, result) {
+  const reported = String(candidate?.path || '').trim()
+  const declared = String(candidate?.declaredPath || '').trim()
+  if (reported && path.isAbsolute(reported)) return reported
+  if (candidate?.scope === 'workspace' && reported) return resolveInWorkspace(reported)
+  if (declared && path.isAbsolute(declared)) return declared
+  const cwd = String(result?.cwd || call?.args?.cwd || '').trim()
+  if (cwd && path.isAbsolute(cwd)) return path.resolve(cwd, declared || reported)
+  return resolveInWorkspace(reported || declared)
+}
+
+export function persistLocalToolArtifacts({ call, result, job, step }) {
+  if (result?.ok !== true || !['write_file', 'bash_exec'].includes(call?.name)) return []
+  const persisted = []
+  const seen = new Set()
+  for (const candidate of localArtifactCandidates(call, result)) {
+    let artifact = null
+    try {
+      const sourcePath = resolveLocalArtifactSource(candidate, call, result)
+      const key = process.platform === 'win32' ? sourcePath.toLowerCase() : sourcePath
+      if (seen.has(key)) continue
+      seen.add(key)
+      artifact = createLocalFileArtifact({ sourcePath, filename: path.basename(sourcePath) })
+      persistGeneratedArtifact({ artifact, args: { title: artifact.title }, job, step })
+      persisted.push(artifact)
+    } catch {
+      if (artifact?.fullPath) {
+        try { fs.unlinkSync(artifact.fullPath) } catch { /* best-effort orphan cleanup */ }
+      }
+      // A successful tool result remains successful if an output disappears
+      // before it can be copied or has no safe downloadable filename.
+    }
+  }
+  return persisted
 }
 
 export const selectToolSpecs = selectJobToolSpecs
@@ -3128,6 +3175,26 @@ export async function runToolsLoop({
       const executedCall = outcome.executionArgs === outcome.call?.args
         ? outcome.call
         : { ...outcome.call, args: outcome.executionArgs }
+      if (succeeded && !outcome.artifactId) {
+        const localArtifacts = persistLocalToolArtifacts({
+          call: executedCall,
+          result: outcome.result,
+          job,
+          step,
+        })
+        if (localArtifacts.length > 0) {
+          outcome.artifactId = localArtifacts[0].id
+          outcome.artifactIds = localArtifacts.map((artifact) => artifact.id)
+          outcome.artifacts = localArtifacts.map(({ id, filename, type, url }) => ({ id, filename, type, url }))
+          outcome.result = {
+            ...outcome.result,
+            artifactId: localArtifacts[0].id,
+            filename: localArtifacts[0].filename,
+            url: localArtifacts[0].url,
+            artifacts: outcome.artifacts,
+          }
+        }
+      }
       const progressChanges = progressChangesFor(executedCall, outcome.result)
       const installSignature = installAttemptSignature(executedCall)
       if (installSignature) rememberInstallAttempt(installSignature)
@@ -3205,7 +3272,8 @@ export async function runToolsLoop({
         pdfLayoutVerificationObserved = true
         pdfLayoutVerificationRetries = 0
       }
-      if (outcome.artifactId) artifactIds.push(outcome.artifactId)
+      if (Array.isArray(outcome.artifactIds)) artifactIds.push(...outcome.artifactIds)
+      else if (outcome.artifactId) artifactIds.push(outcome.artifactId)
       if (outcome.artifactId && expectedArtifactTools.has(outcome.call?.name)) {
         deliveredArtifactTools.add(outcome.call.name)
       }

@@ -1,5 +1,5 @@
-import { ExternalLink, KeyRound, Search, ShieldCheck } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { ArrowDown, ArrowUp, ExternalLink, KeyRound, Plus, Search, ShieldCheck, Trash2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import { WEB_SEARCH_PROVIDERS } from '../../../shared/webSearchProviders.js'
 import {
   deleteWebSearchConfigApi,
@@ -14,6 +14,36 @@ const CUSTOM_DEFAULTS = Object.freeze({
   titlePath: 'title', urlPath: 'url', snippetPath: 'snippet',
 })
 
+let connectionSequence = 0
+
+function createConnection(overrides = {}) {
+  connectionSequence += 1
+  return {
+    id: overrides.id || `search-${Date.now().toString(36)}-${connectionSequence}`,
+    provider: overrides.provider || 'tavily',
+    enabled: overrides.enabled !== false,
+    config: overrides.config || {},
+    apiKey: '',
+    apiKeyPresent: Boolean(overrides.apiKeyPresent),
+  }
+}
+
+function hydrateConnections(config) {
+  if (Array.isArray(config?.connections) && config.connections.length) {
+    return config.connections.map((item) => createConnection(item))
+  }
+  if (config?.provider) {
+    return [createConnection({
+      id: 'primary',
+      provider: config.provider,
+      enabled: true,
+      config: config.config,
+      apiKeyPresent: config.apiKeyPresent,
+    })]
+  }
+  return [createConnection()]
+}
+
 function Field({ label, value, onChange, placeholder = '', multiline = false, type = 'text' }) {
   const className = 'w-full rounded-md border border-ink-fade/50 bg-paper px-3 py-2 text-sm text-ink outline-none focus:border-ember'
   return <label className="flex flex-col gap-1.5 text-xs text-ink-soft"><span>{label}</span>{multiline
@@ -22,50 +52,65 @@ function Field({ label, value, onChange, placeholder = '', multiline = false, ty
 }
 
 function Toggle({ enabled, onChange, label }) {
-  return <button type="button" role="switch" aria-checked={enabled} aria-label={label} onClick={() => onChange(!enabled)} className={`relative h-6 w-11 rounded-full border transition-colors ${enabled ? 'border-ember bg-ember' : 'border-ink-fade/60 bg-paper-2'}`}><span className={`absolute top-0.5 h-[18px] w-[18px] rounded-full bg-paper transition-all ${enabled ? 'left-[21px]' : 'left-0.5'}`} /></button>
+  return <button type="button" role="switch" aria-checked={enabled} aria-label={label} onClick={() => onChange(!enabled)} className={`relative h-6 w-11 shrink-0 rounded-full border transition-colors ${enabled ? 'border-ember bg-ember' : 'border-ink-fade/60 bg-paper-2'}`}><span className={`absolute top-0.5 h-[18px] w-[18px] rounded-full bg-paper transition-all ${enabled ? 'left-[21px]' : 'left-0.5'}`} /></button>
 }
 
 export default function SettingsWebSearchPanel({ t }) {
-  const [provider, setProvider] = useState('tavily')
+  const [connections, setConnections] = useState(() => [createConnection()])
+  const [selectedId, setSelectedId] = useState('')
   const [enabled, setEnabled] = useState(true)
-  const [config, setConfig] = useState({})
-  const [apiKey, setApiKey] = useState('')
-  const [apiKeyPresent, setApiKeyPresent] = useState(false)
   const [lastTest, setLastTest] = useState(null)
   const [loading, setLoading] = useState(true)
   const [working, setWorking] = useState('')
   const [message, setMessage] = useState('')
 
-  const meta = useMemo(() => WEB_SEARCH_PROVIDERS.find((item) => item.id === provider) || WEB_SEARCH_PROVIDERS[0], [provider])
-  const updateConfig = (key, value) => setConfig((current) => ({ ...current, [key]: value }))
+  const selectedIndex = Math.max(0, connections.findIndex((item) => item.id === selectedId))
+  const selected = connections[selectedIndex] || connections[0]
+  const meta = WEB_SEARCH_PROVIDERS.find((item) => item.id === selected?.provider) || WEB_SEARCH_PROVIDERS[0]
+
+  const replaceConnection = (id, updater) => {
+    setConnections((current) => current.map((item) => (item.id === id ? updater(item) : item)))
+  }
+  const updateConfig = (key, value) => replaceConnection(selected.id, (item) => ({
+    ...item,
+    config: { ...item.config, [key]: value },
+  }))
 
   useEffect(() => {
     let active = true
     getWebSearchConfigApi().then((data) => {
-      if (!active || !data.config) return
-      setProvider(data.config.provider || 'tavily')
-      setEnabled(data.config.enabled !== false)
-      setConfig(data.config.config || {})
-      setApiKeyPresent(Boolean(data.config.apiKeyPresent))
-      setLastTest(data.config.lastTest || null)
+      if (!active) return
+      const next = hydrateConnections(data.config)
+      setConnections(next)
+      setSelectedId(next[0].id)
+      setEnabled(data.config?.enabled !== false)
+      setLastTest(data.config?.lastTest || null)
     }).catch((error) => { if (active) setMessage(error.message) }).finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [])
 
   const payload = () => ({
-    provider,
     enabled,
-    config: provider === 'custom' ? { ...CUSTOM_DEFAULTS, ...config } : config,
-    ...(apiKey ? { apiKey } : {}),
+    strategy: 'fallback',
+    connections: connections.map((item) => ({
+      id: item.id,
+      provider: item.provider,
+      enabled: item.enabled,
+      config: item.provider === 'custom' ? { ...CUSTOM_DEFAULTS, ...item.config } : item.config,
+      ...(item.apiKey ? { apiKey: item.apiKey } : {}),
+    })),
   })
 
   const save = async ({ test = false } = {}) => {
     setWorking(test ? 'test' : 'save'); setMessage('')
     try {
       const saved = await saveWebSearchConfigApi(payload())
-      setApiKey(''); setApiKeyPresent(Boolean(saved.config?.apiKeyPresent)); setLastTest(saved.config?.lastTest || null)
+      const next = hydrateConnections(saved.config)
+      setConnections(next)
+      setSelectedId((current) => next.some((item) => item.id === current) ? current : next[0].id)
+      setLastTest(saved.config?.lastTest || null)
       if (test) {
-        const tested = await testWebSearchApi()
+        const tested = await testWebSearchApi({ connectionId: selected.id })
         setLastTest({ at: Date.now(), ok: true, message: tested.result?.message || '' })
         setMessage(t('webSearch.testSuccess', { count: tested.result?.resultCount ?? 0 }))
       } else setMessage(t('webSearch.saved'))
@@ -80,10 +125,38 @@ export default function SettingsWebSearchPanel({ t }) {
     setWorking('clear'); setMessage('')
     try {
       await deleteWebSearchConfigApi()
-      setProvider('tavily'); setEnabled(true); setConfig({}); setApiKey(''); setApiKeyPresent(false); setLastTest(null)
+      const next = createConnection()
+      setConnections([next]); setSelectedId(next.id); setEnabled(true); setLastTest(null)
       setMessage(t('webSearch.cleared'))
     } catch (error) { setMessage(t('webSearch.failed', { message: error.message })) }
     finally { setWorking('') }
+  }
+
+  const addConnection = () => {
+    const next = createConnection()
+    setConnections((current) => [...current, next])
+    setSelectedId(next.id)
+    setMessage('')
+  }
+
+  const removeConnection = (id) => {
+    if (connections.length <= 1) return
+    const index = connections.findIndex((item) => item.id === id)
+    const next = connections.filter((item) => item.id !== id)
+    setConnections(next)
+    if (id === selectedId) setSelectedId(next[Math.min(index, next.length - 1)].id)
+    setMessage('')
+  }
+
+  const moveConnection = (id, offset) => {
+    setConnections((current) => {
+      const index = current.findIndex((item) => item.id === id)
+      const target = index + offset
+      if (index < 0 || target < 0 || target >= current.length) return current
+      const next = [...current]
+      ;[next[index], next[target]] = [next[target], next[index]]
+      return next
+    })
   }
 
   if (loading) return <div className="text-sm text-ink-fade">{t('common.loading')}</div>
@@ -92,24 +165,46 @@ export default function SettingsWebSearchPanel({ t }) {
     <div><span className="font-mono text-[9px] tracking-[0.22em] text-ink-fade">WEB SEARCH</span><h1 className="font-hand text-[28px] text-ink mt-1.5">{t('webSearch.title')}</h1><p className="text-sm text-ink-soft mt-1">{t('webSearch.subtitle')}</p></div>
     <div className="rounded-xl border border-ink/20 bg-paper p-5 flex items-center gap-3"><ShieldCheck className="h-5 w-5 text-emerald-600" /><p className="text-xs text-ink-soft flex-1">{t('webSearch.security')}</p><Toggle enabled={enabled} onChange={setEnabled} label={t('webSearch.enabled')} /></div>
     <div className="rounded-xl border border-ink/20 bg-paper p-5 flex flex-col gap-4">
-      <div><h2 className="text-base text-ink">{t('webSearch.provider')}</h2><p className="text-xs text-ink-fade mt-1">{t('webSearch.providerHint')}</p></div>
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-2">{WEB_SEARCH_PROVIDERS.map((item) => <button key={item.id} type="button" onClick={() => { if (item.id !== provider) { setApiKey(''); setApiKeyPresent(false); setConfig({}) } setProvider(item.id); setMessage('') }} className={`rounded-lg border p-3 text-left transition-colors ${provider === item.id ? 'border-ember bg-ember-soft/50' : 'border-ink-fade/40 hover:bg-paper-2'}`}><span className="block text-sm text-ink">{item.label}</span><span className="mt-1 block text-[10px] text-ink-fade">{item.id === 'custom' ? t('webSearch.customBadge') : t('webSearch.presetBadge')}</span></button>)}</div>
-      {meta.docsUrl ? <a href={meta.docsUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-ember self-start">{t('webSearch.getApiKey')}<ExternalLink className="h-3 w-3" /></a> : null}
-      <Field type="password" label={t('webSearch.apiKey')} value={apiKey} onChange={setApiKey} placeholder={apiKeyPresent ? t('webSearch.secretKept') : t('webSearch.apiKeyPlaceholder')} />
-      {provider === 'google_cse' ? <Field label={t('webSearch.googleCx')} value={config.cx || ''} onChange={(value) => updateConfig('cx', value)} placeholder="0123456789:abcdef" /> : null}
-      {provider === 'custom' ? <div className="grid gap-3 border-t border-dashed border-ink-fade/40 pt-4">
-        <p className="text-xs text-ink-fade">{t('webSearch.customHint')}</p>
-        <Field label={t('webSearch.baseUrl')} value={config.baseUrl || ''} onChange={(value) => updateConfig('baseUrl', value)} placeholder="https://search.example.com/v1/search" />
-        <label className="flex flex-col gap-1.5 text-xs text-ink-soft"><span>{t('webSearch.method')}</span><select value={config.method || 'POST'} onChange={(event) => updateConfig('method', event.target.value)} className="h-9 rounded-md border border-ink-fade/50 bg-paper px-3 text-sm text-ink"><option value="POST">POST</option><option value="GET">GET</option></select></label>
-        {(config.method || 'POST') === 'GET' ? <Field label={t('webSearch.queryParam')} value={config.queryParam || 'q'} onChange={(value) => updateConfig('queryParam', value)} /> : null}
-        <Field multiline label={t('webSearch.headersTemplate')} value={config.headersTemplate ?? CUSTOM_DEFAULTS.headersTemplate} onChange={(value) => updateConfig('headersTemplate', value)} />
-        {(config.method || 'POST') === 'POST' ? <Field multiline label={t('webSearch.bodyTemplate')} value={config.bodyTemplate ?? CUSTOM_DEFAULTS.bodyTemplate} onChange={(value) => updateConfig('bodyTemplate', value)} /> : null}
-        <div className="grid grid-cols-2 gap-3"><Field label={t('webSearch.resultPath')} value={config.resultPath || 'results'} onChange={(value) => updateConfig('resultPath', value)} /><Field label={t('webSearch.titlePath')} value={config.titlePath || 'title'} onChange={(value) => updateConfig('titlePath', value)} /><Field label={t('webSearch.urlPath')} value={config.urlPath || 'url'} onChange={(value) => updateConfig('urlPath', value)} /><Field label={t('webSearch.snippetPath')} value={config.snippetPath || 'snippet'} onChange={(value) => updateConfig('snippetPath', value)} /></div>
-        <p className="font-mono text-[10px] text-ink-fade">{t('webSearch.placeholders')}</p>
-      </div> : null}
+      <div className="flex items-start justify-between gap-4"><div><h2 className="text-base text-ink">{t('webSearch.provider')}</h2><p className="text-xs text-ink-fade mt-1">{t('webSearch.fallbackHint')}</p></div><button type="button" onClick={addConnection} disabled={connections.length >= 8 || Boolean(working)} className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-ink/25 px-3 text-xs text-ink hover:bg-paper-2 disabled:opacity-50"><Plus className="h-3.5 w-3.5" />{t('webSearch.addApi')}</button></div>
+      <div className="grid gap-4 xl:grid-cols-[minmax(190px,0.72fr)_minmax(0,1.7fr)]">
+        <div className="flex flex-col gap-2" data-testid="web-search-connections">
+          {connections.map((item, index) => {
+            const providerMeta = WEB_SEARCH_PROVIDERS.find((candidate) => candidate.id === item.provider)
+            const active = item.id === selected?.id
+            return <div key={item.id} className={`rounded-lg border p-2 transition-colors ${active ? 'border-ember bg-ember-soft/35' : 'border-ink-fade/35 bg-paper-2/40'}`}>
+              <button type="button" onClick={() => { setSelectedId(item.id); setMessage('') }} className="w-full text-left">
+                <span className="flex items-center justify-between gap-2"><span className="truncate text-sm text-ink">{providerMeta?.label || item.provider}</span><span className={`h-2 w-2 shrink-0 rounded-full ${item.enabled ? 'bg-emerald-500' : 'bg-ink-fade/50'}`} /></span>
+                <span className="mt-1 block text-[10px] text-ink-fade">{t('webSearch.priority', { index: index + 1 })} · {item.apiKeyPresent ? t('webSearch.keySaved') : t('webSearch.keyMissing')}</span>
+              </button>
+              <div className="mt-2 flex items-center gap-1 border-t border-ink-fade/25 pt-2">
+                <button type="button" disabled={index === 0} onClick={() => moveConnection(item.id, -1)} aria-label={t('webSearch.moveUp')} className="rounded p-1 text-ink-fade hover:bg-paper disabled:opacity-25"><ArrowUp className="h-3.5 w-3.5" /></button>
+                <button type="button" disabled={index === connections.length - 1} onClick={() => moveConnection(item.id, 1)} aria-label={t('webSearch.moveDown')} className="rounded p-1 text-ink-fade hover:bg-paper disabled:opacity-25"><ArrowDown className="h-3.5 w-3.5" /></button>
+                <button type="button" disabled={connections.length === 1} onClick={() => removeConnection(item.id)} aria-label={t('webSearch.removeApi')} className="ml-auto rounded p-1 text-red-500 hover:bg-red-50 disabled:opacity-25"><Trash2 className="h-3.5 w-3.5" /></button>
+              </div>
+            </div>
+          })}
+        </div>
+        {selected ? <div className="flex min-w-0 flex-col gap-4 rounded-lg border border-ink-fade/35 p-4" data-testid="web-search-connection-editor">
+          <div className="flex items-center justify-between gap-3"><div><h3 className="text-sm font-medium text-ink">{t('webSearch.apiSettings')}</h3><p className="mt-0.5 text-[10px] text-ink-fade">{t('webSearch.priority', { index: selectedIndex + 1 })}</p></div><div className="flex items-center gap-2"><span className="text-xs text-ink-soft">{t('webSearch.useThisApi')}</span><Toggle enabled={selected.enabled} onChange={(value) => replaceConnection(selected.id, (item) => ({ ...item, enabled: value }))} label={t('webSearch.useThisApi')} /></div></div>
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-3">{WEB_SEARCH_PROVIDERS.map((item) => <button key={item.id} type="button" onClick={() => replaceConnection(selected.id, (current) => item.id === current.provider ? current : { ...current, provider: item.id, config: {}, apiKey: '', apiKeyPresent: false })} className={`rounded-lg border p-3 text-left transition-colors ${selected.provider === item.id ? 'border-ember bg-ember-soft/50' : 'border-ink-fade/40 hover:bg-paper-2'}`}><span className="block text-sm text-ink">{item.label}</span><span className="mt-1 block text-[10px] text-ink-fade">{item.id === 'custom' ? t('webSearch.customBadge') : t('webSearch.presetBadge')}</span></button>)}</div>
+          {meta.docsUrl ? <a href={meta.docsUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-ember self-start">{t('webSearch.getApiKey')}<ExternalLink className="h-3 w-3" /></a> : null}
+          <Field type="password" label={t('webSearch.apiKey')} value={selected.apiKey} onChange={(value) => replaceConnection(selected.id, (item) => ({ ...item, apiKey: value }))} placeholder={selected.apiKeyPresent ? t('webSearch.secretKept') : t('webSearch.apiKeyPlaceholder')} />
+          {selected.provider === 'google_cse' ? <Field label={t('webSearch.googleCx')} value={selected.config.cx || ''} onChange={(value) => updateConfig('cx', value)} placeholder="0123456789:abcdef" /> : null}
+          {selected.provider === 'custom' ? <div className="grid gap-3 border-t border-dashed border-ink-fade/40 pt-4">
+            <p className="text-xs text-ink-fade">{t('webSearch.customHint')}</p>
+            <Field label={t('webSearch.baseUrl')} value={selected.config.baseUrl || ''} onChange={(value) => updateConfig('baseUrl', value)} placeholder="https://search.example.com/v1/search" />
+            <label className="flex flex-col gap-1.5 text-xs text-ink-soft"><span>{t('webSearch.method')}</span><select value={selected.config.method || 'POST'} onChange={(event) => updateConfig('method', event.target.value)} className="h-9 rounded-md border border-ink-fade/50 bg-paper px-3 text-sm text-ink"><option value="POST">POST</option><option value="GET">GET</option></select></label>
+            {(selected.config.method || 'POST') === 'GET' ? <Field label={t('webSearch.queryParam')} value={selected.config.queryParam || 'q'} onChange={(value) => updateConfig('queryParam', value)} /> : null}
+            <Field multiline label={t('webSearch.headersTemplate')} value={selected.config.headersTemplate ?? CUSTOM_DEFAULTS.headersTemplate} onChange={(value) => updateConfig('headersTemplate', value)} />
+            {(selected.config.method || 'POST') === 'POST' ? <Field multiline label={t('webSearch.bodyTemplate')} value={selected.config.bodyTemplate ?? CUSTOM_DEFAULTS.bodyTemplate} onChange={(value) => updateConfig('bodyTemplate', value)} /> : null}
+            <div className="grid grid-cols-2 gap-3"><Field label={t('webSearch.resultPath')} value={selected.config.resultPath || 'results'} onChange={(value) => updateConfig('resultPath', value)} /><Field label={t('webSearch.titlePath')} value={selected.config.titlePath || 'title'} onChange={(value) => updateConfig('titlePath', value)} /><Field label={t('webSearch.urlPath')} value={selected.config.urlPath || 'url'} onChange={(value) => updateConfig('urlPath', value)} /><Field label={t('webSearch.snippetPath')} value={selected.config.snippetPath || 'snippet'} onChange={(value) => updateConfig('snippetPath', value)} /></div>
+            <p className="font-mono text-[10px] text-ink-fade">{t('webSearch.placeholders')}</p>
+          </div> : null}
+        </div> : null}
+      </div>
     </div>
     {lastTest ? <div className={`rounded-lg border px-4 py-3 text-sm ${lastTest.ok ? 'border-emerald-300 bg-emerald-50 text-emerald-800' : 'border-red-300 bg-red-50 text-red-700'}`}>{lastTest.ok ? t('webSearch.lastTestOk') : t('webSearch.lastTestFailed')}{lastTest.message ? ` - ${lastTest.message}` : ''}</div> : null}
     {message ? <div role="status" className="text-sm text-ink-soft">{message}</div> : null}
-    <div className="flex flex-wrap gap-2"><button type="button" disabled={Boolean(working)} onClick={() => save()} className="h-10 px-4 rounded-md border border-ink/30 text-sm text-ink disabled:opacity-50">{working === 'save' ? t('common.saving') : t('common.save')}</button><button type="button" disabled={Boolean(working)} onClick={() => save({ test: true })} className="h-10 px-4 rounded-md bg-ink text-paper text-sm inline-flex items-center gap-2 disabled:opacity-50"><Search className="h-4 w-4" />{working === 'test' ? t('webSearch.testing') : t('webSearch.saveAndTest')}</button>{apiKeyPresent ? <button type="button" disabled={Boolean(working)} onClick={clear} className="h-10 px-4 rounded-md text-sm text-red-600 ml-auto disabled:opacity-50"><KeyRound className="h-4 w-4 inline mr-1" />{t('webSearch.clear')}</button> : null}</div>
+    <div className="flex flex-wrap gap-2"><button type="button" disabled={Boolean(working)} onClick={() => save()} className="h-10 px-4 rounded-md border border-ink/30 text-sm text-ink disabled:opacity-50">{working === 'save' ? t('common.saving') : t('common.save')}</button><button type="button" disabled={Boolean(working)} onClick={() => save({ test: true })} className="h-10 px-4 rounded-md bg-ink text-paper text-sm inline-flex items-center gap-2 disabled:opacity-50"><Search className="h-4 w-4" />{working === 'test' ? t('webSearch.testing') : t('webSearch.saveAndTest')}</button>{connections.some((item) => item.apiKeyPresent) ? <button type="button" disabled={Boolean(working)} onClick={clear} className="h-10 px-4 rounded-md text-sm text-red-600 ml-auto disabled:opacity-50"><KeyRound className="h-4 w-4 inline mr-1" />{t('webSearch.clear')}</button> : null}</div>
   </section>
 }
