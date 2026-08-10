@@ -1210,6 +1210,138 @@ test('verified directory resume rejects a repeated authorization wait claim and 
   )))
 })
 
+test('already-authorized read-write directory refreshes the active tool schema without pausing', async () => {
+  const initialNames = ['request_directory', 'list_directory', 'read_file']
+  const initialSpecs = initialNames.map((name) => (
+    SERVER_TOOL_SPECS.find((item) => item?.function?.name === name)
+  ))
+  assert.equal(initialSpecs.every(Boolean), true)
+
+  const directory = 'D:\\already-authorized-output'
+  const outputPath = `${directory}\\authorized-resume.txt`
+  const modelToolNames = []
+  const executed = []
+  let modelCalls = 0
+
+  const result = await runToolsLoop({
+    job: {
+      id: 'already-authorized-refresh-job',
+      userId: 'already-authorized-refresh-user',
+      origin: 'chat',
+      prompt: `Create ${outputPath}, then read it back to verify the result.`,
+    },
+    step: { id: 'already-authorized-refresh-step', kind: 'chat' },
+    messages: [{
+      role: 'user',
+      content: `Create ${outputPath}, then read it back to verify the result.`,
+    }],
+    intentMode: 'execute',
+    toolSpecs: initialSpecs,
+    fallbackToolSpecs: SERVER_TOOL_SPECS,
+    maxIters: 6,
+    enableToolHooks: false,
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    runModel: async ({ tools, messages }) => {
+      modelCalls += 1
+      const names = tools.map((item) => item?.function?.name).filter(Boolean).sort()
+      modelToolNames.push(names)
+
+      if (modelCalls === 1) {
+        assert.deepEqual(names, [...initialNames].sort())
+        for (const unavailable of ['write_file', 'edit_file', 'bash_exec']) {
+          assert.equal(names.includes(unavailable), false, unavailable)
+        }
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'request-existing-directory',
+            type: 'function',
+            function: {
+              name: 'request_directory',
+              arguments: JSON.stringify({
+                purpose: 'Create and verify the requested output file.',
+                access_mode: 'read_write',
+                suggested_path: directory,
+              }),
+            },
+          }],
+        }
+      }
+
+      if (modelCalls === 2) {
+        assert.deepEqual(names, [
+          'bash_exec',
+          'edit_file',
+          'list_directory',
+          'read_file',
+          'request_directory',
+          'write_file',
+        ])
+        const authorizationResult = JSON.parse(messages.findLast((item) => item.role === 'tool').content)
+        assert.equal(authorizationResult.already_authorized, true)
+        assert.equal(authorizationResult.paused, false)
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'write-after-existing-authorization',
+            type: 'function',
+            function: {
+              name: 'write_file',
+              arguments: JSON.stringify({ path: outputPath, content: 'ALREADY_AUTHORIZED_RESUMED' }),
+            },
+          }],
+        }
+      }
+
+      if (modelCalls === 3) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'read-after-existing-authorization',
+            type: 'function',
+            function: {
+              name: 'read_file',
+              arguments: JSON.stringify({ path: outputPath }),
+            },
+          }],
+        }
+      }
+
+      return { content: 'The already-authorized output was created and verified.', toolCalls: [] }
+    },
+    executeTool: async ({ name, args }) => {
+      executed.push({ name, args })
+      if (name === 'request_directory') {
+        return {
+          ok: true,
+          paused: false,
+          already_authorized: true,
+          authorization: {
+            path: directory,
+            resource_type: 'directory',
+            access_mode: 'read_write',
+          },
+          message: `Directory access is already authorized for ${directory}.`,
+        }
+      }
+      if (name === 'write_file') {
+        return { ok: true, path: args.path, bytes: args.content.length, changedPaths: [args.path] }
+      }
+      if (name === 'read_file') {
+        return { ok: true, path: args.path, content: 'ALREADY_AUTHORIZED_RESUMED' }
+      }
+      throw new Error(`unexpected tool: ${name}`)
+    },
+  })
+
+  assert.equal(result.paused, undefined)
+  assert.equal(result.incomplete, undefined)
+  assert.equal(result.text, 'The already-authorized output was created and verified.')
+  assert.deepEqual(executed.map(({ name }) => name), ['request_directory', 'write_file', 'read_file'])
+  assert.equal(modelCalls, 4)
+  assert.equal(modelToolNames.length, 4)
+})
+
 test('a PDF read with no extracted text cannot clear post-mutation verification', async () => {
   const bashExec = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'bash_exec')
   const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')

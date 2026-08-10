@@ -40,7 +40,7 @@ export function applyDirectoryAuthorizationToolsConfig(toolsConfig, resolution) 
   const required = [
     'list_directory',
     'read_file',
-    ...(accessMode === 'read_write' ? ['write_file', 'bash_exec'] : []),
+    ...(accessMode === 'read_write' ? ['write_file', 'edit_file', 'bash_exec'] : []),
   ]
   const enabled = new Set(normalized.enabled)
   const disabled = new Set(normalized.disabled)
@@ -65,7 +65,7 @@ export function restoreDirectoryAuthorizationToolSpecs(baseSpecs, resolution, fa
   const requiredNames = new Set([
     'list_directory',
     'read_file',
-    ...(accessMode === 'read_write' ? ['write_file', 'bash_exec'] : []),
+    ...(accessMode === 'read_write' ? ['write_file', 'edit_file', 'bash_exec'] : []),
   ])
   const restored = new Map()
   for (const spec of current) {

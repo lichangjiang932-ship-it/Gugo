@@ -156,7 +156,7 @@ test('authorized local paths force the minimum filesystem tools even when settin
     'list_directory', 'read_file',
   ])
   assert.deepEqual(resolveLocalPathToolNames(['web_search'], { paths: ['D:\\destok\\money'], accessMode: 'read_write' }), [
-    'web_search', 'list_directory', 'read_file', 'write_file', 'edit_file',
+    'web_search', 'list_directory', 'read_file', 'write_file', 'edit_file', 'bash_exec',
   ])
   assert.deepEqual(resolveLocalPathToolNames([], {
     paths: ['D:\\destok\\answer-sheet.pdf'],

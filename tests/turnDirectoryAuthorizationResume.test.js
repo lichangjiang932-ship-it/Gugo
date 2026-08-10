@@ -17,6 +17,7 @@ const { TurnEngine } = await import('../server/services/TurnEngine.js')
 const { grantLocalPath } = await import('../server/services/localFileAccessService.js')
 const { SERVER_TOOL_SPECS } = await import('../server/services/toolLoopRuntime.js')
 const {
+  applyDirectoryAuthorizationToolsConfig,
   applyServerToolsConfig,
   restoreDirectoryAuthorizationToolSpecs,
 } = await import('../server/services/turnToolSpecs.js')
@@ -63,6 +64,25 @@ test('read-only directory authorization restores only read tools', () => {
   assert.equal(toolNames(restored).includes('bash_exec'), false)
 })
 
+test('read-write directory authorization restores read, write, edit, and execution tools', () => {
+  const resolution = {
+    type: 'directory_authorization',
+    approved: true,
+    path: authorizedDir,
+    access_mode: 'read_write',
+  }
+  const expected = ['bash_exec', 'edit_file', 'list_directory', 'read_file', 'write_file']
+  const restored = restoreDirectoryAuthorizationToolSpecs([], resolution, SERVER_TOOL_SPECS)
+  assert.deepEqual(toolNames(restored), expected)
+
+  const configured = applyDirectoryAuthorizationToolsConfig({
+    enabled: [],
+    disabled: expected,
+  }, resolution)
+  assert.deepEqual(configured.enabled, expected)
+  assert.deepEqual(configured.disabled, [])
+})
+
 test('non-directory resolution cannot restore local execution tools', () => {
   const existing = SERVER_TOOL_SPECS.filter((spec) => spec?.function?.name === 'web_search')
   const restored = restoreDirectoryAuthorizationToolSpecs(existing, {
@@ -87,7 +107,7 @@ test('directory authorization restores code tools missing from the pre-authoriza
     scheduleMemoryExtraction: () => {},
     readApprovalMode: () => 'off',
     toolSpecs: SERVER_TOOL_SPECS.filter((spec) => (
-      !['bash_exec', 'write_file'].includes(spec?.function?.name)
+      !['bash_exec', 'write_file', 'edit_file'].includes(spec?.function?.name)
     )),
     resolveToolSpecs: async ({ baseSpecs, toolsConfig }) => applyServerToolsConfig(
       baseSpecs.filter((spec) => (
@@ -96,6 +116,7 @@ test('directory authorization restores code tools missing from the pre-authoriza
           'bash_exec',
           'run_project_check',
           'write_file',
+          'edit_file',
           'read_file',
           'list_directory',
         ].includes(spec?.function?.name)
@@ -107,7 +128,7 @@ test('directory authorization restores code tools missing from the pre-authoriza
       const toolNames = tools.map((spec) => spec.function.name).sort()
       observedToolNames.push(toolNames)
       if (modelCalls === 1) {
-        for (const disabled of ['bash_exec', 'write_file']) {
+        for (const disabled of ['bash_exec', 'write_file', 'edit_file']) {
           assert.equal(toolNames.includes(disabled), false, disabled)
         }
         for (const readable of ['read_file', 'list_directory']) {
@@ -124,7 +145,7 @@ test('directory authorization restores code tools missing from the pre-authoriza
       }
 
       if (modelCalls === 2) {
-        for (const restored of ['bash_exec', 'write_file', 'read_file', 'list_directory']) {
+        for (const restored of ['bash_exec', 'write_file', 'edit_file', 'read_file', 'list_directory']) {
           assert.equal(toolNames.includes(restored), true, restored)
         }
         const markers = messages.filter((message) => (
@@ -214,7 +235,7 @@ test('directory authorization restores code tools missing from the pre-authoriza
     content: `读取 ${sourcePdf}，再在授权目录中运行代码并验证输出。`,
     intentMode: 'execute',
     toolsConfig: {
-      disabled: ['bash_exec', 'write_file'],
+      disabled: ['bash_exec', 'write_file', 'edit_file'],
     },
   })
   await engine.waitForTurn({ userId, sessionId, turnId })

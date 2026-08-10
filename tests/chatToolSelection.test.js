@@ -133,6 +133,35 @@ test('read-only path grants do not downgrade a user write request to answer mode
   }
 })
 
+test('keeping the source file unchanged does not downgrade an output-copy workflow', () => {
+  const userPrompt = [
+    'Do not modify the source PDF at D:\\demo\\answer-sheet.pdf.',
+    'Create D:\\demo\\filled-answer-sheet.pdf and render PNG previews beside it, then verify every output.',
+  ].join(' ')
+
+  for (const intentMode of ['auto', 'execute']) {
+    const selected = namesOf(selectChat({ prompt: userPrompt, userPrompt, intentMode }))
+    assert.deepEqual(selected, EXECUTE_NAMES)
+    for (const name of ['write_file', 'edit_file', 'bash_exec', 'request_directory']) {
+      assert.ok(selected.includes(name), `${intentMode}: ${name}`)
+    }
+  }
+})
+
+test('a global read-only boundary wins over fix and patch discussion', () => {
+  const userPrompt = [
+    'Inspect the entire project read-only. Do not modify any files.',
+    'Explain how you would fix the issue and what patch you recommend.',
+  ].join(' ')
+
+  for (const intentMode of ['auto', 'execute']) {
+    assert.deepEqual(
+      namesOf(selectChat({ prompt: userPrompt, userPrompt, intentMode })),
+      ANSWER_NAMES,
+    )
+  }
+})
+
 test('an explicit user read-only request remains a hard boundary in execute mode', () => {
   const prompt = [
     '[LOCAL PATH ACCESS GRANTED] The user explicitly authorized these local paths:',

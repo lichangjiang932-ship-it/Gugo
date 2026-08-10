@@ -279,7 +279,7 @@ export function resolveLocalPathToolNames(enabledNames, localPathAccess = {}) {
   const required = [
     ...(!exactFilesOnly ? ['list_directory'] : []),
     'read_file',
-    ...(localPathAccess.accessMode === 'read_write' ? ['write_file', 'edit_file'] : []),
+    ...(localPathAccess.accessMode === 'read_write' ? ['write_file', 'edit_file', 'bash_exec'] : []),
   ]
   return [...new Set([...configured, ...required])]
 }
