@@ -52,6 +52,18 @@ export function steerJob(jobId, content, { fetchImpl = fetch } = {}) {
   }))
 }
 
+export function resumeJobDirectoryAuthorization(jobId, {
+  path,
+  accessMode,
+  fetchImpl = fetch,
+} = {}) {
+  return readJsonResponse(fetchImpl(`/api/jobs/${encodeURIComponent(jobId)}/directory-authorization/resume`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ path, accessMode }),
+  }))
+}
+
 export function approveJobPlan(jobId, { steps = null, fetchImpl = fetch } = {}) {
   return readJsonResponse(fetchImpl(`/api/jobs/${encodeURIComponent(jobId)}/plan/approve`, {
     method: 'POST',

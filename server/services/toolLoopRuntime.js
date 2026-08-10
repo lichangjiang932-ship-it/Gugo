@@ -28,6 +28,7 @@ import { callModelWithContextRecovery } from './contextCompactionRuntime.js'
 import { ensureSafetySystemMessages } from './promptCompiler.js'
 import { allowedArtifactTools, isFileArtifactTool, parseSkillIdFromPrompt } from './artifactIntent.js'
 import { selectChatToolSpecs } from './chatToolSelection.js'
+import { restoreDirectoryAuthorizationToolSpecs } from './turnToolSpecs.js'
 import {
   createSubagentApprovalContext,
   rememberApprovedSubagentCall,
@@ -93,7 +94,7 @@ const MAX_EXECUTION_REASONING_RETRIES = 2
 const MAX_DIRECTORY_RESUME_RETRIES = 2
 const MAX_MUTATION_VERIFICATION_RETRIES = 2
 const MAX_PDF_LAYOUT_VERIFICATION_RETRIES = 2
-const VERIFIED_DIRECTORY_RESOLUTION = /\[TURN_RESOLUTION:\d+\][^\r\n]*local directory authorization is already persisted and verified\./i
+const VERIFIED_DIRECTORY_RESOLUTION = /\[(?:TURN|JOB_DIRECTORY)_RESOLUTION:[^\]]+\][^\r\n]*local directory authorization is already persisted and verified\./i
 const DIRECTORY_AUTHORIZATION_WAIT_CLAIM = /(?:please\s+(?:choose|select|authorize|grant)[\s\S]{0,100}(?:directory|folder)|(?:i(?:'m| am)?\s+)?wait(?:ing)?[\s\S]{0,100}(?:authori[sz]ation|permission|directory|folder)|(?:directory|folder)[\s\S]{0,100}(?:authorization|permission)[\s\S]{0,100}(?:required|pending|choose|select|grant)|\u8bf7[\s\S]{0,40}(?:\u9009\u62e9|\u6388\u6743)[\s\S]{0,40}(?:\u76ee\u5f55|\u6587\u4ef6\u5939)|(?:\u76ee\u5f55|\u6587\u4ef6\u5939)[\s\S]{0,40}(?:\u6388\u6743|\u6743\u9650)[\s\S]{0,40}(?:\u8bf7\u6c42|\u7b49\u5f85|\u9009\u62e9|\u786e\u8ba4|\u9700\u8981|\u672a\u6388\u6743)|\u7b49\u5f85[\s\S]{0,40}(?:\u9009\u62e9|\u6388\u6743|\u76ee\u5f55|\u6587\u4ef6\u5939))/i
 const EXPLICIT_LOCAL_DIRECTORY_CONTEXT = /\[LOCAL PATH (?:ACCESS|REFERENCE)|\[VERIFIED LOCAL FILESYSTEM ACCESS\]|(?:^|[\s"'`])(?:[a-z]:[\\/]|\\\\[^\\\s]+\\[^\\\s]+|\/(?:home|users|workspace|mnt|tmp)\/)|(?:save|write|export).{0,40}(?:folder|directory|desktop)|(?:\u4fdd\u5b58|\u5199\u5165|\u5bfc\u51fa).{0,20}(?:\u76ee\u5f55|\u6587\u4ef6\u5939|\u684c\u9762)/im
 const MANAGED_ATTACHMENT_MARKER = /\[GUGO_MANAGED_ATTACHMENT\b|\[\u9644\u4ef6\s*:|attachment:\/\//i
@@ -1667,6 +1668,7 @@ export async function runToolsLoop({
   saveCheckpoint = null,
   contextWindow = undefined,
   toolSpecs = undefined,
+  fallbackToolSpecs = SERVER_TOOL_SPECS,
   skillId = undefined,
   approvalOrigin = 'job',
   approvalSessionId = null,
@@ -1726,6 +1728,16 @@ export async function runToolsLoop({
     intentMode,
     userId: job?.userId || null,
   })
+  const restored = typeof loadCheckpoint === 'function' ? await loadCheckpoint() : null
+  const restoredState = restored?.state && typeof restored.state === 'object'
+    ? restored.state
+    : restored && typeof restored === 'object'
+      ? restored
+      : null
+  const directoryAuthorizationResolution = restoredState?.directoryAuthorizationResolution
+    && typeof restoredState.directoryAuthorizationResolution === 'object'
+    ? restoredState.directoryAuthorizationResolution
+    : null
   const skillArtifactTools = explicitSkillId
     ? allowedArtifactTools('', { skillId: explicitSkillId })
     : new Set()
@@ -1750,10 +1762,14 @@ export async function runToolsLoop({
   // here prevents a model from pausing /webpage or Office generation for an
   // unrelated filesystem permission. Explicit local-path delivery still keeps
   // the directory request tool available.
-  let activeToolSpecs = selectedToolSpecs.filter((spec) => {
-    const name = spec?.function?.name
-    return !isFileArtifactTool(name) || stepArtifactTools.has(name)
-  })
+  let activeToolSpecs = restoreDirectoryAuthorizationToolSpecs(
+    selectedToolSpecs.filter((spec) => {
+      const name = spec?.function?.name
+      return !isFileArtifactTool(name) || stepArtifactTools.has(name)
+    }),
+    directoryAuthorizationResolution,
+    fallbackToolSpecs,
+  )
   if (requiresPersistedArtifact && !EXPLICIT_LOCAL_DIRECTORY_CONTEXT.test(intentText)) {
     activeToolSpecs = activeToolSpecs.filter((spec) => spec?.function?.name !== 'request_directory')
   }
@@ -1791,14 +1807,14 @@ export async function runToolsLoop({
   const mutationExecutionRequested = requiresPersistedArtifact
     || (directExecutionRequested && hasMutationExecutionIntent(executionIntentText))
   const executionConvergenceEnabled = enforceExecutionIntent && mutationExecutionRequested
-  const requiresPdfLayoutVerification = mutationExecutionRequested
+  let requiresPdfLayoutVerification = mutationExecutionRequested
     && shouldRequirePdfLayoutVerification(executionIntentText)
     && activeToolSpecs.some((spec) => toolNameFromSpec(spec) === 'bash_exec')
   // Explicit execution is a contract, not a hint. Keep this requirement even
   // when routing produced no usable tool; otherwise prose such as "done" would
   // be accepted precisely when the harness cannot perform the requested work.
   const requiresExecutionEvidence = directExecutionRequested
-  const availableVerificationToolNames = activeToolSpecs
+  let availableVerificationToolNames = activeToolSpecs
     .map(toolNameFromSpec)
     .filter((name) => VERIFICATION_TOOLS.has(name) || name === 'bash_exec')
   const representativeReadCalls = buildRepresentativeReadCalls(job?.prompt, job?.id)
@@ -1815,12 +1831,6 @@ export async function runToolsLoop({
   // merely to prepare their next request. Explicit compaction can still request
   // a semantic summary; automatic recovery uses the deterministic archive.
   const semanticSummary = false
-  const restored = typeof loadCheckpoint === 'function' ? await loadCheckpoint() : null
-  const restoredState = restored?.state && typeof restored.state === 'object'
-    ? restored.state
-    : restored && typeof restored === 'object'
-      ? restored
-      : null
   const convo = ensureSafetySystemMessages(
     Array.isArray(restoredState?.messages) ? [...restoredState.messages] : [...messages],
   )
@@ -1863,10 +1873,12 @@ export async function runToolsLoop({
     0,
     Number(restoredState?.completionGuards?.directoryResumeRetries) || 0,
   )
-  const hasVerifiedDirectoryResolution = convo.some((message) => (
-    message?.role === 'system'
-      && VERIFIED_DIRECTORY_RESOLUTION.test(String(message?.content || ''))
-  ))
+  const hasVerifiedDirectoryResolution = directoryAuthorizationResolution?.type === 'directory_authorization'
+    && directoryAuthorizationResolution?.approved === true
+    || convo.some((message) => (
+      message?.role === 'system'
+        && VERIFIED_DIRECTORY_RESOLUTION.test(String(message?.content || ''))
+    ))
   const restoredMutationTargets = Array.isArray(restoredState?.completionGuards?.pendingMutationTargets)
     ? restoredState.completionGuards.pendingMutationTargets
     : restoredState?.completionGuards?.pendingMutationVerification
@@ -2063,6 +2075,7 @@ export async function runToolsLoop({
       recovery,
       progress: serializeToolProgress(progressState),
       failureRecovery: serializeFailureRecovery(failureRecovery),
+      ...(directoryAuthorizationResolution ? { directoryAuthorizationResolution } : {}),
       completionGuards: {
         representativeReadsInjected,
         artifactDeliveryRetries,
@@ -3200,6 +3213,42 @@ export async function runToolsLoop({
         hasSuccessfulRepresentativeRead = true
       }
       convo.push(buildToolResultMessage(outcome.call, outcome.result, { maxChars: toolResultMaxChars }))
+      if (executedCall?.name === 'request_directory'
+        && succeeded
+        && outcome.result?.already_authorized === true
+        && outcome.result?.authorization?.resource_type === 'directory') {
+        const accessMode = String(outcome.result.authorization.access_mode || '').trim()
+        const requiredNames = new Set([
+          'list_directory',
+          'read_file',
+          ...(accessMode === 'read_write' ? ['write_file', 'edit_file', 'bash_exec'] : []),
+        ])
+        const byName = new Map(activeToolSpecs.map((spec) => [toolNameFromSpec(spec), spec]))
+        for (const spec of Array.isArray(fallbackToolSpecs) ? fallbackToolSpecs : []) {
+          const name = toolNameFromSpec(spec)
+          if (requiredNames.has(name) && !byName.has(name)) byName.set(name, spec)
+        }
+        const refreshedSpecs = [...byName.values()].filter(Boolean)
+        if (refreshedSpecs.length > activeToolSpecs.length) {
+          activeToolSpecs = refreshedSpecs
+          availableVerificationToolNames = activeToolSpecs
+            .map(toolNameFromSpec)
+            .filter((name) => VERIFICATION_TOOLS.has(name) || name === 'bash_exec')
+          requiresPdfLayoutVerification = mutationExecutionRequested
+            && shouldRequirePdfLayoutVerification(executionIntentText)
+            && activeToolSpecs.some((spec) => toolNameFromSpec(spec) === 'bash_exec')
+          convo.push({
+            role: 'system',
+            content: [
+              '[DIRECTORY AUTHORIZATION TOOL REFRESH]',
+              `The persisted ${accessMode} directory grant has been verified by the runtime.`,
+              `The callable tools for the next response are now: ${activeToolSpecs.map(toolNameFromSpec).filter(Boolean).join(', ')}.`,
+              `Use the exact authorized directory ${JSON.stringify(outcome.result.authorization.path)} and continue the original task without requesting authorization again.`,
+              `This refreshed list supersedes the earlier ${AVAILABLE_TOOL_CAPABILITIES_MARKER} list for local file and code-execution capabilities.`,
+            ].join(' '),
+          })
+        }
+      }
       const convergenceBlocked = [
         'execution_convergence_probe_blocked',
         'execution_convergence_install_blocked',

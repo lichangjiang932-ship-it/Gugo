@@ -6,6 +6,17 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.16] - 2026-08-10
+
+### Fixed
+
+- Restored `write_file`, `edit_file`, and `bash_exec` after read-write directory
+  authorization, including across suspended background Job checkpoints.
+- Bound Job directory resumes to the active verified grant so authorization
+  continues the same task without repeated prompts or stale wait recovery.
+- Preserved execution intent when a source PDF must remain unchanged while a
+  filled copy and PNG previews are created and verified.
+
 ## [0.10.15] - 2026-08-10
 
 ### Added
@@ -187,7 +198,8 @@ follow [Semantic Versioning](https://semver.org/).
 - Provider, MCP, memory, job, subagent, connector, and workspace tool support.
 - Local-first single-user mode with optional multi-user authentication.
 
-[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.15...HEAD
+[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.16...HEAD
+[0.10.16]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.16
 [0.10.15]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.15
 [0.10.14]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.14
 [0.10.13]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.13

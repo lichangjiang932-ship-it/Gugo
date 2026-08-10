@@ -14,43 +14,44 @@ test('目录授权提交成功后才恢复原 Job', async () => {
       order.push(['grant', input])
       return { ok: true }
     },
-    steer: async (jobId, content) => {
-      order.push(['steer', { jobId, content }])
-      return { accepted: true, job: { id: jobId, status: 'queued' } }
+    resume: async (jobId, payload) => {
+      order.push(['resume', { jobId, payload }])
+      return { resumed: true, job: { id: jobId, status: 'queued' } }
     },
   })
 
   assert.deepEqual(order[0], ['grant', { path: 'D:\\Reports', accessMode: 'read_only' }])
-  assert.equal(order[1][0], 'steer')
+  assert.equal(order[1][0], 'resume')
   assert.equal(order[1][1].jobId, 'job-1')
-  assert.match(order[1][1].content, /\[directory_authorization\]/)
-  assert.match(order[1][1].content, /D:\\\\Reports/)
+  assert.equal(order[1][1].payload.path, 'D:\\Reports')
+  assert.equal(order[1][1].payload.accessMode, 'read_only')
+  assert.equal(typeof order[1][1].payload.purpose, 'string')
   assert.equal(result.path, 'D:\\Reports')
   assert.equal(result.job.status, 'queued')
 })
 
 test('系统选择器取消时不授权也不恢复 Job', async () => {
   let grants = 0
-  let steers = 0
+  let resumes = 0
   const result = await authorizeRequestedDirectory({ jobId: 'job-1', usePicker: true }, {
     pickDirectory: async () => ({ ok: true, path: null }),
     grantPath: async () => { grants += 1 },
-    steer: async () => { steers += 1 },
+    resume: async () => { resumes += 1 },
   })
   assert.equal(result.cancelled, true)
   assert.equal(grants, 0)
-  assert.equal(steers, 0)
+  assert.equal(resumes, 0)
 })
 
 test('目录授权失败时绝不恢复 Job', async () => {
-  let steers = 0
+  let resumes = 0
   await assert.rejects(() => authorizeRequestedDirectory({
     jobId: 'job-1',
     path: 'D:\\Private',
     accessMode: 'read_write',
   }, {
     grantPath: async () => { throw new Error('grant denied') },
-    steer: async () => { steers += 1 },
+    resume: async () => { resumes += 1 },
   }), /grant denied/)
-  assert.equal(steers, 0)
+  assert.equal(resumes, 0)
 })

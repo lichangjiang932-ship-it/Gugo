@@ -109,6 +109,18 @@ export async function handleJobRequest(req, res, runtime) {
       return sendJson(res, 202, result)
     }
 
+    if (req.method === 'POST' && parts[3] === 'directory-authorization' && parts[4] === 'resume') {
+      const body = await readJson(req)
+      const result = runtime.resumeDirectoryAuthorization(jobId, {
+        userId,
+        path: body.path,
+        accessMode: body.accessMode,
+      })
+      if (!result) return sendJson(res, 404, { error: 'job not found' })
+      if (!result.resumed) return sendJson(res, 409, result)
+      return sendJson(res, 202, result)
+    }
+
     if (req.method === 'POST' && parts[3] === 'plan' && parts[4] === 'approve') {
       const body = String(req.headers['content-type'] || '').includes('application/json')
         ? await readJson(req)

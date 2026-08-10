@@ -59,6 +59,7 @@ import { createJobRuntimeScheduler } from './jobRuntimeScheduler.js'
 import { createJobExecutionLeaseCoordinator } from './jobExecutionLeaseRuntime.js'
 import { releaseJobBudget } from '../utils/jobBudget.js'
 import { userCancellationError } from '../utils/toolCancellation.js'
+import { resumeJobDirectoryAuthorization } from './jobDirectoryAuthorization.js'
 import { lostJobExecutionLease, markJobAwaitingApproval, markJobRunningAgain, notifyJobStopHook, notifyJobTerminal, recoverInterruptedJobs, runOwnedJobTransition } from './jobRuntimeLifecycle.js'
 export { recoverInterruptedJobs } from './jobRuntimeLifecycle.js'
 const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled'])
@@ -66,12 +67,7 @@ const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled'])
 // 会把已经批准执行过的动作重跑一遍(发消息/改日历这类不可撤销动作尤其危险)。
 const SUSPENDED_JOB_STATUSES = new Set(['waiting', 'awaiting_approval'])
 const PLANNING_READ_ONLY_TOOLS = new Set([
-  'read_file',
-  'grep_code',
-  'find_symbol',
-  'list_imports',
-  'git_status',
-  'git_diff',
+  'read_file', 'grep_code', 'find_symbol', 'list_imports', 'git_status', 'git_diff',
 ])
 const PLANNING_EXPLORER_ROLES = Object.freeze([
   Object.freeze({
@@ -673,6 +669,7 @@ export class JobRuntime {
     }))
     return { accepted: true, message, job: this.getJob(jobId, { userId }) }
   }
+  resumeDirectoryAuthorization(jobId, options = {}) { return resumeJobDirectoryAuthorization({ jobId, ...options, getJob: this.getJob.bind(this), cancelJobWake, emit: this.emit.bind(this) }) }
 
   approvePlan(jobId, { userId, steps = null } = {}) {
     const job = this.getJob(jobId, { userId })
@@ -751,7 +748,6 @@ export class JobRuntime {
     this.emit(event)
     return this.getJob(jobId, { userId })
   }
-
   resumeAfterApproval(jobId, { userId, stepId = null } = {}) {
     const job = this.getJob(jobId, { userId })
     if (!job || job.status !== 'awaiting_approval') return job
@@ -1151,8 +1147,12 @@ export class JobRuntime {
             this.emit(appendJobEvent({
               jobId: job.id,
               stepId: nextStep.id,
-              type: 'awaiting_user',
+              type: 'notification_failed',
               message: `${question}（提醒发送失败，请留意本页面）`,
+              payload: {
+                notificationKind: 'job_clarification',
+                clarification,
+              },
             }))
           } catch {
             /* 事件也写不进去就真没别的办法了,不要再往上抛 */
