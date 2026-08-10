@@ -6,7 +6,7 @@
 
 ### 必需
 
-- Node.js 20 或更高版本。若要使用本机 Edge/Chrome 自动化，推荐直接安装 Node.js 22 LTS。
+- Node.js 20 或更高版本。使用本机 Edge/Chrome 自动化同样支持 Node.js 20；Node.js 22 LTS 为推荐版本。
 - npm（随 Node.js 安装）。
 - Git，用于克隆和升级源码。
 - 可访问的 OpenAI 兼容、Anthropic、Gemini 或本地模型端点。
@@ -184,7 +184,7 @@ Compose 已把 `/app/server-data` 放入命名卷。生成物默认写到容器�
 ARTIFACT_DIR=/app/server-data/artifacts
 ```
 
-仓库自带镜像基于 Node.js 20 且未安装桌面浏览器，适合聊天和服务端功能；Browser 自动化建议使用安装了 Node.js 22 与 Edge/Chrome 的本机部署，或自行扩展镜像。
+仓库自带镜像基于 Node.js 20 且未安装桌面浏览器，适合聊天和服务端功能；Browser 自动化需要安装 Edge/Chrome 的本机部署，或自行扩展镜像安装浏览器及其系统依赖。
 
 ### 健康检查
 
@@ -333,7 +333,7 @@ npm run serve
 
 ### Browser 工具不可用
 
-使用 Node.js 22+，安装 Edge/Chrome，必要时设置 `BROWSER_EXECUTABLE_PATH`。普通桌面环境不要设置 `BROWSER_NO_SANDBOX=1`。容器中还需自行安装浏览器及其系统依赖。
+确认正在使用 Node.js 20 或更高版本，并已安装 Edge/Chrome；必要时设置 `BROWSER_EXECUTABLE_PATH`。普通桌面环境不要设置 `BROWSER_NO_SANDBOX=1`。容器中还需自行安装浏览器及其系统依赖。
 
 ### `better-sqlite3` 安装失败
 

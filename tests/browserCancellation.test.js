@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import WebSocket from 'ws'
 import { _browserInternals } from '../server/adapters/browserAutomation.js'
 import { userCancellationError } from '../server/utils/toolCancellation.js'
 

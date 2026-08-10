@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import crypto from 'node:crypto'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
+import WebSocket from 'ws'
 import { sanitizeChildEnv } from '../utils/sensitiveEnv.js'
 import { assertSafeOutboundUrl } from './toolProxy.js'
 
@@ -58,9 +59,6 @@ function findBrowserExecutable(env = process.env) {
 
 function assertEnabled() {
   if (process.env.BROWSER_ENABLED === '0') throw new Error('Browser 工具已禁用（BROWSER_ENABLED=0）')
-  if (typeof globalThis.WebSocket !== 'function') {
-    throw new Error('Browser 工具需要 Node.js 22+ 的内置 WebSocket 支持')
-  }
 }
 
 async function validateUrl(raw) {
