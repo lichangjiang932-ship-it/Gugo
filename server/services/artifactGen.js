@@ -149,6 +149,54 @@ function normalizeHtmlArtifactSource(value) {
   return (fenced ? fenced[1] : raw).trim()
 }
 
+function newArtifactPathForFilename(requestedFilename) {
+  ensureArtifactDir()
+  const preferred = String(requestedFilename || '').normalize('NFC').trim()
+  if (!isSafeArtifactFilename(preferred)) throw new Error('invalid local artifact filename')
+  const parsed = path.parse(preferred)
+  for (let suffix = 1; suffix <= 10_000; suffix += 1) {
+    const filename = suffix === 1 ? preferred : `${parsed.name}-${suffix}${parsed.ext}`
+    if (artifactNameExists(filename)) continue
+    const fullPath = path.join(ARTIFACT_DIR, filename)
+    try {
+      const fd = fs.openSync(fullPath, 'wx')
+      fs.closeSync(fd)
+      return {
+        id: crypto.randomBytes(8).toString('hex'),
+        filename,
+        fullPath,
+        url: `/api/artifacts/${encodeURIComponent(filename)}`,
+      }
+    } catch (error) {
+      if (error?.code === 'EEXIST') continue
+      throw error
+    }
+  }
+  throw new Error('could not allocate a unique local artifact filename')
+}
+
+/** Copy a verified local tool output into the authenticated artifact store. */
+export function createLocalFileArtifact({ sourcePath, filename = '' } = {}) {
+  const source = fs.realpathSync(String(sourcePath || ''))
+  const stat = fs.statSync(source)
+  if (!stat.isFile()) throw new Error('local artifact source must be a file')
+  const originalFilename = String(filename || path.basename(source)).normalize('NFC').trim()
+  const artifactPath = newArtifactPathForFilename(originalFilename)
+  try {
+    fs.copyFileSync(source, artifactPath.fullPath)
+  } catch (error) {
+    try { fs.unlinkSync(artifactPath.fullPath) } catch { /* best-effort allocation cleanup */ }
+    throw error
+  }
+  const extension = path.extname(artifactPath.filename).slice(1).toLowerCase()
+  return {
+    ...artifactPath,
+    type: extension || 'file',
+    title: originalFilename,
+    byteLength: stat.size,
+  }
+}
+
 const HTML_DELIVERY_INSTRUCTION_PATTERNS = Object.freeze([
   /(?:网页|页面|html)(?:\s*代码)?(?:已经|已)?(?:生成|完成|准备好)|(?:html|webpage|page)(?:\s+code)?\s+(?:is\s+)?(?:ready|generated|complete)/i,
   /(?:复制|拷贝)[^。！？\n]{0,48}(?:代码|源码)|copy[^.!?\n]{0,48}(?:code|source)/i,

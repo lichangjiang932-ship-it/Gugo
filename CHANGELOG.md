@@ -6,6 +6,23 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.17] - 2026-08-10
+
+### Added
+
+- Added ordered multi-API web search profiles with per-provider enable controls,
+  presets, and automatic failover while keeping credentials server-side.
+
+### Changed
+
+- Reworked execution activity into a compact numbered timeline with structured
+  progress and independently collapsible arguments and results.
+
+### Fixed
+
+- Generated file names now open directly in the right workbench, and every
+  emitted artifact stays synchronized with the Related Files sidebar.
+
 ## [0.10.16] - 2026-08-10
 
 ### Fixed
@@ -198,7 +215,8 @@ follow [Semantic Versioning](https://semver.org/).
 - Provider, MCP, memory, job, subagent, connector, and workspace tool support.
 - Local-first single-user mode with optional multi-user authentication.
 
-[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.16...HEAD
+[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.17...HEAD
+[0.10.17]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.17
 [0.10.16]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.16
 [0.10.15]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.15
 [0.10.14]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.14

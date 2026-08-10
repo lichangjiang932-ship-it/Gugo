@@ -69,3 +69,30 @@ test('route validates custom templates without echoing secrets', async () => {
   assert.equal(body.code, 'WEB_SEARCH_CONFIG_INVALID')
   assert.equal(JSON.stringify(body).includes('never-echo'), false)
 })
+
+test('route accepts an ordered API list and redacts every key', async () => {
+  const user = issueTestSession({ email: 'web-search-route-multi@example.com' })
+  const response = await fetch(baseUrl, {
+    method: 'PUT', headers: auth(user.token, true),
+    body: JSON.stringify({
+      enabled: true,
+      strategy: 'fallback',
+      connections: [
+        { id: 'fast', provider: 'tavily', enabled: true, apiKey: 'route-first-secret', config: {} },
+        { id: 'backup', provider: 'brave', enabled: false, apiKey: 'route-backup-secret', config: {} },
+      ],
+    }),
+  })
+  assert.equal(response.status, 200)
+  const saved = (await response.json()).config
+  assert.equal(saved.version, 2)
+  assert.deepEqual(saved.connections.map((item) => [item.id, item.provider, item.enabled, item.apiKeyPresent]), [
+    ['fast', 'tavily', true, true],
+    ['backup', 'brave', false, true],
+  ])
+  assert.equal(JSON.stringify(saved).includes('route-first-secret'), false)
+  assert.equal(JSON.stringify(saved).includes('route-backup-secret'), false)
+
+  const loaded = (await (await fetch(baseUrl, { headers: auth(user.token) })).json()).config
+  assert.deepEqual(loaded.connections, saved.connections)
+})

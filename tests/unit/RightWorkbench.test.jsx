@@ -60,7 +60,10 @@ test('right workbench renders compact tabs, persists width, and opens generated 
             role: 'assistant',
             content: 'Server artifact ready.',
             meta: {
-              serverArtifacts: [{ id: 'artifact-1', filename: 'analysis.xlsx', type: 'xlsx', url: '/api/artifacts/turn/artifact-1/download' }],
+              serverArtifacts: [
+                { id: 'artifact-1', filename: 'analysis.xlsx', type: 'xlsx', url: '/api/artifacts/turn/artifact-1/download' },
+                { id: 'artifact-2', filename: '填写后 答题卡.pdf', type: 'pdf', url: '/api/artifacts/%E5%A1%AB%E5%86%99%E5%90%8E%20%E7%AD%94%E9%A2%98%E5%8D%A1.pdf' },
+              ],
             },
           }]}
           activeTab="files"
@@ -78,7 +81,7 @@ test('right workbench renders compact tabs, persists width, and opens generated 
     assert.match(navigation.className, /flex/)
     assert.equal(navigation.querySelectorAll(':scope > button').length, 4)
     assert.equal(navigation.querySelector('[aria-current="page"] span.truncate').textContent, '相关文件')
-    assert.equal(rootElement.querySelector('[data-testid="workbench-file-count"]').textContent, '2')
+    assert.equal(rootElement.querySelector('[data-testid="workbench-file-count"]').textContent, '3')
     const resizeHandle = rootElement.querySelector('[data-testid="workbench-resize-handle"]')
     assert.ok(resizeHandle)
     assert.equal(resizeHandle.getAttribute('aria-orientation'), 'vertical')
@@ -138,13 +141,20 @@ test('right workbench renders compact tabs, persists width, and opens generated 
     })
     assert.equal(opened[0].directFile.filename, 'analysis.xlsx')
 
+    const localPdfButton = fileButtons.find((button) => button.textContent.includes('填写后 答题卡.pdf'))
+    assert.ok(localPdfButton)
+    await act(async () => {
+      localPdfButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    assert.equal(opened[1].directFile.filename, '填写后 答题卡.pdf')
+
     const fileButton = fileButtons.find((button) => button.textContent.includes('Quarterly-report.docx'))
     assert.ok(fileButton)
     await act(async () => {
       fileButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }))
     })
-    assert.equal(opened.length, 2)
-    assert.equal(opened[1].preview.filename, 'Quarterly-report.docx')
+    assert.equal(opened.length, 3)
+    assert.equal(opened[2].preview.filename, 'Quarterly-report.docx')
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

@@ -33,8 +33,12 @@ export async function saveWebSearchConfigApi(payload) {
   }))
 }
 
-export async function testWebSearchApi() {
-  return readResponse(await fetch('/api/web-search/test', { method: 'POST', headers: headers() }))
+export async function testWebSearchApi(payload = {}) {
+  return readResponse(await fetch('/api/web-search/test', {
+    method: 'POST',
+    headers: headers(true),
+    body: JSON.stringify(payload),
+  }))
 }
 
 export async function deleteWebSearchConfigApi() {

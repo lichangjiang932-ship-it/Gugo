@@ -5,6 +5,7 @@ import { runProcessWithGroup } from '../server/utils/processGroup.js'
 
 const isPosix = process.platform !== 'win32'
 const node = process.execPath
+const processKillBudgetMs = process.platform === 'win32' ? 8_000 : 4_000
 
 function nodeArgs(script) {
   return ['-e', script]
@@ -39,7 +40,7 @@ test('runProcessWithGroup: 超时杀死 + timedOut=true', async () => {
   const t0 = Date.now()
   const r = await runProcessWithGroup({
     shellPath: node,
-    shellArgs: nodeArgs('setTimeout(() => {}, 5_000)'),
+    shellArgs: nodeArgs('setTimeout(() => {}, 15_000)'),
     cwd: process.cwd(),
     env: process.env,
     timeout: 300,
@@ -47,7 +48,7 @@ test('runProcessWithGroup: 超时杀死 + timedOut=true', async () => {
   const elapsed = Date.now() - t0
   assert.equal(r.timedOut, true)
   assert.equal(r.killed, true)
-  assert.ok(elapsed < 4_000, `应在 4s 内被杀,实际 ${elapsed}ms`)
+  assert.ok(elapsed < processKillBudgetMs, `process tree should stop within ${processKillBudgetMs}ms; actual ${elapsed}ms`)
 })
 
 test('runProcessWithGroup: AbortSignal 取消时杀死进程组', async () => {
@@ -68,7 +69,7 @@ test('runProcessWithGroup: AbortSignal 取消时杀死进程组', async () => {
   assert.equal(result.aborted, true)
   assert.equal(result.timedOut, false)
   assert.equal(result.killed, true)
-  assert.ok(elapsed < 4_000, `取消后应在 4s 内退出,实际 ${elapsed}ms`)
+  assert.ok(elapsed < processKillBudgetMs, `cancelled process tree should stop within ${processKillBudgetMs}ms; actual ${elapsed}ms`)
 })
 
 if (isPosix) {

@@ -1161,6 +1161,7 @@ export class TurnEngine {
             result: outcome.result,
             error: failure,
             artifactId: outcome.artifactId || null,
+            artifacts: Array.isArray(outcome.artifacts) ? outcome.artifacts : [],
           })
         },
         onApprovalPending: async (approval) => emitter('approval.required', {

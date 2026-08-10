@@ -811,6 +811,36 @@ test('dispatchTurnEvent maps tool and approval events to existing chat actions',
   assert.equal(approvals[0].id, 'p1')
 })
 
+test('dispatchTurnEvent forwards every local artifact from one completed shell call', async () => {
+  const artifacts = []
+  await dispatchTurnEvent(createTurnEvent({
+    id: 'shell-multi-output-completed',
+    sessionId: 's',
+    turnId: 't',
+    sequence: 1,
+    type: 'tool.completed',
+    payload: {
+      toolCallId: 'shell-multi-output',
+      name: 'bash_exec',
+      result: { ok: true },
+      artifacts: [
+        { id: 'pdf-1', filename: '填写后 答题卡.pdf', type: 'pdf', url: '/api/artifacts/pdf-1' },
+        { id: 'png-1', filename: '第 1 页.png', type: 'png', url: '/api/artifacts/png-1' },
+      ],
+    },
+    createdAt: 1,
+  }), {
+    dispatch: () => {},
+    taskId: 'task',
+    onArtifact: (artifact) => artifacts.push(artifact),
+  })
+
+  assert.deepEqual(artifacts.map(({ id, filename, name }) => ({ id, filename, name })), [
+    { id: 'pdf-1', filename: '填写后 答题卡.pdf', name: 'bash_exec' },
+    { id: 'png-1', filename: '第 1 页.png', name: 'bash_exec' },
+  ])
+})
+
 test('dispatchTurnActivity shows early tool readiness without creating a tool card or cursor', () => {
   const actions = []
   dispatchTurnActivity(createTurnActivity({

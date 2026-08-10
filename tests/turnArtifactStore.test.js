@@ -12,6 +12,7 @@ const { closeDb, createUser } = await import('../server/db.js')
 const { TurnEngine } = await import('../server/services/TurnEngine.js')
 const { getSessionSnapshot, upsertSession } = await import('../server/services/sessionStore.js')
 const { getTurnArtifactByFilename, listTurnArtifacts } = await import('../server/services/turnArtifactStore.js')
+const { persistLocalToolArtifacts } = await import('../server/services/toolLoopRuntime.js')
 
 createUser({ id: 'artifact-user', email: 'turn-artifact@example.com' })
 upsertSession({ id: 'artifact-session', userId: 'artifact-user', title: 'Artifacts' })
@@ -97,4 +98,54 @@ test('/webpage creates a persisted self-contained HTML artifact for preview', as
   assert.match(artifacts[0].filename, /\.html$/)
   const saved = fs.readFileSync(path.join(process.env.ARTIFACT_DIR, artifacts[0].filename), 'utf8')
   assert.match(saved, /<main>本地模型介绍<\/main>/)
+})
+
+test('verified write_file and bash_exec outputs keep Windows Unicode filenames as turn artifacts', () => {
+  const outputDir = path.join(tempDir, '本地 输出')
+  fs.mkdirSync(outputDir, { recursive: true })
+  const textPath = path.join(outputDir, '授权结果.txt')
+  const pdfPath = path.join(outputDir, '填写后 答题卡.pdf')
+  const pngPath = path.join(outputDir, '第 1 页.png')
+  fs.writeFileSync(textPath, 'INLINE_AUTH_RESUMED')
+  fs.writeFileSync(pdfPath, '%PDF-1.4\nlocal output')
+  fs.writeFileSync(pngPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+
+  const job = {
+    id: 'local-output-turn',
+    origin: 'chat',
+    userId: 'artifact-user',
+    sessionId: 'artifact-session',
+  }
+  const written = persistLocalToolArtifacts({
+    call: { name: 'write_file', args: { path: textPath } },
+    result: { ok: true, path: textPath, scope: 'grant' },
+    job,
+    step: null,
+  })
+  const executed = persistLocalToolArtifacts({
+    call: { name: 'bash_exec', args: { cwd: outputDir } },
+    result: {
+      ok: true,
+      cwd: outputDir,
+      verifiedOutputs: [
+        { path: pdfPath, declaredPath: pdfPath, scope: 'grant', type: 'file', status: 'created' },
+        { path: pngPath, declaredPath: pngPath, scope: 'grant', type: 'file', status: 'created' },
+      ],
+    },
+    job,
+    step: null,
+  })
+
+  assert.deepEqual(written.map((artifact) => artifact.filename), ['授权结果.txt'])
+  assert.deepEqual(executed.map((artifact) => artifact.filename), ['填写后 答题卡.pdf', '第 1 页.png'])
+  const artifacts = listTurnArtifacts({
+    userId: 'artifact-user', sessionId: 'artifact-session', turnId: 'local-output-turn',
+  })
+  assert.deepEqual(artifacts.map((artifact) => artifact.filename), [
+    '授权结果.txt', '填写后 答题卡.pdf', '第 1 页.png',
+  ])
+  for (const artifact of artifacts) {
+    assert.match(artifact.url, /^\/api\/artifacts\//)
+    assert.equal(fs.existsSync(path.join(process.env.ARTIFACT_DIR, artifact.filename)), true)
+  }
 })

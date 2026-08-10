@@ -6,11 +6,14 @@ import {
   getWebSearchCredentials,
   recordWebSearchTest,
   saveWebSearchConfig,
+  saveWebSearchConfigs,
 } from './webSearchConfigStore.js'
 
 const MAX_RESULTS = 10
+const MAX_CONNECTIONS = 8
 const MAX_TEMPLATE_CHARS = 16_000
 const DEFAULT_CUSTOM_BODY = '{"q":"{query}","num":"{maxResults}"}'
+const CONNECTION_ID_RE = /^[A-Za-z0-9_-]{1,64}$/
 
 function webSearchError(message, code, statusCode = 400) {
   return Object.assign(new Error(message), { code, statusCode })
@@ -77,6 +80,30 @@ export function normalizeWebSearchConfig(provider, value = {}) {
     urlPath: normalizePath(config.urlPath, 'url'),
     snippetPath: normalizePath(config.snippetPath, 'snippet'),
   }
+}
+
+export function normalizeWebSearchConnections(value) {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw webSearchError('Add at least one web search API configuration', 'WEB_SEARCH_CONNECTIONS_REQUIRED')
+  }
+  if (value.length > MAX_CONNECTIONS) {
+    throw webSearchError(`At most ${MAX_CONNECTIONS} web search API configurations are allowed`, 'WEB_SEARCH_CONFIG_INVALID')
+  }
+  const seen = new Set()
+  return value.map((item, index) => {
+    const id = String(item?.id || (index === 0 ? 'primary' : `connection-${index + 1}`)).trim()
+    if (!CONNECTION_ID_RE.test(id) || seen.has(id)) {
+      throw webSearchError('Each web search API configuration needs a unique valid ID', 'WEB_SEARCH_CONFIG_INVALID')
+    }
+    seen.add(id)
+    const provider = String(item?.provider || '').trim()
+    return {
+      id,
+      provider,
+      enabled: item?.enabled !== false,
+      config: normalizeWebSearchConfig(provider, item?.config),
+    }
+  })
 }
 
 function readPath(value, path) {
@@ -179,66 +206,114 @@ function customProviderRequest(config, replacements) {
   }
 }
 
-export async function searchWeb({ userId, query, maxResults = 5, fetchImpl = fetch } = {}) {
-  const text = String(query || '').trim()
-  if (!text) throw webSearchError('Search query is required', 'WEB_SEARCH_QUERY_REQUIRED')
-  const saved = getWebSearchCredentials({ userId })
-  if (!saved) {
-    throw webSearchError('联网搜索尚未配置。请前往“设置 → 联网搜索”选择服务并填写 API Key。', 'WEB_SEARCH_NOT_CONFIGURED')
-  }
-  if (!saved.enabled) {
-    throw webSearchError('联网搜索已关闭。请在“设置 → 联网搜索”中启用后重试。', 'WEB_SEARCH_DISABLED')
-  }
-  const provider = saved.provider
-  const config = normalizeWebSearchConfig(provider, saved.config)
-  const apiKey = String(saved.secret?.apiKey || '').trim()
+function assertConnectionReady(connection) {
+  const provider = connection.provider
+  const config = normalizeWebSearchConfig(provider, connection.config)
+  const apiKey = String(connection.secret?.apiKey || '').trim()
   if (provider !== 'custom' && !apiKey) {
-    throw webSearchError('联网搜索缺少 API Key。请在“设置 → 联网搜索”中补充。', 'WEB_SEARCH_API_KEY_REQUIRED')
+    throw webSearchError(`Search provider ${getWebSearchProvider(provider)?.label || provider} is missing an API key`, 'WEB_SEARCH_API_KEY_REQUIRED')
   }
   if (provider === 'google_cse' && !config.cx) {
-    throw webSearchError('Google Custom Search 还需要搜索引擎 ID（cx）。', 'WEB_SEARCH_CX_REQUIRED')
+    throw webSearchError('Google Custom Search also requires a search engine ID (cx)', 'WEB_SEARCH_CX_REQUIRED')
   }
-  const limit = Math.max(1, Math.min(MAX_RESULTS, Number(maxResults) || 5))
+  return { provider, config, apiKey }
+}
+
+async function searchWithConnection({ connection, query, maxResults, fetchImpl }) {
+  const { provider, config, apiKey } = assertConnectionReady(connection)
   const request = provider === 'custom'
-    ? customProviderRequest(config, { query: text, maxResults: limit, apiKey })
-    : fixedProviderRequest(provider, { query: text, maxResults: limit, apiKey, config })
-  const data = await requestJson(request.url, request.init, fetchImpl)
+    ? customProviderRequest(config, { query, maxResults, apiKey })
+    : fixedProviderRequest(provider, { query, maxResults, apiKey, config })
+  let data
+  try {
+    data = await requestJson(request.url, request.init, fetchImpl)
+  } catch (error) {
+    if (apiKey && typeof error?.message === 'string' && error.message.includes(apiKey)) {
+      error.message = error.message.replaceAll(apiKey, '[REDACTED]')
+    }
+    throw error
+  }
   const rawItems = readPath(data, request.listPath)
   const results = (Array.isArray(rawItems) ? rawItems : [])
     .map((item) => normalizeResult(item, request.paths))
     .filter(Boolean)
-    .slice(0, limit)
-  return { ok: true, provider, query: text, results }
+    .slice(0, maxResults)
+  return { ok: true, provider, connectionId: connection.id, query, results }
 }
 
-export function configureWebSearch({ userId, provider, enabled, config, apiKey } = {}) {
+export async function searchWeb({ userId, query, maxResults = 5, connectionId, fetchImpl = fetch } = {}) {
+  const text = String(query || '').trim()
+  if (!text) throw webSearchError('Search query is required', 'WEB_SEARCH_QUERY_REQUIRED')
+  const saved = getWebSearchCredentials({ userId })
+  if (!saved) {
+    throw webSearchError('联网搜索尚未配置。请前往“设置 → 联网搜索”添加至少一个搜索 API。', 'WEB_SEARCH_NOT_CONFIGURED')
+  }
+  if (!saved.enabled) {
+    throw webSearchError('联网搜索已关闭。请在“设置 → 联网搜索”中启用后重试。', 'WEB_SEARCH_DISABLED')
+  }
+  let candidates = saved.connections.filter((item) => item.enabled !== false)
+  if (connectionId) candidates = candidates.filter((item) => item.id === connectionId)
+  if (!candidates.length) {
+    throw webSearchError(connectionId ? 'The selected web search API is disabled or missing' : 'No web search API is enabled', 'WEB_SEARCH_DISABLED')
+  }
+  const limit = Math.max(1, Math.min(MAX_RESULTS, Number(maxResults) || 5))
+  const failures = []
+  for (const connection of candidates) {
+    try {
+      const result = await searchWithConnection({ connection, query: text, maxResults: limit, fetchImpl })
+      return { ...result, attemptedProviders: [...failures.map((item) => item.provider), result.provider] }
+    } catch (error) {
+      failures.push({ provider: connection.provider, error })
+    }
+  }
+  if (failures.length === 1) throw failures[0].error
+  const providerNames = failures.map(({ provider }) => getWebSearchProvider(provider)?.label || provider).join(', ')
+  const statusCode = failures.some(({ error }) => Number(error?.statusCode) >= 500) ? 502 : 400
+  throw webSearchError(`All configured web search APIs failed (${providerNames})`, 'WEB_SEARCH_ALL_PROVIDERS_FAILED', statusCode)
+}
+
+export function configureWebSearch({ userId, provider, enabled, config, apiKey, connections, strategy } = {}) {
+  if (Array.isArray(connections)) {
+    const normalized = normalizeWebSearchConnections(connections)
+    return saveWebSearchConfigs({
+      userId,
+      enabled,
+      strategy,
+      connections: normalized.map((connection, index) => ({
+        ...connection,
+        ...(Object.hasOwn(connections[index] || {}, 'apiKey') ? { apiKey: connections[index].apiKey } : {}),
+      })),
+    })
+  }
   const normalized = normalizeWebSearchConfig(provider, config)
   return saveWebSearchConfig({ userId, provider, enabled, config: normalized, apiKey })
 }
 
 export function isWebSearchReady({ userId } = {}) {
-  try {
-    const saved = getWebSearchCredentials({ userId })
-    if (!saved?.enabled) return false
-    const config = normalizeWebSearchConfig(saved.provider, saved.config)
-    if (saved.provider !== 'custom' && !String(saved.secret?.apiKey || '').trim()) return false
-    if (saved.provider === 'google_cse' && !config.cx) return false
-    return saved.provider !== 'custom' || Boolean(config.baseUrl)
-  } catch {
-    return false
-  }
+  const saved = getWebSearchCredentials({ userId })
+  if (!saved?.enabled) return false
+  return saved.connections.some((connection) => {
+    if (connection.enabled === false) return false
+    try {
+      assertConnectionReady(connection)
+      return true
+    } catch {
+      return false
+    }
+  })
 }
 
-export async function testWebSearch({ userId, fetchImpl = fetch } = {}) {
+export async function testWebSearch({ userId, connectionId, fetchImpl = fetch } = {}) {
   const saved = getWebSearchCredentials({ userId })
   if (!saved) throw webSearchError('Please save a web search configuration first', 'WEB_SEARCH_NOT_CONFIGURED')
   try {
-    const result = await searchWeb({ userId, query: 'OpenAI', maxResults: 3, fetchImpl })
+    const result = await searchWeb({ userId, connectionId, query: 'OpenAI', maxResults: 3, fetchImpl })
+    const label = getWebSearchProvider(result.provider)?.label || result.provider
     const message = result.results.length
-      ? `Connected to ${getWebSearchProvider(saved.provider)?.label || saved.provider}; ${result.results.length} result(s) returned.`
-      : `Connected to ${getWebSearchProvider(saved.provider)?.label || saved.provider}; no results returned for the test query.`
+      ? `Connected to ${label}; ${result.results.length} result(s) returned.`
+      : `Connected to ${label}; no results returned for the test query.`
     recordWebSearchTest({ userId, ok: true, message })
-    return { ok: true, provider: saved.provider, resultCount: result.results.length, message }
+    return { ok: true, provider: result.provider, connectionId: result.connectionId, resultCount: result.results.length, message }
   } catch (error) {
     recordWebSearchTest({ userId, ok: false, message: error?.message || 'Connection failed' })
     throw error

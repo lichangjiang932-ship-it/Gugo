@@ -32,6 +32,14 @@ const toolFailureSchema = z.object({
   hint: z.string().optional(),
   attempts: z.number().int().positive().optional(),
 }).strict()
+const completedArtifactSchema = z.object({
+  id: z.string().min(1),
+  filename: z.string().min(1),
+  type: z.string().min(1).optional(),
+  url: z.string().min(1),
+  title: z.string().optional(),
+  mimeType: z.string().min(1).optional(),
+}).strict()
 const turnResolutionSchema = z.object({
   type: z.string().min(1).optional(),
   approved: z.boolean().optional(),
@@ -90,6 +98,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
   'tool.completed': z.object({
     toolCallId: z.string().optional(), name: z.string().optional(), args: jsonRecord.optional(),
     result: z.unknown().optional(), error: toolFailureSchema.nullable().optional(), artifactId: nullableText,
+    artifacts: z.array(completedArtifactSchema).optional(),
   }).strict(),
   'turn.progress': z.object({
     completed: z.number().int().nonnegative().optional(),
