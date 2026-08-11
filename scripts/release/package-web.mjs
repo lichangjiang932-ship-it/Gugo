@@ -18,6 +18,7 @@ export const WEB_RELEASE_ENTRIES = Object.freeze([
   'shared',
   'seed',
   'plugins',
+  'resources/licenses',
   'scripts/healthcheck.js',
   'src/data.js',
   'src/data/skillCatalog.js',

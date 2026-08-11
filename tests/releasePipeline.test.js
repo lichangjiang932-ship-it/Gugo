@@ -11,7 +11,7 @@ const read = (relativePath) => fs.readFileSync(path.join(ROOT, relativePath), 'u
 function createReleaseFixture(t) {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-release-fixture-'))
   t.after(() => fs.rmSync(rootDir, { recursive: true, force: true }))
-  const directories = new Set(['dist', 'server', 'shared', 'seed', 'plugins'])
+  const directories = new Set(['dist', 'server', 'shared', 'seed', 'plugins', 'resources/licenses'])
   for (const entry of WEB_RELEASE_ENTRIES) {
     const target = path.join(rootDir, entry)
     if (directories.has(entry)) {
@@ -25,6 +25,7 @@ function createReleaseFixture(t) {
   fs.writeFileSync(path.join(rootDir, 'package.json'), JSON.stringify({ name: 'gugo', version: '1.2.3' }))
   fs.writeFileSync(path.join(rootDir, 'dist', 'index.html'), '<!doctype html>')
   fs.writeFileSync(path.join(rootDir, 'server', 'start.js'), '')
+  fs.writeFileSync(path.join(rootDir, 'resources', 'licenses', 'LGPL-3.0.txt'), 'LGPL fixture')
   return rootDir
 }
 
@@ -39,6 +40,7 @@ test('Web release staging contains a complete runnable distribution and is repea
   }
   assert.match(readFrom(first.stageDir, 'README-WEB.md'), /npm ci --omit=dev/)
   assert.match(readFrom(first.stageDir, 'README-WEB.md'), /npm run serve/)
+  assert.equal(fs.existsSync(path.join(first.stageDir, 'resources', 'licenses', 'LGPL-3.0.txt')), true)
 
   fs.writeFileSync(path.join(first.stageDir, 'stale.txt'), 'stale')
   const second = stageWebRelease({ rootDir, outputDir })
@@ -71,6 +73,9 @@ test('Release workflow is gated by reusable CI and reruns update existing releas
   assert.match(release, /gh release view/)
   assert.match(release, /gh release upload[^\n]*--clobber/)
   assert.match(release, /gh release create/)
+  const verification = read('scripts/release/verify-web-release.ps1')
+  assert.match(verification, /THIRD_PARTY_NOTICES\.md/)
+  assert.match(verification, /resources\/licenses\/LGPL-3\.0\.txt/)
 })
 
 function readFrom(rootDir, relativePath) {

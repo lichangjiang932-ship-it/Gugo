@@ -33,6 +33,12 @@ if (-not (Test-Path -LiteralPath (Join-Path $packageRoot 'server/start.js'))) {
 if (-not (Test-Path -LiteralPath (Join-Path $packageRoot 'package-lock.json'))) {
   throw 'The Web release does not contain package-lock.json'
 }
+if (-not (Test-Path -LiteralPath (Join-Path $packageRoot 'THIRD_PARTY_NOTICES.md'))) {
+  throw 'The Web release does not contain THIRD_PARTY_NOTICES.md'
+}
+if (-not (Test-Path -LiteralPath (Join-Path $packageRoot 'resources/licenses/LGPL-3.0.txt'))) {
+  throw 'The Web release does not contain resources/licenses/LGPL-3.0.txt'
+}
 
 try {
   Push-Location $packageRoot
