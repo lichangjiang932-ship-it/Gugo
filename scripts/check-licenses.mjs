@@ -15,6 +15,7 @@ const allowedLicenses = new Set([
   'CC-BY-3.0',
   'CC-BY-4.0',
   'ISC',
+  'LGPL-3.0-or-later',
   'MIT',
   'MIT-0',
   'Python-2.0',

@@ -46,6 +46,21 @@ FFmpeg source revisions are available at
 GPLv3 text is shipped as `resources/licenses/GPL-3.0.txt`; hashes and detailed
 staging provenance are in `resources/licenses/FFMPEG-SIDECARS.md`.
 
+## Sharp and libvips
+
+Image transforms use `sharp@0.35.3` (Apache-2.0). Its platform packages ship
+prebuilt libvips shared libraries under `LGPL-3.0-or-later`; the exact package
+selected by npm depends on the operating system and CPU architecture. Gugo
+loads these as replaceable shared libraries and does not modify libvips.
+
+The complete LGPLv3 supplement and the incorporated GPLv3 terms are shipped as
+`resources/licenses/LGPL-3.0.txt` and `resources/licenses/GPL-3.0.txt`.
+Corresponding libvips source is available from
+[libvips/libvips](https://github.com/libvips/libvips); Sharp's platform build
+and packaging sources are available from
+[lovell/sharp](https://github.com/lovell/sharp). The installed npm platform
+package also records its precise binary and dependency versions.
+
 ## Direct production dependencies
 
 Exact installed versions are resolved by `package-lock.json`. The direct
@@ -71,6 +86,7 @@ runtime dependency families and declared licenses are:
 | `qrcode` | MIT |
 | `react`, `react-dom` | MIT |
 | `react-markdown`, `rehype-highlight`, `rehype-sanitize`, `remark-gfm` | MIT |
+| `sharp` | Apache-2.0; platform libvips shared libraries are LGPL-3.0-or-later |
 | `three` | MIT |
 | `undici` | MIT |
 | `zod` | MIT |

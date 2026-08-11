@@ -130,6 +130,22 @@ test('desktop media sidecars are staged, packaged, and documented', () => {
   ])
 })
 
+test('native image libraries ship cross-platform LGPL notices', () => {
+  const config = read('electron-builder.yml')
+  const dockerfile = read('Dockerfile')
+  const notices = read('THIRD_PARTY_NOTICES.md')
+  const licenseCheck = read('scripts/check-licenses.mjs')
+  const lgpl = read('resources/licenses/LGPL-3.0.txt')
+
+  assert.match(config, /extraResources:[\s\S]*from:\s*resources\/licenses[\s\S]*to:\s*licenses/)
+  assert.match(dockerfile, /COPY LICENSE THIRD_PARTY_NOTICES\.md \.\//)
+  assert.match(dockerfile, /COPY resources\/licenses \.\/resources\/licenses/)
+  assert.match(notices, /## Sharp and libvips[\s\S]*LGPL-3\.0-or-later/)
+  assert.match(notices, /resources\/licenses\/LGPL-3\.0\.txt/)
+  assert.match(licenseCheck, /'LGPL-3\.0-or-later'/)
+  assert.match(lgpl, /GNU LESSER GENERAL PUBLIC LICENSE[\s\S]*Version 3, 29 June 2007/)
+})
+
 test('desktop media sidecar staging fails closed when a required binary is absent', () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-sidecar-package-'))
   try {

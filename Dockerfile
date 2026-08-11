@@ -35,6 +35,8 @@ COPY shared ./shared
 COPY seed ./seed
 COPY plugins ./plugins
 COPY .env.example .env.example
+COPY LICENSE THIRD_PARTY_NOTICES.md ./
+COPY resources/licenses ./resources/licenses
 
 # Data volume mount point
 RUN mkdir -p /app/server-data
