@@ -10,6 +10,7 @@ import { ToastProvider } from './components/Toast.jsx'
 import PreviewBanner from './components/PreviewBanner.jsx'
 import StoragePersistenceNotice from './components/StoragePersistenceNotice.jsx'
 import CommandPalette from './components/CommandPalette.jsx'
+import WorkspaceOnboardingPrompt from './components/WorkspaceOnboardingPrompt.jsx'
 
 const CoverPage = lazy(() => import('./pages/CoverPage'))
 const ChatSplit = lazy(() => import('./pages/ChatSplit'))
@@ -51,6 +52,7 @@ function App() {
       <StoragePersistenceNotice />
       <CommandPalette />
       <SessionSearchModal />
+      <WorkspaceOnboardingPrompt />
       <Suspense fallback={<Fallback />}>
         <main>
           <PreviewBanner />

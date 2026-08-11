@@ -13,6 +13,7 @@ process.env.HOOKS_SHELL_ALLOWED_COMMANDS = process.execPath
 const { runToolsLoop } = await import('../server/services/jobTools.js')
 const { JobRuntime } = await import('../server/services/jobRuntime.js')
 const { upsertHook } = await import('../server/services/hooksService.js')
+const { setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
 const { closeDb } = await import('../server/db.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
@@ -45,6 +46,7 @@ test.after(() => {
 
 test('autonomous job applies pre hook replacements before execution and emits post hook output', async () => {
   const { userId } = issueTestSession({ email: 'job-hook-rewrite@example.com' })
+  setApprovalMode({ userId, mode: 'bypass' })
   const postFile = path.join(TMP_DIR, 'post-hook.json')
   upsertHook({
     userId,

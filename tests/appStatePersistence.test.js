@@ -69,11 +69,14 @@ test('server-backed sessions persist metadata without duplicating transcript mes
   assert.equal(snapshot.sessions[1].messages[0].content, 'local only')
 })
 
-test('legacy execution defaults migrate by schema version while v2 explicit disables are preserved', () => {
+test('tool defaults migrate by schema version while current explicit disables are preserved', () => {
   assert.equal(needsToolsConfigSchemaMigration({ toolsConfig: { bash_exec: false, run_project_check: false } }), true)
   const legacy = normalizePersistedFields({ toolsConfig: { bash_exec: false, run_project_check: false } })
   assert.equal(legacy.toolsConfig.bash_exec, true)
   assert.equal(legacy.toolsConfig.run_project_check, true)
+  for (const id of ['image_info', 'image_transform', 'media_probe', 'media_transform', 'pdf_info', 'pdf_text', 'pdf_transform', 'archive_list', 'archive_create', 'archive_extract', 'batch_rename', 'file_hash_manifest']) {
+    assert.equal(legacy.toolsConfig[id], true)
+  }
   assert.equal(legacy.toolsConfigSchemaVersion, TOOLS_CONFIG_SCHEMA_VERSION)
 
   const v1 = normalizePersistedFields({
@@ -87,13 +90,61 @@ test('legacy execution defaults migrate by schema version while v2 explicit disa
   assert.equal(v1.toolsConfig.bash_exec, false)
   assert.equal(v1.toolsConfig.run_project_check, true)
 
+  const v2 = normalizePersistedFields({
+    toolsConfigSchemaVersion: 2,
+    toolsConfig: { image_info: false, pdf_transform: false, archive_create: false },
+  })
+  assert.equal(v2.toolsConfig.image_info, true)
+  assert.equal(v2.toolsConfig.pdf_transform, true)
+  assert.equal(v2.toolsConfig.archive_create, true)
+
+  const v3Saved = {
+    toolsConfigSchemaVersion: 3,
+    toolsConfig: {
+      image_info: false,
+      archive_create: false,
+      archive_extract: false,
+      batch_rename: false,
+      file_hash_manifest: false,
+    },
+  }
+  assert.equal(needsToolsConfigSchemaMigration(v3Saved), true)
+  const v3 = normalizePersistedFields(v3Saved)
+  assert.equal(v3.toolsConfig.image_info, false)
+  for (const id of ['archive_create', 'archive_extract', 'batch_rename', 'file_hash_manifest']) {
+    assert.equal(v3.toolsConfig[id], true)
+  }
+
+  const v4 = normalizePersistedFields({
+    toolsConfigSchemaVersion: 4,
+    toolsConfig: { pdf_transform: false, archive_extract: false },
+  })
+  assert.equal(v4.toolsConfig.pdf_text, true)
+  assert.equal(v4.toolsConfig.archive_list, true)
+  assert.equal(v4.toolsConfig.pdf_transform, false)
+  assert.equal(v4.toolsConfig.archive_extract, false)
+
   const explicit = normalizePersistedFields({
     toolsConfigSchemaVersion: TOOLS_CONFIG_SCHEMA_VERSION,
-    toolsConfig: { bash_exec: false, run_project_check: false },
+    toolsConfig: {
+      bash_exec: false,
+      run_project_check: false,
+      archive_create: false,
+      archive_extract: false,
+      batch_rename: false,
+      file_hash_manifest: false,
+      pdf_text: false,
+      archive_list: false,
+    },
   })
   assert.equal(needsToolsConfigSchemaMigration(explicit), false)
   assert.equal(explicit.toolsConfig.bash_exec, false)
   assert.equal(explicit.toolsConfig.run_project_check, false)
+  for (const id of ['archive_create', 'archive_extract', 'batch_rename', 'file_hash_manifest']) {
+    assert.equal(explicit.toolsConfig[id], false)
+  }
+  assert.equal(explicit.toolsConfig.pdf_text, false)
+  assert.equal(explicit.toolsConfig.archive_list, false)
   assert.equal(explicit.toolsConfigSchemaVersion, TOOLS_CONFIG_SCHEMA_VERSION)
 })
 

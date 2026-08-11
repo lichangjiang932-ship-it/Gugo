@@ -33,11 +33,12 @@ test('job routes create, fetch, and cancel jobs', async () => {
     const createdResponse = await fetch(`http://127.0.0.1:${port}/api/jobs`, {
       method: 'POST',
       headers: authHeaders,
-      body: JSON.stringify({ prompt: '生成 2 份周报' }),
+      body: JSON.stringify({ prompt: '生成 2 份周报', requirePlanApproval: true }),
     })
     assert.equal(createdResponse.status, 201)
     const created = await createdResponse.json()
     assert.equal(created.job.title, '生成 2 份周报')
+    assert.equal(created.job.steps.find((step) => step.kind === 'plan').input.requirePlanApproval, true)
 
     const detailResponse = await fetch(`http://127.0.0.1:${port}/api/jobs/${created.job.id}`, {
       headers: { Authorization: `Bearer ${token}` },

@@ -97,9 +97,14 @@ function toolDelta(call, index, argumentsMode = 'append') {
 }
 
 function normalizedFinishReason(value, sawToolCall = false) {
-  if (sawToolCall || value === 'function_call' || value === 'tool_calls') return 'tool_calls'
-  if (value === 'length' || value === 'max_tokens') return 'length'
-  return value || 'stop'
+  const raw = String(value || '').trim()
+  const normalized = raw.toLowerCase()
+  // A provider can hit its output limit after emitting the beginning of a
+  // tool call. Preserve that stronger signal so truncated arguments are not
+  // mistaken for a complete executable call.
+  if (['length', 'max_tokens', 'max_output_tokens'].includes(normalized)) return 'length'
+  if (sawToolCall || normalized === 'function_call' || normalized === 'tool_calls') return 'tool_calls'
+  return raw || 'stop'
 }
 
 export function normalizeCompatibleModelStreamPayload(data, state = createCompatibleModelStreamState()) {

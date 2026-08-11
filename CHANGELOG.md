@@ -6,6 +6,33 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.18] - 2026-08-11
+
+### Added
+
+- Added path-based image inspection and transforms, FFmpeg-powered audio/video
+  probing and editing, positioned PDF text extraction with CJK-safe transforms,
+  and large-file archive workflows for ZIP plus RAR4/RAR5 listing/extraction.
+- Added ZIP creation, archive previews, directory-aware batch renaming, exact
+  duplicate manifests, and first-run workspace onboarding for file, Shell, and
+  Git execution capabilities.
+
+### Changed
+
+- Strengthened the execution harness to call exposed `write_file`, `bash_exec`,
+  `pdf_transform`, and related tools directly, recover from structured errors,
+  and verify written outputs instead of returning copy-paste instructions.
+- Long user messages now collapse into an accessible preview and can be expanded
+  or folded again without hiding attachments or skill-command context.
+
+### Fixed
+
+- Prevented length-truncated tool calls from reaching approval or execution while
+  preserving protocol pairing and retry checkpoints for safe regeneration.
+- Hardened media parameter validation, PDF Unicode font embedding, archive path
+  and expansion checks, atomic writes, cancellation rollback, and approval risk
+  classification for destructive transforms.
+
 ## [0.10.17] - 2026-08-10
 
 ### Added
@@ -215,7 +242,8 @@ follow [Semantic Versioning](https://semver.org/).
 - Provider, MCP, memory, job, subagent, connector, and workspace tool support.
 - Local-first single-user mode with optional multi-user authentication.
 
-[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.17...HEAD
+[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.18...HEAD
+[0.10.18]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.18
 [0.10.17]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.17
 [0.10.16]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.16
 [0.10.15]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.15

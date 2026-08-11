@@ -49,10 +49,10 @@ import {
   buildPriorStepsContext,
   buildVerificationPrompt,
   deriveJobProgress,
-  findNextRunnableStep,
+  findNextRunnableStep, normalizeJobCreationSteps,
   normalizeStructuredPlanSteps,
   resolveWorkflowState,
-  shouldCompileDocx,
+  shouldCompileDocx, stepRequiresPlanApproval,
   withStableStepIds,
 } from './jobWorkflow.js'
 import { createJobRuntimeScheduler } from './jobRuntimeScheduler.js'
@@ -605,11 +605,11 @@ export class JobRuntime {
     this.scheduler.stop()
   }
 
-  async createJob(prompt, { userId } = {}) {
+  async createJob(prompt, { userId, requirePlanApproval = false } = {}) {
     if (!userId) throw new Error('createJob requires userId')
     const plan = await this.planner(prompt, { userId })
     const id = newId('job')
-    const normalizedSteps = normalizeStructuredPlanSteps(plan.steps)
+    const normalizedSteps = normalizeJobCreationSteps(plan.steps, { requirePlanApproval })
     persistJob({
       id,
       userId,
@@ -623,7 +623,7 @@ export class JobRuntime {
       jobId: id,
       type: 'created',
       message: '任务已创建',
-      payload: { stepCount: normalizedSteps.length },
+      payload: { stepCount: normalizedSteps.length, requirePlanApproval: requirePlanApproval === true },
     })
     this.emit(event)
     return this.getJob(id, { userId })
@@ -1204,8 +1204,7 @@ export class JobRuntime {
       if (result?.ok === false) {
         throw new Error(result.error || '步骤执行失败')
       }
-      const requiresPlanApproval = nextStep.kind === 'plan'
-        && getApprovalMode({ userId: job.userId }) === 'plan'
+      const requiresPlanApproval = stepRequiresPlanApproval(nextStep, getApprovalMode({ userId: job.userId }))
       let plan = null
       if (!commitOwned(() => {
         updateJobStep(nextStep.id, {

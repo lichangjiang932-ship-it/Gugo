@@ -94,6 +94,46 @@ LOCAL_USER_ID=existing-user-id
 
 `LOCAL_USER_ID` 必须是数据库中已经存在的用户 ID，不是邮箱；不存在时本地认证初始化会报错，浏览器无法进入工作台。服务记录选定所有者后可移除该变量。切换模式前应备份整个 `APP_DATA_DIR` 和浏览器会话导出；不同用户的数据不会自动合并或转移。
 
+## 媒体工具可执行文件
+
+`media_probe` 和 `media_transform` 依赖完整的 `ffmpeg` / `ffprobe` 可执行文件。运行时按以下顺序查找：
+
+1. `GUGO_FFMPEG_PATH` / `GUGO_FFPROBE_PATH`；
+2. Electron 安装目录下的 `resources/bin/ffmpeg.exe` / `resources/bin/ffprobe.exe`；
+3. 可选的 static npm 包；
+4. 服务进程的 `PATH`。
+
+源码、Docker 或其他自托管部署建议使用绝对路径，且两个程序必须来自同一套 FFmpeg 发行版：
+
+```dotenv
+GUGO_FFMPEG_PATH=/opt/ffmpeg/bin/ffmpeg
+GUGO_FFPROBE_PATH=/opt/ffmpeg/bin/ffprobe
+```
+
+Windows 也可使用 `C:\Tools\ffmpeg\bin\ffmpeg.exe` 类型的绝对路径。修改后重启服务，并分别执行 `ffmpeg -version` 与 `ffprobe -version` 验证二进制可用。`media_transform` 的剪辑、转码、提取音频、抽帧、变速、GIF、字幕烧录、拼接、音量调整和 `denoise_audio` 降噪都使用这套二进制。桌面安装包的构建方法见 [DESKTOP_RELEASES.md](./DESKTOP_RELEASES.md#media-sidecars)。
+
+## 专用文件处理与产物通道
+
+普通 `read_file` 仍只用于不超过 5 MB 的 UTF-8 文本。图片、音视频、PDF 和 ZIP 不应先编码成文本或 Base64：`image_info` / `image_transform`、`media_probe` / `media_transform`、`pdf_info` / `pdf_text` / `pdf_transform` 与批量文件工具直接使用工作区路径、用户已授权路径或其规格允许的受管附件 URI，并分别执行像素、字节数、页码范围、处理时长或解压膨胀等限制。
+
+PDF 专用通道默认允许 256 MB 输入和 512 MB 输出，可通过 `PDF_TOOL_MAX_INPUT_BYTES` / `PDF_TOOL_MAX_OUTPUT_BYTES` 收紧或放宽。`pdf_text` 默认单次最多提取 200 页、1,000,000 字符和 50,000 个定位项，分别由 `PDF_TEXT_MAX_PAGES`、`PDF_TEXT_MAX_CHARACTERS`、`PDF_TEXT_MAX_ITEMS` 配置；达到上限时应使用 `pages` / `ranges` 分批读取。
+
+`image_transform`、`media_transform`、`pdf_transform` 和 `archive_create` 成功后，工具循环会异步把输出复制到 `ARTIFACT_DIR`，登记为受管产物并返回下载链接。该复制通道避免把大型二进制内容放入模型上下文，但不会放宽目录授权，也不会取消各专用工具自己的输入/输出上限。源文件默认保留；除非调用时明确设置 `overwrite=true`，输出路径已存在会报错。
+
+能力边界如下：
+
+- `archive_list` / `archive_extract` 支持单卷、未加密的 ZIP32 与 RAR4/RAR5；`archive_create` 只创建 ZIP32。ZIP64、加密或多卷归档以及创建 RAR 不在内建支持范围内。
+- `pdf_text` 按页返回文本和定位项；定位项使用 PDF 点坐标且以左下角为原点，可直接作为 `overlay_text` 的测量依据，但不等同于 OCR 或视觉版式验证。
+- `pdf_transform` 支持合并、拆分、90 度倍数旋转、水印、AcroForm 填写，以及 `overlay_text`。水印、覆盖文字和文本表单外观使用随应用捆绑的 CJK TTF；`overlay_text` 先用指定背景色（默认白色）遮盖，再绘制一行文字，不修改底层文本流，也不负责自动换行或段落重排。
+- 内建 PDF 工具不提供 OCR、PDF→Word、Word→PDF 或任意文本重排。安装 LibreOffice 且允许 `bash_exec` 时，可以脚本方式做尽力转换，但必须渲染并人工检查版式，不能宣称无损。
+- 字体创造由 `font-creator` Skill 指导脚本实现，不是内建工具；运行需要已授权的读写目录、`bash_exec`，以及外部 FontForge 或 Python `fontTools`。依赖缺失时不会自动获得字体编辑能力。
+
+## 首次工作区引导
+
+在服务宿主机上通过回环地址打开应用后，可在「权限中心 → 首次启动 · 开启本地工作区」选择一个目录，分别开启文件、Shell、Git 能力并选择审批模式；远程请求不能修改这项配置。提交前必须确认风险；选择“全部放行”还需要单独确认。配置会把所选目录授予 `read_write`、标记为可信工作区，并把 `WORKSPACE_FS_ENABLED`、`WORKSPACE_SHELL_ENABLED`、`WORKSPACE_GIT_ENABLED` 写入用户级运行配置（默认是 `server-data/runtime.json`，自定义 `APP_DATA_DIR` 时随之变化）。
+
+`.env`、`.gugo/runtime.json`、`APP_CONFIG_PATH` 或系统环境变量中显式设置的同名开关仍按分层优先级生效，并在界面中显示为由部署策略管理；首次引导不能覆盖它们。引导只授权所选目录，不会自动开放整台电脑，也不把 Shell 变成安全沙箱。完成后仍可回到权限中心调整目录、能力和审批模式。
+
 ## 工作区信任
 
 `WORKSPACE_FS_ENABLED`、`WORKSPACE_SHELL_ENABLED`、`WORKSPACE_GIT_ENABLED` 和

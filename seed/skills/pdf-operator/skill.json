@@ -1,0 +1,9 @@
+{
+  "id": "pdf-operator",
+  "name": "PDF Operator · PDF 处理",
+  "description": "读取逐页文本与坐标，并合并、拆分、旋转、添加中文水印、覆盖文字和填写 PDF 表单；保留源文件并验证结果。",
+  "version": "1.1.0",
+  "icon": "📄",
+  "permissions": ["读取已授权 PDF", "在已授权目录写入 PDF 结果"],
+  "source": { "type": "builtin", "license": "MIT" }
+}

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { availableParallelism, tmpdir } from 'node:os'
 import { join, normalize } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
@@ -11,6 +11,14 @@ const testSetupArgs = ['--import', './scripts/testEnvironment.mjs']
 const coverageMode = rawArgs.includes('--coverage')
 const selectors = rawArgs.filter((arg) => !arg.startsWith('-'))
 const nodeArgs = rawArgs.filter((arg) => arg.startsWith('-') && arg !== '--run' && arg !== '--coverage')
+const configuredConcurrency = Number(process.env.TEST_CONCURRENCY)
+const defaultConcurrency = Math.max(1, Math.min(4, availableParallelism()))
+const testConcurrency = Number.isFinite(configuredConcurrency) && configuredConcurrency > 0
+  ? Math.floor(configuredConcurrency)
+  : defaultConcurrency
+const batchNodeArgs = nodeArgs.some((arg) => arg.startsWith('--test-concurrency'))
+  ? nodeArgs
+  : [`--test-concurrency=${testConcurrency}`, ...nodeArgs]
 
 const coverageArgs = coverageMode
   ? [
@@ -82,7 +90,7 @@ if (batchFiles.length) {
     ...testSetupArgs,
     '--test',
     ...coverageArgs,
-    ...nodeArgs,
+    ...batchNodeArgs,
     ...batchFiles,
   ], {
     stdio: 'inherit',

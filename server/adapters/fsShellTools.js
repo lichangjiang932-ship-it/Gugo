@@ -90,7 +90,7 @@ function assertToolPermitted(userId, toolName) {
   }
 }
 
-function resolveForFileTool(rawPath, { userId = null, write = false, allowMissing = false } = {}) {
+export function resolveForFileTool(rawPath, { userId = null, write = false, allowMissing = false } = {}) {
   // 先按「本地文件授权」解析：用户显式授权的路径（grant / all_files）是独立的
   // 信任边界，不应被全局 WORKSPACE_FS_ENABLED 开关短路——授权行为本身已经
   // 是用户的明确同意。只有落到 workspace 来源的路径才需要全局开关 + 工作区信任。
@@ -796,6 +796,23 @@ export async function bashExecTool({
     stderr: r.stderr,
   })
 
+  if (r.processTreeCleanupFailed) {
+    if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'error', durationMs })
+    return {
+      ok: false,
+      code: 'PROCESS_TREE_CLEANUP_FAILED',
+      processTreeCleanupFailed: true,
+      ...(r.aborted ? { cancelled: true } : {}),
+      ...(r.timedOut ? { timedOut: true } : {}),
+      ...(r.truncated ? { truncated: true } : {}),
+      error: '命令已停止，但无法确认所有子进程都已退出',
+      hint: '请检查仍在运行的子进程；在确认清理完成前不要重试会修改同一目录的命令。',
+      stdout: r.stdout,
+      stderr: r.stderr,
+      cwd: displayCwd,
+      ...verificationFields,
+    }
+  }
   if (r.aborted) {
     if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'cancelled', durationMs })
     return {

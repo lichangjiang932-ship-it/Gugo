@@ -141,6 +141,8 @@ function configureDesktopRuntime() {
   process.env.APP_DATA_DIR ||= paths.dataDir
   process.env.APP_DB_PATH ||= paths.database
   process.env.ARTIFACT_DIR ||= paths.artifacts
+  process.env.GUGO_FFMPEG_PATH ||= path.join(process.resourcesPath, 'bin', 'ffmpeg.exe')
+  process.env.GUGO_FFPROBE_PATH ||= path.join(process.resourcesPath, 'bin', 'ffprobe.exe')
   if (pluginRoots.length) process.env.CODEX_PLUGIN_ROOTS = JSON.stringify(pluginRoots)
   return port
 }

@@ -31,6 +31,21 @@ async function responseError(response) {
   try { return JSON.parse(text)?.error?.message || `HTTP ${response.status}` } catch { return text.slice(0, 500) || `HTTP ${response.status}` }
 }
 
+function detectImageMime(buffer, hintedType = '') {
+  const hint = String(hintedType || '').split(';', 1)[0].trim().toLowerCase()
+  if (buffer?.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png'
+  if (buffer?.[0] === 0xff && buffer?.[1] === 0xd8 && buffer?.[2] === 0xff) return 'image/jpeg'
+  if (buffer?.subarray(0, 6).toString('ascii').startsWith('GIF8')) return 'image/gif'
+  if (buffer?.subarray(0, 4).toString('ascii') === 'RIFF'
+    && buffer?.subarray(8, 12).toString('ascii') === 'WEBP') return 'image/webp'
+  const brand = buffer?.subarray(4, 12).toString('ascii') || ''
+  if (brand.startsWith('ftypavif') || brand.startsWith('ftypavis')) return 'image/avif'
+  if (/^image\/(?:png|jpe?g|gif|webp|avif)$/u.test(hint)) {
+    return hint === 'image/jpg' ? 'image/jpeg' : hint
+  }
+  return 'image/png'
+}
+
 export async function generateImage({ userId, providerKey, model, prompt, size = '1024x1024', fetchImpl = fetch } = {}) {
   const provider = providerConfig(userId, providerKey)
   const response = await fetchImpl(endpoint(provider.baseUrl, '/images/generations'), {
@@ -49,15 +64,22 @@ export async function generateImage({ userId, providerKey, model, prompt, size =
   const payload = await response.json()
   const item = payload?.data?.[0]
   let buffer
+  let hintedMimeType = item?.mime_type || item?.mimeType || ''
   if (item?.b64_json) buffer = Buffer.from(item.b64_json, 'base64')
   else if (item?.url) {
     const download = await fetchImpl(item.url, { signal: AbortSignal.timeout(60_000) })
     if (!download.ok) throw new Error(`image download failed: HTTP ${download.status}`)
+    hintedMimeType = download.headers.get('content-type') || hintedMimeType
     buffer = Buffer.from(await download.arrayBuffer())
   }
   if (!buffer?.length) throw new Error('图像服务没有返回图片')
   if (buffer.length > MAX_IMAGE_BYTES) throw new Error('生成图片超过 20MB 限制')
-  return { buffer, mimeType: 'image/png', revisedPrompt: item?.revised_prompt || null, provider: provider.key }
+  return {
+    buffer,
+    mimeType: detectImageMime(buffer, hintedMimeType),
+    revisedPrompt: item?.revised_prompt || null,
+    provider: provider.key,
+  }
 }
 
 export async function transcribeAudio({ userId, providerKey, model = 'whisper-1', audio, mimeType = 'audio/webm', language, fetchImpl = fetch } = {}) {

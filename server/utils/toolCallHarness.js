@@ -685,6 +685,39 @@ export function buildToolResultMessage(call, result, options) {
 }
 
 /**
+ * Browser screenshots need to be visible to the next model response, not
+ * embedded as an enormous base64 string inside JSON. Keep a compact tool
+ * result for protocol pairing, then add the PNG as a normal multimodal user
+ * message so native vision and vision-assist use the existing image path.
+ */
+export function buildToolResultMessages(call, result, options) {
+  const image = call?.name === 'browser_screenshot' ? result?.image : null
+  const data = typeof image?.data === 'string' ? image.data.trim() : ''
+  const mimeType = String(image?.mimeType || '').trim().toLowerCase()
+  if (!data || !/^image\/(?:png|jpe?g|webp|gif)$/u.test(mimeType)) {
+    return [buildToolResultMessage(call, result, options)]
+  }
+  const compactResult = {
+    ...result,
+    image: {
+      captured: true,
+      mimeType,
+      ...(Number.isFinite(Number(image?.bytes)) ? { bytes: Number(image.bytes) } : {}),
+    },
+  }
+  return [
+    buildToolResultMessage(call, compactResult, options),
+    {
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Browser screenshot captured by browser_screenshot. Inspect this image before continuing.' },
+        { type: 'image_url', image_url: { url: `data:${mimeType};base64,${data}` } },
+      ],
+    },
+  ]
+}
+
+/**
  * 有界并发映射，输出顺序始终与输入一致。
  * mapper 抛错时保持 Promise.all 语义向上抛，由调用方决定如何降级。
  */

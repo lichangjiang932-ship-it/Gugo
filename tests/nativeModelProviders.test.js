@@ -6,6 +6,10 @@ import {
   parseModelProviderResponse,
   streamOpenAICompatible,
 } from '../server/adapters/modelProxy.js'
+import {
+  consumeNativeProviderStreamPayload,
+  createNativeProviderStreamState,
+} from '../server/adapters/nativeModelProviders.js'
 import { resolveEndpointProfile } from '../server/utils/endpointProfile.js'
 
 const TOOL = {
@@ -29,6 +33,28 @@ const PDF_MESSAGE = {
     },
   ],
 }
+
+test('native stream preserves max-token truncation after a partial tool call', () => {
+  const state = createNativeProviderStreamState('anthropic')
+  consumeNativeProviderStreamPayload({
+    type: 'content_block_start',
+    index: 0,
+    content_block: { type: 'tool_use', id: 'partial', name: 'write_file' },
+  }, state)
+  consumeNativeProviderStreamPayload({
+    type: 'content_block_delta',
+    index: 0,
+    delta: { type: 'input_json_delta', partial_json: '{"path":"result' },
+  }, state)
+  consumeNativeProviderStreamPayload({
+    type: 'message_delta',
+    delta: { stop_reason: 'max_tokens' },
+  }, state)
+  const events = consumeNativeProviderStreamPayload({ type: 'message_stop' }, state)
+
+  assert.equal(events[0].type, 'tool_calls')
+  assert.equal(events[0].finishReason, 'length')
+})
 
 test('Anthropic 原生请求转换 system、PDF 与工具 schema', () => {
   const config = {

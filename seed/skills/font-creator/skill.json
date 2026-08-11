@@ -1,0 +1,9 @@
+{
+  "id": "font-creator",
+  "name": "Font Creator · 自定义字体",
+  "description": "通过 bash_exec 编排 Python/fontTools 或 FontForge，从矢量字形创建和验证自定义字体。",
+  "version": "1.0.0",
+  "icon": "🔤",
+  "permissions": ["在已授权目录执行字体构建脚本", "写入字体文件和验证报告"],
+  "source": { "type": "builtin", "license": "MIT" }
+}

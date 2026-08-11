@@ -5,6 +5,22 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import SettingsToolsPanel from '../../src/components/settings/SettingsToolsPanel.jsx'
+import { translateKey } from '../../src/i18n/translations.js'
+
+const NEW_TOOL_IDS = [
+  'image_info',
+  'image_transform',
+  'media_probe',
+  'media_transform',
+  'pdf_info',
+  'pdf_text',
+  'pdf_transform',
+  'archive_list',
+  'archive_create',
+  'archive_extract',
+  'batch_rename',
+  'file_hash_manifest',
+]
 
 function setupDom() {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
@@ -28,8 +44,9 @@ test('code execution settings describe the local runtime honestly and keep the t
   try {
     await act(async () => root.render(
       <SettingsToolsPanel
-        state={{ toolsConfig: { bash_exec: true } }}
+        state={{ toolsConfig: { bash_exec: true, archive_create: false } }}
         dispatch={(action) => actions.push(action)}
+        t={(key) => translateKey(key, 'zh')}
       />,
     ))
 
@@ -37,12 +54,25 @@ test('code execution settings describe the local runtime honestly and keep the t
     assert.match(rootElement.textContent, /Python、Node、PowerShell/)
     assert.match(rootElement.textContent, /已授权的读写目录/)
     assert.doesNotMatch(rootElement.textContent, /服务端还需显式启用/)
+    assert.equal(rootElement.querySelectorAll('button[data-tool-id]').length, 24)
+    for (const id of NEW_TOOL_IDS) {
+      assert.ok(rootElement.querySelector(`button[data-tool-id="${id}"]`), `${id} toggle is missing`)
+      assert.match(rootElement.textContent, new RegExp(id))
+    }
 
     const toggle = rootElement.querySelector('button[aria-label="执行代码与命令: 开启"]')
     assert.ok(toggle)
     assert.equal(toggle.getAttribute('aria-pressed'), 'true')
     await act(async () => toggle.click())
-    assert.deepEqual(actions, [{ type: 'SET_TOOLS_CONFIG', payload: { bash_exec: false } }])
+
+    const archiveToggle = rootElement.querySelector('button[aria-label="创建 ZIP 压缩包: 关闭"]')
+    assert.ok(archiveToggle)
+    assert.equal(archiveToggle.getAttribute('aria-pressed'), 'false')
+    await act(async () => archiveToggle.click())
+    assert.deepEqual(actions, [
+      { type: 'SET_TOOLS_CONFIG', payload: { bash_exec: false } },
+      { type: 'SET_TOOLS_CONFIG', payload: { archive_create: true } },
+    ])
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

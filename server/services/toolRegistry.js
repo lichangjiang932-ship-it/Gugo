@@ -2,6 +2,22 @@ import { MEMORY_TOOL_SPECS } from '../utils/memoryTools.js'
 import { normalizeToolRiskMetadata } from '../utils/toolRiskMetadata.js'
 import { isReadOnlyShellCommand } from '../utils/bashGuard.js'
 import { authenticateRequest } from '../middleware.js'
+import { BUILTIN_ARTIFACT_TOOL_SPECS } from './builtinArtifactToolSpecs.js'
+import { IMAGE_TOOL_SPECS } from '../adapters/imageTools.js'
+import { MEDIA_TOOL_SPECS } from '../adapters/mediaTools.js'
+import { PDF_TOOL_SPECS } from '../adapters/pdfTools.js'
+import { BATCH_FILE_TOOL_SPECS } from '../adapters/batchFileTools.js'
+import { FS_SHELL_TOOL_SPECS } from '../adapters/fsShellTools.js'
+import { GIT_TOOL_SPECS } from '../adapters/gitWorkbench.js'
+import { CODE_SEARCH_TOOL_SPECS } from '../utils/codeSearch.js'
+import { APPLY_PATCH_TOOL_SPECS } from '../utils/applyPatch.js'
+import { AGENTIC_TOOL_SPECS } from '../utils/agenticTools.js'
+
+function specsByName(specs) {
+  return Object.fromEntries((Array.isArray(specs) ? specs : [])
+    .map((spec) => [String(spec?.function?.name || '').trim(), spec])
+    .filter(([name]) => Boolean(name)))
+}
 /**
  * 服务端工具注册表（底座 A）
  *
@@ -397,6 +413,23 @@ const BUILTIN_SPECS = {
       },
     },
   },
+  // Override the historical frontend-compatible artifact schemas above with
+  // the exact contracts executed by TurnEngine. This is the server source of
+  // truth consumed by both /api/tools/specs and SERVER_TOOL_SPECS.
+  ...BUILTIN_ARTIFACT_TOOL_SPECS,
+  // Media/PDF/image adapters own their schemas. The registry and TurnEngine
+  // consume those same objects so adding a capability does not create another
+  // hand-maintained model-facing contract.
+  ...specsByName(IMAGE_TOOL_SPECS),
+  ...specsByName(MEDIA_TOOL_SPECS),
+  ...specsByName(PDF_TOOL_SPECS),
+  ...specsByName(BATCH_FILE_TOOL_SPECS),
+  ...specsByName(FS_SHELL_TOOL_SPECS),
+  ...specsByName(GIT_TOOL_SPECS),
+  ...specsByName(CODE_SEARCH_TOOL_SPECS),
+  ...specsByName(APPLY_PATCH_TOOL_SPECS),
+  ...specsByName(AGENTIC_TOOL_SPECS),
+  ...specsByName(MEMORY_TOOL_SPECS),
 }
 
 const READ_ONLY_MODE_TOOLS = new Set([
@@ -409,6 +442,12 @@ const READ_ONLY_MODE_TOOLS = new Set([
   'list_imports',
   'git_status',
   'git_diff',
+  'image_info',
+  'media_probe',
+  'pdf_info',
+  'pdf_text',
+  'archive_list',
+  'file_hash_manifest',
   'reflect',
   'request_clarification',
   'Agent',
@@ -423,8 +462,26 @@ const BUILTIN_CONCURRENCY_SAFE_TOOLS = new Set([
   'list_imports',
   'git_status',
   'git_diff',
+  'image_info',
+  'media_probe',
+  'pdf_info',
+  'pdf_text',
+  'archive_list',
+  'file_hash_manifest',
   'connected_app_list',
 ])
+const BUILTIN_WRITE_LOCAL_TOOLS = new Set([
+  'write_file',
+  'edit_file',
+  'apply_patch',
+  'multi_edit',
+  'image_transform',
+  'pdf_transform',
+  'archive_create',
+  'archive_extract',
+  'batch_rename',
+])
+const BUILTIN_EXEC_TOOLS = new Set(['bash_exec', 'media_transform'])
 const CODE_MODE_TOOLS = [
   'read_file',
   'write_file',
@@ -526,8 +583,8 @@ export function getToolMetadata(name, { args = {}, userId = null } = {}) {
     : READ_ONLY_MODE_TOOLS.has(name)
   const riskClass = isReadOnly
     ? 'read'
-    : (['write_file', 'edit_file', 'apply_patch', 'multi_edit'].includes(name) ? 'write_local'
-        : name === 'bash_exec' ? 'exec' : 'external')
+    : (BUILTIN_WRITE_LOCAL_TOOLS.has(name) ? 'write_local'
+        : BUILTIN_EXEC_TOOLS.has(name) ? 'exec' : 'external')
   return normalizeToolRiskMetadata({
     riskClass,
     isReadOnly,
@@ -591,6 +648,11 @@ export function resolveSpecsForMode(mode = 'chat', { subagentWhitelist = null, u
 
 export function listBuiltinNames() {
   return Object.keys(BUILTIN_SPECS)
+}
+
+/** Canonical model-facing specs for every statically executable server tool. */
+export function listBuiltinSpecs() {
+  return Object.values(BUILTIN_SPECS)
 }
 
 /**

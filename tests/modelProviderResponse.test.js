@@ -110,3 +110,39 @@ test('compatible response parsing supports legacy function_call and Responses fu
   assert.equal(responses.finishReason, 'tool_calls')
   assert.equal(responses.usage.totalTokens, 13)
 })
+
+test('compatible response preserves output-length truncation when tool calls are present', () => {
+  const parsed = parseModelProviderResponse({
+    choices: [{
+      message: {
+        content: '',
+        tool_calls: [{
+          id: 'truncated-write',
+          type: 'function',
+          function: { name: 'write_file', arguments: '{"path":"result.txt"' },
+        }],
+      },
+      finish_reason: 'length',
+    }],
+  })
+
+  assert.equal(parsed.toolCalls.length, 1)
+  assert.equal(parsed.finishReason, 'length')
+})
+
+test('Responses JSON preserves max-output truncation when function calls are present', () => {
+  const parsed = parseModelProviderResponse({
+    status: 'incomplete',
+    incomplete_details: { reason: 'max_output_tokens' },
+    output: [{
+      type: 'function_call',
+      call_id: 'responses-truncated-write',
+      name: 'write_file',
+      arguments: JSON.stringify({ path: 'result.txt', content: 'looks complete but is not safe to run' }),
+    }],
+  })
+
+  assert.equal(parsed.toolCalls.length, 1)
+  assert.equal(parsed.toolCalls[0].function.name, 'write_file')
+  assert.equal(parsed.finishReason, 'length')
+})

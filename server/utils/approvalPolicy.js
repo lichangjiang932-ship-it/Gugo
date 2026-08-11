@@ -16,7 +16,7 @@ export const DEFAULT_APPROVAL_MODE = 'unattended'
 
 /**
  * 每用户的权限档位(对齐 Claude Code / Codex)。和上面的 env 级 APPROVAL_MODE 是两层:
- *   env APPROVAL_MODE  = 部署者决定「审批系统开不开、管不管交互式聊天」
+ *   env APPROVAL_MODE  = 部署者决定审批队列是否可用；不会覆盖用户档位的安全边界
  *   用户 PERMISSION_MODE = 用户决定「我现在要被问到什么程度」
  *
  *   normal      —— 默认。写操作、shell、外部写请求都要问。
@@ -28,7 +28,16 @@ export const PERMISSION_MODES = Object.freeze(['normal', 'acceptEdits', 'plan', 
 export const DEFAULT_PERMISSION_MODE = 'normal'
 
 /** acceptEdits 档位下自动放行的工具:只碰文件,不执行命令、不发外部请求。 */
-const EDIT_TOOLS = Object.freeze(['write_file', 'edit_file', 'apply_patch'])
+const EDIT_TOOLS = Object.freeze([
+  'write_file',
+  'edit_file',
+  'apply_patch',
+  'image_transform',
+  'pdf_transform',
+  'archive_create',
+  'archive_extract',
+  'batch_rename',
+])
 
 // 24h。Windows CI 下任何 < 5000ms 的默认值都会 flake(见 AGENTS.md 五),这里远大于阈值。
 export const DEFAULT_APPROVAL_TIMEOUT_MS = 86_400_000
@@ -42,6 +51,12 @@ export const APPROVAL_REQUIRED_TOOLS = Object.freeze({
   write_file: 'medium',
   edit_file: 'medium',
   apply_patch: 'medium',
+  image_transform: 'medium',
+  pdf_transform: 'medium',
+  media_transform: 'high',
+  archive_create: 'medium',
+  archive_extract: 'medium',
+  batch_rename: 'medium',
   git_commit: 'high',
   git_push: 'high',
   git_rollback: 'high',
@@ -57,7 +72,7 @@ export const APPROVAL_REQUIRED_TOOLS = Object.freeze({
 })
 
 // Sending mail is an irreversible external side effect. Keep it as a
-// per-call decision even when interactive chat normally runs unattended.
+// per-call decision unless the user explicitly selects bypass.
 const ALWAYS_CONFIRM_TOOLS = CONNECTOR_WRITE_TOOL_SET
 
 /** 一望即知无副作用的读类工具,永不审批(白名单优先于上表)。 */
@@ -74,6 +89,12 @@ export const NEVER_APPROVE_TOOLS = Object.freeze([
   'list_imports',
   'git_status',
   'git_diff',
+  'image_info',
+  'media_probe',
+  'pdf_info',
+  'pdf_text',
+  'archive_list',
+  'file_hash_manifest',
   'web_search',
   'browser_state',
   'browser_snapshot',
@@ -164,6 +185,14 @@ function str(value) {
   return typeof value === 'string' ? value : ''
 }
 
+function explicitConfirmationReason(toolName, args = {}) {
+  if (toolName !== 'pdf_transform') return null
+  const operation = str(args.operation).trim().toLowerCase()
+  if (operation === 'fill_form') return '填写 PDF 表单可能写入错误或敏感内容'
+  if (operation === 'overlay_text') return '覆盖 PDF 原文区域可能遮盖既有内容'
+  return null
+}
+
 /**
  * 解析 APPROVAL_MODE。非法值回落到默认,不 throw(注入路径不 throw,见 AGENTS.md 2.5.3)。
  */
@@ -195,16 +224,15 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
   // options 显式传 null 时 default 参数不生效,这里兜一道 —— 本模块在 prompt/工具
   // 注入路径上被调用,不许 throw(AGENTS.md 2.5.3)。
   const opts = options && typeof options === 'object' ? options : {}
-  const mode = opts.mode || resolveApprovalMode()
-  const origin = opts.origin || 'job'
+  const mode = APPROVAL_MODES.includes(opts.mode) ? opts.mode : resolveApprovalMode()
   const permissionMode = PERMISSION_MODES.includes(opts.permissionMode)
     ? opts.permissionMode
     : DEFAULT_PERMISSION_MODE
   const rememberedGrants = Array.isArray(opts.rememberedGrants) ? opts.rememberedGrants : []
   const safeArgs = args && typeof args === 'object' ? args : {}
-  const alwaysConfirm = ALWAYS_CONFIRM_TOOLS.has(name)
+  const parameterConfirmationReason = explicitConfirmationReason(name, safeArgs)
+  const alwaysConfirm = ALWAYS_CONFIRM_TOOLS.has(name) || !!parameterConfirmationReason
 
-  if (mode === 'off') return { needsApproval: false, risk: 'low', reason: null }
   // ★ 空工具名不能当成「安全」放行 —— 那是 fail-open。
   // 归一化漏了(比如上游 wire 形状没被解开)时 name 会是空串,
   // 以前这里直接返回不需审批,等于让一个身份不明的调用绕过整个门控。
@@ -219,20 +247,30 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
   }
   if (NEVER.has(name)) return { needsApproval: false, risk: 'low', reason: null }
 
-  // bypass:用户显式选了全放行
-  if (permissionMode === 'bypass') return { needsApproval: false, risk: 'low', reason: null }
+  let risk = APPROVAL_REQUIRED_TOOLS[name] || (alwaysConfirm ? 'medium' : undefined)
+  let reason = parameterConfirmationReason || (alwaysConfirm ? '\u5916\u90e8\u5de5\u5177\u7684\u5199\u64cd\u4f5c' : null)
 
-  // unattended 模式:交互式聊天不拦(前端已有 apply_patch 弹窗),只拦无人值守路径
-  if (mode === 'unattended' && origin === 'chat' && !alwaysConfirm) {
+  // 明确的无副作用参数优先于工具级风险。plan 模式也可以安全预览/读取。
+  if (name === 'apply_patch' && safeArgs.dry_run === true) {
     return { needsApproval: false, risk: 'low', reason: null }
   }
-
-  let risk = APPROVAL_REQUIRED_TOOLS[name] || (alwaysConfirm ? 'medium' : undefined)
-  let reason = alwaysConfirm ? '\u5916\u90e8\u5de5\u5177\u7684\u5199\u64cd\u4f5c' : null
+  if (name === 'fetch_url') {
+    const method = str(safeArgs.method).toUpperCase() || 'GET'
+    if (SAFE_HTTP_METHODS.has(method)) return { needsApproval: false, risk: 'low', reason: null }
+  }
 
   const metadata = opts.metadata && typeof opts.metadata === 'object' ? opts.metadata : null
   if (metadata) {
     if (!alwaysConfirm && (metadata.requiresApproval === false || metadata.riskClass === 'read')) {
+      // 风险覆盖可以在正常执行时免审,但不能把已知写工具伪装成只读来绕过 plan。
+      if (permissionMode === 'plan' && (risk || WRITE_INTENT_RE.test(name))) {
+        return {
+          needsApproval: false,
+          denied: true,
+          risk: risk || 'medium',
+          reason: '当前是计划模式(只读),不执行任何写操作。要执行请切回正常模式。',
+        }
+      }
       return { needsApproval: false, risk: 'low', reason: null }
     }
     risk = metadata.riskClass === 'exec' ? 'high' : 'medium'
@@ -246,37 +284,6 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
       reason = '外部工具的写操作'
     } else {
       return { needsApproval: false, risk: 'low', reason: null }
-    }
-  }
-
-  // plan 档位:任何需要审批的(即有副作用的)操作一律拒绝,不是问,是不许。
-  // 这样用户能安全地让模型「只看不动」地过一遍方案。
-  if (permissionMode === 'plan') {
-    return {
-      needsApproval: false,
-      denied: true,
-      risk,
-      reason: '当前是计划模式(只读),不执行任何写操作。要执行请切回正常模式。',
-    }
-  }
-
-  // acceptEdits:改文件放行,shell / 外部写请求仍然要问
-  if (permissionMode === 'acceptEdits' && EDIT_TOOLS.includes(name)) {
-    return { needsApproval: false, risk, reason: null }
-  }
-
-  // 用户对这个工具点过「总是允许」
-  const rememberedGrant = findRememberedGrant(name, safeArgs, rememberedGrants)
-  if (rememberedGrant && !alwaysConfirm) {
-    return {
-      needsApproval: false,
-      risk,
-      reason: null,
-      authorization: {
-        kind: 'standing_rule',
-        toolName: name,
-        scope: rememberedGrant.commandPrefix || '',
-      },
     }
   }
 
@@ -294,14 +301,11 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
       reason = reason || '修改文件'
     }
   } else if (name === 'apply_patch') {
-    // dry_run 只预览不落盘,无副作用
-    if (safeArgs.dry_run === true) return { needsApproval: false, risk: 'low', reason: null }
     const count = Array.isArray(safeArgs.changes) ? safeArgs.changes.length : 0
     reason = count ? `原子修改 ${count} 个文件` : '原子修改文件'
     if (count > 5) risk = higher(risk, 'high')
   } else if (name === 'fetch_url') {
     const method = str(safeArgs.method).toUpperCase() || 'GET'
-    if (SAFE_HTTP_METHODS.has(method)) return { needsApproval: false, risk: 'low', reason: null }
     risk = higher(risk, 'medium')
     reason = `对外发起 ${method} 请求`
   } else if (name === 'browser_click' || name === 'browser_type') {
@@ -310,6 +314,49 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
     reason = '打开外部应用'
   } else if (name === 'qq_mail_send') {
     reason = '发送外部邮件'
+  }
+
+  // 用户档位是最终权限边界；部署级开关不能削弱它。
+  if (permissionMode === 'plan') {
+    return {
+      needsApproval: false,
+      denied: true,
+      risk,
+      reason: '当前是计划模式(只读),不执行任何写操作。要执行请切回正常模式。',
+    }
+  }
+
+  // bypass 是唯一对已识别副作用工具全放行的档位。
+  if (permissionMode === 'bypass') return { needsApproval: false, risk, reason: null }
+
+  // acceptEdits:可逆的本地编辑自动放行；shell、外部写入及 PDF 覆盖/填表仍需确认。
+  if (permissionMode === 'acceptEdits' && EDIT_TOOLS.includes(name) && !alwaysConfirm) {
+    return { needsApproval: false, risk, reason: null }
+  }
+
+  // 用户对这个目标范围点过「总是允许」。高风险 shell 和强制逐次确认项不会命中此处。
+  const rememberedGrant = findRememberedGrant(name, safeArgs, rememberedGrants)
+  if (rememberedGrant && !alwaysConfirm) {
+    return {
+      needsApproval: false,
+      risk,
+      reason: null,
+      authorization: {
+        kind: 'standing_rule',
+        toolName: name,
+        scope: rememberedGrant.commandPrefix || '',
+      },
+    }
+  }
+
+  // off 只关闭审批队列,不代表信任所有调用。没有其它授权时保守拒绝。
+  if (mode === 'off') {
+    return {
+      needsApproval: false,
+      denied: true,
+      risk,
+      reason: '审批队列已关闭,危险操作已保守拒绝。请开启审批,或显式切换到 bypass 模式。',
+    }
   }
 
   return { needsApproval: true, risk, reason }

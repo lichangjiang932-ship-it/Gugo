@@ -71,7 +71,10 @@ export async function handleJobRequest(req, res, runtime) {
     const body = await readJson(req)
     const prompt = String(body.prompt || '').trim()
     if (!prompt) return sendJson(res, 400, { error: 'prompt is required' })
-    const job = await runtime.createJob(prompt, { userId })
+    const job = await runtime.createJob(prompt, {
+      userId,
+      requirePlanApproval: body.requirePlanApproval === true,
+    })
     return sendJson(res, 201, { job })
   }
 

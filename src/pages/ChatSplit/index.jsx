@@ -4,6 +4,11 @@ import { useAppContext } from '../../store/AppContext'
 import { describeAttachmentPrompt } from '../../lib/attachments.js'
 import { buildToolSpecs } from '../../lib/tools/index.js'
 import { SERVER_TURN_TOOL_TOGGLE_NAMES } from '../../lib/serverToolConfig.js'
+import {
+  buildServerToolCatalogFallback,
+  fetchServerToolCatalog,
+  selectEnabledServerToolSpecs,
+} from '../../lib/serverToolCatalog.js'
 import { readStoredModel, resolveSessionModel, writeStoredModel } from '../../lib/modelSelection.js'
 import { isLoggedInLocally } from '../../lib/accountClient.js'
 import { useActiveAgent } from '../../agents/activeAgentContext.js'
@@ -79,10 +84,24 @@ export default function ChatSplit() {
     latestServerAssistant?.meta?.serverResumeResolution ? 'resolution' : '',
   ].join(':')
   const navigateInputHistory = useInputHistory({ messages, input, setInput, sessionId: activeSessionId })
-  const contextToolSpecs = useMemo(() => {
-    try { return buildToolSpecs(SERVER_TURN_TOOL_TOGGLE_NAMES.filter((name) => state.toolsConfig?.[name] === true)) }
-    catch { return [] }
+  const fallbackContextToolSpecs = useMemo(() => {
+    const enabledNames = SERVER_TURN_TOOL_TOGGLE_NAMES.filter((name) => state.toolsConfig?.[name] === true)
+    try { return buildServerToolCatalogFallback(enabledNames, buildToolSpecs(enabledNames)) }
+    catch { return buildServerToolCatalogFallback(enabledNames) }
   }, [state.toolsConfig])
+  const [serverToolCatalog, setServerToolCatalog] = useState(null)
+  useEffect(() => {
+    let active = true
+    fetchServerToolCatalog()
+      .then((catalog) => { if (active) setServerToolCatalog(catalog) })
+      .catch(() => { /* Context estimation keeps server-tool placeholders without duplicating schemas. */ })
+    return () => { active = false }
+  }, [])
+  const contextToolSpecs = useMemo(() => (
+    serverToolCatalog
+      ? selectEnabledServerToolSpecs(serverToolCatalog, state.toolsConfig)
+      : fallbackContextToolSpecs
+  ), [fallbackContextToolSpecs, serverToolCatalog, state.toolsConfig])
   const effectiveSelectedModel = resolveSessionModel(modelOptions, {
     sessionModel: activeSession?.modelName,
     selectedModel,

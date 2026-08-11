@@ -44,6 +44,7 @@ test('Windows cancellation waits for a cmd child tree to release its working dir
 
       assert.equal(result.aborted, true)
       assert.equal(result.killed, true)
+      assert.equal(result.processTreeCleanupFailed, false)
       assert.doesNotThrow(() => {
         fs.rmSync(root, { recursive: true, force: true })
         removed = true

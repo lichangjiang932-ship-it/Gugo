@@ -19,6 +19,18 @@ export const SERVER_TURN_TOOL_TOGGLE_NAMES = Object.freeze([
   'git_status',
   'git_diff',
   'run_project_check',
+  'image_info',
+  'image_transform',
+  'media_probe',
+  'media_transform',
+  'pdf_info',
+  'pdf_text',
+  'pdf_transform',
+  'archive_list',
+  'archive_create',
+  'archive_extract',
+  'batch_rename',
+  'file_hash_manifest',
   'manage_todos',
 ])
 

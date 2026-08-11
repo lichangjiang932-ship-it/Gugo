@@ -24,6 +24,9 @@ git --version
 - Edge 或 Chrome：仅 Browser 自动化需要。
 - Docker 与 Docker Compose：仅容器部署需要。
 - SMTP 邮箱：仅 `AUTH_MODE=multi_user` 需要；局域网、公网或多人使用时必须配置，默认本机模式不需要。
+- FFmpeg：视频/音频处理需要 `ffmpeg` 和 `ffprobe`；Windows 安装包内置，源码/容器部署需安装后加入 `PATH` 或配置绝对路径。
+- FontForge 或 Python `fontTools`：仅自定义字体脚本 Skill 需要；它不是 Gugo 内建字体编辑器。
+- LibreOffice：仅在需要通过 Shell 尝试 PDF↔Word 转换时可选；转换结果必须视觉复核，不保证无损。
 - Python、C/C++ 构建工具：通常不需要；若 `better-sqlite3` 没有适配当前平台的预编译包，npm 会提示安装本地编译工具。
 
 ## 2. 获取与安装
@@ -100,13 +103,15 @@ OLLAMA_KEEP_ALIVE=30m
 | `APP_DATA_DIR` | `server-data/` | SQLite、运行时配置、默认凭据密钥和浏览器 Profile |
 | `APP_DB_PATH` | `server-data/app.db` | 自定义 SQLite 文件位置 |
 | `ARTIFACT_DIR` | `.artifacts/` | 生成的 PPT、文档等文件目录 |
-| `APPROVAL_MODE` | `unattended` | `off`、`unattended` 或 `all` |
+| `APPROVAL_MODE` | `unattended` | 审批队列策略：`off` 保守拒绝未授权危险操作，`unattended` / `all` 启用逐次审批；用户 `bypass` 档位才会全放行 |
 | `WORKSPACE_ROOT` | 仓库启动目录 | 文件、Shell 和 Git 工具允许访问的根目录 |
 | `WORKSPACE_FS_ENABLED` | `0` | 开启工作区文件工具 |
 | `WORKSPACE_SHELL_ENABLED` | `0` | 开启共享 `WORKSPACE_ROOT` 的 Shell；等同授予服务器进程权限 |
 | `LOCAL_CODE_EXECUTION_ENABLED` | 本机回环模式为 `1`，其余为 `0` | 控制用户已授权 `read_write` 目录中的代码执行；显式 `0` 可关闭 |
 | `WORKSPACE_GIT_ENABLED` | `0` | 开启 Git 读取工具 |
 | `WORKSPACE_GIT_MUTATION_ENABLED` | `0` | 允许 Git 写操作 |
+| `GUGO_FFMPEG_PATH` | 自动探测 | `ffmpeg` 可执行文件绝对路径 |
+| `GUGO_FFPROBE_PATH` | 自动探测 | `ffprobe` 可执行文件绝对路径 |
 | `APP_PUBLIC_URL` | 空 | 生产 OAuth 回调的固定公网 Origin |
 | `TRUST_PROXY` | `0` | 是否信任已清洗的反向代理转发头 |
 | `CREDENTIAL_ENCRYPTION_KEY` | 自动生成本地密钥文件 | 连接器和模型凭据的 32 字节主密钥 |
@@ -212,13 +217,34 @@ Invoke-WebRequest http://127.0.0.1:5175/api/health
 
 1. 始终使用同一个地址打开应用，例如 `http://127.0.0.1:5175`。
 2. 默认 `AUTH_MODE=local` 会自动进入工作台，无需注册、邮箱或密码。
-3. 进入“设置 → 模型”，新增自己的 OpenAI 兼容、Anthropic、Gemini、Ollama 或 LM Studio Provider，并运行检测。
-4. 进入“设置 → 系统诊断”，执行模型连接测试。
-5. 本机代码执行只需在界面中明确授予目标目录 `read_write`；共享工作区 Shell 或 Git 仍需在 `.env` 中开启必要的全局能力并信任对应工作区。
+3. 在运行 Gugo 服务的电脑上通过回环地址进入“权限中心 → 首次启动 · 开启本地工作区”，选择一个工作目录，按需开启文件、Shell 和 Git，选择审批模式并确认风险；远程请求不能修改这项配置。所选目录会获得 `read_write` 授权，不会开放整台电脑。被 `.env` 或其他更高优先级配置锁定的开关只能由管理员修改。
+4. 进入“设置 → 模型”，新增自己的 OpenAI 兼容、Anthropic、Gemini、Ollama 或 LM Studio Provider，并运行检测。
+5. 进入“设置 → 系统诊断”，执行模型连接测试。
 6. 新建一次普通对话确认流式输出正常，再测试工具调用。
 7. 进入“设置 → 数据 & 导出”导出一次会话备份，确认自己的备份流程可用。
 
 只有局域网、公网或多人部署才启用 `AUTH_MODE=multi_user`。启用后必须配置 SMTP；首次用户通过邮箱验证码登录，可再设置密码。没有 SMTP 的验证码回显仅用于回环地址上的开发调试，禁止暴露到网络。
+
+### Goal 的计划审批流程
+
+在对话中输入 `/goals <目标>` 会创建后台 Goal 并打开任务中心。任务先只生成计划，状态停在等待中；可在计划卡片里编辑、排序、增删步骤，再选择“批准并开始执行”。此计划批准点由 Goal 自身强制要求，即使当前审批模式是“全部放行”也不会跳过。
+
+批准后，任务继续执行和验证，并持久化步骤、事件和检查点；若批准前处于“仅计划”模式，系统会切回交互确认模式，其他审批模式保持不变。服务重启或执行中断后可从已保存状态恢复；失败步骤仍可在任务中心单独重试。`/goals` 不等于永久放开工具权限，后续工具调用仍遵循当前审批模式、目录授权和服务端能力开关。
+
+### 图片、媒体、PDF 与批量文件
+
+| 工具 | 用途 | 主要边界 |
+|---|---|---|
+| `image_info` / `image_transform` | 检查图片元数据；格式转换、缩放、裁剪、旋转、翻转、灰度、模糊、锐化、归一化 | 受像素和输入/输出字节限制；默认不覆盖已有输出 |
+| `media_probe` / `media_transform` | 检查音视频流；剪辑、转码、提取音频、抽帧、变速、GIF、字幕烧录、拼接、音量调整、`denoise_audio` FFT 降噪 | 依赖 `ffmpeg` / `ffprobe`；无损拼接要求流兼容，不兼容时可明确选择重编码；强降噪可能损伤语音或音乐 |
+| `pdf_info` / `pdf_text` / `pdf_transform` | 检查页数、元数据和表单；提取逐页文本/坐标；合并、拆分、旋转、中文水印、中文填表、坐标式文字遮盖重绘 | 加密、XFA 或已签名 PDF 不支持安全改写；文本提取不是 OCR；输出后应重新检查并渲染复核 |
+| `archive_list` / `archive_create` / `archive_extract` | 不落地预览 ZIP/RAR4/RAR5、流式创建 ZIP，或安全解压 ZIP/RAR4/RAR5 | 创建仅支持 ZIP32；不支持 ZIP64、加密或多卷归档，也不创建 RAR |
+| `batch_rename` | 分阶段执行显式的文件或整个目录批量重命名，支持交换和循环 | 同一批次不能同时选择父目录及其后代；不跨文件系统移动，默认不覆盖无关路径 |
+| `file_hash_manifest` | 流式生成 SHA-256 清单和精确重复文件组 | 只报告完全相同的文件，不自动删除或归档 |
+
+这些工具按已授权路径处理大型二进制文件，不受普通 `read_file` 的 5 MB UTF-8 文本上限约束；它们仍有各自的安全限额。图片、媒体、PDF 和新建 ZIP 输出会异步复制为受管 Artifact，并在任务中提供下载链接。源文件默认保留，输出后应使用对应的 `*_info` / `media_probe` 或解压校验确认结果。
+
+需要覆盖原文时，先用 `pdf_text` 取得定位项，再把左下角原点的 PDF 点坐标传给 `pdf_transform` 的 `overlay_text`。它覆盖指定矩形后以随应用捆绑的 CJK 字体绘制一行文字，不会修改底层文本流、自动换行或重排段落。OCR、PDF→Word、Word→PDF 和任意文本重排不是内建 PDF 能力；有 LibreOffice 和 `bash_exec` 时只能做需视觉复核的尽力转换。自定义字体同样是依赖外部 FontForge 或 Python `fontTools` 的脚本 Skill，不是内建编辑器。
 
 ## 6. 日常开发与检查
 
@@ -335,6 +361,10 @@ npm run serve
 
 确认正在使用 Node.js 20 或更高版本，并已安装 Edge/Chrome；必要时设置 `BROWSER_EXECUTABLE_PATH`。普通桌面环境不要设置 `BROWSER_NO_SANDBOX=1`。容器中还需自行安装浏览器及其系统依赖。
 
+### 媒体工具提示 `MEDIA_BINARY_NOT_FOUND`
+
+确认 `ffmpeg -version` 和 `ffprobe -version` 在启动 Gugo 的同一用户/容器中均可执行。若服务进程的 `PATH` 不同，在 `.env` 中设置 `GUGO_FFMPEG_PATH` 和 `GUGO_FFPROBE_PATH` 的绝对路径后重启。Windows 安装版若出现该错误，请修复/重装安装包，不要把来源不明的二进制复制到安装目录。
+
 ### `better-sqlite3` 安装失败
 
 先确认 Node.js 为受支持的正式版本并重新执行 `npm ci`。若平台没有预编译包，按错误提示安装 Python、编译器和构建工具；Windows 通常需要 Visual Studio Build Tools，Debian/Ubuntu 通常需要 `python3 make g++`。
@@ -356,7 +386,7 @@ docker compose logs app
 - 未信任工作区默认只读。不要为了省事在多人或公网部署中设置 `WORKSPACE_SHARED_TRUSTED=1`。
 - 局域网部署必须配置 SMTP、防火墙和可信网络边界；公网部署还必须使用 HTTPS、强密码、反向代理限流，并设置固定 `APP_PUBLIC_URL`。
 - 只有反向代理已经清除客户端伪造的转发头时才设置 `TRUST_PROXY=1`。
-- 生产环境建议使用 `APPROVAL_MODE=all`；`off` 会让高风险工具不经人工确认直接执行。
+- 生产环境建议使用 `APPROVAL_MODE=all`；`off` 会关闭审批队列并保守拒绝未被用户档位或常驻规则授权的危险操作。不要在普通桌面或公网服务上选择用户 `bypass` 档位。
 - 保持 `MCP_STDIO_ENABLED=0`、`HOOKS_SHELL_ENABLED=0`，除非明确需要并配置了最小命令白名单。
 - 不要在普通桌面或公网服务上设置 `BROWSER_NO_SANDBOX=1`。
 - 自定义 Webhook 必须配置签名 Secret，并使用带时间戳的 HMAC；OAuth 回调必须使用固定公网 Origin。详见 [CONFIGURATION.md](./CONFIGURATION.md)。

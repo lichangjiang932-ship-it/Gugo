@@ -8,6 +8,7 @@ import {
   PermissionStats,
   ToolGateSection,
   WorkbenchPolicySection,
+  WorkspaceOnboardingSection,
   WorkspaceTrustSection,
 } from './permissions/PermissionSections.jsx'
 import usePermissionsDashboard from './permissions/usePermissionsDashboard.js'
@@ -25,6 +26,7 @@ export default function PermissionsDashboard() {
           <button onClick={controller.runChecks} disabled={controller.checking} className="flex h-9 items-center gap-1.5 rounded-md border border-dashed border-ink-fade/60 px-4 font-hand text-sm text-ink-soft transition-colors hover:border-ink-fade disabled:opacity-50"><RefreshCw className={`h-4 w-4 ${controller.checking ? 'animate-spin' : ''}`} />{controller.checking ? t('permissionsDashboard.checking') : t('permissionsDashboard.refresh')}</button>
         </div>
         <PermissionStats controller={controller} t={t} />
+        <WorkspaceOnboardingSection key={controller.localFiles?.onboarding?.completedAt || (controller.localFiles ? 'loaded' : 'loading')} controller={controller} t={t} />
         <WorkbenchPolicySection appState={appState} dispatch={dispatch} t={t} />
         <CodeExecutionStatusSection controller={controller} t={t} />
         <WorkspaceTrustSection controller={controller} t={t} />

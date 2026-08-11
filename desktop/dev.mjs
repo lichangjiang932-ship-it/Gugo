@@ -1,5 +1,6 @@
 import path from 'node:path'
 import { spawn } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { getRuntimeEnv } from '../server/utils/runtimeEnv.js'
 
@@ -12,6 +13,11 @@ const viteEntry = path.join(rootDir, 'node_modules', 'vite', 'bin', 'vite.js')
 const electronBinary = process.platform === 'win32'
   ? path.join(rootDir, 'node_modules', 'electron', 'dist', 'electron.exe')
   : path.join(rootDir, 'node_modules', 'electron', 'dist', 'electron')
+const desktopEnv = { ...process.env, YMA_DESKTOP_DEV_URL: devUrl }
+const ffmpegSidecar = path.join(rootDir, 'resources', 'bin', 'ffmpeg.exe')
+const ffprobeSidecar = path.join(rootDir, 'resources', 'bin', 'ffprobe.exe')
+if (!desktopEnv.GUGO_FFMPEG_PATH && existsSync(ffmpegSidecar)) desktopEnv.GUGO_FFMPEG_PATH = ffmpegSidecar
+if (!desktopEnv.GUGO_FFPROBE_PATH && existsSync(ffprobeSidecar)) desktopEnv.GUGO_FFPROBE_PATH = ffprobeSidecar
 
 const children = new Set()
 let stopping = false
@@ -63,7 +69,7 @@ try {
   ])
 
   const electron = start(electronBinary, ['.'], {
-    env: { ...process.env, YMA_DESKTOP_DEV_URL: devUrl },
+    env: desktopEnv,
   })
   const [code] = await onceExit(electron)
   stopAll()

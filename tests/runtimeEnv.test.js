@@ -4,7 +4,13 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { getRuntimeEnv, readRuntimeConfigFile, readRuntimeEnvFile } from '../server/utils/runtimeEnv.js'
+import {
+  getRuntimeEnv,
+  getWorkspaceRuntimeConfiguration,
+  readRuntimeConfigFile,
+  readRuntimeEnvFile,
+  updateWorkspaceRuntimeConfiguration,
+} from '../server/utils/runtimeEnv.js'
 
 test('runtime env reads .env values and lets process variables override them', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-env-'))
@@ -71,4 +77,48 @@ test('runtime env can disable cwd dotenv for packaged desktop isolation', () => 
   const runtime = getRuntimeEnv({ GUGO_LOAD_DOTENV: '0' }, { cwd })
   assert.equal(runtime.MODEL_PROVIDERS, undefined)
   assert.equal(runtime.MODEL_NAME, undefined)
+})
+
+test('workspace onboarding runtime switches persist atomically with completion metadata', () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-workspace-onboarding-env-'))
+  const dataDir = path.join(cwd, 'data')
+  const keys = ['WORKSPACE_FS_ENABLED', 'WORKSPACE_SHELL_ENABLED', 'WORKSPACE_GIT_ENABLED']
+  const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]))
+  const env = { APP_DATA_DIR: dataDir, GUGO_LOAD_DOTENV: '0' }
+  for (const key of keys) {
+    if (process.env[key] !== undefined) env[key] = process.env[key]
+  }
+
+  try {
+    const before = getWorkspaceRuntimeConfiguration({ cwd, env })
+    const desired = {
+      WORKSPACE_FS_ENABLED: before.features.WORKSPACE_FS_ENABLED.locked
+        ? before.features.WORKSPACE_FS_ENABLED.enabled : true,
+      WORKSPACE_SHELL_ENABLED: before.features.WORKSPACE_SHELL_ENABLED.locked
+        ? before.features.WORKSPACE_SHELL_ENABLED.enabled : true,
+      WORKSPACE_GIT_ENABLED: before.features.WORKSPACE_GIT_ENABLED.locked
+        ? before.features.WORKSPACE_GIT_ENABLED.enabled : false,
+    }
+    const completedAt = 1_786_400_000_000
+    const result = updateWorkspaceRuntimeConfiguration({
+      cwd,
+      env,
+      features: desired,
+      completedAt,
+    })
+    assert.equal(result.completedAt, completedAt)
+    const filePath = path.join(dataDir, 'runtime.json')
+    const saved = JSON.parse(fs.readFileSync(filePath, 'utf8'))
+    assert.deepEqual(saved.env, Object.fromEntries(
+      Object.entries(desired).map(([key, value]) => [key, value ? '1' : '0']),
+    ))
+    assert.equal(saved.onboarding.completedAt, completedAt)
+    assert.equal(fs.readdirSync(dataDir).some((name) => name.endsWith('.tmp')), false)
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+    fs.rmSync(cwd, { recursive: true, force: true })
+  }
 })

@@ -166,6 +166,19 @@ export function extractUsage(data) {
   }
 }
 
+function normalizeCompatibleFinishReason(value, hasToolCalls = false) {
+  const raw = String(value || '').trim()
+  const normalized = raw.toLowerCase()
+  // Responses JSON uses status="incomplete" plus
+  // incomplete_details.reason="max_output_tokens" instead of a Chat
+  // Completions finish_reason. Treat an incomplete response without details as
+  // truncated too: executing an otherwise valid-looking partial tool call is
+  // less safe than asking the model to regenerate it.
+  if (['length', 'max_tokens', 'max_output_tokens', 'incomplete'].includes(normalized)) return 'length'
+  if (hasToolCalls || normalized === 'function_call' || normalized === 'tool_calls') return 'tool_calls'
+  return raw || null
+}
+
 export function parseModelProviderResponse(data, profile = {}) {
   const responseError = extractModelResponseError(data)
   if (responseError) throw responseError
@@ -174,16 +187,19 @@ export function parseModelProviderResponse(data, profile = {}) {
     return { ...parsed, content: stripEmbeddedReasoning(parsed?.content) }
   }
   const toolCalls = extractCompatibleToolCalls(data)
-  const rawFinishReason = data?.choices?.[0]?.finish_reason
+  const responseStatus = data?.status || data?.response?.status
+  const incompleteReason = data?.incomplete_details?.reason
+    || data?.response?.incomplete_details?.reason
+  const rawFinishReason = incompleteReason
+    || data?.choices?.[0]?.finish_reason
     || data?.done_reason
     || data?.stop_reason
+    || (String(responseStatus || '').toLowerCase() === 'incomplete' ? 'incomplete' : null)
     || null
   return {
     content: stripEmbeddedReasoning(extractModelResponseText(data)),
     toolCalls,
     usage: extractUsage(data),
-    finishReason: toolCalls.length || rawFinishReason === 'function_call'
-      ? 'tool_calls'
-      : rawFinishReason,
+    finishReason: normalizeCompatibleFinishReason(rawFinishReason, toolCalls.length > 0),
   }
 }

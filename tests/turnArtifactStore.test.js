@@ -10,11 +10,17 @@ process.env.ARTIFACT_DIR = path.join(tempDir, 'artifacts')
 
 const { closeDb, createUser } = await import('../server/db.js')
 const { TurnEngine } = await import('../server/services/TurnEngine.js')
+const { setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
 const { getSessionSnapshot, upsertSession } = await import('../server/services/sessionStore.js')
 const { getTurnArtifactByFilename, listTurnArtifacts } = await import('../server/services/turnArtifactStore.js')
-const { persistLocalToolArtifacts } = await import('../server/services/toolLoopRuntime.js')
+const {
+  persistLocalToolArtifacts,
+  runToolsLoop,
+  SERVER_TOOL_SPECS,
+} = await import('../server/services/toolLoopRuntime.js')
 
 createUser({ id: 'artifact-user', email: 'turn-artifact@example.com' })
+setApprovalMode({ userId: 'artifact-user', mode: 'bypass' })
 upsertSession({ id: 'artifact-session', userId: 'artifact-user', title: 'Artifacts' })
 
 test.after(() => {
@@ -98,6 +104,93 @@ test('/webpage creates a persisted self-contained HTML artifact for preview', as
   assert.match(artifacts[0].filename, /\.html$/)
   const saved = fs.readFileSync(path.join(process.env.ARTIFACT_DIR, artifacts[0].filename), 'utf8')
   assert.match(saved, /<main>本地模型介绍<\/main>/)
+})
+
+test('archive_create publishes its ZIP as a downloadable turn artifact', async () => {
+  const archivePath = path.join(tempDir, 'bundled-output.zip')
+  fs.writeFileSync(archivePath, Buffer.from('PK\x03\x04test-archive'))
+  const archiveCreate = SERVER_TOOL_SPECS.find((item) => (
+    item?.function?.name === 'archive_create'
+  ))
+  const archiveList = SERVER_TOOL_SPECS.find((item) => (
+    item?.function?.name === 'archive_list'
+  ))
+  assert.ok(archiveCreate)
+  assert.ok(archiveList)
+
+  let modelCalls = 0
+  let publishedResult = null
+  const result = await runToolsLoop({
+    job: {
+      id: 'archive-artifact-turn',
+      origin: 'chat',
+      userId: 'artifact-user',
+      sessionId: 'artifact-session',
+      prompt: 'Create a ZIP archive from the requested files.',
+    },
+    step: { id: 'archive-artifact-step', kind: 'chat' },
+    messages: [{ role: 'user', content: 'Create a ZIP archive from the requested files.' }],
+    intentMode: 'execute',
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    toolSpecs: [archiveCreate, archiveList],
+    maxIters: 4,
+    enableToolHooks: false,
+    runModel: async ({ messages }) => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'archive-create-call',
+            type: 'function',
+            function: {
+              name: 'archive_create',
+              arguments: JSON.stringify({ inputs: ['source.txt'], output: archivePath }),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 2) {
+        publishedResult = JSON.parse(messages.findLast((message) => message.role === 'tool').content)
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'archive-list-call',
+            type: 'function',
+            function: {
+              name: 'archive_list',
+              arguments: JSON.stringify({ input: archivePath }),
+            },
+          }],
+        }
+      }
+      return { content: 'The ZIP archive is ready.', toolCalls: [] }
+    },
+    executeTool: async ({ name, args }) => {
+      if (name === 'archive_create') {
+        assert.equal(args.output, archivePath)
+        return { ok: true, output: archivePath, format: 'zip', entries: 1 }
+      }
+      assert.equal(name, 'archive_list')
+      assert.equal(args.input, archivePath)
+      return { ok: true, input: archivePath, format: 'zip', entryCount: 1, entries: [] }
+    },
+  })
+
+  assert.equal(result.text, 'The ZIP archive is ready.')
+  assert.equal(result.artifactIds.length, 1)
+  assert.equal(publishedResult.artifactId, result.artifactIds[0])
+  assert.equal(publishedResult.filename, 'bundled-output.zip')
+  assert.match(publishedResult.url, /^\/api\/artifacts\/bundled-output\.zip$/)
+  const artifacts = listTurnArtifacts({
+    userId: 'artifact-user', sessionId: 'artifact-session', turnId: 'archive-artifact-turn',
+  })
+  assert.deepEqual(artifacts.map(({ id, filename, type, url }) => ({ id, filename, type, url })), [{
+    id: result.artifactIds[0],
+    filename: 'bundled-output.zip',
+    type: 'zip',
+    url: '/api/artifacts/bundled-output.zip',
+  }])
 })
 
 test('verified write_file and bash_exec outputs keep Windows Unicode filenames as turn artifacts', () => {

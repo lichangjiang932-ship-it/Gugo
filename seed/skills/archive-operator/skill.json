@@ -1,0 +1,9 @@
+{
+  "id": "archive-operator",
+  "name": "Archive Operator · 归档与批量整理",
+  "description": "预览 ZIP/RAR4/RAR5、创建 ZIP，并安全解压 ZIP/RAR4/RAR5；支持批量重命名文件或目录，以及用 SHA-256 查找精确重复文件。",
+  "version": "1.0.0",
+  "icon": "🗂️",
+  "permissions": ["读取已授权文件和目录", "在已授权目录创建 ZIP、解压 ZIP/RAR 或重命名"],
+  "source": { "type": "builtin", "license": "MIT" }
+}

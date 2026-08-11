@@ -2,6 +2,23 @@ appId: com.gugo.atelier
 productName: Gugo
 artifactName: Gugo-Setup-${version}-${arch}.${ext}
 asar: true
+asarUnpack:
+  - node_modules/sharp/**/*
+  - node_modules/@img/**/*
+extraResources:
+  - from: resources/bin
+    to: bin
+    filter:
+      - ffmpeg.exe
+      - ffprobe.exe
+  - from: LICENSE
+    to: LICENSE
+  - from: THIRD_PARTY_NOTICES.md
+    to: THIRD_PARTY_NOTICES.md
+  - from: resources/licenses
+    to: licenses
+    filter:
+      - "**/*"
 npmRebuild: false
 compression: normal
 directories:

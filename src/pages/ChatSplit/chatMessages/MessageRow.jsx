@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion'
-import { useEffect, useRef, useState } from 'react'
-import { Check, Copy, FileText } from 'lucide-react'
+import { useEffect, useId, useRef, useState } from 'react'
+import { Check, ChevronDown, ChevronUp, Copy, FileText } from 'lucide-react'
 import MarkdownRenderer from '../../../components/MarkdownRenderer.jsx'
 import CompactionPill from '../../../components/CompactionPill.jsx'
 import ChoicePicker from '../../../components/ChoicePicker.jsx'
@@ -12,7 +12,7 @@ import { formatMessageDateTime, formatMessageTime } from '../../../lib/messageTi
 import { copyTextToClipboard } from '../../../lib/clipboard.js'
 import { ArtifactReferenceLinks } from './ArtifactCards.jsx'
 import { ProgressTrace, ReasoningTrace, ToolCallTrace } from './ActivityTraces.jsx'
-import { splitUserSkillCommand } from './messageContent.js'
+import { buildCollapsedUserMessagePreview, shouldCollapseUserMessage, splitUserSkillCommand } from './messageContent.js'
 import DirectoryRequestCard from '../../taskRun/DirectoryRequestCard.jsx'
 
 export default function MessageRow({
@@ -104,7 +104,7 @@ export default function MessageRow({
             />
           )
         ) : (
-          <UserContent attachments={msg.attachments} command={userSkillCommand} content={msg.content} />
+          <UserContent attachments={msg.attachments} command={userSkillCommand} content={msg.content} t={t} />
         )}
         {msg.role === 'assistant' && isDirectoryRequest && (
           <InlineDirectoryRequestCard
@@ -197,13 +197,50 @@ function CollapsedArtifactContent({ artifactPreview, msg, onOpenArtifact, t }) {
   )
 }
 
-function UserContent({ attachments, command, content }) {
+function UserContent({ attachments, command, content, t }) {
   const files = Array.isArray(attachments) ? attachments : []
+  const displayContent = String(command?.command ? command.body : content || '')
+  const collapsible = shouldCollapseUserMessage(displayContent)
+  const [expanded, setExpanded] = useState(false)
+  const contentId = useId()
+  const collapsed = collapsible && !expanded
+  const toggleLabel = t(expanded ? 'chatMessages.collapse' : 'chatMessages.expand')
+  const visibleContent = collapsed
+    ? buildCollapsedUserMessagePreview(displayContent)
+    : displayContent
+
   return (
     <div data-testid="user-message-bubble" className={`chat-user-message max-w-full rounded-2xl rounded-br-md border bg-paper-2 px-3.5 py-2 text-[14px] leading-6 ${command?.command ? 'chat-user-skill-message border-ink/20' : 'border-ink/10'}`}>
       {command?.command && <span data-testid="sent-skill-command" className="mb-1.5 inline-flex h-6 items-center rounded-md bg-ink px-2 font-mono text-xs font-medium leading-none text-paper shadow-sm">{command.command}</span>}
-      {(command?.command ? command.body : content) && <span className={`whitespace-pre-wrap ${command?.command ? 'block text-ink' : ''}`}>{command?.command ? command.body : content}</span>}
-      {files.length > 0 && <div className={`${content ? 'mt-2' : ''} flex flex-wrap gap-1.5`} data-testid="user-message-attachments">
+      {displayContent && (
+        <div className={command?.command ? 'text-ink' : ''}>
+          <span
+            id={contentId}
+            data-testid="user-message-content"
+            className="block whitespace-pre-wrap break-words"
+          >
+            {visibleContent}{collapsed && <span aria-hidden="true">{'\u2026'}</span>}
+          </span>
+          {collapsible && (
+            <button
+              type="button"
+              data-testid="user-message-collapse-toggle"
+              aria-controls={contentId}
+              aria-expanded={expanded}
+              aria-label={toggleLabel}
+              title={toggleLabel}
+              onClick={() => setExpanded((value) => !value)}
+              className="mt-1 inline-flex min-h-7 items-center gap-1 rounded-md px-1.5 text-xs font-medium text-ink-soft transition-colors hover:bg-ink/5 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/45"
+            >
+              {expanded
+                ? <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
+                : <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />}
+              {toggleLabel}
+            </button>
+          )}
+        </div>
+      )}
+      {files.length > 0 && <div className={`${displayContent || command?.command ? 'mt-2' : ''} flex flex-wrap gap-1.5`} data-testid="user-message-attachments">
         {files.map((file) => <span key={file.id} className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-ink/10 bg-paper px-2 py-1 text-xs text-ink-soft">
           <FileText className="h-3.5 w-3.5 shrink-0 text-ink-fade" />
           <span className="truncate">{file.name}</span>

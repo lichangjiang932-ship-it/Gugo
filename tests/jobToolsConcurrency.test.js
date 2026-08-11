@@ -7,6 +7,7 @@ process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-job-tools-concurrency-tes
 process.env.APPROVAL_MODE = 'off'
 
 const { runToolsLoop } = await import('../server/services/jobTools.js')
+const { setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 const TEST_USER = issueTestSession({ email: 'job-tools-concurrency@example.com' }).userId
@@ -66,6 +67,8 @@ test('runToolsLoop executes an all-read batch concurrently and preserves result 
 })
 
 test('runToolsLoop runs read segments concurrently around a durable write barrier and preserves result order', async () => {
+  const writeUser = issueTestSession({ email: 'job-tools-concurrency-write@example.com' }).userId
+  setApprovalMode({ userId: writeUser, mode: 'bypass' })
   let modelTurns = 0
   let active = 0
   let peak = 0
@@ -88,7 +91,7 @@ test('runToolsLoop runs read segments concurrently around a durable write barrie
   ])
 
   const result = await runToolsLoop({
-    job: { id: 'job-mixed-barrier', userId: TEST_USER, title: 'mixed tools' },
+    job: { id: 'job-mixed-barrier', userId: writeUser, title: 'mixed tools' },
     step: { id: 'step-mixed-barrier', kind: 'execute' },
     messages: [{ role: 'user', content: 'Read twice, write, then read twice.' }],
     saveCheckpoint: async (state) => {

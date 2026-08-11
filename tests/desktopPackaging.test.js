@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import test from 'node:test'
 import {
   DEFAULT_DESKTOP_PET_LAYOUT,
@@ -9,6 +11,11 @@ import {
   createDesktopPetDragSession,
   resolveDesktopPetDragMove,
 } from '../desktop/petDrag.js'
+import {
+  resolveLockedMediaSidecar,
+  stageMediaSidecars,
+  WINDOWS_MEDIA_SIDECARS,
+} from '../scripts/prepare-media-sidecars.mjs'
 
 const read = (relativePath) => fs.readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8')
 
@@ -40,6 +47,8 @@ test('NSIS package includes server runtime dependencies and updater metadata', (
   assert.match(config, /src\/lib\/presentationPlanner\.js/)
   assert.match(config, /^\s*-\s+desktop\/petDrag\.js\s*$/m)
   assert.match(config, /npmRebuild:\s*false/)
+  assert.match(config, /asarUnpack:[\s\S]*node_modules\/sharp\/\*\*\/\*/)
+  assert.match(config, /asarUnpack:[\s\S]*node_modules\/@img\/\*\*\/\*/)
   assert.match(config, /^\s*icon:\s*build\/icon\.ico\s*$/m)
   assert.match(config, /^\s*installerIcon:\s*build\/icon\.ico\s*$/m)
   assert.match(config, /^\s*uninstallerIcon:\s*build\/icon\.ico\s*$/m)
@@ -61,6 +70,150 @@ test('NSIS package includes server runtime dependencies and updater metadata', (
   assert.doesNotMatch(config, /publisherName|certificateFile|certificatePassword/)
   assert.doesNotMatch(config, /verifyUpdateCodeSignature:\s*false/)
   assert.doesNotMatch(main, /showMessageBox/)
+})
+
+test('desktop media sidecars are staged, packaged, and documented', () => {
+  const config = read('electron-builder.yml')
+  const main = read('desktop/main.js')
+  const packageJson = JSON.parse(read('package.json'))
+  const stagingScript = read('scripts/prepare-media-sidecars.mjs')
+  const envExample = read('.env.example')
+  const readme = read('README.md')
+  const releaseGuide = read('docs/DESKTOP_RELEASES.md')
+  const notices = read('THIRD_PARTY_NOTICES.md')
+  const provenance = read('resources/licenses/FFMPEG-SIDECARS.md')
+  const gpl = read('resources/licenses/GPL-3.0.txt')
+
+  assert.match(config, /extraResources:[\s\S]*from:\s*resources\/bin/)
+  assert.match(config, /extraResources:[\s\S]*to:\s*bin/)
+  assert.match(config, /extraResources:[\s\S]*-\s*ffmpeg\.exe/)
+  assert.match(config, /extraResources:[\s\S]*-\s*ffprobe\.exe/)
+  assert.match(config, /extraResources:[\s\S]*from:\s*LICENSE[\s\S]*to:\s*LICENSE/)
+  assert.match(config, /extraResources:[\s\S]*from:\s*THIRD_PARTY_NOTICES\.md/)
+  assert.match(config, /extraResources:[\s\S]*from:\s*resources\/licenses[\s\S]*to:\s*licenses/)
+  assert.match(packageJson.scripts['desktop:media-sidecars'], /prepare-media-sidecars\.mjs/)
+  assert.match(packageJson.scripts['desktop:package'], /^npm run desktop:media-sidecars && electron-builder/)
+  assert.match(packageJson.scripts['desktop:publish'], /npm run desktop:media-sidecars && electron-builder/)
+  assert.equal(packageJson.devDependencies['@ffmpeg-installer/ffmpeg'], '1.1.0')
+  assert.equal(packageJson.devDependencies['@ffprobe-installer/ffprobe'], '2.1.2')
+  assert.match(main, /GUGO_FFMPEG_PATH\s*\|\|=\s*path\.join\(process\.resourcesPath, 'bin', 'ffmpeg\.exe'\)/)
+  assert.match(main, /GUGO_FFPROBE_PATH\s*\|\|=\s*path\.join\(process\.resourcesPath, 'bin', 'ffprobe\.exe'\)/)
+  assert.match(stagingScript, /GUGO_FFMPEG_PATH/)
+  assert.match(stagingScript, /GUGO_FFPROBE_PATH/)
+  assert.match(stagingScript, /@ffmpeg-installer\/ffmpeg/)
+  assert.match(stagingScript, /@ffprobe-installer\/ffprobe/)
+  assert.match(stagingScript, /wrapper\?\.path/)
+  assert.match(stagingScript, /spawnSync\(candidate, \['-version'\]/)
+  assert.equal(fs.existsSync(new URL('../resources/bin/README.md', import.meta.url)), true)
+  assert.match(envExample, /GUGO_FFMPEG_PATH=.*ffmpeg\.exe/)
+  assert.match(envExample, /GUGO_FFPROBE_PATH=.*ffprobe\.exe/)
+  assert.match(readme, /GUGO_FFMPEG_PATH.*GUGO_FFPROBE_PATH/)
+  assert.match(releaseGuide, /npm run desktop:media-sidecars/)
+  assert.match(releaseGuide, /resources\/bin\/ffmpeg\.exe/)
+  assert.match(releaseGuide, /resources\/bin\/ffprobe\.exe/)
+  assert.match(notices, /N-92722-gf22fcd4483/)
+  assert.match(notices, /2023-02-13-git-2296078397/)
+  assert.match(notices, /GNU General Public License version 3/)
+  assert.match(provenance, /@ffmpeg-installer\/win32-x64@4\.1\.0/)
+  assert.match(provenance, /@ffprobe-installer\/win32-x64@5\.1\.0/)
+  assert.match(provenance, /C8ABC49E7BE62DDE8E12972AF373959E0076A7B8DC8040EB45978E0608F8781E/)
+  assert.match(provenance, /F28C4751E7367205267025AAF0FCFC921E34D9B7EDAA46BD9C8ABAF367FC9051/)
+  assert.match(gpl, /GNU GENERAL PUBLIC LICENSE[\s\S]*Version 3, 29 June 2007/)
+
+  assert.deepEqual(WINDOWS_MEDIA_SIDECARS.map(({ name, envName, fileName }) => ({
+    name,
+    envName,
+    fileName,
+  })), [
+    { name: 'ffmpeg', envName: 'GUGO_FFMPEG_PATH', fileName: 'ffmpeg.exe' },
+    { name: 'ffprobe', envName: 'GUGO_FFPROBE_PATH', fileName: 'ffprobe.exe' },
+  ])
+})
+
+test('desktop media sidecar staging fails closed when a required binary is absent', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-sidecar-package-'))
+  try {
+    assert.throws(
+      () => stageMediaSidecars({
+        rootDir,
+        platform: 'win32',
+        env: { PATH: '', PATHEXT: '.EXE' },
+        lockedResolver: null,
+      }),
+      /ffmpeg was not found in locked dependency.*GUGO_FFMPEG_PATH/,
+    )
+    assert.equal(fs.existsSync(path.join(rootDir, 'resources')), false)
+  } finally {
+    fs.rmSync(rootDir, { recursive: true, force: true })
+  }
+})
+
+test('desktop media sidecars stage from locked npm binaries with a clean PATH', {
+  skip: process.platform !== 'win32' && 'locked Windows optional dependencies are installed only on Windows',
+}, () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-sidecar-locked-'))
+  const copied = []
+  const verified = []
+  try {
+    const staged = stageMediaSidecars({
+      rootDir,
+      platform: 'win32',
+      env: { PATH: '', Path: '', PATHEXT: '.EXE' },
+      verify(candidate, name) {
+        assert.equal(fs.statSync(candidate).isFile(), true)
+        verified.push({ candidate, name })
+      },
+      copy(source, target) {
+        copied.push({ source, target })
+        fs.writeFileSync(target, `staged from ${source}`, 'utf8')
+      },
+    })
+
+    assert.equal(staged.length, 2)
+    assert.equal(copied.length, 2)
+    assert.equal(verified.length, 4)
+    for (const item of staged) {
+      assert.equal(item.sourceType, 'locked-dependency')
+      const expected = resolveLockedMediaSidecar({
+        packageName: item.packageName,
+        platform: 'win32',
+      })
+      assert.ok(expected)
+      assert.equal(path.resolve(item.source).toLowerCase(), path.resolve(expected).toLowerCase())
+    }
+  } finally {
+    fs.rmSync(rootDir, { recursive: true, force: true })
+  }
+})
+
+test('explicit media sidecar paths remain higher priority than the locked resolver', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-sidecar-explicit-'))
+  const sourceDirectory = path.join(rootDir, 'configured')
+  fs.mkdirSync(sourceDirectory, { recursive: true })
+  const ffmpegPath = path.join(sourceDirectory, 'ffmpeg.exe')
+  const ffprobePath = path.join(sourceDirectory, 'ffprobe.exe')
+  fs.writeFileSync(ffmpegPath, 'configured ffmpeg')
+  fs.writeFileSync(ffprobePath, 'configured ffprobe')
+  try {
+    const staged = stageMediaSidecars({
+      rootDir,
+      platform: 'win32',
+      env: {
+        PATH: '',
+        PATHEXT: '.EXE',
+        GUGO_FFMPEG_PATH: ffmpegPath,
+        GUGO_FFPROBE_PATH: ffprobePath,
+      },
+      lockedResolver() {
+        throw new Error('explicit paths must bypass the locked resolver')
+      },
+      verify() {},
+      copy: fs.copyFileSync,
+    })
+    assert.deepEqual(staged.map(({ sourceType }) => sourceType), ['environment', 'environment'])
+  } finally {
+    fs.rmSync(rootDir, { recursive: true, force: true })
+  }
 })
 
 test('desktop backend startup survives installer ENOENT races and child spawn errors', () => {
@@ -232,6 +385,9 @@ test('version tags publish a Windows installer and updater metadata through GitH
   assert.match(workflow, /\.Extension -eq '\.exe'/)
   assert.match(workflow, /\.Name -eq 'latest\.yml'/)
   assert.match(workflow, /contents:\s*write/)
+  assert.match(workflow, /- run:\s*npm ci[\s\S]*- name:\s*Package Windows desktop installer[\s\S]*npm run desktop:package/)
+  assert.doesNotMatch(workflow, /choco\s+install\s+ffmpeg|winget\s+install\s+ffmpeg/i)
+  assert.doesNotMatch(workflow, /GUGO_FFMPEG_PATH|GUGO_FFPROBE_PATH/)
 })
 
 test('desktop update notice is the primary message directly above the account card', () => {

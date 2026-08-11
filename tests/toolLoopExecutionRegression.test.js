@@ -4,10 +4,113 @@ import assert from 'node:assert/strict'
 import { buildServerToolsConfig } from '../src/pages/ChatSplit/serverTurnFlow.js'
 import { createInitialState } from '../src/store/appStateBootstrap.js'
 import { applyServerToolsConfig } from '../server/services/turnToolSpecs.js'
+import { parseModelProviderResponse } from '../server/adapters/modelProviderResponse.js'
 
 const { runToolsLoop, SERVER_TOOL_SPECS } = await import('../server/services/jobTools.js')
 const { registerDynamicTool, unregisterDynamicTool } = await import('../server/services/toolRegistry.js')
 const { createJobBudget } = await import('../server/utils/jobBudget.js')
+
+test('output-truncated tool calls are paired but never executed and are regenerated', async () => {
+  const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
+  let modelCalls = 0
+  const executedPaths = []
+
+  const result = await runToolsLoop({
+    job: {
+      id: 'job-truncated-tool-call',
+      userId: null,
+      origin: 'chat',
+      prompt: 'Open README.md and report what it contains.',
+    },
+    step: { id: 'step-truncated-tool-call', kind: 'chat' },
+    messages: [{ role: 'user', content: 'Open README.md and report what it contains.' }],
+    intentMode: 'execute',
+    toolSpecs: [readFile],
+    maxIters: 4,
+    enableToolHooks: false,
+    runModel: async ({ messages }) => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          finishReason: 'length',
+          toolCalls: [{
+            id: 'partial-read',
+            type: 'function',
+            function: { name: 'read_file', arguments: '{"path":"READ' },
+          }],
+        }
+      }
+      if (modelCalls === 2) {
+        const truncatedResult = messages.find((message) => (
+          message.role === 'tool' && String(message.content || '').includes('tool_call_truncated')
+        ))
+        assert.ok(truncatedResult, 'the model must receive a paired structured truncation result')
+        return {
+          content: '',
+          finishReason: 'tool_calls',
+          toolCalls: [{
+            id: 'complete-read',
+            type: 'function',
+            function: { name: 'read_file', arguments: JSON.stringify({ path: 'README.md' }) },
+          }],
+        }
+      }
+      return { content: 'README.md was read successfully.', toolCalls: [], finishReason: 'stop' }
+    },
+    executeTool: async ({ name, args }) => {
+      assert.equal(name, 'read_file')
+      executedPaths.push(args.path)
+      return { ok: true, path: args.path, content: '# Gugo' }
+    },
+  })
+
+  assert.deepEqual(executedPaths, ['README.md'])
+  assert.equal(modelCalls, 3)
+  assert.equal(result.text, 'README.md was read successfully.')
+})
+
+test('non-stream Responses max-output truncation never executes a valid-looking write call', async () => {
+  const writeFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'write_file')
+  let executions = 0
+  let completedResult = null
+
+  const result = await runToolsLoop({
+    job: {
+      id: 'job-responses-json-truncated-write',
+      userId: null,
+      origin: 'chat',
+      prompt: 'Write result.txt now.',
+    },
+    step: { id: 'step-responses-json-truncated-write', kind: 'execute' },
+    messages: [{ role: 'user', content: 'Write result.txt now.' }],
+    intentMode: 'execute',
+    toolSpecs: [writeFile],
+    maxIters: 1,
+    enableToolHooks: false,
+    onToolCompleted: async (outcome) => {
+      completedResult = structuredClone(outcome.result)
+    },
+    runModel: async () => parseModelProviderResponse({
+      status: 'incomplete',
+      incomplete_details: { reason: 'max_output_tokens' },
+      output: [{
+        type: 'function_call',
+        call_id: 'responses-partial-write',
+        name: 'write_file',
+        arguments: JSON.stringify({ path: 'result.txt', content: 'valid JSON must still not execute' }),
+      }],
+    }),
+    executeTool: async () => {
+      executions += 1
+      return { ok: true, path: 'result.txt' }
+    },
+  })
+
+  assert.equal(executions, 0)
+  assert.equal(result.incomplete, true)
+  assert.equal(completedResult?.code, 'tool_call_truncated')
+})
 
 test('executes tool calls returned by the model response that crosses the token budget', async () => {
   const bashExec = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'bash_exec')
@@ -1613,6 +1716,100 @@ test('a successful parallel read clears failures from earlier candidates', async
   })
   assert.equal(result.noProgress, undefined)
   assert.equal(result.text, '已读取有效文件')
+  assert.equal(modelCalls, 2)
+})
+
+test('parallel screenshot batches append every tool response before the image message', async (t) => {
+  const screenshot = {
+    type: 'function',
+    function: {
+      name: 'browser_screenshot',
+      description: 'Capture the current page as PNG.',
+      parameters: {
+        type: 'object',
+        properties: { fullPage: { type: 'boolean' } },
+      },
+    },
+  }
+  registerDynamicTool({
+    name: 'browser_screenshot',
+    origin: 'browser-test',
+    spec: screenshot,
+    metadata: {
+      riskClass: 'read',
+      isReadOnly: true,
+      isConcurrencySafe: true,
+      isIdempotent: true,
+      interruptBehavior: 'cancellable',
+    },
+  })
+  t.after(() => unregisterDynamicTool('browser_screenshot'))
+  const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
+  assert.ok(readFile)
+  let modelCalls = 0
+
+  const result = await runToolsLoop({
+    job: {
+      id: 'job-parallel-screenshot-protocol',
+      userId: null,
+      origin: 'chat',
+      prompt: 'Inspect the browser screenshot and read notes.txt, then summarize both.',
+    },
+    step: { id: 'step-parallel-screenshot-protocol', kind: 'chat' },
+    messages: [{
+      role: 'user',
+      content: 'Inspect the browser screenshot and read notes.txt, then summarize both.',
+    }],
+    intentMode: 'execute',
+    toolSpecs: [screenshot, readFile],
+    maxIters: 3,
+    enableToolHooks: false,
+    runModel: async ({ messages }) => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [
+            {
+              id: 'parallel-shot',
+              type: 'function',
+              function: { name: 'browser_screenshot', arguments: '{}' },
+            },
+            {
+              id: 'parallel-read',
+              type: 'function',
+              function: { name: 'read_file', arguments: '{"path":"notes.txt"}' },
+            },
+          ],
+        }
+      }
+
+      const shotIndex = messages.findIndex((message) => message.tool_call_id === 'parallel-shot')
+      const readIndex = messages.findIndex((message) => message.tool_call_id === 'parallel-read')
+      const imageIndex = messages.findIndex((message) => (
+        message.role === 'user'
+        && Array.isArray(message.content)
+        && message.content.some((part) => part?.type === 'image_url')
+      ))
+      assert.ok(shotIndex >= 0)
+      assert.ok(readIndex > shotIndex)
+      assert.ok(imageIndex > readIndex)
+      assert.equal(JSON.parse(messages[shotIndex].content).image.data, undefined)
+      return { content: 'Screenshot and notes inspected.', toolCalls: [] }
+    },
+    executeTool: async ({ name }) => {
+      if (name === 'browser_screenshot') {
+        return {
+          ok: true,
+          image: { mimeType: 'image/png', data: 'iVBORw0KGgo=', bytes: 8 },
+        }
+      }
+      assert.equal(name, 'read_file')
+      return { ok: true, path: 'notes.txt', content: 'release notes' }
+    },
+  })
+
+  assert.equal(result.text, 'Screenshot and notes inspected.')
   assert.equal(modelCalls, 2)
 })
 
@@ -3340,3 +3537,169 @@ test('a project check cannot verify an absolute artifact inside the workspace', 
     (checkpoint?.completionGuards?.pendingMutationTargets || []).includes(outputPath),
   )
 })
+
+const specializedVerificationScenarios = [
+  {
+    label: 'media_transform is closed by media_probe for the exact output',
+    mutation: 'media_transform',
+    mutationArgs: { operation: 'transcode', input_path: 'input.mov', output_path: 'output.mp4' },
+    mutationResult: { ok: true, output_path: 'output.mp4' },
+    verification: 'media_probe',
+    verificationArgs: { input_path: 'output.mp4' },
+    verificationResult: { ok: true, path: 'output.mp4', probe: { streams: [] } },
+  },
+  {
+    label: 'image_transform is closed by image_info for the exact output',
+    mutation: 'image_transform',
+    mutationArgs: { input_path: 'input.png', output_path: 'output.webp' },
+    mutationResult: { ok: true, path: 'output.webp' },
+    verification: 'image_info',
+    verificationArgs: { path: 'output.webp' },
+    verificationResult: { ok: true, path: 'output.webp', width: 100, height: 100 },
+  },
+  {
+    label: 'pdf_transform is closed by pdf_info for the exact output',
+    mutation: 'pdf_transform',
+    mutationArgs: { operation: 'rotate', input: 'input.pdf', output: 'output.pdf', degrees: 90 },
+    mutationResult: { ok: true, outputs: [{ path: 'output.pdf' }] },
+    verification: 'pdf_info',
+    verificationArgs: { path: 'output.pdf' },
+    verificationResult: { ok: true, path: 'output.pdf', pageCount: 1 },
+  },
+  {
+    label: 'pdf_transform is closed by pdf_text for the exact output',
+    mutation: 'pdf_transform',
+    mutationArgs: { operation: 'overlay_text', input: 'input.pdf', output: 'patched.pdf', overlays: [] },
+    mutationResult: { ok: true, outputs: [{ path: 'patched.pdf' }] },
+    verification: 'pdf_text',
+    verificationArgs: { path: 'patched.pdf' },
+    verificationResult: { ok: true, path: 'patched.pdf', pages: [{ page: 1, text: 'verified' }] },
+  },
+  {
+    label: 'archive_create is tracked and closed by archive_list',
+    mutation: 'archive_create',
+    mutationArgs: { inputs: ['source.txt'], output: 'bundle.zip' },
+    mutationResult: { ok: true, output: 'bundle.zip' },
+    verification: 'archive_list',
+    verificationArgs: { input: 'bundle.zip' },
+    verificationResult: { ok: true, input: 'bundle.zip', entries: [{ path: 'source.txt' }] },
+  },
+  {
+    label: 'archive_extract is tracked and closed by an output directory listing',
+    mutation: 'archive_extract',
+    mutationArgs: { input: 'bundle.zip', outputDir: 'unpacked' },
+    mutationResult: {
+      ok: true,
+      outputDir: 'unpacked',
+      entries: [{ path: 'source.txt', outputPath: 'unpacked/source.txt' }],
+    },
+    verification: 'list_directory',
+    verificationArgs: { path: 'unpacked' },
+    verificationResult: {
+      ok: true,
+      path: 'unpacked',
+      truncated: false,
+      entries: [{ name: 'source.txt', path: 'source.txt', type: 'file' }],
+    },
+  },
+  {
+    label: 'batch_rename is tracked and closed by a destination directory listing',
+    mutation: 'batch_rename',
+    mutationArgs: { operations: [{ from: 'old.txt', to: 'renamed.txt' }] },
+    mutationResult: {
+      ok: true,
+      renamed: [{ from: 'old.txt', to: 'renamed.txt', unchanged: false }],
+    },
+    verification: 'list_directory',
+    verificationArgs: { path: '.' },
+    verificationResult: {
+      ok: true,
+      path: '.',
+      truncated: false,
+      entries: [{ name: 'renamed.txt', path: 'renamed.txt', type: 'file' }],
+    },
+  },
+]
+
+for (const scenario of specializedVerificationScenarios) {
+  test(scenario.label, async () => {
+    const mutationSpec = SERVER_TOOL_SPECS.find((item) => item?.function?.name === scenario.mutation)
+    const verificationSpec = SERVER_TOOL_SPECS.find((item) => item?.function?.name === scenario.verification)
+    assert.ok(mutationSpec, `missing ${scenario.mutation} spec`)
+    assert.ok(verificationSpec, `missing ${scenario.verification} spec`)
+
+    let modelCalls = 0
+    let checkpoint = null
+    const requests = []
+    const executed = []
+    const result = await runToolsLoop({
+      job: {
+        id: `specialized-verification-${scenario.mutation}-${scenario.verification}`,
+        userId: null,
+        origin: 'chat',
+        prompt: `Run ${scenario.mutation}, then verify the exact output with ${scenario.verification}.`,
+      },
+      step: { id: `step-${scenario.mutation}-${scenario.verification}`, kind: 'chat' },
+      messages: [{
+        role: 'user',
+        content: `Run ${scenario.mutation}, then verify the exact output with ${scenario.verification}.`,
+      }],
+      intentMode: 'execute',
+      toolSpecs: [mutationSpec, verificationSpec],
+      maxIters: 6,
+      enableToolHooks: false,
+      saveCheckpoint: async (state) => {
+        checkpoint = structuredClone(state)
+        return true
+      },
+      runModel: async ({ messages }) => {
+        modelCalls += 1
+        requests.push(structuredClone(messages))
+        if (modelCalls === 1) {
+          return {
+            content: '',
+            toolCalls: [{
+              id: `mutate-${scenario.mutation}`,
+              type: 'function',
+              function: {
+                name: scenario.mutation,
+                arguments: JSON.stringify(scenario.mutationArgs),
+              },
+            }],
+          }
+        }
+        if (modelCalls === 2) return { content: 'Mutation complete.', toolCalls: [] }
+        if (modelCalls === 3) {
+          return {
+            content: '',
+            toolCalls: [{
+              id: `verify-${scenario.verification}`,
+              type: 'function',
+              function: {
+                name: scenario.verification,
+                arguments: JSON.stringify(scenario.verificationArgs),
+              },
+            }],
+          }
+        }
+        return { content: 'Mutation and exact-path verification complete.', toolCalls: [] }
+      },
+      executeTool: async ({ name }) => {
+        executed.push(name)
+        if (name === scenario.mutation) return structuredClone(scenario.mutationResult)
+        assert.equal(name, scenario.verification)
+        return structuredClone(scenario.verificationResult)
+      },
+    })
+
+    assert.deepEqual(executed, [scenario.mutation, scenario.verification])
+    assert.equal(modelCalls, 4)
+    assert.equal(result.incomplete, undefined)
+    assert.equal(result.text, 'Mutation and exact-path verification complete.')
+    assert.ok(requests[2].some((message) => (
+      message?.role === 'system'
+      && String(message.content || '').includes('[POST-MUTATION VERIFICATION REQUIRED]')
+    )), 'the runtime must block premature completion until specialized verification runs')
+    assert.deepEqual(checkpoint?.completionGuards?.pendingMutationTargets, [])
+  })
+}

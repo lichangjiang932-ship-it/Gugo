@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { getLocalFileAccessApi, setWorkspaceTrustApi } from '../../lib/localFileAccessClient.js'
+import {
+  configureWorkspaceOnboardingApi,
+  getLocalFileAccessApi,
+  pickLocalDirectoryApi,
+  setWorkspaceTrustApi,
+} from '../../lib/localFileAccessClient.js'
 import { probeLocalStorage, probeMedia, probeNotifications, probeStorage } from '../../lib/permissionsProbes.js'
 import { GATEABLE_TOOLS, fetchToolPermissions, setToolPermission } from '../../lib/toolPermissionClient'
 import { emptyPermissionResults, PERMISSION_ITEMS } from './permissionViewConfig.js'
@@ -12,6 +17,8 @@ export default function usePermissionsDashboard(t) {
   const [localFiles, setLocalFiles] = useState(null)
   const [localFileError, setLocalFileError] = useState(null)
   const [trustBusyPath, setTrustBusyPath] = useState('')
+  const [onboardingBusy, setOnboardingBusy] = useState(false)
+  const [pickerBusy, setPickerBusy] = useState(false)
 
   useEffect(() => {
     let alive = true
@@ -28,6 +35,36 @@ export default function usePermissionsDashboard(t) {
     try { setLocalFiles(await setWorkspaceTrustApi({ path: rootPath, trusted })); setLocalFileError(null) }
     catch (error) { setLocalFileError(error?.message || t('localFiles.workspaceTrustFailed')) }
     finally { setTrustBusyPath('') }
+  }
+  const chooseOnboardingDirectory = async () => {
+    setPickerBusy(true)
+    try {
+      const result = await pickLocalDirectoryApi()
+      setLocalFileError(null)
+      return result?.path || ''
+    } catch (error) {
+      setLocalFileError(error?.message || t('permissionsDashboard.onboardingPickerFailed'))
+      return ''
+    } finally {
+      setPickerBusy(false)
+    }
+  }
+  const configureOnboarding = async (payload) => {
+    setOnboardingBusy(true)
+    try {
+      const result = await configureWorkspaceOnboardingApi(payload)
+      setLocalFiles(result)
+      setLocalFileError(null)
+      return true
+    } catch (error) {
+      const locked = Array.isArray(error?.locks) && error.locks.length
+      setLocalFileError(locked
+        ? t('permissionsDashboard.onboardingLocked', { keys: error.locks.map((item) => item.key).join(', ') })
+        : error?.message || t('permissionsDashboard.onboardingFailed'))
+      return false
+    } finally {
+      setOnboardingBusy(false)
+    }
   }
   const isToolEnabled = (id) => toolOverrides[id] !== false
   const toggleTool = async (id) => {
@@ -68,7 +105,8 @@ export default function usePermissionsDashboard(t) {
   }, { granted: 0, denied: 0, prompt: 0, unsupported: 0 }), [results])
   const gatedOffCount = GATEABLE_TOOLS.filter((tool) => !isToolEnabled(tool.id)).length
   return {
-    changeWorkspaceTrust, checking, counts, gatedOffCount, isToolEnabled, localFileError, localFiles, requestPermission,
+    changeWorkspaceTrust, checking, chooseOnboardingDirectory, configureOnboarding, counts, gatedOffCount,
+    isToolEnabled, localFileError, localFiles, onboardingBusy, pickerBusy, requestPermission,
     results, runChecks, toggleTool, toolError, trustBusyPath,
   }
 }

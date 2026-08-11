@@ -15,11 +15,23 @@ test('code execution and project checks are enabled by default but explicit swit
   assert.deepEqual(buildServerToolsConfig(defaults), {
     enabled: [
       'Agent',
+      'archive_create',
+      'archive_extract',
+      'archive_list',
       'bash_exec',
+      'batch_rename',
       'create_docx',
       'create_pptx',
       'create_xlsx',
+      'file_hash_manifest',
+      'image_info',
+      'image_transform',
       'manage_todos',
+      'media_probe',
+      'media_transform',
+      'pdf_info',
+      'pdf_text',
+      'pdf_transform',
       'run_project_check',
     ],
     disabled: [

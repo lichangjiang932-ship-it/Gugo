@@ -12,16 +12,20 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { appendJobArtifact } from './jobStore.js'
 import { appendTurnArtifact } from './turnArtifactStore.js'
-import { createDocx, createHtmlArtifact, createImageArtifact, createLocalFileArtifact, createPptx, createXlsx } from './artifactGen.js'
+import { createDocx, createHtmlArtifact, createImageArtifact, createLocalFileArtifact, createLocalFileArtifactAsync, createPptx, createXlsx } from './artifactGen.js'
 import { FS_SHELL_TOOL_SPECS, dispatchFsShellTool, resolveInWorkspace } from '../adapters/fsShellTools.js'
-import { GIT_TOOL_SPECS, dispatchGitTool } from '../adapters/gitWorkbench.js'
-import { CODE_SEARCH_TOOL_SPECS, dispatchCodeSearchTool } from '../utils/codeSearch.js'
-import { APPLY_PATCH_TOOL_SPECS, dispatchApplyPatchTool } from '../utils/applyPatch.js'
-import { AGENTIC_TOOL_SPECS, dispatchAgenticTool, isLoopPauseResult } from '../utils/agenticTools.js'
-import { getBuiltinSpec, getToolMetadata } from './toolRegistry.js'
+import { IMAGE_TOOL_SPECS, dispatchImageTool } from '../adapters/imageTools.js'
+import { MEDIA_TOOL_SPECS, dispatchMediaTool } from '../adapters/mediaTools.js'
+import { PDF_TOOL_SPECS, dispatchPdfTool } from '../adapters/pdfTools.js'
+import { BATCH_FILE_TOOL_SPECS, dispatchBatchFileTool } from '../adapters/batchFileTools.js'
+import { dispatchGitTool } from '../adapters/gitWorkbench.js'
+import { dispatchCodeSearchTool } from '../utils/codeSearch.js'
+import { dispatchApplyPatchTool } from '../utils/applyPatch.js'
+import { dispatchAgenticTool, isLoopPauseResult } from '../utils/agenticTools.js'
+import { getToolMetadata, listBuiltinSpecs } from './toolRegistry.js'
 import { createToolAbortScope } from '../utils/toolCancellation.js'
 import { CONNECTOR_TOOL_NAMES, CONNECTOR_TOOL_SPECS, CONNECTOR_WRITE_TOOL_NAMES, executeConnectorTool } from './connectorTools.js'
-import { MEMORY_TOOL_SPECS, dispatchMemoryTool } from '../utils/memoryTools.js'
+import { dispatchMemoryTool } from '../utils/memoryTools.js'
 import { attachJobBudget, getJobBudget, createJobBudget, runWithModelBudget } from '../utils/jobBudget.js'
 import { formatDeniedToolResult, requestApproval, resumePersistedApproval } from './approvalGate.js'
 import { writeToolAudit } from '../utils/audit.js'
@@ -39,6 +43,7 @@ import {
 import {
   buildAssistantToolCallsMessage,
   buildToolResultMessage,
+  buildToolResultMessages,
   createToolLoopGuard,
   executeToolWithRetry,
   isSubstantiveToolCall,
@@ -56,6 +61,7 @@ import { fetchAndExtract } from '../adapters/toolProxy.js'
 import { searchWeb } from './webSearchService.js'
 import { dispatchHooks } from './hooksService.js'
 import { generateImage } from './mediaModelService.js'
+import { replaceRuntimeCapabilityBlock } from './runtimeCapabilities.js'
 import { hasMutationExecutionIntent, shouldRequireExecution } from '../utils/executionIntent.js'
 import {
   observeToolCalls,
@@ -68,6 +74,10 @@ import {
 const FS_SHELL_TOOL_NAMES = new Set(
   FS_SHELL_TOOL_SPECS.map((spec) => String(spec?.function?.name || '')).filter(Boolean),
 )
+const IMAGE_TOOL_NAMES = new Set(IMAGE_TOOL_SPECS.map((spec) => spec.function.name))
+const MEDIA_TOOL_NAMES = new Set(MEDIA_TOOL_SPECS.map((spec) => spec.function.name))
+const PDF_TOOL_NAMES = new Set(PDF_TOOL_SPECS.map((spec) => spec.function.name))
+const BATCH_FILE_TOOL_NAMES = new Set(BATCH_FILE_TOOL_SPECS.map((spec) => spec.function.name))
 
 // 死循环护栏,不是工作预算。后台任务无人盯着,不能真的无限跑 ——
 // 但真正的收敛是 jobBudget(累积调用数 + 挂钟时间),那个和成本线性相关。
@@ -100,7 +110,18 @@ const VERIFIED_DIRECTORY_RESOLUTION = /\[(?:TURN|JOB_DIRECTORY)_RESOLUTION:[^\]]
 const DIRECTORY_AUTHORIZATION_WAIT_CLAIM = /(?:please\s+(?:choose|select|authorize|grant)[\s\S]{0,100}(?:directory|folder)|(?:i(?:'m| am)?\s+)?wait(?:ing)?[\s\S]{0,100}(?:authori[sz]ation|permission|directory|folder)|(?:directory|folder)[\s\S]{0,100}(?:authorization|permission)[\s\S]{0,100}(?:required|pending|choose|select|grant)|\u8bf7[\s\S]{0,40}(?:\u9009\u62e9|\u6388\u6743)[\s\S]{0,40}(?:\u76ee\u5f55|\u6587\u4ef6\u5939)|(?:\u76ee\u5f55|\u6587\u4ef6\u5939)[\s\S]{0,40}(?:\u6388\u6743|\u6743\u9650)[\s\S]{0,40}(?:\u8bf7\u6c42|\u7b49\u5f85|\u9009\u62e9|\u786e\u8ba4|\u9700\u8981|\u672a\u6388\u6743)|\u7b49\u5f85[\s\S]{0,40}(?:\u9009\u62e9|\u6388\u6743|\u76ee\u5f55|\u6587\u4ef6\u5939))/i
 const EXPLICIT_LOCAL_DIRECTORY_CONTEXT = /\[LOCAL PATH (?:ACCESS|REFERENCE)|\[VERIFIED LOCAL FILESYSTEM ACCESS\]|(?:^|[\s"'`])(?:[a-z]:[\\/]|\\\\[^\\\s]+\\[^\\\s]+|\/(?:home|users|workspace|mnt|tmp)\/)|(?:save|write|export).{0,40}(?:folder|directory|desktop)|(?:\u4fdd\u5b58|\u5199\u5165|\u5bfc\u51fa).{0,20}(?:\u76ee\u5f55|\u6587\u4ef6\u5939|\u684c\u9762)/im
 const MANAGED_ATTACHMENT_MARKER = /\[GUGO_MANAGED_ATTACHMENT\b|\[\u9644\u4ef6\s*:|attachment:\/\//i
-const LOCAL_MUTATION_TOOLS = new Set(['write_file', 'edit_file', 'apply_patch', 'multi_edit'])
+const LOCAL_MUTATION_TOOLS = new Set([
+  'write_file',
+  'edit_file',
+  'apply_patch',
+  'multi_edit',
+  'image_transform',
+  'media_transform',
+  'pdf_transform',
+  'archive_create',
+  'archive_extract',
+  'batch_rename',
+])
 const PROJECT_SCOPE_TARGET = '<workspace>'
 const VERIFICATION_TOOLS = new Set([
   'read_file',
@@ -111,6 +132,11 @@ const VERIFICATION_TOOLS = new Set([
   'git_status',
   'git_diff',
   'run_project_check',
+  'image_info',
+  'media_probe',
+  'pdf_info',
+  'pdf_text',
+  'archive_list',
 ])
 const SHELL_VERIFICATION_COMMAND = /(?:^|\s)(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|lint|build|check|typecheck)\b|(?:^|\s)(?:pytest|vitest|jest|eslint|tsc|cargo\s+(?:test|check)|go\s+test|dotnet\s+test)\b|(?:^|\s)git\s+(?:status|diff)\b/i
 const SHELL_PROJECT_CHECK_COMMAND = /(?:^|\s)(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|lint|build|check|typecheck)\b|(?:^|\s)(?:pytest|vitest|jest|eslint|tsc|cargo\s+(?:test|check)|go\s+test|dotnet\s+test)\b/i
@@ -124,7 +150,15 @@ const EXPLICIT_TOOLSET_CONTEXT = /(?:tool(?:set|s)?|capabilit(?:y|ies)|\u5de5\u5
 const CLARIFICATION_CAPABILITY_DENIAL = /(?:do(?:es)?\s+not\s+have|cannot|can't|lack(?:s|ing)?|missing|unavailable|not\s+available|limited|limitation|\u6ca1\u6709|\u7f3a\u5c11|\u4e0d\u5177\u5907|\u4e0d\u53ef\u7528|\u672a\u63d0\u4f9b|\u65e0\u6cd5|\u53d7\u9650|\u9650\u5236)/i
 const CODE_EXECUTION_CAPABILITY = /(?:code\s+execution|execute\s+code|run\s+(?:code|scripts?)|shell|terminal|command\s+execution|python|node\.?(?:js)?|\u4ee3\u7801\u6267\u884c|\u6267\u884c\u4ee3\u7801|\u8fd0\u884c\u4ee3\u7801|\u8fd0\u884c\u811a\u672c|\u547d\u4ee4\u884c|\u7ec8\u7aef|\u811a\u672c)/i
 const FILE_WRITE_CAPABILITY = /(?:file\s+(?:write|edit|modif|generat)|(?:write|edit|modify|generate|create).{0,24}(?:files?|documents?|images?|pdf|png|jpe?g)|document\s+generation|filesystem\s+write|\u6587\u4ef6\u5199\u5165|\u5199\u5165\u6587\u4ef6|\u5199\u6587\u4ef6|\u7f16\u8f91\u6587\u4ef6|\u4fee\u6539\u6587\u4ef6|\u6587\u4ef6\u751f\u6210|\u751f\u6210\u6587\u4ef6|\u4ea7\u7269\u751f\u6210|(?:\u7f16\u8f91|\u4fee\u6539|\u751f\u6210|\u521b\u5efa|\u5199\u5165).{0,16}(?:pdf|png|jpe?g|\u56fe\u50cf|\u56fe\u7247|\u6587\u6863|\u6587\u4ef6))/i
-const FILE_WRITE_TOOL_NAMES = new Set(['write_file', 'edit_file', 'apply_patch', 'multi_edit'])
+const FILE_WRITE_TOOL_NAMES = new Set([
+  'write_file',
+  'edit_file',
+  'apply_patch',
+  'multi_edit',
+  'image_transform',
+  'media_transform',
+  'pdf_transform',
+])
 const PDF_DOCUMENT_REFERENCE = /(?:\.pdf\b|\bpdf\b|application\/pdf)/i
 const PDF_LAYOUT_MUTATION_INTENT = /(?:write|fill|insert|overlay|edit|modify|create|generate|render|export|save|\u5199\u5165|\u586b\u5199|\u586b\u5165|\u53e0\u52a0|\u7f16\u8f91|\u4fee\u6539|\u751f\u6210|\u6e32\u67d3|\u5bfc\u51fa|\u4fdd\u5b58)/i
 const PDF_LAYOUT_VALIDATOR_COMMAND = /(?:^|[\s&|])(?:(?:"[^"]*(?:python(?:3)?|py)(?:\.exe)?")|(?:[^\s"]*[\\/])?(?:python(?:3)?|py)(?:\.exe)?)\s+(?:"[^"]*verify[_-]?pdf[_-]?layout[^"\r\n]*\.py"|'[^']*verify[_-]?pdf[_-]?layout[^'\r\n]*\.py'|[^\s;&|]*verify[_-]?pdf[_-]?layout[^\s;&|]*\.py)(?=$|[\s;&|])/i
@@ -848,6 +882,20 @@ function extractMutationTargets(call, result) {
   // canonical path reported by the successful result; call arguments are only
   // a fallback when the executor cannot report what it actually changed.
   add(result?.path, { reportedByExecutor: true })
+  add(result?.output_path, { reportedByExecutor: true })
+  add(result?.output, { reportedByExecutor: true })
+  add(result?.outputDir, { reportedByExecutor: true })
+  for (const output of Array.isArray(result?.outputs) ? result.outputs : []) {
+    add(output?.path, { reportedByExecutor: true })
+  }
+  for (const mapping of Array.isArray(result?.renamed) ? result.renamed : []) {
+    if (mapping?.unchanged !== true) add(mapping?.to, { reportedByExecutor: true })
+  }
+  if (call?.name === 'archive_extract') {
+    for (const entry of Array.isArray(result?.entries) ? result.entries : []) {
+      add(entry?.outputPath, { reportedByExecutor: true })
+    }
+  }
   const hasAuthoritativeChangedPaths = Array.isArray(result?.changedPaths)
   for (const path of hasAuthoritativeChangedPaths ? result.changedPaths : []) {
     add(path, { reportedByExecutor: true })
@@ -1001,9 +1049,13 @@ function clearTargetsMatchingEvidence(pendingTargets, evidenceTargets) {
 function clearVerifiedMutationTargets(pendingTargets, call, result) {
   if (!pendingTargets.size) return false
   if (call?.name === 'list_directory') {
+    const evidence = listDirectoryVerificationTargets(call, result)
+    if (result?.ok === true) {
+      addVerificationTarget(evidence, result?.path || call?.args?.path)
+    }
     return clearExplicitTargetsMatchingEvidence(
       pendingTargets,
-      listDirectoryVerificationTargets(call, result),
+      evidence,
     )
   }
   if (call?.name === 'git_diff') {
@@ -1024,18 +1076,28 @@ function clearVerifiedMutationTargets(pendingTargets, call, result) {
       return clearWorkspaceScopedMutationTargets(pendingTargets)
     }
   }
-  if (call?.name !== 'read_file') return false
-  if (!readResultCanVerifyMutation(result)) return false
-  const readTarget = normalizeMutationTarget(call?.args?.path)
-  if (!readTarget) return false
-  let cleared = false
-  for (const target of [...pendingTargets]) {
-    if (target !== PROJECT_SCOPE_TARGET && targetsMatch(target, readTarget)) {
-      pendingTargets.delete(target)
-      cleared = true
-    }
+  if (call?.name === 'read_file') {
+    if (!readResultCanVerifyMutation(result)) return false
+    const evidence = new Set()
+    addVerificationTarget(evidence, result?.path)
+    addVerificationTarget(evidence, call?.args?.path)
+    return clearExplicitTargetsMatchingEvidence(pendingTargets, evidence)
   }
-  return cleared
+  const evidence = new Set()
+  addVerificationTarget(evidence, result?.path)
+  if (call?.name === 'image_info') {
+    addVerificationTarget(evidence, call?.args?.path)
+  } else if (call?.name === 'media_probe') {
+    addVerificationTarget(evidence, call?.args?.input_path)
+  } else if (call?.name === 'pdf_info' || call?.name === 'pdf_text') {
+    addVerificationTarget(evidence, call?.args?.path || call?.args?.input)
+  } else if (call?.name === 'archive_list') {
+    addVerificationTarget(evidence, result?.input)
+    addVerificationTarget(evidence, call?.args?.input)
+  } else {
+    return false
+  }
+  return clearExplicitTargetsMatchingEvidence(pendingTargets, evidence)
 }
 
 function artifactDeliveryError(expectedTools) {
@@ -1060,199 +1122,12 @@ function persistGeneratedArtifact({ artifact, args, job, step }) {
 }
 
 /**
- * 4 个内置工具的 OpenAI function-calling spec。
- * 与前端 src/lib/tools/index.js 同名同语义,便于双端文档一致。
+ * TurnEngine consumes the exact same static schemas exposed by toolRegistry.
+ * Connector schemas stay separate because availability is filtered per user
+ * by resolveTurnToolSpecs at the beginning of every turn.
  */
 export const SERVER_TOOL_SPECS = [
-  {
-    type: 'function',
-    function: {
-      name: 'generate_image',
-      description: 'Generate a raster image with the user-configured OpenAI-compatible image model and save it as an artifact.',
-      parameters: {
-        type: 'object',
-        properties: {
-          prompt: { type: 'string' },
-          title: { type: 'string' },
-          model: { type: 'string' },
-          providerKey: { type: 'string' },
-          size: { type: 'string', enum: ['1024x1024', '1024x1536', '1536x1024'] },
-        },
-        required: ['prompt'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'create_pptx',
-      description: [
-        '生成高级 PowerPoint(.pptx)。系统已经控制色彩、版式、字体——你只负责给"内容"。',
-        '【铁律】',
-        '- 标题 ≤ 14 字, 结论式而非疑问式(如「营收 Q1 涨 23%」而非「Q1 业绩」)',
-        '- bullet ≤ 30 字, 动词开头, 含具体数字',
-        '- 单页 bullet ≤ 4 条; 超出请拆页',
-        '- 至少 1 页用 layout="kpi" (传 kpi 字段) 或 layout="chart" (传 chart 字段) 展示数据',
-        '- 6 页以上 deck 至少含 1 张 layout="section" 作章节分割',
-        '【layout 取值】cover / section / kpi / chart / statement / split / process / quote / bullets / end',
-        '不指定 layout 时系统按内容自动挑选; 想要特定样式时明确传 layout。',
-      ].join('\n'),
-      parameters: {
-        type: 'object',
-        properties: {
-          title: { type: 'string', description: '演示文稿标题(用于封面大字 + 文件名)' },
-          subtitle: { type: 'string', description: '封面副标题(可选,一句话提示主题)' },
-          theme: { type: 'string', enum: ['noir', 'paper', 'ocean', 'forest'], description: '色系: noir 编辑暗(默认科技/通用) / paper 暖纸(文档/品牌) / ocean 深蓝(金融/咨询) / forest 墨绿(可持续/医疗)' },
-          brand: { type: 'string', description: '页脚 brand 字(可选,默认 Gugo)' },
-          slides: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                title: { type: 'string' },
-                layout: { type: 'string', enum: ['cover', 'section', 'kpi', 'chart', 'statement', 'split', 'process', 'quote', 'bullets', 'end'] },
-                eyebrow: { type: 'string', description: '标题上方小字(章节/分类),仅 bullets/kpi/chart/split/process layout 显示' },
-                bullets: { type: 'array', items: { type: 'string' } },
-                body: { type: 'string', description: '替代 bullets 的整段文本(用换行分隔)' },
-                subtitle: { type: 'string', description: 'cover 副标题(若不在外层指定)' },
-                kpi: {
-                  type: 'array',
-                  description: '2-4 个数据卡: {value, label, unit?, delta?}',
-                  items: {
-                    type: 'object',
-                    properties: {
-                      value: { type: 'string', description: '主数字(可含单位符号,如 "23.4" 或 "¥4.7M")' },
-                      label: { type: 'string' },
-                      unit: { type: 'string', description: '小字单位/口径(如 "% YoY" / "亿元")' },
-                      delta: { type: 'string', description: '同比/环比,如 "+12.3%"' },
-                    },
-                    required: ['value'],
-                  },
-                },
-                chart: {
-                  type: 'object',
-                  description: '图表(layout=chart 必填)',
-                  properties: {
-                    type: { type: 'string', enum: ['bar', 'line', 'pie'] },
-                    categories: { type: 'array', items: { type: 'string' } },
-                    series: {
-                      type: 'array',
-                      items: {
-                        type: 'object',
-                        properties: {
-                          name: { type: 'string' },
-                          values: { type: 'array', items: { type: 'number' } },
-                        },
-                        required: ['values'],
-                      },
-                    },
-                  },
-                  required: ['type', 'series'],
-                },
-                quote: {
-                  description: '引用 layout=quote 用,字符串或 {text, source}',
-                  oneOf: [
-                    { type: 'string' },
-                    {
-                      type: 'object',
-                      properties: { text: { type: 'string' }, source: { type: 'string' } },
-                      required: ['text'],
-                    },
-                  ],
-                },
-              },
-              required: ['title'],
-            },
-          },
-        },
-        required: ['title', 'slides'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'create_docx',
-      description: '生成 Word(.docx)文档。paragraphs 为段落数组,可含 heading 等级。',
-      parameters: {
-        type: 'object',
-        properties: {
-          title: { type: 'string', description: '文档标题(同时作为文件名)' },
-          paragraphs: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                heading: { type: 'integer', minimum: 1, maximum: 3 },
-                text: { type: 'string' },
-              },
-              required: ['text'],
-            },
-          },
-        },
-        required: ['title', 'paragraphs'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'create_xlsx',
-      description: '生成 Excel(.xlsx)表格。sheets 为工作表数组,每个含 name + rows(二维数组)。',
-      parameters: {
-        type: 'object',
-        properties: {
-          title: { type: 'string', description: '表格标题(同时作为文件名)' },
-          sheets: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                name: { type: 'string' },
-                rows: {
-                  type: 'array',
-                  items: { type: 'array', items: {} },
-                },
-              },
-              required: ['name', 'rows'],
-            },
-          },
-        },
-        required: ['title', 'sheets'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'create_html_app',
-      description: 'Create a polished, self-contained HTML webpage artifact that opens in Gugo preview. Use this instead of write_file or apply_patch when the user asks for a webpage artifact. Put the complete document in html; external scripts, styles, frames, and network requests are rejected.',
-      parameters: {
-        type: 'object',
-        properties: {
-          title: { type: 'string', description: 'Short human-readable page title and filename stem.' },
-          html: { type: 'string', description: 'Complete single-file HTML document with inline CSS and optional inline JavaScript.' },
-        },
-        required: ['title', 'html'],
-      },
-    },
-  },
-  // claude-code 风格的文件 / shell 工具.默认全部关闭,需要在 .env 里设
-  // WORKSPACE_FS_ENABLED=1 / WORKSPACE_SHELL_ENABLED=1 才生效;
-  // 路径沙箱在 WORKSPACE_ROOT(默认 process.cwd()).
-  ...FS_SHELL_TOOL_SPECS,
-  ...GIT_TOOL_SPECS,
-  ...CODE_SEARCH_TOOL_SPECS,
-  ...APPLY_PATCH_TOOL_SPECS,
-  ...AGENTIC_TOOL_SPECS,
-  getBuiltinSpec('web_search'),
-  getBuiltinSpec('fetch_url'),
-  getBuiltinSpec('Agent'),
-  // ★ Harness: system prompt 明确让模型「多步任务先 manage_todos 拆分」,
-  // 但这个工具以前根本不在 job 循环的工具集里 —— 模型照做就必然撞 unknown tool。
-  // 从 toolRegistry 取同一份 spec,避免两处定义漂移。
-  getBuiltinSpec('manage_todos'),
-  ...MEMORY_TOOL_SPECS,
+  ...listBuiltinSpecs(),
   ...CONNECTOR_TOOL_SPECS,
 ].filter(Boolean)
 
@@ -1295,6 +1170,22 @@ function localArtifactCandidates(call, result) {
   if (call?.name === 'write_file') {
     return [{ path: result?.path || call?.args?.path, scope: result?.scope }]
   }
+  if (call?.name === 'image_transform') {
+    return [{ path: result?.path || call?.args?.output_path, scope: result?.scope }]
+  }
+  if (call?.name === 'media_transform') {
+    return [{
+      path: result?.path || result?.output_path || call?.args?.output_path,
+      scope: result?.scope,
+    }]
+  }
+  if (call?.name === 'pdf_transform') {
+    return (Array.isArray(result?.outputs) ? result.outputs : [])
+      .map((output) => ({ path: output?.path, scope: output?.scope }))
+  }
+  if (call?.name === 'archive_create') {
+    return [{ path: result?.output || call?.args?.output, scope: result?.scope }]
+  }
   if (call?.name !== 'bash_exec') return []
   return (Array.isArray(result?.verifiedOutputs) ? result.verifiedOutputs : [])
     .filter((output) => output?.type === 'file')
@@ -1312,7 +1203,14 @@ function resolveLocalArtifactSource(candidate, call, result) {
 }
 
 export function persistLocalToolArtifacts({ call, result, job, step }) {
-  if (result?.ok !== true || !['write_file', 'bash_exec'].includes(call?.name)) return []
+  if (result?.ok !== true || ![
+    'write_file',
+    'bash_exec',
+    'image_transform',
+    'media_transform',
+    'pdf_transform',
+    'archive_create',
+  ].includes(call?.name)) return []
   const persisted = []
   const seen = new Set()
   for (const candidate of localArtifactCandidates(call, result)) {
@@ -1331,6 +1229,38 @@ export function persistLocalToolArtifacts({ call, result, job, step }) {
       }
       // A successful tool result remains successful if an output disappears
       // before it can be copied or has no safe downloadable filename.
+    }
+  }
+  return persisted
+}
+
+async function persistLocalToolArtifactsAsync({ call, result, job, step }) {
+  if (result?.ok !== true || ![
+    'write_file',
+    'bash_exec',
+    'image_transform',
+    'media_transform',
+    'pdf_transform',
+    'archive_create',
+  ].includes(call?.name)) return []
+  const persisted = []
+  const seen = new Set()
+  for (const candidate of localArtifactCandidates(call, result)) {
+    let artifact = null
+    try {
+      const sourcePath = resolveLocalArtifactSource(candidate, call, result)
+      const key = process.platform === 'win32' ? sourcePath.toLowerCase() : sourcePath
+      if (seen.has(key)) continue
+      seen.add(key)
+      artifact = await createLocalFileArtifactAsync({ sourcePath, filename: path.basename(sourcePath) })
+      persistGeneratedArtifact({ artifact, args: { title: artifact.title }, job, step })
+      persisted.push(artifact)
+    } catch {
+      if (artifact?.fullPath) {
+        try { await fs.promises.unlink(artifact.fullPath) } catch { /* best-effort orphan cleanup */ }
+      }
+      // Preserve the successful source operation if an output disappears
+      // before publication or cannot be copied into the artifact store.
     }
   }
   return persisted
@@ -1511,6 +1441,34 @@ async function executeServerTool({
         ...normalizeToolError(err, { fallbackCode: 'fs_tool_failed' }),
         ...(err?.path ? { path: err.path } : {}),
       }
+    }
+  }
+  if (IMAGE_TOOL_NAMES.has(name)) {
+    try {
+      return await dispatchImageTool(name, args || {}, { userId: job?.userId || null, signal })
+    } catch (err) {
+      return normalizeToolError(err, { fallbackCode: 'image_tool_failed' })
+    }
+  }
+  if (MEDIA_TOOL_NAMES.has(name)) {
+    try {
+      return await dispatchMediaTool(name, args || {}, { userId: job?.userId || null, signal })
+    } catch (err) {
+      return normalizeToolError(err, { fallbackCode: 'media_tool_failed' })
+    }
+  }
+  if (PDF_TOOL_NAMES.has(name)) {
+    try {
+      return await dispatchPdfTool(name, args || {}, { userId: job?.userId || null, signal })
+    } catch (err) {
+      return normalizeToolError(err, { fallbackCode: 'pdf_tool_failed' })
+    }
+  }
+  if (BATCH_FILE_TOOL_NAMES.has(name)) {
+    try {
+      return await dispatchBatchFileTool(name, args || {}, { userId: job?.userId || null, signal })
+    } catch (err) {
+      return normalizeToolError(err, { fallbackCode: 'batch_file_tool_failed' })
     }
   }
   if (['grep_code', 'find_symbol', 'list_imports'].includes(name)) {
@@ -1878,9 +1836,13 @@ export async function runToolsLoop({
   // merely to prepare their next request. Explicit compaction can still request
   // a semantic summary; automatic recovery uses the deterministic archive.
   const semanticSummary = false
-  const convo = ensureSafetySystemMessages(
+  let convo = ensureSafetySystemMessages(
     Array.isArray(restoredState?.messages) ? [...restoredState.messages] : [...messages],
   )
+  convo = replaceRuntimeCapabilityBlock(convo, {
+    toolSpecs: activeToolSpecs,
+    approvalMode,
+  })
   const hasRuntimeMarker = (marker) => convo.some((message) => (
     message?.role === 'system' && String(message?.content || '').includes(marker)
   ))
@@ -2804,10 +2766,12 @@ export async function runToolsLoop({
         turnId: job?.id || step?.id,
         iteration: iter,
       })
+      const modelOutputTruncated = String(modelResult?.finishReason || '').toLowerCase() === 'length'
       checkpointCalls = normalizeToolCalls(scopedToolCalls, {
         toolSpecs: activeToolSpecs,
       }).map((call) => ({
         ...call,
+        modelOutputTruncated,
         idempotencyKey: buildJobToolIdempotencyKey({
           jobId: job?.id,
           stepId: step?.id,
@@ -2926,7 +2890,15 @@ export async function runToolsLoop({
           toolCallId: call.id,
           idempotencyKey: call.idempotencyKey,
         })
-      if (call.checkpointStatus === 'executing'
+      if (call.modelOutputTruncated) {
+        result = {
+          ok: false,
+          code: 'tool_call_truncated',
+          error: 'The model reached its output-token limit while generating this tool-call batch, so the arguments may be incomplete and were not executed.',
+          retryable: true,
+          hint: 'Generate a fresh complete tool call. Shorten large inline content or split the work into smaller calls when necessary.',
+        }
+      } else if (call.checkpointStatus === 'executing'
         && getToolMetadata(name, { args, userId: job?.userId || null }).isReadOnly !== true
         && !idempotentResume) {
         // We cannot prove whether a side effect committed before the process
@@ -3168,6 +3140,11 @@ export async function runToolsLoop({
       exploratorySuccess: false,
       productiveSuccess: false,
     }
+    // OpenAI-compatible providers require every tool response for one
+    // assistant tool_calls batch to be contiguous. Browser screenshots add a
+    // multimodal user message, so defer that (and any other post-tool context)
+    // until every tool_call in this batch has received its tool response.
+    const deferredPostBatchMessages = []
 
     const recordOutcome = async (outcome) => {
       outcome.result = normalizeToolResult(outcome.result)
@@ -3176,7 +3153,7 @@ export async function runToolsLoop({
         ? outcome.call
         : { ...outcome.call, args: outcome.executionArgs }
       if (succeeded && !outcome.artifactId) {
-        const localArtifacts = persistLocalToolArtifacts({
+        const localArtifacts = await persistLocalToolArtifactsAsync({
           call: executedCall,
           result: outcome.result,
           job,
@@ -3280,7 +3257,19 @@ export async function runToolsLoop({
       if (executedCall?.name === 'read_file' && succeeded) {
         hasSuccessfulRepresentativeRead = true
       }
-      convo.push(buildToolResultMessage(outcome.call, outcome.result, { maxChars: toolResultMaxChars }))
+      const toolResultMessages = buildToolResultMessages(
+        outcome.call,
+        outcome.result,
+        { maxChars: toolResultMaxChars },
+      )
+      if (toolResultMessages.length > 1 && outcome.result?.image?.data) {
+        const compactImage = { ...outcome.result.image }
+        delete compactImage.data
+        outcome.result = { ...outcome.result, image: { ...compactImage, captured: true } }
+      }
+      const [toolResultMessage, ...postToolMessages] = toolResultMessages
+      convo.push(toolResultMessage)
+      deferredPostBatchMessages.push(...postToolMessages)
       if (executedCall?.name === 'request_directory'
         && succeeded
         && outcome.result?.already_authorized === true
@@ -3299,13 +3288,17 @@ export async function runToolsLoop({
         const refreshedSpecs = [...byName.values()].filter(Boolean)
         if (refreshedSpecs.length > activeToolSpecs.length) {
           activeToolSpecs = refreshedSpecs
+          convo = replaceRuntimeCapabilityBlock(convo, {
+            toolSpecs: activeToolSpecs,
+            approvalMode,
+          })
           availableVerificationToolNames = activeToolSpecs
             .map(toolNameFromSpec)
             .filter((name) => VERIFICATION_TOOLS.has(name) || name === 'bash_exec')
           requiresPdfLayoutVerification = mutationExecutionRequested
             && shouldRequirePdfLayoutVerification(executionIntentText)
             && activeToolSpecs.some((spec) => toolNameFromSpec(spec) === 'bash_exec')
-          convo.push({
+          deferredPostBatchMessages.push({
             role: 'system',
             content: [
               '[DIRECTORY AUTHORIZATION TOOL REFRESH]',
@@ -3423,6 +3416,7 @@ export async function runToolsLoop({
         break
       }
     }
+    convo.push(...deferredPostBatchMessages)
     if (executionConvergenceEnabled) {
       if (convergenceBatch.productiveSuccess) {
         executionConvergence.unproductiveRounds = 0

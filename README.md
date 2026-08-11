@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/SQLite-WAL-2e8fa3" alt="SQLite WAL" />
   <img src="https://img.shields.io/badge/Vite-8-ec4899?logo=vite" alt="Vite 8" />
   <a href="https://github.com/lichangjiang932-ship-it/Gugo/actions/workflows/ci.yml"><img src="https://github.com/lichangjiang932-ship-it/Gugo/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" /></a>
-  <img src="https://img.shields.io/badge/release-v0.10.17-blue" alt="v0.10.17" />
+  <img src="https://img.shields.io/badge/release-v0.10.18-blue" alt="v0.10.18" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT" />
 </p>
 
@@ -47,6 +47,7 @@ Windows 安装包与自动更新元数据见 [GitHub Releases](https://github.co
 - 多模型流式 SSE 输出 · 工具调用循环 · `[[choice:...]]` 结构化选项交互
 - 12 + N 种内置技能（PPT 大师 / 网页生成 / 调研 / 翻译 / 代码审查 / 项目规划 …）
 - 子代理（explore / plan / general）在独立上下文中运行，拥有独立工具循环和上下文压缩
+- `/goals <目标>` 创建可恢复的后台 Goal：先生成可编辑计划并等待显式批准，再按计划执行、验证并记录检查点；即使全局审批设为全部放行，Goal 的首次计划仍不会跳过批准
 
 ### Artifact 渲染（差异化亮点）
 - PPT：layout 控制（cover / section / kpi / chart / statement / split / process / quote / bullets / end）
@@ -64,7 +65,15 @@ Windows 安装包与自动更新元数据见 [GitHub Releases](https://github.co
 - Shell 执行（危险命令拦截）
 - Git workbench（status / diff / commit）
 - 代码理解：grep_code / find_symbol / list_imports
+- 图片：`image_info` 检查格式、尺寸和方向等元数据；`image_transform` 支持格式转换、缩放、裁剪、旋转、翻转、灰度、模糊、锐化与归一化
+- 音视频：`media_probe` 检查流、编码和时长；`media_transform` 支持剪辑、转码、提取音频、抽帧、变速、生成 GIF、烧录字幕、兼容性诊断/重编码拼接、音量调整与 `denoise_audio` FFT 降噪
+- PDF：`pdf_info` 检查页数、元数据和表单，`pdf_text` 按页提取文本及可直接用于覆盖的坐标；`pdf_transform` 支持合并、拆分、旋转、中文水印、中文表单填写与坐标式文字遮盖重绘
+- 批量文件：`archive_list` 不落地预览 ZIP 与 RAR4/RAR5，`archive_create` 流式创建 ZIP，`archive_extract` 安全解压 ZIP 与 RAR4/RAR5，`batch_rename` 分阶段批量重命名文件或整个目录，`file_hash_manifest` 流式生成 SHA-256 清单和精确重复组（不会自动删除文件）
 - 反思工具：manage_todos / reflect / request_clarification
+
+图片、音视频、PDF 和归档工具按已授权路径处理二进制文件，不经过普通 `read_file` 的 5 MB UTF-8 通道；成功生成的图片、媒体、PDF 和 ZIP 会异步复制到受管 Artifact 目录并返回下载链接。普通文本读取的 5 MB 上限仍然保留。
+
+已知边界：`archive_list` / `archive_extract` 支持单卷、未加密的 ZIP32 与 RAR4/RAR5，`archive_create` 只创建 ZIP32；不支持 ZIP64、加密或多卷归档，也不创建 RAR。PDF `overlay_text` 使用 PDF 点坐标（左下角为原点）覆盖指定矩形后以随应用捆绑的 CJK 字体绘制一行文字，不会修改或重排底层文本流。内建 PDF 工具不提供 OCR、PDF↔Word 或任意段落重排；已安装 LibreOffice 时可通过受控 Shell 做需视觉复核的尽力转换。自定义字体是脚本型 Skill，不是内建字体编辑器，需要已授权的读写目录、`bash_exec`，以及外部 FontForge 或 Python `fontTools`。
 
 ### MCP 客户端
 - stdio + Streamable HTTP + Legacy SSE，工具发现 / 调用 / 自动重连
@@ -87,7 +96,7 @@ Windows 安装包与自动更新元数据见 [GitHub Releases](https://github.co
 - **收件箱**：批准 / 拒绝 / **改写参数后再批准**——单次调用粒度，不是「按工具名一刀切」
 - 风险分级按**具体参数**判定：`bash_exec` 命中危险命令黑名单升 high、写文件越出工作区升 high、`fetch_url` 只拦非安全方法、`apply_patch` 的 `dry_run` 直接放行
 - 决策权威在 DB，进程重启后挂起的审批仍可决策；等待中的任务不会被崩溃恢复重跑
-- `APPROVAL_MODE=off | unattended | all` 控制范围，默认只拦无人值守路径
+- `APPROVAL_MODE=off | unattended | all` 控制审批队列是否可用；`off` 对未授权危险操作保守拒绝，只有用户显式选择 `bypass` 才会全放行
 
 ---
 
@@ -160,7 +169,7 @@ npm run dev            # 前端 HMR（默认 :5175）
 npm run local          # 生产模式：build + 启动 Node server
 ```
 
-打开 `http://127.0.0.1:5175`，无需注册或登录。进入「设置 → 模型」添加自己的 OpenAI 兼容、Anthropic、Gemini、Ollama 或 LM Studio Provider；项目不附带可用的模型 API Key。也可以在 `.env` 中配置服务端默认模型。
+打开 `http://127.0.0.1:5175`，无需注册或登录。首次使用先进入「权限中心」，在「首次启动 · 开启本地工作区」中选择工作目录、分别启用文件/Shell/Git 能力并选择审批模式；只会授权所选目录，部署环境锁定的开关不会被界面覆盖。随后进入「设置 → 模型」添加自己的 OpenAI 兼容、Anthropic、Gemini、Ollama 或 LM Studio Provider；项目不附带可用的模型 API Key。也可以在 `.env` 中配置服务端默认模型。
 
 Docker：
 
@@ -175,6 +184,8 @@ Compose 默认只把端口绑定到宿主机 `127.0.0.1`。若要从局域网或
 默认本地模式下可直接在「设置 → 模型」新增模型 Provider。模型配置会自动用于聊天、诊断、后台任务和子代理；留空 API Key 可保留原密钥。启用 `AUTH_MODE=multi_user` 后，各用户登录后分别配置自己的 Provider。
 
 Browser 工具需要 Node.js 20 或更高版本，以及已安装的 Edge/Chrome。默认自动探测浏览器，也可在 `.env` 设置 `BROWSER_EXECUTABLE_PATH`；仅受限 CI/沙箱环境才使用 `BROWSER_NO_SANDBOX=1`。
+
+视频/音频剪辑、转码、抽帧、拼接、音量调整和降噪需要 `ffmpeg` 与 `ffprobe`。官方 Windows 桌面包从 Electron `resources/bin` 自带 sidecar；源码或自托管部署可将它们加入 `PATH`，或用 `GUGO_FFMPEG_PATH` / `GUGO_FFPROBE_PATH` 指向绝对路径。详见 [配置说明](docs/CONFIGURATION.md#媒体工具可执行文件)。
 
 从左侧「连接」进入 Access 中心（Hash 路由为 `/#/access`）。目录中的 Browser 应用是打开对应网站的浏览器入口，不代表原生 API 集成；Notion、GitHub、Slack 与 Google Drive 才提供可被 agent 结构化调用的原生连接，并支持 OAuth 一键授权（配置 `APP_PUBLIC_URL` 与对应 OAuth Client 环境变量），未配置时仍可手工填 token。飞书使用企业自建应用的 App ID / App Secret，个人微信使用二维码扫码。OAuth 握手使用一次性 state、PKCE（GitHub/Google Drive）与 10 分钟持久会话，凭据探测成功后才启用；GitHub 默认仅请求 `read:user`，Slack 默认仅请求公开频道读取范围，Google Drive 默认仅请求 `drive.readonly`，额外 scope 必须通过对应 `*_OAUTH_SCOPES` 显式开启。Google Drive access token 到期后会使用服务端保存的 refresh token 自动续期。凭据只保存在服务端，返回前端时会脱敏。Access 中心还提供常用 MCP Server 的一键安装预设（Chrome DevTools、Fetch、Sequential Thinking、Memory、Playwright），装完即可在对话中直接调用其工具。
 
@@ -224,13 +235,15 @@ Cherry Studio 选择 `Streamable HTTP`，URL 填上述 `/mcp` 地址，并添加
 | `WORKSPACE_GIT_ENABLED` | 否 | Git 工具开关 | `0` |
 | `WORKSPACE_ROOT` | 否 | 工作区根目录 | `process.cwd()` |
 | `WORKSPACE_SHARED_TRUSTED` | 否 | 单机可信环境跳过逐用户工作区信任 | `0` |
+| `GUGO_FFMPEG_PATH` | 否 | `ffmpeg` 可执行文件绝对路径；优先于桌面 sidecar 和 `PATH` | 自动探测 |
+| `GUGO_FFPROBE_PATH` | 否 | `ffprobe` 可执行文件绝对路径；优先于桌面 sidecar 和 `PATH` | 自动探测 |
 | `APP_PUBLIC_URL` | 否 | OAuth 回调使用的固定公网 origin | — |
 | `TRUST_PROXY` | 否 | 信任反向代理转发头（代理必须先清洗） | `0` |
 | `MCP_STDIO_ALLOWED_COMMANDS` | 否 | MCP stdio 命令白名单 | `npx,node,uvx,…` |
 | `MCP_SERVER_ENABLED` | 否 | 开启对外 `/mcp` Streamable HTTP Server | `1` |
 | `MCP_RATE_LIMIT_PER_MINUTE` | 否 | `/mcp` 每来源 IP 每分钟请求上限 | `300` |
 | `MCP_MAX_BODY_BYTES` | 否 | `/mcp` 单请求最大字节数 | `1048576` |
-| `APPROVAL_MODE` | 否 | 审批门控范围：`off` / `unattended` / `all` | `unattended` |
+| `APPROVAL_MODE` | 否 | 审批队列策略：`off` 保守拒绝未授权危险操作，`unattended` / `all` 启用逐次审批；不会覆盖用户权限档位 | `unattended` |
 | `APPROVAL_TIMEOUT_MS` | 否 | 审批超时（超时视同拒绝） | `86400000` |
 | `TURN_EVENT_RETENTION_DAYS` | 否 | 服务端聊天事件整轮保留天数 | `30` |
 | `TURN_EVENT_MAX_TERMINAL_TURNS_PER_USER` | 否 | 每用户最多保留的终态轮次事件 | `1000` |

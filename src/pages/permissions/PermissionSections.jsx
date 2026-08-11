@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion'
-import { Bell, Mic, ShieldCheck, Terminal } from 'lucide-react'
+import { useState } from 'react'
+import { Bell, CheckCircle2, FolderOpen, Mic, ShieldAlert, ShieldCheck, Terminal } from 'lucide-react'
 import RiskOverridesPanel from '../../components/RiskOverridesPanel.jsx'
 import { GATEABLE_TOOLS } from '../../lib/toolPermissionClient'
 import { PERMISSION_ITEMS, STATE_COLOR, STATE_DOT, STATE_KEY, TOOL_ICONS } from './permissionViewConfig.js'
@@ -12,6 +13,127 @@ export function PermissionStats({ controller, t }) {
     { label: t('permissionsDashboard.toolGate'), value: t('permissionsDashboard.serverEnforced'), tone: '' },
   ]
   return <div className="mb-5 grid grid-cols-2 gap-3.5 lg:grid-cols-4">{stats.map((stat, index) => <motion.div key={stat.label} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.08 }} className="rounded-md border border-ink/30 bg-paper p-3.5"><span className={`font-mono text-[9px] tracking-wider ${stat.tone === 'ember' ? 'text-ember' : stat.tone === 'cyan' ? 'text-cyan' : 'text-ink-fade'}`}>{stat.label}</span><div className="mt-1.5 font-hand text-[26px] text-ink">{stat.value}</div></motion.div>)}</div>
+}
+
+export function WorkspaceOnboardingSection({ controller, t }) {
+  const onboarding = controller.localFiles?.onboarding
+  const configured = Boolean(onboarding?.completedAt)
+  const [rootPath, setRootPath] = useState(onboarding?.writableDirectories?.[0]?.path || '')
+  const [features, setFeatures] = useState(() => Object.fromEntries(
+    ['fileSystem', 'shell', 'git'].map((name) => {
+      const state = onboarding?.features?.[name]
+      return [name, configured || state?.locked ? state?.enabled === true : true]
+    }),
+  ))
+  const [approvalMode, setApprovalMode] = useState(onboarding?.approvalMode || 'normal')
+  const [confirmed, setConfirmed] = useState(false)
+  const [bypassConfirmed, setBypassConfirmed] = useState(false)
+
+  const selectDirectory = async () => {
+    const selected = await controller.chooseOnboardingDirectory()
+    if (selected) setRootPath(selected)
+  }
+  const submit = async (event) => {
+    event.preventDefault()
+    await controller.configureOnboarding({
+      path: rootPath.trim(),
+      features,
+      approvalMode,
+      confirmed,
+      bypassConfirmed,
+    })
+  }
+  const blocked = !rootPath.trim()
+    || !confirmed
+    || controller.onboardingBusy
+    || (approvalMode === 'bypass' && !bypassConfirmed)
+
+  return (
+    <>
+      <SectionTitle eyebrow="QUICK START" title={t('permissionsDashboard.onboardingTitle')} />
+      <form onSubmit={submit} className="mb-6 overflow-hidden rounded-md border border-ink/30" data-testid="workspace-onboarding">
+        <div className={`flex items-start gap-3 border-b border-dashed px-4 py-3 ${onboarding?.complete ? 'border-emerald-500/30 bg-emerald-50/50' : 'border-amber-500/40 bg-amber-50/60'}`}>
+          {onboarding?.complete
+            ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700" />
+            : <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />}
+          <div>
+            <div className="text-sm text-ink">{t(onboarding?.complete ? 'permissionsDashboard.onboardingComplete' : 'permissionsDashboard.onboardingRiskTitle')}</div>
+            <div className="mt-1 text-xs leading-relaxed text-ink-soft">{t('permissionsDashboard.onboardingRiskHint')}</div>
+          </div>
+        </div>
+
+        <div className="space-y-4 px-4 py-4">
+          <div>
+            <label htmlFor="workspace-onboarding-path" className="text-xs text-ink-soft">{t('permissionsDashboard.onboardingDirectory')}</label>
+            <div className="mt-1.5 flex gap-2">
+              <input
+                id="workspace-onboarding-path"
+                value={rootPath}
+                onChange={(event) => setRootPath(event.target.value)}
+                placeholder={t('permissionsDashboard.onboardingDirectoryPlaceholder')}
+                className="h-9 min-w-0 flex-1 rounded-md border border-ink-fade/60 bg-paper px-3 font-mono text-xs text-ink outline-none focus:border-ember"
+              />
+              <button type="button" onClick={selectDirectory} disabled={controller.pickerBusy} className="flex h-9 items-center gap-1.5 rounded-md border border-ink-fade/60 px-3 text-xs text-ink-soft disabled:opacity-50">
+                <FolderOpen className="h-3.5 w-3.5" />
+                {t(controller.pickerBusy ? 'permissionsDashboard.onboardingPicking' : 'permissionsDashboard.onboardingPick')}
+              </button>
+            </div>
+            <p className="mt-1 text-[11px] text-ink-fade">{t('permissionsDashboard.onboardingDirectoryHint')}</p>
+          </div>
+
+          <fieldset>
+            <legend className="text-xs text-ink-soft">{t('permissionsDashboard.onboardingFeatures')}</legend>
+            <div className="mt-1.5 grid gap-2 sm:grid-cols-3">
+              {Object.entries({ fileSystem: 'FS', shell: 'SHELL', git: 'GIT' }).map(([name, code]) => {
+                const state = onboarding?.features?.[name]
+                return (
+                  <label key={name} className={`flex items-start gap-2 rounded-md border px-3 py-2 ${state?.locked ? 'border-ink-fade/30 bg-paper-2/50' : 'border-ink-fade/50'}`}>
+                    <input
+                      type="checkbox"
+                      checked={features[name]}
+                      disabled={state?.locked}
+                      onChange={(event) => setFeatures((current) => ({ ...current, [name]: event.target.checked }))}
+                      className="mt-0.5"
+                    />
+                    <span className="min-w-0">
+                      <span className="block font-mono text-[10px] text-ink">{code}</span>
+                      <span className="block text-[11px] text-ink-fade">{t(`permissionsDashboard.onboardingFeature${name[0].toUpperCase()}${name.slice(1)}`)}</span>
+                      {state?.locked && <span className="block text-[10px] text-amber-700">{t('permissionsDashboard.onboardingManaged', { source: state.source })}</span>}
+                    </span>
+                  </label>
+                )
+              })}
+            </div>
+          </fieldset>
+
+          <div>
+            <label htmlFor="workspace-onboarding-approval" className="text-xs text-ink-soft">{t('permissionsDashboard.onboardingApproval')}</label>
+            <select id="workspace-onboarding-approval" value={approvalMode} onChange={(event) => { setApprovalMode(event.target.value); setBypassConfirmed(false) }} className="mt-1.5 h-9 w-full rounded-md border border-ink-fade/60 bg-paper px-3 text-sm text-ink">
+              {['normal', 'acceptEdits', 'plan', 'bypass'].map((mode) => <option key={mode} value={mode}>{t(`approvals.mode.${mode}`)} — {t(`approvals.mode.${mode}Hint`)}</option>)}
+            </select>
+          </div>
+
+          {approvalMode === 'bypass' && (
+            <label className="flex items-start gap-2 rounded-md border border-red-500/40 bg-red-50 px-3 py-2 text-xs text-red-800">
+              <input type="checkbox" checked={bypassConfirmed} onChange={(event) => setBypassConfirmed(event.target.checked)} className="mt-0.5" />
+              <span>{t('permissionsDashboard.onboardingBypassConfirm')}</span>
+            </label>
+          )}
+          <label className="flex items-start gap-2 text-xs text-ink-soft">
+            <input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} className="mt-0.5" />
+            <span>{t('permissionsDashboard.onboardingConfirm')}</span>
+          </label>
+        </div>
+
+        {controller.localFileError && <div className="mx-4 mb-3 rounded-md border border-dashed border-ember/60 px-3 py-2 text-xs text-ember">{controller.localFileError}</div>}
+        <div className="flex justify-end border-t border-dashed border-ink-fade/40 px-4 py-3">
+          <button type="submit" disabled={blocked} className="h-9 rounded-md bg-ember px-4 text-sm text-paper transition-opacity disabled:opacity-40">
+            {t(controller.onboardingBusy ? 'permissionsDashboard.onboardingSaving' : onboarding?.complete ? 'permissionsDashboard.onboardingUpdate' : 'permissionsDashboard.onboardingEnable')}
+          </button>
+        </div>
+      </form>
+    </>
+  )
 }
 
 export function WorkbenchPolicySection({ appState, dispatch, t }) {

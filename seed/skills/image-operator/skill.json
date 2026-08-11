@@ -1,0 +1,9 @@
+{
+  "id": "image-operator",
+  "name": "Image Operator · 图片处理",
+  "description": "检查图片元数据并执行格式转换、缩放、裁剪、旋转和常用滤镜，支持授权路径与大文件。",
+  "version": "1.0.0",
+  "icon": "🖼️",
+  "permissions": ["读取已授权图片", "在已授权目录写入图片结果"],
+  "source": { "type": "builtin", "license": "MIT" }
+}

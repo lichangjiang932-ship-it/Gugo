@@ -7,7 +7,7 @@ import {
   selectPersistedSnapshot,
 } from './appStatePersistence.js'
 
-export const TOOLS_CONFIG_SCHEMA_VERSION = 2
+export const TOOLS_CONFIG_SCHEMA_VERSION = 5
 
 export function needsToolsConfigSchemaMigration(saved) {
   if (!saved?.toolsConfig || typeof saved.toolsConfig !== 'object') return false
@@ -40,7 +40,7 @@ export function createInitialState() {
     agentMode: 'chat',
     previewArtifact: null,
     toolsConfigSchemaVersion: TOOLS_CONFIG_SCHEMA_VERSION,
-    toolsConfig: { fetch_url: false, create_pptx: true, create_docx: true, create_xlsx: true, create_react_component: true, create_mermaid: true, create_chart: true, create_svg: true, create_html_app: true, Agent: true, list_directory: false, read_file: false, write_file: false, edit_file: false, bash_exec: true, git_status: false, git_diff: false, run_project_check: true, manage_todos: true },
+    toolsConfig: { fetch_url: false, create_pptx: true, create_docx: true, create_xlsx: true, create_react_component: true, create_mermaid: true, create_chart: true, create_svg: true, create_html_app: true, Agent: true, list_directory: false, read_file: false, write_file: false, edit_file: false, bash_exec: true, git_status: false, git_diff: false, run_project_check: true, image_info: true, image_transform: true, media_probe: true, media_transform: true, pdf_info: true, pdf_text: true, pdf_transform: true, archive_list: true, archive_create: true, archive_extract: true, batch_rename: true, file_hash_manifest: true, manage_todos: true },
     sessionDrafts: {},
     persistenceNotice: null,
   }
@@ -58,6 +58,24 @@ export function normalizePersistedFields(saved, { cancelRunningTasks = false } =
       normalized.toolsConfig.bash_exec = true
     }
     if (savedSchemaVersion < 2) normalized.toolsConfig.run_project_check = true
+    if (savedSchemaVersion < 3) {
+      normalized.toolsConfig.image_info = true
+      normalized.toolsConfig.image_transform = true
+      normalized.toolsConfig.media_probe = true
+      normalized.toolsConfig.media_transform = true
+      normalized.toolsConfig.pdf_info = true
+      normalized.toolsConfig.pdf_transform = true
+    }
+    if (savedSchemaVersion < 4) {
+      normalized.toolsConfig.archive_create = true
+      normalized.toolsConfig.archive_extract = true
+      normalized.toolsConfig.batch_rename = true
+      normalized.toolsConfig.file_hash_manifest = true
+    }
+    if (savedSchemaVersion < 5) {
+      normalized.toolsConfig.pdf_text = true
+      normalized.toolsConfig.archive_list = true
+    }
   }
   normalized.toolsConfigSchemaVersion = TOOLS_CONFIG_SCHEMA_VERSION
   if (normalized.sessions !== undefined) normalized.sessions = backfillMessageTimestamps(normalized.sessions)

@@ -29,7 +29,7 @@ const {
   countPendingApprovals,
 } = await import('../server/services/approvalStore.js')
 const { listNotifications } = await import('../server/services/notificationsStore.js')
-const { rememberTool, setRiskOverride } = await import('../server/services/approvalSettingsStore.js')
+const { rememberTool, setApprovalMode, setRiskOverride } = await import('../server/services/approvalSettingsStore.js')
 const { createJob } = await import('../server/services/jobStore.js')
 const { closeDb } = await import('../server/db.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
@@ -141,13 +141,68 @@ test('无 userId(内部/系统调用)立即放行且不建行', async () => {
   }
 })
 
-test("mode 'off' 直接放行,不创建审批行", async () => {
+test("mode 'off' 对危险调用 fail closed,不创建审批行", async () => {
   const { userId, jobId } = newUser('off')
   const result = await requestApproval({
-    userId, origin: 'job', jobId, toolName: 'bash_exec', args: { command: 'ls' }, mode: 'off',
+    userId, origin: 'job', jobId, toolName: 'bash_exec', args: { command: 'rm -rf build' }, mode: 'off',
   })
-  assert.equal(result.proceed, true)
+  assert.equal(result.proceed, false)
+  assert.match(result.reason, /审批队列已关闭/)
   assert.equal(countPendingApprovals({ userId }), 0)
+})
+
+test('真实用户档位依次执行 plan / normal / acceptEdits / bypass 语义', async () => {
+  const planUser = newUser('mode-plan')
+  setApprovalMode({ userId: planUser.userId, mode: 'plan' })
+  const planned = await requestApproval({
+    ...planUser,
+    origin: 'chat',
+    toolName: 'write_file',
+    args: { path: 'planned.txt', content: 'x' },
+    mode: 'unattended',
+  })
+  assert.equal(planned.proceed, false)
+  assert.match(planned.reason, /计划模式/)
+  assert.equal(countPendingApprovals({ userId: planUser.userId }), 0)
+
+  const normalUser = newUser('mode-normal')
+  setApprovalMode({ userId: normalUser.userId, mode: 'normal' })
+  const controller = new AbortController()
+  const normalPending = requestApproval({
+    ...normalUser,
+    origin: 'chat',
+    toolName: 'write_file',
+    args: { path: 'normal.txt', content: 'x' },
+    mode: 'unattended',
+    signal: controller.signal,
+  })
+  await waitForPendingRow(normalUser.userId)
+  controller.abort()
+  assert.equal((await normalPending).proceed, false)
+
+  const editsUser = newUser('mode-edits')
+  setApprovalMode({ userId: editsUser.userId, mode: 'acceptEdits' })
+  const edited = await requestApproval({
+    ...editsUser,
+    origin: 'chat',
+    toolName: 'write_file',
+    args: { path: 'accepted.txt', content: 'x' },
+    mode: 'unattended',
+  })
+  assert.equal(edited.proceed, true)
+  assert.equal(countPendingApprovals({ userId: editsUser.userId }), 0)
+
+  const bypassUser = newUser('mode-bypass')
+  setApprovalMode({ userId: bypassUser.userId, mode: 'bypass' })
+  const bypassed = await requestApproval({
+    ...bypassUser,
+    origin: 'job',
+    toolName: 'bash_exec',
+    args: { command: 'rm -rf build' },
+    mode: 'off',
+  })
+  assert.equal(bypassed.proceed, true)
+  assert.equal(countPendingApprovals({ userId: bypassUser.userId }), 0)
 })
 
 test('APPROVE:批准后返回原始 args', async () => {

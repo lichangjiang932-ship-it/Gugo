@@ -98,6 +98,22 @@ test('feedback and goals first open inline panels, then save meaningful values',
   assert.deepEqual(actions[0].payload.todos, [{ id: 'goal-1', text: 'ship the redesign', done: false }])
 })
 
+test('goals command creates a durable planned job and opens it when job runtime is available', async () => {
+  const registry = createRegistry()
+  const calls = []
+  const navigations = []
+  const result = await registry.getCommand('goals').handler('ship the redesign', {
+    createGoalJob: async (prompt, options) => {
+      calls.push({ prompt, options })
+      return { job: { id: 'job 1', status: 'queued' } }
+    },
+    navigate: (path) => navigations.push(path),
+  })
+  assert.equal(result, 'Goal added: ship the redesign')
+  assert.deepEqual(calls, [{ prompt: 'ship the redesign', options: { requirePlanApproval: true } }])
+  assert.deepEqual(navigations, ['/tasks?job=job%201'])
+})
+
 test('continue creates a new chat with a carried-context draft', async () => {
   const registry = createRegistry()
   const actions = []

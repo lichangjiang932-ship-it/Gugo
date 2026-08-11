@@ -97,6 +97,26 @@ test('LM Studio and llama.cpp no-choices frames retain text and tool calls', () 
   assert.equal(frame.terminal, true)
 })
 
+test('stream finish normalization keeps length stronger than a partial tool call', () => {
+  const state = createCompatibleModelStreamState()
+  normalizeCompatibleModelStreamPayload({
+    choices: [{
+      delta: {
+        tool_calls: [{
+          index: 0,
+          id: 'partial',
+          function: { name: 'write_file', arguments: '{' },
+        }],
+      },
+    }],
+  }, state)
+  const terminal = normalizeCompatibleModelStreamPayload({
+    choices: [{ delta: {}, finish_reason: 'length' }],
+  }, state)
+
+  assert.equal(terminal.finishReason, 'length')
+})
+
 test('decodeModelStreamLine accepts SSE variants, NDJSON, and done markers', () => {
   assert.deepEqual(decodeModelStreamLine('data:{"content":"a"}'), { done: false, data: { content: 'a' } })
   assert.deepEqual(decodeModelStreamLine('{"content":"b"}'), { done: false, data: { content: 'b' } })

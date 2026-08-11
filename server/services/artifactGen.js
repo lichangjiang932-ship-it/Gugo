@@ -197,6 +197,28 @@ export function createLocalFileArtifact({ sourcePath, filename = '' } = {}) {
   }
 }
 
+/** Async variant for media/PDF/image outputs that may be hundreds of MB. */
+export async function createLocalFileArtifactAsync({ sourcePath, filename = '' } = {}) {
+  const source = await fs.promises.realpath(String(sourcePath || ''))
+  const stat = await fs.promises.stat(source)
+  if (!stat.isFile()) throw new Error('local artifact source must be a file')
+  const originalFilename = String(filename || path.basename(source)).normalize('NFC').trim()
+  const artifactPath = newArtifactPathForFilename(originalFilename)
+  try {
+    await fs.promises.copyFile(source, artifactPath.fullPath)
+  } catch (error) {
+    try { await fs.promises.unlink(artifactPath.fullPath) } catch { /* best-effort allocation cleanup */ }
+    throw error
+  }
+  const extension = path.extname(artifactPath.filename).slice(1).toLowerCase()
+  return {
+    ...artifactPath,
+    type: extension || 'file',
+    title: originalFilename,
+    byteLength: stat.size,
+  }
+}
+
 const HTML_DELIVERY_INSTRUCTION_PATTERNS = Object.freeze([
   /(?:网页|页面|html)(?:\s*代码)?(?:已经|已)?(?:生成|完成|准备好)|(?:html|webpage|page)(?:\s+code)?\s+(?:is\s+)?(?:ready|generated|complete)/i,
   /(?:复制|拷贝)[^。！？\n]{0,48}(?:代码|源码)|copy[^.!?\n]{0,48}(?:code|source)/i,

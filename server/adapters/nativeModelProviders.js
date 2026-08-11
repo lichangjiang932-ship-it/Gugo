@@ -348,7 +348,12 @@ function finishEvents(state) {
   state.finished = true
   const toolCalls = [...state.toolCalls.values()]
   return toolCalls.length
-    ? [{ type: 'tool_calls', toolCalls, finishReason: 'tool_calls', usage: state.usage }]
+    ? [{
+        type: 'tool_calls',
+        toolCalls,
+        finishReason: state.finishReason === 'length' ? 'length' : 'tool_calls',
+        usage: state.usage,
+      }]
     : [{ type: 'finish', finishReason: state.finishReason || 'stop', usage: state.usage }]
 }
 

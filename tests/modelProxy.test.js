@@ -285,6 +285,38 @@ test('chat tool-loop streaming forwards deltas and returns canonical tool calls'
   assert.equal(result.usage.totalTokens, 15)
 })
 
+test('chat tool-loop removes screenshot base64 before calling a text-only model', async () => {
+  let requestBody = null
+  const result = await callStreamingModelWithTools({
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'text', text: 'inspect screenshot' },
+        { type: 'image_url', image_url: { url: 'data:image/png;base64,SECRET_SCREENSHOT_BYTES' } },
+      ],
+    }],
+    tools: [],
+    env: {
+      MODEL_BASE_URL: 'https://api.example.test/v1',
+      MODEL_API_KEY: 'test-key',
+      MODEL_NAME: 'text-only-model',
+      MODEL_NAMES_VISION: 'vision-only-model',
+    },
+    fetchImpl: async (_url, init) => {
+      requestBody = JSON.parse(init.body)
+      return streamedResponse([
+        `data: ${JSON.stringify({ choices: [{ delta: { content: 'fallback used' }, finish_reason: 'stop' }] })}\n\n`,
+        'data: [DONE]\n\n',
+      ])
+    },
+  })
+
+  const serialized = JSON.stringify(requestBody)
+  assert.equal(serialized.includes('SECRET_SCREENSHOT_BYTES'), false)
+  assert.match(serialized, /does not accept vision input/)
+  assert.equal(result.content, 'fallback used')
+})
+
 test('normalizes OpenAI compatible base URLs to chat completions endpoint', () => {
   assert.equal(
     normalizeOpenAICompatibleUrl('https://api.example.com/v1'),

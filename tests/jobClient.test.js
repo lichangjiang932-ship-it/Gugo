@@ -24,6 +24,7 @@ test('job client uses expected endpoints', async () => {
   }
 
   await createJob('生成周报', { fetchImpl })
+  await createJob('修复项目', { fetchImpl, requirePlanApproval: true })
   await listJobs({ fetchImpl })
   await getJob('job-1', { fetchImpl })
   await cancelJob('job-1', { fetchImpl })
@@ -33,11 +34,17 @@ test('job client uses expected endpoints', async () => {
   assert.deepEqual(calls.map((call) => call.url), [
     '/api/jobs',
     '/api/jobs',
+    '/api/jobs',
     '/api/jobs/job-1',
     '/api/jobs/job-1/cancel',
     '/api/jobs/job-1/retry',
     '/api/jobs/job-1/steps/step-1/retry',
   ])
+  assert.deepEqual(JSON.parse(calls[0].init.body), { prompt: '生成周报' })
+  assert.deepEqual(JSON.parse(calls[1].init.body), {
+    prompt: '修复项目',
+    requirePlanApproval: true,
+  })
 })
 
 test('HTML artifact previews use an auth header without exposing the session token in the URL', async () => {

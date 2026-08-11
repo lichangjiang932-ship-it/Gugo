@@ -23,12 +23,22 @@ import { TOOL_ARG_SCHEMAS } from './toolArgSchemas.js'
 import { TOOL_SPECS } from './toolSpecs.js'
 export { buildToolSpecs, listToolNames, resolveToolsForMode } from './toolSpecs.js'
 
-export function getBuiltinToolRuntimeStatus() {
+export function getStandaloneToolClientStatus() {
   const specNames = Object.keys(TOOL_SPECS)
   const executorNames = Object.keys(EXECUTORS)
   return {
+    scope: 'standalone_client',
     missingExecutors: specNames.filter((name) => typeof EXECUTORS[name] !== 'function'),
     missingSpecs: executorNames.filter((name) => !TOOL_SPECS[name]),
+  }
+}
+
+/** @deprecated Chat turns use the server TurnEngine. Use getStandaloneToolClientStatus(). */
+export function getBuiltinToolRuntimeStatus() {
+  const status = getStandaloneToolClientStatus()
+  return {
+    missingExecutors: status.missingExecutors,
+    missingSpecs: status.missingSpecs,
   }
 }
 
@@ -41,6 +51,7 @@ export function getBuiltinToolRuntimeStatus() {
  *   3. \u5168\u90e8\u901a\u8fc7 \u2192 \u5bf9\u6240\u6709\u6587\u4ef6\u505a\u66ff\u6362\u5e76\u5199\u56de
  *   4. \u4efb\u4f55\u4e00\u4e2a\u5199\u5165\u5931\u8d25 \u2192 \u56de\u6eda\u5df2\u5199\u7684\u6587\u4ef6\u5230\u539f\u59cb\u5185\u5bb9
  */
+/** @deprecated Compatibility client for standalone previews/tests; chat execution is server-owned. */
 export async function executeToolCall(call, options = {}) {  const { maxRetries = 2, retryDelayMs = 600 } = options
   const name = call?.name
   if (FILE_ARTIFACT_TOOL_NAMES.has(name)) {

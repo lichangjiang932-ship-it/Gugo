@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 
 import {
   buildAssistantToolCallsMessage,
+  buildToolResultMessages,
   createToolLoopGuard,
   executeToolWithRetry,
   isSubstantiveToolCall,
@@ -16,6 +17,26 @@ import {
   serializeToolResult,
   validateToolCall,
 } from '../server/utils/toolCallHarness.js'
+
+test('browser screenshot tool results become compact protocol output plus a real image message', () => {
+  const messages = buildToolResultMessages(
+    { id: 'shot-1', name: 'browser_screenshot' },
+    { ok: true, image: { mimeType: 'image/png', data: 'iVBORw0KGgo=', bytes: 8 } },
+  )
+
+  assert.equal(messages.length, 2)
+  assert.equal(messages[0].role, 'tool')
+  assert.equal(messages[0].tool_call_id, 'shot-1')
+  assert.equal(messages[0].content.includes('iVBORw0KGgo='), false)
+  assert.deepEqual(JSON.parse(messages[0].content).image, {
+    captured: true,
+    mimeType: 'image/png',
+    bytes: 8,
+  })
+  assert.equal(messages[1].role, 'user')
+  assert.equal(messages[1].content[1].type, 'image_url')
+  assert.equal(messages[1].content[1].image_url.url, 'data:image/png;base64,iVBORw0KGgo=')
+})
 
 const SPECS = [{
   type: 'function',

@@ -4,6 +4,20 @@
 
 Desktop data lives under Electron's per-user `userData/server-data` directory. Uninstalling the app does not delete that directory. The desktop runtime binds only to `127.0.0.1:5180` by default; set `GUGO_DESKTOP_PORT` to another unused port when required.
 
+## Media sidecars
+
+The Windows installer must contain both `ffmpeg.exe` and `ffprobe.exe`. They are not committed to Git. Before `electron-builder` runs, `npm run desktop:media-sidecars` validates and stages them as `resources/bin/ffmpeg.exe` and `resources/bin/ffprobe.exe`; `electron-builder.yml` then copies them to the installed app's `resources/bin`, which is the location read by `process.resourcesPath` at runtime.
+
+The staging command uses an already staged pair first. Otherwise it reads `GUGO_FFMPEG_PATH` and `GUGO_FFPROBE_PATH`, then searches `PATH`. Both executables must pass their respective `-version` check or packaging stops. A reproducible release should point both variables at the reviewed binaries chosen by the distributor:
+
+```powershell
+$env:GUGO_FFMPEG_PATH = 'C:\Tools\ffmpeg\bin\ffmpeg.exe'
+$env:GUGO_FFPROBE_PATH = 'C:\Tools\ffmpeg\bin\ffprobe.exe'
+npm run desktop:dist
+```
+
+The binaries remain ignored build artifacts. Keep the exact upstream version, download URL, checksum, license configuration, and any required source offer/notices with the release record.
+
 ## Publish an update
 
 1. Update `package.json` and `package-lock.json` to the same semantic version.

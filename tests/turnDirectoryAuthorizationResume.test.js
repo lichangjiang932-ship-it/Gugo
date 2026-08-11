@@ -14,6 +14,7 @@ process.env.APP_DATA_DIR = tempDir
 const { closeDb, createUser } = await import('../server/db.js')
 const { handleTurnEventRequest } = await import('../server/routes/turnEventRoutes.js')
 const { TurnEngine } = await import('../server/services/TurnEngine.js')
+const { setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
 const { grantLocalPath } = await import('../server/services/localFileAccessService.js')
 const { SERVER_TOOL_SPECS } = await import('../server/services/toolLoopRuntime.js')
 const {
@@ -98,6 +99,7 @@ test('non-directory resolution cannot restore local execution tools', () => {
 })
 
 test('directory authorization restores code tools missing from the pre-authorization base specs', async () => {
+  setApprovalMode({ userId, mode: 'bypass' })
   let modelCalls = 0
   const executed = []
   const observedToolNames = []

@@ -12,6 +12,7 @@ process.env.APP_DATA_DIR = tempDir
 
 const { closeDb } = await import('../server/db.js')
 const { JobRuntime } = await import('../server/services/jobRuntime.js')
+const { setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
 const { grantLocalPath } = await import('../server/services/localFileAccessService.js')
 const { appendJobEvent, updateJob } = await import('../server/services/jobStore.js')
 const { getJobTurnCheckpoint, saveJobTurnCheckpoint } = await import('../server/services/jobTurnCheckpointStore.js')
@@ -200,6 +201,7 @@ test('Job remains waiting when the requested directory grant is missing or does 
 
 test('resumed Job reuses its checkpoint marker and continues to write the authorized PDF output', async () => {
   const { userId } = issueTestSession()
+  setApprovalMode({ userId, mode: 'bypass' })
   const outputPath = path.join(authorizedDir, `processed-${Date.now()}.pdf`)
   let modelCalls = 0
   let directoryRequests = 0

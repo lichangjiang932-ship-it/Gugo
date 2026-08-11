@@ -25,6 +25,27 @@ Upstream license texts:
 The checked-in Babel bundle also includes the upstream
 `regenerator-runtime` MIT notice in its source banner.
 
+## Bundled Windows media sidecars
+
+The Windows desktop installer contains separate `ffmpeg.exe` and `ffprobe.exe`
+sidecars. They are staged at release time from exact npm development
+dependencies; the large executable files are intentionally not committed to
+this repository.
+
+| Sidecar | Resolver wrapper | Windows binary package | Exact reported build | Build source | Binary license |
+|---|---|---|---|---|---|
+| `ffmpeg.exe` | `@ffmpeg-installer/ffmpeg@1.1.0` | `@ffmpeg-installer/win32-x64@4.1.0` | `N-92722-gf22fcd4483` (`20181217-f22fcd4`) | [Zeranoe Windows 64-bit static build recorded by the package](https://www.npmjs.com/package/@ffmpeg-installer/win32-x64/v/4.1.0) | GNU General Public License version 3 |
+| `ffprobe.exe` | `@ffprobe-installer/ffprobe@2.1.2` | `@ffprobe-installer/win32-x64@5.1.0` | `2023-02-13-git-2296078397-essentials_build-www.gyan.dev` (`20230213-2296078`) | [Gyan.dev Windows build](https://www.gyan.dev/ffmpeg/builds/) | GNU General Public License version 3 |
+
+Both binaries report builds configured with `--enable-gpl` and
+`--enable-version3`. The wrapper JavaScript packages declare LGPL-2.1, but
+that does not replace the GPLv3 terms of the bundled executables. Corresponding
+FFmpeg source revisions are available at
+[`f22fcd4483`](https://github.com/FFmpeg/FFmpeg/tree/f22fcd4483) and
+[`2296078397`](https://github.com/FFmpeg/FFmpeg/tree/2296078397). The complete
+GPLv3 text is shipped as `resources/licenses/GPL-3.0.txt`; hashes and detailed
+staging provenance are in `resources/licenses/FFMPEG-SIDECARS.md`.
+
 ## Direct production dependencies
 
 Exact installed versions are resolved by `package-lock.json`. The direct
@@ -37,11 +58,15 @@ runtime dependency families and declared licenses are:
 | `@tailwindcss/typography` | MIT |
 | `better-sqlite3` | MIT |
 | `framer-motion` | MIT |
+| `fontkit` | MIT |
 | `highlight.js` | BSD-3-Clause |
 | `html-to-image` | MIT |
 | `jsdom` | MIT |
 | `jszip` | MIT OR GPL-3.0-or-later; Gugo uses it under MIT |
 | `lucide-react` | ISC |
+| `node-unrar-js` | MIT; bundles the official UnRAR source under the upstream UnRAR source license |
+| `pdf-lib` | MIT |
+| `pdfjs-dist` | Apache-2.0 |
 | `pptxgenjs` | MIT |
 | `qrcode` | MIT |
 | `react`, `react-dom` | MIT |
@@ -49,6 +74,15 @@ runtime dependency families and declared licenses are:
 | `three` | MIT |
 | `undici` | MIT |
 | `zod` | MIT |
+
+## Bundled PDF font
+
+`server/assets/fonts/NotoSansSC-Regular.ttf` is a weight-400 static instance of
+Noto Sans SC from Google Fonts. It is redistributed under the SIL Open Font
+License 1.1 so PDF watermarks, text overlays, and form appearances can embed
+Chinese glyphs without relying on host fonts. The complete license, source,
+conversion details, and checksum are shipped beside the font in
+`server/assets/fonts/OFL.txt` and `server/assets/fonts/README.md`.
 
 Run `npm run licenses` after dependency changes. The command inspects every
 package in the production lock graph and fails on missing, unknown, or

@@ -19,6 +19,7 @@ import {
   getPromptCompilerStats,
 } from '../services/promptCompiler.js'
 import { attachVisionDescriptions, hasVisionAssistConfigured, replaceUnsupportedVisionContent } from './visionAssist.js'
+import { prepareToolLoopVision } from './modelToolLoopVision.js'
 import { logWarn } from '../utils/logger.js'
 import { withRetry } from '../utils/modelRetry.js'
 import { isLocalEndpoint, resolveEndpointProfile } from '../utils/endpointProfile.js'
@@ -1021,7 +1022,14 @@ export async function callStreamingModelWithTools({
     config,
     env: runtimeEnv,
   })
-  const candidates = resolveModelFailoverConfigs({ modelName: selectedModel, env: runtimeEnv })
+  const { messages: preparedMessages, candidates } = await prepareToolLoopVision({
+    messages,
+    candidates: resolveModelFailoverConfigs({ modelName: selectedModel, env: runtimeEnv }),
+    requiresVision: hasVisionContent(messages),
+    supportsVision: (candidate) => profileForConfig(candidate, runtimeEnv).supportsVision,
+    userId, env: runtimeEnv, fetchImpl, modelName: selectedModel,
+    onAssistError: (error) => logWarn('vision.assist.tool_loop', error, { userId, modelName: selectedModel }),
+  })
   let activeConfig = candidates[0] || null
   let content = ''
   let reasoningChars = 0
@@ -1034,7 +1042,7 @@ export async function callStreamingModelWithTools({
     candidates,
     (candidate) => streamOpenAICompatible({
       config: candidate,
-      messages,
+      messages: preparedMessages,
       fetchImpl,
       tools,
       toolChoice,

@@ -175,7 +175,7 @@ export default function SettingsView() {
       case '权限中心':
         return <SettingsPermissionsPanel navigate={navigate} t={t} state={state} enabledPermCount={enabledPermCount} />
       case '工具':
-        return <SettingsToolsPanel state={state} dispatch={dispatch} />
+        return <SettingsToolsPanel state={state} dispatch={dispatch} t={t} />
       case '集成':
         return <SettingsIntegrationsPanel navigate={navigate} t={t} />
       case '外观':

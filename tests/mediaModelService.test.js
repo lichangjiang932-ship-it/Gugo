@@ -34,3 +34,20 @@ test('media model service uses the saved user provider for images and transcript
   assert.equal(requests[1].url, 'https://media.example/v1/audio/transcriptions')
   assert.equal(requests.every((request) => request.init.headers.Authorization === 'Bearer media-secret'), true)
 })
+
+test('generated image MIME type follows the actual returned bytes', async () => {
+  const { userId } = issueTestSession()
+  upsertModelProvider({
+    userId,
+    provider: {
+      key: 'jpeg-media', label: 'JPEG Media', baseUrl: 'https://jpeg.example/v1',
+      models: ['image-latest'], defaultModel: 'image-latest', apiKey: 'secret',
+    },
+  })
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46])
+  const fetchImpl = async () => new Response(JSON.stringify({
+    data: [{ b64_json: jpeg.toString('base64') }],
+  }), { status: 200 })
+  const image = await generateImage({ userId, prompt: 'jpeg', fetchImpl })
+  assert.equal(image.mimeType, 'image/jpeg')
+})

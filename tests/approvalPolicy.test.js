@@ -302,25 +302,77 @@ test('git mutation tools always require high-risk approval', () => {
 
 // ───────────────────────────── mode / origin ───────────────────────────────
 
-test("mode 'off' lets everything through", () => {
+test("mode 'off' closes the queue and fails closed for risky calls", () => {
   for (const origin of ['job', 'subagent', 'chat']) {
     for (const name of ['bash_exec', 'write_file', 'apply_patch', 'slack_send_message']) {
-      const out = classifyToolRisk(name, { command: 'rm -rf /', path: '/etc/passwd' }, { origin, mode: 'off' })
-      assert.deepEqual(out, { needsApproval: false, risk: 'low', reason: null }, `${name}/${origin}`)
+      const out = classifyToolRisk(name, { command: 'rm -rf /', path: '/etc/passwd' }, {
+        origin,
+        mode: 'off',
+        permissionMode: 'normal',
+      })
+      assert.equal(out.needsApproval, false, `${name}/${origin}`)
+      assert.equal(out.denied, true, `${name}/${origin}`)
+      assert.match(out.reason, /审批队列已关闭/, `${name}/${origin}`)
     }
   }
 })
 
-test("mode 'unattended' passes chat origin but gates job / subagent", () => {
-  assert.equal(
-    classifyToolRisk('bash_exec', { command: 'ls' }, { origin: 'chat', mode: 'unattended' }).needsApproval,
-    false,
-  )
-  for (const origin of ['job', 'subagent']) {
-    assert.equal(
-      classifyToolRisk('bash_exec', { command: 'ls' }, { origin, mode: 'unattended' }).needsApproval,
-      true,
-      `origin=${origin} should be gated`,
+test("mode 'unattended' never weakens the user's normal permission mode", () => {
+  for (const origin of ['chat', 'job', 'subagent']) {
+    const out = classifyToolRisk('bash_exec', { command: 'ls' }, {
+      origin,
+      mode: 'unattended',
+      permissionMode: 'normal',
+    })
+    assert.equal(out.needsApproval, true, `origin=${origin} should be gated`)
+    assert.equal(out.risk, 'high')
+  }
+})
+
+test('permission-mode matrix keeps user policy stronger than every deployment mode', () => {
+  const riskyArgs = { command: 'rm -rf build' }
+  for (const mode of ['off', 'unattended', 'all']) {
+    const plan = classifyToolRisk('bash_exec', riskyArgs, { mode, permissionMode: 'plan' })
+    assert.equal(plan.denied, true, `plan/${mode}`)
+    assert.equal(plan.needsApproval, false, `plan/${mode}`)
+
+    const normal = classifyToolRisk('bash_exec', riskyArgs, { mode, permissionMode: 'normal' })
+    if (mode === 'off') {
+      assert.equal(normal.denied, true, `normal/${mode}`)
+      assert.equal(normal.needsApproval, false, `normal/${mode}`)
+    } else {
+      assert.equal(normal.denied, undefined, `normal/${mode}`)
+      assert.equal(normal.needsApproval, true, `normal/${mode}`)
+    }
+
+    const bypass = classifyToolRisk('bash_exec', riskyArgs, { mode, permissionMode: 'bypass' })
+    assert.equal(bypass.denied, undefined, `bypass/${mode}`)
+    assert.equal(bypass.needsApproval, false, `bypass/${mode}`)
+    assert.equal(bypass.risk, 'high', `bypass/${mode}`)
+  }
+})
+
+test('plan cannot be bypassed by read metadata on a known mutating tool', () => {
+  for (const mode of ['off', 'unattended', 'all']) {
+    const verdict = classifyToolRisk('write_file', { path: 'output.txt', content: 'x' }, {
+      mode,
+      permissionMode: 'plan',
+      metadata: { riskClass: 'read', requiresApproval: false },
+    })
+    assert.equal(verdict.denied, true, mode)
+    assert.equal(verdict.needsApproval, false, mode)
+  }
+})
+
+test('plan still allows parameter-level read-only operations', () => {
+  for (const mode of ['off', 'unattended', 'all']) {
+    assert.deepEqual(
+      classifyToolRisk('apply_patch', { dry_run: true }, { mode, permissionMode: 'plan' }),
+      { needsApproval: false, risk: 'low', reason: null },
+    )
+    assert.deepEqual(
+      classifyToolRisk('fetch_url', { method: 'GET' }, { mode, permissionMode: 'plan' }),
+      { needsApproval: false, risk: 'low', reason: null },
     )
   }
 })
@@ -455,9 +507,7 @@ test('★ 安全:空工具名在任何权限档位下都不放行', () => {
   for (const permissionMode of ['normal', 'acceptEdits', 'plan', 'bypass']) {
     const verdict = classifyToolRisk('', { command: 'x' }, { origin: 'job', mode: 'all', permissionMode })
     assert.notEqual(verdict.needsApproval, true, `${permissionMode}: 不该进审批队列`)
-    if (permissionMode !== 'bypass') {
-      assert.equal(verdict.denied, true, `${permissionMode}: 应直接拒绝`)
-    }
+    assert.equal(verdict.denied, true, `${permissionMode}: 应直接拒绝`)
   }
 })
 
@@ -470,4 +520,35 @@ test('正常工具不受空名检查影响', () => {
     classifyToolRisk('read_file', { path: 'x' }, { origin: 'job', mode: 'all' }).needsApproval,
     false,
   )
+})
+
+test('acceptEdits still confirms destructive PDF text/form operations by argument', () => {
+  for (const operation of ['fill_form', 'overlay_text']) {
+    const verdict = classifyToolRisk('pdf_transform', { operation }, {
+      origin: 'chat',
+      mode: 'unattended',
+      permissionMode: 'acceptEdits',
+    })
+    assert.equal(verdict.needsApproval, true, operation)
+    assert.equal(verdict.risk, 'medium', operation)
+    assert.match(verdict.reason, /PDF|覆盖/)
+  }
+})
+
+test('acceptEdits allows reversible PDF transforms and local archive edits', () => {
+  for (const [name, args] of [
+    ['pdf_transform', { operation: 'watermark' }],
+    ['pdf_transform', { operation: 'rotate' }],
+    ['archive_create', { outputPath: 'bundle.zip' }],
+    ['archive_extract', { path: 'bundle.zip', outputDir: 'out' }],
+    ['batch_rename', { operations: [] }],
+  ]) {
+    const verdict = classifyToolRisk(name, args, {
+      origin: 'job',
+      mode: 'all',
+      permissionMode: 'acceptEdits',
+    })
+    assert.equal(verdict.needsApproval, false, name)
+    assert.equal(verdict.denied, undefined, name)
+  }
 })

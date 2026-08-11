@@ -15,7 +15,8 @@ const { SERVER_TURN_TOOL_TOGGLE_NAMES } = await import('../src/lib/serverToolCon
 const { WORKSPACE_TOOL_SPECS } = await import('../src/lib/tools/workspaceToolSpecs.js')
 const { FS_SHELL_TOOL_SPECS } = await import('../server/adapters/fsShellTools.js')
 const { runToolsLoop, SERVER_TOOL_SPECS } = await import('../server/services/toolLoopRuntime.js')
-const { getBuiltinSpec } = await import('../server/services/toolRegistry.js')
+const { getBuiltinSpec, listBuiltinSpecs } = await import('../server/services/toolRegistry.js')
+const { CONNECTOR_TOOL_NAMES } = await import('../server/services/connectorTools.js')
 const { resolveTurnToolSpecs } = await import('../server/services/turnToolSpecs.js')
 
 const CLIENT_ONLY_PREVIEW_TOOLS = [
@@ -38,6 +39,15 @@ test('every server turn switch maps to an executable server tool spec', () => {
   }
 })
 
+test('TurnEngine static schemas come from the canonical server registry', () => {
+  const connectorNames = new Set(CONNECTOR_TOOL_NAMES)
+  const runtimeBuiltinNames = namesOf(SERVER_TOOL_SPECS)
+    .filter((name) => !connectorNames.has(name))
+    .sort()
+  const registryNames = namesOf(listBuiltinSpecs()).sort()
+  assert.deepEqual(runtimeBuiltinNames, registryNames)
+})
+
 test('retired client-only preview tools are not advertised as server capabilities', () => {
   const serverNames = new Set(namesOf(SERVER_TOOL_SPECS))
   for (const name of CLIENT_ONLY_PREVIEW_TOOLS) {
@@ -49,6 +59,29 @@ test('retired client-only preview tools are not advertised as server capabilitie
 test('HTML artifact generation is an executable server capability', () => {
   const serverNames = new Set(namesOf(SERVER_TOOL_SPECS))
   assert.equal(serverNames.has('create_html_app'), true)
+})
+
+test('core execution tools survive the canonical turn catalog when enabled', async () => {
+  const required = ['write_file', 'bash_exec', 'pdf_transform']
+  const serverNames = new Set(namesOf(SERVER_TOOL_SPECS))
+  const toggleNames = new Set(SERVER_TURN_TOOL_TOGGLE_NAMES)
+  for (const name of required) {
+    assert.ok(serverNames.has(name), `${name} is missing from TurnEngine specs`)
+    assert.ok(getBuiltinSpec(name), `${name} is missing from the canonical registry`)
+    assert.ok(toggleNames.has(name), `${name} cannot be enabled from the tool catalog`)
+  }
+
+  const resolved = await resolveTurnToolSpecs({
+    userId: null,
+    baseSpecs: SERVER_TOOL_SPECS,
+    toolsConfig: { enabled: required, disabled: [] },
+    enabledConnectorTools: [],
+    webSearchReady: false,
+  })
+  const resolvedNames = new Set(namesOf(resolved))
+  for (const name of required) {
+    assert.ok(resolvedNames.has(name), `${name} was dropped before the model turn`)
+  }
 })
 
 test('resolveTurnToolSpecs removes explicitly disabled builtins after merging tools', async () => {

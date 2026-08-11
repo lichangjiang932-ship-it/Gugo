@@ -1,0 +1,4 @@
+interface:
+  display_name: "Archive Operator"
+  short_description: "Safely inspect, create, extract, and reorganize local files"
+  default_prompt: "Inspect the archive or file tree first, then perform the requested safe archive or staged rename operation and verify the result."

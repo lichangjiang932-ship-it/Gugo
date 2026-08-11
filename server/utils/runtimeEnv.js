@@ -6,6 +6,13 @@ let missingEnvWarned = false
 const MAX_RUNTIME_CONFIG_BYTES = 64 * 1024
 const RUNTIME_CONFIG_RELATIVE_PATH = path.join('.gugo', 'runtime.json')
 const SENSITIVE_CONFIG_KEY = /(API_?KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|PRIVATE_?KEY)/i
+const BOOTSTRAP_ENV_KEYS = new Set(Object.keys(process.env))
+
+export const WORKSPACE_FEATURE_ENV_KEYS = Object.freeze([
+  'WORKSPACE_FS_ENABLED',
+  'WORKSPACE_SHELL_ENABLED',
+  'WORKSPACE_GIT_ENABLED',
+])
 
 function normalizeRuntimeConfigValue(key, value, filePath) {
   if (!/^[A-Z][A-Z0-9_]*$/.test(key)) {
@@ -93,6 +100,119 @@ export function getRuntimeEnv(env = process.env, { cwd = process.cwd(), loadDotE
     : {}
   const dotenv = loadDotEnv && env.GUGO_LOAD_DOTENV !== '0' ? readRuntimeEnvFile(cwd) : {}
   return { ...user, ...project, ...explicit, ...dotenv, ...env }
+}
+
+function readRuntimeConfigDocument(filePath) {
+  if (!filePath || !fs.existsSync(filePath)) return { env: {}, onboarding: {} }
+  // Reuse the strict validation (size, shape, key names and secret rejection)
+  // before preserving optional non-env metadata.
+  const validatedEnv = readRuntimeConfigFile(filePath)
+  const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'))
+  return {
+    env: validatedEnv,
+    onboarding: parsed?.env && parsed?.onboarding && typeof parsed.onboarding === 'object'
+      ? parsed.onboarding
+      : {},
+  }
+}
+
+function runtimeFeatureLock(key, { cwd = process.cwd(), env = process.env } = {}) {
+  const paths = resolveRuntimeConfigPaths({ cwd, env })
+  const dotenv = env.GUGO_LOAD_DOTENV !== '0' ? readRuntimeEnvFile(cwd) : {}
+  const explicit = paths.explicit && ![paths.user, paths.project].includes(paths.explicit)
+    ? readRuntimeConfigFile(paths.explicit)
+    : {}
+  const project = readRuntimeConfigFile(paths.project)
+  if (BOOTSTRAP_ENV_KEYS.has(key)) return { locked: true, source: 'environment' }
+  if (Object.hasOwn(dotenv, key)) return { locked: true, source: '.env' }
+  if (Object.hasOwn(explicit, key)) return { locked: true, source: 'explicit_config' }
+  if (Object.hasOwn(project, key)) return { locked: true, source: 'project_config' }
+  return { locked: false, source: 'user_config' }
+}
+
+export function getWorkspaceRuntimeConfiguration({ cwd = process.cwd(), env = process.env } = {}) {
+  const paths = resolveRuntimeConfigPaths({ cwd, env })
+  const document = readRuntimeConfigDocument(paths.user)
+  const resolved = getRuntimeEnv(env, { cwd })
+  return {
+    path: paths.user,
+    completedAt: Number(document.onboarding?.completedAt) || null,
+    features: Object.fromEntries(WORKSPACE_FEATURE_ENV_KEYS.map((key) => {
+      const lock = runtimeFeatureLock(key, { cwd, env })
+      return [key, {
+        enabled: String(resolved[key] || '') === '1',
+        locked: lock.locked,
+        source: lock.locked
+          ? lock.source
+          : Object.hasOwn(document.env, key) ? 'user_config' : 'default',
+      }]
+    })),
+  }
+}
+
+/**
+ * Persist the three non-secret workspace feature switches used by the local
+ * onboarding flow. Deployment-level values (.env, project/explicit config or
+ * the process environment) remain authoritative and cannot be overwritten.
+ */
+export function updateWorkspaceRuntimeConfiguration({
+  features,
+  completedAt = Date.now(),
+  cwd = process.cwd(),
+  env = process.env,
+} = {}) {
+  if (!features || typeof features !== 'object' || Array.isArray(features)) {
+    const error = new Error('workspace features must be an object')
+    error.statusCode = 400
+    error.code = 'INVALID_WORKSPACE_FEATURES'
+    throw error
+  }
+  const unknown = Object.keys(features).filter((key) => !WORKSPACE_FEATURE_ENV_KEYS.includes(key))
+  if (unknown.length) {
+    const error = new Error(`unsupported workspace feature keys: ${unknown.join(', ')}`)
+    error.statusCode = 400
+    error.code = 'INVALID_WORKSPACE_FEATURES'
+    throw error
+  }
+  const values = Object.fromEntries(WORKSPACE_FEATURE_ENV_KEYS.map((key) => {
+    if (typeof features[key] !== 'boolean') {
+      const error = new Error(`${key} must be a boolean`)
+      error.statusCode = 400
+      error.code = 'INVALID_WORKSPACE_FEATURES'
+      throw error
+    }
+    return [key, features[key] ? '1' : '0']
+  }))
+  const locks = Object.entries(values).flatMap(([key, value]) => {
+    const lock = runtimeFeatureLock(key, { cwd, env })
+    const current = String(getRuntimeEnv(env, { cwd })[key] || '')
+    return lock.locked && current !== value ? [{ key, source: lock.source, current }] : []
+  })
+  if (locks.length) {
+    const error = new Error(`deployment policy locks: ${locks.map((item) => item.key).join(', ')}`)
+    error.statusCode = 409
+    error.code = 'RUNTIME_CONFIG_LOCKED'
+    error.locks = locks
+    throw error
+  }
+
+  const paths = resolveRuntimeConfigPaths({ cwd, env })
+  const document = readRuntimeConfigDocument(paths.user)
+  const next = {
+    env: { ...document.env, ...values },
+    onboarding: { ...document.onboarding, completedAt },
+  }
+  fs.mkdirSync(path.dirname(paths.user), { recursive: true })
+  const tempPath = `${paths.user}.${process.pid}.${Date.now()}.tmp`
+  try {
+    fs.writeFileSync(tempPath, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' })
+    fs.renameSync(tempPath, paths.user)
+  } catch (error) {
+    try { fs.unlinkSync(tempPath) } catch { /* best effort */ }
+    throw error
+  }
+  for (const [key, value] of Object.entries(values)) process.env[key] = value
+  return getWorkspaceRuntimeConfiguration({ cwd, env: { ...env, ...values } })
 }
 
 export function applyRuntimeConfig({ cwd = process.cwd(), env = process.env } = {}) {

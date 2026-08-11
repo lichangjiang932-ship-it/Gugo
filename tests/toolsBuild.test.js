@@ -1,6 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { buildToolSpecs, getBuiltinToolRuntimeStatus, listToolNames } from '../src/lib/tools/index.js'
+import {
+  buildToolSpecs,
+  getBuiltinToolRuntimeStatus,
+  getStandaloneToolClientStatus,
+  listToolNames,
+} from '../src/lib/tools/index.js'
 import { TASK_STATUS, TOOL_CALL_STATUS, HISTORY_STATUS, isTaskStatus, isToolCallStatus } from '../src/store/taskStatus.js'
 
 test('buildToolSpecs canonicalizes equivalent tool sets by function name', () => {
@@ -13,6 +18,11 @@ test('buildToolSpecs canonicalizes equivalent tool sets by function name', () =>
 
 test('every built-in executor and model-facing spec has a matching counterpart', () => {
   assert.deepEqual(getBuiltinToolRuntimeStatus(), {
+    missingExecutors: [],
+    missingSpecs: [],
+  })
+  assert.deepEqual(getStandaloneToolClientStatus(), {
+    scope: 'standalone_client',
     missingExecutors: [],
     missingSpecs: [],
   })

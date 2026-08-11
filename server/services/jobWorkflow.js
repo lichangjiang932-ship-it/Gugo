@@ -105,6 +105,23 @@ export function normalizeStructuredPlanSteps(steps = []) {
   return [...workSteps, verifyStep, finalizeStep]
 }
 
+export function normalizeJobCreationSteps(steps = [], { requirePlanApproval = false } = {}) {
+  const sourceSteps = requirePlanApproval === true
+    && !steps?.some((step) => step?.kind === 'plan')
+    ? [{ id: 'plan', title: '理解目标并制定执行计划', kind: 'plan' }, ...(steps || [])]
+    : steps
+  return normalizeStructuredPlanSteps(sourceSteps).map((step) => (
+    requirePlanApproval === true && step.kind === 'plan'
+      ? { ...step, input: { ...(step.input || {}), requirePlanApproval: true } }
+      : step
+  ))
+}
+
+export function stepRequiresPlanApproval(step, approvalMode = null) {
+  return step?.kind === 'plan'
+    && (step.input?.requirePlanApproval === true || approvalMode === 'plan')
+}
+
 export function findNextRunnableStep(steps = []) {
   return steps.find((step) => RUNNABLE_STEP_STATUSES.has(step.status)) || null
 }

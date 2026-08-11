@@ -19,6 +19,7 @@ async function parse(response) {
     error.hint = data?.error?.hint
     error.suggestGrantPath = data?.error?.suggestGrantPath
     error.requiredAccessMode = data?.error?.requiredAccessMode
+    error.locks = data?.error?.locks
     throw error
   }
   return data
@@ -71,5 +72,25 @@ export async function pickLocalDirectoryApi() {
     method: 'POST',
     headers: authHeaders(true),
     body: '{}',
+  }))
+}
+
+export async function configureWorkspaceOnboardingApi({
+  path,
+  features,
+  approvalMode,
+  confirmed,
+  bypassConfirmed = false,
+}) {
+  return parse(await fetch('/api/local-files/onboarding', {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify({
+      path,
+      features,
+      approvalMode,
+      confirmation: confirmed ? 'ENABLE_WORKSPACE_CAPABILITIES' : undefined,
+      bypassConfirmation: bypassConfirmed ? 'BYPASS_ALL_APPROVALS' : undefined,
+    }),
   }))
 }

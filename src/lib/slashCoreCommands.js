@@ -106,6 +106,15 @@ export function buildCoreSlashCommands(_t, lang = 'en') {
         ctx.openGoals?.()
         return ''
       }
+      // The durable Goal execution path is the existing JobRuntime. It owns
+      // plan proposal, approval, checkpoints, verification, and recovery.
+      // Keep the legacy session todo fallback for non-chat/embedded callers.
+      if (typeof ctx.createGoalJob === 'function') {
+        const created = await ctx.createGoalJob(goal, { requirePlanApproval: true })
+        const jobId = String(created?.job?.id || '').trim()
+        if (jobId) ctx.navigate?.(`/tasks?job=${encodeURIComponent(jobId)}`)
+        return copy.notices.goal.replace('{goal}', goal)
+      }
       let session = currentSession(ctx)
       if (!session) {
         const id = createId(ctx)

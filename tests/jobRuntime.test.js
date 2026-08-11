@@ -10,6 +10,7 @@ const {
   createDefaultExecuteStep,
   recoverInterruptedJobs,
 } = await import('../server/services/jobRuntime.js')
+const { getApprovalMode, setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 const TEST_USER = issueTestSession().userId
@@ -62,6 +63,44 @@ test('runtime completes queued child steps in order', async () => {
   assert.equal(loaded.status, 'completed')
   assert.deepEqual(executed, ['plan', 'batch_item', 'batch_item', 'verify', 'finalize'])
   assert.deepEqual(loaded.steps.map((step) => step.status), ['completed', 'completed', 'completed', 'completed', 'completed'])
+})
+
+test('goal jobs always pause for durable plan approval regardless of the global approval mode', async () => {
+  const executed = []
+  const runtime = new JobRuntime({
+    planner: stubPlanner,
+    executeStep: async ({ step }) => {
+      executed.push(step.kind)
+      return { ok: true, output: { text: step.title } }
+    },
+  })
+  setApprovalMode({ userId: TEST_USER, mode: 'bypass' })
+
+  try {
+    const job = await runtime.createJob('完成一个长期目标', {
+      userId: TEST_USER,
+      requirePlanApproval: true,
+    })
+    assert.equal(job.steps.find((step) => step.kind === 'plan').input.requirePlanApproval, true)
+
+    await runtime.runOneTick()
+    const proposed = runtime.getJob(job.id, { userId: TEST_USER })
+    assert.equal(proposed.status, 'waiting')
+    assert.deepEqual(executed, ['plan'])
+    assert.ok(proposed.events.some((event) => event.type === 'plan_proposed'))
+    assert.equal(getApprovalMode({ userId: TEST_USER }), 'bypass')
+
+    const approval = runtime.approvePlan(job.id, { userId: TEST_USER })
+    assert.equal(approval.approved, true)
+    assert.equal(approval.mode, 'bypass')
+    await runtime.drain()
+
+    const completed = runtime.getJob(job.id, { userId: TEST_USER })
+    assert.equal(completed.status, 'completed')
+    assert.deepEqual(executed, ['plan', 'batch_item', 'batch_item', 'verify', 'finalize'])
+  } finally {
+    setApprovalMode({ userId: TEST_USER, mode: 'normal' })
+  }
 })
 
 test('D6: jobUserCache is evicted once a job reaches a terminal state', async () => {

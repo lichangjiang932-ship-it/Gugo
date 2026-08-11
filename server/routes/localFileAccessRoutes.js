@@ -8,6 +8,10 @@ import {
   setAllFilesAccess,
 } from '../services/localFileAccessService.js'
 import { setWorkspaceTrust } from '../services/workspaceTrustService.js'
+import {
+  configureWorkspaceOnboarding,
+  getWorkspaceOnboardingStatus,
+} from '../services/workspaceOnboardingService.js'
 import { readJson } from '../utils.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
@@ -26,6 +30,7 @@ function sendError(res, error) {
       ...(error?.path ? { path: error.path } : {}),
       ...(typeof error?.retryable === 'boolean' ? { retryable: error.retryable } : {}),
       ...(error?.hint ? { hint: error.hint } : {}),
+      ...(Array.isArray(error?.locks) ? { locks: error.locks } : {}),
     },
   })
 }
@@ -44,7 +49,32 @@ export async function handleLocalFileAccessRequest(req, res) {
 
   try {
     if (req.method === 'GET' && url.pathname === '/api/local-files') {
-      return sendJson(res, 200, { ok: true, ...getLocalFileAccessStatus({ userId }) })
+      return sendJson(res, 200, {
+        ok: true,
+        ...getLocalFileAccessStatus({ userId }),
+        onboarding: getWorkspaceOnboardingStatus({ userId }),
+      })
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/local-files/onboarding') {
+      if (!isLoopbackRequest(req)) {
+        return sendJson(res, 403, {
+          ok: false,
+          error: { code: 'LOCAL_ONLY', message: 'Workspace onboarding can only be changed from the service host.' },
+        })
+      }
+      const body = await readJson(req)
+      return sendJson(res, 200, {
+        ok: true,
+        ...configureWorkspaceOnboarding({
+          userId,
+          rootPath: body.path,
+          features: body.features,
+          approvalMode: body.approvalMode,
+          confirmation: body.confirmation,
+          bypassConfirmation: body.bypassConfirmation,
+        }),
+      })
     }
 
     if (req.method === 'POST' && url.pathname === '/api/local-files/grants') {

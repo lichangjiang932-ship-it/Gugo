@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 import { recordLocalChatFeedback } from '../../lib/localChatFeedback.js'
+import { createJob } from '../../lib/jobClient.js'
 
 export default function useSlashCommandExecution({
   changeApprovalMode,
@@ -35,6 +36,7 @@ export default function useSlashCommandExecution({
         openFeedback: () => setSlashInlinePanel('feedback'),
         openGoals: () => setSlashInlinePanel('goals'),
         openSideChat: () => { setWorkbenchTab('chat'); setWorkbenchOpen(true) },
+        createGoalJob: (goal, options) => createJob(goal, options),
         togglePet: () => setDesktopPetVisible((visible) => !visible),
         setApprovalMode: changeApprovalMode,
         recordFeedback: (value) => recordLocalChatFeedback(value, stateRef.current.activeSessionId),
