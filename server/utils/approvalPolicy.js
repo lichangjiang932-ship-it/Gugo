@@ -32,6 +32,7 @@ const EDIT_TOOLS = Object.freeze([
   'write_file',
   'edit_file',
   'apply_patch',
+  'patch_file',
   'image_transform',
   'pdf_transform',
   'archive_create',
@@ -48,9 +49,14 @@ const RISK_ORDER = Object.freeze({ low: 0, medium: 1, high: 2 })
 export const APPROVAL_REQUIRED_TOOLS = Object.freeze({
   // 文件系统 / shell:已有静态开关,但那是 per 工具名,这里补 per 调用
   bash_exec: 'high',
+  run_command: 'high',
+  run_test: 'high',
+  docker_exec: 'high',
   write_file: 'medium',
   edit_file: 'medium',
   apply_patch: 'medium',
+  patch_file: 'medium',
+  file_download: 'medium',
   image_transform: 'medium',
   pdf_transform: 'medium',
   media_transform: 'high',
@@ -60,12 +66,16 @@ export const APPROVAL_REQUIRED_TOOLS = Object.freeze({
   git_commit: 'high',
   git_push: 'high',
   git_rollback: 'high',
+  git_write: 'high',
   // 网络出站写操作
   fetch_url: 'low',
   // 浏览器自动化:能在已登录的会话里代替用户点按钮 = 可发消息/可下单
   browser_click: 'medium',
   browser_type: 'medium',
+  browser_select: 'medium',
+  browser_press: 'medium',
   browser_open_url: 'low',
+  browser_navigate: 'low',
   // 连接器:打开外部应用
   connected_app_open: 'low',
   qq_mail_send: 'medium',
@@ -120,7 +130,7 @@ const NEVER = new Set(NEVER_APPROVE_TOOLS)
 const WRITE_INTENT_RE = /(^|_)(create|update|delete|remove|write|send|post|put|patch|publish|merge|close|comment|reply|invite|archive|move|rename|upload|execute|run|approve|pay|order|schedule)(_|$)/i
 
 const SAFE_HTTP_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
-const SHELL_TOOLS = new Set(['bash_exec'])
+const SHELL_TOOLS = new Set(['bash_exec', 'run_command', 'run_test', 'docker_exec'])
 const TARGET_KEYS = Object.freeze([
   'to', 'recipient', 'recipientEmail', 'email', 'channelId', 'channel', 'conversationId',
   'repository', 'repo', 'owner', 'url', 'path', 'target', 'resourceId', 'id',
@@ -251,7 +261,7 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
   let reason = parameterConfirmationReason || (alwaysConfirm ? '\u5916\u90e8\u5de5\u5177\u7684\u5199\u64cd\u4f5c' : null)
 
   // 明确的无副作用参数优先于工具级风险。plan 模式也可以安全预览/读取。
-  if (name === 'apply_patch' && safeArgs.dry_run === true) {
+  if ((name === 'apply_patch' || name === 'patch_file') && safeArgs.dry_run === true) {
     return { needsApproval: false, risk: 'low', reason: null }
   }
   if (name === 'fetch_url') {
@@ -288,11 +298,18 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
   }
 
   // ── 参数敏感度加权 ──
-  if (name === 'bash_exec') {
+  if (SHELL_TOOLS.has(name)) {
     const danger = checkBashCommandDanger(str(safeArgs.command))
-    reason = danger ? `危险命令:${danger.reason}` : '执行 shell 命令'
+    const envKeys = Array.isArray(safeArgs.env_keys)
+      ? safeArgs.env_keys.map((key) => str(key).trim()).filter(Boolean).slice(0, 32)
+      : []
+    reason = danger
+      ? `危险命令:${danger.reason}`
+      : envKeys.length > 0
+        ? `执行代码或 shell 命令，并注入宿主环境变量: ${envKeys.join(', ')}`
+        : (name === 'bash_exec' ? '执行 shell 命令' : '执行代码或 shell 命令')
     risk = danger ? 'high' : risk
-  } else if (name === 'write_file' || name === 'edit_file') {
+  } else if (name === 'write_file' || name === 'edit_file' || name === 'file_download') {
     const p = str(safeArgs.path)
     if (isOutsideWorkspacePath(p)) {
       risk = higher(risk, 'high')
@@ -300,7 +317,7 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
     } else {
       reason = reason || '修改文件'
     }
-  } else if (name === 'apply_patch') {
+  } else if (name === 'apply_patch' || name === 'patch_file') {
     const count = Array.isArray(safeArgs.changes) ? safeArgs.changes.length : 0
     reason = count ? `原子修改 ${count} 个文件` : '原子修改文件'
     if (count > 5) risk = higher(risk, 'high')
@@ -308,9 +325,9 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
     const method = str(safeArgs.method).toUpperCase() || 'GET'
     risk = higher(risk, 'medium')
     reason = `对外发起 ${method} 请求`
-  } else if (name === 'browser_click' || name === 'browser_type') {
+  } else if (['browser_click', 'browser_type', 'browser_select', 'browser_press'].includes(name)) {
     reason = '在已登录的浏览器会话中代为操作'
-  } else if (name === 'browser_open_url' || name === 'connected_app_open') {
+  } else if (name === 'browser_open_url' || name === 'browser_navigate' || name === 'connected_app_open') {
     reason = '打开外部应用'
   } else if (name === 'qq_mail_send') {
     reason = '发送外部邮件'

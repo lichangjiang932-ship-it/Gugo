@@ -1,6 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { isSensitiveEnvKey, sanitizeChildEnv } from '../server/utils/sensitiveEnv.js'
+import {
+  isProtectedExecutionEnvKey,
+  isSensitiveEnvKey,
+  sanitizeChildEnv,
+} from '../server/utils/sensitiveEnv.js'
 
 test('isSensitiveEnvKey: explicit deny list', () => {
   assert.equal(isSensitiveEnvKey('MODEL_API_KEY'), true)
@@ -74,4 +78,23 @@ test('sanitizeChildEnv: skips null/undefined values', () => {
   assert.equal(env.A, undefined)
   assert.equal(env.B, undefined)
   assert.equal(env.C, 'ok')
+})
+
+test('sanitizeChildEnv: explicitly inherits operational credentials by name but never service credentials', () => {
+  const previousGhToken = process.env.GH_TOKEN
+  const previousOpenAiKey = process.env.OPENAI_API_KEY
+  process.env.GH_TOKEN = 'github-operational-secret'
+  process.env.OPENAI_API_KEY = 'service-model-secret'
+  try {
+    const env = sanitizeChildEnv({}, { inheritKeys: ['GH_TOKEN', 'OPENAI_API_KEY'] })
+    assert.equal(env.GH_TOKEN, 'github-operational-secret')
+    assert.equal(env.OPENAI_API_KEY, undefined)
+    assert.equal(isProtectedExecutionEnvKey('OPENAI_API_KEY'), true)
+    assert.equal(isProtectedExecutionEnvKey('GH_TOKEN'), false)
+  } finally {
+    if (previousGhToken == null) delete process.env.GH_TOKEN
+    else process.env.GH_TOKEN = previousGhToken
+    if (previousOpenAiKey == null) delete process.env.OPENAI_API_KEY
+    else process.env.OPENAI_API_KEY = previousOpenAiKey
+  }
 })

@@ -45,13 +45,18 @@ test('compaction extracts files, commands, exit codes, and unresolved tool calls
       content: '',
       tool_calls: [
         { id: 'shell-1', type: 'function', function: { name: 'bash_exec', arguments: '{"command":"npm test"}' } },
+        { id: 'command-1', type: 'function', function: { name: 'run_command', arguments: '{"cmd":"python -V"}' } },
         { id: 'write-1', type: 'function', function: { name: 'write_file', arguments: '{"path":"src/a.js"}' } },
       ],
     },
     { role: 'tool', tool_call_id: 'shell-1', name: 'bash_exec', content: '{"ok":false,"exitCode":1}' },
+    { role: 'tool', tool_call_id: 'command-1', name: 'run_command', content: '{"ok":true,"exitCode":0}' },
   ])
   assert.deepEqual(state.files, ['src/a.js'])
-  assert.deepEqual(state.commands, [{ command: 'npm test', exitCode: 1 }])
+  assert.deepEqual(state.commands, [
+    { command: 'npm test', exitCode: 1 },
+    { command: 'python -V', exitCode: 0 },
+  ])
   assert.equal(state.pendingToolCalls.length, 1)
   assert.equal(state.pendingToolCalls[0].id, 'write-1')
 })

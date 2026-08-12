@@ -12,8 +12,10 @@ import {
   gitCommitTool,
   gitPushTool,
   gitRollbackTool,
+  gitWriteTool,
   GIT_TOOL_SPECS,
 } from '../server/adapters/gitWorkbench.js'
+import { createUser, setUserToolPermission } from '../server/db.js'
 
 function git(cwd, args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8' })
@@ -137,6 +139,166 @@ test('git mutation tools are exposed to autonomous jobs', () => {
   assert.equal(names.has('git_commit'), true)
   assert.equal(names.has('git_push'), true)
   assert.equal(names.has('git_rollback'), true)
+  assert.equal(names.has('git_write'), true)
+})
+
+test('git_write creates and checks out branches without shell interpolation', async () => {
+  const cwd = withTempRepo()
+  await withEnv({
+    WORKSPACE_ROOT: cwd,
+    WORKSPACE_GIT_ENABLED: '1',
+    WORKSPACE_GIT_MUTATION_ENABLED: '1',
+  }, async () => {
+    const created = await gitWriteTool({ action: 'branch', branch: 'feat/structured-write' })
+    assert.equal(created.ok, true)
+    assert.equal(created.action, 'create_branch')
+    assert.equal(git(cwd, ['branch', '--show-current']).trim(), 'feat/structured-write')
+
+    const checkedOut = await gitWriteTool({ action: 'checkout', branch: 'master' })
+    assert.equal(checkedOut.ok, true)
+    assert.equal(git(cwd, ['branch', '--show-current']).trim(), 'master')
+  })
+})
+
+test('git_write commit uses explicit selected files and checkout rejects dirty worktrees', async () => {
+  const cwd = withTempRepo()
+  fs.writeFileSync(path.join(cwd, 'README.md'), 'hello\nstructured\n', 'utf8')
+  await withEnv({
+    WORKSPACE_ROOT: cwd,
+    WORKSPACE_GIT_ENABLED: '1',
+    WORKSPACE_GIT_MUTATION_ENABLED: '1',
+  }, async () => {
+    const committed = await gitWriteTool({
+      action: 'commit',
+      message: 'feat: structured git write',
+      files: ['README.md'],
+    })
+    assert.equal(committed.ok, true)
+    assert.equal(committed.action, 'commit')
+    assert.match(committed.commit, /^[0-9a-f]{40}$/u)
+
+    await gitWriteTool({ action: 'branch', branch: 'feat/dirty-target' })
+    await gitWriteTool({ action: 'checkout', branch: 'master' })
+    fs.writeFileSync(path.join(cwd, 'dirty.txt'), 'dirty\n', 'utf8')
+    await assert.rejects(
+      () => gitWriteTool({ action: 'checkout', branch: 'feat/dirty-target' }),
+      /clean working tree/,
+    )
+  })
+})
+
+test('git_status and git_write preserve Unicode rename paths and commit both sides', async () => {
+  const cwd = withTempRepo()
+  const originalPath = '旧文档.txt'
+  const renamedPath = '新文档.txt'
+  fs.writeFileSync(path.join(cwd, originalPath), '中文内容\n', 'utf8')
+  git(cwd, ['add', '--', originalPath])
+  git(cwd, ['commit', '-m', 'test: add unicode file'])
+  git(cwd, ['mv', '--', originalPath, renamedPath])
+
+  await withEnv({
+    WORKSPACE_ROOT: cwd,
+    WORKSPACE_GIT_ENABLED: '1',
+    WORKSPACE_GIT_MUTATION_ENABLED: '1',
+  }, async () => {
+    const status = await gitStatusTool()
+    assert.deepEqual(status.files, [{
+      status: 'R ',
+      path: renamedPath,
+      originalPath,
+    }])
+
+    const committed = await gitWriteTool({
+      action: 'commit',
+      message: 'test: rename unicode file',
+      files: [renamedPath],
+    })
+    assert.equal(committed.ok, true)
+    assert.deepEqual(committed.files, [renamedPath])
+    assert.equal(git(cwd, ['status', '--porcelain=v1']), '')
+    assert.match(
+      git(cwd, ['-c', 'core.quotePath=false', 'show', '--name-status', '--format=', 'HEAD']),
+      new RegExp(`R\\d+\\s+${originalPath}\\s+${renamedPath}`),
+    )
+  })
+})
+
+test('git_write commit checks its alias permission without inheriting the legacy git_commit switch', async () => {
+  const cwd = withTempRepo()
+  const userId = `git-write-permission-${process.pid}`
+  createUser({ id: userId, email: `${userId}@example.com` })
+  fs.writeFileSync(path.join(cwd, 'README.md'), 'hello\npermission gate\n', 'utf8')
+
+  await withEnv({
+    WORKSPACE_ROOT: cwd,
+    WORKSPACE_GIT_ENABLED: '1',
+    WORKSPACE_GIT_MUTATION_ENABLED: '1',
+  }, async () => {
+    setUserToolPermission({ userId, toolName: 'git_write', enabled: false })
+    setUserToolPermission({ userId, toolName: 'git_commit', enabled: true })
+    await assert.rejects(
+      () => gitWriteTool({
+        action: 'commit',
+        message: 'test: alias gate',
+        files: ['README.md'],
+        userId,
+      }),
+      (error) => error?.code === 'TOOL_DISABLED' && /git_write/u.test(error.message),
+    )
+
+    setUserToolPermission({ userId, toolName: 'git_write', enabled: true })
+    setUserToolPermission({ userId, toolName: 'git_commit', enabled: false })
+    await assert.rejects(
+      () => gitCommitTool({
+        message: 'test: request injection is ignored',
+        files: ['README.md'],
+        userId,
+        permissionToolName: 'git_write',
+      }),
+      (error) => error?.code === 'TOOL_DISABLED' && /git_commit/u.test(error.message),
+    )
+
+    const committed = await gitWriteTool({
+      action: 'commit',
+      message: 'test: canonical alias gate',
+      files: ['README.md'],
+      userId,
+    })
+    assert.equal(committed.ok, true)
+    assert.equal(committed.action, 'commit')
+    assert.match(committed.commit, /^[0-9a-f]{40}$/u)
+  })
+})
+
+test('git_write push checks its alias permission without inheriting the legacy git_push switch', async () => {
+  const cwd = withTempRepo()
+  const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'atelier-git-remote-'))
+  git(remote, ['init', '--bare'])
+  git(cwd, ['remote', 'add', 'origin', remote])
+  const userId = `git-push-permission-${process.pid}`
+  createUser({ id: userId, email: `${userId}@example.com` })
+
+  await withEnv({
+    WORKSPACE_ROOT: cwd,
+    WORKSPACE_GIT_ENABLED: '1',
+    WORKSPACE_GIT_MUTATION_ENABLED: '1',
+  }, async () => {
+    setUserToolPermission({ userId, toolName: 'git_write', enabled: true })
+    setUserToolPermission({ userId, toolName: 'git_push', enabled: false })
+    await assert.rejects(
+      () => gitPushTool({
+        userId,
+        permissionToolName: 'git_write',
+      }),
+      (error) => error?.code === 'TOOL_DISABLED' && /git_push/u.test(error.message),
+    )
+
+    const pushed = await gitWriteTool({ action: 'push', userId })
+    assert.equal(pushed.ok, true, JSON.stringify(pushed))
+    assert.equal(pushed.action, 'push')
+    assert.equal(pushed.branch, 'master')
+    assert.equal(git(remote, ['rev-parse', 'refs/heads/master']).trim(), git(cwd, ['rev-parse', 'HEAD']).trim())
+  })
 })
 
 test('git_rollback reverts only the clean current HEAD without rewriting history', async () => {

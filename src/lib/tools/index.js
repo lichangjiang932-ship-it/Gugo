@@ -15,6 +15,19 @@ import { askDirectoryApproval } from '../toolApproval.js'
 import { translateKey } from '../../i18n/translations.js'
 
 const FILE_ARTIFACT_TOOL_NAMES = new Set(['create_pptx', 'create_docx', 'create_xlsx', 'create_html_app'])
+const ROUTED_BROWSER_TOOL_NAMES = new Set([
+  'browser_open_url',
+  'browser_navigate',
+  'browser_state',
+  'browser_snapshot',
+  'browser_console',
+  'browser_click',
+  'browser_type',
+  'browser_select',
+  'browser_press',
+  'browser_wait',
+  'browser_screenshot',
+])
 
 // \u2605 #18: \u5de5\u5177\u53c2\u6570 zod schema \u2014 \u6a21\u578b\u53ef\u80fd\u7ed9\u51fa\u810f\u6570\u636e,\u5148\u6821\u9a8c\u518d\u6267\u884c
 import { EXECUTORS } from './builtinExecutors.js'
@@ -28,7 +41,7 @@ export function getStandaloneToolClientStatus() {
   const executorNames = Object.keys(EXECUTORS)
   return {
     scope: 'standalone_client',
-    missingExecutors: specNames.filter((name) => typeof EXECUTORS[name] !== 'function'),
+    missingExecutors: specNames.filter((name) => !ROUTED_BROWSER_TOOL_NAMES.has(name) && typeof EXECUTORS[name] !== 'function'),
     missingSpecs: executorNames.filter((name) => !TOOL_SPECS[name]),
   }
 }
@@ -117,11 +130,14 @@ export async function executeToolCall(call, options = {}) {  const { maxRetries 
   if (name && name.startsWith('browser_')) {
     const routes = {
       browser_open_url: '/api/browser/open',
+      browser_navigate: '/api/browser/navigate',
       browser_state: '/api/browser/state',
       browser_snapshot: '/api/browser/snapshot',
       browser_console: '/api/browser/console',
       browser_click: '/api/browser/click',
       browser_type: '/api/browser/type',
+      browser_select: '/api/browser/select',
+      browser_press: '/api/browser/press',
       browser_wait: '/api/browser/wait',
       browser_screenshot: '/api/browser/screenshot',
     }

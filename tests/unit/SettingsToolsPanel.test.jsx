@@ -7,7 +7,29 @@ import { createRoot } from 'react-dom/client'
 import SettingsToolsPanel from '../../src/components/settings/SettingsToolsPanel.jsx'
 import { translateKey } from '../../src/i18n/translations.js'
 
-const NEW_TOOL_IDS = [
+const EXPECTED_TOOL_IDS = [
+  'fetch_url',
+  'create_pptx',
+  'create_docx',
+  'create_xlsx',
+  'list_directory',
+  'read_file',
+  'write_file',
+  'edit_file',
+  'apply_patch',
+  'patch_file',
+  'bash_exec',
+  'run_command',
+  'run_test',
+  'docker_exec',
+  'file_download',
+  'git_status',
+  'git_diff',
+  'git_commit',
+  'git_push',
+  'git_rollback',
+  'git_write',
+  'run_project_check',
   'image_info',
   'image_transform',
   'media_probe',
@@ -54,8 +76,8 @@ test('code execution settings describe the local runtime honestly and keep the t
     assert.match(rootElement.textContent, /Python、Node、PowerShell/)
     assert.match(rootElement.textContent, /已授权的读写目录/)
     assert.doesNotMatch(rootElement.textContent, /服务端还需显式启用/)
-    assert.equal(rootElement.querySelectorAll('button[data-tool-id]').length, 24)
-    for (const id of NEW_TOOL_IDS) {
+    assert.equal(rootElement.querySelectorAll('button[data-tool-id]').length, EXPECTED_TOOL_IDS.length)
+    for (const id of EXPECTED_TOOL_IDS) {
       assert.ok(rootElement.querySelector(`button[data-tool-id="${id}"]`), `${id} toggle is missing`)
       assert.match(rootElement.textContent, new RegExp(id))
     }

@@ -1,4 +1,7 @@
 import { callJson } from './tools/toolHttpClient.js'
+import { BROWSER_TOOL_NAMES, BROWSER_TOOL_SPECS } from './tools/browserToolSpecs.js'
+
+const DYNAMIC_CONTEXT_TOOL_NAMES = new Set(BROWSER_TOOL_NAMES)
 
 function toolName(spec) {
   return String(spec?.function?.name || '').trim()
@@ -29,7 +32,7 @@ export function normalizeServerToolCatalog(payload) {
  */
 export function buildServerToolCatalogFallback(enabledNames, localSpecs = []) {
   const byName = new Map()
-  for (const spec of Array.isArray(localSpecs) ? localSpecs : []) {
+  for (const spec of [...Object.values(BROWSER_TOOL_SPECS), ...(Array.isArray(localSpecs) ? localSpecs : [])]) {
     const name = toolName(spec)
     if (name) byName.set(name, spec)
   }
@@ -58,6 +61,6 @@ export async function fetchServerToolCatalog({ mode = 'chat' } = {}) {
 
 export function selectEnabledServerToolSpecs(catalog, toolsConfig = {}) {
   return (Array.isArray(catalog) ? catalog : []).filter((spec) => (
-    toolsConfig?.[toolName(spec)] === true
+    DYNAMIC_CONTEXT_TOOL_NAMES.has(toolName(spec)) || toolsConfig?.[toolName(spec)] === true
   ))
 }

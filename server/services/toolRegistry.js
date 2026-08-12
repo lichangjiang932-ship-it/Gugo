@@ -9,6 +9,7 @@ import { PDF_TOOL_SPECS } from '../adapters/pdfTools.js'
 import { BATCH_FILE_TOOL_SPECS } from '../adapters/batchFileTools.js'
 import { FS_SHELL_TOOL_SPECS } from '../adapters/fsShellTools.js'
 import { GIT_TOOL_SPECS } from '../adapters/gitWorkbench.js'
+import { CODING_AGENT_TOOL_SPECS } from '../adapters/codingAgentTools.js'
 import { CODE_SEARCH_TOOL_SPECS } from '../utils/codeSearch.js'
 import { APPLY_PATCH_TOOL_SPECS } from '../utils/applyPatch.js'
 import { AGENTIC_TOOL_SPECS } from '../utils/agenticTools.js'
@@ -426,6 +427,7 @@ const BUILTIN_SPECS = {
   ...specsByName(BATCH_FILE_TOOL_SPECS),
   ...specsByName(FS_SHELL_TOOL_SPECS),
   ...specsByName(GIT_TOOL_SPECS),
+  ...specsByName(CODING_AGENT_TOOL_SPECS),
   ...specsByName(CODE_SEARCH_TOOL_SPECS),
   ...specsByName(APPLY_PATCH_TOOL_SPECS),
   ...specsByName(AGENTIC_TOOL_SPECS),
@@ -473,6 +475,7 @@ const BUILTIN_CONCURRENCY_SAFE_TOOLS = new Set([
 const BUILTIN_WRITE_LOCAL_TOOLS = new Set([
   'write_file',
   'edit_file',
+  'patch_file',
   'apply_patch',
   'multi_edit',
   'image_transform',
@@ -480,20 +483,27 @@ const BUILTIN_WRITE_LOCAL_TOOLS = new Set([
   'archive_create',
   'archive_extract',
   'batch_rename',
+  'file_download',
 ])
-const BUILTIN_EXEC_TOOLS = new Set(['bash_exec', 'media_transform'])
+const BUILTIN_EXEC_TOOLS = new Set(['bash_exec', 'run_command', 'media_transform', 'run_test', 'docker_exec'])
 const CODE_MODE_TOOLS = [
   'read_file',
   'write_file',
   'edit_file',
   'apply_patch',
+  'patch_file',
   'grep_code',
   'find_symbol',
   'list_imports',
   'bash_exec',
+  'run_command',
   'git_status',
   'git_diff',
   'run_project_check',
+  'run_test',
+  'docker_exec',
+  'file_download',
+  'git_write',
   'reflect',
   'request_clarification',
   'Agent',
@@ -578,8 +588,8 @@ export function getToolMetadata(name, { args = {}, userId = null } = {}) {
   const dynamic = getDynamicTool(name, { userId })
   if (dynamic?.metadata) return dynamic.metadata
   if (!getBuiltinSpec(name)) return normalizeToolRiskMetadata(null, { origin: 'unknown' })
-  const isReadOnly = name === 'bash_exec'
-    ? isReadOnlyShellCommand(args?.command)
+  const isReadOnly = name === 'bash_exec' || name === 'run_command'
+    ? isReadOnlyShellCommand(args?.command ?? args?.cmd)
     : READ_ONLY_MODE_TOOLS.has(name)
   const riskClass = isReadOnly
     ? 'read'
@@ -588,7 +598,8 @@ export function getToolMetadata(name, { args = {}, userId = null } = {}) {
   return normalizeToolRiskMetadata({
     riskClass,
     isReadOnly,
-    isConcurrencySafe: (name === 'bash_exec' && isReadOnly) || BUILTIN_CONCURRENCY_SAFE_TOOLS.has(name),
+    isConcurrencySafe: ((name === 'bash_exec' || name === 'run_command') && isReadOnly)
+      || BUILTIN_CONCURRENCY_SAFE_TOOLS.has(name),
     interruptBehavior: isReadOnly ? 'cancel' : 'block',
     isDestructive: !isReadOnly,
   }, { origin: 'builtin' })

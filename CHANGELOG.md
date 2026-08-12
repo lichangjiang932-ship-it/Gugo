@@ -6,6 +6,37 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.19] - 2026-08-12
+
+### Added
+
+- Added first-class `run_command`, `patch_file`, `run_test`, `docker_exec`,
+  `file_download`, and `git_write` tools, including real Python and Node.js
+  execution, structured test results, atomic downloads, and complete Git write
+  workflows.
+- Added browser navigation, click, type, select, and key-press tools backed by
+  the existing snapshot references for interactive E2E testing and debugging.
+
+### Changed
+
+- Enabled the complete coding-agent tool loop by default while preserving
+  explicit user disables, directory grants, approval modes, and deployment
+  locks.
+- Made command execution durable across context compaction, task checkpoints,
+  retries, cancellation, output truncation, directory authorization, and
+  post-write verification.
+
+### Security
+
+- Isolated permissions for every public tool alias, required explicit approval
+  for downloads and Git mutations, and prevented hidden legacy switches from
+  silently granting write access.
+- Added allowlisted credential injection by environment-variable name with
+  permanent blocking of Gugo model/auth secrets, exact output redaction, and
+  log minimization for credential-bearing commands.
+- Hardened Docker command quoting and missing-runtime errors, download atomicity,
+  process-tree termination, and approval-card secret handling.
+
 ## [0.10.18] - 2026-08-11
 
 ### Added
@@ -242,7 +273,8 @@ follow [Semantic Versioning](https://semver.org/).
 - Provider, MCP, memory, job, subagent, connector, and workspace tool support.
 - Local-first single-user mode with optional multi-user authentication.
 
-[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.18...HEAD
+[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.19...HEAD
+[0.10.19]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.19
 [0.10.18]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.18
 [0.10.17]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.17
 [0.10.16]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.16

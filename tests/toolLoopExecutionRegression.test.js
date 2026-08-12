@@ -1351,7 +1351,7 @@ test('already-authorized read-write directory refreshes the active tool schema w
 
       if (modelCalls === 1) {
         assert.deepEqual(names, [...initialNames].sort())
-        for (const unavailable of ['write_file', 'edit_file', 'bash_exec']) {
+        for (const unavailable of ['write_file', 'edit_file', 'bash_exec', 'run_command']) {
           assert.equal(names.includes(unavailable), false, unavailable)
         }
         return {
@@ -1378,6 +1378,7 @@ test('already-authorized read-write directory refreshes the active tool schema w
           'list_directory',
           'read_file',
           'request_directory',
+          'run_command',
           'write_file',
         ])
         const authorizationResult = JSON.parse(messages.findLast((item) => item.role === 'tool').content)

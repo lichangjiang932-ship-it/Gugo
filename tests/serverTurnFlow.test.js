@@ -8,42 +8,33 @@ import {
 } from '../src/pages/ChatSplit/serverTurnFlow.js'
 import { createInitialState } from '../src/store/appStateBootstrap.js'
 
-test('code execution and project checks are enabled by default but explicit switch-offs are preserved', () => {
+test('the default turn exposes a complete coding-agent execution loop', () => {
   const defaults = createInitialState().toolsConfig
-  assert.equal(defaults.bash_exec, true)
-  assert.equal(defaults.run_project_check, true)
-  assert.deepEqual(buildServerToolsConfig(defaults), {
-    enabled: [
-      'Agent',
-      'archive_create',
-      'archive_extract',
-      'archive_list',
-      'bash_exec',
-      'batch_rename',
-      'create_docx',
-      'create_pptx',
-      'create_xlsx',
-      'file_hash_manifest',
-      'image_info',
-      'image_transform',
-      'manage_todos',
-      'media_probe',
-      'media_transform',
-      'pdf_info',
-      'pdf_text',
-      'pdf_transform',
-      'run_project_check',
-    ],
-    disabled: [
-      'edit_file',
-      'fetch_url',
-      'git_diff',
-      'git_status',
-      'list_directory',
-      'read_file',
-      'write_file',
-    ],
-  })
+  const required = [
+    'list_directory',
+    'read_file',
+    'write_file',
+    'edit_file',
+    'apply_patch',
+    'bash_exec',
+    'run_test',
+    'docker_exec',
+    'file_download',
+    'git_status',
+    'git_diff',
+    'git_commit',
+    'git_push',
+    'git_rollback',
+    'run_project_check',
+  ]
+  for (const name of required) assert.equal(defaults[name], true, name)
+
+  const resolved = buildServerToolsConfig(defaults)
+  for (const name of required) {
+    assert.ok(resolved.enabled.includes(name), `${name} is not enabled for the server turn`)
+    assert.equal(resolved.disabled.includes(name), false, `${name} is unexpectedly disabled`)
+  }
+  assert.deepEqual(resolved.disabled, ['fetch_url'])
   assert.ok(buildServerToolsConfig({ bash_exec: false }).disabled.includes('bash_exec'))
   assert.ok(buildServerToolsConfig({ run_project_check: false }).disabled.includes('run_project_check'))
 })
@@ -107,6 +98,20 @@ test('a writable execution turn always retains readback and directory verificati
     read_file: false,
   }), {
     enabled: ['bash_exec', 'list_directory', 'read_file', 'write_file'],
+    disabled: [],
+  })
+})
+
+test('patch and Git mutation tools retain their inspection companions', () => {
+  assert.deepEqual(buildServerToolsConfig({
+    apply_patch: true,
+    list_directory: false,
+    read_file: false,
+    git_commit: true,
+    git_status: false,
+    git_diff: false,
+  }), {
+    enabled: ['apply_patch', 'git_commit', 'git_diff', 'git_status', 'list_directory', 'read_file'],
     disabled: [],
   })
 })

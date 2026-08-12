@@ -18,8 +18,11 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { createHash } from 'node:crypto'
-import { sanitizeChildEnv } from '../utils/sensitiveEnv.js'
+import { createHash, randomBytes } from 'node:crypto'
+import {
+  isProtectedExecutionEnvKey,
+  sanitizeChildEnv,
+} from '../utils/sensitiveEnv.js'
 import {
   buildCodeExecutionEnv,
   codeExecutionFailureHint,
@@ -48,10 +51,20 @@ import {
 } from '../services/managedAttachmentContent.js'
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024 // 5 MB read/write upper bound
-const SHELL_DEFAULT_TIMEOUT_MS = 60 * 1000
-const SHELL_MAX_TIMEOUT_MS = 5 * 60 * 1000
-const SHELL_MAX_OUTPUT = 1 * 1024 * 1024 // 1 MB combined stdout+stderr cap
+const SHELL_DEFAULT_TIMEOUT_MS = 10 * 60 * 1000
+const SHELL_MAX_TIMEOUT_MS = 6 * 60 * 60 * 1000
+const SHELL_MAX_OUTPUT = 1 * 1024 * 1024 // 内存只保留 stdout+stderr 尾部；完整日志按需落盘
 const SHELL_MAX_EXPECTED_OUTPUTS = 64
+const SHELL_MAX_ENV_KEYS = 32
+
+function createShellOutputLogPath() {
+  const dataRoot = path.resolve(process.env.APP_DATA_DIR || path.join(process.cwd(), 'server-data'))
+  return path.join(
+    dataRoot,
+    'tool-logs',
+    `command-${Date.now()}-${randomBytes(8).toString('hex')}.log`,
+  )
+}
 
 function getWorkspaceRoot() {
   const raw = process.env.WORKSPACE_ROOT?.trim()
@@ -86,8 +99,74 @@ function mapWriteError(error, fullPath) {
 // 不只靠前端不暴露(前端可被绕过)。userId 为空(系统/内部调用)不 gate。
 function assertToolPermitted(userId, toolName) {
   if (userId && !isToolPermittedForUser(userId, toolName)) {
-    throw badReq(`工具 ${toolName} 已被该用户在权限中心关闭`, 403)
+    const error = badReq(`工具 ${toolName} 已被该用户在权限中心关闭`, 403)
+    error.code = 'TOOL_DISABLED'
+    throw error
   }
+}
+
+function normalizeShellEnvKeys(value) {
+  if (value == null) return []
+  if (!Array.isArray(value)) {
+    const error = badReq('env_keys 必须是环境变量名称数组')
+    error.code = 'SHELL_ENV_KEYS_INVALID'
+    throw error
+  }
+  if (value.length > SHELL_MAX_ENV_KEYS) {
+    const error = badReq(`env_keys 最多允许 ${SHELL_MAX_ENV_KEYS} 项`, 413)
+    error.code = 'SHELL_ENV_KEYS_LIMIT'
+    throw error
+  }
+  const keys = []
+  for (const rawKey of value) {
+    const key = typeof rawKey === 'string' ? rawKey.trim() : ''
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key)) {
+      const error = badReq(`无效的环境变量名称: ${String(rawKey ?? '')}`)
+      error.code = 'SHELL_ENV_KEY_INVALID'
+      throw error
+    }
+    if (isProtectedExecutionEnvKey(key)) {
+      const error = badReq(`环境变量 ${key} 属于 Gugo 服务凭据，禁止注入工作区命令`, 403)
+      error.code = 'SHELL_ENV_KEY_PROTECTED'
+      throw error
+    }
+    if (process.env[key] == null) {
+      const error = badReq(`宿主环境变量不存在: ${key}`)
+      error.code = 'SHELL_ENV_KEY_NOT_FOUND'
+      throw error
+    }
+    if (!keys.includes(key)) keys.push(key)
+  }
+  return keys
+}
+
+function requestedEnvValues(keys) {
+  return [...new Set(keys
+    .map((key) => String(process.env[key] || ''))
+    .filter(Boolean))]
+}
+
+function redactSensitiveValues(value, secrets) {
+  let output = String(value ?? '')
+  for (const secret of secrets) output = output.split(secret).join('[REDACTED]')
+  return output
+}
+
+function redactProcessOutput(result, secrets) {
+  if (!secrets.length) return result
+  return {
+    ...result,
+    stdout: redactSensitiveValues(result?.stdout, secrets),
+    stderr: redactSensitiveValues(result?.stderr, secrets),
+    ...(result?.error ? { error: redactSensitiveValues(result.error, secrets) } : {}),
+    sensitiveOutputRedacted: true,
+  }
+}
+
+function effectivePermissionToolName(permissionToolName, fallback) {
+  return typeof permissionToolName === 'string' && permissionToolName.trim()
+    ? permissionToolName.trim()
+    : fallback
 }
 
 export function resolveForFileTool(rawPath, { userId = null, write = false, allowMissing = false } = {}) {
@@ -347,8 +426,11 @@ function lineChangeStats(previous, next) {
   return { additions: m, deletions: n }
 }
 
-export async function writeFileTool({ path: rawPath, content, userId = null }) {
-  assertToolPermitted(userId, 'write_file')
+export async function writeFileTool(
+  { path: rawPath, content, userId = null },
+  { permissionToolName = 'write_file' } = {},
+) {
+  assertToolPermitted(userId, effectivePermissionToolName(permissionToolName, 'write_file'))
   // ★ M3.5:写类限流
   if (userId && !writeLimiter.tryConsume(userId, 'write')) {
     throw badReq('写文件限流:超过 120 次/分钟', 429)
@@ -398,8 +480,10 @@ export async function editFileTool({
   new_string,
   replace_all = false,
   userId = null,
-}) {
-  assertToolPermitted(userId, 'edit_file')
+}, {
+  permissionToolName = 'edit_file',
+} = {}) {
+  assertToolPermitted(userId, effectivePermissionToolName(permissionToolName, 'edit_file'))
   // ★ M3.5:写类限流
   if (userId && !writeLimiter.tryConsume(userId, 'write')) {
     throw badReq('编辑限流:超过 120 次/分钟', 429)
@@ -714,12 +798,17 @@ export async function bashExecTool({
   cwd: rawCwd,
   timeout_ms,
   expected_outputs,
+  env_keys,
   userId = null,
   signal = null,
-}) {
-  assertToolPermitted(userId, 'bash_exec')
+}, {
+  permissionToolName = 'bash_exec',
+} = {}) {
+  assertToolPermitted(userId, effectivePermissionToolName(permissionToolName, 'bash_exec'))
   if (typeof command !== 'string' || !command.trim()) throw badReq('command 必填')
   if (command.length > 10_000) throw badReq('command 过长', 413)
+  const inheritedEnvKeys = normalizeShellEnvKeys(env_keys)
+  const sensitiveEnvValues = requestedEnvValues(inheritedEnvKeys)
 
   // ★ P0:危险命令拦截(rm -rf / / dd /dev / curl|sh / 私钥外泄等)
   const danger = checkBashCommandDanger(command)
@@ -756,11 +845,12 @@ export async function bashExecTool({
   const shellPath = isWin ? (process.env.COMSPEC || 'cmd.exe') : '/bin/sh'
   const shellArgs = isWin ? ['/d', '/s', '/c', command] : ['-c', command]
   const startedAt = Date.now()
-  const r = await runProcessWithGroup({
+  const outputLogPath = sensitiveEnvValues.length > 0 ? null : createShellOutputLogPath()
+  const rawResult = await runProcessWithGroup({
     shellPath,
     shellArgs,
     cwd,
-    env: buildCodeExecutionEnv(sanitizeChildEnv()),
+    env: buildCodeExecutionEnv(sanitizeChildEnv({}, { inheritKeys: inheritedEnvKeys })),
     timeout,
     maxBuffer: SHELL_MAX_OUTPUT,
     windowsHide: true,
@@ -769,11 +859,15 @@ export async function bashExecTool({
     // containing characters such as parentheses remain valid.
     windowsVerbatimArguments: isWin,
     signal,
+    overflowMode: 'tail',
+    fullOutputPath: outputLogPath,
   })
+  const r = redactProcessOutput(rawResult, sensitiveEnvValues)
   const durationMs = Date.now() - startedAt
   const auditArgs = {
     command,
     cwd: displayCwd,
+    ...(inheritedEnvKeys.length > 0 ? { env_keys: inheritedEnvKeys } : {}),
     ...(expectedTargets.length > 0
       ? { expected_outputs: expectedTargets.map((target) => target.path) }
       : {}),
@@ -795,6 +889,21 @@ export async function bashExecTool({
     platform: process.platform,
     stderr: r.stderr,
   })
+  const executionMetadata = {
+    durationMs,
+    ...(r.truncated ? {
+      truncated: true,
+      totalOutputBytes: r.totalOutputBytes,
+      ...(r.fullOutputPath ? { fullOutputPath: r.fullOutputPath } : {}),
+      outputNotice: r.fullOutputPath
+        ? '输出过长，已保留尾部；完整日志已写入 fullOutputPath。'
+        : sensitiveEnvValues.length > 0
+          ? '输出过长，已保留并脱敏尾部；为避免凭据写入磁盘，完整日志未落盘。'
+          : '输出过长，已保留尾部；完整日志写入失败。',
+    } : {}),
+    ...(r.sensitiveOutputRedacted ? { sensitiveOutputRedacted: true } : {}),
+    ...(r.outputLogError ? { outputLogError: r.outputLogError } : {}),
+  }
 
   if (r.processTreeCleanupFailed) {
     if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'error', durationMs })
@@ -810,6 +919,7 @@ export async function bashExecTool({
       stdout: r.stdout,
       stderr: r.stderr,
       cwd: displayCwd,
+      ...executionMetadata,
       ...verificationFields,
     }
   }
@@ -822,6 +932,7 @@ export async function bashExecTool({
       stdout: r.stdout,
       stderr: r.stderr,
       cwd: displayCwd,
+      ...executionMetadata,
       ...(failureHint ? { hint: failureHint } : {}),
       ...verificationFields,
     }
@@ -835,19 +946,8 @@ export async function bashExecTool({
       stdout: r.stdout,
       stderr: r.stderr,
       cwd: displayCwd,
+      ...executionMetadata,
       ...(failureHint ? { hint: failureHint } : {}),
-      ...verificationFields,
-    }
-  }
-  if (r.truncated) {
-    if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'truncated', durationMs })
-    return {
-      ok: false,
-      truncated: true,
-      error: `输出超过 ${SHELL_MAX_OUTPUT} 字节,已截断并杀进程组`,
-      stdout: r.stdout,
-      stderr: r.stderr,
-      cwd: displayCwd,
       ...verificationFields,
     }
   }
@@ -861,6 +961,7 @@ export async function bashExecTool({
       stdout: r.stdout,
       stderr: r.stderr,
       cwd: displayCwd,
+      ...executionMetadata,
       ...verificationFields,
     }
   }
@@ -879,6 +980,7 @@ export async function bashExecTool({
       stdout: r.stdout,
       stderr: r.stderr,
       cwd: displayCwd,
+      ...executionMetadata,
       ...verificationFields,
     }
   }
@@ -889,6 +991,7 @@ export async function bashExecTool({
     stdout: r.stdout,
     stderr: r.stderr,
     cwd: displayCwd,
+    ...executionMetadata,
     ...verificationFields,
   }
 }
@@ -1016,14 +1119,15 @@ export const FS_SHELL_TOOL_SPECS = [
     type: 'function',
     function: {
       name: 'bash_exec',
-      description: '在 workspace 或用户已授权的本地读写目录里跑 shell 命令，可调用已安装的 Python、Node 和 PowerShell（Windows 用 cmd.exe,其他用 /bin/sh）。Windows 不要使用 tail/grep/sed/awk 等 Unix 管道；改用原生命令或 powershell -NoProfile -Command。生成 PDF/PNG 等需要多行或较长 Python 时，不要把脚本塞进 python -c；先用 write_file 写 UTF-8 .py，再用 bash_exec 运行。命令中的绝对路径会逐一校验授权；Windows command 中的每个绝对路径始终用双引号包裹（即使不含空格）。Python/Node/PowerShell 必须在 expected_outputs 声明最终产物。默认超时 60s,最长 5min,stdout+stderr 上限 1MB,敏感 env 已屏蔽。',
+      description: '在 workspace 或用户已授权的本地读写目录里跑 shell 命令，可调用已安装的 Python、Node 和 PowerShell（Windows 用 cmd.exe,其他用 /bin/sh）。Windows 不要使用 tail/grep/sed/awk 等 Unix 管道；改用原生命令或 powershell -NoProfile -Command。生成 PDF/PNG 等需要多行或较长 Python 时，不要把脚本塞进 python -c；先用 write_file 写 UTF-8 .py，再用 bash_exec 运行。命令中的绝对路径会逐一校验授权；Windows command 中的每个绝对路径始终用双引号包裹（即使不含空格）。Python/Node/PowerShell 必须在 expected_outputs 声明最终产物。默认超时 10min，最长 6h；stdout+stderr 内存中保留最后 1MB，超长时不中断进程并返回完整日志路径。敏感 env 默认屏蔽；只有 env_keys 明确列出的宿主变量才会在高风险审批后注入，变量值会从结果脱敏，Gugo 自身服务凭据始终禁止。',
       parameters: {
         type: 'object',
         properties: {
           command: { type: 'string', description: '完整命令字符串,例如 "ls -la src" 或 "npm test"' },
           cwd: { type: 'string', description: 'workspace 相对目录或用户已授权目录的绝对路径,默认 workspace 根' },
-          timeout_ms: { type: 'integer', default: 60000, description: '超时毫秒数,默认 60000,最大 300000' },
+          timeout_ms: { type: 'integer', default: SHELL_DEFAULT_TIMEOUT_MS, minimum: 1000, maximum: SHELL_MAX_TIMEOUT_MS, description: '超时毫秒数，默认 600000，最大 21600000（6 小时）' },
           expected_outputs: { type: 'array', default: [], items: { type: 'string' }, description: '命令预期创建或修改的文件路径;只读命令留空.' },
+          env_keys: { type: 'array', maxItems: SHELL_MAX_ENV_KEYS, uniqueItems: true, items: { type: 'string', pattern: '^[A-Za-z_][A-Za-z0-9_]*$' }, description: '可选宿主环境变量名称。仅在本次高风险审批通过后按名称注入；变量值不会进入工具参数或结果，Gugo 自身模型/认证密钥始终禁止。' },
         },
         required: ['command'],
       },

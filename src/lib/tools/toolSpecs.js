@@ -1,14 +1,16 @@
 import { AGENT_TOOL_SPECS } from './agentToolSpecs.js'
 import { ARTIFACT_TOOL_SPECS } from './artifactToolSpecs.js'
+import { BROWSER_TOOL_SPECS } from './browserToolSpecs.js'
 import { WORKSPACE_TOOL_SPECS } from './workspaceToolSpecs.js'
 
 export const TOOL_SPECS = {
   ...WORKSPACE_TOOL_SPECS,
   ...ARTIFACT_TOOL_SPECS,
   ...AGENT_TOOL_SPECS,
+  ...BROWSER_TOOL_SPECS,
 }
 
-const READ_ONLY_MODE_TOOLS = new Set(['web_search', 'fetch_url', 'list_directory', 'read_file', 'git_status', 'git_diff', 'manage_todos', 'Agent'])
+const READ_ONLY_MODE_TOOLS = new Set(['web_search', 'fetch_url', 'list_directory', 'read_file', 'git_status', 'git_diff', 'manage_todos', 'Agent', 'browser_state', 'browser_snapshot', 'browser_console', 'browser_wait', 'browser_screenshot'])
 const CODE_MODE_TOOLS = ['list_directory', 'read_file', 'write_file', 'edit_file', 'bash_exec', 'git_status', 'git_diff', 'run_project_check', 'manage_todos', 'Agent']
 
 function sortToolSpecsByName(specs = []) {

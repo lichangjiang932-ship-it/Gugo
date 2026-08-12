@@ -1,19 +1,9 @@
 import crypto from 'node:crypto'
 import { buildExploredPlan } from './jobPlanner.js'
 import {
-  appendJobArtifact,
-  appendJobEvent,
-  appendJobSteps,
-  completeJobStep,
-  createJob as persistJob,
-  getJob as getJobRow,
-  getJobWithChildren,
-  listJobSteps,
-  listJobs,
-  listRecoverableJobs,
-  replacePendingJobSteps,
-  updateJob,
-  updateJobStep,
+  appendJobArtifact, appendJobEvent, appendJobSteps, completeJobStep,
+  createJob as persistJob, getJob as getJobRow, getJobWithChildren, listJobSteps,
+  listJobs, listRecoverableJobs, replacePendingJobSteps, updateJob, updateJobStep,
 } from './jobStore.js'
 import { createDocx } from './artifactGen.js'
 import { callBackgroundModel, callBackgroundModelWithTools, formatProxyError, getModelContextWindow } from '../adapters/modelProxy.js'
@@ -29,11 +19,8 @@ import { dispatchHooks } from './hooksService.js'
 import { getLatestJobApproval } from './approvalStore.js'
 import { getApprovalMode, setApprovalMode } from './approvalSettingsStore.js'
 import {
-  deleteJobTurnCheckpoint,
-  deleteJobTurnCheckpoints,
-  getJobTurnCheckpoint,
-  makeJobTurnCheckpointResumable,
-  saveJobTurnCheckpoint,
+  deleteJobTurnCheckpoint, getJobTurnCheckpoint,
+  makeJobTurnCheckpointResumable, saveJobTurnCheckpoint,
 } from './jobTurnCheckpointStore.js'
 import { cancelJobWake, claimDueJobWakes, scheduleJobWake } from './jobWakeStore.js'
 import {
@@ -773,9 +760,19 @@ export class JobRuntime {
     const currentJob = this.getJob(jobId, { userId })
     if (!currentJob) return null
     cancelJobWake({ jobId, userId })
-    deleteJobTurnCheckpoints({ jobId, userId })
     for (const step of currentJob.steps) {
       if (['failed', 'cancelled'].includes(step.status)) {
+        // A truncated run deliberately keeps its durable checkpoint. Clear only
+        // the terminal marker so the next tick continues after the completed
+        // tool results instead of either returning the old failure immediately
+        // or replaying the whole step from scratch. Cancelled steps normally
+        // have no checkpoint, making this a harmless no-op for that path.
+        makeJobTurnCheckpointResumable({
+          jobId,
+          stepId: step.id,
+          userId,
+          resetBudget: true,
+        })
         updateJobStep(step.id, {
           status: 'queued',
           error: null,
@@ -869,7 +866,10 @@ export class JobRuntime {
     const step = job?.steps.find((item) => item.id === stepId)
     if (!job || !step) return null
     cancelJobWake({ jobId, userId })
-    deleteJobTurnCheckpoint({ jobId, stepId, userId })
+    // Preserve completed calls, their results, idempotency keys, and the
+    // accumulated budget. Only the old terminal result must be removed before
+    // the loop can continue from this checkpoint.
+    makeJobTurnCheckpointResumable({ jobId, stepId, userId, resetBudget: true })
     updateJobStep(stepId, {
       status: 'queued',
       error: null,

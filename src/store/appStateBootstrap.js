@@ -7,7 +7,7 @@ import {
   selectPersistedSnapshot,
 } from './appStatePersistence.js'
 
-export const TOOLS_CONFIG_SCHEMA_VERSION = 5
+export const TOOLS_CONFIG_SCHEMA_VERSION = 8
 
 export function needsToolsConfigSchemaMigration(saved) {
   if (!saved?.toolsConfig || typeof saved.toolsConfig !== 'object') return false
@@ -40,7 +40,49 @@ export function createInitialState() {
     agentMode: 'chat',
     previewArtifact: null,
     toolsConfigSchemaVersion: TOOLS_CONFIG_SCHEMA_VERSION,
-    toolsConfig: { fetch_url: false, create_pptx: true, create_docx: true, create_xlsx: true, create_react_component: true, create_mermaid: true, create_chart: true, create_svg: true, create_html_app: true, Agent: true, list_directory: false, read_file: false, write_file: false, edit_file: false, bash_exec: true, git_status: false, git_diff: false, run_project_check: true, image_info: true, image_transform: true, media_probe: true, media_transform: true, pdf_info: true, pdf_text: true, pdf_transform: true, archive_list: true, archive_create: true, archive_extract: true, batch_rename: true, file_hash_manifest: true, manage_todos: true },
+    toolsConfig: {
+      fetch_url: false,
+      create_pptx: true,
+      create_docx: true,
+      create_xlsx: true,
+      create_react_component: true,
+      create_mermaid: true,
+      create_chart: true,
+      create_svg: true,
+      create_html_app: true,
+      Agent: true,
+      list_directory: true,
+      read_file: true,
+      write_file: true,
+      edit_file: true,
+      apply_patch: true,
+      patch_file: true,
+      bash_exec: true,
+      run_command: true,
+      run_test: true,
+      docker_exec: true,
+      file_download: true,
+      git_status: true,
+      git_diff: true,
+      git_commit: true,
+      git_push: true,
+      git_rollback: true,
+      git_write: true,
+      run_project_check: true,
+      image_info: true,
+      image_transform: true,
+      media_probe: true,
+      media_transform: true,
+      pdf_info: true,
+      pdf_text: true,
+      pdf_transform: true,
+      archive_list: true,
+      archive_create: true,
+      archive_extract: true,
+      batch_rename: true,
+      file_hash_manifest: true,
+      manage_todos: true,
+    },
     sessionDrafts: {},
     persistenceNotice: null,
   }
@@ -75,6 +117,34 @@ export function normalizePersistedFields(saved, { cancelRunningTasks = false } =
     if (savedSchemaVersion < 5) {
       normalized.toolsConfig.pdf_text = true
       normalized.toolsConfig.archive_list = true
+    }
+    if (savedSchemaVersion < 6) {
+      for (const name of [
+        'list_directory',
+        'read_file',
+        'write_file',
+        'edit_file',
+        'apply_patch',
+        'bash_exec',
+        'git_status',
+        'git_diff',
+        'git_commit',
+        'git_push',
+        'git_rollback',
+        'run_project_check',
+      ]) normalized.toolsConfig[name] = true
+    }
+    if (savedSchemaVersion < 7) {
+      normalized.toolsConfig.run_test = true
+      normalized.toolsConfig.docker_exec = true
+      normalized.toolsConfig.file_download = true
+    }
+    if (savedSchemaVersion < 8) {
+      for (const name of [
+        'patch_file',
+        'run_command',
+        'git_write',
+      ]) normalized.toolsConfig[name] = true
     }
   }
   normalized.toolsConfigSchemaVersion = TOOLS_CONFIG_SCHEMA_VERSION

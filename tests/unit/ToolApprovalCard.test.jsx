@@ -62,6 +62,29 @@ test('shell approval never offers a standing-rule action', async () => {
   await view.cleanup()
 })
 
+test('run_command approval shows env key names and never offers a standing rule', async () => {
+  const dom = setupDom()
+  const view = await renderInto(dom, (
+    <ToolApprovalCard
+      open
+      busy={false}
+      onDecide={() => {}}
+      request={{
+        name: 'run_command',
+        args: { command: 'npm publish', env_keys: ['NPM_TOKEN'] },
+        risk: 'high',
+        reason: 'credential-aware command',
+      }}
+    />
+  ))
+  const html = view.html()
+  assert.match(html, /run_command/)
+  assert.match(html, /npm publish/)
+  assert.match(html, /NPM_TOKEN/)
+  assert.doesNotMatch(html, /always allow/i)
+  await view.cleanup()
+})
+
 test('ToolApprovalCard renders an apply_patch diff preview', async () => {
   const dom = setupDom()
   const view = await renderInto(dom, (

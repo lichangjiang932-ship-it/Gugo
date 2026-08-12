@@ -12,11 +12,14 @@ const CODE_EXECUTION_CONTINUITY_TOOLS = new Set([
   'read_file',
   'write_file',
   'edit_file',
+  'apply_patch',
   'run_project_check',
 ])
 
-const MUTATION_TOOL_NAMES = ['write_file', 'edit_file']
+const MUTATION_TOOL_NAMES = ['write_file', 'edit_file', 'apply_patch']
 const READBACK_VERIFICATION_TOOL_NAMES = ['list_directory', 'read_file']
+const GIT_MUTATION_TOOL_NAMES = ['git_commit', 'git_push', 'git_rollback']
+const GIT_VERIFICATION_TOOL_NAMES = ['git_status', 'git_diff']
 
 function successfulHistoryToolNames(historyMessages = []) {
   const names = new Set()
@@ -98,6 +101,12 @@ export function buildServerToolsConfig(toolsConfig = {}, localPathAccess = {}, h
   // then receives unknown_tool for the mandatory readback/directory check.
   if (MUTATION_TOOL_NAMES.some((name) => enabled.has(name) && !disabled.has(name))) {
     for (const name of READBACK_VERIFICATION_TOOL_NAMES) {
+      enabled.add(name)
+      disabled.delete(name)
+    }
+  }
+  if (GIT_MUTATION_TOOL_NAMES.some((name) => enabled.has(name) && !disabled.has(name))) {
+    for (const name of GIT_VERIFICATION_TOOL_NAMES) {
       enabled.add(name)
       disabled.delete(name)
     }

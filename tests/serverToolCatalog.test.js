@@ -7,6 +7,7 @@ import {
   normalizeServerToolCatalog,
   selectEnabledServerToolSpecs,
 } from '../src/lib/serverToolCatalog.js'
+import { BROWSER_TOOL_NAMES, BROWSER_TOOL_SPECS } from '../src/lib/tools/browserToolSpecs.js'
 
 function spec(name) {
   return { type: 'function', function: { name, parameters: { type: 'object', properties: {} } } }
@@ -17,13 +18,23 @@ test('fallback keeps enabled server-only tools without copying their live schema
     ['read_file', 'pdf_transform', 'media_transform'],
     [spec('read_file')],
   )
-  assert.deepEqual(result.map((item) => item.function.name), [
-    'media_transform',
-    'pdf_transform',
-    'read_file',
-  ])
-  assert.deepEqual(result[0].function.parameters, { type: 'object', additionalProperties: true })
-  assert.deepEqual(result[2], spec('read_file'))
+  assert.deepEqual(
+    result.map((item) => item.function.name),
+    [...BROWSER_TOOL_NAMES, 'media_transform', 'pdf_transform', 'read_file']
+      .sort((left, right) => left.localeCompare(right, 'en')),
+  )
+
+  const byName = new Map(result.map((item) => [item.function.name, item]))
+  assert.deepEqual(byName.get('media_transform')?.function.parameters, {
+    type: 'object',
+    additionalProperties: true,
+  })
+  assert.deepEqual(byName.get('pdf_transform')?.function.parameters, {
+    type: 'object',
+    additionalProperties: true,
+  })
+  assert.deepEqual(byName.get('read_file'), spec('read_file'))
+  assert.equal(byName.get('browser_click'), BROWSER_TOOL_SPECS.browser_click)
 })
 
 test('normalizes registry entries, deduplicates by name, and sorts stably', () => {

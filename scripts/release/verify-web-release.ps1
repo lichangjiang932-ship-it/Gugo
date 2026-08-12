@@ -50,10 +50,10 @@ try {
   $env:SERVER_PORT = "$port"
   $env:APP_DATA_DIR = $dataRoot
   $env:NODE_ENV = 'production'
-  $server = Start-Process -FilePath node -ArgumentList 'server/start.js' -PassThru -WindowStyle Hidden
+  $server = Start-Process -FilePath node -ArgumentList 'server/start.js' -WorkingDirectory $packageRoot -PassThru -WindowStyle Hidden
 
   $healthy = $false
-  for ($attempt = 0; $attempt -lt 30; $attempt += 1) {
+  for ($attempt = 0; $attempt -lt 120; $attempt += 1) {
     if ($server.HasExited) {
       throw "The Web release server exited with code $($server.ExitCode)"
     }

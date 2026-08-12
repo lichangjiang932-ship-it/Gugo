@@ -91,6 +91,15 @@ test('an explanatory lead does not hide a later explicit execution order', () =>
   }), false)
 })
 
+test('delegated Chinese repair orders execute without turning repair questions into commands', () => {
+  assert.equal(shouldRequireExecution({
+    text: '\u4f60\u6839\u636e\u5b9e\u9645\u60c5\u51b5\u6765\u8fdb\u884c\u4fee\u590d\uff0cpython\u7b49\u7684\u4ee3\u7801\u6267\u884c\u80fd\u529b\u662f\u5fc5\u987b\u6709\u7684',
+  }), true)
+  assert.equal(shouldRequireExecution({
+    text: '\u4f60\u8ba4\u4e3a\u5e94\u8be5\u600e\u4e48\u4fee\u590d\uff1f',
+  }), false)
+})
+
 test('numbered action plans execute while numbered questions remain answers', () => {
   assert.equal(hasActionableNumberedSteps('1. 检查登录\n2. 修复会话恢复'), true)
   assert.equal(shouldRequireExecution({ text: '1. 检查登录\n2. 修复会话恢复' }), true)

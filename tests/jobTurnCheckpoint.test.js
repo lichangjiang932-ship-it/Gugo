@@ -303,6 +303,39 @@ test('a final response checkpoint returns without another model request', async 
   assert.equal(modelCalls, 0)
 })
 
+test('an explicit retry receives a fresh round window without resetting cumulative iterations', async () => {
+  let modelCalls = 0
+  let checkpoint = {
+    messages: [{ role: 'user', content: 'Continue from the saved progress.' }],
+    toolCalls: [],
+    artifactIds: [],
+    iterations: 2,
+    iterationWindowStart: 2,
+    final: null,
+  }
+
+  const result = await runToolsLoop({
+    job: { id: 'retry-window-job', userId: alice },
+    step: { id: 'retry-window-step', kind: 'chat' },
+    messages: [],
+    maxIters: 2,
+    loadCheckpoint: async () => ({ state: checkpoint }),
+    saveCheckpoint: async (state) => {
+      checkpoint = structuredClone(state)
+      return { state: checkpoint }
+    },
+    runModel: async () => {
+      modelCalls += 1
+      return { content: 'continued after retry', toolCalls: [] }
+    },
+  })
+
+  assert.equal(modelCalls, 1)
+  assert.equal(result.text, 'continued after retry')
+  assert.equal(result.iterations, 3)
+  assert.equal(checkpoint.iterationWindowStart, 2)
+})
+
 test('a failed terminal checkpoint restores its exact outcome without rerunning the model', async () => {
   let modelCalls = 0
   const result = await runToolsLoop({
@@ -382,4 +415,62 @@ test('resume restores the tool budget instead of resetting it', async () => {
   assert.equal(result.budgetExceeded, true)
   assert.equal(executeCount, 0)
   assert.ok(checkpoint.budget.used > 3)
+})
+
+test('resume restores the repeated-call fuse and blocks the third identical call before execution', async () => {
+  let checkpoint = null
+  let executions = 0
+  let firstRunModelCalls = 0
+  const repeatedCall = {
+    id: 'same-read',
+    function: { name: 'read_file', arguments: '{"path":"missing.txt"}' },
+  }
+  const saveCheckpoint = async (state) => {
+    checkpoint = structuredClone(state)
+    return { state: checkpoint }
+  }
+  const executeTool = async () => {
+    executions += 1
+    return { ok: false, code: 'ENOENT', error: 'missing', retryable: false }
+  }
+
+  const interrupted = await runToolsLoop({
+    job: { id: 'resume-loop-guard-job', userId: alice },
+    step: { id: 'resume-loop-guard-step' },
+    messages: [{ role: 'user', content: 'read missing.txt' }],
+    saveCheckpoint,
+    executeTool,
+    toolRetryBaseDelayMs: 0,
+    runModel: async () => {
+      firstRunModelCalls += 1
+      if (firstRunModelCalls <= 2) return { content: '', toolCalls: [repeatedCall] }
+      throw Object.assign(new Error('provider restarted'), { code: 'MODEL_RESTARTED' })
+    },
+  })
+
+  assert.equal(interrupted.interrupted, true)
+  assert.equal(executions, 2)
+  assert.equal(checkpoint.loopGuard.repeatedCallStreak, 2)
+  assert.match(checkpoint.loopGuard.lastSignature, /^[a-f0-9]{64}$/u)
+
+  let resumedModelCalls = 0
+  const result = await runToolsLoop({
+    job: { id: 'resume-loop-guard-job', userId: alice },
+    step: { id: 'resume-loop-guard-step' },
+    messages: [],
+    loadCheckpoint: async () => ({ state: checkpoint }),
+    saveCheckpoint,
+    executeTool,
+    toolRetryBaseDelayMs: 0,
+    runModel: async ({ toolChoice }) => {
+      resumedModelCalls += 1
+      if (toolChoice === 'none') return { content: 'Stopped after the durable repeated-call fuse.', toolCalls: [] }
+      return { content: '', toolCalls: [repeatedCall] }
+    },
+  })
+
+  assert.equal(result.noProgress, true)
+  assert.equal(result.text, 'Stopped after the durable repeated-call fuse.')
+  assert.equal(executions, 2, 'the third identical call must be rejected before the executor runs')
+  assert.equal(resumedModelCalls, 2)
 })

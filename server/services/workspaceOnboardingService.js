@@ -17,9 +17,9 @@ import {
 } from './workspaceTrustService.js'
 
 const FEATURE_KEYS = Object.freeze({
-  fileSystem: 'WORKSPACE_FS_ENABLED',
-  shell: 'WORKSPACE_SHELL_ENABLED',
-  git: 'WORKSPACE_GIT_ENABLED',
+  fileSystem: ['WORKSPACE_FS_ENABLED'],
+  shell: ['WORKSPACE_SHELL_ENABLED'],
+  git: ['WORKSPACE_GIT_ENABLED', 'WORKSPACE_GIT_MUTATION_ENABLED'],
 })
 
 function serviceError(message, statusCode = 400, code = 'WORKSPACE_ONBOARDING_ERROR', extra = {}) {
@@ -40,12 +40,23 @@ function normalizeFeatures(features) {
   if (!features || typeof features !== 'object' || Array.isArray(features)) {
     throw serviceError('features must be an object', 400, 'INVALID_WORKSPACE_FEATURES')
   }
-  return Object.fromEntries(Object.entries(FEATURE_KEYS).map(([name, envKey]) => {
+  return Object.fromEntries(Object.entries(FEATURE_KEYS).flatMap(([name, envKeys]) => {
     if (typeof features[name] !== 'boolean') {
       throw serviceError(`${name} must be a boolean`, 400, 'INVALID_WORKSPACE_FEATURES')
     }
-    return [envKey, features[name]]
+    return envKeys.map((envKey) => [envKey, features[name]])
   }))
+}
+
+function featureRuntimeState(runtime, envKeys) {
+  const states = envKeys.map((envKey) => runtime.features[envKey]).filter(Boolean)
+  const locked = states.some((state) => state.locked)
+  const sources = [...new Set(states.filter((state) => state.locked).map((state) => state.source))]
+  return {
+    enabled: states.length === envKeys.length && states.every((state) => state.enabled),
+    locked,
+    source: locked ? sources.join('+') : (states[0]?.source || 'default'),
+  }
 }
 
 export function getWorkspaceOnboardingStatus({ userId } = {}) {
@@ -63,8 +74,8 @@ export function getWorkspaceOnboardingStatus({ userId } = {}) {
     completedAt: runtime.completedAt,
     approvalMode: approval.mode,
     modes: approval.modes,
-    features: Object.fromEntries(Object.entries(FEATURE_KEYS).map(([name, envKey]) => (
-      [name, runtime.features[envKey]]
+    features: Object.fromEntries(Object.entries(FEATURE_KEYS).map(([name, envKeys]) => (
+      [name, featureRuntimeState(runtime, envKeys)]
     ))),
     writableDirectories: writableDirectories.map((grant) => ({ id: grant.id, path: grant.path })),
   }

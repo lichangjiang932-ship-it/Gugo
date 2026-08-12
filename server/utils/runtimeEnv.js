@@ -12,6 +12,7 @@ export const WORKSPACE_FEATURE_ENV_KEYS = Object.freeze([
   'WORKSPACE_FS_ENABLED',
   'WORKSPACE_SHELL_ENABLED',
   'WORKSPACE_GIT_ENABLED',
+  'WORKSPACE_GIT_MUTATION_ENABLED',
 ])
 
 function normalizeRuntimeConfigValue(key, value, filePath) {
@@ -174,14 +175,19 @@ export function updateWorkspaceRuntimeConfiguration({
     error.code = 'INVALID_WORKSPACE_FEATURES'
     throw error
   }
+  const effectiveFeatures = {
+    ...features,
+    WORKSPACE_GIT_MUTATION_ENABLED: features.WORKSPACE_GIT_MUTATION_ENABLED
+      ?? features.WORKSPACE_GIT_ENABLED,
+  }
   const values = Object.fromEntries(WORKSPACE_FEATURE_ENV_KEYS.map((key) => {
-    if (typeof features[key] !== 'boolean') {
+    if (typeof effectiveFeatures[key] !== 'boolean') {
       const error = new Error(`${key} must be a boolean`)
       error.statusCode = 400
       error.code = 'INVALID_WORKSPACE_FEATURES'
       throw error
     }
-    return [key, features[key] ? '1' : '0']
+    return [key, effectiveFeatures[key] ? '1' : '0']
   }))
   const locks = Object.entries(values).flatMap(([key, value]) => {
     const lock = runtimeFeatureLock(key, { cwd, env })

@@ -422,6 +422,81 @@ function elementExpression(refOrSelector, action) {
   })()`
 }
 
+const KEY_DEFINITIONS = Object.freeze({
+  Enter: { code: 'Enter', keyCode: 13, text: '\r' },
+  Tab: { code: 'Tab', keyCode: 9 },
+  Escape: { code: 'Escape', keyCode: 27 },
+  Backspace: { code: 'Backspace', keyCode: 8 },
+  Delete: { code: 'Delete', keyCode: 46 },
+  ArrowLeft: { code: 'ArrowLeft', keyCode: 37 },
+  ArrowUp: { code: 'ArrowUp', keyCode: 38 },
+  ArrowRight: { code: 'ArrowRight', keyCode: 39 },
+  ArrowDown: { code: 'ArrowDown', keyCode: 40 },
+  Home: { code: 'Home', keyCode: 36 },
+  End: { code: 'End', keyCode: 35 },
+  PageUp: { code: 'PageUp', keyCode: 33 },
+  PageDown: { code: 'PageDown', keyCode: 34 },
+  Space: { code: 'Space', keyCode: 32, text: ' ' },
+})
+
+const KEY_ALIASES = Object.freeze({
+  esc: 'Escape',
+  return: 'Enter',
+  spacebar: 'Space',
+  left: 'ArrowLeft',
+  up: 'ArrowUp',
+  right: 'ArrowRight',
+  down: 'ArrowDown',
+  del: 'Delete',
+})
+
+function keyEventParams(rawKey) {
+  const raw = String(rawKey || '').trim()
+  if (!raw || raw.length > 64) throw new Error('请输入有效按键（例如 Enter、Tab 或 Control+A）')
+  const parts = raw.split('+').map((part) => part.trim()).filter(Boolean)
+  const mainRaw = parts.pop()
+  let modifiers = 0
+  for (const modifier of parts) {
+    const normalized = modifier.toLowerCase()
+    if (normalized === 'alt') modifiers |= 1
+    else if (normalized === 'control' || normalized === 'ctrl') modifiers |= 2
+    else if (normalized === 'meta' || normalized === 'command' || normalized === 'cmd') modifiers |= 4
+    else if (normalized === 'shift') modifiers |= 8
+    else throw new Error(`不支持的组合键修饰符: ${modifier}`)
+  }
+
+  const aliased = KEY_ALIASES[String(mainRaw || '').toLowerCase()] || mainRaw
+  const definition = KEY_DEFINITIONS[aliased]
+  if (definition) {
+    return {
+      key: aliased === 'Space' ? ' ' : aliased,
+      code: definition.code,
+      windowsVirtualKeyCode: definition.keyCode,
+      nativeVirtualKeyCode: definition.keyCode,
+      modifiers,
+      ...(definition.text && !(modifiers & 7) ? { text: definition.text, unmodifiedText: definition.text } : {}),
+    }
+  }
+
+  const characters = [...String(aliased || '')]
+  if (characters.length !== 1) throw new Error(`不支持的按键: ${mainRaw}`)
+  const character = characters[0]
+  const upper = character.toUpperCase()
+  const isLetter = /^[A-Za-z]$/.test(character)
+  const isDigit = /^[0-9]$/.test(character)
+  const keyCode = isLetter || isDigit ? upper.charCodeAt(0) : character.codePointAt(0)
+  const eventKey = isLetter && (modifiers & 7) && !(modifiers & 8) ? character.toLowerCase() : character
+  const text = modifiers & 7 ? '' : ((modifiers & 8) && isLetter ? upper : eventKey)
+  return {
+    key: text || eventKey,
+    code: isLetter ? `Key${upper}` : isDigit ? `Digit${character}` : '',
+    windowsVirtualKeyCode: keyCode,
+    nativeVirtualKeyCode: keyCode,
+    modifiers,
+    ...(text ? { text, unmodifiedText: character } : {}),
+  }
+}
+
 export async function browserClick({ userId, target, signal = null }) {
   const session = await getSession(userId, { signal })
   const result = await evaluate(session, elementExpression(target, `el.scrollIntoView({block:'center'}); el.click(); return {ok:true}`), signal)
@@ -443,6 +518,40 @@ export async function browserType({ userId, target, text, submit = false, signal
   `), signal)
   if (!result?.ok) throw new Error(result?.error || '输入失败')
   return { ok: true }
+}
+
+export async function browserSelect({ userId, target, value, signal = null }) {
+  const session = await getSession(userId, { signal })
+  const expected = JSON.stringify(String(value ?? ''))
+  const result = await evaluate(session, elementExpression(target, `
+    if (!(el instanceof HTMLSelectElement)) return {ok:false,error:'target is not a select element'}
+    const expected = ${expected}; const clean = (input) => String(input || '').replace(/\\s+/g, ' ').trim()
+    const option = [...el.options].find((item) => item.value === expected)
+      || [...el.options].find((item) => clean(item.textContent) === clean(expected))
+    if (!option) return {ok:false,error:'option not found: ' + expected}
+    el.focus(); el.value = option.value; option.selected = true
+    el.dispatchEvent(new Event('input', {bubbles:true})); el.dispatchEvent(new Event('change', {bubbles:true}))
+    return {ok:true,value:option.value,label:clean(option.textContent)}
+  `), signal)
+  if (!result?.ok) throw new Error(result?.error || '选择选项失败')
+  await abortableDelay(100, signal)
+  return { ...result, ...(await browserState({ userId, signal })) }
+}
+
+export async function browserPress({ userId, target = '', key, signal = null }) {
+  const session = await getSession(userId, { signal })
+  if (target) {
+    const focused = await evaluate(session, elementExpression(target, `el.scrollIntoView({block:'center'}); el.focus(); return {ok:true}`), signal)
+    if (!focused?.ok) throw new Error(focused?.error || '聚焦元素失败')
+  }
+  const params = keyEventParams(key)
+  await session.client.request('Input.dispatchKeyEvent', { type: 'keyDown', ...params }, session.sessionId, ACTION_TIMEOUT_MS, signal)
+  const keyUpParams = { ...params }
+  delete keyUpParams.text
+  delete keyUpParams.unmodifiedText
+  await session.client.request('Input.dispatchKeyEvent', { type: 'keyUp', ...keyUpParams }, session.sessionId, ACTION_TIMEOUT_MS, signal)
+  await abortableDelay(100, signal)
+  return { ok: true, key: String(key), ...(await browserState({ userId, signal })) }
 }
 
 export async function browserWait({ userId, ms = 500, target = '', signal = null }) {
@@ -498,4 +607,7 @@ export const _browserInternals = {
   validateUrl,
   profileDirectoryForUser,
   isReusableSession,
+  keyEventParams,
+  getSession,
+  evaluate,
 }

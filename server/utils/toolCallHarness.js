@@ -7,7 +7,7 @@
  *
  * 本模块保持纯函数/进程内状态，不做 IO，供 job / subagent 等运行时复用。
  */
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 
 /**
  * 单个工具结果喂回模型时的字符上限。
@@ -750,7 +750,17 @@ function stableValue(value) {
 
 function callSignature(call) {
   const args = call?.args ?? call?.argumentsText ?? ''
-  return `${call?.name || '<missing>'}:${safeStringify(stableValue(args))}`
+  // Checkpoints persist the last signature so a process restart cannot reset a
+  // repeated-call fuse. Store only a digest: commands and tool arguments may
+  // contain credentials or large inline file contents.
+  return createHash('sha256')
+    .update(`${call?.name || '<missing>'}:${safeStringify(stableValue(args))}`)
+    .digest('hex')
+}
+
+function restoredCounter(value) {
+  const number = Number(value)
+  return Number.isInteger(number) && number >= 0 ? number : 0
 }
 
 /**
@@ -794,13 +804,23 @@ export function createToolLoopGuard({
   // Different arguments do not count as progress when the same executor keeps
   // failing. Model-authored JSON/schema errors remain governed separately.
   maxSameToolFailures = 4,
+  initialState = null,
 } = {}) {
+  const restored = initialState && typeof initialState === 'object' ? initialState : {}
   const seenSignatures = new Set()
-  const failedToolCounts = new Map()
-  let consecutiveErrors = 0
-  let consecutiveAuthoringErrors = 0
-  let lastSignature = null
-  let repeatedCallStreak = 0
+  const failedToolCounts = new Map(
+    Object.entries(restored.failedTools && typeof restored.failedTools === 'object'
+      ? restored.failedTools
+      : {})
+      .map(([name, count]) => [String(name || '').trim(), restoredCounter(count)])
+      .filter(([name, count]) => name && count > 0),
+  )
+  let consecutiveErrors = restoredCounter(restored.consecutiveErrors)
+  let consecutiveAuthoringErrors = restoredCounter(restored.consecutiveAuthoringErrors)
+  let lastSignature = /^[a-f0-9]{64}$/u.test(String(restored.lastSignature || ''))
+    ? String(restored.lastSignature)
+    : null
+  let repeatedCallStreak = lastSignature ? restoredCounter(restored.repeatedCallStreak) : 0
 
   return {
     before(call) {
@@ -902,6 +922,7 @@ export function createToolLoopGuard({
         consecutiveAuthoringErrors,
         uniqueCalls: seenSignatures.size,
         repeatedCallStreak,
+        lastSignature,
         failedTools: Object.fromEntries(failedToolCounts),
       }
     },

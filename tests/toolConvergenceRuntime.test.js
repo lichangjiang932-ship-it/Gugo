@@ -17,7 +17,7 @@ function toolCall(id, name, args) {
   }
 }
 
-test('three probe-only batches force execution and block variant probe scripts', async () => {
+test('run_command: three probe-only batches force execution and block variant probe scripts', async () => {
   const outputPath = 'D:\\destok\\filled-answer.pdf'
   const observedRequests = []
   const executed = []
@@ -34,7 +34,7 @@ test('three probe-only batches force execution and block variant probe scripts',
     step: { id: 'execution-convergence-probe-step', kind: 'chat' },
     messages: [{ role: 'user', content: `Create ${outputPath} with Python and verify it.` }],
     intentMode: 'execute',
-    toolSpecs: [spec('write_file'), spec('bash_exec'), spec('read_file')],
+    toolSpecs: [spec('write_file'), spec('run_command'), spec('read_file')],
     maxIters: 9,
     enableToolHooks: false,
     saveCheckpoint: async (state) => {
@@ -68,7 +68,7 @@ test('three probe-only batches force execution and block variant probe scripts',
       if (modelCalls === 2) {
         return {
           content: '',
-          toolCalls: [toolCall('run-inspect-pdf', 'bash_exec', { command: 'python inspect_pdf.py' })],
+          toolCalls: [toolCall('run-inspect-pdf', 'run_command', { command: 'python inspect_pdf.py' })],
         }
       }
       if (modelCalls === 5) {
@@ -76,7 +76,7 @@ test('three probe-only batches force execution and block variant probe scripts',
         assert.equal(blocked.code, 'execution_convergence_probe_blocked')
         return {
           content: '',
-          toolCalls: [toolCall('generate-filled-pdf', 'bash_exec', {
+          toolCalls: [toolCall('generate-filled-pdf', 'run_command', {
             command: 'python create_filled_pdf.py',
             expected_outputs: [outputPath],
           })],
@@ -91,7 +91,7 @@ test('three probe-only batches force execution and block variant probe scripts',
       if (modelCalls === 7) {
         return {
           content: '',
-          toolCalls: [toolCall('verify-filled-pdf-layout', 'bash_exec', {
+          toolCalls: [toolCall('verify-filled-pdf-layout', 'run_command', {
             command: 'python verify_pdf_layout.py',
           })],
         }
@@ -125,18 +125,18 @@ test('three probe-only batches force execution and block variant probe scripts',
   assert.equal(executed.some((item) => item.includes('inspect_header.py')), false)
   assert.deepEqual(executed, [
     'write_file:inspect_pdf.py',
-    'bash_exec:python inspect_pdf.py',
+    'run_command:python inspect_pdf.py',
     'write_file:inspect_layout.py',
-    'bash_exec:python create_filled_pdf.py',
+    'run_command:python create_filled_pdf.py',
     `read_file:${outputPath}`,
-    'bash_exec:python verify_pdf_layout.py',
+    'run_command:python verify_pdf_layout.py',
   ])
   assert.equal(observedRequests.length, 8)
   assert.equal(checkpoints.at(-1).completionGuards.executionConvergence.interventions, 1)
   assert.equal(checkpoints.at(-1).completionGuards.executionConvergence.interventionActive, false)
 })
 
-test('convergence recognizes repeated installs despite command argument variation', async () => {
+test('run_command: convergence recognizes repeated installs despite command argument variation', async () => {
   const executed = []
   let modelCalls = 0
 
@@ -150,7 +150,7 @@ test('convergence recognizes repeated installs despite command argument variatio
     step: { id: 'execution-convergence-install-step', kind: 'chat' },
     messages: [{ role: 'user', content: 'Create result.txt and verify it.' }],
     intentMode: 'execute',
-    toolSpecs: [spec('write_file'), spec('bash_exec'), spec('read_file')],
+    toolSpecs: [spec('write_file'), spec('run_command'), spec('read_file')],
     maxIters: 9,
     enableToolHooks: false,
     runModel: async ({ messages }) => {
@@ -158,7 +158,7 @@ test('convergence recognizes repeated installs despite command argument variatio
       if (modelCalls === 1) {
         return {
           content: '',
-          toolCalls: [toolCall('install-fitz-first', 'bash_exec', {
+          toolCalls: [toolCall('install-fitz-first', 'run_command', {
             command: 'python -m pip install fitz',
           })],
         }
@@ -166,7 +166,7 @@ test('convergence recognizes repeated installs despite command argument variatio
       if (modelCalls === 2) {
         return {
           content: '',
-          toolCalls: [toolCall('check-fitz-version', 'bash_exec', {
+          toolCalls: [toolCall('check-fitz-version', 'run_command', {
             command: 'python -c "import fitz; print(fitz.__version__)"',
           })],
         }
@@ -187,7 +187,7 @@ test('convergence recognizes repeated installs despite command argument variatio
         )))
         return {
           content: '',
-          toolCalls: [toolCall('install-fitz-again', 'bash_exec', {
+          toolCalls: [toolCall('install-fitz-again', 'run_command', {
             command: 'pip install --upgrade fitz',
           })],
         }
