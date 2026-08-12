@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { getDb } from '../db.js'
 
+const COMMAND_EXECUTION_TOOL_NAMES = new Set(['bash_exec', 'run_command'])
+
 const DEFAULT_KEEP_MESSAGES = 160
 export const MAX_OUTBOUND_MESSAGES = 1200
 const MAX_SUMMARY_CHARS = 240_000
@@ -112,6 +114,7 @@ export function extractCompactionState(messages = []) {
   const assistantProgress = []
   const files = new Set()
   const commands = []
+  const commandsByToolCallId = new Map()
   const toolResults = []
   const pending = new Map()
 
@@ -133,7 +136,11 @@ export function extractCompactionState(messages = []) {
             addPath(files, change.path || change.file)
           }
         }
-        if (name === 'bash_exec') commands.push({ command: String(args.command || ''), exitCode: null })
+        if (COMMAND_EXECUTION_TOOL_NAMES.has(name)) {
+          const command = { command: String(args.command || args.cmd || ''), exitCode: null }
+          commands.push(command)
+          if (call?.id) commandsByToolCallId.set(call.id, command)
+        }
       }
     }
     if (message?.role === 'tool') {
@@ -141,13 +148,19 @@ export function extractCompactionState(messages = []) {
       const call = pending.get(message.tool_call_id)
       const name = message.name || call?.name || 'tool'
       const exitCode = result?.exitCode ?? result?.exit_code ?? result?.statusCode ?? null
-      if (name === 'bash_exec' && commands.length) commands[commands.length - 1].exitCode = exitCode
+      if (COMMAND_EXECUTION_TOOL_NAMES.has(name)) {
+        const command = commandsByToolCallId.get(message.tool_call_id)
+        if (command) command.exitCode = exitCode
+      }
       if (result?.path) addPath(files, result.path)
       if (Array.isArray(result?.files)) {
         for (const file of result.files) addPath(files, file?.path || file)
       }
       toolResults.push({ name, ok: result?.ok !== false, exitCode })
-      if (message.tool_call_id) pending.delete(message.tool_call_id)
+      if (message.tool_call_id) {
+        pending.delete(message.tool_call_id)
+        commandsByToolCallId.delete(message.tool_call_id)
+      }
     }
   }
 

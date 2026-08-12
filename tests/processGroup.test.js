@@ -1,6 +1,9 @@
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { runProcessWithGroup } from '../server/utils/processGroup.js'
 
 const isPosix = process.platform !== 'win32'
@@ -107,6 +110,36 @@ test('runProcessWithGroup: maxBuffer 触发 truncated 并杀进程', async () =>
   assert.ok(r.stdout.length <= 10_000)
   // 应该不会等 5s 才返回
 }, { timeout: 5_000 })
+
+test('runProcessWithGroup: tail 模式保留完整日志且不因输出过长杀进程', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-process-tail-'))
+  const fullOutputPath = path.join(root, 'full.log')
+  try {
+    const r = await runProcessWithGroup({
+      shellPath: node,
+      shellArgs: nodeArgs("process.stdout.write('HEAD_MARKER\\n' + 'x'.repeat(200_000) + '\\nTAIL_MARKER')"),
+      cwd: process.cwd(),
+      env: process.env,
+      timeout: 5_000,
+      maxBuffer: 10_000,
+      overflowMode: 'tail',
+      fullOutputPath,
+    })
+    assert.equal(r.code, 0)
+    assert.equal(r.truncated, true)
+    assert.equal(r.killed, false)
+    assert.equal(r.fullOutputPath, fullOutputPath)
+    assert.ok(Buffer.byteLength(`${r.stdout}${r.stderr}`, 'utf8') <= 10_000)
+    assert.match(r.stdout, /TAIL_MARKER/)
+    assert.doesNotMatch(r.stdout, /HEAD_MARKER/)
+    const full = fs.readFileSync(fullOutputPath, 'utf8')
+    assert.match(full, /HEAD_MARKER/)
+    assert.match(full, /TAIL_MARKER/)
+    assert.ok(r.totalOutputBytes > 200_000)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
 
 test('runProcessWithGroup: 命令不存在不挂', async () => {
   const r = await runProcessWithGroup({

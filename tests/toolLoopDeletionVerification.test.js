@@ -104,7 +104,14 @@ test('a workspace-root relative deletion needs a complete list_directory(".") be
   assert.deepEqual(checkpoint?.completionGuards?.pendingDeletionTargets, [])
 })
 
-async function runLiteralDeletionScenario({ label, command, cwd, target, parent }) {
+async function runLiteralDeletionScenario({
+  label,
+  command,
+  cwd,
+  target,
+  parent,
+  commandTool = 'bash_exec',
+}) {
   let modelCalls = 0
   let checkpoint = null
 
@@ -118,7 +125,7 @@ async function runLiteralDeletionScenario({ label, command, cwd, target, parent 
     step: { id: `literal-delete-${label}-step`, kind: 'chat' },
     messages: [{ role: 'user', content: 'Delete the exact temporary path and verify its absence.' }],
     intentMode: 'execute',
-    toolSpecs: [spec('bash_exec'), spec('list_directory')],
+    toolSpecs: [spec(commandTool), spec('list_directory')],
     maxIters: 4,
     enableToolHooks: false,
     saveCheckpoint: async (state) => {
@@ -130,7 +137,7 @@ async function runLiteralDeletionScenario({ label, command, cwd, target, parent 
       if (modelCalls === 1) {
         return {
           content: '',
-          toolCalls: [toolCall(`delete-${label}`, 'bash_exec', { command, cwd })],
+          toolCalls: [toolCall(`delete-${label}`, commandTool, { command, cwd })],
         }
       }
       if (modelCalls === 2) {
@@ -147,7 +154,7 @@ async function runLiteralDeletionScenario({ label, command, cwd, target, parent 
       return { content: 'The exact path was deleted and verified.', toolCalls: [] }
     },
     executeTool: async ({ name }) => (
-      name === 'bash_exec'
+      name === commandTool
         ? { ok: true, exitCode: 0, cwd }
         : { ok: true, path: parent, total: 0, truncated: false, entries: [] }
     ),
@@ -175,6 +182,12 @@ test('literal Unix rm, unlink, and rmdir deletions are tracked until their paren
       label: 'unix-rmdir',
       command: 'rmdir -p "tmp-dir"',
       target: `${cwd}/tmp-dir`,
+    },
+    {
+      label: 'run-command-unix-rm',
+      command: 'rm -f "tmp-run-command.txt"',
+      target: `${cwd}/tmp-run-command.txt`,
+      commandTool: 'run_command',
     },
   ]
 

@@ -105,6 +105,7 @@ test('one request grants and trusts a directory, enables features, and saves app
     WORKSPACE_FS_ENABLED: '1',
     WORKSPACE_SHELL_ENABLED: '1',
     WORKSPACE_GIT_ENABLED: '1',
+    WORKSPACE_GIT_MUTATION_ENABLED: '1',
   })
   assert.ok(saved.onboarding.completedAt > 0)
 

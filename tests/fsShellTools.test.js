@@ -12,7 +12,7 @@ import {
   bashExecTool,
   resolveInWorkspace,
 } from '../server/adapters/fsShellTools.js'
-import { closeDb, createUser } from '../server/db.js'
+import { closeDb, createUser, setUserToolPermission } from '../server/db.js'
 import { grantLocalPath } from '../server/services/localFileAccessService.js'
 import { setWorkspaceTrust } from '../server/services/workspaceTrustService.js'
 
@@ -65,6 +65,75 @@ test('fs 默认禁用:WORKSPACE_FS_ENABLED 未设时,工作区路径被拒', asy
 
 test('shell 默认禁用:WORKSPACE_SHELL_ENABLED 未设时,bash_exec 返回 403', async () => {
   await assert.rejects(() => bashExecTool({ command: 'echo hi' }), /WORKSPACE_SHELL_ENABLED/)
+})
+
+test('bash_exec permission override is internal-only and checks exactly the selected alias', async () => {
+  process.env.WORKSPACE_SHELL_ENABLED = '1'
+  const userId = `shell-permission-${process.pid}-${Date.now()}`
+  createUser({ id: userId, email: `${userId}@example.com` })
+  setUserToolPermission({ userId, toolName: 'bash_exec', enabled: false })
+  setUserToolPermission({ userId, toolName: 'run_command', enabled: true })
+
+  await assert.rejects(
+    () => bashExecTool({
+      command: 'echo must-not-run',
+      userId,
+      permissionToolName: 'run_command',
+    }),
+    (error) => error?.code === 'TOOL_DISABLED' && /bash_exec/u.test(error.message),
+  )
+
+  const result = await bashExecTool(
+    { command: 'echo RUN_COMMAND_PERMISSION_OK', userId },
+    { permissionToolName: 'run_command' },
+  )
+  assert.equal(result.ok, true, JSON.stringify(result))
+  assert.match(result.stdout, /RUN_COMMAND_PERMISSION_OK/u)
+
+  setUserToolPermission({ userId, toolName: 'bash_exec', enabled: true })
+  setUserToolPermission({ userId, toolName: 'run_command', enabled: false })
+  await assert.rejects(
+    () => bashExecTool(
+      { command: 'echo must-not-run', userId },
+      { permissionToolName: 'run_command' },
+    ),
+    (error) => error?.code === 'TOOL_DISABLED' && /run_command/u.test(error.message),
+  )
+})
+
+test('write_file permission override lets patch_file use the writer without inheriting write_file', async () => {
+  process.env.WORKSPACE_FS_ENABLED = '1'
+  const userId = `write-permission-${process.pid}-${Date.now()}`
+  createUser({ id: userId, email: `${userId}@example.com` })
+  setUserToolPermission({ userId, toolName: 'write_file', enabled: false })
+  setUserToolPermission({ userId, toolName: 'patch_file', enabled: true })
+
+  await assert.rejects(
+    () => writeFileTool({
+      path: 'permission-injection.txt',
+      content: 'must not be written',
+      userId,
+      permissionToolName: 'patch_file',
+    }),
+    (error) => error?.code === 'TOOL_DISABLED' && /write_file/u.test(error.message),
+  )
+
+  const result = await writeFileTool(
+    { path: 'permission-patch.txt', content: 'patched through canonical alias', userId },
+    { permissionToolName: 'patch_file' },
+  )
+  assert.equal(result.ok, true)
+  assert.equal(fs.readFileSync(path.join(workspace, 'permission-patch.txt'), 'utf8'), 'patched through canonical alias')
+
+  setUserToolPermission({ userId, toolName: 'write_file', enabled: true })
+  setUserToolPermission({ userId, toolName: 'patch_file', enabled: false })
+  await assert.rejects(
+    () => writeFileTool(
+      { path: 'permission-denied.txt', content: 'must not be written', userId },
+      { permissionToolName: 'patch_file' },
+    ),
+    (error) => error?.code === 'TOOL_DISABLED' && /patch_file/u.test(error.message),
+  )
 })
 
 test('resolveInWorkspace 拦截 .. 越界:相对路径逃出 workspace 被拒', () => {
@@ -441,4 +510,40 @@ test('bash_exec:敏感 env 被屏蔽传给子进程', async () => {
   // 子进程拿到的应该是空(我们传了空串覆盖),不是真实的 sk-secret-test
   assert.equal(result.stdout.includes('sk-secret-test'), false)
   delete process.env.MODEL_API_KEY
+})
+
+test('bash_exec: approved env_keys inject operational credentials and redact command output', async () => {
+  process.env.WORKSPACE_SHELL_ENABLED = '1'
+  const previous = process.env.GH_TOKEN
+  process.env.GH_TOKEN = 'gugo-controlled-token-value'
+  try {
+    const result = await bashExecTool({
+      command: 'node -e "process.stdout.write(process.env.GH_TOKEN || \'missing\')"',
+      env_keys: ['GH_TOKEN'],
+    })
+    assert.equal(result.ok, true, JSON.stringify(result))
+    assert.equal(result.sensitiveOutputRedacted, true)
+    assert.match(result.stdout, /\[REDACTED\]/u)
+    assert.doesNotMatch(JSON.stringify(result), /gugo-controlled-token-value/u)
+  } finally {
+    if (previous == null) delete process.env.GH_TOKEN
+    else process.env.GH_TOKEN = previous
+  }
+})
+
+test('bash_exec: env_keys rejects missing variables and Gugo service credentials', async () => {
+  process.env.WORKSPACE_SHELL_ENABLED = '1'
+  process.env.OPENAI_API_KEY = 'protected-service-value'
+  try {
+    await assert.rejects(
+      () => bashExecTool({ command: 'node -v', env_keys: ['OPENAI_API_KEY'] }),
+      (error) => error?.code === 'SHELL_ENV_KEY_PROTECTED',
+    )
+    await assert.rejects(
+      () => bashExecTool({ command: 'node -v', env_keys: ['GUGO_ENV_THAT_DOES_NOT_EXIST'] }),
+      (error) => error?.code === 'SHELL_ENV_KEY_NOT_FOUND',
+    )
+  } finally {
+    delete process.env.OPENAI_API_KEY
+  }
 })

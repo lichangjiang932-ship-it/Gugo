@@ -72,7 +72,10 @@ test('read-write directory authorization restores read, write, edit, and executi
     path: authorizedDir,
     access_mode: 'read_write',
   }
-  const expected = ['bash_exec', 'edit_file', 'list_directory', 'read_file', 'write_file']
+  const expected = [
+    'apply_patch', 'bash_exec', 'edit_file', 'list_directory',
+    'patch_file', 'read_file', 'run_command', 'write_file',
+  ]
   const restored = restoreDirectoryAuthorizationToolSpecs([], resolution, SERVER_TOOL_SPECS)
   assert.deepEqual(toolNames(restored), expected)
 

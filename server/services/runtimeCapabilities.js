@@ -30,11 +30,11 @@ export function buildRuntimeCapabilityBlock({ toolSpecs = [], approvalMode = nul
 
   add(lines, hasAny(names, ['list_directory', 'read_file']),
     '- Files: inspect authorized workspace/local files with list_directory and read_file.')
-  add(lines, hasAny(names, ['write_file', 'edit_file', 'apply_patch', 'multi_edit']),
+  add(lines, hasAny(names, ['write_file', 'edit_file', 'apply_patch', 'patch_file', 'multi_edit']),
     '- File changes: create or edit authorized local files, then verify the result by reading or checking it.')
-  add(lines, names.has('bash_exec'),
+  add(lines, hasAny(names, ['bash_exec', 'run_command', 'run_test', 'docker_exec']),
     '- Code and automation: run shell commands for builds, tests, scripts, and specialized local tooling; declare expected output files.')
-  add(lines, hasAny(names, ['git_status', 'git_diff', 'git_commit', 'git_push', 'git_rollback']),
+  add(lines, hasAny(names, ['git_status', 'git_diff', 'git_commit', 'git_push', 'git_rollback', 'git_write']),
     '- Git: inspect repository state and use only the exact Git mutation tools that are exposed.')
   add(lines, names.has('media_probe') || names.has('media_transform'),
     '- Audio/video: inspect media with media_probe and use media_transform for trim, transcode, audio extraction, speed changes, GIF generation, subtitle burn-in, concatenation, volume adjustment, or audio denoising. These tools accept large files by path.')
@@ -48,8 +48,10 @@ export function buildRuntimeCapabilityBlock({ toolSpecs = [], approvalMode = nul
     '- Artifacts: use the exposed create_* or generate_image tool only when the user requested that deliverable.')
   add(lines, hasAny(names, ['web_search', 'fetch_url']),
     '- Web: search or fetch current public information when those tools are exposed.')
+  add(lines, names.has('file_download'),
+    '- Downloads: stream public HTTP/HTTPS binary files into authorized local paths with size and optional SHA-256 verification.')
   add(lines, [...names].some((name) => name.startsWith('browser_')),
-    '- Browser: operate the browser with browser_* tools; prefer structured snapshots for interaction and screenshots for visual evidence.')
+    '- Browser: use browser_navigate, then browser_snapshot, then browser_click/browser_type/browser_select/browser_press. Take a fresh snapshot after navigation or major DOM changes because element refs can become stale; use screenshots for visual evidence.')
   add(lines, [...names].some((name) => name.startsWith('mcp__')),
     '- MCP: connected MCP tools are callable by their exact exposed names.')
   add(lines, [...names].some((name) => /^(?:connected_app_|notion_|github_|google_|slack_|jira_|linear_|mail_)/u.test(name)),

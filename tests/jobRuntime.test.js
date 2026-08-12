@@ -11,6 +11,10 @@ const {
   recoverInterruptedJobs,
 } = await import('../server/services/jobRuntime.js')
 const { getApprovalMode, setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
+const {
+  getJobTurnCheckpoint,
+  saveJobTurnCheckpoint,
+} = await import('../server/services/jobTurnCheckpointStore.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 const TEST_USER = issueTestSession().userId
@@ -224,6 +228,121 @@ test('recovery returns interrupted running work to queued', () => {
     { id: 'job-2', status: 'completed' },
   ])
   assert.deepEqual(recovered, [{ id: 'job-1', status: 'queued' }])
+})
+
+async function createTruncatedCheckpointJob(runtime, prompt) {
+  const job = await runtime.createJob(prompt, { userId: TEST_USER })
+  await runtime.drain()
+  const failed = runtime.getJob(job.id, { userId: TEST_USER })
+  assert.equal(failed.status, 'failed')
+  const step = failed.steps[0]
+  const checkpoint = getJobTurnCheckpoint({
+    jobId: job.id,
+    stepId: step.id,
+    userId: TEST_USER,
+  })
+  assert.equal(checkpoint?.state?.final?.noProgress, true)
+  return { job, step, checkpoint }
+}
+
+function truncatedCheckpointRuntime() {
+  return new JobRuntime({
+    planner: (prompt) => ({
+      title: prompt,
+      steps: [{ kind: 'execute', title: 'durable execution' }],
+    }),
+    executeStep: async ({ job, step }) => {
+      const messages = [
+        { role: 'user', content: job.prompt },
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{
+            id: 'read-completed-once',
+            type: 'function',
+            function: { name: 'read_file', arguments: '{"path":"README.md"}' },
+          }],
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'read-completed-once',
+          name: 'read_file',
+          content: '{"ok":true,"content":"durable evidence"}',
+        },
+      ]
+      saveJobTurnCheckpoint({
+        jobId: job.id,
+        stepId: step.id,
+        userId: job.userId,
+        state: {
+          messages,
+          toolCalls: [],
+          artifactIds: [],
+          iterations: 3,
+          budget: { used: 1, maxTotalCalls: 20, elapsed: 25, maxWallMs: 60_000 },
+          final: {
+            text: 'partial result',
+            iterations: 3,
+            incomplete: true,
+            noProgress: true,
+            reason: 'repeated tool call',
+          },
+        },
+      })
+      return {
+        ok: false,
+        truncated: true,
+        incomplete: true,
+        noProgress: true,
+        reason: 'repeated tool call',
+        output: { text: 'partial result', artifactIds: [], toolIterations: 3 },
+      }
+    },
+  })
+}
+
+test('retryStep keeps durable tool results and only clears the terminal checkpoint marker', async () => {
+  const runtime = truncatedCheckpointRuntime()
+  const { job, step, checkpoint } = await createTruncatedCheckpointJob(runtime, 'resume one failed step')
+
+  runtime.retryStep(job.id, step.id, { userId: TEST_USER })
+
+  const resumed = getJobTurnCheckpoint({ jobId: job.id, stepId: step.id, userId: TEST_USER })
+  assert.equal(resumed?.state?.final, null)
+  assert.deepEqual(resumed?.state?.messages, checkpoint.state.messages)
+  assert.deepEqual(resumed?.state?.budget, {
+    ...checkpoint.state.budget,
+    used: 0,
+    elapsed: 0,
+    modelMs: 0,
+    modelCalls: 0,
+    modelTokens: 0,
+    costUsd: 0,
+  })
+  assert.equal(resumed?.state?.iterationWindowStart, checkpoint.state.iterations)
+  assert.equal(runtime.getJob(job.id, { userId: TEST_USER }).steps[0].status, 'queued')
+})
+
+test('retryJob keeps failed-step checkpoints resumable instead of deleting progress', async () => {
+  const runtime = truncatedCheckpointRuntime()
+  const { job, step, checkpoint } = await createTruncatedCheckpointJob(runtime, 'resume a failed job')
+
+  runtime.retryJob(job.id, { userId: TEST_USER })
+
+  const resumed = getJobTurnCheckpoint({ jobId: job.id, stepId: step.id, userId: TEST_USER })
+  assert.equal(resumed?.state?.final, null)
+  assert.deepEqual(resumed?.state?.messages, checkpoint.state.messages)
+  assert.deepEqual(resumed?.state?.budget, {
+    ...checkpoint.state.budget,
+    used: 0,
+    elapsed: 0,
+    modelMs: 0,
+    modelCalls: 0,
+    modelTokens: 0,
+    costUsd: 0,
+  })
+  assert.equal(resumed?.state?.iterationWindowStart, checkpoint.state.iterations)
+  assert.equal(runtime.getJob(job.id, { userId: TEST_USER }).status, 'queued')
 })
 
 test('default executor turns generated text into a downloadable artifact', async () => {

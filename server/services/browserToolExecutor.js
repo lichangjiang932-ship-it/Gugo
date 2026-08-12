@@ -4,7 +4,9 @@ import {
   browserClick,
   browserConsole,
   browserOpenUrl,
+  browserPress,
   browserScreenshot,
+  browserSelect,
   browserSnapshot,
   browserType,
   browserWait,
@@ -21,12 +23,12 @@ export async function executeBrowserTool(
   if (!isIntegrationEnabled({ userId, provider: 'browser', defaultEnabled: true })) {
     throw new Error('Browser is disabled in Access')
   }
-  if (name === 'browser_open_url') {
+  if (name === 'browser_open_url' || name === 'browser_navigate') {
     const connectedApp = assertBrowserAppUrlAccess({ userId, url: args.url })
     const persistent = !!connectedApp || listConnectedBrowserApps({ userId }).length > 0
     return browserOpenUrl({ userId, url: args.url, headed: persistent, ...executionContext })
   }
-  if (['browser_snapshot', 'browser_console', 'browser_click', 'browser_type', 'browser_wait', 'browser_screenshot'].includes(name)) {
+  if (['browser_snapshot', 'browser_console', 'browser_click', 'browser_type', 'browser_select', 'browser_press', 'browser_wait', 'browser_screenshot'].includes(name)) {
     await assertBrowserSessionAppAccess({ userId })
   }
   if (name === 'browser_snapshot') return browserSnapshot({ userId, maxText: args.maxText, ...executionContext })
@@ -40,6 +42,16 @@ export async function executeBrowserTool(
   if (name === 'browser_type') {
     const result = await browserType({ userId, target: args.target, text: args.text, submit: args.submit, ...executionContext })
     await assertBrowserSessionAppAccess({ userId })
+    return result
+  }
+  if (name === 'browser_select') {
+    const result = await browserSelect({ userId, target: args.target, value: args.value, ...executionContext })
+    if (result?.url) assertBrowserAppUrlAccess({ userId, url: result.url })
+    return result
+  }
+  if (name === 'browser_press') {
+    const result = await browserPress({ userId, target: args.target, key: args.key, ...executionContext })
+    if (result?.url) assertBrowserAppUrlAccess({ userId, url: result.url })
     return result
   }
   if (name === 'browser_wait') {

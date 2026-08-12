@@ -40,7 +40,9 @@ export function applyDirectoryAuthorizationToolsConfig(toolsConfig, resolution) 
   const required = [
     'list_directory',
     'read_file',
-    ...(accessMode === 'read_write' ? ['write_file', 'edit_file', 'bash_exec'] : []),
+    ...(accessMode === 'read_write'
+      ? ['write_file', 'edit_file', 'apply_patch', 'patch_file', 'bash_exec', 'run_command']
+      : []),
   ]
   const enabled = new Set(normalized.enabled)
   const disabled = new Set(normalized.disabled)
@@ -65,7 +67,9 @@ export function restoreDirectoryAuthorizationToolSpecs(baseSpecs, resolution, fa
   const requiredNames = new Set([
     'list_directory',
     'read_file',
-    ...(accessMode === 'read_write' ? ['write_file', 'edit_file', 'bash_exec'] : []),
+    ...(accessMode === 'read_write'
+      ? ['write_file', 'edit_file', 'apply_patch', 'patch_file', 'bash_exec', 'run_command']
+      : []),
   ])
   const restored = new Map()
   for (const spec of current) {
@@ -88,9 +92,15 @@ export function applyServerToolsConfig(specs, toolsConfig) {
   // the read tools at their historical false defaults. Keep the dangerous
   // mutation switches authoritative, but never advertise a write capability
   // without its read-only verification companions.
-  if (enabled.has('write_file') || enabled.has('edit_file')) {
+  if (enabled.has('write_file') || enabled.has('edit_file')
+    || enabled.has('apply_patch') || enabled.has('patch_file')) {
     disabled.delete('list_directory')
     disabled.delete('read_file')
+  }
+  if (enabled.has('git_commit') || enabled.has('git_push')
+    || enabled.has('git_rollback') || enabled.has('git_write')) {
+    disabled.delete('git_status')
+    disabled.delete('git_diff')
   }
   return (Array.isArray(specs) ? specs : []).filter((spec) => {
     const name = String(spec?.function?.name || '')

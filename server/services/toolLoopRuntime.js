@@ -18,6 +18,7 @@ import { IMAGE_TOOL_SPECS, dispatchImageTool } from '../adapters/imageTools.js'
 import { MEDIA_TOOL_SPECS, dispatchMediaTool } from '../adapters/mediaTools.js'
 import { PDF_TOOL_SPECS, dispatchPdfTool } from '../adapters/pdfTools.js'
 import { BATCH_FILE_TOOL_SPECS, dispatchBatchFileTool } from '../adapters/batchFileTools.js'
+import { CODING_AGENT_TOOL_SPECS, dispatchCodingAgentTool } from '../adapters/codingAgentTools.js'
 import { dispatchGitTool } from '../adapters/gitWorkbench.js'
 import { dispatchCodeSearchTool } from '../utils/codeSearch.js'
 import { dispatchApplyPatchTool } from '../utils/applyPatch.js'
@@ -78,6 +79,18 @@ const IMAGE_TOOL_NAMES = new Set(IMAGE_TOOL_SPECS.map((spec) => spec.function.na
 const MEDIA_TOOL_NAMES = new Set(MEDIA_TOOL_SPECS.map((spec) => spec.function.name))
 const PDF_TOOL_NAMES = new Set(PDF_TOOL_SPECS.map((spec) => spec.function.name))
 const BATCH_FILE_TOOL_NAMES = new Set(BATCH_FILE_TOOL_SPECS.map((spec) => spec.function.name))
+const CODING_AGENT_TOOL_NAMES = new Set(CODING_AGENT_TOOL_SPECS.map((spec) => spec.function.name))
+const COMMAND_EXECUTION_TOOL_NAMES = new Set(['bash_exec', 'run_command'])
+const COMMAND_OUTPUT_TOOL_NAMES = new Set([...COMMAND_EXECUTION_TOOL_NAMES, 'docker_exec'])
+const LOCAL_ARTIFACT_TOOL_NAMES = new Set([
+  'write_file',
+  ...COMMAND_OUTPUT_TOOL_NAMES,
+  'image_transform',
+  'media_transform',
+  'pdf_transform',
+  'archive_create',
+  'file_download',
+])
 
 // 死循环护栏,不是工作预算。后台任务无人盯着,不能真的无限跑 ——
 // 但真正的收敛是 jobBudget(累积调用数 + 挂钟时间),那个和成本线性相关。
@@ -200,6 +213,25 @@ function toolNameFromSpec(spec) {
   return String(spec?.function?.name || '').trim()
 }
 
+function isCommandExecutionTool(value) {
+  const name = typeof value === 'string' ? value : value?.name
+  return COMMAND_EXECUTION_TOOL_NAMES.has(String(name || '').trim())
+}
+
+function commandExecutionToolNames(specs) {
+  return (Array.isArray(specs) ? specs : [])
+    .map(toolNameFromSpec)
+    .filter((name) => isCommandExecutionTool(name))
+}
+
+function hasCommandExecutionTool(specs) {
+  return commandExecutionToolNames(specs).length > 0
+}
+
+function commandExecutionToolLabel(specs) {
+  return commandExecutionToolNames(specs).join(' or ') || 'bash_exec or run_command'
+}
+
 function parseToolResultMessage(message) {
   if (message?.role !== 'tool') return null
   try {
@@ -251,10 +283,11 @@ function contradictedCapabilityClarification(args, toolSpecs, messages = []) {
     || !CLARIFICATION_CAPABILITY_DENIAL.test(text)) return null
 
   const availableNames = new Set((Array.isArray(toolSpecs) ? toolSpecs : []).map(toolNameFromSpec).filter(Boolean))
+  const availableCommandNames = [...availableNames].filter((name) => isCommandExecutionTool(name))
   const contradicted = []
-  if (CODE_EXECUTION_CAPABILITY.test(text) && availableNames.has('bash_exec')) contradicted.push('bash_exec')
+  if (CODE_EXECUTION_CAPABILITY.test(text)) contradicted.push(...availableCommandNames)
   if (FILE_WRITE_CAPABILITY.test(text)) {
-    if (availableNames.has('bash_exec')) contradicted.push('bash_exec')
+    contradicted.push(...availableCommandNames)
     for (const name of availableNames) {
       if (FILE_WRITE_TOOL_NAMES.has(name) || isFileArtifactTool(name)) contradicted.push(name)
     }
@@ -329,13 +362,13 @@ function buildPdfLayoutExecutionContract(text) {
     'Before writing, inspect the source PDF with code, extract each page heading, determine the exact target page indices, writable rectangles, ruled-line positions, and forbidden/red-line boundaries. Do not guess page numbers.',
     'Generate the requested PDF and every requested page preview with real code. Preserve the original paragraph text and structure exactly, and keep non-target pages unchanged.',
     'After generation, create a separate read-only validator named verify_pdf_layout.py and run it after the write. It must reopen both source and output and assert: the requested heading maps to the written pages; the full requested text appears in order on target pages; non-target pages remain unchanged; every inserted glyph bbox stays inside the writable rectangle and above forbidden boundaries; continuation and indentation rules hold; and all requested PNG previews are present, non-empty, and match freshly rendered output pages.',
-    'Do not call browser_open_url with a local file:// PDF or PNG; browser tools accept only http/https URLs. Inspect local PDF and image files through bash_exec and the read-only validator.',
+    'Do not call browser_open_url with a local file:// PDF or PNG; browser tools accept only http/https URLs. Inspect local PDF and image files through an exposed command tool (bash_exec or run_command) and the read-only validator.',
     `Only after every assertion passes may the validator print the exact standalone marker ${PDF_LAYOUT_VERIFICATION_OK}. A read_file or directory listing proves existence only and is not layout verification. Do not claim completion without a successful validator result containing that marker.`,
   ].join(' ')
 }
 
 function isSuccessfulPdfLayoutVerification(call, result) {
-  if (call?.name !== 'bash_exec' || !isSuccessfulToolResult(result)) return false
+  if (!isCommandExecutionTool(call) || !isSuccessfulToolResult(result)) return false
   if (Array.isArray(call?.args?.expected_outputs) && call.args.expected_outputs.length > 0) return false
   const command = String(call?.args?.command || '')
   if (command.includes(PDF_LAYOUT_VERIFICATION_OK)) return false
@@ -394,7 +427,7 @@ function probePathsFromCall(call) {
 }
 
 function installAttemptSignature(call) {
-  if (call?.name !== 'bash_exec') return ''
+  if (!isCommandExecutionTool(call)) return ''
   const command = String(call?.args?.command || '')
   const patterns = [
     { family: 'pip', regex: /(?:^|[;&|]\s*)(?:(?:python(?:3)?|py)(?:\.exe)?\s+-m\s+)?pip(?:3)?(?:\.exe)?\s+install\b([^;&|\r\n]*)/i },
@@ -425,7 +458,7 @@ function hasInlinePythonMutation(code) {
 
 function isProbeLikeCall(call) {
   if (probePathsFromCall(call).some((path) => PROBE_SCRIPT_PATH.test(path))) return true
-  if (call?.name !== 'bash_exec') return false
+  if (!isCommandExecutionTool(call)) return false
   // An explicit output contract or a statically visible file write is real
   // production work even when inline Python imports a library. The broad
   // environment-probe heuristic below intentionally recognizes `import`, so
@@ -470,7 +503,7 @@ function isProductiveExecutionOutcome(call, result, artifactId = null) {
   if (artifactId) return true
   if (isProbeLikeCall(call) || installAttemptSignature(call)) return false
   if (!isMutationExecutionCall(call, artifactId)) return false
-  if (call?.name === 'bash_exec'
+  if (isCommandExecutionTool(call)
     && Array.isArray(call?.args?.expected_outputs)
     && Object.hasOwn(result || {}, 'changedPaths')) {
     return Array.isArray(result.changedPaths) && result.changedPaths.length > 0
@@ -502,7 +535,7 @@ function progressChangesFor(call, result) {
 }
 
 function inlinePythonCode(call) {
-  if (call?.name !== 'bash_exec') return ''
+  if (!isCommandExecutionTool(call)) return ''
   if (Array.isArray(call?.args?.expected_outputs) && call.args.expected_outputs.length > 0) return ''
   const source = String(call?.args?.command || '').trim()
   const match = source.match(/^(?:(?:"[^"]*(?:python(?:3)?|py)(?:\.exe)?")|(?:[^\s"]*[\\/])?(?:python(?:3)?|py)(?:\.exe)?)(?:\s+(?!-c\b)-[^\s]+)*\s+-c\s+([\s\S]+)$/i)
@@ -524,13 +557,13 @@ function isLocalMutationCall(call) {
   if (LOCAL_MUTATION_TOOLS.has(call?.name)) {
     return !(call?.name === 'apply_patch' && call?.args?.dry_run === true)
   }
-  if (call?.name !== 'bash_exec' || isVerificationCall(call)) return false
+  if (!isCommandExecutionTool(call) || isVerificationCall(call)) return false
   return getToolMetadata(call.name, { args: call.args }).isReadOnly !== true
 }
 
 function isVerificationCall(call) {
   if (VERIFICATION_TOOLS.has(call?.name)) return true
-  if (call?.name !== 'bash_exec') return false
+  if (!isCommandExecutionTool(call)) return false
   // Declared outputs make the command a mutation contract even when the same
   // shell line also runs tests/lint/build. The executor snapshots and verifies
   // these outputs, so classifying the whole call as read-only would discard the
@@ -549,7 +582,7 @@ function isMutationExecutionCall(call, artifactId = null) {
   if (!isSubstantiveToolCall(call)) return false
   if (artifactId || isFileArtifactTool(call?.name) || CONNECTOR_WRITE_TOOL_NAMES.includes(call?.name)) return true
   if (LOCAL_MUTATION_TOOLS.has(call?.name)) return isLocalMutationCall(call)
-  if (call?.name === 'bash_exec') return isLocalMutationCall(call)
+  if (isCommandExecutionTool(call)) return isLocalMutationCall(call)
   const metadata = getToolMetadata(call?.name, { args: call?.args })
   // Dynamic MCP/plugin writes normally use riskClass=external and do not
   // appear in the built-in connector-name list. A successful one is concrete
@@ -677,7 +710,7 @@ function isStaticDeletionTarget(value) {
 }
 
 function staticWindowsDeletionTargets(call, result = null) {
-  if (call?.name !== 'bash_exec') return null
+  if (!isCommandExecutionTool(call)) return null
   const tokens = tokenizeStaticDeletionCommand(call?.args?.command)
   if (!tokens?.length) return null
   const commandName = String(tokens.shift() || '').toLowerCase().replace(/\.exe$/, '')
@@ -713,7 +746,7 @@ function isAllowedUnixDeletionSwitch(commandName, token) {
 }
 
 function staticUnixDeletionTargets(call, result = null) {
-  if (call?.name !== 'bash_exec') return null
+  if (!isCommandExecutionTool(call)) return null
   const tokens = tokenizeStaticDeletionCommand(call?.args?.command)
   if (!tokens?.length) return null
   const commandName = String(tokens.shift() || '').toLowerCase().replace(/\.exe$/, '')
@@ -761,7 +794,7 @@ function parseStaticPowerShellRemoveItem(tokens, cwd) {
 }
 
 function staticPowerShellDeletionTargets(call, result = null) {
-  if (call?.name !== 'bash_exec') return null
+  if (!isCommandExecutionTool(call)) return null
   const tokens = tokenizeStaticDeletionCommand(call?.args?.command)
   if (!tokens?.length) return null
   const commandName = String(tokens[0] || '').toLowerCase().replace(/\.exe$/, '')
@@ -854,7 +887,7 @@ function extractShellMutationTargets(call, cwd = call?.args?.cwd) {
 
 function extractMutationTargets(call, result) {
   const targets = new Set()
-  const shellCwd = call?.name === 'bash_exec'
+  const shellCwd = isCommandExecutionTool(call)
     ? result?.cwd || call?.args?.cwd
     : null
   const canonicalExecutorPaths = new Set(
@@ -871,7 +904,7 @@ function extractMutationTargets(call, result) {
       && (normalizedValue === normalizedShellCwd
         || normalizedValue.startsWith(`${normalizedShellCwd}/`))
     const target = reportedByExecutor
-      && call?.name === 'bash_exec'
+      && isCommandExecutionTool(call)
       && !canonicalExecutorPaths.has(normalizedValue)
       && !alreadyResolvedAgainstRelativeCwd
       ? shellTargetWithCwd(value, shellCwd)
@@ -918,7 +951,7 @@ function extractMutationTargets(call, result) {
     const patch = String(call?.args?.patch || '')
     for (const match of patch.matchAll(/^\*\*\* (?:Add|Update|Delete) File:\s*(.+)$/gm)) add(match[1])
   }
-  if (call?.name === 'bash_exec') {
+  if (isCommandExecutionTool(call)) {
     if (looksLikeDeletionCommand(call?.args?.command)) {
       const deletionTargets = staticDeletionTargets(call, result)
       if (!deletionTargets?.size) targets.add(PROJECT_SCOPE_TARGET)
@@ -1064,7 +1097,7 @@ function clearVerifiedMutationTargets(pendingTargets, call, result) {
   if (call?.name === 'run_project_check') {
     return clearWorkspaceScopedMutationTargets(pendingTargets)
   }
-  if (call?.name === 'bash_exec') {
+  if (isCommandExecutionTool(call)) {
     const command = String(call?.args?.command || '')
     if (/\bgit\s+diff\b/i.test(command)) {
       return clearTargetsMatchingEvidence(pendingTargets, diffVerificationTargets(call, {
@@ -1167,7 +1200,7 @@ export function selectJobToolSpecs({
 }
 
 function localArtifactCandidates(call, result) {
-  if (call?.name === 'write_file') {
+  if (call?.name === 'write_file' || call?.name === 'file_download') {
     return [{ path: result?.path || call?.args?.path, scope: result?.scope }]
   }
   if (call?.name === 'image_transform') {
@@ -1186,7 +1219,7 @@ function localArtifactCandidates(call, result) {
   if (call?.name === 'archive_create') {
     return [{ path: result?.output || call?.args?.output, scope: result?.scope }]
   }
-  if (call?.name !== 'bash_exec') return []
+  if (!COMMAND_OUTPUT_TOOL_NAMES.has(call?.name)) return []
   return (Array.isArray(result?.verifiedOutputs) ? result.verifiedOutputs : [])
     .filter((output) => output?.type === 'file')
 }
@@ -1203,14 +1236,7 @@ function resolveLocalArtifactSource(candidate, call, result) {
 }
 
 export function persistLocalToolArtifacts({ call, result, job, step }) {
-  if (result?.ok !== true || ![
-    'write_file',
-    'bash_exec',
-    'image_transform',
-    'media_transform',
-    'pdf_transform',
-    'archive_create',
-  ].includes(call?.name)) return []
+  if (result?.ok !== true || !LOCAL_ARTIFACT_TOOL_NAMES.has(call?.name)) return []
   const persisted = []
   const seen = new Set()
   for (const candidate of localArtifactCandidates(call, result)) {
@@ -1235,14 +1261,7 @@ export function persistLocalToolArtifacts({ call, result, job, step }) {
 }
 
 async function persistLocalToolArtifactsAsync({ call, result, job, step }) {
-  if (result?.ok !== true || ![
-    'write_file',
-    'bash_exec',
-    'image_transform',
-    'media_transform',
-    'pdf_transform',
-    'archive_create',
-  ].includes(call?.name)) return []
+  if (result?.ok !== true || !LOCAL_ARTIFACT_TOOL_NAMES.has(call?.name)) return []
   const persisted = []
   const seen = new Set()
   for (const candidate of localArtifactCandidates(call, result)) {
@@ -1471,6 +1490,22 @@ async function executeServerTool({
       return normalizeToolError(err, { fallbackCode: 'batch_file_tool_failed' })
     }
   }
+  if (CODING_AGENT_TOOL_NAMES.has(name)) {
+    try {
+      return await dispatchCodingAgentTool(name, args || {}, {
+        userId: job?.userId || null,
+        signal,
+        toolCallId,
+        idempotencyKey,
+      })
+    } catch (err) {
+      return {
+        ...normalizeToolError(err, { fallbackCode: 'coding_tool_failed' }),
+        ...(err?.path ? { path: err.path } : {}),
+        ...(err?.hint ? { hint: err.hint } : {}),
+      }
+    }
+  }
   if (['grep_code', 'find_symbol', 'list_imports'].includes(name)) {
     try {
       return await dispatchCodeSearchTool(name, args || {}, { userId: job?.userId || null })
@@ -1521,7 +1556,7 @@ async function executeServerTool({
       return { ok: false, error: err?.message || String(err) }
     }
   }
-  if (['git_status', 'git_diff', 'run_project_check', 'git_commit', 'git_push', 'git_rollback'].includes(name)) {
+  if (['git_status', 'git_diff', 'run_project_check', 'git_commit', 'git_push', 'git_rollback', 'git_write'].includes(name)) {
     try {
       return await dispatchGitTool(name, args || {}, {
         userId: job?.userId || null,
@@ -1814,14 +1849,14 @@ export async function runToolsLoop({
   const executionConvergenceEnabled = enforceExecutionIntent && mutationExecutionRequested
   let requiresPdfLayoutVerification = mutationExecutionRequested
     && shouldRequirePdfLayoutVerification(executionIntentText)
-    && activeToolSpecs.some((spec) => toolNameFromSpec(spec) === 'bash_exec')
+    && hasCommandExecutionTool(activeToolSpecs)
   // Explicit execution is a contract, not a hint. Keep this requirement even
   // when routing produced no usable tool; otherwise prose such as "done" would
   // be accepted precisely when the harness cannot perform the requested work.
   const requiresExecutionEvidence = directExecutionRequested
   let availableVerificationToolNames = activeToolSpecs
     .map(toolNameFromSpec)
-    .filter((name) => VERIFICATION_TOOLS.has(name) || name === 'bash_exec')
+    .filter((name) => VERIFICATION_TOOLS.has(name) || isCommandExecutionTool(name))
   const representativeReadCalls = buildRepresentativeReadCalls(job?.prompt, job?.id)
   const requiresRepresentativeRead = job?.origin === 'chat'
     && DIRECTORY_REVIEW_INTENT.test(String(job?.userPrompt || ''))
@@ -1938,14 +1973,16 @@ export async function runToolsLoop({
   if ((directExecutionRequested || requiresPersistedArtifact)
     && !hasRuntimeMarker(AVAILABLE_TOOL_CAPABILITIES_MARKER)) {
     const activeToolNames = activeToolSpecs.map(toolNameFromSpec).filter(Boolean)
+    const activeCommandToolNames = activeToolNames.filter((name) => isCommandExecutionTool(name))
+    const activeCommandToolLabel = activeCommandToolNames.join('/')
     const capabilityNotes = []
-    if (activeToolNames.includes('bash_exec')) {
-      capabilityNotes.push('bash_exec can run commands and installed Python/Node scripts in an authorized workspace or local directory')
+    if (activeCommandToolNames.length > 0) {
+      capabilityNotes.push(`${activeCommandToolLabel} can run commands and installed Python/Node scripts in an authorized workspace or local directory`)
     }
     if (process.platform === 'win32'
-      && activeToolNames.includes('bash_exec')
+      && activeCommandToolNames.length > 0
       && activeToolNames.includes('write_file')) {
-      capabilityNotes.push('on Windows, bash_exec uses cmd.exe; for multiline or long Python such as PDF/image generation, write a UTF-8 .py file with write_file and then run that file instead of embedding the program in python -c, and do not use Unix-only tail/grep/sed/awk pipelines')
+      capabilityNotes.push(`on Windows, ${activeCommandToolLabel} uses cmd.exe; for multiline or long Python such as PDF/image generation, write a UTF-8 .py file with write_file and then run that file instead of embedding the program in python -c, and do not use Unix-only tail/grep/sed/awk pipelines`)
     }
     const writableTools = activeToolNames.filter((name) => FILE_WRITE_TOOL_NAMES.has(name))
     if (writableTools.length > 0) {
@@ -2006,6 +2043,16 @@ export async function runToolsLoop({
   let finalText = ''
   let finalCheckpointPersisted = false
   let iter = Math.max(0, Number(restoredState?.iterations) || 0)
+  // `iterations` is cumulative so resumed tool-call ids and idempotency keys
+  // stay stable. An explicit retry records a new window start in the durable
+  // checkpoint, giving that retry a fresh maxIters allowance without replaying
+  // completed calls. Ordinary process/approval resumes keep the old window.
+  const iterationWindowStart = Math.min(
+    iter,
+    Math.max(0, Number(restoredState?.iterationWindowStart) || 0),
+  )
+  const iterationWindowSize = Math.max(1, Math.floor(Number(maxIters) || MAX_ITERS))
+  maxIters = iterationWindowStart + iterationWindowSize
   let modelBudgetExceededAfterResponse = null
   let checkpointCalls = Array.isArray(restoredState?.toolCalls)
     ? restoredState.toolCalls.map((call) => ({
@@ -2080,10 +2127,12 @@ export async function runToolsLoop({
       artifactIds,
       appliedSteeringIds: [...appliedSteeringIds],
       iterations: iter,
+      iterationWindowStart,
       budget: budget.snapshot?.() || null,
       recovery,
       progress: serializeToolProgress(progressState),
       failureRecovery: serializeFailureRecovery(failureRecovery),
+      loopGuard: loopGuard.snapshot(),
       ...(directoryAuthorizationResolution ? { directoryAuthorizationResolution } : {}),
       completionGuards: {
         representativeReadsInjected,
@@ -2240,7 +2289,10 @@ export async function runToolsLoop({
   // 预算测试/小预算任务应优先报告 budgetExceeded；第 5 次相同调用再判无进展。
   // Two identical calls leave room for a transient retry. The third is a loop
   // and must be rejected before execution instead of spending more budget.
-  const loopGuard = createToolLoopGuard({ maxRepeatedCalls: 2 })
+  const loopGuard = createToolLoopGuard({
+    maxRepeatedCalls: 2,
+    initialState: restoredState?.loopGuard,
+  })
   const rememberInstallAttempt = (signature) => {
     if (!signature) return
     executionConvergence.installAttempts = executionConvergence.installAttempts
@@ -2705,7 +2757,7 @@ export async function runToolsLoop({
         if (requiresPdfLayoutVerification && !pdfLayoutVerificationObserved) {
           const canRetry = pdfLayoutVerificationRetries < MAX_PDF_LAYOUT_VERIFICATION_RETRIES
             && iter + 1 < maxIters
-            && activeToolSpecs.some((spec) => toolNameFromSpec(spec) === 'bash_exec')
+            && hasCommandExecutionTool(activeToolSpecs)
           if (!canRetry) {
             const incomplete = await finishIncomplete({
               text: '\u6587\u4ef6\u5df2\u751f\u6210\uff0c\u4f46\u5c1a\u672a\u901a\u8fc7\u76ee\u6807\u9875\u3001\u975e\u76ee\u6807\u9875\u3001\u6587\u672c\u8fb9\u754c\u4e0e\u9010\u9875\u6e32\u67d3\u7684 PDF \u5e03\u5c40\u6821\u9a8c\uff0c\u56e0\u6b64\u6ca1\u6709\u6807\u8bb0\u4e3a\u5b8c\u6210\u3002',
@@ -2725,9 +2777,9 @@ export async function runToolsLoop({
               requestedPdfSectionLabel(executionIntentText)
                 ? `The authoritative requested section is ${requestedPdfSectionLabel(executionIntentText)}.`
                 : 'Use the exact page or section named by the user.',
-              'Create or correct a separate read-only verify_pdf_layout.py, then run it with bash_exec after all writes.',
+              `Create or correct a separate read-only verify_pdf_layout.py, then run it with ${commandExecutionToolLabel(activeToolSpecs)} after all writes.`,
               'It must assert target-page text, unchanged non-target pages, full text/order, glyph bounds, forbidden-line clearance, paragraph continuation/indentation, and one fresh non-empty PNG per output page.',
-              'Do not use browser_open_url for local file:// PDF or PNG paths; browser tools accept only http/https URLs. Use bash_exec and the validator for local visual evidence.',
+              `Do not use browser_open_url for local file:// PDF or PNG paths; browser tools accept only http/https URLs. Use ${commandExecutionToolLabel(activeToolSpecs)} and the validator for local visual evidence.`,
               `Only a successful validator that prints the standalone marker ${PDF_LAYOUT_VERIFICATION_OK} is accepted. Do not echo the marker or print it from the generation script.`,
             ].join(' '),
           })
@@ -2853,9 +2905,9 @@ export async function runToolsLoop({
           'Analyze the failure before making another call. Do not repeat the same method or merely vary guessed arguments.',
           'State internally what was tried, identify the likely cause from the concrete errors below, then choose a materially different strategy or report one specific blocker.',
           ...(process.platform === 'win32'
-            && failureRecovery.tool === 'bash_exec'
+            && isCommandExecutionTool(failureRecovery.tool)
             && activeToolSpecs.some((spec) => toolNameFromSpec(spec) === 'write_file')
-            ? ['For long or multiline Python on Windows, the required different strategy is: create a UTF-8 .py file with write_file, run it with bash_exec, then verify the declared final outputs. Do not retry another long python -c command or a Unix-only pipeline.']
+            ? [`For long or multiline Python on Windows, the required different strategy is: create a UTF-8 .py file with write_file, run it with ${failureRecovery.tool}, then verify the declared final outputs. Do not retry another long python -c command or a Unix-only pipeline.`]
             : []),
           ...tried,
         ].join('\n'),
@@ -3278,7 +3330,9 @@ export async function runToolsLoop({
         const requiredNames = new Set([
           'list_directory',
           'read_file',
-          ...(accessMode === 'read_write' ? ['write_file', 'edit_file', 'bash_exec'] : []),
+          ...(accessMode === 'read_write'
+            ? ['write_file', 'edit_file', ...COMMAND_EXECUTION_TOOL_NAMES]
+            : []),
         ])
         const byName = new Map(activeToolSpecs.map((spec) => [toolNameFromSpec(spec), spec]))
         for (const spec of Array.isArray(fallbackToolSpecs) ? fallbackToolSpecs : []) {
@@ -3294,10 +3348,10 @@ export async function runToolsLoop({
           })
           availableVerificationToolNames = activeToolSpecs
             .map(toolNameFromSpec)
-            .filter((name) => VERIFICATION_TOOLS.has(name) || name === 'bash_exec')
+            .filter((name) => VERIFICATION_TOOLS.has(name) || isCommandExecutionTool(name))
           requiresPdfLayoutVerification = mutationExecutionRequested
             && shouldRequirePdfLayoutVerification(executionIntentText)
-            && activeToolSpecs.some((spec) => toolNameFromSpec(spec) === 'bash_exec')
+            && hasCommandExecutionTool(activeToolSpecs)
           deferredPostBatchMessages.push({
             role: 'system',
             content: [

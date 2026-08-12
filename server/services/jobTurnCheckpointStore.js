@@ -59,14 +59,43 @@ export function saveJobTurnCheckpoint({ jobId, stepId, userId, state, now = Date
   return getJobTurnCheckpoint({ jobId, stepId, userId })
 }
 
-export function makeJobTurnCheckpointResumable({ jobId, stepId, userId } = {}) {
+function resetCheckpointBudget(budget) {
+  if (!budget || typeof budget !== 'object') return budget || null
+  return {
+    ...budget,
+    used: 0,
+    elapsed: 0,
+    modelMs: 0,
+    modelCalls: 0,
+    modelTokens: 0,
+    costUsd: 0,
+  }
+}
+
+export function makeJobTurnCheckpointResumable({
+  jobId,
+  stepId,
+  userId,
+  resetBudget = false,
+} = {}) {
   const checkpoint = getJobTurnCheckpoint({ jobId, stepId, userId })
-  if (!checkpoint?.state?.final) return checkpoint
+  if (!checkpoint?.state) return checkpoint
+  const hasTerminalResult = checkpoint.state.final != null
+  const hasBudgetToReset = resetBudget && checkpoint.state.budget && typeof checkpoint.state.budget === 'object'
+  if (!hasTerminalResult && !hasBudgetToReset) return checkpoint
+  const retryIterationWindowStart = resetBudget
+    ? Math.max(0, Number(checkpoint.state.iterations) || 0)
+    : checkpoint.state.iterationWindowStart
   return saveJobTurnCheckpoint({
     jobId,
     stepId,
     userId,
-    state: { ...checkpoint.state, final: null },
+    state: {
+      ...checkpoint.state,
+      ...(hasTerminalResult ? { final: null } : {}),
+      ...(hasBudgetToReset ? { budget: resetCheckpointBudget(checkpoint.state.budget) } : {}),
+      ...(resetBudget ? { iterationWindowStart: retryIterationWindowStart } : {}),
+    },
   })
 }
 

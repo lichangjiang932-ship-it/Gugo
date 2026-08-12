@@ -69,7 +69,7 @@ test('server-backed sessions persist metadata without duplicating transcript mes
   assert.equal(snapshot.sessions[1].messages[0].content, 'local only')
 })
 
-test('tool defaults migrate by schema version while current explicit disables are preserved', () => {
+test('tool defaults migrate to the complete execution loop while current explicit disables are preserved', () => {
   assert.equal(needsToolsConfigSchemaMigration({ toolsConfig: { bash_exec: false, run_project_check: false } }), true)
   const legacy = normalizePersistedFields({ toolsConfig: { bash_exec: false, run_project_check: false } })
   assert.equal(legacy.toolsConfig.bash_exec, true)
@@ -87,7 +87,7 @@ test('tool defaults migrate by schema version while current explicit disables ar
     toolsConfigSchemaVersion: 1,
     toolsConfig: { bash_exec: false, run_project_check: false },
   }), true)
-  assert.equal(v1.toolsConfig.bash_exec, false)
+  assert.equal(v1.toolsConfig.bash_exec, true)
   assert.equal(v1.toolsConfig.run_project_check, true)
 
   const v2 = normalizePersistedFields({
@@ -124,10 +124,64 @@ test('tool defaults migrate by schema version while current explicit disables ar
   assert.equal(v4.toolsConfig.pdf_transform, false)
   assert.equal(v4.toolsConfig.archive_extract, false)
 
+  const v5 = normalizePersistedFields({
+    toolsConfigSchemaVersion: 5,
+    toolsConfig: {
+      list_directory: false,
+      read_file: false,
+      write_file: false,
+      edit_file: false,
+      apply_patch: false,
+      bash_exec: false,
+      git_status: false,
+      git_diff: false,
+      git_commit: false,
+      git_push: false,
+      git_rollback: false,
+      run_project_check: false,
+    },
+  })
+  for (const id of [
+    'list_directory', 'read_file', 'write_file', 'edit_file', 'apply_patch', 'bash_exec',
+    'git_status', 'git_diff', 'git_commit', 'git_push', 'git_rollback', 'run_project_check',
+  ]) assert.equal(v5.toolsConfig[id], true, id)
+
+  const v6 = normalizePersistedFields({
+    toolsConfigSchemaVersion: 6,
+    toolsConfig: { run_test: false, docker_exec: false, file_download: false },
+  })
+  for (const id of ['run_test', 'docker_exec', 'file_download']) {
+    assert.equal(v6.toolsConfig[id], true, id)
+  }
+
+  const v7 = normalizePersistedFields({
+    toolsConfigSchemaVersion: 7,
+    toolsConfig: { patch_file: false, run_command: false, git_write: false },
+  })
+  for (const id of ['patch_file', 'run_command', 'git_write']) {
+    assert.equal(v7.toolsConfig[id], true, id)
+  }
+
   const explicit = normalizePersistedFields({
     toolsConfigSchemaVersion: TOOLS_CONFIG_SCHEMA_VERSION,
     toolsConfig: {
       bash_exec: false,
+      list_directory: false,
+      read_file: false,
+      write_file: false,
+      edit_file: false,
+      apply_patch: false,
+      patch_file: false,
+      run_command: false,
+      run_test: false,
+      docker_exec: false,
+      file_download: false,
+      git_status: false,
+      git_diff: false,
+      git_commit: false,
+      git_push: false,
+      git_rollback: false,
+      git_write: false,
       run_project_check: false,
       archive_create: false,
       archive_extract: false,
@@ -140,6 +194,11 @@ test('tool defaults migrate by schema version while current explicit disables ar
   assert.equal(needsToolsConfigSchemaMigration(explicit), false)
   assert.equal(explicit.toolsConfig.bash_exec, false)
   assert.equal(explicit.toolsConfig.run_project_check, false)
+  for (const id of [
+    'list_directory', 'read_file', 'write_file', 'edit_file', 'apply_patch', 'patch_file', 'run_command',
+    'run_test', 'docker_exec', 'file_download',
+    'git_status', 'git_diff', 'git_commit', 'git_push', 'git_rollback', 'git_write',
+  ]) assert.equal(explicit.toolsConfig[id], false, id)
   for (const id of ['archive_create', 'archive_extract', 'batch_rename', 'file_hash_manifest']) {
     assert.equal(explicit.toolsConfig[id], false)
   }

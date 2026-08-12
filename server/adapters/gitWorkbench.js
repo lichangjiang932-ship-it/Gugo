@@ -3,6 +3,7 @@ import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { authenticateRequest } from '../middleware.js'
 import { readJson, sendJson } from '../utils.js'
+import { isToolPermittedForUser } from '../db.js'
 import { resolveAuthorizedLocalPath } from '../services/localFileAccessService.js'
 import { getRuntimeEnv } from '../utils/runtimeEnv.js'
 import { assertWorkspaceCapability } from '../services/workspaceTrustService.js'
@@ -121,13 +122,24 @@ function normalizeRepoPath(rawPath) {
   return p
 }
 
-function parsePorcelain(stdout = '') {
-  return stdout.split(/\r?\n/).filter(Boolean).map((line) => {
-    const status = line.slice(0, 2)
-    const rawPath = line.slice(3)
-    const filePath = rawPath.includes(' -> ') ? rawPath.split(' -> ').pop() : rawPath
-    return { status, path: filePath }
-  })
+function parsePorcelainZ(stdout = '') {
+  const records = String(stdout || '').split('\0')
+  const files = []
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index]
+    if (!record || record.length < 4) continue
+    const status = record.slice(0, 2)
+    const filePath = record.slice(3)
+    const renamed = status.includes('R') || status.includes('C')
+    const originalPath = renamed ? String(records[index + 1] || '') : ''
+    if (renamed) index += 1
+    files.push({
+      status,
+      path: filePath,
+      ...(originalPath ? { originalPath } : {}),
+    })
+  }
+  return files
 }
 
 async function currentBranch(cwd) {
@@ -137,8 +149,42 @@ async function currentBranch(cwd) {
 }
 
 async function currentStatusFiles(cwd) {
-  const status = await runGit(['status', '--porcelain=v1', '-uall'], { cwd })
-  return parsePorcelain(status.stdout)
+  // `-z` is machine-readable: paths are never C-quoted, newlines remain
+  // unambiguous, and rename/copy records carry the destination and source as
+  // separate NUL-delimited fields. This keeps Chinese and other Unicode paths
+  // exact regardless of the user's core.quotePath setting.
+  const status = await runGit(['status', '--porcelain=v1', '-z', '-uall'], { cwd })
+  return parsePorcelainZ(status.stdout)
+}
+
+function assertGitToolPermitted(userId, toolName) {
+  if (!userId || isToolPermittedForUser(userId, toolName)) return
+  const error = badReq(`工具 ${toolName} 已被该用户在权限中心关闭`, 403)
+  error.code = 'TOOL_DISABLED'
+  throw error
+}
+
+function effectivePermissionToolName(permissionToolName, fallback) {
+  return typeof permissionToolName === 'string' && permissionToolName.trim()
+    ? permissionToolName.trim()
+    : fallback
+}
+
+async function requireCleanWorkingTree(cwd, action) {
+  const files = await currentStatusFiles(cwd)
+  if (files.length > 0) {
+    throw badReq(`${action} requires a clean working tree; commit the current changes first`)
+  }
+}
+
+async function validateBranchName(rawBranch, cwd) {
+  const branch = String(rawBranch || '').trim()
+  if (!branch || branch.startsWith('-') || branch.length > 240 || branch.includes('\0')) {
+    throw badReq('branch must be a valid local branch name')
+  }
+  const checked = await runGit(['check-ref-format', '--branch', branch], { cwd, rejectOnError: false })
+  if (!checked.ok) throw badReq(`invalid branch name: ${branch}`)
+  return branch
 }
 
 function clip(text, max = MAX_OUTPUT) {
@@ -214,7 +260,7 @@ export async function runProjectCheckTool({ check, cwd: rawCwd, userId = null } 
 
 function validateSelectedFiles(files, statusFiles) {
   if (!Array.isArray(files) || files.length === 0) throw badReq('selected files are required')
-  const changed = new Set(statusFiles.map((f) => f.path))
+  const changed = new Map(statusFiles.map((file) => [file.path, file]))
   const selected = files.map(normalizeRepoPath).filter(Boolean)
   if (!selected.length) throw badReq('selected files are required')
   for (const file of selected) {
@@ -223,7 +269,22 @@ function validateSelectedFiles(files, statusFiles) {
   return [...new Set(selected)]
 }
 
-export async function gitCommitTool({ message, files, cwd: rawCwd, userId = null } = {}) {
+function selectiveCommitPathspecs(statusFiles, selected) {
+  const selectedPaths = new Set(selected)
+  const excludedPaths = statusFiles.flatMap((file) => (
+    selectedPaths.has(file.path) ? [] : [file.path, file.originalPath].filter(Boolean)
+  ))
+  return [
+    ':(top,glob)**',
+    ...[...new Set(excludedPaths)].map((file) => `:(top,exclude,literal)${file}`),
+  ]
+}
+
+export async function gitCommitTool(
+  { message, files, cwd: rawCwd, userId = null } = {},
+  { permissionToolName = 'git_commit' } = {},
+) {
+  assertGitToolPermitted(userId, effectivePermissionToolName(permissionToolName, 'git_commit'))
   const env = getRuntimeEnv()
   requireMutationEnabled(env)
   const root = getRoot({ userId, cwd: rawCwd, env, write: true, capabilities: ['gitMutation'] })
@@ -231,10 +292,16 @@ export async function gitCommitTool({ message, files, cwd: rawCwd, userId = null
   if (msg.length < 3 || msg.length > 200) throw badReq('commit message must be 3-200 characters')
   const statusFiles = await currentStatusFiles(root)
   const selected = validateSelectedFiles(files, statusFiles)
-  await runGit(['add', '--', ...selected], { cwd: root })
+  await runGit(['add', '-A', '--', ...selected], { cwd: root })
   const hasStaged = await runGit(['diff', '--cached', '--quiet', '--', ...selected], { cwd: root, rejectOnError: false })
   if (hasStaged.exitCode === 0) throw badReq('selected files have no staged changes')
-  const commit = await runGit(['commit', '-m', msg, '--', ...selected], { cwd: root })
+  const commit = await runGit([
+    'commit',
+    '-m',
+    msg,
+    '--',
+    ...selectiveCommitPathspecs(await currentStatusFiles(root), selected),
+  ], { cwd: root })
   const hash = await runGit(['rev-parse', 'HEAD'], { cwd: root })
   return {
     ok: true,
@@ -244,7 +311,11 @@ export async function gitCommitTool({ message, files, cwd: rawCwd, userId = null
   }
 }
 
-export async function gitPushTool({ force = false, cwd: rawCwd, userId = null } = {}) {
+export async function gitPushTool(
+  { force = false, cwd: rawCwd, userId = null } = {},
+  { permissionToolName = 'git_push' } = {},
+) {
+  assertGitToolPermitted(userId, effectivePermissionToolName(permissionToolName, 'git_push'))
   const env = getRuntimeEnv()
   requireMutationEnabled(env)
   const root = getRoot({ userId, cwd: rawCwd, env, write: true, capabilities: ['gitMutation'] })
@@ -267,6 +338,7 @@ export async function gitPushTool({ force = false, cwd: rawCwd, userId = null } 
 }
 
 export async function gitRollbackTool({ commit, cwd: rawCwd, userId = null } = {}) {
+  assertGitToolPermitted(userId, 'git_rollback')
   const env = getRuntimeEnv()
   requireMutationEnabled(env)
   const root = getRoot({ userId, cwd: rawCwd, env, write: true, capabilities: ['gitMutation'] })
@@ -307,6 +379,80 @@ export async function gitRollbackTool({ commit, cwd: rawCwd, userId = null } = {
   }
 }
 
+export async function gitWriteTool({
+  action,
+  branch,
+  message,
+  files,
+  cwd: rawCwd,
+  userId = null,
+} = {}) {
+  assertGitToolPermitted(userId, 'git_write')
+  const operation = String(action || '').trim().toLowerCase()
+  if (operation === 'commit') {
+    return {
+      action: operation,
+      ...await gitCommitTool(
+        { message, files, cwd: rawCwd, userId },
+        { permissionToolName: 'git_write' },
+      ),
+    }
+  }
+  if (operation === 'push') {
+    return {
+      action: operation,
+      ...await gitPushTool(
+        { cwd: rawCwd, userId },
+        { permissionToolName: 'git_write' },
+      ),
+    }
+  }
+
+  const env = getRuntimeEnv()
+  requireMutationEnabled(env)
+  const root = getRoot({ userId, cwd: rawCwd, env, write: true, capabilities: ['gitMutation'] })
+
+  if (operation === 'branch' || operation === 'create_branch') {
+    const target = await validateBranchName(branch, root)
+    const exists = await runGit(['show-ref', '--verify', '--quiet', `refs/heads/${target}`], {
+      cwd: root,
+      rejectOnError: false,
+    })
+    if (exists.ok) throw badReq(`local branch already exists: ${target}`)
+    const created = await runGit(['switch', '-c', target], { cwd: root, rejectOnError: false })
+    if (!created.ok) throw badReq(String(created.stderr || created.stdout || 'git branch creation failed').trim(), 500)
+    return { ok: true, action: 'create_branch', branch: target, stdout: created.stdout, stderr: created.stderr }
+  }
+
+  if (operation === 'checkout') {
+    await requireCleanWorkingTree(root, 'checkout')
+    const target = await validateBranchName(branch, root)
+    const exists = await runGit(['show-ref', '--verify', '--quiet', `refs/heads/${target}`], {
+      cwd: root,
+      rejectOnError: false,
+    })
+    if (!exists.ok) throw badReq(`local branch does not exist: ${target}`)
+    const switched = await runGit(['switch', target], { cwd: root, rejectOnError: false })
+    if (!switched.ok) throw badReq(String(switched.stderr || switched.stdout || 'git checkout failed').trim(), 500)
+    return { ok: true, action: operation, branch: target, stdout: switched.stdout, stderr: switched.stderr }
+  }
+
+  if (operation === 'pull') {
+    await requireCleanWorkingTree(root, 'pull')
+    const current = await currentBranch(root)
+    if (!current || current === 'HEAD') throw badReq('cannot pull from detached HEAD')
+    if (branch) {
+      const expected = await validateBranchName(branch, root)
+      if (expected !== current) throw badReq(`requested branch ${expected} is not the current branch ${current}`)
+    }
+    const pulled = await runGit(['pull', '--ff-only', 'origin', current], { cwd: root, rejectOnError: false })
+    if (!pulled.ok) throw badReq(String(pulled.stderr || pulled.stdout || 'git pull --ff-only failed').trim(), 500)
+    return { ok: true, action: operation, branch: current, remote: 'origin', stdout: pulled.stdout, stderr: pulled.stderr }
+  }
+
+  throw badReq('git_write action must be commit, branch, create_branch, checkout, pull, or push')
+}
+
 export async function dispatchGitTool(name, args, { userId = null } = {}) {
   const argsWithUser = userId ? { ...(args || {}), userId } : (args || {})
   switch (name) {
@@ -316,6 +462,7 @@ export async function dispatchGitTool(name, args, { userId = null } = {}) {
     case 'git_commit': return gitCommitTool(argsWithUser)
     case 'git_push': return gitPushTool(argsWithUser)
     case 'git_rollback': return gitRollbackTool(argsWithUser)
+    case 'git_write': return gitWriteTool(argsWithUser)
     default: throw badReq(`unknown git tool: ${name}`, 404)
   }
 }
@@ -353,6 +500,28 @@ export async function handleGitWorkbenchRequest(req, res) {
 }
 
 export const GIT_TOOL_SPECS = [
+  {
+    type: 'function',
+    function: {
+      name: 'git_write',
+      description: 'Perform one structured Git mutation: commit selected files, create a branch, checkout an existing clean branch, fast-forward-only pull, or non-force push. Requires Git mutation permission and per-call approval.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['commit', 'branch', 'create_branch', 'checkout', 'pull', 'push'] },
+          branch: { type: 'string', description: 'Required for branch/create_branch/checkout; optional current-branch assertion for pull.' },
+          message: { type: 'string', minLength: 3, maxLength: 200, description: 'Required for commit.' },
+          files: {
+            type: 'array',
+            minItems: 1,
+            items: { type: 'string', description: 'Explicit repository-relative changed path for commit.' },
+          },
+          cwd: { type: 'string', description: 'Workspace-relative or authorized absolute repository path.' },
+        },
+        required: ['action'],
+      },
+    },
+  },
   {
     type: 'function',
     function: {

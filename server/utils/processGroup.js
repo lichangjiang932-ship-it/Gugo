@@ -17,11 +17,21 @@
  * 返回结构与 execFile 兼容:{ stdout, stderr, code, signal, timedOut, killed, truncated }
  */
 
+import fs from 'node:fs'
+import path from 'node:path'
 import { spawn } from 'node:child_process'
 
 const GRACE_MS = 2_000
 const WINDOWS_TREE_HANDLE_DRAIN_MS = 250
 const WINDOWS_TREE_KILL_TIMEOUT_MS = 6_000
+
+function utf8Tail(value, maxBytes) {
+  const source = Buffer.from(String(value || ''), 'utf8')
+  if (source.length <= maxBytes) return source.toString('utf8')
+  let start = Math.max(0, source.length - Math.max(0, maxBytes))
+  while (start < source.length && (source[start] & 0xc0) === 0x80) start += 1
+  return source.subarray(start).toString('utf8')
+}
 
 function windowsPowerShellPath() {
   const systemRoot = String(process.env.SystemRoot || process.env.WINDIR || '').trim()
@@ -192,6 +202,8 @@ export function runProcessWithGroup({
   windowsHide = true,
   windowsVerbatimArguments = false,
   signal = null,
+  overflowMode = 'kill',
+  fullOutputPath = null,
 }) {
   if (signal?.aborted) {
     return Promise.resolve({
@@ -203,6 +215,7 @@ export function runProcessWithGroup({
       killed: false,
       truncated: false,
       aborted: true,
+      totalOutputBytes: 0,
     })
   }
   return new Promise((resolve) => {
@@ -219,6 +232,10 @@ export function runProcessWithGroup({
 
     let stdoutBuf = ''
     let stderrBuf = ''
+    const tailMode = overflowMode === 'tail'
+    const outputEvents = []
+    let bufferedOutputBytes = 0
+    let totalOutputBytes = 0
     let truncated = false
     let timedOut = false
     let aborted = false
@@ -229,10 +246,49 @@ export function runProcessWithGroup({
     let abortListener = null
     let finalizing = false
     let windowsTreeKillPromise = null
+    let outputLogStream = null
+    let outputLogError = null
+    const streamsPausedForLog = new Set()
+
+    if (tailMode && fullOutputPath) {
+      try {
+        fs.mkdirSync(path.dirname(fullOutputPath), { recursive: true })
+        outputLogStream = fs.createWriteStream(fullOutputPath, { flags: 'wx' })
+        outputLogStream.on('drain', () => {
+          for (const stream of streamsPausedForLog) stream.resume?.()
+          streamsPausedForLog.clear()
+        })
+        outputLogStream.on('error', (error) => {
+          outputLogError = error
+          for (const stream of streamsPausedForLog) stream.resume?.()
+          streamsPausedForLog.clear()
+        })
+      } catch (error) {
+        outputLogError = error
+      }
+    }
 
     const stopBuffering = () => {
       try { child.stdout?.destroy() } catch { /* noop */ }
       try { child.stderr?.destroy() } catch { /* noop */ }
+    }
+
+    const trimTailBuffer = () => {
+      while (bufferedOutputBytes > maxBuffer && outputEvents.length > 0) {
+        truncated = true
+        const first = outputEvents[0]
+        const overflow = bufferedOutputBytes - maxBuffer
+        if (first.bytes <= overflow) {
+          outputEvents.shift()
+          bufferedOutputBytes -= first.bytes
+          continue
+        }
+        const kept = utf8Tail(first.text, first.bytes - overflow)
+        const keptBytes = Buffer.byteLength(kept, 'utf8')
+        bufferedOutputBytes -= first.bytes - keptBytes
+        first.text = kept
+        first.bytes = keptBytes
+      }
     }
 
     const collect = (stream, which) => {
@@ -240,14 +296,35 @@ export function runProcessWithGroup({
       // ★ Lens-3 fix: child 还在写时 destroy 会触发 EPIPE,静默吃掉避免日志噪
       stream?.on('error', () => { /* ignore EPIPE after destroy */ })
       stream?.on('data', (chunk) => {
+        const text = String(chunk)
+        const bytes = Buffer.byteLength(text, 'utf8')
+        totalOutputBytes += bytes
+        if (outputLogStream && !outputLogStream.destroyed) {
+          try {
+            if (!outputLogStream.write(text)) {
+              stream.pause?.()
+              streamsPausedForLog.add(stream)
+            }
+          } catch (error) {
+            outputLogError = error
+            stream.resume?.()
+            streamsPausedForLog.delete(stream)
+          }
+        }
+        if (tailMode) {
+          outputEvents.push({ which, text, bytes })
+          bufferedOutputBytes += bytes
+          trimTailBuffer()
+          return
+        }
         if (truncated) return
         const total = stdoutBuf.length + stderrBuf.length
         const remaining = maxBuffer - total
         if (remaining <= 0) { truncated = true; stopBuffering(); killTree('SIGTERM'); return }
-        const slice = chunk.length > remaining ? chunk.slice(0, remaining) : chunk
+        const slice = text.length > remaining ? text.slice(0, remaining) : text
         if (which === 'out') stdoutBuf += slice
         else stderrBuf += slice
-        if (chunk.length > remaining) { truncated = true; stopBuffering(); killTree('SIGTERM') }
+        if (text.length > remaining) { truncated = true; stopBuffering(); killTree('SIGTERM') }
       })
     }
     collect(child.stdout, 'out')
@@ -380,6 +457,36 @@ export function runProcessWithGroup({
           setTimeout(resolveDrain, WINDOWS_TREE_HANDLE_DRAIN_MS)
         })
       }
+      if (outputLogStream && !outputLogStream.destroyed) {
+        await new Promise((resolveLog) => {
+          let done = false
+          const finish = () => {
+            if (done) return
+            done = true
+            resolveLog()
+          }
+          outputLogStream.once('finish', finish)
+          outputLogStream.once('close', finish)
+          outputLogStream.once('error', finish)
+          outputLogStream.end()
+        })
+      }
+      if (tailMode) {
+        stdoutBuf = outputEvents
+          .filter((entry) => entry.which === 'out')
+          .map((entry) => entry.text)
+          .join('')
+        stderrBuf = outputEvents
+          .filter((entry) => entry.which === 'err')
+          .map((entry) => entry.text)
+          .join('')
+      }
+      let persistedFullOutputPath = null
+      if (tailMode && truncated && fullOutputPath && !outputLogError) {
+        persistedFullOutputPath = fullOutputPath
+      } else if (tailMode && fullOutputPath) {
+        try { await fs.promises.rm(fullOutputPath, { force: true }) } catch { /* best-effort cleanup */ }
+      }
       settled = true
       // ★ Lens-2 fix: 不再无条件给已退出 child 的 pgid 再发 SIGTERM
       // 原因:child.pid 在 close 后可能被 OS 复用,主动 kill(-pid) 会误杀别人。
@@ -397,6 +504,9 @@ export function runProcessWithGroup({
         processTreeCleanupFailed,
         truncated,
         aborted,
+        totalOutputBytes,
+        ...(persistedFullOutputPath ? { fullOutputPath: persistedFullOutputPath } : {}),
+        ...(outputLogError ? { outputLogError: outputLogError?.message || String(outputLogError) } : {}),
       })
     }
 

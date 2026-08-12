@@ -177,6 +177,16 @@ test('apply_patch: dry_run skips approval entirely', () => {
   assert.deepEqual(out, { needsApproval: false, risk: 'low', reason: null })
 })
 
+test('patch_file uses local-write approval with a dry-run exception', () => {
+  assert.deepEqual(
+    classifyToolRisk('patch_file', { path: 'src/app.js', dry_run: true }, JOB),
+    { needsApproval: false, risk: 'low', reason: null },
+  )
+  const out = classifyToolRisk('patch_file', { path: 'src/app.js' }, JOB)
+  assert.equal(out.needsApproval, true)
+  assert.equal(out.risk, 'medium')
+})
+
 test('apply_patch: large change set (6 files) escalates to high', () => {
   const changes = Array.from({ length: 6 }, (_, i) => ({ path: `f${i}.js` }))
   const out = classifyToolRisk('apply_patch', { changes }, JOB)
@@ -293,7 +303,7 @@ test('explicit dynamic-tool metadata overrides unsafe name guessing', () => {
 })
 
 test('git mutation tools always require high-risk approval', () => {
-  for (const name of ['git_commit', 'git_push', 'git_rollback']) {
+  for (const name of ['git_commit', 'git_push', 'git_rollback', 'git_write']) {
     const result = classifyToolRisk(name, {}, { mode: 'unattended', origin: 'job' })
     assert.equal(result.needsApproval, true, `${name} should require approval`)
     assert.equal(result.risk, 'high', `${name} should be high risk`)
@@ -315,6 +325,74 @@ test("mode 'off' closes the queue and fails closed for risky calls", () => {
       assert.match(out.reason, /审批队列已关闭/, `${name}/${origin}`)
     }
   }
+})
+
+test('run_command inherits shell-grade approval and cannot use standing grants', () => {
+  const out = classifyToolRisk('run_command', { command: 'python -V' }, JOB)
+  assert.equal(out.needsApproval, true)
+  assert.equal(out.risk, 'high')
+  assert.throws(() => buildRememberedGrant('run_command', { command: 'python -V' }), /Shell tools/)
+})
+
+test('run_command approval names requested host credentials without exposing values', () => {
+  const out = classifyToolRisk('run_command', {
+    command: 'npm publish',
+    env_keys: ['NPM_TOKEN', 'DATABASE_URL'],
+  }, JOB)
+  assert.equal(out.needsApproval, true)
+  assert.equal(out.risk, 'high')
+  assert.match(out.reason, /NPM_TOKEN/u)
+  assert.match(out.reason, /DATABASE_URL/u)
+  assert.doesNotMatch(out.reason, /secret|password=/iu)
+})
+
+test('browser navigation and interaction actions require approval', () => {
+  for (const name of ['browser_open_url', 'browser_navigate']) {
+    const out = classifyToolRisk(name, { url: 'https://example.com' }, JOB)
+    assert.equal(out.needsApproval, true, `${name} should be gated`)
+    assert.equal(out.risk, 'low', `${name} risk`)
+  }
+  for (const name of ['browser_click', 'browser_type', 'browser_select', 'browser_press']) {
+    const out = classifyToolRisk(name, { target: 'e1' }, JOB)
+    assert.equal(out.needsApproval, true, `${name} should be gated`)
+    assert.equal(out.risk, 'medium', `${name} risk`)
+  }
+})
+
+test('run_test and docker_exec inherit shell-grade approval and command checks', () => {
+  for (const name of ['run_test', 'docker_exec']) {
+    const normal = classifyToolRisk(name, { command: 'python -m pytest' }, JOB)
+    assert.equal(normal.needsApproval, true, name)
+    assert.equal(normal.risk, 'high', name)
+    assert.match(normal.reason, /shell|代码|命令/i, name)
+
+    const dangerous = classifyToolRisk(name, { command: 'rm -rf /' }, JOB)
+    assert.equal(dangerous.needsApproval, true, name)
+    assert.equal(dangerous.risk, 'high', name)
+    assert.match(dangerous.reason, /危险命令/i, name)
+  }
+})
+
+test('file_download is a medium local write and escalates outside the workspace', () => {
+  const local = classifyToolRisk('file_download', { url: 'https://example.com/a', path: 'downloads/a' }, JOB)
+  assert.equal(local.needsApproval, true)
+  assert.equal(local.risk, 'medium')
+
+  const external = classifyToolRisk('file_download', { url: 'https://example.com/a', path: '/tmp/a' }, JOB)
+  assert.equal(external.needsApproval, true)
+  assert.equal(external.risk, 'high')
+})
+
+test('acceptEdits still requires approval before downloading a file', () => {
+  const verdict = classifyToolRisk(
+    'file_download',
+    { url: 'https://example.com/a', path: 'downloads/a' },
+    { origin: 'job', mode: 'unattended', permissionMode: 'acceptEdits' },
+  )
+
+  assert.equal(verdict.needsApproval, true)
+  assert.equal(verdict.denied, undefined)
+  assert.equal(verdict.risk, 'medium')
 })
 
 test("mode 'unattended' never weakens the user's normal permission mode", () => {

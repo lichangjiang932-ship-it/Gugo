@@ -312,6 +312,33 @@ test('createToolLoopGuard only counts consecutive duplicate calls and resets aft
   assert.equal(guard.before(first).ok, true, 'substantive progress resets the duplicate streak')
 })
 
+test('createToolLoopGuard restores durable repeat and failure state without persisting raw arguments', () => {
+  const call = {
+    name: 'bash_exec',
+    args: { command: 'python secret-script.py --token private-value' },
+  }
+  const firstProcess = createToolLoopGuard({ maxRepeatedCalls: 2, maxSameToolFailures: 3 })
+  assert.equal(firstProcess.before(call).ok, true)
+  assert.equal(firstProcess.afterCall(call, { ok: false, error: 'first' }).ok, true)
+  assert.equal(firstProcess.before(call).ok, true)
+  assert.equal(firstProcess.afterCall(call, { ok: false, error: 'second' }).ok, true)
+
+  const durableState = firstProcess.snapshot()
+  assert.match(durableState.lastSignature, /^[a-f0-9]{64}$/u)
+  assert.doesNotMatch(JSON.stringify(durableState), /private-value|secret-script/u)
+
+  const secondProcess = createToolLoopGuard({
+    maxRepeatedCalls: 2,
+    maxSameToolFailures: 3,
+    initialState: durableState,
+  })
+  assert.equal(secondProcess.before(call).result.code, 'repeated_tool_call')
+  assert.equal(
+    secondProcess.afterCall(call, { ok: false, error: 'third' }).result.code,
+    'tool_no_progress',
+  )
+})
+
 test('mapWithConcurrency 保持结果顺序并限制并发数', async () => {
   let active = 0
   let maxActive = 0

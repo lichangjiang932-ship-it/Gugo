@@ -6,7 +6,9 @@ import {
   browserClick,
   browserConsole,
   browserOpenUrl,
+  browserPress,
   browserScreenshot,
+  browserSelect,
   browserSnapshot,
   browserState,
   browserType,
@@ -40,7 +42,7 @@ export async function handleBrowserRequest(req, res) {
     }
     if (req.method !== 'POST') return sendJson(res, 405, { ok: false, error: '仅支持 POST' })
     const body = await readJson(req)
-    if (pathname === '/api/browser/open') {
+    if (pathname === '/api/browser/open' || pathname === '/api/browser/navigate') {
       const connectedApp = assertBrowserAppUrlAccess({ userId, url: body.url })
       const persistent = !!connectedApp || listConnectedBrowserApps({ userId }).length > 0
       return sendJson(res, 200, { ok: true, result: await browserOpenUrl({ userId, url: body.url, headed: persistent }) })
@@ -56,6 +58,16 @@ export async function handleBrowserRequest(req, res) {
     if (pathname === '/api/browser/type') {
       const result = await browserType({ userId, target: body.target, text: body.text, submit: body.submit })
       await assertBrowserSessionAppAccess({ userId })
+      return sendJson(res, 200, { ok: true, result })
+    }
+    if (pathname === '/api/browser/select') {
+      const result = await browserSelect({ userId, target: body.target, value: body.value })
+      if (result?.url) assertBrowserAppUrlAccess({ userId, url: result.url })
+      return sendJson(res, 200, { ok: true, result })
+    }
+    if (pathname === '/api/browser/press') {
+      const result = await browserPress({ userId, target: body.target, key: body.key })
+      if (result?.url) assertBrowserAppUrlAccess({ userId, url: result.url })
       return sendJson(res, 200, { ok: true, result })
     }
     if (pathname === '/api/browser/wait') {

@@ -15,7 +15,7 @@ const { SERVER_TURN_TOOL_TOGGLE_NAMES } = await import('../src/lib/serverToolCon
 const { WORKSPACE_TOOL_SPECS } = await import('../src/lib/tools/workspaceToolSpecs.js')
 const { FS_SHELL_TOOL_SPECS } = await import('../server/adapters/fsShellTools.js')
 const { runToolsLoop, SERVER_TOOL_SPECS } = await import('../server/services/toolLoopRuntime.js')
-const { getBuiltinSpec, listBuiltinSpecs } = await import('../server/services/toolRegistry.js')
+const { getBuiltinSpec, getToolMetadata, listBuiltinSpecs } = await import('../server/services/toolRegistry.js')
 const { CONNECTOR_TOOL_NAMES } = await import('../server/services/connectorTools.js')
 const { resolveTurnToolSpecs } = await import('../server/services/turnToolSpecs.js')
 
@@ -61,8 +61,38 @@ test('HTML artifact generation is an executable server capability', () => {
   assert.equal(serverNames.has('create_html_app'), true)
 })
 
+test('run_command and bash_exec share command-aware concurrency metadata', () => {
+  for (const name of ['bash_exec', 'run_command']) {
+    const readOnly = getToolMetadata(name, { args: { command: 'git status --short' } })
+    assert.equal(readOnly.isReadOnly, true, `${name} read-only command classification`)
+    assert.equal(readOnly.isConcurrencySafe, true, `${name} read-only command concurrency`)
+
+    const mutating = getToolMetadata(name, { args: { command: 'node -e "require(\'fs\').writeFileSync(\'out.txt\', \'x\')"' } })
+    assert.equal(mutating.isReadOnly, false, `${name} mutating command classification`)
+    assert.equal(mutating.isConcurrencySafe, false, `${name} mutating command concurrency`)
+  }
+
+  const cmdAlias = getToolMetadata('run_command', { args: { cmd: 'git diff --stat' } })
+  assert.equal(cmdAlias.isReadOnly, true)
+  assert.equal(cmdAlias.isConcurrencySafe, true)
+})
+
 test('core execution tools survive the canonical turn catalog when enabled', async () => {
-  const required = ['write_file', 'bash_exec', 'pdf_transform']
+  const required = [
+    'write_file',
+    'apply_patch',
+    'patch_file',
+    'bash_exec',
+    'run_command',
+    'run_test',
+    'docker_exec',
+    'file_download',
+    'git_commit',
+    'git_push',
+    'git_rollback',
+    'git_write',
+    'pdf_transform',
+  ]
   const serverNames = new Set(namesOf(SERVER_TOOL_SPECS))
   const toggleNames = new Set(SERVER_TURN_TOOL_TOGGLE_NAMES)
   for (const name of required) {
@@ -118,6 +148,21 @@ test('writable turns retain read-only verification tools despite legacy client d
   assert.ok(names.includes('read_file'))
   assert.ok(names.includes('list_directory'))
   assert.equal(names.includes('edit_file'), false, 'an explicitly disabled write tool stays disabled')
+})
+
+test('Git mutation turns retain status and diff for preflight and verification', async () => {
+  const specs = await resolveTurnToolSpecs({
+    userId: null,
+    baseSpecs: SERVER_TOOL_SPECS,
+    toolsConfig: {
+      enabled: ['git_commit'],
+      disabled: ['git_status', 'git_diff'],
+    },
+    enabledConnectorTools: [],
+    webSearchReady: false,
+  })
+  const names = namesOf(specs)
+  for (const name of ['git_commit', 'git_status', 'git_diff']) assert.ok(names.includes(name), name)
 })
 
 test('every bash_exec spec tells models to quote Windows absolute paths', () => {

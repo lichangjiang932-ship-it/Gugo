@@ -10,22 +10,37 @@ const RISK_TONE = {
 
 const TOOL_ICON = {
   bash_exec: Terminal,
+  run_command: Terminal,
+  run_test: Terminal,
+  docker_exec: Terminal,
   write_file: FilePen,
   edit_file: FileText,
   apply_patch: FileText,
+  patch_file: FileText,
+  file_download: Globe,
   fetch_url: Globe,
   browser_click: MousePointerClick,
   browser_type: MousePointerClick,
+  browser_select: MousePointerClick,
+  browser_press: MousePointerClick,
 }
+
+const SHELL_TOOL_NAMES = new Set(['bash_exec', 'run_command', 'run_test', 'docker_exec'])
 
 /** bash_exec 的命令、write_file 的路径 —— 一眼能看懂的主参数 */
 function headline(name, args) {
   if (!args || typeof args !== 'object') return ''
-  if (name === 'bash_exec') return String(args.command || '')
-  if (name === 'write_file' || name === 'edit_file') return String(args.path || '')
+  if (SHELL_TOOL_NAMES.has(name)) {
+    const command = Array.isArray(args.command) ? args.command.join(' ') : args.command
+    const envKeys = Array.isArray(args.env_keys) && args.env_keys.length > 0
+      ? `\nenv_keys: ${args.env_keys.join(', ')}`
+      : ''
+    return `${String(command || '')}${envKeys}`
+  }
+  if (['write_file', 'edit_file', 'patch_file', 'file_download'].includes(name)) return String(args.path || '')
   if (name === 'fetch_url') return `${String(args.method || 'GET').toUpperCase()} ${String(args.url || '')}`
-  if (name === 'browser_open_url') return String(args.url || '')
-  if (name === 'browser_click' || name === 'browser_type') return String(args.selector || '')
+  if (name === 'browser_open_url' || name === 'browser_navigate') return String(args.url || '')
+  if (['browser_click', 'browser_type', 'browser_select', 'browser_press'].includes(name)) return String(args.target || args.selector || '')
   return ''
 }
 
@@ -92,7 +107,7 @@ export default function ToolApprovalCard({ open, request, onDecide, busy }) {
   const tone = RISK_TONE[risk] || RISK_TONE.low
   const Icon = TOOL_ICON[name] || AlertTriangle
   const main = headline(name, args)
-  const canRemember = name !== 'bash_exec'
+  const canRemember = !SHELL_TOOL_NAMES.has(name)
 
   return (
     <div className={`rounded-md border ${tone.border} ${tone.bg} p-3.5`} data-testid="tool-approval-card">

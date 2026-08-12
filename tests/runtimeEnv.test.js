@@ -82,7 +82,12 @@ test('runtime env can disable cwd dotenv for packaged desktop isolation', () => 
 test('workspace onboarding runtime switches persist atomically with completion metadata', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-workspace-onboarding-env-'))
   const dataDir = path.join(cwd, 'data')
-  const keys = ['WORKSPACE_FS_ENABLED', 'WORKSPACE_SHELL_ENABLED', 'WORKSPACE_GIT_ENABLED']
+  const keys = [
+    'WORKSPACE_FS_ENABLED',
+    'WORKSPACE_SHELL_ENABLED',
+    'WORKSPACE_GIT_ENABLED',
+    'WORKSPACE_GIT_MUTATION_ENABLED',
+  ]
   const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]))
   const env = { APP_DATA_DIR: dataDir, GUGO_LOAD_DOTENV: '0' }
   for (const key of keys) {
@@ -98,6 +103,8 @@ test('workspace onboarding runtime switches persist atomically with completion m
         ? before.features.WORKSPACE_SHELL_ENABLED.enabled : true,
       WORKSPACE_GIT_ENABLED: before.features.WORKSPACE_GIT_ENABLED.locked
         ? before.features.WORKSPACE_GIT_ENABLED.enabled : false,
+      WORKSPACE_GIT_MUTATION_ENABLED: before.features.WORKSPACE_GIT_MUTATION_ENABLED.locked
+        ? before.features.WORKSPACE_GIT_MUTATION_ENABLED.enabled : false,
     }
     const completedAt = 1_786_400_000_000
     const result = updateWorkspaceRuntimeConfiguration({
