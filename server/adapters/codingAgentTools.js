@@ -393,7 +393,11 @@ function dockerCommand({
   } else {
     throw toolError('command 必填', 400, 'DOCKER_COMMAND_REQUIRED')
   }
-  return argv.join(' ')
+  const commandLine = argv.join(' ')
+  // cmd.exe /s /c strips the first and last quote from its command string.
+  // Keep one outer pair so quoted executables (for example Docker Desktop
+  // under Program Files) and quoted trailing arguments survive that pass.
+  return platform === 'win32' ? `"${commandLine}"` : commandLine
 }
 
 export async function dockerExecTool({

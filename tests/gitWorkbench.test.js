@@ -216,7 +216,10 @@ test('git_status and git_write preserve Unicode rename paths and commit both sid
     assert.equal(committed.ok, true)
     assert.deepEqual(committed.files, [renamedPath])
     assert.equal(git(cwd, ['status', '--porcelain=v1']), '')
-    assert.match(git(cwd, ['show', '--name-status', '--format=', 'HEAD']), new RegExp(`R\\d+\\s+${originalPath}\\s+${renamedPath}`))
+    assert.match(
+      git(cwd, ['-c', 'core.quotePath=false', 'show', '--name-status', '--format=', 'HEAD']),
+      new RegExp(`R\\d+\\s+${originalPath}\\s+${renamedPath}`),
+    )
   })
 })
 

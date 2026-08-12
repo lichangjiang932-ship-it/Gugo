@@ -303,7 +303,7 @@ test('docker_exec command builder keeps user command as one shell argument', () 
 
 test('docker_exec does not inherit the hidden bash_exec permission', async () => {
   const userId = createPermissionUser('docker-alias-permission')
-  const fakeDocker = path.join(root, process.platform === 'win32' ? 'fake-docker.cmd' : 'fake-docker')
+  const fakeDocker = path.join(root, process.platform === 'win32' ? 'fake docker.cmd' : 'fake docker')
   if (process.platform === 'win32') {
     fs.writeFileSync(fakeDocker, '@echo off\r\necho DOCKER_ALIAS_PERMISSION_OK\r\nexit /b 0\r\n', 'utf8')
   } else {

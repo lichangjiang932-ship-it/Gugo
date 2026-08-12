@@ -146,11 +146,14 @@ test('Windows Docker command leaves fixed tokens unquoted and defaults strings t
     platform: 'win32',
   })
 
-  assert.match(command, /^docker exec /)
-  assert.doesNotMatch(command, /^"docker" "exec"/)
-  assert.match(command, /\/bin\/sh -lc "python -V && npm -v"$/)
-  assert.match(command, /-w "\/workspace with space"/)
-  assert.match(command, /-e "MODE=test&verify"/)
+  assert.equal(command[0], '"')
+  assert.equal(command.at(-1), '"')
+  const commandLine = command.slice(1, -1)
+  assert.match(commandLine, /^docker exec /)
+  assert.doesNotMatch(commandLine, /^"docker" "exec"/)
+  assert.match(commandLine, /\/bin\/sh -lc "python -V && npm -v"$/)
+  assert.match(commandLine, /-w "\/workspace with space"/)
+  assert.match(commandLine, /-e "MODE=test&verify"/)
 })
 
 test('Docker command arrays remain exact argv and container_os selects Windows shell only for strings', () => {
@@ -160,8 +163,11 @@ test('Docker command arrays remain exact argv and container_os selects Windows s
     containerOs: 'windows',
     platform: 'win32',
   })
-  assert.doesNotMatch(exactArgv, /(?:\/bin\/sh|cmd\.exe)/)
-  assert.match(exactArgv, /dev "python" "-c" "print\(42\)"$/)
+  assert.equal(exactArgv[0], '"')
+  assert.equal(exactArgv.at(-1), '"')
+  const exactArgvLine = exactArgv.slice(1, -1)
+  assert.doesNotMatch(exactArgvLine, /(?:\/bin\/sh|cmd\.exe)/)
+  assert.match(exactArgvLine, /dev "python" "-c" "print\(42\)"$/)
 
   const windowsShell = _internals.dockerCommand({
     container: 'dev',
@@ -169,7 +175,9 @@ test('Docker command arrays remain exact argv and container_os selects Windows s
     containerOs: 'windows',
     platform: 'win32',
   })
-  assert.match(windowsShell, /cmd\.exe \/d \/s \/c "dir && echo ok"$/)
+  assert.equal(windowsShell[0], '"')
+  assert.equal(windowsShell.at(-1), '"')
+  assert.match(windowsShell.slice(1, -1), /cmd\.exe \/d \/s \/c "dir && echo ok"$/)
 })
 
 test('coding command schemas expose env_keys as names-only high-risk credential forwarding', () => {
@@ -237,7 +245,7 @@ test('run_command and run_test forward requested sensitive host variables withou
 test('docker_exec forwards env_keys to the host CLI while keeping container env separate', async () => {
   const key = 'GUGO_P1_DOCKER_TOKEN'
   const value = 'docker-value-must-not-leak'
-  const fakeDocker = path.join(root, process.platform === 'win32' ? 'p1-fake-docker.cmd' : 'p1-fake-docker')
+  const fakeDocker = path.join(root, process.platform === 'win32' ? 'p1 fake docker.cmd' : 'p1 fake docker')
   if (process.platform === 'win32') {
     fs.writeFileSync(
       fakeDocker,
