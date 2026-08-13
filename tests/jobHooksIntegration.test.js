@@ -14,6 +14,8 @@ const { runToolsLoop } = await import('../server/services/jobTools.js')
 const { JobRuntime } = await import('../server/services/jobRuntime.js')
 const { upsertHook } = await import('../server/services/hooksService.js')
 const { setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
+const { decideApproval, listPendingApprovals } = await import('../server/services/approvalStore.js')
+const { releaseApproval } = await import('../server/services/approvalGate.js')
 const { closeDb } = await import('../server/db.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
@@ -37,6 +39,15 @@ function oneToolModel(name, args, finalText = 'done') {
     }
     return { content: finalText, toolCalls: [] }
   }
+}
+
+async function waitForPendingApproval(userId) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const row = listPendingApprovals({ userId, status: 'pending' })[0]
+    if (row) return row
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  throw new Error('timed out waiting for hook-forced approval')
 }
 
 test.after(() => {
@@ -132,6 +143,46 @@ test('autonomous job pre hook can deny a tool before the executor runs', async (
   const denied = JSON.parse(toolMessage.content)
   assert.equal(denied.code, 'hook_denied')
   assert.equal(denied.denied, true)
+})
+
+test('pre hook ask forces a matched safe call through approval before execution', async () => {
+  const { userId } = issueTestSession({ email: 'job-hook-ask@example.com' })
+  setApprovalMode({ userId, mode: 'bypass' })
+  upsertHook({
+    userId,
+    event: 'pre_tool_use',
+    toolPattern: 'demo_tool',
+    argumentMatcher: { value: 'review' },
+    kind: 'shell',
+    command: shellJsonHook({ allow: true, permissionDecision: 'ask', reason: 'matched policy' }),
+    enabled: true,
+    blocking: true,
+    timeoutMs: 5000,
+  })
+
+  let executions = 0
+  const running = runToolsLoop({
+    job: { id: 'turn-hook-ask', userId, prompt: 'run reviewed demo' },
+    step: { id: 'step-hook-ask' },
+    messages: [{ role: 'user', content: 'run reviewed demo' }],
+    runModel: oneToolModel('demo_tool', { value: 'review' }),
+    executeTool: async () => {
+      executions += 1
+      return { ok: true }
+    },
+    approvalOrigin: 'chat',
+    approvalSessionId: 'session-hook-ask',
+  })
+
+  const approval = await waitForPendingApproval(userId)
+  assert.equal(executions, 0)
+  assert.equal(approval.reason, 'matched policy')
+  decideApproval({ userId, id: approval.id, decision: 'approve' })
+  releaseApproval(approval.id)
+
+  const result = await running
+  assert.equal(result.text, 'done')
+  assert.equal(executions, 1)
 })
 
 test('job prompt lifecycle hook can rewrite or reject a queued autonomous job', async () => {

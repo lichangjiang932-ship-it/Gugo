@@ -13,6 +13,7 @@
 import {
   cancelApprovalsForJob,
   cancelApprovalsForTurn,
+  cancelPendingApproval,
   createPendingApproval,
   expireStaleApprovals,
   getApprovalById,
@@ -137,6 +138,8 @@ export async function requestApproval({
   signal = null,
   mode = null,
   onPending = null,
+  forceApproval = false,
+  forceApprovalReason = null,
 } = {}) {
   // 系统/内部调用(无 userId)不 gate —— 和 fsShellTools.assertToolPermitted 一致的口径
   if (!userId) return { proceed: true, args }
@@ -159,7 +162,7 @@ export async function requestApproval({
         reason: `用户风险覆盖: ${riskOverride.riskClass}`,
       }
     : dynamicMetadata
-  const verdict = classifyToolRisk(toolName, args, {
+  let verdict = classifyToolRisk(toolName, args, {
     origin,
     mode: effectiveMode,
     permissionMode: settings.mode,
@@ -168,6 +171,14 @@ export async function requestApproval({
   })
   // plan 档位:直接拒,不排队等人 —— 用户要的就是「只看不动」
   if (verdict.denied) return { proceed: false, reason: verdict.reason }
+  if (forceApproval === true) {
+    verdict = {
+      ...verdict,
+      needsApproval: true,
+      risk: verdict.risk || 'low',
+      reason: String(forceApprovalReason || '').trim() || 'pre_tool_use Hook 要求逐次批准',
+    }
+  }
   if (!verdict.needsApproval) {
     return {
       proceed: true,
@@ -233,13 +244,22 @@ export async function requestApproval({
     }
   }
 
-  return waitForDecision({ approvalId: approval.id, signal })
+  return waitForDecision({
+    approvalId: approval.id,
+    signal,
+    cancelOnAbort: { userId, approvalId: approval.id },
+  })
 }
 
 /**
  * 等待决策。内存唤醒 + 定时轮询双保险,任一触发都重新读 DB 定状态。
  */
-export function waitForDecision({ approvalId, signal = null, pollIntervalMs = POLL_INTERVAL_MS } = {}) {
+export function waitForDecision({
+  approvalId,
+  signal = null,
+  pollIntervalMs = POLL_INTERVAL_MS,
+  cancelOnAbort = null,
+} = {}) {
   return new Promise((resolve) => {
     let settled = false
     let timer = null
@@ -301,11 +321,19 @@ export function waitForDecision({ approvalId, signal = null, pollIntervalMs = PO
     }
 
     function onAbort() {
-      settle({ proceed: false, reason: '任务已中止', approvalId })
+      if (cancelOnAbort?.userId && cancelOnAbort?.approvalId === approvalId) {
+        try {
+          cancelPendingApproval({ userId: cancelOnAbort.userId, id: approvalId })
+          notifyWaiters(approvalId)
+        } catch (err) {
+          console.error('[approval] 取消断连审批失败:', err?.stack || err)
+        }
+      }
+      settle({ proceed: false, reason: '任务已中止', approvalId, cancelled: true })
     }
 
     if (signal?.aborted) {
-      resolve({ proceed: false, reason: '任务已中止', approvalId })
+      onAbort()
       return
     }
     if (signal) signal.addEventListener('abort', onAbort, { once: true })

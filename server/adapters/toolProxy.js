@@ -21,6 +21,7 @@ import { readJson } from '../utils.js'
 import { getPublicAccount } from './authAccount.js'
 import { getSessionByToken } from '../db.js'
 import { dispatchHooks } from '../services/hooksService.js'
+import { requestApproval } from '../services/approvalGate.js'
 import { searchWeb } from '../services/webSearchService.js'
 import { resolveClientId } from '../utils/loginGuard.js'
 
@@ -548,6 +549,36 @@ export async function handleToolProxyRequest(req, res) {
       }
       if (pre.replacementArgs && typeof pre.replacementArgs === 'object') {
         toolArgs = pre.replacementArgs
+      }
+      if (pre.permissionDecision === 'ask') {
+        const abortController = new AbortController()
+        const abort = () => abortController.abort()
+        const abortOnClose = () => {
+          if (!res.writableEnded) abort()
+        }
+        req.once('aborted', abort)
+        res.once('close', abortOnClose)
+        let gate
+        try {
+          gate = await requestApproval({
+            userId,
+            origin: 'chat',
+            toolName,
+            args: toolArgs,
+            signal: abortController.signal,
+            forceApproval: true,
+            forceApprovalReason: pre.reason,
+          })
+        } finally {
+          req.off('aborted', abort)
+          res.off('close', abortOnClose)
+        }
+        if (abortController.signal.aborted || res.destroyed) return
+        if (!gate.proceed) {
+          sendJson(res, 403, { ok: false, error: gate.reason || '该工具调用未获批准' })
+          return
+        }
+        toolArgs = gate.args ?? toolArgs
       }
     }
 

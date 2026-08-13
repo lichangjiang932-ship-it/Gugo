@@ -9,6 +9,7 @@ export default function HooksList({ editingId, error, hooks, loading, onEdit, t 
       <div className="flex items-center gap-2">{hook.kind === 'shell' ? <Terminal className="h-3.5 w-3.5 text-ink-fade" /> : <Webhook className="h-3.5 w-3.5 text-ink-fade" />}<span className="font-mono text-[10px] uppercase tracking-wider text-ember">{hook.event}</span>{!hook.enabled && <span className="text-[10px] text-ink-fade">{t('hooks.disabled')}</span>}{hook.blocking && <span className="text-[10px] text-amber-700">{t('hooks.blocking')}</span>}</div>
       <div className="mt-1 truncate text-xs text-ink">{hook.kind === 'http' ? hook.url : (Array.isArray(hook.command) ? hook.command.join(' ') : '')}</div>
       <div className="mt-0.5 text-[10px] text-ink-fade">{t('hooks.matchTimeout', { pattern: hook.toolPattern || '*', timeout: hook.timeoutMs })}</div>
+      {hook.argumentMatcher && <div className="mt-0.5 truncate font-mono text-[10px] text-ink-fade">{t('hooks.argumentMatch')}: {JSON.stringify(hook.argumentMatcher)}</div>}
     </button>)}
   </div>
 }

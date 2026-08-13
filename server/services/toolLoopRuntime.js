@@ -3277,6 +3277,8 @@ export async function runToolsLoop({
               let effectiveArgs = args
               let gate = null
               let hookAuthorizedCall = false
+              let hookRequiresApproval = false
+              let hookApprovalReason = null
               if (idempotentResume) {
                 effectiveArgs = call.checkpointExecutionArgs ?? effectiveArgs
                 gate = {
@@ -3312,6 +3314,10 @@ export async function runToolsLoop({
                   // A pre_tool_use hook may authorize the call directly,
                   // bypassing the approval inbox for this invocation.
                   if (preHook.permissionDecision === 'allow') hookAuthorizedCall = true
+                  if (preHook.permissionDecision === 'ask') {
+                    hookRequiresApproval = true
+                    hookApprovalReason = preHook.reason || null
+                  }
                 }
                 if (!result && effectiveArgs !== args) {
                   const hookValidationError = validateToolCall(
@@ -3332,6 +3338,8 @@ export async function runToolsLoop({
                     args: effectiveArgs,
                     signal,
                     mode: approvalMode,
+                    forceApproval: hookRequiresApproval,
+                    forceApprovalReason: hookApprovalReason,
                     onPending: async (approval) => {
                       await markCall(call, {
                         checkpointStatus: 'awaiting_approval',

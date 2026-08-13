@@ -9,6 +9,7 @@ import {
   runSchemaMigrations,
   schemaMigrations,
 } from '../server/migrations/index.js'
+import { migrateToV49 } from '../server/migrations/v49HookArgumentMatcher.js'
 
 test('schema migration registry is contiguous and owns the latest version', () => {
   const legacy = Array.from({ length: 29 }, (_, index) => ({
@@ -17,10 +18,110 @@ test('schema migration registry is contiguous and owns the latest version', () =
   }))
   const plan = createSchemaMigrationPlan(legacy)
 
-  assert.deepEqual(plan.map(({ version }) => version), Array.from({ length: 47 }, (_, index) => index + 2))
-  assert.equal(LATEST_SCHEMA_VERSION, 48)
+  assert.deepEqual(plan.map(({ version }) => version), Array.from({ length: 48 }, (_, index) => index + 2))
+  assert.equal(LATEST_SCHEMA_VERSION, 49)
   assert.equal(DB_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
   assert.equal(schemaMigrations.at(-1).version, LATEST_SCHEMA_VERSION)
+})
+
+test('v49 adds the hook argument matcher without rebuilding existing hooks', () => {
+  const db = new Database(':memory:')
+  try {
+    db.exec(`
+      CREATE TABLE hooks (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        event TEXT NOT NULL,
+        tool_pattern TEXT,
+        kind TEXT NOT NULL,
+        command TEXT,
+        url TEXT,
+        headers_json TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        blocking INTEGER NOT NULL DEFAULT 1,
+        timeout_ms INTEGER NOT NULL DEFAULT 5000,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO hooks
+        (id, user_id, event, tool_pattern, kind, enabled, blocking, timeout_ms, created_at, updated_at)
+      VALUES ('hook-1', 'user-1', 'pre_tool_use', 'write_*', 'http', 1, 1, 5000, 1, 1);
+    `)
+
+    migrateToV49(db)
+    migrateToV49(db)
+
+    assert.equal(
+      db.prepare('PRAGMA table_info(hooks)').all().some((row) => row.name === 'argument_matcher_json'),
+      true,
+    )
+    assert.deepEqual(
+      db.prepare('SELECT tool_pattern, argument_matcher_json FROM hooks WHERE id = ?').get('hook-1'),
+      { tool_pattern: 'write_*', argument_matcher_json: null },
+    )
+    assert.ok(
+      db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_hooks_user_event'").get(),
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test('v49 repairs a database whose hooks table is missing', () => {
+  const db = new Database(':memory:')
+  try {
+    migrateToV49(db)
+    migrateToV49(db)
+
+    const columns = new Map(
+      db.prepare('PRAGMA table_info(hooks)').all().map((column) => [column.name, column]),
+    )
+    assert.deepEqual([...columns.keys()], [
+      'id',
+      'user_id',
+      'event',
+      'tool_pattern',
+      'argument_matcher_json',
+      'kind',
+      'command',
+      'url',
+      'headers_json',
+      'enabled',
+      'blocking',
+      'timeout_ms',
+      'created_at',
+      'updated_at',
+    ])
+    assert.equal(columns.get('user_id').notnull, 1)
+    assert.equal(columns.get('event').notnull, 1)
+    assert.equal(columns.get('enabled').dflt_value, '1')
+    assert.equal(columns.get('blocking').dflt_value, '1')
+    assert.equal(columns.get('timeout_ms').dflt_value, '5000')
+    assert.ok(
+      db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_hooks_user_event'").get(),
+    )
+
+    db.prepare(`
+      INSERT INTO hooks
+        (id, user_id, event, tool_pattern, argument_matcher_json, kind, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'hook-created-by-v49',
+      'user-1',
+      'notification',
+      '*',
+      '{"path":"*.env"}',
+      'http',
+      1,
+      1,
+    )
+    assert.equal(
+      db.prepare('SELECT argument_matcher_json FROM hooks WHERE id = ?').get('hook-created-by-v49').argument_matcher_json,
+      '{"path":"*.env"}',
+    )
+  } finally {
+    db.close()
+  }
 })
 
 test('schema migration registry rejects gaps and duplicate versions', () => {
