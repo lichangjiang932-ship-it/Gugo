@@ -182,7 +182,7 @@ export default function AccessConnectModal({ connector, integration, onClose, on
       <div className="w-full max-w-md rounded-xl border border-ink-fade/40 bg-paper shadow-2xl">
         <div className="flex items-start justify-between gap-3 p-5 border-b border-dashed border-ink-fade/40">
           <div>
-            <h2 className="font-hand text-2xl text-ink">{connector.label}</h2>
+            <h2 className="font-semibold text-2xl text-ink">{connector.label}</h2>
             <p className="text-sm text-ink-soft mt-1">{t(connector.hintKey)}</p>
           </div>
           <button type="button" onClick={onClose} className="p-1.5 rounded-md hover:bg-paper-2" aria-label={t('access.cancel')}><X className="w-4 h-4" /></button>

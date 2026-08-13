@@ -49,6 +49,7 @@ import {
 } from './turnSteeringStore.js'
 import { normalizeTurnIntentMode } from '../utils/executionIntent.js'
 import { getLocalFileAccessStatus } from './localFileAccessService.js'
+import { newTraceId, withLogContext } from '../utils/logger.js'
 
 const TERMINAL_TYPES = new Set(['turn.completed', 'turn.cancelled', 'turn.failed'])
 const STREAM_DELTA_TYPES = ['assistant.delta', 'reasoning.delta']
@@ -521,7 +522,18 @@ export class TurnEngine {
     try { return !!this.deps.executionLeases.hasActiveSession({ userId, sessionId }) } catch { return false }
   }
 
-  async startTurn({
+  async startTurn(args) {
+    // 一轮 turn 的关联上下文：userId/sessionId/turnId/traceId 沿异步链传递，
+    // 期间模型代理、工具循环、压缩恢复等结构化日志都能按 turnId 串起来。
+    const { userId, sessionId, turnId } = args || {}
+    const resolvedTurnId = turnId || this.deps.idFactory()
+    return withLogContext(
+      { userId, sessionId, turnId: resolvedTurnId, traceId: newTraceId() },
+      () => this.#startTurnInner({ ...args, turnId: resolvedTurnId }),
+    )
+  }
+
+  async #startTurnInner({
     userId,
     sessionId,
     turnId = this.deps.idFactory(),
@@ -1128,6 +1140,12 @@ export class TurnEngine {
                   createdAt: this.deps.now(),
                 }),
               })
+            },
+            onFailover: async (payload) => {
+              await emitter('model.failover', payload)
+            },
+            onRetry: async (payload) => {
+              await emitter('model.failover', payload)
             },
           })
         },

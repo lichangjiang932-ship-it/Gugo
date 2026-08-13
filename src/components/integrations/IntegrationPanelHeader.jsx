@@ -4,7 +4,7 @@ import { providerIcon } from './providerIcon.js'
 export default function IntegrationPanelHeader({ kind, kindLabel, visionStatus, visionHintOpen, onVisionHintChange, providers, menuOpen, onMenuChange, onOpenProvider, t }) {
   return <div className="flex items-start justify-between gap-3">
     <div>
-      <h3 className="font-hand text-lg text-ink">{kindLabel}</h3>
+      <h3 className="font-semibold text-lg text-ink">{kindLabel}</h3>
       <div className="flex items-center gap-2 mt-0.5">
         <p className="font-mono text-[10px] text-ink-fade">{kind}</p>
         {kind === 'vision_assist' && visionStatus && <span className="relative inline-flex">

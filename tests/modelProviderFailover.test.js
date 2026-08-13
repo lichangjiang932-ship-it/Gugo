@@ -183,3 +183,27 @@ test('breaking stream consumption closes the active provider iterator exactly on
   assert.equal(nextCalls, 1)
   assert.equal(returnCalls, 1)
 })
+
+test('stream failover reports provider switch and retry through observer callbacks', async () => {
+  const observed = []
+  async function* transient(config) {
+    if (config.providerId === 'primary') throw Object.assign(new Error('down'), { status: 503 })
+    yield 'ok'
+  }
+  for await (const item of streamWithProviderFailover([
+    { providerId: 'primary', modelName: 'm1' },
+    { providerId: 'backup', modelName: 'm1' },
+  ], transient, {
+    maxAttemptsPerProvider: 1,
+    retrySleepImpl: async () => {},
+    onFailover: (payload) => observed.push(payload),
+    onRetry: (payload) => observed.push(payload),
+  })) {
+    void item
+  }
+  const failover = observed.find((entry) => entry.kind === 'failover')
+  assert.ok(failover, 'failover observer must fire')
+  assert.equal(failover.from, 'primary')
+  assert.equal(failover.to, 'backup')
+  assert.equal(failover.modelName, 'm1')
+})

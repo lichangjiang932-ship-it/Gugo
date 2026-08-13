@@ -34,7 +34,7 @@ export default function AccessView() {
           <header className="mb-7 flex flex-col justify-between gap-4 md:flex-row md:items-end">
             <div>
               <span className="font-mono text-[9px] uppercase tracking-[0.22em] text-ink-fade">{t('access.eyebrow')}</span>
-              <h1 className="mt-1 font-hand text-[32px] text-ink">{t('access.title')}</h1>
+              <h1 className="mt-1 font-semibold text-[32px] text-ink">{t('access.title')}</h1>
               <p className="mt-1 max-w-2xl text-sm text-ink-soft">{t('access.subtitle')}</p>
             </div>
             <div className="rounded-full border border-ink-fade/40 bg-paper-2 px-4 py-2 text-xs text-ink-soft" data-testid="access-catalog-summary">

@@ -219,7 +219,7 @@ export default function IntegrationsPanel({ kind, t }) {
         <div className="border border-dashed border-ink-fade/40 rounded-md p-6 flex flex-col items-center text-center gap-3 bg-paper-2/60">
           <Plug className="w-9 h-9 text-ink-fade" />
           <div>
-            <div className="font-hand text-xl text-ink">{t('integrations.empty', { kind: kindLabel })}</div>
+            <div className="font-semibold text-xl text-ink">{t('integrations.empty', { kind: kindLabel })}</div>
             <p className="text-sm text-ink-soft mt-1 max-w-lg">
               {kind === 'vision_assist' ? t('integrations.visionAssistHint') : t('settings.integrationsSubtitle')}
             </p>

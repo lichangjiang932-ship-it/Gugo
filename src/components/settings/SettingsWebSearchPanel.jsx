@@ -162,7 +162,7 @@ export default function SettingsWebSearchPanel({ t }) {
   if (loading) return <div className="text-sm text-ink-fade">{t('common.loading')}</div>
 
   return <section className="flex flex-col gap-5 animate-float-up">
-    <div><span className="font-mono text-[9px] tracking-[0.22em] text-ink-fade">WEB SEARCH</span><h1 className="font-hand text-[28px] text-ink mt-1.5">{t('webSearch.title')}</h1><p className="text-sm text-ink-soft mt-1">{t('webSearch.subtitle')}</p></div>
+    <div><span className="font-mono text-[9px] tracking-[0.22em] text-ink-fade">WEB SEARCH</span><h1 className="font-semibold text-[28px] text-ink mt-1.5">{t('webSearch.title')}</h1><p className="text-sm text-ink-soft mt-1">{t('webSearch.subtitle')}</p></div>
     <div className="rounded-xl border border-ink/20 bg-paper p-5 flex items-center gap-3"><ShieldCheck className="h-5 w-5 text-emerald-600" /><p className="text-xs text-ink-soft flex-1">{t('webSearch.security')}</p><Toggle enabled={enabled} onChange={setEnabled} label={t('webSearch.enabled')} /></div>
     <div className="rounded-xl border border-ink/20 bg-paper p-5 flex flex-col gap-4">
       <div className="flex items-start justify-between gap-4"><div><h2 className="text-base text-ink">{t('webSearch.provider')}</h2><p className="text-xs text-ink-fade mt-1">{t('webSearch.fallbackHint')}</p></div><button type="button" onClick={addConnection} disabled={connections.length >= 8 || Boolean(working)} className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-ink/25 px-3 text-xs text-ink hover:bg-paper-2 disabled:opacity-50"><Plus className="h-3.5 w-3.5" />{t('webSearch.addApi')}</button></div>

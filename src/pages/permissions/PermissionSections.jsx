@@ -12,7 +12,7 @@ export function PermissionStats({ controller, t }) {
     { label: t('permissionsDashboard.toolsEnabled'), value: `${GATEABLE_TOOLS.length - controller.gatedOffCount}/${GATEABLE_TOOLS.length}`, tone: 'cyan' },
     { label: t('permissionsDashboard.toolGate'), value: t('permissionsDashboard.serverEnforced'), tone: '' },
   ]
-  return <div className="mb-5 grid grid-cols-2 gap-3.5 lg:grid-cols-4">{stats.map((stat, index) => <motion.div key={stat.label} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.08 }} className="rounded-md border border-ink/30 bg-paper p-3.5"><span className={`font-mono text-[9px] tracking-wider ${stat.tone === 'ember' ? 'text-ember' : stat.tone === 'cyan' ? 'text-cyan' : 'text-ink-fade'}`}>{stat.label}</span><div className="mt-1.5 font-hand text-[26px] text-ink">{stat.value}</div></motion.div>)}</div>
+  return <div className="mb-5 grid grid-cols-2 gap-3.5 lg:grid-cols-4">{stats.map((stat, index) => <motion.div key={stat.label} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: index * 0.08 }} className="rounded-md border border-ink/30 bg-paper p-3.5"><span className={`font-mono text-[9px] tracking-wider ${stat.tone === 'ember' ? 'text-ember' : stat.tone === 'cyan' ? 'text-cyan' : 'text-ink-fade'}`}>{stat.label}</span><div className="mt-1.5 font-semibold text-[26px] text-ink">{stat.value}</div></motion.div>)}</div>
 }
 
 export function WorkspaceOnboardingSection({ controller, t }) {
@@ -245,7 +245,7 @@ export function BrowserPermissionSection({ controller, t }) {
 }
 
 function SectionTitle({ eyebrow, title }) {
-  return <div className="mb-2 flex items-baseline gap-2"><span className="font-mono text-[9px] uppercase tracking-[0.22em] text-ink-fade">{eyebrow}</span><span className="font-hand text-base text-ink-soft">{title}</span></div>
+  return <div className="mb-2 flex items-baseline gap-2"><span className="font-mono text-[9px] uppercase tracking-[0.22em] text-ink-fade">{eyebrow}</span><span className="font-semibold text-base text-ink-soft">{title}</span></div>
 }
 
 function PermSwitch({ on, onToggle, label }) {

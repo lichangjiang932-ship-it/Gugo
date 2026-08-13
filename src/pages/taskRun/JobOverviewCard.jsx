@@ -8,7 +8,7 @@ export default function JobOverviewCard({ controller, statusLabel, onOpenApprova
   return (
     <div className="rounded-md border border-ink/20 bg-paper-2 p-4">
       <div className="flex items-start justify-between gap-4">
-        <div><span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">JOB · {job.id}</span><h2 className="font-hand text-2xl text-ink mt-1">{job.title}</h2><p className="text-sm text-ink-soft mt-1">{job.prompt}</p></div>
+        <div><span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">JOB · {job.id}</span><h2 className="font-semibold text-2xl text-ink mt-1">{job.title}</h2><p className="text-sm text-ink-soft mt-1">{job.prompt}</p></div>
         <div className="flex gap-2">{ACTIVE_STATUSES.has(job.status) && <button type="button" onClick={controller.handleCancel} className="h-9 px-3 border border-ink/40 rounded-md text-sm flex items-center gap-1.5"><PauseCircle className="w-4 h-4" />{t('taskCenter.cancel')}</button>}{['failed', 'cancelled'].includes(job.status) && <button type="button" onClick={controller.handleRetry} className="h-9 px-3 border border-ink/40 rounded-md text-sm flex items-center gap-1.5"><RotateCcw className="w-4 h-4" />{t('taskCenter.retry')}</button>}</div>
       </div>
       <div className="mt-4 grid grid-cols-4 gap-3 text-sm"><Metric label={t('taskCenter.status')} value={statusLabel(job.status)} /><Metric label={t('taskCenter.progress')} value={`${job.progress}%`} /><Metric label={t('taskCenter.createdAt')} value={formatTime(job.createdAt)} /><Metric label={t('taskCenter.updatedAt')} value={formatTime(job.updatedAt)} /></div>

@@ -6,9 +6,9 @@ export default function ImportSkillModal({ market, t }) {
   return (
     <div className="fixed inset-0 bg-ink/40 flex items-center justify-center z-50 p-4" onClick={market.closeImport}>
       <div role="dialog" aria-modal="true" className="bg-paper border border-ink rounded-md p-6 w-full max-w-lg flex flex-col gap-4" onClick={(event) => event.stopPropagation()}>
-        <div className="flex items-center justify-between"><h2 className="font-hand text-xl text-ink">{t('skillsMarket.importPack')}</h2><button type="button" onClick={market.closeImport} className="text-ink-fade hover:text-ink" aria-label={t('skillsMarket.close')}><X className="w-4 h-4" /></button></div>
+        <div className="flex items-center justify-between"><h2 className="font-semibold text-xl text-ink">{t('skillsMarket.importPack')}</h2><button type="button" onClick={market.closeImport} className="text-ink-fade hover:text-ink" aria-label={t('skillsMarket.close')}><X className="w-4 h-4" /></button></div>
         {error ? <div className="p-3 border border-ember-line bg-ember-soft/30 rounded-md text-sm text-ember">{error}</div> : <Preview preview={preview} t={t} />}
-        <div className="flex gap-2 justify-end"><button type="button" onClick={market.closeImport} className="h-9 px-4 border border-ink/40 rounded-md font-hand text-sm text-ink-soft hover:border-ink">{t('skillsMarket.cancel')}</button>{!error && <button type="button" onClick={market.confirmImport} disabled={busy} className="h-9 px-4 bg-ember text-paper rounded-md font-hand text-sm hover:bg-ember/90 disabled:opacity-40">{busy ? t('skillsMarket.importing') : t('skillsMarket.confirmImport')}</button>}</div>
+        <div className="flex gap-2 justify-end"><button type="button" onClick={market.closeImport} className="h-9 px-4 border border-ink/40 rounded-md font-semibold text-sm text-ink-soft hover:border-ink">{t('skillsMarket.cancel')}</button>{!error && <button type="button" onClick={market.confirmImport} disabled={busy} className="h-9 px-4 bg-ember text-paper rounded-md font-semibold text-sm hover:bg-ember/90 disabled:opacity-40">{busy ? t('skillsMarket.importing') : t('skillsMarket.confirmImport')}</button>}</div>
       </div>
     </div>
   )

@@ -6,7 +6,7 @@ export default function JobDeliveryCard({ finalStep, evidence, t }) {
   const incomplete = finalStep.output.complete === false || issues.length > 0
   return (
     <section className={`rounded-md border p-4 ${incomplete ? 'border-amber-400/60 bg-amber-50/60' : 'border-ember/40 bg-ember-soft/40'}`}>
-      <div className="flex items-center gap-2">{incomplete ? <AlertTriangle className="w-4 h-4 text-amber-600" /> : <CheckCircle2 className="w-4 h-4 text-ember" />}<h3 className="font-hand text-lg text-ink">{t(incomplete ? 'taskCenter.deliveryIncomplete' : 'taskCenter.delivery')}</h3></div>
+      <div className="flex items-center gap-2">{incomplete ? <AlertTriangle className="w-4 h-4 text-amber-600" /> : <CheckCircle2 className="w-4 h-4 text-ember" />}<h3 className="font-semibold text-lg text-ink">{t(incomplete ? 'taskCenter.deliveryIncomplete' : 'taskCenter.delivery')}</h3></div>
       {finalStep.output.summary && <p className={`mt-2 text-sm font-medium ${incomplete ? 'text-amber-800' : 'text-ink'}`}>{finalStep.output.summary}</p>}
       {issues.length > 0 && <ul className="mt-2 space-y-1 border-l-2 border-amber-400 pl-3">{issues.map((issue) => <li key={issue} className="text-xs leading-5 text-amber-800">{issue}</li>)}</ul>}
       {finalStep.output.text && <div className="mt-2 max-h-72 overflow-y-auto whitespace-pre-wrap break-words text-sm leading-6 text-ink-soft">{finalStep.output.text}</div>}

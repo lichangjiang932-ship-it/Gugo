@@ -158,6 +158,21 @@ export async function dispatchTurnEvent(event, {
     if (payload.phase === 'completed' || payload.phase === 'failed') {
       dispatchMessage({ type: 'UPDATE_LAST_MESSAGE_META', payload: { modelActivity: null } })
     }
+  } else if (event.type === 'model.failover') {
+    dispatchMessage({
+      type: 'UPDATE_LAST_MESSAGE_META',
+      payload: {
+        modelFallback: {
+          kind: payload.kind || 'failover',
+          from: payload.from || null,
+          to: payload.to || null,
+          modelName: payload.modelName || null,
+          attempt: Number.isInteger(payload.attempt) ? payload.attempt : null,
+        },
+      },
+      ...streamCursor,
+    })
+    cursorCommitted = true
   } else if (event.type === 'assistant.delta') {
     dispatchMessage({ type: 'APPEND_TO_LAST_MESSAGE', payload: payload.text || '', ...streamCursor })
     cursorCommitted = true

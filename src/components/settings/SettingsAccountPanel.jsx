@@ -20,7 +20,7 @@ import { shouldPromptPasswordSetup } from '../../lib/settingsNavigation.js'
 function Group({ title, children }) {
   return (
     <div className="p-4 border border-ink/30 rounded-md flex flex-col gap-3">
-      <h3 className="font-hand text-lg text-ink">{title}</h3>
+      <h3 className="font-semibold text-lg text-ink">{title}</h3>
       {children}
     </div>
   )
@@ -174,7 +174,7 @@ export default function SettingsAccountPanel({ authMode = 'multi_user', dispatch
       <section className="flex flex-col gap-5 animate-float-up">
         <div>
           <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">LOCAL MODE</span>
-          <h1 className="font-hand text-[28px] text-ink mt-1.5">{t('settings.account')}</h1>
+          <h1 className="font-semibold text-[28px] text-ink mt-1.5">{t('settings.account')}</h1>
           <p className="text-sm text-ink-soft mt-1">{t('settings.localAuthDescription')}</p>
         </div>
         <Group title={t('settings.localAuthTitle')}>
@@ -189,7 +189,7 @@ export default function SettingsAccountPanel({ authMode = 'multi_user', dispatch
     <section className="flex flex-col gap-5 animate-float-up">
       <div>
         <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">LOCAL ACCOUNT & SECURITY</span>
-        <h1 className="font-hand text-[28px] text-ink mt-1.5">账户</h1>
+        <h1 className="font-semibold text-[28px] text-ink mt-1.5">账户</h1>
         <p className="text-sm text-ink-soft mt-1">使用本地账户保护个人配置、会话和工作区访问。</p>
       </div>
 

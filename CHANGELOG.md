@@ -6,6 +6,33 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-08-13
+
+### Added
+
+- Live interleaved activity stream in chat that shows running tools, streamed
+  output tails, and provider fallback notices as text instead of spinner-only
+  status, while reasoning text stays compact and private.
+- Provider failover and retry visibility through a new `model.failover` turn
+  event, surfaced in the chat activity stream.
+- Advisory repeat-call guard: consecutive identical tool calls (same tool and
+  arguments) inject a gentle system reminder at thresholds 3/5/8 instead of
+  letting the loop burn tokens silently.
+- Request correlation ids (`X-Request-Id`, userId/sessionId/turnId/jobId) in
+  structured server logs via an AsyncLocalStorage log context.
+
+### Changed
+
+- Simplified the model settings page into a compact status strip and focused
+  the provider editor on service + API key + detected model count.
+- Replaced the handwriting display font (Caveat/Kalam) across the UI with the
+  standard semibold typeface for cleaner, more readable headings and buttons.
+- Centralized job prompt blocks (artifact rules, code workflow, citation
+  guidance, delayed follow-up) into a dedicated module.
+- Split the tool-loop heuristics out of the monolithic runtime into a
+  dedicated module and extracted provider-failover adapters into their own
+  module.
+
 ## [0.10.24] - 2026-08-13
 
 ### Changed
