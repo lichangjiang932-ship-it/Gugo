@@ -58,6 +58,7 @@ import { handleModelProviderRequest } from './routes/modelProviderRoutes.js'
 import { handleBrowserRequest } from './routes/browserRoutes.js'
 import { handleConnectorRequest } from './routes/connectorRoutes.js'
 import { handleLocalFileAccessRequest } from './routes/localFileAccessRoutes.js'
+import { handleFileSnapshotRequest } from './routes/fileSnapshotRoutes.js'
 import { handleTurnEventRequest } from './routes/turnEventRoutes.js'
 import { handleMediaRequest } from './routes/mediaRoutes.js'
 import { handleAttachmentRequest } from './routes/attachmentRoutes.js'
@@ -307,6 +308,10 @@ function createRouter(getEnv = getRuntimeEnv, staticDir = distDir) {
 
   if (req.url?.startsWith('/api/local-files')) {
     return handleLocalFileAccessRequest(req, res)
+  }
+
+  if (req.url?.startsWith('/api/snapshots')) {
+    return handleFileSnapshotRequest(req, res)
   }
 
   if (req.url?.startsWith('/api/media/')) {

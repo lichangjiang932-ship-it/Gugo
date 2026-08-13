@@ -13,8 +13,9 @@ import path from 'node:path'
 import { appendJobArtifact } from './jobStore.js'
 import { appendTurnArtifact } from './turnArtifactStore.js'
 import { publishTurnActivity } from './turnActivityBus.js'
+import { recordFileSnapshot } from './fileSnapshotStore.js'
 import { createDocx, createHtmlArtifact, createImageArtifact, createLocalFileArtifact, createLocalFileArtifactAsync, createPptx, createXlsx } from './artifactGen.js'
-import { FS_SHELL_TOOL_SPECS, dispatchFsShellTool, resolveInWorkspace } from '../adapters/fsShellTools.js'
+import { FS_SHELL_TOOL_SPECS, dispatchFsShellTool, resolveInWorkspace, resolveForFileTool } from '../adapters/fsShellTools.js'
 import { IMAGE_TOOL_SPECS, dispatchImageTool } from '../adapters/imageTools.js'
 import { MEDIA_TOOL_SPECS, dispatchMediaTool } from '../adapters/mediaTools.js'
 import { PDF_TOOL_SPECS, dispatchPdfTool } from '../adapters/pdfTools.js'
@@ -1445,6 +1446,44 @@ async function attachVisionFeedback({ name, result, buffer = null }) {
   return { ...stripped, image: { data: bytes.toString('base64'), mimeType, bytes: bytes.length } }
 }
 
+const SNAPSHOT_TOOL_NAMES = new Set(['write_file', 'edit_file'])
+
+/**
+ * Record a before-image for the most common file-mutating tools so a turn can
+ * be rewound after the model edits the wrong file. Best-effort: snapshot
+ * failures never block the real mutation.
+ */
+async function recordPreMutationSnapshot({ name, args, job, toolCallId }) {
+  if (!job?.sessionId || !job?.id || !toolCallId || !SNAPSHOT_TOOL_NAMES.has(name)) return
+  const rawPath = String(args?.path || '').trim()
+  if (!rawPath) return
+  let resolved
+  try {
+    resolved = resolveForFileTool(rawPath, { userId: job.userId, write: true, allowMissing: true })
+  } catch {
+    return
+  }
+  let beforeContent = null
+  try {
+    if (fs.existsSync(resolved.fullPath) && fs.statSync(resolved.fullPath).isFile()) {
+      beforeContent = fs.readFileSync(resolved.fullPath)
+    }
+  } catch {
+    return
+  }
+  try {
+    recordFileSnapshot({
+      userId: job.userId,
+      sessionId: job.sessionId,
+      turnId: job.id,
+      toolCallId,
+      toolName: name,
+      filePath: resolved.fullPath,
+      beforeContent,
+    })
+  } catch { /* snapshot is best-effort */ }
+}
+
 async function executeServerTool({
   name,
   args,
@@ -1552,6 +1591,7 @@ async function executeServerTool({
   // 任意 fsShellTools 抛错(包括 env 未启用 / 路径越界)都返回 {ok:false,error}.
   if (FS_SHELL_TOOL_NAMES.has(name)) {
     try {
+      await recordPreMutationSnapshot({ name, args, job, toolCallId })
       return await dispatchFsShellTool(name, args || {}, {
         userId: job?.userId || null,
         signal,
