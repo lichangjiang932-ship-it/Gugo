@@ -204,6 +204,7 @@ export function runProcessWithGroup({
   signal = null,
   overflowMode = 'kill',
   fullOutputPath = null,
+  onOutput = null,
 }) {
   if (signal?.aborted) {
     return Promise.resolve({
@@ -299,6 +300,11 @@ export function runProcessWithGroup({
         const text = String(chunk)
         const bytes = Buffer.byteLength(text, 'utf8')
         totalOutputBytes += bytes
+        if (typeof onOutput === 'function') {
+          // Live output is best-effort: a slow or throwing subscriber must
+          // never stall the child process or its buffer management.
+          try { onOutput({ stream: which === 'out' ? 'stdout' : 'stderr', chunk: text }) } catch { /* best-effort */ }
+        }
         if (outputLogStream && !outputLogStream.destroyed) {
           try {
             if (!outputLogStream.write(text)) {

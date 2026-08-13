@@ -583,6 +583,23 @@ html[data-density="loose"] {
   white-space: pre;
 }
 
+.chat-tool-live-output {
+  max-width: 100%;
+  max-height: 12rem;
+  overflow: auto;
+  margin-top: 0.32rem;
+  border: 1px solid rgb(var(--color-ink-rgb) / 0.09);
+  border-radius: 0.36rem;
+  background: rgb(var(--color-ink-rgb) / 0.03);
+  padding: 0.5rem;
+  color: rgb(var(--color-ink-soft-rgb));
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.64rem;
+  line-height: 1rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .chat-tool-error-context {
   margin-top: 0.35rem;
 }

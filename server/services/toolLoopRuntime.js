@@ -12,6 +12,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { appendJobArtifact } from './jobStore.js'
 import { appendTurnArtifact } from './turnArtifactStore.js'
+import { publishTurnActivity } from './turnActivityBus.js'
 import { createDocx, createHtmlArtifact, createImageArtifact, createLocalFileArtifact, createLocalFileArtifactAsync, createPptx, createXlsx } from './artifactGen.js'
 import { FS_SHELL_TOOL_SPECS, dispatchFsShellTool, resolveInWorkspace } from '../adapters/fsShellTools.js'
 import { IMAGE_TOOL_SPECS, dispatchImageTool } from '../adapters/imageTools.js'
@@ -1456,6 +1457,24 @@ async function executeServerTool({
   toolCallId,
   idempotencyKey,
 }) {
+  const publishLiveOutput = (delta) => {
+    if (job?.origin !== 'chat' || !job?.sessionId || !job?.id) return
+    try {
+      publishTurnActivity({
+        userId: job.userId,
+        activity: {
+          sessionId: job.sessionId,
+          turnId: job.id,
+          kind: 'tool_output_delta',
+          toolName: name,
+          toolCallId: toolCallId || null,
+          stream: delta?.stream || null,
+          chunk: typeof delta?.chunk === 'string' ? delta.chunk.slice(0, 64 * 1024) : null,
+        },
+      })
+    } catch { /* Live output is best-effort and must never fail the tool. */ }
+  }
+
   if (isFileArtifactTool(name) && !allowedArtifactTools?.has(name)) {
     return {
       ok: false,
@@ -1538,6 +1557,7 @@ async function executeServerTool({
         signal,
         toolCallId,
         idempotencyKey,
+        onOutput: publishLiveOutput,
       })
     } catch (err) {
       return {
@@ -1556,7 +1576,7 @@ async function executeServerTool({
   }
   if (MEDIA_TOOL_NAMES.has(name)) {
     try {
-      const result = await dispatchMediaTool(name, args || {}, { userId: job?.userId || null, signal })
+      const result = await dispatchMediaTool(name, args || {}, { userId: job?.userId || null, signal, onOutput: publishLiveOutput })
       return await attachVisionFeedback({ name, result })
     } catch (err) {
       return normalizeToolError(err, { fallbackCode: 'media_tool_failed' })

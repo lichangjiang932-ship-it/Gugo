@@ -325,6 +325,7 @@ function runBinary(executable, args, {
   cwd,
   signal = null,
   timeout,
+  onOutput = null,
 } = {}) {
   if (signal?.aborted) {
     return Promise.resolve({
@@ -374,12 +375,15 @@ function runBinary(executable, args, {
       }
     }
 
-    const collect = (chunks) => (chunk) => {
+    const collect = (chunks, which) => (chunk) => {
+      if (typeof onOutput === 'function') {
+        try { onOutput({ stream: which, chunk: String(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)) }) } catch { /* best-effort */ }
+      }
       appendLimited(chunks, chunk, outputState)
       if (outputState.limited) kill()
     }
-    child.stdout?.on('data', collect(stdoutChunks))
-    child.stderr?.on('data', collect(stderrChunks))
+    child.stdout?.on('data', collect(stdoutChunks, 'stdout'))
+    child.stderr?.on('data', collect(stderrChunks, 'stderr'))
 
     const abortListener = () => {
       aborted = true
@@ -1054,6 +1058,7 @@ async function transformMedia(args, context) {
       cwd: path.dirname(output.fullPath),
       signal: context.signal,
       timeout,
+      onOutput: context.onOutput,
     })
     if (result.code !== 0 || result.aborted || result.timedOut || result.outputLimited) {
       return processFailure(result, executable, {
@@ -1088,9 +1093,9 @@ async function transformMedia(args, context) {
   }
 }
 
-export async function dispatchMediaTool(name, args = {}, { userId = null, signal = null } = {}) {
+export async function dispatchMediaTool(name, args = {}, { userId = null, signal = null, onOutput = null } = {}) {
   if (name === 'media_probe') return probeMedia(args, { userId, signal })
-  if (name === 'media_transform') return transformMedia(args, { userId, signal })
+  if (name === 'media_transform') return transformMedia(args, { userId, signal, onOutput })
   throw toolError(`unknown media tool: ${name}`, { code: 'MEDIA_TOOL_UNKNOWN', statusCode: 404 })
 }
 
