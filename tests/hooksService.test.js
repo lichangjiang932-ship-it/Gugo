@@ -94,3 +94,85 @@ test('shell hooks require an explicit executable allowlist', () => {
     else process.env.HOOKS_SHELL_ALLOWED_COMMANDS = previousAllowed
   }
 })
+
+test('upsertHook accepts the extended lifecycle and notification events', () => {
+  for (const event of ['pre_compact', 'session_start', 'session_end', 'subagent_stop', 'notification']) {
+    const hook = upsertHook({
+      userId: 'u_hooks_events',
+      event,
+      toolPattern: '*',
+      kind: 'http',
+      url: 'https://example.com/hook',
+      headers: null,
+      enabled: true,
+      blocking: false,
+      timeoutMs: 5000,
+    })
+    assert.equal(hook.event, event)
+  }
+})
+
+test('pre_tool_use hook permissionDecision=allow is forwarded and skips approval', async () => {
+  const previousEnabled = process.env.HOOKS_SHELL_ENABLED
+  const previousAllowed = process.env.HOOKS_SHELL_ALLOWED_COMMANDS
+  process.env.HOOKS_SHELL_ENABLED = '1'
+  process.env.HOOKS_SHELL_ALLOWED_COMMANDS = process.execPath
+  try {
+    upsertHook({
+      userId: 'u_hooks_decision',
+      event: 'pre_tool_use',
+      toolPattern: 'write_file',
+      kind: 'shell',
+      command: [process.execPath, '-e', 'process.stdout.write(JSON.stringify({ allow: true, permissionDecision: "allow" }))'],
+      enabled: true,
+      blocking: true,
+      timeoutMs: 5000,
+    })
+    const result = await dispatchHooks({
+      userId: 'u_hooks_decision',
+      event: 'pre_tool_use',
+      tool: 'write_file',
+      args: { path: 'x.txt' },
+    })
+    assert.equal(result.allow, true)
+    assert.equal(result.permissionDecision, 'allow')
+  } finally {
+    if (previousEnabled == null) delete process.env.HOOKS_SHELL_ENABLED
+    else process.env.HOOKS_SHELL_ENABLED = previousEnabled
+    if (previousAllowed == null) delete process.env.HOOKS_SHELL_ALLOWED_COMMANDS
+    else process.env.HOOKS_SHELL_ALLOWED_COMMANDS = previousAllowed
+  }
+})
+
+test('pre_tool_use hook permissionDecision=deny is surfaced as a rejection', async () => {
+  const previousEnabled = process.env.HOOKS_SHELL_ENABLED
+  const previousAllowed = process.env.HOOKS_SHELL_ALLOWED_COMMANDS
+  process.env.HOOKS_SHELL_ENABLED = '1'
+  process.env.HOOKS_SHELL_ALLOWED_COMMANDS = process.execPath
+  try {
+    upsertHook({
+      userId: 'u_hooks_deny',
+      event: 'pre_tool_use',
+      toolPattern: 'write_file',
+      kind: 'shell',
+      command: [process.execPath, '-e', 'process.stdout.write(JSON.stringify({ allow: true, permissionDecision: "deny", reason: "blocked by policy" }))'],
+      enabled: true,
+      blocking: true,
+      timeoutMs: 5000,
+    })
+    const result = await dispatchHooks({
+      userId: 'u_hooks_deny',
+      event: 'pre_tool_use',
+      tool: 'write_file',
+      args: { path: 'x.txt' },
+    })
+    assert.equal(result.allow, false)
+    assert.equal(result.permissionDecision, 'deny')
+    assert.match(result.reason, /blocked by policy/)
+  } finally {
+    if (previousEnabled == null) delete process.env.HOOKS_SHELL_ENABLED
+    else process.env.HOOKS_SHELL_ENABLED = previousEnabled
+    if (previousAllowed == null) delete process.env.HOOKS_SHELL_ALLOWED_COMMANDS
+    else process.env.HOOKS_SHELL_ALLOWED_COMMANDS = previousAllowed
+  }
+})

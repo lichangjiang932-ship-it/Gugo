@@ -1,8 +1,15 @@
 import { Play, Save, Trash2, X } from 'lucide-react'
 
 const EVENTS = [
-  { id: 'user_prompt_submit', labelKey: 'hooks.eventUserPrompt' }, { id: 'pre_tool_use', labelKey: 'hooks.eventPreTool' },
-  { id: 'post_tool_use', labelKey: 'hooks.eventPostTool' }, { id: 'stop', labelKey: 'hooks.eventStop' },
+  { id: 'user_prompt_submit', labelKey: 'hooks.eventUserPrompt' },
+  { id: 'pre_tool_use', labelKey: 'hooks.eventPreTool' },
+  { id: 'post_tool_use', labelKey: 'hooks.eventPostTool' },
+  { id: 'stop', labelKey: 'hooks.eventStop' },
+  { id: 'pre_compact', labelKey: 'hooks.eventPreCompact' },
+  { id: 'session_start', labelKey: 'hooks.eventSessionStart' },
+  { id: 'session_end', labelKey: 'hooks.eventSessionEnd' },
+  { id: 'subagent_stop', labelKey: 'hooks.eventSubagentStop' },
+  { id: 'notification', labelKey: 'hooks.eventNotification' },
 ]
 
 export default function HookEditor({ editing, onChange, onClose, onDelete, onSave, onTest, saving, testResult, t }) {

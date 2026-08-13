@@ -23,7 +23,7 @@ import { assertSafeOutboundUrl, fetchSafe } from '../adapters/toolProxy.js'
 import { writeToolAudit } from '../utils/audit.js'
 import { openCredentialObject, sealCredentialObject } from '../utils/credentialVault.js'
 
-const ALLOWED_EVENTS = ['user_prompt_submit', 'pre_tool_use', 'post_tool_use', 'stop']
+const ALLOWED_EVENTS = ['user_prompt_submit', 'pre_tool_use', 'post_tool_use', 'stop', 'pre_compact', 'session_start', 'session_end', 'subagent_stop', 'notification']
 const HOOK_HEADERS_PURPOSE = 'hook-headers'
 
 function sameExecutable(left, right) {
@@ -259,10 +259,13 @@ async function executeOne(hook, payload) {
 
 /**
  * 在 hookBus listener 里调用这个分发器。
- *   ctx = { userId, event, tool, args, sessionId?, requestId? }
+ *   ctx = { userId, event, tool, args, sessionId?, requestId?, payload? }
  * 返回:
- *   - 全部 allow → { allow: true, replacement?: {...} }
+ *   - 全部 allow → { allow: true, replacementArgs?: {...}, permissionDecision?: 'allow'|'deny' }
  *   - 任一 blocking hook allow=false → { allow: false, reason }
+ *
+ * pre_tool_use hook 可以返回 permissionDecision 来直接放行/拒绝，
+ * 让 hook 替代审批门控（与 Claude Code 的 PreToolUse 语义一致）。
  */
 export async function dispatchHooks(ctx) {
   if (!ctx?.userId || !ctx?.event) return { allow: true }
@@ -272,6 +275,8 @@ export async function dispatchHooks(ctx) {
   })
   if (!hooks.length) return { allow: true }
   let workingArgs = ctx.args
+  let permissionDecision = null
+  let permissionReason = null
   for (const h of hooks) {
     const payload = {
       event: ctx.event,
@@ -280,6 +285,7 @@ export async function dispatchHooks(ctx) {
       userId: ctx.userId,
       sessionId: ctx.sessionId || null,
       requestId: ctx.requestId || null,
+      ...(ctx.payload && typeof ctx.payload === 'object' ? { payload: ctx.payload } : {}),
       timestamp: Date.now(),
     }
     if (h.blocking) {
@@ -290,6 +296,12 @@ export async function dispatchHooks(ctx) {
       if (outcome?.replacementArgs && typeof outcome.replacementArgs === 'object') {
         workingArgs = { ...workingArgs, ...outcome.replacementArgs }
       }
+      // Only pre_tool_use may short-circuit approval. The last blocking hook
+      // that returns a decision wins.
+      if (outcome?.permissionDecision === 'allow' || outcome?.permissionDecision === 'deny') {
+        permissionDecision = outcome.permissionDecision
+        permissionReason = outcome.reason || null
+      }
     } else {
       // 非阻塞: fire-and-forget
       executeOne(h, payload).catch((err) => {
@@ -297,7 +309,14 @@ export async function dispatchHooks(ctx) {
       })
     }
   }
-  return { allow: true, replacementArgs: workingArgs }
+  if (permissionDecision === 'deny') {
+    return { allow: false, reason: permissionReason || 'hook 拒绝', permissionDecision: 'deny' }
+  }
+  return {
+    allow: true,
+    replacementArgs: workingArgs,
+    ...(permissionDecision === 'allow' ? { permissionDecision: 'allow' } : {}),
+  }
 }
 
 export async function testHook({ userId, id }) {

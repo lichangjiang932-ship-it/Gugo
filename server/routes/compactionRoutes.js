@@ -7,6 +7,7 @@ import {
   getCompactionArchive,
 } from '../services/compactionService.js'
 import { addSemanticCompactionSummary } from '../services/contextCompactionRuntime.js'
+import { dispatchHooks } from '../services/hooksService.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
 
@@ -44,6 +45,26 @@ export async function handleCompactionRequest(req, res) {
   try {
     if (req.method === 'POST' && pathname === '/api/compaction/compress') {
       const body = await readJson(req)
+      // pre_compact hooks may veto compaction or override the semantic summary
+      // prompt before any archive/summary work runs.
+      const preCompact = await dispatchHooks({
+        userId,
+        event: 'pre_compact',
+        tool: null,
+        args: { keepMessages: body.keepMessages, messageCount: Array.isArray(body.messages) ? body.messages.length : 0 },
+        sessionId: body.sessionId || null,
+        payload: { customPrompt: typeof body.compactPrompt === 'string' ? body.compactPrompt : null },
+      })
+      if (!preCompact.allow) {
+        return sendJson(res, 200, {
+          ok: true,
+          compacted: false,
+          messages: Array.isArray(body.messages) ? body.messages : [],
+          outboundMessages: Array.isArray(body.messages) ? body.messages : [],
+          hookVeto: true,
+          hookReason: preCompact.reason || 'pre_compact hook rejected compaction',
+        })
+      }
       let result = buildCompaction({
         messages: Array.isArray(body.messages) ? body.messages : [],
         keepMessages: Number(body.keepMessages) || undefined,
