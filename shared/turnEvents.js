@@ -230,5 +230,10 @@ export function createTurnActivity({
   chunk = null,
   createdAt = Date.now(),
 }) {
-  return parseTurnActivity({ sessionId, turnId, kind, toolName, modelName, toolCallId, stream, chunk, createdAt })
+  const activity = { sessionId, turnId, kind, toolName, createdAt }
+  if (modelName != null) activity.modelName = modelName
+  if (toolCallId != null) activity.toolCallId = toolCallId
+  if (stream != null) activity.stream = stream
+  if (chunk != null) activity.chunk = chunk
+  return parseTurnActivity(activity)
 }
