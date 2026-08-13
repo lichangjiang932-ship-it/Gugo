@@ -1,12 +1,16 @@
 import { enhanceHtmlDeckDocument, enhanceHtmlPreviewReadability } from './htmlDeckEnhancer.js'
 import { stripDangerousMarkup } from './previewSanitizers.js'
+import { applyVisualPreviewScriptNonces } from './visualDocuments.js'
 
-export function buildHtmlDocument(htmlSource = '') {
+export function buildHtmlDocument(htmlSource = '', options = {}) {
   const src = String(htmlSource || '').trim()
   if (/^\s*(?:<!doctype\s+html|<html[\s>])/i.test(src)) {
-    return enhanceHtmlDeckDocument(enhanceHtmlPreviewReadability(src))
+    return applyVisualPreviewScriptNonces(
+      enhanceHtmlDeckDocument(enhanceHtmlPreviewReadability(src, options), options),
+      options,
+    )
   }
-  return enhanceHtmlDeckDocument(enhanceHtmlPreviewReadability(`<!doctype html>
+  return applyVisualPreviewScriptNonces(enhanceHtmlDeckDocument(enhanceHtmlPreviewReadability(`<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8" />
@@ -17,7 +21,7 @@ export function buildHtmlDocument(htmlSource = '') {
 <body>
 ${src}
 </body>
-</html>`))
+</html>`, options), options), options)
 }
 
 export function parseMultiHtmlSource(source = '') {

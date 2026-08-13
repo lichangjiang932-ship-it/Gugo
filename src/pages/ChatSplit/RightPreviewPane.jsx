@@ -1,5 +1,6 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { FileText, X } from 'lucide-react'
+import { FileText } from 'lucide-react'
 import { useT } from '../../i18n/I18nProvider.jsx'
 import { withArtifactPreviewMode } from '../../lib/directFilePreview.js'
 import { withDownloadToken } from '../../lib/jobClient.js'
@@ -7,6 +8,12 @@ import PreviewBody from './preview/PreviewBody.jsx'
 import DirectFilePreview from './preview/DirectFilePreview.jsx'
 import { DirectFileToolbar, PreviewHeader, PreviewToolbar } from './preview/PreviewChrome.jsx'
 import useArtifactExports from './preview/useArtifactExports.js'
+import {
+  activatePreviewTab,
+  createPreviewTabState,
+  removePreviewTab,
+  upsertPreviewTab,
+} from './preview/previewTabs.js'
 import usePreviewPaneState, {
   DEFAULT_PREVIEW_PANE_WIDTH,
   MIN_PREVIEW_PANE_WIDTH,
@@ -15,25 +22,118 @@ import usePreviewPaneState, {
 
 export default function RightPreviewPane({ artifact, onClose, onMessage }) {
   const { t } = useT()
-  const pane = usePreviewPaneState({ artifact, onClose })
-  if (!artifact) return null
-  if (artifact.directFile) return <DirectFilePane file={artifact.directFile} pane={pane} onClose={onClose} t={t} />
-  const { preview, content } = artifact
-  if (!preview) return <UnsupportedPreview onClose={onClose} t={t} />
-  return <PreviewPane artifact={artifact} preview={preview} content={content} pane={pane} onClose={onClose} onMessage={onMessage} t={t} />
+  const paneRef = useRef(null)
+  const [initialReturnFocus] = useState(() => {
+    if (typeof document === 'undefined') return null
+    const activeElement = document.activeElement
+    return activeElement && activeElement !== document.body && typeof activeElement.focus === 'function'
+      ? activeElement
+      : null
+  })
+  const returnFocusRef = useRef(initialReturnFocus)
+  const focusActiveTabRef = useRef(false)
+  const [tabState, setTabState] = useState(() => ({
+    ...createPreviewTabState(artifact),
+    incomingArtifact: artifact,
+  }))
+  if (artifact !== tabState.incomingArtifact) {
+    setTabState({
+      ...upsertPreviewTab(tabState, artifact),
+      incomingArtifact: artifact,
+    })
+  }
+  const activeTab = tabState.tabs.find((tab) => tab.id === tabState.activeId) || tabState.tabs[0] || null
+  const activeArtifact = activeTab?.artifact || null
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const activeElement = document.activeElement
+    if (
+      activeElement
+      && activeElement !== document.body
+      && typeof activeElement.focus === 'function'
+      && !paneRef.current?.contains(activeElement)
+    ) {
+      returnFocusRef.current = activeElement
+    }
+  }, [artifact])
+
+  const restoreTriggerFocus = useCallback(() => {
+    const target = returnFocusRef.current
+    if (!target?.isConnected || typeof target.focus !== 'function') return
+    try {
+      target.focus({ preventScroll: true })
+    } catch {
+      target.focus()
+    }
+  }, [])
+
+  const closePane = useCallback(() => {
+    restoreTriggerFocus()
+    onClose?.()
+  }, [onClose, restoreTriggerFocus])
+
+  const pane = usePreviewPaneState({ artifact: activeArtifact, onClose: closePane })
+
+  const selectTab = useCallback((tabId) => {
+    setTabState((current) => activatePreviewTab(current, tabId))
+  }, [])
+
+  const closeTab = useCallback((tabId) => {
+    const nextTabs = removePreviewTab(tabState, tabId)
+    if (nextTabs === tabState) return
+    const next = { ...nextTabs, incomingArtifact: tabState.incomingArtifact }
+    focusActiveTabRef.current = next.tabs.length > 0
+    setTabState(next)
+    if (!next.tabs.length) closePane()
+  }, [closePane, tabState])
+
+  useEffect(() => {
+    if (!focusActiveTabRef.current || !activeTab) return
+    focusActiveTabRef.current = false
+    const target = paneRef.current?.querySelector('[role="tab"][aria-selected="true"]')
+    if (typeof target?.focus !== 'function') return
+    try {
+      target.focus({ preventScroll: true })
+    } catch {
+      target.focus()
+    }
+  }, [activeTab, tabState.tabs])
+
+  if (!activeTab || !activeArtifact) return null
+  const testId = activeArtifact.directFile ? 'direct-file-pane' : 'preview-pane'
+  return (
+    <PreviewShell pane={pane} paneRef={paneRef} onClose={closePane} t={t} testId={testId} shellKey="preview-pane">
+      <PreviewHeader
+        tabs={tabState.tabs}
+        activeId={activeTab.id}
+        maximized={pane.maximized}
+        setMaximized={pane.setMaximized}
+        onSelectTab={selectTab}
+        onCloseTab={closeTab}
+        onClose={closePane}
+        t={t}
+      />
+      {activeArtifact.directFile ? (
+        <DirectFileContent file={activeArtifact.directFile} t={t} />
+      ) : activeArtifact.preview ? (
+        <PreviewContent preview={activeArtifact.preview} content={activeArtifact.content} pane={pane} onMessage={onMessage} t={t} />
+      ) : (
+        <UnsupportedPreview t={t} />
+      )}
+    </PreviewShell>
+  )
 }
 
-function DirectFilePane({ file, pane, onClose, t }) {
+function DirectFileContent({ file, t }) {
   const filename = String(file?.filename || file?.title || 'artifact')
   const extension = String(filename.split('.').pop() || '').toLowerCase()
   const rawType = String(file?.type || extension || 'file').toLowerCase()
   const type = rawType.includes('/') ? (extension || rawType.split('/').pop()) : rawType
   const downloadUrl = file?.url ? withDownloadToken(file.url) : ''
   const previewUrl = withArtifactPreviewMode(downloadUrl)
-  const preview = { type, filename }
   return (
-    <PreviewShell pane={pane} onClose={onClose} t={t} testId="direct-file-pane" shellKey="direct-file-pane">
-      <PreviewHeader preview={preview} maximized={pane.maximized} setMaximized={pane.setMaximized} onClose={onClose} t={t} />
+    <>
       <DirectFileToolbar filename={filename} type={type} summary={file?.summary || file?.mimeType || ''} url={downloadUrl} t={t} />
       <div className="chat-direct-file-content min-h-0 flex-1 overflow-hidden" data-testid="direct-file-content">
         {previewUrl ? <DirectFilePreview file={{ ...file, filename, type }} url={previewUrl} t={t} /> : (
@@ -43,26 +143,26 @@ function DirectFilePane({ file, pane, onClose, t }) {
           </div>
         )}
       </div>
-    </PreviewShell>
+    </>
   )
 }
 
-function PreviewPane({ preview, content, pane, onClose, onMessage, t }) {
+function PreviewContent({ preview, content, pane, onMessage, t }) {
   const exports = useArtifactExports({ preview, content, onMessage, t })
   return (
-    <PreviewShell pane={pane} onClose={onClose} t={t} testId="preview-pane" shellKey="preview-pane">
-      <PreviewHeader preview={preview} maximized={pane.maximized} setMaximized={pane.setMaximized} onClose={onClose} t={t} />
+    <>
       <PreviewToolbar preview={preview} content={content} view={pane.view} setView={pane.setView} exports={exports} t={t} />
       <div data-testid="preview-scroll-region" className="chat-preview-scroll-region min-h-0 flex-1 overflow-hidden overscroll-contain"><PreviewBody preview={preview} content={content} view={pane.view} /></div>
-    </PreviewShell>
+    </>
   )
 }
 
-function PreviewShell({ children, onClose, pane, shellKey, t, testId }) {
+function PreviewShell({ children, onClose, pane, paneRef, shellKey, t, testId }) {
   return (
     <AnimatePresence>
       <motion.div key="preview-backdrop" data-testid="preview-backdrop" aria-hidden="true" onClick={onClose} className="chat-preview-backdrop fixed inset-0 z-30" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.16 }} />
       <motion.aside
+        ref={paneRef}
         key={shellKey}
         data-testid={testId}
         onTouchStart={pane.handleTouchStart}
@@ -99,17 +199,12 @@ function PreviewShell({ children, onClose, pane, shellKey, t, testId }) {
   )
 }
 
-function UnsupportedPreview({ onClose, t }) {
+function UnsupportedPreview({ t }) {
   return (
-    <AnimatePresence>
-      <motion.div key="preview-backdrop" data-testid="preview-backdrop" aria-hidden="true" onClick={onClose} className="fixed inset-0 z-30 bg-ink/20 pointer-events-auto" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.18 }} />
-      <motion.aside className="w-full h-full border-l border-ink-fade/30 bg-paper flex flex-col items-center justify-center gap-4 text-ink-fade relative z-40" initial={{ opacity: 0, x: 40 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 40 }} transition={{ duration: 0.2 }}>
-        {onClose && <button type="button" onClick={onClose} aria-label={t('chatPreview.close')} className="absolute right-4 top-4 w-10 h-10 rounded-md bg-paper/80 hover:bg-ember/10 hover:text-ember flex items-center justify-center text-ink-soft" title={t('chatPreview.close')}><X className="w-4 h-4" /></button>}
-        <FileText className="w-10 h-10 opacity-30" />
-        <p className="text-sm">{t('chatPreview.unsupported')}</p>
-        <p className="text-xs text-ink-fade/70 max-w-[200px] text-center">{t('chatPreview.unsupportedHint')}</p>
-        {onClose && <button type="button" onClick={onClose} className="mt-2 h-8 px-4 border border-ink-fade/30 rounded-md text-xs hover:border-ember/50">{t('chatPreview.closePanel')}</button>}
-      </motion.aside>
-    </AnimatePresence>
+    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-4 p-6 text-center text-ink-fade">
+      <FileText className="h-10 w-10 opacity-30" />
+      <p className="text-sm">{t('chatPreview.unsupported')}</p>
+      <p className="max-w-[240px] text-xs text-ink-fade/70">{t('chatPreview.unsupportedHint')}</p>
+    </div>
   )
 }

@@ -3,7 +3,10 @@ import test from 'node:test'
 import { JSDOM } from 'jsdom'
 
 import {
+  buildChartDocument,
   buildHtmlDocument,
+  buildMermaidDocument,
+  buildMultiHtmlDocument,
   enhanceHtmlPreviewReadability,
 } from '../src/lib/artifactPreview.js'
 
@@ -24,6 +27,68 @@ test('buildHtmlDocument protects complete documents and fragments', () => {
 
   assert.match(complete, /data-yma-readability-guard="true"/)
   assert.match(fragment, /data-yma-readability-guard="true"/)
+})
+
+test('preview-owned scripts receive a validated response nonce without authorizing source scripts', () => {
+  const html = buildHtmlDocument(`
+    <script data-user-script>window.userScriptRan = true</script>
+    <section class="slide active">One</section>
+    <section class="slide">Two</section>
+  `, { nonce: 'abcDEF0123+/=' })
+
+  assert.match(html, /<script nonce="abcDEF0123\+\/=" data-yma-readability-guard="true">/)
+  assert.match(html, /<script nonce="abcDEF0123\+\/=" data-yma-deck-enhancer="script">/)
+  assert.match(html, /<script data-user-script>/)
+  assert.doesNotMatch(html, /<script nonce="abcDEF0123\+\/=" data-user-script>/)
+
+  const rejected = buildHtmlDocument('<p>Unsafe nonce</p>', { nonce: '"><script>alert(1)</script>' })
+  assert.doesNotMatch(rejected, /nonce=/)
+})
+
+test('prebuilt multi-file previews refresh only Gugo-owned helper nonces', () => {
+  const nonce = 'multiPreviewNonce123+/='
+  const prebuilt = buildMultiHtmlDocument({
+    'index.html': '<section class="slide active">One</section><section class="slide">Two</section>',
+    'app.js': 'window.multiFileUserScript = true',
+  })
+  const html = buildHtmlDocument(prebuilt, { nonce })
+
+  assert.match(html, new RegExp(`<script nonce="${nonce.replace(/[+/]/g, '\\$&')}" data-yma-readability-guard="true">`))
+  assert.match(html, new RegExp(`<script nonce="${nonce.replace(/[+/]/g, '\\$&')}" data-yma-deck-enhancer="script">`))
+  assert.match(html, /<script>window\.multiFileUserScript = true<\/script>/)
+  assert.doesNotMatch(html, /<script nonce="multiPreviewNonce123\+\/=">window\.multiFileUserScript/)
+})
+
+test('trusted Mermaid and Chart previews nonce only their generated scripts', () => {
+  const nonce = 'visualPreviewNonce123+/='
+  const mermaid = buildHtmlDocument(buildMermaidDocument('flowchart TD\nA-->B'), {
+    nonce,
+    previewType: 'mermaid',
+  })
+  const chart = buildHtmlDocument(buildChartDocument({
+    type: 'bar',
+    data: { labels: ['A'], datasets: [{ data: [1] }] },
+  }), {
+    nonce,
+    previewType: 'chart',
+  })
+
+  for (const marker of ['mermaid-library', 'mermaid-init']) {
+    assert.match(mermaid, new RegExp(`<script nonce="visualPreviewNonce123\\+\\/=" data-yma-preview-script="${marker}"`))
+  }
+  for (const marker of ['chart-library', 'chart-init']) {
+    assert.match(chart, new RegExp(`<script nonce="visualPreviewNonce123\\+\\/=" data-yma-preview-script="${marker}"`))
+  }
+
+  const spoofed = buildHtmlDocument(
+    '<script data-yma-preview-script="mermaid-init">alert(1)</script>',
+    { nonce, previewType: 'mermaid' },
+  )
+  assert.match(spoofed, /<script data-yma-preview-script="mermaid-init">alert\(1\)<\/script>/)
+  assert.doesNotMatch(
+    spoofed,
+    /<script(?=[^>]*\bnonce=)(?=[^>]*data-yma-preview-script="mermaid-init")[^>]*>/,
+  )
 })
 
 test('readability guard repairs faint text without changing readable text', async () => {

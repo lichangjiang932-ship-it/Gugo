@@ -22,10 +22,10 @@ test('task HTML previews fetch source outside the sandbox and never put download
 })
 
 test('React artifact previews apply the shared readability guard', () => {
-  const source = fs.readFileSync(new URL('../src/pages/ChatSplit/RightPreviewPane.jsx', import.meta.url), 'utf8') + previewSource()
+  const source = fs.readFileSync(new URL('../src/pages/ChatSplit/preview/reactSandboxDocument.js', import.meta.url), 'utf8')
 
   assert.match(source, /import \{[^}]*enhanceHtmlPreviewReadability[^}]*\} from '\.\.\/\.\.\/\.\.\/lib\/artifactPreview\.js'/)
-  assert.match(source, /return enhanceHtmlPreviewReadability\(`<!doctype html>/)
+  assert.match(source, /return enhanceHtmlPreviewReadability\(documentHtml, \{ nonce \}\)/)
 })
 
 test('pptx default download uses premium visual export and keeps editable fallback explicit', () => {
