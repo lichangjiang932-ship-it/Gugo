@@ -17,8 +17,8 @@ test('schema migration registry is contiguous and owns the latest version', () =
   }))
   const plan = createSchemaMigrationPlan(legacy)
 
-  assert.deepEqual(plan.map(({ version }) => version), Array.from({ length: 44 }, (_, index) => index + 2))
-  assert.equal(LATEST_SCHEMA_VERSION, 45)
+  assert.deepEqual(plan.map(({ version }) => version), Array.from({ length: 45 }, (_, index) => index + 2))
+  assert.equal(LATEST_SCHEMA_VERSION, 46)
   assert.equal(DB_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
   assert.equal(schemaMigrations.at(-1).version, LATEST_SCHEMA_VERSION)
 })

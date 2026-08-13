@@ -38,6 +38,7 @@ import { handleModelProviderRequest } from './server/routes/modelProviderRoutes.
 import { handleMobileRequest } from './server/routes/mobileRoutes.js'
 import { handleMcpServerRequest } from './server/mcp/mcpServer.js'
 import { handleLocalFileAccessRequest } from './server/routes/localFileAccessRoutes.js'
+import { handleFileSnapshotRequest } from './server/routes/fileSnapshotRoutes.js'
 import { handleTurnEventRequest } from './server/routes/turnEventRoutes.js'
 import { handleMediaRequest } from './server/routes/mediaRoutes.js'
 import { handleAttachmentRequest } from './server/routes/attachmentRoutes.js'
@@ -120,6 +121,10 @@ function fallbackApiPlugin() {
         }
         if (req.url?.startsWith('/api/local-files')) {
           handleLocalFileAccessRequest(req, res)
+          return
+        }
+        if (req.url?.startsWith('/api/snapshots')) {
+          handleFileSnapshotRequest(req, res)
           return
         }
         if (req.url?.startsWith('/api/media/')) {
