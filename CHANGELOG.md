@@ -6,6 +6,43 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.22] - 2026-08-13
+
+### Added
+
+- Fed image-producing tool results back to vision-capable models and streamed
+  live tool output into active chat turns.
+- Added durable pre-mutation file snapshots, the `rewind_files` recovery tool,
+  and managed background-process launch, inspection, and termination.
+- Expanded lifecycle hooks with `pre_compact`, `subagent_stop`, `notification`,
+  and permission events, plus structured argument matchers and
+  `allow`/`deny`/`ask` decisions.
+
+### Changed
+
+- Applied hook-supplied pre-compaction prompts to semantic summaries, dispatched
+  completion notifications, and combined permission decisions conservatively.
+
+### Fixed
+
+- Preserved the backward-compatible `tool_call_ready` activity shape while
+  streaming richer tool progress.
+- Cancelled pending approval records when interrupted work disconnects instead
+  of leaving stale approval requests behind.
+
+## [0.10.21] - 2026-08-13
+
+### Added
+
+- Added model-aware context-window profiles with catalog defaults, native
+  Ollama metadata discovery, and per-provider overrides.
+
+### Changed
+
+- Routed each active model's context window through usage reporting,
+  compaction, jobs, subagents, and tool loops instead of relying on one global
+  default.
+
 ## [0.10.20] - 2026-08-13
 
 ### Added
@@ -296,7 +333,10 @@ follow [Semantic Versioning](https://semver.org/).
 - Provider, MCP, memory, job, subagent, connector, and workspace tool support.
 - Local-first single-user mode with optional multi-user authentication.
 
-[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.19...HEAD
+[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.22...HEAD
+[0.10.22]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.22
+[0.10.21]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.21
+[0.10.20]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.20
 [0.10.19]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.19
 [0.10.18]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.18
 [0.10.17]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.17
