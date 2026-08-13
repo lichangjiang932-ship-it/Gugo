@@ -16,6 +16,7 @@ import {
 } from './sessionStore.js'
 import { appendTurnEvent, getLastTurnEvent, listTurnEvents } from './turnEventStore.js'
 import { publishTurnActivity } from './turnActivityBus.js'
+import { dispatchHooks as dispatchHooksService } from './hooksService.js'
 import { resolveApprovalMode } from '../utils/approvalPolicy.js'
 import {
   buildAssistantModelContext,
@@ -456,6 +457,7 @@ export class TurnEngine {
     acknowledgeAppliedSteering = acknowledgeAppliedTurnSteering,
     releaseSteering = releaseTurnSteeringLease,
     releaseStaleSteering = releaseTurnSteeringLeasesForTurn,
+    dispatchHooks = dispatchHooksService,
     env = process.env,
   } = {}) {
     this.deps = {
@@ -465,7 +467,7 @@ export class TurnEngine {
       getContextWindow, readFileAccessStatus, validateAttachments, bindAttachments, prepareAttachments,
       removeMessage, executionLeases,
       enqueueSteering, claimSteering, acknowledgeSteering, acknowledgeAppliedSteering,
-      releaseSteering, releaseStaleSteering,
+      releaseSteering, releaseStaleSteering, dispatchHooks,
     }
     this.active = new Map()
     this.startingSessions = new Map()
@@ -1291,6 +1293,14 @@ export class TurnEngine {
         artifactIds: result?.artifactIds || [],
         iterations: result?.iterations || 0,
       })
+      // Best-effort async notification to external subscribers.
+      void this.deps.dispatchHooks?.({
+        userId,
+        event: 'notification',
+        tool: null,
+        args: { text: String(text || '').slice(0, 4_000), artifactIds: result?.artifactIds || [], iterations: result?.iterations || 0 },
+        sessionId,
+      }).catch(() => { /* notification hook is best-effort */ })
       try {
         this.deps.scheduleMemoryExtraction({
           userId,
