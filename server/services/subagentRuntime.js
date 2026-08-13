@@ -25,6 +25,7 @@ import { AGENTIC_TOOL_SPECS, dispatchAgenticTool } from '../utils/agenticTools.j
 import { MEMORY_TOOL_SPECS, dispatchMemoryTool } from '../utils/memoryTools.js'
 import { createJobBudget } from '../utils/jobBudget.js'
 import { requestApproval } from './approvalGate.js'
+import { dispatchHooks } from './hooksService.js'
 import { buildSafetyBlock } from './promptCompiler.js'
 import { getBuiltinSpec } from './toolRegistry.js'
 import { normalizePromptContextIds, prepareOptionalPromptContext } from './optionalPromptContext.js'
@@ -776,9 +777,23 @@ export async function runSubagent({
         })
 
     trace.push({ type: 'done', at: now() })
+    void dispatchHooks({
+      userId,
+      event: 'subagent_stop',
+      tool: type,
+      args: { resultText: boundedTranscriptValue(resultText), status: 'completed' },
+      sessionId: parentSessionId || null,
+    }).catch(() => { /* subagent_stop hook is best-effort */ })
     return updateRun({ id, userId, status: 'completed', resultText, trace })
   } catch (err) {
     trace.push({ type: 'error', error: err?.message || String(err), at: now() })
+    void dispatchHooks({
+      userId,
+      event: 'subagent_stop',
+      tool: type,
+      args: { error: err?.message || String(err), status: 'failed' },
+      sessionId: parentSessionId || null,
+    }).catch(() => { /* subagent_stop hook is best-effort */ })
     const run = updateRun({ id, userId, status: 'failed', resultText: err?.message || String(err), trace })
     throw Object.assign(err, { run })
   } finally {

@@ -3276,6 +3276,7 @@ export async function runToolsLoop({
               const resumingApproval = call.checkpointStatus === 'awaiting_approval' && call.checkpointApprovalId
               let effectiveArgs = args
               let gate = null
+              let hookAuthorizedCall = false
               if (idempotentResume) {
                 effectiveArgs = call.checkpointExecutionArgs ?? effectiveArgs
                 gate = {
@@ -3308,6 +3309,9 @@ export async function runToolsLoop({
                   } else if (preHook.replacementArgs && typeof preHook.replacementArgs === 'object') {
                     effectiveArgs = preHook.replacementArgs
                   }
+                  // A pre_tool_use hook may authorize the call directly,
+                  // bypassing the approval inbox for this invocation.
+                  if (preHook.permissionDecision === 'allow') hookAuthorizedCall = true
                 }
                 if (!result && effectiveArgs !== args) {
                   const hookValidationError = validateToolCall(
@@ -3317,7 +3321,8 @@ export async function runToolsLoop({
                   )
                   if (hookValidationError) result = hookValidationError
                 }
-                if (!result) gate = await requestToolApproval({
+                if (!result && !hookAuthorizedCall) {
+                  gate = await requestToolApproval({
                     userId: job?.userId || null,
                     origin: approvalOrigin,
                     jobId: approvalOrigin === 'chat' ? null : job?.id || null,
@@ -3335,6 +3340,10 @@ export async function runToolsLoop({
                       if (typeof onApprovalPending === 'function') await onApprovalPending(approval)
                     },
                   })
+                }
+                if (!result && hookAuthorizedCall) {
+                  gate = { proceed: true, args: effectiveArgs, hookAuthorized: true }
+                }
               }
               if (gate && !gate.proceed) {
                 result = formatDeniedToolResult(gate)

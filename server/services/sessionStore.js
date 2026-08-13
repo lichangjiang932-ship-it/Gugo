@@ -1,6 +1,7 @@
 import { getDb } from '../db.js'
 import { listSessionTurnArtifacts } from './turnArtifactStore.js'
 import { deleteManagedAttachmentsForSession } from './managedAttachmentStore.js'
+import { dispatchHooks } from './hooksService.js'
 
 const LOCAL_OWNER_META_KEY = 'local_auth_owner_user_id'
 const SESSION_SCOPED_TABLES = [
@@ -100,6 +101,16 @@ export function upsertSession({
       revision = sessions.revision + 1
     WHERE sessions.user_id = excluded.user_id
   `).run(id, id, userId, title, Number.MAX_SAFE_INTEGER, finalCreatedAt, updatedAt, lastViewedAt, archivedAt)
+  if (!row) {
+    // Best-effort lifecycle hook for a newly created chat session.
+    void dispatchHooks({
+      userId,
+      event: 'session_start',
+      tool: null,
+      args: { title },
+      sessionId: id,
+    }).catch(() => { /* lifecycle hook is best-effort */ })
+  }
   return getSession({ userId, sessionId: id })
 }
 
@@ -529,6 +540,13 @@ export function deleteSession({ userId, sessionId, expectedRevision } = {}) {
     return result.changes === 1 ? { deleted: true, previousRevision: revision } : null
   })()
   if (result?.deleted) {
+    void dispatchHooks({
+      userId,
+      event: 'session_end',
+      tool: null,
+      args: {},
+      sessionId,
+    }).catch(() => { /* lifecycle hook is best-effort */ })
     try {
       deleteManagedAttachmentsForSession({ userId, sessionId })
     } catch (error) {
