@@ -1,3 +1,5 @@
+import { TOOL_LIVE_OUTPUT_CHAR_LIMIT } from '../../lib/turnClient/toolOutputBuffer.js'
+
 function applyStreamCursor(message, action) {
   if (!Number.isInteger(action.serverSequence)) return { ignored: false, meta: message.meta || {} }
   const meta = message.meta || {}
@@ -276,7 +278,9 @@ export function reduceMessageState(state, action) {
           const appended = `${existing.liveOutput || ''}${entry.chunk}`
           nextCalls[idx] = {
             ...existing,
-            liveOutput: appended.length > 16_000 ? appended.slice(-16_000) : appended,
+            liveOutput: appended.length > TOOL_LIVE_OUTPUT_CHAR_LIMIT
+              ? appended.slice(-TOOL_LIVE_OUTPUT_CHAR_LIMIT)
+              : appended,
             liveStream: entry.stream || existing.liveStream || 'stdout',
           }
           msgs[messageIndex] = { ...last, meta: { ...existingMeta, toolCalls: nextCalls } }

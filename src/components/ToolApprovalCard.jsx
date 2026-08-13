@@ -146,37 +146,47 @@ export default function ToolApprovalCard({ open, request, onDecide, busy }) {
         </div>
       </div>
 
-      <div className="flex items-center gap-2 mt-3 flex-wrap">
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => onDecide?.({ approved: true })}
-          className="h-8 px-3 rounded-md bg-ember text-paper text-sm flex items-center gap-1.5 disabled:opacity-50"
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <span
+          data-testid="tool-approval-hint"
+          className="mr-auto font-mono text-[10px] text-ink-fade"
         >
-          <Check className="w-3.5 h-3.5" />
-          {t('toolApproval.allowOnce')}
-        </button>
-        {canRemember && (
+          {t('toolApproval.hint')}
+        </span>
+        <div
+          data-testid="tool-approval-actions"
+          className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-2"
+        >
           <button
             type="button"
             disabled={busy}
-            onClick={() => onDecide?.({ approved: true, remember: true })}
-            className="h-8 px-3 border border-emerald-500/60 rounded-md text-sm text-emerald-700 hover:bg-emerald-500/10 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+            onClick={() => onDecide?.({ approved: true })}
+            className="h-8 px-3 rounded-md bg-ember text-paper text-sm flex items-center gap-1.5 disabled:opacity-50"
           >
-            <CheckCheck className="w-3.5 h-3.5" />
-            {t('toolApproval.alwaysAllow')}
+            <Check className="w-3.5 h-3.5" />
+            {t('toolApproval.allowOnce')}
           </button>
-        )}
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => onDecide?.({ approved: false })}
-          className="h-8 px-3 border border-ink-fade/60 rounded-md text-sm text-ink-soft hover:border-ink-fade transition-colors flex items-center gap-1.5 disabled:opacity-50"
-        >
-          <X className="w-3.5 h-3.5" />
-          {t('toolApproval.deny')}
-        </button>
-        <span className="font-mono text-[10px] text-ink-fade ml-auto">{t('toolApproval.hint')}</span>
+          {canRemember && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => onDecide?.({ approved: true, remember: true })}
+              className="h-8 px-3 border border-emerald-500/60 rounded-md text-sm text-emerald-700 hover:bg-emerald-500/10 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+            >
+              <CheckCheck className="w-3.5 h-3.5" />
+              {t('toolApproval.alwaysAllow')}
+            </button>
+          )}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onDecide?.({ approved: false })}
+            className="h-8 px-3 border border-ink-fade/60 rounded-md text-sm text-ink-soft hover:border-ink-fade transition-colors flex items-center gap-1.5 disabled:opacity-50"
+          >
+            <X className="w-3.5 h-3.5" />
+            {t('toolApproval.deny')}
+          </button>
+        </div>
       </div>
     </div>
   )

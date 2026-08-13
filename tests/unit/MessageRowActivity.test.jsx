@@ -81,3 +81,71 @@ test('tool readiness is visible without a tool card and yields to the single dur
     dom.window.close()
   }
 })
+
+test('a persisted file owned by a tool call opens from the execution step summary', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const opened = []
+  const msg = {
+    id: 'assistant-file-step',
+    role: 'assistant',
+    content: 'Created the script.',
+    timestamp: Date.now(),
+    meta: {
+      toolCalls: [{
+        id: 'write-script-1',
+        name: 'write_file',
+        arguments: JSON.stringify({ path: 'D:\\work\\inspect_pdf.py' }),
+        result: JSON.stringify({ ok: true, artifactId: 'script-artifact-1' }),
+        status: 'success',
+        textOffset: 0,
+      }],
+      serverArtifacts: [{
+        id: 'script-artifact-1',
+        toolCallId: 'write-script-1',
+        filename: 'inspect_pdf.py',
+        type: 'text',
+        mimeType: 'text/x-python',
+        url: '/api/artifacts/script-artifact-1',
+      }],
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <MessageRow
+          msg={msg}
+          rowKey={msg.id}
+          generatingMessageId=""
+          lang="en"
+          onOpenArtifact={(artifact) => opened.push(artifact)}
+          t={(key) => key}
+        />
+      </I18nProvider>,
+    ))
+
+    const executionToggle = rootElement.querySelector('.chat-activity-summary')
+    assert.ok(executionToggle)
+    await act(async () => executionToggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+
+    const fileButton = rootElement.querySelector('[data-testid="tool-summary-open"]')
+    assert.ok(fileButton)
+    assert.match(fileButton.textContent, /inspect_pdf\.py/)
+    await act(async () => fileButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+
+    assert.equal(opened.length, 1)
+    assert.deepEqual(opened[0].directFile, {
+      id: 'script-artifact-1',
+      filename: 'inspect_pdf.py',
+      title: undefined,
+      type: 'text',
+      mimeType: 'text/x-python',
+      url: '/api/artifacts/script-artifact-1',
+    })
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})

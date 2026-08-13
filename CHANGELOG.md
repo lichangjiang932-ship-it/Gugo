@@ -6,6 +6,23 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.24] - 2026-08-13
+
+### Changed
+
+- Made the chat composer visibly interactive with a persistent boundary,
+  clearer placeholder treatment, and a stronger accessible focus state.
+- Smoothed execution progress with automatic expansion for new running steps,
+  stable animated rows, and batched live output updates.
+- Moved approval actions to the right edge of inline permission prompts.
+
+### Fixed
+
+- Made persisted files in execution steps open in the existing preview pane
+  only when the displayed path can be matched to the exact artifact.
+- Preserved tool arguments across start events and flushed buffered output
+  before completion, cancellation, pause, interruption, or failure states.
+
 ## [0.10.23] - 2026-08-13
 
 ### Changed
@@ -351,7 +368,8 @@ follow [Semantic Versioning](https://semver.org/).
 - Provider, MCP, memory, job, subagent, connector, and workspace tool support.
 - Local-first single-user mode with optional multi-user authentication.
 
-[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.23...HEAD
+[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.24...HEAD
+[0.10.24]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.23...v0.10.24
 [0.10.23]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.22...v0.10.23
 [0.10.22]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.22
 [0.10.21]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.21

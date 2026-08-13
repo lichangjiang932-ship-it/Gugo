@@ -189,10 +189,10 @@ export default function ChatComposer({
             if (event.defaultPrevented || event.target?.closest?.(COMPOSER_INTERACTIVE_SELECTOR)) return
             textareaRef.current?.focus()
           }}
-          className="flex min-h-[104px] flex-col justify-between rounded-2xl border border-ink/15 bg-paper px-3.5 py-3 shadow-[0_8px_28px_rgb(var(--color-ink-rgb)/0.07)]"
+          className="flex min-h-[104px] flex-col justify-between rounded-2xl border border-ink/25 bg-paper px-3.5 py-3 shadow-[0_8px_28px_rgb(var(--color-ink-rgb)/0.07)] transition-[border-color,box-shadow,background-color] hover:border-ink/40 hover:bg-paper-2/20 focus-within:!border-ember focus-within:bg-paper focus-within:ring-[3px] focus-within:ring-ember/25 focus-within:shadow-[0_10px_36px_rgb(var(--color-ember-rgb)/0.18)]"
         >
           <ComposerAttachments attachments={attachments} onClear={() => setAttachments([])} onOpenImage={setFullscreenSrc} onRemove={(id) => setAttachments((current) => current.filter((item) => item.id !== id))} t={t} />
-          <div className="flex items-start gap-2 min-h-6">
+          <div className="flex min-h-6 cursor-text items-start gap-2">
             {skillCommand.command && (
               <span
                 data-testid="active-skill-command"
@@ -238,8 +238,9 @@ export default function ChatComposer({
                 e.preventDefault()
                 onFileChange?.({ target: { files, value: '' } })
               }}
-            placeholder={t('chatComposer.placeholder')}
-              className="w-full min-w-0 bg-transparent outline-none text-sm text-ink placeholder:text-ink-soft/80 resize-none flex-1 leading-6 max-h-48 overflow-y-auto"
+              placeholder={t('chatComposer.placeholder')}
+              aria-label={t('chatComposer.placeholder')}
+              className="w-full min-w-0 cursor-text bg-transparent outline-none text-sm text-ink placeholder:text-ink-soft resize-none flex-1 leading-6 max-h-48 overflow-y-auto"
               rows={1}
             />
           </div>
