@@ -15,6 +15,18 @@ import { ProgressTrace, ReasoningTrace, ToolCallTrace } from './ActivityTraces.j
 import { buildCollapsedUserMessagePreview, shouldCollapseUserMessage, splitUserSkillCommand } from './messageContent.js'
 import DirectoryRequestCard from '../../taskRun/DirectoryRequestCard.jsx'
 
+function stableTimelineSegments(content, toolCalls) {
+  let previousToolKey = 'start'
+  return buildMessageTimeline(content, toolCalls).map((segment, index) => {
+    if (segment.kind === 'tools') {
+      const firstCall = segment.calls?.[0]
+      previousToolKey = String(firstCall?.id || `offset-${firstCall?.textOffset ?? index}`)
+      return { ...segment, key: `tools:${previousToolKey}` }
+    }
+    return { ...segment, key: `text-after:${previousToolKey}` }
+  })
+}
+
 export default function MessageRow({
   msg,
   rowKey,
@@ -154,14 +166,21 @@ function AssistantContent({ artifactPreview, isCurrentStreamingMessage, isMessag
     onOpenArtifact?.(artifactReferenceOpenPayload(reference, msg.id))
     return true
   }
+  const openToolArtifact = (reference) => {
+    const payload = artifactReferenceOpenPayload(reference, msg.id)
+    if (!payload) return false
+    onOpenArtifact?.(payload)
+    return true
+  }
+  const timeline = stableTimelineSegments(stripChoices(msg.content), msg.meta?.toolCalls)
   return (
     <>
       <div data-quotable="true">
         <ReasoningTrace text={msg.meta?.reasoning || ''} streaming={!!msg.meta?.streaming && !msg.content} />
-        {buildMessageTimeline(stripChoices(msg.content), msg.meta?.toolCalls).map((segment, index) => (
+        {timeline.map((segment) => (
           segment.kind === 'tools'
-            ? <ToolCallTrace key={`tool-${index}`} calls={segment.calls} />
-            : <MarkdownRenderer key={`text-${index}`} artifactReferences={artifactReferences} streaming={isCurrentStreamingMessage} onLinkClick={openInlineArtifact}>{segment.text}</MarkdownRenderer>
+            ? <ToolCallTrace key={segment.key} calls={segment.calls} artifacts={artifactReferences} onOpenArtifact={openToolArtifact} />
+            : <MarkdownRenderer key={segment.key} artifactReferences={artifactReferences} streaming={isCurrentStreamingMessage} onLinkClick={openInlineArtifact}>{segment.text}</MarkdownRenderer>
         ))}
       </div>
       {msg.meta?.streaming && <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-ember/80 align-middle" aria-hidden="true" />}
@@ -182,12 +201,24 @@ function AssistantContent({ artifactPreview, isCurrentStreamingMessage, isMessag
 }
 
 function CollapsedArtifactContent({ artifactPreview, msg, onOpenArtifact, t }) {
+  const artifactReferences = buildServerArtifactReferences({
+    artifacts: msg.meta?.serverArtifacts,
+    content: String(msg.meta?.artifactSource || msg.content || ''),
+    messageId: msg.id,
+    preview: artifactPreview,
+  })
+  const openToolArtifact = (reference) => {
+    const payload = artifactReferenceOpenPayload(reference, msg.id)
+    if (!payload) return false
+    onOpenArtifact?.(payload)
+    return true
+  }
   return (
     <>
       <div className="chat-assistant-message text-[15px] leading-7" data-quotable="true">
         <ReasoningTrace text={msg.meta?.reasoning || ''} streaming={false} />
         {Array.isArray(msg.meta?.toolCalls) && msg.meta.toolCalls.length > 0 && (
-          <ToolCallTrace calls={msg.meta.toolCalls} />
+          <ToolCallTrace calls={msg.meta.toolCalls} artifacts={artifactReferences} onOpenArtifact={openToolArtifact} />
         )}
         <p>{t('chat.serverTurn.completed')}</p>
         <ProgressTrace progress={msg.meta?.progress} />

@@ -16,6 +16,7 @@ import {
   streamServerTurnEvents,
 } from '../src/lib/turnClient.js'
 import { createTurnFailureError, normalizeTurnFailurePayload } from '../src/lib/turnClient/turnEventDispatch.js'
+import { reduceMessageState } from '../src/store/reducers/messageReducer.js'
 
 function response(body, status = 200) {
   return { ok: status >= 200 && status < 300, status, json: async () => body }
@@ -808,7 +809,45 @@ test('dispatchTurnEvent maps tool and approval events to existing chat actions',
     '{"title":"Edited Doc"}',
   )
   assert.equal(artifacts[0].filename, 'a.docx')
+  assert.equal(artifacts[0].toolCallId, 'c1')
   assert.equal(approvals[0].id, 'p1')
+})
+
+test('tool.started keeps arguments previously recorded by tool.call', async () => {
+  let state = {
+    activeSessionId: 's',
+    sessions: [{
+      id: 's',
+      messages: [{ id: 'assistant-1', role: 'assistant', content: '', meta: { toolCalls: [] } }],
+    }],
+  }
+  const actions = []
+  const dispatch = (action) => {
+    actions.push(action)
+    const next = reduceMessageState(state, action)
+    if (next) state = next
+  }
+  const options = {
+    dispatch,
+    taskId: 'task',
+    messageTarget: { sessionId: 's', messageId: 'assistant-1' },
+  }
+
+  await dispatchTurnEvent(createTurnEvent({
+    id: 'call-with-args', sessionId: 's', turnId: 't', sequence: 0, type: 'tool.call',
+    payload: { toolCallId: 'shell-1', name: 'bash_exec', args: { command: 'python verify.py' } },
+    createdAt: 1,
+  }), options)
+  await dispatchTurnEvent(createTurnEvent({
+    id: 'started-without-args', sessionId: 's', turnId: 't', sequence: 1, type: 'tool.started',
+    payload: { toolCallId: 'shell-1', name: 'bash_exec' },
+    createdAt: 2,
+  }), options)
+
+  const toolCall = state.sessions[0].messages[0].meta.toolCalls[0]
+  assert.equal(toolCall.arguments, '{"command":"python verify.py"}')
+  const startedAction = actions.filter((action) => action.type === 'APPEND_TOOL_CALL_TO_LAST_MESSAGE').at(-1)
+  assert.equal(Object.hasOwn(startedAction.payload, 'arguments'), false)
 })
 
 test('dispatchTurnEvent forwards every local artifact from one completed shell call', async () => {
@@ -835,9 +874,9 @@ test('dispatchTurnEvent forwards every local artifact from one completed shell c
     onArtifact: (artifact) => artifacts.push(artifact),
   })
 
-  assert.deepEqual(artifacts.map(({ id, filename, name }) => ({ id, filename, name })), [
-    { id: 'pdf-1', filename: '填写后 答题卡.pdf', name: 'bash_exec' },
-    { id: 'png-1', filename: '第 1 页.png', name: 'bash_exec' },
+  assert.deepEqual(artifacts.map(({ id, filename, name, toolCallId }) => ({ id, filename, name, toolCallId })), [
+    { id: 'pdf-1', filename: '填写后 答题卡.pdf', name: 'bash_exec', toolCallId: 'shell-multi-output' },
+    { id: 'png-1', filename: '第 1 页.png', name: 'bash_exec', toolCallId: 'shell-multi-output' },
   ])
 })
 

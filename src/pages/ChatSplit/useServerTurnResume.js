@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { dispatchTurnActivity, dispatchTurnEvent, runServerTurn } from '../../lib/turnClient.js'
+import { createBufferedTurnActivityDispatcher, dispatchTurnEvent, runServerTurn } from '../../lib/turnClient.js'
 import { createTurnFailureError } from '../../lib/turnClient/turnEventDispatch.js'
 import { TASK_STATUS } from '../../store/taskStatus.js'
 import { buildChatFailureMessage, getVisibleModelErrorMessage } from '../../lib/chatFlowGuards.js'
@@ -57,9 +57,6 @@ export default function useServerTurnResume({
     resumingTurnIdsRef.current.add(turnId)
     const controller = new AbortController()
     const owner = { sessionId: session.id, turnId }
-    controller.signal.addEventListener('abort', () => {
-      resolveToolApprovalForOwner(owner, { approved: false })
-    }, { once: true })
     try {
       registerTurnRun({ sessionId: session.id, turnId, controller })
     } catch (error) {
@@ -73,6 +70,11 @@ export default function useServerTurnResume({
     const resumeResolution = message.meta?.serverResumeResolution || null
     const messageTarget = { sessionId: session.id, messageId: message.id }
     const dispatchMessage = (type, payload) => dispatch({ type, payload, ...messageTarget })
+    const turnActivityDispatcher = createBufferedTurnActivityDispatcher({ dispatch, taskId, messageTarget })
+    controller.signal.addEventListener('abort', () => {
+      turnActivityDispatcher.flush()
+      resolveToolApprovalForOwner(owner, { approved: false })
+    }, { once: true })
     let currentAssistantText = String(message.content || '')
     let resumeAccepted = false
     dispatch({
@@ -100,7 +102,7 @@ export default function useServerTurnResume({
           dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { stepLabel: t('taskCenter.statuses.cancel_requested') } } })
         }
       },
-      onActivity: (activity) => dispatchTurnActivity(activity, { dispatch, taskId, messageTarget }),
+      onActivity: turnActivityDispatcher.onActivity,
       onEvent: async (event) => {
         if (event?.type === 'turn.resumed') resumeAccepted = true
         const previousAssistantText = currentAssistantText
@@ -113,6 +115,7 @@ export default function useServerTurnResume({
           dispatch,
           taskId,
           messageTarget,
+          flushToolOutput: turnActivityDispatcher.flush,
           onApproval: (request) => requestServerToolApproval(request, owner),
           onArtifact: (artifact) => {
             const filename = artifact.filename || 'artifact'
@@ -128,6 +131,7 @@ export default function useServerTurnResume({
         }
       },
     }).then(({ terminal, sessionSnapshot }) => {
+      turnActivityDispatcher.flush()
       if (terminal.type === 'turn.failed') throw createTurnFailureError(terminal.payload)
       if (terminal.type === 'turn.cancelled') {
         const error = new Error('Generation stopped')
@@ -176,6 +180,7 @@ export default function useServerTurnResume({
       }
       dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: TASK_STATUS.COMPLETED, stepLabel: t('chat.serverTurn.resumed') } } })
     }).catch((error) => {
+      turnActivityDispatcher.flush()
       const stopped = isUserStopped(error)
       if (shouldKeepResumePending({ resumeResolution, resumeAccepted, stopped })) {
         dispatchMessage('UPDATE_LAST_MESSAGE_META', {
@@ -220,6 +225,7 @@ export default function useServerTurnResume({
       }
       dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: stopped ? TASK_STATUS.CANCELLED : TASK_STATUS.FAILED, stepLabel: stopped ? t('chat.serverTurn.cancelled') : t('chat.serverTurn.resumeFailed') } } })
     }).finally(() => {
+      turnActivityDispatcher.dispose()
       resumingTurnIdsRef.current.delete(turnId)
       clearToolApprovalForOwner(owner)
       unregisterTurnRun({ sessionId: session.id, turnId, controller })

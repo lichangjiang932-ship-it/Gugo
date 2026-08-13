@@ -59,6 +59,11 @@ test('shell approval never offers a standing-rule action', async () => {
   assert.match(html, /允许一次/)
   assert.doesNotMatch(html, /总是允许/)
   assert.match(html, /拒绝/)
+  const actionGroup = dom.window.document.querySelector('[data-testid="tool-approval-actions"]')
+  assert.ok(actionGroup.classList.contains('ml-auto'))
+  assert.ok(actionGroup.classList.contains('flex-wrap'))
+  assert.ok(actionGroup.classList.contains('justify-end'))
+  assert.equal(actionGroup.querySelectorAll('button').length, 2)
   await view.cleanup()
 })
 
@@ -113,9 +118,18 @@ test('non-shell approval actions return one-time, standing-rule, and deny decisi
   ))
   const buttons = [...dom.window.document.querySelectorAll('button')]
   const byText = (text) => buttons.find((button) => button.textContent.includes(text))
+  const actionGroup = dom.window.document.querySelector('[data-testid="tool-approval-actions"]')
+  const hint = dom.window.document.querySelector('[data-testid="tool-approval-hint"]')
+  assert.equal(hint.parentElement.firstElementChild, hint)
+  assert.equal(actionGroup.parentElement.lastElementChild, actionGroup)
+  assert.ok(hint.classList.contains('mr-auto'))
+  assert.ok(actionGroup.classList.contains('ml-auto'))
+  assert.ok(actionGroup.classList.contains('flex-wrap'))
+  assert.ok(actionGroup.classList.contains('justify-end'))
   for (const label of ['允许一次', '总是允许', '拒绝']) {
     const button = byText(label)
     assert.ok(button, `找不到按钮: ${label}`)
+    assert.equal(button.closest('[data-testid="tool-approval-actions"]'), actionGroup)
     await act(async () => { button.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })) })
   }
   assert.deepEqual(decisions, [

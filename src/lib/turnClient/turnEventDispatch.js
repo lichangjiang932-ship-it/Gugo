@@ -1,4 +1,14 @@
 import { TOOL_CALL_STATUS } from '../../store/taskStatus.js'
+import { createToolOutputBuffer } from './toolOutputBuffer.js'
+
+const TOOL_OUTPUT_FLUSH_EVENT_TYPES = new Set([
+  'tool.completed',
+  'turn.interrupted',
+  'turn.completed',
+  'turn.paused',
+  'turn.cancelled',
+  'turn.failed',
+])
 
 function resultText(result) {
   if (typeof result === 'string') return result
@@ -42,21 +52,23 @@ export function createTurnFailureError(payload, options) {
   return Object.assign(new Error(failure.error.message), failure.error, failure, { serverFailure: failure.error })
 }
 
+function dispatchToolOutput(activity, { dispatch, messageTarget } = {}) {
+  if (!activity?.toolCallId || typeof activity.chunk !== 'string' || !activity.chunk) return false
+  dispatch?.({
+    type: 'APPEND_TOOL_CALL_OUTPUT',
+    payload: {
+      id: activity.toolCallId,
+      name: activity.toolName,
+      chunk: activity.chunk,
+      stream: activity.stream || 'stdout',
+    },
+    ...(messageTarget || {}),
+  })
+  return true
+}
+
 export function dispatchTurnActivity(activity, { dispatch, taskId, messageTarget } = {}) {
-  if (activity?.kind === 'tool_output_delta') {
-    if (!activity.toolCallId || typeof activity.chunk !== 'string' || !activity.chunk) return false
-    dispatch?.({
-      type: 'APPEND_TOOL_CALL_OUTPUT',
-      payload: {
-        id: activity.toolCallId,
-        name: activity.toolName,
-        chunk: activity.chunk,
-        stream: activity.stream || 'stdout',
-      },
-      ...(messageTarget || {}),
-    })
-    return true
-  }
+  if (activity?.kind === 'tool_output_delta') return dispatchToolOutput(activity, { dispatch, messageTarget })
   if (activity?.kind !== 'tool_call_ready') return false
   dispatch?.({
     type: 'UPDATE_TASK',
@@ -78,8 +90,42 @@ export function dispatchTurnActivity(activity, { dispatch, taskId, messageTarget
   return true
 }
 
-export async function dispatchTurnEvent(event, { dispatch, taskId, onApproval, onArtifact, messageTarget } = {}) {
+export function createBufferedTurnActivityDispatcher(options = {}) {
+  const { bufferOptions = {}, ...dispatchOptions } = options
+  const outputBuffer = createToolOutputBuffer({
+    ...bufferOptions,
+    onFlush: ({ id, name, chunk, stream }) => dispatchToolOutput({
+      toolCallId: id,
+      toolName: name,
+      chunk,
+      stream,
+    }, dispatchOptions),
+  })
+
+  return {
+    onActivity: (activity) => activity?.kind === 'tool_output_delta'
+      ? outputBuffer.append({
+          id: activity.toolCallId,
+          name: activity.toolName,
+          chunk: activity.chunk,
+          stream: activity.stream,
+        })
+      : dispatchTurnActivity(activity, dispatchOptions),
+    flush: outputBuffer.flush,
+    dispose: outputBuffer.dispose,
+  }
+}
+
+export async function dispatchTurnEvent(event, {
+  dispatch,
+  taskId,
+  onApproval,
+  onArtifact,
+  messageTarget,
+  flushToolOutput,
+} = {}) {
   const payload = event.payload || {}
+  if (TOOL_OUTPUT_FLUSH_EVENT_TYPES.has(event.type)) await flushToolOutput?.()
   const dispatchMessage = (action) => dispatch?.({ ...action, ...(messageTarget || {}) })
   const streamCursor = { serverTurnId: event.turnId, serverSequence: event.sequence }
   let cursorCommitted = false
@@ -128,7 +174,7 @@ export async function dispatchTurnEvent(event, { dispatch, taskId, onApproval, o
       payload: {
         id: payload.toolCallId,
         name: payload.name,
-        arguments: JSON.stringify(payload.args || {}),
+        ...(payload.args !== undefined ? { arguments: JSON.stringify(payload.args) } : {}),
         status: TOOL_CALL_STATUS.RUNNING,
       },
     })
@@ -171,7 +217,9 @@ export async function dispatchTurnEvent(event, { dispatch, taskId, onApproval, o
               url: payload.result?.url || '',
             }]
           : []
-    for (const artifact of completedArtifacts) onArtifact?.({ ...artifact, name: payload.name })
+    for (const artifact of completedArtifacts) {
+      onArtifact?.({ ...artifact, name: payload.name, toolCallId: payload.toolCallId })
+    }
   } else if (event.type === 'approval.required') {
     dispatch?.({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { stepLabel: 'Waiting for approval' } } })
     await onApproval?.({

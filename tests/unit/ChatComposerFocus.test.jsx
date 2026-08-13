@@ -62,6 +62,16 @@ test('composer whitespace focuses the textarea while controls keep their own cli
     const modelPicker = rootElement.querySelector('[data-testid="model-picker-trigger"]')
     const sendButton = rootElement.querySelector('.lucide-send')?.closest('button')
 
+    assert.ok(textarea.placeholder.trim())
+    assert.equal(textarea.getAttribute('aria-label'), textarea.placeholder)
+    assert.equal(surface.classList.contains('cursor-text'), false)
+    for (const className of ['border-ink/25', 'hover:border-ink/40', 'focus-within:!border-ember', 'focus-within:ring-[3px]', 'focus-within:shadow-[0_10px_36px_rgb(var(--color-ember-rgb)/0.18)]']) {
+      assert.ok(surface.classList.contains(className), `composer surface is missing ${className}`)
+    }
+    assert.ok(textarea.classList.contains('cursor-text'))
+    assert.ok(textarea.parentElement.classList.contains('cursor-text'))
+    assert.ok(textarea.classList.contains('placeholder:text-ink-soft'))
+
     outside.focus()
     await act(async () => surface.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
     assert.equal(document.activeElement, textarea)

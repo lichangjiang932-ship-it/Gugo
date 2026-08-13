@@ -1,6 +1,6 @@
 import { serializeAttachmentReferences } from '../../lib/attachmentClient.js'
 import { buildLocalPathEvidenceInstruction, buildLocalPathToolInstruction, resolveLocalPathToolNames } from '../../lib/localPathPreflight.js'
-import { dispatchTurnActivity, dispatchTurnEvent, runServerTurn } from '../../lib/turnClient.js'
+import { createBufferedTurnActivityDispatcher, dispatchTurnEvent, runServerTurn } from '../../lib/turnClient.js'
 import { createTurnFailureError } from '../../lib/turnClient/turnEventDispatch.js'
 import { TASK_STATUS, HISTORY_STATUS } from '../../store/taskStatus.js'
 import { artifactTypeForSkill, buildChatFailureMessage, getVisibleModelErrorMessage } from '../../lib/chatFlowGuards.js'
@@ -158,9 +158,6 @@ export async function runServerChatTurn({
 }) {
   const controller = new AbortController()
   const owner = { sessionId, turnId }
-  controller.signal.addEventListener('abort', () => {
-    resolveToolApprovalForOwner(owner, { approved: false })
-  }, { once: true })
   registerTurnRun({ sessionId, turnId, controller })
   abortCtrlRef.current = controller
   const startedAt = Date.now()
@@ -170,6 +167,11 @@ export async function runServerChatTurn({
   const { assistantId: assistantMessageId } = buildServerTurnMessageIds(turnId)
   const messageTarget = { sessionId, messageId: assistantMessageId }
   const dispatchMessage = (type, payload) => dispatch({ type, payload, ...messageTarget })
+  const turnActivityDispatcher = createBufferedTurnActivityDispatcher({ dispatch, taskId, messageTarget })
+  controller.signal.addEventListener('abort', () => {
+    turnActivityDispatcher.flush()
+    resolveToolApprovalForOwner(owner, { approved: false })
+  }, { once: true })
   dispatch({
     type: 'ADD_TASK',
     payload: { id: taskId, name: taskName, detail: content, status: TASK_STATUS.RUNNING, step: 1, stepLabel: t('chat.serverTurn.submit'), perms: skill?.perms || [] },
@@ -237,7 +239,7 @@ export async function runServerChatTurn({
           dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { stepLabel: t('taskCenter.statuses.cancel_requested') } } })
         }
       },
-      onActivity: (activity) => dispatchTurnActivity(activity, { dispatch, taskId, messageTarget }),
+      onActivity: turnActivityDispatcher.onActivity,
       onEvent: async (event) => {
         if (event.type === 'turn.attempt' && event.payload?.resetStreaming) {
           currentAssistantText = String(event.payload?.assistantText || '')
@@ -249,6 +251,7 @@ export async function runServerChatTurn({
           dispatch,
           taskId,
           messageTarget,
+          flushToolOutput: turnActivityDispatcher.flush,
           onApproval: (request) => requestServerToolApproval(request, owner),
           onArtifact: (artifact) => appendArtifact(artifact, serverArtifacts, dispatchMessage),
         })
@@ -257,6 +260,7 @@ export async function runServerChatTurn({
         }
       },
     })
+    turnActivityDispatcher.flush()
     if (terminal.type === 'turn.failed') {
       const error = createTurnFailureError(terminal.payload)
       if (!currentAssistantText && error.partialText) {
@@ -324,6 +328,7 @@ export async function runServerChatTurn({
       clarification: terminal.payload?.clarification || null,
     }
   } catch (error) {
+    turnActivityDispatcher.flush()
     if (isUserStopped(error)) {
       dispatchMessage('APPEND_TO_LAST_MESSAGE', `\n\n${t('chat.serverTurn.stoppedMarker')}`)
       dispatchMessage('UPDATE_LAST_MESSAGE_META', { streaming: false, serverArtifacts, serverConnectionState: null })
@@ -346,6 +351,7 @@ export async function runServerChatTurn({
     setTimeout(() => dispatch({ type: 'REMOVE_TASK', payload: taskId }), 5000)
     return { failed: true, error }
   } finally {
+    turnActivityDispatcher.dispose()
     clearToolApprovalForOwner(owner)
     unregisterTurnRun({ sessionId, turnId, controller })
     if (abortCtrlRef.current === controller) abortCtrlRef.current = null
