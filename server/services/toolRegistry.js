@@ -322,6 +322,41 @@ const BUILTIN_SPECS = {
       },
     },
   },
+  bash_background: {
+    type: 'function',
+    function: {
+      name: 'bash_background',
+      description: 'Start a detached background process and return its processId and log path. Output is written to the log file, never returned inline. Use for long-running local servers, scrapers, watchers, or builds that would exceed the synchronous bash_exec timeout. Poll with process_list and read the log to check progress.',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string', description: 'Shell command to run in the background.' },
+          cwd: { type: 'string', description: 'Optional authorized working directory.' },
+        },
+        required: ['command'],
+      },
+    },
+  },
+  process_list: {
+    type: 'function',
+    function: {
+      name: 'process_list',
+      description: 'List background processes started by this user, with their id, status, and log path.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  process_kill: {
+    type: 'function',
+    function: {
+      name: 'process_kill',
+      description: 'Terminate a background process previously started by bash_background. Returns the updated process record.',
+      parameters: {
+        type: 'object',
+        properties: { process_id: { type: 'string', description: 'The background process id returned by bash_background or process_list.' } },
+        required: ['process_id'],
+      },
+    },
+  },
   grep_code: {
     type: 'function',
     function: {
@@ -466,6 +501,7 @@ const READ_ONLY_MODE_TOOLS = new Set([
   'pdf_text',
   'archive_list',
   'file_hash_manifest',
+  'process_list',
   'reflect',
   'request_clarification',
   'Agent',
@@ -486,6 +522,7 @@ const BUILTIN_CONCURRENCY_SAFE_TOOLS = new Set([
   'pdf_text',
   'archive_list',
   'file_hash_manifest',
+  'process_list',
   'connected_app_list',
 ])
 const BUILTIN_WRITE_LOCAL_TOOLS = new Set([
@@ -502,7 +539,7 @@ const BUILTIN_WRITE_LOCAL_TOOLS = new Set([
   'file_download',
   'rewind_files',
 ])
-const BUILTIN_EXEC_TOOLS = new Set(['bash_exec', 'run_command', 'media_transform', 'run_test', 'docker_exec'])
+const BUILTIN_EXEC_TOOLS = new Set(['bash_exec', 'run_command', 'media_transform', 'run_test', 'docker_exec', 'bash_background', 'process_kill'])
 const CODE_MODE_TOOLS = [
   'read_file',
   'write_file',

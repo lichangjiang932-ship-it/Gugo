@@ -14,6 +14,7 @@ import { appendJobArtifact } from './jobStore.js'
 import { appendTurnArtifact } from './turnArtifactStore.js'
 import { publishTurnActivity } from './turnActivityBus.js'
 import { recordFileSnapshot, rewindFromToolCall } from './fileSnapshotStore.js'
+import { killBackgroundProcess, listBackgroundProcesses, startBackgroundProcess } from './backgroundProcessStore.js'
 import { createDocx, createHtmlArtifact, createImageArtifact, createLocalFileArtifact, createLocalFileArtifactAsync, createPptx, createXlsx } from './artifactGen.js'
 import { FS_SHELL_TOOL_SPECS, dispatchFsShellTool, resolveInWorkspace, resolveForFileTool } from '../adapters/fsShellTools.js'
 import { IMAGE_TOOL_SPECS, dispatchImageTool } from '../adapters/imageTools.js'
@@ -1520,6 +1521,38 @@ async function executeServerTool({
       code: 'artifact_tool_not_requested',
       error: `用户没有明确要求生成 ${name} 文件，本轮拒绝执行。`,
       retryable: false,
+    }
+  }
+  if (name === 'bash_background') {
+    try {
+      const process = startBackgroundProcess({
+        userId: job?.userId || null,
+        sessionId: job?.sessionId || null,
+        turnId: job?.id || null,
+        toolCallId: toolCallId || null,
+        command: args?.command,
+        cwd: args?.cwd || undefined,
+      })
+      return { ok: true, processId: process.id, pid: process.pid, logPath: process.logPath, status: process.status }
+    } catch (err) {
+      return normalizeToolError(err, { fallbackCode: 'bash_background_failed' })
+    }
+  }
+  if (name === 'process_list') {
+    try {
+      const processes = listBackgroundProcesses({ userId: job?.userId || null })
+      return { ok: true, processes }
+    } catch (err) {
+      return normalizeToolError(err, { fallbackCode: 'process_list_failed' })
+    }
+  }
+  if (name === 'process_kill') {
+    try {
+      const process = killBackgroundProcess({ userId: job?.userId || null, id: args?.process_id })
+      if (!process) return { ok: false, code: 'PROCESS_NOT_FOUND', error: '后台进程不存在', retryable: false }
+      return { ok: true, process }
+    } catch (err) {
+      return normalizeToolError(err, { fallbackCode: 'process_kill_failed' })
     }
   }
   if (name === 'rewind_files') {

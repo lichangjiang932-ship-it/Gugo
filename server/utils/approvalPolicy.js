@@ -52,6 +52,8 @@ export const APPROVAL_REQUIRED_TOOLS = Object.freeze({
   run_command: 'high',
   run_test: 'high',
   docker_exec: 'high',
+  bash_background: 'high',
+  process_kill: 'high',
   write_file: 'medium',
   edit_file: 'medium',
   apply_patch: 'medium',
