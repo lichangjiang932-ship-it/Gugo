@@ -444,6 +444,7 @@ async function imageTransform(args, { userId, signal }) {
       ok: true,
       inputPath: input.displayPath,
       path: output.displayPath,
+      fullPath: output.fullPath,
       scope: output.source,
       bytes: finalStat.size,
       inputBytes: inputStat.size,

@@ -38,6 +38,29 @@ test('browser screenshot tool results become compact protocol output plus a real
   assert.equal(messages[1].content[1].image_url.url, 'data:image/png;base64,iVBORw0KGgo=')
 })
 
+test('non-screenshot image results use the same multimodal feedback channel', () => {
+  const messages = buildToolResultMessages(
+    { id: 'img-1', name: 'image_transform' },
+    { ok: true, image: { mimeType: 'image/jpeg', data: '/9j/4AAQSkZJRg=', bytes: 12 } },
+  )
+
+  assert.equal(messages.length, 2)
+  assert.equal(messages[0].role, 'tool')
+  assert.equal(JSON.parse(messages[0].content).image.captured, true)
+  assert.equal(messages[1].role, 'user')
+  assert.equal(messages[1].content[0].text.includes('image_transform'), true)
+  assert.equal(messages[1].content[1].image_url.url, 'data:image/jpeg;base64,/9j/4AAQSkZJRg=')
+})
+
+test('results without a usable image payload stay a single tool message', () => {
+  const messages = buildToolResultMessages(
+    { id: 'm-1', name: 'media_transform' },
+    { ok: true, output_path: 'clip.mp4', bytes: 100 },
+  )
+  assert.equal(messages.length, 1)
+  assert.equal(messages[0].role, 'tool')
+})
+
 const SPECS = [{
   type: 'function',
   function: {

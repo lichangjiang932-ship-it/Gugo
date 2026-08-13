@@ -1074,6 +1074,7 @@ async function transformMedia(args, context) {
       operation,
       inputs: inputs.map((input) => input.displayPath),
       path: output.displayPath,
+      fullPath: output.fullPath,
       scope: output.source,
       changedPaths: [output.displayPath],
       output_path: output.displayPath,
