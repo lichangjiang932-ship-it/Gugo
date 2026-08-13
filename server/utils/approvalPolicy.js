@@ -67,6 +67,7 @@ export const APPROVAL_REQUIRED_TOOLS = Object.freeze({
   git_push: 'high',
   git_rollback: 'high',
   git_write: 'high',
+  rewind_files: 'high',
   // 网络出站写操作
   fetch_url: 'low',
   // 浏览器自动化:能在已登录的会话里代替用户点按钮 = 可发消息/可下单

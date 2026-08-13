@@ -306,6 +306,22 @@ const BUILTIN_SPECS = {
       },
     },
   },
+  rewind_files: {
+    type: 'function',
+    function: {
+      name: 'rewind_files',
+      description: 'Revert file changes recorded by this turn. Without tool_call_id it restores every file this turn touched back to its state before the turn. With tool_call_id it restores that tool call and every later mutation. Use when the user says the last edits were wrong, or when you detect you modified the wrong file.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tool_call_id: {
+            type: 'string',
+            description: 'Optional. Revert from this tool call onward. Omit to revert the whole turn.',
+          },
+        },
+      },
+    },
+  },
   grep_code: {
     type: 'function',
     function: {
@@ -484,6 +500,7 @@ const BUILTIN_WRITE_LOCAL_TOOLS = new Set([
   'archive_extract',
   'batch_rename',
   'file_download',
+  'rewind_files',
 ])
 const BUILTIN_EXEC_TOOLS = new Set(['bash_exec', 'run_command', 'media_transform', 'run_test', 'docker_exec'])
 const CODE_MODE_TOOLS = [

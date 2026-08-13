@@ -13,7 +13,7 @@ import path from 'node:path'
 import { appendJobArtifact } from './jobStore.js'
 import { appendTurnArtifact } from './turnArtifactStore.js'
 import { publishTurnActivity } from './turnActivityBus.js'
-import { recordFileSnapshot } from './fileSnapshotStore.js'
+import { recordFileSnapshot, rewindFromToolCall } from './fileSnapshotStore.js'
 import { createDocx, createHtmlArtifact, createImageArtifact, createLocalFileArtifact, createLocalFileArtifactAsync, createPptx, createXlsx } from './artifactGen.js'
 import { FS_SHELL_TOOL_SPECS, dispatchFsShellTool, resolveInWorkspace, resolveForFileTool } from '../adapters/fsShellTools.js'
 import { IMAGE_TOOL_SPECS, dispatchImageTool } from '../adapters/imageTools.js'
@@ -1520,6 +1520,36 @@ async function executeServerTool({
       code: 'artifact_tool_not_requested',
       error: `用户没有明确要求生成 ${name} 文件，本轮拒绝执行。`,
       retryable: false,
+    }
+  }
+  if (name === 'rewind_files') {
+    if (!job?.sessionId || !job?.id) {
+      return { ok: false, code: 'REWIND_TARGET_UNAVAILABLE', error: '回退目标上下文不可用' }
+    }
+    try {
+      const result = rewindFromToolCall({
+        userId: job.userId,
+        sessionId: job.sessionId,
+        turnId: job.id,
+        toolCallId: typeof args?.tool_call_id === 'string' && args.tool_call_id.trim()
+          ? args.tool_call_id.trim()
+          : null,
+      })
+      if (!result.found) {
+        return {
+          ok: false,
+          code: 'REWIND_SNAPSHOT_NOT_FOUND',
+          error: '本轮没有可回退的文件变更快照',
+          retryable: false,
+        }
+      }
+      return {
+        ok: true,
+        rewound: result.count,
+        files: result.rewound.map((entry) => ({ path: entry.snapshot.filePath, action: entry.action })),
+      }
+    } catch (err) {
+      return normalizeToolError(err, { fallbackCode: 'rewind_files_failed' })
     }
   }
   if (name === 'web_search') {

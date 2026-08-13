@@ -159,9 +159,9 @@ export function restoreSnapshot({ userId, id }) {
  * in the same turn, in reverse chronological order. Returns the restored
  * snapshot outcomes and the number of snapshots rewound.
  */
-export function rewindFromToolCall({ userId, sessionId, turnId, toolCallId, limit = 2_000 } = {}) {
-  if (!userId || !sessionId || !turnId || !toolCallId) {
-    throw new Error('rewindFromToolCall requires userId/sessionId/turnId/toolCallId')
+export function rewindFromToolCall({ userId, sessionId, turnId, toolCallId = null, limit = 2_000 } = {}) {
+  if (!userId || !sessionId || !turnId) {
+    throw new Error('rewindFromToolCall requires userId/sessionId/turnId')
   }
   const all = getDb().prepare(`
     SELECT * FROM file_snapshots
@@ -170,7 +170,13 @@ export function rewindFromToolCall({ userId, sessionId, turnId, toolCallId, limi
     LIMIT ?
   `).all(userId, sessionId, turnId, limit).map(mapSnapshot)
 
-  const targetIndex = all.findIndex((snapshot) => snapshot.toolCallId === toolCallId)
+  let targetIndex
+  if (toolCallId) {
+    targetIndex = all.findIndex((snapshot) => snapshot.toolCallId === toolCallId)
+  } else {
+    // No target means rewind every mutation recorded for this turn.
+    targetIndex = all.length > 0 ? 0 : -1
+  }
   if (targetIndex === -1) return { rewound: [], count: 0, found: false }
 
   const toRewind = all.slice(targetIndex).reverse()

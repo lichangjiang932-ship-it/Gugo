@@ -93,6 +93,16 @@ test('rewind deletes a file that did not exist before its recorded write', () =>
   assert.equal(fs.existsSync(newFile), false)
 })
 
+test('rewind without a target restores every snapshot in the turn', () => {
+  fs.writeFileSync(fileA, 'A-v4', 'utf8')
+  fs.writeFileSync(fileB, 'B-v4', 'utf8')
+  const result = rewindFromToolCall({ userId, sessionId, turnId })
+  assert.equal(result.found, true)
+  assert.ok(result.count >= 1)
+  assert.equal(fs.readFileSync(fileA, 'utf8'), 'A-v1')
+  assert.equal(fs.readFileSync(fileB, 'utf8'), 'B-v1')
+})
+
 test('restoreSnapshot restores one file and returns its snapshot', () => {
   fs.writeFileSync(fileA, 'A-v3', 'utf8')
   const snapshots = listSnapshots({ userId, sessionId, turnId })
