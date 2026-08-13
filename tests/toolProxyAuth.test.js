@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
 import path from 'node:path'
 import os from 'node:os'
 
@@ -9,6 +10,7 @@ import {
   verifyEmailCode,
 } from '../server/adapters/authAccount.js'
 import { getDb } from '../server/db.js'
+import { upsertHook } from '../server/services/hooksService.js'
 import { configureWebSearch } from '../server/services/webSearchService.js'
 
 // 每个测试进程使用独立数据库目录，避免并行测试冲突
@@ -16,7 +18,7 @@ process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-tests', String(process.pi
 
 function cleanDb() {
   const db = getDb()
-  for (const table of ['ledger', 'sessions', 'login_codes', 'users']) {
+  for (const table of ['pending_approvals', 'notifications', 'hooks', 'ledger', 'sessions', 'login_codes', 'users']) {
     db.prepare(`DELETE FROM ${table}`).run()
   }
 }
@@ -61,6 +63,38 @@ function createRes() {
       this.body += chunk
     },
   }
+}
+
+function createClosableReq(options = {}) {
+  return Object.assign(new EventEmitter(), createReq(options))
+}
+
+function createClosableRes() {
+  const res = Object.assign(new EventEmitter(), createRes(), {
+    destroyed: false,
+    writableEnded: false,
+  })
+  const end = res.end
+  res.end = function closeResponse(chunk = '') {
+    end.call(this, chunk)
+    this.writableEnded = true
+  }
+  return res
+}
+
+async function waitForPendingApproval(userId, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const row = getDb().prepare(`
+      SELECT * FROM pending_approvals
+       WHERE user_id = ? AND status = 'pending'
+       ORDER BY created_at DESC
+       LIMIT 1
+    `).get(userId)
+    if (row) return row
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  throw new Error('timed out waiting for direct tool approval')
 }
 
 test.beforeEach(() => {
@@ -134,4 +168,57 @@ test('legacy web search endpoint uses the user-scoped dedicated configuration', 
   }), res)
   assert.equal(res.statusCode, 400)
   assert.match(JSON.parse(res.body).error, /联网搜索已关闭/)
+})
+
+test('direct tool ask cancels its persisted approval when the response closes early', async () => {
+  const previousEnabled = process.env.HOOKS_SHELL_ENABLED
+  const previousAllowed = process.env.HOOKS_SHELL_ALLOWED_COMMANDS
+  process.env.HOOKS_SHELL_ENABLED = '1'
+  process.env.HOOKS_SHELL_ALLOWED_COMMANDS = process.execPath
+
+  try {
+    const { token, user } = verifyEmailCode({
+      email: 'direct-tool-disconnect@example.com',
+      code: issueEmailCode({ email: 'direct-tool-disconnect@example.com', code: '666666' }).devCode,
+    })
+    upsertHook({
+      userId: user.id,
+      event: 'pre_tool_use',
+      toolPattern: 'web_search',
+      kind: 'shell',
+      command: [
+        process.execPath,
+        '-e',
+        'process.stdout.write(JSON.stringify({ allow: true, permissionDecision: "ask", reason: "review direct search" }))',
+      ],
+      enabled: true,
+      blocking: true,
+      timeoutMs: 5000,
+    })
+
+    const req = createClosableReq({
+      url: '/api/tools/search',
+      token,
+      ip: '198.51.100.91',
+      body: { query: 'disconnect approval test' },
+    })
+    const res = createClosableRes()
+    const handling = handleToolProxyRequest(req, res)
+    const approval = await waitForPendingApproval(user.id)
+
+    res.destroyed = true
+    res.emit('close')
+    await handling
+
+    const persisted = getDb().prepare('SELECT status, decided_at FROM pending_approvals WHERE id = ?').get(approval.id)
+    assert.equal(persisted.status, 'cancelled')
+    assert.ok(Number.isFinite(persisted.decided_at))
+    assert.equal(res.writableEnded, false)
+    assert.equal(res.body, '')
+  } finally {
+    if (previousEnabled == null) delete process.env.HOOKS_SHELL_ENABLED
+    else process.env.HOOKS_SHELL_ENABLED = previousEnabled
+    if (previousAllowed == null) delete process.env.HOOKS_SHELL_ALLOWED_COMMANDS
+    else process.env.HOOKS_SHELL_ALLOWED_COMMANDS = previousAllowed
+  }
 })

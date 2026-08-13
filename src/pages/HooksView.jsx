@@ -25,6 +25,17 @@ export default function HooksView() {
     try {
       const payload = { ...editing }
       if (payload.kind === 'shell' && typeof payload.command === 'string') payload.command = payload.command.trim().split(/\s+/)
+      const matcherText = String(payload.argumentMatcherText || '').trim()
+      if (matcherText) {
+        try {
+          payload.argumentMatcher = JSON.parse(matcherText)
+        } catch {
+          throw new Error(t('hooks.argumentMatcherInvalid'))
+        }
+      } else {
+        payload.argumentMatcher = null
+      }
+      delete payload.argumentMatcherText
       await requestHooks('/api/hooks', { method: 'POST', body: JSON.stringify(payload) })
       setEditing(null); await reload()
     } catch (caught) { setError(caught.message) } finally { setSaving(false) }
@@ -39,6 +50,6 @@ export default function HooksView() {
   }
   return <div className="flex h-screen overflow-hidden bg-paper"><LeftRail /><div className="flex min-w-0 flex-1 flex-col">
     <div className="flex items-center gap-3 border-b border-ink/10 px-6 py-4"><Webhook className="h-5 w-5 text-ember" /><div className="flex-1"><div className="text-base font-semibold text-ink">Hooks</div><div className="text-[11px] text-ink-fade">{t('hooks.subtitle')}</div></div><button type="button" onClick={() => setEditing(createEmptyHook())} className="flex h-8 items-center gap-1 rounded-md bg-ember px-3 text-xs text-paper hover:bg-ember/90"><Plus className="h-3.5 w-3.5" />{t('hooks.add')}</button></div>
-    <div className="flex min-h-0 flex-1"><HooksList editingId={editing?.id} error={error} hooks={hooks} loading={loading} onEdit={setEditing} t={t} /><div className="flex-1 overflow-auto"><HookEditor editing={editing} onChange={setEditing} onClose={() => setEditing(null)} onDelete={remove} onSave={save} onTest={test} saving={saving} testResult={testResult} t={t} /></div></div>
+    <div className="flex min-h-0 flex-1"><HooksList editingId={editing?.id} error={error} hooks={hooks} loading={loading} onEdit={(hook) => setEditing({ ...hook, argumentMatcherText: hook.argumentMatcher ? JSON.stringify(hook.argumentMatcher, null, 2) : '' })} t={t} /><div className="flex-1 overflow-auto"><HookEditor editing={editing} onChange={setEditing} onClose={() => setEditing(null)} onDelete={remove} onSave={save} onTest={test} saving={saving} testResult={testResult} t={t} /></div></div>
   </div></div>
 }

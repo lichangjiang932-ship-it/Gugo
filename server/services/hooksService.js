@@ -9,7 +9,8 @@
  *
  * 协议:
  *   payload = { event, tool, args, userId, sessionId?, requestId?, timestamp }
- *   响应   = { allow?: boolean, replacementArgs?: object, reason?: string }
+ *   响应   = { allow?: boolean, replacementArgs?: object, reason?: string,
+ *              permissionDecision?: 'allow'|'deny'|'ask' }
  *
  * 阻塞型 hook 返回 allow:false → fire 短路。
  * 非阻塞 (blocking=0) → 启动后立即返回 allowed:true，结果到 audit log。
@@ -25,6 +26,10 @@ import { openCredentialObject, sealCredentialObject } from '../utils/credentialV
 
 const ALLOWED_EVENTS = ['user_prompt_submit', 'pre_tool_use', 'post_tool_use', 'stop', 'pre_compact', 'session_start', 'session_end', 'subagent_stop', 'notification']
 const HOOK_HEADERS_PURPOSE = 'hook-headers'
+const MAX_ARGUMENT_MATCHER_BYTES = 8 * 1024
+const MAX_ARGUMENT_MATCHER_DEPTH = 8
+const MAX_ARGUMENT_MATCHER_KEYS = 128
+const PERMISSION_DECISION_PRIORITY = Object.freeze({ allow: 1, ask: 2, deny: 3 })
 
 function sameExecutable(left, right) {
   const a = path.normalize(left)
@@ -74,11 +79,14 @@ function readHookHeaders(row) {
 
 function row2hook(row) {
   if (!row) return null
+  const storedMatcher = parseStoredArgumentMatcher(row.argument_matcher_json)
   return {
     id: row.id,
     userId: row.user_id,
     event: row.event,
     toolPattern: row.tool_pattern || null,
+    argumentMatcher: storedMatcher.value,
+    ...(storedMatcher.invalid ? { argumentMatcherInvalid: true } : {}),
     kind: row.kind,
     command: row.command || null,
     url: row.url || null,
@@ -106,14 +114,79 @@ function matchPattern(pattern, name) {
   return new RegExp(`^${escaped}$`).test(name)
 }
 
+function isPlainObject(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const proto = Object.getPrototypeOf(value)
+  return proto === Object.prototype || proto === null
+}
+
+function validateMatcherValue(value, state, depth = 0) {
+  if (depth > MAX_ARGUMENT_MATCHER_DEPTH) throw new Error(`argumentMatcher 最深 ${MAX_ARGUMENT_MATCHER_DEPTH} 层`)
+  if (value === null || ['string', 'boolean'].includes(typeof value)) return
+  if (typeof value === 'number' && Number.isFinite(value)) return
+  if (Array.isArray(value)) {
+    for (const item of value) validateMatcherValue(item, state, depth + 1)
+    return
+  }
+  if (!isPlainObject(value)) throw new Error('argumentMatcher 只能包含 JSON 值')
+  for (const [key, item] of Object.entries(value)) {
+    state.keys += 1
+    if (state.keys > MAX_ARGUMENT_MATCHER_KEYS) throw new Error(`argumentMatcher 最多 ${MAX_ARGUMENT_MATCHER_KEYS} 个字段`)
+    if (!key) throw new Error('argumentMatcher 字段名不能为空')
+    validateMatcherValue(item, state, depth + 1)
+  }
+}
+
+function normalizeArgumentMatcher(value) {
+  if (value == null || value === '') return null
+  if (!isPlainObject(value)) throw new Error('argumentMatcher 必须是 JSON 对象')
+  validateMatcherValue(value, { keys: 0 })
+  const serialized = JSON.stringify(value)
+  if (Buffer.byteLength(serialized, 'utf8') > MAX_ARGUMENT_MATCHER_BYTES) {
+    throw new Error(`argumentMatcher 不能超过 ${MAX_ARGUMENT_MATCHER_BYTES} 字节`)
+  }
+  return JSON.parse(serialized)
+}
+
+function parseStoredArgumentMatcher(raw) {
+  if (raw == null) return { value: null, invalid: false }
+  try {
+    const parsed = JSON.parse(raw)
+    if (!isPlainObject(parsed)) throw new Error('stored argumentMatcher is not an object')
+    return { value: normalizeArgumentMatcher(parsed), invalid: false }
+  } catch {
+    return { value: null, invalid: true }
+  }
+}
+
+function matchesArgumentValue(matcher, candidate) {
+  if (Array.isArray(matcher)) {
+    return Array.isArray(candidate)
+      && matcher.length === candidate.length
+      && matcher.every((value, index) => matchesArgumentValue(value, candidate[index]))
+  }
+  if (isPlainObject(matcher)) {
+    if (!isPlainObject(candidate)) return false
+    return Object.entries(matcher).every(([key, value]) => (
+      Object.prototype.hasOwnProperty.call(candidate, key)
+      && matchesArgumentValue(value, candidate[key])
+    ))
+  }
+  return Object.is(matcher, candidate)
+}
+
+function matchesArgumentMatcher(matcher, args) {
+  return matcher == null || matchesArgumentValue(matcher, args)
+}
+
 export function listHooks({ userId, event = null }) {
   if (!userId) return []
   const db = getDb()
   let rows
   if (event) {
-    rows = db.prepare('SELECT * FROM hooks WHERE user_id = ? AND event = ? ORDER BY created_at').all(userId, event)
+    rows = db.prepare('SELECT * FROM hooks WHERE user_id = ? AND event = ? ORDER BY created_at, id').all(userId, event)
   } else {
-    rows = db.prepare('SELECT * FROM hooks WHERE user_id = ? ORDER BY event, created_at').all(userId)
+    rows = db.prepare('SELECT * FROM hooks WHERE user_id = ? ORDER BY event, created_at, id').all(userId)
   }
   return rows.map(row2hook)
 }
@@ -125,7 +198,7 @@ export function getHook(userId, id) {
   return row2hook(row)
 }
 
-export function upsertHook({ id, userId, event, toolPattern, kind, command, url, headers, enabled, blocking, timeoutMs }) {
+export function upsertHook({ id, userId, event, toolPattern, argumentMatcher, kind, command, url, headers, enabled, blocking, timeoutMs }) {
   if (!userId) throw new Error('userId 必填')
   if (!ALLOWED_EVENTS.includes(event)) throw new Error('event 非法')
   if (!['shell', 'http'].includes(kind)) throw new Error('kind 非法')
@@ -138,6 +211,8 @@ export function upsertHook({ id, userId, event, toolPattern, kind, command, url,
   const db = getDb()
   const now = Date.now()
   const hookId = id || randomUUID()
+  const normalizedMatcher = normalizeArgumentMatcher(argumentMatcher)
+  const argumentMatcherJson = normalizedMatcher ? JSON.stringify(normalizedMatcher) : null
   const cmdJson = kind === 'shell' ? JSON.stringify(command) : null
   const headersJson = kind === 'http' && headers
     ? sealCredentialObject(headers, { purpose: HOOK_HEADERS_PURPOSE })
@@ -145,12 +220,12 @@ export function upsertHook({ id, userId, event, toolPattern, kind, command, url,
   const existing = db.prepare('SELECT id FROM hooks WHERE user_id = ? AND id = ?').get(userId, hookId)
   if (existing) {
     db.prepare(
-      `UPDATE hooks SET event=?, tool_pattern=?, kind=?, command=?, url=?, headers_json=?, enabled=?, blocking=?, timeout_ms=?, updated_at=? WHERE id=?`
-    ).run(event, toolPattern || null, kind, cmdJson, url || null, headersJson, enabled ? 1 : 0, blocking ? 1 : 0, Math.max(500, Math.min(60000, Number(timeoutMs) || 5000)), now, hookId)
+      `UPDATE hooks SET event=?, tool_pattern=?, argument_matcher_json=?, kind=?, command=?, url=?, headers_json=?, enabled=?, blocking=?, timeout_ms=?, updated_at=? WHERE id=?`
+    ).run(event, toolPattern || null, argumentMatcherJson, kind, cmdJson, url || null, headersJson, enabled ? 1 : 0, blocking ? 1 : 0, Math.max(500, Math.min(60000, Number(timeoutMs) || 5000)), now, hookId)
   } else {
     db.prepare(
-      `INSERT INTO hooks (id, user_id, event, tool_pattern, kind, command, url, headers_json, enabled, blocking, timeout_ms, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(hookId, userId, event, toolPattern || null, kind, cmdJson, url || null, headersJson, enabled ? 1 : 0, blocking ? 1 : 0, Math.max(500, Math.min(60000, Number(timeoutMs) || 5000)), now, now)
+      `INSERT INTO hooks (id, user_id, event, tool_pattern, argument_matcher_json, kind, command, url, headers_json, enabled, blocking, timeout_ms, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(hookId, userId, event, toolPattern || null, argumentMatcherJson, kind, cmdJson, url || null, headersJson, enabled ? 1 : 0, blocking ? 1 : 0, Math.max(500, Math.min(60000, Number(timeoutMs) || 5000)), now, now)
   }
   return getHook(userId, hookId)
 }
@@ -261,10 +336,10 @@ async function executeOne(hook, payload) {
  * 在 hookBus listener 里调用这个分发器。
  *   ctx = { userId, event, tool, args, sessionId?, requestId?, payload? }
  * 返回:
- *   - 全部 allow → { allow: true, replacementArgs?: {...}, permissionDecision?: 'allow'|'deny' }
+ *   - 全部 allow → { allow: true, replacementArgs?: {...}, permissionDecision?: 'allow'|'deny'|'ask' }
  *   - 任一 blocking hook allow=false → { allow: false, reason }
  *
- * pre_tool_use hook 可以返回 permissionDecision 来直接放行/拒绝，
+ * pre_tool_use hook 可以返回 permissionDecision 来直接放行/拒绝/强制审批，
  * 让 hook 替代审批门控（与 Claude Code 的 PreToolUse 语义一致）。
  */
 export async function dispatchHooks(ctx) {
@@ -277,7 +352,16 @@ export async function dispatchHooks(ctx) {
   let workingArgs = ctx.args
   let permissionDecision = null
   let permissionReason = null
+  let matchedHook = false
   for (const h of hooks) {
+    if (h.argumentMatcherInvalid) {
+      if (h.blocking) {
+        return { allow: false, reason: `hook ${h.id} argumentMatcher 配置无效` }
+      }
+      continue
+    }
+    if (!matchesArgumentMatcher(h.argumentMatcher, workingArgs)) continue
+    matchedHook = true
     const payload = {
       event: ctx.event,
       tool: ctx.tool || null,
@@ -296,10 +380,13 @@ export async function dispatchHooks(ctx) {
       if (outcome?.replacementArgs && typeof outcome.replacementArgs === 'object') {
         workingArgs = { ...workingArgs, ...outcome.replacementArgs }
       }
-      // Only pre_tool_use may short-circuit approval. The last blocking hook
-      // that returns a decision wins.
-      if (outcome?.permissionDecision === 'allow' || outcome?.permissionDecision === 'deny') {
-        permissionDecision = outcome.permissionDecision
+      // Only pre_tool_use callers act on this decision. Multiple matching
+      // hooks are combined conservatively: deny > ask > allow.
+      const nextDecision = outcome?.permissionDecision
+      const nextPriority = PERMISSION_DECISION_PRIORITY[nextDecision] || 0
+      const currentPriority = PERMISSION_DECISION_PRIORITY[permissionDecision] || 0
+      if (nextPriority >= currentPriority && nextPriority > 0) {
+        permissionDecision = nextDecision
         permissionReason = outcome.reason || null
       }
     } else {
@@ -309,13 +396,14 @@ export async function dispatchHooks(ctx) {
       })
     }
   }
+  if (!matchedHook) return { allow: true }
   if (permissionDecision === 'deny') {
     return { allow: false, reason: permissionReason || 'hook 拒绝', permissionDecision: 'deny' }
   }
   return {
     allow: true,
     replacementArgs: workingArgs,
-    ...(permissionDecision === 'allow' ? { permissionDecision: 'allow' } : {}),
+    ...(['allow', 'ask'].includes(permissionDecision) ? { permissionDecision, reason: permissionReason } : {}),
   }
 }
 
@@ -333,4 +421,9 @@ export async function testHook({ userId, id }) {
   return await executeOne(hook, stub)
 }
 
-export const _hooksInternals = { assertShellCommandAllowed, shellCommandAllowlist }
+export const _hooksInternals = {
+  assertShellCommandAllowed,
+  shellCommandAllowlist,
+  matchesArgumentMatcher,
+  normalizeArgumentMatcher,
+}

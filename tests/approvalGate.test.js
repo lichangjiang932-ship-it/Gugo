@@ -151,6 +151,51 @@ test("mode 'off' 对危险调用 fail closed,不创建审批行", async () => {
   assert.equal(countPendingApprovals({ userId }), 0)
 })
 
+test('Hook can force a normally safe tool through the durable approval inbox', async () => {
+  const { userId, jobId } = newUser('hook-force')
+  setApprovalMode({ userId, mode: 'bypass' })
+  const args = { path: 'src/index.js' }
+  const pending = requestApproval({
+    userId,
+    origin: 'job',
+    jobId,
+    toolName: 'read_file',
+    args,
+    mode: 'all',
+    forceApproval: true,
+    forceApprovalReason: 'workspace policy review',
+  })
+
+  const row = await waitForPendingRow(userId)
+  assert.equal(row.toolName, 'read_file')
+  assert.equal(row.risk, 'low')
+  assert.equal(row.reason, 'workspace policy review')
+  decideApproval({ userId, id: row.id, decision: 'approve' })
+  releaseApproval(row.id)
+
+  const result = await pending
+  assert.equal(result.proceed, true)
+  assert.deepEqual(result.args, args)
+})
+
+test('Hook force approval does not elevate a write call out of plan mode', async () => {
+  const { userId, jobId } = newUser('hook-force-plan')
+  setApprovalMode({ userId, mode: 'plan' })
+  const result = await requestApproval({
+    userId,
+    origin: 'job',
+    jobId,
+    toolName: 'write_file',
+    args: { path: 'blocked.txt', content: 'x' },
+    mode: 'all',
+    forceApproval: true,
+  })
+
+  assert.equal(result.proceed, false)
+  assert.match(result.reason, /计划模式/)
+  assert.equal(countPendingApprovals({ userId }), 0)
+})
+
 test('真实用户档位依次执行 plan / normal / acceptEdits / bypass 语义', async () => {
   const planUser = newUser('mode-plan')
   setApprovalMode({ userId: planUser.userId, mode: 'plan' })
@@ -275,7 +320,10 @@ test('ABORT:挂起中 abort 立即解除等待,不 hang', async () => {
 
   const result = await pending
   assert.equal(result.proceed, false)
+  assert.equal(result.cancelled, true)
   assert.equal(typeof result.reason, 'string')
+  assert.equal(countPendingApprovals({ userId }), 0)
+  assert.equal(listPendingApprovals({ userId, status: 'cancelled' })[0].id, result.approvalId)
 })
 
 test('预先 abort 的 signal 立即返回', async () => {
@@ -287,6 +335,9 @@ test('预先 abort 的 signal 立即返回', async () => {
     args: { command: 'npm test' }, mode: 'all', signal: controller.signal,
   })
   assert.equal(result.proceed, false)
+  assert.equal(result.cancelled, true)
+  assert.equal(countPendingApprovals({ userId }), 0)
+  assert.equal(listPendingApprovals({ userId, status: 'cancelled' }).length, 1)
 })
 
 test('onPending 在开始等待之前带着已创建的审批触发', async () => {

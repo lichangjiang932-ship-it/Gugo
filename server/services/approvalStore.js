@@ -224,6 +224,18 @@ export function cancelApprovalsForJob({ jobId } = {}) {
   return result.changes || 0
 }
 
+/** Cancel one still-pending approval owned by a user. */
+export function cancelPendingApproval({ userId, id } = {}) {
+  if (!userId || !id) return 0
+  const now = Date.now()
+  const result = getDb().prepare(`
+    UPDATE pending_approvals
+       SET status = 'cancelled', decided_at = @now, updated_at = @now
+     WHERE id = @id AND user_id = @userId AND status = 'pending'
+  `).run({ userId, id, now })
+  return result.changes || 0
+}
+
 export function cancelApprovalsForTurn({ userId, sessionId, turnId } = {}) {
   if (!userId || !sessionId || !turnId) return 0
   const now = Date.now()

@@ -15,5 +15,5 @@ export async function requestHooks(url, options = {}) {
 }
 
 export function createEmptyHook() {
-  return { id: '', event: 'pre_tool_use', toolPattern: '*', kind: 'http', url: 'https://', headers: {}, command: [], enabled: true, blocking: true, timeoutMs: 5000 }
+  return { id: '', event: 'pre_tool_use', toolPattern: '*', argumentMatcher: null, argumentMatcherText: '', kind: 'http', url: 'https://', headers: {}, command: [], enabled: true, blocking: true, timeoutMs: 5000 }
 }
