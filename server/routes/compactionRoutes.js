@@ -65,6 +65,9 @@ export async function handleCompactionRequest(req, res) {
           hookReason: preCompact.reason || 'pre_compact hook rejected compaction',
         })
       }
+      const compactPrompt = typeof preCompact.replacementArgs?.customPrompt === 'string'
+        ? preCompact.replacementArgs.customPrompt
+        : typeof body.compactPrompt === 'string' ? body.compactPrompt : ''
       let result = buildCompaction({
         messages: Array.isArray(body.messages) ? body.messages : [],
         keepMessages: Number(body.keepMessages) || undefined,
@@ -97,6 +100,7 @@ export async function handleCompactionRequest(req, res) {
           callModel: modelContext.callModel,
           contextWindow: modelContext.contextWindow,
           userId,
+          customPrompt: compactPrompt,
         })
         result = semantic.result
         semanticSummary = semantic.telemetry

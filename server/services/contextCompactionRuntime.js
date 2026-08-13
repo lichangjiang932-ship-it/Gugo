@@ -108,6 +108,7 @@ export async function addSemanticCompactionSummary({
   userId = null,
   consumeBudget,
   audit = writeToolAudit,
+  customPrompt = '',
 } = {}) {
   const telemetry = {
     attempted: false,
@@ -193,7 +194,7 @@ export async function addSemanticCompactionSummary({
     }
 
     const semanticSections = await invoke(
-      buildCompactionSummaryMessages({ evidenceSummaries: digests }),
+      buildCompactionSummaryMessages({ evidenceSummaries: digests, customPrompt }),
       'final',
       0,
     )
