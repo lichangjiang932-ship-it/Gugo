@@ -1178,6 +1178,7 @@ export const SERVER_TOOL_SPECS = [
 export function selectJobToolSpecs({
   prompt = '',
   userPrompt = prompt,
+  previousUserPrompt = '',
   skillId = undefined,
   specs = SERVER_TOOL_SPECS,
   origin = '',
@@ -1195,6 +1196,7 @@ export function selectJobToolSpecs({
     return selectChatToolSpecs({
       prompt,
       userPrompt,
+      previousUserPrompt,
       specs: artifactFiltered,
       intentMode,
       executionRequired: allowed.size > 0,
@@ -1971,6 +1973,7 @@ export async function runToolsLoop({
   const selectedToolSpecs = selectJobToolSpecs({
     prompt: intentText,
     userPrompt: artifactAuthorizationText,
+    previousUserPrompt: String(job?.previousUserPrompt || ''),
     skillId: explicitSkillId || skillId,
     specs: Array.isArray(toolSpecs) ? toolSpecs : SERVER_TOOL_SPECS,
     origin: job?.origin,

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   TOOLS_CONFIG_SCHEMA_VERSION,
+  createInitialState,
   needsToolsConfigSchemaMigration,
   normalizePersistedFields,
 } from '../src/store/appStateBootstrap.js'
@@ -30,6 +31,24 @@ function createStorage(entries = []) {
     values,
   }
 }
+
+test('new installs enable every app permission and tool toggle by default', () => {
+  const state = createInitialState()
+  assert.ok(state.permissions.length > 0)
+  assert.equal(state.permissions.every((permission) => permission.enabled === true), true)
+  assert.equal(Object.values(state.toolsConfig).every((enabled) => enabled === true), true)
+})
+
+test('current persisted permission opt-outs remain explicit', () => {
+  const normalized = normalizePersistedFields({
+    permissions: [
+      { id: 'mic', enabled: false },
+      { id: 'notify', enabled: true },
+    ],
+  })
+  assert.equal(normalized.permissions.find((permission) => permission.id === 'mic')?.enabled, false)
+  assert.equal(normalized.permissions.find((permission) => permission.id === 'notify')?.enabled, true)
+})
 
 test('lightweight local snapshot excludes sessions and other large state', () => {
   const snapshot = {

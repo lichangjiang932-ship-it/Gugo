@@ -69,7 +69,6 @@ runtime dependency families and declared licenses are:
 | Package | License |
 |---|---|
 | `@e965/xlsx` | Apache-2.0 |
-| `@react-three/fiber`, `@react-three/postprocessing` | MIT |
 | `@tailwindcss/typography` | MIT |
 | `better-sqlite3` | MIT |
 | `framer-motion` | MIT |
@@ -87,7 +86,6 @@ runtime dependency families and declared licenses are:
 | `react`, `react-dom` | MIT |
 | `react-markdown`, `rehype-highlight`, `rehype-sanitize`, `remark-gfm` | MIT |
 | `sharp` | Apache-2.0; platform libvips shared libraries are LGPL-3.0-or-later |
-| `three` | MIT |
 | `undici` | MIT |
 | `zod` | MIT |
 

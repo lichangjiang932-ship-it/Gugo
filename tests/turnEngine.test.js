@@ -11,6 +11,7 @@ const { closeDb, createUser, getDb } = await import('../server/db.js')
 const { decideApproval } = await import('../server/services/approvalStore.js')
 const { releaseApproval } = await import('../server/services/approvalGate.js')
 const { TurnEngine } = await import('../server/services/TurnEngine.js')
+const { resolveChatCapabilityMode } = await import('../server/services/chatToolSelection.js')
 const { createTurnExecutionLeaseCoordinator } = await import('../server/services/turnExecutionLeaseRuntime.js')
 const { listMessages, upsertMessage, upsertSession } = await import('../server/services/sessionStore.js')
 const { createCompactionArchive } = await import('../server/services/compactionService.js')
@@ -472,6 +473,100 @@ test('TurnEngine persists and applies agent, skill, memory, and tools context', 
   assert.equal(loopOptions.intentMode, 'execute')
   assert.equal(contextWindowRequest.userId, userId)
   assert.equal(contextWindowRequest.modelName, 'context-model')
+})
+
+test('TurnEngine forwards the preceding user display text for continuation routing', async () => {
+  const sessionId = 'turn-engine-continuation-session'
+  upsertSession({ id: sessionId, userId, title: 'Continuation routing' })
+  const loopJobs = []
+  const engine = createTestEngine({
+    runLoop: async (options) => {
+      loopJobs.push(options.job)
+      return { text: 'ok', artifactIds: [], iterations: 0 }
+    },
+  })
+
+  const firstDisplay = '\u8bf7\u4fee\u590d D:\\demo\\app.js\uff0c\u5199\u5165\u6587\u4ef6\u5e76\u8fd0\u884c\u6d4b\u8bd5\u3002'
+  await engine.startTurn({
+    userId,
+    sessionId,
+    turnId: 'turn-continuation-first',
+    content: '[LOCAL PATH ACCESS GRANTED] Access mode: read and write.\n' + firstDisplay,
+    displayContent: firstDisplay,
+  })
+  await engine.waitForTurn({ userId, sessionId, turnId: 'turn-continuation-first' })
+
+  await engine.startTurn({
+    userId,
+    sessionId,
+    turnId: 'turn-continuation-second',
+    content: '[LOCAL PATH ACCESS GRANTED] Access mode: read and write.\n\u7ee7\u7eed',
+    displayContent: '\u7ee7\u7eed',
+  })
+  await engine.waitForTurn({ userId, sessionId, turnId: 'turn-continuation-second' })
+
+  assert.equal(loopJobs[1].userPrompt, '\u7ee7\u7eed')
+  assert.equal(loopJobs[1].previousUserPrompt, firstDisplay)
+  assert.doesNotMatch(loopJobs[1].previousUserPrompt, /LOCAL PATH ACCESS GRANTED/)
+})
+
+test('TurnEngine continuation context cannot read a later concurrent user message', async () => {
+  const sessionId = 'turn-engine-concurrent-continuation-session'
+  const firstTurnId = 'turn-concurrent-continuation-first'
+  const laterTurnId = 'turn-concurrent-continuation-later'
+  const continuation = '\u7ee7\u7eed'
+  const laterExecutionRequest = '\u8bf7\u4fee\u6539 app.js \u5e76\u8fd0\u884c\u6d4b\u8bd5\u3002'
+  upsertSession({ id: sessionId, userId, title: 'Concurrent continuation routing' })
+
+  let releaseFirstStarted
+  let observeFirstStarted
+  const firstStartedGate = new Promise((resolve) => { releaseFirstStarted = resolve })
+  const firstStartedObserved = new Promise((resolve) => { observeFirstStarted = resolve })
+  const loopJobs = new Map()
+  const engine = createTestEngine({
+    appendEvent: async (args) => {
+      if (args.event.type === 'turn.started' && args.event.turnId === firstTurnId) {
+        observeFirstStarted()
+        await firstStartedGate
+      }
+      return appendTurnEvent(args)
+    },
+    runLoop: async ({ job }) => {
+      loopJobs.set(job.id, job)
+      return { text: 'ok', artifactIds: [], iterations: 0 }
+    },
+  })
+
+  const firstStart = engine.startTurn({
+    userId,
+    sessionId,
+    turnId: firstTurnId,
+    content: continuation,
+    displayContent: continuation,
+  })
+  await firstStartedObserved
+
+  await engine.startTurn({
+    userId,
+    sessionId,
+    turnId: laterTurnId,
+    content: laterExecutionRequest,
+    displayContent: laterExecutionRequest,
+  })
+  await engine.waitForTurn({ userId, sessionId, turnId: laterTurnId })
+
+  releaseFirstStarted()
+  await firstStart
+  await engine.waitForTurn({ userId, sessionId, turnId: firstTurnId })
+
+  const firstJob = loopJobs.get(firstTurnId)
+  assert.equal(firstJob.previousUserPrompt, '')
+  assert.notEqual(firstJob.previousUserPrompt, laterExecutionRequest)
+  assert.equal(resolveChatCapabilityMode({
+    userPrompt: firstJob.userPrompt,
+    previousUserPrompt: firstJob.previousUserPrompt,
+  }), 'answer')
+  assert.equal(loopJobs.get(laterTurnId).previousUserPrompt, continuation)
 })
 
 test('TurnEngine resumes a paused directory request on the same turn after a verified grant', async () => {

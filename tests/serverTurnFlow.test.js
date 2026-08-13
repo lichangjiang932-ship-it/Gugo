@@ -11,6 +11,7 @@ import { createInitialState } from '../src/store/appStateBootstrap.js'
 test('the default turn exposes a complete coding-agent execution loop', () => {
   const defaults = createInitialState().toolsConfig
   const required = [
+    'fetch_url',
     'list_directory',
     'read_file',
     'write_file',
@@ -34,7 +35,7 @@ test('the default turn exposes a complete coding-agent execution loop', () => {
     assert.ok(resolved.enabled.includes(name), `${name} is not enabled for the server turn`)
     assert.equal(resolved.disabled.includes(name), false, `${name} is unexpectedly disabled`)
   }
-  assert.deepEqual(resolved.disabled, ['fetch_url'])
+  assert.deepEqual(resolved.disabled, [])
   assert.ok(buildServerToolsConfig({ bash_exec: false }).disabled.includes('bash_exec'))
   assert.ok(buildServerToolsConfig({ run_project_check: false }).disabled.includes('run_project_check'))
 })

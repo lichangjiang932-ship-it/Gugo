@@ -15,7 +15,7 @@
 
 export const ROUTE_READINESS = Object.freeze({
   // ---- stable: 完整功能 + 5 语言 i18n + 持久化 ----
-  '/': 'stable',              // CoverPage
+  '/': 'stable',              // Redirects directly to ChatSplit
   '/chat': 'stable',          // ChatSplit
   '/skills': 'stable',        // SkillsMarket
   '/permissions': 'stable',   // PermissionsDashboard

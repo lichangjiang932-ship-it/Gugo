@@ -13,6 +13,9 @@ const LOCAL_LAYOUT_WRITE_BOUNDARY = /\b(?:do not|don't|never)\s+write\s+(?:below
 const SCOPED_READ_ONLY_VERIFIER = /(?:\b(?:separate|independent)\s+)?\bread[- ]only\b(?=\s+(?:(?:verification|validation|checker|validator|script|tool)\b|[\w.-]*(?:verify|validat|check)[\w.-]*\.(?:py|js|ts|mjs|cjs|sh|ps1)\b))|(?:\u53e6\u5199|\u53e6\u5efa|\u5355\u72ec|\u72ec\u7acb|\u53e6\u5916)?\s*\u53ea\u8bfb(?=\s*(?:(?:\u9a8c\u8bc1|\u6821\u9a8c|\u68c0\u67e5)(?:\u811a\u672c|\u5668|\u7a0b\u5e8f|\u5de5\u5177)?|[\w.-]*(?:verify|validat|check)[\w.-]*\.(?:py|js|ts|mjs|cjs|sh|ps1)\b))/gi
 const GLOBAL_READ_ONLY = /\b(?:do not|don't|never)\b[^\r\n.!?;]{0,48}\b(?:change|modify|edit|write|delete|remove|rename|move|patch|mutate)\b[^\r\n.!?;]{0,32}\b(?:any|all)\s+(?:files?|documents?|artifacts?)\b|\b(?:read[- ]only|no[- ]write)\b[^\r\n.!?;]{0,32}\b(?:entire|whole|all)\s+(?:project|repository|repo|workspace)\b|\b(?:entire|whole)\s+(?:project|repository|repo|workspace)\b[^\r\n.!?;]{0,32}\b(?:read[- ]only|no[- ]write)\b|(?:\u4e0d\u8981|\u4e0d\u5f97|\u7981\u6b62)[^\r\n\u3002\uff1b]{0,32}(?:\u4fee\u6539|\u7f16\u8f91|\u5199\u5165|\u5220\u9664|\u79fb\u52a8|\u91cd\u547d\u540d)[^\r\n\u3002\uff1b]{0,24}(?:\u4efb\u4f55|\u6240\u6709)(?:\u6587\u4ef6|\u6587\u6863|\u4ea7\u7269)|(?:\u6574\u4e2a|\u5168\u90e8)(?:\u9879\u76ee|\u4ed3\u5e93|\u5de5\u4f5c\u533a)[^\r\n\u3002\uff1b]{0,24}(?:\u53ea\u8bfb|\u4ec5\u67e5\u770b|\u4ec5\u5206\u6790|\u4e0d\u8981\u4fee\u6539)/i
 const SCOPED_SOURCE_READ_ONLY_BOUNDARY = /\b(?:do not|don't|never)\b[^\r\n.!?;]{0,40}\b(?:change|modify|edit|write|delete|remove|rename|move|patch|mutate)\b[^\r\n.!?;]{0,24}\b(?:the\s+|this\s+)?(?:source|input|original)\s+(?:pdf|file|document|image)\b|(?:\u4e0d\u8981|\u4e0d\u5f97|\u7981\u6b62)[^\r\n\u3002\uff1b]{0,32}(?:\u4fee\u6539|\u7f16\u8f91|\u5199\u5165|\u8986\u76d6|\u5220\u9664|\u79fb\u52a8|\u91cd\u547d\u540d)[^\r\n\u3002\uff1b]{0,24}(?:\u6e90|\u8f93\u5165|\u539f\u59cb)(?:\s*PDF|\u6587\u4ef6|\u6587\u6863|\u56fe\u7247)/i
+const SCOPED_CONTENT_PRESERVATION_BOUNDARY = /\b(?:do not|don't|never)\b[^\r\n.!?;]{0,40}\b(?:change|modify|edit|rewrite|alter)\b[^\r\n.!?;]{0,24}\b(?:the\s+|this\s+)?(?:article(?:'s)?(?:\s+(?:content|text|wording))?|body(?:\s+(?:content|text))?|copy|wording|text\s+content)\b|(?:\u4e0d\u8981|\u4e0d\u5f97|\u7981\u6b62)[^\r\n\u3002\uff1b]{0,24}(?:\u4fee\u6539|\u7f16\u8f91|\u6539\u52a8|\u53d8\u66f4|\u6539\u5199)[^\r\n\u3002\uff1b]{0,20}(?:(?:\u8fd9\u7bc7|\u8be5\u7bc7|\u539f\u59cb|\u6e90)?\u6587\u7ae0(?:\u7684)?(?:\u5185\u5bb9|\u6587\u5b57|\u63aa\u8f9e)?|\u6b63\u6587(?:\u7684)?(?:\u5185\u5bb9|\u6587\u5b57|\u63aa\u8f9e)?|\u539f\u6587(?:\u7684)?(?:\u5185\u5bb9|\u6587\u5b57|\u63aa\u8f9e)?|\u6587\u672c\u5185\u5bb9|\u6587\u5b57\u5185\u5bb9|\u6587\u6848|\u63aa\u8f9e)/i
+const SCOPED_CONTENT_FIDELITY_BOUNDARY = /\b(?:preserve|keep|retain)\b[^\r\n.!?;]{0,80}\b(?:article|body|text|wording|content)\b[^\r\n.!?;]{0,80}\b(?:do not|don't|never)\b[^\r\n.!?;]{0,32}\b(?:change|modify|edit|polish|delete|remove|add|rewrite|alter)\b[^\r\n.!?;]{0,32}\b(?:content|text|wording|paragraphs?|spelling|grammar|punctuation)\b|(?:\u4fdd\u7559|\u4fdd\u6301)[^\r\n\u3002\uff1b]{0,80}(?:\u6587\u7ae0|\u6b63\u6587|\u539f\u6587)[^\r\n\u3002\uff1b]{0,80}(?:\u4e0d\u8981|\u4e0d\u5f97|\u7981\u6b62)[^\r\n\u3002\uff1b]{0,32}(?:\u4fee\u6539|\u7f16\u8f91|\u6da6\u8272|\u5220\u51cf|\u589e\u52a0|\u6539\u5199)[^\r\n\u3002\uff1b]{0,24}(?:\u5185\u5bb9|\u6587\u5b57|\u6bb5\u843d|\u62fc\u5199|\u8bed\u6cd5|\u6807\u70b9)/i
+const EXECUTION_CONTINUATION = /^(?:continue(?:\s+(?:with\s+)?(?:it|this|the\s+(?:work|changes?|implementation)))?|go\s+ahead|proceed|approved?|i\s+(?:approve|authorize\s+you)(?:\s+to\s+(?:continue|proceed|execute|make\s+the\s+changes?))?|\u7ee7\u7eed(?:\u6267\u884c|\u5904\u7406|\u4fee\u6539|\u5b8c\u6210|\u505a|\u4e0b\u53bb)?(?:\u5427)?|\u6211(?:\u540c\u610f|\u6279\u51c6|\u6388\u6743\u7ed9\u4f60)(?:[\s,\uff0c]*(?:\u7ee7\u7eed|\u6267\u884c|\u4fee\u6539|\u5904\u7406|\u64cd\u4f5c))?|\u6388\u6743\u7ed9\u4f60(?:[\s,\uff0c]*(?:\u7ee7\u7eed|\u6267\u884c|\u4fee\u6539|\u5904\u7406|\u64cd\u4f5c))?)[.!?\u3002\uff01\uff1f\s]*$/i
 
 function toolName(spec) {
   return String(spec?.function?.name || '').trim()
@@ -35,10 +38,22 @@ function isReadOnlyRequest(userPrompt) {
   // Only a boundary explicitly scoped to a single source/input/original may
   // coexist with a separate output mutation. Other explicit read-only wording
   // remains a whole-request boundary, even when a proposed fix is discussed.
-  if (SCOPED_SOURCE_READ_ONLY_BOUNDARY.test(promptWithoutLayoutBoundaries)) {
+  if (SCOPED_SOURCE_READ_ONLY_BOUNDARY.test(promptWithoutLayoutBoundaries)
+    || SCOPED_CONTENT_PRESERVATION_BOUNDARY.test(promptWithoutLayoutBoundaries)
+    || SCOPED_CONTENT_FIDELITY_BOUNDARY.test(promptWithoutLayoutBoundaries)) {
     return !hasMutationExecutionIntent(promptWithoutLayoutBoundaries)
   }
   return true
+}
+
+function shouldInheritExecutionIntent(userPrompt, previousUserPrompt) {
+  const current = String(userPrompt || '').trim()
+  const previous = String(previousUserPrompt || '').trim()
+  if (!current || !previous || current.length > 120 || !EXECUTION_CONTINUATION.test(current)) return false
+  // A prior global/read-only instruction remains authoritative. A short reply
+  // can confirm an existing user-authored work order, but cannot create one.
+  if (isReadOnlyRequest(previous)) return false
+  return shouldRequireExecution({ intentMode: 'auto', text: previous })
 }
 
 function stableUniqueSpecs(specs) {
@@ -68,6 +83,7 @@ function readOnlyMetadata(name, { userId, metadataResolver }) {
 export function resolveChatCapabilityMode({
   prompt = '',
   userPrompt = prompt,
+  previousUserPrompt = '',
   intentMode = 'auto',
   executionRequired = false,
 } = {}) {
@@ -76,6 +92,7 @@ export function resolveChatCapabilityMode({
   if (normalized === 'answer') return 'answer'
   if (normalized === 'execute') return 'execute'
   if (executionRequired) return 'execute'
+  if (shouldInheritExecutionIntent(userPrompt, previousUserPrompt)) return 'execute'
   return shouldRequireExecution({ intentMode: normalized, text: userPrompt }) ? 'execute' : 'answer'
 }
 
@@ -88,6 +105,7 @@ export function resolveChatCapabilityMode({
 export function selectChatToolSpecs({
   prompt = '',
   userPrompt = prompt,
+  previousUserPrompt = '',
   specs = [],
   intentMode = 'auto',
   executionRequired = false,
@@ -97,6 +115,7 @@ export function selectChatToolSpecs({
   const capabilityMode = resolveChatCapabilityMode({
     prompt,
     userPrompt,
+    previousUserPrompt,
     intentMode,
     executionRequired,
   })

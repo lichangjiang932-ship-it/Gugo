@@ -6,6 +6,24 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.23] - 2026-08-13
+
+### Changed
+
+- Enabled application permissions and coding tools by default for new installs
+  while preserving each user's explicit disabled settings and approval gates.
+- Opened the chat workspace directly at startup and removed the retired 3D
+  cover page together with its Three.js runtime dependencies.
+
+### Fixed
+
+- Kept write and command-execution tools available when a request asks to
+  preserve source content while creating or modifying separate output files.
+- Made short continuation messages inherit only the immediately preceding
+  explicit execution request, including under concurrent turn processing.
+- Preserved `write_file`, `bash_exec`, and `run_command` for long document
+  workflows that require real file generation and verification.
+
 ## [0.10.22] - 2026-08-13
 
 ### Added
@@ -333,7 +351,8 @@ follow [Semantic Versioning](https://semver.org/).
 - Provider, MCP, memory, job, subagent, connector, and workspace tool support.
 - Local-first single-user mode with optional multi-user authentication.
 
-[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.22...HEAD
+[Unreleased]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.23...HEAD
+[0.10.23]: https://github.com/lichangjiang932-ship-it/Gugo/compare/v0.10.22...v0.10.23
 [0.10.22]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.22
 [0.10.21]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.21
 [0.10.20]: https://github.com/lichangjiang932-ship-it/Gugo/releases/tag/v0.10.20
