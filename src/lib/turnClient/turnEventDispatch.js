@@ -43,6 +43,20 @@ export function createTurnFailureError(payload, options) {
 }
 
 export function dispatchTurnActivity(activity, { dispatch, taskId, messageTarget } = {}) {
+  if (activity?.kind === 'tool_output_delta') {
+    if (!activity.toolCallId || typeof activity.chunk !== 'string' || !activity.chunk) return false
+    dispatch?.({
+      type: 'APPEND_TOOL_CALL_OUTPUT',
+      payload: {
+        id: activity.toolCallId,
+        name: activity.toolName,
+        chunk: activity.chunk,
+        stream: activity.stream || 'stdout',
+      },
+      ...(messageTarget || {}),
+    })
+    return true
+  }
   if (activity?.kind !== 'tool_call_ready') return false
   dispatch?.({
     type: 'UPDATE_TASK',

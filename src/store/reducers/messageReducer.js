@@ -252,6 +252,39 @@ export function reduceMessageState(state, action) {
       }
     }
 
+    case 'APPEND_TOOL_CALL_OUTPUT': {
+      // payload: { id, name, chunk, stream }
+      const targetSessionId = action.sessionId || state.activeSessionId
+      if (!targetSessionId) return state
+      const entry = action.payload
+      if (!entry || typeof entry.chunk !== 'string' || !entry.chunk) return state
+      return {
+        ...state,
+        sessions: state.sessions.map((s) => {
+          if (s.id !== targetSessionId || s.messages.length === 0) return s
+          const msgs = [...s.messages]
+          const messageIndex = action.messageId ? msgs.findIndex((message) => message.id === action.messageId) : msgs.length - 1
+          if (messageIndex < 0) return s
+          const last = msgs[messageIndex]
+          if (last.role !== 'assistant') return s
+          const existingMeta = last.meta || {}
+          const existingCalls = Array.isArray(existingMeta.toolCalls) ? existingMeta.toolCalls : []
+          const idx = existingCalls.findIndex((c) => c.id === entry.id)
+          if (idx === -1) return s
+          const nextCalls = existingCalls.slice()
+          const existing = nextCalls[idx]
+          const appended = `${existing.liveOutput || ''}${entry.chunk}`
+          nextCalls[idx] = {
+            ...existing,
+            liveOutput: appended.length > 16_000 ? appended.slice(-16_000) : appended,
+            liveStream: entry.stream || existing.liveStream || 'stdout',
+          }
+          msgs[messageIndex] = { ...last, meta: { ...existingMeta, toolCalls: nextCalls } }
+          return { ...s, messages: msgs, updatedAt: Date.now() }
+        }),
+      }
+    }
+
     default:
       return null
   }

@@ -801,6 +801,7 @@ export async function bashExecTool({
   env_keys,
   userId = null,
   signal = null,
+  onOutput = null,
 }, {
   permissionToolName = 'bash_exec',
 } = {}) {
@@ -861,6 +862,7 @@ export async function bashExecTool({
     signal,
     overflowMode: 'tail',
     fullOutputPath: outputLogPath,
+    onOutput,
   })
   const r = redactProcessOutput(rawResult, sensitiveEnvValues)
   const durationMs = Date.now() - startedAt
@@ -1038,14 +1040,14 @@ export async function handleFsShellRequest(req, res) {
 
 // 给 jobTools/jobRuntime 共用:统一 dispatcher,直接函数调用,不经 HTTP.
 // userId 可选(内部 job/subagent 传进来),有则落 audit
-export async function dispatchFsShellTool(name, args, { userId = null, signal = null } = {}) {
+export async function dispatchFsShellTool(name, args, { userId = null, signal = null, onOutput = null } = {}) {
   const argsWithUser = userId ? { ...args, userId } : args
   switch (name) {
     case 'list_directory': return listDirectoryTool(argsWithUser)
     case 'read_file': return readFileTool(argsWithUser)
     case 'write_file': return writeFileTool(argsWithUser)
     case 'edit_file': return editFileTool(argsWithUser)
-    case 'bash_exec': return bashExecTool({ ...argsWithUser, signal })
+    case 'bash_exec': return bashExecTool({ ...argsWithUser, signal, onOutput })
     default: throw new Error(`unknown fsShell tool: ${name}`)
   }
 }

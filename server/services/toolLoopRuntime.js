@@ -12,6 +12,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { appendJobArtifact } from './jobStore.js'
 import { appendTurnArtifact } from './turnArtifactStore.js'
+import { publishTurnActivity } from './turnActivityBus.js'
 import { createDocx, createHtmlArtifact, createImageArtifact, createLocalFileArtifact, createLocalFileArtifactAsync, createPptx, createXlsx } from './artifactGen.js'
 import { FS_SHELL_TOOL_SPECS, dispatchFsShellTool, resolveInWorkspace } from '../adapters/fsShellTools.js'
 import { IMAGE_TOOL_SPECS, dispatchImageTool } from '../adapters/imageTools.js'
@@ -1377,6 +1378,73 @@ export function buildSubagentRequest(args = {}, inheritedModelName = '') {
   }
 }
 
+// Image outputs the model must be able to inspect to verify its own work.
+// Feedback is opt-in per tool and capped so large media never enters the
+// prompt as base64. TIFF/AVIF are omitted because common vision endpoints
+// reject them.
+const VISION_FEEDBACK_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+const VISION_FEEDBACK_FORMAT_MIMES = Object.freeze({
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+  gif: 'image/gif',
+})
+const VISION_FEEDBACK_EXT_MIMES = Object.freeze({
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+})
+
+function resolveVisionFeedbackMaxBytes() {
+  const raw = Number(process.env.VISION_FEEDBACK_MAX_BYTES)
+  return Number.isInteger(raw) && raw > 0 ? raw : 2 * 1024 * 1024
+}
+
+function visionFeedbackMime(name, result) {
+  const explicit = String(result?.imageMime || result?.image?.mimeType || '').toLowerCase()
+  if (VISION_FEEDBACK_MIMES.has(explicit)) return explicit
+  if (name === 'image_transform') {
+    return VISION_FEEDBACK_FORMAT_MIMES[String(result?.format || '').toLowerCase()] || null
+  }
+  const extension = path.extname(String(result?.fullPath || result?.output_path || result?.path || '')).toLowerCase()
+  return VISION_FEEDBACK_EXT_MIMES[extension] || null
+}
+
+function stripLocalInternalFields(result) {
+  if (!result || typeof result !== 'object') return result
+  if (!('fullPath' in result) && !('imageMime' in result)) return result
+  const next = { ...result }
+  delete next.fullPath
+  delete next.imageMime
+  return next
+}
+
+/**
+ * Attach a bounded base64 image so the model can visually verify tool output.
+ * The absolute fullPath is never exposed to the model or persisted.
+ */
+async function attachVisionFeedback({ name, result, buffer = null }) {
+  if (result?.ok !== true) return result
+  const mimeType = visionFeedbackMime(name, result)
+  if (!mimeType || !VISION_FEEDBACK_MIMES.has(mimeType)) return stripLocalInternalFields(result)
+  const maxBytes = resolveVisionFeedbackMaxBytes()
+  let bytes = buffer
+  if (!bytes && result?.fullPath) {
+    try {
+      const stat = await fs.promises.stat(result.fullPath)
+      if (!stat.isFile() || stat.size <= 0 || stat.size > maxBytes) return stripLocalInternalFields(result)
+      bytes = await fs.promises.readFile(result.fullPath)
+    } catch {
+      return stripLocalInternalFields(result)
+    }
+  }
+  const stripped = stripLocalInternalFields(result)
+  if (!bytes || bytes.length <= 0 || bytes.length > maxBytes) return stripped
+  return { ...stripped, image: { data: bytes.toString('base64'), mimeType, bytes: bytes.length } }
+}
+
 async function executeServerTool({
   name,
   args,
@@ -1389,6 +1457,24 @@ async function executeServerTool({
   toolCallId,
   idempotencyKey,
 }) {
+  const publishLiveOutput = (delta) => {
+    if (job?.origin !== 'chat' || !job?.sessionId || !job?.id) return
+    try {
+      publishTurnActivity({
+        userId: job.userId,
+        activity: {
+          sessionId: job.sessionId,
+          turnId: job.id,
+          kind: 'tool_output_delta',
+          toolName: name,
+          toolCallId: toolCallId || null,
+          stream: delta?.stream || null,
+          chunk: typeof delta?.chunk === 'string' ? delta.chunk.slice(0, 64 * 1024) : null,
+        },
+      })
+    } catch { /* Live output is best-effort and must never fail the tool. */ }
+  }
+
   if (isFileArtifactTool(name) && !allowedArtifactTools?.has(name)) {
     return {
       ok: false,
@@ -1416,13 +1502,18 @@ async function executeServerTool({
       mimeType: generated.mimeType,
     })
     persistGeneratedArtifact({ artifact, args, job, step })
-    return {
-      ok: true,
-      artifactId: artifact.id,
-      filename: artifact.filename,
-      url: artifact.url,
-      revisedPrompt: generated.revisedPrompt,
-    }
+    return await attachVisionFeedback({
+      name,
+      buffer: generated.buffer,
+      result: {
+        ok: true,
+        artifactId: artifact.id,
+        filename: artifact.filename,
+        url: artifact.url,
+        revisedPrompt: generated.revisedPrompt,
+        imageMime: generated.mimeType,
+      },
+    })
   }
   if (name === 'fetch_url') {
     try {
@@ -1466,6 +1557,7 @@ async function executeServerTool({
         signal,
         toolCallId,
         idempotencyKey,
+        onOutput: publishLiveOutput,
       })
     } catch (err) {
       return {
@@ -1476,14 +1568,16 @@ async function executeServerTool({
   }
   if (IMAGE_TOOL_NAMES.has(name)) {
     try {
-      return await dispatchImageTool(name, args || {}, { userId: job?.userId || null, signal })
+      const result = await dispatchImageTool(name, args || {}, { userId: job?.userId || null, signal })
+      return await attachVisionFeedback({ name, result })
     } catch (err) {
       return normalizeToolError(err, { fallbackCode: 'image_tool_failed' })
     }
   }
   if (MEDIA_TOOL_NAMES.has(name)) {
     try {
-      return await dispatchMediaTool(name, args || {}, { userId: job?.userId || null, signal })
+      const result = await dispatchMediaTool(name, args || {}, { userId: job?.userId || null, signal, onOutput: publishLiveOutput })
+      return await attachVisionFeedback({ name, result })
     } catch (err) {
       return normalizeToolError(err, { fallbackCode: 'media_tool_failed' })
     }
@@ -3835,3 +3929,9 @@ export async function runToolsLoop({
 }
 
 export const runToolLoop = runToolsLoop
+
+export const _testing = {
+  attachVisionFeedback,
+  visionFeedbackMime,
+  resolveVisionFeedbackMaxBytes,
+}

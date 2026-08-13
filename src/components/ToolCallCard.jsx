@@ -164,6 +164,10 @@ function ToolCallCard({ call, stepNumber }) {
           )}
         </div>
 
+        {call.status === 'running' && call.liveOutput && (
+          <pre className="chat-tool-live-output" data-testid="tool-live-output">{call.liveOutput}</pre>
+        )}
+
         {call.status === 'error' && (errorFacts.length > 0 || call.errorHint) && (
           <div className="chat-tool-error-context">
             {errorFacts.length > 0 && (

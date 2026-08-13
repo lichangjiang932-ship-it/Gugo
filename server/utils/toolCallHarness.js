@@ -685,13 +685,16 @@ export function buildToolResultMessage(call, result, options) {
 }
 
 /**
- * Browser screenshots need to be visible to the next model response, not
+ * Tool-produced images need to be visible to the next model response, not
  * embedded as an enormous base64 string inside JSON. Keep a compact tool
- * result for protocol pairing, then add the PNG as a normal multimodal user
+ * result for protocol pairing, then add the image as a normal multimodal user
  * message so native vision and vision-assist use the existing image path.
+ *
+ * Applies to browser_screenshot and any executor that returns an `image`
+ * payload (image_transform, extract_frame, generate_image).
  */
 export function buildToolResultMessages(call, result, options) {
-  const image = call?.name === 'browser_screenshot' ? result?.image : null
+  const image = result?.image ?? null
   const data = typeof image?.data === 'string' ? image.data.trim() : ''
   const mimeType = String(image?.mimeType || '').trim().toLowerCase()
   if (!data || !/^image\/(?:png|jpe?g|webp|gif)$/u.test(mimeType)) {
@@ -705,12 +708,15 @@ export function buildToolResultMessages(call, result, options) {
       ...(Number.isFinite(Number(image?.bytes)) ? { bytes: Number(image.bytes) } : {}),
     },
   }
+  const inspectionText = call?.name === 'browser_screenshot'
+    ? 'Browser screenshot captured by browser_screenshot. Inspect this image before continuing.'
+    : `${call?.name || 'tool'} produced the image below. Inspect it to verify the result before continuing.`
   return [
     buildToolResultMessage(call, compactResult, options),
     {
       role: 'user',
       content: [
-        { type: 'text', text: 'Browser screenshot captured by browser_screenshot. Inspect this image before continuing.' },
+        { type: 'text', text: inspectionText },
         { type: 'image_url', image_url: { url: `data:${mimeType};base64,${data}` } },
       ],
     },

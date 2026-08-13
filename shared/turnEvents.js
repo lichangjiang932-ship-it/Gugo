@@ -201,7 +201,7 @@ export function createTurnEvent({ id, sessionId, turnId, sequence, type, payload
   return parseTurnEvent({ id, sessionId, turnId, sequence, type, payload, createdAt })
 }
 
-export const TURN_ACTIVITY_KINDS = Object.freeze(['tool_call_ready'])
+export const TURN_ACTIVITY_KINDS = Object.freeze(['tool_call_ready', 'tool_output_delta'])
 
 export const TurnActivitySchema = z.object({
   sessionId: z.string().min(1).max(160),
@@ -209,6 +209,9 @@ export const TurnActivitySchema = z.object({
   kind: z.enum(TURN_ACTIVITY_KINDS),
   toolName: z.string().min(1).max(160),
   modelName: z.string().min(1).max(320).nullable().optional(),
+  toolCallId: z.string().min(1).max(160).nullable().optional(),
+  stream: z.enum(['stdout', 'stderr']).nullable().optional(),
+  chunk: z.string().max(64 * 1024).nullable().optional(),
   createdAt: z.number().int().nonnegative(),
 }).strict()
 
@@ -222,7 +225,15 @@ export function createTurnActivity({
   kind,
   toolName,
   modelName = null,
+  toolCallId = null,
+  stream = null,
+  chunk = null,
   createdAt = Date.now(),
 }) {
-  return parseTurnActivity({ sessionId, turnId, kind, toolName, modelName, createdAt })
+  const activity = { sessionId, turnId, kind, toolName, createdAt }
+  if (modelName != null) activity.modelName = modelName
+  if (toolCallId != null) activity.toolCallId = toolCallId
+  if (stream != null) activity.stream = stream
+  if (chunk != null) activity.chunk = chunk
+  return parseTurnActivity(activity)
 }
