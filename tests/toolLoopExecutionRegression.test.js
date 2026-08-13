@@ -1210,6 +1210,70 @@ test('a compound generation and project-check command remains a pending mutation
   )
 })
 
+for (const scenario of [
+  {
+    name: 'patch_file',
+    args: { path: 'generated/patched.txt', start_line: 1, end_line: 1, replacement: 'updated' },
+    path: 'generated/patched.txt',
+  },
+  {
+    name: 'file_download',
+    args: { url: 'https://example.com/generated.bin', path: 'generated/downloaded.bin' },
+    path: 'generated/downloaded.bin',
+  },
+]) {
+  test(`${scenario.name} remains pending until its exact output is verified`, async () => {
+    const spec = SERVER_TOOL_SPECS.find((item) => item?.function?.name === scenario.name)
+    let modelCalls = 0
+    let checkpoint = null
+
+    const result = await runToolsLoop({
+      job: {
+        id: `post-write-verification-${scenario.name}`,
+        userId: null,
+        origin: 'chat',
+        prompt: `Create ${scenario.path} and verify it.`,
+      },
+      step: { id: `post-write-verification-${scenario.name}-step`, kind: 'chat' },
+      messages: [{ role: 'user', content: `Create ${scenario.path} and verify it.` }],
+      intentMode: 'execute',
+      toolSpecs: [spec],
+      maxIters: 4,
+      enableToolHooks: false,
+      saveCheckpoint: async (state) => {
+        checkpoint = structuredClone(state)
+        return true
+      },
+      runModel: async () => {
+        modelCalls += 1
+        if (modelCalls === 1) {
+          return {
+            content: '',
+            toolCalls: [{
+              id: `pending-${scenario.name}`,
+              type: 'function',
+              function: { name: scenario.name, arguments: JSON.stringify(scenario.args) },
+            }],
+          }
+        }
+        return { content: 'Created successfully.', toolCalls: [] }
+      },
+      executeTool: async () => ({
+        ok: true,
+        path: scenario.path,
+        changedPaths: [scenario.path],
+      }),
+    })
+
+    assert.equal(result.incomplete, true)
+    assert.equal(result.reason, 'post_mutation_verification_missing')
+    assert.equal(checkpoint?.completionGuards?.mutationExecutionObserved, true)
+    assert.ok(
+      (checkpoint?.completionGuards?.pendingMutationTargets || []).includes(scenario.path),
+    )
+  })
+}
+
 test('verified directory resume rejects a repeated authorization wait claim and continues into execution', async () => {
   const bashExec = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'bash_exec')
   const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')

@@ -172,6 +172,75 @@ test('runToolsLoop runs read segments concurrently around a durable write barrie
   assert.deepEqual(resultOrder, expected)
 })
 
+test('tool-boundary steering lets an active read segment finish and supersedes the following write barrier', async () => {
+  let claims = 0
+  let modelTurns = 0
+  let activeReads = 0
+  let peakReads = 0
+  let writeExecutions = 0
+  const acknowledged = []
+  let observedResults = []
+
+  const result = await runToolsLoop({
+    job: { id: 'job-read-steering-barrier', userId: TEST_USER, title: 'steer after reads' },
+    step: { id: 'step-read-steering-barrier', kind: 'execute' },
+    messages: [{ role: 'user', content: 'Inspect the two inputs.' }],
+    saveCheckpoint: async () => true,
+    claimSteering: async () => {
+      claims += 1
+      if (claims === 2) {
+        return {
+          leaseId: 'parallel-boundary-lease',
+          messages: [{ id: 'parallel-boundary-steering', content: 'Stop after the reads; do not write anything.' }],
+        }
+      }
+      return { leaseId: null, messages: [] }
+    },
+    acknowledgeSteering: async (leaseId) => acknowledged.push(leaseId),
+    runModel: async ({ messages }) => {
+      modelTurns += 1
+      if (modelTurns === 1) {
+        return {
+          content: '',
+          toolCalls: [
+            toolCall('steering-read-1', 'read_file', { path: 'one.txt' }),
+            toolCall('steering-read-2', 'read_file', { path: 'two.txt' }),
+            toolCall('steering-write', 'write_file', { path: 'stale.txt', content: 'stale' }),
+          ],
+        }
+      }
+      observedResults = messages
+        .filter((message) => message.role === 'tool')
+        .map((message) => JSON.parse(message.content))
+      assert.ok(messages.some((message) => (
+        message.role === 'user' && message.content === 'Stop after the reads; do not write anything.'
+      )))
+      return { content: 'Stopped after both reads.', toolCalls: [] }
+    },
+    executeTool: async ({ name, args }) => {
+      if (name === 'write_file') {
+        writeExecutions += 1
+        return { ok: true, path: args.path }
+      }
+      activeReads += 1
+      peakReads = Math.max(peakReads, activeReads)
+      await delay(args.path === 'one.txt' ? 30 : 10)
+      activeReads -= 1
+      return { ok: true, path: args.path, content: args.path }
+    },
+  })
+
+  assert.equal(result.text, 'Stopped after both reads.')
+  assert.equal(peakReads, 2)
+  assert.equal(writeExecutions, 0)
+  assert.deepEqual(observedResults.map((entry) => entry.code || entry.path), [
+    'one.txt',
+    'two.txt',
+    'tool_execution_superseded_by_steering',
+  ])
+  assert.deepEqual(acknowledged, ['parallel-boundary-lease'])
+})
+
 test('a third identical parallel read trips no-progress and skips the following write barrier', async () => {
   let modelTurns = 0
   let readExecutions = 0

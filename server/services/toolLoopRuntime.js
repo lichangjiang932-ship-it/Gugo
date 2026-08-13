@@ -127,7 +127,9 @@ const LOCAL_MUTATION_TOOLS = new Set([
   'write_file',
   'edit_file',
   'apply_patch',
+  'patch_file',
   'multi_edit',
+  'file_download',
   'image_transform',
   'media_transform',
   'pdf_transform',
@@ -200,6 +202,7 @@ const PROBE_SCRIPT_REFERENCE = /(?:^|[\s"'`])(?:[^\s"'`;|&]*[\\/])?(?:[._-]?(?:i
 const ENVIRONMENT_PROBE_COMMAND = /(?:\b(?:python(?:3)?|py|node)\b[^\r\n;&|]{0,80}(?:--version|-V\b|\s-c\s+)[^\r\n;&|]{0,240}(?:\bimport\b|find_spec|__version__|version)|\b(?:pip(?:3)?|python(?:3)?\s+-m\s+pip|py\s+-m\s+pip)\s+(?:show|list|check)\b|\b(?:npm|pnpm|yarn)\s+(?:list|ls|why)\b|\b(?:where(?:\.exe)?|which|Get-Command)\s+[^\r\n;&|]+)/i
 const NON_REFLECTIVE_FAILURE_CODES = new Set([
   'tool_execution_skipped',
+  'tool_execution_superseded_by_steering',
   'tool_budget_exceeded',
   'tool_execution_outcome_unknown',
   'approval_denied',
@@ -555,7 +558,7 @@ function isReadOnlyPythonVerificationCall(call) {
 
 function isLocalMutationCall(call) {
   if (LOCAL_MUTATION_TOOLS.has(call?.name)) {
-    return !(call?.name === 'apply_patch' && call?.args?.dry_run === true)
+    return !(['apply_patch', 'patch_file'].includes(call?.name) && call?.args?.dry_run === true)
   }
   if (!isCommandExecutionTool(call) || isVerificationCall(call)) return false
   return getToolMetadata(call.name, { args: call.args }).isReadOnly !== true
@@ -2155,6 +2158,46 @@ export async function runToolsLoop({
     })
     if (saved === false || saved === null) throw new Error('Failed to persist job turn checkpoint')
   }
+  const freshSteeringMessages = (messages = []) => {
+    const seen = new Set(appliedSteeringIds)
+    return (Array.isArray(messages) ? messages : []).filter((steering) => {
+      const id = String(steering?.id || '').trim()
+      if (id && seen.has(id)) return false
+      if (id) seen.add(id)
+      return true
+    })
+  }
+  const appendSteeringMessages = (messages = []) => {
+    if (!messages.length) return 0
+    if (!hasRuntimeMarker(LIVE_STEERING_GUARD_MARKER)) {
+      convo.push({
+        role: 'system',
+        content: `${LIVE_STEERING_GUARD_MARKER} The user sent steering updates while this task was running. Apply them now; newer user direction takes precedence.`,
+      })
+    }
+    for (const steering of messages) {
+      // Preserve the user text verbatim. Do not summarize steering before the model sees it.
+      const id = String(steering?.id || '').trim()
+      if (id) appliedSteeringIds.add(id)
+      convo.push({ role: 'user', content: steering.content })
+    }
+    return messages.length
+  }
+  const persistAndAcknowledgeSteering = async (leaseId) => {
+    try {
+      // The checkpoint is durable proof that every claimed steering id was
+      // applied. Never ACK the lease before that proof exists.
+      await persistTurn()
+      if (leaseId && typeof acknowledgeSteering === 'function') {
+        await acknowledgeSteering(leaseId)
+      }
+    } catch (error) {
+      if (leaseId && typeof releaseSteering === 'function') {
+        await releaseSteering(leaseId)
+      }
+      throw error
+    }
+  }
   const completionGateAllowsFinish = async (details) => {
     if (typeof beforeFinalCompletion !== 'function') return true
     const result = await beforeFinalCompletion(details)
@@ -2335,6 +2378,7 @@ export async function runToolsLoop({
     }
     let steeringLeaseId = null
     let toolCalls
+    let modelMutationBatchScheduled = false
 
     if (injectRepresentativeReadsBeforeModel) {
       representativeReadsInjected = true
@@ -2377,17 +2421,15 @@ export async function runToolsLoop({
       if (typeof claimSteering === 'function') {
         const claimed = await claimSteering()
         if (claimed?.messages?.length) {
-          steeringLeaseId = claimed.leaseId
-          if (!hasRuntimeMarker(LIVE_STEERING_GUARD_MARKER)) {
-            convo.push({
-              role: 'system',
-              content: `${LIVE_STEERING_GUARD_MARKER} The user sent steering updates while this task was running. Apply them now; newer user direction takes precedence.`,
-            })
-          }
-          for (const steering of claimed.messages) {
-            // Preserve the user text verbatim. Do not summarize steering before the model sees it.
-            if (steering?.id) appliedSteeringIds.add(String(steering.id))
-            convo.push({ role: 'user', content: steering.content })
+          const freshMessages = freshSteeringMessages(claimed.messages)
+          if (freshMessages.length > 0) {
+            steeringLeaseId = claimed.leaseId
+            appendSteeringMessages(freshMessages)
+          } else if (claimed.leaseId) {
+            // A prior checkpoint may already contain these ids while its ACK
+            // was lost. Re-affirm the durable state, consume the recovered
+            // lease, and never inject the same steering text twice.
+            await persistAndAcknowledgeSteering(claimed.leaseId)
           }
         }
       }
@@ -2847,6 +2889,7 @@ export async function runToolsLoop({
           await acknowledgeSteering(steeringLeaseId)
           steeringLeaseId = null
         }
+        modelMutationBatchScheduled = true
       } catch (error) {
         if (steeringLeaseId && typeof releaseSteering === 'function') {
           await releaseSteering(steeringLeaseId)
@@ -3401,6 +3444,17 @@ export async function runToolsLoop({
       // tool explicitly declares itself concurrency-safe.
       return metadata.isReadOnly === true && metadata.isConcurrencySafe === true
     }
+    const requiresPreExecutionSteeringCheck = (call) => {
+      if (!call) return false
+      const metadata = getToolMetadata(call.name, {
+        args: call.args,
+        userId: job?.userId || null,
+      })
+      // Command tools remain conservatively guarded even when static analysis
+      // classifies a particular command as read-only. Every other built-in,
+      // MCP, or plugin tool is governed by its canonical side-effect metadata.
+      return isCommandExecutionTool(call) || metadata.isReadOnly !== true
+    }
     const shouldStopBatch = () => Boolean(
       noProgressReason || budgetExceeded || pausedByClarification,
     )
@@ -3424,13 +3478,67 @@ export async function runToolsLoop({
       }
       await persistTurn()
     }
+    const supersedeRemainingCalls = (startIndex) => {
+      for (const superseded of toolCalls.slice(startIndex)) {
+        if (superseded.checkpointStatus === 'completed') continue
+        const supersededResult = {
+          ok: false,
+          code: 'tool_execution_superseded_by_steering',
+          error: 'This unstarted tool call was skipped because newer user steering superseded the current tool-call batch.',
+          retryable: false,
+          superseded: true,
+          executed: false,
+        }
+        convo.push(buildToolResultMessage(
+          superseded,
+          supersededResult,
+          { maxChars: toolResultMaxChars },
+        ))
+        Object.assign(superseded, {
+          checkpointStatus: 'completed',
+          checkpointResult: supersededResult,
+          checkpointArtifactId: null,
+        })
+        // Superseded calls count as protocol-complete progress, but they never
+        // enter failure recovery, convergence, loop-guard, or tool-failure UI.
+        recordToolProgress(progressState, { call: superseded, succeeded: false })
+      }
+    }
+    const claimSteeringAtToolBoundary = async (startIndex) => {
+      if (startIndex >= toolCalls.length || typeof claimSteering !== 'function') return false
+      const claimed = await claimSteering()
+      if (!claimed?.messages?.length) return false
+      const freshMessages = freshSteeringMessages(claimed.messages)
+      if (freshMessages.length === 0) {
+        if (claimed.leaseId) await persistAndAcknowledgeSteering(claimed.leaseId)
+        return false
+      }
+
+      supersedeRemainingCalls(startIndex)
+      // Keep every tool response in the assistant batch contiguous before
+      // adding screenshot context or the newer user direction.
+      convo.push(...deferredPostBatchMessages)
+      deferredPostBatchMessages.length = 0
+      appendSteeringMessages(freshMessages)
+      await persistAndAcknowledgeSteering(claimed.leaseId)
+      if (iter + 1 >= maxIters) maxIters = iter + 2
+      return true
+    }
 
     // Preserve model order while treating each write or non-concurrency-safe
     // call as a barrier. Consecutive safe reads before and after a barrier can
     // run concurrently, while the barrier itself keeps durable execution and
     // approval/checkpoint semantics.
     let callIndex = 0
-    while (callIndex < toolCalls.length) {
+    let batchSupersededBySteering = false
+    const firstPendingCallIndex = toolCalls.findIndex((call) => call.checkpointStatus !== 'completed')
+    const firstPendingCall = firstPendingCallIndex >= 0 ? toolCalls[firstPendingCallIndex] : null
+    if (modelMutationBatchScheduled
+      && requiresPreExecutionSteeringCheck(firstPendingCall)
+      && await claimSteeringAtToolBoundary(firstPendingCallIndex)) {
+      batchSupersededBySteering = true
+    }
+    while (!batchSupersededBySteering && callIndex < toolCalls.length) {
       const call = toolCalls[callIndex]
       if (call.checkpointStatus === 'completed') {
         callIndex += 1
@@ -3465,6 +3573,10 @@ export async function runToolsLoop({
         callIndex += 1
       }
 
+      if (await claimSteeringAtToolBoundary(callIndex)) {
+        batchSupersededBySteering = true
+        break
+      }
       if (shouldStopBatch()) {
         await skipRemainingCalls(callIndex)
         break
@@ -3499,6 +3611,7 @@ export async function runToolsLoop({
     checkpointCalls = null
     await persistTurn()
     await emitToolProgress('batch_completed')
+    if (batchSupersededBySteering) continue
     if (budgetExceeded) {
       // ★ Lens-4 fix:预算超限写 audit,审计员能追查 job 为什么没跑完
       if (job?.userId) {

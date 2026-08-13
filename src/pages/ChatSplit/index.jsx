@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from '../../lib/router.jsx'
 import { useAppContext } from '../../store/AppContext'
 import { describeAttachmentPrompt } from '../../lib/attachments.js'
-import { buildToolSpecs } from '../../lib/tools/index.js'
 import { SERVER_TURN_TOOL_TOGGLE_NAMES } from '../../lib/serverToolConfig.js'
 import {
   buildServerToolCatalogFallback,
@@ -86,8 +85,7 @@ export default function ChatSplit() {
   const navigateInputHistory = useInputHistory({ messages, input, setInput, sessionId: activeSessionId })
   const fallbackContextToolSpecs = useMemo(() => {
     const enabledNames = SERVER_TURN_TOOL_TOGGLE_NAMES.filter((name) => state.toolsConfig?.[name] === true)
-    try { return buildServerToolCatalogFallback(enabledNames, buildToolSpecs(enabledNames)) }
-    catch { return buildServerToolCatalogFallback(enabledNames) }
+    return buildServerToolCatalogFallback(enabledNames)
   }, [state.toolsConfig])
   const [serverToolCatalog, setServerToolCatalog] = useState(null)
   useEffect(() => {
@@ -319,7 +317,7 @@ export default function ChatSplit() {
       onInlineTasks={() => { setSlashInlinePanel(null); navigate('/tasks') }} onKeyDown={handleKeyDown}
       onManageMcp={() => { setSlashInlinePanel(null); navigate('/mcp') }} onManageModels={handleManageModels}
       onModelChange={setModelForActiveSession} onNavigatePermissions={() => navigate('/permissions')}
-      onOpenArtifact={(artifact) => dispatch({ type: 'OPEN_PREVIEW_ARTIFACT', payload: artifact })}
+      onOpenArtifact={(artifact) => dispatch({ type: 'OPEN_PREVIEW_ARTIFACT', payload: artifact ? { ...artifact } : null })}
       onOpenInPreview={(msg, preview) => dispatch({ type: 'OPEN_PREVIEW_ARTIFACT', payload: { messageId: msg.id, content: msg.meta?.artifactSource || msg.content, preview } })}
       onOpenModelPicker={() => setShowModelPicker(true)} onPermAllow={handlePermAllow}
       onPermDeny={() => { dispatch({ type: 'SET_PERM_REQUEST', payload: null }); dispatch({ type: 'RECEIVE_MESSAGE', payload: t('chatReliability.permissionDenied') }) }}

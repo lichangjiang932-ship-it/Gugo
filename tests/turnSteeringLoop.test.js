@@ -95,6 +95,45 @@ test('a steering checkpoint persists applied ids before acknowledging its lease'
   assert.deepEqual(checkpoints[0].appliedSteeringIds, ['steering-checkpoint-order'])
 })
 
+test('an already-applied steering id is acknowledged without duplicate context injection', async () => {
+  const readFile = SERVER_TOOL_SPECS.find((spec) => spec?.function?.name === 'read_file')
+  const acknowledged = []
+  const requests = []
+  let claims = 0
+
+  const result = await baseRun({
+    toolSpecs: [readFile],
+    saveCheckpoint: async () => true,
+    claimSteering: async () => {
+      claims += 1
+      return {
+        leaseId: `duplicate-steering-lease-${claims}`,
+        messages: [{ id: 'same-steering-id', content: 'Use the same direction once.' }],
+      }
+    },
+    acknowledgeSteering: async (leaseId) => acknowledged.push(leaseId),
+    executeTool: async () => ({ ok: true, content: 'README contents' }),
+    runModel: async ({ messages }) => {
+      requests.push(structuredClone(messages))
+      if (requests.length === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'dedupe-read',
+            type: 'function',
+            function: { name: 'read_file', arguments: '{"path":"README.md"}' },
+          }],
+        }
+      }
+      return { content: 'Applied once.', toolCalls: [] }
+    },
+  })
+
+  assert.equal(result.text, 'Applied once.')
+  assert.equal(requests[1].filter((message) => message.content === 'Use the same direction once.').length, 1)
+  assert.deepEqual(acknowledged, ['duplicate-steering-lease-1', 'duplicate-steering-lease-2'])
+})
+
 test('multiple steering batches reuse one stable system contract', async () => {
   const readFile = SERVER_TOOL_SPECS.find((spec) => spec?.function?.name === 'read_file')
   const requests = []
@@ -191,6 +230,199 @@ test('checkpoint tool calls are completed before the loop claims new steering', 
   assert.deepEqual(events.slice(0, 2), ['execute', 'claim'])
   assert.equal(events.filter((event) => event === 'execute').length, 1)
 })
+
+test('tool-boundary steering supersedes unstarted siblings after a durable checkpoint', async () => {
+  const readFile = SERVER_TOOL_SPECS.find((spec) => spec?.function?.name === 'read_file')
+  const writeFile = SERVER_TOOL_SPECS.find((spec) => spec?.function?.name === 'write_file')
+  const executed = []
+  const checkpointOrder = []
+  const steeringCheckpoints = []
+  let claims = 0
+  let modelCalls = 0
+
+  const result = await baseRun({
+    intentMode: 'execute',
+    toolSpecs: [readFile, writeFile],
+    claimSteering: async () => {
+      claims += 1
+      if (claims === 2) {
+        return {
+          leaseId: 'boundary-steering-lease',
+          messages: [{ id: 'boundary-steering-id', content: 'Do not write the file; summarize the read instead.' }],
+        }
+      }
+      return { leaseId: null, messages: [] }
+    },
+    acknowledgeSteering: async (leaseId) => checkpointOrder.push(`ack:${leaseId}`),
+    releaseSteering: async () => assert.fail('a successful boundary checkpoint must not release its lease'),
+    saveCheckpoint: async (state) => {
+      const superseded = state.toolCalls.find((call) => (
+        call.checkpointResult?.code === 'tool_execution_superseded_by_steering'
+      ))
+      if (superseded) {
+        checkpointOrder.push('save:steering')
+        steeringCheckpoints.push(structuredClone(state))
+      }
+      return true
+    },
+    executeTool: async ({ name, args }) => {
+      executed.push(name)
+      return { ok: true, path: args.path, content: 'project notes' }
+    },
+    runModel: async ({ messages }) => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [
+            {
+              id: 'boundary-read',
+              type: 'function',
+              function: { name: 'read_file', arguments: '{"path":"README.md"}' },
+            },
+            {
+              id: 'boundary-write',
+              type: 'function',
+              function: { name: 'write_file', arguments: '{"path":"stale.txt","content":"stale"}' },
+            },
+          ],
+        }
+      }
+
+      const readResultIndex = messages.findIndex((message) => message.tool_call_id === 'boundary-read')
+      const skippedResultIndex = messages.findIndex((message) => message.tool_call_id === 'boundary-write')
+      const steeringIndex = messages.findIndex((message) => (
+        message.role === 'user' && message.content === 'Do not write the file; summarize the read instead.'
+      ))
+      assert.ok(readResultIndex >= 0)
+      assert.equal(skippedResultIndex, readResultIndex + 1)
+      assert.ok(steeringIndex > skippedResultIndex)
+      assert.equal(JSON.parse(messages[skippedResultIndex].content).code, 'tool_execution_superseded_by_steering')
+      return { content: 'Read summarized without writing.', toolCalls: [] }
+    },
+  })
+
+  assert.equal(result.text, 'Read summarized without writing.')
+  assert.deepEqual(executed, ['read_file'])
+  assert.equal(modelCalls, 2)
+  assert.equal(steeringCheckpoints.length, 1)
+  assert.deepEqual(steeringCheckpoints[0].appliedSteeringIds, ['boundary-steering-id'])
+  assert.equal(steeringCheckpoints[0].toolCalls[1].checkpointResult.executed, false)
+  assert.equal(steeringCheckpoints[0].failureRecovery.count, 0)
+  assert.deepEqual(steeringCheckpoints[0].progress.completedCallIds, ['boundary-read', 'boundary-write'])
+  assert.deepEqual(checkpointOrder.slice(0, 2), ['save:steering', 'ack:boundary-steering-lease'])
+})
+
+test('tool-boundary steering releases its lease when the durable checkpoint fails', async () => {
+  const readFile = SERVER_TOOL_SPECS.find((spec) => spec?.function?.name === 'read_file')
+  const writeFile = SERVER_TOOL_SPECS.find((spec) => spec?.function?.name === 'write_file')
+  const released = []
+  let claims = 0
+
+  await assert.rejects(() => baseRun({
+    intentMode: 'execute',
+    toolSpecs: [readFile, writeFile],
+    claimSteering: async () => {
+      claims += 1
+      return claims === 2
+        ? {
+            leaseId: 'boundary-save-failure-lease',
+            messages: [{ id: 'boundary-save-failure-id', content: 'Stop the remaining calls.' }],
+          }
+        : { leaseId: null, messages: [] }
+    },
+    acknowledgeSteering: async () => assert.fail('failed checkpoint must not be acknowledged'),
+    releaseSteering: async (leaseId) => released.push(leaseId),
+    saveCheckpoint: async (state) => {
+      if (state.toolCalls.some((call) => (
+        call.checkpointResult?.code === 'tool_execution_superseded_by_steering'
+      ))) throw new Error('boundary checkpoint failed')
+      return true
+    },
+    executeTool: async ({ args }) => ({ ok: true, path: args.path, content: 'read' }),
+    runModel: async () => ({
+      content: '',
+      toolCalls: [
+        {
+          id: 'boundary-failure-read',
+          type: 'function',
+          function: { name: 'read_file', arguments: '{"path":"README.md"}' },
+        },
+        {
+          id: 'boundary-failure-write',
+          type: 'function',
+          function: { name: 'write_file', arguments: '{"path":"stale.txt","content":"stale"}' },
+        },
+      ],
+    }),
+  }), /boundary checkpoint failed/)
+
+  assert.deepEqual(released, ['boundary-save-failure-lease'])
+})
+
+for (const [toolName, args] of [
+  ['write_file', { path: 'stale.txt', content: 'stale' }],
+  ['patch_file', { path: 'stale.txt', start_line: 1, end_line: 1, replacement: 'stale' }],
+  ['file_download', { url: 'https://example.com/stale.txt', path: 'stale.txt' }],
+  ['bash_exec', { command: 'node stale-script.js' }],
+  ['git_commit', { message: 'stale commit', files: ['stale.txt'] }],
+  ['git_push', {}],
+  ['git_write', { action: 'commit', message: 'stale commit', files: ['stale.txt'] }],
+  ['create_docx', { title: 'Stale document', paragraphs: ['stale'] }],
+]) {
+  test(`steering queued during model execution supersedes the first unstarted ${toolName} call`, async () => {
+    const spec = SERVER_TOOL_SPECS.find((candidate) => candidate?.function?.name === toolName)
+    assert.ok(spec, `${toolName} must be registered in the server tool catalog`)
+    const executed = []
+    const acknowledged = []
+    let modelCalls = 0
+    let steeringAvailable = false
+    let steeringClaimed = false
+
+    const result = await baseRun({
+      toolSpecs: [spec],
+      saveCheckpoint: async () => true,
+      claimSteering: async () => {
+        if (!steeringAvailable || steeringClaimed) return { leaseId: null, messages: [] }
+        steeringClaimed = true
+        return {
+          leaseId: `pre-${toolName}-lease`,
+          messages: [{ id: `pre-${toolName}-steering`, content: 'Stop before making any changes.' }],
+        }
+      },
+      acknowledgeSteering: async (leaseId) => acknowledged.push(leaseId),
+      executeTool: async ({ name }) => {
+        executed.push(name)
+        return { ok: true }
+      },
+      runModel: async ({ messages }) => {
+        modelCalls += 1
+        if (modelCalls === 1) {
+          steeringAvailable = true
+          return {
+            content: '',
+            toolCalls: [{
+              id: `stale-${toolName}`,
+              type: 'function',
+              function: { name: toolName, arguments: JSON.stringify(args) },
+            }],
+          }
+        }
+        const skipped = messages.find((message) => message.tool_call_id === `stale-${toolName}`)
+        assert.ok(skipped)
+        assert.equal(JSON.parse(skipped.content).code, 'tool_execution_superseded_by_steering')
+        assert.ok(messages.some((message) => (
+          message.role === 'user' && message.content === 'Stop before making any changes.'
+        )))
+        return { content: 'Stopped before making changes.', toolCalls: [] }
+      },
+    })
+
+    assert.equal(result.text, 'Stopped before making changes.')
+    assert.deepEqual(executed, [])
+    assert.deepEqual(acknowledged, [`pre-${toolName}-lease`])
+  })
+}
 
 test('a racing steering update defers an interrupted result and gets a recovery model round', async () => {
   const readFile = SERVER_TOOL_SPECS.find((spec) => spec?.function?.name === 'read_file')

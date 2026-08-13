@@ -3,9 +3,18 @@ import { buildHtmlPreview } from '../../../lib/presentationExport.js'
 import { buildHtmlDocument, isHtmlDeckLike } from '../../../lib/artifactPreview.js'
 import { useT } from '../../../i18n/I18nProvider.jsx'
 
-export function HtmlPreview({ html }) {
+function currentDocumentNonce() {
+  if (typeof document === 'undefined') return ''
+  return document.querySelector('script[nonce]')?.nonce || ''
+}
+
+export function HtmlPreview({ html, previewType }) {
   const { t } = useT()
-  const srcDoc = useMemo(() => buildHtmlDocument(html), [html])
+  const nonce = useMemo(() => currentDocumentNonce(), [])
+  const srcDoc = useMemo(
+    () => buildHtmlDocument(html, { nonce, previewType }),
+    [html, nonce, previewType],
+  )
   const iframeRef = useRef(null)
   const isDeck = useMemo(() => isHtmlDeckLike(html), [html])
   const sendDeckCommand = (type) => iframeRef.current?.contentWindow?.postMessage({ type }, '*')

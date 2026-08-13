@@ -7,6 +7,7 @@ import {
   normalizeServerToolCatalog,
   selectEnabledServerToolSpecs,
 } from '../src/lib/serverToolCatalog.js'
+import { SERVER_TURN_TOOL_TOGGLE_NAMES } from '../src/lib/serverToolConfig.js'
 import { BROWSER_TOOL_NAMES, BROWSER_TOOL_SPECS } from '../src/lib/tools/browserToolSpecs.js'
 
 function spec(name) {
@@ -35,6 +36,17 @@ test('fallback keeps enabled server-only tools without copying their live schema
   })
   assert.deepEqual(byName.get('read_file'), spec('read_file'))
   assert.equal(byName.get('browser_click'), BROWSER_TOOL_SPECS.browser_click)
+})
+
+test('fallback represents every configurable server turn tool without the retired client catalog', () => {
+  const names = new Set(
+    buildServerToolCatalogFallback(SERVER_TURN_TOOL_TOGGLE_NAMES)
+      .map((item) => item.function.name),
+  )
+
+  for (const name of SERVER_TURN_TOOL_TOGGLE_NAMES) {
+    assert.ok(names.has(name), `${name} is missing from the context-estimation fallback`)
+  }
 })
 
 test('normalizes registry entries, deduplicates by name, and sorts stably', () => {

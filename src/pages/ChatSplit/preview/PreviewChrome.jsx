@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import {
   Code,
   Code2,
@@ -28,12 +29,65 @@ export function ArtifactIcon({ type }) {
   return <FileText className="w-4 h-4" />
 }
 
-export function PreviewHeader({ preview, maximized, setMaximized, onClose, t }) {
+export function PreviewHeader({ tabs, activeId, maximized, setMaximized, onSelectTab, onCloseTab, onClose, t }) {
+  const activeTabRef = useRef(null)
+  useEffect(() => {
+    activeTabRef.current?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
+  }, [activeId])
+
+  const handleTabKeyDown = (event, index) => {
+    let nextIndex = null
+    if (event.key === 'ArrowRight') nextIndex = (index + 1) % tabs.length
+    if (event.key === 'ArrowLeft') nextIndex = (index - 1 + tabs.length) % tabs.length
+    if (event.key === 'Home') nextIndex = 0
+    if (event.key === 'End') nextIndex = tabs.length - 1
+    if (nextIndex === null) return
+    event.preventDefault()
+    if (nextIndex === index) return
+    onSelectTab(tabs[nextIndex].id)
+    const buttons = event.currentTarget.closest('[role="tablist"]')?.querySelectorAll('[role="tab"]')
+    buttons?.[nextIndex]?.focus()
+  }
+
   return (
     <div data-testid="preview-tab-bar" className="chat-preview-tabbar flex h-12 shrink-0 items-center gap-2 border-b border-ink/10 bg-paper px-3">
-      <div className="chat-preview-active-tab flex h-8 min-w-0 max-w-[min(68%,24rem)] items-center gap-2 rounded-lg border border-ink/10 bg-paper-2 px-2.5 text-ink shadow-sm">
-        <span className="shrink-0 text-ember"><ArtifactIcon type={preview.type} /></span>
-        <span className="truncate text-xs font-medium" title={preview.filename}>{preview.filename}</span>
+      <div role="tablist" aria-label={t('chatPreview.openTabs')} className="chat-preview-tabs flex min-w-0 flex-1 items-center gap-1 overflow-x-auto py-1">
+        {tabs.map((tab, index) => {
+          const active = tab.id === activeId
+          return (
+            <div
+              key={tab.id}
+              data-testid="preview-tab-item"
+              className={`flex h-8 min-w-[8rem] max-w-[14rem] flex-none items-center rounded-lg border transition-colors ${active ? 'chat-preview-active-tab border-ink/10 bg-paper-2 text-ink shadow-sm' : 'border-transparent text-ink-fade hover:border-ink/10 hover:bg-paper-2/60 hover:text-ink'}`}
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={active}
+                tabIndex={active ? 0 : -1}
+                ref={active ? activeTabRef : null}
+                data-testid="preview-tab"
+                onClick={() => onSelectTab(tab.id)}
+                onKeyDown={(event) => handleTabKeyDown(event, index)}
+                className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-l-lg pl-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ember/50"
+                title={tab.preview.filename}
+              >
+                <span className={`shrink-0 ${active ? 'text-ember' : 'text-ink-fade'}`}><ArtifactIcon type={tab.preview.type} /></span>
+                <span className="truncate text-xs font-medium">{tab.preview.filename}</span>
+              </button>
+              <button
+                type="button"
+                data-testid="preview-tab-close"
+                onClick={(event) => { event.stopPropagation(); onCloseTab(tab.id) }}
+                aria-label={t('chatPreview.closeTab', { filename: tab.preview.filename })}
+                title={t('chatPreview.closeTab', { filename: tab.preview.filename })}
+                className="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded text-ink-fade outline-none transition-colors hover:bg-ink/5 hover:text-ember focus-visible:ring-2 focus-visible:ring-ember/50"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )
+        })}
       </div>
       <div className="ml-auto flex shrink-0 items-center gap-0.5">
         <button type="button" onClick={() => setMaximized((value) => !value)} aria-label={t(maximized ? 'chatPreview.restore' : 'chatPreview.maximize')} className="chat-preview-maximize-toggle flex h-8 w-8 items-center justify-center rounded-md text-ink-fade transition-colors hover:bg-paper-2 hover:text-ink" title={t(maximized ? 'chatPreview.restore' : 'chatPreview.maximize')}>

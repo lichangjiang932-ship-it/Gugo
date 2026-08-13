@@ -6,6 +6,29 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.20] - 2026-08-13
+
+### Added
+
+- Added persistent multi-preview tabs for generated files and images, with
+  per-tab close controls, keyboard navigation, overflow scrolling, stable
+  deduplication, and predictable adjacent-tab handoff.
+
+### Changed
+
+- Adopted pi-inspired live steering at tool boundaries so newer user direction
+  supersedes unstarted calls, including the first pending write or command,
+  while preserving durable checkpoint, lease, and recovery semantics.
+
+### Fixed
+
+- Removed the retired browser-side tool catalog from context fallback so every
+  configurable server tool remains represented without unknown-tool warnings.
+- Made HTML and SVG preview helper scripts compatible with the preview CSP so
+  switching or closing previews no longer emits blocked inline-script errors.
+- Replaced React preview `unsafe-eval` execution with nonce-authorized compiled
+  scripts while keeping user source inert until it enters the isolated sandbox.
+
 ## [0.10.19] - 2026-08-12
 
 ### Added

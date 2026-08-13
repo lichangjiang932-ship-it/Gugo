@@ -129,6 +129,36 @@ function injectBeforeCloseTag(documentHtml, tag, injection) {
   return `${documentHtml}\n${injection}`
 }
 
+function previewScriptNonce(options = {}) {
+  const nonce = String(options?.nonce || '').trim()
+  return nonce && /^[A-Za-z0-9+/_=-]+$/.test(nonce) ? nonce : ''
+}
+
+function previewScriptNonceAttribute(options = {}) {
+  const nonce = previewScriptNonce(options)
+  return nonce ? ` nonce="${nonce}"` : ''
+}
+
+function refreshPreviewOwnedScriptNonce(documentHtml, { attribute, value, source }, options = {}) {
+  const nonce = previewScriptNonce(options)
+  if (!nonce) return documentHtml
+  const scriptBody = String(source || '').replace(/<\/script>/gi, '<\\/script>')
+  const pattern = new RegExp(
+    `<script\\b([^>]*)\\b${attribute}\\s*=\\s*(["'])${value}\\2([^>]*)>([\\s\\S]*?)<\\/script>`,
+    'gi',
+  )
+  return documentHtml.replace(pattern, (match, before, _quote, after, body) => {
+    // A marker alone is user-controlled. Only the exact Gugo-owned helper
+    // body may receive the response nonce; ordinary source scripts stay inert.
+    if (body !== scriptBody) return match
+    const attributes = `${before} ${attribute}="${value}"${after}`
+      .replace(/\s+nonce\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    return `<script nonce="${nonce}"${attributes ? ` ${attributes}` : ''}>${body}</script>`
+  })
+}
+
 // Generated previews run in an opaque-origin iframe, so the parent page cannot
 // repair near-white or heavily transparent text after it renders. This guard
 // measures the effective text/background contrast inside the sandbox and only
@@ -238,19 +268,35 @@ const HTML_PREVIEW_READABILITY_GUARD = `(function(){
   else start();
 })();`
 
-export function enhanceHtmlPreviewReadability(documentHtml = '') {
+export function enhanceHtmlPreviewReadability(documentHtml = '', options = {}) {
   const doc = String(documentHtml || '')
-  if (!doc || doc.includes('data-yma-readability-guard')) return doc
+  if (!doc) return doc
+  if (doc.includes('data-yma-readability-guard')) {
+    return refreshPreviewOwnedScriptNonce(doc, {
+      attribute: 'data-yma-readability-guard',
+      value: 'true',
+      source: HTML_PREVIEW_READABILITY_GUARD,
+    }, options)
+  }
+  const nonce = previewScriptNonceAttribute(options)
   return injectBeforeCloseTag(
     doc,
     'body',
-    `<script data-yma-readability-guard="true">${HTML_PREVIEW_READABILITY_GUARD.replace(/<\/script>/gi, '<\\/script>')}</script>`,
+    `<script${nonce} data-yma-readability-guard="true">${HTML_PREVIEW_READABILITY_GUARD.replace(/<\/script>/gi, '<\\/script>')}</script>`,
   )
 }
 
-export function enhanceHtmlDeckDocument(documentHtml = '') {
+export function enhanceHtmlDeckDocument(documentHtml = '', options = {}) {
   const doc = String(documentHtml || '')
-  if (!isHtmlDeckLike(doc) || doc.includes('data-yma-deck-enhancer')) return doc
+  if (!isHtmlDeckLike(doc)) return doc
+  if (doc.includes('data-yma-deck-enhancer')) {
+    return refreshPreviewOwnedScriptNonce(doc, {
+      attribute: 'data-yma-deck-enhancer',
+      value: 'script',
+      source: HTML_DECK_ENHANCER_SCRIPT,
+    }, options)
+  }
+  const nonce = previewScriptNonceAttribute(options)
   const withCss = injectBeforeCloseTag(
     doc,
     'head',
@@ -259,7 +305,7 @@ export function enhanceHtmlDeckDocument(documentHtml = '') {
   return injectBeforeCloseTag(
     withCss,
     'body',
-    `<script data-yma-deck-enhancer="script">${HTML_DECK_ENHANCER_SCRIPT.replace(/<\/script>/gi, '<\\/script>')}</script>`
+    `<script${nonce} data-yma-deck-enhancer="script">${HTML_DECK_ENHANCER_SCRIPT.replace(/<\/script>/gi, '<\\/script>')}</script>`
   )
 }
 
