@@ -12,7 +12,6 @@ import StoragePersistenceNotice from './components/StoragePersistenceNotice.jsx'
 import CommandPalette from './components/CommandPalette.jsx'
 import WorkspaceOnboardingPrompt from './components/WorkspaceOnboardingPrompt.jsx'
 
-const CoverPage = lazy(() => import('./pages/CoverPage'))
 const ChatSplit = lazy(() => import('./pages/ChatSplit'))
 const SkillsMarket = lazy(() => import('./pages/SkillsMarket'))
 const PermissionsDashboard = lazy(() => import('./pages/PermissionsDashboard'))
@@ -57,7 +56,7 @@ function App() {
         <main>
           <PreviewBanner />
           <Routes>
-          <Route path="/" element={<CoverPage />} />
+          <Route path="/" element={<Navigate to="/chat" replace />} />
           <Route path="/chat" element={<ChatSplit />} />
           <Route path="/skills" element={<RequireAuth><SkillsMarket /></RequireAuth>} />
           <Route path="/permissions" element={<RequireAuth><PermissionsDashboard /></RequireAuth>} />

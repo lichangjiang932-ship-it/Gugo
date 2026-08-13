@@ -14,6 +14,7 @@ process.env.WORKSPACE_SHARED_TRUSTED = '1'
 const { createInitialState } = await import('../src/store/appStateBootstrap.js')
 const { buildServerToolsConfig } = await import('../src/pages/ChatSplit/serverTurnFlow.js')
 const { dispatchFsShellTool } = await import('../server/adapters/fsShellTools.js')
+const { closeDb } = await import('../server/db.js')
 const { runToolsLoop, SERVER_TOOL_SPECS } = await import('../server/services/toolLoopRuntime.js')
 const { resolveTurnToolSpecs } = await import('../server/services/turnToolSpecs.js')
 
@@ -23,7 +24,10 @@ function toolSpec(name) {
   return spec
 }
 
-test.after(() => fs.rmSync(workspace, { recursive: true, force: true }))
+test.after(() => {
+  closeDb()
+  fs.rmSync(workspace, { recursive: true, force: true })
+})
 
 test('code execution is advertised by default for a writable local-file workflow', async () => {
   const state = createInitialState()

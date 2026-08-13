@@ -338,8 +338,6 @@ export default defineConfig({
           if (id.includes('node_modules/scheduler')) return 'vendor-react'
           // Group Framer Motion separately (large, stable)
           if (id.includes('node_modules/framer-motion')) return 'vendor-motion'
-          // Three.js 不再合名 — 让它跟随 CoverPage 的 lazy chunk
-          // (manualChunks 会把 node_modules 提到同步 vendor，重点的 3D 装饰不该堆到首屏)
           // Group lucide icons (many small files)
           if (id.includes('node_modules/lucide-react')) return 'vendor-icons'
           // 大货独立分块 — 原 vendor-common 2.4MB 原凶

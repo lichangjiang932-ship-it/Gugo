@@ -25,7 +25,11 @@ export function createInitialState() {
     activeSessionId: null,
     tasks: [],
     history: [],
-    permissions: PERMISSIONS.map((permission) => ({ ...permission, enabled: false, icon: permission.icon ?? null })),
+    permissions: PERMISSIONS.map((permission) => ({
+      ...permission,
+      enabled: permission.enabled !== false,
+      icon: permission.icon ?? null,
+    })),
     permRequest: null,
     choiceRequest: null,
     theme: 'white',
@@ -41,7 +45,7 @@ export function createInitialState() {
     previewArtifact: null,
     toolsConfigSchemaVersion: TOOLS_CONFIG_SCHEMA_VERSION,
     toolsConfig: {
-      fetch_url: false,
+      fetch_url: true,
       create_pptx: true,
       create_docx: true,
       create_xlsx: true,

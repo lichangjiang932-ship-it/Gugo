@@ -56,6 +56,19 @@ test('unused phone, hooks, cron, and global-shortcut routes are not exposed', ()
   assert.doesNotMatch(settings, /function renderShortcuts/)
 })
 
+test('the root route opens chat directly without the removed 3D cover', () => {
+  const app = fs.readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8')
+  const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+  assert.match(app, /<Route path="\/" element={<Navigate to="\/chat" replace \/>} \/>/)
+  assert.doesNotMatch(app, /CoverPage|CoverScene/)
+  for (const file of ['CoverPage.jsx', 'CoverScene.jsx', 'index.jsx']) {
+    assert.equal(fs.existsSync(new URL(`../src/pages/CoverPage/${file}`, import.meta.url)), false, file)
+  }
+  for (const dependency of ['@react-three/fiber', '@react-three/postprocessing', 'three']) {
+    assert.equal(pkg.dependencies?.[dependency], undefined, dependency)
+  }
+})
+
 test('Coding Workbench stays detached from the chat surface', () => {
   const chat = fs.readFileSync(new URL('../src/pages/ChatSplit/index.jsx', import.meta.url), 'utf8')
   const preferences = fs.readFileSync(new URL('../src/lib/chatUiPreferences.js', import.meta.url), 'utf8')

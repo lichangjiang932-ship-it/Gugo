@@ -8,6 +8,7 @@ import { runToolLoop, SERVER_TOOL_SPECS } from './toolLoopRuntime.js'
 import {
   claimLocalChatSession,
   deleteMessage,
+  getPreviousUserMessage,
   getSession,
   listMessages,
   SessionOwnershipError,
@@ -435,6 +436,7 @@ export class TurnEngine {
     claimSession = claimLocalChatSession,
     writeSession = upsertSession,
     readMessages = listMessages,
+    readPreviousUserMessage = getPreviousUserMessage,
     writeMessage = upsertMessage,
     removeMessage = deleteMessage,
     idFactory = randomUUID,
@@ -462,7 +464,8 @@ export class TurnEngine {
   } = {}) {
     this.deps = {
       runLoop, runModel, executeTool, appendEvent, publishActivity, lastEvent, replayEvents,
-      readSession, claimSession, writeSession, readMessages, writeMessage, idFactory, now, toolSpecs,
+      readSession, claimSession, writeSession, readMessages, readPreviousUserMessage,
+      writeMessage, idFactory, now, toolSpecs,
       readApprovalMode, preparePromptContext, resolveToolSpecs, scheduleMemoryExtraction, runMemoryModel, env,
       getContextWindow, readFileAccessStatus, validateAttachments, bindAttachments, prepareAttachments,
       removeMessage, executionLeases,
@@ -930,6 +933,11 @@ export class TurnEngine {
         ? { ...message, content }
         : message)
     const currentUserMessage = storedMessages.find((message) => message.id === `${turnId}:user`)
+    const previousUserPrompt = this.deps.readPreviousUserMessage({
+      userId,
+      sessionId,
+      messageId: `${turnId}:user`,
+    })?.content || ''
     const managedAttachments = Array.isArray(currentUserMessage?.modelContext?.attachments)
       ? currentUserMessage.modelContext.attachments
       : []
@@ -1032,6 +1040,7 @@ export class TurnEngine {
           origin: 'chat',
           prompt: content,
           userPrompt: displayContent || content,
+          previousUserPrompt,
           title: content.slice(0, 120),
           managedAttachments,
           hasManagedAttachments: managedAttachments.length > 0,

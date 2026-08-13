@@ -53,7 +53,6 @@ const BASELINE = {
   'src/pages/ChatSplit/ChatComposer.jsx': 54,
   'src/pages/ChatSplit/index.jsx': 906,
   'src/pages/ChatSplit/RightPreviewPane.jsx': 223,
-  'src/pages/CoverPage/CoverPage.jsx': 15,
   'src/pages/DeskView.jsx': 81,
   'src/pages/MemoryView.jsx': 248,
   'src/pages/MobileKeysView.jsx': 146,

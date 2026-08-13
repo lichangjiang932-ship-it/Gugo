@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/SQLite-WAL-2e8fa3" alt="SQLite WAL" />
   <img src="https://img.shields.io/badge/Vite-8-ec4899?logo=vite" alt="Vite 8" />
   <a href="https://github.com/lichangjiang932-ship-it/Gugo/actions/workflows/ci.yml"><img src="https://github.com/lichangjiang932-ship-it/Gugo/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI" /></a>
-  <img src="https://img.shields.io/badge/release-v0.10.22-blue" alt="v0.10.22" />
+  <img src="https://img.shields.io/badge/release-v0.10.23-blue" alt="v0.10.23" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT" />
 </p>
 
@@ -34,7 +34,6 @@ Windows 安装包与自动更新元数据见 [GitHub Releases](https://github.co
 | MCP | stdio + SSE | 是 | 是 |
 | 子代理 | 独立上下文 + 工具白名单 | 是 | 是 |
 | Skill 系统 | 内置 + 可导入 + 内置 SQLite 系统库 | 是 | 是 |
-| 3D 沉浸式入口 | Three.js 粒子封面页 | 无 | 无 |
 | 独立 Hub | 已实现（`HUB_ENABLED=1`） | 是 | 无 |
 | 跨平台 Bridge | 飞书 / 微信 / Telegram 等（v0.10） | Telegram/飞书/微信/QQ | 无 |
 | 审批门控 | 服务端 pause/resume + 收件箱 + 单次调用批准/拒绝/改参数 | 无 | 权限提示 |
@@ -130,7 +129,7 @@ Windows 安装包与自动更新元数据见 [GitHub Releases](https://github.co
         └── effort_settings / session_meters
 ```
 
-技术栈：React 19 · Vite 8 · Tailwind CSS 3 · Framer Motion · Three.js · Node.js 20 · better-sqlite3 · JSDOM · JSZip · Zod · PPTXGenJS · @e965/xlsx
+技术栈：React 19 · Vite 8 · Tailwind CSS 3 · Framer Motion · Node.js 20 · better-sqlite3 · JSDOM · JSZip · Zod · PPTXGenJS · @e965/xlsx
 
 规模：持续增长的自动化测试套件 · Windows/Linux CI · 零后端框架依赖
 
@@ -328,7 +327,7 @@ Gugo/
 - Claude Code、Cursor、OpenAI Codex CLI — Agent 工作流、apply_patch、reflect 节奏
 - [Reasonix](https://github.com/esengine/DeepSeek-Reasonix) — 钉记忆、TODO、effort 滑块、session meter
 
-技术栈来自 React / Vite / better-sqlite3 / pptxgenjs / Three.js 等开源社区。
+技术栈来自 React / Vite / better-sqlite3 / pptxgenjs 等开源社区。
 
 ---
 

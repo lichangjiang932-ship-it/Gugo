@@ -394,6 +394,31 @@ export function listMessages({ userId, sessionId, limit = 500, offset = 0, recen
   return rows.map(mapMessage)
 }
 
+export function getPreviousUserMessage({ userId, sessionId, messageId } = {}) {
+  if (!userId || !sessionId || !messageId) return null
+  const row = getDb().prepare(`
+    SELECT previous.id, previous.session_id, previous.user_id, previous.role,
+      previous.content, previous.model_context_json, previous.created_at,
+      previous.updated_at, previous.rowid
+    FROM messages AS current
+    JOIN messages AS previous
+      ON previous.user_id = current.user_id
+      AND previous.session_id = current.session_id
+    WHERE current.id = ?
+      AND current.user_id = ?
+      AND current.session_id = ?
+      AND current.role = 'user'
+      AND previous.role = 'user'
+      AND (
+        previous.created_at < current.created_at
+        OR (previous.created_at = current.created_at AND previous.rowid < current.rowid)
+      )
+    ORDER BY previous.created_at DESC, previous.rowid DESC
+    LIMIT 1
+  `).get(messageId, userId, sessionId)
+  return row ? mapMessage(row) : null
+}
+
 export function getSessionSnapshot({ userId, sessionId, limit = 2000, offset = 0 } = {}) {
   const db = getDb()
   return db.transaction(() => {

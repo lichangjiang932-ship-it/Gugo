@@ -75,7 +75,7 @@ export const PERMISSIONS = [
     name: '\u9ea6\u514b\u98ce\u8f93\u5165',
     code: 'MIC',
     scope: '\u6d4f\u89c8\u5668\u8bed\u97f3\u8bc6\u522b',
-    enabled: false,
+    enabled: true,
     usage: '\u672c\u5730\u5f00\u5173',
   },
   {
@@ -83,7 +83,7 @@ export const PERMISSIONS = [
     name: '\u6d4f\u89c8\u5668\u901a\u77e5',
     code: 'PUSH',
     scope: '\u4efb\u52a1\u5b8c\u6210\u63d0\u9192',
-    enabled: false,
+    enabled: true,
     usage: '\u672c\u5730\u5f00\u5173',
   },
 ]
