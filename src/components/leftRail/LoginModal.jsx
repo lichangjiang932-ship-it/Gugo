@@ -8,7 +8,7 @@ export default function LoginModal({ login, onChange, onClose, onSendCode, onVer
   const set = (field, value) => onChange({ [field]: value })
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/35 p-4">
     <div className="flex w-full max-w-md flex-col gap-4 rounded-md border border-ink bg-paper p-5 shadow-xl">
-      <div className="flex items-center justify-between"><div><span className="font-mono text-[9px] uppercase tracking-[0.22em] text-ink-fade">LOGIN REQUIRED</span><h2 className="mt-1 font-hand text-xl text-ink">{t('leftRailLogin.title')}</h2></div><button onClick={onClose} aria-label={t('leftRailLogin.close')} className="text-ink-fade hover:text-ink"><X className="h-4 w-4" /></button></div>
+      <div className="flex items-center justify-between"><div><span className="font-mono text-[9px] uppercase tracking-[0.22em] text-ink-fade">LOGIN REQUIRED</span><h2 className="mt-1 font-semibold text-xl text-ink">{t('leftRailLogin.title')}</h2></div><button onClick={onClose} aria-label={t('leftRailLogin.close')} className="text-ink-fade hover:text-ink"><X className="h-4 w-4" /></button></div>
       <div className="-mt-1 flex gap-2 border-b border-ink-fade/30">
         {['password', 'code'].map((mode) => <button key={mode} type="button" onClick={() => onChange({ mode, message: '' })} className={`border-b-2 px-3 py-1.5 text-sm transition-colors ${login.mode === mode ? 'border-ember text-ink' : 'border-transparent text-ink-fade hover:text-ink-soft'}`}>{t(`leftRailLogin.${mode}Mode`)}</button>)}
       </div>

@@ -9,7 +9,7 @@ export default function CustomSkillModal({ market, t }) {
   return (
     <div className="fixed inset-0 bg-ink/40 flex items-center justify-center z-50 p-4" onClick={() => market.setCustomModal(false)}>
       <div role="dialog" aria-modal="true" className="bg-paper border border-ink rounded-md p-6 w-full max-w-md flex flex-col gap-4" onClick={(event) => event.stopPropagation()}>
-        <div className="flex items-center justify-between"><h2 className="font-hand text-xl text-ink">{t('skillsMarket.newCustom')}</h2><button type="button" onClick={() => market.setCustomModal(false)} className="text-ink-fade hover:text-ink" aria-label={t('skillsMarket.close')}><X className="w-4 h-4" /></button></div>
+        <div className="flex items-center justify-between"><h2 className="font-semibold text-xl text-ink">{t('skillsMarket.newCustom')}</h2><button type="button" onClick={() => market.setCustomModal(false)} className="text-ink-fade hover:text-ink" aria-label={t('skillsMarket.close')}><X className="w-4 h-4" /></button></div>
         <div className="flex flex-col gap-3 text-sm">
           <Field label={t('skillsMarket.commandId')}><input value={market.draft.id} onChange={(event) => update('id', event.target.value, true)} placeholder="my-skill" className="field-input" /></Field>
           <div className="grid grid-cols-[1fr_60px] gap-2">
@@ -21,7 +21,7 @@ export default function CustomSkillModal({ market, t }) {
           <Field label={t('skillsMarket.permissions')}><input value={market.draft.perms} onChange={(event) => update('perms', event.target.value)} placeholder={t('skillsMarket.permissionsPlaceholder')} className="field-input" /></Field>
         </div>
         {market.draftError && <div className="p-2 border border-ember-line bg-ember-soft/30 rounded-md text-sm text-ember">{market.draftError}</div>}
-        <div className="flex gap-2 justify-end"><button type="button" onClick={() => market.setCustomModal(false)} className="h-9 px-4 border border-ink/40 rounded-md font-hand text-sm text-ink-soft hover:border-ink">{t('skillsMarket.cancel')}</button><button type="button" onClick={market.saveCustomSkill} disabled={!market.draft.id.trim() || !market.draft.name.trim() || !market.draft.systemPrompt.trim()} className="h-9 px-4 bg-ember text-paper rounded-md font-hand text-sm hover:bg-ember/90 disabled:opacity-40">{t('skillsMarket.create')}</button></div>
+        <div className="flex gap-2 justify-end"><button type="button" onClick={() => market.setCustomModal(false)} className="h-9 px-4 border border-ink/40 rounded-md font-semibold text-sm text-ink-soft hover:border-ink">{t('skillsMarket.cancel')}</button><button type="button" onClick={market.saveCustomSkill} disabled={!market.draft.id.trim() || !market.draft.name.trim() || !market.draft.systemPrompt.trim()} className="h-9 px-4 bg-ember text-paper rounded-md font-semibold text-sm hover:bg-ember/90 disabled:opacity-40">{t('skillsMarket.create')}</button></div>
       </div>
     </div>
   )

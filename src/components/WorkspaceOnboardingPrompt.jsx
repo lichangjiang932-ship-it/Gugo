@@ -93,7 +93,7 @@ export function WorkspaceOnboardingPromptController({
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-800"><FolderOpen className="h-5 w-5" /></div>
               <div className="min-w-0 flex-1">
                 <div className="font-mono text-[9px] uppercase tracking-[0.2em] text-ink-fade">{t('permissionsDashboard.onboardingPromptEyebrow')}</div>
-                <h2 id="workspace-onboarding-prompt-title" className="mt-1 font-hand text-2xl text-ink">{t('permissionsDashboard.onboardingPromptTitle')}</h2>
+                <h2 id="workspace-onboarding-prompt-title" className="mt-1 font-semibold text-2xl text-ink">{t('permissionsDashboard.onboardingPromptTitle')}</h2>
               </div>
               <button type="button" onClick={defer} aria-label={t('permissionsDashboard.onboardingPromptCloseLabel')} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-ink-fade transition-colors hover:bg-paper-2 hover:text-ink"><X className="h-4 w-4" /></button>
             </div>

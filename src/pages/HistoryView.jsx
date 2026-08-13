@@ -134,7 +134,7 @@ export default function HistoryView() {
         <div className="mx-auto mb-5 flex max-w-5xl flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">{t('history.eyebrow')}</span>
-            <h1 className="font-hand text-[28px] text-ink mt-1.5">{t('history.title')}</h1>
+            <h1 className="font-semibold text-[28px] text-ink mt-1.5">{t('history.title')}</h1>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {tabs.map(tab => (

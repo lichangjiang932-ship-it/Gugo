@@ -863,6 +863,7 @@ export const translations = {
     localFiles: { ...LOCAL_FILES_TRANSLATIONS.zh, ...WORKSPACE_TRUST_TRANSLATIONS.zh, chatAction: '本地文件', chatActionHint: '授权后模型才能读写你电脑上的文件。点这里添加目录。' },
     mcp: { ...MCP_TRANSLATIONS.zh, ...MCP_UI_TRANSLATIONS.zh, ...MCP_OAUTH_TRANSLATIONS.zh },
     modelProviders: {
+      currentModel: '当前模型', baseUrlLabel: '服务地址', statusConfigured: '已配置，可用', statusWaiting: '未配置', notConfigured: '尚未配置', modelsCount: '已配置 {count} 个模型',
       title: '自定义模型 Provider', subtitle: '配置 OpenAI 兼容、Anthropic 或 Gemini 原生端点，API Key 仅保存在服务端。', add: '新增', saved: '已保存模型配置。',
       confirmDelete: '删除这个模型 Provider？', testing: '正在测试端点…', testOk: '端点可用，延迟', default: '默认', test: '测试',
       empty: '尚未配置自定义 Provider，将继续使用服务端 .env。', editor: '模型 Provider 配置', name: '显示名称', keepSecret: '留空保留原 Key',
@@ -1343,6 +1344,7 @@ export const translations = {
     localFiles: { ...LOCAL_FILES_TRANSLATIONS.en, ...WORKSPACE_TRUST_TRANSLATIONS.en, chatAction: 'Local files', chatActionHint: 'The model can only read or edit files you authorize here. Click to add a folder.' },
     mcp: { ...MCP_TRANSLATIONS.en, ...MCP_UI_TRANSLATIONS.en, ...MCP_OAUTH_TRANSLATIONS.en },
     modelProviders: {
+      currentModel: 'Current model', baseUrlLabel: 'Base URL', statusConfigured: 'Configured', statusWaiting: 'Not configured', notConfigured: 'Not set', modelsCount: '{count} models',
       title: 'Custom model providers', subtitle: 'Configure OpenAI-compatible, native Anthropic, or native Gemini endpoints. API keys stay on the server.', add: 'Add', saved: 'Model provider saved.',
       confirmDelete: 'Delete this model provider?', testing: 'Testing endpoint…', testOk: 'Endpoint is available, latency', default: 'Default', test: 'Test',
       empty: 'No custom provider yet. Server environment settings remain active.', editor: 'Model provider settings', name: 'Display name', keepSecret: 'leave blank to keep current key',
@@ -1823,6 +1825,7 @@ export const translations = {
     localFiles: { ...LOCAL_FILES_TRANSLATIONS.ja, ...WORKSPACE_TRUST_TRANSLATIONS.ja, chatAction: 'ローカルファイル', chatActionHint: '許可したファイルのみモデルが読み書きできます。クリックしてフォルダーを追加。' },
     mcp: { ...MCP_TRANSLATIONS.ja, ...MCP_UI_TRANSLATIONS.ja, ...MCP_OAUTH_TRANSLATIONS.ja },
     modelProviders: {
+      currentModel: '現在のモデル', baseUrlLabel: 'ベース URL', statusConfigured: '設定済み', statusWaiting: '未設定', notConfigured: '未設定', modelsCount: '{count} モデル設定済み',
       title: 'カスタムモデル Provider', subtitle: 'OpenAI 互換、Anthropic、Gemini のネイティブエンドポイントを設定します。API Key はサーバー内に保存されます。', add: '追加', saved: 'モデル設定を保存しました。',
       confirmDelete: 'このモデル Provider を削除しますか？', testing: '接続をテスト中…', testOk: '接続成功、遅延', default: '既定', test: 'テスト',
       empty: 'カスタム Provider は未設定です。サーバーの環境設定を使用します。', editor: 'モデル Provider 設定', name: '表示名', keepSecret: '空欄なら現在の Key を保持',
@@ -2303,6 +2306,7 @@ export const translations = {
     localFiles: { ...LOCAL_FILES_TRANSLATIONS.ko, ...WORKSPACE_TRUST_TRANSLATIONS.ko, chatAction: '로컬 파일', chatActionHint: '허용한 파일만 모델이 읽거나 수정할 수 있습니다. 클릭해 폴더를 추가하세요.' },
     mcp: { ...MCP_TRANSLATIONS.ko, ...MCP_UI_TRANSLATIONS.ko, ...MCP_OAUTH_TRANSLATIONS.ko },
     modelProviders: {
+      currentModel: '현재 모델', baseUrlLabel: '베이스 URL', statusConfigured: '설정됨', statusWaiting: '설정 안 됨', notConfigured: '설정 안 됨', modelsCount: '모델 {count}개 설정됨',
       title: '사용자 지정 모델 Provider', subtitle: 'OpenAI 호환, Anthropic 또는 Gemini 네이티브 엔드포인트를 설정합니다. API Key는 서버에만 저장됩니다.', add: '추가', saved: '모델 설정을 저장했습니다.',
       confirmDelete: '이 모델 Provider를 삭제할까요?', testing: '엔드포인트 테스트 중…', testOk: '엔드포인트 사용 가능, 지연', default: '기본값', test: '테스트',
       empty: '사용자 지정 Provider가 없습니다. 서버 환경 설정을 계속 사용합니다.', editor: '모델 Provider 설정', name: '표시 이름', keepSecret: '비워 두면 기존 Key 유지',
@@ -2783,6 +2787,7 @@ export const translations = {
     localFiles: { ...LOCAL_FILES_TRANSLATIONS['zh-TW'], ...WORKSPACE_TRUST_TRANSLATIONS['zh-TW'], chatAction: '本機檔案', chatActionHint: '授權後模型才能讀寫你電腦上的檔案。點這裡新增資料夾。' },
     mcp: { ...MCP_TRANSLATIONS['zh-TW'], ...MCP_UI_TRANSLATIONS['zh-TW'], ...MCP_OAUTH_TRANSLATIONS['zh-TW'] },
     modelProviders: {
+      currentModel: '目前模型', baseUrlLabel: '服務位址', statusConfigured: '已設定，可用', statusWaiting: '未設定', notConfigured: '尚未設定', modelsCount: '已設定 {count} 個模型',
       title: '自訂模型 Provider', subtitle: '設定 OpenAI 相容、Anthropic 或 Gemini 原生端點，API Key 僅保存在伺服器端。', add: '新增', saved: '已儲存模型設定。',
       confirmDelete: '刪除這個模型 Provider？', testing: '正在測試端點…', testOk: '端點可用，延遲', default: '預設', test: '測試',
       empty: '尚未設定自訂 Provider，將繼續使用伺服器 .env。', editor: '模型 Provider 設定', name: '顯示名稱', keepSecret: '留空保留原 Key',

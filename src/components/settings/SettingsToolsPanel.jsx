@@ -42,7 +42,7 @@ export default function SettingsToolsPanel({ state, dispatch, t }) {
     <section className="flex flex-col gap-5 animate-float-up">
       <div>
         <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">TOOLS</span>
-        <h1 className="font-hand text-[28px] text-ink mt-1.5">{t('settingsTools.title')}</h1>
+        <h1 className="font-semibold text-[28px] text-ink mt-1.5">{t('settingsTools.title')}</h1>
         <p className="text-sm text-ink-soft mt-1">{t('settingsTools.subtitle')}</p>
       </div>
       <div className="flex flex-col gap-2">

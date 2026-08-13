@@ -7,7 +7,7 @@ import { useT } from '../../i18n/I18nProvider.jsx'
 function Group({ title, children }) {
   return (
     <div className="p-4 border border-ink/30 rounded-md flex flex-col gap-3">
-      <h3 className="font-hand text-lg text-ink">{title}</h3>
+      <h3 className="font-semibold text-lg text-ink">{title}</h3>
       {children}
     </div>
   )
@@ -117,7 +117,7 @@ export default function SettingsDataExport({ state, dispatch, storageBytes, stor
 
   return (
     <section className="flex flex-col gap-5 animate-float-up">
-      <div><span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">DATA & EXPORT</span><h1 className="font-hand text-[28px] text-ink mt-1.5">{t('settingsDataExport.title')}</h1></div>
+      <div><span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">DATA & EXPORT</span><h1 className="font-semibold text-[28px] text-ink mt-1.5">{t('settingsDataExport.title')}</h1></div>
       <Group title={t('settingsDataExport.exportData')}><div className="flex flex-wrap gap-2">
         <button onClick={exportSessions} className="h-9 px-4 border border-ink/70 rounded-md text-sm text-ink hover:bg-paper-2 flex items-center gap-1.5"><FileJson className="w-3.5 h-3.5" />{t('settingsDataExport.exportSessions')}</button>
         <button onClick={exportSettings} className="h-9 px-4 border border-ink/70 rounded-md text-sm text-ink hover:bg-paper-2 flex items-center gap-1.5"><Download className="w-3.5 h-3.5" />{t('settingsDataExport.exportSettings')}</button>

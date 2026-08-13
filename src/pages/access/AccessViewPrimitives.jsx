@@ -15,7 +15,7 @@ const CONNECTION_METHOD_KEYS = Object.freeze({
 })
 
 export function ConnectorSection({ title, hint, children }) {
-  return <section><div className="mb-3"><h2 className="font-hand text-xl text-ink">{title}</h2><p className="mt-0.5 text-xs text-ink-fade">{hint}</p></div><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{children}</div></section>
+  return <section><div className="mb-3"><h2 className="font-semibold text-xl text-ink">{title}</h2><p className="mt-0.5 text-xs text-ink-fade">{hint}</p></div><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{children}</div></section>
 }
 
 export function ConnectorCapabilityBadge({ capabilityLevel, t }) {
@@ -47,7 +47,7 @@ export function BridgeInboundInbox({ messages, busyId, highlightedId, onAllow, o
   if (!Array.isArray(messages) || messages.length === 0) return null
   return (
     <section className="mb-7 rounded-2xl border border-amber-300/70 bg-amber-50/60 p-4 shadow-sm" data-testid="bridge-inbound-inbox">
-      <div className="flex items-start gap-3"><span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-800"><Inbox className="h-4 w-4" /></span><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><h2 className="font-hand text-xl text-ink">{t('access.inboundInboxTitle')}</h2>{messages.length > 0 && <span className="rounded-full bg-amber-200/70 px-2 py-0.5 text-[10px] font-medium text-amber-900">{messages.length}</span>}</div><p className="mt-0.5 text-xs leading-5 text-ink-soft">{t('access.inboundInboxHint')}</p></div></div>
+      <div className="flex items-start gap-3"><span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-800"><Inbox className="h-4 w-4" /></span><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><h2 className="font-semibold text-xl text-ink">{t('access.inboundInboxTitle')}</h2>{messages.length > 0 && <span className="rounded-full bg-amber-200/70 px-2 py-0.5 text-[10px] font-medium text-amber-900">{messages.length}</span>}</div><p className="mt-0.5 text-xs leading-5 text-ink-soft">{t('access.inboundInboxHint')}</p></div></div>
       <div className="mt-4 space-y-3">{messages.map((message) => <InboundMessage key={message.id} message={message} busy={busyId === message.id} highlighted={highlightedId === message.id} onAllow={onAllow} onReject={onReject} t={t} />)}</div>
     </section>
   )

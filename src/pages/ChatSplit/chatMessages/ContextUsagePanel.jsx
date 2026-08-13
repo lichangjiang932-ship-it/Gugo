@@ -44,9 +44,9 @@ export default function ContextUsagePanel({
             </button>
           </div>
           <div className="grid grid-cols-3 gap-2 text-[11px]">
-            <div><span className="text-ink-fade">{t('chat.contextUsage.messages')}</span><div className="font-hand text-base text-ink">{messages.length}</div></div>
-            <div><span className="text-ink-fade">{t('chat.contextUsage.visibleCharacters')}</span><div className="font-hand text-base text-ink">{contextUsage.visibleCharacters.toLocaleString()}</div></div>
-            <div><span className="text-ink-fade">{t('chat.contextUsage.model')}</span><div className="font-hand text-base text-ink">{selectedModel || t('chat.contextUsage.backendDefault')}</div></div>
+            <div><span className="text-ink-fade">{t('chat.contextUsage.messages')}</span><div className="font-semibold text-base text-ink">{messages.length}</div></div>
+            <div><span className="text-ink-fade">{t('chat.contextUsage.visibleCharacters')}</span><div className="font-semibold text-base text-ink">{contextUsage.visibleCharacters.toLocaleString()}</div></div>
+            <div><span className="text-ink-fade">{t('chat.contextUsage.model')}</span><div className="font-semibold text-base text-ink">{selectedModel || t('chat.contextUsage.backendDefault')}</div></div>
           </div>
           <div className="mt-2 border-t border-dashed border-ember/30 pt-2 text-[11px]">
             <div className="mb-2">

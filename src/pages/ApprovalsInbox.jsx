@@ -72,7 +72,7 @@ function ApprovalCard({ approval, onDecide, busy, t }) {
               </span>
             </div>
             {approval.reason && (
-              <p className="font-hand text-sm text-ink-soft mt-1">{approval.reason}</p>
+              <p className="font-semibold text-sm text-ink-soft mt-1">{approval.reason}</p>
             )}
             <p className="font-mono text-[10px] text-ink-fade mt-1">
               {t(`approvals.origin.${approval.origin}`)} · {formatTime(approval.createdAt)}
@@ -91,7 +91,7 @@ function ApprovalCard({ approval, onDecide, busy, t }) {
             className="w-full font-mono text-[11px] p-2.5 border border-ink/30 rounded bg-paper text-ink resize-y"
           />
           {jsonError && (
-            <p className="font-hand text-sm text-red-600 mt-1">{jsonError}</p>
+            <p className="font-semibold text-sm text-red-600 mt-1">{jsonError}</p>
           )}
         </div>
       ) : (
@@ -106,7 +106,7 @@ function ApprovalCard({ approval, onDecide, busy, t }) {
             <button
               onClick={submitEdit}
               disabled={busy}
-              className="h-8 px-3 border border-emerald-500/60 rounded-md font-hand text-sm text-emerald-700 hover:bg-emerald-500/10 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+              className="h-8 px-3 border border-emerald-500/60 rounded-md font-semibold text-sm text-emerald-700 hover:bg-emerald-500/10 transition-colors flex items-center gap-1.5 disabled:opacity-50"
             >
               <Check className="w-3.5 h-3.5" />
               {t('approvals.inbox.approveEdited')}
@@ -114,7 +114,7 @@ function ApprovalCard({ approval, onDecide, busy, t }) {
             <button
               onClick={() => { setEditing(false); setJsonError(null); setDraft(JSON.stringify(approval.args ?? {}, null, 2)) }}
               disabled={busy}
-              className="h-8 px-3 border border-dashed border-ink-fade/60 rounded-md font-hand text-sm text-ink-soft hover:border-ink-fade transition-colors disabled:opacity-50"
+              className="h-8 px-3 border border-dashed border-ink-fade/60 rounded-md font-semibold text-sm text-ink-soft hover:border-ink-fade transition-colors disabled:opacity-50"
             >
               {t('approvals.inbox.cancelEdit')}
             </button>
@@ -124,7 +124,7 @@ function ApprovalCard({ approval, onDecide, busy, t }) {
             <button
               onClick={() => onDecide(approval.id, 'approve')}
               disabled={busy}
-              className="h-8 px-3 border border-emerald-500/60 rounded-md font-hand text-sm text-emerald-700 hover:bg-emerald-500/10 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+              className="h-8 px-3 border border-emerald-500/60 rounded-md font-semibold text-sm text-emerald-700 hover:bg-emerald-500/10 transition-colors flex items-center gap-1.5 disabled:opacity-50"
             >
               <Check className="w-3.5 h-3.5" />
               {t('approvals.inbox.approve')}
@@ -132,7 +132,7 @@ function ApprovalCard({ approval, onDecide, busy, t }) {
             <button
               onClick={() => onDecide(approval.id, 'deny')}
               disabled={busy}
-              className="h-8 px-3 border border-red-500/60 rounded-md font-hand text-sm text-red-600 hover:bg-red-500/10 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+              className="h-8 px-3 border border-red-500/60 rounded-md font-semibold text-sm text-red-600 hover:bg-red-500/10 transition-colors flex items-center gap-1.5 disabled:opacity-50"
             >
               <X className="w-3.5 h-3.5" />
               {t('approvals.inbox.deny')}
@@ -140,7 +140,7 @@ function ApprovalCard({ approval, onDecide, busy, t }) {
             <button
               onClick={() => setEditing(true)}
               disabled={busy}
-              className="h-8 px-3 border border-dashed border-ink-fade/60 rounded-md font-hand text-sm text-ink-soft hover:border-ink-fade transition-colors flex items-center gap-1.5 disabled:opacity-50"
+              className="h-8 px-3 border border-dashed border-ink-fade/60 rounded-md font-semibold text-sm text-ink-soft hover:border-ink-fade transition-colors flex items-center gap-1.5 disabled:opacity-50"
             >
               <Pencil className="w-3.5 h-3.5" />
               {t('approvals.inbox.edit')}
@@ -219,13 +219,13 @@ export default function ApprovalsInbox() {
         <div className="flex items-end justify-between mb-6">
           <div>
             <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">APPROVALS</span>
-            <h1 className="font-hand text-[28px] text-ink mt-1.5">{t('approvals.inbox.title')}</h1>
-            <p className="font-hand text-base text-ink-soft mt-1">{t('approvals.inbox.subtitle')}</p>
+            <h1 className="font-semibold text-[28px] text-ink mt-1.5">{t('approvals.inbox.title')}</h1>
+            <p className="font-semibold text-base text-ink-soft mt-1">{t('approvals.inbox.subtitle')}</p>
           </div>
           <button
             onClick={load}
             disabled={loading}
-            className="h-9 px-4 border border-dashed border-ink-fade/60 rounded-md font-hand text-sm text-ink-soft hover:border-ink-fade transition-colors flex items-center gap-1.5 disabled:opacity-50"
+            className="h-9 px-4 border border-dashed border-ink-fade/60 rounded-md font-semibold text-sm text-ink-soft hover:border-ink-fade transition-colors flex items-center gap-1.5 disabled:opacity-50"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             {t('approvals.inbox.refresh')}
@@ -235,16 +235,16 @@ export default function ApprovalsInbox() {
         <div className="grid grid-cols-2 gap-3.5 mb-5 max-w-md">
           <div className="p-3.5 border border-ink/30 rounded-md bg-paper">
             <span className="font-mono text-[9px] tracking-wider text-ink-fade">{t('approvals.inbox.statPending')}</span>
-            <div className="font-hand text-[26px] text-ink mt-1.5">{counts.total}</div>
+            <div className="font-semibold text-[26px] text-ink mt-1.5">{counts.total}</div>
           </div>
           <div className="p-3.5 border border-ink/30 rounded-md bg-paper">
             <span className="font-mono text-[9px] tracking-wider text-red-600">{t('approvals.inbox.statHighRisk')}</span>
-            <div className="font-hand text-[26px] text-ink mt-1.5">{counts.high}</div>
+            <div className="font-semibold text-[26px] text-ink mt-1.5">{counts.high}</div>
           </div>
         </div>
 
         {error && (
-          <div className="mb-4 px-4 py-2.5 border border-dashed border-ember/60 rounded-md font-hand text-sm text-ember">
+          <div className="mb-4 px-4 py-2.5 border border-dashed border-ember/60 rounded-md font-semibold text-sm text-ember">
             {error}
           </div>
         )}
@@ -252,8 +252,8 @@ export default function ApprovalsInbox() {
         {approvals.length === 0 && !loading ? (
           <div className="py-16 text-center">
             <ShieldAlert className="w-8 h-8 text-ink-fade mx-auto mb-3" />
-            <p className="font-hand text-base text-ink-soft">{t('approvals.inbox.empty')}</p>
-            <p className="font-hand text-sm text-ink-fade mt-1">{t('approvals.inbox.emptyHint')}</p>
+            <p className="font-semibold text-base text-ink-soft">{t('approvals.inbox.empty')}</p>
+            <p className="font-semibold text-sm text-ink-fade mt-1">{t('approvals.inbox.emptyHint')}</p>
           </div>
         ) : (
           <div className="flex flex-col gap-3 max-w-3xl">

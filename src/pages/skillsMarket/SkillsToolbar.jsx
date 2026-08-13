@@ -7,7 +7,7 @@ export default function SkillsToolbar({
   return (
     <>
       <div className="flex items-end justify-between mb-6 gap-4">
-        <h1 className="font-hand text-[30px] text-ink">{t('skillsMarket.title')}</h1>
+        <h1 className="font-semibold text-[30px] text-ink">{t('skillsMarket.title')}</h1>
         <div className="flex flex-wrap justify-end gap-2">
           <input
             ref={folderInputRef}
@@ -28,19 +28,19 @@ export default function SkillsToolbar({
               className="bg-transparent text-sm text-ink outline-none placeholder:text-ink-soft w-40"
             />
           </div>
-          <button type="button" onClick={() => folderInputRef.current?.click()} className="h-9 px-4 border border-ink/70 rounded-md font-hand text-sm flex items-center gap-1.5 hover:bg-paper-2">
+          <button type="button" onClick={() => folderInputRef.current?.click()} className="h-9 px-4 border border-ink/70 rounded-md font-semibold text-sm flex items-center gap-1.5 hover:bg-paper-2">
             <Upload className="w-4 h-4" />{t('skillsMarket.importPack')}
           </button>
-          <button type="button" onClick={openPlugins} className="h-9 px-4 border border-ink/70 rounded-md font-hand text-sm flex items-center gap-1.5 hover:bg-paper-2">
+          <button type="button" onClick={openPlugins} className="h-9 px-4 border border-ink/70 rounded-md font-semibold text-sm flex items-center gap-1.5 hover:bg-paper-2">
             <Package className="w-4 h-4" />{t('skillsMarket.fromPlugin')}
           </button>
-          <button type="button" onClick={() => openGithub('gsap')} className="h-9 px-4 border border-ink/70 rounded-md font-hand text-sm flex items-center gap-1.5 hover:bg-paper-2">
+          <button type="button" onClick={() => openGithub('gsap')} className="h-9 px-4 border border-ink/70 rounded-md font-semibold text-sm flex items-center gap-1.5 hover:bg-paper-2">
             <GitBranch className="w-4 h-4" />GSAP
           </button>
-          <button type="button" onClick={() => openGithub()} className="h-9 px-4 border border-ink/70 rounded-md font-hand text-sm flex items-center gap-1.5 hover:bg-paper-2">
+          <button type="button" onClick={() => openGithub()} className="h-9 px-4 border border-ink/70 rounded-md font-semibold text-sm flex items-center gap-1.5 hover:bg-paper-2">
             <GitBranch className="w-4 h-4" />{t('skillsMarket.fromGithub')}
           </button>
-          <button type="button" onClick={openCustomModal} className="h-9 px-4 bg-ember text-paper rounded-md font-hand text-sm flex items-center gap-1.5 hover:bg-ember/90">
+          <button type="button" onClick={openCustomModal} className="h-9 px-4 bg-ember text-paper rounded-md font-semibold text-sm flex items-center gap-1.5 hover:bg-ember/90">
             <Plus className="w-4 h-4" />{t('skillsMarket.custom')}
           </button>
         </div>

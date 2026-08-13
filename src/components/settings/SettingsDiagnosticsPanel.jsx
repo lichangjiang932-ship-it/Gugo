@@ -21,7 +21,7 @@ function Info({ label, value }) {
 function Group({ title, children }) {
   return (
     <div className="p-4 border border-ink/30 rounded-md flex flex-col gap-3">
-      <h3 className="font-hand text-lg text-ink">{title}</h3>
+      <h3 className="font-semibold text-lg text-ink">{title}</h3>
       {children}
     </div>
   )
@@ -49,7 +49,7 @@ export default function SettingsDiagnosticsPanel({
       <div className="flex items-start justify-between gap-4">
         <div>
           <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">SYSTEM DIAGNOSTICS</span>
-          <h1 className="font-hand text-[28px] text-ink mt-1.5">系统诊断</h1>
+          <h1 className="font-semibold text-[28px] text-ink mt-1.5">系统诊断</h1>
           <p className="text-sm text-ink-soft mt-1">
             {authMode === 'local'
               ? t('settings.localAuthDescription')

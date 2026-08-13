@@ -82,15 +82,19 @@ export default function ProviderEditor({ editing, setEditing, busy, detecting, c
   const selectedPreset = PROVIDER_PRESETS.find((preset) => preset.id === editing.presetId)
   const isLocalPreset = selectedPreset?.local === true
   const isLocalOrCustom = isLocalPreset || editing.presetId === 'custom'
+  const modelList = [...new Set(String(editing.modelsText || '').split(/[\n,]/).map((model) => model.trim()).filter(Boolean))]
   return createPortal(<div className="fixed inset-0 z-50 bg-ink/40 flex items-start sm:items-center justify-center p-4 overflow-y-auto">
     <div className="w-[620px] max-w-full max-h-[92vh] my-auto bg-paper border border-ink/20 rounded-md flex flex-col overflow-hidden">
       <div className="flex items-center shrink-0 px-5 pt-5 pb-3 border-b border-ink/10"><div className="font-semibold text-ink flex-1">{t('modelProviders.editor')}</div><button type="button" onClick={() => setEditing(null)}><X className="w-4 h-4" /></button></div>
       <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 flex flex-col gap-3">
         <PresetPicker editing={editing} setEditing={setEditing} setShowAdvanced={setShowAdvanced} t={t} />
-        {editing.presetId && editing.presetId !== 'custom' && <div className="rounded-xl border border-ink/10 bg-paper-2 p-4 flex flex-col gap-3">
-          <div className="text-sm font-medium text-ink">{editing.label}</div>
+        {editing.presetId && editing.presetId !== 'custom' && <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="text-sm font-semibold text-ink">{editing.label}</div>
+            {modelList.length > 0 && <span className="rounded-full bg-paper-2 px-2 py-0.5 text-[11px] text-ink-soft">{t('modelProviders.modelsCount', { count: modelList.length })}</span>}
+          </div>
           {!isLocalPreset && <Field label={`API Key${editing.hasApiKey ? ` · ${t('modelProviders.keepSecret')}` : ''}`}><input type="password" value={editing.apiKey} onChange={(event) => setEditing({ ...editing, apiKey: event.target.value })} placeholder={editing.hasApiKey ? '••••••••' : t('modelProviders.apiKeyPlaceholder')} autoFocus /></Field>}
-          {editing.modelsText && <Field label={t('modelProviders.defaultModel')}><select value={editing.defaultModel} onChange={(event) => setEditing({ ...editing, defaultModel: event.target.value })}>{editing.modelsText.split(/[\n,]/).map((model) => model.trim()).filter(Boolean).map((model) => <option key={model} value={model}>{model}</option>)}</select></Field>}
+          {modelList.length > 1 && <Field label={t('modelProviders.defaultModel')}><select value={editing.defaultModel} onChange={(event) => setEditing({ ...editing, defaultModel: event.target.value })}>{modelList.map((model) => <option key={model} value={model}>{model}</option>)}</select></Field>}
           {isLocalPreset && <div className="text-xs text-ink-fade">{t('modelProviders.localDetectHint')}</div>}
         </div>}
         <button type="button" onClick={() => setShowAdvanced((value) => !value)} className="flex items-center gap-2 text-xs text-ink-soft hover:text-ink self-start"><ChevronDown className={`h-4 w-4 transition-transform ${showAdvanced ? 'rotate-180' : ''}`} />{t('modelProviders.advanced')}</button>
