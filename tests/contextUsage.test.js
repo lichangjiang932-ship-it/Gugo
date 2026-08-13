@@ -2,8 +2,11 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  DEFAULT_MODEL_CONTEXT_WINDOW,
   estimateClientContextUsage,
   estimateTextTokens,
+  normalizeContextWindow,
+  resolveModelContextWindow,
 } from '../src/lib/contextUsage.js'
 
 test('client token estimate charges non-ASCII more heavily than ASCII', () => {
@@ -60,5 +63,24 @@ test('client context percent is bounded and invalid windows use the default', ()
     contextWindow: 10,
   })
   assert.equal(usage.percent, 100)
-  assert.equal(estimateClientContextUsage({ contextWindow: 0 }).contextWindow, 1_000_000)
+  assert.equal(estimateClientContextUsage({ contextWindow: 0 }).contextWindow, DEFAULT_MODEL_CONTEXT_WINDOW)
+  assert.equal(estimateClientContextUsage().contextWindow, 128_000)
+})
+
+test('context window normalization is conservative for invalid model metadata', () => {
+  assert.equal(normalizeContextWindow('32768'), 32_768)
+  assert.equal(normalizeContextWindow(32_768.9), 32_768)
+  assert.equal(normalizeContextWindow(-1), DEFAULT_MODEL_CONTEXT_WINDOW)
+  assert.equal(normalizeContextWindow(undefined, 0), DEFAULT_MODEL_CONTEXT_WINDOW)
+})
+
+test('selected model context window follows model switches and falls back conservatively', () => {
+  const models = [
+    { name: 'small-model', contextWindow: 8_192 },
+    { name: 'large-model', contextWindow: 262_144 },
+  ]
+
+  assert.equal(resolveModelContextWindow(models, 'small-model'), 8_192)
+  assert.equal(resolveModelContextWindow(models, 'large-model'), 262_144)
+  assert.equal(resolveModelContextWindow(models, 'unknown-model'), DEFAULT_MODEL_CONTEXT_WINDOW)
 })

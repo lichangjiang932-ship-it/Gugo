@@ -74,6 +74,27 @@ test('compact only replaces chat context when enough messages exist', async () =
   assert.deepEqual(actions, [{ type: 'COMPRESS_CURRENT_SESSION' }])
 })
 
+test('compact uses the selected-model server compaction path when available', async () => {
+  const registry = createRegistry()
+  const messages = Array.from({ length: 9 }, (_, index) => ({ id: `m${index}`, role: 'user', content: `message ${index}` }))
+  const compacted = [{ id: 'summary', role: 'assistant', content: 'summary' }, ...messages.slice(-6)]
+  const calls = []
+  const actions = []
+  const state = { activeSessionId: 's1', sessions: [{ id: 's1', messages }] }
+  const result = await registry.getCommand('compact').handler('', {
+    getState: () => state,
+    compactSession: async (options) => {
+      calls.push(options)
+      return { ok: true, compacted: true, messages: compacted }
+    },
+    dispatch: (action) => actions.push(action),
+  })
+
+  assert.equal(result, 'Chat context compacted.')
+  assert.deepEqual(calls, [{ sessionId: 's1', messages, keepMessages: 6, semantic: true }])
+  assert.deepEqual(actions, [{ type: 'COMPACT_SESSION', payload: { sessionId: 's1', messages: compacted } }])
+})
+
 test('feedback and goals first open inline panels, then save meaningful values', async () => {
   const registry = createRegistry()
   const feedback = []

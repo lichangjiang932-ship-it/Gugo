@@ -5,7 +5,7 @@ import { deleteModelProvider, discoverModelProvider, listModelProviders, saveMod
 import ProviderDiagnostics from './modelProviders/ProviderDiagnostics.jsx'
 import ProviderEditor from './modelProviders/ProviderEditor.jsx'
 import ProviderList from './modelProviders/ProviderList.jsx'
-import { emptyProvider, numberOrNull, PROVIDER_PRESETS, selectToTribool, toEditor } from './modelProviders/providerConfig.js'
+import { emptyProvider, mergeDiscoveredModelProfiles, numberOrNull, PROVIDER_PRESETS, selectToTribool, toEditor } from './modelProviders/providerConfig.js'
 
 export default function ModelProvidersPanel({ onChanged }) {
   const { t } = useT()
@@ -61,7 +61,7 @@ export default function ModelProvidersPanel({ onChanged }) {
         supportsStreaming: selectToTribool(editing.supportsStreaming), supportsVision: selectToTribool(editing.supportsVision),
         supportsPdf: selectToTribool(editing.supportsPdf), firstTokenTimeoutMs: numberOrNull(editing.firstTokenTimeoutMs),
         idleTimeoutMs: numberOrNull(editing.idleTimeoutMs), failoverEnabled: selectToTribool(editing.failoverEnabled),
-        keepAlive: String(editing.keepAlive || '').trim() || null,
+        keepAlive: String(editing.keepAlive || '').trim() || null, modelProfiles: editing.modelProfiles || {},
       })
       setEditing(null)
       await reload()
@@ -103,12 +103,14 @@ export default function ModelProvidersPanel({ onChanged }) {
       const models = data.models || data.endpoint?.remoteModels || []
       if (!models.length) throw new Error(t('modelProviders.noModels'))
       const detected = data.detected || null
+      const discoveredProfiles = data.modelProfiles && typeof data.modelProfiles === 'object' ? data.modelProfiles : {}
       setEditing((current) => ({
         ...current, modelsText: models.join('\n'), defaultModel: models.includes(current.defaultModel) ? current.defaultModel : models[0],
+        modelProfiles: mergeDiscoveredModelProfiles(current.modelProfiles, discoveredProfiles, models),
         ...(data.kind && !current.kind ? { kind: data.kind } : {}),
-        ...(detected?.contextWindow ? { contextWindow: String(detected.contextWindow) } : {}),
-        ...(detected?.supportsTools != null ? { supportsTools: detected.supportsTools ? '1' : '0' } : {}),
-        ...(detected?.supportsVision != null ? { supportsVision: detected.supportsVision ? '1' : '0' } : {}),
+        ...(models.length === 1 && detected?.contextWindow ? { contextWindow: String(detected.contextWindow) } : {}),
+        ...(models.length === 1 && detected?.supportsTools != null ? { supportsTools: detected.supportsTools ? '1' : '0' } : {}),
+        ...(models.length === 1 && detected?.supportsVision != null ? { supportsVision: detected.supportsVision ? '1' : '0' } : {}),
       }))
       const found = t('modelProviders.discovered').replace('{count}', String(models.length))
       setMessage(detected?.contextWindow ? `${found} ${t('modelProviders.detectedFrom')}: ${detected.contextWindow} token` : found)

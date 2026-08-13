@@ -1368,6 +1368,15 @@ function successfulReadFileInMessages(messages = []) {
 /**
  * 执行单个工具调用 → 落盘 artifact → appendJobArtifact → 返回给模型的简短结果。
  */
+export function buildSubagentRequest(args = {}, inheritedModelName = '') {
+  const request = args && typeof args === 'object' && !Array.isArray(args) ? args : {}
+  const modelName = String(request.modelName || request.model_name || inheritedModelName || '').trim()
+  return {
+    ...request,
+    ...(modelName ? { modelName } : {}),
+  }
+}
+
 async function executeServerTool({
   name,
   args,
@@ -1547,7 +1556,7 @@ async function executeServerTool({
     try {
       return await runSubagentBatch({
         userId: job?.userId || null,
-        request: args || {},
+        request: buildSubagentRequest(args, job?.modelName),
         depth: -1,
         parentSessionId: job?.id || null,
         parentMessageId: step?.id || null,

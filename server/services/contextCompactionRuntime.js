@@ -11,9 +11,14 @@ import {
 } from './compactionService.js'
 import { writeToolAudit } from '../utils/audit.js'
 import { logWarn } from '../utils/logger.js'
+import { DEFAULT_CLOUD_CONTEXT_WINDOW } from '../utils/endpointProfile.js'
 
 export const MAX_AUTO_COMPACTION_TOKENS = 800_000
-export const DEFAULT_CONTEXT_WINDOW = 1_000_000
+// Context-aware callers pass the selected model's resolved window. Keep a
+// conservative cloud-sized fallback for legacy/background entry points that
+// do not yet carry model metadata; the former 1M fallback delayed compaction
+// far beyond the capacity of most providers.
+export const DEFAULT_CONTEXT_WINDOW = DEFAULT_CLOUD_CONTEXT_WINDOW
 
 function textTokens(value) {
   const text = typeof value === 'string' ? value : JSON.stringify(value ?? '')

@@ -15,6 +15,25 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body))
 }
 
+export function resolveCompactionModelContext({
+  userId,
+  modelName,
+  resolveContextWindow = getModelContextWindow,
+  invokeModel = callBackgroundModel,
+} = {}) {
+  const selectedModel = String(modelName || '').trim() || undefined
+  return {
+    modelName: selectedModel,
+    contextWindow: resolveContextWindow({ userId, modelName: selectedModel }),
+    callModel: ({ messages, signal }) => invokeModel({
+      userId,
+      modelName: selectedModel,
+      messages,
+      signal,
+    }),
+  }
+}
+
 export async function handleCompactionRequest(req, res) {
   const userId = authenticateRequest(req)
   if (!userId) return sendJson(res, 401, { ok: false, error: 'Unauthorized' })
@@ -48,10 +67,14 @@ export async function handleCompactionRequest(req, res) {
         fallbackReason: body.semantic === false ? 'disabled' : null,
       }
       if (body.semantic !== false) {
+        const modelContext = resolveCompactionModelContext({
+          userId,
+          modelName: body.modelName,
+        })
         const semantic = await addSemanticCompactionSummary({
           result,
-          callModel: ({ messages, signal }) => callBackgroundModel({ userId, messages, signal }),
-          contextWindow: getModelContextWindow({ userId }),
+          callModel: modelContext.callModel,
+          contextWindow: modelContext.contextWindow,
           userId,
         })
         result = semantic.result
@@ -64,13 +87,20 @@ export async function handleCompactionRequest(req, res) {
         archivedMessages: result.archivedMessages,
         summaryText: result.summaryText,
       })
+      const summaryMessage = {
+        ...result.summaryMessage,
+        meta: { ...result.summaryMessage.meta, archiveId: archive.id },
+      }
+      const outboundMessages = result.outboundMessages.map((message) => (
+        message?.id === result.summaryMessage?.id ? summaryMessage : message
+      ))
       return sendJson(res, 200, {
         ok: true,
         compacted: true,
         archiveId: archive.id,
-        summaryMessage: { ...result.summaryMessage, meta: { ...result.summaryMessage.meta, archiveId: archive.id } },
-        messages: result.outboundMessages,
-        outboundMessages: result.outboundMessages,
+        summaryMessage,
+        messages: outboundMessages,
+        outboundMessages,
         replacedMessageCount: result.replacedMessageCount,
         forced: result.forced,
         semanticSummary,

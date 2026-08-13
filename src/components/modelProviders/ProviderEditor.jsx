@@ -35,6 +35,22 @@ function PresetPicker({ editing, setEditing, setShowAdvanced, t }) {
 }
 
 function CapabilityFields({ editing, setEditing, t }) {
+  const models = [...new Set(editing.modelsText.split(/[\n,]/).map((model) => model.trim()).filter(Boolean))]
+  const updateModelContext = (model, value) => {
+    const modelProfiles = { ...(editing.modelProfiles || {}) }
+    const current = modelProfiles[model] && typeof modelProfiles[model] === 'object'
+      ? modelProfiles[model]
+      : {}
+    if (value === '') {
+      const next = { ...current }
+      delete next.contextWindow
+      if (Object.keys(next).length) modelProfiles[model] = next
+      else delete modelProfiles[model]
+    } else {
+      modelProfiles[model] = { ...current, contextWindow: Number(value) }
+    }
+    setEditing({ ...editing, modelProfiles })
+  }
   return <div className="flex flex-col gap-3 p-3 rounded-md border border-ink-fade/30 bg-paper-2">
     <div><div className="text-xs font-medium text-ink">{t('modelProviders.capsTitle')}</div><div className="text-[11px] text-ink-fade mt-0.5">{t('modelProviders.capsHint')}</div></div>
     {editing.baseUrl.trim() && <div className="text-[11px] text-ink-fade break-all">{t('modelProviders.effectiveUrl')}: <code>{effectiveUrl(editing.baseUrl)}</code></div>}
@@ -42,6 +58,12 @@ function CapabilityFields({ editing, setEditing, t }) {
       <Field label={t('modelProviders.kind')}><select value={editing.kind} onChange={(event) => setEditing({ ...editing, kind: event.target.value })}>{KIND_OPTIONS.map((kind) => <option key={kind || 'auto'} value={kind}>{kind || t('modelProviders.kindAuto')}</option>)}</select></Field>
       <Field label={t('modelProviders.contextWindow')}><input type="number" min="1024" value={editing.contextWindow} onChange={(event) => setEditing({ ...editing, contextWindow: event.target.value })} placeholder="8192" /></Field>
     </div>
+    {models.length > 0 && <div className="flex flex-col gap-2">
+      <div className="text-[11px] text-ink-fade">{t('modelProviders.contextWindow')} / model</div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+        {models.map((model) => <Field key={model} label={model}><input type="number" min="1024" value={editing.modelProfiles?.[model]?.contextWindow || ''} onChange={(event) => updateModelContext(model, event.target.value)} placeholder={editing.contextWindow || '128000'} /></Field>)}
+      </div>
+    </div>}
     <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
       {['supportsTools', 'supportsStreaming', 'supportsVision', 'supportsPdf'].map((key) => <TriboolField key={key} label={t(`modelProviders.${key}`)} value={editing[key]} onChange={(value) => setEditing({ ...editing, [key]: value })} t={t} />)}
     </div>
@@ -83,7 +105,7 @@ export default function ProviderEditor({ editing, setEditing, busy, detecting, c
         <div className="flex gap-4 text-xs text-ink-soft"><label><input type="checkbox" checked={editing.enabled} onChange={(event) => setEditing({ ...editing, enabled: event.target.checked })} /> {t('modelProviders.enabled')}</label><label><input type="checkbox" checked={editing.isDefault} onChange={(event) => setEditing({ ...editing, isDefault: event.target.checked })} /> {t('modelProviders.makeDefault')}</label></div>
       </div>
       <div className="flex justify-end gap-2 shrink-0 px-5 py-4 border-t border-ink/10 bg-paper">
-        {isLocalOrCustom && <button type="button" disabled={busy || detecting || !editing.baseUrl.trim()} onClick={onDiscover} className="h-9 px-4 border border-ink/50 text-ink rounded-md text-sm flex items-center gap-1 disabled:opacity-40"><RefreshCw className={`w-4 h-4 ${detecting ? 'animate-spin' : ''}`} />{detecting ? t('modelProviders.detecting') : t('modelProviders.discover')}</button>}
+        <button type="button" disabled={busy || detecting || !editing.baseUrl.trim() || (!isLocalOrCustom && !editing.apiKey.trim() && !editing.hasApiKey)} onClick={onDiscover} className="h-9 px-4 border border-ink/50 text-ink rounded-md text-sm flex items-center gap-1 disabled:opacity-40"><RefreshCw className={`w-4 h-4 ${detecting ? 'animate-spin' : ''}`} />{detecting ? t('modelProviders.detecting') : t('modelProviders.discover')}</button>
         <button type="button" disabled={busy || detecting || !canSave} onClick={onSave} className="h-9 px-4 bg-ember text-paper rounded-md text-sm flex items-center gap-1 disabled:opacity-40"><Save className="w-4 h-4" />{t('modelProviders.save')}</button>
       </div>
     </div>

@@ -1,6 +1,25 @@
 const MESSAGE_OVERHEAD_TOKENS = 6
 const FIXED_CONTEXT_OVERHEAD_TOKENS = 16
 
+export const DEFAULT_MODEL_CONTEXT_WINDOW = 128_000
+
+export function normalizeContextWindow(value, fallback = DEFAULT_MODEL_CONTEXT_WINDOW) {
+  const parsed = Number(value)
+  if (Number.isFinite(parsed) && parsed > 0) return Math.floor(parsed)
+
+  const parsedFallback = Number(fallback)
+  return Number.isFinite(parsedFallback) && parsedFallback > 0
+    ? Math.floor(parsedFallback)
+    : DEFAULT_MODEL_CONTEXT_WINDOW
+}
+
+export function resolveModelContextWindow(models = [], modelName = '', fallback = DEFAULT_MODEL_CONTEXT_WINDOW) {
+  const selected = Array.isArray(models)
+    ? models.find((model) => model?.name === modelName)
+    : null
+  return normalizeContextWindow(selected?.contextWindow, fallback)
+}
+
 export function estimateTextTokens(value) {
   if (value === undefined || value === null || value === '') return 0
   const text = typeof value === 'string' ? value : JSON.stringify(value)
@@ -48,7 +67,7 @@ export function estimateClientContextUsage({
   messages = [],
   tools = [],
   systemPrompt = '',
-  contextWindow = 1_000_000,
+  contextWindow = DEFAULT_MODEL_CONTEXT_WINDOW,
 } = {}) {
   const safeMessages = Array.isArray(messages) ? messages : []
   let messageTokens = 0
@@ -68,9 +87,7 @@ export function estimateClientContextUsage({
   const toolSpecTokens = estimateTextTokens(Array.isArray(tools) ? tools : [])
   const systemTokens = FIXED_CONTEXT_OVERHEAD_TOKENS + estimateTextTokens(systemPrompt)
   const estimatedTokens = messageTokens + toolCallTokens + attachmentTokens + toolSpecTokens + systemTokens
-  const safeWindow = Number.isFinite(Number(contextWindow)) && Number(contextWindow) > 0
-    ? Number(contextWindow)
-    : 1_000_000
+  const safeWindow = normalizeContextWindow(contextWindow)
   const percent = Math.min(100, Math.round((estimatedTokens / safeWindow) * 100))
 
   return {

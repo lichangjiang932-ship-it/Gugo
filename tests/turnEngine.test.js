@@ -467,6 +467,7 @@ test('TurnEngine persists and applies agent, skill, memory, and tools context', 
   assert.deepEqual(loopOptions.toolSpecs.map((spec) => spec.function.name), ['read_file'])
   assert.equal(loopOptions.skillId, 'skill-review')
   assert.equal(loopOptions.job.agentId, 'agent-resolved')
+  assert.equal(loopOptions.job.modelName, 'context-model')
   assert.equal(loopOptions.contextWindow, 8192)
   assert.equal(loopOptions.intentMode, 'execute')
   assert.equal(contextWindowRequest.userId, userId)

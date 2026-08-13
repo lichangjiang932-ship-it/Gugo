@@ -62,6 +62,22 @@ export function buildCoreSlashCommands(_t, lang = 'en') {
     command('compact', copy, async (_args, ctx = {}) => {
       const session = currentSession(ctx)
       if (!session || (session.messages || []).length <= 8) return copy.notices.compactEmpty
+      if (typeof ctx.compactSession === 'function') {
+        const result = await ctx.compactSession({
+          sessionId: session.id,
+          messages: session.messages,
+          keepMessages: 6,
+          semantic: true,
+        })
+        const messages = Array.isArray(result?.messages)
+          ? result.messages
+          : result?.outboundMessages
+        if (result?.ok !== true || !Array.isArray(messages)) {
+          throw new Error(result?.error || 'Context compaction failed.')
+        }
+        ctx.dispatch?.({ type: 'COMPACT_SESSION', payload: { sessionId: session.id, messages } })
+        return result.compacted === false ? copy.notices.compactEmpty : copy.notices.compact
+      }
       ctx.dispatch?.({ type: 'COMPRESS_CURRENT_SESSION' })
       return copy.notices.compact
     }),

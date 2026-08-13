@@ -202,8 +202,9 @@ function tribool(value) {
 
 /**
  * 解析上下文窗口。优先级:
- *   显式 override(provider 设置 / 探测结果)
+ *   精确模型画像(overrides.models / modelProfiles)
  *   > MODEL_CONTEXT_WINDOWS 里按模型名配的
+ *   > legacy provider contextWindow
  *   > MODEL_CONTEXT_WINDOW 全局
  *   > kind/isLocal 默认值
  *
@@ -228,6 +229,32 @@ function parseContextWindowMap(raw = '') {
       })
       .filter(Boolean)
   )
+}
+
+function modelProfileEntry(collection, modelName = '') {
+  const selectedModel = String(modelName || '').trim()
+  if (!selectedModel || !collection) return null
+  if (Array.isArray(collection)) {
+    const matched = collection.find((entry) => {
+      if (!entry || typeof entry !== 'object') return false
+      const name = entry.modelName ?? entry.name ?? entry.id
+      return String(name || '').trim() === selectedModel
+    })
+    return matched && typeof matched === 'object' ? matched : null
+  }
+  if (typeof collection !== 'object') return null
+  const matched = collection[selectedModel]
+  if (matched && typeof matched === 'object' && !Array.isArray(matched)) return matched
+  const contextWindow = positiveInt(matched)
+  return contextWindow ? { contextWindow } : null
+}
+
+function exactModelProfile({ modelName = '', overrides = {}, modelProfiles = null } = {}) {
+  for (const source of [modelProfiles, overrides?.modelProfiles, overrides?.models]) {
+    const matched = modelProfileEntry(source, modelName)
+    if (matched) return matched
+  }
+  return null
 }
 
 function resolveTimeouts({ isLocal, env, overrides }) {
@@ -263,10 +290,12 @@ function resolveTimeouts({ isLocal, env, overrides }) {
  * @param {string} [params.modelName] 模型名(用于按模型查上下文窗口 / 能力白名单)
  * @param {object} [params.env] 运行时环境变量
  * @param {object} [params.overrides] provider 设置里的显式配置(DB v28 字段 / 探测结果)
+ * @param {object|Array} [params.modelProfiles] 按模型名精确匹配的画像映射
  * @returns {{
  *   kind: string, baseUrl: string, modelName: string, isLocal: boolean,
  *   timeouts: {probeMs:number, firstTokenMs:number, idleMs:number, requestMs:number, backgroundMs:number},
- *   contextWindow: number, supportsTools: boolean, supportsStreaming: boolean,
+ *   contextWindow: number, contextWindowSource: string,
+ *   supportsTools: boolean, supportsStreaming: boolean,
  *   supportsVision: boolean, supportsPdf: boolean, supportsParallelTools: boolean,
  *   failoverEligible: boolean, keepAlive: string|null,
  * }}
@@ -276,6 +305,7 @@ export function resolveEndpointProfile({
   modelName = '',
   env = process.env,
   overrides = {},
+  modelProfiles = null,
 } = {}) {
   const safeEnv = env || {}
   const safeOverrides = overrides || {}
@@ -285,15 +315,32 @@ export function resolveEndpointProfile({
     : inferEndpointKind(baseUrl)
   const caps = KIND_CAPABILITIES[kind] || KIND_CAPABILITIES['openai-compatible']
   const selectedModel = String(modelName || safeEnv.MODEL_NAME || '').trim()
+  const selectedModelProfile = exactModelProfile({
+    modelName: selectedModel,
+    overrides: safeOverrides,
+    modelProfiles,
+  }) || {}
+  const effectiveOverrides = { ...safeOverrides, ...selectedModelProfile }
 
   // ---- 上下文窗口 ----
-  let contextWindow = positiveInt(safeOverrides.contextWindow)
+  let contextWindow = positiveInt(selectedModelProfile.contextWindow)
+  let contextWindowSource = contextWindow ? 'model_profile' : ''
   if (!contextWindow) {
     const perModel = parseContextWindowMap(safeEnv.MODEL_CONTEXT_WINDOWS)[selectedModel]
-    contextWindow = positiveInt(perModel) || positiveInt(safeEnv.MODEL_CONTEXT_WINDOW)
+    contextWindow = positiveInt(perModel)
+    if (contextWindow) contextWindowSource = 'model_context_windows'
+  }
+  if (!contextWindow) {
+    contextWindow = positiveInt(safeOverrides.contextWindow)
+    if (contextWindow) contextWindowSource = 'provider_override'
+  }
+  if (!contextWindow) {
+    contextWindow = positiveInt(safeEnv.MODEL_CONTEXT_WINDOW)
+    if (contextWindow) contextWindowSource = 'global'
   }
   if (!contextWindow) {
     contextWindow = isLocal ? DEFAULT_LOCAL_CONTEXT_WINDOW : DEFAULT_CLOUD_CONTEXT_WINDOW
+    contextWindowSource = isLocal ? 'local_default' : 'cloud_default'
   }
   contextWindow = Math.max(MIN_CONTEXT_WINDOW, contextWindow)
 
@@ -305,27 +352,27 @@ export function resolveEndpointProfile({
   const pdfWhitelist = parseCsvSet(safeEnv.MODEL_NAMES_PDF)
   const parallelToolsWhitelist = parseCsvSet(safeEnv.MODEL_NAMES_PARALLEL_TOOLS)
 
-  let supportsTools = tribool(safeOverrides.supportsTools)
+  let supportsTools = tribool(effectiveOverrides.supportsTools)
   if (supportsTools === null) {
     supportsTools = toolsWhitelist.size ? toolsWhitelist.has(selectedModel) : caps.supportsTools
   }
 
-  let supportsVision = tribool(safeOverrides.supportsVision)
+  let supportsVision = tribool(effectiveOverrides.supportsVision)
   if (supportsVision === null) {
     supportsVision = visionWhitelist.size ? visionWhitelist.has(selectedModel) : caps.supportsVision
   }
 
-  let supportsStreaming = tribool(safeOverrides.supportsStreaming)
+  let supportsStreaming = tribool(effectiveOverrides.supportsStreaming)
   if (supportsStreaming === null) supportsStreaming = caps.supportsStreaming
 
-  let supportsPdf = tribool(safeOverrides.supportsPdf)
+  let supportsPdf = tribool(effectiveOverrides.supportsPdf)
   if (supportsPdf === null) {
     supportsPdf = pdfWhitelist.size
       ? pdfWhitelist.has(selectedModel)
       : (caps.supportsPdf || isNativeOpenAIEndpoint(baseUrl))
   }
 
-  let supportsParallelTools = tribool(safeOverrides.supportsParallelTools)
+  let supportsParallelTools = tribool(effectiveOverrides.supportsParallelTools)
   if (supportsParallelTools === null) {
     supportsParallelTools = parallelToolsWhitelist.size
       ? parallelToolsWhitelist.has(selectedModel)
@@ -338,14 +385,14 @@ export function resolveEndpointProfile({
   // 被判定为可故障转移 → 静默切到云端 provider,改变隐私与成本边界」,
   // 用户用自己的显卡却被扣钱,而且完全不知道换了模型。
   // 想要这个行为的人可以在 provider 设置里显式打开。
-  const failoverOverride = tribool(safeOverrides.failoverEnabled)
+  const failoverOverride = tribool(effectiveOverrides.failoverEnabled)
   const failoverEligible = failoverOverride === null ? !isLocal : failoverOverride
 
   // ---- Ollama keep_alive ----
   // 不设的话 Ollama 默认 5 分钟卸载模型,下一次请求又要重新加载权重 ——
   // 这是「本地模型延迟太大」最直接的一个来源。
   const keepAlive = kind === 'ollama'
-    ? String(safeOverrides.keepAlive || safeEnv.OLLAMA_KEEP_ALIVE || '30m').trim() || '30m'
+    ? String(effectiveOverrides.keepAlive || safeEnv.OLLAMA_KEEP_ALIVE || '30m').trim() || '30m'
     : null
 
   return {
@@ -353,8 +400,9 @@ export function resolveEndpointProfile({
     baseUrl: String(baseUrl || '').trim(),
     modelName: selectedModel,
     isLocal,
-    timeouts: resolveTimeouts({ isLocal, env: safeEnv, overrides: safeOverrides }),
+    timeouts: resolveTimeouts({ isLocal, env: safeEnv, overrides: effectiveOverrides }),
     contextWindow,
+    contextWindowSource,
     supportsTools,
     supportsStreaming,
     supportsVision,

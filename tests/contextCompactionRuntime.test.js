@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  DEFAULT_CONTEXT_WINDOW,
   addSemanticCompactionSummary,
   callModelWithContextRecovery,
   estimateContextTokens,
@@ -23,6 +24,12 @@ test('token waterline uses 80% of the 1M window with an 800k ceiling', () => {
   assert.equal(getAutoCompactionThreshold(100_000), 80_000)
   assert.equal(getAutoCompactionThreshold(1_000_000), 800_000)
   assert.ok(estimateContextTokens([{ role: 'user', content: '中文 abc' }], TOOLS) > 0)
+})
+
+test('missing model metadata uses the conservative 128k compaction fallback', () => {
+  assert.equal(DEFAULT_CONTEXT_WINDOW, 128_000)
+  assert.equal(getAutoCompactionThreshold(), 102_400)
+  assert.equal(getAutoCompactionThreshold(Number.NaN), 102_400)
 })
 
 test('proactive waterline compacts before the engine model request', async () => {

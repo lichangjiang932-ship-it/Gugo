@@ -343,6 +343,7 @@ export const SUBAGENT_TYPES = {
  */
 async function executeSubagentTool(toolName, args, {
   userId = null,
+  modelName = undefined,
   depth = 0,
   parentRunId = null,
   parentSessionId = null,
@@ -378,7 +379,10 @@ async function executeSubagentTool(toolName, args, {
     case 'Agent':
       return withYieldedSlot(slotLease, signal, () => runSubagentBatch({
           userId,
-          request: args,
+          request: {
+            ...(args || {}),
+            modelName: String(args?.modelName || args?.model_name || modelName || '').trim() || undefined,
+          },
           depth,
           parentSessionId: parentSessionId || (parentRunId ? `subagent:${parentRunId}` : null),
           parentMessageId: parentRunId,
@@ -405,10 +409,11 @@ async function executeSubagentTool(toolName, args, {
  * @param {number} [options.maxIters=SUBAGENT_MAX_ITERS]
  * @returns {Promise<string>} 最终文本回答
  */
-async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS, userId = null, sessionId = null, runId = null, depth = 0, callModel = callBackgroundModelWithTools, executeTool = executeSubagentTool, budget = null, approvalContext = null, slotLease = null, approveTool = requestApproval, onTranscriptEvent = null }) {
+async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS, userId = null, modelName = undefined, sessionId = null, runId = null, depth = 0, callModel = callBackgroundModelWithTools, executeTool = executeSubagentTool, budget = null, approvalContext = null, slotLease = null, approveTool = requestApproval, onTranscriptEvent = null }) {
   const effectiveBudget = budget || createJobBudget({ ...SUBAGENT_BUDGET })
   const effectiveApprovalContext = approvalContext || createSubagentApprovalContext()
-  const contextWindow = getModelContextWindow({ userId })
+  const selectedModel = String(modelName || '').trim() || undefined
+  const contextWindow = getModelContextWindow({ userId, modelName: selectedModel })
   const emitTranscript = (event) => {
     if (typeof onTranscriptEvent !== 'function') return
     onTranscriptEvent({ ...event, at: now() })
@@ -445,9 +450,14 @@ async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_
       args,
       signal: approvalSignal,
     }),
-    runModel: (request) => callModel(request),
+    runModel: (request) => callModel({
+      ...request,
+      userId,
+      modelName: selectedModel,
+    }),
     executeTool: ({ name, args, signal: toolSignal, budget: loopBudget }) => executeTool(name, args, {
       userId,
+      modelName: selectedModel,
       depth,
       parentRunId: runId,
       parentSessionId: sessionId,
@@ -574,7 +584,8 @@ function normalizeSubagentTasks(request = {}) {
     const role = String(task?.role || description).trim().slice(0, 120)
     const agentId = String(task?.agentId || task?.agent_id || request?.agentId || request?.agent_id || '').trim() || null
     const skillIds = normalizePromptContextIds(task?.skillIds || task?.skill_ids || request?.skillIds || request?.skill_ids)
-    return { type, prompt, description, role, agentId, skillIds }
+    const modelName = String(task?.modelName || task?.model_name || request?.modelName || request?.model_name || '').trim() || undefined
+    return { type, prompt, description, role, agentId, skillIds, modelName }
   })
 }
 
@@ -617,6 +628,7 @@ export async function runSubagentBatch({
     description: task.description,
     agentId: task.agentId,
     skillIds: task.skillIds,
+    modelName: task.modelName,
     team: { ...team, role: task.role, memberIndex: tasks.indexOf(task) },
     parentSessionId,
     parentMessageId,
@@ -746,6 +758,7 @@ export async function runSubagent({
           tools,
           signal,
           userId,
+          modelName,
           sessionId: `subagent:${id}`,
           runId: id,
           depth,

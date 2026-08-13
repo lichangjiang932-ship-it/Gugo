@@ -5,7 +5,7 @@ import test from 'node:test'
 
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-job-tools-tests', String(process.pid))
 
-const { SERVER_TOOL_SPECS, runToolsLoop } = await import('../server/services/jobTools.js')
+const { buildSubagentRequest, SERVER_TOOL_SPECS, runToolsLoop } = await import('../server/services/jobTools.js')
 const {
   createDefaultExecuteStep,
   JobRuntime,
@@ -16,6 +16,15 @@ const { issueTestSession } = await import('./helpers/testAuth.js')
 const { getDb } = await import('../server/db.js')
 
 const TEST_USER = issueTestSession().userId
+
+test('top-level Agent calls inherit the parent model unless explicitly overridden', () => {
+  assert.deepEqual(buildSubagentRequest({ subagent_type: 'explore', prompt: 'inspect' }, 'parent-model'), {
+    subagent_type: 'explore',
+    prompt: 'inspect',
+    modelName: 'parent-model',
+  })
+  assert.equal(buildSubagentRequest({ modelName: 'child-model' }, 'parent-model').modelName, 'child-model')
+})
 
 test('chat compaction uses the real session id and checkpoints its archive recovery', async () => {
   const sessionId = 'chat-compaction-real-session'
@@ -137,6 +146,50 @@ test('planning exploration runs three isolated read-only explorers concurrently 
     args: { pattern: 'refresh', case_sensitive: false, word: false, max_results: 50 },
   })))
   assert.match(exploration, /src\\?\/router\.js|src\/router\.js/)
+})
+
+test('planning and job execution preserve an explicitly selected model', async () => {
+  const planningModels = []
+  let synthesisModel = null
+  await runPlanningExploration({
+    prompt: 'inspect the selected model path',
+    messages: [{ role: 'user', content: 'inspect only' }],
+    userId: TEST_USER,
+    modelName: 'planner-context-model',
+    runModelWithTools: async ({ modelName }) => {
+      planningModels.push(modelName)
+      return { content: 'inspection complete', toolCalls: [] }
+    },
+    synthesizeModel: async ({ modelName }) => {
+      synthesisModel = modelName
+      return { content: 'combined findings' }
+    },
+  })
+  assert.deepEqual(planningModels, Array.from({ length: 3 }, () => 'planner-context-model'))
+  assert.equal(synthesisModel, 'planner-context-model')
+
+  let executionModel = null
+  const executeStep = createDefaultExecuteStep({
+    enableServerTools: false,
+    runModel: async ({ modelName }) => {
+      executionModel = modelName
+      return 'job complete'
+    },
+  })
+  const result = await executeStep({
+    job: {
+      id: 'job-selected-model',
+      userId: TEST_USER,
+      title: 'Selected model job',
+      prompt: 'answer directly',
+      modelName: 'job-context-model',
+      steps: [],
+      artifacts: [],
+    },
+    step: { id: 'step-selected-model', kind: 'execute' },
+  })
+  assert.equal(result.ok, true)
+  assert.equal(executionModel, 'job-context-model')
 })
 
 test('runToolsLoop re-evaluates artifact intent from current user messages even with explicit tool specs', async () => {

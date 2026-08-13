@@ -74,6 +74,7 @@ export async function handleJobRequest(req, res, runtime) {
     const job = await runtime.createJob(prompt, {
       userId,
       requirePlanApproval: body.requirePlanApproval === true,
+      modelName: typeof body.modelName === 'string' ? body.modelName.trim() || undefined : undefined,
     })
     return sendJson(res, 201, { job })
   }
@@ -185,6 +186,7 @@ export async function handleJobRequest(req, res, runtime) {
         title: body.title,
         prompt: body.prompt || body.title,
         steps: body.steps,
+        modelName: typeof body.modelName === 'string' ? body.modelName.trim() || undefined : undefined,
       })
       return sendJson(res, 201, { job })
     }

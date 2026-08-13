@@ -53,6 +53,7 @@ import {
   readModelSseLines,
 } from './modelResponseStream.js'
 import { streamWithProviderFallback } from '../utils/modelStreamFailover.js'
+import { buildVisibleModelCatalog, parseRemoteModelCatalog } from '../utils/modelCatalog.js'
 
 export { extractUsage, parseModelProviderResponse, parseOpenAICompatibleResponse, stripEmbeddedReasoning } from './modelProviderResponse.js'
 export { getUsageStats, recordUsage, resetUsageStats } from './modelUsage.js'
@@ -187,7 +188,12 @@ export function resolveModelConfigForModel({ modelName, env = process.env } = {}
   const base = loadModelConfig(env)
   const selectedModel = modelName?.trim() || base.modelName
   const provider = findProviderForModel(selectedModel, env)
-  if (!provider) return { ...base, modelName: selectedModel }
+  if (!provider) {
+    const conservative = { ...base, modelName: selectedModel }
+    delete conservative.profileOverrides
+    delete conservative.modelProfiles
+    return conservative
+  }
 
   const missing = providerMissingFields(provider)
   const baseWithoutHeaders = { ...base }
@@ -421,7 +427,12 @@ export function getModelStatus(env = process.env) {
   }
 
   const models = getVisibleModels(env, config.modelName)
-  if (models.length > 1 || env.MODEL_NAMES) status.models = models
+  if (models.length) {
+    status.models = models
+    const activeModel = models.find((model) => model.active) || models[0]
+    status.contextWindow = activeModel.contextWindow
+    status.contextWindowSource = activeModel.contextWindowSource
+  }
   return status
 }
 
@@ -462,6 +473,7 @@ export function profileForConfig(config = {}, env = process.env) {
     modelName: config.modelName,
     env,
     overrides: config.profileOverrides || {},
+    modelProfiles: config.modelProfiles || null,
   })
 }
 
@@ -545,15 +557,14 @@ async function checkModelsEndpoint({ config, fetchImpl = fetchWithEnvProxy, env 
       error.status = response.status
       throw error
     }
-    const remoteModels = Array.isArray(data?.data)
-      ? data.data.map((item) => item.id || item.name).filter(Boolean).slice(0, 50)
-      : []
+    const { remoteModels, remoteModelProfiles } = parseRemoteModelCatalog(data)
     return {
       checked: true,
       ok: true,
       url,
       latency: Date.now() - started,
       remoteModels,
+      remoteModelProfiles,
     }
   } catch (error) {
     return {
@@ -597,19 +608,11 @@ export async function getSystemDiagnostics({ env = process.env, fetchImpl = fetc
 
 export function getVisibleModels(env = process.env, defaultModel = '') {
   const providers = getModelProviders(env)
-  const providerModelEntries = providers.flatMap((provider) =>
-    provider.models.map((name) => ({ name, provider: provider.id }))
-  )
-  const names = providerModelEntries.length
-    ? providerModelEntries.map((entry) => entry.name)
-    : parseCsv(env.MODEL_NAMES || defaultModel)
-  const uniqueNames = [...new Set(names.length ? names : [defaultModel].filter(Boolean))]
-  const providerByModel = new Map(providerModelEntries.map((entry) => [entry.name, entry.provider]))
-  return uniqueNames.map((name) => ({
-    name,
-    active: name === defaultModel,
-    ...(providerByModel.has(name) ? { provider: providerByModel.get(name) } : {}),
-  }))
+  const providerModelEntries = providers.flatMap((provider) => provider.models.map((name) => ({ name, provider: provider.id })))
+  const names = providerModelEntries.length ? providerModelEntries.map((entry) => entry.name) : parseCsv(env.MODEL_NAMES || defaultModel)
+  return buildVisibleModelCatalog({
+    names, defaultModel, providerModelEntries, resolveProfile: (name) => profileForConfig(resolveModelConfigForModel({ modelName: name, env }), env),
+  })
 }
 
 function pickAllowedModel({ requestedModel, config, env }) {

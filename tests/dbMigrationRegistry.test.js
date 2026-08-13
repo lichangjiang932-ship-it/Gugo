@@ -17,8 +17,8 @@ test('schema migration registry is contiguous and owns the latest version', () =
   }))
   const plan = createSchemaMigrationPlan(legacy)
 
-  assert.deepEqual(plan.map(({ version }) => version), Array.from({ length: 43 }, (_, index) => index + 2))
-  assert.equal(LATEST_SCHEMA_VERSION, 44)
+  assert.deepEqual(plan.map(({ version }) => version), Array.from({ length: 44 }, (_, index) => index + 2))
+  assert.equal(LATEST_SCHEMA_VERSION, 45)
   assert.equal(DB_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
   assert.equal(schemaMigrations.at(-1).version, LATEST_SCHEMA_VERSION)
 })
@@ -63,6 +63,10 @@ test('schema migration registry upgrades a v30 database through every registered
     )
     assert.equal(
       db.prepare('PRAGMA table_info(model_providers)').all().some((row) => row.name === 'supports_pdf'),
+      true,
+    )
+    assert.equal(
+      db.prepare('PRAGMA table_info(model_providers)').all().some((row) => row.name === 'model_profiles_json'),
       true,
     )
     assert.equal(

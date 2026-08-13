@@ -19,13 +19,15 @@ async function readJsonResponse(responsePromise) {
   return response.json()
 }
 
-export function createJob(prompt, { fetchImpl = fetch, requirePlanApproval = false } = {}) {
+export function createJob(prompt, { fetchImpl = fetch, requirePlanApproval = false, modelName } = {}) {
+  const selectedModel = String(modelName || '').trim()
   return readJsonResponse(fetchImpl('/api/jobs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({
       prompt,
       ...(requirePlanApproval === true ? { requirePlanApproval: true } : {}),
+      ...(selectedModel ? { modelName: selectedModel } : {}),
     }),
   }))
 }

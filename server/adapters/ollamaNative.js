@@ -165,7 +165,7 @@ export function looksLikeOllama(baseUrl = '') {
  * 失败不抛 —— 这是「锦上添花」的探测,拿不到就回落到推断值。
  */
 export async function discoverOllamaEndpoint({ baseUrl, modelName, fetchImpl = fetch, timeoutMs = 30_000 } = {}) {
-  const result = { ok: false, models: [], profile: null, error: null }
+  const result = { ok: false, models: [], modelProfiles: {}, profile: null, error: null }
   try {
     result.models = await listOllamaModels({ baseUrl, fetchImpl, timeoutMs })
     result.ok = true
@@ -176,7 +176,37 @@ export async function discoverOllamaEndpoint({ baseUrl, modelName, fetchImpl = f
   const target = String(modelName || '').trim() || result.models[0]?.name || ''
   if (!target) return result
   try {
-    result.profile = await probeOllamaModel({ baseUrl, modelName: target, fetchImpl, timeoutMs })
+    const names = result.models.map((model) => model.name).filter(Boolean).slice(0, 100)
+    const resolvedTarget = names.includes(target)
+      ? target
+      : (names.includes(`${target}:latest`) ? `${target}:latest` : target)
+    if (!names.includes(resolvedTarget)) names.push(resolvedTarget)
+    const probed = new Array(names.length)
+    let cursor = 0
+    const workers = Array.from({ length: Math.min(4, names.length) }, async () => {
+      while (cursor < names.length) {
+        const index = cursor
+        cursor += 1
+        const name = names[index]
+        try {
+          const profile = await probeOllamaModel({ baseUrl, modelName: name, fetchImpl, timeoutMs })
+          probed[index] = [name, profile]
+        } catch {
+          probed[index] = [name, null]
+        }
+      }
+    })
+    await Promise.all(workers)
+    for (const [name, profile] of probed) {
+      if (profile && Object.values(profile).some((value) => value !== null)) {
+        result.modelProfiles[name] = { ...profile, source: 'ollama-api-show' }
+      }
+    }
+    result.models = result.models.map((model) => ({
+      ...model,
+      ...(result.modelProfiles[model.name] ? { profile: result.modelProfiles[model.name] } : {}),
+    }))
+    result.profile = result.modelProfiles[resolvedTarget] || null
   } catch {
     // /api/show 拿不到不影响模型列表本身
   }

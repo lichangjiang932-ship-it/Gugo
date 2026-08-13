@@ -1025,6 +1025,7 @@ export class TurnEngine {
           id: turnId,
           userId,
           sessionId,
+          modelName: String(modelName || '').trim() || null,
           agentId: promptContext.effectiveAgentId || agentId || null,
           origin: 'chat',
           prompt: content,

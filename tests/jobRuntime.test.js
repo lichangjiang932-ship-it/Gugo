@@ -20,6 +20,30 @@ const { issueTestSession } = await import('./helpers/testAuth.js')
 const TEST_USER = issueTestSession().userId
 const OTHER_USER = issueTestSession().userId
 
+test('job model selection is passed to planning and survives storage reloads', async () => {
+  let plannedWith = null
+  const runtime = new JobRuntime({
+    planner: (prompt, options) => {
+      plannedWith = options.modelName
+      return stubPlanner(prompt)
+    },
+  })
+
+  const job = await runtime.createJob('use the selected model', {
+    userId: TEST_USER,
+    modelName: ' selected-model ',
+  })
+  assert.equal(plannedWith, 'selected-model')
+  assert.equal(job.modelName, 'selected-model')
+
+  const reloadedRuntime = new JobRuntime({
+    planner: stubPlanner,
+    executeStep: async ({ step }) => ({ ok: true, output: { text: step.title } }),
+  })
+  assert.equal(reloadedRuntime.getJob(job.id, { userId: TEST_USER }).modelName, 'selected-model')
+  await reloadedRuntime.drain()
+})
+
 async function waitFor(predicate, { timeoutMs = 2000 } = {}) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
