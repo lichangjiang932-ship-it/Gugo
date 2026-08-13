@@ -1,5 +1,5 @@
 import { ChevronDown, Quote } from 'lucide-react'
-import { estimateClientContextUsage } from '../../lib/contextUsage.js'
+import { DEFAULT_MODEL_CONTEXT_WINDOW, estimateClientContextUsage } from '../../lib/contextUsage.js'
 import { useT } from '../../i18n/I18nProvider.jsx'
 import ContextUsagePanel from './chatMessages/ContextUsagePanel.jsx'
 import MessageRow from './chatMessages/MessageRow.jsx'
@@ -16,7 +16,7 @@ export default function ChatMessages({
   setShowContextPanel,
   selectedModel,
   isGenerating = false,
-  contextWindow = 1_000_000,
+  contextWindow = DEFAULT_MODEL_CONTEXT_WINDOW,
   toolSpecs = [],
   systemPrompt = '',
   onPermAllow,
@@ -45,6 +45,7 @@ export default function ChatMessages({
     ? [...messages].reverse().find((message) => message?.role === 'assistant')?.id
     : null
   const contextUsage = estimateClientContextUsage({ messages, tools: toolSpecs, systemPrompt, contextWindow })
+  const resolvedContextWindow = contextUsage.contextWindow
 
   return (
     <div ref={bindContainer} className="chat-scroll-region relative flex-1 overflow-y-auto px-4 py-4 sm:px-7">
@@ -55,7 +56,7 @@ export default function ChatMessages({
         {showContextUsage && (
           <ContextUsagePanel
             contextUsage={contextUsage}
-            contextWindow={contextWindow}
+            contextWindow={resolvedContextWindow}
             messages={messages}
             selectedModel={selectedModel}
             showDetails={showContextPanel}

@@ -59,6 +59,32 @@ test('job routes create, fetch, and cancel jobs', async () => {
   }
 })
 
+test('job routes persist the selected model for later execution and recovery', async () => {
+  const { token } = issueTestSession()
+  const server = createAppServer({ getEnv: () => ({}) })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const { port } = server.address()
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/jobs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ prompt: 'model-specific job', modelName: ' long-context-model ' }),
+    })
+    assert.equal(response.status, 201)
+    const { job } = await response.json()
+    assert.equal(job.modelName, 'long-context-model')
+
+    const detailResponse = await fetch(`http://127.0.0.1:${port}/api/jobs/${job.id}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    assert.equal(detailResponse.status, 200)
+    assert.equal((await detailResponse.json()).job.modelName, 'long-context-model')
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
+})
+
 test('job routes reject unauthenticated requests', async () => {
   const server = createAppServer({ getEnv: () => ({}) })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))

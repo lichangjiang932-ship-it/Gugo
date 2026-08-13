@@ -114,11 +114,13 @@ test('runSubagent creates a DB record', async () => {
 
 test('subagent injects optional skill and memory context and degrades when preparation fails', async () => {
   let capturedMessages = []
+  let capturedModel = null
   let contextInput = null
   const run = await runSubagent({
     userId,
     type: 'explore',
     prompt: 'inspect memory pipeline',
+    modelName: 'subagent-context-model',
     agentId: 'agent-context',
     skillIds: ['review'],
     preparePromptContext: (input) => {
@@ -130,14 +132,16 @@ test('subagent injects optional skill and memory context and degrades when prepa
         ],
       }
     },
-    callModel: async ({ messages }) => {
+    callModel: async ({ messages, modelName }) => {
       capturedMessages = messages
+      capturedModel = modelName
       return { content: 'done', toolCalls: [] }
     },
   })
   assert.equal(run.status, 'completed')
   assert.equal(contextInput.agentId, 'agent-context')
   assert.deepEqual(contextInput.skillIds, ['review'])
+  assert.equal(capturedModel, 'subagent-context-model')
   assert.ok(capturedMessages.some((message) => message.content.includes('review carefully')))
   assert.ok(capturedMessages.some((message) => message.content.includes('known constraint')))
 
@@ -153,19 +157,22 @@ test('subagent injects optional skill and memory context and degrades when prepa
 })
 
 test('subagent swarm exposes team members with isolated transcripts', async () => {
+  const modelsByPrompt = new Map()
   const result = await runSubagentBatch({
     userId,
     request: {
       team_name: 'review swarm',
+      model_name: 'swarm-default-model',
       tasks: [
         { type: 'explore', role: 'frontend', prompt: 'inspect frontend' },
-        { type: 'plan', role: 'backend', prompt: 'inspect backend' },
+        { type: 'plan', role: 'backend', prompt: 'inspect backend', modelName: 'backend-model' },
       ],
     },
-    callModel: async ({ messages }) => ({
-      content: `done:${messages.find((message) => message.role === 'user')?.content}`,
-      toolCalls: [],
-    }),
+    callModel: async ({ messages, modelName }) => {
+      const prompt = messages.find((message) => message.role === 'user')?.content
+      modelsByPrompt.set(prompt, modelName)
+      return { content: `done:${prompt}`, toolCalls: [] }
+    },
   })
   assert.equal(result.parallel, true)
   assert.equal(result.team.mode, 'swarm')
@@ -178,4 +185,6 @@ test('subagent swarm exposes team members with isolated transcripts', async () =
   assert.match(first.resultText, /frontend/)
   assert.doesNotMatch(first.resultText, /backend/)
   assert.match(second.resultText, /backend/)
+  assert.equal(modelsByPrompt.get('inspect frontend'), 'swarm-default-model')
+  assert.equal(modelsByPrompt.get('inspect backend'), 'backend-model')
 })

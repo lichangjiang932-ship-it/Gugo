@@ -1,10 +1,12 @@
 import { useCallback } from 'react'
 import { recordLocalChatFeedback } from '../../lib/localChatFeedback.js'
 import { createJob } from '../../lib/jobClient.js'
+import { compressSession } from '../../lib/compactionClient.js'
 
 export default function useSlashCommandExecution({
   changeApprovalMode,
   dispatch,
+  modelName,
   navigate,
   setDesktopPetVisible,
   setInput,
@@ -36,7 +38,8 @@ export default function useSlashCommandExecution({
         openFeedback: () => setSlashInlinePanel('feedback'),
         openGoals: () => setSlashInlinePanel('goals'),
         openSideChat: () => { setWorkbenchTab('chat'); setWorkbenchOpen(true) },
-        createGoalJob: (goal, options) => createJob(goal, options),
+        compactSession: (options) => compressSession({ ...options, modelName }),
+        createGoalJob: (goal, options) => createJob(goal, { ...options, modelName }),
         togglePet: () => setDesktopPetVisible((visible) => !visible),
         setApprovalMode: changeApprovalMode,
         recordFeedback: (value) => recordLocalChatFeedback(value, stateRef.current.activeSessionId),
@@ -60,7 +63,7 @@ export default function useSlashCommandExecution({
       return true
     }
   }, [
-    changeApprovalMode, dispatch, navigate, setDesktopPetVisible, setInput, setSlashInlinePanel, setWorkbenchMessage,
+    changeApprovalMode, dispatch, modelName, navigate, setDesktopPetVisible, setInput, setSlashInlinePanel, setWorkbenchMessage,
     setWorkbenchOpen, setWorkbenchTab, slashRegistry, stateRef, triggerSendFlow,
   ])
 }

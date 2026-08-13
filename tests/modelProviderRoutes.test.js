@@ -11,6 +11,7 @@ process.env.APP_DATA_DIR = dir
 const { createAppServer } = await import('../server/appServer.js')
 const { closeDb } = await import('../server/db.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
+const { buildProviderProfileOverrides } = await import('../server/routes/modelProviderRoutes.js')
 
 const server = createAppServer({ getEnv: () => ({}) })
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -25,6 +26,25 @@ test.after(async () => {
 function headers(token) {
   return { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
 }
+
+test('provider diagnostics prefer the selected model profile over provider fallback', () => {
+  assert.deepEqual(buildProviderProfileOverrides({
+    contextWindow: 128000,
+    modelProfiles: { small: { contextWindow: 8192, supportsTools: false } },
+  }), {
+    kind: undefined,
+    contextWindow: 128000,
+    supportsTools: undefined,
+    supportsStreaming: undefined,
+    supportsVision: undefined,
+    supportsPdf: undefined,
+    firstTokenTimeoutMs: undefined,
+    idleTimeoutMs: undefined,
+    failoverEnabled: undefined,
+    keepAlive: undefined,
+    models: { small: { contextWindow: 8192, supportsTools: false } },
+  })
+})
 
 test('model provider routes require authentication', async () => {
   const response = await fetch(baseUrl)
@@ -92,7 +112,10 @@ test('model provider discovery reads a local OpenAI-compatible catalog without a
       return
     }
     res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ data: [{ id: 'qwen3:8b' }, { id: 'deepseek-r1:7b' }] }))
+    res.end(JSON.stringify({ data: [
+      { id: 'qwen3:8b', context_length: 8192, max_output_tokens: 2048 },
+      { id: 'deepseek-r1:7b', top_provider: { context_length: 131072, max_completion_tokens: 16384 } },
+    ] }))
   })
   await new Promise((resolve) => modelServer.listen(0, '127.0.0.1', resolve))
 
@@ -106,6 +129,10 @@ test('model provider discovery reads a local OpenAI-compatible catalog without a
     assert.equal(response.status, 200)
     const data = await response.json()
     assert.deepEqual(data.models, ['qwen3:8b', 'deepseek-r1:7b'])
+    assert.deepEqual(data.modelProfiles, {
+      'qwen3:8b': { contextWindow: 8192, maxOutputTokens: 2048, source: 'models-endpoint' },
+      'deepseek-r1:7b': { contextWindow: 131072, maxOutputTokens: 16384, source: 'models-endpoint' },
+    })
     assert.equal(receivedAuthorization, null)
   } finally {
     await new Promise((resolve) => modelServer.close(resolve))

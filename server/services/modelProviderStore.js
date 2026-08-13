@@ -39,6 +39,40 @@ function parseModels(value) {
   return [...new Set(raw.map((item) => String(item || '').trim()).filter(Boolean))].slice(0, 100)
 }
 
+function parseJsonObject(value) {
+  if (!value) return {}
+  if (typeof value === 'object' && !Array.isArray(value)) return value
+  try {
+    const parsed = JSON.parse(String(value))
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function normalizeModelProfiles(value, allowedModels = []) {
+  const input = parseJsonObject(value)
+  const allowed = new Set(parseModels(allowedModels))
+  const output = {}
+  for (const [rawName, rawProfile] of Object.entries(input)) {
+    const name = String(rawName || '').trim()
+    if (!name || (allowed.size && !allowed.has(name)) || !rawProfile || typeof rawProfile !== 'object' || Array.isArray(rawProfile)) continue
+    const profile = {}
+    const contextWindow = writeNullableInt(rawProfile.contextWindow ?? rawProfile.context_window)
+    const maxOutputTokens = writeNullableInt(rawProfile.maxOutputTokens ?? rawProfile.max_output_tokens)
+    if (contextWindow) profile.contextWindow = contextWindow
+    if (maxOutputTokens) profile.maxOutputTokens = maxOutputTokens
+    for (const field of ['supportsTools', 'supportsStreaming', 'supportsVision', 'supportsPdf']) {
+      const normalized = writeTribool(rawProfile[field])
+      if (normalized !== null) profile[field] = normalized !== 0
+    }
+    const source = String(rawProfile.source || '').trim().slice(0, 80)
+    if (source) profile.source = source
+    if (Object.keys(profile).length) output[name] = profile
+  }
+  return output
+}
+
 function normalizeBaseUrl(value) {
   const raw = String(value || '').trim().replace(/\/+$/, '')
   let url
@@ -88,6 +122,7 @@ function mapRow(row, { includeSecrets = false } = {}) {
   try { models = JSON.parse(row.models_json || '[]') } catch { models = [] }
   const secret = readCredentialColumn(row, 'secret_json', MODEL_SECRET_PURPOSE)
   const headers = readCredentialColumn(row, 'headers_json', MODEL_HEADERS_PURPOSE)
+  const modelProfiles = normalizeModelProfiles(row.model_profiles_json, models)
   return {
     id: row.id,
     key: row.provider_key,
@@ -103,6 +138,7 @@ function mapRow(row, { includeSecrets = false } = {}) {
     // ★ v28:per-provider 能力与超时。全部可空,空 = 自动推断(endpointProfile.js)。
     kind: row.kind || null,
     contextWindow: row.context_window ?? null,
+    modelProfiles,
     supportsTools: readTribool(row.supports_tools),
     supportsStreaming: readTribool(row.supports_streaming),
     supportsVision: readTribool(row.supports_vision),
@@ -181,6 +217,9 @@ export function upsertModelProvider({ userId, provider = {} } = {}) {
   const keepAlive = provider.keepAlive === undefined
     ? (existing?.keep_alive ?? null)
     : (String(provider.keepAlive || '').trim() || null)
+  const modelProfiles = provider.modelProfiles === undefined
+    ? normalizeModelProfiles(existing?.model_profiles_json, models)
+    : normalizeModelProfiles(provider.modelProfiles, models)
 
   const tx = db.transaction(() => {
     if (isDefault) db.prepare('UPDATE model_providers SET is_default = 0 WHERE user_id = ?').run(userId)
@@ -188,25 +227,25 @@ export function upsertModelProvider({ userId, provider = {} } = {}) {
       db.prepare(`UPDATE model_providers SET provider_key=?, label=?, base_url=?, secret_json=?, headers_json=?,
         models_json=?, default_model=?, enabled=?, is_default=?, updated_at=?,
         kind=?, context_window=?, supports_tools=?, supports_streaming=?, supports_vision=?, supports_pdf=?,
-        first_token_timeout_ms=?, idle_timeout_ms=?, failover_enabled=?, keep_alive=?
+        first_token_timeout_ms=?, idle_timeout_ms=?, failover_enabled=?, keep_alive=?, model_profiles_json=?
         WHERE id=? AND user_id=?`).run(
         key, label, baseUrl, writeCredential({ apiKey }, MODEL_SECRET_PURPOSE),
         writeCredential(headers, MODEL_HEADERS_PURPOSE), JSON.stringify(models), defaultModel,
         enabled ? 1 : 0, isDefault ? 1 : 0, now,
         kindRaw, contextWindow, supportsTools, supportsStreaming, supportsVision, supportsPdf,
-        firstTokenTimeoutMs, idleTimeoutMs, failoverEnabled, keepAlive,
+        firstTokenTimeoutMs, idleTimeoutMs, failoverEnabled, keepAlive, JSON.stringify(modelProfiles),
         id, userId,
       )
     } else {
       db.prepare(`INSERT INTO model_providers
         (id,user_id,provider_key,label,base_url,secret_json,headers_json,models_json,default_model,enabled,is_default,created_at,updated_at,
-         kind,context_window,supports_tools,supports_streaming,supports_vision,supports_pdf,first_token_timeout_ms,idle_timeout_ms,failover_enabled,keep_alive)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+         kind,context_window,supports_tools,supports_streaming,supports_vision,supports_pdf,first_token_timeout_ms,idle_timeout_ms,failover_enabled,keep_alive,model_profiles_json)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
         id, userId, key, label, baseUrl, writeCredential({ apiKey }, MODEL_SECRET_PURPOSE),
         writeCredential(headers, MODEL_HEADERS_PURPOSE), JSON.stringify(models),
         defaultModel, enabled ? 1 : 0, isDefault ? 1 : 0, now, now,
         kindRaw, contextWindow, supportsTools, supportsStreaming, supportsVision, supportsPdf,
-        firstTokenTimeoutMs, idleTimeoutMs, failoverEnabled, keepAlive,
+        firstTokenTimeoutMs, idleTimeoutMs, failoverEnabled, keepAlive, JSON.stringify(modelProfiles),
       )
     }
   })
@@ -279,5 +318,6 @@ function buildProviderOverrides(provider) {
   if (provider.idleTimeoutMs) overrides.idleTimeoutMs = provider.idleTimeoutMs
   if (provider.failoverEnabled !== null) overrides.failoverEnabled = provider.failoverEnabled
   if (provider.keepAlive) overrides.keepAlive = provider.keepAlive
+  if (provider.modelProfiles && Object.keys(provider.modelProfiles).length) overrides.models = provider.modelProfiles
   return Object.keys(overrides).length ? JSON.stringify(overrides) : null
 }

@@ -3,6 +3,7 @@ import {
   approveJobPlan, cancelJob, createJob, getJob, listJobs, retryJob, retryStep, steerJob, subscribeToJobEvents,
 } from '../../lib/jobClient.js'
 import { authorizeRequestedDirectory } from '../../lib/jobDirectoryRequest.js'
+import { readStoredModel } from '../../lib/modelSelection.js'
 import { ACTIVE_STATUSES } from './taskRunUtils.js'
 
 export default function useTaskRunController({ linkedJobId, t, toast }) {
@@ -100,7 +101,7 @@ export default function useTaskRunController({ linkedJobId, t, toast }) {
     if (!trimmed) return
     setSubmitting(true); setError('')
     try {
-      const { job } = await createJob(trimmed)
+      const { job } = await createJob(trimmed, { modelName: readStoredModel() || undefined })
       setPrompt(''); setJobs((current) => [job, ...current.filter((item) => item.id !== job.id)]); setSelectedJobId(job.id); setSelectedJob(job)
     } catch (reason) { setError(reason.message); toast.error({ title: t('toast.chatSendFailed'), body: reason.message }) }
     finally { setSubmitting(false) }

@@ -100,6 +100,7 @@ function mapJob(row) {
     userId: row.user_id || null,
     title: row.title,
     prompt: row.prompt,
+    modelName: row.model_name || null,
     status: row.status,
     progress: row.progress,
     cancelRequested: !!row.cancel_requested,
@@ -168,15 +169,17 @@ export function createJob({
   userId,
   title,
   prompt,
+  modelName = null,
   status = 'queued',
   progress = 0,
   now = Date.now(),
 }) {
   if (!userId) throw new Error('createJob requires userId')
+  const selectedModel = boundedText(modelName, 512) || null
   getDb().prepare(`
-    INSERT INTO jobs (id, user_id, title, prompt, status, progress, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, userId, title, prompt, status, progress, now, now)
+    INSERT INTO jobs (id, user_id, title, prompt, model_name, status, progress, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, userId, title, prompt, selectedModel, status, progress, now, now)
   return getJob(id)
 }
 

@@ -17,6 +17,7 @@ import { TASK_STATUS } from '../../store/taskStatus.js'
 import { persistSlashGoals } from '../../lib/slashGoals.js'
 import { recordLocalChatFeedback } from '../../lib/localChatFeedback.js'
 import { fetchCompactionArchive } from '../../lib/compactionClient.js'
+import { resolveModelContextWindow } from '../../lib/contextUsage.js'
 import { attachmentSendState, createPendingChatAttachment, prepareChatAttachment } from '../../lib/chatAttachmentUpload.js'
 import { authorizeChatDirectoryRequest } from '../../lib/chatDirectoryRequest.js'
 import { readContextUsageVisible, readDesktopPetVisible, readWorkbenchOpen } from '../../lib/chatUiPreferences.js'
@@ -105,7 +106,7 @@ export default function ChatSplit() {
     selectedModel,
     storedModel: readStoredModel(),
   }) || activeSession?.modelName || selectedModel || readStoredModel()
-  const selectedContextWindow = modelOptions.find((model) => model.name === effectiveSelectedModel)?.contextWindow || 1_000_000
+  const selectedContextWindow = resolveModelContextWindow(modelOptions, effectiveSelectedModel)
   const approvals = useChatApprovals({ setWorkbenchMessage, toast, t })
   const directory = useDirectoryApproval({ lang, t, toast })
   const { handleVoice, voiceState } = useVoiceRecognition({ dispatch, input, lang, permissions: state.permissions, setInput, setMessage: setWorkbenchMessage, t })
@@ -181,7 +182,7 @@ export default function ChatSplit() {
     stateResumeSignal: serverResumeSignal, stateTurnRunActive: isGenerating, stateRef, t,
   })
   const executeSlashEntry = useSlashCommandExecution({
-    changeApprovalMode: approvals.changeApprovalMode, dispatch, navigate, setDesktopPetVisible, setInput,
+    changeApprovalMode: approvals.changeApprovalMode, dispatch, modelName: effectiveSelectedModel, navigate, setDesktopPetVisible, setInput,
     setSlashInlinePanel, setWorkbenchMessage, setWorkbenchOpen, setWorkbenchTab, slashRegistry, stateRef, triggerSendFlow,
   })
   const slashQuery = input.match(/^\/([^\s/]*)$/i)?.[1]

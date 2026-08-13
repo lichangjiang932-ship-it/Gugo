@@ -14,8 +14,15 @@ async function authedJson(url, body) {
   return data
 }
 
-export function compressSession({ sessionId, messages, keepMessages, semantic = true }) {
-  return authedJson('/api/compaction/compress', { sessionId, messages, keepMessages, semantic })
+export function compressSession({ sessionId, messages, keepMessages, semantic = true, modelName }) {
+  const selectedModel = String(modelName || '').trim()
+  return authedJson('/api/compaction/compress', {
+    sessionId,
+    messages,
+    keepMessages,
+    semantic,
+    ...(selectedModel ? { modelName: selectedModel } : {}),
+  })
 }
 
 export async function fetchCompactionArchive(id) {

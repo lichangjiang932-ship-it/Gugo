@@ -432,8 +432,8 @@ test('loads a backend model catalog without exposing API keys', () => {
 
   assert.equal(status.configured, true)
   assert.deepEqual(status.models, [
-    { name: 'gpt-fast', active: true },
-    { name: 'gpt-pro', active: false },
+    { name: 'gpt-fast', active: true, contextWindow: 128_000, contextWindowSource: 'cloud_default' },
+    { name: 'gpt-pro', active: false, contextWindow: 128_000, contextWindowSource: 'cloud_default' },
   ])
   assert.equal(JSON.stringify(status).includes('sk-test'), false)
 })
@@ -454,10 +454,10 @@ test('loads a multi-provider model catalog', () => {
 
   assert.equal(status.configured, true)
   assert.deepEqual(status.models, [
-    { name: 'deepseek-v4-pro', active: true, provider: 'deepseek' },
-    { name: 'deepseek-v4-flash', active: false, provider: 'deepseek' },
-    { name: 'mimo-v2.5', active: false, provider: 'mimo' },
-    { name: 'mimo-v2.5-pro', active: false, provider: 'mimo' },
+    { name: 'deepseek-v4-pro', active: true, provider: 'deepseek', contextWindow: 128_000, contextWindowSource: 'cloud_default' },
+    { name: 'deepseek-v4-flash', active: false, provider: 'deepseek', contextWindow: 128_000, contextWindowSource: 'cloud_default' },
+    { name: 'mimo-v2.5', active: false, provider: 'mimo', contextWindow: 128_000, contextWindowSource: 'cloud_default' },
+    { name: 'mimo-v2.5-pro', active: false, provider: 'mimo', contextWindow: 128_000, contextWindowSource: 'cloud_default' },
   ])
   assert.equal(JSON.stringify(status).includes('sk-deepseek'), false)
   assert.equal(JSON.stringify(status).includes('sk-mimo'), false)
@@ -498,7 +498,7 @@ test('resolves selected models to their provider endpoint and API key', () => {
   })
 })
 
-test('resolves context windows from the selected provider and its profile override', () => {
+test('resolves context windows from exact model metadata before provider fallbacks', () => {
   const env = {
     MODEL_PROVIDERS: 'local,cloud,tuned',
     MODEL_PROVIDER_LOCAL_BASE_URL: 'http://127.0.0.1:11434/v1',
@@ -508,7 +508,10 @@ test('resolves context windows from the selected provider and its profile overri
     MODEL_PROVIDER_CLOUD_MODELS: 'cloud-model',
     MODEL_PROVIDER_TUNED_BASE_URL: 'https://tuned.example.com/v1',
     MODEL_PROVIDER_TUNED_MODELS: 'tuned-model',
-    MODEL_PROVIDER_TUNED_PROFILE: JSON.stringify({ contextWindow: 65_536 }),
+    MODEL_PROVIDER_TUNED_PROFILE: JSON.stringify({
+      contextWindow: 65_536,
+      models: { 'tuned-model': { contextWindow: 98_304 } },
+    }),
     MODEL_CONTEXT_WINDOWS: JSON.stringify({ 'tuned-model': 32_768 }),
     MODEL_NAME: 'local-default',
   }
@@ -520,9 +523,29 @@ test('resolves context windows from the selected provider and its profile overri
   )
   assert.equal(
     getModelContextWindow({ modelName: 'tuned-model', env }),
-    65_536,
-    'the selected provider profile override must win over global model mappings',
+    98_304,
+    'exact model metadata must win over env mappings and provider fallbacks',
   )
+})
+
+test('model status resolves an independent context window for every model', () => {
+  const status = getModelStatus({
+    MODEL_PROVIDERS: 'mixed',
+    MODEL_PROVIDER_MIXED_BASE_URL: 'https://api.example.com/v1',
+    MODEL_PROVIDER_MIXED_MODELS: 'large,mapped,legacy',
+    MODEL_PROVIDER_MIXED_PROFILE: JSON.stringify({
+      contextWindow: 8192,
+      models: { large: { contextWindow: 131_072 } },
+    }),
+    MODEL_CONTEXT_WINDOWS: JSON.stringify({ mapped: 65_536 }),
+    MODEL_NAME: 'large',
+  })
+
+  assert.deepEqual(status.models, [
+    { name: 'large', active: true, provider: 'mixed', contextWindow: 131_072, contextWindowSource: 'model_profile' },
+    { name: 'mapped', active: false, provider: 'mixed', contextWindow: 65_536, contextWindowSource: 'model_context_windows' },
+    { name: 'legacy', active: false, provider: 'mixed', contextWindow: 8192, contextWindowSource: 'provider_override' },
+  ])
 })
 
 test('system diagnostics summarize model and mail without secrets', async () => {
@@ -594,6 +617,14 @@ test('returns backend model status without exposing API key', () => {
       temperature: 0.7,
       maxTokens: 4096,
       toolMaxRounds: 0,
+      contextWindow: 128_000,
+      contextWindowSource: 'cloud_default',
+      models: [{
+        name: 'gpt-test',
+        active: true,
+        contextWindow: 128_000,
+        contextWindowSource: 'cloud_default',
+      }],
     }
   )
 })

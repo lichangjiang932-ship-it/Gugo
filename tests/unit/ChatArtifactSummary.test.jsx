@@ -70,7 +70,7 @@ test('tool artifact renders final explanation and file card together', async () 
     assert.match(rootElement.textContent, /已修复页面刷新、定时器清理和数据加载问题/)
     assert.match(rootElement.textContent, /修复量化交易平台\.pptx/)
     assert.match(rootElement.textContent, /上下文（估算）/)
-  assert.match(rootElement.textContent, /1,000,000/)
+    assert.match(rootElement.textContent, /128,000/)
     assert.ok(rootElement.querySelector('[data-testid="artifact-open-card"]'))
   } finally {
     await act(async () => root.unmount())

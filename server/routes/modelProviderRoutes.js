@@ -22,6 +22,24 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body))
 }
 
+export function buildProviderProfileOverrides(provider = {}) {
+  return {
+    kind: provider.kind,
+    contextWindow: provider.contextWindow,
+    supportsTools: provider.supportsTools,
+    supportsStreaming: provider.supportsStreaming,
+    supportsVision: provider.supportsVision,
+    supportsPdf: provider.supportsPdf,
+    firstTokenTimeoutMs: provider.firstTokenTimeoutMs,
+    idleTimeoutMs: provider.idleTimeoutMs,
+    failoverEnabled: provider.failoverEnabled,
+    keepAlive: provider.keepAlive,
+    ...(provider.modelProfiles && Object.keys(provider.modelProfiles).length
+      ? { models: provider.modelProfiles }
+      : {}),
+  }
+}
+
 function buildProviderTestEnv(provider) {
   return {
     ...getRuntimeEnv(),
@@ -30,6 +48,7 @@ function buildProviderTestEnv(provider) {
     MODEL_PROVIDER_SELECTED_API_KEY: provider.apiKey || '',
     MODEL_PROVIDER_SELECTED_MODELS: (provider.models || []).join(','),
     MODEL_PROVIDER_SELECTED_HEADERS: JSON.stringify(provider.headers || {}),
+    MODEL_PROVIDER_SELECTED_PROFILE: JSON.stringify(buildProviderProfileOverrides(provider)),
     MODEL_NAME: provider.defaultModel,
     MODEL_TEMPERATURE: '0',
     // Thinking models can spend the first 100+ tokens exclusively in
@@ -94,6 +113,7 @@ export async function handleModelProviderRequest(req, res) {
             endpoint: { checked: true, ok: true, url: baseUrl },
             models: native.models.map((model) => model.name),
             modelDetails: native.models,
+            modelProfiles: native.modelProfiles || {},
             // 探到什么就回什么,前端可以直接填进表单
             detected: native.profile || null,
           })
@@ -116,6 +136,7 @@ export async function handleModelProviderRequest(req, res) {
         kind: profile.kind,
         endpoint: diagnostics.endpoint,
         models: diagnostics.endpoint?.remoteModels || [],
+        modelProfiles: diagnostics.endpoint?.remoteModelProfiles || {},
       })
     }
     if (req.method === 'GET' && !id) {
@@ -143,18 +164,7 @@ export async function handleModelProviderRequest(req, res) {
         baseUrl: provider.baseUrl,
         modelName: provider.defaultModel,
         env: testEnv,
-        overrides: {
-          kind: provider.kind,
-          contextWindow: provider.contextWindow,
-          supportsTools: provider.supportsTools,
-          supportsStreaming: provider.supportsStreaming,
-          supportsVision: provider.supportsVision,
-          supportsPdf: provider.supportsPdf,
-          firstTokenTimeoutMs: provider.firstTokenTimeoutMs,
-          idleTimeoutMs: provider.idleTimeoutMs,
-          failoverEnabled: provider.failoverEnabled,
-          keepAlive: provider.keepAlive,
-        },
+        overrides: buildProviderProfileOverrides(provider),
       })
       const steps = []
 
@@ -174,6 +184,7 @@ export async function handleModelProviderRequest(req, res) {
           return {
             models: native.models.map((m) => m.name),
             detected: native.profile || null,
+            modelProfiles: native.modelProfiles || {},
           }
         }
         const diagnostics = await getSystemDiagnostics({

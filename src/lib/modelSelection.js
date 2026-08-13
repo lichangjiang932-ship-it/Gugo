@@ -42,6 +42,7 @@ export function readStoredModel(storage = globalThis.localStorage) {
 export function writeStoredModel(modelName, storage = globalThis.localStorage) {
   try {
     if (modelName) storage?.setItem(SELECTED_MODEL_STORAGE_KEY, modelName)
+    else storage?.removeItem?.(SELECTED_MODEL_STORAGE_KEY)
   } catch {
     // Ignore storage failures; the selected model still works for this session.
   }

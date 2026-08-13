@@ -29,7 +29,7 @@ export function emptyProvider() {
     id: '', key: '', label: '', baseUrl: '', apiKey: '', modelsText: '', defaultModel: '', presetId: '',
     headersText: '', enabled: true, isDefault: false, kind: '', contextWindow: '', supportsTools: '',
     supportsStreaming: '', supportsVision: '', supportsPdf: '', firstTokenTimeoutMs: '', idleTimeoutMs: '',
-    failoverEnabled: '', keepAlive: '',
+    failoverEnabled: '', keepAlive: '', modelProfiles: {},
   }
 }
 
@@ -43,6 +43,20 @@ export function numberOrNull(value) {
   if (!text) return null
   const num = Number(text)
   return Number.isFinite(num) && num > 0 ? Math.floor(num) : null
+}
+
+export function mergeDiscoveredModelProfiles(existing, discovered, models = []) {
+  const allowed = new Set(models.map((model) => String(model || '').trim()).filter(Boolean))
+  const current = existing && typeof existing === 'object' && !Array.isArray(existing) ? existing : {}
+  const incoming = discovered && typeof discovered === 'object' && !Array.isArray(discovered) ? discovered : {}
+  const merged = {}
+  for (const model of allowed) {
+    const previous = current[model]
+    const next = incoming[model]
+    if (previous && typeof previous === 'object' && !Array.isArray(previous)) merged[model] = { ...previous }
+    if (next && typeof next === 'object' && !Array.isArray(next)) merged[model] = { ...(merged[model] || {}), ...next }
+  }
+  return merged
 }
 
 function triboolToSelect(value) {

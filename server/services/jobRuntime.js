@@ -57,31 +57,17 @@ const PLANNING_READ_ONLY_TOOLS = new Set([
   'read_file', 'grep_code', 'find_symbol', 'list_imports', 'git_status', 'git_diff',
 ])
 const PLANNING_EXPLORER_ROLES = Object.freeze([
-  Object.freeze({
-    id: 'code-map',
-    label: 'Code and dependency mapper',
-    instructions: 'Map the relevant files, symbols, dependencies, and existing implementation patterns. Prefer direct repository evidence.',
-  }),
-  Object.freeze({
-    id: 'risk-audit',
-    label: 'Risk and verification auditor',
-    instructions: 'Find failure modes, compatibility risks, security boundaries, and the strongest concrete verification targets.',
-  }),
-  Object.freeze({
-    id: 'delivery-path',
-    label: 'Delivery path analyst',
-    instructions: 'Trace the user-visible workflow end to end, identify missing requirements and integration points, and propose the smallest complete delivery path.',
-  }),
-])
+  { id: 'code-map', label: 'Code and dependency mapper', instructions: 'Map the relevant files, symbols, dependencies, and existing implementation patterns. Prefer direct repository evidence.' },
+  { id: 'risk-audit', label: 'Risk and verification auditor', instructions: 'Find failure modes, compatibility risks, security boundaries, and the strongest concrete verification targets.' },
+  { id: 'delivery-path', label: 'Delivery path analyst', instructions: 'Trace the user-visible workflow end to end, identify missing requirements and integration points, and propose the smallest complete delivery path.' },
+].map(Object.freeze))
 
 function newId(prefix) {
   return `${prefix}-${crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
 }
 
 export function selectPlanningToolSpecs(prompt = '') {
-  return selectToolSpecs({ prompt }).filter((spec) =>
-    PLANNING_READ_ONLY_TOOLS.has(spec?.function?.name)
-  )
+  return selectToolSpecs({ prompt }).filter((spec) => PLANNING_READ_ONLY_TOOLS.has(spec?.function?.name))
 }
 
 /**
@@ -101,17 +87,19 @@ export async function runPlanningExploration({
   prompt,
   messages,
   userId,
+  modelName,
   signal,
-  runModelWithTools = ({ messages: modelMessages, tools, signal: modelSignal }) =>
-    callBackgroundModelWithTools({ messages: modelMessages, tools, signal: modelSignal, userId }),
-  synthesizeModel = ({ messages: modelMessages, signal: modelSignal }) =>
-    callBackgroundModel({ messages: modelMessages, signal: modelSignal, userId }),
+  runModelWithTools = ({ messages: modelMessages, tools, signal: modelSignal, modelName: selectedModel }) =>
+    callBackgroundModelWithTools({ messages: modelMessages, tools, signal: modelSignal, userId, modelName: selectedModel }),
+  synthesizeModel = ({ messages: modelMessages, signal: modelSignal, modelName: selectedModel }) =>
+    callBackgroundModel({ messages: modelMessages, signal: modelSignal, userId, modelName: selectedModel }),
   executeTool = undefined,
 } = {}) {
   const normalizedPrompt = String(prompt || '').trim()
+  const selectedModel = String(modelName || '').trim().slice(0, 512) || undefined
   const swarmId = newId('planning-swarm')
   const toolSpecs = selectPlanningToolSpecs(normalizedPrompt)
-  const contextWindow = getModelContextWindow({ userId })
+  const contextWindow = getModelContextWindow({ userId, modelName: selectedModel })
   const baseMessages = Array.isArray(messages) ? messages : []
   const settled = await Promise.allSettled(PLANNING_EXPLORER_ROLES.map(async (role) => {
     const planningJob = {
@@ -139,7 +127,7 @@ export async function runPlanningExploration({
       job: planningJob,
       step: { id: newId(`planning-${role.id}`), kind: 'execute' },
       messages: roleMessages,
-      runModel: runModelWithTools,
+      runModel: (request) => runModelWithTools({ ...request, userId, modelName: selectedModel }),
       signal,
       maxIters: PLANNING_EXPLORER_MAX_ITERS,
       toolSpecs,
@@ -187,6 +175,7 @@ export async function runPlanningExploration({
   try {
     const synthesized = await synthesizeModel({
       userId,
+      modelName: selectedModel,
       signal,
       messages: ensureSafetySystemMessages([
         {
@@ -211,9 +200,9 @@ export async function runPlanningExploration({
 }
 
 export function createDefaultExecuteStep({
-  runModel = async ({ messages, signal, userId }) => callBackgroundModel({ messages, signal, userId }),
-  runModelWithTools = async ({ messages, tools, signal, userId }) =>
-    callBackgroundModelWithTools({ messages, tools, signal, userId }),
+  runModel = async ({ messages, signal, userId, modelName }) => callBackgroundModel({ messages, signal, userId, modelName }),
+  runModelWithTools = async ({ messages, tools, signal, userId, modelName }) =>
+    callBackgroundModelWithTools({ messages, tools, signal, userId, modelName }),
   createDocxImpl = createDocx,
   enableServerTools = true,
   preparePromptContext,
@@ -227,6 +216,7 @@ export function createDefaultExecuteStep({
     releaseSteering = null,
     commitCheckpoint = null,
   }) {
+    const selectedModel = String(job?.modelName || '').trim() || undefined
     if (step.kind === 'plan') {
       const text = buildPlanningBrief(job)
       return {
@@ -385,7 +375,11 @@ export function createDefaultExecuteStep({
         // as "send a Slack message" otherwise accept prose as completion even
         // though no tool ever ran.
         intentMode: ['execute', 'batch_item'].includes(step.kind) ? 'execute' : 'auto',
-        runModel: (options) => runModelWithTools({ ...options, userId: job.userId }),
+        runModel: (options) => runModelWithTools({
+          ...options,
+          userId: job.userId,
+          modelName: selectedModel,
+        }),
         signal,
         onApprovalPending: () => markJobAwaitingApproval(job),
         onApprovalResolved: () => markJobRunningAgain(job),
@@ -406,7 +400,10 @@ export function createDefaultExecuteStep({
               return typeof commitCheckpoint === 'function' ? commitCheckpoint(save) : save()
             }
           : null,
-        contextWindow: getModelContextWindow({ userId: job.userId }),
+        contextWindow: getModelContextWindow({
+          userId: job.userId,
+          modelName: selectedModel,
+        }),
       })
       // ★ 修:以前这里只取 text/artifactIds/iterations,把 paused / budgetExceeded
       // 静默丢掉 → 被澄清打断或预算耗尽的截断运行会上报 ok:true 假装成功。
@@ -450,6 +447,7 @@ export function createDefaultExecuteStep({
       skill,
       signal,
       userId: job.userId,
+      modelName: selectedModel,
     })
     return {
       ok: true,
@@ -467,10 +465,10 @@ const TERMINAL_EVENT_TYPES = new Set(['completed', 'failed', 'cancelled', 'abort
 
 export class JobRuntime {
   constructor({
-    planner = (prompt, { userId } = {}) => buildExploredPlan(prompt, {
+    planner = (prompt, { userId, modelName } = {}) => buildExploredPlan(prompt, {
       userId,
-      exploreModel: ({ messages }) => runPlanningExploration({ prompt, messages, userId }),
-      runModel: ({ messages }) => callBackgroundModel({ messages, userId }),
+      exploreModel: ({ messages }) => runPlanningExploration({ prompt, messages, userId, modelName }),
+      runModel: ({ messages }) => callBackgroundModel({ messages, userId, modelName }),
     }),
     executeStep = createDefaultExecuteStep(),
     tickMs = 250,
@@ -592,9 +590,10 @@ export class JobRuntime {
     this.scheduler.stop()
   }
 
-  async createJob(prompt, { userId, requirePlanApproval = false } = {}) {
+  async createJob(prompt, { userId, requirePlanApproval = false, modelName } = {}) {
     if (!userId) throw new Error('createJob requires userId')
-    const plan = await this.planner(prompt, { userId })
+    const selectedModel = String(modelName || '').trim().slice(0, 512) || undefined
+    const plan = await this.planner(prompt, { userId, modelName: selectedModel })
     const id = newId('job')
     const normalizedSteps = normalizeJobCreationSteps(plan.steps, { requirePlanApproval })
     persistJob({
@@ -602,6 +601,7 @@ export class JobRuntime {
       userId,
       title: plan.title,
       prompt: plan.prompt || String(prompt || '').trim(),
+      modelName: selectedModel,
       status: 'queued',
     })
     this.jobUserCache.set(id, userId)
@@ -841,7 +841,7 @@ export class JobRuntime {
    * 创建结构化计划(带风险/目标/验收标准)。
    * 借鉴 Reasonix submit_plan 设计。
    */
-  createPlan({ userId, title, prompt, steps } = {}) {
+  createPlan({ userId, title, prompt, steps, modelName } = {}) {
     if (!userId) throw new Error('createPlan requires userId')
     const id = `job-${crypto.randomUUID()}`
     const t = Date.now()
@@ -852,6 +852,7 @@ export class JobRuntime {
       userId,
       title,
       prompt,
+      modelName: String(modelName || '').trim().slice(0, 512) || undefined,
       status: 'queued',
       progress: 0,
       now: t,

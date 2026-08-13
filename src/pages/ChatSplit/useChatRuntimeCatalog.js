@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { SKILLS } from '../../data.js'
 import { getModelStatus } from '../../lib/modelClient.js'
-import { readStoredModel, resolveInitialModel } from '../../lib/modelSelection.js'
+import { readStoredModel, resolveInitialModel, writeStoredModel } from '../../lib/modelSelection.js'
 import { listSkills } from '../../lib/skillClient.js'
 import { listLocalSkills, mergeRuntimeSkills } from '../../lib/localSkills.js'
 import { presentSkillCollection } from '../../lib/skillPresentation.js'
@@ -11,6 +11,18 @@ import { CORE_SLASH_COMMANDS, registerCoreSlashCommands } from '../../lib/slashC
 
 function promptTemplateCommandName(template) {
   return normalizeSlashCommandName(template?.name) || normalizeSlashCommandName(template?.id)
+}
+
+export function modelOptionsFromStatus(status = {}) {
+  if (Array.isArray(status?.models) && status.models.length > 0) return status.models
+  if (!status?.modelName) return []
+  return [{
+    name: status.modelName,
+    multiplier: 1,
+    active: true,
+    contextWindow: status.contextWindow,
+    contextWindowSource: status.contextWindowSource,
+  }]
 }
 
 export default function useChatRuntimeCatalog({ lang, skillConfigs, t }) {
@@ -46,13 +58,13 @@ export default function useChatRuntimeCatalog({ lang, skillConfigs, t }) {
       try {
         const status = await getModelStatus()
         if (cancelled) return
-        const models = status.models?.length
-          ? status.models
-          : status.modelName
-            ? [{ name: status.modelName, multiplier: 1, active: true }]
-            : []
+        const models = modelOptionsFromStatus(status)
         setModelOptions(models)
-        setSelectedModel((current) => resolveInitialModel(models, current || readStoredModel()))
+        setSelectedModel((current) => {
+          const selected = resolveInitialModel(models, current || readStoredModel())
+          writeStoredModel(selected)
+          return selected
+        })
       } catch {
         if (!cancelled) setModelOptions([])
       }

@@ -102,33 +102,78 @@ test('本地端点拿到慷慨超时,云端沿用原值', () => {
 test('上下文窗口:本地默认 8192 而不是 100 万', () => {
   const local = resolveEndpointProfile({ baseUrl: 'http://localhost:11434', env: {} })
   assert.equal(local.contextWindow, DEFAULT_LOCAL_CONTEXT_WINDOW)
+  assert.equal(local.contextWindowSource, 'local_default')
   const cloud = resolveEndpointProfile({ baseUrl: 'https://api.deepseek.com', env: {} })
   assert.equal(cloud.contextWindow, DEFAULT_CLOUD_CONTEXT_WINDOW)
+  assert.equal(cloud.contextWindowSource, 'cloud_default')
 })
 
-test('上下文窗口优先级:override > 按模型 > 全局 > 默认', () => {
+test('上下文窗口优先级:精确模型画像 > 按模型 env > provider 旧值 > 全局 > 默认', () => {
   const env = { MODEL_CONTEXT_WINDOW: '32000', MODEL_CONTEXT_WINDOWS: 'qwen2.5=16384' }
 
   // 全局
-  assert.equal(
-    resolveEndpointProfile({ baseUrl: 'http://localhost:11434', modelName: 'other', env }).contextWindow,
-    32000
-  )
-  // 按模型压过全局
-  assert.equal(
-    resolveEndpointProfile({ baseUrl: 'http://localhost:11434', modelName: 'qwen2.5', env }).contextWindow,
-    16384
-  )
-  // override 压过一切
-  assert.equal(
-    resolveEndpointProfile({
-      baseUrl: 'http://localhost:11434',
-      modelName: 'qwen2.5',
-      env,
-      overrides: { contextWindow: 4096 },
-    }).contextWindow,
-    4096
-  )
+  const global = resolveEndpointProfile({ baseUrl: 'http://localhost:11434', modelName: 'other', env })
+  assert.equal(global.contextWindow, 32000)
+  assert.equal(global.contextWindowSource, 'global')
+
+  // provider 旧值压过全局
+  const provider = resolveEndpointProfile({
+    baseUrl: 'http://localhost:11434',
+    modelName: 'other',
+    env,
+    overrides: { contextWindow: 4096 },
+  })
+  assert.equal(provider.contextWindow, 4096)
+  assert.equal(provider.contextWindowSource, 'provider_override')
+
+  // 精确 env 映射压过 provider 旧值
+  const mapped = resolveEndpointProfile({
+    baseUrl: 'http://localhost:11434',
+    modelName: 'qwen2.5',
+    env,
+    overrides: { contextWindow: 4096 },
+  })
+  assert.equal(mapped.contextWindow, 16384)
+  assert.equal(mapped.contextWindowSource, 'model_context_windows')
+
+  // 精确模型画像压过所有兼容配置
+  const exact = resolveEndpointProfile({
+    baseUrl: 'http://localhost:11434',
+    modelName: 'qwen2.5',
+    env,
+    overrides: {
+      contextWindow: 4096,
+      models: {
+        'qwen2.5': { contextWindow: 65536 },
+        sibling: { contextWindow: 8192 },
+      },
+    },
+  })
+  assert.equal(exact.contextWindow, 65536)
+  assert.equal(exact.contextWindowSource, 'model_profile')
+})
+
+test('模型画像只做精确匹配,并兼容顶层 modelProfiles', () => {
+  const overrides = {
+    models: { known: { contextWindow: 32768 } },
+  }
+  const unknown = resolveEndpointProfile({
+    baseUrl: 'https://api.example.com/v1',
+    modelName: 'unknown',
+    env: {},
+    overrides,
+  })
+  assert.equal(unknown.contextWindow, DEFAULT_CLOUD_CONTEXT_WINDOW)
+  assert.equal(unknown.contextWindowSource, 'cloud_default')
+
+  const compatible = resolveEndpointProfile({
+    baseUrl: 'https://api.example.com/v1',
+    modelName: 'known',
+    env: { MODEL_CONTEXT_WINDOWS: 'known=16384' },
+    modelProfiles: { known: { contextWindow: 65536 } },
+  })
+  assert.equal(compatible.contextWindow, 65536)
+  assert.equal(compatible.contextWindowSource, 'model_profile')
 })
 
 test('上下文窗口接受小于 4096 的真实小窗口(原来被硬下限顶掉)', () => {
