@@ -698,6 +698,93 @@ html[data-density="loose"] {
   color: rgb(var(--color-cyan-rgb));
 }
 
+/* ── 实时交错文本流（ActivityStream）：用文字行替代 spinner/呼吸点 ── */
+.chat-activity-stream {
+  margin-bottom: 0.65rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid rgb(var(--color-ink-rgb) / 0.1);
+  border-left: 2px solid rgb(var(--color-cyan-rgb) / 0.45);
+  border-radius: 0.5rem;
+  background: rgb(var(--color-paper-2-rgb) / 0.4);
+  color: rgb(var(--color-ink-soft-rgb));
+  font-size: 0.72rem;
+  line-height: 1.35rem;
+}
+
+.chat-activity-line {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+.chat-activity-line-done {
+  color: rgb(var(--color-ink-fade-rgb));
+  opacity: 0.85;
+}
+
+.chat-activity-line-error .chat-activity-label {
+  color: rgb(var(--color-ember-rgb));
+}
+
+.chat-activity-mark {
+  flex: none;
+  width: 0.9rem;
+  text-align: center;
+  color: rgb(var(--color-cyan-rgb));
+}
+
+.chat-activity-mark-running {
+  color: rgb(var(--color-cyan-rgb));
+}
+
+.chat-activity-line-error .chat-activity-mark {
+  color: rgb(var(--color-ember-rgb));
+}
+
+/* 降级链路提示：provider 重试/切换用 ember 标出，与工具状态区分开 */
+.chat-activity-line-fallback {
+  color: rgb(var(--color-ink-soft-rgb));
+}
+
+.chat-activity-line-fallback .chat-activity-label {
+  color: rgb(var(--color-ember-rgb));
+}
+
+.chat-activity-mark-fallback {
+  color: rgb(var(--color-ember-rgb));
+}
+
+.chat-activity-label {
+  flex: none;
+  color: rgb(var(--color-ink-rgb));
+  font-weight: 600;
+}
+
+.chat-activity-arg {
+  min-width: 0;
+  overflow: hidden;
+  color: rgb(var(--color-ink-fade-rgb));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-activity-live-output {
+  margin: 0.3rem 0 0;
+  max-height: 9rem;
+  overflow: auto;
+  border: 1px solid rgb(var(--color-ink-rgb) / 0.08);
+  border-radius: 0.36rem;
+  background: rgb(var(--color-ink-rgb) / 0.03);
+  padding: 0.45rem 0.5rem;
+  color: rgb(var(--color-ink-soft-rgb));
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.64rem;
+  line-height: 1rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .chat-activity-summary:focus-visible,
 .chat-tool-details summary:focus-visible,
 .chat-tool-details pre:focus-visible,

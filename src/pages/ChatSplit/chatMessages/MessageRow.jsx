@@ -11,7 +11,8 @@ import { artifactHasInlineReference, artifactReferenceOpenPayload, buildMessageA
 import { formatMessageDateTime, formatMessageTime } from '../../../lib/messageTime.js'
 import { copyTextToClipboard } from '../../../lib/clipboard.js'
 import { ArtifactReferenceLinks } from './ArtifactCards.jsx'
-import { ProgressTrace, ReasoningTrace, ToolCallTrace } from './ActivityTraces.jsx'
+import { ProgressTrace, ToolCallTrace } from './ActivityTraces.jsx'
+import ActivityStream from './ActivityStream.jsx'
 import { buildCollapsedUserMessagePreview, shouldCollapseUserMessage, splitUserSkillCommand } from './messageContent.js'
 import DirectoryRequestCard from '../../taskRun/DirectoryRequestCard.jsx'
 
@@ -49,12 +50,6 @@ export default function MessageRow({
   ].join(':')
   const artifactPreview = buildMessageArtifactPreview(msg)
   const isCurrentStreamingMessage = msg.id === generatingMessageId || !!msg.meta?.streaming
-  const modelActivity = msg.meta?.modelActivity?.kind === 'tool_call_ready'
-    ? msg.meta.modelActivity
-    : null
-  const liveStatusLabel = modelActivity
-    ? t('chatMessages.toolCallReady', { name: modelActivity.toolName })
-    : t('chatMessages.reasoningActive')
   // A new turn must not make completed artifact messages look "streaming" again.
   // Their collapsed source/link presentation is part of the message itself, not
   // global chat generation state.
@@ -90,12 +85,6 @@ export default function MessageRow({
         : msg.role === 'assistant'
           ? 'chat-assistant-message w-full max-w-[840px] text-[15px] leading-7'
           : 'flex max-w-[min(720px,86%)] flex-col items-end'}>
-        {msg.role === 'assistant' && !collapseArtifact && isCurrentStreamingMessage && (
-          <div data-testid={modelActivity ? 'model-activity' : undefined} className="mb-2 flex items-center gap-2 text-[11px] text-ink-fade" role="status" aria-live="polite">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-ember" aria-hidden="true" />
-            <span>{liveStatusLabel}</span>
-          </div>
-        )}
         {msg.role === 'assistant' ? (
           collapseArtifact ? (
             <CollapsedArtifactContent
@@ -176,7 +165,7 @@ function AssistantContent({ artifactPreview, isCurrentStreamingMessage, isMessag
   return (
     <>
       <div data-quotable="true">
-        <ReasoningTrace text={msg.meta?.reasoning || ''} streaming={!!msg.meta?.streaming && !msg.content} />
+        {isCurrentStreamingMessage && <ActivityStream msg={msg} />}
         {timeline.map((segment) => (
           segment.kind === 'tools'
             ? <ToolCallTrace key={segment.key} calls={segment.calls} artifacts={artifactReferences} onOpenArtifact={openToolArtifact} />
@@ -216,7 +205,6 @@ function CollapsedArtifactContent({ artifactPreview, msg, onOpenArtifact, t }) {
   return (
     <>
       <div className="chat-assistant-message text-[15px] leading-7" data-quotable="true">
-        <ReasoningTrace text={msg.meta?.reasoning || ''} streaming={false} />
         {Array.isArray(msg.meta?.toolCalls) && msg.meta.toolCalls.length > 0 && (
           <ToolCallTrace calls={msg.meta.toolCalls} artifacts={artifactReferences} onOpenArtifact={openToolArtifact} />
         )}

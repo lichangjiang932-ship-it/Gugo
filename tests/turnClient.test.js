@@ -813,6 +813,29 @@ test('dispatchTurnEvent maps tool and approval events to existing chat actions',
   assert.equal(approvals[0].id, 'p1')
 })
 
+test('dispatchTurnEvent maps model failover/retry to a fallback notice', async () => {
+  const actions = []
+  const dispatch = (action) => actions.push(action)
+  const options = { dispatch, taskId: 'task', messageTarget: { sessionId: 's', messageId: 'assistant-1' } }
+  await dispatchTurnEvent(createTurnEvent({
+    id: 'failover', sessionId: 's', turnId: 't', sequence: 0, type: 'model.failover',
+    payload: { kind: 'failover', from: 'primary', to: 'backup', modelName: 'm1' }, createdAt: 1,
+  }), options)
+  await dispatchTurnEvent(createTurnEvent({
+    id: 'retry', sessionId: 's', turnId: 't', sequence: 1, type: 'model.failover',
+    payload: { kind: 'retry', attempt: 2, delayMs: 0, modelName: 'm1' }, createdAt: 2,
+  }), options)
+
+  const metaActions = actions.filter((action) => action.type === 'UPDATE_LAST_MESSAGE_META')
+  assert.ok(metaActions.length >= 2)
+  assert.deepEqual(metaActions[0].payload.modelFallback, {
+    kind: 'failover', from: 'primary', to: 'backup', modelName: 'm1', attempt: null,
+  })
+  assert.deepEqual(metaActions[1].payload.modelFallback, {
+    kind: 'retry', from: null, to: null, modelName: 'm1', attempt: 2,
+  })
+})
+
 test('tool.started keeps arguments previously recorded by tool.call', async () => {
   let state = {
     activeSessionId: 's',

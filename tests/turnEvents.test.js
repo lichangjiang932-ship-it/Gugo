@@ -43,6 +43,23 @@ test('model tool readiness is a strict non-durable activity', () => {
   }))
 })
 
+test('model failover events surface a bounded provider/retry fallback', () => {
+  const failover = createTurnEvent({
+    id: 'failover-1', sessionId: 's1', turnId: 't1', sequence: 1,
+    type: 'model.failover',
+    payload: { kind: 'failover', from: 'primary', to: 'backup', modelName: 'm1', attempt: 1, delayMs: 0 },
+    createdAt: 2,
+  })
+  assert.equal(failover.payload.to, 'backup')
+  assert.equal(failover.payload.modelName, 'm1')
+  assert.throws(() => createTurnEvent({
+    ...failover, id: 'failover-bad-kind', payload: { ...failover.payload, kind: 'recover' },
+  }))
+  assert.throws(() => createTurnEvent({
+    ...failover, id: 'failover-drift', payload: { ...failover.payload, stack: 'private' },
+  }))
+})
+
 test('turn attempt events require an explicit recovery cursor and confirmed stream prefix', () => {
   const attempt = createTurnEvent({
     id: 'attempt-2',

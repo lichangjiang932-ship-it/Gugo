@@ -12,6 +12,7 @@ const lifecycleSource = fs.readFileSync(new URL('../src/pages/ChatSplit/useChatS
 const messageListSource = fs.readFileSync(new URL('../src/pages/ChatSplit/ChatMessages.jsx', import.meta.url), 'utf8')
 const messageRowSource = fs.readFileSync(new URL('../src/pages/ChatSplit/chatMessages/MessageRow.jsx', import.meta.url), 'utf8')
 const activityTracesSource = fs.readFileSync(new URL('../src/pages/ChatSplit/chatMessages/ActivityTraces.jsx', import.meta.url), 'utf8')
+const activityStreamSource = fs.readFileSync(new URL('../src/pages/ChatSplit/chatMessages/ActivityStream.jsx', import.meta.url), 'utf8')
 const chatViewSource = fs.readFileSync(new URL('../src/pages/ChatSplit/ChatSplitView.jsx', import.meta.url), 'utf8')
 const markdownSource = fs.readFileSync(new URL('../src/components/MarkdownRenderer.jsx', import.meta.url), 'utf8')
 const toolCardSource = fs.readFileSync(new URL('../src/components/ToolCallCard.jsx', import.meta.url), 'utf8')
@@ -81,9 +82,9 @@ test('composer uses one stable primary button for send and stop', () => {
 })
 
 test('transient tool readiness is visible in the streaming assistant without creating a tool trace', () => {
-  assert.match(messageRowSource, /msg\.meta\?\.modelActivity\?\.kind === 'tool_call_ready'/)
-  assert.match(messageRowSource, /chatMessages\.toolCallReady/)
-  assert.match(messageRowSource, /data-testid=\{modelActivity \? 'model-activity'/)
+  assert.match(activityStreamSource, /meta\.modelActivity\?\.kind === 'tool_call_ready'/)
+  assert.match(activityStreamSource, /chatMessages\.toolCallReady/)
+  assert.match(activityStreamSource, /data-testid="model-activity"/)
 })
 
 test('tool failures expose status, retryability, attempts, and recovery hints', () => {

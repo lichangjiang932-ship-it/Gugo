@@ -4,7 +4,7 @@ import { isIP } from 'node:net'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { getDbStatus } from './db.js'
-import { logger } from './utils/logger.js'
+import { logger, newTraceId, withLogContext } from './utils/logger.js'
 import {
   corsMiddleware,
   securityHeaders,
@@ -237,12 +237,17 @@ export function enforceLocalAuthExposurePolicy(
 
 function applyMiddlewares(handler, apiRateLimitMiddleware) {
   return (req, res) => {
+    // 请求级关联 ID：客户端可透传 x-request-id，否则生成一个，
+    // 让这一整条请求链上的结构化日志都能按 requestId 串起来。
+    const requestId = String(req.headers['x-request-id'] || '').trim().slice(0, 128) || newTraceId()
+    req.requestId = requestId
+    res.setHeader('X-Request-Id', requestId)
     // 顺序：CORS → 安全头 → 日志 → 错误边界 → 业务逻辑
     corsMiddleware(req, res, () => {
       securityHeaders(req, res, () => {
         requestLogger(req, res, () => {
           apiRateLimitMiddleware(req, res, () => {
-            errorBoundary(req, res, () => handler(req, res))
+            errorBoundary(req, res, () => withLogContext({ requestId }, () => handler(req, res)))
           })
         })
       })

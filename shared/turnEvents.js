@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 export const TURN_EVENT_TYPES = Object.freeze([
-  'turn.started', 'turn.attempt', 'model.phase', 'assistant.delta', 'reasoning.delta',
+  'turn.started', 'turn.attempt', 'model.phase', 'model.failover', 'assistant.delta', 'reasoning.delta',
   'tool.call', 'tool.started', 'tool.completed', 'turn.progress', 'approval.required',
   'approval.resolved', 'turn.checkpoint', 'turn.interrupted', 'turn.paused', 'turn.resumed',
   'turn.completed', 'turn.cancelled',
@@ -86,6 +86,14 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
   'model.phase': z.object({
     phase: z.string(), iteration: z.number().int().nonnegative().optional(),
     usage: jsonRecord.nullable().optional(), modelName: nullableText, error: nullableText,
+  }).strict(),
+  'model.failover': z.object({
+    kind: z.enum(['retry', 'failover']),
+    from: z.string().optional(),
+    to: z.string().optional(),
+    modelName: nullableText,
+    attempt: z.number().int().positive().optional(),
+    delayMs: z.number().int().nonnegative().optional(),
   }).strict(),
   'assistant.delta': z.object({
     text: z.string(), iteration: z.number().int().nonnegative().optional(), modelName: nullableText,
