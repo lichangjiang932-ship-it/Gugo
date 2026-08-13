@@ -3,11 +3,33 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-job-plan-contract-tests', `${process.pid}-${Date.now()}`)
+const testDataDir = path.join(os.tmpdir(), 'yma-job-plan-contract-tests', `${process.pid}-${Date.now()}`)
+process.env.APP_DATA_DIR = testDataDir
+process.env.APP_DB_PATH = path.join(testDataDir, 'app.db')
 
 const { JobRuntime } = await import('../server/services/jobRuntime.js')
 const { getApprovalMode, setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
+
+async function runUntilJobStatus(runtime, jobId, userId, expectedStatus, { timeoutMs = 5_000 } = {}) {
+  const deadline = Date.now() + timeoutMs
+  let job = runtime.getJob(jobId, { userId })
+
+  while (job?.status !== expectedStatus && Date.now() < deadline) {
+    await runtime.runOneTick()
+    job = runtime.getJob(jobId, { userId })
+    if (job?.status !== expectedStatus) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+  }
+
+  assert.equal(
+    job?.status,
+    expectedStatus,
+    `job ${jobId} did not reach ${expectedStatus} within ${timeoutMs}ms (last status: ${job?.status || 'missing'})`,
+  )
+  return job
+}
 
 test('plan mode pauses at a durable proposal and explicit approval resumes the same job', async () => {
   const { userId } = issueTestSession()
@@ -29,9 +51,7 @@ test('plan mode pauses at a durable proposal and explicit approval resumes the s
   })
 
   const created = await runtime.createJob('Implement safely', { userId })
-  assert.equal(await runtime.runOneTick(), true)
-  const proposed = runtime.getJob(created.id, { userId })
-  assert.equal(proposed.status, 'waiting')
+  const proposed = await runUntilJobStatus(runtime, created.id, userId, 'waiting')
   assert.deepEqual(executed, ['plan'])
   assert.equal(proposed.events.at(-1).type, 'plan_proposed')
   assert.equal(proposed.events.at(-1).payload.plan.steps[0].title, 'Write files')
@@ -71,11 +91,7 @@ test('plan approval replaces queued steps with the user-edited order', async () 
   })
 
   const created = await runtime.createJob('Edit before execution', { userId })
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    if (runtime.getJob(created.id, { userId }).status === 'waiting') break
-    await runtime.runOneTick()
-  }
-  assert.equal(runtime.getJob(created.id, { userId }).status, 'waiting')
+  await runUntilJobStatus(runtime, created.id, userId, 'waiting')
   const originalStep = runtime.getJob(created.id, { userId }).steps.find((step) => step.kind === 'execute')
   const approval = runtime.approvePlan(created.id, {
     userId,
@@ -129,7 +145,7 @@ test('plan approval counts required verification and delivery steps toward the 5
   })
 
   const created = await runtime.createJob('Keep the plan bounded', { userId })
-  await runtime.runOneTick()
+  await runUntilJobStatus(runtime, created.id, userId, 'waiting')
   const tooManyWorkSteps = Array.from({ length: 49 }, (_, index) => ({
     id: `work-${index + 1}`,
     title: `Work ${index + 1}`,
