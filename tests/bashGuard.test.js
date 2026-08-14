@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   checkBashCommandDanger,
   checkShellPathSyntax,
+  extractAbsoluteShellPaths,
   isReadOnlyShellCommand,
 } from '../server/utils/bashGuard.js'
 
@@ -119,6 +120,23 @@ test('requires quotes for obvious Windows absolute paths containing parentheses'
     '(type C:\\Windows\\win.ini) & echo ok',
     { platform: 'win32' },
   ), null)
+})
+
+test('extracts complete quoted Windows paths with terminal parentheses and embedded apostrophes', () => {
+  const parenthesized = 'D:\\destok\\your-model-atelier(1)'
+  assert.deepEqual(
+    extractAbsoluteShellPaths(
+      `powershell -Command "Get-Item -LiteralPath '${parenthesized}'"`,
+      { platform: 'win32' },
+    ),
+    [parenthesized],
+  )
+
+  const apostrophe = "D:\\authorized'outside\\input.txt"
+  assert.deepEqual(
+    extractAbsoluteShellPaths(`Get-Item -LiteralPath "${apostrophe}"`, { platform: 'win32' }),
+    [apostrophe],
+  )
 })
 
 test('classifies only conservative shell reads as read-only', () => {

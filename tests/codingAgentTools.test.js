@@ -29,6 +29,7 @@ const {
   runTestTool,
 } = await import('../server/adapters/codingAgentTools.js')
 const { closeDb, createUser, setUserToolPermission } = await import('../server/db.js')
+const { grantLocalPath } = await import('../server/services/localFileAccessService.js')
 const { getBuiltinSpec } = await import('../server/services/toolRegistry.js')
 const { runToolsLoop } = await import('../server/services/toolLoopRuntime.js')
 
@@ -80,6 +81,37 @@ test('run_command standard alias executes real Python and returns stdout/stderr/
   assert.equal(result.exitCode, 0)
   assert.match(result.stdout, /RUN_COMMAND_PYTHON_OK/)
   assert.equal(typeof result.stderr, 'string')
+})
+
+test('run_command infers one authorized read-write cwd for quoted PowerShell paths', {
+  skip: process.platform !== 'win32',
+}, async () => {
+  const previousSharedTrust = process.env.WORKSPACE_SHARED_TRUSTED
+  const externalBase = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-run-command-external-'))
+  const authorizedRoot = path.join(externalBase, 'authorized target (1)')
+  const inputPath = path.join(authorizedRoot, 'input.txt')
+  const userId = createPermissionUser('run-command-inferred-cwd')
+  fs.mkdirSync(authorizedRoot, { recursive: true })
+  fs.writeFileSync(inputPath, 'POWERSHELL_AUTHORIZED_PATH_OK', 'utf8')
+  grantLocalPath({ userId, rootPath: authorizedRoot, accessMode: 'read_write' })
+  setUserToolPermission({ userId, toolName: 'run_command', enabled: true })
+  process.env.WORKSPACE_SHARED_TRUSTED = '0'
+
+  try {
+    const escapedPath = inputPath.replaceAll("'", "''")
+    const result = await runCommandTool({
+      command: `powershell -NoProfile -Command "Get-Content -LiteralPath '${escapedPath}'"`,
+      userId,
+      timeout_ms: 30_000,
+    })
+    assert.equal(result.ok, true, JSON.stringify(result))
+    assert.equal(result.exitCode, 0)
+    assert.equal(result.cwd, fs.realpathSync(authorizedRoot))
+    assert.match(result.stdout, /POWERSHELL_AUTHORIZED_PATH_OK/u)
+  } finally {
+    process.env.WORKSPACE_SHARED_TRUSTED = previousSharedTrust
+    fs.rmSync(externalBase, { recursive: true, force: true })
+  }
 })
 
 test('run_command and run_test do not inherit the hidden bash_exec permission', async () => {
