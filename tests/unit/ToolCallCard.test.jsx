@@ -190,8 +190,8 @@ test('failed command keeps arguments and result in independent disclosures', asy
     assert.equal(disclosures.length, 2)
     assert.equal(disclosures.item(0).open, false)
     assert.equal(disclosures.item(1).open, false)
-    assert.match(disclosures.item(0).querySelector('summary').textContent, /参数/)
-    assert.match(disclosures.item(1).querySelector('summary').textContent, /错误/)
+    assert.match(disclosures.item(0).querySelector('summary').textContent, /Arguments/)
+    assert.match(disclosures.item(1).querySelector('summary').textContent, /Error/)
     assert.equal(rootElement.querySelector('.chat-tool-step-marker').textContent, '2')
 
     const resultDetails = disclosures.item(1).querySelector('pre')?.textContent || ''

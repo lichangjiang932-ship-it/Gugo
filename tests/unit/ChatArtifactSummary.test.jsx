@@ -49,7 +49,7 @@ test('tool artifact renders final explanation and file card together', async () 
         }]}
         state={{ permRequest: null }}
         workbenchMessage=""
-        showContextPanel={false}
+        showContextPanel={true}
         setShowContextPanel={() => {}}
         selectedModel="test-model"
         onExampleClick={() => {}}

@@ -9,7 +9,7 @@ import {
 
 test('chat failure copy does not blame env config for a generic invalid request', () => {
   const text = buildChatFailureMessage('请求参数无效：请检查消息内容或当前模型兼容性。')
-  assert.match(text, /模型调用失败/)
+  assert.match(text, /Model call failed/)
   assert.doesNotMatch(text, /MODEL_BASE_URL/)
   assert.doesNotMatch(text, /MODEL_API_KEY/)
 })
