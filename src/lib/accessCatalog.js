@@ -29,17 +29,9 @@ export const NATIVE_ACCESS = Object.freeze([
   native('linear', 'Linear', '#5E6AD2', 'access.linearDesc', 'access.linearHint', ACCESS_CAPABILITY_LEVELS.NATIVE_API, { connectionMethod: 'api_token', setupUrl: 'https://linear.app/settings/api' }),
   native('trello', 'Trello', '#0C66E4', 'access.trelloDesc', 'access.trelloHint', ACCESS_CAPABILITY_LEVELS.NATIVE_API, { connectionMethod: 'api_token', setupUrl: 'https://trello.com/power-ups/admin' }),
   native('gitlab', 'GitLab', '#FC6D26', 'access.gitlabDesc', 'access.gitlabHint', ACCESS_CAPABILITY_LEVELS.NATIVE_API, { connectionMethod: 'api_token', setupUrl: 'https://gitlab.com/-/user_settings/personal_access_tokens' }),
-  native('asana', 'Asana', '#F06A6A', 'access.asanaDesc', 'access.asanaHint', ACCESS_CAPABILITY_LEVELS.NATIVE_API, { connectionMethod: 'api_token', setupUrl: 'https://app.asana.com/0/my-apps' }),
-  native('clickup', 'ClickUp', '#7B68EE', 'access.clickupDesc', 'access.clickupHint', ACCESS_CAPABILITY_LEVELS.NATIVE_API, { connectionMethod: 'api_token', setupUrl: 'https://app.clickup.com/settings/apps' }),
-  native('airtable', 'Airtable', '#18BFFF', 'access.airtableDesc', 'access.airtableHint', ACCESS_CAPABILITY_LEVELS.NATIVE_API, { connectionMethod: 'api_token', setupUrl: 'https://airtable.com/create/tokens' }),
-  native('monday', 'monday.com', '#6161FF', 'access.mondayDesc', 'access.mondayHint', ACCESS_CAPABILITY_LEVELS.NATIVE_API, { connectionMethod: 'api_token', setupUrl: 'https://developer.monday.com/apps/manage' }),
-  native('hubspot', 'HubSpot', '#FF7A59', 'access.hubspotDesc', 'access.hubspotHint', ACCESS_CAPABILITY_LEVELS.NATIVE_API, { connectionMethod: 'api_token', setupUrl: 'https://developers.hubspot.com/docs/api/private-apps' }),
-  native('zendesk', 'Zendesk', '#03363D', 'access.zendeskDesc', 'access.zendeskHint', ACCESS_CAPABILITY_LEVELS.NATIVE_API, { connectionMethod: 'api_token', setupUrl: 'https://support.zendesk.com/hc/articles/4408889192858' }),
   native('todoist', 'Todoist', '#E44332', 'access.todoistDesc', 'access.todoistHint', ACCESS_CAPABILITY_LEVELS.NATIVE_API, { connectionMethod: 'api_token', setupUrl: 'https://app.todoist.com/app/settings/integrations/developer' }),
   native('dropbox', 'Dropbox', '#0061FF', 'access.dropboxDesc', 'access.dropboxHint', ACCESS_CAPABILITY_LEVELS.NATIVE_API, { connectionMethod: 'access_token', setupUrl: 'https://www.dropbox.com/developers/apps' }),
   native('onedrive', 'Microsoft 365', '#0078D4', 'access.onedriveDesc', 'access.onedriveHint', ACCESS_CAPABILITY_LEVELS.NATIVE_API, { connectionMethod: 'access_token', searchTerms: 'onedrive teams microsoft graph channel message', setupUrl: 'https://entra.microsoft.com/' }),
-  native('confluence', 'Confluence Cloud', '#1868DB', 'access.confluenceDesc', 'access.confluenceHint', ACCESS_CAPABILITY_LEVELS.NATIVE_API, { connectionMethod: 'api_token', setupUrl: 'https://id.atlassian.com/manage-profile/security/api-tokens' }),
-  native('salesforce', 'Salesforce', '#00A1E0', 'access.salesforceDesc', 'access.salesforceHint', ACCESS_CAPABILITY_LEVELS.NATIVE_API, { connectionMethod: 'access_token', setupUrl: 'https://help.salesforce.com/s/articleView?id=xcloud.remoteaccess_authenticate.htm' }),
   native('slack', 'Slack', '#611F69', 'access.slackDesc', 'access.slackHint', ACCESS_CAPABILITY_LEVELS.NATIVE_API, { oauth: true, connectionMethod: 'oauth', setupUrl: 'https://api.slack.com/apps' }),
   native('discord', 'Discord', '#5865F2', 'access.discordDesc', 'access.discordHint', ACCESS_CAPABILITY_LEVELS.NATIVE_API, { connectionMethod: 'bot_token', setupUrl: 'https://discord.com/developers/applications' }),
   native('feishu', 'Feishu / Lark', '#3370FF', 'access.feishuDesc', 'access.feishuHint', ACCESS_CAPABILITY_LEVELS.SOCIAL_BRIDGE, { connectionMethod: 'app_credentials', setupUrl: 'https://open.feishu.cn/app' }),
@@ -49,7 +41,6 @@ export const NATIVE_ACCESS = Object.freeze([
   native('qq_mail', 'QQ Mail', '#12B7F5', 'access.qqMailDesc', 'access.qqMailHint', ACCESS_CAPABILITY_LEVELS.NATIVE_API, { connectionMethod: 'mail_password', category: 'communication', searchTerms: 'mail email qq smtp imap', setupUrl: 'https://service.mail.qq.com/detail/0/75' }),
   native('gmail', 'Gmail', '#EA4335', 'access.mailDesc', 'access.mailHint', ACCESS_CAPABILITY_LEVELS.NATIVE_API, { connectionMethod: 'mail_password', category: 'communication', searchTerms: 'mail email google smtp imap', setupUrl: 'https://myaccount.google.com/apppasswords' }),
   native('outlook', 'Outlook', '#0078D4', 'access.mailDesc', 'access.mailHint', ACCESS_CAPABILITY_LEVELS.NATIVE_API, { connectionMethod: 'mail_password', category: 'communication', searchTerms: 'mail email microsoft smtp imap' }),
-  native('exchange', 'Exchange', '#0078D4', 'access.mailDesc', 'access.mailHint', ACCESS_CAPABILITY_LEVELS.NATIVE_API, { connectionMethod: 'mail_password', category: 'communication', searchTerms: 'mail email exchange smtp imap' }),
   native('custom_mail', 'Custom Mail', '#64748B', 'access.mailDesc', 'access.mailHint', ACCESS_CAPABILITY_LEVELS.NATIVE_API, { connectionMethod: 'mail_password', category: 'communication', searchTerms: 'mail email custom smtp imap' }),
 ])
 
@@ -72,7 +63,7 @@ export const MCP_ACCESS = Object.freeze(MCP_SERVER_PRESETS
 })))
 
 // Dedicated OAuth/API entries take priority over duplicate browser bookmarks.
-const NATIVE_WEB_EQUIVALENTS = new Set(['web_google_drive', 'web_slack', 'web_discord', 'web_telegram', 'web_gmail', 'web_outlook', 'web_airtable', 'web_asana', 'web_clickup', 'web_monday', 'web_dropbox', 'web_onedrive', 'web_confluence', 'web_hubspot', 'web_salesforce'])
+const NATIVE_WEB_EQUIVALENTS = new Set(['web_google_drive', 'web_slack', 'web_discord', 'web_telegram', 'web_gmail', 'web_outlook', 'web_dropbox', 'web_onedrive'])
 
 export const WEB_ACCESS = Object.freeze(WEB_CONNECTOR_CATALOG
   .filter((connector) => !NATIVE_WEB_EQUIVALENTS.has(connector.provider))

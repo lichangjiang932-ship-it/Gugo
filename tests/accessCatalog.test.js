@@ -4,8 +4,8 @@ import { ACCESS_CAPABILITY_LEVELS, ACCESS_CATALOG, MCP_ACCESS, NATIVE_ACCESS, WE
 import { findWebConnectorsForUrl, getWebConnector, isWebConnectorProvider } from '../shared/webConnectorCatalog.js'
 
 test('access catalog separates native connectors from popular Browser apps', () => {
-  assert.equal(NATIVE_ACCESS.length, 31)
-  assert.ok(WEB_ACCESS.length >= 18)
+  assert.equal(NATIVE_ACCESS.length, 22)
+  assert.ok(WEB_ACCESS.length >= 10)
   assert.equal(MCP_ACCESS.length, 5)
   assert.equal(ACCESS_CATALOG.length, NATIVE_ACCESS.length + MCP_ACCESS.length + WEB_ACCESS.length)
   assert.ok(WEB_ACCESS.every((item) => /^https:\/\//.test(item.webUrl)))
@@ -17,7 +17,7 @@ test('access catalog separates native connectors from popular Browser apps', () 
   assert.equal(WEB_ACCESS.some((item) => item.provider === 'web_discord'), false)
   assert.equal(WEB_ACCESS.some((item) => item.provider === 'web_telegram'), false)
   assert.equal(WEB_ACCESS.find((item) => item.provider === 'web_whatsapp')?.connectionMethod, 'qr_browser')
-  assert.deepEqual([...new Set(WEB_ACCESS.map((item) => item.category))].sort(), ['communication', 'creative', 'productivity', 'work'])
+  assert.deepEqual([...new Set(WEB_ACCESS.map((item) => item.category))].sort(), ['communication', 'creative', 'productivity'])
 })
 
 test('access catalog exposes an honest capability level for every entry', () => {
@@ -25,7 +25,7 @@ test('access catalog exposes an honest capability level for every entry', () => 
   assert.ok(ACCESS_CATALOG.every((item) => knownLevels.has(item.capabilityLevel)))
   assert.deepEqual(
     NATIVE_ACCESS.filter((item) => item.capabilityLevel === ACCESS_CAPABILITY_LEVELS.NATIVE_API).map((item) => item.provider),
-    ['notion', 'github', 'google_drive', 'google_calendar', 'jira', 'linear', 'trello', 'gitlab', 'asana', 'clickup', 'airtable', 'monday', 'hubspot', 'zendesk', 'todoist', 'dropbox', 'onedrive', 'confluence', 'salesforce', 'slack', 'discord', 'qq_mail', 'gmail', 'outlook', 'exchange', 'custom_mail'],
+    ['notion', 'github', 'google_drive', 'google_calendar', 'jira', 'linear', 'trello', 'gitlab', 'todoist', 'dropbox', 'onedrive', 'slack', 'discord', 'qq_mail', 'gmail', 'outlook', 'custom_mail'],
   )
   assert.deepEqual(
     NATIVE_ACCESS.filter((item) => item.capabilityLevel === ACCESS_CAPABILITY_LEVELS.SOCIAL_BRIDGE).map((item) => item.provider),
@@ -37,13 +37,13 @@ test('access catalog exposes an honest capability level for every entry', () => 
 })
 
 test('access catalog reports APIs, MCP servers, bridges, and browser fallbacks separately', () => {
-  assert.deepEqual(getAccessCatalogCounts(), { api: 26, mcp: 5, bridges: 4, shortcuts: 18 })
+  assert.deepEqual(getAccessCatalogCounts(), { api: 17, mcp: 5, bridges: 4, shortcuts: 10 })
 })
 
 test('access catalog searches aliases and exposes a shared trusted provider lookup', () => {
   assert.equal(filterAccessCatalog('smtp').some((item) => item.provider === 'qq_mail'), true)
   assert.equal(filterAccessCatalog('gmail').some((item) => item.provider === 'gmail'), true)
-  assert.deepEqual(filterAccessCatalog('jira').map((item) => item.provider).sort(), ['jira', 'web_jira'])
+  assert.deepEqual(filterAccessCatalog('jira').map((item) => item.provider).sort(), ['jira'])
   assert.equal(filterAccessCatalog('google mcp').some((item) => item.provider === 'mcp_chrome_devtools'), true)
   assert.equal(getWebConnector('web_gmail')?.webUrl, 'https://mail.google.com/')
   assert.equal(isWebConnectorProvider('web_gmail'), true)
@@ -53,8 +53,8 @@ test('access catalog searches aliases and exposes a shared trusted provider look
 test('managed app URL matching separates shared domains by page path', () => {
   assert.deepEqual(findWebConnectorsForUrl('https://docs.google.com/document/d/abc').map((item) => item.provider), ['web_google_docs'])
   assert.deepEqual(findWebConnectorsForUrl('https://docs.google.com/spreadsheets/d/abc').map((item) => item.provider), ['web_google_sheets'])
-  assert.deepEqual(findWebConnectorsForUrl('https://team.atlassian.net/wiki/spaces/demo').map((item) => item.provider), ['web_confluence'])
-  assert.deepEqual(findWebConnectorsForUrl('https://team.atlassian.net/jira/software/projects/ABC').map((item) => item.provider), ['web_jira'])
+  assert.deepEqual(findWebConnectorsForUrl('https://team.atlassian.net/wiki/spaces/demo').map((item) => item.provider), [])
+  assert.deepEqual(findWebConnectorsForUrl('https://team.atlassian.net/jira/software/projects/ABC').map((item) => item.provider), [])
   assert.deepEqual(findWebConnectorsForUrl('https://accounts.google.com/signin').map((item) => item.provider).sort(), [
     'web_calendar', 'web_gmail', 'web_google_docs', 'web_google_drive', 'web_google_sheets',
   ])

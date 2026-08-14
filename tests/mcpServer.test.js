@@ -65,7 +65,7 @@ test('streamable HTTP MCP server initializes and lists tools with an access key'
 
 test('streamable HTTP MCP server returns the enabled connected app list', async () => {
   upsertIntegration({ userId: 'u-mcp-server', provider: 'web_gmail', enabled: true })
-  upsertIntegration({ userId: 'u-mcp-server', provider: 'web_jira', enabled: false })
+  upsertIntegration({ userId: 'u-mcp-server', provider: 'web_google_docs', enabled: false })
   const response = await fetch(baseUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${rawKey}` },
@@ -80,7 +80,7 @@ test('MCP browser open cannot bypass an unconnected managed app', async () => {
   const response = await fetch(baseUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${rawKey}` },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'browser_open_url', arguments: { url: 'https://linear.app/' } } }),
+    body: JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'browser_open_url', arguments: { url: 'https://web.whatsapp.com/' } } }),
   })
   const body = await response.json()
   assert.equal(body.result.isError, true)

@@ -135,7 +135,7 @@ test('provider registry distinguishes native APIs from managed-browser shortcuts
 
 test('connected app open rejects unconnected apps and never accepts a client URL', async () => {
   await assert.rejects(
-    openConnectedBrowserApp({ userId: 'u-connectors', provider: 'web_jira', openImpl: async () => ({}) }),
+    openConnectedBrowserApp({ userId: 'u-connectors', provider: 'web_google_docs', openImpl: async () => ({}) }),
     /not connected/i,
   )
   const calls = []
