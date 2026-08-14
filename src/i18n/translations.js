@@ -937,6 +937,8 @@ export const translations = {
     },
     settings: {
       sectionTitle: '设置',
+      groupModelSearch: '模型与联网搜索',
+      groupPermissionsTools: '权限与工具',
       language: '语言',
       languageHint: '切换界面显示语言。',
       systemDiagnostics: '系统诊断',
@@ -1418,6 +1420,8 @@ export const translations = {
     },
     settings: {
       sectionTitle: 'Settings',
+      groupModelSearch: 'Models & Web Search',
+      groupPermissionsTools: 'Permissions & Tools',
       language: 'Language',
       languageHint: 'Switch the interface language.',
       systemDiagnostics: 'System diagnostics',
@@ -1899,6 +1903,8 @@ export const translations = {
     },
     settings: {
       sectionTitle: '設定',
+      groupModelSearch: 'モデルとウェブ検索',
+      groupPermissionsTools: '権限とツール',
       language: '言語',
       languageHint: 'インターフェース言語を切り替えます。',
       systemDiagnostics: 'システム診断',
@@ -2380,6 +2386,8 @@ export const translations = {
     },
     settings: {
       sectionTitle: '설정',
+      groupModelSearch: '모델 및 웹 검색',
+      groupPermissionsTools: '권한 및 도구',
       language: '언어',
       languageHint: '인터페이스 언어를 전환합니다.',
       systemDiagnostics: '시스템 진단',
@@ -2861,6 +2869,8 @@ export const translations = {
     },
     settings: {
       sectionTitle: '設定',
+      groupModelSearch: '模型與聯網搜尋',
+      groupPermissionsTools: '權限與工具',
       language: '語言',
       languageHint: '切換介面顯示語言。',
       systemDiagnostics: '系統診斷',

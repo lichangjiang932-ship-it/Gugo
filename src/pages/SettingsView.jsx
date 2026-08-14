@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import LeftRail from '../components/LeftRail'
-import SettingsAccountPanel from '../components/settings/SettingsAccountPanel.jsx'
 import SettingsDataExport from '../components/settings/SettingsDataExport.jsx'
 import SettingsDiagnosticsPanel from '../components/settings/SettingsDiagnosticsPanel.jsx'
 import SettingsModelsPanel from '../components/settings/SettingsModelsPanel.jsx'
@@ -18,25 +17,17 @@ import { useLocation, useNavigate } from '../lib/router.jsx'
 import { getSystemDiagnostics, testModelEndpoint } from '../lib/modelClient.js'
 import {
   resolveSettingsNavFromSearch,
-  SETTINGS_TAB_ACCOUNT,
   SETTINGS_TAB_MODELS,
   SETTINGS_TAB_WEB_SEARCH,
 } from '../lib/settingsNavigation.js'
 import { useAppContext } from '../store/AppContext'
 import { estimatePersistedSnapshotBytes } from '../store/indexedDbPersistence.js'
 
-const SETTINGS_NAV = [
-  '功能入口',
-  SETTINGS_TAB_MODELS,
-  SETTINGS_TAB_WEB_SEARCH,
-  SETTINGS_TAB_ACCOUNT,
-  '权限中心',
-  '工具',
-  '集成',
-  '外观',
-  '宠物',
-  '系统诊断',
-  '数据 & 导出',
+const SETTINGS_NAV_GROUPS = [
+  { label: null, items: ['功能入口'] },
+  { label: 'groupModelSearch', items: [SETTINGS_TAB_MODELS, SETTINGS_TAB_WEB_SEARCH] },
+  { label: 'groupPermissionsTools', items: ['权限中心', '工具'] },
+  { label: null, items: ['集成', '外观', '宠物', '系统诊断', '数据 & 导出'] },
 ]
 
 function getLocalStorageBytes() {
@@ -144,7 +135,6 @@ export default function SettingsView() {
       case '功能入口': return '功能入口'
       case SETTINGS_TAB_MODELS: return t('modelProviders.navTitle')
       case SETTINGS_TAB_WEB_SEARCH: return t('webSearch.title')
-      case SETTINGS_TAB_ACCOUNT: return t('settings.account')
       case '权限中心': return t('nav.permissions')
       case '工具': return t('settings.tools')
       case '集成': return t('settings.integrations')
@@ -170,8 +160,6 @@ export default function SettingsView() {
         return <SettingsWebSearchPanel t={t} />
       case '系统诊断':
         return <SettingsDiagnosticsPanel authMode={state.authMode} diagnostics={diagnostics} message={diagnosticsMessage} loading={diagnosticsLoading} onConfigureModels={() => setActiveNav(SETTINGS_TAB_MODELS)} onRefresh={refreshDiagnostics} onTest={testModel} t={t} />
-      case SETTINGS_TAB_ACCOUNT:
-        return <SettingsAccountPanel authMode={state.authMode} dispatch={dispatch} search={location.search} t={t} />
       case '权限中心':
         return <SettingsPermissionsPanel navigate={navigate} t={t} state={state} enabledPermCount={enabledPermCount} />
       case '工具':
@@ -185,7 +173,7 @@ export default function SettingsView() {
       case '数据 & 导出':
         return <SettingsDataExport state={state} dispatch={dispatch} storageBytes={storageEstimate.usage} storageQuota={storageEstimate.quota} onStorageChanged={refreshStorage} />
       default:
-        return <SettingsAccountPanel authMode={state.authMode} dispatch={dispatch} search={location.search} t={t} />
+        return <SettingsFeatureHub navigate={navigate} t={t} />
     }
   }
 
@@ -202,10 +190,15 @@ export default function SettingsView() {
           <p className="text-[10px] text-ink-fade mt-1">{t('settings.languageHint')}</p>
         </div>
         <nav className="flex flex-col gap-1">
-          {SETTINGS_NAV.map((item) => (
-            <button key={item} onClick={() => setActiveNav(item)} className={`text-left px-3 py-2 rounded-md text-sm transition-colors ${activeNav === item ? 'bg-paper border border-ink-fade/50 text-ink' : 'text-ink-soft hover:bg-paper/70'}`}>
-              {navLabel(item)}
-            </button>
+          {SETTINGS_NAV_GROUPS.map((group) => (
+            <div key={group.label || group.items.join(',')} className="flex flex-col gap-1">
+              {group.label ? <div className="px-3 pt-3 pb-1 font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">{t(`settings.${group.label}`)}</div> : null}
+              {group.items.map((item) => (
+                <button key={item} onClick={() => setActiveNav(item)} className={`text-left px-3 py-2 rounded-md text-sm transition-colors ${activeNav === item ? 'bg-paper border border-ink-fade/50 text-ink' : 'text-ink-soft hover:bg-paper/70'}`}>
+                  {navLabel(item)}
+                </button>
+              ))}
+            </div>
           ))}
         </nav>
       </aside>
