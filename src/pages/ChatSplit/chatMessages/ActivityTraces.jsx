@@ -3,6 +3,7 @@ import { motion, useReducedMotion } from 'framer-motion'
 import { ChevronDown, Loader2 } from 'lucide-react'
 import ToolCallCard from '../../../components/ToolCallCard.jsx'
 import SubagentCard from '../../../components/SubagentCard.jsx'
+import LiveElapsed from '../../../components/LiveElapsed.jsx'
 import { useT } from '../../../i18n/I18nProvider.jsx'
 
 export function ReasoningTrace({ text = '', streaming = false, label = '', testId }) {
@@ -11,7 +12,7 @@ export function ReasoningTrace({ text = '', streaming = false, label = '', testI
   // payload makes the answer harder to follow and can freeze long chats. Keep
   // only a compact live status; verified tool activity remains visible below.
   if (!streaming) return null
-  return <div className="chat-thinking-line" role="status" aria-live="polite" data-testid={testId} data-has-reasoning={Boolean(text)}><Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /><span>{label || t('chatMessages.reasoningActive')}</span></div>
+  return <div className="chat-thinking-line" role="status" aria-live="polite" data-testid={testId} data-has-reasoning={Boolean(text)}><Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /><span>{label || t('chatMessages.reasoningActive')}</span><LiveElapsed className="chat-thinking-elapsed" /></div>
 }
 
 function nonNegativeInteger(value) {

@@ -449,6 +449,53 @@ test('bash_exec: Windows preserves quoted absolute paths when cwd contains paren
   assert.deepEqual(result.changedPaths, [outputPath])
 })
 
+test('bash_exec: omitted cwd does not choose between multiple read-write directory grants', async () => {
+  process.env.WORKSPACE_SHARED_TRUSTED = '0'
+  const userId = `fs-shell-multiple-grants-${process.pid}-${Date.now()}`
+  const firstRoot = path.join(authorizedWorkspace, `${userId}-first`)
+  const secondRoot = path.join(authorizedWorkspace, `${userId}-second`)
+  const firstFile = path.join(firstRoot, 'first.txt')
+  const secondFile = path.join(secondRoot, 'second.txt')
+  fs.mkdirSync(firstRoot, { recursive: true })
+  fs.mkdirSync(secondRoot, { recursive: true })
+  fs.writeFileSync(firstFile, 'first', 'utf8')
+  fs.writeFileSync(secondFile, 'second', 'utf8')
+  createUser({ id: userId, email: `${userId}@example.com` })
+  grantLocalPath({ userId, rootPath: firstRoot, accessMode: 'read_write' })
+  grantLocalPath({ userId, rootPath: secondRoot, accessMode: 'read_write' })
+
+  await assert.rejects(
+    () => bashExecTool({
+      userId,
+      command: `echo "${firstFile}" "${secondFile}"`,
+    }),
+    (error) => error?.code === 'PATH_NOT_AUTHORIZED',
+  )
+})
+
+test('bash_exec: omitted cwd never promotes read-only or exact-file grants to shell roots', async () => {
+  process.env.WORKSPACE_SHARED_TRUSTED = '0'
+  const readOnlyUser = `fs-shell-read-only-${process.pid}-${Date.now()}`
+  const fileGrantUser = `fs-shell-file-grant-${process.pid}-${Date.now()}`
+  const readOnlyRoot = path.join(authorizedWorkspace, `${readOnlyUser}-root`)
+  const readOnlyFile = path.join(readOnlyRoot, 'input.txt')
+  const exactFile = path.join(authorizedWorkspace, `${fileGrantUser}-input.txt`)
+  fs.mkdirSync(readOnlyRoot, { recursive: true })
+  fs.writeFileSync(readOnlyFile, 'read-only', 'utf8')
+  fs.writeFileSync(exactFile, 'file-grant', 'utf8')
+  createUser({ id: readOnlyUser, email: `${readOnlyUser}@example.com` })
+  createUser({ id: fileGrantUser, email: `${fileGrantUser}@example.com` })
+  grantLocalPath({ userId: readOnlyUser, rootPath: readOnlyRoot, accessMode: 'read_only' })
+  grantLocalPath({ userId: fileGrantUser, rootPath: exactFile, accessMode: 'read_write' })
+
+  for (const [userId, target] of [[readOnlyUser, readOnlyFile], [fileGrantUser, exactFile]]) {
+    await assert.rejects(
+      () => bashExecTool({ userId, command: `echo "${target}"` }),
+      (error) => error?.code === 'PATH_NOT_AUTHORIZED',
+    )
+  }
+})
+
 test('bash_exec: Windows rejects an unquoted parenthesized absolute path with an actionable error', {
   skip: process.platform !== 'win32',
 }, async () => {

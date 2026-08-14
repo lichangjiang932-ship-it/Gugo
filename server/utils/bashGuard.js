@@ -129,8 +129,9 @@ export function checkBashCommandDanger(command) {
   return null
 }
 
-function cleanPathCandidate(value) {
-  return String(value || '').trim().replace(/[),]+$/u, '')
+function cleanPathCandidate(value, { quoted = false } = {}) {
+  const candidate = String(value || '').trim()
+  return quoted ? candidate : candidate.replace(/[),]+$/u, '')
 }
 
 /**
@@ -144,16 +145,18 @@ export function extractAbsoluteShellPaths(command, { platform = process.platform
   const found = []
   const patterns = platform === 'win32'
     ? [
-        /["']((?:[A-Za-z]:[\\/]|\\\\)[^"'\r\n]+?)["']/g,
-        /(?:^|[\s=,(])((?:[A-Za-z]:[\\/]|\\\\)[^\s"'<>|;&,)]+)/g,
+        { pattern: /"((?:[A-Za-z]:[\\/]|\\\\)[^"\r\n]+?)"/g, quoted: true },
+        { pattern: /'((?:[A-Za-z]:[\\/]|\\\\)[^'\r\n]+?)'/g, quoted: true },
+        { pattern: /(?:^|[\s=,(])((?:[A-Za-z]:[\\/]|\\\\)[^\s"'<>|;&,)]+)/g, quoted: false },
       ]
     : [
-        /["'](\/[^"'\r\n]+?)["']/g,
-        /(?:^|[\s=,(])(\/[^\s"'<>|;&,)]+)/g,
+        { pattern: /"(\/[^"\r\n]+?)"/g, quoted: true },
+        { pattern: /'(\/[^'\r\n]+?)'/g, quoted: true },
+        { pattern: /(?:^|[\s=,(])(\/[^\s"'<>|;&,)]+)/g, quoted: false },
       ]
-  for (const pattern of patterns) {
+  for (const { pattern, quoted } of patterns) {
     for (const match of source.matchAll(pattern)) {
-      const candidate = cleanPathCandidate(match[1])
+      const candidate = cleanPathCandidate(match[1], { quoted })
       if (candidate) found.push(candidate)
     }
   }

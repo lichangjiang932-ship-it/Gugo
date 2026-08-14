@@ -119,7 +119,7 @@ function MarkdownRenderer({ artifactReferences = [], children, className = '', o
                 target="_blank"
                 rel="noopener noreferrer"
                 data-testid={isArtifactReference ? 'inline-artifact-link' : undefined}
-                className={isArtifactReference ? 'font-semibold text-ember decoration-ember/45 underline-offset-4 hover:decoration-ember' : anchorProps.className}
+                className={isArtifactReference ? 'chat-output-file-name font-semibold decoration-current/45 underline-offset-4 hover:decoration-current' : anchorProps.className}
                 onClick={(event) => {
                   if (onLinkClick?.(href, event)) event.preventDefault()
                 }}

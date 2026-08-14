@@ -495,6 +495,10 @@ html[data-density="loose"] {
   gap: 0.38rem;
 }
 
+.chat-tool-step-header-compact {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
 .chat-tool-icon {
   display: inline-flex;
   align-items: center;
@@ -819,11 +823,6 @@ html[data-density="loose"] {
     grid-template-columns: auto minmax(0, 1fr) auto;
   }
 
-  .chat-tool-label {
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
   .chat-tool-summary {
     grid-column: 1 / -1;
     grid-row: 2;
@@ -989,7 +988,31 @@ html[data-density="loose"] {
 
 .chat-run-timeline .chat-tool-details-row {
   gap: 0.48rem;
+  max-height: 0;
+  margin-top: 0;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(-2px);
+  transition: max-height 160ms ease, margin 160ms ease, opacity 140ms ease, transform 160ms ease;
+}
+
+/* Delivered filenames follow their surrounding answer instead of the user
+ * accent. Strong-accent mode may emphasize controls, never output identity. */
+.chat-output-file-name,
+.theme-accent-strong .chat-output-file-name,
+.chat-output-file-name code,
+.theme-accent-strong .chat-output-file-name code {
+  color: inherit !important;
+}
+
+.chat-run-timeline .chat-tool-step:hover .chat-tool-details-row,
+.chat-run-timeline .chat-tool-step:focus-within .chat-tool-details-row,
+.chat-run-timeline .chat-tool-details-row:has(details[open]) {
+  max-height: 2rem;
   margin-top: 0.16rem;
+  overflow: visible;
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .chat-run-timeline .chat-tool-details {
@@ -1073,6 +1096,20 @@ html[data-density="loose"] {
   color: rgb(var(--color-cyan-rgb));
 }
 
+.chat-tool-elapsed,
+.chat-thinking-elapsed {
+  color: rgb(var(--color-ink-fade-rgb));
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.62rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 450;
+}
+
+.chat-thinking-elapsed::before {
+  margin-right: 0.3rem;
+  content: "·";
+}
+
 .chat-timeline-history:focus-visible {
   outline: 2px solid var(--color-ember);
   outline-offset: 2px;
@@ -1099,6 +1136,16 @@ html[data-density="loose"] {
   .chat-run-timeline .chat-tool-summary {
     grid-column: 1 / -1;
     padding-left: 1.35rem;
+  }
+}
+
+@media (hover: none) {
+  .chat-run-timeline .chat-tool-details-row {
+    max-height: 2rem;
+    margin-top: 0.16rem;
+    overflow: visible;
+    opacity: 1;
+    transform: none;
   }
 }
 

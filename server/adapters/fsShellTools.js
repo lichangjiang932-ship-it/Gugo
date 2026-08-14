@@ -41,6 +41,7 @@ import { isToolPermittedForUser } from '../db.js'
 import { authenticateRequest } from '../middleware.js'
 import { readJson, sendJson } from '../utils.js'
 import {
+  findAuthorizedDirectoryGrant,
   isLocalCodeExecutionEnabled,
   resolveAuthorizedLocalPath,
 } from '../services/localFileAccessService.js'
@@ -221,6 +222,32 @@ export function resolveForShellCwd(rawPath, { userId = null } = {}) {
     throw error
   }
   return resolved
+}
+
+function resolveShellCwdForCommand(rawCwd, { command, userId }) {
+  try {
+    return resolveForShellCwd(rawCwd, { userId })
+  } catch (error) {
+    const cwdWasOmitted = rawCwd == null || rawCwd === ''
+    if (!cwdWasOmitted || error?.code !== 'PATH_NOT_AUTHORIZED' || !userId) throw error
+
+    const absolutePaths = extractAbsoluteShellPaths(command)
+    if (absolutePaths.length === 0) throw error
+    const grants = absolutePaths.map((rawPath) => findAuthorizedDirectoryGrant({
+      userId,
+      rawPath,
+      accessMode: 'read_write',
+    }))
+    if (grants.some((grant) => !grant)) throw error
+
+    const [firstGrant] = grants
+    const sameGrant = grants.every((grant) => (
+      grant.id === firstGrant.id
+      && path.normalize(grant.path) === path.normalize(firstGrant.path)
+    ))
+    if (!sameGrant) throw error
+    return resolveForShellCwd(firstGrant.path, { userId })
+  }
 }
 
 // 把任意 path 字符串解析到 WORKSPACE_ROOT 下的绝对路径.防 traversal + symlink 逃逸.
@@ -824,7 +851,7 @@ export async function bashExecTool({
     throw badReq('bash_exec 限流:超过 30 次/分钟,请稍后重试', 429)
   }
 
-  const resolvedCwd = resolveForShellCwd(rawCwd, { userId })
+  const resolvedCwd = resolveShellCwdForCommand(rawCwd, { command, userId })
   const cwd = resolvedCwd.fullPath
   const displayCwd = resolvedCwd.displayPath
   if (!fs.statSync(cwd).isDirectory()) throw badReq('cwd 不是目录')

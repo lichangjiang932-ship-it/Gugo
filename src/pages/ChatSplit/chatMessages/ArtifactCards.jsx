@@ -38,11 +38,11 @@ export function ArtifactReferenceLinks({ msg, preview, onOpen }) {
           type="button"
           data-testid="artifact-open-card"
           onClick={() => openReference(reference)}
-          className="inline-flex max-w-full items-center gap-2 rounded-md border border-ember/30 bg-ember-soft px-2.5 py-1.5 text-left text-sm font-medium text-ember transition-colors hover:border-ember/60 hover:bg-ember/10"
+          className="inline-flex max-w-full items-center gap-2 rounded-md border border-ink-fade/30 bg-paper px-2.5 py-1.5 text-left text-sm font-medium text-ink transition-colors hover:border-ink-fade/60 hover:bg-ink-ghost"
           title={reference.filename}
         >
-          <FileText className="h-4 w-4 shrink-0" />
-          <span className="truncate">{reference.filename}</span>
+          <FileText className="h-4 w-4 shrink-0 text-ink-fade" />
+          <span className="chat-output-file-name truncate">{reference.filename}</span>
           <ExternalLink className="h-3.5 w-3.5 shrink-0 opacity-70" />
         </button>
       ))}
