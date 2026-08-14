@@ -6,6 +6,7 @@ import test from 'node:test'
 
 const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-job-hooks-'))
 process.env.APP_DATA_DIR = TMP_DIR
+process.env.APP_DB_PATH = path.join(TMP_DIR, 'app.db')
 process.env.APPROVAL_MODE = 'off'
 process.env.HOOKS_SHELL_ENABLED = '1'
 process.env.HOOKS_SHELL_ALLOWED_COMMANDS = process.execPath
@@ -197,18 +198,21 @@ test('job prompt lifecycle hook can rewrite or reject a queued autonomous job', 
     blocking: true,
     timeoutMs: 5000,
   })
-  const prompts = []
+  const executedJobs = []
   const rewriteRuntime = new JobRuntime({
     executeStep: async ({ job }) => {
-      prompts.push(job.prompt)
+      executedJobs.push({ id: job.id, prompt: job.prompt })
       return { ok: true, output: { text: 'ok' } }
     },
   })
   const rewritten = await rewriteRuntime.createJob('original prompt', { userId: rewriteUser })
   await rewriteRuntime.drain()
   assert.equal(rewriteRuntime.getJob(rewritten.id, { userId: rewriteUser }).prompt, 'rewritten prompt')
-  assert.ok(prompts.length > 0)
-  assert.ok(prompts.every((prompt) => prompt === 'rewritten prompt'))
+  const targetPrompts = executedJobs
+    .filter(({ id }) => id === rewritten.id)
+    .map(({ prompt }) => prompt)
+  assert.ok(targetPrompts.length > 0)
+  assert.ok(targetPrompts.every((prompt) => prompt === 'rewritten prompt'))
 
   const denyUser = issueTestSession({ email: 'job-prompt-deny@example.com' }).userId
   upsertHook({

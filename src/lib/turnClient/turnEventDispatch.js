@@ -302,6 +302,7 @@ export async function dispatchTurnEvent(event, {
       payload: {
         streaming: false,
         modelActivity: null,
+        serverConnectionState: null,
         serverArtifactIds: optionalArtifactIds(payload, 'artifactIds') || [],
         ...(deliveryArtifactIds !== undefined ? { serverDeliveryArtifactIds: deliveryArtifactIds } : {}),
       },
@@ -332,6 +333,7 @@ export async function dispatchTurnEvent(event, {
         serverFailure: failure.error,
         streaming: false,
         modelActivity: null,
+        ...(event.type === 'turn.failed' ? { serverConnectionState: null } : {}),
         serverPartialText: failure.partialText,
         serverArtifactIds: failure.artifactIds,
         ...(failure.deliveryArtifactIds !== undefined

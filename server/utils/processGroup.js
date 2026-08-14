@@ -23,7 +23,16 @@ import { spawn } from 'node:child_process'
 
 const GRACE_MS = 2_000
 const WINDOWS_TREE_HANDLE_DRAIN_MS = 250
-const WINDOWS_TREE_KILL_TIMEOUT_MS = 6_000
+const WINDOWS_TREE_KILL_INTERNAL_TIMEOUT_MS = 4_000
+// Windows PowerShell must start and compile the native helper before its own
+// process-tree deadline begins. Under a loaded CI runner Add-Type alone can
+// exceed the old 6s outer timeout, causing Node to kill a helper that was still
+// making progress and incorrectly report processTreeCleanupFailed. Keep those
+// two budgets separate so the outer watchdog cannot expire before the helper's
+// advertised cleanup window.
+const WINDOWS_TREE_KILL_STARTUP_TIMEOUT_MS = 8_000
+const WINDOWS_TREE_KILL_TIMEOUT_MS = WINDOWS_TREE_KILL_STARTUP_TIMEOUT_MS
+  + WINDOWS_TREE_KILL_INTERNAL_TIMEOUT_MS
 
 function utf8Tail(value, maxBytes) {
   const source = Buffer.from(String(value || ''), 'utf8')
@@ -176,7 +185,7 @@ public static class GugoProcessTreeNative {
 }
 '@
 Add-Type -TypeDefinition $nativeSource
-if ([GugoProcessTreeNative]::KillTree($rootPid, 4000)) { exit 0 }
+if ([GugoProcessTreeNative]::KillTree($rootPid, ${WINDOWS_TREE_KILL_INTERNAL_TIMEOUT_MS})) { exit 0 }
 exit 1
 `.trim()
 }

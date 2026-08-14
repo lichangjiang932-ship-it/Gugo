@@ -18,6 +18,10 @@ const {
   runToolsLoop,
   SERVER_TOOL_SPECS,
 } = await import('../server/services/toolLoopRuntime.js')
+const {
+  isLocalMutationCall,
+  isReadOnlyPowerShellVerificationCall,
+} = await import('../server/services/toolLoopHeuristics.js')
 
 createUser({ id: 'artifact-user', email: 'turn-artifact@example.com' })
 setApprovalMode({ userId: 'artifact-user', mode: 'bypass' })
@@ -420,6 +424,138 @@ test('created chat artifacts require an explicit set_deliverables call before no
   assert.equal(guardObserved, true)
   assert.deepEqual(result.deliveryArtifactIds, [artifactId])
   assert.equal(result.incomplete, undefined)
+})
+
+test('PowerShell readback does not revive workspace verification after final deliverables are selected', async () => {
+  const turnId = 'powershell-readback-terminal-turn'
+  const artifactId = 'powershell-readback-terminal-artifact'
+  const outputPath = 'D:\\destok\\Gugo\\output\\execution-check.txt'
+  const normalizedOutputPath = outputPath.replaceAll('\\', '/')
+  appendTurnArtifact({
+    id: artifactId,
+    userId: 'artifact-user',
+    sessionId: 'artifact-session',
+    turnId,
+    type: 'txt',
+    title: 'Execution check',
+    filename: 'execution-check.txt',
+    url: '/api/artifacts/execution-check.txt',
+  })
+  const bashExec = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'bash_exec')
+  const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
+  const setDeliverables = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'set_deliverables')
+  const runProjectCheck = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'run_project_check')
+  const calls = [
+    ['write-output', 'bash_exec', {
+      command: `powershell -NoProfile -Command "Set-Content -Path '${outputPath}' -Value 'EXECUTION_OK'"`,
+      expected_outputs: [outputPath],
+    }],
+    ['powershell-readback', 'bash_exec', {
+      command: `powershell -NoProfile -Command "Get-Content -Path '${outputPath}' -Raw"`,
+      expected_outputs: [],
+    }],
+    ['powershell-hash', 'bash_exec', {
+      command: `powershell -NoProfile -Command "(Get-FileHash -Path '${outputPath}' -Algorithm SHA256).Hash"`,
+      expected_outputs: [],
+    }],
+    ['readback-file', 'read_file', { path: outputPath, offset: 0, limit: 0 }],
+    ['select-output', 'set_deliverables', { artifact_ids: [artifactId] }],
+  ]
+  const checkpoints = []
+  const executed = []
+  let modelCalls = 0
+
+  const result = await runToolsLoop({
+    job: {
+      id: turnId,
+      origin: 'chat',
+      userId: 'artifact-user',
+      sessionId: 'artifact-session',
+      prompt: 'Write, verify, and deliver the execution check file.',
+      userPrompt: 'Write, verify, and deliver the execution check file.',
+    },
+    step: { id: turnId, kind: 'chat' },
+    messages: [{ role: 'user', content: 'Write, verify, and deliver the execution check file.' }],
+    intentMode: 'execute',
+    toolSpecs: [bashExec, readFile, setDeliverables, runProjectCheck],
+    maxIters: 10,
+    enableToolHooks: false,
+    saveCheckpoint: async (state) => {
+      checkpoints.push(structuredClone(state))
+      return true
+    },
+    runModel: async () => {
+      modelCalls += 1
+      const entry = calls[modelCalls - 1]
+      if (!entry) {
+        assert.equal(modelCalls, 6, 'the turn must stop on the first final answer after set_deliverables')
+        return { content: '验收完成，最终文件已交付。', toolCalls: [] }
+      }
+      return {
+        content: '',
+        toolCalls: [{
+          id: entry[0],
+          type: 'function',
+          function: { name: entry[1], arguments: JSON.stringify(entry[2]) },
+        }],
+      }
+    },
+    executeTool: async ({ name, args }) => {
+      executed.push([name, args.command || args.path || ''])
+      assert.notEqual(name, 'run_project_check', 'ordinary file readback must not require a project check')
+      if (name === 'read_file') return { ok: true, path: outputPath, content: 'EXECUTION_OK' }
+      if (String(args.command).includes('Set-Content')) {
+        return {
+          ok: true,
+          exitCode: 0,
+          cwd: 'D:\\destok\\Gugo',
+          verifiedOutputs: [{ path: outputPath, status: 'created', type: 'file' }],
+          changedPaths: [outputPath],
+          artifactId,
+          filename: 'execution-check.txt',
+          url: '/api/artifacts/execution-check.txt',
+        }
+      }
+      if (String(args.command).includes('Get-Content')) {
+        return { ok: true, exitCode: 0, cwd: 'D:\\destok\\Gugo', stdout: 'EXECUTION_OK\r\n' }
+      }
+      return { ok: true, exitCode: 0, cwd: 'D:\\destok\\Gugo', stdout: 'ABC123\r\n' }
+    },
+  })
+
+  assert.equal(modelCalls, 6)
+  assert.equal(result.text, '验收完成，最终文件已交付。')
+  assert.equal(result.incomplete, undefined)
+  assert.deepEqual(result.deliveryArtifactIds, [artifactId])
+  assert.equal(executed.some(([name]) => name === 'run_project_check'), false)
+  assert.equal(checkpoints.some((state) => (
+    state.completionGuards?.pendingMutationTargets?.includes('<workspace>')
+  )), false)
+  assert.deepEqual(checkpoints.at(-1)?.completionGuards?.pendingMutationTargets, [])
+  assert.ok(checkpoints.some((state) => (
+    state.completionGuards?.pendingMutationTargets?.includes(normalizedOutputPath)
+  )))
+})
+
+test('PowerShell verification classification rejects mixed read and write scripts', () => {
+  const readOnly = {
+    name: 'bash_exec',
+    args: { command: "powershell -NoProfile -Command \"Get-Content -Path 'result.txt' -Raw\"" },
+  }
+  const mixed = {
+    name: 'bash_exec',
+    args: { command: "powershell -NoProfile -Command \"Get-Content -Path 'result.txt'; Set-Content -Path 'result.txt' -Value changed\"" },
+  }
+  const aliasMutation = {
+    name: 'bash_exec',
+    args: { command: "powershell -NoProfile -Command \"Get-Content -Path 'result.txt' | sc 'copy.txt'\"" },
+  }
+  assert.equal(isReadOnlyPowerShellVerificationCall(readOnly), true)
+  assert.equal(isLocalMutationCall(readOnly), false)
+  assert.equal(isReadOnlyPowerShellVerificationCall(mixed), false)
+  assert.equal(isLocalMutationCall(mixed), true)
+  assert.equal(isReadOnlyPowerShellVerificationCall(aliasMutation), false)
+  assert.equal(isLocalMutationCall(aliasMutation), true)
 })
 
 test('creating another artifact after selection invalidates it and requires reconfirmation', async () => {

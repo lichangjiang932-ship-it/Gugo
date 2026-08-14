@@ -28,6 +28,19 @@ function stableTimelineSegments(content, toolCalls) {
   })
 }
 
+function compactMessagePresentation(content, toolCalls) {
+  const timeline = stableTimelineSegments(content, toolCalls)
+  const calls = timeline.flatMap((segment) => segment.kind === 'tools' ? segment.calls || [] : [])
+  const finalText = [...timeline]
+    .reverse()
+    .find((segment) => segment.kind === 'text' && String(segment.text || '').trim())
+
+  return {
+    calls,
+    text: finalText?.text || '',
+  }
+}
+
 export default function MessageRow({
   msg,
   rowKey,
@@ -168,16 +181,17 @@ function AssistantContent({ artifactPreview, isCurrentStreamingMessage, isMessag
     onOpenArtifact?.(payload)
     return true
   }
-  const timeline = stableTimelineSegments(stripChoices(msg.content), msg.meta?.toolCalls)
+  const presentation = compactMessagePresentation(stripChoices(msg.content), msg.meta?.toolCalls)
   return (
     <>
       <div data-quotable="true">
         {isCurrentStreamingMessage && <ActivityStream msg={msg} />}
-        {timeline.map((segment) => (
-          segment.kind === 'tools'
-            ? <ToolCallTrace key={segment.key} calls={segment.calls} artifacts={toolArtifactReferences} onOpenArtifact={openToolArtifact} />
-            : <MarkdownRenderer key={segment.key} artifactReferences={deliveryArtifactReferences} streaming={isCurrentStreamingMessage} onLinkClick={openInlineArtifact}>{segment.text}</MarkdownRenderer>
-        ))}
+        {presentation.calls.length > 0 && (
+          <ToolCallTrace calls={presentation.calls} artifacts={toolArtifactReferences} onOpenArtifact={openToolArtifact} />
+        )}
+        {presentation.text && (
+          <MarkdownRenderer artifactReferences={deliveryArtifactReferences} streaming={isCurrentStreamingMessage} onLinkClick={openInlineArtifact}>{presentation.text}</MarkdownRenderer>
+        )}
       </div>
       <ProgressTrace progress={msg.meta?.progress} />
       {hasChoices(msg.content) && isMessageComplete && (

@@ -64,6 +64,7 @@ test('right workbench renders compact tabs, persists width, and opens generated 
                 { id: 'artifact-1', filename: 'analysis.xlsx', type: 'xlsx', url: '/api/artifacts/turn/artifact-1/download' },
                 { id: 'artifact-2', filename: '填写后 答题卡.pdf', type: 'pdf', url: '/api/artifacts/%E5%A1%AB%E5%86%99%E5%90%8E%20%E7%AD%94%E9%A2%98%E5%8D%A1.pdf' },
               ],
+              serverDeliveryArtifactIds: ['artifact-1', 'artifact-2'],
             },
           }]}
           activeTab="files"

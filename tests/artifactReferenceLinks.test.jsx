@@ -8,6 +8,7 @@ import { ArtifactReferenceLinks } from '../src/pages/ChatSplit/chatMessages/Arti
 import MessageRow from '../src/pages/ChatSplit/chatMessages/MessageRow.jsx'
 import { mergeServerSessionMessages } from '../src/store/sessionServerSync.js'
 import { resolveDeliveryArtifacts } from '../src/lib/artifactReferences.js'
+import { normalizeServerSessionSnapshot } from '../src/lib/turnClient/sessionSnapshot.js'
 
 function setupDom() {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { url: 'http://localhost/' })
@@ -20,13 +21,13 @@ function setupDom() {
   return dom
 }
 
-test('delivery artifact filtering preserves legacy messages and treats explicit empty ids as authoritative', () => {
+test('delivery artifact filtering fails closed without a selection and preserves explicit final ids', () => {
   const artifacts = [
     { id: 'draft', filename: 'draft.py' },
     { id: 'preview', filename: 'preview.png' },
     { id: 'final', filename: 'report.pdf' },
   ]
-  assert.deepEqual(resolveDeliveryArtifacts({ serverArtifacts: artifacts }), artifacts)
+  assert.deepEqual(resolveDeliveryArtifacts({ serverArtifacts: artifacts }), [])
   assert.deepEqual(resolveDeliveryArtifacts({
     serverArtifacts: artifacts,
     serverDeliveryArtifactIds: ['final', 'draft', 'missing', 'final'],
@@ -54,6 +55,56 @@ test('delivery artifact filtering preserves legacy messages and treats explicit 
   assert.deepEqual(merged.meta.serverDeliveryArtifactIds, [])
 })
 
+test('failed and restored legacy turns never expose unselected intermediate artifacts', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const artifact = {
+    id: 'legacy-helper',
+    filename: 'render-preview.py',
+    type: 'file',
+    url: '/api/artifacts/legacy-helper',
+  }
+  const failed = {
+    id: 'failed-with-helper',
+    role: 'assistant',
+    content: 'Task failed after creating [render-preview.py](/api/artifacts/legacy-helper).',
+    timestamp: Date.now(),
+    meta: { failed: true, serverArtifacts: [artifact] },
+  }
+  const restored = normalizeServerSessionSnapshot({
+    complete: true,
+    messages: [{
+      id: 'legacy-restored:assistant',
+      role: 'assistant',
+      content: 'Legacy task created render-preview.py before it stopped.',
+      createdAt: Date.now(),
+      artifacts: [artifact],
+      modelContext: { turnId: 'legacy-restored' },
+    }],
+  }).messages[0]
+
+  try {
+    for (const msg of [failed, restored]) {
+      await act(async () => root.render(
+        <MessageRow
+          msg={msg}
+          rowKey={msg.id}
+          generatingMessageId=""
+          lang="en"
+          t={(key) => key}
+        />,
+      ))
+      assert.equal(rootElement.querySelectorAll('[data-testid="artifact-open-card"]').length, 0)
+      assert.equal(rootElement.querySelectorAll('[data-testid="inline-artifact-link"]').length, 0)
+      assert.equal(rootElement.querySelector('[data-testid="artifact-reference-links"]'), null)
+    }
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
 test('generated file names render as highlighted links and open the right-pane payload', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')
@@ -62,7 +113,10 @@ test('generated file names render as highlighted links and open the right-pane p
   const msg = {
     id: 'message-1',
     content: 'The calculator is ready.',
-    meta: { serverArtifacts: [{ id: 'file-1', filename: 'calculator.html', type: 'html', url: '/api/artifacts/file-1' }] },
+    meta: {
+      serverArtifacts: [{ id: 'file-1', filename: 'calculator.html', type: 'html', url: '/api/artifacts/file-1' }],
+      serverDeliveryArtifactIds: ['file-1'],
+    },
   }
   const preview = { type: 'html', filename: 'generated.html', html: '<main>Calculator</main>' }
 
@@ -163,6 +217,7 @@ test('an inline generated-file link keeps narration, opens the real file, and su
       artifactType: 'docx',
       artifactTitle: '项目总结',
       serverArtifacts: [{ id: 'docx-1', filename: '项目总结.docx', type: 'docx', url: '/api/artifacts/%E9%A1%B9%E7%9B%AE%E6%80%BB%E7%BB%93.docx' }],
+      serverDeliveryArtifactIds: ['docx-1'],
     },
   }
 
@@ -203,6 +258,7 @@ test('a completed artifact keeps its narration and file link while a later reply
     meta: {
       streaming: false,
       serverArtifacts: [{ id: 'file-1', filename: 'calculator.html', type: 'html', url: '/api/artifacts/file-1' }],
+      serverDeliveryArtifactIds: ['file-1'],
     },
   }
   const t = (key) => key === 'chat.serverTurn.completed' ? '已完成' : key
@@ -246,6 +302,7 @@ test('plain, bold, and inline-code filenames open persisted artifacts without du
         { id: 'pptx-1', filename: 'deck.pptx', type: 'pptx', url: '/api/artifacts/pptx-1' },
         { id: 'pdf-1', filename: 'manual.pdf', type: 'pdf', url: '/api/artifacts/pdf-1' },
       ],
+      serverDeliveryArtifactIds: ['html-1', 'docx-1', 'xlsx-1', 'pptx-1', 'pdf-1'],
     },
   }
 
@@ -289,6 +346,7 @@ test('similar names and fenced-code filenames do not become inline artifact link
     timestamp: Date.now(),
     meta: {
       serverArtifacts: [{ id: 'html-1', filename: 'site.html', type: 'html', url: '/api/artifacts/html-1' }],
+      serverDeliveryArtifactIds: ['html-1'],
     },
   }
 
@@ -327,6 +385,7 @@ test('a generated filename inside a Windows path with spaces and Chinese opens i
         type: 'pdf',
         url: '/api/artifacts/%E5%A1%AB%E5%86%99%E5%90%8E%20%E7%AD%94%E9%A2%98%E5%8D%A1.pdf',
       }],
+      serverDeliveryArtifactIds: ['local-pdf-1'],
     },
   }
 
@@ -353,6 +412,56 @@ test('a generated filename inside a Windows path with spaces and Chinese opens i
   }
 })
 
+test('an inline-code Windows path opens only its selected deliverable artifact', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const opened = []
+  const finalPath = 'D:\\workspace\\output\\final report.pdf'
+  const draftPath = 'D:\\workspace\\drafts\\draft.pdf'
+  const unknownPath = 'D:\\workspace\\private\\unknown.pdf'
+  const msg = {
+    id: 'windows-inline-code-output',
+    role: 'assistant',
+    content: `Final: \`${finalPath}\`. Draft: \`${draftPath}\`. Unknown: \`${unknownPath}\`.`,
+    timestamp: Date.now(),
+    meta: {
+      serverArtifacts: [
+        { id: 'final-pdf', filename: 'final report-2.pdf', title: 'final report.pdf', type: 'pdf', url: '/api/artifacts/final-pdf' },
+        { id: 'draft-pdf', filename: 'draft.pdf', type: 'pdf', url: '/api/artifacts/draft-pdf' },
+      ],
+      serverDeliveryArtifactIds: ['final-pdf'],
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <MessageRow
+        msg={msg}
+        rowKey={msg.id}
+        generatingMessageId=""
+        lang="en"
+        onOpenArtifact={(artifact) => opened.push(artifact)}
+        t={(key) => key}
+      />,
+    ))
+    const links = [...rootElement.querySelectorAll('[data-testid="inline-artifact-link"]')]
+    assert.equal(links.length, 1)
+    assert.equal(links[0].textContent, finalPath)
+    assert.equal(rootElement.querySelectorAll('[data-testid="artifact-open-card"]').length, 0)
+    assert.equal([...rootElement.querySelectorAll('code')].some((code) => code.textContent === draftPath), true)
+    assert.equal([...rootElement.querySelectorAll('code')].some((code) => code.textContent === unknownPath), true)
+
+    await act(async () => links[0].dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })))
+    assert.equal(opened.length, 1)
+    assert.equal(opened[0].directFile.id, 'final-pdf')
+    assert.equal(opened[0].directFile.filename, 'final report-2.pdf')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
 test('an explicit Markdown link to a local Windows output is rewritten to the persisted artifact', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')
@@ -370,6 +479,7 @@ test('an explicit Markdown link to a local Windows output is rewritten to the pe
         type: 'pdf',
         url: '/api/artifacts/%E5%A1%AB%E5%86%99%E5%90%8E%20%E7%AD%94%E9%A2%98%E5%8D%A1.pdf',
       }],
+      serverDeliveryArtifactIds: ['local-pdf-markdown'],
     },
   }
 
