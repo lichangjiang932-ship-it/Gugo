@@ -1,7 +1,8 @@
 import { memo } from 'react'
-import { Search, Globe, ChevronDown, CheckCircle2, XCircle, CircleStop, Loader2, FileText, Presentation, Table2, Code2, PieChart, Image, Bot, FolderOpen, FileEdit, Terminal, GitBranch, Diff, CheckSquare, Layers, Wrench } from 'lucide-react'
+import { Search, Globe, ChevronDown, CheckCircle2, XCircle, CircleStop, Loader2, FileText, Presentation, Table2, Code2, PieChart, Image, Bot, FolderOpen, FileEdit, Terminal, GitBranch, Diff, CheckSquare, Layers, Wrench, FolderKey, ListRestart, RotateCcw, ListTree, MessageCircleQuestion, PackageCheck, SquareTerminal, CircleStop as StopProcess } from 'lucide-react'
 import { findToolCallArtifacts } from '../lib/toolCallArtifacts.js'
 import { parseToolArgs, summarizeToolArgsEn, toolCallLabelEn } from '../lib/toolCallPresentation.js'
+import LiveElapsed from './LiveElapsed.jsx'
 
 const ICONS = {
   web_search: Search,
@@ -24,10 +25,21 @@ const ICONS = {
   grep_code: Search,
   find_symbol: Search,
   bash_exec: Terminal,
+  run_command: Terminal,
+  run_test: CheckSquare,
+  docker_exec: SquareTerminal,
+  bash_background: SquareTerminal,
+  process_list: ListTree,
+  process_kill: StopProcess,
   git_status: GitBranch,
   git_diff: Diff,
   run_project_check: CheckSquare,
   manage_todos: CheckSquare,
+  request_directory: FolderKey,
+  request_clarification: MessageCircleQuestion,
+  set_deliverables: PackageCheck,
+  rewind_files: RotateCcw,
+  list_imports: ListRestart,
 }
 
 const FILE_PATH_SUMMARY_TOOLS = new Set(['read_file', 'write_file', 'edit_file'])
@@ -98,7 +110,7 @@ function ToolCallCard({ call, stepNumber, artifacts = [], onOpenArtifact }) {
         call.errorCode,
         Number.isInteger(Number(call.errorStatus)) ? `HTTP ${Number(call.errorStatus)}` : '',
         Number.isInteger(Number(call.attempts)) && Number(call.attempts) > 0 ? `${Number(call.attempts)}×` : '',
-        call.retryable ? 'retryable' : '',
+        call.retryable ? 'Retry' : '',
       ].filter(Boolean))]
     : []
 
@@ -129,9 +141,11 @@ function ToolCallCard({ call, stepNumber, artifacts = [], onOpenArtifact }) {
         {stepNumber}
       </div>
       <div className="chat-tool-step-body">
-        <header className="chat-tool-step-header">
-          <span className="chat-tool-icon"><Icon aria-hidden="true" /></span>
-          <span className="chat-tool-label">{label}</span>
+        <header className="chat-tool-step-header chat-tool-step-header-compact">
+          <span className="chat-tool-icon">
+            <Icon aria-hidden="true" />
+            <span className="sr-only">{label}</span>
+          </span>
           {summaryCanOpen ? (
             <button
               type="button"
@@ -148,6 +162,7 @@ function ToolCallCard({ call, stepNumber, artifacts = [], onOpenArtifact }) {
           <span className="chat-tool-status">
             <StatusIcon className={call.status === 'running' ? 'animate-spin' : ''} aria-hidden="true" />
             <span>{statusText}</span>
+            {call.status === 'running' && <LiveElapsed className="chat-tool-elapsed" />}
           </span>
         </header>
 
@@ -160,12 +175,12 @@ function ToolCallCard({ call, stepNumber, artifacts = [], onOpenArtifact }) {
                 key={artifact.id}
                 type="button"
                 data-testid="tool-artifact-open"
-                className="inline-flex max-w-full items-center gap-1 rounded border border-ink-fade/25 bg-paper px-1.5 py-0.5 font-mono text-[10px] text-ink-soft transition-colors hover:border-ember/45 hover:text-ember focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/45"
+                className="inline-flex max-w-full items-center gap-1 rounded border border-ink-fade/25 bg-paper px-1.5 py-0.5 font-mono text-[10px] text-ink-soft transition-colors hover:border-ink-fade/50 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-fade/45"
                 title={artifact.filename || artifact.title}
                 onClick={() => onOpenArtifact(artifact, call)}
               >
                 <FileText className="h-3 w-3 shrink-0" aria-hidden="true" />
-                <span className="truncate">{artifact.filename || artifact.title}</span>
+                <span className="chat-output-file-name truncate">{artifact.filename || artifact.title}</span>
               </button>
             ))}
           </div>
@@ -177,7 +192,7 @@ function ToolCallCard({ call, stepNumber, artifacts = [], onOpenArtifact }) {
               <ChevronDown aria-hidden="true" />
               <span>Arguments</span>
             </summary>
-            <pre tabIndex="0">{formatDetails(call.arguments, '(no arguments)')}</pre>
+            <pre tabIndex="0">{formatDetails(call.arguments, '(empty)')}</pre>
           </details>
 
           {(call.status === 'success' || call.status === 'error') && (
@@ -193,7 +208,7 @@ function ToolCallCard({ call, stepNumber, artifacts = [], onOpenArtifact }) {
 
         {call.status === 'running' && call.liveOutput && (
           <details className="chat-tool-live-details">
-            <summary title="Live output (updates as the command runs)">
+            <summary title="Live output">
               <ChevronDown aria-hidden="true" />
               <span>Live output</span>
               <span className="chat-tool-live-tail" data-testid="tool-live-output-tail">

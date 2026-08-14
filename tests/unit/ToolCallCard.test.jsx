@@ -21,6 +21,43 @@ test('code-search tool summaries use the executor argument names', () => {
   assert.match(renderToolCall('find_symbol', { name: 'buildToolSpecs' }), /buildToolSpecs/)
 })
 
+test('planning and permission tools show human summaries instead of raw JSON', () => {
+  const todoMarkup = renderToolCall('manage_todos', {
+    todos: [{ status: 'in_progress', activeForm: '正在验证最终 PDF', content: '验证最终 PDF' }],
+  })
+  const todoHeader = todoMarkup.match(/<header[\s\S]*?<\/header>/u)?.[0] || ''
+  assert.match(todoMarkup, /正在验证最终 PDF/)
+  assert.doesNotMatch(todoHeader, /&quot;todos&quot;/)
+
+  const directoryMarkup = renderToolCall('request_directory', {
+    path: 'D:\\work\\report', access_mode: 'read_write', purpose: '保存最终文件',
+  })
+  assert.match(directoryMarkup, /Request directory/)
+  assert.match(directoryMarkup, /D:\\work\\report/)
+
+  const deliveryMarkup = renderToolCall('set_deliverables', { artifact_ids: ['pdf-1'] })
+  const deliveryHeader = deliveryMarkup.match(/<header[\s\S]*?<\/header>/u)?.[0] || ''
+  assert.match(deliveryMarkup, /1 final file/)
+  assert.doesNotMatch(deliveryHeader, /artifact_ids/)
+})
+
+test('running tools expose a live elapsed clock', () => {
+  assert.match(renderToolCall('bash_exec', { command: 'npm test' }), /data-testid="live-elapsed"/)
+})
+
+test('execution rows emphasize concrete paths and commands without a visible action label', () => {
+  const readMarkup = renderToolCall('read_file', { path: 'D:\\work\\report.txt' })
+  const commandMarkup = renderToolCall('run_command', { command: 'npm test' })
+  assert.match(readMarkup, /D:\\work\\report\.txt/)
+  assert.match(commandMarkup, /npm test/)
+  assert.doesNotMatch(readMarkup, /chat-tool-label/)
+  assert.doesNotMatch(commandMarkup, /chat-tool-label/)
+  assert.match(readMarkup, /<span class="sr-only">Read file<\/span>/)
+  assert.match(commandMarkup, /<span class="sr-only">Run command<\/span>/)
+  assert.doesNotMatch(readMarkup, /title="Read file"/)
+  assert.doesNotMatch(commandMarkup, /title="Run command"/)
+})
+
 test('only an exactly associated persisted file makes a path summary interactive', () => {
   const artifact = { id: 'script-1', toolCallId: 'call-1', filename: 'inspect_pdf.py', url: '/api/artifacts/script-1' }
   const otherArtifact = { id: 'report-1', toolCallId: 'call-1', filename: 'report.pdf', url: '/api/artifacts/report-1' }

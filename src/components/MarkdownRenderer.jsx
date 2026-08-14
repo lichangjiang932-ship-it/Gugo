@@ -133,7 +133,7 @@ function MarkdownRenderer({ artifactReferences = [], children, className = '', o
                 {...(isLocalPath ? {} : { target: '_blank', rel: 'noopener noreferrer' })}
                 data-testid={isArtifactReference ? 'inline-artifact-link' : isLocalPath ? 'inline-local-path-link' : undefined}
                 className={isArtifactReference
-                  ? 'font-semibold text-ember decoration-ember/45 underline-offset-4 hover:decoration-ember'
+                  ? 'chat-output-file-name font-semibold decoration-current/45 underline-offset-4 hover:decoration-current'
                   : isLocalPath
                     ? 'font-mono text-[0.88em] text-cyan underline decoration-cyan/40 underline-offset-4 hover:decoration-cyan'
                     : anchorProps.className}

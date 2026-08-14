@@ -3,16 +3,17 @@ import { motion, useReducedMotion } from 'framer-motion'
 import { ChevronDown, Loader2 } from 'lucide-react'
 import ToolCallCard from '../../../components/ToolCallCard.jsx'
 import SubagentCard from '../../../components/SubagentCard.jsx'
+import LiveElapsed from '../../../components/LiveElapsed.jsx'
 
-// ★ 执行过程(推理状态/进度条/工具时间线)按用户要求使用全英文技术标签,
-// 与界面语言无关:执行轨迹属于技术事实,不随 UI 语言翻译。
+// Execution traces (reasoning status / progress / tool timeline) use English
+// technical labels regardless of UI language: they are technical facts.
 
 export function ReasoningTrace({ text = '', streaming = false, label = '', testId }) {
   // Providers can stream very large private reasoning payloads. Rendering that
   // payload makes the answer harder to follow and can freeze long chats. Keep
   // only a compact live status; verified tool activity remains visible below.
   if (!streaming) return null
-  return <div className="chat-thinking-line" role="status" aria-live="polite" data-testid={testId} data-has-reasoning={Boolean(text)}><Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /><span>{label || 'Thinking…'}</span></div>
+  return <div className="chat-thinking-line" role="status" aria-live="polite" data-testid={testId} data-has-reasoning={Boolean(text)}><Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /><span>{label || 'Thinking…'}</span><LiveElapsed className="chat-thinking-elapsed" /></div>
 }
 
 function nonNegativeInteger(value) {
@@ -111,8 +112,9 @@ export function ToolCallTrace({ calls = [], artifacts = [], onOpenArtifact }) {
           <span>{`${showAll ? normalizedCalls.length : hiddenCount} steps`}</span>
         </button>
       )}
-      {/* ★ 展开 参数/结果 是纯文档流:去掉 layout 位移动画,否则展开时
-          兄弟卡片会被 framer 做 transform 位移,与下方内容瞬态重叠。 */}
+      {/* Expanding argument/result details is a pure document flow: keep layout
+          animation off the list container, or framer shifts sibling cards and
+          they transiently overlap the content below. */}
       <div className="chat-tool-list" role="list">
         {visibleCalls.map((call, index) => {
           const stepNumber = startIndex + index + 1

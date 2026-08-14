@@ -105,7 +105,7 @@ test('failed and restored legacy turns never expose unselected intermediate arti
   }
 })
 
-test('generated file names render as highlighted links and open the right-pane payload', async () => {
+test('generated file names follow the answer tone and open the right-pane payload', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
@@ -125,7 +125,8 @@ test('generated file names render as highlighted links and open the right-pane p
     const link = rootElement.querySelector('button')
     assert.ok(link)
     assert.match(link.textContent, /calculator\.html/)
-    assert.match(link.className, /bg-ember-soft/)
+    assert.doesNotMatch(link.className, /text-ember|bg-ember-soft/)
+    assert.match(link.querySelector('.chat-output-file-name')?.className || '', /chat-output-file-name/)
     await act(async () => link.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
     assert.equal(opened[0].directFile.filename, 'calculator.html')
   } finally {
@@ -402,6 +403,8 @@ test('a generated filename inside a Windows path with spaces and Chinese opens i
     ))
     const link = rootElement.querySelector('[data-testid="inline-artifact-link"]')
     assert.ok(link)
+    assert.match(link.className, /chat-output-file-name/)
+    assert.doesNotMatch(link.className, /text-ember/)
     assert.equal(link.textContent, '填写后 答题卡.pdf')
     assert.equal(rootElement.querySelectorAll('[data-testid="artifact-open-card"]').length, 0)
     await act(async () => link.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })))
@@ -448,6 +451,8 @@ test('an inline-code Windows path opens only its selected deliverable artifact',
     const links = [...rootElement.querySelectorAll('[data-testid="inline-artifact-link"]')]
     assert.equal(links.length, 1)
     assert.equal(links[0].textContent, finalPath)
+    assert.match(links[0].className, /chat-output-file-name/)
+    assert.ok(links[0].querySelector('code'))
     assert.equal(rootElement.querySelectorAll('[data-testid="artifact-open-card"]').length, 0)
     assert.equal([...rootElement.querySelectorAll('code')].some((code) => code.textContent === draftPath), true)
     assert.equal([...rootElement.querySelectorAll('code')].some((code) => code.textContent === unknownPath), true)

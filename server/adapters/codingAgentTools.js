@@ -679,7 +679,7 @@ export const CODING_AGENT_TOOL_SPECS = [
     type: 'function',
     function: {
       name: 'run_command',
-      description: 'Execute a shell command in the authorized workspace with timeout, cancellation, process-tree cleanup, stdout, stderr, and exit code. Use this for Python, Node, npm, PowerShell, builds, and arbitrary project commands. Declare files that should change in expected_outputs. env_keys can forward named host credentials only after high-risk approval; credential values are never accepted in arguments or added to structured results.',
+      description: 'Execute a shell command in the authorized workspace with timeout, cancellation, process-tree cleanup, stdout, stderr, and exit code. Use this for Python, Node, npm, PowerShell, builds, and arbitrary project commands. Pass cwd explicitly when working in an authorized directory outside the default workspace. Declare files that should change in expected_outputs. env_keys can forward named host credentials only after high-risk approval; credential values are never accepted in arguments or added to structured results.',
       parameters: {
         type: 'object',
         properties: {

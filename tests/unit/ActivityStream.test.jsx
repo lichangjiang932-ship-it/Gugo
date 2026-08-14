@@ -31,6 +31,7 @@ test('pure reasoning keeps a compact status and never exposes raw text', () => {
     meta: { streaming: true, reasoning: 'secret chain of thought' },
   })
   assert.match(markup, /role="status"/)
+  assert.match(markup, /data-testid="live-elapsed"/)
   assert.doesNotMatch(markup, /secret chain of thought/)
 })
 
