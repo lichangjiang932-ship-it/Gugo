@@ -517,6 +517,36 @@ test('runServerTurn reports reconnect state and reports connected after the stre
   assert.deepEqual(states, ['reconnecting', 'connected'])
 })
 
+test('runServerTurn consumes a persisted terminal after stream truncation without reconnecting or waking it', async () => {
+  const completed = createTurnEvent({
+    id: 'persisted-terminal', sessionId: 's1', turnId: 'persisted-terminal-turn', sequence: 1,
+    type: 'turn.completed', payload: { text: 'final answer', artifactIds: ['final-file'] }, createdAt: 2,
+  })
+  const urls = []
+  const states = []
+  const seen = []
+  const fetchImpl = async (url) => {
+    urls.push(String(url))
+    if (url === '/api/turns/run') {
+      return response({ turn: { sessionId: 's1', turnId: 'persisted-terminal-turn', status: 'running' } }, 202)
+    }
+    if (String(url).startsWith('/api/turns/stream?')) return sseResponse([])
+    if (String(url).startsWith('/api/turns/events?')) return response({ events: [completed] })
+    assert.fail(`terminal replay must finish before requesting ${url}`)
+  }
+
+  const result = await runServerTurn({
+    sessionId: 's1', content: 'finish the file', fetchImpl, reconnectDelayMs: 0,
+    onConnectionState: (state) => states.push(state.status),
+    onEvent: (event) => seen.push(event.type),
+  })
+
+  assert.equal(result.terminal.id, completed.id)
+  assert.deepEqual(seen, ['turn.completed'])
+  assert.deepEqual(states, [])
+  assert.equal(urls.some((url) => url.endsWith('/resume')), false)
+})
+
 test('runServerTurn wakes an unfinished turn after replay when the server process restarts', async () => {
   let streamCalls = 0
   let resumeCalls = 0
@@ -902,11 +932,11 @@ test('assistant delta appends text and publishes responding activity in one stat
 
 test('terminal turn events settle every running tool call and stop streaming', async () => {
   const cases = [
-    { type: 'turn.completed', payload: { text: 'done', artifactIds: [] }, expected: 'cancelled' },
-    { type: 'turn.paused', payload: { text: '', clarification: { question: 'Need input' } }, expected: 'cancelled' },
-    { type: 'turn.cancelled', payload: { reason: 'user stopped' }, expected: 'cancelled' },
-    { type: 'turn.interrupted', payload: { code: 'MODEL_503', message: 'interrupted', retryable: true }, expected: 'cancelled' },
-    { type: 'turn.failed', payload: { code: 'TURN_FAILED', message: 'failed' }, expected: 'error' },
+    { type: 'turn.completed', payload: { text: 'done', artifactIds: [] }, expected: 'cancelled', connection: null },
+    { type: 'turn.paused', payload: { text: '', clarification: { question: 'Need input' } }, expected: 'cancelled', connection: 'paused' },
+    { type: 'turn.cancelled', payload: { reason: 'user stopped' }, expected: 'cancelled', connection: 'cancelled' },
+    { type: 'turn.interrupted', payload: { code: 'MODEL_503', message: 'interrupted', retryable: true }, expected: 'cancelled', connection: 'interrupted' },
+    { type: 'turn.failed', payload: { code: 'TURN_FAILED', message: 'failed' }, expected: 'error', connection: null },
   ]
 
   for (const [index, terminal] of cases.entries()) {
@@ -921,6 +951,7 @@ test('terminal turn events settle every running tool call and stop streaming', a
           meta: {
             streaming: true,
             modelActivity: { kind: 'model' },
+            serverConnectionState: 'reconnecting',
             toolCalls: [
               { id: 'running-call', name: 'bash_exec', status: 'running' },
               { id: 'finished-call', name: 'read_file', status: 'success' },
@@ -952,6 +983,7 @@ test('terminal turn events settle every running tool call and stop streaming', a
     assert.equal(result.cursorCommitted, true, terminal.type)
     assert.equal(meta.streaming, false, terminal.type)
     assert.equal(meta.modelActivity, null, terminal.type)
+    assert.equal(meta.serverConnectionState, terminal.connection, terminal.type)
     if (terminal.type === 'turn.cancelled') {
       assert.ok(Object.hasOwn(meta, 'serverDeliveryArtifactIds'))
       assert.deepEqual(meta.serverDeliveryArtifactIds, [])

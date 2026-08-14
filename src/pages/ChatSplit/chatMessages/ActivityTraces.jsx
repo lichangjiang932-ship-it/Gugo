@@ -87,7 +87,7 @@ export function ToolCallTrace({ calls = [], artifacts = [], onOpenArtifact }) {
   const normalizedCalls = Array.isArray(calls) ? calls : []
   const [showAll, setShowAll] = useState(false)
   const reduceMotion = useReducedMotion()
-  const visibleLimit = 6
+  const visibleLimit = 4
   const hiddenCount = Math.max(0, normalizedCalls.length - visibleLimit)
   const startIndex = showAll ? 0 : hiddenCount
   const visibleCalls = showAll ? normalizedCalls : normalizedCalls.slice(startIndex)
@@ -101,7 +101,7 @@ export function ToolCallTrace({ calls = [], artifacts = [], onOpenArtifact }) {
     <section
       className="chat-run-timeline"
       data-status={running ? 'running' : failed ? 'error' : cancelled ? 'cancelled' : 'success'}
-      aria-label={t('chatMessages.execution')}
+      aria-label={t('chatMessages.steps', { count: normalizedCalls.length })}
       aria-busy={running}
     >
       {hiddenCount > 0 && (

@@ -353,6 +353,56 @@ test('a generated filename inside a Windows path with spaces and Chinese opens i
   }
 })
 
+test('an inline-code Windows path opens only its selected deliverable artifact', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const opened = []
+  const finalPath = 'D:\\workspace\\output\\final report.pdf'
+  const draftPath = 'D:\\workspace\\drafts\\draft.pdf'
+  const unknownPath = 'D:\\workspace\\private\\unknown.pdf'
+  const msg = {
+    id: 'windows-inline-code-output',
+    role: 'assistant',
+    content: `Final: \`${finalPath}\`. Draft: \`${draftPath}\`. Unknown: \`${unknownPath}\`.`,
+    timestamp: Date.now(),
+    meta: {
+      serverArtifacts: [
+        { id: 'final-pdf', filename: 'final report-2.pdf', title: 'final report.pdf', type: 'pdf', url: '/api/artifacts/final-pdf' },
+        { id: 'draft-pdf', filename: 'draft.pdf', type: 'pdf', url: '/api/artifacts/draft-pdf' },
+      ],
+      serverDeliveryArtifactIds: ['final-pdf'],
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <MessageRow
+        msg={msg}
+        rowKey={msg.id}
+        generatingMessageId=""
+        lang="en"
+        onOpenArtifact={(artifact) => opened.push(artifact)}
+        t={(key) => key}
+      />,
+    ))
+    const links = [...rootElement.querySelectorAll('[data-testid="inline-artifact-link"]')]
+    assert.equal(links.length, 1)
+    assert.equal(links[0].textContent, finalPath)
+    assert.equal(rootElement.querySelectorAll('[data-testid="artifact-open-card"]').length, 0)
+    assert.equal([...rootElement.querySelectorAll('code')].some((code) => code.textContent === draftPath), true)
+    assert.equal([...rootElement.querySelectorAll('code')].some((code) => code.textContent === unknownPath), true)
+
+    await act(async () => links[0].dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })))
+    assert.equal(opened.length, 1)
+    assert.equal(opened[0].directFile.id, 'final-pdf')
+    assert.equal(opened[0].directFile.filename, 'final report-2.pdf')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
 test('an explicit Markdown link to a local Windows output is rewritten to the persisted artifact', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')

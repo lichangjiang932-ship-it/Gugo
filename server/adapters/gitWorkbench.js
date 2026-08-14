@@ -101,14 +101,26 @@ async function runGit(args, opts = {}) {
   return runFile('git', args, opts)
 }
 
-function npmCommandArgs(scriptName) {
+export function npmCommandArgs(scriptName, {
+  npmExecPath = process.env.npm_execpath,
+  executablePath = process.execPath,
+  platform = process.platform,
+  commandInterpreter = process.env.ComSpec,
+  fileExists = fs.existsSync,
+} = {}) {
   const candidates = [
-    process.env.npm_execpath,
-    path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    npmExecPath,
+    path.join(path.dirname(executablePath), 'node_modules', 'npm', 'bin', 'npm-cli.js'),
   ].filter(Boolean)
-  const npmCli = candidates.find((candidate) => fs.existsSync(candidate))
-  if (npmCli) return { file: process.execPath, args: [npmCli, 'run', scriptName] }
-  return { file: process.platform === 'win32' ? 'npm.cmd' : 'npm', args: ['run', scriptName] }
+  const npmCli = candidates.find((candidate) => fileExists(candidate))
+  if (npmCli) return { file: executablePath, args: [npmCli, 'run', scriptName] }
+  if (platform === 'win32') {
+    return {
+      file: commandInterpreter || 'cmd.exe',
+      args: ['/d', '/s', '/c', 'npm.cmd', 'run', scriptName],
+    }
+  }
+  return { file: 'npm', args: ['run', scriptName] }
 }
 
 function normalizeRepoPath(rawPath) {

@@ -132,6 +132,8 @@ const VERIFICATION_TOOLS = new Set([
 ])
 const SHELL_VERIFICATION_COMMAND = /(?:^|\s)(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|lint|build|check|typecheck)\b|(?:^|\s)(?:pytest|vitest|jest|eslint|tsc|cargo\s+(?:test|check)|go\s+test|dotnet\s+test)\b|(?:^|\s)git\s+(?:status|diff)\b/i
 const SHELL_PROJECT_CHECK_COMMAND = /(?:^|\s)(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|lint|build|check|typecheck)\b|(?:^|\s)(?:pytest|vitest|jest|eslint|tsc|cargo\s+(?:test|check)|go\s+test|dotnet\s+test)\b/i
+const POWERSHELL_READ_ONLY_COMMAND = /\b(?:Get-Content|Get-FileHash|Get-ChildItem|Get-Item|Test-Path|Select-String|Measure-Object|Compare-Object)\b/i
+const POWERSHELL_MUTATION_COMMAND = /\b(?:Set-Content|Add-Content|Clear-Content|Out-File|New-Item|Remove-Item|Copy-Item|Move-Item|Rename-Item|Set-Item|Set-ItemProperty|New-ItemProperty|Remove-ItemProperty|Set-Acl|Start-Process|Invoke-Expression)\b|(?:^|[^>])>{1,2}(?!=)/i
 const PYTHON_INLINE_READ_EVIDENCE = /(?:\b(?:fitz|pymupdf)\.open\s*\(|\bImage\.open\s*\(|\bopen\s*\(|\bos\.path\.(?:exists|isfile|getsize)\s*\(|\bPath\s*\([^)]*\)\.(?:exists|is_file|stat|read_text|read_bytes)\s*\(|\.read\s*\(|\.verify\s*\()/i
 const PYTHON_INLINE_MUTATION = /(?:\bopen\s*\([^)]*(?:,\s*['"][^'"]*[wax+]|\bmode\s*=\s*['"][^'"]*[wax+])|\bos\.open\s*\(|\.(?:write|writelines|truncate|write_text|write_bytes|save|saveIncr|insert_text|insert_image|new_page|delete_page|touch|mkdir|unlink|rename|replace|chmod)\s*\(|\b(?:os\.(?:remove|unlink|rename|replace|mkdir|makedirs|rmdir|removedirs|chmod|utime|symlink|link)|shutil\.(?:copy|copy2|copyfile|move|rmtree|make_archive|unpack_archive)|subprocess\.|eval\s*\(|exec\s*\()|(?:^|[;\s])(?:remove|unlink|rename|replace)\s*\()/i
 const PYTHON_PATH_OPEN_MUTATION = /\.\s*open\s*\(\s*(?:mode\s*=\s*)?(['"])(?=[rwaxtb+u]*[wax+])[rwaxtb+u]+\1/i
@@ -534,6 +536,36 @@ function isReadOnlyPythonVerificationCall(call) {
     && !hasInlinePythonMutation(code)
 }
 
+function powerShellCommandScript(call) {
+  if (!isCommandExecutionTool(call)) return ''
+  const command = String(call?.args?.command || '').trim()
+  if (!/^\s*(?:powershell|pwsh)(?:\.exe)?\b/i.test(command)) return ''
+  const commandFlag = command.match(/(?:^|\s)-(?:command|c)\s+([\s\S]+)$/i)
+  if (!commandFlag) return ''
+  let script = String(commandFlag[1] || '').trim()
+  if ((script.startsWith('"') && script.endsWith('"'))
+    || (script.startsWith("'") && script.endsWith("'"))) {
+    script = script.slice(1, -1).trim()
+  }
+  return script
+}
+
+function isReadOnlyPowerShellVerificationCall(call) {
+  const script = powerShellCommandScript(call)
+  if (!script
+    || /[;<>`]|&&|\|\||\$\(/.test(script)
+    || POWERSHELL_MUTATION_COMMAND.test(script)) {
+    return false
+  }
+  const pipeline = script.split('|').map((part) => part.trim()).filter(Boolean)
+  if (!pipeline.length || !/^\(?\s*(?:Get-Content|Get-FileHash|Get-ChildItem|Get-Item|Test-Path|Select-String|Compare-Object)\b/i.test(pipeline[0])) {
+    return false
+  }
+  return pipeline.slice(1).every((part) => (
+    /^(?:Format-(?:Table|List|Wide)|Select-Object|Sort-Object|Measure-Object)\b/i.test(part)
+  )) && POWERSHELL_READ_ONLY_COMMAND.test(script)
+}
+
 function isLocalMutationCall(call) {
   if (LOCAL_MUTATION_TOOLS.has(call?.name)) {
     return !(['apply_patch', 'patch_file'].includes(call?.name) && call?.args?.dry_run === true)
@@ -556,6 +588,7 @@ function isVerificationCall(call) {
   return SHELL_VERIFICATION_COMMAND.test(command)
     || PDF_LAYOUT_VALIDATOR_COMMAND.test(command)
     || isReadOnlyPythonVerificationCall(call)
+    || isReadOnlyPowerShellVerificationCall(call)
     || getToolMetadata(call.name, { args: call.args }).isReadOnly === true
 }
 
@@ -982,6 +1015,18 @@ function diffVerificationTargets(call, result) {
   return targets
 }
 
+function powerShellVerificationTargets(call, result) {
+  if (!isReadOnlyPowerShellVerificationCall(call)) return new Set()
+  const script = powerShellCommandScript(call)
+  const targets = new Set()
+  addVerificationTarget(targets, result?.path)
+  const pathArgument = /\b(?:Get-Content|Get-FileHash|Get-Item|Select-String)\b[^\r\n;|]{0,240}?(?:-(?:Literal)?Path\s+)(?:"([^"]+)"|'([^']+)'|([^\s;|)]+))/gi
+  for (const match of script.matchAll(pathArgument)) {
+    addVerificationTarget(targets, match[1] || match[2] || match[3])
+  }
+  return targets
+}
+
 function listDirectoryVerificationTargets(call, result) {
   if (result?.ok !== true) return new Set()
   const directory = normalizeMutationTarget(result?.path || call?.args?.path)
@@ -1088,6 +1133,10 @@ function clearVerifiedMutationTargets(pendingTargets, call, result) {
     }
     if (SHELL_PROJECT_CHECK_COMMAND.test(command)) {
       return clearWorkspaceScopedMutationTargets(pendingTargets)
+    }
+    const powerShellEvidence = powerShellVerificationTargets(call, result)
+    if (powerShellEvidence.size > 0) {
+      return clearExplicitTargetsMatchingEvidence(pendingTargets, powerShellEvidence)
     }
   }
   if (call?.name === 'read_file') {
@@ -1929,6 +1978,8 @@ export {
   VERIFICATION_TOOLS,
   SHELL_VERIFICATION_COMMAND,
   SHELL_PROJECT_CHECK_COMMAND,
+  POWERSHELL_READ_ONLY_COMMAND,
+  POWERSHELL_MUTATION_COMMAND,
   PYTHON_INLINE_READ_EVIDENCE,
   PYTHON_INLINE_MUTATION,
   PYTHON_PATH_OPEN_MUTATION,
@@ -1986,6 +2037,8 @@ export {
   progressChangesFor,
   inlinePythonCode,
   isReadOnlyPythonVerificationCall,
+  powerShellCommandScript,
+  isReadOnlyPowerShellVerificationCall,
   isLocalMutationCall,
   isVerificationCall,
   isMutationExecutionCall,
@@ -2009,6 +2062,7 @@ export {
   readResultCanVerifyMutation,
   addVerificationTarget,
   diffVerificationTargets,
+  powerShellVerificationTargets,
   listDirectoryVerificationTargets,
   clearVerifiedDeletionTargets,
   clearExplicitTargetsMatchingEvidence,

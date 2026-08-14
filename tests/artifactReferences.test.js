@@ -5,6 +5,8 @@ import {
   buildArtifactReferenceIdentity,
   buildMessageArtifactPreview,
   buildServerArtifactReferences,
+  findArtifactReferenceByLocalPath,
+  normalizeArtifactLocalPath,
   normalizeArtifactReferenceType,
 } from '../src/lib/artifactReferences.js'
 
@@ -139,4 +141,48 @@ test('artifact source previews obey live, failure, and explicit delivery boundar
     },
   })
   assert.equal(selected.type, 'html')
+})
+
+test('absolute Windows paths resolve only to a unique registered artifact', () => {
+  const reference = {
+    id: 'execution-check',
+    filename: 'execution-check-2.txt',
+    title: 'execution-check.txt',
+    url: '/api/artifacts/execution-check',
+  }
+
+  assert.equal(
+    normalizeArtifactLocalPath('file:///D:/Gugo/output/../output/execution-check.txt'),
+    'd:/gugo/output/execution-check.txt',
+  )
+  assert.equal(
+    findArtifactReferenceByLocalPath([reference], 'D:\\Gugo\\output\\execution-check.txt'),
+    reference,
+  )
+  assert.equal(
+    findArtifactReferenceByLocalPath([reference], 'D:/Gugo/output/unregistered.txt'),
+    null,
+  )
+  assert.equal(
+    findArtifactReferenceByLocalPath([{ ...reference, url: '' }], 'D:/Gugo/output/execution-check.txt'),
+    null,
+  )
+})
+
+test('duplicate artifact basenames require a matching normalized full path', () => {
+  const first = {
+    id: 'first-report',
+    filename: 'report.pdf',
+    fullPath: 'D:\\first\\report.pdf',
+    url: '/api/artifacts/first-report',
+  }
+  const second = {
+    id: 'second-report',
+    filename: 'report.pdf',
+    fullPath: 'D:\\second\\report.pdf',
+    url: '/api/artifacts/second-report',
+  }
+
+  assert.equal(findArtifactReferenceByLocalPath([first, second], 'd:/FIRST/./report.pdf'), first)
+  assert.equal(findArtifactReferenceByLocalPath([first, second], 'D:\\other\\report.pdf'), null)
 })

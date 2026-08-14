@@ -9,6 +9,7 @@ import {
   gitStatusTool,
   gitDiffTool,
   runProjectCheckTool,
+  npmCommandArgs,
   gitCommitTool,
   gitPushTool,
   gitRollbackTool,
@@ -59,6 +60,19 @@ function withEnv(vars, fn) {
       }
     })
 }
+
+test('packaged Windows project checks launch npm.cmd through the command interpreter', () => {
+  assert.deepEqual(npmCommandArgs('build', {
+    npmExecPath: '',
+    executablePath: 'D:\\Gugo\\Gugo.exe',
+    platform: 'win32',
+    commandInterpreter: 'C:\\Windows\\System32\\cmd.exe',
+    fileExists: () => false,
+  }), {
+    file: 'C:\\Windows\\System32\\cmd.exe',
+    args: ['/d', '/s', '/c', 'npm.cmd', 'run', 'build'],
+  })
+})
 
 test('git_status requires WORKSPACE_GIT_ENABLED', async () => {
   const cwd = withTempRepo()

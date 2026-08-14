@@ -157,6 +157,16 @@ test('reasoning stays a compact live status while tool traces remain inspectable
   assert.match(toolCallTrace, /chat-timeline-history/)
   assert.match(toolCallTrace, /aria-expanded=\{showAll\}/)
   assert.doesNotMatch(toolCallTrace, /chatMessages\.clickExpand/)
+  assert.doesNotMatch(toolCallTrace, /chatMessages\.execution/)
+})
+
+test('one assistant turn renders a single compact tool timeline and only its latest narration', () => {
+  assert.match(messageRowSource, /function compactMessagePresentation/)
+  assert.match(messageRowSource, /timeline\.flatMap/)
+  assert.match(messageRowSource, /\.reverse\(\)[\s\S]*?segment\.kind === 'text'/)
+  assert.match(messageRowSource, /<ToolCallTrace calls=\{presentation\.calls\}/)
+  assert.match(messageRowSource, /\{presentation\.text && \(/)
+  assert.doesNotMatch(messageRowSource, /timeline\.map\(\(segment\)/)
 })
 
 test('reasoning does not expose raw text or character counts', () => {

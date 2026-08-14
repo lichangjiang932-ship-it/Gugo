@@ -125,29 +125,153 @@ export function findArtifactReferenceByHref(references = [], href = '') {
   return references.find((reference) => artifactReferenceMatchesHref(reference, href)) || null
 }
 
+const ARTIFACT_PATH_FIELDS = Object.freeze([
+  'path',
+  'fullPath',
+  'sourcePath',
+  'outputPath',
+  'localPath',
+])
+
+function decodedPathText(value = '') {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  try { return decodeURIComponent(raw) } catch { return raw }
+}
+
+function unwrappedPathText(value = '') {
+  let raw = decodedPathText(value)
+  if ((raw.startsWith('<') && raw.endsWith('>'))
+    || (raw.startsWith('"') && raw.endsWith('"'))
+    || (raw.startsWith("'") && raw.endsWith("'"))) {
+    raw = raw.slice(1, -1).trim()
+  }
+  if (/^file:\/\//i.test(raw)) {
+    try {
+      const url = new URL(raw)
+      const host = url.hostname && url.hostname.toLowerCase() !== 'localhost' ? `//${url.hostname}` : ''
+      raw = `${host}${decodeURIComponent(url.pathname)}`
+    } catch {
+      raw = raw.replace(/^file:\/\//i, '')
+    }
+  }
+  return raw.replaceAll('\\', '/')
+}
+
+/**
+ * Normalize a Windows absolute path for comparison only. This never grants
+ * filesystem access; it is used to resolve prose back to an already persisted
+ * artifact URL.
+ */
+export function normalizeArtifactLocalPath(value = '') {
+  let raw = unwrappedPathText(value)
+  if (/^\/[a-z]:\//i.test(raw)) raw = raw.slice(1)
+  const drive = raw.match(/^([a-z]):\/(.*)$/i)
+  const unc = raw.match(/^\/\/([^/]+)\/([^/]+)(?:\/(.*))?$/)
+  if (!drive && !unc) return ''
+
+  const root = drive ? `${drive[1].toLowerCase()}:/` : `//${unc[1].toLowerCase()}/${unc[2].toLowerCase()}/`
+  const tail = drive ? drive[2] : (unc[3] || '')
+  const segments = []
+  for (const segment of tail.split('/')) {
+    if (!segment || segment === '.') continue
+    if (segment === '..') {
+      segments.pop()
+      continue
+    }
+    segments.push(segment.normalize('NFC').toLowerCase())
+  }
+  return `${root}${segments.join('/')}`.replace(/\/$/, segments.length > 0 ? '' : '/')
+}
+
+function normalizedArtifactFilenameValue(value = '') {
+  const raw = decodedPathText(value)
+  if (!raw) return ''
+  const path = normalizeArtifactLocalPath(raw)
+  const filename = path ? path.split('/').pop() : raw.split(/[\\/]/).pop()
+  return String(filename || '').normalize('NFC').trim().toLowerCase()
+}
+
+function artifactFilenameAliases(reference = {}) {
+  const filename = decodedPathText(reference?.filename || '')
+  const title = decodedPathText(reference?.title || '')
+  const values = filename ? [filename] : [title]
+  // Local artifacts retain the original source basename in `title` when the
+  // artifact store adds a collision suffix (report.pdf -> report-2.pdf).
+  // Semantic titles such as "Quarterly report" are intentionally excluded.
+  if (filename && title && /\.[a-z0-9]{1,12}$/i.test(title.split(/[\\/]/).pop() || '')) values.push(title)
+  const aliases = []
+  const seen = new Set()
+  for (const value of values) {
+    const normalized = normalizedArtifactFilenameValue(value)
+    if (!normalized || seen.has(normalized)) continue
+    seen.add(normalized)
+    aliases.push({ normalized, value: String(value).split(/[\\/]/).pop() || String(value) })
+  }
+  return aliases
+}
+
+function uniqueArtifactReference(references = []) {
+  const unique = []
+  const keys = new Set()
+  for (const reference of references) {
+    const key = String(reference?.id || reference?.url || '')
+    if (key ? keys.has(key) : unique.includes(reference)) continue
+    if (key) keys.add(key)
+    unique.push(reference)
+  }
+  return unique.length === 1 ? unique[0] : null
+}
+
+function findArtifactReferenceByFilename(references = [], filename = '') {
+  const normalized = decodedPathText(filename).normalize('NFC').trim().toLowerCase()
+  if (!normalized || normalized.includes('/') || normalized.includes('\\')) return null
+  return uniqueArtifactReference(references.filter((reference) => (
+    reference?.url && artifactFilenameAliases(reference).some((alias) => alias.normalized === normalized)
+  )))
+}
+
+/**
+ * Resolve an absolute Windows path only against registered artifact URLs.
+ * A known full path wins; otherwise basename matching is allowed only when it
+ * identifies exactly one artifact, so duplicate names cannot open the wrong
+ * file.
+ */
+export function findArtifactReferenceByLocalPath(references = [], value = '') {
+  const target = normalizeArtifactLocalPath(value)
+  if (!target || !Array.isArray(references)) return null
+  const registered = references.filter((reference) => reference?.url)
+  const exactMatches = registered.filter((reference) => ARTIFACT_PATH_FIELDS.some((field) => (
+    normalizeArtifactLocalPath(reference?.[field]) === target
+  )))
+  const exact = uniqueArtifactReference(exactMatches)
+  if (exact) return exact
+  return findArtifactReferenceByFilename(registered, target.split('/').pop() || '')
+}
+
 function localFileHrefMatchesReference(href, reference) {
   const raw = String(href || '').trim()
-  const filename = String(reference?.filename || reference?.title || '').trim().toLowerCase()
-  if (!raw || !filename) return false
+  const aliases = artifactFilenameAliases(reference)
+  if (!raw || aliases.length === 0) return false
   let decoded = raw
   try { decoded = decodeURIComponent(raw) } catch { /* compare the original href */ }
   const localPath = /^(?:file:\/\/|[a-z]:[\\/]|\.\.?[\\/])/i.test(decoded)
   if (!localPath) return false
-  const targetName = decoded.replace(/[?#].*$/, '').split(/[\\/]/).pop()?.toLowerCase() || ''
-  return targetName === filename
+  const targetName = normalizedArtifactFilenameValue(decoded.replace(/[?#].*$/, '').split(/[\\/]/).pop() || '')
+  return aliases.some((alias) => alias.normalized === targetName)
 }
 
 export function artifactHasInlineLink(content = '', artifact = {}) {
   const markdown = String(content || '')
-  const filename = String(artifact.filename || artifact.title || '').trim().toLowerCase()
+  const filenames = new Set(artifactFilenameAliases(artifact).map((alias) => alias.normalized))
   const links = /\[([^\]]*)\]\(\s*(?:<([^>]+)>|([^\s)]+))(?:\s+["'][^"']*["'])?\s*\)|<((?:https?:\/\/|\/)[^>]+)>/g
   let match
   while ((match = links.exec(markdown)) !== null) {
-    const label = String(match[1] || '').trim().toLowerCase()
+    const label = String(match[1] || '').normalize('NFC').trim().toLowerCase()
     const href = match[2] || match[3] || match[4] || ''
     if (artifactReferenceMatchesHref(artifact, href)) return true
-    if (label === filename && localFileHrefMatchesReference(href, artifact)) return true
-    if (!artifact.url && filename && label === filename) return true
+    if (filenames.has(label) && localFileHrefMatchesReference(href, artifact)) return true
+    if (!artifact.url && filenames.has(label)) return true
   }
   return false
 }
@@ -178,16 +302,17 @@ function findFilenameMatch(value = '', references = [], fromIndex = 0) {
   const lowerSource = source.toLowerCase()
   let best = null
   for (const reference of references) {
-    const filename = String(reference?.filename || reference?.title || '').trim()
-    if (!filename) continue
-    const lowerFilename = filename.toLowerCase()
-    let index = lowerSource.indexOf(lowerFilename, fromIndex)
-    while (index >= 0 && !filenameMatchHasBoundaries(source, index, filename)) {
-      index = lowerSource.indexOf(lowerFilename, index + 1)
-    }
-    if (index < 0) continue
-    if (!best || index < best.index || (index === best.index && filename.length > best.filename.length)) {
-      best = { filename, index, reference }
+    for (const alias of artifactFilenameAliases(reference)) {
+      const filename = alias.value
+      const lowerFilename = filename.toLowerCase()
+      let index = lowerSource.indexOf(lowerFilename, fromIndex)
+      while (index >= 0 && !filenameMatchHasBoundaries(source, index, filename)) {
+        index = lowerSource.indexOf(lowerFilename, index + 1)
+      }
+      if (index < 0) continue
+      if (!best || index < best.index || (index === best.index && filename.length > best.filename.length)) {
+        best = { filename, index, reference }
+      }
     }
   }
   return best
@@ -267,19 +392,23 @@ function persistedReferenceForBareAutolink(node, references, markdownSource) {
   // GFM turns filename-like text such as `deck.pptx` into an http link. Only
   // rewrite a source-level bare label; explicit Markdown links stay untouched.
   if (!label || originalSource !== label) return null
-  return references.find((reference) => (
-    String(reference.filename || reference.title || '').trim().toLowerCase() === label.toLowerCase()
-  )) || null
+  return findArtifactReferenceByFilename(references, label)
 }
 
 function persistedReferenceForLocalFileLink(node, references) {
   if (node?.type !== 'link') return null
   const label = markdownNodeText(node).trim().toLowerCase()
   if (!label) return null
-  return references.find((reference) => {
-    const filename = String(reference.filename || reference.title || '').trim().toLowerCase()
-    return filename === label && localFileHrefMatchesReference(node.url, reference)
-  }) || null
+  const normalizedLabel = label.normalize('NFC')
+  const absoluteReference = findArtifactReferenceByLocalPath(references, node.url)
+  if (absoluteReference && artifactFilenameAliases(absoluteReference).some((alias) => alias.normalized === normalizedLabel)) {
+    return absoluteReference
+  }
+  return uniqueArtifactReference(references.filter((reference) => (
+    reference?.url
+      && artifactFilenameAliases(reference).some((alias) => alias.normalized === normalizedLabel)
+      && localFileHrefMatchesReference(node.url, reference)
+  )))
 }
 
 function linkArtifactNodes(parent, references, markdownSource) {
@@ -289,9 +418,8 @@ function linkArtifactNodes(parent, references, markdownSource) {
     if (node?.type === 'inlineCode') {
       const source = String(node.value || '')
       const trimmed = source.trim()
-      const reference = references.find((candidate) => (
-        String(candidate.filename || candidate.title || '').trim().toLowerCase() === trimmed.toLowerCase()
-      ))
+      const reference = findArtifactReferenceByLocalPath(references, trimmed)
+        || findArtifactReferenceByFilename(references, trimmed)
       if (!reference) return [node]
       return [{ type: 'link', url: reference.url, children: [node] }]
     }

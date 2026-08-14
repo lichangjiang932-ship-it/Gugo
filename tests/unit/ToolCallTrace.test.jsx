@@ -24,6 +24,8 @@ test('ToolCallTrace renders one lightweight accessible timeline without a visibl
 
   assert.match(markup, /class="chat-run-timeline"/)
   assert.doesNotMatch(markup, /chat-activity-title/)
+  assert.match(markup, /aria-label="2 步"/)
+  assert.doesNotMatch(markup, /执行过程/)
   assert.match(markup, /chat-tool-step-marker/)
   assert.equal((markup.match(/data-testid="tool-call-step"/g) || []).length, 2)
 })
@@ -58,7 +60,7 @@ test('ToolCallTrace renders a stopped Agent without an empty result disclosure',
   assert.doesNotMatch(markup, /子代理结果/)
 })
 
-test('ToolCallTrace keeps the latest six steps visible and can reveal older history', async () => {
+test('ToolCallTrace keeps the latest four steps visible and can reveal older history', async () => {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
     url: 'http://localhost/chat',
   })
@@ -91,7 +93,7 @@ test('ToolCallTrace keeps the latest six steps visible and can reveal older hist
     const history = rootElement.querySelector('.chat-timeline-history')
     assert.ok(history)
     assert.equal(history.getAttribute('aria-expanded'), 'false')
-    assert.equal(rootElement.querySelectorAll('[data-testid="tool-call-step"]').length, 6)
+    assert.equal(rootElement.querySelectorAll('[data-testid="tool-call-step"]').length, 4)
     assert.doesNotMatch(rootElement.textContent, /file-1\.txt/)
     assert.match(rootElement.textContent, /file-8\.txt/)
 
@@ -101,7 +103,7 @@ test('ToolCallTrace keeps the latest six steps visible and can reveal older hist
     assert.match(rootElement.textContent, /file-1\.txt/)
 
     await act(async () => history.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
-    assert.equal(rootElement.querySelectorAll('[data-testid="tool-call-step"]').length, 6)
+    assert.equal(rootElement.querySelectorAll('[data-testid="tool-call-step"]').length, 4)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
