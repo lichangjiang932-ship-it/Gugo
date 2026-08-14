@@ -72,7 +72,7 @@ test('only the streaming assistant hides copy actions while completed messages r
 
 test('composer uses one stable primary button for send and stop', () => {
   assert.match(composerActionsSource, /<ModelPicker/)
-  assert.match(composerActionsSource, /<Mic/)
+  assert.match(composerActionsSource, /data-testid="context-ring"/)
   assert.match(composerActionsSource, /const primaryActionLabel = t\(isGenerating \? 'chatComposer\.stop' : 'chatComposer\.send'\)/)
   assert.match(composerActionsSource, /onClick=\{isGenerating \? onAbort : onSend\}/)
   assert.match(composerActionsSource, /disabled=\{!isGenerating && sendDisabled\}/)

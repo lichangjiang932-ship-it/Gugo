@@ -28,14 +28,15 @@ export default function ChatComposer({
   onSend,
   attachments,
   setAttachments,
-  voiceState,
+  contextPanelOpen,
+  contextUsage,
   modelPickerOpen,
   modelOptions,
   selectedModel,
   isGenerating,
   onAbort,
   onFileChange,
-  onVoiceClick,
+  onToggleContext,
   onOpenModelPicker,
   onCloseModelPicker,
   onModelChange,
@@ -48,13 +49,6 @@ export default function ChatComposer({
   onSlashCommandSelect,
 }) {
   const { t } = useT()
-  const voiceLabel = {
-    requesting: t('chatMessages.voiceRequesting'),
-    listening: t('chatMessages.voiceListening'),
-    unsupported: t('chatMessages.voiceUnsupported'),
-    denied: t('chatMessages.voiceDenied'),
-    error: t('chatMessages.voiceError'),
-  }[voiceState] || t('chatMessages.voice')
   const textareaRef = useRef(null)
   const fileInputRef = useRef(null)
   const composerSurfaceRef = useRef(null)
@@ -246,6 +240,8 @@ export default function ChatComposer({
           </div>
           <ComposerActions
             approvalMode={approvalMode}
+            contextPanelOpen={contextPanelOpen}
+            contextUsage={contextUsage}
             fileInputRef={fileInputRef}
             isGenerating={isGenerating}
             modelOptions={modelOptions}
@@ -258,12 +254,10 @@ export default function ChatComposer({
             onModelChange={onModelChange}
             onOpenModelPicker={onOpenModelPicker}
             onSend={onSend}
+            onToggleContext={onToggleContext}
             sendDisabled={attachmentState.uploading || attachmentState.failed}
-            onVoiceClick={onVoiceClick}
             selectedModel={selectedModel}
             t={t}
-            voiceLabel={voiceLabel}
-            voiceState={voiceState}
           />
         </div>
       </div>
