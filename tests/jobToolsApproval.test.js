@@ -18,7 +18,7 @@ const { runToolsLoop } = await import('../server/services/jobTools.js')
 const { releaseApproval, _resetWaiters } = await import('../server/services/approvalGate.js')
 const { listPendingApprovals, decideApproval } = await import('../server/services/approvalStore.js')
 const { createJob } = await import('../server/services/jobStore.js')
-const { rememberTool } = await import('../server/services/approvalSettingsStore.js')
+const { rememberTool, setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
 const { closeDb } = await import('../server/db.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
@@ -26,6 +26,12 @@ const { issueTestSession } = await import('./helpers/testAuth.js')
 function makeJob({ id, userId, title }) {
   createJob({ id, userId, title, prompt: title, status: 'running' })
   return { id, userId, title }
+}
+
+function issueNormalApprovalSession(email) {
+  const session = issueTestSession({ email })
+  setApprovalMode({ userId: session.userId, mode: 'normal' })
+  return session
 }
 
 /** 轮询直到该用户出现一条 pending 审批(或超时)。 */
@@ -91,7 +97,7 @@ test.after(() => {
 })
 
 test('INTERCEPTION: bash_exec 在批准前不会到达 executeTool', async () => {
-  const { userId } = issueTestSession({ email: 'approval-intercept@example.com' })
+  const { userId } = issueNormalApprovalSession('approval-intercept@example.com')
   const calls = []
   const fakeExecute = async ({ name, args }) => {
     calls.push({ name, args })
@@ -129,7 +135,7 @@ test('INTERCEPTION: bash_exec 在批准前不会到达 executeTool', async () =>
 })
 
 test('EDITED ARGS: 改写后的参数才是 executeTool 收到的参数', async () => {
-  const { userId } = issueTestSession({ email: 'approval-edit@example.com' })
+  const { userId } = issueNormalApprovalSession('approval-edit@example.com')
   const calls = []
   const fakeExecute = async ({ name, args }) => {
     calls.push({ name, args })
@@ -169,7 +175,7 @@ test('EDITED ARGS: 改写后的参数才是 executeTool 收到的参数', async 
 })
 
 test('DENY: 拒绝不杀死 job,拒绝结果作为 tool 消息喂回模型', async () => {
-  const { userId } = issueTestSession({ email: 'approval-deny@example.com' })
+  const { userId } = issueNormalApprovalSession('approval-deny@example.com')
   const calls = []
   const fakeExecute = async ({ name, args }) => {
     calls.push({ name, args })
@@ -207,7 +213,7 @@ test('DENY: 拒绝不杀死 job,拒绝结果作为 tool 消息喂回模型', asy
 })
 
 test('NEVER_APPROVE: create_docx 直通,不产生任何 pending 行', async () => {
-  const { userId } = issueTestSession({ email: 'approval-never@example.com' })
+  const { userId } = issueNormalApprovalSession('approval-never@example.com')
   const calls = []
   let turns = 0
   const runModel = async () => {
@@ -251,7 +257,7 @@ test('NEVER_APPROVE: create_docx 直通,不产生任何 pending 行', async () =
 })
 
 test('standing rule 命中来源写入 tool 结果供事件与卡片审计', async () => {
-  const { userId } = issueTestSession({ email: 'approval-standing-audit@example.com' })
+  const { userId } = issueNormalApprovalSession('approval-standing-audit@example.com')
   rememberTool({ userId, toolName: 'publish_report', args: { channelId: 'C-ops', text: 'first' } })
   const seenMessages = []
   const result = await runToolsLoop({

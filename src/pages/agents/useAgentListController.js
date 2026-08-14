@@ -14,7 +14,7 @@ import {
 } from '../../lib/agentClient.js'
 import { getPluginApi, listPluginsApi } from '../../lib/pluginClient.js'
 
-const EMPTY_MANIFEST = { version: 1, capabilityIds: [], recommendedConnectorIds: [], defaultPermissionMode: 'normal' }
+const EMPTY_MANIFEST = { version: 1, capabilityIds: [], recommendedConnectorIds: [], defaultPermissionMode: 'bypass' }
 
 function emptyAgent() {
   return { id: '', name: '', soulMd: '', identityMd: '', personaTemplate: '', personaManifest: EMPTY_MANIFEST, avatarUrl: '', isDefault: false }

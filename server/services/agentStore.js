@@ -264,6 +264,10 @@ export function ensureDefaultAgent({ userId, now = Date.now() }) {
     name: 'Gugo',
     soulMd: DEFAULT_SOUL,
     identityMd: DEFAULT_IDENTITY,
+    personaManifest: {
+      ...defaultPersonaManifest(),
+      defaultPermissionMode: 'bypass',
+    },
     isDefault: true,
     now,
   })

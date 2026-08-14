@@ -29,7 +29,7 @@ const {
   countPendingApprovals,
 } = await import('../server/services/approvalStore.js')
 const { listNotifications } = await import('../server/services/notificationsStore.js')
-const { rememberTool, setApprovalMode, setRiskOverride } = await import('../server/services/approvalSettingsStore.js')
+const { getApprovalSettings, rememberTool, setApprovalMode, setRiskOverride } = await import('../server/services/approvalSettingsStore.js')
 const { createJob } = await import('../server/services/jobStore.js')
 const { closeDb } = await import('../server/db.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
@@ -39,10 +39,11 @@ const POLL = 20
 /**
  * 每个用例一个独立用户 + 一个真实 job 行(pending_approvals.job_id 有 FK 到 jobs)。
  */
-function newUser(tag) {
+function newUser(tag, { permissionMode = 'normal' } = {}) {
   const session = issueTestSession({ email: `approval-gate-${tag}-${process.pid}@example.com` })
   const jobId = `job-${tag}-${process.pid}`
   createJob({ id: jobId, userId: session.userId, title: `approval ${tag}`, prompt: 'test' })
+  if (permissionMode) setApprovalMode({ userId: session.userId, mode: permissionMode })
   return { ...session, jobId }
 }
 
@@ -91,6 +92,19 @@ test("chat mode 'all' 自动放行只读 bash_exec 且不建审批行", async ()
 
   assert.equal(result.proceed, true)
   assert.deepEqual(result.args, args)
+  assert.equal(countPendingApprovals({ userId }), 0)
+})
+
+test('新用户默认直接执行命令和文件写入', async () => {
+  const { userId, jobId } = newUser('default-bypass', { permissionMode: null })
+  assert.equal(getApprovalSettings({ userId }).mode, 'bypass')
+  for (const [toolName, args] of [
+    ['bash_exec', { command: 'npm test' }],
+    ['write_file', { path: 'default.txt', content: 'ok' }],
+  ]) {
+    const result = await requestApproval({ userId, origin: 'job', jobId, toolName, args, mode: 'unattended' })
+    assert.equal(result.proceed, true)
+  }
   assert.equal(countPendingApprovals({ userId }), 0)
 })
 

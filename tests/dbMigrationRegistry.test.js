@@ -10,6 +10,7 @@ import {
   schemaMigrations,
 } from '../server/migrations/index.js'
 import { migrateToV49 } from '../server/migrations/v49HookArgumentMatcher.js'
+import { migrateToV50 } from '../server/migrations/v50DefaultExecutionPermissions.js'
 
 test('schema migration registry is contiguous and owns the latest version', () => {
   const legacy = Array.from({ length: 29 }, (_, index) => ({
@@ -18,10 +19,39 @@ test('schema migration registry is contiguous and owns the latest version', () =
   }))
   const plan = createSchemaMigrationPlan(legacy)
 
-  assert.deepEqual(plan.map(({ version }) => version), Array.from({ length: 48 }, (_, index) => index + 2))
-  assert.equal(LATEST_SCHEMA_VERSION, 49)
+  assert.deepEqual(plan.map(({ version }) => version), Array.from({ length: 49 }, (_, index) => index + 2))
+  assert.equal(LATEST_SCHEMA_VERSION, 50)
   assert.equal(DB_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
   assert.equal(schemaMigrations.at(-1).version, LATEST_SCHEMA_VERSION)
+})
+
+test('v50 upgrades only legacy default execution permissions', () => {
+  const db = new Database(':memory:')
+  try {
+    db.exec(`
+      CREATE TABLE user_approval_settings (user_id TEXT PRIMARY KEY, mode TEXT NOT NULL, updated_at INTEGER NOT NULL);
+      INSERT INTO user_approval_settings VALUES ('legacy', 'normal', 1), ('explicit', 'plan', 1);
+      CREATE TABLE agents (
+        id TEXT PRIMARY KEY,
+        is_default INTEGER NOT NULL,
+        persona_manifest_json TEXT
+      );
+    `)
+    const baseline = JSON.stringify({ version: 1, capabilityIds: [], recommendedConnectorIds: [], defaultPermissionMode: 'normal' })
+    const custom = JSON.stringify({ version: 1, capabilityIds: ['coding'], recommendedConnectorIds: [], defaultPermissionMode: 'normal' })
+    db.prepare('INSERT INTO agents VALUES (?, ?, ?)').run('default', 1, baseline)
+    db.prepare('INSERT INTO agents VALUES (?, ?, ?)').run('custom', 1, custom)
+
+    migrateToV50(db)
+    migrateToV50(db)
+
+    assert.equal(db.prepare('SELECT mode FROM user_approval_settings WHERE user_id = ?').get('legacy').mode, 'bypass')
+    assert.equal(db.prepare('SELECT mode FROM user_approval_settings WHERE user_id = ?').get('explicit').mode, 'plan')
+    assert.equal(JSON.parse(db.prepare('SELECT persona_manifest_json FROM agents WHERE id = ?').get('default').persona_manifest_json).defaultPermissionMode, 'bypass')
+    assert.equal(JSON.parse(db.prepare('SELECT persona_manifest_json FROM agents WHERE id = ?').get('custom').persona_manifest_json).defaultPermissionMode, 'normal')
+  } finally {
+    db.close()
+  }
 })
 
 test('v49 adds the hook argument matcher without rebuilding existing hooks', () => {

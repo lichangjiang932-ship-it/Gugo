@@ -10,6 +10,7 @@ process.env.APP_DATA_DIR = tempDir
 const { closeDb, createUser, getDb } = await import('../server/db.js')
 const { decideApproval } = await import('../server/services/approvalStore.js')
 const { releaseApproval } = await import('../server/services/approvalGate.js')
+const { setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
 const { TurnEngine } = await import('../server/services/TurnEngine.js')
 const { resolveChatCapabilityMode } = await import('../server/services/chatToolSelection.js')
 const { createTurnExecutionLeaseCoordinator } = await import('../server/services/turnExecutionLeaseRuntime.js')
@@ -1242,7 +1243,11 @@ test('TurnEngine preserves completed tools across a retryable model interruption
   assert.equal(completedAssistant?.modelContext?.toolTrace?.length, 2)
 })
 
-test('TurnEngine pauses at approval and resumes after the persisted decision', async () => {
+test('TurnEngine pauses at approval and resumes after the persisted decision', async (t) => {
+  setApprovalMode({ userId, mode: 'normal' })
+  t.after(() => {
+    getDb().prepare('DELETE FROM user_approval_settings WHERE user_id = ?').run(userId)
+  })
   let modelCalls = 0
   const executions = []
   const engine = createTestEngine({
