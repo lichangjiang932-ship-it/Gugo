@@ -7,6 +7,7 @@ import { createRoot } from 'react-dom/client'
 import { ArtifactReferenceLinks } from '../src/pages/ChatSplit/chatMessages/ArtifactCards.jsx'
 import MessageRow from '../src/pages/ChatSplit/chatMessages/MessageRow.jsx'
 import { mergeServerSessionMessages } from '../src/store/sessionServerSync.js'
+import { resolveDeliveryArtifacts } from '../src/lib/artifactReferences.js'
 
 function setupDom() {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { url: 'http://localhost/' })
@@ -18,6 +19,40 @@ function setupDom() {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
   return dom
 }
+
+test('delivery artifact filtering preserves legacy messages and treats explicit empty ids as authoritative', () => {
+  const artifacts = [
+    { id: 'draft', filename: 'draft.py' },
+    { id: 'preview', filename: 'preview.png' },
+    { id: 'final', filename: 'report.pdf' },
+  ]
+  assert.deepEqual(resolveDeliveryArtifacts({ serverArtifacts: artifacts }), artifacts)
+  assert.deepEqual(resolveDeliveryArtifacts({
+    serverArtifacts: artifacts,
+    serverDeliveryArtifactIds: ['final', 'draft', 'missing', 'final'],
+  }), [artifacts[2], artifacts[0]])
+  assert.deepEqual(resolveDeliveryArtifacts({
+    serverArtifacts: artifacts,
+    serverDeliveryArtifactIds: [],
+  }), [])
+
+  const [merged] = mergeServerSessionMessages(
+    [{
+      id: 'delivery-message',
+      role: 'assistant',
+      content: 'done',
+      meta: { serverDeliveryArtifactIds: ['draft'] },
+    }],
+    [{
+      id: 'delivery-message',
+      role: 'assistant',
+      content: 'done',
+      meta: { serverAuthoritative: true, serverDeliveryArtifactIds: [] },
+    }],
+  )
+  assert.ok(Object.hasOwn(merged.meta, 'serverDeliveryArtifactIds'))
+  assert.deepEqual(merged.meta.serverDeliveryArtifactIds, [])
+})
 
 test('generated file names render as highlighted links and open the right-pane payload', async () => {
   const dom = setupDom()
@@ -39,6 +74,75 @@ test('generated file names render as highlighted links and open the right-pane p
     assert.match(link.className, /bg-ember-soft/)
     await act(async () => link.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
     assert.equal(opened[0].directFile.filename, 'calculator.html')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('explicit empty delivery suppresses an artifactSource preview card below the message', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const msg = {
+    id: 'empty-delivery-source',
+    role: 'assistant',
+    content: 'No file is intentionally delivered.',
+    timestamp: Date.now(),
+    meta: {
+      artifactType: 'html',
+      artifactTitle: 'Draft page',
+      artifactSource: '<!doctype html><html><body>Draft</body></html>',
+      serverArtifacts: [{ id: 'draft', filename: 'draft.html', type: 'html', url: '/api/artifacts/draft' }],
+      serverDeliveryArtifactIds: [],
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <MessageRow
+        msg={msg}
+        rowKey={msg.id}
+        generatingMessageId=""
+        lang="en"
+        t={(key) => key}
+      />,
+    ))
+    assert.equal(rootElement.querySelectorAll('[data-testid="artifact-open-card"]').length, 0)
+    assert.equal(rootElement.querySelector('[data-testid="artifact-reference-links"]'), null)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('an unselected managed artifact URL is rendered as text instead of a live draft link', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const msg = {
+    id: 'unselected-managed-link',
+    role: 'assistant',
+    content: 'Draft: [draft.html](/api/artifacts/draft.html)',
+    timestamp: Date.now(),
+    meta: {
+      serverArtifacts: [{ id: 'draft', filename: 'draft.html', type: 'html', url: '/api/artifacts/draft.html' }],
+      serverDeliveryArtifactIds: [],
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <MessageRow
+        msg={msg}
+        rowKey={msg.id}
+        generatingMessageId=""
+        lang="en"
+        t={(key) => key}
+      />,
+    ))
+    assert.equal(rootElement.querySelector('a[href="/api/artifacts/draft.html"]'), null)
+    assert.equal(rootElement.querySelector('[data-testid="blocked-artifact-link"]')?.textContent, 'draft.html')
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

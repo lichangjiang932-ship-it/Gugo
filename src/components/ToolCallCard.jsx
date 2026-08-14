@@ -1,5 +1,5 @@
 import { memo } from 'react'
-import { Search, Globe, ChevronDown, CheckCircle2, XCircle, Loader2, FileText, Presentation, Table2, Code2, PieChart, Image, Bot, FolderOpen, FileEdit, Terminal, GitBranch, Diff, CheckSquare, Layers, Wrench } from 'lucide-react'
+import { Search, Globe, ChevronDown, CheckCircle2, XCircle, CircleStop, Loader2, FileText, Presentation, Table2, Code2, PieChart, Image, Bot, FolderOpen, FileEdit, Terminal, GitBranch, Diff, CheckSquare, Layers, Wrench } from 'lucide-react'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { findToolCallArtifacts } from '../lib/toolCallArtifacts.js'
 import { parseToolArgs, summarizeToolArgs, toolCallLabel } from '../lib/toolCallPresentation.js'
@@ -66,6 +66,12 @@ function formatDetails(value, fallback) {
   try { return JSON.stringify(JSON.parse(value), null, 2).slice(0, 12000) } catch { return value.slice(0, 12000) }
 }
 
+function liveOutputTail(value) {
+  const tail = String(value || '').replace(/\r/g, '').slice(-4000)
+  const line = tail.split('\n').reverse().find((item) => item.trim())?.trim() || ''
+  return line.length <= 220 ? line : `…${line.slice(-219)}`
+}
+
 function authorizationLabel(authorization, t) {
   if (!authorization || typeof authorization !== 'object') return ''
   if (authorization.kind === 'standing_rule') {
@@ -106,6 +112,9 @@ function ToolCallCard({ call, stepNumber, artifacts = [], onOpenArtifact }) {
   } else if (call.status === 'error') {
     StatusIcon = XCircle
     statusText = t('chatMessages.toolFailed')
+  } else if (call.status === 'cancelled') {
+    StatusIcon = CircleStop
+    statusText = t('chatMessages.toolStopped')
   }
 
   const resultValue = call.status === 'error' ? (call.result || call.error) : call.result
@@ -173,8 +182,8 @@ function ToolCallCard({ call, stepNumber, artifacts = [], onOpenArtifact }) {
             <pre tabIndex="0">{formatDetails(call.arguments, t('chatMessages.toolNoArguments'))}</pre>
           </details>
 
-          {call.status !== 'running' && (
-            <details className="chat-tool-details" open={call.status === 'error'}>
+          {(call.status === 'success' || call.status === 'error') && (
+            <details className="chat-tool-details">
               <summary>
                 <ChevronDown aria-hidden="true" />
                 <span>{call.status === 'error' ? t('chatMessages.toolError') : t('chatMessages.toolResult')}</span>
@@ -185,7 +194,16 @@ function ToolCallCard({ call, stepNumber, artifacts = [], onOpenArtifact }) {
         </div>
 
         {call.status === 'running' && call.liveOutput && (
-          <pre className="chat-tool-live-output" data-testid="tool-live-output">{call.liveOutput}</pre>
+          <details className="chat-tool-live-details">
+            <summary title={t('chatMessages.toolLiveOutputHint')}>
+              <ChevronDown aria-hidden="true" />
+              <span>{t('chatMessages.toolLiveOutput')}</span>
+              <span className="chat-tool-live-tail" data-testid="tool-live-output-tail">
+                {liveOutputTail(call.liveOutput)}
+              </span>
+            </summary>
+            <pre className="chat-tool-live-output" data-testid="tool-live-output" tabIndex="0">{call.liveOutput}</pre>
+          </details>
         )}
 
         {call.status === 'error' && (errorFacts.length > 0 || call.errorHint) && (

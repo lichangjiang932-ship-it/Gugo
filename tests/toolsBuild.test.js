@@ -56,6 +56,7 @@ test('isTaskStatus / isToolCallStatus 正确判别', () => {
   assert.ok(isTaskStatus(TASK_STATUS.COMPLETED))
   assert.ok(!isTaskStatus('weird'))
   assert.ok(isToolCallStatus(TOOL_CALL_STATUS.RUNNING))
+  assert.ok(isToolCallStatus(TOOL_CALL_STATUS.CANCELLED))
   assert.ok(!isToolCallStatus('weird'))
 })
 

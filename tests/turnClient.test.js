@@ -873,6 +873,100 @@ test('tool.started keeps arguments previously recorded by tool.call', async () =
   assert.equal(Object.hasOwn(startedAction.payload, 'arguments'), false)
 })
 
+test('assistant delta appends text and publishes responding activity in one state update', async () => {
+  const actions = []
+  const result = await dispatchTurnEvent(createTurnEvent({
+    id: 'assistant-delta-one-update',
+    sessionId: 's',
+    turnId: 't',
+    sequence: 3,
+    type: 'assistant.delta',
+    payload: { text: 'hello' },
+    createdAt: 4,
+  }), {
+    dispatch: (action) => actions.push(action),
+    messageTarget: { sessionId: 's', messageId: 'assistant-1' },
+  })
+
+  assert.deepEqual(actions, [{
+    type: 'APPEND_TO_LAST_MESSAGE',
+    payload: 'hello',
+    meta: { modelActivity: { kind: 'responding' } },
+    serverTurnId: 't',
+    serverSequence: 3,
+    sessionId: 's',
+    messageId: 'assistant-1',
+  }])
+  assert.equal(result.cursorCommitted, true)
+})
+
+test('terminal turn events settle every running tool call and stop streaming', async () => {
+  const cases = [
+    { type: 'turn.completed', payload: { text: 'done', artifactIds: [] }, expected: 'cancelled' },
+    { type: 'turn.paused', payload: { text: '', clarification: { question: 'Need input' } }, expected: 'cancelled' },
+    { type: 'turn.cancelled', payload: { reason: 'user stopped' }, expected: 'cancelled' },
+    { type: 'turn.interrupted', payload: { code: 'MODEL_503', message: 'interrupted', retryable: true }, expected: 'cancelled' },
+    { type: 'turn.failed', payload: { code: 'TURN_FAILED', message: 'failed' }, expected: 'error' },
+  ]
+
+  for (const [index, terminal] of cases.entries()) {
+    let state = {
+      activeSessionId: 's',
+      sessions: [{
+        id: 's',
+        messages: [{
+          id: 'assistant-1',
+          role: 'assistant',
+          content: '',
+          meta: {
+            streaming: true,
+            modelActivity: { kind: 'model' },
+            toolCalls: [
+              { id: 'running-call', name: 'bash_exec', status: 'running' },
+              { id: 'finished-call', name: 'read_file', status: 'success' },
+            ],
+          },
+        }],
+      }],
+    }
+    const dispatch = (action) => {
+      const next = reduceMessageState(state, action)
+      if (next) state = next
+    }
+
+    const result = await dispatchTurnEvent(createTurnEvent({
+      id: `terminal-${index}`,
+      sessionId: 's',
+      turnId: 't',
+      sequence: index,
+      type: terminal.type,
+      payload: terminal.payload,
+      createdAt: index + 1,
+    }), {
+      dispatch,
+      taskId: 'task',
+      messageTarget: { sessionId: 's', messageId: 'assistant-1' },
+    })
+
+    const meta = state.sessions[0].messages[0].meta
+    assert.equal(result.cursorCommitted, true, terminal.type)
+    assert.equal(meta.streaming, false, terminal.type)
+    assert.equal(meta.modelActivity, null, terminal.type)
+    if (terminal.type === 'turn.cancelled') {
+      assert.ok(Object.hasOwn(meta, 'serverDeliveryArtifactIds'))
+      assert.deepEqual(meta.serverDeliveryArtifactIds, [])
+    }
+    assert.deepEqual(
+      meta.toolCalls.map(({ id, status }) => ({ id, status })),
+      [
+        { id: 'running-call', status: terminal.expected },
+        { id: 'finished-call', status: 'success' },
+      ],
+      terminal.type,
+    )
+  }
+})
+
 test('dispatchTurnEvent forwards every local artifact from one completed shell call', async () => {
   const artifacts = []
   await dispatchTurnEvent(createTurnEvent({
@@ -954,6 +1048,30 @@ test('dispatchTurnEvent stores progress with the durable stream cursor', async (
   }])
 })
 
+test('dispatchTurnEvent preserves explicit empty delivery ids on completion', async () => {
+  const actions = []
+  const result = await dispatchTurnEvent(createTurnEvent({
+    id: 'delivery-completed-event',
+    sessionId: 'delivery-session',
+    turnId: 'delivery-turn',
+    sequence: 4,
+    type: 'turn.completed',
+    payload: {
+      text: 'done',
+      artifactIds: ['draft', 'final'],
+      deliveryArtifactIds: [],
+      iterations: 2,
+    },
+    createdAt: 5,
+  }), { dispatch: (action) => actions.push(action) })
+
+  const meta = actions.find((action) => action.type === 'UPDATE_LAST_MESSAGE_META')?.payload
+  assert.deepEqual(meta.serverArtifactIds, ['draft', 'final'])
+  assert.ok(Object.hasOwn(meta, 'serverDeliveryArtifactIds'))
+  assert.deepEqual(meta.serverDeliveryArtifactIds, [])
+  assert.equal(result.cursorCommitted, true)
+})
+
 test('dispatchTurnEvent exposes a paused directory request to the inline authorization card', async () => {
   const actions = []
   const clarification = {
@@ -974,9 +1092,10 @@ test('dispatchTurnEvent exposes a paused directory request to the inline authori
   assert.equal(result.cursorCommitted, true)
   assert.deepEqual(actions[0], {
     type: 'UPDATE_LAST_MESSAGE_META',
-    payload: {
-      streaming: false,
-      paused: true,
+      payload: {
+        streaming: false,
+        modelActivity: null,
+        paused: true,
       serverConnectionState: 'paused',
       serverClarification: clarification,
       directoryAuthorizationPending: false,
@@ -1065,7 +1184,7 @@ test('interrupted turns retain resumable evidence and a recovery attempt clears 
     },
     createdAt: 7,
   }), { dispatch, messageTarget: { sessionId: 's', messageId: 'assistant-1' } })
-  const interrupted = actions.at(-1).payload
+  const interrupted = actions.find((action) => action.type === 'UPDATE_LAST_MESSAGE_META').payload
   assert.equal(interrupted.serverFailure.retryable, true)
   assert.equal(interrupted.serverPartialText, 'preserved work')
   assert.equal(interrupted.serverConnectionState, 'interrupted')
@@ -1413,6 +1532,51 @@ test('server snapshot restores persisted turn artifacts into assistant rendering
     filename: 'landing.html',
     url: '/api/artifacts/landing.html',
   }])
+  assert.equal(Object.hasOwn(snapshot.messages[0].meta, 'serverDeliveryArtifactIds'), false)
+})
+
+test('server snapshot preserves explicit delivery artifact ids including an empty selection', () => {
+  const baseMessage = {
+    role: 'assistant',
+    content: 'Finished.',
+    createdAt: 1,
+    artifacts: [{
+      id: 'report-1',
+      type: 'pdf',
+      title: 'Report',
+      filename: 'report.pdf',
+      url: '/api/artifacts/report.pdf',
+    }],
+  }
+  const selected = normalizeServerSessionSnapshot({
+    complete: true,
+    messages: [{
+      ...baseMessage,
+      id: 'turn-selected:assistant',
+      modelContext: {
+        turnId: 'turn-selected',
+        artifactIds: ['report-1'],
+        deliveryArtifactIds: ['report-1'],
+      },
+    }],
+  })
+  assert.deepEqual(selected.messages[0].meta.serverDeliveryArtifactIds, ['report-1'])
+
+  const empty = normalizeServerSessionSnapshot({
+    complete: true,
+    messages: [{
+      ...baseMessage,
+      id: 'turn-empty:assistant',
+      modelContext: {
+        turnId: 'turn-empty',
+        artifactIds: ['report-1'],
+        deliveryArtifactIds: [],
+      },
+    }],
+  })
+  assert.ok(Object.hasOwn(empty.messages[0].meta, 'serverDeliveryArtifactIds'))
+  assert.deepEqual(empty.messages[0].meta.serverDeliveryArtifactIds, [])
+  assert.equal(empty.messages[0].meta.serverArtifacts.length, 1)
 })
 
 test('server snapshot restores a paused directory request for inline authorization after reload', () => {

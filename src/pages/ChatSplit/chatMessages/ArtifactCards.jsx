@@ -1,12 +1,12 @@
 import { BarChart3, Code2, Download, ExternalLink, FileText, LayoutList } from 'lucide-react'
 import { useT } from '../../../i18n/I18nProvider.jsx'
-import { artifactHasInlineReference, artifactReferenceOpenPayload, buildArtifactReferenceIdentity, buildServerArtifactReferences } from '../../../lib/artifactReferences.js'
+import { artifactHasInlineReference, artifactReferenceOpenPayload, buildArtifactReferenceIdentity, buildServerArtifactReferences, resolveDeliveryArtifacts } from '../../../lib/artifactReferences.js'
 import { withDownloadToken } from '../../../lib/jobClient.js'
 
 export function ArtifactReferenceLinks({ msg, preview, onOpen }) {
   const source = String(msg?.meta?.artifactSource || msg?.content || '')
   const allReferences = buildServerArtifactReferences({
-    artifacts: msg?.meta?.serverArtifacts,
+    artifacts: resolveDeliveryArtifacts(msg?.meta),
     content: source,
     messageId: msg?.id,
     preview,

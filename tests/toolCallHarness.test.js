@@ -340,26 +340,120 @@ test('createToolLoopGuard restores durable repeat and failure state without pers
     name: 'bash_exec',
     args: { command: 'python secret-script.py --token private-value' },
   }
-  const firstProcess = createToolLoopGuard({ maxRepeatedCalls: 2, maxSameToolFailures: 3 })
+  const firstProcess = createToolLoopGuard({
+    maxRepeatedCalls: 2,
+    maxSameToolFailures: 20,
+    sameToolFailureAdvisoryThresholds: [2, 4],
+  })
   assert.equal(firstProcess.before(call).ok, true)
   assert.equal(firstProcess.afterCall(call, { ok: false, error: 'first' }).ok, true)
   assert.equal(firstProcess.before(call).ok, true)
-  assert.equal(firstProcess.afterCall(call, { ok: false, error: 'second' }).ok, true)
+  const firstAdvisory = firstProcess.afterCall(call, { ok: false, error: 'second' })
+  assert.equal(firstAdvisory.ok, true)
+  assert.equal(firstAdvisory.advisory.level, 1)
 
   const durableState = firstProcess.snapshot()
   assert.match(durableState.lastSignature, /^[a-f0-9]{64}$/u)
   assert.doesNotMatch(JSON.stringify(durableState), /private-value|secret-script/u)
+  assert.deepEqual(durableState.firedToolAdvisoryThresholds, {})
+  assert.deepEqual(durableState.pendingToolAdvisoryThresholds, { bash_exec: 2 })
 
   const secondProcess = createToolLoopGuard({
     maxRepeatedCalls: 2,
-    maxSameToolFailures: 3,
+    maxSameToolFailures: 20,
+    sameToolFailureAdvisoryThresholds: [2, 4],
     initialState: durableState,
   })
   assert.equal(secondProcess.before(call).result.code, 'repeated_tool_call')
-  assert.equal(
-    secondProcess.afterCall(call, { ok: false, error: 'third' }).result.code,
-    'tool_no_progress',
-  )
+  const thirdFailure = secondProcess.afterCall(call, { ok: false, error: 'third' })
+  assert.equal(thirdFailure.ok, true)
+  assert.equal(thirdFailure.advisory, undefined, 'restored pending tier must not fire twice')
+  const secondAdvisory = secondProcess.afterCall(call, { ok: false, error: 'fourth' })
+  assert.equal(secondAdvisory.ok, true)
+  assert.equal(secondAdvisory.advisory.level, 2)
+  assert.equal(secondProcess.pendingAdvisories()[0].level, 2)
+  secondProcess.commitPendingAdvisories()
+
+  const committedState = secondProcess.snapshot()
+  assert.deepEqual(committedState.firedToolAdvisoryThresholds, { bash_exec: 4 })
+  assert.deepEqual(committedState.pendingToolAdvisoryThresholds, {})
+  const thirdProcess = createToolLoopGuard({
+    maxSameToolFailures: 20,
+    sameToolFailureAdvisoryThresholds: [2, 4],
+    initialState: committedState,
+  })
+  assert.equal(thirdProcess.afterCall(call, { ok: false, error: 'fifth' }).advisory, undefined)
+})
+
+test('createToolLoopGuard keeps a true high same-tool failure hard limit', () => {
+  const guard = createToolLoopGuard({
+    maxSameToolFailures: 5,
+    sameToolFailureAdvisoryThresholds: [2, 4],
+  })
+  const call = { name: 'read_file' }
+  assert.equal(guard.afterCall(call, { ok: false, error: 'first' }).ok, true)
+  assert.equal(guard.afterCall(call, { ok: false, error: 'second' }).advisory.level, 1)
+  assert.equal(guard.afterCall(call, { ok: false, error: 'third' }).ok, true)
+  assert.equal(guard.afterCall(call, { ok: false, error: 'fourth' }).advisory.level, 2)
+  const stopped = guard.afterCall(call, { ok: false, error: 'fifth' })
+  assert.equal(stopped.ok, false)
+  assert.equal(stopped.result.code, 'tool_no_progress_hard_limit')
+})
+
+test('createToolLoopGuard defaults to a 20-failure hard limit', () => {
+  const guard = createToolLoopGuard({ sameToolFailureAdvisoryThresholds: [] })
+  const call = { name: 'read_file' }
+  for (let count = 1; count < 20; count += 1) {
+    assert.equal(
+      guard.afterCall(call, { ok: false, error: 'failure-' + count }).ok,
+      true,
+    )
+  }
+  const stopped = guard.afterCall(call, { ok: false, error: 'failure-20' })
+  assert.equal(stopped.ok, false)
+  assert.equal(stopped.result.code, 'tool_no_progress_hard_limit')
+})
+
+test('global error streak allows 19 mixed-tool failures and stops at 20', () => {
+  const guard = createToolLoopGuard({ maxConsecutiveErrors: 20 })
+  for (let count = 1; count < 20; count += 1) {
+    const call = { name: count % 2 === 0 ? 'read_file' : 'git_status' }
+    const result = { ok: false, error: 'mixed-failure-' + count }
+    assert.equal(guard.after(result, call).ok, true)
+    assert.equal(guard.afterCall(call, result).ok, true)
+  }
+  const twentiethCall = { name: 'read_file' }
+  const twentiethResult = { ok: false, error: 'mixed-failure-20' }
+  const stopped = guard.after(twentiethResult, twentiethCall)
+  assert.equal(stopped.ok, false)
+  assert.equal(stopped.result.code, 'tool_error_streak')
+})
+
+test('persisted advisory thresholds remain correct when configured tiers change', () => {
+  const call = { name: 'read_file' }
+  const oldGuard = createToolLoopGuard({
+    sameToolFailureAdvisoryThresholds: [4, 8, 12],
+  })
+  for (let count = 1; count <= 4; count += 1) {
+    oldGuard.afterCall(call, { ok: false, error: 'old-' + count })
+  }
+  oldGuard.commitPendingAdvisories()
+  const oldState = oldGuard.snapshot()
+  assert.deepEqual(oldState.firedToolAdvisoryThresholds, { read_file: 4 })
+
+  const upgradedGuard = createToolLoopGuard({
+    sameToolFailureAdvisoryThresholds: [8, 12, 16],
+    initialState: oldState,
+  })
+  for (let count = 5; count < 8; count += 1) {
+    assert.equal(
+      upgradedGuard.afterCall(call, { ok: false, error: 'new-' + count }).advisory,
+      undefined,
+    )
+  }
+  const upgradedAdvisory = upgradedGuard.afterCall(call, { ok: false, error: 'new-8' })
+  assert.equal(upgradedAdvisory.advisory.count, 8)
+  assert.equal(upgradedAdvisory.advisory.level, 1)
 })
 
 test('mapWithConcurrency 保持结果顺序并限制并发数', async () => {
@@ -401,13 +495,18 @@ test('normalizeToolResult rejects empty or ambiguous executor results', () => {
 })
 
 test('a different successful tool does not clear per-tool failure history', () => {
-  const guard = createToolLoopGuard({ maxSameToolFailures: 3 })
+  const guard = createToolLoopGuard({
+    maxSameToolFailures: 20,
+    sameToolFailureAdvisoryThresholds: [3],
+  })
   const readCall = { name: 'read_file' }
 
   assert.equal(guard.afterCall(readCall, { ok: false, error: 'first' }).ok, true)
   assert.equal(guard.afterCall(readCall, { ok: false, error: 'second' }).ok, true)
   assert.equal(guard.afterCall({ name: 'git_status' }, { ok: true }).ok, true)
-  assert.equal(guard.afterCall(readCall, { ok: false, error: 'third' }).ok, false)
+  const third = guard.afterCall(readCall, { ok: false, error: 'third' })
+  assert.equal(third.ok, true)
+  assert.equal(third.advisory.level, 1)
 })
 
 test('non-substantive tools do not clear a real execution error streak', () => {

@@ -104,3 +104,39 @@ test('managed file labels require real source or persisted bytes', () => {
   })
   assert.equal(sourcedDoc.type, 'docx')
 })
+
+test('artifact source previews obey live, failure, and explicit delivery boundaries', () => {
+  const artifactSource = '<!doctype html><html><body>Draft</body></html>'
+  const baseMessage = {
+    role: 'assistant',
+    content: 'The page is ready.',
+    meta: { artifactType: 'html', artifactTitle: 'Draft', artifactSource },
+  }
+
+  assert.equal(buildMessageArtifactPreview({
+    ...baseMessage,
+    meta: { ...baseMessage.meta, streaming: true },
+  }), null)
+  assert.equal(buildMessageArtifactPreview({
+    ...baseMessage,
+    meta: { ...baseMessage.meta, failed: true },
+  }), null)
+  assert.equal(buildMessageArtifactPreview({
+    ...baseMessage,
+    meta: {
+      ...baseMessage.meta,
+      serverArtifacts: [{ id: 'draft', filename: 'draft.html', type: 'html', url: '/api/artifacts/draft' }],
+      serverDeliveryArtifactIds: [],
+    },
+  }), null)
+
+  const selected = buildMessageArtifactPreview({
+    ...baseMessage,
+    meta: {
+      ...baseMessage.meta,
+      serverArtifacts: [{ id: 'final', filename: 'final.html', type: 'html', url: '/api/artifacts/final' }],
+      serverDeliveryArtifactIds: ['final'],
+    },
+  })
+  assert.equal(selected.type, 'html')
+})

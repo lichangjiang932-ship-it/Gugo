@@ -160,3 +160,71 @@ test('right workbench renders compact tabs, persists width, and opens generated 
     dom.window.close()
   }
 })
+
+test('right workbench hides live intermediates and synthetic previews outside delivery', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  const messages = [{
+    id: 'assistant-running',
+    role: 'assistant',
+    content: 'Working...',
+    meta: {
+      streaming: true,
+      serverArtifacts: [{ id: 'live-draft', filename: 'live-draft.pdf', type: 'pdf', url: '/api/artifacts/live-draft' }],
+    },
+  }, {
+    id: 'assistant-empty-source',
+    role: 'assistant',
+    content: 'No delivery.',
+    meta: {
+      artifactType: 'html',
+      artifactTitle: 'Synthetic draft',
+      artifactSource: '<!doctype html><html><body>Draft</body></html>',
+      serverArtifacts: [{ id: 'source-draft', filename: 'source-draft.html', type: 'html', url: '/api/artifacts/source-draft' }],
+      serverDeliveryArtifactIds: [],
+    },
+  }, {
+    id: 'assistant-failed-source',
+    role: 'assistant',
+    content: 'Generation failed.',
+    meta: {
+      failed: true,
+      artifactType: 'html',
+      artifactTitle: 'Failed draft',
+      artifactSource: '<!doctype html><html><body>Failed</body></html>',
+    },
+  }, {
+    id: 'assistant-final',
+    role: 'assistant',
+    content: 'Final ready.',
+    meta: {
+      serverArtifacts: [
+        { id: 'old-draft', filename: 'old-draft.pdf', type: 'pdf', url: '/api/artifacts/old-draft' },
+        { id: 'final', filename: 'final-report.pdf', type: 'pdf', url: '/api/artifacts/final' },
+      ],
+      serverDeliveryArtifactIds: ['final'],
+    },
+  }]
+
+  try {
+    await act(async () => root.render(
+      <RightWorkbench
+        messages={messages}
+        activeTab="files"
+        onTabChange={() => {}}
+        onClose={() => {}}
+        onOpenArtifact={() => {}}
+        onSendMessage={() => {}}
+        isGenerating
+      />,
+    ))
+
+    assert.equal(rootElement.querySelector('[data-testid="workbench-file-count"]').textContent, '1')
+    assert.match(rootElement.textContent, /final-report\.pdf/)
+    assert.doesNotMatch(rootElement.textContent, /live-draft|source-draft|Synthetic draft|Failed draft|old-draft/)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})

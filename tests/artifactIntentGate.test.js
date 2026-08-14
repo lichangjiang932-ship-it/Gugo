@@ -10,6 +10,9 @@ import {
 import { runToolsLoop, SERVER_TOOL_SPECS, selectJobToolSpecs } from '../server/services/jobTools.js'
 import { buildFinalOutput, shouldCompileDocx } from '../server/services/jobWorkflow.js'
 import { validateHtmlArtifactSource } from '../server/services/artifactGen.js'
+import { createUser } from '../server/db.js'
+import { upsertSession } from '../server/services/sessionStore.js'
+import { appendTurnArtifact } from '../server/services/turnArtifactStore.js'
 
 const nameOf = (specs) => specs.map((s) => s?.function?.name)
 const ARTIFACT_GENERATOR_NAMES = [
@@ -19,6 +22,33 @@ const ARTIFACT_GENERATOR_NAMES = [
   'create_xlsx',
   'generate_image',
 ]
+const INTENT_ARTIFACT_USER_ID = 'intent-user'
+const INTENT_ARTIFACT_SESSION_ID = 'artifact-intent-session'
+let intentArtifactScopeReady = false
+
+function persistStubTurnArtifact({ turnId, id, filename, type }) {
+  if (!intentArtifactScopeReady) {
+    createUser({ id: INTENT_ARTIFACT_USER_ID, email: 'artifact-intent@example.com' })
+    upsertSession({
+      id: INTENT_ARTIFACT_SESSION_ID,
+      userId: INTENT_ARTIFACT_USER_ID,
+      title: 'Artifact intent tests',
+    })
+    intentArtifactScopeReady = true
+  }
+  const url = `/api/artifacts/${filename}`
+  appendTurnArtifact({
+    id,
+    userId: INTENT_ARTIFACT_USER_ID,
+    sessionId: INTENT_ARTIFACT_SESSION_ID,
+    turnId,
+    type,
+    title: filename,
+    url,
+    filename,
+  })
+  return { ok: true, artifactId: id, filename, url }
+}
 
 function forgedArtifactArgs(name) {
   if (name === 'generate_image') return { prompt: 'An unrelated verification image' }
@@ -35,7 +65,9 @@ test('code task cannot even see file-artifact tools', () => {
   assert.ok(!names.includes('create_xlsx'))
   assert.ok(!names.includes('create_html_app'))
   // 非文件类工具一个都不能被误伤
-  const nonArtifact = nameOf(SERVER_TOOL_SPECS).filter((n) => !isFileArtifactTool(n))
+  const nonArtifact = nameOf(SERVER_TOOL_SPECS).filter((n) => (
+    !isFileArtifactTool(n) && n !== 'set_deliverables'
+  ))
   for (const n of nonArtifact) assert.ok(names.includes(n), `${n} 被误过滤`)
 })
 
@@ -421,7 +453,13 @@ test('text tool protocol from a local model becomes a real webpage artifact call
   const executions = []
   let modelCalls = 0
   const result = await runToolsLoop({
-    job: { id: 'webpage-text-protocol', userId: 'intent-user', origin: 'chat', prompt: '/webpage 帮我生成一个网页' },
+    job: {
+      id: 'webpage-text-protocol',
+      userId: INTENT_ARTIFACT_USER_ID,
+      sessionId: INTENT_ARTIFACT_SESSION_ID,
+      origin: 'chat',
+      prompt: '/webpage 帮我生成一个网页',
+    },
     step: { id: 'webpage-text-protocol', kind: 'chat' },
     messages: [{ role: 'user', content: '/webpage 帮我生成一个网页' }],
     skillId: 'webpage',
@@ -431,7 +469,12 @@ test('text tool protocol from a local model becomes a real webpage artifact call
     onModelDelta: async ({ text }) => deltas.push(text),
     executeTool: async ({ name, args }) => {
       executions.push({ name, args })
-      return { ok: true, artifactId: 'html-artifact-1', filename: 'local-model.html', url: '/api/artifacts/local-model.html' }
+      return persistStubTurnArtifact({
+        turnId: 'webpage-text-protocol',
+        id: 'html-artifact-1',
+        filename: 'local-model.html',
+        type: 'html',
+      })
     },
     runModel: async ({ messages }) => {
       modelCalls += 1
@@ -441,7 +484,19 @@ test('text tool protocol from a local model becomes a real webpage artifact call
           toolCalls: [],
         }
       }
-      assert.ok(messages.some((message) => message.role === 'tool' && message.name === 'create_html_app'))
+      if (modelCalls === 2) {
+        assert.ok(messages.some((message) => message.role === 'tool' && message.name === 'create_html_app'))
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'select-local-model-html',
+            function: {
+              name: 'set_deliverables',
+              arguments: JSON.stringify({ artifact_ids: ['html-artifact-1'] }),
+            },
+          }],
+        }
+      }
       return { content: '网页已生成。', toolCalls: [] }
     },
   })
@@ -450,6 +505,7 @@ test('text tool protocol from a local model becomes a real webpage artifact call
   assert.equal(executions[0].name, 'create_html_app')
   assert.match(executions[0].args.html, /<main>完成<\/main>/)
   assert.deepEqual(result.artifactIds, ['html-artifact-1'])
+  assert.deepEqual(result.deliveryArtifactIds, ['html-artifact-1'])
   assert.equal(result.text, '网页已生成。')
   assert.equal(deltas.join('').includes('<tool_call>'), false)
 })
@@ -460,7 +516,13 @@ test('webpage delivery retries natural-language fallback until a real artifact e
   const visibleToolNames = []
   let modelCalls = 0
   const result = await runToolsLoop({
-    job: { id: 'webpage-delivery-guard', userId: 'intent-user', origin: 'chat', prompt: '/webpage build a product page' },
+    job: {
+      id: 'webpage-delivery-guard',
+      userId: INTENT_ARTIFACT_USER_ID,
+      sessionId: INTENT_ARTIFACT_SESSION_ID,
+      origin: 'chat',
+      prompt: '/webpage build a product page',
+    },
     step: { id: 'webpage-delivery-guard', kind: 'chat' },
     messages: [{ role: 'user', content: '/webpage build a product page' }],
     skillId: 'webpage',
@@ -470,7 +532,12 @@ test('webpage delivery retries natural-language fallback until a real artifact e
     onModelDelta: async ({ text }) => deltas.push(text),
     executeTool: async ({ name, args }) => {
       executions.push({ name, args })
-      return { ok: true, artifactId: 'guarded-html-1', filename: 'product.html', url: '/api/artifacts/product.html' }
+      return persistStubTurnArtifact({
+        turnId: 'webpage-delivery-guard',
+        id: 'guarded-html-1',
+        filename: 'guarded-product.html',
+        type: 'html',
+      })
     },
     runModel: async ({ messages, tools }) => {
       modelCalls += 1
@@ -494,14 +561,27 @@ test('webpage delivery retries natural-language fallback until a real artifact e
           }],
         }
       }
+      if (modelCalls === 3) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'select-guarded-html',
+            function: {
+              name: 'set_deliverables',
+              arguments: JSON.stringify({ artifact_ids: ['guarded-html-1'] }),
+            },
+          }],
+        }
+      }
       return { content: 'The webpage is ready.', toolCalls: [] }
     },
   })
 
-  assert.equal(modelCalls, 3)
+  assert.equal(modelCalls, 4)
   assert.equal(executions.length, 1)
   assert.equal(executions[0].name, 'create_html_app')
   assert.deepEqual(result.artifactIds, ['guarded-html-1'])
+  assert.deepEqual(result.deliveryArtifactIds, ['guarded-html-1'])
   assert.equal(result.text, 'The webpage is ready.')
   assert.equal(deltas.join(''), 'The webpage is ready.')
   assert.equal(visibleToolNames[0].includes('request_directory'), false)
@@ -516,7 +596,13 @@ test('webpage delivery rejects handoff prose disguised as HTML and accepts the c
   const realHtml = '<!doctype html><html><body><main><h1>Product</h1><section><p>Fast and reliable.</p></section></main></body></html>'
 
   const result = await runToolsLoop({
-    job: { id: 'webpage-invalid-html-retry', userId: 'intent-user', origin: 'chat', prompt: '/webpage build a product page' },
+    job: {
+      id: 'webpage-invalid-html-retry',
+      userId: INTENT_ARTIFACT_USER_ID,
+      sessionId: INTENT_ARTIFACT_SESSION_ID,
+      origin: 'chat',
+      prompt: '/webpage build a product page',
+    },
     step: { id: 'webpage-invalid-html-retry', kind: 'chat' },
     messages: [{ role: 'user', content: '/webpage build a product page' }],
     skillId: 'webpage',
@@ -530,7 +616,12 @@ test('webpage delivery rejects handoff prose disguised as HTML and accepts the c
       } catch (error) {
         return { ok: false, code: 'invalid_html_artifact', error: error.message }
       }
-      return { ok: true, artifactId: 'real-html-artifact', filename: 'product.html', url: '/api/artifacts/product.html' }
+      return persistStubTurnArtifact({
+        turnId: 'webpage-invalid-html-retry',
+        id: 'real-html-artifact',
+        filename: 'validated-product.html',
+        type: 'html',
+      })
     },
     runModel: async ({ messages }) => {
       modelCalls += 1
@@ -555,13 +646,26 @@ test('webpage delivery rejects handoff prose disguised as HTML and accepts the c
           }],
         }
       }
+      if (modelCalls === 3) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'select-real-html',
+            function: {
+              name: 'set_deliverables',
+              arguments: JSON.stringify({ artifact_ids: ['real-html-artifact'] }),
+            },
+          }],
+        }
+      }
       return { content: 'The real webpage is ready.', toolCalls: [] }
     },
   })
 
-  assert.equal(modelCalls, 3)
+  assert.equal(modelCalls, 4)
   assert.deepEqual(executions.map(({ name }) => name), ['create_html_app', 'create_html_app'])
   assert.deepEqual(result.artifactIds, ['real-html-artifact'])
+  assert.deepEqual(result.deliveryArtifactIds, ['real-html-artifact'])
   assert.equal(result.text, 'The real webpage is ready.')
 })
 
@@ -570,7 +674,13 @@ test('webpage slash skill does not require a docx for quarterly report content',
   let modelCalls = 0
   const prompt = '/webpage build a website for a quarterly report'
   const result = await runToolsLoop({
-    job: { id: 'webpage-quarterly-report', userId: 'intent-user', origin: 'chat', prompt },
+    job: {
+      id: 'webpage-quarterly-report',
+      userId: INTENT_ARTIFACT_USER_ID,
+      sessionId: INTENT_ARTIFACT_SESSION_ID,
+      origin: 'chat',
+      prompt,
+    },
     step: { id: 'webpage-quarterly-report', kind: 'chat' },
     messages: [{ role: 'user', content: prompt }],
     skillId: 'webpage',
@@ -579,7 +689,12 @@ test('webpage slash skill does not require a docx for quarterly report content',
     requestToolApproval: async ({ args }) => ({ proceed: true, args }),
     executeTool: async ({ name }) => {
       executions.push(name)
-      return { ok: true, artifactId: 'quarterly-html', filename: 'quarterly-report.html', url: '/api/artifacts/quarterly-report.html' }
+      return persistStubTurnArtifact({
+        turnId: 'webpage-quarterly-report',
+        id: 'quarterly-html',
+        filename: 'quarterly-report.html',
+        type: 'html',
+      })
     },
     runModel: async () => {
       modelCalls += 1
@@ -598,13 +713,26 @@ test('webpage slash skill does not require a docx for quarterly report content',
           }],
         }
       }
+      if (modelCalls === 2) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'select-quarterly-html',
+            function: {
+              name: 'set_deliverables',
+              arguments: JSON.stringify({ artifact_ids: ['quarterly-html'] }),
+            },
+          }],
+        }
+      }
       return { content: 'The quarterly report website is ready.', toolCalls: [] }
     },
   })
 
-  assert.equal(modelCalls, 2)
+  assert.equal(modelCalls, 3)
   assert.deepEqual(executions, ['create_html_app'])
   assert.deepEqual(result.artifactIds, ['quarterly-html'])
+  assert.deepEqual(result.deliveryArtifactIds, ['quarterly-html'])
   assert.equal(result.text, 'The quarterly report website is ready.')
 })
 
@@ -613,7 +741,13 @@ test('a multi-file request without a slash skill still requires every requested 
   let modelCalls = 0
   const prompt = 'Create a Word document and export an Excel spreadsheet'
   const result = await runToolsLoop({
-    job: { id: 'multi-artifact-request', userId: 'intent-user', origin: 'chat', prompt },
+    job: {
+      id: 'multi-artifact-request',
+      userId: INTENT_ARTIFACT_USER_ID,
+      sessionId: INTENT_ARTIFACT_SESSION_ID,
+      origin: 'chat',
+      prompt,
+    },
     step: { id: 'multi-artifact-request', kind: 'chat' },
     messages: [{ role: 'user', content: prompt }],
     toolSpecs: SERVER_TOOL_SPECS,
@@ -621,11 +755,13 @@ test('a multi-file request without a slash skill still requires every requested 
     requestToolApproval: async ({ args }) => ({ proceed: true, args }),
     executeTool: async ({ name }) => {
       executions.push(name)
-      return {
-        ok: true,
-        artifactId: `${name}-artifact`,
-        filename: name === 'create_docx' ? 'summary.docx' : 'summary.xlsx',
-      }
+      const filename = name === 'create_docx' ? 'summary.docx' : 'summary.xlsx'
+      return persistStubTurnArtifact({
+        turnId: 'multi-artifact-request',
+        id: `${name}-artifact`,
+        filename,
+        type: name === 'create_docx' ? 'docx' : 'xlsx',
+      })
     },
     runModel: async () => {
       modelCalls += 1
@@ -650,13 +786,28 @@ test('a multi-file request without a slash skill still requires every requested 
           ],
         }
       }
+      if (modelCalls === 2) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'select-multi-artifacts',
+            function: {
+              name: 'set_deliverables',
+              arguments: JSON.stringify({
+                artifact_ids: ['create_docx-artifact', 'create_xlsx-artifact'],
+              }),
+            },
+          }],
+        }
+      }
       return { content: 'Both files are ready.', toolCalls: [] }
     },
   })
 
-  assert.equal(modelCalls, 2)
+  assert.equal(modelCalls, 3)
   assert.deepEqual(executions.sort(), ['create_docx', 'create_xlsx'])
   assert.deepEqual(result.artifactIds.sort(), ['create_docx-artifact', 'create_xlsx-artifact'])
+  assert.deepEqual(result.deliveryArtifactIds.sort(), ['create_docx-artifact', 'create_xlsx-artifact'])
   assert.equal(result.text, 'Both files are ready.')
 })
 
@@ -689,7 +840,13 @@ test('an image artifact cannot satisfy a webpage delivery requirement', async ()
   let modelCalls = 0
   const prompt = '/webpage build a product page and also create a hero image'
   const result = await runToolsLoop({
-    job: { id: 'webpage-image-bypass', userId: 'intent-user', origin: 'chat', prompt },
+    job: {
+      id: 'webpage-image-bypass',
+      userId: INTENT_ARTIFACT_USER_ID,
+      sessionId: INTENT_ARTIFACT_SESSION_ID,
+      origin: 'chat',
+      prompt,
+    },
     step: { id: 'webpage-image-bypass', kind: 'chat' },
     messages: [{ role: 'user', content: prompt }],
     skillId: 'webpage',
@@ -700,8 +857,18 @@ test('an image artifact cannot satisfy a webpage delivery requirement', async ()
     executeTool: async ({ name }) => {
       executions.push(name)
       return name === 'generate_image'
-        ? { ok: true, artifactId: 'image-artifact', filename: 'hero.png', url: '/api/artifacts/hero.png' }
-        : { ok: true, artifactId: 'html-artifact', filename: 'product.html', url: '/api/artifacts/product.html' }
+        ? persistStubTurnArtifact({
+            turnId: 'webpage-image-bypass',
+            id: 'image-artifact',
+            filename: 'hero.png',
+            type: 'png',
+          })
+        : persistStubTurnArtifact({
+            turnId: 'webpage-image-bypass',
+            id: 'html-artifact',
+            filename: 'image-bypass-product.html',
+            type: 'html',
+          })
     },
     runModel: async ({ messages }) => {
       modelCalls += 1
@@ -725,12 +892,26 @@ test('an image artifact cannot satisfy a webpage delivery requirement', async ()
           }],
         }
       }
+      if (modelCalls === 4) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'select-image-and-html',
+            function: {
+              name: 'set_deliverables',
+              arguments: JSON.stringify({ artifact_ids: ['image-artifact', 'html-artifact'] }),
+            },
+          }],
+        }
+      }
       return { content: 'The real webpage is ready.', toolCalls: [] }
     },
   })
 
   assert.deepEqual(executions, ['generate_image', 'create_html_app'])
   assert.deepEqual(result.artifactIds, ['image-artifact', 'html-artifact'])
+  assert.deepEqual(result.deliveryArtifactIds, ['image-artifact', 'html-artifact'])
+  assert.equal(modelCalls, 5)
   assert.equal(result.text, 'The real webpage is ready.')
   assert.equal(deltas.join(''), 'The real webpage is ready.')
 })

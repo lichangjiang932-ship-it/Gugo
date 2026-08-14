@@ -201,6 +201,37 @@ test('server snapshot artifacts replace empty or partial local artifact lists', 
   }
 })
 
+test('an authoritative artifact change clears a stale local delivery when the snapshot omits the field', () => {
+  const draft = { id: 'draft', filename: 'draft.pdf', url: '/api/artifacts/draft' }
+  const final = { id: 'final', filename: 'final.pdf', url: '/api/artifacts/final' }
+  const local = [{
+    id: 'assistant-delivery',
+    role: 'assistant',
+    content: 'done',
+    meta: {
+      serverArtifacts: [draft],
+      serverDeliveryArtifactIds: ['draft'],
+    },
+  }]
+
+  const [changed] = mergeServerSessionMessages(local, [{
+    id: 'assistant-delivery',
+    role: 'assistant',
+    content: 'done',
+    meta: { serverAuthoritative: true, serverArtifacts: [draft, final] },
+  }])
+  assert.ok(Object.hasOwn(changed.meta, 'serverDeliveryArtifactIds'))
+  assert.deepEqual(changed.meta.serverDeliveryArtifactIds, [])
+
+  const [unchanged] = mergeServerSessionMessages(local, [{
+    id: 'assistant-delivery',
+    role: 'assistant',
+    content: 'done',
+    meta: { serverAuthoritative: true, serverArtifacts: [draft] },
+  }])
+  assert.deepEqual(unchanged.meta.serverDeliveryArtifactIds, ['draft'])
+})
+
 test('a paused server snapshot keeps its directory request when local streaming metadata is stale', () => {
   const clarification = {
     question: 'Please choose and authorize a directory so this task can continue.',

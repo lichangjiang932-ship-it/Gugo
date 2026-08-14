@@ -16,18 +16,15 @@ function renderTrace(calls) {
   )
 }
 
-test('ToolCallTrace renders an accessible summary and numbered running steps', () => {
+test('ToolCallTrace renders one lightweight accessible timeline without a visible title', () => {
   const markup = renderTrace([
     { id: 'read-1', name: 'read_file', arguments: '{"path":"D:/work/a.js"}', status: 'success' },
     { id: 'bash-1', name: 'bash_exec', arguments: '{"command":"npm test"}', status: 'running' },
   ])
 
-  assert.match(markup, /aria-expanded="true"/)
-  assert.match(markup, /aria-controls=/)
-  assert.match(markup, /执行过程/)
-  assert.match(markup, /进行中 · 1 步/)
-  assert.match(markup, />1<\/div>/)
-  assert.match(markup, />2<\/div>/)
+  assert.match(markup, /class="chat-run-timeline"/)
+  assert.doesNotMatch(markup, /chat-activity-title/)
+  assert.match(markup, /chat-tool-step-marker/)
   assert.equal((markup.match(/data-testid="tool-call-step"/g) || []).length, 2)
 })
 
@@ -36,7 +33,32 @@ test('ToolCallTrace omits empty and invalid call lists', () => {
   assert.equal(renderTrace(null), '')
 })
 
-test('ToolCallTrace opens for a newly added running step but respects a manual collapse', async () => {
+test('ToolCallTrace renders a terminal stopped step without a busy spinner', () => {
+  const markup = renderTrace([
+    { id: 'stopped-1', name: 'bash_exec', arguments: '{"command":"npm test"}', status: 'cancelled' },
+  ])
+
+  assert.match(markup, /data-status="cancelled"/)
+  assert.match(markup, /aria-busy="false"/)
+  assert.match(markup, /已停止/)
+  assert.doesNotMatch(markup, /animate-spin/)
+})
+
+test('ToolCallTrace renders a stopped Agent without an empty result disclosure', () => {
+  const markup = renderTrace([{
+    id: 'agent-stopped',
+    name: 'Agent',
+    arguments: '{"description":"Review files","subagent_type":"reviewer"}',
+    status: 'cancelled',
+  }])
+
+  assert.match(markup, /data-status="cancelled"/)
+  assert.match(markup, /已停止/)
+  assert.doesNotMatch(markup, /animate-spin/)
+  assert.doesNotMatch(markup, /子代理结果/)
+})
+
+test('ToolCallTrace keeps the latest six steps visible and can reveal older history', async () => {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
     url: 'http://localhost/chat',
   })
@@ -54,33 +76,32 @@ test('ToolCallTrace opens for a newly added running step but respects a manual c
   })
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
-  const renderCalls = async (calls) => act(async () => root.render(
-    <I18nProvider><ToolCallTrace calls={calls} /></I18nProvider>,
-  ))
 
   try {
-    const completed = [
-      { id: 'read-1', name: 'read_file', arguments: '{}', status: 'success' },
-    ]
-    await renderCalls(completed)
-    const summary = rootElement.querySelector('.chat-activity-summary')
-    assert.equal(summary.getAttribute('aria-expanded'), 'false')
+    const calls = Array.from({ length: 8 }, (_, index) => ({
+      id: `read-${index + 1}`,
+      name: 'read_file',
+      arguments: JSON.stringify({ path: `file-${index + 1}.txt` }),
+      status: index === 7 ? 'running' : 'success',
+    }))
+    await act(async () => root.render(
+      <I18nProvider><ToolCallTrace calls={calls} /></I18nProvider>,
+    ))
 
-    await renderCalls([
-      ...completed,
-      { id: 'bash-1', name: 'bash_exec', arguments: '{}', status: 'running' },
-    ])
-    assert.equal(summary.getAttribute('aria-expanded'), 'true')
+    const history = rootElement.querySelector('.chat-timeline-history')
+    assert.ok(history)
+    assert.equal(history.getAttribute('aria-expanded'), 'false')
+    assert.equal(rootElement.querySelectorAll('[data-testid="tool-call-step"]').length, 6)
+    assert.doesNotMatch(rootElement.textContent, /file-1\.txt/)
+    assert.match(rootElement.textContent, /file-8\.txt/)
 
-    await act(async () => summary.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
-    assert.equal(summary.getAttribute('aria-expanded'), 'false')
+    await act(async () => history.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.equal(history.getAttribute('aria-expanded'), 'true')
+    assert.equal(rootElement.querySelectorAll('[data-testid="tool-call-step"]').length, 8)
+    assert.match(rootElement.textContent, /file-1\.txt/)
 
-    await renderCalls([
-      ...completed,
-      { id: 'bash-1', name: 'bash_exec', arguments: '{}', status: 'running', liveOutput: 'still running' },
-      { id: 'write-1', name: 'write_file', arguments: '{}', status: 'running' },
-    ])
-    assert.equal(summary.getAttribute('aria-expanded'), 'false')
+    await act(async () => history.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.equal(rootElement.querySelectorAll('[data-testid="tool-call-step"]').length, 6)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

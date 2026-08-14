@@ -476,6 +476,12 @@ html[data-density="loose"] {
   color: rgb(var(--color-ember-rgb));
 }
 
+.chat-tool-step[data-status="cancelled"] .chat-tool-step-marker {
+  border-color: rgb(var(--color-ink-rgb) / 0.18);
+  background: rgb(var(--color-ink-rgb) / 0.035);
+  color: rgb(var(--color-ink-fade-rgb));
+}
+
 .chat-tool-step-body {
   min-width: 0;
   padding-top: 0.08rem;
@@ -539,6 +545,10 @@ html[data-density="loose"] {
 
 .chat-tool-step[data-status="error"] .chat-tool-status {
   color: rgb(var(--color-ember-rgb));
+}
+
+.chat-tool-step[data-status="cancelled"] .chat-tool-status {
+  color: rgb(var(--color-ink-fade-rgb));
 }
 
 .chat-tool-authorization {
@@ -849,6 +859,253 @@ html[data-density="loose"] {
     animation-iteration-count: 1 !important;
     scroll-behavior: auto !important;
     transition-duration: 0.001ms !important;
+  }
+}
+
+/* Compact execution timeline: one durable trace for both streaming and completed turns. */
+.chat-run-timeline {
+  position: relative;
+  margin: 0.1rem 0 0.7rem;
+  color: rgb(var(--color-ink-soft-rgb));
+}
+
+.chat-timeline-history {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  min-height: 1.7rem;
+  margin: 0 0 0.15rem 1.12rem;
+  padding: 0 0.25rem;
+  color: rgb(var(--color-ink-fade-rgb));
+  font-size: 0.67rem;
+  transition: color 150ms ease;
+}
+
+.chat-timeline-history:hover {
+  color: rgb(var(--color-ink-rgb));
+}
+
+.chat-timeline-history svg {
+  transition: transform 150ms ease;
+}
+
+.chat-run-timeline .chat-tool-list {
+  position: relative;
+  overflow: visible;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.chat-run-timeline .chat-tool-list::before {
+  top: 0.85rem;
+  bottom: 0.85rem;
+  left: 0.43rem;
+  background: rgb(var(--color-ink-rgb) / 0.1);
+}
+
+.chat-run-timeline .chat-tool-step-motion + .chat-tool-step-motion {
+  border-top: 0;
+}
+
+.chat-run-timeline .chat-tool-step {
+  position: relative;
+  display: block;
+  padding: 0.3rem 0 0.3rem 1.18rem;
+}
+
+.chat-run-timeline .chat-tool-step::before {
+  position: absolute;
+  z-index: 1;
+  top: 0.87rem;
+  left: 0.27rem;
+  width: 0.34rem;
+  height: 0.34rem;
+  border: 1px solid rgb(var(--color-paper-rgb));
+  border-radius: 999px;
+  background: rgb(var(--color-ink-fade-rgb));
+  box-shadow: 0 0 0 2px rgb(var(--color-paper-rgb));
+  content: "";
+}
+
+.chat-run-timeline .chat-tool-step[data-status="success"]::before {
+  background: rgb(var(--color-cyan-rgb));
+}
+
+.chat-run-timeline .chat-tool-step[data-status="error"]::before {
+  background: rgb(var(--color-ember-rgb));
+}
+
+.chat-run-timeline .chat-tool-step[data-status="cancelled"]::before {
+  background: rgb(var(--color-ink-fade-rgb));
+}
+
+.chat-run-timeline .chat-tool-step[data-status="running"]::before {
+  background: rgb(var(--color-cyan-rgb));
+  animation: chat-timeline-pulse 1.45s ease-in-out infinite;
+}
+
+.chat-run-timeline .chat-tool-step-marker {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  margin: -1px;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.chat-run-timeline .chat-tool-step-body {
+  padding: 0;
+}
+
+.chat-run-timeline .chat-tool-step-header {
+  min-height: 1.45rem;
+  gap: 0.35rem;
+}
+
+.chat-run-timeline .chat-tool-icon {
+  width: 1rem;
+  height: 1rem;
+  border-radius: 0;
+  background: transparent;
+}
+
+.chat-run-timeline .chat-tool-label {
+  color: rgb(var(--color-ink-rgb));
+  font-size: 0.75rem;
+  font-weight: 620;
+}
+
+.chat-run-timeline .chat-tool-summary {
+  font-size: 0.68rem;
+}
+
+.chat-run-timeline .chat-tool-status {
+  font-size: 0.65rem;
+}
+
+.chat-run-timeline .chat-tool-details-row {
+  gap: 0.48rem;
+  margin-top: 0.16rem;
+}
+
+.chat-run-timeline .chat-tool-details {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.chat-run-timeline .chat-tool-details summary {
+  min-height: 1.15rem;
+  padding: 0;
+  font-size: 0.59rem;
+}
+
+.chat-run-timeline .chat-tool-details pre,
+.chat-run-timeline .chat-tool-live-output {
+  margin-top: 0.3rem;
+  border: 0;
+  border-left: 2px solid rgb(var(--color-ink-rgb) / 0.11);
+  border-radius: 0;
+  background: rgb(var(--color-ink-rgb) / 0.025);
+  padding: 0.42rem 0.55rem;
+}
+
+.chat-run-timeline .chat-tool-live-details {
+  min-width: 0;
+  margin-top: 0.16rem;
+  color: rgb(var(--color-ink-fade-rgb));
+  font-size: 0.62rem;
+}
+
+.chat-run-timeline .chat-tool-live-details summary {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.chat-run-timeline .chat-tool-live-details summary::-webkit-details-marker { display: none; }
+
+.chat-run-timeline .chat-tool-live-details summary svg {
+  width: 0.7rem;
+  height: 0.7rem;
+  flex: none;
+  transform: rotate(-90deg);
+  transition: transform 120ms ease;
+}
+
+.chat-run-timeline .chat-tool-live-details[open] summary svg { transform: rotate(0); }
+
+.chat-run-timeline .chat-tool-live-tail {
+  min-width: 0;
+  overflow: hidden;
+  color: rgb(var(--color-ink-soft-rgb));
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-activity-stream {
+  margin-bottom: 0.45rem;
+  padding: 0.12rem 0;
+  border: 0;
+  background: transparent;
+  font-size: 0.72rem;
+}
+
+.chat-thinking-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  min-height: 1.8rem;
+  margin: 0.05rem 0 0.4rem;
+  color: rgb(var(--color-ink-fade-rgb));
+  font-size: 0.72rem;
+}
+
+.chat-thinking-line svg {
+  color: rgb(var(--color-cyan-rgb));
+}
+
+.chat-timeline-history:focus-visible {
+  outline: 2px solid var(--color-ember);
+  outline-offset: 2px;
+}
+
+@keyframes chat-timeline-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px rgb(var(--color-paper-rgb)), 0 0 0 3px rgb(var(--color-cyan-rgb) / 0); }
+  50% { box-shadow: 0 0 0 2px rgb(var(--color-paper-rgb)), 0 0 0 5px rgb(var(--color-cyan-rgb) / 0.18); }
+}
+
+@media (max-width: 640px) {
+  .chat-run-timeline .chat-tool-list {
+    padding: 0;
+  }
+
+  .chat-run-timeline .chat-tool-list::before {
+    left: 0.43rem;
+  }
+
+  .chat-run-timeline .chat-tool-step-header {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .chat-run-timeline .chat-tool-summary {
+    grid-column: 1 / -1;
+    padding-left: 1.35rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-run-timeline .chat-tool-step[data-status="running"]::before,
+  .chat-thinking-line svg {
+    animation: none !important;
   }
 }
 

@@ -306,6 +306,26 @@ const BUILTIN_SPECS = {
       },
     },
   },
+  set_deliverables: {
+    type: 'function',
+    function: {
+      name: 'set_deliverables',
+      description: 'Select the persisted artifacts that are the final files delivered by this turn. Pass exact artifact IDs returned by earlier tool results. Each call replaces the previous selection; pass an empty array when the turn intentionally delivers no files.',
+      parameters: {
+        type: 'object',
+        properties: {
+          artifact_ids: {
+            type: 'array',
+            items: { type: 'string', minLength: 1 },
+            maxItems: 256,
+            uniqueItems: true,
+          },
+        },
+        required: ['artifact_ids'],
+        additionalProperties: false,
+      },
+    },
+  },
   rewind_files: {
     type: 'function',
     function: {
@@ -538,6 +558,7 @@ const BUILTIN_WRITE_LOCAL_TOOLS = new Set([
   'batch_rename',
   'file_download',
   'rewind_files',
+  'set_deliverables',
 ])
 const BUILTIN_EXEC_TOOLS = new Set(['bash_exec', 'run_command', 'media_transform', 'run_test', 'docker_exec', 'bash_background', 'process_kill'])
 const CODE_MODE_TOOLS = [
@@ -558,6 +579,7 @@ const CODE_MODE_TOOLS = [
   'docker_exec',
   'file_download',
   'git_write',
+  'set_deliverables',
   'reflect',
   'request_clarification',
   'Agent',
@@ -642,6 +664,17 @@ export function getToolMetadata(name, { args = {}, userId = null } = {}) {
   const dynamic = getDynamicTool(name, { userId })
   if (dynamic?.metadata) return dynamic.metadata
   if (!getBuiltinSpec(name)) return normalizeToolRiskMetadata(null, { origin: 'unknown' })
+  if (name === 'set_deliverables') {
+    return normalizeToolRiskMetadata({
+      riskClass: 'write_local',
+      requiresApproval: false,
+      isReadOnly: false,
+      isConcurrencySafe: false,
+      isIdempotent: true,
+      interruptBehavior: 'block',
+      isDestructive: false,
+    }, { origin: 'builtin' })
+  }
   const isReadOnly = name === 'bash_exec' || name === 'run_command'
     ? isReadOnlyShellCommand(args?.command ?? args?.cmd)
     : READ_ONLY_MODE_TOOLS.has(name)

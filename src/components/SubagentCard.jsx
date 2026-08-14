@@ -1,4 +1,4 @@
-import { Bot, ChevronDown, CheckCircle2, Loader2, XCircle } from 'lucide-react'
+import { Bot, ChevronDown, CheckCircle2, CircleStop, Loader2, XCircle } from 'lucide-react'
 import { useT } from '../i18n/I18nProvider.jsx'
 
 function parseJson(value, fallback = {}) {
@@ -25,6 +25,9 @@ export default function SubagentCard({ call, stepNumber }) {
   } else if (call.status === 'error') {
     StatusIcon = XCircle
     statusText = t('chatMessages.toolFailed')
+  } else if (call.status === 'cancelled') {
+    StatusIcon = CircleStop
+    statusText = t('chatMessages.toolStopped')
   }
 
   const resultValue = call.status === 'error'
@@ -50,7 +53,7 @@ export default function SubagentCard({ call, stepNumber }) {
             <summary><ChevronDown aria-hidden="true" /><span>{t('chatMessages.subagentPrompt')}</span></summary>
             <pre tabIndex="0">{formatValue(args.prompt, t('chatMessages.toolEmptyResult'))}</pre>
           </details>
-          {call.status !== 'running' && (
+          {(call.status === 'success' || call.status === 'error') && (
             <details className="chat-tool-details" open={call.status === 'error'}>
               <summary><ChevronDown aria-hidden="true" /><span>{t('chatMessages.subagentResult')}</span></summary>
               <pre tabIndex="0">{formatValue(resultValue, t('chatMessages.toolEmptyResult'))}</pre>

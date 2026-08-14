@@ -59,7 +59,8 @@ test('tool readiness is visible without a tool card and yields to the single dur
     const readiness = rootElement.querySelector('[data-testid="model-activity"]')
     assert.ok(readiness)
     assert.match(readiness.textContent, /正在准备运行 bash_exec/)
-    assert.equal(rootElement.querySelectorAll('.chat-activity-panel').length, 0)
+    assert.equal(rootElement.querySelectorAll('.chat-run-timeline').length, 0)
+    assert.equal(rootElement.querySelector('.animate-pulse'), null)
 
     await renderMessage({
       streaming: true,
@@ -74,8 +75,9 @@ test('tool readiness is visible without a tool card and yields to the single dur
     })
 
     assert.equal(rootElement.querySelector('[data-testid="model-activity"]'), null)
-    assert.equal(rootElement.querySelectorAll('.chat-activity-panel').length, 1)
+    assert.equal(rootElement.querySelectorAll('.chat-run-timeline').length, 1)
     assert.equal(rootElement.querySelectorAll('.chat-tool-list > *').length, 1)
+    assert.equal(rootElement.querySelector('.animate-pulse'), null)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
@@ -126,10 +128,6 @@ test('a persisted file owned by a tool call opens from the execution step summar
       </I18nProvider>,
     ))
 
-    const executionToggle = rootElement.querySelector('.chat-activity-summary')
-    assert.ok(executionToggle)
-    await act(async () => executionToggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
-
     const fileButton = rootElement.querySelector('[data-testid="tool-summary-open"]')
     assert.ok(fileButton)
     assert.match(fileButton.textContent, /inspect_pdf\.py/)
@@ -144,6 +142,82 @@ test('a persisted file owned by a tool call opens from the execution step summar
       mimeType: 'text/x-python',
       url: '/api/artifacts/script-artifact-1',
     })
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('intermediate files stay available in execution steps while only final deliverables appear below', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const opened = []
+  const calls = [
+    ['draft', 'draft.py'],
+    ['preview', 'preview.png'],
+    ['final', 'report.pdf'],
+  ].map(([id, filename]) => ({
+    id: `write-${id}`,
+    name: 'write_file',
+    arguments: JSON.stringify({ path: `D:\\work\\${filename}` }),
+    result: JSON.stringify({ ok: true, artifactId: id }),
+    status: 'success',
+    textOffset: 0,
+  }))
+  const serverArtifacts = calls.map((call, index) => ({
+    id: ['draft', 'preview', 'final'][index],
+    toolCallId: call.id,
+    filename: ['draft.py', 'preview.png', 'report.pdf'][index],
+    type: 'file',
+    url: `/api/artifacts/${['draft', 'preview', 'final'][index]}`,
+  }))
+  const baseMessage = {
+    id: 'assistant-delivery-filter',
+    role: 'assistant',
+    content: 'Task completed.',
+    timestamp: Date.now(),
+    meta: {
+      toolCalls: calls,
+      serverArtifacts,
+      serverDeliveryArtifactIds: ['final'],
+    },
+  }
+
+  const renderMessage = async (msg) => act(async () => root.render(
+    <I18nProvider>
+      <MessageRow
+        msg={msg}
+        rowKey={msg.id}
+        generatingMessageId=""
+        lang="en"
+        onOpenArtifact={(artifact) => opened.push(artifact)}
+        t={(key) => key}
+      />
+    </I18nProvider>,
+  ))
+
+  try {
+    await renderMessage(baseMessage)
+    const stepFiles = [...rootElement.querySelectorAll('[data-testid="tool-summary-open"]')]
+    assert.deepEqual(
+      stepFiles.map((button) => button.textContent.trim().split(/[\\/]/).pop()),
+      ['draft.py', 'preview.png', 'report.pdf'],
+    )
+    const deliveries = [...rootElement.querySelectorAll('[data-testid="artifact-open-card"]')]
+    assert.equal(deliveries.length, 1)
+    assert.match(deliveries[0].textContent, /report\.pdf/)
+    assert.doesNotMatch(deliveries[0].textContent, /draft\.py|preview\.png/)
+
+    await act(async () => stepFiles[0].dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.equal(opened[0].directFile.filename, 'draft.py')
+
+    await renderMessage({
+      ...baseMessage,
+      meta: { ...baseMessage.meta, serverDeliveryArtifactIds: [] },
+    })
+    assert.equal(rootElement.querySelectorAll('[data-testid="artifact-open-card"]').length, 0)
+    assert.equal(rootElement.querySelectorAll('[data-testid="tool-summary-open"]').length, 3)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

@@ -34,7 +34,7 @@ test('pure reasoning keeps a compact status and never exposes raw text', () => {
   assert.doesNotMatch(markup, /secret chain of thought/)
 })
 
-test('tool activity renders interleaved text lines with a live output tail', () => {
+test('running tool activity is rendered only by the durable tool timeline', () => {
   const markup = render({
     meta: {
       streaming: true,
@@ -44,14 +44,10 @@ test('tool activity renders interleaved text lines with a live output tail', () 
       ],
     },
   })
-  assert.match(markup, /chat-activity-stream/)
-  assert.match(markup, /D:\/work\/a\.js/)
-  assert.match(markup, /npm test/)
-  assert.match(markup, /data-testid="activity-live-output"/)
-  assert.match(markup, /2 passing/)
+  assert.equal(markup, '')
 })
 
-test('failed calls surface an error-styled line', () => {
+test('completed tool details are not duplicated while the model continues', () => {
   const markup = render({
     meta: {
       streaming: true,
@@ -60,8 +56,8 @@ test('failed calls surface an error-styled line', () => {
       ],
     },
   })
-  assert.match(markup, /chat-activity-line-error/)
-  assert.match(markup, /npm test/)
+  assert.match(markup, /data-testid="model-activity"/)
+  assert.doesNotMatch(markup, /npm test/)
 })
 
 test('provider fallback renders a retry/switch notice line', () => {
@@ -85,4 +81,17 @@ test('absent fallback metadata renders no fallback line', () => {
     meta: { streaming: true, modelActivity: { kind: 'tool_call_ready', toolName: 'bash_exec' }, toolCalls: [] },
   })
   assert.doesNotMatch(markup, /data-testid="model-fallback"/)
+})
+
+test('reconnection status overrides a stale running tool state', () => {
+  const markup = render({
+    meta: {
+      streaming: true,
+      serverConnectionState: 'reconnecting',
+      modelActivity: { kind: 'model' },
+      toolCalls: [{ id: 'bash-1', name: 'bash_exec', status: 'running' }],
+    },
+  })
+  assert.match(markup, /data-testid="model-activity"/)
+  assert.match(markup, /正在重连/)
 })

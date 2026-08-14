@@ -129,25 +129,32 @@ test('重复调用熔断不受影响', () => {
   assert.equal(fourth.result.code, 'repeated_tool_call')
 })
 
-test('同一工具不断更换错误参数也会被判定为无进展', () => {
-  const guard = createToolLoopGuard({ maxSameToolFailures: 3, maxConsecutiveErrors: 99 })
-  for (let index = 0; index < 2; index += 1) {
+test('同一工具不断更换错误参数会触发分级策略提示而非低阈值熔断', () => {
+  const guard = createToolLoopGuard({
+    maxSameToolFailures: 20,
+    maxConsecutiveErrors: 99,
+    sameToolFailureAdvisoryThresholds: [3, 5, 8],
+  })
+  const advisories = []
+  for (let index = 0; index < 8; index += 1) {
     const verdict = guard.afterCall(
       { name: 'read_file', args: { path: `missing-${index}.txt` } },
       { ok: false, error: 'ENOENT' },
     )
     assert.equal(verdict.ok, true)
+    if (verdict.advisory) advisories.push(verdict.advisory)
   }
-  const stopped = guard.afterCall(
-    { name: 'read_file', args: { path: 'missing-final.txt' } },
-    { ok: false, error: 'ENOENT' },
-  )
-  assert.equal(stopped.ok, false)
-  assert.match(stopped.reason, /read_file/)
+  assert.deepEqual(advisories.map((item) => item.level), [1, 2, 3])
+  assert.deepEqual(advisories.map((item) => item.count), [3, 5, 8])
+  assert.equal(advisories.every((item) => item.code === 'tool_failure_strategy_required'), true)
 })
 
 test('跨参数熔断不抢占小模型的参数自纠错预算且真实成功会重置计数', () => {
-  const guard = createToolLoopGuard({ maxSameToolFailures: 3, maxAuthoringErrors: 20 })
+  const guard = createToolLoopGuard({
+    maxSameToolFailures: 20,
+    maxAuthoringErrors: 20,
+    sameToolFailureAdvisoryThresholds: [2],
+  })
   for (let index = 0; index < 10; index += 1) {
     assert.equal(guard.afterCall(
       { name: 'read_file', args: { path: `attempt-${index}` } },
@@ -155,12 +162,20 @@ test('跨参数熔断不抢占小模型的参数自纠错预算且真实成功�
     ).ok, true)
   }
   guard.afterCall({ name: 'read_file', args: { path: 'missing-a' } }, { ok: false, error: 'ENOENT' })
-  guard.afterCall({ name: 'read_file', args: { path: 'missing-b' } }, { ok: false, error: 'ENOENT' })
+  assert.equal(
+    guard.afterCall(
+      { name: 'read_file', args: { path: 'missing-b' } },
+      { ok: false, error: 'ENOENT' },
+    ).advisory.level,
+    1,
+  )
   assert.equal(guard.afterCall({ name: 'read_file', args: { path: 'found.txt' } }, { ok: true, data: [] }).ok, true)
   assert.equal(guard.afterCall(
     { name: 'read_file', args: { path: 'missing-c' } },
     { ok: false, error: 'ENOENT' },
   ).ok, true, 'a successful result from the same tool must reset its stale failure count')
+  assert.deepEqual(guard.snapshot().failedTools, { read_file: 1 })
+  assert.deepEqual(guard.snapshot().pendingToolAdvisoryThresholds, {})
 })
 
 /* ------------------------------------------------------------------ *
@@ -351,32 +366,244 @@ test('编号步骤要求直接执行，且无工具证据时不能接受模型�
   assert.match(result.text, /尚未完成|实际执行结果/)
 })
 
-test('不同参数反复失败会快速收尾并保留最终回复', async () => {
+test('同一工具低次数失败会收到策略提示并允许后续方案成功', async () => {
   const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
-  let calls = 0
+  const listDirectory = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'list_directory')
+  let modelCalls = 0
+  let readAttempts = 0
+  let alternateStrategySucceeded = false
+  let advisorySeenByModel = false
+  let advisoryCheckpointed = false
   const result = await runToolsLoop({
     job: { id: 'job-changing-arguments', userId: null, origin: 'chat', prompt: '读取目标文件' },
     step: { id: 'step-changing-arguments', kind: 'chat' },
     messages: [{ role: 'user', content: '读取目标文件' }],
-    toolSpecs: [readFile],
+    toolSpecs: [readFile, listDirectory],
     maxIters: 20,
     enableToolHooks: false,
-    runModel: async ({ toolChoice }) => {
-      calls += 1
-      if (toolChoice === 'none') return { content: '未找到文件；请确认唯一的文件名。', toolCalls: [] }
+    saveCheckpoint: async (checkpoint) => {
+      const systemText = checkpoint.messages
+        .filter((item) => item.role === 'system')
+        .map((item) => item.content)
+        .join('\n')
+      if (systemText.includes('[TOOL FAILURE STRATEGY REQUIRED]')) {
+        advisoryCheckpointed = true
+      }
+      return true
+    },
+    runModel: async ({ messages }) => {
+      modelCalls += 1
+      const systemText = messages
+        .filter((item) => item.role === 'system')
+        .map((item) => item.content)
+        .join('\n')
+      advisorySeenByModel ||= systemText.includes('[TOOL FAILURE STRATEGY REQUIRED]')
+      if (alternateStrategySucceeded) {
+        return { content: '已改用目录枚举并找到 target.txt。', toolCalls: [] }
+      }
+      if (advisorySeenByModel) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'list-after-advisory',
+            type: 'function',
+            function: { name: 'list_directory', arguments: JSON.stringify({ path: '.' }) },
+          }],
+        }
+      }
       return {
         content: '',
         toolCalls: [{
-          id: `read-${calls}`,
+          id: `read-${modelCalls}`,
           type: 'function',
-          function: { name: 'read_file', arguments: JSON.stringify({ path: `missing-${calls}.txt` }) },
+          function: { name: 'read_file', arguments: JSON.stringify({ path: `missing-${modelCalls}.txt` }) },
         }],
       }
     },
-    executeTool: async () => ({ ok: false, code: 'ENOENT', error: 'not found' }),
+    executeTool: async ({ name }) => {
+      if (name === 'list_directory') {
+        alternateStrategySucceeded = true
+        return { ok: true, data: ['target.txt'] }
+      }
+      readAttempts += 1
+      return { ok: false, code: 'ENOENT', error: 'not found' }
+    },
   })
+  assert.equal(result.noProgress, undefined)
+  assert.equal(result.incomplete, undefined)
+  assert.equal(result.text, '已改用目录枚举并找到 target.txt。')
+  assert.equal(readAttempts, 4)
+  assert.equal(alternateStrategySucceeded, true)
+  assert.equal(advisorySeenByModel, true)
+  assert.equal(advisoryCheckpointed, true)
+})
+
+test('pending 策略提示在 checkpoint 中断后恢复且不会重放已完成工具', async () => {
+  const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
+  const listDirectory = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'list_directory')
+  const job = {
+    id: 'job-advisory-checkpoint-resume',
+    userId: null,
+    origin: 'chat',
+    prompt: '读取目标文件',
+  }
+  const step = { id: 'step-advisory-checkpoint-resume', kind: 'chat' }
+  const messages = [{ role: 'user', content: '读取目标文件' }]
+  let interruptedCheckpoint = null
+  let initialModelCalls = 0
+  let initialReadExecutions = 0
+
+  await assert.rejects(
+    runToolsLoop({
+      job,
+      step,
+      messages,
+      toolSpecs: [readFile, listDirectory],
+      maxIters: 20,
+      enableToolHooks: false,
+      runModel: async () => {
+        initialModelCalls += 1
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'crash-read-' + initialModelCalls,
+            type: 'function',
+            function: {
+              name: 'read_file',
+              arguments: JSON.stringify({ path: 'missing-' + initialModelCalls + '.txt' }),
+            },
+          }],
+        }
+      },
+      executeTool: async () => {
+        initialReadExecutions += 1
+        return { ok: false, code: 'ENOENT', error: 'not found' }
+      },
+      saveCheckpoint: async (checkpoint) => {
+        const hasAdvisoryMessage = checkpoint.messages.some((item) => (
+          item.role === 'system'
+            && String(item.content || '').includes('[TOOL FAILURE STRATEGY REQUIRED]')
+        ))
+        if (checkpoint.loopGuard?.pendingToolAdvisoryThresholds?.read_file === 4
+          && !hasAdvisoryMessage) {
+          interruptedCheckpoint = JSON.parse(JSON.stringify(checkpoint))
+          throw new Error('simulated advisory checkpoint interruption')
+        }
+        return true
+      },
+    }),
+    /simulated advisory checkpoint interruption/,
+  )
+
+  assert.equal(initialReadExecutions, 4)
+  assert.equal(interruptedCheckpoint.loopGuard.pendingToolAdvisoryThresholds.read_file, 4)
+  assert.deepEqual(interruptedCheckpoint.loopGuard.firedToolAdvisoryThresholds, {})
+  assert.equal(interruptedCheckpoint.toolCalls[0].checkpointStatus, 'completed')
+
+  let resumedReadExecutions = 0
+  let directoryExecutions = 0
+  let maxAdvisoryMessagesSeen = 0
+  let finalCheckpoint = null
+  const result = await runToolsLoop({
+    job: { ...job },
+    step,
+    messages,
+    toolSpecs: [readFile, listDirectory],
+    maxIters: 20,
+    enableToolHooks: false,
+    loadCheckpoint: async () => interruptedCheckpoint,
+    saveCheckpoint: async (checkpoint) => {
+      finalCheckpoint = JSON.parse(JSON.stringify(checkpoint))
+      return true
+    },
+    runModel: async ({ messages: modelMessages }) => {
+      const advisoryCount = modelMessages.filter((item) => (
+        item.role === 'system'
+          && String(item.content || '').includes('[TOOL FAILURE STRATEGY REQUIRED]')
+      )).length
+      maxAdvisoryMessagesSeen = Math.max(maxAdvisoryMessagesSeen, advisoryCount)
+      if (directoryExecutions === 0) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'resume-list',
+            type: 'function',
+            function: { name: 'list_directory', arguments: JSON.stringify({ path: '.' }) },
+          }],
+        }
+      }
+      return { content: '恢复后改用目录枚举并找到 target.txt。', toolCalls: [] }
+    },
+    executeTool: async ({ name }) => {
+      if (name === 'read_file') {
+        resumedReadExecutions += 1
+        return { ok: false, code: 'ENOENT', error: 'must not replay' }
+      }
+      directoryExecutions += 1
+      return { ok: true, data: ['target.txt'] }
+    },
+  })
+
+  assert.equal(result.text, '恢复后改用目录枚举并找到 target.txt。')
+  assert.equal(resumedReadExecutions, 0)
+  assert.equal(directoryExecutions, 1)
+  assert.equal(maxAdvisoryMessagesSeen, 1)
+  assert.deepEqual(finalCheckpoint.loopGuard.firedToolAdvisoryThresholds, { read_file: 4 })
+  assert.deepEqual(finalCheckpoint.loopGuard.pendingToolAdvisoryThresholds, {})
+  assert.equal(finalCheckpoint.messages.filter((item) => (
+    item.role === 'system'
+      && String(item.content || '').includes('[TOOL FAILURE STRATEGY REQUIRED]')
+  )).length, 1)
+})
+
+test('运行时在第 20 次同工具失败后保留硬上限机器码', async () => {
+  const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
+  const job = {
+    id: 'job-same-tool-hard-limit',
+    userId: null,
+    origin: 'chat',
+    prompt: '读取目标文件',
+  }
+  let modelToolRounds = 0
+  let executions = 0
+  let finalCheckpointCode = null
+  const result = await runToolsLoop({
+    job,
+    step: { id: 'step-same-tool-hard-limit', kind: 'chat' },
+    messages: [{ role: 'user', content: '读取目标文件' }],
+    toolSpecs: [readFile],
+    maxIters: 25,
+    enableToolHooks: false,
+    saveCheckpoint: async (checkpoint) => {
+      if (checkpoint.final?.code) finalCheckpointCode = checkpoint.final.code
+      return true
+    },
+    runModel: async ({ toolChoice }) => {
+      if (toolChoice === 'none') {
+        return { content: '已达到工具失败硬上限。', toolCalls: [] }
+      }
+      modelToolRounds += 1
+      return {
+        content: '',
+        toolCalls: [{
+          id: 'hard-limit-read-' + modelToolRounds,
+          type: 'function',
+          function: {
+            name: 'read_file',
+            arguments: JSON.stringify({ path: 'missing-' + modelToolRounds + '.txt' }),
+          },
+        }],
+      }
+    },
+    executeTool: async () => {
+      executions += 1
+      return { ok: false, code: 'ENOENT', error: 'not found' }
+    },
+  })
+
+  assert.equal(executions, 20)
+  assert.equal(modelToolRounds, 20)
   assert.equal(result.noProgress, true)
-  assert.equal(result.incomplete, true)
-  assert.equal(result.text, '未找到文件；请确认唯一的文件名。')
-  assert.equal(calls, 5, '四次失败后只允许一次无工具收尾调用')
+  assert.equal(result.code, 'tool_no_progress_hard_limit')
+  assert.equal(finalCheckpointCode, 'tool_no_progress_hard_limit')
 })

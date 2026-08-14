@@ -45,6 +45,19 @@ export function needsServerSessionSnapshot(session, hydratedRevision) {
     && hydratedRevision !== session.serverRevision
 }
 
+function normalizedArtifactIds(artifacts) {
+  return [...new Set((Array.isArray(artifacts) ? artifacts : [])
+    .map((artifact) => String(artifact?.id || '').trim())
+    .filter(Boolean))].sort()
+}
+
+function sameArtifactCollection(left, right) {
+  const leftIds = normalizedArtifactIds(left)
+  const rightIds = normalizedArtifactIds(right)
+  return leftIds.length === rightIds.length
+    && leftIds.every((id, index) => id === rightIds[index])
+}
+
 export function mergeServerSessionMessages(localMessages, serverMessages) {
   const localById = new Map(
     (Array.isArray(localMessages) ? localMessages : [])
@@ -88,6 +101,18 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
         // empty or partial list left behind by a missed live tool event.
         if (Object.hasOwn(serverMeta, 'serverArtifacts')) {
           merged.meta.serverArtifacts = serverMeta.serverArtifacts
+        }
+        if (Object.hasOwn(serverMeta, 'serverDeliveryArtifactIds')) {
+          merged.meta.serverDeliveryArtifactIds = serverMeta.serverDeliveryArtifactIds
+        } else if (!recoveryStub
+          && Object.hasOwn(serverMeta, 'serverArtifacts')
+          && Object.hasOwn(localMeta, 'serverDeliveryArtifactIds')
+          && !sameArtifactCollection(localMeta.serverArtifacts, serverMeta.serverArtifacts)) {
+          // A delivery selection is valid only for the artifact collection it
+          // was made against. If an authoritative snapshot exposes a different
+          // collection but predates the delivery field, retaining the local
+          // IDs can revive a draft that the current turn already invalidated.
+          merged.meta.serverDeliveryArtifactIds = []
         }
 
         const serverPauseSequence = Number.isInteger(serverMeta.serverLastSequence)

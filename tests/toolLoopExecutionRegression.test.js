@@ -9,6 +9,9 @@ import { parseModelProviderResponse } from '../server/adapters/modelProviderResp
 const { runToolsLoop, SERVER_TOOL_SPECS } = await import('../server/services/jobTools.js')
 const { registerDynamicTool, unregisterDynamicTool } = await import('../server/services/toolRegistry.js')
 const { createJobBudget } = await import('../server/utils/jobBudget.js')
+const { createUser, getDb } = await import('../server/db.js')
+const { upsertSession } = await import('../server/services/sessionStore.js')
+const { appendTurnArtifact } = await import('../server/services/turnArtifactStore.js')
 
 test('output-truncated tool calls are paired but never executed and are regenerated', async () => {
   const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
@@ -407,7 +410,10 @@ test('a malformed search cannot turn available execution tools into a fake clari
     runModel: async ({ messages, tools }) => {
       modelCalls += 1
       observedRequests.push(structuredClone(messages))
-      assert.deepEqual(tools.map((item) => item.function.name).sort(), [...names].sort())
+      assert.deepEqual(
+        tools.map((item) => item.function.name).sort(),
+        [...names, 'set_deliverables'].sort(),
+      )
       if (modelCalls === 1) {
         const systemText = messages.filter((item) => item.role === 'system').map((item) => item.content).join('\n')
         assert.match(systemText, /\[AVAILABLE TOOL CAPABILITIES\]/)
@@ -767,17 +773,35 @@ test('capability-denial clarifications are checked outside direct-execution turn
   assert.equal(result.text, 'The listed tools support file and script-based document workflows.')
 })
 
-test('artifact delivery rejects a fake missing-capability clarification and continues to generation', async () => {
+test('artifact delivery rejects a fake missing-capability clarification and continues to generation', async (t) => {
   const createPptx = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'create_pptx')
   const clarification = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'request_clarification')
+  const setDeliverables = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'set_deliverables')
+  const userId = 'artifact-capability-user'
+  const sessionId = 'artifact-capability-session'
+  const artifactId = 'pptx-artifact-1'
+  const artifactFilename = 'artifact-capability-q3-strategy.pptx'
+  const db = getDb()
+  db.prepare('DELETE FROM turn_artifacts WHERE id = ? OR filename = ?').run(artifactId, artifactFilename)
+  createUser({ id: userId, email: 'artifact-capability@example.com' })
+  upsertSession({ id: sessionId, userId, title: 'Artifact capability regression' })
+  t.after(() => {
+    db.prepare('DELETE FROM users WHERE id = ?').run(userId)
+  })
   let modelCalls = 0
   let generatorCalls = 0
   const result = await runToolsLoop({
-    job: { id: 'artifact-capability-job', userId: null, origin: 'chat', prompt: '/ppt Q3 strategy' },
+    job: {
+      id: 'artifact-capability-job',
+      userId,
+      sessionId,
+      origin: 'chat',
+      prompt: '/ppt Q3 strategy',
+    },
     step: { id: 'artifact-capability-step', kind: 'chat' },
     messages: [{ role: 'user', content: '/ppt Q3 strategy' }],
     skillId: 'ppt',
-    toolSpecs: [createPptx, clarification],
+    toolSpecs: [createPptx, clarification, setDeliverables],
     maxIters: 5,
     enableToolHooks: false,
     runModel: async ({ messages }) => {
@@ -816,19 +840,43 @@ test('artifact delivery rejects a fake missing-capability clarification and cont
           }],
         }
       }
+      if (modelCalls === 3) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'select-real-pptx',
+            type: 'function',
+            function: {
+              name: 'set_deliverables',
+              arguments: JSON.stringify({ artifact_ids: [artifactId] }),
+            },
+          }],
+        }
+      }
       return { content: 'The presentation was created.', toolCalls: [] }
     },
     executeTool: async ({ name }) => {
       assert.equal(name, 'create_pptx')
       generatorCalls += 1
-      return { ok: true, artifactId: 'pptx-artifact-1' }
+      appendTurnArtifact({
+        id: artifactId,
+        userId,
+        sessionId,
+        turnId: 'artifact-capability-job',
+        type: 'pptx',
+        title: 'Q3 strategy',
+        url: `/api/artifacts/${artifactFilename}`,
+        filename: artifactFilename,
+      })
+      return { ok: true, artifactId }
     },
   })
 
-  assert.equal(modelCalls, 3)
+  assert.equal(modelCalls, 4)
   assert.equal(generatorCalls, 1)
   assert.equal(result.paused, undefined)
-  assert.deepEqual(result.artifactIds, ['pptx-artifact-1'])
+  assert.deepEqual(result.artifactIds, [artifactId])
+  assert.deepEqual(result.deliveryArtifactIds, [artifactId])
 })
 
 test('a real execution failure still allows a specific clarification', async () => {
@@ -1414,7 +1462,7 @@ test('already-authorized read-write directory refreshes the active tool schema w
       modelToolNames.push(names)
 
       if (modelCalls === 1) {
-        assert.deepEqual(names, [...initialNames].sort())
+        assert.deepEqual(names, [...initialNames, 'set_deliverables'].sort())
         for (const unavailable of ['write_file', 'edit_file', 'bash_exec', 'run_command']) {
           assert.equal(names.includes(unavailable), false, unavailable)
         }
@@ -1443,6 +1491,7 @@ test('already-authorized read-write directory refreshes the active tool schema w
           'read_file',
           'request_directory',
           'run_command',
+          'set_deliverables',
           'write_file',
         ])
         const authorizationResult = JSON.parse(messages.findLast((item) => item.role === 'tool').content)

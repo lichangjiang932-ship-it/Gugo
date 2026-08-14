@@ -12,7 +12,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { buildMessageArtifactPreview, normalizeArtifactReferenceType } from '../../lib/artifactReferences.js'
+import { buildMessageArtifactPreview, normalizeArtifactReferenceType, resolveDeliveryArtifacts } from '../../lib/artifactReferences.js'
 import { runWorkbenchTerminal } from '../../lib/workbenchClient.js'
 import { useT } from '../../i18n/I18nProvider.jsx'
 import { withDownloadToken } from '../../lib/jobClient.js'
@@ -39,9 +39,10 @@ function readStoredWidth() {
 
 function collectArtifacts(messages) {
   return messages.flatMap((message, index) => {
-    if (message?.role !== 'assistant') return []
-    const direct = Array.isArray(message?.meta?.serverArtifacts)
-      ? message.meta.serverArtifacts.map((artifact) => ({
+    if (message?.role !== 'assistant' || message?.meta?.streaming) return []
+    const deliveryArtifacts = resolveDeliveryArtifacts(message?.meta)
+    const direct = deliveryArtifacts.length > 0
+      ? deliveryArtifacts.map((artifact) => ({
           ...artifact,
           id: artifact.id || `${message.id || index}-${artifact.url}`,
           messageId: message.id,

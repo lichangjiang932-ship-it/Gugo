@@ -69,6 +69,94 @@ test('TurnEngine emits every artifact produced by one completed local tool call'
   assert.equal(completed.payload.artifactId, 'local-pdf-1')
 })
 
+test('TurnEngine preserves explicit empty delivery ids through checkpoint, model context, and completion', async () => {
+  const turnId = 'turn-explicit-empty-delivery'
+  const artifactIds = ['draft-artifact', 'final-artifact']
+  const engine = createTestEngine({
+    runLoop: async ({ saveCheckpoint }) => {
+      await saveCheckpoint({
+        messages: [],
+        artifactIds,
+        deliveryArtifactIds: [],
+        iterations: 1,
+      })
+      return {
+        text: 'The turn intentionally delivers no files.',
+        artifactIds,
+        deliveryArtifactIds: [],
+        iterations: 1,
+      }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'Finish without delivering a file.',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const turnEvents = events(turnId)
+  const checkpoint = turnEvents.find((event) => event.type === 'turn.checkpoint')
+  const completed = turnEvents.find((event) => event.type === 'turn.completed')
+  assert.ok(Object.hasOwn(checkpoint.payload.state, 'deliveryArtifactIds'))
+  assert.deepEqual(checkpoint.payload.state.deliveryArtifactIds, [])
+  assert.ok(Object.hasOwn(completed.payload, 'deliveryArtifactIds'))
+  assert.deepEqual(completed.payload.deliveryArtifactIds, [])
+
+  const assistant = listMessages({ userId, sessionId: 'turn-engine-session' })
+    .find((message) => message.id === `${turnId}:assistant`)
+  assert.ok(Object.hasOwn(assistant.modelContext, 'deliveryArtifactIds'))
+  assert.deepEqual(assistant.modelContext.deliveryArtifactIds, [])
+  assert.deepEqual(assistant.modelContext.artifactIds, artifactIds)
+})
+
+test('TurnEngine clears a stale delivery fallback when a legacy checkpoint adds artifacts without the field', async () => {
+  const turnId = 'turn-stale-delivery-cleared'
+  const engine = createTestEngine({
+    runLoop: async ({ saveCheckpoint }) => {
+      await saveCheckpoint({
+        messages: [],
+        artifactIds: ['draft-artifact'],
+        deliveryArtifactIds: ['draft-artifact'],
+        iterations: 1,
+      })
+      await saveCheckpoint({
+        messages: [],
+        artifactIds: ['draft-artifact', 'new-artifact'],
+        iterations: 2,
+      })
+      return {
+        interrupted: true,
+        code: 'MODEL_HTTP_503',
+        reason: 'provider interrupted after producing a newer artifact',
+        artifactIds: ['draft-artifact', 'new-artifact'],
+        iterations: 2,
+      }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'Create and deliver the final file.',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const interrupted = events(turnId).find((event) => event.type === 'turn.interrupted')
+  assert.ok(interrupted)
+  assert.ok(Object.hasOwn(interrupted.payload, 'deliveryArtifactIds'))
+  assert.deepEqual(interrupted.payload.deliveryArtifactIds, [])
+
+  const assistant = listMessages({ userId, sessionId: 'turn-engine-session' })
+    .find((message) => message.id === `${turnId}:assistant`)
+  assert.ok(Object.hasOwn(assistant.modelContext, 'deliveryArtifactIds'))
+  assert.deepEqual(assistant.modelContext.deliveryArtifactIds, [])
+  assert.deepEqual(assistant.modelContext.artifactIds, ['draft-artifact', 'new-artifact'])
+})
+
 test('TurnEngine rejects more than 32 attachments instead of silently dropping files', async () => {
   const engine = createTestEngine({ runLoop: async () => ({ text: 'must not run' }) })
   await assert.rejects(
@@ -1229,7 +1317,10 @@ test('TurnEngine aborts an active model request with an explicit cancelled event
   await waitUntil(() => events('turn-cancel').some((event) => event.type === 'model.phase'))
   await engine.cancelTurn({ userId, sessionId: 'turn-engine-session', turnId: 'turn-cancel' })
   await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId: 'turn-cancel' })
-  assert.equal(events('turn-cancel').at(-1).type, 'turn.cancelled')
+  const cancelled = events('turn-cancel').at(-1)
+  assert.equal(cancelled.type, 'turn.cancelled')
+  assert.deepEqual(cancelled.payload.artifactIds, [])
+  assert.deepEqual(cancelled.payload.deliveryArtifactIds, [])
 })
 
 test('TurnEngine treats an internal AbortError as a structured failure and persists evidence', async () => {

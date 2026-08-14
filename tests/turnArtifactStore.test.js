@@ -12,7 +12,7 @@ const { closeDb, createUser } = await import('../server/db.js')
 const { TurnEngine } = await import('../server/services/TurnEngine.js')
 const { setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
 const { getSessionSnapshot, upsertSession } = await import('../server/services/sessionStore.js')
-const { getTurnArtifactByFilename, listTurnArtifacts } = await import('../server/services/turnArtifactStore.js')
+const { appendTurnArtifact, getTurnArtifactByFilename, listTurnArtifacts } = await import('../server/services/turnArtifactStore.js')
 const {
   persistLocalToolArtifacts,
   runToolsLoop,
@@ -115,8 +115,12 @@ test('archive_create publishes its ZIP as a downloadable turn artifact', async (
   const archiveList = SERVER_TOOL_SPECS.find((item) => (
     item?.function?.name === 'archive_list'
   ))
+  const setDeliverables = SERVER_TOOL_SPECS.find((item) => (
+    item?.function?.name === 'set_deliverables'
+  ))
   assert.ok(archiveCreate)
   assert.ok(archiveList)
+  assert.ok(setDeliverables)
 
   let modelCalls = 0
   let publishedResult = null
@@ -132,7 +136,7 @@ test('archive_create publishes its ZIP as a downloadable turn artifact', async (
     messages: [{ role: 'user', content: 'Create a ZIP archive from the requested files.' }],
     intentMode: 'execute',
     requestToolApproval: async ({ args }) => ({ proceed: true, args }),
-    toolSpecs: [archiveCreate, archiveList],
+    toolSpecs: [archiveCreate, archiveList, setDeliverables],
     maxIters: 4,
     enableToolHooks: false,
     runModel: async ({ messages }) => {
@@ -160,6 +164,19 @@ test('archive_create publishes its ZIP as a downloadable turn artifact', async (
             function: {
               name: 'archive_list',
               arguments: JSON.stringify({ input: archivePath }),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 3) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'select-archive-call',
+            type: 'function',
+            function: {
+              name: 'set_deliverables',
+              arguments: JSON.stringify({ artifact_ids: [publishedResult.artifactId] }),
             },
           }],
         }
@@ -241,4 +258,295 @@ test('verified write_file and bash_exec outputs keep Windows Unicode filenames a
     assert.match(artifact.url, /^\/api\/artifacts\//)
     assert.equal(fs.existsSync(path.join(process.env.ARTIFACT_DIR, artifact.filename)), true)
   }
+})
+
+test('set_deliverables strictly scopes artifact ids, replaces selections, and preserves explicit empty delivery on resume', async () => {
+  const currentTurnId = 'deliverable-selection-turn'
+  const draftId = 'deliverable-draft'
+  const finalId = 'deliverable-final'
+  const crossTurnId = 'deliverable-cross-turn'
+  const crossSessionId = 'deliverable-cross-session'
+  const crossUserId = 'deliverable-cross-user'
+  const append = ({ id, userId = 'artifact-user', sessionId = 'artifact-session', turnId = currentTurnId }) => (
+    appendTurnArtifact({
+      id,
+      userId,
+      sessionId,
+      turnId,
+      type: 'pdf',
+      title: id,
+      filename: `${id}.pdf`,
+      url: `/api/artifacts/${id}.pdf`,
+    })
+  )
+
+  upsertSession({ id: 'deliverable-other-session', userId: 'artifact-user', title: 'Other session' })
+  createUser({ id: 'deliverable-other-user', email: 'deliverable-other@example.com' })
+  upsertSession({ id: 'deliverable-other-user-session', userId: 'deliverable-other-user', title: 'Other user' })
+  append({ id: draftId })
+  append({ id: finalId })
+  append({ id: crossTurnId, turnId: 'another-turn' })
+  append({ id: crossSessionId, sessionId: 'deliverable-other-session' })
+  append({
+    id: crossUserId,
+    userId: 'deliverable-other-user',
+    sessionId: 'deliverable-other-user-session',
+  })
+
+  const setDeliverablesSpec = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'set_deliverables')
+  const readFileSpec = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
+  assert.ok(setDeliverablesSpec)
+  assert.ok(readFileSpec)
+
+  const selections = []
+  const checkpoints = []
+  let modelCalls = 0
+  const result = await runToolsLoop({
+    job: {
+      id: currentTurnId,
+      origin: 'chat',
+      userId: 'artifact-user',
+      sessionId: 'artifact-session',
+      prompt: 'Review the completed files and select the final deliverables.',
+    },
+    step: { id: currentTurnId, kind: 'chat' },
+    messages: [{ role: 'user', content: 'Review the completed files and select the final deliverables.' }],
+    intentMode: 'execute',
+    toolSpecs: [readFileSpec, setDeliverablesSpec],
+    maxIters: 8,
+    enableToolHooks: false,
+    requestToolApproval: async () => assert.fail('set_deliverables must not require approval'),
+    loadCheckpoint: async () => ({
+      state: { artifactIds: [draftId, finalId], iterations: 0 },
+    }),
+    saveCheckpoint: async (state) => {
+      checkpoints.push(structuredClone(state))
+      return true
+    },
+    runModel: async () => {
+      modelCalls += 1
+      const calls = {
+        1: ['read-evidence', 'read_file', { path: 'README.md' }],
+        2: ['reject-foreign', 'set_deliverables', { artifact_ids: [crossTurnId, crossSessionId, crossUserId] }],
+        3: ['select-draft', 'set_deliverables', { artifact_ids: [draftId] }],
+        4: ['replace-with-final', 'set_deliverables', { artifact_ids: [finalId] }],
+        5: ['clear-delivery', 'set_deliverables', { artifact_ids: [] }],
+      }
+      const entry = calls[modelCalls]
+      if (!entry) return { content: 'No files are intentionally delivered.', toolCalls: [] }
+      return {
+        content: '',
+        toolCalls: [{
+          id: entry[0],
+          type: 'function',
+          function: { name: entry[1], arguments: JSON.stringify(entry[2]) },
+        }],
+      }
+    },
+    executeTool: async ({ name }) => {
+      assert.equal(name, 'read_file', 'set_deliverables must be handled by the scoped runtime control path')
+      return { ok: true, path: 'README.md', content: 'evidence' }
+    },
+    onToolCompleted: async (outcome) => {
+      if (outcome.call.name === 'set_deliverables') selections.push(outcome.result)
+    },
+  })
+
+  assert.equal(selections[0].code, 'deliverable_artifact_scope_mismatch')
+  assert.deepEqual(selections[0].invalidArtifactIds, [crossTurnId, crossSessionId, crossUserId])
+  assert.deepEqual(selections.slice(1).map((selection) => selection.deliveryArtifactIds), [
+    [draftId],
+    [finalId],
+    [],
+  ])
+  assert.deepEqual(result.artifactIds, [draftId, finalId])
+  assert.ok(Object.hasOwn(result, 'deliveryArtifactIds'))
+  assert.deepEqual(result.deliveryArtifactIds, [])
+  assert.ok(checkpoints.some((state) => JSON.stringify(state.deliveryArtifactIds) === JSON.stringify([draftId])))
+  assert.ok(checkpoints.some((state) => JSON.stringify(state.deliveryArtifactIds) === JSON.stringify([finalId])))
+  assert.deepEqual(checkpoints.at(-1).deliveryArtifactIds, [])
+})
+
+test('created chat artifacts require an explicit set_deliverables call before normal completion', async () => {
+  const turnId = 'deliverable-required-turn'
+  const artifactId = 'deliverable-required-final'
+  appendTurnArtifact({
+    id: artifactId,
+    userId: 'artifact-user',
+    sessionId: 'artifact-session',
+    turnId,
+    type: 'pdf',
+    title: 'Final report',
+    filename: 'final-report.pdf',
+    url: '/api/artifacts/final-report.pdf',
+  })
+  const setDeliverables = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'set_deliverables')
+  let modelCalls = 0
+  let guardObserved = false
+  const result = await runToolsLoop({
+    job: {
+      id: turnId,
+      origin: 'chat',
+      userId: 'artifact-user',
+      sessionId: 'artifact-session',
+      prompt: 'What is the status of the generated report?',
+    },
+    step: { id: turnId, kind: 'chat' },
+    messages: [{ role: 'user', content: 'What is the status of the generated report?' }],
+    intentMode: 'auto',
+    toolSpecs: [setDeliverables],
+    maxIters: 6,
+    enableToolHooks: false,
+    loadCheckpoint: async () => ({ state: { artifactIds: [artifactId], iterations: 0 } }),
+    saveCheckpoint: async () => true,
+    runModel: async ({ messages }) => {
+      modelCalls += 1
+      if (modelCalls === 1) return { content: 'The report is ready.', toolCalls: [] }
+      if (modelCalls === 2) {
+        guardObserved = messages.some((message) => String(message?.content || '').includes('[FINAL DELIVERABLE SELECTION REQUIRED]'))
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'select-final-report',
+            type: 'function',
+            function: { name: 'set_deliverables', arguments: JSON.stringify({ artifact_ids: [artifactId] }) },
+          }],
+        }
+      }
+      return { content: 'The report is ready.', toolCalls: [] }
+    },
+  })
+
+  assert.equal(guardObserved, true)
+  assert.deepEqual(result.deliveryArtifactIds, [artifactId])
+  assert.equal(result.incomplete, undefined)
+})
+
+test('creating another artifact after selection invalidates it and requires reconfirmation', async () => {
+  const turnId = 'deliverable-dirty-turn'
+  const draftId = 'deliverable-dirty-draft'
+  const finalId = 'deliverable-dirty-final'
+  appendTurnArtifact({
+    id: draftId,
+    userId: 'artifact-user',
+    sessionId: 'artifact-session',
+    turnId,
+    type: 'docx',
+    title: 'Draft',
+    filename: 'draft.docx',
+    url: '/api/artifacts/draft.docx',
+  })
+  const createDocx = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'create_docx')
+  const setDeliverables = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'set_deliverables')
+  let modelCalls = 0
+  let guardObserved = false
+  const checkpoints = []
+  const result = await runToolsLoop({
+    job: {
+      id: turnId,
+      origin: 'chat',
+      userId: 'artifact-user',
+      sessionId: 'artifact-session',
+      prompt: 'Create the final Word document.',
+      userPrompt: 'Create the final Word document.',
+    },
+    step: { id: turnId, kind: 'chat' },
+    messages: [{ role: 'user', content: 'Create the final Word document.' }],
+    intentMode: 'execute',
+    toolSpecs: [createDocx, setDeliverables],
+    maxIters: 8,
+    enableToolHooks: false,
+    loadCheckpoint: async () => ({ state: { artifactIds: [draftId], iterations: 0 } }),
+    saveCheckpoint: async (state) => {
+      checkpoints.push(structuredClone(state))
+      return true
+    },
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    executeTool: async ({ name }) => {
+      assert.equal(name, 'create_docx')
+      appendTurnArtifact({
+        id: finalId,
+        userId: 'artifact-user',
+        sessionId: 'artifact-session',
+        turnId,
+        type: 'docx',
+        title: 'Final',
+        filename: 'final.docx',
+        url: '/api/artifacts/final.docx',
+      })
+      return { ok: true, artifactId: finalId, filename: 'final.docx', url: '/api/artifacts/final.docx' }
+    },
+    runModel: async ({ messages }) => {
+      modelCalls += 1
+      const calls = {
+        1: ['select-draft-first', 'set_deliverables', { artifact_ids: [draftId] }],
+        2: ['create-final-doc', 'create_docx', { title: 'Final', paragraphs: [{ text: 'done' }] }],
+        4: ['reselect-final-doc', 'set_deliverables', { artifact_ids: [finalId] }],
+      }
+      if (modelCalls === 3) return { content: 'The final document is ready.', toolCalls: [] }
+      if (modelCalls === 4) {
+        guardObserved = messages.some((message) => String(message?.content || '').includes('[FINAL DELIVERABLE SELECTION REQUIRED]'))
+      }
+      const entry = calls[modelCalls]
+      if (!entry) return { content: 'The final document is ready.', toolCalls: [] }
+      return {
+        content: '',
+        toolCalls: [{
+          id: entry[0],
+          type: 'function',
+          function: { name: entry[1], arguments: JSON.stringify(entry[2]) },
+        }],
+      }
+    },
+  })
+
+  assert.equal(guardObserved, true)
+  assert.deepEqual(result.artifactIds, [draftId, finalId])
+  assert.deepEqual(result.deliveryArtifactIds, [finalId])
+  const invalidatedCheckpoint = checkpoints.find((state) => (
+    JSON.stringify(state.artifactIds) === JSON.stringify([draftId, finalId])
+    && state.completionGuards?.deliveryArtifactSelectionArtifactIds?.length === 0
+  ))
+  assert.ok(invalidatedCheckpoint, 'the invalidated selection must be checkpointed before reselection')
+  assert.ok(Object.hasOwn(invalidatedCheckpoint, 'deliveryArtifactIds'))
+  assert.deepEqual(invalidatedCheckpoint.deliveryArtifactIds, [])
+})
+
+test('refusing final artifact selection ends incomplete with explicit empty delivery', async () => {
+  const turnId = 'deliverable-refused-turn'
+  const artifactId = 'deliverable-refused-artifact'
+  appendTurnArtifact({
+    id: artifactId,
+    userId: 'artifact-user',
+    sessionId: 'artifact-session',
+    turnId,
+    type: 'png',
+    title: 'Preview',
+    filename: 'preview.png',
+    url: '/api/artifacts/preview.png',
+  })
+  const setDeliverables = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'set_deliverables')
+  const result = await runToolsLoop({
+    job: {
+      id: turnId,
+      origin: 'chat',
+      userId: 'artifact-user',
+      sessionId: 'artifact-session',
+      prompt: 'What is the status of the generated preview?',
+    },
+    step: { id: turnId, kind: 'chat' },
+    messages: [{ role: 'user', content: 'What is the status of the generated preview?' }],
+    intentMode: 'auto',
+    toolSpecs: [setDeliverables],
+    maxIters: 1,
+    enableToolHooks: false,
+    loadCheckpoint: async () => ({ state: { artifactIds: [artifactId], iterations: 0 } }),
+    saveCheckpoint: async () => true,
+    runModel: async () => ({ content: 'Done.', toolCalls: [] }),
+  })
+
+  assert.equal(result.incomplete, true)
+  assert.equal(result.reason, 'deliverable_selection_missing')
+  assert.deepEqual(result.deliveryArtifactIds, [])
+  assert.deepEqual(result.artifactIds, [artifactId])
 })

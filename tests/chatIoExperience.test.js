@@ -82,9 +82,9 @@ test('composer uses one stable primary button for send and stop', () => {
 })
 
 test('transient tool readiness is visible in the streaming assistant without creating a tool trace', () => {
-  assert.match(activityStreamSource, /meta\.modelActivity\?\.kind === 'tool_call_ready'/)
+  assert.match(activityStreamSource, /activity\?\.kind === 'tool_call_ready'/)
   assert.match(activityStreamSource, /chatMessages\.toolCallReady/)
-  assert.match(activityStreamSource, /data-testid="model-activity"/)
+  assert.match(activityStreamSource, /testId="model-activity"/)
 })
 
 test('tool failures expose status, retryability, attempts, and recovery hints', () => {
@@ -148,13 +148,14 @@ test('reasoning stays a compact live status while tool traces remain inspectable
   const reasoningTrace = activityTracesSource.match(/function ReasoningTrace[\s\S]*?(?=\nexport function ToolCallTrace)/)?.[0] || ''
   const toolCallTrace = activityTracesSource.match(/function ToolCallTrace[\s\S]*$/)?.[0] || ''
 
-  assert.match(reasoningTrace, /if \(!text \|\| !streaming\) return null/)
+  assert.match(reasoningTrace, /if \(!streaming\) return null/)
   assert.match(reasoningTrace, /role="status"/)
   assert.doesNotMatch(reasoningTrace, /<pre/)
   assert.match(toolCallTrace, /const normalizedCalls = Array\.isArray\(calls\) \? calls : \[\]/)
-  assert.match(toolCallTrace, /useState\(\(\) => normalizedCalls\.some/)
+  assert.match(toolCallTrace, /useState\(false\)/)
   assert.match(toolCallTrace, /chat-tool-list/)
-  assert.match(toolCallTrace, /aria-expanded=\{expanded\}/)
+  assert.match(toolCallTrace, /chat-timeline-history/)
+  assert.match(toolCallTrace, /aria-expanded=\{showAll\}/)
   assert.doesNotMatch(toolCallTrace, /chatMessages\.clickExpand/)
 })
 

@@ -104,6 +104,13 @@ function toolCallsFromContext(context) {
   return calls
 }
 
+function optionalContextArtifactIds(context, key) {
+  if (!context || typeof context !== 'object' || !Object.hasOwn(context, key)) return undefined
+  return [...new Set((Array.isArray(context[key]) ? context[key] : [])
+    .map((id) => String(id || '').trim())
+    .filter(Boolean))]
+}
+
 function turnEvidenceMeta(message) {
   const context = message?.modelContext && typeof message.modelContext === 'object'
     ? message.modelContext
@@ -118,12 +125,14 @@ function turnEvidenceMeta(message) {
   const iterations = Number.isInteger(context.iterations) && context.iterations >= 0
     ? context.iterations
     : undefined
+  const deliveryArtifactIds = optionalContextArtifactIds(context, 'deliveryArtifactIds')
 
   return {
     ...(state === 'failed' ? { failed: true } : { interrupted: true }),
     serverFailure: failure,
     serverPartialText: String(message?.content || ''),
     serverArtifactIds: artifactIds,
+    ...(deliveryArtifactIds !== undefined ? { serverDeliveryArtifactIds: deliveryArtifactIds } : {}),
     ...(iterations !== undefined ? { serverIterations: iterations } : {}),
   }
 }
@@ -228,6 +237,9 @@ export function normalizeServerSessionSnapshot(snapshot) {
       const serverArtifacts = message.role === 'assistant' && Array.isArray(message?.artifacts)
         ? message.artifacts.filter((artifact) => artifact?.id && artifact?.url && artifact?.filename)
         : []
+      const serverDeliveryArtifactIds = message.role === 'assistant'
+        ? optionalContextArtifactIds(message?.modelContext, 'deliveryArtifactIds')
+        : undefined
       const storedAttachments = message?.attachments ?? message?.modelContext?.attachments
       const attachments = message.role === 'user' && Array.isArray(storedAttachments)
         ? storedAttachments.filter((attachment) => attachment?.id).map((attachment) => ({
@@ -261,6 +273,7 @@ export function normalizeServerSessionSnapshot(snapshot) {
             toolCalls,
             ...(toolTrace.length ? { toolTrace } : {}),
             ...(serverArtifacts.length ? { serverArtifacts } : {}),
+            ...(serverDeliveryArtifactIds !== undefined ? { serverDeliveryArtifactIds } : {}),
             ...turnEvidenceMeta(message),
             ...pausedTurnMeta(message),
           },

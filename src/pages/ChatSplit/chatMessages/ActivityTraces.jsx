@@ -1,17 +1,17 @@
-import { useEffect, useId, useRef, useState } from 'react'
-import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { CheckCircle2, ChevronDown, Loader2, XCircle } from 'lucide-react'
+import { useState } from 'react'
+import { motion, useReducedMotion } from 'framer-motion'
+import { ChevronDown, Loader2 } from 'lucide-react'
 import ToolCallCard from '../../../components/ToolCallCard.jsx'
 import SubagentCard from '../../../components/SubagentCard.jsx'
 import { useT } from '../../../i18n/I18nProvider.jsx'
 
-export function ReasoningTrace({ text = '', streaming = false }) {
+export function ReasoningTrace({ text = '', streaming = false, label = '', testId }) {
   const { t } = useT()
   // Providers can stream very large private reasoning payloads. Rendering that
   // payload makes the answer harder to follow and can freeze long chats. Keep
   // only a compact live status; verified tool activity remains visible below.
-  if (!text || !streaming) return null
-  return <div className="mb-2 inline-flex items-center gap-2 rounded-md bg-paper-2/70 px-2.5 py-1.5 text-xs text-ink-soft" role="status" aria-live="polite"><Loader2 className="h-3.5 w-3.5 animate-spin text-cyan" aria-hidden="true" /><span>{t('chatMessages.reasoningActive')}</span></div>
+  if (!streaming) return null
+  return <div className="chat-thinking-line" role="status" aria-live="polite" data-testid={testId} data-has-reasoning={Boolean(text)}><Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /><span>{label || t('chatMessages.reasoningActive')}</span></div>
 }
 
 function nonNegativeInteger(value) {
@@ -85,95 +85,61 @@ export function ProgressTrace({ progress = null }) {
 export function ToolCallTrace({ calls = [], artifacts = [], onOpenArtifact }) {
   const { t } = useT()
   const normalizedCalls = Array.isArray(calls) ? calls : []
-  const [expanded, setExpanded] = useState(() => normalizedCalls.some((call) => call.status === 'running'))
-  const userToggledRef = useRef(false)
-  const previousCallCountRef = useRef(normalizedCalls.length)
+  const [showAll, setShowAll] = useState(false)
   const reduceMotion = useReducedMotion()
-  const panelId = useId()
-  const failed = normalizedCalls.filter((call) => call.status === 'error').length
-  const running = normalizedCalls.filter((call) => call.status === 'running').length
-  const completed = normalizedCalls.length - running
-  const StatusIcon = running > 0 ? Loader2 : failed > 0 ? XCircle : CheckCircle2
-  const statusClass = running > 0 ? 'text-ember animate-spin' : failed > 0 ? 'text-red-600' : 'text-emerald-600'
-  const stateLabel = running > 0
-    ? t('chatMessages.runningSteps', { count: running })
-    : failed > 0
-      ? t('chatMessages.failedSteps', { count: failed })
-      : t('chatMessages.steps', { count: normalizedCalls.length })
-
-  useEffect(() => {
-    const addedRunningStep = running > 0 && normalizedCalls.length > previousCallCountRef.current
-    previousCallCountRef.current = normalizedCalls.length
-    if (addedRunningStep && !userToggledRef.current) setExpanded(true)
-  }, [normalizedCalls.length, running])
+  const visibleLimit = 6
+  const hiddenCount = Math.max(0, normalizedCalls.length - visibleLimit)
+  const startIndex = showAll ? 0 : hiddenCount
+  const visibleCalls = showAll ? normalizedCalls : normalizedCalls.slice(startIndex)
+  const running = normalizedCalls.some((call) => call.status === 'running')
+  const failed = normalizedCalls.some((call) => call.status === 'error')
+  const cancelled = normalizedCalls.some((call) => call.status === 'cancelled')
 
   if (normalizedCalls.length === 0) return null
 
-  const toggleExpanded = () => {
-    userToggledRef.current = true
-    setExpanded((value) => !value)
-  }
-
   return (
     <section
-      className="chat-activity-panel"
-      data-status={running > 0 ? 'running' : failed > 0 ? 'error' : 'success'}
+      className="chat-run-timeline"
+      data-status={running ? 'running' : failed ? 'error' : cancelled ? 'cancelled' : 'success'}
       aria-label={t('chatMessages.execution')}
+      aria-busy={running}
     >
-      <button
-        type="button"
-        onClick={toggleExpanded}
-        aria-expanded={expanded}
-        aria-controls={panelId}
-        aria-label={t('chatMessages.executionToggle', {
-          state: expanded ? t('chatMessages.collapse') : t('chatMessages.expand'),
-          completed,
-          total: normalizedCalls.length,
+      {hiddenCount > 0 && (
+        <button
+          type="button"
+          className="chat-timeline-history"
+          onClick={() => setShowAll((value) => !value)}
+          aria-expanded={showAll}
+        >
+          <ChevronDown className={`h-3.5 w-3.5 ${showAll ? 'rotate-180' : ''}`} aria-hidden="true" />
+          <span>{showAll ? t('chatMessages.collapse') : t('chatMessages.expand')}</span>
+          <span>{t('chatMessages.steps', { count: showAll ? normalizedCalls.length : hiddenCount })}</span>
+        </button>
+      )}
+      <motion.div className="chat-tool-list" role="list" layout={reduceMotion ? false : 'position'}>
+        {visibleCalls.map((call, index) => {
+          const stepNumber = startIndex + index + 1
+          return (
+            <motion.div
+              key={call.id || `${call.name || 'tool'}-${stepNumber}`}
+              className="chat-tool-step-motion"
+              layout={reduceMotion ? false : 'position'}
+              initial={reduceMotion ? false : { opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: reduceMotion ? 0 : 0.16, ease: [0.2, 0, 0, 1] }}
+            >
+              {call.name === 'Agent'
+                ? <SubagentCard call={call} stepNumber={stepNumber} />
+                : <ToolCallCard
+                    call={call}
+                    stepNumber={stepNumber}
+                    artifacts={artifacts}
+                    onOpenArtifact={onOpenArtifact}
+                  />}
+            </motion.div>
+          )
         })}
-        className="chat-activity-summary"
-      >
-        <StatusIcon className={`chat-activity-status h-4 w-4 ${statusClass}`} aria-hidden="true" />
-        <span className="chat-activity-title">{t('chatMessages.execution')}</span>
-        <span className="chat-activity-state" data-status={running > 0 ? 'running' : failed > 0 ? 'error' : 'success'}>
-          {stateLabel}
-        </span>
-        <span className="chat-activity-count">{t('chatMessages.executionSummary', { completed, total: normalizedCalls.length })}</span>
-        <ChevronDown className={`chat-activity-chevron h-3.5 w-3.5 ${expanded ? '' : '-rotate-90'}`} aria-hidden="true" />
-      </button>
-      <AnimatePresence initial={false}>
-        {expanded && (
-          <motion.div
-            id={panelId}
-            key="tool-list"
-            className="chat-tool-list"
-            role="list"
-            initial={reduceMotion ? false : { height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={reduceMotion ? { opacity: 0 } : { height: 0, opacity: 0 }}
-            transition={{ duration: reduceMotion ? 0 : 0.2, ease: [0.2, 0, 0, 1] }}
-          >
-            {normalizedCalls.map((call, index) => (
-              <motion.div
-                key={call.id || `${call.name || 'tool'}-${index}`}
-                className="chat-tool-step-motion"
-                layout={reduceMotion ? false : 'position'}
-                initial={reduceMotion ? false : { opacity: 0, y: 5 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: reduceMotion ? 0 : 0.18, ease: [0.2, 0, 0, 1] }}
-              >
-                {call.name === 'Agent'
-                  ? <SubagentCard call={call} stepNumber={index + 1} />
-                  : <ToolCallCard
-                      call={call}
-                      stepNumber={index + 1}
-                      artifacts={artifacts}
-                      onOpenArtifact={onOpenArtifact}
-                    />}
-              </motion.div>
-            ))}
-          </motion.div>
-        )}
-      </AnimatePresence>
+      </motion.div>
     </section>
   )
 }

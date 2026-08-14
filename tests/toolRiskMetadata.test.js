@@ -77,3 +77,17 @@ test('PDF/archive inspection tools are read-only, concurrency-safe, and availabl
   assert.ok(planNames.includes('archive_list'))
   assert.ok(!planNames.includes('pdf_transform'))
 })
+
+test('set_deliverables is available only to execution capability sets and never requires approval', () => {
+  const metadata = getToolMetadata('set_deliverables')
+  assert.equal(metadata.isReadOnly, false)
+  assert.equal(metadata.isConcurrencySafe, false)
+  assert.equal(metadata.isIdempotent, true)
+  assert.equal(metadata.requiresApproval, false)
+  assert.equal(metadata.isDestructive, false)
+
+  const planNames = resolveSpecsForMode('plan').map((entry) => entry.name)
+  const codeNames = resolveSpecsForMode('code').map((entry) => entry.name)
+  assert.equal(planNames.includes('set_deliverables'), false)
+  assert.equal(codeNames.includes('set_deliverables'), true)
+})

@@ -38,6 +38,14 @@ function nodeText(node) {
   return ''
 }
 
+function isManagedArtifactHref(href = '') {
+  try {
+    return new URL(String(href || ''), 'http://artifact.local').pathname.startsWith('/api/artifacts/')
+  } catch {
+    return String(href || '').startsWith('/api/artifacts/')
+  }
+}
+
 function CodeBlock({ children, streaming = false }) {
   const { t } = useT()
   const [copyState, setCopyState] = useState('idle')
@@ -101,6 +109,9 @@ function MarkdownRenderer({ artifactReferences = [], children, className = '', o
             const isArtifactReference = Boolean(findArtifactReferenceByHref(artifactReferences, href))
             const anchorProps = { ...props }
             delete anchorProps.node
+            if (!isArtifactReference && isManagedArtifactHref(href)) {
+              return <span {...anchorProps} data-testid="blocked-artifact-link">{children}</span>
+            }
             return (
               <a
                 {...anchorProps}

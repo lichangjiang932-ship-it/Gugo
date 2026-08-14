@@ -187,6 +187,7 @@ export async function runServerChatTurn({
         artifactType: initialArtifactType,
         artifactTitle: initialArtifactType ? taskName : undefined,
         streaming: true,
+        modelActivity: { kind: 'preparing' },
         serverTurnId: turnId,
         serverLastSequence: -1,
       },
@@ -331,7 +332,12 @@ export async function runServerChatTurn({
     turnActivityDispatcher.flush()
     if (isUserStopped(error)) {
       dispatchMessage('APPEND_TO_LAST_MESSAGE', `\n\n${t('chat.serverTurn.stoppedMarker')}`)
-      dispatchMessage('UPDATE_LAST_MESSAGE_META', { streaming: false, serverArtifacts, serverConnectionState: null })
+      dispatchMessage('UPDATE_LAST_MESSAGE_META', {
+        streaming: false,
+        serverArtifacts,
+        serverDeliveryArtifactIds: [],
+        serverConnectionState: null,
+      })
       dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: TASK_STATUS.CANCELLED, stepLabel: t('chat.serverTurn.cancelled') } } })
     } else {
       const message = getVisibleModelErrorMessage(error, t)

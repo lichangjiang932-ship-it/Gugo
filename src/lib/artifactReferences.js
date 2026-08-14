@@ -13,6 +13,20 @@ const PREVIEW_TYPE_ALIASES = Object.freeze({
 
 const FILE_ARTIFACT_TYPES = new Set(['html', 'pptx', 'docx', 'xlsx'])
 
+export function resolveDeliveryArtifacts(meta = {}) {
+  const artifacts = Array.isArray(meta?.serverArtifacts) ? meta.serverArtifacts : []
+  if (!meta || typeof meta !== 'object' || !Object.hasOwn(meta, 'serverDeliveryArtifactIds')) {
+    return artifacts
+  }
+  const byId = new Map(artifacts
+    .filter((artifact) => artifact?.id)
+    .map((artifact) => [String(artifact.id), artifact]))
+  const ids = [...new Set((Array.isArray(meta.serverDeliveryArtifactIds)
+    ? meta.serverDeliveryArtifactIds
+    : []).map((id) => String(id || '').trim()).filter(Boolean))]
+  return ids.map((id) => byId.get(id)).filter(Boolean)
+}
+
 function declaresManagedFileArtifact(meta = {}) {
   const type = normalizeArtifactReferenceType({ type: meta?.artifactType })
   return FILE_ARTIFACT_TYPES.has(type) || Boolean(resolveArtifactToolForSkillId(meta?.skillId))
@@ -29,11 +43,18 @@ function declaresManagedFileArtifact(meta = {}) {
 export function buildMessageArtifactPreview(message = {}) {
   if (message?.role !== 'assistant') return null
   const meta = message?.meta || {}
-  const artifactSource = String(meta.artifactSource || '').trim()
-  if (artifactSource) return buildArtifactPreview({ content: artifactSource, meta })
-
-  const serverArtifacts = Array.isArray(meta.serverArtifacts) ? meta.serverArtifacts : []
   if (meta.failed || meta.streaming) return null
+
+  const deliverySelectionExplicit = Object.hasOwn(meta, 'serverDeliveryArtifactIds')
+  const serverArtifacts = resolveDeliveryArtifacts(meta)
+  const artifactSource = String(meta.artifactSource || '').trim()
+  if (artifactSource) {
+    const preview = buildArtifactPreview({ content: artifactSource, meta })
+    if (!deliverySelectionExplicit) return preview
+    return preview && serverArtifacts.some((artifact) => artifactReferenceMatchesPreview(artifact, preview))
+      ? preview
+      : null
+  }
 
   const content = String(message?.content || '')
   if (!content.trim()) return null

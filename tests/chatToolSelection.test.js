@@ -36,7 +36,10 @@ const SPECS = TOOL_NAMES.map(spec)
 const ARTIFACT_NAMES = new Set([
   'create_pptx', 'create_docx', 'create_xlsx', 'create_html_app', 'generate_image',
 ])
-const EXECUTE_NAMES = sorted(TOOL_NAMES.filter((name) => !ARTIFACT_NAMES.has(name)))
+const EXECUTE_NAMES = sorted([
+  ...TOOL_NAMES.filter((name) => !ARTIFACT_NAMES.has(name)),
+  'set_deliverables',
+])
 const ANSWER_NAMES = sorted([...READ_ONLY_NAMES, ...ANSWER_RECOVERY_NAMES])
 const metadataResolver = (name) => ({
   isReadOnly: READ_ONLY_NAMES.has(name),
@@ -98,6 +101,34 @@ test('explicit execute mode retains file, browser, connector, and MCP tools with
   }
   for (const name of ARTIFACT_NAMES) assert.ok(!selected.includes(name), name)
   assert.deepEqual(selected, EXECUTE_NAMES)
+})
+
+test('chat execution restores the internal delivery control when upstream tool config omits it', () => {
+  const configured = [spec('read_file'), spec('write_file')]
+  const executeNames = namesOf(selectJobToolSpecs({
+    origin: 'chat',
+    specs: configured,
+    prompt: 'Write the final file and deliver it.',
+    intentMode: 'execute',
+    metadataResolver,
+  }))
+  assert.deepEqual(executeNames, ['read_file', 'set_deliverables', 'write_file'])
+
+  const answerNames = namesOf(selectJobToolSpecs({
+    origin: 'chat',
+    specs: configured,
+    prompt: 'Explain the file format.',
+    intentMode: 'answer',
+    metadataResolver,
+  }))
+  assert.deepEqual(answerNames, ['read_file'])
+
+  const jobNames = namesOf(selectJobToolSpecs({
+    origin: 'job',
+    specs: configured,
+    prompt: 'Write the final file.',
+  }))
+  assert.equal(jobNames.includes('set_deliverables'), false)
 })
 
 test('explicit answer mode wins over mutation words and artifact skill contracts', () => {

@@ -143,12 +143,14 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     retryable: z.boolean(),
     text: z.string().optional(),
     artifactIds: z.array(z.string()).optional(),
+    deliveryArtifactIds: z.array(z.string()).optional(),
     iterations: z.number().int().nonnegative().optional(),
   }).strict(),
   'turn.paused': z.object({
     text: z.string(),
     clarification: z.union([jsonRecord, z.string().min(1)]),
     artifactIds: z.array(z.string()).optional(),
+    deliveryArtifactIds: z.array(z.string()).optional(),
     iterations: z.number().int().nonnegative().optional(),
   }).strict(),
   'turn.resumed': z.object({
@@ -166,11 +168,16 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     }
   }),
   'turn.completed': z.object({
-    text: z.string().optional(), artifactIds: z.array(z.string()).optional(), iterations: z.number().int().nonnegative().optional(),
+    text: z.string().optional(), artifactIds: z.array(z.string()).optional(), deliveryArtifactIds: z.array(z.string()).optional(), iterations: z.number().int().nonnegative().optional(),
     usage: jsonRecord.nullable().optional(),
     paused: z.boolean().optional(), clarification: z.unknown().nullable().optional(), interrupted: z.boolean().optional(),
   }).strict(),
-  'turn.cancelled': z.object({ reason: z.string().optional() }).strict(),
+  'turn.cancelled': z.object({
+    reason: z.string().optional(),
+    artifactIds: z.array(z.string()).optional(),
+    deliveryArtifactIds: z.array(z.string()).optional(),
+    iterations: z.number().int().nonnegative().optional(),
+  }).strict(),
   'turn.failed': z.object({
     // Keep the legacy top-level fields so older clients can still render the failure.
     code: z.string().optional(),
@@ -178,6 +185,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     error: toolFailureSchema.optional(),
     partialText: z.string().optional(),
     artifactIds: z.array(z.string()).optional(),
+    deliveryArtifactIds: z.array(z.string()).optional(),
     iterations: z.number().int().nonnegative().optional(),
   }).strict(),
   heartbeat: z.object({ at: z.number().int().nonnegative().optional() }).strict(),

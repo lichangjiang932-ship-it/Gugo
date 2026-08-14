@@ -145,6 +145,7 @@ test('stream recovery resets only its target assistant and rejects replayed even
   const appended = reduceMessageState(reset, {
     type: 'APPEND_TO_LAST_MESSAGE',
     payload: ' fresh',
+    meta: { modelActivity: { kind: 'responding' } },
     sessionId: 'origin',
     messageId: 'assistant-1',
     serverTurnId: 'turn-1',
@@ -160,6 +161,7 @@ test('stream recovery resets only its target assistant and rejects replayed even
   })
   assert.equal(replayed.sessions[0].messages[0].content, 'confirmed fresh')
   assert.equal(replayed.sessions[0].messages[0].meta.serverLastSequence, 7)
+  assert.deepEqual(replayed.sessions[0].messages[0].meta.modelActivity, { kind: 'responding' })
 
   const reasoning = reduceMessageState(replayed, {
     type: 'APPEND_REASONING_TO_LAST_MESSAGE',

@@ -1,4 +1,5 @@
 import { TOOL_LIVE_OUTPUT_CHAR_LIMIT } from '../../lib/turnClient/toolOutputBuffer.js'
+import { TOOL_CALL_STATUS } from '../taskStatus.js'
 
 function applyStreamCursor(message, action) {
   if (!Number.isInteger(action.serverSequence)) return { ignored: false, meta: message.meta || {} }
@@ -192,7 +193,11 @@ export function reduceMessageState(state, action) {
           if (last.role !== 'assistant') return s
           const cursor = applyStreamCursor(last, action)
           if (cursor.ignored) return s
-          msgs[messageIndex] = { ...last, content: (last.content || '') + delta, meta: cursor.meta }
+          msgs[messageIndex] = {
+            ...last,
+            content: (last.content || '') + delta,
+            meta: { ...cursor.meta, ...(action.meta || {}) },
+          }
           return { ...s, messages: msgs, updatedAt: Date.now() }
         }),
       }
@@ -285,6 +290,47 @@ export function reduceMessageState(state, action) {
           }
           msgs[messageIndex] = { ...last, meta: { ...existingMeta, toolCalls: nextCalls } }
           return { ...s, messages: msgs, updatedAt: Date.now() }
+        }),
+      }
+    }
+
+    case 'FINALIZE_RUNNING_TOOL_CALLS': {
+      const targetSessionId = action.sessionId || state.activeSessionId
+      if (!targetSessionId) return state
+      const status = action.payload?.status === TOOL_CALL_STATUS.ERROR
+        ? TOOL_CALL_STATUS.ERROR
+        : TOOL_CALL_STATUS.CANCELLED
+      return {
+        ...state,
+        sessions: state.sessions.map((session) => {
+          if (session.id !== targetSessionId || session.messages.length === 0) return session
+          const messages = [...session.messages]
+          const messageIndex = action.messageId
+            ? messages.findIndex((message) => message.id === action.messageId)
+            : messages.length - 1
+          if (messageIndex < 0) return session
+          const message = messages[messageIndex]
+          if (message.role !== 'assistant') return session
+          const meta = message.meta || {}
+          const calls = Array.isArray(meta.toolCalls) ? meta.toolCalls : []
+          let changed = false
+          const nextCalls = calls.map((call) => {
+            if (call?.status !== TOOL_CALL_STATUS.RUNNING) return call
+            changed = true
+            return {
+              ...call,
+              status,
+              ...(status === TOOL_CALL_STATUS.ERROR
+                ? {
+                    error: action.payload?.error || call.error || 'Turn ended before the tool returned a result',
+                    errorCode: action.payload?.errorCode || call.errorCode || 'TURN_TERMINATED',
+                  }
+                : {}),
+            }
+          })
+          if (!changed) return session
+          messages[messageIndex] = { ...message, meta: { ...meta, toolCalls: nextCalls } }
+          return { ...session, messages, updatedAt: Date.now() }
         }),
       }
     }

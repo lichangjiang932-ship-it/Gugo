@@ -189,7 +189,7 @@ test('failed command keeps arguments and result in independent disclosures', asy
     const disclosures = rootElement.querySelectorAll('details')
     assert.equal(disclosures.length, 2)
     assert.equal(disclosures.item(0).open, false)
-    assert.equal(disclosures.item(1).open, true)
+    assert.equal(disclosures.item(1).open, false)
     assert.match(disclosures.item(0).querySelector('summary').textContent, /参数/)
     assert.match(disclosures.item(1).querySelector('summary').textContent, /错误/)
     assert.equal(rootElement.querySelector('.chat-tool-step-marker').textContent, '2')
@@ -202,4 +202,26 @@ test('failed command keeps arguments and result in independent disclosures', asy
     await act(async () => root.unmount())
     dom.window.close()
   }
+})
+
+test('running command keeps full output collapsed and shows the latest line', () => {
+  const markup = renderToStaticMarkup(
+    <I18nProvider>
+      <ToolCallCard call={{
+        name: 'bash_exec',
+        arguments: JSON.stringify({ command: 'npm test' }),
+        status: 'running',
+        liveOutput: 'starting suite\nPASS activity stream\n42 tests passed',
+      }} stepNumber={1} />
+    </I18nProvider>,
+  )
+  assert.match(markup, /data-testid="tool-live-output-tail"[^>]*>42 tests passed</)
+  const liveTailTag = markup.match(/<span class="chat-tool-live-tail"[^>]*>/)?.[0]
+  assert.ok(liveTailTag)
+  assert.doesNotMatch(liveTailTag, /\brole=/)
+  assert.doesNotMatch(liveTailTag, /\baria-live=/)
+  assert.doesNotMatch(liveTailTag, /\baria-atomic=/)
+  assert.match(markup, /<details class="chat-tool-live-details">/)
+  assert.doesNotMatch(markup, /<details class="chat-tool-live-details" open/)
+  assert.match(markup, /data-testid="tool-live-output"/)
 })

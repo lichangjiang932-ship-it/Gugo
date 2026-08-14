@@ -237,6 +237,7 @@ export function buildAssistantModelContext({
   checkpointMessages,
   baselineToolCallIds,
   artifactIds = [],
+  deliveryArtifactIds,
   iterations = 0,
   paused = false,
   compactionArchiveId = null,
@@ -248,6 +249,9 @@ export function buildAssistantModelContext({
       excludedCallIds: baselineToolCallIds || new Set(),
     }),
     artifactIds: Array.isArray(artifactIds) ? artifactIds.map(String) : [],
+    ...(Array.isArray(deliveryArtifactIds)
+      ? { deliveryArtifactIds: deliveryArtifactIds.map(String) }
+      : {}),
     iterations: Math.max(0, Number(iterations) || 0),
     paused: !!paused,
     ...(compactionArchiveId ? { compactionArchiveId: String(compactionArchiveId) } : {}),

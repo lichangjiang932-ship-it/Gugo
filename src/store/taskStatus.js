@@ -13,6 +13,7 @@ export const TOOL_CALL_STATUS = Object.freeze({
   RUNNING: 'running',
   SUCCESS: 'success',
   ERROR:   'error',
+  CANCELLED: 'cancelled',
 })
 
 export const HISTORY_STATUS = Object.freeze({

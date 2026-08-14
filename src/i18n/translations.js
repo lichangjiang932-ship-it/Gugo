@@ -160,6 +160,7 @@ Object.assign(CHAT_SURFACE_TRANSLATIONS['zh-TW'].chatPreview, { loadingFile: '�
 const FEATURE_PAGE_TRANSLATIONS = {
   zh: {
     chatMessages: {
+      toolStopped: '已停止',
       progressLabel: '进度', progressPhase: '阶段：{phase}', progressSteps: '第 {completed}/{total} 步', progressCompleted: '已完成 {completed} 步', progressTotal: '共 {total} 步', progressIteration: '第 {iteration} 轮', progressFiles: '{count} 个文件', progressChanges: '+{additions} / -{deletions}',
       copied: '已复制', copyFailed: '复制失败，请重试', toolRunning: '正在运行', toolCompleted: '已运行', toolFailed: '失败', toolArguments: '参数', toolNoArguments: '（无）', toolError: '错误', toolResult: '结果', toolUnknownError: '未知错误', toolEmptyResult: '（空）', toolApplyPatch: '应用补丁', toolListDirectory: '查看目录', toolGrepCode: '搜索代码', toolFindSymbol: '查找符号', toolCurrentWorkspace: '（当前工作区）', toolUnspecified: '（未指定）', toolFileCount: '{count} 个文件',
       weeklyReport: '帮我写一份本周项目周报', salesExcel: '把这段销售数据生成 Excel 表格并分析', productPpt: '生成一份 5 页的产品介绍 PPT', workPlan: '帮我列出今天的工作计划',
@@ -177,6 +178,7 @@ const FEATURE_PAGE_TRANSLATIONS = {
   },
   en: {
     chatMessages: {
+      toolStopped: 'Stopped',
       progressLabel: 'Progress', progressPhase: 'Phase: {phase}', progressSteps: 'Step {completed}/{total}', progressCompleted: '{completed} steps completed', progressTotal: '{total} steps total', progressIteration: 'Iteration {iteration}', progressFiles: '{count} files', progressChanges: '+{additions} / -{deletions}',
       copied: 'Copied', copyFailed: 'Copy failed. Try again.', toolRunning: 'Running', toolCompleted: 'Completed', toolFailed: 'Failed', toolArguments: 'Arguments', toolNoArguments: '(none)', toolError: 'Error', toolResult: 'Result', toolUnknownError: 'Unknown error', toolEmptyResult: '(empty)', toolApplyPatch: 'Apply patch', toolListDirectory: 'List directory', toolGrepCode: 'Search code', toolFindSymbol: 'Find symbol', toolCurrentWorkspace: '(current workspace)', toolUnspecified: '(not specified)', toolFileCount: '{count} files',
       weeklyReport: 'Write this week’s project update', salesExcel: 'Turn this sales data into an Excel workbook and analyze it', productPpt: 'Create a 5-slide product introduction', workPlan: 'List my work plan for today',
@@ -194,6 +196,7 @@ const FEATURE_PAGE_TRANSLATIONS = {
   },
   ja: {
     chatMessages: {
+      toolStopped: '停止済み',
       progressLabel: '進捗', progressPhase: 'フェーズ：{phase}', progressSteps: 'ステップ {completed}/{total}', progressCompleted: '{completed} ステップ完了', progressTotal: '全 {total} ステップ', progressIteration: '反復 {iteration}', progressFiles: '{count} ファイル', progressChanges: '+{additions} / -{deletions}',
       copied: 'コピーしました', copyFailed: 'コピーに失敗しました。もう一度お試しください。', toolRunning: '実行中', toolCompleted: '実行済み', toolFailed: '失敗', toolArguments: '引数', toolNoArguments: '（なし）', toolError: 'エラー', toolResult: '結果', toolUnknownError: '不明なエラー', toolEmptyResult: '（空）', toolApplyPatch: 'パッチを適用', toolListDirectory: 'ディレクトリを表示', toolGrepCode: 'コードを検索', toolFindSymbol: 'シンボルを検索', toolCurrentWorkspace: '（現在のワークスペース）', toolUnspecified: '（未指定）', toolFileCount: '{count} ファイル',
       weeklyReport: '今週のプロジェクト週報を書いて', salesExcel: 'この売上データを Excel にして分析して', productPpt: '5枚の製品紹介 PPT を作成して', workPlan: '今日の作業計画を一覧にして',
@@ -205,6 +208,7 @@ const FEATURE_PAGE_TRANSLATIONS = {
   },
   ko: {
     chatMessages: {
+      toolStopped: '중지됨',
       progressLabel: '진행률', progressPhase: '단계: {phase}', progressSteps: '{completed}/{total}단계', progressCompleted: '{completed}단계 완료', progressTotal: '총 {total}단계', progressIteration: '{iteration}회차', progressFiles: '파일 {count}개', progressChanges: '+{additions} / -{deletions}',
       copied: '복사됨', copyFailed: '복사하지 못했습니다. 다시 시도하세요.', toolRunning: '실행 중', toolCompleted: '실행 완료', toolFailed: '실패', toolArguments: '인수', toolNoArguments: '(없음)', toolError: '오류', toolResult: '결과', toolUnknownError: '알 수 없는 오류', toolEmptyResult: '(비어 있음)', toolApplyPatch: '패치 적용', toolListDirectory: '디렉터리 보기', toolGrepCode: '코드 검색', toolFindSymbol: '기호 찾기', toolCurrentWorkspace: '(현재 작업 공간)', toolUnspecified: '(지정되지 않음)', toolFileCount: '파일 {count}개',
       voice: '음성', voiceRequesting: '마이크 권한 요청 중…', voiceListening: '듣는 중 · 클릭하여 중지', voiceUnsupported: '이 브라우저는 음성 입력을 지원하지 않습니다', voiceDenied: '마이크 권한이 거부되었습니다. 브라우저 설정에서 허용하세요.', voiceNoSpeech: '음성이 감지되지 않았습니다.', voiceNetworkError: '음성 인식 네트워크를 사용할 수 없습니다', voiceError: '음성 입력에 실패했습니다.', voiceStopped: '음성 입력을 중지했습니다',
@@ -215,6 +219,7 @@ const FEATURE_PAGE_TRANSLATIONS = {
   },
   'zh-TW': {
     chatMessages: {
+      toolStopped: '已停止',
       progressLabel: '進度', progressPhase: '階段：{phase}', progressSteps: '第 {completed}/{total} 步', progressCompleted: '已完成 {completed} 步', progressTotal: '共 {total} 步', progressIteration: '第 {iteration} 輪', progressFiles: '{count} 個檔案', progressChanges: '+{additions} / -{deletions}',
       copied: '已複製', copyFailed: '複製失敗，請重試', toolRunning: '正在執行', toolCompleted: '已執行', toolFailed: '失敗', toolArguments: '參數', toolNoArguments: '（無）', toolError: '錯誤', toolResult: '結果', toolUnknownError: '未知錯誤', toolEmptyResult: '（空）', toolApplyPatch: '套用修補', toolListDirectory: '查看目錄', toolGrepCode: '搜尋程式碼', toolFindSymbol: '尋找符號', toolCurrentWorkspace: '（目前工作區）', toolUnspecified: '（未指定）', toolFileCount: '{count} 個檔案',
       voice: '語音', voiceRequesting: '正在請求麥克風…', voiceListening: '聆聽中 · 點擊停止', voiceUnsupported: '目前瀏覽器不支援語音輸入', voiceDenied: '麥克風權限遭拒，請在瀏覽器設定中允許', voiceNoSpeech: '沒有偵測到語音，請重試', voiceNetworkError: '語音辨識網路無法使用', voiceError: '語音輸入失敗，請重試', voiceStopped: '已停止語音輸入',
@@ -226,6 +231,7 @@ const FEATURE_PAGE_TRANSLATIONS = {
 }
 
 Object.assign(FEATURE_PAGE_TRANSLATIONS.zh.chatMessages, {
+  preparingTask: '正在准备任务…', waitingForModel: '正在等待模型响应…', draftingResponse: '正在生成回复…', reviewingResults: '正在整理执行结果…', continuingTask: '正在继续处理…', reconnectingTask: '连接中断，正在重连…', cancellingTask: '正在停止任务…', toolLiveOutput: '实时输出', toolLiveOutputHint: '展开查看完整输出',
   progressPhaseToolCompleted: '工具已完成', progressPhaseBatchCompleted: '本批次已完成', progressPhaseVerify: '验证中', progressPhaseEditing: '编辑中',
   executionSummary: '{completed}/{total}', executionToggle: '{state}执行过程，已完成 {completed}/{total} 步', expand: '展开', collapse: '收起', stepNumber: '第 {number} 步',
   toolEmptyValue: '（空）', toolEditCount: '{count} 个编辑', toolUnknown: '工具',
@@ -233,6 +239,7 @@ Object.assign(FEATURE_PAGE_TRANSLATIONS.zh.chatMessages, {
   subagentFallback: '子代理', subagentType: '代理 · {type}', subagentGeneral: '通用', subagentPrompt: '任务说明', subagentResult: '结果',
 })
 Object.assign(FEATURE_PAGE_TRANSLATIONS.en.chatMessages, {
+  preparingTask: 'Preparing task…', waitingForModel: 'Waiting for the model…', draftingResponse: 'Drafting response…', reviewingResults: 'Reviewing execution results…', continuingTask: 'Continuing the task…', reconnectingTask: 'Connection lost. Reconnecting…', cancellingTask: 'Stopping task…', toolLiveOutput: 'Live output', toolLiveOutputHint: 'Expand to view full output',
   progressPhaseToolCompleted: 'Tool completed', progressPhaseBatchCompleted: 'Batch completed', progressPhaseVerify: 'Verifying', progressPhaseEditing: 'Editing',
   executionSummary: '{completed}/{total}', executionToggle: '{state} execution, {completed} of {total} steps completed', expand: 'Expand', collapse: 'Collapse', stepNumber: 'Step {number}',
   toolEmptyValue: '(empty)', toolEditCount: '{count} edits', toolUnknown: 'Tool',
@@ -240,6 +247,7 @@ Object.assign(FEATURE_PAGE_TRANSLATIONS.en.chatMessages, {
   subagentFallback: 'Sub-agent', subagentType: 'Agent · {type}', subagentGeneral: 'general', subagentPrompt: 'Prompt', subagentResult: 'Result',
 })
 Object.assign(FEATURE_PAGE_TRANSLATIONS.ja.chatMessages, {
+  preparingTask: 'タスクを準備中…', waitingForModel: 'モデルの応答を待機中…', draftingResponse: '回答を作成中…', reviewingResults: '実行結果を確認中…', continuingTask: 'タスクを続行中…', reconnectingTask: '接続が切れました。再接続中…', cancellingTask: 'タスクを停止中…', toolLiveOutput: 'ライブ出力', toolLiveOutputHint: '展開して出力全体を表示',
   progressPhaseToolCompleted: 'ツール完了', progressPhaseBatchCompleted: 'バッチ完了', progressPhaseVerify: '検証中', progressPhaseEditing: '編集中',
   executionSummary: '{completed}/{total}', executionToggle: '実行過程を{state}、{completed}/{total} ステップ完了', expand: '展開', collapse: '折りたたむ', stepNumber: 'ステップ {number}',
   toolEmptyValue: '（空）', toolEditCount: '{count} 件の編集', toolUnknown: 'ツール',
@@ -247,6 +255,7 @@ Object.assign(FEATURE_PAGE_TRANSLATIONS.ja.chatMessages, {
   subagentFallback: 'サブエージェント', subagentType: 'エージェント · {type}', subagentGeneral: '汎用', subagentPrompt: '指示', subagentResult: '結果',
 })
 Object.assign(FEATURE_PAGE_TRANSLATIONS.ko.chatMessages, {
+  preparingTask: '작업 준비 중…', waitingForModel: '모델 응답 대기 중…', draftingResponse: '답변 작성 중…', reviewingResults: '실행 결과 검토 중…', continuingTask: '작업 계속 진행 중…', reconnectingTask: '연결이 끊겼습니다. 다시 연결 중…', cancellingTask: '작업 중지 중…', toolLiveOutput: '실시간 출력', toolLiveOutputHint: '펼쳐서 전체 출력 보기',
   progressPhaseToolCompleted: '도구 완료', progressPhaseBatchCompleted: '일괄 작업 완료', progressPhaseVerify: '검증 중', progressPhaseEditing: '편집 중',
   executionSummary: '{completed}/{total}', executionToggle: '실행 과정을 {state}, {completed}/{total}단계 완료', expand: '펼치기', collapse: '접기', stepNumber: '{number}단계',
   toolEmptyValue: '(비어 있음)', toolEditCount: '편집 {count}개', toolUnknown: '도구',
@@ -254,6 +263,7 @@ Object.assign(FEATURE_PAGE_TRANSLATIONS.ko.chatMessages, {
   subagentFallback: '하위 에이전트', subagentType: '에이전트 · {type}', subagentGeneral: '일반', subagentPrompt: '지시문', subagentResult: '결과',
 })
 Object.assign(FEATURE_PAGE_TRANSLATIONS['zh-TW'].chatMessages, {
+  preparingTask: '正在準備任務…', waitingForModel: '正在等待模型回應…', draftingResponse: '正在產生回覆…', reviewingResults: '正在整理執行結果…', continuingTask: '正在繼續處理…', reconnectingTask: '連線中斷，正在重新連線…', cancellingTask: '正在停止任務…', toolLiveOutput: '即時輸出', toolLiveOutputHint: '展開查看完整輸出',
   progressPhaseToolCompleted: '工具已完成', progressPhaseBatchCompleted: '本批次已完成', progressPhaseVerify: '驗證中', progressPhaseEditing: '編輯中',
   executionSummary: '{completed}/{total}', executionToggle: '{state}執行過程，已完成 {completed}/{total} 步', expand: '展開', collapse: '收合', stepNumber: '第 {number} 步',
   toolEmptyValue: '（空）', toolEditCount: '{count} 個編輯', toolUnknown: '工具',

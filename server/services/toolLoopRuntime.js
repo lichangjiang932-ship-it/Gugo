@@ -26,9 +26,25 @@ import { dispatchHooks } from './hooksService.js'
 import { replaceRuntimeCapabilityBlock } from './runtimeCapabilities.js'
 import { hasMutationExecutionIntent, shouldRequireExecution } from '../utils/executionIntent.js'
 import { observeToolCalls, recordToolProgress, restoreToolProgress, serializeToolProgress, toolProgressPayload } from '../utils/toolProgress.js'
+import { listTurnArtifacts } from './turnArtifactStore.js'
 
 import { withLogContext } from '../utils/logger.js'
 import { createRepeatCallGuard } from '../utils/repeatCallGuard.js'
+
+const DELIVERABLE_SELECTION_GUARD_MARKER = '[FINAL DELIVERABLE SELECTION REQUIRED]'
+const MAX_DELIVERABLE_SELECTION_RETRIES = 2
+
+function normalizeArtifactIdList(ids) {
+  return [...new Set((Array.isArray(ids) ? ids : [])
+    .map((id) => String(id || '').trim())
+    .filter(Boolean))]
+}
+
+function sameArtifactIdList(left, right) {
+  const a = normalizeArtifactIdList(left)
+  const b = normalizeArtifactIdList(right)
+  return a.length === b.length && a.every((id) => b.includes(id))
+}
 
 import {
   COMMAND_EXECUTION_TOOL_NAMES,
@@ -313,7 +329,115 @@ export async function runToolsLoop({
   let representativeReadsInjected = Boolean(restoredState?.completionGuards?.representativeReadsInjected)
     || convo.some((message) => message?.role === 'system' && String(message?.content || '').includes(DIRECTORY_REVIEW_GUARD_MARKER))
   let hasSuccessfulRepresentativeRead = successfulReadFileInMessages(convo)
-  const artifactIds = Array.isArray(restoredState?.artifactIds) ? [...restoredState.artifactIds] : []
+  const artifactIds = normalizeArtifactIdList(restoredState?.artifactIds)
+  let deliveryArtifactSelectionExplicit = Object.hasOwn(restoredState || {}, 'deliveryArtifactIds')
+  let deliveryArtifactIds = deliveryArtifactSelectionExplicit
+    ? normalizeArtifactIdList(restoredState.deliveryArtifactIds)
+    : []
+  const restoredSelectionArtifactIds = restoredState?.completionGuards?.deliveryArtifactSelectionArtifactIds
+  let deliveryArtifactSelectionArtifactIds = deliveryArtifactSelectionExplicit
+    ? normalizeArtifactIdList(Array.isArray(restoredSelectionArtifactIds)
+        ? restoredSelectionArtifactIds
+        : artifactIds)
+    : []
+  if (deliveryArtifactSelectionExplicit
+    && Array.isArray(restoredSelectionArtifactIds)
+    && !sameArtifactIdList(deliveryArtifactSelectionArtifactIds, artifactIds)) {
+    deliveryArtifactSelectionExplicit = false
+    deliveryArtifactIds = []
+    deliveryArtifactSelectionArtifactIds = []
+  }
+  let deliverableSelectionRetries = Math.max(
+    0,
+    Number(restoredState?.completionGuards?.deliverableSelectionRetries) || 0,
+  )
+  const hasCurrentDeliverableSelection = () => deliveryArtifactSelectionExplicit
+    && sameArtifactIdList(deliveryArtifactSelectionArtifactIds, artifactIds)
+  const deliverySelectionFields = () => {
+    if (hasCurrentDeliverableSelection()) {
+      return { deliveryArtifactIds: [...deliveryArtifactIds] }
+    }
+    // Once a chat turn has artifacts, an absent field is ambiguous to older
+    // checkpoint consumers and can revive a stale selection after a crash.
+    // Persist an explicit empty delivery while selection is pending/invalid;
+    // completionGuards still distinguishes that state from an intentional
+    // set_deliverables({ artifact_ids: [] }) selection on resume.
+    if (job?.origin === 'chat' && artifactIds.length > 0) {
+      return { deliveryArtifactIds: [] }
+    }
+    return {}
+  }
+  const invalidateDeliverableSelection = () => {
+    deliveryArtifactSelectionExplicit = false
+    deliveryArtifactIds = []
+    deliveryArtifactSelectionArtifactIds = []
+    deliverableSelectionRetries = 0
+  }
+  const recordArtifactIds = (ids) => {
+    let added = false
+    for (const id of normalizeArtifactIdList(ids)) {
+      if (artifactIds.includes(id)) continue
+      artifactIds.push(id)
+      added = true
+    }
+    if (added && deliveryArtifactSelectionExplicit) invalidateDeliverableSelection()
+    return added
+  }
+  const needsDeliverableSelection = () => job?.origin === 'chat'
+    && artifactIds.length > 0
+    && !hasCurrentDeliverableSelection()
+  const suppressUnselectedArtifacts = () => {
+    if (!needsDeliverableSelection()) return
+    deliveryArtifactIds = []
+    deliveryArtifactSelectionArtifactIds = [...artifactIds]
+    deliveryArtifactSelectionExplicit = true
+  }
+  const selectDeliverables = (args = {}) => {
+    if (job?.origin !== 'chat' || !job?.userId || !job?.sessionId || !job?.id) {
+      return {
+        ok: false,
+        code: 'deliverable_scope_unavailable',
+        error: 'Final deliverables can only be selected for a persisted chat turn.',
+        retryable: false,
+      }
+    }
+    const requested = args.artifact_ids
+    if (!Array.isArray(requested)
+      || requested.some((id) => typeof id !== 'string' || !id || id.trim() !== id)
+      || new Set(requested).size !== requested.length) {
+      return {
+        ok: false,
+        code: 'invalid_deliverable_artifact_ids',
+        error: 'artifact_ids must contain unique, non-empty artifact ID strings without surrounding whitespace.',
+        retryable: false,
+      }
+    }
+    const ownedIds = new Set(listTurnArtifacts({
+      userId: job.userId,
+      sessionId: job.sessionId,
+      turnId: job.id,
+    }).map((artifact) => artifact.id))
+    const invalidArtifactIds = requested.filter((id) => !ownedIds.has(id))
+    if (invalidArtifactIds.length > 0) {
+      return {
+        ok: false,
+        code: 'deliverable_artifact_scope_mismatch',
+        error: 'Every deliverable artifact ID must belong to the current user, session, and turn.',
+        invalidArtifactIds,
+        retryable: false,
+      }
+    }
+    deliveryArtifactIds = [...requested]
+    deliveryArtifactSelectionArtifactIds = [...artifactIds]
+    deliveryArtifactSelectionExplicit = true
+    deliverableSelectionRetries = 0
+    return {
+      ok: true,
+      deliveryArtifactIds: [...deliveryArtifactIds],
+      selected: deliveryArtifactIds.length,
+      replaced: true,
+    }
+  }
   let artifactDeliveryRetries = Math.max(0, Number(restoredState?.completionGuards?.artifactDeliveryRetries) || 0)
   const deliveredArtifactTools = new Set(
     Array.isArray(restoredState?.completionGuards?.deliveredArtifactTools)
@@ -539,6 +663,7 @@ export async function runToolsLoop({
       ...restoredState.final,
       text: String(restoredState.final.text),
       artifactIds,
+      ...deliverySelectionFields(),
       iterations: Math.max(1, Number(restoredState.final.iterations) || iter || 1),
       resumed: true,
       recovery,
@@ -556,6 +681,7 @@ export async function runToolsLoop({
       messages: convo,
       toolCalls: checkpointCalls || [],
       artifactIds,
+      ...deliverySelectionFields(),
       appliedSteeringIds: [...appliedSteeringIds],
       iterations: iter,
       iterationWindowStart,
@@ -569,6 +695,8 @@ export async function runToolsLoop({
         representativeReadsInjected,
         artifactDeliveryRetries,
         deliveredArtifactTools: [...deliveredArtifactTools],
+        deliverableSelectionRetries,
+        deliveryArtifactSelectionArtifactIds: [...deliveryArtifactSelectionArtifactIds],
         executionEvidenceObserved,
         mutationExecutionObserved,
         executionEvidenceRetries,
@@ -683,6 +811,7 @@ export async function runToolsLoop({
       reason,
     })
     if (!completion.closed) return { deferredForSteering: true }
+    suppressUnselectedArtifacts()
     if (!completion.prepared) convo.push({ role: 'assistant', content: finalText })
     try {
       await persistTurn({
@@ -706,6 +835,7 @@ export async function runToolsLoop({
     return {
       text: finalText,
       artifactIds,
+      ...deliverySelectionFields(),
       iterations: iter + 1,
       incomplete: true,
       reason,
@@ -725,6 +855,9 @@ export async function runToolsLoop({
       reason: result?.reason || null,
     })
     if (!completion.closed) return null
+    if (result?.incomplete === true || result?.paused === true || result?.interrupted === true) {
+      suppressUnselectedArtifacts()
+    }
     if (!completion.prepared && text && appendTextToConversation) {
       convo.push({ role: 'assistant', content: text })
     }
@@ -738,7 +871,7 @@ export async function runToolsLoop({
       },
     })
     finalCheckpointPersisted = Boolean(text.trim())
-    return result
+    return { ...result, ...deliverySelectionFields() }
   }
   // ★ M3.5 + Lens-2 fix:任务级预算用 WeakMap 持有,模型/工具碰不到 job 的属性也无法绕过。
   const restoredBudget = restoredState?.budget && typeof restoredState.budget === 'object'
@@ -760,11 +893,12 @@ export async function runToolsLoop({
     ? (getJobBudget(job) || attachJobBudget(job, restoredBudget))
     : createJobBudget(restoredBudget))
   const subagentApprovalContext = approvalContext || createSubagentApprovalContext()
-  // 预算测试/小预算任务应优先报告 budgetExceeded；第 5 次相同调用再判无进展。
-  // Two identical calls leave room for a transient retry. The third is a loop
-  // and must be rejected before execution instead of spending more budget.
+  // Exact duplicate signatures keep their separate fuse. Calls that change
+  // arguments get graded strategy advisories and a much higher recovery budget.
   const loopGuard = createToolLoopGuard({
     maxRepeatedCalls: 2,
+    maxConsecutiveErrors: 20,
+    maxSameToolFailures: 20,
     initialState: restoredState?.loopGuard,
   })
   const rememberInstallAttempt = (signature) => {
@@ -1262,6 +1396,35 @@ export async function runToolsLoop({
           }
           continue
         }
+        if (needsDeliverableSelection()) {
+          if (deliverableSelectionRetries >= MAX_DELIVERABLE_SELECTION_RETRIES) {
+            const incomplete = await finishIncomplete({
+              text: 'Files were created, but the model did not explicitly select the final deliverables. No intermediate files were attached to the answer.',
+              reason: 'deliverable_selection_missing',
+              steeringLeaseId,
+            })
+            if (incomplete.deferredForSteering) continue
+            return incomplete
+          }
+          deliverableSelectionRetries += 1
+          if (content) convo.push({ role: 'assistant', content })
+          convo.push({
+            role: 'system',
+            content: [
+              DELIVERABLE_SELECTION_GUARD_MARKER,
+              'The previous completion was discarded because this chat turn created files without explicitly selecting its final deliverables.',
+              `Current artifact IDs: ${artifactIds.join(', ')}.`,
+              'Call set_deliverables now with only the artifact_ids that should appear in the final answer. Use an empty array only when no file should be delivered.',
+              'If any later tool creates another artifact, call set_deliverables again after that tool finishes.',
+            ].join(' '),
+          })
+          if (iter + 1 >= maxIters) maxIters = iter + 2
+          await persistTurn()
+          if (steeringLeaseId && typeof acknowledgeSteering === 'function') {
+            await acknowledgeSteering(steeringLeaseId)
+          }
+          continue
+        }
         const completion = await prepareCompletionForSteering({
           text: content || '',
           steeringLeaseId,
@@ -1334,6 +1497,7 @@ export async function runToolsLoop({
     modelBudgetExceededAfterResponse = null
     let budgetExceeded = budgetExceededByCompletedModelResponse
     let noProgressReason = null
+    let noProgressCode = null
     const markCall = async (call, updates) => {
       Object.assign(call, updates)
       await persistTurn()
@@ -1405,7 +1569,7 @@ export async function runToolsLoop({
       if (repeatReminder) pendingRepeatCallReminder = repeatReminder
       let executionArgsUsed = args
       // ★ M3.5:预算检查(reflect/request_clarification 不计,鼓励复盘与澄清)
-      const isFree = name === 'reflect' || name === 'request_clarification' || name === 'request_directory' || name === 'sleep_until'
+      const isFree = name === 'reflect' || name === 'request_clarification' || name === 'request_directory' || name === 'sleep_until' || name === 'set_deliverables'
       let result
       let outcomeBudgetExceeded = null
       let outcomeNoProgressReason = null
@@ -1494,6 +1658,14 @@ export async function runToolsLoop({
 
           if (!result && name === 'request_clarification') {
             result = contradictedCapabilityClarification(args, activeToolSpecs, convo)
+          }
+
+          if (!result && name === 'set_deliverables') {
+            try {
+              result = selectDeliverables(args)
+            } catch (error) {
+              result = normalizeToolError(error)
+            }
           }
 
           if (!result) {
@@ -1720,9 +1892,10 @@ export async function runToolsLoop({
         }
       }
       const progressChanges = progressChangesFor(executedCall, outcome.result)
+      const semanticControlCall = executedCall?.name === 'set_deliverables'
       const installSignature = installAttemptSignature(executedCall)
       if (installSignature) rememberInstallAttempt(installSignature)
-      const productiveExecution = executionConvergenceEnabled
+      const productiveExecution = !semanticControlCall && executionConvergenceEnabled
         && isProductiveExecutionOutcome(executedCall, outcome.result, outcome.artifactId)
       if (productiveExecution) {
         convergenceBatch.productiveSuccess = true
@@ -1743,10 +1916,12 @@ export async function runToolsLoop({
         && outcome.result?.clarification?.blocker_kind === 'scheduled_wake'
         && Number.isFinite(Number(outcome.result?.clarification?.wakeAt))
         && SCHEDULED_WAIT_INTENT.test(executionIntentText)
-      if (succeeded && (isSubstantiveToolCall(executedCall) || scheduledWaitEvidence)) {
+      if (!semanticControlCall && succeeded && (isSubstantiveToolCall(executedCall) || scheduledWaitEvidence)) {
         executionEvidenceObserved = true
       }
-      const mutationExecutionSucceeded = executionConvergenceEnabled
+      const mutationExecutionSucceeded = semanticControlCall
+        ? false
+        : executionConvergenceEnabled
         ? productiveExecution
         : succeeded && isMutationExecutionCall(executedCall, outcome.artifactId)
       if (mutationExecutionSucceeded) {
@@ -1796,8 +1971,8 @@ export async function runToolsLoop({
         pdfLayoutVerificationObserved = true
         pdfLayoutVerificationRetries = 0
       }
-      if (Array.isArray(outcome.artifactIds)) artifactIds.push(...outcome.artifactIds)
-      else if (outcome.artifactId) artifactIds.push(outcome.artifactId)
+      if (Array.isArray(outcome.artifactIds)) recordArtifactIds(outcome.artifactIds)
+      else if (outcome.artifactId) recordArtifactIds([outcome.artifactId])
       if (outcome.artifactId && expectedArtifactTools.has(outcome.call?.name)) {
         deliveredArtifactTools.add(outcome.call.name)
       }
@@ -1871,8 +2046,15 @@ export async function runToolsLoop({
         : loopGuard.afterCall?.(executedCall, outcome.result) || { ok: true }
       if (!noProgressReason) {
         noProgressReason = outcome.noProgressReason
-          || (!progress.ok ? progress.reason : null)
           || (!toolProgress.ok ? toolProgress.reason : null)
+          || (!progress.ok ? progress.reason : null)
+        if (noProgressReason) {
+          noProgressCode = outcome.noProgressReason
+            ? outcome.result?.code || 'tool_no_progress'
+            : !toolProgress.ok
+              ? toolProgress.result?.code || 'tool_no_progress'
+              : progress.result?.code || 'tool_no_progress'
+        }
       }
       if (!budgetExceeded && outcome.budgetExceeded) budgetExceeded = outcome.budgetExceeded
       if (!pausedByClarification && outcome.clarification) pausedByClarification = outcome.clarification
@@ -2011,13 +2193,18 @@ export async function runToolsLoop({
           (candidate) => executeOne(candidate, { durableExecution: false }),
           { concurrency: JOB_READ_CONCURRENCY },
         )
-        const hardNoProgressReason = outcomes.find((outcome) => outcome.noProgressReason)?.noProgressReason || null
+        const hardNoProgressOutcome = outcomes.find((outcome) => outcome.noProgressReason) || null
         for (const outcome of outcomes) await recordOutcome(outcome)
         // A later successful candidate proves progress after ordinary read
         // failures. It must not, however, erase a pre-execution hard fuse such
         // as the third identical call in the same segment.
-        if (hardNoProgressReason) noProgressReason = hardNoProgressReason
-        else if (outcomes.some(({ result }) => result?.ok === true)) noProgressReason = null
+        if (hardNoProgressOutcome) {
+          noProgressReason = hardNoProgressOutcome.noProgressReason
+          noProgressCode = hardNoProgressOutcome.result?.code || 'tool_no_progress'
+        } else if (outcomes.some(({ result }) => result?.ok === true)) {
+          noProgressReason = null
+          noProgressCode = null
+        }
         callIndex = segmentEnd
       } else {
         const outcome = await executeOne(call)
@@ -2035,6 +2222,23 @@ export async function runToolsLoop({
       }
     }
     convo.push(...deferredPostBatchMessages)
+    const failureStrategyAdvisories = loopGuard.pendingAdvisories?.() || []
+    for (const advisory of failureStrategyAdvisories) {
+      convo.push({
+        role: 'system',
+        content: [
+          '[TOOL FAILURE STRATEGY REQUIRED]',
+          'code=' + advisory.code,
+          'level=' + advisory.level,
+          'tool=' + advisory.tool,
+          'failures=' + advisory.count + '.',
+          advisory.content,
+        ].join(' '),
+      })
+    }
+    // Commit the fired tier only after its model-visible message is in the
+    // conversation. The checkpoint below then persists both atomically.
+    if (failureStrategyAdvisories.length > 0) loopGuard.commitPendingAdvisories?.()
     if (executionConvergenceEnabled) {
       if (convergenceBatch.productiveSuccess) {
         executionConvergence.unproductiveRounds = 0
@@ -2071,6 +2275,7 @@ export async function runToolsLoop({
     await persistTurn()
     await emitToolProgress('batch_completed')
     if (batchSupersededBySteering) continue
+    if (needsDeliverableSelection() && iter + 1 >= maxIters) maxIters = iter + 2
     if (budgetExceeded) {
       // ★ Lens-4 fix:预算超限写 audit,审计员能追查 job 为什么没跑完
       if (job?.userId) {
@@ -2206,9 +2411,16 @@ export async function runToolsLoop({
         iterations: iter + 1,
         incomplete: true,
         noProgress: true,
+        code: noProgressCode || 'tool_no_progress',
         reason: noProgressReason,
         recovery,
-      }, { steeringLeaseId, finalMetadata: { noProgress: true } })
+      }, {
+        steeringLeaseId,
+        finalMetadata: {
+          noProgress: true,
+          code: noProgressCode || 'tool_no_progress',
+        },
+      })
       if (!terminal) continue
       return terminal
     }
@@ -2281,7 +2493,13 @@ export async function runToolsLoop({
   if (!finalCheckpointPersisted) {
     await persistTurn({ final: { text: finalText, iterations: Math.min(iter + 1, maxIters) } })
   }
-  return { text: finalText, artifactIds, iterations: Math.min(iter + 1, maxIters), recovery }
+  return {
+    text: finalText,
+    artifactIds,
+    ...deliverySelectionFields(),
+    iterations: Math.min(iter + 1, maxIters),
+    recovery,
+  }
 }
 
 /**

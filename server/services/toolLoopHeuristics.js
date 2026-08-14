@@ -35,7 +35,7 @@ import { dispatchGitTool } from '../adapters/gitWorkbench.js'
 import { dispatchCodeSearchTool } from '../utils/codeSearch.js'
 import { dispatchApplyPatchTool } from '../utils/applyPatch.js'
 import { dispatchAgenticTool } from '../utils/agenticTools.js'
-import { getToolMetadata, listBuiltinSpecs } from './toolRegistry.js'
+import { getBuiltinSpec, getToolMetadata, listBuiltinSpecs } from './toolRegistry.js'
 import { CONNECTOR_TOOL_NAMES, CONNECTOR_TOOL_SPECS, CONNECTOR_WRITE_TOOL_NAMES, executeConnectorTool } from './connectorTools.js'
 import { dispatchMemoryTool } from '../utils/memoryTools.js'
 import { allowedArtifactTools, isFileArtifactTool } from './artifactIntent.js'
@@ -1161,10 +1161,26 @@ export function selectJobToolSpecs({
   userId = null,
   metadataResolver = undefined,
 } = {}) {
+  // Final-delivery selection is a server-owned chat control, not a user
+  // capability toggle. Older clients and persisted settings do not know about
+  // this hidden tool, so the upstream configured list can legitimately omit
+  // it. Restore the canonical schema for chat turns before capability routing;
+  // answer mode will still remove it as a mutating control, and non-chat jobs
+  // remain unable to claim turn-owned artifacts.
+  const sourceSpecs = Array.isArray(specs) ? specs : []
+  const deliveryControlSpec = origin === 'chat' ? getBuiltinSpec('set_deliverables') : null
+  const routedSpecs = deliveryControlSpec
+    && !sourceSpecs.some((spec) => spec?.function?.name === 'set_deliverables')
+    ? [...sourceSpecs, deliveryControlSpec]
+    : sourceSpecs
   const allowed = allowedArtifactTools(userPrompt, { skillId })
-  const artifactFiltered = specs.filter((spec) => {
+  const artifactFiltered = routedSpecs.filter((spec) => {
     const name = spec?.function?.name
     if (!name) return false
+    // Final-delivery selection is scoped to a persisted chat turn. Background
+    // jobs have a different artifact owner (job/step) and must not be allowed
+    // to claim turn artifacts through this control tool.
+    if (name === 'set_deliverables' && origin !== 'chat') return false
     return !isFileArtifactTool(name) || allowed.has(name)
   })
   if (origin === 'chat') {

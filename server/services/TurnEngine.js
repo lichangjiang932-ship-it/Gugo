@@ -334,6 +334,26 @@ function normalizeArtifactIds(values) {
     .filter(Boolean))]
 }
 
+function sameArtifactIds(left, right) {
+  const normalizedLeft = normalizeArtifactIds(left)
+  const normalizedRight = normalizeArtifactIds(right)
+  return normalizedLeft.length === normalizedRight.length
+    && normalizedLeft.every((id, index) => id === normalizedRight[index])
+}
+
+function optionalDeliveryArtifactIds(value, fallback = undefined) {
+  if (value && typeof value === 'object' && Object.hasOwn(value, 'deliveryArtifactIds')) {
+    return normalizeArtifactIds(value.deliveryArtifactIds)
+  }
+  return fallback
+}
+
+function deliveryArtifactFields(deliveryArtifactIds) {
+  return Array.isArray(deliveryArtifactIds)
+    ? { deliveryArtifactIds: [...deliveryArtifactIds] }
+    : {}
+}
+
 function normalizeFailure(error, {
   code = 'TURN_FAILED',
   message = 'Turn execution failed',
@@ -1001,9 +1021,10 @@ export class TurnEngine {
     const baselineToolCallIds = collectToolCallIds(messages)
     let checkpointMessages = restoredCheckpointState?.messages || []
     let checkpointArtifactIds = normalizeArtifactIds(restoredCheckpointState?.artifactIds)
+    let checkpointDeliveryArtifactIds = optionalDeliveryArtifactIds(restoredCheckpointState)
     let checkpointIterations = Math.max(0, Number(restoredCheckpointState?.iterations) || 0)
     let streamedAssistantText = String(pendingRecoveryAttempt?.assistantText || '')
-    const persistTurnEvidence = ({ state, text, artifactIds, iterations, error = null }) => {
+    const persistTurnEvidence = ({ state, text, artifactIds, deliveryArtifactIds, iterations, error = null }) => {
       const evidenceText = String(text || '').trim() || error?.message || 'Turn execution did not complete.'
       const evidenceArtifacts = normalizeArtifactIds(artifactIds)
       const evidenceIterations = Math.max(0, Number(iterations) || 0)
@@ -1020,6 +1041,7 @@ export class TurnEngine {
             checkpointMessages,
             baselineToolCallIds,
             artifactIds: evidenceArtifacts,
+            deliveryArtifactIds,
             iterations: evidenceIterations,
           }),
           turnEvidence: true,
@@ -1100,7 +1122,13 @@ export class TurnEngine {
         loadCheckpoint: async () => restoredCheckpointState || null,
         saveCheckpoint: async (state) => {
           checkpointMessages = Array.isArray(state?.messages) ? state.messages : checkpointMessages
-          checkpointArtifactIds = normalizeArtifactIds(state?.artifactIds ?? checkpointArtifactIds)
+          const nextCheckpointArtifactIds = normalizeArtifactIds(state?.artifactIds ?? checkpointArtifactIds)
+          const artifactCollectionChanged = !sameArtifactIds(checkpointArtifactIds, nextCheckpointArtifactIds)
+          checkpointArtifactIds = nextCheckpointArtifactIds
+          checkpointDeliveryArtifactIds = optionalDeliveryArtifactIds(
+            state,
+            artifactCollectionChanged ? [] : checkpointDeliveryArtifactIds,
+          )
           checkpointIterations = Math.max(0, Number(state?.iterations) || checkpointIterations)
           await emitter('turn.checkpoint', { state })
           return true
@@ -1208,17 +1236,24 @@ export class TurnEngine {
       })
       if (signal.aborted) {
         if (lostTurnLease(signal)) return
-        await emitter('turn.cancelled', { reason: 'Cancelled by user' })
+        await emitter('turn.cancelled', {
+          reason: 'Cancelled by user',
+          artifactIds: normalizeArtifactIds(checkpointArtifactIds),
+          deliveryArtifactIds: [],
+          iterations: checkpointIterations,
+        })
         return
       }
       if (result?.interrupted) {
         const artifactIds = normalizeArtifactIds(result.artifactIds ?? checkpointArtifactIds)
+        const deliveryArtifactIds = optionalDeliveryArtifactIds(result, checkpointDeliveryArtifactIds)
         const iterations = Math.max(0, Number(result.iterations) || checkpointIterations)
         const partialText = String(result.text || streamedAssistantText || '')
         persistTurnEvidence({
           state: 'interrupted',
           text: partialText,
           artifactIds,
+          deliveryArtifactIds,
           iterations,
           error: normalizeFailure({
             code: result.code,
@@ -1232,6 +1267,7 @@ export class TurnEngine {
           retryable: true,
           text: partialText,
           artifactIds,
+          ...deliveryArtifactFields(deliveryArtifactIds),
           iterations,
         })
         return
@@ -1247,11 +1283,13 @@ export class TurnEngine {
         }, { retryable: true })
         const partialText = String(result.text || streamedAssistantText || '')
         const artifactIds = normalizeArtifactIds(result.artifactIds ?? checkpointArtifactIds)
+        const deliveryArtifactIds = optionalDeliveryArtifactIds(result, checkpointDeliveryArtifactIds)
         const iterations = Math.max(0, Number(result.iterations) || checkpointIterations)
         persistTurnEvidence({
           state: 'failed',
           text: partialText,
           artifactIds,
+          deliveryArtifactIds,
           iterations,
           error: failure,
         })
@@ -1261,6 +1299,7 @@ export class TurnEngine {
           error: failure,
           partialText,
           artifactIds,
+          ...deliveryArtifactFields(deliveryArtifactIds),
           iterations,
         })
         return
@@ -1271,8 +1310,15 @@ export class TurnEngine {
           ? result.clarification
           : { question: text, blocker_kind: 'missing_info' }
         const artifactIds = normalizeArtifactIds(result.artifactIds ?? checkpointArtifactIds)
+        const deliveryArtifactIds = optionalDeliveryArtifactIds(result, checkpointDeliveryArtifactIds)
         const iterations = Math.max(0, Number(result.iterations) || checkpointIterations)
-        await emitter('turn.paused', { text, clarification, artifactIds, iterations }, {
+        await emitter('turn.paused', {
+          text,
+          clarification,
+          artifactIds,
+          ...deliveryArtifactFields(deliveryArtifactIds),
+          iterations,
+        }, {
           beforeAppend: (pausedEvent) => {
             const pausedAt = this.deps.now()
             this.deps.writeMessage({
@@ -1287,6 +1333,7 @@ export class TurnEngine {
                   checkpointMessages,
                   baselineToolCallIds,
                   artifactIds,
+                  deliveryArtifactIds,
                   iterations,
                   paused: true,
                   compactionArchiveId: result?.recovery?.archiveId || null,
@@ -1302,6 +1349,8 @@ export class TurnEngine {
         return
       }
       const text = String(result?.text || '(任务已结束，但模型没有返回文本。)')
+      const artifactIds = normalizeArtifactIds(result?.artifactIds ?? checkpointArtifactIds)
+      const deliveryArtifactIds = optionalDeliveryArtifactIds(result, checkpointDeliveryArtifactIds)
       const completedAt = this.deps.now()
       this.deps.writeMessage({
         id: `${turnId}:assistant`, userId, sessionId, role: 'assistant', content: text,
@@ -1309,7 +1358,8 @@ export class TurnEngine {
           turnId,
           checkpointMessages,
           baselineToolCallIds,
-          artifactIds: result?.artifactIds || [],
+          artifactIds,
+          deliveryArtifactIds,
           iterations: result?.iterations || 0,
           compactionArchiveId: result?.recovery?.archiveId || null,
         }),
@@ -1317,7 +1367,8 @@ export class TurnEngine {
       })
       await emitter('turn.completed', {
         text,
-        artifactIds: result?.artifactIds || [],
+        artifactIds,
+        ...deliveryArtifactFields(deliveryArtifactIds),
         iterations: result?.iterations || 0,
       })
       // Best-effort async notification to external subscribers.
@@ -1325,7 +1376,12 @@ export class TurnEngine {
         userId,
         event: 'notification',
         tool: null,
-        args: { text: String(text || '').slice(0, 4_000), artifactIds: result?.artifactIds || [], iterations: result?.iterations || 0 },
+        args: {
+          text: String(text || '').slice(0, 4_000),
+          artifactIds,
+          ...deliveryArtifactFields(deliveryArtifactIds),
+          iterations: result?.iterations || 0,
+        },
         sessionId,
       }).catch(() => { /* notification hook is best-effort */ })
       try {
@@ -1346,18 +1402,25 @@ export class TurnEngine {
     } catch (error) {
       if (lostTurnLease(signal, error)) return
       if (isExplicitTurnCancellation(signal, error)) {
-        await emitter('turn.cancelled', { reason: error?.message || 'Cancelled by user' })
+        await emitter('turn.cancelled', {
+          reason: error?.message || 'Cancelled by user',
+          artifactIds: normalizeArtifactIds(checkpointArtifactIds),
+          deliveryArtifactIds: [],
+          iterations: checkpointIterations,
+        })
         return
       }
       const failure = normalizeFailure(error)
       const partialText = String(error?.partialText || error?.text || streamedAssistantText || '')
       const artifactIds = normalizeArtifactIds(error?.artifactIds ?? checkpointArtifactIds)
+      const deliveryArtifactIds = optionalDeliveryArtifactIds(error, checkpointDeliveryArtifactIds)
       const iterations = Math.max(0, Number(error?.iterations) || checkpointIterations)
       try {
         persistTurnEvidence({
           state: 'failed',
           text: partialText,
           artifactIds,
+          deliveryArtifactIds,
           iterations,
           error: failure,
         })
@@ -1370,6 +1433,7 @@ export class TurnEngine {
         error: failure,
         partialText,
         artifactIds,
+        ...deliveryArtifactFields(deliveryArtifactIds),
         iterations,
       })
     }

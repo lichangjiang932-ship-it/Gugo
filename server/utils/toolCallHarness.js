@@ -794,6 +794,21 @@ function isModelAuthoringError(result) {
   return MODEL_AUTHORING_ERROR_CODES.has(code)
 }
 
+function sameToolFailureAdvisory({ tool, count, level }) {
+  const guidance = [
+    'Analyze the concrete errors before another attempt. Do not keep guessing arguments; choose a materially different strategy.',
+    'Stop varying the same approach. Change executor or workflow, verify a new hypothesis, or identify one specific missing prerequisite.',
+    'You are approaching the hard no-progress limit. Use a fundamentally different path, request one concrete missing input, or finish with the verified partial result.',
+  ][Math.min(Math.max(level, 1), 3) - 1]
+  return {
+    code: 'tool_failure_strategy_required',
+    tool,
+    count,
+    level,
+    content: 'Tool ' + tool + ' has failed ' + count + ' times without recovering. ' + guidance,
+  }
+}
+
 /**
  * 无进展熔断：同一调用反复出现，或工具连续失败时停止继续烧 token。
  *
@@ -801,18 +816,41 @@ function isModelAuthoringError(result) {
  * @param {number} [options.maxRepeatedCalls] 同一签名重复多少次算无进展
  * @param {number} [options.maxConsecutiveErrors] 连续多少次**真实执行失败**算熔断
  * @param {number} [options.maxAuthoringErrors] 连续多少次**参数写错**才熔断。
+ * @param {number} [options.maxSameToolFailures] 同一执行器真实失败多少次才硬熔断
+ * @param {number[]} [options.sameToolFailureAdvisoryThresholds] 要求模型升级策略的失败次数
  *   给得比 maxConsecutiveErrors 宽松得多 —— 小模型需要更多次自我纠正的机会。
  */
 export function createToolLoopGuard({
   maxRepeatedCalls = 3,
   maxConsecutiveErrors = 6,
   maxAuthoringErrors = 20,
-  // Different arguments do not count as progress when the same executor keeps
-  // failing. Model-authored JSON/schema errors remain governed separately.
-  maxSameToolFailures = 4,
+  maxSameToolFailures = 20,
+  sameToolFailureAdvisoryThresholds = [4, 8, 12],
   initialState = null,
 } = {}) {
   const restored = initialState && typeof initialState === 'object' ? initialState : {}
+  const sameToolFailureHardLimit = Number.isFinite(Number(maxSameToolFailures))
+    ? Math.max(1, Math.floor(Number(maxSameToolFailures)))
+    : 20
+  const advisoryThresholds = [...new Set(
+    Array.isArray(sameToolFailureAdvisoryThresholds)
+      ? sameToolFailureAdvisoryThresholds
+      : [],
+  )]
+    .filter((value) => Number.isInteger(value)
+      && value >= 1
+      && value < sameToolFailureHardLimit)
+    .sort((left, right) => left - right)
+  const restoreAdvisoryThresholds = (value) => new Map(
+    Object.entries(value && typeof value === 'object' ? value : {})
+      .map(([name, threshold]) => [
+        String(name || '').trim(),
+        restoredCounter(threshold),
+      ])
+      .filter(([name, threshold]) => (
+        name && threshold > 0 && threshold < sameToolFailureHardLimit
+      )),
+  )
   const seenSignatures = new Set()
   const failedToolCounts = new Map(
     Object.entries(restored.failedTools && typeof restored.failedTools === 'object'
@@ -821,6 +859,17 @@ export function createToolLoopGuard({
       .map(([name, count]) => [String(name || '').trim(), restoredCounter(count)])
       .filter(([name, count]) => name && count > 0),
   )
+  const firedToolAdvisoryThresholds = restoreAdvisoryThresholds(
+    restored.firedToolAdvisoryThresholds,
+  )
+  const pendingToolAdvisoryThresholds = restoreAdvisoryThresholds(
+    restored.pendingToolAdvisoryThresholds,
+  )
+  for (const [name, threshold] of pendingToolAdvisoryThresholds) {
+    if (threshold <= (firedToolAdvisoryThresholds.get(name) || 0)) {
+      pendingToolAdvisoryThresholds.delete(name)
+    }
+  }
   let consecutiveErrors = restoredCounter(restored.consecutiveErrors)
   let consecutiveAuthoringErrors = restoredCounter(restored.consecutiveAuthoringErrors)
   let lastSignature = /^[a-f0-9]{64}$/u.test(String(restored.lastSignature || ''))
@@ -887,13 +936,23 @@ export function createToolLoopGuard({
       if (isModelAuthoringError(normalized)) {
         consecutiveAuthoringErrors += 1
         if (consecutiveAuthoringErrors >= maxAuthoringErrors) {
-          return { ok: false, reason: `模型已连续 ${consecutiveAuthoringErrors} 次写出不合法的工具参数` }
+          const reason = '模型已连续 ' + consecutiveAuthoringErrors + ' 次写出不合法的工具参数'
+          return {
+            ok: false,
+            reason,
+            result: toolError('tool_error_streak', reason, { retryable: false }),
+          }
         }
         return { ok: true }
       }
       consecutiveErrors += 1
       if (consecutiveErrors >= maxConsecutiveErrors) {
-        return { ok: false, reason: `工具已连续失败 ${consecutiveErrors} 次` }
+        const reason = '工具已连续失败 ' + consecutiveErrors + ' 次'
+        return {
+          ok: false,
+          reason,
+          result: toolError('tool_error_streak', reason, { retryable: false }),
+        }
       }
       return { ok: true }
     },
@@ -905,22 +964,63 @@ export function createToolLoopGuard({
       if (!failed) {
         // Success only proves recovery for this exact executor. In particular,
         // a reflect/request/sleep result must not erase another tool's history.
-        if (isSubstantiveToolCall(call)) failedToolCounts.delete(name)
+        if (isSubstantiveToolCall(call)) {
+          failedToolCounts.delete(name)
+          firedToolAdvisoryThresholds.delete(name)
+          pendingToolAdvisoryThresholds.delete(name)
+        }
         return { ok: true }
       }
       if (isModelAuthoringError(normalized)) return { ok: true }
       const count = (failedToolCounts.get(name) || 0) + 1
       failedToolCounts.set(name, count)
-      if (count < maxSameToolFailures) return { ok: true }
-      const reason = `工具 ${name} 已使用不同参数失败 ${count} 次，未取得新进展`
-      return {
-        ok: false,
-        reason,
-        result: toolError('tool_no_progress', reason, {
-          retryable: false,
-          hint: '停止继续猜测参数；请基于已有结果简短收尾，或明确说明唯一缺失条件。',
-        }),
+      if (count >= sameToolFailureHardLimit) {
+        const reason = '工具 ' + name + ' 已连续失败 ' + count + ' 次，达到无进展硬上限'
+        return {
+          ok: false,
+          reason,
+          result: toolError('tool_no_progress_hard_limit', reason, {
+            retryable: false,
+            hint: '停止继续猜测参数；请基于已有结果简短收尾，或明确说明唯一缺失条件。',
+          }),
+        }
       }
+      let threshold = 0
+      let level = 0
+      for (let index = 0; index < advisoryThresholds.length; index += 1) {
+        if (count < advisoryThresholds[index]) break
+        threshold = advisoryThresholds[index]
+        level = index + 1
+      }
+      const knownThreshold = Math.max(
+        firedToolAdvisoryThresholds.get(name) || 0,
+        pendingToolAdvisoryThresholds.get(name) || 0,
+      )
+      if (threshold <= knownThreshold) return { ok: true }
+      pendingToolAdvisoryThresholds.set(name, threshold)
+      return { ok: true, advisory: sameToolFailureAdvisory({ tool: name, count, level }) }
+    },
+    pendingAdvisories() {
+      return [...pendingToolAdvisoryThresholds.entries()].map(([tool, threshold]) => {
+        const configuredIndex = advisoryThresholds.indexOf(threshold)
+        const level = configuredIndex >= 0
+          ? configuredIndex + 1
+          : Math.max(1, advisoryThresholds.filter((value) => value <= threshold).length)
+        return sameToolFailureAdvisory({
+          tool,
+          level,
+          count: failedToolCounts.get(tool) || threshold,
+        })
+      })
+    },
+    commitPendingAdvisories() {
+      for (const [tool, threshold] of pendingToolAdvisoryThresholds) {
+        firedToolAdvisoryThresholds.set(
+          tool,
+          Math.max(firedToolAdvisoryThresholds.get(tool) || 0, threshold),
+        )
+      }
+      pendingToolAdvisoryThresholds.clear()
     },
     snapshot() {
       return {
@@ -930,6 +1030,8 @@ export function createToolLoopGuard({
         repeatedCallStreak,
         lastSignature,
         failedTools: Object.fromEntries(failedToolCounts),
+        firedToolAdvisoryThresholds: Object.fromEntries(firedToolAdvisoryThresholds),
+        pendingToolAdvisoryThresholds: Object.fromEntries(pendingToolAdvisoryThresholds),
       }
     },
   }

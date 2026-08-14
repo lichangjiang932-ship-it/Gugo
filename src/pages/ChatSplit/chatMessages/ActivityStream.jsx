@@ -1,26 +1,6 @@
 import { useT } from '../../../i18n/I18nProvider.jsx'
 import { TOOL_CALL_STATUS } from '../../../store/taskStatus.js'
-import { parseToolArgs, summarizeToolArgs, toolCallLabel } from '../../../lib/toolCallPresentation.js'
 import { ReasoningTrace } from './ActivityTraces.jsx'
-
-const LIVE_OUTPUT_TAIL_CHARS = 1200
-const LIVE_OUTPUT_TAIL_LINES = 8
-const COMPLETED_PREVIEW_COUNT = 2
-
-function tailLines(text, chars, lines) {
-  const value = String(text || '')
-  if (!value) return ''
-  const trimmed = value.length > chars ? value.slice(-chars) : value
-  const byLines = trimmed.split(/\r?\n/)
-  return byLines.slice(-lines).join('\n')
-}
-
-function callLine(call, t) {
-  const label = toolCallLabel(call.name, t)
-  const args = parseToolArgs(call.arguments)
-  const summary = summarizeToolArgs(call.name, args, t)
-  return { label, summary: summary || t('chatMessages.toolNoArguments') }
-}
 
 /**
  * 降级链路可视化:provider 重试 / 切换以一条 amber 文字行透出,
@@ -59,58 +39,37 @@ export default function ActivityStream({ msg }) {
   const toolCalls = Array.isArray(meta.toolCalls) ? meta.toolCalls : []
   const running = [...toolCalls].reverse().find((call) => call.status === TOOL_CALL_STATUS.RUNNING) || null
   const fallback = fallbackNotice(meta, t)
+  const connectionNeedsAttention = ['reconnecting', 'cancelling'].includes(meta.serverConnectionState)
 
-  if (meta.modelActivity?.kind === 'tool_call_ready' && !running) {
-    return (
-      <div data-testid="model-activity" role="status" aria-live="polite" className="chat-activity-stream mb-2">
-        {fallback}
-        <div className="chat-activity-line chat-activity-line-ready">
-          <span>{t('chatMessages.toolCallReady', { name: meta.modelActivity.toolName })}</span>
-        </div>
-      </div>
-    )
+  if (running && !connectionNeedsAttention) {
+    return fallback
+      ? <div className="chat-activity-stream mb-2" role="status" aria-live="polite">{fallback}</div>
+      : null
   }
-
-  if (toolCalls.length === 0) {
-    return (
-      <>
-        {fallback && <div className="chat-activity-stream mb-2" role="status" aria-live="polite">{fallback}</div>}
-        <ReasoningTrace text={meta.reasoning || ''} streaming={!!meta.streaming && !msg.content} />
-      </>
-    )
-  }
-
-  const completed = toolCalls.filter((call) => call.status !== TOOL_CALL_STATUS.RUNNING)
-  const recentCompleted = completed.slice(-COMPLETED_PREVIEW_COUNT)
 
   return (
-    <div className="chat-activity-stream mb-2" role="status" aria-live="polite">
-      {fallback}
-      {recentCompleted.map((call) => {
-        const { label, summary } = callLine(call, t)
-        const failed = call.status === TOOL_CALL_STATUS.ERROR
-        return (
-          <div key={call.id} className={`chat-activity-line chat-activity-line-done ${failed ? 'chat-activity-line-error' : ''}`}>
-            <span className="chat-activity-mark" aria-hidden="true">{failed ? '\u2717' : '\u2713'}</span>
-            <span className="chat-activity-label">{label}</span>
-            <span className="chat-activity-arg">{summary}</span>
-          </div>
-        )
-      })}
-      {running && (() => {
-        const { label, summary } = callLine(running, t)
-        const output = tailLines(running.liveOutput, LIVE_OUTPUT_TAIL_CHARS, LIVE_OUTPUT_TAIL_LINES)
-        return (
-          <div key={running.id}>
-            <div className="chat-activity-line chat-activity-line-running">
-              <span className="chat-activity-mark chat-activity-mark-running" aria-hidden="true">{'\u2192'}</span>
-              <span className="chat-activity-label">{label}</span>
-              <span className="chat-activity-arg">{summary}</span>
-            </div>
-            {output && <pre className="chat-activity-live-output" data-testid="activity-live-output">{output}</pre>}
-          </div>
-        )
-      })()}
-    </div>
+    <>
+      {fallback && <div className="chat-activity-stream mb-2" role="status" aria-live="polite">{fallback}</div>}
+      <ReasoningTrace
+        text={meta.reasoning || ''}
+        streaming={!!meta.streaming}
+        label={activityLabel(meta, toolCalls, t)}
+        testId="model-activity"
+      />
+    </>
   )
+}
+
+function activityLabel(meta, toolCalls, t) {
+  if (meta?.serverConnectionState === 'reconnecting') return t('chatMessages.reconnectingTask')
+  if (meta?.serverConnectionState === 'cancelling') return t('chatMessages.cancellingTask')
+  const activity = meta?.modelActivity
+  if (activity?.kind === 'tool_call_ready') {
+    return t('chatMessages.toolCallReady', { name: activity.toolName || t('chatMessages.toolUnknown') })
+  }
+  if (activity?.kind === 'model') return t('chatMessages.waitingForModel')
+  if (activity?.kind === 'responding') return t('chatMessages.draftingResponse')
+  if (activity?.kind === 'reviewing') return t('chatMessages.reviewingResults')
+  if (toolCalls.length > 0) return t('chatMessages.continuingTask')
+  return t('chatMessages.preparingTask')
 }

@@ -7,7 +7,7 @@ import ChoicePicker from '../../../components/ChoicePicker.jsx'
 import { hasChoices, stripChoices } from '../../../lib/choices.js'
 import { buildMessageTimeline } from '../../../lib/messageTimeline.js'
 import { shouldCollapseArtifactPreview } from '../../../lib/artifactPreview.js'
-import { artifactHasInlineReference, artifactReferenceOpenPayload, buildMessageArtifactPreview, buildServerArtifactReferences, findArtifactReferenceByHref } from '../../../lib/artifactReferences.js'
+import { artifactHasInlineReference, artifactReferenceOpenPayload, buildMessageArtifactPreview, buildServerArtifactReferences, findArtifactReferenceByHref, resolveDeliveryArtifacts } from '../../../lib/artifactReferences.js'
 import { formatMessageDateTime, formatMessageTime } from '../../../lib/messageTime.js'
 import { copyTextToClipboard } from '../../../lib/clipboard.js'
 import { ArtifactReferenceLinks } from './ArtifactCards.jsx'
@@ -55,8 +55,9 @@ export default function MessageRow({
   // global chat generation state.
   const isMessageComplete = !isCurrentStreamingMessage
   const showArtifactPreview = !!artifactPreview && isMessageComplete
+  const deliveryArtifacts = resolveDeliveryArtifacts(msg.meta)
   const serverArtifactReferences = buildServerArtifactReferences({
-    artifacts: msg.meta?.serverArtifacts,
+    artifacts: deliveryArtifacts,
     content: String(msg.meta?.artifactSource || msg.content || ''),
     messageId: msg.id,
     preview: artifactPreview,
@@ -143,14 +144,20 @@ export default function MessageRow({
 }
 
 function AssistantContent({ artifactPreview, isCurrentStreamingMessage, isMessageComplete, msg, onOpenArtifact, showArtifactPreview }) {
-  const artifactReferences = buildServerArtifactReferences({
+  const toolArtifactReferences = buildServerArtifactReferences({
     artifacts: msg.meta?.serverArtifacts,
     content: String(msg.meta?.artifactSource || msg.content || ''),
     messageId: msg.id,
     preview: artifactPreview,
   })
+  const deliveryArtifactReferences = buildServerArtifactReferences({
+    artifacts: resolveDeliveryArtifacts(msg.meta),
+    content: String(msg.meta?.artifactSource || msg.content || ''),
+    messageId: msg.id,
+    preview: artifactPreview,
+  })
   const openInlineArtifact = (href) => {
-    const reference = findArtifactReferenceByHref(artifactReferences, href)
+    const reference = findArtifactReferenceByHref(deliveryArtifactReferences, href)
     if (!reference) return false
     onOpenArtifact?.(artifactReferenceOpenPayload(reference, msg.id))
     return true
@@ -168,11 +175,10 @@ function AssistantContent({ artifactPreview, isCurrentStreamingMessage, isMessag
         {isCurrentStreamingMessage && <ActivityStream msg={msg} />}
         {timeline.map((segment) => (
           segment.kind === 'tools'
-            ? <ToolCallTrace key={segment.key} calls={segment.calls} artifacts={artifactReferences} onOpenArtifact={openToolArtifact} />
-            : <MarkdownRenderer key={segment.key} artifactReferences={artifactReferences} streaming={isCurrentStreamingMessage} onLinkClick={openInlineArtifact}>{segment.text}</MarkdownRenderer>
+            ? <ToolCallTrace key={segment.key} calls={segment.calls} artifacts={toolArtifactReferences} onOpenArtifact={openToolArtifact} />
+            : <MarkdownRenderer key={segment.key} artifactReferences={deliveryArtifactReferences} streaming={isCurrentStreamingMessage} onLinkClick={openInlineArtifact}>{segment.text}</MarkdownRenderer>
         ))}
       </div>
-      {msg.meta?.streaming && <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse bg-ember/80 align-middle" aria-hidden="true" />}
       <ProgressTrace progress={msg.meta?.progress} />
       {hasChoices(msg.content) && isMessageComplete && (
         <ChoicePicker
@@ -182,7 +188,7 @@ function AssistantContent({ artifactPreview, isCurrentStreamingMessage, isMessag
           }))}
         />
       )}
-      {isMessageComplete && (showArtifactPreview || msg.meta?.serverArtifacts?.length > 0) && (
+      {isMessageComplete && (showArtifactPreview || resolveDeliveryArtifacts(msg.meta).length > 0) && (
         <ArtifactReferenceLinks msg={msg} preview={artifactPreview} onOpen={onOpenArtifact} />
       )}
     </>
