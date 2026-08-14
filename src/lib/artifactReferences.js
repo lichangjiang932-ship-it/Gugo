@@ -16,7 +16,10 @@ const FILE_ARTIFACT_TYPES = new Set(['html', 'pptx', 'docx', 'xlsx'])
 export function resolveDeliveryArtifacts(meta = {}) {
   const artifacts = Array.isArray(meta?.serverArtifacts) ? meta.serverArtifacts : []
   if (!meta || typeof meta !== 'object' || !Object.hasOwn(meta, 'serverDeliveryArtifactIds')) {
-    return artifacts
+    // A server turn can persist drafts, previews, and validation helpers beside
+    // the actual deliverable. Without an explicit selection there is no safe
+    // way to tell them apart, so fail closed instead of exposing every artifact.
+    return []
   }
   const byId = new Map(artifacts
     .filter((artifact) => artifact?.id)
@@ -47,6 +50,17 @@ export function buildMessageArtifactPreview(message = {}) {
 
   const deliverySelectionExplicit = Object.hasOwn(meta, 'serverDeliveryArtifactIds')
   const serverArtifacts = resolveDeliveryArtifacts(meta)
+  const hasServerArtifactContract = Boolean(
+    meta.serverTurnId
+      || meta.serverAuthoritative
+      || Object.hasOwn(meta, 'serverArtifacts')
+      || Object.hasOwn(meta, 'serverArtifactIds')
+      || deliverySelectionExplicit,
+  )
+  // Server-backed files follow the same explicit-delivery contract as the
+  // links below the message. Do not recreate a draft card from artifactSource
+  // or raw HTML when the selection is absent, empty, or cannot be resolved.
+  if (hasServerArtifactContract && (!deliverySelectionExplicit || serverArtifacts.length === 0)) return null
   const artifactSource = String(meta.artifactSource || '').trim()
   if (artifactSource) {
     const preview = buildArtifactPreview({ content: artifactSource, meta })

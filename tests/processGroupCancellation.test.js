@@ -21,7 +21,9 @@ async function cleanupEventually(root) {
 
 test('Windows cancellation waits for a cmd child tree to release its working directory', {
   skip: process.platform !== 'win32',
-  timeout: 15_000,
+  // Each iteration may legitimately spend the PowerShell startup budget plus
+  // the native tree-kill budget on a heavily loaded Windows runner.
+  timeout: 45_000,
 }, async () => {
   for (let iteration = 0; iteration < 3; iteration += 1) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-process-cancel-'))
