@@ -9,6 +9,7 @@ import {
   projectSessionMutation,
   resolveSessionMutationTarget,
 } from '../src/store/sessionServerSync.js'
+import { buildMessageTimeline } from '../src/lib/messageTimeline.js'
 
 function replaceSession(state, sessionId, update) {
   return {
@@ -137,7 +138,7 @@ test('projectSessionMutation derives exact replacement messages without mutating
   assert.deepEqual(state.sessions[0].messages.map((message) => message.id), ['m1', 'm2'])
 })
 
-test('server snapshots replace canonical text while retaining local rendering metadata', () => {
+test('server snapshots replace canonical text without retaining stale tool offsets', () => {
   const localMessages = [{
     id: 'assistant-1',
     role: 'assistant',
@@ -168,11 +169,52 @@ test('server snapshots replace canonical text while retaining local rendering me
   assert.equal(merged[0].timestamp, 20)
   assert.deepEqual(merged[0].attachments, [{ name: 'preview.png' }])
   assert.equal(merged[0].meta.reasoning, 'local reasoning')
-  assert.deepEqual(merged[0].meta.toolCalls, [{ id: 'call-1', textOffset: 4 }])
+  assert.deepEqual(merged[0].meta.toolCalls, [{ id: 'call-1' }])
   assert.deepEqual(merged[0].meta.serverArtifacts, [{ id: 'artifact-1' }])
   assert.equal(merged[0].meta.serverTurnId, 'turn-1')
   assert.equal(merged[0].meta.streaming, false)
   assert.equal(merged[0].meta.serverAuthoritative, true)
+})
+
+test('server snapshots retain local tool offsets when canonical text is unchanged', () => {
+  const content = 'same canonical text'
+  const [merged] = mergeServerSessionMessages([{
+    id: 'assistant-same',
+    role: 'assistant',
+    content,
+    meta: { toolCalls: [{ id: 'call-same', textOffset: 4 }] },
+  }], [{
+    id: 'assistant-same',
+    role: 'assistant',
+    content,
+    meta: { toolCalls: [{ id: 'call-same' }] },
+  }])
+
+  assert.deepEqual(merged.meta.toolCalls, [{ id: 'call-same', textOffset: 4 }])
+})
+
+test('authoritative final text remains fully visible after a discarded candidate response', () => {
+  const discardedCandidate = 'C'.repeat(224)
+  const finalText = `${'F'.repeat(224)}6B5102A919ABDA03146DE557A78EA1311FEEEAA26C8FBA4E7`
+  const [merged] = mergeServerSessionMessages([{
+    id: 'assistant-final',
+    role: 'assistant',
+    content: discardedCandidate + finalText,
+    meta: { toolCalls: [{ id: 'readback', name: 'read_file', textOffset: discardedCandidate.length }] },
+  }], [{
+    id: 'assistant-final',
+    role: 'assistant',
+    content: finalText,
+    meta: { toolCalls: [{ id: 'readback', name: 'read_file' }] },
+  }])
+
+  const finalSegment = [...buildMessageTimeline(merged.content, merged.meta.toolCalls)]
+    .reverse()
+    .find((segment) => segment.kind === 'text' && segment.text.trim())
+
+  assert.equal(merged.content, finalText)
+  assert.deepEqual(merged.meta.toolCalls, [{ id: 'readback', name: 'read_file' }])
+  assert.equal(finalSegment?.text, finalText)
 })
 
 test('server snapshot artifacts replace empty or partial local artifact lists', () => {
@@ -371,6 +413,27 @@ test('recovery stubs stay resumable until a real server assistant replaces them'
   assert.equal(completed.content, 'complete')
   assert.equal(completed.meta.streaming, false)
   assert.equal(completed.meta.serverRecoveryStub, undefined)
+})
+
+test('recovery stubs preserve live tool offsets even when placeholder text differs', () => {
+  const [recoverable] = mergeServerSessionMessages([{
+    id: 'turn-offset:assistant',
+    role: 'assistant',
+    content: 'live partial text',
+    meta: { streaming: true, toolCalls: [{ id: 'live-call', textOffset: 5 }] },
+  }], [{
+    id: 'turn-offset:assistant',
+    role: 'assistant',
+    content: 'recovering',
+    meta: {
+      streaming: true,
+      serverRecoveryStub: true,
+      toolCalls: [{ id: 'live-call' }],
+    },
+  }])
+
+  assert.equal(recoverable.meta.serverRecoveryStub, true)
+  assert.deepEqual(recoverable.meta.toolCalls, [{ id: 'live-call', textOffset: 5 }])
 })
 
 test('a server session containing only an active-turn stub still requires transcript hydration', () => {

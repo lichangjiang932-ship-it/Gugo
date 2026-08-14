@@ -90,6 +90,22 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
       delete merged.meta.pendingServerSync
       if (serverMessage.role === 'assistant') {
         const recoveryStub = serverMeta.serverRecoveryStub === true
+        const canonicalTextChanged = !recoveryStub && merged.content !== localMessage.content
+        if (canonicalTextChanged) {
+          if (Array.isArray(serverMeta.toolCalls)) {
+            // Live text offsets are coordinates into the local streamed body.
+            // Once an authoritative snapshot replaces that body, only the
+            // snapshot's tool calls are safe to use for timeline slicing.
+            merged.meta.toolCalls = serverMeta.toolCalls
+          } else if (Array.isArray(localMeta.toolCalls)) {
+            merged.meta.toolCalls = localMeta.toolCalls.map((call) => {
+              if (!call || typeof call !== 'object' || !Object.hasOwn(call, 'textOffset')) return call
+              const normalized = { ...call }
+              delete normalized.textOffset
+              return normalized
+            })
+          }
+        }
         merged.meta.serverTurnId = serverMeta.serverTurnId ?? localMeta.serverTurnId ?? null
         merged.meta.streaming = recoveryStub
         merged.meta.serverAuthoritative = !recoveryStub
