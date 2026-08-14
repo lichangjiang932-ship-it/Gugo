@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
+import { CLOUD_PRESETS, LOCAL_PRESETS, formatContextTokens } from '../src/components/modelProviders/providerConfig.js'
 
 const source = fs.readFileSync(new URL('../src/components/modelProviders/providerConfig.js', import.meta.url), 'utf8')
 
@@ -13,4 +14,25 @@ test('verified DeepSeek and Qwen presets use current official API model IDs', ()
   }
   assert.doesNotMatch(source, /qwen3\.5-(?:max|plus|flash)/)
   assert.doesNotMatch(source, /models:\s*\['deepseek-v4',/)
+})
+
+test('every preset ships defaults so users only paste an API key', () => {
+  for (const preset of [...CLOUD_PRESETS, ...LOCAL_PRESETS]) {
+    assert.ok(preset.baseUrl, `${preset.id} has a baseUrl`)
+    if (preset.local) continue
+    assert.ok(Number.isFinite(preset.contextWindow) && preset.contextWindow > 0, `${preset.id} has a contextWindow`)
+    for (const key of ['supportsTools', 'supportsStreaming', 'supportsVision', 'supportsPdf']) {
+      assert.ok(['0', '1'].includes(preset.caps?.[key]), `${preset.id} caps.${key} is 0/1`)
+    }
+    assert.ok(Array.isArray(preset.models) && preset.models.length > 0, `${preset.id} has models`)
+  }
+})
+
+test('formatContextTokens renders compact sizes', () => {
+  assert.equal(formatContextTokens(128000), '128K')
+  assert.equal(formatContextTokens(1000000), '1M')
+  assert.equal(formatContextTokens(200000), '200K')
+  assert.equal(formatContextTokens(''), '')
+  assert.equal(formatContextTokens(0), '')
+  assert.equal(formatContextTokens(undefined), '')
 })

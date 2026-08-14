@@ -24,7 +24,7 @@ import { buildAssistantToolCallsMessage, buildToolResultMessage, buildToolResult
 import { extractTextToolCalls } from '../utils/textToolCalls.js'
 import { dispatchHooks } from './hooksService.js'
 import { replaceRuntimeCapabilityBlock } from './runtimeCapabilities.js'
-import { hasMutationExecutionIntent, shouldRequireExecution } from '../utils/executionIntent.js'
+import { hasMutationExecutionIntent, isTextDeliverableRequest, shouldRequireExecution } from '../utils/executionIntent.js'
 import { observeToolCalls, recordToolProgress, restoreToolProgress, serializeToolProgress, toolProgressPayload } from '../utils/toolProgress.js'
 import { listTurnArtifacts } from './turnArtifactStore.js'
 
@@ -289,8 +289,13 @@ export async function runToolsLoop({
     intentMode,
     text: executionIntentText,
   })
-  const mutationExecutionRequested = requiresPersistedArtifact
-    || (directExecutionRequested && hasMutationExecutionIntent(executionIntentText))
+  // ★ 纯文本交付(生成周报/写文案/做总结,没有文件路径)不写文件,
+  // 文字本身就是交付物。这类请求既不算 mutation 任务,也不要求工具执行证据 ——
+  // 否则纯文本任务永远以 execution_evidence_missing 收尾。
+  const textDeliverableOnly = isTextDeliverableRequest(executionIntentText)
+  const mutationExecutionRequested = !textDeliverableOnly && (
+    requiresPersistedArtifact
+    || (directExecutionRequested && hasMutationExecutionIntent(executionIntentText)))
   const executionConvergenceEnabled = enforceExecutionIntent && mutationExecutionRequested
   let requiresPdfLayoutVerification = mutationExecutionRequested
     && shouldRequirePdfLayoutVerification(executionIntentText)
@@ -298,7 +303,7 @@ export async function runToolsLoop({
   // Explicit execution is a contract, not a hint. Keep this requirement even
   // when routing produced no usable tool; otherwise prose such as "done" would
   // be accepted precisely when the harness cannot perform the requested work.
-  const requiresExecutionEvidence = directExecutionRequested
+  const requiresExecutionEvidence = directExecutionRequested && !textDeliverableOnly
   let availableVerificationToolNames = activeToolSpecs
     .map(toolNameFromSpec)
     .filter((name) => VERIFICATION_TOOLS.has(name) || isCommandExecutionTool(name))
@@ -1970,6 +1975,13 @@ export async function runToolsLoop({
         && isSuccessfulPdfLayoutVerification(executedCall, outcome.result)) {
         pdfLayoutVerificationObserved = true
         pdfLayoutVerificationRetries = 0
+        // ★ 验证器会重新打开源文件与输出文件并逐页断言文本/边界/预览 PNG,
+        // 这是比 read/diff 更强的验证证据。它打印 OK 即证明本轮产物完整 ——
+        // 清空待验证目标,否则「验证明明通过」最后仍会误报
+        // post_mutation_verification_missing,任务以一句矛盾的失败收尾。
+        pendingMutationTargets.clear()
+        pendingDeletionTargets.clear()
+        mutationVerificationRetries = 0
       }
       if (Array.isArray(outcome.artifactIds)) recordArtifactIds(outcome.artifactIds)
       else if (outcome.artifactId) recordArtifactIds([outcome.artifactId])

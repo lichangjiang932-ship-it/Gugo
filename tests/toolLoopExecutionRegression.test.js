@@ -3816,4 +3816,24 @@ for (const scenario of specializedVerificationScenarios) {
     )), 'the runtime must block premature completion until specialized verification runs')
     assert.deepEqual(checkpoint?.completionGuards?.pendingMutationTargets, [])
   })
+
+  test('a pure text deliverable completes without demanding tool execution evidence', async () => {
+    const result = await runToolsLoop({
+      job: {
+        id: 'job-text-deliverable',
+        userId: null,
+        origin: 'chat',
+        prompt: '帮我生成一份本周项目周报',
+      },
+      step: { id: 'step-text-deliverable', kind: 'chat' },
+      messages: [{ role: 'user', content: '帮我生成一份本周项目周报' }],
+      toolSpecs: [],
+      maxIters: 2,
+      enableToolHooks: false,
+      runModel: async () => ({ content: '本周周报：完成 A，推进 B，下周计划 C。', toolCalls: [] }),
+    })
+
+    assert.equal(result.incomplete, undefined)
+    assert.match(result.text, /本周周报/)
+  })
 }

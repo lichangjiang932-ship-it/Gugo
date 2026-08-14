@@ -2,32 +2,18 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
-  SETTINGS_TAB_ACCOUNT,
   SETTINGS_TAB_FEATURES,
+  SETTINGS_TAB_MODELS,
   resolveSettingsNavFromSearch,
   settingsPathAfterLogin,
-  shouldPromptPasswordSetup,
 } from '../src/lib/settingsNavigation.js'
 
-test('login without a password goes directly to account password setup', () => {
-  assert.equal(
-    settingsPathAfterLogin({ hasPassword: false }),
-    '/settings?tab=account&setupPassword=1',
-  )
+test('after login lands on settings; the removed account tab falls back to features', () => {
+  assert.equal(settingsPathAfterLogin({ hasPassword: false }), '/settings')
   assert.equal(settingsPathAfterLogin({ hasPassword: true }), '/settings')
   assert.equal(settingsPathAfterLogin(null), '/settings')
-})
 
-test('settings query opens account tab and prompts only when password is missing', () => {
-  assert.equal(resolveSettingsNavFromSearch('?tab=account'), SETTINGS_TAB_ACCOUNT)
+  assert.equal(resolveSettingsNavFromSearch('?tab=account'), SETTINGS_TAB_FEATURES)
   assert.equal(resolveSettingsNavFromSearch(''), SETTINGS_TAB_FEATURES)
-
-  assert.equal(
-    shouldPromptPasswordSetup('?tab=account&setupPassword=1', { hasPassword: false }),
-    true,
-  )
-  assert.equal(
-    shouldPromptPasswordSetup('?tab=account&setupPassword=1', { hasPassword: true }),
-    false,
-  )
+  assert.equal(resolveSettingsNavFromSearch('?tab=models'), SETTINGS_TAB_MODELS)
 })

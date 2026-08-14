@@ -7,7 +7,7 @@ import ChoicePicker from '../../../components/ChoicePicker.jsx'
 import { hasChoices, stripChoices } from '../../../lib/choices.js'
 import { buildMessageTimeline } from '../../../lib/messageTimeline.js'
 import { shouldCollapseArtifactPreview } from '../../../lib/artifactPreview.js'
-import { artifactHasInlineReference, artifactReferenceOpenPayload, buildMessageArtifactPreview, buildServerArtifactReferences, findArtifactReferenceByHref, resolveDeliveryArtifacts } from '../../../lib/artifactReferences.js'
+import { artifactHasInlineReference, artifactReferenceOpenPayload, buildMessageArtifactPreview, buildServerArtifactReferences, findArtifactReferenceByHref, findArtifactReferenceByLocalPath, resolveDeliveryArtifacts } from '../../../lib/artifactReferences.js'
 import { formatMessageDateTime, formatMessageTime } from '../../../lib/messageTime.js'
 import { copyTextToClipboard } from '../../../lib/clipboard.js'
 import { ArtifactReferenceLinks } from './ArtifactCards.jsx'
@@ -143,7 +143,7 @@ export default function MessageRow({
         )}
         {msg.role === 'assistant' && msg.meta?.failed && msg.meta?.type !== 'model_reply' && (
           <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-dashed border-ember/40 pt-2 text-[11px]">
-            <span className="text-ember">{t('chatMessages.replyIncomplete')}</span>
+            <span className="text-ember">This reply could not be completed</span>
           </div>
         )}
         {msg.role === 'assistant' && msg.meta?.type === 'context_summary' && (
@@ -170,7 +170,10 @@ function AssistantContent({ artifactPreview, isCurrentStreamingMessage, isMessag
     preview: artifactPreview,
   })
   const openInlineArtifact = (href) => {
+    // 先按产物 URL 匹配,再按本地路径(含 file:/// 与 D:\ 形式)匹配,
+    // 让输出文字里的文件路径能一键打开预览。
     const reference = findArtifactReferenceByHref(deliveryArtifactReferences, href)
+      || findArtifactReferenceByLocalPath(deliveryArtifactReferences, href)
     if (!reference) return false
     onOpenArtifact?.(artifactReferenceOpenPayload(reference, msg.id))
     return true
@@ -209,7 +212,7 @@ function AssistantContent({ artifactPreview, isCurrentStreamingMessage, isMessag
   )
 }
 
-function CollapsedArtifactContent({ artifactPreview, msg, onOpenArtifact, t }) {
+function CollapsedArtifactContent({ artifactPreview, msg, onOpenArtifact }) {
   const artifactReferences = buildServerArtifactReferences({
     artifacts: msg.meta?.serverArtifacts,
     content: String(msg.meta?.artifactSource || msg.content || ''),
@@ -228,7 +231,7 @@ function CollapsedArtifactContent({ artifactPreview, msg, onOpenArtifact, t }) {
         {Array.isArray(msg.meta?.toolCalls) && msg.meta.toolCalls.length > 0 && (
           <ToolCallTrace calls={msg.meta.toolCalls} artifacts={artifactReferences} onOpenArtifact={openToolArtifact} />
         )}
-        <p>{t('chat.serverTurn.completed')}</p>
+        <p>Server turn completed</p>
         <ProgressTrace progress={msg.meta?.progress} />
       </div>
       <ArtifactReferenceLinks msg={msg} preview={artifactPreview} onOpen={onOpenArtifact} />

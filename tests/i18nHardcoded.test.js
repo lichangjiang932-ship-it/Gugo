@@ -16,7 +16,6 @@ const BASELINE = {
   'src/components/IntegrationsPanel.jsx': 26,
   'src/components/LeftRail.jsx': 346,
   'src/components/SkillCommandsSync.jsx': 8,
-  'src/components/settings/SettingsAccountPanel.jsx': 244,
   'src/components/settings/SettingsDataExport.jsx': 215,
   'src/components/settings/SettingsDiagnosticsPanel.jsx': 164,
   'src/components/settings/SettingsModelsPanel.jsx': 26,

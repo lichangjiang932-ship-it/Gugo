@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, ExternalLink, KeyRound, Plus, Search, ShieldCheck, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, Check, ExternalLink, KeyRound, Plus, Search, ShieldCheck, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { WEB_SEARCH_PROVIDERS } from '../../../shared/webSearchProviders.js'
 import {
@@ -53,6 +53,11 @@ function Field({ label, value, onChange, placeholder = '', multiline = false, ty
 
 function Toggle({ enabled, onChange, label }) {
   return <button type="button" role="switch" aria-checked={enabled} aria-label={label} onClick={() => onChange(!enabled)} className={`relative h-6 w-11 shrink-0 rounded-full border transition-colors ${enabled ? 'border-ember bg-ember' : 'border-ink-fade/60 bg-paper-2'}`}><span className={`absolute top-0.5 h-[18px] w-[18px] rounded-full bg-paper transition-all ${enabled ? 'left-[21px]' : 'left-0.5'}`} /></button>
+}
+
+function BrandMark({ item, size = 'md' }) {
+  const cls = size === 'lg' ? 'h-9 w-9 rounded-lg text-sm' : 'h-6 w-6 rounded-md text-[10px]'
+  return <span className={`grid shrink-0 place-items-center font-semibold ${cls} ${item?.accent || 'bg-ink-fade/15 text-ink-soft'}`}>{item?.initial || '·'}</span>
 }
 
 export default function SettingsWebSearchPanel({ t }) {
@@ -163,7 +168,7 @@ export default function SettingsWebSearchPanel({ t }) {
 
   return <section className="flex flex-col gap-5 animate-float-up">
     <div><span className="font-mono text-[9px] tracking-[0.22em] text-ink-fade">WEB SEARCH</span><h1 className="font-semibold text-[28px] text-ink mt-1.5">{t('webSearch.title')}</h1><p className="text-sm text-ink-soft mt-1">{t('webSearch.subtitle')}</p></div>
-    <div className="rounded-xl border border-ink/20 bg-paper p-5 flex items-center gap-3"><ShieldCheck className="h-5 w-5 text-emerald-600" /><p className="text-xs text-ink-soft flex-1">{t('webSearch.security')}</p><Toggle enabled={enabled} onChange={setEnabled} label={t('webSearch.enabled')} /></div>
+    <div className="rounded-xl border border-emerald-200/70 bg-gradient-to-r from-emerald-50 via-paper to-paper p-5 flex items-center gap-4"><span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-emerald-100"><ShieldCheck className="h-5 w-5 text-emerald-700" /></span><p className="text-xs text-ink-soft flex-1">{t('webSearch.security')}</p><Toggle enabled={enabled} onChange={setEnabled} label={t('webSearch.enabled')} /></div>
     <div className="rounded-xl border border-ink/20 bg-paper p-5 flex flex-col gap-4">
       <div className="flex items-start justify-between gap-4"><div><h2 className="text-base text-ink">{t('webSearch.provider')}</h2><p className="text-xs text-ink-fade mt-1">{t('webSearch.fallbackHint')}</p></div><button type="button" onClick={addConnection} disabled={connections.length >= 8 || Boolean(working)} className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-md border border-ink/25 px-3 text-xs text-ink hover:bg-paper-2 disabled:opacity-50"><Plus className="h-3.5 w-3.5" />{t('webSearch.addApi')}</button></div>
       <div className="grid gap-4 xl:grid-cols-[minmax(190px,0.72fr)_minmax(0,1.7fr)]">
@@ -171,10 +176,10 @@ export default function SettingsWebSearchPanel({ t }) {
           {connections.map((item, index) => {
             const providerMeta = WEB_SEARCH_PROVIDERS.find((candidate) => candidate.id === item.provider)
             const active = item.id === selected?.id
-            return <div key={item.id} className={`rounded-lg border p-2 transition-colors ${active ? 'border-ember bg-ember-soft/35' : 'border-ink-fade/35 bg-paper-2/40'}`}>
-              <button type="button" onClick={() => { setSelectedId(item.id); setMessage('') }} className="w-full text-left">
-                <span className="flex items-center justify-between gap-2"><span className="truncate text-sm text-ink">{providerMeta?.label || item.provider}</span><span className={`h-2 w-2 shrink-0 rounded-full ${item.enabled ? 'bg-emerald-500' : 'bg-ink-fade/50'}`} /></span>
-                <span className="mt-1 block text-[10px] text-ink-fade">{t('webSearch.priority', { index: index + 1 })} · {item.apiKeyPresent ? t('webSearch.keySaved') : t('webSearch.keyMissing')}</span>
+            return <div key={item.id} className={`rounded-lg border p-2.5 transition-all ${active ? 'border-ember bg-ember-soft/35 shadow-sm' : 'border-ink-fade/35 bg-paper-2/40 hover:border-ink-fade/70'}`}>
+              <button type="button" onClick={() => { setSelectedId(item.id); setMessage('') }} className="flex w-full items-center gap-2.5 text-left">
+                <BrandMark item={providerMeta} />
+                <span className="min-w-0 flex-1"><span className="block truncate text-sm text-ink">{providerMeta?.label || item.provider}</span><span className="mt-0.5 flex items-center gap-1.5 text-[10px] text-ink-fade"><span className={`h-1.5 w-1.5 rounded-full ${item.enabled ? 'bg-emerald-500' : 'bg-ink-fade/50'}`} />{t('webSearch.priority', { index: index + 1 })} · {item.apiKeyPresent ? t('webSearch.keySaved') : t('webSearch.keyMissing')}</span></span>
               </button>
               <div className="mt-2 flex items-center gap-1 border-t border-ink-fade/25 pt-2">
                 <button type="button" disabled={index === 0} onClick={() => moveConnection(item.id, -1)} aria-label={t('webSearch.moveUp')} className="rounded p-1 text-ink-fade hover:bg-paper disabled:opacity-25"><ArrowUp className="h-3.5 w-3.5" /></button>
@@ -185,8 +190,8 @@ export default function SettingsWebSearchPanel({ t }) {
           })}
         </div>
         {selected ? <div className="flex min-w-0 flex-col gap-4 rounded-lg border border-ink-fade/35 p-4" data-testid="web-search-connection-editor">
-          <div className="flex items-center justify-between gap-3"><div><h3 className="text-sm font-medium text-ink">{t('webSearch.apiSettings')}</h3><p className="mt-0.5 text-[10px] text-ink-fade">{t('webSearch.priority', { index: selectedIndex + 1 })}</p></div><div className="flex items-center gap-2"><span className="text-xs text-ink-soft">{t('webSearch.useThisApi')}</span><Toggle enabled={selected.enabled} onChange={(value) => replaceConnection(selected.id, (item) => ({ ...item, enabled: value }))} label={t('webSearch.useThisApi')} /></div></div>
-          <div className="grid grid-cols-2 gap-2 lg:grid-cols-3">{WEB_SEARCH_PROVIDERS.map((item) => <button key={item.id} type="button" onClick={() => replaceConnection(selected.id, (current) => item.id === current.provider ? current : { ...current, provider: item.id, config: {}, apiKey: '', apiKeyPresent: false })} className={`rounded-lg border p-3 text-left transition-colors ${selected.provider === item.id ? 'border-ember bg-ember-soft/50' : 'border-ink-fade/40 hover:bg-paper-2'}`}><span className="block text-sm text-ink">{item.label}</span><span className="mt-1 block text-[10px] text-ink-fade">{item.id === 'custom' ? t('webSearch.customBadge') : t('webSearch.presetBadge')}</span></button>)}</div>
+          <div className="flex items-center justify-between gap-3"><div className="flex items-center gap-2.5"><BrandMark item={meta} size="lg" /><div><h3 className="text-sm font-medium text-ink">{meta.label}</h3><p className="mt-0.5 text-[10px] text-ink-fade">{t('webSearch.apiSettings')} · {t('webSearch.priority', { index: selectedIndex + 1 })}</p></div></div><div className="flex items-center gap-2"><span className="text-xs text-ink-soft">{t('webSearch.useThisApi')}</span><Toggle enabled={selected.enabled} onChange={(value) => replaceConnection(selected.id, (item) => ({ ...item, enabled: value }))} label={t('webSearch.useThisApi')} /></div></div>
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-3">{WEB_SEARCH_PROVIDERS.map((item) => { const chosen = selected.provider === item.id; return <button key={item.id} type="button" onClick={() => replaceConnection(selected.id, (current) => item.id === current.provider ? current : { ...current, provider: item.id, config: {}, apiKey: '', apiKeyPresent: false })} className={`relative rounded-lg border p-3 text-left transition-all ${chosen ? 'border-ember bg-ember-soft/50 shadow-sm' : 'border-ink-fade/40 hover:border-ink-fade/80 hover:bg-paper-2'}`}>{chosen && <Check className="absolute right-2.5 top-2.5 h-4 w-4 text-ember" />}<span className="flex items-start gap-2"><BrandMark item={item} size="lg" /><span className="min-w-0"><span className="block truncate text-sm text-ink">{item.label}</span><span className="mt-0.5 block text-[10px] text-ink-fade">{item.id === 'custom' ? t('webSearch.customBadge') : t('webSearch.presetBadge')}</span></span></span></button> })}</div>
           {meta.docsUrl ? <a href={meta.docsUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-ember self-start">{t('webSearch.getApiKey')}<ExternalLink className="h-3 w-3" /></a> : null}
           <Field type="password" label={t('webSearch.apiKey')} value={selected.apiKey} onChange={(value) => replaceConnection(selected.id, (item) => ({ ...item, apiKey: value }))} placeholder={selected.apiKeyPresent ? t('webSearch.secretKept') : t('webSearch.apiKeyPlaceholder')} />
           {selected.provider === 'google_cse' ? <Field label={t('webSearch.googleCx')} value={selected.config.cx || ''} onChange={(value) => updateConfig('cx', value)} placeholder="0123456789:abcdef" /> : null}

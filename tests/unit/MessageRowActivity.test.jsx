@@ -58,7 +58,7 @@ test('tool readiness is visible without a tool card and yields to the single dur
 
     const readiness = rootElement.querySelector('[data-testid="model-activity"]')
     assert.ok(readiness)
-    assert.match(readiness.textContent, /正在准备运行 bash_exec/)
+    assert.match(readiness.textContent, /Preparing bash_exec/)
     assert.equal(rootElement.querySelectorAll('.chat-run-timeline').length, 0)
     assert.equal(rootElement.querySelector('.animate-pulse'), null)
 

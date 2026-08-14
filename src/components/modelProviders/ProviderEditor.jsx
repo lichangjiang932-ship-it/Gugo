@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, Cloud, RefreshCw, Save, X } from 'lucide-react'
 import {
-  CLOUD_PRESETS, effectiveUrl, emptyProvider, KIND_OPTIONS, LOCAL_PRESETS, PROVIDER_PRESETS, TRIBOOL_VALUES,
+  CLOUD_PRESETS, effectiveUrl, emptyProvider, formatContextTokens, KIND_OPTIONS, LOCAL_PRESETS, PROVIDER_PRESETS, TRIBOOL_VALUES,
 } from './providerConfig.js'
 
 function Field({ label, children }) {
@@ -18,14 +18,28 @@ function TriboolField({ label, value, onChange, t }) {
 function PresetPicker({ editing, setEditing, setShowAdvanced, t }) {
   const presetLabel = (preset) => preset.labelKey ? t(`modelProviders.${preset.labelKey}`) : preset.label
   const applyPreset = (preset) => {
-    setEditing((current) => ({ ...current, presetId: preset.id, key: current.id ? current.key : preset.key,
+    const caps = preset.caps || {}
+    setEditing((current) => ({
+      ...current, presetId: preset.id, key: current.id ? current.key : preset.key,
       label: current.id ? current.label : presetLabel(preset), baseUrl: preset.baseUrl, kind: preset.kind || '',
-      modelsText: preset.models?.join('\n') || current.modelsText, defaultModel: preset.models?.[0] || current.defaultModel, isDefault: true }))
+      modelsText: preset.models?.join('\n') || current.modelsText, defaultModel: preset.models?.[0] || current.defaultModel,
+      isDefault: true,
+      contextWindow: preset.contextWindow != null ? String(preset.contextWindow) : current.contextWindow,
+      supportsTools: caps.supportsTools ?? current.supportsTools,
+      supportsStreaming: caps.supportsStreaming ?? current.supportsStreaming,
+      supportsVision: caps.supportsVision ?? current.supportsVision,
+      supportsPdf: caps.supportsPdf ?? current.supportsPdf,
+    }))
     setShowAdvanced(false)
+  }
+  const contextBadge = (preset) => {
+    const tokens = formatContextTokens(preset.contextWindow)
+    if (!tokens) return null
+    return <span className="ml-auto shrink-0 rounded bg-paper-2 px-1.5 py-0.5 text-[10px] text-ink-fade">{tokens}</span>
   }
   return <div className="flex flex-col gap-3">
     <div className="flex items-center gap-2 text-xs font-medium text-ink"><Cloud className="h-4 w-4 text-ember" />{t('modelProviders.chooseProvider')}</div>
-    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">{CLOUD_PRESETS.map((preset) => <button key={preset.id} type="button" onClick={() => applyPreset(preset)} className={`min-h-12 rounded-lg border px-3 py-2 text-left text-xs ${editing.presetId === preset.id ? 'border-ember bg-ember-soft/30 text-ink' : 'border-ink/15 bg-paper hover:border-ink/40 text-ink-soft'}`}>{presetLabel(preset)}</button>)}</div>
+    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">{CLOUD_PRESETS.map((preset) => <button key={preset.id} type="button" onClick={() => applyPreset(preset)} className={`min-h-14 rounded-lg border px-3 py-2 text-left text-xs flex flex-col gap-1 ${editing.presetId === preset.id ? 'border-ember bg-ember-soft/30 text-ink' : 'border-ink/15 bg-paper hover:border-ink/40 text-ink-soft'}`}><span className="flex items-center gap-2"><span className="font-medium">{presetLabel(preset)}</span>{contextBadge(preset)}</span><span className="text-[10px] text-ink-fade">{preset.models?.length ? t('modelProviders.modelsCount', { count: preset.models.length }) : '—'}</span></button>)}</div>
     <div className="text-[11px] font-medium text-ink-soft">{t('modelProviders.localPreset')}</div>
     <div className="flex flex-wrap gap-2">
       {LOCAL_PRESETS.map((preset) => <button key={preset.id} type="button" onClick={() => applyPreset(preset)} className={`h-8 px-3 rounded-md border text-xs ${editing.presetId === preset.id ? 'border-ember bg-ember-soft/30 text-ink' : 'border-ink-fade/50 bg-paper text-ink hover:border-ink'}`}>{preset.label}</button>)}
@@ -94,6 +108,7 @@ export default function ProviderEditor({ editing, setEditing, busy, detecting, c
             {modelList.length > 0 && <span className="rounded-full bg-paper-2 px-2 py-0.5 text-[11px] text-ink-soft">{t('modelProviders.modelsCount', { count: modelList.length })}</span>}
           </div>
           {!isLocalPreset && <Field label={`API Key${editing.hasApiKey ? ` · ${t('modelProviders.keepSecret')}` : ''}`}><input type="password" value={editing.apiKey} onChange={(event) => setEditing({ ...editing, apiKey: event.target.value })} placeholder={editing.hasApiKey ? '••••••••' : t('modelProviders.apiKeyPlaceholder')} autoFocus /></Field>}
+          {!isLocalPreset && <div className="text-[11px] text-ink-fade">{t('modelProviders.presetFilled')}</div>}
           {modelList.length > 1 && <Field label={t('modelProviders.defaultModel')}><select value={editing.defaultModel} onChange={(event) => setEditing({ ...editing, defaultModel: event.target.value })}>{modelList.map((model) => <option key={model} value={model}>{model}</option>)}</select></Field>}
           {isLocalPreset && <div className="text-xs text-ink-fade">{t('modelProviders.localDetectHint')}</div>}
         </div>}

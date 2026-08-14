@@ -1,8 +1,7 @@
 import { memo } from 'react'
 import { Search, Globe, ChevronDown, CheckCircle2, XCircle, CircleStop, Loader2, FileText, Presentation, Table2, Code2, PieChart, Image, Bot, FolderOpen, FileEdit, Terminal, GitBranch, Diff, CheckSquare, Layers, Wrench, FolderKey, ListRestart, RotateCcw, ListTree, MessageCircleQuestion, PackageCheck, SquareTerminal, CircleStop as StopProcess } from 'lucide-react'
-import { useT } from '../i18n/I18nProvider.jsx'
 import { findToolCallArtifacts } from '../lib/toolCallArtifacts.js'
-import { parseToolArgs, summarizeToolArgs, toolCallLabel } from '../lib/toolCallPresentation.js'
+import { parseToolArgs, summarizeToolArgsEn, toolCallLabelEn } from '../lib/toolCallPresentation.js'
 import LiveElapsed from './LiveElapsed.jsx'
 
 const ICONS = {
@@ -84,53 +83,52 @@ function liveOutputTail(value) {
   return line.length <= 220 ? line : `…${line.slice(-219)}`
 }
 
-function authorizationLabel(authorization, t) {
+function authorizationLabel(authorization) {
   if (!authorization || typeof authorization !== 'object') return ''
   if (authorization.kind === 'standing_rule') {
     return authorization.scope
-      ? t('permissionsDashboard.authorizationStandingScope', { scope: authorization.scope })
-      : t('permissionsDashboard.authorizationStanding')
+      ? `Standing rule: ${authorization.scope}`
+      : 'Standing rule'
   }
-  return authorization.kind ? t('permissionsDashboard.authorizationKind', { kind: authorization.kind }) : ''
+  return authorization.kind ? String(authorization.kind) : ''
 }
 
 function ToolCallCard({ call, stepNumber, artifacts = [], onOpenArtifact }) {
-  const { t } = useT()
   const Icon = ICONS[call.name] || Wrench
-  const label = toolCallLabel(call.name, t)
+  const label = toolCallLabelEn(call.name)
   const args = parseToolArgs(call.arguments)
-  const summary = summarizeToolArgs(call.name, args, t)
+  const summary = summarizeToolArgsEn(call.name, args)
   const matchedArtifacts = findToolCallArtifacts(call, artifacts).filter(isManagedArtifact)
   const summaryArtifact = exactSummaryArtifact(call.name, args, matchedArtifacts)
   const summaryCanOpen = Boolean(summaryArtifact && typeof onOpenArtifact === 'function')
   const commandArtifacts = COMMAND_ARTIFACT_TOOLS.has(call.name) && typeof onOpenArtifact === 'function'
     ? matchedArtifacts
     : []
-  const authorization = authorizationLabel(call.approvalAuthorization, t)
+  const authorization = authorizationLabel(call.approvalAuthorization)
   const errorFacts = call.status === 'error'
     ? [...new Set([
         call.errorCode,
         Number.isInteger(Number(call.errorStatus)) ? `HTTP ${Number(call.errorStatus)}` : '',
         Number.isInteger(Number(call.attempts)) && Number(call.attempts) > 0 ? `${Number(call.attempts)}×` : '',
-        call.retryable ? t('taskCenter.retry') : '',
+        call.retryable ? 'Retry' : '',
       ].filter(Boolean))]
     : []
 
   let StatusIcon = Loader2
-  let statusText = t('chatMessages.toolRunning')
+  let statusText = 'Running'
   if (call.status === 'success') {
     StatusIcon = CheckCircle2
-    statusText = t('chatMessages.toolCompleted')
+    statusText = 'Completed'
   } else if (call.status === 'error') {
     StatusIcon = XCircle
-    statusText = t('chatMessages.toolFailed')
+    statusText = 'Failed'
   } else if (call.status === 'cancelled') {
     StatusIcon = CircleStop
-    statusText = t('chatMessages.toolStopped')
+    statusText = 'Stopped'
   }
 
   const resultValue = call.status === 'error' ? (call.result || call.error) : call.result
-  const resultFallback = call.status === 'error' ? t('chatMessages.toolUnknownError') : t('chatMessages.toolEmptyResult')
+  const resultFallback = call.status === 'error' ? 'Unknown error' : '(empty)'
 
   return (
     <article
@@ -139,7 +137,7 @@ function ToolCallCard({ call, stepNumber, artifacts = [], onOpenArtifact }) {
       data-status={call.status || 'running'}
       role="listitem"
     >
-      <div className="chat-tool-step-marker" aria-label={t('chatMessages.stepNumber', { number: stepNumber })}>
+      <div className="chat-tool-step-marker" aria-label={`Step ${stepNumber}`}>
         {stepNumber}
       </div>
       <div className="chat-tool-step-body">
@@ -192,16 +190,16 @@ function ToolCallCard({ call, stepNumber, artifacts = [], onOpenArtifact }) {
           <details className="chat-tool-details">
             <summary>
               <ChevronDown aria-hidden="true" />
-              <span>{t('chatMessages.toolArguments')}</span>
+              <span>Arguments</span>
             </summary>
-            <pre tabIndex="0">{formatDetails(call.arguments, t('chatMessages.toolNoArguments'))}</pre>
+            <pre tabIndex="0">{formatDetails(call.arguments, '(empty)')}</pre>
           </details>
 
           {(call.status === 'success' || call.status === 'error') && (
             <details className="chat-tool-details">
               <summary>
                 <ChevronDown aria-hidden="true" />
-                <span>{call.status === 'error' ? t('chatMessages.toolError') : t('chatMessages.toolResult')}</span>
+                <span>{call.status === 'error' ? 'Error' : 'Result'}</span>
               </summary>
               <pre tabIndex="0">{formatDetails(resultValue, resultFallback)}</pre>
             </details>
@@ -210,9 +208,9 @@ function ToolCallCard({ call, stepNumber, artifacts = [], onOpenArtifact }) {
 
         {call.status === 'running' && call.liveOutput && (
           <details className="chat-tool-live-details">
-            <summary title={t('chatMessages.toolLiveOutputHint')}>
+            <summary title="Live output">
               <ChevronDown aria-hidden="true" />
-              <span>{t('chatMessages.toolLiveOutput')}</span>
+              <span>Live output</span>
               <span className="chat-tool-live-tail" data-testid="tool-live-output-tail">
                 {liveOutputTail(call.liveOutput)}
               </span>

@@ -11,7 +11,6 @@ export default function ChatMessages({
   messages,
   state,
   workbenchMessage,
-  showContextUsage = true,
   showContextPanel,
   setShowContextPanel,
   selectedModel,
@@ -53,13 +52,14 @@ export default function ChatMessages({
         {workbenchMessage && (
           <div className="rounded-lg border border-ink/10 bg-paper-2/55 px-3 py-2 text-xs text-ink-soft">{workbenchMessage}</div>
         )}
-        {showContextUsage && (
+        {/* 上下文详情只在点击输入框旁的用量圆环时显示,不再常驻左上角 */}
+        {showContextPanel && (
           <ContextUsagePanel
             contextUsage={contextUsage}
             contextWindow={resolvedContextWindow}
             messages={messages}
             selectedModel={selectedModel}
-            showDetails={showContextPanel}
+            showDetails
             setShowDetails={setShowContextPanel}
             t={t}
           />

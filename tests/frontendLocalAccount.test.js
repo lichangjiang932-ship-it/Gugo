@@ -8,12 +8,10 @@ function read(relativePath) {
 
 test('local account surfaces do not expose payment or balance controls', () => {
   const accountClient = read('../src/lib/accountClient.js')
-  const accountPanel = read('../src/components/settings/SettingsAccountPanel.jsx')
   const diagnostics = read('../src/components/settings/SettingsDiagnosticsPanel.jsx')
   const rail = read('../src/components/leftRail/useLeftRailController.js')
 
   assert.doesNotMatch(accountClient, /\/api\/billing|\brecharge\b/i)
-  assert.doesNotMatch(accountPanel, /\brecharge\b|\bcredits\b|\bledger\b|\bpackages\b/i)
   assert.doesNotMatch(diagnostics, /diagnostics\?\.billing|basePer1k|multipliers/)
   assert.doesNotMatch(rail, /user\.credits|user\.plan/)
 })

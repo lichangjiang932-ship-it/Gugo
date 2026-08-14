@@ -32,12 +32,12 @@ test('planning and permission tools show human summaries instead of raw JSON', (
   const directoryMarkup = renderToolCall('request_directory', {
     path: 'D:\\work\\report', access_mode: 'read_write', purpose: '保存最终文件',
   })
-  assert.match(directoryMarkup, /请求目录权限/)
+  assert.match(directoryMarkup, /Request directory/)
   assert.match(directoryMarkup, /D:\\work\\report/)
 
   const deliveryMarkup = renderToolCall('set_deliverables', { artifact_ids: ['pdf-1'] })
   const deliveryHeader = deliveryMarkup.match(/<header[\s\S]*?<\/header>/u)?.[0] || ''
-  assert.match(deliveryMarkup, /1 个最终文件/)
+  assert.match(deliveryMarkup, /1 final file/)
   assert.doesNotMatch(deliveryHeader, /artifact_ids/)
 })
 
@@ -52,10 +52,10 @@ test('execution rows emphasize concrete paths and commands without a visible act
   assert.match(commandMarkup, /npm test/)
   assert.doesNotMatch(readMarkup, /chat-tool-label/)
   assert.doesNotMatch(commandMarkup, /chat-tool-label/)
-  assert.match(readMarkup, /<span class="sr-only">读取文件<\/span>/)
-  assert.match(commandMarkup, /<span class="sr-only">运行命令<\/span>/)
-  assert.doesNotMatch(readMarkup, /title="读取文件"/)
-  assert.doesNotMatch(commandMarkup, /title="运行命令"/)
+  assert.match(readMarkup, /<span class="sr-only">Read file<\/span>/)
+  assert.match(commandMarkup, /<span class="sr-only">Run command<\/span>/)
+  assert.doesNotMatch(readMarkup, /title="Read file"/)
+  assert.doesNotMatch(commandMarkup, /title="Run command"/)
 })
 
 test('only an exactly associated persisted file makes a path summary interactive', () => {
@@ -227,8 +227,8 @@ test('failed command keeps arguments and result in independent disclosures', asy
     assert.equal(disclosures.length, 2)
     assert.equal(disclosures.item(0).open, false)
     assert.equal(disclosures.item(1).open, false)
-    assert.match(disclosures.item(0).querySelector('summary').textContent, /参数/)
-    assert.match(disclosures.item(1).querySelector('summary').textContent, /错误/)
+    assert.match(disclosures.item(0).querySelector('summary').textContent, /Arguments/)
+    assert.match(disclosures.item(1).querySelector('summary').textContent, /Error/)
     assert.equal(rootElement.querySelector('.chat-tool-step-marker').textContent, '2')
 
     const resultDetails = disclosures.item(1).querySelector('pre')?.textContent || ''

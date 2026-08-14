@@ -8,6 +8,7 @@ import DesktopPet from './DesktopPet.jsx'
 import RightPreviewPane from './RightPreviewPane'
 import RightWorkbench from './RightWorkbench'
 import SlashInlinePanelHost from './SlashInlinePanelHost.jsx'
+import { estimateClientContextUsage } from '../../lib/contextUsage.js'
 
 export default function ChatSplitView({
   activeSession,
@@ -56,7 +57,6 @@ export default function ChatSplitView({
   onSubmitFeedback,
   onSlashCommandSelect,
   onToolApproval,
-  onVoiceClick,
   onWorkbenchSend,
   onWorkbenchTabChange,
   onWorkbenchToggle,
@@ -67,7 +67,6 @@ export default function ChatSplitView({
   setInput,
   setShowContextPanel,
   showContextPanel,
-  showContextUsage,
   showModelPicker,
   slashCommands,
   slashInlinePanel,
@@ -75,12 +74,20 @@ export default function ChatSplitView({
   t,
   tasks,
   toolApproval,
-  voiceState,
   workbenchMessage,
   workbenchOpen,
   workbenchTab,
   previewArtifact,
 }) {
+  // 上下文用量按当前实际模型上下文窗口估算(与模型配置联动)。
+  const contextUsage = estimateClientContextUsage({
+    messages,
+    tools: contextToolSpecs,
+    systemPrompt: contextSystemPrompt,
+    contextWindow,
+  })
+  const toggleContextPanel = () => setShowContextPanel((current) => !current)
+
   return (
     <div className="h-screen flex bg-paper overflow-hidden">
       <LeftRail />
@@ -105,7 +112,6 @@ export default function ChatSplitView({
           messages={messages}
           state={state}
           workbenchMessage={workbenchMessage}
-          showContextUsage={showContextUsage}
           showContextPanel={showContextPanel}
           setShowContextPanel={setShowContextPanel}
           selectedModel={selectedModel}
@@ -188,14 +194,15 @@ export default function ChatSplitView({
           onSend={onSend}
           attachments={attachments}
           setAttachments={setAttachments}
-          voiceState={voiceState}
+          contextPanelOpen={showContextPanel}
+          contextUsage={contextUsage}
           modelPickerOpen={showModelPicker}
           modelOptions={modelOptions}
           selectedModel={selectedModel}
           isGenerating={isGenerating}
           onAbort={onAbort}
           onFileChange={onFileChange}
-          onVoiceClick={onVoiceClick}
+          onToggleContext={toggleContextPanel}
           onOpenModelPicker={onOpenModelPicker}
           onCloseModelPicker={onCloseModelPicker}
           onModelChange={onModelChange}

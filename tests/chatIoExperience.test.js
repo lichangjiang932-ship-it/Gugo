@@ -72,7 +72,7 @@ test('only the streaming assistant hides copy actions while completed messages r
 
 test('composer uses one stable primary button for send and stop', () => {
   assert.match(composerActionsSource, /<ModelPicker/)
-  assert.match(composerActionsSource, /<Mic/)
+  assert.match(composerActionsSource, /data-testid="context-ring"/)
   assert.match(composerActionsSource, /const primaryActionLabel = t\(isGenerating \? 'chatComposer\.stop' : 'chatComposer\.send'\)/)
   assert.match(composerActionsSource, /onClick=\{isGenerating \? onAbort : onSend\}/)
   assert.match(composerActionsSource, /disabled=\{!isGenerating && sendDisabled\}/)
@@ -83,7 +83,7 @@ test('composer uses one stable primary button for send and stop', () => {
 
 test('transient tool readiness is visible in the streaming assistant without creating a tool trace', () => {
   assert.match(activityStreamSource, /activity\?\.kind === 'tool_call_ready'/)
-  assert.match(activityStreamSource, /chatMessages\.toolCallReady/)
+  assert.match(activityStreamSource, /Preparing \$\{activity\.toolName/)
   assert.match(activityStreamSource, /testId="model-activity"/)
 })
 
@@ -180,6 +180,6 @@ test('completed artifact rows do not revert to streaming source when a later mes
   assert.match(messageRowSource, /const isCurrentStreamingMessage = msg\.id === generatingMessageId \|\| !!msg\.meta\?\.streaming/)
   assert.match(messageRowSource, /const isMessageComplete = !isCurrentStreamingMessage/)
   assert.match(messageRowSource, /function CollapsedArtifactContent/)
-  assert.match(messageRowSource, /chat\.serverTurn\.completed/)
+  assert.match(messageRowSource, /Server turn completed/)
   assert.match(messageRowSource, /<ArtifactReferenceLinks msg=\{msg\}/)
 })
