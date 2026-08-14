@@ -24,7 +24,7 @@ test('ToolCallTrace renders one lightweight accessible timeline without a visibl
 
   assert.match(markup, /class="chat-run-timeline"/)
   assert.doesNotMatch(markup, /chat-activity-title/)
-  assert.match(markup, /aria-label="2 步"/)
+  assert.match(markup, /aria-label="2 steps"/)
   assert.doesNotMatch(markup, /执行过程/)
   assert.match(markup, /chat-tool-step-marker/)
   assert.equal((markup.match(/data-testid="tool-call-step"/g) || []).length, 2)
@@ -42,7 +42,7 @@ test('ToolCallTrace renders a terminal stopped step without a busy spinner', () 
 
   assert.match(markup, /data-status="cancelled"/)
   assert.match(markup, /aria-busy="false"/)
-  assert.match(markup, /已停止/)
+  assert.match(markup, /Stopped/)
   assert.doesNotMatch(markup, /animate-spin/)
 })
 
@@ -55,7 +55,7 @@ test('ToolCallTrace renders a stopped Agent without an empty result disclosure',
   }])
 
   assert.match(markup, /data-status="cancelled"/)
-  assert.match(markup, /已停止/)
+  assert.match(markup, /Stopped/)
   assert.doesNotMatch(markup, /animate-spin/)
   assert.doesNotMatch(markup, /子代理结果/)
 })

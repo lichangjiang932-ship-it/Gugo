@@ -20,21 +20,21 @@ test('ProgressTrace renders structured step, iteration, file, and diff progress'
   })
 
   assert.match(markup, /data-testid="turn-progress"/)
-  assert.match(markup, /阶段：验证中/)
+  assert.match(markup, /Phase: Verifying/)
   assert.match(markup, /title="verify"/)
-  assert.match(markup, /第 2\/4 步/)
-  assert.match(markup, /第 3 轮/)
-  assert.match(markup, /3 个文件/)
+  assert.match(markup, /Step 2\/4/)
+  assert.match(markup, /Iteration 3/)
+  assert.match(markup, /3 files/)
   assert.match(markup, /\+12 \/ -5/)
   assert.match(markup, /chat-progress-chip-phase/)
   assert.match(markup, /chat-progress-chip-changes/)
   assert.match(markup, /aria-live="polite"/)
 })
 
-test('ProgressTrace localizes known machine phases while retaining the raw value', () => {
+test('ProgressTrace keeps the raw machine phase while rendering an English label', () => {
   const markup = renderProgress({ phase: 'batch_completed', completed: 1, total: 1 })
 
-  assert.match(markup, /阶段：本批次已完成/)
+  assert.match(markup, /Phase: Batch completed/)
   assert.match(markup, /title="batch_completed"/)
 })
 

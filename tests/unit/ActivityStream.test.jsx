@@ -65,14 +65,14 @@ test('provider fallback renders a retry/switch notice line', () => {
     meta: { streaming: true, modelFallback: { kind: 'failover', from: 'primary', to: 'backup', modelName: 'm1' } },
   })
   assert.match(failover, /data-testid="model-fallback"/)
-  assert.match(failover, /已切换模型提供方/)
+  assert.match(failover, /Switched provider/)
   assert.match(failover, /backup/)
 
   const retry = render({
     meta: { streaming: true, modelFallback: { kind: 'retry', attempt: 3, modelName: 'm1' } },
   })
   assert.match(retry, /data-testid="model-fallback"/)
-  assert.match(retry, /正在重试模型/)
+  assert.match(retry, /Retrying model/)
   assert.match(retry, /\(3\)/)
 })
 
@@ -93,5 +93,5 @@ test('reconnection status overrides a stale running tool state', () => {
     },
   })
   assert.match(markup, /data-testid="model-activity"/)
-  assert.match(markup, /正在重连/)
+  assert.match(markup, /Reconnecting/)
 })

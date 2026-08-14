@@ -1970,6 +1970,13 @@ export async function runToolsLoop({
         && isSuccessfulPdfLayoutVerification(executedCall, outcome.result)) {
         pdfLayoutVerificationObserved = true
         pdfLayoutVerificationRetries = 0
+        // ★ 验证器会重新打开源文件与输出文件并逐页断言文本/边界/预览 PNG,
+        // 这是比 read/diff 更强的验证证据。它打印 OK 即证明本轮产物完整 ——
+        // 清空待验证目标,否则「验证明明通过」最后仍会误报
+        // post_mutation_verification_missing,任务以一句矛盾的失败收尾。
+        pendingMutationTargets.clear()
+        pendingDeletionTargets.clear()
+        mutationVerificationRetries = 0
       }
       if (Array.isArray(outcome.artifactIds)) recordArtifactIds(outcome.artifactIds)
       else if (outcome.artifactId) recordArtifactIds([outcome.artifactId])

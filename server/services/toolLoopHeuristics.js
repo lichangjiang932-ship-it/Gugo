@@ -347,6 +347,10 @@ function buildPdfLayoutExecutionContract(text) {
     'After generation, create a separate read-only validator named verify_pdf_layout.py and run it after the write. It must reopen both source and output and assert: the requested heading maps to the written pages; the full requested text appears in order on target pages; non-target pages remain unchanged; every inserted glyph bbox stays inside the writable rectangle and above forbidden boundaries; continuation and indentation rules hold; and all requested PNG previews are present, non-empty, and match freshly rendered output pages.',
     'Do not call browser_open_url with a local file:// PDF or PNG; browser tools accept only http/https URLs. Inspect local PDF and image files through an exposed command tool (bash_exec or run_command) and the read-only validator.',
     `Only after every assertion passes may the validator print the exact standalone marker ${PDF_LAYOUT_VERIFICATION_OK}. A read_file or directory listing proves existence only and is not layout verification. Do not claim completion without a successful validator result containing that marker.`,
+    // ★ 实事求是汇报(用户明确要求):验证通过就直说「验证器打印了 PDF_LAYOUT_VERIFICATION_OK」,
+    // 不要用「通过全部断言」这类转述猜测;产出文件用 Markdown 链接给出完整路径,
+    // 供用户直接点击打开;永远不要把设备重定向(nul)当成产出文件列出来。
+    'Report results as plain fact: if the validator printed PDF_LAYOUT_VERIFICATION_OK, say exactly that — do not paraphrase it as assertions passing or speculate about internals. List every produced file with its full path as a Markdown link so it can be clicked. Never list device-redirection targets (nul) as output files.',
   ].join(' ')
 }
 
@@ -613,6 +617,12 @@ function normalizeMutationTarget(rawTarget) {
     target = target.slice(1, -1).trim()
   }
   if (!target || target.startsWith('-') || target.startsWith('&')) return ''
+  // ★ Windows/Unix 空设备是重定向目标,不是真实产出。
+  //   `>nul`(cmd) / `>$null`(PowerShell) / `>/dev/null`(sh) 一旦被当成
+  //   pending mutation target,就永远无法被读回/差异验证清除 ——
+  //   最终会误报 post_mutation_verification_missing,让一个已完成的任务
+  //   以「验证缺失」结尾。空设备一律不跟踪。
+  if (/^(?:nul|\\\\.\\nul|\/dev\/null|\$null)$/i.test(target)) return ''
   target = target.replace(/\\/g, '/').replace(/\/+/g, '/')
   while (target.startsWith('./')) target = target.slice(2)
   if (target.length > 1) target = target.replace(/\/$/, '')

@@ -278,7 +278,7 @@ function localFileHrefMatchesReference(href, reference) {
 export function artifactHasInlineLink(content = '', artifact = {}) {
   const markdown = String(content || '')
   const filenames = new Set(artifactFilenameAliases(artifact).map((alias) => alias.normalized))
-  const links = /\[([^\]]*)\]\(\s*(?:<([^>]+)>|([^\s)]+))(?:\s+["'][^"']*["'])?\s*\)|<((?:https?:\/\/|\/)[^>]+)>/g
+  const links = /\[([^\]]*)\]\(\s*(?:<([^>]+)>|([^\s)]+))(?:\s+[\x22\x27][^\x22\x27]*[\x22\x27])?\s*\)|<((?:https?:\/\/|\/)[^>]+)>/g
   let match
   while ((match = links.exec(markdown)) !== null) {
     const label = String(match[1] || '').normalize('NFC').trim().toLowerCase()
@@ -457,6 +457,63 @@ export function remarkArtifactReferences({ references = [] } = {}) {
     : []
   return (tree, file) => {
     if (linkableReferences.length > 0) linkArtifactNodes(tree, linkableReferences, String(file?.value || ''))
+  }
+}
+
+// ── Bare absolute paths become clickable links ───────────────────────────
+
+const BARE_ABSOLUTE_PATH_RE = /(^|[\s(（[])([a-zA-Z]:[\\/][^\]\s<>\x22|?*，。；：、（）()[…]+)/g
+
+function trimPathTrailingPunctuation(value) {
+  let raw = String(value || '')
+  while (raw && /[.,;:!?\x27\x22)\]，。；：、…)]$/.test(raw)) raw = raw.slice(0, -1)
+  return raw
+}
+
+function barePathLinkNodes(text) {
+  const source = String(text || '')
+  if (!/[a-zA-Z]:[\\/]/.test(source)) return [{ type: 'text', value: source }]
+  const nodes = []
+  let cursor = 0
+  BARE_ABSOLUTE_PATH_RE.lastIndex = 0
+  let match
+  while ((match = BARE_ABSOLUTE_PATH_RE.exec(source)) !== null) {
+    const prefix = String(match[1] || '')
+    const rawPath = String(match[2] || '')
+    const path = trimPathTrailingPunctuation(rawPath)
+    if (!/[a-zA-Z]:[\\/]/.test(path) || path.length < 4) continue
+    const start = match.index + prefix.length
+    const end = start + rawPath.length
+    if (start > cursor) nodes.push({ type: 'text', value: source.slice(cursor, start) })
+    nodes.push({
+      type: 'link',
+      url: `file:///${path.replace(/\\/g, '/')}`,
+      children: [{ type: 'text', value: path }],
+    })
+    cursor = end
+  }
+  if (cursor < source.length) nodes.push({ type: 'text', value: source.slice(cursor) })
+  return nodes.length > 0 ? nodes : [{ type: 'text', value: source }]
+}
+
+/**
+ * Turn bare Windows absolute paths (D:\... / C:/...) in text nodes into
+ * file:/// links so users can click a path to open the file. The click is
+ * handled by MarkdownRenderer's onLinkClick: paths that resolve to persisted
+ * artifacts open the preview; everything else just blocks navigation.
+ * Code and existing links are left untouched.
+ */
+export function remarkLocalPathLinks() {
+  return (tree) => {
+    const visit = (parent) => {
+      if (!Array.isArray(parent?.children)) return
+      parent.children = parent.children.flatMap((node) => {
+        if (node?.type === 'text') return barePathLinkNodes(node.value)
+        if (!NON_LINKABLE_MARKDOWN_NODES.has(node?.type)) visit(node)
+        return [node]
+      })
+    }
+    visit(tree)
   }
 }
 

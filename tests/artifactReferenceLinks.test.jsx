@@ -274,7 +274,7 @@ test('a completed artifact keeps its narration and file link while a later reply
         t={t}
       />,
     ))
-    assert.match(rootElement.textContent, /已完成/)
+    assert.match(rootElement.textContent, /Server turn completed/)
     assert.match(rootElement.textContent, /calculator\.html/)
     assert.doesNotMatch(rootElement.textContent, /Calculator source/)
     assert.ok(rootElement.querySelector('[data-testid="artifact-open-card"]'))

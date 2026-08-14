@@ -6,7 +6,7 @@ import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import rehypeHighlight from 'rehype-highlight'
 import FullscreenMediaModal from './FullscreenMediaModal.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
-import { findArtifactReferenceByHref, remarkArtifactReferences } from '../lib/artifactReferences.js'
+import { findArtifactReferenceByHref, findArtifactReferenceByLocalPath, remarkArtifactReferences, remarkLocalPathLinks } from '../lib/artifactReferences.js'
 import { copyTextToClipboard } from '../lib/clipboard.js'
 
 /**
@@ -29,6 +29,16 @@ const sanitizeSchema = {
     span: [...(defaultSchema.attributes?.span || []), 'className'],
     a: [...(defaultSchema.attributes?.a || []), 'target', 'rel'],
   },
+  // ★ 允许 file:// 协议,供「裸绝对路径 → 可点击链接」使用。
+  // 点击永远被 onLinkClick 拦截,浏览器不会真的导航到 file://。
+  protocols: {
+    ...(defaultSchema.protocols || {}),
+    href: [...new Set([...(defaultSchema.protocols?.href || []), 'file'])],
+  },
+}
+
+function isLocalPathHref(href = '') {
+  return /^file:\/\//i.test(String(href || ''))
 }
 
 function nodeText(node) {
@@ -98,15 +108,19 @@ function MarkdownRenderer({ artifactReferences = [], children, className = '', o
   return (
     <div className={`chat-markdown prose prose-sm max-w-none ${className}`}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, [remarkArtifactReferences, { references: artifactReferences }]]}
+        remarkPlugins={[remarkGfm, [remarkArtifactReferences, { references: artifactReferences }], remarkLocalPathLinks]}
         rehypePlugins={[
           [rehypeSanitize, sanitizeSchema],
           rehypeHighlight,
         ]}
         components={{
-          // 自定义链接：强制新标签页打开 + noopener
+          // 自定义链接：本地路径可点击打开;普通链接新标签页打开 + noopener
           a: ({ href, children, ...props }) => {
-            const isArtifactReference = Boolean(findArtifactReferenceByHref(artifactReferences, href))
+            const isLocalPath = isLocalPathHref(href)
+            const isArtifactReference = Boolean(
+              findArtifactReferenceByHref(artifactReferences, href)
+              || (isLocalPath && findArtifactReferenceByLocalPath(artifactReferences, href)),
+            )
             const anchorProps = { ...props }
             delete anchorProps.node
             if (!isArtifactReference && isManagedArtifactHref(href)) {
@@ -115,12 +129,16 @@ function MarkdownRenderer({ artifactReferences = [], children, className = '', o
             return (
               <a
                 {...anchorProps}
-                href={href}
-                target="_blank"
-                rel="noopener noreferrer"
-                data-testid={isArtifactReference ? 'inline-artifact-link' : undefined}
-                className={isArtifactReference ? 'font-semibold text-ember decoration-ember/45 underline-offset-4 hover:decoration-ember' : anchorProps.className}
+                href={isLocalPath ? undefined : href}
+                {...(isLocalPath ? {} : { target: '_blank', rel: 'noopener noreferrer' })}
+                data-testid={isArtifactReference ? 'inline-artifact-link' : isLocalPath ? 'inline-local-path-link' : undefined}
+                className={isArtifactReference
+                  ? 'font-semibold text-ember decoration-ember/45 underline-offset-4 hover:decoration-ember'
+                  : isLocalPath
+                    ? 'font-mono text-[0.88em] text-cyan underline decoration-cyan/40 underline-offset-4 hover:decoration-cyan'
+                    : anchorProps.className}
                 onClick={(event) => {
+                  if (isLocalPath) event.preventDefault()
                   if (onLinkClick?.(href, event)) event.preventDefault()
                 }}
               >

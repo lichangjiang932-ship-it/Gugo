@@ -23,7 +23,8 @@ export function artifactTypeForSkill(skillId) {
 
 export function buildChatFailureMessage(message = '') {
   const detail = String(message || '模型代理调用失败。')
-  const base = `\n\n模型调用失败：${detail}`
+  // ★ 执行/失败状态行按用户要求用英文技术表述,与界面语言无关。
+  const base = `\n\nModel call failed: ${detail}`
   if (CONFIG_ERROR_PATTERNS.some((pattern) => pattern.test(detail))) {
     return `${base}\n\n请前往“设置 → 模型”选择模型服务并保存 API Key；自定义部署也可以在高级配置中填写接口地址和模型名称。`
   }
