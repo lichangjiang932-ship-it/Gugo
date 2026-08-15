@@ -3,7 +3,7 @@ import { getSkillIconPresentation } from '../../lib/skillIcons.js'
 
 export default function SkillsGrid({ skills, onSelect, onDelete, t }) {
   return (
-    <div className="grid grid-cols-[repeat(auto-fill,minmax(min(238px,100%),1fr))] gap-4">
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 xl:grid-cols-3 2xl:grid-cols-4">
       {skills.map((skill) => {
         const { Icon, className: iconClassName } = getSkillIconPresentation(skill)
         const detailLabel = `${t('nav.skillDetails')}: ${skill.name}`

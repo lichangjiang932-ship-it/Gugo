@@ -1,6 +1,7 @@
 import { getRuntimeSkill } from './skillRegistry.js'
 import { prepareOptionalPromptContext } from './optionalPromptContext.js'
 import { canonicalizeSkillId } from '../../shared/artifactIntent.js'
+import { applySkillQualityContract } from '../utils/skillQuality.js'
 
 export function resolveJobSkillContext({ prompt = '', userId = null } = {}) {
   const text = String(prompt || '')
@@ -34,7 +35,7 @@ export function injectJobPromptContext({
   })
   const blocks = [...context.messages]
   if (skill?.systemPrompt && !context.skillIds.includes(String(skillId))) {
-    blocks.push({ role: 'system', content: skill.systemPrompt })
+    blocks.push({ role: 'system', content: applySkillQualityContract(skill) })
   }
   messages.splice(1, 0, ...blocks)
   return context

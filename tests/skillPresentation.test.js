@@ -111,6 +111,31 @@ test('default skill library stays compact while retaining user skills and common
   assert.ok(catalog.some((skill) => skill.id === 'codex-obscure-runtime'), 'full catalog must keep non-default skills searchable')
 })
 
+test('large catalogs keep a compact featured set and deterministic complete ordering', () => {
+  const featured = Array.from({ length: 25 }, (_, index) => ({
+    id: `core-skill-${String(index).padStart(2, '0')}`,
+    name: `Core skill ${String(index).padStart(2, '0')}`,
+    desc: `Built-in capability ${index}`,
+    runnable: true,
+    recommended: true,
+  }))
+  const longTail = Array.from({ length: 586 }, (_, index) => ({
+    id: `codex-specialized-${String(index).padStart(3, '0')}`,
+    name: `Specialized plugin ${String(index).padStart(3, '0')}`,
+    desc: `Specialized capability ${index}`,
+    runnable: true,
+    codexPlugin: true,
+    external: true,
+  }))
+
+  const catalog = organizeSkillCatalog([...longTail, ...featured], 'en')
+  const reversed = organizeSkillCatalog([...featured, ...longTail].reverse(), 'en')
+
+  assert.equal(catalog.length, 611)
+  assert.equal(selectDefaultSkillCatalog(catalog).length, 25)
+  assert.deepEqual(catalog.map((skill) => skill.id), reversed.map((skill) => skill.id))
+})
+
 test('skill library, slash menu, and command palette share presented metadata', () => {
   const chat = readSourceTree('../src/pages/ChatSplit/')
   const commands = fs.readFileSync(new URL('../src/components/SkillCommandsSync.jsx', import.meta.url), 'utf8')

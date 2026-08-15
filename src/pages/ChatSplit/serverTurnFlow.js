@@ -223,6 +223,7 @@ export async function runServerChatTurn({
       history: historyMessages,
       agentId,
       skillIds: skillId ? [skillId] : [],
+      skillDefinitions: skill?.localCustom ? [skill] : [],
       intentMode,
       syncSessionSnapshot: true,
       toolsConfig: buildServerToolsConfig(toolsConfig, localPathAccess, historyMessages),

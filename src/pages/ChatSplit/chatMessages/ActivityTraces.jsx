@@ -18,6 +18,7 @@ export function ReasoningTrace({ text = '', streaming = false, label = '', testI
 export function ToolCallTrace({ calls = [], artifacts = [], onOpenArtifact }) {
   const normalizedCalls = Array.isArray(calls) ? calls : []
   const [showAll, setShowAll] = useState(false)
+  const [expandedCallKey, setExpandedCallKey] = useState(null)
   const visibleLimit = 4
   const hiddenCount = Math.max(0, normalizedCalls.length - visibleLimit)
   const startIndex = showAll ? 0 : hiddenCount
@@ -53,9 +54,10 @@ export function ToolCallTrace({ calls = [], artifacts = [], onOpenArtifact }) {
       <div className="chat-tool-list" role="list">
         {visibleCalls.map((call, index) => {
           const stepNumber = startIndex + index + 1
+          const callKey = stableCallKey(call, normalizedCalls, stepNumber - 1)
           return (
             <div
-              key={call.id || `${call.name || 'tool'}-${stepNumber}`}
+              key={callKey}
               className="chat-tool-step-motion"
             >
               {call.name === 'Agent'
@@ -65,6 +67,8 @@ export function ToolCallTrace({ calls = [], artifacts = [], onOpenArtifact }) {
                     stepNumber={stepNumber}
                     artifacts={artifacts}
                     onOpenArtifact={onOpenArtifact}
+                    expanded={expandedCallKey === callKey}
+                    onToggle={() => setExpandedCallKey((current) => current === callKey ? null : callKey)}
                   />}
             </div>
           )
@@ -72,4 +76,20 @@ export function ToolCallTrace({ calls = [], artifacts = [], onOpenArtifact }) {
       </div>
     </section>
   )
+}
+
+function stableCallKey(call, calls, index) {
+  if (call?.id != null && String(call.id).trim()) return String(call.id)
+  const signature = `${call?.name || 'tool'}\u0000${String(call?.arguments || '')}`
+  let occurrence = 0
+  for (let cursor = 0; cursor < index; cursor += 1) {
+    const candidate = calls[cursor]
+    if (`${candidate?.name || 'tool'}\u0000${String(candidate?.arguments || '')}` === signature) occurrence += 1
+  }
+  let hash = 2166136261
+  for (let cursor = 0; cursor < signature.length; cursor += 1) {
+    hash ^= signature.charCodeAt(cursor)
+    hash = Math.imul(hash, 16777619)
+  }
+  return `legacy-${(hash >>> 0).toString(36)}-${occurrence}`
 }

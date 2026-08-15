@@ -3,11 +3,20 @@ import { getAgentTemplateSystemPrompt } from './agentTemplates.js'
 import { getRuntimeSkill } from './skillRegistry.js'
 import { getCompactionArchive } from './compactionService.js'
 import { buildPersonaManifestBlock } from './agentStore.js'
+import {
+  applySkillQualityContract,
+  getSkillQualityContract,
+  hasSkillQualityContract,
+} from '../utils/skillQuality.js'
+import {
+  INLINE_SKILL_DEFINITION_LIMITS,
+  truncateInlineSkillText,
+} from '../../shared/inlineSkillDefinitions.js'
 
 const BLOCK_TYPES = ['identity', 'ishiki', 'skills', 'sessions']
 const CACHE_LIMIT = 64
 export const SKILL_PROMPT_LIMITS = Object.freeze({
-  maxPromptBytes: 96 * 1024,
+  maxPromptBytes: INLINE_SKILL_DEFINITION_LIMITS.systemPrompt.maxUtf8Bytes,
   maxBlockBytes: 256 * 1024,
 })
 const EMPTY_RESULT = Object.freeze({ text: '', fingerprint: 'empty', sources: {} })
@@ -172,12 +181,39 @@ function truncateUtf8(value, maxBytes, marker = '') {
   return { text: characters.join('') + marker, truncated: true }
 }
 
-function normalizeSkill(skill) {
-  const prompt = truncateUtf8(
-    skill.systemPrompt || '',
-    SKILL_PROMPT_LIMITS.maxPromptBytes,
-    '\n\n[Skill prompt truncated by safety budget]',
-  )
+const SKILL_TRUNCATION_MARKER = '[Skill prompt truncated by safety budget]'
+const SKILLS_BLOCK_OMISSION_MARKER = '\n\n[Additional skill content omitted by safety budget]'
+
+function originalSkillPrompt(skill, prompt, contract) {
+  if (!hasSkillQualityContract(skill, prompt)) return prompt
+  if (prompt === contract) return ''
+  return prompt.slice(0, -(`\n\n${contract}`.length)).trimEnd()
+}
+
+function fitSkillPrompt(skill, maxPromptBytes) {
+  const sourcePrompt = String(skill.systemPrompt || '').trim()
+  const qualityContract = getSkillQualityContract(skill)
+  const appliedPrompt = applySkillQualityContract(skill)
+  if (Buffer.byteLength(appliedPrompt, 'utf8') <= maxPromptBytes) {
+    return { text: appliedPrompt, truncated: false, contractPreserved: true }
+  }
+  const promptBody = originalSkillPrompt(skill, sourcePrompt, qualityContract)
+  const truncationSuffix = `\n\n${SKILL_TRUNCATION_MARKER}`
+  const fixedSuffix = `${truncationSuffix}\n\n${qualityContract}`
+  if (!promptBody || Buffer.byteLength(fixedSuffix, 'utf8') > maxPromptBytes) {
+    return { text: '', truncated: true, contractPreserved: false }
+  }
+  const sourceBudget = maxPromptBytes - Buffer.byteLength(`\n\n${qualityContract}`, 'utf8')
+  const truncatedSource = truncateUtf8(promptBody, sourceBudget, truncationSuffix)
+  return {
+    text: `${truncatedSource.text}\n\n${qualityContract}`,
+    truncated: true,
+    contractPreserved: true,
+  }
+}
+
+function normalizeSkill(skill, maxPromptBytes = SKILL_PROMPT_LIMITS.maxPromptBytes) {
+  const prompt = fitSkillPrompt(skill, maxPromptBytes)
   return {
     id: skill.id,
     name: skill.name || '',
@@ -188,8 +224,46 @@ function normalizeSkill(skill) {
   }
 }
 
+function renderSkillHeader(skill) {
+  const lines = [`## ${skill.name || skill.id} (${skill.id})`]
+  if (skill.description) lines.push(skill.description)
+  if (skill.permissions.length) lines.push(`Permissions: ${skill.permissions.join(', ')}`)
+  return lines.join('\n')
+}
+
+function renderSkillSection(skill) {
+  return [renderSkillHeader(skill), skill.systemPrompt?.trim()].filter(Boolean).join('\n\n')
+}
+
 function normalizeSkillIds(skillIds) {
   return [...new Set((Array.isArray(skillIds) ? skillIds : []).map(String).filter(Boolean))].sort()
+}
+
+export function prepareInlineSkillsForPrompt({ skillIds = [], skillDefinitions = [] } = {}) {
+  const limits = INLINE_SKILL_DEFINITION_LIMITS
+  const allowedIds = new Set(normalizeSkillIds(skillIds))
+  const seen = new Set()
+  return (Array.isArray(skillDefinitions) ? skillDefinitions : [])
+    .map((skill) => {
+      const id = truncateInlineSkillText(skill?.id, limits.id)
+      if (!id || !allowedIds.has(id) || seen.has(id)) return null
+      const systemPrompt = truncateInlineSkillText(skill?.systemPrompt, limits.systemPrompt)
+      if (!systemPrompt) return null
+      seen.add(id)
+      return normalizeSkill({
+        id,
+        name: truncateInlineSkillText(skill?.name || id, limits.name),
+        description: truncateInlineSkillText(skill?.description || skill?.desc, limits.description),
+        permissions: [...new Set(
+          (Array.isArray(skill?.permissions) ? skill.permissions : Array.isArray(skill?.perms) ? skill.perms : [])
+            .map((permission) => truncateInlineSkillText(permission, limits.permission))
+            .filter(Boolean),
+        )].slice(0, limits.maxPermissions),
+        systemPrompt,
+      })
+    })
+    .filter(Boolean)
+    .slice(0, limits.maxDefinitions)
 }
 
 /**
@@ -202,7 +276,7 @@ export function prepareSkillsForPrompt({ userId, skillIds = [] } = {}) {
   return normalizedIds
     .map((id) => getRuntimeSkill(id, { userId }))
     .filter(Boolean)
-    .map(normalizeSkill)
+    .map((skill) => normalizeSkill(skill))
 }
 
 export function buildSkillsBlockFromPrepared({ userId, agentId = null, skills = [] } = {}) {
@@ -224,19 +298,41 @@ export function buildSkillsBlockFromPrepared({ userId, agentId = null, skills = 
     fields: ['id', 'name', 'description', 'permissions', 'systemPrompt'],
   }
   return cachedBuild('skills', input, sources, () => {
-    const sections = normalized.map((skill) => {
-      const lines = [`## ${skill.name || skill.id} (${skill.id})`]
-      if (skill.description) lines.push(skill.description)
-      if (skill.permissions.length) lines.push(`Permissions: ${skill.permissions.join(', ')}`)
-      if (skill.systemPrompt) lines.push('', skill.systemPrompt.trim())
-      return lines.join('\n')
-    })
-    const rendered = ['# Skills', ...sections].join('\n\n')
-    return truncateUtf8(
-      rendered,
-      SKILL_PROMPT_LIMITS.maxBlockBytes,
-      '\n\n[Additional skill content omitted by safety budget]',
-    ).text
+    let rendered = '# Skills'
+    let omitted = false
+    for (const [index, skill] of normalized.entries()) {
+      const separator = '\n\n'
+      const section = renderSkillSection(skill)
+      const candidate = `${rendered}${separator}${section}`
+      const hasMoreSkills = index < normalized.length - 1
+      const reserveBytes = hasMoreSkills
+        ? Buffer.byteLength(SKILLS_BLOCK_OMISSION_MARKER, 'utf8')
+        : 0
+      if (Buffer.byteLength(candidate, 'utf8') + reserveBytes <= SKILL_PROMPT_LIMITS.maxBlockBytes) {
+        rendered = candidate
+        continue
+      }
+
+      const headerPrefix = `${rendered}${separator}${renderSkillHeader(skill)}\n\n`
+      const promptBudget = SKILL_PROMPT_LIMITS.maxBlockBytes
+        - Buffer.byteLength(headerPrefix + SKILLS_BLOCK_OMISSION_MARKER, 'utf8')
+      const fitted = normalizeSkill(skill, Math.max(0, promptBudget))
+      if (fitted.systemPrompt && hasSkillQualityContract(fitted, fitted.systemPrompt)) {
+        const fittedCandidate = `${headerPrefix}${fitted.systemPrompt}${SKILLS_BLOCK_OMISSION_MARKER}`
+        if (Buffer.byteLength(fittedCandidate, 'utf8') <= SKILL_PROMPT_LIMITS.maxBlockBytes) {
+          rendered = fittedCandidate
+          omitted = true
+          break
+        }
+      }
+      omitted = true
+      break
+    }
+    if (omitted && !rendered.endsWith(SKILLS_BLOCK_OMISSION_MARKER)) {
+      const withMarker = `${rendered}${SKILLS_BLOCK_OMISSION_MARKER}`
+      if (Buffer.byteLength(withMarker, 'utf8') <= SKILL_PROMPT_LIMITS.maxBlockBytes) rendered = withMarker
+    }
+    return rendered
   })
 }
 

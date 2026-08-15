@@ -225,3 +225,68 @@ test('自定义技能创建后持久化可执行指令并立即出现在技能�
     dom.window.close()
   }
 })
+
+test('技能 API 失败时保留精选入口并明确说明仅显示内置技能', async () => {
+  const dom = setupDom()
+  const [
+    { act },
+    { createRoot },
+    { HashRouter },
+    { default: SkillsMarket },
+    { ToastProvider },
+    { I18nProvider },
+    { AppProvider },
+  ] = await Promise.all([
+    import('react'),
+    import('react-dom/client'),
+    import('../../src/lib/router.jsx'),
+    import('../../src/pages/SkillsMarket.jsx'),
+    import('../../src/components/Toast.jsx'),
+    import('../../src/i18n/I18nProvider.jsx'),
+    import('../../src/store/AppContext.jsx'),
+  ])
+  const originalFetch = globalThis.fetch
+  const fetchUrls = []
+  globalThis.fetch = async (url) => {
+    const requestUrl = String(url)
+    fetchUrls.push(requestUrl)
+    if (requestUrl.includes('/api/skills')) throw new Error('skills API unavailable')
+    return new Response(JSON.stringify({}), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  try {
+    await act(async () => {
+      root.render(
+        <HashRouter>
+          <I18nProvider>
+            <ToastProvider>
+              <AppProvider>
+                <SkillsMarket />
+              </AppProvider>
+            </ToastProvider>
+          </I18nProvider>
+        </HashRouter>,
+      )
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+
+    assert.ok(fetchUrls.some((url) => url.includes('/api/skills')), 'skills request should run after mounting the page')
+    const fallback = rootElement.querySelector('[data-testid="skills-catalog-fallback"]')
+    assert.ok(fallback)
+    assert.match(fallback.textContent, /仅显示内置技能/)
+    const featuredFilter = [...rootElement.querySelectorAll('button')]
+      .find((button) => button.textContent.trim().startsWith('精选 ·'))
+    assert.ok(featuredFilter)
+    assert.equal(featuredFilter.getAttribute('aria-pressed'), 'true')
+    assert.ok(rootElement.querySelectorAll('[data-skill-id]').length > 0)
+  } finally {
+    globalThis.fetch = originalFetch
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})

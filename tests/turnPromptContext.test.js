@@ -73,3 +73,58 @@ test('changing workspace instructions preserves compiled block cache hits and co
   }
   assert.notEqual(second.messages.at(-1).content, first.messages.at(-1).content)
 })
+
+test('turn prompt executes an unknown local skill definition with the quality contract', () => {
+  const prepared = prepareTurnPromptContext({
+    userId: 'local-skill-user',
+    skillIds: ['local-writer'],
+    skillDefinitions: [{
+      id: 'local-writer',
+      name: 'Local writer',
+      description: 'A browser-local custom skill.',
+      permissions: ['read'],
+      systemPrompt: 'Use this exact custom workflow.',
+    }],
+    env: { AGENT_INJECT_ENABLED: '0' },
+  }, {
+    prepareSkillsForPrompt: () => [],
+    prepareMemoryInjectionContext: () => ({ text: '', memoryIds: [] }),
+    readWorkspaceInstructions: () => null,
+  })
+
+  assert.deepEqual(prepared.skillIds, ['local-writer'])
+  const skillBlock = prepared.messages.find((message) => message.content.startsWith('# Skills'))?.content || ''
+  assert.match(skillBlock, /Use this exact custom workflow\./)
+  assert.match(skillBlock, /gugo-skill-quality:v1/)
+  assert.match(skillBlock, /then inspect the result, run the most relevant checks/i)
+})
+
+test('registered skills take precedence over conflicting inline definitions', () => {
+  const prepared = prepareTurnPromptContext({
+    userId: 'registered-priority-user',
+    skillIds: ['shared-skill-id'],
+    skillDefinitions: [{
+      id: 'shared-skill-id',
+      name: 'Inline copy',
+      description: 'Browser-local fallback.',
+      permissions: [],
+      systemPrompt: 'INLINE PROMPT MUST NOT WIN.',
+    }],
+    env: { AGENT_INJECT_ENABLED: '0' },
+  }, {
+    prepareSkillsForPrompt: () => [{
+      id: 'shared-skill-id',
+      name: 'Registered skill',
+      description: 'Server-authoritative workflow.',
+      permissions: ['read'],
+      systemPrompt: 'REGISTERED PROMPT WINS.',
+    }],
+    prepareMemoryInjectionContext: () => ({ text: '', memoryIds: [] }),
+    readWorkspaceInstructions: () => null,
+  })
+
+  const skillBlock = prepared.messages.find((message) => message.content.startsWith('# Skills'))?.content || ''
+  assert.match(skillBlock, /REGISTERED PROMPT WINS\./)
+  assert.doesNotMatch(skillBlock, /INLINE PROMPT MUST NOT WIN\./)
+  assert.deepEqual(prepared.skillIds, ['shared-skill-id'])
+})

@@ -22,6 +22,10 @@ export function modelOptionsFromStatus(status = {}) {
     active: true,
     contextWindow: status.contextWindow,
     contextWindowSource: status.contextWindowSource,
+    contextWindowEstimated: status.contextWindowEstimated,
+    contextWindowSourceUrl: status.contextWindowSourceUrl,
+    contextWindowVerifiedAt: status.contextWindowVerifiedAt,
+    maxOutputTokens: status.maxOutputTokens,
   }]
 }
 

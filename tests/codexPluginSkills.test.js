@@ -101,7 +101,8 @@ test('discovers nested Codex plugins as metadata and lazily loads only ready pro
     assert.equal(listRuntimeSkills().find((skill) => skill.id === ready.id)?.systemPrompt, undefined)
     assert.equal(getRuntimeSkill(ready.id)?.systemPrompt, 'SECRET_BODY_ready-plugin')
     const prepared = prepareSkillsForPrompt({ skillIds: [ready.id] })
-    assert.equal(prepared[0]?.systemPrompt, 'SECRET_BODY_ready-plugin')
+    assert.match(prepared[0]?.systemPrompt || '', /^SECRET_BODY_ready-plugin/)
+    assert.match(prepared[0]?.systemPrompt || '', /gugo-skill-quality:v1/)
     clearPromptCompilerCache('skills')
     const firstBlock = buildSkillsBlock({ skillIds: [ready.id] })
     fs.writeFileSync(readySkillPath, [
@@ -113,7 +114,8 @@ test('discovers nested Codex plugins as metadata and lazily loads only ready pro
     ].join('\n'))
     const updated = prepareSkillsForPrompt({ skillIds: [ready.id] })
     const secondBlock = buildSkillsBlock({ skillIds: [ready.id] })
-    assert.equal(updated[0]?.systemPrompt, 'UPDATED_SECRET_BODY_ready-plugin_with_a_new_size')
+    assert.match(updated[0]?.systemPrompt || '', /^UPDATED_SECRET_BODY_ready-plugin_with_a_new_size/)
+    assert.match(updated[0]?.systemPrompt || '', /gugo-skill-quality:v1/)
     assert.notEqual(firstBlock.fingerprint, secondBlock.fingerprint)
     const turnContext = prepareTurnPromptContext({
       userId: 'codex-plugin-user',

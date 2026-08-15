@@ -34,8 +34,9 @@ export default function SkillsMarket() {
   return (
     <div className="h-screen flex bg-paper overflow-hidden">
       <LeftRail />
-      <main className="flex-1 p-8 overflow-y-auto">
-        <SkillsToolbar
+      <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
+        <div className="mx-auto w-full max-w-[1480px]">
+          <SkillsToolbar
           query={market.query}
           setQuery={market.setQuery}
           activeFilter={market.activeFilter}
@@ -48,8 +49,10 @@ export default function SkillsMarket() {
           openGithub={market.openGithub}
           openCustomModal={market.openCustomModal}
           t={t}
-        />
-        <SkillsGrid skills={market.filteredSkills} onSelect={market.setSelectedSkill} onDelete={market.deleteCustomSkill} t={t} />
+          />
+          {market.catalogFallback && <div role="status" className="mb-5 rounded-xl border border-amber-300/70 bg-amber-50/70 px-4 py-3 text-sm text-amber-900" data-testid="skills-catalog-fallback">{t('skillsMarket.builtInFallback')}</div>}
+          <SkillsGrid skills={market.filteredSkills} onSelect={market.setSelectedSkill} onDelete={market.deleteCustomSkill} t={t} />
+        </div>
       </main>
       <SkillDetailModal skill={market.selectedSkill} copy={detailCopy} lang={lang} onClose={() => market.setSelectedSkill(null)} onUse={market.useSelectedSkill} t={t} />
       <CustomSkillModal market={market} t={t} />

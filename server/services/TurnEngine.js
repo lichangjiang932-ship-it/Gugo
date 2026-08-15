@@ -26,6 +26,7 @@ import {
   materializeManagedAttachmentMessages,
 } from './turnMessageContext.js'
 import { prepareTurnPromptContext } from './turnPromptContext.js'
+import { prepareInlineSkillsForPrompt } from './promptCompiler.js'
 import {
   applyDirectoryAuthorizationToolsConfig,
   normalizeServerToolsConfig,
@@ -563,6 +564,7 @@ export class TurnEngine {
     history = [],
     agentId = null,
     skillIds = [],
+    skillDefinitions = [],
     toolsConfig = null,
     intentMode = 'auto',
     attachments = [],
@@ -610,6 +612,10 @@ export class TurnEngine {
       const createdAt = this.deps.now()
       const normalizedAgentId = normalizeOptionalId(agentId)
       const normalizedSkillIds = normalizeIds(resolvedSkill.skillIds)
+      const normalizedSkillDefinitions = prepareInlineSkillsForPrompt({
+        skillIds: normalizedSkillIds,
+        skillDefinitions,
+      })
       const normalizedToolsConfig = normalizeServerToolsConfig(toolsConfig)
       const normalizedIntentMode = normalizeTurnIntentMode(intentMode)
       let managedAttachments = []
@@ -674,6 +680,7 @@ export class TurnEngine {
           modelName: modelName || null,
           agentId: normalizedAgentId,
           skillIds: normalizedSkillIds,
+          skillDefinitions: normalizedSkillDefinitions,
           toolsConfig: normalizedToolsConfig,
           intentMode: normalizedIntentMode,
           userMessageId,
@@ -693,6 +700,7 @@ export class TurnEngine {
         modelName,
         agentId: normalizedAgentId,
         skillIds: normalizedSkillIds,
+        skillDefinitions: normalizedSkillDefinitions,
         toolsConfig: normalizedToolsConfig,
         intentMode: normalizedIntentMode,
         emitter,
@@ -817,6 +825,10 @@ export class TurnEngine {
       modelName: started.payload.modelName || null,
       agentId: normalizeOptionalId(started.payload.agentId),
       skillIds: normalizeIds(started.payload.skillIds),
+      skillDefinitions: prepareInlineSkillsForPrompt({
+        skillIds: normalizeIds(started.payload.skillIds),
+        skillDefinitions: started.payload.skillDefinitions,
+      }),
       toolsConfig: normalizeServerToolsConfig(started.payload.toolsConfig),
       intentMode: normalizeTurnIntentMode(started.payload.intentMode),
       resumeContext,
@@ -922,6 +934,7 @@ export class TurnEngine {
     modelName,
     agentId,
     skillIds,
+    skillDefinitions,
     toolsConfig,
     intentMode,
     resumeContext,
@@ -980,6 +993,7 @@ export class TurnEngine {
         userId,
         agentId,
         skillIds,
+        skillDefinitions,
         sessionId,
         recentMessages: storedMessages,
         includeRecentTranscript: false,

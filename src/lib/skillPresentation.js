@@ -189,6 +189,7 @@ const DEFAULT_PLUGIN_SKILL_IDENTITIES = Object.freeze([
   'test-driven-development',
   'verification-before-completion',
   'writing-plans',
+  'writing-skills',
 ])
 
 function catalogLanguage(lang) {

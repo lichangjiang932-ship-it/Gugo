@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createTurnActivity, createTurnEvent } from '../shared/turnEvents.js'
+import {
+  INLINE_SKILL_DEFINITION_LIMITS,
+  unicodeCharacterLength,
+  utf8ByteLength,
+} from '../shared/inlineSkillDefinitions.js'
 import { setAuthToken } from '../src/lib/accountClient.js'
 import {
   dispatchTurnActivity,
@@ -254,6 +259,69 @@ test('startServerTurn sends a canonical explicit tools configuration', async () 
   assert.equal(requestBody.agentId, 'agent-primary')
   assert.deepEqual(requestBody.skillIds, ['skill-review'])
   assert.equal(requestBody.intentMode, 'execute')
+})
+
+test('startServerTurn sends only selected local skill definitions', async () => {
+  let requestBody = null
+  await startServerTurn({
+    sessionId: 's-local-skill',
+    content: 'use my local skill',
+    skillIds: ['local-writer'],
+    skillDefinitions: [
+      {
+        id: 'local-writer',
+        name: 'Local writer',
+        desc: 'User-authored workflow',
+        perms: ['read', 'read'],
+        systemPrompt: 'Inspect the source, edit the real file, and verify the result.',
+        localCustom: true,
+      },
+      { id: 'not-selected', name: 'Ignored', systemPrompt: 'Do not send this.' },
+    ],
+    fetchImpl: async (url, options) => {
+      assert.equal(url, '/api/turns/run')
+      requestBody = JSON.parse(options.body)
+      return response({ turn: { sessionId: 's-local-skill', turnId: 't-local-skill', status: 'running' } }, 202)
+    },
+  })
+
+  assert.deepEqual(requestBody.skillDefinitions, [{
+    id: 'local-writer',
+    name: 'Local writer',
+    description: 'User-authored workflow',
+    permissions: ['read'],
+    systemPrompt: 'Inspect the source, edit the real file, and verify the result.',
+  }])
+})
+
+test('startServerTurn bounds multibyte inline skill fields by the durable event limits', async () => {
+  const limits = INLINE_SKILL_DEFINITION_LIMITS
+  let requestBody = null
+  await startServerTurn({
+    sessionId: 's-local-skill-bounds',
+    content: 'use my bounded local skill',
+    skillIds: ['local-writer'],
+    skillDefinitions: [{
+      id: 'local-writer',
+      name: '名字🙂'.repeat(limits.name.maxCharacters),
+      description: '说明🙂'.repeat(limits.description.maxCharacters),
+      perms: ['权限🙂'.repeat(limits.permission.maxCharacters)],
+      systemPrompt: '执行并验证🙂'.repeat(limits.systemPrompt.maxUtf8Bytes),
+    }],
+    fetchImpl: async (_url, options) => {
+      requestBody = JSON.parse(options.body)
+      return response({ turn: { sessionId: 's-local-skill-bounds', turnId: 't-local-skill-bounds', status: 'running' } }, 202)
+    },
+  })
+
+  const definition = requestBody.skillDefinitions[0]
+  assert.ok(unicodeCharacterLength(definition.name) <= limits.name.maxCharacters)
+  assert.ok(utf8ByteLength(definition.name) <= limits.name.maxUtf8Bytes)
+  assert.ok(unicodeCharacterLength(definition.description) <= limits.description.maxCharacters)
+  assert.ok(utf8ByteLength(definition.description) <= limits.description.maxUtf8Bytes)
+  assert.ok(unicodeCharacterLength(definition.permissions[0]) <= limits.permission.maxCharacters)
+  assert.ok(utf8ByteLength(definition.permissions[0]) <= limits.permission.maxUtf8Bytes)
+  assert.ok(utf8ByteLength(definition.systemPrompt) <= limits.systemPrompt.maxUtf8Bytes)
 })
 
 test('WebSocket delivers transient activity before the durable event without treating it as terminal', async () => {

@@ -432,8 +432,8 @@ test('loads a backend model catalog without exposing API keys', () => {
 
   assert.equal(status.configured, true)
   assert.deepEqual(status.models, [
-    { name: 'gpt-fast', active: true, contextWindow: 128_000, contextWindowSource: 'cloud_default' },
-    { name: 'gpt-pro', active: false, contextWindow: 128_000, contextWindowSource: 'cloud_default' },
+    { name: 'gpt-fast', active: true, contextWindow: 128_000, contextWindowSource: 'cloud_default', contextWindowEstimated: true },
+    { name: 'gpt-pro', active: false, contextWindow: 128_000, contextWindowSource: 'cloud_default', contextWindowEstimated: true },
   ])
   assert.equal(JSON.stringify(status).includes('sk-test'), false)
 })
@@ -454,10 +454,30 @@ test('loads a multi-provider model catalog', () => {
 
   assert.equal(status.configured, true)
   assert.deepEqual(status.models, [
-    { name: 'deepseek-v4-pro', active: true, provider: 'deepseek', contextWindow: 128_000, contextWindowSource: 'cloud_default' },
-    { name: 'deepseek-v4-flash', active: false, provider: 'deepseek', contextWindow: 128_000, contextWindowSource: 'cloud_default' },
-    { name: 'mimo-v2.5', active: false, provider: 'mimo', contextWindow: 128_000, contextWindowSource: 'cloud_default' },
-    { name: 'mimo-v2.5-pro', active: false, provider: 'mimo', contextWindow: 128_000, contextWindowSource: 'cloud_default' },
+    {
+      name: 'deepseek-v4-pro',
+      active: true,
+      provider: 'deepseek',
+      contextWindow: 1_000_000,
+      contextWindowSource: 'official_catalog',
+      contextWindowEstimated: false,
+      contextWindowSourceUrl: 'https://api-docs.deepseek.com/quick_start/pricing/',
+      contextWindowVerifiedAt: '2026-08-15',
+      maxOutputTokens: 384_000,
+    },
+    {
+      name: 'deepseek-v4-flash',
+      active: false,
+      provider: 'deepseek',
+      contextWindow: 1_000_000,
+      contextWindowSource: 'official_catalog',
+      contextWindowEstimated: false,
+      contextWindowSourceUrl: 'https://api-docs.deepseek.com/quick_start/pricing/',
+      contextWindowVerifiedAt: '2026-08-15',
+      maxOutputTokens: 384_000,
+    },
+    { name: 'mimo-v2.5', active: false, provider: 'mimo', contextWindow: 128_000, contextWindowSource: 'cloud_default', contextWindowEstimated: true },
+    { name: 'mimo-v2.5-pro', active: false, provider: 'mimo', contextWindow: 128_000, contextWindowSource: 'cloud_default', contextWindowEstimated: true },
   ])
   assert.equal(JSON.stringify(status).includes('sk-deepseek'), false)
   assert.equal(JSON.stringify(status).includes('sk-mimo'), false)
@@ -542,9 +562,9 @@ test('model status resolves an independent context window for every model', () =
   })
 
   assert.deepEqual(status.models, [
-    { name: 'large', active: true, provider: 'mixed', contextWindow: 131_072, contextWindowSource: 'model_profile' },
-    { name: 'mapped', active: false, provider: 'mixed', contextWindow: 65_536, contextWindowSource: 'model_context_windows' },
-    { name: 'legacy', active: false, provider: 'mixed', contextWindow: 8192, contextWindowSource: 'provider_override' },
+    { name: 'large', active: true, provider: 'mixed', contextWindow: 131_072, contextWindowSource: 'model_profile', contextWindowEstimated: false },
+    { name: 'mapped', active: false, provider: 'mixed', contextWindow: 65_536, contextWindowSource: 'model_context_windows', contextWindowEstimated: false },
+    { name: 'legacy', active: false, provider: 'mixed', contextWindow: 8192, contextWindowSource: 'provider_override', contextWindowEstimated: false },
   ])
 })
 
@@ -619,11 +639,13 @@ test('returns backend model status without exposing API key', () => {
       toolMaxRounds: 0,
       contextWindow: 128_000,
       contextWindowSource: 'cloud_default',
+      contextWindowEstimated: true,
       models: [{
         name: 'gpt-test',
         active: true,
         contextWindow: 128_000,
         contextWindowSource: 'cloud_default',
+        contextWindowEstimated: true,
       }],
     }
   )

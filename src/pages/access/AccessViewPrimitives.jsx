@@ -1,4 +1,5 @@
-import { Ban, Inbox, LoaderCircle, ShieldCheck } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Ban, Inbox, Info, LoaderCircle, ShieldCheck } from 'lucide-react'
 import { ACCESS_CAPABILITY_LEVELS } from '../../lib/accessCatalog.js'
 
 const CAPABILITY_PRESENTATION = Object.freeze({
@@ -31,11 +32,55 @@ export function ConnectionMethodBadge({ method, t }) {
 }
 
 export function CapabilityLegend({ t }) {
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef(null)
+  const triggerRef = useRef(null)
+
+  useEffect(() => {
+    if (!open) return undefined
+    const handlePointerDown = (event) => {
+      if (!containerRef.current?.contains(event.target)) setOpen(false)
+    }
+    const handleKeyDown = (event) => {
+      if (event.key !== 'Escape') return
+      setOpen(false)
+      triggerRef.current?.focus()
+    }
+    document.addEventListener('mousedown', handlePointerDown)
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [open])
+
   return (
-    <aside className="mb-7 rounded-xl border border-ink-fade/30 bg-paper-2/60 p-3" aria-label={t('access.capabilityLegend')} data-testid="access-capability-legend">
-      <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-ink-fade">{t('access.capabilityLegend')}</p>
-      <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">{Object.entries(CAPABILITY_PRESENTATION).map(([level, presentation]) => <div key={level} className="flex items-start gap-2 text-xs text-ink-soft"><ConnectorCapabilityBadge capabilityLevel={level} t={t} /><span className="leading-5">{t(presentation.hintKey)}</span></div>)}</div>
-    </aside>
+    <div ref={containerRef} className="relative shrink-0">
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls="access-capability-popover"
+        onClick={() => setOpen((current) => !current)}
+        className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full border border-ink-fade/40 bg-paper px-3 text-xs text-ink-soft transition-colors hover:border-ink-fade hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/45"
+        data-testid="access-capability-help"
+      >
+        <Info className="h-3.5 w-3.5" aria-hidden="true" />
+        {t('access.capabilityLegend')}
+      </button>
+      {open && (
+        <aside
+          id="access-capability-popover"
+          role="dialog"
+          aria-label={t('access.capabilityLegend')}
+          className="absolute right-0 top-10 z-30 w-[min(22rem,calc(100vw-3rem))] rounded-xl border border-ink-fade/30 bg-paper p-3 shadow-xl"
+          data-testid="access-capability-popover"
+        >
+          <div className="space-y-2.5">{Object.entries(CAPABILITY_PRESENTATION).map(([level, presentation]) => <div key={level} className="flex items-start gap-2 text-xs text-ink-soft"><ConnectorCapabilityBadge capabilityLevel={level} t={t} /><span className="leading-5">{t(presentation.hintKey)}</span></div>)}</div>
+        </aside>
+      )}
+    </div>
   )
 }
 

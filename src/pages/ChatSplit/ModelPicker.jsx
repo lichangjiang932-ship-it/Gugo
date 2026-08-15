@@ -2,12 +2,13 @@ import { useEffect, useId, useRef } from 'react'
 import { Check, ChevronDown } from 'lucide-react'
 import { useT } from '../../i18n/I18nProvider.jsx'
 
-function contextWindowLabel(value) {
+function contextWindowLabel(value, estimated = false) {
   const tokens = Number(value)
   if (!Number.isFinite(tokens) || tokens <= 0) return ''
-  if (tokens >= 1_000_000) return `${Number((tokens / 1_000_000).toFixed(1))}M`
-  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}K`
-  return String(tokens)
+  let label = String(tokens)
+  if (tokens >= 1_000_000) label = `${Number((tokens / 1_000_000).toFixed(1))}M`
+  else if (tokens >= 1_000) label = `${Math.round(tokens / 1_000)}K`
+  return estimated ? `~${label}` : label
 }
 
 export default function ModelPicker({
@@ -121,7 +122,7 @@ export default function ModelPicker({
               <div className="px-2 py-4 text-center text-xs text-ink-fade">{t('chat.modelPicker.empty')}</div>
             ) : modelOptions.map((model, index) => {
               const selected = model.name === selectedModel
-              const windowLabel = contextWindowLabel(model.contextWindow)
+              const windowLabel = contextWindowLabel(model.contextWindow, model.contextWindowEstimated)
               const hasMultiplier = Number.isFinite(Number(model.multiplier))
               return (
                 <button

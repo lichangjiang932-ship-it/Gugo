@@ -61,6 +61,10 @@ export function buildVisibleModelCatalog({ names = [], defaultModel = '', provid
       ...(providerByModel.has(name) ? { provider: providerByModel.get(name) } : {}),
       contextWindow: profile.contextWindow,
       contextWindowSource: profile.contextWindowSource,
+      contextWindowEstimated: profile.contextWindowEstimated,
+      ...(profile.contextWindowSourceUrl ? { contextWindowSourceUrl: profile.contextWindowSourceUrl } : {}),
+      ...(profile.contextWindowVerifiedAt ? { contextWindowVerifiedAt: profile.contextWindowVerifiedAt } : {}),
+      ...(profile.maxOutputTokens ? { maxOutputTokens: profile.maxOutputTokens } : {}),
     }
   })
 }

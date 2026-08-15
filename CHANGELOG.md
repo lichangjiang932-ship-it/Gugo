@@ -6,6 +6,25 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.9] - 2026-08-15
+
+### Added
+
+- Added an exact-model capability catalog with verified context windows, output limits, provenance, and conservative fallback for unknown model IDs.
+- Added a runtime quality contract for every built-in, imported, seeded, and plugin skill so execution, inspection, repair, verification, and final-file delivery are enforced consistently.
+
+### Changed
+
+- Rebuilt tool execution rows as a stable single-open accordion with inline details, copy controls, live output, and clickable persisted-file links that open in the single right preview area.
+- Made the skills library open on a compact 25-item featured set while retaining the complete deterministic catalog under All, including a clear built-in fallback when the server catalog is unavailable.
+- Removed the ACCESS eyebrow and replaced the large connector capability legend with a compact, keyboard-accessible popover beside the filters.
+- Removed provider-wide context-window assumptions and updated current Gemini and Moonshot model identifiers while preserving labeled legacy choices.
+
+### Fixed
+
+- Prevented execution details from changing height on hover, flashing under the pointer, or overlapping following steps.
+- Prevented generated-file previews from mounting alongside another right workbench panel.
+
 ## [0.11.0] - 2026-08-13
 
 ### Added

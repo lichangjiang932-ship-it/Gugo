@@ -28,7 +28,7 @@ test('model picker opens above the composer and switches from a vertical model l
       selectedModel: selected,
       modelOptions: [
         { name: 'alpha', contextWindow: 1_000_000, multiplier: 1 },
-        { name: 'beta', contextWindow: 200_000, multiplier: 2 },
+        { name: 'beta', contextWindow: 200_000, contextWindowEstimated: true, multiplier: 2 },
       ],
       onOpen: () => setOpen(true),
       onClose: () => setOpen(false),
@@ -52,6 +52,8 @@ test('model picker opens above the composer and switches from a vertical model l
   assert.ok(listbox)
   assert.equal(options.length, 2)
   assert.deepEqual(options.map((option) => option.textContent.includes('alpha') ? 'alpha' : 'beta'), ['alpha', 'beta'])
+  assert.match(options[0].textContent, /1M/)
+  assert.match(options[1].textContent, /~200K/)
 
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 0))

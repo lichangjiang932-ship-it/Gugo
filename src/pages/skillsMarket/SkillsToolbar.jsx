@@ -6,9 +6,9 @@ export default function SkillsToolbar({
 }) {
   return (
     <>
-      <div className="flex items-end justify-between mb-6 gap-4">
+      <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <h1 className="font-semibold text-[30px] text-ink">{t('skillsMarket.title')}</h1>
-        <div className="flex flex-wrap justify-end gap-2">
+        <div className="flex flex-wrap gap-2 lg:justify-end">
           <input
             ref={folderInputRef}
             type="file"
@@ -25,6 +25,7 @@ export default function SkillsToolbar({
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder={t('skillsMarket.search')}
+              aria-label={t('skillsMarket.search')}
               className="bg-transparent text-sm text-ink outline-none placeholder:text-ink-soft w-40"
             />
           </div>
@@ -51,6 +52,7 @@ export default function SkillsToolbar({
             type="button"
             key={filter.key}
             onClick={() => setActiveFilter(filter.key)}
+            aria-pressed={activeFilter === filter.key}
             className={`inline-flex items-center h-[26px] px-3 rounded-full text-xs border transition-colors ${activeFilter === filter.key ? 'bg-ink text-paper border-ink' : 'border-ink-fade/60 text-ink-soft hover:border-ink-fade'}`}
           >
             {filter.label} · {filter.count}

@@ -1,5 +1,36 @@
 import { parseTurnEvent } from '../../../shared/turnEvents.js'
+import {
+  INLINE_SKILL_DEFINITION_LIMITS,
+  truncateInlineSkillText,
+} from '../../../shared/inlineSkillDefinitions.js'
 import { headers, normalizeContextIds, normalizeToolsConfig, parseResponse } from './turnTransport.js'
+
+export function normalizeSkillDefinitions(skillDefinitions, skillIds = []) {
+  const limits = INLINE_SKILL_DEFINITION_LIMITS
+  const allowedIds = new Set(normalizeContextIds(skillIds))
+  const seen = new Set()
+  return (Array.isArray(skillDefinitions) ? skillDefinitions : [])
+    .map((skill) => {
+      const id = truncateInlineSkillText(skill?.id, limits.id)
+      const systemPrompt = truncateInlineSkillText(skill?.systemPrompt, limits.systemPrompt)
+      if (!id || !allowedIds.has(id) || seen.has(id) || !systemPrompt) return null
+      seen.add(id)
+      const permissions = [...new Set(
+        (Array.isArray(skill?.permissions) ? skill.permissions : Array.isArray(skill?.perms) ? skill.perms : [])
+          .map((permission) => truncateInlineSkillText(permission, limits.permission))
+          .filter(Boolean),
+      )].slice(0, limits.maxPermissions)
+      return {
+        id,
+        name: truncateInlineSkillText(skill?.name || id, limits.name),
+        description: truncateInlineSkillText(skill?.description || skill?.desc, limits.description),
+        permissions,
+        systemPrompt,
+      }
+    })
+    .filter(Boolean)
+    .slice(0, limits.maxDefinitions)
+}
 
 export async function startServerTurn({
   sessionId,
@@ -11,12 +42,14 @@ export async function startServerTurn({
   history,
   agentId,
   skillIds,
+  skillDefinitions,
   toolsConfig,
   intentMode,
   signal,
   fetchImpl = fetch,
 }) {
   const normalizedAgentId = typeof agentId === 'string' ? agentId.trim() || null : null
+  const normalizedSkillIds = normalizeContextIds(skillIds)
   const response = await fetchImpl('/api/turns/run', {
     method: 'POST',
     headers: headers(true),
@@ -29,7 +62,8 @@ export async function startServerTurn({
       turnId,
       history,
       agentId: normalizedAgentId,
-      skillIds: normalizeContextIds(skillIds),
+      skillIds: normalizedSkillIds,
+      skillDefinitions: normalizeSkillDefinitions(skillDefinitions, normalizedSkillIds),
       toolsConfig: normalizeToolsConfig(toolsConfig),
       intentMode: ['answer', 'execute'].includes(intentMode) ? intentMode : 'auto',
     }),

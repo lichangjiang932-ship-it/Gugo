@@ -8,12 +8,20 @@ test('single-model status keeps resolved context metadata', () => {
     modelName: 'local-model',
     contextWindow: 8_192,
     contextWindowSource: 'provider_override',
+    contextWindowEstimated: false,
+    contextWindowSourceUrl: 'https://example.com/models/local-model',
+    contextWindowVerifiedAt: '2026-08-15',
+    maxOutputTokens: 2_048,
   }), [{
     name: 'local-model',
     multiplier: 1,
     active: true,
     contextWindow: 8_192,
     contextWindowSource: 'provider_override',
+    contextWindowEstimated: false,
+    contextWindowSourceUrl: 'https://example.com/models/local-model',
+    contextWindowVerifiedAt: '2026-08-15',
+    maxOutputTokens: 2_048,
   }])
 })
 
