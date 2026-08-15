@@ -172,6 +172,7 @@ async function runHtmlRevision({
   originalSource,
   revisedSource,
   replaceOriginal,
+  omitReplacementId = false,
 }) {
   const scope = createOriginalHtml({ label, source: originalSource })
   const turnId = `revision-turn-${label}-${testToken}`
@@ -207,7 +208,9 @@ async function runHtmlRevision({
               arguments: JSON.stringify({
                 title: `Revised ${label}`,
                 html: revisedSource,
-                ...(replaceOriginal ? { replace_artifact_id: scope.artifact.id } : {}),
+                ...(replaceOriginal && !omitReplacementId
+                  ? { replace_artifact_id: scope.artifact.id }
+                  : {}),
               }),
             },
           }],
@@ -254,6 +257,26 @@ test('an explicit in-place HTML revision preserves artifact ID and filename', as
   const sourcePage = readArtifactSourcePage({ artifact: stored })
   assert.equal(sourcePage.sourceFormat, 'artifact_tool_arguments_json')
   assert.equal(JSON.parse(sourcePage.content).html, revisedSource)
+  assert.equal(listSessionTurnArtifacts({ userId, sessionId }).length, 1)
+})
+
+test('an explicit in-place HTML revision infers the sole adjacent artifact ID when omitted', async () => {
+  const originalSource = '<!doctype html><html><body><main data-version="original">Original</main></body></html>'
+  const revisedSource = '<!doctype html><html><body style="background: lightblue"><main data-version="blue-revision">Original</main></body></html>'
+  const { artifact, userId, sessionId, result } = await runHtmlRevision({
+    label: 'replace-inferred-id',
+    prompt: '修改刚才的原版文件，背景改成浅蓝色，不要新建版本',
+    originalSource,
+    revisedSource,
+    replaceOriginal: true,
+    omitReplacementId: true,
+  })
+
+  assert.deepEqual(result.artifactIds, [artifact.id])
+  assert.deepEqual(result.deliveryArtifactIds, [artifact.id])
+  const stored = getTurnArtifactById({ id: artifact.id, userId, sessionId })
+  assert.equal(stored.filename, artifact.filename)
+  assert.equal(fs.readFileSync(path.join(getArtifactDir(), artifact.filename), 'utf8'), revisedSource)
   assert.equal(listSessionTurnArtifacts({ userId, sessionId }).length, 1)
 })
 

@@ -5,8 +5,10 @@ import {
   detectArtifactIntent,
   expectsFileArtifact,
   findAdjacentDeliveredArtifacts,
+  findExplicitlyReferencedDeliveredArtifacts,
   isFileArtifactTool,
   parseSkillIdFromPrompt,
+  resolveArtifactRevisionMode,
 } from '../server/services/artifactIntent.js'
 import { runToolsLoop, SERVER_TOOL_SPECS, selectJobToolSpecs } from '../server/services/jobTools.js'
 import { buildFinalOutput, shouldCompileDocx } from '../server/services/jobWorkflow.js'
@@ -216,6 +218,57 @@ function adjacentHtmlRevisionMessages(currentPrompt = '这里不足，请修改�
   ]
 }
 
+function deliveredHtmlTurn({ prefix, artifactId, filename }) {
+  const createCallId = `${prefix}-create`
+  const deliveryCallId = `${prefix}-deliver`
+  return [
+    { role: 'user', content: `生成 ${filename}` },
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [{
+        id: createCallId,
+        function: {
+          name: 'create_html_app',
+          arguments: JSON.stringify({
+            title: filename.replace(/\.html$/i, ''),
+            html: `<!doctype html><html><body>${filename}</body></html>`,
+          }),
+        },
+      }],
+    },
+    {
+      role: 'tool',
+      tool_call_id: createCallId,
+      name: 'create_html_app',
+      content: JSON.stringify({
+        ok: true,
+        artifactId,
+        filename,
+        url: `/api/artifacts/${filename}`,
+      }),
+    },
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [{
+        id: deliveryCallId,
+        function: {
+          name: 'set_deliverables',
+          arguments: JSON.stringify({ artifact_ids: [artifactId] }),
+        },
+      }],
+    },
+    {
+      role: 'tool',
+      tool_call_id: deliveryCallId,
+      name: 'set_deliverables',
+      content: JSON.stringify({ ok: true, deliveryArtifactIds: [artifactId] }),
+    },
+    { role: 'assistant', content: `${filename} 已生成。` },
+  ]
+}
+
 test('only an adjacent delivered artifact can authorize an implicit revision', () => {
   const artifacts = findAdjacentDeliveredArtifacts(adjacentHtmlRevisionMessages())
   assert.deepEqual(artifacts, [{
@@ -254,6 +307,368 @@ test('only an adjacent delivered artifact can authorize an implicit revision', (
   assert.equal(allowedArtifactTools('修改是什么意思？', { priorArtifactTypes: ['html'] }).size, 0)
   assert.deepEqual([...allowedArtifactTools('请另做一份 PDF', { priorArtifactTypes: ['html'] })], ['create_pdf'])
 })
+
+test('keeping the original filename is an in-place revision, not a request for a copy', () => {
+  for (const prompt of [
+    '把刚才的原版文件直接修改，保留原文件名，不要新建版本',
+    '直接修改当前文件并保留当前文件名',
+    '直接修改当前文件，保留原文件的名称',
+    '保留原文件 名，直接修改内容',
+    'edit the original file and keep the original filename',
+  ]) {
+    assert.equal(resolveArtifactRevisionMode(prompt), 'replace_original', prompt)
+  }
+  assert.equal(
+    resolveArtifactRevisionMode('不要修改原文件名，另建一个新版本'),
+    'create_copy',
+  )
+})
+
+test('an exact filename recovers a delivered artifact across one failed turn', () => {
+  const messages = [
+    ...adjacentHtmlRevisionMessages('把配色改一下'),
+    { role: 'assistant', content: 'The previous revision failed.' },
+    { role: 'user', content: '继续修改原版 产品网页.html，不要新建版本' },
+  ]
+  assert.deepEqual(findAdjacentDeliveredArtifacts(messages), [])
+  assert.deepEqual(findExplicitlyReferencedDeliveredArtifacts(
+    messages,
+    '继续修改原版 产品网页.html，不要新建版本',
+  ), [{
+    id: 'previous-html-artifact',
+    type: 'html',
+    filename: '产品网页.html',
+    url: '/api/artifacts/previous-html-artifact',
+    toolName: 'create_html_app',
+  }])
+  assert.deepEqual(
+    findExplicitlyReferencedDeliveredArtifacts(messages, '继续修改刚才的网页'),
+    [],
+  )
+})
+
+test('exact artifact references use complete filename and ID boundaries', () => {
+  const artifactId = 'artifact-app-html'
+  const base = deliveredHtmlTurn({ prefix: 'boundary', artifactId, filename: 'app.html' })
+  const exactPrompt = '直接修改app.html的背景，不要新建版本'
+  assert.deepEqual(
+    findExplicitlyReferencedDeliveredArtifacts([...base, { role: 'user', content: exactPrompt }], exactPrompt)
+      .map((artifact) => artifact.id),
+    [artifactId],
+  )
+  for (const prompt of [
+    '直接修改myapp.html，不要新建版本',
+    '直接修改 app.htmlx，不要新建版本',
+    '直接修改 artifact-app-html-copy，不要新建版本',
+  ]) {
+    assert.deepEqual(
+      findExplicitlyReferencedDeliveredArtifacts([...base, { role: 'user', content: prompt }], prompt),
+      [],
+      prompt,
+    )
+  }
+})
+
+test('an exact older filename overrides the adjacent artifact before UI and checkpoint persistence', async () => {
+  const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  const oldId = `older-html-${suffix}`
+  const adjacentId = `adjacent-html-${suffix}`
+  const oldFilename = `older-page-${suffix}.html`
+  const adjacentFilename = `adjacent-page-${suffix}.html`
+  const turnId = `older-file-revision-${suffix}`
+  persistStubTurnArtifact({ turnId: `seed-old-${suffix}`, id: oldId, filename: oldFilename, type: 'html' })
+  persistStubTurnArtifact({ turnId: `seed-new-${suffix}`, id: adjacentId, filename: adjacentFilename, type: 'html' })
+  const prompt = `直接修改原版 ${oldFilename}，背景改成浅绿色，不要新建版本`
+  const messages = [
+    ...deliveredHtmlTurn({ prefix: `old-${suffix}`, artifactId: oldId, filename: oldFilename }),
+    ...deliveredHtmlTurn({ prefix: `new-${suffix}`, artifactId: adjacentId, filename: adjacentFilename }),
+    { role: 'user', content: prompt },
+  ]
+  const scheduledCalls = []
+  const checkpoints = []
+  let executionArgs = null
+  let modelCalls = 0
+
+  const result = await runToolsLoop({
+    job: {
+      id: turnId,
+      userId: INTENT_ARTIFACT_USER_ID,
+      sessionId: INTENT_ARTIFACT_SESSION_ID,
+      origin: 'chat',
+      prompt,
+      userPrompt: prompt,
+    },
+    step: { id: turnId, kind: 'chat' },
+    messages,
+    toolSpecs: SERVER_TOOL_SPECS,
+    enableToolHooks: false,
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    onToolCall: async (call) => scheduledCalls.push(JSON.parse(JSON.stringify(call))),
+    saveCheckpoint: async (state) => {
+      checkpoints.push(JSON.parse(JSON.stringify(state)))
+      return true
+    },
+    executeTool: async ({ name, args }) => {
+      assert.equal(name, 'create_html_app')
+      executionArgs = args
+      return {
+        ok: true,
+        artifactId: oldId,
+        filename: oldFilename,
+        url: `/api/artifacts/${oldFilename}`,
+      }
+    },
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: `replace-older-${suffix}`,
+            function: {
+              name: 'create_html_app',
+              arguments: JSON.stringify({
+                title: 'Older page revised',
+                html: '<!doctype html><html><body style="background:#c8f7c5">older</body></html>',
+              }),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 2) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: `deliver-older-${suffix}`,
+            function: {
+              name: 'set_deliverables',
+              arguments: JSON.stringify({ artifact_ids: [oldId] }),
+            },
+          }],
+        }
+      }
+      return { content: '旧文件已原地修改。', toolCalls: [] }
+    },
+  })
+
+  assert.equal(executionArgs?.replace_artifact_id, oldId)
+  assert.notEqual(executionArgs?.replace_artifact_id, adjacentId)
+  const scheduledCreate = scheduledCalls.find((call) => call.name === 'create_html_app')
+  assert.equal(scheduledCreate?.args?.replace_artifact_id, oldId)
+  const pending = checkpoints.find((state) => state.toolCalls?.some((call) => (
+    call.name === 'create_html_app' && call.checkpointStatus === 'pending'
+  )))
+  const persistedCreate = pending?.toolCalls?.find((call) => call.name === 'create_html_app')
+  assert.equal(persistedCreate?.args?.replace_artifact_id, oldId)
+  assert.equal(JSON.parse(persistedCreate?.argumentsText || '{}').replace_artifact_id, oldId)
+  const assistantCreate = pending?.messages?.findLast((message) => (
+    message?.role === 'assistant'
+      && message.tool_calls?.some((call) => call.function?.name === 'create_html_app')
+  ))
+  const assistantArgs = JSON.parse(
+    assistantCreate?.tool_calls?.find((call) => call.function?.name === 'create_html_app')
+      ?.function?.arguments || '{}',
+  )
+  assert.equal(assistantArgs.replace_artifact_id, oldId)
+  assert.deepEqual(result.deliveryArtifactIds, [oldId])
+})
+
+test('a restored pending in-place call keeps normalized args synchronized before execution', async () => {
+  const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  const artifactId = `restored-html-${suffix}`
+  const filename = `restored-page-${suffix}.html`
+  const turnId = `restored-revision-${suffix}`
+  const createCallId = `restored-create-${suffix}`
+  persistStubTurnArtifact({ turnId: `seed-restored-${suffix}`, id: artifactId, filename, type: 'html' })
+  const prompt = `直接修改原版 ${filename}，保留原文件名，不要新建版本`
+  const baseMessages = [
+    ...deliveredHtmlTurn({ prefix: `restored-${suffix}`, artifactId, filename }),
+    { role: 'user', content: prompt },
+  ]
+  const originalArgs = {
+    title: 'Restored revision',
+    html: '<!doctype html><html><body>restored</body></html>',
+  }
+  const checkpoint = {
+    messages: [
+      ...baseMessages,
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{
+          id: createCallId,
+          type: 'function',
+          function: {
+            name: 'create_html_app',
+            arguments: JSON.stringify(originalArgs),
+          },
+        }],
+      },
+    ],
+    toolCalls: [{
+      id: createCallId,
+      name: 'create_html_app',
+      args: originalArgs,
+      argumentsText: JSON.stringify(originalArgs),
+      parseError: null,
+      checkpointStatus: 'pending',
+      checkpointApprovalId: null,
+    }],
+    artifactIds: [],
+    iterations: 0,
+  }
+  const checkpoints = []
+  let executionArgs = null
+  let modelCalls = 0
+
+  const result = await runToolsLoop({
+    job: {
+      id: turnId,
+      userId: INTENT_ARTIFACT_USER_ID,
+      sessionId: INTENT_ARTIFACT_SESSION_ID,
+      origin: 'chat',
+      prompt,
+      userPrompt: prompt,
+    },
+    step: { id: turnId, kind: 'chat' },
+    messages: baseMessages,
+    toolSpecs: SERVER_TOOL_SPECS,
+    enableToolHooks: false,
+    loadCheckpoint: async () => ({ state: checkpoint }),
+    saveCheckpoint: async (state) => {
+      checkpoints.push(JSON.parse(JSON.stringify(state)))
+      return true
+    },
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    executeTool: async ({ name, args }) => {
+      assert.equal(name, 'create_html_app')
+      executionArgs = args
+      return {
+        ok: true,
+        artifactId,
+        filename,
+        url: `/api/artifacts/${filename}`,
+      }
+    },
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: `restored-deliver-${suffix}`,
+            function: {
+              name: 'set_deliverables',
+              arguments: JSON.stringify({ artifact_ids: [artifactId] }),
+            },
+          }],
+        }
+      }
+      return { content: '恢复后已完成原地修改。', toolCalls: [] }
+    },
+  })
+
+  assert.equal(executionArgs?.replace_artifact_id, artifactId)
+  const executing = checkpoints.find((state) => state.toolCalls?.some((call) => (
+    call.id === createCallId && call.checkpointStatus === 'executing'
+  )))
+  const persistedCall = executing?.toolCalls?.find((call) => call.id === createCallId)
+  assert.equal(persistedCall?.args?.replace_artifact_id, artifactId)
+  assert.equal(JSON.parse(persistedCall?.argumentsText || '{}').replace_artifact_id, artifactId)
+  const persistedAssistant = executing?.messages?.findLast((message) => (
+    message?.role === 'assistant' && message.tool_calls?.some((call) => call.id === createCallId)
+  ))
+  assert.equal(
+    JSON.parse(persistedAssistant?.tool_calls?.find((call) => call.id === createCallId)?.function?.arguments || '{}')
+      .replace_artifact_id,
+    artifactId,
+  )
+  assert.deepEqual(result.deliveryArtifactIds, [artifactId])
+})
+
+for (const scenario of [
+  {
+    label: 'a non-empty wrong replacement ID is rejected instead of being silently retargeted',
+    modelReplacementId: 'unauthorized-model-target',
+    rewriteApproval: false,
+  },
+  {
+    label: 'an approval-edited replacement ID is revalidated immediately before execution',
+    modelReplacementId: null,
+    rewriteApproval: true,
+  },
+]) {
+  test(scenario.label, async () => {
+    const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`
+    const artifactId = `guarded-html-${suffix}`
+    const filename = `guarded-page-${suffix}.html`
+    const turnId = `guarded-revision-${suffix}`
+    persistStubTurnArtifact({ turnId: `seed-${suffix}`, id: artifactId, filename, type: 'html' })
+    const prompt = `直接修改原版 ${filename}，不要新建版本`
+    const messages = [
+      ...deliveredHtmlTurn({ prefix: `guarded-${suffix}`, artifactId, filename }),
+      { role: 'user', content: prompt },
+    ]
+    const outcomes = []
+    let executions = 0
+    let approvalCalls = 0
+
+    await assert.rejects(
+      runToolsLoop({
+        job: {
+          id: turnId,
+          userId: INTENT_ARTIFACT_USER_ID,
+          sessionId: INTENT_ARTIFACT_SESSION_ID,
+          origin: 'chat',
+          prompt,
+          userPrompt: prompt,
+        },
+        step: { id: turnId, kind: 'chat' },
+        messages,
+        toolSpecs: SERVER_TOOL_SPECS,
+        maxIters: 1,
+        enableToolHooks: false,
+        requestToolApproval: async ({ args }) => {
+          approvalCalls += 1
+          assert.equal(args.replace_artifact_id, artifactId)
+          return {
+            proceed: true,
+            args: scenario.rewriteApproval
+              ? { ...args, replace_artifact_id: 'unauthorized-approval-target' }
+              : args,
+          }
+        },
+        executeTool: async () => {
+          executions += 1
+          return { ok: true, artifactId }
+        },
+        onToolCompleted: async (outcome) => outcomes.push(outcome),
+        runModel: async () => ({
+          content: '',
+          toolCalls: [{
+            id: `guarded-create-${suffix}`,
+            function: {
+              name: 'create_html_app',
+              arguments: JSON.stringify({
+                title: 'Guarded revision',
+                html: '<!doctype html><html><body>guarded</body></html>',
+                ...(scenario.modelReplacementId
+                  ? { replace_artifact_id: scenario.modelReplacementId }
+                  : {}),
+              }),
+            },
+          }],
+        }),
+      }),
+      (error) => error?.code === 'ARTIFACT_NOT_CREATED',
+    )
+
+    assert.equal(executions, 0)
+    assert.equal(approvalCalls, scenario.rewriteApproval ? 1 : 0)
+    assert.equal(outcomes.length, 1)
+    assert.equal(outcomes[0].result?.code, 'artifact_replacement_not_authorized')
+  })
+}
 
 test('an implicit adjacent webpage revision creates and delivers a new file without a skill', async () => {
   const currentPrompt = '这里的按钮太大了，请缩小并继续完善'

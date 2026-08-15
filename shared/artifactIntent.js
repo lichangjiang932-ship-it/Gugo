@@ -95,22 +95,28 @@ const ARTIFACT_REPLACE_ORIGINAL_CUE = /(?:原地(?:修改|编辑|更新|覆盖)|
 const ARTIFACT_CREATE_COPY_CUE = /(?:(?:新建|另建|另做|另生成|另外生成|重新创建)(?:一|1)?(?:个|份)?(?:新)?(?:文件|版本|副本)?|(?:创建|生成|制作)(?:一|1)?(?:个|份)?新(?:文件|版本|副本)|另存为|(?:create|make|save)\s+(?:a\s+)?(?:new|separate)\s+(?:file|copy|version))/i
 const ARTIFACT_CREATE_COPY_DENIAL = /(?:(?:不要|别|无需)(?:再)?(?:新建|另建|另做|新生成|创建新(?:文件|版本|副本))|without\s+creating\s+(?:a\s+)?new\s+(?:file|copy))/gi
 const ARTIFACT_REPLACE_ORIGINAL_DENIAL = /(?:(?:保留|不改|不要修改|不要覆盖)(?:原版|原文件|当前文件|上一版)|keep\s+(?:the\s+)?original)/gi
+const ARTIFACT_FILENAME_PRESERVATION = /(?:(?:保留|保持|维持|不改|不修改|别修改|不要修改|不要更改|不要改变|别更改|别改变)\s*(?:(?:原|当前)\s*)?文件\s*(?:名(?:称)?|的\s*(?:文件\s*)?名(?:称)?)|(?:keep|preserve|retain|do\s+not\s+change|don't\s+change|dont\s+change)\s+(?:the\s+)?(?:(?:original|existing|same|current)\s+)?(?:file\s*name|filename))/gi
 const CODE_SNIPPET_DENIAL = /(?:不要|别|无需|不用|禁止|避免)[^。！？!?\n]{0,24}(?:代码|源码|code|source)|(?:do\s+not|don't|dont|never|without)[^.!?\n]{0,24}(?:code|source)/i
 const EXPLICIT_CODE_SNIPPET_REQUEST = /(?:代码片段|源码片段|示例代码|完整代码|完整源码|(?:html|css|javascript|typescript|python|java|c\+\+|sql)\s*(?:代码|源码)|\bcode\s+snippet\b|\bfull\s+source(?:\s+code)?\b)|(?:给我|输出|提供|展示|贴出|发我|返回|生成|写出)[^。！？!?\n]{0,20}(?:代码|源码)|(?:show|provide|print|paste|return|write|give\s+me)[^.!?\n]{0,20}(?:code|source)/i
 
 export function resolveArtifactRevisionMode(prompt = '') {
   const text = String(prompt || '').trim()
   if (!text) return 'unspecified'
+  ARTIFACT_FILENAME_PRESERVATION.lastIndex = 0
+  const preserveFilename = ARTIFACT_FILENAME_PRESERVATION.test(text)
+  ARTIFACT_FILENAME_PRESERVATION.lastIndex = 0
+  const dispositionText = text.replace(ARTIFACT_FILENAME_PRESERVATION, ' ')
   ARTIFACT_CREATE_COPY_DENIAL.lastIndex = 0
   ARTIFACT_REPLACE_ORIGINAL_DENIAL.lastIndex = 0
-  const createCopyDenied = ARTIFACT_CREATE_COPY_DENIAL.test(text)
-  const replaceOriginalDenied = ARTIFACT_REPLACE_ORIGINAL_DENIAL.test(text)
+  const createCopyDenied = ARTIFACT_CREATE_COPY_DENIAL.test(dispositionText)
+  const replaceOriginalDenied = ARTIFACT_REPLACE_ORIGINAL_DENIAL.test(dispositionText)
   ARTIFACT_CREATE_COPY_DENIAL.lastIndex = 0
   ARTIFACT_REPLACE_ORIGINAL_DENIAL.lastIndex = 0
-  const replaceOriginal = createCopyDenied
-    || ARTIFACT_REPLACE_ORIGINAL_CUE.test(text.replace(ARTIFACT_REPLACE_ORIGINAL_DENIAL, ''))
   const createCopy = replaceOriginalDenied
-    || ARTIFACT_CREATE_COPY_CUE.test(text.replace(ARTIFACT_CREATE_COPY_DENIAL, ''))
+    || ARTIFACT_CREATE_COPY_CUE.test(dispositionText.replace(ARTIFACT_CREATE_COPY_DENIAL, ''))
+  const replaceOriginal = createCopyDenied
+    || ARTIFACT_REPLACE_ORIGINAL_CUE.test(dispositionText.replace(ARTIFACT_REPLACE_ORIGINAL_DENIAL, ''))
+    || (preserveFilename && !createCopy)
   if (replaceOriginal && createCopy) return 'conflict'
   if (replaceOriginal) return 'replace_original'
   if (createCopy) return 'create_copy'

@@ -20,6 +20,7 @@ import { ensureSafetySystemMessages } from './promptCompiler.js'
 import {
   allowedArtifactTools,
   findAdjacentDeliveredArtifacts,
+  findExplicitlyReferencedDeliveredArtifacts,
   isArtifactRevisionRequest,
   isExplicitCodeSnippetRequest,
   isFileArtifactTool,
@@ -169,6 +170,27 @@ export {
   SERVER_TOOL_SPECS, selectJobToolSpecs, selectToolSpecs, persistLocalToolArtifacts, buildSubagentRequest, inheritedJobSkillIds, buildJobToolIdempotencyKey, scopeTextToolCallIds,
 }
 
+function synchronizeCheckpointToolCallMessages(messages, calls) {
+  const argumentsById = new Map((Array.isArray(calls) ? calls : [])
+    .map((call) => [String(call?.id || '').trim(), String(call?.argumentsText || '{}')])
+    .filter(([id]) => id))
+  if (argumentsById.size === 0) return messages
+  return (Array.isArray(messages) ? messages : []).map((message) => {
+    if (message?.role !== 'assistant' || !Array.isArray(message.tool_calls)) return message
+    let changed = false
+    const toolCalls = message.tool_calls.map((toolCall) => {
+      const argumentsText = argumentsById.get(String(toolCall?.id || '').trim())
+      if (argumentsText == null || toolCall?.function?.arguments === argumentsText) return toolCall
+      changed = true
+      return {
+        ...toolCall,
+        function: { ...toolCall.function, arguments: argumentsText },
+      }
+    })
+    return changed ? { ...message, tool_calls: toolCalls } : message
+  })
+}
+
 function normalizeCompactionRecovery(value) {
   const archiveId = String(value?.archiveId || '').trim()
   if (!archiveId) return null
@@ -254,11 +276,95 @@ export async function runToolsLoop({
   const artifactAuthorizationText = String(
     job?.userPrompt || currentUserMessage?.content || job?.prompt || '',
   )
-  const priorArtifacts = findAdjacentDeliveredArtifacts(messages)
+  const adjacentArtifacts = findAdjacentDeliveredArtifacts(messages)
+  const explicitlyReferencedArtifacts = findExplicitlyReferencedDeliveredArtifacts(
+    messages,
+    artifactAuthorizationText,
+  )
+  // An exact ID or complete filename in the current request is stronger than
+  // the implicit "most recently delivered" default. This matters after a
+  // failed retry or when the user deliberately returns to an older artifact.
+  const priorArtifacts = explicitlyReferencedArtifacts.length > 0
+    ? explicitlyReferencedArtifacts
+    : adjacentArtifacts
   const priorArtifactTypes = [...new Set(priorArtifacts.map((artifact) => artifact.type))]
   const artifactRevisionMode = priorArtifacts.length > 0
     ? resolveArtifactRevisionMode(artifactAuthorizationText)
     : 'unspecified'
+  const normalizeArtifactReplacementCall = (call) => {
+    const name = String(call?.name || '').trim()
+    if (!isFileArtifactTool(name) || artifactRevisionMode !== 'replace_original') return call
+    const matching = priorArtifacts.filter((artifact) => artifact.toolName === name)
+    const args = call?.args && typeof call.args === 'object' && !Array.isArray(call.args)
+      ? call.args
+      : {}
+    // Only fill an omitted target. A non-empty wrong target must reach the
+    // authorization guard unchanged and be rejected, never silently retargeted.
+    if (matching.length !== 1 || String(args.replace_artifact_id || '').trim()) return call
+    const normalizedArgs = { ...args, replace_artifact_id: matching[0].id }
+    return {
+      ...call,
+      args: normalizedArgs,
+      argumentsText: JSON.stringify(normalizedArgs),
+    }
+  }
+  const artifactReplacementValidationError = (name, args) => {
+    if (!isFileArtifactTool(name)) return null
+    const replacementId = String(args?.replace_artifact_id || '').trim()
+    const matching = priorArtifacts.filter((artifact) => artifact.toolName === name)
+    const authorizedIds = new Set(matching.map((artifact) => String(artifact.id)))
+    if (artifactRevisionMode === 'conflict') {
+      return {
+        ok: false,
+        code: 'artifact_revision_mode_conflict',
+        error: 'The user gave conflicting instructions about replacing the original versus creating a new file.',
+        retryable: false,
+        hint: 'Call request_clarification before any artifact generator.',
+      }
+    }
+    if (artifactRevisionMode === 'replace_original') {
+      if (!replacementId && matching.length > 1) {
+        return {
+          ok: false,
+          code: 'artifact_replacement_target_ambiguous',
+          error: `More than one authorized ${name} artifact could be replaced in place.`,
+          retryable: false,
+          hint: 'Call request_clarification so the user can identify the exact original file.',
+        }
+      }
+      if (!replacementId && matching.length === 1) {
+        return {
+          ok: false,
+          code: 'artifact_replacement_required',
+          error: `This in-place revision must set replace_artifact_id to the exact authorized artifact ID: ${matching[0].id}.`,
+          retryable: true,
+          requiredArtifactId: matching[0].id,
+        }
+      }
+      if (!replacementId || !authorizedIds.has(replacementId)) {
+        return {
+          ok: false,
+          code: 'artifact_replacement_not_authorized',
+          error: 'The requested replacement target was not explicitly authorized by the current user request.',
+          retryable: false,
+          authorizedArtifactIds: [...authorizedIds],
+        }
+      }
+      return null
+    }
+    if (replacementId) {
+      return {
+        ok: false,
+        code: 'artifact_replacement_not_authorized',
+        error: artifactRevisionMode === 'create_copy'
+          ? 'The user explicitly requested a new file, so the original artifact must not be replaced.'
+          : 'In-place replacement was not explicitly authorized by the current user request.',
+        retryable: false,
+        hint: 'Omit replace_artifact_id and create a new artifact.',
+      }
+    }
+    return null
+  }
   const codeSnippetRequested = isExplicitCodeSnippetRequest(artifactAuthorizationText)
   const explicitArtifactTools = allowedArtifactTools(artifactAuthorizationText, {
     skillId: explicitSkillId || skillId,
@@ -656,7 +762,7 @@ export async function runToolsLoop({
     const revisionInstruction = artifactRevisionMode === 'replace_original'
       ? [
           'The user explicitly requested an in-place revision of the original file.',
-          'Call each matching artifact generator with replace_artifact_id set to the exact adjacent artifact ID shown above. The tool will preserve that artifact ID and filename while replacing its contents.',
+          'Call each matching artifact generator with replace_artifact_id set to the exact authorized artifact ID shown above. The tool will preserve that artifact ID and filename while replacing its contents.',
           'Do not create or deliver a second file for that artifact.',
         ]
       : artifactRevisionMode === 'create_copy'
@@ -677,7 +783,7 @@ export async function runToolsLoop({
       role: 'system',
       content: [
         '[ADJACENT ARTIFACT REVISION CONTRACT]',
-        'The current user request is a revision of files delivered by the immediately preceding turn.',
+        'The current user request is a revision of the authorized delivered files listed below. An exact filename or artifact ID in the current request may deliberately select an older delivered file instead of the immediately preceding one.',
         `Prior delivered artifacts: ${JSON.stringify(priorArtifacts)}.`,
         'Use the preceding tool-call arguments and current user request as the source of truth, apply the requested changes, and call the matching artifact generator.',
         ...revisionInstruction,
@@ -793,8 +899,11 @@ export async function runToolsLoop({
           stepId: step?.id,
           toolCallId: call.id,
         }),
-      }))
+      })).map(normalizeArtifactReplacementCall)
     : null
+  if (checkpointCalls?.length) {
+    convo = synchronizeCheckpointToolCallMessages(convo, checkpointCalls)
+  }
   const progressState = restoreToolProgress(restoredState?.progress)
   observeToolCalls(progressState, checkpointCalls)
   for (const call of checkpointCalls || []) {
@@ -1720,7 +1829,7 @@ export async function runToolsLoop({
       const modelOutputTruncated = String(modelResult?.finishReason || '').toLowerCase() === 'length'
       checkpointCalls = normalizeToolCalls(scopedToolCalls, {
         toolSpecs: activeToolSpecs,
-      }).map((call) => ({
+      }).map(normalizeArtifactReplacementCall).map((call) => ({
         ...call,
         modelOutputTruncated,
         idempotencyKey: buildJobToolIdempotencyKey({
@@ -1904,48 +2013,7 @@ export async function runToolsLoop({
             }
           }
 
-          if (!result && isFileArtifactTool(name)) {
-            const replacementId = String(args?.replace_artifact_id || '').trim()
-            const matchingPriorArtifacts = priorArtifacts.filter((artifact) => artifact.toolName === name)
-            if (artifactRevisionMode === 'conflict') {
-              result = {
-                ok: false,
-                code: 'artifact_revision_mode_conflict',
-                error: 'The user gave conflicting instructions about replacing the original versus creating a new file.',
-                retryable: false,
-                hint: 'Call request_clarification before any artifact generator.',
-              }
-            } else if (artifactRevisionMode === 'replace_original' && matchingPriorArtifacts.length > 1) {
-              result = {
-                ok: false,
-                code: 'artifact_replacement_target_ambiguous',
-                error: `More than one adjacent ${name} artifact could be replaced in place.`,
-                retryable: false,
-                hint: 'Call request_clarification so the user can identify the exact original file.',
-              }
-            } else if (artifactRevisionMode === 'replace_original' && matchingPriorArtifacts.length === 1) {
-              const requiredId = matchingPriorArtifacts[0].id
-              if (replacementId !== requiredId) {
-                result = {
-                  ok: false,
-                  code: 'artifact_replacement_required',
-                  error: `This in-place revision must set replace_artifact_id to the exact adjacent artifact ID: ${requiredId}.`,
-                  retryable: true,
-                  requiredArtifactId: requiredId,
-                }
-              }
-            } else if (replacementId) {
-              result = {
-                ok: false,
-                code: 'artifact_replacement_not_authorized',
-                error: artifactRevisionMode === 'create_copy'
-                  ? 'The user explicitly requested a new file, so the original artifact must not be replaced.'
-                  : 'In-place replacement was not explicitly authorized by the current user request.',
-                retryable: false,
-                hint: 'Omit replace_artifact_id and create a new artifact.',
-              }
-            }
-          }
+          if (!result) result = artifactReplacementValidationError(name, args)
 
           if (!result) {
             const validationError = validateToolCall(call, activeToolSpecs, {
@@ -2068,63 +2136,72 @@ export async function runToolsLoop({
               } else if (gate) {
                 const executionArgs = gate.args ?? effectiveArgs
                 executionArgsUsed = executionArgs
-                rememberApprovedSubagentCall(subagentApprovalContext, name, executionArgs, gate)
-                const executionMetadata = getToolMetadata(name, {
-                  args: executionArgs,
-                  userId: job?.userId || null,
-                })
-                // Mutating tools ignore lease/transport aborts while a call is in flight,
-                // but an explicit user stop still reaches cancellable shell/browser work.
-                const abortScope = createToolAbortScope(signal, executionMetadata.interruptBehavior)
-                if (durableExecution) {
-                  await markCall(call, {
-                    checkpointStatus: 'executing',
-                    checkpointApprovalId: gate.approvalId || call.checkpointApprovalId || null,
-                    checkpointExecutionArgs: executionArgs,
-                    idempotencyKey: call.idempotencyKey,
+                const finalValidationError = validateToolCall(
+                  { ...call, args: executionArgs },
+                  activeToolSpecs,
+                  { allowUnknown: executeTool !== executeServerTool },
+                ) || artifactReplacementValidationError(name, executionArgs)
+                if (finalValidationError) {
+                  result = finalValidationError
+                } else {
+                  rememberApprovedSubagentCall(subagentApprovalContext, name, executionArgs, gate)
+                  const executionMetadata = getToolMetadata(name, {
+                    args: executionArgs,
+                    userId: job?.userId || null,
                   })
-                }
-                try {
-                  result = await executeToolWithRetry({
-                    metadata: executionMetadata,
-                    signal: abortScope.signal,
-                    maxAttempts: toolRetryMaxAttempts,
-                    baseDelayMs: toolRetryBaseDelayMs,
-                    execute: () => executeTool({
-                      name,
-                      args: executionArgs,
-                      job,
-                      step,
-                      signal: abortScope.signal,
-                      budget,
-                      skillId: explicitSkillId || null,
-                      toolCallId: call.id,
+                  // Mutating tools ignore lease/transport aborts while a call is in flight,
+                  // but an explicit user stop still reaches cancellable shell/browser work.
+                  const abortScope = createToolAbortScope(signal, executionMetadata.interruptBehavior)
+                  if (durableExecution) {
+                    await markCall(call, {
+                      checkpointStatus: 'executing',
+                      checkpointApprovalId: gate.approvalId || call.checkpointApprovalId || null,
+                      checkpointExecutionArgs: executionArgs,
                       idempotencyKey: call.idempotencyKey,
-                      approvalContext: subagentApprovalContext,
-                      allowedArtifactTools: stepArtifactTools,
-                    }),
-                  })
-                } finally {
-                  abortScope.dispose()
-                }
-                if (gate.authorization && result && typeof result === 'object') {
-                  result = { ...result, approvalAuthorization: gate.authorization }
-                }
-                artifactId = result?.artifactId || null
-                if (isLoopPauseResult(result)) clarification = result.clarification
-                if (enableToolHooks && job?.userId) {
-                  try {
-                    await dispatchHooks({
-                      userId: job.userId,
-                      event: 'post_tool_use',
-                      tool: name,
-                      args: { input: executionArgs, output: result },
-                      sessionId: job.id || null,
-                      requestId: step?.id || null,
                     })
-                  } catch {
-                    // The tool has already executed; a post hook failure must
-                    // not replay or reinterpret its side effects.
+                  }
+                  try {
+                    result = await executeToolWithRetry({
+                      metadata: executionMetadata,
+                      signal: abortScope.signal,
+                      maxAttempts: toolRetryMaxAttempts,
+                      baseDelayMs: toolRetryBaseDelayMs,
+                      execute: () => executeTool({
+                        name,
+                        args: executionArgs,
+                        job,
+                        step,
+                        signal: abortScope.signal,
+                        budget,
+                        skillId: explicitSkillId || null,
+                        toolCallId: call.id,
+                        idempotencyKey: call.idempotencyKey,
+                        approvalContext: subagentApprovalContext,
+                        allowedArtifactTools: stepArtifactTools,
+                      }),
+                    })
+                  } finally {
+                    abortScope.dispose()
+                  }
+                  if (gate.authorization && result && typeof result === 'object') {
+                    result = { ...result, approvalAuthorization: gate.authorization }
+                  }
+                  artifactId = result?.artifactId || null
+                  if (isLoopPauseResult(result)) clarification = result.clarification
+                  if (enableToolHooks && job?.userId) {
+                    try {
+                      await dispatchHooks({
+                        userId: job.userId,
+                        event: 'post_tool_use',
+                        tool: name,
+                        args: { input: executionArgs, output: result },
+                        sessionId: job.id || null,
+                        requestId: step?.id || null,
+                      })
+                    } catch {
+                      // The tool has already executed; a post hook failure must
+                      // not replay or reinterpret its side effects.
+                    }
                   }
                 }
               }

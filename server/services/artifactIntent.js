@@ -96,9 +96,14 @@ export function findAdjacentDeliveredArtifacts(messages = []) {
   }
   if (previousUserIndex < 0) return []
 
+  return findDeliveredArtifactsBetween(history, previousUserIndex + 1, currentUserIndex)
+}
+
+function findDeliveredArtifactsBetween(history, startIndex, endIndex) {
+  const turnMessages = history.slice(startIndex, endIndex)
   const calls = new Map()
   let selectedIds = null
-  for (const message of history.slice(previousUserIndex + 1, currentUserIndex)) {
+  for (const message of turnMessages) {
     if (message?.role !== 'assistant' || !Array.isArray(message.tool_calls)) continue
     for (const call of message.tool_calls) {
       const id = String(call?.id || '').trim()
@@ -115,7 +120,7 @@ export function findAdjacentDeliveredArtifacts(messages = []) {
 
   const artifacts = []
   const seen = new Set()
-  for (const message of history.slice(previousUserIndex + 1, currentUserIndex)) {
+  for (const message of turnMessages) {
     if (message?.role !== 'tool') continue
     const call = calls.get(String(message.tool_call_id || message.toolCallId || '').trim())
     if (!call) continue
@@ -143,6 +148,76 @@ export function findAdjacentDeliveredArtifacts(messages = []) {
   if (!Array.isArray(selectedIds)) return artifacts
   const selected = new Set(selectedIds)
   return artifacts.filter((artifact) => selected.has(artifact.id))
+}
+
+const REFERENCE_TOKEN_CHARACTER = /[\p{L}\p{N}._-]/u
+const FILENAME_ACTION_PREFIX = /(?:修改|编辑|更新|调整|优化|完善|重做|替换|覆盖|打开|读取|检查|选择|针对|继续|处理|文件(?:是|为)?|名为|叫做|revise|edit|update|modify|open|read|inspect|select)\s*$/iu
+const FILENAME_LABEL_SUFFIX = /^(?:的|文件|页面|网页|原版|版本)/u
+
+function hasExactReference(text, reference, { filename = false } = {}) {
+  const needle = String(reference || '').trim().toLowerCase()
+  if (!needle) return false
+  let offset = 0
+  while (offset <= text.length - needle.length) {
+    const index = text.indexOf(needle, offset)
+    if (index < 0) return false
+    const before = index > 0 ? text[index - 1] : ''
+    const afterIndex = index + needle.length
+    const after = afterIndex < text.length ? text[afterIndex] : ''
+    const beforeIsBoundary = !before
+      || !REFERENCE_TOKEN_CHARACTER.test(before)
+      || (filename && FILENAME_ACTION_PREFIX.test(text.slice(0, index)))
+    const afterIsBoundary = !after
+      || !REFERENCE_TOKEN_CHARACTER.test(after)
+      || (filename && FILENAME_LABEL_SUFFIX.test(text.slice(afterIndex)))
+    if (beforeIsBoundary && afterIsBoundary) return true
+    offset = index + 1
+  }
+  return false
+}
+
+/**
+ * Recover a delivered artifact from an older turn only when the current user
+ * explicitly names its exact managed ID or complete filename. This lets a
+ * user retry an in-place revision after a failed assistant turn without
+ * making unrelated historical artifacts implicit context for every request.
+ */
+export function findExplicitlyReferencedDeliveredArtifacts(messages = [], prompt = '') {
+  const history = Array.isArray(messages) ? messages : []
+  const referenceText = String(prompt || '').trim().toLowerCase()
+  if (!referenceText) return []
+
+  let currentUserIndex = -1
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    if (history[index]?.role === 'user') { currentUserIndex = index; break }
+  }
+  if (currentUserIndex <= 0) return []
+
+  const matches = []
+  const seen = new Set()
+  let turnEnd = currentUserIndex
+  for (let searchIndex = currentUserIndex - 1; searchIndex >= 0;) {
+    let previousUserIndex = -1
+    for (let index = searchIndex; index >= 0; index -= 1) {
+      if (history[index]?.role === 'user') { previousUserIndex = index; break }
+    }
+    if (previousUserIndex < 0) break
+
+    const artifacts = findDeliveredArtifactsBetween(history, previousUserIndex + 1, turnEnd)
+    for (const artifact of artifacts) {
+      const id = String(artifact?.id || '').trim()
+      const filename = String(artifact?.filename || '').trim()
+      const explicitlyNamed = hasExactReference(referenceText, id)
+        || hasExactReference(referenceText, filename, { filename: true })
+      if (!explicitlyNamed || seen.has(id)) continue
+      seen.add(id)
+      matches.push(artifact)
+    }
+
+    turnEnd = previousUserIndex
+    searchIndex = previousUserIndex - 1
+  }
+  return matches
 }
 
 /** 从 `/ppt 帮我讲讲 X` 这类提示词里取技能 id;与 jobRuntime.parseSkillPrompt 同规则。 */
