@@ -28,6 +28,14 @@ test('every preset ships defaults so users only paste an API key', () => {
   }
 })
 
+test('mainstream cloud presets default to the real 1M context window', () => {
+  const million = CLOUD_PRESETS.filter((preset) => preset.contextWindow >= 1000000)
+  assert.ok(million.length >= 10, `expected most presets at 1M, got ${million.length}`)
+  for (const id of ['openai', 'anthropic', 'gemini', 'deepseek', 'openrouter', 'qwen', 'siliconflow', 'moonshot', 'zhipu', 'xai']) {
+    assert.ok(million.some((preset) => preset.id === id), `${id} should be 1M`)
+  }
+})
+
 test('formatContextTokens renders compact sizes', () => {
   assert.equal(formatContextTokens(128000), '128K')
   assert.equal(formatContextTokens(1000000), '1M')

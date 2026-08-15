@@ -13,18 +13,18 @@ export const LOCAL_PRESETS = Object.freeze([
 ])
 
 export const CLOUD_PRESETS = Object.freeze([
-  { id: 'openai', key: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', models: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'], kind: 'openai-compatible', contextWindow: 128000, caps: CAPS.tools },
-  { id: 'anthropic', key: 'anthropic', label: 'Anthropic Claude', baseUrl: 'https://api.anthropic.com', models: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5'], kind: 'anthropic', contextWindow: 200000, caps: CAPS.toolsVision },
+  { id: 'openai', key: 'openai', label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', models: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'], kind: 'openai-compatible', contextWindow: 1000000, caps: CAPS.tools },
+  { id: 'anthropic', key: 'anthropic', label: 'Anthropic Claude', baseUrl: 'https://api.anthropic.com', models: ['claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5'], kind: 'anthropic', contextWindow: 1000000, caps: CAPS.toolsVision },
   { id: 'gemini', key: 'gemini', label: 'Google Gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', models: ['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.1-pro'], kind: 'gemini', contextWindow: 1000000, caps: CAPS.toolsVision },
-  { id: 'deepseek', key: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com', models: ['deepseek-v4-flash', 'deepseek-v4-flash-0731', 'deepseek-v4-pro'], kind: 'openai-compatible', contextWindow: 128000, caps: CAPS.toolsText },
-  { id: 'openrouter', key: 'openrouter', label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', models: ['openai/gpt-5.6-sol', 'anthropic/claude-opus-4.8', 'google/gemini-3.1-pro'], kind: 'openai-compatible', contextWindow: 128000, caps: CAPS.tools },
-  { id: 'qwen', key: 'qwen', labelKey: 'providerQwen', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', models: ['qwen3.8-max', 'qwen3.7-plus', 'qwen3.7-flash'], kind: 'openai-compatible', contextWindow: 128000, caps: CAPS.tools },
-  { id: 'siliconflow', key: 'siliconflow', labelKey: 'providerSiliconFlow', baseUrl: 'https://api.siliconflow.cn/v1', models: ['deepseek-ai/DeepSeek-V3.2', 'Qwen/Qwen3-Next-80B-A3B-Instruct', 'moonshotai/Kimi-K2.5'], kind: 'openai-compatible', contextWindow: 128000, caps: CAPS.tools },
-  { id: 'moonshot', key: 'moonshot', label: 'Moonshot Kimi', baseUrl: 'https://api.moonshot.cn/v1', models: ['kimi-k2.5', 'kimi-k2-thinking', 'moonshot-v1-128k'], kind: 'openai-compatible', contextWindow: 128000, caps: CAPS.toolsText },
-  { id: 'zhipu', key: 'zhipu', labelKey: 'providerZhipu', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', models: ['glm-5', 'glm-5-flash', 'glm-4.6v'], kind: 'openai-compatible', contextWindow: 128000, caps: CAPS.tools },
-  { id: 'xai', key: 'xai', label: 'xAI Grok', baseUrl: 'https://api.x.ai/v1', models: ['grok-4.1', 'grok-4.1-fast', 'grok-4-fast'], kind: 'openai-compatible', contextWindow: 128000, caps: CAPS.tools },
+  { id: 'deepseek', key: 'deepseek', label: 'DeepSeek', baseUrl: 'https://api.deepseek.com', models: ['deepseek-v4-flash', 'deepseek-v4-flash-0731', 'deepseek-v4-pro'], kind: 'openai-compatible', contextWindow: 1000000, caps: CAPS.toolsText },
+  { id: 'openrouter', key: 'openrouter', label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', models: ['openai/gpt-5.6-sol', 'anthropic/claude-opus-4.8', 'google/gemini-3.1-pro'], kind: 'openai-compatible', contextWindow: 1000000, caps: CAPS.tools },
+  { id: 'qwen', key: 'qwen', labelKey: 'providerQwen', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', models: ['qwen3.8-max', 'qwen3.7-plus', 'qwen3.7-flash'], kind: 'openai-compatible', contextWindow: 1000000, caps: CAPS.tools },
+  { id: 'siliconflow', key: 'siliconflow', labelKey: 'providerSiliconFlow', baseUrl: 'https://api.siliconflow.cn/v1', models: ['deepseek-ai/DeepSeek-V3.2', 'Qwen/Qwen3-Next-80B-A3B-Instruct', 'moonshotai/Kimi-K2.5'], kind: 'openai-compatible', contextWindow: 1000000, caps: CAPS.tools },
+  { id: 'moonshot', key: 'moonshot', label: 'Moonshot Kimi', baseUrl: 'https://api.moonshot.cn/v1', models: ['kimi-k2.5', 'kimi-k2-thinking', 'moonshot-v1-128k'], kind: 'openai-compatible', contextWindow: 1000000, caps: CAPS.toolsText },
+  { id: 'zhipu', key: 'zhipu', labelKey: 'providerZhipu', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', models: ['glm-5', 'glm-5-flash', 'glm-4.6v'], kind: 'openai-compatible', contextWindow: 1000000, caps: CAPS.tools },
+  { id: 'xai', key: 'xai', label: 'xAI Grok', baseUrl: 'https://api.x.ai/v1', models: ['grok-4.1', 'grok-4.1-fast', 'grok-4-fast'], kind: 'openai-compatible', contextWindow: 1000000, caps: CAPS.tools },
   { id: 'groq', key: 'groq', label: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', models: ['openai/gpt-oss-120b', 'moonshotai/kimi-k2-instruct-0905', 'llama-3.3-70b-versatile'], kind: 'openai-compatible', contextWindow: 128000, caps: CAPS.toolsText },
-  { id: 'mistral', key: 'mistral', label: 'Mistral AI', baseUrl: 'https://api.mistral.ai/v1', models: ['mistral-large-latest', 'magistral-medium-latest', 'codestral-latest'], kind: 'openai-compatible', contextWindow: 128000, caps: CAPS.toolsVision },
+  { id: 'mistral', key: 'mistral', label: 'Mistral AI', baseUrl: 'https://api.mistral.ai/v1', models: ['mistral-large-latest', 'magistral-medium-latest', 'codestral-latest'], kind: 'openai-compatible', contextWindow: 256000, caps: CAPS.toolsVision },
 ])
 
 export const PROVIDER_PRESETS = Object.freeze([...CLOUD_PRESETS, ...LOCAL_PRESETS])
