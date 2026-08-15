@@ -299,6 +299,11 @@ test('nested Agent calls inherit the selected skills through the subagent tool a
     tools: SUBAGENT_TYPES.general.tools,
     userId: USER,
     skillIds: ['webpage', 'webpage'],
+    skillDefinitions: [{
+      id: 'webpage',
+      name: 'Inline webpage',
+      systemPrompt: 'Use the inherited webpage workflow.',
+    }],
     approveTool: async ({ args }) => ({ proceed: true, args }),
     callModel: async () => {
       modelStep += 1
@@ -314,6 +319,8 @@ test('nested Agent calls inherit the selected skills through the subagent tool a
 
   assert.equal(result, 'done')
   assert.deepEqual(nestedOptions?.skillIds, ['webpage'])
+  assert.equal(nestedOptions?.skillDefinitions?.[0]?.id, 'webpage')
+  assert.match(nestedOptions?.skillDefinitions?.[0]?.systemPrompt || '', /gugo-skill-quality:v1/)
 })
 
 test('审批只复用同一树内工具名和完整参数完全相同的人工批准', async () => {

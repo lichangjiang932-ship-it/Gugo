@@ -1031,7 +1031,9 @@ export class TurnEngine {
     } catch {
       // MCP/browser discovery is optional; retain the built-in tool set on failure.
     }
-    const activeSkillId = normalizeIds(promptContext.skillIds).at(0) || normalizeIds(skillIds).at(0) || null
+    const preparedSkillIds = normalizeIds(promptContext.skillIds)
+    const effectiveSkillIds = preparedSkillIds.length ? preparedSkillIds : normalizeIds(skillIds)
+    const activeSkillId = effectiveSkillIds.at(0) || null
     const baselineToolCallIds = collectToolCallIds(messages)
     let checkpointMessages = restoredCheckpointState?.messages || []
     let checkpointArtifactIds = normalizeArtifactIds(restoredCheckpointState?.artifactIds)
@@ -1085,6 +1087,8 @@ export class TurnEngine {
           sessionId,
           modelName: String(modelName || '').trim() || null,
           agentId: promptContext.effectiveAgentId || agentId || null,
+          skillIds: effectiveSkillIds,
+          skillDefinitions,
           origin: 'chat',
           prompt: content,
           userPrompt: displayContent || content,

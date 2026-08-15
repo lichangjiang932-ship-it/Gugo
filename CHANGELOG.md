@@ -6,6 +6,13 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.11] - 2026-08-15
+
+### Fixed
+
+- Preserved every prepared skill, including trusted inline definitions and quality contracts, across top-level, batched, and recursively nested Agent execution.
+- Rejected model-supplied inline skill definitions during Agent delegation while keeping registered skills authoritative when identifiers overlap.
+
 ## [0.11.10] - 2026-08-15
 
 ### Changed

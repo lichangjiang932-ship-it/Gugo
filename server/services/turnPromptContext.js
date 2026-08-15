@@ -35,6 +35,7 @@ export function prepareBackgroundPromptContext({
   userId,
   agentId = null,
   skillIds = [],
+  skillDefinitions = [],
   query = '',
   env = process.env,
 } = {}, dependencies = {}) {
@@ -44,9 +45,15 @@ export function prepareBackgroundPromptContext({
   const readInstructions = dependencies.readWorkspaceInstructions || readWorkspaceInstructions
   const normalizedSkillIds = normalizeIds(skillIds)
   const effectiveAgentId = agentId ? String(agentId) : null
-  const preparedSkills = safeStep('background skill context failed', [], () => (
+  const registeredSkills = safeStep('background skill context failed', [], () => (
     prepareSkills({ userId, skillIds: normalizedSkillIds })
   ), warn)
+  const inlineSkills = safeStep('background inline skill context failed', [], () => (
+    prepareInlineSkillsForPrompt({ skillIds: normalizedSkillIds, skillDefinitions })
+  ), warn)
+  const preparedById = new Map(inlineSkills.map((skill) => [String(skill.id), skill]))
+  for (const skill of registeredSkills) preparedById.set(String(skill.id), skill)
+  const preparedSkills = normalizedSkillIds.map((id) => preparedById.get(id)).filter(Boolean)
   const skills = safeStep('background skills block failed', null, () => buildSkillsBlockFromPrepared({
     userId,
     agentId: effectiveAgentId,

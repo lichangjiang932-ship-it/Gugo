@@ -126,12 +126,13 @@ import {
   selectToolSpecs,
   persistLocalToolArtifacts,
   buildSubagentRequest,
+  inheritedJobSkillIds,
   buildJobToolIdempotencyKey,
   scopeTextToolCallIds,
 } from './toolLoopHeuristics.js'
 
 export {
-  SERVER_TOOL_SPECS, selectJobToolSpecs, selectToolSpecs, persistLocalToolArtifacts, buildSubagentRequest, buildJobToolIdempotencyKey, scopeTextToolCallIds,
+  SERVER_TOOL_SPECS, selectJobToolSpecs, selectToolSpecs, persistLocalToolArtifacts, buildSubagentRequest, inheritedJobSkillIds, buildJobToolIdempotencyKey, scopeTextToolCallIds,
 }
 
 export async function runToolsLoop({

@@ -156,6 +156,31 @@ test('subagent injects optional skill and memory context and degrades when prepa
   assert.equal(degraded.resultText, 'still completed')
 })
 
+test('subagent compiles an inherited inline skill with the shared quality contract', async () => {
+  let capturedMessages = []
+  const run = await runSubagent({
+    userId,
+    type: 'explore',
+    prompt: 'apply the local workflow',
+    skillIds: ['local-inline-review'],
+    skillDefinitions: [{
+      id: 'local-inline-review',
+      name: 'Local inline review',
+      description: 'A browser-local review workflow.',
+      systemPrompt: 'Use this exact inherited local workflow.',
+    }],
+    callModel: async ({ messages }) => {
+      capturedMessages = messages
+      return { content: 'done', toolCalls: [] }
+    },
+  })
+
+  assert.equal(run.status, 'completed')
+  const skillBlock = capturedMessages.find((message) => message.content.startsWith('# Skills'))?.content || ''
+  assert.match(skillBlock, /Use this exact inherited local workflow\./)
+  assert.match(skillBlock, /gugo-skill-quality:v1/)
+})
+
 test('subagent swarm exposes team members with isolated transcripts', async () => {
   const modelsByPrompt = new Map()
   const result = await runSubagentBatch({
