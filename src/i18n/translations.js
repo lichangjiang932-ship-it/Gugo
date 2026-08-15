@@ -14,19 +14,19 @@ export const DEFAULT_LANGUAGE = 'zh'
 
 const CHAT_CONTEXT_TRANSLATIONS = {
   zh: {
-    compactLabel: '上下文（估算）', openDetails: '查看上下文占用明细', closeDetails: '关闭上下文详情', messages: '消息数', visibleCharacters: '可见字符', model: '模型', backendDefault: '后端默认', estimatedUsage: '上下文占用（估算）', messagePayload: '消息', toolCalls: '工具调用', attachments: '附件', toolDefinitions: '工具定义', estimateNotice: '这是用于提前预警的近似值；实际 tokenizer、系统提示词和服务端动态工具可能使最终用量不同。',
+    compactLabel: '上下文（估算）', openDetails: '查看上下文占用明细', closeDetails: '关闭上下文详情', messages: '消息数', visibleCharacters: '可见字符', model: '模型', backendDefault: '后端默认', estimatedUsage: '上下文占用（估算）', remaining: '剩余可用', messagePayload: '对话消息', toolCalls: '工具调用', attachments: '附件', toolDefinitions: '工具定义', systemPrompt: '系统提示词', estimateNotice: '这是用于提前预警的近似值；实际 tokenizer、系统提示词和服务端动态工具可能使最终用量不同。',
   },
   en: {
-    compactLabel: 'Context (estimated)', openDetails: 'View context usage details', closeDetails: 'Close context details', messages: 'Messages', visibleCharacters: 'Visible characters', model: 'Model', backendDefault: 'Backend default', estimatedUsage: 'Context usage (estimated)', messagePayload: 'Messages', toolCalls: 'Tool calls', attachments: 'Attachments', toolDefinitions: 'Tool definitions', estimateNotice: 'This is an early-warning estimate. The model tokenizer, system prompt, and server-side dynamic tools can change the final usage.',
+    compactLabel: 'Context (estimated)', openDetails: 'View context usage details', closeDetails: 'Close context details', messages: 'Messages', visibleCharacters: 'Visible characters', model: 'Model', backendDefault: 'Backend default', estimatedUsage: 'Context usage (estimated)', remaining: 'Remaining', messagePayload: 'Conversation', toolCalls: 'Tool calls', attachments: 'Attachments', toolDefinitions: 'Tool definitions', systemPrompt: 'System prompt', estimateNotice: 'This is an early-warning estimate. The model tokenizer, system prompt, and server-side dynamic tools can change the final usage.',
   },
   ja: {
-    compactLabel: 'コンテキスト（推定）', openDetails: 'コンテキスト使用量の詳細を表示', closeDetails: 'コンテキストの詳細を閉じる', messages: 'メッセージ数', visibleCharacters: '表示文字数', model: 'モデル', backendDefault: 'サーバー既定', estimatedUsage: 'コンテキスト使用量（推定）', messagePayload: 'メッセージ', toolCalls: 'ツール呼び出し', attachments: '添付', toolDefinitions: 'ツール定義', estimateNotice: '早期警告用の推定値です。実際の tokenizer、システムプロンプト、サーバー側の動的ツールにより最終値は変わります。',
+    compactLabel: 'コンテキスト（推定）', openDetails: 'コンテキスト使用量の詳細を表示', closeDetails: 'コンテキストの詳細を閉じる', messages: 'メッセージ数', visibleCharacters: '表示文字数', model: 'モデル', backendDefault: 'サーバー既定', estimatedUsage: 'コンテキスト使用量（推定）', remaining: '残り', messagePayload: '会話メッセージ', toolCalls: 'ツール呼び出し', attachments: '添付', toolDefinitions: 'ツール定義', systemPrompt: 'システムプロンプト', estimateNotice: '早期警告用の推定値です。実際の tokenizer、システムプロンプト、サーバー側の動的ツールにより最終値は変わります。',
   },
   ko: {
-    compactLabel: '컨텍스트(추정)', openDetails: '컨텍스트 사용량 상세 보기', closeDetails: '컨텍스트 상세 닫기', messages: '메시지 수', visibleCharacters: '표시 문자', model: '모델', backendDefault: '서버 기본값', estimatedUsage: '컨텍스트 사용량(추정)', messagePayload: '메시지', toolCalls: '도구 호출', attachments: '첨부 파일', toolDefinitions: '도구 정의', estimateNotice: '조기 경고용 추정치입니다. 실제 tokenizer, 시스템 프롬프트 및 서버 동적 도구에 따라 최종 사용량이 달라질 수 있습니다.',
+    compactLabel: '컨텍스트(추정)', openDetails: '컨텍스트 사용량 상세 보기', closeDetails: '컨텍스트 상세 닫기', messages: '메시지 수', visibleCharacters: '표시 문자', model: '모델', backendDefault: '서버 기본값', estimatedUsage: '컨텍스트 사용량(추정)', remaining: '남은 용량', messagePayload: '대화 메시지', toolCalls: '도구 호출', attachments: '첨부 파일', toolDefinitions: '도구 정의', systemPrompt: '시스템 프롬프트', estimateNotice: '조기 경고용 추정치입니다. 실제 tokenizer, 시스템 프롬프트 및 서버 동적 도구에 따라 최종 사용량이 달라질 수 있습니다.',
   },
   'zh-TW': {
-    compactLabel: '上下文（估算）', openDetails: '檢視上下文用量明細', closeDetails: '關閉上下文明細', messages: '訊息數', visibleCharacters: '可見字元', model: '模型', backendDefault: '後端預設', estimatedUsage: '上下文用量（估算）', messagePayload: '訊息', toolCalls: '工具呼叫', attachments: '附件', toolDefinitions: '工具定義', estimateNotice: '這是用於提前預警的近似值；實際 tokenizer、系統提示詞與伺服器動態工具可能使最終用量不同。',
+    compactLabel: '上下文（估算）', openDetails: '檢視上下文用量明細', closeDetails: '關閉上下文明細', messages: '訊息數', visibleCharacters: '可見字元', model: '模型', backendDefault: '後端預設', estimatedUsage: '上下文用量（估算）', remaining: '剩餘可用', messagePayload: '對話訊息', toolCalls: '工具呼叫', attachments: '附件', toolDefinitions: '工具定義', systemPrompt: '系統提示詞', estimateNotice: '這是用於提前預警的近似值；實際 tokenizer、系統提示詞與伺服器動態工具可能使最終用量不同。',
   },
 }
 

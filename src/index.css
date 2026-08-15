@@ -1006,13 +1006,22 @@ html[data-density="loose"] {
 }
 
 .chat-run-timeline .chat-tool-step:hover .chat-tool-details-row,
-.chat-run-timeline .chat-tool-step:focus-within .chat-tool-details-row,
-.chat-run-timeline .chat-tool-details-row:has(details[open]) {
+.chat-run-timeline .chat-tool-step:focus-within .chat-tool-details-row {
   max-height: 2rem;
   margin-top: 0.16rem;
   overflow: visible;
   opacity: 1;
   transform: translateY(0);
+}
+
+/* Expanded argument/result content belongs to the normal document flow:
+   it must push the following cards down instead of overflowing them. */
+.chat-run-timeline .chat-tool-details-row:has(details[open]) {
+  max-height: none;
+  margin-top: 0.16rem;
+  overflow: visible;
+  opacity: 1;
+  transform: none;
 }
 
 .chat-run-timeline .chat-tool-details {

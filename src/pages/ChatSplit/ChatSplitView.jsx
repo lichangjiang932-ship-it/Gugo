@@ -8,6 +8,7 @@ import DesktopPet from './DesktopPet.jsx'
 import RightPreviewPane from './RightPreviewPane'
 import RightWorkbench from './RightWorkbench'
 import SlashInlinePanelHost from './SlashInlinePanelHost.jsx'
+import ContextUsagePanel from './chatMessages/ContextUsagePanel.jsx'
 import { estimateClientContextUsage } from '../../lib/contextUsage.js'
 
 export default function ChatSplitView({
@@ -112,12 +113,6 @@ export default function ChatSplitView({
           messages={messages}
           state={state}
           workbenchMessage={workbenchMessage}
-          showContextPanel={showContextPanel}
-          setShowContextPanel={setShowContextPanel}
-          selectedModel={selectedModel}
-          contextWindow={contextWindow}
-          toolSpecs={contextToolSpecs}
-          systemPrompt={contextSystemPrompt}
           isGenerating={isGenerating}
           onPermAllow={onPermAllow}
           onPermDeny={onPermDeny}
@@ -185,6 +180,19 @@ export default function ChatSplitView({
                 {t('toast.chatResumeDismiss')}
               </button>
             </div>
+          </div>
+        )}
+
+        {showContextPanel && (
+          <div className="mx-auto w-full max-w-[872px] px-4 pb-2">
+            <ContextUsagePanel
+              contextUsage={contextUsage}
+              contextWindow={contextWindow}
+              messages={messages}
+              selectedModel={selectedModel}
+              onClose={() => setShowContextPanel(false)}
+              t={t}
+            />
           </div>
         )}
 
