@@ -122,8 +122,9 @@ test('generated file names follow the answer tone and open the right-pane payloa
 
   try {
     await act(async () => root.render(<ArtifactReferenceLinks msg={msg} preview={preview} onOpen={(artifact) => opened.push(artifact)} />))
-    const link = rootElement.querySelector('button')
+    const link = rootElement.querySelector('a[data-testid="artifact-open-card"]')
     assert.ok(link)
+    assert.match(link.getAttribute('href'), /\/api\/artifacts\/file-1/)
     assert.match(link.textContent, /calculator\.html/)
     assert.doesNotMatch(link.className, /text-ember|bg-ember-soft/)
     assert.match(link.querySelector('.chat-output-file-name')?.className || '', /chat-output-file-name/)

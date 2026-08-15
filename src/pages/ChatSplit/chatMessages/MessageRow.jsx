@@ -61,14 +61,17 @@ export default function MessageRow({
     serverClarification?.suggested_path || serverClarification?.suggestedPath || '',
     serverClarification?.access_mode || serverClarification?.accessMode || '',
   ].join(':')
-  const artifactPreview = buildMessageArtifactPreview(msg)
+  const deliveryArtifacts = resolveDeliveryArtifacts(msg.meta)
+  // Only server-confirmed final deliverables may become previewable UI. Legacy
+  // artifactSource metadata can still help render a selected file, but it must
+  // never create a clickable synthetic file by itself.
+  const artifactPreview = deliveryArtifacts.length > 0 ? buildMessageArtifactPreview(msg) : null
   const isCurrentStreamingMessage = msg.id === generatingMessageId || !!msg.meta?.streaming
   // A new turn must not make completed artifact messages look "streaming" again.
   // Their collapsed source/link presentation is part of the message itself, not
   // global chat generation state.
   const isMessageComplete = !isCurrentStreamingMessage
   const showArtifactPreview = !!artifactPreview && isMessageComplete
-  const deliveryArtifacts = resolveDeliveryArtifacts(msg.meta)
   const serverArtifactReferences = buildServerArtifactReferences({
     artifacts: deliveryArtifacts,
     content: String(msg.meta?.artifactSource || msg.content || ''),
@@ -157,12 +160,6 @@ export default function MessageRow({
 }
 
 function AssistantContent({ artifactPreview, isCurrentStreamingMessage, isMessageComplete, msg, onOpenArtifact, showArtifactPreview }) {
-  const toolArtifactReferences = buildServerArtifactReferences({
-    artifacts: msg.meta?.serverArtifacts,
-    content: String(msg.meta?.artifactSource || msg.content || ''),
-    messageId: msg.id,
-    preview: artifactPreview,
-  })
   const deliveryArtifactReferences = buildServerArtifactReferences({
     artifacts: resolveDeliveryArtifacts(msg.meta),
     content: String(msg.meta?.artifactSource || msg.content || ''),
@@ -190,7 +187,7 @@ function AssistantContent({ artifactPreview, isCurrentStreamingMessage, isMessag
       <div data-quotable="true">
         {isCurrentStreamingMessage && <ActivityStream msg={msg} />}
         {presentation.calls.length > 0 && (
-          <ToolCallTrace calls={presentation.calls} artifacts={toolArtifactReferences} onOpenArtifact={openToolArtifact} />
+          <ToolCallTrace calls={presentation.calls} artifacts={deliveryArtifactReferences} onOpenArtifact={openToolArtifact} />
         )}
         {presentation.text && (
           <MarkdownRenderer artifactReferences={deliveryArtifactReferences} streaming={isCurrentStreamingMessage} onLinkClick={openInlineArtifact}>{presentation.text}</MarkdownRenderer>
@@ -213,7 +210,7 @@ function AssistantContent({ artifactPreview, isCurrentStreamingMessage, isMessag
 
 function CollapsedArtifactContent({ artifactPreview, msg, onOpenArtifact }) {
   const artifactReferences = buildServerArtifactReferences({
-    artifacts: msg.meta?.serverArtifacts,
+    artifacts: resolveDeliveryArtifacts(msg.meta),
     content: String(msg.meta?.artifactSource || msg.content || ''),
     messageId: msg.id,
     preview: artifactPreview,

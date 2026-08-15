@@ -46,6 +46,7 @@ test('leaving chat detaches the view without cancelling the active server turn',
   assert.match(lifecycleSource, /getTurnRun\(state\.activeSessionId\)/)
   assert.match(lifecycleSource, /subscribeTurnRuns\(syncActiveTurn\)/)
   assert.match(chatEntrySource, /cancelTurnRun\(activeSessionId\)/)
+  assert.match(chatEntrySource, /if \(!cancelTurnRun\(activeSessionId\)\) abortCtrlRef\.current\?\.abort\(\)/)
 })
 
 test('streaming no longer reparses stable markdown or delays messages by history index', () => {

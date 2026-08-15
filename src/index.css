@@ -1295,7 +1295,7 @@ html[data-density="loose"] {
 }
 
 @media (max-width: 480px) {
-  .chat-preview-tabbar,
+  .chat-preview-header,
   .chat-preview-toolbar {
     padding-inline: 0.625rem;
   }

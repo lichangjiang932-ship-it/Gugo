@@ -5,6 +5,7 @@ import {
   OFFICIAL_MODEL_CAPABILITY_CATALOG,
   getOfficialModelProfile,
 } from '../shared/modelCapabilityCatalog.js'
+import { CLOUD_PRESETS } from '../src/components/modelProviders/providerConfig.js'
 
 const EXPECTED_MODELS = {
   'gpt-5.6-sol': [1_050_000, 128_000],
@@ -18,7 +19,7 @@ const EXPECTED_MODELS = {
   'gemini-3.1-pro-preview': [1_048_576, 65_536],
   'deepseek-v4-flash': [1_000_000, 384_000],
   'deepseek-v4-pro': [1_000_000, 384_000],
-  'glm-5': [200_000, 128_000],
+  'glm-5': [204_800, 128_000],
 }
 
 test('official model catalog stores verified exact-model limits and provenance', () => {
@@ -31,17 +32,28 @@ test('official model catalog stores verified exact-model limits and provenance',
     assert.equal(profile.verifiedAt, '2026-08-15')
     assert.match(profile.sourceUrl, /^https:\/\//)
   }
-  assert.equal(Object.keys(OFFICIAL_MODEL_CAPABILITY_CATALOG).length, Object.keys(EXPECTED_MODELS).length)
+})
+
+test('every cloud preset has exact-model context metadata instead of a provider-wide estimate', () => {
+  const presetModels = CLOUD_PRESETS.flatMap((preset) => preset.models)
+  assert.equal(new Set(presetModels).size, presetModels.length, 'cloud preset model IDs stay unambiguous')
+  for (const modelName of presetModels) {
+    const profile = getOfficialModelProfile(modelName)
+    assert.ok(profile, `${modelName} has an exact profile`)
+    assert.ok(Number.isInteger(profile.contextWindow) && profile.contextWindow > 0, `${modelName} has a context window`)
+    assert.equal(profile.source, 'official-catalog')
+    assert.match(profile.sourceUrl, /^https:\/\//)
+  }
+  assert.equal(Object.keys(OFFICIAL_MODEL_CAPABILITY_CATALOG).length, presetModels.length)
 })
 
 test('official model catalog never guesses aliases, prefixes, or unverified dated IDs', () => {
   for (const modelName of [
     'gpt-5.6-sol-latest',
-    'openai/gpt-5.6-sol',
     'gemini-3.1-pro',
-    'deepseek-v4-flash-0731',
-    'glm-5-flash',
-    'kimi-k3',
+    'deepseek-v4-flash-9999',
+    'glm-5-unknown',
+    'kimi-k4',
     '',
   ]) {
     assert.equal(getOfficialModelProfile(modelName), null, `${modelName || '<empty>'} must remain unverified`)

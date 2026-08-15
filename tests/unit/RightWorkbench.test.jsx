@@ -82,7 +82,7 @@ test('right workbench renders compact tabs, persists width, and opens generated 
     assert.match(navigation.className, /flex/)
     assert.equal(navigation.querySelectorAll(':scope > button').length, 4)
     assert.equal(navigation.querySelector('[aria-current="page"] span.truncate').textContent, '相关文件')
-    assert.equal(rootElement.querySelector('[data-testid="workbench-file-count"]').textContent, '3')
+    assert.equal(rootElement.querySelector('[data-testid="workbench-file-count"]').textContent, '2')
     const resizeHandle = rootElement.querySelector('[data-testid="workbench-resize-handle"]')
     assert.ok(resizeHandle)
     assert.equal(resizeHandle.getAttribute('aria-orientation'), 'vertical')
@@ -134,28 +134,24 @@ test('right workbench renders compact tabs, persists width, and opens generated 
     assert.ok(serverArtifactLink)
     assert.match(serverArtifactLink.href, /\/api\/artifacts\/turn\/artifact-1\/download/)
 
-    const fileButtons = [...rootElement.querySelectorAll('[data-testid="workbench-files"] button')]
-    const directFileButton = fileButtons.find((button) => button.textContent.includes('analysis.xlsx'))
-    assert.ok(directFileButton)
+    const fileLinks = [...rootElement.querySelectorAll('[data-testid="workbench-file-open"]')]
+    assert.equal(fileLinks.length, 2)
+    assert.ok(fileLinks.every((link) => link.tagName === 'A' && link.getAttribute('href')))
+    const directFileLink = fileLinks.find((link) => link.textContent.includes('analysis.xlsx'))
+    assert.ok(directFileLink)
     await act(async () => {
-      directFileButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }))
+      directFileLink.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }))
     })
     assert.equal(opened[0].directFile.filename, 'analysis.xlsx')
 
-    const localPdfButton = fileButtons.find((button) => button.textContent.includes('填写后 答题卡.pdf'))
-    assert.ok(localPdfButton)
+    const localPdfLink = fileLinks.find((link) => link.textContent.includes('填写后 答题卡.pdf'))
+    assert.ok(localPdfLink)
     await act(async () => {
-      localPdfButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }))
+      localPdfLink.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }))
     })
     assert.equal(opened[1].directFile.filename, '填写后 答题卡.pdf')
-
-    const fileButton = fileButtons.find((button) => button.textContent.includes('Quarterly-report.docx'))
-    assert.ok(fileButton)
-    await act(async () => {
-      fileButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }))
-    })
-    assert.equal(opened.length, 3)
-    assert.equal(opened[2].preview.filename, 'Quarterly-report.docx')
+    assert.equal(opened.length, 2)
+    assert.doesNotMatch(rootElement.textContent, /Quarterly-report\.docx/)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

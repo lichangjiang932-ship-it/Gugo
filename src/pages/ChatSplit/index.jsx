@@ -227,7 +227,7 @@ export default function ChatSplit() {
     triggerSendFlow(typedContent || describeAttachmentPrompt(currentAttachments), currentAttachments)
   }, [attachments, directory.directoryApproval.open, dispatch, executeSlashEntry, input, isGenerating, showPendingDirectoryGuidance, slashRegistry, state.activeSessionId, steerActiveTurn, t, triggerSendFlow])
   const handleAbort = useCallback(() => {
-    cancelTurnRun(activeSessionId)
+    if (!cancelTurnRun(activeSessionId)) abortCtrlRef.current?.abort()
   }, [activeSessionId])
   useEffect(() => {
     const handler = (event) => {

@@ -36,7 +36,7 @@ export default function usePreviewPaneState({ artifact, onClose }) {
   const [resizing, setResizing] = useState(false)
   const dragStateRef = useRef(null)
   const touchStateRef = useRef(null)
-  const previousArtifactKey = useRef('')
+  const previousArtifactRef = useRef(null)
 
   useEffect(() => {
     try { localStorage.setItem('preview-pane-width', String(paneWidth)) } catch { /* ignore blocked storage */ }
@@ -61,9 +61,8 @@ export default function usePreviewPaneState({ artifact, onClose }) {
   }, [onClose])
 
   useEffect(() => {
-    const key = `${artifact?.messageId || ''}:${artifact?.preview?.type || ''}`
-    if (key === previousArtifactKey.current) return
-    previousArtifactKey.current = key
+    if (artifact === previousArtifactRef.current) return
+    previousArtifactRef.current = artifact
     setView('preview')
     setMaximized(isPresentationArtifact(artifact))
   }, [artifact])

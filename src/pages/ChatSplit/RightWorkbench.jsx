@@ -12,7 +12,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { buildMessageArtifactPreview, normalizeArtifactReferenceType, resolveDeliveryArtifacts } from '../../lib/artifactReferences.js'
+import { resolveDeliveryArtifacts } from '../../lib/artifactReferences.js'
 import { runWorkbenchTerminal } from '../../lib/workbenchClient.js'
 import { useT } from '../../i18n/I18nProvider.jsx'
 import { withDownloadToken } from '../../lib/jobClient.js'
@@ -41,21 +41,21 @@ function collectArtifacts(messages) {
   return messages.flatMap((message, index) => {
     if (message?.role !== 'assistant' || message?.meta?.streaming) return []
     const deliveryArtifacts = resolveDeliveryArtifacts(message?.meta)
-    const direct = deliveryArtifacts.length > 0
-      ? deliveryArtifacts.map((artifact) => ({
-          ...artifact,
-          id: artifact.id || `${message.id || index}-${artifact.url}`,
-          messageId: message.id,
-          direct: true,
-        }))
-      : []
-    const source = message?.meta?.artifactSource || message?.content
-    const preview = buildMessageArtifactPreview(message)
-    if (!preview) return direct
-    const previewType = preview && normalizeArtifactReferenceType({ type: preview.type, filename: preview.filename })
-    const hasPersistedPreview = previewType && direct.some((artifact) => normalizeArtifactReferenceType(artifact) === previewType)
-    return preview && !hasPersistedPreview ? [...direct, { id: message.id || `artifact-${index}`, messageId: message.id, content: source, preview }] : direct
+    return deliveryArtifacts
+      .filter((artifact) => artifact?.url)
+      .map((artifact) => ({
+        ...artifact,
+        id: artifact.id || `${message.id || index}-${artifact.url}`,
+        messageId: message.id,
+      }))
   }).reverse()
+}
+
+function openArtifactLink(event, onOpenArtifact, artifact) {
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+  if (typeof onOpenArtifact !== 'function') return
+  event.preventDefault()
+  onOpenArtifact({ messageId: artifact.messageId || '', content: '', preview: null, directFile: artifact })
 }
 
 function normalizeBrowserUrl(value) {
@@ -245,21 +245,22 @@ export default function RightWorkbench({
           </div>
           {artifacts.length === 0 ? (
             <div className="flex h-44 flex-col items-center justify-center gap-2 text-ink-fade"><Files className="h-7 w-7 opacity-30" /><span className="text-xs">{t('workbench.noFiles')}</span></div>
-          ) : artifacts.map((artifact) => artifact.direct ? (
+          ) : artifacts.map((artifact) => (
             <div key={artifact.id} className="group flex w-full items-center rounded-md transition-colors hover:bg-ink/5">
-              <button type="button" onClick={() => onOpenArtifact({ messageId: artifact.messageId || '', content: '', preview: null, directFile: artifact })} className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left">
+              <a
+                href={withDownloadToken(artifact.url)}
+                target="_blank"
+                rel="noopener noreferrer"
+                data-testid="workbench-file-open"
+                onClick={(event) => openArtifactLink(event, onOpenArtifact, artifact)}
+                className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left"
+              >
                 <span className="flex h-7 w-7 items-center justify-center rounded bg-ink/5 text-ink-fade"><FileText className="h-3.5 w-3.5" /></span>
                 <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-ink">{artifact.filename || t('workbench.untitledArtifact')}</span><span className="mt-0.5 block truncate text-[11px] uppercase tracking-wide text-ink-fade">{artifact.type || t('workbench.fileType')}</span></span>
                 <ExternalLink className="h-3.5 w-3.5 text-ink-fade" />
-              </button>
+              </a>
               <a href={withDownloadToken(artifact.url)} download={artifact.filename || ''} aria-label={t('chatPreview.download', { filename: artifact.filename || t('workbench.untitledArtifact') })} title={t('chatPreview.download', { filename: artifact.filename || t('workbench.untitledArtifact') })} className="mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded text-ink-fade hover:bg-paper hover:text-ember"><Download className="h-3.5 w-3.5" /></a>
             </div>
-          ) : (
-            <button key={artifact.id} type="button" onClick={() => onOpenArtifact(artifact)} className="group flex w-full items-center gap-2 rounded-md px-2 py-2 text-left transition-colors hover:bg-ink/5">
-              <span className="flex h-7 w-7 items-center justify-center rounded bg-ink/5 text-ink-fade"><FileText className="h-3.5 w-3.5" /></span>
-              <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-ink">{artifact.preview.filename}</span><span className="mt-0.5 block truncate text-[11px] text-ink-fade">{artifact.preview.summary}</span></span>
-              <ExternalLink className="h-3.5 w-3.5 text-ink-fade" />
-            </button>
           ))}
         </section>
       )}

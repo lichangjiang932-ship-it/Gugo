@@ -16,6 +16,24 @@ test('classifies representative built-in and imported skills', () => {
   assert.equal(classifySkill({ id: 'custom', description: 'unrecognized specialist' }), 'general')
 })
 
+test('assigns specialist verification to plugin-style skill metadata', () => {
+  const examples = {
+    security: { name: 'dependency-security-audit' },
+    science: { name: 'ngs-fastq-qc' },
+    finance: { name: 'dcf-valuation' },
+    deployment: { name: 'kubernetes-deployment' },
+    automation: { name: 'parallel-agent-workflow' },
+    evaluation: { name: 'plugin-eval-benchmark' },
+    data: { name: 'analytics-dashboard' },
+    translation: { name: 'localization-review' },
+    communication: { name: 'client-email-brief' },
+  }
+  for (const [category, skill] of Object.entries(examples)) {
+    assert.equal(classifySkill(skill), category, category)
+    assert.match(applySkillQualityContract({ ...skill, systemPrompt: 'Follow the workflow.' }), new RegExp(`### ${category} verification`))
+  }
+})
+
 test('adds an executable, verifiable delivery contract to every skill', () => {
   const prompt = applySkillQualityContract({ id: 'code', systemPrompt: 'Implement the request.' })
   assert.match(prompt, /Implement the request\./)
@@ -46,8 +64,8 @@ test('a bare public marker cannot bypass the complete quality contract', () => {
 
 test('classifies the real built-in catalog from public metadata without prompt contamination', () => {
   const expected = {
-    ppt: 'slides', webpage: 'web', doc: 'document', excel: 'spreadsheet', mail: 'general',
-    finance: 'research', code: 'code', review: 'code', test: 'code', translate: 'general',
+    ppt: 'slides', webpage: 'web', doc: 'document', excel: 'spreadsheet', mail: 'communication',
+    finance: 'finance', code: 'code', review: 'code', test: 'code', translate: 'translation',
     research: 'research', plan: 'planning',
   }
   for (const skill of SKILLS) assert.equal(classifySkill(skill), expected[skill.id], skill.id)

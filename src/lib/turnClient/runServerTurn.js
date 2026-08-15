@@ -75,6 +75,11 @@ export async function runServerTurn({
   let resumeWakeRequested = false
   let activeRequestController = null
   let activeWaitController = null
+  let initialRequestController = null
+  let resolveCancellationStarted = () => {}
+  const cancellationStarted = new Promise((resolve) => {
+    resolveCancellationStarted = resolve
+  })
 
   const notifyConnectionState = async (state) => {
     await onConnectionState?.({ turnId: activeTurnId, ...state })
@@ -133,6 +138,7 @@ export async function runServerTurn({
   const requestCancel = () => {
     if (cancelRequested) return
     cancelRequested = true
+    resolveCancellationStarted()
     activeRequestController?.abort()
     activeWaitController?.abort()
     Promise.resolve(notifyConnectionState({
@@ -176,7 +182,7 @@ export async function runServerTurn({
     return { cause, delivered, turn }
   }
 
-  const tryAcknowledgeCancellation = async () => {
+  const tryAcknowledgeCancellation = async ({ acceptTerminal = true } = {}) => {
     cancelAttempts += 1
     try {
       const turn = await withRequestSignal((requestSignal) => cancelServerTurn({
@@ -193,8 +199,8 @@ export async function runServerTurn({
         confirmed: true,
         attempt: cancelAttempts,
       })
-      await acceptTerminalFromTurn(turn)
-      return null
+      if (acceptTerminal) await acceptTerminalFromTurn(turn)
+      return { turn, error: null }
     } catch (error) {
       await notifyConnectionState({
         status: 'cancelling',
@@ -202,7 +208,7 @@ export async function runServerTurn({
         attempt: cancelAttempts,
         error,
       })
-      return error
+      return { turn: null, error }
     }
   }
 
@@ -227,17 +233,20 @@ export async function runServerTurn({
   signal?.addEventListener('abort', requestCancel, { once: true })
   if (signal?.aborted) requestCancel()
   try {
-    // Do not bind the initial request to the user-stop signal. If the stop is
-    // clicked while the POST is in flight, its outcome is ambiguous; waiting
-    // for the turn idempotency key to be acknowledged lets us cancel safely.
-    const turn = resume
-      ? await resumeServerTurnRequest({
+    // The client already owns the idempotent turn id. Race the initial POST
+    // with a user stop so cancellation can be sent even when /run has not
+    // returned yet. The initial request is only aborted after /cancel is
+    // acknowledged, avoiding an ambiguous create-or-cancel outcome.
+    initialRequestController = new AbortController()
+    const initialRequest = (resume
+      ? resumeServerTurnRequest({
           sessionId,
           turnId: requestedTurnId,
           resolution: resumeResolution,
+          signal: initialRequestController.signal,
           fetchImpl,
         })
-      : await startServerTurn({
+      : startServerTurn({
           sessionId,
           content,
           displayContent,
@@ -250,15 +259,54 @@ export async function runServerTurn({
           skillDefinitions,
           toolsConfig,
           intentMode,
+          signal: initialRequestController.signal,
           fetchImpl,
-        })
+        }))
+      .then(
+        (turn) => ({ kind: 'started', turn }),
+        (error) => ({ kind: 'failed', error }),
+      )
+    let initialOutcome = cancelRequested
+      ? { kind: 'cancel' }
+      : await Promise.race([
+          initialRequest,
+          cancellationStarted.then(() => ({ kind: 'cancel' })),
+        ])
+
+    while (initialOutcome.kind === 'cancel') {
+      const cancellation = await tryAcknowledgeCancellation({ acceptTerminal: false })
+      if (cancellation.turn) {
+        initialRequestController.abort()
+        initialOutcome = { kind: 'started', turn: cancellation.turn }
+        break
+      }
+      const delayMs = reconnectDelayForAttempt(
+        cancelAttempts,
+        cancelRetryDelayMs,
+        cancelRetryMaxDelayMs,
+      )
+      await notifyConnectionState({
+        status: 'cancelling',
+        confirmed: false,
+        attempt: cancelAttempts,
+        delayMs,
+        error: cancellation.error,
+      })
+      const retry = waitForNextAttempt(delayMs).then(() => ({ kind: 'cancel' }))
+      initialOutcome = await Promise.race([initialRequest, retry])
+      if (initialOutcome.kind !== 'cancel') activeWaitController?.abort()
+    }
+
+    if (initialOutcome.kind === 'failed') throw initialOutcome.error
+    const turn = initialOutcome.turn
     activeTurnId = turn.turnId
     await onStarted?.(turn)
     await acceptTerminalFromTurn(turn)
 
     while (!terminal) {
       if (cancelRequested && !cancelAcknowledged) {
-        let cancelCause = await tryAcknowledgeCancellation()
+        const cancellation = await tryAcknowledgeCancellation()
+        let cancelCause = cancellation.error
         if (terminal) continue
         if (!cancelAcknowledged) {
           const observed = await observePersistedTurn(cancelCause)
@@ -377,6 +425,7 @@ export async function runServerTurn({
     }
     return { turnId: activeTurnId, terminal, lastSequence: after, sessionSnapshot }
   } finally {
+    initialRequestController?.abort()
     activeRequestController?.abort()
     activeWaitController?.abort()
     signal?.removeEventListener('abort', requestCancel)

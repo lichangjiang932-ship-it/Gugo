@@ -3,6 +3,7 @@ import { Search, Globe, ChevronDown, CheckCircle2, XCircle, CircleStop, Loader2,
 import { findToolCallArtifacts } from '../lib/toolCallArtifacts.js'
 import { parseToolArgs, summarizeToolArgsEn, toolCallLabelEn } from '../lib/toolCallPresentation.js'
 import { copyTextToClipboard } from '../lib/clipboard.js'
+import { withDownloadToken } from '../lib/jobClient.js'
 import LiveElapsed from './LiveElapsed.jsx'
 
 const ICONS = {
@@ -22,7 +23,19 @@ const FILE_PATH_SUMMARY_TOOLS = new Set(['read_file', 'write_file', 'edit_file']
 const COMMAND_ARTIFACT_TOOLS = new Set(['bash_exec', 'run_command'])
 
 function isManagedArtifact(artifact) {
-  return Boolean(artifact && typeof artifact === 'object' && String(artifact.id || '').trim() && String(artifact.url || '').trim())
+  return Boolean(artifact && typeof artifact === 'object' && String(artifact.id || '').trim() && managedArtifactHref(artifact))
+}
+
+function managedArtifactHref(artifact) {
+  const raw = String(artifact?.url || '').trim()
+  if (!raw) return ''
+  try {
+    const parsed = new URL(raw, 'http://artifact.local')
+    if (parsed.origin !== 'http://artifact.local' || !parsed.pathname.startsWith('/api/artifacts/')) return ''
+    return withDownloadToken(`${parsed.pathname}${parsed.search}${parsed.hash}`)
+  } catch {
+    return ''
+  }
 }
 
 function normalizedFilename(value) {
@@ -49,6 +62,13 @@ function authorizationLabel(authorization) {
   if (!authorization || typeof authorization !== 'object') return ''
   if (authorization.kind === 'standing_rule') return authorization.scope ? `Standing rule: ${authorization.scope}` : 'Standing rule'
   return authorization.kind ? String(authorization.kind) : ''
+}
+
+function openArtifactLink(event, onOpenArtifact, artifact, call) {
+  event.stopPropagation()
+  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+  event.preventDefault()
+  onOpenArtifact(artifact, call)
 }
 
 function DetailSection({ kind, label, value, live = false }) {
@@ -104,7 +124,7 @@ function ToolCallCard({ call, stepNumber, artifacts = [], onOpenArtifact, expand
         <header className="chat-tool-step-header chat-tool-step-header-compact" data-expanded={expanded ? 'true' : 'false'} onClick={() => onToggle?.()}>
           <span className="chat-tool-icon"><Icon aria-hidden="true" /><span className="sr-only">{label}</span></span>
           {summaryCanOpen ? (
-            <button type="button" className="chat-tool-summary chat-tool-summary-button text-left underline decoration-current/30 underline-offset-2 hover:decoration-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/45" title={summary} data-testid="tool-summary-open" onClick={(event) => { event.stopPropagation(); onOpenArtifact(summaryArtifact, call) }}>{summary}</button>
+            <a href={managedArtifactHref(summaryArtifact)} target="_blank" rel="noopener noreferrer" className="chat-tool-summary chat-tool-summary-button text-left underline decoration-current/30 underline-offset-2 hover:decoration-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/45" title={summary} data-testid="tool-summary-open" onClick={(event) => openArtifactLink(event, onOpenArtifact, summaryArtifact, call)}>{summary}</a>
           ) : <span className="chat-tool-summary" title={summary}>{summary}</span>}
           <span className="chat-tool-status"><StatusIcon className={call.status === 'running' ? 'animate-spin' : ''} aria-hidden="true" /><span>{statusText}</span>{call.status === 'running' && <LiveElapsed className="chat-tool-elapsed" />}</span>
           <button type="button" className="chat-tool-step-toggle" data-testid="tool-step-toggle" aria-expanded={expanded} aria-controls={detailsId} aria-label={expanded ? 'Collapse details' : 'Expand details'} onClick={(event) => { event.stopPropagation(); onToggle?.() }}><ChevronDown aria-hidden="true" /></button>
@@ -113,9 +133,9 @@ function ToolCallCard({ call, stepNumber, artifacts = [], onOpenArtifact, expand
         {commandArtifacts.length > 0 && (
           <div className="chat-tool-artifact-links" data-testid="tool-artifact-links">
             {commandArtifacts.map((artifact) => (
-              <button key={artifact.id} type="button" data-testid="tool-artifact-open" className="chat-tool-artifact-link" title={artifact.filename || artifact.title} onClick={(event) => { event.stopPropagation(); onOpenArtifact(artifact, call) }}>
+              <a key={artifact.id} href={managedArtifactHref(artifact)} target="_blank" rel="noopener noreferrer" data-testid="tool-artifact-open" className="chat-tool-artifact-link" title={artifact.filename || artifact.title} onClick={(event) => openArtifactLink(event, onOpenArtifact, artifact, call)}>
                 <FileText aria-hidden="true" /><span className="chat-output-file-name">{artifact.filename || artifact.title}</span>
-              </button>
+              </a>
             ))}
           </div>
         )}
