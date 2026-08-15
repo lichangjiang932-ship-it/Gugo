@@ -20,7 +20,6 @@ test('every preset ships defaults so users only paste an API key', () => {
   for (const preset of [...CLOUD_PRESETS, ...LOCAL_PRESETS]) {
     assert.ok(preset.baseUrl, `${preset.id} has a baseUrl`)
     if (preset.local) continue
-    assert.ok(Number.isFinite(preset.contextWindow) && preset.contextWindow > 0, `${preset.id} has a contextWindow`)
     for (const key of ['supportsTools', 'supportsStreaming', 'supportsVision', 'supportsPdf']) {
       assert.ok(['0', '1'].includes(preset.caps?.[key]), `${preset.id} caps.${key} is 0/1`)
     }
@@ -28,12 +27,21 @@ test('every preset ships defaults so users only paste an API key', () => {
   }
 })
 
-test('mainstream cloud presets default to the real 1M context window', () => {
-  const million = CLOUD_PRESETS.filter((preset) => preset.contextWindow >= 1000000)
-  assert.ok(million.length >= 10, `expected most presets at 1M, got ${million.length}`)
-  for (const id of ['openai', 'anthropic', 'gemini', 'deepseek', 'openrouter', 'qwen', 'siliconflow', 'moonshot', 'zhipu', 'xai']) {
-    assert.ok(million.some((preset) => preset.id === id), `${id} should be 1M`)
+test('cloud presets never impose a provider-wide context window', () => {
+  for (const preset of CLOUD_PRESETS) {
+    assert.equal('contextWindow' in preset, false, `${preset.id} must use exact-model metadata`)
   }
+})
+
+test('Gemini and Moonshot presets use current exact IDs while preserving labeled legacy IDs', () => {
+  const gemini = CLOUD_PRESETS.find((preset) => preset.id === 'gemini')
+  assert.ok(gemini.models.includes('gemini-3.1-pro-preview'))
+  assert.ok(!gemini.models.includes('gemini-3.1-pro'))
+
+  const moonshot = CLOUD_PRESETS.find((preset) => preset.id === 'moonshot')
+  assert.deepEqual(moonshot.models.slice(0, 2), ['kimi-k3', 'kimi-k2.6'])
+  assert.deepEqual(moonshot.legacyModels, ['kimi-k2.5', 'kimi-k2-thinking', 'moonshot-v1-128k'])
+  for (const model of moonshot.legacyModels) assert.ok(moonshot.models.includes(model))
 })
 
 test('formatContextTokens renders compact sizes', () => {

@@ -176,6 +176,7 @@ export async function handleTurnEventRequest(
         history: body.history,
         agentId: body.agentId || null,
         skillIds: body.skillIds,
+        skillDefinitions: body.skillDefinitions,
         toolsConfig: body.toolsConfig,
         intentMode: body.intentMode,
         attachments: body.attachments,

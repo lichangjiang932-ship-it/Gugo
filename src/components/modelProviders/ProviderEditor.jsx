@@ -24,7 +24,7 @@ function PresetPicker({ editing, setEditing, setShowAdvanced, t }) {
       label: current.id ? current.label : presetLabel(preset), baseUrl: preset.baseUrl, kind: preset.kind || '',
       modelsText: preset.models?.join('\n') || current.modelsText, defaultModel: preset.models?.[0] || current.defaultModel,
       isDefault: true,
-      contextWindow: preset.contextWindow != null ? String(preset.contextWindow) : current.contextWindow,
+      contextWindow: preset.contextWindow != null ? String(preset.contextWindow) : '',
       supportsTools: caps.supportsTools ?? current.supportsTools,
       supportsStreaming: caps.supportsStreaming ?? current.supportsStreaming,
       supportsVision: caps.supportsVision ?? current.supportsVision,
@@ -109,7 +109,7 @@ export default function ProviderEditor({ editing, setEditing, busy, detecting, c
           </div>
           {!isLocalPreset && <Field label={`API Key${editing.hasApiKey ? ` · ${t('modelProviders.keepSecret')}` : ''}`}><input type="password" value={editing.apiKey} onChange={(event) => setEditing({ ...editing, apiKey: event.target.value })} placeholder={editing.hasApiKey ? '••••••••' : t('modelProviders.apiKeyPlaceholder')} autoFocus /></Field>}
           {!isLocalPreset && <div className="text-[11px] text-ink-fade">{t('modelProviders.presetFilled')}</div>}
-          {modelList.length > 1 && <Field label={t('modelProviders.defaultModel')}><select value={editing.defaultModel} onChange={(event) => setEditing({ ...editing, defaultModel: event.target.value })}>{modelList.map((model) => <option key={model} value={model}>{model}</option>)}</select></Field>}
+          {modelList.length > 1 && <Field label={t('modelProviders.defaultModel')}><select value={editing.defaultModel} onChange={(event) => setEditing({ ...editing, defaultModel: event.target.value })}>{modelList.map((model) => <option key={model} value={model}>{model}{selectedPreset?.legacyModels?.includes(model) ? ' · legacy' : ''}</option>)}</select></Field>}
           {isLocalPreset && <div className="text-xs text-ink-fade">{t('modelProviders.localDetectHint')}</div>}
         </div>}
         <button type="button" onClick={() => setShowAdvanced((value) => !value)} className="flex items-center gap-2 text-xs text-ink-soft hover:text-ink self-start"><ChevronDown className={`h-4 w-4 transition-transform ${showAdvanced ? 'rotate-180' : ''}`} />{t('modelProviders.advanced')}</button>

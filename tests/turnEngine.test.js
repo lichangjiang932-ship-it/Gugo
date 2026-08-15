@@ -19,6 +19,11 @@ const { createCompactionArchive } = await import('../server/services/compactionS
 const { prepareTurnPromptContext } = await import('../server/services/turnPromptContext.js')
 const { appendTurnEvent, listTurnEvents } = await import('../server/services/turnEventStore.js')
 const { createTurnEvent } = await import('../shared/turnEvents.js')
+const {
+  INLINE_SKILL_DEFINITION_LIMITS,
+  unicodeCharacterLength,
+  utf8ByteLength,
+} = await import('../shared/inlineSkillDefinitions.js')
 
 const userId = 'turn-engine-user'
 createUser({ id: userId, email: 'turn-engine@example.com' })
@@ -537,6 +542,13 @@ test('TurnEngine persists and applies agent, skill, memory, and tools context', 
     modelName: 'context-model',
     agentId: ' agent-input ',
     skillIds: [' skill-review ', 'skill-review'],
+    skillDefinitions: [{
+      id: 'skill-review',
+      name: 'Local review',
+      description: 'A local review workflow.',
+      permissions: ['read'],
+      systemPrompt: 'Use the local review instructions.',
+    }],
     toolsConfig: { enabled: ['read_file'], disabled: ['bash_exec'] },
     intentMode: 'execute',
   })
@@ -545,10 +557,14 @@ test('TurnEngine persists and applies agent, skill, memory, and tools context', 
   const started = events('turn-context').find((event) => event.type === 'turn.started')
   assert.equal(started.payload.agentId, 'agent-input')
   assert.deepEqual(started.payload.skillIds, ['skill-review'])
+  assert.equal(started.payload.skillDefinitions[0].id, 'skill-review')
+  assert.match(started.payload.skillDefinitions[0].systemPrompt, /gugo-skill-quality:v1/)
   assert.deepEqual(started.payload.toolsConfig, { enabled: ['read_file'], disabled: ['bash_exec'] })
   assert.equal(started.payload.intentMode, 'execute')
   assert.equal(promptRequest.agentId, 'agent-input')
   assert.deepEqual(promptRequest.skillIds, ['skill-review'])
+  assert.equal(promptRequest.skillDefinitions[0].id, 'skill-review')
+  assert.match(promptRequest.skillDefinitions[0].systemPrompt, /Use the local review instructions\./)
   assert.equal(promptRequest.query, 'use memory and review skill')
   assert.equal(promptRequest.includeRecentTranscript, false)
   assert.deepEqual(toolRequest.toolsConfig, { enabled: ['read_file'], disabled: ['bash_exec'] })
@@ -562,6 +578,46 @@ test('TurnEngine persists and applies agent, skill, memory, and tools context', 
   assert.equal(loopOptions.intentMode, 'execute')
   assert.equal(contextWindowRequest.userId, userId)
   assert.equal(contextWindowRequest.modelName, 'context-model')
+})
+
+test('TurnEngine sanitizes oversized inline skill fields before persisting turn.started', async () => {
+  const turnId = 'turn-inline-skill-bounds'
+  const limits = INLINE_SKILL_DEFINITION_LIMITS
+  const engine = createTestEngine({
+    runLoop: async () => ({ text: 'bounded inline skill', artifactIds: [], iterations: 0 }),
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'run the bounded skill',
+    skillIds: ['bounded-local-skill'],
+    skillDefinitions: [{
+      id: 'bounded-local-skill',
+      name: 'N'.repeat(limits.name.maxCharacters + 400),
+      description: '说明🙂'.repeat(limits.description.maxCharacters + 100),
+      permissions: Array.from({ length: limits.maxPermissions + 10 }, (_, index) => (
+        `permission-${index}-` + 'x'.repeat(limits.permission.maxCharacters + 100)
+      )),
+      systemPrompt: '执行并验证🙂'.repeat(limits.systemPrompt.maxUtf8Bytes),
+    }],
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const definition = events(turnId).find((event) => event.type === 'turn.started')?.payload.skillDefinitions?.[0]
+  assert.ok(definition)
+  assert.ok(unicodeCharacterLength(definition.name) <= limits.name.maxCharacters)
+  assert.ok(utf8ByteLength(definition.name) <= limits.name.maxUtf8Bytes)
+  assert.ok(unicodeCharacterLength(definition.description) <= limits.description.maxCharacters)
+  assert.ok(utf8ByteLength(definition.description) <= limits.description.maxUtf8Bytes)
+  assert.equal(definition.permissions.length, limits.maxPermissions)
+  assert.ok(definition.permissions.every((permission) => (
+    unicodeCharacterLength(permission) <= limits.permission.maxCharacters
+      && utf8ByteLength(permission) <= limits.permission.maxUtf8Bytes
+  )))
+  assert.ok(utf8ByteLength(definition.systemPrompt) <= limits.systemPrompt.maxUtf8Bytes)
+  assert.match(definition.systemPrompt, /gugo-skill-quality:v1/)
 })
 
 test('TurnEngine forwards the preceding user display text for continuation routing', async () => {
@@ -876,7 +932,7 @@ test('TurnEngine injects an ordinary clarification answer once when resuming', a
   assert.equal(events(turnId).at(-1).type, 'turn.completed')
 })
 
-test('TurnEngine restores persisted prompt and tool context on resume', async () => {
+test('TurnEngine restores a persisted inline skill into prompt preparation after restart', async () => {
   const turnId = 'turn-context-resume'
   appendTurnEvent({
     userId,
@@ -890,6 +946,13 @@ test('TurnEngine restores persisted prompt and tool context on resume', async ()
         content: 'resume context',
         agentId: 'agent-resume',
         skillIds: ['skill-resume'],
+        skillDefinitions: [{
+          id: 'skill-resume',
+          name: 'Persisted local skill',
+          description: 'Survives process restart.',
+          permissions: ['read'],
+          systemPrompt: 'Use the persisted local workflow.',
+        }],
         toolsConfig: { enabled: [], disabled: ['bash_exec'] },
         intentMode: 'answer',
       },
@@ -919,6 +982,8 @@ test('TurnEngine restores persisted prompt and tool context on resume', async ()
 
   assert.equal(promptRequest.agentId, 'agent-resume')
   assert.deepEqual(promptRequest.skillIds, ['skill-resume'])
+  assert.equal(promptRequest.skillDefinitions[0].id, 'skill-resume')
+  assert.match(promptRequest.skillDefinitions[0].systemPrompt, /Use the persisted local workflow\./)
   assert.deepEqual(toolRequest.toolsConfig, { enabled: [], disabled: ['bash_exec'] })
   assert.equal(loopOptions.skillId, 'skill-resume')
   assert.equal(loopOptions.job.agentId, 'agent-resume')

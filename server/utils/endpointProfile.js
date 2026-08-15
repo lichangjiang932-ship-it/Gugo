@@ -1,3 +1,5 @@
+import { getOfficialModelProfile } from '../../shared/modelCapabilityCatalog.js'
+
 /**
  * 端点能力画像 —— 「这个模型端点是什么、能干什么、该给它多少耐心」。
  *
@@ -320,15 +322,28 @@ export function resolveEndpointProfile({
     overrides: safeOverrides,
     modelProfiles,
   }) || {}
+  const officialModelProfile = getOfficialModelProfile(selectedModel) || {}
   const effectiveOverrides = { ...safeOverrides, ...selectedModelProfile }
 
   // ---- 上下文窗口 ----
   let contextWindow = positiveInt(selectedModelProfile.contextWindow)
-  let contextWindowSource = contextWindow ? 'model_profile' : ''
+  let contextWindowSource = contextWindow
+    ? (String(selectedModelProfile.source || '').trim() || 'model_profile')
+    : ''
+  let contextWindowSourceUrl = contextWindow ? String(selectedModelProfile.sourceUrl || '').trim() : ''
+  let contextWindowVerifiedAt = contextWindow ? String(selectedModelProfile.verifiedAt || '').trim() : ''
   if (!contextWindow) {
     const perModel = parseContextWindowMap(safeEnv.MODEL_CONTEXT_WINDOWS)[selectedModel]
     contextWindow = positiveInt(perModel)
     if (contextWindow) contextWindowSource = 'model_context_windows'
+  }
+  if (!contextWindow) {
+    contextWindow = positiveInt(officialModelProfile.contextWindow)
+    if (contextWindow) {
+      contextWindowSource = 'official_catalog'
+      contextWindowSourceUrl = officialModelProfile.sourceUrl
+      contextWindowVerifiedAt = officialModelProfile.verifiedAt
+    }
   }
   if (!contextWindow) {
     contextWindow = positiveInt(safeOverrides.contextWindow)
@@ -343,6 +358,9 @@ export function resolveEndpointProfile({
     contextWindowSource = isLocal ? 'local_default' : 'cloud_default'
   }
   contextWindow = Math.max(MIN_CONTEXT_WINDOW, contextWindow)
+  const contextWindowEstimated = contextWindowSource === 'local_default' || contextWindowSource === 'cloud_default'
+  const maxOutputTokens = positiveInt(selectedModelProfile.maxOutputTokens)
+    || positiveInt(officialModelProfile.maxOutputTokens)
 
   // ---- 能力 ----
   // env 白名单(MODEL_NAMES_TOOLS / MODEL_NAMES_VISION)一旦设置就是精确名单:
@@ -403,6 +421,10 @@ export function resolveEndpointProfile({
     timeouts: resolveTimeouts({ isLocal, env: safeEnv, overrides: effectiveOverrides }),
     contextWindow,
     contextWindowSource,
+    contextWindowEstimated,
+    contextWindowSourceUrl: contextWindowSourceUrl || null,
+    contextWindowVerifiedAt: contextWindowVerifiedAt || null,
+    maxOutputTokens,
     supportsTools,
     supportsStreaming,
     supportsVision,

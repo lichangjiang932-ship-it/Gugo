@@ -123,6 +123,7 @@ test('clicking a managed file summary returns the exact artifact and call', asyn
     status: 'success',
   }
   let opened = null
+  let toggleCount = 0
 
   try {
     await act(async () => root.render(
@@ -134,6 +135,7 @@ test('clicking a managed file summary returns the exact artifact and call', asyn
           onOpenArtifact={(selectedArtifact, selectedCall) => {
             opened = { artifact: selectedArtifact, call: selectedCall }
           }}
+          onToggle={() => { toggleCount += 1 }}
         />
       </I18nProvider>,
     ))
@@ -145,6 +147,7 @@ test('clicking a managed file summary returns the exact artifact and call', asyn
     assert.equal(opened.artifact.id, artifact.id)
     assert.equal(opened.artifact.toolCallId, call.id)
     assert.equal(opened.call, call)
+    assert.equal(toggleCount, 0)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
@@ -191,7 +194,7 @@ test('command artifacts open by their persisted filenames without turning the co
   }
 })
 
-test('failed command keeps arguments and result in independent disclosures', async () => {
+test('failed command keeps arguments and result in one expanded card whose copy control does not collapse it', async () => {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
     url: 'http://localhost/chat',
   })
@@ -204,6 +207,16 @@ test('failed command keeps arguments and result in independent disclosures', asy
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
+  const copied = []
+  let toggleCount = 0
+  Object.defineProperty(dom.window.navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText: async (value) => copied.push(value) },
+  })
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: dom.window.navigator,
+  })
 
   try {
     await act(async () => root.render(
@@ -219,30 +232,39 @@ test('failed command keeps arguments and result in independent disclosures', asy
             exitCode: 2,
             stderr: 'SyntaxError: invalid syntax',
           }),
-        }} stepNumber={2} />
+        }} stepNumber={2} expanded onToggle={() => { toggleCount += 1 }} />
       </I18nProvider>,
     ))
 
-    const disclosures = rootElement.querySelectorAll('details')
-    assert.equal(disclosures.length, 2)
-    assert.equal(disclosures.item(0).open, false)
-    assert.equal(disclosures.item(1).open, false)
-    assert.match(disclosures.item(0).querySelector('summary').textContent, /Arguments/)
-    assert.match(disclosures.item(1).querySelector('summary').textContent, /Error/)
+    const detailCard = rootElement.querySelector('[data-testid="tool-step-details"]')
+    assert.ok(detailCard)
+    assert.equal(rootElement.querySelectorAll('details').length, 0)
+    assert.match(detailCard.textContent, /Arguments/)
+    assert.match(detailCard.textContent, /Error/)
     assert.equal(rootElement.querySelector('.chat-tool-step-marker').textContent, '2')
 
-    const resultDetails = disclosures.item(1).querySelector('pre')?.textContent || ''
+    const resultDetails = detailCard.querySelector('[data-testid="tool-detail-result"] pre')?.textContent || ''
     assert.match(resultDetails, /COMMAND_FAILED/)
     assert.match(resultDetails, /"exitCode": 2/)
     assert.match(resultDetails, /SyntaxError: invalid syntax/)
+
+    const copyButton = detailCard.querySelector('[data-testid="tool-detail-copy-result"]')
+    assert.ok(copyButton)
+    await act(async () => {
+      copyButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      await Promise.resolve()
+    })
+    assert.equal(toggleCount, 0)
+    assert.equal(copied.length, 1)
+    assert.match(copied[0], /COMMAND_FAILED/)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
   }
 })
 
-test('running command keeps full output collapsed and shows the latest line', () => {
-  const markup = renderToStaticMarkup(
+test('running command keeps full output inside the controlled detail card', () => {
+  const collapsedMarkup = renderToStaticMarkup(
     <I18nProvider>
       <ToolCallCard call={{
         name: 'bash_exec',
@@ -252,13 +274,21 @@ test('running command keeps full output collapsed and shows the latest line', ()
       }} stepNumber={1} />
     </I18nProvider>,
   )
-  assert.match(markup, /data-testid="tool-live-output-tail"[^>]*>42 tests passed</)
-  const liveTailTag = markup.match(/<span class="chat-tool-live-tail"[^>]*>/)?.[0]
-  assert.ok(liveTailTag)
-  assert.doesNotMatch(liveTailTag, /\brole=/)
-  assert.doesNotMatch(liveTailTag, /\baria-live=/)
-  assert.doesNotMatch(liveTailTag, /\baria-atomic=/)
-  assert.match(markup, /<details class="chat-tool-live-details">/)
-  assert.doesNotMatch(markup, /<details class="chat-tool-live-details" open/)
-  assert.match(markup, /data-testid="tool-live-output"/)
+  assert.doesNotMatch(collapsedMarkup, /data-testid="tool-step-details"/)
+  assert.doesNotMatch(collapsedMarkup, /42 tests passed/)
+
+  const expandedMarkup = renderToStaticMarkup(
+    <I18nProvider>
+      <ToolCallCard call={{
+        name: 'bash_exec',
+        arguments: JSON.stringify({ command: 'npm test' }),
+        status: 'running',
+        liveOutput: 'starting suite\nPASS activity stream\n42 tests passed',
+      }} stepNumber={1} expanded />
+    </I18nProvider>,
+  )
+  assert.match(expandedMarkup, /data-testid="tool-step-details"/)
+  assert.match(expandedMarkup, /data-testid="tool-live-output"/)
+  assert.match(expandedMarkup, /42 tests passed/)
+  assert.doesNotMatch(expandedMarkup, /<details/)
 })

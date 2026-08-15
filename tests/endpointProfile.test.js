@@ -176,6 +176,57 @@ test('模型画像只做精确匹配,并兼容顶层 modelProfiles', () => {
   assert.equal(compatible.contextWindowSource, 'model_profile')
 })
 
+test('官方目录只补精确模型，并低于实时画像与用户逐模型覆盖', () => {
+  const catalog = resolveEndpointProfile({
+    baseUrl: 'https://api.openai.com/v1',
+    modelName: 'gpt-5.6-sol',
+    env: { MODEL_CONTEXT_WINDOW: '64000' },
+    overrides: { contextWindow: 32_000 },
+  })
+  assert.equal(catalog.contextWindow, 1_050_000)
+  assert.equal(catalog.contextWindowSource, 'official_catalog')
+  assert.equal(catalog.contextWindowEstimated, false)
+  assert.equal(catalog.maxOutputTokens, 128_000)
+  assert.equal(catalog.contextWindowVerifiedAt, '2026-08-15')
+  assert.match(catalog.contextWindowSourceUrl, /platform\.openai\.com/)
+
+  const userExact = resolveEndpointProfile({
+    baseUrl: 'https://api.openai.com/v1',
+    modelName: 'gpt-5.6-sol',
+    env: { MODEL_CONTEXT_WINDOWS: '{"gpt-5.6-sol":900000}' },
+  })
+  assert.equal(userExact.contextWindow, 900_000)
+  assert.equal(userExact.contextWindowSource, 'model_context_windows')
+
+  const live = resolveEndpointProfile({
+    baseUrl: 'https://api.openai.com/v1',
+    modelName: 'gpt-5.6-sol',
+    env: { MODEL_CONTEXT_WINDOWS: '{"gpt-5.6-sol":900000}' },
+    modelProfiles: {
+      'gpt-5.6-sol': {
+        contextWindow: 880_000,
+        maxOutputTokens: 96_000,
+        source: 'models-endpoint',
+      },
+    },
+  })
+  assert.equal(live.contextWindow, 880_000)
+  assert.equal(live.contextWindowSource, 'models-endpoint')
+  assert.equal(live.maxOutputTokens, 96_000)
+})
+
+test('未知云模型继续保守回退，并明确标为估算值', () => {
+  const unknown = resolveEndpointProfile({
+    baseUrl: 'https://api.example.com/v1',
+    modelName: 'gpt-5.6-sol-latest',
+    env: {},
+  })
+  assert.equal(unknown.contextWindow, DEFAULT_CLOUD_CONTEXT_WINDOW)
+  assert.equal(unknown.contextWindowSource, 'cloud_default')
+  assert.equal(unknown.contextWindowEstimated, true)
+  assert.equal(unknown.maxOutputTokens, null)
+})
+
 test('上下文窗口接受小于 4096 的真实小窗口(原来被硬下限顶掉)', () => {
   const profile = resolveEndpointProfile({
     baseUrl: 'http://localhost:8080/v1',

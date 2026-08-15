@@ -4,6 +4,7 @@ import {
   buildIshikiBlock,
   buildSessionsBlock,
   buildSkillsBlockFromPrepared,
+  prepareInlineSkillsForPrompt,
   prepareSkillsForPrompt,
 } from './promptCompiler.js'
 import { prepareMemoryInjectionContext } from './memoryContextService.js'
@@ -75,6 +76,7 @@ export function prepareTurnPromptContext({
   userId,
   agentId = null,
   skillIds = [],
+  skillDefinitions = [],
   sessionId = null,
   recentMessages = [],
   includeRecentTranscript = true,
@@ -96,9 +98,15 @@ export function prepareTurnPromptContext({
     ), warn)
   }
   const effectiveAgentId = agent?.id || (agentId ? String(agentId) : null)
-  const preparedSkills = safeStep('skill context failed', [], () => (
+  const registeredSkills = safeStep('skill context failed', [], () => (
     prepareSkills({ userId, skillIds: normalizedSkillIds })
   ), warn)
+  const inlineSkills = safeStep('inline skill context failed', [], () => (
+    prepareInlineSkillsForPrompt({ skillIds: normalizedSkillIds, skillDefinitions })
+  ), warn)
+  const preparedById = new Map(inlineSkills.map((skill) => [String(skill.id), skill]))
+  for (const skill of registeredSkills) preparedById.set(String(skill.id), skill)
+  const preparedSkills = normalizedSkillIds.map((id) => preparedById.get(id)).filter(Boolean)
 
   const blocks = []
   const instructions = safeStep('workspace instructions failed', null, () => readInstructions({ env }), warn)

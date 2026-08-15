@@ -16,6 +16,7 @@ export function useSkillsMarket({ lang, t, toast, onUseSkill }) {
   const [activeFilter, setActiveFilter] = useState(FILTER_RECOMMENDED)
   const [customSkills, setCustomSkills] = useState(() => listLocalSkills())
   const [runtimeSkills, setRuntimeSkills] = useState(SKILLS)
+  const [catalogFallback, setCatalogFallback] = useState(false)
   const [selectedSkill, setSelectedSkill] = useState(null)
   const [customModal, setCustomModal] = useState(false)
   const [draft, setDraft] = useState(EMPTY_DRAFT)
@@ -36,9 +37,19 @@ export function useSkillsMarket({ lang, t, toast, onUseSkill }) {
   useEffect(() => {
     let active = true
     listSkills().then(({ skills }) => {
-      if (active && Array.isArray(skills) && skills.length) setRuntimeSkills(skills)
+      if (!active) return
+      if (Array.isArray(skills) && skills.length) {
+        setRuntimeSkills(skills)
+        setCatalogFallback(false)
+      } else {
+        setRuntimeSkills(SKILLS)
+        setCatalogFallback(true)
+      }
     }).catch(() => {
-      if (active) setRuntimeSkills(SKILLS)
+      if (active) {
+        setRuntimeSkills(SKILLS)
+        setCatalogFallback(true)
+      }
     })
     return () => { active = false }
   }, [])
@@ -144,6 +155,7 @@ export function useSkillsMarket({ lang, t, toast, onUseSkill }) {
       await importSkillPack(importState.files)
       const { skills } = await listSkills()
       setRuntimeSkills(skills)
+      setCatalogFallback(false)
       closeImport()
     } catch (error) {
       setImportState((current) => ({ ...current, error: error.message, busy: false }))
@@ -163,7 +175,10 @@ export function useSkillsMarket({ lang, t, toast, onUseSkill }) {
       const response = await importSkillFromGithubUrl(githubState.url.trim())
       if (!response?.skill) throw new Error(response?.error || t('skillsMarket.installFailed'))
       const { skills } = await listSkills().catch(() => ({ skills: null }))
-      if (Array.isArray(skills)) setRuntimeSkills(skills)
+      if (Array.isArray(skills)) {
+        setRuntimeSkills(skills)
+        setCatalogFallback(false)
+      }
       setGithubState((current) => ({ ...current, url: '', busy: false, success: { name: response.skill.name || response.skill.id, source: response.source, repo: response.repo } }))
     } catch (error) {
       setGithubState((current) => ({ ...current, busy: false, error: error.message || t('skillsMarket.installFailed') }))
@@ -186,7 +201,10 @@ export function useSkillsMarket({ lang, t, toast, onUseSkill }) {
       const response = await installPluginAsSkillApi(pluginId)
       if (!response?.ok || !response.skill) throw new Error(response?.error || t('skillsMarket.installFailed'))
       const { skills } = await listSkills().catch(() => ({ skills: null }))
-      if (Array.isArray(skills) && skills.length) setRuntimeSkills(skills)
+      if (Array.isArray(skills) && skills.length) {
+        setRuntimeSkills(skills)
+        setCatalogFallback(false)
+      }
       setPluginState((current) => ({ ...current, open: false, installingId: null }))
     } catch (error) {
       setPluginState((current) => ({ ...current, error: error.message || t('skillsMarket.installFailed'), installingId: null }))
@@ -195,7 +213,7 @@ export function useSkillsMarket({ lang, t, toast, onUseSkill }) {
   }
 
   return {
-    query, setQuery, activeFilter, setActiveFilter, filterDefs, filteredSkills, selectedSkill, setSelectedSkill,
+    query, setQuery, activeFilter, setActiveFilter, filterDefs, filteredSkills, catalogFallback, selectedSkill, setSelectedSkill,
     searchRef, folderInputRef, customModal, setCustomModal, draft, setDraft, draftError, setDraftError,
     importState, githubState, setGithubState, pluginState, setPluginState,
     openCustomModal, saveCustomSkill, deleteCustomSkill, selectFolder, closeImport, confirmImport,

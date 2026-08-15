@@ -1,4 +1,9 @@
 import { z } from 'zod'
+import {
+  INLINE_SKILL_DEFINITION_LIMITS,
+  unicodeCharacterLength,
+  utf8ByteLength,
+} from './inlineSkillDefinitions.js'
 
 export const TURN_EVENT_TYPES = Object.freeze([
   'turn.started', 'turn.attempt', 'model.phase', 'model.failover', 'assistant.delta', 'reasoning.delta',
@@ -40,6 +45,31 @@ const completedArtifactSchema = z.object({
   title: z.string().optional(),
   mimeType: z.string().min(1).optional(),
 }).strict()
+function inlineSkillTextSchema({ maxCharacters = null, maxUtf8Bytes = null, minCharacters = 0 } = {}) {
+  return z.string().superRefine((value, context) => {
+    const characterLength = unicodeCharacterLength(value)
+    if (characterLength < minCharacters) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: `must contain at least ${minCharacters} Unicode character(s)` })
+    }
+    if (maxCharacters !== null && characterLength > maxCharacters) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: `must contain at most ${maxCharacters} Unicode characters` })
+    }
+    const byteLength = utf8ByteLength(value)
+    if (maxUtf8Bytes !== null && byteLength > maxUtf8Bytes) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: `must contain at most ${maxUtf8Bytes} UTF-8 bytes` })
+    }
+  })
+}
+
+const inlineSkillLimits = INLINE_SKILL_DEFINITION_LIMITS
+const inlineSkillDefinitionSchema = z.object({
+  id: inlineSkillTextSchema({ ...inlineSkillLimits.id, minCharacters: 1 }),
+  name: inlineSkillTextSchema(inlineSkillLimits.name),
+  description: inlineSkillTextSchema(inlineSkillLimits.description),
+  permissions: z.array(inlineSkillTextSchema(inlineSkillLimits.permission)).max(inlineSkillLimits.maxPermissions),
+  systemPrompt: inlineSkillTextSchema({ ...inlineSkillLimits.systemPrompt, minCharacters: 1 }),
+  promptTruncated: z.boolean().optional(),
+}).strict()
 const turnResolutionSchema = z.object({
   type: z.string().min(1).optional(),
   approved: z.boolean().optional(),
@@ -65,6 +95,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     content: z.string().optional(), displayContent: nullableText, modelName: nullableText,
     model: z.string().optional(),
     agentId: nullableText, skillIds: z.array(z.string()).optional(),
+    skillDefinitions: z.array(inlineSkillDefinitionSchema).max(inlineSkillLimits.maxDefinitions).optional(),
     toolsConfig: z.object({
       enabled: z.array(z.string()).optional(),
       disabled: z.array(z.string()).optional(),

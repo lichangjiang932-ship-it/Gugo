@@ -11,6 +11,38 @@ import SlashInlinePanelHost from './SlashInlinePanelHost.jsx'
 import ContextUsagePanel from './chatMessages/ContextUsagePanel.jsx'
 import { estimateClientContextUsage } from '../../lib/contextUsage.js'
 
+export function ChatRightPanels({
+  workbenchOpen,
+  messages,
+  workbenchTab,
+  onWorkbenchTabChange,
+  onCloseWorkbench,
+  onOpenArtifact,
+  onWorkbenchSend,
+  isGenerating,
+  workbenchMessage,
+  previewArtifact,
+  onClosePreview,
+  onPreviewMessage,
+}) {
+  if (previewArtifact) {
+    return <RightPreviewPane artifact={previewArtifact} onClose={onClosePreview} onMessage={onPreviewMessage} />
+  }
+  if (!workbenchOpen) return null
+  return (
+    <RightWorkbench
+      messages={messages}
+      activeTab={workbenchTab}
+      onTabChange={onWorkbenchTabChange}
+      onClose={onCloseWorkbench}
+      onOpenArtifact={onOpenArtifact}
+      onSendMessage={onWorkbenchSend}
+      isGenerating={isGenerating}
+      statusMessage={workbenchMessage}
+    />
+  )
+}
+
 export default function ChatSplitView({
   activeSession,
   activeSessionId,
@@ -224,18 +256,20 @@ export default function ChatSplitView({
         />
       </div>
 
-      {workbenchOpen && (
-        <RightWorkbench
-          messages={messages}
-          activeTab={workbenchTab}
-          onTabChange={onWorkbenchTabChange}
-          onClose={onCloseWorkbench}
-          onOpenArtifact={onOpenArtifact}
-          onSendMessage={onWorkbenchSend}
-          isGenerating={isGenerating}
-          statusMessage={workbenchMessage}
-        />
-      )}
+      <ChatRightPanels
+        workbenchOpen={workbenchOpen}
+        messages={messages}
+        workbenchTab={workbenchTab}
+        onWorkbenchTabChange={onWorkbenchTabChange}
+        onCloseWorkbench={onCloseWorkbench}
+        onOpenArtifact={onOpenArtifact}
+        onWorkbenchSend={onWorkbenchSend}
+        isGenerating={isGenerating}
+        workbenchMessage={workbenchMessage}
+        previewArtifact={previewArtifact}
+        onClosePreview={onClosePreview}
+        onPreviewMessage={onPreviewMessage}
+      />
 
       {desktopPetVisible && !window.gugoDesktop?.isDesktop && (
         <DesktopPet
@@ -246,10 +280,6 @@ export default function ChatSplitView({
           toolApproval={toolApproval}
         />
       )}
-
-      {previewArtifact ? (
-        <RightPreviewPane artifact={previewArtifact} onClose={onClosePreview} onMessage={onPreviewMessage} />
-      ) : null}
 
     </div>
   )

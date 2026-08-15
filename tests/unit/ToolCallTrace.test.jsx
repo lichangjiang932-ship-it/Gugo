@@ -109,3 +109,64 @@ test('ToolCallTrace keeps the latest four steps visible and can reveal older his
     dom.window.close()
   }
 })
+
+test('ToolCallTrace opens one stable inline detail card and preserves it across live updates', async () => {
+  const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
+    url: 'http://localhost/chat',
+  })
+  globalThis.window = dom.window
+  globalThis.document = dom.window.document
+  globalThis.HTMLElement = dom.window.HTMLElement
+  globalThis.SVGElement = dom.window.SVGElement
+  globalThis.MouseEvent = dom.window.MouseEvent
+  globalThis.localStorage = dom.window.localStorage
+  globalThis.IS_REACT_ACT_ENVIRONMENT = true
+  dom.window.matchMedia = () => ({
+    matches: false,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  })
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const calls = [
+    { id: 'read-stable', name: 'read_file', arguments: '{"path":"D:/work/a.js"}', status: 'success', result: 'alpha' },
+    { id: 'command-stable', name: 'bash_exec', arguments: '{"command":"npm test"}', status: 'running', liveOutput: 'starting' },
+  ]
+
+  try {
+    await act(async () => root.render(
+      <I18nProvider><ToolCallTrace calls={calls} /></I18nProvider>,
+    ))
+
+    let toggles = [...rootElement.querySelectorAll('[data-testid="tool-step-toggle"]')]
+    assert.deepEqual(toggles.map((toggle) => toggle.getAttribute('aria-expanded')), ['false', 'false'])
+    assert.equal(rootElement.querySelectorAll('[data-testid="tool-step-details"]').length, 0)
+
+    await act(async () => toggles[0].dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    toggles = [...rootElement.querySelectorAll('[data-testid="tool-step-toggle"]')]
+    assert.deepEqual(toggles.map((toggle) => toggle.getAttribute('aria-expanded')), ['true', 'false'])
+    assert.equal(rootElement.querySelectorAll('[data-testid="tool-step-details"]').length, 1)
+    assert.match(rootElement.querySelector('[data-testid="tool-step-details"]').textContent, /alpha/)
+
+    await act(async () => toggles[1].dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    toggles = [...rootElement.querySelectorAll('[data-testid="tool-step-toggle"]')]
+    assert.deepEqual(toggles.map((toggle) => toggle.getAttribute('aria-expanded')), ['false', 'true'])
+    assert.equal(rootElement.querySelectorAll('[data-testid="tool-step-details"]').length, 1)
+
+    await act(async () => root.render(
+      <I18nProvider>
+        <ToolCallTrace calls={calls.map((call) => (
+          call.id === 'command-stable'
+            ? { ...call, liveOutput: 'starting\n42 tests passed' }
+            : { ...call }
+        ))} />
+      </I18nProvider>,
+    ))
+    toggles = [...rootElement.querySelectorAll('[data-testid="tool-step-toggle"]')]
+    assert.equal(toggles[1].getAttribute('aria-expanded'), 'true')
+    assert.match(rootElement.querySelector('[data-testid="tool-step-details"]').textContent, /42 tests passed/)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})

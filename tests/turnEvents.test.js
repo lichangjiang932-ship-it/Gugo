@@ -9,12 +9,47 @@ import {
   parseTurnActivity,
   parseTurnEvent,
 } from '../shared/turnEvents.js'
+import { INLINE_SKILL_DEFINITION_LIMITS } from '../shared/inlineSkillDefinitions.js'
 
 test('turn event protocol accepts known events and rejects protocol drift', () => {
-  const event = createTurnEvent({ id: 'e1', sessionId: 's1', turnId: 't1', sequence: 0, type: 'turn.started', payload: { model: 'test' }, createdAt: 1 })
+  const event = createTurnEvent({
+    id: 'e1', sessionId: 's1', turnId: 't1', sequence: 0, type: 'turn.started', createdAt: 1,
+    payload: {
+      model: 'test',
+      skillIds: ['local-writer'],
+      skillDefinitions: [{
+        id: 'local-writer',
+        name: 'Local writer',
+        description: 'Custom workflow',
+        permissions: ['read'],
+        systemPrompt: 'Use the custom workflow.',
+      }],
+    },
+  })
   assert.equal(event.type, 'turn.started')
+  assert.equal(event.payload.skillDefinitions[0].id, 'local-writer')
   assert.throws(() => parseTurnEvent({ ...event, type: 'text' }))
   assert.throws(() => parseTurnEvent({ ...event, sequence: -1 }))
+})
+
+test('turn.started enforces inline prompts by UTF-8 bytes, not JavaScript string length', () => {
+  const maxBytes = INLINE_SKILL_DEFINITION_LIMITS.systemPrompt.maxUtf8Bytes
+  assert.throws(() => createTurnEvent({
+    id: 'inline-byte-overflow', sessionId: 's1', turnId: 't1', sequence: 0,
+    type: 'turn.started', createdAt: 1,
+    payload: {
+      skillIds: ['local-writer'],
+      skillDefinitions: [{
+        id: 'local-writer',
+        name: 'Local writer',
+        description: '',
+        permissions: [],
+        // Fewer JavaScript characters than the old limit, but three UTF-8
+        // bytes per character make this payload exceed the durable budget.
+        systemPrompt: '技'.repeat(Math.floor(maxBytes / 3) + 1),
+      }],
+    },
+  }))
 })
 
 test('model tool readiness is a strict non-durable activity', () => {

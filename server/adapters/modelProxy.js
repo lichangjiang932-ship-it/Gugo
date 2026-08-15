@@ -376,6 +376,10 @@ export function getModelStatus(env = process.env) {
     const activeModel = models.find((model) => model.active) || models[0]
     status.contextWindow = activeModel.contextWindow
     status.contextWindowSource = activeModel.contextWindowSource
+    status.contextWindowEstimated = activeModel.contextWindowEstimated
+    if (activeModel.contextWindowSourceUrl) status.contextWindowSourceUrl = activeModel.contextWindowSourceUrl
+    if (activeModel.contextWindowVerifiedAt) status.contextWindowVerifiedAt = activeModel.contextWindowVerifiedAt
+    if (activeModel.maxOutputTokens) status.maxOutputTokens = activeModel.maxOutputTokens
   }
   return status
 }
