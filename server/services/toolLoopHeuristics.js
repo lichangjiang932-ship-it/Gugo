@@ -1423,12 +1423,17 @@ function successfulReadFileInMessages(messages = []) {
 /**
  * 执行单个工具调用 → 落盘 artifact → appendJobArtifact → 返回给模型的简短结果。
  */
-export function buildSubagentRequest(args = {}, inheritedModelName = '') {
+export function buildSubagentRequest(args = {}, inheritedModelName = '', inheritedSkillIds = []) {
   const request = args && typeof args === 'object' && !Array.isArray(args) ? args : {}
   const modelName = String(request.modelName || request.model_name || inheritedModelName || '').trim()
+  const explicitSkillIds = request.skillIds || request.skill_ids
+  const skillIds = [...new Set((Array.isArray(explicitSkillIds) ? explicitSkillIds : inheritedSkillIds)
+    .map((value) => String(value || '').trim())
+    .filter(Boolean))]
   return {
     ...request,
     ...(modelName ? { modelName } : {}),
+    ...(skillIds.length ? { skillIds } : {}),
   }
 }
 
@@ -1544,6 +1549,7 @@ async function executeServerTool({
   step,
   signal,
   budget,
+  skillId,
   approvalContext,
   allowedArtifactTools,
   toolCallId,
@@ -1805,7 +1811,7 @@ async function executeServerTool({
     try {
       return await runSubagentBatch({
         userId: job?.userId || null,
-        request: buildSubagentRequest(args, job?.modelName),
+        request: buildSubagentRequest(args, job?.modelName, skillId ? [skillId] : []),
         depth: -1,
         parentSessionId: job?.id || null,
         parentMessageId: step?.id || null,

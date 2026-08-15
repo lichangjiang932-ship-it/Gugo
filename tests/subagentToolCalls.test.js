@@ -291,6 +291,31 @@ test('整棵子代理树沿用调用方传入的同一预算对象', async () =>
   assert.ok(budget.calls >= 1)
 })
 
+test('nested Agent calls inherit the selected skills through the subagent tool adapter', async () => {
+  let modelStep = 0
+  let nestedOptions = null
+  const result = await _testing.subagentToolsLoop({
+    messages: [{ role: 'user', content: 'delegate with the active skill' }],
+    tools: SUBAGENT_TYPES.general.tools,
+    userId: USER,
+    skillIds: ['webpage', 'webpage'],
+    approveTool: async ({ args }) => ({ proceed: true, args }),
+    callModel: async () => {
+      modelStep += 1
+      if (modelStep === 1) return wireCall('Agent', { prompt: 'child', subagent_type: 'general' })
+      return { content: 'done', toolCalls: [] }
+    },
+    executeTool: async (name, _args, options) => {
+      assert.equal(name, 'Agent')
+      nestedOptions = options
+      return { ok: true }
+    },
+  })
+
+  assert.equal(result, 'done')
+  assert.deepEqual(nestedOptions?.skillIds, ['webpage'])
+})
+
 test('审批只复用同一树内工具名和完整参数完全相同的人工批准', async () => {
   const context = (await import('../server/services/subagentRuntime.js')).createSubagentApprovalContext()
   let approvalRequests = 0

@@ -5,7 +5,6 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import RightPreviewPane from '../../src/pages/ChatSplit/RightPreviewPane.jsx'
-import { previewArtifactTabId } from '../../src/pages/ChatSplit/preview/previewTabs.js'
 
 const artifact = {
   messageId: 'msg-1',
@@ -92,7 +91,7 @@ test('RightPreviewPane closes on Escape', async () => {
   }
 })
 
-test('RightPreviewPane keeps multiple closable tabs and selects an adjacent tab on close', async () => {
+test('RightPreviewPane reuses one preview slot when the selected artifact changes', async () => {
   let closeCount = 0
   const first = {
     messageId: 'msg-alpha',
@@ -109,77 +108,36 @@ test('RightPreviewPane keeps multiple closable tabs and selects an adjacent tab 
     content: 'gamma content',
     preview: { type: 'text', label: 'FILE', filename: 'gamma.txt', summary: 'Gamma' },
   }
-  const { dom, rootEl, rerender, cleanup } = await renderPane(() => { closeCount += 1 }, first)
-  const findTab = (filename) => [...rootEl.querySelectorAll('[role="tab"]')]
-    .find((button) => button.textContent.includes(filename))
-  const findClose = (filename) => [...rootEl.querySelectorAll('[data-testid="preview-tab-item"]')]
-    .find((item) => item.querySelector('[role="tab"]')?.textContent.includes(filename))
-    ?.querySelector('[data-testid="preview-tab-close"]')
-  const click = async (element) => {
-    assert.ok(element)
-    await act(async () => {
-      element.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }))
-    })
-  }
+  const { rootEl, rerender, cleanup } = await renderPane(() => { closeCount += 1 }, first)
 
   try {
+    assert.equal(rootEl.querySelectorAll('.chat-preview-pane').length, 1)
+    assert.equal(rootEl.querySelectorAll('[data-testid="preview-header"]').length, 1)
+    assert.equal(rootEl.querySelectorAll('[role="tab"]').length, 0)
+    assert.equal(rootEl.querySelector('[data-testid="preview-current-file"]')?.textContent.trim(), 'alpha.txt')
+    assert.match(rootEl.querySelector('pre')?.textContent || '', /alpha content/)
+
     await rerender(second)
     await rerender(third)
 
-    assert.equal(rootEl.querySelectorAll('[role="tab"]').length, 3)
-    assert.equal(rootEl.querySelectorAll('[data-testid="preview-tab-close"]').length, 3)
-    assert.equal(findTab('gamma.txt')?.getAttribute('aria-selected'), 'true')
-    assert.equal(findTab('gamma.txt')?.tabIndex, 0)
-    assert.equal(findTab('beta.txt')?.tabIndex, -1)
+    assert.equal(rootEl.querySelectorAll('.chat-preview-pane').length, 1)
+    assert.equal(rootEl.querySelectorAll('[data-testid="preview-header"]').length, 1)
+    assert.equal(rootEl.querySelectorAll('[role="tab"]').length, 0)
+    assert.equal(rootEl.querySelector('[data-testid="preview-current-file"]')?.textContent.trim(), 'gamma.txt')
     assert.match(rootEl.querySelector('pre')?.textContent || '', /gamma content/)
-
-    const endEvent = new dom.window.KeyboardEvent('keydown', {
-      key: 'End',
-      bubbles: true,
-      cancelable: true,
-    })
-    await act(async () => {
-      findTab('gamma.txt').dispatchEvent(endEvent)
-    })
-    assert.equal(endEvent.defaultPrevented, true)
-    assert.equal(findTab('gamma.txt')?.getAttribute('aria-selected'), 'true')
-
-    await act(async () => {
-      findTab('gamma.txt').dispatchEvent(new dom.window.KeyboardEvent('keydown', {
-        key: 'ArrowLeft',
-        bubbles: true,
-        cancelable: true,
-      }))
-    })
-    assert.equal(findTab('beta.txt')?.getAttribute('aria-selected'), 'true')
-    assert.equal(dom.window.document.activeElement, findTab('beta.txt'))
-    assert.match(rootEl.querySelector('pre')?.textContent || '', /beta content/)
+    assert.doesNotMatch(rootEl.textContent, /alpha content|beta content/)
 
     await rerender({ ...second })
-    assert.equal(rootEl.querySelectorAll('[role="tab"]').length, 3, 'reopening a file reuses its tab')
-    assert.equal(findTab('beta.txt')?.getAttribute('aria-selected'), 'true')
+    assert.equal(rootEl.querySelectorAll('.chat-preview-pane').length, 1)
+    assert.equal(rootEl.querySelector('[data-testid="preview-current-file"]')?.textContent.trim(), 'beta.txt')
     assert.match(rootEl.querySelector('pre')?.textContent || '', /beta content/)
-
-    await click(findClose('beta.txt'))
-    assert.equal(rootEl.querySelectorAll('[role="tab"]').length, 2)
-    assert.equal(findTab('gamma.txt')?.getAttribute('aria-selected'), 'true', 'closing the middle tab selects its right neighbor')
-    assert.equal(dom.window.document.activeElement, findTab('gamma.txt'), 'the selected neighbor receives focus')
-
-    await click(findClose('gamma.txt'))
-    assert.equal(rootEl.querySelectorAll('[role="tab"]').length, 1)
-    assert.equal(findTab('alpha.txt')?.getAttribute('aria-selected'), 'true', 'closing the last tab selects its left neighbor')
-    assert.equal(dom.window.document.activeElement, findTab('alpha.txt'), 'the remaining tab receives focus')
-    assert.match(rootEl.querySelector('pre')?.textContent || '', /alpha content/)
-
-    await click(findClose('alpha.txt'))
-    assert.equal(closeCount, 1)
-    assert.equal(rootEl.querySelectorAll('[role="tab"]').length, 0)
+    assert.equal(closeCount, 0)
   } finally {
     await cleanup()
   }
 })
 
-test('RightPreviewPane keeps file and image previews in separate closable tabs', async () => {
+test('RightPreviewPane switches the same slot between text and direct image files', async () => {
   const textArtifact = {
     messageId: 'msg-file-tab',
     content: 'notes content',
@@ -196,50 +154,31 @@ test('RightPreviewPane keeps file and image previews in separate closable tabs',
       url: 'https://example.test/page1_check.png',
     },
   }
-  const { dom, rootEl, rerender, cleanup } = await renderPane(() => {}, textArtifact)
-  const findTab = (filename) => [...rootEl.querySelectorAll('[role="tab"]')]
-    .find((button) => button.textContent.includes(filename))
+  const { rootEl, rerender, cleanup } = await renderPane(() => {}, textArtifact)
 
   try {
+    assert.match(rootEl.querySelector('pre')?.textContent || '', /notes content/)
     await rerender(imageArtifact)
 
-    assert.equal(rootEl.querySelectorAll('[role="tab"]').length, 2)
-    assert.equal(rootEl.querySelectorAll('[data-testid="preview-tab-close"]').length, 2)
-    assert.equal(findTab('page1_check.png')?.getAttribute('aria-selected'), 'true')
+    assert.equal(rootEl.querySelectorAll('.chat-preview-pane').length, 1)
+    assert.equal(rootEl.querySelectorAll('[role="tab"]').length, 0)
+    assert.equal(rootEl.querySelector('[data-testid="preview-current-file"]')?.textContent.trim(), 'page1_check.png')
     const imageUrl = new URL(rootEl.querySelector('img[alt="page1_check.png"]')?.getAttribute('src'))
     assert.equal(imageUrl.origin + imageUrl.pathname, 'https://example.test/page1_check.png')
     assert.equal(imageUrl.searchParams.get('preview'), '1')
+    assert.equal(rootEl.querySelector('pre'), null)
 
-    await act(async () => {
-      findTab('notes.txt').dispatchEvent(new dom.window.MouseEvent('click', {
-        bubbles: true,
-        cancelable: true,
-      }))
-    })
-
-    assert.equal(findTab('notes.txt')?.getAttribute('aria-selected'), 'true')
+    await rerender(textArtifact)
+    assert.equal(rootEl.querySelectorAll('.chat-preview-pane').length, 1)
+    assert.equal(rootEl.querySelector('[data-testid="preview-current-file"]')?.textContent.trim(), 'notes.txt')
     assert.match(rootEl.querySelector('pre')?.textContent || '', /notes content/)
-
-    const imageClose = [...rootEl.querySelectorAll('[data-testid="preview-tab-item"]')]
-      .find((item) => item.querySelector('[role="tab"]')?.textContent.includes('page1_check.png'))
-      ?.querySelector('[data-testid="preview-tab-close"]')
-    assert.ok(imageClose)
-    imageClose.focus()
-    await act(async () => {
-      imageClose.dispatchEvent(new dom.window.MouseEvent('click', {
-        bubbles: true,
-        cancelable: true,
-      }))
-    })
-
-    assert.equal(rootEl.querySelectorAll('[role="tab"]').length, 1)
-    assert.equal(dom.window.document.activeElement, findTab('notes.txt'))
+    assert.equal(rootEl.querySelector('img[alt="page1_check.png"]'), null)
   } finally {
     await cleanup()
   }
 })
 
-test('RightPreviewPane restores focus to the opener after the final tab closes', async () => {
+test('RightPreviewPane restores focus to the opener when the single preview closes', async () => {
   let closeCount = 0
   let opener
   const { dom, rootEl, cleanup } = await renderPane(() => { closeCount += 1 }, artifact, (document) => {
@@ -250,7 +189,7 @@ test('RightPreviewPane restores focus to the opener after the final tab closes',
   })
 
   try {
-    const closeButton = rootEl.querySelector('[data-testid="preview-tab-close"]')
+    const closeButton = rootEl.querySelector('[data-testid="preview-close"]')
     assert.ok(closeButton)
     closeButton.focus()
     assert.equal(dom.window.document.activeElement, closeButton)
@@ -264,30 +203,6 @@ test('RightPreviewPane restores focus to the opener after the final tab closes',
   } finally {
     await cleanup()
   }
-})
-
-test('preview tab identity distinguishes same-name artifacts while reusing stable matches', () => {
-  const directBase = {
-    messageId: 'msg-direct',
-    directFile: { filename: 'report.pdf', type: 'pdf' },
-  }
-  assert.notEqual(
-    previewArtifactTabId({ ...directBase, directFile: { ...directBase.directFile, path: 'C:/one/report.pdf' } }),
-    previewArtifactTabId({ ...directBase, directFile: { ...directBase.directFile, path: 'C:/two/report.pdf' } }),
-  )
-
-  const previewBase = {
-    messageId: 'msg-preview',
-    preview: { filename: 'notes.txt', type: 'text' },
-  }
-  const first = previewArtifactTabId({ ...previewBase, content: 'alpha', source: 'workspace-a' })
-  const same = previewArtifactTabId({ ...previewBase, content: 'alpha', source: 'workspace-a' })
-  const changedContent = previewArtifactTabId({ ...previewBase, content: 'beta', source: 'workspace-a' })
-  const changedSource = previewArtifactTabId({ ...previewBase, content: 'alpha', source: 'workspace-b' })
-
-  assert.equal(first, same)
-  assert.notEqual(first, changedContent)
-  assert.notEqual(first, changedSource)
 })
 
 test('RightPreviewPane closes when the backdrop is clicked', async () => {
@@ -360,7 +275,7 @@ test('RightPreviewPane shows a clickable X when preview is unavailable', async (
   }
 })
 
-test('RightPreviewPane renders local text files in the preview tab', async () => {
+test('RightPreviewPane renders local text files in the single preview slot', async () => {
   const { rootEl, cleanup } = await renderPane(() => {}, {
     messageId: 'msg-file',
     content: 'alpha\nbeta',

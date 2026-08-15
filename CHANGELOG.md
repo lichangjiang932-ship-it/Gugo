@@ -6,6 +6,21 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.10] - 2026-08-15
+
+### Changed
+
+- Expanded the runtime quality layer across every existing built-in, imported, plugin, inline, Job, and nested-Agent skill with category-specific delivery and verification contracts while preserving each skill's specialist workflow and bundled resources.
+- Updated every bundled cloud model preset to use exact-model context metadata and current provider model identifiers instead of provider-wide estimates.
+- Simplified generated-file viewing to one right-side preview slot and made final delivery filenames real links that open in that slot on a normal click.
+
+### Fixed
+
+- Preserved selected skills through top-level and recursively nested Agent calls, including Job execution and explicit child overrides.
+- Sent and retried a real turn cancellation request even when the initial `/api/turns/run` response is still pending.
+- Kept intermediate execution files out of the delivery area and non-interactive while allowing only explicitly selected final deliverables to open.
+- Prevented the onboarding reminder from covering the composer and send button.
+
 ## [0.11.9] - 2026-08-15
 
 ### Added

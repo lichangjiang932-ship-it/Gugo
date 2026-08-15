@@ -8,12 +8,6 @@ import PreviewBody from './preview/PreviewBody.jsx'
 import DirectFilePreview from './preview/DirectFilePreview.jsx'
 import { DirectFileToolbar, PreviewHeader, PreviewToolbar } from './preview/PreviewChrome.jsx'
 import useArtifactExports from './preview/useArtifactExports.js'
-import {
-  activatePreviewTab,
-  createPreviewTabState,
-  removePreviewTab,
-  upsertPreviewTab,
-} from './preview/previewTabs.js'
 import usePreviewPaneState, {
   DEFAULT_PREVIEW_PANE_WIDTH,
   MIN_PREVIEW_PANE_WIDTH,
@@ -31,19 +25,7 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
       : null
   })
   const returnFocusRef = useRef(initialReturnFocus)
-  const focusActiveTabRef = useRef(false)
-  const [tabState, setTabState] = useState(() => ({
-    ...createPreviewTabState(artifact),
-    incomingArtifact: artifact,
-  }))
-  if (artifact !== tabState.incomingArtifact) {
-    setTabState({
-      ...upsertPreviewTab(tabState, artifact),
-      incomingArtifact: artifact,
-    })
-  }
-  const activeTab = tabState.tabs.find((tab) => tab.id === tabState.activeId) || tabState.tabs[0] || null
-  const activeArtifact = activeTab?.artifact || null
+  const activeArtifact = artifact || null
 
   useEffect(() => {
     if (typeof document === 'undefined') return
@@ -75,42 +57,14 @@ export default function RightPreviewPane({ artifact, onClose, onMessage }) {
 
   const pane = usePreviewPaneState({ artifact: activeArtifact, onClose: closePane })
 
-  const selectTab = useCallback((tabId) => {
-    setTabState((current) => activatePreviewTab(current, tabId))
-  }, [])
-
-  const closeTab = useCallback((tabId) => {
-    const nextTabs = removePreviewTab(tabState, tabId)
-    if (nextTabs === tabState) return
-    const next = { ...nextTabs, incomingArtifact: tabState.incomingArtifact }
-    focusActiveTabRef.current = next.tabs.length > 0
-    setTabState(next)
-    if (!next.tabs.length) closePane()
-  }, [closePane, tabState])
-
-  useEffect(() => {
-    if (!focusActiveTabRef.current || !activeTab) return
-    focusActiveTabRef.current = false
-    const target = paneRef.current?.querySelector('[role="tab"][aria-selected="true"]')
-    if (typeof target?.focus !== 'function') return
-    try {
-      target.focus({ preventScroll: true })
-    } catch {
-      target.focus()
-    }
-  }, [activeTab, tabState.tabs])
-
-  if (!activeTab || !activeArtifact) return null
+  if (!activeArtifact) return null
   const testId = activeArtifact.directFile ? 'direct-file-pane' : 'preview-pane'
   return (
     <PreviewShell pane={pane} paneRef={paneRef} onClose={closePane} t={t} testId={testId} shellKey="preview-pane">
       <PreviewHeader
-        tabs={tabState.tabs}
-        activeId={activeTab.id}
+        artifact={activeArtifact}
         maximized={pane.maximized}
         setMaximized={pane.setMaximized}
-        onSelectTab={selectTab}
-        onCloseTab={closeTab}
         onClose={closePane}
         t={t}
       />

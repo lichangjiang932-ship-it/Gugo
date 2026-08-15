@@ -1793,6 +1793,7 @@ export async function runToolsLoop({
                       step,
                       signal: abortScope.signal,
                       budget,
+                      skillId: explicitSkillId || null,
                       toolCallId: call.id,
                       idempotencyKey: call.idempotencyKey,
                       approvalContext: subagentApprovalContext,

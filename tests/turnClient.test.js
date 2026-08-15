@@ -546,6 +546,54 @@ test('runServerTurn waits for a terminal cancellation event after the stop is ac
   assert.equal(urls.includes('/api/turns/t-stop/cancel'), true)
 })
 
+test('runServerTurn cancels and retries while the initial start response is still pending', async () => {
+  const urls = []
+  const controller = new AbortController()
+  let cancelCalls = 0
+  const cancelled = createTurnEvent({
+    id: 'cancelled-during-start', sessionId: 's-start-stop', turnId: 't-start-stop', sequence: 0,
+    type: 'turn.cancelled', payload: { reason: 'user stopped' }, createdAt: 1,
+  })
+  const fetchImpl = async (url, options = {}) => {
+    urls.push(String(url))
+    if (url === '/api/turns/run') {
+      queueMicrotask(() => controller.abort())
+      return new Promise((resolve, reject) => {
+        options.signal?.addEventListener('abort', () => {
+          const error = new Error('initial request aborted after cancellation acknowledgement')
+          error.name = 'AbortError'
+          reject(error)
+        }, { once: true })
+      })
+    }
+    if (url === '/api/turns/t-start-stop/cancel') {
+      cancelCalls += 1
+      if (cancelCalls === 1) {
+        return response({ error: { code: 'TURN_NOT_FOUND', message: 'turn not found yet' } }, 404)
+      }
+      return response({
+        turn: {
+          sessionId: 's-start-stop', turnId: 't-start-stop', status: 'cancelled', lastEvent: cancelled,
+        },
+      })
+    }
+    assert.fail(`unexpected request after startup cancellation: ${url}`)
+  }
+
+  const result = await runServerTurn({
+    sessionId: 's-start-stop', turnId: 't-start-stop', content: 'stop immediately',
+    signal: controller.signal, fetchImpl, cancelRetryDelayMs: 0,
+  })
+
+  assert.equal(result.terminal.type, 'turn.cancelled')
+  assert.equal(cancelCalls, 2)
+  assert.deepEqual(urls, [
+    '/api/turns/run',
+    '/api/turns/t-start-stop/cancel',
+    '/api/turns/t-start-stop/cancel',
+  ])
+})
+
 test('reconnect delay is exponential and capped', () => {
   assert.equal(reconnectDelayForAttempt(1, 500, 4_000), 500)
   assert.equal(reconnectDelayForAttempt(2, 500, 4_000), 1_000)

@@ -345,6 +345,7 @@ export const SUBAGENT_TYPES = {
 async function executeSubagentTool(toolName, args, {
   userId = null,
   modelName = undefined,
+  skillIds = [],
   depth = 0,
   parentRunId = null,
   parentSessionId = null,
@@ -383,6 +384,7 @@ async function executeSubagentTool(toolName, args, {
           request: {
             ...(args || {}),
             modelName: String(args?.modelName || args?.model_name || modelName || '').trim() || undefined,
+            skillIds: normalizePromptContextIds(args?.skillIds || args?.skill_ids || skillIds),
           },
           depth,
           parentSessionId: parentSessionId || (parentRunId ? `subagent:${parentRunId}` : null),
@@ -410,7 +412,7 @@ async function executeSubagentTool(toolName, args, {
  * @param {number} [options.maxIters=SUBAGENT_MAX_ITERS]
  * @returns {Promise<string>} 最终文本回答
  */
-async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS, userId = null, modelName = undefined, sessionId = null, runId = null, depth = 0, callModel = callBackgroundModelWithTools, executeTool = executeSubagentTool, budget = null, approvalContext = null, slotLease = null, approveTool = requestApproval, onTranscriptEvent = null }) {
+async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS, userId = null, modelName = undefined, skillIds = [], sessionId = null, runId = null, depth = 0, callModel = callBackgroundModelWithTools, executeTool = executeSubagentTool, budget = null, approvalContext = null, slotLease = null, approveTool = requestApproval, onTranscriptEvent = null }) {
   const effectiveBudget = budget || createJobBudget({ ...SUBAGENT_BUDGET })
   const effectiveApprovalContext = approvalContext || createSubagentApprovalContext()
   const selectedModel = String(modelName || '').trim() || undefined
@@ -437,6 +439,7 @@ async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_
     signal,
     maxIters,
     contextWindow,
+    skillId: normalizePromptContextIds(skillIds).at(0) || undefined,
     runtimeBudget: effectiveBudget,
     approvalContext: effectiveApprovalContext,
     approvalOrigin: 'subagent',
@@ -455,10 +458,12 @@ async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_
       ...request,
       userId,
       modelName: selectedModel,
+      skillIds: normalizePromptContextIds(skillIds),
     }),
     executeTool: ({ name, args, signal: toolSignal, budget: loopBudget }) => executeTool(name, args, {
       userId,
       modelName: selectedModel,
+      skillIds: normalizePromptContextIds(skillIds),
       depth,
       parentRunId: runId,
       parentSessionId: sessionId,
@@ -760,6 +765,7 @@ export async function runSubagent({
           signal,
           userId,
           modelName,
+          skillIds: normalizePromptContextIds(skillIds),
           sessionId: `subagent:${id}`,
           runId: id,
           depth,

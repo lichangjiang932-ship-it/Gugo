@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
 import { CLOUD_PRESETS, LOCAL_PRESETS, formatContextTokens } from '../src/components/modelProviders/providerConfig.js'
+import { getOfficialModelProfile } from '../shared/modelCapabilityCatalog.js'
 
 const source = fs.readFileSync(new URL('../src/components/modelProviders/providerConfig.js', import.meta.url), 'utf8')
 
@@ -42,6 +43,16 @@ test('Gemini and Moonshot presets use current exact IDs while preserving labeled
   assert.deepEqual(moonshot.models.slice(0, 2), ['kimi-k3', 'kimi-k2.6'])
   assert.deepEqual(moonshot.legacyModels, ['kimi-k2.5', 'kimi-k2-thinking', 'moonshot-v1-128k'])
   for (const model of moonshot.legacyModels) assert.ok(moonshot.models.includes(model))
+})
+
+test('OpenRouter and xAI presets use current exact IDs with model-specific context profiles', () => {
+  const openrouter = CLOUD_PRESETS.find((preset) => preset.id === 'openrouter')
+  assert.ok(openrouter.models.includes('google/gemini-3.1-pro-preview'))
+  assert.ok(!openrouter.models.includes('google/gemini-3.1-pro'))
+
+  const xai = CLOUD_PRESETS.find((preset) => preset.id === 'xai')
+  assert.deepEqual(xai.models, ['grok-4.6', 'grok-4.5', 'grok-4.3'])
+  assert.deepEqual(xai.models.map((model) => getOfficialModelProfile(model).contextWindow), [500_000, 500_000, 1_000_000])
 })
 
 test('formatContextTokens renders compact sizes', () => {

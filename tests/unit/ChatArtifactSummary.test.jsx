@@ -45,6 +45,13 @@ test('tool artifact renders final explanation and file card together', async () 
             artifactType: 'pptx',
             artifactTitle: '修复量化交易平台',
             artifactSource,
+            serverArtifacts: [{
+              id: 'final-pptx',
+              filename: '修复量化交易平台.pptx',
+              type: 'pptx',
+              url: '/api/artifacts/final-pptx',
+            }],
+            serverDeliveryArtifactIds: ['final-pptx'],
           },
         }]}
         state={{ permRequest: null }}
@@ -105,6 +112,13 @@ test('generation only hides actions for the streaming assistant and completed me
       artifactType: 'html',
       artifactTitle: 'Partial preview',
       artifactSource: '<!doctype html><html><body>partial</body></html>',
+      serverArtifacts: [{
+        id: 'partial-final',
+        filename: 'Partial-preview.html',
+        type: 'html',
+        url: '/api/artifacts/partial-final',
+      }],
+      serverDeliveryArtifactIds: ['partial-final'],
     },
   }
   const completedAssistantMessage = {

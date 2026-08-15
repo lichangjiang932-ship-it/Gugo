@@ -26,6 +26,22 @@ test('top-level Agent calls inherit the parent model unless explicitly overridde
   assert.equal(buildSubagentRequest({ modelName: 'child-model' }, 'parent-model').modelName, 'child-model')
 })
 
+test('Agent calls inherit selected skills while explicit child skills take precedence', () => {
+  assert.deepEqual(
+    buildSubagentRequest({ subagent_type: 'general', prompt: 'build it' }, 'parent-model', ['webpage']),
+    {
+      subagent_type: 'general',
+      prompt: 'build it',
+      modelName: 'parent-model',
+      skillIds: ['webpage'],
+    },
+  )
+  assert.deepEqual(
+    buildSubagentRequest({ skill_ids: ['review', 'review'] }, 'parent-model', ['webpage']).skillIds,
+    ['review'],
+  )
+})
+
 test('chat compaction uses the real session id and checkpoints its archive recovery', async () => {
   const sessionId = 'chat-compaction-real-session'
   const checkpoints = []

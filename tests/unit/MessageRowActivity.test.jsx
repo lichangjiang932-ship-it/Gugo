@@ -111,6 +111,7 @@ test('a persisted file owned by a tool call opens from the execution step summar
         mimeType: 'text/x-python',
         url: '/api/artifacts/script-artifact-1',
       }],
+      serverDeliveryArtifactIds: ['script-artifact-1'],
     },
   }
 
@@ -148,7 +149,7 @@ test('a persisted file owned by a tool call opens from the execution step summar
   }
 })
 
-test('intermediate files stay available in execution steps while only final deliverables appear below', async () => {
+test('only final deliverables are clickable in execution steps and appear below', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
@@ -199,25 +200,29 @@ test('intermediate files stay available in execution steps while only final deli
 
   try {
     await renderMessage(baseMessage)
-    const stepFiles = [...rootElement.querySelectorAll('[data-testid="tool-summary-open"]')]
+    const stepSummaries = [...rootElement.querySelectorAll('.chat-tool-summary')]
     assert.deepEqual(
-      stepFiles.map((button) => button.textContent.trim().split(/[\\/]/).pop()),
+      stepSummaries.map((summary) => summary.textContent.trim().split(/[\\/]/).pop()),
       ['draft.py', 'preview.png', 'report.pdf'],
     )
+    const stepFiles = [...rootElement.querySelectorAll('[data-testid="tool-summary-open"]')]
+    assert.equal(stepFiles.length, 1)
+    assert.equal(stepFiles[0].textContent.trim().split(/[\\/]/).pop(), 'report.pdf')
     const deliveries = [...rootElement.querySelectorAll('[data-testid="artifact-open-card"]')]
     assert.equal(deliveries.length, 1)
     assert.match(deliveries[0].textContent, /report\.pdf/)
     assert.doesNotMatch(deliveries[0].textContent, /draft\.py|preview\.png/)
 
     await act(async () => stepFiles[0].dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
-    assert.equal(opened[0].directFile.filename, 'draft.py')
+    assert.equal(opened[0].directFile.filename, 'report.pdf')
 
     await renderMessage({
       ...baseMessage,
       meta: { ...baseMessage.meta, serverDeliveryArtifactIds: [] },
     })
     assert.equal(rootElement.querySelectorAll('[data-testid="artifact-open-card"]').length, 0)
-    assert.equal(rootElement.querySelectorAll('[data-testid="tool-summary-open"]').length, 3)
+    assert.equal(rootElement.querySelectorAll('[data-testid="tool-summary-open"]').length, 0)
+    assert.equal(rootElement.querySelectorAll('.chat-tool-summary').length, 3)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

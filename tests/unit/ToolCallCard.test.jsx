@@ -100,6 +100,10 @@ test('only an exactly associated persisted file makes a path summary interactive
     render('write_file', { path: 'D:\\work\\inspect_pdf.py' }, { artifacts: [artifact, { ...artifact, id: 'script-duplicate' }], onOpenArtifact: handler }),
     /data-testid="tool-summary-open"/,
   )
+  assert.doesNotMatch(
+    render('write_file', { path: 'D:\\work\\inspect_pdf.py' }, { artifacts: [{ ...artifact, url: 'https://example.com/inspect_pdf.py' }], onOpenArtifact: handler }),
+    /data-testid="tool-summary-open"/,
+  )
 })
 
 test('clicking a managed file summary returns the exact artifact and call', async () => {
@@ -140,10 +144,12 @@ test('clicking a managed file summary returns the exact artifact and call', asyn
       </I18nProvider>,
     ))
 
-    const button = rootElement.querySelector('[data-testid="tool-summary-open"]')
-    assert.ok(button)
-    assert.equal(button.tagName, 'BUTTON')
-    await act(async () => button.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    const link = rootElement.querySelector('[data-testid="tool-summary-open"]')
+    assert.ok(link)
+    assert.equal(link.tagName, 'A')
+    assert.equal(link.getAttribute('href'), '/api/artifacts/script-2')
+    assert.equal(link.getAttribute('rel'), 'noopener noreferrer')
+    await act(async () => link.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
     assert.equal(opened.artifact.id, artifact.id)
     assert.equal(opened.artifact.toolCallId, call.id)
     assert.equal(opened.call, call)
@@ -184,9 +190,11 @@ test('command artifacts open by their persisted filenames without turning the co
       </I18nProvider>,
     ))
     assert.equal(rootElement.querySelector('[data-testid="tool-summary-open"]'), null)
-    const buttons = [...rootElement.querySelectorAll('[data-testid="tool-artifact-open"]')]
-    assert.deepEqual(buttons.map((button) => button.textContent.trim()), ['report.pdf', 'page.png'])
-    await act(async () => buttons[1].dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    const links = [...rootElement.querySelectorAll('[data-testid="tool-artifact-open"]')]
+    assert.deepEqual(links.map((link) => link.textContent.trim()), ['report.pdf', 'page.png'])
+    assert.deepEqual(links.map((link) => link.tagName), ['A', 'A'])
+    assert.deepEqual(links.map((link) => link.getAttribute('href')), ['/api/artifacts/report-1', '/api/artifacts/page-1'])
+    await act(async () => links[1].dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
     assert.deepEqual(opened, ['page-1'])
   } finally {
     await act(async () => root.unmount())

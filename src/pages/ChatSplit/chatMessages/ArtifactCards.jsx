@@ -1,6 +1,6 @@
 import { BarChart3, Code2, Download, ExternalLink, FileText, LayoutList } from 'lucide-react'
 import { useT } from '../../../i18n/I18nProvider.jsx'
-import { artifactHasInlineReference, artifactReferenceOpenPayload, buildArtifactReferenceIdentity, buildServerArtifactReferences, resolveDeliveryArtifacts } from '../../../lib/artifactReferences.js'
+import { artifactHasInlineReference, artifactReferenceOpenPayload, buildServerArtifactReferences, resolveDeliveryArtifacts } from '../../../lib/artifactReferences.js'
 import { withDownloadToken } from '../../../lib/jobClient.js'
 
 export function ArtifactReferenceLinks({ msg, preview, onOpen }) {
@@ -11,40 +11,36 @@ export function ArtifactReferenceLinks({ msg, preview, onOpen }) {
     messageId: msg?.id,
     preview,
   })
-  const references = allReferences.filter((reference) => !artifactHasInlineReference(msg?.content, reference))
-  const previewAlreadyRepresented = allReferences.some((reference) => reference.previewArtifact)
-  if (preview && !previewAlreadyRepresented && !artifactHasInlineReference(msg?.content, preview)) {
-    const identity = buildArtifactReferenceIdentity({ filename: preview.filename, messageId: msg?.id, type: preview.type })
-    references.unshift({
-      id: `${msg?.id || 'artifact'}-preview`,
-      identity,
-      filename: preview.filename,
-      type: preview.type,
-      previewArtifact: { messageId: String(msg?.id || ''), artifactIdentity: identity, content: source, preview },
-    })
-  }
+  const references = allReferences.filter((reference) => (
+    reference.url && !artifactHasInlineReference(msg?.content, reference)
+  ))
   if (references.length === 0) return null
 
-  const openReference = (reference) => {
+  const openReference = (event, reference) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
     const artifact = artifactReferenceOpenPayload(reference, msg?.id)
-    onOpen?.(artifact)
+    if (!artifact || typeof onOpen !== 'function') return
+    event.preventDefault()
+    onOpen(artifact)
   }
 
   return (
     <div className="mt-3 flex flex-wrap gap-2" data-testid="artifact-reference-links">
       {references.map((reference) => (
-        <button
+        <a
           key={reference.identity || reference.id || reference.url || reference.filename}
-          type="button"
+          href={withDownloadToken(reference.url)}
+          target="_blank"
+          rel="noopener noreferrer"
           data-testid="artifact-open-card"
-          onClick={() => openReference(reference)}
+          onClick={(event) => openReference(event, reference)}
           className="inline-flex max-w-full items-center gap-2 rounded-md border border-ink-fade/30 bg-paper px-2.5 py-1.5 text-left text-sm font-medium text-ink transition-colors hover:border-ink-fade/60 hover:bg-ink-ghost"
           title={reference.filename}
         >
           <FileText className="h-4 w-4 shrink-0 text-ink-fade" />
           <span className="chat-output-file-name truncate">{reference.filename}</span>
           <ExternalLink className="h-3.5 w-3.5 shrink-0 opacity-70" />
-        </button>
+        </a>
       ))}
     </div>
   )
