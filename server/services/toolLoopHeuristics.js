@@ -1423,8 +1423,11 @@ function successfulReadFileInMessages(messages = []) {
 /**
  * 执行单个工具调用 → 落盘 artifact → appendJobArtifact → 返回给模型的简短结果。
  */
-export function buildSubagentRequest(args = {}, inheritedModelName = '', inheritedSkillIds = []) {
-  const request = args && typeof args === 'object' && !Array.isArray(args) ? args : {}
+export function buildSubagentRequest(args = {}, inheritedModelName = '', inheritedSkillIds = [], inheritedSkillDefinitions = []) {
+  const rawRequest = args && typeof args === 'object' && !Array.isArray(args) ? args : {}
+  const request = { ...rawRequest }
+  delete request.skillDefinitions
+  delete request.skill_definitions
   const modelName = String(request.modelName || request.model_name || inheritedModelName || '').trim()
   const explicitSkillIds = request.skillIds || request.skill_ids
   const skillIds = [...new Set((Array.isArray(explicitSkillIds) ? explicitSkillIds : inheritedSkillIds)
@@ -1434,7 +1437,18 @@ export function buildSubagentRequest(args = {}, inheritedModelName = '', inherit
     ...request,
     ...(modelName ? { modelName } : {}),
     ...(skillIds.length ? { skillIds } : {}),
+    ...(Array.isArray(inheritedSkillDefinitions) && inheritedSkillDefinitions.length
+      ? { skillDefinitions: inheritedSkillDefinitions }
+      : {}),
   }
+}
+
+export function inheritedJobSkillIds(job, activeSkillId = null) {
+  const configured = Array.isArray(job?.skillIds) ? job.skillIds : []
+  const fallback = configured.length ? configured : (activeSkillId ? [activeSkillId] : [])
+  return [...new Set(fallback
+    .map((value) => String(value || '').trim())
+    .filter(Boolean))]
 }
 
 // Image outputs the model must be able to inspect to verify its own work.
@@ -1811,7 +1825,12 @@ async function executeServerTool({
     try {
       return await runSubagentBatch({
         userId: job?.userId || null,
-        request: buildSubagentRequest(args, job?.modelName, skillId ? [skillId] : []),
+        request: buildSubagentRequest(
+          args,
+          job?.modelName,
+          inheritedJobSkillIds(job, skillId),
+          job?.skillDefinitions,
+        ),
         depth: -1,
         parentSessionId: job?.id || null,
         parentMessageId: step?.id || null,

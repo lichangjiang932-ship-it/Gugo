@@ -26,7 +26,7 @@ import { MEMORY_TOOL_SPECS, dispatchMemoryTool } from '../utils/memoryTools.js'
 import { createJobBudget } from '../utils/jobBudget.js'
 import { requestApproval } from './approvalGate.js'
 import { dispatchHooks } from './hooksService.js'
-import { buildSafetyBlock } from './promptCompiler.js'
+import { buildSafetyBlock, prepareInlineSkillsForPrompt } from './promptCompiler.js'
 import { getBuiltinSpec } from './toolRegistry.js'
 import { normalizePromptContextIds, prepareOptionalPromptContext } from './optionalPromptContext.js'
 
@@ -346,6 +346,7 @@ async function executeSubagentTool(toolName, args, {
   userId = null,
   modelName = undefined,
   skillIds = [],
+  skillDefinitions = [],
   depth = 0,
   parentRunId = null,
   parentSessionId = null,
@@ -378,13 +379,23 @@ async function executeSubagentTool(toolName, args, {
     case 'request_directory':
     case 'sleep_until':
       return dispatchAgenticTool(toolName, args, { userId })
-    case 'Agent':
-      return withYieldedSlot(slotLease, signal, () => runSubagentBatch({
+    case 'Agent': {
+        const rawRequest = args && typeof args === 'object' && !Array.isArray(args) ? args : {}
+        const request = { ...rawRequest }
+        delete request.skillDefinitions
+        delete request.skill_definitions
+        const inheritedSkillIds = normalizePromptContextIds(request.skillIds || request.skill_ids || skillIds)
+        const inheritedSkillDefinitions = prepareInlineSkillsForPrompt({
+          skillIds: inheritedSkillIds,
+          skillDefinitions,
+        })
+        return withYieldedSlot(slotLease, signal, () => runSubagentBatch({
           userId,
           request: {
-            ...(args || {}),
-            modelName: String(args?.modelName || args?.model_name || modelName || '').trim() || undefined,
-            skillIds: normalizePromptContextIds(args?.skillIds || args?.skill_ids || skillIds),
+            ...request,
+            modelName: String(request.modelName || request.model_name || modelName || '').trim() || undefined,
+            skillIds: inheritedSkillIds,
+            ...(inheritedSkillDefinitions.length ? { skillDefinitions: inheritedSkillDefinitions } : {}),
           },
           depth,
           parentSessionId: parentSessionId || (parentRunId ? `subagent:${parentRunId}` : null),
@@ -394,6 +405,7 @@ async function executeSubagentTool(toolName, args, {
           approvalContext,
           approveTool,
         }))
+    }
     default:
       return { ok: false, error: `unknown subagent tool: ${toolName}` }
   }
@@ -412,7 +424,7 @@ async function executeSubagentTool(toolName, args, {
  * @param {number} [options.maxIters=SUBAGENT_MAX_ITERS]
  * @returns {Promise<string>} 最终文本回答
  */
-async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS, userId = null, modelName = undefined, skillIds = [], sessionId = null, runId = null, depth = 0, callModel = callBackgroundModelWithTools, executeTool = executeSubagentTool, budget = null, approvalContext = null, slotLease = null, approveTool = requestApproval, onTranscriptEvent = null }) {
+async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS, userId = null, modelName = undefined, skillIds = [], skillDefinitions = [], sessionId = null, runId = null, depth = 0, callModel = callBackgroundModelWithTools, executeTool = executeSubagentTool, budget = null, approvalContext = null, slotLease = null, approveTool = requestApproval, onTranscriptEvent = null }) {
   const effectiveBudget = budget || createJobBudget({ ...SUBAGENT_BUDGET })
   const effectiveApprovalContext = approvalContext || createSubagentApprovalContext()
   const selectedModel = String(modelName || '').trim() || undefined
@@ -459,11 +471,13 @@ async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_
       userId,
       modelName: selectedModel,
       skillIds: normalizePromptContextIds(skillIds),
+      skillDefinitions: prepareInlineSkillsForPrompt({ skillIds, skillDefinitions }),
     }),
     executeTool: ({ name, args, signal: toolSignal, budget: loopBudget }) => executeTool(name, args, {
       userId,
       modelName: selectedModel,
       skillIds: normalizePromptContextIds(skillIds),
+      skillDefinitions: prepareInlineSkillsForPrompt({ skillIds, skillDefinitions }),
       depth,
       parentRunId: runId,
       parentSessionId: sessionId,
@@ -590,8 +604,12 @@ function normalizeSubagentTasks(request = {}) {
     const role = String(task?.role || description).trim().slice(0, 120)
     const agentId = String(task?.agentId || task?.agent_id || request?.agentId || request?.agent_id || '').trim() || null
     const skillIds = normalizePromptContextIds(task?.skillIds || task?.skill_ids || request?.skillIds || request?.skill_ids)
+    const skillDefinitions = prepareInlineSkillsForPrompt({
+      skillIds,
+      skillDefinitions: request?.skillDefinitions,
+    })
     const modelName = String(task?.modelName || task?.model_name || request?.modelName || request?.model_name || '').trim() || undefined
-    return { type, prompt, description, role, agentId, skillIds, modelName }
+    return { type, prompt, description, role, agentId, skillIds, skillDefinitions, modelName }
   })
 }
 
@@ -634,6 +652,7 @@ export async function runSubagentBatch({
     description: task.description,
     agentId: task.agentId,
     skillIds: task.skillIds,
+    skillDefinitions: task.skillDefinitions,
     modelName: task.modelName,
     team: { ...team, role: task.role, memberIndex: tasks.indexOf(task) },
     parentSessionId,
@@ -698,6 +717,7 @@ export async function runSubagent({
   description = '',
   agentId = null,
   skillIds = [],
+  skillDefinitions = [],
   team = null,
   parentSessionId = null,
   parentMessageId = null,
@@ -738,6 +758,7 @@ export async function runSubagent({
         userId,
         agentId,
         skillIds: normalizePromptContextIds(skillIds),
+        skillDefinitions: prepareInlineSkillsForPrompt({ skillIds, skillDefinitions }),
         query: String(prompt).trim(),
       },
       scope: 'subagent.prompt',
@@ -766,6 +787,7 @@ export async function runSubagent({
           userId,
           modelName,
           skillIds: normalizePromptContextIds(skillIds),
+          skillDefinitions: prepareInlineSkillsForPrompt({ skillIds, skillDefinitions }),
           sessionId: `subagent:${id}`,
           runId: id,
           depth,
