@@ -3,6 +3,18 @@ const FIXED_CONTEXT_OVERHEAD_TOKENS = 16
 
 export const DEFAULT_MODEL_CONTEXT_WINDOW = 128_000
 
+export function normalizeOptionalTokenCount(value) {
+  if (
+    value === null
+    || value === undefined
+    || typeof value === 'boolean'
+    || (typeof value === 'string' && value.trim() === '')
+  ) return null
+
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
+}
+
 export function normalizeContextWindow(value, fallback = DEFAULT_MODEL_CONTEXT_WINDOW) {
   const parsed = Number(value)
   if (Number.isFinite(parsed) && parsed > 0) return Math.floor(parsed)
@@ -68,6 +80,7 @@ export function estimateClientContextUsage({
   tools = [],
   systemPrompt = '',
   contextWindow = DEFAULT_MODEL_CONTEXT_WINDOW,
+  actualPromptTokens = null,
 } = {}) {
   const safeMessages = Array.isArray(messages) ? messages : []
   let messageTokens = 0
@@ -89,16 +102,20 @@ export function estimateClientContextUsage({
   const estimatedTokens = messageTokens + toolCallTokens + attachmentTokens + toolSpecTokens + systemTokens
   const safeWindow = normalizeContextWindow(contextWindow)
   const percent = Math.min(100, Math.round((estimatedTokens / safeWindow) * 100))
+  const measuredPromptTokens = normalizeOptionalTokenCount(actualPromptTokens)
+  const hasMeasuredPromptTokens = measuredPromptTokens !== null
 
   return {
     estimatedTokens,
     percent,
     contextWindow: safeWindow,
+    messageCount: safeMessages.length,
     visibleCharacters,
     messageTokens,
     toolCallTokens,
     attachmentTokens,
     toolSpecTokens,
     systemTokens,
+    ...(hasMeasuredPromptTokens ? { actualPromptTokens: Math.floor(measuredPromptTokens) } : {}),
   }
 }

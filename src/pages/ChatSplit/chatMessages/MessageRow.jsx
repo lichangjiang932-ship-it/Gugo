@@ -18,27 +18,17 @@ import DirectoryRequestCard from '../../taskRun/DirectoryRequestCard.jsx'
 
 function stableTimelineSegments(content, toolCalls) {
   let previousToolKey = 'start'
+  let toolStepOffset = 0
   return buildMessageTimeline(content, toolCalls).map((segment, index) => {
     if (segment.kind === 'tools') {
       const firstCall = segment.calls?.[0]
+      const stepOffset = toolStepOffset
+      toolStepOffset += segment.calls?.length || 0
       previousToolKey = String(firstCall?.id || `offset-${firstCall?.textOffset ?? index}`)
-      return { ...segment, key: `tools:${previousToolKey}` }
+      return { ...segment, key: `tools:${previousToolKey}`, stepOffset }
     }
     return { ...segment, key: `text-after:${previousToolKey}` }
   })
-}
-
-function compactMessagePresentation(content, toolCalls) {
-  const timeline = stableTimelineSegments(content, toolCalls)
-  const calls = timeline.flatMap((segment) => segment.kind === 'tools' ? segment.calls || [] : [])
-  const finalText = [...timeline]
-    .reverse()
-    .find((segment) => segment.kind === 'text' && String(segment.text || '').trim())
-
-  return {
-    calls,
-    text: finalText?.text || '',
-  }
 }
 
 export default function MessageRow({
@@ -119,6 +109,7 @@ export default function MessageRow({
               onOpenArtifact={openArtifact}
               onOpenInPreview={onOpenInPreview}
               showArtifactPreview={showArtifactPreview}
+              t={t}
             />
           )
         ) : (
@@ -159,7 +150,7 @@ export default function MessageRow({
   )
 }
 
-function AssistantContent({ artifactPreview, isCurrentStreamingMessage, isMessageComplete, msg, onOpenArtifact, showArtifactPreview }) {
+function AssistantContent({ artifactPreview, isCurrentStreamingMessage, isMessageComplete, msg, onOpenArtifact, showArtifactPreview, t }) {
   const deliveryArtifactReferences = buildServerArtifactReferences({
     artifacts: resolveDeliveryArtifacts(msg.meta),
     content: String(msg.meta?.artifactSource || msg.content || ''),
@@ -181,16 +172,38 @@ function AssistantContent({ artifactPreview, isCurrentStreamingMessage, isMessag
     onOpenArtifact?.(payload)
     return true
   }
-  const presentation = compactMessagePresentation(stripChoices(msg.content), msg.meta?.toolCalls)
+  const timeline = stableTimelineSegments(stripChoices(msg.content), msg.meta?.toolCalls)
+  const presentation = assistantTimelinePresentation(timeline, isCurrentStreamingMessage)
+  const hasExecution = isCurrentStreamingMessage || presentation.execution.length > 0
   return (
     <>
       <div data-quotable="true">
-        {isCurrentStreamingMessage && <ActivityStream msg={msg} />}
-        {presentation.calls.length > 0 && (
-          <ToolCallTrace calls={presentation.calls} artifacts={deliveryArtifactReferences} onOpenArtifact={openToolArtifact} />
+        {(hasExecution || msg.meta?.serverTurnId || msg.meta?.type === 'model_reply') && (
+          <ExecutionDisclosure
+            key={isCurrentStreamingMessage ? 'execution-running' : 'execution-complete'}
+            hasExecution={hasExecution}
+            msg={msg}
+            running={isCurrentStreamingMessage}
+            t={t}
+          >
+            <TimelineSegments
+              artifacts={deliveryArtifactReferences}
+              onLinkClick={openInlineArtifact}
+              onOpenArtifact={openToolArtifact}
+              segments={presentation.execution}
+              streaming={isCurrentStreamingMessage}
+            />
+            {isCurrentStreamingMessage && <ActivityStream msg={msg} />}
+          </ExecutionDisclosure>
         )}
-        {presentation.text && (
-          <MarkdownRenderer artifactReferences={deliveryArtifactReferences} streaming={isCurrentStreamingMessage} onLinkClick={openInlineArtifact}>{presentation.text}</MarkdownRenderer>
+        {presentation.answer && (
+          <MarkdownRenderer
+            artifactReferences={deliveryArtifactReferences}
+            streaming={isCurrentStreamingMessage}
+            onLinkClick={openInlineArtifact}
+          >
+            {presentation.answer}
+          </MarkdownRenderer>
         )}
       </div>
       {hasChoices(msg.content) && isMessageComplete && (
@@ -208,7 +221,149 @@ function AssistantContent({ artifactPreview, isCurrentStreamingMessage, isMessag
   )
 }
 
-function CollapsedArtifactContent({ artifactPreview, msg, onOpenArtifact }) {
+function assistantTimelinePresentation(timeline, streaming) {
+  const normalized = Array.isArray(timeline) ? timeline : []
+  const hasTools = normalized.some((segment) => segment.kind === 'tools')
+  if (!hasTools) {
+    return {
+      execution: [],
+      answer: normalized.filter((segment) => segment.kind === 'text').map((segment) => segment.text).join(''),
+    }
+  }
+  if (streaming) return { execution: normalized, answer: '' }
+
+  const lastToolIndex = normalized.findLastIndex((segment) => segment.kind === 'tools')
+  const finalTextIndex = normalized.findLastIndex((segment, index) => (
+    index > lastToolIndex
+    && segment.kind === 'text'
+    && String(segment.text || '').trim()
+  ))
+  if (finalTextIndex < 0) return { execution: normalized, answer: '' }
+  return {
+    execution: normalized.filter((_, index) => index !== finalTextIndex),
+    answer: normalized[finalTextIndex].text,
+  }
+}
+
+function TimelineSegments({ artifacts, onLinkClick, onOpenArtifact, segments, streaming }) {
+  return segments.map((segment, index) => segment.kind === 'tools' ? (
+    <ToolCallTrace
+      key={segment.key}
+      calls={segment.calls}
+      stepOffset={segment.stepOffset}
+      artifacts={artifacts}
+      onOpenArtifact={onOpenArtifact}
+    />
+  ) : (
+    <MarkdownRenderer
+      key={segment.key}
+      artifactReferences={artifacts}
+      streaming={streaming && index === segments.length - 1}
+      onLinkClick={onLinkClick}
+    >
+      {segment.text}
+    </MarkdownRenderer>
+  ))
+}
+
+function ExecutionDisclosure({ children, hasExecution, msg, running, t }) {
+  const [expanded, setExpanded] = useState(running)
+  const contentId = useId()
+  const [fallbackStartedAt] = useState(() => Date.now())
+  const storedLatency = Number(msg.meta?.latency)
+  const storedStartedAt = Number(msg.meta?.turnStartedAt)
+  const storedCompletedAt = Number(msg.meta?.turnCompletedAt)
+  const derivedLatency = Number.isFinite(storedStartedAt) && Number.isFinite(storedCompletedAt)
+    ? Math.max(0, storedCompletedAt - storedStartedAt)
+    : null
+  const elapsedMs = !running
+    ? Number.isFinite(storedLatency) ? Math.max(0, storedLatency) : derivedLatency ?? 0
+    : null
+  const startedAt = Number(msg.meta?.turnStartedAt || msg.timestamp) || fallbackStartedAt
+  const elapsed = useElapsedMilliseconds({ elapsedMs, running, startedAt })
+  const label = t('chatMessages.elapsed', { value: formatTaskDuration(elapsed, t) })
+
+  if (!hasExecution) {
+    return <div className="chat-task-duration" data-testid="task-duration-header">{label}</div>
+  }
+
+  return (
+    <section className="chat-execution-disclosure" data-running={running || undefined}>
+      <button
+        type="button"
+        className="chat-execution-toggle"
+        data-testid="execution-toggle"
+        aria-controls={contentId}
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <span data-testid="task-duration-header">{label}</span>
+        <ChevronDown className={`h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-180' : ''}`} aria-hidden="true" />
+      </button>
+      {expanded && <div id={contentId} className="chat-execution-content" data-testid="execution-content">{children}</div>}
+    </section>
+  )
+}
+
+function useElapsedMilliseconds({ elapsedMs, running, startedAt }) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!running || elapsedMs !== null) return undefined
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [elapsedMs, running])
+  return elapsedMs !== null ? elapsedMs : Math.max(0, now - startedAt)
+}
+
+function formatTaskDuration(milliseconds, t) {
+  const totalSeconds = Math.max(0, Math.floor(Number(milliseconds || 0) / 1000))
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return minutes > 0
+    ? t('chatMessages.durationMinutesSeconds', { minutes, seconds })
+    : t('chatMessages.durationSeconds', { seconds })
+}
+
+const ARTIFACT_TYPE_LABELS = Object.freeze({
+  docx: 'Word',
+  html: 'HTML',
+  html_multi: 'HTML',
+  json: 'JSON',
+  markdown: 'Markdown',
+  mermaid: 'Mermaid',
+  pdf: 'PDF',
+  pptx: 'PowerPoint',
+  react: 'React',
+  svg: 'SVG',
+  text: 'Text',
+  xlsx: 'Excel',
+})
+
+function artifactTypeLabel(reference) {
+  const type = String(reference?.type || '').trim().toLowerCase()
+  if (!type || type === 'file') return ''
+  return ARTIFACT_TYPE_LABELS[type] || type.toUpperCase()
+}
+
+function collapsedArtifactSummary(artifactReferences, t) {
+  const references = Array.isArray(artifactReferences) ? artifactReferences : []
+  if (references.length === 0) return t('chatMessages.artifactReadyGeneric')
+  if (references.length === 1) {
+    const [reference] = references
+    const type = artifactTypeLabel(reference)
+    if (!type) return t('chatMessages.artifactReadySingleFile', { filename: reference.filename })
+    return t('chatMessages.artifactReadySingle', {
+      filename: reference.filename,
+      type,
+    })
+  }
+  return t('chatMessages.artifactReadyMultiple', {
+    count: references.length,
+    filenames: references.map((reference) => reference.filename).join(', '),
+  })
+}
+
+function CollapsedArtifactContent({ artifactPreview, msg, onOpenArtifact, t }) {
   const artifactReferences = buildServerArtifactReferences({
     artifacts: resolveDeliveryArtifacts(msg.meta),
     content: String(msg.meta?.artifactSource || msg.content || ''),
@@ -224,10 +379,17 @@ function CollapsedArtifactContent({ artifactPreview, msg, onOpenArtifact }) {
   return (
     <>
       <div className="chat-assistant-message text-[15px] leading-7" data-quotable="true">
-        {Array.isArray(msg.meta?.toolCalls) && msg.meta.toolCalls.length > 0 && (
-          <ToolCallTrace calls={msg.meta.toolCalls} artifacts={artifactReferences} onOpenArtifact={openToolArtifact} />
-        )}
-        <p>Server turn completed</p>
+        <ExecutionDisclosure
+          hasExecution={Array.isArray(msg.meta?.toolCalls) && msg.meta.toolCalls.length > 0}
+          msg={msg}
+          running={false}
+          t={t}
+        >
+          {Array.isArray(msg.meta?.toolCalls) && msg.meta.toolCalls.length > 0 && (
+            <ToolCallTrace calls={msg.meta.toolCalls} artifacts={artifactReferences} onOpenArtifact={openToolArtifact} />
+          )}
+        </ExecutionDisclosure>
+        <p data-testid="artifact-completion-summary">{collapsedArtifactSummary(artifactReferences, t)}</p>
       </div>
       <ArtifactReferenceLinks msg={msg} preview={artifactPreview} onOpen={onOpenArtifact} />
     </>

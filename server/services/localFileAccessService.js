@@ -5,6 +5,7 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import { getDb } from '../db.js'
 import { getRuntimeEnv } from '../utils/runtimeEnv.js'
+import { isApprovalBypassEnabled } from './approvalSettingsStore.js'
 import { getWorkspaceTrustStatus } from './workspaceTrustService.js'
 import { resolveManagedAttachmentPath } from './managedAttachmentStore.js'
 
@@ -158,8 +159,10 @@ export function getLocalFileAccessStatus({ userId }) {
   const grants = getGrantRows(userId).map(mapGrant)
   const workspaceEnabled = process.env.WORKSPACE_FS_ENABLED === '1'
   const root = workspaceEnabled ? workspaceRoot() : null
+  const bypassEnabled = isApprovalBypassEnabled({ userId })
   return {
     allFilesEnabled: !!settings?.all_files_enabled,
+    bypassEnabled,
     grants,
     workspace: {
       enabled: workspaceEnabled,
@@ -184,9 +187,9 @@ export function getLocalFileAccessStatus({ userId }) {
 
 /**
  * Return the persisted directory grant that already satisfies a concrete
- * request_directory call. This deliberately ignores all-files access and
- * exact-file grants: shell/code execution requires an explicit read_write
- * directory grant, and a file grant cannot authorize sibling outputs.
+ * request_directory call. Explicit permission bypass is a user-selected
+ * read/write authority, while the separate all-files toggle and exact-file
+ * grants still do not grant shell/code execution authority.
  */
 export function findAuthorizedDirectoryGrant({
   userId,
@@ -205,6 +208,28 @@ export function findAuthorizedDirectoryGrant({
   }
   const checkedPath = target.exists ? target.fullPath : target.anchorPath
   if (!checkedPath) return null
+
+  if (isApprovalBypassEnabled({ userId })) {
+    let authorizedPath = target.fullPath
+    try {
+      if (target.exists && fs.statSync(target.fullPath).isFile()) {
+        authorizedPath = path.dirname(target.fullPath)
+      }
+    } catch {
+      // The canonical target already passed resolution; retain it if stat
+      // becomes unavailable between those operations.
+    }
+    return {
+      id: `permission-bypass:${userId}`,
+      path: authorizedPath,
+      resourceType: 'directory',
+      accessMode: 'read_write',
+      available: target.exists,
+      createdAt: null,
+      updatedAt: null,
+      source: 'bypass',
+    }
+  }
 
   const row = getGrantRows(userId).find((grant) => {
     if (grant.resource_type !== 'directory') return false
@@ -311,9 +336,10 @@ export function resolveAuthorizedLocalPath({
   if (!raw) throw serviceError('path 必填', 400, 'PATH_REQUIRED')
   const managedAttachment = resolveManagedAttachmentPath({ userId, rawPath: raw, write })
   if (managedAttachment) return managedAttachment
+  const bypassEnabled = isApprovalBypassEnabled({ userId })
   const workspaceEnabled = allowWorkspace === true
   const workspaceTrusted = workspaceEnabled && (!userId || sharedWorkspaceTrusted())
-  if (!path.isAbsolute(raw) && !workspaceEnabled) {
+  if (!path.isAbsolute(raw) && !workspaceEnabled && !bypassEnabled) {
     // ★ 报错要告诉模型「你能用什么」,而不只是「你不能用什么」。
     //
     // 原来只说「请使用已授权范围内的绝对路径」—— 模型不知道授权了哪些目录,
@@ -339,6 +365,15 @@ export function resolveAuthorizedLocalPath({
   const basePath = path.isAbsolute(raw) ? raw : path.resolve(workspaceRoot(), raw)
   const target = resolveTarget(basePath, { allowMissing })
   const checkedPath = target.exists ? target.fullPath : target.anchorPath
+
+  if (bypassEnabled) {
+    return {
+      fullPath: target.fullPath,
+      displayPath: target.fullPath,
+      source: 'bypass',
+      rootPath: path.parse(target.fullPath).root,
+    }
+  }
 
   if (workspaceTrusted) {
     const root = realPath(workspaceRoot())

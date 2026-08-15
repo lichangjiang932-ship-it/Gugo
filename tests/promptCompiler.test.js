@@ -16,6 +16,7 @@ const {
   buildSessionsBlock,
   clearPromptCompilerCache,
   getPromptCompilerStats,
+  prepareSkillCatalogForPrompt,
   SKILL_PROMPT_LIMITS,
 } = await import('../server/services/promptCompiler.js')
 const { buildAgentSystemBlock } = await import('../server/services/agentStore.js')
@@ -130,6 +131,50 @@ test('prepared skill prompts and the combined skills block obey safety budgets',
   })
   assert.ok(Buffer.byteLength(block.text, 'utf8') <= SKILL_PROMPT_LIMITS.maxBlockBytes)
   assert.match(block.text, /safety budget/)
+})
+
+test('skill catalog stays metadata-only until a skill is explicitly loaded', () => {
+  const block = buildSkillsBlockFromPrepared({
+    catalogSkills: [{
+      id: 'catalog-writer',
+      name: 'Catalog writer',
+      description: 'A compact catalog entry.',
+      systemPrompt: 'SECRET_UNSELECTED_SKILL_BODY',
+      loadable: true,
+    }],
+  })
+
+  assert.match(block.text, /catalog-writer.*Catalog writer.*loadable: \/catalog-writer/)
+  assert.doesNotMatch(block.text, /SECRET_UNSELECTED_SKILL_BODY/)
+  assert.deepEqual(block.sources.skillIds, [])
+  assert.deepEqual(block.sources.catalogSkillIds, ['catalog-writer'])
+})
+
+test('selected skills with identical instruction digests inject the body once', () => {
+  const block = buildSkillsBlockFromPrepared({
+    skills: [{
+      id: 'duplicate-a',
+      name: 'Duplicate A',
+      systemPrompt: 'SHARED_SKILL_BODY_FOR_DIGEST_DEDUP',
+    }, {
+      id: 'duplicate-b',
+      name: 'Duplicate B',
+      systemPrompt: 'SHARED_SKILL_BODY_FOR_DIGEST_DEDUP',
+    }],
+  })
+
+  assert.deepEqual(block.sources.skillIds, ['duplicate-a', 'duplicate-b'])
+  assert.equal(block.sources.promptDigests.length, 1)
+  assert.equal(block.text.match(/SHARED_SKILL_BODY_FOR_DIGEST_DEDUP/g)?.length, 1)
+  assert.match(block.text, /Equivalent selected IDs.*duplicate-b/)
+})
+
+test('runtime catalog preparation exposes bounded metadata without prompt bodies', () => {
+  const catalog = prepareSkillCatalogForPrompt()
+  assert.ok(catalog.length > 0)
+  assert.equal(catalog.every((skill) => !Object.hasOwn(skill, 'systemPrompt')), true)
+  assert.equal(catalog.every((skill) => Array.from(skill.description).length <= 500), true)
+  assert.equal(catalog.every((skill) => typeof skill.loadable === 'boolean'), true)
 })
 
 test('buildSessionsBlock includes sessionId and recentMessages in fingerprint', () => {

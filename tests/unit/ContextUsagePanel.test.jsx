@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { JSDOM } from 'jsdom'
-import { act } from 'react'
+import { act, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import { I18nProvider, useT } from '../../src/i18n/I18nProvider.jsx'
+import ComposerActions from '../../src/pages/ChatSplit/chatComposer/ComposerActions.jsx'
 import ContextUsagePanel from '../../src/pages/ChatSplit/chatMessages/ContextUsagePanel.jsx'
 
 function setupDom() {
@@ -21,19 +22,42 @@ function setupDom() {
   return dom
 }
 
-function Harness({ contextUsage, onClose }) {
+function Harness({ contextUsage }) {
   const { t } = useT()
   return <ContextUsagePanel
     contextUsage={contextUsage}
     contextWindow={128000}
-    messages={[{ id: 'a', role: 'user' }, { id: 'b', role: 'assistant' }]}
-    selectedModel="deepseek-v4"
-    onClose={onClose}
     t={t}
   />
 }
 
-test('context panel reports usage, remaining, system prompt, tools, and messages', async () => {
+function ComposerHarness({ contextUsage }) {
+  const { t } = useT()
+  const fileInputRef = useRef(null)
+  const [open, setOpen] = useState(false)
+  return <ComposerActions
+    approvalMode="normal"
+    contextPanelOpen={open}
+    contextUsage={contextUsage}
+    fileInputRef={fileInputRef}
+    isGenerating={false}
+    modelOptions={[{ name: 'deepseek-v4', contextWindow: 1000000 }]}
+    modelPickerOpen={false}
+    onApprovalModeChange={() => {}}
+    onCloseModelPicker={() => {}}
+    onFileChange={() => {}}
+    onManageModels={() => {}}
+    onModelChange={() => {}}
+    onOpenModelPicker={() => {}}
+    onSend={() => {}}
+    onToggleContext={() => setOpen((current) => !current)}
+    sendDisabled
+    selectedModel="deepseek-v4"
+    t={t}
+  />
+}
+
+test('context panel shows compact total plus system, tools, and conversation breakdown', async () => {
   const dom = setupDom()
   const rootElement = dom.window.document.getElementById('root')
   const root = createRoot(rootElement)
@@ -51,41 +75,128 @@ test('context panel reports usage, remaining, system prompt, tools, and messages
   try {
     await act(async () => root.render(
       <I18nProvider>
-        <Harness contextUsage={contextUsage} onClose={() => {}} />
+        <Harness contextUsage={contextUsage} />
       </I18nProvider>,
     ))
     assert.ok(rootElement.querySelector('[data-testid="context-usage-panel"]'))
     const text = rootElement.textContent
-    assert.match(text, /30,000 \/ 128,000/)
+    assert.match(text, /~30K \/ 128K/)
     assert.match(text, /23%/)
-    assert.match(text, /98,000/) // remaining = 128000 - 30000
     assert.match(text, /系统提示词/)
-    assert.match(text, /工具定义/)
+    assert.match(text, /工具/)
     assert.match(text, /对话消息/)
-    assert.match(text, /2/)
-    assert.match(text, /deepseek-v4/)
+    assert.match(text, /~8K/)
+    assert.match(text, /~12K/)
+    assert.match(text, /~10K/)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
   }
 })
 
-test('context panel close button calls onClose', async () => {
+test('context panel prefers measured prompt tokens and matches the model-circle summary', async () => {
   const dom = setupDom()
   const rootElement = dom.window.document.getElementById('root')
   const root = createRoot(rootElement)
-  let closed = false
-  const contextUsage = { estimatedTokens: 1000, percent: 1, contextWindow: 128000, systemTokens: 16, messageTokens: 900, toolCallTokens: 0, attachmentTokens: 0, toolSpecTokens: 0 }
+  const contextUsage = { actualPromptTokens: 331000, estimatedTokens: 1000, percent: 1, contextWindow: 1000000, systemTokens: 1500, messageTokens: 262000, toolCallTokens: 2000, attachmentTokens: 0, toolSpecTokens: 4700 }
   try {
     await act(async () => root.render(
       <I18nProvider>
-        <Harness contextUsage={contextUsage} onClose={() => { closed = true }} />
+        <Harness contextUsage={contextUsage} />
       </I18nProvider>,
     ))
-    const closeButton = [...rootElement.querySelectorAll('button')].find((button) => button.title === '关闭上下文详情')
-    assert.ok(closeButton)
-    await act(async () => closeButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
-    assert.equal(closed, true)
+    assert.match(rootElement.textContent, /33%/)
+    assert.match(rootElement.textContent, /331K \/ 1M/)
+    assert.doesNotMatch(rootElement.textContent, /~331K \/ 1M/)
+    assert.equal(rootElement.querySelector('[data-testid="context-usage-panel"]')?.getAttribute('role'), 'dialog')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('context panel treats measured zero as real usage', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  const contextUsage = {
+    actualPromptTokens: 0,
+    estimatedTokens: 5000,
+    contextWindow: 128000,
+    systemTokens: 100,
+    messageTokens: 200,
+    toolCallTokens: 0,
+    attachmentTokens: 0,
+    toolSpecTokens: 0,
+  }
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <Harness contextUsage={contextUsage} />
+      </I18nProvider>,
+    ))
+    assert.match(rootElement.textContent, /0 \/ 128K/)
+    assert.doesNotMatch(rootElement.textContent, /~5K \/ 128K/)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('context panel and model circle fall back to estimates when measured usage is missing', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  const contextUsage = {
+    actualPromptTokens: null,
+    estimatedTokens: 5000,
+    percent: 4,
+    contextWindow: 128000,
+    systemTokens: 100,
+    messageTokens: 200,
+    toolCallTokens: 0,
+    attachmentTokens: 0,
+    toolSpecTokens: 0,
+  }
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <ComposerHarness contextUsage={contextUsage} />
+      </I18nProvider>,
+    ))
+    const ring = rootElement.querySelector('[data-testid="context-ring"]')
+    assert.match(ring?.getAttribute('aria-label') || '', /4% · 5,000 \/ 128,000 tokens/)
+
+    await act(async () => ring.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.match(rootElement.textContent, /~5K \/ 128K/)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('model context circle toggles the usage popover and closes it with Escape', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  const contextUsage = { actualPromptTokens: 331000, estimatedTokens: 1000, percent: 1, contextWindow: 1000000, systemTokens: 1500, messageTokens: 262000, toolCallTokens: 2000, attachmentTokens: 0, toolSpecTokens: 4700 }
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <ComposerHarness contextUsage={contextUsage} />
+      </I18nProvider>,
+    ))
+    const ring = rootElement.querySelector('[data-testid="context-ring"]')
+    assert.ok(ring)
+    assert.match(ring.getAttribute('aria-label') || '', /33% · 331,000 \/ 1,000,000 tokens/)
+    assert.equal(rootElement.querySelector('[data-testid="context-usage-popover"]'), null)
+
+    await act(async () => ring.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.ok(rootElement.querySelector('[data-testid="context-usage-popover"]'))
+    assert.equal(ring.getAttribute('aria-expanded'), 'true')
+
+    await act(async () => dom.window.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    assert.equal(rootElement.querySelector('[data-testid="context-usage-popover"]'), null)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

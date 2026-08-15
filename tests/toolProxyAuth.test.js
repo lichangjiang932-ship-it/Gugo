@@ -10,6 +10,7 @@ import {
   verifyEmailCode,
 } from '../server/adapters/authAccount.js'
 import { getDb } from '../server/db.js'
+import { setApprovalMode } from '../server/services/approvalSettingsStore.js'
 import { upsertHook } from '../server/services/hooksService.js'
 import { configureWebSearch } from '../server/services/webSearchService.js'
 
@@ -181,6 +182,7 @@ test('direct tool ask cancels its persisted approval when the response closes ea
       email: 'direct-tool-disconnect@example.com',
       code: issueEmailCode({ email: 'direct-tool-disconnect@example.com', code: '666666' }).devCode,
     })
+    setApprovalMode({ userId: user.id, mode: 'normal' })
     upsertHook({
       userId: user.id,
       event: 'pre_tool_use',

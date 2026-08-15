@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, Cloud, RefreshCw, Save, X } from 'lucide-react'
 import {
-  CLOUD_PRESETS, effectiveUrl, emptyProvider, formatContextTokens, KIND_OPTIONS, LOCAL_PRESETS, PROVIDER_PRESETS, TRIBOOL_VALUES,
+  CLOUD_PRESETS, effectiveUrl, emptyProvider, findConfiguredPresetProvider, formatContextTokens, KIND_OPTIONS, LOCAL_PRESETS,
+  PROVIDER_PRESETS, toEditor, TRIBOOL_VALUES,
 } from './providerConfig.js'
 
 function Field({ label, children }) {
@@ -15,21 +16,25 @@ function TriboolField({ label, value, onChange, t }) {
   </select></Field>
 }
 
-function PresetPicker({ editing, setEditing, setShowAdvanced, t }) {
+function PresetPicker({ editing, setEditing, setShowAdvanced, providers, t }) {
   const presetLabel = (preset) => preset.labelKey ? t(`modelProviders.${preset.labelKey}`) : preset.label
   const applyPreset = (preset) => {
     const caps = preset.caps || {}
-    setEditing((current) => ({
-      ...current, presetId: preset.id, key: current.id ? current.key : preset.key,
-      label: current.id ? current.label : presetLabel(preset), baseUrl: preset.baseUrl, kind: preset.kind || '',
-      modelsText: preset.models?.join('\n') || current.modelsText, defaultModel: preset.models?.[0] || current.defaultModel,
-      isDefault: true,
-      contextWindow: preset.contextWindow != null ? String(preset.contextWindow) : '',
-      supportsTools: caps.supportsTools ?? current.supportsTools,
-      supportsStreaming: caps.supportsStreaming ?? current.supportsStreaming,
-      supportsVision: caps.supportsVision ?? current.supportsVision,
-      supportsPdf: caps.supportsPdf ?? current.supportsPdf,
-    }))
+    setEditing((current) => {
+      const existing = current.id ? null : findConfiguredPresetProvider(providers, preset)
+      if (existing) return { ...toEditor(existing), presetId: preset.id }
+      return {
+        ...current, presetId: preset.id, key: current.id ? current.key : preset.key,
+        label: current.id ? current.label : presetLabel(preset), baseUrl: preset.baseUrl, kind: preset.kind || '',
+        modelsText: preset.models?.join('\n') || current.modelsText, defaultModel: preset.models?.[0] || current.defaultModel,
+        isDefault: true,
+        contextWindow: preset.contextWindow != null ? String(preset.contextWindow) : '',
+        supportsTools: caps.supportsTools ?? current.supportsTools,
+        supportsStreaming: caps.supportsStreaming ?? current.supportsStreaming,
+        supportsVision: caps.supportsVision ?? current.supportsVision,
+        supportsPdf: caps.supportsPdf ?? current.supportsPdf,
+      }
+    })
     setShowAdvanced(false)
   }
   const contextBadge = (preset) => {
@@ -91,7 +96,7 @@ function CapabilityFields({ editing, setEditing, t }) {
   </div>
 }
 
-export default function ProviderEditor({ editing, setEditing, busy, detecting, canSave, onSave, onDiscover, t }) {
+export default function ProviderEditor({ editing, setEditing, providers = [], busy, detecting, canSave, onSave, onDiscover, t }) {
   const [showAdvanced, setShowAdvanced] = useState(editing.presetId === 'custom')
   const selectedPreset = PROVIDER_PRESETS.find((preset) => preset.id === editing.presetId)
   const isLocalPreset = selectedPreset?.local === true
@@ -101,13 +106,13 @@ export default function ProviderEditor({ editing, setEditing, busy, detecting, c
     <div className="w-[620px] max-w-full max-h-[92vh] my-auto bg-paper border border-ink/20 rounded-md flex flex-col overflow-hidden">
       <div className="flex items-center shrink-0 px-5 pt-5 pb-3 border-b border-ink/10"><div className="font-semibold text-ink flex-1">{t('modelProviders.editor')}</div><button type="button" onClick={() => setEditing(null)}><X className="w-4 h-4" /></button></div>
       <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 flex flex-col gap-3">
-        <PresetPicker editing={editing} setEditing={setEditing} setShowAdvanced={setShowAdvanced} t={t} />
+        <PresetPicker editing={editing} setEditing={setEditing} setShowAdvanced={setShowAdvanced} providers={providers} t={t} />
         {editing.presetId && editing.presetId !== 'custom' && <div className="flex flex-col gap-3">
           <div className="flex flex-wrap items-center gap-2">
             <div className="text-sm font-semibold text-ink">{editing.label}</div>
             {modelList.length > 0 && <span className="rounded-full bg-paper-2 px-2 py-0.5 text-[11px] text-ink-soft">{t('modelProviders.modelsCount', { count: modelList.length })}</span>}
           </div>
-          {!isLocalPreset && <Field label={`API Key${editing.hasApiKey ? ` · ${t('modelProviders.keepSecret')}` : ''}`}><input type="password" value={editing.apiKey} onChange={(event) => setEditing({ ...editing, apiKey: event.target.value })} placeholder={editing.hasApiKey ? '••••••••' : t('modelProviders.apiKeyPlaceholder')} autoFocus /></Field>}
+          {!isLocalPreset && <Field label={`API Key${editing.hasApiKey ? ` · ${t('modelProviders.keepSecret')}` : ''}`}><input type="password" value={editing.apiKey} onInput={(event) => setEditing({ ...editing, apiKey: event.currentTarget.value })} placeholder={editing.hasApiKey ? '••••••••' : t('modelProviders.apiKeyPlaceholder')} autoFocus /></Field>}
           {!isLocalPreset && <div className="text-[11px] text-ink-fade">{t('modelProviders.presetFilled')}</div>}
           {modelList.length > 1 && <Field label={t('modelProviders.defaultModel')}><select value={editing.defaultModel} onChange={(event) => setEditing({ ...editing, defaultModel: event.target.value })}>{modelList.map((model) => <option key={model} value={model}>{model}{selectedPreset?.legacyModels?.includes(model) ? ' · legacy' : ''}</option>)}</select></Field>}
           {isLocalPreset && <div className="text-xs text-ink-fade">{t('modelProviders.localDetectHint')}</div>}
@@ -116,7 +121,7 @@ export default function ProviderEditor({ editing, setEditing, busy, detecting, c
         {showAdvanced && <div className="flex flex-col gap-3 rounded-xl border border-ink/15 p-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3"><Field label="Provider ID"><input disabled={!!editing.id} value={editing.key} onChange={(event) => setEditing({ ...editing, key: event.target.value.toLowerCase() })} placeholder="my-provider" /></Field><Field label={t('modelProviders.name')}><input value={editing.label} onChange={(event) => setEditing({ ...editing, label: event.target.value })} placeholder="My Provider" /></Field></div>
           <Field label="Base URL"><input value={editing.baseUrl} onChange={(event) => setEditing({ ...editing, baseUrl: event.target.value })} placeholder="https://api.example.com/v1" /></Field>
-          {isLocalOrCustom && <Field label={`API Key · ${t('modelProviders.optional')}${editing.hasApiKey ? ` (${t('modelProviders.keepSecret')})` : ''}`}><input type="password" value={editing.apiKey} onChange={(event) => setEditing({ ...editing, apiKey: event.target.value })} placeholder={editing.hasApiKey ? '••••••••' : t('modelProviders.localNoKey')} /></Field>}
+          {isLocalOrCustom && <Field label={`API Key · ${t('modelProviders.optional')}${editing.hasApiKey ? ` (${t('modelProviders.keepSecret')})` : ''}`}><input type="password" value={editing.apiKey} onInput={(event) => setEditing({ ...editing, apiKey: event.currentTarget.value })} placeholder={editing.hasApiKey ? '••••••••' : t('modelProviders.localNoKey')} /></Field>}
           <Field label={t('modelProviders.models')}><textarea rows="3" value={editing.modelsText} onChange={(event) => setEditing({ ...editing, modelsText: event.target.value })} placeholder={'model-a\nmodel-b'} /></Field>
           <Field label={t('modelProviders.headers')}><textarea rows="3" value={editing.headersText} onChange={(event) => setEditing({ ...editing, headersText: event.target.value })} placeholder={'{"X-Custom-Header":"value"}'} /></Field>
           <CapabilityFields editing={editing} setEditing={setEditing} t={t} />

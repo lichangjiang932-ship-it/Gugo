@@ -47,6 +47,78 @@ test('runToolsLoop: 模型调 request_clarification → 立即 paused 中断', a
   assert.equal(callCount, 1, '模型只能被调一次')
 })
 
+test('runToolsLoop: execution clarification filters source from payload, checkpoint, and restore', async () => {
+  const unsafeQuestion = '```js\nconst patch = "copy me"\n```\n请自行保存并运行。'
+  const checkpoints = []
+  const job = {
+    id: 'clarification-source-guard',
+    userId: 'u-1',
+    origin: 'chat',
+    prompt: '修改 src/login.js 并验证',
+    userPrompt: '修改 src/login.js 并验证',
+    steps: [],
+  }
+  const result = await runToolsLoop({
+    job,
+    step: { id: 'clarification-source-guard', kind: 'chat' },
+    messages: [{ role: 'user', content: '修改 src/login.js 并验证' }],
+    runModel: async () => ({
+      content: '',
+      toolCalls: [{
+        id: 'unsafe-clarification',
+        function: {
+          name: 'request_clarification',
+          arguments: JSON.stringify({
+            question: unsafeQuestion,
+            options: ['<!doctype html><html><body>copy me</body></html>', '继续'],
+          }),
+        },
+      }],
+    }),
+    executeTool: async ({ name, args }) => {
+      assert.equal(name, 'request_clarification')
+      return requestClarificationTool(args)
+    },
+    saveCheckpoint: async (state) => {
+      checkpoints.push(structuredClone(state))
+      return true
+    },
+  })
+
+  assert.equal(result.paused, true)
+  assert.match(result.text, /已隐藏模型异常收尾时返回的代码内容/)
+  assert.equal(JSON.stringify(result.clarification).includes('copy me'), false)
+  assert.equal(JSON.stringify(result.clarification).includes('请自行保存并运行'), false)
+  assert.equal(JSON.stringify(checkpoints.at(-1)?.final?.clarification).includes('copy me'), false)
+
+  const resumed = await runToolsLoop({
+    job: { ...job, id: 'clarification-source-guard-restored' },
+    step: { id: 'clarification-source-guard-restored', kind: 'chat' },
+    messages: [{ role: 'user', content: '修改 src/login.js 并验证' }],
+    loadCheckpoint: async () => ({
+      state: {
+        final: {
+          text: '需要你补充信息后才能继续。',
+          iterations: 1,
+          paused: true,
+          clarification: {
+            question: unsafeQuestion,
+            options: ['<!doctype html><html><body>copy me</body></html>'],
+          },
+        },
+      },
+    }),
+    runModel: async () => {
+      throw new Error('terminal checkpoint should be restored without another model call')
+    },
+  })
+
+  assert.equal(resumed.resumed, true)
+  assert.equal(resumed.paused, true)
+  assert.equal(JSON.stringify(resumed.clarification).includes('copy me'), false)
+  assert.equal(JSON.stringify(resumed.clarification).includes('请自行保存并运行'), false)
+})
+
 test('runToolsLoop: reflect 不中断,继续下一轮', async () => {
   let callCount = 0
   const fakeRunModel = async () => {

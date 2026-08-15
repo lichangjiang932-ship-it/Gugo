@@ -50,6 +50,7 @@ test('model providers are user-scoped, redacted and converted to runtime env', (
   assert.equal(env.MODEL_BASE_URL, 'https://models.example.com/v1')
   assert.equal(env.MODEL_API_KEY, 'sk-secret')
   assert.equal(env.MODEL_PROVIDER_CUSTOM_OPENAI_API_KEY, 'sk-secret')
+  assert.equal(env.MODEL_PROVIDER_CUSTOM_OPENAI_LABEL, 'Custom OpenAI')
   assert.equal(env.MODEL_PROVIDER_CUSTOM_OPENAI_MODELS, 'alpha,beta')
   assert.equal(JSON.parse(env.MODEL_PROVIDER_CUSTOM_OPENAI_HEADERS)['X-Tenant'], 'atelier')
 

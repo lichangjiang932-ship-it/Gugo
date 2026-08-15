@@ -282,6 +282,7 @@ export function buildUserModelEnv({ userId, env = process.env } = {}) {
   next.MODEL_PROVIDERS = [...new Set([...providers.map((provider) => provider.key), ...envIds])].join(',')
   for (const provider of providers) {
     const prefix = envPrefix(provider.key)
+    next[`${prefix}_LABEL`] = provider.label
     next[`${prefix}_BASE_URL`] = provider.baseUrl
     next[`${prefix}_API_KEY`] = provider.apiKey
     next[`${prefix}_MODELS`] = provider.models.join(',')

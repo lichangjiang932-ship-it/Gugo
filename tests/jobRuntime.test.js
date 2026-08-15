@@ -493,8 +493,8 @@ test('default executor does not deny generic file and shell capabilities when no
     job: {
       id: 'job-generic-file-capability-prompt',
       userId: null,
-      title: 'Update PDF',
-      prompt: '将 Task 1 写入 D:\\desktop\\answer.pdf。',
+      title: 'Update text file',
+      prompt: '将 Task 1 写入 D:\\desktop\\answer.txt。',
       steps: [],
     },
     step: { id: 'step-generic-file-capability-prompt', kind: 'execute' },

@@ -43,7 +43,8 @@ function oneToolModel(name, args, finalText = 'done') {
 }
 
 async function waitForPendingApproval(userId) {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline) {
     const row = listPendingApprovals({ userId, status: 'pending' })[0]
     if (row) return row
     await new Promise((resolve) => setTimeout(resolve, 10))
@@ -146,9 +147,9 @@ test('autonomous job pre hook can deny a tool before the executor runs', async (
   assert.equal(denied.denied, true)
 })
 
-test('pre hook ask forces a matched safe call through approval before execution', async () => {
+test('pre hook ask forces a matched safe call through approval outside bypass mode', async () => {
   const { userId } = issueTestSession({ email: 'job-hook-ask@example.com' })
-  setApprovalMode({ userId, mode: 'bypass' })
+  setApprovalMode({ userId, mode: 'normal' })
   upsertHook({
     userId,
     event: 'pre_tool_use',
@@ -171,6 +172,7 @@ test('pre hook ask forces a matched safe call through approval before execution'
       executions += 1
       return { ok: true }
     },
+    approvalMode: 'all',
     approvalOrigin: 'chat',
     approvalSessionId: 'session-hook-ask',
   })
@@ -184,6 +186,40 @@ test('pre hook ask forces a matched safe call through approval before execution'
   const result = await running
   assert.equal(result.text, 'done')
   assert.equal(executions, 1)
+})
+
+test('bypass mode does not let pre hook ask recreate an approval wait', async () => {
+  const { userId } = issueTestSession({ email: 'job-hook-ask-bypass@example.com' })
+  setApprovalMode({ userId, mode: 'bypass' })
+  upsertHook({
+    userId,
+    event: 'pre_tool_use',
+    toolPattern: 'demo_tool',
+    argumentMatcher: { value: 'review' },
+    kind: 'shell',
+    command: shellJsonHook({ allow: true, permissionDecision: 'ask', reason: 'matched policy' }),
+    enabled: true,
+    blocking: true,
+    timeoutMs: 5000,
+  })
+
+  let executions = 0
+  const result = await runToolsLoop({
+    job: { id: 'turn-hook-ask-bypass', userId, prompt: 'run reviewed demo' },
+    step: { id: 'step-hook-ask-bypass' },
+    messages: [{ role: 'user', content: 'run reviewed demo' }],
+    runModel: oneToolModel('demo_tool', { value: 'review' }),
+    executeTool: async () => {
+      executions += 1
+      return { ok: true }
+    },
+    approvalOrigin: 'chat',
+    approvalSessionId: 'session-hook-ask-bypass',
+  })
+
+  assert.equal(result.text, 'done')
+  assert.equal(executions, 1)
+  assert.equal(listPendingApprovals({ userId, status: 'pending' }).length, 0)
 })
 
 test('job prompt lifecycle hook can rewrite or reject a queued autonomous job', async () => {

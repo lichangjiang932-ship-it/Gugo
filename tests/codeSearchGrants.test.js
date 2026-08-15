@@ -19,6 +19,7 @@ process.env.APP_DATA_DIR = tmpData
 process.env.WORKSPACE_FS_ENABLED = '0'
 
 const { getDb } = await import('../server/db.js')
+const { setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
 const { grantLocalPath } = await import('../server/services/localFileAccessService.js')
 const { grepCodeTool, findSymbolTool, listImportsTool, dispatchCodeSearchTool } =
   await import('../server/utils/codeSearch.js')
@@ -28,6 +29,7 @@ const USER = 'cs-grant-user'
 getDb()
   .prepare('INSERT INTO users (id,email,created_at,updated_at) VALUES (?,?,?,?)')
   .run(USER, 'cs-grants@example.com', now, now)
+setApprovalMode({ userId: USER, mode: 'normal' })
 
 // 一个 WORKSPACE_ROOT 之外的项目目录
 const project = fs.mkdtempSync(path.join(os.tmpdir(), 'outside-project-'))

@@ -6,6 +6,7 @@ import {
   estimateClientContextUsage,
   estimateTextTokens,
   normalizeContextWindow,
+  normalizeOptionalTokenCount,
   resolveModelContextWindow,
 } from '../src/lib/contextUsage.js'
 
@@ -65,6 +66,28 @@ test('client context percent is bounded and invalid windows use the default', ()
   assert.equal(usage.percent, 100)
   assert.equal(estimateClientContextUsage({ contextWindow: 0 }).contextWindow, DEFAULT_MODEL_CONTEXT_WINDOW)
   assert.equal(estimateClientContextUsage().contextWindow, 128_000)
+})
+
+test('client context usage retains a measured zero instead of falling back to the estimate', () => {
+  const usage = estimateClientContextUsage({
+    messages: [{ role: 'user', content: 'This still has an estimate.' }],
+    actualPromptTokens: 0,
+  })
+  assert.equal(usage.actualPromptTokens, 0)
+  assert.ok(usage.estimatedTokens > 0)
+})
+
+test('missing measured usage stays absent so the UI can use its estimate', () => {
+  for (const actualPromptTokens of [null, undefined, '', '   ', false]) {
+    const usage = estimateClientContextUsage({
+      messages: [{ role: 'user', content: 'This needs an estimate.' }],
+      actualPromptTokens,
+    })
+    assert.equal(Object.hasOwn(usage, 'actualPromptTokens'), false)
+    assert.ok(usage.estimatedTokens > 0)
+  }
+  assert.equal(normalizeOptionalTokenCount(0), 0)
+  assert.equal(normalizeOptionalTokenCount('42'), 42)
 })
 
 test('context window normalization is conservative for invalid model metadata', () => {

@@ -51,14 +51,21 @@ export function buildVisibleModelCatalog({ names = [], defaultModel = '', provid
   const uniqueNames = [...new Set(names.length ? names : [defaultModel].filter(Boolean))]
   const providerByModel = new Map()
   for (const entry of providerModelEntries) {
-    if (!providerByModel.has(entry.name)) providerByModel.set(entry.name, entry.provider)
+    if (!providerByModel.has(entry.name)) {
+      providerByModel.set(entry.name, {
+        id: entry.provider,
+        label: String(entry.providerLabel || '').trim(),
+      })
+    }
   }
   return uniqueNames.map((name) => {
     const profile = resolveProfile(name)
+    const provider = providerByModel.get(name)
     return {
       name,
       active: name === defaultModel,
-      ...(providerByModel.has(name) ? { provider: providerByModel.get(name) } : {}),
+      ...(provider ? { provider: provider.id } : {}),
+      ...(provider?.label ? { providerLabel: provider.label } : {}),
       contextWindow: profile.contextWindow,
       contextWindowSource: profile.contextWindowSource,
       contextWindowEstimated: profile.contextWindowEstimated,

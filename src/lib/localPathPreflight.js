@@ -226,6 +226,7 @@ export function buildLocalPathPreflight(content) {
 
 export function isLocalPathAuthorized(targetPath, status, accessMode = 'read_only') {
   if (!targetPath || !status) return false
+  if (status.bypassEnabled === true) return true
   if (status.allFilesEnabled) return true
   if (status.workspace?.enabled && status.workspace.path && pathContains(status.workspace.path, targetPath)) return true
   return (status.grants || []).some((grant) => {

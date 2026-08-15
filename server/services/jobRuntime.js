@@ -10,7 +10,7 @@ import { callBackgroundModel, callBackgroundModelWithTools, formatProxyError, ge
 import { runToolLoop, selectToolSpecs, SERVER_TOOL_SPECS } from './toolLoopRuntime.js'
 import { listUserToolSpecs } from '../mcp/mcpManager.js'
 import { listRegisteredBrowserToolSpecs } from './browserTools.js'
-import { allowedArtifactTools } from './artifactIntent.js'
+import { allowedArtifactTools, isExplicitCodeSnippetRequest } from './artifactIntent.js'
 import { ensureSafetySystemMessages } from './promptCompiler.js'
 import { injectJobPromptContext, resolveJobSkillContext } from './jobPromptContext.js'
 import {
@@ -289,7 +289,12 @@ export function createDefaultExecuteStep({
     if (enableServerTools) {
       // 提示词分支和工具集裁剪必须用同一份判定(见 toolLoopRuntime 里的注释),
       // 这里按顺序注入:产物规则 → 代码工作流 → 引用/链接引导 → 延迟唤醒。
-      messages.push({ role: 'system', content: buildArtifactPrompt(artifactTools) })
+      messages.push({
+        role: 'system',
+        content: buildArtifactPrompt(artifactTools, {
+          codeSnippetRequested: isExplicitCodeSnippetRequest(userPrompt || job.prompt),
+        }),
+      })
       messages.push({ role: 'system', content: buildCodeWorkflowPrompt() })
       messages.push({ role: 'system', content: buildCitationPrompt() })
       messages.push({ role: 'system', content: buildDelayedFollowupPrompt() })

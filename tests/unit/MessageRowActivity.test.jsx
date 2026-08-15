@@ -84,6 +84,127 @@ test('tool readiness is visible without a tool card and yields to the single dur
   }
 })
 
+test('completed assistant turn renders its persisted total elapsed time', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const msg = {
+    id: 'assistant-with-total-duration',
+    role: 'assistant',
+    content: 'The task is complete.',
+    timestamp: 100_000,
+    meta: {
+      serverTurnId: 'turn-with-total-duration',
+      turnStartedAt: 100_000,
+      turnCompletedAt: 165_000,
+    },
+  }
+  const t = (key, values = {}) => {
+    if (key === 'chatMessages.elapsed') return `Elapsed ${values.value}`
+    if (key === 'chatMessages.durationMinutesSeconds') return `${values.minutes}m ${values.seconds}s`
+    if (key === 'chatMessages.durationSeconds') return `${values.seconds}s`
+    return key
+  }
+
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <MessageRow
+          msg={msg}
+          rowKey={msg.id}
+          generatingMessageId=""
+          lang="en"
+          t={t}
+        />
+      </I18nProvider>,
+    ))
+
+    const durationHeader = rootElement.querySelector('[data-testid="task-duration-header"]')
+    assert.ok(durationHeader)
+    assert.equal(durationHeader.textContent, 'Elapsed 1m 5s')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('assistant keeps narration and tools in true DOM order with the current command expanded last', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const beforeTool = 'Checked the project files.\n\n'
+  const afterTool = 'Generated the page and started verification.'
+  const content = `${beforeTool}${afterTool}`
+  const msg = {
+    id: 'assistant-ordered-timeline',
+    role: 'assistant',
+    content,
+    timestamp: Date.now(),
+    meta: {
+      streaming: true,
+      toolCalls: [{
+        id: 'read-project',
+        name: 'list_directory',
+        arguments: JSON.stringify({ path: 'D:\\work' }),
+        result: JSON.stringify({ ok: true }),
+        status: 'success',
+        textOffset: beforeTool.length,
+      }, {
+        id: 'verify-page',
+        name: 'run_command',
+        arguments: JSON.stringify({ command: 'npm test' }),
+        status: 'running',
+        liveOutput: 'starting verification\n3 tests passed',
+        textOffset: content.length,
+      }],
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <MessageRow
+          msg={msg}
+          rowKey={msg.id}
+          generatingMessageId={msg.id}
+          lang="en"
+          t={(key) => key}
+        />
+      </I18nProvider>,
+    ))
+
+    const quotable = rootElement.querySelector('[data-quotable="true"]')
+    assert.ok(quotable)
+    const executionToggle = quotable.querySelector('[data-testid="execution-toggle"]')
+    assert.equal(executionToggle?.getAttribute('aria-expanded'), 'true')
+    const executionContent = quotable.querySelector('[data-testid="execution-content"]')
+    assert.ok(executionContent)
+    const orderedChildren = [...executionContent.children].slice(0, 4)
+    assert.deepEqual(
+      orderedChildren.map((element) => element.classList.contains('chat-markdown') ? 'text' : 'tools'),
+      ['text', 'tools', 'text', 'tools'],
+    )
+    assert.match(orderedChildren[0].textContent, /Checked the project files/)
+    assert.match(orderedChildren[2].textContent, /Generated the page and started verification/)
+
+    const timelines = [...executionContent.querySelectorAll(':scope > .chat-run-timeline')]
+    assert.equal(timelines.length, 2)
+    assert.equal(timelines[0].querySelector('.chat-tool-step-marker')?.textContent, '1')
+    assert.equal(timelines[1].querySelector('.chat-tool-step-marker')?.textContent, '2')
+    assert.match(timelines[1].querySelector('[data-testid="tool-detail-arguments"]')?.textContent || '', /npm test/)
+    assert.match(timelines[1].querySelector('[data-testid="tool-live-output"]')?.textContent || '', /3 tests passed/)
+
+    const runningToggle = timelines[1].querySelector('[data-testid="tool-step-toggle"]')
+    assert.equal(runningToggle?.getAttribute('aria-expanded'), 'true')
+    await act(async () => runningToggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.equal(timelines[1].querySelector('[data-testid="tool-step-details"]'), null)
+    assert.equal(runningToggle.getAttribute('aria-expanded'), 'false')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
 test('a persisted file owned by a tool call opens from the execution step summary', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')
@@ -130,9 +251,15 @@ test('a persisted file owned by a tool call opens from the execution step summar
     ))
 
     const fileButton = rootElement.querySelector('[data-testid="tool-summary-open"]')
-    assert.ok(fileButton)
-    assert.match(fileButton.textContent, /inspect_pdf\.py/)
-    await act(async () => fileButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    const executionToggle = rootElement.querySelector('[data-testid="execution-toggle"]')
+    assert.equal(executionToggle?.getAttribute('aria-expanded'), 'false')
+    assert.equal(rootElement.querySelector('[data-testid="execution-content"]'), null)
+    await act(async () => executionToggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    const expandedFileButton = rootElement.querySelector('[data-testid="tool-summary-open"]')
+    assert.equal(fileButton, null)
+    assert.ok(expandedFileButton)
+    assert.match(expandedFileButton.textContent, /inspect_pdf\.py/)
+    await act(async () => expandedFileButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
 
     assert.equal(opened.length, 1)
     assert.deepEqual(opened[0].directFile, {
@@ -200,6 +327,9 @@ test('only final deliverables are clickable in execution steps and appear below'
 
   try {
     await renderMessage(baseMessage)
+    const executionToggle = rootElement.querySelector('[data-testid="execution-toggle"]')
+    assert.equal(executionToggle?.getAttribute('aria-expanded'), 'false')
+    await act(async () => executionToggle.dispatchEvent(new window.MouseEvent('click', { bubbles: true })))
     const stepSummaries = [...rootElement.querySelectorAll('.chat-tool-summary')]
     assert.deepEqual(
       stepSummaries.map((summary) => summary.textContent.trim().split(/[\\/]/).pop()),

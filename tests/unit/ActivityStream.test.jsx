@@ -28,11 +28,26 @@ test('readiness shows the tool being prepared without creating a tool trace', ()
 test('pure reasoning keeps a compact status and never exposes raw text', () => {
   const markup = render({
     content: '',
-    meta: { streaming: true, reasoning: 'secret chain of thought' },
+    meta: { streaming: true, reasoning: 'secret chain of thought', modelActivity: { kind: 'reasoning', phase: 'streaming' } },
   })
   assert.match(markup, /role="status"/)
   assert.match(markup, /data-testid="live-elapsed"/)
+  assert.match(markup, /reasoning through the next step/)
   assert.doesNotMatch(markup, /secret chain of thought/)
+})
+
+test('model heartbeat phases explain cold start and temporary stream idle', () => {
+  const waiting = render({
+    meta: { streaming: true, modelActivity: { kind: 'model', phase: 'waiting_first_token' } },
+  })
+  assert.match(waiting, /Request sent/)
+  assert.match(waiting, /first model output/)
+
+  const idle = render({
+    meta: { streaming: true, modelActivity: { kind: 'model', phase: 'idle' } },
+  })
+  assert.match(idle, /output paused/)
+  assert.match(idle, /still running/)
 })
 
 test('running tool activity is rendered only by the durable tool timeline', () => {

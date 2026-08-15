@@ -130,6 +130,273 @@ test('SERVER_TOOL_SPECS exposes artifact, web, git mutation, and connected-app t
   }
 })
 
+test('direct execution turns forbid source handoff unless the user requests a code snippet', async () => {
+  let sourceDeliveryPolicy = ''
+  const result = await runToolsLoop({
+    job: {
+      id: 'direct-execution-source-policy',
+      userId: TEST_USER,
+      origin: 'chat',
+      prompt: '修复 src/login.js 的登录错误',
+    },
+    step: { id: 'direct-execution-source-policy', kind: 'chat' },
+    messages: [{ role: 'user', content: '修复 src/login.js 的登录错误' }],
+    toolSpecs: [],
+    maxIters: 1,
+    runModel: async ({ messages }) => {
+      sourceDeliveryPolicy = messages.find((message) => (
+        message.role === 'system'
+        && message.content.includes('[ARTIFACT SOURCE DELIVERY POLICY]')
+      ))?.content || ''
+      return { content: 'Unable to execute.', toolCalls: [] }
+    },
+  })
+
+  assert.match(sourceDeliveryPolicy, /did not explicitly request a code snippet/i)
+  assert.match(sourceDeliveryPolicy, /Never output complete source code/i)
+  assert.equal(result.incomplete, true)
+  assert.equal(result.reason, 'execution_evidence_missing')
+})
+
+test('an explicit snippet request that forbids file changes preserves fenced code', async () => {
+  const prompt = '请只给我一个 JavaScript 代码片段，不要修改文件。'
+  const snippet = '\x60\x60\x60js\nconst answer = 42\n\x60\x60\x60'
+  const published = []
+  const result = await runToolsLoop({
+    job: {
+      id: 'explicit-code-snippet',
+      userId: TEST_USER,
+      origin: 'chat',
+      prompt,
+      userPrompt: prompt,
+    },
+    step: { id: 'explicit-code-snippet', kind: 'chat' },
+    messages: [{ role: 'user', content: prompt }],
+    toolSpecs: [],
+    maxIters: 1,
+    runModel: async ({ onTextDelta }) => {
+      await onTextDelta?.(snippet)
+      return { content: snippet, toolCalls: [] }
+    },
+    onModelDelta: async ({ text }) => published.push(text),
+  })
+
+  assert.equal(result.text, snippet)
+  assert.equal(result.incomplete, undefined)
+  assert.deepEqual(published, [snippet])
+})
+
+test('artifact turns withhold streamed source and retry for a prose-only completion', async () => {
+  let modelCalls = 0
+  const published = []
+  const result = await runToolsLoop({
+    job: {
+      id: 'artifact-source-handoff-guard',
+      userId: TEST_USER,
+      prompt: '生成一份 Word 文档',
+      userPrompt: '生成一份 Word 文档',
+    },
+    step: { id: 'artifact-source-handoff-guard', kind: 'execute' },
+    messages: [{ role: 'user', content: '生成一份 Word 文档' }],
+    toolSpecs: SERVER_TOOL_SPECS,
+    maxIters: 3,
+    runModel: async ({ messages, onTextDelta }) => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'create-guarded-docx',
+            function: {
+              name: 'create_docx',
+              arguments: JSON.stringify({ title: '交付文档', paragraphs: [{ text: '正文' }] }),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 2) {
+        const unsafe = '```js\nconst documentSource = "copy me"\n```\n请自行保存并运行。'
+        await onTextDelta?.(unsafe)
+        return { content: unsafe, toolCalls: [] }
+      }
+      assert.ok(messages.some((message) => (
+        message.role === 'system' && message.content.includes('[SOURCE HANDOFF BLOCKED]')
+      )))
+      const safe = 'Word 文档已生成并完成交付。'
+      await onTextDelta?.(safe)
+      return { content: safe, toolCalls: [] }
+    },
+    executeTool: async () => ({
+      ok: true,
+      artifactId: 'guarded-docx-artifact',
+      filename: '交付文档.docx',
+      url: '/api/artifacts/guarded-docx-artifact',
+    }),
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    enableToolHooks: false,
+    onModelDelta: async ({ text }) => published.push(text),
+  })
+
+  assert.equal(modelCalls, 3)
+  assert.equal(result.text, 'Word 文档已生成并完成交付。')
+  assert.deepEqual(published, ['Word 文档已生成并完成交付。'])
+  assert.equal(published.some((text) => text.includes('```') || text.includes('copy me')), false)
+})
+
+test('artifact turns use a deterministic safe summary when source rewriting fails', async () => {
+  let modelCalls = 0
+  const published = []
+  const result = await runToolsLoop({
+    job: {
+      id: 'artifact-source-handoff-fallback',
+      userId: TEST_USER,
+      prompt: '生成一份 Word 文档',
+      userPrompt: '生成一份 Word 文档',
+    },
+    step: { id: 'artifact-source-handoff-fallback', kind: 'execute' },
+    messages: [{ role: 'user', content: '生成一份 Word 文档' }],
+    toolSpecs: SERVER_TOOL_SPECS,
+    maxIters: 3,
+    runModel: async ({ onTextDelta }) => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'create-fallback-docx',
+            function: {
+              name: 'create_docx',
+              arguments: JSON.stringify({ title: '兜底文档', paragraphs: [{ text: '正文' }] }),
+            },
+          }],
+        }
+      }
+      const unsafe = '<!doctype html><html><body>source</body></html>'
+      await onTextDelta?.(unsafe)
+      return { content: unsafe, toolCalls: [] }
+    },
+    executeTool: async () => ({
+      ok: true,
+      artifactId: 'fallback-docx-artifact',
+      filename: '兜底文档.docx',
+      url: '/api/artifacts/fallback-docx-artifact',
+    }),
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    enableToolHooks: false,
+    onModelDelta: async ({ text }) => published.push(text),
+  })
+
+  assert.equal(modelCalls, 3)
+  assert.match(result.text, /文件已通过工具生成并完成交付/)
+  assert.equal(result.text.includes('<html>'), false)
+  assert.deepEqual(published, [result.text])
+})
+
+test('model budget wrap-up filters source from terminal text, events, and checkpoints', async () => {
+  let modelCalls = 0
+  const published = []
+  const phases = []
+  const checkpoints = []
+  const unsafe = '```js\nconst patch = "copy me"\n```\n请自行保存并运行。'
+  const result = await runToolsLoop({
+    job: {
+      id: 'model-budget-source-handoff-guard',
+      userId: TEST_USER,
+      origin: 'chat',
+      prompt: '修改 src/login.js 并验证',
+      userPrompt: '修改 src/login.js 并验证',
+    },
+    step: { id: 'model-budget-source-handoff-guard', kind: 'chat' },
+    messages: [{ role: 'user', content: '修改 src/login.js 并验证' }],
+    toolSpecs: [],
+    maxIters: 2,
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        const error = new Error('model token budget exceeded')
+        error.code = 'MODEL_BUDGET_EXCEEDED'
+        throw error
+      }
+      return { content: unsafe, toolCalls: [] }
+    },
+    saveCheckpoint: async (state) => {
+      checkpoints.push(structuredClone(state))
+      return true
+    },
+    onModelDelta: async ({ text }) => published.push(text),
+    onModelPhase: async (event) => phases.push(structuredClone(event)),
+  })
+
+  assert.equal(modelCalls, 2)
+  assert.equal(result.incomplete, true)
+  assert.equal(result.budgetExceeded, true)
+  assert.match(result.text, /已隐藏模型异常收尾时返回的代码内容/)
+  assert.equal(result.text.includes('```'), false)
+  assert.equal(result.text.includes('请自行保存并运行'), false)
+  assert.equal(published.some((text) => text.includes('```') || text.includes('请自行保存并运行')), false)
+  assert.equal(phases.some((event) => String(event.content || '').includes('copy me')), false)
+  assert.equal(checkpoints.at(-1)?.final?.text, result.text)
+})
+
+test('max-iteration wrap-up filters source from terminal text, events, and checkpoints', async () => {
+  let modelCalls = 0
+  const phases = []
+  const checkpoints = []
+  const unsafe = '<!doctype html><html><body>copy me</body></html>\n请自行保存并运行。'
+  const result = await runToolsLoop({
+    job: {
+      id: 'max-iteration-source-handoff-guard',
+      userId: TEST_USER,
+      prompt: '生成一份 Word 文档',
+      userPrompt: '生成一份 Word 文档',
+    },
+    step: { id: 'max-iteration-source-handoff-guard', kind: 'execute' },
+    messages: [{ role: 'user', content: '生成一份 Word 文档' }],
+    toolSpecs: SERVER_TOOL_SPECS,
+    maxIters: 1,
+    runModel: async ({ tools }) => {
+      modelCalls += 1
+      if (Array.isArray(tools) && tools.length > 0) {
+        return {
+          content: unsafe,
+          toolCalls: [{
+            id: 'create-max-iteration-docx',
+            function: {
+              name: 'create_docx',
+              arguments: JSON.stringify({ title: '迭代上限文档', paragraphs: [{ text: '正文' }] }),
+            },
+          }],
+        }
+      }
+      return { content: unsafe, toolCalls: [] }
+    },
+    executeTool: async () => ({
+      ok: true,
+      artifactId: 'max-iteration-docx-artifact',
+      filename: '迭代上限文档.docx',
+      url: '/api/artifacts/max-iteration-docx-artifact',
+    }),
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    enableToolHooks: false,
+    saveCheckpoint: async (state) => {
+      checkpoints.push(structuredClone(state))
+      return true
+    },
+    onModelPhase: async (event) => phases.push(structuredClone(event)),
+  })
+
+  assert.equal(modelCalls, 2)
+  assert.deepEqual(result.artifactIds, ['max-iteration-docx-artifact'])
+  assert.match(result.text, /已隐藏模型异常收尾时返回的代码内容/)
+  assert.equal(result.text.includes('<!doctype html>'), false)
+  assert.equal(result.text.includes('请自行保存并运行'), false)
+  assert.equal(phases.some((event) => String(event.content || '').includes('copy me')), false)
+  assert.equal(checkpoints.at(-1)?.final?.text, result.text)
+  assert.equal(checkpoints.some((state) => (state.messages || []).some((message) => (
+    message.role === 'assistant' && String(message.content || '').includes('copy me')
+  ))), false)
+})
+
 test('planning exploration runs three isolated read-only explorers concurrently and synthesizes their findings', async () => {
   const planningNames = selectPlanningToolSpecs('修复项目刷新').map((spec) => spec.function.name)
   assert.ok(planningNames.includes('grep_code'))

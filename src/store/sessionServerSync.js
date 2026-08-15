@@ -89,6 +89,9 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
       merged.meta = { ...serverMeta, ...localMeta }
       delete merged.meta.pendingServerSync
       if (serverMessage.role === 'assistant') {
+        for (const key of ['turnStartedAt', 'turnCompletedAt', 'latency']) {
+          if (Object.hasOwn(serverMeta, key)) merged.meta[key] = serverMeta[key]
+        }
         const recoveryStub = serverMeta.serverRecoveryStub === true
         const canonicalTextChanged = !recoveryStub && merged.content !== localMessage.content
         if (canonicalTextChanged) {
@@ -107,7 +110,7 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
           }
         }
         merged.meta.serverTurnId = serverMeta.serverTurnId ?? localMeta.serverTurnId ?? null
-        merged.meta.streaming = recoveryStub
+        merged.meta.streaming = recoveryStub || serverMeta.streaming === true
         merged.meta.serverAuthoritative = !recoveryStub
         if (recoveryStub) merged.meta.serverRecoveryStub = true
         else delete merged.meta.serverRecoveryStub
@@ -143,7 +146,15 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
           && localSequence !== null
           && localSequence > serverPauseSequence
 
-        if (serverMeta.paused === true && (localResumeInFlight || localHasNewerTurnState)) {
+        if (serverMeta.interrupted === true && !localHasNewerTurnState) {
+          merged.meta.streaming = true
+          merged.meta.turnCompletedAt = null
+          merged.meta.latency = null
+          merged.meta.serverConnectionState = 'interrupted'
+          if (serverPauseSequence !== null) {
+            merged.meta.serverLastSequence = serverPauseSequence
+          }
+        } else if (serverMeta.paused === true && (localResumeInFlight || localHasNewerTurnState)) {
           // A snapshot may race with the user's authorization or with newer
           // streamed events. Retain that newer local lifecycle state. While an
           // authorization is in flight, the server clarification is still the

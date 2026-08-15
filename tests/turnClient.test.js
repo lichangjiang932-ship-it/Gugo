@@ -524,6 +524,80 @@ test('runServerTurn exits without polling when resume response is already termin
   assert.deepEqual(urls, ['/api/turns/t1/resume'])
 })
 
+test('runServerTurn takes over a known turn when the initial run response body disconnects', async () => {
+  const urls = []
+  const seen = []
+  const started = createTurnEvent({
+    id: 'initial-run-started', sessionId: 's-initial-run', turnId: 't-initial-run', sequence: 0,
+    type: 'turn.started', payload: { content: 'continue' }, createdAt: 1,
+  })
+  const completed = createTurnEvent({
+    id: 'initial-run-completed', sessionId: 's-initial-run', turnId: 't-initial-run', sequence: 1,
+    type: 'turn.completed', payload: { text: 'finished' }, createdAt: 2,
+  })
+  const fetchImpl = async (url) => {
+    urls.push(String(url))
+    if (url === '/api/turns/run') {
+      return {
+        ok: true,
+        status: 202,
+        json: async () => { throw new TypeError('response body disconnected') },
+      }
+    }
+    if (String(url).startsWith('/api/turns/events?')) return response({ events: [started] })
+    if (String(url).startsWith('/api/turns/t-initial-run?')) {
+      return response({ turn: { sessionId: 's-initial-run', turnId: 't-initial-run', status: 'running' } })
+    }
+    if (String(url).startsWith('/api/turns/stream?')) return sseResponse([completed])
+    assert.fail(`unexpected takeover request: ${url}`)
+  }
+
+  const result = await runServerTurn({
+    sessionId: 's-initial-run', turnId: 't-initial-run', content: 'continue', fetchImpl,
+    onEvent: (event) => seen.push(event.type),
+  })
+
+  assert.equal(result.terminal.id, completed.id)
+  assert.deepEqual(seen, ['turn.started', 'turn.completed'])
+  assert.equal(urls.filter((url) => url === '/api/turns/run').length, 1)
+  assert.equal(urls.some((url) => url.startsWith('/api/turns/events?')), true)
+  assert.equal(urls.some((url) => url.startsWith('/api/turns/t-initial-run?')), true)
+})
+
+test('runServerTurn takes over a known turn when the initial resume response body disconnects', async () => {
+  const urls = []
+  const completed = createTurnEvent({
+    id: 'initial-resume-completed', sessionId: 's-initial-resume', turnId: 't-initial-resume', sequence: 4,
+    type: 'turn.completed', payload: { text: 'resumed and finished' }, createdAt: 2,
+  })
+  const fetchImpl = async (url) => {
+    urls.push(String(url))
+    if (url === '/api/turns/t-initial-resume/resume') {
+      return {
+        ok: true,
+        status: 202,
+        json: async () => { throw new TypeError('resume response body disconnected') },
+      }
+    }
+    if (String(url).startsWith('/api/turns/events?')) return response({ events: [] })
+    if (String(url).startsWith('/api/turns/t-initial-resume?')) {
+      return response({ turn: { sessionId: 's-initial-resume', turnId: 't-initial-resume', status: 'running' } })
+    }
+    if (String(url).startsWith('/api/turns/stream?')) return sseResponse([completed])
+    assert.fail(`unexpected resume takeover request: ${url}`)
+  }
+
+  const result = await runServerTurn({
+    sessionId: 's-initial-resume', turnId: 't-initial-resume', resume: true,
+    afterSequence: 3, fetchImpl,
+  })
+
+  assert.equal(result.terminal.id, completed.id)
+  assert.equal(urls.filter((url) => url === '/api/turns/t-initial-resume/resume').length, 1)
+  assert.equal(urls.some((url) => url.startsWith('/api/turns/events?')), true)
+  assert.equal(urls.some((url) => url.startsWith('/api/turns/t-initial-resume?')), true)
+})
+
 test('runServerTurn waits for a terminal cancellation event after the stop is acknowledged', async () => {
   const urls = []
   const controller = new AbortController()
@@ -893,6 +967,70 @@ test('runServerTurn enters low-frequency recovery after reconnect exhaustion and
   assert.equal(states.some((state) => state.recoveryMode === true), true)
 })
 
+test('recovery polling retries realtime transports and restores live activity after the network returns', async () => {
+  await withWebSocketAuth(async () => {
+    let webSocketAttempts = 0
+    let sseCalls = 0
+    const activities = []
+    const completed = createTurnEvent({
+      id: 'realtime-recovered', sessionId: 's-realtime-recovery', turnId: 't-realtime-recovery', sequence: 0,
+      type: 'turn.completed', payload: { text: 'live again' }, createdAt: 2,
+    })
+    const activity = createTurnActivity({
+      sessionId: 's-realtime-recovery', turnId: 't-realtime-recovery',
+      kind: 'tool_output_delta', toolName: 'run_command', toolCallId: 'tool-live',
+      stream: 'stdout', chunk: 'network restored', createdAt: 1,
+    })
+    const fetchImpl = async (url) => {
+      if (url === '/api/turns/run') {
+        return response({ turn: { sessionId: 's-realtime-recovery', turnId: 't-realtime-recovery', status: 'running' } }, 202)
+      }
+      if (String(url).startsWith('/api/turns/events?')) return response({ events: [] })
+      if (String(url).startsWith('/api/turns/t-realtime-recovery?')) {
+        return response({ turn: { sessionId: 's-realtime-recovery', turnId: 't-realtime-recovery', status: 'running' } })
+      }
+      if (url === '/api/turns/t-realtime-recovery/resume') {
+        return response({ turn: { sessionId: 's-realtime-recovery', turnId: 't-realtime-recovery', status: 'running' } }, 202)
+      }
+      if (String(url).startsWith('/api/turns/stream?')) {
+        sseCalls += 1
+        return sseResponse([])
+      }
+      assert.fail(`unexpected realtime recovery request: ${url}`)
+    }
+
+    const result = await runServerTurn({
+      sessionId: 's-realtime-recovery', turnId: 't-realtime-recovery', content: 'keep going',
+      fetchImpl, reconnectMaxAttempts: 1, reconnectDelayMs: 0, recoveryPollIntervalMs: 0,
+      webSocketConnectTimeoutMs: 100, webSocketSubscribeTimeoutMs: 100,
+      webSocketFactory: () => {
+        webSocketAttempts += 1
+        const attempt = webSocketAttempts
+        const socket = new FakeWebSocket()
+        queueMicrotask(() => {
+          if (attempt === 1) {
+            socket.emit('error')
+            return
+          }
+          socket.emit('open')
+          socket.emit('message', { data: JSON.stringify({
+            type: 'subscribed.turn', sessionId: 's-realtime-recovery', turnId: 't-realtime-recovery',
+          }) })
+          socket.emit('message', { data: JSON.stringify({ type: 'turn.activity', activity }) })
+          socket.emit('message', { data: JSON.stringify({ type: 'turn.event', event: completed }) })
+        })
+        return socket
+      },
+      onActivity: (value) => activities.push(value),
+    })
+
+    assert.equal(result.terminal.id, completed.id)
+    assert.equal(webSocketAttempts, 2)
+    assert.equal(sseCalls, 1)
+    assert.deepEqual(activities, [activity])
+  })
+})
+
 test('cancel retries after a network failure and does not finish before turn.cancelled', async () => {
   const controller = new AbortController()
   let cancelCalls = 0
@@ -1009,14 +1147,16 @@ test('tool.started keeps arguments previously recorded by tool.call', async () =
   }), options)
   await dispatchTurnEvent(createTurnEvent({
     id: 'started-without-args', sessionId: 's', turnId: 't', sequence: 1, type: 'tool.started',
-    payload: { toolCallId: 'shell-1', name: 'bash_exec' },
+    payload: { toolCallId: 'shell-1', name: 'bash_exec', outputReplay: 'live_only' },
     createdAt: 2,
   }), options)
 
   const toolCall = state.sessions[0].messages[0].meta.toolCalls[0]
   assert.equal(toolCall.arguments, '{"command":"python verify.py"}')
+  assert.equal(toolCall.outputReplay, 'live_only')
   const startedAction = actions.filter((action) => action.type === 'APPEND_TOOL_CALL_TO_LAST_MESSAGE').at(-1)
   assert.equal(Object.hasOwn(startedAction.payload, 'arguments'), false)
+  assert.equal(startedAction.payload.outputReplay, 'live_only')
 })
 
 test('assistant delta appends text and publishes responding activity in one state update', async () => {
@@ -1046,13 +1186,47 @@ test('assistant delta appends text and publishes responding activity in one stat
   assert.equal(result.cursorCommitted, true)
 })
 
-test('terminal turn events settle every running tool call and stop streaming', async () => {
+test('model heartbeat phases keep visible activity before and between streamed chunks', async () => {
+  const actions = []
+  const phases = ['waiting_first_token', 'streaming', 'idle', 'streaming']
+  for (const [index, phase] of phases.entries()) {
+    await dispatchTurnEvent(createTurnEvent({
+      id: `model-heartbeat-${index}`,
+      sessionId: 's',
+      turnId: 't',
+      sequence: index,
+      type: 'model.phase',
+      payload: { phase, iteration: 0 },
+      createdAt: index + 1,
+    }), {
+      dispatch: (action) => actions.push(action),
+      taskId: 'task',
+      messageTarget: { sessionId: 's', messageId: 'assistant-1' },
+    })
+  }
+
+  assert.deepEqual(
+    actions.filter((action) => action.type === 'UPDATE_TASK').map((action) => action.payload.updates.stepLabel),
+    [
+      'Waiting for model output',
+      'Receiving model output',
+      'Model output paused; task is still running',
+      'Receiving model output',
+    ],
+  )
+  assert.deepEqual(
+    actions.filter((action) => action.type === 'UPDATE_LAST_MESSAGE_META').map((action) => action.payload.modelActivity.kind),
+    ['model', 'responding', 'model', 'responding'],
+  )
+})
+
+test('terminal events stop streaming while interrupted turns remain visibly resumable', async () => {
   const cases = [
-    { type: 'turn.completed', payload: { text: 'done', artifactIds: [] }, expected: 'cancelled', connection: null },
-    { type: 'turn.paused', payload: { text: '', clarification: { question: 'Need input' } }, expected: 'cancelled', connection: 'paused' },
-    { type: 'turn.cancelled', payload: { reason: 'user stopped' }, expected: 'cancelled', connection: 'cancelled' },
-    { type: 'turn.interrupted', payload: { code: 'MODEL_503', message: 'interrupted', retryable: true }, expected: 'cancelled', connection: 'interrupted' },
-    { type: 'turn.failed', payload: { code: 'TURN_FAILED', message: 'failed' }, expected: 'error', connection: null },
+    { type: 'turn.completed', payload: { text: 'done', artifactIds: [] }, expected: 'cancelled', connection: null, streaming: false },
+    { type: 'turn.paused', payload: { text: '', clarification: { question: 'Need input' } }, expected: 'cancelled', connection: 'paused', streaming: false },
+    { type: 'turn.cancelled', payload: { reason: 'user stopped' }, expected: 'cancelled', connection: 'cancelled', streaming: false },
+    { type: 'turn.interrupted', payload: { code: 'MODEL_503', message: 'interrupted', retryable: true }, expected: 'cancelled', connection: 'interrupted', streaming: true },
+    { type: 'turn.failed', payload: { code: 'TURN_FAILED', message: 'failed' }, expected: 'error', connection: null, streaming: false },
   ]
 
   for (const [index, terminal] of cases.entries()) {
@@ -1097,7 +1271,8 @@ test('terminal turn events settle every running tool call and stop streaming', a
 
     const meta = state.sessions[0].messages[0].meta
     assert.equal(result.cursorCommitted, true, terminal.type)
-    assert.equal(meta.streaming, false, terminal.type)
+    assert.equal(meta.streaming, terminal.streaming, terminal.type)
+    assert.equal(meta.turnCompletedAt, terminal.streaming ? null : index + 1, terminal.type)
     assert.equal(meta.modelActivity, null, terminal.type)
     assert.equal(meta.serverConnectionState, terminal.connection, terminal.type)
     if (terminal.type === 'turn.cancelled') {
@@ -1196,6 +1371,40 @@ test('dispatchTurnEvent stores progress with the durable stream cursor', async (
   }])
 })
 
+test('model usage events overwrite the current message with the latest measured prompt tokens', async () => {
+  const actions = []
+  const dispatch = (action) => actions.push(action)
+  const target = { sessionId: 's', messageId: 'assistant-usage' }
+  await dispatchTurnEvent(createTurnEvent({
+    id: 'usage-phase', sessionId: 's', turnId: 't', sequence: 3, type: 'model.phase',
+    payload: {
+      phase: 'completed',
+      iteration: 2,
+      usage: { promptTokens: 420, completionTokens: 30, totalTokens: 450 },
+      modelName: 'test-model',
+      error: null,
+    },
+    createdAt: 4,
+  }), { dispatch, taskId: 'task', messageTarget: target })
+  await dispatchTurnEvent(createTurnEvent({
+    id: 'usage-completed', sessionId: 's', turnId: 't', sequence: 4, type: 'turn.completed',
+    payload: {
+      text: 'done',
+      usage: { promptTokens: 460, completionTokens: 35, totalTokens: 495 },
+    },
+    createdAt: 5,
+  }), { dispatch, taskId: 'task', messageTarget: target })
+
+  const usageUpdates = actions
+    .filter((action) => action.type === 'UPDATE_LAST_MESSAGE_META' && action.payload.modelUsage)
+  assert.deepEqual(usageUpdates.map((action) => action.payload.actualPromptTokens), [420, 460])
+  assert.deepEqual(usageUpdates.at(-1).payload.modelUsage, {
+    promptTokens: 460,
+    completionTokens: 35,
+    totalTokens: 495,
+  })
+})
+
 test('dispatchTurnEvent preserves explicit empty delivery ids on completion', async () => {
   const actions = []
   const result = await dispatchTurnEvent(createTurnEvent({
@@ -1242,6 +1451,7 @@ test('dispatchTurnEvent exposes a paused directory request to the inline authori
     type: 'UPDATE_LAST_MESSAGE_META',
       payload: {
         streaming: false,
+        turnCompletedAt: 11,
         modelActivity: null,
         paused: true,
       serverConnectionState: 'paused',
@@ -1336,6 +1546,9 @@ test('interrupted turns retain resumable evidence and a recovery attempt clears 
   assert.equal(interrupted.serverFailure.retryable, true)
   assert.equal(interrupted.serverPartialText, 'preserved work')
   assert.equal(interrupted.serverConnectionState, 'interrupted')
+  assert.equal(interrupted.streaming, true)
+  assert.equal(interrupted.turnCompletedAt, null)
+  assert.equal(interrupted.latency, null)
 
   await dispatchTurnEvent(createTurnEvent({
     id: 'attempt-turn', sessionId: 's', turnId: 't', sequence: 7,
@@ -1387,6 +1600,11 @@ test('dispatchTurnEvent atomically maps a recovery attempt to stream reset and c
     type: 'UPDATE_LAST_MESSAGE_META',
     payload: {
       interrupted: false,
+      failed: false,
+      paused: false,
+      streaming: true,
+      turnCompletedAt: null,
+      latency: null,
       serverFailure: null,
       serverPartialText: '',
       serverArtifactIds: [],
@@ -1439,6 +1657,29 @@ test('fetchServerSessionSnapshot aggregates every page before normalizing messag
   assert.equal(snapshot.revision, 7)
   assert.deepEqual(snapshot.messages.map((message) => message.id), ['m1', 'm2', 'm3'])
   assert.equal(snapshot.messages[1].meta.serverAuthoritative, true)
+})
+
+test('server snapshot restores measured model usage for the context ring', () => {
+  const snapshot = normalizeServerSessionSnapshot({
+    complete: true,
+    messages: [{
+      id: 'turn-usage:assistant',
+      role: 'assistant',
+      content: 'done',
+      createdAt: 1,
+      modelContext: {
+        turnId: 'turn-usage',
+        usage: { promptTokens: 512, completionTokens: 64, totalTokens: 576 },
+      },
+    }],
+  })
+
+  assert.equal(snapshot.messages[0].meta.actualPromptTokens, 512)
+  assert.deepEqual(snapshot.messages[0].meta.modelUsage, {
+    promptTokens: 512,
+    completionTokens: 64,
+    totalTokens: 576,
+  })
 })
 
 test('server snapshot restores steering identity for authoritative message reconciliation', () => {
@@ -1758,6 +1999,7 @@ test('server snapshot restores a paused directory request for inline authorizati
     streaming: false,
     serverAuthoritative: true,
     toolCalls: [],
+    turnCompletedAt: 1,
     paused: true,
     serverConnectionState: 'paused',
     serverClarification: clarification,
@@ -1798,6 +2040,9 @@ test('server snapshot restores failed and interrupted turn evidence after reload
         turnId: 'turn-interrupted',
         turnEvidence: true,
         evidenceState: 'interrupted',
+        serverLastSequence: 9,
+        turnCompletedAt: 2,
+        latency: 1,
         artifactIds: ['report-1'],
         error: { code: 'MODEL_CALL_INTERRUPTED', message: 'Connection lost', retryable: true },
       },
@@ -1809,6 +2054,7 @@ test('server snapshot restores failed and interrupted turn evidence after reload
     streaming: false,
     serverAuthoritative: true,
     toolCalls: [],
+    turnCompletedAt: 1,
     failed: true,
     serverFailure: {
       code: 'MODEL_TIMEOUT',
@@ -1821,6 +2067,11 @@ test('server snapshot restores failed and interrupted turn evidence after reload
     serverIterations: 3,
   })
   assert.equal(snapshot.messages[1].meta.interrupted, true)
+  assert.equal(snapshot.messages[1].meta.serverConnectionState, 'interrupted')
+  assert.equal(snapshot.messages[1].meta.streaming, true)
+  assert.equal(snapshot.messages[1].meta.turnCompletedAt, null)
+  assert.equal(snapshot.messages[1].meta.latency, null)
+  assert.equal(snapshot.messages[1].meta.serverLastSequence, 9)
   assert.equal(snapshot.messages[1].meta.failed, undefined)
   assert.deepEqual(snapshot.messages[1].meta.serverArtifactIds, ['report-1'])
   assert.equal(snapshot.messages[1].meta.serverFailure.code, 'MODEL_CALL_INTERRUPTED')

@@ -17,7 +17,15 @@ import { writeToolAudit } from '../utils/audit.js'
 import { isContextLengthError } from '../adapters/modelProxy.js'
 import { callModelWithContextRecovery } from './contextCompactionRuntime.js'
 import { ensureSafetySystemMessages } from './promptCompiler.js'
-import { allowedArtifactTools, isFileArtifactTool, parseSkillIdFromPrompt } from './artifactIntent.js'
+import {
+  allowedArtifactTools,
+  findAdjacentDeliveredArtifacts,
+  isArtifactRevisionRequest,
+  isExplicitCodeSnippetRequest,
+  isFileArtifactTool,
+  parseSkillIdFromPrompt,
+  resolveArtifactRevisionMode,
+} from './artifactIntent.js'
 import { restoreDirectoryAuthorizationToolSpecs } from './turnToolSpecs.js'
 import { createSubagentApprovalContext, rememberApprovedSubagentCall } from './subagentRuntime.js'
 import { buildAssistantToolCallsMessage, buildToolResultMessage, buildToolResultMessages, createToolLoopGuard, executeToolWithRetry, isSubstantiveToolCall, mapWithConcurrency, normalizeToolError, normalizeToolResult, normalizeToolCalls, resolveToolResultMaxChars, validateToolCall } from '../utils/toolCallHarness.js'
@@ -27,12 +35,38 @@ import { replaceRuntimeCapabilityBlock } from './runtimeCapabilities.js'
 import { hasMutationExecutionIntent, isTextDeliverableRequest, shouldRequireExecution } from '../utils/executionIntent.js'
 import { observeToolCalls, recordToolProgress, restoreToolProgress, serializeToolProgress, toolProgressPayload } from '../utils/toolProgress.js'
 import { listTurnArtifacts } from './turnArtifactStore.js'
+import { createModelPhaseHeartbeat, DEFAULT_MODEL_PHASE_HEARTBEAT_MS } from './modelPhaseHeartbeat.js'
 
 import { withLogContext } from '../utils/logger.js'
 import { createRepeatCallGuard } from '../utils/repeatCallGuard.js'
 
 const DELIVERABLE_SELECTION_GUARD_MARKER = '[FINAL DELIVERABLE SELECTION REQUIRED]'
 const MAX_DELIVERABLE_SELECTION_RETRIES = 2
+const SOURCE_HANDOFF_GUARD_MARKER = '[SOURCE HANDOFF BLOCKED]'
+const MAX_SOURCE_HANDOFF_RETRIES = 1
+
+function sourceHandoffViolation(text) {
+  const value = String(text || '').trim()
+  if (!value) return null
+
+  // Execution turns may explain what happened, but they must never hand a
+  // source file back to the user as a fenced snippet or raw document.
+  if (/```[^\n]*\n[\s\S]*?```/.test(value)) return 'fenced_code'
+  if (/<(?:!doctype\s+html|html\b|head\b|body\b|script\b|style\b)/i.test(value)) return 'document_source'
+
+  const manualHandoff = [
+    /\b(?:copy|paste)\b[\s\S]{0,80}\b(?:this|the following|code|source|snippet)\b/i,
+    /\b(?:save|create|rename|convert|run|execute)\b[\s\S]{0,60}\b(?:this|the following|the code|the script|the command)\b/i,
+    /(?:请|你需要|需要你|你可以|自行|手动)[\s\S]{0,60}(?:运行|执行|保存|复制|粘贴|创建|新建|改名|转换|修改(?:文件)?(?:后缀|扩展名))/i,
+    /(?:复制|粘贴)[\s\S]{0,60}(?:代码|源码|脚本)/i,
+  ]
+  if (manualHandoff.some((pattern) => pattern.test(value))) return 'manual_handoff'
+
+  const sourceLikeLines = value.split(/\r?\n/).filter((line) => (
+    /^\s*(?:import\s+.+|export\s+.+|(?:const|let|var)\s+[\w$]+\s*=|(?:async\s+)?function\s+\w+\s*\(|class\s+\w+|def\s+\w+\s*\(|#include\s*[<"]|public\s+static\s+|<\/?[a-z][^>]*>|[.#][\w-]+\s*\{)/i.test(line)
+  )).length
+  return value.length >= 600 && sourceLikeLines >= 4 ? 'source_like' : null
+}
 
 function normalizeArtifactIdList(ids) {
   return [...new Set((Array.isArray(ids) ? ids : [])
@@ -135,6 +169,28 @@ export {
   SERVER_TOOL_SPECS, selectJobToolSpecs, selectToolSpecs, persistLocalToolArtifacts, buildSubagentRequest, inheritedJobSkillIds, buildJobToolIdempotencyKey, scopeTextToolCallIds,
 }
 
+function normalizeCompactionRecovery(value) {
+  const archiveId = String(value?.archiveId || '').trim()
+  if (!archiveId) return null
+  const firstKeptMessageId = String(value?.firstKeptMessageId || '').trim()
+  const lastCompactedMessageId = String(value?.lastCompactedMessageId || '').trim()
+  return {
+    archiveId,
+    ...(firstKeptMessageId ? { firstKeptMessageId } : {}),
+    ...(lastCompactedMessageId ? { lastCompactedMessageId } : {}),
+  }
+}
+
+function mergeCompactionRecovery(previous, next) {
+  const normalizedNext = normalizeCompactionRecovery(next)
+  if (!normalizedNext) return normalizeCompactionRecovery(previous)
+  return {
+    ...normalizeCompactionRecovery(previous),
+    ...normalizedNext,
+    archiveId: normalizedNext.archiveId,
+  }
+}
+
 export async function runToolsLoop({
   job,
   step,
@@ -173,6 +229,7 @@ export async function runToolsLoop({
   intentMode = 'auto',
   toolRetryMaxAttempts = 3,
   toolRetryBaseDelayMs = 120,
+  modelHeartbeatIntervalMs = DEFAULT_MODEL_PHASE_HEARTBEAT_MS,
 }) {
   // 文件产物工具按本次任务意图裁剪。同一份 spec 既喂给模型,也用于 validateToolCall ——
   // 这样"模型看不到"和"调了也会被拒"是同一个事实,不会两边漂移。
@@ -197,9 +254,26 @@ export async function runToolsLoop({
   const artifactAuthorizationText = String(
     job?.userPrompt || currentUserMessage?.content || job?.prompt || '',
   )
-  const authorizedArtifactTools = allowedArtifactTools(artifactAuthorizationText, {
+  const priorArtifacts = findAdjacentDeliveredArtifacts(messages)
+  const priorArtifactTypes = [...new Set(priorArtifacts.map((artifact) => artifact.type))]
+  const artifactRevisionMode = priorArtifacts.length > 0
+    ? resolveArtifactRevisionMode(artifactAuthorizationText)
+    : 'unspecified'
+  const codeSnippetRequested = isExplicitCodeSnippetRequest(artifactAuthorizationText)
+  const explicitArtifactTools = allowedArtifactTools(artifactAuthorizationText, {
     skillId: explicitSkillId || skillId,
   })
+  const authorizedArtifactTools = allowedArtifactTools(artifactAuthorizationText, {
+    skillId: explicitSkillId || skillId,
+    priorArtifactTypes,
+  })
+  const inheritsAdjacentArtifact = explicitArtifactTools.size === 0
+    && authorizedArtifactTools.size > 0
+  const revisesAdjacentArtifact = priorArtifacts.length > 0
+    && authorizedArtifactTools.size > 0
+    && (inheritsAdjacentArtifact
+      || artifactRevisionMode !== 'unspecified'
+      || isArtifactRevisionRequest(artifactAuthorizationText))
   // Planning and verification consume an existing deliverable. They must not
   // manufacture another one merely because the original prompt names a format.
   const artifactDeliveryStep = !['plan', 'verify', 'finalize'].includes(String(step?.kind || ''))
@@ -208,6 +282,7 @@ export async function runToolsLoop({
     prompt: intentText,
     userPrompt: artifactAuthorizationText,
     previousUserPrompt: String(job?.previousUserPrompt || ''),
+    priorArtifactTypes,
     skillId: explicitSkillId || skillId,
     specs: Array.isArray(toolSpecs) ? toolSpecs : SERVER_TOOL_SPECS,
     origin: job?.origin,
@@ -305,6 +380,9 @@ export async function runToolsLoop({
   // when routing produced no usable tool; otherwise prose such as "done" would
   // be accepted precisely when the harness cannot perform the requested work.
   const requiresExecutionEvidence = directExecutionRequested && !textDeliverableOnly
+  const requiresSourceHandoffProtection = !codeSnippetRequested && (
+    directExecutionRequested || requiresPersistedArtifact || revisesAdjacentArtifact
+  )
   let availableVerificationToolNames = activeToolSpecs
     .map(toolNameFromSpec)
     .filter((name) => VERIFICATION_TOOLS.has(name) || isCommandExecutionTool(name))
@@ -336,6 +414,40 @@ export async function runToolsLoop({
     || convo.some((message) => message?.role === 'system' && String(message?.content || '').includes(DIRECTORY_REVIEW_GUARD_MARKER))
   let hasSuccessfulRepresentativeRead = successfulReadFileInMessages(convo)
   const artifactIds = normalizeArtifactIdList(restoredState?.artifactIds)
+  const protectTerminalText = (text, { incomplete = false } = {}) => {
+    const value = String(text || '')
+    if (!requiresSourceHandoffProtection || !sourceHandoffViolation(value)) return value
+
+    if (artifactIds.length > 0) {
+      return incomplete
+        ? '文件已通过工具生成并保存当前进度，但任务尚未完整结束。已隐藏模型异常收尾时返回的代码内容。'
+        : '文件已通过工具生成并完成交付。已隐藏模型返回的代码内容。'
+    }
+    return incomplete
+      ? '任务已保存当前执行进度，但尚未完整结束。已隐藏模型异常收尾时返回的代码内容。'
+      : '任务已通过工具执行并完成必要验证。已隐藏模型返回的代码内容。'
+  }
+  const protectClarification = (clarification) => {
+    if (!requiresSourceHandoffProtection || !clarification || typeof clarification !== 'object') {
+      return clarification
+    }
+    const safeQuestion = protectTerminalText(
+      clarification.question || clarification.message || clarification.why,
+      { incomplete: true },
+    ) || '需要你补充信息后才能继续。'
+    const seen = new WeakSet()
+    const protectValue = (value) => {
+      if (typeof value === 'string') {
+        return sourceHandoffViolation(value) ? safeQuestion : value
+      }
+      if (!value || typeof value !== 'object') return value
+      if (seen.has(value)) return null
+      seen.add(value)
+      if (Array.isArray(value)) return value.map(protectValue)
+      return Object.fromEntries(Object.entries(value).map(([key, nested]) => [key, protectValue(nested)]))
+    }
+    return { ...protectValue(clarification), question: safeQuestion }
+  }
   let deliveryArtifactSelectionExplicit = Object.hasOwn(restoredState || {}, 'deliveryArtifactIds')
   let deliveryArtifactIds = deliveryArtifactSelectionExplicit
     ? normalizeArtifactIdList(restoredState.deliveryArtifactIds)
@@ -423,12 +535,17 @@ export async function runToolsLoop({
       sessionId: job.sessionId,
       turnId: job.id,
     }).map((artifact) => artifact.id))
+    if (artifactRevisionMode === 'replace_original') {
+      for (const artifact of priorArtifacts) {
+        if (artifactIds.includes(artifact.id)) ownedIds.add(artifact.id)
+      }
+    }
     const invalidArtifactIds = requested.filter((id) => !ownedIds.has(id))
     if (invalidArtifactIds.length > 0) {
       return {
         ok: false,
         code: 'deliverable_artifact_scope_mismatch',
-        error: 'Every deliverable artifact ID must belong to the current user, session, and turn.',
+        error: 'Every deliverable artifact ID must be created by this turn or be an adjacent artifact successfully replaced in place by this turn.',
         invalidArtifactIds,
         retryable: false,
       }
@@ -471,6 +588,10 @@ export async function runToolsLoop({
   let executionReasoningRetries = Math.max(
     0,
     Number(restoredState?.completionGuards?.executionReasoningRetries) || 0,
+  )
+  let sourceHandoffRetries = Math.max(
+    0,
+    Number(restoredState?.completionGuards?.sourceHandoffRetries) || 0,
   )
   let directoryResumeRetries = Math.max(
     0,
@@ -529,6 +650,59 @@ export async function runToolsLoop({
       ].join(' '),
     })
   }
+  if (priorArtifacts.length > 0
+    && revisesAdjacentArtifact
+    && !hasRuntimeMarker('[ADJACENT ARTIFACT REVISION CONTRACT]')) {
+    const revisionInstruction = artifactRevisionMode === 'replace_original'
+      ? [
+          'The user explicitly requested an in-place revision of the original file.',
+          'Call each matching artifact generator with replace_artifact_id set to the exact adjacent artifact ID shown above. The tool will preserve that artifact ID and filename while replacing its contents.',
+          'Do not create or deliver a second file for that artifact.',
+        ]
+      : artifactRevisionMode === 'create_copy'
+        ? [
+            'The user explicitly requested a new or separate file and wants the original preserved.',
+            'Call the matching artifact generator without replace_artifact_id and deliver the newly returned artifact ID.',
+            'Do not overwrite or mutate the adjacent original artifact.',
+          ]
+        : artifactRevisionMode === 'conflict'
+          ? [
+              'The current request contains conflicting instructions about replacing the original versus creating a separate file.',
+              'Call request_clarification before any artifact generator. Do not guess which file disposition the user intended.',
+            ]
+          : [
+              'No explicit in-place replacement was authorized. Create and deliver a new revised artifact ID, preserving the prior delivered file.',
+            ]
+    convo.push({
+      role: 'system',
+      content: [
+        '[ADJACENT ARTIFACT REVISION CONTRACT]',
+        'The current user request is a revision of files delivered by the immediately preceding turn.',
+        `Prior delivered artifacts: ${JSON.stringify(priorArtifacts)}.`,
+        'Use the preceding tool-call arguments and current user request as the source of truth, apply the requested changes, and call the matching artifact generator.',
+        ...revisionInstruction,
+        'Do not answer with source code, save instructions, or a request for the user to recreate the file manually.',
+      ].join(' '),
+    })
+  }
+  if ((directExecutionRequested || requiresPersistedArtifact || revisesAdjacentArtifact || codeSnippetRequested)
+    && !hasRuntimeMarker('[ARTIFACT SOURCE DELIVERY POLICY]')) {
+    convo.push({
+      role: 'system',
+      content: codeSnippetRequested
+        ? [
+            '[ARTIFACT SOURCE DELIVERY POLICY]',
+            'The user explicitly requested a code snippet, so you may include the specifically requested snippet in the answer.',
+            'If the user also requested a downloadable artifact, the snippet does not replace the required successful artifact tool call.',
+          ].join(' ')
+        : [
+            '[ARTIFACT SOURCE DELIVERY POLICY]',
+            'The user did not explicitly request a code snippet.',
+            'Never output complete source code, a large code block, copy/paste instructions, or directions telling the user to create, save, rename, or convert the file manually.',
+            'This remains true after malformed arguments, a failed artifact tool call, retries, missing capabilities, or exhausted execution budget. Correct and retry with tools when safe; otherwise report one concise blocker without source code.',
+          ].join(' '),
+    })
+  }
   if ((directExecutionRequested || requiresPersistedArtifact)
     && !hasRuntimeMarker(AVAILABLE_TOOL_CAPABILITIES_MARKER)) {
     const activeToolNames = activeToolSpecs.map(toolNameFromSpec).filter(Boolean)
@@ -570,7 +744,7 @@ export async function runToolsLoop({
         '[DIRECT EXECUTION REQUIRED]',
         'The user asked for concrete work, not instructions for doing it later.',
         'Use the available tools now, follow the supplied steps, create or modify the requested deliverable, and verify the result before answering.',
-        'Do not merely print a script or tell the user to run commands unless execution is genuinely blocked by a missing permission or indispensable user input.',
+        'Do not merely print a script or tell the user to run commands. If execution is genuinely blocked, report the concise blocker; full source is allowed only when the artifact source-delivery policy confirms that the user explicitly requested a code snippet.',
         'Keep internal deliberation brief; report the completed result or one concise, specific blocker.',
       ].join(' '),
     })
@@ -591,9 +765,7 @@ export async function runToolsLoop({
     const missing = missingArtifactTools()
     if (missing.length > 0) throw artifactDeliveryError(missing)
   }
-  let recovery = restoredState?.recovery?.archiveId
-    ? { archiveId: String(restoredState.recovery.archiveId) }
-    : null
+  let recovery = normalizeCompactionRecovery(restoredState?.recovery)
   const appliedSteeringIds = new Set(
     Array.isArray(restoredState?.appliedSteeringIds)
       ? restoredState.appliedSteeringIds.map((id) => String(id || '').trim()).filter(Boolean)
@@ -659,15 +831,18 @@ export async function runToolsLoop({
   if (restoredState?.final?.text != null
     && String(restoredState.final.text).trim()
     && !restoredFinalIsInterrupted
+    && (!requiresSourceHandoffProtection || !sourceHandoffViolation(restoredState.final.text))
     && (restoredFinalIsTerminal || (
        hasRequiredArtifacts()
        && hasRequiredExecutionEvidence()
        && !hasPendingMutationVerification()
        && (!requiresPdfLayoutVerification || pdfLayoutVerificationObserved)
     ))) {
+    const restoredClarification = protectClarification(restoredState.final.clarification)
     return {
       ...restoredState.final,
       text: String(restoredState.final.text),
+      ...(restoredClarification ? { clarification: restoredClarification } : {}),
       artifactIds,
       ...deliverySelectionFields(),
       iterations: Math.max(1, Number(restoredState.final.iterations) || iter || 1),
@@ -707,6 +882,7 @@ export async function runToolsLoop({
         mutationExecutionObserved,
         executionEvidenceRetries,
         executionReasoningRetries,
+        sourceHandoffRetries,
         directoryResumeRetries,
         pendingMutationVerification: hasPendingMutationVerification(),
         pendingMutationTargets: [...pendingMutationTargets],
@@ -809,7 +985,7 @@ export async function runToolsLoop({
     }
   }
   const finishIncomplete = async ({ text, reason, steeringLeaseId = null }) => {
-    finalText = text
+    finalText = protectTerminalText(text, { incomplete: true })
     const completion = await prepareCompletionForSteering({
       text: finalText,
       steeringLeaseId,
@@ -853,7 +1029,12 @@ export async function runToolsLoop({
     finalMetadata = {},
     appendTextToConversation = true,
   } = {}) => {
-    const text = String(result?.text || '')
+    const terminalIsIncomplete = result?.incomplete === true
+      || result?.paused === true
+      || result?.interrupted === true
+      || result?.budgetExceeded === true
+      || result?.noProgress === true
+    const text = protectTerminalText(result?.text, { incomplete: terminalIsIncomplete })
     const completion = await prepareCompletionForSteering({
       text,
       steeringLeaseId,
@@ -877,7 +1058,7 @@ export async function runToolsLoop({
       },
     })
     finalCheckpointPersisted = Boolean(text.trim())
-    return { ...result, ...deliverySelectionFields() }
+    return { ...result, text, ...deliverySelectionFields() }
   }
   // ★ M3.5 + Lens-2 fix:任务级预算用 WeakMap 持有,模型/工具碰不到 job 的属性也无法绕过。
   const restoredBudget = restoredState?.budget && typeof restoredState.budget === 'object'
@@ -898,6 +1079,58 @@ export async function runToolsLoop({
   const budget = runtimeBudget || (job
     ? (getJobBudget(job) || attachJobBudget(job, restoredBudget))
     : createJobBudget(restoredBudget))
+  const callTrackedModel = async ({
+    messages: modelMessages,
+    tools: modelTools = [],
+    toolChoice,
+    consumeBudget,
+    allowOverBudget = false,
+    onTextDelta,
+    onReasoningDelta: handleReasoningDelta,
+  }) => {
+    if (typeof onModelPhase === 'function') {
+      await onModelPhase({ phase: 'started', iteration: iter })
+    }
+    const heartbeat = createModelPhaseHeartbeat({
+      onPhase: onModelPhase,
+      iteration: iter,
+      intervalMs: modelHeartbeatIntervalMs,
+    })
+    try {
+      return await callModelWithContextRecovery({
+        messages: modelMessages,
+        tools: modelTools,
+        callModel: async (modelRequest) => {
+          await heartbeat.beginRequest()
+          return runWithModelBudget(
+            budget,
+            () => runModel(modelRequest),
+            { allowOverBudget },
+          )
+        },
+        isContextLengthError,
+        contextWindow,
+        semanticSummary,
+        signal,
+        userId: job?.userId || null,
+        sessionId: recoverySessionId,
+        ...(typeof consumeBudget === 'function' ? { consumeBudget } : {}),
+        ...(toolChoice !== undefined ? { toolChoice } : {}),
+        onTextDelta: async (text, metadata = {}) => {
+          if (text) await heartbeat.recordDelta()
+          if (typeof onTextDelta === 'function') await onTextDelta(text, metadata)
+        },
+        onReasoningDelta: async (text, metadata = {}) => {
+          if (text) await heartbeat.recordDelta()
+          if (typeof handleReasoningDelta === 'function') {
+            await handleReasoningDelta(text, metadata)
+          }
+        },
+      })
+    } finally {
+      await heartbeat.stop()
+    }
+  }
   const subagentApprovalContext = approvalContext || createSubagentApprovalContext()
   // Exact duplicate signatures keep their separate fuse. Calls that change
   // arguments get graded strategy advisories and a much higher recovery budget.
@@ -1006,30 +1239,22 @@ export async function runToolsLoop({
       }
 
       let modelResult
+      let responseTextPublished = false
       try {
-        if (typeof onModelPhase === 'function') await onModelPhase({ phase: 'started', iteration: iter })
         let streamedText = false
-        const request = await callModelWithContextRecovery({
+        const request = await callTrackedModel({
           messages: convo,
           tools: activeToolSpecs,
-          callModel: (modelRequest) => runWithModelBudget(
-            budget,
-            () => runModel(modelRequest),
-          ),
-          isContextLengthError,
-          contextWindow,
-          semanticSummary,
-          signal,
-          userId: job?.userId || null,
-          sessionId: recoverySessionId,
           consumeBudget: (cost) => budget.consume(cost),
           onTextDelta: async (text, metadata = {}) => {
             if (!text) return
-            // Do not leak a model's "copy this code into a file" fallback into
-            // the chat while a real file artifact is still required. The final
-            // narration streams normally after the generator succeeds.
-            if (!hasRequiredArtifacts()) return
+            // Execution responses are buffered until the complete candidate is
+            // available for source-handoff validation. Model/tool phase events
+            // remain live, and safe narration is published before tools run.
+            if (requiresSourceHandoffProtection) return
+            if (!hasRequiredArtifacts() && !codeSnippetRequested) return
             streamedText = true
+            responseTextPublished = true
             if (typeof onModelDelta === 'function') {
               await onModelDelta({ text, iteration: iter, modelName: metadata.modelName || null })
             }
@@ -1040,9 +1265,7 @@ export async function runToolsLoop({
           },
         })
         convo.splice(0, convo.length, ...request.messages)
-        if (request.recovery?.archiveId) {
-          recovery = { archiveId: String(request.recovery.archiveId) }
-        }
+        recovery = mergeCompactionRecovery(recovery, request.recovery)
         modelResult = request.response
         if (!Array.isArray(modelResult?.toolCalls) || modelResult.toolCalls.length === 0) {
           const compatibilityCall = extractTextToolCalls(modelResult?.content)
@@ -1075,20 +1298,29 @@ export async function runToolsLoop({
         if (typeof onModelPhase === 'function') await onModelPhase({
           phase: 'completed',
           iteration: iter,
-          content: modelResult?.content || '',
+          content: requiresSourceHandoffProtection && sourceHandoffViolation(modelResult?.content)
+            ? ''
+            : modelResult?.content || '',
           toolCalls: modelResult?.toolCalls || [],
           usage: modelResult?.usage || null,
           modelName: modelResult?.modelName || null,
         })
+        const bufferedTextIsSafe = !requiresSourceHandoffProtection
+          || !sourceHandoffViolation(modelResult?.content)
+        const protectedTextHasEvidence = requiresPersistedArtifact
+          ? hasRequiredArtifacts()
+          : hasRequiredExecutionEvidence()
         if (!streamedText
           && modelResult?.content
-          && hasRequiredArtifacts()
+          && bufferedTextIsSafe
+          && (requiresSourceHandoffProtection ? protectedTextHasEvidence : hasRequiredArtifacts())
           && typeof onModelDelta === 'function') {
           await onModelDelta({
             text: modelResult.content,
             iteration: iter,
             modelName: modelResult?.modelName || null,
           })
+          responseTextPublished = true
         }
       } catch (error) {
         let recoverableModelResult = error?.partialModelResult
@@ -1146,7 +1378,9 @@ export async function runToolsLoop({
           if (typeof onModelPhase === 'function') await onModelPhase({
             phase: 'completed',
             iteration: iter,
-            content: modelResult?.content || '',
+            content: requiresSourceHandoffProtection && sourceHandoffViolation(modelResult?.content)
+              ? ''
+              : modelResult?.content || '',
             toolCalls: modelResult?.toolCalls || [],
             usage: modelResult?.usage || null,
             modelName: modelResult?.modelName || null,
@@ -1175,7 +1409,7 @@ export async function runToolsLoop({
             .slice(0, 4000)
           let wrapUpText = ''
           try {
-            const wrapUpRequest = await callModelWithContextRecovery({
+            const wrapUpRequest = await callTrackedModel({
               messages: [
                 ...convo,
                 {
@@ -1184,22 +1418,10 @@ export async function runToolsLoop({
                 },
               ],
               tools: [],
-              callModel: (modelRequest) => runWithModelBudget(
-                budget,
-                () => runModel(modelRequest),
-                { allowOverBudget: true },
-              ),
-              isContextLengthError,
-              contextWindow,
-              semanticSummary,
-              signal,
-              userId: job?.userId || null,
-              sessionId: recoverySessionId,
+              allowOverBudget: true,
               toolChoice: 'none',
             })
-            if (wrapUpRequest.recovery?.archiveId) {
-              recovery = { archiveId: String(wrapUpRequest.recovery.archiveId) }
-            }
+            recovery = mergeCompactionRecovery(recovery, wrapUpRequest.recovery)
             wrapUpText = wrapUpRequest.response?.content || ''
           } catch (wrapUpError) {
             if (wrapUpError?.name === 'AbortError') throw wrapUpError
@@ -1295,7 +1517,9 @@ export async function runToolsLoop({
               ARTIFACT_DELIVERY_GUARD_MARKER,
               'The user requested a real downloadable file, but the previous response did not create one.',
               `Call each missing artifact generator now: ${missing.join(', ')}.`,
-              'Do not ask for a directory, do not print source code as the deliverable, and do not claim completion until the tool returns artifactId.',
+              codeSnippetRequested
+                ? 'The explicitly requested code snippet may be included, but it does not satisfy the required file delivery. Do not claim completion until the tool returns artifactId.'
+                : 'Do not ask for a directory, print complete source code, provide copy/save instructions, or claim completion until the tool returns artifactId. If the tool still fails, report a concise blocker without code.',
             ].join(' '),
           })
           await persistTurn()
@@ -1431,12 +1655,45 @@ export async function runToolsLoop({
           }
           continue
         }
+        const sourceViolation = requiresSourceHandoffProtection
+          ? sourceHandoffViolation(content)
+          : null
+        let acceptedContent = String(content || '')
+        if (sourceViolation) {
+          if (sourceHandoffRetries < MAX_SOURCE_HANDOFF_RETRIES) {
+            sourceHandoffRetries += 1
+            convo.push({
+              role: 'system',
+              content: [
+                SOURCE_HANDOFF_GUARD_MARKER,
+                `The previous final response was withheld because it contained ${sourceViolation}.`,
+                'Return one concise prose-only summary of what was actually executed, changed, and verified.',
+                'Do not include fenced blocks, source code, commands for the user to run, or instructions to copy, save, rename, or convert files manually.',
+              ].join(' '),
+            })
+            if (iter + 1 >= maxIters) maxIters = iter + 2
+            await persistTurn()
+            if (steeringLeaseId && typeof acknowledgeSteering === 'function') {
+              await acknowledgeSteering(steeringLeaseId)
+            }
+            continue
+          }
+          acceptedContent = protectTerminalText(content)
+          responseTextPublished = false
+        }
+        if (!responseTextPublished && acceptedContent && typeof onModelDelta === 'function') {
+          await onModelDelta({
+            text: acceptedContent,
+            iteration: iter,
+            modelName: modelResult?.modelName || null,
+          })
+        }
         const completion = await prepareCompletionForSteering({
-          text: content || '',
+          text: acceptedContent,
           steeringLeaseId,
         })
         if (!completion.closed) continue
-        finalText = content || ''
+        finalText = acceptedContent
         if (!completion.prepared) convo.push({ role: 'assistant', content: finalText })
         try {
           const hasFinalText = Boolean(finalText.trim())
@@ -1480,7 +1737,10 @@ export async function runToolsLoop({
       }
       await emitToolProgress('tools_scheduled')
       toolCalls = checkpointCalls
-      convo.push(buildAssistantToolCallsMessage(toolCalls, content))
+      const checkpointContent = requiresSourceHandoffProtection && sourceHandoffViolation(content)
+        ? ''
+        : content
+      convo.push(buildAssistantToolCallsMessage(toolCalls, checkpointContent))
       try {
         // The model response and steering text become durable atomically from
         // the engine's perspective; only then may the steering lease be ACKed.
@@ -1640,6 +1900,49 @@ export async function runToolsLoop({
                 error: `用户没有要求生成 ${call.name} 这类文件产物,该工具在本次任务中不可用。`,
                 retryable: false,
                 hint: '直接完成用户真正要求的工作(如修改代码、给出结论),并用文字说明结果;不要用文件代替交付。',
+              }
+            }
+          }
+
+          if (!result && isFileArtifactTool(name)) {
+            const replacementId = String(args?.replace_artifact_id || '').trim()
+            const matchingPriorArtifacts = priorArtifacts.filter((artifact) => artifact.toolName === name)
+            if (artifactRevisionMode === 'conflict') {
+              result = {
+                ok: false,
+                code: 'artifact_revision_mode_conflict',
+                error: 'The user gave conflicting instructions about replacing the original versus creating a new file.',
+                retryable: false,
+                hint: 'Call request_clarification before any artifact generator.',
+              }
+            } else if (artifactRevisionMode === 'replace_original' && matchingPriorArtifacts.length > 1) {
+              result = {
+                ok: false,
+                code: 'artifact_replacement_target_ambiguous',
+                error: `More than one adjacent ${name} artifact could be replaced in place.`,
+                retryable: false,
+                hint: 'Call request_clarification so the user can identify the exact original file.',
+              }
+            } else if (artifactRevisionMode === 'replace_original' && matchingPriorArtifacts.length === 1) {
+              const requiredId = matchingPriorArtifacts[0].id
+              if (replacementId !== requiredId) {
+                result = {
+                  ok: false,
+                  code: 'artifact_replacement_required',
+                  error: `This in-place revision must set replace_artifact_id to the exact adjacent artifact ID: ${requiredId}.`,
+                  retryable: true,
+                  requiredArtifactId: requiredId,
+                }
+              }
+            } else if (replacementId) {
+              result = {
+                ok: false,
+                code: 'artifact_replacement_not_authorized',
+                error: artifactRevisionMode === 'create_copy'
+                  ? 'The user explicitly requested a new file, so the original artifact must not be replaced.'
+                  : 'In-place replacement was not explicitly authorized by the current user request.',
+                retryable: false,
+                hint: 'Omit replace_artifact_id and create a new artifact.',
               }
             }
           }
@@ -2314,7 +2617,7 @@ export async function runToolsLoop({
       }
       if (!finalText) {
         try {
-          const wrapUpRequest = await callModelWithContextRecovery({
+          const wrapUpRequest = await callTrackedModel({
             messages: [
               ...convo,
               {
@@ -2323,22 +2626,10 @@ export async function runToolsLoop({
               },
             ],
             tools: [],
-            callModel: (modelRequest) => runWithModelBudget(
-              budget,
-              () => runModel(modelRequest),
-              { allowOverBudget: true },
-            ),
-            isContextLengthError,
-            contextWindow,
-            semanticSummary,
-            signal,
-            userId: job?.userId || null,
-            sessionId: recoverySessionId,
+            allowOverBudget: true,
             toolChoice: 'none',
           })
-          if (wrapUpRequest.recovery?.archiveId) {
-            recovery = { archiveId: String(wrapUpRequest.recovery.archiveId) }
-          }
+          recovery = mergeCompactionRecovery(recovery, wrapUpRequest.recovery)
           finalText = wrapUpRequest.response?.content || ''
         } catch {
           writeToolAudit?.({
@@ -2367,27 +2658,28 @@ export async function runToolsLoop({
     }
     if (pausedByClarification) {
       // ★ M3: 模型主动调 request_clarification → 当轮 loop 中断交回用户
+      const protectedClarification = protectClarification(pausedByClarification)
       const terminal = await finishTerminalResult({
         text: finalText || String(
-          pausedByClarification.question
-          || pausedByClarification.message
+          protectedClarification.question
+          || protectedClarification.message
           || '需要你补充信息后才能继续。',
         ),
         artifactIds,
         iterations: iter + 1,
         paused: true,
-        clarification: pausedByClarification,
+        clarification: protectedClarification,
         recovery,
       }, {
         steeringLeaseId,
-        finalMetadata: { paused: true, clarification: pausedByClarification },
+        finalMetadata: { paused: true, clarification: protectedClarification },
       })
       if (!terminal) continue
       return terminal
     }
     if (noProgressReason) {
       try {
-        const wrapUpRequest = await callModelWithContextRecovery({
+        const wrapUpRequest = await callTrackedModel({
           messages: [
             ...convo,
             {
@@ -2396,23 +2688,11 @@ export async function runToolsLoop({
             },
           ],
           tools: [],
-          callModel: (modelRequest) => runWithModelBudget(
-            budget,
-            () => runModel(modelRequest),
-            { allowOverBudget: true },
-          ),
-          isContextLengthError,
-          contextWindow,
-          semanticSummary,
-          signal,
-          userId: job?.userId || null,
-          sessionId: recoverySessionId,
+          allowOverBudget: true,
           consumeBudget: (cost) => budget.consume(cost),
           toolChoice: 'none',
         })
-        if (wrapUpRequest.recovery?.archiveId) {
-          recovery = { archiveId: String(wrapUpRequest.recovery.archiveId) }
-        }
+        recovery = mergeCompactionRecovery(recovery, wrapUpRequest.recovery)
         const wrapUp = wrapUpRequest.response
         finalText = wrapUp?.content || ''
       } catch {
@@ -2445,7 +2725,7 @@ export async function runToolsLoop({
   // 收个尾,拿不到就至少说清楚是被上限截断的,不要静默空返回。
   if (!finalText) {
     try {
-      const wrapUpRequest = await callModelWithContextRecovery({
+      const wrapUpRequest = await callTrackedModel({
         messages: [
           ...convo,
           {
@@ -2454,23 +2734,11 @@ export async function runToolsLoop({
           },
         ],
         tools: [],
-        callModel: (modelRequest) => runWithModelBudget(
-          budget,
-          () => runModel(modelRequest),
-          { allowOverBudget: true },
-        ),
-        isContextLengthError,
-        contextWindow,
-        semanticSummary,
-        signal,
-        userId: job?.userId || null,
-        sessionId: recoverySessionId,
+        allowOverBudget: true,
         consumeBudget: (cost) => budget.consume(cost),
         toolChoice: 'none',
       })
-      if (wrapUpRequest.recovery?.archiveId) {
-        recovery = { archiveId: String(wrapUpRequest.recovery.archiveId) }
-      }
+      recovery = mergeCompactionRecovery(recovery, wrapUpRequest.recovery)
       const wrapUp = wrapUpRequest.response
       finalText = wrapUp?.content || ''
     } catch {
@@ -2488,6 +2756,7 @@ export async function runToolsLoop({
       finalText = `(已达到 ${maxIters} 轮工具调用上限,任务未能自行收尾。上面的工具结果可能已包含部分进展。)`
     }
   }
+  finalText = protectTerminalText(finalText, { incomplete: true })
 
   assertRequiredArtifacts()
   if (!hasRequiredExecutionEvidence()) {

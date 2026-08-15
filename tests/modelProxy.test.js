@@ -442,6 +442,7 @@ test('loads a multi-provider model catalog', () => {
   const env = {
     MODEL_PROVIDERS: 'deepseek,mimo',
     MODEL_PROVIDER_DEEPSEEK_BASE_URL: 'https://api.deepseek.com',
+    MODEL_PROVIDER_DEEPSEEK_LABEL: 'DeepSeek Primary',
     MODEL_PROVIDER_DEEPSEEK_API_KEY: 'sk-deepseek',
     MODEL_PROVIDER_DEEPSEEK_MODELS: 'deepseek-v4-pro,deepseek-v4-flash',
     MODEL_PROVIDER_MIMO_BASE_URL: 'https://api.xiaomimimo.com/v1',
@@ -458,6 +459,7 @@ test('loads a multi-provider model catalog', () => {
       name: 'deepseek-v4-pro',
       active: true,
       provider: 'deepseek',
+      providerLabel: 'DeepSeek Primary',
       contextWindow: 1_000_000,
       contextWindowSource: 'official_catalog',
       contextWindowEstimated: false,
@@ -469,6 +471,7 @@ test('loads a multi-provider model catalog', () => {
       name: 'deepseek-v4-flash',
       active: false,
       provider: 'deepseek',
+      providerLabel: 'DeepSeek Primary',
       contextWindow: 1_000_000,
       contextWindowSource: 'official_catalog',
       contextWindowEstimated: false,

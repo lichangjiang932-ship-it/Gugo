@@ -83,6 +83,11 @@ export function toEditor(provider) {
   }
 }
 
+export function findConfiguredPresetProvider(providers, preset) {
+  if (!preset) return null
+  return (Array.isArray(providers) ? providers : []).find((provider) => provider?.key === preset.key) || null
+}
+
 export function formatContextTokens(value) {
   const num = Number(value)
   if (!Number.isFinite(num) || num <= 0) return ''

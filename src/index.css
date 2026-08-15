@@ -255,6 +255,45 @@ html[data-density="loose"] {
   color: var(--color-ink);
 }
 
+.chat-task-duration,
+.chat-execution-toggle {
+  color: rgb(var(--color-ink-fade-rgb));
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-task-duration {
+  margin-bottom: 0.6rem;
+}
+
+.chat-execution-disclosure {
+  margin-bottom: 0.65rem;
+  border-bottom: 1px solid rgb(var(--color-ink-rgb) / 0.08);
+}
+
+.chat-execution-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-height: 1.8rem;
+  margin-bottom: 0.25rem;
+  transition: color 150ms ease;
+}
+
+.chat-execution-toggle:hover,
+.chat-execution-toggle:focus-visible {
+  color: rgb(var(--color-ink-rgb));
+}
+
+.chat-execution-toggle:focus-visible {
+  outline: 2px solid rgb(var(--color-ember-rgb) / 0.45);
+  outline-offset: 2px;
+}
+
+.chat-execution-content {
+  padding-bottom: 0.55rem;
+}
+
 /* Hover-only controls need a direct touch target on phones and tablets. */
 @media (hover: none), (pointer: coarse) {
   .chat-message-actions,

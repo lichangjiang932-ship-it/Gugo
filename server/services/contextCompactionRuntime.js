@@ -12,8 +12,10 @@ import {
 import { writeToolAudit } from '../utils/audit.js'
 import { logWarn } from '../utils/logger.js'
 import { DEFAULT_CLOUD_CONTEXT_WINDOW } from '../utils/endpointProfile.js'
+import { storedMessageSourceId } from './turnMessageContext.js'
 
-export const MAX_AUTO_COMPACTION_TOKENS = 800_000
+export const DEFAULT_ACTIVE_CONTEXT_TOKENS = 128_000
+export const MAX_AUTO_COMPACTION_TOKENS = DEFAULT_ACTIVE_CONTEXT_TOKENS
 // Context-aware callers pass the selected model's resolved window. Keep a
 // conservative cloud-sized fallback for legacy/background entry points that
 // do not yet carry model metadata; the former 1M fallback delayed compaction
@@ -31,20 +33,128 @@ function textTokens(value) {
   return Math.ceil(ascii / 4) + nonAscii
 }
 
+const TOOL_RESULT_CONTEXT_RATIO = 0.25
+const MAX_ROLLING_TOOL_RESULT_TOKENS = 24_000
+const MIN_ROLLING_TOOL_RESULT_TOKENS = 256
+const COMPACTED_TOOL_ERROR_CHARS = 600
+const COMPACTED_TOOL_PREVIEW_CHARS = 160
+
+function boundedSummaryValue(value, maxChars = 320) {
+  if (typeof value === 'string') return value.slice(0, maxChars)
+  if (typeof value === 'number' || typeof value === 'boolean' || value === null) return value
+  return undefined
+}
+
+function compactToolResultContent(value) {
+  const text = typeof value === 'string' ? value : JSON.stringify(value ?? '')
+  let parsed = null
+  try { parsed = JSON.parse(text) } catch { /* non-JSON tool output */ }
+
+  const summary = {
+    ok: parsed && typeof parsed === 'object' ? parsed.ok !== false : true,
+    contextCompacted: true,
+    originalChars: text.length,
+    note: 'Earlier tool output was compacted. Re-read the source if exact content is needed.',
+  }
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    for (const key of ['code', 'artifactId', 'filename', 'path', 'url', 'sha256', 'scope']) {
+      const bounded = boundedSummaryValue(parsed[key])
+      if (bounded !== undefined && bounded !== '') summary[key] = bounded
+    }
+    if (parsed.ok === false && parsed.error) {
+      summary.error = String(parsed.error).slice(0, COMPACTED_TOOL_ERROR_CHARS)
+    }
+    if (Array.isArray(parsed.artifactIds)) {
+      summary.artifactIds = parsed.artifactIds.map(String).slice(0, 8)
+    }
+    if (Array.isArray(parsed.artifacts)) {
+      summary.artifacts = parsed.artifacts.slice(0, 8).map((artifact) => ({
+        ...(artifact?.id ? { id: String(artifact.id) } : {}),
+        ...(artifact?.filename ? { filename: String(artifact.filename).slice(0, 240) } : {}),
+        ...(artifact?.type ? { type: String(artifact.type).slice(0, 80) } : {}),
+        ...(artifact?.url ? { url: String(artifact.url).slice(0, 320) } : {}),
+      }))
+    }
+  } else if (text) {
+    summary.preview = text.slice(0, COMPACTED_TOOL_PREVIEW_CHARS)
+  }
+  return JSON.stringify(summary)
+}
+
+/**
+ * Keep the newest tool evidence verbatim while replacing older large results
+ * with protocol-safe structured summaries. This bounds long tool loops before
+ * a full conversation compaction is necessary.
+ */
+export function applyRollingToolResultBudget(messages = [], {
+  contextWindow = DEFAULT_CONTEXT_WINDOW,
+  activeContextTokens,
+  maxTokens,
+} = {}) {
+  const source = Array.isArray(messages) ? messages : []
+  const threshold = getAutoCompactionThreshold(contextWindow, activeContextTokens)
+  const configuredMax = Number(maxTokens)
+  const budgetTokens = Number.isFinite(configuredMax) && configuredMax > 0
+    ? Math.floor(configuredMax)
+    : Math.max(
+        MIN_ROLLING_TOOL_RESULT_TOKENS,
+        Math.min(MAX_ROLLING_TOOL_RESULT_TOKENS, Math.floor(threshold * TOOL_RESULT_CONTEXT_RATIO)),
+      )
+  const output = source.slice()
+  let remainingTokens = budgetTokens
+  let retainedFullCount = 0
+  let compactedCount = 0
+
+  for (let index = source.length - 1; index >= 0; index -= 1) {
+    const message = source[index]
+    if (message?.role !== 'tool') continue
+    const originalTokens = 6 + textTokens(message.content)
+    if (originalTokens <= remainingTokens || retainedFullCount === 0) {
+      remainingTokens = Math.max(0, remainingTokens - originalTokens)
+      retainedFullCount += 1
+      continue
+    }
+
+    const compactedContent = compactToolResultContent(message.content)
+    const compactedTokens = 6 + textTokens(compactedContent)
+    if (compactedTokens >= originalTokens) {
+      remainingTokens = Math.max(0, remainingTokens - originalTokens)
+      continue
+    }
+    output[index] = { ...message, content: compactedContent }
+    remainingTokens = Math.max(0, remainingTokens - compactedTokens)
+    compactedCount += 1
+  }
+
+  return {
+    messages: compactedCount > 0 ? output : source,
+    compactedCount,
+    retainedFullCount,
+    budgetTokens,
+  }
+}
+
 export function estimateContextTokens(messages = [], tools = []) {
   const messageTokens = (Array.isArray(messages) ? messages : [])
     .reduce((total, message) => total + 6 + textTokens(message), 0)
   return messageTokens + textTokens(Array.isArray(tools) ? tools : []) + 16
 }
 
-export function getAutoCompactionThreshold(contextWindow = DEFAULT_CONTEXT_WINDOW) {
+export function getAutoCompactionThreshold(
+  contextWindow = DEFAULT_CONTEXT_WINDOW,
+  activeContextTokens = process.env.MODEL_ACTIVE_CONTEXT_TOKENS,
+) {
   const window = Number(contextWindow)
   // ★ 原来 `>= 4096` 的硬下限,会把「真的只有 2k/4k 窗口的小模型」
   // 悄悄换成 DEFAULT_CONTEXT_WINDOW —— 阈值算出来比实际窗口大好几倍,
   // 于是压缩永远不触发,每个请求都必然溢出。
   // 现在只要是正数就认(下限统一在 endpointProfile.MIN_CONTEXT_WINDOW 兜底)。
   const safeWindow = Number.isFinite(window) && window > 0 ? window : DEFAULT_CONTEXT_WINDOW
-  return Math.min(Math.floor(safeWindow * 0.8), MAX_AUTO_COMPACTION_TOKENS)
+  const configuredActiveLimit = Number(activeContextTokens)
+  const activeLimit = Number.isFinite(configuredActiveLimit) && configuredActiveLimit > 0
+    ? Math.floor(configuredActiveLimit)
+    : DEFAULT_ACTIVE_CONTEXT_TOKENS
+  return Math.min(Math.floor(safeWindow * 0.8), activeLimit)
 }
 
 function chooseTailSize(messages, threshold) {
@@ -258,6 +368,20 @@ function archiveCompaction(result, { userId, sessionId }) {
   }
 }
 
+function compactionMessageBoundary(result) {
+  const archivedIds = (Array.isArray(result?.archivedMessages) ? result.archivedMessages : [])
+    .map(storedMessageSourceId)
+    .filter(Boolean)
+  const retainedIds = (Array.isArray(result?.outboundMessages) ? result.outboundMessages : [])
+    .filter((message) => message !== result?.summaryMessage && message?.role !== 'system')
+    .map(storedMessageSourceId)
+    .filter(Boolean)
+  return {
+    ...(retainedIds[0] ? { firstKeptMessageId: retainedIds[0] } : {}),
+    ...(archivedIds.at(-1) ? { lastCompactedMessageId: archivedIds.at(-1) } : {}),
+  }
+}
+
 export async function compactForModel({
   messages = [],
   tools = [],
@@ -269,21 +393,33 @@ export async function compactForModel({
   userId = null,
   sessionId = null,
   consumeBudget,
+  activeContextTokens,
 } = {}) {
-  const threshold = getAutoCompactionThreshold(contextWindow)
-  const estimatedTokens = estimateContextTokens(messages, tools)
-  const overMessageLimit = messages.length > MAX_OUTBOUND_MESSAGES
+  const threshold = getAutoCompactionThreshold(contextWindow, activeContextTokens)
+  const rollingToolResults = applyRollingToolResultBudget(messages, {
+    contextWindow,
+    activeContextTokens,
+  })
+  const preparedMessages = rollingToolResults.messages
+  const estimatedTokens = estimateContextTokens(preparedMessages, tools)
+  const overMessageLimit = preparedMessages.length > MAX_OUTBOUND_MESSAGES
   if (!force && !overMessageLimit && estimatedTokens < threshold) {
-    return { messages, compacted: false, estimatedTokens, threshold }
+    return {
+      messages: preparedMessages,
+      compacted: false,
+      estimatedTokens,
+      threshold,
+      rollingToolResultsCompacted: rollingToolResults.compactedCount,
+    }
   }
 
-  const nonSystemCount = messages.filter((message) => message?.role !== 'system').length
-  const adaptiveTail = chooseTailSize(messages, threshold)
+  const nonSystemCount = preparedMessages.filter((message) => message?.role !== 'system').length
+  const adaptiveTail = chooseTailSize(preparedMessages, threshold)
   const keepMessages = force && nonSystemCount > 1
     ? Math.min(adaptiveTail, Math.max(1, Math.floor(nonSystemCount / 2)))
     : adaptiveTail
   let result = buildCompaction({
-    messages,
+    messages: preparedMessages,
     keepMessages,
     force: true,
   })
@@ -311,6 +447,7 @@ export async function compactForModel({
         },
       }
   result = semantic.result
+  const messageBoundary = compactionMessageBoundary(result)
   const archive = archiveCompaction(result, { userId, sessionId })
   if (archive) {
     const summaryIndex = result.outboundMessages.indexOf(result.summaryMessage)
@@ -330,7 +467,9 @@ export async function compactForModel({
     threshold,
     replacedMessageCount: result.replacedMessageCount,
     archiveId: archive?.id || null,
+    ...messageBoundary,
     semanticSummary: semantic.telemetry,
+    rollingToolResultsCompacted: rollingToolResults.compactedCount,
   }
 }
 
@@ -414,6 +553,7 @@ export async function callModelWithContextRecovery({
   userId = null,
   sessionId = null,
   consumeBudget,
+  activeContextTokens,
   ...modelOptions
 } = {}) {
   if (typeof callModel !== 'function') throw new Error('callModel is required')
@@ -427,6 +567,7 @@ export async function callModelWithContextRecovery({
     userId,
     sessionId,
     consumeBudget,
+    activeContextTokens,
   })
   const invoke = () => callModel({ ...modelOptions, messages: prepared.messages, tools, signal })
   try {
@@ -446,6 +587,7 @@ export async function callModelWithContextRecovery({
     userId,
     sessionId,
     consumeBudget,
+    activeContextTokens,
   })
   // ★ compactForModel 拒绝压缩时会带一个 error 说明原因(工具调用链断了之类),
   // 而原来**每个调用方都把它丢掉** —— 于是「压缩没生效」和「压缩成功了」

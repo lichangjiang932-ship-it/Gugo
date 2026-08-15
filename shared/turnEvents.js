@@ -133,7 +133,15 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     text: z.string(), iteration: z.number().int().nonnegative().optional(), modelName: nullableText,
   }).strict(),
   'tool.call': z.object({ toolCallId: z.string().optional(), name: z.string().optional(), args: jsonRecord.optional() }).strict(),
-  'tool.started': z.object({ toolCallId: z.string().optional(), name: z.string().optional() }).strict(),
+  'tool.started': z.object({
+    toolCallId: z.string().optional(),
+    name: z.string().optional(),
+    args: jsonRecord.optional(),
+    // stdout/stderr deltas are intentionally process-local. A replayed
+    // running tool can restore its identity and arguments, while making the
+    // missing pre-reconnect output explicit instead of implying an empty log.
+    outputReplay: z.literal('live_only').optional(),
+  }).strict(),
   'tool.completed': z.object({
     toolCallId: z.string().optional(), name: z.string().optional(), args: jsonRecord.optional(),
     result: z.unknown().optional(), error: toolFailureSchema.nullable().optional(), artifactId: nullableText,
@@ -167,7 +175,15 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     approvalId: nullableText, proceed: z.boolean(), edited: z.boolean(), args: jsonRecord.nullable().optional(),
     reason: nullableText,
   }).strict(),
-  'turn.checkpoint': z.object({ state: z.unknown().optional() }).strict(),
+  'turn.checkpoint': z.object({
+    // `state` remains accepted for v50-and-earlier event-log checkpoints.
+    // New checkpoints keep state in the upsert table and emit bounded metadata.
+    state: z.unknown().optional(),
+    storage: z.literal('turn_checkpoints').optional(),
+    checkpointVersion: z.number().int().positive().optional(),
+    iterations: z.number().int().nonnegative().optional(),
+    toolCallCount: z.number().int().nonnegative().optional(),
+  }).strict(),
   'turn.interrupted': z.object({
     code: z.string().min(1),
     message: z.string().min(1),

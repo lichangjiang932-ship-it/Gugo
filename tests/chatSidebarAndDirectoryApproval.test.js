@@ -7,12 +7,16 @@ import { readWorkbenchOpen, writeWorkbenchOpen } from '../src/lib/chatUiPreferen
 
 const read = (path) => fs.readFileSync(new URL(path, import.meta.url), 'utf8')
 
-test('directory authorization is rendered inline above the composer', () => {
+test('directory authorization uses an in-app modal instead of occupying the chat stream', () => {
   const chat = read('../src/pages/ChatSplit/ChatSplitView.jsx')
   const approval = read('../src/components/DirectoryApprovalModal.jsx')
 
+  assert.match(approval, /data-testid="directory-approval-modal"/)
   assert.match(approval, /data-testid="directory-approval-card"/)
-  assert.doesNotMatch(approval, /fixed inset-0|backdrop-blur/)
+  assert.match(approval, /fixed inset-0/)
+  assert.match(approval, /role="dialog"/)
+  assert.match(approval, /aria-modal="true"/)
+  assert.match(approval, /aria-busy=\{!!busy\}/)
   assert.ok(chat.indexOf('{directoryApproval.open && (') < chat.indexOf('<ChatComposer'))
   assert.doesNotMatch(chat, /ApplyPatchApprovalModal/)
 })
@@ -41,7 +45,9 @@ test('local paths are authorized before the model call and paused turns resume i
   assert.match(messageRow, /serverClarification\?\.request_type \|\| serverClarification\?\.requestType/)
   assert.match(messageRow, /<DirectoryRequestCard/)
   assert.match(serverTurn, /buildLocalPathToolInstruction\([\s\S]{0,160}localPathAccess\.paths,[\s\S]{0,160}localPathAccess\.accessMode,[\s\S]{0,160}localPathAccess\.resources,[\s\S]{0,80}\)/)
-  assert.match(directoryApproval, /directoryApprovalResolveRef\.current\?\.\(\{ approved: false \}\)/)
+  assert.match(directoryApproval, /settleDirectoryApprovalRequest\([\s\S]*\{ approved: false \}/)
+  assert.match(directoryApproval, /directoryApprovalRequestRef\.current === requestRecord/)
+  assert.match(directoryApproval, /requestRecord\.controller\?\.abort\(\)/)
   assert.match(chat, /if \(!localPathAccess\.proceed\) return/)
   assert.match(serverTurn, /await collectLocalPathEvidence\(\{/)
   assert.match(serverTurn, /signal: controller\.signal/)

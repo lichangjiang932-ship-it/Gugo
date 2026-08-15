@@ -193,6 +193,37 @@ test('server snapshots retain local tool offsets when canonical text is unchange
   assert.deepEqual(merged.meta.toolCalls, [{ id: 'call-same', textOffset: 4 }])
 })
 
+test('authoritative snapshots replace stale local turn timing metadata', () => {
+  const [merged] = mergeServerSessionMessages([{
+    id: 'timed-assistant',
+    role: 'assistant',
+    content: 'Finished.',
+    timestamp: 5_000,
+    meta: {
+      serverTurnId: 'timed-turn',
+      turnStartedAt: 4_000,
+      turnCompletedAt: 5_000,
+      latency: 1_000,
+    },
+  }], [{
+    id: 'timed-assistant',
+    role: 'assistant',
+    content: 'Finished.',
+    timestamp: 5_000,
+    meta: {
+      serverTurnId: 'timed-turn',
+      turnStartedAt: 1_000,
+      turnCompletedAt: 5_000,
+      latency: 4_000,
+      serverAuthoritative: true,
+    },
+  }])
+
+  assert.equal(merged.meta.turnStartedAt, 1_000)
+  assert.equal(merged.meta.turnCompletedAt, 5_000)
+  assert.equal(merged.meta.latency, 4_000)
+})
+
 test('authoritative final text remains fully visible after a discarded candidate response', () => {
   const discardedCandidate = 'C'.repeat(224)
   const finalText = `${'F'.repeat(224)}6B5102A919ABDA03146DE557A78EA1311FEEEAA26C8FBA4E7`
@@ -379,6 +410,43 @@ test('an empty completion snapshot cannot erase assistant text already received 
 
   assert.equal(merged.content, 'Done. Your file is ready.')
   assert.equal(merged.meta.streaming, false)
+})
+
+test('an interrupted snapshot keeps streaming and advances a stale local replay cursor', () => {
+  const [merged] = mergeServerSessionMessages([{
+    id: 'turn-interrupted:assistant',
+    role: 'assistant',
+    content: 'local partial',
+    meta: {
+      streaming: false,
+      turnCompletedAt: 500,
+      latency: 400,
+      serverTurnId: 'turn-interrupted',
+      serverLastSequence: 3,
+      serverConnectionState: null,
+    },
+  }], [{
+    id: 'turn-interrupted:assistant',
+    role: 'assistant',
+    content: 'durable checkpoint',
+    meta: {
+      streaming: true,
+      interrupted: true,
+      turnCompletedAt: null,
+      latency: null,
+      serverTurnId: 'turn-interrupted',
+      serverLastSequence: 8,
+      serverConnectionState: 'interrupted',
+      serverAuthoritative: true,
+    },
+  }])
+
+  assert.equal(merged.content, 'durable checkpoint')
+  assert.equal(merged.meta.streaming, true)
+  assert.equal(merged.meta.turnCompletedAt, null)
+  assert.equal(merged.meta.latency, null)
+  assert.equal(merged.meta.serverLastSequence, 8)
+  assert.equal(merged.meta.serverConnectionState, 'interrupted')
 })
 
 test('recovery stubs stay resumable until a real server assistant replaces them', () => {

@@ -128,7 +128,7 @@ test('run_project_check requires shell authorization instead of the Git gate', a
 test('git_commit requires mutation gate, non-empty message, selected changed files', async () => {
   const cwd = withTempRepo()
   fs.writeFileSync(path.join(cwd, 'README.md'), 'hello\nchanged\n', 'utf8')
-  await withEnv({ WORKSPACE_ROOT: cwd, WORKSPACE_GIT_ENABLED: '1', WORKSPACE_GIT_MUTATION_ENABLED: null }, async () => {
+  await withEnv({ WORKSPACE_ROOT: cwd, WORKSPACE_GIT_ENABLED: '1', WORKSPACE_GIT_MUTATION_ENABLED: '0' }, async () => {
     await assert.rejects(() => gitCommitTool({ message: 'feat: nope', files: ['README.md'] }), /WORKSPACE_GIT_MUTATION_ENABLED=1/)
   })
   await withEnv({ WORKSPACE_ROOT: cwd, WORKSPACE_GIT_ENABLED: '1', WORKSPACE_GIT_MUTATION_ENABLED: '1' }, async () => {

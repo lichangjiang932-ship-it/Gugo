@@ -1,0 +1,143 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+
+import { registerBrowserTools } from '../server/services/browserTools.js'
+import { CONNECTOR_TOOL_NAMES } from '../server/services/connectorTools.js'
+import { SERVER_TOOL_SPECS } from '../server/services/toolLoopRuntime.js'
+import { resolveTurnToolPolicy, resolveTurnToolSpecs } from '../server/services/turnToolSpecs.js'
+
+function namesOf(specs) {
+  return specs.map((spec) => spec?.function?.name).filter(Boolean)
+}
+
+const allConnectorsEnabled = [...CONNECTOR_TOOL_NAMES]
+
+test('website and file turns expose a compact local execution catalog', async () => {
+  const specs = await resolveTurnToolSpecs({
+    userId: null,
+    baseSpecs: SERVER_TOOL_SPECS,
+    prompt: '请生成一个响应式网站，写入项目文件并运行检查',
+    messages: [{ role: 'user', content: '生成网站' }],
+    enabledConnectorTools: allConnectorsEnabled,
+    webSearchReady: true,
+  })
+  const names = namesOf(specs)
+
+  for (const name of ['create_html_app', 'list_directory', 'read_file', 'read_artifact_source', 'write_file', 'bash_exec', 'run_project_check']) {
+    assert.ok(names.includes(name), `${name} missing from compact website catalog`)
+  }
+  for (const name of ['web_search', 'fetch_url', 'github_search_repositories', 'dropbox_list_files', 'notion_search']) {
+    assert.equal(names.includes(name), false, `${name} should require explicit remote intent`)
+  }
+  assert.ok(names.length < 60, `website catalog unexpectedly contains ${names.length} tools`)
+})
+
+test('ordinary turns omit remote schemas unless the user asks for them', async () => {
+  const specs = await resolveTurnToolSpecs({
+    userId: null,
+    baseSpecs: SERVER_TOOL_SPECS,
+    prompt: '解释一下这个概念',
+    messages: [{ role: 'user', content: '解释概念' }],
+    enabledConnectorTools: allConnectorsEnabled,
+    webSearchReady: true,
+  })
+  const names = namesOf(specs)
+
+  assert.ok(names.includes('request_clarification'))
+  assert.equal(names.includes('web_search'), false)
+  assert.equal(names.includes('github_search_repositories'), false)
+  assert.equal(names.some((name) => name.startsWith('mcp__')), false)
+})
+
+test('ambiguous brand words do not activate remote connectors without provider intent', async () => {
+  const specs = await resolveTurnToolSpecs({
+    userId: null,
+    baseSpecs: SERVER_TOOL_SPECS,
+    prompt: 'Explain linear algebra and the notion of vector spaces.',
+    messages: [{ role: 'user', content: 'linear algebra' }],
+    enabledConnectorTools: allConnectorsEnabled,
+    webSearchReady: false,
+  })
+  const names = namesOf(specs)
+
+  assert.equal(names.includes('linear_search_issues'), false)
+  assert.equal(names.includes('notion_search'), false)
+})
+
+test('explicit connector provider intent exposes only that enabled provider', async () => {
+  const specs = await resolveTurnToolSpecs({
+    userId: null,
+    baseSpecs: SERVER_TOOL_SPECS,
+    prompt: '请在 GitHub 搜索与 prompt cache 有关的仓库',
+    messages: [{ role: 'user', content: 'GitHub search' }],
+    enabledConnectorTools: allConnectorsEnabled,
+    webSearchReady: true,
+  })
+  const names = namesOf(specs)
+
+  assert.ok(names.includes('github_search_repositories'))
+  assert.ok(names.includes('github_get_file'))
+  assert.equal(names.includes('dropbox_list_files'), false)
+  assert.equal(names.includes('notion_search'), false)
+})
+
+test('recent connector calls keep the same provider available for terse follow-ups', async () => {
+  const specs = await resolveTurnToolSpecs({
+    userId: null,
+    baseSpecs: SERVER_TOOL_SPECS,
+    prompt: '继续，再读取上一个结果',
+    messages: [{ role: 'tool', name: 'github_search_repositories', content: '{"ok":true}' }],
+    enabledConnectorTools: allConnectorsEnabled,
+    webSearchReady: false,
+  })
+  const names = namesOf(specs)
+
+  assert.ok(names.includes('github_get_file'))
+  assert.equal(names.includes('dropbox_list_files'), false)
+})
+
+test('explicit browser intent loads browser schemas while website generation alone does not', async () => {
+  registerBrowserTools()
+  const generated = await resolveTurnToolSpecs({
+    userId: null,
+    baseSpecs: SERVER_TOOL_SPECS,
+    prompt: '创建一个 HTML 网页',
+    messages: [{ role: 'user', content: '创建网页' }],
+    enabledConnectorTools: [],
+    webSearchReady: false,
+  })
+  const inspected = await resolveTurnToolSpecs({
+    userId: null,
+    baseSpecs: SERVER_TOOL_SPECS,
+    prompt: '在浏览器打开网站并点击登录按钮',
+    messages: [{ role: 'user', content: '浏览器验收' }],
+    enabledConnectorTools: [],
+    webSearchReady: false,
+  })
+
+  assert.equal(namesOf(generated).some((name) => name.startsWith('browser_')), false)
+  assert.ok(namesOf(inspected).includes('browser_navigate'))
+  assert.ok(namesOf(inspected).includes('browser_click'))
+})
+
+test('MCP continuation exposes sibling tools from the previously used server only', async () => {
+  const mcpSpecs = ['mcp__jira_server__search', 'mcp__jira_server__create', 'mcp__docs_server__read'].map((name) => ({
+    type: 'function',
+    function: { name, description: name, parameters: { type: 'object', properties: {} } },
+  }))
+  const specs = await resolveTurnToolSpecs({
+    userId: null,
+    baseSpecs: mcpSpecs,
+    prompt: '继续处理上一个结果',
+    messages: [{ role: 'tool', name: 'mcp__jira_server__search', content: '{}' }],
+    enabledConnectorTools: [],
+    webSearchReady: false,
+  })
+
+  assert.deepEqual(namesOf(specs), ['mcp__jira_server__create', 'mcp__jira_server__search'])
+})
+
+test('policy keeps legacy catalog behavior only when no turn intent context is provided', () => {
+  assert.equal(resolveTurnToolPolicy().legacyFullCatalog, true)
+  assert.equal(resolveTurnToolPolicy({ prompt: '你好' }).legacyFullCatalog, false)
+})

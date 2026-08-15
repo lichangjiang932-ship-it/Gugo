@@ -4,13 +4,14 @@ import {
   allowedArtifactTools,
   detectArtifactIntent,
   expectsFileArtifact,
+  findAdjacentDeliveredArtifacts,
   isFileArtifactTool,
   parseSkillIdFromPrompt,
 } from '../server/services/artifactIntent.js'
 import { runToolsLoop, SERVER_TOOL_SPECS, selectJobToolSpecs } from '../server/services/jobTools.js'
 import { buildFinalOutput, shouldCompileDocx } from '../server/services/jobWorkflow.js'
 import { validateHtmlArtifactSource } from '../server/services/artifactGen.js'
-import { createUser } from '../server/db.js'
+import { createUser, getDb } from '../server/db.js'
 import { upsertSession } from '../server/services/sessionStore.js'
 import { appendTurnArtifact } from '../server/services/turnArtifactStore.js'
 
@@ -18,6 +19,7 @@ const nameOf = (specs) => specs.map((s) => s?.function?.name)
 const ARTIFACT_GENERATOR_NAMES = [
   'create_docx',
   'create_html_app',
+  'create_pdf',
   'create_pptx',
   'create_xlsx',
   'generate_image',
@@ -28,6 +30,8 @@ let intentArtifactScopeReady = false
 
 function persistStubTurnArtifact({ turnId, id, filename, type }) {
   if (!intentArtifactScopeReady) {
+    getDb().prepare('DELETE FROM turn_artifacts WHERE user_id = ? AND session_id = ?')
+      .run(INTENT_ARTIFACT_USER_ID, INTENT_ARTIFACT_SESSION_ID)
     createUser({ id: INTENT_ARTIFACT_USER_ID, email: 'artifact-intent@example.com' })
     upsertSession({
       id: INTENT_ARTIFACT_SESSION_ID,
@@ -154,6 +158,168 @@ test('explicit image production unlocks only generate_image', () => {
     ['generate_image'],
   )
   assert.equal(detectArtifactIntent('why did generate_image run?').image, false)
+})
+
+test('explicit PDF production works without a slash skill', () => {
+  assert.deepEqual([...allowedArtifactTools('请生成一份中文项目总结 PDF')], ['create_pdf'])
+  assert.equal(detectArtifactIntent('导出为 PDF').pdf, true)
+  assert.equal(detectArtifactIntent('为什么会自动生成 PDF？').pdf, false)
+})
+
+function adjacentHtmlRevisionMessages(currentPrompt = '这里不足，请修改一下') {
+  return [
+    { role: 'user', content: '/webpage 生成一个产品网页' },
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [{
+        id: 'previous-html-call',
+        function: {
+          name: 'create_html_app',
+          arguments: JSON.stringify({
+            title: '产品网页',
+            html: '<!doctype html><html><body><main><button>开始</button></main></body></html>',
+          }),
+        },
+      }],
+    },
+    {
+      role: 'tool',
+      tool_call_id: 'previous-html-call',
+      name: 'create_html_app',
+      content: JSON.stringify({
+        ok: true,
+        artifactId: 'previous-html-artifact',
+        filename: '产品网页.html',
+        url: '/api/artifacts/previous-html-artifact',
+      }),
+    },
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [{
+        id: 'previous-delivery-call',
+        function: {
+          name: 'set_deliverables',
+          arguments: JSON.stringify({ artifact_ids: ['previous-html-artifact'] }),
+        },
+      }],
+    },
+    {
+      role: 'tool',
+      tool_call_id: 'previous-delivery-call',
+      name: 'set_deliverables',
+      content: JSON.stringify({ ok: true, deliveryArtifactIds: ['previous-html-artifact'] }),
+    },
+    { role: 'assistant', content: '网页已生成。' },
+    { role: 'user', content: currentPrompt },
+  ]
+}
+
+test('only an adjacent delivered artifact can authorize an implicit revision', () => {
+  const artifacts = findAdjacentDeliveredArtifacts(adjacentHtmlRevisionMessages())
+  assert.deepEqual(artifacts, [{
+    id: 'previous-html-artifact',
+    type: 'html',
+    filename: '产品网页.html',
+    url: '/api/artifacts/previous-html-artifact',
+    toolName: 'create_html_app',
+  }])
+  assert.deepEqual(
+    [...allowedArtifactTools('这里不足，请修改一下', { priorArtifactTypes: artifacts.map((item) => item.type) })],
+    ['create_html_app'],
+  )
+  for (const prompt of ['把配色改一下', '把这里改一下', '配色改一下', '换个配色']) {
+    assert.deepEqual(
+      [...allowedArtifactTools(prompt, { priorArtifactTypes: ['html'] })],
+      ['create_html_app'],
+      prompt,
+    )
+  }
+  for (const [type, tool] of [
+    ['pptx', 'create_pptx'],
+    ['docx', 'create_docx'],
+    ['xlsx', 'create_xlsx'],
+    ['pdf', 'create_pdf'],
+    ['image', 'generate_image'],
+  ]) {
+    assert.deepEqual(
+      [...allowedArtifactTools('把这里改一下', { priorArtifactTypes: [type] })],
+      [tool],
+      type,
+    )
+  }
+  assert.equal(allowedArtifactTools('请解释一下配色原则', { priorArtifactTypes: ['html'] }).size, 0)
+  assert.equal(allowedArtifactTools('如何修改配色？', { priorArtifactTypes: ['html'] }).size, 0)
+  assert.equal(allowedArtifactTools('修改是什么意思？', { priorArtifactTypes: ['html'] }).size, 0)
+  assert.deepEqual([...allowedArtifactTools('请另做一份 PDF', { priorArtifactTypes: ['html'] })], ['create_pdf'])
+})
+
+test('an implicit adjacent webpage revision creates and delivers a new file without a skill', async () => {
+  const currentPrompt = '这里的按钮太大了，请缩小并继续完善'
+  const nextArtifactId = `revision-html-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  let modelCalls = 0
+  const result = await runToolsLoop({
+    job: {
+      id: `revision-turn-${nextArtifactId}`,
+      userId: INTENT_ARTIFACT_USER_ID,
+      sessionId: INTENT_ARTIFACT_SESSION_ID,
+      origin: 'chat',
+      prompt: currentPrompt,
+      userPrompt: currentPrompt,
+    },
+    step: { id: `revision-turn-${nextArtifactId}`, kind: 'chat' },
+    messages: adjacentHtmlRevisionMessages(currentPrompt),
+    toolSpecs: SERVER_TOOL_SPECS,
+    enableToolHooks: false,
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    executeTool: async ({ name, args }) => {
+      assert.equal(name, 'create_html_app')
+      assert.match(args.html, /font-size:12px/)
+      return persistStubTurnArtifact({
+        turnId: `revision-turn-${nextArtifactId}`,
+        id: nextArtifactId,
+        filename: `${nextArtifactId}.html`,
+        type: 'html',
+      })
+    },
+    runModel: async ({ messages, tools }) => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        assert.ok(tools.some((tool) => tool.function.name === 'create_html_app'))
+        assert.ok(messages.some((message) => String(message.content || '').includes('[ADJACENT ARTIFACT REVISION CONTRACT]')))
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'revision-html-call',
+            function: {
+              name: 'create_html_app',
+              arguments: JSON.stringify({
+                title: '产品网页-修订版',
+                html: '<!doctype html><html><body><main><button style="font-size:12px">开始</button></main></body></html>',
+              }),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 2) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'revision-delivery-call',
+            function: {
+              name: 'set_deliverables',
+              arguments: JSON.stringify({ artifact_ids: [nextArtifactId] }),
+            },
+          }],
+        }
+      }
+      return { content: '已直接修改并生成新的网页文件。', toolCalls: [] }
+    },
+  })
+  assert.deepEqual(result.artifactIds, [nextArtifactId])
+  assert.deepEqual(result.deliveryArtifactIds, [nextArtifactId])
+  assert.equal(result.text, '已直接修改并生成新的网页文件。')
 })
 
 test('chat project-check turn does not inherit artifact generators from an older Word request', async () => {
@@ -432,15 +598,15 @@ test('slash skill unlocks its matching artifact tool', () => {
 test('slash artifact skills stay locked to one generator unless multiple file formats are explicit', () => {
   assert.deepEqual(
     detectArtifactIntent('/webpage build a website for a quarterly report'),
-    { pptx: false, docx: false, xlsx: false, html: true, image: false },
+    { pptx: false, docx: false, xlsx: false, html: true, pdf: false, image: false },
   )
   assert.deepEqual(
     detectArtifactIntent('/doc create a report with a spreadsheet-style table'),
-    { pptx: false, docx: true, xlsx: false, html: false, image: false },
+    { pptx: false, docx: true, xlsx: false, html: false, pdf: false, image: false },
   )
   assert.deepEqual(
     detectArtifactIntent('/ppt present the quarterly report'),
-    { pptx: true, docx: false, xlsx: false, html: false, image: false },
+    { pptx: true, docx: false, xlsx: false, html: false, pdf: false, image: false },
   )
   assert.deepEqual(
     [...allowedArtifactTools('/webpage build a website and also export a Word document')].sort(),
@@ -1000,13 +1166,13 @@ test('ppt intent suppresses the looser docx keywords', () => {
   assert.equal(intent.pptx, true)
   assert.equal(intent.docx, false, '「导出」不该在已有 pptx 意图时再触发 docx')
   assert.deepEqual(detectArtifactIntent('Make a PPT report'), {
-    pptx: true, docx: false, xlsx: false, html: false, image: false,
+    pptx: true, docx: false, xlsx: false, html: false, pdf: false, image: false,
   })
   assert.deepEqual(detectArtifactIntent('做一份 PPT 汇报'), {
-    pptx: true, docx: false, xlsx: false, html: false, image: false,
+    pptx: true, docx: false, xlsx: false, html: false, pdf: false, image: false,
   })
   assert.deepEqual(detectArtifactIntent('同时生成 PPT 以及 Word 文档'), {
-    pptx: true, docx: true, xlsx: false, html: false, image: false,
+    pptx: true, docx: true, xlsx: false, html: false, pdf: false, image: false,
   })
   assert.equal(shouldCompileDocx('生成 PPT 并导出'), false)
 })

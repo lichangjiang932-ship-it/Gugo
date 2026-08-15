@@ -24,8 +24,11 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { pathToFileURL } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { Readable } from 'node:stream'
 import JSZip from 'jszip'
+import * as fontkit from 'fontkit'
+import { PDFDocument, rgb } from 'pdf-lib'
 import { HTML_ARTIFACT_RESPONSE_CSP } from '../../shared/htmlArtifactPolicy.js'
 import { authenticateRequest } from '../middleware.js'
 import { getArtifactByFilename } from './jobStore.js'
@@ -41,6 +44,20 @@ const ARTIFACT_DIR =
     ? process.env.ARTIFACT_DIR
     : path.resolve(process.cwd(), process.env.ARTIFACT_DIR || '.artifacts')
 
+const PDF_CJK_FONT_PATH = fileURLToPath(new URL('../assets/fonts/NotoSansSC-Regular.ttf', import.meta.url))
+const pdfLibFontkit = {
+  create(...args) {
+    const font = fontkit.create(...args)
+    const createSubset = font.createSubset.bind(font)
+    font.createSubset = () => {
+      const subset = createSubset()
+      subset.encodeStream = () => Readable.from([subset.encode()])
+      return subset
+    }
+    return font
+  },
+}
+
 function ensureArtifactDir() {
   fs.mkdirSync(ARTIFACT_DIR, { recursive: true })
   return ARTIFACT_DIR
@@ -50,6 +67,7 @@ const ARTIFACT_FALLBACK_NAMES = Object.freeze({
   pptx: 'presentation',
   docx: 'document',
   xlsx: 'spreadsheet',
+  pdf: 'document',
   html: 'webpage',
   png: 'image',
   jpg: 'image',
@@ -1050,6 +1068,128 @@ export async function createDocx({ title = 'Document', paragraphs = [] } = {}) {
   const a = newArtifactPath(title, 'docx')
   fs.writeFileSync(a.fullPath, buffer)
   return { ...a, type: 'docx', title, paragraphCount: paragraphs.length, byteLength: buffer.length }
+}
+
+/* ────────────────────────── PDF ────────────────────────── */
+
+const PDF_PAGE_WIDTH = 595.28
+const PDF_PAGE_HEIGHT = 841.89
+const PDF_MARGIN_X = 56
+const PDF_MARGIN_TOP = 58
+const PDF_MARGIN_BOTTOM = 52
+
+function pdfTextWidth(font, text, size) {
+  return font.widthOfTextAtSize(String(text || ''), size)
+}
+
+function wrapPdfText(text, font, size, maxWidth) {
+  const source = String(text || '').replace(/\s+/g, ' ').trim()
+  if (!source) return []
+  const lines = []
+  let current = ''
+  for (const character of source) {
+    const candidate = `${current}${character}`
+    if (current && pdfTextWidth(font, candidate, size) > maxWidth) {
+      lines.push(current.trimEnd())
+      current = character.trimStart()
+    } else {
+      current = candidate
+    }
+  }
+  if (current.trim()) lines.push(current.trimEnd())
+  return lines
+}
+
+function normalizedPdfBlocks(blocks = []) {
+  return (Array.isArray(blocks) ? blocks : [])
+    .map((block) => ({
+      type: ['title', 'heading', 'bullet'].includes(block?.type) ? block.type : 'paragraph',
+      text: String(block?.text || '').trim(),
+    }))
+    .filter((block) => block.text)
+}
+
+export async function createPdf({ title = 'Document', blocks = [] } = {}) {
+  const normalizedTitle = String(title || 'Document').trim().slice(0, 200) || 'Document'
+  const contentBlocks = normalizedPdfBlocks(blocks)
+  if (!contentBlocks.length) throw new Error('PDF content blocks 不能为空')
+
+  const document = await PDFDocument.create()
+  document.registerFontkit(pdfLibFontkit)
+  let font
+  try {
+    font = await document.embedFont(fs.readFileSync(PDF_CJK_FONT_PATH), { subset: true })
+  } catch (cause) {
+    throw new Error(`PDF 中文字体加载失败: ${cause?.message || cause}`, { cause })
+  }
+  document.setTitle(normalizedTitle)
+  document.setCreator('Gugo')
+  document.setProducer('Gugo PDF artifact generator')
+
+  let page = null
+  let y = 0
+  const addPage = () => {
+    page = document.addPage([PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT])
+    y = PDF_PAGE_HEIGHT - PDF_MARGIN_TOP
+  }
+  const ensureSpace = (height) => {
+    if (!page || y - height < PDF_MARGIN_BOTTOM) addPage()
+  }
+  const drawBlock = ({ type, text }) => {
+    const titleBlock = type === 'title'
+    const headingBlock = type === 'heading'
+    const bulletBlock = type === 'bullet'
+    const size = titleBlock ? 25 : headingBlock ? 16 : 11.5
+    const lineHeight = titleBlock ? 34 : headingBlock ? 24 : 18
+    const before = titleBlock ? 0 : headingBlock ? 12 : 4
+    const after = titleBlock ? 18 : headingBlock ? 7 : 5
+    const prefix = bulletBlock ? '• ' : ''
+    const indent = bulletBlock ? 14 : 0
+    const maxWidth = PDF_PAGE_WIDTH - (PDF_MARGIN_X * 2) - indent
+    const lines = wrapPdfText(`${prefix}${text}`, font, size, maxWidth)
+    ensureSpace(before + Math.max(1, lines.length) * lineHeight + after)
+    y -= before
+    for (const line of lines) {
+      ensureSpace(lineHeight + after)
+      page.drawText(line, {
+        x: PDF_MARGIN_X + indent,
+        y: y - size,
+        size,
+        font,
+        color: titleBlock ? rgb(0.08, 0.12, 0.2) : headingBlock ? rgb(0.12, 0.2, 0.34) : rgb(0.16, 0.18, 0.22),
+      })
+      y -= lineHeight
+    }
+    y -= after
+  }
+
+  const startsWithSameTitle = contentBlocks[0]?.type === 'title'
+    && contentBlocks[0].text.localeCompare(normalizedTitle, undefined, { sensitivity: 'base' }) === 0
+  drawBlock({ type: 'title', text: normalizedTitle })
+  for (const block of startsWithSameTitle ? contentBlocks.slice(1) : contentBlocks) drawBlock(block)
+
+  const pages = document.getPages()
+  pages.forEach((item, index) => {
+    const label = `${index + 1} / ${pages.length}`
+    item.drawText(label, {
+      x: (PDF_PAGE_WIDTH - pdfTextWidth(font, label, 9)) / 2,
+      y: 24,
+      size: 9,
+      font,
+      color: rgb(0.48, 0.5, 0.54),
+    })
+  })
+
+  const buffer = Buffer.from(await document.save())
+  const artifactPath = newArtifactPath(normalizedTitle, 'pdf')
+  fs.writeFileSync(artifactPath.fullPath, buffer)
+  return {
+    ...artifactPath,
+    type: 'pdf',
+    title: normalizedTitle,
+    pageCount: pages.length,
+    byteLength: buffer.length,
+  }
 }
 
 /* ────────────────────────── XLSX ────────────────────────── */

@@ -2,7 +2,44 @@
  * Canonical model-facing schemas for managed artifacts.
  * Both the public tool catalog and the server turn runtime consume this map.
  */
+const REPLACE_ARTIFACT_ID_PROPERTY = Object.freeze({
+  type: 'string',
+  minLength: 1,
+  description: 'Set only when the runtime explicitly instructs an in-place revision of an adjacent delivered artifact. Use that exact artifact ID; omit this field when creating a new file or version.',
+})
+
 export const BUILTIN_ARTIFACT_TOOL_SPECS = Object.freeze({
+  read_artifact_source: {
+    type: 'function',
+    function: {
+      name: 'read_artifact_source',
+      description: 'Read the current editable source for a managed artifact owned by this chat session. Artifact creation history contains only a lightweight reference; call this before revising an existing HTML/PDF/Word/PowerPoint/Excel artifact. Read every page until complete=true, then apply the user change and call the matching create_* tool.',
+      parameters: {
+        type: 'object',
+        properties: {
+          artifact_id: {
+            type: 'string',
+            minLength: 1,
+            description: 'Exact artifactId from the adjacent artifact reference or tool result.',
+          },
+          offset: {
+            type: 'integer',
+            minimum: 0,
+            default: 0,
+            description: 'Character offset. Start at 0, then use nextOffset until complete=true.',
+          },
+          limit: {
+            type: 'integer',
+            minimum: 1,
+            maximum: 20000,
+            default: 16000,
+            description: 'Maximum source characters returned in this page.',
+          },
+        },
+        required: ['artifact_id'],
+      },
+    },
+  },
   generate_image: {
     type: 'function',
     function: {
@@ -16,6 +53,7 @@ export const BUILTIN_ARTIFACT_TOOL_SPECS = Object.freeze({
           model: { type: 'string' },
           providerKey: { type: 'string' },
           size: { type: 'string', enum: ['1024x1024', '1024x1536', '1536x1024'] },
+          replace_artifact_id: REPLACE_ARTIFACT_ID_PROPERTY,
         },
         required: ['prompt'],
       },
@@ -33,6 +71,7 @@ export const BUILTIN_ARTIFACT_TOOL_SPECS = Object.freeze({
           subtitle: { type: 'string' },
           theme: { type: 'string', enum: ['noir', 'paper', 'ocean', 'forest'] },
           brand: { type: 'string' },
+          replace_artifact_id: REPLACE_ARTIFACT_ID_PROPERTY,
           slides: {
             type: 'array',
             items: {
@@ -115,6 +154,7 @@ export const BUILTIN_ARTIFACT_TOOL_SPECS = Object.freeze({
               required: ['text'],
             },
           },
+          replace_artifact_id: REPLACE_ARTIFACT_ID_PROPERTY,
         },
         required: ['title', 'paragraphs'],
       },
@@ -140,8 +180,25 @@ export const BUILTIN_ARTIFACT_TOOL_SPECS = Object.freeze({
               required: ['name', 'rows'],
             },
           },
+          replace_artifact_id: REPLACE_ARTIFACT_ID_PROPERTY,
         },
         required: ['title', 'sheets'],
+      },
+    },
+  },
+  create_pdf: {
+    type: 'function',
+    function: {
+      name: 'create_pdf',
+      description: 'Create a real downloadable PDF artifact from Markdown. The server handles pagination, line wrapping, page numbers, and embedded Unicode/Chinese fonts.',
+      parameters: {
+        type: 'object',
+        properties: {
+          title: { type: 'string' },
+          markdown: { type: 'string' },
+          replace_artifact_id: REPLACE_ARTIFACT_ID_PROPERTY,
+        },
+        required: ['title', 'markdown'],
       },
     },
   },
@@ -155,6 +212,7 @@ export const BUILTIN_ARTIFACT_TOOL_SPECS = Object.freeze({
         properties: {
           title: { type: 'string' },
           html: { type: 'string', description: 'Complete single-file HTML document with inline CSS and optional inline JavaScript.' },
+          replace_artifact_id: REPLACE_ARTIFACT_ID_PROPERTY,
         },
         required: ['title', 'html'],
       },

@@ -82,11 +82,13 @@ function resolveInWorkspace(rawPath, { mustExist = false, userId = null } = {}) 
       write: true,
       allowMissing: !mustExist,
     })
-    assertWorkspaceCapability({
-      userId,
-      rootPath: resolved.rootPath || getWorkspaceRoot(),
-      capability: 'fileSystemWrite',
-    })
+    if (resolved.source === 'workspace') {
+      assertWorkspaceCapability({
+        userId,
+        rootPath: resolved.rootPath || getWorkspaceRoot(),
+        capability: 'fileSystemWrite',
+      })
+    }
     return resolved
   }
   const root = getWorkspaceRoot()

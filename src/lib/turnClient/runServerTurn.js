@@ -27,6 +27,26 @@ function finiteDelay(value, fallback) {
   return Number.isFinite(numeric) ? Math.max(0, numeric) : fallback
 }
 
+function incompleteInitialTurnError(turnId) {
+  const error = new Error(`Turn ${turnId} was accepted but its response ended before the turn could be read`)
+  error.code = 'TURN_INITIAL_RESPONSE_INCOMPLETE'
+  return error
+}
+
+function hasTurnIdentity(turn) {
+  return Boolean(String(turn?.turnId || '').trim())
+}
+
+function isAmbiguousInitialRequestError(error) {
+  const status = Number(error?.status)
+  if (!Number.isInteger(status)) return true
+  return status >= 500 || [408, 409, 425, 429].includes(status)
+}
+
+function confirmsExistingTurn(error) {
+  return Number(error?.status) === 409 && error?.code === 'TURN_EXISTS'
+}
+
 export async function runServerTurn({
   sessionId,
   content,
@@ -72,6 +92,7 @@ export async function runServerTurn({
   let reconnectAttempts = 0
   let recoveryMode = false
   let webSocketDisabled = false
+  let initialTurnConfirmed
   let resumeWakeRequested = false
   let activeRequestController = null
   let activeWaitController = null
@@ -233,17 +254,12 @@ export async function runServerTurn({
   signal?.addEventListener('abort', requestCancel, { once: true })
   if (signal?.aborted) requestCancel()
   try {
-    // The client already owns the idempotent turn id. Race the initial POST
-    // with a user stop so cancellation can be sent even when /run has not
-    // returned yet. The initial request is only aborted after /cancel is
-    // acknowledged, avoiding an ambiguous create-or-cancel outcome.
-    initialRequestController = new AbortController()
-    const initialRequest = (resume
+    const issueInitialRequest = (requestSignal) => (resume
       ? resumeServerTurnRequest({
           sessionId,
           turnId: requestedTurnId,
           resolution: resumeResolution,
-          signal: initialRequestController.signal,
+          signal: requestSignal,
           fetchImpl,
         })
       : startServerTurn({
@@ -259,9 +275,16 @@ export async function runServerTurn({
           skillDefinitions,
           toolsConfig,
           intentMode,
-          signal: initialRequestController.signal,
+          signal: requestSignal,
           fetchImpl,
         }))
+
+    // The client already owns the idempotent turn id. Race the initial POST
+    // with a user stop so cancellation can be sent even when /run has not
+    // returned yet. The initial request is only aborted after /cancel is
+    // acknowledged, avoiding an ambiguous create-or-cancel outcome.
+    initialRequestController = new AbortController()
+    const initialRequest = issueInitialRequest(initialRequestController.signal)
       .then(
         (turn) => ({ kind: 'started', turn }),
         (error) => ({ kind: 'failed', error }),
@@ -297,9 +320,45 @@ export async function runServerTurn({
       if (initialOutcome.kind !== 'cancel') activeWaitController?.abort()
     }
 
-    if (initialOutcome.kind === 'failed') throw initialOutcome.error
-    const turn = initialOutcome.turn
-    activeTurnId = turn.turnId
+    if (initialOutcome.kind === 'started' && !hasTurnIdentity(initialOutcome.turn)) {
+      initialOutcome = { kind: 'failed', error: incompleteInitialTurnError(requestedTurnId) }
+    }
+
+    let turn = initialOutcome.turn
+    if (initialOutcome.kind === 'failed') {
+      if (!isAmbiguousInitialRequestError(initialOutcome.error)) throw initialOutcome.error
+
+      // The POST may have reached the server even when its response body was
+      // cut off. The client already knows the durable turn id, so first take
+      // over through replay/query instead of creating a second logical turn.
+      reconnectAttempts = 1
+      const observed = await observePersistedTurn(initialOutcome.error)
+      initialTurnConfirmed = Boolean(
+        terminal || observed.turn || observed.delivered > 0 || confirmsExistingTurn(initialOutcome.error),
+      )
+      recoveryMode = !initialTurnConfirmed
+      turn = observed.turn || {
+        sessionId,
+        turnId: requestedTurnId,
+        status: terminal ? 'completed' : 'recovering',
+      }
+      if (!terminal) {
+        await notifyConnectionState({
+          status: cancelRequested ? 'cancelling' : 'reconnecting',
+          confirmed: cancelRequested ? cancelAcknowledged : undefined,
+          recoverable: true,
+          recoveryMode,
+          attempt: reconnectAttempts,
+          maxAttempts,
+          delayMs: recoveryMode ? recoveryDelay : 0,
+          error: observed.cause || initialOutcome.error,
+        })
+      }
+    } else {
+      initialTurnConfirmed = true
+    }
+
+    activeTurnId = String(turn?.turnId || requestedTurnId)
     await onStarted?.(turn)
     await acceptTerminalFromTurn(turn)
 
@@ -332,7 +391,24 @@ export async function runServerTurn({
       if (recoveryMode) {
         const observed = await observePersistedTurn()
         if (terminal) continue
-        if (!cancelRequested && observed.turn?.status === 'interrupted') {
+        if (observed.turn || observed.delivered > 0) initialTurnConfirmed = true
+
+        if (!cancelRequested && !initialTurnConfirmed) {
+          try {
+            const retriedTurn = await withRequestSignal(issueInitialRequest)
+            if (!hasTurnIdentity(retriedTurn)) throw incompleteInitialTurnError(requestedTurnId)
+            initialTurnConfirmed = true
+            await acceptTerminalFromTurn(retriedTurn)
+          } catch (error) {
+            if (cancelRequested && error?.name === 'AbortError') continue
+            if (confirmsExistingTurn(error)) initialTurnConfirmed = true
+            else if (!isAmbiguousInitialRequestError(error)) throw error
+            observed.cause = error
+          }
+          if (terminal) continue
+        }
+
+        if (!cancelRequested && initialTurnConfirmed && observed.turn?.status === 'interrupted') {
           observed.cause = await tryWakeTurn(observed.cause)
           if (terminal) continue
         }
@@ -346,6 +422,17 @@ export async function runServerTurn({
           delayMs: recoveryDelay,
           error: observed.cause,
         })
+
+        // Recovery polling keeps durable state visible, but it is not a live
+        // transport. Periodically promote back to WebSocket/SSE so transient
+        // tool activity and streaming deltas return as soon as the network
+        // does. A fresh WebSocket attempt is allowed even if an earlier one
+        // failed before recovery mode was entered.
+        if (!cancelRequested && initialTurnConfirmed) {
+          recoveryMode = false
+          webSocketDisabled = false
+          continue
+        }
         await waitForNextAttempt(recoveryDelay)
         continue
       }

@@ -19,10 +19,29 @@
 // ★ 200 → 2000 并可配。200 次调用对「读完一个中等项目再动手改」偏紧 ——
 // 光探索就可能几十次,真正改代码又是几十次,还要验证。碰到上限
 // 用户看到的就是「做到一半没后续」。用 JOB_MAX_TOOL_CALLS 可覆盖。
-const DEFAULT_MAX_CALLS = (() => {
-  const raw = Number(process.env.JOB_MAX_TOOL_CALLS)
-  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 2000
-})()
+function envLimit(env, name, fallback) {
+  const raw = Number(env?.[name])
+  return Number.isFinite(raw) && raw >= 0 ? raw : fallback
+}
+
+export function resolveJobBudgetDefaults(env = process.env) {
+  const rawToolCalls = Number(env?.JOB_MAX_TOOL_CALLS)
+  const rawWallMs = Number(env?.JOB_MAX_WALL_MS)
+  return {
+    maxTotalCalls: Number.isFinite(rawToolCalls) && rawToolCalls > 0
+      ? Math.floor(rawToolCalls)
+      : 2000,
+    maxWallMs: Number.isFinite(rawWallMs) && rawWallMs >= 0
+      ? Math.floor(rawWallMs)
+      : 6 * 60 * 60 * 1000,
+    maxModelCalls: envLimit(env, 'JOB_MAX_MODEL_CALLS', 2000),
+    maxModelTokens: envLimit(env, 'JOB_MAX_MODEL_TOKENS', 0),
+    maxCostUsd: envLimit(env, 'JOB_MAX_COST_USD', 0),
+  }
+}
+
+const DEFAULTS = resolveJobBudgetDefaults()
+const DEFAULT_MAX_CALLS = DEFAULTS.maxTotalCalls
 
 // ★ 墙钟从 60 分钟提到 6 小时并可配。
 //
@@ -30,20 +49,14 @@ const DEFAULT_MAX_CALLS = (() => {
 // 它只统计工具真正执行的时间。6 小时的「纯工具执行时间」意味着
 // 真的有东西卡死了,而不是「任务比较大」。
 // 设 0 = 完全不限时间(只靠调用次数和用户手动取消收敛)。
-const DEFAULT_MAX_WALL_MS = (() => {
-  const raw = Number(process.env.JOB_MAX_WALL_MS)
-  if (Number.isFinite(raw) && raw >= 0) return Math.floor(raw)
-  return 6 * 60 * 60 * 1000
-})()
+const DEFAULT_MAX_WALL_MS = DEFAULTS.maxWallMs
 
-function envLimit(name, fallback) {
-  const raw = Number(process.env[name])
-  return Number.isFinite(raw) && raw >= 0 ? raw : fallback
-}
-
-const DEFAULT_MAX_MODEL_CALLS = envLimit('JOB_MAX_MODEL_CALLS', 100)
-const DEFAULT_MAX_MODEL_TOKENS = envLimit('JOB_MAX_MODEL_TOKENS', 200_000)
-const DEFAULT_MAX_COST_USD = envLimit('JOB_MAX_COST_USD', 5)
+// Model budgets are opt-in cost controls, not normal-work limits. The previous
+// 100-call / 200k-token defaults stopped long agent runs mid-task even though
+// the tool loop itself intentionally allows 2000 iterations.
+const DEFAULT_MAX_MODEL_CALLS = DEFAULTS.maxModelCalls
+const DEFAULT_MAX_MODEL_TOKENS = DEFAULTS.maxModelTokens
+const DEFAULT_MAX_COST_USD = DEFAULTS.maxCostUsd
 
 // ★ Lens-2:用 WeakMap 而不是 job.__budget,模型/工具碰不到、不能 delete 绕过
 //

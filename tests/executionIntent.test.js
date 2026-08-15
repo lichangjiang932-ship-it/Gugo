@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   hasActionableNumberedSteps,
+  hasFileTargetReference,
   hasMutationExecutionIntent,
   normalizeTurnIntentMode,
   shouldRequireExecution,
@@ -118,4 +119,17 @@ test('external sends are mutation intents and cannot be satisfied by a non-writi
   assert.equal(hasMutationExecutionIntent('\u4e0d\u8981\u91cd\u65b0\u751f\u6210\u6587\u4ef6\uff1b\u53ea\u56de\u8bfb\u5e76\u5217\u76ee\u5f55\u3002'), false)
   assert.equal(hasMutationExecutionIntent('\u4e0d\u8981\u4fee\u6539 A\uff1b\u8bf7\u521b\u5efa B.txt\u3002'), true)
   assert.equal(hasMutationExecutionIntent('请立即发送发布通知。'), true)
+})
+
+test('negated mutations do not create execution intent while mixed work orders remain executable', () => {
+  assert.equal(shouldRequireExecution({
+    text: '请只给我一个 JavaScript 代码片段，不要修改文件。',
+  }), false)
+  assert.equal(shouldRequireExecution({
+    text: '不要修改 A；请创建 B.txt。',
+  }), true)
+  assert.equal(shouldRequireExecution({
+    text: '修改 src/example.js，并给我一个代码片段。',
+  }), true)
+  assert.equal(hasFileTargetReference('修改 src/example.js，并给我一个代码片段。'), true)
 })

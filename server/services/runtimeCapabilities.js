@@ -44,7 +44,7 @@ export function buildRuntimeCapabilityBlock({ toolSpecs = [], approvalMode = nul
     '- Images: inspect metadata with image_info and use image_transform for conversion, resize, crop, rotation, and filters, including large files by path.')
   add(lines, hasAny(names, ['archive_list', 'archive_create', 'archive_extract', 'batch_rename', 'file_hash_manifest']),
     '- Batch files: inspect ZIP contents without extraction, create/extract ZIP archives, perform staged bulk file or directory renames, and build SHA-256 duplicate manifests with the exposed batch file tools.')
-  add(lines, hasAny(names, ['create_pptx', 'create_docx', 'create_xlsx', 'create_html_app', 'generate_image']),
+  add(lines, hasAny(names, ['create_pptx', 'create_docx', 'create_xlsx', 'create_pdf', 'create_html_app', 'generate_image']),
     '- Artifacts: use the exposed create_* or generate_image tool only when the user requested that deliverable.')
   add(lines, hasAny(names, ['web_search', 'fetch_url']),
     '- Web: search or fetch current public information when those tools are exposed.')

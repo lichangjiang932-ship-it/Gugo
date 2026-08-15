@@ -12,6 +12,7 @@ const EXPECTED_TOOL_IDS = [
   'create_pptx',
   'create_docx',
   'create_xlsx',
+  'create_pdf',
   'list_directory',
   'read_file',
   'write_file',
@@ -98,5 +99,12 @@ test('code execution settings describe the local runtime honestly and keep the t
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
+  }
+})
+
+test('PDF generator settings labels exist in every supported language', () => {
+  for (const language of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
+    assert.notEqual(translateKey('settingsTools.tools.create_pdf.name', language), 'settingsTools.tools.create_pdf.name')
+    assert.notEqual(translateKey('chatMessages.toolCreatePdf', language), 'chatMessages.toolCreatePdf')
   }
 })

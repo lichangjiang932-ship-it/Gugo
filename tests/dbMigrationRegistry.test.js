@@ -11,6 +11,7 @@ import {
 } from '../server/migrations/index.js'
 import { migrateToV49 } from '../server/migrations/v49HookArgumentMatcher.js'
 import { migrateToV50 } from '../server/migrations/v50DefaultExecutionPermissions.js'
+import { migrateToV51 } from '../server/migrations/v51TurnCheckpoints.js'
 
 test('schema migration registry is contiguous and owns the latest version', () => {
   const legacy = Array.from({ length: 29 }, (_, index) => ({
@@ -19,10 +20,38 @@ test('schema migration registry is contiguous and owns the latest version', () =
   }))
   const plan = createSchemaMigrationPlan(legacy)
 
-  assert.deepEqual(plan.map(({ version }) => version), Array.from({ length: 49 }, (_, index) => index + 2))
-  assert.equal(LATEST_SCHEMA_VERSION, 50)
+  assert.deepEqual(plan.map(({ version }) => version), Array.from({ length: 50 }, (_, index) => index + 2))
+  assert.equal(LATEST_SCHEMA_VERSION, 51)
   assert.equal(DB_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
   assert.equal(schemaMigrations.at(-1).version, LATEST_SCHEMA_VERSION)
+})
+
+test('v51 adds one mutable checkpoint row per turn', () => {
+  const db = new Database(':memory:')
+  try {
+    db.exec(`
+      CREATE TABLE users (id TEXT PRIMARY KEY);
+      CREATE TABLE sessions (token TEXT PRIMARY KEY, user_id TEXT NOT NULL);
+    `)
+    migrateToV51(db)
+    migrateToV51(db)
+
+    const columns = db.prepare('PRAGMA table_info(turn_checkpoints)').all().map((row) => row.name)
+    assert.deepEqual(columns, [
+      'user_id',
+      'session_id',
+      'turn_id',
+      'event_sequence',
+      'state_json',
+      'created_at',
+      'updated_at',
+    ])
+    assert.ok(
+      db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_turn_checkpoints_updated'").get(),
+    )
+  } finally {
+    db.close()
+  }
 })
 
 test('v50 upgrades only legacy default execution permissions', () => {
@@ -218,6 +247,7 @@ test('schema migration registry upgrades a v30 database through every registered
       'web_search_configs',
       'managed_attachments',
       'turn_execution_leases',
+      'turn_checkpoints',
     ]) {
       assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table), table)
     }

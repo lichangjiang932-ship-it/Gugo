@@ -19,6 +19,11 @@ export function getApprovalMode({ userId } = {}) {
   return PERMISSION_MODES.includes(row.mode) ? row.mode : DEFAULT_PERMISSION_MODE
 }
 
+/** Keep path and execution scopes aligned with the effective UI mode. */
+export function isApprovalBypassEnabled({ userId } = {}) {
+  return !!userId && getApprovalMode({ userId }) === 'bypass'
+}
+
 export function setApprovalMode({ userId, mode } = {}) {
   if (!userId) throw new Error('userId 必填')
   if (!PERMISSION_MODES.includes(mode)) throw new Error(`非法模式: ${mode}`)

@@ -1,6 +1,33 @@
 import { normalizeThemeMode } from '../../lib/themeMode.js'
 import { createInitialState } from '../appStateBootstrap.js'
 import { TASK_STATUS } from '../taskStatus.js'
+import {
+  activatePreviewTab,
+  createPreviewTabState,
+  removePreviewTab,
+  upsertPreviewTab,
+} from '../../pages/ChatSplit/preview/previewTabs.js'
+
+function currentPreviewTabState(state) {
+  const tabs = Array.isArray(state.previewTabs) ? state.previewTabs : []
+  if (tabs.length > 0) {
+    const activeId = tabs.some((tab) => tab.id === state.previewActiveId)
+      ? state.previewActiveId
+      : tabs[0].id
+    return { tabs, activeId }
+  }
+  return createPreviewTabState(state.previewArtifact)
+}
+
+function mergePreviewTabState(state, tabState) {
+  const activeTab = tabState.tabs.find((tab) => tab.id === tabState.activeId) || tabState.tabs[0] || null
+  return {
+    ...state,
+    previewArtifact: activeTab?.artifact || null,
+    previewTabs: tabState.tabs,
+    previewActiveId: activeTab?.id || '',
+  }
+}
 
 export function reduceTaskSettingsState(state, action) {
   switch (action.type) {
@@ -195,11 +222,29 @@ export function reduceTaskSettingsState(state, action) {
 
     case 'OPEN_PREVIEW_ARTIFACT': {
       // payload: { messageId, content, preview }
-      return { ...state, previewArtifact: action.payload ?? null }
+      if (!action.payload) return mergePreviewTabState(state, { tabs: [], activeId: '' })
+      return mergePreviewTabState(
+        state,
+        upsertPreviewTab(currentPreviewTabState(state), action.payload),
+      )
+    }
+
+    case 'ACTIVATE_PREVIEW_TAB': {
+      return mergePreviewTabState(
+        state,
+        activatePreviewTab(currentPreviewTabState(state), String(action.payload || '')),
+      )
+    }
+
+    case 'CLOSE_PREVIEW_TAB': {
+      return mergePreviewTabState(
+        state,
+        removePreviewTab(currentPreviewTabState(state), String(action.payload || '')),
+      )
     }
 
     case 'CLOSE_PREVIEW_ARTIFACT': {
-      return { ...state, previewArtifact: null }
+      return mergePreviewTabState(state, { tabs: [], activeId: '' })
     }
 
     case 'SET_TOOLS_CONFIG': {

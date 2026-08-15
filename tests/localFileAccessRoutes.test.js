@@ -16,6 +16,7 @@ process.env.WORKSPACE_GIT_ENABLED = '1'
 
 const { createAppServer } = await import('../server/appServer.js')
 const { closeDb } = await import('../server/db.js')
+const { setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 const server = createAppServer({ getEnv: () => ({}) })
@@ -45,6 +46,8 @@ test('local file access routes require authentication', async () => {
 test('authorized path can be used by file tools and remains user-scoped', async () => {
   const alice = issueTestSession({ email: 'local-route-alice@example.com' })
   const bob = issueTestSession({ email: 'local-route-bob@example.com' })
+  setApprovalMode({ userId: alice.userId, mode: 'normal' })
+  setApprovalMode({ userId: bob.userId, mode: 'normal' })
   const grantResponse = await fetch(`${origin}/api/local-files/grants`, {
     method: 'POST',
     headers: headers(alice.token),

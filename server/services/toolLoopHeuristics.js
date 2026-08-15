@@ -20,11 +20,14 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { appendJobArtifact } from './jobStore.js'
-import { appendTurnArtifact } from './turnArtifactStore.js'
+import { appendTurnArtifact, getTurnArtifactById } from './turnArtifactStore.js'
+import { deleteArtifactSourceSnapshot, readArtifactSourcePage, writeArtifactSourceSnapshot } from './artifactSourceStore.js'
 import { publishTurnActivity } from './turnActivityBus.js'
 import { recordFileSnapshot, rewindFromToolCall } from './fileSnapshotStore.js'
 import { killBackgroundProcess, listBackgroundProcesses, startBackgroundProcess } from './backgroundProcessStore.js'
-import { createDocx, createHtmlArtifact, createImageArtifact, createLocalFileArtifact, createLocalFileArtifactAsync, createPptx, createXlsx } from './artifactGen.js'
+import { createDocx, createHtmlArtifact, createImageArtifact, createLocalFileArtifact, createLocalFileArtifactAsync, createPdf, createPptx, createXlsx, getArtifactDir } from './artifactGen.js'
+import { parseMarkdownDocument, parseSpreadsheetRows } from '../../src/lib/officeExport.js'
+import { parseMarkdownSlides } from '../../src/lib/presentationExport.js'
 import { FS_SHELL_TOOL_SPECS, dispatchFsShellTool, resolveInWorkspace, resolveForFileTool } from '../adapters/fsShellTools.js'
 import { IMAGE_TOOL_SPECS, dispatchImageTool } from '../adapters/imageTools.js'
 import { MEDIA_TOOL_SPECS, dispatchMediaTool } from '../adapters/mediaTools.js'
@@ -1194,6 +1197,156 @@ function persistGeneratedArtifact({ artifact, args, job, step }) {
     : appendJobArtifact({ ...common, jobId: job.id, stepId: step?.id || null })
 }
 
+const GENERATED_ARTIFACT_TYPE = Object.freeze({
+  generate_image: 'image',
+  create_pptx: 'pptx',
+  create_docx: 'docx',
+  create_xlsx: 'xlsx',
+  create_pdf: 'pdf',
+  create_html_app: 'html',
+})
+
+function artifactReplacementError(code, message) {
+  const error = new Error(message)
+  error.code = code
+  error.retryable = false
+  return error
+}
+
+function isInsideDirectory(filePath, directoryPath) {
+  return filePath === directoryPath || filePath.startsWith(directoryPath + path.sep)
+}
+
+/**
+ * Publish a generated artifact, or replace one explicitly authorized managed
+ * artifact in place. The original database identity and filename remain
+ * stable so existing chat cards continue to point at the revised file.
+ */
+function publishGeneratedArtifact({ name, artifact, args, job, step }) {
+  const replacementId = String(args?.replace_artifact_id || '').trim()
+  if (!replacementId) {
+    writeArtifactSourceSnapshot({ artifactId: artifact.id, toolName: name, args })
+    persistGeneratedArtifact({ artifact, args, job, step })
+    return artifact
+  }
+  if (job?.origin !== 'chat' || !job?.userId || !job?.sessionId) {
+    throw artifactReplacementError(
+      'artifact_replacement_scope_unavailable',
+      'In-place artifact replacement is available only for an owned chat artifact.',
+    )
+  }
+  const target = getTurnArtifactById({
+    id: replacementId,
+    userId: job.userId,
+    sessionId: job.sessionId,
+  })
+  if (!target) {
+    throw artifactReplacementError(
+      'artifact_replacement_not_found',
+      'The requested replacement artifact does not exist in this user and session scope.',
+    )
+  }
+  const expectedType = GENERATED_ARTIFACT_TYPE[name]
+  if (!expectedType || String(target.type || '').toLowerCase() !== expectedType) {
+    throw artifactReplacementError(
+      'artifact_replacement_type_mismatch',
+      `Cannot replace a ${target.type || 'different'} artifact with ${name}.`,
+    )
+  }
+
+  const artifactDirectory = fs.realpathSync(getArtifactDir())
+  const sourcePath = fs.realpathSync(artifact.fullPath || path.join(artifactDirectory, artifact.filename))
+  const targetPath = fs.realpathSync(path.join(artifactDirectory, target.filename))
+  if (!isInsideDirectory(sourcePath, artifactDirectory)
+    || !isInsideDirectory(targetPath, artifactDirectory)) {
+    throw artifactReplacementError(
+      'artifact_replacement_path_invalid',
+      'Artifact replacement paths must stay inside the managed artifact directory.',
+    )
+  }
+  if (path.extname(sourcePath).toLowerCase() !== path.extname(targetPath).toLowerCase()) {
+    throw artifactReplacementError(
+      'artifact_replacement_format_mismatch',
+      'The revised artifact format must match the original managed file.',
+    )
+  }
+
+  const backupPath = `${targetPath}.replace-${artifact.id}.bak`
+  try {
+    fs.renameSync(targetPath, backupPath)
+    try {
+      fs.renameSync(sourcePath, targetPath)
+    } catch (error) {
+      fs.renameSync(backupPath, targetPath)
+      throw error
+    }
+    try {
+      writeArtifactSourceSnapshot({ artifactId: target.id, toolName: name, args })
+    } catch {
+      // The artifact replacement itself is already committed. Never report it
+      // as failed and invite a duplicate retry; remove any stale source so a
+      // legacy HTML artifact falls back to its current file contents.
+      deleteArtifactSourceSnapshot(target.id)
+    }
+    fs.rmSync(backupPath, { force: true })
+  } catch (error) {
+    try {
+      if (!fs.existsSync(targetPath) && fs.existsSync(backupPath)) {
+        fs.renameSync(backupPath, targetPath)
+      }
+    } catch { /* best-effort rollback; original backup remains managed */ }
+    try { if (fs.existsSync(sourcePath)) fs.rmSync(sourcePath, { force: true }) } catch { /* generated temp cleanup */ }
+    throw artifactReplacementError(
+      'artifact_replacement_failed',
+      error?.message || 'Failed to replace the managed artifact.',
+    )
+  }
+
+  return {
+    ...artifact,
+    id: target.id,
+    filename: target.filename,
+    url: target.url,
+    type: target.type,
+    title: target.title || artifact.title,
+    fullPath: targetPath,
+    replaced: true,
+    replacedArtifactId: target.id,
+  }
+}
+
+function pptxSlidesFromArtifactArgs(args = {}) {
+  if (Array.isArray(args.slides) && args.slides.length > 0) return args.slides
+  const parsed = parseMarkdownSlides(String(args.markdown || ''))
+  return parsed.map((slide) => ({
+    ...slide,
+    ...(slide.layout ? {} : slide.type === 'cover' ? { layout: 'cover' } : {}),
+  }))
+}
+
+function docxParagraphsFromArtifactArgs(args = {}) {
+  if (Array.isArray(args.paragraphs) && args.paragraphs.length > 0) return args.paragraphs
+  const parsed = parseMarkdownDocument(String(args.markdown || ''))
+  return parsed.blocks
+    .filter((block, index) => !(index === 0 && block.type === 'title' && block.text === parsed.title))
+    .map((block) => ({
+      text: block.text,
+      ...(block.type === 'title' ? { heading: 1 } : block.type === 'heading' ? { heading: 2 } : {}),
+    }))
+}
+
+function xlsxSheetsFromArtifactArgs(args = {}) {
+  if (Array.isArray(args.sheets) && args.sheets.length > 0) return args.sheets
+  if (Array.isArray(args.rows) && args.rows.length > 0) return [{ name: 'Sheet1', rows: args.rows }]
+  const rows = parseSpreadsheetRows(String(args.markdown || ''))
+  return rows.length > 0 ? [{ name: 'Sheet1', rows }] : []
+}
+
+function pdfBlocksFromArtifactArgs(args = {}) {
+  if (Array.isArray(args.blocks) && args.blocks.length > 0) return args.blocks
+  return parseMarkdownDocument(String(args.markdown || '')).blocks
+}
+
 /**
  * TurnEngine consumes the exact same static schemas exposed by toolRegistry.
  * Connector schemas stay separate because availability is filtered per user
@@ -1213,6 +1366,7 @@ export function selectJobToolSpecs({
   prompt = '',
   userPrompt = prompt,
   previousUserPrompt = '',
+  priorArtifactTypes = [],
   skillId = undefined,
   specs = SERVER_TOOL_SPECS,
   origin = '',
@@ -1232,7 +1386,7 @@ export function selectJobToolSpecs({
     && !sourceSpecs.some((spec) => spec?.function?.name === 'set_deliverables')
     ? [...sourceSpecs, deliveryControlSpec]
     : sourceSpecs
-  const allowed = allowedArtifactTools(userPrompt, { skillId })
+  const allowed = allowedArtifactTools(userPrompt, { skillId, priorArtifactTypes })
   const artifactFiltered = routedSpecs.filter((spec) => {
     const name = spec?.function?.name
     if (!name) return false
@@ -1668,14 +1822,46 @@ async function executeServerTool({
       return normalizeToolError(err, { fallbackCode: 'WEB_SEARCH_ERROR' })
     }
   }
+  if (name === 'read_artifact_source') {
+    if (job?.origin !== 'chat' || !job?.userId || !job?.sessionId) {
+      return {
+        ok: false,
+        code: 'artifact_source_scope_unavailable',
+        error: 'Managed artifact source can only be read from its owning chat session.',
+        retryable: false,
+      }
+    }
+    const artifact = getTurnArtifactById({
+      id: String(args?.artifact_id || '').trim(),
+      userId: job.userId,
+      sessionId: job.sessionId,
+    })
+    if (!artifact) {
+      return {
+        ok: false,
+        code: 'artifact_source_not_found',
+        error: 'The artifact does not exist in this user and session scope.',
+        retryable: false,
+      }
+    }
+    try {
+      return readArtifactSourcePage({
+        artifact,
+        offset: args?.offset,
+        limit: args?.limit,
+      })
+    } catch (error) {
+      return normalizeToolError(error, { fallbackCode: 'artifact_source_read_failed' })
+    }
+  }
   if (name === 'generate_image') {
     const generated = await generateImage({ userId: job.userId, ...args })
-    const artifact = createImageArtifact({
+    const generatedArtifact = createImageArtifact({
       title: args.title || args.prompt,
       buffer: generated.buffer,
       mimeType: generated.mimeType,
     })
-    persistGeneratedArtifact({ artifact, args, job, step })
+    const artifact = publishGeneratedArtifact({ name, artifact: generatedArtifact, args, job, step })
     return await attachVisionFeedback({
       name,
       buffer: generated.buffer,
@@ -1684,6 +1870,7 @@ async function executeServerTool({
         artifactId: artifact.id,
         filename: artifact.filename,
         url: artifact.url,
+        replaced: artifact.replaced === true,
         revisedPrompt: generated.revisedPrompt,
         imageMime: generated.mimeType,
       },
@@ -1697,30 +1884,44 @@ async function executeServerTool({
     }
   }
   if (name === 'create_pptx') {
-    const artifact = await createPptx({
+    const generatedArtifact = await createPptx({
       title: args.title,
       subtitle: args.subtitle,
       theme: args.theme,
       brand: args.brand,
-      slides: args.slides || [],
+      slides: pptxSlidesFromArtifactArgs(args),
     })
-    persistGeneratedArtifact({ artifact, args, job, step })
-    return { ok: true, artifactId: artifact.id, filename: artifact.filename, url: artifact.url }
+    const artifact = publishGeneratedArtifact({ name, artifact: generatedArtifact, args, job, step })
+    return { ok: true, artifactId: artifact.id, filename: artifact.filename, url: artifact.url, replaced: artifact.replaced === true }
   }
   if (name === 'create_docx') {
-    const artifact = await createDocx({ title: args.title, paragraphs: args.paragraphs || [] })
-    persistGeneratedArtifact({ artifact, args, job, step })
-    return { ok: true, artifactId: artifact.id, filename: artifact.filename, url: artifact.url }
+    const generatedArtifact = await createDocx({
+      title: args.title,
+      paragraphs: docxParagraphsFromArtifactArgs(args),
+    })
+    const artifact = publishGeneratedArtifact({ name, artifact: generatedArtifact, args, job, step })
+    return { ok: true, artifactId: artifact.id, filename: artifact.filename, url: artifact.url, replaced: artifact.replaced === true }
   }
   if (name === 'create_xlsx') {
-    const artifact = await createXlsx({ title: args.title, sheets: args.sheets || [] })
-    persistGeneratedArtifact({ artifact, args, job, step })
-    return { ok: true, artifactId: artifact.id, filename: artifact.filename, url: artifact.url }
+    const generatedArtifact = await createXlsx({
+      title: args.title,
+      sheets: xlsxSheetsFromArtifactArgs(args),
+    })
+    const artifact = publishGeneratedArtifact({ name, artifact: generatedArtifact, args, job, step })
+    return { ok: true, artifactId: artifact.id, filename: artifact.filename, url: artifact.url, replaced: artifact.replaced === true }
+  }
+  if (name === 'create_pdf') {
+    const generatedArtifact = await createPdf({
+      title: args.title,
+      blocks: pdfBlocksFromArtifactArgs(args),
+    })
+    const artifact = publishGeneratedArtifact({ name, artifact: generatedArtifact, args, job, step })
+    return { ok: true, artifactId: artifact.id, filename: artifact.filename, url: artifact.url, replaced: artifact.replaced === true }
   }
   if (name === 'create_html_app') {
-    const artifact = createHtmlArtifact({ title: args.title, html: args.html, files: args.files })
-    persistGeneratedArtifact({ artifact, args, job, step })
-    return { ok: true, artifactId: artifact.id, filename: artifact.filename, url: artifact.url }
+    const generatedArtifact = createHtmlArtifact({ title: args.title, html: args.html, files: args.files })
+    const artifact = publishGeneratedArtifact({ name, artifact: generatedArtifact, args, job, step })
+    return { ok: true, artifactId: artifact.id, filename: artifact.filename, url: artifact.url, replaced: artifact.replaced === true }
   }
   // fs/shell 工具不落 artifact,执行结果直接回给模型.
   // 任意 fsShellTools 抛错(包括 env 未启用 / 路径越界)都返回 {ok:false,error}.

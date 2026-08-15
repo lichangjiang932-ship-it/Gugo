@@ -10,6 +10,7 @@ export const SERVER_TURN_TOOL_TOGGLE_NAMES = Object.freeze([
   'create_pptx',
   'create_docx',
   'create_xlsx',
+  'create_pdf',
   'Agent',
   'list_directory',
   'read_file',

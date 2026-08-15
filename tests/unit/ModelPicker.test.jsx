@@ -27,8 +27,8 @@ test('model picker opens above the composer and switches from a vertical model l
       open,
       selectedModel: selected,
       modelOptions: [
-        { name: 'alpha', contextWindow: 1_000_000, multiplier: 1 },
-        { name: 'beta', contextWindow: 200_000, contextWindowEstimated: true, multiplier: 2 },
+        { name: 'alpha', provider: 'primary', providerLabel: 'Primary Cloud', contextWindow: 1_000_000, multiplier: 1 },
+        { name: 'beta', provider: 'local-lab', providerLabel: 'Local Lab', contextWindow: 200_000, contextWindowEstimated: true, multiplier: 2 },
       ],
       onOpen: () => setOpen(true),
       onClose: () => setOpen(false),
@@ -48,9 +48,13 @@ test('model picker opens above the composer and switches from a vertical model l
   const panel = rootElement.querySelector('[data-testid="model-picker-panel"]')
   const listbox = rootElement.querySelector('[role="listbox"]')
   const options = [...rootElement.querySelectorAll('[data-testid="model-picker-option"]')]
+  const groups = [...rootElement.querySelectorAll('[data-testid="model-picker-group"]')]
   assert.ok(panel)
   assert.ok(listbox)
   assert.equal(options.length, 2)
+  assert.equal(groups.length, 2)
+  assert.match(groups[0].textContent, /Primary Cloud/)
+  assert.match(groups[1].textContent, /Local Lab/)
   assert.deepEqual(options.map((option) => option.textContent.includes('alpha') ? 'alpha' : 'beta'), ['alpha', 'beta'])
   assert.match(options[0].textContent, /1M/)
   assert.match(options[1].textContent, /~200K/)

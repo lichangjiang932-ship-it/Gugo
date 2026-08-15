@@ -1,47 +1,61 @@
-import { X } from 'lucide-react'
+import { normalizeOptionalTokenCount } from '../../../lib/contextUsage.js'
 
-/**
- * 上下文用量明细面板。挂在输入框上方,点击用量圆环打开:
- *   - 上下文用量(总用量 / 窗口 / 剩余)
- *   - 系统提示词、工具(定义+调用)、对话消息 三大占用来源
- */
+function compactTokens(value) {
+  const tokens = Math.max(0, Number(value) || 0)
+  if (tokens >= 1_000_000) return `${Number((tokens / 1_000_000).toFixed(tokens >= 10_000_000 ? 0 : 1))}M`
+  if (tokens >= 1_000) return `${Number((tokens / 1_000).toFixed(tokens >= 100_000 ? 0 : 1))}K`
+  return Math.round(tokens).toLocaleString()
+}
+
+function UsageRow({ color, label, value }) {
+  return (
+    <div className="flex items-center gap-2.5 py-1.5">
+      <span className={`h-3 w-3 shrink-0 rounded-[3px] ${color}`} aria-hidden="true" />
+      <span className="min-w-0 flex-1 truncate text-sm text-ink-soft">{label}</span>
+      <span className="shrink-0 font-mono text-sm text-ink">~{compactTokens(value)}</span>
+    </div>
+  )
+}
+
 export default function ContextUsagePanel({
   contextUsage,
   contextWindow,
-  messages,
-  selectedModel,
-  onClose,
   t,
 }) {
-  const estimatedTokens = contextUsage.estimatedTokens
-  const percent = contextUsage.percent
+  const measuredPromptTokens = normalizeOptionalTokenCount(contextUsage.actualPromptTokens)
+  const hasMeasuredPromptTokens = measuredPromptTokens !== null
+  const usedTokens = hasMeasuredPromptTokens
+    ? measuredPromptTokens
+    : Number(contextUsage.estimatedTokens || 0)
   const windowTokens = Number(contextUsage.contextWindow || contextWindow)
-  const remaining = Math.max(0, windowTokens - estimatedTokens)
+  const percent = Math.min(100, Math.max(0, Math.round((usedTokens / Math.max(1, windowTokens)) * 100)))
+  const toolTokens = Number(contextUsage.toolSpecTokens || 0) + Number(contextUsage.toolCallTokens || 0)
+  const conversationTokens = Number(contextUsage.messageTokens || 0) + Number(contextUsage.attachmentTokens || 0)
 
   return (
-    <div className="mx-auto w-full max-w-[872px] rounded-lg border border-ink/10 bg-paper p-3 text-xs text-ink-soft shadow-sm" data-testid="context-usage-panel">
-      <div className="mb-2 flex items-center justify-between">
-        <span className="font-mono text-[9px] uppercase tracking-[0.22em] text-ember">{t('chatMessages.contextTitle')}</span>
-        <button type="button" onClick={onClose} className="text-ink-fade hover:text-ink" title={t('chat.contextUsage.closeDetails')} aria-label={t('chat.contextUsage.closeDetails')}>
-          <X className="h-3 w-3" />
-        </button>
+    <div
+      className="w-full rounded-2xl border border-ink/10 bg-paper px-4 py-4 text-ink-soft shadow-[0_16px_48px_rgb(var(--color-ink-rgb)/0.16)]"
+      data-testid="context-usage-panel"
+      role="dialog"
+      aria-label={t('chat.contextUsage.estimatedUsage')}
+    >
+      <div className="flex items-baseline justify-between gap-4">
+        <div className="text-base text-ink-soft">
+          {t('chat.contextUsage.estimatedUsage')} <strong className="ml-1 font-semibold text-ink">{percent}%</strong>
+        </div>
+        <div className="shrink-0 font-mono text-base font-semibold text-ink">{hasMeasuredPromptTokens ? '' : '~'}{compactTokens(usedTokens)} / {compactTokens(windowTokens)}</div>
       </div>
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-        <span className="text-ink-fade">{t('chat.contextUsage.estimatedUsage')}</span>
-        <span className="font-mono text-ink">{estimatedTokens.toLocaleString()} / {windowTokens.toLocaleString()} tokens</span>
-        <span className={`font-mono ${percent >= 80 ? 'text-red-500' : percent >= 60 ? 'text-amber-500' : 'text-emerald-600'}`}>{percent}%</span>
-        <span className="text-ink-fade">{t('chat.contextUsage.remaining')} <span className="font-mono text-ink-soft">~{remaining.toLocaleString()}</span></span>
+      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-ink/10" aria-hidden="true">
+        <div
+          className={`h-full rounded-full transition-[width,background-color] ${percent >= 80 ? 'bg-red-500' : percent >= 60 ? 'bg-amber-500' : 'bg-blue-500'}`}
+          style={{ width: `${percent}%` }}
+        />
       </div>
-      <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5 border-t border-dashed border-ink-fade/40 pt-2 text-[11px] sm:grid-cols-3">
-        <div className="flex items-center justify-between gap-2"><span className="text-ink-fade">{t('chat.contextUsage.systemPrompt')}</span><span className="font-mono">~{contextUsage.systemTokens.toLocaleString()}</span></div>
-        <div className="flex items-center justify-between gap-2"><span className="text-ink-fade">{t('chat.contextUsage.toolDefinitions')}</span><span className="font-mono">~{contextUsage.toolSpecTokens.toLocaleString()}</span></div>
-        <div className="flex items-center justify-between gap-2"><span className="text-ink-fade">{t('chat.contextUsage.toolCalls')}</span><span className="font-mono">~{contextUsage.toolCallTokens.toLocaleString()}</span></div>
-        <div className="flex items-center justify-between gap-2"><span className="text-ink-fade">{t('chat.contextUsage.messagePayload')}</span><span className="font-mono">~{contextUsage.messageTokens.toLocaleString()}</span></div>
-        <div className="flex items-center justify-between gap-2"><span className="text-ink-fade">{t('chat.contextUsage.attachments')}</span><span className="font-mono">~{contextUsage.attachmentTokens.toLocaleString()}</span></div>
-        <div className="flex items-center justify-between gap-2"><span className="text-ink-fade">{t('chat.contextUsage.messages')}</span><span className="font-mono">{messages.length}</span></div>
+      <div className="mt-3 border-t border-ink/10 pt-2">
+        <UsageRow color="bg-slate-400" label={t('chat.contextUsage.systemPrompt')} value={contextUsage.systemTokens} />
+        <UsageRow color="bg-violet-500" label={t('chat.contextUsage.tools')} value={toolTokens} />
+        <UsageRow color="bg-blue-500" label={t('chat.contextUsage.messagePayload')} value={conversationTokens} />
       </div>
-      <div className="mt-2 text-[10px] text-ink-fade">{t('chat.contextUsage.estimateNotice')}</div>
-      <div className="mt-1 text-[10px] text-ink-fade">{t('chat.contextUsage.model')}: {selectedModel || t('chat.contextUsage.backendDefault')}</div>
     </div>
   )
 }

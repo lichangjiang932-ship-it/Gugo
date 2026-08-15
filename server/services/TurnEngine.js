@@ -3,6 +3,7 @@ import path from 'node:path'
 import { callBackgroundModel, callStreamingModelWithTools, getModelContextWindow } from '../adapters/modelProxy.js'
 import { createTurnActivity, createTurnEvent } from '../../shared/turnEvents.js'
 import { canonicalizeSkillId } from '../../shared/artifactIntent.js'
+import { normalizeModelUsage } from '../../shared/modelUsage.js'
 import { releaseApprovalsForTurn } from './approvalGate.js'
 import { runToolLoop, SERVER_TOOL_SPECS } from './toolLoopRuntime.js'
 import {
@@ -16,6 +17,7 @@ import {
   upsertSession,
 } from './sessionStore.js'
 import { appendTurnEvent, getLastTurnEvent, listTurnEvents } from './turnEventStore.js'
+import { getTurnCheckpoint, saveTurnCheckpoint } from './turnCheckpointStore.js'
 import { publishTurnActivity } from './turnActivityBus.js'
 import { dispatchHooks as dispatchHooksService } from './hooksService.js'
 import { resolveApprovalMode } from '../utils/approvalPolicy.js'
@@ -24,6 +26,8 @@ import {
   collectToolCallIds,
   expandStoredMessages,
   materializeManagedAttachmentMessages,
+  selectAttachmentIdsForModelRequest,
+  selectStoredMessagesAfterCompaction,
 } from './turnMessageContext.js'
 import { prepareTurnPromptContext } from './turnPromptContext.js'
 import { prepareInlineSkillsForPrompt } from './promptCompiler.js'
@@ -119,6 +123,24 @@ function recoveryAttemptAfterCheckpoint(replayEvents, scope, checkpoint) {
     previousStreamSequence: previousStream.sequence,
     ...prefix,
   }
+}
+
+function storedCheckpointEvent(checkpoint) {
+  if (!checkpoint?.state || !Number.isInteger(checkpoint.eventSequence)) return null
+  return {
+    sessionId: checkpoint.sessionId,
+    turnId: checkpoint.turnId,
+    sequence: checkpoint.eventSequence,
+    type: 'turn.checkpoint',
+    payload: { state: checkpoint.state },
+    createdAt: checkpoint.updatedAt,
+  }
+}
+
+function latestLegacyCheckpoint(replayEvents, scope) {
+  return replayPersistedTurnEvents(replayEvents, scope)
+    .filter((event) => event.type === 'turn.checkpoint' && isRecord(event.payload?.state))
+    .at(-1) || null
 }
 
 export class TurnEngineError extends Error {
@@ -454,6 +476,8 @@ export class TurnEngine {
     publishActivity = publishTurnActivity,
     lastEvent = getLastTurnEvent,
     replayEvents = listTurnEvents,
+    readCheckpoint = getTurnCheckpoint,
+    writeCheckpoint = saveTurnCheckpoint,
     readSession = getSession,
     claimSession = claimLocalChatSession,
     writeSession = upsertSession,
@@ -486,6 +510,7 @@ export class TurnEngine {
   } = {}) {
     this.deps = {
       runLoop, runModel, executeTool, appendEvent, publishActivity, lastEvent, replayEvents,
+      readCheckpoint, writeCheckpoint,
       readSession, claimSession, writeSession, readMessages, readPreviousUserMessage,
       writeMessage, idFactory, now, toolSpecs,
       readApprovalMode, preparePromptContext, resolveToolSpecs, scheduleMemoryExtraction, runMemoryModel, env,
@@ -695,6 +720,7 @@ export class TurnEngine {
         userId,
         sessionId,
         turnId,
+        turnStartedAt: createdAt,
         content: text,
         displayContent: displayText,
         modelName,
@@ -820,6 +846,7 @@ export class TurnEngine {
       userId,
       sessionId,
       turnId,
+      turnStartedAt: started.createdAt,
       content: String(started.payload.content || ''),
       displayContent: String(started.payload.displayContent || started.payload.content || ''),
       modelName: started.payload.modelName || null,
@@ -887,14 +914,14 @@ export class TurnEngine {
   #createEmitter({ userId, sessionId, turnId, sequence }) {
     let nextSequence = sequence
     let appendQueue = Promise.resolve()
-    return (type, payload = {}, { beforeAppend } = {}) => {
+    return (type, payload = {}, { beforeAppend, checkpointState = null } = {}) => {
       const pending = appendQueue.then(async () => {
         const event = createTurnEvent({
           id: this.deps.idFactory(), sessionId, turnId, sequence: nextSequence, type,
           payload, createdAt: this.deps.now(),
         })
         await beforeAppend?.(event)
-        const stored = await this.deps.appendEvent({ userId, event })
+        const stored = await this.deps.appendEvent({ userId, event, checkpointState })
         nextSequence += 1
         return stored
       })
@@ -929,6 +956,7 @@ export class TurnEngine {
     userId,
     sessionId,
     turnId,
+    turnStartedAt,
     content,
     displayContent,
     modelName,
@@ -944,7 +972,12 @@ export class TurnEngine {
       if (!lostTurnLease(signal)) await emitter('turn.cancelled', { reason: signal.reason?.message || 'Cancelled by user' })
       return
     }
-    const checkpoint = this.deps.lastEvent({ userId, sessionId, turnId, type: 'turn.checkpoint' })
+    const checkpointScope = { userId, sessionId, turnId }
+    const effectiveTurnStartedAt = Number.isFinite(Number(turnStartedAt))
+      ? Math.max(0, Number(turnStartedAt))
+      : this.deps.now()
+    const checkpoint = storedCheckpointEvent(this.deps.readCheckpoint(checkpointScope))
+      || latestLegacyCheckpoint(this.deps.replayEvents, checkpointScope)
     const restoredCheckpointState = checkpointStateForResolution(checkpoint?.payload?.state, resumeContext)
     const steeringOwnerId = normalizeOptionalId(this.deps.executionLeases.ownerId)
     const steeringScope = { userId, sessionId, turnId, ownerId: steeringOwnerId }
@@ -986,8 +1019,14 @@ export class TurnEngine {
     const managedAttachments = Array.isArray(currentUserMessage?.modelContext?.attachments)
       ? currentUserMessage.modelContext.attachments
       : []
-    const historyMessages = expandStoredMessages(storedMessages)
-    let promptContext = { messages: [], effectiveAgentId: agentId, skillIds, memoryIds: [] }
+    let promptContext = {
+      messages: [],
+      effectiveAgentId: agentId,
+      skillIds,
+      memoryIds: [],
+      compactionArchiveId: null,
+      compactionBoundary: null,
+    }
     try {
       promptContext = await this.deps.preparePromptContext({
         userId,
@@ -1003,10 +1042,20 @@ export class TurnEngine {
     } catch {
       // Optional memory/agent/skill context must never prevent a turn from running.
     }
+    const promptStoredMessages = selectStoredMessagesAfterCompaction(
+      storedMessages,
+      promptContext.compactionBoundary,
+    )
+    const historyMessages = expandStoredMessages(promptStoredMessages)
     const messages = [
       ...(Array.isArray(promptContext.messages) ? promptContext.messages : []),
       ...historyMessages,
     ]
+    const attachmentIdsForFirstModelRequest = selectAttachmentIdsForModelRequest(messages, {
+      currentAttachmentIds: managedAttachments.map((attachment) => attachment.id),
+      prompt: content,
+    })
+    let shouldInlineManagedAttachments = attachmentIdsForFirstModelRequest.length > 0
     const effectiveToolsConfig = applyDirectoryAuthorizationToolsConfig(
       toolsConfig,
       resumeContext?.resolution,
@@ -1015,6 +1064,8 @@ export class TurnEngine {
       && resumeContext.resolution.access_mode === 'read_write'
       ? 'execute'
       : normalizeTurnIntentMode(intentMode)
+    const preparedSkillIds = normalizeIds(promptContext.skillIds)
+    const effectiveSkillIds = preparedSkillIds.length ? preparedSkillIds : normalizeIds(skillIds)
     let resolvedToolSpecs = this.deps.toolSpecs
     try {
       const authorizationAwareBaseSpecs = restoreDirectoryAuthorizationToolSpecs(
@@ -1026,21 +1077,32 @@ export class TurnEngine {
         userId,
         baseSpecs: authorizationAwareBaseSpecs,
         toolsConfig: effectiveToolsConfig,
+        prompt: content,
+        messages,
+        skillIds: effectiveSkillIds,
       })
       if (Array.isArray(resolved)) resolvedToolSpecs = resolved
     } catch {
       // MCP/browser discovery is optional; retain the built-in tool set on failure.
     }
-    const preparedSkillIds = normalizeIds(promptContext.skillIds)
-    const effectiveSkillIds = preparedSkillIds.length ? preparedSkillIds : normalizeIds(skillIds)
     const activeSkillId = effectiveSkillIds.at(0) || null
     const baselineToolCallIds = collectToolCallIds(messages)
     let checkpointMessages = restoredCheckpointState?.messages || []
     let checkpointArtifactIds = normalizeArtifactIds(restoredCheckpointState?.artifactIds)
     let checkpointDeliveryArtifactIds = optionalDeliveryArtifactIds(restoredCheckpointState)
     let checkpointIterations = Math.max(0, Number(restoredCheckpointState?.iterations) || 0)
+    let checkpointRecovery = restoredCheckpointState?.recovery || null
+    let latestModelUsage = normalizeModelUsage(restoredCheckpointState?.latestModelUsage)
     let streamedAssistantText = String(pendingRecoveryAttempt?.assistantText || '')
-    const persistTurnEvidence = ({ state, text, artifactIds, deliveryArtifactIds, iterations, error = null }) => {
+    const persistTurnEvidence = ({
+      state,
+      text,
+      artifactIds,
+      deliveryArtifactIds,
+      iterations,
+      error = null,
+      serverLastSequence = null,
+    }) => {
       const evidenceText = String(text || '').trim() || error?.message || 'Turn execution did not complete.'
       const evidenceArtifacts = normalizeArtifactIds(artifactIds)
       const evidenceIterations = Math.max(0, Number(iterations) || 0)
@@ -1059,9 +1121,16 @@ export class TurnEngine {
             artifactIds: evidenceArtifacts,
             deliveryArtifactIds,
             iterations: evidenceIterations,
+            compactionRecovery: checkpointRecovery,
+            usage: latestModelUsage,
+            turnStartedAt: effectiveTurnStartedAt,
+            turnCompletedAt: writtenAt,
           }),
           turnEvidence: true,
           evidenceState: state,
+          ...(Number.isInteger(serverLastSequence) && serverLastSequence >= 0
+            ? { serverLastSequence }
+            : {}),
           ...(error ? { error } : {}),
         },
         createdAt: writtenAt,
@@ -1139,16 +1208,44 @@ export class TurnEngine {
           : null,
         loadCheckpoint: async () => restoredCheckpointState || null,
         saveCheckpoint: async (state) => {
-          checkpointMessages = Array.isArray(state?.messages) ? state.messages : checkpointMessages
-          const nextCheckpointArtifactIds = normalizeArtifactIds(state?.artifactIds ?? checkpointArtifactIds)
+          const checkpointState = latestModelUsage
+            ? { ...state, latestModelUsage }
+            : state
+          checkpointMessages = Array.isArray(checkpointState?.messages)
+            ? checkpointState.messages
+            : checkpointMessages
+          const nextCheckpointArtifactIds = normalizeArtifactIds(
+            checkpointState?.artifactIds ?? checkpointArtifactIds,
+          )
           const artifactCollectionChanged = !sameArtifactIds(checkpointArtifactIds, nextCheckpointArtifactIds)
           checkpointArtifactIds = nextCheckpointArtifactIds
           checkpointDeliveryArtifactIds = optionalDeliveryArtifactIds(
-            state,
+            checkpointState,
             artifactCollectionChanged ? [] : checkpointDeliveryArtifactIds,
           )
-          checkpointIterations = Math.max(0, Number(state?.iterations) || checkpointIterations)
-          await emitter('turn.checkpoint', { state })
+          checkpointIterations = Math.max(0, Number(checkpointState?.iterations) || checkpointIterations)
+          checkpointRecovery = checkpointState?.recovery || checkpointRecovery
+          const checkpointEvent = await emitter('turn.checkpoint', {
+            storage: 'turn_checkpoints',
+            checkpointVersion: 1,
+            iterations: checkpointIterations,
+            toolCallCount: Array.isArray(checkpointState?.toolCalls) ? checkpointState.toolCalls.length : 0,
+          }, { checkpointState })
+          let saved = this.deps.readCheckpoint({ userId, sessionId, turnId })
+          if (saved?.eventSequence !== checkpointEvent.sequence) {
+            // Custom event-store adapters may not implement the atomic
+            // checkpointState extension. Preserve dependency compatibility
+            // with a post-append upsert fallback.
+            saved = await this.deps.writeCheckpoint({
+              userId,
+              sessionId,
+              turnId,
+              eventSequence: checkpointEvent.sequence,
+              state: checkpointState,
+              now: checkpointEvent.createdAt,
+            })
+          }
+          if (!saved?.state) throw new Error('Failed to persist turn checkpoint')
           return true
         },
         runModel: async (request) => {
@@ -1158,10 +1255,15 @@ export class TurnEngine {
             streamedAssistantText = String(attempt.assistantText || '')
             await emitter('turn.attempt', attempt)
           }
+          const inlineAttachmentIds = shouldInlineManagedAttachments
+            ? attachmentIdsForFirstModelRequest
+            : []
+          shouldInlineManagedAttachments = false
           const providerMessages = await materializeManagedAttachmentMessages(request.messages, {
             userId,
             sessionId,
             prepareAttachments: this.deps.prepareAttachments,
+            inlineAttachmentIds,
           })
           const inheritedToolCallReady = request.onToolCallReady
           return this.deps.runModel({
@@ -1196,7 +1298,15 @@ export class TurnEngine {
           })
         },
         onModelPhase: async ({ phase, iteration, usage, modelName: activeModel, error }) => {
-          await emitter('model.phase', { phase, iteration, usage, modelName: activeModel, error })
+          const normalizedUsage = phase === 'completed' ? normalizeModelUsage(usage) : null
+          if (normalizedUsage) latestModelUsage = normalizedUsage
+          await emitter('model.phase', {
+            phase,
+            iteration,
+            usage: normalizedUsage || usage,
+            modelName: activeModel,
+            error,
+          })
         },
         onModelDelta: async ({ text: delta, iteration, modelName: activeModel }) => {
           streamedAssistantText += String(delta || '')
@@ -1220,7 +1330,7 @@ export class TurnEngine {
           toolCallId: call.id, name: call.name, args: call.args,
         }),
         onToolStarted: async (call) => emitter('tool.started', {
-          toolCallId: call.id, name: call.name,
+          toolCallId: call.id, name: call.name, args: call.args, outputReplay: 'live_only',
         }),
         onToolCompleted: async (outcome) => {
           const failure = outcome.result?.ok === false ? {
@@ -1267,18 +1377,11 @@ export class TurnEngine {
         const deliveryArtifactIds = optionalDeliveryArtifactIds(result, checkpointDeliveryArtifactIds)
         const iterations = Math.max(0, Number(result.iterations) || checkpointIterations)
         const partialText = String(result.text || streamedAssistantText || '')
-        persistTurnEvidence({
-          state: 'interrupted',
-          text: partialText,
-          artifactIds,
-          deliveryArtifactIds,
-          iterations,
-          error: normalizeFailure({
-            code: result.code,
-            message: result.reason,
-            retryable: true,
-          }, { code: 'MODEL_CALL_INTERRUPTED', retryable: true }),
-        })
+        const failure = normalizeFailure({
+          code: result.code,
+          message: result.reason,
+          retryable: true,
+        }, { code: 'MODEL_CALL_INTERRUPTED', retryable: true })
         await emitter('turn.interrupted', {
           code: String(result.code || 'MODEL_CALL_INTERRUPTED'),
           message: String(result.reason || 'Model execution was interrupted after tool progress'),
@@ -1287,19 +1390,32 @@ export class TurnEngine {
           artifactIds,
           ...deliveryArtifactFields(deliveryArtifactIds),
           iterations,
+        }, {
+          beforeAppend: (interruptedEvent) => persistTurnEvidence({
+            state: 'interrupted',
+            text: partialText,
+            artifactIds,
+            deliveryArtifactIds,
+            iterations,
+            error: failure,
+            serverLastSequence: interruptedEvent.sequence,
+          }),
         })
         return
       }
       if (result?.incomplete) {
+        const partialText = String(result.text || streamedAssistantText || '')
         const failure = normalizeFailure({
           code: 'TURN_INCOMPLETE',
-          message: result.reason
-            ? `Turn did not complete: ${result.reason}`
-            : 'Turn did not complete',
+          // Keep the wrap-up in partialText and the machine reason in the
+          // hint. Reusing the wrap-up as the error message would make clients
+          // append the same useful result a second time as an error banner.
+          message: '任务未完全完成，已保留当前进展。',
           retryable: true,
-          hint: 'Retry the turn or use a model with the required tool capabilities.',
+          hint: result.reason
+            ? `Incomplete reason: ${result.reason}`
+            : 'Retry the turn to continue from the durable checkpoint.',
         }, { retryable: true })
-        const partialText = String(result.text || streamedAssistantText || '')
         const artifactIds = normalizeArtifactIds(result.artifactIds ?? checkpointArtifactIds)
         const deliveryArtifactIds = optionalDeliveryArtifactIds(result, checkpointDeliveryArtifactIds)
         const iterations = Math.max(0, Number(result.iterations) || checkpointIterations)
@@ -1355,6 +1471,10 @@ export class TurnEngine {
                   iterations,
                   paused: true,
                   compactionArchiveId: result?.recovery?.archiveId || null,
+                  compactionRecovery: result?.recovery || checkpointRecovery,
+                  usage: latestModelUsage,
+                  turnStartedAt: effectiveTurnStartedAt,
+                  turnCompletedAt: pausedAt,
                 }),
                 clarification,
                 pausedSequence: pausedEvent.sequence,
@@ -1380,6 +1500,10 @@ export class TurnEngine {
           deliveryArtifactIds,
           iterations: result?.iterations || 0,
           compactionArchiveId: result?.recovery?.archiveId || null,
+          compactionRecovery: result?.recovery || checkpointRecovery,
+          usage: latestModelUsage,
+          turnStartedAt: effectiveTurnStartedAt,
+          turnCompletedAt: completedAt,
         }),
         createdAt: completedAt, updatedAt: completedAt,
       })
@@ -1388,6 +1512,7 @@ export class TurnEngine {
         artifactIds,
         ...deliveryArtifactFields(deliveryArtifactIds),
         iterations: result?.iterations || 0,
+        ...(latestModelUsage ? { usage: latestModelUsage } : {}),
       })
       // Best-effort async notification to external subscribers.
       void this.deps.dispatchHooks?.({

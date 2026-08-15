@@ -6,6 +6,7 @@ import { TASK_STATUS, HISTORY_STATUS } from '../../store/taskStatus.js'
 import { artifactTypeForSkill, buildChatFailureMessage, getVisibleModelErrorMessage } from '../../lib/chatFlowGuards.js'
 import { isServerTurnToolToggle } from '../../lib/serverToolConfig.js'
 import { registerTurnRun, unregisterTurnRun } from './turnRunRegistry.js'
+import { mergeAssistantText, missingAssistantTextSuffix } from '../../lib/assistantTextContinuity.js'
 
 const CODE_EXECUTION_CONTINUITY_TOOLS = new Set([
   'list_directory',
@@ -36,6 +37,15 @@ function successfulHistoryToolNames(historyMessages = []) {
 
 export function isUserStopped(error) {
   return error?.name === 'AbortError' || error?.code === 'USER_STOPPED'
+}
+
+export function turnEventTimestamp(eventOrTimestamp, fallback = Date.now()) {
+  const raw = eventOrTimestamp && typeof eventOrTimestamp === 'object'
+    ? eventOrTimestamp.createdAt
+    : eventOrTimestamp
+  if (raw == null || raw === '') return fallback
+  const timestamp = Number(raw)
+  return Number.isFinite(timestamp) && timestamp >= 0 ? timestamp : fallback
 }
 
 export async function collectLocalPathEvidence({ localPathAccess, probeLocalPathAccess, signal }) {
@@ -167,6 +177,12 @@ export async function runServerChatTurn({
   const { assistantId: assistantMessageId } = buildServerTurnMessageIds(turnId)
   const messageTarget = { sessionId, messageId: assistantMessageId }
   const dispatchMessage = (type, payload) => dispatch({ type, payload, ...messageTarget })
+  const appendMissingAssistantText = (candidate) => {
+    const suffix = missingAssistantTextSuffix(currentAssistantText, candidate)
+    if (suffix) dispatchMessage('APPEND_TO_LAST_MESSAGE', suffix)
+    currentAssistantText = mergeAssistantText(currentAssistantText, candidate)
+    return suffix
+  }
   const turnActivityDispatcher = createBufferedTurnActivityDispatcher({ dispatch, taskId, messageTarget })
   controller.signal.addEventListener('abort', () => {
     turnActivityDispatcher.flush()
@@ -187,6 +203,7 @@ export async function runServerChatTurn({
         artifactType: initialArtifactType,
         artifactTitle: initialArtifactType ? taskName : undefined,
         streaming: true,
+        turnStartedAt: startedAt,
         modelActivity: { kind: 'preparing' },
         serverTurnId: turnId,
         serverLastSequence: -1,
@@ -265,26 +282,24 @@ export async function runServerChatTurn({
     turnActivityDispatcher.flush()
     if (terminal.type === 'turn.failed') {
       const error = createTurnFailureError(terminal.payload)
-      if (!currentAssistantText && error.partialText) {
-        dispatchMessage('APPEND_TO_LAST_MESSAGE', error.partialText)
-        currentAssistantText = error.partialText
-      }
+      error.turnCompletedAt = turnEventTimestamp(terminal)
+      appendMissingAssistantText(error.partialText)
       throw error
     }
     if (terminal.type === 'turn.cancelled') {
       const error = new Error('Generation stopped')
       error.name = 'AbortError'
+      error.turnCompletedAt = turnEventTimestamp(terminal)
       throw error
     }
     if (terminal.type === 'turn.paused') {
-      if (!currentAssistantText && terminal.payload?.text) {
-        dispatchMessage('APPEND_TO_LAST_MESSAGE', terminal.payload.text)
-        currentAssistantText = terminal.payload.text
-      }
+      appendMissingAssistantText(terminal.payload?.text)
+      const completedAt = turnEventTimestamp(terminal)
       dispatchMessage('UPDATE_LAST_MESSAGE_META', {
         type: 'model_reply',
         modelName: modelName || 'backend-default',
-        latency: Date.now() - startedAt,
+        latency: Math.max(0, completedAt - startedAt),
+        turnCompletedAt: completedAt,
         streaming: false,
         paused: true,
         serverArtifacts,
@@ -304,11 +319,13 @@ export async function runServerChatTurn({
       setTimeout(() => dispatch({ type: 'REMOVE_TASK', payload: taskId }), 5000)
       return { paused: true, clarification: terminal.payload?.clarification || null }
     }
-    if (!currentAssistantText && terminal.payload?.text) dispatchMessage('APPEND_TO_LAST_MESSAGE', terminal.payload.text)
+    appendMissingAssistantText(terminal.payload?.text)
+    const completedAt = turnEventTimestamp(terminal)
     dispatchMessage('UPDATE_LAST_MESSAGE_META', {
       type: 'model_reply',
       modelName: modelName || 'backend-default',
-      latency: Date.now() - startedAt,
+      latency: Math.max(0, completedAt - startedAt),
+      turnCompletedAt: completedAt,
       streaming: false,
       paused: false,
       serverClarification: null,
@@ -331,10 +348,13 @@ export async function runServerChatTurn({
     }
   } catch (error) {
     turnActivityDispatcher.flush()
+    const completedAt = turnEventTimestamp(error?.turnCompletedAt)
     if (isUserStopped(error)) {
       dispatchMessage('APPEND_TO_LAST_MESSAGE', `\n\n${t('chat.serverTurn.stoppedMarker')}`)
       dispatchMessage('UPDATE_LAST_MESSAGE_META', {
         streaming: false,
+        latency: Math.max(0, completedAt - startedAt),
+        turnCompletedAt: completedAt,
         serverArtifacts,
         serverDeliveryArtifactIds: [],
         serverConnectionState: null,
@@ -345,6 +365,8 @@ export async function runServerChatTurn({
       dispatchMessage('APPEND_TO_LAST_MESSAGE', buildChatFailureMessage(message))
       dispatchMessage('UPDATE_LAST_MESSAGE_META', {
         streaming: false,
+        latency: Math.max(0, completedAt - startedAt),
+        turnCompletedAt: completedAt,
         failed: true,
         serverArtifacts,
         serverConnectionState: null,

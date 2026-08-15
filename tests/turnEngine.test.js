@@ -18,6 +18,7 @@ const { listMessages, upsertMessage, upsertSession } = await import('../server/s
 const { createCompactionArchive } = await import('../server/services/compactionService.js')
 const { prepareTurnPromptContext } = await import('../server/services/turnPromptContext.js')
 const { appendTurnEvent, listTurnEvents } = await import('../server/services/turnEventStore.js')
+const { getTurnCheckpoint } = await import('../server/services/turnCheckpointStore.js')
 const { createTurnEvent } = await import('../shared/turnEvents.js')
 const {
   INLINE_SKILL_DEFINITION_LIMITS,
@@ -75,6 +76,56 @@ test('TurnEngine emits every artifact produced by one completed local tool call'
   assert.equal(completed.payload.artifactId, 'local-pdf-1')
 })
 
+test('TurnEngine persists only the latest completed model usage across checkpoints and completion', async () => {
+  const turnId = 'turn-latest-model-usage'
+  const firstUsage = { promptTokens: 120, completionTokens: 20, totalTokens: 140 }
+  const latestUsage = { promptTokens: 360, completionTokens: 40, totalTokens: 400 }
+  const engine = createTestEngine({
+    runLoop: async ({ onModelPhase, saveCheckpoint }) => {
+      await onModelPhase({
+        phase: 'completed', iteration: 1, usage: firstUsage, modelName: 'test-model', error: null,
+      })
+      await onModelPhase({
+        phase: 'completed', iteration: 2, usage: latestUsage, modelName: 'test-model', error: null,
+      })
+      await saveCheckpoint({ messages: [], artifactIds: [], iterations: 2 })
+      return { text: 'Usage recorded.', artifactIds: [], iterations: 2 }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'Record the latest context usage.',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const turnEvents = events(turnId)
+  assert.deepEqual(
+    turnEvents.filter((event) => event.type === 'model.phase').map((event) => event.payload.usage),
+    [firstUsage, latestUsage],
+  )
+  assert.deepEqual(
+    turnEvents.find((event) => event.type === 'turn.completed').payload.usage,
+    latestUsage,
+  )
+  assert.deepEqual(getTurnCheckpoint({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+  }).state.latestModelUsage, latestUsage)
+  const assistant = listMessages({ userId, sessionId: 'turn-engine-session' })
+    .find((message) => message.id === `${turnId}:assistant`)
+  assert.deepEqual(assistant.modelContext.usage, latestUsage)
+  assert.ok(Number.isFinite(assistant.modelContext.turnStartedAt))
+  assert.ok(Number.isFinite(assistant.modelContext.turnCompletedAt))
+  assert.equal(
+    assistant.modelContext.latency,
+    assistant.modelContext.turnCompletedAt - assistant.modelContext.turnStartedAt,
+  )
+})
+
 test('TurnEngine preserves explicit empty delivery ids through checkpoint, model context, and completion', async () => {
   const turnId = 'turn-explicit-empty-delivery'
   const artifactIds = ['draft-artifact', 'final-artifact']
@@ -106,8 +157,19 @@ test('TurnEngine preserves explicit empty delivery ids through checkpoint, model
   const turnEvents = events(turnId)
   const checkpoint = turnEvents.find((event) => event.type === 'turn.checkpoint')
   const completed = turnEvents.find((event) => event.type === 'turn.completed')
-  assert.ok(Object.hasOwn(checkpoint.payload.state, 'deliveryArtifactIds'))
-  assert.deepEqual(checkpoint.payload.state.deliveryArtifactIds, [])
+  assert.deepEqual(checkpoint.payload, {
+    storage: 'turn_checkpoints',
+    checkpointVersion: 1,
+    iterations: 1,
+    toolCallCount: 0,
+  })
+  const storedCheckpoint = getTurnCheckpoint({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+  })
+  assert.ok(Object.hasOwn(storedCheckpoint.state, 'deliveryArtifactIds'))
+  assert.deepEqual(storedCheckpoint.state.deliveryArtifactIds, [])
   assert.ok(Object.hasOwn(completed.payload, 'deliveryArtifactIds'))
   assert.deepEqual(completed.payload.deliveryArtifactIds, [])
 
@@ -163,6 +225,53 @@ test('TurnEngine clears a stale delivery fallback when a legacy checkpoint adds 
   assert.deepEqual(assistant.modelContext.artifactIds, ['draft-artifact', 'new-artifact'])
 })
 
+test('TurnEngine keeps repeated checkpoints linear in the event log', async () => {
+  const turnId = 'turn-linear-checkpoints'
+  const checkpointCount = 40
+  const engine = createTestEngine({
+    runLoop: async ({ saveCheckpoint }) => {
+      const messages = []
+      for (let index = 0; index < checkpointCount; index += 1) {
+        messages.push({ role: 'tool', tool_call_id: `call-${index}`, content: 'x'.repeat(500) })
+        await saveCheckpoint({
+          messages: [...messages],
+          toolCalls: Array.from({ length: index + 1 }, (_, callIndex) => ({
+            id: `call-${callIndex}`,
+            name: 'read_file',
+            checkpointStatus: 'completed',
+          })),
+          artifactIds: [],
+          iterations: index + 1,
+        })
+      }
+      return { text: 'Checkpointed work completed.', artifactIds: [], iterations: checkpointCount }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'Exercise many checkpoints.',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const checkpoints = events(turnId).filter((event) => event.type === 'turn.checkpoint')
+  assert.equal(checkpoints.length, 1, 'superseded checkpoint events should be compacted')
+  assert.equal(checkpoints.every((event) => event.payload.storage === 'turn_checkpoints'), true)
+  assert.equal(checkpoints.some((event) => Object.hasOwn(event.payload, 'state')), false)
+  assert.ok(
+    checkpoints.reduce((sum, event) => sum + JSON.stringify(event.payload).length, 0) < 150,
+    'durable replay metadata must stay bounded',
+  )
+  const rows = getDb().prepare(`
+    SELECT state_json FROM turn_checkpoints
+     WHERE user_id = ? AND session_id = ? AND turn_id = ?
+  `).all(userId, 'turn-engine-session', turnId)
+  assert.equal(rows.length, 1)
+  assert.equal(JSON.parse(rows[0].state_json).iterations, checkpointCount)
+})
+
 test('TurnEngine rejects more than 32 attachments instead of silently dropping files', async () => {
   const engine = createTestEngine({ runLoop: async () => ({ text: 'must not run' }) })
   await assert.rejects(
@@ -179,9 +288,10 @@ test('TurnEngine rejects more than 32 attachments instead of silently dropping f
 
 test('TurnEngine restores a persisted compaction archive on the next chat turn', async () => {
   const sessionId = 'turn-engine-compaction-session'
-  const summaryText = 'Persisted archive summary for the next chat turn.'
+  const summaryText = 'Persisted archive summary: the first turn requested the initial page.'
   upsertSession({ id: sessionId, userId, title: 'Compaction continuity' })
   const preparedContexts = []
+  const loopMessages = []
   let loopCalls = 0
   let archiveId = null
   const engine = createTestEngine({
@@ -190,7 +300,8 @@ test('TurnEngine restores a persisted compaction archive on the next chat turn',
       preparedContexts.push(prepared)
       return prepared
     },
-    runLoop: async () => {
+    runLoop: async (options) => {
+      loopMessages.push(options.messages)
       loopCalls += 1
       if (loopCalls === 1) {
         const archive = createCompactionArchive({
@@ -200,7 +311,15 @@ test('TurnEngine restores a persisted compaction archive on the next chat turn',
           summaryText,
         })
         archiveId = archive.id
-        return { text: 'First reply', artifactIds: [], iterations: 1, recovery: { archiveId } }
+        return {
+          text: 'First reply',
+          artifactIds: [],
+          iterations: 1,
+          recovery: {
+            archiveId,
+            lastCompactedMessageId: 'turn-compaction-first:user',
+          },
+        }
       }
       return { text: 'Second reply', artifactIds: [], iterations: 1 }
     },
@@ -216,8 +335,12 @@ test('TurnEngine restores a persisted compaction archive on the next chat turn',
   await engine.waitForTurn({ userId, sessionId, turnId: 'turn-compaction-second' })
   assert.match(
     preparedContexts[1].messages.map((message) => message.content).join('\n'),
-    /Persisted archive summary for the next chat turn\./,
+    /Persisted archive summary: the first turn requested the initial page\./,
   )
+  const secondPayload = loopMessages[1].map((message) => message.content).join('\n')
+  assert.doesNotMatch(secondPayload, /^First turn$/m, 'archive-covered user text must not be replayed')
+  assert.match(secondPayload, /First reply/)
+  assert.match(secondPayload, /Second turn/)
 })
 
 async function waitUntil(predicate, timeoutMs = 3000) {
@@ -415,8 +538,12 @@ test('TurnEngine owns a text turn and persists the final assistant message', asy
 
   assert.equal(engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId: 'turn-text' }).status, 'completed')
   assert.deepEqual(events('turn-text').map((event) => event.type), [
-    'turn.started', 'model.phase', 'model.phase', 'assistant.delta', 'turn.checkpoint', 'turn.completed',
+    'turn.started', 'model.phase', 'model.phase', 'model.phase', 'assistant.delta', 'turn.checkpoint', 'turn.completed',
   ])
+  assert.deepEqual(
+    events('turn-text').filter((event) => event.type === 'model.phase').map((event) => event.payload.phase),
+    ['started', 'waiting_first_token', 'completed'],
+  )
   assert.equal(listMessages({ userId, sessionId: 'turn-engine-session' }).at(-1).content, '服务端完成。')
 })
 
@@ -568,6 +695,9 @@ test('TurnEngine persists and applies agent, skill, memory, and tools context', 
   assert.equal(promptRequest.query, 'use memory and review skill')
   assert.equal(promptRequest.includeRecentTranscript, false)
   assert.deepEqual(toolRequest.toolsConfig, { enabled: ['read_file'], disabled: ['bash_exec'] })
+  assert.equal(toolRequest.prompt, 'use memory and review skill')
+  assert.deepEqual(toolRequest.skillIds, ['skill-review'])
+  assert.ok(toolRequest.messages.some((message) => message.role === 'user' && message.content === 'use memory and review skill'))
   assert.equal(loopOptions.messages[0].content, '# Skill\nreview carefully')
   assert.equal(loopOptions.messages[1].content, '# Memory\nproject uses SQLite')
   assert.deepEqual(loopOptions.toolSpecs.map((spec) => spec.function.name), ['read_file'])
@@ -1157,8 +1287,12 @@ test('TurnEngine runs a multi-round tool call and records its lifecycle', async 
 
   assert.equal(modelCalls, 2)
   assert.equal(executions, 1)
-  const types = events('turn-tools').map((event) => event.type)
+  const turnEvents = events('turn-tools')
+  const types = turnEvents.map((event) => event.type)
   for (const type of ['tool.call', 'tool.started', 'tool.completed', 'turn.completed']) assert.ok(types.includes(type))
+  const started = turnEvents.find((event) => event.type === 'tool.started')
+  assert.equal(started.payload.args.path, 'README.md')
+  assert.equal(started.payload.outputReplay, 'live_only')
 })
 
 test('TurnEngine serializes lifecycle events emitted by parallel tools', async () => {
@@ -1282,6 +1416,7 @@ test('TurnEngine preserves completed tools across a retryable model interruption
     .find((message) => message.id === `${turnId}:assistant`)
   assert.equal(interruptedEvidence?.modelContext?.turnEvidence, true)
   assert.equal(interruptedEvidence?.modelContext?.evidenceState, 'interrupted')
+  assert.equal(interruptedEvidence?.modelContext?.serverLastSequence, interrupted.sequence)
   assert.match(interruptedEvidence?.content || '', /durable README content/)
   assert.equal(executions, 1)
 
@@ -1487,6 +1622,8 @@ test('TurnEngine maps an incomplete loop result to failure instead of completion
   assert.equal(turnEvents.some((event) => event.type === 'turn.completed'), false)
   assert.equal(failed.payload.code, 'TURN_INCOMPLETE')
   assert.equal(failed.payload.error.retryable, true)
+  assert.equal(failed.payload.message, '任务未完全完成，已保留当前进展。')
+  assert.doesNotMatch(failed.payload.message, /Turn did not complete/)
   assert.equal(failed.payload.partialText, 'The requested mutation could not be verified.')
   assert.deepEqual(failed.payload.artifactIds, ['artifact-unverified'])
   assert.equal(engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId }).status, 'failed')

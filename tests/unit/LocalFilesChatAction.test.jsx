@@ -28,7 +28,7 @@ function setupDom() {
   return dom
 }
 
-test('local-file chat wording renders an inline grant card and enables read tools', async () => {
+test('local-file chat wording renders an in-app grant dialog and enables read tools', async () => {
   const request = buildLocalPathPreflight('\u4f60\u80fd\u9605\u8bfb"D:\\destok\\money"\u8fd9\u4e2a\u9879\u76ee\u5417')
   assert.deepEqual(request, { paths: ['D:\\destok\\money'], accessMode: 'read_only' })
 
@@ -54,10 +54,14 @@ test('local-file chat wording renders an inline grant card and enables read tool
       )
     })
 
+    const modal = rootElement.querySelector('[data-testid="directory-approval-modal"]')
     const card = rootElement.querySelector('[data-testid="directory-approval-card"]')
     const pathInput = rootElement.querySelector('#directory-approval-path')
     const modeSelect = rootElement.querySelector('#directory-approval-mode')
+    assert.ok(modal)
     assert.ok(card)
+    assert.equal(card.getAttribute('role'), 'dialog')
+    assert.equal(card.getAttribute('aria-modal'), 'true')
     assert.equal(pathInput.value, 'D:\\destok\\money')
     assert.equal(modeSelect.value, 'read_only')
 
@@ -69,6 +73,65 @@ test('local-file chat wording renders an inline grant card and enables read tool
       path: 'D:\\destok\\money', accessMode: 'read_only', usePicker: false, trustWorkspaceConfig: false,
     }])
     assert.deepEqual(resolveLocalPathToolNames([], request), ['list_directory', 'read_file'])
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('picker and grant authorization keep an explicit cancellation control while busy', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  let rejected = 0
+  const renderModal = (busy) => (
+    <DirectoryApprovalModal
+      open
+      request={{ path: 'D:\\destok\\money', requiredAccessMode: 'read_write' }}
+      busy={busy}
+      error=""
+      onAuthorize={() => {}}
+      onReject={() => { rejected += 1 }}
+    />
+  )
+  try {
+    await act(async () => {
+      root.render(renderModal('grant'))
+    })
+
+    const modal = rootElement.querySelector('[data-testid="directory-approval-modal"]')
+    const card = rootElement.querySelector('[data-testid="directory-approval-card"]')
+    const cancelButton = rootElement.querySelector('[data-testid="directory-approval-cancel"]')
+    const pickerButton = rootElement.querySelector('[data-testid="directory-approval-picker"]')
+    const authorizeButton = rootElement.querySelector('[data-testid="directory-approval-authorize"]')
+    assert.equal(card.getAttribute('aria-busy'), 'true')
+    assert.ok(cancelButton)
+    assert.equal(cancelButton.disabled, false)
+    assert.equal(pickerButton.disabled, true)
+    assert.equal(authorizeButton.disabled, true)
+
+    await act(async () => {
+      cancelButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    assert.equal(rejected, 1)
+
+    await act(async () => {
+      root.render(renderModal('picker'))
+    })
+    assert.equal(rootElement.querySelector('[data-testid="directory-approval-cancel"]').disabled, false)
+    assert.equal(rootElement.querySelector('[data-testid="directory-approval-picker"]').disabled, true)
+    assert.equal(rootElement.querySelector('[data-testid="directory-approval-authorize"]').disabled, true)
+
+    await act(async () => {
+      rootElement.querySelector('[data-testid="directory-approval-cancel"]')
+        .dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    assert.equal(rejected, 2)
+
+    await act(async () => {
+      modal.dispatchEvent(new dom.window.MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+    })
+    assert.equal(rejected, 3)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

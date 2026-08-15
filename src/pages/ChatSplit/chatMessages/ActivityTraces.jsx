@@ -7,6 +7,12 @@ import LiveElapsed from '../../../components/LiveElapsed.jsx'
 // Execution traces (reasoning status / tool timeline) use English technical
 // labels regardless of UI language: they are technical facts.
 
+const LIVE_COMMAND_TOOLS = new Set(['shell', 'bash', 'bash_exec', 'run_command', 'bash_background', 'docker_exec'])
+
+function shouldAutoExpandToolCall(call) {
+  return call?.status === 'running' && LIVE_COMMAND_TOOLS.has(call?.name)
+}
+
 export function ReasoningTrace({ text = '', streaming = false, label = '', testId }) {
   // Providers can stream very large private reasoning payloads. Rendering that
   // payload makes the answer harder to follow and can freeze long chats. Keep
@@ -15,10 +21,11 @@ export function ReasoningTrace({ text = '', streaming = false, label = '', testI
   return <div className="chat-thinking-line" role="status" aria-live="polite" data-testid={testId} data-has-reasoning={Boolean(text)}><Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /><span>{label || 'Thinking…'}</span><LiveElapsed className="chat-thinking-elapsed" /></div>
 }
 
-export function ToolCallTrace({ calls = [], artifacts = [], onOpenArtifact }) {
+export function ToolCallTrace({ calls = [], stepOffset = 0, artifacts = [], onOpenArtifact }) {
   const normalizedCalls = Array.isArray(calls) ? calls : []
   const [showAll, setShowAll] = useState(false)
   const [expandedCallKey, setExpandedCallKey] = useState(null)
+  const [collapsedDefaultCallKey, setCollapsedDefaultCallKey] = useState(null)
   const visibleLimit = 4
   const hiddenCount = Math.max(0, normalizedCalls.length - visibleLimit)
   const startIndex = showAll ? 0 : hiddenCount
@@ -26,6 +33,12 @@ export function ToolCallTrace({ calls = [], artifacts = [], onOpenArtifact }) {
   const running = normalizedCalls.some((call) => call.status === 'running')
   const failed = normalizedCalls.some((call) => call.status === 'error')
   const cancelled = normalizedCalls.some((call) => call.status === 'cancelled')
+  const defaultExpandedIndex = normalizedCalls.findLastIndex(shouldAutoExpandToolCall)
+  const defaultExpandedCallKey = defaultExpandedIndex >= 0
+    ? stableCallKey(normalizedCalls[defaultExpandedIndex], normalizedCalls, defaultExpandedIndex)
+    : null
+  const autoExpandedCallKey = defaultExpandedCallKey !== collapsedDefaultCallKey ? defaultExpandedCallKey : null
+  const effectiveExpandedCallKey = autoExpandedCallKey || expandedCallKey
 
   if (normalizedCalls.length === 0) return null
 
@@ -53,8 +66,9 @@ export function ToolCallTrace({ calls = [], artifacts = [], onOpenArtifact }) {
           deepseek-harness tool display. */}
       <div className="chat-tool-list" role="list">
         {visibleCalls.map((call, index) => {
-          const stepNumber = startIndex + index + 1
-          const callKey = stableCallKey(call, normalizedCalls, stepNumber - 1)
+          const callIndex = startIndex + index
+          const stepNumber = stepOffset + callIndex + 1
+          const callKey = stableCallKey(call, normalizedCalls, callIndex)
           return (
             <div
               key={callKey}
@@ -67,8 +81,16 @@ export function ToolCallTrace({ calls = [], artifacts = [], onOpenArtifact }) {
                     stepNumber={stepNumber}
                     artifacts={artifacts}
                     onOpenArtifact={onOpenArtifact}
-                    expanded={expandedCallKey === callKey}
-                    onToggle={() => setExpandedCallKey((current) => current === callKey ? null : callKey)}
+                    expanded={effectiveExpandedCallKey === callKey}
+                    onToggle={() => {
+                      if (effectiveExpandedCallKey === callKey) {
+                        setExpandedCallKey(null)
+                        if (defaultExpandedCallKey === callKey) setCollapsedDefaultCallKey(callKey)
+                        return
+                      }
+                      setExpandedCallKey(callKey)
+                      setCollapsedDefaultCallKey(defaultExpandedCallKey)
+                    }}
                   />}
             </div>
           )

@@ -19,6 +19,7 @@ const SKILL_ARTIFACT_TOOL = Object.freeze({
   doc: 'create_docx',
   excel: 'create_xlsx',
   webpage: 'create_html_app',
+  pdf: 'create_pdf',
   image: 'generate_image',
 })
 
@@ -29,6 +30,7 @@ const SKILL_ID_ALIASES = Object.freeze({
   doc: ['doc', 'write-doc'],
   excel: ['excel', 'analyze-excel'],
   webpage: ['webpage', 'html', 'website'],
+  pdf: ['pdf'],
   image: ['image', 'imagegen', 'image-gen'],
 })
 
@@ -46,6 +48,7 @@ const ARTIFACT_TERMS = Object.freeze({
   docx: /\bdocx?\b|\.docx?\b|\bword\b|word\s*文档|文档|报告|会议纪要|纪要|周报|合同|简历|document|report|minutes/gi,
   xlsx: /\bxlsx?\b|\.xlsx?\b|\bexcel\b|工作簿|电子表格|spread\s*sheet/gi,
   html: /\bhtml?\b|\.html?\b|\bweb\s*page\b|\bwebsite\b|\blanding\s*page\b|网页|网站|落地页/gi,
+  pdf: /\bpdf\b|\.pdf\b|便携式文档/gi,
   image: /\bimages?\b|\bpictures?\b|\bphotos?\b|\billustrations?\b|\bposters?\b|\bcover\s+art\b|\bhero\s+art\b|\u56fe\u7247|\u56fe\u50cf|\u63d2\u56fe|\u914d\u56fe|\u6d77\u62a5|\u5c01\u9762\u56fe/gi,
 })
 
@@ -77,8 +80,68 @@ const STRONG_ARTIFACT_FORMAT = Object.freeze({
   docx: /\bdocx?\b|\.docx?\b|\bword\b|word\s*document|\u0057\u006f\u0072\u0064\s*\u6587\u6863|\u6587\u6863/i,
   xlsx: /\bxlsx?\b|\.xlsx?\b|\bexcel\b|spread\s*sheet|\u5de5\u4f5c\u7c3f|\u7535\u5b50\u8868\u683c/i,
   html: /\bhtml?\b|\.html?\b|\bweb\s*page\b|\bwebsite\b|\blanding\s*page\b|\u7f51\u9875|\u7f51\u7ad9|\u843d\u5730\u9875/i,
+  pdf: /\bpdf\b|\.pdf\b|\u4fbf\u643a\u5f0f\u6587\u6863/i,
   image: /\bimages?\b|\bpictures?\b|\bphotos?\b|\billustrations?\b|\bposters?\b|\u56fe\u7247|\u56fe\u50cf|\u63d2\u56fe|\u914d\u56fe|\u6d77\u62a5|\u5c01\u9762\u56fe/i,
 })
+
+// A terse follow-up such as “这里不足，修改一下” intentionally omits the
+// file format because the immediately preceding deliverable is the subject.
+// This is deliberately action-oriented: merely discussing or asking about an
+// older file must not keep artifact generators enabled forever.
+const ARTIFACT_REVISION_ACTION = /(?:继续(?:修改|编辑|完善|优化|调整|润色|改进|补充|更新|迭代)|(?:请|帮我|麻烦)?(?:把|将)?(?:它|这个|这里|刚才的|上一个|上一版|该(?:文件|页面|文档|表格|演示|幻灯片))?[^。！？!?\n]{0,24}(?:修改|编辑|完善|优化|调整|润色|改进|补充|更新|迭代|重做|重制|替换|换成|改成|改(?:一?下)?|换(?:一?下|个)?|删(?:一?下|掉)?|删除|添加|加(?:一?下|上)?|补(?:一?下|上)?|缩小|放大)|(?:再|重新|继续|请|帮我|麻烦)?(?:改|换|删|加|补|调|修)(?:一?下|个|掉|成|为)?[^。！？!?\n]{0,24}|(?:这里|这版|上一版|刚才的)[^。！？!?\n]{0,24}(?:不足|不对|不好|有问题)[^。！？!?\n]{0,20}(?:改|修|调整|优化|完善)|(?:revise|edit|update|improve|refine|adjust|polish|iterate|redo|redesign|change|replace|remove|add|continue\s+(?:working|editing|improving))\b)/i
+const ARTIFACT_REVISION_DENIAL = /(?:不要|不用|无需|别|禁止|停止|取消)[^，,；;：:。！？!?\n]{0,20}(?:修改|编辑|更新|优化|调整|重做|生成|导出)|(?:do\s+not|don't|dont|never|stop|cancel)[^,;:.!?\n]{0,24}(?:revise|edit|update|change|generate|export)/i
+const ARTIFACT_REVISION_DISCUSSION = /^(?:为什么|为何|怎么|如何|请?(?:解释|说明|分析|讨论)|告诉我)[^。！？!?\n]{0,40}|(?:修改|编辑|调整|优化|改|换)[^。！？!?\n]{0,10}(?:是什么|什么意思|含义|原则|方法|逻辑|代码|工具)/i
+const ARTIFACT_REPLACE_ORIGINAL_CUE = /(?:原地(?:修改|编辑|更新|覆盖)|(?:修改|编辑|更新|覆盖|改动?|调整)(?:原版|原文件|原文档|原表格|原演示|当前文件|当前版本|上一版)|(?:在|基于)(?:原版|原文件|当前文件|当前版本|上一版)(?:上|中|直接)?(?:修改|编辑|更新|覆盖|改动?|调整)|直接覆盖(?:原版|原文件|当前文件|上一版)|(?:edit|update|modify|overwrite)\s+(?:the\s+)?(?:original|existing|same)\s+(?:file|artifact|document|deck|workbook|page)|in[ -]?place)/i
+const ARTIFACT_CREATE_COPY_CUE = /(?:(?:新建|另建|另做|另生成|另外生成|重新创建)(?:一|1)?(?:个|份)?(?:新)?(?:文件|版本|副本)?|(?:创建|生成|制作)(?:一|1)?(?:个|份)?新(?:文件|版本|副本)|另存为|(?:create|make|save)\s+(?:a\s+)?(?:new|separate)\s+(?:file|copy|version))/i
+const ARTIFACT_CREATE_COPY_DENIAL = /(?:(?:不要|别|无需)(?:再)?(?:新建|另建|另做|新生成|创建新(?:文件|版本|副本))|without\s+creating\s+(?:a\s+)?new\s+(?:file|copy))/gi
+const ARTIFACT_REPLACE_ORIGINAL_DENIAL = /(?:(?:保留|不改|不要修改|不要覆盖)(?:原版|原文件|当前文件|上一版)|keep\s+(?:the\s+)?original)/gi
+const CODE_SNIPPET_DENIAL = /(?:不要|别|无需|不用|禁止|避免)[^。！？!?\n]{0,24}(?:代码|源码|code|source)|(?:do\s+not|don't|dont|never|without)[^.!?\n]{0,24}(?:code|source)/i
+const EXPLICIT_CODE_SNIPPET_REQUEST = /(?:代码片段|源码片段|示例代码|完整代码|完整源码|(?:html|css|javascript|typescript|python|java|c\+\+|sql)\s*(?:代码|源码)|\bcode\s+snippet\b|\bfull\s+source(?:\s+code)?\b)|(?:给我|输出|提供|展示|贴出|发我|返回|生成|写出)[^。！？!?\n]{0,20}(?:代码|源码)|(?:show|provide|print|paste|return|write|give\s+me)[^.!?\n]{0,20}(?:code|source)/i
+
+export function resolveArtifactRevisionMode(prompt = '') {
+  const text = String(prompt || '').trim()
+  if (!text) return 'unspecified'
+  ARTIFACT_CREATE_COPY_DENIAL.lastIndex = 0
+  ARTIFACT_REPLACE_ORIGINAL_DENIAL.lastIndex = 0
+  const createCopyDenied = ARTIFACT_CREATE_COPY_DENIAL.test(text)
+  const replaceOriginalDenied = ARTIFACT_REPLACE_ORIGINAL_DENIAL.test(text)
+  ARTIFACT_CREATE_COPY_DENIAL.lastIndex = 0
+  ARTIFACT_REPLACE_ORIGINAL_DENIAL.lastIndex = 0
+  const replaceOriginal = createCopyDenied
+    || ARTIFACT_REPLACE_ORIGINAL_CUE.test(text.replace(ARTIFACT_REPLACE_ORIGINAL_DENIAL, ''))
+  const createCopy = replaceOriginalDenied
+    || ARTIFACT_CREATE_COPY_CUE.test(text.replace(ARTIFACT_CREATE_COPY_DENIAL, ''))
+  if (replaceOriginal && createCopy) return 'conflict'
+  if (replaceOriginal) return 'replace_original'
+  if (createCopy) return 'create_copy'
+  return 'unspecified'
+}
+
+export function isExplicitCodeSnippetRequest(prompt = '') {
+  const text = String(prompt || '').trim()
+  return Boolean(
+    text
+      && !CODE_SNIPPET_DENIAL.test(text)
+      && EXPLICIT_CODE_SNIPPET_REQUEST.test(text),
+  )
+}
+
+export function isArtifactRevisionRequest(prompt = '') {
+  const text = String(prompt || '').trim()
+  if (!text
+    || GLOBAL_DENIAL.test(text)
+    || ARTIFACT_REVISION_DENIAL.test(text)
+    || ARTIFACT_REVISION_DISCUSSION.test(text)) return false
+  return ARTIFACT_REVISION_ACTION.test(text)
+    || resolveArtifactRevisionMode(text) !== 'unspecified'
+}
+
+function normalizePriorArtifactTypes(values) {
+  return new Set((Array.isArray(values) ? values : [])
+    .map((value) => String(value || '').trim().toLowerCase().replace(/^\./, ''))
+    .map((value) => value === 'ppt' ? 'pptx' : value === 'doc' ? 'docx' : value === 'xls' ? 'xlsx' : value)
+    .filter((value) => Object.hasOwn(ARTIFACT_TERMS, value)))
+}
 
 export function parseArtifactSkillId(prompt = '') {
   const match = String(prompt || '').trim().match(SKILL_PREFIX)
@@ -120,12 +183,15 @@ export function hasExplicitArtifactRequest(prompt = '', type) {
   return false
 }
 
-export function detectArtifactIntent(prompt = '', { skillId = undefined } = {}) {
+export function detectArtifactIntent(prompt = '', { skillId = undefined, priorArtifactTypes = [] } = {}) {
   const text = String(prompt || '')
   const resolvedSkill = skillId === undefined ? parseArtifactSkillId(text) : skillId
   const skillTool = resolvedSkill ? resolveArtifactToolForSkillId(resolvedSkill) : null
   const explicitPptx = hasExplicitArtifactRequest(text, 'pptx')
   const explicitDocx = hasExplicitArtifactRequest(text, 'docx')
+  const explicitXlsx = hasExplicitArtifactRequest(text, 'xlsx')
+  const explicitHtml = hasExplicitArtifactRequest(text, 'html')
+  const explicitPdf = hasExplicitArtifactRequest(text, 'pdf')
   const explicitImage = hasExplicitArtifactRequest(text, 'image')
   const allowAdditionalFormat = (type) => Boolean(
     ADDITIONAL_ARTIFACT_CUE.test(text)
@@ -133,17 +199,22 @@ export function detectArtifactIntent(prompt = '', { skillId = undefined } = {}) 
       && hasExplicitArtifactRequest(text, type),
   )
   const pptx = skillTool === 'create_pptx' || (skillTool ? allowAdditionalFormat('pptx') : explicitPptx)
+  const explicitAny = Boolean(skillTool || explicitPptx || explicitDocx || explicitXlsx || explicitHtml || explicitPdf || explicitImage)
+  const inherited = !explicitAny && isArtifactRevisionRequest(text)
+    ? normalizePriorArtifactTypes(priorArtifactTypes)
+    : new Set()
   return {
-    pptx,
+    pptx: pptx || inherited.has('pptx'),
     // "PPT report" / "PPT 汇报" describes the deck's purpose; it is not a
     // second Word deliverable. Once PPT intent is explicit, require both a
     // multi-deliverable cue and a strong Word/DOCX term before adding DOCX.
     docx: skillTool === 'create_docx'
       || (skillTool
         ? allowAdditionalFormat('docx')
-        : explicitDocx && (!pptx || allowAdditionalFormat('docx'))),
-    xlsx: skillTool === 'create_xlsx' || (skillTool ? allowAdditionalFormat('xlsx') : hasExplicitArtifactRequest(text, 'xlsx')),
-    html: skillTool === 'create_html_app' || (skillTool ? allowAdditionalFormat('html') : hasExplicitArtifactRequest(text, 'html')),
-    image: skillTool === 'generate_image' || (skillTool ? allowAdditionalFormat('image') : explicitImage),
+        : explicitDocx && (!pptx || allowAdditionalFormat('docx'))) || inherited.has('docx'),
+    xlsx: skillTool === 'create_xlsx' || (skillTool ? allowAdditionalFormat('xlsx') : explicitXlsx) || inherited.has('xlsx'),
+    html: skillTool === 'create_html_app' || (skillTool ? allowAdditionalFormat('html') : explicitHtml) || inherited.has('html'),
+    pdf: skillTool === 'create_pdf' || (skillTool ? allowAdditionalFormat('pdf') : explicitPdf) || inherited.has('pdf'),
+    image: skillTool === 'generate_image' || (skillTool ? allowAdditionalFormat('image') : explicitImage) || inherited.has('image'),
   }
 }

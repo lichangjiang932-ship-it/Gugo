@@ -1,8 +1,39 @@
 import { TOOL_CALL_STATUS } from '../../store/taskStatus.js'
+import { normalizeModelUsage } from '../../../shared/modelUsage.js'
 import { DEFAULT_SNAPSHOT_PAGE_SIZE, DEFAULT_SNAPSHOT_REVISION_ATTEMPTS, headers, parseResponse } from './turnTransport.js'
 
 function parseToolResult(content) {
   try { return JSON.parse(content) } catch { return null }
+}
+
+function finiteTimestamp(value) {
+  if (value == null || value === '') return null
+  const normalized = Number(value)
+  return Number.isFinite(normalized) && normalized >= 0 ? normalized : null
+}
+
+function nonNegativeInteger(value) {
+  if (value == null || value === '') return null
+  const normalized = Number(value)
+  return Number.isInteger(normalized) && normalized >= 0 ? normalized : null
+}
+
+function snapshotLastSequence(context) {
+  if (!context || typeof context !== 'object') return null
+  for (const key of [
+    'serverLastSequence',
+    'server_last_sequence',
+    'lastSequence',
+    'last_sequence',
+    'eventSequence',
+    'event_sequence',
+    'pausedSequence',
+    'paused_sequence',
+  ]) {
+    const sequence = nonNegativeInteger(context[key])
+    if (sequence !== null) return sequence
+  }
+  return null
 }
 
 function snapshotText(value, fallback = '') {
@@ -128,7 +159,15 @@ function turnEvidenceMeta(message) {
   const deliveryArtifactIds = optionalContextArtifactIds(context, 'deliveryArtifactIds')
 
   return {
-    ...(state === 'failed' ? { failed: true } : { interrupted: true }),
+    ...(state === 'failed'
+      ? { failed: true }
+      : {
+          interrupted: true,
+          streaming: true,
+          turnCompletedAt: null,
+          latency: null,
+          serverConnectionState: 'interrupted',
+        }),
     serverFailure: failure,
     serverPartialText: String(message?.content || ''),
     serverArtifactIds: artifactIds,
@@ -203,7 +242,13 @@ export function normalizeServerSessionSnapshot(snapshot) {
   if (!snapshot || snapshot.complete !== true) return null
   const rawMessages = Array.isArray(snapshot.messages) ? snapshot.messages : []
   const resultRows = new Map()
+  const legacyTurnStartedAt = new Map()
   rawMessages.forEach((message, index) => {
+    if (message?.role === 'user') {
+      const turnId = String(message?.modelContext?.turnId || '').trim()
+      const createdAt = finiteTimestamp(message?.createdAt)
+      if (turnId && createdAt !== null) legacyTurnStartedAt.set(turnId, createdAt)
+    }
     if (message?.role !== 'tool') return
     const callId = String(
       message?.modelContext?.toolCallId || message?.tool_call_id || message?.toolCallId || '',
@@ -240,6 +285,40 @@ export function normalizeServerSessionSnapshot(snapshot) {
       const serverDeliveryArtifactIds = message.role === 'assistant'
         ? optionalContextArtifactIds(message?.modelContext, 'deliveryArtifactIds')
         : undefined
+      const modelUsage = message.role === 'assistant'
+        ? normalizeModelUsage(message?.modelContext?.usage)
+        : null
+      const assistantTurnId = message.role === 'assistant'
+        ? String(message?.modelContext?.turnId || '').trim()
+        : ''
+      const evidenceState = message.role === 'assistant'
+        && message?.modelContext?.turnEvidence === true
+        ? String(message.modelContext.evidenceState || '')
+        : ''
+      const interrupted = evidenceState === 'interrupted'
+      const serverLastSequence = message.role === 'assistant'
+        ? snapshotLastSequence(message?.modelContext)
+        : null
+      const storedTurnStartedAt = message.role === 'assistant'
+        ? finiteTimestamp(message?.modelContext?.turnStartedAt)
+        : null
+      const turnStartedAt = storedTurnStartedAt
+        ?? (assistantTurnId ? legacyTurnStartedAt.get(assistantTurnId) ?? null : null)
+      const storedTurnCompletedAt = message.role === 'assistant'
+        ? finiteTimestamp(message?.modelContext?.turnCompletedAt)
+        : null
+      const turnCompletedAt = interrupted
+        ? null
+        : storedTurnCompletedAt
+          ?? (message.role === 'assistant' ? finiteTimestamp(message?.createdAt) : null)
+      const storedLatency = message.role === 'assistant'
+        ? finiteTimestamp(message?.modelContext?.latency)
+        : null
+      const latency = storedLatency ?? (
+        turnStartedAt !== null && turnCompletedAt !== null
+          ? Math.max(0, turnCompletedAt - turnStartedAt)
+          : null
+      )
       const storedAttachments = message?.attachments ?? message?.modelContext?.attachments
       const attachments = message.role === 'user' && Array.isArray(storedAttachments)
         ? storedAttachments.filter((attachment) => attachment?.id).map((attachment) => ({
@@ -274,6 +353,16 @@ export function normalizeServerSessionSnapshot(snapshot) {
             ...(toolTrace.length ? { toolTrace } : {}),
             ...(serverArtifacts.length ? { serverArtifacts } : {}),
             ...(serverDeliveryArtifactIds !== undefined ? { serverDeliveryArtifactIds } : {}),
+            ...(modelUsage ? {
+              modelUsage,
+              actualPromptTokens: modelUsage.promptTokens,
+            } : {}),
+            ...(turnStartedAt !== null ? { turnStartedAt } : {}),
+            ...(turnCompletedAt !== null ? { turnCompletedAt } : {}),
+            ...(latency !== null ? { latency } : {}),
+            ...(serverLastSequence !== null
+              ? { serverLastSequence }
+              : interrupted ? { serverLastSequence: -1 } : {}),
             ...turnEvidenceMeta(message),
             ...pausedTurnMeta(message),
           },

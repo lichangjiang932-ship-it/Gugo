@@ -5,6 +5,7 @@ import {
   buildSessionsBlock,
   buildSkillsBlockFromPrepared,
   prepareInlineSkillsForPrompt,
+  prepareSkillCatalogForPrompt,
   prepareSkillsForPrompt,
 } from './promptCompiler.js'
 import { prepareMemoryInjectionContext } from './memoryContextService.js'
@@ -40,6 +41,7 @@ export function prepareBackgroundPromptContext({
   env = process.env,
 } = {}, dependencies = {}) {
   const prepareSkills = dependencies.prepareSkillsForPrompt || prepareSkillsForPrompt
+  const prepareSkillCatalog = dependencies.prepareSkillCatalogForPrompt || prepareSkillCatalogForPrompt
   const prepareMemory = dependencies.prepareMemoryInjectionContext || prepareMemoryInjectionContext
   const warn = dependencies.logWarn || logWarn
   const readInstructions = dependencies.readWorkspaceInstructions || readWorkspaceInstructions
@@ -47,6 +49,9 @@ export function prepareBackgroundPromptContext({
   const effectiveAgentId = agentId ? String(agentId) : null
   const registeredSkills = safeStep('background skill context failed', [], () => (
     prepareSkills({ userId, skillIds: normalizedSkillIds })
+  ), warn)
+  const catalogSkills = safeStep('background skill catalog failed', [], () => (
+    prepareSkillCatalog({ userId })
   ), warn)
   const inlineSkills = safeStep('background inline skill context failed', [], () => (
     prepareInlineSkillsForPrompt({ skillIds: normalizedSkillIds, skillDefinitions })
@@ -58,6 +63,7 @@ export function prepareBackgroundPromptContext({
     userId,
     agentId: effectiveAgentId,
     skills: preparedSkills,
+    catalogSkills: [...catalogSkills, ...preparedSkills],
   }), warn)
   const tokenCap = Number(env.MEMORY_INJECT_TOKEN_CAP || 800)
   const memory = safeStep('background memory context failed', { text: '', memoryIds: [] }, () => prepareMemory({
@@ -93,6 +99,7 @@ export function prepareTurnPromptContext({
   const readAgent = dependencies.getAgent || getAgent
   const ensureAgent = dependencies.ensureDefaultAgent || ensureDefaultAgent
   const prepareSkills = dependencies.prepareSkillsForPrompt || prepareSkillsForPrompt
+  const prepareSkillCatalog = dependencies.prepareSkillCatalogForPrompt || prepareSkillCatalogForPrompt
   const prepareMemory = dependencies.prepareMemoryInjectionContext || prepareMemoryInjectionContext
   const warn = dependencies.logWarn || logWarn
   const readInstructions = dependencies.readWorkspaceInstructions || readWorkspaceInstructions
@@ -107,6 +114,9 @@ export function prepareTurnPromptContext({
   const effectiveAgentId = agent?.id || (agentId ? String(agentId) : null)
   const registeredSkills = safeStep('skill context failed', [], () => (
     prepareSkills({ userId, skillIds: normalizedSkillIds })
+  ), warn)
+  const catalogSkills = safeStep('skill catalog failed', [], () => (
+    prepareSkillCatalog({ userId })
   ), warn)
   const inlineSkills = safeStep('inline skill context failed', [], () => (
     prepareInlineSkillsForPrompt({ skillIds: normalizedSkillIds, skillDefinitions })
@@ -123,6 +133,7 @@ export function prepareTurnPromptContext({
     userId,
     agentId: effectiveAgentId,
     skills: preparedSkills,
+    catalogSkills: [...catalogSkills, ...preparedSkills],
   }), warn)
   const sessions = safeStep('session block failed', null, () => buildSessionsBlock({
     userId,
@@ -152,5 +163,7 @@ export function prepareTurnPromptContext({
     effectiveAgentId,
     skillIds: preparedSkills.map((skill) => String(skill.id)),
     memoryIds: memory.memoryIds,
+    compactionArchiveId: sessions?.sources?.archiveId || null,
+    compactionBoundary: sessions?.sources?.compactionBoundary || null,
   }
 }
