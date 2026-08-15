@@ -11,7 +11,7 @@ import { artifactHasInlineReference, artifactReferenceOpenPayload, buildMessageA
 import { formatMessageDateTime, formatMessageTime } from '../../../lib/messageTime.js'
 import { copyTextToClipboard } from '../../../lib/clipboard.js'
 import { ArtifactReferenceLinks } from './ArtifactCards.jsx'
-import { ProgressTrace, ToolCallTrace } from './ActivityTraces.jsx'
+import { ToolCallTrace } from './ActivityTraces.jsx'
 import ActivityStream from './ActivityStream.jsx'
 import { buildCollapsedUserMessagePreview, shouldCollapseUserMessage, splitUserSkillCommand } from './messageContent.js'
 import DirectoryRequestCard from '../../taskRun/DirectoryRequestCard.jsx'
@@ -196,7 +196,6 @@ function AssistantContent({ artifactPreview, isCurrentStreamingMessage, isMessag
           <MarkdownRenderer artifactReferences={deliveryArtifactReferences} streaming={isCurrentStreamingMessage} onLinkClick={openInlineArtifact}>{presentation.text}</MarkdownRenderer>
         )}
       </div>
-      <ProgressTrace progress={msg.meta?.progress} />
       {hasChoices(msg.content) && isMessageComplete && (
         <ChoicePicker
           text={msg.content}
@@ -232,7 +231,6 @@ function CollapsedArtifactContent({ artifactPreview, msg, onOpenArtifact }) {
           <ToolCallTrace calls={msg.meta.toolCalls} artifacts={artifactReferences} onOpenArtifact={openToolArtifact} />
         )}
         <p>Server turn completed</p>
-        <ProgressTrace progress={msg.meta?.progress} />
       </div>
       <ArtifactReferenceLinks msg={msg} preview={artifactPreview} onOpen={onOpenArtifact} />
     </>

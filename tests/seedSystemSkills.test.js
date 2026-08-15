@@ -106,6 +106,30 @@ test('disabled seed manifests remove only the repository-owned system skill', ()
   }
 })
 
+test('system skills removed from the seed are swept so installs converge', () => {
+  const seedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-seed-sweep-'))
+  const db = createSeedDb()
+  try {
+    writeSeedSkill(seedRoot)
+    seedSystemSkills({ seedRoot, db, silent: true })
+    // Simulate an older release: the DB still holds a system skill whose
+    // directory no longer exists in the current repository seed.
+    db.prepare(`INSERT INTO skills
+      (id, user_id, name, description, version, icon, permissions_json, created_at, updated_at)
+      VALUES ('legacy-skill', NULL, 'Legacy', 'Old', '1', 'old', '[]', 1, 1)`).run()
+    db.prepare(`INSERT INTO skill_assets (skill_id, path, content) VALUES ('legacy-skill', 'SKILL.md', 'old')`).run()
+
+    const results = seedSystemSkills({ seedRoot, db, silent: true })
+    assert.ok(results.some((result) => result.id === 'legacy-skill' && result.status === 'swept'))
+    assert.equal(db.prepare('SELECT COUNT(*) count FROM skills WHERE id = ?').get('legacy-skill').count, 0)
+    assert.equal(db.prepare('SELECT COUNT(*) count FROM skill_assets WHERE skill_id = ?').get('legacy-skill').count, 0)
+    assert.equal(db.prepare('SELECT COUNT(*) count FROM skills WHERE id = ?').get('demo-skill').count, 1)
+  } finally {
+    db.close()
+    fs.rmSync(seedRoot, { recursive: true, force: true })
+  }
+})
+
 test('seed package validation rejects unsupported binary files and package overflow', () => {
   const seedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-seed-limits-'))
   try {

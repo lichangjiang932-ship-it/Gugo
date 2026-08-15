@@ -1,7 +1,5 @@
 import { ChevronDown, Quote } from 'lucide-react'
-import { DEFAULT_MODEL_CONTEXT_WINDOW, estimateClientContextUsage } from '../../lib/contextUsage.js'
 import { useT } from '../../i18n/I18nProvider.jsx'
-import ContextUsagePanel from './chatMessages/ContextUsagePanel.jsx'
 import MessageRow from './chatMessages/MessageRow.jsx'
 import NewConversationWelcome from './chatMessages/NewConversationWelcome.jsx'
 import PermissionRequestCard from './chatMessages/PermissionRequestCard.jsx'
@@ -11,13 +9,7 @@ export default function ChatMessages({
   messages,
   state,
   workbenchMessage,
-  showContextPanel,
-  setShowContextPanel,
-  selectedModel,
   isGenerating = false,
-  contextWindow = DEFAULT_MODEL_CONTEXT_WINDOW,
-  toolSpecs = [],
-  systemPrompt = '',
   onPermAllow,
   onPermDeny,
   onNavigatePermissions,
@@ -43,26 +35,12 @@ export default function ChatMessages({
   const generatingMessageId = isGenerating
     ? [...messages].reverse().find((message) => message?.role === 'assistant')?.id
     : null
-  const contextUsage = estimateClientContextUsage({ messages, tools: toolSpecs, systemPrompt, contextWindow })
-  const resolvedContextWindow = contextUsage.contextWindow
 
   return (
     <div ref={bindContainer} className="chat-scroll-region relative flex-1 overflow-y-auto px-4 py-4 sm:px-7">
       <div className="chat-conversation-column mx-auto flex w-full max-w-[840px] flex-col gap-5">
         {workbenchMessage && (
           <div className="rounded-lg border border-ink/10 bg-paper-2/55 px-3 py-2 text-xs text-ink-soft">{workbenchMessage}</div>
-        )}
-        {/* 上下文详情只在点击输入框旁的用量圆环时显示,不再常驻左上角 */}
-        {showContextPanel && (
-          <ContextUsagePanel
-            contextUsage={contextUsage}
-            contextWindow={resolvedContextWindow}
-            messages={messages}
-            selectedModel={selectedModel}
-            showDetails
-            setShowDetails={setShowContextPanel}
-            t={t}
-          />
         )}
         {messages.length > 0 ? (
           <>

@@ -304,6 +304,28 @@ export function seedSystemSkills({
       results.push({ dir, status: 'error', code: error.code || 'SEED_SKILL_ERROR', error: error.message })
     }
   }
+
+  // Sweep repository-owned skills that no longer exist in the current seed.
+  // Without this, an old install keeps stale rows forever and the web app and
+  // desktop app report different skill counts for the same seed set.
+  const expectedIds = new Set()
+  for (const dir of skillDirs) {
+    try {
+      const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'skill.json'), 'utf8'))
+      if (manifest?.id) expectedIds.add(manifest.id)
+    } catch {
+      // The directory already failed above; nothing to track here.
+    }
+  }
+  for (const row of targetDb.prepare('SELECT id FROM skills WHERE user_id IS NULL').all()) {
+    if (expectedIds.has(row.id)) continue
+    targetDb.transaction(() => {
+      targetDb.prepare('DELETE FROM skill_assets WHERE skill_id = ?').run(row.id)
+      targetDb.prepare('DELETE FROM skills WHERE id = ? AND user_id IS NULL').run(row.id)
+    })()
+    results.push({ id: row.id, status: 'swept', version: null, reason: 'no longer in repository seed' })
+    if (!silent) logger.info(`[seed] ${row.id}: swept (not in current seed)`)
+  }
   return results
 }
 

@@ -68,6 +68,30 @@ test('ordinary questions expose only a stable read-only capability set', () => {
   assert.ok(!ANSWER_NAMES.includes('Agent'))
 })
 
+test('code generation and execution requests keep command execution tools', () => {
+  for (const prompt of [
+    '帮我生成一个随机数脚本',
+    '写一个 python 函数并运行它',
+    '写段代码测试一下这个接口',
+    '运行这段代码看看结果',
+    'Write a script that parses this log file.',
+    'Generate a small python program and run it.',
+  ]) {
+    const selected = namesOf(selectChat({ prompt }))
+    assert.ok(selected.includes('bash_exec'), `${prompt}: bash_exec`)
+    assert.ok(selected.includes('run_project_check'), `${prompt}: run_project_check`)
+  }
+  for (const prompt of [
+    '解释什么是函数',
+    '帮我分析这段代码哪里有问题',
+    '介绍一下 Python 的装饰器',
+  ]) {
+    const selected = namesOf(selectChat({ prompt }))
+    assert.ok(!selected.includes('bash_exec'), `${prompt}: answer mode`)
+    assert.deepEqual(selected, ANSWER_NAMES, prompt)
+  }
+})
+
 test('implicit delegated commands retain execution tools without unrelated generators', () => {
   for (const prompt of [
     '登录问题你来处理好',

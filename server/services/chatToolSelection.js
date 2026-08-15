@@ -17,6 +17,24 @@ const SCOPED_CONTENT_PRESERVATION_BOUNDARY = /\b(?:do not|don't|never)\b[^\r\n.!
 const SCOPED_CONTENT_FIDELITY_BOUNDARY = /\b(?:preserve|keep|retain)\b[^\r\n.!?;]{0,80}\b(?:article|body|text|wording|content)\b[^\r\n.!?;]{0,80}\b(?:do not|don't|never)\b[^\r\n.!?;]{0,32}\b(?:change|modify|edit|polish|delete|remove|add|rewrite|alter)\b[^\r\n.!?;]{0,32}\b(?:content|text|wording|paragraphs?|spelling|grammar|punctuation)\b|(?:\u4fdd\u7559|\u4fdd\u6301)[^\r\n\u3002\uff1b]{0,80}(?:\u6587\u7ae0|\u6b63\u6587|\u539f\u6587)[^\r\n\u3002\uff1b]{0,80}(?:\u4e0d\u8981|\u4e0d\u5f97|\u7981\u6b62)[^\r\n\u3002\uff1b]{0,32}(?:\u4fee\u6539|\u7f16\u8f91|\u6da6\u8272|\u5220\u51cf|\u589e\u52a0|\u6539\u5199)[^\r\n\u3002\uff1b]{0,24}(?:\u5185\u5bb9|\u6587\u5b57|\u6bb5\u843d|\u62fc\u5199|\u8bed\u6cd5|\u6807\u70b9)/i
 const EXECUTION_CONTINUATION = /^(?:continue(?:\s+(?:with\s+)?(?:it|this|the\s+(?:work|changes?|implementation)))?|go\s+ahead|proceed|approved?|i\s+(?:approve|authorize\s+you)(?:\s+to\s+(?:continue|proceed|execute|make\s+the\s+changes?))?|\u7ee7\u7eed(?:\u6267\u884c|\u5904\u7406|\u4fee\u6539|\u5b8c\u6210|\u505a|\u4e0b\u53bb)?(?:\u5427)?|\u6211(?:\u540c\u610f|\u6279\u51c6|\u6388\u6743\u7ed9\u4f60)(?:[\s,\uff0c]*(?:\u7ee7\u7eed|\u6267\u884c|\u4fee\u6539|\u5904\u7406|\u64cd\u4f5c))?|\u6388\u6743\u7ed9\u4f60(?:[\s,\uff0c]*(?:\u7ee7\u7eed|\u6267\u884c|\u4fee\u6539|\u5904\u7406|\u64cd\u4f5c))?)[.!?\u3002\uff01\uff1f\s]*$/i
 
+// Code generation and execution requests get the execution toolset even when
+// no file target is named. Otherwise the model receives read-only tools only
+// and tells the user "this environment has no code execution tools" although
+// bash_exec / run_command are available and approval-gated.
+const CODE_EXECUTION_INTENT = new RegExp(
+  [
+    // 中文:写/生成/实现/创建/修复 + 代码/脚本/函数/程序/工具/接口/爬虫 或语言名
+    '(?:(?:\u5199|\u7f16\u5199|\u751f\u6210|\u5b9e\u73b0|\u521b\u5efa|\u4fee\u590d|\u5e2e\u6211\u5199|\u505a\u4e00\u4e2a?)[^\r\n\u3002\uff01\uff1f!?,\uff0c;\uff1b]{0,12}(?:\u4ee3\u7801|\u811a\u672c|\u51fd\u6570|\u7a0b\u5e8f|\u5de5\u5177|\u63a5\u53e3|\u722c\u866b|python|javascript|bash|shell))',
+    // 中文:运行/执行/测试/跑 + 代码/脚本/命令/程序
+    '(?:(?:\u8fd0\u884c|\u6267\u884c|\u6d4b\u8bd5|\u8dd1\u4e00\u4e0b|\u8dd1|\u8bd5\u8bd5|\u9a8c\u8bc1)[^\r\n\u3002\uff01\uff1f!?,\uff0c;\uff1b]{0,8}(?:\u4ee3\u7801|\u811a\u672c|\u547d\u4ee4|\u7a0b\u5e8f|python|script|code))',
+    // 英文:write/create/generate/implement/build + code/script/function/program
+    '(?:\\b(?:write|create|generate|implement|build|code)\\b[^\r\n.!?]{0,30}\\b(?:code|script|function|program|python|javascript|bash|shell)\\b)',
+    // 英文:run/execute/test/try + code/script/command/program
+    '(?:\\b(?:run|execute|test|try)\\b[^\r\n.!?]{0,12}\\b(?:code|script|command|program|python)\\b)',
+  ].join('|'),
+  'i',
+)
+
 function toolName(spec) {
   return String(spec?.function?.name || '').trim()
 }
@@ -93,6 +111,7 @@ export function resolveChatCapabilityMode({
   if (normalized === 'execute') return 'execute'
   if (executionRequired) return 'execute'
   if (shouldInheritExecutionIntent(userPrompt, previousUserPrompt)) return 'execute'
+  if (CODE_EXECUTION_INTENT.test(String(userPrompt || ''))) return 'execute'
   return shouldRequireExecution({ intentMode: normalized, text: userPrompt }) ? 'execute' : 'answer'
 }
 
