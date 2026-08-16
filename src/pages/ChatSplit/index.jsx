@@ -18,6 +18,7 @@ import { persistSlashGoals } from '../../lib/slashGoals.js'
 import { recordLocalChatFeedback } from '../../lib/localChatFeedback.js'
 import { fetchCompactionArchive } from '../../lib/compactionClient.js'
 import { resolveModelContextWindow } from '../../lib/contextUsage.js'
+import { MAX_CHAT_ATTACHMENTS_PER_MESSAGE } from '../../lib/chatAttachmentParser.js'
 import { attachmentSendState, createPendingChatAttachment, prepareChatAttachment } from '../../lib/chatAttachmentUpload.js'
 import { authorizeChatDirectoryRequest } from '../../lib/chatDirectoryRequest.js'
 import { readContextUsageVisible, readDesktopPetVisible, readWorkbenchOpen } from '../../lib/chatUiPreferences.js'
@@ -59,6 +60,7 @@ export default function ChatSplit() {
   const [contextSystemPrompts, setContextSystemPrompts] = useState({})
   const [resumeState, setResumeState] = useState(null)
   const abortCtrlRef = useRef(null)
+  const preserveAttachmentsForSessionRef = useRef(null)
   const resumingTurnIdsRef = useRef(new Set())
   const stateRef = useRef(state)
   useEffect(() => { stateRef.current = state }, [state])
@@ -111,7 +113,7 @@ export default function ChatSplit() {
   const directory = useDirectoryApproval({ lang, t, toast })
   const { handleVoice, voiceState } = useVoiceRecognition({ dispatch, input, lang, permissions: state.permissions, setInput, setMessage: setWorkbenchMessage, t })
   const { abortSessionIdRef, inputRef } = useChatSessionLifecycle({
-    abortCtrlRef, desktopPetVisible, dispatch, input, isGenerating, messages, setAttachments, setDesktopPetVisible,
+    abortCtrlRef, desktopPetVisible, dispatch, input, isGenerating, messages, preserveAttachmentsForSessionRef, setAttachments, setDesktopPetVisible,
     setInput, setIsGenerating, setWorkbenchMessage, showContextUsage, state, toolApproval: approvals.toolApproval,
     workbenchOpen,
   })
@@ -239,7 +241,7 @@ export default function ChatSplit() {
     const files = Array.from(event.target.files || [])
     event.target.value = ''
     if (!files.length) return
-    const available = Math.max(0, 8 - attachments.length)
+    const available = Math.max(0, MAX_CHAT_ATTACHMENTS_PER_MESSAGE - attachments.length)
     const accepted = files.slice(0, available)
     if (!accepted.length) {
       setWorkbenchMessage(t('chatAttachments.maxCountNotice', { count: files.length }))
@@ -248,13 +250,14 @@ export default function ChatSplit() {
     let targetSessionId = state.activeSessionId
     if (!targetSessionId) {
       targetSessionId = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
+      preserveAttachmentsForSessionRef.current = targetSessionId
       dispatch({
         type: 'NEW_SESSION',
         payload: { id: targetSessionId, title: t('chatReliability.newConversation'), agentId: effectiveAgentId || null },
       })
     }
     const pending = accepted.map(createPendingChatAttachment)
-    setAttachments((current) => [...current, ...pending].slice(0, 8))
+    setAttachments((current) => [...current, ...pending].slice(0, MAX_CHAT_ATTACHMENTS_PER_MESSAGE))
     setWorkbenchMessage(t('chatAttachments.uploading'))
     const parserMessages = Object.fromEntries(['imageLimit', 'imageTooLarge', 'compressedTooLarge', 'excelTooLong', 'wordTooLong', 'pptTooLong', 'textTooLong', 'unsupportedFormat', 'readFailed'].map((key) => [key, t(`chatAttachments.${key}`)]))
     const existingImageCount = attachments.filter((item) => item.kind === 'image').length

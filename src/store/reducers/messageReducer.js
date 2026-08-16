@@ -2,8 +2,14 @@ import { TOOL_LIVE_OUTPUT_CHAR_LIMIT } from '../../lib/turnClient/toolOutputBuff
 import { TOOL_CALL_STATUS } from '../taskStatus.js'
 
 function applyStreamCursor(message, action) {
-  if (!Number.isInteger(action.serverSequence)) return { ignored: false, meta: message.meta || {} }
   const meta = message.meta || {}
+  if (action.transientTurnActivity) {
+    if (action.serverTurnId && meta.serverTurnId && action.serverTurnId !== meta.serverTurnId) {
+      return { ignored: true, meta }
+    }
+    if (meta.streaming === false) return { ignored: true, meta }
+  }
+  if (!Number.isInteger(action.serverSequence)) return { ignored: false, meta }
   if (action.serverTurnId && meta.serverTurnId && action.serverTurnId !== meta.serverTurnId) {
     return { ignored: true, meta }
   }
@@ -18,6 +24,30 @@ function applyStreamCursor(message, action) {
       serverLastSequence: action.serverSequence,
     },
   }
+}
+
+function finalizeRunningToolCalls(meta, finalizer) {
+  if (!finalizer) return meta
+  const status = finalizer.status === TOOL_CALL_STATUS.ERROR
+    ? TOOL_CALL_STATUS.ERROR
+    : TOOL_CALL_STATUS.CANCELLED
+  const calls = Array.isArray(meta.toolCalls) ? meta.toolCalls : []
+  let changed = false
+  const toolCalls = calls.map((call) => {
+    if (call?.status !== TOOL_CALL_STATUS.RUNNING) return call
+    changed = true
+    return {
+      ...call,
+      status,
+      ...(status === TOOL_CALL_STATUS.ERROR
+        ? {
+            error: finalizer.error || call.error || 'Turn ended before the tool returned a result',
+            errorCode: finalizer.errorCode || call.errorCode || 'TURN_TERMINATED',
+          }
+        : {}),
+    }
+  })
+  return changed ? { ...meta, toolCalls } : meta
 }
 
 export function reduceMessageState(state, action) {
@@ -146,7 +176,11 @@ export function reduceMessageState(state, action) {
           messages[messageIndex] = {
             ...message,
             content: String(action.payload?.content || ''),
-            meta: { ...cursor.meta, reasoning: String(action.payload?.reasoning || '') },
+            meta: {
+              ...cursor.meta,
+              ...(action.meta || {}),
+              reasoning: String(action.payload?.reasoning || ''),
+            },
           }
           return { ...session, messages, updatedAt: Date.now() }
         }),
@@ -171,7 +205,11 @@ export function reduceMessageState(state, action) {
           if (cursor.ignored) return s
           msgs[messageIndex] = {
             ...last,
-            meta: { ...cursor.meta, reasoning: (cursor.meta.reasoning || '') + delta },
+            meta: {
+              ...cursor.meta,
+              ...(action.meta || {}),
+              reasoning: (cursor.meta.reasoning || '') + delta,
+            },
           }
           return { ...s, messages: msgs, updatedAt: Date.now() }
         }),
@@ -206,7 +244,7 @@ export function reduceMessageState(state, action) {
     case 'UPDATE_LAST_MESSAGE_META': {
       const targetSessionId = action.sessionId || state.activeSessionId
       if (!targetSessionId) return state
-      const meta = action.payload ?? {}
+      const { finalizeRunningToolCalls: finalizer = null, ...meta } = action.payload ?? {}
       return {
         ...state,
         sessions: state.sessions.map((s) => {
@@ -218,7 +256,8 @@ export function reduceMessageState(state, action) {
           if (last.role !== 'assistant') return s
           const cursor = applyStreamCursor(last, action)
           if (cursor.ignored) return s
-          msgs[messageIndex] = { ...last, meta: { ...cursor.meta, ...meta } }
+          const nextMeta = finalizeRunningToolCalls({ ...cursor.meta, ...meta }, finalizer)
+          msgs[messageIndex] = { ...last, meta: nextMeta }
           return { ...s, messages: msgs, updatedAt: Date.now() }
         }),
       }
@@ -239,7 +278,9 @@ export function reduceMessageState(state, action) {
           if (messageIndex < 0) return s
           const last = msgs[messageIndex]
           if (last.role !== 'assistant') return s
-          const existingMeta = last.meta || {}
+          const cursor = applyStreamCursor(last, action)
+          if (cursor.ignored) return s
+          const existingMeta = cursor.meta
           const existingCalls = Array.isArray(existingMeta.toolCalls) ? existingMeta.toolCalls : []
           const idx = existingCalls.findIndex((c) => c.id === entry.id)
           let nextCalls
@@ -253,7 +294,10 @@ export function reduceMessageState(state, action) {
             nextCalls = existingCalls.slice()
             nextCalls[idx] = { ...nextCalls[idx], ...entry }
           }
-          msgs[messageIndex] = { ...last, meta: { ...existingMeta, toolCalls: nextCalls } }
+          msgs[messageIndex] = {
+            ...last,
+            meta: { ...existingMeta, ...(action.meta || {}), toolCalls: nextCalls },
+          }
           return { ...s, messages: msgs, updatedAt: Date.now() }
         }),
       }
@@ -280,6 +324,7 @@ export function reduceMessageState(state, action) {
           if (idx === -1) return s
           const nextCalls = existingCalls.slice()
           const existing = nextCalls[idx]
+          if (existing?.status !== TOOL_CALL_STATUS.RUNNING) return s
           const appended = `${existing.liveOutput || ''}${entry.chunk}`
           nextCalls[idx] = {
             ...existing,

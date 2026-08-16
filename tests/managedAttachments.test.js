@@ -84,6 +84,50 @@ test('raw binary upload persists identical bytes and returns stable metadata', a
   assert.deepEqual(Buffer.from(await contentResponse.arrayBuffer()), pdfBytes)
 })
 
+test('embedded attachment previews and downloads accept a content-scoped query token', async () => {
+  assert.ok(uploaded)
+  const previewUrl = `${origin}${uploaded.downloadUrl}?preview=1&token=${encodeURIComponent(alice.token)}`
+  const previewResponse = await fetch(previewUrl)
+  assert.equal(previewResponse.status, 200)
+  assert.equal(previewResponse.headers.get('content-type'), 'application/pdf')
+  assert.equal(previewResponse.headers.get('content-disposition')?.startsWith('inline;'), true)
+  assert.equal(previewResponse.headers.get('referrer-policy'), 'no-referrer')
+  assert.deepEqual(Buffer.from(await previewResponse.arrayBuffer()), pdfBytes)
+
+  const downloadResponse = await fetch(
+    `${origin}${uploaded.downloadUrl}?token=${encodeURIComponent(alice.token)}`,
+  )
+  assert.equal(downloadResponse.status, 200)
+  assert.deepEqual(Buffer.from(await downloadResponse.arrayBuffer()), pdfBytes)
+
+  const noTokenResponse = await fetch(`${origin}${uploaded.downloadUrl}?preview=1`)
+  assert.equal(noTokenResponse.status, 401)
+
+  const metadataWithQueryToken = await fetch(
+    `${origin}/api/attachments/${uploaded.id}?token=${encodeURIComponent(alice.token)}`,
+  )
+  assert.equal(metadataWithQueryToken.status, 401)
+
+  const listWithQueryToken = await fetch(
+    `${origin}/api/attachments?token=${encodeURIComponent(alice.token)}`,
+  )
+  assert.equal(listWithQueryToken.status, 401)
+})
+
+test('attachment preview query tokens retain owner isolation and header precedence', async () => {
+  assert.ok(uploaded)
+  const bobPreview = await fetch(
+    `${origin}${uploaded.downloadUrl}?preview=1&token=${encodeURIComponent(bob.token)}`,
+  )
+  assert.equal(bobPreview.status, 404)
+
+  const invalidHeaderWithValidQuery = await fetch(
+    `${origin}${uploaded.downloadUrl}?preview=1&token=${encodeURIComponent(alice.token)}`,
+    { headers: { Authorization: 'Bearer invalid-session-token' } },
+  )
+  assert.equal(invalidHeaderWithValidQuery.status, 401)
+})
+
 test('clipboard File travels through the browser client, HTTP storage, and attachment URI as real bytes', async () => {
   const originalText = 'Clipboard real bytes\n剪贴板附件可由模型读取\nline 3'
   const originalBytes = Buffer.from(originalText, 'utf8')

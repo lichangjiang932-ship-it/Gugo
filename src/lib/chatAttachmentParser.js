@@ -13,10 +13,11 @@ import {
 
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024
 const MAX_RAW_IMAGE_BYTES = 16 * 1024 * 1024
-const MAX_IMAGES_PER_MESSAGE = 5
+export const MAX_CHAT_ATTACHMENTS_PER_MESSAGE = 32
+export const MAX_IMAGES_PER_MESSAGE = MAX_CHAT_ATTACHMENTS_PER_MESSAGE
 
 const DEFAULT_MESSAGES = {
-  imageLimit: 'Image limit reached; only 5 images can be sent in one message.',
+  imageLimit: `Image limit reached; only ${MAX_IMAGES_PER_MESSAGE} images can be sent in one message.`,
   imageTooLarge: 'Image is too large to process locally.',
   compressedTooLarge: 'Compressed image is still over 4MB.',
   excelTooLong: 'Excel content too long',

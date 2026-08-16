@@ -193,6 +193,39 @@ test('server snapshots retain local tool offsets when canonical text is unchange
   assert.deepEqual(merged.meta.toolCalls, [{ id: 'call-same', textOffset: 4 }])
 })
 
+test('an older snapshot cannot roll a newer live tool result back to running', () => {
+  const [merged] = mergeServerSessionMessages([{
+    id: 'assistant-tool-race',
+    role: 'assistant',
+    content: 'newer live text',
+    meta: {
+      serverTurnId: 'turn-tool-race',
+      serverLastSequence: 5,
+      toolCalls: [{
+        id: 'call-race',
+        name: 'read_file',
+        status: 'success',
+        result: '{"ok":true}',
+        textOffset: 4,
+      }],
+    },
+  }], [{
+    id: 'assistant-tool-race',
+    role: 'assistant',
+    content: 'older snapshot text',
+    meta: {
+      serverTurnId: 'turn-tool-race',
+      serverLastSequence: 3,
+      toolCalls: [{ id: 'call-race', name: 'read_file', status: 'running' }],
+    },
+  }])
+
+  assert.equal(merged.meta.serverLastSequence, 5)
+  assert.equal(merged.meta.toolCalls[0].status, 'success')
+  assert.equal(merged.meta.toolCalls[0].result, '{"ok":true}')
+  assert.equal(Object.hasOwn(merged.meta.toolCalls[0], 'textOffset'), false)
+})
+
 test('authoritative snapshots replace stale local turn timing metadata', () => {
   const [merged] = mergeServerSessionMessages([{
     id: 'timed-assistant',

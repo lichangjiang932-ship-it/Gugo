@@ -157,6 +157,45 @@ test('preview reducer opens, activates, and closes tabs without losing sibling f
   assert.equal(state.previewArtifact, null)
 })
 
+test('preview reducer refreshes a revised direct file instead of duplicating its tab', () => {
+  const original = {
+    messageId: 'msg-original',
+    artifactIdentity: 'msg-original:smoke.html',
+    content: '',
+    preview: null,
+    directFile: {
+      id: 'local-file-stable',
+      filename: 'smoke.html',
+      type: 'html',
+      path: 'D:\\output\\smoke.html',
+      url: '/api/local-files/verified/local-file-stable?turnId=turn-original',
+    },
+  }
+  const revised = {
+    messageId: 'msg-revised',
+    artifactIdentity: 'msg-revised:smoke.html',
+    content: '',
+    preview: null,
+    directFile: {
+      ...original.directFile,
+      url: '/api/local-files/verified/local-file-stable?turnId=turn-revised',
+    },
+  }
+  const dispatch = (state, payload) => reduceTaskSettingsState(state, {
+    type: 'OPEN_PREVIEW_ARTIFACT',
+    payload,
+  })
+
+  let state = dispatch(createInitialState(), original)
+  const originalTabId = state.previewActiveId
+  state = dispatch(state, revised)
+
+  assert.equal(state.previewTabs.length, 1)
+  assert.equal(state.previewActiveId, originalTabId)
+  assert.equal(state.previewArtifact, revised)
+  assert.match(state.previewArtifact.directFile.url, /turn-revised/)
+})
+
 test('RightPreviewPane closes on Escape', async () => {
   let closeCount = 0
   const { dom, cleanup } = await renderPane(() => { closeCount += 1 })
@@ -348,6 +387,7 @@ test('RightPreviewPane switches between text and direct image tabs', async () =>
       id: 'image-file-1',
       filename: 'page1_check.png',
       type: 'png',
+      mimeType: 'image/png',
       url: 'https://example.test/page1_check.png',
     },
   }
@@ -363,6 +403,7 @@ test('RightPreviewPane switches between text and direct image tabs', async () =>
     const imageUrl = new URL(rootEl.querySelector('img[alt="page1_check.png"]')?.getAttribute('src'))
     assert.equal(imageUrl.origin + imageUrl.pathname, 'https://example.test/page1_check.png')
     assert.equal(imageUrl.searchParams.get('preview'), '1')
+    assert.doesNotMatch(rootEl.querySelector('[data-testid="preview-command-bar"]')?.textContent || '', /image\/png/)
     assert.equal(rootEl.querySelector('pre'), null)
 
     const textTab = [...rootEl.querySelectorAll('[role="tab"]')].find((tab) => tab.textContent.includes('notes.txt'))

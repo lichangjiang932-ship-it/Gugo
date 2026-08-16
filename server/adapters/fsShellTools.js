@@ -486,13 +486,14 @@ export async function writeFileTool(
   if (resolved.source === 'workspace') {
     try { checkWorkspaceSize(getWorkspaceRoot()) } catch { /* 巡检失败不影响写入 */ }
   }
+  const changed = !previousContentKnown || previousContent !== content
   const changes = previousContentKnown ? [{
     path: resolved.displayPath,
     ...(previousContent == null
       ? { additions: contentLineCount(content), deletions: 0 }
       : lineChangeStats(previousContent, content)),
   }] : []
-  return { ok: true, path: resolved.displayPath, scope: resolved.source, bytes, changes }
+  return { ok: true, path: resolved.displayPath, scope: resolved.source, bytes, changed, changes }
 }
 
 /* ── edit_file (字符串精确替换) ────────────────────────────── */

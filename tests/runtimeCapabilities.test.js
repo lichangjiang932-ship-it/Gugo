@@ -38,6 +38,18 @@ test('capability block directs concrete file, shell, and PDF work through expose
   assert.match(text, /call the tool now/i)
 })
 
+test('bypass capability block forbids redundant directory authorization prompts', () => {
+  const text = buildRuntimeCapabilityBlock({
+    toolSpecs: [spec('read_file'), spec('write_file'), spec('request_directory')],
+    approvalMode: 'bypass',
+  })
+
+  assert.match(text, /Approval mode: bypass \(allow all\)/)
+  assert.match(text, /do not require an authorization prompt/i)
+  assert.doesNotMatch(text, /- Authorization:/)
+  assert.doesNotMatch(text, /Approval mode: unattended/)
+})
+
 test('capability block advertises PDF generation when create_pdf is exposed', () => {
   const text = buildRuntimeCapabilityBlock({ toolSpecs: [spec('create_pdf')] })
   assert.match(text, /Artifacts:/)

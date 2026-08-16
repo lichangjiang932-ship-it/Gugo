@@ -59,11 +59,6 @@ export default function ActivityStream({ msg }) {
 function activityLabel(meta, toolCalls) {
   if (meta?.serverConnectionState === 'reconnecting') return 'Connection lost. Reconnecting…'
   if (meta?.serverConnectionState === 'cancelling') return 'Stopping task…'
-  const progress = meta?.progress
-  if (progress?.phase) return `Working: ${progress.phase}…`
-  if (Number.isFinite(progress?.completed) && Number.isFinite(progress?.total) && progress.total > 0) {
-    return `Processing ${progress.completed}/${progress.total}…`
-  }
   const activity = meta?.modelActivity
   if (activity?.kind === 'tool_call_ready') {
     return `Preparing ${activity.toolName || 'tool'}…`
@@ -76,6 +71,14 @@ function activityLabel(meta, toolCalls) {
   if (activity?.kind === 'model') return 'Model is working on the next step…'
   if (activity?.kind === 'responding') return 'Receiving model output…'
   if (activity?.kind === 'reviewing') return 'Reviewing execution results…'
+  // Progress events describe the last completed batch. A newer model/tool
+  // activity is the current work and must win, otherwise the UI can remain on
+  // a stale "batch_completed" label while the next model call is running.
+  const progress = meta?.progress
+  if (progress?.phase) return `Working: ${progress.phase}…`
+  if (Number.isFinite(progress?.completed) && Number.isFinite(progress?.total) && progress.total > 0) {
+    return `Processing ${progress.completed}/${progress.total}…`
+  }
   if (toolCalls.length > 0) return 'Continuing the task…'
   return 'Preparing task…'
 }

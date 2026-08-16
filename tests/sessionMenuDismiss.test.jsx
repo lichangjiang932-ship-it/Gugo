@@ -37,6 +37,7 @@ function MenuHarness({ calls, sourceSessions = sessions }) {
       onMenuOpen={setOpenMenuId}
       onMenuToggle={(id) => setOpenMenuId((current) => current === id ? null : id)}
       onMenuClose={() => setOpenMenuId(null)}
+      onSearch={() => calls.searched?.push('search')}
       onOpen={(id) => calls.opened.push(id)}
       onPinToggle={(session) => calls.pinned?.push(session.id)}
       onArchiveToggle={(session) => calls.archived.push(session.id)}
@@ -115,6 +116,31 @@ test('session history keeps one compact title-only list without time groups or t
     assert.equal(sessionButtons[1].textContent.trim(), 'Session two')
     assert.doesNotMatch(rootElement.textContent, /nav\.groupToday|nav\.groupYesterday|nav\.groupWeek|nav\.groupEarlier/)
     assert.doesNotMatch(rootElement.textContent, /nav\.filterActive|history\.messageCount|\d{2}:\d{2}/)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('history search sits beside the title and opens without collapsing the list', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const calls = { opened: [], pinned: [], archived: [], deleted: [], searched: [] }
+
+  try {
+    await act(async () => root.render(<MenuHarness calls={calls} />))
+    const historyToggle = findButton(rootElement, 'nav.history')
+    const searchButton = rootElement.querySelector('button[aria-label="nav.searchPlaceholder"]')
+    assert.ok(searchButton)
+    assert.equal(historyToggle.parentElement, searchButton.parentElement)
+    assert.equal(historyToggle.getAttribute('aria-expanded'), 'true')
+
+    await act(async () => searchButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.deepEqual(calls.searched, ['search'])
+    assert.equal(historyToggle.getAttribute('aria-expanded'), 'true')
+    assert.equal(rootElement.querySelectorAll('[data-session-open]').length, 2)
+    assert.equal(findButton(rootElement, 'nav.archiveSession'), undefined)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

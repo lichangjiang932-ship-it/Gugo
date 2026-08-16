@@ -220,6 +220,23 @@ test('imported tool results survive snapshot editing and full-session replacemen
   assert.match(results[0].content, /README contents/)
 })
 
+test('stored system rows are not replayed beside freshly compiled system blocks', () => {
+  const expanded = expandStoredMessages([
+    {
+      id: 'stale-system',
+      role: 'system',
+      content: 'STALE_IDENTITY_AND_UI_STATE_MUST_NOT_REPLAY',
+      modelContext: { uiState: { spinner: true } },
+    },
+    { id: 'user-fact', role: 'user', content: 'Keep this user request.' },
+    { id: 'assistant-fact', role: 'assistant', content: 'Keep this answer.' },
+  ])
+
+  assert.deepEqual(expanded.map((message) => message.role), ['user', 'assistant'])
+  assert.doesNotMatch(JSON.stringify(expanded), /STALE_IDENTITY_AND_UI_STATE_MUST_NOT_REPLAY|spinner/)
+  assert.match(JSON.stringify(expanded), /Keep this user request/)
+})
+
 test('successful artifact calls retain a lightweight reference instead of 70k HTML source', () => {
   const tailMarker = '<!-- REVISION_SOURCE_TAIL: keep this exact footer -->'
   const html = `<!doctype html><html><body>${'x'.repeat(70_000)}${tailMarker}</body></html>`

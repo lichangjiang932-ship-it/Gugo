@@ -213,6 +213,7 @@ export function subscribeToJobEvents(
 // Append the auth token for browser download links, which cannot carry headers.
 export function withDownloadToken(url) {
   if (!url) return url
+  if (/^(?:data|blob):/i.test(url)) return url
   const token = getAuthToken?.()
   if (!token) return url
   const separator = url.includes('?') ? '&' : '?'

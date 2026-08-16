@@ -76,10 +76,11 @@ test('TurnEngine emits every artifact produced by one completed local tool call'
   assert.equal(completed.payload.artifactId, 'local-pdf-1')
 })
 
-test('TurnEngine persists only the latest completed model usage across checkpoints and completion', async () => {
+test('TurnEngine persists latest context usage and cumulative turn usage separately', async () => {
   const turnId = 'turn-latest-model-usage'
   const firstUsage = { promptTokens: 120, completionTokens: 20, totalTokens: 140 }
   const latestUsage = { promptTokens: 360, completionTokens: 40, totalTokens: 400 }
+  const turnModelUsage = { promptTokens: 480, completionTokens: 60, totalTokens: 540 }
   const engine = createTestEngine({
     runLoop: async ({ onModelPhase, saveCheckpoint }) => {
       await onModelPhase({
@@ -106,24 +107,66 @@ test('TurnEngine persists only the latest completed model usage across checkpoin
     turnEvents.filter((event) => event.type === 'model.phase').map((event) => event.payload.usage),
     [firstUsage, latestUsage],
   )
-  assert.deepEqual(
-    turnEvents.find((event) => event.type === 'turn.completed').payload.usage,
-    latestUsage,
-  )
-  assert.deepEqual(getTurnCheckpoint({
+  const completed = turnEvents.find((event) => event.type === 'turn.completed')
+  assert.deepEqual(completed.payload.usage, latestUsage)
+  assert.deepEqual(completed.payload.turnModelUsage, turnModelUsage)
+  const checkpoint = getTurnCheckpoint({
     userId,
     sessionId: 'turn-engine-session',
     turnId,
-  }).state.latestModelUsage, latestUsage)
+  }).state
+  assert.deepEqual(checkpoint.latestModelUsage, latestUsage)
+  assert.deepEqual(checkpoint.turnModelUsage, turnModelUsage)
   const assistant = listMessages({ userId, sessionId: 'turn-engine-session' })
     .find((message) => message.id === `${turnId}:assistant`)
   assert.deepEqual(assistant.modelContext.usage, latestUsage)
+  assert.deepEqual(assistant.modelContext.turnModelUsage, turnModelUsage)
   assert.ok(Number.isFinite(assistant.modelContext.turnStartedAt))
   assert.ok(Number.isFinite(assistant.modelContext.turnCompletedAt))
   assert.equal(
     assistant.modelContext.latency,
     assistant.modelContext.turnCompletedAt - assistant.modelContext.turnStartedAt,
   )
+})
+
+test('TurnEngine persists the final server request estimate when provider usage is absent', async () => {
+  const turnId = 'turn-server-prompt-estimate'
+  const engine = createTestEngine({
+    runModel: async () => ({ content: 'estimated', toolCalls: [] }),
+    runLoop: async ({ runModel, saveCheckpoint }) => {
+      await runModel({
+        messages: [
+          { role: 'system', content: 'Keep the response concise.' },
+          { role: 'user', content: 'Summarize the compacted request.' },
+        ],
+        tools: [{ type: 'function', function: { name: 'read_file', parameters: { type: 'object' } } }],
+      })
+      await saveCheckpoint({ messages: [], artifactIds: [], iterations: 1 })
+      return { text: 'Estimate recorded.', artifactIds: [], iterations: 1 }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'Record the server request estimate.',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const completed = events(turnId).find((event) => event.type === 'turn.completed')
+  const estimate = completed.payload.estimatedPromptTokens
+  assert.ok(Number.isInteger(estimate) && estimate > 0)
+  const checkpoint = getTurnCheckpoint({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+  }).state
+  assert.equal(checkpoint.latestEstimatedPromptTokens, estimate)
+  const assistant = listMessages({ userId, sessionId: 'turn-engine-session' })
+    .find((message) => message.id === `${turnId}:assistant`)
+  assert.equal(assistant.modelContext.estimatedPromptTokens, estimate)
+  assert.equal(assistant.modelContext.usage, undefined)
 })
 
 test('TurnEngine preserves explicit empty delivery ids through checkpoint, model context, and completion', async () => {
@@ -634,10 +677,19 @@ test('TurnEngine exposes early tool readiness without creating a durable tool ca
   assert.equal(turnEvents.filter((event) => event.type === 'tool.call').length, 1)
 })
 
-test('TurnEngine uses the runtime approval mode while preserving chat origin', async () => {
+test('TurnEngine reads the user approval mode once and shares it with discovery and execution', async () => {
   let loopOptions = null
+  let toolRequest = null
+  const approvalModeRequests = []
   const engine = createTestEngine({
-    readApprovalMode: () => 'unattended',
+    readApprovalMode: (request) => {
+      approvalModeRequests.push(request)
+      return 'bypass'
+    },
+    resolveToolSpecs: async (request) => {
+      toolRequest = request
+      return request.baseSpecs
+    },
     runLoop: async (options) => {
       loopOptions = options
       return { text: 'ok', artifactIds: [], iterations: 0 }
@@ -655,9 +707,53 @@ test('TurnEngine uses the runtime approval mode while preserving chat origin', a
     turnId: 'turn-runtime-approval-mode',
   })
 
-  assert.equal(loopOptions.approvalMode, 'unattended')
+  assert.deepEqual(approvalModeRequests, [{ userId }])
+  assert.equal(toolRequest.permissionMode, 'bypass')
+  assert.equal(loopOptions.approvalMode, 'bypass')
   assert.equal(loopOptions.approvalOrigin, 'chat')
   assert.equal(loopOptions.job.origin, 'chat')
+})
+
+test('TurnEngine projects the stored bypass mode into model-visible capabilities', async (t) => {
+  setApprovalMode({ userId, mode: 'bypass' })
+  t.after(() => {
+    getDb().prepare('DELETE FROM user_approval_settings WHERE user_id = ?').run(userId)
+  })
+  let modelRequest = null
+  const engine = createTestEngine({
+    toolSpecs: [
+      { type: 'function', function: { name: 'read_file', parameters: { type: 'object' } } },
+      { type: 'function', function: { name: 'request_directory', parameters: { type: 'object' } } },
+    ],
+    runModel: async (request) => {
+      modelRequest = request
+      return { content: '权限状态已确认。', toolCalls: [], modelName: 'stub' }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId: 'turn-stored-bypass-capabilities',
+    content: '说明当前文件访问能力',
+  })
+  await engine.waitForTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId: 'turn-stored-bypass-capabilities',
+  })
+
+  assert.ok(modelRequest)
+  assert.equal(
+    modelRequest.tools.some((tool) => tool?.function?.name === 'request_directory'),
+    false,
+  )
+  const capabilityMessage = modelRequest.messages.find((message) => (
+    message?.role === 'system'
+      && String(message.content || '').includes('[RUNTIME CAPABILITIES]')
+  ))
+  assert.match(capabilityMessage?.content || '', /Approval mode: bypass \(allow all\)/)
+  assert.doesNotMatch(capabilityMessage?.content || '', /- Authorization:/)
 })
 
 test('TurnEngine persists and applies agent, skill, memory, and tools context', async () => {
@@ -1731,19 +1827,36 @@ test('TurnEngine resumes a durable completed tool call without executing it twic
             checkpointStatus: 'completed', checkpointResult: { ok: true, content: 'done' },
           }],
           artifactIds: [], iterations: 0,
+          latestModelUsage: { promptTokens: 140, completionTokens: 10, totalTokens: 150 },
+          turnModelUsage: { promptTokens: 240, completionTokens: 30, totalTokens: 270 },
         },
       },
     }),
   })
   let executions = 0
   const engine = createTestEngine({
-    runModel: async () => ({ content: '从断点完成。', toolCalls: [] }),
+    runModel: async () => ({
+      content: '从断点完成。',
+      toolCalls: [],
+      usage: { promptTokens: 200, completionTokens: 20, totalTokens: 220 },
+    }),
     executeTool: async () => { executions += 1; return { ok: true } },
   })
   await engine.resumeTurn({ userId, sessionId: 'turn-engine-session', turnId: 'turn-resume' })
   await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId: 'turn-resume' })
   assert.equal(executions, 0)
-  assert.equal(events('turn-resume').at(-1).type, 'turn.completed')
+  const completed = events('turn-resume').at(-1)
+  assert.equal(completed.type, 'turn.completed')
+  assert.deepEqual(completed.payload.usage, {
+    promptTokens: 200,
+    completionTokens: 20,
+    totalTokens: 220,
+  })
+  assert.deepEqual(completed.payload.turnModelUsage, {
+    promptTokens: 440,
+    completionTokens: 50,
+    totalTokens: 490,
+  })
   assert.equal(engine.getTurn({ userId: 'another-user', sessionId: 'turn-engine-session', turnId: 'turn-resume' }), null)
 })
 

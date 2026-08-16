@@ -1,5 +1,7 @@
 import { listUserToolSpecs } from '../mcp/mcpManager.js'
+import { isToolPermittedForUser } from '../db.js'
 import { listRegisteredBrowserToolSpecs } from './browserTools.js'
+import { getApprovalMode } from './approvalSettingsStore.js'
 import { CONNECTOR_TOOL_NAMES } from './connectorTools.js'
 import { listEnabledIntegrationToolNames } from './integrationsStore.js'
 import { isWebSearchReady } from './webSearchService.js'
@@ -78,6 +80,30 @@ const PROVIDER_ALIASES = new Map([
 
 function toolName(spec) {
   return String(spec?.function?.name || '')
+}
+
+function effectivePermissionMode(userId, explicitMode) {
+  const normalized = String(explicitMode || '').trim()
+  if (normalized) return normalized
+  if (!userId) return null
+  try {
+    return getApprovalMode({ userId })
+  } catch {
+    // Tool discovery is advisory and must not block a chat turn. The runtime
+    // permission gate remains authoritative when settings storage is unavailable.
+    return null
+  }
+}
+
+function isVisibleToUser(userId, name) {
+  if (!userId || !name) return Boolean(name)
+  try {
+    return isToolPermittedForUser(userId, name)
+  } catch {
+    // Preserve availability on a transient settings read failure; execution
+    // still passes through the same server-side permission gate.
+    return true
+  }
 }
 
 function connectorProvider(name) {
@@ -308,6 +334,7 @@ export async function resolveTurnToolSpecs({
   userId,
   baseSpecs = [],
   toolsConfig,
+  permissionMode,
   webSearchReady = isWebSearchReady({ userId }),
   enabledConnectorTools,
   prompt = '',
@@ -315,6 +342,7 @@ export async function resolveTurnToolSpecs({
   skillIds = [],
 } = {}) {
   const policy = resolveTurnToolPolicy({ prompt, messages, skillIds })
+  const resolvedPermissionMode = effectivePermissionMode(userId, permissionMode)
   let mcpSpecs = []
   if (policy.includeMcp) {
     try {
@@ -345,6 +373,11 @@ export async function resolveTurnToolSpecs({
   const enabledConnectorNames = new Set(connectorTools)
   const readySpecs = [...merged.values()].filter((spec) => {
     const name = toolName(spec)
+    if (!isVisibleToUser(userId, name)) return false
+    // "Allow all" grants path access directly in localFileAccessService. Do
+    // not advertise a directory-authorization action that can only add a
+    // redundant pause and contradicts the effective runtime authority.
+    if (resolvedPermissionMode === 'bypass' && name === 'request_directory') return false
     if (name === 'web_search') return webSearchReady === true && policy.includeWeb
     if (name === 'fetch_url') return policy.includeWeb
     if (name.startsWith('browser_')) return policy.includeBrowser

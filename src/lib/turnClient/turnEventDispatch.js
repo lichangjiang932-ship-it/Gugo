@@ -76,6 +76,9 @@ export function normalizeTurnFailurePayload(payload = {}, {
   const iterations = optionalInteger(payload.iterations, 0)
   const deliveryArtifactIds = optionalArtifactIds(payload, 'deliveryArtifactIds')
   const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)
+  const modelUsage = normalizeModelUsage(payload.usage)
+  const turnModelUsage = normalizeModelUsage(payload.turnModelUsage)
+  const estimatedPromptTokens = optionalInteger(payload.estimatedPromptTokens, 0)
   return {
     error,
     partialText: String(payload.partialText ?? payload.text ?? ''),
@@ -84,6 +87,9 @@ export function normalizeTurnFailurePayload(payload = {}, {
     ...(deliveryArtifactIds !== undefined ? { deliveryArtifactIds } : {}),
     ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
     ...(iterations !== undefined ? { iterations } : {}),
+    ...(modelUsage ? { modelUsage } : {}),
+    ...(turnModelUsage ? { turnModelUsage } : {}),
+    ...(estimatedPromptTokens !== undefined ? { estimatedPromptTokens } : {}),
   }
 }
 
@@ -102,6 +108,8 @@ function dispatchToolOutput(activity, { dispatch, messageTarget } = {}) {
       chunk: activity.chunk,
       stream: activity.stream || 'stdout',
     },
+    transientTurnActivity: true,
+    serverTurnId: activity.turnId || undefined,
     ...(messageTarget || {}),
   })
   return true
@@ -125,6 +133,8 @@ export function dispatchTurnActivity(activity, { dispatch, taskId, messageTarget
         toolName: activity.toolName,
       },
     },
+    transientTurnActivity: true,
+    serverTurnId: activity.turnId || undefined,
     ...(messageTarget || {}),
   })
   return true
@@ -134,11 +144,12 @@ export function createBufferedTurnActivityDispatcher(options = {}) {
   const { bufferOptions = {}, ...dispatchOptions } = options
   const outputBuffer = createToolOutputBuffer({
     ...bufferOptions,
-    onFlush: ({ id, name, chunk, stream }) => dispatchToolOutput({
+    onFlush: ({ id, name, chunk, stream, turnId }) => dispatchToolOutput({
       toolCallId: id,
       toolName: name,
       chunk,
       stream,
+      turnId,
     }, dispatchOptions),
   })
 
@@ -149,6 +160,7 @@ export function createBufferedTurnActivityDispatcher(options = {}) {
           name: activity.toolName,
           chunk: activity.chunk,
           stream: activity.stream,
+          turnId: activity.turnId,
         })
       : dispatchTurnActivity(activity, dispatchOptions),
     flush: outputBuffer.flush,
@@ -168,6 +180,16 @@ export async function dispatchTurnEvent(event, {
   if (TOOL_OUTPUT_FLUSH_EVENT_TYPES.has(event.type)) await flushToolOutput?.()
   const dispatchMessage = (action) => dispatch?.({ ...action, ...(messageTarget || {}) })
   const streamCursor = { serverTurnId: event.turnId, serverSequence: event.sequence }
+  const terminalToolStatus = TERMINAL_TOOL_CALL_STATUS.get(event.type)
+  const terminalToolFinalizer = terminalToolStatus ? {
+    status: terminalToolStatus,
+    ...(terminalToolStatus === TOOL_CALL_STATUS.ERROR
+      ? {
+          error: String(payload.message || payload.reason || 'Turn failed before the tool returned a result'),
+          errorCode: String(payload.code || payload.error?.code || 'TURN_FAILED'),
+        }
+      : {}),
+  } : null
   let cursorCommitted = false
   if (event.type === 'turn.started') {
     dispatchMessage({
@@ -184,11 +206,7 @@ export async function dispatchTurnEvent(event, {
         content: payload.assistantText || '',
         reasoning: payload.reasoningText || '',
       },
-      ...streamCursor,
-    })
-    dispatchMessage({
-      type: 'UPDATE_LAST_MESSAGE_META',
-      payload: {
+      meta: {
         interrupted: false,
         failed: false,
         paused: false,
@@ -200,6 +218,7 @@ export async function dispatchTurnEvent(event, {
         serverArtifactIds: [],
         modelActivity: null,
       },
+      ...streamCursor,
     })
     cursorCommitted = true
   } else if (event.type === 'turn.resumed') {
@@ -236,13 +255,17 @@ export async function dispatchTurnEvent(event, {
     if (payload.phase === 'streaming') {
       dispatchMessage({
         type: 'UPDATE_LAST_MESSAGE_META',
-        payload: { modelActivity: { kind: 'responding', phase: payload.phase, iteration: payload.iteration } },
+        payload: { progress: null, modelActivity: { kind: 'responding', phase: payload.phase, iteration: payload.iteration } },
+        ...streamCursor,
       })
+      cursorCommitted = true
     } else if (['started', 'waiting_first_token', 'idle', 'retrying'].includes(payload.phase)) {
       dispatchMessage({
         type: 'UPDATE_LAST_MESSAGE_META',
-        payload: { modelActivity: { kind: 'model', phase: payload.phase, iteration: payload.iteration } },
+        payload: { progress: null, modelActivity: { kind: 'model', phase: payload.phase, iteration: payload.iteration } },
+        ...streamCursor,
       })
+      cursorCommitted = true
     } else if (payload.phase === 'completed' || payload.phase === 'failed') {
       dispatchMessage({
         type: 'UPDATE_LAST_MESSAGE_META',
@@ -253,7 +276,9 @@ export async function dispatchTurnEvent(event, {
             actualPromptTokens: modelUsage.promptTokens,
           } : {}),
         },
+        ...streamCursor,
       })
+      cursorCommitted = true
     }
   } else if (event.type === 'model.failover') {
     dispatchMessage({
@@ -274,22 +299,22 @@ export async function dispatchTurnEvent(event, {
     dispatchMessage({
       type: 'APPEND_TO_LAST_MESSAGE',
       payload: payload.text || '',
-      meta: { modelActivity: { kind: 'responding' } },
+      meta: { progress: null, modelActivity: { kind: 'responding' } },
       ...streamCursor,
     })
     cursorCommitted = true
   } else if (event.type === 'reasoning.delta') {
     dispatchMessage({
-      type: 'UPDATE_LAST_MESSAGE_META',
-      payload: { modelActivity: { kind: 'reasoning', phase: 'streaming', iteration: payload.iteration } },
+      type: 'APPEND_REASONING_TO_LAST_MESSAGE',
+      payload: payload.text || '',
+      meta: { progress: null, modelActivity: { kind: 'reasoning', phase: 'streaming', iteration: payload.iteration } },
+      ...streamCursor,
     })
-    dispatchMessage({ type: 'APPEND_REASONING_TO_LAST_MESSAGE', payload: payload.text || '', ...streamCursor })
     cursorCommitted = true
   } else if (event.type === 'turn.progress') {
     dispatchMessage({ type: 'UPDATE_LAST_MESSAGE_META', payload: { progress: payload }, ...streamCursor })
     cursorCommitted = true
   } else if (event.type === 'tool.call' || event.type === 'tool.started') {
-    dispatchMessage({ type: 'UPDATE_LAST_MESSAGE_META', payload: { modelActivity: null } })
     dispatchMessage({
       type: 'APPEND_TOOL_CALL_TO_LAST_MESSAGE',
       payload: {
@@ -299,8 +324,11 @@ export async function dispatchTurnEvent(event, {
         ...(payload.outputReplay ? { outputReplay: payload.outputReplay } : {}),
         status: TOOL_CALL_STATUS.RUNNING,
       },
+      meta: { modelActivity: null },
+      ...streamCursor,
     })
     dispatch?.({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { stepLabel: `Calling ${payload.name || 'tool'}` } } })
+    cursorCommitted = true
   } else if (event.type === 'tool.completed') {
     const failed = payload.result?.ok === false
     const failure = payload.error || (failed ? {
@@ -327,6 +355,8 @@ export async function dispatchTurnEvent(event, {
         attempts: failed ? failure?.attempts : undefined,
         approvalAuthorization: payload.result?.approvalAuthorization || null,
       },
+      meta: { modelActivity: { kind: 'reviewing' } },
+      ...streamCursor,
     })
     const completedArtifacts = Array.isArray(payload.artifacts) && payload.artifacts.length > 0
       ? payload.artifacts
@@ -342,7 +372,7 @@ export async function dispatchTurnEvent(event, {
     for (const artifact of completedArtifacts) {
       onArtifact?.({ ...artifact, name: payload.name, toolCallId: payload.toolCallId })
     }
-    dispatchMessage({ type: 'UPDATE_LAST_MESSAGE_META', payload: { modelActivity: { kind: 'reviewing' } } })
+    cursorCommitted = true
   } else if (event.type === 'approval.required') {
     dispatch?.({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { stepLabel: 'Waiting for approval' } } })
     await onApproval?.({
@@ -357,17 +387,25 @@ export async function dispatchTurnEvent(event, {
   } else if (event.type === 'turn.paused') {
     const deliveryArtifactIds = optionalArtifactIds(payload, 'deliveryArtifactIds')
     const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)
+    const modelUsage = normalizeModelUsage(payload.usage)
+    const turnModelUsage = normalizeModelUsage(payload.turnModelUsage)
+    const estimatedPromptTokens = optionalInteger(payload.estimatedPromptTokens, 0)
     dispatchMessage({
       type: 'UPDATE_LAST_MESSAGE_META',
       payload: {
         streaming: false,
         turnCompletedAt: event.createdAt,
         modelActivity: null,
+        progress: null,
         paused: true,
         serverConnectionState: 'paused',
         serverClarification: payload.clarification || null,
         directoryAuthorizationPending: false,
         serverResumeResolution: null,
+        finalizeRunningToolCalls: terminalToolFinalizer,
+        ...(modelUsage ? { modelUsage, actualPromptTokens: modelUsage.promptTokens } : {}),
+        ...(turnModelUsage ? { turnModelUsage } : {}),
+        ...(estimatedPromptTokens !== undefined ? { serverEstimatedPromptTokens: estimatedPromptTokens } : {}),
         ...(deliveryArtifactIds !== undefined ? { serverDeliveryArtifactIds: deliveryArtifactIds } : {}),
         ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
       },
@@ -379,35 +417,49 @@ export async function dispatchTurnEvent(event, {
     const deliveryArtifactIds = optionalArtifactIds(payload, 'deliveryArtifactIds')
     const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)
     const modelUsage = normalizeModelUsage(payload.usage)
+    const turnModelUsage = normalizeModelUsage(payload.turnModelUsage)
+    const estimatedPromptTokens = optionalInteger(payload.estimatedPromptTokens, 0)
     dispatchMessage({
       type: 'UPDATE_LAST_MESSAGE_META',
       payload: {
         streaming: false,
         turnCompletedAt: event.createdAt,
         modelActivity: null,
+        progress: null,
         serverConnectionState: null,
         serverArtifactIds: optionalArtifactIds(payload, 'artifactIds') || [],
+        finalizeRunningToolCalls: terminalToolFinalizer,
         ...(deliveryArtifactIds !== undefined ? { serverDeliveryArtifactIds: deliveryArtifactIds } : {}),
         ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
         ...(modelUsage ? {
           modelUsage,
           actualPromptTokens: modelUsage.promptTokens,
         } : {}),
+        ...(turnModelUsage ? { turnModelUsage } : {}),
+        ...(estimatedPromptTokens !== undefined ? { serverEstimatedPromptTokens: estimatedPromptTokens } : {}),
       },
       ...streamCursor,
     })
     cursorCommitted = true
   } else if (event.type === 'turn.cancelled') {
     const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)
+    const modelUsage = normalizeModelUsage(payload.usage)
+    const turnModelUsage = normalizeModelUsage(payload.turnModelUsage)
+    const estimatedPromptTokens = optionalInteger(payload.estimatedPromptTokens, 0)
     dispatchMessage({
       type: 'UPDATE_LAST_MESSAGE_META',
       payload: {
         streaming: false,
         turnCompletedAt: event.createdAt,
         modelActivity: null,
+        progress: null,
         serverConnectionState: 'cancelled',
         serverArtifactIds: optionalArtifactIds(payload, 'artifactIds') || [],
         serverDeliveryArtifactIds: optionalArtifactIds(payload, 'deliveryArtifactIds') || [],
+        finalizeRunningToolCalls: terminalToolFinalizer,
+        ...(modelUsage ? { modelUsage, actualPromptTokens: modelUsage.promptTokens } : {}),
+        ...(turnModelUsage ? { turnModelUsage } : {}),
+        ...(estimatedPromptTokens !== undefined ? { serverEstimatedPromptTokens: estimatedPromptTokens } : {}),
         ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
       },
       ...streamCursor,
@@ -426,6 +478,7 @@ export async function dispatchTurnEvent(event, {
         turnCompletedAt: event.type === 'turn.interrupted' ? null : event.createdAt,
         ...(event.type === 'turn.interrupted' ? { latency: null } : {}),
         modelActivity: null,
+        progress: null,
         ...(event.type === 'turn.failed' ? { serverConnectionState: null } : {}),
         serverPartialText: failure.partialText,
         serverArtifactIds: failure.artifactIds,
@@ -436,6 +489,15 @@ export async function dispatchTurnEvent(event, {
           ? { verifiedLocalFiles: failure.verifiedLocalFiles }
           : {}),
         ...(failure.iterations !== undefined ? { serverIterations: failure.iterations } : {}),
+        finalizeRunningToolCalls: terminalToolFinalizer,
+        ...(failure.modelUsage ? {
+          modelUsage: failure.modelUsage,
+          actualPromptTokens: failure.modelUsage.promptTokens,
+        } : {}),
+        ...(failure.turnModelUsage ? { turnModelUsage: failure.turnModelUsage } : {}),
+        ...(failure.estimatedPromptTokens !== undefined
+          ? { serverEstimatedPromptTokens: failure.estimatedPromptTokens }
+          : {}),
         interrupted: event.type === 'turn.interrupted',
         ...(event.type === 'turn.interrupted'
           ? { failed: false, paused: false, serverConnectionState: 'interrupted' }
@@ -444,21 +506,6 @@ export async function dispatchTurnEvent(event, {
       ...streamCursor,
     })
     cursorCommitted = true
-  }
-  const terminalToolStatus = TERMINAL_TOOL_CALL_STATUS.get(event.type)
-  if (terminalToolStatus) {
-    dispatchMessage({
-      type: 'FINALIZE_RUNNING_TOOL_CALLS',
-      payload: {
-        status: terminalToolStatus,
-        ...(terminalToolStatus === TOOL_CALL_STATUS.ERROR
-          ? {
-              error: String(payload.message || payload.reason || 'Turn failed before the tool returned a result'),
-              errorCode: String(payload.code || payload.error?.code || 'TURN_FAILED'),
-            }
-          : {}),
-      },
-    })
   }
   return { cursorCommitted }
 }

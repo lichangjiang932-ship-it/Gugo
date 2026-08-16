@@ -145,6 +145,20 @@ const NON_SUBSTANTIVE_TOOL_NAMES = new Set([
   'sleep_until',
 ])
 
+const OBSERVATION_TOOL_NAMES = new Set([
+  'archive_list',
+  'file_hash_manifest',
+  'git_diff',
+  'git_status',
+  'image_info',
+  'list_directory',
+  'media_probe',
+  'pdf_info',
+  'pdf_text',
+  'read_file',
+  'run_project_check',
+])
+
 /**
  * Tool executors share one explicit result contract. Legacy `{ error }`
  * objects remain failures, while empty or ambiguous values must never be
@@ -883,6 +897,41 @@ function callSignature(call) {
     .digest('hex')
 }
 
+function observationSignature(call, result) {
+  const name = String(call?.name || '').trim()
+  if (!OBSERVATION_TOOL_NAMES.has(name) || result?.ok !== true) return null
+  const args = call?.args && typeof call.args === 'object' ? call.args : {}
+  const target = String(
+    result?.path
+    || result?.filePath
+    || result?.file_path
+    || args.path
+    || args.filePath
+    || args.file_path
+    || args.cwd
+    || '<default>',
+  ).trim().replace(/\\/g, '/').toLowerCase()
+  const omitEchoFields = new Set([
+    'createdAt', 'durationMs', 'elapsedMs', 'end', 'endLine', 'filePath', 'file_path',
+    'limit', 'offset', 'path', 'pattern', 'query', 'start', 'startLine', 'updatedAt',
+  ])
+  const outcome = (value) => {
+    if (Array.isArray(value)) return value.map(outcome)
+    if (!isPlainObject(value)) return value
+    return Object.fromEntries(Object.keys(value)
+      .filter((key) => !omitEchoFields.has(key))
+      .sort()
+      .map((key) => [key, outcome(value[key])]))
+  }
+  const serialized = safeStringify(outcome(result))
+  const bounded = serialized.length <= 131_072
+    ? serialized
+    : `${serialized.slice(0, 65_536)}:${serialized.slice(-65_536)}`
+  return createHash('sha256')
+    .update(`${name}:${target}:${bounded}`)
+    .digest('hex')
+}
+
 function restoredCounter(value) {
   const number = Number(value)
   return Number.isInteger(number) && number >= 0 ? number : 0
@@ -941,6 +990,10 @@ function sameToolFailureAdvisory({ tool, count, level }) {
  */
 export function createToolLoopGuard({
   maxRepeatedCalls = 3,
+  maxWindowRepeatedCalls = 6,
+  repeatWindowSize = 24,
+  maxRepeatedObservations = 6,
+  observationWindowSize = 24,
   maxConsecutiveErrors = 6,
   maxAuthoringErrors = 20,
   maxSameToolFailures = 20,
@@ -995,11 +1048,49 @@ export function createToolLoopGuard({
     ? String(restored.lastSignature)
     : null
   let repeatedCallStreak = lastSignature ? restoredCounter(restored.repeatedCallStreak) : 0
+  const safeWindowSize = Math.max(2, Math.floor(Number(repeatWindowSize) || 24))
+  const safeWindowRepeatLimit = Math.max(
+    Math.floor(Number(maxRepeatedCalls) || 3) + 1,
+    Math.floor(Number(maxWindowRepeatedCalls) || 6),
+  )
+  const recentSignatures = Array.isArray(restored.recentSignatures)
+    ? restored.recentSignatures
+        .map((value) => String(value || ''))
+        .filter((value) => /^[a-f0-9]{64}$/u.test(value))
+        .slice(-safeWindowSize)
+    : []
+  const safeObservationWindowSize = Math.max(
+    2,
+    Math.floor(Number(observationWindowSize) || 24),
+  )
+  const safeObservationRepeatLimit = Math.max(
+    2,
+    Math.floor(Number(maxRepeatedObservations) || 6),
+  )
+  const recentObservationSignatures = Array.isArray(restored.recentObservationSignatures)
+    ? restored.recentObservationSignatures
+        .map((value) => String(value || ''))
+        .filter((value) => /^[a-f0-9]{64}$/u.test(value))
+        .slice(-safeObservationWindowSize)
+    : []
+
+  const resetRepetition = () => {
+    lastSignature = null
+    repeatedCallStreak = 0
+    recentSignatures.length = 0
+    recentObservationSignatures.length = 0
+  }
 
   return {
     before(call) {
       const signature = callSignature(call)
       seenSignatures.add(signature)
+      recentSignatures.push(signature)
+      if (recentSignatures.length > safeWindowSize) recentSignatures.shift()
+      const windowOccurrences = recentSignatures.reduce(
+        (count, candidate) => count + (candidate === signature ? 1 : 0),
+        0,
+      )
       if (signature === lastSignature) repeatedCallStreak += 1
       else {
         lastSignature = signature
@@ -1013,6 +1104,17 @@ export function createToolLoopGuard({
           result: toolError('repeated_tool_call', reason, {
             retryable: false,
             hint: '请停止重复调用，改用已有结果收尾或换一种方法。',
+          }),
+        }
+      }
+      if (windowOccurrences > safeWindowRepeatLimit) {
+        const reason = `同一工具调用在最近 ${recentSignatures.length} 次调用中已重复 ${windowOccurrences} 次，未取得实质进展`
+        return {
+          ok: false,
+          reason,
+          result: toolError('repeated_tool_call_window', reason, {
+            retryable: false,
+            hint: '请停止交替重复读取或搜索，改用已有结果执行修改、完成验证或明确报告一个具体阻塞。',
           }),
         }
       }
@@ -1046,8 +1148,6 @@ export function createToolLoopGuard({
         if (!call || isSubstantiveToolCall(call)) {
           consecutiveErrors = 0
           consecutiveAuthoringErrors = 0
-          lastSignature = null
-          repeatedCallStreak = 0
         }
         return { ok: true }
       }
@@ -1081,6 +1181,28 @@ export function createToolLoopGuard({
       const normalized = normalizeToolResult(result)
       const failed = normalized.ok === false
       if (!failed) {
+        const observation = observationSignature(call, normalized)
+        if (observation) {
+          recentObservationSignatures.push(observation)
+          if (recentObservationSignatures.length > safeObservationWindowSize) {
+            recentObservationSignatures.shift()
+          }
+          const occurrences = recentObservationSignatures.reduce(
+            (count, candidate) => count + (candidate === observation ? 1 : 0),
+            0,
+          )
+          if (occurrences > safeObservationRepeatLimit) {
+            const reason = `工具 ${name} 在最近 ${recentObservationSignatures.length} 次观察中重复返回相同状态 ${occurrences} 次，未取得新进展`
+            return {
+              ok: false,
+              reason,
+              result: toolError('repeated_tool_observation', reason, {
+                retryable: false,
+                hint: '停止继续改变无关参数；请使用已有观察结果执行下一步、验证交付，或报告一个具体阻塞。',
+              }),
+            }
+          }
+        }
         // Success only proves recovery for this exact executor. In particular,
         // a reflect/request/sleep result must not erase another tool's history.
         if (isSubstantiveToolCall(call)) {
@@ -1141,6 +1263,21 @@ export function createToolLoopGuard({
       }
       pendingToolAdvisoryThresholds.clear()
     },
+    markProgress(call = null) {
+      if (!call) {
+        resetRepetition()
+        return
+      }
+      const signature = callSignature(call)
+      const currentStreak = signature === lastSignature
+        ? Math.max(1, repeatedCallStreak)
+        : 1
+      lastSignature = signature
+      repeatedCallStreak = currentStreak
+      recentSignatures.splice(0, recentSignatures.length, ...Array(currentStreak).fill(signature).slice(-safeWindowSize))
+      recentObservationSignatures.length = 0
+    },
+    resetRepetition,
     snapshot() {
       return {
         consecutiveErrors,
@@ -1148,6 +1285,8 @@ export function createToolLoopGuard({
         uniqueCalls: seenSignatures.size,
         repeatedCallStreak,
         lastSignature,
+        recentSignatures: [...recentSignatures],
+        recentObservationSignatures: [...recentObservationSignatures],
         failedTools: Object.fromEntries(failedToolCounts),
         firedToolAdvisoryThresholds: Object.fromEntries(firedToolAdvisoryThresholds),
         pendingToolAdvisoryThresholds: Object.fromEntries(pendingToolAdvisoryThresholds),

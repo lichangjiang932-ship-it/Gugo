@@ -27,7 +27,7 @@ test('chat composer accepts pasted files and shows managed upload state', () => 
 
 test('chat drafts persist while typing and message actions stay copy-only', () => {
   assert.match(lifecycleSource, /SET_SESSION_DRAFT[\s\S]{0,180}text: input/)
-  assert.match(lifecycleSource, /previousId === nextId[\s\S]{0,320}setAttachments\(\[\]\)/)
+  assert.match(lifecycleSource, /previousId === nextId[\s\S]{0,520}preserveAttachmentsForSessionRef[\s\S]{0,360}if \(!preserveAttachments\) setAttachments\(\[\]\)/)
   assert.match(chatEntrySource, /triggerSendFlow\(typedContent \|\| describeAttachmentPrompt\(currentAttachments\), currentAttachments\)/)
   assert.doesNotMatch(chatSource, /handleEditMessage|editingMessageId|handleRegenerate|handleDeleteMessage/)
   assert.match(messageRowSource, /<CopyButton content=\{msg\.content\}/)
@@ -67,7 +67,8 @@ test('only the streaming assistant hides copy actions while completed messages r
   assert.match(markdownSource, /function CodeBlock\(\{ children, streaming = false \}\)/)
   assert.match(markdownSource, /!streaming && \(/)
   assert.match(messageRowSource, /const isMessageComplete = !isCurrentStreamingMessage/)
-  assert.match(messageRowSource, /const showArtifactPreview = !!artifactPreview && isMessageComplete/)
+  assert.match(messageRowSource, /const canPresentDeliverables = isMessageComplete[\s\S]*?msg\.meta\?\.interrupted === true[\s\S]*?msg\.meta\?\.failed === true/)
+  assert.match(messageRowSource, /const showArtifactPreview = !!artifactPreview && canPresentDeliverables/)
   assert.match(chatViewSource, /isGenerating=\{isGenerating\}/)
 })
 
@@ -163,7 +164,7 @@ test('reasoning stays a compact live status while tool traces remain inspectable
 
 test('one assistant turn preserves narration and tool batches in their recorded order', () => {
   assert.match(messageRowSource, /buildMessageTimeline\(content, toolCalls\)/)
-  assert.match(messageRowSource, /assistantTimelinePresentation\(timeline, isCurrentStreamingMessage\)/)
+  assert.match(messageRowSource, /assistantTimelinePresentation\(timeline\)/)
   assert.match(messageRowSource, /segments\.map\(\(segment, index\)/)
   assert.match(messageRowSource, /segment\.kind === 'tools'/)
   assert.match(messageRowSource, /<ToolCallTrace[\s\S]*?calls=\{segment\.calls\}/)
@@ -181,7 +182,8 @@ test('reasoning does not expose raw text or character counts', () => {
 })
 
 test('completed artifact rows do not revert to streaming source when a later message generates', () => {
-  assert.match(messageRowSource, /const isCurrentStreamingMessage = msg\.id === generatingMessageId \|\| !!msg\.meta\?\.streaming/)
+  assert.match(messageRowSource, /const isCurrentStreamingMessage = msg\.meta\?\.streaming === true/)
+  assert.match(messageRowSource, /msg\.meta\?\.streaming == null && msg\.id === generatingMessageId/)
   assert.match(messageRowSource, /const isMessageComplete = !isCurrentStreamingMessage/)
   assert.match(messageRowSource, /function CollapsedArtifactContent/)
   assert.match(messageRowSource, /artifact-completion-summary/)

@@ -39,6 +39,7 @@ const LOCAL_FILE_MUTATION_TOOLS = new Set([
   'write_file',
   'edit_file',
   'apply_patch',
+  'patch_file',
   'bash_exec',
   'run_command',
 ])
@@ -126,7 +127,12 @@ function retainedToolResultMetadata(result) {
 function mutationResultPaths(call, result) {
   if (!LOCAL_FILE_MUTATION_TOOLS.has(call.name) || result?.ok !== true) return []
   const evidence = retainedToolResultMetadata(result) || result
-  if (call.name === 'apply_patch' && (evidence.dry_run === true || call.args?.dry_run === true)) return []
+  if (['apply_patch', 'patch_file'].includes(call.name)
+    && (evidence.dry_run === true
+      || evidence.dryRun === true
+      || result.dry_run === true
+      || result.dryRun === true
+      || call.args?.dry_run === true)) return []
 
   const values = []
   if (Array.isArray(evidence.changedPaths)) values.push(...evidence.changedPaths)
@@ -604,6 +610,12 @@ function textContent(value) {
 }
 
 function storedMessageToWire(message) {
+  // System blocks are rebuilt by promptCompiler for every request. Replaying a
+  // stored/imported system row would duplicate stale identity, skill, runtime,
+  // or UI state and could elevate untrusted imported transcript text back to
+  // system authority. Durable conversation facts remain in user/assistant and
+  // paired tool messages.
+  if (message?.role === 'system') return null
   const context = message.modelContext && typeof message.modelContext === 'object'
     ? message.modelContext
     : null
@@ -696,7 +708,8 @@ export function expandStoredMessages(messages) {
         tagStoredMessageSource({ ...item }, message.id)
       )))
     }
-    expanded.push(tagStoredMessageSource(storedMessageToWire(message), message.id))
+    const wire = storedMessageToWire(message)
+    if (wire) expanded.push(tagStoredMessageSource(wire, message.id))
   })
   return expanded
 }
@@ -714,6 +727,8 @@ export function buildAssistantModelContext({
   compactionArchiveId = null,
   compactionRecovery = null,
   usage = null,
+  turnModelUsage = null,
+  estimatedPromptTokens = null,
   turnStartedAt = null,
   turnCompletedAt = null,
 } = {}) {
@@ -725,6 +740,15 @@ export function buildAssistantModelContext({
     }),
   )
   const normalizedUsage = normalizeModelUsage(usage)
+  const normalizedTurnModelUsage = normalizeModelUsage(turnModelUsage)
+  const normalizedEstimatedPromptTokens = (
+    estimatedPromptTokens !== null
+    && estimatedPromptTokens !== undefined
+    && estimatedPromptTokens !== ''
+    && typeof estimatedPromptTokens !== 'boolean'
+    && Number.isFinite(Number(estimatedPromptTokens))
+    && Number(estimatedPromptTokens) >= 0
+  ) ? Math.floor(Number(estimatedPromptTokens)) : null
   const normalizedStartedAt = Number.isFinite(Number(turnStartedAt))
     ? Math.max(0, Number(turnStartedAt))
     : null
@@ -751,6 +775,10 @@ export function buildAssistantModelContext({
     iterations: Math.max(0, Number(iterations) || 0),
     paused: !!paused,
     ...(normalizedUsage ? { usage: normalizedUsage } : {}),
+    ...(normalizedTurnModelUsage ? { turnModelUsage: normalizedTurnModelUsage } : {}),
+    ...(normalizedEstimatedPromptTokens !== null
+      ? { estimatedPromptTokens: normalizedEstimatedPromptTokens }
+      : {}),
     ...(normalizedStartedAt !== null ? { turnStartedAt: normalizedStartedAt } : {}),
     ...(normalizedCompletedAt !== null ? { turnCompletedAt: normalizedCompletedAt } : {}),
     ...(latency !== null ? { latency } : {}),

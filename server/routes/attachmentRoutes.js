@@ -48,11 +48,29 @@ function routeParts(pathname) {
   return pathname.split('/').filter(Boolean)
 }
 
+function authenticateAttachmentRequest(req, url, parts) {
+  const contentRead = req.method === 'GET'
+    && parts.length === 4
+    && parts[0] === 'api'
+    && parts[1] === 'attachments'
+    && parts[2]
+    && parts[3] === 'content'
+
+  // Embedded media and browser download links cannot attach an Authorization
+  // header. Accept the session token from the query string only for the exact
+  // read-only content endpoint; metadata and mutation routes stay header-only.
+  const contentToken = contentRead ? url.searchParams.get('token') : ''
+  if (contentToken && !req.headers.authorization) {
+    req.headers.authorization = `Bearer ${contentToken}`
+  }
+  return authenticateRequest(req)
+}
+
 export async function handleAttachmentRequest(req, res) {
-  const userId = authenticateRequest(req)
-  if (!userId) return sendJson(res, 401, { error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } })
   const url = new URL(req.url, 'http://localhost')
   const parts = routeParts(url.pathname)
+  const userId = authenticateAttachmentRequest(req, url, parts)
+  if (!userId) return sendJson(res, 401, { error: { code: 'UNAUTHORIZED', message: 'Unauthorized' } })
   try {
     if (req.method === 'POST' && url.pathname === '/api/attachments/cleanup') {
       return sendJson(res, 200, cleanupManagedAttachments({ userId }))
@@ -113,6 +131,7 @@ export async function handleAttachmentRequest(req, res) {
           ETag: `"sha256-${attachment.sha256}"`,
           'X-Content-Type-Options': 'nosniff',
           'Cross-Origin-Resource-Policy': 'same-origin',
+          'Referrer-Policy': 'no-referrer',
           ...(!inline ? { 'Content-Security-Policy': "sandbox; default-src 'none'" } : {}),
         })
         return fs.createReadStream(attachment.fullPath).pipe(res)

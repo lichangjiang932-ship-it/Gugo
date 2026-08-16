@@ -106,6 +106,15 @@ function isExistingAssetPlacement(text = '') {
 }
 const ARTIFACT_REVISION_DENIAL = /(?:不要|不用|无需|别|禁止|停止|取消)[^，,；;：:。！？!?\n]{0,20}(?:修改|编辑|更新|优化|调整|重做|生成|导出)|(?:do\s+not|don't|dont|never|stop|cancel)[^,;:.!?\n]{0,24}(?:revise|edit|update|change|generate|export)/i
 const ARTIFACT_REVISION_DISCUSSION = /^(?:为什么|为何|怎么|如何|请?(?:解释|说明|分析|讨论)|告诉我)[^。！？!?\n]{0,40}|(?:修改|编辑|调整|优化|改|换)[^。！？!?\n]{0,10}(?:是什么|什么意思|含义|原则|方法|逻辑|代码|工具)/i
+// Once a deliverable is immediately adjacent, users often describe only the
+// desired visual state instead of repeating an edit verb or filename. Keep
+// these cues contextual: the same complaint in an unrelated conversation must
+// not unlock artifact mutation tools.
+const ARTIFACT_REVISION_CONTEXTUAL_CONTINUE = /^(?:继续|接着|往下做|继续吧|接着做|continue|go\s+on|keep\s+going)[\s。.!！]*$/i
+const ARTIFACT_REVISION_CONTEXTUAL_PLACEMENT = /^(?:(?:请|帮我|麻烦(?:你)?|直接|再)?\s*(?:把|将)\s*[^。！？!?；;\n]{1,48}?(?:放|移|挪|置|排列|对齐)(?:到|至|在|于|成)\s*[^。！？!?；;\n]{1,32}|(?:please\s+)?(?:move|place|align|position)\s+[^.!?\n]{1,48}\s+(?:to|on|at|in)\s+[^.!?\n]{1,32})[\s。.!！]*$/i
+const ARTIFACT_REVISION_CONTEXTUAL_FEEDBACK = /^(?=[^。！？!?\n]{2,64}[。.!！]*$)(?:(?:这个|这张|这段|这里|页面|网页|背景(?:颜色)?|颜色|人物|图片|图像|按钮|标题|文字|字体|字号|间距|布局|卡片|表格|图表|封面|主视觉|动画|效果|内容)[^。！？!?\n]{0,28}(?:太(?:浅|深|大|小|亮|暗|高|低|宽|窄|快|慢|密|疏)|有点[^。！？!?\n]{1,12}|不够[^。！？!?\n]{1,12}|不好看|难看|不协调|不清楚|看不清|不明显|不对|有问题|不合适)(?:了|啦)?|(?:人物|图片|图像|按钮|标题|文字|字体|字号|间距|布局|卡片|表格|图表|封面|主视觉)[^。！？!?\n]{0,16}(?:(?:再|更)(?:大|小|高|低|宽|窄|亮|暗|粗|细|靠左|靠右|往左|往右|往上|往下|上移|下移)|(?:大|小|高|低|宽|窄|亮|暗|粗|细|居中|左对齐|右对齐|靠左|靠右)(?:一?点|一些)?))[\s。.!！]*$/i
+const ARTIFACT_REVISION_CONTEXTUAL_DENIAL = /^(?:不要|别|不用|无需|禁止|停止|取消|先不要|暂时不要|do\s+not|don't|dont|never|stop|cancel)/i
+const ARTIFACT_REVISION_CONTEXTUAL_QUESTION = /^(?:是不是|是否|能否|可否|要不要|你觉得|你认为|should\b|could\b|can\b|would\b|is\b|are\b)|[?？]\s*$/i
 const ARTIFACT_REPLACE_ORIGINAL_CUE = /(?:原地(?:修改|编辑|更新|覆盖)|(?:修改|编辑|更新|覆盖|改动?|调整)(?:原版|原文件|原文档|原表格|原演示|当前文件|当前版本|上一版)|(?:在|基于)(?:原版|原文件|当前文件|当前版本|上一版)(?:上|中|直接)?(?:修改|编辑|更新|覆盖|改动?|调整)|直接覆盖(?:原版|原文件|当前文件|上一版)|(?:edit|update|modify|overwrite)\s+(?:the\s+)?(?:original|existing|same)\s+(?:file|artifact|document|deck|workbook|page)|in[ -]?place)/i
 const ARTIFACT_CREATE_COPY_CUE = /(?:(?:新建|另建|另做|另生成|另外生成|重新创建)(?:一|1)?(?:个|份)?(?:新)?(?:文件|版本|副本)?|(?:创建|生成|制作)(?:一|1)?(?:个|份)?新(?:文件|版本|副本)|另存为|(?:create|make|save)\s+(?:a\s+)?(?:new|separate)\s+(?:file|copy|version))/i
 const ARTIFACT_CREATE_COPY_DENIAL = /(?:(?:不要|别|无需)(?:再)?(?:新建|另建|另做|新生成|创建新(?:文件|版本|副本))|without\s+creating\s+(?:a\s+)?new\s+(?:file|copy))/gi
@@ -233,6 +242,8 @@ export function resolveArtifactDeliveryTargets(prompt = '', {
   const source = String(prompt || '').trim()
   const { text, references } = extractFileTargetReferences(source)
   const prior = Array.isArray(priorArtifacts) ? priorArtifacts : []
+  const hasPriorArtifactContext = prior.length > 0
+    || (Array.isArray(priorArtifactTypes) && priorArtifactTypes.length > 0)
   const localFileTargets = []
   const managedFileTargets = []
   // “保留原文件名” describes the replacement disposition; its “原文件”
@@ -299,6 +310,7 @@ export function resolveArtifactDeliveryTargets(prompt = '', {
   const residualIntent = detectArtifactIntentRaw(residualText, {
     skillId: residualSkill,
     priorArtifactTypes: localFileTargets.length > 0 ? [] : priorArtifactTypes,
+    hasPriorArtifact: localFileTargets.length === 0 && hasPriorArtifactContext,
   })
   const managedArtifactTypes = [...new Set([
     ...managedFileTargets.map(({ type }) => type),
@@ -312,7 +324,7 @@ export function resolveArtifactDeliveryTargets(prompt = '', {
     ? ARTIFACT_DELIVERY_TARGETS.MIXED
     : hasLocal
       ? ARTIFACT_DELIVERY_TARGETS.WORKSPACE_FILE
-      : hasPriorArtifact && isArtifactRevisionRequest(source)
+      : hasPriorArtifact && isArtifactRevisionRequest(source, { hasPriorArtifact: true })
         ? ARTIFACT_DELIVERY_TARGETS.MANAGED_ARTIFACT
         : ARTIFACT_DELIVERY_TARGETS.STANDALONE
 
@@ -361,7 +373,7 @@ export function isExplicitCodeSnippetRequest(prompt = '') {
   )
 }
 
-export function isArtifactRevisionRequest(prompt = '') {
+export function isArtifactRevisionRequest(prompt = '', { hasPriorArtifact = false } = {}) {
   const text = String(prompt || '').trim()
   if (!text
     || GLOBAL_DENIAL.test(text)
@@ -370,9 +382,15 @@ export function isArtifactRevisionRequest(prompt = '') {
   const existingAssetPlacement = isExistingAssetPlacement(text)
   const actionText = text.replace(ARTIFACT_REVISION_SHORT_DENIAL, ' ')
   ARTIFACT_REVISION_SHORT_DENIAL.lastIndex = 0
-  return ARTIFACT_REVISION_ACTION.test(actionText)
+  const explicitRevision = ARTIFACT_REVISION_ACTION.test(actionText)
     || existingAssetPlacement
     || resolveArtifactRevisionMode(text) !== 'unspecified'
+  if (explicitRevision || !hasPriorArtifact) return explicitRevision
+  if (ARTIFACT_REVISION_CONTEXTUAL_DENIAL.test(text)
+    || ARTIFACT_REVISION_CONTEXTUAL_QUESTION.test(text)) return false
+  return ARTIFACT_REVISION_CONTEXTUAL_CONTINUE.test(text)
+    || ARTIFACT_REVISION_CONTEXTUAL_PLACEMENT.test(text)
+    || ARTIFACT_REVISION_CONTEXTUAL_FEEDBACK.test(text)
 }
 
 function normalizePriorArtifactTypes(values) {
@@ -422,8 +440,15 @@ export function hasExplicitArtifactRequest(prompt = '', type) {
   return false
 }
 
-function detectArtifactIntentRaw(prompt = '', { skillId = undefined, priorArtifactTypes = [] } = {}) {
+function detectArtifactIntentRaw(prompt = '', {
+  skillId = undefined,
+  priorArtifactTypes = [],
+  hasPriorArtifact = false,
+} = {}) {
   const text = String(prompt || '')
+  const revisionRequest = isArtifactRevisionRequest(text, {
+    hasPriorArtifact: hasPriorArtifact || priorArtifactTypes.length > 0,
+  })
   const resolvedSkill = skillId === undefined ? parseArtifactSkillId(text) : skillId
   const skillTool = resolvedSkill ? resolveArtifactToolForSkillId(resolvedSkill) : null
   const explicitPptx = hasExplicitArtifactRequest(text, 'pptx')
@@ -432,7 +457,7 @@ function detectArtifactIntentRaw(prompt = '', { skillId = undefined, priorArtifa
   const explicitHtml = hasExplicitArtifactRequest(text, 'html')
   const explicitPdf = hasExplicitArtifactRequest(text, 'pdf')
   const existingAssetPlacement = isExistingAssetPlacement(text)
-    && isArtifactRevisionRequest(text)
+    && revisionRequest
   const additionalImageProduction = ADDITIONAL_IMAGE_PRODUCTION.test(text)
   // In "use this image as the background", the image is an input asset, not
   // a request to generate a second image artifact. An independent clause such
@@ -447,7 +472,7 @@ function detectArtifactIntentRaw(prompt = '', { skillId = undefined, priorArtifa
   const pptx = skillTool === 'create_pptx' || (skillTool ? allowAdditionalFormat('pptx') : explicitPptx)
   const explicitAny = Boolean(skillTool || explicitPptx || explicitDocx || explicitXlsx || explicitHtml || explicitPdf || explicitImage)
   const inherited = (!explicitAny || existingAssetPlacement)
-    && isArtifactRevisionRequest(text)
+    && revisionRequest
     ? normalizePriorArtifactTypes(priorArtifactTypes)
     : new Set()
   return {

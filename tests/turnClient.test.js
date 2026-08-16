@@ -1159,6 +1159,51 @@ test('tool.started keeps arguments previously recorded by tool.call', async () =
   assert.equal(startedAction.payload.outputReplay, 'live_only')
 })
 
+test('tool events commit the durable cursor and reject older interleaved progress', async () => {
+  let state = {
+    activeSessionId: 's',
+    sessions: [{
+      id: 's',
+      messages: [{ id: 'assistant-1', role: 'assistant', content: '', meta: { toolCalls: [] } }],
+    }],
+  }
+  const dispatch = (action) => {
+    const next = reduceMessageState(state, action)
+    if (next) state = next
+  }
+  const options = {
+    dispatch,
+    taskId: 'task',
+    messageTarget: { sessionId: 's', messageId: 'assistant-1' },
+  }
+
+  const started = await dispatchTurnEvent(createTurnEvent({
+    id: 'cursor-tool-started', sessionId: 's', turnId: 't', sequence: 3,
+    type: 'tool.started',
+    payload: { toolCallId: 'cursor-tool', name: 'read_file', args: { path: 'a.txt' } },
+    createdAt: 4,
+  }), options)
+  const completed = await dispatchTurnEvent(createTurnEvent({
+    id: 'cursor-tool-completed', sessionId: 's', turnId: 't', sequence: 5,
+    type: 'tool.completed',
+    payload: { toolCallId: 'cursor-tool', name: 'read_file', result: { ok: true, content: 'new' } },
+    createdAt: 6,
+  }), options)
+  await dispatchTurnEvent(createTurnEvent({
+    id: 'stale-progress', sessionId: 's', turnId: 't', sequence: 4,
+    type: 'turn.progress', payload: { completed: 0, total: 1 }, createdAt: 5,
+  }), options)
+
+  const meta = state.sessions[0].messages[0].meta
+  assert.equal(started.cursorCommitted, true)
+  assert.equal(completed.cursorCommitted, true)
+  assert.equal(meta.serverTurnId, 't')
+  assert.equal(meta.serverLastSequence, 5)
+  assert.equal(meta.progress, undefined)
+  assert.equal(meta.toolCalls[0].status, 'success')
+  assert.match(meta.toolCalls[0].result, /"content":"new"/)
+})
+
 test('assistant delta appends text and publishes responding activity in one state update', async () => {
   const actions = []
   const result = await dispatchTurnEvent(createTurnEvent({
@@ -1177,7 +1222,7 @@ test('assistant delta appends text and publishes responding activity in one stat
   assert.deepEqual(actions, [{
     type: 'APPEND_TO_LAST_MESSAGE',
     payload: 'hello',
-    meta: { modelActivity: { kind: 'responding' } },
+    meta: { progress: null, modelActivity: { kind: 'responding' } },
     serverTurnId: 't',
     serverSequence: 3,
     sessionId: 's',
@@ -1340,6 +1385,8 @@ test('dispatchTurnActivity shows early tool readiness without creating a tool ca
     {
       type: 'UPDATE_LAST_MESSAGE_META',
       payload: { modelActivity: { kind: 'tool_call_ready', toolName: 'write_file' } },
+      transientTurnActivity: true,
+      serverTurnId: 't',
       sessionId: 's',
       messageId: 'assistant-1',
     },
@@ -1391,6 +1438,8 @@ test('model usage events overwrite the current message with the latest measured 
     payload: {
       text: 'done',
       usage: { promptTokens: 460, completionTokens: 35, totalTokens: 495 },
+      turnModelUsage: { promptTokens: 880, completionTokens: 65, totalTokens: 945 },
+      estimatedPromptTokens: 444,
     },
     createdAt: 5,
   }), { dispatch, taskId: 'task', messageTarget: target })
@@ -1403,6 +1452,12 @@ test('model usage events overwrite the current message with the latest measured 
     completionTokens: 35,
     totalTokens: 495,
   })
+  assert.deepEqual(usageUpdates.at(-1).payload.turnModelUsage, {
+    promptTokens: 880,
+    completionTokens: 65,
+    totalTokens: 945,
+  })
+  assert.equal(usageUpdates.at(-1).payload.serverEstimatedPromptTokens, 444)
 })
 
 test('dispatchTurnEvent preserves explicit empty delivery ids on completion', async () => {
@@ -1453,11 +1508,13 @@ test('dispatchTurnEvent exposes a paused directory request to the inline authori
         streaming: false,
         turnCompletedAt: 11,
         modelActivity: null,
+        progress: null,
         paused: true,
       serverConnectionState: 'paused',
       serverClarification: clarification,
       directoryAuthorizationPending: false,
       serverResumeResolution: null,
+      finalizeRunningToolCalls: { status: 'cancelled' },
     },
     sessionId: 's',
     messageId: 'assistant-1',
@@ -1560,7 +1617,7 @@ test('interrupted turns retain resumable evidence and a recovery attempt clears 
     },
     createdAt: 8,
   }), { dispatch, messageTarget: { sessionId: 's', messageId: 'assistant-1' } })
-  const cleared = actions.findLast((action) => action.type === 'UPDATE_LAST_MESSAGE_META').payload
+  const cleared = actions.findLast((action) => action.type === 'RESET_LAST_MESSAGE_STREAM').meta
   assert.equal(cleared.interrupted, false)
   assert.equal(cleared.serverFailure, null)
 })
@@ -1592,13 +1649,7 @@ test('dispatchTurnEvent atomically maps a recovery attempt to stream reset and c
   assert.deepEqual(actions, [{
     type: 'RESET_LAST_MESSAGE_STREAM',
     payload: { attempt: 2, content: 'confirmed', reasoning: 'checked' },
-    serverTurnId: 't',
-    serverSequence: 9,
-    sessionId: 's',
-    messageId: 'assistant-1',
-  }, {
-    type: 'UPDATE_LAST_MESSAGE_META',
-    payload: {
+    meta: {
       interrupted: false,
       failed: false,
       paused: false,
@@ -1610,6 +1661,8 @@ test('dispatchTurnEvent atomically maps a recovery attempt to stream reset and c
       serverArtifactIds: [],
       modelActivity: null,
     },
+    serverTurnId: 't',
+    serverSequence: 9,
     sessionId: 's',
     messageId: 'assistant-1',
   }])
@@ -1670,6 +1723,8 @@ test('server snapshot restores measured model usage for the context ring', () =>
       modelContext: {
         turnId: 'turn-usage',
         usage: { promptTokens: 512, completionTokens: 64, totalTokens: 576 },
+        turnModelUsage: { promptTokens: 900, completionTokens: 96, totalTokens: 996 },
+        estimatedPromptTokens: 500,
       },
     }],
   })
@@ -1680,6 +1735,12 @@ test('server snapshot restores measured model usage for the context ring', () =>
     completionTokens: 64,
     totalTokens: 576,
   })
+  assert.deepEqual(snapshot.messages[0].meta.turnModelUsage, {
+    promptTokens: 900,
+    completionTokens: 96,
+    totalTokens: 996,
+  })
+  assert.equal(snapshot.messages[0].meta.serverEstimatedPromptTokens, 500)
 })
 
 test('server snapshot restores steering identity for authoritative message reconciliation', () => {

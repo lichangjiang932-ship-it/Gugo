@@ -27,9 +27,24 @@ export function ToolCallTrace({ calls = [], stepOffset = 0, artifacts = [], onOp
   const [expandedCallKey, setExpandedCallKey] = useState(null)
   const [collapsedDefaultCallKey, setCollapsedDefaultCallKey] = useState(null)
   const visibleLimit = 4
-  const hiddenCount = Math.max(0, normalizedCalls.length - visibleLimit)
-  const startIndex = showAll ? 0 : hiddenCount
-  const visibleCalls = showAll ? normalizedCalls : normalizedCalls.slice(startIndex)
+  const collapsedEntries = (() => {
+    const visibleIndexes = new Set()
+    for (let index = Math.max(0, normalizedCalls.length - visibleLimit); index < normalizedCalls.length; index += 1) {
+      visibleIndexes.add(index)
+    }
+    // Never hide an active operation behind newer completed siblings. If
+    // more than four calls are still running, showing all of them is more
+    // important than enforcing the compact history limit.
+    normalizedCalls.forEach((call, index) => {
+      if (call?.status === 'running') visibleIndexes.add(index)
+    })
+    return [...visibleIndexes].sort((left, right) => left - right)
+      .map((index) => ({ call: normalizedCalls[index], index }))
+  })()
+  const visibleEntries = showAll
+    ? normalizedCalls.map((call, index) => ({ call, index }))
+    : collapsedEntries
+  const hiddenCount = Math.max(0, normalizedCalls.length - collapsedEntries.length)
   const running = normalizedCalls.some((call) => call.status === 'running')
   const failed = normalizedCalls.some((call) => call.status === 'error')
   const cancelled = normalizedCalls.some((call) => call.status === 'cancelled')
@@ -46,7 +61,7 @@ export function ToolCallTrace({ calls = [], stepOffset = 0, artifacts = [], onOp
     <section
       className="chat-run-timeline"
       data-status={running ? 'running' : failed ? 'error' : cancelled ? 'cancelled' : 'success'}
-      aria-label={`${normalizedCalls.length} steps`}
+      aria-label={`${normalizedCalls.length} tool calls`}
       aria-busy={running}
     >
       {hiddenCount > 0 && (
@@ -58,15 +73,14 @@ export function ToolCallTrace({ calls = [], stepOffset = 0, artifacts = [], onOp
         >
           <ChevronDown className={`h-3.5 w-3.5 ${showAll ? 'rotate-180' : ''}`} aria-hidden="true" />
           <span>{showAll ? 'Collapse' : 'Expand'}</span>
-          <span>{`${showAll ? normalizedCalls.length : hiddenCount} steps`}</span>
+          <span>{`${showAll ? normalizedCalls.length : hiddenCount} tool calls`}</span>
         </button>
       )}
       {/* Static document flow (no transform animations): expanding argument or
           result details simply pushes the following content down, like the
           deepseek-harness tool display. */}
       <div className="chat-tool-list" role="list">
-        {visibleCalls.map((call, index) => {
-          const callIndex = startIndex + index
+        {visibleEntries.map(({ call, index: callIndex }) => {
           const stepNumber = stepOffset + callIndex + 1
           const callKey = stableCallKey(call, normalizedCalls, callIndex)
           return (

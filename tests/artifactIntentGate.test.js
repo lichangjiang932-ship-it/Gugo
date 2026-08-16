@@ -1029,6 +1029,47 @@ test('only an adjacent delivered artifact can authorize an implicit revision', (
       prompt,
     )
   }
+  for (const prompt of [
+    '背景颜色太浅了',
+    '人物再大一点',
+    '人物大一点',
+    '按钮小一点',
+    '标题居中',
+    '这个按钮不好看',
+    '把图片放到右边',
+    '继续',
+  ]) {
+    assert.equal(isArtifactRevisionRequest(prompt), false, `${prompt}: no adjacent artifact context`)
+    assert.equal(
+      isArtifactRevisionRequest(prompt, { hasPriorArtifact: true }),
+      true,
+      `${prompt}: adjacent artifact context`,
+    )
+    assert.deepEqual(
+      [...allowedArtifactTools(prompt, { priorArtifactTypes: ['html'] })],
+      ['create_html_app'],
+      prompt,
+    )
+    assert.equal(
+      resolveArtifactDeliveryTarget(prompt, { priorArtifacts: artifacts }),
+      'managed_artifact',
+      prompt,
+    )
+  }
+  for (const prompt of [
+    '是不是背景颜色太浅了？',
+    '你觉得这个按钮不好看吗？',
+    '不要把图片放到右边',
+    '先不要继续',
+    '为什么人物要再大一点？',
+  ]) {
+    assert.equal(
+      isArtifactRevisionRequest(prompt, { hasPriorArtifact: true }),
+      false,
+      prompt,
+    )
+    assert.equal(allowedArtifactTools(prompt, { priorArtifactTypes: ['html'] }).size, 0, prompt)
+  }
   for (const [type, tool] of [
     ['pptx', 'create_pptx'],
     ['docx', 'create_docx'],
@@ -1410,8 +1451,8 @@ for (const scenario of [
   })
 }
 
-test('an implicit adjacent webpage revision creates and delivers a new file without a skill', async () => {
-  const currentPrompt = '这里的按钮太大了，请缩小并继续完善'
+test('a terse adjacent webpage critique creates and delivers a new file without a skill', async () => {
+  const currentPrompt = '这个按钮不好看'
   const nextArtifactId = `revision-html-${Date.now()}-${Math.random().toString(16).slice(2)}`
   let modelCalls = 0
   const result = await runToolsLoop({

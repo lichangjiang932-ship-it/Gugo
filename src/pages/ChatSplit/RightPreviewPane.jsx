@@ -131,7 +131,7 @@ function DirectFileContent({ file, t }) {
   const previewUrl = withArtifactPreviewMode(downloadUrl)
   return (
     <>
-      <DirectFileToolbar filename={filename} type={type} summary={file?.summary || file?.mimeType || ''} url={downloadUrl} t={t} />
+      <DirectFileToolbar filename={filename} type={type} url={downloadUrl} t={t} />
       <div className="chat-direct-file-content min-h-0 flex-1 overflow-hidden" data-testid="direct-file-content">
         {previewUrl ? <DirectFilePreview file={{ ...file, filename, type }} url={previewUrl} t={t} /> : (
           <div className="flex h-full min-h-[320px] flex-col items-center justify-center gap-3 p-6 text-center">

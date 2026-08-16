@@ -1,5 +1,4 @@
 import { useRef, useEffect, useState } from 'react'
-import FullscreenMediaModal from '../../components/FullscreenMediaModal.jsx'
 import { useT } from '../../i18n/I18nProvider.jsx'
 import SlashCommandMenu from './SlashCommandMenu.jsx'
 import ComposerActions from './chatComposer/ComposerActions.jsx'
@@ -9,6 +8,7 @@ import {
 } from 'lucide-react'
 import { getClipboardFiles } from '../../lib/chatAttachmentFiles.js'
 import { attachmentSendState } from '../../lib/chatAttachmentUpload.js'
+import { buildAttachmentPreviewArtifact } from '../../lib/attachmentPreview.js'
 import { resolveSlashMenuKey } from '../../lib/slashMenuNavigation.js'
 
 const COMPOSER_INTERACTIVE_SELECTOR = 'button, input, textarea, select, option, a, label, [role="button"], [role="menuitem"], [role="option"], [contenteditable="true"]'
@@ -41,6 +41,7 @@ export default function ChatComposer({
   onCloseModelPicker,
   onModelChange,
   onManageModels,
+  onOpenAttachment,
   approvalMode,
   onApprovalModeChange,
   handleKeyDown,
@@ -102,7 +103,6 @@ export default function ChatComposer({
     return () => window.removeEventListener('command-palette:prefill', onPrefill)
   }, [setInput])
 
-  const [fullscreenSrc, setFullscreenSrc] = useState(null)
   // 拖放上传：dragCounter 计数解决移到子元素时 dragleave 误触发导致高亮闪烁。
   const [isDraggingFile, setIsDraggingFile] = useState(false)
   const dragCounter = useRef(0)
@@ -185,7 +185,16 @@ export default function ChatComposer({
           }}
           className="flex min-h-[104px] flex-col justify-between rounded-2xl border border-ink/25 bg-paper px-3.5 py-3 shadow-[0_8px_28px_rgb(var(--color-ink-rgb)/0.07)] transition-[border-color,box-shadow,background-color] hover:border-ink/40 hover:bg-paper-2/20 focus-within:!border-ember focus-within:bg-paper focus-within:ring-[3px] focus-within:ring-ember/25 focus-within:shadow-[0_10px_36px_rgb(var(--color-ember-rgb)/0.18)]"
         >
-          <ComposerAttachments attachments={attachments} onClear={() => setAttachments([])} onOpenImage={setFullscreenSrc} onRemove={(id) => setAttachments((current) => current.filter((item) => item.id !== id))} t={t} />
+          <ComposerAttachments
+            attachments={attachments}
+            onClear={() => setAttachments([])}
+            onOpen={(attachment) => {
+              const artifact = buildAttachmentPreviewArtifact(attachment)
+              if (artifact) onOpenAttachment?.(artifact)
+            }}
+            onRemove={(id) => setAttachments((current) => current.filter((item) => item.id !== id))}
+            t={t}
+          />
           <div className="flex min-h-6 cursor-text items-start gap-2">
             {skillCommand.command && (
               <span
@@ -261,13 +270,6 @@ export default function ChatComposer({
           />
         </div>
       </div>
-      {fullscreenSrc && (
-        <FullscreenMediaModal
-          src={fullscreenSrc.src}
-          alt={fullscreenSrc.alt}
-          onClose={() => setFullscreenSrc(null)}
-        />
-      )}
     </div>
   )
 }

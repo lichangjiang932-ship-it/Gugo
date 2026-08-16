@@ -90,7 +90,6 @@ import {
   ARTIFACT_DELIVERY_GUARD_MARKER,
   MAX_ARTIFACT_DELIVERY_RETRIES,
   EXECUTION_EVIDENCE_GUARD_MARKER,
-  EXECUTION_REASONING_RECOVERY_MARKER,
   DIRECTORY_RESUME_GUARD_MARKER,
   AVAILABLE_TOOL_CAPABILITIES_MARKER,
   POST_MUTATION_VERIFICATION_GUARD_MARKER,
@@ -98,7 +97,6 @@ import {
   PDF_LAYOUT_VERIFICATION_GUARD_MARKER,
   PDF_LAYOUT_VERIFICATION_OK,
   MAX_EXECUTION_EVIDENCE_RETRIES,
-  MAX_EXECUTION_REASONING_RETRIES,
   MAX_DIRECTORY_RESUME_RETRIES,
   MAX_MUTATION_VERIFICATION_RETRIES,
   MAX_PDF_LAYOUT_VERIFICATION_RETRIES,
@@ -141,6 +139,7 @@ import {
   isMutationExecutionCall,
   normalizeMutationTarget,
   targetsMatch,
+  shellTargetWithCwd,
   looksLikeDeletionCommand,
   staticDeletionTargets,
   extractMutationTargets,
@@ -549,7 +548,7 @@ export async function runToolsLoop({
     && authorizedArtifactTools.size > 0
     && (inheritsAdjacentArtifact
       || artifactRevisionMode !== 'unspecified'
-      || isArtifactRevisionRequest(artifactAuthorizationText))
+      || isArtifactRevisionRequest(artifactAuthorizationText, { hasPriorArtifact: true }))
   // Planning and verification consume an existing deliverable. They must not
   // manufacture another one merely because the original prompt names a format.
   const artifactDeliveryStep = !['plan', 'verify', 'finalize'].includes(String(step?.kind || ''))
@@ -915,6 +914,33 @@ export async function runToolsLoop({
       .map(normalizeMutationTarget)
       .filter(Boolean),
   )
+  const auxiliaryMutationTargets = new Set(
+    (Array.isArray(restoredState?.completionGuards?.auxiliaryMutationTargets)
+      ? restoredState.completionGuards.auxiliaryMutationTargets
+      : [])
+      .map(normalizeMutationTarget)
+      .filter(Boolean),
+  )
+  const auxiliaryScriptTarget = (target) => /(?:^|\/)[._-]?(?:run|generate|render|verify|validate|inspect|probe|cleanup|tmp|temp)(?:[-_.][^/]*)?\.(?:py|m?js|cjs|ts|ps1|sh|cmd|bat)$/i
+    .test(normalizeMutationTarget(target))
+  const commandReferencesTarget = (call, target) => {
+    if (!isCommandExecutionTool(call)) return false
+    const command = String(call?.args?.command || call?.args?.cmd || '')
+    const cwd = call?.args?.cwd
+    const referencedTargets = new Set()
+    const addReference = (value) => {
+      const candidate = String(value || '').trim()
+      if (!candidate || candidate.startsWith('-')) return
+      const resolved = shellTargetWithCwd(candidate, cwd)
+      if (resolved) referencedTargets.add(resolved)
+    }
+    const quoted = /"([^"\r\n]+)"|'([^'\r\n]+)'/g
+    for (const match of command.matchAll(quoted)) addReference(match[1] || match[2])
+    const unquoted = command.replace(quoted, ' ')
+    const literal = /(?:^|[\s=,(])([^\s"'<>|;&,)]+)/g
+    for (const match of unquoted.matchAll(literal)) addReference(match[1])
+    return [...referencedTargets].some((candidate) => targetsMatch(candidate, target))
+  }
   const hasPendingMutationVerification = () => (
     pendingMutationTargets.size > 0 || pendingDeletionTargets.size > 0
   )
@@ -1211,6 +1237,7 @@ export async function runToolsLoop({
         pendingMutationVerification: hasPendingMutationVerification(),
         pendingMutationTargets: [...pendingMutationTargets],
         pendingDeletionTargets: [...pendingDeletionTargets],
+        auxiliaryMutationTargets: [...auxiliaryMutationTargets],
         mutationVerificationRetries,
         pdfLayoutVerificationObserved,
         pdfLayoutVerificationRetries,
@@ -1233,6 +1260,7 @@ export async function runToolsLoop({
     if (!messages.length) return 0
     // 用户干预改变了上下文,跨干预的重复调用不算死循环。
     repeatCallGuard.reset()
+    loopGuard.resetRepetition?.()
     pendingRepeatCallReminder = null
     if (!hasRuntimeMarker(LIVE_STEERING_GUARD_MARKER)) {
       convo.push({
@@ -1673,35 +1701,6 @@ export async function runToolsLoop({
         const recoverableToolCalls = Array.isArray(recoverableModelResult?.toolCalls)
           ? recoverableModelResult.toolCalls
           : []
-        const canRecoverExecutionReasoning = error?.code === 'REASONING_RUNAWAY'
-          && directExecutionRequested
-          && activeToolSpecs.length > 0
-          && executionReasoningRetries < MAX_EXECUTION_REASONING_RETRIES
-          && iter + 1 < maxIters
-        if (canRecoverExecutionReasoning) {
-          executionReasoningRetries += 1
-          convo.push({
-            role: 'system',
-            content: [
-              EXECUTION_REASONING_RECOVERY_MARKER,
-              'The previous response spent too long reasoning without submitting a tool call and was cancelled.',
-              'Do not recompute the plan, layout, or environment and do not narrate another intention to act.',
-              `Begin the next response with one substantive available tool call. Preferred execution tools: ${activeToolSpecs.map(toolNameFromSpec).filter(Boolean).join(', ')}.`,
-              'Keep private reasoning brief, execute the requested mutation now, and verify concrete output afterward.',
-            ].join(' '),
-          })
-          if (typeof onModelPhase === 'function') await onModelPhase({
-            phase: 'retrying',
-            iteration: iter,
-            error: error?.message || String(error),
-            reason: 'reasoning_runaway',
-          })
-          await persistTurn()
-          if (steeringLeaseId && typeof acknowledgeSteering === 'function') {
-            await acknowledgeSteering(steeringLeaseId)
-          }
-          continue
-        }
         if (error?.code === 'MODEL_BUDGET_EXCEEDED' && recoverableToolCalls.length > 0) {
           // The provider request and its cost have already happened. Discarding
           // an actionable tool call here wastes that work and can stop one step
@@ -1771,6 +1770,33 @@ export async function runToolsLoop({
             reason: error.message,
             recovery,
           }, { steeringLeaseId, finalMetadata: { budgetExceeded: true } })
+          if (!terminal) continue
+          return terminal
+        }
+        if (error?.code === 'REASONING_RUNAWAY') {
+          if (steeringLeaseId) {
+            if (typeof releaseSteering === 'function') await releaseSteering(steeringLeaseId)
+          }
+          const collected = convo
+            .filter((message) => message.role === 'tool')
+            .map((message) => (typeof message.content === 'string' ? message.content : ''))
+            .filter(Boolean)
+            .join('\n')
+            .slice(0, 4000)
+          const terminal = await finishTerminalResult({
+            text: `模型推理超过安全上限，任务已停止，以避免继续无休止重复。${collected ? `\n\n已保留的工具结果：\n${collected}` : ''}`,
+            artifactIds,
+            iterations: iter + 1,
+            incomplete: true,
+            code: 'REASONING_RUNAWAY',
+            reason: error?.message || 'reasoning exceeded the safe limit',
+            recovery,
+          }, {
+            finalMetadata: {
+              code: 'REASONING_RUNAWAY',
+              reasoningRunaway: true,
+            },
+          })
           if (!terminal) continue
           return terminal
         }
@@ -2517,6 +2543,9 @@ export async function runToolsLoop({
         && isProductiveExecutionOutcome(executedCall, outcome.result, outcome.artifactId)
       if (productiveExecution) {
         convergenceBatch.productiveSuccess = true
+        // Keep the current signature as the new progress baseline. Clearing it
+        // entirely would let a model repeat the same successful write forever.
+        loopGuard.markProgress?.(executedCall)
       } else if (executionConvergenceEnabled
         && succeeded
         && isExplorationOnlyCall(executedCall, job?.userId || null)) {
@@ -2553,6 +2582,12 @@ export async function runToolsLoop({
           : null
         if (deletionTargets?.size) {
           for (const deletionTarget of deletionTargets) {
+            const auxiliaryTarget = [...auxiliaryMutationTargets]
+              .find((pending) => targetsMatch(pending, deletionTarget))
+            if (auxiliaryTarget) {
+              auxiliaryMutationTargets.delete(auxiliaryTarget)
+              continue
+            }
             for (const pending of [...pendingMutationTargets]) {
               if (pending !== PROJECT_SCOPE_TARGET && targetsMatch(pending, deletionTarget)) {
                 pendingMutationTargets.delete(pending)
@@ -2561,12 +2596,28 @@ export async function runToolsLoop({
             pendingDeletionTargets.add(deletionTarget)
           }
         } else {
-          for (const target of extractMutationTargets(executedCall, outcome.result)) {
+          const currentMutationTargets = extractMutationTargets(executedCall, outcome.result)
+          for (const target of currentMutationTargets) {
             pendingMutationTargets.add(target)
             if (target === PROJECT_SCOPE_TARGET) continue
             for (const deleted of [...pendingDeletionTargets]) {
               if (targetsMatch(deleted, target)) pendingDeletionTargets.delete(deleted)
             }
+          }
+        }
+        const declaredOutputs = Array.isArray(executedCall?.args?.expected_outputs)
+          ? executedCall.args.expected_outputs.map(normalizeMutationTarget).filter(Boolean)
+          : []
+        if (declaredOutputs.length > 0) {
+          const currentMutationTargets = extractMutationTargets(executedCall, outcome.result)
+          const referencedHelperTargets = [...pendingMutationTargets].filter((pending) => (
+            auxiliaryScriptTarget(pending) && commandReferencesTarget(executedCall, pending)
+          ))
+          for (const pending of [...currentMutationTargets, ...referencedHelperTargets]) {
+            if (!auxiliaryScriptTarget(pending)) continue
+            if (declaredOutputs.some((output) => targetsMatch(pending, output))) continue
+            pendingMutationTargets.delete(pending)
+            auxiliaryMutationTargets.add(pending)
           }
         }
         mutationVerificationRetries = 0
@@ -2582,6 +2633,7 @@ export async function runToolsLoop({
           outcome.result,
         )
         if (clearedMutation || clearedDeletion) {
+          loopGuard.markProgress?.()
           mutationVerificationRetries = 0
           if (recoveredMutationVerificationPending && !hasPendingMutationVerification()) {
             verifiedRecoveredMutationObserved = true

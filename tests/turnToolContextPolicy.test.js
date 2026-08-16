@@ -141,3 +141,21 @@ test('policy keeps legacy catalog behavior only when no turn intent context is p
   assert.equal(resolveTurnToolPolicy().legacyFullCatalog, true)
   assert.equal(resolveTurnToolPolicy({ prompt: '你好' }).legacyFullCatalog, false)
 })
+
+test('bypass permission mode removes the redundant directory authorization tool', async () => {
+  const specs = await resolveTurnToolSpecs({
+    userId: null,
+    permissionMode: 'bypass',
+    baseSpecs: SERVER_TOOL_SPECS,
+    prompt: '修改 D:\\work\\site.html 并验证',
+    messages: [{ role: 'user', content: '直接修改文件' }],
+    enabledConnectorTools: [],
+    webSearchReady: false,
+  })
+  const names = namesOf(specs)
+
+  assert.equal(names.includes('request_directory'), false)
+  for (const name of ['read_file', 'write_file', 'edit_file', 'bash_exec']) {
+    assert.ok(names.includes(name), `${name} must remain executable in bypass mode`)
+  }
+})

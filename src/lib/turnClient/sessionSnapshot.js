@@ -383,6 +383,12 @@ export function normalizeServerSessionSnapshot(snapshot) {
       const modelUsage = message.role === 'assistant'
         ? normalizeModelUsage(message?.modelContext?.usage)
         : null
+      const turnModelUsage = message.role === 'assistant'
+        ? normalizeModelUsage(message?.modelContext?.turnModelUsage)
+        : null
+      const estimatedPromptTokens = message.role === 'assistant'
+        ? nonNegativeInteger(message?.modelContext?.estimatedPromptTokens)
+        : null
       const assistantTurnId = message.role === 'assistant'
         ? String(message?.modelContext?.turnId || '').trim()
         : ''
@@ -453,6 +459,10 @@ export function normalizeServerSessionSnapshot(snapshot) {
               modelUsage,
               actualPromptTokens: modelUsage.promptTokens,
             } : {}),
+            ...(turnModelUsage ? { turnModelUsage } : {}),
+            ...(estimatedPromptTokens !== null
+              ? { serverEstimatedPromptTokens: estimatedPromptTokens }
+              : {}),
             ...(turnStartedAt !== null ? { turnStartedAt } : {}),
             ...(turnCompletedAt !== null ? { turnCompletedAt } : {}),
             ...(latency !== null ? { latency } : {}),
