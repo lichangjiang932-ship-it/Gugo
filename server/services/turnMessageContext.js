@@ -78,7 +78,11 @@ function resolveVerifiedLocalPath(rawPath, { userId, resolvePath }) {
     // or a workspace symlink could silently turn into a trusted receipt.
     if (!path.isAbsolute(raw)) {
       let root = workspaceRoot()
-      try { root = fs.realpathSync.native(root) } catch { root = path.resolve(root) }
+      // Match localFileAccessService's canonical representation. On Windows,
+      // mixing realpathSync.native() with realpathSync() can compare the long
+      // temp path against its 8.3 alias (for example RUNNER~1) and reject a
+      // file that is actually inside the authorized workspace.
+      try { root = fs.realpathSync(root) } catch { root = path.resolve(root) }
       if (!isInsidePath(root, fullPath)) return null
     }
     return fullPath
