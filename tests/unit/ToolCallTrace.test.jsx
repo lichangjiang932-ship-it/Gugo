@@ -24,7 +24,7 @@ test('ToolCallTrace renders one lightweight accessible timeline without a visibl
 
   assert.match(markup, /class="chat-run-timeline"/)
   assert.doesNotMatch(markup, /chat-activity-title/)
-  assert.match(markup, /aria-label="2 steps"/)
+  assert.match(markup, /aria-label="2 tool calls"/)
   assert.doesNotMatch(markup, /执行过程/)
   assert.match(markup, /chat-tool-step-marker/)
   assert.equal((markup.match(/data-testid="tool-call-step"/g) || []).length, 2)
@@ -108,6 +108,20 @@ test('ToolCallTrace keeps the latest four steps visible and can reveal older his
     await act(async () => root.unmount())
     dom.window.close()
   }
+})
+
+test('ToolCallTrace never hides an older running call behind newer completed calls', () => {
+  const calls = Array.from({ length: 5 }, (_, index) => ({
+    id: `parallel-${index + 1}`,
+    name: 'read_file',
+    arguments: JSON.stringify({ path: `parallel-${index + 1}.txt` }),
+    status: index === 0 ? 'running' : 'success',
+  }))
+  const markup = renderTrace(calls)
+
+  assert.match(markup, /parallel-1\.txt/)
+  assert.match(markup, /data-status="running"/)
+  assert.match(markup, /aria-busy="true"/)
 })
 
 test('ToolCallTrace defaults the running command open and preserves the selected detail across live updates', async () => {

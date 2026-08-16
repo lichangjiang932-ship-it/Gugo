@@ -358,3 +358,52 @@ test('only final deliverables are clickable in execution steps and appear below'
     dom.window.close()
   }
 })
+
+test('an interrupted resumable turn keeps verified output clickable while execution remains active', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const opened = []
+  const msg = {
+    id: 'assistant-interrupted-delivery',
+    role: 'assistant',
+    content: 'Recovery is pending.',
+    timestamp: Date.now(),
+    meta: {
+      streaming: true,
+      interrupted: true,
+      serverTurnId: 'turn-interrupted-delivery',
+      verifiedLocalFiles: [{
+        id: 'verified-report',
+        path: 'D:\\work\\verified-report.pdf',
+        filename: 'verified-report.pdf',
+      }],
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <MessageRow
+          msg={msg}
+          rowKey={msg.id}
+          generatingMessageId={msg.id}
+          lang="en"
+          onOpenArtifact={(artifact) => opened.push(artifact)}
+          t={(key) => key}
+        />
+      </I18nProvider>,
+    ))
+
+    assert.equal(rootElement.querySelector('[data-testid="execution-toggle"]')?.getAttribute('aria-expanded'), 'true')
+    const file = rootElement.querySelector('[data-testid="artifact-open-card"]')
+    assert.ok(file)
+    assert.match(file.textContent, /verified-report\.pdf/)
+    await act(async () => file.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.equal(opened[0]?.directFile?.filename, 'verified-report.pdf')
+    assert.equal(opened[0]?.directFile?.path, 'D:\\work\\verified-report.pdf')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})

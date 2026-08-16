@@ -564,6 +564,7 @@ function isProductiveExecutionOutcome(call, result, artifactId = null) {
   if (artifactId) return true
   if (isProbeLikeCall(call) || installAttemptSignature(call)) return false
   if (!isMutationExecutionCall(call, artifactId)) return false
+  if (Object.hasOwn(result || {}, 'changed')) return result.changed === true
   if (isCommandExecutionTool(call)
     && Array.isArray(call?.args?.expected_outputs)
     && Object.hasOwn(result || {}, 'changedPaths')) {
@@ -804,13 +805,25 @@ function shellTargetWithCwd(target, cwd) {
 }
 
 function looksLikeDeletionCommand(command) {
-  const source = String(command || '')
+  const source = unwrapStaticWindowsCommand(command)
   return /(?:^|[;&|\r\n])\s*(?:rm|unlink|rmdir|del|erase|rd|remove-item)(?:\.exe)?\b/i.test(source)
     || /^\s*(?:powershell|pwsh)(?:\.exe)?\b[\s\S]*\bremove-item\b/i.test(source)
 }
 
-function tokenizeStaticDeletionCommand(command) {
+function unwrapStaticWindowsCommand(command) {
   const source = String(command || '').trim()
+  const wrapper = source.match(/^cmd(?:\.exe)?\s+(?:(?:\/[dqs])\s+)*\/c\s+([\s\S]+)$/i)
+  if (!wrapper) return source
+  const body = String(wrapper[1] || '').trim()
+  return body.length >= 2 && body.startsWith('"') && body.endsWith('"')
+    ? body.slice(1, -1).trim()
+    : body
+}
+
+function tokenizeStaticDeletionCommand(command) {
+  const source = unwrapStaticWindowsCommand(command)
+    .replace(/\s+2\s*>\s*nul\s*$/i, '')
+    .trim()
   // Compensation is safe only when this is one literal delete operation with
   // no chaining, redirection, variable expansion, or shell escaping.
   if (!source || /[&|;<>\r\n\x60^]/.test(source)) return null
@@ -2452,6 +2465,7 @@ export {
   clearWorkspaceScopedMutationTargets,
   shellTargetWithCwd,
   looksLikeDeletionCommand,
+  unwrapStaticWindowsCommand,
   tokenizeStaticDeletionCommand,
   isAllowedWindowsDeletionSwitch,
   isStaticDeletionTarget,

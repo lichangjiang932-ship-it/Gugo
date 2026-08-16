@@ -56,6 +56,27 @@ function compactToolCall(call) {
   }
 }
 
+export function sumSessionModelUsage(messages = []) {
+  if (!Array.isArray(messages)) return null
+  let total = 0
+  let measured = false
+  for (const message of messages) {
+    if (message?.role !== 'assistant') continue
+    const candidates = [message?.meta?.turnModelUsage, message?.meta?.modelUsage]
+    for (const usage of candidates) {
+      if (!usage || typeof usage !== 'object' || Array.isArray(usage)) continue
+      const directTotal = normalizeOptionalTokenCount(usage.totalTokens)
+      const prompt = normalizeOptionalTokenCount(usage.promptTokens)
+      const completion = normalizeOptionalTokenCount(usage.completionTokens)
+      if (directTotal === null && prompt === null && completion === null) continue
+      total += directTotal ?? (prompt || 0) + (completion || 0)
+      measured = true
+      break
+    }
+  }
+  return measured ? Math.floor(total) : null
+}
+
 function textContentOf(value) {
   if (typeof value === 'string') return value.replace(DATA_IMAGE_URL_PATTERN, '')
   if (Array.isArray(value)) return value.map(textContentOf).filter(Boolean).join('\n')
@@ -144,6 +165,7 @@ export function estimateClientContextUsage({
   systemPrompt = '',
   contextWindow = DEFAULT_MODEL_CONTEXT_WINDOW,
   actualPromptTokens = null,
+  serverEstimatedPromptTokens = null,
 } = {}) {
   const safeMessages = Array.isArray(messages) ? messages : []
   let messageTokens = 0
@@ -174,6 +196,7 @@ export function estimateClientContextUsage({
   const percent = Math.min(100, Math.round((estimatedTokens / safeWindow) * 100))
   const measuredPromptTokens = normalizeOptionalTokenCount(actualPromptTokens)
   const hasMeasuredPromptTokens = measuredPromptTokens !== null
+  const serverPromptEstimate = normalizeOptionalTokenCount(serverEstimatedPromptTokens)
 
   return {
     estimatedTokens,
@@ -188,5 +211,8 @@ export function estimateClientContextUsage({
     toolSpecTokens,
     systemTokens,
     ...(hasMeasuredPromptTokens ? { actualPromptTokens: Math.floor(measuredPromptTokens) } : {}),
+    ...(serverPromptEstimate !== null
+      ? { serverEstimatedPromptTokens: Math.floor(serverPromptEstimate) }
+      : {}),
   }
 }

@@ -57,11 +57,12 @@ test('FullscreenMediaModal accepts list/index for prev/next navigation', () => {
   assert.match(source, /goNext/)
 })
 
-test('ChatComposer wires image attachment thumbnail to FullscreenMediaModal', () => {
+test('ChatComposer opens image attachment thumbnails in the right preview pane', () => {
   const source = fs.readFileSync(composerPath, 'utf8') + readSourceTree('../src/pages/ChatSplit/chatComposer/')
-  assert.match(source, /FullscreenMediaModal/)
-  assert.match(source, /setFullscreenSrc/)
-  assert.match(source, /cursor-zoom-in/)
+  assert.match(source, /buildAttachmentPreviewArtifact/)
+  assert.match(source, /onOpenAttachment/)
+  assert.match(source, /onOpen=\{\(attachment\)/)
+  assert.doesNotMatch(source, /setFullscreenSrc|<FullscreenMediaModal/)
 })
 
 test('MarkdownRenderer wires <img> click to FullscreenMediaModal', () => {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { PanelLeftClose, PanelLeftOpen, Plus, Search, Wrench } from 'lucide-react'
+import { PanelLeftClose, PanelLeftOpen, Plus, Search } from 'lucide-react'
 import { useLocation, useNavigate } from '../lib/router.jsx'
 import { useAppContext } from '../store/AppContext'
 import { archiveSessionRemote, pinSessionRemote, unarchiveSessionRemote, unpinSessionRemote } from '../lib/sessionClient.js'
@@ -56,6 +56,7 @@ export default function LeftRail() {
     try { window.localStorage?.setItem(COLLAPSED_KEY, next ? '1' : '0') } catch { /* storage is optional */ }
   }
   const handleNewChat = () => { controller.closeSessionMenu(); closeMobileRail(); dispatch({ type: 'START_NEW_DRAFT' }); navigate('/chat') }
+  const handleSearch = () => { controller.closeSessionMenu(); closeMobileRail(); window.dispatchEvent(new CustomEvent('session-search:open')) }
   const handleOpenSession = (sessionId) => { controller.closeSessionMenu(); closeMobileRail(); dispatch({ type: 'SWITCH_SESSION', payload: sessionId }); navigate('/chat') }
   const handleDelete = (session) => {
     controller.setOpenMenuId(null)
@@ -103,11 +104,10 @@ export default function LeftRail() {
 
       <div className="mt-2 flex flex-col gap-0.5">
         <button type="button" onClick={handleNewChat} title={collapsed ? t('nav.newChat') : undefined} aria-label={t('nav.newChat')} className={`flex h-9 w-full items-center rounded-lg bg-ink/[0.065] text-[13px] font-medium text-ink transition-colors hover:bg-ink/[0.1] ${collapsed ? 'justify-center px-0' : 'gap-2.5 px-2.5'}`}><Plus className="h-4 w-4 shrink-0" />{!collapsed && <span>{t('nav.newChat')}</span>}</button>
-        {navButton(Search, t('nav.searchPlaceholder'), () => { controller.closeSessionMenu(); closeMobileRail(); window.dispatchEvent(new CustomEvent('session-search:open')) })}
-        {navButton(Wrench, t('nav.skills'), () => { closeMobileRail(); controller.navigateItem({ path: '/skills' }) }, location.pathname === '/skills')}
+        {collapsed && navButton(Search, t('nav.searchPlaceholder'), handleSearch)}
       </div>
 
-      {!collapsed && <div className="mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-0.5"><SessionList sessions={sessions} activeSessionId={state.activeSessionId} openMenuId={controller.openMenuId} onMenuOpen={controller.setOpenMenuId} onMenuToggle={(id) => controller.setOpenMenuId(controller.openMenuId === id ? null : id)} onMenuClose={controller.closeSessionMenu} onOpen={handleOpenSession} onPinToggle={handlePinToggle} onArchiveToggle={handleArchiveToggle} onDelete={handleDelete} lang={lang} t={t} /></div>}
+      {!collapsed && <div className="mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-0.5"><SessionList sessions={sessions} activeSessionId={state.activeSessionId} openMenuId={controller.openMenuId} onMenuOpen={controller.setOpenMenuId} onMenuToggle={(id) => controller.setOpenMenuId(controller.openMenuId === id ? null : id)} onMenuClose={controller.closeSessionMenu} onSearch={handleSearch} onOpen={handleOpenSession} onPinToggle={handlePinToggle} onArchiveToggle={handleArchiveToggle} onDelete={handleDelete} lang={lang} t={t} /></div>}
       {collapsed && <div className="min-h-0 flex-1" />}
       <AccountArea compact={collapsed} accountMenuOpen={controller.accountMenuOpen} accountMenuRef={controller.accountMenuRef} user={state.user} pendingApprovals={controller.pendingApprovals} onToggle={() => { controller.closeSessionMenu(); controller.setAccountMenuOpen((open) => !open) }} onNavigate={(item) => { closeMobileRail(); controller.navigateItem(item) }} t={t} />
     </aside>

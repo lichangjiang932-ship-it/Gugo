@@ -58,14 +58,16 @@ export function createToolOutputBuffer({
     scheduledHandle?.unref?.()
   }
 
-  const append = ({ id, name, chunk, stream } = {}) => {
+  const append = ({ id, name, chunk, stream, turnId } = {}) => {
     if (disposed || !id || typeof chunk !== 'string' || chunk.length === 0) return false
     const existing = pending.get(id)
+    const resolvedTurnId = turnId || existing?.turnId || null
     pending.set(id, {
       id,
       name: name || existing?.name,
       chunk: tail(`${existing?.chunk || ''}${chunk}`, limit),
       stream: stream || existing?.stream || 'stdout',
+      ...(resolvedTurnId ? { turnId: resolvedTurnId } : {}),
     })
     schedulePendingFlush()
     return true

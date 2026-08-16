@@ -16,6 +16,18 @@ test('settings feature hub no longer exposes the low-value channels entry', () =
   assert.doesNotMatch(featureHub, /\/channels/)
 })
 
+test('settings keeps five consolidated destinations and removes the model tool toggle page', () => {
+  const settings = read('../src/pages/SettingsView.jsx')
+  const navigation = read('../src/lib/settingsNavigation.js')
+  assert.match(settings, /const SETTINGS_NAV_ITEMS = \[/)
+  assert.match(settings, /SETTINGS_PAGE_MODEL_SEARCH/)
+  assert.match(settings, /SETTINGS_PAGE_FILES_PERMISSIONS/)
+  assert.match(settings, /SETTINGS_PAGE_APPEARANCE_LANGUAGE/)
+  assert.match(settings, /SETTINGS_PAGE_SYSTEM_DATA/)
+  assert.doesNotMatch(settings, /SettingsToolsPanel|SETTINGS_TAB_TOOLS/)
+  assert.match(navigation, /settingsPathForSection/)
+})
+
 test('history opens on conversations and keeps session rows free of task failure status', () => {
   const source = read('../src/pages/HistoryView.jsx')
   const content = read('../src/pages/history/HistoryContent.jsx')
@@ -36,7 +48,7 @@ test('chat output defaults to a compact layout with optional context usage', () 
   const styles = read('../src/index.css')
   assert.match(messages, /chat-conversation-column/)
   assert.match(messages, /max-w-\[840px\]/)
-  assert.match(messageRow, /const isCurrentStreamingMessage = msg\.id === generatingMessageId \|\| !!msg\.meta\?\.streaming/)
+  assert.match(messageRow, /const isCurrentStreamingMessage = msg\.meta\?\.streaming === true[\s\S]*?msg\.meta\?\.streaming == null && msg\.id === generatingMessageId/)
   assert.doesNotMatch(messages, /<span className="uppercase tracking-\[0\.14em\]">Gugo<\/span>/)
   const contextBar = contextUsage.match(/className="chat-context-bar[^"]+"/)?.[0] || ''
   assert.doesNotMatch(contextBar, /sticky|backdrop-blur/)
@@ -63,6 +75,10 @@ test('chat chrome stays focused on conversations and essential composer controls
   const composerActions = read('../src/pages/ChatSplit/chatComposer/ComposerActions.jsx')
 
   assert.match(rail, /<SessionList/)
+  assert.match(rail, /onSearch=\{handleSearch\}/)
+  assert.match(rail, /collapsed && navButton\(Search/)
+  assert.doesNotMatch(rail, /navButton\(Wrench|path: '\/skills'/)
+  assert.match(sessions, /aria-label=\{t\('nav\.searchPlaceholder'\)\}/)
   assert.match(account, /accountMenuOpen/)
   assert.match(account, /path: '\/access'/)
   assert.match(account, /path: '\/settings'/)

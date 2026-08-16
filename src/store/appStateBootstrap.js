@@ -7,7 +7,7 @@ import {
   selectPersistedSnapshot,
 } from './appStatePersistence.js'
 
-export const TOOLS_CONFIG_SCHEMA_VERSION = 9
+export const TOOLS_CONFIG_SCHEMA_VERSION = 10
 
 export function needsToolsConfigSchemaMigration(saved) {
   if (!saved?.toolsConfig || typeof saved.toolsConfig !== 'object') return false
@@ -154,6 +154,13 @@ export function normalizePersistedFields(saved, { cancelRunningTasks = false } =
       ]) normalized.toolsConfig[name] = true
     }
     if (savedSchemaVersion < 9) normalized.toolsConfig.create_pdf = true
+    // The per-tool settings UI was removed in favour of the single runtime
+    // permission mode. Older snapshots may still contain disabled switches
+    // that users can no longer see or restore, so migrate every built-in tool
+    // back to the current all-enabled default once.
+    if (savedSchemaVersion < 10) {
+      for (const name of Object.keys(base.toolsConfig)) normalized.toolsConfig[name] = true
+    }
   }
   normalized.toolsConfigSchemaVersion = TOOLS_CONFIG_SCHEMA_VERSION
   if (normalized.sessions !== undefined) normalized.sessions = backfillMessageTimestamps(normalized.sessions)

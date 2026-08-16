@@ -385,7 +385,7 @@ test('createToolLoopGuard 熔断重复调用和连续失败', () => {
   assert.equal(failures.after({ ok: false, error: 'b' }).ok, false)
 })
 
-test('createToolLoopGuard only counts consecutive duplicate calls and resets after progress', () => {
+test('createToolLoopGuard only resets duplicate calls after explicitly observed progress', () => {
   const guard = createToolLoopGuard({ maxRepeatedCalls: 2 })
   const first = { name: 'read_file', args: { path: 'a.txt' } }
   const second = { name: 'read_file', args: { path: 'b.txt' } }
@@ -396,8 +396,74 @@ test('createToolLoopGuard only counts consecutive duplicate calls and resets aft
   assert.equal(guard.before(first).ok, true)
   assert.equal(guard.before(first).ok, true)
   assert.equal(guard.after({ ok: true, content: 'read' }, first).ok, true)
+  assert.equal(guard.snapshot().repeatedCallStreak, 2)
+  guard.markProgress()
   assert.equal(guard.snapshot().repeatedCallStreak, 0)
   assert.equal(guard.before(first).ok, true, 'substantive progress resets the duplicate streak')
+})
+
+test('createToolLoopGuard stops identical successful calls when no real state change is observed', () => {
+  const guard = createToolLoopGuard({ maxRepeatedCalls: 2 })
+  const call = { name: 'write_file', args: { path: 'same.txt', content: 'unchanged' } }
+  assert.equal(guard.before(call).ok, true)
+  assert.equal(guard.after({ ok: true, changed: false }, call).ok, true)
+  assert.equal(guard.before(call).ok, true)
+  assert.equal(guard.after({ ok: true, changed: false }, call).ok, true)
+  assert.equal(guard.before(call).result.code, 'repeated_tool_call')
+})
+
+test('createToolLoopGuard stops alternating duplicate calls inside a rolling window', () => {
+  const guard = createToolLoopGuard({
+    maxRepeatedCalls: 2,
+    maxWindowRepeatedCalls: 3,
+    repeatWindowSize: 8,
+  })
+  const repeated = { name: 'read_file', args: { path: 'same.html' } }
+  for (let index = 0; index < 3; index += 1) {
+    assert.equal(guard.before(repeated).ok, true)
+    guard.after({ ok: true, content: 'unchanged' }, repeated)
+    assert.equal(guard.before({ name: 'grep_code', args: { pattern: `marker-${index}` } }).ok, true)
+    guard.after({ ok: true, matches: [] })
+  }
+  const stopped = guard.before(repeated)
+  assert.equal(stopped.ok, false)
+  assert.equal(stopped.result.code, 'repeated_tool_call_window')
+})
+
+test('createToolLoopGuard clears rolling duplicates after substantive progress', () => {
+  const guard = createToolLoopGuard({ maxWindowRepeatedCalls: 2, repeatWindowSize: 8 })
+  const repeated = { name: 'read_file', args: { path: 'same.html' } }
+  assert.equal(guard.before(repeated).ok, true)
+  guard.after({ ok: true }, repeated)
+  assert.equal(guard.before({ name: 'grep_code', args: { pattern: 'same' } }).ok, true)
+  guard.after({ ok: true })
+  assert.equal(guard.before(repeated).ok, true)
+  guard.markProgress()
+  assert.equal(guard.before(repeated).ok, true)
+})
+
+test('createToolLoopGuard detects cross-parameter probes that return the same observed state', () => {
+  const guard = createToolLoopGuard({
+    maxRepeatedCalls: 20,
+    maxWindowRepeatedCalls: 20,
+    maxRepeatedObservations: 2,
+    observationWindowSize: 8,
+  })
+  for (let offset = 0; offset < 3; offset += 1) {
+    const call = { name: 'image_info', args: { path: 'portrait.jpg', offset } }
+    assert.equal(guard.before(call).ok, true)
+    const decision = guard.afterCall(call, {
+      ok: true,
+      path: 'portrait.jpg',
+      offset,
+      width: 1080,
+      height: 1920,
+      mimeType: 'image/jpeg',
+    })
+    if (offset < 2) assert.equal(decision.ok, true)
+    else assert.equal(decision.result.code, 'repeated_tool_observation')
+  }
+  assert.doesNotMatch(JSON.stringify(guard.snapshot()), /portrait\.jpg/u)
 })
 
 test('createToolLoopGuard restores durable repeat and failure state without persisting raw arguments', () => {

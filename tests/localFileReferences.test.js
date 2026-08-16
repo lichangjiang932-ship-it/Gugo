@@ -211,6 +211,36 @@ test('declared command outputs use executor-reported changedPaths', () => {
   }), [])
 })
 
+test('patch_file revisions become clickable after readback and dry runs stay unlinked', () => {
+  const patched = call('patch_file', {
+    path: target,
+    start_line: 1,
+    end_line: 1,
+    replacement: '<h1>Patched</h1>',
+  }, {
+    ok: true,
+    path: target,
+    beforeSha256: 'before',
+    afterSha256: 'after',
+  })
+  const [reference] = buildVerifiedLocalFileReferences({
+    toolCalls: [patched, read({ content: '<h1>Patched</h1>' })],
+  })
+  assert.equal(reference.path, target)
+
+  const previewOnly = call('patch_file', {
+    path: target,
+    dry_run: true,
+  }, {
+    ok: true,
+    dryRun: true,
+    path: target,
+  })
+  assert.deepEqual(buildVerifiedLocalFileReferences({
+    toolCalls: [previewOnly, read({ content: '<h1>Unchanged</h1>' })],
+  }), [])
+})
+
 test('persisted receipts open the authenticated real-file URL without embedding file content', () => {
   const [reference] = buildVerifiedLocalFileReferences({
     messageId: 'turn-receipt:assistant',

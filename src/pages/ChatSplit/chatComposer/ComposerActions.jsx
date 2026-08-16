@@ -49,15 +49,16 @@ export default function ComposerActions({
   const usage = contextUsage || {}
   const measuredTokens = normalizeOptionalTokenCount(usage.actualPromptTokens)
   const hasMeasuredTokens = measuredTokens !== null
-  const usedTokens = hasMeasuredTokens
-    ? measuredTokens
-    : Number(usage.estimatedTokens || 0)
+  const serverEstimatedTokens = normalizeOptionalTokenCount(usage.serverEstimatedPromptTokens)
+  const usedTokens = measuredTokens
+    ?? serverEstimatedTokens
+    ?? Number(usage.estimatedTokens || 0)
   const contextWindow = Math.max(1, Number(usage.contextWindow || 0))
-  const measuredPercent = hasMeasuredTokens
+  const measuredPercent = hasMeasuredTokens || serverEstimatedTokens !== null
     ? (usedTokens / contextWindow) * 100
     : Number(usage.percent)
   const percent = Number.isFinite(measuredPercent) ? Math.max(0, Math.min(100, measuredPercent)) : 0
-  const ringTitle = `${Math.round(percent)}% · ${usedTokens.toLocaleString()} / ${Number(usage.contextWindow || 0).toLocaleString()} tokens`
+  const ringTitle = `${Math.round(percent)}% · ${hasMeasuredTokens ? '' : '~'}${usedTokens.toLocaleString()} / ${Number(usage.contextWindow || 0).toLocaleString()} tokens`
 
   useEffect(() => {
     if (!contextPanelOpen) return undefined

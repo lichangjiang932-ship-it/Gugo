@@ -15,6 +15,7 @@ const { SERVER_TURN_TOOL_TOGGLE_NAMES } = await import('../src/lib/serverToolCon
 const { WORKSPACE_TOOL_SPECS } = await import('../src/lib/tools/workspaceToolSpecs.js')
 const { FS_SHELL_TOOL_SPECS } = await import('../server/adapters/fsShellTools.js')
 const { runToolsLoop, SERVER_TOOL_SPECS } = await import('../server/services/toolLoopRuntime.js')
+const { createUser, setUserToolPermission } = await import('../server/db.js')
 const { getBuiltinSpec, getToolMetadata, listBuiltinSpecs } = await import('../server/services/toolRegistry.js')
 const { CONNECTOR_TOOL_NAMES } = await import('../server/services/connectorTools.js')
 const { resolveTurnToolSpecs } = await import('../server/services/turnToolSpecs.js')
@@ -130,6 +131,24 @@ test('resolveTurnToolSpecs removes explicitly disabled builtins after merging to
   assert.equal(names.includes('read_file'), false, 'disabled must win over enabled')
   assert.equal(names.includes('bash_exec'), false)
   assert.equal(names.includes('web_search'), true)
+})
+
+test('model-visible schemas exclude tools disabled by the authoritative server permission gate', async () => {
+  const userId = 'server-tool-schema-permission-user'
+  createUser({ id: userId, email: 'server-tool-schema-permission@example.com' })
+  setUserToolPermission({ userId, toolName: 'bash_exec', enabled: false })
+  const resolved = await resolveTurnToolSpecs({
+    userId,
+    permissionMode: 'normal',
+    baseSpecs: SERVER_TOOL_SPECS,
+    prompt: '运行项目检查',
+    messages: [{ role: 'user', content: '运行项目检查' }],
+    enabledConnectorTools: [],
+    webSearchReady: false,
+  })
+
+  assert.equal(namesOf(resolved).includes('bash_exec'), false)
+  assert.equal(namesOf(resolved).includes('run_project_check'), true)
 })
 
 test('writable turns retain read-only verification tools despite legacy client defaults', async () => {

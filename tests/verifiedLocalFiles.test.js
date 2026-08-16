@@ -368,6 +368,39 @@ test('command mutations use changedPaths and ignore empty changedPaths', () => {
   )
 })
 
+test('patch_file mutations create receipts after readback while dry runs never do', () => {
+  const relativePath = 'pages/patched.html'
+  const fullPath = path.join(workspace, relativePath)
+  const content = '<!doctype html>\n<title>Patched</title>'
+  fs.mkdirSync(path.dirname(fullPath), { recursive: true })
+  fs.writeFileSync(fullPath, content, 'utf8')
+
+  const applied = mutationAndReadMessages({
+    mutationId: 'patch-file-applied',
+    mutationName: 'patch_file',
+    mutationArgs: { path: relativePath, start_line: 2, end_line: 2, replacement: '<title>Patched</title>' },
+    mutationResult: { ok: true, path: relativePath, beforeSha256: 'before', afterSha256: 'after' },
+    readId: 'patch-file-read',
+    readPath: relativePath,
+    content,
+  })
+  const dryRun = mutationAndReadMessages({
+    mutationId: 'patch-file-dry-run',
+    mutationName: 'patch_file',
+    mutationArgs: { path: relativePath, start_line: 2, end_line: 2, replacement: '<title>Preview</title>', dry_run: true },
+    mutationResult: { ok: true, dryRun: true, path: relativePath, beforeSha256: 'before', afterSha256: 'preview' },
+    readId: 'patch-file-dry-run-read',
+    readPath: relativePath,
+    content,
+  })
+
+  assert.deepEqual(
+    extractVerifiedLocalFiles(applied, { userId: integrationUserId }).map((receipt) => receipt.path),
+    [fs.realpathSync(fullPath)],
+  )
+  assert.deepEqual(extractVerifiedLocalFiles(dryRun, { userId: integrationUserId }), [])
+})
+
 test('command changedPaths survive truncation of very long stdout without trusting preview text', () => {
   const relativePath = 'generated/long-command.html'
   const fakeRelativePath = 'generated/preview-only.html'

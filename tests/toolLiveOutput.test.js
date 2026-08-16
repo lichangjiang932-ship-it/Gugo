@@ -188,9 +188,10 @@ test('buffered turn activity flushes output before tool completion', async () =>
   assert.deepEqual(actions.map((action) => action.type), [
     'APPEND_TOOL_CALL_OUTPUT',
     'APPEND_TOOL_CALL_TO_LAST_MESSAGE',
-    'UPDATE_LAST_MESSAGE_META',
   ])
   assert.equal(actions[0].payload.chunk, 'final line\n')
+  assert.equal(actions[0].serverTurnId, 't1')
+  assert.deepEqual(actions[1].meta?.modelActivity, { kind: 'reviewing' })
   assert.equal(scheduler.size, 0)
   buffered.dispose()
 })

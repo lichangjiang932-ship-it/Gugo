@@ -201,6 +201,9 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     deliveryArtifactIds: z.array(z.string()).optional(),
     verifiedLocalFiles: verifiedLocalFilesSchema,
     iterations: z.number().int().nonnegative().optional(),
+    usage: jsonRecord.nullable().optional(),
+    turnModelUsage: jsonRecord.nullable().optional(),
+    estimatedPromptTokens: z.number().int().nonnegative().optional(),
   }).strict(),
   'turn.paused': z.object({
     text: z.string(),
@@ -209,6 +212,9 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     deliveryArtifactIds: z.array(z.string()).optional(),
     verifiedLocalFiles: verifiedLocalFilesSchema,
     iterations: z.number().int().nonnegative().optional(),
+    usage: jsonRecord.nullable().optional(),
+    turnModelUsage: jsonRecord.nullable().optional(),
+    estimatedPromptTokens: z.number().int().nonnegative().optional(),
   }).strict(),
   'turn.resumed': z.object({
     resolution: turnResolutionSchema,
@@ -228,6 +234,8 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     text: z.string().optional(), artifactIds: z.array(z.string()).optional(), deliveryArtifactIds: z.array(z.string()).optional(), iterations: z.number().int().nonnegative().optional(),
     verifiedLocalFiles: verifiedLocalFilesSchema,
     usage: jsonRecord.nullable().optional(),
+    turnModelUsage: jsonRecord.nullable().optional(),
+    estimatedPromptTokens: z.number().int().nonnegative().optional(),
     paused: z.boolean().optional(), clarification: z.unknown().nullable().optional(), interrupted: z.boolean().optional(),
   }).strict(),
   'turn.cancelled': z.object({
@@ -236,6 +244,9 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     deliveryArtifactIds: z.array(z.string()).optional(),
     verifiedLocalFiles: verifiedLocalFilesSchema,
     iterations: z.number().int().nonnegative().optional(),
+    usage: jsonRecord.nullable().optional(),
+    turnModelUsage: jsonRecord.nullable().optional(),
+    estimatedPromptTokens: z.number().int().nonnegative().optional(),
   }).strict(),
   'turn.failed': z.object({
     // Keep the legacy top-level fields so older clients can still render the failure.
@@ -247,6 +258,9 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     deliveryArtifactIds: z.array(z.string()).optional(),
     verifiedLocalFiles: verifiedLocalFilesSchema,
     iterations: z.number().int().nonnegative().optional(),
+    usage: jsonRecord.nullable().optional(),
+    turnModelUsage: jsonRecord.nullable().optional(),
+    estimatedPromptTokens: z.number().int().nonnegative().optional(),
   }).strict(),
   heartbeat: z.object({ at: z.number().int().nonnegative().optional() }).strict(),
 })

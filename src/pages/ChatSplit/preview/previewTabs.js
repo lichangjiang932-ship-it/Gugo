@@ -42,9 +42,6 @@ function firstStableValue(...values) {
 }
 
 export function previewArtifactTabId(artifact) {
-  const artifactIdentity = String(artifact?.artifactIdentity || '').trim()
-  if (artifactIdentity) return `artifact:${artifactIdentity}`
-
   const file = artifact?.directFile
   if (file) {
     const fileIdentity = firstStableValue(
@@ -66,6 +63,9 @@ export function previewArtifactTabId(artifact) {
       content: firstStableValue(file.content, artifact?.content) || '',
     })}`
   }
+
+  const artifactIdentity = String(artifact?.artifactIdentity || '').trim()
+  if (artifactIdentity) return `artifact:${artifactIdentity}`
 
   const preview = artifact?.preview
   return `preview:${stableIdentityDigest({

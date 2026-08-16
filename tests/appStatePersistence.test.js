@@ -130,7 +130,7 @@ test('tool defaults migrate to the complete execution loop while current explici
   }
   assert.equal(needsToolsConfigSchemaMigration(v3Saved), true)
   const v3 = normalizePersistedFields(v3Saved)
-  assert.equal(v3.toolsConfig.image_info, false)
+  assert.equal(v3.toolsConfig.image_info, true)
   for (const id of ['archive_create', 'archive_extract', 'batch_rename', 'file_hash_manifest']) {
     assert.equal(v3.toolsConfig[id], true)
   }
@@ -141,8 +141,8 @@ test('tool defaults migrate to the complete execution loop while current explici
   })
   assert.equal(v4.toolsConfig.pdf_text, true)
   assert.equal(v4.toolsConfig.archive_list, true)
-  assert.equal(v4.toolsConfig.pdf_transform, false)
-  assert.equal(v4.toolsConfig.archive_extract, false)
+  assert.equal(v4.toolsConfig.pdf_transform, true)
+  assert.equal(v4.toolsConfig.archive_extract, true)
 
   const v5 = normalizePersistedFields({
     toolsConfigSchemaVersion: 5,

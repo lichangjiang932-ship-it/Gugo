@@ -20,7 +20,7 @@ import { appendTurnEvent, getLastTurnEvent, listTurnEvents } from './turnEventSt
 import { getTurnCheckpoint, saveTurnCheckpoint } from './turnCheckpointStore.js'
 import { publishTurnActivity } from './turnActivityBus.js'
 import { dispatchHooks as dispatchHooksService } from './hooksService.js'
-import { resolveApprovalMode } from '../utils/approvalPolicy.js'
+import { getApprovalMode } from './approvalSettingsStore.js'
 import {
   buildAssistantModelContext,
   collectToolCallIds,
@@ -65,6 +65,43 @@ const TERMINAL_TYPES = new Set(['turn.completed', 'turn.cancelled', 'turn.failed
 const STREAM_DELTA_TYPES = ['assistant.delta', 'reasoning.delta']
 const TURN_RESOLUTION_MARKER = '[TURN_RESOLUTION:'
 const ATTACHMENT_CONTEXT_HEADROOM_TOKENS = 64
+const SUMMABLE_MODEL_USAGE_KEYS = Object.freeze([
+  'cacheHitTokens',
+  'cacheMissTokens',
+  'cacheCreationTokens',
+  'uncachedInputTokens',
+])
+
+function modelUsageTotal(usage) {
+  if (Object.hasOwn(usage, 'totalTokens')) return usage.totalTokens
+  return usage.promptTokens + (usage.completionTokens || 0)
+}
+
+function addModelUsage(total, value) {
+  const current = normalizeModelUsage(value)
+  const previous = normalizeModelUsage(total)
+  if (!current) return previous
+
+  const aggregate = {
+    promptTokens: (previous?.promptTokens || 0) + current.promptTokens,
+    completionTokens: (previous?.completionTokens || 0) + (current.completionTokens || 0),
+    totalTokens: (previous ? modelUsageTotal(previous) : 0) + modelUsageTotal(current),
+  }
+  for (const key of SUMMABLE_MODEL_USAGE_KEYS) {
+    if (!Object.hasOwn(previous || {}, key) && !Object.hasOwn(current, key)) continue
+    aggregate[key] = (previous?.[key] || 0) + (current[key] || 0)
+  }
+  if (Object.hasOwn(previous || {}, 'costUsd') || Object.hasOwn(current, 'costUsd')) {
+    aggregate.costUsd = (previous?.costUsd || 0) + (current.costUsd || 0)
+  }
+  return normalizeModelUsage(aggregate)
+}
+
+function normalizePromptTokenEstimate(value) {
+  if (value === null || value === undefined || value === '' || typeof value === 'boolean') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : null
+}
 
 function inlineMediaProjectionTokens(value, seen = new WeakSet()) {
   if (typeof value === 'string') {
@@ -523,7 +560,7 @@ export class TurnEngine {
     idFactory = randomUUID,
     now = Date.now,
     toolSpecs = SERVER_TOOL_SPECS,
-    readApprovalMode = resolveApprovalMode,
+    readApprovalMode = getApprovalMode,
     preparePromptContext = prepareTurnPromptContext,
     resolveToolSpecs = resolveTurnToolSpecs,
     scheduleMemoryExtraction = scheduleAutoMemoryExtraction,
@@ -1113,6 +1150,7 @@ export class TurnEngine {
       : normalizeTurnIntentMode(intentMode)
     const preparedSkillIds = normalizeIds(promptContext.skillIds)
     const effectiveSkillIds = preparedSkillIds.length ? preparedSkillIds : normalizeIds(skillIds)
+    const effectiveApprovalMode = this.deps.readApprovalMode({ userId })
     let resolvedToolSpecs = this.deps.toolSpecs
     try {
       const authorizationAwareBaseSpecs = restoreDirectoryAuthorizationToolSpecs(
@@ -1124,6 +1162,7 @@ export class TurnEngine {
         userId,
         baseSpecs: authorizationAwareBaseSpecs,
         toolsConfig: effectiveToolsConfig,
+        permissionMode: effectiveApprovalMode,
         prompt: content,
         messages,
         skillIds: effectiveSkillIds,
@@ -1140,6 +1179,11 @@ export class TurnEngine {
     let checkpointIterations = Math.max(0, Number(restoredCheckpointState?.iterations) || 0)
     let checkpointRecovery = restoredCheckpointState?.recovery || null
     let latestModelUsage = normalizeModelUsage(restoredCheckpointState?.latestModelUsage)
+    let turnModelUsage = normalizeModelUsage(restoredCheckpointState?.turnModelUsage)
+      || latestModelUsage
+    let latestEstimatedPromptTokens = normalizePromptTokenEstimate(
+      restoredCheckpointState?.latestEstimatedPromptTokens,
+    )
     let streamedAssistantText = String(pendingRecoveryAttempt?.assistantText || '')
     const verifiedLocalFilesAt = (verifiedAt = this.deps.now()) => extractVerifiedLocalFiles(
       checkpointMessages,
@@ -1180,6 +1224,8 @@ export class TurnEngine {
             iterations: evidenceIterations,
             compactionRecovery: checkpointRecovery,
             usage: latestModelUsage,
+            turnModelUsage,
+            estimatedPromptTokens: latestEstimatedPromptTokens,
             turnStartedAt: effectiveTurnStartedAt,
             turnCompletedAt: writtenAt,
           }),
@@ -1233,7 +1279,7 @@ export class TurnEngine {
         executeTool: this.deps.executeTool,
         approvalOrigin: 'chat',
         approvalSessionId: sessionId,
-        approvalMode: this.deps.readApprovalMode(),
+        approvalMode: effectiveApprovalMode,
         claimSteering: steeringOwnerId
           ? async () => this.deps.claimSteering({
               ...steeringScope,
@@ -1265,9 +1311,12 @@ export class TurnEngine {
           : null,
         loadCheckpoint: async () => restoredCheckpointState || null,
         saveCheckpoint: async (state) => {
-          const checkpointState = latestModelUsage
-            ? { ...state, latestModelUsage }
-            : state
+          const checkpointState = {
+            ...state,
+            ...(latestModelUsage ? { latestModelUsage } : {}),
+            ...(turnModelUsage ? { turnModelUsage } : {}),
+            ...(latestEstimatedPromptTokens !== null ? { latestEstimatedPromptTokens } : {}),
+          }
           checkpointMessages = Array.isArray(checkpointState?.messages)
             ? checkpointState.messages
             : checkpointMessages
@@ -1374,6 +1423,7 @@ export class TurnEngine {
               inlineAttachmentIds,
             })
           }
+          latestEstimatedPromptTokens = estimateContextTokens(providerMessages, request.tools)
           const inheritedToolCallReady = request.onToolCallReady
           return this.deps.runModel({
             ...request,
@@ -1408,7 +1458,10 @@ export class TurnEngine {
         },
         onModelPhase: async ({ phase, iteration, usage, modelName: activeModel, error }) => {
           const normalizedUsage = phase === 'completed' ? normalizeModelUsage(usage) : null
-          if (normalizedUsage) latestModelUsage = normalizedUsage
+          if (normalizedUsage) {
+            latestModelUsage = normalizedUsage
+            turnModelUsage = addModelUsage(turnModelUsage, normalizedUsage)
+          }
           await emitter('model.phase', {
             phase,
             iteration,
@@ -1480,6 +1533,9 @@ export class TurnEngine {
           deliveryArtifactIds: [],
           verifiedLocalFiles,
           iterations: checkpointIterations,
+          ...(latestModelUsage ? { usage: latestModelUsage } : {}),
+          ...(turnModelUsage ? { turnModelUsage } : {}),
+          ...(latestEstimatedPromptTokens !== null ? { estimatedPromptTokens: latestEstimatedPromptTokens } : {}),
         })
         return
       }
@@ -1503,6 +1559,9 @@ export class TurnEngine {
           ...deliveryArtifactFields(deliveryArtifactIds),
           verifiedLocalFiles,
           iterations,
+          ...(latestModelUsage ? { usage: latestModelUsage } : {}),
+          ...(turnModelUsage ? { turnModelUsage } : {}),
+          ...(latestEstimatedPromptTokens !== null ? { estimatedPromptTokens: latestEstimatedPromptTokens } : {}),
         }, {
           beforeAppend: (interruptedEvent) => persistTurnEvidence({
             state: 'interrupted',
@@ -1519,17 +1578,18 @@ export class TurnEngine {
       }
       if (result?.incomplete) {
         const partialText = String(result.text || streamedAssistantText || '')
+        const nonRetryable = result.code === 'REASONING_RUNAWAY'
         const failure = normalizeFailure({
-          code: 'TURN_INCOMPLETE',
+          code: nonRetryable ? result.code : 'TURN_INCOMPLETE',
           // Keep the wrap-up in partialText and the machine reason in the
           // hint. Reusing the wrap-up as the error message would make clients
           // append the same useful result a second time as an error banner.
           message: '任务未完全完成，已保留当前进展。',
-          retryable: true,
+          retryable: !nonRetryable,
           hint: result.reason
             ? `Incomplete reason: ${result.reason}`
             : 'Retry the turn to continue from the durable checkpoint.',
-        }, { retryable: true })
+        }, { retryable: !nonRetryable })
         const artifactIds = normalizeArtifactIds(result.artifactIds ?? checkpointArtifactIds)
         const deliveryArtifactIds = optionalDeliveryArtifactIds(result, checkpointDeliveryArtifactIds)
         const iterations = Math.max(0, Number(result.iterations) || checkpointIterations)
@@ -1552,6 +1612,9 @@ export class TurnEngine {
           ...deliveryArtifactFields(deliveryArtifactIds),
           verifiedLocalFiles,
           iterations,
+          ...(latestModelUsage ? { usage: latestModelUsage } : {}),
+          ...(turnModelUsage ? { turnModelUsage } : {}),
+          ...(latestEstimatedPromptTokens !== null ? { estimatedPromptTokens: latestEstimatedPromptTokens } : {}),
         })
         return
       }
@@ -1571,6 +1634,9 @@ export class TurnEngine {
           ...deliveryArtifactFields(deliveryArtifactIds),
           verifiedLocalFiles,
           iterations,
+          ...(latestModelUsage ? { usage: latestModelUsage } : {}),
+          ...(turnModelUsage ? { turnModelUsage } : {}),
+          ...(latestEstimatedPromptTokens !== null ? { estimatedPromptTokens: latestEstimatedPromptTokens } : {}),
         }, {
           beforeAppend: (pausedEvent) => {
             const pausedAt = this.deps.now()
@@ -1594,6 +1660,8 @@ export class TurnEngine {
                   compactionArchiveId: result?.recovery?.archiveId || null,
                   compactionRecovery: result?.recovery || checkpointRecovery,
                   usage: latestModelUsage,
+                  turnModelUsage,
+                  estimatedPromptTokens: latestEstimatedPromptTokens,
                   turnStartedAt: effectiveTurnStartedAt,
                   turnCompletedAt: pausedAt,
                 }),
@@ -1626,6 +1694,8 @@ export class TurnEngine {
           compactionArchiveId: result?.recovery?.archiveId || null,
           compactionRecovery: result?.recovery || checkpointRecovery,
           usage: latestModelUsage,
+          turnModelUsage,
+          estimatedPromptTokens: latestEstimatedPromptTokens,
           turnStartedAt: effectiveTurnStartedAt,
           turnCompletedAt: completedAt,
         }),
@@ -1638,6 +1708,8 @@ export class TurnEngine {
         verifiedLocalFiles,
         iterations: result?.iterations || 0,
         ...(latestModelUsage ? { usage: latestModelUsage } : {}),
+        ...(turnModelUsage ? { turnModelUsage } : {}),
+        ...(latestEstimatedPromptTokens !== null ? { estimatedPromptTokens: latestEstimatedPromptTokens } : {}),
       })
       // Best-effort async notification to external subscribers.
       void this.deps.dispatchHooks?.({
@@ -1677,6 +1749,9 @@ export class TurnEngine {
           deliveryArtifactIds: [],
           verifiedLocalFiles,
           iterations: checkpointIterations,
+          ...(latestModelUsage ? { usage: latestModelUsage } : {}),
+          ...(turnModelUsage ? { turnModelUsage } : {}),
+          ...(latestEstimatedPromptTokens !== null ? { estimatedPromptTokens: latestEstimatedPromptTokens } : {}),
         })
         return
       }
@@ -1708,6 +1783,9 @@ export class TurnEngine {
         ...deliveryArtifactFields(deliveryArtifactIds),
         verifiedLocalFiles,
         iterations,
+        ...(latestModelUsage ? { usage: latestModelUsage } : {}),
+        ...(turnModelUsage ? { turnModelUsage } : {}),
+        ...(latestEstimatedPromptTokens !== null ? { estimatedPromptTokens: latestEstimatedPromptTokens } : {}),
       })
     }
   }

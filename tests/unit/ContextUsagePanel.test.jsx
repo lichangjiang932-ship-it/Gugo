@@ -63,6 +63,7 @@ test('context panel shows compact total plus system, tools, and conversation bre
   const root = createRoot(rootElement)
   const contextUsage = {
     estimatedTokens: 30000,
+    cumulativeTokens: 279000000,
     percent: 23,
     contextWindow: 128000,
     visibleCharacters: 1200,
@@ -80,6 +81,9 @@ test('context panel shows compact total plus system, tools, and conversation bre
     ))
     assert.ok(rootElement.querySelector('[data-testid="context-usage-panel"]'))
     const text = rootElement.textContent
+    assert.match(text, /当前有效上下文/)
+    assert.match(text, /会话累计 Token/)
+    assert.match(text, /279M/)
     assert.match(text, /~30K \/ 128K/)
     assert.match(text, /23%/)
     assert.match(text, /系统提示词/)
@@ -165,10 +169,44 @@ test('context panel and model circle fall back to estimates when measured usage 
       </I18nProvider>,
     ))
     const ring = rootElement.querySelector('[data-testid="context-ring"]')
-    assert.match(ring?.getAttribute('aria-label') || '', /4% · 5,000 \/ 128,000 tokens/)
+    assert.match(ring?.getAttribute('aria-label') || '', /4% · ~5,000 \/ 128,000 tokens/)
 
     await act(async () => ring.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
     assert.match(rootElement.textContent, /~5K \/ 128K/)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('server request estimate wins over uncompressed client history without pretending to be measured', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  const contextUsage = {
+    actualPromptTokens: null,
+    serverEstimatedPromptTokens: 16000,
+    estimatedTokens: 96000,
+    percent: 75,
+    contextWindow: 128000,
+    systemTokens: 100,
+    messageTokens: 90000,
+    toolCallTokens: 0,
+    attachmentTokens: 0,
+    toolSpecTokens: 0,
+  }
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <ComposerHarness contextUsage={contextUsage} />
+      </I18nProvider>,
+    ))
+    const ring = rootElement.querySelector('[data-testid="context-ring"]')
+    assert.match(ring?.getAttribute('aria-label') || '', /13% · ~16,000 \/ 128,000 tokens/)
+
+    await act(async () => ring.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.match(rootElement.textContent, /~16K \/ 128K/)
+    assert.doesNotMatch(rootElement.textContent, /~96K \/ 128K/)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

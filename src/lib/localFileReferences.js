@@ -127,6 +127,8 @@ function mutationEvidence(toolCalls = []) {
     const result = callResult(call)
     if (!MUTATION_TOOL_NAMES.has(name) || !result || !callSucceeded(call, result)) return
     const args = callArguments(call)
+    if (['apply_patch', 'patch_file'].includes(name)
+      && (args.dry_run === true || result.dry_run === true || result.dryRun === true)) return
     const content = name === 'write_file' && typeof args.content === 'string' ? args.content : null
     const paths = resultPaths(result)
     const artifactIdsByPath = artifactIdsFromResult(result, paths)

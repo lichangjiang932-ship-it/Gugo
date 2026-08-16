@@ -8,6 +8,7 @@ import {
   normalizeContextWindow,
   normalizeOptionalTokenCount,
   resolveModelContextWindow,
+  sumSessionModelUsage,
 } from '../src/lib/contextUsage.js'
 
 test('client token estimate charges non-ASCII more heavily than ASCII', () => {
@@ -38,6 +39,21 @@ test('client context estimate includes tool calls, attachments, and tool specs',
   assert.ok(complete.attachmentTokens > 0)
   assert.ok(complete.toolSpecTokens > 0)
   assert.equal(complete.visibleCharacters, 5)
+})
+
+test('session cumulative usage prefers per-turn totals and falls back to legacy latest-request usage', () => {
+  assert.equal(sumSessionModelUsage([
+    { role: 'user', meta: { modelUsage: { totalTokens: 999 } } },
+    {
+      role: 'assistant',
+      meta: {
+        modelUsage: { totalTokens: 450 },
+        turnModelUsage: { promptTokens: 800, completionTokens: 100, totalTokens: 900 },
+      },
+    },
+    { role: 'assistant', meta: { modelUsage: { promptTokens: 500, completionTokens: 25 } } },
+  ]), 1425)
+  assert.equal(sumSessionModelUsage([{ role: 'assistant', meta: {} }]), null)
 })
 
 test('client context estimate treats a large inline image as visual input instead of base64 text', () => {
@@ -136,6 +152,20 @@ test('client context usage retains a measured zero instead of falling back to th
   })
   assert.equal(usage.actualPromptTokens, 0)
   assert.ok(usage.estimatedTokens > 0)
+})
+
+test('server request estimate survives when the provider omits measured usage', () => {
+  const usage = estimateClientContextUsage({
+    messages: [{ role: 'user', content: 'This visible history is intentionally much larger. '.repeat(100) }],
+    serverEstimatedPromptTokens: 321,
+  })
+  assert.equal(usage.serverEstimatedPromptTokens, 321)
+  assert.ok(usage.estimatedTokens > 321)
+
+  const zero = estimateClientContextUsage({ serverEstimatedPromptTokens: 0 })
+  assert.equal(zero.serverEstimatedPromptTokens, 0)
+  const invalid = estimateClientContextUsage({ serverEstimatedPromptTokens: false })
+  assert.equal(Object.hasOwn(invalid, 'serverEstimatedPromptTokens'), false)
 })
 
 test('missing measured usage stays absent so the UI can use its estimate', () => {

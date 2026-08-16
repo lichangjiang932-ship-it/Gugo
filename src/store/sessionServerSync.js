@@ -75,6 +75,15 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
     const localMeta = localMessage?.meta && typeof localMessage.meta === 'object'
       ? localMessage.meta
       : {}
+    const serverPauseSequence = Number.isInteger(serverMeta.serverLastSequence)
+      ? serverMeta.serverLastSequence
+      : null
+    const localSequence = Number.isInteger(localMeta.serverLastSequence)
+      ? localMeta.serverLastSequence
+      : null
+    const localHasNewerTurnState = serverPauseSequence !== null
+      && localSequence !== null
+      && localSequence > serverPauseSequence
     const merged = {
       ...serverMessage,
       ...localMessage,
@@ -95,7 +104,7 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
         const recoveryStub = serverMeta.serverRecoveryStub === true
         const canonicalTextChanged = !recoveryStub && merged.content !== localMessage.content
         if (canonicalTextChanged) {
-          if (Array.isArray(serverMeta.toolCalls)) {
+          if (Array.isArray(serverMeta.toolCalls) && !localHasNewerTurnState) {
             // Live text offsets are coordinates into the local streamed body.
             // Once an authoritative snapshot replaces that body, only the
             // snapshot's tool calls are safe to use for timeline slicing.
@@ -137,17 +146,8 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
           merged.meta.verifiedLocalFiles = serverMeta.verifiedLocalFiles
         }
 
-        const serverPauseSequence = Number.isInteger(serverMeta.serverLastSequence)
-          ? serverMeta.serverLastSequence
-          : null
-        const localSequence = Number.isInteger(localMeta.serverLastSequence)
-          ? localMeta.serverLastSequence
-          : null
         const localResumeInFlight = localMeta.directoryAuthorizationPending === true
           || localMeta.serverResumeResolution != null
-        const localHasNewerTurnState = serverPauseSequence !== null
-          && localSequence !== null
-          && localSequence > serverPauseSequence
 
         if (serverMeta.interrupted === true && !localHasNewerTurnState) {
           merged.meta.streaming = true

@@ -1,6 +1,25 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parseChatAttachments } from '../src/lib/chatAttachmentParser.js'
+import {
+  MAX_CHAT_ATTACHMENTS_PER_MESSAGE,
+  MAX_IMAGES_PER_MESSAGE,
+  parseChatAttachments,
+} from '../src/lib/chatAttachmentParser.js'
+
+test('chat attachment limits match the managed upload capacity', async () => {
+  assert.equal(MAX_CHAT_ATTACHMENTS_PER_MESSAGE, 32)
+  assert.equal(MAX_IMAGES_PER_MESSAGE, 32)
+  const [attachment] = await parseChatAttachments([{
+    name: 'overflow.png',
+    size: 12,
+    type: 'image/png',
+  }], {
+    existingImageCount: 32,
+    messages: { imageLimit: '32-image-limit' },
+  })
+  assert.equal(attachment.kind, 'file')
+  assert.equal(attachment.error, '32-image-limit')
+})
 
 test('chat attachment parser extracts text files', async () => {
   const [attachment] = await parseChatAttachments([{

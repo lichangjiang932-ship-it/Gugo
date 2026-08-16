@@ -132,8 +132,8 @@ export function PreviewToolbar({ preview, content, view, setView, exports, t }) 
   )
 }
 
-export function DirectFileToolbar({ filename, type, summary, url, t }) {
-  const preview = { filename, label: type.toUpperCase(), summary }
+export function DirectFileToolbar({ filename, type, url, t }) {
+  const preview = { filename, label: type.toUpperCase() }
   return (
     <div data-testid="preview-command-bar" className="chat-preview-toolbar flex min-h-14 shrink-0 items-center gap-3 border-b border-ink/10 bg-paper px-3 py-2">
       <FileIdentity preview={preview} />

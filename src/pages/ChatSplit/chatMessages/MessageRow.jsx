@@ -16,6 +16,7 @@ import { ToolCallTrace } from './ActivityTraces.jsx'
 import ActivityStream from './ActivityStream.jsx'
 import { buildCollapsedUserMessagePreview, shouldCollapseUserMessage, splitUserSkillCommand } from './messageContent.js'
 import DirectoryRequestCard from '../../taskRun/DirectoryRequestCard.jsx'
+import { buildAttachmentPreviewArtifact } from '../../../lib/attachmentPreview.js'
 
 function stableTimelineSegments(content, toolCalls) {
   let previousToolKey = 'start'
@@ -57,19 +58,26 @@ export default function MessageRow({
   // artifactSource metadata can still help render a selected file, but it must
   // never create a clickable synthetic file by itself.
   const artifactPreview = deliveryArtifacts.length > 0 ? buildMessageArtifactPreview(msg) : null
-  const isCurrentStreamingMessage = msg.id === generatingMessageId || !!msg.meta?.streaming
+  const isCurrentStreamingMessage = msg.meta?.streaming === true
+    || (msg.meta?.streaming == null && msg.id === generatingMessageId)
   // A new turn must not make completed artifact messages look "streaming" again.
   // Their collapsed source/link presentation is part of the message itself, not
   // global chat generation state.
   const isMessageComplete = !isCurrentStreamingMessage
-  const showArtifactPreview = !!artifactPreview && isMessageComplete
+  // An interrupted turn may remain resumable/streaming while already having
+  // durable output. Keep those verified files available instead of hiding them
+  // until recovery finishes.
+  const canPresentDeliverables = isMessageComplete
+    || msg.meta?.interrupted === true
+    || msg.meta?.failed === true
+  const showArtifactPreview = !!artifactPreview && canPresentDeliverables
   const serverArtifactReferences = buildServerArtifactReferences({
     artifacts: deliveryArtifacts,
     content: String(msg.meta?.artifactSource || msg.content || ''),
     messageId: msg.id,
     preview: artifactPreview,
   })
-  const verifiedLocalFileReferences = isMessageComplete
+  const verifiedLocalFileReferences = canPresentDeliverables
     ? buildVerifiedLocalFileReferences({
         toolCalls: msg.meta?.toolCalls,
         verifiedLocalFiles: msg.meta?.verifiedLocalFiles,
@@ -84,7 +92,7 @@ export default function MessageRow({
   const hasInlineArtifactReference = artifactReferences.some((reference) => (
     artifactHasInlineReference(msg.content, reference, artifactReferences)
   ))
-  const collapseArtifact = showArtifactPreview && !hasInlineArtifactReference && shouldCollapseArtifactPreview(artifactPreview, {
+  const collapseArtifact = isMessageComplete && showArtifactPreview && !hasInlineArtifactReference && shouldCollapseArtifactPreview(artifactPreview, {
     content: msg.content,
     artifactSource: msg.meta?.artifactSource,
   })
@@ -121,6 +129,7 @@ export default function MessageRow({
             <AssistantContent
               artifactPreview={artifactPreview}
               artifactReferences={artifactReferences}
+              canPresentDeliverables={canPresentDeliverables}
               isCurrentStreamingMessage={isCurrentStreamingMessage}
               isMessageComplete={isMessageComplete}
               msg={msg}
@@ -132,7 +141,16 @@ export default function MessageRow({
             />
           )
         ) : (
-          <UserContent attachments={msg.attachments} command={userSkillCommand} content={msg.content} t={t} />
+          <UserContent
+            attachments={msg.attachments}
+            command={userSkillCommand}
+            content={msg.content}
+            onOpenAttachment={(attachment) => {
+              const artifact = buildAttachmentPreviewArtifact(attachment, { messageId: msg.id })
+              if (artifact) openArtifact(artifact)
+            }}
+            t={t}
+          />
         )}
         {msg.role === 'assistant' && isDirectoryRequest && (
           <InlineDirectoryRequestCard
@@ -169,7 +187,7 @@ export default function MessageRow({
   )
 }
 
-function AssistantContent({ artifactPreview, artifactReferences, isCurrentStreamingMessage, isMessageComplete, msg, onOpenArtifact, showArtifactPreview, t, verifiedLocalFileReferences }) {
+function AssistantContent({ artifactPreview, artifactReferences, canPresentDeliverables, isCurrentStreamingMessage, isMessageComplete, msg, onOpenArtifact, showArtifactPreview, t, verifiedLocalFileReferences }) {
   const inlineFileReferences = artifactReferences
   const openInlineArtifact = (href) => {
     // 先按产物 URL 匹配,再按本地路径(含 file:/// 与 D:\ 形式)匹配,
@@ -190,7 +208,7 @@ function AssistantContent({ artifactPreview, artifactReferences, isCurrentStream
     return true
   }
   const timeline = stableTimelineSegments(stripChoices(msg.content), msg.meta?.toolCalls)
-  const presentation = assistantTimelinePresentation(timeline, isCurrentStreamingMessage)
+  const presentation = assistantTimelinePresentation(timeline)
   const hasExecution = isCurrentStreamingMessage || presentation.execution.length > 0
   return (
     <>
@@ -231,7 +249,7 @@ function AssistantContent({ artifactPreview, artifactReferences, isCurrentStream
           }))}
         />
       )}
-      {isMessageComplete && (showArtifactPreview || resolveDeliveryArtifacts(msg.meta).length > 0 || verifiedLocalFileReferences.length > 0) && (
+      {canPresentDeliverables && (showArtifactPreview || resolveDeliveryArtifacts(msg.meta).length > 0 || verifiedLocalFileReferences.length > 0) && (
         <ArtifactReferenceLinks
           msg={msg}
           preview={artifactPreview}
@@ -244,7 +262,7 @@ function AssistantContent({ artifactPreview, artifactReferences, isCurrentStream
   )
 }
 
-function assistantTimelinePresentation(timeline, streaming) {
+function assistantTimelinePresentation(timeline) {
   const normalized = Array.isArray(timeline) ? timeline : []
   const hasTools = normalized.some((segment) => segment.kind === 'tools')
   if (!hasTools) {
@@ -253,8 +271,6 @@ function assistantTimelinePresentation(timeline, streaming) {
       answer: normalized.filter((segment) => segment.kind === 'text').map((segment) => segment.text).join(''),
     }
   }
-  if (streaming) return { execution: normalized, answer: '' }
-
   const lastToolIndex = normalized.findLastIndex((segment) => segment.kind === 'tools')
   const finalTextIndex = normalized.findLastIndex((segment, index) => (
     index > lastToolIndex
@@ -418,7 +434,7 @@ function CollapsedArtifactContent({ artifactPreview, artifactReferences, msg, on
   )
 }
 
-function UserContent({ attachments, command, content, t }) {
+function UserContent({ attachments, command, content, onOpenAttachment, t }) {
   const files = Array.isArray(attachments) ? attachments : []
   const displayContent = String(command?.command ? command.body : content || '')
   const collapsible = shouldCollapseUserMessage(displayContent)
@@ -462,10 +478,10 @@ function UserContent({ attachments, command, content, t }) {
         </div>
       )}
       {files.length > 0 && <div className={`${displayContent || command?.command ? 'mt-2' : ''} flex flex-wrap gap-1.5`} data-testid="user-message-attachments">
-        {files.map((file) => <span key={file.id} className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-ink/10 bg-paper px-2 py-1 text-xs text-ink-soft">
+        {files.map((file) => <button key={file.id} type="button" onClick={() => onOpenAttachment?.(file)} className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-ink/10 bg-paper px-2 py-1 text-xs text-ink-soft transition-colors hover:border-ember/40 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/45">
           <FileText className="h-3.5 w-3.5 shrink-0 text-ink-fade" />
           <span className="truncate">{file.name}</span>
-        </span>)}
+        </button>)}
       </div>}
     </div>
   )

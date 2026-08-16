@@ -168,11 +168,10 @@ test('executes tool calls returned by the model response that crosses the token 
   assert.equal(result.incomplete, true)
 })
 
-test('execution reasoning runaway is retried into a substantive tool call and persisted', async () => {
+test('execution reasoning runaway stops without an automatic model retry and persists a visible final', async () => {
   const writeFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'write_file')
   const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
   const outputPath = 'D:\\authorized\\reasoning-recovered.txt'
-  const phases = []
   let checkpoint = null
   let modelCalls = 0
   let executedWrites = 0
@@ -193,51 +192,16 @@ test('execution reasoning runaway is retried into a substantive tool call and pe
     toolSpecs: [writeFile, readFile],
     maxIters: 6,
     enableToolHooks: false,
-    onModelPhase: async (phase) => phases.push(phase),
     saveCheckpoint: async (state) => {
       checkpoint = structuredClone(state)
       return true
     },
     runModel: async ({ messages }) => {
       modelCalls += 1
-      if (modelCalls === 1) {
-        const error = new Error('reasoning exceeded execution ceiling')
-        error.code = 'REASONING_RUNAWAY'
-        throw error
-      }
-      if (modelCalls === 2) {
-        const systemText = messages
-          .filter((message) => message.role === 'system')
-          .map((message) => message.content)
-          .join('\n')
-        assert.match(systemText, /\[EXECUTION REASONING RECOVERY REQUIRED\]/)
-        assert.match(systemText, /Begin the next response with one substantive available tool call/)
-        return {
-          content: '',
-          toolCalls: [{
-            id: 'write-after-reasoning-recovery',
-            type: 'function',
-            function: {
-              name: 'write_file',
-              arguments: JSON.stringify({ path: outputPath, content: 'RECOVERED' }),
-            },
-          }],
-        }
-      }
-      if (modelCalls === 3) {
-        return {
-          content: '',
-          toolCalls: [{
-            id: 'verify-after-reasoning-recovery',
-            type: 'function',
-            function: {
-              name: 'read_file',
-              arguments: JSON.stringify({ path: outputPath }),
-            },
-          }],
-        }
-      }
-      return { content: 'Created and verified reasoning-recovered.txt.', toolCalls: [] }
+      assert.ok(Array.isArray(messages))
+      const error = new Error('reasoning exceeded execution ceiling')
+      error.code = 'REASONING_RUNAWAY'
+      throw error
     },
     executeTool: async ({ name }) => {
       if (name === 'write_file') {
@@ -249,11 +213,12 @@ test('execution reasoning runaway is retried into a substantive tool call and pe
     },
   })
 
-  assert.equal(result.text, 'Created and verified reasoning-recovered.txt.')
-  assert.equal(executedWrites, 1)
-  assert.equal(modelCalls, 4)
-  assert.equal(phases.some((phase) => phase.reason === 'reasoning_runaway'), true)
-  assert.equal(checkpoint?.completionGuards?.executionReasoningRetries, 1)
+  assert.match(result.text, /模型推理超过安全上限/)
+  assert.equal(result.incomplete, true)
+  assert.equal(result.code, 'REASONING_RUNAWAY')
+  assert.equal(executedWrites, 0)
+  assert.equal(modelCalls, 1)
+  assert.equal(checkpoint?.final?.code, 'REASONING_RUNAWAY')
 })
 
 test('default client config keeps bash_exec available through a read-only local PDF execution turn', async () => {
@@ -3542,7 +3507,7 @@ test('exact Windows del compensates a generated temporary script while PDF and P
             function: {
               name: 'bash_exec',
               arguments: JSON.stringify({
-                command: 'del /q "' + scriptPath + '"',
+                command: 'cmd.exe /d /c del /q "' + scriptPath + '" 2>nul',
                 cwd: directory,
               }),
             },
@@ -3626,6 +3591,113 @@ test('exact Windows del compensates a generated temporary script while PDF and P
   assert.deepEqual(snapshots.at(-1), [])
 })
 
+test('failed auxiliary-script cleanup cannot overturn a verified primary delivery', async () => {
+  const writeFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'write_file')
+  const bashExec = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'bash_exec')
+  const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
+  const directory = 'D:\\destok'
+  const scriptPath = directory + '\\_run_report.py'
+  const sourcePath = directory + '\\source\\_run_report.py'
+  const outputPath = directory + '\\final-report.txt'
+  let modelCalls = 0
+  let checkpoint = null
+
+  const result = await runToolsLoop({
+    job: {
+      id: 'failed-auxiliary-cleanup-job',
+      userId: null,
+      origin: 'chat',
+      prompt: 'Create and verify final-report.txt using a temporary helper, then clean up the helper.',
+    },
+    step: { id: 'failed-auxiliary-cleanup-step', kind: 'chat' },
+    messages: [{ role: 'user', content: 'Create and verify final-report.txt using a temporary helper, then clean up the helper.' }],
+    intentMode: 'execute',
+    toolSpecs: [writeFile, bashExec, readFile],
+    maxIters: 8,
+    enableToolHooks: false,
+    saveCheckpoint: async (state) => {
+      checkpoint = structuredClone(state)
+      return true
+    },
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) return {
+        content: '',
+        toolCalls: [{
+          id: 'write-report-helper', type: 'function', function: {
+            name: 'write_file',
+            arguments: JSON.stringify({ path: scriptPath, content: 'print("report")' }),
+          },
+        }],
+      }
+      if (modelCalls === 2) return {
+        content: '',
+        toolCalls: [{
+          id: 'write-same-name-source', type: 'function', function: {
+            name: 'write_file',
+            arguments: JSON.stringify({ path: sourcePath, content: 'export const report = true' }),
+          },
+        }],
+      }
+      if (modelCalls === 3) return {
+        content: '',
+        toolCalls: [{
+          id: 'generate-final-report', type: 'function', function: {
+            name: 'bash_exec',
+            arguments: JSON.stringify({
+              command: 'python "' + scriptPath + '"',
+              cwd: directory,
+              expected_outputs: [outputPath],
+            }),
+          },
+        }],
+      }
+      if (modelCalls === 4) return {
+        content: '',
+        toolCalls: [{
+          id: 'verify-final-report', type: 'function', function: {
+            name: 'read_file', arguments: JSON.stringify({ path: outputPath }),
+          },
+        }],
+      }
+      if (modelCalls === 5) return {
+        content: '',
+        toolCalls: [{
+          id: 'verify-same-name-source', type: 'function', function: {
+            name: 'read_file', arguments: JSON.stringify({ path: sourcePath }),
+          },
+        }],
+      }
+      if (modelCalls === 6) return {
+        content: '',
+        toolCalls: [{
+          id: 'cleanup-report-helper', type: 'function', function: {
+            name: 'bash_exec',
+            arguments: JSON.stringify({ command: 'del /q "' + scriptPath + '"', cwd: directory }),
+          },
+        }],
+      }
+      return {
+        content: 'Final report was generated and verified; temporary helper cleanup failed.',
+        toolCalls: [],
+      }
+    },
+    executeTool: async ({ name, args }) => {
+      if (name === 'write_file') return { ok: true, path: args.path }
+      if (name === 'read_file') return { ok: true, path: args.path, content: 'verified content' }
+      if (Array.isArray(args.expected_outputs) && args.expected_outputs.length > 0) {
+        return { ok: true, exitCode: 0, cwd: directory, changedPaths: [outputPath] }
+      }
+      return { ok: false, code: 'cleanup_failed', error: 'temporary helper is locked', retryable: false }
+    },
+  })
+
+  assert.equal(result.incomplete, undefined)
+  assert.match(result.text, /generated and verified/)
+  assert.deepEqual(checkpoint?.completionGuards?.pendingMutationTargets, [])
+  assert.deepEqual(checkpoint?.completionGuards?.auxiliaryMutationTargets, [scriptPath.replaceAll('\\', '/')])
+})
+
 test('dynamic, wildcard, compound, unmatched, and mixed Windows deletes cannot clear a pending target', async () => {
   const writeFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'write_file')
   const bashExec = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'bash_exec')
@@ -3636,6 +3708,8 @@ test('dynamic, wildcard, compound, unmatched, and mixed Windows deletes cannot c
     { label: 'environment expansion', command: 'del "%TEMP%\\_cleanup.py"' },
     { label: 'wildcard', command: 'del "' + directory + '\\*.py"' },
     { label: 'compound command', command: 'del "' + scriptPath + '" && echo done' },
+    { label: 'wrapped compound command', command: 'cmd /c del "' + scriptPath + '" && echo done' },
+    { label: 'wrapped redirected output', command: 'cmd /c del "' + scriptPath + '" 2>delete.log' },
     { label: 'unmatched literal', command: 'erase "' + directory + '\\other.py"' },
     { label: 'mixed literal and dynamic targets', command: 'del "' + scriptPath + '" "%TEMP%\\other.py"' },
   ]

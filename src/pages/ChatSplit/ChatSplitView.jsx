@@ -8,7 +8,7 @@ import DesktopPet from './DesktopPet.jsx'
 import RightPreviewPane from './RightPreviewPane'
 import RightWorkbench from './RightWorkbench'
 import SlashInlinePanelHost from './SlashInlinePanelHost.jsx'
-import { estimateClientContextUsage } from '../../lib/contextUsage.js'
+import { estimateClientContextUsage, sumSessionModelUsage } from '../../lib/contextUsage.js'
 
 export function ChatRightPanels({
   workbenchOpen,
@@ -130,14 +130,20 @@ export default function ChatSplitView({
   const latestAssistantMessage = [...messages].reverse()
     .find((message) => message?.role === 'assistant')
   const actualPromptTokens = latestAssistantMessage?.meta?.actualPromptTokens
-  // 优先显示服务端最新一次模型调用的真实 prompt tokens；缺失时再估算。
-  const contextUsage = estimateClientContextUsage({
-    messages,
-    tools: contextToolSpecs,
-    systemPrompt: contextSystemPrompt,
-    contextWindow,
-    actualPromptTokens,
-  })
+  const serverEstimatedPromptTokens = latestAssistantMessage?.meta?.serverEstimatedPromptTokens
+  // 优先显示服务端真实 usage；上游不返回 usage 时使用服务端最终请求估算，
+  // 避免压缩后仍按完整 UI 历史高估当前上下文。
+  const contextUsage = {
+    ...estimateClientContextUsage({
+      messages,
+      tools: contextToolSpecs,
+      systemPrompt: contextSystemPrompt,
+      contextWindow,
+      actualPromptTokens,
+      serverEstimatedPromptTokens,
+    }),
+    cumulativeTokens: sumSessionModelUsage(messages),
+  }
   const toggleContextPanel = () => setShowContextPanel((current) => !current)
 
   return (
@@ -251,6 +257,7 @@ export default function ChatSplitView({
           onCloseModelPicker={onCloseModelPicker}
           onModelChange={onModelChange}
           onManageModels={onManageModels}
+          onOpenAttachment={onOpenArtifact}
           approvalMode={approvalMode}
           onApprovalModeChange={onApprovalModeChange}
           handleKeyDown={onKeyDown}
