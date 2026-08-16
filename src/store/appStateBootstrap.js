@@ -7,7 +7,7 @@ import {
   selectPersistedSnapshot,
 } from './appStatePersistence.js'
 
-export const TOOLS_CONFIG_SCHEMA_VERSION = 10
+export const TOOLS_CONFIG_SCHEMA_VERSION = 11
 
 export function needsToolsConfigSchemaMigration(saved) {
   if (!saved?.toolsConfig || typeof saved.toolsConfig !== 'object') return false
@@ -52,6 +52,7 @@ export function createInitialState() {
       create_docx: true,
       create_xlsx: true,
       create_pdf: true,
+      render_pdf_pages: true,
       create_react_component: true,
       create_mermaid: true,
       create_chart: true,
@@ -161,6 +162,7 @@ export function normalizePersistedFields(saved, { cancelRunningTasks = false } =
     if (savedSchemaVersion < 10) {
       for (const name of Object.keys(base.toolsConfig)) normalized.toolsConfig[name] = true
     }
+    if (savedSchemaVersion < 11) normalized.toolsConfig.render_pdf_pages = true
   }
   normalized.toolsConfigSchemaVersion = TOOLS_CONFIG_SCHEMA_VERSION
   if (normalized.sessions !== undefined) normalized.sessions = backfillMessageTimestamps(normalized.sessions)

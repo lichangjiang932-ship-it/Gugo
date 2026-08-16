@@ -31,6 +31,12 @@ export function buildChatFailureMessage(message = '') {
   return base
 }
 
+export function buildChatFailureDisplayKey(turnId, error) {
+  const normalizedTurnId = String(turnId || 'unknown-turn').trim() || 'unknown-turn'
+  const code = String(error?.serverFailure?.code || error?.code || 'MODEL_CALL_FAILED').trim() || 'MODEL_CALL_FAILED'
+  return `${normalizedTurnId}:${code}`
+}
+
 export function getVisibleModelErrorMessage(error, t) {
   if (error?.code === 'EMPTY_MODEL_RESPONSE_LENGTH') return t('errors.emptyModelResponseLength')
   if (error?.code === 'EMPTY_MODEL_RESPONSE') return t('errors.emptyModelResponse')

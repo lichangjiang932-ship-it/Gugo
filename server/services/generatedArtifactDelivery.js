@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { getDefaultOutputDirectory, resolveAuthorizedLocalPath } from './localFileAccessService.js'
 import { readArtifactSourceSnapshot, writeArtifactSourceSnapshot } from './artifactSourceStore.js'
+import { expandHtmlArtifactAssets } from './htmlArtifactAssets.js'
 
 function samePath(left, right) {
   const a = path.normalize(left)
@@ -22,7 +23,7 @@ function deliveryError(code, message, cause = null) {
   return error
 }
 
-function copyNewDeliveryFile(sourcePath, directory, filename) {
+function copyNewDeliveryFile(sourcePath, directory, filename, content = null) {
   const parsed = path.parse(filename)
   for (let suffix = 1; suffix <= 10_000; suffix += 1) {
     const candidate = path.join(
@@ -30,10 +31,20 @@ function copyNewDeliveryFile(sourcePath, directory, filename) {
       suffix === 1 ? filename : `${parsed.name}-${suffix}${parsed.ext}`,
     )
     try {
-      fs.copyFileSync(sourcePath, candidate, fs.constants.COPYFILE_EXCL)
+      if (content == null) {
+        fs.copyFileSync(sourcePath, candidate, fs.constants.COPYFILE_EXCL)
+      } else {
+        const descriptor = fs.openSync(candidate, 'wx')
+        try {
+          fs.writeFileSync(descriptor, content)
+        } finally {
+          fs.closeSync(descriptor)
+        }
+      }
       return candidate
     } catch (error) {
       if (error?.code === 'EEXIST') continue
+      try { fs.rmSync(candidate, { force: true }) } catch { /* best-effort cleanup */ }
       throw error
     }
   }
@@ -41,6 +52,35 @@ function copyNewDeliveryFile(sourcePath, directory, filename) {
     'ARTIFACT_DELIVERY_PATH_EXHAUSTED',
     'could not allocate a unique generated-file delivery path',
   )
+}
+
+function replaceDeliveryFile(target, { sourcePath = '', content = null } = {}) {
+  const suffix = `${process.pid}-${Math.random().toString(16).slice(2)}`
+  const temporary = `${target}.gugo-${suffix}.tmp`
+  const backup = `${target}.gugo-${suffix}.bak`
+  let backedUp = false
+  try {
+    if (content == null) {
+      fs.copyFileSync(sourcePath, temporary, fs.constants.COPYFILE_EXCL)
+    } else {
+      fs.writeFileSync(temporary, content, { flag: 'wx' })
+    }
+    if (fs.existsSync(target)) {
+      fs.renameSync(target, backup)
+      backedUp = true
+    }
+    fs.renameSync(temporary, target)
+    if (backedUp) fs.rmSync(backup, { force: true })
+  } catch (error) {
+    try { fs.rmSync(temporary, { force: true }) } catch { /* best-effort cleanup */ }
+    try {
+      if (backedUp) {
+        fs.rmSync(target, { force: true })
+        fs.renameSync(backup, target)
+      }
+    } catch { /* keep the backup for manual recovery */ }
+    throw error
+  }
 }
 
 function assertSafeRevisionPath({ snapshot, directory, filename, userId }) {
@@ -117,6 +157,13 @@ export function syncGeneratedArtifactToOutputDirectory({
   }
   const sourcePath = fs.realpathSync(rawSourcePath)
   if (!fs.statSync(sourcePath).isFile()) throw new Error('generated artifact delivery source is not a file')
+  const standaloneContent = toolName === 'create_html_app'
+    ? Buffer.from(expandHtmlArtifactAssets({
+      artifactDirectory: path.dirname(sourcePath),
+      artifactId,
+      html: fs.readFileSync(sourcePath, 'utf8'),
+    }), 'utf8')
+    : null
 
   const requestedDirectory = path.resolve(
     String(outputDirectory || getDefaultOutputDirectory({ userId }) || '').trim(),
@@ -135,11 +182,16 @@ export function syncGeneratedArtifactToOutputDirectory({
       const deliveryStat = fs.statSync(deliveryPath)
       sameFile = sourceStat.dev === deliveryStat.dev && sourceStat.ino === deliveryStat.ino
     }
-    if (!sameFile) {
-      fs.copyFileSync(sourcePath, deliveryPath)
+    if (sameFile && standaloneContent != null) {
+      throw deliveryError('ARTIFACT_DELIVERY_SOURCE_CONFLICT', 'standalone HTML delivery cannot overwrite its managed source')
+    }
+    if (!sameFile && standaloneContent != null) {
+      replaceDeliveryFile(deliveryPath, { content: standaloneContent })
+    } else if (!sameFile) {
+      replaceDeliveryFile(deliveryPath, { sourcePath })
     }
   } else {
-    deliveryPath = copyNewDeliveryFile(sourcePath, directory, filename)
+    deliveryPath = copyNewDeliveryFile(sourcePath, directory, filename, standaloneContent)
   }
   const deliveryRoot = snapshot?.deliveryRoot && isInsideDirectory(snapshot.deliveryRoot, deliveryPath)
     ? snapshot.deliveryRoot

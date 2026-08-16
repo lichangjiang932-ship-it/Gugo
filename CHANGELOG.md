@@ -6,6 +6,24 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.16] - 2026-08-17
+
+### Added
+
+- Added owner-scoped media bundles for managed HTML artifacts so existing local images, audio, and video render in previews and export as a self-contained offline HTML file without exposing disk paths.
+
+### Changed
+
+- Unified Agent artifact routing across HTML, images, PDF, PowerPoint, Word, and Excel for create, in-place replacement, copy, conversion, and input-only intents.
+- Required file tasks to complete through the matching tool and verified file delivery instead of returning code snippets or instructions that ask the user to open, edit, save, or convert files manually.
+
+### Fixed
+
+- Prevented existing image and document inputs from incorrectly triggering same-format generation tools such as `generate_image`.
+- Preserved delivered files and clickable links when a later model step fails, and removed duplicate failure notices.
+- Restored ordinary workspace HTML previews while keeping managed HTML media private, authenticated, sandboxed, and safely released after use.
+- Made HTML media staging and rollback best-effort, added bounded offline expansion, and switched asset hashing to fixed-size chunks.
+
 ## [0.11.12] - 2026-08-16
 
 ### Added

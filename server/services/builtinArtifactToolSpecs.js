@@ -8,6 +8,27 @@ const REPLACE_ARTIFACT_ID_PROPERTY = Object.freeze({
   description: 'Set only when the runtime explicitly instructs an in-place revision of an adjacent delivered artifact. Use that exact artifact ID; omit this field when creating a new file or version.',
 })
 
+const OFFICE_IMAGES_PROPERTY = Object.freeze({
+  type: 'array',
+  maxItems: 50,
+  description: 'Existing authorized raster images to embed as real media in the generated Office file. This never generates a new image. target_index is 1-based (slide for PPTX, paragraph position for DOCX, sheet for XLSX). x/y/width/height are optional inches; anchor is an XLSX cell such as D2.',
+  items: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      path: { type: 'string', minLength: 1, description: 'Existing workspace/local file path or attachment:// URI.' },
+      alt: { type: 'string', maxLength: 500 },
+      target_index: { type: 'integer', minimum: 1 },
+      anchor: { type: 'string', pattern: '^[A-Za-z]{1,3}[1-9][0-9]{0,6}$' },
+      x: { type: 'number', minimum: 0 },
+      y: { type: 'number', minimum: 0 },
+      width: { type: 'number', exclusiveMinimum: 0 },
+      height: { type: 'number', exclusiveMinimum: 0 },
+    },
+    required: ['path'],
+  },
+})
+
 export const BUILTIN_ARTIFACT_TOOL_SPECS = Object.freeze({
   read_artifact_source: {
     type: 'function',
@@ -71,6 +92,7 @@ export const BUILTIN_ARTIFACT_TOOL_SPECS = Object.freeze({
           subtitle: { type: 'string' },
           theme: { type: 'string', enum: ['noir', 'paper', 'ocean', 'forest'] },
           brand: { type: 'string' },
+          images: OFFICE_IMAGES_PROPERTY,
           replace_artifact_id: REPLACE_ARTIFACT_ID_PROPERTY,
           slides: {
             type: 'array',
@@ -154,6 +176,7 @@ export const BUILTIN_ARTIFACT_TOOL_SPECS = Object.freeze({
               required: ['text'],
             },
           },
+          images: OFFICE_IMAGES_PROPERTY,
           replace_artifact_id: REPLACE_ARTIFACT_ID_PROPERTY,
         },
         required: ['title', 'paragraphs'],
@@ -180,6 +203,7 @@ export const BUILTIN_ARTIFACT_TOOL_SPECS = Object.freeze({
               required: ['name', 'rows'],
             },
           },
+          images: OFFICE_IMAGES_PROPERTY,
           replace_artifact_id: REPLACE_ARTIFACT_ID_PROPERTY,
         },
         required: ['title', 'sheets'],
@@ -190,15 +214,20 @@ export const BUILTIN_ARTIFACT_TOOL_SPECS = Object.freeze({
     type: 'function',
     function: {
       name: 'create_pdf',
-      description: 'Create a real downloadable PDF artifact from Markdown. The server handles pagination, line wrapping, page numbers, and embedded Unicode/Chinese fonts.',
+      description: 'Create a real downloadable PDF artifact from Markdown and/or existing authorized raster images. Images are embedded as real PDF image objects; this never calls image generation. The server handles pagination, line wrapping, page numbers, and embedded Unicode/Chinese fonts.',
       parameters: {
         type: 'object',
         properties: {
           title: { type: 'string' },
           markdown: { type: 'string' },
+          images: OFFICE_IMAGES_PROPERTY,
           replace_artifact_id: REPLACE_ARTIFACT_ID_PROPERTY,
         },
-        required: ['title', 'markdown'],
+        required: ['title'],
+        anyOf: [
+          { required: ['markdown'] },
+          { required: ['images'] },
+        ],
       },
     },
   },
@@ -206,12 +235,26 @@ export const BUILTIN_ARTIFACT_TOOL_SPECS = Object.freeze({
     type: 'function',
     function: {
       name: 'create_html_app',
-      description: 'Create a polished, self-contained managed HTML artifact that opens in Gugo preview. Use it for a standalone Gugo deliverable or an explicitly referenced managed artifact. Do not use it when the user names a local/workspace file target; edit or write that exact file instead. External scripts, styles, frames, and network requests are rejected.',
+      description: 'Create a polished managed HTML artifact that opens in Gugo preview. Use it for a standalone Gugo deliverable or an explicitly referenced managed artifact. Existing authorized local images/audio/video are input assets, not requests to generate new media: declare every one in assets and reference it from HTML as gugo-asset://<id>. Gugo bundles those files without exposing local paths. Do not use this tool when the user names a local/workspace HTML target; edit or write that exact file instead. External scripts, styles, frames, and network requests are rejected.',
       parameters: {
         type: 'object',
         properties: {
           title: { type: 'string' },
-          html: { type: 'string', description: 'Complete single-file HTML document with inline CSS and optional inline JavaScript.' },
+          html: { type: 'string', description: 'Complete HTML document with inline CSS and optional inline JavaScript. For every declared local asset, use its exact gugo-asset://<id> URI in src, poster, CSS url(), or a JavaScript string; never write file:// or a drive path into HTML.' },
+          assets: {
+            type: 'array',
+            maxItems: 500,
+            description: 'Authorized existing local image/audio/video inputs to bundle with the HTML. This does not generate media. Every id must be unique and referenced by gugo-asset://<id>. During an in-place revision, omit path only to retain an existing asset with the same id.',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                id: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$' },
+                path: { type: 'string', description: 'Existing workspace/local file path or attachment:// URI.' },
+              },
+              required: ['id'],
+            },
+          },
           replace_artifact_id: REPLACE_ARTIFACT_ID_PROPERTY,
         },
         required: ['title', 'html'],

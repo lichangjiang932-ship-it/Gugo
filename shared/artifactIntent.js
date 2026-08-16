@@ -52,7 +52,7 @@ const ARTIFACT_TERMS = Object.freeze({
   image: /\bimages?\b|\bpictures?\b|\bphotos?\b|\billustrations?\b|\bposters?\b|\bcover\s+art\b|\bhero\s+art\b|\u56fe\u7247|\u56fe\u50cf|\u63d2\u56fe|\u914d\u56fe|\u6d77\u62a5|\u5c01\u9762\u56fe/gi,
 })
 
-const BEFORE_ACTION = /(?:帮我|请|麻烦|给我|我要|我需要|我想要|希望|来(?:一|个|份|套)?|写|编写|撰写|做|制作|生成|创建|输出|导出|整理成|转换成|转成|改成|做成|设计|起草|重做|重制|修改|编辑|更新|优化|润色|make|create|generate|build|produce|export|convert|design|draft|prepare|write|revise|edit|update|redesign|give\s+me|i\s+(?:want|need))[^。！？!?\n]{0,32}$/i
+const BEFORE_ACTION = /(?:帮我|请|麻烦|给我|我要|我需要|我想要|希望|来(?:一|个|份|套)?|写|编写|撰写|做|制作|生成|创建|输出|导出|整理成|转换成|转换为|转成|转为|改成|改为|做成|放入|放进|加入|写入|整理到|设计|起草|重做|重制|修改|编辑|更新|优化|润色|make|create|generate|build|produce|export|convert|design|draft|prepare|write|revise|edit|update|redesign|give\s+me|i\s+(?:want|need))[^。！？!?\n]{0,32}$/i
 const AFTER_ACTION = /^[^。！？!?\n]{0,12}(?:写|编写|撰写|做|制作|生成|创建|输出|导出|重做|修改|编辑|更新|优化|润色|make|create|generate|export|edit|update)/i
 const DIRECT_NEGATION = /(?:不要|不再|别再?|禁止|避免|无需|不用|不需要|不可|不能|不应|不想要|勿|拒绝|防止|阻止|确保不会|没有要求|没要求|没有让|没让|未要求|without|do\s+not|don't|dont|never|avoid|prevent|stop|must\s+not|should\s+not|no\s+need\s+to)[^。！？!?\n]{0,28}$/i
 const AUTO_OR_ACCIDENTAL = /(?:自动|随意|擅自|自行|莫名|错误|意外|偷偷|被|乱)[^。！？!?\n]{0,10}(?:生成|制作|创建|输出|导出|变成|转成|generate|create|make|export)[^。！？!?\n]{0,8}$/i
@@ -66,7 +66,12 @@ const GLOBAL_DENIAL = /(?:没有|没|未)(?:有)?(?:让|要求|叫|授权)[^。�
 // a request for a downloadable Word document. Explicit authoring phrases
 // (生成报告 / write a report) remain eligible for DOCX.
 const RESULT_REPORT_OBJECT = /^[\s:：]*(?:(?:the\s+)?(?:real|actual|current|final|latest|specific)\s+|(?:真实|实际|当前|最终|最新|具体|本次)\s*)?(?:(?:test|check|verification|execution)\s+|(?:测试|检查|验证|执行)\s*)?(?:exit\s*code|exitcode|stdout|stderr|status|results?|progress|outcome|error|reason|findings?|退出码|结果|状态|进度|错误|异常|原因|结论|输出)/i
-const ARTIFACT_PRODUCTION_BEFORE = /(?:写(?:一|1)?份|编写|撰写|制作|生成|创建|导出|整理成|转换成|make|create|generate|produce|export|draft|prepare|write)(?:[^。！？?!\n]{0,24})$/i
+const ARTIFACT_PRODUCTION_BEFORE = /(?:写(?:一|1)?份?|做|编写|撰写|制作|生成|创建|导出|整理成|转换成|转换为|转成|转为|改成|改为|做成|放入|放进|加入|写入|整理到|make|create|generate|produce|export|draft|prepare|write|build|convert)(?:[^。！？?!\n]{0,24})$/i
+const ARTIFACT_INPUT_ACTION_BEFORE = /(?:使用|用|利用|采用|基于|根据|参考|读取|查看|浏览|分析|导入|引用|展示|显示|包含|收录|把|将|来自|从|use|using|with|from|read|inspect|browse|analy[sz]e|reference|based\s+on|import|include|show|display)(?:[^。！？!?；;\n]{0,32})$/i
+const ARTIFACT_INPUT_AFTER = /^[^。！？!?；;\n]{0,20}(?:作为|用作|用于|放入|放进|加入|展示在|显示在|写入|整理到|生成|制作|创建|写|编写|撰写|as\s+(?:an?\s+)?(?:input|source|reference)|into|to\s+(?:build|create|write|make)|for\s+(?:a|the)?\s*(?:website|webpage|document|deck|presentation))/i
+const ARTIFACT_COMPOUND_MODIFIER_AFTER = /^(?:展示|浏览|查看|画廊|图库|图片墙|管理|检索|搜索|gallery|viewer|browser|catalog|library|list)(?:网站|网页|页面|系统|工具|应用|app|website|webpage|page)?/i
+const ARTIFACT_OUTPUT_RELATION_BEFORE = /(?:把|将)[^。！？!?；;\n]{1,48}(?:作为|用作|设为|设置为|设成|当作)[^。！？!?；;\n]{0,12}$/i
+const PDF_TO_IMAGE_CONVERSION = /(?:\b(?:convert|render|export)\b[^。！？!?;\n]{0,64}\bpdf\b[^。！？!?;\n]{0,32}\b(?:to|into|as)\b[^。！？!?;\n]{0,24}\b(?:images?|pictures?|png|jpe?g|webp)\b|(?:把|将)?[^。！？!?；;\n]{0,24}(?:pdf|\.pdf)[^。！？!?；;\n]{0,24}(?:转(?:换)?(?:成|为)|导出(?:成|为)|渲染(?:成|为)|生成)[^。！？!?；;\n]{0,16}(?:图片|图像|png|jpe?g|webp))/i
 const SKILL_PREFIX = /^\/([a-z0-9_-]+)(?:\s|$)/i
 
 // A slash artifact skill is a delivery contract, not merely another keyword.
@@ -96,13 +101,42 @@ const ARTIFACT_REVISION_ACTION = /(?:继续(?:修改|编辑|完善|优化|调整
 // use...", and similar discussion cannot unlock mutation tools from a
 // substring in the middle of the sentence.
 const ARTIFACT_REVISION_PLACEMENT = /(?:^|[\n。！？!?；;，,])\s*(?:(?:(?:请|帮我|麻烦(?:你)?|直接|继续|再|只)\s*)*(?:(?:把|将)\s*[^。！？!?；;\n]{1,40}?(?:作为|设为|设置为|设成|用作|当作|当)\s*(?:网页|网站|页面|首页|文档|幻灯片|演示)?\s*(?:的)?\s*(?:背景(?:图|图片)?|封面(?:图|图片)?|主视觉)(?:使用)?|(?:用|使用|以)\s*[^。！？!?；;\n]{1,40}?(?:作为|用作|当作|来做|做(?:成)?)\s*(?:网页|网站|页面|首页|文档|幻灯片|演示)?\s*(?:的)?\s*(?:背景(?:图|图片)?|封面(?:图|图片)?|主视觉))|(?:(?:please\s+|(?:can|could|would)\s+you\s+)?(?:use|set|make)\s+(?:(?:this|that|these|those|the|my|your|uploaded|attached|provided|existing|current)\s+){0,4}(?:image|photo|picture|portrait|attachment)\s+(?:(?:as|for)\s+)?(?:(?:the|an?)\s+)?(?:(?:website|webpage|page|document|slide|deck)\s+)?(?:background(?!\s+(?:information|context|material|reference)\b)|cover|hero(?:\s+(?:image|art))?)))/i
-const EXISTING_ASSET_PLACEMENT = /(?:(?:这|那|该|此)(?:一)?(?:张|幅|个)?(?:人物)?(?:图|图片|图像|照片)|(?:上传(?:的)?|附件(?:中|里|的)?|我(?:上传|提供|发)(?:的)?)[^。！？!?；;\n]{0,12}(?:(?:人物)?(?:图|图片|图像|照片|附件)|[^\s。！？!?；;]+\.(?:avif|gif|jpe?g|png|webp))|[^\s。！？!?；;]+\.(?:avif|gif|jpe?g|png|webp)|(?:(?:this|that|these|those|my|your)\s+)(?:(?:attached|uploaded|provided|existing|current)\s+)?(?:image|photo|picture|portrait|attachment)|(?:the\s+)?(?:attached|uploaded|provided|existing|current)\s+(?:image|photo|picture|portrait|attachment))/i
+const EXISTING_ASSET_PLACEMENT = /(?:(?:这|那|该|此)(?:一)?(?:张|幅|个)?(?:人物)?(?:图|图片|图像|照片)|(?:上传(?:的)?|附件(?:中|里|的)?|我(?:上传|提供|发)(?:的)?)[^。！？!?；;\n]{0,12}(?:(?:人物)?(?:图|图片|图像|照片|附件)|[^\s。！？!?；;]+\.(?:avif|gif|jpe?g|png|webp))|attachment:\/\/[a-zA-Z0-9][a-zA-Z0-9_-]{7,127}|[^\s。！？!?；;]+\.(?:avif|gif|jpe?g|png|webp)|(?:(?:this|that|these|those|my|your)\s+)(?:(?:attached|uploaded|provided|existing|current)\s+)?(?:image|photo|picture|portrait|attachment)|(?:the\s+)?(?:attached|uploaded|provided|existing|current)\s+(?:image|photo|picture|portrait|attachment))/i
+const EXISTING_ASSET_MUTATION_COMMAND_PREFIX = /^(?:(?:请|帮我|麻烦(?:你)?|直接|继续|再|只)\s*)*(?:(?:把|将|在|向|给|用|使用)\s*|(?:please\s+)?(?:add|insert|put|place|embed|use|set|replace)\b)/i
+const EXISTING_ASSET_MUTATION_ACTION_BEFORE = /(?:加入|添加|插入|放入|放进|放到|置入|嵌入|作为|用作|设为|设置为|设成|替换为|(?:add|insert|put|place|embed|use|set|replace))\s*$/i
+const EXISTING_ASSET_MUTATION_ACTION_AFTER = /^\s*(?:加入|添加|插入|放入|放进|放到|置入|嵌入|作为|用作|设为|设置为|设成|替换为)/i
 const ADDITIONAL_IMAGE_PRODUCTION = /(?:(?:另外|另行|同时|还要|并且|以及|再)\s*(?:请|帮我|麻烦)?\s*(?:生成|创建|制作|画|绘制)|(?:also|additionally|separately)\s+(?:generate|create|make|draw))[^。！？!?\n]{0,32}(?:图|图片|图像|照片|海报|插图|image|photo|picture|poster|illustration)/i
 const ARTIFACT_REVISION_SHORT_DENIAL = /(?:不要|不用|无需|别|禁止|停止|取消)\s*(?:再)?\s*(?:改|换|删|加|补|调|修)(?:一?下|掉|成|为)?/gi
 
 function isExistingAssetPlacement(text = '') {
-  const placement = String(text || '').match(ARTIFACT_REVISION_PLACEMENT)?.[0] || ''
-  return Boolean(placement && EXISTING_ASSET_PLACEMENT.test(placement))
+  const value = String(text || '').trim()
+  const placement = value.match(ARTIFACT_REVISION_PLACEMENT)?.[0] || ''
+  if (placement && EXISTING_ASSET_PLACEMENT.test(placement)) return true
+  const assetPattern = new RegExp(
+    EXISTING_ASSET_PLACEMENT.source,
+    EXISTING_ASSET_PLACEMENT.flags.includes('g')
+      ? EXISTING_ASSET_PLACEMENT.flags
+      : `${EXISTING_ASSET_PLACEMENT.flags}g`,
+  )
+  for (const asset of value.matchAll(assetPattern)) {
+    const before = value.slice(Math.max(0, asset.index - 48), asset.index)
+    const after = value.slice(asset.index + asset[0].length, asset.index + asset[0].length + 48)
+    const clauseStart = Math.max(
+      value.lastIndexOf('\n', asset.index - 1),
+      value.lastIndexOf('。', asset.index - 1),
+      value.lastIndexOf('！', asset.index - 1),
+      value.lastIndexOf('？', asset.index - 1),
+      value.lastIndexOf('；', asset.index - 1),
+      value.lastIndexOf(';', asset.index - 1),
+      value.lastIndexOf('，', asset.index - 1),
+      value.lastIndexOf(',', asset.index - 1),
+    )
+    const commandClause = value.slice(clauseStart + 1).trimStart()
+    if (EXISTING_ASSET_MUTATION_COMMAND_PREFIX.test(commandClause)
+      && (EXISTING_ASSET_MUTATION_ACTION_BEFORE.test(before)
+        || EXISTING_ASSET_MUTATION_ACTION_AFTER.test(after))) return true
+  }
+  return false
 }
 const ARTIFACT_REVISION_DENIAL = /(?:不要|不用|无需|别|禁止|停止|取消)[^，,；;：:。！？!?\n]{0,20}(?:修改|编辑|更新|优化|调整|重做|生成|导出)|(?:do\s+not|don't|dont|never|stop|cancel)[^,;:.!?\n]{0,24}(?:revise|edit|update|change|generate|export)/i
 const ARTIFACT_REVISION_DISCUSSION = /^(?:为什么|为何|怎么|如何|请?(?:解释|说明|分析|讨论)|告诉我)[^。！？!?\n]{0,40}|(?:修改|编辑|调整|优化|改|换)[^。！？!?\n]{0,10}(?:是什么|什么意思|含义|原则|方法|逻辑|代码|工具)/i
@@ -405,7 +439,62 @@ export function parseArtifactSkillId(prompt = '') {
   return match ? canonicalizeSkillId(match[1]) : null
 }
 
-function occurrenceIsExplicitRequest(text, match) {
+function clauseAroundOccurrence(text, match) {
+  const start = Math.max(
+    text.lastIndexOf('。', match.index - 1),
+    text.lastIndexOf('！', match.index - 1),
+    text.lastIndexOf('？', match.index - 1),
+    text.lastIndexOf('!', match.index - 1),
+    text.lastIndexOf('?', match.index - 1),
+    text.lastIndexOf('\n', match.index - 1),
+  ) + 1
+  const tail = text.slice(match.index + match[0].length)
+  const boundary = tail.search(/[。！？!?\n]/)
+  const end = boundary < 0 ? text.length : match.index + match[0].length + boundary
+  return text.slice(start, end)
+}
+
+function artifactMentionIsInputMaterial(text, match, type) {
+  const before = text.slice(Math.max(0, match.index - 72), match.index)
+  const after = text.slice(match.index + match[0].length, match.index + match[0].length + 96)
+  const clause = clauseAroundOccurrence(text, match)
+  const otherTypeMentioned = Object.entries(ARTIFACT_TERMS).some(([candidate, matcher]) => {
+    if (candidate === type) return false
+    const probe = new RegExp(matcher.source, matcher.flags.replace('g', ''))
+    return probe.test(clause)
+  })
+  if (!otherTypeMentioned) return false
+
+  const inputRelationship = ARTIFACT_INPUT_ACTION_BEFORE.test(before)
+    || ARTIFACT_INPUT_AFTER.test(after)
+    || ARTIFACT_COMPOUND_MODIFIER_AFTER.test(after)
+  const conversionConnector = after.match(/^[^。！？!?；;\n]{0,48}?\b(?:to|into|as)\b/i)
+  const conversionTarget = conversionConnector
+    ? after.slice(conversionConnector[0].length)
+    : ''
+  const conversionSource = Boolean(conversionConnector && Object.entries(ARTIFACT_TERMS).some(([candidate, matcher]) => {
+    if (candidate === type) return false
+    const probe = new RegExp(matcher.source, matcher.flags.replace('g', ''))
+    return probe.test(conversionTarget)
+  }))
+  if (!inputRelationship && !conversionSource) return false
+
+  // English conversion clauses put the source format before to/into/as and
+  // the requested output after it: "convert PDF to images" must expose only
+  // generate_image, never create_pdf as a second deliverable.
+  if (conversionSource) return true
+
+  // A direct request such as "生成图片并做网站" is genuinely multi-output.
+  // Existing/input material wording, or a compound noun such as "图片画廊网站",
+  // makes the same mention an input/topic instead of a second deliverable.
+  const directProduction = ARTIFACT_PRODUCTION_BEFORE.test(before)
+    || ARTIFACT_OUTPUT_RELATION_BEFORE.test(before)
+  const compoundModifier = ARTIFACT_COMPOUND_MODIFIER_AFTER.test(after)
+  if (compoundModifier) return true
+  return !directProduction
+}
+
+function occurrenceIsExplicitRequest(text, match, type) {
   const before = text.slice(Math.max(0, match.index - 48), match.index)
   const after = text.slice(match.index + match[0].length, match.index + match[0].length + 32)
   const identifierPrefix = text.slice(Math.max(0, match.index - 16), match.index)
@@ -416,8 +505,11 @@ function occurrenceIsExplicitRequest(text, match) {
     && !ARTIFACT_PRODUCTION_BEFORE.test(before)) return false
   if (DIRECT_NEGATION.test(before) || NEGATION_AFTER.test(after)) return false
   if (AUTO_OR_ACCIDENTAL.test(before) || CAPABILITY_QUESTION.test(before)) return false
+  if (artifactMentionIsInputMaterial(text, match, type)) return false
 
-  const requested = BEFORE_ACTION.test(before) || AFTER_ACTION.test(after)
+  const requested = BEFORE_ACTION.test(before)
+    || ARTIFACT_OUTPUT_RELATION_BEFORE.test(before)
+    || AFTER_ACTION.test(after)
   if (!requested) return false
   if (META_QUESTION.test(before) && !/(?:帮我|请|麻烦|给我|我要|我需要|我想要|make|create|generate|export|give\s+me|i\s+(?:want|need))[^。！？!?\n]{0,24}$/i.test(before)) {
     return false
@@ -435,9 +527,17 @@ export function hasExplicitArtifactRequest(prompt = '', type) {
   if (GLOBAL_DENIAL.test(text)) return false
   matcher.lastIndex = 0
   for (const match of text.matchAll(matcher)) {
-    if (occurrenceIsExplicitRequest(text, match)) return true
+    if (occurrenceIsExplicitRequest(text, match, type)) return true
   }
   return false
+}
+
+/**
+ * A PDF rasterization request consumes an existing PDF. It must use the
+ * deterministic renderer, never the generative image model.
+ */
+export function isPdfToImageConversionRequest(prompt = '') {
+  return PDF_TO_IMAGE_CONVERSION.test(String(prompt || ''))
 }
 
 function detectArtifactIntentRaw(prompt = '', {
@@ -456,8 +556,9 @@ function detectArtifactIntentRaw(prompt = '', {
   const explicitXlsx = hasExplicitArtifactRequest(text, 'xlsx')
   const explicitHtml = hasExplicitArtifactRequest(text, 'html')
   const explicitPdf = hasExplicitArtifactRequest(text, 'pdf')
+  const explicitNonImageArtifact = explicitPptx || explicitDocx || explicitXlsx || explicitHtml || explicitPdf
   const existingAssetPlacement = isExistingAssetPlacement(text)
-    && revisionRequest
+    && (revisionRequest || explicitNonImageArtifact)
   const additionalImageProduction = ADDITIONAL_IMAGE_PRODUCTION.test(text)
   // In "use this image as the background", the image is an input asset, not
   // a request to generate a second image artifact. An independent clause such

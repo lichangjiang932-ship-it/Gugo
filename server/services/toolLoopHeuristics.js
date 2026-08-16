@@ -53,6 +53,14 @@ import { searchWeb } from './webSearchService.js'
 import { generateImage } from './mediaModelService.js'
 import { syncGeneratedArtifactToOutputDirectory } from './generatedArtifactDelivery.js'
 import { getManagedAttachment } from './managedAttachmentStore.js'
+import {
+  beginHtmlArtifactAssetInstall,
+  discardStagedHtmlArtifactAssets,
+  finishHtmlArtifactAssetInstall,
+  htmlArtifactAssetIds,
+  rollbackHtmlArtifactAssetInstall,
+  stageHtmlArtifactAssets,
+} from './htmlArtifactAssets.js'
 
 
 const FS_SHELL_TOOL_NAMES = new Set(
@@ -140,6 +148,50 @@ async function resolveHtmlArtifactArgs(args = {}, { userId } = {}) {
       typeof content === 'string' ? await inlineHtmlAttachmentUris(content, { userId }) : content,
     ])))
   }
+  const markerSource = [resolved.html, ...Object.values(resolved.files || {})]
+    .filter((value) => typeof value === 'string')
+    .join('\n')
+  const assetIds = htmlArtifactAssetIds(markerSource)
+  const referenced = new Set(assetIds)
+  const seen = new Set()
+  const sources = []
+  for (const entry of Array.isArray(resolved.assets) ? resolved.assets : []) {
+    const id = String(entry?.id || '').trim()
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new Error('invalid HTML asset id')
+    if (seen.has(id)) throw new Error(`duplicate HTML asset id: ${id}`)
+    if (!referenced.has(id)) throw new Error(`HTML asset is declared but not referenced: ${id}`)
+    seen.add(id)
+    const rawPath = String(entry?.path || '').trim()
+    if (!rawPath) continue
+    const source = resolveForFileTool(rawPath, { userId })
+    sources.push({ id, sourcePath: source.fullPath })
+  }
+  resolved.assets = assetIds.map((id) => ({ id }))
+  Object.defineProperty(resolved, '_htmlAssetIds', { value: assetIds, enumerable: false })
+  Object.defineProperty(resolved, '_htmlAssetSources', { value: sources, enumerable: false })
+  return resolved
+}
+
+function resolveOfficeArtifactArgs(args = {}, { userId } = {}) {
+  const resolved = { ...args }
+  const images = (Array.isArray(args.images) ? args.images : []).map((entry, index) => {
+    const rawPath = String(entry?.path || '').trim()
+    if (!rawPath) throw new Error(`images[${index}].path is required`)
+    const source = resolveForFileTool(rawPath, { userId })
+    const stat = fs.statSync(source.fullPath)
+    if (!stat.isFile()) throw new Error(`images[${index}].path must reference a file`)
+    return {
+      sourcePath: source.fullPath,
+      alt: entry?.alt,
+      target_index: entry?.target_index,
+      anchor: entry?.anchor,
+      x: entry?.x,
+      y: entry?.y,
+      width: entry?.width,
+      height: entry?.height,
+    }
+  })
+  Object.defineProperty(resolved, '_officeImages', { value: images, enumerable: false })
   return resolved
 }
 
@@ -1331,6 +1383,7 @@ function persistGeneratedArtifact({ artifact, args, job, step }) {
 
 const GENERATED_ARTIFACT_TYPE = Object.freeze({
   generate_image: 'image',
+  render_pdf_pages: 'image',
   create_pptx: 'pptx',
   create_docx: 'docx',
   create_xlsx: 'xlsx',
@@ -1357,9 +1410,30 @@ function isInsideDirectory(filePath, directoryPath) {
 function publishGeneratedArtifact({ name, artifact, args, job, step }) {
   const replacementId = String(args?.replace_artifact_id || '').trim()
   if (!replacementId) {
-    writeArtifactSourceSnapshot({ artifactId: artifact.id, toolName: name, args })
-    persistGeneratedArtifact({ artifact, args, job, step })
-    return artifact
+    let assetStage = null
+    let assetTransaction = null
+    try {
+      if (name === 'create_html_app') {
+        assetStage = stageHtmlArtifactAssets({
+          artifactDirectory: getArtifactDir(),
+          artifactId: artifact.id,
+          parentFilename: artifact.filename,
+          requiredAssetIds: args?._htmlAssetIds || [],
+          sources: args?._htmlAssetSources || [],
+        })
+        assetTransaction = beginHtmlArtifactAssetInstall(assetStage)
+      }
+      writeArtifactSourceSnapshot({ artifactId: artifact.id, toolName: name, args })
+      persistGeneratedArtifact({ artifact, args, job, step })
+      finishHtmlArtifactAssetInstall(assetTransaction)
+      return artifact
+    } catch (error) {
+      rollbackHtmlArtifactAssetInstall(assetTransaction)
+      discardStagedHtmlArtifactAssets(assetStage)
+      deleteArtifactSourceSnapshot(artifact.id)
+      try { fs.rmSync(artifact.fullPath, { force: true }) } catch { /* best-effort cleanup */ }
+      throw error
+    }
   }
   if (job?.origin !== 'chat' || !job?.userId || !job?.sessionId) {
     throw artifactReplacementError(
@@ -1404,7 +1478,19 @@ function publishGeneratedArtifact({ name, artifact, args, job, step }) {
   }
 
   const backupPath = `${targetPath}.replace-${artifact.id}.bak`
+  let assetStage = null
+  let assetTransaction = null
   try {
+    if (name === 'create_html_app') {
+      assetStage = stageHtmlArtifactAssets({
+        artifactDirectory: artifactDirectory,
+        artifactId: target.id,
+        parentFilename: target.filename,
+        requiredAssetIds: args?._htmlAssetIds || [],
+        sources: args?._htmlAssetSources || [],
+        existingArtifactId: target.id,
+      })
+    }
     fs.renameSync(targetPath, backupPath)
     try {
       fs.renameSync(sourcePath, targetPath)
@@ -1412,6 +1498,9 @@ function publishGeneratedArtifact({ name, artifact, args, job, step }) {
       fs.renameSync(backupPath, targetPath)
       throw error
     }
+    assetTransaction = beginHtmlArtifactAssetInstall(assetStage)
+    fs.rmSync(backupPath, { force: true })
+    finishHtmlArtifactAssetInstall(assetTransaction)
     try {
       writeArtifactSourceSnapshot({ artifactId: target.id, toolName: name, args })
     } catch {
@@ -1420,10 +1509,14 @@ function publishGeneratedArtifact({ name, artifact, args, job, step }) {
       // legacy HTML artifact falls back to its current file contents.
       deleteArtifactSourceSnapshot(target.id)
     }
-    fs.rmSync(backupPath, { force: true })
   } catch (error) {
+    rollbackHtmlArtifactAssetInstall(assetTransaction)
+    discardStagedHtmlArtifactAssets(assetStage)
     try {
       if (!fs.existsSync(targetPath) && fs.existsSync(backupPath)) {
+        fs.renameSync(backupPath, targetPath)
+      } else if (fs.existsSync(targetPath) && fs.existsSync(backupPath)) {
+        fs.rmSync(targetPath, { force: true })
         fs.renameSync(backupPath, targetPath)
       }
     } catch { /* best-effort rollback; original backup remains managed */ }
@@ -1479,7 +1572,14 @@ function pdfBlocksFromArtifactArgs(args = {}) {
   return parseMarkdownDocument(String(args.markdown || '')).blocks
 }
 
-function publishedArtifactResult({ name, artifact, args, job, extra = {} }) {
+function publishedArtifactResult({
+  name,
+  artifact,
+  args,
+  job,
+  extra = {},
+  requiresLocalArtifactDelivery = false,
+}) {
   const result = {
     ok: true,
     artifactId: artifact.id,
@@ -1500,16 +1600,26 @@ function publishedArtifactResult({ name, artifact, args, job, extra = {} }) {
       deliveryStatus: 'delivered',
     }
   } catch (error) {
-    // The managed artifact has already been persisted and remains a valid
-    // preview/download. Report the local-copy failure without returning a
-    // failed tool result that would invite the model to generate duplicates.
+    const deliveryError = {
+      code: error?.code || 'ARTIFACT_DEFAULT_DELIVERY_FAILED',
+      message: error?.message || String(error),
+    }
+    // A managed preview is a valid fallback only when the caller's
+    // server-owned delivery contract did not require a local file. Default
+    // output, exact-path, and in-place revision turns must never turn a failed
+    // disk write into a semantic success.
     return {
       ...result,
+      ...(requiresLocalArtifactDelivery
+        ? {
+            ok: false,
+            code: deliveryError.code,
+            error: deliveryError.message,
+            retryable: false,
+          }
+        : {}),
       deliveryStatus: 'managed_only',
-      deliveryError: {
-        code: error?.code || 'ARTIFACT_DEFAULT_DELIVERY_FAILED',
-        message: error?.message || String(error),
-      },
+      deliveryError,
       warning: 'The managed artifact was created, but its default-directory copy could not be written.',
     }
   }
@@ -1895,6 +2005,7 @@ async function executeServerTool({
   skillId,
   approvalContext,
   allowedArtifactTools,
+  requiresLocalArtifactDelivery = false,
   toolCallId,
   idempotencyKey,
 }) {
@@ -2045,11 +2156,102 @@ async function executeServerTool({
         artifact,
         args,
         job,
+        requiresLocalArtifactDelivery,
         extra: {
           revisedPrompt: generated.revisedPrompt,
           imageMime: generated.mimeType,
         },
       }),
+    })
+  }
+  if (name === 'render_pdf_pages') {
+    const rendered = await dispatchPdfTool(name, args || {}, {
+      userId: job?.userId || null,
+      signal,
+    })
+    if (String(args?.replace_artifact_id || '').trim() && rendered.pages.length !== 1) {
+      throw artifactReplacementError(
+        'artifact_replacement_requires_single_page',
+        'Replacing one existing image requires exactly one rendered PDF page.',
+      )
+    }
+    const inputName = path.basename(String(rendered.input || args?.input || 'document.pdf'))
+    const baseTitle = String(args?.title || path.parse(inputName).name || 'PDF-page').trim()
+    const publishedPages = []
+    for (const page of rendered.pages) {
+      const pageTitle = rendered.pages.length === 1 && args?.title
+        ? String(args.title)
+        : `${baseTitle}-page-${page.page}`
+      const pageArgs = { ...args, title: pageTitle, pages: [page.page] }
+      const generatedArtifact = createImageArtifact({
+        title: pageTitle,
+        buffer: page.buffer,
+        mimeType: page.mimeType,
+      })
+      const artifact = publishGeneratedArtifact({
+        name,
+        artifact: generatedArtifact,
+        args: pageArgs,
+        job,
+        step,
+      })
+      const delivery = publishedArtifactResult({
+        name,
+        artifact,
+        args: pageArgs,
+        job,
+        requiresLocalArtifactDelivery,
+        extra: {
+          page: page.page,
+          width: page.width,
+          height: page.height,
+          dpi: page.dpi,
+          imageMime: page.mimeType,
+        },
+      })
+      publishedPages.push({ page, artifact, delivery })
+    }
+    const artifacts = publishedPages.map(({ page, artifact, delivery }) => ({
+      id: artifact.id,
+      artifactId: artifact.id,
+      filename: artifact.filename,
+      url: artifact.url,
+      type: artifact.type,
+      page: page.page,
+      width: page.width,
+      height: page.height,
+      dpi: page.dpi,
+      mimeType: page.mimeType,
+      replaced: artifact.replaced === true,
+      deliveryStatus: delivery.deliveryStatus,
+      ...(delivery.path ? { path: delivery.path, localPath: delivery.localPath } : {}),
+    }))
+    const failedDelivery = publishedPages.find(({ delivery }) => delivery.ok !== true)?.delivery
+    const result = {
+      ok: !failedDelivery,
+      ...(failedDelivery
+        ? {
+            code: failedDelivery.code,
+            error: failedDelivery.error,
+            retryable: false,
+          }
+        : {}),
+      artifactId: artifacts[0]?.id || null,
+      artifactIds: artifacts.map((artifact) => artifact.id),
+      artifacts,
+      input: rendered.input,
+      pageCount: rendered.pageCount,
+      renderedPageCount: rendered.renderedPageCount,
+      pages: artifacts,
+      format: rendered.format,
+      dpi: rendered.dpi,
+      imageMime: rendered.mimeType,
+      totalBytes: rendered.totalBytes,
+    }
+    return await attachVisionFeedback({
+      name,
+      result,
+      buffer: publishedPages[0]?.page?.buffer || null,
     })
   }
   if (name === 'fetch_url') {
@@ -2060,39 +2262,47 @@ async function executeServerTool({
     }
   }
   if (name === 'create_pptx') {
+    const resolvedArgs = resolveOfficeArtifactArgs(args, { userId: job?.userId || null })
     const generatedArtifact = await createPptx({
-      title: args.title,
-      subtitle: args.subtitle,
-      theme: args.theme,
-      brand: args.brand,
-      slides: pptxSlidesFromArtifactArgs(args),
+      title: resolvedArgs.title,
+      subtitle: resolvedArgs.subtitle,
+      theme: resolvedArgs.theme,
+      brand: resolvedArgs.brand,
+      slides: pptxSlidesFromArtifactArgs(resolvedArgs),
+      images: resolvedArgs._officeImages,
     })
-    const artifact = publishGeneratedArtifact({ name, artifact: generatedArtifact, args, job, step })
-    return publishedArtifactResult({ name, artifact, args, job })
+    const artifact = publishGeneratedArtifact({ name, artifact: generatedArtifact, args: resolvedArgs, job, step })
+    return publishedArtifactResult({ name, artifact, args: resolvedArgs, job, requiresLocalArtifactDelivery })
   }
   if (name === 'create_docx') {
+    const resolvedArgs = resolveOfficeArtifactArgs(args, { userId: job?.userId || null })
     const generatedArtifact = await createDocx({
-      title: args.title,
-      paragraphs: docxParagraphsFromArtifactArgs(args),
+      title: resolvedArgs.title,
+      paragraphs: docxParagraphsFromArtifactArgs(resolvedArgs),
+      images: resolvedArgs._officeImages,
     })
-    const artifact = publishGeneratedArtifact({ name, artifact: generatedArtifact, args, job, step })
-    return publishedArtifactResult({ name, artifact, args, job })
+    const artifact = publishGeneratedArtifact({ name, artifact: generatedArtifact, args: resolvedArgs, job, step })
+    return publishedArtifactResult({ name, artifact, args: resolvedArgs, job, requiresLocalArtifactDelivery })
   }
   if (name === 'create_xlsx') {
+    const resolvedArgs = resolveOfficeArtifactArgs(args, { userId: job?.userId || null })
     const generatedArtifact = await createXlsx({
-      title: args.title,
-      sheets: xlsxSheetsFromArtifactArgs(args),
+      title: resolvedArgs.title,
+      sheets: xlsxSheetsFromArtifactArgs(resolvedArgs),
+      images: resolvedArgs._officeImages,
     })
-    const artifact = publishGeneratedArtifact({ name, artifact: generatedArtifact, args, job, step })
-    return publishedArtifactResult({ name, artifact, args, job })
+    const artifact = publishGeneratedArtifact({ name, artifact: generatedArtifact, args: resolvedArgs, job, step })
+    return publishedArtifactResult({ name, artifact, args: resolvedArgs, job, requiresLocalArtifactDelivery })
   }
   if (name === 'create_pdf') {
+    const resolvedArgs = resolveOfficeArtifactArgs(args, { userId: job?.userId || null })
     const generatedArtifact = await createPdf({
-      title: args.title,
-      blocks: pdfBlocksFromArtifactArgs(args),
+      title: resolvedArgs.title,
+      blocks: pdfBlocksFromArtifactArgs(resolvedArgs),
+      images: resolvedArgs._officeImages,
     })
-    const artifact = publishGeneratedArtifact({ name, artifact: generatedArtifact, args, job, step })
-    return publishedArtifactResult({ name, artifact, args, job })
+    const artifact = publishGeneratedArtifact({ name, artifact: generatedArtifact, args: resolvedArgs, job, step })
+    return publishedArtifactResult({ name, artifact, args: resolvedArgs, job, requiresLocalArtifactDelivery })
   }
   if (name === 'create_html_app') {
     const resolvedArgs = await resolveHtmlArtifactArgs(args, { userId: job?.userId || null })
@@ -2100,9 +2310,16 @@ async function executeServerTool({
       title: resolvedArgs.title,
       html: resolvedArgs.html,
       files: resolvedArgs.files,
+      assetIds: resolvedArgs._htmlAssetIds,
     })
     const artifact = publishGeneratedArtifact({ name, artifact: generatedArtifact, args: resolvedArgs, job, step })
-    return publishedArtifactResult({ name, artifact, args: resolvedArgs, job })
+    return publishedArtifactResult({
+      name,
+      artifact,
+      args: resolvedArgs,
+      job,
+      requiresLocalArtifactDelivery,
+    })
   }
   // fs/shell 工具不落 artifact,执行结果直接回给模型.
   // 任意 fsShellTools 抛错(包括 env 未启用 / 路径越界)都返回 {ok:false,error}.

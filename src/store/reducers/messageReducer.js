@@ -229,6 +229,8 @@ export function reduceMessageState(state, action) {
           if (messageIndex < 0) return s
           const last = msgs[messageIndex]
           if (last.role !== 'assistant') return s
+          const failureDisplayKey = String(action.meta?.serverFailureDisplayKey || '').trim()
+          if (failureDisplayKey && last.meta?.serverFailureDisplayKey === failureDisplayKey) return s
           const cursor = applyStreamCursor(last, action)
           if (cursor.ignored) return s
           msgs[messageIndex] = {

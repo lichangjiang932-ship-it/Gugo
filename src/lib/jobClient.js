@@ -114,6 +114,52 @@ export async function loadArtifactPreviewHtml(url, { fetchImpl = fetch, signal }
   return response.text()
 }
 
+const MANAGED_HTML_ASSET_URI = /gugo-asset:\/\/([A-Za-z0-9_-]{1,64})/g
+
+/**
+ * Load an authenticated managed HTML preview and replace its private asset
+ * markers with parent-owned Blob URLs. Session credentials stay in the parent
+ * application and are never exposed to the sandboxed document.
+ */
+export async function loadArtifactPreviewDocument(url, {
+  fetchImpl = fetch,
+  signal,
+  createObjectUrl = (blob) => URL.createObjectURL(blob),
+} = {}) {
+  const previewUrl = authenticatedArtifactUrl(url)
+  const response = await fetchImpl(previewUrl, {
+    headers: authHeaders(),
+    credentials: 'same-origin',
+    signal,
+  })
+  if (!response.ok) throw new Error(`artifact preview request failed: ${response.status}`)
+  let html = await response.text()
+  const assetIds = [...new Set([...html.matchAll(MANAGED_HTML_ASSET_URI)].map((match) => match[1]))]
+  MANAGED_HTML_ASSET_URI.lastIndex = 0
+  if (assetIds.length === 0) return { html, objectUrls: [] }
+
+  const parsed = new URL(previewUrl, globalThis.location?.origin || 'http://localhost')
+  const assetBase = parsed.pathname.replace(/\/$/, '')
+  const objectUrls = []
+  try {
+    for (const id of assetIds) {
+      const assetResponse = await fetchImpl(`${assetBase}/assets/${encodeURIComponent(id)}`, {
+        headers: authHeaders(),
+        credentials: 'same-origin',
+        signal,
+      })
+      if (!assetResponse.ok) throw new Error(`artifact asset preview request failed: ${assetResponse.status}`)
+      const objectUrl = createObjectUrl(await assetResponse.blob())
+      objectUrls.push(objectUrl)
+      html = html.replaceAll(`gugo-asset://${id}`, objectUrl)
+    }
+    return { html, objectUrls }
+  } catch (error) {
+    for (const objectUrl of objectUrls) URL.revokeObjectURL?.(objectUrl)
+    throw error
+  }
+}
+
 // EventSource cannot send Authorization headers. Exchange the session token for
 // a short-lived, one-time ticket and get a fresh ticket after every disconnect.
 export function subscribeToJobEvents(

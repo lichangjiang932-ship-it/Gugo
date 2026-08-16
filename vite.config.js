@@ -320,7 +320,12 @@ export default defineConfig({
     // Generated release fixtures and browser artifacts can contain thousands
     // of files. They are never source inputs, so skip watching them.
     watch: {
-      ignored: ['**/.tmp/**', '**/output/**'],
+      ignored: [
+        '**/.tmp/**',
+        '**/output/**',
+        '**/release/**',
+        '**/release-*/**',
+      ],
     },
     // 端口被占就直接报错,**不要**自动换一个 —— 静默换端口正是
     // "同一个命令这次能看到历史、下次看不到"的元凶。

@@ -32,6 +32,7 @@ const ARTIFACT_GENERATOR_NAMES = [
   'create_pptx',
   'create_xlsx',
   'generate_image',
+  'render_pdf_pages',
 ]
 const INTENT_ARTIFACT_USER_ID = 'intent-user'
 const INTENT_ARTIFACT_SESSION_ID = 'artifact-intent-session'
@@ -65,7 +66,75 @@ function persistStubTurnArtifact({ turnId, id, filename, type }) {
 
 function forgedArtifactArgs(name) {
   if (name === 'generate_image') return { prompt: 'An unrelated verification image' }
+  if (name === 'render_pdf_pages') return { input: 'unrelated.pdf', pages: [1] }
   return { title: 'Unrequested artifact', paragraphs: [{ text: 'Must not be generated' }] }
+}
+
+function validArtifactArgs(name) {
+  if (name === 'create_pptx') {
+    return { title: 'Presentation', slides: [{ title: 'Summary', body: 'Done' }] }
+  }
+  if (name === 'create_docx') {
+    return { title: 'Document', paragraphs: [{ text: 'Done' }] }
+  }
+  if (name === 'create_xlsx') {
+    return { title: 'Workbook', sheets: [{ name: 'Data', rows: [['Status'], ['Done']] }] }
+  }
+  if (name === 'create_pdf') return { title: 'PDF', markdown: '# Done' }
+  if (name === 'create_html_app') {
+    return { title: 'Webpage', html: '<!doctype html><html><body><main>Done</main></body></html>' }
+  }
+  if (name === 'generate_image') return { prompt: 'Create a new abstract status image' }
+  if (name === 'render_pdf_pages') return { input: 'source.pdf', pages: [1], format: 'png' }
+  throw new Error(`unknown artifact generator: ${name}`)
+}
+
+function deliveredArtifactMessages({ prefix, tool, artifactId, filename, type }) {
+  const createCallId = `${prefix}-create`
+  const deliveryCallId = `${prefix}-delivery`
+  return [
+    { role: 'user', content: `生成 ${filename}` },
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [{
+        id: createCallId,
+        type: 'function',
+        function: { name: tool, arguments: JSON.stringify(validArtifactArgs(tool)) },
+      }],
+    },
+    {
+      role: 'tool',
+      tool_call_id: createCallId,
+      name: tool,
+      content: JSON.stringify({
+        ok: true,
+        artifactId,
+        filename,
+        type,
+        url: `/api/artifacts/${filename}`,
+      }),
+    },
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [{
+        id: deliveryCallId,
+        type: 'function',
+        function: {
+          name: 'set_deliverables',
+          arguments: JSON.stringify({ artifact_ids: [artifactId] }),
+        },
+      }],
+    },
+    {
+      role: 'tool',
+      tool_call_id: deliveryCallId,
+      name: 'set_deliverables',
+      content: JSON.stringify({ ok: true, deliveryArtifactIds: [artifactId] }),
+    },
+    { role: 'assistant', content: `${filename} 已生成。` },
+  ]
 }
 
 // ── 事故回归:代码任务不该看得见 create_pptx ────────────────────────────
@@ -169,6 +238,177 @@ test('explicit image production unlocks only generate_image', () => {
   assert.equal(detectArtifactIntent('why did generate_image run?').image, false)
 })
 
+test('existing file formats used as website inputs do not become extra deliverables', () => {
+  const htmlOnly = [
+    '"E:\\果"这个地方有很多人物图片，用这些人物图片你来写一个网站，确保该文件下的所有内容都被使用，我想在网站看这些，这样更方便，写到D盘',
+    '读取本地图片目录，生成一个 HTML 画廊网站',
+    '/webpage 使用 E:\\果 目录里的所有人物图片做一个网站',
+    '读取 D:\\资料\\季度报告.pdf 的内容，生成一个网页展示',
+    '使用已有的 budget.xlsx 制作一个网站',
+    '根据上传的 slides.pptx 写一个网站',
+  ]
+
+  for (const prompt of htmlOnly) {
+    assert.deepEqual(detectArtifactIntent(prompt), {
+      pptx: false,
+      docx: false,
+      xlsx: false,
+      html: true,
+      pdf: false,
+      image: false,
+    }, prompt)
+    assert.deepEqual([...allowedArtifactTools(prompt)], ['create_html_app'], prompt)
+    const visible = nameOf(selectJobToolSpecs({ prompt, specs: SERVER_TOOL_SPECS }))
+    assert.equal(visible.includes('create_html_app'), true, prompt)
+    assert.equal(visible.includes('generate_image'), false, prompt)
+    assert.equal(visible.includes('create_pdf'), false, prompt)
+    assert.equal(visible.includes('create_xlsx'), false, prompt)
+    assert.equal(visible.includes('create_pptx'), false, prompt)
+  }
+
+  for (const prompt of [
+    '生成图片并做网站',
+    '做一个网站，另外生成一张新封面图',
+    '/webpage 使用已有图片制作画廊，另外生成一张新的装饰插图',
+  ]) {
+    assert.deepEqual([...allowedArtifactTools(prompt)].sort(), [
+      'create_html_app',
+      'generate_image',
+    ], prompt)
+  }
+
+  assert.deepEqual([...allowedArtifactTools('生成一张人物图片')], ['generate_image'])
+})
+
+test('existing artifacts used as inputs unlock only the explicitly requested output format', () => {
+  const scenarios = [
+    ['使用已有 PDF 生成 Word 文档', 'create_docx'],
+    ['读取现有 Word 文档制作一份 PPT 演示文稿', 'create_pptx'],
+    ['参考已有 PPT 创建 Excel 工作簿', 'create_xlsx'],
+    ['基于已有 Excel 导出 PDF', 'create_pdf'],
+    ['把 Word 文档转成网页', 'create_html_app'],
+    ['把 PDF 转成图片', 'render_pdf_pages'],
+    ['把 HTML 页面转为 PDF', 'create_pdf'],
+    ['把图片转成 PDF', 'create_pdf'],
+    ['将 PDF 作为附件放入 Word 文档', 'create_docx'],
+    ['把图片作为 PPT 背景', 'create_pptx'],
+  ]
+
+  for (const [prompt, expectedTool] of scenarios) {
+    assert.deepEqual([...allowedArtifactTools(prompt)], [expectedTool], prompt)
+    const visible = nameOf(selectJobToolSpecs({
+      prompt,
+      userPrompt: prompt,
+      origin: 'chat',
+      intentMode: 'execute',
+      specs: SERVER_TOOL_SPECS,
+    }))
+    for (const generator of ARTIFACT_GENERATOR_NAMES) {
+      assert.equal(visible.includes(generator), generator === expectedTool, `${prompt}: ${generator}`)
+    }
+  }
+
+  for (const [prompt, expectedTool] of [
+    ['读取已有 report.pdf，生成 Word 文档', 'create_docx'],
+    ['参考现有 slides.pptx，生成 Excel 工作簿', 'create_xlsx'],
+    ['使用已有 budget.xlsx，制作一份 PPT 演示文稿', 'create_pptx'],
+    ['基于已有 notes.docx，导出 PDF', 'create_pdf'],
+    ['读取现有 landing.html，创建一份 PDF', 'create_pdf'],
+    ['用上传的 hero.png 制作一份 PPT', 'create_pptx'],
+  ]) {
+    assert.deepEqual([...allowedArtifactTools(prompt)], [expectedTool], prompt)
+  }
+})
+
+test('English convert and export clauses unlock only the target artifact format', () => {
+  const scenarios = [
+    ['convert Word to PDF', 'create_pdf'],
+    ['convert PDF to Word', 'create_docx'],
+    ['convert Excel into PDF', 'create_pdf'],
+    ['convert HTML to PowerPoint', 'create_pptx'],
+    ['convert PowerPoint into a Word document', 'create_docx'],
+    ['convert image to PDF', 'create_pdf'],
+    ['convert PDF to image', 'render_pdf_pages'],
+    ['export PDF as images', 'render_pdf_pages'],
+    ['convert the document into a spreadsheet', 'create_xlsx'],
+    ['convert the website to a PowerPoint', 'create_pptx'],
+  ]
+
+  for (const [prompt, expectedTool] of scenarios) {
+    assert.deepEqual([...allowedArtifactTools(prompt)], [expectedTool], prompt)
+  }
+})
+
+test('placing a provided image in an adjacent artifact retains only the original format tool', () => {
+  const scenarios = [
+    ['在原版 Word 文档中加入这张图片', 'docx', 'create_docx'],
+    ['在原版 PPT 中加入这张图片', 'pptx', 'create_pptx'],
+    ['在原版 Excel 中加入这张图片', 'xlsx', 'create_xlsx'],
+    ['在原版 PDF 中加入这张图片', 'pdf', 'create_pdf'],
+    ['在原版网页中加入这张图片', 'html', 'create_html_app'],
+    ['put this uploaded photo into the existing PowerPoint', 'pptx', 'create_pptx'],
+  ]
+
+  for (const [prompt, priorType, expectedTool] of scenarios) {
+    const options = { priorArtifactTypes: [priorType], hasPriorArtifact: true }
+    assert.deepEqual([...allowedArtifactTools(prompt, options)], [expectedTool], prompt)
+    assert.equal(detectArtifactIntent(prompt, options).image, false, prompt)
+  }
+})
+
+test('all artifact formats distinguish create, replace, copy, convert, and input-only intent', () => {
+  const cases = [
+    {
+      type: 'pptx', tool: 'create_pptx', create: '生成一份 PPT',
+      convert: '把 Word 文档转成 PPT', input: '读取已有 PPT 并在聊天里总结内容',
+    },
+    {
+      type: 'docx', tool: 'create_docx', create: '生成一份 Word 文档',
+      convert: '把 PDF 转成 Word 文档', input: '读取已有 Word 文档并在聊天里总结内容',
+    },
+    {
+      type: 'xlsx', tool: 'create_xlsx', create: '生成一个 Excel 工作簿',
+      convert: '把 PPT 转成 Excel 工作簿', input: '分析已有 Excel 并在聊天里总结数据',
+    },
+    {
+      type: 'pdf', tool: 'create_pdf', create: '生成一份 PDF',
+      convert: '把图片转成 PDF', input: '读取已有 PDF 并在聊天里总结内容',
+    },
+    {
+      type: 'html', tool: 'create_html_app', create: '生成一个网页',
+      convert: '把 Word 文档转成网页', input: '读取已有 HTML 并在聊天里总结内容',
+    },
+    {
+      type: 'image', tool: 'generate_image', convertTool: 'render_pdf_pages', create: '生成一张图片',
+      convert: '把 PDF 转成图片', input: '查看已有图片并在聊天里描述内容',
+    },
+  ]
+
+  for (const scenario of cases) {
+    assert.deepEqual([...allowedArtifactTools(scenario.create)], [scenario.tool], `${scenario.type}: create`)
+    assert.deepEqual(
+      [...allowedArtifactTools(scenario.convert)],
+      [scenario.convertTool || scenario.tool],
+      `${scenario.type}: convert`,
+    )
+    assert.deepEqual([...allowedArtifactTools(scenario.input)], [], `${scenario.type}: input only`)
+    assert.deepEqual(
+      [...allowedArtifactTools('直接修改原版，保留原文件名，不要新建版本', {
+        priorArtifactTypes: [scenario.type],
+      })],
+      [scenario.tool],
+      `${scenario.type}: replace`,
+    )
+    assert.deepEqual(
+      [...allowedArtifactTools('基于上一版另建一个新文件，保留原版', {
+        priorArtifactTypes: [scenario.type],
+      })],
+      [scenario.tool],
+      `${scenario.type}: create copy`,
+    )
+  }
+})
+
 test('object-first attachment placement inherits the adjacent webpage revision contract', () => {
   const priorArtifacts = [{
     id: 'previous-html-artifact',
@@ -264,6 +504,53 @@ test('explicit PDF production works without a slash skill', () => {
   assert.deepEqual([...allowedArtifactTools('请生成一份中文项目总结 PDF')], ['create_pdf'])
   assert.equal(detectArtifactIntent('导出为 PDF').pdf, true)
   assert.equal(detectArtifactIntent('为什么会自动生成 PDF？').pdf, false)
+})
+
+test('existing uploaded images route to the requested file generator instead of generate_image', () => {
+  const cases = [
+    {
+      prompt: '请用上传的 hero.png 作为封面，制作一份 PPT 演示文稿',
+      expected: ['create_pptx'],
+    },
+    {
+      prompt: '请把 D:\\assets\\portrait.png 插入新的 Word 文档',
+      expected: ['create_docx'],
+    },
+    {
+      prompt: '请将 attachment://image_asset_12345678 放入新的 Excel 工作簿',
+      expected: ['create_xlsx'],
+    },
+    {
+      prompt: '请使用上传的 photo.jpg 制作一份 PDF',
+      expected: ['create_pdf'],
+    },
+    {
+      prompt: '请用 attachment://image_asset_87654321 作为背景生成一个网页',
+      expected: ['create_html_app'],
+    },
+    {
+      prompt: '请把上传的 portrait.png 放入新的 Word 文档，另外生成一张新的装饰插图',
+      expected: ['create_docx', 'generate_image'],
+    },
+    {
+      prompt: '请把上传的 report.pdf 转成 PNG 图片',
+      expected: ['render_pdf_pages'],
+    },
+  ]
+
+  for (const { prompt, expected } of cases) {
+    assert.deepEqual([...allowedArtifactTools(prompt)].sort(), expected.sort(), prompt)
+
+    const visible = nameOf(selectJobToolSpecs({
+      prompt,
+      userPrompt: prompt,
+      origin: 'chat',
+      specs: SERVER_TOOL_SPECS,
+    }))
+    for (const generator of ARTIFACT_GENERATOR_NAMES) {
+      assert.equal(visible.includes(generator), expected.includes(generator), `${prompt}: ${generator}`)
+    }
+  }
 })
 
 test('explicit workspace filenames are not standalone managed artifacts', () => {
@@ -1105,6 +1392,132 @@ test('keeping the original filename is an in-place revision, not a request for a
   )
 })
 
+for (const format of [
+  { type: 'pptx', tool: 'create_pptx', filename: 'original-deck.pptx' },
+  { type: 'docx', tool: 'create_docx', filename: 'original-document.docx' },
+  { type: 'xlsx', tool: 'create_xlsx', filename: 'original-workbook.xlsx' },
+  { type: 'pdf', tool: 'create_pdf', filename: 'original-report.pdf' },
+  { type: 'html', tool: 'create_html_app', filename: 'original-page.html' },
+  { type: 'image', tool: 'generate_image', filename: 'original-image.png' },
+  { type: 'image', tool: 'render_pdf_pages', filename: 'original-rendered-page.png' },
+]) {
+  for (const mode of ['replace_original', 'create_copy']) {
+    test(`${format.tool} ${mode} executes the matching generator with the correct target disposition`, async () => {
+      const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`
+      const turnId = `${format.tool}-${mode}-${suffix}`
+      const originalId = `original-${format.type}-${suffix}`
+      const originalFilename = `original-${suffix}.${format.type === 'image' ? 'png' : format.type}`
+      const nextId = mode === 'replace_original' ? originalId : `copy-${format.type}-${suffix}`
+      const nextFilename = mode === 'replace_original'
+        ? originalFilename
+        : `copy-${suffix}.${format.type === 'image' ? 'png' : format.type}`
+      const prompt = mode === 'replace_original'
+        ? '直接修改原版，保留原文件名，不要新建版本'
+        : '基于上一版另建一个新文件，保留原版'
+      persistStubTurnArtifact({
+        turnId: `seed-${turnId}`,
+        id: originalId,
+        filename: originalFilename,
+        type: format.type,
+      })
+      const history = [
+        ...deliveredArtifactMessages({
+          prefix: `history-${turnId}`,
+          tool: format.tool,
+          artifactId: originalId,
+          filename: originalFilename,
+          type: format.type,
+        }),
+        { role: 'user', content: prompt },
+      ]
+      const executions = []
+      let modelCalls = 0
+
+      const result = await runToolsLoop({
+        job: {
+          id: turnId,
+          userId: INTENT_ARTIFACT_USER_ID,
+          sessionId: INTENT_ARTIFACT_SESSION_ID,
+          origin: 'chat',
+          prompt,
+          userPrompt: prompt,
+        },
+        step: { id: turnId, kind: 'chat' },
+        messages: history,
+        intentMode: 'execute',
+        toolSpecs: SERVER_TOOL_SPECS,
+        enableToolHooks: false,
+        requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+        executeTool: async ({ name, args }) => {
+          executions.push({ name, args })
+          assert.equal(name, format.tool)
+          if (mode === 'replace_original') {
+            assert.equal(args.replace_artifact_id, originalId)
+            return {
+              ok: true,
+              artifactId: originalId,
+              filename: originalFilename,
+              type: format.type,
+              url: `/api/artifacts/${originalFilename}`,
+            }
+          }
+          assert.equal(String(args.replace_artifact_id || ''), '')
+          return persistStubTurnArtifact({
+            turnId,
+            id: nextId,
+            filename: nextFilename,
+            type: format.type,
+          })
+        },
+        runModel: async ({ tools }) => {
+          modelCalls += 1
+          const visible = nameOf(tools)
+          for (const generator of ARTIFACT_GENERATOR_NAMES) {
+            assert.equal(
+              visible.includes(generator),
+              generator === format.tool,
+              `${format.tool} ${mode}: ${generator}`,
+            )
+          }
+          if (modelCalls === 1) {
+            return {
+              content: '',
+              toolCalls: [{
+                id: `${turnId}-create`,
+                type: 'function',
+                function: {
+                  name: format.tool,
+                  arguments: JSON.stringify(validArtifactArgs(format.tool)),
+                },
+              }],
+            }
+          }
+          if (modelCalls === 2) {
+            return {
+              content: '',
+              toolCalls: [{
+                id: `${turnId}-select`,
+                type: 'function',
+                function: {
+                  name: 'set_deliverables',
+                  arguments: JSON.stringify({ artifact_ids: [nextId] }),
+                },
+              }],
+            }
+          }
+          return { content: '文件已通过工具生成并交付。', toolCalls: [] }
+        },
+      })
+
+      assert.equal(modelCalls, 3)
+      assert.equal(executions.length, 1)
+      assert.deepEqual(result.artifactIds, [nextId])
+      assert.deepEqual(result.deliveryArtifactIds, [nextId])
+      assert.equal(result.text, '文件已通过工具生成并交付。')
+    })
+  }
+}
+
 test('an exact filename recovers a delivered artifact across one failed turn', () => {
   const messages = [
     ...adjacentHtmlRevisionMessages('把配色改一下'),
@@ -1570,7 +1983,7 @@ test('chat project-check turn does not inherit artifact generators from an older
   assert.deepEqual(result.artifactIds, [])
 })
 
-for (const generatorName of ['create_docx', 'generate_image']) {
+for (const generatorName of ARTIFACT_GENERATOR_NAMES) {
   test(`chat project-check turn rejects forged ${generatorName} before execution`, async () => {
     const currentPrompt = 'Run only run_project_check and report whether the project tests pass.'
     const outcomes = []
@@ -1808,6 +2221,292 @@ test('slash artifact skills stay locked to one generator unless multiple file fo
     [...allowedArtifactTools('/webpage build a website and also export a Word document')].sort(),
     ['create_docx', 'create_html_app'],
   )
+})
+
+test('an existing-image gallery request completes after the HTML artifact without an image gate', async () => {
+  const prompt = '"E:\\果"这个地方有很多人物图片，用这些人物图片你来写一个网站，确保该文件下的所有内容都被使用，我想在网站看这些，这样更方便，写到D盘'
+  const executions = []
+  const visibleToolNames = []
+  const modelMessages = []
+  let modelCalls = 0
+
+  const result = await runToolsLoop({
+    job: {
+      id: 'existing-image-gallery-html-only',
+      userId: INTENT_ARTIFACT_USER_ID,
+      sessionId: INTENT_ARTIFACT_SESSION_ID,
+      origin: 'chat',
+      prompt,
+    },
+    step: { id: 'existing-image-gallery-html-only', kind: 'chat' },
+    messages: [{ role: 'user', content: prompt }],
+    toolSpecs: SERVER_TOOL_SPECS,
+    enableToolHooks: false,
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    executeTool: async ({ name }) => {
+      executions.push(name)
+      assert.equal(name, 'create_html_app')
+      return persistStubTurnArtifact({
+        turnId: 'existing-image-gallery-html-only',
+        id: 'existing-image-gallery-html',
+        filename: '果-图片画廊.html',
+        type: 'html',
+      })
+    },
+    runModel: async ({ messages, tools }) => {
+      modelCalls += 1
+      visibleToolNames.push(nameOf(tools))
+      modelMessages.push(messages.map((message) => String(message.content || '')).join('\n'))
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'create-existing-image-gallery',
+            function: {
+              name: 'create_html_app',
+              arguments: JSON.stringify({
+                title: '果·图片画廊',
+                html: '<!doctype html><html><body><main>人物图片画廊</main></body></html>',
+              }),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 2) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'select-existing-image-gallery',
+            function: {
+              name: 'set_deliverables',
+              arguments: JSON.stringify({ artifact_ids: ['existing-image-gallery-html'] }),
+            },
+          }],
+        }
+      }
+      return { content: '图片画廊网页已生成。', toolCalls: [] }
+    },
+  })
+
+  assert.equal(modelCalls, 3)
+  assert.deepEqual(executions, ['create_html_app'])
+  assert.deepEqual(result.artifactIds, ['existing-image-gallery-html'])
+  assert.deepEqual(result.deliveryArtifactIds, ['existing-image-gallery-html'])
+  assert.equal(result.text, '图片画廊网页已生成。')
+  assert.ok(visibleToolNames.every((names) => names.includes('create_html_app')))
+  assert.ok(visibleToolNames.every((names) => !names.includes('generate_image')))
+  assert.ok(modelMessages.every((message) => !message.includes('must successfully call: generate_image')))
+})
+
+for (const scenario of [
+  {
+    prompt: '使用已有 budget.xlsx 制作一份 PPT 演示文稿',
+    tool: 'create_pptx',
+    type: 'pptx',
+    filename: 'from-existing-workbook.pptx',
+  },
+  {
+    prompt: '读取已有 report.pdf，生成 Word 文档',
+    tool: 'create_docx',
+    type: 'docx',
+    filename: 'from-existing-pdf.docx',
+  },
+  {
+    prompt: '基于现有 notes.docx 创建 Excel 工作簿',
+    tool: 'create_xlsx',
+    type: 'xlsx',
+    filename: 'from-existing-document.xlsx',
+  },
+  {
+    prompt: '把 Word 文档转成网页',
+    tool: 'create_html_app',
+    type: 'html',
+    filename: 'from-existing-document.html',
+  },
+  {
+    prompt: '把图片转成 PDF',
+    tool: 'create_pdf',
+    type: 'pdf',
+    filename: 'from-existing-image.pdf',
+  },
+  {
+    prompt: '把 PDF 转成图片',
+    tool: 'render_pdf_pages',
+    type: 'image',
+    filename: 'from-existing-pdf.png',
+  },
+]) {
+  test(`${scenario.tool} alone satisfies its input-to-output artifact contract`, async () => {
+    const turnId = `single-artifact-contract-${scenario.tool}`
+    const artifactId = `single-artifact-${scenario.tool}`
+    const executions = []
+    const modelContexts = []
+    let modelCalls = 0
+
+    const result = await runToolsLoop({
+      job: {
+        id: turnId,
+        userId: INTENT_ARTIFACT_USER_ID,
+        sessionId: INTENT_ARTIFACT_SESSION_ID,
+        origin: 'chat',
+        prompt: scenario.prompt,
+        userPrompt: scenario.prompt,
+      },
+      step: { id: turnId, kind: 'chat' },
+      messages: [{ role: 'user', content: scenario.prompt }],
+      intentMode: 'execute',
+      toolSpecs: SERVER_TOOL_SPECS,
+      enableToolHooks: false,
+      requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+      executeTool: async ({ name }) => {
+        executions.push(name)
+        assert.equal(name, scenario.tool)
+        return persistStubTurnArtifact({
+          turnId,
+          id: artifactId,
+          filename: scenario.filename,
+          type: scenario.type,
+        })
+      },
+      runModel: async ({ messages, tools }) => {
+        modelCalls += 1
+        const visible = nameOf(tools)
+        modelContexts.push(messages.map((message) => String(message.content || '')).join('\n'))
+        for (const generator of ARTIFACT_GENERATOR_NAMES) {
+          assert.equal(visible.includes(generator), generator === scenario.tool, `${scenario.prompt}: ${generator}`)
+        }
+        if (modelCalls === 1) {
+          return {
+            content: '',
+            toolCalls: [{
+              id: `${turnId}-create`,
+              function: {
+                name: scenario.tool,
+                arguments: JSON.stringify(validArtifactArgs(scenario.tool)),
+              },
+            }],
+          }
+        }
+        if (modelCalls === 2) {
+          return {
+            content: '',
+            toolCalls: [{
+              id: `${turnId}-select`,
+              function: {
+                name: 'set_deliverables',
+                arguments: JSON.stringify({ artifact_ids: [artifactId] }),
+              },
+            }],
+          }
+        }
+        return { content: '文件已生成并交付。', toolCalls: [] }
+      },
+    })
+
+    assert.equal(modelCalls, 3)
+    assert.deepEqual(executions, [scenario.tool])
+    assert.deepEqual(result.artifactIds, [artifactId])
+    assert.deepEqual(result.deliveryArtifactIds, [artifactId])
+    assert.equal(result.text, '文件已生成并交付。')
+    for (const otherTool of ARTIFACT_GENERATOR_NAMES.filter((name) => name !== scenario.tool)) {
+      assert.ok(modelContexts.every((context) => (
+        !context.includes(`must successfully call: ${otherTool}`)
+      )), `${scenario.prompt}: completion guard required ${otherTool}`)
+    }
+  })
+}
+
+test('a real webpage and new-image request still blocks completion until both artifacts exist', async () => {
+  const prompt = '生成图片并做网站'
+  const executions = []
+  let modelCalls = 0
+
+  const result = await runToolsLoop({
+    job: {
+      id: 'html-and-new-image-delivery',
+      userId: INTENT_ARTIFACT_USER_ID,
+      sessionId: INTENT_ARTIFACT_SESSION_ID,
+      origin: 'chat',
+      prompt,
+    },
+    step: { id: 'html-and-new-image-delivery', kind: 'chat' },
+    messages: [{ role: 'user', content: prompt }],
+    toolSpecs: SERVER_TOOL_SPECS,
+    enableToolHooks: false,
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    executeTool: async ({ name }) => {
+      executions.push(name)
+      return name === 'create_html_app'
+        ? persistStubTurnArtifact({
+            turnId: 'html-and-new-image-delivery',
+            id: 'dual-html-artifact',
+            filename: 'dual-delivery.html',
+            type: 'html',
+          })
+        : persistStubTurnArtifact({
+            turnId: 'html-and-new-image-delivery',
+            id: 'dual-image-artifact',
+            filename: 'dual-delivery.png',
+            type: 'png',
+          })
+    },
+    runModel: async ({ messages, tools }) => {
+      modelCalls += 1
+      const names = nameOf(tools)
+      assert.equal(names.includes('create_html_app'), true)
+      assert.equal(names.includes('generate_image'), true)
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'dual-html-call',
+            function: {
+              name: 'create_html_app',
+              arguments: JSON.stringify({
+                title: 'Dual delivery',
+                html: '<!doctype html><html><body><main>Dual delivery</main></body></html>',
+              }),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 2) return { content: '网站和图片都已完成。', toolCalls: [] }
+      if (modelCalls === 3) {
+        assert.ok(messages.some((message) => String(message.content || '').includes('generate_image')))
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'dual-image-call',
+            function: {
+              name: 'generate_image',
+              arguments: JSON.stringify({ prompt: 'A new hero image' }),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 4) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'select-dual-delivery',
+            function: {
+              name: 'set_deliverables',
+              arguments: JSON.stringify({
+                artifact_ids: ['dual-html-artifact', 'dual-image-artifact'],
+              }),
+            },
+          }],
+        }
+      }
+      return { content: '网站和新图片均已生成。', toolCalls: [] }
+    },
+  })
+
+  assert.equal(modelCalls, 5)
+  assert.deepEqual(executions, ['create_html_app', 'generate_image'])
+  assert.deepEqual(result.artifactIds, ['dual-html-artifact', 'dual-image-artifact'])
+  assert.deepEqual(result.deliveryArtifactIds, ['dual-html-artifact', 'dual-image-artifact'])
+  assert.equal(result.text, '网站和新图片均已生成。')
 })
 
 test('text tool protocol from a local model becomes a real webpage artifact call', async () => {
@@ -2178,6 +2877,8 @@ for (const delivery of [
   { label: 'PPTX', skillId: 'ppt', prompt: '/ppt build a product deck' },
   { label: 'DOCX', skillId: 'doc', prompt: '/doc build a product brief' },
   { label: 'XLSX', skillId: 'excel', prompt: '/excel build a product table' },
+  { label: 'PDF', skillId: 'pdf', prompt: '/pdf build a product report' },
+  { label: 'image', skillId: 'image', prompt: '/image create a product hero image' },
 ]) {
   test(`${delivery.label} delivery fails explicitly instead of completing with a fake preview`, async () => {
     await assert.rejects(

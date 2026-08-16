@@ -131,3 +131,21 @@ test('vite.config.js 真的 import 了这些 handler(不能只写 if 不导入)'
     assert.match(source, new RegExp(`import\\s*\\{[^}]*\\b${name}\\b`), `缺少 ${name} 的 import`)
   }
 })
+
+test('vite dev watcher ignores electron-builder release directories', () => {
+  const source = readFileSync(join(ROOT, 'vite.config.js'), 'utf8')
+  const ignoredBlock = source.match(/watch:\s*\{\s*ignored:\s*\[([\s\S]*?)\]/)?.[1]
+
+  assert.ok(ignoredBlock, 'vite.config.js 应配置 server.watch.ignored')
+  const ignoredPatterns = [...ignoredBlock.matchAll(/['"]([^'"]+)['"]/g)]
+    .map((match) => match[1])
+
+  assert.ok(
+    ignoredPatterns.includes('**/release/**'),
+    'Vite 应忽略 release/**，避免占用 electron-builder 的 win-unpacked.tmp',
+  )
+  assert.ok(
+    ignoredPatterns.includes('**/release-*/**'),
+    'Vite 应忽略 release-*/** 版本化发布目录',
+  )
+})

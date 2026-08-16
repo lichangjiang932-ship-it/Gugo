@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   artifactTypeForSkill,
+  buildChatFailureDisplayKey,
   buildChatFailureMessage,
   getVisibleModelErrorMessage,
 } from '../src/lib/chatFlowGuards.js'
@@ -12,6 +13,17 @@ test('chat failure copy does not blame env config for a generic invalid request'
   assert.match(text, /Model call failed/)
   assert.doesNotMatch(text, /MODEL_BASE_URL/)
   assert.doesNotMatch(text, /MODEL_API_KEY/)
+})
+
+test('failure display keys collapse the same turn and failure code', () => {
+  assert.equal(
+    buildChatFailureDisplayKey('turn-1', { serverFailure: { code: 'ARTIFACT_NOT_CREATED' } }),
+    'turn-1:ARTIFACT_NOT_CREATED',
+  )
+  assert.equal(
+    buildChatFailureDisplayKey('turn-1', { code: 'ARTIFACT_NOT_CREATED' }),
+    'turn-1:ARTIFACT_NOT_CREATED',
+  )
 })
 
 test('chat failure copy directs users to model settings for configuration failures', () => {

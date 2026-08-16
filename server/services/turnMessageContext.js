@@ -21,6 +21,7 @@ const SOURCE_BEARING_ARTIFACT_TOOLS = new Set([
   'create_pptx',
   'create_xlsx',
   'generate_image',
+  'render_pdf_pages',
 ])
 const ARTIFACT_TYPE_BY_TOOL = Object.freeze({
   create_docx: 'docx',
@@ -29,6 +30,7 @@ const ARTIFACT_TYPE_BY_TOOL = Object.freeze({
   create_pptx: 'pptx',
   create_xlsx: 'xlsx',
   generate_image: 'image',
+  render_pdf_pages: 'image',
 })
 const MAX_TOOL_GROUPS_PER_TURN = 16
 const MAX_MANAGED_ATTACHMENTS_PER_MESSAGE = 32

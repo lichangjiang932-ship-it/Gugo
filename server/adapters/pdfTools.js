@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
+import { createCanvas } from '@napi-rs/canvas'
 import * as fontkit from 'fontkit'
 import {
   PDFCheckBox,
@@ -24,6 +25,13 @@ const DEFAULT_MAX_OUTPUT_BYTES = 512 * 1024 * 1024
 const DEFAULT_MAX_TEXT_PAGES = 200
 const DEFAULT_MAX_TEXT_CHARACTERS = 1_000_000
 const DEFAULT_MAX_TEXT_ITEMS = 50_000
+const DEFAULT_RENDER_DPI = 144
+const MIN_RENDER_DPI = 36
+const MAX_RENDER_DPI = 300
+const MAX_RENDER_PAGES = 100
+const MAX_RENDER_DIMENSION = 32_768
+const MAX_RENDER_PAGE_PIXELS = 40_000_000
+const MAX_RENDER_TOTAL_PIXELS = 200_000_000
 const CJK_FONT_URL = new URL('../assets/fonts/NotoSansSC-Regular.ttf', import.meta.url)
 const PDFJS_STANDARD_FONT_DATA_URL = `${path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -599,6 +607,183 @@ function pdfTextParseError(inputPath, cause) {
   )
 }
 
+function renderPdfError(inputPath, cause) {
+  const name = String(cause?.name || '')
+  const message = String(cause?.message || '')
+  if (name === 'PasswordException' || /password/i.test(message)) {
+    return pdfError(
+      `PDF 已加密，无法渲染：${inputPath}。请先解密文件。`,
+      422,
+      'PDF_ENCRYPTED',
+      { path: inputPath, encrypted: true, cause },
+    )
+  }
+  return pdfError(
+    `无法渲染 PDF 页面：${inputPath}。${message || '文件结构无效或不受支持。'}`,
+    422,
+    'PDF_RENDER_FAILED',
+    { path: inputPath, cause },
+  )
+}
+
+function renderFormat(value) {
+  const format = String(value || 'png').trim().toLowerCase()
+  if (!['png', 'jpeg'].includes(format)) {
+    throw pdfError('format must be png or jpeg', 400, 'PDF_RENDER_FORMAT_UNSUPPORTED')
+  }
+  return format
+}
+
+function renderDpi(value) {
+  if (value == null || value === '') return DEFAULT_RENDER_DPI
+  const dpi = Number(value)
+  if (!Number.isFinite(dpi) || dpi < MIN_RENDER_DPI || dpi > MAX_RENDER_DPI) {
+    throw pdfError(
+      `dpi must be between ${MIN_RENDER_DPI} and ${MAX_RENDER_DPI}`,
+      400,
+      'PDF_RENDER_DPI_OUT_OF_RANGE',
+      { minDpi: MIN_RENDER_DPI, maxDpi: MAX_RENDER_DPI },
+    )
+  }
+  return dpi
+}
+
+function throwIfRenderAborted(signal) {
+  if (!signal?.aborted) return
+  const error = pdfError('PDF 页面渲染已取消', 499, 'ABORT_ERR')
+  error.name = 'AbortError'
+  error.cancelled = true
+  throw error
+}
+
+async function renderPdfPages(args, { userId = null, signal = null } = {}) {
+  const input = readPdfInput(args?.input || args?.path, { userId })
+  const format = renderFormat(args?.format)
+  const dpi = renderDpi(args?.dpi)
+  const mimeType = format === 'jpeg' ? 'image/jpeg' : 'image/png'
+  let loadingTask
+  let document
+  try {
+    throwIfRenderAborted(signal)
+    const pdfjs = await loadPdfJs()
+    loadingTask = pdfjs.getDocument({
+      data: new Uint8Array(input.bytes),
+      disableWorker: true,
+      isEvalSupported: false,
+      standardFontDataUrl: PDFJS_STANDARD_FONT_DATA_URL,
+      useWorkerFetch: false,
+    })
+    document = await loadingTask.promise
+    const pages = args?.pages == null
+      ? Array.from({ length: document.numPages }, (_, index) => index + 1)
+      : selectedPages({ pages: args.pages }, document.numPages, { label: 'render_pdf_pages' })
+    if (pages.length > MAX_RENDER_PAGES) {
+      throw pdfError(
+        `请求渲染 ${pages.length} 页，超过单次上限 ${MAX_RENDER_PAGES} 页。请用 pages 分批渲染。`,
+        413,
+        'PDF_RENDER_PAGE_LIMIT_EXCEEDED',
+        { pages: pages.length, maxPages: MAX_RENDER_PAGES },
+      )
+    }
+
+    const renderedPages = []
+    let totalPixels = 0
+    let totalBytes = 0
+    for (const pageNumber of pages) {
+      throwIfRenderAborted(signal)
+      const page = await document.getPage(pageNumber)
+      try {
+        const viewport = page.getViewport({ scale: dpi / 72 })
+        const width = Math.max(1, Math.ceil(viewport.width))
+        const height = Math.max(1, Math.ceil(viewport.height))
+        const pixels = width * height
+        totalPixels += pixels
+        if (width > MAX_RENDER_DIMENSION || height > MAX_RENDER_DIMENSION
+          || pixels > MAX_RENDER_PAGE_PIXELS || totalPixels > MAX_RENDER_TOTAL_PIXELS) {
+          throw pdfError(
+            `PDF 页面渲染尺寸过大：第 ${pageNumber} 页为 ${width}×${height} 像素。请降低 dpi 或分批渲染。`,
+            413,
+            'PDF_RENDER_PIXEL_LIMIT_EXCEEDED',
+            {
+              page: pageNumber,
+              width,
+              height,
+              pixels,
+              maxDimension: MAX_RENDER_DIMENSION,
+              maxPagePixels: MAX_RENDER_PAGE_PIXELS,
+              maxTotalPixels: MAX_RENDER_TOTAL_PIXELS,
+            },
+          )
+        }
+        const canvas = createCanvas(width, height)
+        const context = canvas.getContext('2d')
+        context.save()
+        context.fillStyle = '#ffffff'
+        context.fillRect(0, 0, width, height)
+        context.restore()
+        const task = page.render({
+          canvasContext: context,
+          viewport,
+          background: 'rgb(255,255,255)',
+        })
+        const cancelRender = () => task.cancel()
+        if (signal) {
+          signal.addEventListener('abort', cancelRender, { once: true })
+        }
+        try {
+          await task.promise
+        } finally {
+          signal?.removeEventListener('abort', cancelRender)
+        }
+        throwIfRenderAborted(signal)
+        const buffer = canvas.toBuffer(mimeType)
+        totalBytes += buffer.byteLength
+        const maxBytes = outputByteLimit()
+        if (totalBytes > maxBytes) {
+          throw pdfError(
+            `PDF 页面图片总输出过大（${totalBytes} 字节；上限 ${maxBytes} 字节）。请降低 dpi 或分批渲染。`,
+            413,
+            'PDF_OUTPUT_TOO_LARGE',
+            { size: totalBytes, maxBytes, path: input.path },
+          )
+        }
+        renderedPages.push({
+          page: pageNumber,
+          width,
+          height,
+          dpi,
+          format,
+          mimeType,
+          size: buffer.byteLength,
+          buffer,
+        })
+      } finally {
+        page.cleanup()
+      }
+    }
+    return {
+      ok: true,
+      input: input.path,
+      scope: input.scope,
+      title: typeof args?.title === 'string' ? args.title.trim() : '',
+      pageCount: document.numPages,
+      renderedPageCount: renderedPages.length,
+      pages: renderedPages,
+      format,
+      mimeType,
+      dpi,
+      totalBytes,
+    }
+  } catch (cause) {
+    throwIfRenderAborted(signal)
+    if (cause?.code) throw cause
+    throw renderPdfError(input.path, cause)
+  } finally {
+    try { await document?.destroy() } catch { /* best effort cleanup */ }
+    try { await loadingTask?.destroy() } catch { /* best effort cleanup */ }
+  }
+}
+
 async function pdfText(args, { userId = null } = {}) {
   const input = readPdfInput(args?.path || args?.input, { userId })
   const includeItems = args?.includeItems !== false && args?.include_items !== false
@@ -1073,10 +1258,11 @@ async function pdfTransform(args, context) {
   }
 }
 
-export async function dispatchPdfTool(name, args = {}, { userId = null } = {}) {
+export async function dispatchPdfTool(name, args = {}, { userId = null, signal = null } = {}) {
   switch (name) {
     case 'pdf_info': return pdfInfo(args, { userId })
     case 'pdf_text': return pdfText(args, { userId })
+    case 'render_pdf_pages': return renderPdfPages(args, { userId, signal })
     case 'pdf_transform': return pdfTransform(args, { userId })
     default: throw pdfError(`unknown PDF tool: ${name}`, 404, 'PDF_TOOL_NOT_FOUND')
   }
@@ -1134,6 +1320,36 @@ export const PDF_TOOL_SPECS = [
           includeItems: { type: 'boolean', description: 'Defaults true. Set false to omit coordinate items and return page text only.' },
         },
         required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'render_pdf_pages',
+      description: 'Render real PDF pages to downloadable PNG or JPEG images. This is deterministic conversion of the source PDF, never AI image generation. Omitting pages renders every page (up to the safety limit); an explicit pages list preserves its order.',
+      parameters: {
+        type: 'object',
+        properties: {
+          input: { type: 'string', description: 'Workspace-relative, attachment://, or authorized local PDF path.' },
+          title: { type: 'string', description: 'Base title for generated page image artifacts.' },
+          pages: {
+            type: 'array',
+            minItems: 1,
+            maxItems: MAX_RENDER_PAGES,
+            items: { type: 'integer', minimum: 1 },
+            description: 'Optional 1-based page numbers in desired output order. Omit to render every page.',
+          },
+          format: { type: 'string', enum: ['png', 'jpeg'], default: 'png' },
+          dpi: { type: 'number', minimum: MIN_RENDER_DPI, maximum: MAX_RENDER_DPI, default: DEFAULT_RENDER_DPI },
+          replace_artifact_id: {
+            type: 'string',
+            minLength: 1,
+            description: 'For a one-page in-place revision only, exact authorized image artifact ID to replace.',
+          },
+        },
+        required: ['input'],
+        additionalProperties: false,
       },
     },
   },

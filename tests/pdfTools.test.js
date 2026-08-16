@@ -4,7 +4,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test, { after, before, beforeEach } from 'node:test'
-import { PDFDocument, PDFName, StandardFonts, degrees } from 'pdf-lib'
+import { PDFDocument, PDFName, StandardFonts, degrees, rgb } from 'pdf-lib'
+import sharp from 'sharp'
 
 import { PDF_TOOL_SPECS, dispatchPdfTool } from '../server/adapters/pdfTools.js'
 
@@ -63,6 +64,18 @@ async function createPdf(relativePath, pageCount, { title = relativePath } = {})
   return bytes
 }
 
+async function createVisualPdf(relativePath) {
+  const document = await PDFDocument.create()
+  const colors = [rgb(1, 0, 0), rgb(0, 1, 0), rgb(0, 0, 1)]
+  for (let index = 0; index < colors.length; index += 1) {
+    const width = 120 + (index * 10)
+    const height = 80 + (index * 5)
+    const page = document.addPage([width, height])
+    page.drawRectangle({ x: 0, y: 0, width, height, color: colors[index] })
+  }
+  fs.writeFileSync(path.join(workspace, relativePath), await document.save())
+}
+
 async function loadOutput(relativePath) {
   return PDFDocument.load(fs.readFileSync(path.join(workspace, relativePath)), { updateMetadata: false })
 }
@@ -102,7 +115,9 @@ async function createChinesePdf(relativePath, text = '中文坐标测试') {
 }
 
 test('exports complete PDF tool specs and rejects unknown tools', async () => {
-  assert.deepEqual(PDF_TOOL_SPECS.map((spec) => spec.function.name), ['pdf_info', 'pdf_text', 'pdf_transform'])
+  assert.deepEqual(PDF_TOOL_SPECS.map((spec) => spec.function.name), [
+    'pdf_info', 'pdf_text', 'render_pdf_pages', 'pdf_transform',
+  ])
   const text = PDF_TOOL_SPECS.find((spec) => spec.function.name === 'pdf_text')
   assert.match(text.function.description, /bottom-left origin/)
   assert.match(text.function.description, /Does not OCR/)
@@ -115,6 +130,78 @@ test('exports complete PDF tool specs and rejects unknown tools', async () => {
     () => dispatchPdfTool('pdf_missing', {}),
     (error) => error?.code === 'PDF_TOOL_NOT_FOUND' && error?.statusCode === 404,
   )
+})
+
+test('render_pdf_pages renders every real page as ordered PNG buffers with exact dimensions', async () => {
+  await createVisualPdf('render-all.pdf')
+  const result = await dispatchPdfTool('render_pdf_pages', {
+    input: 'render-all.pdf',
+    dpi: 72,
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.pageCount, 3)
+  assert.equal(result.renderedPageCount, 3)
+  assert.deepEqual(result.pages.map((page) => page.page), [1, 2, 3])
+  assert.deepEqual(result.pages.map((page) => [page.width, page.height]), [
+    [120, 80], [130, 85], [140, 90],
+  ])
+  for (const page of result.pages) {
+    assert.deepEqual(page.buffer.subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+    const metadata = await sharp(page.buffer).metadata()
+    assert.equal(metadata.format, 'png')
+    assert.equal(metadata.width, page.width)
+    assert.equal(metadata.height, page.height)
+  }
+  const means = await Promise.all(result.pages.map(async (page) => (
+    (await sharp(page.buffer).stats()).channels.slice(0, 3).map((channel) => Math.round(channel.mean))
+  )))
+  assert.ok(means[0][0] > 240 && means[0][1] < 15 && means[0][2] < 15)
+  assert.ok(means[1][0] < 15 && means[1][1] > 240 && means[1][2] < 15)
+  assert.ok(means[2][0] < 15 && means[2][1] < 15 && means[2][2] > 240)
+})
+
+test('render_pdf_pages preserves an explicit page order and emits real JPEG dimensions', async () => {
+  await createVisualPdf('render-selection.pdf')
+  const result = await dispatchPdfTool('render_pdf_pages', {
+    input: 'render-selection.pdf',
+    pages: [3, 1],
+    format: 'jpeg',
+    dpi: 144,
+  })
+
+  assert.deepEqual(result.pages.map((page) => page.page), [3, 1])
+  assert.deepEqual(result.pages.map((page) => [page.width, page.height]), [[280, 180], [240, 160]])
+  for (const page of result.pages) {
+    assert.deepEqual(page.buffer.subarray(0, 3), Buffer.from([0xff, 0xd8, 0xff]))
+    const metadata = await sharp(page.buffer).metadata()
+    assert.equal(metadata.format, 'jpeg')
+    assert.equal(metadata.width, page.width)
+    assert.equal(metadata.height, page.height)
+  }
+})
+
+test('render_pdf_pages enforces page, DPI, and pixel limits before producing buffers', async () => {
+  await createPdf('render-too-many.pdf', 101)
+  await assert.rejects(
+    () => dispatchPdfTool('render_pdf_pages', { input: 'render-too-many.pdf', dpi: 72 }),
+    (error) => error?.code === 'PDF_RENDER_PAGE_LIMIT_EXCEEDED' && error?.maxPages === 100,
+  )
+
+  await createPdf('render-dpi.pdf', 1)
+  await assert.rejects(
+    () => dispatchPdfTool('render_pdf_pages', { input: 'render-dpi.pdf', dpi: 301 }),
+    (error) => error?.code === 'PDF_RENDER_DPI_OUT_OF_RANGE' && error?.maxDpi === 300,
+  )
+
+  const oversized = await PDFDocument.create()
+  oversized.addPage([20_000, 20_000])
+  fs.writeFileSync(path.join(workspace, 'render-pixels.pdf'), await oversized.save())
+  await assert.rejects(
+    () => dispatchPdfTool('render_pdf_pages', { input: 'render-pixels.pdf' }),
+    (error) => error?.code === 'PDF_RENDER_PIXEL_LIMIT_EXCEEDED' && error?.page === 1,
+  )
+  assert.equal(fs.readdirSync(workspace).some((name) => name.endsWith('.tmp')), false)
 })
 
 test('pdf_info reports real page geometry, metadata, and form limitations', async () => {

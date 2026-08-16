@@ -1,3 +1,24 @@
+const OFFICE_IMAGES_PROPERTY = {
+  type: 'array',
+  maxItems: 50,
+  description: 'Existing authorized images to embed as real Office media; this never generates a new image. target_index is 1-based, and path accepts a local/workspace path or an attachment:// URI.',
+  items: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      path: { type: 'string' },
+      alt: { type: 'string' },
+      target_index: { type: 'integer', minimum: 1 },
+      anchor: { type: 'string', pattern: '^[A-Za-z]{1,3}[1-9][0-9]{0,6}$' },
+      x: { type: 'number', minimum: 0 },
+      y: { type: 'number', minimum: 0 },
+      width: { type: 'number', exclusiveMinimum: 0 },
+      height: { type: 'number', exclusiveMinimum: 0 },
+    },
+    required: ['path'],
+  },
+}
+
 export const ARTIFACT_TOOL_SPECS = {
   create_pptx: {
     type: 'function',
@@ -9,6 +30,7 @@ export const ARTIFACT_TOOL_SPECS = {
         properties: {
           title: { type: 'string', description: '\u6f14\u793a\u6587\u7a3f\u6807\u9898(\u4e5f\u4f5c\u4e3a\u4e0b\u8f7d\u6587\u4ef6\u540d)' },
           markdown: { type: 'string', description: '\u5e7b\u706f\u7247 markdown \u6e90,--- \u5206\u9875,\u9996\u884c # \u6807\u9898,\u6b21\u884c <!-- type -->' },
+          images: OFFICE_IMAGES_PROPERTY,
         },
         required: ['title', 'markdown'],
       },
@@ -24,6 +46,7 @@ export const ARTIFACT_TOOL_SPECS = {
         properties: {
           title: { type: 'string', description: '\u6587\u6863\u6807\u9898(\u4e5f\u4f5c\u4e3a\u4e0b\u8f7d\u6587\u4ef6\u540d)' },
           markdown: { type: 'string', description: '\u6587\u6863\u6b63\u6587 markdown' },
+          images: OFFICE_IMAGES_PROPERTY,
         },
         required: ['title', 'markdown'],
       },
@@ -44,6 +67,7 @@ export const ARTIFACT_TOOL_SPECS = {
             items: { type: 'array', items: {} },
           },
           markdown: { type: 'string', description: '\u5f53\u4e0d\u4fbf\u7528 rows \u65f6,\u53ef\u4f20 markdown \u8868\u683c\u6216 csv \u6587\u672c(\u4e09\u53cd\u5f15\u53f7\u5305\u88f9)' },
+          images: OFFICE_IMAGES_PROPERTY,
         },
         required: ['title'],
       },
@@ -115,12 +139,25 @@ export const ARTIFACT_TOOL_SPECS = {
     type: 'function',
     function: {
       name: 'create_html_app',
-      description: 'Create a self-contained HTML artifact. Prefer one complete document in html; files.index.html remains supported for compatibility.',
+      description: 'Create a managed HTML artifact. Prefer one complete document in html. Existing authorized local images/audio/video are input assets: declare them in assets and reference each exact id as gugo-asset://<id>; never use file:// or an absolute drive path.',
       parameters: {
         type: 'object',
         properties: {
           title: { type: 'string' },
-          html: { type: 'string', description: 'Complete single-file HTML with inline CSS and JavaScript.' },
+          html: { type: 'string', description: 'Complete HTML with inline CSS and JavaScript. Local media must use declared gugo-asset://<id> references.' },
+          assets: {
+            type: 'array',
+            maxItems: 500,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                id: { type: 'string', pattern: '^[A-Za-z0-9_-]{1,64}$' },
+                path: { type: 'string' },
+              },
+              required: ['id'],
+            },
+          },
           files: {
             type: 'object',
             description: 'Map of filename to text content. Must include index.html. External script/link tags are rejected.',

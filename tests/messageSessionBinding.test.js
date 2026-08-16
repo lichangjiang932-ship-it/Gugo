@@ -72,6 +72,28 @@ test('SEND_MESSAGE remains bound to its originating session when active navigati
   assert.equal(next.sessions[0].messages[0].meta.pendingServerSync, true)
 })
 
+test('the same turn failure marker is appended only once', () => {
+  const state = {
+    activeSessionId: 'origin',
+    sessions: [{
+      id: 'origin',
+      messages: [{ id: 'turn-1:assistant', role: 'assistant', content: 'Partial result', meta: {} }],
+    }],
+  }
+  const action = {
+    type: 'APPEND_TO_LAST_MESSAGE',
+    payload: '\n\nModel call failed: missing image',
+    meta: { serverFailureDisplayKey: 'turn-1:ARTIFACT_NOT_CREATED' },
+    sessionId: 'origin',
+    messageId: 'turn-1:assistant',
+  }
+  const appended = reduceMessageState(state, action)
+  const repeated = reduceMessageState(appended, action)
+
+  assert.equal(repeated.sessions[0].messages[0].content, 'Partial result\n\nModel call failed: missing image')
+  assert.equal(repeated.sessions[0].messages[0].meta.serverFailureDisplayKey, 'turn-1:ARTIFACT_NOT_CREATED')
+})
+
 test('SEND_MESSAGE keeps attachment metadata separate from visible message content', () => {
   const state = { activeSessionId: 'origin', sessions: [{ id: 'origin', messages: [] }] }
   const next = reduceMessageState(state, {

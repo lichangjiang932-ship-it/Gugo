@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { AlertCircle, Code2, Download, FileText, Globe, Loader2, Presentation, Table2, X } from 'lucide-react'
 import { applyHtmlArtifactDocumentPolicy } from '../../shared/htmlArtifactPolicy.js'
-import { loadArtifactPreviewHtml, withDownloadToken } from '../lib/jobClient.js'
+import { loadArtifactPreviewDocument, withDownloadToken } from '../lib/jobClient.js'
 import { useT } from '../i18n/I18nProvider.jsx'
 
 function TypeIcon({ type }) {
@@ -18,18 +18,23 @@ export default function TaskArtifactPreview({ artifact, onClose }) {
   const artifactUrl = String(artifact?.url || '')
   const isInlineHtml = artifact?.type === 'html'
   const requestKey = `${artifact?.id || ''}:${artifactUrl}`
-  const [loadState, setLoadState] = useState(() => ({ key: '', html: '', error: '' }))
+  const [loadState, setLoadState] = useState(() => ({ key: '', html: '', objectUrls: [], error: '' }))
   const [loadedKey, setLoadedKey] = useState('')
 
   useEffect(() => {
     if (!isInlineHtml || !artifactUrl) return undefined
     const controller = new AbortController()
-    loadArtifactPreviewHtml(artifactUrl, { signal: controller.signal }).then((source) => {
-      if (!controller.signal.aborted) setLoadState({ key: requestKey, html: source, error: '' })
+    let objectUrls = []
+    loadArtifactPreviewDocument(artifactUrl, { signal: controller.signal }).then((document) => {
+      objectUrls = document.objectUrls
+      if (!controller.signal.aborted) setLoadState({ key: requestKey, html: document.html, objectUrls, error: '' })
     }).catch((cause) => {
-      if (!controller.signal.aborted) setLoadState({ key: requestKey, html: '', error: cause?.message || String(cause) })
+      if (!controller.signal.aborted) setLoadState({ key: requestKey, html: '', objectUrls: [], error: cause?.message || String(cause) })
     })
-    return () => controller.abort()
+    return () => {
+      controller.abort()
+      for (const objectUrl of objectUrls) URL.revokeObjectURL?.(objectUrl)
+    }
   }, [artifactUrl, isInlineHtml, requestKey])
 
   const currentLoadState = loadState.key === requestKey ? loadState : null
