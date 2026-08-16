@@ -206,7 +206,7 @@ export const BUILTIN_ARTIFACT_TOOL_SPECS = Object.freeze({
     type: 'function',
     function: {
       name: 'create_html_app',
-      description: 'Create a polished, self-contained HTML artifact that opens in Gugo preview. External scripts, styles, frames, and network requests are rejected.',
+      description: 'Create a polished, self-contained managed HTML artifact that opens in Gugo preview. Use it for a standalone Gugo deliverable or an explicitly referenced managed artifact. Do not use it when the user names a local/workspace file target; edit or write that exact file instead. External scripts, styles, frames, and network requests are rejected.',
       parameters: {
         type: 'object',
         properties: {

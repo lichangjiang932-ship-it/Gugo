@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 
 import {
   buildAssistantToolCallsMessage,
+  buildToolResultMessageBundle,
   buildToolResultMessages,
   createToolLoopGuard,
   executeToolWithRetry,
@@ -15,6 +16,7 @@ import {
   repairTruncatedJsonObject,
   resolveToolResultMaxChars,
   serializeToolResult,
+  stripEphemeralToolMediaMessages,
   validateToolCall,
 } from '../server/utils/toolCallHarness.js'
 
@@ -59,6 +61,44 @@ test('results without a usable image payload stay a single tool message', () => 
   )
   assert.equal(messages.length, 1)
   assert.equal(messages[0].role, 'tool')
+})
+
+test('tool media bundles separate durable receipts from one-request image context', () => {
+  const bundle = buildToolResultMessageBundle(
+    { id: 'shot-durable', name: 'browser_screenshot' },
+    { ok: true, image: { mimeType: 'image/png', data: 'SECRET_SCREENSHOT_BYTES', bytes: 17 } },
+  )
+
+  assert.equal(bundle.durableMessages.length, 1)
+  assert.equal(bundle.ephemeralMessages.length, 1)
+  assert.doesNotMatch(JSON.stringify(bundle.durableMessages), /SECRET_SCREENSHOT_BYTES|data:image/u)
+  assert.match(JSON.stringify(bundle.ephemeralMessages), /data:image\/png;base64,SECRET_SCREENSHOT_BYTES/u)
+  assert.deepEqual(stripEphemeralToolMediaMessages([
+    ...bundle.durableMessages,
+    ...bundle.ephemeralMessages,
+  ]), bundle.durableMessages)
+})
+
+test('legacy unmarked screenshot messages are removed when restoring durable context', () => {
+  const legacyScreenshot = {
+    role: 'user',
+    content: [
+      { type: 'text', text: 'Browser screenshot captured by browser_screenshot. Inspect this image before continuing.' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,LEGACY_BYTES' } },
+    ],
+  }
+  const ordinaryUserImage = {
+    role: 'user',
+    content: [
+      { type: 'text', text: 'Please inspect my attached image.' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,USER_BYTES' } },
+    ],
+  }
+
+  assert.deepEqual(stripEphemeralToolMediaMessages([
+    legacyScreenshot,
+    ordinaryUserImage,
+  ]), [ordinaryUserImage])
 })
 
 const SPECS = [{

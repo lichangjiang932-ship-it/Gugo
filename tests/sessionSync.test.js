@@ -475,6 +475,33 @@ test('compaction boundary selects only the retained canonical tail', () => {
   assert.equal(stored.length, 4, 'canonical UI/audit history must remain intact')
 })
 
+test('unmatched compaction boundary keeps messages after the archive reference', () => {
+  const stored = [
+    { id: 'archived-user', role: 'user', content: 'old request must stay archived' },
+    { id: 'archived-assistant', role: 'assistant', content: 'old reply must stay archived' },
+    { id: 'archive-reference', role: 'assistant', content: 'archive reference' },
+    { id: 'current-turn:user', role: 'user', content: 'current request must survive' },
+  ]
+
+  assert.deepEqual(
+    selectStoredMessagesAfterCompaction(stored, {
+      firstKeptMessageId: 'missing-retained-message',
+      lastCompactedMessageId: 'missing-archived-message',
+      referenceMessageId: 'archive-reference',
+    }).map((message) => message.id),
+    ['current-turn:user'],
+  )
+  assert.deepEqual(
+    selectStoredMessagesAfterCompaction(stored, {
+      firstKeptMessageId: 'missing-retained-message',
+      lastCompactedMessageId: 'missing-archived-message',
+    }),
+    [],
+    'without any trustworthy anchor, archived history must remain excluded',
+  )
+  assert.equal(stored.length, 4, 'canonical UI/audit history must remain intact')
+})
+
 test('assistant model context and server snapshots preserve total turn duration', () => {
   const modelContext = buildAssistantModelContext({
     turnId: 'timed-turn',

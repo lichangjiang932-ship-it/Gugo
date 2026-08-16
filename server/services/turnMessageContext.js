@@ -47,20 +47,49 @@ export function storedMessageSourceId(message) {
   return String(message?.[STORED_MESSAGE_SOURCE_ID] || '').trim() || null
 }
 
-export function selectStoredMessagesAfterCompaction(messages, boundary = null) {
+export function resolveStoredMessagesAfterCompaction(messages, boundary = null) {
   const source = Array.isArray(messages) ? messages : []
   const firstKeptMessageId = String(boundary?.firstKeptMessageId || '').trim()
   if (firstKeptMessageId) {
     const index = source.findIndex((message) => String(message?.id || '') === firstKeptMessageId)
-    if (index >= 0) return source.slice(index)
+    if (index >= 0) return { messages: source.slice(index), matched: true, boundary: 'first_kept' }
   }
 
   const lastCompactedMessageId = String(boundary?.lastCompactedMessageId || '').trim()
   if (lastCompactedMessageId) {
     const index = source.findIndex((message) => String(message?.id || '') === lastCompactedMessageId)
-    if (index >= 0) return source.slice(index + 1)
+    if (index >= 0) return { messages: source.slice(index + 1), matched: true, boundary: 'last_compacted' }
   }
-  return source
+
+  // A stale canonical snapshot may no longer contain either exact compaction
+  // boundary, while still containing the assistant message that references
+  // the archive. Everything after that reference is newer than the archive
+  // and must remain visible (most importantly, the active user request).
+  const referenceMessageId = String(boundary?.referenceMessageId || '').trim()
+  if (referenceMessageId) {
+    const index = source.findIndex((message) => String(message?.id || '') === referenceMessageId)
+    if (index >= 0) {
+      return { messages: source.slice(index + 1), matched: false, boundary: 'archive_reference' }
+    }
+  }
+  const referenceMessageIndex = Number(boundary?.referenceMessageIndex)
+  if (Number.isInteger(referenceMessageIndex)
+    && referenceMessageIndex >= 0
+    && referenceMessageIndex < source.length) {
+    return {
+      messages: source.slice(referenceMessageIndex + 1),
+      matched: false,
+      boundary: 'archive_reference_index',
+    }
+  }
+  const compacted = boundary?.compacted === true || Boolean(firstKeptMessageId || lastCompactedMessageId)
+  return compacted
+    ? { messages: [], matched: false, boundary: 'unmatched' }
+    : { messages: source, matched: false, boundary: 'none' }
+}
+
+export function selectStoredMessagesAfterCompaction(messages, boundary = null) {
+  return resolveStoredMessagesAfterCompaction(messages, boundary).messages
 }
 
 function jsonLength(value) {

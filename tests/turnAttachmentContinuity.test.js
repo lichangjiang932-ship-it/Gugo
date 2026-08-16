@@ -9,6 +9,10 @@ process.env.APP_DATA_DIR = tempDir
 
 const { closeDb, createUser } = await import('../server/db.js')
 const { TurnEngine } = await import('../server/services/TurnEngine.js')
+const {
+  estimateContextTokens,
+  getAutoCompactionThreshold,
+} = await import('../server/services/contextCompactionRuntime.js')
 const { upsertSession } = await import('../server/services/sessionStore.js')
 const { listTurnEvents } = await import('../server/services/turnEventStore.js')
 const { getTurnCheckpoint } = await import('../server/services/turnCheckpointStore.js')
@@ -116,6 +120,7 @@ test('TurnEngine sends attachment bytes once per relevant turn while checkpoints
   assert.equal(preparedRequests.length, 2)
   assert.equal(preparedRequests[0].text, 'inspect the image')
   assert.equal(preparedRequests[1].text, 'inspect the image')
+  assert.ok(preparedRequests.every((request) => request.maxAttachmentTokens > 0))
 
   for (const turnId of ['attachment-first-turn', 'attachment-follow-up-turn', 'attachment-unrelated-turn']) {
     const checkpoint = listTurnEvents({
@@ -132,4 +137,143 @@ test('TurnEngine sends attachment bytes once per relevant turn while checkpoints
     assert.ok(stored)
     assert.doesNotMatch(JSON.stringify(stored.state), /base64,/)
   }
+})
+
+test('TurnEngine re-prices a large extracted text attachment after materialization', async () => {
+  const contextWindow = 4_096
+  const textSessionId = 'attachment-large-text-session'
+  const textAttachmentId = 'attachment-large-text'
+  const attachment = {
+    id: textAttachmentId,
+    name: 'large-notes.txt',
+    mimeType: 'text/plain',
+    size: 200_000,
+    sha256: 'large-text-hash',
+    uri: `attachment://${textAttachmentId}`,
+    downloadUrl: `/api/attachments/${textAttachmentId}/content`,
+  }
+  const providerRequests = []
+  const preparationBudgets = []
+  upsertSession({ id: textSessionId, userId, title: 'Large text attachment budget' })
+  const engine = new TurnEngine({
+    executionLeases: {
+      claim: () => true,
+      hold: () => () => {},
+      hasActiveSession: () => false,
+    },
+    validateAttachments: ({ attachmentIds }) => (
+      attachmentIds.includes(textAttachmentId) ? [attachment] : []
+    ),
+    bindAttachments: () => {},
+    prepareAttachments: async (request) => {
+      preparationBudgets.push(request.maxAttachmentTokens)
+      return {
+        attachments: [attachment],
+        content: [
+          { type: 'text', text: request.text },
+          { type: 'text', text: `TEXT_BUDGET_HEAD\n${'x'.repeat(200_000)}\nTEXT_BUDGET_TAIL` },
+        ],
+      }
+    },
+    preparePromptContext: async () => ({
+      messages: [], effectiveAgentId: null, skillIds: [], memoryIds: [],
+    }),
+    resolveToolSpecs: async ({ baseSpecs }) => baseSpecs,
+    getContextWindow: () => contextWindow,
+    runModel: async (request) => {
+      providerRequests.push(request.messages)
+      return { content: 'done', toolCalls: [] }
+    },
+    runLoop: async (options) => {
+      await options.runModel({ messages: options.messages, tools: [], signal: options.signal })
+      return { text: 'done', artifactIds: [], iterations: 1 }
+    },
+    scheduleMemoryExtraction: () => {},
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: textSessionId,
+    turnId: 'attachment-large-text-turn',
+    content: 'inspect the text attachment',
+    attachments: [{ id: textAttachmentId }],
+  })
+  await engine.waitForTurn({ userId, sessionId: textSessionId, turnId: 'attachment-large-text-turn' })
+
+  assert.equal(providerRequests.length, 1)
+  assert.equal(preparationBudgets.length, 1)
+  assert.ok(preparationBudgets[0] > 0)
+  const payload = JSON.stringify(providerRequests[0])
+  assert.doesNotMatch(payload, /TEXT_BUDGET_TAIL/)
+  assert.match(payload, /attachment:\/\/attachment-large-text/)
+  assert.ok(
+    estimateContextTokens(providerRequests[0], []) < getAutoCompactionThreshold(contextWindow),
+  )
+})
+
+test('TurnEngine removes an oversized image data URL from the final provider surface', async () => {
+  const contextWindow = 4_096
+  const imageSessionId = 'attachment-large-image-session'
+  const imageAttachmentId = 'attachment-large-image'
+  const attachment = {
+    id: imageAttachmentId,
+    name: 'large-diagram.png',
+    mimeType: 'image/png',
+    size: 200_000,
+    sha256: 'large-image-hash',
+    uri: `attachment://${imageAttachmentId}`,
+    downloadUrl: `/api/attachments/${imageAttachmentId}/content`,
+  }
+  const oversizedDataUrl = `data:image/png;base64,${Buffer.alloc(200_000, 7).toString('base64')}`
+  const providerRequests = []
+  upsertSession({ id: imageSessionId, userId, title: 'Large image attachment budget' })
+  const engine = new TurnEngine({
+    executionLeases: {
+      claim: () => true,
+      hold: () => () => {},
+      hasActiveSession: () => false,
+    },
+    validateAttachments: ({ attachmentIds }) => (
+      attachmentIds.includes(imageAttachmentId) ? [attachment] : []
+    ),
+    bindAttachments: () => {},
+    prepareAttachments: async (request) => ({
+      attachments: [attachment],
+      content: [
+        { type: 'text', text: request.text },
+        { type: 'image_url', image_url: { url: oversizedDataUrl } },
+      ],
+    }),
+    preparePromptContext: async () => ({
+      messages: [], effectiveAgentId: null, skillIds: [], memoryIds: [],
+    }),
+    resolveToolSpecs: async ({ baseSpecs }) => baseSpecs,
+    getContextWindow: () => contextWindow,
+    runModel: async (request) => {
+      providerRequests.push(request.messages)
+      return { content: 'done', toolCalls: [] }
+    },
+    runLoop: async (options) => {
+      await options.runModel({ messages: options.messages, tools: [], signal: options.signal })
+      return { text: 'done', artifactIds: [], iterations: 1 }
+    },
+    scheduleMemoryExtraction: () => {},
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: imageSessionId,
+    turnId: 'attachment-large-image-turn',
+    content: 'inspect the image attachment',
+    attachments: [{ id: imageAttachmentId }],
+  })
+  await engine.waitForTurn({ userId, sessionId: imageSessionId, turnId: 'attachment-large-image-turn' })
+
+  assert.equal(providerRequests.length, 1)
+  const payload = JSON.stringify(providerRequests[0])
+  assert.doesNotMatch(payload, /base64,/)
+  assert.match(payload, /attachment:\/\/attachment-large-image/)
+  assert.ok(
+    estimateContextTokens(providerRequests[0], []) < getAutoCompactionThreshold(contextWindow),
+  )
 })

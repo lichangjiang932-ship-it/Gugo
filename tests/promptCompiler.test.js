@@ -21,6 +21,7 @@ const {
 } = await import('../server/services/promptCompiler.js')
 const { buildAgentSystemBlock } = await import('../server/services/agentStore.js')
 const { createCompactionArchive } = await import('../server/services/compactionService.js')
+const { MAX_COMPACTION_SUMMARY_CHARS } = await import('../server/services/contextCompactionRuntime.js')
 
 function agent(patch = {}) {
   return {
@@ -230,6 +231,163 @@ test('buildSessionsBlock reads compaction archive summary from recent message ar
   })
 
   assert.match(block.text, /Archived summary text/)
+})
+
+test('buildSessionsBlock bounds legacy oversized compaction archive summaries', () => {
+  clearPromptCompilerCache('sessions')
+  const omittedSentinel = 'LEGACY_ARCHIVE_OMITTED_SENTINEL'
+  const oversizedSummary = [
+    'LEGACY_ARCHIVE_HEAD',
+    'x'.repeat(120_000),
+    omittedSentinel,
+    'y'.repeat(120_000),
+  ].join('\n')
+  const archive = createCompactionArchive({
+    userId: 'u_archive_oversized',
+    sessionId: 's_archive_oversized',
+    archivedMessages: [],
+    summaryText: oversizedSummary,
+  })
+  const block = buildSessionsBlock({
+    userId: 'u_archive_oversized',
+    sessionId: 's_archive_oversized',
+    recentMessages: [{ role: 'assistant', content: 'summary', meta: { archiveId: archive.id } }],
+  })
+
+  assert.match(block.text, /LEGACY_ARCHIVE_HEAD/)
+  assert.match(block.text, /Compaction checkpoint shortened to fit the active context budget/)
+  assert.doesNotMatch(block.text, new RegExp(omittedSentinel))
+  assert.ok(block.text.length <= MAX_COMPACTION_SUMMARY_CHARS + 512)
+  assert.ok(block.text.length < oversizedSummary.length / 4)
+})
+
+test('buildSessionsBlock projects only messages after a matched compaction boundary', () => {
+  clearPromptCompilerCache('sessions')
+  const archive = createCompactionArchive({
+    userId: 'u_archive_matched_boundary',
+    sessionId: 's_archive_matched_boundary',
+    archivedMessages: [],
+    summaryText: 'Matched archive summary',
+  })
+  const block = buildSessionsBlock({
+    userId: 'u_archive_matched_boundary',
+    sessionId: 's_archive_matched_boundary',
+    recentMessages: [
+      { id: 'old-user', role: 'user', content: 'ARCHIVED_REQUEST_MUST_NOT_REPLAY' },
+      { id: 'old-assistant', role: 'assistant', content: 'ARCHIVED_REPLY_MUST_NOT_REPLAY' },
+      { id: 'retained-user', role: 'user', content: 'RETAINED_OBJECTIVE' },
+      {
+        id: 'retained-assistant',
+        role: 'assistant',
+        content: 'RETAINED_REPLY',
+        modelContext: {
+          compactionArchiveId: archive.id,
+          compactionFirstKeptMessageId: 'retained-user',
+          compactionLastCompactedMessageId: 'old-assistant',
+        },
+      },
+    ],
+  })
+
+  assert.match(block.text, /Matched archive summary/)
+  assert.match(block.text, /RETAINED_OBJECTIVE/)
+  assert.match(block.text, /RETAINED_REPLY/)
+  assert.doesNotMatch(block.text, /ARCHIVED_REQUEST_MUST_NOT_REPLAY/)
+  assert.doesNotMatch(block.text, /ARCHIVED_REPLY_MUST_NOT_REPLAY/)
+  assert.equal(block.sources.compactionBoundaryMatched, true)
+})
+
+test('buildSessionsBlock keeps post-reference messages when a compaction boundary is unmatched', () => {
+  clearPromptCompilerCache('sessions')
+  const archive = createCompactionArchive({
+    userId: 'u_archive_unmatched_boundary',
+    sessionId: 's_archive_unmatched_boundary',
+    archivedMessages: [],
+    summaryText: 'Unmatched archive summary',
+  })
+  const block = buildSessionsBlock({
+    userId: 'u_archive_unmatched_boundary',
+    sessionId: 's_archive_unmatched_boundary',
+    recentMessages: [
+      { id: 'old-user', role: 'user', content: 'STALE_REQUEST_MUST_NOT_REPLAY' },
+      { id: 'old-assistant', role: 'assistant', content: 'STALE_REPLY_MUST_NOT_REPLAY' },
+      {
+        id: 'archive-reference',
+        role: 'assistant',
+        content: 'REFERENCE_MESSAGE_MUST_NOT_REPLAY',
+        modelContext: {
+          compactionArchiveId: archive.id,
+          compactionFirstKeptMessageId: 'missing-retained-message',
+          compactionLastCompactedMessageId: 'missing-archived-message',
+        },
+      },
+      { id: 'current-turn:user', role: 'user', content: 'CURRENT_REQUEST_MUST_SURVIVE' },
+    ],
+  })
+
+  assert.match(block.text, /Unmatched archive summary/)
+  assert.match(block.text, /Recent Transcript/)
+  assert.match(block.text, /CURRENT_REQUEST_MUST_SURVIVE/)
+  assert.doesNotMatch(block.text, /STALE_REQUEST_MUST_NOT_REPLAY/)
+  assert.doesNotMatch(block.text, /STALE_REPLY_MUST_NOT_REPLAY/)
+  assert.doesNotMatch(block.text, /REFERENCE_MESSAGE_MUST_NOT_REPLAY/)
+  assert.equal(block.sources.compactionBoundaryMatched, false)
+})
+
+test('buildSessionsBlock keeps canonical history when the referenced archive is missing', () => {
+  clearPromptCompilerCache('sessions')
+  const block = buildSessionsBlock({
+    userId: 'u_archive_missing',
+    sessionId: 's_archive_missing',
+    recentMessages: [
+      { id: 'old-user', role: 'user', content: 'CANONICAL_HISTORY_MUST_SURVIVE' },
+      {
+        id: 'missing-archive-reference',
+        role: 'assistant',
+        content: 'MISSING_ARCHIVE_REFERENCE_MUST_SURVIVE',
+        modelContext: {
+          compactionArchiveId: 'cmp-does-not-exist',
+          compactionFirstKeptMessageId: 'missing-retained-message',
+        },
+      },
+      { id: 'current-turn:user', role: 'user', content: 'CURRENT_REQUEST_MUST_SURVIVE' },
+    ],
+  })
+
+  assert.match(block.text, /CANONICAL_HISTORY_MUST_SURVIVE/)
+  assert.match(block.text, /MISSING_ARCHIVE_REFERENCE_MUST_SURVIVE/)
+  assert.match(block.text, /CURRENT_REQUEST_MUST_SURVIVE/)
+  assert.equal(block.sources.archiveId, null)
+  assert.equal(block.sources.compactionBoundary, null)
+})
+
+test('buildSessionsBlock keeps canonical history when the archive belongs to another session', () => {
+  clearPromptCompilerCache('sessions')
+  const archive = createCompactionArchive({
+    userId: 'u_archive_wrong_session',
+    sessionId: 's_archive_owner',
+    archivedMessages: [],
+    summaryText: 'WRONG_SESSION_SUMMARY_MUST_NOT_LOAD',
+  })
+  const block = buildSessionsBlock({
+    userId: 'u_archive_wrong_session',
+    sessionId: 's_archive_requester',
+    recentMessages: [
+      {
+        id: 'wrong-session-reference',
+        role: 'assistant',
+        content: 'CANONICAL_REFERENCE_MUST_SURVIVE',
+        modelContext: { compactionArchiveId: archive.id },
+      },
+      { id: 'current-turn:user', role: 'user', content: 'CURRENT_REQUEST_MUST_SURVIVE' },
+    ],
+  })
+
+  assert.match(block.text, /CANONICAL_REFERENCE_MUST_SURVIVE/)
+  assert.match(block.text, /CURRENT_REQUEST_MUST_SURVIVE/)
+  assert.doesNotMatch(block.text, /WRONG_SESSION_SUMMARY_MUST_NOT_LOAD/)
+  assert.equal(block.sources.archiveId, null)
+  assert.equal(block.sources.compactionBoundary, null)
 })
 
 test('buildSessionsBlock can retain the compacted archive without mirroring recent transcript', () => {

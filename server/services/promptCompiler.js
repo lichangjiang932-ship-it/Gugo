@@ -2,6 +2,8 @@ import crypto from 'node:crypto'
 import { getAgentTemplateSystemPrompt } from './agentTemplates.js'
 import { getRuntimeSkill, listRuntimeSkillCatalog } from './skillRegistry.js'
 import { getCompactionArchive } from './compactionService.js'
+import { boundCompactionSummary } from './contextCompactionRuntime.js'
+import { resolveStoredMessagesAfterCompaction } from './turnMessageContext.js'
 import { buildPersonaManifestBlock } from './agentStore.js'
 import {
   applySkillQualityContract,
@@ -469,7 +471,7 @@ function transcriptMessage(message, index) {
   return parts.join('\n')
 }
 
-function findArchiveReference(recentMessages) {
+export function findCompactionArchiveReference(recentMessages) {
   for (let index = recentMessages.length - 1; index >= 0; index -= 1) {
     const message = recentMessages[index]
     const id = message?.meta?.archiveId
@@ -478,6 +480,8 @@ function findArchiveReference(recentMessages) {
     if (id) {
       return {
         id: String(id),
+        messageIndex: index,
+        referenceMessageId: String(message?.id || '').trim() || null,
         firstKeptMessageId: String(message?.modelContext?.compactionFirstKeptMessageId || '').trim() || null,
         lastCompactedMessageId: String(message?.modelContext?.compactionLastCompactedMessageId || '').trim() || null,
       }
@@ -486,8 +490,7 @@ function findArchiveReference(recentMessages) {
   return null
 }
 
-function loadArchive({ userId, sessionId, recentMessages }) {
-  const reference = findArchiveReference(recentMessages)
+function loadArchive({ userId, sessionId, reference }) {
   if (!userId || !reference?.id) return null
   try {
     const archive = getCompactionArchive({ userId, id: reference.id })
@@ -505,16 +508,30 @@ export function buildSessionsBlock({
   includeRecentTranscript = true,
 } = {}) {
   const sourceMessages = Array.isArray(recentMessages) ? recentMessages : []
-  const normalizedMessages = includeRecentTranscript
-    ? sourceMessages.slice(-64).map(normalizeRecentMessage)
-    : []
-  const loadedArchive = loadArchive({ userId, sessionId, recentMessages: sourceMessages })
+  const reference = findCompactionArchiveReference(sourceMessages)
+  const loadedArchive = loadArchive({ userId, sessionId, reference })
   const archive = loadedArchive?.archive || null
-  if (!normalizedMessages.length && !archive?.summaryText) return EMPTY_RESULT
+  // Never discard canonical history unless the referenced archive was loaded
+  // for this user and session. A stale/deleted/cross-session id otherwise
+  // leaves the model with neither the archive summary nor the original text.
+  const compactionBoundary = archive && reference ? {
+    compacted: true,
+    firstKeptMessageId: reference.firstKeptMessageId,
+    lastCompactedMessageId: reference.lastCompactedMessageId,
+    referenceMessageId: reference.referenceMessageId,
+    referenceMessageIndex: reference.messageIndex,
+  } : null
+  const projection = resolveStoredMessagesAfterCompaction(sourceMessages, compactionBoundary)
+  const normalizedMessages = includeRecentTranscript
+    ? projection.messages.slice(-64).map(normalizeRecentMessage)
+    : []
 
   const normalizedArchive = archive
     ? {
-        summaryText: (archive.summaryText || '').trim(),
+        // Older releases could persist summaries up to 240k characters. Keep
+        // the canonical archive lossless, but never replay that legacy surface
+        // verbatim into every subsequent model request.
+        summaryText: boundCompactionSummary(archive.summaryText || ''),
       }
     : null
   const input = {
@@ -526,13 +543,14 @@ export function buildSessionsBlock({
     userId: userId || null,
     sessionId: sessionId || null,
     archiveId: archive?.id || null,
-    compactionBoundary: loadedArchive ? {
-      firstKeptMessageId: loadedArchive.reference.firstKeptMessageId,
-      lastCompactedMessageId: loadedArchive.reference.lastCompactedMessageId,
-    } : null,
+    compactionBoundary,
+    compactionBoundaryMatched: compactionBoundary ? projection.matched : null,
     fields: includeRecentTranscript
       ? ['sessionId', 'recentMessages', 'compactionArchive.summaryText']
       : ['sessionId', 'compactionArchive.summaryText'],
+  }
+  if (!normalizedMessages.length && !archive?.summaryText) {
+    return compactionBoundary ? { ...EMPTY_RESULT, sources } : EMPTY_RESULT
   }
   return cachedBuild('sessions', input, sources, () => {
     const sections = ['# Session Context']

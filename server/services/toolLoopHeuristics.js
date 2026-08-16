@@ -1366,7 +1366,9 @@ export function selectJobToolSpecs({
   prompt = '',
   userPrompt = prompt,
   previousUserPrompt = '',
+  priorArtifacts = [],
   priorArtifactTypes = [],
+  hasExplicitManagedArtifactReference = false,
   skillId = undefined,
   specs = SERVER_TOOL_SPECS,
   origin = '',
@@ -1386,7 +1388,12 @@ export function selectJobToolSpecs({
     && !sourceSpecs.some((spec) => spec?.function?.name === 'set_deliverables')
     ? [...sourceSpecs, deliveryControlSpec]
     : sourceSpecs
-  const allowed = allowedArtifactTools(userPrompt, { skillId, priorArtifactTypes })
+  const allowed = allowedArtifactTools(userPrompt, {
+    skillId,
+    priorArtifacts,
+    priorArtifactTypes,
+    hasExplicitManagedArtifactReference,
+  })
   const artifactFiltered = routedSpecs.filter((spec) => {
     const name = spec?.function?.name
     if (!name) return false

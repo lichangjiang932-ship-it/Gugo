@@ -73,6 +73,41 @@ test('overflow fallback keeps outbound view under its hard message limit with a 
   assert.equal(validateToolCallChain(result.outboundMessages).ok, true)
 })
 
+test('compaction keeps the latest parallel tool-call batch and every matching result atomic', () => {
+  const calls = ['one', 'two', 'three', 'four'].map((name) => ({
+    id: `parallel-${name}`,
+    type: 'function',
+    function: { name: 'read_file', arguments: JSON.stringify({ path: `${name}.txt` }) },
+  }))
+  const assistantCall = { role: 'assistant', content: '', tool_calls: calls }
+  const toolResults = calls.map((call) => ({
+    role: 'tool',
+    tool_call_id: call.id,
+    name: 'read_file',
+    content: JSON.stringify({ ok: true, path: `${call.id}.txt` }),
+  }))
+  const result = buildCompaction({
+    messages: [
+      { role: 'user', content: 'Earlier objective.' },
+      { role: 'assistant', content: 'Earlier progress.' },
+      { role: 'user', content: 'Read all four files.' },
+      assistantCall,
+      ...toolResults,
+    ],
+    keepMessages: 1,
+    force: true,
+  })
+
+  const retainedCall = result.outboundMessages.find((message) => message?.tool_calls?.length)
+  const retainedResults = result.outboundMessages.filter((message) => message?.role === 'tool')
+  assert.equal(result.ok, true)
+  assert.deepEqual(retainedCall.tool_calls.map((call) => call.id), calls.map((call) => call.id))
+  assert.deepEqual(retainedResults.map((message) => message.tool_call_id), calls.map((call) => call.id))
+  assert.equal(result.archivedMessages.includes(assistantCall), false)
+  assert.equal(toolResults.some((message) => result.archivedMessages.includes(message)), false)
+  assert.equal(validateToolCallChain(result.outboundMessages).ok, true)
+})
+
 test('semantic summary input is split into bounded batches instead of serializing the whole archive', () => {
   const archivedMessages = Array.from({ length: 24 }, (_, index) => ({
     role: index % 2 ? 'assistant' : 'user',

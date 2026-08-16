@@ -684,6 +684,37 @@ export function buildToolResultMessage(call, result, options) {
   }
 }
 
+const EPHEMERAL_TOOL_MEDIA_TYPE = 'ephemeral_tool_media'
+
+function inlineImageDataUrl(message) {
+  if (message?.role !== 'user' || !Array.isArray(message.content)) return false
+  return message.content.some((part) => (
+    part?.type === 'image_url'
+    && /^data:image\/(?:png|jpe?g|webp|gif);base64,/iu.test(String(part?.image_url?.url || ''))
+  ))
+}
+
+/**
+ * Tool-produced media is request-scoped context. The marker lets the runtime
+ * remove it from the durable conversation after the next logical model call.
+ * The text check also recognizes checkpoints written by versions predating the
+ * marker so a resumed turn cannot replay a legacy screenshot indefinitely.
+ */
+export function isEphemeralToolMediaMessage(message) {
+  if (message?.meta?.type === EPHEMERAL_TOOL_MEDIA_TYPE) return true
+  if (!inlineImageDataUrl(message)) return false
+  const text = message.content
+    .filter((part) => part?.type === 'text')
+    .map((part) => String(part?.text || ''))
+    .join(' ')
+  return /Browser screenshot captured by browser_screenshot|produced the image below\. Inspect it to verify the result before continuing\./u.test(text)
+}
+
+export function stripEphemeralToolMediaMessages(messages = []) {
+  const source = Array.isArray(messages) ? messages : []
+  return source.filter((message) => !isEphemeralToolMediaMessage(message))
+}
+
 /**
  * Tool-produced images need to be visible to the next model response, not
  * embedded as an enormous base64 string inside JSON. Keep a compact tool
@@ -693,12 +724,15 @@ export function buildToolResultMessage(call, result, options) {
  * Applies to browser_screenshot and any executor that returns an `image`
  * payload (image_transform, extract_frame, generate_image).
  */
-export function buildToolResultMessages(call, result, options) {
+export function buildToolResultMessageBundle(call, result, options) {
   const image = result?.image ?? null
   const data = typeof image?.data === 'string' ? image.data.trim() : ''
   const mimeType = String(image?.mimeType || '').trim().toLowerCase()
   if (!data || !/^image\/(?:png|jpe?g|webp|gif)$/u.test(mimeType)) {
-    return [buildToolResultMessage(call, result, options)]
+    return {
+      durableMessages: [buildToolResultMessage(call, result, options)],
+      ephemeralMessages: [],
+    }
   }
   const compactResult = {
     ...result,
@@ -711,16 +745,27 @@ export function buildToolResultMessages(call, result, options) {
   const inspectionText = call?.name === 'browser_screenshot'
     ? 'Browser screenshot captured by browser_screenshot. Inspect this image before continuing.'
     : `${call?.name || 'tool'} produced the image below. Inspect it to verify the result before continuing.`
-  return [
-    buildToolResultMessage(call, compactResult, options),
-    {
+  return {
+    durableMessages: [buildToolResultMessage(call, compactResult, options)],
+    ephemeralMessages: [{
       role: 'user',
       content: [
         { type: 'text', text: inspectionText },
         { type: 'image_url', image_url: { url: `data:${mimeType};base64,${data}` } },
       ],
-    },
-  ]
+      meta: {
+        type: EPHEMERAL_TOOL_MEDIA_TYPE,
+        toolCallId: call?.id || null,
+        consume: 'next_model_call',
+      },
+    }],
+  }
+}
+
+/** Backward-compatible flattened view for callers that do not persist it. */
+export function buildToolResultMessages(call, result, options) {
+  const bundle = buildToolResultMessageBundle(call, result, options)
+  return [...bundle.durableMessages, ...bundle.ephemeralMessages]
 }
 
 /**

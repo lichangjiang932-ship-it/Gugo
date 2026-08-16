@@ -25,11 +25,12 @@ import {
   isExplicitCodeSnippetRequest,
   isFileArtifactTool,
   parseSkillIdFromPrompt,
+  resolveArtifactDeliveryTargets,
   resolveArtifactRevisionMode,
 } from './artifactIntent.js'
 import { restoreDirectoryAuthorizationToolSpecs } from './turnToolSpecs.js'
 import { createSubagentApprovalContext, rememberApprovedSubagentCall } from './subagentRuntime.js'
-import { buildAssistantToolCallsMessage, buildToolResultMessage, buildToolResultMessages, createToolLoopGuard, executeToolWithRetry, isSubstantiveToolCall, mapWithConcurrency, normalizeToolError, normalizeToolResult, normalizeToolCalls, resolveToolResultMaxChars, validateToolCall } from '../utils/toolCallHarness.js'
+import { buildAssistantToolCallsMessage, buildToolResultMessage, buildToolResultMessageBundle, createToolLoopGuard, executeToolWithRetry, isSubstantiveToolCall, mapWithConcurrency, normalizeToolError, normalizeToolResult, normalizeToolCalls, resolveToolResultMaxChars, stripEphemeralToolMediaMessages, validateToolCall } from '../utils/toolCallHarness.js'
 import { extractTextToolCalls } from '../utils/textToolCalls.js'
 import { dispatchHooks } from './hooksService.js'
 import { replaceRuntimeCapabilityBlock } from './runtimeCapabilities.js'
@@ -191,6 +192,94 @@ function synchronizeCheckpointToolCallMessages(messages, calls) {
   })
 }
 
+function parseHistoricalToolObject(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value
+  if (typeof value !== 'string' || !value.trim()) return null
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function normalizeRepeatedUserRequest(value) {
+  const text = typeof value === 'string'
+    ? value
+    : Array.isArray(value)
+      ? value
+          .filter((part) => ['text', 'input_text'].includes(part?.type) && typeof part?.text === 'string')
+          .map((part) => part.text)
+          .join('\n')
+      : ''
+  return text.trim().replace(/\s+/g, ' ')
+}
+
+function recoverPriorLocalMutationTargets(messages, currentUserMessage) {
+  const history = Array.isArray(messages) ? messages : []
+  const currentUserIndex = history.lastIndexOf(currentUserMessage)
+  if (currentUserIndex <= 0) return { mutationTargets: [], deletionTargets: [] }
+  let priorUserIndex = -1
+  for (let index = currentUserIndex - 1; index >= 0; index -= 1) {
+    if (history[index]?.role === 'user') {
+      priorUserIndex = index
+      break
+    }
+  }
+  const currentRequest = normalizeRepeatedUserRequest(currentUserMessage?.content)
+  if (priorUserIndex < 0
+    || !currentRequest
+    || currentRequest !== normalizeRepeatedUserRequest(history[priorUserIndex]?.content)) {
+    return { mutationTargets: [], deletionTargets: [] }
+  }
+
+  const callsById = new Map()
+  const resultsById = new Map()
+  const duplicateCallIds = new Set()
+  const duplicateResultIds = new Set()
+  for (const message of history.slice(priorUserIndex + 1, currentUserIndex)) {
+    if (message?.role === 'assistant' && Array.isArray(message.tool_calls)) {
+      for (const rawCall of message.tool_calls) {
+        const id = String(rawCall?.id || '').trim()
+        const name = String(rawCall?.function?.name || rawCall?.name || '').trim()
+        const args = parseHistoricalToolObject(rawCall?.function?.arguments ?? rawCall?.arguments ?? rawCall?.args)
+        if (!id || !name || !args) continue
+        if (callsById.has(id)) duplicateCallIds.add(id)
+        else callsById.set(id, { id, name, args })
+      }
+    } else if (message?.role === 'tool') {
+      const id = String(message?.tool_call_id || '').trim()
+      const result = parseHistoricalToolObject(message.content)
+      if (!id || !result) continue
+      if (resultsById.has(id)) duplicateResultIds.add(id)
+      else resultsById.set(id, { name: String(message?.name || '').trim(), result })
+    }
+  }
+
+  const mutationTargets = new Set()
+  const deletionTargets = new Set()
+  for (const [id, call] of callsById) {
+    if (duplicateCallIds.has(id)
+      || duplicateResultIds.has(id)
+      || !isMutationExecutionCall(call)
+      || !isLocalMutationCall(call)) continue
+    const paired = resultsById.get(id)
+    if (!paired
+      || paired.name !== call.name
+      || paired.result?.ok !== true
+      || !isSuccessfulToolResult(paired.result)) continue
+    const deleted = looksLikeDeletionCommand(call?.args?.command)
+      ? staticDeletionTargets(call, paired.result)
+      : null
+    if (deleted?.size) {
+      for (const target of deleted) deletionTargets.add(target)
+    } else {
+      for (const target of extractMutationTargets(call, paired.result)) mutationTargets.add(target)
+    }
+  }
+  return { mutationTargets: [...mutationTargets], deletionTargets: [...deletionTargets] }
+}
+
 function normalizeCompactionRecovery(value) {
   const archiveId = String(value?.archiveId || '').trim()
   if (!archiveId) return null
@@ -284,9 +373,20 @@ export async function runToolsLoop({
   // An exact ID or complete filename in the current request is stronger than
   // the implicit "most recently delivered" default. This matters after a
   // failed retry or when the user deliberately returns to an older artifact.
-  const priorArtifacts = explicitlyReferencedArtifacts.length > 0
+  const discoveredPriorArtifacts = explicitlyReferencedArtifacts.length > 0
     ? explicitlyReferencedArtifacts
     : adjacentArtifacts
+  const artifactDelivery = resolveArtifactDeliveryTargets(artifactAuthorizationText, {
+    priorArtifacts: discoveredPriorArtifacts,
+    priorArtifactTypes: [...new Set(discoveredPriorArtifacts.map((artifact) => artifact.type))],
+    hasExplicitManagedArtifactReference: explicitlyReferencedArtifacts.length > 0,
+    skillId: explicitSkillId || skillId,
+  })
+  // A complete filename can name either a local/workspace file or a managed
+  // artifact. Explicit local-file/no-artifact wording wins: do not bind an
+  // adjacent artifact merely because it happens to have the same filename.
+  const workspaceArtifactTypes = new Set(artifactDelivery.workspaceArtifactTypes)
+  const priorArtifacts = discoveredPriorArtifacts.filter((artifact) => !workspaceArtifactTypes.has(artifact.type))
   const priorArtifactTypes = [...new Set(priorArtifacts.map((artifact) => artifact.type))]
   const artifactRevisionMode = priorArtifacts.length > 0
     ? resolveArtifactRevisionMode(artifactAuthorizationText)
@@ -366,13 +466,14 @@ export async function runToolsLoop({
     return null
   }
   const codeSnippetRequested = isExplicitCodeSnippetRequest(artifactAuthorizationText)
-  const explicitArtifactTools = allowedArtifactTools(artifactAuthorizationText, {
+  const artifactIntentOptions = {
     skillId: explicitSkillId || skillId,
-  })
-  const authorizedArtifactTools = allowedArtifactTools(artifactAuthorizationText, {
-    skillId: explicitSkillId || skillId,
+    priorArtifacts,
     priorArtifactTypes,
-  })
+    hasExplicitManagedArtifactReference: explicitlyReferencedArtifacts.length > 0,
+  }
+  const explicitArtifactTools = allowedArtifactTools(artifactAuthorizationText, artifactIntentOptions)
+  const authorizedArtifactTools = allowedArtifactTools(artifactAuthorizationText, artifactIntentOptions)
   const inheritsAdjacentArtifact = explicitArtifactTools.size === 0
     && authorizedArtifactTools.size > 0
   const revisesAdjacentArtifact = priorArtifacts.length > 0
@@ -388,7 +489,9 @@ export async function runToolsLoop({
     prompt: intentText,
     userPrompt: artifactAuthorizationText,
     previousUserPrompt: String(job?.previousUserPrompt || ''),
+    priorArtifacts,
     priorArtifactTypes,
+    hasExplicitManagedArtifactReference: explicitlyReferencedArtifacts.length > 0,
     skillId: explicitSkillId || skillId,
     specs: Array.isArray(toolSpecs) ? toolSpecs : SERVER_TOOL_SPECS,
     origin: job?.origin,
@@ -406,7 +509,8 @@ export async function runToolsLoop({
     ? restoredState.directoryAuthorizationResolution
     : null
   const skillArtifactTools = explicitSkillId
-    ? allowedArtifactTools('', { skillId: explicitSkillId })
+    ? new Set([...allowedArtifactTools('', { skillId: explicitSkillId })]
+        .filter((name) => authorizedArtifactTools.has(name)))
     : new Set()
   // A slash artifact skill is the delivery contract for this run. Keep the
   // completion guard on that one generator; content words such as "report"
@@ -507,7 +611,9 @@ export async function runToolsLoop({
   // a semantic summary; automatic recovery uses the deterministic archive.
   const semanticSummary = false
   let convo = ensureSafetySystemMessages(
-    Array.isArray(restoredState?.messages) ? [...restoredState.messages] : [...messages],
+    Array.isArray(restoredState?.messages)
+      ? stripEphemeralToolMediaMessages(restoredState.messages)
+      : [...messages],
   )
   convo = replaceRuntimeCapabilityBlock(convo, {
     toolSpecs: activeToolSpecs,
@@ -714,18 +820,32 @@ export async function runToolsLoop({
     : restoredState?.completionGuards?.pendingMutationVerification
       ? [PROJECT_SCOPE_TARGET]
       : []
+  const recoveredHistoricalTargets = recoverPriorLocalMutationTargets(messages, currentUserMessage)
   const pendingMutationTargets = new Set(
-    restoredMutationTargets.map(normalizeMutationTarget).filter(Boolean),
+    [...restoredMutationTargets, ...recoveredHistoricalTargets.mutationTargets]
+      .map(normalizeMutationTarget)
+      .filter(Boolean),
   )
   const pendingDeletionTargets = new Set(
-    (Array.isArray(restoredState?.completionGuards?.pendingDeletionTargets)
-      ? restoredState.completionGuards.pendingDeletionTargets
-      : [])
+    [
+      ...(Array.isArray(restoredState?.completionGuards?.pendingDeletionTargets)
+        ? restoredState.completionGuards.pendingDeletionTargets
+        : []),
+      ...recoveredHistoricalTargets.deletionTargets,
+    ]
       .map(normalizeMutationTarget)
       .filter(Boolean),
   )
   const hasPendingMutationVerification = () => (
     pendingMutationTargets.size > 0 || pendingDeletionTargets.size > 0
+  )
+  let recoveredMutationVerificationPending = !mutationExecutionObserved
+    && hasPendingMutationVerification()
+  let verifiedRecoveredMutationObserved = Boolean(
+    restoredState?.completionGuards?.verifiedRecoveredMutationObserved,
+  )
+  let mutationSteeringPending = Boolean(
+    restoredState?.completionGuards?.mutationSteeringPending,
   )
   let mutationVerificationRetries = Math.max(
     0,
@@ -865,7 +985,16 @@ export async function runToolsLoop({
   const missingArtifactTools = () => [...expectedArtifactTools].filter((name) => !deliveredArtifactTools.has(name))
   const hasRequiredArtifacts = () => !requiresPersistedArtifact || missingArtifactTools().length === 0
   const hasRequiredExecutionEvidence = () => !requiresExecutionEvidence
-    || (mutationExecutionRequested ? mutationExecutionObserved : executionEvidenceObserved)
+    || (mutationExecutionRequested
+      ? !mutationSteeringPending && (
+          mutationExecutionObserved || (
+            !requiresPersistedArtifact
+            && verifiedRecoveredMutationObserved
+            && executionEvidenceObserved
+            && !hasPendingMutationVerification()
+          )
+        )
+      : executionEvidenceObserved)
   const assertRequiredArtifacts = () => {
     if (!requiresPersistedArtifact) return
     const missing = missingArtifactTools()
@@ -879,6 +1008,11 @@ export async function runToolsLoop({
   )
   let finalText = ''
   let finalCheckpointPersisted = false
+  // Tool-produced images live only until the next logical model call. They are
+  // never part of `convo`, so checkpoint persistence and process recovery
+  // cannot replay base64 screenshots. A context-length retry still sees the
+  // same local request payload inside callModelWithContextRecovery.
+  const pendingEphemeralToolMessages = []
   let iter = Math.max(0, Number(restoredState?.iterations) || 0)
   // `iterations` is cumulative so resumed tool-call ids and idempotency keys
   // stay stable. An explicit retry records a new window start in the durable
@@ -989,6 +1123,8 @@ export async function runToolsLoop({
         deliveryArtifactSelectionArtifactIds: [...deliveryArtifactSelectionArtifactIds],
         executionEvidenceObserved,
         mutationExecutionObserved,
+        verifiedRecoveredMutationObserved,
+        mutationSteeringPending,
         executionEvidenceRetries,
         executionReasoningRetries,
         sourceHandoffRetries,
@@ -1030,6 +1166,11 @@ export async function runToolsLoop({
       const id = String(steering?.id || '').trim()
       if (id) appliedSteeringIds.add(id)
       convo.push({ role: 'user', content: steering.content })
+      if (hasMutationExecutionIntent(String(steering?.content || ''))) {
+        mutationSteeringPending = true
+        verifiedRecoveredMutationObserved = false
+        recoveredMutationVerificationPending = false
+      }
     }
     return messages.length
   }
@@ -1205,9 +1346,11 @@ export async function runToolsLoop({
       iteration: iter,
       intervalMs: modelHeartbeatIntervalMs,
     })
+    const ephemeralMessages = pendingEphemeralToolMessages.splice(0)
     try {
-      return await callModelWithContextRecovery({
+      const request = await callModelWithContextRecovery({
         messages: modelMessages,
+        ephemeralMessages,
         tools: modelTools,
         callModel: async (modelRequest) => {
           await heartbeat.beginRequest()
@@ -1236,6 +1379,10 @@ export async function runToolsLoop({
           }
         },
       })
+      return {
+        ...request,
+        messages: stripEphemeralToolMediaMessages(request.messages),
+      }
     } finally {
       await heartbeat.stop()
     }
@@ -1642,7 +1789,7 @@ export async function runToolsLoop({
             && iter + 1 < maxIters
           if (!canRetry) {
             const incomplete = await finishIncomplete({
-              text: '任务尚未完成：模型没有调用任何可用工具取得实际执行结果。请重试，或切换到支持工具调用的模型。',
+              text: '任务尚未完成：尚未取得符合本次修改目标的实际执行证据。可重试本任务，或切换到支持工具调用的模型。',
               reason: 'execution_evidence_missing',
               steeringLeaseId,
             })
@@ -1655,8 +1802,8 @@ export async function runToolsLoop({
             role: 'system',
             content: [
               EXECUTION_EVIDENCE_GUARD_MARKER,
-              'The previous response described work but did not execute any substantive tool successfully, so it was not accepted as completion.',
-              'Use the available tools now and continue until there is a concrete tool result.',
+              'The previous response did not establish execution evidence for the current modification target, so it was not accepted as completion.',
+              'Continue until the requested target has concrete mutation evidence, or an inherited successful mutation has been strictly verified.',
               'If indispensable information is missing, call request_clarification instead of presenting instructions as a completed result.',
             ].join(' '),
           })
@@ -2251,6 +2398,7 @@ export async function runToolsLoop({
     // multimodal user message, so defer that (and any other post-tool context)
     // until every tool_call in this batch has received its tool response.
     const deferredPostBatchMessages = []
+    const deferredEphemeralToolMessages = []
 
     const recordOutcome = async (outcome) => {
       outcome.result = normalizeToolResult(outcome.result)
@@ -2313,6 +2461,7 @@ export async function runToolsLoop({
         : succeeded && isMutationExecutionCall(executedCall, outcome.artifactId)
       if (mutationExecutionSucceeded) {
         mutationExecutionObserved = true
+        mutationSteeringPending = false
       }
       if (mutationExecutionSucceeded && isLocalMutationCall(executedCall)) {
         if (requiresPdfLayoutVerification) pdfLayoutVerificationObserved = false
@@ -2351,6 +2500,10 @@ export async function runToolsLoop({
         )
         if (clearedMutation || clearedDeletion) {
           mutationVerificationRetries = 0
+          if (recoveredMutationVerificationPending && !hasPendingMutationVerification()) {
+            verifiedRecoveredMutationObserved = true
+            recoveredMutationVerificationPending = false
+          }
         }
       }
       if (requiresPdfLayoutVerification
@@ -2373,19 +2526,18 @@ export async function runToolsLoop({
       if (executedCall?.name === 'read_file' && succeeded) {
         hasSuccessfulRepresentativeRead = true
       }
-      const toolResultMessages = buildToolResultMessages(
+      const toolResultBundle = buildToolResultMessageBundle(
         outcome.call,
         outcome.result,
         { maxChars: toolResultMaxChars },
       )
-      if (toolResultMessages.length > 1 && outcome.result?.image?.data) {
+      if (toolResultBundle.ephemeralMessages.length > 0 && outcome.result?.image?.data) {
         const compactImage = { ...outcome.result.image }
         delete compactImage.data
         outcome.result = { ...outcome.result, image: { ...compactImage, captured: true } }
       }
-      const [toolResultMessage, ...postToolMessages] = toolResultMessages
-      convo.push(toolResultMessage)
-      deferredPostBatchMessages.push(...postToolMessages)
+      convo.push(...toolResultBundle.durableMessages)
+      deferredEphemeralToolMessages.push(...toolResultBundle.ephemeralMessages)
       if (executedCall?.name === 'request_directory'
         && succeeded
         && outcome.result?.already_authorized === true
@@ -2547,6 +2699,8 @@ export async function runToolsLoop({
       // adding screenshot context or the newer user direction.
       convo.push(...deferredPostBatchMessages)
       deferredPostBatchMessages.length = 0
+      pendingEphemeralToolMessages.push(...deferredEphemeralToolMessages)
+      deferredEphemeralToolMessages.length = 0
       appendSteeringMessages(freshMessages)
       await persistAndAcknowledgeSteering(claimed.leaseId)
       if (iter + 1 >= maxIters) maxIters = iter + 2
@@ -2616,6 +2770,7 @@ export async function runToolsLoop({
       }
     }
     convo.push(...deferredPostBatchMessages)
+    pendingEphemeralToolMessages.push(...deferredEphemeralToolMessages)
     const failureStrategyAdvisories = loopGuard.pendingAdvisories?.() || []
     for (const advisory of failureStrategyAdvisories) {
       convo.push({
@@ -2838,7 +2993,7 @@ export async function runToolsLoop({
   assertRequiredArtifacts()
   if (!hasRequiredExecutionEvidence()) {
     return finishIncomplete({
-      text: '\u4efb\u52a1\u5c1a\u672a\u5b8c\u6210\uff1a\u672a\u83b7\u5f97\u53ef\u9a8c\u8bc1\u7684\u5b9e\u9645\u6267\u884c\u7ed3\u679c\u3002\u8bf7\u91cd\u8bd5\uff0c\u6216\u5207\u6362\u5230\u652f\u6301\u5de5\u5177\u8c03\u7528\u7684\u6a21\u578b\u3002',
+      text: '\u4efb\u52a1\u5c1a\u672a\u5b8c\u6210\uff1a\u5c1a\u672a\u53d6\u5f97\u7b26\u5408\u672c\u6b21\u4fee\u6539\u76ee\u6807\u7684\u5b9e\u9645\u6267\u884c\u8bc1\u636e\u3002\u53ef\u91cd\u8bd5\u672c\u4efb\u52a1\uff0c\u6216\u5207\u6362\u5230\u652f\u6301\u5de5\u5177\u8c03\u7528\u7684\u6a21\u578b\u3002',
       reason: 'execution_evidence_missing',
     })
   }

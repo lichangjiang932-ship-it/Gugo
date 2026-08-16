@@ -3,14 +3,18 @@ import test from 'node:test'
 
 import {
   DEFAULT_CONTEXT_WINDOW,
+  MAX_COMPACTION_SUMMARY_CHARS,
   addSemanticCompactionSummary,
   applyRollingToolResultBudget,
   callModelWithContextRecovery,
+  compactForModel,
   estimateContextTokens,
   getAutoCompactionThreshold,
   trimOldestContext,
 } from '../server/services/contextCompactionRuntime.js'
 import { buildCompaction, validateToolCallChain } from '../server/services/compactionService.js'
+import { createUser, getDb } from '../server/db.js'
+import { upsertSession } from '../server/services/sessionStore.js'
 
 const TOOLS = [{
   type: 'function',
@@ -32,6 +36,19 @@ test('missing model metadata uses the conservative 128k compaction fallback', ()
   assert.equal(DEFAULT_CONTEXT_WINDOW, 128_000)
   assert.equal(getAutoCompactionThreshold(), 102_400)
   assert.equal(getAutoCompactionThreshold(Number.NaN), 102_400)
+})
+
+test('server context estimate treats inline images as bounded visual input instead of base64 text', () => {
+  const oneMegabyteImage = `data:image/png;base64,${'A'.repeat(1024 * 1024)}`
+  const estimated = estimateContextTokens([{
+    role: 'user',
+    content: [
+      { type: 'text', text: 'Inspect this screenshot.' },
+      { type: 'image_url', image_url: { url: oneMegabyteImage } },
+    ],
+  }])
+
+  assert.ok(estimated < 1_000)
 })
 
 test('rolling tool-result budget keeps newest evidence and compacts older large outputs', () => {
@@ -117,6 +134,132 @@ test('automatic compaction never makes hidden semantic-summary model calls', asy
   assert.equal(requests[0].tools.length, 1)
   assert.equal(result.recovery.semanticSummary.modelCalls, 0)
   assert.equal(result.recovery.semanticSummary.fallbackReason, 'disabled_for_automatic_compaction')
+})
+
+test('post-compaction measurement performs one bounded second pass and keeps a legal tool chain', async () => {
+  const tools = [{
+    type: 'function',
+    function: {
+      name: 'large_schema_tool',
+      description: 't'.repeat(4_000),
+      parameters: { type: 'object', properties: {} },
+    },
+  }]
+  const messages = [{ role: 'system', content: 's'.repeat(5_000) }]
+  for (let index = 0; index < 18; index += 1) {
+    const id = `call-${index}`
+    messages.push({ role: 'user', content: `request ${index} ${'x'.repeat(360)}` })
+    messages.push({
+      role: 'assistant',
+      content: '',
+      tool_calls: [{
+        id,
+        type: 'function',
+        function: { name: 'large_schema_tool', arguments: '{}' },
+      }],
+    })
+    messages.push({ role: 'tool', tool_call_id: id, name: 'large_schema_tool', content: '{"ok":true}' })
+  }
+
+  const result = await compactForModel({ messages, tools, contextWindow: 4_096 })
+
+  assert.equal(result.compacted, true)
+  assert.equal(result.convergencePasses, 2)
+  assert.ok(result.postCompactionEstimatedTokens < result.threshold)
+  assert.equal(result.postCompactionEstimatedTokens, estimateContextTokens(result.messages, tools))
+  assert.equal(validateToolCallChain(result.messages).ok, true)
+  assert.ok(result.messages.find((message) => message?.meta?.compaction).content.length <= MAX_COMPACTION_SUMMARY_CHARS)
+})
+
+test('two ephemeral screenshots survive a context retry but never enter second-pass compaction or archive', async (t) => {
+  const userId = `ephemeral-compaction-user-${process.pid}`
+  const sessionId = `ephemeral-compaction-session-${process.pid}`
+  const db = getDb()
+  db.prepare('DELETE FROM compaction_archive WHERE user_id = ?').run(userId)
+  db.prepare('DELETE FROM users WHERE id = ?').run(userId)
+  createUser({ id: userId, email: `ephemeral-compaction-${process.pid}@example.com` })
+  upsertSession({ id: sessionId, userId, title: 'Ephemeral compaction isolation' })
+  t.after(() => {
+    db.prepare('DELETE FROM compaction_archive WHERE user_id = ?').run(userId)
+    db.prepare('DELETE FROM users WHERE id = ?').run(userId)
+  })
+
+  const tools = [{
+    type: 'function',
+    function: {
+      name: 'large_schema_tool',
+      description: 't'.repeat(6_000),
+      parameters: { type: 'object', properties: {} },
+    },
+  }]
+  const messages = [
+    { role: 'system', content: 's'.repeat(5_000) },
+    ...Array.from({ length: 12 }, (_, index) => ({
+      role: index % 2 ? 'assistant' : 'user',
+      content: `history ${index} ${'x'.repeat(360)}`,
+    })),
+  ]
+  const ephemeralMessages = ['FIRST_SCREENSHOT_BYTES', 'SECOND_SCREENSHOT_BYTES'].map((data, index) => ({
+    role: 'user',
+    content: [
+      { type: 'text', text: `Inspect screenshot ${index + 1}.` },
+      { type: 'image_url', image_url: { url: `data:image/png;base64,${data}` } },
+    ],
+    meta: { type: 'ephemeral_tool_media', toolCallId: `shot-${index + 1}` },
+  }))
+  const requests = []
+
+  const result = await callModelWithContextRecovery({
+    messages,
+    ephemeralMessages,
+    tools,
+    contextWindow: 4_096,
+    userId,
+    sessionId,
+    isContextLengthError: (error) => error?.code === 'context_length_exceeded',
+    callModel: async ({ messages: outbound }) => {
+      requests.push(structuredClone(outbound))
+      if (requests.length === 1) throw contextError()
+      return { content: 'recovered', toolCalls: [] }
+    },
+  })
+
+  assert.equal(result.response.content, 'recovered')
+  assert.equal(result.recovery.convergencePasses, 2)
+  assert.equal(requests.length, 2)
+  for (const request of requests) {
+    assert.match(JSON.stringify(request.at(-2)), /FIRST_SCREENSHOT_BYTES/u)
+    assert.match(JSON.stringify(request.at(-1)), /SECOND_SCREENSHOT_BYTES/u)
+  }
+  assert.doesNotMatch(JSON.stringify(result.messages), /data:image|base64|SCREENSHOT_BYTES/u)
+  const archive = db.prepare(`
+    SELECT archived_messages_json, summary_text
+    FROM compaction_archive
+    WHERE id = ?
+  `).get(result.recovery.archiveId)
+  assert.ok(archive)
+  assert.doesNotMatch(JSON.stringify(archive), /data:image|base64|SCREENSHOT_BYTES/u)
+})
+
+test('non-converging oversized dynamic text fails before any main-model request', async () => {
+  let calls = 0
+  await assert.rejects(
+    callModelWithContextRecovery({
+      messages: [
+        { role: 'system', content: 'fixed instructions' },
+        { role: 'user', content: `latest objective ${'x'.repeat(40_000)}` },
+      ],
+      tools: TOOLS,
+      contextWindow: 4_096,
+      isContextLengthError: () => false,
+      callModel: async () => {
+        calls += 1
+        return { content: 'must not run' }
+      },
+    }),
+    (error) => error?.code === 'CONTEXT_COMPACTION_DID_NOT_CONVERGE',
+  )
+  assert.equal(calls, 0)
 })
 
 test('400 recovery force-compacts once, then trims oldest 10% for the final retry', async () => {

@@ -43,6 +43,10 @@ import {
   validateManagedAttachmentsForTurn,
 } from './managedAttachmentStore.js'
 import { prepareManagedAttachmentsForModel } from './managedAttachmentContent.js'
+import {
+  estimateContextTokens,
+  getAutoCompactionThreshold,
+} from './contextCompactionRuntime.js'
 import { createTurnExecutionLeaseCoordinator } from './turnExecutionLeaseRuntime.js'
 import {
   acknowledgeAppliedTurnSteering,
@@ -59,6 +63,29 @@ import { newTraceId, withLogContext } from '../utils/logger.js'
 const TERMINAL_TYPES = new Set(['turn.completed', 'turn.cancelled', 'turn.failed'])
 const STREAM_DELTA_TYPES = ['assistant.delta', 'reasoning.delta']
 const TURN_RESOLUTION_MARKER = '[TURN_RESOLUTION:'
+const ATTACHMENT_CONTEXT_HEADROOM_TOKENS = 64
+
+function inlineMediaProjectionTokens(value, seen = new WeakSet()) {
+  if (typeof value === 'string') {
+    const marker = ';base64,'
+    const markerIndex = value.indexOf(marker)
+    if (markerIndex <= 5 || !value.startsWith('data:')) return 0
+    const mimeType = value.slice(5, markerIndex).toLowerCase()
+    if (!mimeType.startsWith('image/') && mimeType !== 'application/pdf') return 0
+    // Base64 is four characters per three bytes. Keep the attachment byte
+    // budget separate from visual token pricing so a multi-megabyte image is
+    // still downgraded before it is copied into a small-window request.
+    return Math.ceil(Math.max(0, value.length - markerIndex - marker.length) / 4) + 64
+  }
+  if (!value || typeof value !== 'object') return 0
+  if (seen.has(value)) return 0
+  seen.add(value)
+  if (Array.isArray(value)) {
+    return value.reduce((total, item) => total + inlineMediaProjectionTokens(item, seen), 0)
+  }
+  return Object.values(value)
+    .reduce((total, item) => total + inlineMediaProjectionTokens(item, seen), 0)
+}
 
 function replayPersistedTurnEvents(replayEvents, scope) {
   if (typeof replayEvents !== 'function') return []
@@ -1042,10 +1069,14 @@ export class TurnEngine {
     } catch {
       // Optional memory/agent/skill context must never prevent a turn from running.
     }
-    const promptStoredMessages = selectStoredMessagesAfterCompaction(
+    const selectedStoredMessages = selectStoredMessagesAfterCompaction(
       storedMessages,
       promptContext.compactionBoundary,
     )
+    const promptStoredMessages = currentUserMessage
+      && !selectedStoredMessages.some((message) => message?.id === currentUserMessage.id)
+      ? [...selectedStoredMessages, currentUserMessage]
+      : selectedStoredMessages
     const historyMessages = expandStoredMessages(promptStoredMessages)
     const messages = [
       ...(Array.isArray(promptContext.messages) ? promptContext.messages : []),
@@ -1259,12 +1290,64 @@ export class TurnEngine {
             ? attachmentIdsForFirstModelRequest
             : []
           shouldInlineManagedAttachments = false
-          const providerMessages = await materializeManagedAttachmentMessages(request.messages, {
-            userId,
-            sessionId,
-            prepareAttachments: this.deps.prepareAttachments,
-            inlineAttachmentIds,
-          })
+          const materializationOptions = { userId, sessionId }
+          let providerMessages
+          if (inlineAttachmentIds.length > 0) {
+            // Context compaction prices the lightweight stored surface. Build a
+            // reference-only provider projection first so attachment bytes and
+            // extracted text receive only the genuinely remaining request budget.
+            const referenceMessages = await materializeManagedAttachmentMessages(request.messages, {
+              ...materializationOptions,
+              prepareAttachments: this.deps.prepareAttachments,
+              inlineAttachmentIds: [],
+            })
+            const threshold = getAutoCompactionThreshold(
+              contextWindow,
+              this.deps.env?.MODEL_ACTIVE_CONTEXT_TOKENS,
+            )
+            const referenceTokens = estimateContextTokens(referenceMessages, request.tools)
+            const maxAttachmentTokens = Math.max(
+              0,
+              threshold - referenceTokens - ATTACHMENT_CONTEXT_HEADROOM_TOKENS,
+            )
+            providerMessages = maxAttachmentTokens > 0
+              ? await materializeManagedAttachmentMessages(request.messages, {
+                  ...materializationOptions,
+                  prepareAttachments: (attachmentRequest) => this.deps.prepareAttachments({
+                    ...attachmentRequest,
+                    maxAttachmentTokens,
+                  }),
+                  inlineAttachmentIds,
+                })
+              : referenceMessages
+
+            // Re-price text/tool context after expansion and independently
+            // enforce the raw inline-media budget. Visual models do not tokenize
+            // base64 as text, but very large media still must not bypass the
+            // attachment allocation merely because its visual token cost is low.
+            if (
+              inlineMediaProjectionTokens(providerMessages) > maxAttachmentTokens
+              || estimateContextTokens(providerMessages, request.tools) >= threshold
+            ) {
+              providerMessages = referenceMessages
+            }
+            const finalTokens = estimateContextTokens(providerMessages, request.tools)
+            if (finalTokens >= threshold) {
+              const error = new Error(
+                `附件展开后的请求仍超出上下文预算（估算 ${finalTokens} token，阈值 ${threshold} token）。`,
+              )
+              error.code = 'ATTACHMENT_CONTEXT_BUDGET_EXCEEDED'
+              error.status = 413
+              error.retryable = false
+              throw error
+            }
+          } else {
+            providerMessages = await materializeManagedAttachmentMessages(request.messages, {
+              ...materializationOptions,
+              prepareAttachments: this.deps.prepareAttachments,
+              inlineAttachmentIds,
+            })
+          }
           const inheritedToolCallReady = request.onToolCallReady
           return this.deps.runModel({
             ...request,

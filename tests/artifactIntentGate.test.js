@@ -8,6 +8,8 @@ import {
   findExplicitlyReferencedDeliveredArtifacts,
   isFileArtifactTool,
   parseSkillIdFromPrompt,
+  resolveArtifactDeliveryTarget,
+  resolveArtifactDeliveryTargets,
   resolveArtifactRevisionMode,
 } from '../server/services/artifactIntent.js'
 import { runToolsLoop, SERVER_TOOL_SPECS, selectJobToolSpecs } from '../server/services/jobTools.js'
@@ -168,6 +170,42 @@ test('explicit PDF production works without a slash skill', () => {
   assert.equal(detectArtifactIntent('为什么会自动生成 PDF？').pdf, false)
 })
 
+test('explicit workspace filenames are not standalone managed artifacts', () => {
+  const priorArtifacts = [{
+    id: 'managed-html-1',
+    type: 'html',
+    filename: 'Gugo-产品落地页.html',
+    toolName: 'create_html_app',
+  }]
+  for (const prompt of [
+    '继续修改刚才的原文件 qa-context-test.html，只允许修改这个现有原文件，不要新建任何文件或 artifact',
+    '修改 qa-context-test.html 的主视觉标题',
+    '请在当前项目根目录中新建 qa-context-test-v2.html',
+    'edit the existing workspace file pages/product.html in place',
+  ]) {
+    assert.equal(
+      resolveArtifactDeliveryTarget(prompt, { priorArtifacts }),
+      'workspace_file',
+      prompt,
+    )
+  }
+  assert.equal(
+    resolveArtifactDeliveryTarget('生成一个产品网页', { priorArtifacts: [] }),
+    'standalone',
+  )
+  assert.equal(
+    resolveArtifactDeliveryTarget('继续修改 Gugo-产品落地页.html', {
+      priorArtifacts,
+      hasExplicitManagedArtifactReference: true,
+    }),
+    'managed_artifact',
+  )
+  assert.equal(
+    resolveArtifactDeliveryTarget('把这里的按钮缩小一点', { priorArtifacts }),
+    'managed_artifact',
+  )
+})
+
 function adjacentHtmlRevisionMessages(currentPrompt = '这里不足，请修改一下') {
   return [
     { role: 'user', content: '/webpage 生成一个产品网页' },
@@ -217,6 +255,203 @@ function adjacentHtmlRevisionMessages(currentPrompt = '这里不足，请修改�
     { role: 'user', content: currentPrompt },
   ]
 }
+
+test('remote URLs never become local targets or historical artifact references', () => {
+  const prompt = '参考 https://example.com/product-page.html然后修改“qa.html”'
+  const delivery = resolveArtifactDeliveryTargets(prompt)
+
+  assert.equal(delivery.target, 'workspace_file')
+  assert.deepEqual(delivery.localFileTargets, [{
+    path: 'qa.html',
+    filename: 'qa.html',
+    type: 'html',
+  }])
+  assert.deepEqual(delivery.workspaceArtifactTypes, ['html'])
+  assert.deepEqual(delivery.managedArtifactTypes, [])
+  assert.deepEqual(
+    findExplicitlyReferencedDeliveredArtifacts(adjacentHtmlRevisionMessages(prompt), prompt),
+    [],
+  )
+
+  const urlOnly = resolveArtifactDeliveryTargets('请检查 https://example.com/report.pdf 的内容')
+  assert.deepEqual(urlOnly.localFileTargets, [])
+  assert.deepEqual(urlOnly.workspaceArtifactTypes, [])
+  assert.deepEqual(urlOnly.managedArtifactTypes, [])
+})
+
+test('Chinese quotes and parentheses preserve explicit workspace filenames', () => {
+  for (const prompt of [
+    '修改本地文件“qa.html”',
+    '修改本地文件（qa.html）',
+  ]) {
+    const delivery = resolveArtifactDeliveryTargets(prompt)
+    assert.equal(delivery.target, 'workspace_file', prompt)
+    assert.deepEqual(delivery.localFileTargets, [{
+      path: 'qa.html',
+      filename: 'qa.html',
+      type: 'html',
+    }], prompt)
+    assert.deepEqual([...allowedArtifactTools(prompt)], [], prompt)
+  }
+
+  const skillDelivery = resolveArtifactDeliveryTargets('/webpage 修改本地文件“qa.html”', {
+    skillId: 'webpage',
+  })
+  assert.equal(skillDelivery.target, 'workspace_file')
+  assert.deepEqual(skillDelivery.managedArtifactTypes, [])
+})
+
+test('bare named artifact files remain managed deliverables', () => {
+  for (const scenario of [
+    { prompt: '生成 report.docx', type: 'docx', tool: 'create_docx' },
+    { prompt: '制作 slides.pptx', type: 'pptx', tool: 'create_pptx' },
+    { prompt: '生成 budget.xlsx', type: 'xlsx', tool: 'create_xlsx' },
+    { prompt: '生成 landing.html', type: 'html', tool: 'create_html_app' },
+    { prompt: '导出 report.pdf', type: 'pdf', tool: 'create_pdf' },
+    { prompt: '生成 hero.png', type: 'image', tool: 'generate_image' },
+  ]) {
+    const delivery = resolveArtifactDeliveryTargets(scenario.prompt)
+    assert.equal(delivery.target, 'standalone', scenario.prompt)
+    assert.deepEqual(delivery.localFileTargets, [], scenario.prompt)
+    assert.deepEqual(delivery.workspaceArtifactTypes, [], scenario.prompt)
+    assert.deepEqual(delivery.managedArtifactTypes, [scenario.type], scenario.prompt)
+    assert.deepEqual([...allowedArtifactTools(scenario.prompt)], [scenario.tool], scenario.prompt)
+  }
+})
+
+test('mixed local HTML and managed PDF expose only the PDF generator', () => {
+  const prompt = '修改本地文件“index.html”，并另外生成一份 PDF'
+  const delivery = resolveArtifactDeliveryTargets(prompt)
+
+  assert.equal(delivery.target, 'mixed')
+  assert.deepEqual(delivery.localFileTargets, [{
+    path: 'index.html',
+    filename: 'index.html',
+    type: 'html',
+  }])
+  assert.deepEqual(delivery.workspaceArtifactTypes, ['html'])
+  assert.deepEqual(delivery.managedArtifactTypes, ['pdf'])
+  assert.deepEqual([...allowedArtifactTools(prompt)], ['create_pdf'])
+
+  const names = nameOf(selectJobToolSpecs({
+    prompt,
+    userPrompt: prompt,
+    origin: 'chat',
+    intentMode: 'execute',
+    specs: SERVER_TOOL_SPECS,
+  }))
+  assert.equal(names.includes('create_html_app'), false)
+  assert.equal(names.includes('create_pdf'), true)
+})
+
+test('workspace HTML targets use filesystem tools without a managed-artifact completion guard', async () => {
+  const cases = [
+    {
+      label: 'auto-skill-existing-file',
+      prompt: '请直接修改当前项目根目录中现有的 qa-context-test.html，把它完善成一个简洁的深色产品落地页。必须实际编辑原文件并验证，不要输出代码片段。',
+      path: 'qa-context-test.html',
+      skillId: 'webpage',
+    },
+    {
+      label: 'plain-follow-up-existing-file',
+      prompt: '继续修改刚才的原文件 qa-context-test.html：优化主视觉。只允许修改这个现有原文件，不要新建任何文件或 artifact。',
+      path: 'qa-context-test.html',
+      messages: null,
+    },
+    {
+      label: 'auto-skill-new-file',
+      prompt: '请在当前项目根目录中新建 qa-context-test-v2.html，并直接完成页面和验证，不要输出代码片段。',
+      path: 'qa-context-test-v2.html',
+      skillId: 'webpage',
+    },
+  ]
+
+  for (const scenario of cases) {
+    let modelCalls = 0
+    const executions = []
+    const history = scenario.messages
+      || (scenario.label === 'plain-follow-up-existing-file'
+        ? adjacentHtmlRevisionMessages(scenario.prompt)
+        : [{ role: 'user', content: scenario.prompt }])
+    const result = await runToolsLoop({
+      job: {
+        id: `workspace-html-${scenario.label}`,
+        userId: INTENT_ARTIFACT_USER_ID,
+        origin: 'chat',
+        prompt: scenario.prompt,
+        userPrompt: scenario.prompt,
+      },
+      step: { id: `workspace-html-${scenario.label}`, kind: 'chat' },
+      messages: history,
+      skillId: scenario.skillId,
+      intentMode: 'execute',
+      toolSpecs: SERVER_TOOL_SPECS,
+      enableToolHooks: false,
+      requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+      executeTool: async ({ name, args }) => {
+        executions.push({ name, args })
+        assert.equal(args.path, scenario.path)
+        if (name === 'write_file') {
+          return { ok: true, path: scenario.path, bytes: 64, scope: 'workspace' }
+        }
+        if (name === 'read_file') {
+          return {
+            ok: true,
+            path: scenario.path,
+            content: '<!doctype html><html><body><main>verified</main></body></html>',
+            truncated: false,
+          }
+        }
+        assert.fail(`unexpected tool for ${scenario.label}: ${name}`)
+      },
+      runModel: async ({ messages, tools }) => {
+        modelCalls += 1
+        const names = tools.map((tool) => tool.function.name)
+        assert.equal(names.includes('create_html_app'), false, scenario.label)
+        assert.equal(
+          messages.some((message) => String(message.content || '').includes('[PERSISTED ARTIFACT DELIVERY REQUIRED]')),
+          false,
+          scenario.label,
+        )
+        if (modelCalls === 1) {
+          assert.ok(names.includes('write_file'), scenario.label)
+          return {
+            content: '',
+            toolCalls: [{
+              id: `${scenario.label}-write`,
+              function: {
+                name: 'write_file',
+                arguments: JSON.stringify({
+                  path: scenario.path,
+                  content: '<!doctype html><html><body><main>updated</main></body></html>',
+                }),
+              },
+            }],
+          }
+        }
+        if (modelCalls === 2) {
+          assert.ok(names.includes('read_file'), scenario.label)
+          return {
+            content: '',
+            toolCalls: [{
+              id: `${scenario.label}-read`,
+              function: {
+                name: 'read_file',
+                arguments: JSON.stringify({ path: scenario.path }),
+              },
+            }],
+          }
+        }
+        return { content: '已按要求修改指定文件并完成验证。', toolCalls: [] }
+      },
+    })
+
+    assert.equal(modelCalls, 3, scenario.label)
+    assert.deepEqual(executions.map(({ name }) => name), ['write_file', 'read_file'], scenario.label)
+    assert.deepEqual(result.artifactIds, [], scenario.label)
+    assert.equal(result.text, '已按要求修改指定文件并完成验证。', scenario.label)
+  }
+})
 
 function deliveredHtmlTurn({ prefix, artifactId, filename }) {
   const createCallId = `${prefix}-create`

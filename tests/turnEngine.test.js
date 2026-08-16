@@ -343,6 +343,42 @@ test('TurnEngine restores a persisted compaction archive on the next chat turn',
   assert.match(secondPayload, /Second turn/)
 })
 
+test('TurnEngine always keeps the active user request when a compaction boundary is stale', async () => {
+  const sessionId = 'turn-engine-stale-compaction-boundary'
+  const turnId = 'turn-stale-compaction-boundary'
+  upsertSession({ id: sessionId, userId, title: 'Stale compaction boundary' })
+  let loopMessages = []
+  const engine = createTestEngine({
+    preparePromptContext: async () => ({
+      messages: [{ role: 'system', content: 'Valid archive summary.' }],
+      effectiveAgentId: null,
+      skillIds: [],
+      memoryIds: [],
+      compactionBoundary: {
+        compacted: true,
+        firstKeptMessageId: 'missing-retained-message',
+        lastCompactedMessageId: 'missing-archived-message',
+      },
+    }),
+    runLoop: async (options) => {
+      loopMessages = options.messages
+      return { text: 'Current request handled.', artifactIds: [], iterations: 0 }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId,
+    turnId,
+    content: 'ACTIVE_USER_REQUEST_MUST_SURVIVE',
+  })
+  await engine.waitForTurn({ userId, sessionId, turnId })
+
+  assert.ok(loopMessages.some((message) => (
+    message.role === 'user' && message.content === 'ACTIVE_USER_REQUEST_MUST_SURVIVE'
+  )))
+})
+
 async function waitUntil(predicate, timeoutMs = 3000) {
   const started = Date.now()
   while (Date.now() - started < timeoutMs) {

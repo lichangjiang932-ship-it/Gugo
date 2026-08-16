@@ -5,15 +5,109 @@ import {
   buildCompaction,
   createCompactionArchive,
   getCompactionArchive,
+  replaceCompactionSummary,
+  validateToolCallChain,
 } from '../services/compactionService.js'
-import { addSemanticCompactionSummary } from '../services/contextCompactionRuntime.js'
+import {
+  addSemanticCompactionSummary,
+  boundCompactionSummary,
+  estimateContextTokens,
+  getAutoCompactionThreshold,
+  getCompactionSummaryTokenLimit,
+} from '../services/contextCompactionRuntime.js'
 import { dispatchHooks } from '../services/hooksService.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
+const MANUAL_COMPACTION_RESERVE_TOKENS = 64
+const MIN_MANUAL_SUMMARY_TOKENS = 8
 
 function sendJson(res, status, body) {
   res.writeHead(status, JSON_HEADERS)
   res.end(JSON.stringify(body))
+}
+
+function estimateMessageSurface(messages) {
+  // estimateContextTokens includes a fixed 16-token request allowance. Remove
+  // it when comparing one message surface with another.
+  return Math.max(0, estimateContextTokens(messages, []) - 16)
+}
+
+/**
+ * Apply the same bounded-summary and final outbound remeasurement rules used
+ * by automatic compaction. Manual compaction must never treat "a summary was
+ * produced" as proof that the resulting request actually fits.
+ */
+export function fitManualCompactionResult(result, {
+  tools = [],
+  contextWindow,
+  activeContextTokens,
+} = {}) {
+  const threshold = getAutoCompactionThreshold(contextWindow, activeContextTokens)
+  const target = Math.max(1, threshold - MANUAL_COMPACTION_RESERVE_TOKENS)
+  const summaryTokenLimit = getCompactionSummaryTokenLimit(contextWindow, activeContextTokens)
+  const archivedTokens = estimateMessageSurface(result?.archivedMessages || [])
+  const emptySummaryTokens = estimateMessageSurface([{ ...result?.summaryMessage, content: '' }])
+  let budget = Math.min(
+    summaryTokenLimit,
+    Math.max(0, archivedTokens - emptySummaryTokens - 1),
+  )
+  let bestResult = result
+  let bestEstimate = estimateContextTokens(result?.outboundMessages || [], tools)
+  let bestSummaryTokens = estimateMessageSurface(result?.summaryMessage ? [result.summaryMessage] : [])
+  let summaryTruncated = false
+
+  for (let attempt = 0; attempt < 5 && budget >= MIN_MANUAL_SUMMARY_TOKENS; attempt += 1) {
+    const summaryText = boundCompactionSummary(result.summaryText, { maxTokens: budget })
+    const candidate = replaceCompactionSummary(result, summaryText)
+    const estimatedTokens = estimateContextTokens(candidate.outboundMessages, tools)
+    const summaryTokens = estimateMessageSurface([candidate.summaryMessage])
+    const chain = validateToolCallChain(candidate.outboundMessages)
+    summaryTruncated ||= summaryText !== result.summaryText
+    if (estimatedTokens < bestEstimate) {
+      bestResult = candidate
+      bestEstimate = estimatedTokens
+      bestSummaryTokens = summaryTokens
+    }
+    if (chain.ok && estimatedTokens < target && summaryTokens < archivedTokens) {
+      return {
+        ok: true,
+        result: candidate,
+        estimatedTokens,
+        summaryTokens,
+        summaryTruncated,
+        threshold,
+      }
+    }
+    const overflow = Math.max(
+      1,
+      estimatedTokens - target + 1,
+      summaryTokens - archivedTokens + 1,
+    )
+    budget = Math.floor(budget - overflow - 4)
+  }
+
+  return {
+    ok: false,
+    result: bestResult,
+    estimatedTokens: bestEstimate,
+    summaryTokens: bestSummaryTokens,
+    summaryTruncated,
+    threshold,
+    error: bestEstimate >= target
+      ? `compacted outbound context still needs ${bestEstimate} tokens (budget ${target})`
+      : 'compaction summary was not smaller than the archived surface',
+  }
+}
+
+export function attachManualCompactionArchive(result, archiveId) {
+  const summaryMessage = {
+    ...result.summaryMessage,
+    meta: { ...result.summaryMessage.meta, archiveId },
+  }
+  const outboundMessages = result.outboundMessages.map((message) => (
+    message === result.summaryMessage ? summaryMessage : message
+  ))
+  return { summaryMessage, outboundMessages }
 }
 
 export function resolveCompactionModelContext({
@@ -68,8 +162,9 @@ export async function handleCompactionRequest(req, res) {
       const compactPrompt = typeof preCompact.replacementArgs?.customPrompt === 'string'
         ? preCompact.replacementArgs.customPrompt
         : typeof body.compactPrompt === 'string' ? body.compactPrompt : ''
+      const inputMessages = Array.isArray(body.messages) ? body.messages : []
       let result = buildCompaction({
-        messages: Array.isArray(body.messages) ? body.messages : [],
+        messages: inputMessages,
         keepMessages: Number(body.keepMessages) || undefined,
       })
       if (!result.ok) return sendJson(res, 400, { ok: false, error: result.error })
@@ -82,6 +177,10 @@ export async function handleCompactionRequest(req, res) {
         })
       }
 
+      const modelContext = resolveCompactionModelContext({
+        userId,
+        modelName: body.modelName,
+      })
       let semanticSummary = {
         attempted: false,
         used: false,
@@ -91,10 +190,6 @@ export async function handleCompactionRequest(req, res) {
         fallbackReason: body.semantic === false ? 'disabled' : null,
       }
       if (body.semantic !== false) {
-        const modelContext = resolveCompactionModelContext({
-          userId,
-          modelName: body.modelName,
-        })
         const semantic = await addSemanticCompactionSummary({
           result,
           callModel: modelContext.callModel,
@@ -106,19 +201,55 @@ export async function handleCompactionRequest(req, res) {
         semanticSummary = semantic.telemetry
       }
 
+      let convergencePasses = 1
+      let fit = fitManualCompactionResult(result, {
+        tools: Array.isArray(body.tools) ? body.tools : [],
+        contextWindow: modelContext.contextWindow,
+      })
+      if (!fit.ok) {
+        // A large retained tail cannot be fixed by shortening the summary.
+        // Retry once with the smallest legal tail, matching automatic
+        // compaction's convergence strategy.
+        const retry = buildCompaction({
+          messages: inputMessages,
+          keepMessages: 1,
+          force: true,
+        })
+        if (retry.ok && retry.compacted && retry.replacedMessageCount > 0) {
+          convergencePasses = 2
+          result = retry
+          fit = fitManualCompactionResult(result, {
+            tools: Array.isArray(body.tools) ? body.tools : [],
+            contextWindow: modelContext.contextWindow,
+          })
+          if (semanticSummary.used) {
+            semanticSummary = {
+              ...semanticSummary,
+              used: false,
+              fallbackReason: 'semantic_summary_replaced_for_convergence',
+            }
+          }
+        }
+      }
+      if (!fit.ok) {
+        return sendJson(res, 422, {
+          ok: false,
+          code: 'CONTEXT_COMPACTION_DID_NOT_CONVERGE',
+          error: fit.error,
+          estimatedTokens: fit.estimatedTokens,
+          threshold: fit.threshold,
+          convergencePasses,
+        })
+      }
+      result = fit.result
+
       const archive = createCompactionArchive({
         userId,
         sessionId: body.sessionId || 'unknown',
         archivedMessages: result.archivedMessages,
         summaryText: result.summaryText,
       })
-      const summaryMessage = {
-        ...result.summaryMessage,
-        meta: { ...result.summaryMessage.meta, archiveId: archive.id },
-      }
-      const outboundMessages = result.outboundMessages.map((message) => (
-        message?.id === result.summaryMessage?.id ? summaryMessage : message
-      ))
+      const { summaryMessage, outboundMessages } = attachManualCompactionArchive(result, archive.id)
       return sendJson(res, 200, {
         ok: true,
         compacted: true,
@@ -128,6 +259,10 @@ export async function handleCompactionRequest(req, res) {
         outboundMessages,
         replacedMessageCount: result.replacedMessageCount,
         forced: result.forced,
+        postCompactionEstimatedTokens: fit.estimatedTokens,
+        threshold: fit.threshold,
+        convergencePasses,
+        summaryTruncated: fit.summaryTruncated,
         semanticSummary,
       })
     }

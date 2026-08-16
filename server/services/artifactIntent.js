@@ -32,13 +32,19 @@ import {
   isArtifactRevisionRequest,
   isExplicitCodeSnippetRequest,
   parseArtifactSkillId,
+  resolveArtifactDeliveryTarget,
+  resolveArtifactDeliveryTargets,
   resolveArtifactRevisionMode,
+  stripRemoteUrlReferences,
 } from '../../shared/artifactIntent.js'
 
 export {
   isArtifactRevisionRequest,
   isExplicitCodeSnippetRequest,
+  resolveArtifactDeliveryTarget,
+  resolveArtifactDeliveryTargets,
   resolveArtifactRevisionMode,
+  stripRemoteUrlReferences,
 }
 
 const ARTIFACT_TYPE_BY_TOOL = Object.freeze({
@@ -184,7 +190,7 @@ function hasExactReference(text, reference, { filename = false } = {}) {
  */
 export function findExplicitlyReferencedDeliveredArtifacts(messages = [], prompt = '') {
   const history = Array.isArray(messages) ? messages : []
-  const referenceText = String(prompt || '').trim().toLowerCase()
+  const referenceText = stripRemoteUrlReferences(prompt).trim().toLowerCase()
   if (!referenceText) return []
 
   let currentUserIndex = -1

@@ -98,6 +98,220 @@ const ARTIFACT_REPLACE_ORIGINAL_DENIAL = /(?:(?:保留|不改|不要修改|不�
 const ARTIFACT_FILENAME_PRESERVATION = /(?:(?:保留|保持|维持|不改|不修改|别修改|不要修改|不要更改|不要改变|别更改|别改变)\s*(?:(?:原|当前)\s*)?文件\s*(?:名(?:称)?|的\s*(?:文件\s*)?名(?:称)?)|(?:keep|preserve|retain|do\s+not\s+change|don't\s+change|dont\s+change)\s+(?:the\s+)?(?:(?:original|existing|same|current)\s+)?(?:file\s*name|filename))/gi
 const CODE_SNIPPET_DENIAL = /(?:不要|别|无需|不用|禁止|避免)[^。！？!?\n]{0,24}(?:代码|源码|code|source)|(?:do\s+not|don't|dont|never|without)[^.!?\n]{0,24}(?:code|source)/i
 const EXPLICIT_CODE_SNIPPET_REQUEST = /(?:代码片段|源码片段|示例代码|完整代码|完整源码|(?:html|css|javascript|typescript|python|java|c\+\+|sql)\s*(?:代码|源码)|\bcode\s+snippet\b|\bfull\s+source(?:\s+code)?\b)|(?:给我|输出|提供|展示|贴出|发我|返回|生成|写出)[^。！？!?\n]{0,20}(?:代码|源码)|(?:show|provide|print|paste|return|write|give\s+me)[^.!?\n]{0,20}(?:code|source)/i
+const ARTIFACT_TYPE_BY_EXTENSION = Object.freeze({
+  ppt: 'pptx',
+  pptx: 'pptx',
+  doc: 'docx',
+  docx: 'docx',
+  xls: 'xlsx',
+  xlsx: 'xlsx',
+  htm: 'html',
+  html: 'html',
+  pdf: 'pdf',
+  png: 'image',
+  jpg: 'image',
+  jpeg: 'image',
+  webp: 'image',
+  gif: 'image',
+  svg: 'image',
+})
+const FILE_TARGET_REFERENCE = /(?:[a-z]:[\\/]|\.{1,2}[\\/]|[\\/])?(?:[^\s"'`“”‘’<>|?*，。；：！？（）()\u005b\u005d【】{}\\/]+[\\/])*[^\s"'`“”‘’<>|?*，。；：！？（）()\u005b\u005d【】{}\\/]+\.(?:pptx?|docx?|xlsx?|html?|pdf|png|jpe?g|webp|gif|svg)(?=$|[\s"'`“”‘’<>（）()\u005b\u005d【】{},;:，。；：！？])/giu
+const REMOTE_URL_REFERENCE = /\b(?:https?|ftp):\/\/[a-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+/giu
+const WORKSPACE_FILE_CUE = /(?:本地|工作区|项目(?:中|内|里)|仓库|目录|磁盘)(?:中|内|里|上|的)?[^。！？!?\n]{0,20}(?:现有|已有)?(?:原)?文件|(?:现有|已有)(?:的)?(?:本地|工作区|项目)?(?:原)?文件|(?:local|workspace|project|repository|on[- ]disk)\s+(?:existing\s+)?files?|existing\s+(?:local\s+|workspace\s+|project\s+)?files?/i
+const MANAGED_ARTIFACT_DENIAL = /(?:不要|别|禁止|不允许|无需|不用|不得)[^。！？!?\n]{0,48}(?:artifact|托管产物|可下载产物|产物卡片)|(?:without|do\s+not|don't|dont|never|must\s+not|no)\s+[^.!?\n]{0,48}(?:managed\s+)?artifact/i
+const LOCAL_PATH_CONTEXT = /(?:本地|工作区|当前?(?:的)?项目|项目(?:根)?目录|仓库|目录|磁盘|原文件|现有文件|已有文件|原版文件|local|workspace|project|repository|on[- ]disk|existing\s+file)/i
+const LOCAL_MUTATION_ACTION = /(?:继续\s*)?(?:修改|编辑|更新|覆盖|改写|调整|优化|完善|润色|修复|替换|edit|update|modify|overwrite|revise|adjust|refine)\s*(?:这个|该|现有的?|已有的?|原版的?|原)?\s*$/i
+const LOCAL_MUTATION_AFTER = /^\s*(?:这个|该|现有的?|已有的?|原版的?|原)?\s*(?:文件)?\s*(?:修改|编辑|更新|覆盖|改写|调整|优化|完善|润色|修复|替换|edit|update|modify|overwrite|revise|adjust|refine)\b/i
+const FILE_CREATION_ACTION = /(?:新建|创建|生成|制作|导出|另存为|create|generate|make|produce|export|save\s+as)\s*(?:一个|一份|新的?|the|a|an)?\s*$/i
+const LEADING_FILE_ACTION = /^(?:(?:请|帮我|麻烦|给我|直接|继续|把|将|再|重新)\s*)*(?:新建|创建|生成|制作|导出|修改|编辑|更新|覆盖|打开|读取|检查)\s*/iu
+
+export const ARTIFACT_DELIVERY_TARGETS = Object.freeze({
+  WORKSPACE_FILE: 'workspace_file',
+  MANAGED_ARTIFACT: 'managed_artifact',
+  MIXED: 'mixed',
+  STANDALONE: 'standalone',
+})
+
+function maskRemoteUrlReferences(prompt = '') {
+  REMOTE_URL_REFERENCE.lastIndex = 0
+  const masked = String(prompt || '').replace(REMOTE_URL_REFERENCE, (url) => ' '.repeat(url.length))
+  REMOTE_URL_REFERENCE.lastIndex = 0
+  return masked
+}
+
+export function stripRemoteUrlReferences(prompt = '') {
+  REMOTE_URL_REFERENCE.lastIndex = 0
+  const stripped = String(prompt || '').replace(REMOTE_URL_REFERENCE, ' ')
+  REMOTE_URL_REFERENCE.lastIndex = 0
+  return stripped
+}
+
+function normalizeFileTargetPath(value = '') {
+  const raw = String(value || '').trim()
+  if (!raw) return ''
+  const withoutAction = /[\\/]/.test(raw) || /^[a-z]:/i.test(raw)
+    ? raw
+    : raw.replace(LEADING_FILE_ACTION, '')
+  return withoutAction.trim()
+}
+
+function fileTargetType(path = '') {
+  const match = String(path || '').match(/\.([a-z0-9]+)$/i)
+  return match ? ARTIFACT_TYPE_BY_EXTENSION[match[1].toLowerCase()] || null : null
+}
+
+function extractFileTargetReferences(prompt = '') {
+  const text = maskRemoteUrlReferences(prompt)
+  FILE_TARGET_REFERENCE.lastIndex = 0
+  const references = []
+  const seen = new Set()
+  for (const match of text.matchAll(FILE_TARGET_REFERENCE)) {
+    const path = normalizeFileTargetPath(match[0])
+    const type = fileTargetType(path)
+    if (!path || !type) continue
+    const normalized = path.replace(/\\/g, '/').toLowerCase()
+    if (seen.has(normalized)) continue
+    seen.add(normalized)
+    references.push({
+      path,
+      filename: path.split(/[\\/]/).pop() || path,
+      type,
+      index: match.index,
+      length: match[0].length,
+      raw: match[0],
+    })
+  }
+  FILE_TARGET_REFERENCE.lastIndex = 0
+  return { text, references }
+}
+
+function typeForArtifactTool(toolName = '') {
+  return Object.entries({
+    pptx: 'create_pptx',
+    docx: 'create_docx',
+    xlsx: 'create_xlsx',
+    html: 'create_html_app',
+    pdf: 'create_pdf',
+    image: 'generate_image',
+  }).find(([, tool]) => tool === toolName)?.[0] || null
+}
+
+function filenameEquals(left = '', right = '') {
+  return String(left || '').trim().toLowerCase() === String(right || '').trim().toLowerCase()
+}
+
+function intentTypes(intent = {}) {
+  return Object.keys(ARTIFACT_TERMS).filter((type) => intent?.[type] === true)
+}
+
+/**
+ * Resolve local/workspace targets independently from managed artifact formats.
+ * One local HTML edit therefore cannot disable an independently requested PDF,
+ * PPTX, DOCX, XLSX, or image artifact in the same user turn.
+ */
+export function resolveArtifactDeliveryTargets(prompt = '', {
+  priorArtifacts = [],
+  priorArtifactTypes = [],
+  hasExplicitManagedArtifactReference = false,
+  skillId = undefined,
+} = {}) {
+  const source = String(prompt || '').trim()
+  const { text, references } = extractFileTargetReferences(source)
+  const prior = Array.isArray(priorArtifacts) ? priorArtifacts : []
+  const localFileTargets = []
+  const managedFileTargets = []
+  // “保留原文件名” describes the replacement disposition; its “原文件”
+  // substring is not evidence that the named file lives in the workspace.
+  // Mask it at equal length so reference indices continue to line up.
+  ARTIFACT_FILENAME_PRESERVATION.lastIndex = 0
+  const localCueText = text.replace(
+    ARTIFACT_FILENAME_PRESERVATION,
+    (match) => ' '.repeat(match.length),
+  )
+  ARTIFACT_FILENAME_PRESERVATION.lastIndex = 0
+  const globallyLocal = WORKSPACE_FILE_CUE.test(localCueText)
+    || MANAGED_ARTIFACT_DENIAL.test(localCueText)
+    || /(?:当前项目根目录|项目根目录|工作目录|authorized\s+(?:workspace|directory))/i.test(localCueText)
+
+  for (const reference of references) {
+    const before = text.slice(Math.max(0, reference.index - 64), reference.index)
+    const after = text.slice(reference.index + reference.length, reference.index + reference.length + 40)
+    const around = localCueText.slice(
+      Math.max(0, reference.index - 48),
+      reference.index + reference.length + 48,
+    )
+    const explicitPath = /^(?:[a-z]:[\\/]|\.{1,2}[\\/]|[\\/])/i.test(reference.path)
+      || /[\\/]/.test(reference.path)
+    const matchesPrior = prior.some((artifact) => filenameEquals(artifact?.filename, reference.filename))
+    const explicitManaged = hasExplicitManagedArtifactReference && matchesPrior
+    const localContext = globallyLocal || LOCAL_PATH_CONTEXT.test(around)
+    const mutationContext = LOCAL_MUTATION_ACTION.test(before) || LOCAL_MUTATION_AFTER.test(after)
+    const creationContext = FILE_CREATION_ACTION.test(before)
+    // Rendered page-N files are image-side verification outputs. Treating the
+    // same token inside an HTML filename (for example product-page-123.html)
+    // as a local derived output breaks an explicitly referenced managed page.
+    const derivedOutputContext = reference.type === 'image'
+      && /(?:render|verify|preview|screenshot|page[-_ ]?\d+|渲染|验证|预览|截图|逐页)/i.test(around)
+    const local = explicitPath
+      || localContext
+      || MANAGED_ARTIFACT_DENIAL.test(source)
+      || derivedOutputContext
+      || (!explicitManaged && (mutationContext || !creationContext))
+    ;(local ? localFileTargets : managedFileTargets).push({
+      path: reference.path,
+      filename: reference.filename,
+      type: reference.type,
+    })
+  }
+
+  const workspaceArtifactTypes = [...new Set(localFileTargets.map(({ type }) => type))]
+  // File extensions are authoritative format declarations. Mask every
+  // filename before running the looser semantic detector so a basename such
+  // as report.pdf cannot also trigger DOCX through the word “report”. The
+  // managed target types are unioned back explicitly below.
+  const fileReferenceRanges = references
+  let residualText = text
+  for (const reference of [...fileReferenceRanges].sort((a, b) => b.index - a.index)) {
+    residualText = `${residualText.slice(0, reference.index)}${' '.repeat(reference.length)}${residualText.slice(reference.index + reference.length)}`
+  }
+
+  const resolvedSkill = skillId === undefined ? parseArtifactSkillId(source) : skillId
+  const skillType = typeForArtifactTool(resolveArtifactToolForSkillId(resolvedSkill))
+  const residualSkill = skillType && workspaceArtifactTypes.includes(skillType) ? null : resolvedSkill
+  if (!residualSkill && skillType) {
+    residualText = residualText.replace(SKILL_PREFIX, (match) => ' '.repeat(match.length))
+  }
+  const residualIntent = detectArtifactIntentRaw(residualText, {
+    skillId: residualSkill,
+    priorArtifactTypes: localFileTargets.length > 0 ? [] : priorArtifactTypes,
+  })
+  const managedArtifactTypes = [...new Set([
+    ...managedFileTargets.map(({ type }) => type),
+    ...intentTypes(residualIntent),
+  ])]
+
+  const hasLocal = localFileTargets.length > 0
+  const hasManaged = managedArtifactTypes.length > 0
+  const hasPriorArtifact = prior.length > 0
+  const target = hasLocal && hasManaged
+    ? ARTIFACT_DELIVERY_TARGETS.MIXED
+    : hasLocal
+      ? ARTIFACT_DELIVERY_TARGETS.WORKSPACE_FILE
+      : hasPriorArtifact && isArtifactRevisionRequest(source)
+        ? ARTIFACT_DELIVERY_TARGETS.MANAGED_ARTIFACT
+        : ARTIFACT_DELIVERY_TARGETS.STANDALONE
+
+  return {
+    target,
+    localFileTargets,
+    workspaceArtifactTypes,
+    managedArtifactTypes,
+  }
+}
+
+export function resolveArtifactDeliveryTarget(prompt = '', options = {}) {
+  return resolveArtifactDeliveryTargets(prompt, options).target
+}
 
 export function resolveArtifactRevisionMode(prompt = '') {
   const text = String(prompt || '').trim()
@@ -189,7 +403,7 @@ export function hasExplicitArtifactRequest(prompt = '', type) {
   return false
 }
 
-export function detectArtifactIntent(prompt = '', { skillId = undefined, priorArtifactTypes = [] } = {}) {
+function detectArtifactIntentRaw(prompt = '', { skillId = undefined, priorArtifactTypes = [] } = {}) {
   const text = String(prompt || '')
   const resolvedSkill = skillId === undefined ? parseArtifactSkillId(text) : skillId
   const skillTool = resolvedSkill ? resolveArtifactToolForSkillId(resolvedSkill) : null
@@ -223,4 +437,10 @@ export function detectArtifactIntent(prompt = '', { skillId = undefined, priorAr
     pdf: skillTool === 'create_pdf' || (skillTool ? allowAdditionalFormat('pdf') : explicitPdf) || inherited.has('pdf'),
     image: skillTool === 'generate_image' || (skillTool ? allowAdditionalFormat('image') : explicitImage) || inherited.has('image'),
   }
+}
+
+export function detectArtifactIntent(prompt = '', options = {}) {
+  const delivery = resolveArtifactDeliveryTargets(prompt, options)
+  const managed = new Set(delivery.managedArtifactTypes)
+  return Object.fromEntries(Object.keys(ARTIFACT_TERMS).map((type) => [type, managed.has(type)]))
 }
