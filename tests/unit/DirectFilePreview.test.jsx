@@ -51,10 +51,30 @@ test('native image, audio, and video previews expose loading and failure states'
   }
 })
 
-test('direct HTML files use the sandboxed artifact preview URL instead of srcdoc', async () => {
+test('managed HTML artifacts load private assets into a sandboxed srcdoc', async () => {
   const dom = setupDom()
   const rootElement = dom.window.document.getElementById('root')
   const root = createRoot(rootElement)
+  const originalFetch = globalThis.fetch
+  const originalCreateObjectURL = globalThis.URL.createObjectURL
+  const originalRevokeObjectURL = globalThis.URL.revokeObjectURL
+  const requests = []
+  const revoked = []
+  globalThis.fetch = async (input) => {
+    requests.push(String(input))
+    if (requests.length === 1) {
+      return {
+        ok: true,
+        text: async () => '<!doctype html><html><body><img src="gugo-asset://portrait"></body></html>',
+      }
+    }
+    return {
+      ok: true,
+      blob: async () => new Blob(['portrait'], { type: 'image/jpeg' }),
+    }
+  }
+  globalThis.URL.createObjectURL = () => 'blob:managed-portrait'
+  globalThis.URL.revokeObjectURL = (value) => revoked.push(value)
   try {
     await act(async () => root.render(
       <DirectFilePreview
@@ -63,13 +83,54 @@ test('direct HTML files use the sandboxed artifact preview URL instead of srcdoc
         t={(key) => key}
       />,
     ))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     const frame = rootElement.querySelector('iframe')
     assert.ok(frame)
-    assert.equal(frame.getAttribute('src'), '/api/artifacts/interactive.html?token=test&preview=1')
-    assert.equal(frame.getAttribute('srcdoc'), null)
+    assert.equal(frame.getAttribute('src'), null)
+    assert.match(frame.getAttribute('srcdoc'), /blob:managed-portrait/)
+    assert.doesNotMatch(frame.getAttribute('srcdoc'), /gugo-asset:\/\//)
     assert.equal(frame.getAttribute('sandbox'), 'allow-scripts allow-forms')
+    assert.deepEqual(requests, [
+      '/api/artifacts/interactive.html?preview=1',
+      '/api/artifacts/interactive.html/assets/portrait',
+    ])
   } finally {
     await act(async () => root.unmount())
+    globalThis.fetch = originalFetch
+    globalThis.URL.createObjectURL = originalCreateObjectURL
+    globalThis.URL.revokeObjectURL = originalRevokeObjectURL
+    assert.deepEqual(revoked, ['blob:managed-portrait'])
+    dom.window.close()
+  }
+})
+
+test('ordinary workspace HTML keeps the direct sandboxed preview path', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  const originalFetch = globalThis.fetch
+  let fetchCalls = 0
+  globalThis.fetch = async () => {
+    fetchCalls += 1
+    throw new Error('workspace HTML must not use the managed artifact loader')
+  }
+  try {
+    await act(async () => root.render(
+      <DirectFilePreview
+        file={{ filename: 'workspace-page.html', type: 'html' }}
+        url="/api/workspace/files/workspace-page.html?preview=1"
+        t={(key) => key}
+      />,
+    ))
+    const frame = rootElement.querySelector('iframe')
+    assert.ok(frame)
+    assert.equal(frame.getAttribute('src'), '/api/workspace/files/workspace-page.html?preview=1')
+    assert.equal(frame.getAttribute('srcdoc'), null)
+    assert.equal(frame.getAttribute('sandbox'), 'allow-scripts allow-forms')
+    assert.equal(fetchCalls, 0)
+  } finally {
+    await act(async () => root.unmount())
+    globalThis.fetch = originalFetch
     dom.window.close()
   }
 })

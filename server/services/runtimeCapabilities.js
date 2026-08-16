@@ -43,14 +43,14 @@ export function buildRuntimeCapabilityBlock({
     '- Git: inspect repository state and use only the exact Git mutation tools that are exposed.')
   add(lines, names.has('media_probe') || names.has('media_transform'),
     '- Audio/video: inspect media with media_probe and use media_transform for trim, transcode, audio extraction, speed changes, GIF generation, subtitle burn-in, concatenation, volume adjustment, or audio denoising. These tools accept large files by path.')
-  add(lines, hasAny(names, ['pdf_info', 'pdf_text', 'pdf_transform']),
-    '- PDF: inspect page/form metadata with pdf_info, extract page text and positioned text items with pdf_text, and use pdf_transform for merge, split, rotation, CJK-capable watermarking, bounded coordinate text overlays, or form filling. Verify the produced PDF visually.')
-  add(lines, names.has('image_info') || names.has('image_transform'),
+  add(lines, hasAny(names, ['pdf_info', 'pdf_text', 'pdf_transform', 'render_pdf_pages']),
+    '- PDF: inspect page/form metadata with pdf_info, extract page text and positioned text items with pdf_text, use pdf_transform for structural edits, and use render_pdf_pages for deterministic PDF-to-image conversion. Never use generate_image to reproduce an existing PDF page. Verify the produced PDF or rendered pages visually.')
+  add(lines, names.has('image_info') || names.has('image_transform') || names.has('render_pdf_pages'),
     '- Images: inspect metadata with image_info and use image_transform for conversion, resize, crop, rotation, and filters, including large files by path.')
   add(lines, hasAny(names, ['archive_list', 'archive_create', 'archive_extract', 'batch_rename', 'file_hash_manifest']),
     '- Batch files: inspect ZIP contents without extraction, create/extract ZIP archives, perform staged bulk file or directory renames, and build SHA-256 duplicate manifests with the exposed batch file tools.')
-  add(lines, hasAny(names, ['create_pptx', 'create_docx', 'create_xlsx', 'create_pdf', 'create_html_app', 'generate_image']),
-    '- Artifacts: use the exposed create_* or generate_image tool only when the user requested that deliverable.')
+  add(lines, hasAny(names, ['create_pptx', 'create_docx', 'create_xlsx', 'create_pdf', 'create_html_app', 'generate_image', 'render_pdf_pages']),
+    '- Artifacts: use the exposed create_*, generate_image, or render_pdf_pages tool only when the user requested that deliverable. Existing files are inputs to the matching deterministic file tool; generate_image is only for a genuinely new AI-created image.')
   add(lines, hasAny(names, ['web_search', 'fetch_url']),
     '- Web: search or fetch current public information when those tools are exposed.')
   add(lines, names.has('file_download'),

@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { createBufferedTurnActivityDispatcher, dispatchTurnEvent, runServerTurn } from '../../lib/turnClient.js'
 import { createTurnFailureError } from '../../lib/turnClient/turnEventDispatch.js'
 import { TASK_STATUS } from '../../store/taskStatus.js'
-import { buildChatFailureMessage, getVisibleModelErrorMessage } from '../../lib/chatFlowGuards.js'
+import { buildChatFailureDisplayKey, buildChatFailureMessage, getVisibleModelErrorMessage } from '../../lib/chatFlowGuards.js'
 import { isUserStopped, turnEventTimestamp } from './serverTurnFlow.js'
 import { hasTurnRun, registerTurnRun, unregisterTurnRun } from './turnRunRegistry.js'
 import { mergeAssistantText, missingAssistantTextSuffix } from '../../lib/assistantTextContinuity.js'
@@ -242,7 +242,13 @@ export default function useServerTurnResume({
           dispatchMessage('APPEND_TO_LAST_MESSAGE', partialSuffix)
           currentAssistantText = mergeAssistantText(currentAssistantText, error.partialText || '')
         }
-        dispatchMessage('APPEND_TO_LAST_MESSAGE', buildChatFailureMessage(getVisibleModelErrorMessage(error, t)))
+        const serverFailureDisplayKey = buildChatFailureDisplayKey(turnId, error)
+        dispatch({
+          type: 'APPEND_TO_LAST_MESSAGE',
+          payload: buildChatFailureMessage(getVisibleModelErrorMessage(error, t)),
+          meta: { serverFailureDisplayKey },
+          ...messageTarget,
+        })
         dispatchMessage('UPDATE_LAST_MESSAGE_META', {
           ...timingMeta,
           streaming: false,
@@ -255,6 +261,7 @@ export default function useServerTurnResume({
           serverArtifacts,
           serverConnectionState: null,
           serverFailure: error.serverFailure || null,
+          serverFailureDisplayKey,
           serverPartialText: error.partialText || '',
           serverArtifactIds: Array.isArray(error.artifactIds) ? error.artifactIds : [],
         })

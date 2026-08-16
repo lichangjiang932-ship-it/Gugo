@@ -3,7 +3,7 @@ import { buildLocalPathEvidenceInstruction, buildLocalPathToolInstruction, resol
 import { createBufferedTurnActivityDispatcher, dispatchTurnEvent, runServerTurn } from '../../lib/turnClient.js'
 import { createTurnFailureError } from '../../lib/turnClient/turnEventDispatch.js'
 import { TASK_STATUS, HISTORY_STATUS } from '../../store/taskStatus.js'
-import { artifactTypeForSkill, buildChatFailureMessage, getVisibleModelErrorMessage } from '../../lib/chatFlowGuards.js'
+import { artifactTypeForSkill, buildChatFailureDisplayKey, buildChatFailureMessage, getVisibleModelErrorMessage } from '../../lib/chatFlowGuards.js'
 import { isServerTurnToolToggle } from '../../lib/serverToolConfig.js'
 import { registerTurnRun, unregisterTurnRun } from './turnRunRegistry.js'
 import { mergeAssistantText, missingAssistantTextSuffix } from '../../lib/assistantTextContinuity.js'
@@ -362,7 +362,13 @@ export async function runServerChatTurn({
       dispatch({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { status: TASK_STATUS.CANCELLED, stepLabel: t('chat.serverTurn.cancelled') } } })
     } else {
       const message = getVisibleModelErrorMessage(error, t)
-      dispatchMessage('APPEND_TO_LAST_MESSAGE', buildChatFailureMessage(message))
+      const serverFailureDisplayKey = buildChatFailureDisplayKey(turnId, error)
+      dispatch({
+        type: 'APPEND_TO_LAST_MESSAGE',
+        payload: buildChatFailureMessage(message),
+        meta: { serverFailureDisplayKey },
+        ...messageTarget,
+      })
       dispatchMessage('UPDATE_LAST_MESSAGE_META', {
         streaming: false,
         latency: Math.max(0, completedAt - startedAt),
@@ -371,6 +377,7 @@ export async function runServerChatTurn({
         serverArtifacts,
         serverConnectionState: null,
         serverFailure: error.serverFailure || null,
+        serverFailureDisplayKey,
         serverPartialText: error.partialText || '',
         serverArtifactIds: Array.isArray(error.artifactIds) ? error.artifactIds : [],
       })

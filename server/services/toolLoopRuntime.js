@@ -59,8 +59,8 @@ function sourceHandoffViolation(text) {
 
   const manualHandoff = [
     /\b(?:copy|paste)\b[\s\S]{0,80}\b(?:this|the following|code|source|snippet)\b/i,
-    /\b(?:save|create|rename|convert|run|execute)\b[\s\S]{0,60}\b(?:this|the following|the code|the script|the command)\b/i,
-    /(?:请|你需要|需要你|你可以|自行|手动)[\s\S]{0,60}(?:运行|执行|保存|复制|粘贴|创建|新建|改名|转换|修改(?:文件)?(?:后缀|扩展名))/i,
+    /\b(?:save|create|rename|convert|run|execute|open|edit|modify)\b[\s\S]{0,60}\b(?:this|the following|the code|the script|the command|the file|the document|the image)\b/i,
+    /(?:请|你需要|需要你|你可以|自行|手动)[\s\S]{0,60}(?:运行|执行|保存|复制|粘贴|创建|新建|打开|编辑|修改|改名|转换)/i,
     /(?:复制|粘贴)[\s\S]{0,60}(?:代码|源码|脚本)/i,
   ]
   if (manualHandoff.some((pattern) => pattern.test(value))) return 'manual_handoff'
@@ -596,6 +596,12 @@ export async function runToolsLoop({
   // artifact already produced by execute/batch_item, not manufacture a second
   // copy. Chat and delivery steps keep the strict persisted-file contract.
   const requiresPersistedArtifact = expectedArtifactTools.size > 0 && artifactDeliveryStep
+  // A PDF named only as source material for another managed deliverable (for
+  // example "read report.pdf and create a Word document") must not activate
+  // the PDF layout validator. Keep the strict validator for create_pdf and
+  // direct local-file work, where no managed artifact generator is expected.
+  const pdfLayoutDeliveryEligible = expectedArtifactTools.size === 0
+    || expectedArtifactTools.has('create_pdf')
   // A standalone Gugo artifact is written to the managed artifact store. It
   // never needs access to an arbitrary user folder. Hiding request_directory
   // here prevents a model from pausing /webpage or Office generation for an
@@ -652,6 +658,7 @@ export async function runToolsLoop({
     || (directExecutionRequested && hasMutationExecutionIntent(executionIntentText)))
   const executionConvergenceEnabled = enforceExecutionIntent && mutationExecutionRequested
   let requiresPdfLayoutVerification = mutationExecutionRequested
+    && pdfLayoutDeliveryEligible
     && shouldRequirePdfLayoutVerification(executionIntentText)
     && hasCommandExecutionTool(activeToolSpecs)
   // Explicit execution is a contract, not a hint. Keep this requirement even
@@ -687,6 +694,9 @@ export async function runToolsLoop({
   } catch {
     // Prompt context is best-effort and must never block a turn.
   }
+  const requiresLocalArtifactDelivery = ['workspace_file', 'mixed'].includes(artifactDelivery.target)
+    || artifactRevisionMode === 'replace_original'
+    || Boolean(String(outputDirectoryContext.defaultOutputDirectory || '').trim())
   let convo = ensureSafetySystemMessages(
     Array.isArray(restoredState?.messages)
       ? stripEphemeralToolMediaMessages(restoredState.messages)
@@ -2202,6 +2212,7 @@ export async function runToolsLoop({
       let outcomeNoProgressReason = null
       let clarification = null
       let artifactId = null
+      let artifactIds = []
       const idempotentResume = call.checkpointStatus === 'executing'
         && supportsIdempotentResume(executeTool, {
           name,
@@ -2434,6 +2445,7 @@ export async function runToolsLoop({
                         idempotencyKey: call.idempotencyKey,
                         approvalContext: subagentApprovalContext,
                         allowedArtifactTools: stepArtifactTools,
+                        requiresLocalArtifactDelivery,
                       }),
                     })
                   } finally {
@@ -2443,6 +2455,8 @@ export async function runToolsLoop({
                     result = { ...result, approvalAuthorization: gate.authorization }
                   }
                   artifactId = result?.artifactId || null
+                  artifactIds = normalizeArtifactIdList(result?.artifactIds)
+                  if (artifactIds.length === 0 && artifactId) artifactIds = [String(artifactId)]
                   if (isLoopPauseResult(result)) clarification = result.clarification
                   if (enableToolHooks && job?.userId) {
                     try {
@@ -2484,6 +2498,7 @@ export async function runToolsLoop({
         executionArgs: executionArgsUsed,
         result,
         artifactId,
+        artifactIds,
         clarification,
         budgetExceeded: outcomeBudgetExceeded,
         noProgressReason: outcomeNoProgressReason,
@@ -2655,7 +2670,12 @@ export async function runToolsLoop({
       }
       if (Array.isArray(outcome.artifactIds)) recordArtifactIds(outcome.artifactIds)
       else if (outcome.artifactId) recordArtifactIds([outcome.artifactId])
-      if (outcome.artifactId && expectedArtifactTools.has(outcome.call?.name)) {
+      const requiredArtifactDeliverySatisfied = !requiresLocalArtifactDelivery
+        || outcome.result?.deliveryStatus !== 'managed_only'
+      if (succeeded
+        && requiredArtifactDeliverySatisfied
+        && outcome.artifactId
+        && expectedArtifactTools.has(outcome.call?.name)) {
         deliveredArtifactTools.add(outcome.call.name)
       }
       if (executedCall?.name === 'read_file' && succeeded) {
@@ -2702,6 +2722,7 @@ export async function runToolsLoop({
             .map(toolNameFromSpec)
             .filter((name) => VERIFICATION_TOOLS.has(name) || isCommandExecutionTool(name))
           requiresPdfLayoutVerification = mutationExecutionRequested
+            && pdfLayoutDeliveryEligible
             && shouldRequirePdfLayoutVerification(executionIntentText)
             && hasCommandExecutionTool(activeToolSpecs)
           deferredPostBatchMessages.push({

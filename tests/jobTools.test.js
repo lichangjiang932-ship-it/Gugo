@@ -243,6 +243,63 @@ test('artifact turns withhold streamed source and retry for a prose-only complet
   assert.equal(published.some((text) => text.includes('```') || text.includes('copy me')), false)
 })
 
+test('artifact turns reject instructions that ask the user to edit the delivered file manually', async () => {
+  let modelCalls = 0
+  const published = []
+  const result = await runToolsLoop({
+    job: {
+      id: 'artifact-manual-edit-handoff-guard',
+      userId: TEST_USER,
+      prompt: '生成一份 Word 文档',
+      userPrompt: '生成一份 Word 文档',
+    },
+    step: { id: 'artifact-manual-edit-handoff-guard', kind: 'execute' },
+    messages: [{ role: 'user', content: '生成一份 Word 文档' }],
+    toolSpecs: SERVER_TOOL_SPECS,
+    maxIters: 3,
+    runModel: async ({ messages, onTextDelta }) => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'create-manual-edit-docx',
+            function: {
+              name: 'create_docx',
+              arguments: JSON.stringify({ title: '交付文档', paragraphs: [{ text: '正文' }] }),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 2) {
+        const unsafe = '请手动打开 Word 文档并编辑内容。'
+        await onTextDelta?.(unsafe)
+        return { content: unsafe, toolCalls: [] }
+      }
+      assert.ok(messages.some((message) => (
+        message.role === 'system' && message.content.includes('[SOURCE HANDOFF BLOCKED]')
+      )))
+      const safe = 'Word 文档已生成并完成交付。'
+      await onTextDelta?.(safe)
+      return { content: safe, toolCalls: [] }
+    },
+    executeTool: async () => ({
+      ok: true,
+      artifactId: 'manual-edit-guarded-docx-artifact',
+      filename: '交付文档.docx',
+      url: '/api/artifacts/manual-edit-guarded-docx-artifact',
+    }),
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    enableToolHooks: false,
+    onModelDelta: async ({ text }) => published.push(text),
+  })
+
+  assert.equal(modelCalls, 3)
+  assert.equal(result.text, 'Word 文档已生成并完成交付。')
+  assert.deepEqual(published, ['Word 文档已生成并完成交付。'])
+  assert.equal(published.some((text) => text.includes('请手动打开')), false)
+})
+
 test('artifact turns use a deterministic safe summary when source rewriting fails', async () => {
   let modelCalls = 0
   const published = []

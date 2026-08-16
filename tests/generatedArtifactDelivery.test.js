@@ -107,6 +107,62 @@ test('new artifacts never overwrite an unrelated same-named file', () => {
   assert.equal(fs.readFileSync(path.join(outputDirectory, 'slides.pptx'), 'utf8'), 'keep me')
 })
 
+test('a failed non-HTML revision copy leaves the existing delivered file intact', () => {
+  const artifactDirectory = path.join(root, 'artifacts')
+  const outputDirectory = path.join(root, 'atomic-revision-output')
+  fs.mkdirSync(artifactDirectory, { recursive: true })
+  const managedPath = path.join(artifactDirectory, 'atomic-report.docx')
+  fs.writeFileSync(managedPath, 'first managed version')
+
+  const first = syncGeneratedArtifactToOutputDirectory({
+    artifact: { id: 'atomic-revision-artifact', filename: 'atomic-report.docx', fullPath: managedPath },
+    args: { title: 'Atomic report', paragraphs: [{ text: 'first' }] },
+    toolName: 'create_docx',
+    outputDirectory,
+  })
+  const originalDelivery = fs.readFileSync(first.path)
+  fs.writeFileSync(managedPath, 'revised managed version')
+
+  const originalCopyFileSync = fs.copyFileSync
+  fs.copyFileSync = (source, destination, flags) => {
+    if (source === managedPath && String(destination).includes('.gugo-') && String(destination).endsWith('.tmp')) {
+      fs.writeFileSync(destination, 'partial replacement', { flag: 'wx' })
+      const error = new Error('simulated revision copy failure')
+      error.code = 'EIO'
+      throw error
+    }
+    return originalCopyFileSync(source, destination, flags)
+  }
+  try {
+    assert.throws(
+      () => syncGeneratedArtifactToOutputDirectory({
+        artifact: {
+          id: 'atomic-revision-artifact',
+          filename: 'atomic-report.docx',
+          fullPath: managedPath,
+          replaced: true,
+        },
+        args: {
+          title: 'Atomic report',
+          paragraphs: [{ text: 'revised' }],
+          replace_artifact_id: 'atomic-revision-artifact',
+        },
+        toolName: 'create_docx',
+        outputDirectory,
+      }),
+      /simulated revision copy failure/,
+    )
+  } finally {
+    fs.copyFileSync = originalCopyFileSync
+  }
+
+  assert.deepEqual(fs.readFileSync(first.path), originalDelivery)
+  assert.deepEqual(
+    fs.readdirSync(outputDirectory).sort(),
+    [path.basename(first.path)],
+  )
+})
+
 test('a revision rejects delivery metadata that escapes its recorded root', () => {
   const artifactDirectory = path.join(root, 'artifacts')
   const outputDirectory = path.join(root, 'safe-output')

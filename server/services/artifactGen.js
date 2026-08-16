@@ -15,7 +15,7 @@
  *   - create_docx({ title, paragraphs })                                                                            → .docx
  *   - create_xlsx({ title, sheets })                                                                                → .xlsx
  *
- * 不做(下一轮):图片嵌入 / 多 sheet 复杂样式 / 字体内嵌
+ * 支持:授权本地/附件图片真实嵌入 PPTX/DOCX/XLSX；暂不做字体内嵌。
  */
 
 import fs from 'node:fs'
@@ -29,10 +29,12 @@ import { Readable } from 'node:stream'
 import JSZip from 'jszip'
 import * as fontkit from 'fontkit'
 import { PDFDocument, rgb } from 'pdf-lib'
-import { HTML_ARTIFACT_RESPONSE_CSP } from '../../shared/htmlArtifactPolicy.js'
+import { applyHtmlArtifactDocumentPolicy, HTML_ARTIFACT_RESPONSE_CSP } from '../../shared/htmlArtifactPolicy.js'
 import { authenticateRequest } from '../middleware.js'
 import { getArtifactByFilename } from './jobStore.js'
 import { getTurnArtifactByFilename } from './turnArtifactStore.js'
+import { expandHtmlArtifactAssets, getHtmlArtifactAsset } from './htmlArtifactAssets.js'
+import { officeImageSize, prepareOfficeArtifactImages } from './officeArtifactImages.js'
 import {
   HEAD_FONT, BODY_FONT, CJK_FONT,
   PREMIUM_THEMES, resolvePremiumTheme,
@@ -160,6 +162,13 @@ export function createImageArtifact({ title = 'generated-image', buffer, mimeTyp
 
 export const MAX_HTML_ARTIFACT_BYTES = 2 * 1024 * 1024
 const HTML_FENCE = /^\s*```(?:html)?\s*([\s\S]*?)\s*```\s*$/i
+const HTML_LOCAL_RESOURCE_REFERENCE = /(?:\b(?:src|poster)\s*=\s*["']\s*|\burl\s*\(\s*["']?\s*|["'`])(?:file:\/\/{0,2}|[a-z]:[\\/]|\\\\[^\\\s"'`]+\\)/i
+const HTML_MANAGED_ASSET_URI = /gugo-asset:\/\/([A-Za-z0-9_-]{1,64})/g
+const HTML_REMOTE_RESOURCE_REFERENCE = /(?:\b(?:src|srcset|poster|data|background)\s*=\s*["']?\s*|\burl\s*\(\s*["']?\s*|@import\s+(?:url\s*\(\s*)?["']?\s*)(?:https?:|wss?:|ftp:|\/\/)/i
+const HTML_REMOTE_LINK_REFERENCE = /<(?:link|base)\b[^>]*\bhref\s*=\s*["']?\s*(?:https?:|wss?:|ftp:|\/\/)/i
+const HTML_FORM_SUBMISSION = /<(?:form\b[^>]*\baction|(?:button|input)\b[^>]*\bformaction)\s*=/i
+const HTML_META_REFRESH = /<meta\b[^>]*\bhttp-equiv\s*=\s*["']?refresh\b/i
+const HTML_NETWORK_API_CALL = /(?:\b(?:fetch|sendBeacon)\s*\(|\[\s*["'](?:fetch|sendBeacon)["']\s*\]\s*\(|\b(?:new\s+)?(?:XMLHttpRequest|WebSocket|EventSource|WebTransport)\s*\()/i
 
 function normalizeHtmlArtifactSource(value) {
   const raw = String(value || '')
@@ -267,7 +276,7 @@ function assertHtmlIsPageContent(source) {
   }
 }
 
-export function validateHtmlArtifactSource(source) {
+export function validateHtmlArtifactSource(source, { assetIds = [] } = {}) {
   const html = normalizeHtmlArtifactSource(source)
   if (!html) throw new Error('html is required')
   if (Buffer.byteLength(html, 'utf8') > MAX_HTML_ARTIFACT_BYTES) {
@@ -279,11 +288,34 @@ export function validateHtmlArtifactSource(source) {
   if (/attachment:\/\//i.test(html)) {
     throw new Error('html artifact contains an unresolved attachment URI')
   }
+  if (HTML_LOCAL_RESOURCE_REFERENCE.test(html)) {
+    throw new Error('html artifact cannot reference a local disk path; declare the file in assets and use gugo-asset://<id>')
+  }
+  const declaredAssetIds = new Set(
+    Array.isArray(assetIds)
+      ? assetIds.map((value) => String(value || '').trim()).filter(Boolean)
+      : [],
+  )
+  const referencedAssetIds = new Set([...html.matchAll(HTML_MANAGED_ASSET_URI)].map((match) => match[1]))
+  for (const id of referencedAssetIds) {
+    if (!declaredAssetIds.has(id)) {
+      throw new Error(`html artifact references undeclared managed asset: ${id}`)
+    }
+  }
+  for (const id of declaredAssetIds) {
+    if (!referencedAssetIds.has(id)) {
+      throw new Error(`html artifact declares an unused managed asset: ${id}`)
+    }
+  }
   const blocked = [
     /<script\b[^>]*\bsrc\s*=/i,
     /<link\b[^>]*\brel\s*=\s*["']?stylesheet["']?[^>]*\bhref\s*=/i,
     /<iframe\b/i,
-    /\b(?:fetch|XMLHttpRequest|WebSocket)\s*\(/i,
+    HTML_REMOTE_RESOURCE_REFERENCE,
+    HTML_REMOTE_LINK_REFERENCE,
+    HTML_FORM_SUBMISSION,
+    HTML_META_REFRESH,
+    HTML_NETWORK_API_CALL,
     /javascript\s*:/i,
   ]
   if (blocked.some((pattern) => pattern.test(html))) {
@@ -309,8 +341,8 @@ function inlineHtmlFiles(files = {}) {
   return html
 }
 
-export function createHtmlArtifact({ title = 'Webpage', html, files } = {}) {
-  const source = validateHtmlArtifactSource(html || inlineHtmlFiles(files))
+export function createHtmlArtifact({ title = 'Webpage', html, files, assetIds = [] } = {}) {
+  const source = validateHtmlArtifactSource(html || inlineHtmlFiles(files), { assetIds })
   const artifactPath = newArtifactPath(title, 'html')
   fs.writeFileSync(artifactPath.fullPath, source, 'utf8')
   return {
@@ -886,7 +918,7 @@ function renderEnd(slide, pptx, theme, { titleText, bullets, brand }) {
 
 /* ── 主入口 ── */
 
-export async function createPptx({ title = 'Presentation', subtitle = '', theme: themeName, brand = 'Gugo', slides = [] } = {}) {
+export async function createPptx({ title = 'Presentation', subtitle = '', theme: themeName, brand = 'Gugo', slides = [], images = [] } = {}) {
   if (!Array.isArray(slides) || slides.length === 0) {
     throw new Error('slides 不能为空')
   }
@@ -907,6 +939,10 @@ export async function createPptx({ title = 'Presentation', subtitle = '', theme:
   const explicit = themeName && THEMES[themeName]
   const theme = explicit || resolvePptxTheme(`${title} ${subtitle} ${slides.map((s) => s?.title || '').join(' ')}`)
   const total = slides.length
+  const officeImages = await prepareOfficeArtifactImages(images)
+  if (officeImages.some((image) => image.targetIndex && image.targetIndex > total)) {
+    throw new Error(`image target_index exceeds the ${total}-slide deck`)
+  }
 
   let sectionCounter = 0
 
@@ -963,6 +999,16 @@ export async function createPptx({ title = 'Presentation', subtitle = '', theme:
     if (!['cover', 'end', 'section'].includes(layout)) {
       addFooter(slide, pptx, theme, i, total, brand)
     }
+
+    const slideImages = officeImages.filter((image, imageIndex) => (
+      (image.targetIndex || ((imageIndex % total) + 1)) === i + 1
+    ))
+    slideImages.forEach((image, imageIndex) => {
+      const size = officeImageSize(image, { defaultWidth: 4.1, maxWidth: 11.8, maxHeight: 5.8 })
+      const x = image.x ?? Math.max(0.75, 12.55 - size.width - (imageIndex * 0.18))
+      const y = image.y ?? Math.max(0.9, 6.55 - size.height - (imageIndex * 0.18))
+      slide.addImage({ data: image.dataUri, x, y, w: size.width, h: size.height })
+    })
   }
 
   let buffer = await pptx.write({ outputType: 'nodebuffer' })
@@ -973,7 +1019,7 @@ export async function createPptx({ title = 'Presentation', subtitle = '', theme:
 
   const a = newArtifactPath(title, 'pptx')
   fs.writeFileSync(a.fullPath, buffer)
-  return { ...a, type: 'pptx', title, slideCount: slides.length, byteLength: buffer.length, themeName: explicit ? themeName : undefined }
+  return { ...a, type: 'pptx', title, slideCount: slides.length, imageCount: officeImages.length, byteLength: buffer.length, themeName: explicit ? themeName : undefined }
 }
 
 /* ── 注入 east-asia 字体（让 CJK 渲染稳定） ──
@@ -1001,9 +1047,46 @@ function buildDocxParagraphsXml(paragraphs) {
   return out.join('')
 }
 
-export async function createDocx({ title = 'Document', paragraphs = [] } = {}) {
+function docxImageXml(image, index, relationshipId) {
+  const size = officeImageSize(image, { defaultWidth: 5.8, maxWidth: 6.5, maxHeight: 8.5 })
+  const cx = Math.round(size.width * 914400)
+  const cy = Math.round(size.height * 914400)
+  const description = escapeXml(image.alt || image.sourceName || `Image ${index + 1}`)
+  return `<w:p><w:pPr><w:jc w:val="center"/></w:pPr><w:r><w:drawing>
+    <wp:inline distT="0" distB="0" distL="0" distR="0">
+      <wp:extent cx="${cx}" cy="${cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/>
+      <wp:docPr id="${index + 1}" name="Image ${index + 1}" descr="${description}"/>
+      <wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>
+      <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+        <pic:pic><pic:nvPicPr><pic:cNvPr id="${index + 1}" name="${description}"/><pic:cNvPicPr/></pic:nvPicPr>
+          <pic:blipFill><a:blip r:embed="${relationshipId}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>
+          <pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>
+        </pic:pic>
+      </a:graphicData></a:graphic>
+    </wp:inline>
+  </w:drawing></w:r></w:p>`
+}
+
+function buildDocxBodyXml(paragraphs, images) {
+  const parts = []
+  const lastTarget = Math.max(1, paragraphs.length)
+  paragraphs.forEach((paragraph, paragraphIndex) => {
+    parts.push(buildDocxParagraphsXml([paragraph]))
+    images.forEach((image, imageIndex) => {
+      const target = Math.min(image.targetIndex || lastTarget, lastTarget)
+      if (target === paragraphIndex + 1) parts.push(docxImageXml(image, imageIndex, `rId${imageIndex + 2}`))
+    })
+  })
+  return parts.join('')
+}
+
+export async function createDocx({ title = 'Document', paragraphs = [], images = [] } = {}) {
   if (!Array.isArray(paragraphs) || paragraphs.length === 0) {
     throw new Error('paragraphs 不能为空')
+  }
+  const officeImages = await prepareOfficeArtifactImages(images)
+  if (officeImages.some((image) => image.targetIndex && image.targetIndex > paragraphs.length)) {
+    throw new Error(`image target_index exceeds the ${paragraphs.length}-paragraph document`)
   }
   const zip = new JSZip()
   zip.file(
@@ -1012,6 +1095,8 @@ export async function createDocx({ title = 'Document', paragraphs = [] } = {}) {
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
+${officeImages.some((image) => image.extension === 'png') ? '  <Default Extension="png" ContentType="image/png"/>' : ''}
+${officeImages.some((image) => image.extension === 'jpg') ? '  <Default Extension="jpg" ContentType="image/jpeg"/>' : ''}
   <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
   <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
 </Types>`,
@@ -1029,8 +1114,11 @@ export async function createDocx({ title = 'Document', paragraphs = [] } = {}) {
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+${officeImages.map((image, index) => `  <Relationship Id="rId${index + 2}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image${index + 1}.${image.extension}"/>`).join('\n')}
 </Relationships>`,
   )
+  const media = word.folder('media')
+  officeImages.forEach((image, index) => media.file(`image${index + 1}.${image.extension}`, image.buffer))
   // Normal style + Heading 1/2/3，并把 east-asia 字体绑死成 Microsoft YaHei
   word.file(
     'styles.xml',
@@ -1055,14 +1143,17 @@ export async function createDocx({ title = 'Document', paragraphs = [] } = {}) {
     <w:rPr><w:b/><w:sz w:val="24"/></w:rPr></w:style>
 </w:styles>`,
   )
-  // 标题作为第一段 H1
-  const allParagraphs = [{ heading: 1, text: title }, ...paragraphs]
   word.file(
     'document.xml',
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+            xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+            xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+            xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
   <w:body>
-    ${buildDocxParagraphsXml(allParagraphs)}
+    ${buildDocxParagraphsXml([{ heading: 1, text: title }])}
+    ${buildDocxBodyXml(paragraphs, officeImages)}
     <w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
   </w:body>
 </w:document>`,
@@ -1070,7 +1161,7 @@ export async function createDocx({ title = 'Document', paragraphs = [] } = {}) {
   const buffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
   const a = newArtifactPath(title, 'docx')
   fs.writeFileSync(a.fullPath, buffer)
-  return { ...a, type: 'docx', title, paragraphCount: paragraphs.length, byteLength: buffer.length }
+  return { ...a, type: 'docx', title, paragraphCount: paragraphs.length, imageCount: officeImages.length, byteLength: buffer.length }
 }
 
 /* ────────────────────────── PDF ────────────────────────── */
@@ -1112,18 +1203,21 @@ function normalizedPdfBlocks(blocks = []) {
     .filter((block) => block.text)
 }
 
-export async function createPdf({ title = 'Document', blocks = [] } = {}) {
+export async function createPdf({ title = 'Document', blocks = [], images = [] } = {}) {
   const normalizedTitle = String(title || 'Document').trim().slice(0, 200) || 'Document'
   const contentBlocks = normalizedPdfBlocks(blocks)
-  if (!contentBlocks.length) throw new Error('PDF content blocks 不能为空')
+  const officeImages = await prepareOfficeArtifactImages(images)
+  if (!contentBlocks.length && !officeImages.length) throw new Error('PDF content blocks 或 images 不能为空')
 
   const document = await PDFDocument.create()
-  document.registerFontkit(pdfLibFontkit)
-  let font
-  try {
-    font = await document.embedFont(fs.readFileSync(PDF_CJK_FONT_PATH), { subset: true })
-  } catch (cause) {
-    throw new Error(`PDF 中文字体加载失败: ${cause?.message || cause}`, { cause })
+  let font = null
+  if (contentBlocks.length) {
+    document.registerFontkit(pdfLibFontkit)
+    try {
+      font = await document.embedFont(fs.readFileSync(PDF_CJK_FONT_PATH), { subset: true })
+    } catch (cause) {
+      throw new Error(`PDF 中文字体加载失败: ${cause?.message || cause}`, { cause })
+    }
   }
   document.setTitle(normalizedTitle)
   document.setCreator('Gugo')
@@ -1166,22 +1260,55 @@ export async function createPdf({ title = 'Document', blocks = [] } = {}) {
     y -= after
   }
 
-  const startsWithSameTitle = contentBlocks[0]?.type === 'title'
-    && contentBlocks[0].text.localeCompare(normalizedTitle, undefined, { sensitivity: 'base' }) === 0
-  drawBlock({ type: 'title', text: normalizedTitle })
-  for (const block of startsWithSameTitle ? contentBlocks.slice(1) : contentBlocks) drawBlock(block)
+  if (contentBlocks.length) {
+    const startsWithSameTitle = contentBlocks[0]?.type === 'title'
+      && contentBlocks[0].text.localeCompare(normalizedTitle, undefined, { sensitivity: 'base' }) === 0
+    drawBlock({ type: 'title', text: normalizedTitle })
+    for (const block of startsWithSameTitle ? contentBlocks.slice(1) : contentBlocks) drawBlock(block)
+  }
+
+  for (const [imageIndex, image] of officeImages.entries()) {
+    let targetPage
+    if (image.targetIndex) {
+      while (document.getPageCount() < image.targetIndex) document.addPage([PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT])
+      targetPage = document.getPage(image.targetIndex - 1)
+    } else {
+      targetPage = document.addPage([PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT])
+    }
+    const embedded = image.mimeType === 'image/jpeg'
+      ? await document.embedJpg(image.buffer)
+      : await document.embedPng(image.buffer)
+    const { width: pageWidth, height: pageHeight } = targetPage.getSize()
+    const availableWidth = Math.max(1, pageWidth - (PDF_MARGIN_X * 2))
+    const availableHeight = Math.max(1, pageHeight - PDF_MARGIN_TOP - PDF_MARGIN_BOTTOM)
+    const requested = officeImageSize(image, {
+      defaultWidth: availableWidth / 72,
+      maxWidth: availableWidth / 72,
+      maxHeight: availableHeight / 72,
+    })
+    const width = requested.width * 72
+    const height = requested.height * 72
+    const x = image.x == null ? (pageWidth - width) / 2 : image.x * 72
+    const y = image.y == null ? (pageHeight - height) / 2 : pageHeight - (image.y * 72) - height
+    if (x < 0 || y < 0 || x + width > pageWidth || y + height > pageHeight) {
+      throw new Error(`images[${imageIndex}] placement exceeds PDF page bounds`)
+    }
+    targetPage.drawImage(embedded, { x, y, width, height })
+  }
 
   const pages = document.getPages()
-  pages.forEach((item, index) => {
-    const label = `${index + 1} / ${pages.length}`
-    item.drawText(label, {
-      x: (PDF_PAGE_WIDTH - pdfTextWidth(font, label, 9)) / 2,
-      y: 24,
-      size: 9,
-      font,
-      color: rgb(0.48, 0.5, 0.54),
+  if (contentBlocks.length) {
+    pages.forEach((item, index) => {
+      const label = `${index + 1} / ${pages.length}`
+      item.drawText(label, {
+        x: (item.getWidth() - pdfTextWidth(font, label, 9)) / 2,
+        y: 24,
+        size: 9,
+        font,
+        color: rgb(0.48, 0.5, 0.54),
+      })
     })
-  })
+  }
 
   const buffer = Buffer.from(await document.save())
   const artifactPath = newArtifactPath(normalizedTitle, 'pdf')
@@ -1191,6 +1318,7 @@ export async function createPdf({ title = 'Document', blocks = [] } = {}) {
     type: 'pdf',
     title: normalizedTitle,
     pageCount: pages.length,
+    imageCount: officeImages.length,
     byteLength: buffer.length,
   }
 }
@@ -1225,7 +1353,38 @@ function buildSheetXml(rows) {
   return lines.join('')
 }
 
-export async function createXlsx({ title = 'Spreadsheet', sheets = [] } = {}) {
+function xlsxAnchorCell(value, fallbackRow) {
+  const match = String(value || '').toUpperCase().match(/^([A-Z]{1,3})([1-9][0-9]{0,6})$/)
+  if (!match) return { column: 0, row: Math.max(0, fallbackRow - 1) }
+  let column = 0
+  for (const character of match[1]) column = (column * 26) + character.charCodeAt(0) - 64
+  return { column: column - 1, row: Number(match[2]) - 1 }
+}
+
+function buildXlsxDrawingXml(entries) {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing"
+          xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+${entries.map(({ image }, index) => {
+    const anchor = xlsxAnchorCell(image.anchor, 1 + (index * 18))
+    const size = officeImageSize(image, { defaultWidth: 3.5, maxWidth: 8, maxHeight: 6 })
+    const cx = Math.round(size.width * 914400)
+    const cy = Math.round(size.height * 914400)
+    const description = escapeXml(image.alt || image.sourceName || `Image ${index + 1}`)
+    return `  <xdr:oneCellAnchor>
+    <xdr:from><xdr:col>${anchor.column}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${anchor.row}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>
+    <xdr:ext cx="${cx}" cy="${cy}"/>
+    <xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${index + 1}" name="Image ${index + 1}" descr="${description}"/><xdr:cNvPicPr/></xdr:nvPicPr>
+      <xdr:blipFill><a:blip r:embed="rId${index + 1}"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill>
+      <xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr>
+    </xdr:pic><xdr:clientData/>
+  </xdr:oneCellAnchor>`
+  }).join('\n')}
+</xdr:wsDr>`
+}
+
+export async function createXlsx({ title = 'Spreadsheet', sheets = [], images = [] } = {}) {
   if (!Array.isArray(sheets) || sheets.length === 0) {
     throw new Error('sheets 不能为空')
   }
@@ -1236,6 +1395,13 @@ export async function createXlsx({ title = 'Spreadsheet', sheets = [] } = {}) {
     }))
     .filter((s) => s.rows.length > 0)
   if (!validSheets.length) throw new Error('至少要有一个非空 sheet')
+  const officeImages = await prepareOfficeArtifactImages(images)
+  if (officeImages.some((image) => image.targetIndex && image.targetIndex > validSheets.length)) {
+    throw new Error(`image target_index exceeds the ${validSheets.length}-sheet workbook`)
+  }
+  const sheetImages = validSheets.map((_, sheetIndex) => officeImages
+    .map((image, imageIndex) => ({ image, imageIndex }))
+    .filter(({ image, imageIndex }) => (image.targetIndex || ((imageIndex % validSheets.length) + 1)) === sheetIndex + 1))
 
   const zip = new JSZip()
   zip.file(
@@ -1244,8 +1410,11 @@ export async function createXlsx({ title = 'Spreadsheet', sheets = [] } = {}) {
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
+${officeImages.some((image) => image.extension === 'png') ? '  <Default Extension="png" ContentType="image/png"/>' : ''}
+${officeImages.some((image) => image.extension === 'jpg') ? '  <Default Extension="jpg" ContentType="image/jpeg"/>' : ''}
   <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
 ${validSheets.map((_, i) => `  <Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('\n')}
+${sheetImages.map((entries, i) => entries.length ? `  <Override PartName="/xl/drawings/drawing${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>` : '').filter(Boolean).join('\n')}
 </Types>`,
   )
   zip.folder('_rels').file(
@@ -1274,21 +1443,46 @@ ${validSheets.map((s, i) => `    <sheet name="${escapeXml(s.name)}" sheetId="${i
 </workbook>`,
   )
   const ws = xl.folder('worksheets')
+  const worksheetRelationships = ws.folder('_rels')
+  const drawings = xl.folder('drawings')
+  const drawingRelationships = drawings.folder('_rels')
+  const media = xl.folder('media')
+  officeImages.forEach((image, imageIndex) => media.file(`image${imageIndex + 1}.${image.extension}`, image.buffer))
   validSheets.forEach((s, i) => {
+    const entries = sheetImages[i]
     ws.file(
       `sheet${i + 1}.xml`,
       `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+           xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheetData>${buildSheetXml(s.rows)}</sheetData>
+${entries.length ? '  <drawing r:id="rId1"/>' : ''}
 </worksheet>`,
     )
+    if (entries.length) {
+      worksheetRelationships.file(
+        `sheet${i + 1}.xml.rels`,
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing${i + 1}.xml"/>
+</Relationships>`,
+      )
+      drawings.file(`drawing${i + 1}.xml`, buildXlsxDrawingXml(entries))
+      drawingRelationships.file(
+        `drawing${i + 1}.xml.rels`,
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+${entries.map(({ image, imageIndex }, relationshipIndex) => `  <Relationship Id="rId${relationshipIndex + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image${imageIndex + 1}.${image.extension}"/>`).join('\n')}
+</Relationships>`,
+      )
+    }
   })
 
   const buffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
   const a = newArtifactPath(title, 'xlsx')
   fs.writeFileSync(a.fullPath, buffer)
   const totalRows = validSheets.reduce((sum, s) => sum + s.rows.length, 0)
-  return { ...a, type: 'xlsx', title, sheetCount: validSheets.length, rowCount: totalRows, byteLength: buffer.length }
+  return { ...a, type: 'xlsx', title, sheetCount: validSheets.length, rowCount: totalRows, imageCount: officeImages.length, byteLength: buffer.length }
 }
 
 /* ────────────────────────── 静态服务 ────────────────────────── */
@@ -1522,18 +1716,24 @@ export async function renderArtifactPreviewPng({ artifactPath, page = 1, userId 
 }
 
 export function handleArtifactDownload(req, res) {
-  const url = req.url || ''
-  const m = url.match(/^\/api\/artifacts\/([^?#]+)/)
-  if (!m) { res.statusCode = 404; res.end('not found'); return }
+  if (!['GET', 'HEAD'].includes(String(req.method || 'GET').toUpperCase())) {
+    res.writeHead(405, { Allow: 'GET, HEAD' }); res.end('method not allowed'); return
+  }
+  const requestUrl = new URL(req.url || '', 'http://localhost')
+  const route = requestUrl.pathname.match(/^\/api\/artifacts\/([^/]+)(?:\/assets\/([^/]+))?$/)
+  if (!route) { res.statusCode = 404; res.end('not found'); return }
   let filename = ''
-  try { filename = decodeURIComponent(m[1]) } catch { /* rejected below */ }
+  let assetId = ''
+  try {
+    filename = decodeURIComponent(route[1])
+    assetId = route[2] ? decodeURIComponent(route[2]) : ''
+  } catch { /* rejected below */ }
   if (!isSafeArtifactFilename(filename)) { res.statusCode = 400; res.end('bad filename'); return }
 
   // 鉴权:Header 优先,query token 兜底(浏览器 <a> 下载没法带 Authorization 头)
   let userId = authenticateRequest(req)
   if (!userId) {
-    const u = new URL(req.url, 'http://localhost')
-    const queryToken = u.searchParams.get('token')
+    const queryToken = requestUrl.searchParams.get('token')
     if (queryToken) {
       req.headers.authorization = `Bearer ${queryToken}`
       userId = authenticateRequest(req)
@@ -1549,6 +1749,45 @@ export function handleArtifactDownload(req, res) {
     res.statusCode = 404; res.end('not found'); return
   }
 
+  if (assetId) {
+    if (String(artifact.type || '').toLowerCase() !== 'html') {
+      res.statusCode = 404; res.end('not found'); return
+    }
+    let asset
+    try {
+      asset = getHtmlArtifactAsset({ artifactDirectory: ensureArtifactDir(), artifactId: artifact.id, assetId })
+    } catch {
+      res.statusCode = 404; res.end('not found'); return
+    }
+    if (!asset) { res.statusCode = 404; res.end('not found'); return }
+    const requestedRange = req.headers.range
+    const range = requestedRange ? parseArtifactRange(requestedRange, asset.size) : null
+    if (requestedRange && !range) {
+      res.writeHead(416, { 'Content-Range': `bytes */${asset.size}`, 'Accept-Ranges': 'bytes' })
+      res.end()
+      return
+    }
+    const headers = {
+      'Content-Type': asset.mimeType,
+      'Content-Disposition': artifactContentDisposition('inline', asset.filename),
+      'Content-Length': range ? range.end - range.start + 1 : asset.size,
+      'Cache-Control': 'private, no-store',
+      'Accept-Ranges': 'bytes',
+      'X-Content-Type-Options': 'nosniff',
+      'Cross-Origin-Resource-Policy': 'same-origin',
+    }
+    if (range) headers['Content-Range'] = `bytes ${range.start}-${range.end}/${asset.size}`
+    res.writeHead(range ? 206 : 200, headers)
+    if (req.method === 'HEAD') { res.end(); return }
+    const stream = fs.createReadStream(asset.fullPath, range || undefined)
+    stream.on('error', (error) => {
+      console.error('[artifactGen] asset read stream error:', error?.message)
+      if (!res.headersSent) { res.statusCode = 500; res.end('read error') }
+    })
+    stream.pipe(res)
+    return
+  }
+
   ensureArtifactDir()
   let full = path.join(ARTIFACT_DIR, filename)
   // 防 path traversal (含 symlink)
@@ -1559,10 +1798,45 @@ export function handleArtifactDownload(req, res) {
   }
   if (!full.startsWith(fs.realpathSync(ARTIFACT_DIR) + path.sep)) { res.statusCode = 400; res.end('bad filename'); return }
   if (!fs.existsSync(full)) { res.statusCode = 404; res.end('not found'); return }
-  const requestUrl = new URL(req.url, 'http://localhost')
   const preview = requestUrl.searchParams.get('preview') === '1'
   const contentType = artifactContentType(filename)
-  const size = fs.statSync(full).size
+  let downloadBuffer = null
+  if (!preview && /^text\/html/i.test(contentType)) {
+    try {
+      downloadBuffer = Buffer.from(applyHtmlArtifactDocumentPolicy(
+        expandHtmlArtifactAssets({
+          artifactDirectory: ensureArtifactDir(),
+          artifactId: artifact.id,
+          html: fs.readFileSync(full, 'utf8'),
+        }),
+      ), 'utf8')
+    } catch (error) {
+      console.error('[artifactGen] offline HTML expansion failed:', error?.message)
+      const assetError = String(error?.code || '').startsWith('HTML_ASSET_')
+      const tooLarge = error?.code === 'HTML_ASSET_OFFLINE_TOO_LARGE'
+      const status = tooLarge ? 413 : assetError ? 409 : 500
+      const code = assetError ? error.code : 'HTML_ARTIFACT_DOWNLOAD_FAILED'
+      const message = tooLarge
+        ? 'This HTML artifact is available in the managed preview, but its bundled media is too large for a single offline HTML download. Reduce or compress the media and regenerate the file.'
+        : assetError
+          ? 'This HTML artifact cannot be downloaded because its bundled media is unavailable or invalid. Open the managed preview or regenerate the file.'
+          : 'The offline HTML download could not be prepared. Open the managed preview or try again.'
+      const payload = Buffer.from(JSON.stringify({
+        error: { code, message, previewAvailable: true },
+      }))
+      res.writeHead(status, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Content-Length': payload.length,
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+        'X-Gugo-Error-Code': code,
+      })
+      if (req.method === 'HEAD') res.end()
+      else res.end(payload)
+      return
+    }
+  }
+  const size = downloadBuffer ? downloadBuffer.length : fs.statSync(full).size
   const requestedRange = req.headers.range
   const range = requestedRange ? parseArtifactRange(requestedRange, size) : null
   if (requestedRange && !range) {
@@ -1588,6 +1862,10 @@ export function handleArtifactDownload(req, res) {
   }
   res.writeHead(range ? 206 : 200, headers)
   if (req.method === 'HEAD') { res.end(); return }
+  if (downloadBuffer) {
+    res.end(range ? downloadBuffer.subarray(range.start, range.end + 1) : downloadBuffer)
+    return
+  }
   const stream = fs.createReadStream(full, range || undefined)
   stream.on('error', (err) => {
     console.error('[artifactGen] read stream error:', err?.message)

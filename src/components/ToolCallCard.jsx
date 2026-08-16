@@ -8,7 +8,7 @@ import LiveElapsed from './LiveElapsed.jsx'
 
 const ICONS = {
   web_search: Search, fetch_url: Globe, create_pptx: Presentation, create_docx: FileText,
-  create_xlsx: Table2, create_pdf: FileText, create_react_component: Code2, create_mermaid: PieChart,
+  create_xlsx: Table2, create_pdf: FileText, render_pdf_pages: Image, create_react_component: Code2, create_mermaid: PieChart,
   create_chart: PieChart, create_svg: Image, create_html_app: Code2, Agent: Bot,
   read_file: FolderOpen, write_file: FileEdit, edit_file: FileEdit, multi_edit: Layers,
   apply_patch: Diff, list_directory: FolderOpen, grep_code: Search, find_symbol: Search,

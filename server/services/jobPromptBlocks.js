@@ -27,10 +27,12 @@ export function buildArtifactPrompt(artifactTools, {
       artifactTools.has('create_pdf') ? 'create_pdf (PDF)' : null,
       artifactTools.has('create_html_app') ? 'create_html_app (HTML)' : null,
       artifactTools.has('generate_image') ? 'generate_image (image)' : null,
+      artifactTools.has('render_pdf_pages') ? 'render_pdf_pages (PDF pages to images)' : null,
     ].filter(Boolean)
     lines.push(
       `用户明确要了可下载的文件产物,你可以调用:${available.join('、')}。`,
       '把内容完整填好再调用。文件生成后仍要用文字说明做了什么、结论是什么 —— 文件不能代替回答。',
+      '已有 PDF 转图片必须调用 render_pdf_pages 读取并真实渲染原文件；generate_image 只用于用户明确要求从零生成的新图片，不能代替文件转换。',
     )
   } else {
     lines.push(

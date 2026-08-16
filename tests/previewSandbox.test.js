@@ -15,7 +15,8 @@ test('artifact preview iframes do not allow modal popups by default', () => {
 test('task HTML previews fetch source outside the sandbox and never put download tokens in iframe URLs', () => {
   const source = fs.readFileSync(new URL('../src/pages/TaskArtifactPreview.jsx', import.meta.url), 'utf8')
 
-  assert.match(source, /loadArtifactPreviewHtml\(artifactUrl/)
+  assert.match(source, /loadArtifactPreviewDocument\(artifactUrl/)
+  assert.match(source, /URL\.revokeObjectURL/)
   assert.match(source, /srcDoc=\{previewHtml\}/)
   assert.match(source, /sandbox="allow-scripts"/)
   assert.doesNotMatch(source, /<iframe[\s\S]*?src=\{downloadUrl\}/)

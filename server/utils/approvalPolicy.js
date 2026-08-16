@@ -124,6 +124,9 @@ export const NEVER_APPROVE_TOOLS = Object.freeze([
   'create_pptx',
   'create_docx',
   'create_xlsx',
+  'create_pdf',
+  'create_html_app',
+  'render_pdf_pages',
   'run_project_check',
 ])
 

@@ -12,6 +12,11 @@ process.env.ARTIFACT_DIR = artifactDir
 const { createAppServer } = await import('../server/appServer.js')
 const { closeDb } = await import('../server/db.js')
 const { appendJobArtifact, createJob } = await import('../server/services/jobStore.js')
+const {
+  beginHtmlArtifactAssetInstall,
+  finishHtmlArtifactAssetInstall,
+  stageHtmlArtifactAssets,
+} = await import('../server/services/htmlArtifactAssets.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 fs.mkdirSync(artifactDir, { recursive: true })
@@ -105,6 +110,142 @@ test('artifact previews return explicit MIME types for newer media formats', asy
       assert.equal(response.status, 200)
       assert.equal(response.headers.get('content-type'), cases[index][1], cases[index][0])
     }
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
+})
+
+test('HTML media assets are owner-scoped, range-aware, and downloads become standalone', async () => {
+  const owner = issueTestSession()
+  const outsider = issueTestSession()
+  const index = 30
+  const artifactId = `preview-artifact-${index}`
+  const filename = 'media-gallery.html'
+  const htmlBody = '<!doctype html><html><body><img src="gugo-asset://portrait"><main>Gallery</main></body></html>'
+  const url = registerArtifact({ filename, body: htmlBody, userId: owner.userId, index })
+  const mediaDirectory = path.join(tempDir, 'media')
+  const portraitPath = path.join(mediaDirectory, 'portrait.jpg')
+  const portrait = Buffer.from([0xff, 0xd8, 0xff, 0xdb, 1, 2, 3, 4, 5])
+  fs.mkdirSync(mediaDirectory, { recursive: true })
+  fs.writeFileSync(portraitPath, portrait)
+  finishHtmlArtifactAssetInstall(beginHtmlArtifactAssetInstall(stageHtmlArtifactAssets({
+    artifactDirectory: artifactDir,
+    artifactId,
+    parentFilename: filename,
+    requiredAssetIds: ['portrait'],
+    sources: [{ id: 'portrait', sourcePath: portraitPath }],
+  })))
+
+  const server = createAppServer({ getEnv: () => ({}) })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const origin = `http://127.0.0.1:${server.address().port}`
+  const assetUrl = `${origin}${url}/assets/portrait`
+  try {
+    const unauthorized = await fetch(assetUrl)
+    assert.equal(unauthorized.status, 401)
+
+    const hiddenFromOutsider = await fetch(assetUrl, {
+      headers: { Authorization: `Bearer ${outsider.token}` },
+    })
+    assert.equal(hiddenFromOutsider.status, 404)
+
+    const asset = await fetch(assetUrl, {
+      headers: { Authorization: `Bearer ${owner.token}` },
+    })
+    assert.equal(asset.status, 200)
+    assert.equal(asset.headers.get('content-type'), 'image/jpeg')
+    assert.match(asset.headers.get('content-disposition') || '', /^inline;/)
+    assert.deepEqual(Buffer.from(await asset.arrayBuffer()), portrait)
+
+    const range = await fetch(assetUrl, {
+      headers: { Authorization: `Bearer ${owner.token}`, Range: 'bytes=0-2' },
+    })
+    assert.equal(range.status, 206)
+    assert.equal(range.headers.get('content-range'), `bytes 0-2/${portrait.length}`)
+    assert.deepEqual(Buffer.from(await range.arrayBuffer()), portrait.subarray(0, 3))
+
+    const head = await fetch(assetUrl, {
+      method: 'HEAD',
+      headers: { Authorization: `Bearer ${owner.token}` },
+    })
+    assert.equal(head.status, 200)
+    assert.equal(Number(head.headers.get('content-length')), portrait.length)
+
+    const preview = await fetch(`${origin}${url}?preview=1`, {
+      headers: { Authorization: `Bearer ${owner.token}` },
+    })
+    assert.equal(await preview.text(), htmlBody)
+
+    const download = await fetch(`${origin}${url}`, {
+      headers: { Authorization: `Bearer ${owner.token}` },
+    })
+    const standalone = await download.text()
+    assert.match(standalone, /data:image\/jpeg;base64,/)
+    assert.doesNotMatch(standalone, /gugo-asset:\/\//)
+    assert.match(standalone, /http-equiv="Content-Security-Policy"/i)
+    assert.match(standalone, /connect-src 'none'/)
+    assert.match(standalone, /form-action 'none'/)
+    assert.ok(
+      standalone.indexOf('Content-Security-Policy') < standalone.indexOf('<html>'),
+      'offline CSP must precede document markup',
+    )
+
+    const missing = await fetch(`${origin}${url}/assets/missing`, {
+      headers: { Authorization: `Bearer ${owner.token}` },
+    })
+    assert.equal(missing.status, 404)
+    const post = await fetch(assetUrl, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${owner.token}` },
+    })
+    assert.equal(post.status, 405)
+  } finally {
+    await new Promise((resolve) => server.close(resolve))
+  }
+})
+
+test('oversized offline HTML downloads return a stable 413 while managed preview remains available', async () => {
+  const owner = issueTestSession()
+  const index = 31
+  const artifactId = `preview-artifact-${index}`
+  const filename = 'large-media-gallery.html'
+  const repeated = Array.from({ length: 100 }, () => '<img src="gugo-asset://media">').join('')
+  const htmlBody = `<!doctype html><html><body>${repeated}<main>Large gallery</main></body></html>`
+  const url = registerArtifact({ filename, body: htmlBody, userId: owner.userId, index })
+  const mediaDirectory = path.join(tempDir, 'large-media')
+  const mediaPath = path.join(mediaDirectory, 'media.png')
+  fs.mkdirSync(mediaDirectory, { recursive: true })
+  fs.writeFileSync(mediaPath, Buffer.alloc(1024 * 1024, 0x5a))
+  finishHtmlArtifactAssetInstall(beginHtmlArtifactAssetInstall(stageHtmlArtifactAssets({
+    artifactDirectory: artifactDir,
+    artifactId,
+    parentFilename: filename,
+    requiredAssetIds: ['media'],
+    sources: [{ id: 'media', sourcePath: mediaPath }],
+  })))
+
+  const server = createAppServer({ getEnv: () => ({}) })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const origin = `http://127.0.0.1:${server.address().port}`
+  const headers = { Authorization: `Bearer ${owner.token}` }
+  try {
+    const preview = await fetch(`${origin}${url}?preview=1`, { headers })
+    assert.equal(preview.status, 200)
+    assert.equal(await preview.text(), htmlBody)
+
+    const download = await fetch(`${origin}${url}`, { headers })
+    assert.equal(download.status, 413)
+    assert.equal(download.headers.get('x-gugo-error-code'), 'HTML_ASSET_OFFLINE_TOO_LARGE')
+    assert.match(download.headers.get('content-type') || '', /^application\/json/)
+    const body = await download.json()
+    assert.equal(body.error.code, 'HTML_ASSET_OFFLINE_TOO_LARGE')
+    assert.equal(body.error.previewAvailable, true)
+    assert.match(body.error.message, /managed preview/i)
+
+    const head = await fetch(`${origin}${url}`, { method: 'HEAD', headers })
+    assert.equal(head.status, 413)
+    assert.equal(head.headers.get('x-gugo-error-code'), 'HTML_ASSET_OFFLINE_TOO_LARGE')
+    assert.equal(await head.text(), '')
   } finally {
     await new Promise((resolve) => server.close(resolve))
   }

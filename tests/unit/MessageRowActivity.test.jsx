@@ -407,3 +407,48 @@ test('an interrupted resumable turn keeps verified output clickable while execut
     dom.window.close()
   }
 })
+
+test('a failed turn with a delivered artifact is labeled partially completed', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const msg = {
+    id: 'assistant-partial-delivery',
+    role: 'assistant',
+    content: 'The page was created before a later step failed.',
+    timestamp: Date.now(),
+    meta: {
+      failed: true,
+      serverArtifacts: [{
+        id: 'delivered-html',
+        filename: 'gallery.html',
+        type: 'html',
+        url: '/api/artifacts/delivered-html',
+      }],
+      serverDeliveryArtifactIds: ['delivered-html'],
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <I18nProvider>
+        <MessageRow
+          msg={msg}
+          rowKey={msg.id}
+          generatingMessageId=""
+          lang="en"
+          t={(key) => key === 'chatMessages.replyPartiallyCompleted'
+            ? 'Generated files were preserved'
+            : key}
+        />
+      </I18nProvider>,
+    ))
+
+    assert.equal(rootElement.querySelector('[data-testid="reply-completion-state"]')?.textContent, 'Generated files were preserved')
+    assert.ok(rootElement.querySelector('[data-testid="artifact-open-card"]'))
+    assert.doesNotMatch(rootElement.textContent, /This reply could not be completed/)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})

@@ -20,6 +20,7 @@
 /** 会写出可下载文件的工具。默认对模型不可见。 */
 export const FILE_ARTIFACT_TOOLS = Object.freeze([
   'generate_image',
+  'render_pdf_pages',
   'create_pptx',
   'create_docx',
   'create_xlsx',
@@ -31,6 +32,7 @@ import {
   detectArtifactIntent as detectSharedArtifactIntent,
   isArtifactRevisionRequest,
   isExplicitCodeSnippetRequest,
+  isPdfToImageConversionRequest,
   parseArtifactSkillId,
   resolveArtifactDeliveryTarget,
   resolveArtifactDeliveryTargets,
@@ -54,6 +56,7 @@ const ARTIFACT_TYPE_BY_TOOL = Object.freeze({
   create_html_app: 'html',
   create_pdf: 'pdf',
   generate_image: 'image',
+  render_pdf_pages: 'image',
 })
 const CONTINUABLE_ARTIFACT_TYPES = new Set(Object.values(ARTIFACT_TYPE_BY_TOOL))
 
@@ -257,7 +260,13 @@ export function allowedArtifactTools(prompt = '', options = {}) {
   if (intent.xlsx) allowed.add('create_xlsx')
   if (intent.html) allowed.add('create_html_app')
   if (intent.pdf) allowed.add('create_pdf')
-  if (intent.image) allowed.add('generate_image')
+  if (intent.image) {
+    const revisesRenderedPdfPage = Array.isArray(options?.priorArtifacts)
+      && options.priorArtifacts.some((artifact) => artifact?.toolName === 'render_pdf_pages')
+      && isArtifactRevisionRequest(prompt, { hasPriorArtifact: true })
+    if (isPdfToImageConversionRequest(prompt) || revisesRenderedPdfPage) allowed.add('render_pdf_pages')
+    else allowed.add('generate_image')
+  }
   return allowed
 }
 

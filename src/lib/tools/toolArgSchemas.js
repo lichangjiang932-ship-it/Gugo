@@ -1,5 +1,16 @@
 import { z } from 'zod'
 
+const officeImagesSchema = z.array(z.object({
+  path: z.string().min(1).max(2000),
+  alt: z.string().max(500).optional(),
+  target_index: z.number().int().min(1).optional(),
+  anchor: z.string().regex(/^[A-Za-z]{1,3}[1-9][0-9]{0,6}$/).optional(),
+  x: z.number().min(0).optional(),
+  y: z.number().min(0).optional(),
+  width: z.number().positive().optional(),
+  height: z.number().positive().optional(),
+}).strict()).max(50)
+
 export const TOOL_ARG_SCHEMAS = {
   list_directory: z.object({
     path: z.string().min(1, 'path \u4e0d\u80fd\u4e3a\u7a7a').max(2000),
@@ -16,16 +27,19 @@ export const TOOL_ARG_SCHEMAS = {
     title: z.string().min(1, 'title \u4e0d\u80fd\u4e3a\u7a7a').max(200),
     // markdown:\u7528 --- \u5206\u9875\u6216 # \u5206\u9875;\u6bcf\u9875\u7b2c\u4e00\u884c\u975e\u5206\u9694\u5219\u5f53\u6807\u9898
     markdown: z.string().min(1, 'markdown \u4e0d\u80fd\u4e3a\u7a7a').max(60000),
+    images: officeImagesSchema.optional(),
   }),
   create_docx: z.object({
     title: z.string().min(1, 'title \u4e0d\u80fd\u4e3a\u7a7a').max(200),
     markdown: z.string().min(1, 'markdown \u4e0d\u80fd\u4e3a\u7a7a').max(120000),
+    images: officeImagesSchema.optional(),
   }),
   create_xlsx: z.object({
     title: z.string().min(1, 'title \u4e0d\u80fd\u4e3a\u7a7a').max(200),
     // \u4e8c\u7ef4\u6570\u7ec4 (\u4f18\u5148) \u6216 markdown \u8868\u683c / csv
     rows: z.array(z.array(z.union([z.string(), z.number(), z.boolean(), z.null()]))).optional(),
     markdown: z.string().max(60000).optional(),
+    images: officeImagesSchema.optional(),
   }).refine((d) => Array.isArray(d.rows) ? d.rows.length > 0 : !!d.markdown,
     { message: '\u9700\u8981\u63d0\u4f9b rows \u6216 markdown \u81f3\u5c11\u4e00\u9879' }),
   create_react_component: z.object({
@@ -53,6 +67,10 @@ export const TOOL_ARG_SCHEMAS = {
     title: z.string().min(1).max(200),
     html: z.string().min(1).max(2000000).optional(),
     files: z.record(z.string(), z.string()).optional(),
+    assets: z.array(z.object({
+      id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
+      path: z.string().min(1).optional(),
+    }).strict()).max(500).optional(),
   }).refine((value) => !!value.html || !!value.files?.['index.html'], { message: 'html or files.index.html is required' }),
   Agent: z.object({
     subagent_type: z.enum(['explore', 'plan', 'general']).optional(),

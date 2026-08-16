@@ -4,6 +4,7 @@ import {
   cancelJob,
   createJob,
   getJob,
+  loadArtifactPreviewDocument,
   loadArtifactPreviewHtml,
   listJobs,
   retryJob,
@@ -85,6 +86,42 @@ test('HTML artifact previews reject cross-origin URLs before forwarding credenti
     /same-origin/,
   )
   assert.equal(fetched, false)
+})
+
+test('HTML artifact previews load each private media asset once and replace markers with Blob URLs', async () => {
+  const previousWindow = globalThis.window
+  globalThis.window = { localStorage: null, sessionStorage: null }
+  setAuthToken('asset-session-secret')
+  const calls = []
+  try {
+    const document = await loadArtifactPreviewDocument('/api/artifacts/gallery.html?token=stale', {
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init })
+        if (url === '/api/artifacts/gallery.html?preview=1') {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => '<img src="gugo-asset://portrait"><div style="background:url(gugo-asset://portrait)"></div>',
+          }
+        }
+        assert.equal(url, '/api/artifacts/gallery.html/assets/portrait')
+        return { ok: true, status: 200, blob: async () => new Blob(['portrait'], { type: 'image/jpeg' }) }
+      },
+      createObjectUrl: (blob) => {
+        assert.equal(blob.type, 'image/jpeg')
+        return 'blob:gugo-portrait'
+      },
+    })
+    assert.equal(calls.length, 2)
+    assert.ok(calls.every((call) => call.init.headers.Authorization === 'Bearer asset-session-secret'))
+    assert.ok(calls.every((call) => !String(call.url).includes('token=')))
+    assert.equal(document.objectUrls.length, 1)
+    assert.equal(document.html.match(/blob:gugo-portrait/g)?.length, 2)
+    assert.doesNotMatch(document.html, /gugo-asset:\/\//)
+  } finally {
+    setAuthToken('')
+    globalThis.window = previousWindow
+  }
 })
 
 test('subscribeToJobEvents exchanges a one-time ticket and connects with ?ticket=', async () => {

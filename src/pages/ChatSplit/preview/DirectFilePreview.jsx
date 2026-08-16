@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { AlertCircle, FileText, LoaderCircle } from 'lucide-react'
 import MarkdownRenderer from '../../../components/MarkdownRenderer.jsx'
 import { classifyDirectFile, loadDirectFilePreview } from '../../../lib/directFilePreview.js'
+import { loadArtifactPreviewDocument } from '../../../lib/jobClient.js'
+import { applyHtmlArtifactDocumentPolicy } from '../../../../shared/htmlArtifactPolicy.js'
 import { DocxPreview, PptxPreview, SourceView, XlsxPreview } from './ArtifactRenderers.jsx'
 
 export default function DirectFilePreview({ file, url, t }) {
@@ -48,7 +50,63 @@ export default function DirectFilePreview({ file, url, t }) {
   return <PreviewStatus icon={<FileText className="h-6 w-6" />} text={file.filename || file.title || 'artifact'} detail={t('chatPreview.unsupportedHint')} />
 }
 
+function isManagedArtifactPreviewUrl(url) {
+  const raw = String(url || '').trim()
+  if (!raw) return false
+  try {
+    const baseOrigin = globalThis.location?.origin
+      || globalThis.window?.location?.origin
+      || 'http://localhost'
+    const parsed = new URL(raw, baseOrigin)
+    return parsed.origin === baseOrigin && parsed.pathname.startsWith('/api/artifacts/')
+  } catch {
+    return false
+  }
+}
+
 function InteractiveHtmlFilePreview({ file, t, url }) {
+  if (isManagedArtifactPreviewUrl(url)) {
+    return <ManagedHtmlArtifactPreview file={file} t={t} url={url} />
+  }
+  return <DirectHtmlUrlPreview file={file} t={t} url={url} />
+}
+
+function ManagedHtmlArtifactPreview({ file, t, url }) {
+  const [state, setState] = useState({ html: '', error: '' })
+  useEffect(() => {
+    const controller = new AbortController()
+    let objectUrls = []
+    loadArtifactPreviewDocument(url, { signal: controller.signal }).then((document) => {
+      if (controller.signal.aborted) {
+        for (const objectUrl of document.objectUrls) URL.revokeObjectURL?.(objectUrl)
+        return
+      }
+      objectUrls = document.objectUrls
+      setState({ html: applyHtmlArtifactDocumentPolicy(document.html), error: '' })
+    }).catch((cause) => {
+      if (!controller.signal.aborted) setState({ html: '', error: cause?.message || String(cause) })
+    })
+    return () => {
+      controller.abort()
+      for (const objectUrl of objectUrls) URL.revokeObjectURL?.(objectUrl)
+    }
+  }, [url])
+  return (
+    <div className="relative h-full min-h-0 bg-white">
+      {state.html && <iframe
+        srcDoc={state.html}
+        title={file.filename || file.title || t('chatPreview.htmlTitle')}
+        sandbox="allow-scripts allow-forms"
+        referrerPolicy="no-referrer"
+        className="block h-full w-full border-0 bg-white"
+      />}
+      {!state.html && !state.error && <div className="absolute inset-0 flex items-center justify-center bg-paper-2/90"><PreviewStatus icon={<LoaderCircle className="h-6 w-6 animate-spin" />} text={t('chatPreview.loadingFile')} /></div>}
+      {state.error && <PreviewStatus icon={<AlertCircle className="h-6 w-6" />} text={t('chatPreview.previewFailed')} detail={state.error} />}
+    </div>
+  )
+}
+
+function DirectHtmlUrlPreview({ file, t, url }) {
   const [status, setStatus] = useState('loading')
   return (
     <div className="relative h-full min-h-0 bg-white">

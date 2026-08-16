@@ -174,7 +174,9 @@ export default function MessageRow({
         )}
         {msg.role === 'assistant' && msg.meta?.failed && msg.meta?.type !== 'model_reply' && (
           <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-dashed border-ember/40 pt-2 text-[11px]">
-            <span className="text-ember">This reply could not be completed</span>
+            <span className="text-ember" data-testid="reply-completion-state">
+              {t(deliveryArtifacts.length > 0 ? 'chatMessages.replyPartiallyCompleted' : 'chatMessages.replyIncomplete')}
+            </span>
           </div>
         )}
         {msg.role === 'assistant' && msg.meta?.type === 'context_summary' && (
