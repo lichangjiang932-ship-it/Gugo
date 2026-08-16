@@ -1,7 +1,7 @@
 {
   "name": "gugo",
   "private": true,
-  "version": "0.11.12",
+  "version": "0.11.13",
   "description": "Self-hosted AI workspace for browser and Windows desktop with agents, tools, memory, jobs, and MCP.",
   "author": "lichangjiang932-ship-it",
   "license": "MIT",
@@ -47,8 +47,10 @@
     "desktop:dev": "node desktop/dev.mjs",
     "desktop:start": "npm run build && electron .",
     "desktop:check": "node --check desktop/main.js && node --check desktop/dev.mjs && node --check desktop/preload.cjs && node --test tests/desktopSecurity.test.js tests/desktopPackaging.test.js",
+    "desktop:verify-package": "node scripts/verify-desktop-package.cjs",
+    "desktop:smoke-package": "node scripts/smoke-test-desktop-package.mjs",
     "desktop:media-sidecars": "node scripts/prepare-media-sidecars.mjs",
-    "desktop:package": "npm run desktop:media-sidecars && electron-builder --win nsis --publish never",
+    "desktop:package": "npm run desktop:media-sidecars && electron-builder --win nsis --publish never && npm run desktop:smoke-package",
     "desktop:dist": "npm run build && npm run desktop:check && npm run desktop:package",
     "desktop:publish": "npm run build && npm run desktop:check && npm run desktop:media-sidecars && electron-builder --win nsis --publish always",
     "preview": "vite preview --configLoader runner",
@@ -84,6 +86,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@electron/asar": "3.4.1",
     "@ffmpeg-installer/ffmpeg": "1.1.0",
     "@ffprobe-installer/ffprobe": "2.1.2",
     "@tailwindcss/typography": "^0.5.19",

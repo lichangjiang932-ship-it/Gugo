@@ -16,6 +16,13 @@ import {
   stageMediaSidecars,
   WINDOWS_MEDIA_SIDECARS,
 } from '../scripts/prepare-media-sidecars.mjs'
+import desktopPackageVerifier from '../scripts/verify-desktop-package.cjs'
+
+const {
+  REQUIRED_DESKTOP_ASAR_FILES,
+  normalizeAsarEntry,
+  resolveAsarPath,
+} = desktopPackageVerifier
 
 const read = (relativePath) => fs.readFileSync(new URL(`../${relativePath}`, import.meta.url), 'utf8')
 
@@ -45,6 +52,11 @@ test('NSIS package includes server runtime dependencies and updater metadata', (
   assert.equal(fs.existsSync(new URL('../src/data/skillCatalog.js', import.meta.url)), true)
   assert.match(config, /src\/lib\/pptCore\.js/)
   assert.match(config, /src\/lib\/presentationPlanner\.js/)
+  for (const runtimeFile of REQUIRED_DESKTOP_ASAR_FILES.filter((file) => file.startsWith('src/'))) {
+    assert.match(config, new RegExp(`^\\s*-\\s+${runtimeFile.replaceAll('/', '\\/').replaceAll('.', '\\.')}\\s*$`, 'm'))
+    assert.equal(fs.existsSync(new URL(`../${runtimeFile}`, import.meta.url)), true)
+  }
+  assert.match(config, /^afterPack:\s+scripts\/verify-desktop-package\.cjs\s*$/m)
   assert.match(config, /^\s*-\s+desktop\/petDrag\.js\s*$/m)
   assert.match(config, /npmRebuild:\s*false/)
   assert.match(config, /asarUnpack:[\s\S]*node_modules\/sharp\/\*\*\/\*/)
@@ -72,6 +84,19 @@ test('NSIS package includes server runtime dependencies and updater metadata', (
   assert.doesNotMatch(main, /showMessageBox/)
 })
 
+test('desktop ASAR verifier normalizes package paths and covers the backend entry dependency closure', () => {
+  assert.equal(normalizeAsarEntry('\\src\\lib\\officeExport\\documentExport.js'), 'src/lib/officeExport/documentExport.js')
+  assert.equal(resolveAsarPath(path.join('release', 'win-unpacked')), path.resolve('release', 'win-unpacked', 'resources', 'app.asar'))
+  assert.deepEqual(REQUIRED_DESKTOP_ASAR_FILES, [
+    'server/start.js',
+    'src/lib/officeExport/documentExport.js',
+    'src/lib/officeExport/officeCommon.js',
+    'src/lib/officeExport/spreadsheetExport.js',
+    'src/lib/presentationExport/presentationParseHelpers.js',
+    'src/lib/presentationExport/presentationParser.js',
+  ])
+})
+
 test('desktop media sidecars are staged, packaged, and documented', () => {
   const config = read('electron-builder.yml')
   const main = read('desktop/main.js')
@@ -93,7 +118,10 @@ test('desktop media sidecars are staged, packaged, and documented', () => {
   assert.match(config, /extraResources:[\s\S]*from:\s*resources\/licenses[\s\S]*to:\s*licenses/)
   assert.match(packageJson.scripts['desktop:media-sidecars'], /prepare-media-sidecars\.mjs/)
   assert.match(packageJson.scripts['desktop:package'], /^npm run desktop:media-sidecars && electron-builder/)
+  assert.match(packageJson.scripts['desktop:package'], /&& npm run desktop:smoke-package$/)
+  assert.match(packageJson.scripts['desktop:smoke-package'], /smoke-test-desktop-package\.mjs/)
   assert.match(packageJson.scripts['desktop:publish'], /npm run desktop:media-sidecars && electron-builder/)
+  assert.equal(packageJson.devDependencies['@electron/asar'], '3.4.1')
   assert.equal(packageJson.devDependencies['@ffmpeg-installer/ffmpeg'], '1.1.0')
   assert.equal(packageJson.devDependencies['@ffprobe-installer/ffprobe'], '2.1.2')
   assert.match(main, /GUGO_FFMPEG_PATH\s*\|\|=\s*path\.join\(process\.resourcesPath, 'bin', 'ffmpeg\.exe'\)/)
