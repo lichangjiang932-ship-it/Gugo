@@ -165,8 +165,16 @@ function configuredOutputDirectory(userId) {
   return String(getSettingsRow(userId)?.default_output_directory || '').trim()
 }
 
+function isolatedTestOutputDirectory() {
+  if (!process.env.YMA_TEST_DATA_ROOT) return ''
+  const configured = String(process.env.YMA_TEST_DEFAULT_OUTPUT_DIR || '').trim()
+  return configured && path.isAbsolute(configured) ? path.normalize(configured) : ''
+}
+
 export function getDefaultOutputDirectory({ userId } = {}) {
-  return configuredOutputDirectory(userId) || getProjectDirectory({ userId })
+  return configuredOutputDirectory(userId)
+    || isolatedTestOutputDirectory()
+    || getProjectDirectory({ userId })
 }
 
 export function resolveDirectoryRequestPath({ userId, rawPath = '' } = {}) {
@@ -192,7 +200,7 @@ export function getLocalFileAccessStatus({ userId }) {
     allFilesEnabled: !!settings?.all_files_enabled,
     bypassEnabled,
     projectDirectory: getProjectDirectory({ userId }),
-    defaultOutputDirectory: String(settings?.default_output_directory || '').trim() || getProjectDirectory({ userId }),
+    defaultOutputDirectory: getDefaultOutputDirectory({ userId }),
     grants,
     workspace: {
       enabled: workspaceEnabled,
