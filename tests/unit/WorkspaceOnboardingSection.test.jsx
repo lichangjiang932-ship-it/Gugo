@@ -40,12 +40,29 @@ test('workspace onboarding requires risk confirmation and preserves deployment-l
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
   const submitted = []
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async (url, init = {}) => {
+    assert.equal(url, '/api/local-files/browse-directories')
+    assert.equal(init.method, 'POST')
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        ok: true,
+        directory: {
+          currentPath: 'C:\\Work',
+          parentPath: 'C:\\',
+          projectDirectory: 'C:\\Work',
+          defaultOutputDirectory: 'C:\\Work',
+          entries: [],
+        },
+      }),
+    }
+  }
   const controller = {
     localFiles: { onboarding: onboarding() },
     localFileError: null,
     onboardingBusy: false,
-    pickerBusy: false,
-    chooseOnboardingDirectory: async () => 'C:\\Work',
     configureOnboarding: async (payload) => { submitted.push(payload); return true },
   }
 
@@ -59,7 +76,16 @@ test('workspace onboarding requires risk confirmation and preserves deployment-l
     assert.equal(submit.disabled, true)
 
     const picker = [...form.querySelectorAll('button')].find((button) => button.type === 'button')
-    await act(async () => picker.click())
+    await act(async () => {
+      picker.click()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    const browser = form.querySelector('[data-testid="inline-directory-browser"]')
+    assert.ok(browser)
+    const selectCurrent = [...browser.querySelectorAll('button')]
+      .find((button) => button.textContent.includes('taskSteering.directoryBrowserSelectCurrent'))
+    assert.ok(selectCurrent)
+    await act(async () => selectCurrent.click())
     assert.equal(form.querySelector('#workspace-onboarding-path').value, 'C:\\Work')
 
     const confirmations = form.querySelectorAll('label > input[type="checkbox"]')
@@ -82,6 +108,7 @@ test('workspace onboarding requires risk confirmation and preserves deployment-l
     await act(async () => bypass.click())
     assert.equal(submit.disabled, false)
   } finally {
+    globalThis.fetch = originalFetch
     await act(async () => root.unmount())
     dom.window.close()
   }

@@ -1,7 +1,6 @@
 import { getAuthToken } from './accountClient.js'
 
 const LOCAL_FILE_REQUEST_TIMEOUT_MS = 30_000
-const DIRECTORY_PICKER_TIMEOUT_MS = 125_000
 
 function authHeaders(json = false) {
   const token = getAuthToken?.()
@@ -94,12 +93,20 @@ export async function setWorkspaceTrustApi({ path, trusted }, options = {}) {
   }, options))
 }
 
-export async function pickLocalDirectoryApi(options = {}) {
-  return parse(await fetchWithTimeout('/api/local-files/pick-directory', {
+export async function browseLocalDirectoriesApi(path = '', options = {}) {
+  return parse(await fetchWithTimeout('/api/local-files/browse-directories', {
     method: 'POST',
     headers: authHeaders(true),
-    body: '{}',
-  }, { timeoutMs: DIRECTORY_PICKER_TIMEOUT_MS, ...options }))
+    body: JSON.stringify({ path }),
+  }, options))
+}
+
+export async function setDefaultOutputDirectoryApi(path, options = {}) {
+  return parse(await fetchWithTimeout('/api/local-files/default-output-directory', {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify({ path }),
+  }, options))
 }
 
 export async function configureWorkspaceOnboardingApi({

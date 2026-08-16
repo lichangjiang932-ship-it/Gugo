@@ -242,7 +242,7 @@ test('verified turn receipts stream the real file and remain user-scoped', async
   assert.equal((await crossUserBrowserLink.json()).error.code, 'VERIFIED_FILE_NOT_FOUND')
 })
 
-test('legacy verified tool evidence upgrades to a live current-file link without rewriting history', async () => {
+test('legacy bounded read evidence upgrades to a live current-file link without rewriting history', async () => {
   const alice = issueTestSession({ email: 'local-route-legacy-live@example.com' })
   setApprovalMode({ userId: alice.userId, mode: 'normal' })
   const grantResponse = await fetch(`${origin}/api/local-files/grants`, {
@@ -288,7 +288,7 @@ test('legacy verified tool evidence upgrades to a live current-file link without
         tool_calls: [{
           id: 'legacy-read',
           type: 'function',
-          function: { name: 'read_file', arguments: JSON.stringify({ path: filePath }) },
+          function: { name: 'read_file', arguments: JSON.stringify({ path: filePath, offset: 6, limit: 1 }) },
         }],
       }, {
         role: 'tool',
@@ -298,7 +298,7 @@ test('legacy verified tool evidence upgrades to a live current-file link without
           ok: true,
           path: filePath,
           content: original,
-          offset: 0,
+          offset: 6,
           returnedLines: 1,
           totalLines,
         }),

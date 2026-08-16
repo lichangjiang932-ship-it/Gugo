@@ -46,7 +46,7 @@ function normalizeSourceArguments(args) {
  * Keep the model-authored source beside the generated binary/text artifact,
  * outside chat history and outside the public one-filename download route.
  */
-export function writeArtifactSourceSnapshot({ artifactId, toolName, args } = {}) {
+export function writeArtifactSourceSnapshot({ artifactId, toolName, args, deliveryPath, deliveryRoot } = {}) {
   const id = String(artifactId || '').trim()
   const name = String(toolName || '').trim()
   if (!id || !name) throw sourceError('artifact_source_identity_required', 'artifactId and toolName are required')
@@ -57,12 +57,37 @@ export function writeArtifactSourceSnapshot({ artifactId, toolName, args } = {})
       `Artifact source exceeds the ${MAX_SOURCE_CHARS} character managed-source limit.`,
     )
   }
+  let retainedDeliveryPath = typeof deliveryPath === 'string' && path.isAbsolute(deliveryPath.trim())
+    ? path.normalize(deliveryPath.trim())
+    : ''
+  let retainedDeliveryRoot = typeof deliveryRoot === 'string' && path.isAbsolute(deliveryRoot.trim())
+    ? path.normalize(deliveryRoot.trim())
+    : ''
+  if (!retainedDeliveryPath || !retainedDeliveryRoot) {
+    try {
+      const previous = JSON.parse(fs.readFileSync(sourceSnapshotPath(id), 'utf8'))
+      if (!retainedDeliveryPath
+        && typeof previous?.deliveryPath === 'string'
+        && path.isAbsolute(previous.deliveryPath.trim())) {
+        retainedDeliveryPath = path.normalize(previous.deliveryPath.trim())
+      }
+      if (!retainedDeliveryRoot
+        && typeof previous?.deliveryRoot === 'string'
+        && path.isAbsolute(previous.deliveryRoot.trim())) {
+        retainedDeliveryRoot = path.normalize(previous.deliveryRoot.trim())
+      }
+    } catch {
+      // A first-generation artifact has no previous delivery metadata.
+    }
+  }
   const snapshot = JSON.stringify({
     version: SOURCE_SNAPSHOT_VERSION,
     artifactId: id,
     toolName: name,
     sourceFormat: 'artifact_tool_arguments_json',
     source,
+    ...(retainedDeliveryPath ? { deliveryPath: retainedDeliveryPath } : {}),
+    ...(retainedDeliveryRoot ? { deliveryRoot: retainedDeliveryRoot } : {}),
     updatedAt: Date.now(),
   })
   const target = sourceSnapshotPath(id)
@@ -110,6 +135,12 @@ export function readArtifactSourceSnapshot(artifactId) {
     toolName: String(parsed.toolName || ''),
     sourceFormat: String(parsed.sourceFormat || 'artifact_tool_arguments_json'),
     source: parsed.source,
+    deliveryPath: typeof parsed.deliveryPath === 'string' && path.isAbsolute(parsed.deliveryPath)
+      ? path.normalize(parsed.deliveryPath)
+      : null,
+    deliveryRoot: typeof parsed.deliveryRoot === 'string' && path.isAbsolute(parsed.deliveryRoot)
+      ? path.normalize(parsed.deliveryRoot)
+      : null,
     updatedAt: Number(parsed.updatedAt) || null,
   }
 }

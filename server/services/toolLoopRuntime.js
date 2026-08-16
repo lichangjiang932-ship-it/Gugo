@@ -38,6 +38,7 @@ import { hasMutationExecutionIntent, isTextDeliverableRequest, shouldRequireExec
 import { observeToolCalls, recordToolProgress, restoreToolProgress, serializeToolProgress, toolProgressPayload } from '../utils/toolProgress.js'
 import { listTurnArtifacts } from './turnArtifactStore.js'
 import { createModelPhaseHeartbeat, DEFAULT_MODEL_PHASE_HEARTBEAT_MS } from './modelPhaseHeartbeat.js'
+import { getDefaultOutputDirectory, getProjectDirectory } from './localFileAccessService.js'
 
 import { withLogContext } from '../utils/logger.js'
 import { createRepeatCallGuard } from '../utils/repeatCallGuard.js'
@@ -678,6 +679,15 @@ export async function runToolsLoop({
   // merely to prepare their next request. Explicit compaction can still request
   // a semantic summary; automatic recovery uses the deterministic archive.
   const semanticSummary = false
+  let outputDirectoryContext = {}
+  try {
+    outputDirectoryContext = {
+      defaultOutputDirectory: getDefaultOutputDirectory({ userId: job?.userId || null }),
+      projectDirectory: getProjectDirectory({ userId: job?.userId || null }),
+    }
+  } catch {
+    // Prompt context is best-effort and must never block a turn.
+  }
   let convo = ensureSafetySystemMessages(
     Array.isArray(restoredState?.messages)
       ? stripEphemeralToolMediaMessages(restoredState.messages)
@@ -686,6 +696,7 @@ export async function runToolsLoop({
   convo = replaceRuntimeCapabilityBlock(convo, {
     toolSpecs: activeToolSpecs,
     approvalMode,
+    ...outputDirectoryContext,
   })
   const hasRuntimeMarker = (marker) => convo.some((message) => (
     message?.role === 'system' && String(message?.content || '').includes(marker)
@@ -1818,7 +1829,7 @@ export async function runToolsLoop({
             role: 'system',
             content: [
               DIRECTORY_RESUME_GUARD_MARKER,
-              'The requested directory grant is already verified in this checkpoint; there is no pending directory picker or authorization action.',
+              'The requested directory grant is already verified in this checkpoint; there is no pending directory selection or authorization action.',
               'Do not ask the user to authorize, choose, or confirm that directory again.',
               'Continue the original task now with the available execution tools and obtain concrete execution and verification results before answering.',
             ].join(' '),
@@ -2633,6 +2644,7 @@ export async function runToolsLoop({
           convo = replaceRuntimeCapabilityBlock(convo, {
             toolSpecs: activeToolSpecs,
             approvalMode,
+            ...outputDirectoryContext,
           })
           availableVerificationToolNames = activeToolSpecs
             .map(toolNameFromSpec)

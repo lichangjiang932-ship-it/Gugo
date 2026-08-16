@@ -1,4 +1,4 @@
-import { grantLocalPathApi, pickLocalDirectoryApi } from './localFileAccessClient.js'
+import { grantLocalPathApi } from './localFileAccessClient.js'
 
 const VALID_ACCESS_MODES = new Set(['read_only', 'read_write'])
 
@@ -9,9 +9,7 @@ export async function authorizeChatDirectoryRequest({
   path = '',
   accessMode = 'read_only',
   purpose = '',
-  usePicker = false,
 } = {}, {
-  pickDirectory = pickLocalDirectoryApi,
   grantPath = grantLocalPathApi,
 } = {}) {
   if (!sessionId) throw new Error('sessionId is required')
@@ -21,12 +19,7 @@ export async function authorizeChatDirectoryRequest({
   }
   if (!VALID_ACCESS_MODES.has(accessMode)) throw new Error('invalid directory access mode')
 
-  let selectedPath = String(path || '').trim()
-  if (usePicker) {
-    const picked = await pickDirectory()
-    selectedPath = String(picked?.path || '').trim()
-    if (!selectedPath) return { cancelled: true }
-  }
+  const selectedPath = String(path || '').trim()
   if (!selectedPath) throw new Error('directory path is required')
 
   const grantResult = await grantPath({ path: selectedPath, accessMode })

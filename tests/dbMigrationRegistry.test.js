@@ -12,6 +12,7 @@ import {
 import { migrateToV49 } from '../server/migrations/v49HookArgumentMatcher.js'
 import { migrateToV50 } from '../server/migrations/v50DefaultExecutionPermissions.js'
 import { migrateToV51 } from '../server/migrations/v51TurnCheckpoints.js'
+import { migrateToV52 } from '../server/migrations/v52DefaultOutputDirectory.js'
 
 test('schema migration registry is contiguous and owns the latest version', () => {
   const legacy = Array.from({ length: 29 }, (_, index) => ({
@@ -20,10 +21,37 @@ test('schema migration registry is contiguous and owns the latest version', () =
   }))
   const plan = createSchemaMigrationPlan(legacy)
 
-  assert.deepEqual(plan.map(({ version }) => version), Array.from({ length: 50 }, (_, index) => index + 2))
-  assert.equal(LATEST_SCHEMA_VERSION, 51)
+  assert.deepEqual(plan.map(({ version }) => version), Array.from({ length: 51 }, (_, index) => index + 2))
+  assert.equal(LATEST_SCHEMA_VERSION, 52)
   assert.equal(DB_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
   assert.equal(schemaMigrations.at(-1).version, LATEST_SCHEMA_VERSION)
+})
+
+test('v52 persists a user default output directory without changing all-files access', () => {
+  const db = new Database(':memory:')
+  try {
+    db.exec(`
+      CREATE TABLE users (id TEXT PRIMARY KEY);
+      CREATE TABLE local_file_access_settings (
+        user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        all_files_enabled INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO users VALUES ('user-1');
+      INSERT INTO local_file_access_settings VALUES ('user-1', 1, 1);
+    `)
+    migrateToV52(db)
+    migrateToV52(db)
+
+    const columns = db.prepare('PRAGMA table_info(local_file_access_settings)').all().map((row) => row.name)
+    assert.deepEqual(columns, ['user_id', 'all_files_enabled', 'updated_at', 'default_output_directory'])
+    assert.deepEqual(
+      db.prepare('SELECT all_files_enabled, default_output_directory FROM local_file_access_settings WHERE user_id = ?').get('user-1'),
+      { all_files_enabled: 1, default_output_directory: null },
+    )
+  } finally {
+    db.close()
+  }
 })
 
 test('v51 adds one mutable checkpoint row per turn', () => {

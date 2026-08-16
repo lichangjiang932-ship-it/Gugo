@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { grantLocalPathApi, pickLocalDirectoryApi, setWorkspaceTrustApi } from '../../lib/localFileAccessClient.js'
+import { grantLocalPathApi, setWorkspaceTrustApi } from '../../lib/localFileAccessClient.js'
 import { createLocalPathAccessEnsurer, createLocalPathAccessProbe } from '../../lib/localPathAccessFlow.js'
 
 export default function useDirectoryApproval({ lang, t, toast }) {
@@ -35,7 +35,7 @@ export default function useDirectoryApproval({ lang, t, toast }) {
     settleDirectoryApprovalRequest(directoryApprovalRequestRef.current, decision)
   }, [settleDirectoryApprovalRequest])
 
-  const authorizeDirectory = useCallback(async ({ path, accessMode, usePicker, trustWorkspaceConfig = false }) => {
+  const authorizeDirectory = useCallback(async ({ path, accessMode, trustWorkspaceConfig = false }) => {
     const requestRecord = directoryApprovalRequestRef.current
     if (!requestRecord || requestRecord.settled) return
 
@@ -51,22 +51,11 @@ export default function useDirectoryApproval({ lang, t, toast }) {
     )
     setDirectoryApproval((current) => (
       current.requestId === requestRecord.id
-        ? { ...current, busy: usePicker ? 'picker' : 'grant', error: '' }
+        ? { ...current, busy: 'grant', error: '' }
         : current
     ))
     try {
-      let selectedPath = String(path || '').trim()
-      if (usePicker) {
-        const picked = await pickLocalDirectoryApi({ signal: controller.signal })
-        if (!isCurrentRequest()) return
-        selectedPath = String(picked?.path || '').trim()
-        if (!selectedPath) {
-          setDirectoryApproval((current) => (
-            current.requestId === requestRecord.id ? { ...current, busy: false } : current
-          ))
-          return
-        }
-      }
+      const selectedPath = String(path || '').trim()
       if (!selectedPath) {
         setDirectoryApproval((current) => (
           current.requestId === requestRecord.id ? { ...current, busy: false } : current

@@ -581,11 +581,9 @@ test('a paused assistant message renders a camelCase directory request inline', 
     assert.deepEqual({
       path: authorizations[0].path,
       accessMode: authorizations[0].accessMode,
-      usePicker: authorizations[0].usePicker,
     }, {
       path: 'D:\\destok',
       accessMode: 'read_write',
-      usePicker: false,
     })
   } finally {
     await act(async () => root.unmount())

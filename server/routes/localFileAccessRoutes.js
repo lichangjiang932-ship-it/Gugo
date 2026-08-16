@@ -1,12 +1,13 @@
 import fs from 'node:fs'
 import { authenticateRequest } from '../middleware.js'
 import {
+  browseLocalDirectories,
   getLocalFileAccessStatus,
   grantLocalPath,
-  pickLocalDirectory,
   resolveAuthorizedLocalPath,
   revokeLocalPath,
   setAllFilesAccess,
+  setDefaultOutputDirectory,
 } from '../services/localFileAccessService.js'
 import { setWorkspaceTrust } from '../services/workspaceTrustService.js'
 import {
@@ -231,12 +232,19 @@ export async function handleLocalFileAccessRequest(req, res) {
       })
     }
 
-    if (req.method === 'POST' && url.pathname === '/api/local-files/pick-directory') {
+    if (req.method === 'POST' && url.pathname === '/api/local-files/browse-directories') {
       if (!isLoopbackRequest(req)) {
-        return sendJson(res, 403, { ok: false, error: { code: 'LOCAL_ONLY', message: '文件夹选择器只能从运行服务的本机打开' } })
+        return sendJson(res, 403, { ok: false, error: { code: 'LOCAL_ONLY', message: '目录浏览只能从运行服务的本机使用' } })
       }
-      const selectedPath = await pickLocalDirectory()
-      return sendJson(res, 200, { ok: true, path: selectedPath })
+      const body = await readJson(req)
+      const directory = browseLocalDirectories({ userId, rawPath: body.path })
+      return sendJson(res, 200, { ok: true, directory })
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/local-files/default-output-directory') {
+      const body = await readJson(req)
+      const status = setDefaultOutputDirectory({ userId, rootPath: body.path })
+      return sendJson(res, 200, { ok: true, ...status })
     }
 
     return sendJson(res, 405, { ok: false, error: { code: 'METHOD_NOT_ALLOWED', message: '不支持的请求' } })

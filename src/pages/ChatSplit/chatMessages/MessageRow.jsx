@@ -479,7 +479,7 @@ function InlineDirectoryRequestCard({ msg, onAuthorize, t }) {
 
   const authorize = async (decision) => {
     if (pending || busy || typeof onAuthorize !== 'function') return
-    setBusy(decision.usePicker ? 'picker' : 'grant')
+    setBusy('grant')
     setError('')
     try {
       await onAuthorize({ message: msg, ...decision })

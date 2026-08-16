@@ -1,12 +1,14 @@
 import { useState } from 'react'
 import { FolderOpen, LoaderCircle } from 'lucide-react'
+import InlineDirectoryBrowser from '../../components/InlineDirectoryBrowser.jsx'
 
-export default function DirectoryRequestCard({ request, busy, error = '', onAuthorize, t }) {
+export default function DirectoryRequestCard({ request, busy, error = '', onAuthorize, t, browseDirectories }) {
   const [path, setPath] = useState(request.suggested_path || request.suggestedPath || '')
+  const [browserOpen, setBrowserOpen] = useState(false)
   const requestedMode = request.access_mode || request.accessMode
   const [accessMode, setAccessMode] = useState(requestedMode === 'read_write' ? 'read_write' : 'read_only')
 
-  const authorize = (usePicker) => onAuthorize({ path, accessMode, usePicker })
+  const authorize = () => onAuthorize({ path, accessMode })
 
   return (
     <div className="mt-3 rounded-md border border-dashed border-sky-500/50 bg-sky-500/5 p-3" data-testid="directory-request-card">
@@ -22,7 +24,7 @@ export default function DirectoryRequestCard({ request, busy, error = '', onAuth
           value={path}
           onChange={(event) => setPath(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === 'Enter' && path.trim() && !busy) authorize(false)
+            if (event.key === 'Enter' && path.trim() && !busy) authorize()
           }}
           placeholder={t('taskSteering.directoryPathPlaceholder')}
           className="h-9 min-w-0 flex-1 rounded-md border border-sky-500/30 bg-paper px-3 font-mono text-xs text-ink outline-none focus:border-sky-600"
@@ -39,7 +41,7 @@ export default function DirectoryRequestCard({ request, busy, error = '', onAuth
         </select>
         <button
           type="button"
-          onClick={() => authorize(false)}
+          onClick={authorize}
           disabled={!!busy || !path.trim()}
           className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-sky-600/50 px-3 text-xs text-sky-800 disabled:opacity-40"
         >
@@ -48,16 +50,26 @@ export default function DirectoryRequestCard({ request, busy, error = '', onAuth
         </button>
         <button
           type="button"
-          onClick={() => authorize(true)}
+          onClick={() => setBrowserOpen((open) => !open)}
           disabled={!!busy}
           className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md bg-sky-700 px-3 text-xs text-white disabled:opacity-40"
         >
-          {busy === 'picker'
-            ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
-            : <FolderOpen className="h-3.5 w-3.5" />}
+          <FolderOpen className="h-3.5 w-3.5" />
           {t('taskSteering.chooseDirectory')}
         </button>
       </div>
+      {browserOpen && (
+        <InlineDirectoryBrowser
+          initialPath={path}
+          onSelect={(selectedPath) => {
+            setPath(selectedPath)
+            setBrowserOpen(false)
+          }}
+          onCancel={() => setBrowserOpen(false)}
+          t={t}
+          browseDirectories={browseDirectories}
+        />
+      )}
       {error && <p className="mt-2 text-[11px] text-red-600" role="alert">{error}</p>}
       <p className="mt-2 text-[11px] text-ink-fade">{t('taskSteering.directorySecurityHint')}</p>
     </div>

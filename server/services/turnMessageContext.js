@@ -146,19 +146,12 @@ function completeReadEvidence(call, result) {
   const retainedMetadata = retainedToolResultMetadata(result)
   const evidence = retainedMetadata || result
   if (retainedMetadata) {
-    if (retainedMetadata.contentPresent !== true || retainedMetadata.sourceTruncated === true) return null
+    if (retainedMetadata.contentPresent !== true) return null
   } else if (typeof result.content !== 'string' || result.truncated === true) {
     return null
   }
   const offset = Number(evidence.offset ?? call.args?.offset ?? 0)
-  if (!Number.isFinite(offset) || offset !== 0) return null
-  const totalLines = Number(evidence.totalLines)
-  const returnedLines = Number(evidence.returnedLines)
-  if (Number.isFinite(totalLines) && Number.isFinite(returnedLines)) {
-    return returnedLines >= totalLines ? evidence : null
-  }
-  const limit = Number(call.args?.limit ?? 0)
-  return !Number.isFinite(limit) || limit <= 0 ? evidence : null
+  return Number.isFinite(offset) && offset >= 0 ? evidence : null
 }
 
 function legacyReadEvidence(call, result) {
@@ -256,9 +249,11 @@ function extractVerifiedLocalFilesWithReadEvidence(messages, {
 }
 
 /**
- * Build lightweight receipts only when a successful mutation is followed by
- * a successful, complete read_file of the same authorized file. Tool bodies
- * stay out of the receipt so large-file links survive bounded history.
+ * Build lightweight link receipts only when a successful mutation is followed
+ * by a successful read_file of the same authorized file. A bounded read is
+ * enough to prove the tool reached the mutated path; opening the link still
+ * re-authorizes and stats the current file. This avoids forcing an entire
+ * large file into model context merely to make the result clickable.
  */
 export function extractVerifiedLocalFiles(messages, options = {}) {
   return extractVerifiedLocalFilesWithReadEvidence(messages, options, completeReadEvidence)

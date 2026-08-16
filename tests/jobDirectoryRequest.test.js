@@ -30,15 +30,13 @@ test('目录授权提交成功后才恢复原 Job', async () => {
   assert.equal(result.job.status, 'queued')
 })
 
-test('系统选择器取消时不授权也不恢复 Job', async () => {
+test('目录路径为空时不授权也不恢复 Job', async () => {
   let grants = 0
   let resumes = 0
-  const result = await authorizeRequestedDirectory({ jobId: 'job-1', usePicker: true }, {
-    pickDirectory: async () => ({ ok: true, path: null }),
+  await assert.rejects(() => authorizeRequestedDirectory({ jobId: 'job-1' }, {
     grantPath: async () => { grants += 1 },
     resume: async () => { resumes += 1 },
-  })
-  assert.equal(result.cancelled, true)
+  }), /directory path is required/)
   assert.equal(grants, 0)
   assert.equal(resumes, 0)
 })

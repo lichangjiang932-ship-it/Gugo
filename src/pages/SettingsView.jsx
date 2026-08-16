@@ -11,6 +11,7 @@ import {
   SettingsPetPanel,
 } from '../components/settings/SettingsSecondaryPanels.jsx'
 import SettingsToolsPanel from '../components/settings/SettingsToolsPanel.jsx'
+import SettingsFileOutputPanel from '../components/settings/SettingsFileOutputPanel.jsx'
 import SettingsWebSearchPanel from '../components/settings/SettingsWebSearchPanel.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { useLocation, useNavigate } from '../lib/router.jsx'
@@ -26,7 +27,7 @@ import { estimatePersistedSnapshotBytes } from '../store/indexedDbPersistence.js
 const SETTINGS_NAV_GROUPS = [
   { label: null, items: ['功能入口'] },
   { label: 'groupModelSearch', items: [SETTINGS_TAB_MODELS, SETTINGS_TAB_WEB_SEARCH] },
-  { label: 'groupPermissionsTools', items: ['权限中心', '工具'] },
+  { label: 'groupPermissionsTools', items: ['权限中心', '文件与目录', '工具'] },
   { label: null, items: ['集成', '外观', '宠物', '系统诊断', '数据 & 导出'] },
 ]
 
@@ -136,6 +137,7 @@ export default function SettingsView() {
       case SETTINGS_TAB_MODELS: return t('modelProviders.navTitle')
       case SETTINGS_TAB_WEB_SEARCH: return t('webSearch.title')
       case '权限中心': return t('nav.permissions')
+      case '文件与目录': return t('fileOutput.navTitle')
       case '工具': return t('settings.tools')
       case '集成': return t('settings.integrations')
       case '外观': return t('settings.appearance')
@@ -162,6 +164,8 @@ export default function SettingsView() {
         return <SettingsDiagnosticsPanel authMode={state.authMode} diagnostics={diagnostics} message={diagnosticsMessage} loading={diagnosticsLoading} onConfigureModels={() => setActiveNav(SETTINGS_TAB_MODELS)} onRefresh={refreshDiagnostics} onTest={testModel} t={t} />
       case '权限中心':
         return <SettingsPermissionsPanel navigate={navigate} t={t} state={state} enabledPermCount={enabledPermCount} />
+      case '文件与目录':
+        return <SettingsFileOutputPanel t={t} />
       case '工具':
         return <SettingsToolsPanel state={state} dispatch={dispatch} t={t} />
       case '集成':

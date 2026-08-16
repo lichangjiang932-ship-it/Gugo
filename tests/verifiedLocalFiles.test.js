@@ -95,7 +95,7 @@ function mutationAndReadMessages({
   ]
 }
 
-test('legacy receipt recovery accepts an offset-zero sample without weakening new strict receipts', () => {
+test('a bounded read after mutation creates a lightweight clickable-file receipt', () => {
   const relativePath = 'pages/legacy-sampled.html'
   const fullPath = path.join(workspace, relativePath)
   const content = '<!doctype html>\n<title>Legacy sampled file</title>\n<h1>Current</h1>'
@@ -115,10 +115,13 @@ test('legacy receipt recovery accepts an offset-zero sample without weakening ne
     }),
   ]
 
-  assert.deepEqual(extractVerifiedLocalFiles(messages, {
+  const [currentReceipt] = extractVerifiedLocalFiles(messages, {
     userId: integrationUserId,
     verifiedAt: 111,
-  }), [])
+  })
+  assert.equal(currentReceipt.path, fs.realpathSync(fullPath))
+  assert.equal(currentReceipt.filename, 'legacy-sampled.html')
+  assert.equal(currentReceipt.verifiedAt, 111)
   const [receipt] = recoverLegacyVerifiedLocalFiles(messages, {
     userId: integrationUserId,
     verifiedAt: 111,
@@ -131,21 +134,12 @@ test('legacy receipt recovery accepts an offset-zero sample without weakening ne
   }), [])
 })
 
-test('new turn context persists an authoritative empty receipt list', () => {
+test('new turn context persists an authoritative empty receipt list without readback', () => {
   const relativePath = 'pages/partial-new-turn.html'
   const content = '<!doctype html>\n<title>Partial</title>\n<h1>Not fully read</h1>'
   const messages = [
     assistantCall('partial-new-write', 'write_file', { path: relativePath, content }),
     toolResult('partial-new-write', 'write_file', { ok: true, path: relativePath }),
-    assistantCall('partial-new-read', 'read_file', { path: relativePath, offset: 0, limit: 1 }),
-    toolResult('partial-new-read', 'read_file', {
-      ok: true,
-      path: relativePath,
-      offset: 0,
-      returnedLines: 1,
-      totalLines: 3,
-      content: '<!doctype html>',
-    }),
   ]
 
   const context = buildAssistantModelContext({
@@ -156,6 +150,45 @@ test('new turn context persists an authoritative empty receipt list', () => {
   })
 
   assert.deepEqual(context.verifiedLocalFiles, [])
+})
+
+test('a nonzero partial read after edit produces a link without embedding the whole file', () => {
+  const relativePath = 'pages/partial-edit.html'
+  const fullPath = path.join(workspace, relativePath)
+  const content = Array.from({ length: 120 }, (_, index) => `line ${index + 1}`).join('\n')
+  fs.mkdirSync(path.dirname(fullPath), { recursive: true })
+  fs.writeFileSync(fullPath, content, 'utf8')
+  const messages = [
+    assistantCall('partial-edit', 'edit_file', {
+      path: relativePath,
+      old_string: 'line 80',
+      new_string: 'line eighty',
+    }),
+    toolResult('partial-edit', 'edit_file', {
+      ok: true,
+      path: relativePath,
+      replacedCount: 1,
+      changes: [{ path: relativePath, additions: 1, deletions: 1 }],
+    }),
+    assistantCall('partial-edit-read', 'read_file', { path: relativePath, offset: 76, limit: 10 }),
+    toolResult('partial-edit-read', 'read_file', {
+      ok: true,
+      path: relativePath,
+      offset: 76,
+      returnedLines: 10,
+      totalLines: 120,
+      content: 'line 77\nline 78\nline 79\nline eighty\nline 81',
+    }),
+  ]
+
+  const [receipt] = extractVerifiedLocalFiles(messages, {
+    userId: integrationUserId,
+    verifiedAt: 222,
+  })
+  assert.equal(receipt.path, fs.realpathSync(fullPath))
+  assert.equal(receipt.filename, 'partial-edit.html')
+  assert.equal(receipt.size, Buffer.byteLength(content))
+  assert.equal('content' in receipt, false)
 })
 
 test('large read_file bodies are bounded while verified receipts survive persisted model context', () => {

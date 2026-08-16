@@ -1,6 +1,7 @@
 import { FolderOpen, Loader2, ShieldCheck, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useT } from '../i18n/I18nProvider.jsx'
+import InlineDirectoryBrowser from './InlineDirectoryBrowser.jsx'
 
 function initialPath(request) {
   return String(request?.suggestGrantPath || request?.suggestedPath || request?.path || '').trim()
@@ -17,6 +18,7 @@ export default function DirectoryApprovalModal({ open, request, busy, error, onA
   const [path, setPath] = useState(() => initialPath(request))
   const [accessMode, setAccessMode] = useState(() => initialAccessMode(request))
   const [trustWorkspaceConfig, setTrustWorkspaceConfig] = useState(false)
+  const [browserOpen, setBrowserOpen] = useState(false)
   const requiresWrite = initialAccessMode(request) === 'read_write'
 
   useEffect(() => {
@@ -28,28 +30,17 @@ export default function DirectoryApprovalModal({ open, request, busy, error, onA
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [onReject, open])
 
-  useEffect(() => {
-    if (!open || typeof document === 'undefined') return undefined
-    const previousOverflow = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => { document.body.style.overflow = previousOverflow }
-  }, [open])
-
   if (!open || !request) return null
 
   return (
     <div
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/30 p-4 backdrop-blur-[1px]"
+      className="mx-auto w-full max-w-[872px] px-4 pb-2"
       data-testid="directory-approval-modal"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onReject?.()
-      }}
     >
       <section
-        className="max-h-[min(720px,calc(100vh-2rem))] w-full max-w-3xl overflow-y-auto rounded-2xl border border-sky-600/25 bg-paper shadow-[0_24px_80px_rgb(0_0_0/0.24)]"
+        className="w-full overflow-hidden rounded-md border border-sky-600/25 bg-paper"
         data-testid="directory-approval-card"
-        role="dialog"
-        aria-modal="true"
+        role="region"
         aria-busy={!!busy}
         aria-labelledby="directory-approval-title"
       >
@@ -84,7 +75,7 @@ export default function DirectoryApprovalModal({ open, request, busy, error, onA
               onChange={(event) => setPath(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && path.trim() && !busy) {
-                  onAuthorize?.({ path: path.trim(), accessMode, usePicker: false, trustWorkspaceConfig })
+                  onAuthorize?.({ path: path.trim(), accessMode, trustWorkspaceConfig })
                 }
               }}
               disabled={!!busy}
@@ -115,6 +106,19 @@ export default function DirectoryApprovalModal({ open, request, busy, error, onA
               {error}
             </p>
           )}
+          {browserOpen && (
+            <div className="sm:col-span-2">
+              <InlineDirectoryBrowser
+                initialPath={path}
+                onSelect={(selectedPath) => {
+                  setPath(selectedPath)
+                  setBrowserOpen(false)
+                }}
+                onCancel={() => setBrowserOpen(false)}
+                t={t}
+              />
+            </div>
+          )}
           <label className="flex items-start gap-2 rounded-md border border-ink/10 bg-paper-2/60 px-3 py-2.5 text-xs leading-relaxed text-ink-soft sm:col-span-2">
             <input
               type="checkbox"
@@ -143,17 +147,17 @@ export default function DirectoryApprovalModal({ open, request, busy, error, onA
           </button>
           <button
             type="button"
-            onClick={() => onAuthorize?.({ path: path.trim(), accessMode, usePicker: true, trustWorkspaceConfig })}
+            onClick={() => setBrowserOpen((current) => !current)}
             disabled={!!busy}
             data-testid="directory-approval-picker"
             className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-sky-600/40 px-4 text-sm text-sky-800 transition-colors hover:bg-sky-500/5 disabled:opacity-50"
           >
-            {busy === 'picker' ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderOpen className="h-4 w-4" />}
+            <FolderOpen className="h-4 w-4" />
             {t('taskSteering.chooseDirectory')}
           </button>
           <button
             type="button"
-            onClick={() => onAuthorize?.({ path: path.trim(), accessMode, usePicker: false, trustWorkspaceConfig })}
+            onClick={() => onAuthorize?.({ path: path.trim(), accessMode, trustWorkspaceConfig })}
             disabled={!!busy || !path.trim()}
             data-testid="directory-approval-authorize"
             className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-ink px-4 text-sm text-paper transition-colors hover:bg-ink-soft disabled:opacity-60"

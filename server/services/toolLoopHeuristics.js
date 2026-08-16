@@ -50,6 +50,7 @@ import { executeBrowserTool } from './browserToolExecutor.js'
 import { fetchAndExtract } from '../adapters/toolProxy.js'
 import { searchWeb } from './webSearchService.js'
 import { generateImage } from './mediaModelService.js'
+import { syncGeneratedArtifactToOutputDirectory } from './generatedArtifactDelivery.js'
 
 
 const FS_SHELL_TOOL_NAMES = new Set(
@@ -1395,6 +1396,42 @@ function pdfBlocksFromArtifactArgs(args = {}) {
   return parseMarkdownDocument(String(args.markdown || '')).blocks
 }
 
+function publishedArtifactResult({ name, artifact, args, job, extra = {} }) {
+  const result = {
+    ok: true,
+    artifactId: artifact.id,
+    filename: artifact.filename,
+    url: artifact.url,
+    replaced: artifact.replaced === true,
+    ...extra,
+  }
+  try {
+    return {
+      ...result,
+      ...syncGeneratedArtifactToOutputDirectory({
+        artifact,
+        args,
+        toolName: name,
+        userId: job?.userId,
+      }),
+      deliveryStatus: 'delivered',
+    }
+  } catch (error) {
+    // The managed artifact has already been persisted and remains a valid
+    // preview/download. Report the local-copy failure without returning a
+    // failed tool result that would invite the model to generate duplicates.
+    return {
+      ...result,
+      deliveryStatus: 'managed_only',
+      deliveryError: {
+        code: error?.code || 'ARTIFACT_DEFAULT_DELIVERY_FAILED',
+        message: error?.message || String(error),
+      },
+      warning: 'The managed artifact was created, but its default-directory copy could not be written.',
+    }
+  }
+}
+
 /**
  * TurnEngine consumes the exact same static schemas exposed by toolRegistry.
  * Connector schemas stay separate because availability is filtered per user
@@ -1920,15 +1957,16 @@ async function executeServerTool({
     return await attachVisionFeedback({
       name,
       buffer: generated.buffer,
-      result: {
-        ok: true,
-        artifactId: artifact.id,
-        filename: artifact.filename,
-        url: artifact.url,
-        replaced: artifact.replaced === true,
-        revisedPrompt: generated.revisedPrompt,
-        imageMime: generated.mimeType,
-      },
+      result: publishedArtifactResult({
+        name,
+        artifact,
+        args,
+        job,
+        extra: {
+          revisedPrompt: generated.revisedPrompt,
+          imageMime: generated.mimeType,
+        },
+      }),
     })
   }
   if (name === 'fetch_url') {
@@ -1947,7 +1985,7 @@ async function executeServerTool({
       slides: pptxSlidesFromArtifactArgs(args),
     })
     const artifact = publishGeneratedArtifact({ name, artifact: generatedArtifact, args, job, step })
-    return { ok: true, artifactId: artifact.id, filename: artifact.filename, url: artifact.url, replaced: artifact.replaced === true }
+    return publishedArtifactResult({ name, artifact, args, job })
   }
   if (name === 'create_docx') {
     const generatedArtifact = await createDocx({
@@ -1955,7 +1993,7 @@ async function executeServerTool({
       paragraphs: docxParagraphsFromArtifactArgs(args),
     })
     const artifact = publishGeneratedArtifact({ name, artifact: generatedArtifact, args, job, step })
-    return { ok: true, artifactId: artifact.id, filename: artifact.filename, url: artifact.url, replaced: artifact.replaced === true }
+    return publishedArtifactResult({ name, artifact, args, job })
   }
   if (name === 'create_xlsx') {
     const generatedArtifact = await createXlsx({
@@ -1963,7 +2001,7 @@ async function executeServerTool({
       sheets: xlsxSheetsFromArtifactArgs(args),
     })
     const artifact = publishGeneratedArtifact({ name, artifact: generatedArtifact, args, job, step })
-    return { ok: true, artifactId: artifact.id, filename: artifact.filename, url: artifact.url, replaced: artifact.replaced === true }
+    return publishedArtifactResult({ name, artifact, args, job })
   }
   if (name === 'create_pdf') {
     const generatedArtifact = await createPdf({
@@ -1971,12 +2009,12 @@ async function executeServerTool({
       blocks: pdfBlocksFromArtifactArgs(args),
     })
     const artifact = publishGeneratedArtifact({ name, artifact: generatedArtifact, args, job, step })
-    return { ok: true, artifactId: artifact.id, filename: artifact.filename, url: artifact.url, replaced: artifact.replaced === true }
+    return publishedArtifactResult({ name, artifact, args, job })
   }
   if (name === 'create_html_app') {
     const generatedArtifact = createHtmlArtifact({ title: args.title, html: args.html, files: args.files })
     const artifact = publishGeneratedArtifact({ name, artifact: generatedArtifact, args, job, step })
-    return { ok: true, artifactId: artifact.id, filename: artifact.filename, url: artifact.url, replaced: artifact.replaced === true }
+    return publishedArtifactResult({ name, artifact, args, job })
   }
   // fs/shell 工具不落 artifact,执行结果直接回给模型.
   // 任意 fsShellTools 抛错(包括 env 未启用 / 路径越界)都返回 {ok:false,error}.

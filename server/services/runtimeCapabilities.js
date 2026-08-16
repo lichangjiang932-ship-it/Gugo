@@ -18,7 +18,12 @@ function add(lines, condition, text) {
  * Build a short, truthful capability guide from the exact tool set exposed to
  * this model turn. This intentionally does not maintain another tool catalog.
  */
-export function buildRuntimeCapabilityBlock({ toolSpecs = [], approvalMode = null } = {}) {
+export function buildRuntimeCapabilityBlock({
+  toolSpecs = [],
+  approvalMode = null,
+  defaultOutputDirectory = '',
+  projectDirectory = '',
+} = {}) {
   const names = toolNames(toolSpecs)
   const lines = [
     RUNTIME_CAPABILITIES_MARKER,
@@ -60,10 +65,22 @@ export function buildRuntimeCapabilityBlock({ toolSpecs = [], approvalMode = nul
     '- Delegation: use Agent for independent, bounded subtasks that benefit from parallel work.')
   add(lines, names.has('manage_todos'),
     '- Planning: keep multi-step execution visible with manage_todos and update statuses as work progresses.')
-  add(lines, names.has('request_directory'),
+  add(lines, names.has('request_directory') && approvalMode !== 'bypass',
     '- Authorization: if a required local path is not authorized, call request_directory with the needed read or read/write access instead of asking the user to edit environment files.')
 
-  if (approvalMode) lines.push(`- Approval mode: ${String(approvalMode)}. Approval requirements still apply to risky actions.`)
+  if (defaultOutputDirectory) {
+    lines.push(
+      `- Default generated-file directory: ${String(defaultOutputDirectory)}. When the user does not specify a destination, create the new file there. An explicit user path always wins, and revisions must modify the original file in place.`,
+    )
+  }
+  if (projectDirectory) {
+    lines.push(`- Current project directory: ${String(projectDirectory)}. Resolve explicit relative project paths against this directory.`)
+  }
+  if (approvalMode === 'bypass') {
+    lines.push('- Approval mode: bypass (allow all). Local file, directory, shell, and Git operations do not require an authorization prompt; continue with the tools directly.')
+  } else if (approvalMode) {
+    lines.push(`- Approval mode: ${String(approvalMode)}. Request authorization only when the runtime reports a real permission blocker.`)
+  }
   return lines.join('\n').slice(0, 6_000)
 }
 

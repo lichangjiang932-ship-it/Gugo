@@ -58,7 +58,7 @@ function renderDirectoryApprovalHook(root) {
   return () => latest
 }
 
-test('cancelling a busy directory picker aborts its request and rejects the approval', async () => {
+test('cancelling a busy directory grant aborts its request and rejects the approval', async () => {
   const dom = setupDom()
   const root = createRoot(dom.window.document.getElementById('root'))
   const originalFetch = globalThis.fetch
@@ -78,16 +78,15 @@ test('cancelling a busy directory picker aborts its request and rejects the appr
     })
     await act(async () => {
       authorizationPromise = getLatest().authorizeDirectory({
-        path: '',
+        path: 'D:\\first',
         accessMode: 'read_only',
-        usePicker: true,
       })
     })
 
     assert.equal(deferred.requests.length, 1)
-    assert.equal(deferred.requests[0].url, '/api/local-files/pick-directory')
+    assert.equal(deferred.requests[0].url, '/api/local-files/grants')
     assert.equal(deferred.requests[0].signal.aborted, false)
-    assert.equal(getLatest().directoryApproval.busy, 'picker')
+    assert.equal(getLatest().directoryApproval.busy, 'grant')
 
     await act(async () => {
       getLatest().cancelDirectoryApproval()
@@ -98,7 +97,7 @@ test('cancelling a busy directory picker aborts its request and rejects the appr
     assert.equal(getLatest().directoryApproval.open, false)
 
     await act(async () => {
-      deferred.requests[0].resolve(jsonResponse({ ok: true, path: 'D:\\ignored' }))
+      deferred.requests[0].resolve(grantResponse('D:\\ignored'))
       await authorizationPromise
     })
     assert.equal(deferred.requests.length, 1)
@@ -135,7 +134,6 @@ test('a replacement approval aborts and rejects the old request without acceptin
       firstAuthorizationPromise = getLatest().authorizeDirectory({
         path: 'D:\\first',
         accessMode: 'read_only',
-        usePicker: false,
       })
     })
 
@@ -164,7 +162,6 @@ test('a replacement approval aborts and rejects the old request without acceptin
       secondAuthorizationPromise = getLatest().authorizeDirectory({
         path: 'D:\\second',
         accessMode: 'read_only',
-        usePicker: false,
       })
     })
     assert.equal(deferred.requests.length, 2)

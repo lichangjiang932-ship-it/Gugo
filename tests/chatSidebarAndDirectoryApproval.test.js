@@ -7,15 +7,16 @@ import { readWorkbenchOpen, writeWorkbenchOpen } from '../src/lib/chatUiPreferen
 
 const read = (path) => fs.readFileSync(new URL(path, import.meta.url), 'utf8')
 
-test('directory authorization uses an in-app modal instead of occupying the chat stream', () => {
+test('directory authorization renders an inline card before the chat composer', () => {
   const chat = read('../src/pages/ChatSplit/ChatSplitView.jsx')
   const approval = read('../src/components/DirectoryApprovalModal.jsx')
 
   assert.match(approval, /data-testid="directory-approval-modal"/)
   assert.match(approval, /data-testid="directory-approval-card"/)
-  assert.match(approval, /fixed inset-0/)
-  assert.match(approval, /role="dialog"/)
-  assert.match(approval, /aria-modal="true"/)
+  assert.doesNotMatch(approval, /fixed inset-0/)
+  assert.match(approval, /role="region"/)
+  assert.doesNotMatch(approval, /aria-modal="true"/)
+  assert.match(approval, /<InlineDirectoryBrowser/)
   assert.match(approval, /aria-busy=\{!!busy\}/)
   assert.ok(chat.indexOf('{directoryApproval.open && (') < chat.indexOf('<ChatComposer'))
   assert.doesNotMatch(chat, /ApplyPatchApprovalModal/)

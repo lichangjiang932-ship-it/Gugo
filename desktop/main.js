@@ -1,7 +1,7 @@
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen, session, shell } from 'electron'
 import updaterPackage from 'electron-updater'
@@ -141,6 +141,9 @@ function configureDesktopRuntime() {
   process.env.APP_DATA_DIR ||= paths.dataDir
   process.env.APP_DB_PATH ||= paths.database
   process.env.ARTIFACT_DIR ||= paths.artifacts
+  const defaultWorkspaceRoot = path.join(app.getPath('documents'), 'Gugo')
+  mkdirSync(defaultWorkspaceRoot, { recursive: true })
+  process.env.WORKSPACE_ROOT ||= defaultWorkspaceRoot
   process.env.GUGO_FFMPEG_PATH ||= path.join(process.resourcesPath, 'bin', 'ffmpeg.exe')
   process.env.GUGO_FFPROBE_PATH ||= path.join(process.resourcesPath, 'bin', 'ffprobe.exe')
   if (pluginRoots.length) process.env.CODEX_PLUGIN_ROOTS = JSON.stringify(pluginRoots)

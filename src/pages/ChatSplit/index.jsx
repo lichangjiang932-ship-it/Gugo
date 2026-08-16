@@ -145,7 +145,6 @@ export default function ChatSplit() {
     message,
     path,
     accessMode,
-    usePicker = false,
   }) => {
     const sessionId = stateRef.current.activeSessionId
     const turnId = message?.meta?.serverTurnId
@@ -156,13 +155,8 @@ export default function ChatSplit() {
       pausedSequence: message?.meta?.serverLastSequence,
       path,
       accessMode,
-      usePicker,
       purpose: clarification.purpose || clarification.why || '',
     })
-    if (result.cancelled) {
-      toast.info({ title: t('taskSteering.directoryPickerCancelled') })
-      return result
-    }
     dispatch({
       type: 'UPDATE_LAST_MESSAGE_META',
       sessionId,

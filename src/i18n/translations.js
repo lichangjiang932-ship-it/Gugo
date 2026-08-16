@@ -481,7 +481,7 @@ const WORKSPACE_TRUST_TRANSLATIONS = {
     workspaceTrusted: '已信任工作区配置。',
     workspaceUntrusted: '已停止信任工作区配置。',
     workspaceTrustManage: '工作区配置与信任', workspaceTrustManageHint: '此处的信任控制共享工作区、Git 与 .gugo/config.json；独立本地目录仍按其 read_only/read_write 授权生效。', workspaceTrustEmpty: '尚无可管理的已授权目录。请先在对话中的内联卡片授权目录。', workspaceTrustOff: '未信任工作区配置；本地路径授权仍按访问模式生效', workspaceConfigMissing: '未找到 .gugo/config.json', workspaceConfigInvalid: '配置无效', workspaceTrustAction: '信任并启用允许的能力', workspaceUntrustAction: '停止信任', workspaceTrustWorking: '处理中…', workspaceTrustLoadFailed: '无法加载本地文件授权状态。', workspaceTrustFailed: '无法更新工作区信任。',
-    codeExecutionTitle: '代码执行运行时', codeExecutionHint: '仅明确授权的 read_write 目录可执行代码；单文件、只读和“全部文件”授权不会获得 Shell 权限。写入型命令每次仍需确认。', codeExecutionRuntime: '后端运行时', codeExecutionToolGate: '用户工具 Gate', codeExecutionWritableDirectories: '可执行读写目录', codeExecutionEnabled: '已启用', codeExecutionDisabled: '已关闭', codeExecutionLoading: '检查中', codeExecutionUnknown: '未报告', codeExecutionChecking: '正在读取代码执行状态…', codeExecutionRuntimeUnknown: '后端未报告代码执行状态；请重启服务以应用最新版本。', codeExecutionRuntimeBlocked: '当前部署已关闭本地代码执行。可由管理员检查 LOCAL_CODE_EXECUTION_ENABLED。', codeExecutionToolBlocked: '代码执行运行时可用，但 bash_exec 已在权限中心关闭。', codeExecutionNeedsWritableDirectory: '代码执行可用；请先给目标文件所在目录授予 read_write 权限。', codeExecutionReady: '代码执行已就绪，可在 {count} 个已授权读写目录中运行命令。',
+    codeExecutionTitle: '代码执行运行时', codeExecutionHint: '仅明确授权的 read_write 目录可执行代码；单文件、只读和“全部文件”授权不会获得 Shell 权限。是否询问由当前审批模式决定；“全部放行”不会再询问。', codeExecutionRuntime: '后端运行时', codeExecutionToolGate: '用户工具 Gate', codeExecutionWritableDirectories: '可执行读写目录', codeExecutionEnabled: '已启用', codeExecutionDisabled: '已关闭', codeExecutionLoading: '检查中', codeExecutionUnknown: '未报告', codeExecutionChecking: '正在读取代码执行状态…', codeExecutionRuntimeUnknown: '后端未报告代码执行状态；请重启服务以应用最新版本。', codeExecutionRuntimeBlocked: '当前部署已关闭本地代码执行。可由管理员检查 LOCAL_CODE_EXECUTION_ENABLED。', codeExecutionToolBlocked: '代码执行运行时可用，但 bash_exec 已在权限中心关闭。', codeExecutionNeedsWritableDirectory: '代码执行可用；请先给目标文件所在目录授予 read_write 权限。', codeExecutionReady: '代码执行已就绪，可在 {count} 个已授权读写目录中运行命令。',
   },
   en: {
     workspaceTrustTitle: 'Trust this workspace configuration',
@@ -489,7 +489,7 @@ const WORKSPACE_TRUST_TRANSLATIONS = {
     workspaceTrusted: 'Workspace configuration trusted.',
     workspaceUntrusted: 'Workspace configuration is no longer trusted.',
     workspaceTrustManage: 'Workspace configuration and trust', workspaceTrustManageHint: 'Trust here controls the shared workspace, Git, and .gugo/config.json. Separate local folders continue to follow their read_only/read_write grants.', workspaceTrustEmpty: 'No authorized folders to manage. Authorize one from the inline card in chat first.', workspaceTrustOff: 'Workspace configuration is not trusted; local path grants still apply', workspaceConfigMissing: '.gugo/config.json not found', workspaceConfigInvalid: 'Invalid configuration', workspaceTrustAction: 'Trust allowed capabilities', workspaceUntrustAction: 'Stop trusting', workspaceTrustWorking: 'Working…', workspaceTrustLoadFailed: 'Could not load local-file access status.', workspaceTrustFailed: 'Could not update workspace trust.',
-    codeExecutionTitle: 'Code execution runtime', codeExecutionHint: 'Code runs only inside explicitly authorized read_write folders. File-only, read-only, and all-files grants never add shell authority. Mutating commands still require one-time approval.', codeExecutionRuntime: 'Backend runtime', codeExecutionToolGate: 'User tool gate', codeExecutionWritableDirectories: 'Executable write folders', codeExecutionEnabled: 'Enabled', codeExecutionDisabled: 'Disabled', codeExecutionLoading: 'Checking', codeExecutionUnknown: 'Not reported', codeExecutionChecking: 'Checking code-execution status…', codeExecutionRuntimeUnknown: 'The backend did not report code-execution status. Restart the service to apply the latest version.', codeExecutionRuntimeBlocked: 'Local code execution is disabled for this deployment. An administrator can check LOCAL_CODE_EXECUTION_ENABLED.', codeExecutionToolBlocked: 'The runtime is available, but bash_exec is disabled in Permissions.', codeExecutionNeedsWritableDirectory: 'Code execution is available. Authorize the target file’s folder with read_write access first.', codeExecutionReady: 'Code execution is ready in {count} authorized read/write folder(s).',
+    codeExecutionTitle: 'Code execution runtime', codeExecutionHint: 'Code runs only inside explicitly authorized read_write folders. File-only, read-only, and all-files grants never add shell authority. Prompts follow the active approval mode; Bypass all asks no further questions.', codeExecutionRuntime: 'Backend runtime', codeExecutionToolGate: 'User tool gate', codeExecutionWritableDirectories: 'Executable write folders', codeExecutionEnabled: 'Enabled', codeExecutionDisabled: 'Disabled', codeExecutionLoading: 'Checking', codeExecutionUnknown: 'Not reported', codeExecutionChecking: 'Checking code-execution status…', codeExecutionRuntimeUnknown: 'The backend did not report code-execution status. Restart the service to apply the latest version.', codeExecutionRuntimeBlocked: 'Local code execution is disabled for this deployment. An administrator can check LOCAL_CODE_EXECUTION_ENABLED.', codeExecutionToolBlocked: 'The runtime is available, but bash_exec is disabled in Permissions.', codeExecutionNeedsWritableDirectory: 'Code execution is available. Authorize the target file’s folder with read_write access first.', codeExecutionReady: 'Code execution is ready in {count} authorized read/write folder(s).',
   },
   ja: {
     workspaceTrustTitle: 'このワークスペース設定を信頼',
@@ -497,7 +497,7 @@ const WORKSPACE_TRUST_TRANSLATIONS = {
     workspaceTrusted: 'ワークスペース設定を信頼しました。',
     workspaceUntrusted: 'ワークスペース設定の信頼を解除しました。',
     workspaceTrustManage: 'ワークスペース設定と信頼', workspaceTrustManageHint: 'ここでの信頼は共有ワークスペース、Git、.gugo/config.json を制御します。ローカルフォルダーは read_only/read_write 許可に従います。', workspaceTrustEmpty: '管理できる許可済みフォルダーはありません。先にチャットのインラインカードで許可してください。', workspaceTrustOff: 'ワークスペース設定は未信頼です。ローカルパスの許可は引き続き有効です', workspaceConfigMissing: '.gugo/config.json が見つかりません', workspaceConfigInvalid: '設定が無効です', workspaceTrustAction: '許可された機能を信頼', workspaceUntrustAction: '信頼を解除', workspaceTrustWorking: '処理中…', workspaceTrustLoadFailed: 'ローカルファイルの許可状態を読み込めませんでした。', workspaceTrustFailed: 'ワークスペースの信頼を更新できませんでした。',
-    codeExecutionTitle: 'コード実行ランタイム', codeExecutionHint: 'コードは明示的に read_write 許可したフォルダー内だけで実行できます。単一ファイル、読み取り専用、全ファイル許可では Shell 権限は追加されません。', codeExecutionRuntime: 'バックエンド', codeExecutionToolGate: 'ユーザーツール Gate', codeExecutionWritableDirectories: '実行可能フォルダー', codeExecutionEnabled: '有効', codeExecutionDisabled: '無効', codeExecutionLoading: '確認中', codeExecutionUnknown: '未報告', codeExecutionChecking: 'コード実行状態を確認しています…', codeExecutionRuntimeUnknown: 'バックエンドがコード実行状態を報告していません。最新版を反映するためサービスを再起動してください。', codeExecutionRuntimeBlocked: 'この環境ではローカルコード実行が無効です。管理者は LOCAL_CODE_EXECUTION_ENABLED を確認してください。', codeExecutionToolBlocked: 'ランタイムは利用できますが、権限センターで bash_exec が無効です。', codeExecutionNeedsWritableDirectory: 'コード実行は利用できます。対象ファイルのフォルダーを read_write で許可してください。', codeExecutionReady: '{count} 個の許可済み読み書きフォルダーでコード実行を利用できます。',
+    codeExecutionTitle: 'コード実行ランタイム', codeExecutionHint: 'コードは明示的に read_write 許可したフォルダー内だけで実行できます。単一ファイル、読み取り専用、全ファイル許可では Shell 権限は追加されません。確認の有無は承認モードに従い、「すべて許可」では確認しません。', codeExecutionRuntime: 'バックエンド', codeExecutionToolGate: 'ユーザーツール Gate', codeExecutionWritableDirectories: '実行可能フォルダー', codeExecutionEnabled: '有効', codeExecutionDisabled: '無効', codeExecutionLoading: '確認中', codeExecutionUnknown: '未報告', codeExecutionChecking: 'コード実行状態を確認しています…', codeExecutionRuntimeUnknown: 'バックエンドがコード実行状態を報告していません。最新版を反映するためサービスを再起動してください。', codeExecutionRuntimeBlocked: 'この環境ではローカルコード実行が無効です。管理者は LOCAL_CODE_EXECUTION_ENABLED を確認してください。', codeExecutionToolBlocked: 'ランタイムは利用できますが、権限センターで bash_exec が無効です。', codeExecutionNeedsWritableDirectory: 'コード実行は利用できます。対象ファイルのフォルダーを read_write で許可してください。', codeExecutionReady: '{count} 個の許可済み読み書きフォルダーでコード実行を利用できます。',
   },
   ko: {
     workspaceTrustTitle: '이 작업 공간 설정 신뢰',
@@ -505,7 +505,7 @@ const WORKSPACE_TRUST_TRANSLATIONS = {
     workspaceTrusted: '작업 공간 설정을 신뢰했습니다.',
     workspaceUntrusted: '작업 공간 설정 신뢰를 해제했습니다.',
     workspaceTrustManage: '작업 공간 설정 및 신뢰', workspaceTrustManageHint: '여기서의 신뢰는 공유 작업 공간, Git 및 .gugo/config.json을 제어합니다. 로컬 폴더는 read_only/read_write 권한을 계속 따릅니다.', workspaceTrustEmpty: '관리할 수 있는 허용된 폴더가 없습니다. 먼저 채팅의 인라인 카드에서 폴더를 허용하세요.', workspaceTrustOff: '작업 공간 설정은 신뢰되지 않지만 로컬 경로 권한은 계속 적용됩니다', workspaceConfigMissing: '.gugo/config.json을 찾을 수 없음', workspaceConfigInvalid: '잘못된 설정', workspaceTrustAction: '허용된 기능 신뢰', workspaceUntrustAction: '신뢰 해제', workspaceTrustWorking: '처리 중…', workspaceTrustLoadFailed: '로컬 파일 권한 상태를 불러올 수 없습니다.', workspaceTrustFailed: '작업 공간 신뢰를 업데이트할 수 없습니다.',
-    codeExecutionTitle: '코드 실행 런타임', codeExecutionHint: '코드는 명시적으로 read_write 허용한 폴더 안에서만 실행됩니다. 단일 파일, 읽기 전용 및 전체 파일 허용은 Shell 권한을 추가하지 않습니다.', codeExecutionRuntime: '백엔드 런타임', codeExecutionToolGate: '사용자 도구 Gate', codeExecutionWritableDirectories: '실행 가능한 쓰기 폴더', codeExecutionEnabled: '활성', codeExecutionDisabled: '비활성', codeExecutionLoading: '확인 중', codeExecutionUnknown: '보고되지 않음', codeExecutionChecking: '코드 실행 상태를 확인하는 중…', codeExecutionRuntimeUnknown: '백엔드가 코드 실행 상태를 보고하지 않았습니다. 최신 버전을 적용하려면 서비스를 다시 시작하세요.', codeExecutionRuntimeBlocked: '이 배포에서는 로컬 코드 실행이 꺼져 있습니다. 관리자는 LOCAL_CODE_EXECUTION_ENABLED를 확인하세요.', codeExecutionToolBlocked: '런타임은 사용 가능하지만 권한 센터에서 bash_exec가 꺼져 있습니다.', codeExecutionNeedsWritableDirectory: '코드 실행을 사용할 수 있습니다. 대상 파일 폴더를 read_write로 허용하세요.', codeExecutionReady: '{count}개의 허용된 읽기/쓰기 폴더에서 코드 실행을 사용할 수 있습니다.',
+    codeExecutionTitle: '코드 실행 런타임', codeExecutionHint: '코드는 명시적으로 read_write 허용한 폴더 안에서만 실행됩니다. 단일 파일, 읽기 전용 및 전체 파일 허용은 Shell 권한을 추가하지 않습니다. 확인 여부는 승인 모드를 따르며 “모두 허용”에서는 다시 묻지 않습니다.', codeExecutionRuntime: '백엔드 런타임', codeExecutionToolGate: '사용자 도구 Gate', codeExecutionWritableDirectories: '실행 가능한 쓰기 폴더', codeExecutionEnabled: '활성', codeExecutionDisabled: '비활성', codeExecutionLoading: '확인 중', codeExecutionUnknown: '보고되지 않음', codeExecutionChecking: '코드 실행 상태를 확인하는 중…', codeExecutionRuntimeUnknown: '백엔드가 코드 실행 상태를 보고하지 않았습니다. 최신 버전을 적용하려면 서비스를 다시 시작하세요.', codeExecutionRuntimeBlocked: '이 배포에서는 로컬 코드 실행이 꺼져 있습니다. 관리자는 LOCAL_CODE_EXECUTION_ENABLED를 확인하세요.', codeExecutionToolBlocked: '런타임은 사용 가능하지만 권한 센터에서 bash_exec가 꺼져 있습니다.', codeExecutionNeedsWritableDirectory: '코드 실행을 사용할 수 있습니다. 대상 파일 폴더를 read_write로 허용하세요.', codeExecutionReady: '{count}개의 허용된 읽기/쓰기 폴더에서 코드 실행을 사용할 수 있습니다.',
   },
   'zh-TW': {
     workspaceTrustTitle: '信任此工作區設定',
@@ -513,7 +513,7 @@ const WORKSPACE_TRUST_TRANSLATIONS = {
     workspaceTrusted: '已信任工作區設定。',
     workspaceUntrusted: '已停止信任工作區設定。',
     workspaceTrustManage: '工作區設定與信任', workspaceTrustManageHint: '此處的信任控制共享工作區、Git 與 .gugo/config.json；本機資料夾仍依 read_only/read_write 授權生效。', workspaceTrustEmpty: '尚無可管理的已授權資料夾。請先在對話中的內嵌卡片授權資料夾。', workspaceTrustOff: '未信任工作區設定；本機路徑授權仍依存取模式生效', workspaceConfigMissing: '找不到 .gugo/config.json', workspaceConfigInvalid: '設定無效', workspaceTrustAction: '信任並啟用允許的能力', workspaceUntrustAction: '停止信任', workspaceTrustWorking: '處理中…', workspaceTrustLoadFailed: '無法載入本機檔案授權狀態。', workspaceTrustFailed: '無法更新工作區信任。',
-    codeExecutionTitle: '程式碼執行執行階段', codeExecutionHint: '僅明確授權的 read_write 資料夾可執行程式碼；單一檔案、唯讀和「全部檔案」授權不會取得 Shell 權限。寫入型命令每次仍需確認。', codeExecutionRuntime: '後端執行階段', codeExecutionToolGate: '使用者工具 Gate', codeExecutionWritableDirectories: '可執行讀寫資料夾', codeExecutionEnabled: '已啟用', codeExecutionDisabled: '已關閉', codeExecutionLoading: '檢查中', codeExecutionUnknown: '未回報', codeExecutionChecking: '正在讀取程式碼執行狀態…', codeExecutionRuntimeUnknown: '後端未回報程式碼執行狀態；請重新啟動服務以套用最新版本。', codeExecutionRuntimeBlocked: '目前部署已關閉本機程式碼執行。管理員可檢查 LOCAL_CODE_EXECUTION_ENABLED。', codeExecutionToolBlocked: '程式碼執行環境可用，但 bash_exec 已在權限中心關閉。', codeExecutionNeedsWritableDirectory: '程式碼執行可用；請先將目標檔案所在資料夾授權為 read_write。', codeExecutionReady: '程式碼執行已就緒，可在 {count} 個已授權讀寫資料夾中執行命令。',
+    codeExecutionTitle: '程式碼執行執行階段', codeExecutionHint: '僅明確授權的 read_write 資料夾可執行程式碼；單一檔案、唯讀和「全部檔案」授權不會取得 Shell 權限。是否詢問由目前審批模式決定；「全部放行」不會再詢問。', codeExecutionRuntime: '後端執行階段', codeExecutionToolGate: '使用者工具 Gate', codeExecutionWritableDirectories: '可執行讀寫資料夾', codeExecutionEnabled: '已啟用', codeExecutionDisabled: '已關閉', codeExecutionLoading: '檢查中', codeExecutionUnknown: '未回報', codeExecutionChecking: '正在讀取程式碼執行狀態…', codeExecutionRuntimeUnknown: '後端未回報程式碼執行狀態；請重新啟動服務以套用最新版本。', codeExecutionRuntimeBlocked: '目前部署已關閉本機程式碼執行。管理員可檢查 LOCAL_CODE_EXECUTION_ENABLED。', codeExecutionToolBlocked: '程式碼執行環境可用，但 bash_exec 已在權限中心關閉。', codeExecutionNeedsWritableDirectory: '程式碼執行可用；請先將目標檔案所在資料夾授權為 read_write。', codeExecutionReady: '程式碼執行已就緒，可在 {count} 個已授權讀寫資料夾中執行命令。',
   },
 }
 
@@ -1176,8 +1176,9 @@ export const translations = {
       deleteStep: '删除步骤',
       addStep: '添加步骤',
       newStepTitle: '新步骤',
-      directoryRequestTitle: '任务需要目录授权', directoryPathPlaceholder: '输入绝对目录路径，或使用系统选择器', directoryAccessMode: '目录访问模式', directoryReadOnly: '仅读取', directoryReadWrite: '读取和修改', authorizeDirectory: '授权此路径', chooseDirectory: '选择目录', cancelDirectoryAuthorization: '取消授权', directorySecurityHint: '只有你明确选择的目录会被授权；授权成功后，同一任务才会继续。', directoryGranted: '目录已授权，任务继续执行', directoryGrantFailed: '目录授权失败', directoryPickerCancelled: '已取消目录选择', directoryRequestCancelled: '已取消本地路径授权，本轮未调用模型',
+      directoryRequestTitle: '任务需要目录授权', directoryPathPlaceholder: '输入目录路径，或在下方浏览', directoryAccessMode: '目录访问模式', directoryReadOnly: '仅读取', directoryReadWrite: '读取和修改', authorizeDirectory: '授权此路径', chooseDirectory: '浏览目录', cancelDirectoryAuthorization: '取消授权', directorySecurityHint: '只有你明确选择的目录会被授权；授权成功后，同一任务会继续。', directoryGranted: '目录已授权，任务继续执行', directoryGrantFailed: '目录授权失败', directoryPickerCancelled: '已取消目录选择', directoryRequestCancelled: '已取消本地路径授权，本轮未调用模型', directoryBrowserPath: '当前目录路径', directoryBrowserOpen: '打开', directoryBrowserParent: '上一级', directoryBrowserProject: '项目目录', directoryBrowserDefault: '默认生成目录', directoryBrowserEmpty: '当前目录没有子目录', directoryBrowserLoading: '正在读取目录…', directoryBrowserLoadFailed: '无法读取目录', directoryBrowserSelectCurrent: '选择当前目录',
     },
+    fileOutput: { navTitle: '文件与目录', title: '文件与目录', subtitle: '设置未指定保存位置时的默认生成目录。', defaultDirectory: '生成文件默认目录', defaultDirectoryHint: '新建文件且你的指令没有指定位置时，模型会保存到这里；修改已有文件仍修改原文件。', pathPlaceholder: '选择一个可写目录', browse: '浏览目录', save: '保存', saving: '保存中…', saved: '默认生成目录已保存', loadFailed: '无法读取目录设置', saveFailed: '无法保存默认生成目录', priorityHint: '保存位置优先级：指令明确路径 → 默认生成目录 → 当前项目目录。', projectDirectory: '当前项目目录' },
     sessionSearch: {
       placeholder: '搜索所有会话消息…',
       hint: '输入关键词搜索跨会话消息。',
@@ -1659,8 +1660,9 @@ export const translations = {
       deleteStep: 'Delete step',
       addStep: 'Add step',
       newStepTitle: 'New step',
-      directoryRequestTitle: 'Directory access required', directoryPathPlaceholder: 'Enter an absolute directory path or use the system picker', directoryAccessMode: 'Directory access mode', directoryReadOnly: 'Read only', directoryReadWrite: 'Read and edit', authorizeDirectory: 'Authorize path', chooseDirectory: 'Choose directory', cancelDirectoryAuthorization: 'Cancel authorization', directorySecurityHint: 'Only the directory you explicitly choose is authorized. The same job resumes after the grant succeeds.', directoryGranted: 'Directory authorized; job resumed', directoryGrantFailed: 'Directory authorization failed', directoryPickerCancelled: 'Directory selection cancelled', directoryRequestCancelled: 'Local path authorization cancelled; the model was not called',
+      directoryRequestTitle: 'Directory access required', directoryPathPlaceholder: 'Enter a directory path or browse below', directoryAccessMode: 'Directory access mode', directoryReadOnly: 'Read only', directoryReadWrite: 'Read and edit', authorizeDirectory: 'Authorize path', chooseDirectory: 'Browse directories', cancelDirectoryAuthorization: 'Cancel authorization', directorySecurityHint: 'Only the directory you explicitly choose is authorized. The same job resumes after the grant succeeds.', directoryGranted: 'Directory authorized; job resumed', directoryGrantFailed: 'Directory authorization failed', directoryPickerCancelled: 'Directory selection cancelled', directoryRequestCancelled: 'Local path authorization cancelled; the model was not called', directoryBrowserPath: 'Current directory path', directoryBrowserOpen: 'Open', directoryBrowserParent: 'Parent', directoryBrowserProject: 'Project directory', directoryBrowserDefault: 'Default output', directoryBrowserEmpty: 'No subdirectories here', directoryBrowserLoading: 'Loading directories…', directoryBrowserLoadFailed: 'Could not load directories', directoryBrowserSelectCurrent: 'Select current directory',
     },
+    fileOutput: { navTitle: 'Files & folders', title: 'Files & folders', subtitle: 'Choose where newly generated files go when no destination is specified.', defaultDirectory: 'Default generated-file directory', defaultDirectoryHint: 'New files without an explicit destination are saved here. Existing files are always edited in place.', pathPlaceholder: 'Choose a writable directory', browse: 'Browse', save: 'Save', saving: 'Saving…', saved: 'Default output directory saved', loadFailed: 'Could not load directory settings', saveFailed: 'Could not save the default output directory', priorityHint: 'Destination priority: explicit instruction path → default output directory → current project directory.', projectDirectory: 'Current project directory' },
     sessionSearch: {
       placeholder: 'Search all session messages…',
       hint: 'Type keywords to search messages across sessions.',
@@ -2142,8 +2144,9 @@ export const translations = {
       deleteStep: '手順を削除',
       addStep: '手順を追加',
       newStepTitle: '新しい手順',
-      directoryRequestTitle: 'ディレクトリの許可が必要です', directoryPathPlaceholder: '絶対パスを入力するか、システム選択画面を使用', directoryAccessMode: 'ディレクトリアクセス', directoryReadOnly: '読取のみ', directoryReadWrite: '読取と編集', authorizeDirectory: 'このパスを許可', chooseDirectory: 'ディレクトリを選択', cancelDirectoryAuthorization: '許可をキャンセル', directorySecurityHint: '明示的に選択したディレクトリだけを許可します。許可成功後、同じジョブを再開します。', directoryGranted: 'ディレクトリを許可し、ジョブを再開しました', directoryGrantFailed: 'ディレクトリを許可できませんでした', directoryPickerCancelled: 'ディレクトリ選択をキャンセルしました', directoryRequestCancelled: 'ローカルパスの許可をキャンセルしました。モデルは呼び出されていません',
+      directoryRequestTitle: 'ディレクトリの許可が必要です', directoryPathPlaceholder: 'パスを入力するか、下で参照してください', directoryAccessMode: 'ディレクトリアクセス', directoryReadOnly: '読取のみ', directoryReadWrite: '読取と編集', authorizeDirectory: 'このパスを許可', chooseDirectory: 'ディレクトリを参照', cancelDirectoryAuthorization: '許可をキャンセル', directorySecurityHint: '明示的に選択したディレクトリだけを許可します。許可成功後、同じジョブを再開します。', directoryGranted: 'ディレクトリを許可し、ジョブを再開しました', directoryGrantFailed: 'ディレクトリを許可できませんでした', directoryPickerCancelled: 'ディレクトリ選択をキャンセルしました', directoryRequestCancelled: 'ローカルパスの許可をキャンセルしました。モデルは呼び出されていません', directoryBrowserPath: '現在のディレクトリ', directoryBrowserOpen: '開く', directoryBrowserParent: '上の階層', directoryBrowserProject: 'プロジェクト', directoryBrowserDefault: '既定の出力先', directoryBrowserEmpty: 'サブディレクトリはありません', directoryBrowserLoading: 'ディレクトリを読み込み中…', directoryBrowserLoadFailed: 'ディレクトリを読み込めません', directoryBrowserSelectCurrent: '現在のディレクトリを選択',
     },
+    fileOutput: { navTitle: 'ファイルとフォルダー', title: 'ファイルとフォルダー', subtitle: '保存先が指定されていない新規ファイルの出力先を設定します。', defaultDirectory: '生成ファイルの既定ディレクトリ', defaultDirectoryHint: '保存先の指定がない新規ファイルはここに保存されます。既存ファイルは元の場所で編集します。', pathPlaceholder: '書き込み可能なディレクトリを選択', browse: '参照', save: '保存', saving: '保存中…', saved: '既定の出力先を保存しました', loadFailed: 'ディレクトリ設定を読み込めません', saveFailed: '既定の出力先を保存できません', priorityHint: '保存先の優先順位：指示で指定したパス → 既定の出力先 → 現在のプロジェクト。', projectDirectory: '現在のプロジェクト' },
     sessionSearch: {
       placeholder: 'すべてのセッションメッセージを検索…',
       hint: 'キーワードを入力してセッション横断で検索します。',
@@ -2625,8 +2628,9 @@ export const translations = {
       deleteStep: '단계 삭제',
       addStep: '단계 추가',
       newStepTitle: '새 단계',
-      directoryRequestTitle: '디렉터리 권한 필요', directoryPathPlaceholder: '절대 디렉터리 경로를 입력하거나 시스템 선택기 사용', directoryAccessMode: '디렉터리 접근 모드', directoryReadOnly: '읽기 전용', directoryReadWrite: '읽기 및 수정', authorizeDirectory: '이 경로 허용', chooseDirectory: '디렉터리 선택', cancelDirectoryAuthorization: '권한 부여 취소', directorySecurityHint: '명시적으로 선택한 디렉터리만 허용됩니다. 권한 부여가 성공한 뒤 같은 작업이 계속됩니다.', directoryGranted: '디렉터리를 허용하고 작업을 재개했습니다', directoryGrantFailed: '디렉터리 권한 부여 실패', directoryPickerCancelled: '디렉터리 선택 취소됨', directoryRequestCancelled: '로컬 경로 권한을 취소했습니다. 모델은 호출되지 않았습니다',
+      directoryRequestTitle: '디렉터리 권한 필요', directoryPathPlaceholder: '경로를 입력하거나 아래에서 탐색하세요', directoryAccessMode: '디렉터리 접근 모드', directoryReadOnly: '읽기 전용', directoryReadWrite: '읽기 및 수정', authorizeDirectory: '이 경로 허용', chooseDirectory: '디렉터리 탐색', cancelDirectoryAuthorization: '권한 부여 취소', directorySecurityHint: '명시적으로 선택한 디렉터리만 허용됩니다. 권한 부여가 성공한 뒤 같은 작업이 계속됩니다.', directoryGranted: '디렉터리를 허용하고 작업을 재개했습니다', directoryGrantFailed: '디렉터리 권한 부여 실패', directoryPickerCancelled: '디렉터리 선택 취소됨', directoryRequestCancelled: '로컬 경로 권한을 취소했습니다. 모델은 호출되지 않았습니다', directoryBrowserPath: '현재 디렉터리 경로', directoryBrowserOpen: '열기', directoryBrowserParent: '상위', directoryBrowserProject: '프로젝트 디렉터리', directoryBrowserDefault: '기본 출력 디렉터리', directoryBrowserEmpty: '하위 디렉터리가 없습니다', directoryBrowserLoading: '디렉터리 불러오는 중…', directoryBrowserLoadFailed: '디렉터리를 불러올 수 없습니다', directoryBrowserSelectCurrent: '현재 디렉터리 선택',
     },
+    fileOutput: { navTitle: '파일 및 폴더', title: '파일 및 폴더', subtitle: '저장 위치를 지정하지 않은 새 파일의 기본 생성 디렉터리를 설정합니다.', defaultDirectory: '생성 파일 기본 디렉터리', defaultDirectoryHint: '명시적 위치가 없는 새 파일은 여기에 저장됩니다. 기존 파일은 원래 위치에서 수정됩니다.', pathPlaceholder: '쓰기 가능한 디렉터리 선택', browse: '탐색', save: '저장', saving: '저장 중…', saved: '기본 출력 디렉터리를 저장했습니다', loadFailed: '디렉터리 설정을 불러올 수 없습니다', saveFailed: '기본 출력 디렉터리를 저장할 수 없습니다', priorityHint: '저장 위치 우선순위: 지시에 명시된 경로 → 기본 출력 디렉터리 → 현재 프로젝트 디렉터리.', projectDirectory: '현재 프로젝트 디렉터리' },
     sessionSearch: {
       placeholder: '모든 세션 메시지 검색…',
       hint: '키워드를 입력해 세션 전체 메시지를 검색하세요.',
@@ -3108,8 +3112,9 @@ export const translations = {
       deleteStep: '刪除步驟',
       addStep: '新增步驟',
       newStepTitle: '新步驟',
-      directoryRequestTitle: '任務需要目錄授權', directoryPathPlaceholder: '輸入絕對目錄路徑，或使用系統選擇器', directoryAccessMode: '目錄存取模式', directoryReadOnly: '僅讀取', directoryReadWrite: '讀取和修改', authorizeDirectory: '授權此路徑', chooseDirectory: '選擇目錄', cancelDirectoryAuthorization: '取消授權', directorySecurityHint: '只有你明確選擇的目錄會被授權；授權成功後，同一任務才會繼續。', directoryGranted: '目錄已授權，任務繼續執行', directoryGrantFailed: '目錄授權失敗', directoryPickerCancelled: '已取消目錄選擇', directoryRequestCancelled: '已取消本機路徑授權，本輪未呼叫模型',
+      directoryRequestTitle: '任務需要目錄授權', directoryPathPlaceholder: '輸入目錄路徑，或在下方瀏覽', directoryAccessMode: '目錄存取模式', directoryReadOnly: '僅讀取', directoryReadWrite: '讀取和修改', authorizeDirectory: '授權此路徑', chooseDirectory: '瀏覽目錄', cancelDirectoryAuthorization: '取消授權', directorySecurityHint: '只有你明確選擇的目錄會被授權；授權成功後，同一任務會繼續。', directoryGranted: '目錄已授權，任務繼續執行', directoryGrantFailed: '目錄授權失敗', directoryPickerCancelled: '已取消目錄選擇', directoryRequestCancelled: '已取消本機路徑授權，本輪未呼叫模型', directoryBrowserPath: '目前目錄路徑', directoryBrowserOpen: '開啟', directoryBrowserParent: '上一層', directoryBrowserProject: '專案目錄', directoryBrowserDefault: '預設產生目錄', directoryBrowserEmpty: '目前目錄沒有子目錄', directoryBrowserLoading: '正在讀取目錄…', directoryBrowserLoadFailed: '無法讀取目錄', directoryBrowserSelectCurrent: '選擇目前目錄',
     },
+    fileOutput: { navTitle: '檔案與目錄', title: '檔案與目錄', subtitle: '設定未指定儲存位置時的預設產生目錄。', defaultDirectory: '產生檔案預設目錄', defaultDirectoryHint: '新建檔案且指令未指定位置時會儲存在這裡；修改現有檔案仍修改原檔。', pathPlaceholder: '選擇可寫入的目錄', browse: '瀏覽目錄', save: '儲存', saving: '儲存中…', saved: '預設產生目錄已儲存', loadFailed: '無法讀取目錄設定', saveFailed: '無法儲存預設產生目錄', priorityHint: '儲存位置優先順序：指令明確路徑 → 預設產生目錄 → 目前專案目錄。', projectDirectory: '目前專案目錄' },
     sessionSearch: {
       placeholder: '搜尋所有會話訊息…',
       hint: '輸入關鍵字搜尋跨會話訊息。',
@@ -3290,7 +3295,7 @@ const WORKSPACE_ONBOARDING_TRANSLATIONS = {
   zh: {
     onboardingTitle: '首次启动 · 开启本地工作区', onboardingComplete: '本地工作区已配置，可随时在这里调整。',
     onboardingRiskTitle: '启用前请确认风险', onboardingRiskHint: '文件、Shell 和 Git 能力会让模型读取或修改所选目录，并在其中执行命令。高风险操作仍受下方审批模式约束。',
-    onboardingDirectory: '授权工作目录', onboardingDirectoryPlaceholder: '输入绝对路径，或使用系统目录选择器', onboardingDirectoryHint: '仅授权这个目录；不会自动开放整台电脑。目录将获得读写权限并被标记为可信工作区。',
+    onboardingDirectory: '授权工作目录', onboardingDirectoryPlaceholder: '输入绝对路径，或在下方内联浏览', onboardingDirectoryHint: '仅授权这个目录；不会自动开放整台电脑。目录将获得读写权限并被标记为可信工作区。',
     onboardingPick: '选择目录', onboardingPicking: '选择中…', onboardingPickerFailed: '无法打开目录选择器。',
     onboardingFeatures: '开启能力', onboardingFeatureFileSystem: '读取、写入与管理文件', onboardingFeatureShell: '在授权目录执行命令', onboardingFeatureGit: '查看与操作 Git 仓库',
     onboardingManaged: '由 {source} 管理', onboardingApproval: '审批模式', onboardingBypassConfirm: '我理解“全部放行”将跳过所有工具审批，并确认仅在完全可信的本机环境使用。',
@@ -3306,7 +3311,7 @@ const WORKSPACE_ONBOARDING_TRANSLATIONS = {
   en: {
     onboardingTitle: 'First launch · Enable local workspace', onboardingComplete: 'The local workspace is configured. You can adjust it here at any time.',
     onboardingRiskTitle: 'Review the risks before enabling', onboardingRiskHint: 'File, Shell, and Git capabilities let the model read or change the selected directory and run commands there. Risky operations still follow the approval mode below.',
-    onboardingDirectory: 'Authorized work directory', onboardingDirectoryPlaceholder: 'Enter an absolute path or use the system folder picker', onboardingDirectoryHint: 'Only this directory is authorized; the rest of the computer stays closed. It receives read/write access and becomes a trusted workspace.',
+    onboardingDirectory: 'Authorized work directory', onboardingDirectoryPlaceholder: 'Enter an absolute path or browse inline below', onboardingDirectoryHint: 'Only this directory is authorized; the rest of the computer stays closed. It receives read/write access and becomes a trusted workspace.',
     onboardingPick: 'Choose folder', onboardingPicking: 'Choosing…', onboardingPickerFailed: 'Could not open the folder picker.',
     onboardingFeatures: 'Enable capabilities', onboardingFeatureFileSystem: 'Read, write, and manage files', onboardingFeatureShell: 'Run commands in the authorized directory', onboardingFeatureGit: 'Inspect and operate Git repositories',
     onboardingManaged: 'Managed by {source}', onboardingApproval: 'Approval mode', onboardingBypassConfirm: 'I understand that “Bypass all” skips every tool approval and will use it only on a fully trusted local machine.',
@@ -3322,7 +3327,7 @@ const WORKSPACE_ONBOARDING_TRANSLATIONS = {
   ja: {
     onboardingTitle: '初回起動 · ローカルワークスペースを有効化', onboardingComplete: 'ローカルワークスペースは設定済みです。いつでもここで変更できます。',
     onboardingRiskTitle: '有効化する前にリスクを確認してください', onboardingRiskHint: 'ファイル、Shell、Git を有効にすると、モデルは選択したフォルダーを読み書きし、その中でコマンドを実行できます。高リスク操作には下記の承認モードが適用されます。',
-    onboardingDirectory: '許可する作業フォルダー', onboardingDirectoryPlaceholder: '絶対パスを入力するか、システムのフォルダー選択を使用', onboardingDirectoryHint: '許可されるのはこのフォルダーだけです。PC 全体は公開されません。読み書き可能な信頼済みワークスペースとして登録されます。',
+    onboardingDirectory: '許可する作業フォルダー', onboardingDirectoryPlaceholder: '絶対パスを入力するか、下のインライン一覧から選択', onboardingDirectoryHint: '許可されるのはこのフォルダーだけです。PC 全体は公開されません。読み書き可能な信頼済みワークスペースとして登録されます。',
     onboardingPick: 'フォルダーを選択', onboardingPicking: '選択中…', onboardingPickerFailed: 'フォルダー選択を開けませんでした。',
     onboardingFeatures: '機能を有効化', onboardingFeatureFileSystem: 'ファイルの読み取り・書き込み・管理', onboardingFeatureShell: '許可したフォルダーでコマンドを実行', onboardingFeatureGit: 'Git リポジトリの確認と操作',
     onboardingManaged: '{source} により管理', onboardingApproval: '承認モード', onboardingBypassConfirm: '「すべて許可」では全ツールの承認が省略されることを理解し、完全に信頼できるローカル端末でのみ使用します。',
@@ -3338,7 +3343,7 @@ const WORKSPACE_ONBOARDING_TRANSLATIONS = {
   ko: {
     onboardingTitle: '첫 실행 · 로컬 작업 공간 활성화', onboardingComplete: '로컬 작업 공간이 설정되었습니다. 언제든 여기에서 조정할 수 있습니다.',
     onboardingRiskTitle: '활성화 전에 위험을 확인하세요', onboardingRiskHint: '파일, Shell 및 Git 기능을 사용하면 모델이 선택한 폴더를 읽거나 수정하고 그 안에서 명령을 실행할 수 있습니다. 위험한 작업에는 아래 승인 모드가 계속 적용됩니다.',
-    onboardingDirectory: '허용할 작업 폴더', onboardingDirectoryPlaceholder: '절대 경로를 입력하거나 시스템 폴더 선택기 사용', onboardingDirectoryHint: '이 폴더만 허용되며 컴퓨터 전체는 공개되지 않습니다. 읽기/쓰기 가능한 신뢰 작업 공간으로 등록됩니다.',
+    onboardingDirectory: '허용할 작업 폴더', onboardingDirectoryPlaceholder: '절대 경로를 입력하거나 아래 인라인 목록에서 선택', onboardingDirectoryHint: '이 폴더만 허용되며 컴퓨터 전체는 공개되지 않습니다. 읽기/쓰기 가능한 신뢰 작업 공간으로 등록됩니다.',
     onboardingPick: '폴더 선택', onboardingPicking: '선택 중…', onboardingPickerFailed: '폴더 선택기를 열 수 없습니다.',
     onboardingFeatures: '기능 활성화', onboardingFeatureFileSystem: '파일 읽기, 쓰기 및 관리', onboardingFeatureShell: '허용된 폴더에서 명령 실행', onboardingFeatureGit: 'Git 저장소 확인 및 조작',
     onboardingManaged: '{source}에서 관리', onboardingApproval: '승인 모드', onboardingBypassConfirm: '“모두 허용”이 모든 도구 승인을 건너뛴다는 점을 이해하며 완전히 신뢰하는 로컬 컴퓨터에서만 사용하겠습니다.',
@@ -3354,7 +3359,7 @@ const WORKSPACE_ONBOARDING_TRANSLATIONS = {
   'zh-TW': {
     onboardingTitle: '首次啟動 · 開啟本機工作區', onboardingComplete: '本機工作區已設定，可隨時在此調整。',
     onboardingRiskTitle: '啟用前請確認風險', onboardingRiskHint: '檔案、Shell 與 Git 能力會讓模型讀取或修改所選目錄，並在其中執行命令。高風險操作仍受下方審批模式限制。',
-    onboardingDirectory: '授權工作目錄', onboardingDirectoryPlaceholder: '輸入絕對路徑，或使用系統目錄選擇器', onboardingDirectoryHint: '只授權此目錄；不會自動開放整台電腦。目錄將取得讀寫權限並標記為可信工作區。',
+    onboardingDirectory: '授權工作目錄', onboardingDirectoryPlaceholder: '輸入絕對路徑，或在下方內嵌瀏覽', onboardingDirectoryHint: '只授權此目錄；不會自動開放整台電腦。目錄將取得讀寫權限並標記為可信工作區。',
     onboardingPick: '選擇目錄', onboardingPicking: '選擇中…', onboardingPickerFailed: '無法開啟目錄選擇器。',
     onboardingFeatures: '開啟能力', onboardingFeatureFileSystem: '讀取、寫入與管理檔案', onboardingFeatureShell: '在授權目錄執行命令', onboardingFeatureGit: '查看與操作 Git 儲存庫',
     onboardingManaged: '由 {source} 管理', onboardingApproval: '審批模式', onboardingBypassConfirm: '我理解「全部放行」會略過所有工具審批，並確認只在完全信任的本機環境使用。',
@@ -3391,7 +3396,7 @@ const SETTINGS_TOOLS_TRANSLATIONS = {
       edit_file: { name: '编辑本地文件', desc: '在已获读写授权的路径内精确替换文件内容。' },
       apply_patch: { name: '原子补丁', desc: '以 Codex 格式对一个或多个文件执行可回滚的精确补丁。' },
       patch_file: { name: '精确修改文件', desc: '按行范围或 Codex 补丁精确修改文件，并支持哈希校验与预演。' },
-      bash_exec: { name: '执行代码与命令', desc: '在已授权的读写目录中运行 Python、Node、PowerShell 和项目命令；写入型命令每次仍需确认。' },
+      bash_exec: { name: '执行代码与命令', desc: '在已授权的读写目录中运行 Python、Node、PowerShell 和项目命令；是否询问由当前审批模式决定。' },
       run_command: { name: '运行命令', desc: '在已授权工作区执行 Python、Node、PowerShell、构建或任意项目命令，并返回输出与退出码。' },
       run_test: { name: '运行测试', desc: '自动识别或按指定命令运行 npm、pytest、Cargo、Go、Maven 或 Gradle 测试。' },
       docker_exec: { name: '执行 Docker 命令', desc: '在已存在的 Docker 容器中执行命令，并返回标准输出、错误与退出码。' },
