@@ -1,6 +1,9 @@
 import { Paperclip, Send, Square } from 'lucide-react'
+import { useEffect, useRef } from 'react'
 import PermissionModeSwitcher from '../../../components/PermissionModeSwitcher.jsx'
+import { normalizeOptionalTokenCount } from '../../../lib/contextUsage.js'
 import ModelPicker from '../ModelPicker.jsx'
+import ContextUsagePanel from '../chatMessages/ContextUsagePanel.jsx'
 
 /**
  * 上下文用量圆环:满环 = 上下文窗口用满。颜色随用量变化:
@@ -41,10 +44,36 @@ export default function ComposerActions({
   selectedModel,
   t,
 }) {
+  const contextPopoverRef = useRef(null)
   const primaryActionLabel = t(isGenerating ? 'chatComposer.stop' : 'chatComposer.send')
   const usage = contextUsage || {}
-  const percent = Number.isFinite(Number(usage.percent)) ? Math.max(0, Math.min(100, Number(usage.percent))) : 0
-  const ringTitle = `${Math.round(percent)}% · ${Number(usage.estimatedTokens || 0).toLocaleString()} / ${Number(usage.contextWindow || 0).toLocaleString()} tokens`
+  const measuredTokens = normalizeOptionalTokenCount(usage.actualPromptTokens)
+  const hasMeasuredTokens = measuredTokens !== null
+  const usedTokens = hasMeasuredTokens
+    ? measuredTokens
+    : Number(usage.estimatedTokens || 0)
+  const contextWindow = Math.max(1, Number(usage.contextWindow || 0))
+  const measuredPercent = hasMeasuredTokens
+    ? (usedTokens / contextWindow) * 100
+    : Number(usage.percent)
+  const percent = Number.isFinite(measuredPercent) ? Math.max(0, Math.min(100, measuredPercent)) : 0
+  const ringTitle = `${Math.round(percent)}% · ${usedTokens.toLocaleString()} / ${Number(usage.contextWindow || 0).toLocaleString()} tokens`
+
+  useEffect(() => {
+    if (!contextPanelOpen) return undefined
+    const closeOnOutsidePointer = (event) => {
+      if (!contextPopoverRef.current?.contains(event.target)) onToggleContext?.()
+    }
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') onToggleContext?.()
+    }
+    window.addEventListener('pointerdown', closeOnOutsidePointer)
+    window.addEventListener('keydown', closeOnEscape)
+    return () => {
+      window.removeEventListener('pointerdown', closeOnOutsidePointer)
+      window.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [contextPanelOpen, onToggleContext])
 
   return (
     <div data-testid="chat-composer-actions" className="mt-2.5 flex items-center justify-between gap-3">
@@ -64,18 +93,25 @@ export default function ComposerActions({
       </div>
       <div className="flex min-w-0 items-center gap-1.5">
         <ModelPicker open={modelPickerOpen} modelOptions={modelOptions} selectedModel={selectedModel} onOpen={onOpenModelPicker} onClose={onCloseModelPicker} onSelect={onModelChange} onManage={onManageModels} />
-        {/* 上下文用量圆环(替代原语音按钮):点击查看详情 */}
-        <button
-          type="button"
-          data-testid="context-ring"
-          onClick={onToggleContext}
-          aria-pressed={!!contextPanelOpen}
-          aria-label={ringTitle}
-          title={ringTitle}
-          className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors ${contextPanelOpen ? 'bg-paper-2 text-ink-soft' : 'text-ink-fade hover:bg-ink-ghost hover:text-ink-soft'}`}
-        >
-          <ContextRing percent={percent} />
-        </button>
+        <div ref={contextPopoverRef} className="relative">
+          {contextPanelOpen && (
+            <div className="absolute bottom-[calc(100%+12px)] right-0 z-50 w-[min(25rem,calc(100vw-2rem))]" data-testid="context-usage-popover">
+              <ContextUsagePanel contextUsage={usage} contextWindow={usage.contextWindow} t={t} />
+            </div>
+          )}
+          <button
+            type="button"
+            data-testid="context-ring"
+            onClick={onToggleContext}
+            aria-expanded={!!contextPanelOpen}
+            aria-haspopup="dialog"
+            aria-label={ringTitle}
+            title={ringTitle}
+            className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors ${contextPanelOpen ? 'bg-paper-2 text-ink-soft' : 'text-ink-fade hover:bg-ink-ghost hover:text-ink-soft'}`}
+          >
+            <ContextRing percent={percent} />
+          </button>
+        </div>
         <button
           type="button"
           data-testid="composer-primary-action"

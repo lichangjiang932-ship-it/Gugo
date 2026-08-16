@@ -13,7 +13,6 @@ const HTML_ARTIFACT_DIRECTIVES = Object.freeze([
   "script-src 'unsafe-inline'",
   "worker-src 'none'",
   "manifest-src 'none'",
-  "navigate-to 'none'",
 ])
 
 export const HTML_ARTIFACT_DOCUMENT_CSP = HTML_ARTIFACT_DIRECTIVES.join('; ')

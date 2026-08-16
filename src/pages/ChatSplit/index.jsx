@@ -145,7 +145,6 @@ export default function ChatSplit() {
     message,
     path,
     accessMode,
-    usePicker = false,
   }) => {
     const sessionId = stateRef.current.activeSessionId
     const turnId = message?.meta?.serverTurnId
@@ -156,13 +155,8 @@ export default function ChatSplit() {
       pausedSequence: message?.meta?.serverLastSequence,
       path,
       accessMode,
-      usePicker,
       purpose: clarification.purpose || clarification.why || '',
     })
-    if (result.cancelled) {
-      toast.info({ title: t('taskSteering.directoryPickerCancelled') })
-      return result
-    }
     dispatch({
       type: 'UPDATE_LAST_MESSAGE_META',
       sessionId,
@@ -310,8 +304,10 @@ export default function ChatSplit() {
       onAuthorizeDirectoryRequest={handleAuthorizeDirectoryRequest}
       onAuthorizeDirectory={directory.authorizeDirectory} onCloseDesktopPet={() => setDesktopPetVisible(false)}
       onCloseInlinePanel={() => setSlashInlinePanel(null)} onCloseModelPicker={() => setShowModelPicker(false)}
+      onActivatePreviewTab={(tabId) => dispatch({ type: 'ACTIVATE_PREVIEW_TAB', payload: tabId })}
+      onClosePreviewTab={(tabId) => dispatch({ type: 'CLOSE_PREVIEW_TAB', payload: tabId })}
       onClosePreview={() => dispatch({ type: 'CLOSE_PREVIEW_ARTIFACT' })} onCloseWorkbench={() => setWorkbenchOpen(false)}
-      onDirectoryReject={() => directory.resolveDirectoryApproval({ approved: false })} onDismissResume={() => setResumeState(null)}
+      onDirectoryReject={directory.cancelDirectoryApproval} onDismissResume={() => setResumeState(null)}
       onExpandCompaction={handleExpandCompaction} onFileChange={handleFileChange}
       onGoalsChange={(todos) => persistSlashGoals(dispatch, stateRef.current.activeSessionId, todos, getSlashActionCopy(lang).goals[0])}
       onInlineContext={() => { setSlashInlinePanel(null); setShowContextUsage(true); setShowContextPanel(true) }}
@@ -334,7 +330,8 @@ export default function ChatSplit() {
       onSubmitFeedback={(value) => recordLocalChatFeedback(value, stateRef.current.activeSessionId)}
       onToolApproval={approvals.resolveToolApproval} onVoiceClick={handleVoice} onWorkbenchSend={triggerSendFlow}
       onWorkbenchTabChange={setWorkbenchTab} onWorkbenchToggle={() => setWorkbenchOpen((open) => !open)}
-      previewArtifact={state.previewArtifact} resumeAvailable={!!resumeState}
+      previewArtifact={state.previewArtifact} previewTabs={state.previewTabs} previewActiveId={state.previewActiveId}
+      resumeAvailable={!!resumeState}
       runtimeSkillIds={runtimeSkills.filter((skill) => skill.runnable !== false).map((skill) => skill.id)}
       selectedModel={effectiveSelectedModel} setAttachments={setAttachments} setInput={setInput}
       setShowContextPanel={setShowContextPanel} showContextPanel={showContextPanel} showContextUsage={showContextUsage}

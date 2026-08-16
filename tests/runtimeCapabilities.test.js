@@ -38,6 +38,12 @@ test('capability block directs concrete file, shell, and PDF work through expose
   assert.match(text, /call the tool now/i)
 })
 
+test('capability block advertises PDF generation when create_pdf is exposed', () => {
+  const text = buildRuntimeCapabilityBlock({ toolSpecs: [spec('create_pdf')] })
+  assert.match(text, /Artifacts:/)
+  assert.match(text, /exposed create_\*/)
+})
+
 test('capability block is replaced on resume instead of duplicated', () => {
   const old = { role: 'system', content: `${RUNTIME_CAPABILITIES_MARKER}\n- PDF: stale` }
   const next = replaceRuntimeCapabilityBlock([

@@ -8,7 +8,6 @@ import DesktopPet from './DesktopPet.jsx'
 import RightPreviewPane from './RightPreviewPane'
 import RightWorkbench from './RightWorkbench'
 import SlashInlinePanelHost from './SlashInlinePanelHost.jsx'
-import ContextUsagePanel from './chatMessages/ContextUsagePanel.jsx'
 import { estimateClientContextUsage } from '../../lib/contextUsage.js'
 
 export function ChatRightPanels({
@@ -22,11 +21,23 @@ export function ChatRightPanels({
   isGenerating,
   workbenchMessage,
   previewArtifact,
+  previewTabs,
+  previewActiveId,
+  onActivatePreviewTab,
+  onClosePreviewTab,
   onClosePreview,
   onPreviewMessage,
 }) {
   if (previewArtifact) {
-    return <RightPreviewPane artifact={previewArtifact} onClose={onClosePreview} onMessage={onPreviewMessage} />
+    return <RightPreviewPane
+      artifact={previewArtifact}
+      previewTabs={previewTabs}
+      activePreviewId={previewActiveId}
+      onActivateTab={onActivatePreviewTab}
+      onCloseTab={onClosePreviewTab}
+      onClose={onClosePreview}
+      onMessage={onPreviewMessage}
+    />
   }
   if (!workbenchOpen) return null
   return (
@@ -111,13 +122,21 @@ export default function ChatSplitView({
   workbenchOpen,
   workbenchTab,
   previewArtifact,
+  previewTabs,
+  previewActiveId,
+  onActivatePreviewTab,
+  onClosePreviewTab,
 }) {
-  // 上下文用量按当前实际模型上下文窗口估算(与模型配置联动)。
+  const latestAssistantMessage = [...messages].reverse()
+    .find((message) => message?.role === 'assistant')
+  const actualPromptTokens = latestAssistantMessage?.meta?.actualPromptTokens
+  // 优先显示服务端最新一次模型调用的真实 prompt tokens；缺失时再估算。
   const contextUsage = estimateClientContextUsage({
     messages,
     tools: contextToolSpecs,
     systemPrompt: contextSystemPrompt,
     contextWindow,
+    actualPromptTokens,
   })
   const toggleContextPanel = () => setShowContextPanel((current) => !current)
 
@@ -177,17 +196,15 @@ export default function ChatSplitView({
           onManageMcp={onManageMcp}
         />
         {directoryApproval.open && (
-          <div className="mx-auto w-full max-w-[872px] px-4 pb-2">
-            <DirectoryApprovalModal
-              key={directoryApproval.request?.suggestGrantPath || directoryApproval.request?.path || 'request'}
-              open={directoryApproval.open}
-              request={directoryApproval.request}
-              busy={directoryApproval.busy}
-              error={directoryApproval.error}
-              onAuthorize={onAuthorizeDirectory}
-              onReject={onDirectoryReject}
-            />
-          </div>
+          <DirectoryApprovalModal
+            key={directoryApproval.requestId || directoryApproval.request?.suggestGrantPath || directoryApproval.request?.path || 'request'}
+            open={directoryApproval.open}
+            request={directoryApproval.request}
+            busy={directoryApproval.busy}
+            error={directoryApproval.error}
+            onAuthorize={onAuthorizeDirectory}
+            onReject={onDirectoryReject}
+          />
         )}
 
         {toolApproval.open && (
@@ -212,19 +229,6 @@ export default function ChatSplitView({
                 {t('toast.chatResumeDismiss')}
               </button>
             </div>
-          </div>
-        )}
-
-        {showContextPanel && (
-          <div className="mx-auto w-full max-w-[872px] px-4 pb-2">
-            <ContextUsagePanel
-              contextUsage={contextUsage}
-              contextWindow={contextWindow}
-              messages={messages}
-              selectedModel={selectedModel}
-              onClose={() => setShowContextPanel(false)}
-              t={t}
-            />
           </div>
         )}
 
@@ -267,6 +271,10 @@ export default function ChatSplitView({
         isGenerating={isGenerating}
         workbenchMessage={workbenchMessage}
         previewArtifact={previewArtifact}
+        previewTabs={previewTabs}
+        previewActiveId={previewActiveId}
+        onActivatePreviewTab={onActivatePreviewTab}
+        onClosePreviewTab={onClosePreviewTab}
         onClosePreview={onClosePreview}
         onPreviewMessage={onPreviewMessage}
       />

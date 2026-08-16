@@ -1,5 +1,6 @@
 import { getDb } from '../db.js'
 import { parseTurnEvent } from '../../shared/turnEvents.js'
+import { saveTurnCheckpoint } from './turnCheckpointStore.js'
 
 const subscribers = new Map()
 const DAY_MS = 86_400_000
@@ -49,6 +50,31 @@ function publishTurnEvent(userId, event) {
 
 function mapRow(row) {
   return row ? parseTurnEvent({ id: row.id, sessionId: row.session_id, turnId: row.turn_id, sequence: row.sequence, type: row.type, payload: JSON.parse(row.payload_json), createdAt: row.created_at }) : null
+}
+
+export function turnEventForClient(event) {
+  if (event?.type !== 'turn.checkpoint') return event
+  if (event.payload?.storage === 'turn_checkpoints') return event
+  const state = event.payload?.state && typeof event.payload.state === 'object'
+    ? event.payload.state
+    : {}
+  const budget = state.budget && typeof state.budget === 'object' ? state.budget : {}
+  return {
+    ...event,
+    payload: {
+      state: {
+        iterations: Math.max(0, Number(state.iterations) || 0),
+        toolCalls: Array.isArray(state.toolCalls) ? state.toolCalls.length : 0,
+        artifactCount: Array.isArray(state.artifactIds) ? state.artifactIds.length : 0,
+        budget: {
+          used: Math.max(0, Number(budget.used) || 0),
+          maxTotalCalls: Math.max(0, Number(budget.maxTotalCalls) || 0),
+          modelCalls: Math.max(0, Number(budget.modelCalls) || 0),
+          maxModelCalls: Math.max(0, Number(budget.maxModelCalls) || 0),
+        },
+      },
+    },
+  }
 }
 
 /**
@@ -106,11 +132,16 @@ export function pruneTurnEvents({
     DELETE FROM turn_events
     WHERE user_id = ? AND session_id = ? AND turn_id = ?
   `)
+  const removeCheckpoint = db.prepare(`
+    DELETE FROM turn_checkpoints
+    WHERE user_id = ? AND session_id = ? AND turn_id = ?
+  `)
   let turnsDeleted = 0
   let eventsDeleted = 0
   db.transaction(() => {
     for (const row of doomed.values()) {
       const result = remove.run(row.user_id, row.session_id, row.turn_id)
+      removeCheckpoint.run(row.user_id, row.session_id, row.turn_id)
       if (result.changes > 0) turnsDeleted += 1
       eventsDeleted += result.changes
     }
@@ -131,24 +162,51 @@ function maybePruneTurnEvents(now = Date.now()) {
   }
 }
 
-export function appendTurnEvent({ userId, event }) {
+export function appendTurnEvent({ userId, event, checkpointState = null }) {
   if (!userId) throw new Error('user id is required')
   const value = parseTurnEvent(event)
+  if (checkpointState !== null && value.type !== 'turn.checkpoint') {
+    throw new Error('checkpoint state requires a turn.checkpoint event')
+  }
   const db = getDb()
   const session = db.prepare(`
     SELECT token FROM sessions
     WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
   `).get(userId, value.sessionId)
   if (!session) throw new Error('session not found')
-  const inserted = db.prepare(`INSERT OR IGNORE INTO turn_events
-    (id, user_id, session_id, turn_id, sequence, type, payload_json, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(value.id, userId, value.sessionId, value.turnId, value.sequence, value.type, JSON.stringify(value.payload), value.createdAt)
-  const row = db.prepare('SELECT * FROM turn_events WHERE user_id = ? AND session_id = ? AND turn_id = ? AND sequence = ?').get(userId, value.sessionId, value.turnId, value.sequence)
-  if (row.id !== value.id || row.type !== value.type || row.payload_json !== JSON.stringify(value.payload)) throw new Error('turn event sequence conflict')
+  let inserted
+  let row
+  db.transaction(() => {
+    inserted = db.prepare(`INSERT OR IGNORE INTO turn_events
+      (id, user_id, session_id, turn_id, sequence, type, payload_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(value.id, userId, value.sessionId, value.turnId, value.sequence, value.type, JSON.stringify(value.payload), value.createdAt)
+    row = db.prepare('SELECT * FROM turn_events WHERE user_id = ? AND session_id = ? AND turn_id = ? AND sequence = ?')
+      .get(userId, value.sessionId, value.turnId, value.sequence)
+    if (row.id !== value.id || row.type !== value.type || row.payload_json !== JSON.stringify(value.payload)) {
+      throw new Error('turn event sequence conflict')
+    }
+    if (inserted.changes > 0 && checkpointState !== null) {
+      const checkpoint = saveTurnCheckpoint({
+        userId,
+        sessionId: value.sessionId,
+        turnId: value.turnId,
+        eventSequence: value.sequence,
+        state: checkpointState,
+        now: value.createdAt,
+      })
+      if (!checkpoint?.state) throw new Error('Failed to persist turn checkpoint')
+    }
+    if (inserted.changes > 0 && value.type === 'turn.checkpoint') {
+      db.prepare(`DELETE FROM turn_events
+        WHERE user_id = ? AND session_id = ? AND turn_id = ?
+          AND type = 'turn.checkpoint' AND sequence < ?`)
+        .run(userId, value.sessionId, value.turnId, value.sequence)
+    }
+  })()
   const stored = mapRow(row)
   if (inserted.changes > 0) {
-    publishTurnEvent(userId, stored)
+    publishTurnEvent(userId, turnEventForClient(stored))
     // Event timestamps and retention share the same clock. This also makes a
     // first append after process restart eligible to clean up an old database.
     maybePruneTurnEvents(value.createdAt)

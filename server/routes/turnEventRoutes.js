@@ -2,7 +2,7 @@ import { authenticateRequest } from '../middleware.js'
 import { resolveAuthMode } from '../adapters/authAccount.js'
 import { readJson, sendJson } from '../utils.js'
 import { getTurnEngine, TurnEngineError } from '../services/TurnEngine.js'
-import { listTurnEvents, subscribeTurnEvents } from '../services/turnEventStore.js'
+import { listTurnEvents, subscribeTurnEvents, turnEventForClient } from '../services/turnEventStore.js'
 import { subscribeTurnActivities } from '../services/turnActivityBus.js'
 import { TurnSteeringError } from '../services/turnSteeringStore.js'
 
@@ -88,7 +88,7 @@ export async function handleTurnEventRequest(
       const sendEvent = (event) => {
         if (closed || event.sequence <= lastSequence) return
         lastSequence = event.sequence
-        sendSse(res, 'turn_event', event, event.sequence)
+        sendSse(res, 'turn_event', turnEventForClient(event), event.sequence)
         if (STREAM_END_EVENTS.has(event.type)) {
           cleanup()
           res.end()
@@ -158,7 +158,7 @@ export async function handleTurnEventRequest(
         after: url.searchParams.get('after'),
         limit: url.searchParams.get('limit'),
       })
-      return sendJson(res, 200, { events })
+      return sendJson(res, 200, { events: events.map(turnEventForClient) })
     }
 
     if (req.method === 'POST' && url.pathname === '/api/turns/run') {

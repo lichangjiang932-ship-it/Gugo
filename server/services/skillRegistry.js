@@ -3,7 +3,13 @@ import { canonicalizeSkillId, PPT_SKILL_ID_ALIASES } from '../../shared/artifact
 import { getCodexPluginSkill, listCodexPluginSkills } from '../adapters/codexPluginSkills.js'
 import { getImportedSkill, listAllSkillIds, listImportedSkills } from './skillStore.js'
 
-function mapBuiltInSkill(skill) {
+const SKILL_CATALOG_DESCRIPTION_CHARACTERS = 500
+
+function boundedDescription(value) {
+  return Array.from(String(value || '').trim()).slice(0, SKILL_CATALOG_DESCRIPTION_CHARACTERS).join('')
+}
+
+function mapBuiltInSkill(skill, { loadPrompt = true } = {}) {
   return {
     id: skill.id,
     name: skill.name,
@@ -14,12 +20,12 @@ function mapBuiltInSkill(skill) {
     perms: skill.perms || [],
     recommended: !!skill.recommended,
     custom: false,
-    systemPrompt: skill.systemPrompt || '',
+    ...(loadPrompt ? { systemPrompt: skill.systemPrompt || '' } : {}),
   }
 }
 
-function mapImportedSkill(skill) {
-  const full = getImportedSkill(skill.id, { userId: skill.userId })
+function mapImportedSkill(skill, { loadPrompt = true } = {}) {
+  const full = loadPrompt ? getImportedSkill(skill.id, { userId: skill.userId }) : null
   const fileList = full?.files ? Object.keys(full.files) : []
   return {
     id: skill.id,
@@ -34,9 +40,23 @@ function mapImportedSkill(skill) {
     imported: !skill.system,
     system: !!skill.system,
     version: skill.version,
-    assetCount: fileList.length,
-    hasTemplates: fileList.some((p) => p.startsWith('templates/')),
-    systemPrompt: full?.files?.['prompts/system.md'] || '',
+    ...(loadPrompt ? {
+      assetCount: fileList.length,
+      hasTemplates: fileList.some((p) => p.startsWith('templates/')),
+      systemPrompt: full?.files?.['prompts/system.md'] || '',
+    } : {}),
+  }
+}
+
+function catalogEntry(skill) {
+  const id = String(skill?.id || '').trim()
+  if (!id) return null
+  return {
+    id,
+    name: String(skill?.name || id).trim(),
+    description: boundedDescription(skill?.description || skill?.desc),
+    loadable: skill?.runnable !== false,
+    loadHint: `/${id}`,
   }
 }
 
@@ -56,6 +76,25 @@ export function listRuntimeSkills({ userId } = {}) {
     ...primary,
     ...listCodexPluginSkills().filter((skill) => !primaryIds.has(skill.id)),
   ]
+}
+
+/**
+ * Prompt-safe runtime catalog. This path deliberately avoids reading imported
+ * skill assets or Codex SKILL.md bodies; full instructions are loaded only by
+ * getRuntimeSkill() for explicit skillIds.
+ */
+export function listRuntimeSkillCatalog({ userId } = {}) {
+  const primary = [
+    ...SKILLS.map((skill) => mapBuiltInSkill(skill, { loadPrompt: false })),
+    ...listImportedSkills({ userId })
+      .filter((skill) => canonicalizeSkillId(skill.id) === skill.id)
+      .map((skill) => mapImportedSkill(skill, { loadPrompt: false })),
+  ]
+  const primaryIds = new Set(primary.map((skill) => skill.id))
+  return [
+    ...primary,
+    ...listCodexPluginSkills().filter((skill) => !primaryIds.has(skill.id)),
+  ].map(catalogEntry).filter(Boolean)
 }
 
 export function getRuntimeSkill(id, { userId } = {}) {

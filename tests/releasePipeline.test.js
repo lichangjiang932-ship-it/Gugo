@@ -76,6 +76,28 @@ test('Release workflow is gated by reusable CI and reruns update existing releas
   const verification = read('scripts/release/verify-web-release.ps1')
   assert.match(verification, /THIRD_PARTY_NOTICES\.md/)
   assert.match(verification, /resources\/licenses\/LGPL-3\.0\.txt/)
+  assert.match(verification, /RedirectStandardOutput/)
+  assert.match(verification, /RedirectStandardError/)
+  assert.match(verification, /Read-ServerDiagnostics/)
+})
+
+test('Web release includes the server parser dependency closure without browser barrels', () => {
+  const runtimeParserEntries = [
+    'src/lib/officeExport/documentExport.js',
+    'src/lib/officeExport/officeCommon.js',
+    'src/lib/officeExport/spreadsheetExport.js',
+    'src/lib/presentationExport/presentationParseHelpers.js',
+    'src/lib/presentationExport/presentationParser.js',
+  ]
+  for (const entry of runtimeParserEntries) {
+    assert.equal(WEB_RELEASE_ENTRIES.includes(entry), true, `missing runtime parser dependency ${entry}`)
+  }
+
+  const heuristics = read('server/services/toolLoopHeuristics.js')
+  assert.match(heuristics, /officeExport\/documentExport\.js/)
+  assert.match(heuristics, /officeExport\/spreadsheetExport\.js/)
+  assert.match(heuristics, /presentationExport\/presentationParser\.js/)
+  assert.doesNotMatch(heuristics, /from ['"]\.\.\/\.\.\/src\/lib\/(?:officeExport|presentationExport)\.js['"]/)
 })
 
 function readFrom(rootDir, relativePath) {

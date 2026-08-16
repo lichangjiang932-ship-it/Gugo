@@ -7,7 +7,7 @@ import {
   selectPersistedSnapshot,
 } from './appStatePersistence.js'
 
-export const TOOLS_CONFIG_SCHEMA_VERSION = 8
+export const TOOLS_CONFIG_SCHEMA_VERSION = 9
 
 export function needsToolsConfigSchemaMigration(saved) {
   if (!saved?.toolsConfig || typeof saved.toolsConfig !== 'object') return false
@@ -43,12 +43,15 @@ export function createInitialState() {
     skillConfigs: {},
     agentMode: 'chat',
     previewArtifact: null,
+    previewTabs: [],
+    previewActiveId: '',
     toolsConfigSchemaVersion: TOOLS_CONFIG_SCHEMA_VERSION,
     toolsConfig: {
       fetch_url: true,
       create_pptx: true,
       create_docx: true,
       create_xlsx: true,
+      create_pdf: true,
       create_react_component: true,
       create_mermaid: true,
       create_chart: true,
@@ -150,6 +153,7 @@ export function normalizePersistedFields(saved, { cancelRunningTasks = false } =
         'git_write',
       ]) normalized.toolsConfig[name] = true
     }
+    if (savedSchemaVersion < 9) normalized.toolsConfig.create_pdf = true
   }
   normalized.toolsConfigSchemaVersion = TOOLS_CONFIG_SCHEMA_VERSION
   if (normalized.sessions !== undefined) normalized.sessions = backfillMessageTimestamps(normalized.sessions)

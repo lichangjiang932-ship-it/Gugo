@@ -16,10 +16,12 @@ const {
   buildSessionsBlock,
   clearPromptCompilerCache,
   getPromptCompilerStats,
+  prepareSkillCatalogForPrompt,
   SKILL_PROMPT_LIMITS,
 } = await import('../server/services/promptCompiler.js')
 const { buildAgentSystemBlock } = await import('../server/services/agentStore.js')
 const { createCompactionArchive } = await import('../server/services/compactionService.js')
+const { MAX_COMPACTION_SUMMARY_CHARS } = await import('../server/services/contextCompactionRuntime.js')
 
 function agent(patch = {}) {
   return {
@@ -132,6 +134,50 @@ test('prepared skill prompts and the combined skills block obey safety budgets',
   assert.match(block.text, /safety budget/)
 })
 
+test('skill catalog stays metadata-only until a skill is explicitly loaded', () => {
+  const block = buildSkillsBlockFromPrepared({
+    catalogSkills: [{
+      id: 'catalog-writer',
+      name: 'Catalog writer',
+      description: 'A compact catalog entry.',
+      systemPrompt: 'SECRET_UNSELECTED_SKILL_BODY',
+      loadable: true,
+    }],
+  })
+
+  assert.match(block.text, /catalog-writer.*Catalog writer.*loadable: \/catalog-writer/)
+  assert.doesNotMatch(block.text, /SECRET_UNSELECTED_SKILL_BODY/)
+  assert.deepEqual(block.sources.skillIds, [])
+  assert.deepEqual(block.sources.catalogSkillIds, ['catalog-writer'])
+})
+
+test('selected skills with identical instruction digests inject the body once', () => {
+  const block = buildSkillsBlockFromPrepared({
+    skills: [{
+      id: 'duplicate-a',
+      name: 'Duplicate A',
+      systemPrompt: 'SHARED_SKILL_BODY_FOR_DIGEST_DEDUP',
+    }, {
+      id: 'duplicate-b',
+      name: 'Duplicate B',
+      systemPrompt: 'SHARED_SKILL_BODY_FOR_DIGEST_DEDUP',
+    }],
+  })
+
+  assert.deepEqual(block.sources.skillIds, ['duplicate-a', 'duplicate-b'])
+  assert.equal(block.sources.promptDigests.length, 1)
+  assert.equal(block.text.match(/SHARED_SKILL_BODY_FOR_DIGEST_DEDUP/g)?.length, 1)
+  assert.match(block.text, /Equivalent selected IDs.*duplicate-b/)
+})
+
+test('runtime catalog preparation exposes bounded metadata without prompt bodies', () => {
+  const catalog = prepareSkillCatalogForPrompt()
+  assert.ok(catalog.length > 0)
+  assert.equal(catalog.every((skill) => !Object.hasOwn(skill, 'systemPrompt')), true)
+  assert.equal(catalog.every((skill) => Array.from(skill.description).length <= 500), true)
+  assert.equal(catalog.every((skill) => typeof skill.loadable === 'boolean'), true)
+})
+
 test('buildSessionsBlock includes sessionId and recentMessages in fingerprint', () => {
   clearPromptCompilerCache()
   const base = buildSessionsBlock({
@@ -185,6 +231,163 @@ test('buildSessionsBlock reads compaction archive summary from recent message ar
   })
 
   assert.match(block.text, /Archived summary text/)
+})
+
+test('buildSessionsBlock bounds legacy oversized compaction archive summaries', () => {
+  clearPromptCompilerCache('sessions')
+  const omittedSentinel = 'LEGACY_ARCHIVE_OMITTED_SENTINEL'
+  const oversizedSummary = [
+    'LEGACY_ARCHIVE_HEAD',
+    'x'.repeat(120_000),
+    omittedSentinel,
+    'y'.repeat(120_000),
+  ].join('\n')
+  const archive = createCompactionArchive({
+    userId: 'u_archive_oversized',
+    sessionId: 's_archive_oversized',
+    archivedMessages: [],
+    summaryText: oversizedSummary,
+  })
+  const block = buildSessionsBlock({
+    userId: 'u_archive_oversized',
+    sessionId: 's_archive_oversized',
+    recentMessages: [{ role: 'assistant', content: 'summary', meta: { archiveId: archive.id } }],
+  })
+
+  assert.match(block.text, /LEGACY_ARCHIVE_HEAD/)
+  assert.match(block.text, /Compaction checkpoint shortened to fit the active context budget/)
+  assert.doesNotMatch(block.text, new RegExp(omittedSentinel))
+  assert.ok(block.text.length <= MAX_COMPACTION_SUMMARY_CHARS + 512)
+  assert.ok(block.text.length < oversizedSummary.length / 4)
+})
+
+test('buildSessionsBlock projects only messages after a matched compaction boundary', () => {
+  clearPromptCompilerCache('sessions')
+  const archive = createCompactionArchive({
+    userId: 'u_archive_matched_boundary',
+    sessionId: 's_archive_matched_boundary',
+    archivedMessages: [],
+    summaryText: 'Matched archive summary',
+  })
+  const block = buildSessionsBlock({
+    userId: 'u_archive_matched_boundary',
+    sessionId: 's_archive_matched_boundary',
+    recentMessages: [
+      { id: 'old-user', role: 'user', content: 'ARCHIVED_REQUEST_MUST_NOT_REPLAY' },
+      { id: 'old-assistant', role: 'assistant', content: 'ARCHIVED_REPLY_MUST_NOT_REPLAY' },
+      { id: 'retained-user', role: 'user', content: 'RETAINED_OBJECTIVE' },
+      {
+        id: 'retained-assistant',
+        role: 'assistant',
+        content: 'RETAINED_REPLY',
+        modelContext: {
+          compactionArchiveId: archive.id,
+          compactionFirstKeptMessageId: 'retained-user',
+          compactionLastCompactedMessageId: 'old-assistant',
+        },
+      },
+    ],
+  })
+
+  assert.match(block.text, /Matched archive summary/)
+  assert.match(block.text, /RETAINED_OBJECTIVE/)
+  assert.match(block.text, /RETAINED_REPLY/)
+  assert.doesNotMatch(block.text, /ARCHIVED_REQUEST_MUST_NOT_REPLAY/)
+  assert.doesNotMatch(block.text, /ARCHIVED_REPLY_MUST_NOT_REPLAY/)
+  assert.equal(block.sources.compactionBoundaryMatched, true)
+})
+
+test('buildSessionsBlock keeps post-reference messages when a compaction boundary is unmatched', () => {
+  clearPromptCompilerCache('sessions')
+  const archive = createCompactionArchive({
+    userId: 'u_archive_unmatched_boundary',
+    sessionId: 's_archive_unmatched_boundary',
+    archivedMessages: [],
+    summaryText: 'Unmatched archive summary',
+  })
+  const block = buildSessionsBlock({
+    userId: 'u_archive_unmatched_boundary',
+    sessionId: 's_archive_unmatched_boundary',
+    recentMessages: [
+      { id: 'old-user', role: 'user', content: 'STALE_REQUEST_MUST_NOT_REPLAY' },
+      { id: 'old-assistant', role: 'assistant', content: 'STALE_REPLY_MUST_NOT_REPLAY' },
+      {
+        id: 'archive-reference',
+        role: 'assistant',
+        content: 'REFERENCE_MESSAGE_MUST_NOT_REPLAY',
+        modelContext: {
+          compactionArchiveId: archive.id,
+          compactionFirstKeptMessageId: 'missing-retained-message',
+          compactionLastCompactedMessageId: 'missing-archived-message',
+        },
+      },
+      { id: 'current-turn:user', role: 'user', content: 'CURRENT_REQUEST_MUST_SURVIVE' },
+    ],
+  })
+
+  assert.match(block.text, /Unmatched archive summary/)
+  assert.match(block.text, /Recent Transcript/)
+  assert.match(block.text, /CURRENT_REQUEST_MUST_SURVIVE/)
+  assert.doesNotMatch(block.text, /STALE_REQUEST_MUST_NOT_REPLAY/)
+  assert.doesNotMatch(block.text, /STALE_REPLY_MUST_NOT_REPLAY/)
+  assert.doesNotMatch(block.text, /REFERENCE_MESSAGE_MUST_NOT_REPLAY/)
+  assert.equal(block.sources.compactionBoundaryMatched, false)
+})
+
+test('buildSessionsBlock keeps canonical history when the referenced archive is missing', () => {
+  clearPromptCompilerCache('sessions')
+  const block = buildSessionsBlock({
+    userId: 'u_archive_missing',
+    sessionId: 's_archive_missing',
+    recentMessages: [
+      { id: 'old-user', role: 'user', content: 'CANONICAL_HISTORY_MUST_SURVIVE' },
+      {
+        id: 'missing-archive-reference',
+        role: 'assistant',
+        content: 'MISSING_ARCHIVE_REFERENCE_MUST_SURVIVE',
+        modelContext: {
+          compactionArchiveId: 'cmp-does-not-exist',
+          compactionFirstKeptMessageId: 'missing-retained-message',
+        },
+      },
+      { id: 'current-turn:user', role: 'user', content: 'CURRENT_REQUEST_MUST_SURVIVE' },
+    ],
+  })
+
+  assert.match(block.text, /CANONICAL_HISTORY_MUST_SURVIVE/)
+  assert.match(block.text, /MISSING_ARCHIVE_REFERENCE_MUST_SURVIVE/)
+  assert.match(block.text, /CURRENT_REQUEST_MUST_SURVIVE/)
+  assert.equal(block.sources.archiveId, null)
+  assert.equal(block.sources.compactionBoundary, null)
+})
+
+test('buildSessionsBlock keeps canonical history when the archive belongs to another session', () => {
+  clearPromptCompilerCache('sessions')
+  const archive = createCompactionArchive({
+    userId: 'u_archive_wrong_session',
+    sessionId: 's_archive_owner',
+    archivedMessages: [],
+    summaryText: 'WRONG_SESSION_SUMMARY_MUST_NOT_LOAD',
+  })
+  const block = buildSessionsBlock({
+    userId: 'u_archive_wrong_session',
+    sessionId: 's_archive_requester',
+    recentMessages: [
+      {
+        id: 'wrong-session-reference',
+        role: 'assistant',
+        content: 'CANONICAL_REFERENCE_MUST_SURVIVE',
+        modelContext: { compactionArchiveId: archive.id },
+      },
+      { id: 'current-turn:user', role: 'user', content: 'CURRENT_REQUEST_MUST_SURVIVE' },
+    ],
+  })
+
+  assert.match(block.text, /CANONICAL_REFERENCE_MUST_SURVIVE/)
+  assert.match(block.text, /CURRENT_REQUEST_MUST_SURVIVE/)
+  assert.doesNotMatch(block.text, /WRONG_SESSION_SUMMARY_MUST_NOT_LOAD/)
+  assert.equal(block.sources.archiveId, null)
+  assert.equal(block.sources.compactionBoundary, null)
 })
 
 test('buildSessionsBlock can retain the compacted archive without mirroring recent transcript', () => {

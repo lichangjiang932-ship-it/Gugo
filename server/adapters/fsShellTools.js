@@ -204,7 +204,7 @@ export function resolveForShellCwd(rawPath, { userId = null } = {}) {
       throw error
     }
     assertWorkspaceCapability({ userId, rootPath, capability: 'shell' })
-  } else if (resolved.source === 'grant') {
+  } else if (resolved.source === 'grant' || resolved.source === 'bypass') {
     if (!isLocalCodeExecutionEnabled()) {
       const error = badReq('本地代码执行已被 LOCAL_CODE_EXECUTION_ENABLED=0 关闭', 403)
       error.code = 'LOCAL_CODE_EXECUTION_DISABLED'
@@ -216,7 +216,7 @@ export function resolveForShellCwd(rawPath, { userId = null } = {}) {
       throw error
     }
   } else {
-    const error = badReq('代码执行必须使用用户明确授权的读写目录；全文件访问不会隐式授予 Shell 权限', 403)
+    const error = badReq('代码执行必须使用用户明确授权的读写目录或“全部放行”模式；全文件访问不会隐式授予 Shell 权限', 403)
     error.code = 'SHELL_DIRECTORY_GRANT_REQUIRED'
     error.requiredAccessMode = 'read_write'
     throw error
@@ -225,29 +225,25 @@ export function resolveForShellCwd(rawPath, { userId = null } = {}) {
 }
 
 function resolveShellCwdForCommand(rawCwd, { command, userId }) {
-  try {
-    return resolveForShellCwd(rawCwd, { userId })
-  } catch (error) {
-    const cwdWasOmitted = rawCwd == null || rawCwd === ''
-    if (!cwdWasOmitted || error?.code !== 'PATH_NOT_AUTHORIZED' || !userId) throw error
-
+  const cwdWasOmitted = rawCwd == null || rawCwd === ''
+  if (cwdWasOmitted && userId) {
     const absolutePaths = extractAbsoluteShellPaths(command)
-    if (absolutePaths.length === 0) throw error
-    const grants = absolutePaths.map((rawPath) => findAuthorizedDirectoryGrant({
-      userId,
-      rawPath,
-      accessMode: 'read_write',
-    }))
-    if (grants.some((grant) => !grant)) throw error
-
-    const [firstGrant] = grants
-    const sameGrant = grants.every((grant) => (
-      grant.id === firstGrant.id
-      && path.normalize(grant.path) === path.normalize(firstGrant.path)
-    ))
-    if (!sameGrant) throw error
-    return resolveForShellCwd(firstGrant.path, { userId })
+    if (absolutePaths.length > 0) {
+      const grants = absolutePaths.map((rawPath) => findAuthorizedDirectoryGrant({
+        userId,
+        rawPath,
+        accessMode: 'read_write',
+      }))
+      const [firstGrant] = grants
+      const sameGrant = firstGrant && grants.every((grant) => (
+        grant
+        && grant.id === firstGrant.id
+        && path.normalize(grant.path) === path.normalize(firstGrant.path)
+      ))
+      if (sameGrant) return resolveForShellCwd(firstGrant.path, { userId })
+    }
   }
+  return resolveForShellCwd(rawCwd, { userId })
 }
 
 // 把任意 path 字符串解析到 WORKSPACE_ROOT 下的绝对路径.防 traversal + symlink 逃逸.

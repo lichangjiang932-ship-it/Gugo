@@ -39,13 +39,15 @@ function getRoot({
     allowWorkspace: true,
   })
   if (!fs.statSync(resolved.fullPath).isDirectory()) throw badReq('cwd must be a directory')
-  for (const capability of capabilities) {
-    assertWorkspaceCapability({
-      userId,
-      rootPath: resolved.rootPath || resolved.fullPath,
-      capability,
-      env,
-    })
+  if (resolved.source !== 'bypass') {
+    for (const capability of capabilities) {
+      assertWorkspaceCapability({
+        userId,
+        rootPath: resolved.rootPath || resolved.fullPath,
+        capability,
+        env,
+      })
+    }
   }
   return resolved.fullPath
 }

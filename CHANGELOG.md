@@ -6,6 +6,25 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.12] - 2026-08-16
+
+### Added
+
+- Added an in-app directory browser to chat, tasks, workspace permissions, and settings, replacing the blocking native folder picker.
+- Added a configurable default output directory for generated HTML, image, PDF, PowerPoint, Word, and Excel files.
+
+### Changed
+
+- Made output placement follow the user's explicit path first, then the configured default directory, then the active project directory; edits keep the original file path.
+- Made “Bypass all” skip file, directory, Shell, Git, and external-action approval prompts while keeping path validation and workspace safety checks.
+- Kept long-running tool activity visible and preserved lightweight clickable file receipts without loading entire large files into model context.
+
+### Fixed
+
+- Prevented generated files from overwriting unrelated same-named files and preserved the first delivery path across revisions.
+- Prevented artifact-generation tests from leaking HTML, DOCX, PPTX, and other sample files into the repository checkout.
+- Removed stale system-picker and per-command-approval wording that contradicted the inline browser and active approval mode.
+
 ## [0.11.11] - 2026-08-15
 
 ### Fixed

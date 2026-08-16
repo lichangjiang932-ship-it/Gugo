@@ -1,6 +1,6 @@
 import { isValidElement, memo, useState } from 'react'
 import { Check, Copy } from 'lucide-react'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import rehypeHighlight from 'rehype-highlight'
@@ -39,6 +39,13 @@ const sanitizeSchema = {
 
 function isLocalPathHref(href = '') {
   return /^file:\/\//i.test(String(href || ''))
+}
+
+function markdownUrlTransform(value) {
+  // Local paths are rendered without an href below and every click is
+  // intercepted by the registered-reference resolver. All other protocols
+  // retain react-markdown's default URL safety policy.
+  return isLocalPathHref(value) ? value : defaultUrlTransform(value)
 }
 
 function nodeText(node) {
@@ -109,6 +116,7 @@ function MarkdownRenderer({ artifactReferences = [], children, className = '', o
     <div className={`chat-markdown prose prose-sm max-w-none ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, [remarkArtifactReferences, { references: artifactReferences }], remarkLocalPathLinks]}
+        urlTransform={markdownUrlTransform}
         rehypePlugins={[
           [rehypeSanitize, sanitizeSchema],
           rehypeHighlight,

@@ -118,12 +118,52 @@ export function errorBoundary(req, res, next) {
 
 /* ── 请求日志 ── */
 
+const SENSITIVE_LOG_QUERY_KEYS = new Set([
+  'apikey',
+  'auth',
+  'authorization',
+  'clientsecret',
+  'code',
+  'key',
+  'password',
+  'secret',
+  'token',
+])
+
+function isSensitiveLogQueryKey(value) {
+  const key = String(value || '').trim().toLowerCase().replace(/[-_]/g, '')
+  return SENSITIVE_LOG_QUERY_KEYS.has(key)
+    || key.endsWith('token')
+    || key.endsWith('secret')
+    || key.endsWith('password')
+}
+
+export function redactUrlForLog(value = '') {
+  const raw = String(value || '')
+  if (!raw.includes('?')) return raw
+  try {
+    const parsed = new URL(raw, 'http://localhost')
+    for (const key of new Set(parsed.searchParams.keys())) {
+      if (isSensitiveLogQueryKey(key)) parsed.searchParams.set(key, '[REDACTED]')
+    }
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`
+      .replaceAll('%5BREDACTED%5D', '[REDACTED]')
+  } catch {
+    return raw.replace(
+      /([?&](?:api[_-]?key|auth(?:orization)?|client[_-]?secret|code|key|password|secret|(?:[a-z0-9_-]*token))=)[^&#]*/gi,
+      '$1[REDACTED]',
+    )
+  }
+}
+
 export function requestLogger(req, res, next) {
   const start = Date.now()
   const originalEnd = res.end.bind(res)
   res.end = (...args) => {
     const duration = Date.now() - start
-    if (process.env.NODE_ENV !== 'production') logger.info(`${req.method} ${req.url} ${res.statusCode || 200} ${duration}ms`)
+    if (process.env.NODE_ENV !== 'production') {
+      logger.info(`${req.method} ${redactUrlForLog(req.url)} ${res.statusCode || 200} ${duration}ms`)
+    }
     originalEnd(...args)
   }
   next()

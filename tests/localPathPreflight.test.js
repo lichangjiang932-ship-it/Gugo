@@ -106,6 +106,14 @@ test('file grants require exact matches and all-files bypasses individual grants
   assert.equal(isLocalPathAuthorized('/any/path', { allFilesEnabled: true }, 'read_write'), true)
 })
 
+test('an explicit permission bypass authorizes local paths without a separate file grant', () => {
+  assert.equal(isLocalPathAuthorized('/any/path', {
+    allFilesEnabled: false,
+    bypassEnabled: true,
+    grants: [],
+  }, 'read_write'), true)
+})
+
 test('authorized-path instruction requires real file tool use', () => {
   const instruction = buildLocalPathToolInstruction(['D:\\destok\\money'])
   assert.match(instruction, /list_directory/)

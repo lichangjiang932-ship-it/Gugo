@@ -8,7 +8,7 @@ const EXTERNAL_ACTION_ORDER = /^(?:\s*(?:please|directly|help\s+(?:me\s+)?|can\s
 const EXTERNAL_MUTATION_INTENT = /\b(?:send|notify|post|publish)\b|(?:\u53d1\u9001|\u901a\u77e5|\u53d1\u5e03)/i
 const MUTATION_EXECUTION_INTENT = /\b(?:implement|integrate|enable|apply|fix|handle|resolve|create|generate|build|write|save|export|install|delete|rename|move|copy|update|modify|patch|refactor|improve|optimize|finish|complete)\b|\b(?:wire\s+in|take\s+care\s+of|sort\s+out)\b|(?:\u5b9e\u73b0|\u96c6\u6210|\u63a5\u5165|\u542f\u7528|\u4fee\u6539|\u4fee\u590d|\u521b\u5efa|\u751f\u6210|\u6784\u5efa|\u5199\u5165|\u4fdd\u5b58|\u5bfc\u51fa|\u5b89\u88c5|\u5220\u9664|\u91cd\u547d\u540d|\u79fb\u52a8|\u590d\u5236|\u66f4\u65b0|\u6253\u8865\u4e01|\u91cd\u6784|\u4f18\u5316|\u5b8c\u5584|\u8865\u5168|\u5904\u7406\u597d|\u641e\u5b9a|\u89e3\u51b3)/i
 const NEGATED_MUTATION_CLAUSE = /(?:(?:\b(?:do\s+not|don't|never|without|no\s+need\s+to|must\s+not)\b)|(?:\u4e0d\u8981|\u65e0\u9700|\u4e0d\u5fc5|\u4e0d\u5f97|\u7981\u6b62))[^,.;\uff0c\u3002\uff1b\r\n]{0,120}?(?:\b(?:re-?generate|regenerate|rewrite|implement|integrate|enable|apply|fix|create|generate|build|write|save|export|install|delete|rename|move|copy|update|modify|patch|refactor|improve|optimize)(?:s|d|ed|ing)?\b|(?:\u5b9e\u73b0|\u96c6\u6210|\u63a5\u5165|\u542f\u7528|\u4fee\u6539|\u4fee\u590d|\u521b\u5efa|\u751f\u6210|\u6784\u5efa|\u5199\u5165|\u4fdd\u5b58|\u5bfc\u51fa|\u5b89\u88c5|\u5220\u9664|\u91cd\u547d\u540d|\u79fb\u52a8|\u590d\u5236|\u66f4\u65b0|\u6253\u8865\u4e01|\u91cd\u6784|\u4f18\u5316))[^,.;\uff0c\u3002\uff1b\r\n]{0,120}/giu
-const FILE_TARGET_REFERENCE = /(?:^|[\s"'`(])(?:[a-z]:[\\/]|\.\.?[\\/]|\/)?(?:[\p{L}\p{N}_@%+.,()[\]{} -]+[\\/])*[\p{L}\p{N}_@%+.,()[\]{} -]+\.[a-z0-9]{1,12}(?=$|[\s"'`),;:])/iu
+const FILE_TARGET_REFERENCE = /(?:^|[\s"'`(])(?:[a-z]:[\\/]|\.\.?[\\/]|\/)?(?:[\p{L}\p{N}_@%+.,()[\]{} -]+[\\/])*[\p{L}\p{N}_@%+.,()[\]{} -]+\.[a-z0-9]{1,12}(?=$|[\s"'`),;:，。；：！？])/iu
 // 纯文本交付物对象:「生成一份周报/写一段文案」是文字产出,不写文件。
 // 生成/创建/写 类动词 + 这些对象 + 没有文件路径时,不该按「文件修改任务」
 // 要求工具执行证据 —— 否则纯文本任务永远以 execution_evidence_missing 收尾。
@@ -41,26 +41,31 @@ export function shouldRequireExecution({ intentMode = 'auto', text = '' } = {}) 
 
   const prompt = String(text || '').trim()
   if (!prompt) return false
-  if (hasActionableNumberedSteps(prompt)) return true
-  if (DIRECT_EXECUTION_INTENT.test(prompt)) return true
-  if (EXTERNAL_ACTION_ORDER.test(prompt)) return true
-  if (MUTATION_EXECUTION_INTENT.test(prompt) && FILE_TARGET_REFERENCE.test(prompt)) return true
-  if (DELEGATED_EXECUTION_INTENT.test(prompt)) return true
+  // Mutation verbs inside an explicit prohibition are constraints, not work
+  // orders. Strip only the negated clause so mixed prompts remain executable:
+  // "do not edit A; create B" still retains the affirmative second clause.
+  const actionablePrompt = prompt.replace(NEGATED_MUTATION_CLAUSE, ' ').trim()
+  if (!actionablePrompt) return false
+  if (hasActionableNumberedSteps(actionablePrompt)) return true
+  if (DIRECT_EXECUTION_INTENT.test(actionablePrompt)) return true
+  if (EXTERNAL_ACTION_ORDER.test(actionablePrompt)) return true
+  if (MUTATION_EXECUTION_INTENT.test(actionablePrompt) && FILE_TARGET_REFERENCE.test(actionablePrompt)) return true
+  if (DELEGATED_EXECUTION_INTENT.test(actionablePrompt)) return true
   // A question may be followed by a separate, explicit work order. Inspect the
   // text after the first sentence boundary so the leading "How/如何" does not
   // downgrade "Please fix it now/直接帮我修复好" to an answer-only request.
-  const firstBoundary = prompt.search(/[?\uff1f.!\u3002;\uff1b\n]/)
-  const laterClause = firstBoundary >= 0 ? prompt.slice(firstBoundary + 1).trim() : ''
+  const firstBoundary = actionablePrompt.search(/[?\uff1f.!\u3002;\uff1b\n]/)
+  const laterClause = firstBoundary >= 0 ? actionablePrompt.slice(firstBoundary + 1).trim() : ''
   const hasLaterExecutionOrder = Boolean(laterClause) && (
     IMPERATIVE_EXECUTION_INTENT.test(laterClause)
     || OBJECT_FIRST_EXECUTION_INTENT.test(laterClause)
     || DELEGATED_EXECUTION_INTENT.test(laterClause)
   )
-  const hasFollowUpExecution = FOLLOW_UP_EXECUTION.test(prompt) || hasLaterExecutionOrder
-  if (!IMPERATIVE_EXECUTION_INTENT.test(prompt)
-    && !OBJECT_FIRST_EXECUTION_INTENT.test(prompt)
+  const hasFollowUpExecution = FOLLOW_UP_EXECUTION.test(actionablePrompt) || hasLaterExecutionOrder
+  if (!IMPERATIVE_EXECUTION_INTENT.test(actionablePrompt)
+    && !OBJECT_FIRST_EXECUTION_INTENT.test(actionablePrompt)
     && !hasFollowUpExecution) return false
-  if (ANSWER_ONLY_LEAD.test(prompt) && !hasFollowUpExecution) return false
+  if (ANSWER_ONLY_LEAD.test(actionablePrompt) && !hasFollowUpExecution) return false
   return true
 }
 

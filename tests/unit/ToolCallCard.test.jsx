@@ -45,6 +45,12 @@ test('running tools expose a live elapsed clock', () => {
   assert.match(renderToolCall('bash_exec', { command: 'npm test' }), /data-testid="live-elapsed"/)
 })
 
+test('PDF generation uses a readable execution label and title summary', () => {
+  const markup = renderToolCall('create_pdf', { title: 'Quarterly report' })
+  assert.match(markup, /Create PDF/)
+  assert.match(markup, /Quarterly report/)
+})
+
 test('execution rows emphasize concrete paths and commands without a visible action label', () => {
   const readMarkup = renderToolCall('read_file', { path: 'D:\\work\\report.txt' })
   const commandMarkup = renderToolCall('run_command', { command: 'npm test' })
@@ -271,32 +277,38 @@ test('failed command keeps arguments and result in one expanded card whose copy 
   }
 })
 
-test('running command keeps full output inside the controlled detail card', () => {
+test('running commands default open with arguments and live output while remaining controllable', () => {
+  const defaultMarkup = renderToStaticMarkup(
+    <I18nProvider>
+      <ToolCallCard call={{
+        name: 'bash_exec',
+        arguments: JSON.stringify({ command: 'npm test' }),
+        status: 'running',
+        outputReplay: 'live_only',
+        liveOutput: 'starting suite\nPASS activity stream\n42 tests passed',
+      }} stepNumber={1} />
+    </I18nProvider>,
+  )
+  assert.match(defaultMarkup, /data-testid="tool-step-details"/)
+  assert.match(defaultMarkup, /npm test/)
+  assert.match(defaultMarkup, /data-testid="tool-live-output"/)
+  assert.match(defaultMarkup, /42 tests passed/)
+  assert.match(defaultMarkup, /data-testid="tool-output-replay-note"/)
+  assert.match(defaultMarkup, /Live output is not replayed after reconnect/)
+
   const collapsedMarkup = renderToStaticMarkup(
     <I18nProvider>
       <ToolCallCard call={{
         name: 'bash_exec',
         arguments: JSON.stringify({ command: 'npm test' }),
         status: 'running',
+        outputReplay: 'live_only',
         liveOutput: 'starting suite\nPASS activity stream\n42 tests passed',
-      }} stepNumber={1} />
+      }} stepNumber={1} expanded={false} />
     </I18nProvider>,
   )
   assert.doesNotMatch(collapsedMarkup, /data-testid="tool-step-details"/)
   assert.doesNotMatch(collapsedMarkup, /42 tests passed/)
-
-  const expandedMarkup = renderToStaticMarkup(
-    <I18nProvider>
-      <ToolCallCard call={{
-        name: 'bash_exec',
-        arguments: JSON.stringify({ command: 'npm test' }),
-        status: 'running',
-        liveOutput: 'starting suite\nPASS activity stream\n42 tests passed',
-      }} stepNumber={1} expanded />
-    </I18nProvider>,
-  )
-  assert.match(expandedMarkup, /data-testid="tool-step-details"/)
-  assert.match(expandedMarkup, /data-testid="tool-live-output"/)
-  assert.match(expandedMarkup, /42 tests passed/)
-  assert.doesNotMatch(expandedMarkup, /<details/)
+  assert.doesNotMatch(collapsedMarkup, /tool-output-replay-note/)
+  assert.doesNotMatch(defaultMarkup, /<details/)
 })

@@ -277,8 +277,32 @@ export function buildCompaction({
   const system = allSystem.slice(-Math.min(32, maxMessages - 2))
   const nonSystem = messages.filter((message) => message.role !== 'system')
   const effectiveKeep = Math.max(1, Math.min(requestedKeep, maxMessages - system.length - 2))
-  const tail = nonSystem.slice(-effectiveKeep)
-  let head = nonSystem.slice(0, -effectiveKeep)
+  let tailStart = Math.max(0, nonSystem.length - effectiveKeep)
+
+  // A parallel tool round is one protocol and evidence unit. If the requested
+  // tail cuts through its results, move the boundary back to the matching
+  // assistant message so every call and every result from that round remains
+  // visible to the next model request. Filtering the assistant down to only
+  // the last retained result creates a valid-looking but incomplete history.
+  const retainedToolCallIds = new Set(
+    nonSystem
+      .slice(tailStart)
+      .filter((message) => message?.role === 'tool' && message.tool_call_id)
+      .map((message) => message.tool_call_id),
+  )
+  if (retainedToolCallIds.size > 0) {
+    for (let index = 0; index < tailStart; index += 1) {
+      const message = nonSystem[index]
+      if (message?.role !== 'assistant' || !Array.isArray(message.tool_calls)) continue
+      if (message.tool_calls.some((call) => call?.id && retainedToolCallIds.has(call.id))) {
+        tailStart = index
+        break
+      }
+    }
+  }
+
+  const tail = nonSystem.slice(tailStart)
+  let head = nonSystem.slice(0, tailStart)
 
   const tailToolCallIds = new Set()
   const satisfiedInTail = new Set()

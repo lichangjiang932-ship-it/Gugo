@@ -92,6 +92,7 @@ test('core execution tools survive the canonical turn catalog when enabled', asy
     'git_rollback',
     'git_write',
     'pdf_transform',
+    'create_pdf',
   ]
   const serverNames = new Set(namesOf(SERVER_TOOL_SPECS))
   const toggleNames = new Set(SERVER_TURN_TOOL_TOGGLE_NAMES)

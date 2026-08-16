@@ -248,7 +248,7 @@ test('an inline generated-file link keeps narration, opens the real file, and su
   }
 })
 
-test('a completed artifact keeps its narration and file link while a later reply is generating', async () => {
+test('a collapsed completed artifact keeps a localized summary, folded execution, and its file card', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
@@ -259,11 +259,24 @@ test('a completed artifact keeps its narration and file link while a later reply
     timestamp: Date.now(),
     meta: {
       streaming: false,
+      toolCalls: [{
+        id: 'write-calculator',
+        name: 'write_file',
+        arguments: JSON.stringify({ path: 'calculator.html' }),
+        result: JSON.stringify({ ok: true, path: 'calculator.html' }),
+        status: 'success',
+        textOffset: 0,
+      }],
       serverArtifacts: [{ id: 'file-1', filename: 'calculator.html', type: 'html', url: '/api/artifacts/file-1' }],
       serverDeliveryArtifactIds: ['file-1'],
     },
   }
-  const t = (key) => key === 'chat.serverTurn.completed' ? '已完成' : key
+  const strings = {
+    'chatMessages.artifactReadySingle': '任务已完成，{type} 文件已准备好：{filename}',
+    'chatMessages.durationSeconds': '{seconds} 秒',
+    'chatMessages.elapsed': '耗时 {value}',
+  }
+  const t = (key, vars = {}) => String(strings[key] || key).replace(/\{(\w+)\}/g, (_, name) => String(vars[name] ?? `{${name}}`))
 
   try {
     await act(async () => root.render(
@@ -276,9 +289,16 @@ test('a completed artifact keeps its narration and file link while a later reply
         t={t}
       />,
     ))
-    assert.match(rootElement.textContent, /Server turn completed/)
+    assert.match(rootElement.textContent, /任务已完成，HTML 文件已准备好：calculator\.html/)
+    assert.doesNotMatch(rootElement.textContent, /Server turn completed/)
     assert.match(rootElement.textContent, /calculator\.html/)
     assert.doesNotMatch(rootElement.textContent, /Calculator source/)
+    const executionToggle = rootElement.querySelector('[data-testid="execution-toggle"]')
+    assert.equal(executionToggle?.getAttribute('aria-expanded'), 'false')
+    assert.equal(rootElement.querySelector('[data-testid="execution-content"]'), null)
+    assert.ok(rootElement.querySelector('[data-testid="artifact-open-card"]'))
+    await act(async () => executionToggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.ok(rootElement.querySelector('[data-testid="execution-content"]'))
     assert.ok(rootElement.querySelector('[data-testid="artifact-open-card"]'))
   } finally {
     await act(async () => root.unmount())
@@ -561,11 +581,9 @@ test('a paused assistant message renders a camelCase directory request inline', 
     assert.deepEqual({
       path: authorizations[0].path,
       accessMode: authorizations[0].accessMode,
-      usePicker: authorizations[0].usePicker,
     }, {
       path: 'D:\\destok',
       accessMode: 'read_write',
-      usePicker: false,
     })
   } finally {
     await act(async () => root.unmount())
@@ -629,6 +647,431 @@ test('a paused server snapshot survives stale local metadata and renders its inl
     assert.equal(card.querySelector('input').value, 'D:\\destok')
     assert.equal(card.querySelector('select').value, 'read_write')
     assert.match(card.textContent, /Write the completed PDF and PNG preview\./)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('a verified local edit turns the final inline-code filename into a workbench link', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const opened = []
+  const path = 'D:\\workspace\\qa-second-revision-test.html'
+  const source = '<!doctype html><html><head><title>Updated</title></head><body><h1>Updated</h1></body></html>'
+  const editCall = {
+    id: 'edit-local-page',
+    name: 'edit_file',
+    arguments: JSON.stringify({ path }),
+    result: JSON.stringify({ ok: true, path, changes: [{ path, additions: 1, deletions: 1 }] }),
+    status: 'success',
+    textOffset: 0,
+  }
+  const readCall = {
+    id: 'verify-local-page',
+    name: 'read_file',
+    arguments: JSON.stringify({ path }),
+    result: JSON.stringify({
+      ok: true,
+      path,
+      content: source,
+      offset: 0,
+      returnedLines: 1,
+      totalLines: 1,
+    }),
+    status: 'success',
+    textOffset: 0,
+  }
+  const baseMessage = {
+    id: 'verified-local-edit-message',
+    role: 'assistant',
+    content: '已原地更新 `qa-second-revision-test.html`。',
+    timestamp: Date.now(),
+    meta: { toolCalls: [editCall, readCall] },
+  }
+
+  const renderMessage = async (msg) => act(async () => root.render(
+    <MessageRow
+      msg={msg}
+      rowKey={msg.id}
+      generatingMessageId=""
+      lang="zh"
+      onOpenArtifact={(artifact) => opened.push(artifact)}
+      t={(key) => key}
+    />,
+  ))
+
+  try {
+    await renderMessage(baseMessage)
+    const link = rootElement.querySelector('[data-testid="inline-artifact-link"]')
+    assert.ok(link)
+    assert.match(link.textContent, /qa-second-revision-test\.html/)
+    await act(async () => link.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.equal(opened.length, 1)
+    assert.equal(opened[0].preview.filename, 'qa-second-revision-test.html')
+    assert.equal(opened[0].preview.path, path)
+    assert.equal(opened[0].content, source)
+
+    await renderMessage({
+      ...baseMessage,
+      id: 'unverified-local-edit-message',
+      meta: { toolCalls: [editCall] },
+    })
+    assert.equal(rootElement.querySelector('[data-testid="inline-artifact-link"]'), null)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('a verified original file supersedes the immutable artifact snapshot from the same write', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const opened = []
+  const path = 'D:\\workspace\\qa-second-revision-test.html'
+  const currentSource = '<!doctype html><title>Current</title><h1>Your AI Workspace, Runs Locally</h1>'
+  const msg = {
+    id: 'local-file-supersedes-snapshot',
+    role: 'assistant',
+    content: '已交付：`qa-second-revision-test.html`。',
+    timestamp: Date.now(),
+    meta: {
+      serverArtifacts: [{
+        id: 'stale-managed-snapshot',
+        filename: 'qa-second-revision-test.html',
+        type: 'html',
+        url: '/api/artifacts/qa-second-revision-test.html',
+      }],
+      serverDeliveryArtifactIds: ['stale-managed-snapshot'],
+      toolCalls: [{
+        id: 'write-original-file',
+        name: 'write_file',
+        arguments: JSON.stringify({ path, content: '<h1>Original snapshot</h1>' }),
+        result: JSON.stringify({
+          ok: true,
+          path,
+          artifactId: 'stale-managed-snapshot',
+          artifacts: [{
+            id: 'stale-managed-snapshot',
+            filename: 'qa-second-revision-test.html',
+            url: '/api/artifacts/qa-second-revision-test.html',
+          }],
+        }),
+        status: 'success',
+        textOffset: 0,
+      }, {
+        id: 'read-current-file',
+        name: 'read_file',
+        arguments: JSON.stringify({ path }),
+        result: JSON.stringify({
+          ok: true,
+          path,
+          content: currentSource,
+          offset: 0,
+          returnedLines: 1,
+          totalLines: 1,
+        }),
+        status: 'success',
+        textOffset: 0,
+      }],
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <MessageRow
+        msg={msg}
+        rowKey={msg.id}
+        generatingMessageId=""
+        lang="zh"
+        onOpenArtifact={(artifact) => opened.push(artifact)}
+        t={(key) => key}
+      />,
+    ))
+
+    const inlineLinks = [...rootElement.querySelectorAll('[data-testid="inline-artifact-link"]')]
+    assert.equal(inlineLinks.length, 1)
+    assert.match(inlineLinks[0].getAttribute('href'), /__local-file-reference__/)
+    assert.equal(rootElement.querySelectorAll('[data-testid="artifact-reference-links"] [data-testid="artifact-open-card"]').length, 0)
+    await act(async () => inlineLinks[0].dispatchEvent(new dom.window.MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+    })))
+    assert.equal(opened.length, 1)
+    assert.equal(opened[0].content, currentSource)
+    assert.equal(opened[0].preview.path, path)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('same-named verified local files require an exact path and open the matching file', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const opened = []
+  const firstPath = 'D:\\workspace\\first\\index.html'
+  const secondPath = 'D:\\workspace\\second\\index.html'
+  const firstSource = '<h1>First</h1>'
+  const secondSource = '<h1>Second</h1>'
+  const writeRead = (id, path, content) => ([
+    {
+      id: `write-${id}`,
+      name: 'write_file',
+      arguments: JSON.stringify({ path, content }),
+      result: JSON.stringify({
+        ok: true,
+        path,
+        changes: [{ path, additions: 1, deletions: 0 }],
+      }),
+      status: 'success',
+      textOffset: 0,
+    },
+    {
+      id: `read-${id}`,
+      name: 'read_file',
+      arguments: JSON.stringify({ path }),
+      result: JSON.stringify({
+        ok: true,
+        path,
+        content,
+        offset: 0,
+        returnedLines: 1,
+        totalLines: 1,
+      }),
+      status: 'success',
+      textOffset: 0,
+    },
+  ])
+  const toolCalls = [
+    ...writeRead('first', firstPath, firstSource),
+    ...writeRead('second', secondPath, secondSource),
+  ]
+  const renderMessage = async (id, content) => act(async () => root.render(
+    <MessageRow
+      msg={{ id, role: 'assistant', content, timestamp: Date.now(), meta: { toolCalls } }}
+      rowKey={id}
+      generatingMessageId=""
+      lang="zh"
+      onOpenArtifact={(artifact) => opened.push(artifact)}
+      t={(key) => key}
+    />,
+  ))
+
+  try {
+    await renderMessage('same-name-exact-path', `已更新 ${secondPath}。`)
+    const exactLinks = [...rootElement.querySelectorAll('[data-testid="inline-artifact-link"]')]
+    assert.equal(exactLinks.length, 1)
+    assert.match(exactLinks[0].textContent, /D:\\workspace\\second\\index\.html/)
+    await act(async () => exactLinks[0].dispatchEvent(new dom.window.MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+    })))
+    assert.equal(opened.length, 1)
+    assert.equal(opened[0].preview.path, secondPath)
+    assert.equal(opened[0].content, secondSource)
+    const exactFallbacks = [...rootElement.querySelectorAll('[data-testid="artifact-reference-links"] [data-testid="artifact-open-card"]')]
+    assert.equal(exactFallbacks.length, 1)
+    assert.match(exactFallbacks[0].getAttribute('title'), /D:\\workspace\\first\\index\.html|index\.html/)
+
+    await renderMessage('same-name-ambiguous-basename', '已更新 index.html。')
+    assert.equal(rootElement.querySelector('[data-testid="inline-artifact-link"]'), null)
+    assert.equal(rootElement.querySelectorAll('[data-testid="artifact-reference-links"] [data-testid="artifact-open-card"]').length, 2)
+    assert.equal(opened.length, 1)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('restored verified local files keep a clickable fallback when the answer omits the filename', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const opened = []
+  const turnId = 'restored-local-file-turn'
+  const filePath = 'D:\\workspace\\exports\\项目总结.docx'
+  const restored = normalizeServerSessionSnapshot({
+    complete: true,
+    messages: [{
+      id: `${turnId}:assistant`,
+      role: 'assistant',
+      content: '文件已经按要求生成并验证完成。',
+      createdAt: Date.now(),
+      modelContext: {
+        turnId,
+        verifiedLocalFiles: [{
+          id: 'verified-docx-1',
+          path: filePath,
+          filename: '项目总结.docx',
+          size: 4096,
+        }],
+      },
+    }],
+  }).messages[0]
+
+  try {
+    await act(async () => root.render(
+      <MessageRow
+        msg={restored}
+        rowKey={restored.id}
+        generatingMessageId=""
+        lang="zh"
+        onOpenArtifact={(artifact) => opened.push(artifact)}
+        t={(key) => key}
+      />,
+    ))
+
+    assert.deepEqual(restored.meta.verifiedLocalFiles, [{
+      id: 'verified-docx-1',
+      path: filePath,
+      filename: '项目总结.docx',
+      size: 4096,
+    }])
+    const link = rootElement.querySelector('[data-testid="artifact-reference-links"] [data-testid="artifact-open-card"]')
+    assert.ok(link)
+    assert.match(link.textContent, /项目总结\.docx/)
+    assert.match(link.getAttribute('href'), /\/api\/local-files\/verified\/verified-docx-1\?turnId=restored-local-file-turn/)
+    await act(async () => link.dispatchEvent(new dom.window.MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+    })))
+
+    assert.equal(opened.length, 1)
+    assert.deepEqual(opened[0].directFile, {
+      id: 'verified-docx-1',
+      filename: '项目总结.docx',
+      title: '项目总结.docx',
+      type: 'docx',
+      url: '/api/local-files/verified/verified-docx-1?turnId=restored-local-file-turn',
+      path: filePath,
+      size: 4096,
+      summary: '4096 bytes',
+    })
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('a filename hidden in collapsed execution does not suppress the visible verified-file fallback', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const turnId = 'collapsed-execution-file-turn'
+  const filePath = 'D:\\workspace\\exports\\hidden-report.pdf'
+  const beforeTool = `已生成 ${filePath}。\n\n`
+  const msg = {
+    id: `${turnId}:assistant`,
+    role: 'assistant',
+    content: `${beforeTool}更新完成。`,
+    timestamp: Date.now(),
+    meta: {
+      serverTurnId: turnId,
+      verifiedLocalFiles: [{
+        id: 'hidden-report-receipt',
+        path: filePath,
+        filename: 'hidden-report.pdf',
+        size: 128,
+      }],
+      toolCalls: [{
+        id: 'write-hidden-report',
+        name: 'write_file',
+        arguments: JSON.stringify({ path: filePath }),
+        result: JSON.stringify({ ok: true, path: filePath }),
+        status: 'success',
+        textOffset: beforeTool.length,
+      }],
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <MessageRow
+        msg={msg}
+        rowKey={msg.id}
+        generatingMessageId=""
+        lang="zh"
+        t={(key) => key}
+      />,
+    ))
+
+    assert.equal(rootElement.querySelector('[data-testid="execution-toggle"]')?.getAttribute('aria-expanded'), 'false')
+    assert.equal(rootElement.querySelector('[data-testid="inline-artifact-link"]'), null)
+    const fallback = rootElement.querySelector('[data-testid="artifact-reference-links"] [data-testid="artifact-open-card"]')
+    assert.ok(fallback)
+    assert.match(fallback.textContent, /hidden-report\.pdf/)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('legacy snapshots recover a selected successful tool artifact as a clickable file', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const opened = []
+  const turnId = 'legacy-clickable-file'
+  const restored = normalizeServerSessionSnapshot({
+    complete: true,
+    messages: [{
+      id: `${turnId}:assistant`,
+      role: 'assistant',
+      content: '网页已经生成完成。',
+      createdAt: Date.now(),
+      modelContext: {
+        turnId,
+        deliveryArtifactIds: ['legacy-final-html'],
+        toolTrace: [{
+          role: 'assistant',
+          content: '',
+          tool_calls: [{
+            id: 'legacy-write-html',
+            type: 'function',
+            function: { name: 'write_file', arguments: '{}' },
+          }],
+        }, {
+          role: 'tool',
+          tool_call_id: 'legacy-write-html',
+          name: 'write_file',
+          content: JSON.stringify({
+            ok: true,
+            artifactId: 'legacy-final-html',
+            filename: '旧版页面.html',
+            type: 'html',
+            url: '/api/artifacts/legacy-final-html',
+          }),
+        }],
+      },
+    }],
+  }).messages[0]
+
+  try {
+    await act(async () => root.render(
+      <MessageRow
+        msg={restored}
+        rowKey={restored.id}
+        generatingMessageId=""
+        lang="zh"
+        onOpenArtifact={(artifact) => opened.push(artifact)}
+        t={(key) => key}
+      />,
+    ))
+
+    const link = rootElement.querySelector('[data-testid="artifact-reference-links"] [data-testid="artifact-open-card"]')
+    assert.ok(link)
+    assert.match(link.textContent, /旧版页面\.html/)
+    await act(async () => link.dispatchEvent(new dom.window.MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+    })))
+    assert.equal(opened.length, 1)
+    assert.equal(opened[0].directFile.id, 'legacy-final-html')
+    assert.equal(opened[0].directFile.url, '/api/artifacts/legacy-final-html')
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

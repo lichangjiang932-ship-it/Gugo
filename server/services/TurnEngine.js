@@ -3,6 +3,7 @@ import path from 'node:path'
 import { callBackgroundModel, callStreamingModelWithTools, getModelContextWindow } from '../adapters/modelProxy.js'
 import { createTurnActivity, createTurnEvent } from '../../shared/turnEvents.js'
 import { canonicalizeSkillId } from '../../shared/artifactIntent.js'
+import { normalizeModelUsage } from '../../shared/modelUsage.js'
 import { releaseApprovalsForTurn } from './approvalGate.js'
 import { runToolLoop, SERVER_TOOL_SPECS } from './toolLoopRuntime.js'
 import {
@@ -16,6 +17,7 @@ import {
   upsertSession,
 } from './sessionStore.js'
 import { appendTurnEvent, getLastTurnEvent, listTurnEvents } from './turnEventStore.js'
+import { getTurnCheckpoint, saveTurnCheckpoint } from './turnCheckpointStore.js'
 import { publishTurnActivity } from './turnActivityBus.js'
 import { dispatchHooks as dispatchHooksService } from './hooksService.js'
 import { resolveApprovalMode } from '../utils/approvalPolicy.js'
@@ -23,7 +25,10 @@ import {
   buildAssistantModelContext,
   collectToolCallIds,
   expandStoredMessages,
+  extractVerifiedLocalFiles,
   materializeManagedAttachmentMessages,
+  selectAttachmentIdsForModelRequest,
+  selectStoredMessagesAfterCompaction,
 } from './turnMessageContext.js'
 import { prepareTurnPromptContext } from './turnPromptContext.js'
 import { prepareInlineSkillsForPrompt } from './promptCompiler.js'
@@ -39,6 +44,10 @@ import {
   validateManagedAttachmentsForTurn,
 } from './managedAttachmentStore.js'
 import { prepareManagedAttachmentsForModel } from './managedAttachmentContent.js'
+import {
+  estimateContextTokens,
+  getAutoCompactionThreshold,
+} from './contextCompactionRuntime.js'
 import { createTurnExecutionLeaseCoordinator } from './turnExecutionLeaseRuntime.js'
 import {
   acknowledgeAppliedTurnSteering,
@@ -55,6 +64,29 @@ import { newTraceId, withLogContext } from '../utils/logger.js'
 const TERMINAL_TYPES = new Set(['turn.completed', 'turn.cancelled', 'turn.failed'])
 const STREAM_DELTA_TYPES = ['assistant.delta', 'reasoning.delta']
 const TURN_RESOLUTION_MARKER = '[TURN_RESOLUTION:'
+const ATTACHMENT_CONTEXT_HEADROOM_TOKENS = 64
+
+function inlineMediaProjectionTokens(value, seen = new WeakSet()) {
+  if (typeof value === 'string') {
+    const marker = ';base64,'
+    const markerIndex = value.indexOf(marker)
+    if (markerIndex <= 5 || !value.startsWith('data:')) return 0
+    const mimeType = value.slice(5, markerIndex).toLowerCase()
+    if (!mimeType.startsWith('image/') && mimeType !== 'application/pdf') return 0
+    // Base64 is four characters per three bytes. Keep the attachment byte
+    // budget separate from visual token pricing so a multi-megabyte image is
+    // still downgraded before it is copied into a small-window request.
+    return Math.ceil(Math.max(0, value.length - markerIndex - marker.length) / 4) + 64
+  }
+  if (!value || typeof value !== 'object') return 0
+  if (seen.has(value)) return 0
+  seen.add(value)
+  if (Array.isArray(value)) {
+    return value.reduce((total, item) => total + inlineMediaProjectionTokens(item, seen), 0)
+  }
+  return Object.values(value)
+    .reduce((total, item) => total + inlineMediaProjectionTokens(item, seen), 0)
+}
 
 function replayPersistedTurnEvents(replayEvents, scope) {
   if (typeof replayEvents !== 'function') return []
@@ -119,6 +151,31 @@ function recoveryAttemptAfterCheckpoint(replayEvents, scope, checkpoint) {
     previousStreamSequence: previousStream.sequence,
     ...prefix,
   }
+}
+
+function latestVerifiedLocalFiles(replayEvents, scope) {
+  return replayPersistedTurnEvents(replayEvents, scope)
+    .map((event) => event?.payload?.verifiedLocalFiles)
+    .filter(Array.isArray)
+    .at(-1) || []
+}
+
+function storedCheckpointEvent(checkpoint) {
+  if (!checkpoint?.state || !Number.isInteger(checkpoint.eventSequence)) return null
+  return {
+    sessionId: checkpoint.sessionId,
+    turnId: checkpoint.turnId,
+    sequence: checkpoint.eventSequence,
+    type: 'turn.checkpoint',
+    payload: { state: checkpoint.state },
+    createdAt: checkpoint.updatedAt,
+  }
+}
+
+function latestLegacyCheckpoint(replayEvents, scope) {
+  return replayPersistedTurnEvents(replayEvents, scope)
+    .filter((event) => event.type === 'turn.checkpoint' && isRecord(event.payload?.state))
+    .at(-1) || null
 }
 
 export class TurnEngineError extends Error {
@@ -454,6 +511,8 @@ export class TurnEngine {
     publishActivity = publishTurnActivity,
     lastEvent = getLastTurnEvent,
     replayEvents = listTurnEvents,
+    readCheckpoint = getTurnCheckpoint,
+    writeCheckpoint = saveTurnCheckpoint,
     readSession = getSession,
     claimSession = claimLocalChatSession,
     writeSession = upsertSession,
@@ -486,6 +545,7 @@ export class TurnEngine {
   } = {}) {
     this.deps = {
       runLoop, runModel, executeTool, appendEvent, publishActivity, lastEvent, replayEvents,
+      readCheckpoint, writeCheckpoint,
       readSession, claimSession, writeSession, readMessages, readPreviousUserMessage,
       writeMessage, idFactory, now, toolSpecs,
       readApprovalMode, preparePromptContext, resolveToolSpecs, scheduleMemoryExtraction, runMemoryModel, env,
@@ -695,6 +755,7 @@ export class TurnEngine {
         userId,
         sessionId,
         turnId,
+        turnStartedAt: createdAt,
         content: text,
         displayContent: displayText,
         modelName,
@@ -820,6 +881,7 @@ export class TurnEngine {
       userId,
       sessionId,
       turnId,
+      turnStartedAt: started.createdAt,
       content: String(started.payload.content || ''),
       displayContent: String(started.payload.displayContent || started.payload.content || ''),
       modelName: started.payload.modelName || null,
@@ -865,7 +927,10 @@ export class TurnEngine {
       return { ...this.getTurn({ userId, sessionId, turnId }), status: 'cancelling' }
     }
     const emit = this.#createEmitter({ userId, sessionId, turnId, sequence: last.sequence + 1 })
-    await emit('turn.cancelled', { reason: 'Cancelled by user' })
+    await emit('turn.cancelled', {
+      reason: 'Cancelled by user',
+      verifiedLocalFiles: latestVerifiedLocalFiles(this.deps.replayEvents, scope),
+    })
     releaseApprovalsForTurn({ userId, sessionId, turnId })
     return this.getTurn({ userId, sessionId, turnId })
   }
@@ -887,14 +952,14 @@ export class TurnEngine {
   #createEmitter({ userId, sessionId, turnId, sequence }) {
     let nextSequence = sequence
     let appendQueue = Promise.resolve()
-    return (type, payload = {}, { beforeAppend } = {}) => {
+    return (type, payload = {}, { beforeAppend, checkpointState = null } = {}) => {
       const pending = appendQueue.then(async () => {
         const event = createTurnEvent({
           id: this.deps.idFactory(), sessionId, turnId, sequence: nextSequence, type,
           payload, createdAt: this.deps.now(),
         })
         await beforeAppend?.(event)
-        const stored = await this.deps.appendEvent({ userId, event })
+        const stored = await this.deps.appendEvent({ userId, event, checkpointState })
         nextSequence += 1
         return stored
       })
@@ -929,6 +994,7 @@ export class TurnEngine {
     userId,
     sessionId,
     turnId,
+    turnStartedAt,
     content,
     displayContent,
     modelName,
@@ -941,10 +1007,20 @@ export class TurnEngine {
     emitter,
   }, signal) {
     if (signal.aborted) {
-      if (!lostTurnLease(signal)) await emitter('turn.cancelled', { reason: signal.reason?.message || 'Cancelled by user' })
+      if (!lostTurnLease(signal)) {
+        await emitter('turn.cancelled', {
+          reason: signal.reason?.message || 'Cancelled by user',
+          verifiedLocalFiles: [],
+        })
+      }
       return
     }
-    const checkpoint = this.deps.lastEvent({ userId, sessionId, turnId, type: 'turn.checkpoint' })
+    const checkpointScope = { userId, sessionId, turnId }
+    const effectiveTurnStartedAt = Number.isFinite(Number(turnStartedAt))
+      ? Math.max(0, Number(turnStartedAt))
+      : this.deps.now()
+    const checkpoint = storedCheckpointEvent(this.deps.readCheckpoint(checkpointScope))
+      || latestLegacyCheckpoint(this.deps.replayEvents, checkpointScope)
     const restoredCheckpointState = checkpointStateForResolution(checkpoint?.payload?.state, resumeContext)
     const steeringOwnerId = normalizeOptionalId(this.deps.executionLeases.ownerId)
     const steeringScope = { userId, sessionId, turnId, ownerId: steeringOwnerId }
@@ -986,8 +1062,14 @@ export class TurnEngine {
     const managedAttachments = Array.isArray(currentUserMessage?.modelContext?.attachments)
       ? currentUserMessage.modelContext.attachments
       : []
-    const historyMessages = expandStoredMessages(storedMessages)
-    let promptContext = { messages: [], effectiveAgentId: agentId, skillIds, memoryIds: [] }
+    let promptContext = {
+      messages: [],
+      effectiveAgentId: agentId,
+      skillIds,
+      memoryIds: [],
+      compactionArchiveId: null,
+      compactionBoundary: null,
+    }
     try {
       promptContext = await this.deps.preparePromptContext({
         userId,
@@ -1003,10 +1085,24 @@ export class TurnEngine {
     } catch {
       // Optional memory/agent/skill context must never prevent a turn from running.
     }
+    const selectedStoredMessages = selectStoredMessagesAfterCompaction(
+      storedMessages,
+      promptContext.compactionBoundary,
+    )
+    const promptStoredMessages = currentUserMessage
+      && !selectedStoredMessages.some((message) => message?.id === currentUserMessage.id)
+      ? [...selectedStoredMessages, currentUserMessage]
+      : selectedStoredMessages
+    const historyMessages = expandStoredMessages(promptStoredMessages)
     const messages = [
       ...(Array.isArray(promptContext.messages) ? promptContext.messages : []),
       ...historyMessages,
     ]
+    const attachmentIdsForFirstModelRequest = selectAttachmentIdsForModelRequest(messages, {
+      currentAttachmentIds: managedAttachments.map((attachment) => attachment.id),
+      prompt: content,
+    })
+    let shouldInlineManagedAttachments = attachmentIdsForFirstModelRequest.length > 0
     const effectiveToolsConfig = applyDirectoryAuthorizationToolsConfig(
       toolsConfig,
       resumeContext?.resolution,
@@ -1015,6 +1111,8 @@ export class TurnEngine {
       && resumeContext.resolution.access_mode === 'read_write'
       ? 'execute'
       : normalizeTurnIntentMode(intentMode)
+    const preparedSkillIds = normalizeIds(promptContext.skillIds)
+    const effectiveSkillIds = preparedSkillIds.length ? preparedSkillIds : normalizeIds(skillIds)
     let resolvedToolSpecs = this.deps.toolSpecs
     try {
       const authorizationAwareBaseSpecs = restoreDirectoryAuthorizationToolSpecs(
@@ -1026,25 +1124,44 @@ export class TurnEngine {
         userId,
         baseSpecs: authorizationAwareBaseSpecs,
         toolsConfig: effectiveToolsConfig,
+        prompt: content,
+        messages,
+        skillIds: effectiveSkillIds,
       })
       if (Array.isArray(resolved)) resolvedToolSpecs = resolved
     } catch {
       // MCP/browser discovery is optional; retain the built-in tool set on failure.
     }
-    const preparedSkillIds = normalizeIds(promptContext.skillIds)
-    const effectiveSkillIds = preparedSkillIds.length ? preparedSkillIds : normalizeIds(skillIds)
     const activeSkillId = effectiveSkillIds.at(0) || null
     const baselineToolCallIds = collectToolCallIds(messages)
     let checkpointMessages = restoredCheckpointState?.messages || []
     let checkpointArtifactIds = normalizeArtifactIds(restoredCheckpointState?.artifactIds)
     let checkpointDeliveryArtifactIds = optionalDeliveryArtifactIds(restoredCheckpointState)
     let checkpointIterations = Math.max(0, Number(restoredCheckpointState?.iterations) || 0)
+    let checkpointRecovery = restoredCheckpointState?.recovery || null
+    let latestModelUsage = normalizeModelUsage(restoredCheckpointState?.latestModelUsage)
     let streamedAssistantText = String(pendingRecoveryAttempt?.assistantText || '')
-    const persistTurnEvidence = ({ state, text, artifactIds, deliveryArtifactIds, iterations, error = null }) => {
+    const verifiedLocalFilesAt = (verifiedAt = this.deps.now()) => extractVerifiedLocalFiles(
+      checkpointMessages,
+      { userId, baselineToolCallIds, verifiedAt },
+    )
+    const persistTurnEvidence = ({
+      state,
+      text,
+      artifactIds,
+      deliveryArtifactIds,
+      iterations,
+      error = null,
+      serverLastSequence = null,
+      verifiedLocalFiles = null,
+    }) => {
       const evidenceText = String(text || '').trim() || error?.message || 'Turn execution did not complete.'
       const evidenceArtifacts = normalizeArtifactIds(artifactIds)
       const evidenceIterations = Math.max(0, Number(iterations) || 0)
       const writtenAt = this.deps.now()
+      const evidenceVerifiedLocalFiles = Array.isArray(verifiedLocalFiles)
+        ? verifiedLocalFiles
+        : verifiedLocalFilesAt(writtenAt)
       this.deps.writeMessage({
         id: `${turnId}:assistant`,
         userId,
@@ -1056,12 +1173,21 @@ export class TurnEngine {
             turnId,
             checkpointMessages,
             baselineToolCallIds,
+            userId,
+            verifiedLocalFiles: evidenceVerifiedLocalFiles,
             artifactIds: evidenceArtifacts,
             deliveryArtifactIds,
             iterations: evidenceIterations,
+            compactionRecovery: checkpointRecovery,
+            usage: latestModelUsage,
+            turnStartedAt: effectiveTurnStartedAt,
+            turnCompletedAt: writtenAt,
           }),
           turnEvidence: true,
           evidenceState: state,
+          ...(Number.isInteger(serverLastSequence) && serverLastSequence >= 0
+            ? { serverLastSequence }
+            : {}),
           ...(error ? { error } : {}),
         },
         createdAt: writtenAt,
@@ -1139,16 +1265,44 @@ export class TurnEngine {
           : null,
         loadCheckpoint: async () => restoredCheckpointState || null,
         saveCheckpoint: async (state) => {
-          checkpointMessages = Array.isArray(state?.messages) ? state.messages : checkpointMessages
-          const nextCheckpointArtifactIds = normalizeArtifactIds(state?.artifactIds ?? checkpointArtifactIds)
+          const checkpointState = latestModelUsage
+            ? { ...state, latestModelUsage }
+            : state
+          checkpointMessages = Array.isArray(checkpointState?.messages)
+            ? checkpointState.messages
+            : checkpointMessages
+          const nextCheckpointArtifactIds = normalizeArtifactIds(
+            checkpointState?.artifactIds ?? checkpointArtifactIds,
+          )
           const artifactCollectionChanged = !sameArtifactIds(checkpointArtifactIds, nextCheckpointArtifactIds)
           checkpointArtifactIds = nextCheckpointArtifactIds
           checkpointDeliveryArtifactIds = optionalDeliveryArtifactIds(
-            state,
+            checkpointState,
             artifactCollectionChanged ? [] : checkpointDeliveryArtifactIds,
           )
-          checkpointIterations = Math.max(0, Number(state?.iterations) || checkpointIterations)
-          await emitter('turn.checkpoint', { state })
+          checkpointIterations = Math.max(0, Number(checkpointState?.iterations) || checkpointIterations)
+          checkpointRecovery = checkpointState?.recovery || checkpointRecovery
+          const checkpointEvent = await emitter('turn.checkpoint', {
+            storage: 'turn_checkpoints',
+            checkpointVersion: 1,
+            iterations: checkpointIterations,
+            toolCallCount: Array.isArray(checkpointState?.toolCalls) ? checkpointState.toolCalls.length : 0,
+          }, { checkpointState })
+          let saved = this.deps.readCheckpoint({ userId, sessionId, turnId })
+          if (saved?.eventSequence !== checkpointEvent.sequence) {
+            // Custom event-store adapters may not implement the atomic
+            // checkpointState extension. Preserve dependency compatibility
+            // with a post-append upsert fallback.
+            saved = await this.deps.writeCheckpoint({
+              userId,
+              sessionId,
+              turnId,
+              eventSequence: checkpointEvent.sequence,
+              state: checkpointState,
+              now: checkpointEvent.createdAt,
+            })
+          }
+          if (!saved?.state) throw new Error('Failed to persist turn checkpoint')
           return true
         },
         runModel: async (request) => {
@@ -1158,11 +1312,68 @@ export class TurnEngine {
             streamedAssistantText = String(attempt.assistantText || '')
             await emitter('turn.attempt', attempt)
           }
-          const providerMessages = await materializeManagedAttachmentMessages(request.messages, {
-            userId,
-            sessionId,
-            prepareAttachments: this.deps.prepareAttachments,
-          })
+          const inlineAttachmentIds = shouldInlineManagedAttachments
+            ? attachmentIdsForFirstModelRequest
+            : []
+          shouldInlineManagedAttachments = false
+          const materializationOptions = { userId, sessionId }
+          let providerMessages
+          if (inlineAttachmentIds.length > 0) {
+            // Context compaction prices the lightweight stored surface. Build a
+            // reference-only provider projection first so attachment bytes and
+            // extracted text receive only the genuinely remaining request budget.
+            const referenceMessages = await materializeManagedAttachmentMessages(request.messages, {
+              ...materializationOptions,
+              prepareAttachments: this.deps.prepareAttachments,
+              inlineAttachmentIds: [],
+            })
+            const threshold = getAutoCompactionThreshold(
+              contextWindow,
+              this.deps.env?.MODEL_ACTIVE_CONTEXT_TOKENS,
+            )
+            const referenceTokens = estimateContextTokens(referenceMessages, request.tools)
+            const maxAttachmentTokens = Math.max(
+              0,
+              threshold - referenceTokens - ATTACHMENT_CONTEXT_HEADROOM_TOKENS,
+            )
+            providerMessages = maxAttachmentTokens > 0
+              ? await materializeManagedAttachmentMessages(request.messages, {
+                  ...materializationOptions,
+                  prepareAttachments: (attachmentRequest) => this.deps.prepareAttachments({
+                    ...attachmentRequest,
+                    maxAttachmentTokens,
+                  }),
+                  inlineAttachmentIds,
+                })
+              : referenceMessages
+
+            // Re-price text/tool context after expansion and independently
+            // enforce the raw inline-media budget. Visual models do not tokenize
+            // base64 as text, but very large media still must not bypass the
+            // attachment allocation merely because its visual token cost is low.
+            if (
+              inlineMediaProjectionTokens(providerMessages) > maxAttachmentTokens
+              || estimateContextTokens(providerMessages, request.tools) >= threshold
+            ) {
+              providerMessages = referenceMessages
+            }
+            const finalTokens = estimateContextTokens(providerMessages, request.tools)
+            if (finalTokens >= threshold) {
+              const error = new Error(
+                `附件展开后的请求仍超出上下文预算（估算 ${finalTokens} token，阈值 ${threshold} token）。`,
+              )
+              error.code = 'ATTACHMENT_CONTEXT_BUDGET_EXCEEDED'
+              error.status = 413
+              error.retryable = false
+              throw error
+            }
+          } else {
+            providerMessages = await materializeManagedAttachmentMessages(request.messages, {
+              ...materializationOptions,
+              prepareAttachments: this.deps.prepareAttachments,
+              inlineAttachmentIds,
+            })
+          }
           const inheritedToolCallReady = request.onToolCallReady
           return this.deps.runModel({
             ...request,
@@ -1196,7 +1407,15 @@ export class TurnEngine {
           })
         },
         onModelPhase: async ({ phase, iteration, usage, modelName: activeModel, error }) => {
-          await emitter('model.phase', { phase, iteration, usage, modelName: activeModel, error })
+          const normalizedUsage = phase === 'completed' ? normalizeModelUsage(usage) : null
+          if (normalizedUsage) latestModelUsage = normalizedUsage
+          await emitter('model.phase', {
+            phase,
+            iteration,
+            usage: normalizedUsage || usage,
+            modelName: activeModel,
+            error,
+          })
         },
         onModelDelta: async ({ text: delta, iteration, modelName: activeModel }) => {
           streamedAssistantText += String(delta || '')
@@ -1220,7 +1439,7 @@ export class TurnEngine {
           toolCallId: call.id, name: call.name, args: call.args,
         }),
         onToolStarted: async (call) => emitter('tool.started', {
-          toolCallId: call.id, name: call.name,
+          toolCallId: call.id, name: call.name, args: call.args, outputReplay: 'live_only',
         }),
         onToolCompleted: async (outcome) => {
           const failure = outcome.result?.ok === false ? {
@@ -1254,10 +1473,12 @@ export class TurnEngine {
       })
       if (signal.aborted) {
         if (lostTurnLease(signal)) return
+        const verifiedLocalFiles = verifiedLocalFilesAt()
         await emitter('turn.cancelled', {
           reason: 'Cancelled by user',
           artifactIds: normalizeArtifactIds(checkpointArtifactIds),
           deliveryArtifactIds: [],
+          verifiedLocalFiles,
           iterations: checkpointIterations,
         })
         return
@@ -1267,18 +1488,12 @@ export class TurnEngine {
         const deliveryArtifactIds = optionalDeliveryArtifactIds(result, checkpointDeliveryArtifactIds)
         const iterations = Math.max(0, Number(result.iterations) || checkpointIterations)
         const partialText = String(result.text || streamedAssistantText || '')
-        persistTurnEvidence({
-          state: 'interrupted',
-          text: partialText,
-          artifactIds,
-          deliveryArtifactIds,
-          iterations,
-          error: normalizeFailure({
-            code: result.code,
-            message: result.reason,
-            retryable: true,
-          }, { code: 'MODEL_CALL_INTERRUPTED', retryable: true }),
-        })
+        const verifiedLocalFiles = verifiedLocalFilesAt()
+        const failure = normalizeFailure({
+          code: result.code,
+          message: result.reason,
+          retryable: true,
+        }, { code: 'MODEL_CALL_INTERRUPTED', retryable: true })
         await emitter('turn.interrupted', {
           code: String(result.code || 'MODEL_CALL_INTERRUPTED'),
           message: String(result.reason || 'Model execution was interrupted after tool progress'),
@@ -1286,23 +1501,39 @@ export class TurnEngine {
           text: partialText,
           artifactIds,
           ...deliveryArtifactFields(deliveryArtifactIds),
+          verifiedLocalFiles,
           iterations,
+        }, {
+          beforeAppend: (interruptedEvent) => persistTurnEvidence({
+            state: 'interrupted',
+            text: partialText,
+            artifactIds,
+            deliveryArtifactIds,
+            iterations,
+            error: failure,
+            serverLastSequence: interruptedEvent.sequence,
+            verifiedLocalFiles,
+          }),
         })
         return
       }
       if (result?.incomplete) {
+        const partialText = String(result.text || streamedAssistantText || '')
         const failure = normalizeFailure({
           code: 'TURN_INCOMPLETE',
-          message: result.reason
-            ? `Turn did not complete: ${result.reason}`
-            : 'Turn did not complete',
+          // Keep the wrap-up in partialText and the machine reason in the
+          // hint. Reusing the wrap-up as the error message would make clients
+          // append the same useful result a second time as an error banner.
+          message: '任务未完全完成，已保留当前进展。',
           retryable: true,
-          hint: 'Retry the turn or use a model with the required tool capabilities.',
+          hint: result.reason
+            ? `Incomplete reason: ${result.reason}`
+            : 'Retry the turn to continue from the durable checkpoint.',
         }, { retryable: true })
-        const partialText = String(result.text || streamedAssistantText || '')
         const artifactIds = normalizeArtifactIds(result.artifactIds ?? checkpointArtifactIds)
         const deliveryArtifactIds = optionalDeliveryArtifactIds(result, checkpointDeliveryArtifactIds)
         const iterations = Math.max(0, Number(result.iterations) || checkpointIterations)
+        const verifiedLocalFiles = verifiedLocalFilesAt()
         persistTurnEvidence({
           state: 'failed',
           text: partialText,
@@ -1310,6 +1541,7 @@ export class TurnEngine {
           deliveryArtifactIds,
           iterations,
           error: failure,
+          verifiedLocalFiles,
         })
         await emitter('turn.failed', {
           code: failure.code,
@@ -1318,6 +1550,7 @@ export class TurnEngine {
           partialText,
           artifactIds,
           ...deliveryArtifactFields(deliveryArtifactIds),
+          verifiedLocalFiles,
           iterations,
         })
         return
@@ -1330,11 +1563,13 @@ export class TurnEngine {
         const artifactIds = normalizeArtifactIds(result.artifactIds ?? checkpointArtifactIds)
         const deliveryArtifactIds = optionalDeliveryArtifactIds(result, checkpointDeliveryArtifactIds)
         const iterations = Math.max(0, Number(result.iterations) || checkpointIterations)
+        const verifiedLocalFiles = verifiedLocalFilesAt()
         await emitter('turn.paused', {
           text,
           clarification,
           artifactIds,
           ...deliveryArtifactFields(deliveryArtifactIds),
+          verifiedLocalFiles,
           iterations,
         }, {
           beforeAppend: (pausedEvent) => {
@@ -1350,11 +1585,17 @@ export class TurnEngine {
                   turnId,
                   checkpointMessages,
                   baselineToolCallIds,
+                  userId,
+                  verifiedLocalFiles,
                   artifactIds,
                   deliveryArtifactIds,
                   iterations,
                   paused: true,
                   compactionArchiveId: result?.recovery?.archiveId || null,
+                  compactionRecovery: result?.recovery || checkpointRecovery,
+                  usage: latestModelUsage,
+                  turnStartedAt: effectiveTurnStartedAt,
+                  turnCompletedAt: pausedAt,
                 }),
                 clarification,
                 pausedSequence: pausedEvent.sequence,
@@ -1370,16 +1611,23 @@ export class TurnEngine {
       const artifactIds = normalizeArtifactIds(result?.artifactIds ?? checkpointArtifactIds)
       const deliveryArtifactIds = optionalDeliveryArtifactIds(result, checkpointDeliveryArtifactIds)
       const completedAt = this.deps.now()
+      const verifiedLocalFiles = verifiedLocalFilesAt(completedAt)
       this.deps.writeMessage({
         id: `${turnId}:assistant`, userId, sessionId, role: 'assistant', content: text,
         modelContext: buildAssistantModelContext({
           turnId,
           checkpointMessages,
           baselineToolCallIds,
+          userId,
+          verifiedLocalFiles,
           artifactIds,
           deliveryArtifactIds,
           iterations: result?.iterations || 0,
           compactionArchiveId: result?.recovery?.archiveId || null,
+          compactionRecovery: result?.recovery || checkpointRecovery,
+          usage: latestModelUsage,
+          turnStartedAt: effectiveTurnStartedAt,
+          turnCompletedAt: completedAt,
         }),
         createdAt: completedAt, updatedAt: completedAt,
       })
@@ -1387,7 +1635,9 @@ export class TurnEngine {
         text,
         artifactIds,
         ...deliveryArtifactFields(deliveryArtifactIds),
+        verifiedLocalFiles,
         iterations: result?.iterations || 0,
+        ...(latestModelUsage ? { usage: latestModelUsage } : {}),
       })
       // Best-effort async notification to external subscribers.
       void this.deps.dispatchHooks?.({
@@ -1420,10 +1670,12 @@ export class TurnEngine {
     } catch (error) {
       if (lostTurnLease(signal, error)) return
       if (isExplicitTurnCancellation(signal, error)) {
+        const verifiedLocalFiles = verifiedLocalFilesAt()
         await emitter('turn.cancelled', {
           reason: error?.message || 'Cancelled by user',
           artifactIds: normalizeArtifactIds(checkpointArtifactIds),
           deliveryArtifactIds: [],
+          verifiedLocalFiles,
           iterations: checkpointIterations,
         })
         return
@@ -1433,6 +1685,7 @@ export class TurnEngine {
       const artifactIds = normalizeArtifactIds(error?.artifactIds ?? checkpointArtifactIds)
       const deliveryArtifactIds = optionalDeliveryArtifactIds(error, checkpointDeliveryArtifactIds)
       const iterations = Math.max(0, Number(error?.iterations) || checkpointIterations)
+      const verifiedLocalFiles = verifiedLocalFilesAt()
       try {
         persistTurnEvidence({
           state: 'failed',
@@ -1441,6 +1694,7 @@ export class TurnEngine {
           deliveryArtifactIds,
           iterations,
           error: failure,
+          verifiedLocalFiles,
         })
       } catch {
         // The durable event remains the source of truth if message persistence fails.
@@ -1452,6 +1706,7 @@ export class TurnEngine {
         partialText,
         artifactIds,
         ...deliveryArtifactFields(deliveryArtifactIds),
+        verifiedLocalFiles,
         iterations,
       })
     }

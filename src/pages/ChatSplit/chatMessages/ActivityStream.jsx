@@ -59,12 +59,22 @@ export default function ActivityStream({ msg }) {
 function activityLabel(meta, toolCalls) {
   if (meta?.serverConnectionState === 'reconnecting') return 'Connection lost. Reconnecting…'
   if (meta?.serverConnectionState === 'cancelling') return 'Stopping task…'
+  const progress = meta?.progress
+  if (progress?.phase) return `Working: ${progress.phase}…`
+  if (Number.isFinite(progress?.completed) && Number.isFinite(progress?.total) && progress.total > 0) {
+    return `Processing ${progress.completed}/${progress.total}…`
+  }
   const activity = meta?.modelActivity
   if (activity?.kind === 'tool_call_ready') {
     return `Preparing ${activity.toolName || 'tool'}…`
   }
-  if (activity?.kind === 'model') return 'Waiting for the model…'
-  if (activity?.kind === 'responding') return 'Drafting response…'
+  if (activity?.kind === 'reasoning') return 'Model is reasoning through the next step…'
+  if (activity?.kind === 'model' && activity.phase === 'started') return 'Connecting to the model…'
+  if (activity?.kind === 'model' && activity.phase === 'waiting_first_token') return 'Request sent · waiting for the first model output…'
+  if (activity?.kind === 'model' && activity.phase === 'idle') return 'Model output paused · task is still running…'
+  if (activity?.kind === 'model' && activity.phase === 'retrying') return 'Retrying the model request…'
+  if (activity?.kind === 'model') return 'Model is working on the next step…'
+  if (activity?.kind === 'responding') return 'Receiving model output…'
   if (activity?.kind === 'reviewing') return 'Reviewing execution results…'
   if (toolCalls.length > 0) return 'Continuing the task…'
   return 'Preparing task…'

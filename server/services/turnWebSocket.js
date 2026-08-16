@@ -1,6 +1,6 @@
 import { WebSocketServer } from 'ws'
 import { getSessionByToken } from '../db.js'
-import { listTurnEvents, subscribeTurnEvents } from './turnEventStore.js'
+import { listTurnEvents, subscribeTurnEvents, turnEventForClient } from './turnEventStore.js'
 import { subscribeTurnActivities } from './turnActivityBus.js'
 import { decideApproval, getPendingApproval } from './approvalStore.js'
 import { releaseApproval } from './approvalGate.js'
@@ -122,7 +122,7 @@ export function attachTurnWebSocketServer(server) {
     const deliver = (subscription, event) => {
       if (!event || event.sequence <= subscription.cursor) return
       subscription.cursor = event.sequence
-      send(socket, { type: 'turn.event', event })
+      send(socket, { type: 'turn.event', event: turnEventForClient(event) })
     }
     const deliverActivity = (_subscription, activity) => {
       if (activity) send(socket, { type: 'turn.activity', activity })

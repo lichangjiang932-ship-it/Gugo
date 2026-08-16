@@ -1,6 +1,20 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { createJobBudget, runWithModelBudget } from '../server/utils/jobBudget.js'
+import {
+  createJobBudget,
+  resolveJobBudgetDefaults,
+  runWithModelBudget,
+} from '../server/utils/jobBudget.js'
+
+test('default workload guardrails allow long tasks without a 100-call cutoff', () => {
+  assert.deepEqual(resolveJobBudgetDefaults({}), {
+    maxTotalCalls: 2000,
+    maxWallMs: 6 * 60 * 60 * 1000,
+    maxModelCalls: 2000,
+    maxModelTokens: 0,
+    maxCostUsd: 0,
+  })
+})
 
 test('model token budget stops the job after real usage crosses the hard cap', () => {
   const budget = createJobBudget({

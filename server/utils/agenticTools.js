@@ -35,6 +35,7 @@ import { sanitizeSuggestedDirectoryPath } from '../../shared/suggestedDirectoryP
 import {
   findAuthorizedDirectoryGrant,
   isExistingLocalDirectory,
+  resolveDirectoryRequestPath,
 } from '../services/localFileAccessService.js'
 
 const MAX_TEXT = 4000
@@ -123,6 +124,7 @@ export function requestDirectoryTool({
 } = {}, {
   userId = null,
   resolveDirectoryGrant = findAuthorizedDirectoryGrant,
+  resolveDirectoryPath = resolveDirectoryRequestPath,
   directoryPathExists = isExistingLocalDirectory,
 } = {}) {
   if (typeof purpose !== 'string' || !purpose.trim()) {
@@ -133,9 +135,17 @@ export function requestDirectoryTool({
   }
   const normalizedPurpose = clampStr(purpose, MAX_SHORT).trim()
   const rawSuggestedPath = suggested_path ? clampStr(suggested_path, MAX_SHORT).trim() : ''
-  const suggestedPath = sanitizeSuggestedDirectoryPath(rawSuggestedPath, {
+  const sanitizedSuggestedPath = sanitizeSuggestedDirectoryPath(rawSuggestedPath, {
     pathExists: directoryPathExists,
   }) || null
+  let suggestedPath = sanitizedSuggestedPath
+  if (userId && typeof resolveDirectoryPath === 'function') {
+    try {
+      suggestedPath = resolveDirectoryPath({ userId, rawPath: sanitizedSuggestedPath || '' })
+    } catch {
+      // Keep the sanitized hint if the default/project path cannot be resolved.
+    }
+  }
   if (userId && suggestedPath && typeof resolveDirectoryGrant === 'function') {
     let existingGrant = null
     try {
@@ -242,7 +252,7 @@ export const AGENTIC_TOOL_SPECS = [
     type: 'function',
     function: {
       name: 'request_directory',
-      description: 'Pause this durable job and ask the user to choose and explicitly authorize a local directory. Use read_write when the task must create, edit, patch, rename, or delete files; use read_only only for inspection. Use this instead of guessing alternate subdirectories after a permission error. The same job resumes after authorization.',
+      description: 'Request a local directory only after a real path-authorization failure. In bypass mode the runtime resolves project-relative paths and continues automatically, so never ask the user separately. Use read_write when the task must create, edit, patch, rename, or delete files; use read_only only for inspection. The same job resumes after an inline authorization when one is actually required.',
       parameters: {
         type: 'object',
         properties: {

@@ -15,7 +15,7 @@ process.env.ARTIFACT_DIR = TMP
 process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-artifact-tests', String(process.pid))
 
 const { createAppServer } = await import('../server/appServer.js')
-const { buildArtifactFilename, createHtmlArtifact, createPptx, createDocx, createXlsx, getArtifactDir, validateHtmlArtifactSource } = await import('../server/services/artifactGen.js')
+const { buildArtifactFilename, createHtmlArtifact, createPptx, createDocx, createPdf, createXlsx, getArtifactDir, validateHtmlArtifactSource } = await import('../server/services/artifactGen.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 async function loadPptxZip(result) {
@@ -161,6 +161,22 @@ test('createDocx 真实生成 OOXML docx', async () => {
 
 test('createDocx paragraphs 为空时报错', async () => {
   await assert.rejects(() => createDocx({ title: 't', paragraphs: [] }), /paragraphs/)
+})
+
+test('createPdf 真实生成带中文字体和页码的 PDF', async () => {
+  const result = await createPdf({
+    title: '中文项目总结',
+    blocks: [
+      { type: 'heading', text: '完成情况' },
+      { type: 'paragraph', text: '无需技能即可直接生成真实 PDF 文件。' },
+      { type: 'bullet', text: '支持自动分页、换行和中文字体' },
+    ],
+  })
+  const bytes = fs.readFileSync(result.fullPath)
+  assert.equal(bytes.subarray(0, 5).toString(), '%PDF-')
+  assert.equal(result.type, 'pdf')
+  assert.equal(result.pageCount, 1)
+  assert.ok(result.byteLength > 1_000)
 })
 
 test('createXlsx 真实生成 SpreadsheetML', async () => {

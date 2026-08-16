@@ -285,3 +285,24 @@ test('a fresh chat authorizes, reads, enables least-privilege tools, and opens t
   assert.equal(artifact.preview.title, 'README.md')
   assert.equal(artifact.content, '# Fresh chat')
 })
+
+test('explicit bypass skips the message preflight directory dialog', async () => {
+  const path = 'D:\\trusted\\project'
+  let approvalRequests = 0
+  const ensureAccess = createLocalPathAccessEnsurer(async () => {
+    approvalRequests += 1
+    return { approved: false }
+  }, {
+    getAccessStatus: async () => ({
+      allFilesEnabled: false,
+      bypassEnabled: true,
+      grants: [],
+    }),
+  })
+
+  const access = await ensureAccess(`请修改 ${path} 中的网页`)
+  assert.equal(access.proceed, true)
+  assert.equal(access.accessMode, 'read_write')
+  assert.deepEqual(access.paths, [path])
+  assert.equal(approvalRequests, 0)
+})

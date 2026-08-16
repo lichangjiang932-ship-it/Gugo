@@ -63,7 +63,7 @@ test('only the streaming assistant hides copy actions while completed messages r
   assert.match(messageRowSource, /function UserMeta[\s\S]*?!msg\.meta\?\.streaming &&/)
   assert.doesNotMatch(messageRowSource, /function (?:UserMeta|AssistantMeta)\([^)]*isGenerating/)
   assert.match(messageRowSource, /chat-message-actions/)
-  assert.match(messageRowSource, /<MarkdownRenderer[^>]*streaming=\{isCurrentStreamingMessage\}/)
+  assert.match(messageRowSource, /<MarkdownRenderer[\s\S]*?streaming=\{isCurrentStreamingMessage\}/)
   assert.match(markdownSource, /function CodeBlock\(\{ children, streaming = false \}\)/)
   assert.match(markdownSource, /!streaming && \(/)
   assert.match(messageRowSource, /const isMessageComplete = !isCurrentStreamingMessage/)
@@ -161,13 +161,16 @@ test('reasoning stays a compact live status while tool traces remain inspectable
   assert.doesNotMatch(toolCallTrace, /chatMessages\.execution/)
 })
 
-test('one assistant turn renders a single compact tool timeline and only its latest narration', () => {
-  assert.match(messageRowSource, /function compactMessagePresentation/)
-  assert.match(messageRowSource, /timeline\.flatMap/)
-  assert.match(messageRowSource, /\.reverse\(\)[\s\S]*?segment\.kind === 'text'/)
-  assert.match(messageRowSource, /<ToolCallTrace calls=\{presentation\.calls\}/)
-  assert.match(messageRowSource, /\{presentation\.text && \(/)
-  assert.doesNotMatch(messageRowSource, /timeline\.map\(\(segment\)/)
+test('one assistant turn preserves narration and tool batches in their recorded order', () => {
+  assert.match(messageRowSource, /buildMessageTimeline\(content, toolCalls\)/)
+  assert.match(messageRowSource, /assistantTimelinePresentation\(timeline, isCurrentStreamingMessage\)/)
+  assert.match(messageRowSource, /segments\.map\(\(segment, index\)/)
+  assert.match(messageRowSource, /segment\.kind === 'tools'/)
+  assert.match(messageRowSource, /<ToolCallTrace[\s\S]*?calls=\{segment\.calls\}/)
+  assert.match(messageRowSource, /\{segment\.text\}/)
+  assert.match(messageRowSource, /<ExecutionDisclosure[\s\S]*?isCurrentStreamingMessage && <ActivityStream/)
+  assert.match(messageRowSource, /key=\{isCurrentStreamingMessage \? 'execution-running' : 'execution-complete'\}/)
+  assert.doesNotMatch(messageRowSource, /compactMessagePresentation|timeline\.flatMap|\.reverse\(\)/)
 })
 
 test('reasoning does not expose raw text or character counts', () => {
@@ -181,6 +184,7 @@ test('completed artifact rows do not revert to streaming source when a later mes
   assert.match(messageRowSource, /const isCurrentStreamingMessage = msg\.id === generatingMessageId \|\| !!msg\.meta\?\.streaming/)
   assert.match(messageRowSource, /const isMessageComplete = !isCurrentStreamingMessage/)
   assert.match(messageRowSource, /function CollapsedArtifactContent/)
-  assert.match(messageRowSource, /Server turn completed/)
-  assert.match(messageRowSource, /<ArtifactReferenceLinks msg=\{msg\}/)
+  assert.match(messageRowSource, /artifact-completion-summary/)
+  assert.doesNotMatch(messageRowSource, /Server turn completed/)
+  assert.match(messageRowSource, /<ArtifactReferenceLinks[\s\S]*?msg=\{msg\}/)
 })

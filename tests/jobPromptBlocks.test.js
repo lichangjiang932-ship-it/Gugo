@@ -13,9 +13,20 @@ test('artifact prompt only injects rules for requested artifact tools', () => {
   assert.match(withPpt, /高级 PPT 必守规则/)
   assert.doesNotMatch(withPpt, /create_docx \(Word\)/)
 
+  const withPdf = buildArtifactPrompt(new Set(['create_pdf']))
+  assert.match(withPdf, /create_pdf \(PDF\)/)
+  assert.doesNotMatch(withPdf, /高级 PPT 必守规则/)
+
   const none = buildArtifactPrompt(new Set())
-  assert.match(none, /未匹配到专用的 PowerPoint/)
+  assert.match(none, /未匹配到专用的 PowerPoint \/ Word \/ Excel \/ PDF/)
   assert.doesNotMatch(none, /高级 PPT 必守规则/)
+  assert.match(none, /没有明确要求代码片段/)
+  assert.match(none, /不要输出完整源码/)
+
+  const snippet = buildArtifactPrompt(new Set(['create_html_app']), { codeSnippetRequested: true })
+  assert.match(snippet, /明确要求了代码片段/)
+  assert.match(snippet, /代码片段不能代替真实工具执行与文件交付/)
+  assert.doesNotMatch(snippet, /不要输出完整源码/)
 })
 
 test('citation prompt guides the model to emit clickable links', () => {

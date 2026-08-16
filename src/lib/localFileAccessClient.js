@@ -1,5 +1,7 @@
 import { getAuthToken } from './accountClient.js'
 
+const LOCAL_FILE_REQUEST_TIMEOUT_MS = 30_000
+
 function authHeaders(json = false) {
   const token = getAuthToken?.()
   return {
@@ -25,16 +27,40 @@ async function parse(response) {
   return data
 }
 
+async function fetchWithTimeout(url, init = {}, { signal, timeoutMs = LOCAL_FILE_REQUEST_TIMEOUT_MS } = {}) {
+  const controller = new AbortController()
+  let timedOut = false
+  const forwardAbort = () => controller.abort(signal?.reason)
+  if (signal?.aborted) forwardAbort()
+  else signal?.addEventListener?.('abort', forwardAbort, { once: true })
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, Math.max(1, Number(timeoutMs) || LOCAL_FILE_REQUEST_TIMEOUT_MS))
+  try {
+    return await fetch(url, { ...init, signal: controller.signal })
+  } catch (error) {
+    if (!timedOut) throw error
+    const timeoutError = new Error('Directory authorization timed out. Please retry.')
+    timeoutError.code = 'LOCAL_FILE_REQUEST_TIMEOUT'
+    timeoutError.retryable = true
+    throw timeoutError
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener?.('abort', forwardAbort)
+  }
+}
+
 export async function getLocalFileAccessApi({ signal } = {}) {
   return parse(await fetch('/api/local-files', { headers: authHeaders(), signal }))
 }
 
-export async function grantLocalPathApi({ path, accessMode }) {
-  return parse(await fetch('/api/local-files/grants', {
+export async function grantLocalPathApi({ path, accessMode }, options = {}) {
+  return parse(await fetchWithTimeout('/api/local-files/grants', {
     method: 'POST',
     headers: authHeaders(true),
     body: JSON.stringify({ path, accessMode }),
-  }))
+  }, options))
 }
 
 export async function revokeLocalPathApi(id) {
@@ -55,8 +81,8 @@ export async function setAllFilesAccessApi(enabled) {
   }))
 }
 
-export async function setWorkspaceTrustApi({ path, trusted }) {
-  return parse(await fetch('/api/local-files/workspace-trust', {
+export async function setWorkspaceTrustApi({ path, trusted }, options = {}) {
+  return parse(await fetchWithTimeout('/api/local-files/workspace-trust', {
     method: 'POST',
     headers: authHeaders(true),
     body: JSON.stringify({
@@ -64,15 +90,23 @@ export async function setWorkspaceTrustApi({ path, trusted }) {
       trusted,
       confirmation: trusted ? 'TRUST_WORKSPACE_CONFIG' : undefined,
     }),
-  }))
+  }, options))
 }
 
-export async function pickLocalDirectoryApi() {
-  return parse(await fetch('/api/local-files/pick-directory', {
+export async function browseLocalDirectoriesApi(path = '', options = {}) {
+  return parse(await fetchWithTimeout('/api/local-files/browse-directories', {
     method: 'POST',
     headers: authHeaders(true),
-    body: '{}',
-  }))
+    body: JSON.stringify({ path }),
+  }, options))
+}
+
+export async function setDefaultOutputDirectoryApi(path, options = {}) {
+  return parse(await fetchWithTimeout('/api/local-files/default-output-directory', {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify({ path }),
+  }, options))
 }
 
 export async function configureWorkspaceOnboardingApi({

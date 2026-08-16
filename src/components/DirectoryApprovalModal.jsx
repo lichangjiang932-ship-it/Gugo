@@ -1,6 +1,7 @@
 import { FolderOpen, Loader2, ShieldCheck, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useT } from '../i18n/I18nProvider.jsx'
+import InlineDirectoryBrowser from './InlineDirectoryBrowser.jsx'
 
 function initialPath(request) {
   return String(request?.suggestGrantPath || request?.suggestedPath || request?.path || '').trim()
@@ -17,25 +18,32 @@ export default function DirectoryApprovalModal({ open, request, busy, error, onA
   const [path, setPath] = useState(() => initialPath(request))
   const [accessMode, setAccessMode] = useState(() => initialAccessMode(request))
   const [trustWorkspaceConfig, setTrustWorkspaceConfig] = useState(false)
+  const [browserOpen, setBrowserOpen] = useState(false)
   const requiresWrite = initialAccessMode(request) === 'read_write'
 
   useEffect(() => {
-    if (!open || busy) return undefined
+    if (!open) return undefined
     const onKeyDown = (event) => {
       if (event.key === 'Escape') onReject?.()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [busy, onReject, open])
+  }, [onReject, open])
 
   if (!open || !request) return null
 
   return (
-    <section
-      className="w-full overflow-hidden rounded-lg border border-sky-600/25 bg-paper shadow-sm"
-      data-testid="directory-approval-card"
-      aria-labelledby="directory-approval-title"
+    <div
+      className="mx-auto w-full max-w-[872px] px-4 pb-2"
+      data-testid="directory-approval-modal"
     >
+      <section
+        className="w-full overflow-hidden rounded-md border border-sky-600/25 bg-paper"
+        data-testid="directory-approval-card"
+        role="region"
+        aria-busy={!!busy}
+        aria-labelledby="directory-approval-title"
+      >
         <div className="flex items-start gap-3 border-b border-ink/10 bg-sky-500/5 px-4 py-3">
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-sky-500/10 text-sky-700">
             <ShieldCheck className="h-4 w-4" />
@@ -49,9 +57,8 @@ export default function DirectoryApprovalModal({ open, request, busy, error, onA
           <button
             type="button"
             onClick={onReject}
-            disabled={!!busy}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-ink-fade transition-colors hover:bg-paper hover:text-ink disabled:opacity-50"
-            aria-label={t('toolApproval.deny')}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-ink-fade transition-colors hover:bg-paper hover:text-ink"
+            aria-label={t('taskSteering.cancelDirectoryAuthorization')}
           >
             <X className="h-4 w-4" />
           </button>
@@ -68,7 +75,7 @@ export default function DirectoryApprovalModal({ open, request, busy, error, onA
               onChange={(event) => setPath(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && path.trim() && !busy) {
-                  onAuthorize?.({ path: path.trim(), accessMode, usePicker: false, trustWorkspaceConfig })
+                  onAuthorize?.({ path: path.trim(), accessMode, trustWorkspaceConfig })
                 }
               }}
               disabled={!!busy}
@@ -99,6 +106,19 @@ export default function DirectoryApprovalModal({ open, request, busy, error, onA
               {error}
             </p>
           )}
+          {browserOpen && (
+            <div className="sm:col-span-2">
+              <InlineDirectoryBrowser
+                initialPath={path}
+                onSelect={(selectedPath) => {
+                  setPath(selectedPath)
+                  setBrowserOpen(false)
+                }}
+                onCancel={() => setBrowserOpen(false)}
+                t={t}
+              />
+            </div>
+          )}
           <label className="flex items-start gap-2 rounded-md border border-ink/10 bg-paper-2/60 px-3 py-2.5 text-xs leading-relaxed text-ink-soft sm:col-span-2">
             <input
               type="checkbox"
@@ -119,31 +139,34 @@ export default function DirectoryApprovalModal({ open, request, busy, error, onA
           <button
             type="button"
             onClick={onReject}
-            disabled={!!busy}
-            className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-ink/15 bg-paper px-4 text-sm text-ink-soft transition-colors hover:text-ink disabled:opacity-50"
+            data-testid="directory-approval-cancel"
+            className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-ink/15 bg-paper px-4 text-sm text-ink-soft transition-colors hover:text-ink"
           >
             <X className="h-4 w-4" />
-            {t('toolApproval.deny')}
+            {t('taskSteering.cancelDirectoryAuthorization')}
           </button>
           <button
             type="button"
-            onClick={() => onAuthorize?.({ path: path.trim(), accessMode, usePicker: true, trustWorkspaceConfig })}
+            onClick={() => setBrowserOpen((current) => !current)}
             disabled={!!busy}
+            data-testid="directory-approval-picker"
             className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-sky-600/40 px-4 text-sm text-sky-800 transition-colors hover:bg-sky-500/5 disabled:opacity-50"
           >
-            {busy === 'picker' ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderOpen className="h-4 w-4" />}
+            <FolderOpen className="h-4 w-4" />
             {t('taskSteering.chooseDirectory')}
           </button>
           <button
             type="button"
-            onClick={() => onAuthorize?.({ path: path.trim(), accessMode, usePicker: false, trustWorkspaceConfig })}
+            onClick={() => onAuthorize?.({ path: path.trim(), accessMode, trustWorkspaceConfig })}
             disabled={!!busy || !path.trim()}
+            data-testid="directory-approval-authorize"
             className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-ink px-4 text-sm text-paper transition-colors hover:bg-ink-soft disabled:opacity-60"
           >
             {busy === 'grant' ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}
             {t('taskSteering.authorizeDirectory')}
           </button>
         </div>
-    </section>
+      </section>
+    </div>
   )
 }

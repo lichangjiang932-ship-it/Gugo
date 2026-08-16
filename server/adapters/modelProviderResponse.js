@@ -2,6 +2,7 @@ import {
   isNativeProviderKind,
   parseNativeProviderResponse,
 } from './nativeModelProviders.js'
+import { normalizeModelUsage, normalizeOptionalUsageNumber } from '../../shared/modelUsage.js'
 
 export function stripEmbeddedReasoning(value) {
   const text = String(value || '')
@@ -145,25 +146,29 @@ export function parseOpenAICompatibleResponse(data) {
 export function extractUsage(data) {
   const usageSource = data?.usage ?? data?.response?.usage
   const usage = usageSource && typeof usageSource === 'object' ? usageSource : null
-  const hasOllamaUsage = Number.isFinite(Number(data?.prompt_eval_count)) || Number.isFinite(Number(data?.eval_count))
-  if (!usage && !hasOllamaUsage) return null
-  const promptTokens = Number(usage?.prompt_tokens ?? usage?.input_tokens ?? data?.prompt_eval_count) || 0
-  const completionTokens = Number(usage?.completion_tokens ?? usage?.output_tokens ?? data?.eval_count) || 0
-  const cacheHitTokens = Number(
+  const promptTokens = normalizeOptionalUsageNumber(
+    usage?.prompt_tokens ?? usage?.input_tokens ?? data?.prompt_eval_count,
+  )
+  if (promptTokens === null) return null
+  const completionTokens = normalizeOptionalUsageNumber(
+    usage?.completion_tokens ?? usage?.output_tokens ?? data?.eval_count,
+  ) ?? 0
+  const cacheHitTokens = normalizeOptionalUsageNumber(
     usage?.prompt_cache_hit_tokens
       ?? usage?.prompt_tokens_details?.cached_tokens
       ?? usage?.input_tokens_details?.cached_tokens
-      ?? 0,
-  ) || 0
-  return {
+  ) ?? 0
+  const totalTokens = normalizeOptionalUsageNumber(usage?.total_tokens)
+    ?? promptTokens + completionTokens
+  const cacheMissTokens = normalizeOptionalUsageNumber(usage?.prompt_cache_miss_tokens)
+    ?? Math.max(0, promptTokens - cacheHitTokens)
+  return normalizeModelUsage({
     promptTokens,
     completionTokens,
-    totalTokens: Number(usage?.total_tokens) || promptTokens + completionTokens,
+    totalTokens,
     cacheHitTokens,
-    cacheMissTokens: Number(
-      usage?.prompt_cache_miss_tokens ?? Math.max(0, promptTokens - cacheHitTokens),
-    ) || 0,
-  }
+    cacheMissTokens,
+  })
 }
 
 function normalizeCompatibleFinishReason(value, hasToolCalls = false) {

@@ -29,6 +29,7 @@ test.after(() => {
 
 async function createWaitingDirectoryJob() {
   const { userId } = issueTestSession()
+  setApprovalMode({ userId, mode: 'normal' })
   const runtime = new JobRuntime({
     planner: (prompt) => ({
       title: 'Directory authorization job',
@@ -201,7 +202,7 @@ test('Job remains waiting when the requested directory grant is missing or does 
 
 test('resumed Job reuses its checkpoint marker and continues to write the authorized PDF output', async () => {
   const { userId } = issueTestSession()
-  setApprovalMode({ userId, mode: 'bypass' })
+  setApprovalMode({ userId, mode: 'normal' })
   const outputPath = path.join(authorizedDir, `processed-${Date.now()}.pdf`)
   let modelCalls = 0
   let directoryRequests = 0
@@ -217,6 +218,7 @@ test('resumed Job reuses its checkpoint marker and continues to write the author
       approvalMode: 'off',
       loadCheckpoint: () => getJobTurnCheckpoint({ jobId: job.id, stepId: step.id, userId }),
       saveCheckpoint: (state) => saveJobTurnCheckpoint({ jobId: job.id, stepId: step.id, userId, state }),
+      requestToolApproval: async ({ args }) => ({ proceed: true, args }),
       runModel: async ({ messages, tools }) => {
         modelCalls += 1
         if (modelCalls === 1) {

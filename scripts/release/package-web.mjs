@@ -22,7 +22,12 @@ export const WEB_RELEASE_ENTRIES = Object.freeze([
   'scripts/healthcheck.js',
   'src/data.js',
   'src/data/skillCatalog.js',
+  'src/lib/officeExport/documentExport.js',
+  'src/lib/officeExport/officeCommon.js',
+  'src/lib/officeExport/spreadsheetExport.js',
   'src/lib/pptCore.js',
+  'src/lib/presentationExport/presentationParseHelpers.js',
+  'src/lib/presentationExport/presentationParser.js',
   'src/lib/presentationPlanner.js',
 ])
 

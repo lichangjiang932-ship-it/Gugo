@@ -9,6 +9,7 @@ import {
 import {
   consumeNativeProviderStreamPayload,
   createNativeProviderStreamState,
+  extractNativeProviderUsage,
 } from '../server/adapters/nativeModelProviders.js'
 import { resolveEndpointProfile } from '../server/utils/endpointProfile.js'
 
@@ -91,15 +92,46 @@ test('Anthropic 响应归一化文本、工具调用与缓存 usage', () => {
       { type: 'tool_use', id: 'toolu_1', name: 'read_report', input: { section: 'summary' } },
     ],
     stop_reason: 'tool_use',
-    usage: { input_tokens: 100, output_tokens: 12, cache_read_input_tokens: 40 },
+    usage: {
+      input_tokens: 100,
+      output_tokens: 12,
+      cache_read_input_tokens: 40,
+      cache_creation_input_tokens: 30,
+    },
   }, profile)
 
   assert.equal(parsed.content, 'Checking.')
   assert.equal(parsed.toolCalls[0].id, 'toolu_1')
   assert.equal(parsed.toolCalls[0].function.arguments, '{"section":"summary"}')
+  assert.equal(parsed.usage.promptTokens, 170)
   assert.equal(parsed.usage.cacheHitTokens, 40)
-  assert.equal(parsed.usage.cacheMissTokens, 60)
+  assert.equal(parsed.usage.cacheCreationTokens, 30)
+  assert.equal(parsed.usage.uncachedInputTokens, 100)
+  assert.equal(parsed.usage.cacheMissTokens, 130)
+  assert.equal(parsed.usage.totalTokens, 182)
   assert.equal(parsed.finishReason, 'tool_calls')
+})
+
+test('native usage rejects missing prompt counts but keeps a real zero', () => {
+  for (const usage of [
+    {},
+    { input_tokens: null, output_tokens: 2 },
+    { input_tokens: '', output_tokens: 2 },
+    { input_tokens: false, output_tokens: 2 },
+  ]) assert.equal(extractNativeProviderUsage({ usage }, 'anthropic'), null)
+  for (const usageMetadata of [
+    {},
+    { promptTokenCount: null, candidatesTokenCount: 2 },
+    { promptTokenCount: '', candidatesTokenCount: 2 },
+    { promptTokenCount: false, candidatesTokenCount: 2 },
+  ]) assert.equal(extractNativeProviderUsage({ usageMetadata }, 'gemini'), null)
+
+  assert.equal(extractNativeProviderUsage({
+    usage: { input_tokens: 0, output_tokens: 2 },
+  }, 'anthropic').promptTokens, 0)
+  assert.equal(extractNativeProviderUsage({
+    usageMetadata: { promptTokenCount: 0, candidatesTokenCount: 2 },
+  }, 'gemini').promptTokens, 0)
 })
 
 test('Gemini 原生请求转换 PDF、工具声明与指定工具选择', () => {
@@ -196,7 +228,17 @@ test('native providers preserve structured tool results and approval authorizati
 
 test('Anthropic SSE 转成统一文本、usage 与 finish 事件', async () => {
   const frames = [
-    { type: 'message_start', message: { usage: { input_tokens: 8, output_tokens: 0 } } },
+    {
+      type: 'message_start',
+      message: {
+        usage: {
+          input_tokens: 8,
+          output_tokens: 0,
+          cache_read_input_tokens: 20,
+          cache_creation_input_tokens: 4,
+        },
+      },
+    },
     { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
     { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Hello' } },
     { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 2 } },
@@ -213,8 +255,12 @@ test('Anthropic SSE 转成统一文本、usage 与 finish 事件', async () => {
 
   assert.equal(events.find((event) => event.type === 'text')?.delta, 'Hello')
   assert.equal(events.at(-1).type, 'finish')
-  assert.equal(events.at(-1).usage.promptTokens, 8)
+  assert.equal(events.at(-1).usage.promptTokens, 32)
   assert.equal(events.at(-1).usage.completionTokens, 2)
+  assert.equal(events.at(-1).usage.cacheHitTokens, 20)
+  assert.equal(events.at(-1).usage.cacheCreationTokens, 4)
+  assert.equal(events.at(-1).usage.cacheMissTokens, 12)
+  assert.equal(events.at(-1).usage.totalTokens, 34)
 })
 
 test('Gemini SSE 转成统一工具调用事件', async () => {

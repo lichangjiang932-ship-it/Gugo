@@ -2,6 +2,7 @@ import { getDb } from '../db.js'
 import { listSessionTurnArtifacts } from './turnArtifactStore.js'
 import { deleteManagedAttachmentsForSession } from './managedAttachmentStore.js'
 import { dispatchHooks } from './hooksService.js'
+import { extractVerifiedLocalFiles, recoverLegacyVerifiedLocalFiles } from './turnMessageContext.js'
 
 const LOCAL_OWNER_META_KEY = 'local_auth_owner_user_id'
 const SESSION_SCOPED_TABLES = [
@@ -192,6 +193,32 @@ function mapMessage(row) {
     modelContext: parseModelContext(row.model_context_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  }
+}
+
+function withRecoveredVerifiedLocalFiles(message) {
+  const context = message?.modelContext
+  if (message?.role !== 'assistant'
+    || !context
+    || typeof context !== 'object'
+    || Object.hasOwn(context, 'verifiedLocalFiles')) {
+    return message
+  }
+  const options = {
+    userId: message.userId,
+    verifiedAt: context.turnCompletedAt || message.updatedAt || message.createdAt,
+  }
+  const verifiedLocalFiles = extractVerifiedLocalFiles(context.toolTrace, options)
+  const compatibleVerifiedLocalFiles = verifiedLocalFiles.length > 0
+    ? verifiedLocalFiles
+    : recoverLegacyVerifiedLocalFiles(context.toolTrace, options)
+  if (compatibleVerifiedLocalFiles.length === 0) return message
+  // Older messages predate persisted receipts. Enrich only this read response;
+  // the database remains unchanged and the download route independently
+  // reconstructs and authorizes the same deterministic receipt.
+  return {
+    ...message,
+    modelContext: { ...context, verifiedLocalFiles: compatibleVerifiedLocalFiles },
   }
 }
 
@@ -394,6 +421,24 @@ export function listMessages({ userId, sessionId, limit = 500, offset = 0, recen
   return rows.map(mapMessage)
 }
 
+export function getMessage({ userId, sessionId, messageId } = {}) {
+  if (!userId || !messageId) return null
+  const row = sessionId
+    ? getDb().prepare(`
+      SELECT id, session_id, user_id, role, content, model_context_json, created_at, updated_at, rowid
+      FROM messages
+      WHERE user_id = ? AND session_id = ? AND id = ?
+      LIMIT 1
+    `).get(userId, sessionId, messageId)
+    : getDb().prepare(`
+      SELECT id, session_id, user_id, role, content, model_context_json, created_at, updated_at, rowid
+      FROM messages
+      WHERE user_id = ? AND id = ?
+      LIMIT 1
+    `).get(userId, messageId)
+  return row ? mapMessage(row) : null
+}
+
 export function getPreviousUserMessage({ userId, sessionId, messageId } = {}) {
   if (!userId || !sessionId || !messageId) return null
   const row = getDb().prepare(`
@@ -445,6 +490,7 @@ export function getSessionSnapshot({ userId, sessionId, limit = 2000, offset = 0
       artifactsByTurn.set(artifact.turnId, entries)
     }
     const messages = listMessages({ userId, sessionId, limit: safeLimit, offset: safeOffset })
+      .map(withRecoveredVerifiedLocalFiles)
       .map((message) => {
         const turnId = String(message?.modelContext?.turnId || '')
         if (!turnId) return message

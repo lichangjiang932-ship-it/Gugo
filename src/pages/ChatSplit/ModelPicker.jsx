@@ -1,6 +1,7 @@
-import { useEffect, useId, useRef } from 'react'
+import { useEffect, useId, useMemo, useRef } from 'react'
 import { Check, ChevronDown } from 'lucide-react'
 import { useT } from '../../i18n/I18nProvider.jsx'
+import { groupModelOptions } from './modelPickerGroups.js'
 
 function contextWindowLabel(value, estimated = false) {
   const tokens = Number(value)
@@ -25,6 +26,8 @@ export default function ModelPicker({
   const triggerRef = useRef(null)
   const optionRefs = useRef([])
   const listboxId = useId()
+  const modelGroups = useMemo(() => groupModelOptions(modelOptions), [modelOptions])
+  const orderedModelOptions = useMemo(() => modelGroups.flatMap((group) => group.models), [modelGroups])
 
   useEffect(() => {
     if (!open) return undefined
@@ -47,12 +50,12 @@ export default function ModelPicker({
 
   useEffect(() => {
     if (!open || typeof window === 'undefined') return undefined
-    const selectedIndex = modelOptions.findIndex((model) => model.name === selectedModel)
+    const selectedIndex = orderedModelOptions.findIndex((model) => model.name === selectedModel)
     const focusTimer = window.setTimeout(() => {
       optionRefs.current[selectedIndex >= 0 ? selectedIndex : 0]?.focus()
     }, 0)
     return () => window.clearTimeout(focusTimer)
-  }, [modelOptions, open, selectedModel])
+  }, [open, orderedModelOptions, selectedModel])
 
   const handleTriggerKeyDown = (event) => {
     if (open || !['ArrowDown', 'ArrowUp'].includes(event.key)) return
@@ -120,37 +123,50 @@ export default function ModelPicker({
           >
             {modelOptions.length === 0 ? (
               <div className="px-2 py-4 text-center text-xs text-ink-fade">{t('chat.modelPicker.empty')}</div>
-            ) : modelOptions.map((model, index) => {
-              const selected = model.name === selectedModel
-              const windowLabel = contextWindowLabel(model.contextWindow, model.contextWindowEstimated)
-              const hasMultiplier = Number.isFinite(Number(model.multiplier))
+            ) : modelGroups.map((group, groupIndex) => {
+              const groupLabel = group.label || t('chat.modelPicker.defaultGroup')
+              const groupLabelId = `${listboxId}-group-${groupIndex}`
               return (
-                <button
-                  key={model.name}
-                  ref={(option) => { optionRefs.current[index] = option }}
-                  type="button"
-                  role="option"
-                  aria-selected={selected}
-                  tabIndex={selected ? 0 : -1}
-                  onClick={() => {
-                    onSelect?.(model.name)
-                    onClose?.()
-                  }}
-                  className={`flex w-full items-center gap-3 rounded-md px-2.5 py-2 text-left transition-colors ${selected ? 'bg-ember-soft text-ember' : 'text-ink hover:bg-ink-ghost'}`}
-                  data-testid="model-picker-option"
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium">{model.name}</span>
-                    {(windowLabel || hasMultiplier) && (
-                      <span className="mt-0.5 block text-[10px] text-ink-fade">
-                        {windowLabel ? `${windowLabel} ${t('chat.modelPicker.context')}` : ''}
-                        {windowLabel && hasMultiplier ? ' · ' : ''}
-                        {hasMultiplier ? `×${model.multiplier}` : ''}
-                      </span>
-                    )}
-                  </span>
-                  {selected && <Check className="h-4 w-4 shrink-0" aria-hidden="true" />}
-                </button>
+                <div key={group.key} role="group" aria-labelledby={groupLabelId} data-testid="model-picker-group">
+                  <div id={groupLabelId} className="sticky top-0 z-10 flex items-center gap-2 bg-paper/95 px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-ink-fade backdrop-blur">
+                    <span className="min-w-0 flex-1 truncate">{groupLabel}</span>
+                    <span aria-hidden="true">{group.models.length}</span>
+                  </div>
+                  {group.models.map((model, modelIndex) => {
+                    const index = group.startIndex + modelIndex
+                    const selected = model.name === selectedModel
+                    const windowLabel = contextWindowLabel(model.contextWindow, model.contextWindowEstimated)
+                    const hasMultiplier = Number.isFinite(Number(model.multiplier))
+                    return (
+                      <button
+                        key={`${group.key}:${model.name}`}
+                        ref={(option) => { optionRefs.current[index] = option }}
+                        type="button"
+                        role="option"
+                        aria-selected={selected}
+                        tabIndex={selected ? 0 : -1}
+                        onClick={() => {
+                          onSelect?.(model.name)
+                          onClose?.()
+                        }}
+                        className={`flex w-full items-center gap-3 rounded-md px-2.5 py-2 text-left transition-colors ${selected ? 'bg-ember-soft text-ember' : 'text-ink hover:bg-ink-ghost'}`}
+                        data-testid="model-picker-option"
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium">{model.name}</span>
+                          {(windowLabel || hasMultiplier) && (
+                            <span className="mt-0.5 block text-[10px] text-ink-fade">
+                              {windowLabel ? `${windowLabel} ${t('chat.modelPicker.context')}` : ''}
+                              {windowLabel && hasMultiplier ? ' · ' : ''}
+                              {hasMultiplier ? `×${model.multiplier}` : ''}
+                            </span>
+                          )}
+                        </span>
+                        {selected && <Check className="h-4 w-4 shrink-0" aria-hidden="true" />}
+                      </button>
+                    )
+                  })}
+                </div>
               )
             })}
           </div>

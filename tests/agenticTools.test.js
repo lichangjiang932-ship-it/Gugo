@@ -131,6 +131,7 @@ test('request_directory: an existing sufficient directory grant continues withou
     suggested_path: 'D:\\Reports',
   }, {
     userId: 'authorized-user',
+    resolveDirectoryPath: ({ rawPath }) => rawPath,
     resolveDirectoryGrant: ({ userId, rawPath, accessMode }) => {
       assert.equal(userId, 'authorized-user')
       assert.equal(rawPath, 'D:\\Reports')
@@ -158,6 +159,7 @@ test('request_directory: explanatory suffixes are removed only from the suggeste
     suggested_path: 'D:\\foo\uFF08\u4ECE\u672A\u6388\u6743\uFF09\u3002',
   }, {
     userId: 'suggestion-user',
+    resolveDirectoryPath: ({ rawPath }) => rawPath,
     directoryPathExists: () => false,
     resolveDirectoryGrant: ({ rawPath }) => {
       lookedUpPaths.push(rawPath)

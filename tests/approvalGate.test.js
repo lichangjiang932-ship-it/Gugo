@@ -167,7 +167,7 @@ test("mode 'off' 对危险调用 fail closed,不创建审批行", async () => {
 
 test('Hook can force a normally safe tool through the durable approval inbox', async () => {
   const { userId, jobId } = newUser('hook-force')
-  setApprovalMode({ userId, mode: 'bypass' })
+  setApprovalMode({ userId, mode: 'normal' })
   const args = { path: 'src/index.js' }
   const pending = requestApproval({
     userId,
@@ -261,6 +261,18 @@ test('真实用户档位依次执行 plan / normal / acceptEdits / bypass 语义
     mode: 'off',
   })
   assert.equal(bypassed.proceed, true)
+  assert.equal(countPendingApprovals({ userId: bypassUser.userId }), 0)
+
+  const hookForced = await requestApproval({
+    ...bypassUser,
+    origin: 'chat',
+    toolName: 'bash_exec',
+    args: { command: 'npm run build' },
+    mode: 'all',
+    forceApproval: true,
+    forceApprovalReason: 'pre_tool_use Hook 要求逐次批准',
+  })
+  assert.equal(hookForced.proceed, true)
   assert.equal(countPendingApprovals({ userId: bypassUser.userId }), 0)
 })
 

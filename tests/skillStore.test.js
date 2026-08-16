@@ -13,6 +13,8 @@ const {
   listImportedSkills,
 } = await import('../server/services/skillStore.js')
 const { closeDb } = await import('../server/db.js')
+const { getRuntimeSkill, listRuntimeSkillCatalog } = await import('../server/services/skillRegistry.js')
+const { prepareSkillsForPrompt } = await import('../server/services/promptCompiler.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 test.after(() => {
@@ -40,6 +42,18 @@ test('skill store persists imported skill metadata and prompt asset', () => {
   assert.equal(skill.name, '写作助手')
   assert.equal(skill.files['prompts/system.md'], '你是写作助手')
   assert.equal(listImportedSkills({ userId }).length, 1)
+
+  const catalogEntry = listRuntimeSkillCatalog({ userId }).find((entry) => entry.id === 'writer')
+  assert.deepEqual(catalogEntry, {
+    id: 'writer',
+    name: '写作助手',
+    description: '生成长文',
+    loadable: true,
+    loadHint: '/writer',
+  })
+  assert.equal(Object.hasOwn(catalogEntry, 'systemPrompt'), false)
+  assert.equal(getRuntimeSkill('writer', { userId }).systemPrompt, '你是写作助手')
+  assert.match(prepareSkillsForPrompt({ userId, skillIds: ['writer'] })[0].systemPrompt, /你是写作助手/)
 
   // 另一个用户看不到
   const other = issueTestSession()

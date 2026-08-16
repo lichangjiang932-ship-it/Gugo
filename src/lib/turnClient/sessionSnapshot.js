@@ -1,8 +1,39 @@
 import { TOOL_CALL_STATUS } from '../../store/taskStatus.js'
+import { normalizeModelUsage } from '../../../shared/modelUsage.js'
 import { DEFAULT_SNAPSHOT_PAGE_SIZE, DEFAULT_SNAPSHOT_REVISION_ATTEMPTS, headers, parseResponse } from './turnTransport.js'
 
 function parseToolResult(content) {
   try { return JSON.parse(content) } catch { return null }
+}
+
+function finiteTimestamp(value) {
+  if (value == null || value === '') return null
+  const normalized = Number(value)
+  return Number.isFinite(normalized) && normalized >= 0 ? normalized : null
+}
+
+function nonNegativeInteger(value) {
+  if (value == null || value === '') return null
+  const normalized = Number(value)
+  return Number.isInteger(normalized) && normalized >= 0 ? normalized : null
+}
+
+function snapshotLastSequence(context) {
+  if (!context || typeof context !== 'object') return null
+  for (const key of [
+    'serverLastSequence',
+    'server_last_sequence',
+    'lastSequence',
+    'last_sequence',
+    'eventSequence',
+    'event_sequence',
+    'pausedSequence',
+    'paused_sequence',
+  ]) {
+    const sequence = nonNegativeInteger(context[key])
+    if (sequence !== null) return sequence
+  }
+  return null
 }
 
 function snapshotText(value, fallback = '') {
@@ -111,6 +142,95 @@ function optionalContextArtifactIds(context, key) {
     .filter(Boolean))]
 }
 
+function recoveredArtifactUrl(value) {
+  const url = String(value || '').trim()
+  return url.startsWith('/api/artifacts/') ? url : ''
+}
+
+function normalizeRecoveredToolArtifact(value, toolCallId) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const id = String(value.id || value.artifactId || '').trim()
+  const filename = String(value.filename || '').trim().split(/[\\/]/).pop() || ''
+  const url = recoveredArtifactUrl(value.url || value.downloadUrl)
+  if (!id || !filename || !url) return null
+  return {
+    id,
+    filename,
+    url,
+    toolCallId: String(toolCallId || ''),
+    ...(value.title ? { title: String(value.title) } : {}),
+    ...(value.type ? { type: String(value.type) } : {}),
+    ...(value.mimeType ? { mimeType: String(value.mimeType) } : {}),
+  }
+}
+
+/**
+ * Older snapshots did not always copy persisted artifacts onto the assistant
+ * message. Recover only server-selected deliverables from successful, stored
+ * tool results; assistant prose is never treated as artifact evidence.
+ */
+function recoverSelectedToolArtifacts(context, deliveryArtifactIds) {
+  if (!Array.isArray(deliveryArtifactIds) || deliveryArtifactIds.length === 0) return []
+  const selected = new Set(deliveryArtifactIds)
+  const recovered = new Map()
+  const toolTrace = Array.isArray(context?.toolTrace) ? context.toolTrace : []
+  const declaredCallIds = new Set(toolTrace.flatMap((trace) => (
+    trace?.role === 'assistant' && Array.isArray(trace.tool_calls)
+      ? trace.tool_calls.map((call) => String(call?.id || '').trim()).filter(Boolean)
+      : []
+  )))
+  for (const trace of toolTrace) {
+    if (trace?.role !== 'tool') continue
+    const toolCallId = String(trace.tool_call_id || '').trim()
+    if (!toolCallId || !declaredCallIds.has(toolCallId)) continue
+    const parsed = parseToolResult(trace.content)
+    if (parsed?.ok !== true) continue
+    const result = parsed.result && typeof parsed.result === 'object' && !Array.isArray(parsed.result)
+      ? parsed.result
+      : parsed
+    const candidates = [
+      ...(Array.isArray(result.artifacts) ? result.artifacts : []),
+      ...(result.artifact && typeof result.artifact === 'object' ? [result.artifact] : []),
+      ...(result.artifactId ? [{
+        artifactId: result.artifactId,
+        filename: result.filename,
+        url: result.url || result.downloadUrl,
+        title: result.title,
+        type: result.type,
+        mimeType: result.mimeType,
+      }] : []),
+    ]
+    for (const candidate of candidates) {
+      const artifact = normalizeRecoveredToolArtifact(candidate, toolCallId)
+      if (artifact && selected.has(artifact.id) && !recovered.has(artifact.id)) {
+        recovered.set(artifact.id, artifact)
+      }
+    }
+  }
+  return deliveryArtifactIds.map((id) => recovered.get(id)).filter(Boolean)
+}
+
+function optionalContextVerifiedLocalFiles(context) {
+  if (!context || typeof context !== 'object' || !Object.hasOwn(context, 'verifiedLocalFiles')) return undefined
+  const seen = new Set()
+  return (Array.isArray(context.verifiedLocalFiles) ? context.verifiedLocalFiles : [])
+    .map((file) => {
+      const id = String(file?.id || '').trim()
+      const path = String(file?.path || '').trim()
+      const filename = String(file?.filename || '').trim()
+      if (!id || !path || !filename || seen.has(id)) return null
+      seen.add(id)
+      return {
+        id,
+        path,
+        filename,
+        ...(Number.isFinite(Number(file?.size)) ? { size: Math.max(0, Number(file.size)) } : {}),
+        ...(Number.isFinite(Number(file?.verifiedAt)) ? { verifiedAt: Math.max(0, Number(file.verifiedAt)) } : {}),
+      }
+    })
+    .filter(Boolean)
+}
+
 function turnEvidenceMeta(message) {
   const context = message?.modelContext && typeof message.modelContext === 'object'
     ? message.modelContext
@@ -128,7 +248,15 @@ function turnEvidenceMeta(message) {
   const deliveryArtifactIds = optionalContextArtifactIds(context, 'deliveryArtifactIds')
 
   return {
-    ...(state === 'failed' ? { failed: true } : { interrupted: true }),
+    ...(state === 'failed'
+      ? { failed: true }
+      : {
+          interrupted: true,
+          streaming: true,
+          turnCompletedAt: null,
+          latency: null,
+          serverConnectionState: 'interrupted',
+        }),
     serverFailure: failure,
     serverPartialText: String(message?.content || ''),
     serverArtifactIds: artifactIds,
@@ -203,7 +331,13 @@ export function normalizeServerSessionSnapshot(snapshot) {
   if (!snapshot || snapshot.complete !== true) return null
   const rawMessages = Array.isArray(snapshot.messages) ? snapshot.messages : []
   const resultRows = new Map()
+  const legacyTurnStartedAt = new Map()
   rawMessages.forEach((message, index) => {
+    if (message?.role === 'user') {
+      const turnId = String(message?.modelContext?.turnId || '').trim()
+      const createdAt = finiteTimestamp(message?.createdAt)
+      if (turnId && createdAt !== null) legacyTurnStartedAt.set(turnId, createdAt)
+    }
     if (message?.role !== 'tool') return
     const callId = String(
       message?.modelContext?.toolCallId || message?.tool_call_id || message?.toolCallId || '',
@@ -234,12 +368,52 @@ export function normalizeServerSessionSnapshot(snapshot) {
       const toolCalls = message.role === 'assistant'
         ? toolCallsFromContext({ toolTrace })
         : []
-      const serverArtifacts = message.role === 'assistant' && Array.isArray(message?.artifacts)
-        ? message.artifacts.filter((artifact) => artifact?.id && artifact?.url && artifact?.filename)
-        : []
       const serverDeliveryArtifactIds = message.role === 'assistant'
         ? optionalContextArtifactIds(message?.modelContext, 'deliveryArtifactIds')
         : undefined
+      const persistedArtifacts = message.role === 'assistant' && Array.isArray(message?.artifacts)
+        ? message.artifacts.filter((artifact) => artifact?.id && artifact?.url && artifact?.filename)
+        : []
+      const serverArtifacts = persistedArtifacts.length > 0
+        ? persistedArtifacts
+        : recoverSelectedToolArtifacts(message?.modelContext, serverDeliveryArtifactIds)
+      const verifiedLocalFiles = message.role === 'assistant'
+        ? optionalContextVerifiedLocalFiles(message?.modelContext)
+        : undefined
+      const modelUsage = message.role === 'assistant'
+        ? normalizeModelUsage(message?.modelContext?.usage)
+        : null
+      const assistantTurnId = message.role === 'assistant'
+        ? String(message?.modelContext?.turnId || '').trim()
+        : ''
+      const evidenceState = message.role === 'assistant'
+        && message?.modelContext?.turnEvidence === true
+        ? String(message.modelContext.evidenceState || '')
+        : ''
+      const interrupted = evidenceState === 'interrupted'
+      const serverLastSequence = message.role === 'assistant'
+        ? snapshotLastSequence(message?.modelContext)
+        : null
+      const storedTurnStartedAt = message.role === 'assistant'
+        ? finiteTimestamp(message?.modelContext?.turnStartedAt)
+        : null
+      const turnStartedAt = storedTurnStartedAt
+        ?? (assistantTurnId ? legacyTurnStartedAt.get(assistantTurnId) ?? null : null)
+      const storedTurnCompletedAt = message.role === 'assistant'
+        ? finiteTimestamp(message?.modelContext?.turnCompletedAt)
+        : null
+      const turnCompletedAt = interrupted
+        ? null
+        : storedTurnCompletedAt
+          ?? (message.role === 'assistant' ? finiteTimestamp(message?.createdAt) : null)
+      const storedLatency = message.role === 'assistant'
+        ? finiteTimestamp(message?.modelContext?.latency)
+        : null
+      const latency = storedLatency ?? (
+        turnStartedAt !== null && turnCompletedAt !== null
+          ? Math.max(0, turnCompletedAt - turnStartedAt)
+          : null
+      )
       const storedAttachments = message?.attachments ?? message?.modelContext?.attachments
       const attachments = message.role === 'user' && Array.isArray(storedAttachments)
         ? storedAttachments.filter((attachment) => attachment?.id).map((attachment) => ({
@@ -274,6 +448,17 @@ export function normalizeServerSessionSnapshot(snapshot) {
             ...(toolTrace.length ? { toolTrace } : {}),
             ...(serverArtifacts.length ? { serverArtifacts } : {}),
             ...(serverDeliveryArtifactIds !== undefined ? { serverDeliveryArtifactIds } : {}),
+            ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
+            ...(modelUsage ? {
+              modelUsage,
+              actualPromptTokens: modelUsage.promptTokens,
+            } : {}),
+            ...(turnStartedAt !== null ? { turnStartedAt } : {}),
+            ...(turnCompletedAt !== null ? { turnCompletedAt } : {}),
+            ...(latency !== null ? { latency } : {}),
+            ...(serverLastSequence !== null
+              ? { serverLastSequence }
+              : interrupted ? { serverLastSequence: -1 } : {}),
             ...turnEvidenceMeta(message),
             ...pausedTurnMeta(message),
           },

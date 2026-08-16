@@ -101,6 +101,7 @@ export function getModelProviders(env = process.env) {
     const prefix = providerEnvPrefix(id)
     return {
       id,
+      label: env[`${prefix}_LABEL`]?.trim() || '',
       baseUrl: env[`${prefix}_BASE_URL`]?.trim() || '',
       apiKey: env[`${prefix}_API_KEY`]?.trim() || '',
       models: parseCsv(env[`${prefix}_MODELS`]),
@@ -556,7 +557,11 @@ export async function getSystemDiagnostics({ env = process.env, fetchImpl = fetc
 
 export function getVisibleModels(env = process.env, defaultModel = '') {
   const providers = getModelProviders(env)
-  const providerModelEntries = providers.flatMap((provider) => provider.models.map((name) => ({ name, provider: provider.id })))
+  const providerModelEntries = providers.flatMap((provider) => provider.models.map((name) => ({
+    name,
+    provider: provider.id,
+    providerLabel: provider.label,
+  })))
   const names = providerModelEntries.length ? providerModelEntries.map((entry) => entry.name) : parseCsv(env.MODEL_NAMES || defaultModel)
   return buildVisibleModelCatalog({
     names, defaultModel, providerModelEntries, resolveProfile: (name) => profileForConfig(resolveModelConfigForModel({ modelName: name, env }), env),

@@ -14,7 +14,13 @@ import {
 } from '../server/adapters/fsShellTools.js'
 import { closeDb, createUser, setUserToolPermission } from '../server/db.js'
 import { grantLocalPath } from '../server/services/localFileAccessService.js'
+import { setApprovalMode } from '../server/services/approvalSettingsStore.js'
 import { setWorkspaceTrust } from '../server/services/workspaceTrustService.js'
+
+function createNormalUser(user) {
+  createUser(user)
+  setApprovalMode({ userId: user.id, mode: 'normal' })
+}
 
 // 每个测试自带 workspace 临时目录 + env 闸门管理.
 let workspace
@@ -70,7 +76,7 @@ test('shell 默认禁用:WORKSPACE_SHELL_ENABLED 未设时,bash_exec 返回 403'
 test('bash_exec permission override is internal-only and checks exactly the selected alias', async () => {
   process.env.WORKSPACE_SHELL_ENABLED = '1'
   const userId = `shell-permission-${process.pid}-${Date.now()}`
-  createUser({ id: userId, email: `${userId}@example.com` })
+  createNormalUser({ id: userId, email: `${userId}@example.com` })
   setUserToolPermission({ userId, toolName: 'bash_exec', enabled: false })
   setUserToolPermission({ userId, toolName: 'run_command', enabled: true })
 
@@ -104,7 +110,7 @@ test('bash_exec permission override is internal-only and checks exactly the sele
 test('write_file permission override lets patch_file use the writer without inheriting write_file', async () => {
   process.env.WORKSPACE_FS_ENABLED = '1'
   const userId = `write-permission-${process.pid}-${Date.now()}`
-  createUser({ id: userId, email: `${userId}@example.com` })
+  createNormalUser({ id: userId, email: `${userId}@example.com` })
   setUserToolPermission({ userId, toolName: 'write_file', enabled: false })
   setUserToolPermission({ userId, toolName: 'patch_file', enabled: true })
 
@@ -401,7 +407,7 @@ test('bash_exec:相对 expected_output 按 effective cwd 解析且不能越出�
 test('bash_exec:用户授权目录内的相对 expected_output 使用实际 cwd 验证', async () => {
   process.env.WORKSPACE_SHELL_ENABLED = '1'
   const userId = 'fs-shell-output-user'
-  createUser({ id: userId, email: 'fs-shell-output@example.com' })
+  createNormalUser({ id: userId, email: 'fs-shell-output@example.com' })
   grantLocalPath({ userId, rootPath: authorizedWorkspace, accessMode: 'read_write' })
   setWorkspaceTrust({
     userId,
@@ -433,7 +439,7 @@ test('bash_exec: Windows preserves quoted absolute paths when cwd contains paren
   const specialWorkspace = path.join(authorizedWorkspace, 'directory (1)')
   const outputPath = path.join(specialWorkspace, 'parentheses-output.txt')
   fs.mkdirSync(specialWorkspace, { recursive: true })
-  createUser({ id: userId, email: 'fs-shell-parentheses@example.com' })
+  createNormalUser({ id: userId, email: 'fs-shell-parentheses@example.com' })
   grantLocalPath({ userId, rootPath: specialWorkspace, accessMode: 'read_write' })
 
   const result = await bashExecTool({
@@ -460,7 +466,7 @@ test('bash_exec: omitted cwd does not choose between multiple read-write directo
   fs.mkdirSync(secondRoot, { recursive: true })
   fs.writeFileSync(firstFile, 'first', 'utf8')
   fs.writeFileSync(secondFile, 'second', 'utf8')
-  createUser({ id: userId, email: `${userId}@example.com` })
+  createNormalUser({ id: userId, email: `${userId}@example.com` })
   grantLocalPath({ userId, rootPath: firstRoot, accessMode: 'read_write' })
   grantLocalPath({ userId, rootPath: secondRoot, accessMode: 'read_write' })
 
@@ -483,8 +489,8 @@ test('bash_exec: omitted cwd never promotes read-only or exact-file grants to sh
   fs.mkdirSync(readOnlyRoot, { recursive: true })
   fs.writeFileSync(readOnlyFile, 'read-only', 'utf8')
   fs.writeFileSync(exactFile, 'file-grant', 'utf8')
-  createUser({ id: readOnlyUser, email: `${readOnlyUser}@example.com` })
-  createUser({ id: fileGrantUser, email: `${fileGrantUser}@example.com` })
+  createNormalUser({ id: readOnlyUser, email: `${readOnlyUser}@example.com` })
+  createNormalUser({ id: fileGrantUser, email: `${fileGrantUser}@example.com` })
   grantLocalPath({ userId: readOnlyUser, rootPath: readOnlyRoot, accessMode: 'read_only' })
   grantLocalPath({ userId: fileGrantUser, rootPath: exactFile, accessMode: 'read_write' })
 

@@ -171,7 +171,9 @@ export async function requestApproval({
   })
   // plan 档位:直接拒,不排队等人 —— 用户要的就是「只看不动」
   if (verdict.denied) return { proceed: false, reason: verdict.reason }
-  if (forceApproval === true) {
+  // “全部放行”是用户对审批层的最终选择。Hook 仍可拒绝调用，
+  // 但 permissionDecision=ask 不能把 bypass 重新降级为等待审批。
+  if (forceApproval === true && settings.mode !== 'bypass') {
     verdict = {
       ...verdict,
       needsApproval: true,

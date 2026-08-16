@@ -96,6 +96,7 @@ test('tool defaults migrate to the complete execution loop while current explici
   for (const id of ['image_info', 'image_transform', 'media_probe', 'media_transform', 'pdf_info', 'pdf_text', 'pdf_transform', 'archive_list', 'archive_create', 'archive_extract', 'batch_rename', 'file_hash_manifest']) {
     assert.equal(legacy.toolsConfig[id], true)
   }
+  assert.equal(legacy.toolsConfig.create_pdf, true)
   assert.equal(legacy.toolsConfigSchemaVersion, TOOLS_CONFIG_SCHEMA_VERSION)
 
   const v1 = normalizePersistedFields({
@@ -181,6 +182,12 @@ test('tool defaults migrate to the complete execution loop while current explici
     assert.equal(v7.toolsConfig[id], true, id)
   }
 
+  const v8 = normalizePersistedFields({
+    toolsConfigSchemaVersion: 8,
+    toolsConfig: { create_pdf: false },
+  })
+  assert.equal(v8.toolsConfig.create_pdf, true)
+
   const explicit = normalizePersistedFields({
     toolsConfigSchemaVersion: TOOLS_CONFIG_SCHEMA_VERSION,
     toolsConfig: {
@@ -208,6 +215,7 @@ test('tool defaults migrate to the complete execution loop while current explici
       file_hash_manifest: false,
       pdf_text: false,
       archive_list: false,
+      create_pdf: false,
     },
   })
   assert.equal(needsToolsConfigSchemaMigration(explicit), false)
@@ -223,6 +231,7 @@ test('tool defaults migrate to the complete execution loop while current explici
   }
   assert.equal(explicit.toolsConfig.pdf_text, false)
   assert.equal(explicit.toolsConfig.archive_list, false)
+  assert.equal(explicit.toolsConfig.create_pdf, false)
   assert.equal(explicit.toolsConfigSchemaVersion, TOOLS_CONFIG_SCHEMA_VERSION)
 })
 

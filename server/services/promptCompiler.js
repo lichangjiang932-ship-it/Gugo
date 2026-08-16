@@ -1,7 +1,9 @@
 import crypto from 'node:crypto'
 import { getAgentTemplateSystemPrompt } from './agentTemplates.js'
-import { getRuntimeSkill } from './skillRegistry.js'
+import { getRuntimeSkill, listRuntimeSkillCatalog } from './skillRegistry.js'
 import { getCompactionArchive } from './compactionService.js'
+import { boundCompactionSummary } from './contextCompactionRuntime.js'
+import { resolveStoredMessagesAfterCompaction } from './turnMessageContext.js'
 import { buildPersonaManifestBlock } from './agentStore.js'
 import {
   applySkillQualityContract,
@@ -15,9 +17,14 @@ import {
 
 const BLOCK_TYPES = ['identity', 'ishiki', 'skills', 'sessions']
 const CACHE_LIMIT = 64
+const KIB = 1024
 export const SKILL_PROMPT_LIMITS = Object.freeze({
-  maxPromptBytes: INLINE_SKILL_DEFINITION_LIMITS.systemPrompt.maxUtf8Bytes,
-  maxBlockBytes: 256 * 1024,
+  maxPromptBytes: 48 * KIB,
+  maxBlockBytes: 64 * KIB,
+  maxCatalogBytes: 16 * KIB,
+  maxCatalogEntries: 128,
+  maxCatalogDescriptionCharacters: 500,
+  maxLoadedSkills: INLINE_SKILL_DEFINITION_LIMITS.maxDefinitions,
 })
 const EMPTY_RESULT = Object.freeze({ text: '', fingerprint: 'empty', sources: {} })
 const UNTRUSTED_CONTENT_SAFETY_TEXT = [
@@ -183,6 +190,7 @@ function truncateUtf8(value, maxBytes, marker = '') {
 
 const SKILL_TRUNCATION_MARKER = '[Skill prompt truncated by safety budget]'
 const SKILLS_BLOCK_OMISSION_MARKER = '\n\n[Additional skill content omitted by safety budget]'
+const SKILL_CATALOG_OMISSION_MARKER = '\n- [Additional catalog entries omitted by safety budget]'
 
 function originalSkillPrompt(skill, prompt, contract) {
   if (!hasSkillQualityContract(skill, prompt)) return prompt
@@ -217,22 +225,25 @@ function normalizeSkill(skill, maxPromptBytes = SKILL_PROMPT_LIMITS.maxPromptByt
   return {
     id: skill.id,
     name: skill.name || '',
-    description: skill.description || skill.desc || '',
+    description: Array.from(String(skill.description || skill.desc || '').trim())
+      .slice(0, SKILL_PROMPT_LIMITS.maxCatalogDescriptionCharacters)
+      .join(''),
     permissions: Array.isArray(skill.permissions) ? [...skill.permissions].sort() : [],
     systemPrompt: prompt.text,
     promptTruncated: prompt.truncated,
   }
 }
 
-function renderSkillHeader(skill) {
+function renderSkillHeader(skill, equivalentIds = []) {
   const lines = [`## ${skill.name || skill.id} (${skill.id})`]
   if (skill.description) lines.push(skill.description)
   if (skill.permissions.length) lines.push(`Permissions: ${skill.permissions.join(', ')}`)
+  if (equivalentIds.length) lines.push(`Equivalent selected IDs (same instructions): ${equivalentIds.join(', ')}`)
   return lines.join('\n')
 }
 
-function renderSkillSection(skill) {
-  return [renderSkillHeader(skill), skill.systemPrompt?.trim()].filter(Boolean).join('\n\n')
+function renderSkillSection(skill, equivalentIds = []) {
+  return [renderSkillHeader(skill, equivalentIds), skill.systemPrompt?.trim()].filter(Boolean).join('\n\n')
 }
 
 function normalizeSkillIds(skillIds) {
@@ -266,12 +277,32 @@ export function prepareInlineSkillsForPrompt({ skillIds = [], skillDefinitions =
     .slice(0, limits.maxDefinitions)
 }
 
+function normalizeCatalogSkill(skill) {
+  const id = truncateInlineSkillText(skill?.id, INLINE_SKILL_DEFINITION_LIMITS.id)
+  if (!id) return null
+  return {
+    id,
+    name: truncateInlineSkillText(skill?.name || id, INLINE_SKILL_DEFINITION_LIMITS.name),
+    description: Array.from(String(skill?.description || skill?.desc || '').trim())
+      .slice(0, SKILL_PROMPT_LIMITS.maxCatalogDescriptionCharacters)
+      .join(''),
+    loadable: skill?.loadable !== false && skill?.runnable !== false,
+    loadHint: truncateInlineSkillText(skill?.loadHint || `/${id}`, INLINE_SKILL_DEFINITION_LIMITS.name),
+  }
+}
+
+export function prepareSkillCatalogForPrompt({ userId } = {}) {
+  return listRuntimeSkillCatalog({ userId })
+    .map(normalizeCatalogSkill)
+    .filter(Boolean)
+}
+
 /**
  * 在 caller 层解析用户可见技能。这样 turn/job/subagent 可以先完成 DB 读取，
  * 再把稳定的纯数据交给 prompt compiler，避免编译阶段隐式查询。
  */
 export function prepareSkillsForPrompt({ userId, skillIds = [] } = {}) {
-  const normalizedIds = normalizeSkillIds(skillIds)
+  const normalizedIds = normalizeSkillIds(skillIds).slice(0, SKILL_PROMPT_LIMITS.maxLoadedSkills)
   if (!normalizedIds.length) return []
   return normalizedIds
     .map((id) => getRuntimeSkill(id, { userId }))
@@ -279,61 +310,114 @@ export function prepareSkillsForPrompt({ userId, skillIds = [] } = {}) {
     .map((skill) => normalizeSkill(skill))
 }
 
-export function buildSkillsBlockFromPrepared({ userId, agentId = null, skills = [] } = {}) {
-  const normalized = [...new Map(
-    (Array.isArray(skills) ? skills : [])
-      .filter((skill) => skill?.id)
-      .map((skill) => {
-        const value = normalizeSkill(skill)
-        return [String(value.id), value]
-      }),
-  ).values()].sort((a, b) => String(a.id).localeCompare(String(b.id)))
-  if (!normalized.length) return EMPTY_RESULT
+function skillPromptDigest(skill) {
+  return crypto.createHash('sha256').update(String(skill.systemPrompt || ''), 'utf8').digest('hex').slice(0, 16)
+}
 
-  const input = { skills: normalized }
-  const sources = {
-    userId: userId || null,
-    agentId: agentId || null,
-    skillIds: normalized.map((skill) => skill.id),
-    fields: ['id', 'name', 'description', 'permissions', 'systemPrompt'],
-  }
-  return cachedBuild('skills', input, sources, () => {
-    let rendered = '# Skills'
-    let omitted = false
-    for (const [index, skill] of normalized.entries()) {
-      const separator = '\n\n'
-      const section = renderSkillSection(skill)
-      const candidate = `${rendered}${separator}${section}`
-      const hasMoreSkills = index < normalized.length - 1
-      const reserveBytes = hasMoreSkills
-        ? Buffer.byteLength(SKILLS_BLOCK_OMISSION_MARKER, 'utf8')
-        : 0
-      if (Buffer.byteLength(candidate, 'utf8') + reserveBytes <= SKILL_PROMPT_LIMITS.maxBlockBytes) {
-        rendered = candidate
-        continue
-      }
-
-      const headerPrefix = `${rendered}${separator}${renderSkillHeader(skill)}\n\n`
-      const promptBudget = SKILL_PROMPT_LIMITS.maxBlockBytes
-        - Buffer.byteLength(headerPrefix + SKILLS_BLOCK_OMISSION_MARKER, 'utf8')
-      const fitted = normalizeSkill(skill, Math.max(0, promptBudget))
-      if (fitted.systemPrompt && hasSkillQualityContract(fitted, fitted.systemPrompt)) {
-        const fittedCandidate = `${headerPrefix}${fitted.systemPrompt}${SKILLS_BLOCK_OMISSION_MARKER}`
-        if (Buffer.byteLength(fittedCandidate, 'utf8') <= SKILL_PROMPT_LIMITS.maxBlockBytes) {
-          rendered = fittedCandidate
-          omitted = true
-          break
-        }
-      }
+function renderSkillCatalog(skills) {
+  let rendered = [
+    '## Available skill catalog',
+    'Catalog entries are metadata only. Full instructions are loaded only when the request explicitly supplies skillIds or uses the matching /skill command. Do not assume instructions from an unloaded skill.',
+  ].join('\n')
+  let omitted = false
+  for (const skill of skills.slice(0, SKILL_PROMPT_LIMITS.maxCatalogEntries)) {
+    const status = skill.loadable ? `loadable: ${skill.loadHint}` : 'not loadable in this runtime'
+    const line = `- ${skill.id} | ${skill.name || skill.id}${skill.description ? ` — ${skill.description}` : ''} | ${status}`
+    if (Buffer.byteLength(`${rendered}\n${line}`, 'utf8') > SKILL_PROMPT_LIMITS.maxCatalogBytes) {
       omitted = true
       break
     }
-    if (omitted && !rendered.endsWith(SKILLS_BLOCK_OMISSION_MARKER)) {
-      const withMarker = `${rendered}${SKILLS_BLOCK_OMISSION_MARKER}`
-      if (Buffer.byteLength(withMarker, 'utf8') <= SKILL_PROMPT_LIMITS.maxBlockBytes) rendered = withMarker
+    rendered += `\n${line}`
+  }
+  if (skills.length > SKILL_PROMPT_LIMITS.maxCatalogEntries) omitted = true
+  if (omitted && Buffer.byteLength(rendered + SKILL_CATALOG_OMISSION_MARKER, 'utf8') <= SKILL_PROMPT_LIMITS.maxCatalogBytes) {
+    rendered += SKILL_CATALOG_OMISSION_MARKER
+  }
+  return rendered
+}
+
+export function buildSkillsBlockFromPrepared({
+  userId,
+  agentId = null,
+  skills = [],
+  catalogSkills = [],
+} = {}) {
+  const selectedById = new Map(
+    (Array.isArray(skills) ? skills : [])
+      .filter((skill) => skill?.id)
+      .map((skill) => [String(skill.id), skill]),
+  )
+  const selected = [...selectedById.values()]
+    .sort((a, b) => String(a.id).localeCompare(String(b.id)))
+    .slice(0, SKILL_PROMPT_LIMITS.maxLoadedSkills)
+  const catalogById = new Map()
+  for (const skill of [...(Array.isArray(catalogSkills) ? catalogSkills : []), ...selected]) {
+    const normalized = normalizeCatalogSkill(skill)
+    if (normalized) catalogById.set(normalized.id, normalized)
+  }
+  const catalog = [...catalogById.values()].sort((a, b) => a.id.localeCompare(b.id))
+  if (!selected.length && !catalog.length) return EMPTY_RESULT
+
+  const groupsByDigest = new Map()
+  for (const skill of selected) {
+    const normalized = normalizeSkill(skill)
+    if (!normalized.systemPrompt) continue
+    const digest = skillPromptDigest(normalized)
+    const existing = groupsByDigest.get(digest)
+    if (existing && existing.normalized.systemPrompt === normalized.systemPrompt) {
+      existing.equivalentIds.push(String(normalized.id))
+      continue
     }
-    return rendered
-  })
+    groupsByDigest.set(digest, {
+      source: skill,
+      normalized,
+      digest,
+      equivalentIds: [],
+    })
+  }
+  const groups = [...groupsByDigest.values()]
+  let rendered = '# Skills'
+  if (catalog.length) rendered += `\n\n${renderSkillCatalog(catalog)}`
+  if (groups.length) rendered += '\n\n## Loaded skill instructions'
+  let omitted = selectedById.size > selected.length
+  for (const [index, group] of groups.entries()) {
+    const remainingGroups = groups.length - index
+    const remainingBytes = SKILL_PROMPT_LIMITS.maxBlockBytes
+      - Buffer.byteLength(rendered + SKILLS_BLOCK_OMISSION_MARKER, 'utf8')
+    const sectionBudget = Math.max(0, Math.floor(remainingBytes / Math.max(1, remainingGroups)))
+    const header = renderSkillHeader(group.normalized, group.equivalentIds)
+    const fixedBytes = Buffer.byteLength(`\n\n${header}\n\n`, 'utf8')
+    const promptBudget = Math.min(
+      SKILL_PROMPT_LIMITS.maxPromptBytes,
+      Math.max(0, sectionBudget - fixedBytes),
+    )
+    const fitted = normalizeSkill(group.source, promptBudget)
+    if (!fitted.systemPrompt || !hasSkillQualityContract(fitted, fitted.systemPrompt)) {
+      omitted = true
+      continue
+    }
+    if (fitted.promptTruncated) omitted = true
+    const section = renderSkillSection(fitted, group.equivalentIds)
+    if (Buffer.byteLength(`${rendered}\n\n${section}${SKILLS_BLOCK_OMISSION_MARKER}`, 'utf8') > SKILL_PROMPT_LIMITS.maxBlockBytes) {
+      omitted = true
+      continue
+    }
+    rendered += `\n\n${section}`
+  }
+  if (omitted && Buffer.byteLength(rendered + SKILLS_BLOCK_OMISSION_MARKER, 'utf8') <= SKILL_PROMPT_LIMITS.maxBlockBytes) {
+    rendered += SKILLS_BLOCK_OMISSION_MARKER
+  }
+
+  const input = { rendered }
+  const sources = {
+    userId: userId || null,
+    agentId: agentId || null,
+    skillIds: selected.map((skill) => String(skill.id)),
+    catalogSkillIds: catalog.map((skill) => skill.id),
+    promptDigests: groups.map((group) => group.digest),
+    fields: ['catalog.id', 'catalog.name', 'catalog.description', 'selected.systemPrompt'],
+  }
+  return cachedBuild('skills', input, sources, () => rendered)
 }
 
 export function buildSkillsBlock({ userId, agentId = null, skillIds = [], preparedSkills } = {}) {
@@ -346,6 +430,7 @@ export function buildSkillsBlock({ userId, agentId = null, skillIds = [], prepar
     userId,
     agentId,
     skills,
+    catalogSkills: skills,
   })
 }
 
@@ -386,22 +471,31 @@ function transcriptMessage(message, index) {
   return parts.join('\n')
 }
 
-function findArchiveId(recentMessages) {
+export function findCompactionArchiveReference(recentMessages) {
   for (let index = recentMessages.length - 1; index >= 0; index -= 1) {
     const message = recentMessages[index]
     const id = message?.meta?.archiveId
       || message?.meta?.compactionArchiveId
       || message?.modelContext?.compactionArchiveId
-    if (id) return id
+    if (id) {
+      return {
+        id: String(id),
+        messageIndex: index,
+        referenceMessageId: String(message?.id || '').trim() || null,
+        firstKeptMessageId: String(message?.modelContext?.compactionFirstKeptMessageId || '').trim() || null,
+        lastCompactedMessageId: String(message?.modelContext?.compactionLastCompactedMessageId || '').trim() || null,
+      }
+    }
   }
   return null
 }
 
-function loadArchive({ userId, recentMessages }) {
-  const archiveId = findArchiveId(recentMessages)
-  if (!userId || !archiveId) return null
+function loadArchive({ userId, sessionId, reference }) {
+  if (!userId || !reference?.id) return null
   try {
-    return getCompactionArchive({ userId, id: archiveId })
+    const archive = getCompactionArchive({ userId, id: reference.id })
+    if (!archive || (sessionId && archive.sessionId !== sessionId)) return null
+    return { archive, reference }
   } catch {
     return null
   }
@@ -414,15 +508,30 @@ export function buildSessionsBlock({
   includeRecentTranscript = true,
 } = {}) {
   const sourceMessages = Array.isArray(recentMessages) ? recentMessages : []
+  const reference = findCompactionArchiveReference(sourceMessages)
+  const loadedArchive = loadArchive({ userId, sessionId, reference })
+  const archive = loadedArchive?.archive || null
+  // Never discard canonical history unless the referenced archive was loaded
+  // for this user and session. A stale/deleted/cross-session id otherwise
+  // leaves the model with neither the archive summary nor the original text.
+  const compactionBoundary = archive && reference ? {
+    compacted: true,
+    firstKeptMessageId: reference.firstKeptMessageId,
+    lastCompactedMessageId: reference.lastCompactedMessageId,
+    referenceMessageId: reference.referenceMessageId,
+    referenceMessageIndex: reference.messageIndex,
+  } : null
+  const projection = resolveStoredMessagesAfterCompaction(sourceMessages, compactionBoundary)
   const normalizedMessages = includeRecentTranscript
-    ? sourceMessages.slice(-64).map(normalizeRecentMessage)
+    ? projection.messages.slice(-64).map(normalizeRecentMessage)
     : []
-  const archive = loadArchive({ userId, recentMessages: sourceMessages })
-  if (!normalizedMessages.length && !archive?.summaryText) return EMPTY_RESULT
 
   const normalizedArchive = archive
     ? {
-        summaryText: (archive.summaryText || '').trim(),
+        // Older releases could persist summaries up to 240k characters. Keep
+        // the canonical archive lossless, but never replay that legacy surface
+        // verbatim into every subsequent model request.
+        summaryText: boundCompactionSummary(archive.summaryText || ''),
       }
     : null
   const input = {
@@ -434,9 +543,14 @@ export function buildSessionsBlock({
     userId: userId || null,
     sessionId: sessionId || null,
     archiveId: archive?.id || null,
+    compactionBoundary,
+    compactionBoundaryMatched: compactionBoundary ? projection.matched : null,
     fields: includeRecentTranscript
       ? ['sessionId', 'recentMessages', 'compactionArchive.summaryText']
       : ['sessionId', 'compactionArchive.summaryText'],
+  }
+  if (!normalizedMessages.length && !archive?.summaryText) {
+    return compactionBoundary ? { ...EMPTY_RESULT, sources } : EMPTY_RESULT
   }
   return cachedBuild('sessions', input, sources, () => {
     const sections = ['# Session Context']

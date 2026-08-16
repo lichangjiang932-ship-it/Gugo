@@ -5,8 +5,16 @@ import {
   buildServerToolsConfig,
   buildServerTurnMessageIds,
   collectLocalPathEvidence,
+  turnEventTimestamp,
 } from '../src/pages/ChatSplit/serverTurnFlow.js'
 import { createInitialState } from '../src/store/appStateBootstrap.js'
+
+test('turn event timestamps prefer the server clock and safely fall back', () => {
+  assert.equal(turnEventTimestamp({ createdAt: 1_234 }, 9_999), 1_234)
+  assert.equal(turnEventTimestamp(2_345, 9_999), 2_345)
+  assert.equal(turnEventTimestamp({ createdAt: 'invalid' }, 9_999), 9_999)
+  assert.equal(turnEventTimestamp(null, 9_999), 9_999)
+})
 
 test('the default turn exposes a complete coding-agent execution loop', () => {
   const defaults = createInitialState().toolsConfig

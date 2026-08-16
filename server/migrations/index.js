@@ -18,8 +18,10 @@ import { migrateToV47 } from './v47BackgroundProcesses.js'
 import { migrateToV48 } from './v48HooksEvents.js'
 import { migrateToV49 } from './v49HookArgumentMatcher.js'
 import { migrateToV50 } from './v50DefaultExecutionPermissions.js'
+import { migrateToV51 } from './v51TurnCheckpoints.js'
+import { migrateToV52 } from './v52DefaultOutputDirectory.js'
 
-export { migrateToV31, migrateToV32, migrateToV33, migrateToV34, migrateToV35, migrateToV36, migrateToV37, migrateToV38, migrateToV39, migrateToV40, migrateToV41, migrateToV42, migrateToV43, migrateToV44, migrateToV45, migrateToV46, migrateToV47, migrateToV48, migrateToV49, migrateToV50 }
+export { migrateToV31, migrateToV32, migrateToV33, migrateToV34, migrateToV35, migrateToV36, migrateToV37, migrateToV38, migrateToV39, migrateToV40, migrateToV41, migrateToV42, migrateToV43, migrateToV44, migrateToV45, migrateToV46, migrateToV47, migrateToV48, migrateToV49, migrateToV50, migrateToV51, migrateToV52 }
 
 /**
  * V2-V30 stay in db.js for upgrade compatibility. New migrations are registered
@@ -46,6 +48,8 @@ export const schemaMigrations = Object.freeze([
   { version: 48, up: migrateToV48 },
   { version: 49, up: migrateToV49 },
   { version: 50, up: migrateToV50 },
+  { version: 51, up: migrateToV51 },
+  { version: 52, up: migrateToV52 },
 ])
 
 export const LATEST_SCHEMA_VERSION = schemaMigrations.at(-1)?.version || 30

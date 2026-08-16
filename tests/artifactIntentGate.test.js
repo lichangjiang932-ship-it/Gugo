@@ -1,23 +1,33 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import test from 'node:test'
 import {
   allowedArtifactTools,
   detectArtifactIntent,
   expectsFileArtifact,
+  findAdjacentDeliveredArtifacts,
+  findExplicitlyReferencedDeliveredArtifacts,
   isFileArtifactTool,
   parseSkillIdFromPrompt,
+  resolveArtifactDeliveryTarget,
+  resolveArtifactDeliveryTargets,
+  resolveArtifactRevisionMode,
 } from '../server/services/artifactIntent.js'
 import { runToolsLoop, SERVER_TOOL_SPECS, selectJobToolSpecs } from '../server/services/jobTools.js'
 import { buildFinalOutput, shouldCompileDocx } from '../server/services/jobWorkflow.js'
 import { validateHtmlArtifactSource } from '../server/services/artifactGen.js'
-import { createUser } from '../server/db.js'
+import { createUser, getDb } from '../server/db.js'
 import { upsertSession } from '../server/services/sessionStore.js'
-import { appendTurnArtifact } from '../server/services/turnArtifactStore.js'
+import { appendTurnArtifact, listTurnArtifacts } from '../server/services/turnArtifactStore.js'
 
 const nameOf = (specs) => specs.map((s) => s?.function?.name)
 const ARTIFACT_GENERATOR_NAMES = [
   'create_docx',
   'create_html_app',
+  'create_pdf',
   'create_pptx',
   'create_xlsx',
   'generate_image',
@@ -28,6 +38,8 @@ let intentArtifactScopeReady = false
 
 function persistStubTurnArtifact({ turnId, id, filename, type }) {
   if (!intentArtifactScopeReady) {
+    getDb().prepare('DELETE FROM turn_artifacts WHERE user_id = ? AND session_id = ?')
+      .run(INTENT_ARTIFACT_USER_ID, INTENT_ARTIFACT_SESSION_ID)
     createUser({ id: INTENT_ARTIFACT_USER_ID, email: 'artifact-intent@example.com' })
     upsertSession({
       id: INTENT_ARTIFACT_SESSION_ID,
@@ -154,6 +166,1223 @@ test('explicit image production unlocks only generate_image', () => {
     ['generate_image'],
   )
   assert.equal(detectArtifactIntent('why did generate_image run?').image, false)
+})
+
+test('explicit PDF production works without a slash skill', () => {
+  assert.deepEqual([...allowedArtifactTools('请生成一份中文项目总结 PDF')], ['create_pdf'])
+  assert.equal(detectArtifactIntent('导出为 PDF').pdf, true)
+  assert.equal(detectArtifactIntent('为什么会自动生成 PDF？').pdf, false)
+})
+
+test('explicit workspace filenames are not standalone managed artifacts', () => {
+  const priorArtifacts = [{
+    id: 'managed-html-1',
+    type: 'html',
+    filename: 'Gugo-产品落地页.html',
+    toolName: 'create_html_app',
+  }]
+  for (const prompt of [
+    '继续修改刚才的原文件 qa-context-test.html，只允许修改这个现有原文件，不要新建任何文件或 artifact',
+    '修改 qa-context-test.html 的主视觉标题',
+    '请在当前项目根目录中新建 qa-context-test-v2.html',
+    'edit the existing workspace file pages/product.html in place',
+  ]) {
+    assert.equal(
+      resolveArtifactDeliveryTarget(prompt, { priorArtifacts }),
+      'workspace_file',
+      prompt,
+    )
+  }
+  assert.equal(
+    resolveArtifactDeliveryTarget('生成一个产品网页', { priorArtifacts: [] }),
+    'standalone',
+  )
+  assert.equal(
+    resolveArtifactDeliveryTarget('继续修改 Gugo-产品落地页.html', {
+      priorArtifacts,
+      hasExplicitManagedArtifactReference: true,
+    }),
+    'managed_artifact',
+  )
+  assert.equal(
+    resolveArtifactDeliveryTarget('把这里的按钮缩小一点', { priorArtifacts }),
+    'managed_artifact',
+  )
+})
+
+function adjacentHtmlRevisionMessages(currentPrompt = '这里不足，请修改一下') {
+  return [
+    { role: 'user', content: '/webpage 生成一个产品网页' },
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [{
+        id: 'previous-html-call',
+        function: {
+          name: 'create_html_app',
+          arguments: JSON.stringify({
+            title: '产品网页',
+            html: '<!doctype html><html><body><main><button>开始</button></main></body></html>',
+          }),
+        },
+      }],
+    },
+    {
+      role: 'tool',
+      tool_call_id: 'previous-html-call',
+      name: 'create_html_app',
+      content: JSON.stringify({
+        ok: true,
+        artifactId: 'previous-html-artifact',
+        filename: '产品网页.html',
+        url: '/api/artifacts/previous-html-artifact',
+      }),
+    },
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [{
+        id: 'previous-delivery-call',
+        function: {
+          name: 'set_deliverables',
+          arguments: JSON.stringify({ artifact_ids: ['previous-html-artifact'] }),
+        },
+      }],
+    },
+    {
+      role: 'tool',
+      tool_call_id: 'previous-delivery-call',
+      name: 'set_deliverables',
+      content: JSON.stringify({ ok: true, deliveryArtifactIds: ['previous-html-artifact'] }),
+    },
+    { role: 'assistant', content: '网页已生成。' },
+    { role: 'user', content: currentPrompt },
+  ]
+}
+
+test('remote URLs never become local targets or historical artifact references', () => {
+  const prompt = '参考 https://example.com/product-page.html然后修改“qa.html”'
+  const delivery = resolveArtifactDeliveryTargets(prompt)
+
+  assert.equal(delivery.target, 'workspace_file')
+  assert.deepEqual(delivery.localFileTargets, [{
+    path: 'qa.html',
+    filename: 'qa.html',
+    type: 'html',
+  }])
+  assert.deepEqual(delivery.workspaceArtifactTypes, ['html'])
+  assert.deepEqual(delivery.managedArtifactTypes, [])
+  assert.deepEqual(
+    findExplicitlyReferencedDeliveredArtifacts(adjacentHtmlRevisionMessages(prompt), prompt),
+    [],
+  )
+
+  const urlOnly = resolveArtifactDeliveryTargets('请检查 https://example.com/report.pdf 的内容')
+  assert.deepEqual(urlOnly.localFileTargets, [])
+  assert.deepEqual(urlOnly.workspaceArtifactTypes, [])
+  assert.deepEqual(urlOnly.managedArtifactTypes, [])
+})
+
+test('Chinese quotes and parentheses preserve explicit workspace filenames', () => {
+  for (const prompt of [
+    '修改本地文件“qa.html”',
+    '修改本地文件（qa.html）',
+  ]) {
+    const delivery = resolveArtifactDeliveryTargets(prompt)
+    assert.equal(delivery.target, 'workspace_file', prompt)
+    assert.deepEqual(delivery.localFileTargets, [{
+      path: 'qa.html',
+      filename: 'qa.html',
+      type: 'html',
+    }], prompt)
+    assert.deepEqual([...allowedArtifactTools(prompt)], [], prompt)
+  }
+
+  const skillDelivery = resolveArtifactDeliveryTargets('/webpage 修改本地文件“qa.html”', {
+    skillId: 'webpage',
+  })
+  assert.equal(skillDelivery.target, 'workspace_file')
+  assert.deepEqual(skillDelivery.managedArtifactTypes, [])
+})
+
+test('bare named artifact files remain managed deliverables', () => {
+  for (const scenario of [
+    { prompt: '生成 report.docx', type: 'docx', tool: 'create_docx' },
+    { prompt: '制作 slides.pptx', type: 'pptx', tool: 'create_pptx' },
+    { prompt: '生成 budget.xlsx', type: 'xlsx', tool: 'create_xlsx' },
+    { prompt: '生成 landing.html', type: 'html', tool: 'create_html_app' },
+    { prompt: '导出 report.pdf', type: 'pdf', tool: 'create_pdf' },
+    { prompt: '生成 hero.png', type: 'image', tool: 'generate_image' },
+  ]) {
+    const delivery = resolveArtifactDeliveryTargets(scenario.prompt)
+    assert.equal(delivery.target, 'standalone', scenario.prompt)
+    assert.deepEqual(delivery.localFileTargets, [], scenario.prompt)
+    assert.deepEqual(delivery.workspaceArtifactTypes, [], scenario.prompt)
+    assert.deepEqual(delivery.managedArtifactTypes, [scenario.type], scenario.prompt)
+    assert.deepEqual([...allowedArtifactTools(scenario.prompt)], [scenario.tool], scenario.prompt)
+  }
+})
+
+test('mixed local HTML and managed PDF expose only the PDF generator', () => {
+  const prompt = '修改本地文件“index.html”，并另外生成一份 PDF'
+  const delivery = resolveArtifactDeliveryTargets(prompt)
+
+  assert.equal(delivery.target, 'mixed')
+  assert.deepEqual(delivery.localFileTargets, [{
+    path: 'index.html',
+    filename: 'index.html',
+    type: 'html',
+  }])
+  assert.deepEqual(delivery.workspaceArtifactTypes, ['html'])
+  assert.deepEqual(delivery.managedArtifactTypes, ['pdf'])
+  assert.deepEqual([...allowedArtifactTools(prompt)], ['create_pdf'])
+
+  const names = nameOf(selectJobToolSpecs({
+    prompt,
+    userPrompt: prompt,
+    origin: 'chat',
+    intentMode: 'execute',
+    specs: SERVER_TOOL_SPECS,
+  }))
+  assert.equal(names.includes('create_html_app'), false)
+  assert.equal(names.includes('create_pdf'), true)
+})
+
+test('workspace HTML targets use filesystem tools without a managed-artifact completion guard', async () => {
+  const cases = [
+    {
+      label: 'auto-skill-existing-file',
+      prompt: '请直接修改当前项目根目录中现有的 qa-context-test.html，把它完善成一个简洁的深色产品落地页。必须实际编辑原文件并验证，不要输出代码片段。',
+      path: 'qa-context-test.html',
+      skillId: 'webpage',
+    },
+    {
+      label: 'plain-follow-up-existing-file',
+      prompt: '继续修改刚才的原文件 qa-context-test.html：优化主视觉。只允许修改这个现有原文件，不要新建任何文件或 artifact。',
+      path: 'qa-context-test.html',
+      messages: null,
+    },
+    {
+      label: 'auto-skill-new-file',
+      prompt: '请在当前项目根目录中新建 qa-context-test-v2.html，并直接完成页面和验证，不要输出代码片段。',
+      path: 'qa-context-test-v2.html',
+      skillId: 'webpage',
+    },
+  ]
+
+  for (const scenario of cases) {
+    let modelCalls = 0
+    const executions = []
+    const history = scenario.messages
+      || (scenario.label === 'plain-follow-up-existing-file'
+        ? adjacentHtmlRevisionMessages(scenario.prompt)
+        : [{ role: 'user', content: scenario.prompt }])
+    const result = await runToolsLoop({
+      job: {
+        id: `workspace-html-${scenario.label}`,
+        userId: INTENT_ARTIFACT_USER_ID,
+        origin: 'chat',
+        prompt: scenario.prompt,
+        userPrompt: scenario.prompt,
+      },
+      step: { id: `workspace-html-${scenario.label}`, kind: 'chat' },
+      messages: history,
+      skillId: scenario.skillId,
+      intentMode: 'execute',
+      toolSpecs: SERVER_TOOL_SPECS,
+      enableToolHooks: false,
+      requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+      executeTool: async ({ name, args }) => {
+        executions.push({ name, args })
+        assert.equal(args.path, scenario.path)
+        if (name === 'write_file') {
+          return { ok: true, path: scenario.path, bytes: 64, scope: 'workspace' }
+        }
+        if (name === 'read_file') {
+          return {
+            ok: true,
+            path: scenario.path,
+            content: '<!doctype html><html><body><main>verified</main></body></html>',
+            truncated: false,
+          }
+        }
+        assert.fail(`unexpected tool for ${scenario.label}: ${name}`)
+      },
+      runModel: async ({ messages, tools }) => {
+        modelCalls += 1
+        const names = tools.map((tool) => tool.function.name)
+        assert.equal(names.includes('create_html_app'), false, scenario.label)
+        assert.equal(
+          messages.some((message) => String(message.content || '').includes('[PERSISTED ARTIFACT DELIVERY REQUIRED]')),
+          false,
+          scenario.label,
+        )
+        if (modelCalls === 1) {
+          assert.ok(names.includes('write_file'), scenario.label)
+          return {
+            content: '',
+            toolCalls: [{
+              id: `${scenario.label}-write`,
+              function: {
+                name: 'write_file',
+                arguments: JSON.stringify({
+                  path: scenario.path,
+                  content: '<!doctype html><html><body><main>updated</main></body></html>',
+                }),
+              },
+            }],
+          }
+        }
+        if (modelCalls === 2) {
+          assert.ok(names.includes('read_file'), scenario.label)
+          return {
+            content: '',
+            toolCalls: [{
+              id: `${scenario.label}-read`,
+              function: {
+                name: 'read_file',
+                arguments: JSON.stringify({ path: scenario.path }),
+              },
+            }],
+          }
+        }
+        return { content: '已按要求修改指定文件并完成验证。', toolCalls: [] }
+      },
+    })
+
+    assert.equal(modelCalls, 3, scenario.label)
+    assert.deepEqual(executions.map(({ name }) => name), ['write_file', 'read_file'], scenario.label)
+    assert.deepEqual(result.artifactIds, [], scenario.label)
+    assert.equal(result.text, '已按要求修改指定文件并完成验证。', scenario.label)
+  }
+})
+
+test('a real in-place workspace HTML write does not publish a duplicate artifact', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-local-html-revision-'))
+  const targetPath = path.join(root, 'existing.html')
+  const userId = 'local-revision-user-' + randomUUID()
+  const sessionId = 'local-revision-session-' + randomUUID()
+  const turnId = 'local-revision-turn-' + randomUUID()
+  const promptPath = targetPath.replace(/\\/g, '/')
+  const prompt = '继续修改现有原文件 ' + promptPath + '，只覆盖原文件，不要新建任何文件或 artifact。'
+  fs.writeFileSync(targetPath, '<!doctype html><title>before</title>', 'utf8')
+  createUser({ id: userId, email: userId + '@example.com' })
+  upsertSession({ id: sessionId, userId, title: 'Local revision artifact gate' })
+  let modelCalls = 0
+  try {
+    const result = await runToolsLoop({
+      job: {
+        id: turnId,
+        userId,
+        sessionId,
+        origin: 'chat',
+        prompt,
+        userPrompt: prompt,
+      },
+      step: { id: turnId, kind: 'chat' },
+      messages: [{ role: 'user', content: prompt }],
+      intentMode: 'execute',
+      toolSpecs: SERVER_TOOL_SPECS,
+      enableToolHooks: false,
+      requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+      executeTool: async ({ name, args }) => {
+        if (name === 'write_file') {
+          fs.writeFileSync(targetPath, args.content, 'utf8')
+          return {
+            ok: true,
+            path: targetPath,
+            bytes: Buffer.byteLength(args.content),
+            scope: 'local',
+            changes: [{ path: targetPath, additions: 1, deletions: 1 }],
+          }
+        }
+        if (name === 'read_file') {
+          return {
+            ok: true,
+            path: targetPath,
+            content: fs.readFileSync(targetPath, 'utf8'),
+            truncated: false,
+          }
+        }
+        assert.fail('unexpected tool: ' + name)
+      },
+      runModel: async () => {
+        modelCalls += 1
+        if (modelCalls === 1) {
+          return {
+            content: '',
+            toolCalls: [{
+              id: 'overwrite-existing-html',
+              function: {
+                name: 'write_file',
+                arguments: JSON.stringify({
+                  path: targetPath,
+                  content: '<!doctype html><title>after</title>',
+                }),
+              },
+            }],
+          }
+        }
+        if (modelCalls === 2) {
+          return {
+            content: '',
+            toolCalls: [{
+              id: 'read-overwritten-html',
+              function: {
+                name: 'read_file',
+                arguments: JSON.stringify({ path: targetPath }),
+              },
+            }],
+          }
+        }
+        return { content: '已完成原文件修改和验证。', toolCalls: [] }
+      },
+    })
+
+    assert.equal(modelCalls, 3)
+    assert.equal(fs.readFileSync(targetPath, 'utf8'), '<!doctype html><title>after</title>')
+    assert.deepEqual(result.artifactIds, [])
+    assert.deepEqual(listTurnArtifacts({ userId, sessionId, turnId }), [])
+    assert.deepEqual(fs.readdirSync(root), ['existing.html'])
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+    getDb().prepare('DELETE FROM turn_artifacts WHERE user_id = ? AND session_id = ?').run(userId, sessionId)
+    getDb().prepare('DELETE FROM sessions WHERE id = ?').run(sessionId)
+    getDb().prepare('DELETE FROM users WHERE id = ?').run(userId)
+  }
+})
+
+test('a workspace-file request cannot silently fall back to a same-named managed artifact', async () => {
+  const prompt = '继续修改刚才的原文件 qa-context-test.html，只允许修改这个现有原文件，不要新建任何文件或 artifact。'
+  let modelCalls = 0
+  let executions = 0
+  let rejectionObserved = false
+  const result = await runToolsLoop({
+    job: {
+      id: 'workspace-managed-store-mismatch',
+      userId: INTENT_ARTIFACT_USER_ID,
+      origin: 'chat',
+      prompt,
+      userPrompt: prompt,
+    },
+    step: { id: 'workspace-managed-store-mismatch', kind: 'chat' },
+    messages: [{ role: 'user', content: prompt }],
+    intentMode: 'execute',
+    toolSpecs: SERVER_TOOL_SPECS,
+    enableToolHooks: false,
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    executeTool: async () => {
+      executions += 1
+      return { ok: true }
+    },
+    runModel: async ({ messages }) => {
+      modelCalls += 1
+      rejectionObserved ||= messages.some((message) => (
+        String(message.content || '').includes('workspace_target_managed_store_mismatch')
+      ))
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'wrong-managed-store-write',
+            function: {
+              name: 'write_file',
+              arguments: JSON.stringify({
+                path: '.artifacts/qa-context-test.html',
+                content: '<!doctype html><title>wrong target</title>',
+              }),
+            },
+          }],
+        }
+      }
+      return { content: '无法确认原文件位置。', toolCalls: [] }
+    },
+  })
+
+  assert.equal(executions, 0)
+  assert.equal(rejectionObserved, true)
+  assert.equal(result.incomplete, true)
+  assert.equal(result.reason, 'execution_evidence_missing')
+})
+
+async function runRejectedExactWorkspaceMutation({
+  label,
+  name,
+  args,
+  approvalArgs = null,
+}) {
+  const prompt = '继续修改当前项目里的原文件 qa-context-test.html，只覆盖这个原文件，不要新建副本或 artifact。'
+  let modelCalls = 0
+  let executions = 0
+  let approvals = 0
+  const observedCodes = new Set()
+  const result = await runToolsLoop({
+    job: {
+      id: `exact-workspace-target-${label}`,
+      userId: INTENT_ARTIFACT_USER_ID,
+      origin: 'chat',
+      prompt,
+      userPrompt: prompt,
+    },
+    step: { id: `exact-workspace-target-${label}`, kind: 'chat' },
+    messages: [{ role: 'user', content: prompt }],
+    intentMode: 'execute',
+    toolSpecs: SERVER_TOOL_SPECS,
+    enableToolHooks: false,
+    requestToolApproval: async () => {
+      approvals += 1
+      return { proceed: true, args: approvalArgs || args }
+    },
+    executeTool: async () => {
+      executions += 1
+      return { ok: true }
+    },
+    runModel: async ({ messages }) => {
+      modelCalls += 1
+      for (const message of messages) {
+        const content = String(message?.content || '')
+        for (const code of [
+          'workspace_target_managed_store_mismatch',
+          'workspace_target_mismatch',
+          'workspace_mutation_target_unproven',
+        ]) {
+          if (content.includes(code)) observedCodes.add(code)
+        }
+      }
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: `wrong-target-${label}`,
+            function: { name, arguments: JSON.stringify(args) },
+          }],
+        }
+      }
+      return { content: '无法完成原文件修改。', toolCalls: [] }
+    },
+  })
+  return { approvals, executions, observedCodes, result }
+}
+
+test('every filesystem mutation tool rejects sibling targets during an exact in-place revision', async () => {
+  const originalPath = 'qa-context-test.html'
+  const siblingPath = 'qa-context-test-copy.html'
+  const scenarios = [
+    {
+      label: 'write-file',
+      name: 'write_file',
+      args: { path: siblingPath, content: '<!doctype html><title>copy</title>' },
+    },
+    {
+      label: 'edit-file',
+      name: 'edit_file',
+      args: { path: siblingPath, old_string: 'before', new_string: 'after' },
+    },
+    {
+      label: 'patch-file',
+      name: 'patch_file',
+      args: { path: siblingPath, start_line: 1, end_line: 1, replacement: 'after' },
+    },
+    {
+      label: 'multi-edit',
+      name: 'multi_edit',
+      args: {
+        edits: [
+          { path: originalPath, oldText: 'before', newText: 'after' },
+          { path: siblingPath, oldText: 'before', newText: 'after' },
+        ],
+      },
+    },
+    {
+      label: 'apply-patch',
+      name: 'apply_patch',
+      args: {
+        patch: [
+          '*** Begin Patch',
+          `*** Update File: ${originalPath}`,
+          '@@',
+          '-before',
+          '+after',
+          `*** Update File: ${siblingPath}`,
+          '@@',
+          '-before',
+          '+after',
+          '*** End Patch',
+        ].join('\n'),
+      },
+    },
+  ]
+
+  for (const scenario of scenarios) {
+    const outcome = await runRejectedExactWorkspaceMutation(scenario)
+    assert.equal(outcome.executions, 0, scenario.label)
+    assert.equal(outcome.approvals, 0, scenario.label)
+    assert.equal(outcome.observedCodes.has('workspace_target_mismatch'), true, scenario.label)
+    assert.equal(outcome.result.incomplete, true, scenario.label)
+  }
+})
+
+test('command mutations reject wrong, managed-store, and unproven targets during an exact in-place revision', async () => {
+  const scenarios = [
+    {
+      label: 'bash-sibling-output',
+      name: 'bash_exec',
+      args: { command: 'python write_html.py', expected_outputs: ['qa-context-test-copy.html'] },
+      code: 'workspace_target_mismatch',
+    },
+    {
+      label: 'run-command-managed-output',
+      name: 'run_command',
+      args: { command: 'python write_html.py', expected_outputs: ['.artifacts/qa-context-test.html'] },
+      code: 'workspace_target_managed_store_mismatch',
+    },
+    {
+      label: 'bash-unproven-output',
+      name: 'bash_exec',
+      args: { command: 'python write_html.py' },
+      code: 'workspace_mutation_target_unproven',
+    },
+  ]
+
+  for (const scenario of scenarios) {
+    const outcome = await runRejectedExactWorkspaceMutation(scenario)
+    assert.equal(outcome.executions, 0, scenario.label)
+    assert.equal(outcome.approvals, 0, scenario.label)
+    assert.equal(outcome.observedCodes.has(scenario.code), true, scenario.label)
+    assert.equal(outcome.result.incomplete, true, scenario.label)
+  }
+})
+
+test('approval-edited filesystem args are revalidated against the exact original target', async () => {
+  const outcome = await runRejectedExactWorkspaceMutation({
+    label: 'approval-edited-path',
+    name: 'write_file',
+    args: {
+      path: 'qa-context-test.html',
+      content: '<!doctype html><title>updated original</title>',
+    },
+    approvalArgs: {
+      path: 'qa-context-test-copy.html',
+      content: '<!doctype html><title>wrong copy</title>',
+    },
+  })
+
+  assert.equal(outcome.approvals, 1)
+  assert.equal(outcome.executions, 0)
+  assert.equal(outcome.observedCodes.has('workspace_target_mismatch'), true)
+  assert.equal(outcome.result.incomplete, true)
+})
+
+test('approval-edited command outputs are revalidated against the exact original target', async () => {
+  const outcome = await runRejectedExactWorkspaceMutation({
+    label: 'approval-edited-command-output',
+    name: 'bash_exec',
+    args: {
+      command: 'python write_html.py',
+      expected_outputs: ['qa-context-test.html'],
+    },
+    approvalArgs: {
+      command: 'python write_html.py',
+      expected_outputs: ['qa-context-test-copy.html'],
+    },
+  })
+
+  assert.equal(outcome.approvals, 1)
+  assert.equal(outcome.executions, 0)
+  assert.equal(outcome.observedCodes.has('workspace_target_mismatch'), true)
+  assert.equal(outcome.result.incomplete, true)
+})
+
+test('a command with an exact declared output may update and verify the requested original', async () => {
+  const prompt = '继续修改当前项目里的原文件 qa-context-test.html，只覆盖这个原文件，不要新建副本或 artifact。'
+  const targetPath = 'qa-context-test.html'
+  let modelCalls = 0
+  const executed = []
+  const result = await runToolsLoop({
+    job: {
+      id: 'exact-workspace-target-allowed-command',
+      userId: INTENT_ARTIFACT_USER_ID,
+      origin: 'chat',
+      prompt,
+      userPrompt: prompt,
+    },
+    step: { id: 'exact-workspace-target-allowed-command', kind: 'chat' },
+    messages: [{ role: 'user', content: prompt }],
+    intentMode: 'execute',
+    toolSpecs: SERVER_TOOL_SPECS,
+    enableToolHooks: false,
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    executeTool: async ({ name, args }) => {
+      executed.push(name)
+      if (name === 'bash_exec') {
+        return {
+          ok: true,
+          exitCode: 0,
+          changedPaths: [targetPath],
+          verifiedOutputs: [{ path: targetPath, changed: true }],
+        }
+      }
+      assert.equal(name, 'read_file')
+      assert.equal(args.path, targetPath)
+      return { ok: true, path: targetPath, content: '<!doctype html><title>verified</title>' }
+    },
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'exact-command-write',
+            function: {
+              name: 'bash_exec',
+              arguments: JSON.stringify({
+                command: 'python write_html.py',
+                expected_outputs: [targetPath],
+              }),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 2) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'exact-command-read-back',
+            function: {
+              name: 'read_file',
+              arguments: JSON.stringify({ path: targetPath }),
+            },
+          }],
+        }
+      }
+      return { content: '已修改并验证原文件。', toolCalls: [] }
+    },
+  })
+
+  assert.deepEqual(executed, ['bash_exec', 'read_file'])
+  assert.equal(modelCalls, 3)
+  assert.equal(result.incomplete, undefined)
+  assert.equal(result.text, '已修改并验证原文件。')
+  assert.deepEqual(result.artifactIds, [])
+})
+
+function deliveredHtmlTurn({ prefix, artifactId, filename }) {
+  const createCallId = `${prefix}-create`
+  const deliveryCallId = `${prefix}-deliver`
+  return [
+    { role: 'user', content: `生成 ${filename}` },
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [{
+        id: createCallId,
+        function: {
+          name: 'create_html_app',
+          arguments: JSON.stringify({
+            title: filename.replace(/\.html$/i, ''),
+            html: `<!doctype html><html><body>${filename}</body></html>`,
+          }),
+        },
+      }],
+    },
+    {
+      role: 'tool',
+      tool_call_id: createCallId,
+      name: 'create_html_app',
+      content: JSON.stringify({
+        ok: true,
+        artifactId,
+        filename,
+        url: `/api/artifacts/${filename}`,
+      }),
+    },
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [{
+        id: deliveryCallId,
+        function: {
+          name: 'set_deliverables',
+          arguments: JSON.stringify({ artifact_ids: [artifactId] }),
+        },
+      }],
+    },
+    {
+      role: 'tool',
+      tool_call_id: deliveryCallId,
+      name: 'set_deliverables',
+      content: JSON.stringify({ ok: true, deliveryArtifactIds: [artifactId] }),
+    },
+    { role: 'assistant', content: `${filename} 已生成。` },
+  ]
+}
+
+test('only an adjacent delivered artifact can authorize an implicit revision', () => {
+  const artifacts = findAdjacentDeliveredArtifacts(adjacentHtmlRevisionMessages())
+  assert.deepEqual(artifacts, [{
+    id: 'previous-html-artifact',
+    type: 'html',
+    filename: '产品网页.html',
+    url: '/api/artifacts/previous-html-artifact',
+    toolName: 'create_html_app',
+  }])
+  assert.deepEqual(
+    [...allowedArtifactTools('这里不足，请修改一下', { priorArtifactTypes: artifacts.map((item) => item.type) })],
+    ['create_html_app'],
+  )
+  for (const prompt of ['把配色改一下', '把这里改一下', '配色改一下', '换个配色']) {
+    assert.deepEqual(
+      [...allowedArtifactTools(prompt, { priorArtifactTypes: ['html'] })],
+      ['create_html_app'],
+      prompt,
+    )
+  }
+  for (const [type, tool] of [
+    ['pptx', 'create_pptx'],
+    ['docx', 'create_docx'],
+    ['xlsx', 'create_xlsx'],
+    ['pdf', 'create_pdf'],
+    ['image', 'generate_image'],
+  ]) {
+    assert.deepEqual(
+      [...allowedArtifactTools('把这里改一下', { priorArtifactTypes: [type] })],
+      [tool],
+      type,
+    )
+  }
+  assert.equal(allowedArtifactTools('请解释一下配色原则', { priorArtifactTypes: ['html'] }).size, 0)
+  assert.equal(allowedArtifactTools('如何修改配色？', { priorArtifactTypes: ['html'] }).size, 0)
+  assert.equal(allowedArtifactTools('修改是什么意思？', { priorArtifactTypes: ['html'] }).size, 0)
+  assert.deepEqual([...allowedArtifactTools('请另做一份 PDF', { priorArtifactTypes: ['html'] })], ['create_pdf'])
+})
+
+test('keeping the original filename is an in-place revision, not a request for a copy', () => {
+  for (const prompt of [
+    '把刚才的原版文件直接修改，保留原文件名，不要新建版本',
+    '直接修改当前文件并保留当前文件名',
+    '直接修改当前文件，保留原文件的名称',
+    '保留原文件 名，直接修改内容',
+    'edit the original file and keep the original filename',
+  ]) {
+    assert.equal(resolveArtifactRevisionMode(prompt), 'replace_original', prompt)
+  }
+  assert.equal(
+    resolveArtifactRevisionMode('不要修改原文件名，另建一个新版本'),
+    'create_copy',
+  )
+})
+
+test('an exact filename recovers a delivered artifact across one failed turn', () => {
+  const messages = [
+    ...adjacentHtmlRevisionMessages('把配色改一下'),
+    { role: 'assistant', content: 'The previous revision failed.' },
+    { role: 'user', content: '继续修改原版 产品网页.html，不要新建版本' },
+  ]
+  assert.deepEqual(findAdjacentDeliveredArtifacts(messages), [])
+  assert.deepEqual(findExplicitlyReferencedDeliveredArtifacts(
+    messages,
+    '继续修改原版 产品网页.html，不要新建版本',
+  ), [{
+    id: 'previous-html-artifact',
+    type: 'html',
+    filename: '产品网页.html',
+    url: '/api/artifacts/previous-html-artifact',
+    toolName: 'create_html_app',
+  }])
+  assert.deepEqual(
+    findExplicitlyReferencedDeliveredArtifacts(messages, '继续修改刚才的网页'),
+    [],
+  )
+})
+
+test('exact artifact references use complete filename and ID boundaries', () => {
+  const artifactId = 'artifact-app-html'
+  const base = deliveredHtmlTurn({ prefix: 'boundary', artifactId, filename: 'app.html' })
+  const exactPrompt = '直接修改app.html的背景，不要新建版本'
+  assert.deepEqual(
+    findExplicitlyReferencedDeliveredArtifacts([...base, { role: 'user', content: exactPrompt }], exactPrompt)
+      .map((artifact) => artifact.id),
+    [artifactId],
+  )
+  for (const prompt of [
+    '直接修改myapp.html，不要新建版本',
+    '直接修改 app.htmlx，不要新建版本',
+    '直接修改 artifact-app-html-copy，不要新建版本',
+  ]) {
+    assert.deepEqual(
+      findExplicitlyReferencedDeliveredArtifacts([...base, { role: 'user', content: prompt }], prompt),
+      [],
+      prompt,
+    )
+  }
+})
+
+test('an exact older filename overrides the adjacent artifact before UI and checkpoint persistence', async () => {
+  const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  const oldId = `older-html-${suffix}`
+  const adjacentId = `adjacent-html-${suffix}`
+  const oldFilename = `older-page-${suffix}.html`
+  const adjacentFilename = `adjacent-page-${suffix}.html`
+  const turnId = `older-file-revision-${suffix}`
+  persistStubTurnArtifact({ turnId: `seed-old-${suffix}`, id: oldId, filename: oldFilename, type: 'html' })
+  persistStubTurnArtifact({ turnId: `seed-new-${suffix}`, id: adjacentId, filename: adjacentFilename, type: 'html' })
+  const prompt = `直接修改原版 ${oldFilename}，背景改成浅绿色，不要新建版本`
+  const messages = [
+    ...deliveredHtmlTurn({ prefix: `old-${suffix}`, artifactId: oldId, filename: oldFilename }),
+    ...deliveredHtmlTurn({ prefix: `new-${suffix}`, artifactId: adjacentId, filename: adjacentFilename }),
+    { role: 'user', content: prompt },
+  ]
+  const scheduledCalls = []
+  const checkpoints = []
+  let executionArgs = null
+  let modelCalls = 0
+
+  const result = await runToolsLoop({
+    job: {
+      id: turnId,
+      userId: INTENT_ARTIFACT_USER_ID,
+      sessionId: INTENT_ARTIFACT_SESSION_ID,
+      origin: 'chat',
+      prompt,
+      userPrompt: prompt,
+    },
+    step: { id: turnId, kind: 'chat' },
+    messages,
+    toolSpecs: SERVER_TOOL_SPECS,
+    enableToolHooks: false,
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    onToolCall: async (call) => scheduledCalls.push(JSON.parse(JSON.stringify(call))),
+    saveCheckpoint: async (state) => {
+      checkpoints.push(JSON.parse(JSON.stringify(state)))
+      return true
+    },
+    executeTool: async ({ name, args }) => {
+      assert.equal(name, 'create_html_app')
+      executionArgs = args
+      return {
+        ok: true,
+        artifactId: oldId,
+        filename: oldFilename,
+        url: `/api/artifacts/${oldFilename}`,
+      }
+    },
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: `replace-older-${suffix}`,
+            function: {
+              name: 'create_html_app',
+              arguments: JSON.stringify({
+                title: 'Older page revised',
+                html: '<!doctype html><html><body style="background:#c8f7c5">older</body></html>',
+              }),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 2) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: `deliver-older-${suffix}`,
+            function: {
+              name: 'set_deliverables',
+              arguments: JSON.stringify({ artifact_ids: [oldId] }),
+            },
+          }],
+        }
+      }
+      return { content: '旧文件已原地修改。', toolCalls: [] }
+    },
+  })
+
+  assert.equal(executionArgs?.replace_artifact_id, oldId)
+  assert.notEqual(executionArgs?.replace_artifact_id, adjacentId)
+  const scheduledCreate = scheduledCalls.find((call) => call.name === 'create_html_app')
+  assert.equal(scheduledCreate?.args?.replace_artifact_id, oldId)
+  const pending = checkpoints.find((state) => state.toolCalls?.some((call) => (
+    call.name === 'create_html_app' && call.checkpointStatus === 'pending'
+  )))
+  const persistedCreate = pending?.toolCalls?.find((call) => call.name === 'create_html_app')
+  assert.equal(persistedCreate?.args?.replace_artifact_id, oldId)
+  assert.equal(JSON.parse(persistedCreate?.argumentsText || '{}').replace_artifact_id, oldId)
+  const assistantCreate = pending?.messages?.findLast((message) => (
+    message?.role === 'assistant'
+      && message.tool_calls?.some((call) => call.function?.name === 'create_html_app')
+  ))
+  const assistantArgs = JSON.parse(
+    assistantCreate?.tool_calls?.find((call) => call.function?.name === 'create_html_app')
+      ?.function?.arguments || '{}',
+  )
+  assert.equal(assistantArgs.replace_artifact_id, oldId)
+  assert.deepEqual(result.deliveryArtifactIds, [oldId])
+})
+
+test('a restored pending in-place call keeps normalized args synchronized before execution', async () => {
+  const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  const artifactId = `restored-html-${suffix}`
+  const filename = `restored-page-${suffix}.html`
+  const turnId = `restored-revision-${suffix}`
+  const createCallId = `restored-create-${suffix}`
+  persistStubTurnArtifact({ turnId: `seed-restored-${suffix}`, id: artifactId, filename, type: 'html' })
+  const prompt = `直接修改原版 ${filename}，保留原文件名，不要新建版本`
+  const baseMessages = [
+    ...deliveredHtmlTurn({ prefix: `restored-${suffix}`, artifactId, filename }),
+    { role: 'user', content: prompt },
+  ]
+  const originalArgs = {
+    title: 'Restored revision',
+    html: '<!doctype html><html><body>restored</body></html>',
+  }
+  const checkpoint = {
+    messages: [
+      ...baseMessages,
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{
+          id: createCallId,
+          type: 'function',
+          function: {
+            name: 'create_html_app',
+            arguments: JSON.stringify(originalArgs),
+          },
+        }],
+      },
+    ],
+    toolCalls: [{
+      id: createCallId,
+      name: 'create_html_app',
+      args: originalArgs,
+      argumentsText: JSON.stringify(originalArgs),
+      parseError: null,
+      checkpointStatus: 'pending',
+      checkpointApprovalId: null,
+    }],
+    artifactIds: [],
+    iterations: 0,
+  }
+  const checkpoints = []
+  let executionArgs = null
+  let modelCalls = 0
+
+  const result = await runToolsLoop({
+    job: {
+      id: turnId,
+      userId: INTENT_ARTIFACT_USER_ID,
+      sessionId: INTENT_ARTIFACT_SESSION_ID,
+      origin: 'chat',
+      prompt,
+      userPrompt: prompt,
+    },
+    step: { id: turnId, kind: 'chat' },
+    messages: baseMessages,
+    toolSpecs: SERVER_TOOL_SPECS,
+    enableToolHooks: false,
+    loadCheckpoint: async () => ({ state: checkpoint }),
+    saveCheckpoint: async (state) => {
+      checkpoints.push(JSON.parse(JSON.stringify(state)))
+      return true
+    },
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    executeTool: async ({ name, args }) => {
+      assert.equal(name, 'create_html_app')
+      executionArgs = args
+      return {
+        ok: true,
+        artifactId,
+        filename,
+        url: `/api/artifacts/${filename}`,
+      }
+    },
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: `restored-deliver-${suffix}`,
+            function: {
+              name: 'set_deliverables',
+              arguments: JSON.stringify({ artifact_ids: [artifactId] }),
+            },
+          }],
+        }
+      }
+      return { content: '恢复后已完成原地修改。', toolCalls: [] }
+    },
+  })
+
+  assert.equal(executionArgs?.replace_artifact_id, artifactId)
+  const executing = checkpoints.find((state) => state.toolCalls?.some((call) => (
+    call.id === createCallId && call.checkpointStatus === 'executing'
+  )))
+  const persistedCall = executing?.toolCalls?.find((call) => call.id === createCallId)
+  assert.equal(persistedCall?.args?.replace_artifact_id, artifactId)
+  assert.equal(JSON.parse(persistedCall?.argumentsText || '{}').replace_artifact_id, artifactId)
+  const persistedAssistant = executing?.messages?.findLast((message) => (
+    message?.role === 'assistant' && message.tool_calls?.some((call) => call.id === createCallId)
+  ))
+  assert.equal(
+    JSON.parse(persistedAssistant?.tool_calls?.find((call) => call.id === createCallId)?.function?.arguments || '{}')
+      .replace_artifact_id,
+    artifactId,
+  )
+  assert.deepEqual(result.deliveryArtifactIds, [artifactId])
+})
+
+for (const scenario of [
+  {
+    label: 'a non-empty wrong replacement ID is rejected instead of being silently retargeted',
+    modelReplacementId: 'unauthorized-model-target',
+    rewriteApproval: false,
+  },
+  {
+    label: 'an approval-edited replacement ID is revalidated immediately before execution',
+    modelReplacementId: null,
+    rewriteApproval: true,
+  },
+]) {
+  test(scenario.label, async () => {
+    const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`
+    const artifactId = `guarded-html-${suffix}`
+    const filename = `guarded-page-${suffix}.html`
+    const turnId = `guarded-revision-${suffix}`
+    persistStubTurnArtifact({ turnId: `seed-${suffix}`, id: artifactId, filename, type: 'html' })
+    const prompt = `直接修改原版 ${filename}，不要新建版本`
+    const messages = [
+      ...deliveredHtmlTurn({ prefix: `guarded-${suffix}`, artifactId, filename }),
+      { role: 'user', content: prompt },
+    ]
+    const outcomes = []
+    let executions = 0
+    let approvalCalls = 0
+
+    await assert.rejects(
+      runToolsLoop({
+        job: {
+          id: turnId,
+          userId: INTENT_ARTIFACT_USER_ID,
+          sessionId: INTENT_ARTIFACT_SESSION_ID,
+          origin: 'chat',
+          prompt,
+          userPrompt: prompt,
+        },
+        step: { id: turnId, kind: 'chat' },
+        messages,
+        toolSpecs: SERVER_TOOL_SPECS,
+        maxIters: 1,
+        enableToolHooks: false,
+        requestToolApproval: async ({ args }) => {
+          approvalCalls += 1
+          assert.equal(args.replace_artifact_id, artifactId)
+          return {
+            proceed: true,
+            args: scenario.rewriteApproval
+              ? { ...args, replace_artifact_id: 'unauthorized-approval-target' }
+              : args,
+          }
+        },
+        executeTool: async () => {
+          executions += 1
+          return { ok: true, artifactId }
+        },
+        onToolCompleted: async (outcome) => outcomes.push(outcome),
+        runModel: async () => ({
+          content: '',
+          toolCalls: [{
+            id: `guarded-create-${suffix}`,
+            function: {
+              name: 'create_html_app',
+              arguments: JSON.stringify({
+                title: 'Guarded revision',
+                html: '<!doctype html><html><body>guarded</body></html>',
+                ...(scenario.modelReplacementId
+                  ? { replace_artifact_id: scenario.modelReplacementId }
+                  : {}),
+              }),
+            },
+          }],
+        }),
+      }),
+      (error) => error?.code === 'ARTIFACT_NOT_CREATED',
+    )
+
+    assert.equal(executions, 0)
+    assert.equal(approvalCalls, scenario.rewriteApproval ? 1 : 0)
+    assert.equal(outcomes.length, 1)
+    assert.equal(outcomes[0].result?.code, 'artifact_replacement_not_authorized')
+  })
+}
+
+test('an implicit adjacent webpage revision creates and delivers a new file without a skill', async () => {
+  const currentPrompt = '这里的按钮太大了，请缩小并继续完善'
+  const nextArtifactId = `revision-html-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  let modelCalls = 0
+  const result = await runToolsLoop({
+    job: {
+      id: `revision-turn-${nextArtifactId}`,
+      userId: INTENT_ARTIFACT_USER_ID,
+      sessionId: INTENT_ARTIFACT_SESSION_ID,
+      origin: 'chat',
+      prompt: currentPrompt,
+      userPrompt: currentPrompt,
+    },
+    step: { id: `revision-turn-${nextArtifactId}`, kind: 'chat' },
+    messages: adjacentHtmlRevisionMessages(currentPrompt),
+    toolSpecs: SERVER_TOOL_SPECS,
+    enableToolHooks: false,
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    executeTool: async ({ name, args }) => {
+      assert.equal(name, 'create_html_app')
+      assert.match(args.html, /font-size:12px/)
+      return persistStubTurnArtifact({
+        turnId: `revision-turn-${nextArtifactId}`,
+        id: nextArtifactId,
+        filename: `${nextArtifactId}.html`,
+        type: 'html',
+      })
+    },
+    runModel: async ({ messages, tools }) => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        assert.ok(tools.some((tool) => tool.function.name === 'create_html_app'))
+        assert.ok(messages.some((message) => String(message.content || '').includes('[ADJACENT ARTIFACT REVISION CONTRACT]')))
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'revision-html-call',
+            function: {
+              name: 'create_html_app',
+              arguments: JSON.stringify({
+                title: '产品网页-修订版',
+                html: '<!doctype html><html><body><main><button style="font-size:12px">开始</button></main></body></html>',
+              }),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 2) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'revision-delivery-call',
+            function: {
+              name: 'set_deliverables',
+              arguments: JSON.stringify({ artifact_ids: [nextArtifactId] }),
+            },
+          }],
+        }
+      }
+      return { content: '已直接修改并生成新的网页文件。', toolCalls: [] }
+    },
+  })
+  assert.deepEqual(result.artifactIds, [nextArtifactId])
+  assert.deepEqual(result.deliveryArtifactIds, [nextArtifactId])
+  assert.equal(result.text, '已直接修改并生成新的网页文件。')
 })
 
 test('chat project-check turn does not inherit artifact generators from an older Word request', async () => {
@@ -432,15 +1661,15 @@ test('slash skill unlocks its matching artifact tool', () => {
 test('slash artifact skills stay locked to one generator unless multiple file formats are explicit', () => {
   assert.deepEqual(
     detectArtifactIntent('/webpage build a website for a quarterly report'),
-    { pptx: false, docx: false, xlsx: false, html: true, image: false },
+    { pptx: false, docx: false, xlsx: false, html: true, pdf: false, image: false },
   )
   assert.deepEqual(
     detectArtifactIntent('/doc create a report with a spreadsheet-style table'),
-    { pptx: false, docx: true, xlsx: false, html: false, image: false },
+    { pptx: false, docx: true, xlsx: false, html: false, pdf: false, image: false },
   )
   assert.deepEqual(
     detectArtifactIntent('/ppt present the quarterly report'),
-    { pptx: true, docx: false, xlsx: false, html: false, image: false },
+    { pptx: true, docx: false, xlsx: false, html: false, pdf: false, image: false },
   )
   assert.deepEqual(
     [...allowedArtifactTools('/webpage build a website and also export a Word document')].sort(),
@@ -1000,13 +2229,13 @@ test('ppt intent suppresses the looser docx keywords', () => {
   assert.equal(intent.pptx, true)
   assert.equal(intent.docx, false, '「导出」不该在已有 pptx 意图时再触发 docx')
   assert.deepEqual(detectArtifactIntent('Make a PPT report'), {
-    pptx: true, docx: false, xlsx: false, html: false, image: false,
+    pptx: true, docx: false, xlsx: false, html: false, pdf: false, image: false,
   })
   assert.deepEqual(detectArtifactIntent('做一份 PPT 汇报'), {
-    pptx: true, docx: false, xlsx: false, html: false, image: false,
+    pptx: true, docx: false, xlsx: false, html: false, pdf: false, image: false,
   })
   assert.deepEqual(detectArtifactIntent('同时生成 PPT 以及 Word 文档'), {
-    pptx: true, docx: true, xlsx: false, html: false, image: false,
+    pptx: true, docx: true, xlsx: false, html: false, pdf: false, image: false,
   })
   assert.equal(shouldCompileDocx('生成 PPT 并导出'), false)
 })

@@ -12,6 +12,10 @@ const { createJobBudget } = await import('../server/utils/jobBudget.js')
 const { createUser, getDb } = await import('../server/db.js')
 const { upsertSession } = await import('../server/services/sessionStore.js')
 const { appendTurnArtifact } = await import('../server/services/turnArtifactStore.js')
+const {
+  isLocalMutationCall,
+  isVerificationCall,
+} = await import('../server/services/toolLoopHeuristics.js')
 
 test('output-truncated tool calls are paired but never executed and are regenerated', async () => {
   const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
@@ -383,6 +387,203 @@ test('direct execution cannot finish as prose before any substantive tool succee
     .map((item) => item.content)
     .join('\n')
   assert.match(correction, /\[EXECUTION EVIDENCE REQUIRED\]/)
+})
+
+test('a local mutation retry may finish when strict target checks prove the requested state already exists', async () => {
+  const names = ['write_file', 'edit_file', 'read_file', 'grep_code']
+  const specs = names.map((name) => SERVER_TOOL_SPECS.find((item) => item?.function?.name === name))
+  assert.equal(specs.every(Boolean), true)
+
+  const target = 'qa-context-test.html'
+  const repeatedPrompt = `继续修改现有原文件 ${target}：使用蓝紫渐变，优化卡片层次。只修改这个原文件。`
+  const executed = []
+  let modelCalls = 0
+  const result = await runToolsLoop({
+    job: {
+      id: 'job-existing-local-state-verified',
+      userId: null,
+      origin: 'chat',
+      prompt: repeatedPrompt,
+      userPrompt: repeatedPrompt,
+    },
+    step: { id: 'step-existing-local-state-verified', kind: 'chat' },
+    messages: [
+      { role: 'user', content: repeatedPrompt },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{
+          id: 'prior-edit-target',
+          type: 'function',
+          function: {
+            name: 'edit_file',
+            arguments: JSON.stringify({
+              path: target,
+              old_string: '--accent:#6d5dfc',
+              new_string: '--accent:#4f46e5;--accent2:#a855f7',
+            }),
+          },
+        }],
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'prior-edit-target',
+        name: 'edit_file',
+        content: JSON.stringify({
+          ok: true,
+          path: target,
+          replacedCount: 1,
+          changes: [{ path: target, additions: 1, deletions: 1 }],
+        }),
+      },
+      { role: 'assistant', content: '任务未能正确收尾，请重试。' },
+      { role: 'user', content: repeatedPrompt },
+    ],
+    intentMode: 'execute',
+    toolSpecs: specs,
+    maxIters: 6,
+    enableToolHooks: false,
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'read-existing-target',
+            type: 'function',
+            function: { name: 'read_file', arguments: JSON.stringify({ path: target, offset: 0, limit: 0 }) },
+          }],
+        }
+      }
+      if (modelCalls === 2) {
+        return {
+          content: '上一轮修改已经在目标文件中，无需重复写入；我会定向核对要求。',
+          toolCalls: [
+            {
+              id: 'verify-existing-colors',
+              type: 'function',
+              function: {
+                name: 'grep_code',
+                arguments: JSON.stringify({ pattern: '#4f46e5|#a855f7', path: target }),
+              },
+            },
+            {
+              id: 'verify-existing-cards',
+              type: 'function',
+              function: {
+                name: 'grep_code',
+                arguments: JSON.stringify({ pattern: 'card::before|card:hover', path: target }),
+              },
+            },
+          ],
+        }
+      }
+      return {
+        content: '目标文件已经包含蓝紫渐变和优化后的卡片层次；已完成完整读取与定向核验，无需重复修改。',
+        toolCalls: [],
+      }
+    },
+    executeTool: async ({ name, args }) => {
+      executed.push({ name, path: args.path })
+      assert.equal(args.path, target)
+      if (name === 'read_file') {
+        return {
+          ok: true,
+          path: target,
+          content: '<style>:root{--accent:#4f46e5;--accent2:#a855f7}.card::before{}.card:hover{}</style>',
+          size: 96,
+          totalLines: 1,
+          offset: 0,
+          returnedLines: 1,
+          truncated: false,
+        }
+      }
+      if (name === 'grep_code') {
+        return {
+          ok: true,
+          pattern: args.pattern,
+          searched_path: target,
+          total: 2,
+          truncated: false,
+          matches: [{ file: target, line: 1, text: args.pattern }],
+        }
+      }
+      assert.fail(`unexpected mutation call: ${name}`)
+    },
+  })
+
+  assert.deepEqual(executed.map(({ name }) => name), ['read_file', 'grep_code', 'grep_code'])
+  assert.equal(modelCalls, 3)
+  assert.equal(result.incomplete, undefined)
+  assert.match(result.text, /无需重复修改/)
+})
+
+test('checks against an unrelated file cannot replace required local mutation evidence', async () => {
+  const names = ['write_file', 'read_file', 'grep_code']
+  const specs = names.map((name) => SERVER_TOOL_SPECS.find((item) => item?.function?.name === name))
+  assert.equal(specs.every(Boolean), true)
+
+  let modelCalls = 0
+  const result = await runToolsLoop({
+    job: {
+      id: 'job-existing-local-state-unrelated',
+      userId: null,
+      origin: 'chat',
+      prompt: '修改现有原文件 qa-context-test.html 的主视觉。',
+      userPrompt: '修改现有原文件 qa-context-test.html 的主视觉。',
+    },
+    step: { id: 'step-existing-local-state-unrelated', kind: 'chat' },
+    messages: [{ role: 'user', content: '修改现有原文件 qa-context-test.html 的主视觉。' }],
+    intentMode: 'execute',
+    toolSpecs: specs,
+    maxIters: 4,
+    enableToolHooks: false,
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'read-unrelated-target',
+            type: 'function',
+            function: { name: 'read_file', arguments: JSON.stringify({ path: 'README.md' }) },
+          }],
+        }
+      }
+      if (modelCalls === 2) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'grep-unrelated-target',
+            type: 'function',
+            function: { name: 'grep_code', arguments: JSON.stringify({ pattern: 'Gugo', path: 'README.md' }) },
+          }],
+        }
+      }
+      return { content: '已经完成修改。', toolCalls: [] }
+    },
+    executeTool: async ({ name, args }) => name === 'read_file'
+      ? {
+          ok: true,
+          path: args.path,
+          content: '# Gugo',
+          totalLines: 1,
+          offset: 0,
+          returnedLines: 1,
+          truncated: false,
+        }
+      : {
+          ok: true,
+          searched_path: args.path,
+          total: 1,
+          truncated: false,
+          matches: [{ file: args.path, line: 1, text: 'Gugo' }],
+        },
+  })
+
+  assert.equal(result.incomplete, true)
+  assert.equal(result.reason, 'execution_evidence_missing')
+  assert.doesNotMatch(result.text, /没有调用任何可用工具/)
 })
 
 test('a malformed search cannot turn available execution tools into a fake clarification blocker', async () => {
@@ -1322,6 +1523,137 @@ for (const scenario of [
   })
 }
 
+test('Windows cmd directory discovery redirected to nul is verification, not a mutation', () => {
+  const call = {
+    name: 'bash_exec',
+    args: {
+      command: 'cmd.exe /c "cd /d D:\\destok && dir /s /b qa-context-test*.html 2>nul"',
+    },
+  }
+
+  assert.equal(isVerificationCall(call), true)
+  assert.equal(isLocalMutationCall(call), false)
+})
+
+test('Windows cmd verification classification stays conservative for dynamic or mutating syntax', () => {
+  const commands = [
+    'cmd.exe /c "dir /b && del victim.txt"',
+    'cmd.exe /c "dir /b > results.txt"',
+    'cmd.exe /c "dir /b & erase victim.txt"',
+    'cmd.exe /c "dir /b $(whoami)"',
+    'cmd.exe /c "dir /b `whoami`"',
+    'cmd.exe /c "dir /b %TARGET%"',
+    'cmd.exe /v:on /c "dir /b !TARGET!"',
+  ]
+
+  for (const command of commands) {
+    const call = { name: 'bash_exec', args: { command } }
+    assert.equal(isVerificationCall(call), false, command)
+    assert.equal(isLocalMutationCall(call), true, command)
+  }
+})
+
+test('directory discovery through cmd can precede a write and read-back without leaving a phantom nul target', async () => {
+  const bashExec = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'bash_exec')
+  const writeFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'write_file')
+  const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
+  const outputPath = 'D:\\destok\\qa-context-test.html'
+  const html = '<!doctype html><title>Second revision complete</title>'
+  let modelCalls = 0
+  let checkpoint = null
+  const executed = []
+
+  const result = await runToolsLoop({
+    job: {
+      id: 'windows-cmd-discovery-before-second-revision-job',
+      userId: null,
+      origin: 'chat',
+      prompt: 'Find the existing HTML, apply the second revision, and verify the saved file.',
+    },
+    step: { id: 'windows-cmd-discovery-before-second-revision-step', kind: 'chat' },
+    messages: [{
+      role: 'user',
+      content: 'Find the existing HTML, apply the second revision, and verify the saved file.',
+    }],
+    intentMode: 'execute',
+    toolSpecs: [bashExec, writeFile, readFile],
+    maxIters: 6,
+    enableToolHooks: false,
+    saveCheckpoint: async (state) => {
+      checkpoint = structuredClone(state)
+      return true
+    },
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'find-existing-html-with-cmd',
+            type: 'function',
+            function: {
+              name: 'bash_exec',
+              arguments: JSON.stringify({
+                command: 'cmd.exe /c "cd /d D:\\destok && dir /s /b qa-context-test*.html 2>nul"',
+              }),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 2) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'write-second-revision',
+            type: 'function',
+            function: {
+              name: 'write_file',
+              arguments: JSON.stringify({ path: outputPath, content: html }),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 3) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'read-second-revision',
+            type: 'function',
+            function: {
+              name: 'read_file',
+              arguments: JSON.stringify({ path: outputPath }),
+            },
+          }],
+        }
+      }
+      return { content: 'The second revision was saved and verified.', toolCalls: [] }
+    },
+    executeTool: async ({ name, args }) => {
+      executed.push(name)
+      if (name === 'bash_exec') {
+        return { ok: true, exitCode: 0, stdout: `${outputPath}\r\n` }
+      }
+      if (name === 'write_file') {
+        return {
+          ok: true,
+          path: args.path,
+          bytes: args.content.length,
+          changedPaths: [args.path],
+        }
+      }
+      assert.equal(name, 'read_file')
+      return { ok: true, path: args.path, content: html }
+    },
+  })
+
+  assert.deepEqual(executed, ['bash_exec', 'write_file', 'read_file'])
+  assert.equal(modelCalls, 4)
+  assert.equal(result.incomplete, undefined)
+  assert.notEqual(result.reason, 'post_mutation_verification_missing')
+  assert.equal(result.text, 'The second revision was saved and verified.')
+  assert.deepEqual(checkpoint?.completionGuards?.pendingMutationTargets, [])
+})
+
 test('verified directory resume rejects a repeated authorization wait claim and continues into execution', async () => {
   const bashExec = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'bash_exec')
   const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
@@ -1833,7 +2165,7 @@ test('a successful parallel read clears failures from earlier candidates', async
   assert.equal(modelCalls, 2)
 })
 
-test('parallel screenshot batches append every tool response before the image message', async (t) => {
+test('parallel screenshot batches reuse both images for context retry without persisting either', async (t) => {
   const screenshot = {
     type: 'function',
     function: {
@@ -1861,6 +2193,7 @@ test('parallel screenshot batches append every tool response before the image me
   const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
   assert.ok(readFile)
   let modelCalls = 0
+  const checkpoints = []
 
   const result = await runToolsLoop({
     job: {
@@ -1878,6 +2211,10 @@ test('parallel screenshot batches append every tool response before the image me
     toolSpecs: [screenshot, readFile],
     maxIters: 3,
     enableToolHooks: false,
+    saveCheckpoint: async (state) => {
+      checkpoints.push(structuredClone(state))
+      return true
+    },
     runModel: async ({ messages }) => {
       modelCalls += 1
       if (modelCalls === 1) {
@@ -1885,7 +2222,12 @@ test('parallel screenshot batches append every tool response before the image me
           content: '',
           toolCalls: [
             {
-              id: 'parallel-shot',
+              id: 'parallel-shot-one',
+              type: 'function',
+              function: { name: 'browser_screenshot', arguments: '{}' },
+            },
+            {
+              id: 'parallel-shot-two',
               type: 'function',
               function: { name: 'browser_screenshot', arguments: '{}' },
             },
@@ -1898,24 +2240,52 @@ test('parallel screenshot batches append every tool response before the image me
         }
       }
 
-      const shotIndex = messages.findIndex((message) => message.tool_call_id === 'parallel-shot')
-      const readIndex = messages.findIndex((message) => message.tool_call_id === 'parallel-read')
-      const imageIndex = messages.findIndex((message) => (
+      const imageIndexes = messages.map((message, index) => ({ message, index })).filter(({ message }) => (
         message.role === 'user'
         && Array.isArray(message.content)
         && message.content.some((part) => part?.type === 'image_url')
-      ))
-      assert.ok(shotIndex >= 0)
-      assert.ok(readIndex > shotIndex)
-      assert.ok(imageIndex > readIndex)
-      assert.equal(JSON.parse(messages[shotIndex].content).image.data, undefined)
+      )).map(({ index }) => index)
+      if (modelCalls === 2 || modelCalls === 3) {
+        assert.equal(imageIndexes.length, 2)
+        const requestText = JSON.stringify(messages)
+        assert.match(requestText, /data:image\/png;base64,FIRST_SCREENSHOT_BYTES/u)
+        assert.match(requestText, /data:image\/png;base64,SECOND_SCREENSHOT_BYTES/u)
+        if (modelCalls === 2) {
+          const firstShotIndex = messages.findIndex((message) => message.tool_call_id === 'parallel-shot-one')
+          const secondShotIndex = messages.findIndex((message) => message.tool_call_id === 'parallel-shot-two')
+          const readIndex = messages.findIndex((message) => message.tool_call_id === 'parallel-read')
+          assert.ok(firstShotIndex >= 0)
+          assert.ok(secondShotIndex > firstShotIndex)
+          assert.ok(readIndex > secondShotIndex)
+          assert.ok(imageIndexes[0] > readIndex)
+          assert.ok(imageIndexes[1] > imageIndexes[0])
+          assert.equal(JSON.parse(messages[firstShotIndex].content).image.data, undefined)
+          assert.equal(JSON.parse(messages[secondShotIndex].content).image.data, undefined)
+          throw Object.assign(new Error('maximum context length exceeded'), { status: 400 })
+        }
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'post-shot-read',
+            type: 'function',
+            function: { name: 'read_file', arguments: '{"path":"after-shot.txt"}' },
+          }],
+        }
+      }
+      assert.deepEqual(imageIndexes, [], 'the image must not be replayed after its next logical model call')
       return { content: 'Screenshot and notes inspected.', toolCalls: [] }
     },
-    executeTool: async ({ name }) => {
+    executeTool: async ({ name, toolCallId }) => {
       if (name === 'browser_screenshot') {
         return {
           ok: true,
-          image: { mimeType: 'image/png', data: 'iVBORw0KGgo=', bytes: 8 },
+          image: {
+            mimeType: 'image/png',
+            data: toolCallId === 'parallel-shot-one'
+              ? 'FIRST_SCREENSHOT_BYTES'
+              : 'SECOND_SCREENSHOT_BYTES',
+            bytes: 8,
+          },
         }
       }
       assert.equal(name, 'read_file')
@@ -1924,7 +2294,14 @@ test('parallel screenshot batches append every tool response before the image me
   })
 
   assert.equal(result.text, 'Screenshot and notes inspected.')
-  assert.equal(modelCalls, 2)
+  assert.equal(modelCalls, 4)
+  assert.ok(checkpoints.length > 0)
+  for (const checkpoint of checkpoints) {
+    assert.doesNotMatch(
+      JSON.stringify(checkpoint),
+      /data:image|base64|FIRST_SCREENSHOT_BYTES|SECOND_SCREENSHOT_BYTES/u,
+    )
+  }
 })
 
 test('empty model output persists the non-empty wrap-up checkpoint', async () => {

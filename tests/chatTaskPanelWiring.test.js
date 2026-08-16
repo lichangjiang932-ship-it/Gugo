@@ -42,7 +42,11 @@ test('chat task views avoid speculative numeric progress while a model request i
   assert.match(serverTurnSource, /let currentAssistantText = ''/)
   assert.match(serverTurnSource, /currentAssistantText = String\(event\.payload\?\.assistantText \|\| ''\)/)
   assert.match(serverTurnSource, /currentAssistantText \+= String\(event\.payload\.text\)/)
-  assert.match(serverTurnSource, /if \(!currentAssistantText && terminal\.payload\?\.text\) dispatchMessage\('APPEND_TO_LAST_MESSAGE', terminal\.payload\.text\)/)
+  assert.match(serverTurnSource, /const appendMissingAssistantText = \(candidate\) => \{/)
+  assert.match(serverTurnSource, /const suffix = missingAssistantTextSuffix\(currentAssistantText, candidate\)/)
+  assert.match(serverTurnSource, /if \(suffix\) dispatchMessage\('APPEND_TO_LAST_MESSAGE', suffix\)/)
+  assert.match(serverTurnSource, /currentAssistantText = mergeAssistantText\(currentAssistantText, candidate\)/)
+  assert.match(serverTurnSource, /appendMissingAssistantText\(terminal\.payload\?\.text\)/)
   assert.match(serverTurnSource, /stepLabel:\s*t\('chat\.serverTurn\.submit'\)/)
 
   assert.doesNotMatch(detailSource, /task\.progress/)

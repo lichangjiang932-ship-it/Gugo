@@ -13,13 +13,18 @@
  * 文件产物提示词。artifactTools 是 allowedArtifactTools() 返回的 Set,
  * 只有用户明确要了某种产物时才注入对应规则 —— 修 bug 的任务不会再被推去做 PPT。
  */
-export function buildArtifactPrompt(artifactTools) {
+export function buildArtifactPrompt(artifactTools, {
+  codeSnippetRequested = false,
+  defaultOutputDirectory = '',
+  projectDirectory = '',
+} = {}) {
   const lines = []
   if (artifactTools.size) {
     const available = [
       artifactTools.has('create_pptx') ? 'create_pptx (PowerPoint)' : null,
       artifactTools.has('create_docx') ? 'create_docx (Word)' : null,
       artifactTools.has('create_xlsx') ? 'create_xlsx (Excel)' : null,
+      artifactTools.has('create_pdf') ? 'create_pdf (PDF)' : null,
       artifactTools.has('create_html_app') ? 'create_html_app (HTML)' : null,
       artifactTools.has('generate_image') ? 'generate_image (image)' : null,
     ].filter(Boolean)
@@ -29,9 +34,22 @@ export function buildArtifactPrompt(artifactTools) {
     )
   } else {
     lines.push(
-      '本次未匹配到专用的 PowerPoint / Word / Excel 产物生成器；这不代表通用文件或 Shell 能力不可用。',
+      '本次未匹配到专用的 PowerPoint / Word / Excel / PDF 产物生成器；这不代表通用文件或 Shell 能力不可用。',
       '始终以本轮实际工具列表为准。若用户要求修改或生成其他格式，使用已列出的写入、Shell 或其他执行工具完成并验证。',
     )
+  }
+
+  lines.push(
+    '',
+    '【文件交付与源码兜底】',
+    codeSnippetRequested
+      ? '用户本轮明确要求了代码片段；可以给出其明确要求的片段，但若同时要求创建或修改文件，代码片段不能代替真实工具执行与文件交付。'
+      : '用户本轮没有明确要求代码片段。凡是要求创建或修改文件，都必须直接使用可用工具完成；即使工具失败，也不要输出完整源码、大段代码、复制粘贴/自行保存步骤，或让用户手动改扩展名、转换格式。应安全重试，确实无法完成时只报告简短且具体的阻塞原因。',
+  )
+  if (defaultOutputDirectory) {
+    lines.push(`用户未指定新文件保存位置时，统一保存到：${defaultOutputDirectory}。用户明确指定的路径优先；修改已有文件必须原地修改，不能复制到默认目录。`)
+  } else if (projectDirectory) {
+    lines.push(`用户未指定新文件保存位置时，保存到当前项目目录：${projectDirectory}。用户明确指定的路径优先；修改已有文件必须原地修改。`)
   }
 
   if (artifactTools.has('create_pptx')) {

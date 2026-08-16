@@ -506,6 +506,7 @@ const BUILTIN_SPECS = {
 }
 
 const READ_ONLY_MODE_TOOLS = new Set([
+  'read_artifact_source',
   'list_directory',
   'web_search',
   'fetch_url',
@@ -527,6 +528,7 @@ const READ_ONLY_MODE_TOOLS = new Set([
   'Agent',
 ])
 const BUILTIN_CONCURRENCY_SAFE_TOOLS = new Set([
+  'read_artifact_source',
   'web_search',
   'fetch_url',
   'list_directory',

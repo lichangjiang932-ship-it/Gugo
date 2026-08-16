@@ -15,6 +15,14 @@ export const TURN_EVENT_TYPES = Object.freeze([
 
 const jsonRecord = z.record(z.string(), z.unknown())
 const nullableText = z.string().nullable().optional()
+const verifiedLocalFileSchema = z.object({
+  id: z.string().min(1).max(160),
+  path: z.string().min(1).max(32_768),
+  filename: z.string().min(1).max(1_024),
+  size: z.number().nonnegative().optional(),
+  verifiedAt: z.number().int().nonnegative().optional(),
+}).strict()
+const verifiedLocalFilesSchema = z.array(verifiedLocalFileSchema).max(64).optional()
 const managedAttachmentSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -133,7 +141,15 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     text: z.string(), iteration: z.number().int().nonnegative().optional(), modelName: nullableText,
   }).strict(),
   'tool.call': z.object({ toolCallId: z.string().optional(), name: z.string().optional(), args: jsonRecord.optional() }).strict(),
-  'tool.started': z.object({ toolCallId: z.string().optional(), name: z.string().optional() }).strict(),
+  'tool.started': z.object({
+    toolCallId: z.string().optional(),
+    name: z.string().optional(),
+    args: jsonRecord.optional(),
+    // stdout/stderr deltas are intentionally process-local. A replayed
+    // running tool can restore its identity and arguments, while making the
+    // missing pre-reconnect output explicit instead of implying an empty log.
+    outputReplay: z.literal('live_only').optional(),
+  }).strict(),
   'tool.completed': z.object({
     toolCallId: z.string().optional(), name: z.string().optional(), args: jsonRecord.optional(),
     result: z.unknown().optional(), error: toolFailureSchema.nullable().optional(), artifactId: nullableText,
@@ -167,7 +183,15 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     approvalId: nullableText, proceed: z.boolean(), edited: z.boolean(), args: jsonRecord.nullable().optional(),
     reason: nullableText,
   }).strict(),
-  'turn.checkpoint': z.object({ state: z.unknown().optional() }).strict(),
+  'turn.checkpoint': z.object({
+    // `state` remains accepted for v50-and-earlier event-log checkpoints.
+    // New checkpoints keep state in the upsert table and emit bounded metadata.
+    state: z.unknown().optional(),
+    storage: z.literal('turn_checkpoints').optional(),
+    checkpointVersion: z.number().int().positive().optional(),
+    iterations: z.number().int().nonnegative().optional(),
+    toolCallCount: z.number().int().nonnegative().optional(),
+  }).strict(),
   'turn.interrupted': z.object({
     code: z.string().min(1),
     message: z.string().min(1),
@@ -175,6 +199,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     text: z.string().optional(),
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),
+    verifiedLocalFiles: verifiedLocalFilesSchema,
     iterations: z.number().int().nonnegative().optional(),
   }).strict(),
   'turn.paused': z.object({
@@ -182,6 +207,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     clarification: z.union([jsonRecord, z.string().min(1)]),
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),
+    verifiedLocalFiles: verifiedLocalFilesSchema,
     iterations: z.number().int().nonnegative().optional(),
   }).strict(),
   'turn.resumed': z.object({
@@ -200,6 +226,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
   }),
   'turn.completed': z.object({
     text: z.string().optional(), artifactIds: z.array(z.string()).optional(), deliveryArtifactIds: z.array(z.string()).optional(), iterations: z.number().int().nonnegative().optional(),
+    verifiedLocalFiles: verifiedLocalFilesSchema,
     usage: jsonRecord.nullable().optional(),
     paused: z.boolean().optional(), clarification: z.unknown().nullable().optional(), interrupted: z.boolean().optional(),
   }).strict(),
@@ -207,6 +234,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     reason: z.string().optional(),
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),
+    verifiedLocalFiles: verifiedLocalFilesSchema,
     iterations: z.number().int().nonnegative().optional(),
   }).strict(),
   'turn.failed': z.object({
@@ -217,6 +245,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     partialText: z.string().optional(),
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),
+    verifiedLocalFiles: verifiedLocalFilesSchema,
     iterations: z.number().int().nonnegative().optional(),
   }).strict(),
   heartbeat: z.object({ at: z.number().int().nonnegative().optional() }).strict(),

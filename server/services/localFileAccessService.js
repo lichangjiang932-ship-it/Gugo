@@ -1,16 +1,14 @@
-import { execFile } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { promisify } from 'node:util'
 import { getDb } from '../db.js'
 import { getRuntimeEnv } from '../utils/runtimeEnv.js'
+import { isApprovalBypassEnabled } from './approvalSettingsStore.js'
 import { getWorkspaceTrustStatus } from './workspaceTrustService.js'
 import { resolveManagedAttachmentPath } from './managedAttachmentStore.js'
 
-const execFileAsync = promisify(execFile)
 const MAX_GRANTS = 64
-const PICKER_TIMEOUT_MS = 2 * 60 * 1000
+const MAX_DIRECTORY_BROWSER_ENTRIES = 500
 
 function isLoopbackHost(value) {
   const host = String(value || '').trim().toLowerCase().replace(/^\[|\]$/g, '')
@@ -39,6 +37,23 @@ function serviceError(message, statusCode = 400, code = 'LOCAL_FILE_ACCESS_ERROR
 
 function workspaceRoot() {
   return path.resolve(process.env.WORKSPACE_ROOT?.trim() || process.cwd())
+}
+
+export function getProjectDirectory({ userId } = {}) {
+  if (userId) {
+    try {
+      const grant = [...getGrantRows(userId)].reverse().find((row) => (
+        row.resource_type === 'directory'
+        && row.access_mode === 'read_write'
+        && fs.existsSync(row.root_path)
+        && getWorkspaceTrustStatus({ userId, rootPath: row.root_path }).trusted
+      ))
+      if (grant) return grant.root_path
+    } catch {
+      // Fall back to the deployment workspace below.
+    }
+  }
+  return workspaceRoot()
 }
 
 function sharedWorkspaceTrusted() {
@@ -102,7 +117,6 @@ function assertPathWritable(canonicalPath, stat) {
     throw error
   }
 }
-
 function resolveTarget(rawPath, { allowMissing = false } = {}) {
   if (typeof rawPath !== 'string' || !rawPath.trim()) {
     throw serviceError('path 必填', 400, 'PATH_REQUIRED')
@@ -142,8 +156,31 @@ function mapGrant(row) {
 
 function getSettingsRow(userId) {
   return getDb().prepare(
-    'SELECT all_files_enabled, updated_at FROM local_file_access_settings WHERE user_id = ?'
+    'SELECT all_files_enabled, default_output_directory, updated_at FROM local_file_access_settings WHERE user_id = ?'
   ).get(userId)
+}
+
+function configuredOutputDirectory(userId) {
+  if (!userId) return ''
+  return String(getSettingsRow(userId)?.default_output_directory || '').trim()
+}
+
+function isolatedTestOutputDirectory() {
+  if (!process.env.YMA_TEST_DATA_ROOT) return ''
+  const configured = String(process.env.YMA_TEST_DEFAULT_OUTPUT_DIR || '').trim()
+  return configured && path.isAbsolute(configured) ? path.normalize(configured) : ''
+}
+
+export function getDefaultOutputDirectory({ userId } = {}) {
+  return configuredOutputDirectory(userId)
+    || isolatedTestOutputDirectory()
+    || getProjectDirectory({ userId })
+}
+
+export function resolveDirectoryRequestPath({ userId, rawPath = '' } = {}) {
+  const input = String(rawPath || '').trim()
+  if (!input) return getDefaultOutputDirectory({ userId })
+  return path.resolve(path.isAbsolute(input) ? input : path.join(getProjectDirectory({ userId }), input))
 }
 
 function getGrantRows(userId) {
@@ -158,8 +195,12 @@ export function getLocalFileAccessStatus({ userId }) {
   const grants = getGrantRows(userId).map(mapGrant)
   const workspaceEnabled = process.env.WORKSPACE_FS_ENABLED === '1'
   const root = workspaceEnabled ? workspaceRoot() : null
+  const bypassEnabled = isApprovalBypassEnabled({ userId })
   return {
     allFilesEnabled: !!settings?.all_files_enabled,
+    bypassEnabled,
+    projectDirectory: getProjectDirectory({ userId }),
+    defaultOutputDirectory: getDefaultOutputDirectory({ userId }),
     grants,
     workspace: {
       enabled: workspaceEnabled,
@@ -184,9 +225,9 @@ export function getLocalFileAccessStatus({ userId }) {
 
 /**
  * Return the persisted directory grant that already satisfies a concrete
- * request_directory call. This deliberately ignores all-files access and
- * exact-file grants: shell/code execution requires an explicit read_write
- * directory grant, and a file grant cannot authorize sibling outputs.
+ * request_directory call. Explicit permission bypass is a user-selected
+ * read/write authority, while the separate all-files toggle and exact-file
+ * grants still do not grant shell/code execution authority.
  */
 export function findAuthorizedDirectoryGrant({
   userId,
@@ -195,16 +236,38 @@ export function findAuthorizedDirectoryGrant({
 } = {}) {
   if (!userId || typeof rawPath !== 'string' || !rawPath.trim()) return null
   if (!['read_only', 'read_write'].includes(accessMode)) return null
-  if (!path.isAbsolute(rawPath.trim())) return null
+  const requestedPath = resolveDirectoryRequestPath({ userId, rawPath })
 
   let target
   try {
-    target = resolveTarget(rawPath.trim(), { allowMissing: true })
+    target = resolveTarget(requestedPath, { allowMissing: true })
   } catch {
     return null
   }
   const checkedPath = target.exists ? target.fullPath : target.anchorPath
   if (!checkedPath) return null
+
+  if (isApprovalBypassEnabled({ userId })) {
+    let authorizedPath = target.fullPath
+    try {
+      if (target.exists && fs.statSync(target.fullPath).isFile()) {
+        authorizedPath = path.dirname(target.fullPath)
+      }
+    } catch {
+      // The canonical target already passed resolution; retain it if stat
+      // becomes unavailable between those operations.
+    }
+    return {
+      id: `permission-bypass:${userId}`,
+      path: authorizedPath,
+      resourceType: 'directory',
+      accessMode: 'read_write',
+      available: target.exists,
+      createdAt: null,
+      updatedAt: null,
+      source: 'bypass',
+    }
+  }
 
   const row = getGrantRows(userId).find((grant) => {
     if (grant.resource_type !== 'directory') return false
@@ -300,6 +363,86 @@ export function setAllFilesAccess({ userId, enabled, confirmation, now = Date.no
   return getLocalFileAccessStatus({ userId })
 }
 
+export function setDefaultOutputDirectory({ userId, rootPath, now = Date.now() }) {
+  if (!userId) throw serviceError('userId 必填', 400, 'USER_REQUIRED')
+  const requested = resolveDirectoryRequestPath({ userId, rawPath: rootPath })
+  try {
+    fs.mkdirSync(requested, { recursive: true })
+  } catch (cause) {
+    throw serviceError(
+      `无法创建默认生成目录：${requested}（${cause?.code || 'CREATE_FAILED'}）`,
+      403,
+      'DEFAULT_OUTPUT_DIRECTORY_CREATE_FAILED',
+    )
+  }
+  const canonicalPath = realPath(requested)
+  const stat = fs.statSync(canonicalPath)
+  if (!stat.isDirectory()) {
+    throw serviceError('默认生成路径必须是目录', 400, 'DEFAULT_OUTPUT_DIRECTORY_NOT_DIRECTORY')
+  }
+  assertPathWritable(canonicalPath, stat)
+  getDb().prepare(`
+    INSERT INTO local_file_access_settings
+      (user_id, all_files_enabled, default_output_directory, updated_at)
+    VALUES (?, 0, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET
+      default_output_directory = excluded.default_output_directory,
+      updated_at = excluded.updated_at
+  `).run(userId, canonicalPath, now)
+  if (!isApprovalBypassEnabled({ userId })) {
+    grantLocalPath({ userId, rootPath: canonicalPath, accessMode: 'read_write', now })
+  }
+  return getLocalFileAccessStatus({ userId })
+}
+
+function nearestExistingDirectory(rawPath) {
+  let candidate = path.resolve(rawPath)
+  while (!fs.existsSync(candidate) && candidate !== path.dirname(candidate)) {
+    candidate = path.dirname(candidate)
+  }
+  if (!fs.existsSync(candidate)) return getProjectDirectory()
+  const stat = fs.statSync(candidate)
+  return stat.isDirectory() ? candidate : path.dirname(candidate)
+}
+
+export function browseLocalDirectories({ userId, rawPath = '' } = {}) {
+  if (!userId) throw serviceError('userId 必填', 400, 'USER_REQUIRED')
+  const requested = resolveDirectoryRequestPath({ userId, rawPath })
+  let currentPath
+  try {
+    currentPath = realPath(nearestExistingDirectory(requested))
+  } catch {
+    throw serviceError('目录不存在或无法访问', 404, 'DIRECTORY_NOT_FOUND')
+  }
+  if (!fs.statSync(currentPath).isDirectory()) {
+    throw serviceError('所选路径不是目录', 400, 'PATH_NOT_DIRECTORY')
+  }
+
+  const entries = []
+  for (const entry of fs.readdirSync(currentPath, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue
+    const entryPath = path.join(currentPath, entry.name)
+    try {
+      fs.accessSync(entryPath, fs.constants.R_OK)
+      entries.push({ name: entry.name, path: entryPath })
+    } catch {
+      // Keep inaccessible directories out of the chooser instead of failing
+      // the whole listing.
+    }
+    if (entries.length >= MAX_DIRECTORY_BROWSER_ENTRIES) break
+  }
+  entries.sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true }))
+  const rootPath = path.parse(currentPath).root
+  return {
+    currentPath,
+    parentPath: samePath(currentPath, rootPath) ? null : path.dirname(currentPath),
+    projectDirectory: getProjectDirectory({ userId }),
+    defaultOutputDirectory: getDefaultOutputDirectory({ userId }),
+    entries,
+    truncated: entries.length >= MAX_DIRECTORY_BROWSER_ENTRIES,
+  }
+}
+
 export function resolveAuthorizedLocalPath({
   userId,
   rawPath,
@@ -311,9 +454,16 @@ export function resolveAuthorizedLocalPath({
   if (!raw) throw serviceError('path 必填', 400, 'PATH_REQUIRED')
   const managedAttachment = resolveManagedAttachmentPath({ userId, rawPath: raw, write })
   if (managedAttachment) return managedAttachment
+  const bypassEnabled = isApprovalBypassEnabled({ userId })
   const workspaceEnabled = allowWorkspace === true
   const workspaceTrusted = workspaceEnabled && (!userId || sharedWorkspaceTrusted())
-  if (!path.isAbsolute(raw) && !workspaceEnabled) {
+  const projectDirectory = getProjectDirectory({ userId })
+  const hasProjectGrant = Boolean(userId && getGrantRows(userId).some((row) => (
+    row.resource_type === 'directory'
+    && fs.existsSync(row.root_path)
+    && samePath(row.root_path, projectDirectory)
+  )))
+  if (!path.isAbsolute(raw) && !workspaceEnabled && !bypassEnabled && !hasProjectGrant) {
     // ★ 报错要告诉模型「你能用什么」,而不只是「你不能用什么」。
     //
     // 原来只说「请使用已授权范围内的绝对路径」—— 模型不知道授权了哪些目录,
@@ -336,9 +486,18 @@ export function resolveAuthorizedLocalPath({
     )
   }
 
-  const basePath = path.isAbsolute(raw) ? raw : path.resolve(workspaceRoot(), raw)
+  const basePath = path.isAbsolute(raw) ? raw : path.resolve(projectDirectory, raw)
   const target = resolveTarget(basePath, { allowMissing })
   const checkedPath = target.exists ? target.fullPath : target.anchorPath
+
+  if (bypassEnabled) {
+    return {
+      fullPath: target.fullPath,
+      displayPath: target.fullPath,
+      source: 'bypass',
+      rootPath: path.parse(target.fullPath).root,
+    }
+  }
 
   if (workspaceTrusted) {
     const root = realPath(workspaceRoot())
@@ -405,36 +564,4 @@ export function resolveAuthorizedLocalPath({
     rootPath: grant.root_path,
     grantId: grant.id,
   }
-}
-
-export async function pickLocalDirectory() {
-  let result
-  if (process.platform === 'win32') {
-    const script = [
-      'Add-Type -AssemblyName System.Windows.Forms',
-      '$dialog = New-Object System.Windows.Forms.FolderBrowserDialog',
-      "$dialog.Description = '选择允许 Gugo 访问的文件夹'",
-      '$dialog.ShowNewFolderButton = $true',
-      'if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($dialog.SelectedPath) }',
-    ].join('; ')
-    result = await execFileAsync('powershell.exe', ['-NoProfile', '-STA', '-Command', script], {
-      timeout: PICKER_TIMEOUT_MS,
-      windowsHide: true,
-      maxBuffer: 16 * 1024,
-    })
-  } else if (process.platform === 'darwin') {
-    result = await execFileAsync('osascript', ['-e', 'POSIX path of (choose folder with prompt "Choose a folder for Gugo")'], {
-      timeout: PICKER_TIMEOUT_MS,
-      maxBuffer: 16 * 1024,
-    })
-  } else if (process.platform === 'linux') {
-    result = await execFileAsync('zenity', ['--file-selection', '--directory', '--title=Choose a folder for Gugo'], {
-      timeout: PICKER_TIMEOUT_MS,
-      maxBuffer: 16 * 1024,
-    })
-  } else {
-    throw serviceError('当前系统不支持原生文件夹选择器，请直接输入绝对路径', 501, 'PICKER_UNAVAILABLE')
-  }
-  const selected = String(result.stdout || '').trim()
-  return selected ? realPath(selected) : null
 }

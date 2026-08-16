@@ -3,6 +3,7 @@ const TOOL_IDS = Object.freeze([
   'create_pptx',
   'create_docx',
   'create_xlsx',
+  'create_pdf',
   'list_directory',
   'read_file',
   'write_file',

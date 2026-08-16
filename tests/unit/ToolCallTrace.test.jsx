@@ -110,7 +110,7 @@ test('ToolCallTrace keeps the latest four steps visible and can reveal older his
   }
 })
 
-test('ToolCallTrace opens one stable inline detail card and preserves it across live updates', async () => {
+test('ToolCallTrace defaults the running command open and preserves the selected detail across live updates', async () => {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
     url: 'http://localhost/chat',
   })
@@ -139,8 +139,9 @@ test('ToolCallTrace opens one stable inline detail card and preserves it across 
     ))
 
     let toggles = [...rootElement.querySelectorAll('[data-testid="tool-step-toggle"]')]
-    assert.deepEqual(toggles.map((toggle) => toggle.getAttribute('aria-expanded')), ['false', 'false'])
-    assert.equal(rootElement.querySelectorAll('[data-testid="tool-step-details"]').length, 0)
+    assert.deepEqual(toggles.map((toggle) => toggle.getAttribute('aria-expanded')), ['false', 'true'])
+    assert.equal(rootElement.querySelectorAll('[data-testid="tool-step-details"]').length, 1)
+    assert.match(rootElement.querySelector('[data-testid="tool-step-details"]').textContent, /starting/)
 
     await act(async () => toggles[0].dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
     toggles = [...rootElement.querySelectorAll('[data-testid="tool-step-toggle"]')]

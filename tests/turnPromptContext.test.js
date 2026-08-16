@@ -128,3 +128,52 @@ test('registered skills take precedence over conflicting inline definitions', ()
   assert.doesNotMatch(skillBlock, /INLINE PROMPT MUST NOT WIN\./)
   assert.deepEqual(prepared.skillIds, ['shared-skill-id'])
 })
+
+test('skill catalog failure does not block an explicitly selected skill', () => {
+  const warnings = []
+  const prepared = prepareTurnPromptContext({
+    userId: 'catalog-fallback-user',
+    skillIds: ['explicit-writer'],
+    env: { AGENT_INJECT_ENABLED: '0' },
+  }, {
+    prepareSkillCatalogForPrompt: () => {
+      throw new Error('catalog unavailable')
+    },
+    prepareSkillsForPrompt: () => [{
+      id: 'explicit-writer',
+      name: 'Explicit writer',
+      description: 'Selected directly by the request.',
+      systemPrompt: 'EXPLICIT_SKILL_BODY_SURVIVES_CATALOG_FAILURE',
+    }],
+    prepareMemoryInjectionContext: () => ({ text: '', memoryIds: [] }),
+    readWorkspaceInstructions: () => null,
+    logWarn: (...args) => warnings.push(args.join(' ')),
+  })
+
+  assert.deepEqual(prepared.skillIds, ['explicit-writer'])
+  assert.match(prepared.messages.map((message) => message.content).join('\n'), /EXPLICIT_SKILL_BODY_SURVIVES_CATALOG_FAILURE/)
+  assert.equal(warnings.some((warning) => warning.includes('catalog unavailable')), true)
+})
+
+test('an unselected skill contributes catalog metadata without its instructions', () => {
+  const prepared = prepareTurnPromptContext({
+    userId: 'catalog-only-user',
+    env: { AGENT_INJECT_ENABLED: '0' },
+  }, {
+    prepareSkillCatalogForPrompt: () => [{
+      id: 'optional-reviewer',
+      name: 'Optional reviewer',
+      description: 'Load only when explicitly selected.',
+      systemPrompt: 'UNSELECTED_BODY_MUST_NOT_BE_IN_PROMPT',
+      loadable: true,
+    }],
+    prepareSkillsForPrompt: () => [],
+    prepareMemoryInjectionContext: () => ({ text: '', memoryIds: [] }),
+    readWorkspaceInstructions: () => null,
+  })
+
+  const text = prepared.messages.map((message) => message.content).join('\n')
+  assert.deepEqual(prepared.skillIds, [])
+  assert.match(text, /optional-reviewer.*loadable: \/optional-reviewer/)
+  assert.doesNotMatch(text, /UNSELECTED_BODY_MUST_NOT_BE_IN_PROMPT/)
+})

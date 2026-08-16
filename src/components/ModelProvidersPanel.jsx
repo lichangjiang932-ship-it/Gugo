@@ -5,7 +5,9 @@ import { deleteModelProvider, discoverModelProvider, listModelProviders, saveMod
 import ProviderDiagnostics from './modelProviders/ProviderDiagnostics.jsx'
 import ProviderEditor from './modelProviders/ProviderEditor.jsx'
 import ProviderList from './modelProviders/ProviderList.jsx'
-import { emptyProvider, mergeDiscoveredModelProfiles, numberOrNull, PROVIDER_PRESETS, selectToTribool, toEditor } from './modelProviders/providerConfig.js'
+import {
+  emptyProvider, findConfiguredPresetProvider, mergeDiscoveredModelProfiles, numberOrNull, PROVIDER_PRESETS, selectToTribool, toEditor,
+} from './modelProviders/providerConfig.js'
 
 export default function ModelProvidersPanel({ onChanged }) {
   const { t } = useT()
@@ -51,10 +53,11 @@ export default function ModelProvidersPanel({ onChanged }) {
       const models = editing.modelsText.split(/[\n,]/).map((item) => item.trim()).filter(Boolean)
       const preset = PROVIDER_PRESETS.find((item) => item.id === editing.presetId)
       if (preset && !preset.local && !editing.apiKey.trim() && !editing.hasApiKey) throw new Error(t('modelProviders.apiKeyRequired'))
+      const existingPresetProvider = editing.id ? null : findConfiguredPresetProvider(providers, preset)
       let headers
       if (editing.headersText.trim()) headers = JSON.parse(editing.headersText)
       await saveModelProvider({
-        id: editing.id || undefined, key: editing.key, label: editing.label, baseUrl: editing.baseUrl,
+        id: editing.id || existingPresetProvider?.id || undefined, key: editing.key, label: editing.label, baseUrl: editing.baseUrl,
         apiKey: editing.apiKey, models, defaultModel: editing.defaultModel || models[0], enabled: editing.enabled,
         isDefault: editing.isDefault, ...(headers ? { headers } : {}), kind: editing.kind || null,
         contextWindow: numberOrNull(editing.contextWindow), supportsTools: selectToTribool(editing.supportsTools),
@@ -126,6 +129,6 @@ export default function ModelProvidersPanel({ onChanged }) {
     <ProviderList providers={providers} busy={busy} onTest={test} onEdit={(provider) => setEditing(toEditor(provider))} onRemove={remove} t={t} />
     {message && <div className="text-xs text-ink-soft border border-ink/10 rounded-md p-2">{message}</div>}
     <ProviderDiagnostics diagnostics={diagnostics} onClose={() => setDiagnostics(null)} t={t} />
-    {editing && <ProviderEditor editing={editing} setEditing={setEditing} busy={busy} detecting={detecting} canSave={canSave} onSave={save} onDiscover={discover} t={t} />}
+    {editing && <ProviderEditor editing={editing} setEditing={setEditing} providers={providers} busy={busy} detecting={detecting} canSave={canSave} onSave={save} onDiscover={discover} t={t} />}
   </div>
 }

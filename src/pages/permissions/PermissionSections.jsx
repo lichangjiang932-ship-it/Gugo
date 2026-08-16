@@ -2,6 +2,7 @@ import { motion } from 'framer-motion'
 import { useState } from 'react'
 import { Bell, CheckCircle2, FolderOpen, Mic, ShieldAlert, ShieldCheck, Terminal } from 'lucide-react'
 import RiskOverridesPanel from '../../components/RiskOverridesPanel.jsx'
+import InlineDirectoryBrowser from '../../components/InlineDirectoryBrowser.jsx'
 import { GATEABLE_TOOLS } from '../../lib/toolPermissionClient'
 import { PERMISSION_ITEMS, STATE_COLOR, STATE_DOT, STATE_KEY, TOOL_ICONS } from './permissionViewConfig.js'
 
@@ -28,11 +29,8 @@ export function WorkspaceOnboardingSection({ controller, t }) {
   const [approvalMode, setApprovalMode] = useState(onboarding?.approvalMode || 'normal')
   const [confirmed, setConfirmed] = useState(false)
   const [bypassConfirmed, setBypassConfirmed] = useState(false)
+  const [browserOpen, setBrowserOpen] = useState(false)
 
-  const selectDirectory = async () => {
-    const selected = await controller.chooseOnboardingDirectory()
-    if (selected) setRootPath(selected)
-  }
   const submit = async (event) => {
     event.preventDefault()
     await controller.configureOnboarding({
@@ -73,11 +71,22 @@ export function WorkspaceOnboardingSection({ controller, t }) {
                 placeholder={t('permissionsDashboard.onboardingDirectoryPlaceholder')}
                 className="h-9 min-w-0 flex-1 rounded-md border border-ink-fade/60 bg-paper px-3 font-mono text-xs text-ink outline-none focus:border-ember"
               />
-              <button type="button" onClick={selectDirectory} disabled={controller.pickerBusy} className="flex h-9 items-center gap-1.5 rounded-md border border-ink-fade/60 px-3 text-xs text-ink-soft disabled:opacity-50">
+              <button type="button" onClick={() => setBrowserOpen((open) => !open)} className="flex h-9 items-center gap-1.5 rounded-md border border-ink-fade/60 px-3 text-xs text-ink-soft disabled:opacity-50">
                 <FolderOpen className="h-3.5 w-3.5" />
-                {t(controller.pickerBusy ? 'permissionsDashboard.onboardingPicking' : 'permissionsDashboard.onboardingPick')}
+                {t('permissionsDashboard.onboardingPick')}
               </button>
             </div>
+            {browserOpen && (
+              <InlineDirectoryBrowser
+                initialPath={rootPath}
+                onSelect={(selectedPath) => {
+                  setRootPath(selectedPath)
+                  setBrowserOpen(false)
+                }}
+                onCancel={() => setBrowserOpen(false)}
+                t={t}
+              />
+            )}
             <p className="mt-1 text-[11px] text-ink-fade">{t('permissionsDashboard.onboardingDirectoryHint')}</p>
           </div>
 

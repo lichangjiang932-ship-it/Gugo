@@ -296,37 +296,137 @@ function metadataLine(attachment) {
   return `[GUGO_MANAGED_ATTACHMENT id="${attachment.id}" uri="${attachment.uri}" name="${name}" mime="${attachment.mimeType}" size=${attachment.size} sha256="${attachment.sha256}"]`
 }
 
+function projectedTokens(value) {
+  const text = typeof value === 'string' ? value : JSON.stringify(value ?? '')
+  let ascii = 0
+  let nonAscii = 0
+  for (const char of text) {
+    if (char.charCodeAt(0) <= 0x7f) ascii += 1
+    else nonAscii += 1
+  }
+  return Math.ceil(ascii / 4) + nonAscii
+}
+
+function normalizeAttachmentTokenBudget(value) {
+  if (value === undefined || value === null) return Number.POSITIVE_INFINITY
+  const budget = Number(value)
+  return Number.isFinite(budget) ? Math.max(0, Math.floor(budget)) : Number.POSITIVE_INFINITY
+}
+
+function inlineMediaTokenProjection(attachment, metadata) {
+  // Base64 expands bytes by 4/3 and the shared context estimator prices ASCII
+  // at four characters per token. This projection lets large media fall back
+  // before allocating a multi-megabyte data URL; the final provider projection
+  // is still measured authoritatively by TurnEngine.
+  return projectedTokens({ type: 'text', text: metadata })
+    + Math.ceil(Math.max(0, Number(attachment.size) || 0) / 3)
+    + 64
+}
+
+function attachmentBudgetNote(attachment, truncated = true) {
+  return truncated
+    ? `[附件内容已按当前上下文预算截断。需要更多内容时请通过 ${attachment.uri} 分页读取。]`
+    : `[附件未内联：展开内容超出当前上下文预算。需要时请通过 ${attachment.uri} 读取。]`
+}
+
+function fitAttachmentText(metadata, body, attachment, maxTokens) {
+  const text = String(body || '')
+  const full = [metadata, text].filter(Boolean).join('\n')
+  if (!Number.isFinite(maxTokens) || projectedTokens({ type: 'text', text: full }) <= maxTokens) {
+    return full
+  }
+
+  const note = attachmentBudgetNote(attachment, true)
+  const minimum = `${metadata}\n${note}`
+  if (!text || projectedTokens({ type: 'text', text: minimum }) > maxTokens) {
+    return metadata
+  }
+
+  let low = 0
+  let high = text.length
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2)
+    const candidate = `${metadata}\n${text.slice(0, middle)}\n${note}`
+    if (projectedTokens({ type: 'text', text: candidate }) <= maxTokens) low = middle
+    else high = middle - 1
+  }
+  return `${metadata}\n${text.slice(0, low)}\n${note}`
+}
+
+function extractionCharLimit(remainingTokens) {
+  if (!Number.isFinite(remainingTokens)) return MAX_EXTRACTED_CHARS
+  return Math.min(MAX_EXTRACTED_CHARS, Math.max(1_024, remainingTokens * 4))
+}
+
 export async function prepareManagedAttachmentsForModel({
   userId,
   sessionId,
   attachmentIds,
   text = '',
+  maxAttachmentTokens,
 } = {}) {
   const attachments = validateManagedAttachmentsForTurn({ userId, sessionId, attachmentIds })
   if (!attachments.length) return { attachments: [], content: String(text || '') }
   const content = [{ type: 'text', text: String(text || '请分析附件内容。') }]
+  let remainingTokens = normalizeAttachmentTokenBudget(maxAttachmentTokens)
+  const pushTextFallback = (attachment, metadata, body = '', truncated = true) => {
+    const fallbackBody = body || attachmentBudgetNote(attachment, truncated)
+    const fitted = fitAttachmentText(metadata, fallbackBody, attachment, remainingTokens)
+    const part = { type: 'text', text: fitted }
+    content.push(part)
+    if (Number.isFinite(remainingTokens)) {
+      remainingTokens = Math.max(0, remainingTokens - projectedTokens(part))
+    }
+  }
   for (const item of attachments) {
     const attachment = getManagedAttachment({ userId, id: item.id })
     const metadata = metadataLine(attachment)
-    if (attachment.mimeType.startsWith('image/') && attachment.size <= MAX_INLINE_MEDIA_BYTES) {
+    if (attachment.mimeType.startsWith('image/')) {
+      if (
+        attachment.size > MAX_INLINE_MEDIA_BYTES
+        || inlineMediaTokenProjection(attachment, metadata) > remainingTokens
+      ) {
+        pushTextFallback(attachment, metadata, '', false)
+        continue
+      }
       const data = fs.readFileSync(attachment.fullPath).toString('base64')
-      content.push({ type: 'text', text: metadata })
-      content.push({ type: 'image_url', image_url: { url: `data:${attachment.mimeType};base64,${data}` } })
+      const metadataPart = { type: 'text', text: metadata }
+      const imagePart = { type: 'image_url', image_url: { url: `data:${attachment.mimeType};base64,${data}` } }
+      const inlineTokens = projectedTokens(metadataPart) + projectedTokens(imagePart)
+      if (inlineTokens > remainingTokens) {
+        pushTextFallback(attachment, metadata, '', false)
+        continue
+      }
+      content.push(metadataPart, imagePart)
+      if (Number.isFinite(remainingTokens)) remainingTokens -= inlineTokens
       continue
     }
-    const extracted = await extractManagedAttachmentText({ userId, id: attachment.id })
+    const extracted = remainingTokens > 0
+      ? await extractManagedAttachmentText({
+          userId,
+          id: attachment.id,
+          maxChars: extractionCharLimit(remainingTokens),
+        })
+      : ''
     const fallbackText = `${metadata}\n${extracted}`
     if (attachment.mimeType === 'application/pdf' && attachment.size <= MAX_INLINE_MEDIA_BYTES) {
-      const data = fs.readFileSync(attachment.fullPath).toString('base64')
-      content.push({
-        type: 'yma_pdf',
-        filename: attachment.name,
-        file_data: `data:application/pdf;base64,${data}`,
-        fallback_text: fallbackText,
-      })
-      continue
+      if (inlineMediaTokenProjection(attachment, metadata) <= remainingTokens) {
+        const data = fs.readFileSync(attachment.fullPath).toString('base64')
+        const pdfPart = {
+          type: 'yma_pdf',
+          filename: attachment.name,
+          file_data: `data:application/pdf;base64,${data}`,
+          fallback_text: fallbackText,
+        }
+        const inlineTokens = projectedTokens(pdfPart)
+        if (inlineTokens <= remainingTokens) {
+          content.push(pdfPart)
+          if (Number.isFinite(remainingTokens)) remainingTokens -= inlineTokens
+          continue
+        }
+      }
     }
-    content.push({ type: 'text', text: fallbackText })
+    pushTextFallback(attachment, metadata, extracted, !!extracted)
   }
   return { attachments, content }
 }

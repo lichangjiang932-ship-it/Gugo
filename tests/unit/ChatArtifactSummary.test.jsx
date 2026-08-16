@@ -153,7 +153,9 @@ test('generation only hides actions for the streaming assistant and completed me
   try {
     assert.equal(rootElement.querySelectorAll('[data-testid="assistant-message-actions"]').length, 1)
     assert.equal(rootElement.querySelectorAll('.chat-message-actions').length, 2)
-    assert.equal(rootElement.querySelector('.chat-code-block button'), null)
+    const streamingCodeBlock = rootElement.querySelector('.chat-code-block')
+    assert.ok(streamingCodeBlock)
+    assert.equal(streamingCodeBlock.getElementsByTagName('button').length, 0)
     assert.equal(rootElement.querySelector('[data-testid="artifact-open-card"]'), null)
     const activeCopyButtons = rootElement.querySelectorAll('.chat-message-actions button')
     await act(async () => {
@@ -181,7 +183,9 @@ test('generation only hides actions for the streaming assistant and completed me
 
     assert.equal(rootElement.querySelectorAll('[data-testid="assistant-message-actions"]').length, 2)
     assert.equal(rootElement.querySelectorAll('.chat-message-actions').length, 3)
-    assert.ok(rootElement.querySelector('.chat-code-block button'))
+    const completedCodeBlock = rootElement.querySelector('.chat-code-block')
+    assert.ok(completedCodeBlock)
+    assert.equal(completedCodeBlock.getElementsByTagName('button').length, 1)
     assert.ok(rootElement.querySelector('[data-testid="artifact-open-card"]'))
     const userBubble = rootElement.querySelector('[data-testid="user-message-bubble"]')
     assert.ok(userBubble)

@@ -30,6 +30,7 @@ const {
   setAllFilesAccess,
 } = await import('../server/services/localFileAccessService.js')
 const { getWorkspaceTrustStatus } = await import('../server/services/workspaceTrustService.js')
+const { setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
 const { getToolMetadata } = await import('../server/services/toolRegistry.js')
 const { classifyToolRisk } = await import('../server/utils/approvalPolicy.js')
 
@@ -39,6 +40,7 @@ for (const [id, email] of [
   ['local-code-all-files', 'local-code-all-files@example.com'],
 ]) {
   createUser({ id, email })
+  setApprovalMode({ userId: id, mode: 'normal' })
 }
 
 test.after(() => {

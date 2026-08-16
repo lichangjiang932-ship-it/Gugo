@@ -38,6 +38,7 @@ const {
   setAllFilesAccess,
 } = await import('../server/services/localFileAccessService.js')
 const { setWorkspaceTrust } = await import('../server/services/workspaceTrustService.js')
+const { setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
 const { bashExecTool, editFileTool, listDirectoryTool, readFileTool, writeFileTool } = await import('../server/adapters/fsShellTools.js')
 const { dispatchGitTool } = await import('../server/adapters/gitWorkbench.js')
 const { applyPatchTool } = await import('../server/utils/applyPatch.js')
@@ -51,6 +52,20 @@ createUser({ id: 'workspace-user-b', email: 'workspace-b@example.com' })
 createUser({ id: 'grant-lookup-user', email: 'grant-lookup@example.com' })
 createUser({ id: 'file-grant-user', email: 'file-grant@example.com' })
 createUser({ id: 'all-files-grant-user', email: 'all-files-grant@example.com' })
+
+for (const userId of [
+  'local-user-a',
+  'local-user-b',
+  'execution-user',
+  'readonly-execution-user',
+  'workspace-user-a',
+  'workspace-user-b',
+  'grant-lookup-user',
+  'file-grant-user',
+  'all-files-grant-user',
+]) {
+  setApprovalMode({ userId, mode: 'normal' })
+}
 
 setWorkspaceTrust({
   userId: 'local-user-a',

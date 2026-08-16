@@ -8,15 +8,35 @@ $archive = (Resolve-Path -LiteralPath $ArchivePath).Path
 $version = node -p "require('./package.json').version"
 $packageDirectoryName = "gugo-$version-web"
 $temporaryRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
-$verificationRoot = Join-Path $temporaryRoot "gugo-web-release-$version"
+$verificationRunId = [guid]::NewGuid().ToString('N')
+$verificationRoot = Join-Path $temporaryRoot "gugo-web-release-$version-$verificationRunId"
 $packageRoot = Join-Path $verificationRoot $packageDirectoryName
 $dataRoot = Join-Path $verificationRoot 'data'
+$serverStdoutPath = Join-Path $verificationRoot 'server.stdout.log'
+$serverStderrPath = Join-Path $verificationRoot 'server.stderr.log'
 $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
 $listener.Start()
 $port = $listener.LocalEndpoint.Port
 $listener.Stop()
 $server = $null
 $locationPushed = $false
+
+function Read-ServerDiagnostics {
+  $parts = @()
+  foreach ($log in @(
+    @{ Label = 'server stdout'; Path = $serverStdoutPath },
+    @{ Label = 'server stderr'; Path = $serverStderrPath }
+  )) {
+    if (Test-Path -LiteralPath $log.Path) {
+      $content = Get-Content -LiteralPath $log.Path -Raw -ErrorAction SilentlyContinue
+      if (-not [string]::IsNullOrWhiteSpace($content)) {
+        $parts += "$($log.Label):`n$content"
+      }
+    }
+  }
+  if ($parts.Count -eq 0) { return 'The Web release server produced no diagnostics.' }
+  return ($parts -join "`n")
+}
 
 if (Test-Path -LiteralPath $verificationRoot) {
   Remove-Item -LiteralPath $verificationRoot -Recurse -Force
@@ -50,12 +70,13 @@ try {
   $env:SERVER_PORT = "$port"
   $env:APP_DATA_DIR = $dataRoot
   $env:NODE_ENV = 'production'
-  $server = Start-Process -FilePath node -ArgumentList 'server/start.js' -WorkingDirectory $packageRoot -PassThru -WindowStyle Hidden
+  $server = Start-Process -FilePath node -ArgumentList 'server/start.js' -WorkingDirectory $packageRoot -RedirectStandardOutput $serverStdoutPath -RedirectStandardError $serverStderrPath -PassThru -WindowStyle Hidden
 
   $healthy = $false
   for ($attempt = 0; $attempt -lt 120; $attempt += 1) {
     if ($server.HasExited) {
-      throw "The Web release server exited with code $($server.ExitCode)"
+      $server.WaitForExit()
+      throw "The Web release server exited with code $($server.ExitCode)`n$(Read-ServerDiagnostics)"
     }
     try {
       $response = Invoke-WebRequest -Uri "http://127.0.0.1:$port/api/health" -UseBasicParsing -TimeoutSec 2
@@ -67,7 +88,7 @@ try {
       Start-Sleep -Milliseconds 500
     }
   }
-  if (-not $healthy) { throw 'The Web release did not become healthy' }
+  if (-not $healthy) { throw "The Web release did not become healthy`n$(Read-ServerDiagnostics)" }
 } finally {
   if ($server -and -not $server.HasExited) {
     Stop-Process -Id $server.Id -Force

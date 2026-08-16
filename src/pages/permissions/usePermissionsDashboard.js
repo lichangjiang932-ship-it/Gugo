@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   configureWorkspaceOnboardingApi,
   getLocalFileAccessApi,
-  pickLocalDirectoryApi,
   setWorkspaceTrustApi,
 } from '../../lib/localFileAccessClient.js'
 import { probeLocalStorage, probeMedia, probeNotifications, probeStorage } from '../../lib/permissionsProbes.js'
@@ -18,7 +17,6 @@ export default function usePermissionsDashboard(t) {
   const [localFileError, setLocalFileError] = useState(null)
   const [trustBusyPath, setTrustBusyPath] = useState('')
   const [onboardingBusy, setOnboardingBusy] = useState(false)
-  const [pickerBusy, setPickerBusy] = useState(false)
 
   useEffect(() => {
     let alive = true
@@ -35,19 +33,6 @@ export default function usePermissionsDashboard(t) {
     try { setLocalFiles(await setWorkspaceTrustApi({ path: rootPath, trusted })); setLocalFileError(null) }
     catch (error) { setLocalFileError(error?.message || t('localFiles.workspaceTrustFailed')) }
     finally { setTrustBusyPath('') }
-  }
-  const chooseOnboardingDirectory = async () => {
-    setPickerBusy(true)
-    try {
-      const result = await pickLocalDirectoryApi()
-      setLocalFileError(null)
-      return result?.path || ''
-    } catch (error) {
-      setLocalFileError(error?.message || t('permissionsDashboard.onboardingPickerFailed'))
-      return ''
-    } finally {
-      setPickerBusy(false)
-    }
   }
   const configureOnboarding = async (payload) => {
     setOnboardingBusy(true)
@@ -105,8 +90,8 @@ export default function usePermissionsDashboard(t) {
   }, { granted: 0, denied: 0, prompt: 0, unsupported: 0 }), [results])
   const gatedOffCount = GATEABLE_TOOLS.filter((tool) => !isToolEnabled(tool.id)).length
   return {
-    changeWorkspaceTrust, checking, chooseOnboardingDirectory, configureOnboarding, counts, gatedOffCount,
-    isToolEnabled, localFileError, localFiles, onboardingBusy, pickerBusy, requestPermission,
+    changeWorkspaceTrust, checking, configureOnboarding, counts, gatedOffCount,
+    isToolEnabled, localFileError, localFiles, onboardingBusy, requestPermission,
     results, runChecks, toggleTool, toolError, trustBusyPath,
   }
 }

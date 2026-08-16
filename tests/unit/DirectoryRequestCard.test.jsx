@@ -28,6 +28,7 @@ const labels = {
   'taskSteering.authorizeDirectory': '授权此路径',
   'taskSteering.chooseDirectory': '选择目录',
   'taskSteering.directorySecurityHint': '只有明确选择的目录会被授权。',
+  'taskSteering.directoryBrowserSelectCurrent': '选择当前目录',
 }
 const t = (key) => labels[key] || key
 
@@ -38,9 +39,10 @@ async function click(dom, element) {
   })
 }
 
-test('目录请求卡保留建议路径、最小权限并区分手工授权与系统选择器', async () => {
+test('目录请求卡保留建议路径、最小权限并通过内联浏览更新授权路径', async () => {
   const dom = setupDom()
   const decisions = []
+  const browsedPaths = []
   const rootElement = dom.window.document.getElementById('root')
   const root = createRoot(rootElement)
   try {
@@ -50,6 +52,20 @@ test('目录请求卡保留建议路径、最小权限并区分手工授权与�
           request={{ purpose: '读取季度报告', suggested_path: 'D:\\Reports', access_mode: 'read_only' }}
           busy=""
           onAuthorize={(value) => decisions.push(value)}
+          browseDirectories={async (path) => {
+            browsedPaths.push(path)
+            return {
+              directory: {
+                currentPath: path,
+                parentPath: 'D:\\',
+                projectDirectory: 'D:\\Project',
+                defaultOutputDirectory: 'D:\\Output',
+                entries: path === 'D:\\Reports'
+                  ? [{ name: 'Archive', path: 'D:\\Reports\\Archive' }]
+                  : [],
+              },
+            }
+          }}
           t={t}
         />,
       )
@@ -64,10 +80,25 @@ test('目录请求卡保留建议路径、最小权限并区分手工授权与�
 
     await click(dom, buttons.find((button) => button.textContent.includes('授权此路径')))
     await click(dom, buttons.find((button) => button.textContent.includes('选择目录')))
+    assert.ok(rootElement.querySelector('[data-testid="inline-directory-browser"]'))
+    assert.deepEqual(decisions, [{ path: 'D:\\Reports', accessMode: 'read_only' }])
+
+    const archiveButton = [...rootElement.querySelectorAll('button')]
+      .find((button) => button.textContent.includes('Archive'))
+    await click(dom, archiveButton)
+    const selectCurrentButton = [...rootElement.querySelectorAll('button')]
+      .find((button) => button.textContent.includes('选择当前目录'))
+    await click(dom, selectCurrentButton)
+
+    assert.equal(input.value, 'D:\\Reports\\Archive')
+    assert.equal(rootElement.querySelector('[data-testid="inline-directory-browser"]'), null)
+    await click(dom, [...rootElement.querySelectorAll('button')]
+      .find((button) => button.textContent.includes('授权此路径')))
     assert.deepEqual(decisions, [
-      { path: 'D:\\Reports', accessMode: 'read_only', usePicker: false },
-      { path: 'D:\\Reports', accessMode: 'read_only', usePicker: true },
+      { path: 'D:\\Reports', accessMode: 'read_only' },
+      { path: 'D:\\Reports\\Archive', accessMode: 'read_only' },
     ])
+    assert.deepEqual(browsedPaths, ['D:\\Reports', 'D:\\Reports\\Archive'])
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

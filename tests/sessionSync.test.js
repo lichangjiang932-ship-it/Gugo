@@ -22,8 +22,12 @@ const {
 } = await import('../server/services/sessionStore.js')
 const { appendTurnEvent } = await import('../server/services/turnEventStore.js')
 const {
+  buildAssistantModelContext,
   expandStoredMessages,
   materializeManagedAttachmentMessages,
+  selectAttachmentIdsForModelRequest,
+  selectStoredMessagesAfterCompaction,
+  TURN_TOOL_CONTEXT_LIMITS,
 } = await import('../server/services/turnMessageContext.js')
 const { normalizeSessionMessagesForServer } = await import('../src/lib/sessionClient.js')
 const { normalizeServerSessionSnapshot } = await import('../src/lib/turnClient.js')
@@ -216,6 +220,105 @@ test('imported tool results survive snapshot editing and full-session replacemen
   assert.match(results[0].content, /README contents/)
 })
 
+test('successful artifact calls retain a lightweight reference instead of 70k HTML source', () => {
+  const tailMarker = '<!-- REVISION_SOURCE_TAIL: keep this exact footer -->'
+  const html = `<!doctype html><html><body>${'x'.repeat(70_000)}${tailMarker}</body></html>`
+  const argumentsText = JSON.stringify({ title: 'Large page', html })
+  assert.ok(argumentsText.length > TURN_TOOL_CONTEXT_LIMITS.maxArgumentChars)
+
+  const modelContext = buildAssistantModelContext({
+    turnId: 'large-html-turn',
+    checkpointMessages: [{
+      role: 'assistant',
+      content: '',
+      tool_calls: [{
+        id: 'large-html-call',
+        type: 'function',
+        function: { name: 'create_html_app', arguments: argumentsText },
+      }],
+    }, {
+      role: 'tool',
+      tool_call_id: 'large-html-call',
+      name: 'create_html_app',
+      content: JSON.stringify({
+        ok: true,
+        artifactId: 'large-html-artifact',
+        filename: 'large-page.html',
+      }),
+    }],
+    baselineToolCallIds: new Set(),
+    artifactIds: ['large-html-artifact'],
+  })
+
+  const retainedArguments = modelContext.toolTrace[0].tool_calls[0].function.arguments
+  const reference = JSON.parse(retainedArguments)
+  assert.deepEqual(reference, {
+    __artifactReference: true,
+    artifactId: 'large-html-artifact',
+    filename: 'large-page.html',
+    type: 'html',
+    title: 'Large page',
+    source: {
+      omittedFromHistory: true,
+      readTool: 'read_artifact_source',
+      artifact_id: 'large-html-artifact',
+      instruction: 'Call read_artifact_source from offset 0 through complete=true before revising this artifact.',
+    },
+  })
+  assert.equal(JSON.stringify(modelContext.toolTrace).includes(tailMarker), false)
+  assert.ok(JSON.stringify(modelContext.toolTrace).length < 2_000)
+
+  const expanded = expandStoredMessages([{
+    id: 'large-html-assistant',
+    role: 'assistant',
+    content: '网页已生成。',
+    modelContext,
+  }])
+  const expandedCall = expanded.find((message) => message.tool_calls)?.tool_calls[0]
+  assert.deepEqual(JSON.parse(expandedCall.function.arguments), reference)
+})
+
+test('artifact source page contents are omitted from persisted tool trace', () => {
+  const sourceMarker = 'SOURCE_PAGE_MUST_NOT_PERSIST'
+  const modelContext = buildAssistantModelContext({
+    turnId: 'artifact-source-read-turn',
+    checkpointMessages: [{
+      role: 'assistant',
+      content: '',
+      tool_calls: [{
+        id: 'read-source-call',
+        type: 'function',
+        function: {
+          name: 'read_artifact_source',
+          arguments: JSON.stringify({ artifact_id: 'artifact-1', offset: 0, limit: 16000 }),
+        },
+      }],
+    }, {
+      role: 'tool',
+      tool_call_id: 'read-source-call',
+      name: 'read_artifact_source',
+      content: JSON.stringify({
+        ok: true,
+        artifactId: 'artifact-1',
+        filename: 'page.html',
+        sourceFormat: 'artifact_tool_arguments_json',
+        offset: 0,
+        returnedChars: 16000,
+        totalChars: 70000,
+        complete: false,
+        nextOffset: 16000,
+        content: sourceMarker.repeat(500),
+      }),
+    }],
+    baselineToolCallIds: new Set(),
+  })
+
+  const retainedResult = JSON.parse(modelContext.toolTrace[1].content)
+  assert.equal(retainedResult.sourceOmittedFromHistory, true)
+  assert.equal(Object.hasOwn(retainedResult, 'content'), false)
+  assert.equal(JSON.stringify(modelContext.toolTrace).includes(sourceMarker), false)
+})
+
 test('managed attachments stay lightweight in history and materialize only for a model request', async () => {
   const stored = [{
     id: 'attachment-user',
@@ -275,6 +378,51 @@ test('managed attachments stay lightweight in history and materialize only for a
   assert.doesNotMatch(JSON.stringify(history), /base64,/)
 })
 
+test('managed attachments stay as references when a provider request does not need binary media', async () => {
+  const history = expandStoredMessages([{
+    id: 'prior-attachment-user',
+    role: 'user',
+    content: 'Summarize the diagram.',
+    modelContext: {
+      modelContent: 'Summarize the diagram.',
+      attachments: [{
+        id: 'attachment-reference-only',
+        name: 'diagram.png',
+        mimeType: 'image/png',
+        size: 12,
+        sha256: 'abc123',
+        uri: 'attachment://attachment-reference-only',
+      }],
+    },
+  }])
+  let prepared = 0
+  const providerMessages = await materializeManagedAttachmentMessages(history, {
+    userId: 'user-1',
+    sessionId: 'session-1',
+    inlineAttachmentIds: [],
+    prepareAttachments: async () => {
+      prepared += 1
+      throw new Error('reference-only requests must not read attachment bytes')
+    },
+  })
+
+  assert.equal(prepared, 0)
+  assert.doesNotMatch(JSON.stringify(providerMessages), /base64,/)
+  assert.match(String(providerMessages[0].content), /attachment:\/\/attachment-reference-only/)
+  assert.equal('managedAttachments' in providerMessages[0], false)
+
+  assert.deepEqual(selectAttachmentIdsForModelRequest(history, {
+    prompt: 'Now explain the implementation choices.',
+  }), [])
+  assert.deepEqual(selectAttachmentIdsForModelRequest(history, {
+    prompt: 'What is shown in the same image?',
+  }), ['attachment-reference-only'])
+  assert.deepEqual(selectAttachmentIdsForModelRequest(history, {
+    currentAttachmentIds: ['new-upload'],
+    prompt: 'Analyze this upload.',
+  }), ['new-upload'])
+})
+
 test('server snapshots restore user attachments from persisted model context', () => {
   const snapshot = normalizeServerSessionSnapshot({
     complete: true,
@@ -304,6 +452,109 @@ test('server snapshots restore user attachments from persisted model context', (
     sha256: 'pdf-hash',
     downloadUrl: '/api/attachments/attachment-2/content',
   }])
+})
+
+test('compaction boundary selects only the retained canonical tail', () => {
+  const stored = [
+    { id: 'archived-user', role: 'user', content: 'old request' },
+    { id: 'archived-assistant', role: 'assistant', content: 'old reply' },
+    { id: 'retained-user', role: 'user', content: 'current retained objective' },
+    { id: 'retained-assistant', role: 'assistant', content: 'current reply' },
+  ]
+
+  assert.deepEqual(
+    selectStoredMessagesAfterCompaction(stored, { firstKeptMessageId: 'retained-user' })
+      .map((message) => message.id),
+    ['retained-user', 'retained-assistant'],
+  )
+  assert.deepEqual(
+    selectStoredMessagesAfterCompaction(stored, { lastCompactedMessageId: 'archived-assistant' })
+      .map((message) => message.id),
+    ['retained-user', 'retained-assistant'],
+  )
+  assert.equal(stored.length, 4, 'canonical UI/audit history must remain intact')
+})
+
+test('unmatched compaction boundary keeps messages after the archive reference', () => {
+  const stored = [
+    { id: 'archived-user', role: 'user', content: 'old request must stay archived' },
+    { id: 'archived-assistant', role: 'assistant', content: 'old reply must stay archived' },
+    { id: 'archive-reference', role: 'assistant', content: 'archive reference' },
+    { id: 'current-turn:user', role: 'user', content: 'current request must survive' },
+  ]
+
+  assert.deepEqual(
+    selectStoredMessagesAfterCompaction(stored, {
+      firstKeptMessageId: 'missing-retained-message',
+      lastCompactedMessageId: 'missing-archived-message',
+      referenceMessageId: 'archive-reference',
+    }).map((message) => message.id),
+    ['current-turn:user'],
+  )
+  assert.deepEqual(
+    selectStoredMessagesAfterCompaction(stored, {
+      firstKeptMessageId: 'missing-retained-message',
+      lastCompactedMessageId: 'missing-archived-message',
+    }),
+    [],
+    'without any trustworthy anchor, archived history must remain excluded',
+  )
+  assert.equal(stored.length, 4, 'canonical UI/audit history must remain intact')
+})
+
+test('assistant model context and server snapshots preserve total turn duration', () => {
+  const modelContext = buildAssistantModelContext({
+    turnId: 'timed-turn',
+    checkpointMessages: [],
+    baselineToolCallIds: new Set(),
+    turnStartedAt: 1_000,
+    turnCompletedAt: 4_250,
+  })
+
+  assert.equal(modelContext.turnStartedAt, 1_000)
+  assert.equal(modelContext.turnCompletedAt, 4_250)
+  assert.equal(modelContext.latency, 3_250)
+
+  const snapshot = normalizeServerSessionSnapshot({
+    complete: true,
+    messages: [{
+      id: 'timed-assistant',
+      role: 'assistant',
+      content: 'Finished.',
+      createdAt: 4_250,
+      modelContext: {
+        ...modelContext,
+        latency: undefined,
+      },
+    }],
+  })
+
+  assert.equal(snapshot.messages[0].meta.turnStartedAt, 1_000)
+  assert.equal(snapshot.messages[0].meta.turnCompletedAt, 4_250)
+  assert.equal(snapshot.messages[0].meta.latency, 3_250)
+})
+
+test('legacy server snapshots derive turn duration from matching user and assistant messages', () => {
+  const snapshot = normalizeServerSessionSnapshot({
+    complete: true,
+    messages: [{
+      id: 'legacy-turn:user',
+      role: 'user',
+      content: 'Start.',
+      createdAt: 10_000,
+      modelContext: { turnId: 'legacy-turn' },
+    }, {
+      id: 'legacy-turn:assistant',
+      role: 'assistant',
+      content: 'Finished.',
+      createdAt: 13_750,
+      modelContext: { turnId: 'legacy-turn' },
+    }],
+  })
+
+  assert.equal(snapshot.messages[1].meta.turnStartedAt, 10_000)
+  assert.equal(snapshot.messages[1].meta.turnCompletedAt, 13_750)
+  assert.equal(snapshot.messages[1].meta.latency, 3_750)
 })
 
 test('session mutation routes return 409 for stale revisions and active turns', { concurrency: false }, async () => {

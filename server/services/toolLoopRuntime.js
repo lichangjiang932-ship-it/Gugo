@@ -17,22 +17,59 @@ import { writeToolAudit } from '../utils/audit.js'
 import { isContextLengthError } from '../adapters/modelProxy.js'
 import { callModelWithContextRecovery } from './contextCompactionRuntime.js'
 import { ensureSafetySystemMessages } from './promptCompiler.js'
-import { allowedArtifactTools, isFileArtifactTool, parseSkillIdFromPrompt } from './artifactIntent.js'
+import {
+  allowedArtifactTools,
+  findAdjacentDeliveredArtifacts,
+  findExplicitlyReferencedDeliveredArtifacts,
+  isArtifactRevisionRequest,
+  isExplicitCodeSnippetRequest,
+  isFileArtifactTool,
+  parseSkillIdFromPrompt,
+  resolveArtifactDeliveryTargets,
+  resolveArtifactRevisionMode,
+} from './artifactIntent.js'
 import { restoreDirectoryAuthorizationToolSpecs } from './turnToolSpecs.js'
 import { createSubagentApprovalContext, rememberApprovedSubagentCall } from './subagentRuntime.js'
-import { buildAssistantToolCallsMessage, buildToolResultMessage, buildToolResultMessages, createToolLoopGuard, executeToolWithRetry, isSubstantiveToolCall, mapWithConcurrency, normalizeToolError, normalizeToolResult, normalizeToolCalls, resolveToolResultMaxChars, validateToolCall } from '../utils/toolCallHarness.js'
+import { buildAssistantToolCallsMessage, buildToolResultMessage, buildToolResultMessageBundle, createToolLoopGuard, executeToolWithRetry, isSubstantiveToolCall, mapWithConcurrency, normalizeToolError, normalizeToolResult, normalizeToolCalls, resolveToolResultMaxChars, stripEphemeralToolMediaMessages, validateToolCall } from '../utils/toolCallHarness.js'
 import { extractTextToolCalls } from '../utils/textToolCalls.js'
 import { dispatchHooks } from './hooksService.js'
 import { replaceRuntimeCapabilityBlock } from './runtimeCapabilities.js'
 import { hasMutationExecutionIntent, isTextDeliverableRequest, shouldRequireExecution } from '../utils/executionIntent.js'
 import { observeToolCalls, recordToolProgress, restoreToolProgress, serializeToolProgress, toolProgressPayload } from '../utils/toolProgress.js'
 import { listTurnArtifacts } from './turnArtifactStore.js'
+import { createModelPhaseHeartbeat, DEFAULT_MODEL_PHASE_HEARTBEAT_MS } from './modelPhaseHeartbeat.js'
+import { getDefaultOutputDirectory, getProjectDirectory } from './localFileAccessService.js'
 
 import { withLogContext } from '../utils/logger.js'
 import { createRepeatCallGuard } from '../utils/repeatCallGuard.js'
 
 const DELIVERABLE_SELECTION_GUARD_MARKER = '[FINAL DELIVERABLE SELECTION REQUIRED]'
 const MAX_DELIVERABLE_SELECTION_RETRIES = 2
+const SOURCE_HANDOFF_GUARD_MARKER = '[SOURCE HANDOFF BLOCKED]'
+const MAX_SOURCE_HANDOFF_RETRIES = 1
+
+function sourceHandoffViolation(text) {
+  const value = String(text || '').trim()
+  if (!value) return null
+
+  // Execution turns may explain what happened, but they must never hand a
+  // source file back to the user as a fenced snippet or raw document.
+  if (/```[^\n]*\n[\s\S]*?```/.test(value)) return 'fenced_code'
+  if (/<(?:!doctype\s+html|html\b|head\b|body\b|script\b|style\b)/i.test(value)) return 'document_source'
+
+  const manualHandoff = [
+    /\b(?:copy|paste)\b[\s\S]{0,80}\b(?:this|the following|code|source|snippet)\b/i,
+    /\b(?:save|create|rename|convert|run|execute)\b[\s\S]{0,60}\b(?:this|the following|the code|the script|the command)\b/i,
+    /(?:请|你需要|需要你|你可以|自行|手动)[\s\S]{0,60}(?:运行|执行|保存|复制|粘贴|创建|新建|改名|转换|修改(?:文件)?(?:后缀|扩展名))/i,
+    /(?:复制|粘贴)[\s\S]{0,60}(?:代码|源码|脚本)/i,
+  ]
+  if (manualHandoff.some((pattern) => pattern.test(value))) return 'manual_handoff'
+
+  const sourceLikeLines = value.split(/\r?\n/).filter((line) => (
+    /^\s*(?:import\s+.+|export\s+.+|(?:const|let|var)\s+[\w$]+\s*=|(?:async\s+)?function\s+\w+\s*\(|class\s+\w+|def\s+\w+\s*\(|#include\s*[<"]|public\s+static\s+|<\/?[a-z][^>]*>|[.#][\w-]+\s*\{)/i.test(line)
+  )).length
+  return value.length >= 600 && sourceLikeLines >= 4 ? 'source_like' : null
+}
 
 function normalizeArtifactIdList(ids) {
   return [...new Set((Array.isArray(ids) ? ids : [])
@@ -135,6 +172,137 @@ export {
   SERVER_TOOL_SPECS, selectJobToolSpecs, selectToolSpecs, persistLocalToolArtifacts, buildSubagentRequest, inheritedJobSkillIds, buildJobToolIdempotencyKey, scopeTextToolCallIds,
 }
 
+function synchronizeCheckpointToolCallMessages(messages, calls) {
+  const argumentsById = new Map((Array.isArray(calls) ? calls : [])
+    .map((call) => [String(call?.id || '').trim(), String(call?.argumentsText || '{}')])
+    .filter(([id]) => id))
+  if (argumentsById.size === 0) return messages
+  return (Array.isArray(messages) ? messages : []).map((message) => {
+    if (message?.role !== 'assistant' || !Array.isArray(message.tool_calls)) return message
+    let changed = false
+    const toolCalls = message.tool_calls.map((toolCall) => {
+      const argumentsText = argumentsById.get(String(toolCall?.id || '').trim())
+      if (argumentsText == null || toolCall?.function?.arguments === argumentsText) return toolCall
+      changed = true
+      return {
+        ...toolCall,
+        function: { ...toolCall.function, arguments: argumentsText },
+      }
+    })
+    return changed ? { ...message, tool_calls: toolCalls } : message
+  })
+}
+
+function parseHistoricalToolObject(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value
+  if (typeof value !== 'string' || !value.trim()) return null
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function normalizeRepeatedUserRequest(value) {
+  const text = typeof value === 'string'
+    ? value
+    : Array.isArray(value)
+      ? value
+          .filter((part) => ['text', 'input_text'].includes(part?.type) && typeof part?.text === 'string')
+          .map((part) => part.text)
+          .join('\n')
+      : ''
+  return text.trim().replace(/\s+/g, ' ')
+}
+
+function recoverPriorLocalMutationTargets(messages, currentUserMessage) {
+  const history = Array.isArray(messages) ? messages : []
+  const currentUserIndex = history.lastIndexOf(currentUserMessage)
+  if (currentUserIndex <= 0) return { mutationTargets: [], deletionTargets: [] }
+  let priorUserIndex = -1
+  for (let index = currentUserIndex - 1; index >= 0; index -= 1) {
+    if (history[index]?.role === 'user') {
+      priorUserIndex = index
+      break
+    }
+  }
+  const currentRequest = normalizeRepeatedUserRequest(currentUserMessage?.content)
+  if (priorUserIndex < 0
+    || !currentRequest
+    || currentRequest !== normalizeRepeatedUserRequest(history[priorUserIndex]?.content)) {
+    return { mutationTargets: [], deletionTargets: [] }
+  }
+
+  const callsById = new Map()
+  const resultsById = new Map()
+  const duplicateCallIds = new Set()
+  const duplicateResultIds = new Set()
+  for (const message of history.slice(priorUserIndex + 1, currentUserIndex)) {
+    if (message?.role === 'assistant' && Array.isArray(message.tool_calls)) {
+      for (const rawCall of message.tool_calls) {
+        const id = String(rawCall?.id || '').trim()
+        const name = String(rawCall?.function?.name || rawCall?.name || '').trim()
+        const args = parseHistoricalToolObject(rawCall?.function?.arguments ?? rawCall?.arguments ?? rawCall?.args)
+        if (!id || !name || !args) continue
+        if (callsById.has(id)) duplicateCallIds.add(id)
+        else callsById.set(id, { id, name, args })
+      }
+    } else if (message?.role === 'tool') {
+      const id = String(message?.tool_call_id || '').trim()
+      const result = parseHistoricalToolObject(message.content)
+      if (!id || !result) continue
+      if (resultsById.has(id)) duplicateResultIds.add(id)
+      else resultsById.set(id, { name: String(message?.name || '').trim(), result })
+    }
+  }
+
+  const mutationTargets = new Set()
+  const deletionTargets = new Set()
+  for (const [id, call] of callsById) {
+    if (duplicateCallIds.has(id)
+      || duplicateResultIds.has(id)
+      || !isMutationExecutionCall(call)
+      || !isLocalMutationCall(call)) continue
+    const paired = resultsById.get(id)
+    if (!paired
+      || paired.name !== call.name
+      || paired.result?.ok !== true
+      || !isSuccessfulToolResult(paired.result)) continue
+    const deleted = looksLikeDeletionCommand(call?.args?.command)
+      ? staticDeletionTargets(call, paired.result)
+      : null
+    if (deleted?.size) {
+      for (const target of deleted) deletionTargets.add(target)
+    } else {
+      for (const target of extractMutationTargets(call, paired.result)) mutationTargets.add(target)
+    }
+  }
+  return { mutationTargets: [...mutationTargets], deletionTargets: [...deletionTargets] }
+}
+
+function normalizeCompactionRecovery(value) {
+  const archiveId = String(value?.archiveId || '').trim()
+  if (!archiveId) return null
+  const firstKeptMessageId = String(value?.firstKeptMessageId || '').trim()
+  const lastCompactedMessageId = String(value?.lastCompactedMessageId || '').trim()
+  return {
+    archiveId,
+    ...(firstKeptMessageId ? { firstKeptMessageId } : {}),
+    ...(lastCompactedMessageId ? { lastCompactedMessageId } : {}),
+  }
+}
+
+function mergeCompactionRecovery(previous, next) {
+  const normalizedNext = normalizeCompactionRecovery(next)
+  if (!normalizedNext) return normalizeCompactionRecovery(previous)
+  return {
+    ...normalizeCompactionRecovery(previous),
+    ...normalizedNext,
+    archiveId: normalizedNext.archiveId,
+  }
+}
+
 export async function runToolsLoop({
   job,
   step,
@@ -173,6 +341,7 @@ export async function runToolsLoop({
   intentMode = 'auto',
   toolRetryMaxAttempts = 3,
   toolRetryBaseDelayMs = 120,
+  modelHeartbeatIntervalMs = DEFAULT_MODEL_PHASE_HEARTBEAT_MS,
 }) {
   // 文件产物工具按本次任务意图裁剪。同一份 spec 既喂给模型,也用于 validateToolCall ——
   // 这样"模型看不到"和"调了也会被拒"是同一个事实,不会两边漂移。
@@ -197,9 +366,190 @@ export async function runToolsLoop({
   const artifactAuthorizationText = String(
     job?.userPrompt || currentUserMessage?.content || job?.prompt || '',
   )
-  const authorizedArtifactTools = allowedArtifactTools(artifactAuthorizationText, {
+  const adjacentArtifacts = findAdjacentDeliveredArtifacts(messages)
+  const explicitlyReferencedArtifacts = findExplicitlyReferencedDeliveredArtifacts(
+    messages,
+    artifactAuthorizationText,
+  )
+  // An exact ID or complete filename in the current request is stronger than
+  // the implicit "most recently delivered" default. This matters after a
+  // failed retry or when the user deliberately returns to an older artifact.
+  const discoveredPriorArtifacts = explicitlyReferencedArtifacts.length > 0
+    ? explicitlyReferencedArtifacts
+    : adjacentArtifacts
+  const artifactDelivery = resolveArtifactDeliveryTargets(artifactAuthorizationText, {
+    priorArtifacts: discoveredPriorArtifacts,
+    priorArtifactTypes: [...new Set(discoveredPriorArtifacts.map((artifact) => artifact.type))],
+    hasExplicitManagedArtifactReference: explicitlyReferencedArtifacts.length > 0,
     skillId: explicitSkillId || skillId,
   })
+  const localArtifactPublicationAllowed = !['workspace_file', 'mixed'].includes(artifactDelivery.target)
+  // A complete filename can name either a local/workspace file or a managed
+  // artifact. Explicit local-file/no-artifact wording wins: do not bind an
+  // adjacent artifact merely because it happens to have the same filename.
+  const workspaceArtifactTypes = new Set(artifactDelivery.workspaceArtifactTypes)
+  const priorArtifacts = discoveredPriorArtifacts.filter((artifact) => !workspaceArtifactTypes.has(artifact.type))
+  const priorArtifactTypes = [...new Set(priorArtifacts.map((artifact) => artifact.type))]
+  const requestedArtifactRevisionMode = resolveArtifactRevisionMode(artifactAuthorizationText)
+  const artifactRevisionMode = priorArtifacts.length > 0
+    ? requestedArtifactRevisionMode
+    : 'unspecified'
+  const normalizeArtifactReplacementCall = (call) => {
+    const name = String(call?.name || '').trim()
+    if (!isFileArtifactTool(name) || artifactRevisionMode !== 'replace_original') return call
+    const matching = priorArtifacts.filter((artifact) => artifact.toolName === name)
+    const args = call?.args && typeof call.args === 'object' && !Array.isArray(call.args)
+      ? call.args
+      : {}
+    // Only fill an omitted target. A non-empty wrong target must reach the
+    // authorization guard unchanged and be rejected, never silently retargeted.
+    if (matching.length !== 1 || String(args.replace_artifact_id || '').trim()) return call
+    const normalizedArgs = { ...args, replace_artifact_id: matching[0].id }
+    return {
+      ...call,
+      args: normalizedArgs,
+      argumentsText: JSON.stringify(normalizedArgs),
+    }
+  }
+  const artifactReplacementValidationError = (name, args) => {
+    if (!isFileArtifactTool(name)) return null
+    const replacementId = String(args?.replace_artifact_id || '').trim()
+    const matching = priorArtifacts.filter((artifact) => artifact.toolName === name)
+    const authorizedIds = new Set(matching.map((artifact) => String(artifact.id)))
+    if (artifactRevisionMode === 'conflict') {
+      return {
+        ok: false,
+        code: 'artifact_revision_mode_conflict',
+        error: 'The user gave conflicting instructions about replacing the original versus creating a new file.',
+        retryable: false,
+        hint: 'Call request_clarification before any artifact generator.',
+      }
+    }
+    if (artifactRevisionMode === 'replace_original') {
+      if (!replacementId && matching.length > 1) {
+        return {
+          ok: false,
+          code: 'artifact_replacement_target_ambiguous',
+          error: `More than one authorized ${name} artifact could be replaced in place.`,
+          retryable: false,
+          hint: 'Call request_clarification so the user can identify the exact original file.',
+        }
+      }
+      if (!replacementId && matching.length === 1) {
+        return {
+          ok: false,
+          code: 'artifact_replacement_required',
+          error: `This in-place revision must set replace_artifact_id to the exact authorized artifact ID: ${matching[0].id}.`,
+          retryable: true,
+          requiredArtifactId: matching[0].id,
+        }
+      }
+      if (!replacementId || !authorizedIds.has(replacementId)) {
+        return {
+          ok: false,
+          code: 'artifact_replacement_not_authorized',
+          error: 'The requested replacement target was not explicitly authorized by the current user request.',
+          retryable: false,
+          authorizedArtifactIds: [...authorizedIds],
+        }
+      }
+      return null
+    }
+    if (replacementId) {
+      return {
+        ok: false,
+        code: 'artifact_replacement_not_authorized',
+        error: artifactRevisionMode === 'create_copy'
+          ? 'The user explicitly requested a new file, so the original artifact must not be replaced.'
+          : 'In-place replacement was not explicitly authorized by the current user request.',
+        retryable: false,
+        hint: 'Omit replace_artifact_id and create a new artifact.',
+      }
+    }
+    return null
+  }
+  const exactWorkspaceTargetPaths = artifactDelivery.localFileTargets
+    .map((target) => String(target?.path || '').trim())
+    .filter(Boolean)
+  const exactWorkspaceTargetConstraint = requestedArtifactRevisionMode === 'replace_original'
+    && ['workspace_file', 'mixed'].includes(artifactDelivery.target)
+    && exactWorkspaceTargetPaths.length > 0
+  const isManagedArtifactStorePath = (candidate) => (
+    /(?:^|[\\/])\.artifacts(?:[\\/]|$)/i.test(String(candidate || '').trim())
+  )
+  const isAllowedWorkspaceTarget = (candidate) => exactWorkspaceTargetPaths.some((target) => (
+    targetsMatch(candidate, target)
+  ))
+  const workspaceTargetValidationError = (name, args = {}) => {
+    if (!exactWorkspaceTargetConstraint) return null
+    const call = { name, args }
+    const fileMutationTool = ['write_file', 'edit_file', 'multi_edit', 'apply_patch', 'patch_file'].includes(name)
+    const commandMutationTool = isCommandExecutionTool(call) && isLocalMutationCall(call)
+    if (!fileMutationTool && !commandMutationTool) return null
+
+    const candidatePaths = fileMutationTool
+      ? [
+        args?.path,
+        args?.file_path,
+        args?.filePath,
+        ...(Array.isArray(args?.edits)
+          ? args.edits.flatMap((edit) => [edit?.path, edit?.file_path, edit?.filePath])
+          : []),
+      ]
+      : [...extractMutationTargets(call, null)]
+    if (fileMutationTool && (name === 'apply_patch' || name === 'patch_file')) {
+      const patchText = String(args?.patch || args?.diff || '')
+      for (const match of patchText.matchAll(/^\*\*\* (?:Add|Update|Delete) File:\s*(.+)$/gm)) {
+        candidatePaths.push(match[1])
+      }
+    }
+    const concretePaths = [...new Set(candidatePaths
+      .map((candidate) => String(candidate || '').trim())
+      .filter(Boolean))]
+    const unprovenCommandTarget = commandMutationTool && (
+      concretePaths.length === 0 || concretePaths.includes(PROJECT_SCOPE_TARGET)
+    )
+    const disallowedPaths = concretePaths.filter((candidate) => (
+      candidate === PROJECT_SCOPE_TARGET || !isAllowedWorkspaceTarget(candidate)
+    ))
+    if (!unprovenCommandTarget && disallowedPaths.length === 0) return null
+    const managedStoreMismatch = disallowedPaths.some(isManagedArtifactStorePath)
+    return {
+      ok: false,
+      code: managedStoreMismatch
+        ? 'workspace_target_managed_store_mismatch'
+        : unprovenCommandTarget
+          ? 'workspace_mutation_target_unproven'
+          : 'workspace_target_mismatch',
+      error: managedStoreMismatch
+        ? 'The user requested an exact local/workspace file, but this call would write to Gugo managed artifact storage instead.'
+        : unprovenCommandTarget
+          ? 'The user requested an exact local/workspace file, but this command does not statically prove every file it may modify.'
+          : 'The user requested an exact local/workspace file, but this call would modify a different path.',
+      retryable: true,
+      allowedPaths: exactWorkspaceTargetPaths,
+      rejectedPaths: disallowedPaths,
+      hint: commandMutationTool
+        ? 'Use expected_outputs or a statically recognizable literal write target, and make every target exactly match the requested local/workspace file.'
+        : 'Use only the exact requested local/workspace path. Do not create a sibling copy or substitute a same-named file from .artifacts.',
+    }
+  }
+  const codeSnippetRequested = isExplicitCodeSnippetRequest(artifactAuthorizationText)
+  const artifactIntentOptions = {
+    skillId: explicitSkillId || skillId,
+    priorArtifacts,
+    priorArtifactTypes,
+    hasExplicitManagedArtifactReference: explicitlyReferencedArtifacts.length > 0,
+  }
+  const explicitArtifactTools = allowedArtifactTools(artifactAuthorizationText, artifactIntentOptions)
+  const authorizedArtifactTools = allowedArtifactTools(artifactAuthorizationText, artifactIntentOptions)
+  const inheritsAdjacentArtifact = explicitArtifactTools.size === 0
+    && authorizedArtifactTools.size > 0
+  const revisesAdjacentArtifact = priorArtifacts.length > 0
+    && authorizedArtifactTools.size > 0
+    && (inheritsAdjacentArtifact
+      || artifactRevisionMode !== 'unspecified'
+      || isArtifactRevisionRequest(artifactAuthorizationText))
   // Planning and verification consume an existing deliverable. They must not
   // manufacture another one merely because the original prompt names a format.
   const artifactDeliveryStep = !['plan', 'verify', 'finalize'].includes(String(step?.kind || ''))
@@ -208,6 +558,9 @@ export async function runToolsLoop({
     prompt: intentText,
     userPrompt: artifactAuthorizationText,
     previousUserPrompt: String(job?.previousUserPrompt || ''),
+    priorArtifacts,
+    priorArtifactTypes,
+    hasExplicitManagedArtifactReference: explicitlyReferencedArtifacts.length > 0,
     skillId: explicitSkillId || skillId,
     specs: Array.isArray(toolSpecs) ? toolSpecs : SERVER_TOOL_SPECS,
     origin: job?.origin,
@@ -225,7 +578,8 @@ export async function runToolsLoop({
     ? restoredState.directoryAuthorizationResolution
     : null
   const skillArtifactTools = explicitSkillId
-    ? allowedArtifactTools('', { skillId: explicitSkillId })
+    ? new Set([...allowedArtifactTools('', { skillId: explicitSkillId })]
+        .filter((name) => authorizedArtifactTools.has(name)))
     : new Set()
   // A slash artifact skill is the delivery contract for this run. Keep the
   // completion guard on that one generator; content words such as "report"
@@ -305,6 +659,9 @@ export async function runToolsLoop({
   // when routing produced no usable tool; otherwise prose such as "done" would
   // be accepted precisely when the harness cannot perform the requested work.
   const requiresExecutionEvidence = directExecutionRequested && !textDeliverableOnly
+  const requiresSourceHandoffProtection = !codeSnippetRequested && (
+    directExecutionRequested || requiresPersistedArtifact || revisesAdjacentArtifact
+  )
   let availableVerificationToolNames = activeToolSpecs
     .map(toolNameFromSpec)
     .filter((name) => VERIFICATION_TOOLS.has(name) || isCommandExecutionTool(name))
@@ -322,12 +679,24 @@ export async function runToolsLoop({
   // merely to prepare their next request. Explicit compaction can still request
   // a semantic summary; automatic recovery uses the deterministic archive.
   const semanticSummary = false
+  let outputDirectoryContext = {}
+  try {
+    outputDirectoryContext = {
+      defaultOutputDirectory: getDefaultOutputDirectory({ userId: job?.userId || null }),
+      projectDirectory: getProjectDirectory({ userId: job?.userId || null }),
+    }
+  } catch {
+    // Prompt context is best-effort and must never block a turn.
+  }
   let convo = ensureSafetySystemMessages(
-    Array.isArray(restoredState?.messages) ? [...restoredState.messages] : [...messages],
+    Array.isArray(restoredState?.messages)
+      ? stripEphemeralToolMediaMessages(restoredState.messages)
+      : [...messages],
   )
   convo = replaceRuntimeCapabilityBlock(convo, {
     toolSpecs: activeToolSpecs,
     approvalMode,
+    ...outputDirectoryContext,
   })
   const hasRuntimeMarker = (marker) => convo.some((message) => (
     message?.role === 'system' && String(message?.content || '').includes(marker)
@@ -336,6 +705,40 @@ export async function runToolsLoop({
     || convo.some((message) => message?.role === 'system' && String(message?.content || '').includes(DIRECTORY_REVIEW_GUARD_MARKER))
   let hasSuccessfulRepresentativeRead = successfulReadFileInMessages(convo)
   const artifactIds = normalizeArtifactIdList(restoredState?.artifactIds)
+  const protectTerminalText = (text, { incomplete = false } = {}) => {
+    const value = String(text || '')
+    if (!requiresSourceHandoffProtection || !sourceHandoffViolation(value)) return value
+
+    if (artifactIds.length > 0) {
+      return incomplete
+        ? '文件已通过工具生成并保存当前进度，但任务尚未完整结束。已隐藏模型异常收尾时返回的代码内容。'
+        : '文件已通过工具生成并完成交付。已隐藏模型返回的代码内容。'
+    }
+    return incomplete
+      ? '任务已保存当前执行进度，但尚未完整结束。已隐藏模型异常收尾时返回的代码内容。'
+      : '任务已通过工具执行并完成必要验证。已隐藏模型返回的代码内容。'
+  }
+  const protectClarification = (clarification) => {
+    if (!requiresSourceHandoffProtection || !clarification || typeof clarification !== 'object') {
+      return clarification
+    }
+    const safeQuestion = protectTerminalText(
+      clarification.question || clarification.message || clarification.why,
+      { incomplete: true },
+    ) || '需要你补充信息后才能继续。'
+    const seen = new WeakSet()
+    const protectValue = (value) => {
+      if (typeof value === 'string') {
+        return sourceHandoffViolation(value) ? safeQuestion : value
+      }
+      if (!value || typeof value !== 'object') return value
+      if (seen.has(value)) return null
+      seen.add(value)
+      if (Array.isArray(value)) return value.map(protectValue)
+      return Object.fromEntries(Object.entries(value).map(([key, nested]) => [key, protectValue(nested)]))
+    }
+    return { ...protectValue(clarification), question: safeQuestion }
+  }
   let deliveryArtifactSelectionExplicit = Object.hasOwn(restoredState || {}, 'deliveryArtifactIds')
   let deliveryArtifactIds = deliveryArtifactSelectionExplicit
     ? normalizeArtifactIdList(restoredState.deliveryArtifactIds)
@@ -423,12 +826,17 @@ export async function runToolsLoop({
       sessionId: job.sessionId,
       turnId: job.id,
     }).map((artifact) => artifact.id))
+    if (artifactRevisionMode === 'replace_original') {
+      for (const artifact of priorArtifacts) {
+        if (artifactIds.includes(artifact.id)) ownedIds.add(artifact.id)
+      }
+    }
     const invalidArtifactIds = requested.filter((id) => !ownedIds.has(id))
     if (invalidArtifactIds.length > 0) {
       return {
         ok: false,
         code: 'deliverable_artifact_scope_mismatch',
-        error: 'Every deliverable artifact ID must belong to the current user, session, and turn.',
+        error: 'Every deliverable artifact ID must be created by this turn or be an adjacent artifact successfully replaced in place by this turn.',
         invalidArtifactIds,
         retryable: false,
       }
@@ -472,6 +880,10 @@ export async function runToolsLoop({
     0,
     Number(restoredState?.completionGuards?.executionReasoningRetries) || 0,
   )
+  let sourceHandoffRetries = Math.max(
+    0,
+    Number(restoredState?.completionGuards?.sourceHandoffRetries) || 0,
+  )
   let directoryResumeRetries = Math.max(
     0,
     Number(restoredState?.completionGuards?.directoryResumeRetries) || 0,
@@ -487,18 +899,32 @@ export async function runToolsLoop({
     : restoredState?.completionGuards?.pendingMutationVerification
       ? [PROJECT_SCOPE_TARGET]
       : []
+  const recoveredHistoricalTargets = recoverPriorLocalMutationTargets(messages, currentUserMessage)
   const pendingMutationTargets = new Set(
-    restoredMutationTargets.map(normalizeMutationTarget).filter(Boolean),
+    [...restoredMutationTargets, ...recoveredHistoricalTargets.mutationTargets]
+      .map(normalizeMutationTarget)
+      .filter(Boolean),
   )
   const pendingDeletionTargets = new Set(
-    (Array.isArray(restoredState?.completionGuards?.pendingDeletionTargets)
-      ? restoredState.completionGuards.pendingDeletionTargets
-      : [])
+    [
+      ...(Array.isArray(restoredState?.completionGuards?.pendingDeletionTargets)
+        ? restoredState.completionGuards.pendingDeletionTargets
+        : []),
+      ...recoveredHistoricalTargets.deletionTargets,
+    ]
       .map(normalizeMutationTarget)
       .filter(Boolean),
   )
   const hasPendingMutationVerification = () => (
     pendingMutationTargets.size > 0 || pendingDeletionTargets.size > 0
+  )
+  let recoveredMutationVerificationPending = !mutationExecutionObserved
+    && hasPendingMutationVerification()
+  let verifiedRecoveredMutationObserved = Boolean(
+    restoredState?.completionGuards?.verifiedRecoveredMutationObserved,
+  )
+  let mutationSteeringPending = Boolean(
+    restoredState?.completionGuards?.mutationSteeringPending,
   )
   let mutationVerificationRetries = Math.max(
     0,
@@ -527,6 +953,59 @@ export async function runToolsLoop({
         attachmentUris.length ? `Use read_file with these exact URIs when file contents are needed: ${attachmentUris.join(', ')}.` : 'Use the attachment:// URI shown in the user message with read_file when file contents are needed.',
         'Do not search Dropbox, Google Drive, OneDrive, or browser apps to locate these files. Prefer the supplied extracted PDF/text content when it is already present.',
       ].join(' '),
+    })
+  }
+  if (priorArtifacts.length > 0
+    && revisesAdjacentArtifact
+    && !hasRuntimeMarker('[ADJACENT ARTIFACT REVISION CONTRACT]')) {
+    const revisionInstruction = artifactRevisionMode === 'replace_original'
+      ? [
+          'The user explicitly requested an in-place revision of the original file.',
+          'Call each matching artifact generator with replace_artifact_id set to the exact authorized artifact ID shown above. The tool will preserve that artifact ID and filename while replacing its contents.',
+          'Do not create or deliver a second file for that artifact.',
+        ]
+      : artifactRevisionMode === 'create_copy'
+        ? [
+            'The user explicitly requested a new or separate file and wants the original preserved.',
+            'Call the matching artifact generator without replace_artifact_id and deliver the newly returned artifact ID.',
+            'Do not overwrite or mutate the adjacent original artifact.',
+          ]
+        : artifactRevisionMode === 'conflict'
+          ? [
+              'The current request contains conflicting instructions about replacing the original versus creating a separate file.',
+              'Call request_clarification before any artifact generator. Do not guess which file disposition the user intended.',
+            ]
+          : [
+              'No explicit in-place replacement was authorized. Create and deliver a new revised artifact ID, preserving the prior delivered file.',
+            ]
+    convo.push({
+      role: 'system',
+      content: [
+        '[ADJACENT ARTIFACT REVISION CONTRACT]',
+        'The current user request is a revision of the authorized delivered files listed below. An exact filename or artifact ID in the current request may deliberately select an older delivered file instead of the immediately preceding one.',
+        `Prior delivered artifacts: ${JSON.stringify(priorArtifacts)}.`,
+        'Use the preceding tool-call arguments and current user request as the source of truth, apply the requested changes, and call the matching artifact generator.',
+        ...revisionInstruction,
+        'Do not answer with source code, save instructions, or a request for the user to recreate the file manually.',
+      ].join(' '),
+    })
+  }
+  if ((directExecutionRequested || requiresPersistedArtifact || revisesAdjacentArtifact || codeSnippetRequested)
+    && !hasRuntimeMarker('[ARTIFACT SOURCE DELIVERY POLICY]')) {
+    convo.push({
+      role: 'system',
+      content: codeSnippetRequested
+        ? [
+            '[ARTIFACT SOURCE DELIVERY POLICY]',
+            'The user explicitly requested a code snippet, so you may include the specifically requested snippet in the answer.',
+            'If the user also requested a downloadable artifact, the snippet does not replace the required successful artifact tool call.',
+          ].join(' ')
+        : [
+            '[ARTIFACT SOURCE DELIVERY POLICY]',
+            'The user did not explicitly request a code snippet.',
+            'Never output complete source code, a large code block, copy/paste instructions, or directions telling the user to create, save, rename, or convert the file manually.',
+            'This remains true after malformed arguments, a failed artifact tool call, retries, missing capabilities, or exhausted execution budget. Correct and retry with tools when safe; otherwise report one concise blocker without source code.',
+          ].join(' '),
     })
   }
   if ((directExecutionRequested || requiresPersistedArtifact)
@@ -570,7 +1049,7 @@ export async function runToolsLoop({
         '[DIRECT EXECUTION REQUIRED]',
         'The user asked for concrete work, not instructions for doing it later.',
         'Use the available tools now, follow the supplied steps, create or modify the requested deliverable, and verify the result before answering.',
-        'Do not merely print a script or tell the user to run commands unless execution is genuinely blocked by a missing permission or indispensable user input.',
+        'Do not merely print a script or tell the user to run commands. If execution is genuinely blocked, report the concise blocker; full source is allowed only when the artifact source-delivery policy confirms that the user explicitly requested a code snippet.',
         'Keep internal deliberation brief; report the completed result or one concise, specific blocker.',
       ].join(' '),
     })
@@ -585,15 +1064,22 @@ export async function runToolsLoop({
   const missingArtifactTools = () => [...expectedArtifactTools].filter((name) => !deliveredArtifactTools.has(name))
   const hasRequiredArtifacts = () => !requiresPersistedArtifact || missingArtifactTools().length === 0
   const hasRequiredExecutionEvidence = () => !requiresExecutionEvidence
-    || (mutationExecutionRequested ? mutationExecutionObserved : executionEvidenceObserved)
+    || (mutationExecutionRequested
+      ? !mutationSteeringPending && (
+          mutationExecutionObserved || (
+            !requiresPersistedArtifact
+            && verifiedRecoveredMutationObserved
+            && executionEvidenceObserved
+            && !hasPendingMutationVerification()
+          )
+        )
+      : executionEvidenceObserved)
   const assertRequiredArtifacts = () => {
     if (!requiresPersistedArtifact) return
     const missing = missingArtifactTools()
     if (missing.length > 0) throw artifactDeliveryError(missing)
   }
-  let recovery = restoredState?.recovery?.archiveId
-    ? { archiveId: String(restoredState.recovery.archiveId) }
-    : null
+  let recovery = normalizeCompactionRecovery(restoredState?.recovery)
   const appliedSteeringIds = new Set(
     Array.isArray(restoredState?.appliedSteeringIds)
       ? restoredState.appliedSteeringIds.map((id) => String(id || '').trim()).filter(Boolean)
@@ -601,6 +1087,11 @@ export async function runToolsLoop({
   )
   let finalText = ''
   let finalCheckpointPersisted = false
+  // Tool-produced images live only until the next logical model call. They are
+  // never part of `convo`, so checkpoint persistence and process recovery
+  // cannot replay base64 screenshots. A context-length retry still sees the
+  // same local request payload inside callModelWithContextRecovery.
+  const pendingEphemeralToolMessages = []
   let iter = Math.max(0, Number(restoredState?.iterations) || 0)
   // `iterations` is cumulative so resumed tool-call ids and idempotency keys
   // stay stable. An explicit retry records a new window start in the durable
@@ -621,8 +1112,11 @@ export async function runToolsLoop({
           stepId: step?.id,
           toolCallId: call.id,
         }),
-      }))
+      })).map(normalizeArtifactReplacementCall)
     : null
+  if (checkpointCalls?.length) {
+    convo = synchronizeCheckpointToolCallMessages(convo, checkpointCalls)
+  }
   const progressState = restoreToolProgress(restoredState?.progress)
   observeToolCalls(progressState, checkpointCalls)
   for (const call of checkpointCalls || []) {
@@ -659,15 +1153,18 @@ export async function runToolsLoop({
   if (restoredState?.final?.text != null
     && String(restoredState.final.text).trim()
     && !restoredFinalIsInterrupted
+    && (!requiresSourceHandoffProtection || !sourceHandoffViolation(restoredState.final.text))
     && (restoredFinalIsTerminal || (
        hasRequiredArtifacts()
        && hasRequiredExecutionEvidence()
        && !hasPendingMutationVerification()
        && (!requiresPdfLayoutVerification || pdfLayoutVerificationObserved)
     ))) {
+    const restoredClarification = protectClarification(restoredState.final.clarification)
     return {
       ...restoredState.final,
       text: String(restoredState.final.text),
+      ...(restoredClarification ? { clarification: restoredClarification } : {}),
       artifactIds,
       ...deliverySelectionFields(),
       iterations: Math.max(1, Number(restoredState.final.iterations) || iter || 1),
@@ -705,8 +1202,11 @@ export async function runToolsLoop({
         deliveryArtifactSelectionArtifactIds: [...deliveryArtifactSelectionArtifactIds],
         executionEvidenceObserved,
         mutationExecutionObserved,
+        verifiedRecoveredMutationObserved,
+        mutationSteeringPending,
         executionEvidenceRetries,
         executionReasoningRetries,
+        sourceHandoffRetries,
         directoryResumeRetries,
         pendingMutationVerification: hasPendingMutationVerification(),
         pendingMutationTargets: [...pendingMutationTargets],
@@ -745,6 +1245,11 @@ export async function runToolsLoop({
       const id = String(steering?.id || '').trim()
       if (id) appliedSteeringIds.add(id)
       convo.push({ role: 'user', content: steering.content })
+      if (hasMutationExecutionIntent(String(steering?.content || ''))) {
+        mutationSteeringPending = true
+        verifiedRecoveredMutationObserved = false
+        recoveredMutationVerificationPending = false
+      }
     }
     return messages.length
   }
@@ -809,7 +1314,7 @@ export async function runToolsLoop({
     }
   }
   const finishIncomplete = async ({ text, reason, steeringLeaseId = null }) => {
-    finalText = text
+    finalText = protectTerminalText(text, { incomplete: true })
     const completion = await prepareCompletionForSteering({
       text: finalText,
       steeringLeaseId,
@@ -853,7 +1358,12 @@ export async function runToolsLoop({
     finalMetadata = {},
     appendTextToConversation = true,
   } = {}) => {
-    const text = String(result?.text || '')
+    const terminalIsIncomplete = result?.incomplete === true
+      || result?.paused === true
+      || result?.interrupted === true
+      || result?.budgetExceeded === true
+      || result?.noProgress === true
+    const text = protectTerminalText(result?.text, { incomplete: terminalIsIncomplete })
     const completion = await prepareCompletionForSteering({
       text,
       steeringLeaseId,
@@ -877,7 +1387,7 @@ export async function runToolsLoop({
       },
     })
     finalCheckpointPersisted = Boolean(text.trim())
-    return { ...result, ...deliverySelectionFields() }
+    return { ...result, text, ...deliverySelectionFields() }
   }
   // ★ M3.5 + Lens-2 fix:任务级预算用 WeakMap 持有,模型/工具碰不到 job 的属性也无法绕过。
   const restoredBudget = restoredState?.budget && typeof restoredState.budget === 'object'
@@ -898,6 +1408,64 @@ export async function runToolsLoop({
   const budget = runtimeBudget || (job
     ? (getJobBudget(job) || attachJobBudget(job, restoredBudget))
     : createJobBudget(restoredBudget))
+  const callTrackedModel = async ({
+    messages: modelMessages,
+    tools: modelTools = [],
+    toolChoice,
+    consumeBudget,
+    allowOverBudget = false,
+    onTextDelta,
+    onReasoningDelta: handleReasoningDelta,
+  }) => {
+    if (typeof onModelPhase === 'function') {
+      await onModelPhase({ phase: 'started', iteration: iter })
+    }
+    const heartbeat = createModelPhaseHeartbeat({
+      onPhase: onModelPhase,
+      iteration: iter,
+      intervalMs: modelHeartbeatIntervalMs,
+    })
+    const ephemeralMessages = pendingEphemeralToolMessages.splice(0)
+    try {
+      const request = await callModelWithContextRecovery({
+        messages: modelMessages,
+        ephemeralMessages,
+        tools: modelTools,
+        callModel: async (modelRequest) => {
+          await heartbeat.beginRequest()
+          return runWithModelBudget(
+            budget,
+            () => runModel(modelRequest),
+            { allowOverBudget },
+          )
+        },
+        isContextLengthError,
+        contextWindow,
+        semanticSummary,
+        signal,
+        userId: job?.userId || null,
+        sessionId: recoverySessionId,
+        ...(typeof consumeBudget === 'function' ? { consumeBudget } : {}),
+        ...(toolChoice !== undefined ? { toolChoice } : {}),
+        onTextDelta: async (text, metadata = {}) => {
+          if (text) await heartbeat.recordDelta()
+          if (typeof onTextDelta === 'function') await onTextDelta(text, metadata)
+        },
+        onReasoningDelta: async (text, metadata = {}) => {
+          if (text) await heartbeat.recordDelta()
+          if (typeof handleReasoningDelta === 'function') {
+            await handleReasoningDelta(text, metadata)
+          }
+        },
+      })
+      return {
+        ...request,
+        messages: stripEphemeralToolMediaMessages(request.messages),
+      }
+    } finally {
+      await heartbeat.stop()
+    }
+  }
   const subagentApprovalContext = approvalContext || createSubagentApprovalContext()
   // Exact duplicate signatures keep their separate fuse. Calls that change
   // arguments get graded strategy advisories and a much higher recovery budget.
@@ -1006,30 +1574,22 @@ export async function runToolsLoop({
       }
 
       let modelResult
+      let responseTextPublished = false
       try {
-        if (typeof onModelPhase === 'function') await onModelPhase({ phase: 'started', iteration: iter })
         let streamedText = false
-        const request = await callModelWithContextRecovery({
+        const request = await callTrackedModel({
           messages: convo,
           tools: activeToolSpecs,
-          callModel: (modelRequest) => runWithModelBudget(
-            budget,
-            () => runModel(modelRequest),
-          ),
-          isContextLengthError,
-          contextWindow,
-          semanticSummary,
-          signal,
-          userId: job?.userId || null,
-          sessionId: recoverySessionId,
           consumeBudget: (cost) => budget.consume(cost),
           onTextDelta: async (text, metadata = {}) => {
             if (!text) return
-            // Do not leak a model's "copy this code into a file" fallback into
-            // the chat while a real file artifact is still required. The final
-            // narration streams normally after the generator succeeds.
-            if (!hasRequiredArtifacts()) return
+            // Execution responses are buffered until the complete candidate is
+            // available for source-handoff validation. Model/tool phase events
+            // remain live, and safe narration is published before tools run.
+            if (requiresSourceHandoffProtection) return
+            if (!hasRequiredArtifacts() && !codeSnippetRequested) return
             streamedText = true
+            responseTextPublished = true
             if (typeof onModelDelta === 'function') {
               await onModelDelta({ text, iteration: iter, modelName: metadata.modelName || null })
             }
@@ -1040,9 +1600,7 @@ export async function runToolsLoop({
           },
         })
         convo.splice(0, convo.length, ...request.messages)
-        if (request.recovery?.archiveId) {
-          recovery = { archiveId: String(request.recovery.archiveId) }
-        }
+        recovery = mergeCompactionRecovery(recovery, request.recovery)
         modelResult = request.response
         if (!Array.isArray(modelResult?.toolCalls) || modelResult.toolCalls.length === 0) {
           const compatibilityCall = extractTextToolCalls(modelResult?.content)
@@ -1075,20 +1633,29 @@ export async function runToolsLoop({
         if (typeof onModelPhase === 'function') await onModelPhase({
           phase: 'completed',
           iteration: iter,
-          content: modelResult?.content || '',
+          content: requiresSourceHandoffProtection && sourceHandoffViolation(modelResult?.content)
+            ? ''
+            : modelResult?.content || '',
           toolCalls: modelResult?.toolCalls || [],
           usage: modelResult?.usage || null,
           modelName: modelResult?.modelName || null,
         })
+        const bufferedTextIsSafe = !requiresSourceHandoffProtection
+          || !sourceHandoffViolation(modelResult?.content)
+        const protectedTextHasEvidence = requiresPersistedArtifact
+          ? hasRequiredArtifacts()
+          : hasRequiredExecutionEvidence()
         if (!streamedText
           && modelResult?.content
-          && hasRequiredArtifacts()
+          && bufferedTextIsSafe
+          && (requiresSourceHandoffProtection ? protectedTextHasEvidence : hasRequiredArtifacts())
           && typeof onModelDelta === 'function') {
           await onModelDelta({
             text: modelResult.content,
             iteration: iter,
             modelName: modelResult?.modelName || null,
           })
+          responseTextPublished = true
         }
       } catch (error) {
         let recoverableModelResult = error?.partialModelResult
@@ -1146,7 +1713,9 @@ export async function runToolsLoop({
           if (typeof onModelPhase === 'function') await onModelPhase({
             phase: 'completed',
             iteration: iter,
-            content: modelResult?.content || '',
+            content: requiresSourceHandoffProtection && sourceHandoffViolation(modelResult?.content)
+              ? ''
+              : modelResult?.content || '',
             toolCalls: modelResult?.toolCalls || [],
             usage: modelResult?.usage || null,
             modelName: modelResult?.modelName || null,
@@ -1175,7 +1744,7 @@ export async function runToolsLoop({
             .slice(0, 4000)
           let wrapUpText = ''
           try {
-            const wrapUpRequest = await callModelWithContextRecovery({
+            const wrapUpRequest = await callTrackedModel({
               messages: [
                 ...convo,
                 {
@@ -1184,22 +1753,10 @@ export async function runToolsLoop({
                 },
               ],
               tools: [],
-              callModel: (modelRequest) => runWithModelBudget(
-                budget,
-                () => runModel(modelRequest),
-                { allowOverBudget: true },
-              ),
-              isContextLengthError,
-              contextWindow,
-              semanticSummary,
-              signal,
-              userId: job?.userId || null,
-              sessionId: recoverySessionId,
+              allowOverBudget: true,
               toolChoice: 'none',
             })
-            if (wrapUpRequest.recovery?.archiveId) {
-              recovery = { archiveId: String(wrapUpRequest.recovery.archiveId) }
-            }
+            recovery = mergeCompactionRecovery(recovery, wrapUpRequest.recovery)
             wrapUpText = wrapUpRequest.response?.content || ''
           } catch (wrapUpError) {
             if (wrapUpError?.name === 'AbortError') throw wrapUpError
@@ -1272,7 +1829,7 @@ export async function runToolsLoop({
             role: 'system',
             content: [
               DIRECTORY_RESUME_GUARD_MARKER,
-              'The requested directory grant is already verified in this checkpoint; there is no pending directory picker or authorization action.',
+              'The requested directory grant is already verified in this checkpoint; there is no pending directory selection or authorization action.',
               'Do not ask the user to authorize, choose, or confirm that directory again.',
               'Continue the original task now with the available execution tools and obtain concrete execution and verification results before answering.',
             ].join(' '),
@@ -1295,7 +1852,9 @@ export async function runToolsLoop({
               ARTIFACT_DELIVERY_GUARD_MARKER,
               'The user requested a real downloadable file, but the previous response did not create one.',
               `Call each missing artifact generator now: ${missing.join(', ')}.`,
-              'Do not ask for a directory, do not print source code as the deliverable, and do not claim completion until the tool returns artifactId.',
+              codeSnippetRequested
+                ? 'The explicitly requested code snippet may be included, but it does not satisfy the required file delivery. Do not claim completion until the tool returns artifactId.'
+                : 'Do not ask for a directory, print complete source code, provide copy/save instructions, or claim completion until the tool returns artifactId. If the tool still fails, report a concise blocker without code.',
             ].join(' '),
           })
           await persistTurn()
@@ -1309,7 +1868,7 @@ export async function runToolsLoop({
             && iter + 1 < maxIters
           if (!canRetry) {
             const incomplete = await finishIncomplete({
-              text: '任务尚未完成：模型没有调用任何可用工具取得实际执行结果。请重试，或切换到支持工具调用的模型。',
+              text: '任务尚未完成：尚未取得符合本次修改目标的实际执行证据。可重试本任务，或切换到支持工具调用的模型。',
               reason: 'execution_evidence_missing',
               steeringLeaseId,
             })
@@ -1322,8 +1881,8 @@ export async function runToolsLoop({
             role: 'system',
             content: [
               EXECUTION_EVIDENCE_GUARD_MARKER,
-              'The previous response described work but did not execute any substantive tool successfully, so it was not accepted as completion.',
-              'Use the available tools now and continue until there is a concrete tool result.',
+              'The previous response did not establish execution evidence for the current modification target, so it was not accepted as completion.',
+              'Continue until the requested target has concrete mutation evidence, or an inherited successful mutation has been strictly verified.',
               'If indispensable information is missing, call request_clarification instead of presenting instructions as a completed result.',
             ].join(' '),
           })
@@ -1431,12 +1990,45 @@ export async function runToolsLoop({
           }
           continue
         }
+        const sourceViolation = requiresSourceHandoffProtection
+          ? sourceHandoffViolation(content)
+          : null
+        let acceptedContent = String(content || '')
+        if (sourceViolation) {
+          if (sourceHandoffRetries < MAX_SOURCE_HANDOFF_RETRIES) {
+            sourceHandoffRetries += 1
+            convo.push({
+              role: 'system',
+              content: [
+                SOURCE_HANDOFF_GUARD_MARKER,
+                `The previous final response was withheld because it contained ${sourceViolation}.`,
+                'Return one concise prose-only summary of what was actually executed, changed, and verified.',
+                'Do not include fenced blocks, source code, commands for the user to run, or instructions to copy, save, rename, or convert files manually.',
+              ].join(' '),
+            })
+            if (iter + 1 >= maxIters) maxIters = iter + 2
+            await persistTurn()
+            if (steeringLeaseId && typeof acknowledgeSteering === 'function') {
+              await acknowledgeSteering(steeringLeaseId)
+            }
+            continue
+          }
+          acceptedContent = protectTerminalText(content)
+          responseTextPublished = false
+        }
+        if (!responseTextPublished && acceptedContent && typeof onModelDelta === 'function') {
+          await onModelDelta({
+            text: acceptedContent,
+            iteration: iter,
+            modelName: modelResult?.modelName || null,
+          })
+        }
         const completion = await prepareCompletionForSteering({
-          text: content || '',
+          text: acceptedContent,
           steeringLeaseId,
         })
         if (!completion.closed) continue
-        finalText = content || ''
+        finalText = acceptedContent
         if (!completion.prepared) convo.push({ role: 'assistant', content: finalText })
         try {
           const hasFinalText = Boolean(finalText.trim())
@@ -1463,7 +2055,7 @@ export async function runToolsLoop({
       const modelOutputTruncated = String(modelResult?.finishReason || '').toLowerCase() === 'length'
       checkpointCalls = normalizeToolCalls(scopedToolCalls, {
         toolSpecs: activeToolSpecs,
-      }).map((call) => ({
+      }).map(normalizeArtifactReplacementCall).map((call) => ({
         ...call,
         modelOutputTruncated,
         idempotencyKey: buildJobToolIdempotencyKey({
@@ -1480,7 +2072,10 @@ export async function runToolsLoop({
       }
       await emitToolProgress('tools_scheduled')
       toolCalls = checkpointCalls
-      convo.push(buildAssistantToolCallsMessage(toolCalls, content))
+      const checkpointContent = requiresSourceHandoffProtection && sourceHandoffViolation(content)
+        ? ''
+        : content
+      convo.push(buildAssistantToolCallsMessage(toolCalls, checkpointContent))
       try {
         // The model response and steering text become durable atomically from
         // the engine's perspective; only then may the steering lease be ACKed.
@@ -1645,6 +2240,11 @@ export async function runToolsLoop({
           }
 
           if (!result) {
+            result = artifactReplacementValidationError(name, args)
+              || workspaceTargetValidationError(name, args)
+          }
+
+          if (!result) {
             const validationError = validateToolCall(call, activeToolSpecs, {
               // 单测/嵌入方可注入自己的 executor；生产默认执行器仍严格限制在已声明工具集。
               allowUnknown: executeTool !== executeServerTool,
@@ -1765,63 +2365,73 @@ export async function runToolsLoop({
               } else if (gate) {
                 const executionArgs = gate.args ?? effectiveArgs
                 executionArgsUsed = executionArgs
-                rememberApprovedSubagentCall(subagentApprovalContext, name, executionArgs, gate)
-                const executionMetadata = getToolMetadata(name, {
-                  args: executionArgs,
-                  userId: job?.userId || null,
-                })
-                // Mutating tools ignore lease/transport aborts while a call is in flight,
-                // but an explicit user stop still reaches cancellable shell/browser work.
-                const abortScope = createToolAbortScope(signal, executionMetadata.interruptBehavior)
-                if (durableExecution) {
-                  await markCall(call, {
-                    checkpointStatus: 'executing',
-                    checkpointApprovalId: gate.approvalId || call.checkpointApprovalId || null,
-                    checkpointExecutionArgs: executionArgs,
-                    idempotencyKey: call.idempotencyKey,
+                const finalValidationError = validateToolCall(
+                  { ...call, args: executionArgs },
+                  activeToolSpecs,
+                  { allowUnknown: executeTool !== executeServerTool },
+                ) || artifactReplacementValidationError(name, executionArgs)
+                  || workspaceTargetValidationError(name, executionArgs)
+                if (finalValidationError) {
+                  result = finalValidationError
+                } else {
+                  rememberApprovedSubagentCall(subagentApprovalContext, name, executionArgs, gate)
+                  const executionMetadata = getToolMetadata(name, {
+                    args: executionArgs,
+                    userId: job?.userId || null,
                   })
-                }
-                try {
-                  result = await executeToolWithRetry({
-                    metadata: executionMetadata,
-                    signal: abortScope.signal,
-                    maxAttempts: toolRetryMaxAttempts,
-                    baseDelayMs: toolRetryBaseDelayMs,
-                    execute: () => executeTool({
-                      name,
-                      args: executionArgs,
-                      job,
-                      step,
-                      signal: abortScope.signal,
-                      budget,
-                      skillId: explicitSkillId || null,
-                      toolCallId: call.id,
+                  // Mutating tools ignore lease/transport aborts while a call is in flight,
+                  // but an explicit user stop still reaches cancellable shell/browser work.
+                  const abortScope = createToolAbortScope(signal, executionMetadata.interruptBehavior)
+                  if (durableExecution) {
+                    await markCall(call, {
+                      checkpointStatus: 'executing',
+                      checkpointApprovalId: gate.approvalId || call.checkpointApprovalId || null,
+                      checkpointExecutionArgs: executionArgs,
                       idempotencyKey: call.idempotencyKey,
-                      approvalContext: subagentApprovalContext,
-                      allowedArtifactTools: stepArtifactTools,
-                    }),
-                  })
-                } finally {
-                  abortScope.dispose()
-                }
-                if (gate.authorization && result && typeof result === 'object') {
-                  result = { ...result, approvalAuthorization: gate.authorization }
-                }
-                artifactId = result?.artifactId || null
-                if (isLoopPauseResult(result)) clarification = result.clarification
-                if (enableToolHooks && job?.userId) {
-                  try {
-                    await dispatchHooks({
-                      userId: job.userId,
-                      event: 'post_tool_use',
-                      tool: name,
-                      args: { input: executionArgs, output: result },
-                      sessionId: job.id || null,
-                      requestId: step?.id || null,
                     })
-                  } catch {
-                    // The tool has already executed; a post hook failure must
-                    // not replay or reinterpret its side effects.
+                  }
+                  try {
+                    result = await executeToolWithRetry({
+                      metadata: executionMetadata,
+                      signal: abortScope.signal,
+                      maxAttempts: toolRetryMaxAttempts,
+                      baseDelayMs: toolRetryBaseDelayMs,
+                      execute: () => executeTool({
+                        name,
+                        args: executionArgs,
+                        job,
+                        step,
+                        signal: abortScope.signal,
+                        budget,
+                        skillId: explicitSkillId || null,
+                        toolCallId: call.id,
+                        idempotencyKey: call.idempotencyKey,
+                        approvalContext: subagentApprovalContext,
+                        allowedArtifactTools: stepArtifactTools,
+                      }),
+                    })
+                  } finally {
+                    abortScope.dispose()
+                  }
+                  if (gate.authorization && result && typeof result === 'object') {
+                    result = { ...result, approvalAuthorization: gate.authorization }
+                  }
+                  artifactId = result?.artifactId || null
+                  if (isLoopPauseResult(result)) clarification = result.clarification
+                  if (enableToolHooks && job?.userId) {
+                    try {
+                      await dispatchHooks({
+                        userId: job.userId,
+                        event: 'post_tool_use',
+                        tool: name,
+                        args: { input: executionArgs, output: result },
+                        sessionId: job.id || null,
+                        requestId: step?.id || null,
+                      })
+                    } catch {
+                      // The tool has already executed; a post hook failure must
+                      // not replay or reinterpret its side effects.
+                    }
                   }
                 }
               }
@@ -1871,6 +2481,7 @@ export async function runToolsLoop({
     // multimodal user message, so defer that (and any other post-tool context)
     // until every tool_call in this batch has received its tool response.
     const deferredPostBatchMessages = []
+    const deferredEphemeralToolMessages = []
 
     const recordOutcome = async (outcome) => {
       outcome.result = normalizeToolResult(outcome.result)
@@ -1878,7 +2489,7 @@ export async function runToolsLoop({
       const executedCall = outcome.executionArgs === outcome.call?.args
         ? outcome.call
         : { ...outcome.call, args: outcome.executionArgs }
-      if (succeeded && !outcome.artifactId) {
+      if (succeeded && !outcome.artifactId && localArtifactPublicationAllowed) {
         const localArtifacts = await persistLocalToolArtifactsAsync({
           call: executedCall,
           result: outcome.result,
@@ -1933,6 +2544,7 @@ export async function runToolsLoop({
         : succeeded && isMutationExecutionCall(executedCall, outcome.artifactId)
       if (mutationExecutionSucceeded) {
         mutationExecutionObserved = true
+        mutationSteeringPending = false
       }
       if (mutationExecutionSucceeded && isLocalMutationCall(executedCall)) {
         if (requiresPdfLayoutVerification) pdfLayoutVerificationObserved = false
@@ -1971,6 +2583,10 @@ export async function runToolsLoop({
         )
         if (clearedMutation || clearedDeletion) {
           mutationVerificationRetries = 0
+          if (recoveredMutationVerificationPending && !hasPendingMutationVerification()) {
+            verifiedRecoveredMutationObserved = true
+            recoveredMutationVerificationPending = false
+          }
         }
       }
       if (requiresPdfLayoutVerification
@@ -1993,19 +2609,18 @@ export async function runToolsLoop({
       if (executedCall?.name === 'read_file' && succeeded) {
         hasSuccessfulRepresentativeRead = true
       }
-      const toolResultMessages = buildToolResultMessages(
+      const toolResultBundle = buildToolResultMessageBundle(
         outcome.call,
         outcome.result,
         { maxChars: toolResultMaxChars },
       )
-      if (toolResultMessages.length > 1 && outcome.result?.image?.data) {
+      if (toolResultBundle.ephemeralMessages.length > 0 && outcome.result?.image?.data) {
         const compactImage = { ...outcome.result.image }
         delete compactImage.data
         outcome.result = { ...outcome.result, image: { ...compactImage, captured: true } }
       }
-      const [toolResultMessage, ...postToolMessages] = toolResultMessages
-      convo.push(toolResultMessage)
-      deferredPostBatchMessages.push(...postToolMessages)
+      convo.push(...toolResultBundle.durableMessages)
+      deferredEphemeralToolMessages.push(...toolResultBundle.ephemeralMessages)
       if (executedCall?.name === 'request_directory'
         && succeeded
         && outcome.result?.already_authorized === true
@@ -2029,6 +2644,7 @@ export async function runToolsLoop({
           convo = replaceRuntimeCapabilityBlock(convo, {
             toolSpecs: activeToolSpecs,
             approvalMode,
+            ...outputDirectoryContext,
           })
           availableVerificationToolNames = activeToolSpecs
             .map(toolNameFromSpec)
@@ -2167,6 +2783,8 @@ export async function runToolsLoop({
       // adding screenshot context or the newer user direction.
       convo.push(...deferredPostBatchMessages)
       deferredPostBatchMessages.length = 0
+      pendingEphemeralToolMessages.push(...deferredEphemeralToolMessages)
+      deferredEphemeralToolMessages.length = 0
       appendSteeringMessages(freshMessages)
       await persistAndAcknowledgeSteering(claimed.leaseId)
       if (iter + 1 >= maxIters) maxIters = iter + 2
@@ -2236,6 +2854,7 @@ export async function runToolsLoop({
       }
     }
     convo.push(...deferredPostBatchMessages)
+    pendingEphemeralToolMessages.push(...deferredEphemeralToolMessages)
     const failureStrategyAdvisories = loopGuard.pendingAdvisories?.() || []
     for (const advisory of failureStrategyAdvisories) {
       convo.push({
@@ -2314,7 +2933,7 @@ export async function runToolsLoop({
       }
       if (!finalText) {
         try {
-          const wrapUpRequest = await callModelWithContextRecovery({
+          const wrapUpRequest = await callTrackedModel({
             messages: [
               ...convo,
               {
@@ -2323,22 +2942,10 @@ export async function runToolsLoop({
               },
             ],
             tools: [],
-            callModel: (modelRequest) => runWithModelBudget(
-              budget,
-              () => runModel(modelRequest),
-              { allowOverBudget: true },
-            ),
-            isContextLengthError,
-            contextWindow,
-            semanticSummary,
-            signal,
-            userId: job?.userId || null,
-            sessionId: recoverySessionId,
+            allowOverBudget: true,
             toolChoice: 'none',
           })
-          if (wrapUpRequest.recovery?.archiveId) {
-            recovery = { archiveId: String(wrapUpRequest.recovery.archiveId) }
-          }
+          recovery = mergeCompactionRecovery(recovery, wrapUpRequest.recovery)
           finalText = wrapUpRequest.response?.content || ''
         } catch {
           writeToolAudit?.({
@@ -2367,27 +2974,28 @@ export async function runToolsLoop({
     }
     if (pausedByClarification) {
       // ★ M3: 模型主动调 request_clarification → 当轮 loop 中断交回用户
+      const protectedClarification = protectClarification(pausedByClarification)
       const terminal = await finishTerminalResult({
         text: finalText || String(
-          pausedByClarification.question
-          || pausedByClarification.message
+          protectedClarification.question
+          || protectedClarification.message
           || '需要你补充信息后才能继续。',
         ),
         artifactIds,
         iterations: iter + 1,
         paused: true,
-        clarification: pausedByClarification,
+        clarification: protectedClarification,
         recovery,
       }, {
         steeringLeaseId,
-        finalMetadata: { paused: true, clarification: pausedByClarification },
+        finalMetadata: { paused: true, clarification: protectedClarification },
       })
       if (!terminal) continue
       return terminal
     }
     if (noProgressReason) {
       try {
-        const wrapUpRequest = await callModelWithContextRecovery({
+        const wrapUpRequest = await callTrackedModel({
           messages: [
             ...convo,
             {
@@ -2396,23 +3004,11 @@ export async function runToolsLoop({
             },
           ],
           tools: [],
-          callModel: (modelRequest) => runWithModelBudget(
-            budget,
-            () => runModel(modelRequest),
-            { allowOverBudget: true },
-          ),
-          isContextLengthError,
-          contextWindow,
-          semanticSummary,
-          signal,
-          userId: job?.userId || null,
-          sessionId: recoverySessionId,
+          allowOverBudget: true,
           consumeBudget: (cost) => budget.consume(cost),
           toolChoice: 'none',
         })
-        if (wrapUpRequest.recovery?.archiveId) {
-          recovery = { archiveId: String(wrapUpRequest.recovery.archiveId) }
-        }
+        recovery = mergeCompactionRecovery(recovery, wrapUpRequest.recovery)
         const wrapUp = wrapUpRequest.response
         finalText = wrapUp?.content || ''
       } catch {
@@ -2445,7 +3041,7 @@ export async function runToolsLoop({
   // 收个尾,拿不到就至少说清楚是被上限截断的,不要静默空返回。
   if (!finalText) {
     try {
-      const wrapUpRequest = await callModelWithContextRecovery({
+      const wrapUpRequest = await callTrackedModel({
         messages: [
           ...convo,
           {
@@ -2454,23 +3050,11 @@ export async function runToolsLoop({
           },
         ],
         tools: [],
-        callModel: (modelRequest) => runWithModelBudget(
-          budget,
-          () => runModel(modelRequest),
-          { allowOverBudget: true },
-        ),
-        isContextLengthError,
-        contextWindow,
-        semanticSummary,
-        signal,
-        userId: job?.userId || null,
-        sessionId: recoverySessionId,
+        allowOverBudget: true,
         consumeBudget: (cost) => budget.consume(cost),
         toolChoice: 'none',
       })
-      if (wrapUpRequest.recovery?.archiveId) {
-        recovery = { archiveId: String(wrapUpRequest.recovery.archiveId) }
-      }
+      recovery = mergeCompactionRecovery(recovery, wrapUpRequest.recovery)
       const wrapUp = wrapUpRequest.response
       finalText = wrapUp?.content || ''
     } catch {
@@ -2488,11 +3072,12 @@ export async function runToolsLoop({
       finalText = `(已达到 ${maxIters} 轮工具调用上限,任务未能自行收尾。上面的工具结果可能已包含部分进展。)`
     }
   }
+  finalText = protectTerminalText(finalText, { incomplete: true })
 
   assertRequiredArtifacts()
   if (!hasRequiredExecutionEvidence()) {
     return finishIncomplete({
-      text: '\u4efb\u52a1\u5c1a\u672a\u5b8c\u6210\uff1a\u672a\u83b7\u5f97\u53ef\u9a8c\u8bc1\u7684\u5b9e\u9645\u6267\u884c\u7ed3\u679c\u3002\u8bf7\u91cd\u8bd5\uff0c\u6216\u5207\u6362\u5230\u652f\u6301\u5de5\u5177\u8c03\u7528\u7684\u6a21\u578b\u3002',
+      text: '\u4efb\u52a1\u5c1a\u672a\u5b8c\u6210\uff1a\u5c1a\u672a\u53d6\u5f97\u7b26\u5408\u672c\u6b21\u4fee\u6539\u76ee\u6807\u7684\u5b9e\u9645\u6267\u884c\u8bc1\u636e\u3002\u53ef\u91cd\u8bd5\u672c\u4efb\u52a1\uff0c\u6216\u5207\u6362\u5230\u652f\u6301\u5de5\u5177\u8c03\u7528\u7684\u6a21\u578b\u3002',
       reason: 'execution_evidence_missing',
     })
   }

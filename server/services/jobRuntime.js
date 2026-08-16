@@ -10,7 +10,7 @@ import { callBackgroundModel, callBackgroundModelWithTools, formatProxyError, ge
 import { runToolLoop, selectToolSpecs, SERVER_TOOL_SPECS } from './toolLoopRuntime.js'
 import { listUserToolSpecs } from '../mcp/mcpManager.js'
 import { listRegisteredBrowserToolSpecs } from './browserTools.js'
-import { allowedArtifactTools } from './artifactIntent.js'
+import { allowedArtifactTools, isExplicitCodeSnippetRequest } from './artifactIntent.js'
 import { ensureSafetySystemMessages } from './promptCompiler.js'
 import { injectJobPromptContext, resolveJobSkillContext } from './jobPromptContext.js'
 import {
@@ -53,6 +53,7 @@ import { createJobExecutionLeaseCoordinator } from './jobExecutionLeaseRuntime.j
 import { releaseJobBudget } from '../utils/jobBudget.js'
 import { userCancellationError } from '../utils/toolCancellation.js'
 import { resumeJobDirectoryAuthorization } from './jobDirectoryAuthorization.js'
+import { getDefaultOutputDirectory, getProjectDirectory } from './localFileAccessService.js'
 import { lostJobExecutionLease, markJobAwaitingApproval, markJobRunningAgain, notifyJobStopHook, notifyJobTerminal, recoverInterruptedJobs, runOwnedJobTransition } from './jobRuntimeLifecycle.js'
 export { recoverInterruptedJobs } from './jobRuntimeLifecycle.js'
 const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled'])
@@ -285,11 +286,26 @@ export function createDefaultExecuteStep({
         .filter((spec) => spec?.function?.name)
         .map((spec) => [spec.function.name, spec]),
     ).values()]
+    let outputDirectoryContext = {}
+    try {
+      outputDirectoryContext = {
+        defaultOutputDirectory: getDefaultOutputDirectory({ userId: job.userId }),
+        projectDirectory: getProjectDirectory({ userId: job.userId }),
+      }
+    } catch {
+      // Optional prompt context must not block job execution.
+    }
 
     if (enableServerTools) {
       // 提示词分支和工具集裁剪必须用同一份判定(见 toolLoopRuntime 里的注释),
       // 这里按顺序注入:产物规则 → 代码工作流 → 引用/链接引导 → 延迟唤醒。
-      messages.push({ role: 'system', content: buildArtifactPrompt(artifactTools) })
+      messages.push({
+        role: 'system',
+        content: buildArtifactPrompt(artifactTools, {
+          codeSnippetRequested: isExplicitCodeSnippetRequest(userPrompt || job.prompt),
+          ...outputDirectoryContext,
+        }),
+      })
       messages.push({ role: 'system', content: buildCodeWorkflowPrompt() })
       messages.push({ role: 'system', content: buildCitationPrompt() })
       messages.push({ role: 'system', content: buildDelayedFollowupPrompt() })

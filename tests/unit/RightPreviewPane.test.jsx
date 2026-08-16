@@ -1,10 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { JSDOM } from 'jsdom'
-import { act } from 'react'
+import { act, useEffect, useReducer } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import RightPreviewPane from '../../src/pages/ChatSplit/RightPreviewPane.jsx'
+import { createInitialState } from '../../src/store/appStateBootstrap.js'
+import { reduceTaskSettingsState } from '../../src/store/reducers/taskSettingsReducer.js'
 
 const artifact = {
   messageId: 'msg-1',
@@ -46,15 +48,39 @@ async function renderPane(onClose, artifactOverride = artifact, prepareDocument)
   prepareDocument?.(dom.window.document)
   const root = createRoot(rootEl)
 
+  function ControlledPreviewPane({ nextArtifact }) {
+    const [state, dispatch] = useReducer(
+      reduceTaskSettingsState,
+      nextArtifact,
+      (initialArtifact) => reduceTaskSettingsState(createInitialState(), {
+        type: 'OPEN_PREVIEW_ARTIFACT',
+        payload: initialArtifact,
+      }),
+    )
+
+    useEffect(() => {
+      dispatch({ type: 'OPEN_PREVIEW_ARTIFACT', payload: nextArtifact })
+    }, [nextArtifact])
+
+    return (
+      <RightPreviewPane
+        artifact={state.previewArtifact}
+        previewTabs={state.previewTabs}
+        activePreviewId={state.previewActiveId}
+        onActivateTab={(tabId) => dispatch({ type: 'ACTIVATE_PREVIEW_TAB', payload: tabId })}
+        onCloseTab={(tabId) => dispatch({ type: 'CLOSE_PREVIEW_TAB', payload: tabId })}
+        onClose={() => {
+          dispatch({ type: 'CLOSE_PREVIEW_ARTIFACT' })
+          onClose()
+        }}
+        onMessage={() => {}}
+      />
+    )
+  }
+
   const renderArtifact = async (nextArtifact) => {
     await act(async () => {
-      root.render(
-        <RightPreviewPane
-          artifact={nextArtifact}
-          onClose={onClose}
-          onMessage={() => {}}
-        />,
-      )
+      root.render(<ControlledPreviewPane nextArtifact={nextArtifact} />)
     })
   }
 
@@ -71,6 +97,51 @@ async function renderPane(onClose, artifactOverride = artifact, prepareDocument)
     },
   }
 }
+
+test('preview reducer opens, activates, and closes tabs without losing sibling files', () => {
+  const first = {
+    messageId: 'msg-reducer-alpha',
+    content: 'alpha',
+    preview: { type: 'text', filename: 'alpha.txt' },
+  }
+  const second = {
+    messageId: 'msg-reducer-beta',
+    content: 'beta',
+    preview: { type: 'text', filename: 'beta.txt' },
+  }
+  const third = {
+    messageId: 'msg-reducer-gamma',
+    content: 'gamma',
+    preview: { type: 'text', filename: 'gamma.txt' },
+  }
+  const dispatch = (state, type, payload) => reduceTaskSettingsState(state, { type, payload })
+
+  let state = createInitialState()
+  state = dispatch(state, 'OPEN_PREVIEW_ARTIFACT', first)
+  const firstId = state.previewActiveId
+  state = dispatch(state, 'OPEN_PREVIEW_ARTIFACT', second)
+  const secondId = state.previewActiveId
+  state = dispatch(state, 'OPEN_PREVIEW_ARTIFACT', third)
+  const thirdId = state.previewActiveId
+
+  assert.deepEqual(state.previewTabs.map((tab) => tab.preview.filename), ['alpha.txt', 'beta.txt', 'gamma.txt'])
+  assert.equal(state.previewArtifact, third)
+
+  state = dispatch(state, 'ACTIVATE_PREVIEW_TAB', firstId)
+  assert.equal(state.previewArtifact, first)
+
+  state = dispatch(state, 'CLOSE_PREVIEW_TAB', secondId)
+  assert.deepEqual(state.previewTabs.map((tab) => tab.preview.filename), ['alpha.txt', 'gamma.txt'])
+  assert.equal(state.previewActiveId, firstId)
+
+  state = dispatch(state, 'CLOSE_PREVIEW_TAB', firstId)
+  assert.equal(state.previewActiveId, thirdId)
+  assert.equal(state.previewArtifact, third)
+
+  state = dispatch(state, 'CLOSE_PREVIEW_TAB', thirdId)
+  assert.deepEqual(state.previewTabs, [])
+  assert.equal(state.previewArtifact, null)
+})
 
 test('RightPreviewPane closes on Escape', async () => {
   let closeCount = 0
@@ -91,7 +162,7 @@ test('RightPreviewPane closes on Escape', async () => {
   }
 })
 
-test('RightPreviewPane reuses one preview slot when the selected artifact changes', async () => {
+test('RightPreviewPane keeps multiple files open and closes each tab independently', async () => {
   let closeCount = 0
   const first = {
     messageId: 'msg-alpha',
@@ -113,8 +184,7 @@ test('RightPreviewPane reuses one preview slot when the selected artifact change
   try {
     assert.equal(rootEl.querySelectorAll('.chat-preview-pane').length, 1)
     assert.equal(rootEl.querySelectorAll('[data-testid="preview-header"]').length, 1)
-    assert.equal(rootEl.querySelectorAll('[role="tab"]').length, 0)
-    assert.equal(rootEl.querySelector('[data-testid="preview-current-file"]')?.textContent.trim(), 'alpha.txt')
+    assert.equal(rootEl.querySelectorAll('[role="tab"]').length, 1)
     assert.match(rootEl.querySelector('pre')?.textContent || '', /alpha content/)
 
     await rerender(second)
@@ -122,22 +192,81 @@ test('RightPreviewPane reuses one preview slot when the selected artifact change
 
     assert.equal(rootEl.querySelectorAll('.chat-preview-pane').length, 1)
     assert.equal(rootEl.querySelectorAll('[data-testid="preview-header"]').length, 1)
-    assert.equal(rootEl.querySelectorAll('[role="tab"]').length, 0)
-    assert.equal(rootEl.querySelector('[data-testid="preview-current-file"]')?.textContent.trim(), 'gamma.txt')
+    assert.equal(rootEl.querySelectorAll('[role="tab"]').length, 3)
+    assert.deepEqual(
+      [...rootEl.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent.trim()),
+      ['alpha.txt', 'beta.txt', 'gamma.txt'],
+    )
+    assert.equal(rootEl.querySelector('[role="tab"][aria-selected="true"]')?.textContent.trim(), 'gamma.txt')
     assert.match(rootEl.querySelector('pre')?.textContent || '', /gamma content/)
-    assert.doesNotMatch(rootEl.textContent, /alpha content|beta content/)
 
-    await rerender({ ...second })
-    assert.equal(rootEl.querySelectorAll('.chat-preview-pane').length, 1)
-    assert.equal(rootEl.querySelector('[data-testid="preview-current-file"]')?.textContent.trim(), 'beta.txt')
-    assert.match(rootEl.querySelector('pre')?.textContent || '', /beta content/)
+    const alphaTab = [...rootEl.querySelectorAll('[role="tab"]')].find((tab) => tab.textContent.includes('alpha.txt'))
+    await act(async () => alphaTab.dispatchEvent(new window.MouseEvent('click', { bubbles: true })))
+    assert.equal(rootEl.querySelector('[role="tab"][aria-selected="true"]')?.textContent.trim(), 'alpha.txt')
+    assert.match(rootEl.querySelector('pre')?.textContent || '', /alpha content/)
+
+    const betaClose = rootEl.querySelectorAll('[data-testid="preview-tab-close"]')[1]
+    await act(async () => betaClose.dispatchEvent(new window.MouseEvent('click', { bubbles: true })))
+    assert.deepEqual(
+      [...rootEl.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent.trim()),
+      ['alpha.txt', 'gamma.txt'],
+    )
+    assert.equal(rootEl.querySelector('[role="tab"][aria-selected="true"]')?.textContent.trim(), 'alpha.txt')
     assert.equal(closeCount, 0)
+
+    const alphaClose = rootEl.querySelectorAll('[data-testid="preview-tab-close"]')[0]
+    await act(async () => alphaClose.dispatchEvent(new window.MouseEvent('click', { bubbles: true })))
+    assert.equal(rootEl.querySelectorAll('[role="tab"]').length, 1)
+    assert.equal(rootEl.querySelector('[role="tab"][aria-selected="true"]')?.textContent.trim(), 'gamma.txt')
+    assert.match(rootEl.querySelector('pre')?.textContent || '', /gamma content/)
+    assert.equal(closeCount, 0)
+
+    const finalClose = rootEl.querySelector('[data-testid="preview-tab-close"]')
+    await act(async () => finalClose.dispatchEvent(new window.MouseEvent('click', { bubbles: true })))
+    assert.equal(closeCount, 1)
   } finally {
     await cleanup()
   }
 })
 
-test('RightPreviewPane switches the same slot between text and direct image files', async () => {
+test('RightPreviewPane keeps tab filenames without rendering the legacy type badge', async () => {
+  const first = {
+    messageId: 'msg-no-type-badge-alpha',
+    content: 'alpha content',
+    preview: {
+      type: 'text',
+      label: 'LEGACY_TYPE_BADGE',
+      filename: 'alpha.txt',
+    },
+  }
+  const second = {
+    messageId: 'msg-no-type-badge-beta',
+    content: 'beta content',
+    preview: {
+      type: 'text',
+      label: 'LEGACY_TYPE_BADGE',
+      filename: 'beta.txt',
+    },
+  }
+  const { rootEl, rerender, cleanup } = await renderPane(() => {}, first)
+
+  try {
+    await rerender(second)
+
+    assert.deepEqual(
+      [...rootEl.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent.trim()),
+      ['alpha.txt', 'beta.txt'],
+    )
+    const commandBar = rootEl.querySelector('[data-testid="preview-command-bar"]')
+    assert.ok(commandBar)
+    assert.match(commandBar.textContent, /beta\.txt/)
+    assert.doesNotMatch(rootEl.textContent, /LEGACY_TYPE_BADGE/)
+  } finally {
+    await cleanup()
+  }
+})
+
+test('RightPreviewPane switches between text and direct image tabs', async () => {
   const textArtifact = {
     messageId: 'msg-file-tab',
     content: 'notes content',
@@ -161,16 +290,18 @@ test('RightPreviewPane switches the same slot between text and direct image file
     await rerender(imageArtifact)
 
     assert.equal(rootEl.querySelectorAll('.chat-preview-pane').length, 1)
-    assert.equal(rootEl.querySelectorAll('[role="tab"]').length, 0)
-    assert.equal(rootEl.querySelector('[data-testid="preview-current-file"]')?.textContent.trim(), 'page1_check.png')
+    assert.equal(rootEl.querySelectorAll('[role="tab"]').length, 2)
+    assert.equal(rootEl.querySelector('[role="tab"][aria-selected="true"]')?.textContent.trim(), 'page1_check.png')
     const imageUrl = new URL(rootEl.querySelector('img[alt="page1_check.png"]')?.getAttribute('src'))
     assert.equal(imageUrl.origin + imageUrl.pathname, 'https://example.test/page1_check.png')
     assert.equal(imageUrl.searchParams.get('preview'), '1')
     assert.equal(rootEl.querySelector('pre'), null)
 
-    await rerender(textArtifact)
+    const textTab = [...rootEl.querySelectorAll('[role="tab"]')].find((tab) => tab.textContent.includes('notes.txt'))
+    await act(async () => textTab.dispatchEvent(new window.MouseEvent('click', { bubbles: true })))
     assert.equal(rootEl.querySelectorAll('.chat-preview-pane').length, 1)
-    assert.equal(rootEl.querySelector('[data-testid="preview-current-file"]')?.textContent.trim(), 'notes.txt')
+    assert.equal(rootEl.querySelectorAll('[role="tab"]').length, 2)
+    assert.equal(rootEl.querySelector('[role="tab"][aria-selected="true"]')?.textContent.trim(), 'notes.txt')
     assert.match(rootEl.querySelector('pre')?.textContent || '', /notes content/)
     assert.equal(rootEl.querySelector('img[alt="page1_check.png"]'), null)
   } finally {

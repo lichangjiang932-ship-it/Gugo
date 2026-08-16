@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  extractUsage,
   parseModelProviderResponse,
   parseOpenAICompatibleResponse,
 } from '../server/adapters/modelProxy.js'
@@ -81,6 +82,44 @@ test('compatible response parsing normalizes Ollama native content and object to
     totalTokens: 19,
     cacheHitTokens: 0,
     cacheMissTokens: 12,
+  })
+})
+
+test('compatible usage requires an explicit non-empty prompt token count', () => {
+  for (const data of [
+    { usage: {} },
+    { usage: { prompt_tokens: null, completion_tokens: 2 } },
+    { usage: { prompt_tokens: '', completion_tokens: 2 } },
+    { usage: { input_tokens: '   ', output_tokens: 2 } },
+    { usage: { prompt_tokens: false, completion_tokens: 2 } },
+    { prompt_eval_count: null, eval_count: 2 },
+    { prompt_eval_count: '', eval_count: 2 },
+  ]) assert.equal(extractUsage(data), null)
+
+  assert.deepEqual(extractUsage({
+    usage: { prompt_tokens: 0, completion_tokens: 2 },
+  }), {
+    promptTokens: 0,
+    completionTokens: 2,
+    totalTokens: 2,
+    cacheHitTokens: 0,
+    cacheMissTokens: 0,
+  })
+})
+
+test('OpenAI-compatible prompt tokens already include cached tokens', () => {
+  assert.deepEqual(extractUsage({
+    usage: {
+      prompt_tokens: 100,
+      completion_tokens: 12,
+      prompt_tokens_details: { cached_tokens: 40 },
+    },
+  }), {
+    promptTokens: 100,
+    completionTokens: 12,
+    totalTokens: 112,
+    cacheHitTokens: 40,
+    cacheMissTokens: 60,
   })
 })
 

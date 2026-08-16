@@ -1,4 +1,5 @@
 import { TOOL_CALL_STATUS } from '../../store/taskStatus.js'
+import { normalizeModelUsage } from '../../../shared/modelUsage.js'
 import { createToolOutputBuffer } from './toolOutputBuffer.js'
 
 const TOOL_OUTPUT_FLUSH_EVENT_TYPES = new Set([
@@ -34,6 +35,27 @@ function optionalArtifactIds(payload, key) {
     .map((value) => String(value || '').trim()).filter(Boolean))]
 }
 
+function optionalVerifiedLocalFiles(payload) {
+  if (!payload || typeof payload !== 'object' || !Object.hasOwn(payload, 'verifiedLocalFiles')) return undefined
+  const seen = new Set()
+  return (Array.isArray(payload.verifiedLocalFiles) ? payload.verifiedLocalFiles : [])
+    .map((file) => {
+      const id = String(file?.id || '').trim()
+      const path = String(file?.path || '').trim()
+      const filename = String(file?.filename || '').trim()
+      if (!id || !path || !filename || seen.has(id)) return null
+      seen.add(id)
+      return {
+        id,
+        path,
+        filename,
+        ...(Number.isFinite(Number(file?.size)) ? { size: Math.max(0, Number(file.size)) } : {}),
+        ...(Number.isFinite(Number(file?.verifiedAt)) ? { verifiedAt: Math.max(0, Number(file.verifiedAt)) } : {}),
+      }
+    })
+    .filter(Boolean)
+}
+
 export function normalizeTurnFailurePayload(payload = {}, {
   fallbackCode = 'TURN_FAILED', fallbackMessage = 'Server turn failed',
 } = {}) {
@@ -53,12 +75,14 @@ export function normalizeTurnFailurePayload(payload = {}, {
   }
   const iterations = optionalInteger(payload.iterations, 0)
   const deliveryArtifactIds = optionalArtifactIds(payload, 'deliveryArtifactIds')
+  const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)
   return {
     error,
     partialText: String(payload.partialText ?? payload.text ?? ''),
     artifactIds: [...new Set((Array.isArray(payload.artifactIds) ? payload.artifactIds : [])
       .map((value) => String(value || '').trim()).filter(Boolean))],
     ...(deliveryArtifactIds !== undefined ? { deliveryArtifactIds } : {}),
+    ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
     ...(iterations !== undefined ? { iterations } : {}),
   }
 }
@@ -148,7 +172,7 @@ export async function dispatchTurnEvent(event, {
   if (event.type === 'turn.started') {
     dispatchMessage({
       type: 'UPDATE_LAST_MESSAGE_META',
-      payload: { modelActivity: { kind: 'preparing' } },
+      payload: { modelActivity: { kind: 'preparing' }, turnStartedAt: event.createdAt },
       ...streamCursor,
     })
     cursorCommitted = true
@@ -166,6 +190,11 @@ export async function dispatchTurnEvent(event, {
       type: 'UPDATE_LAST_MESSAGE_META',
       payload: {
         interrupted: false,
+        failed: false,
+        paused: false,
+        streaming: true,
+        turnCompletedAt: null,
+        latency: null,
         serverFailure: null,
         serverPartialText: '',
         serverArtifactIds: [],
@@ -173,15 +202,58 @@ export async function dispatchTurnEvent(event, {
       },
     })
     cursorCommitted = true
+  } else if (event.type === 'turn.resumed') {
+    dispatchMessage({
+      type: 'UPDATE_LAST_MESSAGE_META',
+      payload: {
+        interrupted: false,
+        failed: false,
+        paused: false,
+        streaming: true,
+        turnCompletedAt: null,
+        latency: null,
+        serverConnectionState: 'connected',
+        modelActivity: { kind: 'preparing' },
+      },
+      ...streamCursor,
+    })
+    cursorCommitted = true
   } else if (event.type === 'model.phase') {
-    const label = payload.phase === 'started' ? 'Calling model'
-      : payload.phase === 'failed' ? 'Model call failed'
-        : 'Model response completed'
+    const labels = {
+      started: 'Calling model',
+      waiting_first_token: 'Waiting for model output',
+      streaming: 'Receiving model output',
+      idle: 'Model output paused; task is still running',
+      retrying: 'Retrying model call',
+      failed: 'Model call failed',
+      completed: 'Model response completed',
+    }
+    const label = labels[payload.phase] || 'Model task is running'
     dispatch?.({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { stepLabel: label } } })
-    if (payload.phase === 'started') {
-      dispatchMessage({ type: 'UPDATE_LAST_MESSAGE_META', payload: { modelActivity: { kind: 'model' } } })
+    const modelUsage = payload.phase === 'completed'
+      ? normalizeModelUsage(payload.usage)
+      : null
+    if (payload.phase === 'streaming') {
+      dispatchMessage({
+        type: 'UPDATE_LAST_MESSAGE_META',
+        payload: { modelActivity: { kind: 'responding', phase: payload.phase, iteration: payload.iteration } },
+      })
+    } else if (['started', 'waiting_first_token', 'idle', 'retrying'].includes(payload.phase)) {
+      dispatchMessage({
+        type: 'UPDATE_LAST_MESSAGE_META',
+        payload: { modelActivity: { kind: 'model', phase: payload.phase, iteration: payload.iteration } },
+      })
     } else if (payload.phase === 'completed' || payload.phase === 'failed') {
-      dispatchMessage({ type: 'UPDATE_LAST_MESSAGE_META', payload: { modelActivity: null } })
+      dispatchMessage({
+        type: 'UPDATE_LAST_MESSAGE_META',
+        payload: {
+          modelActivity: null,
+          ...(modelUsage ? {
+            modelUsage,
+            actualPromptTokens: modelUsage.promptTokens,
+          } : {}),
+        },
+      })
     }
   } else if (event.type === 'model.failover') {
     dispatchMessage({
@@ -207,6 +279,10 @@ export async function dispatchTurnEvent(event, {
     })
     cursorCommitted = true
   } else if (event.type === 'reasoning.delta') {
+    dispatchMessage({
+      type: 'UPDATE_LAST_MESSAGE_META',
+      payload: { modelActivity: { kind: 'reasoning', phase: 'streaming', iteration: payload.iteration } },
+    })
     dispatchMessage({ type: 'APPEND_REASONING_TO_LAST_MESSAGE', payload: payload.text || '', ...streamCursor })
     cursorCommitted = true
   } else if (event.type === 'turn.progress') {
@@ -220,6 +296,7 @@ export async function dispatchTurnEvent(event, {
         id: payload.toolCallId,
         name: payload.name,
         ...(payload.args !== undefined ? { arguments: JSON.stringify(payload.args) } : {}),
+        ...(payload.outputReplay ? { outputReplay: payload.outputReplay } : {}),
         status: TOOL_CALL_STATUS.RUNNING,
       },
     })
@@ -279,10 +356,12 @@ export async function dispatchTurnEvent(event, {
     dispatch?.({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { stepLabel: 'Approval resolved, continuing' } } })
   } else if (event.type === 'turn.paused') {
     const deliveryArtifactIds = optionalArtifactIds(payload, 'deliveryArtifactIds')
+    const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)
     dispatchMessage({
       type: 'UPDATE_LAST_MESSAGE_META',
       payload: {
         streaming: false,
+        turnCompletedAt: event.createdAt,
         modelActivity: null,
         paused: true,
         serverConnectionState: 'paused',
@@ -290,6 +369,7 @@ export async function dispatchTurnEvent(event, {
         directoryAuthorizationPending: false,
         serverResumeResolution: null,
         ...(deliveryArtifactIds !== undefined ? { serverDeliveryArtifactIds: deliveryArtifactIds } : {}),
+        ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
       },
       ...streamCursor,
     })
@@ -297,27 +377,38 @@ export async function dispatchTurnEvent(event, {
     cursorCommitted = true
   } else if (event.type === 'turn.completed') {
     const deliveryArtifactIds = optionalArtifactIds(payload, 'deliveryArtifactIds')
+    const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)
+    const modelUsage = normalizeModelUsage(payload.usage)
     dispatchMessage({
       type: 'UPDATE_LAST_MESSAGE_META',
       payload: {
         streaming: false,
+        turnCompletedAt: event.createdAt,
         modelActivity: null,
         serverConnectionState: null,
         serverArtifactIds: optionalArtifactIds(payload, 'artifactIds') || [],
         ...(deliveryArtifactIds !== undefined ? { serverDeliveryArtifactIds: deliveryArtifactIds } : {}),
+        ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
+        ...(modelUsage ? {
+          modelUsage,
+          actualPromptTokens: modelUsage.promptTokens,
+        } : {}),
       },
       ...streamCursor,
     })
     cursorCommitted = true
   } else if (event.type === 'turn.cancelled') {
+    const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)
     dispatchMessage({
       type: 'UPDATE_LAST_MESSAGE_META',
       payload: {
         streaming: false,
+        turnCompletedAt: event.createdAt,
         modelActivity: null,
         serverConnectionState: 'cancelled',
         serverArtifactIds: optionalArtifactIds(payload, 'artifactIds') || [],
         serverDeliveryArtifactIds: optionalArtifactIds(payload, 'deliveryArtifactIds') || [],
+        ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
       },
       ...streamCursor,
     })
@@ -331,7 +422,9 @@ export async function dispatchTurnEvent(event, {
       type: 'UPDATE_LAST_MESSAGE_META',
       payload: {
         serverFailure: failure.error,
-        streaming: false,
+        streaming: event.type === 'turn.interrupted',
+        turnCompletedAt: event.type === 'turn.interrupted' ? null : event.createdAt,
+        ...(event.type === 'turn.interrupted' ? { latency: null } : {}),
         modelActivity: null,
         ...(event.type === 'turn.failed' ? { serverConnectionState: null } : {}),
         serverPartialText: failure.partialText,
@@ -339,10 +432,13 @@ export async function dispatchTurnEvent(event, {
         ...(failure.deliveryArtifactIds !== undefined
           ? { serverDeliveryArtifactIds: failure.deliveryArtifactIds }
           : {}),
+        ...(failure.verifiedLocalFiles !== undefined
+          ? { verifiedLocalFiles: failure.verifiedLocalFiles }
+          : {}),
         ...(failure.iterations !== undefined ? { serverIterations: failure.iterations } : {}),
         interrupted: event.type === 'turn.interrupted',
         ...(event.type === 'turn.interrupted'
-          ? { serverConnectionState: 'interrupted' }
+          ? { failed: false, paused: false, serverConnectionState: 'interrupted' }
           : { failed: true, streaming: false }),
       },
       ...streamCursor,

@@ -1,4 +1,5 @@
 import { normalizeModelContentForEndpoint } from '../utils/modelContentCapabilities.js'
+import { normalizeOptionalUsageNumber } from '../../shared/modelUsage.js'
 
 export const NATIVE_PROVIDER_KINDS = new Set(['anthropic', 'gemini'])
 
@@ -257,28 +258,70 @@ export function buildNativeProviderRequest(args = {}) {
   throw new Error(`Unsupported native provider kind: ${args.profile?.kind || 'unknown'}`)
 }
 
-function commonUsage({ prompt = 0, completion = 0, total = 0, cached = 0 } = {}) {
-  const promptTokens = Number(prompt) || 0
-  const completionTokens = Number(completion) || 0
-  const cacheHitTokens = Number(cached) || 0
-  return {
-    promptTokens,
-    completionTokens,
-    totalTokens: Number(total) || promptTokens + completionTokens,
-    cacheHitTokens,
-    cacheMissTokens: Math.max(0, promptTokens - cacheHitTokens),
+function commonUsage({ prompt, completion, total, cached } = {}, { allowPartial = false } = {}) {
+  const promptTokens = normalizeOptionalUsageNumber(prompt)
+  const completionTokens = normalizeOptionalUsageNumber(completion)
+  const totalTokens = normalizeOptionalUsageNumber(total)
+  const cacheHitTokens = normalizeOptionalUsageNumber(cached)
+  if (promptTokens === null && !allowPartial) return null
+  if (
+    promptTokens === null
+    && completionTokens === null
+    && totalTokens === null
+    && cacheHitTokens === null
+  ) return null
+
+  const normalized = {}
+  if (promptTokens !== null) normalized.promptTokens = Math.floor(promptTokens)
+  if (completionTokens !== null) normalized.completionTokens = Math.floor(completionTokens)
+  else if (promptTokens !== null) normalized.completionTokens = 0
+  if (totalTokens !== null) normalized.totalTokens = Math.floor(totalTokens)
+  else if (promptTokens !== null) {
+    normalized.totalTokens = Math.floor(promptTokens + (completionTokens ?? 0))
   }
+  if (cacheHitTokens !== null) normalized.cacheHitTokens = Math.floor(cacheHitTokens)
+  else if (promptTokens !== null) normalized.cacheHitTokens = 0
+  if (promptTokens !== null) {
+    normalized.cacheMissTokens = Math.max(0, Math.floor(promptTokens - (cacheHitTokens ?? 0)))
+  }
+  return normalized
 }
 
-export function extractNativeProviderUsage(data, kind = '') {
+function anthropicUsage(usage, { allowPartial = false } = {}) {
+  const uncachedInputTokens = normalizeOptionalUsageNumber(usage?.input_tokens)
+  const cacheHitTokens = normalizeOptionalUsageNumber(usage?.cache_read_input_tokens)
+  const cacheCreationTokens = normalizeOptionalUsageNumber(usage?.cache_creation_input_tokens)
+  const completionTokens = normalizeOptionalUsageNumber(usage?.output_tokens)
+  const hasPromptUsage = uncachedInputTokens !== null
+    || cacheHitTokens !== null
+    || cacheCreationTokens !== null
+  if (!hasPromptUsage && !allowPartial) return null
+  if (!hasPromptUsage && completionTokens === null) return null
+
+  const normalized = {}
+  if (hasPromptUsage) {
+    const uncached = Math.floor(uncachedInputTokens ?? 0)
+    const cached = Math.floor(cacheHitTokens ?? 0)
+    const created = Math.floor(cacheCreationTokens ?? 0)
+    normalized.promptTokens = uncached + cached + created
+    normalized.cacheHitTokens = cached
+    normalized.cacheCreationTokens = created
+    normalized.uncachedInputTokens = uncached
+    normalized.cacheMissTokens = uncached + created
+  }
+  if (completionTokens !== null) normalized.completionTokens = Math.floor(completionTokens)
+  else if (hasPromptUsage) normalized.completionTokens = 0
+  if (hasPromptUsage) {
+    normalized.totalTokens = normalized.promptTokens + (normalized.completionTokens ?? 0)
+  }
+  return normalized
+}
+
+export function extractNativeProviderUsage(data, kind = '', options = {}) {
   if (kind === 'anthropic') {
     const usage = data?.usage
     if (!usage) return null
-    return commonUsage({
-      prompt: usage.input_tokens,
-      completion: usage.output_tokens,
-      cached: usage.cache_read_input_tokens,
-    })
+    return anthropicUsage(usage, options)
   }
   if (kind === 'gemini') {
     const usage = data?.usageMetadata
@@ -288,7 +331,7 @@ export function extractNativeProviderUsage(data, kind = '') {
       completion: usage.candidatesTokenCount,
       total: usage.totalTokenCount,
       cached: usage.cachedContentTokenCount,
-    })
+    }, options)
   }
   return null
 }
@@ -332,15 +375,26 @@ export function createNativeProviderStreamState(kind = '') {
 function mergeUsage(previous, current) {
   if (!previous) return current
   if (!current) return previous
-  const promptTokens = current.promptTokens || previous.promptTokens
-  const completionTokens = current.completionTokens || previous.completionTokens
-  return {
-    promptTokens,
-    completionTokens,
-    totalTokens: promptTokens + completionTokens,
-    cacheHitTokens: current.cacheHitTokens || previous.cacheHitTokens,
-    cacheMissTokens: current.cacheMissTokens || previous.cacheMissTokens,
+  const promptTokens = current.promptTokens ?? previous.promptTokens
+  const completionTokens = current.completionTokens ?? previous.completionTokens
+  const cacheHitTokens = current.cacheHitTokens ?? previous.cacheHitTokens
+  const cacheCreationTokens = current.cacheCreationTokens ?? previous.cacheCreationTokens
+  const uncachedInputTokens = current.uncachedInputTokens ?? previous.uncachedInputTokens
+  const cacheMissTokens = current.cacheMissTokens ?? previous.cacheMissTokens
+  const merged = {}
+  if (promptTokens !== undefined) merged.promptTokens = promptTokens
+  if (completionTokens !== undefined) merged.completionTokens = completionTokens
+  if (promptTokens !== undefined && completionTokens !== undefined) {
+    merged.totalTokens = promptTokens + completionTokens
+  } else if (current.totalTokens !== undefined || previous.totalTokens !== undefined) {
+    merged.totalTokens = current.totalTokens ?? previous.totalTokens
   }
+  if (cacheHitTokens !== undefined) merged.cacheHitTokens = cacheHitTokens
+  if (cacheCreationTokens !== undefined) merged.cacheCreationTokens = cacheCreationTokens
+  if (uncachedInputTokens !== undefined) merged.uncachedInputTokens = uncachedInputTokens
+  if (cacheMissTokens !== undefined) merged.cacheMissTokens = cacheMissTokens
+  else if (promptTokens !== undefined) merged.cacheMissTokens = Math.max(0, promptTokens - (cacheHitTokens ?? 0))
+  return merged
 }
 
 function finishEvents(state) {
@@ -360,7 +414,11 @@ function finishEvents(state) {
 export function consumeNativeProviderStreamPayload(data, state) {
   const events = []
   if (state.kind === 'anthropic') {
-    const usage = extractNativeProviderUsage({ usage: data?.message?.usage || data?.usage }, 'anthropic')
+    const usage = extractNativeProviderUsage(
+      { usage: data?.message?.usage || data?.usage },
+      'anthropic',
+      { allowPartial: true },
+    )
     if (usage) {
       state.usage = mergeUsage(state.usage, usage)
       events.push({ type: 'usage', usage: state.usage })
@@ -394,8 +452,9 @@ export function consumeNativeProviderStreamPayload(data, state) {
   }
 
   const parsed = parseNativeProviderResponse(data, 'gemini')
-  if (parsed.usage) {
-    state.usage = mergeUsage(state.usage, parsed.usage)
+  const streamedUsage = extractNativeProviderUsage(data, 'gemini', { allowPartial: true })
+  if (streamedUsage) {
+    state.usage = mergeUsage(state.usage, streamedUsage)
     events.push({ type: 'usage', usage: state.usage })
   }
   const parts = data?.candidates?.[0]?.content?.parts || []
