@@ -25,7 +25,7 @@ import { deleteArtifactSourceSnapshot, readArtifactSourcePage, writeArtifactSour
 import { publishTurnActivity } from './turnActivityBus.js'
 import { recordFileSnapshot, rewindFromToolCall } from './fileSnapshotStore.js'
 import { killBackgroundProcess, listBackgroundProcesses, startBackgroundProcess } from './backgroundProcessStore.js'
-import { createDocx, createHtmlArtifact, createImageArtifact, createLocalFileArtifact, createLocalFileArtifactAsync, createPdf, createPptx, createXlsx, getArtifactDir } from './artifactGen.js'
+import { MAX_HTML_ARTIFACT_BYTES, createDocx, createHtmlArtifact, createImageArtifact, createLocalFileArtifact, createLocalFileArtifactAsync, createPdf, createPptx, createXlsx, getArtifactDir } from './artifactGen.js'
 import { parseMarkdownDocument } from '../../src/lib/officeExport/documentExport.js'
 import { parseSpreadsheetRows } from '../../src/lib/officeExport/spreadsheetExport.js'
 import { parseMarkdownSlides } from '../../src/lib/presentationExport/presentationParser.js'
@@ -52,6 +52,7 @@ import { fetchAndExtract } from '../adapters/toolProxy.js'
 import { searchWeb } from './webSearchService.js'
 import { generateImage } from './mediaModelService.js'
 import { syncGeneratedArtifactToOutputDirectory } from './generatedArtifactDelivery.js'
+import { getManagedAttachment } from './managedAttachmentStore.js'
 
 
 const FS_SHELL_TOOL_NAMES = new Set(
@@ -73,6 +74,74 @@ const LOCAL_ARTIFACT_TOOL_NAMES = new Set([
   'archive_create',
   'file_download',
 ])
+const HTML_ATTACHMENT_URI = /attachment:\/\/([a-zA-Z0-9][a-zA-Z0-9_-]{7,127})/g
+const HTML_INLINE_IMAGE_MIMES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'image/avif',
+])
+
+function attachmentUriOccurrences(source, uri) {
+  let count = 0
+  let offset = 0
+  while ((offset = source.indexOf(uri, offset)) !== -1) {
+    count += 1
+    offset += uri.length
+  }
+  return count
+}
+
+function predictedInlineBytes(source, uri, attachment, mimeType) {
+  const occurrences = attachmentUriOccurrences(source, uri)
+  const encodedBytes = Math.ceil(Number(attachment.size || 0) / 3) * 4
+  const dataUriBytes = Buffer.byteLength(`data:${mimeType};base64,`, 'utf8') + encodedBytes
+  return Buffer.byteLength(source, 'utf8')
+    - (Buffer.byteLength(uri, 'utf8') * occurrences)
+    + (dataUriBytes * occurrences)
+}
+
+async function inlineHtmlAttachmentUris(value, { userId } = {}) {
+  const source = String(value || '')
+  const attachmentIds = [...new Set([...source.matchAll(HTML_ATTACHMENT_URI)].map((match) => match[1]))]
+  let resolved = source
+  for (const attachmentId of attachmentIds) {
+    const attachment = getManagedAttachment({ userId, id: attachmentId })
+    if (!attachment || attachment.status !== 'ready') {
+      throw new Error('html references an attachment that is unavailable or not owned by the current user')
+    }
+    const mimeType = String(attachment.mimeType || '').split(';', 1)[0].trim().toLowerCase()
+    if (!HTML_INLINE_IMAGE_MIMES.has(mimeType)) {
+      throw new Error('html attachment references must point to a supported raster image')
+    }
+    const uri = `attachment://${attachmentId}`
+    if (predictedInlineBytes(resolved, uri, attachment, mimeType) > MAX_HTML_ARTIFACT_BYTES) {
+      throw new Error('html attachment is too large to inline; resize or compress the image first')
+    }
+    const bytes = await fs.promises.readFile(attachment.fullPath)
+    const dataUri = `data:${mimeType};base64,${bytes.toString('base64')}`
+    resolved = resolved.replaceAll(uri, dataUri)
+    if (Buffer.byteLength(resolved, 'utf8') > MAX_HTML_ARTIFACT_BYTES) {
+      throw new Error('html attachment is too large to inline; resize or compress the image first')
+    }
+  }
+  return resolved
+}
+
+async function resolveHtmlArtifactArgs(args = {}, { userId } = {}) {
+  const resolved = { ...args }
+  if (typeof resolved.html === 'string') {
+    resolved.html = await inlineHtmlAttachmentUris(resolved.html, { userId })
+  }
+  if (resolved.files && typeof resolved.files === 'object' && !Array.isArray(resolved.files)) {
+    resolved.files = Object.fromEntries(await Promise.all(Object.entries(resolved.files).map(async ([name, content]) => [
+      name,
+      typeof content === 'string' ? await inlineHtmlAttachmentUris(content, { userId }) : content,
+    ])))
+  }
+  return resolved
+}
 
 // 死循环护栏,不是工作预算。后台任务无人盯着,不能真的无限跑 ——
 // 但真正的收敛是 jobBudget(累积调用数 + 挂钟时间),那个和成本线性相关。
@@ -2013,9 +2082,14 @@ async function executeServerTool({
     return publishedArtifactResult({ name, artifact, args, job })
   }
   if (name === 'create_html_app') {
-    const generatedArtifact = createHtmlArtifact({ title: args.title, html: args.html, files: args.files })
-    const artifact = publishGeneratedArtifact({ name, artifact: generatedArtifact, args, job, step })
-    return publishedArtifactResult({ name, artifact, args, job })
+    const resolvedArgs = await resolveHtmlArtifactArgs(args, { userId: job?.userId || null })
+    const generatedArtifact = createHtmlArtifact({
+      title: resolvedArgs.title,
+      html: resolvedArgs.html,
+      files: resolvedArgs.files,
+    })
+    const artifact = publishGeneratedArtifact({ name, artifact: generatedArtifact, args: resolvedArgs, job, step })
+    return publishedArtifactResult({ name, artifact, args: resolvedArgs, job })
   }
   // fs/shell 工具不落 artifact,执行结果直接回给模型.
   // 任意 fsShellTools 抛错(包括 env 未启用 / 路径越界)都返回 {ok:false,error}.

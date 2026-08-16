@@ -58,6 +58,7 @@ test('local paths are authorized before the model call and paused turns resume i
 test('right workbench toggle leaves the navigation rail mounted', () => {
   const chat = readSourceTree('../src/pages/ChatSplit/')
   const view = read('../src/pages/ChatSplit/ChatSplitView.jsx')
+  const shortcuts = read('../src/components/GlobalShortcuts.jsx')
 
   assert.match(chat, /const \[workbenchOpen, setWorkbenchOpen\] = useState\(readWorkbenchOpen\)/)
   assert.match(view, /<LeftRail \/>/)
@@ -66,6 +67,10 @@ test('right workbench toggle leaves the navigation rail mounted', () => {
   assert.match(view, /aria-controls="right-workbench"/)
   assert.match(view, /aria-expanded=\{workbenchOpen\}/)
   assert.match(view, /<RightWorkbench/)
+  assert.match(view, /if \(!workbenchOpen\) return null[\s\S]*if \(previewArtifact\)/)
+  assert.match(chat, /onClosePreview=\{\(\) => setWorkbenchOpen\(false\)\}/)
+  assert.match(chat, /onOpenArtifact=\{\(artifact\) => \{ setWorkbenchOpen\(true\); dispatch\(\{ type: 'OPEN_PREVIEW_ARTIFACT'/)
+  assert.doesNotMatch(shortcuts, /CLOSE_PREVIEW_ARTIFACT/)
   assert.match(chat, /writeWorkbenchOpen\(workbenchOpen\)/)
 })
 

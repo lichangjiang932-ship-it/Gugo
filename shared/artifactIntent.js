@@ -89,6 +89,21 @@ const STRONG_ARTIFACT_FORMAT = Object.freeze({
 // This is deliberately action-oriented: merely discussing or asking about an
 // older file must not keep artifact generators enabled forever.
 const ARTIFACT_REVISION_ACTION = /(?:继续(?:修改|编辑|完善|优化|调整|润色|改进|补充|更新|迭代)|(?:请|帮我|麻烦)?(?:把|将)?(?:它|这个|这里|刚才的|上一个|上一版|该(?:文件|页面|文档|表格|演示|幻灯片))?[^。！？!?\n]{0,24}(?:修改|编辑|完善|优化|调整|润色|改进|补充|更新|迭代|重做|重制|替换|换成|改成|改(?:一?下)?|换(?:一?下|个)?|删(?:一?下|掉)?|删除|添加|加(?:一?下|上)?|补(?:一?下|上)?|缩小|放大)|(?:再|重新|继续|请|帮我|麻烦)?(?:改|换|删|加|补|调|修)(?:一?下|个|掉|成|为)?[^。！？!?\n]{0,24}|(?:这里|这版|上一版|刚才的)[^。！？!?\n]{0,24}(?:不足|不对|不好|有问题)[^。！？!?\n]{0,20}(?:改|修|调整|优化|完善)|(?:revise|edit|update|improve|refine|adjust|polish|iterate|redo|redesign|change|replace|remove|add|continue\s+(?:working|editing|improving))\b)/i
+// Object-first follow-ups often describe the desired placement instead of
+// saying "modify" explicitly: "把这张人物图作为背景" still changes the
+// immediately preceding webpage. Every branch starts at a sentence boundary
+// and accepts only command prefixes so "不要把...", "是否用...", "Why
+// use...", and similar discussion cannot unlock mutation tools from a
+// substring in the middle of the sentence.
+const ARTIFACT_REVISION_PLACEMENT = /(?:^|[\n。！？!?；;，,])\s*(?:(?:(?:请|帮我|麻烦(?:你)?|直接|继续|再|只)\s*)*(?:(?:把|将)\s*[^。！？!?；;\n]{1,40}?(?:作为|设为|设置为|设成|用作|当作|当)\s*(?:网页|网站|页面|首页|文档|幻灯片|演示)?\s*(?:的)?\s*(?:背景(?:图|图片)?|封面(?:图|图片)?|主视觉)(?:使用)?|(?:用|使用|以)\s*[^。！？!?；;\n]{1,40}?(?:作为|用作|当作|来做|做(?:成)?)\s*(?:网页|网站|页面|首页|文档|幻灯片|演示)?\s*(?:的)?\s*(?:背景(?:图|图片)?|封面(?:图|图片)?|主视觉))|(?:(?:please\s+|(?:can|could|would)\s+you\s+)?(?:use|set|make)\s+(?:(?:this|that|these|those|the|my|your|uploaded|attached|provided|existing|current)\s+){0,4}(?:image|photo|picture|portrait|attachment)\s+(?:(?:as|for)\s+)?(?:(?:the|an?)\s+)?(?:(?:website|webpage|page|document|slide|deck)\s+)?(?:background(?!\s+(?:information|context|material|reference)\b)|cover|hero(?:\s+(?:image|art))?)))/i
+const EXISTING_ASSET_PLACEMENT = /(?:(?:这|那|该|此)(?:一)?(?:张|幅|个)?(?:人物)?(?:图|图片|图像|照片)|(?:上传(?:的)?|附件(?:中|里|的)?|我(?:上传|提供|发)(?:的)?)[^。！？!?；;\n]{0,12}(?:(?:人物)?(?:图|图片|图像|照片|附件)|[^\s。！？!?；;]+\.(?:avif|gif|jpe?g|png|webp))|[^\s。！？!?；;]+\.(?:avif|gif|jpe?g|png|webp)|(?:(?:this|that|these|those|my|your)\s+)(?:(?:attached|uploaded|provided|existing|current)\s+)?(?:image|photo|picture|portrait|attachment)|(?:the\s+)?(?:attached|uploaded|provided|existing|current)\s+(?:image|photo|picture|portrait|attachment))/i
+const ADDITIONAL_IMAGE_PRODUCTION = /(?:(?:另外|另行|同时|还要|并且|以及|再)\s*(?:请|帮我|麻烦)?\s*(?:生成|创建|制作|画|绘制)|(?:also|additionally|separately)\s+(?:generate|create|make|draw))[^。！？!?\n]{0,32}(?:图|图片|图像|照片|海报|插图|image|photo|picture|poster|illustration)/i
+const ARTIFACT_REVISION_SHORT_DENIAL = /(?:不要|不用|无需|别|禁止|停止|取消)\s*(?:再)?\s*(?:改|换|删|加|补|调|修)(?:一?下|掉|成|为)?/gi
+
+function isExistingAssetPlacement(text = '') {
+  const placement = String(text || '').match(ARTIFACT_REVISION_PLACEMENT)?.[0] || ''
+  return Boolean(placement && EXISTING_ASSET_PLACEMENT.test(placement))
+}
 const ARTIFACT_REVISION_DENIAL = /(?:不要|不用|无需|别|禁止|停止|取消)[^，,；;：:。！？!?\n]{0,20}(?:修改|编辑|更新|优化|调整|重做|生成|导出)|(?:do\s+not|don't|dont|never|stop|cancel)[^,;:.!?\n]{0,24}(?:revise|edit|update|change|generate|export)/i
 const ARTIFACT_REVISION_DISCUSSION = /^(?:为什么|为何|怎么|如何|请?(?:解释|说明|分析|讨论)|告诉我)[^。！？!?\n]{0,40}|(?:修改|编辑|调整|优化|改|换)[^。！？!?\n]{0,10}(?:是什么|什么意思|含义|原则|方法|逻辑|代码|工具)/i
 const ARTIFACT_REPLACE_ORIGINAL_CUE = /(?:原地(?:修改|编辑|更新|覆盖)|(?:修改|编辑|更新|覆盖|改动?|调整)(?:原版|原文件|原文档|原表格|原演示|当前文件|当前版本|上一版)|(?:在|基于)(?:原版|原文件|当前文件|当前版本|上一版)(?:上|中|直接)?(?:修改|编辑|更新|覆盖|改动?|调整)|直接覆盖(?:原版|原文件|当前文件|上一版)|(?:edit|update|modify|overwrite)\s+(?:the\s+)?(?:original|existing|same)\s+(?:file|artifact|document|deck|workbook|page)|in[ -]?place)/i
@@ -352,7 +367,11 @@ export function isArtifactRevisionRequest(prompt = '') {
     || GLOBAL_DENIAL.test(text)
     || ARTIFACT_REVISION_DENIAL.test(text)
     || ARTIFACT_REVISION_DISCUSSION.test(text)) return false
-  return ARTIFACT_REVISION_ACTION.test(text)
+  const existingAssetPlacement = isExistingAssetPlacement(text)
+  const actionText = text.replace(ARTIFACT_REVISION_SHORT_DENIAL, ' ')
+  ARTIFACT_REVISION_SHORT_DENIAL.lastIndex = 0
+  return ARTIFACT_REVISION_ACTION.test(actionText)
+    || existingAssetPlacement
     || resolveArtifactRevisionMode(text) !== 'unspecified'
 }
 
@@ -412,7 +431,14 @@ function detectArtifactIntentRaw(prompt = '', { skillId = undefined, priorArtifa
   const explicitXlsx = hasExplicitArtifactRequest(text, 'xlsx')
   const explicitHtml = hasExplicitArtifactRequest(text, 'html')
   const explicitPdf = hasExplicitArtifactRequest(text, 'pdf')
+  const existingAssetPlacement = isExistingAssetPlacement(text)
+    && isArtifactRevisionRequest(text)
+  const additionalImageProduction = ADDITIONAL_IMAGE_PRODUCTION.test(text)
+  // In "use this image as the background", the image is an input asset, not
+  // a request to generate a second image artifact. An independent clause such
+  // as "also generate a new illustration" remains explicit production.
   const explicitImage = hasExplicitArtifactRequest(text, 'image')
+    && (!existingAssetPlacement || additionalImageProduction)
   const allowAdditionalFormat = (type) => Boolean(
     ADDITIONAL_ARTIFACT_CUE.test(text)
       && STRONG_ARTIFACT_FORMAT[type]?.test(text)
@@ -420,7 +446,8 @@ function detectArtifactIntentRaw(prompt = '', { skillId = undefined, priorArtifa
   )
   const pptx = skillTool === 'create_pptx' || (skillTool ? allowAdditionalFormat('pptx') : explicitPptx)
   const explicitAny = Boolean(skillTool || explicitPptx || explicitDocx || explicitXlsx || explicitHtml || explicitPdf || explicitImage)
-  const inherited = !explicitAny && isArtifactRevisionRequest(text)
+  const inherited = (!explicitAny || existingAssetPlacement)
+    && isArtifactRevisionRequest(text)
     ? normalizePriorArtifactTypes(priorArtifactTypes)
     : new Set()
   return {

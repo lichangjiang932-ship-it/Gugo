@@ -10,8 +10,13 @@ process.env.APP_DATA_DIR = path.join(root, 'data')
 
 const { syncGeneratedArtifactToOutputDirectory } = await import('../server/services/generatedArtifactDelivery.js')
 const { writeArtifactSourceSnapshot } = await import('../server/services/artifactSourceStore.js')
+const { closeDb, createUser } = await import('../server/db.js')
+const { setDefaultOutputDirectory } = await import('../server/services/localFileAccessService.js')
 
-test.after(() => fs.rmSync(root, { recursive: true, force: true }))
+test.after(() => {
+  closeDb()
+  fs.rmSync(root, { recursive: true, force: true })
+})
 
 test('new generated artifacts use the default directory and revisions keep that exact path', () => {
   const artifactDirectory = path.join(root, 'artifacts')
@@ -43,6 +48,44 @@ test('new generated artifacts use the default directory and revisions keep that 
   })
   assert.equal(revised.path, first.path)
   assert.equal(fs.readFileSync(revised.path, 'utf8'), 'revised version')
+})
+
+test('an omitted destination uses the persisted default while later revisions stay in place', () => {
+  const userId = 'persisted-default-output-user'
+  const artifactDirectory = path.join(root, 'artifacts')
+  const firstDefault = path.join(root, 'persisted-default-one')
+  const laterDefault = path.join(root, 'persisted-default-two')
+  const managedPath = path.join(artifactDirectory, 'persisted-report.pdf')
+  createUser({ id: userId, email: 'persisted-default-output@example.com' })
+  fs.mkdirSync(artifactDirectory, { recursive: true })
+  fs.writeFileSync(managedPath, 'persisted first version')
+  setDefaultOutputDirectory({ userId, rootPath: `"${firstDefault}"` })
+
+  const first = syncGeneratedArtifactToOutputDirectory({
+    artifact: { id: 'persisted-default-artifact', filename: 'persisted-report.pdf', fullPath: managedPath },
+    args: { title: 'Persisted report', markdown: 'first version' },
+    toolName: 'create_pdf',
+    userId,
+  })
+  assert.equal(first.path, path.join(firstDefault, 'persisted-report.pdf'))
+
+  setDefaultOutputDirectory({ userId, rootPath: laterDefault })
+  fs.writeFileSync(managedPath, 'persisted revised version')
+  const revised = syncGeneratedArtifactToOutputDirectory({
+    artifact: {
+      id: 'persisted-default-artifact',
+      filename: 'persisted-report.pdf',
+      fullPath: managedPath,
+      replaced: true,
+    },
+    args: { title: 'Persisted report', markdown: 'revised version', replace_artifact_id: 'persisted-default-artifact' },
+    toolName: 'create_pdf',
+    userId,
+  })
+
+  assert.equal(revised.path, first.path)
+  assert.equal(fs.readFileSync(first.path, 'utf8'), 'persisted revised version')
+  assert.deepEqual(fs.readdirSync(laterDefault), [])
 })
 
 test('new artifacts never overwrite an unrelated same-named file', () => {

@@ -239,6 +239,11 @@ test('HTML artifact validation keeps genuine compact webpages valid', () => {
   assert.equal(validateHtmlArtifactSource(html), html)
 })
 
+test('HTML artifact validation rejects unresolved managed attachment URIs', () => {
+  const html = '<!doctype html><html><body style="background-image:url(attachment://attachment-123)"><main>Page</main></body></html>'
+  assert.throws(() => validateHtmlArtifactSource(html), /unresolved attachment URI/i)
+})
+
 test('artifact filenames use the document title and increment duplicate names', async () => {
   assert.equal(buildArtifactFilename('项目总结', 'docx'), '项目总结.docx')
   const first = await createDocx({ title: '项目总结', paragraphs: [{ text: '第一版' }] })

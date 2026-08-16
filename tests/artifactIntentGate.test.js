@@ -10,6 +10,7 @@ import {
   expectsFileArtifact,
   findAdjacentDeliveredArtifacts,
   findExplicitlyReferencedDeliveredArtifacts,
+  isArtifactRevisionRequest,
   isFileArtifactTool,
   parseSkillIdFromPrompt,
   resolveArtifactDeliveryTarget,
@@ -166,6 +167,97 @@ test('explicit image production unlocks only generate_image', () => {
     ['generate_image'],
   )
   assert.equal(detectArtifactIntent('why did generate_image run?').image, false)
+})
+
+test('object-first attachment placement inherits the adjacent webpage revision contract', () => {
+  const priorArtifacts = [{
+    id: 'previous-html-artifact',
+    type: 'html',
+    filename: '产品网页.html',
+    toolName: 'create_html_app',
+  }]
+  const priorArtifactTypes = priorArtifacts.map((artifact) => artifact.type)
+  const revisionPrompts = [
+    '把这张人物图作为背景',
+    '请把这张图片设为背景',
+    '帮我把这张图片设为背景',
+    '将上传的照片设为网页背景图',
+    '麻烦将附件图片用作网页背景',
+    '使用附件里的图片作为页面主视觉',
+    '用这张图片做背景',
+    '请使用这张图片作为网页背景',
+    '请把附件里的图片当背景使用',
+    '用我提供的照片做封面图',
+    'Use this attached image as the website background',
+    'Use this image as a background',
+    'Set the uploaded photo as the page hero image',
+  ]
+
+  for (const prompt of revisionPrompts) {
+    assert.equal(isArtifactRevisionRequest(prompt), true, prompt)
+    const intentOptions = { priorArtifacts, priorArtifactTypes }
+    assert.equal(detectArtifactIntent(prompt, intentOptions).html, true, prompt)
+    assert.deepEqual([...allowedArtifactTools(prompt, intentOptions)], ['create_html_app'], prompt)
+    assert.equal(resolveArtifactDeliveryTarget(prompt, intentOptions), 'managed_artifact', prompt)
+
+    const visible = nameOf(selectJobToolSpecs({
+      prompt,
+      userPrompt: prompt,
+      priorArtifacts,
+      priorArtifactTypes,
+      origin: 'chat',
+      specs: SERVER_TOOL_SPECS,
+    }))
+    for (const name of [
+      'create_html_app',
+      'image_info',
+      'image_transform',
+      'read_artifact_source',
+      'write_file',
+      'run_project_check',
+      'set_deliverables',
+    ]) {
+      assert.ok(visible.includes(name), `${prompt}: ${name}`)
+    }
+    assert.equal(visible.includes('generate_image'), false, prompt)
+  }
+
+  for (const prompt of [
+    '不要把这张图作为背景',
+    '别用这张图作为背景',
+    '是否用这张图作为背景？',
+    '我建议用这张图作为背景',
+    '为什么上一版把人物图设为背景？',
+    '先告诉我如何把图片作为背景，不要修改文件',
+    'Do not use this image as the background.',
+    'Why use this image as the background?',
+    'Can I use this image as the background?',
+    'Should we use this image as the background?',
+    '把项目经历作为背景介绍一下',
+    '将现状作为背景分析问题',
+    '把这个需求作为背景说明一下',
+    '把项目经历作为背景介绍一下，并参考这张图',
+    '把项目经历作为背景介绍一下，这张图不要改',
+    'Use this file as background information',
+  ]) {
+    assert.equal(isArtifactRevisionRequest(prompt), false, prompt)
+    const intentOptions = { priorArtifacts, priorArtifactTypes }
+    assert.equal(detectArtifactIntent(prompt, intentOptions).html, false, prompt)
+    assert.deepEqual([...allowedArtifactTools(prompt, intentOptions)], [], prompt)
+  }
+
+  assert.deepEqual(
+    [...allowedArtifactTools('把这张人物图作为背景')],
+    [],
+    'an existing input image is not a request to generate a new image without a target artifact',
+  )
+  assert.deepEqual(
+    [...allowedArtifactTools('把这张人物图作为背景，同时生成一张新的装饰插图', {
+      priorArtifacts,
+      priorArtifactTypes,
+    })].sort(),
+    ['create_html_app', 'generate_image'],
+  )
 })
 
 test('explicit PDF production works without a slash skill', () => {

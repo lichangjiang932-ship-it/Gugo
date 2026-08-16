@@ -28,6 +28,7 @@ export function ChatRightPanels({
   onClosePreview,
   onPreviewMessage,
 }) {
+  if (!workbenchOpen) return null
   if (previewArtifact) {
     return <RightPreviewPane
       artifact={previewArtifact}
@@ -39,7 +40,6 @@ export function ChatRightPanels({
       onMessage={onPreviewMessage}
     />
   }
-  if (!workbenchOpen) return null
   return (
     <RightWorkbench
       messages={messages}
