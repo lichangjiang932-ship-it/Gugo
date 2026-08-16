@@ -77,11 +77,11 @@ export default function RightPreviewPane({
   }, [onActivateTab])
 
   const closeTab = useCallback((tabId) => {
-    if (tabState.tabs.length <= 1 || typeof onCloseTab !== 'function') {
+    if (typeof onCloseTab !== 'function') {
       closePane()
       return
     }
-    focusActiveTabRef.current = true
+    focusActiveTabRef.current = tabState.tabs.length > 1
     onCloseTab(tabId)
   }, [closePane, onCloseTab, tabState.tabs.length])
 

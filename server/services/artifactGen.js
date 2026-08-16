@@ -158,7 +158,7 @@ export function createImageArtifact({ title = 'generated-image', buffer, mimeTyp
   return { ...artifactPath, type: 'image', title: String(title || 'generated-image').slice(0, 200) }
 }
 
-const MAX_HTML_ARTIFACT_BYTES = 2 * 1024 * 1024
+export const MAX_HTML_ARTIFACT_BYTES = 2 * 1024 * 1024
 const HTML_FENCE = /^\s*```(?:html)?\s*([\s\S]*?)\s*```\s*$/i
 
 function normalizeHtmlArtifactSource(value) {
@@ -275,6 +275,9 @@ export function validateHtmlArtifactSource(source) {
   }
   if (!/<(?:!doctype\s+html|html|head|body|main|section)\b/i.test(html)) {
     throw new Error('html must contain a complete HTML document')
+  }
+  if (/attachment:\/\//i.test(html)) {
+    throw new Error('html artifact contains an unresolved attachment URI')
   }
   const blocked = [
     /<script\b[^>]*\bsrc\s*=/i,

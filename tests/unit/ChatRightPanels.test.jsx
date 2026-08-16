@@ -52,6 +52,32 @@ test('a generated file preview is the only mounted right panel', async () => {
     assert.equal(rootElement.querySelector('[data-testid="right-workbench"]'), null)
 
     await act(async () => root.render(
+      <I18nProvider>
+        <ChatRightPanels
+          {...baseProps}
+          workbenchOpen={false}
+          previewArtifact={{ messageId: 'final-message', content: '', preview: null, directFile: {
+            id: 'final-pdf', filename: 'final-report.pdf', type: 'pdf', url: '/api/artifacts/final-pdf',
+          } }}
+        />
+      </I18nProvider>,
+    ))
+    assert.equal(rootElement.querySelector('[data-testid="direct-file-pane"]'), null)
+    assert.equal(rootElement.querySelector('[data-testid="right-workbench"]'), null)
+
+    await act(async () => root.render(
+      <I18nProvider>
+        <ChatRightPanels
+          {...baseProps}
+          previewArtifact={{ messageId: 'final-message', content: '', preview: null, directFile: {
+            id: 'final-pdf', filename: 'final-report.pdf', type: 'pdf', url: '/api/artifacts/final-pdf',
+          } }}
+        />
+      </I18nProvider>,
+    ))
+    assert.ok(rootElement.querySelector('[data-testid="direct-file-pane"]'))
+
+    await act(async () => root.render(
       <I18nProvider><ChatRightPanels {...baseProps} previewArtifact={null} /></I18nProvider>,
     ))
     assert.ok(rootElement.querySelector('[data-testid="right-workbench"]'))

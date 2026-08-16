@@ -12,7 +12,9 @@ process.env.ARTIFACT_DIR = path.join(testRoot, 'artifacts')
 const { createUser } = await import('../server/db.js')
 const { createHtmlArtifact, getArtifactDir } = await import('../server/services/artifactGen.js')
 const { readArtifactSourcePage } = await import('../server/services/artifactSourceStore.js')
+const { createManagedAttachment } = await import('../server/services/managedAttachmentStore.js')
 const { SERVER_TOOL_SPECS, runToolsLoop } = await import('../server/services/jobTools.js')
+const { executeServerTool } = await import('../server/services/toolLoopHeuristics.js')
 const { upsertSession } = await import('../server/services/sessionStore.js')
 const {
   appendTurnArtifact,
@@ -26,6 +28,11 @@ function createScope(label) {
   createUser({ id: userId, email: `${userId}@example.com` })
   upsertSession({ id: sessionId, userId, title: `Artifact revision ${label}` })
   return { userId, sessionId }
+}
+
+function binarySource(value) {
+  const buffer = Buffer.isBuffer(value) ? value : Buffer.from(value)
+  return (async function* stream() { yield buffer })()
 }
 
 function createOriginalHtml({ label, source }) {
@@ -278,6 +285,151 @@ test('an explicit in-place HTML revision infers the sole adjacent artifact ID wh
   assert.equal(stored.filename, artifact.filename)
   assert.equal(fs.readFileSync(path.join(getArtifactDir(), artifact.filename), 'utf8'), revisedSource)
   assert.equal(listSessionTurnArtifacts({ userId, sessionId }).length, 1)
+})
+
+test('an adjacent webpage revision safely inlines an owned background-image attachment', async () => {
+  const originalSource = '<!doctype html><html><body><main data-version="original">Original</main></body></html>'
+  const scope = createOriginalHtml({ label: 'attachment-background', source: originalSource })
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    'base64',
+  )
+  const attachment = await createManagedAttachment({
+    userId: scope.userId,
+    sessionId: scope.sessionId,
+    name: 'portrait.png',
+    mimeType: 'image/png',
+    source: binarySource(png),
+    contentLength: png.length,
+  })
+  const prompt = '把这张人物图作为背景'
+  const turnId = `revision-turn-attachment-background-${testToken}`
+  const createCallId = `create-attachment-background-${testToken}`
+  let modelCalls = 0
+
+  const result = await runToolsLoop({
+    job: {
+      id: turnId,
+      userId: scope.userId,
+      sessionId: scope.sessionId,
+      origin: 'chat',
+      prompt,
+      userPrompt: prompt,
+    },
+    step: { id: turnId, kind: 'chat' },
+    messages: adjacentArtifactMessages({
+      artifact: scope.artifact,
+      prompt: `${prompt}\n[GUGO_MANAGED_ATTACHMENT uri="${attachment.uri}"]`,
+      originalSource,
+    }),
+    toolSpecs: SERVER_TOOL_SPECS,
+    enableToolHooks: false,
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    runModel: async ({ messages, tools }) => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        const names = tools.map((tool) => tool.function.name)
+        for (const name of ['create_html_app', 'image_info', 'image_transform', 'read_artifact_source']) {
+          assert.ok(names.includes(name), name)
+        }
+        assert.equal(names.includes('generate_image'), false)
+        return {
+          content: '',
+          toolCalls: [{
+            id: createCallId,
+            function: {
+              name: 'create_html_app',
+              arguments: JSON.stringify({
+                title: 'Attachment background revision',
+                html: `<!doctype html><html><head><style>body{background-image:url('${attachment.uri}');background-size:cover}</style></head><body><main>Updated</main></body></html>`,
+              }),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 2) {
+        const created = createdArtifactResult(messages, createCallId)
+        assert.equal(created?.ok, true, JSON.stringify(created))
+        return {
+          content: '',
+          toolCalls: [{
+            id: `deliver-attachment-background-${testToken}`,
+            function: {
+              name: 'set_deliverables',
+              arguments: JSON.stringify({ artifact_ids: [created.artifactId] }),
+            },
+          }],
+        }
+      }
+      return { content: '人物图已直接加入网页背景并完成文件交付。', toolCalls: [] }
+    },
+  })
+
+  assert.equal(result.artifactIds.length, 1)
+  assert.deepEqual(result.deliveryArtifactIds, result.artifactIds)
+  const artifact = getTurnArtifactById({
+    id: result.artifactIds[0],
+    userId: scope.userId,
+    sessionId: scope.sessionId,
+  })
+  const deliveredHtml = fs.readFileSync(path.join(getArtifactDir(), artifact.filename), 'utf8')
+  assert.match(deliveredHtml, /data:image\/png;base64,/)
+  assert.doesNotMatch(deliveredHtml, /attachment:\/\//i)
+  const sourceSnapshot = readArtifactSourcePage({ artifact })
+  const sourceArgs = JSON.parse(sourceSnapshot.content)
+  assert.match(sourceArgs.html, /data:image\/png;base64,/)
+  assert.doesNotMatch(sourceArgs.html, /attachment:\/\//i)
+})
+
+test('HTML attachment inlining rejects unavailable, cross-user, and oversized images before creating files', async () => {
+  const owner = createScope('attachment-rejection-owner')
+  const outsider = createScope('attachment-rejection-outsider')
+  const image = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    'base64',
+  )
+  const owned = await createManagedAttachment({
+    userId: owner.userId,
+    sessionId: owner.sessionId,
+    name: 'private.png',
+    mimeType: 'image/png',
+    source: binarySource(image),
+    contentLength: image.length,
+  })
+  const oversizedBytes = Buffer.alloc(1_600_000, 0x61)
+  const oversized = await createManagedAttachment({
+    userId: owner.userId,
+    sessionId: owner.sessionId,
+    name: 'oversized.jpg',
+    mimeType: 'image/jpeg',
+    source: binarySource(oversizedBytes),
+    contentLength: oversizedBytes.length,
+  })
+  const artifactFilesBefore = new Set(fs.readdirSync(getArtifactDir()))
+  const executeHtml = ({ userId, uri }) => executeServerTool({
+    name: 'create_html_app',
+    args: {
+      title: 'Rejected attachment',
+      html: `<!doctype html><html><body style="background-image:url('${uri}')"><main>Rejected</main></body></html>`,
+    },
+    job: { id: `attachment-rejection-${testToken}`, userId, origin: 'chat' },
+    step: { id: `attachment-rejection-step-${testToken}`, kind: 'chat' },
+    allowedArtifactTools: new Set(['create_html_app']),
+  })
+
+  await assert.rejects(
+    executeHtml({ userId: outsider.userId, uri: owned.uri }),
+    /unavailable or not owned/i,
+  )
+  await assert.rejects(
+    executeHtml({ userId: owner.userId, uri: 'attachment://missing-attachment-123' }),
+    /unavailable or not owned/i,
+  )
+  await assert.rejects(
+    executeHtml({ userId: owner.userId, uri: oversized.uri }),
+    /too large to inline/i,
+  )
+  assert.deepEqual(new Set(fs.readdirSync(getArtifactDir())), artifactFilesBefore)
 })
 
 test('an explicit new-version HTML revision preserves the original and creates a new artifact', async () => {

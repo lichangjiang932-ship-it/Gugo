@@ -31,11 +31,14 @@ process.env.WORKSPACE_FS_ENABLED = '1'
 
 const { closeDb, createUser } = await import('../server/db.js')
 const {
+  browseLocalDirectories,
   findAuthorizedDirectoryGrant,
   getLocalFileAccessStatus,
   grantLocalPath,
+  resolveDirectoryRequestPath,
   revokeLocalPath,
   setAllFilesAccess,
+  setDefaultOutputDirectory,
 } = await import('../server/services/localFileAccessService.js')
 const { setWorkspaceTrust } = await import('../server/services/workspaceTrustService.js')
 const { setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
@@ -52,6 +55,7 @@ createUser({ id: 'workspace-user-b', email: 'workspace-b@example.com' })
 createUser({ id: 'grant-lookup-user', email: 'grant-lookup@example.com' })
 createUser({ id: 'file-grant-user', email: 'file-grant@example.com' })
 createUser({ id: 'all-files-grant-user', email: 'all-files-grant@example.com' })
+createUser({ id: 'default-output-user', email: 'default-output@example.com' })
 
 for (const userId of [
   'local-user-a',
@@ -63,6 +67,7 @@ for (const userId of [
   'grant-lookup-user',
   'file-grant-user',
   'all-files-grant-user',
+  'default-output-user',
 ]) {
   setApprovalMode({ userId, mode: 'normal' })
 }
@@ -109,6 +114,50 @@ test('local file grants are user-scoped and default to no access', async () => {
     () => readFileTool({ userId: 'local-user-b', path: path.join(grantedDir, 'note.txt') }),
     /未获得读取授权/
   )
+})
+
+test('default output directory strips paired quotes, creates missing folders, and persists', () => {
+  const missingDirectory = path.join(tempDir, 'default-output', 'nested')
+  const quotedDirectory = `"${missingDirectory}"`
+
+  assert.equal(resolveDirectoryRequestPath({
+    userId: 'default-output-user',
+    rawPath: quotedDirectory,
+  }), path.resolve(missingDirectory))
+
+  const saved = setDefaultOutputDirectory({
+    userId: 'default-output-user',
+    rootPath: quotedDirectory,
+  })
+  const canonicalDirectory = fs.realpathSync(missingDirectory)
+  assert.equal(fs.statSync(canonicalDirectory).isDirectory(), true)
+  assert.equal(saved.defaultOutputDirectory, canonicalDirectory)
+  assert.equal(
+    getLocalFileAccessStatus({ userId: 'default-output-user' }).defaultOutputDirectory,
+    canonicalDirectory,
+  )
+
+  const browsed = browseLocalDirectories({
+    userId: 'default-output-user',
+    rawPath: `'${missingDirectory}'`,
+  })
+  assert.equal(browsed.currentPath, canonicalDirectory)
+})
+
+test('directory input recognizes quoted Windows drive and UNC absolute paths', {
+  skip: process.platform !== 'win32',
+}, () => {
+  const driveDirectory = path.join(tempDir, 'quoted-drive-output')
+  const uncDirectory = '\\\\server\\share\\generated'
+
+  assert.equal(resolveDirectoryRequestPath({
+    userId: 'default-output-user',
+    rawPath: `  "${driveDirectory}"  `,
+  }), path.resolve(driveDirectory))
+  assert.equal(resolveDirectoryRequestPath({
+    userId: 'default-output-user',
+    rawPath: `"${uncDirectory}"`,
+  }), path.normalize(uncDirectory))
 })
 
 test('read-only grants block writes and can be upgraded to read-write', async () => {

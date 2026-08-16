@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { JSDOM } from 'jsdom'
-import { act, useEffect, useReducer } from 'react'
+import { act, useEffect, useReducer, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import RightPreviewPane from '../../src/pages/ChatSplit/RightPreviewPane.jsx'
@@ -49,6 +49,7 @@ async function renderPane(onClose, artifactOverride = artifact, prepareDocument)
   const root = createRoot(rootEl)
 
   function ControlledPreviewPane({ nextArtifact }) {
+    const [visible, setVisible] = useState(true)
     const [state, dispatch] = useReducer(
       reduceTaskSettingsState,
       nextArtifact,
@@ -60,21 +61,34 @@ async function renderPane(onClose, artifactOverride = artifact, prepareDocument)
 
     useEffect(() => {
       dispatch({ type: 'OPEN_PREVIEW_ARTIFACT', payload: nextArtifact })
+      setVisible(true)
     }, [nextArtifact])
 
     return (
-      <RightPreviewPane
-        artifact={state.previewArtifact}
-        previewTabs={state.previewTabs}
-        activePreviewId={state.previewActiveId}
-        onActivateTab={(tabId) => dispatch({ type: 'ACTIVATE_PREVIEW_TAB', payload: tabId })}
-        onCloseTab={(tabId) => dispatch({ type: 'CLOSE_PREVIEW_TAB', payload: tabId })}
-        onClose={() => {
-          dispatch({ type: 'CLOSE_PREVIEW_ARTIFACT' })
-          onClose()
-        }}
-        onMessage={() => {}}
-      />
+      <>
+        <button type="button" data-testid="test-preview-toggle" onClick={() => setVisible((current) => !current)}>
+          Toggle preview
+        </button>
+        <output
+          data-testid="test-preview-state"
+          data-tab-count={state.previewTabs.length}
+          data-active-id={state.previewActiveId}
+        />
+        {visible && state.previewArtifact ? (
+          <RightPreviewPane
+            artifact={state.previewArtifact}
+            previewTabs={state.previewTabs}
+            activePreviewId={state.previewActiveId}
+            onActivateTab={(tabId) => dispatch({ type: 'ACTIVATE_PREVIEW_TAB', payload: tabId })}
+            onCloseTab={(tabId) => dispatch({ type: 'CLOSE_PREVIEW_TAB', payload: tabId })}
+            onClose={() => {
+              setVisible(false)
+              onClose()
+            }}
+            onMessage={() => {}}
+          />
+        ) : null}
+      </>
     )
   }
 
@@ -223,7 +237,61 @@ test('RightPreviewPane keeps multiple files open and closes each tab independent
 
     const finalClose = rootEl.querySelector('[data-testid="preview-tab-close"]')
     await act(async () => finalClose.dispatchEvent(new window.MouseEvent('click', { bubbles: true })))
+    assert.equal(closeCount, 0)
+    assert.equal(rootEl.querySelector('[data-testid="preview-pane"]'), null)
+    assert.equal(rootEl.querySelector('[data-testid="test-preview-state"]')?.dataset.tabCount, '0')
+  } finally {
+    await cleanup()
+  }
+})
+
+test('RightPreviewPane hides without closing tabs, restores them, and reopens for a new file', async () => {
+  let closeCount = 0
+  const first = {
+    messageId: 'msg-persist-alpha',
+    content: 'alpha content',
+    preview: { type: 'text', label: 'FILE', filename: 'alpha.txt' },
+  }
+  const second = {
+    messageId: 'msg-persist-beta',
+    content: 'beta content',
+    preview: { type: 'text', label: 'FILE', filename: 'beta.txt' },
+  }
+  const third = {
+    messageId: 'msg-persist-gamma',
+    content: 'gamma content',
+    preview: { type: 'text', label: 'FILE', filename: 'gamma.txt' },
+  }
+  const { rootEl, rerender, cleanup } = await renderPane(() => { closeCount += 1 }, first)
+  const click = async (element) => {
+    assert.ok(element)
+    await act(async () => element.dispatchEvent(new window.MouseEvent('click', { bubbles: true })))
+  }
+
+  try {
+    await rerender(second)
+    const alphaTab = [...rootEl.querySelectorAll('[role="tab"]')]
+      .find((tab) => tab.textContent.includes('alpha.txt'))
+    await click(alphaTab)
+    const activeId = rootEl.querySelector('[data-testid="test-preview-state"]')?.dataset.activeId
+
+    await click(rootEl.querySelector('[data-testid="preview-close"]'))
     assert.equal(closeCount, 1)
+    assert.equal(rootEl.querySelector('[data-testid="preview-pane"]'), null)
+    assert.equal(rootEl.querySelector('[data-testid="test-preview-state"]')?.dataset.tabCount, '2')
+    assert.equal(rootEl.querySelector('[data-testid="test-preview-state"]')?.dataset.activeId, activeId)
+
+    await click(rootEl.querySelector('[data-testid="test-preview-toggle"]'))
+    assert.equal(rootEl.querySelectorAll('[role="tab"]').length, 2)
+    assert.equal(rootEl.querySelector('[role="tab"][aria-selected="true"]')?.textContent.trim(), 'alpha.txt')
+    assert.match(rootEl.querySelector('pre')?.textContent || '', /alpha content/)
+
+    await click(rootEl.querySelector('[data-testid="preview-close"]'))
+    await rerender(third)
+    assert.ok(rootEl.querySelector('[data-testid="preview-pane"]'))
+    assert.equal(rootEl.querySelectorAll('[role="tab"]').length, 3)
+    assert.equal(rootEl.querySelector('[role="tab"][aria-selected="true"]')?.textContent.trim(), 'gamma.txt')
+    assert.match(rootEl.querySelector('pre')?.textContent || '', /gamma content/)
   } finally {
     await cleanup()
   }

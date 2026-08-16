@@ -39,6 +39,17 @@ function workspaceRoot() {
   return path.resolve(process.env.WORKSPACE_ROOT?.trim() || process.cwd())
 }
 
+function stripPairedOuterQuotes(value) {
+  let normalized = String(value || '').trim()
+  while (normalized.length >= 2) {
+    const first = normalized[0]
+    const last = normalized[normalized.length - 1]
+    if (!((first === '"' && last === '"') || (first === "'" && last === "'"))) break
+    normalized = normalized.slice(1, -1).trim()
+  }
+  return normalized
+}
+
 export function getProjectDirectory({ userId } = {}) {
   if (userId) {
     try {
@@ -178,9 +189,11 @@ export function getDefaultOutputDirectory({ userId } = {}) {
 }
 
 export function resolveDirectoryRequestPath({ userId, rawPath = '' } = {}) {
-  const input = String(rawPath || '').trim()
+  const input = stripPairedOuterQuotes(rawPath)
   if (!input) return getDefaultOutputDirectory({ userId })
-  return path.resolve(path.isAbsolute(input) ? input : path.join(getProjectDirectory({ userId }), input))
+  return path.isAbsolute(input)
+    ? path.resolve(input)
+    : path.resolve(getProjectDirectory({ userId }), input)
 }
 
 function getGrantRows(userId) {

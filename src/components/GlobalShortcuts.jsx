@@ -9,7 +9,7 @@ import { matchShortcut } from '../lib/shortcuts'
  *   Alt + L  →  清空当前会话
  *   Alt + ,  →  设置
  *   Alt + B  →  切换历史
- *   Esc      →  关闭右侧预览 (优先) / 否则广播 'app:escape' 让组件清理本地状态
+ *   Esc      →  广播 'app:escape' 让当前可见组件清理本地状态
  *
  * 之所以从 Ctrl/Cmd 改成 Alt：浏览器把 Ctrl+N（开新窗口）、Ctrl+L（地址栏）、
  * Ctrl+,（设置）、Ctrl+B（收藏栏）抢走，preventDefault 拦不住。Alt+键 全平台
@@ -21,18 +21,13 @@ import { matchShortcut } from '../lib/shortcuts'
  */
 export default function GlobalShortcuts() {
   const navigate = useNavigate()
-  const { state, dispatch } = useAppContext()
+  const { dispatch } = useAppContext()
 
   useEffect(() => {
     const onKey = (e) => {
-      // ★ #25: 全局 Esc — 关闭预览;否则广播事件给监听的组件
+      // 可见的预览栏会在组件内拦截 Esc。这里不能根据“仍有打开文件”
+      // 清空预览标签，因为侧栏收起后标签必须继续保留。
       if (e.key === 'Escape') {
-        if (state.previewArtifact) {
-          e.preventDefault()
-          dispatch({ type: 'CLOSE_PREVIEW_ARTIFACT' })
-          return
-        }
-        // 让其它组件 (LeftRail 搜索框等) 听 'app:escape' 自行清理
         window.dispatchEvent(new CustomEvent('app:escape'))
         return
       }
@@ -70,7 +65,7 @@ export default function GlobalShortcuts() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [navigate, dispatch, state.previewArtifact])
+  }, [navigate, dispatch])
 
   return null
 }
