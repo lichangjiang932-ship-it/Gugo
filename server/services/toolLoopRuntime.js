@@ -382,14 +382,16 @@ export async function runToolsLoop({
     hasExplicitManagedArtifactReference: explicitlyReferencedArtifacts.length > 0,
     skillId: explicitSkillId || skillId,
   })
+  const localArtifactPublicationAllowed = !['workspace_file', 'mixed'].includes(artifactDelivery.target)
   // A complete filename can name either a local/workspace file or a managed
   // artifact. Explicit local-file/no-artifact wording wins: do not bind an
   // adjacent artifact merely because it happens to have the same filename.
   const workspaceArtifactTypes = new Set(artifactDelivery.workspaceArtifactTypes)
   const priorArtifacts = discoveredPriorArtifacts.filter((artifact) => !workspaceArtifactTypes.has(artifact.type))
   const priorArtifactTypes = [...new Set(priorArtifacts.map((artifact) => artifact.type))]
+  const requestedArtifactRevisionMode = resolveArtifactRevisionMode(artifactAuthorizationText)
   const artifactRevisionMode = priorArtifacts.length > 0
-    ? resolveArtifactRevisionMode(artifactAuthorizationText)
+    ? requestedArtifactRevisionMode
     : 'unspecified'
   const normalizeArtifactReplacementCall = (call) => {
     const name = String(call?.name || '').trim()
@@ -464,6 +466,72 @@ export async function runToolsLoop({
       }
     }
     return null
+  }
+  const exactWorkspaceTargetPaths = artifactDelivery.localFileTargets
+    .map((target) => String(target?.path || '').trim())
+    .filter(Boolean)
+  const exactWorkspaceTargetConstraint = requestedArtifactRevisionMode === 'replace_original'
+    && ['workspace_file', 'mixed'].includes(artifactDelivery.target)
+    && exactWorkspaceTargetPaths.length > 0
+  const isManagedArtifactStorePath = (candidate) => (
+    /(?:^|[\\/])\.artifacts(?:[\\/]|$)/i.test(String(candidate || '').trim())
+  )
+  const isAllowedWorkspaceTarget = (candidate) => exactWorkspaceTargetPaths.some((target) => (
+    targetsMatch(candidate, target)
+  ))
+  const workspaceTargetValidationError = (name, args = {}) => {
+    if (!exactWorkspaceTargetConstraint) return null
+    const call = { name, args }
+    const fileMutationTool = ['write_file', 'edit_file', 'multi_edit', 'apply_patch', 'patch_file'].includes(name)
+    const commandMutationTool = isCommandExecutionTool(call) && isLocalMutationCall(call)
+    if (!fileMutationTool && !commandMutationTool) return null
+
+    const candidatePaths = fileMutationTool
+      ? [
+        args?.path,
+        args?.file_path,
+        args?.filePath,
+        ...(Array.isArray(args?.edits)
+          ? args.edits.flatMap((edit) => [edit?.path, edit?.file_path, edit?.filePath])
+          : []),
+      ]
+      : [...extractMutationTargets(call, null)]
+    if (fileMutationTool && (name === 'apply_patch' || name === 'patch_file')) {
+      const patchText = String(args?.patch || args?.diff || '')
+      for (const match of patchText.matchAll(/^\*\*\* (?:Add|Update|Delete) File:\s*(.+)$/gm)) {
+        candidatePaths.push(match[1])
+      }
+    }
+    const concretePaths = [...new Set(candidatePaths
+      .map((candidate) => String(candidate || '').trim())
+      .filter(Boolean))]
+    const unprovenCommandTarget = commandMutationTool && (
+      concretePaths.length === 0 || concretePaths.includes(PROJECT_SCOPE_TARGET)
+    )
+    const disallowedPaths = concretePaths.filter((candidate) => (
+      candidate === PROJECT_SCOPE_TARGET || !isAllowedWorkspaceTarget(candidate)
+    ))
+    if (!unprovenCommandTarget && disallowedPaths.length === 0) return null
+    const managedStoreMismatch = disallowedPaths.some(isManagedArtifactStorePath)
+    return {
+      ok: false,
+      code: managedStoreMismatch
+        ? 'workspace_target_managed_store_mismatch'
+        : unprovenCommandTarget
+          ? 'workspace_mutation_target_unproven'
+          : 'workspace_target_mismatch',
+      error: managedStoreMismatch
+        ? 'The user requested an exact local/workspace file, but this call would write to Gugo managed artifact storage instead.'
+        : unprovenCommandTarget
+          ? 'The user requested an exact local/workspace file, but this command does not statically prove every file it may modify.'
+          : 'The user requested an exact local/workspace file, but this call would modify a different path.',
+      retryable: true,
+      allowedPaths: exactWorkspaceTargetPaths,
+      rejectedPaths: disallowedPaths,
+      hint: commandMutationTool
+        ? 'Use expected_outputs or a statically recognizable literal write target, and make every target exactly match the requested local/workspace file.'
+        : 'Use only the exact requested local/workspace path. Do not create a sibling copy or substitute a same-named file from .artifacts.',
+    }
   }
   const codeSnippetRequested = isExplicitCodeSnippetRequest(artifactAuthorizationText)
   const artifactIntentOptions = {
@@ -2160,7 +2228,10 @@ export async function runToolsLoop({
             }
           }
 
-          if (!result) result = artifactReplacementValidationError(name, args)
+          if (!result) {
+            result = artifactReplacementValidationError(name, args)
+              || workspaceTargetValidationError(name, args)
+          }
 
           if (!result) {
             const validationError = validateToolCall(call, activeToolSpecs, {
@@ -2288,6 +2359,7 @@ export async function runToolsLoop({
                   activeToolSpecs,
                   { allowUnknown: executeTool !== executeServerTool },
                 ) || artifactReplacementValidationError(name, executionArgs)
+                  || workspaceTargetValidationError(name, executionArgs)
                 if (finalValidationError) {
                   result = finalValidationError
                 } else {
@@ -2406,7 +2478,7 @@ export async function runToolsLoop({
       const executedCall = outcome.executionArgs === outcome.call?.args
         ? outcome.call
         : { ...outcome.call, args: outcome.executionArgs }
-      if (succeeded && !outcome.artifactId) {
+      if (succeeded && !outcome.artifactId && localArtifactPublicationAllowed) {
         const localArtifacts = await persistLocalToolArtifactsAsync({
           call: executedCall,
           result: outcome.result,

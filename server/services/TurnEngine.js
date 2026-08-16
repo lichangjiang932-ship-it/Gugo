@@ -25,6 +25,7 @@ import {
   buildAssistantModelContext,
   collectToolCallIds,
   expandStoredMessages,
+  extractVerifiedLocalFiles,
   materializeManagedAttachmentMessages,
   selectAttachmentIdsForModelRequest,
   selectStoredMessagesAfterCompaction,
@@ -150,6 +151,13 @@ function recoveryAttemptAfterCheckpoint(replayEvents, scope, checkpoint) {
     previousStreamSequence: previousStream.sequence,
     ...prefix,
   }
+}
+
+function latestVerifiedLocalFiles(replayEvents, scope) {
+  return replayPersistedTurnEvents(replayEvents, scope)
+    .map((event) => event?.payload?.verifiedLocalFiles)
+    .filter(Array.isArray)
+    .at(-1) || []
 }
 
 function storedCheckpointEvent(checkpoint) {
@@ -919,7 +927,10 @@ export class TurnEngine {
       return { ...this.getTurn({ userId, sessionId, turnId }), status: 'cancelling' }
     }
     const emit = this.#createEmitter({ userId, sessionId, turnId, sequence: last.sequence + 1 })
-    await emit('turn.cancelled', { reason: 'Cancelled by user' })
+    await emit('turn.cancelled', {
+      reason: 'Cancelled by user',
+      verifiedLocalFiles: latestVerifiedLocalFiles(this.deps.replayEvents, scope),
+    })
     releaseApprovalsForTurn({ userId, sessionId, turnId })
     return this.getTurn({ userId, sessionId, turnId })
   }
@@ -996,7 +1007,12 @@ export class TurnEngine {
     emitter,
   }, signal) {
     if (signal.aborted) {
-      if (!lostTurnLease(signal)) await emitter('turn.cancelled', { reason: signal.reason?.message || 'Cancelled by user' })
+      if (!lostTurnLease(signal)) {
+        await emitter('turn.cancelled', {
+          reason: signal.reason?.message || 'Cancelled by user',
+          verifiedLocalFiles: [],
+        })
+      }
       return
     }
     const checkpointScope = { userId, sessionId, turnId }
@@ -1125,6 +1141,10 @@ export class TurnEngine {
     let checkpointRecovery = restoredCheckpointState?.recovery || null
     let latestModelUsage = normalizeModelUsage(restoredCheckpointState?.latestModelUsage)
     let streamedAssistantText = String(pendingRecoveryAttempt?.assistantText || '')
+    const verifiedLocalFilesAt = (verifiedAt = this.deps.now()) => extractVerifiedLocalFiles(
+      checkpointMessages,
+      { userId, baselineToolCallIds, verifiedAt },
+    )
     const persistTurnEvidence = ({
       state,
       text,
@@ -1133,11 +1153,15 @@ export class TurnEngine {
       iterations,
       error = null,
       serverLastSequence = null,
+      verifiedLocalFiles = null,
     }) => {
       const evidenceText = String(text || '').trim() || error?.message || 'Turn execution did not complete.'
       const evidenceArtifacts = normalizeArtifactIds(artifactIds)
       const evidenceIterations = Math.max(0, Number(iterations) || 0)
       const writtenAt = this.deps.now()
+      const evidenceVerifiedLocalFiles = Array.isArray(verifiedLocalFiles)
+        ? verifiedLocalFiles
+        : verifiedLocalFilesAt(writtenAt)
       this.deps.writeMessage({
         id: `${turnId}:assistant`,
         userId,
@@ -1149,6 +1173,8 @@ export class TurnEngine {
             turnId,
             checkpointMessages,
             baselineToolCallIds,
+            userId,
+            verifiedLocalFiles: evidenceVerifiedLocalFiles,
             artifactIds: evidenceArtifacts,
             deliveryArtifactIds,
             iterations: evidenceIterations,
@@ -1447,10 +1473,12 @@ export class TurnEngine {
       })
       if (signal.aborted) {
         if (lostTurnLease(signal)) return
+        const verifiedLocalFiles = verifiedLocalFilesAt()
         await emitter('turn.cancelled', {
           reason: 'Cancelled by user',
           artifactIds: normalizeArtifactIds(checkpointArtifactIds),
           deliveryArtifactIds: [],
+          verifiedLocalFiles,
           iterations: checkpointIterations,
         })
         return
@@ -1460,6 +1488,7 @@ export class TurnEngine {
         const deliveryArtifactIds = optionalDeliveryArtifactIds(result, checkpointDeliveryArtifactIds)
         const iterations = Math.max(0, Number(result.iterations) || checkpointIterations)
         const partialText = String(result.text || streamedAssistantText || '')
+        const verifiedLocalFiles = verifiedLocalFilesAt()
         const failure = normalizeFailure({
           code: result.code,
           message: result.reason,
@@ -1472,6 +1501,7 @@ export class TurnEngine {
           text: partialText,
           artifactIds,
           ...deliveryArtifactFields(deliveryArtifactIds),
+          verifiedLocalFiles,
           iterations,
         }, {
           beforeAppend: (interruptedEvent) => persistTurnEvidence({
@@ -1482,6 +1512,7 @@ export class TurnEngine {
             iterations,
             error: failure,
             serverLastSequence: interruptedEvent.sequence,
+            verifiedLocalFiles,
           }),
         })
         return
@@ -1502,6 +1533,7 @@ export class TurnEngine {
         const artifactIds = normalizeArtifactIds(result.artifactIds ?? checkpointArtifactIds)
         const deliveryArtifactIds = optionalDeliveryArtifactIds(result, checkpointDeliveryArtifactIds)
         const iterations = Math.max(0, Number(result.iterations) || checkpointIterations)
+        const verifiedLocalFiles = verifiedLocalFilesAt()
         persistTurnEvidence({
           state: 'failed',
           text: partialText,
@@ -1509,6 +1541,7 @@ export class TurnEngine {
           deliveryArtifactIds,
           iterations,
           error: failure,
+          verifiedLocalFiles,
         })
         await emitter('turn.failed', {
           code: failure.code,
@@ -1517,6 +1550,7 @@ export class TurnEngine {
           partialText,
           artifactIds,
           ...deliveryArtifactFields(deliveryArtifactIds),
+          verifiedLocalFiles,
           iterations,
         })
         return
@@ -1529,11 +1563,13 @@ export class TurnEngine {
         const artifactIds = normalizeArtifactIds(result.artifactIds ?? checkpointArtifactIds)
         const deliveryArtifactIds = optionalDeliveryArtifactIds(result, checkpointDeliveryArtifactIds)
         const iterations = Math.max(0, Number(result.iterations) || checkpointIterations)
+        const verifiedLocalFiles = verifiedLocalFilesAt()
         await emitter('turn.paused', {
           text,
           clarification,
           artifactIds,
           ...deliveryArtifactFields(deliveryArtifactIds),
+          verifiedLocalFiles,
           iterations,
         }, {
           beforeAppend: (pausedEvent) => {
@@ -1549,6 +1585,8 @@ export class TurnEngine {
                   turnId,
                   checkpointMessages,
                   baselineToolCallIds,
+                  userId,
+                  verifiedLocalFiles,
                   artifactIds,
                   deliveryArtifactIds,
                   iterations,
@@ -1573,12 +1611,15 @@ export class TurnEngine {
       const artifactIds = normalizeArtifactIds(result?.artifactIds ?? checkpointArtifactIds)
       const deliveryArtifactIds = optionalDeliveryArtifactIds(result, checkpointDeliveryArtifactIds)
       const completedAt = this.deps.now()
+      const verifiedLocalFiles = verifiedLocalFilesAt(completedAt)
       this.deps.writeMessage({
         id: `${turnId}:assistant`, userId, sessionId, role: 'assistant', content: text,
         modelContext: buildAssistantModelContext({
           turnId,
           checkpointMessages,
           baselineToolCallIds,
+          userId,
+          verifiedLocalFiles,
           artifactIds,
           deliveryArtifactIds,
           iterations: result?.iterations || 0,
@@ -1594,6 +1635,7 @@ export class TurnEngine {
         text,
         artifactIds,
         ...deliveryArtifactFields(deliveryArtifactIds),
+        verifiedLocalFiles,
         iterations: result?.iterations || 0,
         ...(latestModelUsage ? { usage: latestModelUsage } : {}),
       })
@@ -1628,10 +1670,12 @@ export class TurnEngine {
     } catch (error) {
       if (lostTurnLease(signal, error)) return
       if (isExplicitTurnCancellation(signal, error)) {
+        const verifiedLocalFiles = verifiedLocalFilesAt()
         await emitter('turn.cancelled', {
           reason: error?.message || 'Cancelled by user',
           artifactIds: normalizeArtifactIds(checkpointArtifactIds),
           deliveryArtifactIds: [],
+          verifiedLocalFiles,
           iterations: checkpointIterations,
         })
         return
@@ -1641,6 +1685,7 @@ export class TurnEngine {
       const artifactIds = normalizeArtifactIds(error?.artifactIds ?? checkpointArtifactIds)
       const deliveryArtifactIds = optionalDeliveryArtifactIds(error, checkpointDeliveryArtifactIds)
       const iterations = Math.max(0, Number(error?.iterations) || checkpointIterations)
+      const verifiedLocalFiles = verifiedLocalFilesAt()
       try {
         persistTurnEvidence({
           state: 'failed',
@@ -1649,6 +1694,7 @@ export class TurnEngine {
           deliveryArtifactIds,
           iterations,
           error: failure,
+          verifiedLocalFiles,
         })
       } catch {
         // The durable event remains the source of truth if message persistence fails.
@@ -1660,6 +1706,7 @@ export class TurnEngine {
         partialText,
         artifactIds,
         ...deliveryArtifactFields(deliveryArtifactIds),
+        verifiedLocalFiles,
         iterations,
       })
     }

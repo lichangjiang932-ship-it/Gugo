@@ -186,5 +186,5 @@ test('completed artifact rows do not revert to streaming source when a later mes
   assert.match(messageRowSource, /function CollapsedArtifactContent/)
   assert.match(messageRowSource, /artifact-completion-summary/)
   assert.doesNotMatch(messageRowSource, /Server turn completed/)
-  assert.match(messageRowSource, /<ArtifactReferenceLinks msg=\{msg\}/)
+  assert.match(messageRowSource, /<ArtifactReferenceLinks[\s\S]*?msg=\{msg\}/)
 })

@@ -2136,6 +2136,103 @@ test('server snapshot restores structured tool failure details', () => {
   })
 })
 
+test('server snapshot recovers only selected artifacts from successful legacy tool results', () => {
+  const toolCall = (id, name = 'write_file') => ({
+    id,
+    type: 'function',
+    function: { name, arguments: '{}' },
+  })
+  const snapshot = normalizeServerSessionSnapshot({
+    complete: true,
+    messages: [{
+      id: 'legacy-artifacts:assistant',
+      role: 'assistant',
+      content: 'The requested file is ready.',
+      createdAt: 1,
+      modelContext: {
+        turnId: 'legacy-artifacts',
+        deliveryArtifactIds: ['final-file', 'failed-file', 'external-file', 'stray-file', 'final-file'],
+        toolTrace: [{
+          role: 'assistant',
+          content: '',
+          tool_calls: [toolCall('create-draft'), toolCall('create-final'), toolCall('create-failed'), toolCall('create-external')],
+        }, {
+          role: 'tool',
+          tool_call_id: 'create-draft',
+          name: 'write_file',
+          content: JSON.stringify({
+            ok: true,
+            artifactId: 'draft-file',
+            filename: 'draft.html',
+            url: '/api/artifacts/draft-file',
+          }),
+        }, {
+          role: 'tool',
+          tool_call_id: 'create-final',
+          name: 'write_file',
+          content: JSON.stringify({
+            ok: true,
+            artifacts: [{
+              id: 'final-file',
+              filename: 'final.html',
+              type: 'html',
+              url: '/api/artifacts/final-file',
+            }, {
+              id: 'unselected-helper',
+              filename: 'helper.js',
+              url: '/api/artifacts/unselected-helper',
+            }],
+          }),
+        }, {
+          role: 'tool',
+          tool_call_id: 'create-failed',
+          name: 'write_file',
+          content: JSON.stringify({
+            ok: false,
+            artifactId: 'failed-file',
+            filename: 'failed.html',
+            url: '/api/artifacts/failed-file',
+          }),
+        }, {
+          role: 'tool',
+          tool_call_id: 'create-external',
+          name: 'write_file',
+          content: JSON.stringify({
+            ok: true,
+            artifactId: 'external-file',
+            filename: 'external.html',
+            url: 'https://example.com/external.html',
+          }),
+        }, {
+          role: 'tool',
+          tool_call_id: 'undeclared-call',
+          name: 'write_file',
+          content: JSON.stringify({
+            ok: true,
+            artifactId: 'stray-file',
+            filename: 'stray.html',
+            url: '/api/artifacts/stray-file',
+          }),
+        }],
+      },
+    }],
+  })
+
+  assert.deepEqual(snapshot.messages[0].meta.serverDeliveryArtifactIds, [
+    'final-file',
+    'failed-file',
+    'external-file',
+    'stray-file',
+  ])
+  assert.deepEqual(snapshot.messages[0].meta.serverArtifacts, [{
+    id: 'final-file',
+    filename: 'final.html',
+    url: '/api/artifacts/final-file',
+    toolCallId: 'create-final',
+    type: 'html',
+  }])
+})
+
 test('fetchServerSessionSnapshot retries from offset zero when page revisions differ', async () => {
   const pages = [
     { messages: [{ id: 'stale-1', role: 'user', content: 'old', createdAt: 1 }], revision: 10, totalMessages: 2, nextOffset: 1, complete: false },

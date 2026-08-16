@@ -573,6 +573,45 @@ function isReadOnlyPowerShellVerificationCall(call) {
   )) && POWERSHELL_READ_ONLY_COMMAND.test(script)
 }
 
+function windowsCmdScript(call) {
+  if (!isCommandExecutionTool(call)) return ''
+  const command = String(call?.args?.command || '').trim()
+  const wrapped = command.match(/^cmd(?:\.exe)?\s+(?:(?:\/[dqs])\s+)*\/c\s+([\s\S]+)$/i)
+  if (!wrapped) return ''
+  let script = String(wrapped[1] || '').trim()
+  if ((script.startsWith('"') && script.endsWith('"'))
+    || (script.startsWith("'") && script.endsWith("'"))) {
+    script = script.slice(1, -1).trim()
+  }
+  return script
+}
+
+function isReadOnlyWindowsCmdVerificationCall(call) {
+  const script = windowsCmdScript(call)
+  if (!script) return false
+  // Only null-device / descriptor redirects are harmless. Any remaining
+  // redirect, pipe, separator, or escape keeps the conservative mutation path.
+  const withoutSafeRedirects = script
+    .replace(/\d?>&\d+/g, ' ')
+    .replace(/\d?>{1,2}\s*(?:"(?:\\\\\.\\)?nul:?"|'(?:\\\\\.\\)?nul:?'|(?:\\\\\.\\)?nul:?)(?=$|\s)/gi, ' ')
+    .trim()
+  if (!withoutSafeRedirects
+    || /[<>|;\r\n^\x60]/.test(withoutSafeRedirects)
+    || /\$\(|%[^%]+%|![^!]+!/.test(withoutSafeRedirects)) return false
+  const commands = withoutSafeRedirects.split(/\s*&&\s*/).map((part) => part.trim()).filter(Boolean)
+  if (!commands.length || commands.some((part) => /&/.test(part))) return false
+  let inspectionObserved = false
+  for (const command of commands) {
+    if (/^cd(?:\s+\/d)?(?:\s+.+)?$/i.test(command)) continue
+    if (/^(?:dir|where|type|findstr)(?:\s|$)/i.test(command)) {
+      inspectionObserved = true
+      continue
+    }
+    return false
+  }
+  return inspectionObserved
+}
+
 function isLocalMutationCall(call) {
   if (LOCAL_MUTATION_TOOLS.has(call?.name)) {
     return !(['apply_patch', 'patch_file'].includes(call?.name) && call?.args?.dry_run === true)
@@ -596,6 +635,7 @@ function isVerificationCall(call) {
     || PDF_LAYOUT_VALIDATOR_COMMAND.test(command)
     || isReadOnlyPythonVerificationCall(call)
     || isReadOnlyPowerShellVerificationCall(call)
+    || isReadOnlyWindowsCmdVerificationCall(call)
     || getToolMetadata(call.name, { args: call.args }).isReadOnly === true
 }
 
@@ -612,7 +652,15 @@ function isMutationExecutionCall(call, artifactId = null) {
   return metadata.isReadOnly === false
 }
 
-function normalizeMutationTarget(rawTarget) {
+function isNullMutationTarget(value, platform = process.platform) {
+  const candidate = String(value || '').replace(/^["']+|["']+$/g, '').trim()
+  if (/^(?:nul:?|\\\\\.\\nul:?|\/dev\/null|\$null)$/i.test(candidate)) return true
+  if (platform !== 'win32') return false
+  const filename = candidate.replace(/\\/g, '/').split('/').at(-1) || ''
+  return /^nul(?::|\..*)?$/i.test(filename)
+}
+
+function normalizeMutationTarget(rawTarget, { platform = process.platform } = {}) {
   let target = String(rawTarget || '').trim()
   if (!target) return ''
   if ((target.startsWith('"') && target.endsWith('"'))
@@ -625,7 +673,7 @@ function normalizeMutationTarget(rawTarget) {
   //   pending mutation target,就永远无法被读回/差异验证清除 ——
   //   最终会误报 post_mutation_verification_missing,让一个已完成的任务
   //   以「验证缺失」结尾。空设备一律不跟踪。
-  if (/^(?:nul|\\\\.\\nul|\/dev\/null|\$null)$/i.test(target)) return ''
+  if (isNullMutationTarget(target, platform)) return ''
   target = target.replace(/\\/g, '/').replace(/\/+/g, '/')
   while (target.startsWith('./')) target = target.slice(2)
   if (target.length > 1) target = target.replace(/\/$/, '')
@@ -894,7 +942,7 @@ function extractShellMutationTargets(call, cwd = call?.args?.cwd) {
     const target = shellTargetWithCwd(value, cwd)
     if (target) targets.add(target)
   }
-  const redirection = /\d?>{1,2}\s*(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/g
+  const redirection = /\d?>{1,2}\s*(?:"([^"]+)"|'([^']+)'|([^\s;&|"']+))/g
   for (const match of command.matchAll(redirection)) add(match[1] || match[2] || match[3])
   const pathArgument = /\b(?:Set-Content|Add-Content|Out-File|New-Item|Remove-Item)\b[^\r\n;|]{0,160}?(?:-(?:Literal)?Path\s+)(?:"([^"]+)"|'([^']+)'|([^\s;|]+))/gi
   for (const match of command.matchAll(pathArgument)) add(match[1] || match[2] || match[3])
@@ -2285,6 +2333,7 @@ export {
   isLocalMutationCall,
   isVerificationCall,
   isMutationExecutionCall,
+  isNullMutationTarget,
   normalizeMutationTarget,
   targetsMatch,
   clearWorkspaceScopedMutationTargets,

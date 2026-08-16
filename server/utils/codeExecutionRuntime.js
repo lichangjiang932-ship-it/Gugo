@@ -4,15 +4,37 @@ import { spawnSync } from 'node:child_process'
 
 const PYTHON_CONFIG_KEY = 'CODE_EXECUTION_PYTHON'
 const PROBE_TIMEOUT_MS = 4_000
-const NULL_OUTPUT_TARGETS = new Set(['/dev/null', 'nul'])
+const NULL_OUTPUT_TARGET = /^(?:\/dev\/null|(?:\\\\\.\\)?nul:?|\$null)$/i
 
 let cachedRuntime = null
 let cachedRuntimeKey = null
 
-function normalizedOutputTarget(value) {
-  const target = String(value || '').trim()
+function unquotePairedTarget(value) {
+  let target = String(value || '').trim()
+  if ((target.startsWith('"') && target.endsWith('"'))
+    || (target.startsWith("'") && target.endsWith("'"))) {
+    target = target.slice(1, -1).trim()
+  }
+  return target
+}
+
+function isNullOutputTarget(value, platform = process.platform) {
+  const target = unquotePairedTarget(value)
+  // A dangling wrapper quote may survive a caller's shell parsing. Use the
+  // stripped form only for device detection; preserve it for ordinary paths.
+  const candidate = target.replace(/^["']+|["']+$/g, '').trim()
+  if (NULL_OUTPUT_TARGET.test(candidate)) return true
+  if (platform !== 'win32') return false
+  const filename = candidate.replace(/\\/g, '/').split('/').at(-1) || ''
+  // Win32 device names remain devices with a colon or extension and inside a
+  // directory (for example NUL:, NUL.txt, or .\\NUL).
+  return /^nul(?::|\..*)?$/i.test(filename)
+}
+
+function normalizedOutputTarget(value, platform = process.platform) {
+  const target = unquotePairedTarget(value)
   if (!target || /^&\d+$/.test(target)) return ''
-  return NULL_OUTPUT_TARGETS.has(target.toLowerCase()) ? '' : target
+  return isNullOutputTarget(target, platform) ? '' : target
 }
 
 function inlinePythonSource(command) {
@@ -31,15 +53,15 @@ function inlinePythonSource(command) {
  * and after the process and reports it only when the filesystem really
  * changed.
  */
-export function inferCodeExecutionOutputPaths(command) {
+export function inferCodeExecutionOutputPaths(command, { platform = process.platform } = {}) {
   const targets = new Set()
   const add = (value) => {
-    const target = normalizedOutputTarget(value)
+    const target = normalizedOutputTarget(value, platform)
     if (target) targets.add(target)
   }
   const source = String(command || '')
 
-  const redirection = /\d?>{1,2}\s*(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/g
+  const redirection = /\d?>{1,2}\s*(?:"([^"]+)"|'([^']+)'|([^\s;&|"']+))/g
   for (const match of source.matchAll(redirection)) add(match[1] || match[2] || match[3])
 
   const python = inlinePythonSource(source)
@@ -277,4 +299,6 @@ export const _internals = {
   pathEntries,
   pathKey,
   pipCandidates,
+  isNullOutputTarget,
+  normalizedOutputTarget,
 }

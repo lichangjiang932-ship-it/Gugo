@@ -15,6 +15,14 @@ export const TURN_EVENT_TYPES = Object.freeze([
 
 const jsonRecord = z.record(z.string(), z.unknown())
 const nullableText = z.string().nullable().optional()
+const verifiedLocalFileSchema = z.object({
+  id: z.string().min(1).max(160),
+  path: z.string().min(1).max(32_768),
+  filename: z.string().min(1).max(1_024),
+  size: z.number().nonnegative().optional(),
+  verifiedAt: z.number().int().nonnegative().optional(),
+}).strict()
+const verifiedLocalFilesSchema = z.array(verifiedLocalFileSchema).max(64).optional()
 const managedAttachmentSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -191,6 +199,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     text: z.string().optional(),
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),
+    verifiedLocalFiles: verifiedLocalFilesSchema,
     iterations: z.number().int().nonnegative().optional(),
   }).strict(),
   'turn.paused': z.object({
@@ -198,6 +207,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     clarification: z.union([jsonRecord, z.string().min(1)]),
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),
+    verifiedLocalFiles: verifiedLocalFilesSchema,
     iterations: z.number().int().nonnegative().optional(),
   }).strict(),
   'turn.resumed': z.object({
@@ -216,6 +226,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
   }),
   'turn.completed': z.object({
     text: z.string().optional(), artifactIds: z.array(z.string()).optional(), deliveryArtifactIds: z.array(z.string()).optional(), iterations: z.number().int().nonnegative().optional(),
+    verifiedLocalFiles: verifiedLocalFilesSchema,
     usage: jsonRecord.nullable().optional(),
     paused: z.boolean().optional(), clarification: z.unknown().nullable().optional(), interrupted: z.boolean().optional(),
   }).strict(),
@@ -223,6 +234,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     reason: z.string().optional(),
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),
+    verifiedLocalFiles: verifiedLocalFilesSchema,
     iterations: z.number().int().nonnegative().optional(),
   }).strict(),
   'turn.failed': z.object({
@@ -233,6 +245,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     partialText: z.string().optional(),
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),
+    verifiedLocalFiles: verifiedLocalFilesSchema,
     iterations: z.number().int().nonnegative().optional(),
   }).strict(),
   heartbeat: z.object({ at: z.number().int().nonnegative().optional() }).strict(),

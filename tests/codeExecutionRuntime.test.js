@@ -119,6 +119,19 @@ test('code execution output inference finds relative shell and inline Python wri
   )
 })
 
+test('code execution output inference ignores quoted Windows null-device redirects', () => {
+  assert.deepEqual(
+    inferCodeExecutionOutputPaths('cmd.exe /c "cd /d D:\\destok && dir /s /b qa-context-test*.html 2>nul"'),
+    [],
+  )
+  assert.deepEqual(inferCodeExecutionOutputPaths('cmd.exe /c "dir 2>NUL:"'), [])
+  assert.deepEqual(inferCodeExecutionOutputPaths('cmd.exe /c "dir 2>"nul""'), [])
+  assert.deepEqual(
+    inferCodeExecutionOutputPaths('cmd.exe /c "dir 2>errors.log"'),
+    ['errors.log'],
+  )
+})
+
 test('codeExecutionFailureHint redirects fragile Windows commands to portable strategies', () => {
   const longInline = `python -c "${'print(1);'.repeat(90)}"`
   assert.match(

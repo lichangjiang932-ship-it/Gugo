@@ -348,6 +348,31 @@ test('serializeToolResult 对循环引用和超长结果始终输出合法 JSON'
   assert.equal(clipped.length <= 800, true)
 })
 
+test('serializeToolResult retains bounded file metadata when clipping large bodies', () => {
+  const clipped = serializeToolResult({
+    ok: true,
+    path: 'pages/large.html',
+    size: 40_000,
+    totalLines: 3,
+    offset: 0,
+    returnedLines: 3,
+    content: 'private-body'.repeat(4_000),
+  }, { maxChars: 800 })
+  const parsed = JSON.parse(clipped)
+  assert.deepEqual(parsed._gugoResultMetadata, {
+    version: 1,
+    path: 'pages/large.html',
+    size: 40_000,
+    totalLines: 3,
+    offset: 0,
+    returnedLines: 3,
+    contentPresent: true,
+    sourceTruncated: false,
+  })
+  assert.equal('content' in parsed._gugoResultMetadata, false)
+  assert.ok(clipped.length <= 800)
+})
+
 test('createToolLoopGuard 熔断重复调用和连续失败', () => {
   const [call] = normalizeToolCalls([{ name: 'read_file', arguments: '{"path":"a"}' }])
   const repeated = createToolLoopGuard({ maxRepeatedCalls: 2 })

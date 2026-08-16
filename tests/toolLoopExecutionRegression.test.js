@@ -12,6 +12,10 @@ const { createJobBudget } = await import('../server/utils/jobBudget.js')
 const { createUser, getDb } = await import('../server/db.js')
 const { upsertSession } = await import('../server/services/sessionStore.js')
 const { appendTurnArtifact } = await import('../server/services/turnArtifactStore.js')
+const {
+  isLocalMutationCall,
+  isVerificationCall,
+} = await import('../server/services/toolLoopHeuristics.js')
 
 test('output-truncated tool calls are paired but never executed and are regenerated', async () => {
   const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
@@ -1518,6 +1522,137 @@ for (const scenario of [
     )
   })
 }
+
+test('Windows cmd directory discovery redirected to nul is verification, not a mutation', () => {
+  const call = {
+    name: 'bash_exec',
+    args: {
+      command: 'cmd.exe /c "cd /d D:\\destok && dir /s /b qa-context-test*.html 2>nul"',
+    },
+  }
+
+  assert.equal(isVerificationCall(call), true)
+  assert.equal(isLocalMutationCall(call), false)
+})
+
+test('Windows cmd verification classification stays conservative for dynamic or mutating syntax', () => {
+  const commands = [
+    'cmd.exe /c "dir /b && del victim.txt"',
+    'cmd.exe /c "dir /b > results.txt"',
+    'cmd.exe /c "dir /b & erase victim.txt"',
+    'cmd.exe /c "dir /b $(whoami)"',
+    'cmd.exe /c "dir /b `whoami`"',
+    'cmd.exe /c "dir /b %TARGET%"',
+    'cmd.exe /v:on /c "dir /b !TARGET!"',
+  ]
+
+  for (const command of commands) {
+    const call = { name: 'bash_exec', args: { command } }
+    assert.equal(isVerificationCall(call), false, command)
+    assert.equal(isLocalMutationCall(call), true, command)
+  }
+})
+
+test('directory discovery through cmd can precede a write and read-back without leaving a phantom nul target', async () => {
+  const bashExec = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'bash_exec')
+  const writeFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'write_file')
+  const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
+  const outputPath = 'D:\\destok\\qa-context-test.html'
+  const html = '<!doctype html><title>Second revision complete</title>'
+  let modelCalls = 0
+  let checkpoint = null
+  const executed = []
+
+  const result = await runToolsLoop({
+    job: {
+      id: 'windows-cmd-discovery-before-second-revision-job',
+      userId: null,
+      origin: 'chat',
+      prompt: 'Find the existing HTML, apply the second revision, and verify the saved file.',
+    },
+    step: { id: 'windows-cmd-discovery-before-second-revision-step', kind: 'chat' },
+    messages: [{
+      role: 'user',
+      content: 'Find the existing HTML, apply the second revision, and verify the saved file.',
+    }],
+    intentMode: 'execute',
+    toolSpecs: [bashExec, writeFile, readFile],
+    maxIters: 6,
+    enableToolHooks: false,
+    saveCheckpoint: async (state) => {
+      checkpoint = structuredClone(state)
+      return true
+    },
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'find-existing-html-with-cmd',
+            type: 'function',
+            function: {
+              name: 'bash_exec',
+              arguments: JSON.stringify({
+                command: 'cmd.exe /c "cd /d D:\\destok && dir /s /b qa-context-test*.html 2>nul"',
+              }),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 2) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'write-second-revision',
+            type: 'function',
+            function: {
+              name: 'write_file',
+              arguments: JSON.stringify({ path: outputPath, content: html }),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 3) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'read-second-revision',
+            type: 'function',
+            function: {
+              name: 'read_file',
+              arguments: JSON.stringify({ path: outputPath }),
+            },
+          }],
+        }
+      }
+      return { content: 'The second revision was saved and verified.', toolCalls: [] }
+    },
+    executeTool: async ({ name, args }) => {
+      executed.push(name)
+      if (name === 'bash_exec') {
+        return { ok: true, exitCode: 0, stdout: `${outputPath}\r\n` }
+      }
+      if (name === 'write_file') {
+        return {
+          ok: true,
+          path: args.path,
+          bytes: args.content.length,
+          changedPaths: [args.path],
+        }
+      }
+      assert.equal(name, 'read_file')
+      return { ok: true, path: args.path, content: html }
+    },
+  })
+
+  assert.deepEqual(executed, ['bash_exec', 'write_file', 'read_file'])
+  assert.equal(modelCalls, 4)
+  assert.equal(result.incomplete, undefined)
+  assert.notEqual(result.reason, 'post_mutation_verification_missing')
+  assert.equal(result.text, 'The second revision was saved and verified.')
+  assert.deepEqual(checkpoint?.completionGuards?.pendingMutationTargets, [])
+})
 
 test('verified directory resume rejects a repeated authorization wait claim and continues into execution', async () => {
   const bashExec = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'bash_exec')

@@ -247,9 +247,9 @@ function findArtifactReferenceByFilename(references = [], filename = '') {
 
 /**
  * Resolve an absolute Windows path only against registered artifact URLs.
- * A known full path wins; otherwise basename matching is allowed only when it
- * identifies exactly one artifact, so duplicate names cannot open the wrong
- * file.
+ * References that carry a real absolute source path must match exactly.
+ * Managed artifacts that do not know their source path may still use a unique
+ * basename, because their persisted URL is the only available identity.
  */
 export function findArtifactReferenceByLocalPath(references = [], value = '') {
   const target = normalizeArtifactLocalPath(value)
@@ -260,7 +260,10 @@ export function findArtifactReferenceByLocalPath(references = [], value = '') {
   )))
   const exact = uniqueArtifactReference(exactMatches)
   if (exact) return exact
-  return findArtifactReferenceByFilename(registered, target.split('/').pop() || '')
+  const pathless = registered.filter((reference) => !ARTIFACT_PATH_FIELDS.some((field) => (
+    normalizeArtifactLocalPath(reference?.[field])
+  )))
+  return findArtifactReferenceByFilename(pathless, target.split('/').pop() || '')
 }
 
 function localFileHrefMatchesReference(href, reference) {
@@ -275,17 +278,36 @@ function localFileHrefMatchesReference(href, reference) {
   return aliases.some((alias) => alias.normalized === targetName)
 }
 
-export function artifactHasInlineLink(content = '', artifact = {}) {
+function sameArtifactReference(left, right) {
+  if (!left || !right) return false
+  if (left === right) return true
+  return ['identity', 'id', 'url'].some((key) => (
+    left[key] && right[key] && String(left[key]) === String(right[key])
+  ))
+}
+
+function referenceForInlineHref(references, label, href) {
+  const direct = findArtifactReferenceByHref(references, href)
+    || findArtifactReferenceByLocalPath(references, href)
+  if (direct) return direct
+  const normalizedLabel = String(label || '').normalize('NFC').trim().toLowerCase()
+  if (!normalizedLabel) return null
+  return uniqueArtifactReference(references.filter((reference) => (
+    reference?.url
+      && artifactFilenameAliases(reference).some((alias) => alias.normalized === normalizedLabel)
+      && localFileHrefMatchesReference(href, reference)
+  )))
+}
+
+export function artifactHasInlineLink(content = '', artifact = {}, references = [artifact]) {
   const markdown = String(content || '')
-  const filenames = new Set(artifactFilenameAliases(artifact).map((alias) => alias.normalized))
+  const candidates = Array.isArray(references) && references.length > 0 ? references : [artifact]
   const links = /\[([^\]]*)\]\(\s*(?:<([^>]+)>|([^\s)]+))(?:\s+[\x22\x27][^\x22\x27]*[\x22\x27])?\s*\)|<((?:https?:\/\/|\/)[^>]+)>/g
   let match
   while ((match = links.exec(markdown)) !== null) {
-    const label = String(match[1] || '').normalize('NFC').trim().toLowerCase()
     const href = match[2] || match[3] || match[4] || ''
-    if (artifactReferenceMatchesHref(artifact, href)) return true
-    if (filenames.has(label) && localFileHrefMatchesReference(href, artifact)) return true
-    if (!artifact.url && filenames.has(label)) return true
+    const reference = referenceForInlineHref(candidates, match[1], href)
+    if (sameArtifactReference(reference, artifact)) return true
   }
   return false
 }
@@ -324,8 +346,13 @@ function findFilenameMatch(value = '', references = [], fromIndex = 0) {
         index = lowerSource.indexOf(lowerFilename, index + 1)
       }
       if (index < 0) continue
+      // A bare filename cannot identify one of several same-named files.
+      // Leave the text untouched in that case so a following absolute-path
+      // pass can still resolve the complete path exactly.
+      const resolvedReference = findArtifactReferenceByFilename(references, filename)
+      if (!resolvedReference) continue
       if (!best || index < best.index || (index === best.index && filename.length > best.filename.length)) {
-        best = { filename, index, reference }
+        best = { filename, index, reference: resolvedReference }
       }
     }
   }
@@ -354,11 +381,27 @@ function markdownWithoutNonLinkableContent(content = '') {
     .replace(/<(?:(?:https?:\/\/|\/)[^>]+|[^>]+)>/g, '')
 }
 
-export function artifactHasInlineReference(content = '', artifact = {}) {
-  if (artifactHasInlineLink(content, artifact)) return true
+export function artifactHasInlineReference(content = '', artifact = {}, references = [artifact]) {
+  const candidates = Array.isArray(references) && references.length > 0 ? references : [artifact]
+  if (artifactHasInlineLink(content, artifact, candidates)) return true
   const filename = String(artifact?.filename || artifact?.title || '').trim()
   if (!filename) return false
-  return Boolean(findFilenameMatch(markdownWithoutNonLinkableContent(content), [{ ...artifact, filename }]))
+  const visibleContent = markdownWithoutNonLinkableContent(content)
+  BARE_ABSOLUTE_PATH_RE.lastIndex = 0
+  let pathMatch
+  while ((pathMatch = BARE_ABSOLUTE_PATH_RE.exec(visibleContent)) !== null) {
+    const path = trimPathTrailingPunctuation(pathMatch[2])
+    const reference = findArtifactReferenceByLocalPath(candidates, path)
+    if (sameArtifactReference(reference, artifact)) return true
+  }
+  let cursor = 0
+  while (cursor < visibleContent.length) {
+    const match = findFilenameMatch(visibleContent, candidates, cursor)
+    if (!match) return false
+    if (sameArtifactReference(match.reference, artifact)) return true
+    cursor = match.index + match.filename.length
+  }
+  return false
 }
 
 function linkTextNode(value, references) {

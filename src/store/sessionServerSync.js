@@ -133,6 +133,9 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
           // IDs can revive a draft that the current turn already invalidated.
           merged.meta.serverDeliveryArtifactIds = []
         }
+        if (Object.hasOwn(serverMeta, 'verifiedLocalFiles')) {
+          merged.meta.verifiedLocalFiles = serverMeta.verifiedLocalFiles
+        }
 
         const serverPauseSequence = Number.isInteger(serverMeta.serverLastSequence)
           ? serverMeta.serverLastSequence

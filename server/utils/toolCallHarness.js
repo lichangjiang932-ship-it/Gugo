@@ -24,6 +24,10 @@ export const DEFAULT_TOOL_OUTPUT_CHARS = (() => {
 })()
 
 const MIN_TOOL_OUTPUT_CHARS = 500
+export const TRUNCATED_TOOL_RESULT_METADATA_KEY = '_gugoResultMetadata'
+const TRUNCATED_TOOL_RESULT_METADATA_VERSION = 1
+const MAX_RECEIPT_PATH_CHARS = 4_096
+const MAX_RECEIPT_PATHS = 64
 // Reserve most of the model window for instructions, history, tool-call
 // protocol, and the next answer. At 0.75 chars per context token, four tool
 // results in an 8k window share about 6k characters, while a 128k window still
@@ -650,28 +654,98 @@ function safeStringify(value) {
   }
 }
 
+function receiptPath(value) {
+  const text = typeof value === 'string' ? value.trim() : ''
+  return text && text.length <= MAX_RECEIPT_PATH_CHARS ? text : null
+}
+
+function receiptInteger(value) {
+  const number = Number(value)
+  return Number.isInteger(number) && number >= 0 ? number : null
+}
+
+function truncatedToolResultMetadata(value, limit) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const metadata = { version: TRUNCATED_TOOL_RESULT_METADATA_VERSION }
+  const metadataBudget = Math.max(180, Math.min(8_000, Math.floor(limit * 0.45)))
+  const directPath = receiptPath(value.path)
+  if (directPath) metadata.path = directPath
+  for (const key of ['size', 'totalLines', 'offset', 'returnedLines']) {
+    const number = receiptInteger(value[key])
+    if (number !== null) metadata[key] = number
+  }
+  if (typeof value.content === 'string') {
+    metadata.contentPresent = true
+    metadata.sourceTruncated = value.truncated === true
+  }
+  if (typeof value.dry_run === 'boolean') metadata.dry_run = value.dry_run
+
+  const appendWithinBudget = (key, item) => {
+    const nextItems = [...(metadata[key] || []), item]
+    const candidate = { ...metadata, [key]: nextItems }
+    if ((safeStringify(candidate) || '').length > metadataBudget) return false
+    metadata[key] = nextItems
+    return true
+  }
+  for (const valuePath of Array.isArray(value.changedPaths)
+    ? value.changedPaths.slice(0, MAX_RECEIPT_PATHS)
+    : []) {
+    const normalized = receiptPath(valuePath)
+    if (normalized && !appendWithinBudget('changedPaths', normalized)) break
+  }
+  for (const change of Array.isArray(value.changes)
+    ? value.changes.slice(0, MAX_RECEIPT_PATHS)
+    : []) {
+    const normalized = receiptPath(change?.path)
+    if (!normalized) continue
+    const compact = {
+      path: normalized,
+      ...(typeof change?.op === 'string' && change.op.length <= 32 ? { op: change.op } : {}),
+    }
+    if (!appendWithinBudget('changes', compact)) break
+  }
+
+  return Object.keys(metadata).length > 1 ? metadata : null
+}
+
 /** 始终返回合法 JSON；超长结果变为带长度和预览的说明对象。 */
 export function serializeToolResult(value, { maxChars = DEFAULT_TOOL_OUTPUT_CHARS } = {}) {
   const limit = Math.max(MIN_TOOL_OUTPUT_CHARS, Number(maxChars) || DEFAULT_TOOL_OUTPUT_CHARS)
   const json = safeStringify(value) ?? 'null'
   if (json.length <= limit) return json
 
-  let previewChars = Math.max(100, limit - 220)
+  const metadata = truncatedToolResultMetadata(value, limit)
+  const base = {
+    ok: value?.ok ?? true,
+    truncated: true,
+    _truncated: true,
+    originalChars: json.length,
+    _originalChars: json.length,
+    ...(metadata ? { [TRUNCATED_TOOL_RESULT_METADATA_KEY]: metadata } : {}),
+    hint: '结果过长。请缩小查询范围、使用分页/offset，或只读取相关片段。',
+  }
+  const baseChars = (safeStringify({ ...base, preview: '' }) || '').length
+  let previewChars = Math.max(0, limit - baseChars - 8)
   let clipped
   do {
     clipped = safeStringify({
-      ok: value?.ok ?? true,
-      truncated: true,
-      _truncated: true,
-      originalChars: json.length,
-      _originalChars: json.length,
+      ...base,
       preview: json.slice(0, previewChars),
-      hint: '结果过长。请缩小查询范围、使用分页/offset，或只读取相关片段。',
     })
-    previewChars -= 100
-  } while (clipped.length > limit && previewChars > 100)
-  return clipped.length <= limit
-    ? clipped
+    previewChars = Math.max(0, previewChars - 100)
+  } while (clipped.length > limit && previewChars > 0)
+  if (clipped.length <= limit) return clipped
+
+  const fallback = safeStringify({
+    ok: value?.ok ?? true,
+    truncated: true,
+    _truncated: true,
+    originalChars: json.length,
+    _originalChars: json.length,
+    ...(metadata ? { [TRUNCATED_TOOL_RESULT_METADATA_KEY]: metadata } : {}),
+  })
+  return fallback.length <= limit
+    ? fallback
     : safeStringify({ truncated: true, _truncated: true, originalChars: json.length, _originalChars: json.length })
 }
 

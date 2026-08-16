@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import test from 'node:test'
 import {
   allowedArtifactTools,
@@ -17,7 +21,7 @@ import { buildFinalOutput, shouldCompileDocx } from '../server/services/jobWorkf
 import { validateHtmlArtifactSource } from '../server/services/artifactGen.js'
 import { createUser, getDb } from '../server/db.js'
 import { upsertSession } from '../server/services/sessionStore.js'
-import { appendTurnArtifact } from '../server/services/turnArtifactStore.js'
+import { appendTurnArtifact, listTurnArtifacts } from '../server/services/turnArtifactStore.js'
 
 const nameOf = (specs) => specs.map((s) => s?.function?.name)
 const ARTIFACT_GENERATOR_NAMES = [
@@ -451,6 +455,415 @@ test('workspace HTML targets use filesystem tools without a managed-artifact com
     assert.deepEqual(result.artifactIds, [], scenario.label)
     assert.equal(result.text, '已按要求修改指定文件并完成验证。', scenario.label)
   }
+})
+
+test('a real in-place workspace HTML write does not publish a duplicate artifact', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-local-html-revision-'))
+  const targetPath = path.join(root, 'existing.html')
+  const userId = 'local-revision-user-' + randomUUID()
+  const sessionId = 'local-revision-session-' + randomUUID()
+  const turnId = 'local-revision-turn-' + randomUUID()
+  const promptPath = targetPath.replace(/\\/g, '/')
+  const prompt = '继续修改现有原文件 ' + promptPath + '，只覆盖原文件，不要新建任何文件或 artifact。'
+  fs.writeFileSync(targetPath, '<!doctype html><title>before</title>', 'utf8')
+  createUser({ id: userId, email: userId + '@example.com' })
+  upsertSession({ id: sessionId, userId, title: 'Local revision artifact gate' })
+  let modelCalls = 0
+  try {
+    const result = await runToolsLoop({
+      job: {
+        id: turnId,
+        userId,
+        sessionId,
+        origin: 'chat',
+        prompt,
+        userPrompt: prompt,
+      },
+      step: { id: turnId, kind: 'chat' },
+      messages: [{ role: 'user', content: prompt }],
+      intentMode: 'execute',
+      toolSpecs: SERVER_TOOL_SPECS,
+      enableToolHooks: false,
+      requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+      executeTool: async ({ name, args }) => {
+        if (name === 'write_file') {
+          fs.writeFileSync(targetPath, args.content, 'utf8')
+          return {
+            ok: true,
+            path: targetPath,
+            bytes: Buffer.byteLength(args.content),
+            scope: 'local',
+            changes: [{ path: targetPath, additions: 1, deletions: 1 }],
+          }
+        }
+        if (name === 'read_file') {
+          return {
+            ok: true,
+            path: targetPath,
+            content: fs.readFileSync(targetPath, 'utf8'),
+            truncated: false,
+          }
+        }
+        assert.fail('unexpected tool: ' + name)
+      },
+      runModel: async () => {
+        modelCalls += 1
+        if (modelCalls === 1) {
+          return {
+            content: '',
+            toolCalls: [{
+              id: 'overwrite-existing-html',
+              function: {
+                name: 'write_file',
+                arguments: JSON.stringify({
+                  path: targetPath,
+                  content: '<!doctype html><title>after</title>',
+                }),
+              },
+            }],
+          }
+        }
+        if (modelCalls === 2) {
+          return {
+            content: '',
+            toolCalls: [{
+              id: 'read-overwritten-html',
+              function: {
+                name: 'read_file',
+                arguments: JSON.stringify({ path: targetPath }),
+              },
+            }],
+          }
+        }
+        return { content: '已完成原文件修改和验证。', toolCalls: [] }
+      },
+    })
+
+    assert.equal(modelCalls, 3)
+    assert.equal(fs.readFileSync(targetPath, 'utf8'), '<!doctype html><title>after</title>')
+    assert.deepEqual(result.artifactIds, [])
+    assert.deepEqual(listTurnArtifacts({ userId, sessionId, turnId }), [])
+    assert.deepEqual(fs.readdirSync(root), ['existing.html'])
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+    getDb().prepare('DELETE FROM turn_artifacts WHERE user_id = ? AND session_id = ?').run(userId, sessionId)
+    getDb().prepare('DELETE FROM sessions WHERE id = ?').run(sessionId)
+    getDb().prepare('DELETE FROM users WHERE id = ?').run(userId)
+  }
+})
+
+test('a workspace-file request cannot silently fall back to a same-named managed artifact', async () => {
+  const prompt = '继续修改刚才的原文件 qa-context-test.html，只允许修改这个现有原文件，不要新建任何文件或 artifact。'
+  let modelCalls = 0
+  let executions = 0
+  let rejectionObserved = false
+  const result = await runToolsLoop({
+    job: {
+      id: 'workspace-managed-store-mismatch',
+      userId: INTENT_ARTIFACT_USER_ID,
+      origin: 'chat',
+      prompt,
+      userPrompt: prompt,
+    },
+    step: { id: 'workspace-managed-store-mismatch', kind: 'chat' },
+    messages: [{ role: 'user', content: prompt }],
+    intentMode: 'execute',
+    toolSpecs: SERVER_TOOL_SPECS,
+    enableToolHooks: false,
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    executeTool: async () => {
+      executions += 1
+      return { ok: true }
+    },
+    runModel: async ({ messages }) => {
+      modelCalls += 1
+      rejectionObserved ||= messages.some((message) => (
+        String(message.content || '').includes('workspace_target_managed_store_mismatch')
+      ))
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'wrong-managed-store-write',
+            function: {
+              name: 'write_file',
+              arguments: JSON.stringify({
+                path: '.artifacts/qa-context-test.html',
+                content: '<!doctype html><title>wrong target</title>',
+              }),
+            },
+          }],
+        }
+      }
+      return { content: '无法确认原文件位置。', toolCalls: [] }
+    },
+  })
+
+  assert.equal(executions, 0)
+  assert.equal(rejectionObserved, true)
+  assert.equal(result.incomplete, true)
+  assert.equal(result.reason, 'execution_evidence_missing')
+})
+
+async function runRejectedExactWorkspaceMutation({
+  label,
+  name,
+  args,
+  approvalArgs = null,
+}) {
+  const prompt = '继续修改当前项目里的原文件 qa-context-test.html，只覆盖这个原文件，不要新建副本或 artifact。'
+  let modelCalls = 0
+  let executions = 0
+  let approvals = 0
+  const observedCodes = new Set()
+  const result = await runToolsLoop({
+    job: {
+      id: `exact-workspace-target-${label}`,
+      userId: INTENT_ARTIFACT_USER_ID,
+      origin: 'chat',
+      prompt,
+      userPrompt: prompt,
+    },
+    step: { id: `exact-workspace-target-${label}`, kind: 'chat' },
+    messages: [{ role: 'user', content: prompt }],
+    intentMode: 'execute',
+    toolSpecs: SERVER_TOOL_SPECS,
+    enableToolHooks: false,
+    requestToolApproval: async () => {
+      approvals += 1
+      return { proceed: true, args: approvalArgs || args }
+    },
+    executeTool: async () => {
+      executions += 1
+      return { ok: true }
+    },
+    runModel: async ({ messages }) => {
+      modelCalls += 1
+      for (const message of messages) {
+        const content = String(message?.content || '')
+        for (const code of [
+          'workspace_target_managed_store_mismatch',
+          'workspace_target_mismatch',
+          'workspace_mutation_target_unproven',
+        ]) {
+          if (content.includes(code)) observedCodes.add(code)
+        }
+      }
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: `wrong-target-${label}`,
+            function: { name, arguments: JSON.stringify(args) },
+          }],
+        }
+      }
+      return { content: '无法完成原文件修改。', toolCalls: [] }
+    },
+  })
+  return { approvals, executions, observedCodes, result }
+}
+
+test('every filesystem mutation tool rejects sibling targets during an exact in-place revision', async () => {
+  const originalPath = 'qa-context-test.html'
+  const siblingPath = 'qa-context-test-copy.html'
+  const scenarios = [
+    {
+      label: 'write-file',
+      name: 'write_file',
+      args: { path: siblingPath, content: '<!doctype html><title>copy</title>' },
+    },
+    {
+      label: 'edit-file',
+      name: 'edit_file',
+      args: { path: siblingPath, old_string: 'before', new_string: 'after' },
+    },
+    {
+      label: 'patch-file',
+      name: 'patch_file',
+      args: { path: siblingPath, start_line: 1, end_line: 1, replacement: 'after' },
+    },
+    {
+      label: 'multi-edit',
+      name: 'multi_edit',
+      args: {
+        edits: [
+          { path: originalPath, oldText: 'before', newText: 'after' },
+          { path: siblingPath, oldText: 'before', newText: 'after' },
+        ],
+      },
+    },
+    {
+      label: 'apply-patch',
+      name: 'apply_patch',
+      args: {
+        patch: [
+          '*** Begin Patch',
+          `*** Update File: ${originalPath}`,
+          '@@',
+          '-before',
+          '+after',
+          `*** Update File: ${siblingPath}`,
+          '@@',
+          '-before',
+          '+after',
+          '*** End Patch',
+        ].join('\n'),
+      },
+    },
+  ]
+
+  for (const scenario of scenarios) {
+    const outcome = await runRejectedExactWorkspaceMutation(scenario)
+    assert.equal(outcome.executions, 0, scenario.label)
+    assert.equal(outcome.approvals, 0, scenario.label)
+    assert.equal(outcome.observedCodes.has('workspace_target_mismatch'), true, scenario.label)
+    assert.equal(outcome.result.incomplete, true, scenario.label)
+  }
+})
+
+test('command mutations reject wrong, managed-store, and unproven targets during an exact in-place revision', async () => {
+  const scenarios = [
+    {
+      label: 'bash-sibling-output',
+      name: 'bash_exec',
+      args: { command: 'python write_html.py', expected_outputs: ['qa-context-test-copy.html'] },
+      code: 'workspace_target_mismatch',
+    },
+    {
+      label: 'run-command-managed-output',
+      name: 'run_command',
+      args: { command: 'python write_html.py', expected_outputs: ['.artifacts/qa-context-test.html'] },
+      code: 'workspace_target_managed_store_mismatch',
+    },
+    {
+      label: 'bash-unproven-output',
+      name: 'bash_exec',
+      args: { command: 'python write_html.py' },
+      code: 'workspace_mutation_target_unproven',
+    },
+  ]
+
+  for (const scenario of scenarios) {
+    const outcome = await runRejectedExactWorkspaceMutation(scenario)
+    assert.equal(outcome.executions, 0, scenario.label)
+    assert.equal(outcome.approvals, 0, scenario.label)
+    assert.equal(outcome.observedCodes.has(scenario.code), true, scenario.label)
+    assert.equal(outcome.result.incomplete, true, scenario.label)
+  }
+})
+
+test('approval-edited filesystem args are revalidated against the exact original target', async () => {
+  const outcome = await runRejectedExactWorkspaceMutation({
+    label: 'approval-edited-path',
+    name: 'write_file',
+    args: {
+      path: 'qa-context-test.html',
+      content: '<!doctype html><title>updated original</title>',
+    },
+    approvalArgs: {
+      path: 'qa-context-test-copy.html',
+      content: '<!doctype html><title>wrong copy</title>',
+    },
+  })
+
+  assert.equal(outcome.approvals, 1)
+  assert.equal(outcome.executions, 0)
+  assert.equal(outcome.observedCodes.has('workspace_target_mismatch'), true)
+  assert.equal(outcome.result.incomplete, true)
+})
+
+test('approval-edited command outputs are revalidated against the exact original target', async () => {
+  const outcome = await runRejectedExactWorkspaceMutation({
+    label: 'approval-edited-command-output',
+    name: 'bash_exec',
+    args: {
+      command: 'python write_html.py',
+      expected_outputs: ['qa-context-test.html'],
+    },
+    approvalArgs: {
+      command: 'python write_html.py',
+      expected_outputs: ['qa-context-test-copy.html'],
+    },
+  })
+
+  assert.equal(outcome.approvals, 1)
+  assert.equal(outcome.executions, 0)
+  assert.equal(outcome.observedCodes.has('workspace_target_mismatch'), true)
+  assert.equal(outcome.result.incomplete, true)
+})
+
+test('a command with an exact declared output may update and verify the requested original', async () => {
+  const prompt = '继续修改当前项目里的原文件 qa-context-test.html，只覆盖这个原文件，不要新建副本或 artifact。'
+  const targetPath = 'qa-context-test.html'
+  let modelCalls = 0
+  const executed = []
+  const result = await runToolsLoop({
+    job: {
+      id: 'exact-workspace-target-allowed-command',
+      userId: INTENT_ARTIFACT_USER_ID,
+      origin: 'chat',
+      prompt,
+      userPrompt: prompt,
+    },
+    step: { id: 'exact-workspace-target-allowed-command', kind: 'chat' },
+    messages: [{ role: 'user', content: prompt }],
+    intentMode: 'execute',
+    toolSpecs: SERVER_TOOL_SPECS,
+    enableToolHooks: false,
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    executeTool: async ({ name, args }) => {
+      executed.push(name)
+      if (name === 'bash_exec') {
+        return {
+          ok: true,
+          exitCode: 0,
+          changedPaths: [targetPath],
+          verifiedOutputs: [{ path: targetPath, changed: true }],
+        }
+      }
+      assert.equal(name, 'read_file')
+      assert.equal(args.path, targetPath)
+      return { ok: true, path: targetPath, content: '<!doctype html><title>verified</title>' }
+    },
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'exact-command-write',
+            function: {
+              name: 'bash_exec',
+              arguments: JSON.stringify({
+                command: 'python write_html.py',
+                expected_outputs: [targetPath],
+              }),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 2) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'exact-command-read-back',
+            function: {
+              name: 'read_file',
+              arguments: JSON.stringify({ path: targetPath }),
+            },
+          }],
+        }
+      }
+      return { content: '已修改并验证原文件。', toolCalls: [] }
+    },
+  })
+
+  assert.deepEqual(executed, ['bash_exec', 'read_file'])
+  assert.equal(modelCalls, 3)
+  assert.equal(result.incomplete, undefined)
+  assert.equal(result.text, '已修改并验证原文件。')
+  assert.deepEqual(result.artifactIds, [])
 })
 
 function deliveredHtmlTurn({ prefix, artifactId, filename }) {

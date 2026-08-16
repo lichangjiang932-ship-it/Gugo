@@ -35,6 +35,27 @@ function optionalArtifactIds(payload, key) {
     .map((value) => String(value || '').trim()).filter(Boolean))]
 }
 
+function optionalVerifiedLocalFiles(payload) {
+  if (!payload || typeof payload !== 'object' || !Object.hasOwn(payload, 'verifiedLocalFiles')) return undefined
+  const seen = new Set()
+  return (Array.isArray(payload.verifiedLocalFiles) ? payload.verifiedLocalFiles : [])
+    .map((file) => {
+      const id = String(file?.id || '').trim()
+      const path = String(file?.path || '').trim()
+      const filename = String(file?.filename || '').trim()
+      if (!id || !path || !filename || seen.has(id)) return null
+      seen.add(id)
+      return {
+        id,
+        path,
+        filename,
+        ...(Number.isFinite(Number(file?.size)) ? { size: Math.max(0, Number(file.size)) } : {}),
+        ...(Number.isFinite(Number(file?.verifiedAt)) ? { verifiedAt: Math.max(0, Number(file.verifiedAt)) } : {}),
+      }
+    })
+    .filter(Boolean)
+}
+
 export function normalizeTurnFailurePayload(payload = {}, {
   fallbackCode = 'TURN_FAILED', fallbackMessage = 'Server turn failed',
 } = {}) {
@@ -54,12 +75,14 @@ export function normalizeTurnFailurePayload(payload = {}, {
   }
   const iterations = optionalInteger(payload.iterations, 0)
   const deliveryArtifactIds = optionalArtifactIds(payload, 'deliveryArtifactIds')
+  const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)
   return {
     error,
     partialText: String(payload.partialText ?? payload.text ?? ''),
     artifactIds: [...new Set((Array.isArray(payload.artifactIds) ? payload.artifactIds : [])
       .map((value) => String(value || '').trim()).filter(Boolean))],
     ...(deliveryArtifactIds !== undefined ? { deliveryArtifactIds } : {}),
+    ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
     ...(iterations !== undefined ? { iterations } : {}),
   }
 }
@@ -333,6 +356,7 @@ export async function dispatchTurnEvent(event, {
     dispatch?.({ type: 'UPDATE_TASK', payload: { id: taskId, updates: { stepLabel: 'Approval resolved, continuing' } } })
   } else if (event.type === 'turn.paused') {
     const deliveryArtifactIds = optionalArtifactIds(payload, 'deliveryArtifactIds')
+    const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)
     dispatchMessage({
       type: 'UPDATE_LAST_MESSAGE_META',
       payload: {
@@ -345,6 +369,7 @@ export async function dispatchTurnEvent(event, {
         directoryAuthorizationPending: false,
         serverResumeResolution: null,
         ...(deliveryArtifactIds !== undefined ? { serverDeliveryArtifactIds: deliveryArtifactIds } : {}),
+        ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
       },
       ...streamCursor,
     })
@@ -352,6 +377,7 @@ export async function dispatchTurnEvent(event, {
     cursorCommitted = true
   } else if (event.type === 'turn.completed') {
     const deliveryArtifactIds = optionalArtifactIds(payload, 'deliveryArtifactIds')
+    const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)
     const modelUsage = normalizeModelUsage(payload.usage)
     dispatchMessage({
       type: 'UPDATE_LAST_MESSAGE_META',
@@ -362,6 +388,7 @@ export async function dispatchTurnEvent(event, {
         serverConnectionState: null,
         serverArtifactIds: optionalArtifactIds(payload, 'artifactIds') || [],
         ...(deliveryArtifactIds !== undefined ? { serverDeliveryArtifactIds: deliveryArtifactIds } : {}),
+        ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
         ...(modelUsage ? {
           modelUsage,
           actualPromptTokens: modelUsage.promptTokens,
@@ -371,6 +398,7 @@ export async function dispatchTurnEvent(event, {
     })
     cursorCommitted = true
   } else if (event.type === 'turn.cancelled') {
+    const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)
     dispatchMessage({
       type: 'UPDATE_LAST_MESSAGE_META',
       payload: {
@@ -380,6 +408,7 @@ export async function dispatchTurnEvent(event, {
         serverConnectionState: 'cancelled',
         serverArtifactIds: optionalArtifactIds(payload, 'artifactIds') || [],
         serverDeliveryArtifactIds: optionalArtifactIds(payload, 'deliveryArtifactIds') || [],
+        ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
       },
       ...streamCursor,
     })
@@ -402,6 +431,9 @@ export async function dispatchTurnEvent(event, {
         serverArtifactIds: failure.artifactIds,
         ...(failure.deliveryArtifactIds !== undefined
           ? { serverDeliveryArtifactIds: failure.deliveryArtifactIds }
+          : {}),
+        ...(failure.verifiedLocalFiles !== undefined
+          ? { verifiedLocalFiles: failure.verifiedLocalFiles }
           : {}),
         ...(failure.iterations !== undefined ? { serverIterations: failure.iterations } : {}),
         interrupted: event.type === 'turn.interrupted',

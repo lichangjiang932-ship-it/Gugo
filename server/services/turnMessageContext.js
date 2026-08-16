@@ -1,4 +1,9 @@
+import { createHash } from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
 import { normalizeModelUsage } from '../../shared/modelUsage.js'
+import { TRUNCATED_TOOL_RESULT_METADATA_KEY } from '../utils/toolCallHarness.js'
+import { resolveAuthorizedLocalPath } from './localFileAccessService.js'
 
 const MAX_TOOL_CALLS_PER_GROUP = 8
 // Historical tool arguments are audit/context hints, not an artifact source
@@ -30,6 +35,245 @@ const MAX_MANAGED_ATTACHMENTS_PER_MESSAGE = 32
 const MAX_HISTORICAL_ATTACHMENTS_PER_REQUEST = 4
 const STORED_MESSAGE_SOURCE_ID = Symbol('gugoStoredMessageSourceId')
 const HISTORICAL_ATTACHMENT_REFERENCE_PATTERN = /(?:attachment:\/\/|(?:刚才|之前|上次|前面|同一|同一个|那个|那张|这张|这份|上一张|原来).{0,16}(?:附件|图片|图像|照片|截图|图表|文件|文档|pdf)|(?:附件|图片|图像|照片|截图|图表|文档|pdf).{0,16}(?:重新|再|继续).{0,8}(?:看|读|分析|检查|查看)|(?:same|previous|earlier|that|the\s+attached)\s+(?:attachment|image|photo|screenshot|diagram|file|document|pdf)|(?:re-?inspect|re-?read|look\s+again\s+at).{0,24}(?:attachment|image|photo|file|document|pdf))/i
+const LOCAL_FILE_MUTATION_TOOLS = new Set([
+  'write_file',
+  'edit_file',
+  'apply_patch',
+  'bash_exec',
+  'run_command',
+])
+const COMMAND_MUTATION_TOOLS = new Set(['bash_exec', 'run_command'])
+const MAX_VERIFIED_LOCAL_FILES = 64
+
+function workspaceRoot() {
+  return path.resolve(process.env.WORKSPACE_ROOT?.trim() || process.cwd())
+}
+
+function isInsidePath(root, target) {
+  const relative = path.relative(root, target)
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))
+}
+
+function canonicalLocalPath(value) {
+  const normalized = path.normalize(String(value || ''))
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized
+}
+
+function resolveVerifiedLocalPath(rawPath, { userId, resolvePath }) {
+  const raw = typeof rawPath === 'string' ? rawPath.trim() : ''
+  if (!raw) return null
+  try {
+    const resolved = resolvePath({
+      userId,
+      rawPath: raw,
+      write: false,
+      allowWorkspace: true,
+    })
+    const resolvedFullPath = typeof resolved?.fullPath === 'string' ? resolved.fullPath.trim() : ''
+    if (!resolvedFullPath || !path.isAbsolute(resolvedFullPath)) return null
+    const fullPath = path.normalize(resolvedFullPath)
+
+    // Relative tool paths are workspace-relative by contract. Keep that
+    // boundary even when approval bypass is enabled, otherwise ../outside
+    // or a workspace symlink could silently turn into a trusted receipt.
+    if (!path.isAbsolute(raw)) {
+      let root = workspaceRoot()
+      try { root = fs.realpathSync.native(root) } catch { root = path.resolve(root) }
+      if (!isInsidePath(root, fullPath)) return null
+    }
+    return fullPath
+  } catch {
+    return null
+  }
+}
+
+function localFileReceipt(fullPath, { statFile, verifiedAt }) {
+  try {
+    const stat = statFile(fullPath)
+    if (!stat?.isFile?.()) return null
+    const normalized = path.normalize(fullPath)
+    const id = `local-file-${createHash('sha256').update(canonicalLocalPath(normalized)).digest('hex').slice(0, 24)}`
+    return {
+      id,
+      path: normalized,
+      filename: path.basename(normalized),
+      size: Math.max(0, Number(stat.size) || 0),
+      verifiedAt: Math.max(0, Number(verifiedAt) || Date.now()),
+    }
+  } catch {
+    return null
+  }
+}
+
+function toolCallParts(rawCall) {
+  const id = String(rawCall?.id || '').trim()
+  const name = String(rawCall?.function?.name || rawCall?.name || '').trim()
+  const args = parsedObject(rawCall?.function?.arguments ?? rawCall?.argumentsText ?? rawCall?.args)
+  return id && name ? { id, name, args: args || {} } : null
+}
+
+function retainedToolResultMetadata(result) {
+  if (result?.truncated !== true || result?._truncated !== true) return null
+  const metadata = result?.[TRUNCATED_TOOL_RESULT_METADATA_KEY]
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null
+  return metadata.version === 1 ? metadata : null
+}
+
+function mutationResultPaths(call, result) {
+  if (!LOCAL_FILE_MUTATION_TOOLS.has(call.name) || result?.ok !== true) return []
+  const evidence = retainedToolResultMetadata(result) || result
+  if (call.name === 'apply_patch' && (evidence.dry_run === true || call.args?.dry_run === true)) return []
+
+  const values = []
+  if (Array.isArray(evidence.changedPaths)) values.push(...evidence.changedPaths)
+  if (!COMMAND_MUTATION_TOOLS.has(call.name)) {
+    if (typeof evidence.path === 'string') values.push(evidence.path)
+    if (Array.isArray(evidence.changes)) {
+      for (const change of evidence.changes) {
+        if (call.name === 'apply_patch' && change?.op === 'delete') continue
+        if (typeof change?.path === 'string') values.push(change.path)
+      }
+    }
+    if ((call.name === 'write_file' || call.name === 'edit_file') && typeof call.args?.path === 'string') {
+      values.push(call.args.path)
+    }
+  }
+  return values
+}
+
+function completeReadEvidence(call, result) {
+  if (call.name !== 'read_file' || result?.ok !== true) return null
+  const retainedMetadata = retainedToolResultMetadata(result)
+  const evidence = retainedMetadata || result
+  if (retainedMetadata) {
+    if (retainedMetadata.contentPresent !== true || retainedMetadata.sourceTruncated === true) return null
+  } else if (typeof result.content !== 'string' || result.truncated === true) {
+    return null
+  }
+  const offset = Number(evidence.offset ?? call.args?.offset ?? 0)
+  if (!Number.isFinite(offset) || offset !== 0) return null
+  const totalLines = Number(evidence.totalLines)
+  const returnedLines = Number(evidence.returnedLines)
+  if (Number.isFinite(totalLines) && Number.isFinite(returnedLines)) {
+    return returnedLines >= totalLines ? evidence : null
+  }
+  const limit = Number(call.args?.limit ?? 0)
+  return !Number.isFinite(limit) || limit <= 0 ? evidence : null
+}
+
+function legacyReadEvidence(call, result) {
+  if (call.name !== 'read_file' || result?.ok !== true) return null
+  const retainedMetadata = retainedToolResultMetadata(result)
+  const evidence = retainedMetadata || result
+  if (retainedMetadata) {
+    if (retainedMetadata.contentPresent !== true) return null
+  } else if (typeof result.content !== 'string') {
+    return null
+  }
+  const offset = Number(evidence.offset ?? call.args?.offset ?? 0)
+  return Number.isFinite(offset) && offset === 0 ? evidence : null
+}
+
+function normalizedVerifiedLocalFiles(values) {
+  const receipts = []
+  const seen = new Set()
+  for (const value of Array.isArray(values) ? values : []) {
+    const fullPath = typeof value?.path === 'string' ? path.normalize(value.path.trim()) : ''
+    const id = String(value?.id || '').trim()
+    const filename = String(value?.filename || path.basename(fullPath)).trim()
+    if (!id || !fullPath || !path.isAbsolute(fullPath) || !filename) continue
+    const key = canonicalLocalPath(fullPath)
+    if (seen.has(key)) continue
+    seen.add(key)
+    receipts.push({
+      id,
+      path: fullPath,
+      filename,
+      ...(Number.isFinite(Number(value?.size)) ? { size: Math.max(0, Number(value.size)) } : {}),
+      ...(Number.isFinite(Number(value?.verifiedAt))
+        ? { verifiedAt: Math.max(0, Number(value.verifiedAt)) }
+        : {}),
+    })
+    if (receipts.length >= MAX_VERIFIED_LOCAL_FILES) break
+  }
+  return receipts
+}
+
+function extractVerifiedLocalFilesWithReadEvidence(messages, {
+  userId = null,
+  baselineToolCallIds = new Set(),
+  verifiedAt = Date.now(),
+  resolvePath = resolveAuthorizedLocalPath,
+  statFile = fs.statSync,
+} = {}, readEvidenceForCall = completeReadEvidence) {
+  const calls = new Map()
+  const mutatedAt = new Map()
+  const receipts = new Map()
+  let sequence = 0
+
+  for (const message of Array.isArray(messages) ? messages : []) {
+    sequence += 1
+    if (message?.role === 'assistant' && Array.isArray(message.tool_calls)) {
+      for (const rawCall of message.tool_calls) {
+        const call = toolCallParts(rawCall)
+        if (!call || baselineToolCallIds.has(call.id)) continue
+        calls.set(call.id, call)
+      }
+      continue
+    }
+    if (message?.role !== 'tool') continue
+    const toolCallId = String(message.tool_call_id || message.toolCallId || '').trim()
+    const call = calls.get(toolCallId)
+    const result = parsedObject(message.content)
+    if (!call || !result) continue
+    const resultName = String(message.name || '').trim()
+    if (resultName && resultName !== call.name) continue
+
+    if (LOCAL_FILE_MUTATION_TOOLS.has(call.name)) {
+      for (const rawPath of mutationResultPaths(call, result)) {
+        const fullPath = resolveVerifiedLocalPath(rawPath, { userId, resolvePath })
+        if (!fullPath) continue
+        const key = canonicalLocalPath(fullPath)
+        mutatedAt.set(key, sequence)
+        receipts.delete(key)
+      }
+      continue
+    }
+    const readEvidence = readEvidenceForCall(call, result)
+    if (!readEvidence) continue
+    for (const rawPath of [readEvidence.path, call.args?.path]) {
+      const fullPath = resolveVerifiedLocalPath(rawPath, { userId, resolvePath })
+      if (!fullPath) continue
+      const key = canonicalLocalPath(fullPath)
+      if (!mutatedAt.has(key) || mutatedAt.get(key) >= sequence) continue
+      const receipt = localFileReceipt(fullPath, { statFile, verifiedAt })
+      if (receipt) receipts.set(key, receipt)
+      break
+    }
+  }
+
+  return normalizedVerifiedLocalFiles([...receipts.values()].slice(-MAX_VERIFIED_LOCAL_FILES))
+}
+
+/**
+ * Build lightweight receipts only when a successful mutation is followed by
+ * a successful, complete read_file of the same authorized file. Tool bodies
+ * stay out of the receipt so large-file links survive bounded history.
+ */
+export function extractVerifiedLocalFiles(messages, options = {}) {
+  return extractVerifiedLocalFilesWithReadEvidence(messages, options, completeReadEvidence)
+}
+
+/**
+ * Compatibility for turns stored before verified receipts existed. A
+ * successful mutation followed by an offset-zero read proves the trusted path
+ * exists, even when that old turn sampled only the beginning of the file. This
+ * is used only when the model context has no explicit verifiedLocalFiles field;
+ * new turns retain the complete-read requirement above.
+ */
+export function recoverLegacyVerifiedLocalFiles(messages, options = {}) {
+  return extractVerifiedLocalFilesWithReadEvidence(messages, options, legacyReadEvidence)
+}
 
 function tagStoredMessageSource(message, sourceId) {
   const id = String(sourceId || '').trim()
@@ -462,6 +706,8 @@ export function buildAssistantModelContext({
   turnId,
   checkpointMessages,
   baselineToolCallIds,
+  userId = null,
+  verifiedLocalFiles,
   artifactIds = [],
   deliveryArtifactIds,
   iterations = 0,
@@ -472,6 +718,13 @@ export function buildAssistantModelContext({
   turnStartedAt = null,
   turnCompletedAt = null,
 } = {}) {
+  const localFileReceipts = normalizedVerifiedLocalFiles(
+    verifiedLocalFiles ?? extractVerifiedLocalFiles(checkpointMessages, {
+      userId,
+      baselineToolCallIds: baselineToolCallIds || new Set(),
+      verifiedAt: turnCompletedAt || Date.now(),
+    }),
+  )
   const normalizedUsage = normalizeModelUsage(usage)
   const normalizedStartedAt = Number.isFinite(Number(turnStartedAt))
     ? Math.max(0, Number(turnStartedAt))
@@ -488,6 +741,10 @@ export function buildAssistantModelContext({
     toolTrace: extractTurnToolTrace(checkpointMessages, {
       excludedCallIds: baselineToolCallIds || new Set(),
     }),
+    // Presence is authoritative. Persist an explicit empty list for new turns
+    // so restored clients never reinterpret an intentionally unverified write
+    // through the legacy tool-trace compatibility path.
+    verifiedLocalFiles: localFileReceipts,
     artifactIds: Array.isArray(artifactIds) ? artifactIds.map(String) : [],
     ...(Array.isArray(deliveryArtifactIds)
       ? { deliveryArtifactIds: deliveryArtifactIds.map(String) }

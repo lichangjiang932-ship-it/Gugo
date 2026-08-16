@@ -8,6 +8,7 @@ import { hasChoices, stripChoices } from '../../../lib/choices.js'
 import { buildMessageTimeline } from '../../../lib/messageTimeline.js'
 import { shouldCollapseArtifactPreview } from '../../../lib/artifactPreview.js'
 import { artifactHasInlineReference, artifactReferenceOpenPayload, buildMessageArtifactPreview, buildServerArtifactReferences, findArtifactReferenceByHref, findArtifactReferenceByLocalPath, resolveDeliveryArtifacts } from '../../../lib/artifactReferences.js'
+import { buildVerifiedLocalFileReferences, mergeArtifactReferences, verifiedLocalFileOpenPayload } from '../../../lib/localFileReferences.js'
 import { formatMessageDateTime, formatMessageTime } from '../../../lib/messageTime.js'
 import { copyTextToClipboard } from '../../../lib/clipboard.js'
 import { ArtifactReferenceLinks } from './ArtifactCards.jsx'
@@ -68,7 +69,21 @@ export default function MessageRow({
     messageId: msg.id,
     preview: artifactPreview,
   })
-  const hasInlineArtifactReference = serverArtifactReferences.some((reference) => artifactHasInlineReference(msg.content, reference))
+  const verifiedLocalFileReferences = isMessageComplete
+    ? buildVerifiedLocalFileReferences({
+        toolCalls: msg.meta?.toolCalls,
+        verifiedLocalFiles: msg.meta?.verifiedLocalFiles,
+        messageId: msg.id,
+        turnId: msg.meta?.serverTurnId,
+      })
+    : []
+  const artifactReferences = mergeArtifactReferences({
+    serverReferences: serverArtifactReferences,
+    verifiedLocalFileReferences,
+  })
+  const hasInlineArtifactReference = artifactReferences.some((reference) => (
+    artifactHasInlineReference(msg.content, reference, artifactReferences)
+  ))
   const collapseArtifact = showArtifactPreview && !hasInlineArtifactReference && shouldCollapseArtifactPreview(artifactPreview, {
     content: msg.content,
     artifactSource: msg.meta?.artifactSource,
@@ -95,14 +110,17 @@ export default function MessageRow({
         {msg.role === 'assistant' ? (
           collapseArtifact ? (
             <CollapsedArtifactContent
+              artifactReferences={artifactReferences}
               artifactPreview={artifactPreview}
               msg={msg}
               onOpenArtifact={openArtifact}
               t={t}
+              verifiedLocalFileReferences={verifiedLocalFileReferences}
             />
           ) : (
             <AssistantContent
               artifactPreview={artifactPreview}
+              artifactReferences={artifactReferences}
               isCurrentStreamingMessage={isCurrentStreamingMessage}
               isMessageComplete={isMessageComplete}
               msg={msg}
@@ -110,6 +128,7 @@ export default function MessageRow({
               onOpenInPreview={onOpenInPreview}
               showArtifactPreview={showArtifactPreview}
               t={t}
+              verifiedLocalFileReferences={verifiedLocalFileReferences}
             />
           )
         ) : (
@@ -150,20 +169,18 @@ export default function MessageRow({
   )
 }
 
-function AssistantContent({ artifactPreview, isCurrentStreamingMessage, isMessageComplete, msg, onOpenArtifact, showArtifactPreview, t }) {
-  const deliveryArtifactReferences = buildServerArtifactReferences({
-    artifacts: resolveDeliveryArtifacts(msg.meta),
-    content: String(msg.meta?.artifactSource || msg.content || ''),
-    messageId: msg.id,
-    preview: artifactPreview,
-  })
+function AssistantContent({ artifactPreview, artifactReferences, isCurrentStreamingMessage, isMessageComplete, msg, onOpenArtifact, showArtifactPreview, t, verifiedLocalFileReferences }) {
+  const inlineFileReferences = artifactReferences
   const openInlineArtifact = (href) => {
     // 先按产物 URL 匹配,再按本地路径(含 file:/// 与 D:\ 形式)匹配,
     // 让输出文字里的文件路径能一键打开预览。
-    const reference = findArtifactReferenceByHref(deliveryArtifactReferences, href)
-      || findArtifactReferenceByLocalPath(deliveryArtifactReferences, href)
+    const reference = findArtifactReferenceByHref(inlineFileReferences, href)
+      || findArtifactReferenceByLocalPath(inlineFileReferences, href)
     if (!reference) return false
-    onOpenArtifact?.(artifactReferenceOpenPayload(reference, msg.id))
+    onOpenArtifact?.(
+      verifiedLocalFileOpenPayload(reference)
+        || artifactReferenceOpenPayload(reference, msg.id),
+    )
     return true
   }
   const openToolArtifact = (reference) => {
@@ -187,7 +204,7 @@ function AssistantContent({ artifactPreview, isCurrentStreamingMessage, isMessag
             t={t}
           >
             <TimelineSegments
-              artifacts={deliveryArtifactReferences}
+              artifacts={inlineFileReferences}
               onLinkClick={openInlineArtifact}
               onOpenArtifact={openToolArtifact}
               segments={presentation.execution}
@@ -198,7 +215,7 @@ function AssistantContent({ artifactPreview, isCurrentStreamingMessage, isMessag
         )}
         {presentation.answer && (
           <MarkdownRenderer
-            artifactReferences={deliveryArtifactReferences}
+            artifactReferences={inlineFileReferences}
             streaming={isCurrentStreamingMessage}
             onLinkClick={openInlineArtifact}
           >
@@ -214,8 +231,14 @@ function AssistantContent({ artifactPreview, isCurrentStreamingMessage, isMessag
           }))}
         />
       )}
-      {isMessageComplete && (showArtifactPreview || resolveDeliveryArtifacts(msg.meta).length > 0) && (
-        <ArtifactReferenceLinks msg={msg} preview={artifactPreview} onOpen={onOpenArtifact} />
+      {isMessageComplete && (showArtifactPreview || resolveDeliveryArtifacts(msg.meta).length > 0 || verifiedLocalFileReferences.length > 0) && (
+        <ArtifactReferenceLinks
+          msg={msg}
+          preview={artifactPreview}
+          onOpen={onOpenArtifact}
+          referenceContent={presentation.answer}
+          verifiedLocalFileReferences={verifiedLocalFileReferences}
+        />
       )}
     </>
   )
@@ -363,13 +386,7 @@ function collapsedArtifactSummary(artifactReferences, t) {
   })
 }
 
-function CollapsedArtifactContent({ artifactPreview, msg, onOpenArtifact, t }) {
-  const artifactReferences = buildServerArtifactReferences({
-    artifacts: resolveDeliveryArtifacts(msg.meta),
-    content: String(msg.meta?.artifactSource || msg.content || ''),
-    messageId: msg.id,
-    preview: artifactPreview,
-  })
+function CollapsedArtifactContent({ artifactPreview, artifactReferences, msg, onOpenArtifact, t, verifiedLocalFileReferences }) {
   const openToolArtifact = (reference) => {
     const payload = artifactReferenceOpenPayload(reference, msg.id)
     if (!payload) return false
@@ -391,7 +408,12 @@ function CollapsedArtifactContent({ artifactPreview, msg, onOpenArtifact, t }) {
         </ExecutionDisclosure>
         <p data-testid="artifact-completion-summary">{collapsedArtifactSummary(artifactReferences, t)}</p>
       </div>
-      <ArtifactReferenceLinks msg={msg} preview={artifactPreview} onOpen={onOpenArtifact} />
+      <ArtifactReferenceLinks
+        msg={msg}
+        preview={artifactPreview}
+        onOpen={onOpenArtifact}
+        verifiedLocalFileReferences={verifiedLocalFileReferences}
+      />
     </>
   )
 }
