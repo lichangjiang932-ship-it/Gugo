@@ -34,6 +34,11 @@ files:
   - src/data/**/*
   - src/lib/pptCore.js
   - src/lib/presentationPlanner.js
+  - src/lib/officeExport/documentExport.js
+  - src/lib/officeExport/officeCommon.js
+  - src/lib/officeExport/spreadsheetExport.js
+  - src/lib/presentationExport/presentationParseHelpers.js
+  - src/lib/presentationExport/presentationParser.js
   - desktop/main.js
   - desktop/petDrag.js
   - desktop/preload.cjs
@@ -67,3 +72,4 @@ publish:
   repo: Gugo
   releaseType: release
   channel: latest
+afterPack: scripts/verify-desktop-package.cjs
