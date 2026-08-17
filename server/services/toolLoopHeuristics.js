@@ -174,15 +174,26 @@ function requestedArtifactOutputDirective(prompt = '') {
       .trim()
     if (!candidate) return
     if (/^[a-z]:$/i.test(candidate)) candidate += path.sep
-    if (!path.isAbsolute(candidate)) return
-    const extension = path.extname(path.basename(candidate)).toLowerCase()
+    // User prompts can contain Windows paths even when the server/test runner
+    // itself is hosted on Linux. node:path follows the host platform, so
+    // path.isAbsolute('E:\\output') is false on POSIX and silently drops an
+    // otherwise explicit destination. Select path semantics from the value
+    // instead of from process.platform, while keeping POSIX paths unchanged.
+    const pathApi = /^[a-z]:[\\/]/i.test(candidate) || /^\\\\[^\\]/.test(candidate)
+      ? path.win32
+      : candidate.startsWith('/')
+        ? path.posix
+        : null
+    if (!pathApi?.isAbsolute(candidate)) return
+    candidate = pathApi.normalize(candidate)
+    const extension = pathApi.extname(pathApi.basename(candidate)).toLowerCase()
     const generatedFileExtensions = new Set([
       '.html', '.htm', '.pptx', '.docx', '.xlsx', '.pdf',
       '.png', '.jpg', '.jpeg', '.webp', '.avif',
     ])
     candidates.push({
       index,
-      directory: generatedFileExtensions.has(extension) ? path.dirname(candidate) : candidate,
+      directory: generatedFileExtensions.has(extension) ? pathApi.dirname(candidate) : candidate,
     })
   }
 

@@ -271,11 +271,11 @@ test('a complete JPG directory is fully bundled, delivered to the explicit direc
   ), `E:${path.sep}`)
   assert.equal(
     requestedArtifactOutputDirectory('读取 E:\\果 中全部 JPG，生成网站，写到 E:\\网页输出，完成后验证'),
-    path.normalize('E:\\网页输出'),
+    path.win32.normalize('E:\\网页输出'),
   )
   assert.equal(
     requestedArtifactOutputDirectory('保存到 "E:\\网页 输出"'),
-    path.normalize('E:\\网页 输出'),
+    path.win32.normalize('E:\\网页 输出'),
   )
   assert.equal(
     requestedArtifactOutputDirectory('不要保存到 D:\\默认目录，纠正：写到 E 盘'),
@@ -283,7 +283,7 @@ test('a complete JPG directory is fully bundled, delivered to the explicit direc
   )
   assert.equal(
     requestedArtifactOutputDirectory('把网站保存到 E:\\网页输出\\gallery.html，完成后告诉我'),
-    path.normalize('E:\\网页输出'),
+    path.win32.normalize('E:\\网页输出'),
   )
   assert.equal(
     requestedArtifactOutputDirectory('读取 E:\\果 中全部 JPG 并生成网站'),
