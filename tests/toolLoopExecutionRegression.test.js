@@ -1529,6 +1529,7 @@ test('directory discovery through cmd can precede a write and read-back without 
   let modelCalls = 0
   let checkpoint = null
   const executed = []
+  const modelRequestMessages = []
 
   const result = await runToolsLoop({
     job: {
@@ -1550,7 +1551,8 @@ test('directory discovery through cmd can precede a write and read-back without 
       checkpoint = structuredClone(state)
       return true
     },
-    runModel: async () => {
+    runModel: async ({ messages: requestMessages }) => {
+      modelRequestMessages.push(structuredClone(requestMessages))
       modelCalls += 1
       if (modelCalls === 1) {
         return {
@@ -1619,6 +1621,15 @@ test('directory discovery through cmd can precede a write and read-back without 
   assert.notEqual(result.reason, 'post_mutation_verification_missing')
   assert.equal(result.text, 'The second revision was saved and verified.')
   assert.deepEqual(checkpoint?.completionGuards?.pendingMutationTargets, [])
+  if (process.platform !== 'win32') {
+    assert.equal(
+      modelRequestMessages.flat().some((message) => (
+        String(message?.content || '').includes('[LOCAL HTML DELIVERY VALIDATION REQUIRED]')
+      )),
+      false,
+      'a foreign Windows path must not start host-local HTML delivery validation',
+    )
+  }
 })
 
 test('verified directory resume rejects a repeated authorization wait claim and continues into execution', async () => {

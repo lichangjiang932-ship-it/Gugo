@@ -1106,7 +1106,13 @@ export async function runToolsLoop({
   )
   const isLocalHtmlTarget = (value) => {
     const target = normalizeMutationTarget(value)
-    return target !== PROJECT_SCOPE_TARGET && /\.html?$/i.test(target)
+    if (target === PROJECT_SCOPE_TARGET || !/\.html?$/i.test(target)) return false
+    // A Windows drive path is only a local, reopenable delivery target on
+    // Windows. Linux CI also exercises the cmd.exe parser with synthetic
+    // D:\\... paths; treating those as Linux files would schedule a bogus
+    // repair loop after an otherwise successful mocked read-back.
+    if (process.platform !== 'win32' && /^[a-z]:\//i.test(target)) return false
+    return true
   }
   const localHtmlDeliveryTargets = new Set(
     [
