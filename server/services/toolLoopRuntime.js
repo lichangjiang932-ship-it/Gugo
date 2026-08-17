@@ -8,6 +8,7 @@
  *   - 每次工具调用产物立刻 appendJobArtifact 进 jobStore(归属 job.userId)
  *   - 循环最多 maxIters 轮,防失控
  */
+import path from 'node:path'
 import { isLoopPauseResult } from '../utils/agenticTools.js'
 import { getToolMetadata } from './toolRegistry.js'
 import { createToolAbortScope } from '../utils/toolCancellation.js'
@@ -40,6 +41,7 @@ import { listTurnArtifacts } from './turnArtifactStore.js'
 import { createModelPhaseHeartbeat, DEFAULT_MODEL_PHASE_HEARTBEAT_MS } from './modelPhaseHeartbeat.js'
 import { getDefaultOutputDirectory, getProjectDirectory } from './localFileAccessService.js'
 import { createPartialResultFallback } from './partialResultFallback.js'
+import { validateLocalHtmlDelivery } from './localHtmlDeliveryValidation.js'
 
 import { withLogContext } from '../utils/logger.js'
 import { createRepeatCallGuard } from '../utils/repeatCallGuard.js'
@@ -48,6 +50,8 @@ const DELIVERABLE_SELECTION_GUARD_MARKER = '[FINAL DELIVERABLE SELECTION REQUIRE
 const MAX_DELIVERABLE_SELECTION_RETRIES = 2
 const SOURCE_HANDOFF_GUARD_MARKER = '[SOURCE HANDOFF BLOCKED]'
 const MAX_SOURCE_HANDOFF_RETRIES = 1
+const LOCAL_HTML_DELIVERY_GUARD_MARKER = '[LOCAL HTML DELIVERY VALIDATION REQUIRED]'
+const MAX_LOCAL_HTML_DELIVERY_RETRIES = 4
 const ARTIFACT_RECOVERY_DIAGNOSIS_MARKER = '[ARTIFACT RECOVERY DIAGNOSIS]'
 const ARTIFACT_RECOVERY_FORCE_MARKER = '[ARTIFACT RECOVERY GENERATOR REQUIRED]'
 const ARTIFACT_RECOVERY_PHASE_DIAGNOSE = 'diagnose'
@@ -1100,6 +1104,74 @@ export async function runToolsLoop({
       .map(normalizeMutationTarget)
       .filter(Boolean),
   )
+  const isLocalHtmlTarget = (value) => {
+    const target = normalizeMutationTarget(value)
+    return target !== PROJECT_SCOPE_TARGET && /\.html?$/i.test(target)
+  }
+  const localHtmlDeliveryTargets = new Set(
+    [
+      ...(Array.isArray(restoredState?.completionGuards?.localHtmlDeliveryTargets)
+        ? restoredState.completionGuards.localHtmlDeliveryTargets
+        : []),
+      ...(mutationExecutionObserved ? exactWorkspaceTargetPaths : []),
+    ]
+      .map(normalizeMutationTarget)
+      .filter(isLocalHtmlTarget),
+  )
+  const localHtmlReadSources = new Map()
+  let localHtmlDeliveryValidationPending = localHtmlDeliveryTargets.size > 0
+  let localHtmlDeliveryRetries = Math.max(
+    0,
+    Number(restoredState?.completionGuards?.localHtmlDeliveryRetries) || 0,
+  )
+  const absoluteLocalHtmlPath = (target) => {
+    const normalized = normalizeMutationTarget(target)
+    if (!normalized || normalized === PROJECT_SCOPE_TARGET) return ''
+    if (path.isAbsolute(normalized) || /^[a-z]:\//i.test(normalized)) return path.normalize(normalized)
+    return path.resolve(getProjectDirectory({ userId: job?.userId || null }), normalized)
+  }
+  const readSourceForHtmlTarget = (target) => {
+    for (const [candidate, source] of localHtmlReadSources) {
+      if (targetsMatch(candidate, target)) return source
+    }
+    return undefined
+  }
+  const validateLocalHtmlDeliveries = async () => {
+    if (!requiresLocalArtifactDelivery || localHtmlDeliveryTargets.size === 0) {
+      localHtmlDeliveryValidationPending = false
+      return null
+    }
+    if (!localHtmlDeliveryValidationPending) return null
+    for (const target of localHtmlDeliveryTargets) {
+      try {
+        await validateLocalHtmlDelivery({
+          filePath: absoluteLocalHtmlPath(target),
+          source: readSourceForHtmlTarget(target),
+        })
+      } catch (error) {
+        return { target, error }
+      }
+    }
+    localHtmlDeliveryValidationPending = false
+    return null
+  }
+  const appendLocalHtmlDeliveryRepairPrompt = ({ target, error }, content = '') => {
+    if (content) convo.push({ role: 'assistant', content })
+    convo.push({
+      role: 'system',
+      content: [
+        LOCAL_HTML_DELIVERY_GUARD_MARKER,
+        'The previous completion claim was discarded because the final local HTML would not render completely in the project side preview.',
+        `HTML target: ${target}.`,
+        `Validation failure: ${String(error?.code || 'HTML_DELIVERY_VALIDATION_FAILED')} — ${String(error?.message || error)}.`,
+        error?.reference ? `Broken reference: ${String(error.reference).slice(0, 400)}.` : '',
+        error?.resourcePath ? `Resolved resource path: ${String(error.resourcePath).slice(0, 800)}.` : '',
+        'Correct the actual HTML file now with the available tools. Every local src, srcset, poster, stylesheet, script, font, CSS url(), import, and fetch dependency must exist beneath the HTML file directory; use browser-style forward-slash relative URLs. Referenced images must be real decodable image files.',
+        'If an input image is outside that directory, either embed it into the HTML or, when the user permits additional files, copy it into an adjacent asset subdirectory and update the reference. Do not print source code or ask the user to repair it manually.',
+        'After correcting all affected files, read back the exact final HTML and continue the task. The runtime will validate it again automatically.',
+      ].filter(Boolean).join(' '),
+    })
+  }
   const auxiliaryScriptTarget = (target) => /(?:^|\/)[._-]?(?:run|generate|render|verify|validate|inspect|probe|cleanup|tmp|temp)(?:[-_.][^/]*)?\.(?:py|m?js|cjs|ts|ps1|sh|cmd|bat)$/i
     .test(normalizeMutationTarget(target))
   const commandReferencesTarget = (call, target) => {
@@ -1438,6 +1510,7 @@ export async function runToolsLoop({
     || restoredState?.final?.noProgress,
   )
   if (restoredFinalIsInterrupted || restoredFinalIsTerminal) suppressTerminalArtifacts()
+  let restoredLocalHtmlDeliveryFailure = null
   if (restoredState?.final?.text != null
     && String(restoredState.final.text).trim()
     && !restoredFinalIsInterrupted
@@ -1447,19 +1520,24 @@ export async function runToolsLoop({
        && hasRequiredExecutionEvidence()
        && !hasPendingMutationVerification()
        && (!requiresPdfLayoutVerification || pdfLayoutVerificationObserved)
-    ))) {
-    const restoredClarification = protectClarification(restoredState.final.clarification)
-    return {
-      ...restoredState.final,
-      text: restoredFinalIsTerminal
-        ? protectTerminalText(restoredState.final.text, { incomplete: true })
-        : String(restoredState.final.text),
-      ...(restoredClarification ? { clarification: restoredClarification } : {}),
-      artifactIds,
-      ...deliverySelectionFields(),
-      iterations: Math.max(1, Number(restoredState.final.iterations) || iter || 1),
-      resumed: true,
-      recovery,
+     ))) {
+    if (!restoredFinalIsTerminal) {
+      restoredLocalHtmlDeliveryFailure = await validateLocalHtmlDeliveries()
+    }
+    if (!restoredLocalHtmlDeliveryFailure) {
+      const restoredClarification = protectClarification(restoredState.final.clarification)
+      return {
+        ...restoredState.final,
+        text: restoredFinalIsTerminal
+          ? protectTerminalText(restoredState.final.text, { incomplete: true })
+          : String(restoredState.final.text),
+        ...(restoredClarification ? { clarification: restoredClarification } : {}),
+        artifactIds,
+        ...deliverySelectionFields(),
+        iterations: Math.max(1, Number(restoredState.final.iterations) || iter || 1),
+        resumed: true,
+        recovery,
+      }
     }
   }
 
@@ -1514,6 +1592,8 @@ export async function runToolsLoop({
         pendingDeletionTargets: [...pendingDeletionTargets],
         auxiliaryMutationTargets: [...auxiliaryMutationTargets],
         mutationVerificationRetries,
+        localHtmlDeliveryTargets: [...localHtmlDeliveryTargets],
+        localHtmlDeliveryRetries,
         pdfLayoutVerificationObserved,
         pdfLayoutVerificationRetries,
         executionConvergence: serializeExecutionConvergence(executionConvergence),
@@ -1660,6 +1740,37 @@ export async function runToolsLoop({
       reason,
       recovery,
     }
+  }
+  const handleLocalHtmlDeliveryFailure = async ({
+    failure,
+    content = '',
+    steeringLeaseId = null,
+  }) => {
+    if (!failure) {
+      localHtmlDeliveryRetries = 0
+      return { scheduled: false, result: null }
+    }
+    if (localHtmlDeliveryRetries >= MAX_LOCAL_HTML_DELIVERY_RETRIES) {
+      return {
+        scheduled: false,
+        result: await finishIncomplete({
+          text: '网页文件尚未通过资源完整性验证，因此没有作为已完成文件显示或交付。请重试以继续自动修复。',
+          reason: 'local_html_delivery_validation_failed',
+          steeringLeaseId,
+        }),
+      }
+    }
+    localHtmlDeliveryRetries += 1
+    appendLocalHtmlDeliveryRepairPrompt(failure, content)
+    // A normal correction uses one model round to write, one to read back,
+    // and one to make the completion claim. Keep the extension bounded by the
+    // four validation retries while allowing that complete repair sequence.
+    if (iter + 1 >= maxIters) maxIters = iter + 3
+    await persistTurn()
+    if (steeringLeaseId && typeof acknowledgeSteering === 'function') {
+      await acknowledgeSteering(steeringLeaseId)
+    }
+    return { scheduled: true, result: null }
   }
   const finishTerminalResult = async (result, {
     steeringLeaseId = null,
@@ -1839,6 +1950,13 @@ export async function runToolsLoop({
       }
     }
     return null
+  }
+
+  if (restoredLocalHtmlDeliveryFailure) {
+    const restoredRecovery = await handleLocalHtmlDeliveryFailure({
+      failure: restoredLocalHtmlDeliveryFailure,
+    })
+    if (restoredRecovery.result) return restoredRecovery.result
   }
 
   for (; iter < maxIters; iter += 1) {
@@ -2306,6 +2424,20 @@ export async function runToolsLoop({
           }
           continue
         }
+        const localHtmlDeliveryFailure = await validateLocalHtmlDeliveries()
+        if (localHtmlDeliveryFailure) {
+          const recoveryResult = await handleLocalHtmlDeliveryFailure({
+            failure: localHtmlDeliveryFailure,
+            content,
+            steeringLeaseId,
+          })
+          if (recoveryResult.result) {
+            if (recoveryResult.result.deferredForSteering) continue
+            return recoveryResult.result
+          }
+          continue
+        }
+        localHtmlDeliveryRetries = 0
         if (requiresPdfLayoutVerification && !pdfLayoutVerificationObserved) {
           const canRetry = pdfLayoutVerificationRetries < MAX_PDF_LAYOUT_VERIFICATION_RETRIES
             && iter + 1 < maxIters
@@ -2951,6 +3083,7 @@ export async function runToolsLoop({
       }
       if (mutationExecutionSucceeded && isLocalMutationCall(executedCall)) {
         if (requiresPdfLayoutVerification) pdfLayoutVerificationObserved = false
+        const currentMutationTargets = extractMutationTargets(executedCall, outcome.result)
         const deletionTargets = looksLikeDeletionCommand(executedCall?.args?.command)
           ? staticDeletionTargets(executedCall, outcome.result)
           : null
@@ -2968,22 +3101,30 @@ export async function runToolsLoop({
               }
             }
             pendingDeletionTargets.add(deletionTarget)
+            for (const htmlTarget of [...localHtmlDeliveryTargets]) {
+              if (targetsMatch(htmlTarget, deletionTarget)) {
+                localHtmlDeliveryTargets.delete(htmlTarget)
+                localHtmlReadSources.delete(htmlTarget)
+              }
+            }
           }
         } else {
-          const currentMutationTargets = extractMutationTargets(executedCall, outcome.result)
           for (const target of currentMutationTargets) {
             pendingMutationTargets.add(target)
+            if (isLocalHtmlTarget(target)) localHtmlDeliveryTargets.add(target)
             if (target === PROJECT_SCOPE_TARGET) continue
             for (const deleted of [...pendingDeletionTargets]) {
               if (targetsMatch(deleted, target)) pendingDeletionTargets.delete(deleted)
             }
+          }
+          for (const target of exactWorkspaceTargetPaths) {
+            if (isLocalHtmlTarget(target)) localHtmlDeliveryTargets.add(normalizeMutationTarget(target))
           }
         }
         const declaredOutputs = Array.isArray(executedCall?.args?.expected_outputs)
           ? executedCall.args.expected_outputs.map(normalizeMutationTarget).filter(Boolean)
           : []
         if (declaredOutputs.length > 0) {
-          const currentMutationTargets = extractMutationTargets(executedCall, outcome.result)
           const referencedHelperTargets = [...pendingMutationTargets].filter((pending) => (
             auxiliaryScriptTarget(pending) && commandReferencesTarget(executedCall, pending)
           ))
@@ -2994,6 +3135,7 @@ export async function runToolsLoop({
             auxiliaryMutationTargets.add(pending)
           }
         }
+        localHtmlDeliveryValidationPending = localHtmlDeliveryTargets.size > 0
         mutationVerificationRetries = 0
       } else if (succeeded && hasPendingMutationVerification() && isVerificationCall(executedCall)) {
         const clearedMutation = clearVerifiedMutationTargets(
@@ -3012,6 +3154,19 @@ export async function runToolsLoop({
           if (recoveredMutationVerificationPending && !hasPendingMutationVerification()) {
             verifiedRecoveredMutationObserved = true
             recoveredMutationVerificationPending = false
+          }
+        }
+      }
+      if (succeeded
+        && executedCall?.name === 'read_file'
+        && typeof outcome.result?.content === 'string'
+        && outcome.result?.truncated !== true) {
+        const evidenceTargets = [outcome.result?.path, executedCall?.args?.path]
+          .map(normalizeMutationTarget)
+          .filter(Boolean)
+        for (const htmlTarget of localHtmlDeliveryTargets) {
+          if (evidenceTargets.some((candidate) => targetsMatch(candidate, htmlTarget))) {
+            localHtmlReadSources.set(htmlTarget, outcome.result.content)
           }
         }
       }
@@ -3439,6 +3594,21 @@ export async function runToolsLoop({
       return incomplete
     }
     if (needsDeliverableSelection() && iter + 1 >= maxIters) maxIters = iter + 2
+    if (!batchSupersededBySteering
+      && iter + 1 >= maxIters
+      && hasRequiredArtifacts()
+      && hasRequiredExecutionEvidence()
+      && !hasPendingMutationVerification()) {
+      const boundaryHtmlFailure = await validateLocalHtmlDeliveries()
+      if (boundaryHtmlFailure) {
+        const boundaryRecovery = await handleLocalHtmlDeliveryFailure({
+          failure: boundaryHtmlFailure,
+        })
+        if (boundaryRecovery.result) return boundaryRecovery.result
+        continue
+      }
+      localHtmlDeliveryRetries = 0
+    }
     if (budgetExceeded) {
       // ★ Lens-4 fix:预算超限写 audit,审计员能追查 job 为什么没跑完
       if (job?.userId) {
@@ -3626,6 +3796,14 @@ export async function runToolsLoop({
       reason: 'post_mutation_verification_missing',
     })
   }
+  const finalLocalHtmlDeliveryFailure = await validateLocalHtmlDeliveries()
+  if (finalLocalHtmlDeliveryFailure) {
+    return finishIncomplete({
+      text: '网页文件尚未通过资源完整性验证，因此没有作为已完成文件显示或交付。请重试以继续自动修复。',
+      reason: 'local_html_delivery_validation_failed',
+    })
+  }
+  localHtmlDeliveryRetries = 0
   if (!finalCheckpointPersisted) {
     await persistTurn({ final: { text: finalText, iterations: Math.min(iter + 1, maxIters) } })
   }

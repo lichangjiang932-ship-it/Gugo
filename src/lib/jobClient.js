@@ -116,15 +116,33 @@ export async function loadArtifactPreviewHtml(url, { fetchImpl = fetch, signal }
 
 const MANAGED_HTML_ASSET_URI = /gugo-asset:\/\/([A-Za-z0-9_-]{1,64})/g
 
+async function blobToEmbeddedDataUrl(blob) {
+  const mimeType = String(blob?.type || 'application/octet-stream')
+  const bytes = new Uint8Array(await blob.arrayBuffer())
+  let binary = ''
+  // Avoid overflowing Function argument/string limits for large background
+  // images while keeping the result usable by an opaque-origin srcDoc frame.
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
+  }
+  return `data:${mimeType};base64,${globalThis.btoa(binary)}`
+}
+
 /**
  * Load an authenticated managed HTML preview and replace its private asset
- * markers with parent-owned Blob URLs. Session credentials stay in the parent
- * application and are never exposed to the sandboxed document.
+ * markers with self-contained browser URLs. Session credentials stay in the
+ * parent application and are never exposed to the sandboxed document.
  */
 export async function loadArtifactPreviewDocument(url, {
   fetchImpl = fetch,
   signal,
-  createObjectUrl = (blob) => URL.createObjectURL(blob),
+  // Blob URLs created by the parent are not reliably readable from a
+  // sandboxed srcDoc frame because that frame has an opaque origin/storage
+  // partition. Embed assets by default so the side preview matches the
+  // downloaded standalone HTML without granting allow-same-origin.
+  createAssetUrl = blobToEmbeddedDataUrl,
+  // Kept for callers/tests that explicitly manage short-lived object URLs.
+  createObjectUrl,
 } = {}) {
   const previewUrl = authenticatedArtifactUrl(url)
   const response = await fetchImpl(previewUrl, {
@@ -149,15 +167,59 @@ export async function loadArtifactPreviewDocument(url, {
         signal,
       })
       if (!assetResponse.ok) throw new Error(`artifact asset preview request failed: ${assetResponse.status}`)
-      const objectUrl = createObjectUrl(await assetResponse.blob())
-      objectUrls.push(objectUrl)
-      html = html.replaceAll(`gugo-asset://${id}`, objectUrl)
+      const assetBlob = await assetResponse.blob()
+      const assetUrl = await (createObjectUrl || createAssetUrl)(assetBlob)
+      if (String(assetUrl).startsWith('blob:')) objectUrls.push(assetUrl)
+      html = html.replaceAll(`gugo-asset://${id}`, assetUrl)
     }
     return { html, objectUrls }
   } catch (error) {
     for (const objectUrl of objectUrls) URL.revokeObjectURL?.(objectUrl)
     throw error
   }
+}
+
+export async function createLocalHtmlPreviewSession(url, { fetchImpl = fetch, signal } = {}) {
+  const raw = String(url || '').trim()
+  const baseOrigin = globalThis.location?.origin || 'http://localhost'
+  const parsed = new URL(raw, baseOrigin)
+  const match = parsed.pathname.match(/^\/api\/local-files\/verified\/([^/]+)$/)
+  if (parsed.origin !== baseOrigin || !match) {
+    throw new Error('verified local HTML preview URL must be same-origin')
+  }
+  parsed.searchParams.delete('preview')
+  parsed.searchParams.delete('token')
+  const requestUrl = `${parsed.pathname}/preview-session${parsed.search}`
+  const response = await fetchImpl(requestUrl, {
+    method: 'POST',
+    headers: authHeaders(),
+    credentials: 'same-origin',
+    signal,
+  })
+  if (!response.ok) throw new Error(`local HTML preview session request failed: ${response.status}`)
+  const payload = await response.json()
+  const previewUrl = new URL(String(payload?.url || ''), baseOrigin)
+  if (previewUrl.origin !== baseOrigin || !previewUrl.pathname.startsWith('/api/local-files/previews/')) {
+    throw new Error('local HTML preview session returned an invalid URL')
+  }
+  return `${previewUrl.pathname}${previewUrl.search}`
+}
+
+export async function revokeLocalHtmlPreviewSession(url, { fetchImpl = fetch } = {}) {
+  const raw = String(url || '').trim()
+  const baseOrigin = globalThis.location?.origin || 'http://localhost'
+  const parsed = new URL(raw, baseOrigin)
+  const match = parsed.pathname.match(/^\/api\/local-files\/previews\/([^/]+)(?:\/.*)?$/)
+  if (parsed.origin !== baseOrigin || !match) {
+    throw new Error('local HTML preview URL must be same-origin')
+  }
+  const response = await fetchImpl(`/api/local-files/previews/${match[1]}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+    credentials: 'same-origin',
+    keepalive: true,
+  })
+  if (!response.ok) throw new Error(`local HTML preview revoke failed: ${response.status}`)
 }
 
 // EventSource cannot send Authorization headers. Exchange the session token for

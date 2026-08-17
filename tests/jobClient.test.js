@@ -2,11 +2,13 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   cancelJob,
+  createLocalHtmlPreviewSession,
   createJob,
   getJob,
   loadArtifactPreviewDocument,
   loadArtifactPreviewHtml,
   listJobs,
+  revokeLocalHtmlPreviewSession,
   retryJob,
   retryStep,
   subscribeToJobEvents,
@@ -122,6 +124,81 @@ test('HTML artifact previews load each private media asset once and replace mark
     setAuthToken('')
     globalThis.window = previousWindow
   }
+})
+
+test('verified local HTML exchanges account auth for a scoped relative-resource preview URL', async () => {
+  const previousWindow = globalThis.window
+  globalThis.window = { localStorage: null, sessionStorage: null }
+  setAuthToken('local-preview-account-secret')
+  const calls = []
+  try {
+    const previewUrl = await createLocalHtmlPreviewSession(
+      '/api/local-files/verified/file-1?turnId=turn-1&preview=1&token=stale-secret',
+      {
+        fetchImpl: async (url, init) => {
+          calls.push({ url, init })
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ url: '/api/local-files/previews/opaque-ticket/index.html' }),
+          }
+        },
+      },
+    )
+    assert.equal(previewUrl, '/api/local-files/previews/opaque-ticket/index.html')
+    assert.equal(calls[0].url, '/api/local-files/verified/file-1/preview-session?turnId=turn-1')
+    assert.equal(calls[0].init.method, 'POST')
+    assert.equal(calls[0].init.headers.Authorization, 'Bearer local-preview-account-secret')
+    assert.doesNotMatch(calls[0].url, /token=|stale-secret|local-preview-account-secret/)
+  } finally {
+    setAuthToken('')
+    globalThis.window = previousWindow
+  }
+})
+
+test('verified local HTML preview tickets are revoked with account auth and never leak in query parameters', async () => {
+  const previousWindow = globalThis.window
+  globalThis.window = { localStorage: null, sessionStorage: null }
+  setAuthToken('local-preview-revoke-secret')
+  const calls = []
+  try {
+    await revokeLocalHtmlPreviewSession('/api/local-files/previews/opaque-ticket/index.html?ignored=1', {
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init })
+        return { ok: true, status: 204 }
+      },
+    })
+    assert.equal(calls[0].url, '/api/local-files/previews/opaque-ticket')
+    assert.equal(calls[0].init.method, 'DELETE')
+    assert.equal(calls[0].init.keepalive, true)
+    assert.equal(calls[0].init.headers.Authorization, 'Bearer local-preview-revoke-secret')
+    assert.doesNotMatch(calls[0].url, /secret|ignored/)
+  } finally {
+    setAuthToken('')
+    globalThis.window = previousWindow
+  }
+})
+
+test('HTML artifact previews embed private media by default for opaque-origin iframe compatibility', async () => {
+  const document = await loadArtifactPreviewDocument('/api/artifacts/background.html', {
+    fetchImpl: async (url) => {
+      if (url === '/api/artifacts/background.html?preview=1') {
+        return {
+          ok: true,
+          text: async () => '<style>body{background:url(gugo-asset://hero)}</style>',
+        }
+      }
+      assert.equal(url, '/api/artifacts/background.html/assets/hero')
+      return {
+        ok: true,
+        blob: async () => new Blob(['background'], { type: 'image/jpeg' }),
+      }
+    },
+  })
+
+  assert.match(document.html, /data:image\/jpeg;base64,/)
+  assert.doesNotMatch(document.html, /(?:gugo-asset|blob):\/\//)
+  assert.deepEqual(document.objectUrls, [])
 })
 
 test('subscribeToJobEvents exchanges a one-time ticket and connects with ?ticket=', async () => {

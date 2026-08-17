@@ -67,6 +67,8 @@ test('authenticated incomplete onboarding opens without replacing a deep link an
     assert.equal(reminder.classList.contains('fixed'), true)
     assert.equal([...reminder.classList].some((name) => name.startsWith('top-')), true)
     assert.equal([...reminder.classList].some((name) => name.startsWith('bottom-')), false)
+    assert.equal(reminder.classList.contains('right-[4.25rem]'), true)
+    assert.equal(reminder.classList.contains('right-4'), false)
     assert.equal(reminder.getAttribute('aria-haspopup'), 'dialog')
     assert.equal(reminder.getAttribute('aria-controls'), 'workspace-onboarding-prompt-dialog')
     assert.equal(reminder.getAttribute('aria-expanded'), 'false')

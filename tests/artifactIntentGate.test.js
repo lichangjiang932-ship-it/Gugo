@@ -943,6 +943,255 @@ test('a real in-place workspace HTML write does not publish a duplicate artifact
   }
 })
 
+test('a broken local HTML background is withheld and automatically corrected before completion', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-local-html-recovery-'))
+  const targetPath = path.join(root, 'landing.html')
+  const validImagePath = path.join(root, 'hero.svg')
+  const promptPath = targetPath.replace(/\\/g, '/')
+  const prompt = `请新建 ${promptPath}，使用同目录的 hero.svg 作为背景图，完成后直接交付文件。`
+  fs.writeFileSync(validImagePath, '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect width="20" height="20" fill="#2450ff"/></svg>', 'utf8')
+  let modelCalls = 0
+  let recoveryObserved = false
+  const executions = []
+  const brokenHtml = '<!doctype html><style>body{background:url("missing.svg")}</style><main>Page</main>'
+  const correctedHtml = '<!doctype html><style>body{background:url("hero.svg")}</style><main>Page</main>'
+  try {
+    const result = await runToolsLoop({
+      job: {
+        id: `local-html-recovery-${randomUUID()}`,
+        userId: INTENT_ARTIFACT_USER_ID,
+        origin: 'chat',
+        prompt,
+        userPrompt: prompt,
+      },
+      step: { id: 'local-html-recovery-step', kind: 'chat' },
+      messages: [{ role: 'user', content: prompt }],
+      intentMode: 'execute',
+      toolSpecs: SERVER_TOOL_SPECS,
+      enableToolHooks: false,
+      requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+      executeTool: async ({ name, args }) => {
+        executions.push(name)
+        if (name === 'write_file') {
+          fs.writeFileSync(targetPath, args.content, 'utf8')
+          return { ok: true, path: targetPath, bytes: Buffer.byteLength(args.content), scope: 'local' }
+        }
+        if (name === 'read_file') {
+          return { ok: true, path: targetPath, content: fs.readFileSync(targetPath, 'utf8'), truncated: false }
+        }
+        assert.fail(`unexpected tool: ${name}`)
+      },
+      runModel: async ({ messages }) => {
+        modelCalls += 1
+        recoveryObserved ||= messages.some((message) => (
+          String(message.content || '').includes('[LOCAL HTML DELIVERY VALIDATION REQUIRED]')
+            && String(message.content || '').includes('missing.svg')
+        ))
+        if (modelCalls === 1 || modelCalls === 4) {
+          return {
+            content: '',
+            toolCalls: [{
+              id: modelCalls === 1 ? 'write-broken-html' : 'correct-broken-html',
+              function: {
+                name: 'write_file',
+                arguments: JSON.stringify({ path: targetPath, content: modelCalls === 1 ? brokenHtml : correctedHtml }),
+              },
+            }],
+          }
+        }
+        if (modelCalls === 2 || modelCalls === 5) {
+          return {
+            content: '',
+            toolCalls: [{
+              id: modelCalls === 2 ? 'read-broken-html' : 'read-corrected-html',
+              function: { name: 'read_file', arguments: JSON.stringify({ path: targetPath }) },
+            }],
+          }
+        }
+        return { content: '网页及其背景图已完成并验证。', toolCalls: [] }
+      },
+    })
+
+    assert.equal(recoveryObserved, true)
+    assert.equal(modelCalls, 6)
+    assert.deepEqual(executions, ['write_file', 'read_file', 'write_file', 'read_file'])
+    assert.equal(result.incomplete, undefined)
+    assert.equal(result.text, '网页及其背景图已完成并验证。')
+    assert.equal(fs.readFileSync(targetPath, 'utf8'), correctedHtml)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a broken local HTML at the maxIters boundary is revalidated and repaired before completion', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-local-html-boundary-'))
+  const targetPath = path.join(root, 'landing.html')
+  const heroPath = path.join(root, 'hero.svg')
+  const promptPath = targetPath.replace(/\\/g, '/')
+  const prompt = `请新建 ${promptPath}，完成后验证并直接交付。`
+  const brokenHtml = '<!doctype html><style>body{background:url("missing.svg")}</style><main>Page</main>'
+  const correctedHtml = '<!doctype html><style>body{background:url("hero.svg")}</style><main>Page</main>'
+  fs.writeFileSync(heroPath, '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><rect width="20" height="20" fill="#2450ff"/></svg>', 'utf8')
+  let modelCalls = 0
+  let recoveryObserved = false
+  try {
+    const result = await runToolsLoop({
+      job: {
+        id: `local-html-boundary-${randomUUID()}`,
+        userId: INTENT_ARTIFACT_USER_ID,
+        origin: 'chat',
+        prompt,
+        userPrompt: prompt,
+      },
+      step: { id: 'local-html-boundary-step', kind: 'chat' },
+      messages: [{ role: 'user', content: prompt }],
+      intentMode: 'execute',
+      toolSpecs: SERVER_TOOL_SPECS,
+      maxIters: 1,
+      enableToolHooks: false,
+      requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+      executeTool: async ({ name, args }) => {
+        if (name === 'write_file') {
+          fs.writeFileSync(targetPath, args.content, 'utf8')
+          return { ok: true, path: targetPath, bytes: Buffer.byteLength(args.content), scope: 'local' }
+        }
+        if (name === 'read_file') {
+          return { ok: true, path: targetPath, content: fs.readFileSync(targetPath, 'utf8'), truncated: false }
+        }
+        assert.fail(`unexpected tool: ${name}`)
+      },
+      runModel: async ({ messages }) => {
+        modelCalls += 1
+        recoveryObserved ||= messages.some((message) => (
+          String(message.content || '').includes('[LOCAL HTML DELIVERY VALIDATION REQUIRED]')
+        ))
+        if (modelCalls <= 2) {
+          const content = modelCalls === 1 ? brokenHtml : correctedHtml
+          return {
+            content: '',
+            toolCalls: [
+              {
+                id: `boundary-write-${modelCalls}`,
+                function: { name: 'write_file', arguments: JSON.stringify({ path: targetPath, content }) },
+              },
+              {
+                id: `boundary-read-${modelCalls}`,
+                function: { name: 'read_file', arguments: JSON.stringify({ path: targetPath }) },
+              },
+            ],
+          }
+        }
+        return { content: '网页已修复、验证并交付。', toolCalls: [] }
+      },
+    })
+
+    assert.equal(modelCalls, 3)
+    assert.equal(recoveryObserved, true)
+    assert.equal(result.incomplete, undefined)
+    assert.equal(fs.readFileSync(targetPath, 'utf8'), correctedHtml)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a restored successful local HTML checkpoint is revalidated against disk before reuse', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-local-html-resume-validation-'))
+  const targetPath = path.join(root, 'landing.html')
+  const promptPath = targetPath.replace(/\\/g, '/')
+  const prompt = `请新建 ${promptPath}，完成后验证并直接交付。`
+  const validHtml = '<!doctype html><html><body><main>Valid</main></body></html>'
+  const brokenHtml = '<!doctype html><style>body{background:url("missing.svg")}</style><main>Broken</main>'
+  const repairedHtml = '<!doctype html><html><body><main>Repaired</main></body></html>'
+  const job = {
+    id: `local-html-resume-${randomUUID()}`,
+    userId: INTENT_ARTIFACT_USER_ID,
+    origin: 'chat',
+    prompt,
+    userPrompt: prompt,
+  }
+  const step = { id: 'local-html-resume-step', kind: 'chat' }
+  let checkpoint = null
+  const executeTool = async ({ name, args }) => {
+    if (name === 'write_file') {
+      fs.writeFileSync(targetPath, args.content, 'utf8')
+      return { ok: true, path: targetPath, bytes: Buffer.byteLength(args.content), scope: 'local' }
+    }
+    if (name === 'read_file') {
+      return { ok: true, path: targetPath, content: fs.readFileSync(targetPath, 'utf8'), truncated: false }
+    }
+    assert.fail(`unexpected tool: ${name}`)
+  }
+  const toolBatch = (content, suffix) => ({
+    content: '',
+    toolCalls: [
+      {
+        id: `resume-write-${suffix}`,
+        function: { name: 'write_file', arguments: JSON.stringify({ path: targetPath, content }) },
+      },
+      {
+        id: `resume-read-${suffix}`,
+        function: { name: 'read_file', arguments: JSON.stringify({ path: targetPath }) },
+      },
+    ],
+  })
+  try {
+    let initialCalls = 0
+    const initial = await runToolsLoop({
+      job,
+      step,
+      messages: [{ role: 'user', content: prompt }],
+      intentMode: 'execute',
+      toolSpecs: SERVER_TOOL_SPECS,
+      enableToolHooks: false,
+      requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+      executeTool,
+      saveCheckpoint: async (state) => { checkpoint = structuredClone(state) },
+      runModel: async () => {
+        initialCalls += 1
+        return initialCalls === 1
+          ? toolBatch(validHtml, 'initial')
+          : { content: '初次网页已验证并交付。', toolCalls: [] }
+      },
+    })
+    assert.equal(initial.incomplete, undefined)
+    assert.equal(checkpoint?.final?.text, '初次网页已验证并交付。')
+
+    fs.writeFileSync(targetPath, brokenHtml, 'utf8')
+    let resumedCalls = 0
+    let recoveryObserved = false
+    const resumed = await runToolsLoop({
+      job,
+      step,
+      messages: [{ role: 'user', content: prompt }],
+      intentMode: 'execute',
+      toolSpecs: SERVER_TOOL_SPECS,
+      enableToolHooks: false,
+      requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+      executeTool,
+      loadCheckpoint: async () => ({ state: structuredClone(checkpoint) }),
+      saveCheckpoint: async (state) => { checkpoint = structuredClone(state) },
+      runModel: async ({ messages }) => {
+        resumedCalls += 1
+        recoveryObserved ||= messages.some((message) => (
+          String(message.content || '').includes('[LOCAL HTML DELIVERY VALIDATION REQUIRED]')
+            && String(message.content || '').includes('missing.svg')
+        ))
+        return resumedCalls === 1
+          ? toolBatch(repairedHtml, 'repaired')
+          : { content: '恢复后已重新验证并交付。', toolCalls: [] }
+      },
+    })
+
+    assert.equal(resumedCalls, 2)
+    assert.equal(recoveryObserved, true)
+    assert.equal(resumed.incomplete, undefined)
+    assert.equal(resumed.text, '恢复后已重新验证并交付。')
+    assert.equal(fs.readFileSync(targetPath, 'utf8'), repairedHtml)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('a workspace-file request cannot silently fall back to a same-named managed artifact', async () => {
   const prompt = '继续修改刚才的原文件 qa-context-test.html，只允许修改这个现有原文件，不要新建任何文件或 artifact。'
   let modelCalls = 0

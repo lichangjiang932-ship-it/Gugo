@@ -120,7 +120,7 @@ export function WorkspaceOnboardingPromptController({
           aria-controls="workspace-onboarding-prompt-dialog"
           aria-expanded="false"
           aria-haspopup="dialog"
-          className="workspace-onboarding-reminder fixed right-4 top-[max(1rem,env(safe-area-inset-top))] z-40 flex max-w-[min(24rem,calc(100vw-2rem))] items-center gap-2 rounded-full border border-amber-500/35 bg-paper/95 px-3.5 py-2 text-left text-xs text-ink-soft shadow-lg backdrop-blur transition-colors hover:border-amber-500/60 hover:bg-amber-50"
+          className="workspace-onboarding-reminder fixed right-[4.25rem] top-[max(1rem,env(safe-area-inset-top))] z-40 flex max-w-[min(24rem,calc(100vw-5.25rem))] items-center gap-2 rounded-full border border-amber-500/35 bg-paper/95 px-3.5 py-2 text-left text-xs text-ink-soft shadow-lg backdrop-blur transition-colors hover:border-amber-500/60 hover:bg-amber-50"
         >
           <ShieldAlert className="h-4 w-4 shrink-0 text-amber-700" />
           <span className="truncate">{t('permissionsDashboard.onboardingPromptReminder')}</span>

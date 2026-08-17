@@ -140,13 +140,17 @@ function isSensitiveLogQueryKey(value) {
 
 export function redactUrlForLog(value = '') {
   const raw = String(value || '')
-  if (!raw.includes('?')) return raw
+  const redactPathCapabilities = (url) => url.replace(
+    /(\/api\/local-files\/previews\/)[^/?#]+/gi,
+    '$1[REDACTED]',
+  )
+  if (!raw.includes('?')) return redactPathCapabilities(raw)
   try {
     const parsed = new URL(raw, 'http://localhost')
     for (const key of new Set(parsed.searchParams.keys())) {
       if (isSensitiveLogQueryKey(key)) parsed.searchParams.set(key, '[REDACTED]')
     }
-    return `${parsed.pathname}${parsed.search}${parsed.hash}`
+    return redactPathCapabilities(`${parsed.pathname}${parsed.search}${parsed.hash}`)
       .replaceAll('%5BREDACTED%5D', '[REDACTED]')
   } catch {
     return raw.replace(
