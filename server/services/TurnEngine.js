@@ -65,6 +65,20 @@ const TERMINAL_TYPES = new Set(['turn.completed', 'turn.cancelled', 'turn.failed
 const STREAM_DELTA_TYPES = ['assistant.delta', 'reasoning.delta']
 const TURN_RESOLUTION_MARKER = '[TURN_RESOLUTION:'
 const ATTACHMENT_CONTEXT_HEADROOM_TOKENS = 64
+const PUBLIC_TURN_FAILURE = '任务执行遇到问题，尚未完成。请重试；若仍失败，请检查模型配置和工具调用支持。'
+const PUBLIC_TURN_INTERRUPTED = '模型服务暂时中断。请重试，系统会继续处理尚未完成的任务。'
+const PUBLIC_TURN_INCOMPLETE = '任务未完成，未通过验证的文件不会显示或交付。请重试以继续。'
+const PUBLIC_REASONING_RUNAWAY = '模型推理超过安全上限，任务已停止。请重试，或换用更适合执行工具任务的模型。'
+const INTERNAL_TERMINAL_FAILURE_PATTERNS = [
+  /Model call failed\s*:/i,
+  /This reply could not be completed/i,
+  /The requested (?:file|artifact|mutation).*?(?:was not|could not|failed)/i,
+  /ARTIFACT_NOT_CREATED/i,
+  /(?:tool|artifact|model)[_-](?:execution|write|call)?[_-]?failed/i,
+  /(?:^|\n)\s*(?:Error|Exception|TypeError|RangeError|AbortError)\s*:/i,
+  /任务未完全完成[^\n]*(?:保留|保存)/,
+  /(?:已保留|保存当前)[^\n]*(?:残缺|文件|进展|工具结果)/,
+]
 const SUMMABLE_MODEL_USAGE_KEYS = Object.freeze([
   'cacheHitTokens',
   'cacheMissTokens',
@@ -449,14 +463,49 @@ function deliveryArtifactFields(deliveryArtifactIds) {
     : {}
 }
 
+function containsInternalTerminalFailure(value) {
+  return INTERNAL_TERMINAL_FAILURE_PATTERNS.some((pattern) => pattern.test(String(value || '')))
+}
+
+function publicTurnFailureMessage(error, { code = 'TURN_FAILED', fallback = PUBLIC_TURN_FAILURE } = {}) {
+  const normalizedCode = String(error?.code || code || 'TURN_FAILED').trim().toUpperCase()
+  const rawMessage = String(error?.message || error?.reason || '').trim()
+  const status = Number(error?.status ?? error?.statusCode)
+  if (normalizedCode === 'TURN_INCOMPLETE') return PUBLIC_TURN_INCOMPLETE
+  if (normalizedCode === 'REASONING_RUNAWAY') return PUBLIC_REASONING_RUNAWAY
+  if (normalizedCode.includes('TIMEOUT')
+    || normalizedCode.includes('UNAVAILABLE')
+    || normalizedCode.includes('INTERRUPT')
+    || status === 408
+    || status === 425
+    || status === 429
+    || status >= 500) {
+    return PUBLIC_TURN_INTERRUPTED
+  }
+  if (rawMessage
+    && /[\u3400-\u9fff]/u.test(rawMessage)
+    && !containsInternalTerminalFailure(rawMessage)) {
+    return rawMessage
+  }
+  return fallback
+}
+
+function publicIncompleteText(value, fallback = PUBLIC_TURN_INCOMPLETE) {
+  const text = String(value || '').trim()
+  if (!text || containsInternalTerminalFailure(text)) return fallback
+  return text
+}
+
 function normalizeFailure(error, {
   code = 'TURN_FAILED',
-  message = 'Turn execution failed',
+  message = PUBLIC_TURN_FAILURE,
   retryable,
 } = {}) {
   const normalizedCode = String(error?.code || code || 'TURN_FAILED').trim() || 'TURN_FAILED'
-  const normalizedMessage = String(error?.message || error?.reason || message || 'Turn execution failed').trim()
-    || 'Turn execution failed'
+  const normalizedMessage = publicTurnFailureMessage(error, {
+    code: normalizedCode,
+    fallback: String(message || PUBLIC_TURN_FAILURE).trim() || PUBLIC_TURN_FAILURE,
+  })
   const rawStatus = Number(error?.status ?? error?.statusCode)
   const status = Number.isInteger(rawStatus) && rawStatus >= 100 && rawStatus <= 599
     ? rawStatus
@@ -472,7 +521,12 @@ function normalizeFailure(error, {
       : (typeof retryable === 'boolean' ? retryable : inferredRetryable),
   }
   if (status !== null) failure.status = status
-  if (error?.hint) failure.hint = String(error.hint)
+  const rawHint = String(error?.hint || '').trim()
+  if (rawHint && /[\u3400-\u9fff]/u.test(rawHint) && !containsInternalTerminalFailure(rawHint)) {
+    failure.hint = rawHint
+  } else if (failure.retryable) {
+    failure.hint = '请重试本任务；系统会继续处理尚未完成的步骤。'
+  }
   const attempts = Number(error?.attempts)
   if (Number.isInteger(attempts) && attempts > 0) failure.attempts = attempts
   return failure
@@ -1541,9 +1595,12 @@ export class TurnEngine {
       }
       if (result?.interrupted) {
         const artifactIds = normalizeArtifactIds(result.artifactIds ?? checkpointArtifactIds)
-        const deliveryArtifactIds = optionalDeliveryArtifactIds(result, checkpointDeliveryArtifactIds)
+        const deliveryArtifactIds = []
         const iterations = Math.max(0, Number(result.iterations) || checkpointIterations)
-        const partialText = String(result.text || streamedAssistantText || '')
+        const partialText = publicIncompleteText(
+          result.text || streamedAssistantText,
+          PUBLIC_TURN_INTERRUPTED,
+        )
         const verifiedLocalFiles = verifiedLocalFilesAt()
         const failure = normalizeFailure({
           code: result.code,
@@ -1552,7 +1609,7 @@ export class TurnEngine {
         }, { code: 'MODEL_CALL_INTERRUPTED', retryable: true })
         await emitter('turn.interrupted', {
           code: String(result.code || 'MODEL_CALL_INTERRUPTED'),
-          message: String(result.reason || 'Model execution was interrupted after tool progress'),
+          message: failure.message,
           retryable: true,
           text: partialText,
           artifactIds,
@@ -1577,21 +1634,19 @@ export class TurnEngine {
         return
       }
       if (result?.incomplete) {
-        const partialText = String(result.text || streamedAssistantText || '')
+        const partialText = publicIncompleteText(result.text || streamedAssistantText)
         const nonRetryable = result.code === 'REASONING_RUNAWAY'
         const failure = normalizeFailure({
           code: nonRetryable ? result.code : 'TURN_INCOMPLETE',
           // Keep the wrap-up in partialText and the machine reason in the
           // hint. Reusing the wrap-up as the error message would make clients
           // append the same useful result a second time as an error banner.
-          message: '任务未完全完成，已保留当前进展。',
+          message: PUBLIC_TURN_INCOMPLETE,
           retryable: !nonRetryable,
-          hint: result.reason
-            ? `Incomplete reason: ${result.reason}`
-            : 'Retry the turn to continue from the durable checkpoint.',
+          hint: '请重试本任务；系统会继续处理尚未完成的步骤。',
         }, { retryable: !nonRetryable })
         const artifactIds = normalizeArtifactIds(result.artifactIds ?? checkpointArtifactIds)
-        const deliveryArtifactIds = optionalDeliveryArtifactIds(result, checkpointDeliveryArtifactIds)
+        const deliveryArtifactIds = []
         const iterations = Math.max(0, Number(result.iterations) || checkpointIterations)
         const verifiedLocalFiles = verifiedLocalFilesAt()
         persistTurnEvidence({
@@ -1624,7 +1679,7 @@ export class TurnEngine {
           ? result.clarification
           : { question: text, blocker_kind: 'missing_info' }
         const artifactIds = normalizeArtifactIds(result.artifactIds ?? checkpointArtifactIds)
-        const deliveryArtifactIds = optionalDeliveryArtifactIds(result, checkpointDeliveryArtifactIds)
+        const deliveryArtifactIds = []
         const iterations = Math.max(0, Number(result.iterations) || checkpointIterations)
         const verifiedLocalFiles = verifiedLocalFilesAt()
         await emitter('turn.paused', {
@@ -1756,9 +1811,12 @@ export class TurnEngine {
         return
       }
       const failure = normalizeFailure(error)
-      const partialText = String(error?.partialText || error?.text || streamedAssistantText || '')
+      const partialText = publicIncompleteText(
+        error?.partialText || error?.text || streamedAssistantText,
+        failure.message,
+      )
       const artifactIds = normalizeArtifactIds(error?.artifactIds ?? checkpointArtifactIds)
-      const deliveryArtifactIds = optionalDeliveryArtifactIds(error, checkpointDeliveryArtifactIds)
+      const deliveryArtifactIds = []
       const iterations = Math.max(0, Number(error?.iterations) || checkpointIterations)
       const verifiedLocalFiles = verifiedLocalFilesAt()
       try {

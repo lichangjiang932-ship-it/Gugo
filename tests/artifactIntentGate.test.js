@@ -509,6 +509,18 @@ test('explicit PDF production works without a slash skill', () => {
 test('existing uploaded images route to the requested file generator instead of generate_image', () => {
   const cases = [
     {
+      prompt: '读取 E:\\果 中全部 JPG，生成图片网站并保存到 E 盘',
+      expected: ['create_html_app'],
+    },
+    {
+      prompt: 'Read every JPG from D:\\photos and build an image gallery website',
+      expected: ['create_html_app'],
+    },
+    {
+      prompt: '读取 E:\\果 中全部 JPG，生成图片网站，另外生成一张新的装饰插图',
+      expected: ['create_html_app', 'generate_image'],
+    },
+    {
       prompt: '请用上传的 hero.png 作为封面，制作一份 PPT 演示文稿',
       expected: ['create_pptx'],
     },
@@ -1807,8 +1819,7 @@ for (const scenario of [
     let executions = 0
     let approvalCalls = 0
 
-    await assert.rejects(
-      runToolsLoop({
+    const result = await runToolsLoop({
         job: {
           id: turnId,
           userId: INTENT_ARTIFACT_USER_ID,
@@ -1853,14 +1864,16 @@ for (const scenario of [
             },
           }],
         }),
-      }),
-      (error) => error?.code === 'ARTIFACT_NOT_CREATED',
-    )
+      })
 
     assert.equal(executions, 0)
     assert.equal(approvalCalls, scenario.rewriteApproval ? 1 : 0)
     assert.equal(outcomes.length, 1)
     assert.equal(outcomes[0].result?.code, 'artifact_replacement_not_authorized')
+    assert.equal(result.incomplete, true)
+    assert.equal(result.reason, 'artifact_delivery_not_converged')
+    assert.deepEqual(result.deliveryArtifactIds, [])
+    assert.doesNotMatch(result.text, /The requested file was not created|ARTIFACT_NOT_CREATED/)
   })
 }
 
@@ -2881,8 +2894,8 @@ for (const delivery of [
   { label: 'image', skillId: 'image', prompt: '/image create a product hero image' },
 ]) {
   test(`${delivery.label} delivery fails explicitly instead of completing with a fake preview`, async () => {
-    await assert.rejects(
-      runToolsLoop({
+    let modelCalls = 0
+    const result = await runToolsLoop({
         job: { id: `${delivery.skillId}-delivery-failure`, userId: 'intent-user', origin: 'chat', prompt: delivery.prompt },
         step: { id: `${delivery.skillId}-delivery-failure`, kind: 'chat' },
         messages: [{ role: 'user', content: delivery.prompt }],
@@ -2890,12 +2903,577 @@ for (const delivery of [
         toolSpecs: SERVER_TOOL_SPECS,
         maxIters: 2,
         enableToolHooks: false,
-        runModel: async () => ({ content: 'The requested file is ready. Save this answer locally.', toolCalls: [] }),
-      }),
-      (error) => error?.code === 'ARTIFACT_NOT_CREATED',
-    )
+        runModel: async () => {
+          modelCalls += 1
+          return { content: 'The requested file is ready. Save this answer locally.', toolCalls: [] }
+        },
+      })
+    assert.equal(modelCalls, 5, '初次漏调后必须完成四轮有界自动纠错')
+    assert.equal(result.incomplete, true)
+    assert.equal(result.reason, 'artifact_delivery_not_converged')
+    assert.deepEqual(result.deliveryArtifactIds, [])
+    assert.doesNotMatch(result.text, /The requested file was not created|ARTIFACT_NOT_CREATED/)
   })
 }
+
+test('forced artifact recovery falls back when a compatible provider rejects named tool_choice', async () => {
+  const turnId = `forced-tool-choice-fallback-${randomUUID()}`
+  const artifactId = `${turnId}-html`
+  const prompt = '/webpage 创建一个可下载的产品介绍网页'
+  const observedChoices = []
+  let modelCalls = 0
+  let generatorExecutions = 0
+
+  const result = await runToolsLoop({
+    job: {
+      id: turnId,
+      userId: INTENT_ARTIFACT_USER_ID,
+      sessionId: INTENT_ARTIFACT_SESSION_ID,
+      origin: 'chat',
+      prompt,
+      userPrompt: prompt,
+    },
+    step: { id: turnId, kind: 'chat' },
+    messages: [{ role: 'user', content: prompt }],
+    skillId: 'webpage',
+    toolSpecs: SERVER_TOOL_SPECS,
+    maxIters: 5,
+    enableToolHooks: false,
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    executeTool: async ({ name }) => {
+      assert.equal(name, 'create_html_app')
+      generatorExecutions += 1
+      return persistStubTurnArtifact({
+        turnId,
+        id: artifactId,
+        filename: 'tool-choice-fallback.html',
+        type: 'html',
+      })
+    },
+    runModel: async ({ toolChoice }) => {
+      modelCalls += 1
+      observedChoices.push(toolChoice?.function?.name || null)
+      if (modelCalls === 1) {
+        return { content: '网页已经准备好了。', toolCalls: [] }
+      }
+      if (modelCalls === 2) {
+        assert.equal(toolChoice?.function?.name, 'create_html_app')
+        const error = new Error('invalid tool_choice value: named function selection is not supported')
+        error.status = 400
+        error.code = 'unsupported_value'
+        error.param = 'tool_choice'
+        throw error
+      }
+      if (modelCalls === 3) {
+        assert.equal(toolChoice, undefined)
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'compatible-generator-call',
+            type: 'function',
+            function: {
+              name: 'create_html_app',
+              arguments: JSON.stringify(validArtifactArgs('create_html_app')),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 4) {
+        assert.equal(toolChoice, undefined)
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'select-compatible-artifact',
+            type: 'function',
+            function: {
+              name: 'set_deliverables',
+              arguments: JSON.stringify({ artifact_ids: [artifactId] }),
+            },
+          }],
+        }
+      }
+      assert.equal(toolChoice, undefined)
+      return { content: '网页已成功生成、验证并交付。', toolCalls: [] }
+    },
+  })
+
+  assert.equal(modelCalls, 5)
+  assert.equal(generatorExecutions, 1)
+  assert.deepEqual(observedChoices, [null, 'create_html_app', null, null, null])
+  assert.equal(result.incomplete, undefined)
+  assert.deepEqual(result.deliveryArtifactIds, [artifactId])
+  assert.equal(result.text, '网页已成功生成、验证并交付。')
+})
+
+test('tool_choice compatibility fallback remains bounded across checkpoint resume', async () => {
+  const turnId = `forced-tool-choice-resume-${randomUUID()}`
+  const prompt = '/webpage 创建一个可下载的产品介绍网页'
+  const checkpoints = []
+  let checkpoint = null
+  let crashInjected = false
+  let initialResponseSent = false
+  let forcedRequests = 0
+  let compatibilityFallbackRequests = 0
+
+  const sharedOptions = {
+    job: {
+      id: turnId,
+      userId: INTENT_ARTIFACT_USER_ID,
+      sessionId: INTENT_ARTIFACT_SESSION_ID,
+      origin: 'chat',
+      prompt,
+      userPrompt: prompt,
+    },
+    step: { id: turnId, kind: 'chat' },
+    messages: [{ role: 'user', content: prompt }],
+    skillId: 'webpage',
+    toolSpecs: SERVER_TOOL_SPECS,
+    maxIters: 1,
+    enableToolHooks: false,
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    runModel: async ({ toolChoice }) => {
+      if (!initialResponseSent) {
+        initialResponseSent = true
+        assert.equal(toolChoice, undefined)
+        return { content: '网页已经准备好了。', toolCalls: [] }
+      }
+      if (toolChoice?.function?.name === 'create_html_app') {
+        forcedRequests += 1
+        const error = new Error('tool_choice for a specific function is unsupported')
+        error.status = 422
+        error.code = 'unsupported_value'
+        error.param = 'tool_choice'
+        throw error
+      }
+      assert.equal(toolChoice, undefined)
+      compatibilityFallbackRequests += 1
+      return { content: '当前兼容端点未返回工具调用。', toolCalls: [] }
+    },
+  }
+
+  await assert.rejects(
+    runToolsLoop({
+      ...sharedOptions,
+      saveCheckpoint: async (state) => {
+        checkpoint = structuredClone(state)
+        checkpoints.push(checkpoint)
+        const guards = state.completionGuards || {}
+        if (!crashInjected
+          && guards.artifactDeliveryRetries === 1
+          && guards.artifactRecoveryPhase === 'force'
+          && guards.forcedArtifactAttemptPending === true) {
+          crashInjected = true
+          throw new Error('simulated restart after compatible tool_choice fallback')
+        }
+        return true
+      },
+    }),
+    /simulated restart/,
+  )
+
+  assert.equal(crashInjected, true)
+  assert.ok(checkpoint)
+  assert.equal(forcedRequests, 1)
+  assert.equal(compatibilityFallbackRequests, 1)
+
+  const result = await runToolsLoop({
+    ...sharedOptions,
+    loadCheckpoint: async () => ({ state: checkpoint }),
+    saveCheckpoint: async (state) => {
+      checkpoint = structuredClone(state)
+      checkpoints.push(checkpoint)
+      return true
+    },
+  })
+
+  assert.equal(forcedRequests, 4, 'checkpoint resume must preserve the four-attempt recovery fuse')
+  assert.equal(compatibilityFallbackRequests, 4)
+  assert.equal(
+    Math.max(...checkpoints.map((state) => Number(state.completionGuards?.artifactDeliveryRetries) || 0)),
+    4,
+  )
+  assert.equal(result.incomplete, true)
+  assert.equal(result.reason, 'artifact_delivery_not_converged')
+  assert.deepEqual(result.deliveryArtifactIds, [])
+})
+
+test('artifact recovery diagnoses a failed generator before forcing it again', async () => {
+  const turnId = `forced-artifact-recovery-${randomUUID()}`
+  const artifactId = `${turnId}-html`
+  const checkpoints = []
+  const forcedChoices = []
+  let modelCalls = 0
+  let generatorExecutions = 0
+
+  const generatorCall = (id, title) => ({
+    id,
+    type: 'function',
+    function: {
+      name: 'create_html_app',
+      arguments: JSON.stringify({
+        ...validArtifactArgs('create_html_app'),
+        title,
+      }),
+    },
+  })
+
+  const result = await runToolsLoop({
+    job: {
+      id: turnId,
+      userId: INTENT_ARTIFACT_USER_ID,
+      sessionId: INTENT_ARTIFACT_SESSION_ID,
+      origin: 'chat',
+      prompt: '/webpage 创建一个可下载的产品介绍网页',
+      userPrompt: '/webpage 创建一个可下载的产品介绍网页',
+    },
+    step: { id: turnId, kind: 'chat' },
+    messages: [{ role: 'user', content: '/webpage 创建一个可下载的产品介绍网页' }],
+    skillId: 'webpage',
+    toolSpecs: SERVER_TOOL_SPECS,
+    maxIters: 8,
+    enableToolHooks: false,
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    saveCheckpoint: async (state) => {
+      checkpoints.push(structuredClone(state))
+      return true
+    },
+    executeTool: async ({ name }) => {
+      if (name === 'list_directory') {
+        return { ok: true, entries: [{ name: 'reference.jpg', type: 'file' }] }
+      }
+      if (name === 'read_file') {
+        return { ok: true, content: 'reference input' }
+      }
+      assert.equal(name, 'create_html_app')
+      generatorExecutions += 1
+      if (generatorExecutions < 3) {
+        return {
+          ok: false,
+          code: `html_generation_failed_${generatorExecutions}`,
+          error: `generation attempt ${generatorExecutions} failed`,
+          retryable: false,
+        }
+      }
+      return persistStubTurnArtifact({
+        turnId,
+        id: artifactId,
+        filename: 'forced-recovery.html',
+        type: 'html',
+      })
+    },
+    runModel: async ({ toolChoice }) => {
+      modelCalls += 1
+      const forcedName = toolChoice?.function?.name || null
+      forcedChoices.push(forcedName)
+      if (modelCalls === 1) {
+        assert.equal(forcedName, null)
+        return { content: '', toolCalls: [generatorCall('initial-generator-failure', 'Initial')] }
+      }
+      if (modelCalls === 2) {
+        assert.equal(forcedName, null)
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'diagnose-list-inputs',
+            type: 'function',
+            function: {
+              name: 'list_directory',
+              arguments: JSON.stringify({ path: 'E:\\fruit' }),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 3) {
+        assert.equal(forcedName, null)
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'diagnose-read-input',
+            type: 'function',
+            function: {
+              name: 'read_file',
+              arguments: JSON.stringify({ path: 'E:\\fruit\\reference.jpg' }),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 4) {
+        assert.equal(forcedName, 'create_html_app')
+        return { content: '', toolCalls: [generatorCall('forced-generator-failure', 'Forced retry')] }
+      }
+      if (modelCalls === 5) {
+        assert.equal(forcedName, null)
+        return { content: '已根据工具错误修正生成参数。', toolCalls: [] }
+      }
+      if (modelCalls === 6) {
+        assert.equal(forcedName, 'create_html_app')
+        return { content: '', toolCalls: [generatorCall('forced-generator-success', 'Recovered')] }
+      }
+      if (modelCalls === 7) {
+        assert.equal(forcedName, null)
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'select-recovered-deliverable',
+            type: 'function',
+            function: {
+              name: 'set_deliverables',
+              arguments: JSON.stringify({ artifact_ids: [artifactId] }),
+            },
+          }],
+        }
+      }
+      assert.equal(forcedName, null)
+      return { content: '网页已成功生成、验证并交付。', toolCalls: [] }
+    },
+  })
+
+  const checkpointAfter = (callId) => checkpoints.filter((state) => (
+    state.toolCalls?.some((call) => call.id === callId && call.checkpointStatus === 'completed')
+  )).at(-1)
+
+  assert.equal(modelCalls, 8)
+  assert.equal(generatorExecutions, 3)
+  assert.deepEqual(forcedChoices, [
+    null,
+    null,
+    null,
+    'create_html_app',
+    null,
+    'create_html_app',
+    null,
+    null,
+  ])
+  assert.equal(
+    checkpointAfter('forced-generator-failure')?.completionGuards?.forcedArtifactToolName,
+    'create_html_app',
+  )
+  assert.equal(
+    checkpointAfter('forced-generator-success')?.completionGuards?.forcedArtifactToolName,
+    null,
+  )
+  assert.equal(result.incomplete, undefined)
+  assert.deepEqual(result.deliveryArtifactIds, [artifactId])
+  assert.equal(result.text, '网页已成功生成、验证并交付。')
+})
+
+test('artifact recovery resumes at a maxIters boundary and succeeds on the fourth forced attempt', async () => {
+  const turnId = `artifact-recovery-resume-${randomUUID()}`
+  const artifactId = `${turnId}-html`
+  const prompt = '/webpage 创建一个可下载的产品介绍网页'
+  let checkpoint = null
+  let crashInjected = false
+  let modelCalls = 0
+  let generatorExecutions = 0
+  let artifactCreated = false
+  let deliverableSelected = false
+  const forcedChoices = []
+
+  const generatorCall = () => ({
+    id: `recovery-generator-${modelCalls}`,
+    type: 'function',
+    function: {
+      name: 'create_html_app',
+      arguments: JSON.stringify(validArtifactArgs('create_html_app')),
+    },
+  })
+  const sharedOptions = {
+    job: {
+      id: turnId,
+      userId: INTENT_ARTIFACT_USER_ID,
+      sessionId: INTENT_ARTIFACT_SESSION_ID,
+      origin: 'chat',
+      prompt,
+      userPrompt: prompt,
+    },
+    step: { id: turnId, kind: 'chat' },
+    messages: [{ role: 'user', content: prompt }],
+    skillId: 'webpage',
+    toolSpecs: SERVER_TOOL_SPECS,
+    maxIters: 1,
+    enableToolHooks: false,
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    executeTool: async ({ name }) => {
+      assert.equal(name, 'create_html_app')
+      generatorExecutions += 1
+      if (generatorExecutions < 4) {
+        return {
+          ok: false,
+          code: `simulated_generation_failure_${generatorExecutions}`,
+          error: `simulated generation failure ${generatorExecutions}`,
+          retryable: false,
+        }
+      }
+      artifactCreated = true
+      return persistStubTurnArtifact({
+        turnId,
+        id: artifactId,
+        filename: 'recovered-on-fourth-attempt.html',
+        type: 'html',
+      })
+    },
+    runModel: async ({ toolChoice }) => {
+      modelCalls += 1
+      const forcedName = toolChoice?.function?.name || null
+      forcedChoices.push(forcedName)
+      if (modelCalls === 1) return { content: '网页已经准备好了。', toolCalls: [] }
+      if (forcedName === 'create_html_app') {
+        return { content: '', toolCalls: [generatorCall()] }
+      }
+      if (!artifactCreated) {
+        assert.equal(forcedName, null)
+        return { content: '正在根据上一次工具结果诊断生成参数。', toolCalls: [] }
+      }
+      if (!deliverableSelected) {
+        assert.equal(forcedName, null)
+        deliverableSelected = true
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'select-fourth-attempt-artifact',
+            type: 'function',
+            function: {
+              name: 'set_deliverables',
+              arguments: JSON.stringify({ artifact_ids: [artifactId] }),
+            },
+          }],
+        }
+      }
+      return { content: '网页已生成、验证并交付。', toolCalls: [] }
+    },
+  }
+
+  await assert.rejects(
+    runToolsLoop({
+      ...sharedOptions,
+      saveCheckpoint: async (state) => {
+        checkpoint = structuredClone(state)
+        const guards = state.completionGuards || {}
+        if (!crashInjected
+          && generatorExecutions === 1
+          && state.iterations === 1
+          && state.toolCalls?.length === 0
+            && guards.artifactDeliveryRetries === 1
+            && guards.artifactRecoveryPhase === 'diagnose'
+            && guards.forcedArtifactAttemptPending === false) {
+          crashInjected = true
+          throw new Error('simulated process restart after forced artifact failure')
+        }
+        return true
+      },
+    }),
+    /simulated process restart/,
+  )
+
+  assert.equal(crashInjected, true)
+  assert.ok(checkpoint)
+  assert.equal(generatorExecutions, 1)
+
+  const result = await runToolsLoop({
+    ...sharedOptions,
+    loadCheckpoint: async () => ({ state: checkpoint }),
+    saveCheckpoint: async (state) => {
+      checkpoint = structuredClone(state)
+      return true
+    },
+  })
+
+  assert.equal(generatorExecutions, 4, 'checkpoint 恢复后不得重放已失败的第一次工具调用')
+  assert.equal(modelCalls, 10)
+  assert.deepEqual(forcedChoices, [
+    null,
+    'create_html_app',
+    null,
+    'create_html_app',
+    null,
+    'create_html_app',
+    null,
+    'create_html_app',
+    null,
+    null,
+  ])
+  assert.equal(result.incomplete, undefined)
+  assert.deepEqual(result.deliveryArtifactIds, [artifactId])
+  assert.equal(result.text, '网页已生成、验证并交付。')
+})
+
+test('artifact recovery stops safely after four forced failures at a maxIters boundary', async () => {
+  const turnId = `artifact-recovery-exhausted-${randomUUID()}`
+  const prompt = '/webpage 创建一个可下载的产品介绍网页'
+  let modelCalls = 0
+  let generatorExecutions = 0
+  const forcedChoices = []
+
+  const result = await runToolsLoop({
+    job: {
+      id: turnId,
+      userId: INTENT_ARTIFACT_USER_ID,
+      sessionId: INTENT_ARTIFACT_SESSION_ID,
+      origin: 'chat',
+      prompt,
+      userPrompt: prompt,
+    },
+    step: { id: turnId, kind: 'chat' },
+    messages: [{ role: 'user', content: prompt }],
+    skillId: 'webpage',
+    toolSpecs: SERVER_TOOL_SPECS,
+    maxIters: 1,
+    enableToolHooks: false,
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    executeTool: async ({ name }) => {
+      assert.equal(name, 'create_html_app')
+      generatorExecutions += 1
+      return {
+        ok: false,
+        code: `bounded_generation_failure_${generatorExecutions}`,
+        error: `bounded generation failure ${generatorExecutions}`,
+        retryable: false,
+      }
+    },
+    runModel: async ({ toolChoice }) => {
+      modelCalls += 1
+      const forcedName = toolChoice?.function?.name || null
+      forcedChoices.push(forcedName)
+      if (modelCalls === 1) {
+        assert.equal(toolChoice, undefined)
+        return { content: '网页已经准备好了。', toolCalls: [] }
+      }
+      if (forcedName === 'create_html_app') {
+        return {
+          content: '',
+          toolCalls: [{
+            id: `bounded-generator-${modelCalls}`,
+            type: 'function',
+            function: {
+              name: 'create_html_app',
+              arguments: JSON.stringify(validArtifactArgs('create_html_app')),
+            },
+          }],
+        }
+      }
+      assert.equal(forcedName, null)
+      return { content: '正在根据上一次生成失败结果诊断参数。', toolCalls: [] }
+    },
+  })
+
+  assert.equal(generatorExecutions, 4)
+  assert.equal(modelCalls, 8, '一次漏调加四次强制尝试后必须停止，不能无限循环')
+  assert.deepEqual(forcedChoices, [
+    null,
+    'create_html_app',
+    null,
+    'create_html_app',
+    null,
+    'create_html_app',
+    null,
+    'create_html_app',
+  ])
+  assert.equal(result.incomplete, true)
+  assert.equal(result.reason, 'artifact_delivery_not_converged')
+  assert.deepEqual(result.deliveryArtifactIds, [])
+  assert.doesNotMatch(result.text, /The requested file was not created|ARTIFACT_NOT_CREATED|Model call failed/i)
+  assert.doesNotMatch(result.text, /任务未完全完成，已保留生成的文件/)
+})
 
 test('an image artifact cannot satisfy a webpage delivery requirement', async () => {
   const deltas = []

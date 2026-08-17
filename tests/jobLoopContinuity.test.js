@@ -230,10 +230,14 @@ test('预算耗尽时必须给出收尾总结,绝不返回空文本', async () =
   // 用户看到「任务跑了很久然后一个字都没有」,即「做到一半没后续」。
   assert.ok(result.text && result.text.trim().length > 0, '预算耗尽也必须有文字交代')
   assert.match(result.text, /进展|预算/)
+  assert.match(result.text, /已经完成的部分/)
+  assert.match(result.text, /read_file.*f1\.txt/)
+  assert.doesNotMatch(result.text, /文件内容/)
 })
 
-test('模型中途报错 → 降级成部分结果,不丢已完成的工具成果', async () => {
+test('模型中途报错 → 保留安全完成证据且不泄露 read_file 正文', async () => {
   const job = { id: 'job-degrade', userId: null, title: 't', prompt: '干活' }
+  let latestCheckpoint = null
 
   let modelCalls = 0
   const runModel = async () => {
@@ -260,12 +264,26 @@ test('模型中途报错 → 降级成部分结果,不丢已完成的工具成�
     messages: [{ role: 'user', content: '干活' }],
     runModel,
     executeTool: async () => ({ ok: true, data: '这是重要发现' }),
+    saveCheckpoint: async (checkpoint) => {
+      latestCheckpoint = structuredClone(checkpoint)
+      return true
+    },
   })
 
   assert.equal(result.interrupted, true)
   assert.match(result.text, /任务中断/)
-  // 第一轮工具查到的东西必须还在
-  assert.match(result.text, /这是重要发现/)
+  // 第一轮工具完成的事实必须保留，但读取到的正文可能包含源码、配置
+  // 或凭据，不能进入用户可见的中断摘要。
+  assert.match(result.text, /read_file/)
+  assert.match(result.text, /important\.txt/)
+  assert.doesNotMatch(result.text, /这是重要发现/)
+  assert.ok(latestCheckpoint?.completionGuards?.partialResultEntries?.some((entry) => (
+    /read_file/.test(entry) && /important\.txt/.test(entry)
+  )))
+  assert.doesNotMatch(
+    JSON.stringify(latestCheckpoint?.completionGuards?.partialResultEntries || []),
+    /这是重要发现/,
+  )
 })
 
 test('第一轮就报错仍然向上抛 —— 没有任何成果时降级没有意义', async () => {

@@ -499,8 +499,7 @@ test('replace_artifact_id is rejected before execution without current-turn auth
   let executions = 0
   let modelCalls = 0
 
-  await assert.rejects(
-    runToolsLoop({
+  const result = await runToolsLoop({
       job: {
         id: `revision-turn-unauthorized-${testToken}`,
         userId: scope.userId,
@@ -543,8 +542,10 @@ test('replace_artifact_id is rejected before execution without current-turn auth
         )))
         return { content: '无法完成。', toolCalls: [] }
       },
-    }),
-    (error) => error?.code === 'ARTIFACT_NOT_CREATED',
-  )
+    })
   assert.equal(executions, 0)
+  assert.equal(result.incomplete, true)
+  assert.equal(result.reason, 'artifact_delivery_not_converged')
+  assert.deepEqual(result.deliveryArtifactIds, [])
+  assert.doesNotMatch(result.text, /The requested file was not created|ARTIFACT_NOT_CREATED/)
 })

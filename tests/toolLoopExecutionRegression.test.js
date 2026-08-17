@@ -213,12 +213,14 @@ test('execution reasoning runaway stops without an automatic model retry and per
     },
   })
 
-  assert.match(result.text, /模型推理超过安全上限/)
+  assert.equal(result.text, '任务尚未完成。请重试以继续；若仍失败，请检查模型和工具调用支持。')
+  assert.doesNotMatch(result.text, /reasoning exceeded execution ceiling/i)
   assert.equal(result.incomplete, true)
   assert.equal(result.code, 'REASONING_RUNAWAY')
   assert.equal(executedWrites, 0)
   assert.equal(modelCalls, 1)
   assert.equal(checkpoint?.final?.code, 'REASONING_RUNAWAY')
+  assert.equal(checkpoint?.final?.text, result.text)
 })
 
 test('default client config keeps bash_exec available through a read-only local PDF execution turn', async () => {
@@ -2053,8 +2055,7 @@ test('a non-empty structured git diff verifies only its matching mutation target
 test('failed artifact tools cannot satisfy delivery with a dangling artifact id', async () => {
   const createDocx = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'create_docx')
   let modelCalls = 0
-  await assert.rejects(
-    () => runToolsLoop({
+  const result = await runToolsLoop({
       job: {
         id: 'job-failed-artifact-id',
         userId: null,
@@ -2089,9 +2090,11 @@ test('failed artifact tools cannot satisfy delivery with a dangling artifact id'
         error: 'failed to persist artifact bytes',
         artifactId: 'dangling-partial-id',
       }),
-    }),
-    (error) => error?.code === 'ARTIFACT_NOT_CREATED',
-  )
+    })
+  assert.equal(result.incomplete, true)
+  assert.equal(result.reason, 'artifact_delivery_not_converged')
+  assert.deepEqual(result.deliveryArtifactIds, [])
+  assert.doesNotMatch(result.text, /The requested file was not created|ARTIFACT_NOT_CREATED/)
 })
 
 test('a successful parallel read clears failures from earlier candidates', async () => {

@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import sharp from 'sharp'
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-html-runtime-'))
 process.env.APP_DATA_DIR = path.join(root, 'data')
@@ -12,8 +13,8 @@ const { closeDb, createUser } = await import('../server/db.js')
 const { readArtifactSourceSnapshot } = await import('../server/services/artifactSourceStore.js')
 const { getArtifactDir } = await import('../server/services/artifactGen.js')
 const { getHtmlArtifactAsset } = await import('../server/services/htmlArtifactAssets.js')
-const { setDefaultOutputDirectory } = await import('../server/services/localFileAccessService.js')
-const { executeServerTool } = await import('../server/services/toolLoopHeuristics.js')
+const { setAllFilesAccess, setDefaultOutputDirectory } = await import('../server/services/localFileAccessService.js')
+const { executeServerTool, requestedArtifactOutputDirectory } = await import('../server/services/toolLoopHeuristics.js')
 const { upsertSession } = await import('../server/services/sessionStore.js')
 const { getTurnArtifactById, listSessionTurnArtifacts } = await import('../server/services/turnArtifactStore.js')
 
@@ -28,7 +29,9 @@ test('create_html_app bundles authorized media, delivers offline, and retains it
   const outputDirectory = path.join(root, 'output')
   const sourceDirectory = path.join(root, 'source')
   const portraitPath = path.join(sourceDirectory, 'portrait.jpg')
-  const portrait = Buffer.from([0xff, 0xd8, 0xff, 0xdb, 1, 2, 3, 4])
+  const portrait = await sharp({
+    create: { width: 2, height: 2, channels: 3, background: '#334155' },
+  }).jpeg().toBuffer()
   fs.mkdirSync(sourceDirectory, { recursive: true })
   fs.writeFileSync(portraitPath, portrait)
   createUser({ id: userId, email: 'html-runtime@example.com' })
@@ -116,6 +119,103 @@ test('create_html_app bundles authorized media, delivers offline, and retains it
     portrait,
   )
   assert.equal(listSessionTurnArtifacts({ userId, sessionId }).length, 1)
+})
+
+test('a complete JPG directory is fully bundled, delivered to the explicit directory, and fails closed when one image is omitted', async () => {
+  const userId = 'html-complete-gallery-user'
+  const sessionId = 'html-complete-gallery-session'
+  const sourceDirectory = path.join(root, '完整 人物图库')
+  const defaultOutputDirectory = path.join(root, 'unused-default-output')
+  const explicitOutputDirectory = path.join(root, 'explicit-output')
+  fs.mkdirSync(sourceDirectory, { recursive: true })
+  const jpeg = await sharp({
+    create: { width: 8, height: 8, channels: 3, background: { r: 34, g: 120, b: 200 } },
+  }).jpeg().toBuffer()
+  const files = [
+    path.join(sourceDirectory, '人物 01.jpg'),
+    path.join(sourceDirectory, '人物-二.JPG'),
+    path.join(sourceDirectory, '角色三.jpeg'),
+  ]
+  for (const file of files) fs.writeFileSync(file, jpeg)
+  fs.writeFileSync(path.join(sourceDirectory, 'not-requested.png'), await sharp(jpeg).png().toBuffer())
+
+  createUser({ id: userId, email: 'html-complete-gallery@example.com' })
+  upsertSession({ id: sessionId, userId, title: 'Complete gallery' })
+  setDefaultOutputDirectory({ userId, rootPath: defaultOutputDirectory })
+  setAllFilesAccess({ userId, enabled: true, confirmation: 'ALLOW_ALL_LOCAL_FILES' })
+
+  const ids = ['portrait_1', 'portrait_2', 'portrait_3']
+  const html = `<!doctype html><html><body>${ids.map((id) => `<img src="gugo-asset://${id}" alt="${id}">`).join('')}</body></html>`
+  const result = await executeServerTool({
+    name: 'create_html_app',
+    args: {
+      title: '完整人物画廊',
+      html,
+      output_directory: explicitOutputDirectory,
+      asset_collection: { directory: sourceDirectory, extensions: ['jpg', 'jpeg'], recursive: true },
+      assets: files.map((file, index) => ({ id: ids[index], path: file })),
+    },
+    job: {
+      id: 'html-complete-gallery-turn', userId, sessionId, origin: 'chat',
+      prompt: `确保 ${sourceDirectory} 下所有 JPG 都被使用，生成网站并保存到指定目录`,
+      userPrompt: `确保 ${sourceDirectory} 下所有 JPG 都被使用，生成网站并保存到指定目录`,
+    },
+    step: { id: 'html-complete-gallery-step', kind: 'chat' },
+    allowedArtifactTools: new Set(['create_html_app']),
+    requiresLocalArtifactDelivery: true,
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.deliveryStatus, 'delivered')
+  assert.equal(result.mediaAssetCount, 3)
+  assert.equal(path.dirname(result.path), fs.realpathSync(explicitOutputDirectory))
+  assert.notEqual(path.dirname(result.path), fs.realpathSync(defaultOutputDirectory))
+  const delivered = fs.readFileSync(result.path, 'utf8')
+  assert.equal((delivered.match(/data:image\/jpeg;base64,/g) || []).length, 3)
+  assert.doesNotMatch(delivered, /gugo-asset:|file:\/\/\//i)
+  const snapshot = readArtifactSourceSnapshot(result.artifactId)
+  assert.doesNotMatch(snapshot.source, new RegExp(sourceDirectory.replaceAll('\\', '\\\\'), 'i'))
+  assert.doesNotMatch(snapshot.source, new RegExp(explicitOutputDirectory.replaceAll('\\', '\\\\'), 'i'))
+
+  await assert.rejects(() => executeServerTool({
+    name: 'create_html_app',
+    args: {
+      title: '漏图画廊',
+      html: `<!doctype html><html><body>${ids.slice(0, 2).map((id) => `<img src="gugo-asset://${id}">`).join('')}</body></html>`,
+      output_directory: explicitOutputDirectory,
+      asset_collection: { directory: sourceDirectory, extensions: ['jpg', 'jpeg'] },
+      assets: files.slice(0, 2).map((file, index) => ({ id: ids[index], path: file })),
+    },
+    job: {
+      id: 'html-incomplete-gallery-turn', userId, sessionId, origin: 'chat',
+      prompt: `确保 ${sourceDirectory} 下所有 JPG 都被使用`,
+      userPrompt: `确保 ${sourceDirectory} 下所有 JPG 都被使用`,
+    },
+    step: { id: 'html-incomplete-gallery-step', kind: 'chat' },
+    allowedArtifactTools: new Set(['create_html_app']),
+    requiresLocalArtifactDelivery: true,
+  }), (error) => error?.code === 'HTML_MEDIA_COLLECTION_INCOMPLETE' && error?.missingCount === 1)
+
+  await assert.rejects(() => executeServerTool({
+    name: 'create_html_app',
+    args: {
+      title: '隐藏图片画廊',
+      html: `<!doctype html><html><body>${ids.slice(0, 2).map((id) => `<img src="gugo-asset://${id}">`).join('')}<img hidden src="gugo-asset://${ids[2]}"></body></html>`,
+      output_directory: explicitOutputDirectory,
+      asset_collection: { directory: sourceDirectory, extensions: ['jpg', 'jpeg'] },
+      assets: files.map((file, index) => ({ id: ids[index], path: file })),
+    },
+    job: {
+      id: 'html-hidden-gallery-turn', userId, sessionId, origin: 'chat',
+      prompt: `确保 ${sourceDirectory} 下所有 JPG 都被使用`,
+      userPrompt: `确保 ${sourceDirectory} 下所有 JPG 都被使用`,
+    },
+    step: { id: 'html-hidden-gallery-step', kind: 'chat' },
+    allowedArtifactTools: new Set(['create_html_app']),
+    requiresLocalArtifactDelivery: true,
+  }), (error) => error?.code === 'HTML_MEDIA_COLLECTION_NOT_VISIBLE' && error?.hiddenCount === 1)
+
+  assert.equal(requestedArtifactOutputDirectory('把网页写到E盘'), `E:${path.sep}`)
 })
 
 test('a failed replacement cannot corrupt the current HTML or media bundle', async () => {

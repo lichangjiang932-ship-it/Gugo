@@ -6,6 +6,21 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.17] - 2026-08-17
+
+### Changed
+
+- Restored the settings page to separate, directly navigable modules on desktop and narrow screens.
+- Made file-producing Agents diagnose failed calls, force the correct generator, resume from checkpoints, and retry within a bounded recovery loop instead of ending with code snippets or internal errors.
+- Made subagents preserve paused, interrupted, incomplete, and budget-exhausted terminal states, with durable same-run checkpoint recovery that does not replay completed tools.
+
+### Fixed
+
+- Prevented failed, interrupted, or unverified artifacts from appearing as deliverable links or right-sidebar files.
+- Added real pixel, PDF page-tree, and Office package validation before publication, including HTML gallery checks that require every requested image to be visible and decodable.
+- Made multi-page PDF rendering transactional so a later invalid page rolls back the entire batch and a retry cannot leave duplicate files.
+- Replaced internal model/tool failure text with safe progress summaries while preserving verified work for continuation.
+
 ## [0.11.16] - 2026-08-17
 
 ### Added

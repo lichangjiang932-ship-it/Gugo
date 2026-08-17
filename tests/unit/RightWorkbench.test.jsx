@@ -190,6 +190,26 @@ test('right workbench hides live intermediates and synthetic previews outside de
       artifactType: 'html',
       artifactTitle: 'Failed draft',
       artifactSource: '<!doctype html><html><body>Failed</body></html>',
+      serverArtifacts: [{ id: 'failed-draft', filename: 'failed-draft.html', type: 'html', url: '/api/artifacts/failed-draft' }],
+      serverDeliveryArtifactIds: ['failed-draft'],
+    },
+  }, {
+    id: 'assistant-interrupted-source',
+    role: 'assistant',
+    content: 'Generation interrupted.',
+    meta: {
+      interrupted: true,
+      serverArtifacts: [{ id: 'interrupted-draft', filename: 'interrupted-draft.html', type: 'html', url: '/api/artifacts/interrupted-draft' }],
+      serverDeliveryArtifactIds: ['interrupted-draft'],
+    },
+  }, {
+    id: 'assistant-paused-source',
+    role: 'assistant',
+    content: 'Generation paused.',
+    meta: {
+      paused: true,
+      serverArtifacts: [{ id: 'paused-draft', filename: 'paused-draft.html', type: 'html', url: '/api/artifacts/paused-draft' }],
+      serverDeliveryArtifactIds: ['paused-draft'],
     },
   }, {
     id: 'assistant-final',
@@ -219,7 +239,7 @@ test('right workbench hides live intermediates and synthetic previews outside de
 
     assert.equal(rootElement.querySelector('[data-testid="workbench-file-count"]').textContent, '1')
     assert.match(rootElement.textContent, /final-report\.pdf/)
-    assert.doesNotMatch(rootElement.textContent, /live-draft|source-draft|Synthetic draft|Failed draft|old-draft/)
+    assert.doesNotMatch(rootElement.textContent, /live-draft|source-draft|Synthetic draft|Failed draft|failed-draft|interrupted-draft|paused-draft|old-draft/)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

@@ -1,0 +1,764 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import zlib from 'node:zlib'
+import { JSDOM } from 'jsdom'
+import sharp from 'sharp'
+
+const MAX_FILE_BYTES = 256 * 1024 * 1024
+const MAX_ZIP_ENTRIES = 20_000
+const MAX_ZIP_EXPANDED_BYTES = 512 * 1024 * 1024
+const MAX_XML_BYTES = 32 * 1024 * 1024
+const MAX_IMAGE_PIXELS = 100_000_000
+const MAX_PDF_PAGES = 10_000
+
+const CONTENT_TYPES_NAMESPACE = 'http://schemas.openxmlformats.org/package/2006/content-types'
+const PACKAGE_RELATIONSHIPS_NAMESPACE = 'http://schemas.openxmlformats.org/package/2006/relationships'
+const OFFICE_RELATIONSHIP_NAMESPACES = new Set([
+  'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
+  'http://purl.oclc.org/ooxml/officeDocument/relationships',
+])
+const OFFICE_MAIN_NAMESPACES = Object.freeze({
+  docx: new Set([
+    'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
+    'http://purl.oclc.org/ooxml/wordprocessingml/main',
+  ]),
+  pptx: new Set([
+    'http://schemas.openxmlformats.org/presentationml/2006/main',
+    'http://purl.oclc.org/ooxml/presentationml/main',
+  ]),
+  xlsx: new Set([
+    'http://schemas.openxmlformats.org/spreadsheetml/2006/main',
+    'http://purl.oclc.org/ooxml/spreadsheetml/main',
+  ]),
+})
+const OFFICE_MAIN_CONTENT_TYPE = Object.freeze({
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml',
+})
+const OFFICE_CHILD_CONTENT_TYPE = Object.freeze({
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.slide+xml',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml',
+})
+const PDFJS_STANDARD_FONT_DATA_URL = `${path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../../node_modules/pdfjs-dist/standard_fonts',
+)}${path.sep}`
+
+const FORMAT_BY_TOOL = Object.freeze({
+  create_docx: 'docx',
+  create_pptx: 'pptx',
+  create_xlsx: 'xlsx',
+  create_pdf: 'pdf',
+  generate_image: 'image',
+  render_pdf_pages: 'image',
+})
+
+const OFFICE_MAIN_PART = Object.freeze({
+  docx: 'word/document.xml',
+  pptx: 'ppt/presentation.xml',
+  xlsx: 'xl/workbook.xml',
+})
+
+const OFFICE_MAIN_ROOT = Object.freeze({ docx: 'document', pptx: 'presentation', xlsx: 'workbook' })
+
+export class GeneratedArtifactFormatError extends Error {
+  constructor(code, message, cause = null) {
+    super(message)
+    this.name = 'GeneratedArtifactFormatError'
+    this.code = code
+    this.retryable = true
+    this.statusCode = 422
+    this.artifactValidationFailure = true
+    if (cause) this.cause = cause
+  }
+}
+
+function invalid(code, message, cause = null) {
+  throw new GeneratedArtifactFormatError(code, message, cause)
+}
+
+export function isGeneratedArtifactFormatError(error) {
+  return error?.artifactValidationFailure === true
+    || /^ARTIFACT_FORMAT_/.test(String(error?.code || ''))
+}
+
+function checkedFile(filePath) {
+  const raw = String(filePath || '').trim()
+  if (!raw || !path.isAbsolute(raw)) {
+    invalid('ARTIFACT_FORMAT_PATH_INVALID', 'Generated artifact validation requires an absolute file path.')
+  }
+  let canonical
+  let stat
+  try {
+    canonical = fs.realpathSync(raw)
+    stat = fs.statSync(canonical)
+  } catch (cause) {
+    invalid('ARTIFACT_FORMAT_FILE_UNREADABLE', 'The generated artifact file cannot be read.', cause)
+  }
+  if (!stat.isFile()) invalid('ARTIFACT_FORMAT_FILE_INVALID', 'The generated artifact path is not a file.')
+  if (stat.size <= 0) invalid('ARTIFACT_FORMAT_FILE_EMPTY', 'The generated artifact file is empty.')
+  if (stat.size > MAX_FILE_BYTES) {
+    invalid('ARTIFACT_FORMAT_FILE_TOO_LARGE', 'The generated artifact is too large for bounded validation.')
+  }
+  try {
+    return { canonical, stat, bytes: fs.readFileSync(canonical) }
+  } catch (cause) {
+    invalid('ARTIFACT_FORMAT_FILE_UNREADABLE', 'The generated artifact file cannot be read.', cause)
+  }
+}
+
+function isPathInside(candidate, directory) {
+  const relative = path.relative(directory, candidate)
+  return relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
+}
+
+/**
+ * Remove a rejected generated file only when both its lexical path and its
+ * resolved target are inside the managed artifact directory. This prevents a
+ * malformed tool result (or a symlink) from turning validation cleanup into
+ * an arbitrary file deletion primitive.
+ */
+export function discardInvalidGeneratedArtifactFile({ filePath, artifactDirectory } = {}) {
+  const rawFile = String(filePath || '').trim()
+  const rawDirectory = String(artifactDirectory || '').trim()
+  if (!rawFile || !rawDirectory || !path.isAbsolute(rawFile) || !path.isAbsolute(rawDirectory)) return false
+
+  const directory = path.resolve(rawDirectory)
+  const candidate = path.resolve(rawFile)
+  if (!isPathInside(candidate, directory)) return false
+
+  let realDirectory
+  let realCandidate
+  let candidateStat
+  try {
+    realDirectory = fs.realpathSync(directory)
+    candidateStat = fs.lstatSync(candidate)
+    realCandidate = fs.realpathSync(candidate)
+  } catch {
+    return false
+  }
+  if (!fs.statSync(realDirectory).isDirectory() || candidateStat.isDirectory()
+    || !isPathInside(realCandidate, realDirectory)) return false
+
+  try {
+    fs.rmSync(candidate, { force: true })
+    return !fs.existsSync(candidate)
+  } catch {
+    return false
+  }
+}
+
+function resolveFormat({ toolName, artifactType, filename, filePath }) {
+  const toolFormat = FORMAT_BY_TOOL[String(toolName || '').trim()]
+  const type = String(artifactType || '').trim().toLowerCase()
+  const extension = path.extname(String(filename || filePath || '')).slice(1).toLowerCase()
+  const extensionFormat = extension === 'jpeg' ? 'image'
+    : ['png', 'jpg', 'webp'].includes(extension) ? 'image'
+      : ['docx', 'pptx', 'xlsx', 'pdf'].includes(extension) ? extension
+        : null
+  const declaredFormat = type === 'image' ? 'image'
+    : ['docx', 'pptx', 'xlsx', 'pdf'].includes(type) ? type
+      : null
+  const format = toolFormat || declaredFormat || extensionFormat
+  if (!format) {
+    invalid('ARTIFACT_FORMAT_UNSUPPORTED', 'The generated artifact format is not supported by the validator.')
+  }
+  if (toolFormat && declaredFormat && toolFormat !== declaredFormat) {
+    invalid('ARTIFACT_FORMAT_TYPE_MISMATCH', 'The generated artifact type does not match its generator.')
+  }
+  if (!extensionFormat || extensionFormat !== format) {
+    invalid('ARTIFACT_FORMAT_EXTENSION_MISMATCH', 'The generated artifact extension does not match its format.')
+  }
+  return { format, extension }
+}
+
+let crcTable = null
+function crc32(bytes) {
+  if (!crcTable) {
+    crcTable = new Uint32Array(256)
+    for (let value = 0; value < 256; value += 1) {
+      let crc = value
+      for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0)
+      crcTable[value] = crc >>> 0
+    }
+  }
+  let crc = 0xffffffff
+  for (const byte of bytes) crc = (crc >>> 8) ^ crcTable[(crc ^ byte) & 0xff]
+  return (crc ^ 0xffffffff) >>> 0
+}
+
+function findZipEocd(bytes) {
+  const minimum = Math.max(0, bytes.length - 65_557)
+  for (let offset = bytes.length - 22; offset >= minimum; offset -= 1) {
+    if (bytes.readUInt32LE(offset) !== 0x06054b50) continue
+    const commentLength = bytes.readUInt16LE(offset + 20)
+    if (offset + 22 + commentLength === bytes.length) return offset
+  }
+  invalid('ARTIFACT_FORMAT_ZIP_INVALID', 'The Office artifact has no valid ZIP end record.')
+}
+
+function safeZipName(raw) {
+  const name = raw.toString('utf8').replaceAll('\\', '/')
+  const normalized = path.posix.normalize(name)
+  if (!name || name.includes('\0') || name.startsWith('/') || normalized === '..'
+    || normalized.startsWith('../') || normalized !== name.replace(/^\.\//, '')) {
+    invalid('ARTIFACT_FORMAT_ZIP_ENTRY_INVALID', 'The Office artifact contains an unsafe ZIP entry path.')
+  }
+  return normalized
+}
+
+function inflateZipEntry(bytes, entry, centralOffset) {
+  const offset = entry.localOffset
+  if (offset < 0 || offset + 30 > centralOffset || bytes.readUInt32LE(offset) !== 0x04034b50) {
+    invalid('ARTIFACT_FORMAT_ZIP_ENTRY_INVALID', `ZIP entry ${entry.name} has an invalid local header.`)
+  }
+  const flags = bytes.readUInt16LE(offset + 6)
+  const method = bytes.readUInt16LE(offset + 8)
+  const nameLength = bytes.readUInt16LE(offset + 26)
+  const extraLength = bytes.readUInt16LE(offset + 28)
+  const dataStart = offset + 30 + nameLength + extraLength
+  const dataEnd = dataStart + entry.compressedSize
+  if ((flags & 1) !== 0 || method !== entry.method || dataEnd > centralOffset) {
+    invalid('ARTIFACT_FORMAT_ZIP_ENTRY_INVALID', `ZIP entry ${entry.name} is encrypted, truncated, or inconsistent.`)
+  }
+  const localName = safeZipName(bytes.subarray(offset + 30, offset + 30 + nameLength))
+  if (localName !== entry.name) {
+    invalid('ARTIFACT_FORMAT_ZIP_ENTRY_INVALID', `ZIP entry ${entry.name} has inconsistent names.`)
+  }
+  const compressed = bytes.subarray(dataStart, dataEnd)
+  let output
+  try {
+    output = method === 0
+      ? Buffer.from(compressed)
+      : method === 8
+        ? zlib.inflateRawSync(compressed, { maxOutputLength: Math.max(1, entry.uncompressedSize + 1) })
+        : invalid('ARTIFACT_FORMAT_ZIP_COMPRESSION_UNSUPPORTED', `ZIP entry ${entry.name} uses an unsupported compression method.`)
+  } catch (cause) {
+    if (cause instanceof GeneratedArtifactFormatError) throw cause
+    invalid('ARTIFACT_FORMAT_ZIP_ENTRY_INVALID', `ZIP entry ${entry.name} cannot be decompressed.`, cause)
+  }
+  if (output.length !== entry.uncompressedSize) {
+    invalid('ARTIFACT_FORMAT_ZIP_ENTRY_INVALID', `ZIP entry ${entry.name} has an invalid expanded size.`)
+  }
+  if (crc32(output) !== entry.crc) {
+    invalid('ARTIFACT_FORMAT_ZIP_CRC_MISMATCH', `ZIP entry ${entry.name} failed its CRC check.`)
+  }
+  return output
+}
+
+function readOfficeZip(bytes) {
+  if (bytes.length < 22 || bytes.readUInt32LE(0) !== 0x04034b50) {
+    invalid('ARTIFACT_FORMAT_ZIP_INVALID', 'The Office artifact is not a ZIP package.')
+  }
+  const eocd = findZipEocd(bytes)
+  const disk = bytes.readUInt16LE(eocd + 4)
+  const centralDisk = bytes.readUInt16LE(eocd + 6)
+  const diskEntries = bytes.readUInt16LE(eocd + 8)
+  const entryCount = bytes.readUInt16LE(eocd + 10)
+  const centralSize = bytes.readUInt32LE(eocd + 12)
+  const centralOffset = bytes.readUInt32LE(eocd + 16)
+  if (disk !== 0 || centralDisk !== 0 || diskEntries !== entryCount || entryCount === 0
+    || entryCount > MAX_ZIP_ENTRIES || entryCount === 0xffff
+    || centralSize === 0xffffffff || centralOffset === 0xffffffff
+    || centralOffset + centralSize !== eocd) {
+    invalid('ARTIFACT_FORMAT_ZIP_INVALID', 'The Office ZIP directory is invalid or unsupported.')
+  }
+  const metadata = []
+  const names = new Set()
+  let cursor = centralOffset
+  let expandedBytes = 0
+  for (let index = 0; index < entryCount; index += 1) {
+    if (cursor + 46 > eocd || bytes.readUInt32LE(cursor) !== 0x02014b50) {
+      invalid('ARTIFACT_FORMAT_ZIP_INVALID', 'The Office ZIP central directory is truncated.')
+    }
+    const flags = bytes.readUInt16LE(cursor + 8)
+    const method = bytes.readUInt16LE(cursor + 10)
+    const crc = bytes.readUInt32LE(cursor + 16)
+    const compressedSize = bytes.readUInt32LE(cursor + 20)
+    const uncompressedSize = bytes.readUInt32LE(cursor + 24)
+    const nameLength = bytes.readUInt16LE(cursor + 28)
+    const extraLength = bytes.readUInt16LE(cursor + 30)
+    const commentLength = bytes.readUInt16LE(cursor + 32)
+    const diskStart = bytes.readUInt16LE(cursor + 34)
+    const localOffset = bytes.readUInt32LE(cursor + 42)
+    const end = cursor + 46 + nameLength + extraLength + commentLength
+    if (end > eocd || diskStart !== 0 || (flags & 1) !== 0
+      || [compressedSize, uncompressedSize, localOffset].includes(0xffffffff)) {
+      invalid('ARTIFACT_FORMAT_ZIP_ENTRY_INVALID', 'The Office ZIP contains an invalid or unsupported entry.')
+    }
+    const name = safeZipName(bytes.subarray(cursor + 46, cursor + 46 + nameLength))
+    const key = name.toLowerCase()
+    if (names.has(key)) invalid('ARTIFACT_FORMAT_ZIP_ENTRY_INVALID', `Duplicate ZIP entry: ${name}.`)
+    names.add(key)
+    expandedBytes += uncompressedSize
+    if (expandedBytes > MAX_ZIP_EXPANDED_BYTES) {
+      invalid('ARTIFACT_FORMAT_ZIP_BOMB_BLOCKED', 'The Office ZIP expands beyond the validation limit.')
+    }
+    metadata.push({ name, method, crc, compressedSize, uncompressedSize, localOffset })
+    cursor = end
+  }
+  if (cursor !== eocd) invalid('ARTIFACT_FORMAT_ZIP_INVALID', 'The Office ZIP directory length is inconsistent.')
+  const entries = new Map()
+  for (const entry of metadata) entries.set(entry.name, inflateZipEntry(bytes, entry, centralOffset))
+  return entries
+}
+
+let xmlParser = null
+function parseXml(bytes, entryName) {
+  if (!bytes || bytes.length === 0 || bytes.length > MAX_XML_BYTES) {
+    invalid('ARTIFACT_FORMAT_XML_INVALID', `Required XML part ${entryName} is empty or too large.`)
+  }
+  const source = bytes.toString('utf8')
+  if (/<!DOCTYPE/i.test(source)) invalid('ARTIFACT_FORMAT_XML_INVALID', `XML part ${entryName} contains a forbidden doctype.`)
+  try {
+    if (!xmlParser) xmlParser = new (new JSDOM('').window.DOMParser)()
+    const document = xmlParser.parseFromString(source, 'application/xml')
+    if (!document?.documentElement || document.getElementsByTagName('parsererror').length > 0) {
+      invalid('ARTIFACT_FORMAT_XML_INVALID', `XML part ${entryName} is not well formed.`)
+    }
+    return document
+  } catch (cause) {
+    if (cause instanceof GeneratedArtifactFormatError) throw cause
+    invalid('ARTIFACT_FORMAT_XML_INVALID', `XML part ${entryName} cannot be parsed.`, cause)
+  }
+}
+
+function relationshipSource(name) {
+  if (name === '_rels/.rels') return ''
+  const marker = '/_rels/'
+  const index = name.indexOf(marker)
+  if (index < 0 || !name.endsWith('.rels')) return null
+  return `${name.slice(0, index)}/${name.slice(index + marker.length, -5)}`
+}
+
+function relationshipTarget(relName, target) {
+  const source = relationshipSource(relName)
+  if (source == null) return null
+  const raw = String(target || '').split('#', 1)[0].replaceAll('\\', '/')
+  const joined = raw.startsWith('/')
+    ? path.posix.normalize(raw.slice(1))
+    : path.posix.normalize(path.posix.join(path.posix.dirname(source), raw))
+  if (!joined || joined === '..' || joined.startsWith('../') || path.posix.isAbsolute(joined)) return null
+  return joined
+}
+
+function directChildren(element, namespace, localName) {
+  return [...(element?.children || [])].filter((child) => (
+    child.namespaceURI === namespace && child.localName === localName
+  ))
+}
+
+function validateContentTypes(entries, document, format) {
+  const root = document?.documentElement
+  if (root?.localName !== 'Types' || root?.namespaceURI !== CONTENT_TYPES_NAMESPACE) {
+    invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', 'The Office content-types part is invalid.')
+  }
+  const defaults = new Map()
+  const overrides = new Map()
+  for (const node of directChildren(root, CONTENT_TYPES_NAMESPACE, 'Default')) {
+    const extension = String(node.getAttribute('Extension') || '').trim().toLowerCase()
+    const contentType = String(node.getAttribute('ContentType') || '').trim()
+    if (!extension || extension.includes('/') || !contentType || defaults.has(extension)) {
+      invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', 'The Office package has invalid default content types.')
+    }
+    defaults.set(extension, contentType)
+  }
+  for (const node of directChildren(root, CONTENT_TYPES_NAMESPACE, 'Override')) {
+    const rawName = String(node.getAttribute('PartName') || '').trim().replaceAll('\\', '/')
+    const contentType = String(node.getAttribute('ContentType') || '').trim()
+    const partName = rawName.startsWith('/') ? rawName.slice(1) : ''
+    if (!partName || path.posix.normalize(partName) !== partName || !contentType || overrides.has(partName)) {
+      invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', 'The Office package has invalid override content types.')
+    }
+    overrides.set(partName, contentType)
+  }
+  const contentTypes = new Map()
+  for (const name of entries.keys()) {
+    if (name === '[Content_Types].xml' || name.endsWith('/')) continue
+    const extension = name.endsWith('.rels')
+      ? 'rels'
+      : path.posix.extname(name).slice(1).toLowerCase()
+    const contentType = overrides.get(name) || defaults.get(extension)
+    if (!contentType) {
+      invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', `Office package part ${name} has no declared content type.`)
+    }
+    contentTypes.set(name, contentType)
+  }
+  if (contentTypes.get(OFFICE_MAIN_PART[format]) !== OFFICE_MAIN_CONTENT_TYPE[format]) {
+    invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', `The ${format.toUpperCase()} main content type is invalid.`)
+  }
+  return contentTypes
+}
+
+function validateRelationships(entries, documents) {
+  const relationshipSets = new Map()
+  for (const [name, document] of documents) {
+    if (!name.endsWith('.rels')) continue
+    const root = document?.documentElement
+    if (root?.localName !== 'Relationships' || root?.namespaceURI !== PACKAGE_RELATIONSHIPS_NAMESPACE) {
+      invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', `Relationship part ${name} has an invalid namespace.`)
+    }
+    const source = relationshipSource(name)
+    if (source == null || (source && !entries.has(source))) {
+      invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', `Relationship part ${name} has no valid source part.`)
+    }
+    const relations = new Map()
+    for (const relation of directChildren(root, PACKAGE_RELATIONSHIPS_NAMESPACE, 'Relationship')) {
+      const id = String(relation.getAttribute('Id') || '').trim()
+      const type = String(relation.getAttribute('Type') || '').trim()
+      const targetValue = String(relation.getAttribute('Target') || '').trim()
+      const external = String(relation.getAttribute('TargetMode') || '').trim().toLowerCase() === 'external'
+      if (!id || !type || !targetValue || relations.has(id)) {
+        invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', `Relationship part ${name} has an invalid or duplicate relationship.`)
+      }
+      const target = external ? null : relationshipTarget(name, targetValue)
+      if (!external && (!target || !entries.has(target))) {
+        invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', `Relationship ${name}#${id} points to a missing package part.`)
+      }
+      relations.set(id, { id, type, target, external })
+    }
+    relationshipSets.set(name, relations)
+  }
+  return relationshipSets
+}
+
+function officeRelationshipId(element) {
+  for (const namespace of OFFICE_RELATIONSHIP_NAMESPACES) {
+    const id = String(element?.getAttributeNS(namespace, 'id') || '').trim()
+    if (id) return id
+  }
+  return ''
+}
+
+function requireBoundParts({ nodes, relationships, relationSuffix, contentTypes, contentType, documents, validatePart }) {
+  if (nodes.length === 0) invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', 'The Office document contains no bound content parts.')
+  for (const node of nodes) {
+    const id = officeRelationshipId(node)
+    const relation = relationships?.get(id)
+    if (!id || !relation || relation.external || !relation.type.endsWith(relationSuffix)
+      || !relation.target || contentTypes.get(relation.target) !== contentType) {
+      invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', 'An Office content node is not bound to the required package part.')
+    }
+    validatePart(documents.get(relation.target), relation.target)
+  }
+}
+
+function validateOfficePackage(bytes, format) {
+  const entries = readOfficeZip(bytes)
+  const required = ['[Content_Types].xml', '_rels/.rels', OFFICE_MAIN_PART[format]]
+  for (const name of required) {
+    if (!entries.has(name)) invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', `The ${format.toUpperCase()} package is missing ${name}.`)
+  }
+  const documents = new Map()
+  for (const [name, content] of entries) {
+    if ((name.endsWith('.xml') || name.endsWith('.rels')) && !name.endsWith('/')) {
+      documents.set(name, parseXml(content, name))
+    }
+  }
+  const contentTypes = validateContentTypes(entries, documents.get('[Content_Types].xml'), format)
+  const relationshipSets = validateRelationships(entries, documents)
+  const rootRelationships = relationshipSets.get('_rels/.rels')
+  const officeRelationship = [...(rootRelationships?.values() || [])]
+    .find((item) => item.type.endsWith('/officeDocument'))
+  if (officeRelationship?.target !== OFFICE_MAIN_PART[format] || officeRelationship.external) {
+    invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', `The ${format.toUpperCase()} package has no valid office-document relationship.`)
+  }
+
+  const main = documents.get(OFFICE_MAIN_PART[format])
+  const mainNamespace = main?.documentElement?.namespaceURI
+  if (main?.documentElement?.localName !== OFFICE_MAIN_ROOT[format]
+    || !OFFICE_MAIN_NAMESPACES[format].has(mainNamespace)) {
+    invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', `The ${format.toUpperCase()} main document part is invalid.`)
+  }
+
+  if (format === 'docx') {
+    const bodies = directChildren(main.documentElement, mainNamespace, 'body')
+    const body = bodies.length === 1 ? bodies[0] : null
+    const content = body ? [...body.getElementsByTagNameNS(mainNamespace, 'p'), ...body.getElementsByTagNameNS(mainNamespace, 'tbl')] : []
+    if (!body || content.length === 0) {
+      invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', 'The DOCX document has no paragraph or table body content.')
+    }
+  } else {
+    const mainRelsName = format === 'pptx' ? 'ppt/_rels/presentation.xml.rels' : 'xl/_rels/workbook.xml.rels'
+    const mainRelationships = relationshipSets.get(mainRelsName)
+    if (!mainRelationships) {
+      invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', `The ${format.toUpperCase()} main relationships are missing.`)
+    }
+    if (format === 'pptx') {
+      const nodes = [...main.getElementsByTagNameNS(mainNamespace, 'sldId')]
+      requireBoundParts({
+        nodes,
+        relationships: mainRelationships,
+        relationSuffix: '/slide',
+        contentTypes,
+        contentType: OFFICE_CHILD_CONTENT_TYPE.pptx,
+        documents,
+        validatePart(document, name) {
+          const root = document?.documentElement
+          const namespace = root?.namespaceURI
+          const commonSlides = root ? directChildren(root, namespace, 'cSld') : []
+          const shapeTrees = commonSlides.flatMap((item) => directChildren(item, namespace, 'spTree'))
+          if (root?.localName !== 'sld' || !OFFICE_MAIN_NAMESPACES.pptx.has(namespace)
+            || commonSlides.length !== 1 || shapeTrees.length !== 1) {
+            invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', `PPTX slide part ${name} has no valid shape tree.`)
+          }
+        },
+      })
+    } else {
+      const nodes = [...main.getElementsByTagNameNS(mainNamespace, 'sheet')]
+      requireBoundParts({
+        nodes,
+        relationships: mainRelationships,
+        relationSuffix: '/worksheet',
+        contentTypes,
+        contentType: OFFICE_CHILD_CONTENT_TYPE.xlsx,
+        documents,
+        validatePart(document, name) {
+          const root = document?.documentElement
+          const namespace = root?.namespaceURI
+          const sheetData = root ? directChildren(root, namespace, 'sheetData') : []
+          const rows = sheetData[0] ? [...sheetData[0].getElementsByTagNameNS(namespace, 'row')] : []
+          if (root?.localName !== 'worksheet' || !OFFICE_MAIN_NAMESPACES.xlsx.has(namespace)
+            || sheetData.length !== 1 || rows.length === 0) {
+            invalid('ARTIFACT_FORMAT_STRUCTURE_INVALID', `XLSX worksheet part ${name} has no row data.`)
+          }
+        },
+      })
+    }
+  }
+  return { entryCount: entries.size }
+}
+
+let pdfJsPromise = null
+function loadPdfJs() {
+  if (!pdfJsPromise) pdfJsPromise = import('pdfjs-dist/legacy/build/pdf.mjs')
+  return pdfJsPromise
+}
+
+async function validatePdf(bytes) {
+  let loadingTask = null
+  let document = null
+  try {
+    const { getDocument } = await loadPdfJs()
+    loadingTask = getDocument({
+      data: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength),
+      standardFontDataUrl: PDFJS_STANDARD_FONT_DATA_URL,
+      disableWorker: true,
+      stopAtErrors: true,
+      isEvalSupported: false,
+      useSystemFonts: true,
+      verbosity: 0,
+    })
+    document = await loadingTask.promise
+    if (!Number.isSafeInteger(document.numPages) || document.numPages <= 0 || document.numPages > MAX_PDF_PAGES) {
+      invalid('ARTIFACT_FORMAT_PDF_INVALID', 'The PDF has no bounded, non-empty page tree.')
+    }
+    let operatorCount = 0
+    for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+      const page = await document.getPage(pageNumber)
+      const view = page?.view
+      const width = Array.isArray(view) ? Math.abs(Number(view[2]) - Number(view[0])) : 0
+      const height = Array.isArray(view) ? Math.abs(Number(view[3]) - Number(view[1])) : 0
+      if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+        invalid('ARTIFACT_FORMAT_PDF_INVALID', `PDF page ${pageNumber} has invalid dimensions.`)
+      }
+      const operators = await page.getOperatorList()
+      if (!Array.isArray(operators?.fnArray) || !Array.isArray(operators?.argsArray)) {
+        invalid('ARTIFACT_FORMAT_PDF_INVALID', `PDF page ${pageNumber} cannot be decoded.`)
+      }
+      operatorCount += operators.fnArray.length
+      page.cleanup()
+    }
+    return { pageCount: document.numPages, operatorCount }
+  } catch (cause) {
+    if (cause instanceof GeneratedArtifactFormatError) throw cause
+    invalid('ARTIFACT_FORMAT_PDF_INVALID', 'The PDF page tree or page content cannot be parsed.', cause)
+  } finally {
+    try {
+      if (document) await document.destroy()
+      else if (loadingTask) await loadingTask.destroy()
+    } catch { /* parser cleanup only */ }
+  }
+}
+
+function validatePng(bytes) {
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+  if (bytes.length < 33 || !bytes.subarray(0, 8).equals(signature)) invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'The PNG signature is invalid.')
+  let offset = 8
+  let width = 0
+  let height = 0
+  let colorType = -1
+  let bitDepth = 0
+  let interlace = -1
+  let sawHeader = false
+  let sawEnd = false
+  const imageData = []
+  while (offset + 12 <= bytes.length) {
+    const length = bytes.readUInt32BE(offset)
+    const end = offset + 12 + length
+    if (end > bytes.length) invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'The PNG contains a truncated chunk.')
+    const type = bytes.subarray(offset + 4, offset + 8).toString('ascii')
+    const payload = bytes.subarray(offset + 8, offset + 8 + length)
+    const expectedCrc = bytes.readUInt32BE(offset + 8 + length)
+    if (crc32(bytes.subarray(offset + 4, offset + 8 + length)) !== expectedCrc) {
+      invalid('ARTIFACT_FORMAT_IMAGE_INVALID', `PNG chunk ${type} failed its CRC check.`)
+    }
+    if (!sawHeader && type !== 'IHDR') invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'PNG IHDR is not the first chunk.')
+    if (type === 'IHDR') {
+      if (sawHeader || length !== 13) invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'The PNG IHDR chunk is invalid.')
+      sawHeader = true
+      width = payload.readUInt32BE(0)
+      height = payload.readUInt32BE(4)
+      bitDepth = payload[8]
+      colorType = payload[9]
+      interlace = payload[12]
+    } else if (type === 'IDAT') imageData.push(payload)
+    else if (type === 'IEND') {
+      if (length !== 0) invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'The PNG IEND chunk is invalid.')
+      sawEnd = true
+      offset = end
+      break
+    }
+    offset = end
+  }
+  if (!sawHeader || !sawEnd || imageData.length === 0 || offset !== bytes.length
+    || width <= 0 || height <= 0 || width * height > MAX_IMAGE_PIXELS
+    || ![0, 2, 3, 4, 6].includes(colorType) || ![1, 2, 4, 8, 16].includes(bitDepth)
+    || ![0, 1].includes(interlace)) {
+    invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'The PNG structure or dimensions are invalid.')
+  }
+  try {
+    const expanded = zlib.inflateSync(Buffer.concat(imageData), { maxOutputLength: MAX_ZIP_EXPANDED_BYTES })
+    if (expanded.length === 0) invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'The PNG image data is empty.')
+  } catch (cause) {
+    if (cause instanceof GeneratedArtifactFormatError) throw cause
+    invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'The PNG image data cannot be decompressed.', cause)
+  }
+  return { width, height }
+}
+
+function validateJpeg(bytes) {
+  if (bytes.length < 12 || bytes.readUInt16BE(0) !== 0xffd8) invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'The JPEG signature is invalid.')
+  let offset = 2
+  let width = 0
+  let height = 0
+  let sawScan = false
+  while (offset < bytes.length) {
+    if (bytes[offset] !== 0xff) invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'The JPEG marker stream is invalid.')
+    while (bytes[offset] === 0xff) offset += 1
+    const marker = bytes[offset]
+    offset += 1
+    if (marker === 0xd9) {
+      if (!sawScan || !width || !height || offset !== bytes.length) invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'The JPEG image is incomplete.')
+      return { width, height }
+    }
+    if (marker === 0x00 || marker === 0xd8 || (marker >= 0xd0 && marker <= 0xd7) || marker === 0x01) continue
+    if (offset + 2 > bytes.length) invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'The JPEG segment is truncated.')
+    const length = bytes.readUInt16BE(offset)
+    if (length < 2 || offset + length > bytes.length) invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'The JPEG segment length is invalid.')
+    if ((marker >= 0xc0 && marker <= 0xcf) && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+      if (length < 8) invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'The JPEG frame header is invalid.')
+      height = bytes.readUInt16BE(offset + 3)
+      width = bytes.readUInt16BE(offset + 5)
+      if (!width || !height || width * height > MAX_IMAGE_PIXELS) invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'The JPEG dimensions are invalid.')
+    }
+    offset += length
+    if (marker !== 0xda) continue
+    sawScan = true
+    while (offset < bytes.length - 1) {
+      if (bytes[offset] !== 0xff) { offset += 1; continue }
+      let next = offset + 1
+      while (bytes[next] === 0xff) next += 1
+      if (bytes[next] === 0x00 || (bytes[next] >= 0xd0 && bytes[next] <= 0xd7)) {
+        offset = next + 1
+        continue
+      }
+      break
+    }
+  }
+  invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'The JPEG end marker is missing.')
+}
+
+function validateWebp(bytes) {
+  if (bytes.length < 30 || bytes.toString('ascii', 0, 4) !== 'RIFF'
+    || bytes.toString('ascii', 8, 12) !== 'WEBP' || bytes.readUInt32LE(4) + 8 !== bytes.length) {
+    invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'The WebP RIFF container is invalid.')
+  }
+  let offset = 12
+  let width = 0
+  let height = 0
+  while (offset + 8 <= bytes.length) {
+    const type = bytes.toString('ascii', offset, offset + 4)
+    const length = bytes.readUInt32LE(offset + 4)
+    const start = offset + 8
+    const end = start + length
+    if (end > bytes.length) invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'The WebP contains a truncated chunk.')
+    if (type === 'VP8X' && length >= 10) {
+      width = 1 + bytes.readUIntLE(start + 4, 3)
+      height = 1 + bytes.readUIntLE(start + 7, 3)
+    } else if (type === 'VP8L' && length >= 5 && bytes[start] === 0x2f) {
+      const bits = bytes.readUInt32LE(start + 1)
+      width = 1 + (bits & 0x3fff)
+      height = 1 + ((bits >>> 14) & 0x3fff)
+    } else if (type === 'VP8 ' && length >= 10
+      && bytes[start + 3] === 0x9d && bytes[start + 4] === 0x01 && bytes[start + 5] === 0x2a) {
+      width = bytes.readUInt16LE(start + 6) & 0x3fff
+      height = bytes.readUInt16LE(start + 8) & 0x3fff
+    }
+    offset = end + (length % 2)
+  }
+  if (offset !== bytes.length || !width || !height || width * height > MAX_IMAGE_PIXELS) {
+    invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'The WebP bitstream or dimensions are invalid.')
+  }
+  return { width, height }
+}
+
+async function validateImage(bytes, extension) {
+  const expectedFormat = extension === 'jpg' || extension === 'jpeg' ? 'jpeg' : extension
+  const structure = extension === 'png' ? validatePng(bytes)
+    : extension === 'jpg' || extension === 'jpeg' ? validateJpeg(bytes)
+      : extension === 'webp' ? validateWebp(bytes)
+        : invalid('ARTIFACT_FORMAT_UNSUPPORTED', 'Only generated PNG, JPEG, and WebP images are supported.')
+  try {
+    const options = {
+      animated: true,
+      failOn: 'error',
+      limitInputPixels: MAX_IMAGE_PIXELS,
+    }
+    const metadata = await sharp(bytes, options).metadata()
+    const width = Number(metadata.width)
+    const height = Number(metadata.pageHeight || metadata.height)
+    const pages = Number(metadata.pages || 1)
+    if (metadata.format !== expectedFormat || !Number.isSafeInteger(width) || !Number.isSafeInteger(height)
+      || !Number.isSafeInteger(pages) || width <= 0 || height <= 0 || pages <= 0
+      || width * height * pages > MAX_IMAGE_PIXELS) {
+      invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'The image codec, dimensions, or page count is invalid.')
+    }
+    const decoded = await sharp(bytes, options).raw().toBuffer({ resolveWithObject: true })
+    if (!decoded?.data?.length || decoded.info?.width <= 0 || decoded.info?.height <= 0) {
+      invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'The image contains no decodable pixels.')
+    }
+    return { width, height, pages, decodedBytes: decoded.data.length, ...structure }
+  } catch (cause) {
+    if (cause instanceof GeneratedArtifactFormatError) throw cause
+    invalid('ARTIFACT_FORMAT_IMAGE_INVALID', 'The image pixels cannot be decoded.', cause)
+  }
+}
+
+/**
+ * Validate a generated deliverable before it is exposed as a completed
+ * artifact. All parsers are bounded because this runs on the turn
+ * execution path and must not turn malformed output into a resource attack.
+ */
+export async function validateGeneratedArtifactFile({ filePath, filename = '', toolName = '', artifactType = '' } = {}) {
+  const { canonical, stat, bytes } = checkedFile(filePath)
+  const { format, extension } = resolveFormat({ toolName, artifactType, filename, filePath: canonical })
+  const details = format === 'image'
+    ? await validateImage(bytes, extension)
+    : format === 'pdf'
+      ? await validatePdf(bytes)
+      : validateOfficePackage(bytes, format)
+  return { ok: true, format, byteLength: stat.size, ...details }
+}

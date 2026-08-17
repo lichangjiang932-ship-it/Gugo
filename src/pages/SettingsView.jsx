@@ -15,14 +15,10 @@ import SettingsWebSearchPanel from '../components/settings/SettingsWebSearchPane
 import { useT } from '../i18n/I18nProvider.jsx'
 import { getSystemDiagnostics, testModelEndpoint } from '../lib/modelClient.js'
 import {
-  SETTINGS_PAGE_APPEARANCE_LANGUAGE,
-  SETTINGS_PAGE_FEATURES,
-  SETTINGS_PAGE_FILES_PERMISSIONS,
-  SETTINGS_PAGE_MODEL_SEARCH,
-  SETTINGS_PAGE_SYSTEM_DATA,
   SETTINGS_TAB_APPEARANCE,
   SETTINGS_TAB_DATA,
   SETTINGS_TAB_DIAGNOSTICS,
+  SETTINGS_TAB_FEATURES,
   SETTINGS_TAB_FILES,
   SETTINGS_TAB_INTEGRATIONS,
   SETTINGS_TAB_LANGUAGE,
@@ -36,30 +32,18 @@ import { useAppContext } from '../store/AppContext'
 import { estimatePersistedSnapshotBytes } from '../store/indexedDbPersistence.js'
 
 const SETTINGS_NAV_ITEMS = [
-  SETTINGS_PAGE_FEATURES,
-  SETTINGS_PAGE_MODEL_SEARCH,
-  SETTINGS_PAGE_FILES_PERMISSIONS,
-  SETTINGS_PAGE_APPEARANCE_LANGUAGE,
-  SETTINGS_PAGE_SYSTEM_DATA,
+  SETTINGS_TAB_FEATURES,
+  SETTINGS_TAB_MODELS,
+  SETTINGS_TAB_WEB_SEARCH,
+  SETTINGS_TAB_FILES,
+  SETTINGS_TAB_PERMISSIONS,
+  SETTINGS_TAB_INTEGRATIONS,
+  SETTINGS_TAB_APPEARANCE,
+  SETTINGS_TAB_LANGUAGE,
+  SETTINGS_TAB_PET,
+  SETTINGS_TAB_DIAGNOSTICS,
+  SETTINGS_TAB_DATA,
 ]
-
-function SettingsSubnav({ label, onChange, options, value }) {
-  return (
-    <nav className="mb-6 flex flex-wrap gap-1 rounded-lg border border-ink/15 bg-paper-2 p-1" aria-label={label}>
-      {options.map(([id, title]) => (
-        <button
-          key={id}
-          type="button"
-          aria-current={value === id ? 'page' : undefined}
-          onClick={() => onChange(id)}
-          className={`min-h-9 rounded-md px-3 text-sm transition-colors ${value === id ? 'bg-paper font-medium text-ink shadow-sm' : 'text-ink-soft hover:bg-paper/70 hover:text-ink'}`}
-        >
-          {title}
-        </button>
-      ))}
-    </nav>
-  )
-}
 
 function getLocalStorageBytes() {
   if (typeof window === 'undefined') return 0
@@ -100,7 +84,7 @@ async function getBrowserStorageEstimate() {
 
 export default function SettingsView() {
   const { state, dispatch } = useAppContext()
-  const { activeNav, activeSection, navigate, setActiveNav, setActiveSection } = useSettingsNavigation()
+  const { activeSection, navigate, setActiveSection } = useSettingsNavigation()
   const { t, lang, setLang, languages } = useT()
   const [storageTick, setStorageTick] = useState(0)
   const [storageEstimate, setStorageEstimate] = useState(() => ({ usage: getLocalStorageBytes(), quota: null }))
@@ -155,27 +139,18 @@ export default function SettingsView() {
 
   const navLabel = (item) => {
     switch (item) {
-      case SETTINGS_PAGE_FEATURES: return '功能入口'
-      case SETTINGS_PAGE_MODEL_SEARCH: return `${t('modelProviders.navTitle')} · ${t('webSearch.title')}`
-      case SETTINGS_PAGE_FILES_PERMISSIONS: return `${t('fileOutput.navTitle')} · ${t('nav.permissions')}`
-      case SETTINGS_PAGE_APPEARANCE_LANGUAGE: return `${t('settings.appearance')} · ${t('settings.language')}`
-      case SETTINGS_PAGE_SYSTEM_DATA: return `${t('settings.systemDiagnostics')} · ${t('settings.dataExport')}`
+      case SETTINGS_TAB_FEATURES: return '功能入口'
+      case SETTINGS_TAB_MODELS: return t('modelProviders.navTitle')
+      case SETTINGS_TAB_WEB_SEARCH: return t('webSearch.title')
+      case SETTINGS_TAB_FILES: return t('fileOutput.navTitle')
+      case SETTINGS_TAB_PERMISSIONS: return t('nav.permissions')
+      case SETTINGS_TAB_INTEGRATIONS: return t('settings.integrations')
+      case SETTINGS_TAB_APPEARANCE: return t('settings.appearance')
+      case SETTINGS_TAB_LANGUAGE: return t('settings.language')
+      case SETTINGS_TAB_PET: return t('settings.pet')
+      case SETTINGS_TAB_DIAGNOSTICS: return t('settings.systemDiagnostics')
+      case SETTINGS_TAB_DATA: return t('settings.dataExport')
       default: return item
-    }
-  }
-
-  const sectionOptions = () => {
-    switch (activeNav) {
-      case SETTINGS_PAGE_MODEL_SEARCH:
-        return [[SETTINGS_TAB_MODELS, t('modelProviders.navTitle')], [SETTINGS_TAB_WEB_SEARCH, t('webSearch.title')], [SETTINGS_TAB_INTEGRATIONS, t('settings.integrations')]]
-      case SETTINGS_PAGE_FILES_PERMISSIONS:
-        return [[SETTINGS_TAB_FILES, t('fileOutput.navTitle')], [SETTINGS_TAB_PERMISSIONS, t('nav.permissions')]]
-      case SETTINGS_PAGE_APPEARANCE_LANGUAGE:
-        return [[SETTINGS_TAB_APPEARANCE, t('settings.appearance')], [SETTINGS_TAB_LANGUAGE, t('settings.language')], [SETTINGS_TAB_PET, t('settings.pet')]]
-      case SETTINGS_PAGE_SYSTEM_DATA:
-        return [[SETTINGS_TAB_DIAGNOSTICS, t('settings.systemDiagnostics')], [SETTINGS_TAB_DATA, t('settings.dataExport')]]
-      default:
-        return []
     }
   }
 
@@ -202,62 +177,51 @@ export default function SettingsView() {
   }
 
   function renderActive() {
-    if (activeNav === SETTINGS_PAGE_FEATURES) return <SettingsFeatureHub navigate={navigate} t={t} />
-
-    let panel
     switch (activeSection) {
+      case SETTINGS_TAB_FEATURES:
+        return <SettingsFeatureHub navigate={navigate} t={t} />
       case SETTINGS_TAB_MODELS:
-        panel = renderModels()
-        break
+        return renderModels()
       case SETTINGS_TAB_WEB_SEARCH:
-        panel = <SettingsWebSearchPanel t={t} />
-        break
+        return <SettingsWebSearchPanel t={t} />
       case SETTINGS_TAB_INTEGRATIONS:
-        panel = <SettingsIntegrationsPanel navigate={navigate} t={t} />
-        break
+        return <SettingsIntegrationsPanel navigate={navigate} t={t} />
       case SETTINGS_TAB_PERMISSIONS:
-        panel = <SettingsPermissionsPanel navigate={navigate} t={t} state={state} enabledPermCount={enabledPermCount} />
-        break
+        return <SettingsPermissionsPanel navigate={navigate} t={t} state={state} enabledPermCount={enabledPermCount} />
       case SETTINGS_TAB_FILES:
-        panel = <SettingsFileOutputPanel t={t} />
-        break
+        return <SettingsFileOutputPanel t={t} />
       case SETTINGS_TAB_LANGUAGE:
-        panel = renderLanguage()
-        break
+        return renderLanguage()
       case SETTINGS_TAB_PET:
-        panel = <SettingsPetPanel t={t} />
-        break
+        return <SettingsPetPanel t={t} />
       case SETTINGS_TAB_DATA:
-        panel = <SettingsDataExport state={state} dispatch={dispatch} storageBytes={storageEstimate.usage} storageQuota={storageEstimate.quota} onStorageChanged={refreshStorage} />
-        break
+        return <SettingsDataExport state={state} dispatch={dispatch} storageBytes={storageEstimate.usage} storageQuota={storageEstimate.quota} onStorageChanged={refreshStorage} />
       case SETTINGS_TAB_DIAGNOSTICS:
-        panel = <SettingsDiagnosticsPanel authMode={state.authMode} diagnostics={diagnostics} message={diagnosticsMessage} loading={diagnosticsLoading} onConfigureModels={() => setActiveSection(SETTINGS_TAB_MODELS)} onRefresh={refreshDiagnostics} onTest={testModel} t={t} />
-        break
+        return <SettingsDiagnosticsPanel authMode={state.authMode} diagnostics={diagnostics} message={diagnosticsMessage} loading={diagnosticsLoading} onConfigureModels={() => setActiveSection(SETTINGS_TAB_MODELS)} onRefresh={refreshDiagnostics} onTest={testModel} t={t} />
       case SETTINGS_TAB_APPEARANCE:
       default:
-        panel = <SettingsAppearancePanel t={t} state={state} dispatch={dispatch} />
-        break
+        return <SettingsAppearancePanel t={t} state={state} dispatch={dispatch} />
     }
-
-    return <><SettingsSubnav label={navLabel(activeNav)} options={sectionOptions()} value={activeSection} onChange={setActiveSection} />{panel}</>
   }
 
   return (
     <div className="h-screen flex bg-paper overflow-hidden">
       <LeftRail />
-      <aside className="w-[240px] border-r border-dashed border-ink-fade/50 p-4 overflow-y-auto bg-paper-2">
-        <div className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade mb-3">{t('settings.sectionTitle')}</div>
-        <nav className="flex flex-col gap-1">
-          {SETTINGS_NAV_ITEMS.map((item) => (
-            <button key={item} aria-current={activeNav === item ? 'page' : undefined} onClick={() => setActiveNav(item)} className={`text-left px-3 py-2.5 rounded-md text-sm transition-colors ${activeNav === item ? 'bg-paper border border-ink-fade/50 text-ink' : 'text-ink-soft hover:bg-paper/70'}`}>
-              {navLabel(item)}
-            </button>
-          ))}
-        </nav>
-      </aside>
-      <main className="flex-1 overflow-y-auto p-8">
-        <div className="max-w-4xl">{renderActive()}</div>
-      </main>
+      <div className="min-w-0 flex-1 flex flex-col md:flex-row overflow-hidden">
+        <aside className="shrink-0 border-b md:border-b-0 md:border-r border-dashed border-ink-fade/50 bg-paper-2 px-2 py-2 md:w-[220px] md:p-4 md:overflow-y-auto overflow-x-auto">
+          <div className="hidden md:block font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade mb-3">{t('settings.sectionTitle')}</div>
+          <nav className="flex min-w-max flex-row gap-1 md:min-w-0 md:flex-col" aria-label={t('settings.sectionTitle')}>
+            {SETTINGS_NAV_ITEMS.map((item) => (
+              <button key={item} type="button" aria-current={activeSection === item ? 'page' : undefined} onClick={() => setActiveSection(item)} className={`shrink-0 text-left px-3 py-2 rounded-md text-sm transition-colors ${activeSection === item ? 'bg-paper border border-ink-fade/50 text-ink' : 'text-ink-soft hover:bg-paper/70'}`}>
+                {navLabel(item)}
+              </button>
+            ))}
+          </nav>
+        </aside>
+        <main className="min-w-0 flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
+          <div className="max-w-4xl">{renderActive()}</div>
+        </main>
+      </div>
     </div>
   )
 }

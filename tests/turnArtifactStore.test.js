@@ -648,6 +648,123 @@ test('creating another artifact after selection invalidates it and requires reco
   assert.deepEqual(invalidatedCheckpoint.deliveryArtifactIds, [])
 })
 
+test('same-id delivery failure revokes verified provenance and the previous deliverable selection', async () => {
+  const turnId = 'same-id-delivery-downgrade-turn'
+  const artifactId = 'same-id-delivery-downgrade-artifact'
+  const createHtml = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'create_html_app')
+  const setDeliverables = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'set_deliverables')
+  const checkpoints = []
+  let modelCalls = 0
+  let generatorCalls = 0
+
+  const result = await runToolsLoop({
+    job: {
+      id: turnId,
+      origin: 'chat',
+      userId: 'artifact-user',
+      sessionId: 'artifact-session',
+      prompt: '/webpage Create a webpage and save it to D:\\destok\\exports.',
+      userPrompt: '/webpage Create a webpage and save it to D:\\destok\\exports.',
+    },
+    step: { id: turnId, kind: 'chat' },
+    messages: [{ role: 'user', content: '/webpage Create a webpage and save it to D:\\destok\\exports.' }],
+    skillId: 'webpage',
+    intentMode: 'execute',
+    toolSpecs: [createHtml, setDeliverables],
+    maxIters: 3,
+    enableToolHooks: false,
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
+    saveCheckpoint: async (state) => {
+      checkpoints.push(structuredClone(state))
+      return true
+    },
+    executeTool: async ({ name }) => {
+      assert.equal(name, 'create_html_app')
+      generatorCalls += 1
+      if (generatorCalls === 1) {
+        appendTurnArtifact({
+          id: artifactId,
+          userId: 'artifact-user',
+          sessionId: 'artifact-session',
+          turnId,
+          type: 'html',
+          title: 'Delivered page',
+          filename: 'same-id-delivered.html',
+          url: '/api/artifacts/same-id-delivered.html',
+        })
+        return {
+          ok: true,
+          artifactId,
+          filename: 'same-id-delivered.html',
+          url: '/api/artifacts/same-id-delivered.html',
+          deliveryStatus: 'delivered',
+        }
+      }
+      return {
+        ok: false,
+        artifactId,
+        filename: 'same-id-delivered.html',
+        url: '/api/artifacts/same-id-delivered.html',
+        deliveryStatus: 'managed_only',
+        code: 'ARTIFACT_DEFAULT_DELIVERY_FAILED',
+        error: 'simulated local replacement sync failure',
+        retryable: false,
+      }
+    },
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'same-id-initial-success',
+            type: 'function',
+            function: { name: 'create_html_app', arguments: JSON.stringify({ title: 'Page', html: '<!doctype html><html><body><main>v1</main></body></html>' }) },
+          }],
+        }
+      }
+      if (modelCalls === 2) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'same-id-select-success',
+            type: 'function',
+            function: { name: 'set_deliverables', arguments: JSON.stringify({ artifact_ids: [artifactId] }) },
+          }],
+        }
+      }
+      if (modelCalls === 3) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'same-id-replacement-failure',
+            type: 'function',
+            function: { name: 'create_html_app', arguments: JSON.stringify({ title: 'Page', html: '<!doctype html><html><body><main>v2</main></body></html>' }) },
+          }],
+        }
+      }
+      return { content: 'The replacement is complete.', toolCalls: [] }
+    },
+  })
+
+  assert.equal(generatorCalls, 2)
+  assert.equal(result.incomplete, true)
+  assert.equal(result.reason, 'artifact_delivery_not_converged')
+  assert.deepEqual(result.artifactIds, [artifactId])
+  assert.deepEqual(result.deliveryArtifactIds, [])
+  const downgraded = checkpoints.find((state) => (
+    state.toolCalls?.some((call) => call.id === 'same-id-replacement-failure' && call.checkpointStatus === 'completed')
+  ))
+  assert.ok(downgraded)
+  assert.deepEqual(downgraded.deliveryArtifactIds, [])
+  assert.deepEqual(downgraded.completionGuards?.deliveredArtifactTools, [])
+  assert.deepEqual(downgraded.completionGuards?.artifactProvenance, [{
+    artifactId,
+    toolName: 'create_html_app',
+    verified: false,
+  }])
+})
+
 test('refusing final artifact selection ends incomplete with explicit empty delivery', async () => {
   const turnId = 'deliverable-refused-turn'
   const artifactId = 'deliverable-refused-artifact'

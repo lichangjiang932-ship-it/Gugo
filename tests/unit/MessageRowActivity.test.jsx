@@ -359,11 +359,10 @@ test('only final deliverables are clickable in execution steps and appear below'
   }
 })
 
-test('an interrupted resumable turn keeps verified output clickable while execution remains active', async () => {
+test('an interrupted resumable turn hides retained output until the turn completes', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
-  const opened = []
   const msg = {
     id: 'assistant-interrupted-delivery',
     role: 'assistant',
@@ -389,26 +388,20 @@ test('an interrupted resumable turn keeps verified output clickable while execut
           rowKey={msg.id}
           generatingMessageId={msg.id}
           lang="en"
-          onOpenArtifact={(artifact) => opened.push(artifact)}
           t={(key) => key}
         />
       </I18nProvider>,
     ))
 
     assert.equal(rootElement.querySelector('[data-testid="execution-toggle"]')?.getAttribute('aria-expanded'), 'true')
-    const file = rootElement.querySelector('[data-testid="artifact-open-card"]')
-    assert.ok(file)
-    assert.match(file.textContent, /verified-report\.pdf/)
-    await act(async () => file.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
-    assert.equal(opened[0]?.directFile?.filename, 'verified-report.pdf')
-    assert.equal(opened[0]?.directFile?.path, 'D:\\work\\verified-report.pdf')
+    assert.equal(rootElement.querySelector('[data-testid="artifact-open-card"]'), null)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
   }
 })
 
-test('a failed turn with a delivered artifact is labeled partially completed', async () => {
+test('a failed turn never exposes retained artifacts as deliverables', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
@@ -437,16 +430,15 @@ test('a failed turn with a delivered artifact is labeled partially completed', a
           rowKey={msg.id}
           generatingMessageId=""
           lang="en"
-          t={(key) => key === 'chatMessages.replyPartiallyCompleted'
-            ? 'Generated files were preserved'
+          t={(key) => key === 'chatMessages.replyIncomplete'
+            ? 'Unverified files were not delivered'
             : key}
         />
       </I18nProvider>,
     ))
 
-    assert.equal(rootElement.querySelector('[data-testid="reply-completion-state"]')?.textContent, 'Generated files were preserved')
-    assert.ok(rootElement.querySelector('[data-testid="artifact-open-card"]'))
-    assert.doesNotMatch(rootElement.textContent, /This reply could not be completed/)
+    assert.equal(rootElement.querySelector('[data-testid="reply-completion-state"]')?.textContent, 'Unverified files were not delivered')
+    assert.equal(rootElement.querySelector('[data-testid="artifact-open-card"]'), null)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

@@ -39,7 +39,13 @@ function readStoredWidth() {
 
 function collectArtifacts(messages) {
   return messages.flatMap((message, index) => {
-    if (message?.role !== 'assistant' || message?.meta?.streaming) return []
+    if (
+      message?.role !== 'assistant'
+      || message?.meta?.streaming
+      || message?.meta?.failed
+      || message?.meta?.interrupted
+      || message?.meta?.paused
+    ) return []
     const deliveryArtifacts = resolveDeliveryArtifacts(message?.meta)
     return deliveryArtifacts
       .filter((artifact) => artifact?.url)

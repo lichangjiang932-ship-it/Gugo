@@ -4,12 +4,14 @@ import { issueTestSession } from './helpers/testAuth.js'
 import {
   SUBAGENT_TYPES,
   getSubagentRun,
+  recoverInterruptedSubagentRuns,
   runSubagentBatch,
   runSubagent,
   listSubagentTypes,
   _testing,
 } from '../server/services/subagentRuntime.js'
 import { createJobBudget } from '../server/utils/jobBudget.js'
+import { getDb } from '../server/db.js'
 
 const { userId } = issueTestSession({ email: 'subagent-test@example.com' })
 
@@ -64,7 +66,9 @@ test('subagent model calls consume the shared hard budget and still return a wra
       }
     },
   })
-  assert.equal(result, 'Budget wrap-up with evidence.')
+  assert.equal(result.budgetExceeded, true)
+  assert.equal(result.incomplete, true)
+  assert.match(result.text, /Budget wrap-up with evidence\./)
   assert.equal(providerCalls, 2, 'one normal request plus one explicit wrap-up')
   assert.equal(budget.snapshot().modelCalls, 2)
   assert.equal(budget.snapshot().modelTokens, 25)
@@ -161,7 +165,7 @@ test('subagent compiles an inherited inline skill with the shared quality contra
   const run = await runSubagent({
     userId,
     type: 'explore',
-    prompt: 'apply the local workflow',
+    prompt: 'review the local workflow',
     skillIds: ['local-inline-review'],
     skillDefinitions: [{
       id: 'local-inline-review',
@@ -212,4 +216,136 @@ test('subagent swarm exposes team members with isolated transcripts', async () =
   assert.match(second.resultText, /backend/)
   assert.equal(modelsByPrompt.get('inspect frontend'), 'swarm-default-model')
   assert.equal(modelsByPrompt.get('inspect backend'), 'backend-model')
+})
+
+test('runSubagent persists paused and interrupted loop terminals without claiming completion', async () => {
+  for (const terminal of [
+    { paused: true, expected: 'paused' },
+    { interrupted: true, expected: 'interrupted' },
+    { incomplete: true, expected: 'interrupted' },
+    { budgetExceeded: true, expected: 'interrupted' },
+    { noProgress: true, expected: 'interrupted' },
+    { text: 'done', expected: 'completed' },
+  ]) {
+    assert.equal(_testing.subagentStatusForLoopResult(terminal), terminal.expected)
+  }
+
+  const paused = await runSubagent({
+    id: `subagent-paused-${Date.now()}`,
+    userId,
+    type: 'explore',
+    prompt: 'inspect the relevant area',
+    callModel: async () => ({
+      content: '',
+      toolCalls: [{
+        id: 'clarify-1',
+        function: {
+          name: 'request_clarification',
+          arguments: JSON.stringify({ question: 'Which area should be inspected?' }),
+        },
+      }],
+    }),
+  })
+  assert.equal(paused.status, 'paused')
+  assert.match(paused.resultText, /需要澄清/)
+
+  let modelCalls = 0
+  const interrupted = await runSubagent({
+    id: `subagent-interrupted-${Date.now()}`,
+    userId,
+    type: 'explore',
+    prompt: 'inspect one file',
+    callModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'read-1',
+            function: { name: 'read_file', arguments: JSON.stringify({ path: 'README.md' }) },
+          }],
+        }
+      }
+      throw Object.assign(new Error('provider interrupted'), { status: 503 })
+    },
+    executeTool: async () => ({ ok: true, content: 'evidence' }),
+  })
+  assert.equal(interrupted.status, 'interrupted')
+  assert.match(interrupted.resultText, /探索中断/)
+})
+
+test('stale running subagent is marked interrupted and resumes completed tool outcomes from its checkpoint', async () => {
+  let checkpoint = null
+  let modelCalls = 0
+  let toolCalls = 0
+  const prompt = 'resume checkpoint evidence'
+  const initial = await _testing.subagentToolsLoop({
+    messages: [{ role: 'user', content: prompt }],
+    tools: [SUBAGENT_TYPES.explore.tools.find((tool) => tool.function.name === 'read_file')],
+    userId,
+    callModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'checkpoint-read-1',
+            function: { name: 'read_file', arguments: JSON.stringify({ path: 'README.md' }) },
+          }],
+        }
+      }
+      throw Object.assign(new Error('simulated restart'), { status: 503 })
+    },
+    executeTool: async () => {
+      toolCalls += 1
+      return { ok: true, content: 'durable evidence' }
+    },
+    saveCheckpoint: async (state) => {
+      checkpoint = structuredClone(state)
+      return { state }
+    },
+  })
+  assert.equal(initial.interrupted, true)
+  assert.ok(checkpoint)
+  assert.equal(toolCalls, 1)
+
+  const id = `subagent-resume-${Date.now()}`
+  const at = Date.now()
+  getDb().prepare(`
+    INSERT INTO subagent_runs
+      (id, user_id, agent_type, prompt, status, trace_json, created_at)
+    VALUES (?, ?, 'explore', ?, 'running', ?, ?)
+  `).run(id, userId, prompt, JSON.stringify([
+    { type: 'start', at },
+    { type: 'runtime_checkpoint', state: checkpoint, at },
+  ]), at)
+
+  assert.equal(recoverInterruptedSubagentRuns({ at: at + 1 }), 1)
+  const recovered = getSubagentRun({ userId, id })
+  assert.equal(recovered.status, 'interrupted')
+  assert.equal(recovered.trace.some((event) => event.type === 'runtime_checkpoint'), false)
+  assert.equal(recovered.trace.at(-1).resumable, true)
+
+  let resumedModelCalls = 0
+  const resumed = await runSubagent({
+    id,
+    userId,
+    type: 'explore',
+    prompt,
+    callModel: async ({ messages }) => {
+      resumedModelCalls += 1
+      assert.ok(messages.some((message) => (
+        message.role === 'tool' && String(message.content).includes('durable evidence')
+      )))
+      return { content: 'resumed and completed', toolCalls: [] }
+    },
+    executeTool: async () => {
+      toolCalls += 1
+      return { ok: true }
+    },
+  })
+  assert.equal(resumed.status, 'completed')
+  assert.equal(resumed.resultText, 'resumed and completed')
+  assert.equal(resumedModelCalls, 1)
+  assert.equal(toolCalls, 1, 'a completed checkpointed tool must not be replayed')
 })

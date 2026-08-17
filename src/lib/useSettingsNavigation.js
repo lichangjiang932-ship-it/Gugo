@@ -2,7 +2,6 @@ import { useCallback } from 'react'
 
 import { useLocation, useNavigate } from './router.jsx'
 import {
-  defaultSettingsSection,
   resolveSettingsNavFromSearch,
   resolveSettingsSectionFromSearch,
   settingsPathForSection,
@@ -11,12 +10,12 @@ import {
 export default function useSettingsNavigation() {
   const location = useLocation()
   const navigate = useNavigate()
-  const activeNav = resolveSettingsNavFromSearch(location.search)
   const activeSection = resolveSettingsSectionFromSearch(location.search)
+  const activeNav = resolveSettingsNavFromSearch(location.search)
 
   const setActiveNav = useCallback((nextNav) => {
     if (nextNav === activeNav) return false
-    navigate(settingsPathForSection(defaultSettingsSection(nextNav)))
+    navigate(settingsPathForSection(nextNav))
     return true
   }, [activeNav, navigate])
 

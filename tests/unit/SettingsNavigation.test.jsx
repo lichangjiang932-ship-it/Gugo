@@ -6,9 +6,8 @@ import { createRoot } from 'react-dom/client'
 
 import { HashRouter } from '../../src/lib/router.jsx'
 import {
-  SETTINGS_PAGE_FILES_PERMISSIONS,
-  SETTINGS_PAGE_MODEL_SEARCH,
   SETTINGS_TAB_FILES,
+  SETTINGS_TAB_MODELS,
   SETTINGS_TAB_PERMISSIONS,
   SETTINGS_TAB_WEB_SEARCH,
 } from '../../src/lib/settingsNavigation.js'
@@ -32,8 +31,8 @@ function NavigationHarness() {
   return <>
     <output data-testid="page">{navigation.activeNav}</output>
     <output data-testid="section">{navigation.activeSection}</output>
-    <button type="button" data-testid="model-page" onClick={() => navigation.setActiveNav(SETTINGS_PAGE_MODEL_SEARCH)}>Models and search</button>
-    <button type="button" data-testid="files-page" onClick={() => navigation.setActiveNav(SETTINGS_PAGE_FILES_PERMISSIONS)}>Files and permissions</button>
+    <button type="button" data-testid="models" onClick={() => navigation.setActiveNav(SETTINGS_TAB_MODELS)}>Models</button>
+    <button type="button" data-testid="files" onClick={() => navigation.setActiveNav(SETTINGS_TAB_FILES)}>Files</button>
     <button type="button" data-testid="web-search" onClick={() => navigation.setActiveSection(SETTINGS_TAB_WEB_SEARCH)}>Web search</button>
     <button type="button" data-testid="permissions" onClick={() => navigation.setActiveSection(SETTINGS_TAB_PERMISSIONS)}>Permissions</button>
   </>
@@ -47,7 +46,7 @@ async function waitForHash(expected) {
   assert.equal(window.location.hash, expected)
 }
 
-test('settings navigation keeps active main and child clicks out of browser history', async () => {
+test('settings navigation gives every module its own history entry and avoids duplicate entries', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
@@ -56,22 +55,24 @@ test('settings navigation keeps active main and child clicks out of browser hist
     await act(async () => root.render(<HashRouter><NavigationHarness /></HashRouter>))
     const initialLength = window.history.length
 
-    await act(async () => rootElement.querySelector('[data-testid="model-page"]').click())
+    await act(async () => rootElement.querySelector('[data-testid="models"]').click())
+    assert.equal(window.location.hash, '#/settings?tab=models')
+    assert.equal(rootElement.querySelector('[data-testid="page"]').textContent, SETTINGS_TAB_MODELS)
     await act(async () => rootElement.querySelector('[data-testid="web-search"]').click())
     assert.equal(window.location.hash, '#/settings?tab=web-search')
-    assert.equal(window.history.length, initialLength)
+    assert.equal(window.history.length, initialLength + 2)
 
-    await act(async () => rootElement.querySelector('[data-testid="files-page"]').click())
+    await act(async () => rootElement.querySelector('[data-testid="files"]').click())
     assert.equal(window.location.hash, '#/settings?tab=files')
-    assert.equal(rootElement.querySelector('[data-testid="page"]').textContent, SETTINGS_PAGE_FILES_PERMISSIONS)
+    assert.equal(rootElement.querySelector('[data-testid="page"]').textContent, SETTINGS_TAB_FILES)
     assert.equal(rootElement.querySelector('[data-testid="section"]').textContent, SETTINGS_TAB_FILES)
-    assert.equal(window.history.length, initialLength + 1)
+    assert.equal(window.history.length, initialLength + 3)
 
     await act(async () => rootElement.querySelector('[data-testid="permissions"]').click())
     assert.equal(window.location.hash, '#/settings?tab=permissions')
-    assert.equal(window.history.length, initialLength + 2)
+    assert.equal(window.history.length, initialLength + 4)
     await act(async () => rootElement.querySelector('[data-testid="permissions"]').click())
-    assert.equal(window.history.length, initialLength + 2)
+    assert.equal(window.history.length, initialLength + 4)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
@@ -87,7 +88,7 @@ test('settings navigation restores sections after refresh and browser back/forwa
     await act(async () => root.render(<HashRouter><NavigationHarness /></HashRouter>))
     assert.equal(rootElement.querySelector('[data-testid="section"]').textContent, SETTINGS_TAB_PERMISSIONS)
 
-    await act(async () => rootElement.querySelector('[data-testid="model-page"]').click())
+    await act(async () => rootElement.querySelector('[data-testid="models"]').click())
     assert.equal(window.location.hash, '#/settings?tab=models')
 
     await act(async () => {
@@ -100,12 +101,12 @@ test('settings navigation restores sections after refresh and browser back/forwa
       window.history.forward()
       await waitForHash('#/settings?tab=models')
     })
-    assert.equal(rootElement.querySelector('[data-testid="page"]').textContent, SETTINGS_PAGE_MODEL_SEARCH)
+    assert.equal(rootElement.querySelector('[data-testid="page"]').textContent, SETTINGS_TAB_MODELS)
 
     await act(async () => root.unmount())
     root = createRoot(rootElement)
     await act(async () => root.render(<HashRouter><NavigationHarness /></HashRouter>))
-    assert.equal(rootElement.querySelector('[data-testid="page"]').textContent, SETTINGS_PAGE_MODEL_SEARCH)
+    assert.equal(rootElement.querySelector('[data-testid="page"]').textContent, SETTINGS_TAB_MODELS)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

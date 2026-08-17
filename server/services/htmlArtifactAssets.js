@@ -1,6 +1,8 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { JSDOM } from 'jsdom'
+import sharp from 'sharp'
 
 const BUNDLE_VERSION = 1
 const BUNDLE_ROOT_NAME = '.html-artifact-assets'
@@ -13,7 +15,28 @@ const MAX_OFFLINE_HTML_BYTES = 128 * 1024 * 1024
 const HASH_CHUNK_BYTES = 1024 * 1024
 const ASSET_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
 const SHA256_PATTERN = /^[a-f0-9]{64}$/
-const MANAGED_ASSET_URI = /gugo-asset:\/\/([A-Za-z0-9_-]{1,64})/g
+const MANAGED_ASSET_VALUE = /^gugo-asset:\/\/([A-Za-z0-9_-]{1,64})$/
+const CSS_ASSET_URL = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^\s)'";]+))\s*\)/gi
+const HTML_RESOURCE_ATTRIBUTES = Object.freeze({
+  audio: ['src'],
+  embed: ['src'],
+  img: ['src', 'srcset'],
+  input: ['src'],
+  link: ['href'],
+  object: ['data'],
+  source: ['src', 'srcset'],
+  track: ['src'],
+  video: ['src', 'poster'],
+  image: ['href', 'xlink:href'],
+})
+const SHARP_FORMAT_BY_EXTENSION = Object.freeze({
+  '.jpg': 'jpeg',
+  '.jpeg': 'jpeg',
+  '.png': 'png',
+  '.gif': 'gif',
+  '.webp': 'webp',
+  '.avif': 'heif',
+})
 
 const MIME_BY_EXTENSION = Object.freeze({
   '.png': 'image/png',
@@ -153,7 +176,67 @@ function hashFileSync(filePath) {
   return hash.digest('hex')
 }
 
-function copyVerifiedAsset({ id, sourcePath, stageDirectory }) {
+function assertDecodableBmp(filePath) {
+  const descriptor = fs.openSync(filePath, 'r')
+  const header = Buffer.alloc(138)
+  let size
+  let bytesRead
+  try {
+    size = fs.fstatSync(descriptor).size
+    bytesRead = fs.readSync(descriptor, header, 0, header.length, 0)
+  } finally {
+    fs.closeSync(descriptor)
+  }
+  if (bytesRead < 54 || header.subarray(0, 2).toString('ascii') !== 'BM') throw new Error('invalid BMP header')
+  const declaredSize = header.readUInt32LE(2)
+  const pixelOffset = header.readUInt32LE(10)
+  const dibSize = header.readUInt32LE(14)
+  const width = header.readInt32LE(18)
+  const height = header.readInt32LE(22)
+  const planes = header.readUInt16LE(26)
+  const bitsPerPixel = header.readUInt16LE(28)
+  const compression = header.readUInt32LE(30)
+  if (declaredSize !== size || dibSize < 40 || width < 1 || height === 0 || planes !== 1
+    || ![1, 4, 8, 16, 24, 32].includes(bitsPerPixel) || ![0, 3, 6].includes(compression)
+    || pixelOffset < 14 + dibSize || pixelOffset > size) {
+    throw new Error('invalid BMP metadata')
+  }
+  const rowBytes = Math.ceil((bitsPerPixel * width) / 32) * 4
+  const pixelBytes = rowBytes * Math.abs(height)
+  if (!Number.isSafeInteger(pixelBytes) || pixelBytes < 1 || pixelOffset + pixelBytes > size) {
+    throw new Error('truncated BMP pixel data')
+  }
+}
+
+async function assertDecodableImage(filePath, extension, id) {
+  if (!MIME_BY_EXTENSION[extension]?.startsWith('image/')) return
+  try {
+    if (extension === '.bmp') {
+      assertDecodableBmp(filePath)
+      return
+    }
+    const options = { failOn: 'error', animated: false, sequentialRead: true }
+    const metadata = await sharp(filePath, options).metadata()
+    if (metadata.format !== SHARP_FORMAT_BY_EXTENSION[extension]
+      || !Number.isInteger(metadata.width) || metadata.width < 1
+      || !Number.isInteger(metadata.height) || metadata.height < 1) {
+      throw new Error('decoded image format or dimensions do not match the file extension')
+    }
+    // Force libvips to decode pixels as well as parse container metadata. A
+    // one-pixel output keeps the validation bounded while failOn:error rejects
+    // truncated/corrupt input instead of accepting a plausible magic header.
+    await sharp(filePath, options)
+      .resize({ width: 1, height: 1, fit: 'inside', withoutEnlargement: true })
+      .raw()
+      .toBuffer()
+  } catch (cause) {
+    const error = assetError('HTML_ASSET_CONTENT_INVALID', `HTML image cannot be decoded or does not match its file extension: ${id}`)
+    error.cause = cause
+    throw error
+  }
+}
+
+async function copyVerifiedAsset({ id, sourcePath, stageDirectory }) {
   let canonical
   try {
     canonical = fs.realpathSync(String(sourcePath || ''))
@@ -177,14 +260,118 @@ function copyVerifiedAsset({ id, sourcePath, stageDirectory }) {
   if (!copied.isFile() || copied.size !== sourceStat.size) {
     throw assetError('HTML_ASSET_COPY_FAILED', `HTML asset copy verification failed: ${id}`)
   }
+  await assertDecodableImage(target, extension, id)
   const sha256 = hashFileSync(target)
   return { id, filename, mimeType, size: copied.size, sha256 }
 }
 
 export function htmlArtifactAssetIds(source = '') {
-  const ids = [...new Set([...String(source).matchAll(MANAGED_ASSET_URI)].map((match) => match[1]))]
-  MANAGED_ASSET_URI.lastIndex = 0
-  return ids
+  const ids = new Set()
+  const addValue = (value) => {
+    const match = String(value || '').trim().match(MANAGED_ASSET_VALUE)
+    if (match) ids.add(match[1])
+  }
+  const addCssUrls = (css) => {
+    const sourceCss = String(css || '').replace(/\/\*[\s\S]*?\*\//g, '')
+    for (const match of sourceCss.matchAll(CSS_ASSET_URL)) addValue(match[1] ?? match[2] ?? match[3])
+    CSS_ASSET_URL.lastIndex = 0
+  }
+  const document = new JSDOM(String(source || '')).window.document
+  for (const [tagName, attributes] of Object.entries(HTML_RESOURCE_ATTRIBUTES)) {
+    for (const element of document.querySelectorAll(tagName)) {
+      if (tagName === 'link' && !/^(?:icon|apple-touch-icon|mask-icon)$/i.test(element.getAttribute('rel') || '')) continue
+      if (tagName === 'input' && String(element.getAttribute('type') || '').toLowerCase() !== 'image') continue
+      for (const attribute of attributes) {
+        const value = element.getAttribute(attribute)
+        if (!value) continue
+        if (attribute === 'srcset') {
+          for (const candidate of value.split(',')) addValue(candidate.trim().split(/\s+/, 1)[0])
+        } else {
+          addValue(value)
+        }
+      }
+    }
+  }
+  for (const element of document.querySelectorAll('[style]')) addCssUrls(element.getAttribute('style'))
+  for (const element of document.querySelectorAll('style')) addCssUrls(element.textContent)
+  return [...ids]
+}
+
+function isDefinitelyHidden(element) {
+  for (let current = element; current; current = current.parentElement) {
+    if (String(current.tagName || '').toLowerCase() === 'template') return true
+    if (current.hasAttribute?.('hidden')) return true
+    const style = current.style
+    if (!style) continue
+    if (style.display === 'none') return true
+    if (style.visibility === 'hidden' || style.visibility === 'collapse') return true
+    if (style.contentVisibility === 'hidden') return true
+    if (String(style.opacity || '').trim() !== '' && Number(style.opacity) === 0) return true
+  }
+  return false
+}
+
+/**
+ * Return managed image ids that occupy a visible browser resource slot.
+ * Complete gallery validation uses this stricter view so a favicon, template,
+ * hidden node, or unmatched CSS selector cannot stand in for a requested image.
+ */
+export function htmlArtifactVisibleImageAssetIds(source = '') {
+  const ids = new Set()
+  const addValue = (value) => {
+    const match = String(value || '').trim().match(MANAGED_ASSET_VALUE)
+    if (match) ids.add(match[1])
+  }
+  const addSrcset = (value) => {
+    for (const candidate of String(value || '').split(',')) addValue(candidate.trim().split(/\s+/, 1)[0])
+  }
+  const addCssUrls = (css) => {
+    const sourceCss = String(css || '').replace(/\/\*[\s\S]*?\*\//g, '')
+    for (const match of sourceCss.matchAll(CSS_ASSET_URL)) addValue(match[1] ?? match[2] ?? match[3])
+    CSS_ASSET_URL.lastIndex = 0
+  }
+  const document = new JSDOM(String(source || '')).window.document
+  const visibleElements = (selector) => {
+    try {
+      return [...document.querySelectorAll(selector)].filter((element) => !isDefinitelyHidden(element))
+    } catch {
+      return []
+    }
+  }
+
+  for (const element of visibleElements('img')) {
+    addValue(element.getAttribute('src'))
+    addSrcset(element.getAttribute('srcset'))
+  }
+  for (const element of visibleElements('picture source')) {
+    addValue(element.getAttribute('src'))
+    addSrcset(element.getAttribute('srcset'))
+  }
+  for (const element of visibleElements('video')) addValue(element.getAttribute('poster'))
+  for (const element of visibleElements('input[type="image"], embed, object, svg image')) {
+    addValue(element.getAttribute('src'))
+    addValue(element.getAttribute('data'))
+    addValue(element.getAttribute('href'))
+    addValue(element.getAttribute('xlink:href'))
+  }
+  for (const element of visibleElements('[style]')) addCssUrls(element.getAttribute('style'))
+
+  const visitCssRules = (rules) => {
+    for (const rule of [...(rules || [])]) {
+      if (rule.selectorText && visibleElements(rule.selectorText).length > 0) {
+        addCssUrls(rule.style?.cssText || '')
+      }
+      if (rule.cssRules) visitCssRules(rule.cssRules)
+    }
+  }
+  for (const sheet of [...document.styleSheets]) {
+    try {
+      visitCssRules(sheet.cssRules)
+    } catch {
+      // Uninspectable styles cannot prove that a managed gallery image is visible.
+    }
+  }
+  return [...ids]
 }
 
 /**
@@ -192,7 +379,7 @@ export function htmlArtifactAssetIds(source = '') {
  * asset with the same id; omitted ids may be retained only from the owned
  * artifact being replaced.
  */
-export function stageHtmlArtifactAssets({
+export async function stageHtmlArtifactAssets({
   artifactDirectory,
   artifactId,
   parentFilename,
@@ -223,7 +410,7 @@ export function stageHtmlArtifactAssets({
       if (!sourcePath) {
         throw assetError('HTML_ASSET_UNDECLARED', `HTML references an unavailable managed asset: ${id}`)
       }
-      const asset = copyVerifiedAsset({ id, sourcePath, stageDirectory })
+      const asset = await copyVerifiedAsset({ id, sourcePath, stageDirectory })
       totalBytes += asset.size
       if (totalBytes > MAX_BUNDLE_BYTES) {
         throw assetError('HTML_ASSET_BUNDLE_TOO_LARGE', 'HTML media bundle exceeds the 2 GB limit')

@@ -387,12 +387,16 @@ test('model budget wrap-up filters source from terminal text, events, and checkp
   assert.equal(modelCalls, 2)
   assert.equal(result.incomplete, true)
   assert.equal(result.budgetExceeded, true)
-  assert.match(result.text, /已隐藏模型异常收尾时返回的代码内容/)
+  assert.equal(result.text, '任务尚未完成。请重试以继续；若仍失败，请检查模型和工具调用支持。')
   assert.equal(result.text.includes('```'), false)
   assert.equal(result.text.includes('请自行保存并运行'), false)
   assert.equal(published.some((text) => text.includes('```') || text.includes('请自行保存并运行')), false)
   assert.equal(phases.some((event) => String(event.content || '').includes('copy me')), false)
   assert.equal(checkpoints.at(-1)?.final?.text, result.text)
+  assert.equal(checkpoints.some((state) => (state.messages || []).some((message) => (
+    String(message.content || '').includes('copy me')
+    || String(message.content || '').includes('请自行保存并运行')
+  ))), false)
 })
 
 test('max-iteration wrap-up filters source from terminal text, events, and checkpoints', async () => {
@@ -444,7 +448,7 @@ test('max-iteration wrap-up filters source from terminal text, events, and check
 
   assert.equal(modelCalls, 2)
   assert.deepEqual(result.artifactIds, ['max-iteration-docx-artifact'])
-  assert.match(result.text, /已隐藏模型异常收尾时返回的代码内容/)
+  assert.equal(result.text, '任务尚未通过最终验证，未通过验证的文件不会显示或交付。请重试以继续。')
   assert.equal(result.text.includes('<!doctype html>'), false)
   assert.equal(result.text.includes('请自行保存并运行'), false)
   assert.equal(phases.some((event) => String(event.content || '').includes('copy me')), false)
@@ -815,8 +819,7 @@ test('runToolsLoop rejects malformed artifact args without executing or claiming
   const job = { id: 'job-tools-3', userId: TEST_USER, title: 'bad args' }
   const step = { id: 'step-3', kind: 'execute' }
   let executeCount = 0
-  await assert.rejects(
-    runToolsLoop({
+  const result = await runToolsLoop({
       job, step,
       messages: [{ role: 'user', content: '请生成一个测试用 pptx' }],
       runModel,
@@ -825,11 +828,13 @@ test('runToolsLoop rejects malformed artifact args without executing or claiming
         executeCount += 1
         return { ok: true }
       },
-    }),
-    (error) => error?.code === 'ARTIFACT_NOT_CREATED',
-  )
+    })
   assert.equal(executeCount, 0, '损坏参数绝不能静默变成 {} 后落到执行器')
   assert.equal(JSON.parse(toolResult.content).code, 'invalid_tool_arguments')
+  assert.equal(result.incomplete, true)
+  assert.equal(result.reason, 'artifact_delivery_not_converged')
+  assert.deepEqual(result.deliveryArtifactIds, [])
+  assert.doesNotMatch(result.text, /The requested file was not created|ARTIFACT_NOT_CREATED/)
 })
 
 test('job tool loop can execute connected_app_list with the job owner', async () => {
