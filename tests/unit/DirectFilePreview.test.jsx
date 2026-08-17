@@ -175,6 +175,62 @@ test('verified local HTML uses a scoped preview URL so relative sidecar assets k
   }
 })
 
+test('verified local HTML offers an in-place retry after a persistent 405 and keeps the formal file URL', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  const originalFetch = globalThis.fetch
+  const requests = []
+  globalThis.fetch = async (input, init = {}) => {
+    requests.push({ input: String(input), init })
+    if (init.method === 'DELETE') return { ok: true, status: 204 }
+    if (String(input) === '/api/health') {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ capabilities: { localHtmlPreviewSession: 1 } }),
+      }
+    }
+    if (requests.filter((request) => request.init.method === 'POST').length === 1) {
+      return { ok: false, status: 405 }
+    }
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ url: '/api/local-files/previews/recovered-ticket/gallery.html' }),
+    }
+  }
+  try {
+    await act(async () => root.render(
+      <DirectFilePreview
+        file={{ filename: 'gallery.html', type: 'html' }}
+        url="/api/local-files/verified/formal-gallery?turnId=turn-gallery&preview=1"
+        t={(key) => key}
+      />,
+    ))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    assert.match(rootElement.textContent, /chatPreview\.localHtmlServiceUnavailable/)
+    const retry = [...rootElement.querySelectorAll('button')]
+      .find((button) => button.textContent.includes('chatPreview.retryPreview'))
+    assert.ok(retry)
+
+    await act(async () => retry.click())
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    const frame = rootElement.querySelector('iframe')
+    assert.ok(frame)
+    assert.equal(frame.getAttribute('src'), '/api/local-files/previews/recovered-ticket/gallery.html')
+    assert.equal(requests.filter((request) => request.init.method === 'POST').length, 2)
+    assert.ok(requests
+      .filter((request) => request.init.method === 'POST')
+      .every((request) => request.input === '/api/local-files/verified/formal-gallery/preview-session?turnId=turn-gallery'))
+  } finally {
+    await act(async () => root.unmount())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    globalThis.fetch = originalFetch
+    dom.window.close()
+  }
+})
+
 test('verified local HTML revokes a preview ticket that arrives after the sidebar closes', async () => {
   const dom = setupDom()
   const rootElement = dom.window.document.getElementById('root')

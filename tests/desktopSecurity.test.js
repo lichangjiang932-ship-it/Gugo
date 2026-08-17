@@ -9,9 +9,11 @@ import {
 } from '../desktop/security.js'
 import {
   DEFAULT_DESKTOP_PORT,
+  ensureDesktopRuntimeConfigFile,
   resolveDesktopDataPaths,
   resolveDesktopPluginRoots,
   resolveDesktopPort,
+  resolveDesktopRuntimeConfigPath,
   waitForDesktopRuntimeFiles,
 } from '../desktop/runtime.js'
 
@@ -55,6 +57,32 @@ test('desktop runtime keeps a stable valid port and isolated data paths', () => 
     database: path.resolve('C:/Users/test/AppData/Roaming/Gugo/server-data/app.db'),
     artifacts: path.resolve('C:/Users/test/AppData/Roaming/Gugo/server-data/artifacts'),
   })
+})
+
+test('desktop runtime config is a fixed regular file inside application data', () => {
+  const userData = 'C:/Users/test/AppData/Roaming/Gugo'
+  const expected = path.join(path.resolve(userData, 'server-data'), 'runtime.json')
+  assert.equal(resolveDesktopRuntimeConfigPath(userData), expected)
+  assert.throws(() => resolveDesktopRuntimeConfigPath(''), /user data path is required/)
+
+  const calls = []
+  assert.equal(ensureDesktopRuntimeConfigFile({
+    userData,
+    mkdirSync: (...args) => calls.push(['mkdir', ...args]),
+    writeFileSync: (...args) => calls.push(['write', ...args]),
+    lstatSync: () => ({ isFile: () => true, isSymbolicLink: () => false }),
+  }), expected)
+  assert.deepEqual(calls[0], ['mkdir', path.dirname(expected), { recursive: true }])
+  assert.equal(calls[1][0], 'write')
+  assert.equal(calls[1][1], expected)
+  assert.equal(calls[1][3].flag, 'wx')
+
+  assert.throws(() => ensureDesktopRuntimeConfigFile({
+    userData,
+    mkdirSync: () => {},
+    writeFileSync: () => { throw Object.assign(new Error('exists'), { code: 'EEXIST' }) },
+    lstatSync: () => ({ isFile: () => true, isSymbolicLink: () => true }),
+  }), (error) => error?.code === 'INVALID_RUNTIME_CONFIG_FILE')
 })
 
 test('desktop plugin discovery only returns existing, de-duplicated roots', () => {

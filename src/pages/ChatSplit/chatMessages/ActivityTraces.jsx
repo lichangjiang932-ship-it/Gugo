@@ -9,7 +9,7 @@ import LiveElapsed from '../../../components/LiveElapsed.jsx'
 
 const LIVE_COMMAND_TOOLS = new Set(['shell', 'bash', 'bash_exec', 'run_command', 'bash_background', 'docker_exec'])
 
-function shouldAutoExpandToolCall(call) {
+function isLiveCommandCall(call) {
   return call?.status === 'running' && LIVE_COMMAND_TOOLS.has(call?.name)
 }
 
@@ -25,7 +25,7 @@ export function ToolCallTrace({ calls = [], stepOffset = 0, artifacts = [], onOp
   const normalizedCalls = Array.isArray(calls) ? calls : []
   const [showAll, setShowAll] = useState(false)
   const [expandedCallKey, setExpandedCallKey] = useState(null)
-  const [collapsedDefaultCallKey, setCollapsedDefaultCallKey] = useState(null)
+  const [dismissedAutoKey, setDismissedAutoKey] = useState(null)
   const visibleLimit = 4
   const collapsedEntries = (() => {
     const visibleIndexes = new Set()
@@ -48,13 +48,12 @@ export function ToolCallTrace({ calls = [], stepOffset = 0, artifacts = [], onOp
   const running = normalizedCalls.some((call) => call.status === 'running')
   const failed = normalizedCalls.some((call) => call.status === 'error')
   const cancelled = normalizedCalls.some((call) => call.status === 'cancelled')
-  const defaultExpandedIndex = normalizedCalls.findLastIndex(shouldAutoExpandToolCall)
-  const defaultExpandedCallKey = defaultExpandedIndex >= 0
-    ? stableCallKey(normalizedCalls[defaultExpandedIndex], normalizedCalls, defaultExpandedIndex)
+  const autoOpenIndex = normalizedCalls.findLastIndex(isLiveCommandCall)
+  const autoOpenKey = autoOpenIndex >= 0
+    ? stableCallKey(normalizedCalls[autoOpenIndex], normalizedCalls, autoOpenIndex)
     : null
-  const autoExpandedCallKey = defaultExpandedCallKey !== collapsedDefaultCallKey ? defaultExpandedCallKey : null
-  const effectiveExpandedCallKey = autoExpandedCallKey || expandedCallKey
-
+  const effectiveAutoKey = autoOpenKey !== dismissedAutoKey ? autoOpenKey : null
+  const effectiveExpandedCallKey = effectiveAutoKey || expandedCallKey
   if (normalizedCalls.length === 0) return null
 
   return (
@@ -99,11 +98,11 @@ export function ToolCallTrace({ calls = [], stepOffset = 0, artifacts = [], onOp
                     onToggle={() => {
                       if (effectiveExpandedCallKey === callKey) {
                         setExpandedCallKey(null)
-                        if (defaultExpandedCallKey === callKey) setCollapsedDefaultCallKey(callKey)
+                        if (autoOpenKey === callKey) setDismissedAutoKey(callKey)
                         return
                       }
                       setExpandedCallKey(callKey)
-                      setCollapsedDefaultCallKey(defaultExpandedCallKey)
+                      setDismissedAutoKey(autoOpenKey)
                     }}
                   />}
             </div>

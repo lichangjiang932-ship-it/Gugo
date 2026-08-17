@@ -39,8 +39,13 @@ export default function SubagentCard({ call, stepNumber }) {
       <div className="chat-tool-step-marker" aria-label={`Step ${stepNumber}`}>{stepNumber}</div>
       <div className="chat-tool-step-body">
         <header className="chat-tool-step-header">
-          <span className="chat-tool-icon"><Bot aria-hidden="true" /></span>
-          <span className="chat-tool-label">{`Subagent: ${args.subagent_type || 'general'}`}</span>
+          <span className="chat-tool-identity">
+            <span className="chat-tool-icon"><Bot aria-hidden="true" /></span>
+            <span className="chat-tool-kicker">Tool call</span>
+            <span aria-hidden="true">·</span>
+            <span className="chat-tool-label">{`Agent:${args.subagent_type || 'general'}`}</span>
+            <span aria-hidden="true">·</span>
+          </span>
           <span className="chat-tool-summary" title={label}>{label}</span>
           <span className="chat-tool-status">
             <StatusIcon className={call.status === 'running' ? 'animate-spin' : ''} aria-hidden="true" />
@@ -54,7 +59,7 @@ export default function SubagentCard({ call, stepNumber }) {
             <pre tabIndex="0">{formatValue(args.prompt, '(empty)')}</pre>
           </details>
           {(call.status === 'success' || call.status === 'error') && (
-            <details className="chat-tool-details" open={call.status === 'error'}>
+            <details className="chat-tool-details">
               <summary><ChevronDown aria-hidden="true" /><span>Result</span></summary>
               <pre tabIndex="0">{formatValue(resultValue, '(empty)')}</pre>
             </details>

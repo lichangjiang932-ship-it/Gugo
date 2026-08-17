@@ -36,6 +36,7 @@ function stableTimelineSegments(content, toolCalls) {
 export default function MessageRow({
   msg,
   rowKey,
+  turnIndex,
   generatingMessageId,
   lang,
   onExpandCompaction,
@@ -108,15 +109,16 @@ export default function MessageRow({
     <motion.div
       key={rowKey}
       id={msg.id ? `message-${msg.id}` : undefined}
-      initial={{ opacity: 0, y: 12 }}
+      data-chat-turn-index={msg.role === 'user' ? turnIndex : undefined}
+      initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.2 }}
-      className={`group/message flex w-full py-1.5 sm:py-2 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+      className={`group/message flex w-full py-1 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
     >
       <div className={collapseArtifact
         ? 'w-full max-w-[840px]'
         : msg.role === 'assistant'
-          ? 'chat-assistant-message w-full max-w-[840px] text-[15px] leading-7'
+          ? 'chat-assistant-message w-full max-w-[840px] text-[15px] leading-[1.6]'
           : 'flex max-w-[min(720px,86%)] flex-col items-end'}>
         {msg.role === 'assistant' ? (
           collapseArtifact ? (
@@ -325,10 +327,11 @@ function ExecutionDisclosure({ children, hasExecution, msg, running, t }) {
     : null
   const startedAt = Number(msg.meta?.turnStartedAt || msg.timestamp) || fallbackStartedAt
   const elapsed = useElapsedMilliseconds({ elapsedMs, running, startedAt })
-  const label = t('chatMessages.elapsed', { value: formatTaskDuration(elapsed, t) })
+  const elapsedLabel = t('chatMessages.elapsed', { value: formatTaskDuration(elapsed, t) })
+  const label = `${t('chatMessages.execution')} · ${elapsedLabel}`
 
   if (!hasExecution) {
-    return <div className="chat-task-duration" data-testid="task-duration-header">{label}</div>
+    return <div className="chat-task-duration" data-testid="task-duration-header">{elapsedLabel}</div>
   }
 
   return (
@@ -452,8 +455,8 @@ function UserContent({ attachments, command, content, onOpenAttachment, t }) {
     : displayContent
 
   return (
-    <div data-testid="user-message-bubble" className={`chat-user-message max-w-full rounded-2xl rounded-br-md border bg-paper-2 px-3.5 py-2 text-[14px] leading-6 ${command?.command ? 'chat-user-skill-message border-ink/20' : 'border-ink/10'}`}>
-      {command?.command && <span data-testid="sent-skill-command" className="mb-1.5 inline-flex h-6 items-center rounded-md bg-ink px-2 font-mono text-xs font-medium leading-none text-paper shadow-sm">{command.command}</span>}
+    <div data-testid="user-message-bubble" className={`chat-user-message max-w-full text-[14px] leading-[1.6] ${command?.command ? 'chat-user-skill-message' : ''}`}>
+      {command?.command && <span data-testid="sent-skill-command" className="mb-1.5 inline-flex h-6 items-center rounded-md bg-ink/5 px-2 font-mono text-xs font-medium leading-none text-ink-soft">{command.command}</span>}
       {displayContent && (
         <div className={command?.command ? 'text-ink' : ''}>
           <span
@@ -524,7 +527,7 @@ function InlineDirectoryRequestCard({ msg, onAuthorize, t }) {
 
 function UserMeta({ lang, msg, t }) {
   return (
-    <div className="mt-1 flex h-4 items-center justify-end gap-3 pr-1 text-[10px] leading-none text-ink-fade">
+    <div className="mt-0.5 flex h-4 items-center justify-end gap-3 text-[10px] leading-none text-ink-fade">
       <span data-testid="user-message-time" className="chat-message-meta pointer-events-none opacity-0 transition-opacity group-hover/message:pointer-events-auto group-hover/message:opacity-100 group-focus-within/message:pointer-events-auto group-focus-within/message:opacity-100" title={formatMessageDateTime(msg.timestamp, lang)}>{formatMessageTime(msg.timestamp, lang)}</span>
       {!msg.meta?.streaming && (
         <div className="chat-message-actions pointer-events-none flex items-center gap-3 opacity-0 transition-opacity group-hover/message:pointer-events-auto group-hover/message:opacity-100 group-focus-within/message:pointer-events-auto group-focus-within/message:opacity-100">
@@ -537,7 +540,7 @@ function UserMeta({ lang, msg, t }) {
 
 function AssistantMeta({ isCurrentStreamingMessage, lang, msg, showArtifactPreview, t }) {
   return (
-    <div className={`${showArtifactPreview ? 'mt-2 px-2' : 'mt-4'} flex flex-wrap items-center gap-2 text-[11px] text-ink-fade/85`}>
+    <div className={`${showArtifactPreview ? 'mt-2 px-2' : 'mt-1'} flex flex-wrap items-center gap-2 text-[11px] text-ink-fade/85`}>
       <div data-testid="assistant-message-meta" className="chat-message-meta pointer-events-none flex items-center gap-2 opacity-0 transition-opacity group-hover/message:pointer-events-auto group-hover/message:opacity-100 group-focus-within/message:pointer-events-auto group-focus-within/message:opacity-100">
         <span title={formatMessageDateTime(msg.timestamp, lang)}>{formatMessageTime(msg.timestamp, lang)}</span>
         {msg.meta?.type === 'model_reply' && <span>{t('chatMessages.model', { name: msg.meta.modelName })}</span>}

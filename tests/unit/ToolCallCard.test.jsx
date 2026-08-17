@@ -32,7 +32,7 @@ test('planning and permission tools show human summaries instead of raw JSON', (
   const directoryMarkup = renderToolCall('request_directory', {
     path: 'D:\\work\\report', access_mode: 'read_write', purpose: '保存最终文件',
   })
-  assert.match(directoryMarkup, /Request directory/)
+  assert.match(directoryMarkup, /request_directory/)
   assert.match(directoryMarkup, /D:\\work\\report/)
 
   const deliveryMarkup = renderToolCall('set_deliverables', { artifact_ids: ['pdf-1'] })
@@ -45,21 +45,19 @@ test('running tools expose a live elapsed clock', () => {
   assert.match(renderToolCall('bash_exec', { command: 'npm test' }), /data-testid="live-elapsed"/)
 })
 
-test('PDF generation uses a readable execution label and title summary', () => {
+test('PDF generation uses the tool name and a readable title summary', () => {
   const markup = renderToolCall('create_pdf', { title: 'Quarterly report' })
-  assert.match(markup, /Create PDF/)
+  assert.match(markup, /create_pdf/)
   assert.match(markup, /Quarterly report/)
 })
 
-test('execution rows emphasize concrete paths and commands without a visible action label', () => {
+test('execution rows show a compact tool-call label with concrete paths and commands', () => {
   const readMarkup = renderToolCall('read_file', { path: 'D:\\work\\report.txt' })
   const commandMarkup = renderToolCall('run_command', { command: 'npm test' })
   assert.match(readMarkup, /D:\\work\\report\.txt/)
   assert.match(commandMarkup, /npm test/)
-  assert.doesNotMatch(readMarkup, /chat-tool-label/)
-  assert.doesNotMatch(commandMarkup, /chat-tool-label/)
-  assert.match(readMarkup, /<span class="sr-only">Read file<\/span>/)
-  assert.match(commandMarkup, /<span class="sr-only">Run command<\/span>/)
+  assert.match(readMarkup, />Tool call<\/span>[\s\S]*?>read_file<\/span>/)
+  assert.match(commandMarkup, />Tool call<\/span>[\s\S]*?>run_command<\/span>/)
   assert.doesNotMatch(readMarkup, /title="Read file"/)
   assert.doesNotMatch(commandMarkup, /title="Run command"/)
 })
@@ -277,7 +275,7 @@ test('failed command keeps arguments and result in one expanded card whose copy 
   }
 })
 
-test('running commands default open with arguments and live output while remaining controllable', () => {
+test('running commands default closed and reveal arguments and live output only when expanded', () => {
   const defaultMarkup = renderToStaticMarkup(
     <I18nProvider>
       <ToolCallCard call={{
@@ -289,14 +287,13 @@ test('running commands default open with arguments and live output while remaini
       }} stepNumber={1} />
     </I18nProvider>,
   )
-  assert.match(defaultMarkup, /data-testid="tool-step-details"/)
+  assert.doesNotMatch(defaultMarkup, /data-testid="tool-step-details"/)
   assert.match(defaultMarkup, /npm test/)
-  assert.match(defaultMarkup, /data-testid="tool-live-output"/)
-  assert.match(defaultMarkup, /42 tests passed/)
-  assert.match(defaultMarkup, /data-testid="tool-output-replay-note"/)
-  assert.match(defaultMarkup, /Live output is not replayed after reconnect/)
+  assert.doesNotMatch(defaultMarkup, /data-testid="tool-live-output"/)
+  assert.doesNotMatch(defaultMarkup, /42 tests passed/)
+  assert.doesNotMatch(defaultMarkup, /tool-output-replay-note/)
 
-  const collapsedMarkup = renderToStaticMarkup(
+  const expandedMarkup = renderToStaticMarkup(
     <I18nProvider>
       <ToolCallCard call={{
         name: 'bash_exec',
@@ -304,11 +301,13 @@ test('running commands default open with arguments and live output while remaini
         status: 'running',
         outputReplay: 'live_only',
         liveOutput: 'starting suite\nPASS activity stream\n42 tests passed',
-      }} stepNumber={1} expanded={false} />
+      }} stepNumber={1} expanded />
     </I18nProvider>,
   )
-  assert.doesNotMatch(collapsedMarkup, /data-testid="tool-step-details"/)
-  assert.doesNotMatch(collapsedMarkup, /42 tests passed/)
-  assert.doesNotMatch(collapsedMarkup, /tool-output-replay-note/)
+  assert.match(expandedMarkup, /data-testid="tool-step-details"/)
+  assert.match(expandedMarkup, /data-testid="tool-live-output"/)
+  assert.match(expandedMarkup, /42 tests passed/)
+  assert.match(expandedMarkup, /tool-output-replay-note/)
+  assert.match(expandedMarkup, /Live output is not replayed after reconnect/)
   assert.doesNotMatch(defaultMarkup, /<details/)
 })

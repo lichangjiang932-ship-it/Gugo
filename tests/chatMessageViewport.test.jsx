@@ -15,9 +15,9 @@ function setupDom() {
   return dom
 }
 
-function Harness({ messages, metrics, onElement }) {
+function Harness({ messages, metrics, onElement, turns = [] }) {
   const viewport = useChatMessageViewport({ messages })
-  return <div ref={(element) => {
+  return <div data-active-turn={viewport.activeTurnIndex ?? ''} ref={(element) => {
     if (!element) return
     if (!element.__viewportMetrics) {
       element.__viewportMetrics = metrics
@@ -35,7 +35,9 @@ function Harness({ messages, metrics, onElement }) {
     element.__viewportMetrics = metrics
     viewport.bindContainer(element)
     onElement(element)
-  }} />
+  }}>
+    {turns.map((turnIndex) => <div key={turnIndex} data-chat-turn-index={turnIndex} />)}
+  </div>
 }
 
 const streamingMessage = {
@@ -92,6 +94,51 @@ test('directory clarification does not pull a user who deliberately scrolled upw
     metrics.height = 1200
     await act(async () => root.render(<Harness messages={[pausedMessage()]} metrics={metrics} onElement={(value) => { element = value }} />))
     assert.equal(element.scrollTop, 200)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('scrolling updates the active conversation turn from visible message anchors', async () => {
+  const dom = setupDom()
+  const root = createRoot(document.getElementById('root'))
+  const metrics = { height: 1200, clientHeight: 400 }
+  const messages = [
+    { id: 'user-1', role: 'user', content: 'First request' },
+    { id: 'assistant-1', role: 'assistant', content: 'First answer' },
+    { id: 'user-2', role: 'user', content: 'Second request' },
+    { id: 'assistant-2', role: 'assistant', content: 'Second answer' },
+  ]
+  let element
+
+  try {
+    await act(async () => root.render(
+      <Harness
+        messages={messages}
+        metrics={metrics}
+        onElement={(value) => { element = value }}
+        turns={[0, 2]}
+      />,
+    ))
+
+    const anchors = [...element.querySelectorAll('[data-chat-turn-index]')]
+    element.getBoundingClientRect = () => ({ top: 0 })
+    anchors[0].getBoundingClientRect = () => ({ top: 40 })
+    anchors[1].getBoundingClientRect = () => ({ top: 360 })
+    await act(async () => {
+      element.scrollTop = 120
+      element.dispatchEvent(new dom.window.Event('scroll'))
+    })
+    assert.equal(element.dataset.activeTurn, '0')
+
+    anchors[0].getBoundingClientRect = () => ({ top: -280 })
+    anchors[1].getBoundingClientRect = () => ({ top: 80 })
+    await act(async () => {
+      element.scrollTop = 520
+      element.dispatchEvent(new dom.window.Event('scroll'))
+    })
+    assert.equal(element.dataset.activeTurn, '2')
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

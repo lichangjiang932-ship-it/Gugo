@@ -21,11 +21,6 @@ const ICONS = {
 
 const FILE_PATH_SUMMARY_TOOLS = new Set(['read_file', 'write_file', 'edit_file'])
 const COMMAND_ARTIFACT_TOOLS = new Set(['bash_exec', 'run_command'])
-const LIVE_COMMAND_TOOLS = new Set(['shell', 'bash', 'bash_exec', 'run_command', 'bash_background', 'docker_exec'])
-
-function shouldAutoExpandToolCall(call) {
-  return call?.status === 'running' && LIVE_COMMAND_TOOLS.has(call?.name)
-}
 
 function isManagedArtifact(artifact) {
   return Boolean(artifact && typeof artifact === 'object' && String(artifact.id || '').trim() && managedArtifactHref(artifact))
@@ -121,14 +116,20 @@ function ToolCallCard({ call, stepNumber, artifacts = [], onOpenArtifact, expand
   const resultValue = call.status === 'error' ? (call.result || call.error) : call.result
   const argumentsText = formatDetails(call.arguments, '(empty)')
   const resultText = formatDetails(resultValue, call.status === 'error' ? 'Unknown error' : '(empty)')
-  const isExpanded = typeof expanded === 'boolean' ? expanded : shouldAutoExpandToolCall(call)
+  const isExpanded = expanded === true
 
   return (
     <article className="chat-tool-step" data-testid="tool-call-step" data-status={call.status || 'running'} role="listitem">
       <div className="chat-tool-step-marker" aria-label={`Step ${stepNumber}`}>{stepNumber}</div>
       <div className="chat-tool-step-body">
         <header className="chat-tool-step-header chat-tool-step-header-compact" data-expanded={isExpanded ? 'true' : 'false'} onClick={() => onToggle?.()}>
-          <span className="chat-tool-icon"><Icon aria-hidden="true" /><span className="sr-only">{label}</span></span>
+          <span className="chat-tool-identity">
+            <span className="chat-tool-icon"><Icon aria-hidden="true" /></span>
+            <span className="chat-tool-kicker">Tool call</span>
+            <span aria-hidden="true">·</span>
+            <span className="chat-tool-label">{call.name || label}</span>
+            <span aria-hidden="true">·</span>
+          </span>
           {summaryCanOpen ? (
             <a href={managedArtifactHref(summaryArtifact)} target="_blank" rel="noopener noreferrer" className="chat-tool-summary chat-tool-summary-button text-left underline decoration-current/30 underline-offset-2 hover:decoration-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/45" title={summary} data-testid="tool-summary-open" onClick={(event) => openArtifactLink(event, onOpenArtifact, summaryArtifact, call)}>{summary}</a>
           ) : <span className="chat-tool-summary" title={summary}>{summary}</span>}

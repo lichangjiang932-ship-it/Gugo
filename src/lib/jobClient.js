@@ -1,4 +1,14 @@
 import { getAuthToken } from './accountClient.js'
+import { translateKey } from '../i18n/translations.js'
+
+function currentLanguage() {
+  if (typeof window === 'undefined') return undefined
+  try {
+    return window.localStorage?.getItem('lang') || undefined
+  } catch {
+    return undefined
+  }
+}
 
 function authHeaders() {
   const token = getAuthToken?.()
@@ -179,24 +189,82 @@ export async function loadArtifactPreviewDocument(url, {
   }
 }
 
-export async function createLocalHtmlPreviewSession(url, { fetchImpl = fetch, signal } = {}) {
+function waitForPreviewRetry(delayMs, signal) {
+  if (signal?.aborted) return Promise.reject(signal.reason || new DOMException('Aborted', 'AbortError'))
+  return new Promise((resolve, reject) => {
+    const onAbort = () => {
+      clearTimeout(timer)
+      reject(signal.reason || new DOMException('Aborted', 'AbortError'))
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, Math.max(0, Number(delayMs) || 0))
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+async function previewSessionCompatibilityError({ fetchImpl, signal, status }) {
+  if (status !== 405) {
+    const error = new Error(`local HTML preview session request failed: ${status}`)
+    error.statusCode = status
+    error.code = 'LOCAL_HTML_PREVIEW_SESSION_FAILED'
+    return error
+  }
+  try {
+    const response = await fetchImpl('/api/health', {
+      method: 'GET',
+      credentials: 'same-origin',
+      signal,
+    })
+    const health = response.ok ? await response.json() : null
+    if (Number(health?.capabilities?.localHtmlPreviewSession || 0) < 1) {
+      const error = new Error(translateKey('chatPreview.localHtmlRuntimeMismatch', currentLanguage()))
+      error.statusCode = status
+      error.code = 'LOCAL_HTML_PREVIEW_RUNTIME_MISMATCH'
+      return error
+    }
+  } catch (cause) {
+    if (signal?.aborted) throw cause
+  }
+  const error = new Error(translateKey('chatPreview.localHtmlRouteUnavailable', currentLanguage()))
+  error.statusCode = status
+  error.code = 'LOCAL_HTML_PREVIEW_ROUTE_UNAVAILABLE'
+  return error
+}
+
+export async function createLocalHtmlPreviewSession(url, {
+  fetchImpl = fetch,
+  signal,
+  retryDelays = [],
+} = {}) {
   const raw = String(url || '').trim()
   const baseOrigin = globalThis.location?.origin || 'http://localhost'
   const parsed = new URL(raw, baseOrigin)
-  const match = parsed.pathname.match(/^\/api\/local-files\/verified\/([^/]+)$/)
+  const match = parsed.pathname.match(/^\/api\/local-files\/verified\/([^/]+)\/?$/)
   if (parsed.origin !== baseOrigin || !match) {
     throw new Error('verified local HTML preview URL must be same-origin')
   }
   parsed.searchParams.delete('preview')
   parsed.searchParams.delete('token')
-  const requestUrl = `${parsed.pathname}/preview-session${parsed.search}`
-  const response = await fetchImpl(requestUrl, {
+  const verifiedPath = parsed.pathname.replace(/\/$/, '')
+  const requestUrl = `${verifiedPath}/preview-session${parsed.search}`
+  const request = () => fetchImpl(requestUrl, {
     method: 'POST',
     headers: authHeaders(),
     credentials: 'same-origin',
     signal,
   })
-  if (!response.ok) throw new Error(`local HTML preview session request failed: ${response.status}`)
+  let response = await request()
+  // Tests and explicitly coordinated restart flows may opt into bounded
+  // retries. The UI does not blindly replay a deterministic route mismatch:
+  // it probes runtime capability below and exposes an in-place retry instead.
+  for (const delay of Array.isArray(retryDelays) ? retryDelays : []) {
+    if (response.status !== 405) break
+    await waitForPreviewRetry(delay, signal)
+    response = await request()
+  }
+  if (!response.ok) throw await previewSessionCompatibilityError({ fetchImpl, signal, status: response.status })
   const payload = await response.json()
   const previewUrl = new URL(String(payload?.url || ''), baseOrigin)
   if (previewUrl.origin !== baseOrigin || !previewUrl.pathname.startsWith('/api/local-files/previews/')) {

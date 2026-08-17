@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { DEFAULT_MESSAGE_WINDOW_SIZE, getExpandedWindowCount, getMessageWindow } from '../../../lib/messageWindow.js'
 
 function directoryRequestKey(messages) {
@@ -27,6 +27,30 @@ export default function useChatMessageViewport({ messages, onQuoteSelection }) {
   const lastCountRef = useRef(messages.length)
   const lastDirectoryRequestKeyRef = useRef(directoryRequestKey(messages))
   const pendingScrollRestoreRef = useRef(null)
+  const pendingTurnIndexRef = useRef(null)
+  const [activeTurnIndex, setActiveTurnIndex] = useState(null)
+
+  const updateActiveTurn = useCallback(() => {
+    const element = scrollRef.current
+    if (!element) return
+    const anchors = [...element.querySelectorAll('[data-chat-turn-index]')]
+    if (anchors.length === 0) return
+    const containerRect = element.getBoundingClientRect()
+    const nearBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 16
+    let active = Number(anchors[0].dataset.chatTurnIndex)
+    if (nearBottom) {
+      active = Number(anchors[anchors.length - 1].dataset.chatTurnIndex)
+    } else {
+      const focusY = containerRect.top + Math.min(element.clientHeight * 0.32, 240)
+      for (const anchor of anchors) {
+        if (anchor.getBoundingClientRect().top > focusY) break
+        active = Number(anchor.dataset.chatTurnIndex)
+      }
+    }
+    if (Number.isFinite(active)) {
+      setActiveTurnIndex((current) => (current === active ? current : active))
+    }
+  }, [])
 
   useLayoutEffect(() => {
     const element = scrollRef.current
@@ -34,12 +58,23 @@ export default function useChatMessageViewport({ messages, onQuoteSelection }) {
     element.scrollTop = element.scrollHeight
   }, [])
   useLayoutEffect(() => {
-    const pending = pendingScrollRestoreRef.current
     const element = scrollRef.current
-    if (!pending || !element) return
+    if (!element) return
+    const pendingTurnIndex = pendingTurnIndexRef.current
+    if (pendingTurnIndex != null) {
+      const target = element.querySelector(`[data-chat-turn-index="${pendingTurnIndex}"]`)
+      if (target) {
+        pendingTurnIndexRef.current = null
+        target.scrollIntoView({ block: 'center', behavior: 'smooth' })
+        updateActiveTurn()
+      }
+      return
+    }
+    const pending = pendingScrollRestoreRef.current
+    if (!pending) return
     element.scrollTop = pending.top + (element.scrollHeight - pending.height)
     pendingScrollRestoreRef.current = null
-  }, [visibleCount])
+  }, [visibleCount, updateActiveTurn])
   useEffect(() => {
     const element = scrollRef.current
     if (!element) return undefined
@@ -47,11 +82,12 @@ export default function useChatMessageViewport({ messages, onQuoteSelection }) {
       const nextAtBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 80
       atBottomRef.current = nextAtBottom
       setAtBottom(nextAtBottom)
+      updateActiveTurn()
     }
     element.addEventListener('scroll', onScroll, { passive: true })
     onScroll()
     return () => element.removeEventListener('scroll', onScroll)
-  }, [])
+  }, [updateActiveTurn])
   useLayoutEffect(() => {
     const element = scrollRef.current
     if (!element) return
@@ -67,6 +103,9 @@ export default function useChatMessageViewport({ messages, onQuoteSelection }) {
     lastCountRef.current = messages.length
     lastDirectoryRequestKeyRef.current = nextDirectoryRequestKey
   }, [messages])
+  useLayoutEffect(() => {
+    updateActiveTurn()
+  }, [messages, updateActiveTurn, visibleCount])
   useEffect(() => {
     if (typeof window === 'undefined' || !window.location.hash.startsWith('#message-')) return undefined
     const targetId = decodeURIComponent(window.location.hash.slice(1))
@@ -109,11 +148,23 @@ export default function useChatMessageViewport({ messages, onQuoteSelection }) {
     setVisibleCount((count) => Math.min(messages.length, count + DEFAULT_MESSAGE_WINDOW_SIZE))
   }
   const scrollToBottom = () => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
+  const scrollToTurn = (messageIndex) => {
+    const element = scrollRef.current
+    if (!element || !Number.isInteger(messageIndex)) return
+    setActiveTurnIndex(messageIndex)
+    if (messageIndex < hiddenCount) {
+      pendingTurnIndexRef.current = messageIndex
+      setVisibleCount(getExpandedWindowCount(messages.length, messageIndex))
+      return
+    }
+    element.querySelector(`[data-chat-turn-index="${messageIndex}"]`)
+      ?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }
   const quoteSelection = () => {
     if (!quoteBubble?.text) return
     onQuoteSelection?.(quoteBubble.text)
     setQuoteBubble(null)
     if (typeof window !== 'undefined') window.getSelection()?.removeAllRanges()
   }
-  return { hiddenCount, visibleMessages, quoteBubble, atBottom, bindContainer, loadEarlierMessages, scrollToBottom, quoteSelection }
+  return { hiddenCount, visibleMessages, quoteBubble, atBottom, activeTurnIndex, bindContainer, loadEarlierMessages, scrollToBottom, scrollToTurn, quoteSelection }
 }

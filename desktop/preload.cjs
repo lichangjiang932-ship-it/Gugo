@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('gugoDesktop', Object.freeze({
   platform: process.platform,
   writeClipboardText: (value) => ipcRenderer.invoke('desktop:write-clipboard-text', String(value ?? '')),
   getVersion: () => ipcRenderer.invoke('desktop:get-version'),
+  openConfigFile: () => ipcRenderer.invoke('desktop:open-config-file'),
   checkForUpdates: () => ipcRenderer.invoke('desktop:check-for-updates'),
   installUpdate: () => ipcRenderer.invoke('desktop:install-update'),
   setPetVisible: (visible) => ipcRenderer.invoke('desktop:set-pet-visible', visible === true),

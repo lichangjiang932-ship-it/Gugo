@@ -1,48 +1,68 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { X } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import LeftRail from '../components/LeftRail'
 import SettingsDataExport from '../components/settings/SettingsDataExport.jsx'
 import SettingsDiagnosticsPanel from '../components/settings/SettingsDiagnosticsPanel.jsx'
+import SettingsFileOutputPanel from '../components/settings/SettingsFileOutputPanel.jsx'
 import SettingsModelsPanel from '../components/settings/SettingsModelsPanel.jsx'
 import {
+  SettingsAgentPresetsPanel,
   SettingsAppearancePanel,
-  SettingsFeatureHub,
   SettingsIntegrationsPanel,
   SettingsPermissionsPanel,
   SettingsPetPanel,
+  SettingsPluginsPanel,
 } from '../components/settings/SettingsSecondaryPanels.jsx'
-import SettingsFileOutputPanel from '../components/settings/SettingsFileOutputPanel.jsx'
+import { SettingsGroup, SettingsPanel, SettingsRow } from '../components/settings/SettingsPrimitives.jsx'
 import SettingsWebSearchPanel from '../components/settings/SettingsWebSearchPanel.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { getSystemDiagnostics, testModelEndpoint } from '../lib/modelClient.js'
 import {
+  SETTINGS_TAB_ABOUT,
+  SETTINGS_TAB_AGENT_PRESETS,
   SETTINGS_TAB_APPEARANCE,
   SETTINGS_TAB_DATA,
-  SETTINGS_TAB_DIAGNOSTICS,
-  SETTINGS_TAB_FEATURES,
-  SETTINGS_TAB_FILES,
+  SETTINGS_TAB_GENERAL,
   SETTINGS_TAB_INTEGRATIONS,
   SETTINGS_TAB_LANGUAGE,
   SETTINGS_TAB_MODELS,
   SETTINGS_TAB_PERMISSIONS,
-  SETTINGS_TAB_PET,
+  SETTINGS_TAB_PLUGINS,
   SETTINGS_TAB_WEB_SEARCH,
 } from '../lib/settingsNavigation.js'
 import useSettingsNavigation from '../lib/useSettingsNavigation.js'
+import useModalFocusTrap from '../lib/useModalFocusTrap.js'
 import { useAppContext } from '../store/AppContext'
 import { estimatePersistedSnapshotBytes } from '../store/indexedDbPersistence.js'
+import './SettingsView.css'
 
-const SETTINGS_NAV_ITEMS = [
-  SETTINGS_TAB_FEATURES,
-  SETTINGS_TAB_MODELS,
-  SETTINGS_TAB_WEB_SEARCH,
-  SETTINGS_TAB_FILES,
-  SETTINGS_TAB_PERMISSIONS,
-  SETTINGS_TAB_INTEGRATIONS,
-  SETTINGS_TAB_APPEARANCE,
-  SETTINGS_TAB_LANGUAGE,
-  SETTINGS_TAB_PET,
-  SETTINGS_TAB_DIAGNOSTICS,
-  SETTINGS_TAB_DATA,
+const SETTINGS_NAV_GROUPS = [
+  {
+    labelKey: 'settings.navGroups.general',
+    items: [
+      SETTINGS_TAB_GENERAL,
+      SETTINGS_TAB_MODELS,
+      SETTINGS_TAB_APPEARANCE,
+      SETTINGS_TAB_LANGUAGE,
+    ],
+  },
+  {
+    labelKey: 'settings.navGroups.capabilities',
+    items: [
+      SETTINGS_TAB_PLUGINS,
+      SETTINGS_TAB_WEB_SEARCH,
+      SETTINGS_TAB_PERMISSIONS,
+      SETTINGS_TAB_AGENT_PRESETS,
+    ],
+  },
+  {
+    labelKey: 'settings.navGroups.system',
+    items: [
+      SETTINGS_TAB_INTEGRATIONS,
+      SETTINGS_TAB_DATA,
+      SETTINGS_TAB_ABOUT,
+    ],
+  },
 ]
 
 function getLocalStorageBytes() {
@@ -86,13 +106,24 @@ export default function SettingsView() {
   const { state, dispatch } = useAppContext()
   const { activeSection, navigate, setActiveSection } = useSettingsNavigation()
   const { t, lang, setLang, languages } = useT()
+  const closeButtonRef = useRef(null)
+  const dialogRef = useRef(null)
   const [storageTick, setStorageTick] = useState(0)
   const [storageEstimate, setStorageEstimate] = useState(() => ({ usage: getLocalStorageBytes(), quota: null }))
   const [diagnostics, setDiagnostics] = useState(null)
   const [diagnosticsMessage, setDiagnosticsMessage] = useState('')
   const [diagnosticsLoading, setDiagnosticsLoading] = useState(false)
+  const [configMessage, setConfigMessage] = useState('')
 
+  const closeSettings = useCallback(() => navigate('/chat'), [navigate])
   const refreshStorage = useCallback(() => setStorageTick((value) => value + 1), [])
+
+  useModalFocusTrap({
+    dialogRef,
+    initialFocusRef: closeButtonRef,
+    onClose: closeSettings,
+    restoreFocusSelector: '[data-settings-focus-return]',
+  })
 
   useEffect(() => {
     let active = true
@@ -104,29 +135,29 @@ export default function SettingsView() {
 
   const refreshDiagnostics = useCallback(async ({ check = false } = {}) => {
     setDiagnosticsLoading(true)
-    setDiagnosticsMessage(check ? '正在探测模型端点...' : '')
+    setDiagnosticsMessage(check ? t('settings.diagnosticsChecking') : '')
     try {
       setDiagnostics(await getSystemDiagnostics({ check }))
-      setDiagnosticsMessage(check ? '端点探测完成。' : '诊断状态已刷新。')
+      setDiagnosticsMessage(t(check ? 'settings.diagnosticsChecked' : 'settings.diagnosticsRefreshed'))
     } catch (error) {
       setDiagnosticsMessage(error.message)
     } finally {
       setDiagnosticsLoading(false)
     }
-  }, [])
+  }, [t])
 
   const testModel = useCallback(async () => {
     setDiagnosticsLoading(true)
-    setDiagnosticsMessage('正在发送测试消息...')
+    setDiagnosticsMessage(t('settings.modelTesting'))
     try {
       const result = await testModelEndpoint()
-      setDiagnosticsMessage(`测试成功，延迟 ${result.latency ?? 0} ms。`)
+      setDiagnosticsMessage(t('settings.modelTestSucceeded', { latency: result.latency ?? 0 }))
     } catch (error) {
       setDiagnosticsMessage(error.message)
     } finally {
       setDiagnosticsLoading(false)
     }
-  }, [])
+  }, [t])
 
   useEffect(() => {
     Promise.resolve().then(() => refreshDiagnostics())
@@ -139,88 +170,175 @@ export default function SettingsView() {
 
   const navLabel = (item) => {
     switch (item) {
-      case SETTINGS_TAB_FEATURES: return '功能入口'
+      case SETTINGS_TAB_GENERAL: return t('settings.general')
       case SETTINGS_TAB_MODELS: return t('modelProviders.navTitle')
-      case SETTINGS_TAB_WEB_SEARCH: return t('webSearch.title')
-      case SETTINGS_TAB_FILES: return t('fileOutput.navTitle')
-      case SETTINGS_TAB_PERMISSIONS: return t('nav.permissions')
-      case SETTINGS_TAB_INTEGRATIONS: return t('settings.integrations')
       case SETTINGS_TAB_APPEARANCE: return t('settings.appearance')
       case SETTINGS_TAB_LANGUAGE: return t('settings.language')
-      case SETTINGS_TAB_PET: return t('settings.pet')
-      case SETTINGS_TAB_DIAGNOSTICS: return t('settings.systemDiagnostics')
+      case SETTINGS_TAB_PLUGINS: return t('settings.plugins')
+      case SETTINGS_TAB_WEB_SEARCH: return t('webSearch.title')
+      case SETTINGS_TAB_PERMISSIONS: return t('nav.permissions')
+      case SETTINGS_TAB_AGENT_PRESETS: return t('settings.agentPresets')
+      case SETTINGS_TAB_INTEGRATIONS: return t('settings.integrations')
       case SETTINGS_TAB_DATA: return t('settings.dataExport')
+      case SETTINGS_TAB_ABOUT: return t('settings.about')
       default: return item
     }
   }
+
+  const openConfigFile = useCallback(async () => {
+    const desktopOpen = globalThis.window?.gugoDesktop?.openConfigFile
+    if (typeof desktopOpen !== 'function') {
+      setConfigMessage(t('settings.configFileWebFallback'))
+      return
+    }
+    try {
+      const result = await desktopOpen()
+      if (result?.opened !== true) throw new Error('desktop config was not opened')
+      setConfigMessage(t('settings.configFileOpened'))
+    } catch {
+      setConfigMessage(t('settings.configFileOpenFailed'))
+    }
+  }, [t])
 
   function renderModels() {
     return <SettingsModelsPanel diagnostics={diagnostics} onChanged={() => refreshDiagnostics()} t={t} />
   }
 
+  function renderGeneral() {
+    return (
+      <SettingsPanel title={t('settings.general')} description={t('settings.generalDescription')}>
+        <SettingsFileOutputPanel compact t={t} />
+        <SettingsPetPanel compact t={t} />
+      </SettingsPanel>
+    )
+  }
+
   function renderLanguage() {
     return (
-      <section className="flex flex-col gap-5 animate-float-up">
-        <div>
-          <span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">LANGUAGE</span>
-          <h1 className="mt-1.5 text-[28px] font-semibold text-ink">{t('settings.language')}</h1>
-          <p className="mt-1 text-sm text-ink-soft">{t('settings.languageHint')}</p>
-        </div>
-        <div className="max-w-md rounded-md border border-ink/20 p-4">
-          <label htmlFor="settings-language" className="mb-2 block text-sm font-medium text-ink">{t('settings.language')}</label>
-          <select id="settings-language" value={lang} onChange={(event) => setLang(event.target.value)} className="h-10 w-full rounded-md border border-ink/30 bg-paper px-3 text-sm text-ink outline-none focus:border-ember">
-            {languages.map((language) => <option key={language.code} value={language.code}>{language.label}</option>)}
-          </select>
-        </div>
-      </section>
+      <SettingsPanel title={t('settings.language')} description={t('settings.languageHint')}>
+        <SettingsGroup>
+          <SettingsRow title={t('settings.interfaceLanguage')} description={t('settings.interfaceLanguageDescription')}>
+            <select
+              id="settings-language"
+              aria-label={t('settings.interfaceLanguage')}
+              value={lang}
+              onChange={(event) => setLang(event.target.value)}
+              className="settings-select"
+            >
+              {languages.map((language) => (
+                <option key={language.code} value={language.code}>{language.label}</option>
+              ))}
+            </select>
+          </SettingsRow>
+        </SettingsGroup>
+      </SettingsPanel>
+    )
+  }
+
+  function renderAbout() {
+    return (
+      <SettingsDiagnosticsPanel
+        compact
+        authMode={state.authMode}
+        diagnostics={diagnostics}
+        message={diagnosticsMessage}
+        loading={diagnosticsLoading}
+        onConfigureModels={() => setActiveSection(SETTINGS_TAB_MODELS)}
+        onRefresh={refreshDiagnostics}
+        onTest={testModel}
+        t={t}
+      />
     )
   }
 
   function renderActive() {
     switch (activeSection) {
-      case SETTINGS_TAB_FEATURES:
-        return <SettingsFeatureHub navigate={navigate} t={t} />
+      case SETTINGS_TAB_GENERAL:
+        return renderGeneral()
       case SETTINGS_TAB_MODELS:
         return renderModels()
-      case SETTINGS_TAB_WEB_SEARCH:
-        return <SettingsWebSearchPanel t={t} />
-      case SETTINGS_TAB_INTEGRATIONS:
-        return <SettingsIntegrationsPanel navigate={navigate} t={t} />
-      case SETTINGS_TAB_PERMISSIONS:
-        return <SettingsPermissionsPanel navigate={navigate} t={t} state={state} enabledPermCount={enabledPermCount} />
-      case SETTINGS_TAB_FILES:
-        return <SettingsFileOutputPanel t={t} />
+      case SETTINGS_TAB_APPEARANCE:
+        return <SettingsAppearancePanel t={t} state={state} dispatch={dispatch} />
       case SETTINGS_TAB_LANGUAGE:
         return renderLanguage()
-      case SETTINGS_TAB_PET:
-        return <SettingsPetPanel t={t} />
+      case SETTINGS_TAB_PLUGINS:
+        return <SettingsPluginsPanel navigate={navigate} t={t} />
+      case SETTINGS_TAB_WEB_SEARCH:
+        return <SettingsWebSearchPanel t={t} />
+      case SETTINGS_TAB_PERMISSIONS:
+        return <SettingsPermissionsPanel navigate={navigate} t={t} state={state} enabledPermCount={enabledPermCount} />
+      case SETTINGS_TAB_AGENT_PRESETS:
+        return <SettingsAgentPresetsPanel navigate={navigate} t={t} />
+      case SETTINGS_TAB_INTEGRATIONS:
+        return <SettingsIntegrationsPanel navigate={navigate} t={t} />
       case SETTINGS_TAB_DATA:
         return <SettingsDataExport state={state} dispatch={dispatch} storageBytes={storageEstimate.usage} storageQuota={storageEstimate.quota} onStorageChanged={refreshStorage} />
-      case SETTINGS_TAB_DIAGNOSTICS:
-        return <SettingsDiagnosticsPanel authMode={state.authMode} diagnostics={diagnostics} message={diagnosticsMessage} loading={diagnosticsLoading} onConfigureModels={() => setActiveSection(SETTINGS_TAB_MODELS)} onRefresh={refreshDiagnostics} onTest={testModel} t={t} />
-      case SETTINGS_TAB_APPEARANCE:
+      case SETTINGS_TAB_ABOUT:
       default:
-        return <SettingsAppearancePanel t={t} state={state} dispatch={dispatch} />
+        return renderAbout()
     }
   }
 
   return (
-    <div className="h-screen flex bg-paper overflow-hidden">
-      <LeftRail />
-      <div className="min-w-0 flex-1 flex flex-col md:flex-row overflow-hidden">
-        <aside className="shrink-0 border-b md:border-b-0 md:border-r border-dashed border-ink-fade/50 bg-paper-2 px-2 py-2 md:w-[220px] md:p-4 md:overflow-y-auto overflow-x-auto">
-          <div className="hidden md:block font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade mb-3">{t('settings.sectionTitle')}</div>
-          <nav className="flex min-w-max flex-row gap-1 md:min-w-0 md:flex-col" aria-label={t('settings.sectionTitle')}>
-            {SETTINGS_NAV_ITEMS.map((item) => (
-              <button key={item} type="button" aria-current={activeSection === item ? 'page' : undefined} onClick={() => setActiveSection(item)} className={`shrink-0 text-left px-3 py-2 rounded-md text-sm transition-colors ${activeSection === item ? 'bg-paper border border-ink-fade/50 text-ink' : 'text-ink-soft hover:bg-paper/70'}`}>
-                {navLabel(item)}
+    <div className="settings-page h-screen flex overflow-hidden">
+      <div className="settings-page-background flex min-w-0 flex-1" aria-hidden="true" inert="">
+        <LeftRail />
+        <div className="min-w-0 flex-1 bg-paper-2/25" />
+      </div>
+      <div className="settings-page-backdrop" onMouseDown={(event) => {
+        if (event.target === event.currentTarget) closeSettings()
+      }}>
+        <div
+          ref={dialogRef}
+          className="settings-dialog"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t('settings.sectionTitle')}
+          tabIndex={-1}
+          onMouseDown={(event) => event.stopPropagation()}
+        >
+          <aside className="settings-dialog-nav">
+            <div className="settings-dialog-brand">{t('settings.sectionTitle')}</div>
+            <nav className="settings-nav-groups" aria-label={t('settings.sectionTitle')}>
+              {SETTINGS_NAV_GROUPS.map((group) => (
+                <section className="settings-nav-group" key={group.labelKey}>
+                  <h2 className="settings-nav-group-label">{t(group.labelKey)}</h2>
+                  <div className="settings-nav-group-items">
+                    {group.items.map((item) => (
+                      <button
+                        key={item}
+                        type="button"
+                        aria-current={activeSection === item ? 'page' : undefined}
+                        onClick={() => setActiveSection(item)}
+                        className="settings-nav-item"
+                      >
+                        {navLabel(item)}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              ))}
+            </nav>
+          </aside>
+          <main className="settings-dialog-main">
+            <header className="settings-dialog-toolbar">
+              {configMessage ? <span className="settings-dialog-status" role="status">{configMessage}</span> : null}
+              <button type="button" className="settings-config-button" onClick={() => void openConfigFile()}>
+                {t('settings.openConfigFile')}
               </button>
-            ))}
-          </nav>
-        </aside>
-        <main className="min-w-0 flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
-          <div className="max-w-4xl">{renderActive()}</div>
-        </main>
+              <button
+                ref={closeButtonRef}
+                type="button"
+                className="settings-close-button"
+                onClick={closeSettings}
+                aria-label={t('settings.close')}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </header>
+            <div className="settings-dialog-content">{renderActive()}</div>
+          </main>
+        </div>
       </div>
     </div>
   )

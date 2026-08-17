@@ -7,6 +7,7 @@ import { createRoot } from 'react-dom/client'
 import { HashRouter } from '../../src/lib/router.jsx'
 import {
   SETTINGS_TAB_FILES,
+  SETTINGS_TAB_GENERAL,
   SETTINGS_TAB_MODELS,
   SETTINGS_TAB_PERMISSIONS,
   SETTINGS_TAB_WEB_SEARCH,
@@ -64,8 +65,8 @@ test('settings navigation gives every module its own history entry and avoids du
 
     await act(async () => rootElement.querySelector('[data-testid="files"]').click())
     assert.equal(window.location.hash, '#/settings?tab=files')
-    assert.equal(rootElement.querySelector('[data-testid="page"]').textContent, SETTINGS_TAB_FILES)
-    assert.equal(rootElement.querySelector('[data-testid="section"]').textContent, SETTINGS_TAB_FILES)
+    assert.equal(rootElement.querySelector('[data-testid="page"]').textContent, SETTINGS_TAB_GENERAL)
+    assert.equal(rootElement.querySelector('[data-testid="section"]').textContent, SETTINGS_TAB_GENERAL)
     assert.equal(window.history.length, initialLength + 3)
 
     await act(async () => rootElement.querySelector('[data-testid="permissions"]').click())

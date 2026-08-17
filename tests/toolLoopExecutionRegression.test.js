@@ -1143,6 +1143,240 @@ test('a mutation request cannot be completed by an unrelated read-only success',
   assert.equal(modelCalls, 3)
 })
 
+test('bypass recovery never remounts a tool excluded from the current turn enabled catalog', async () => {
+  const target = 'D:\\work\\disabled-tool-guard.txt'
+  const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
+  assert.ok(readFile)
+
+  const visibleToolNames = []
+  const result = await runToolsLoop({
+    job: {
+      id: 'job-disabled-dynamic-tool-guard',
+      userId: null,
+      origin: 'chat',
+      prompt: `修改 ${target}。`,
+      userPrompt: `修改 ${target}。`,
+    },
+    step: { id: 'step-disabled-dynamic-tool-guard', kind: 'chat' },
+    messages: [{ role: 'user', content: `修改 ${target}。` }],
+    // This is the catalog after the user's tool configuration was applied.
+    // write_file/apply_patch/command tools are deliberately disabled.
+    toolSpecs: [readFile],
+    approvalMode: 'bypass',
+    maxIters: 1,
+    enableToolHooks: false,
+    loadCheckpoint: async () => ({
+      state: {
+        completionGuards: {
+          // A stale checkpoint must not be able to resurrect a now-disabled tool.
+          dynamicallyMountedToolNames: ['write_file', 'apply_patch'],
+        },
+      },
+    }),
+    runModel: async ({ tools }) => {
+      const names = tools.map((item) => item?.function?.name).filter(Boolean)
+      visibleToolNames.push(names)
+      assert.ok(names.includes('read_file'))
+      for (const disabledName of [
+        'write_file',
+        'edit_file',
+        'multi_edit',
+        'apply_patch',
+        'patch_file',
+        'bash_exec',
+        'run_command',
+      ]) {
+        assert.equal(names.includes(disabledName), false, `${disabledName} must remain disabled`)
+      }
+      return { content: '无法在当前已启用工具范围内完成修改。', toolCalls: [] }
+    },
+  })
+
+  assert.equal(visibleToolNames.length, 1)
+  assert.equal(result.incomplete, true)
+})
+
+test('a continuation turn remounts execution tools, preserves the canonical file, and switches tools after failure', async () => {
+  const target = 'D:\\work\\gallery.js'
+  const priorPrompt = `修改 ${target} 的卡片翻转逻辑。`
+  const continuation = '继续刚才未完成的修改。'
+  const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
+  assert.ok(readFile)
+  const enabledExecutionNames = new Set([
+    'read_file',
+    'write_file',
+    'edit_file',
+    'apply_patch',
+    'patch_file',
+    'bash_exec',
+    'run_command',
+  ])
+  const enabledTurnCatalog = SERVER_TOOL_SPECS.filter((item) => (
+    enabledExecutionNames.has(item?.function?.name)
+  ))
+  assert.equal(enabledTurnCatalog.length, enabledExecutionNames.size)
+
+  const modelRequests = []
+  const approvalRequests = []
+  const executed = []
+  let modelCalls = 0
+  let patched = false
+  const result = await runToolsLoop({
+    job: {
+      id: 'job-dynamic-execution-continuation',
+      userId: null,
+      origin: 'chat',
+      prompt: continuation,
+      userPrompt: continuation,
+      previousUserPrompt: priorPrompt,
+    },
+    step: { id: 'step-dynamic-execution-continuation', kind: 'chat' },
+    messages: [
+      { role: 'user', content: priorPrompt },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{
+          id: 'prior-gallery-edit',
+          type: 'function',
+          function: {
+            name: 'edit_file',
+            arguments: JSON.stringify({
+              path: target,
+              old_string: 'const card = oldCard',
+              new_string: 'const card = fixedCard',
+            }),
+          },
+        }],
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'prior-gallery-edit',
+        name: 'edit_file',
+        content: JSON.stringify({ ok: true, path: target, replacedCount: 1, changedPaths: [target] }),
+      },
+      { role: 'assistant', content: '上一轮未能完成最终验证。' },
+      { role: 'user', content: continuation },
+    ],
+    toolSpecs: [readFile],
+    // Simulate the wider catalog already resolved after user configuration.
+    // Recovery may remount from this list, never from the global registry.
+    fallbackToolSpecs: enabledTurnCatalog,
+    approvalMode: 'bypass',
+    maxIters: 8,
+    toolRetryMaxAttempts: 1,
+    enableToolHooks: false,
+    onApprovalPending: async () => assert.fail('bypass mode must not enter approval pending'),
+    requestToolApproval: async (request) => {
+      approvalRequests.push(request)
+      assert.equal(request.mode, 'bypass')
+      return { proceed: true, args: request.args }
+    },
+    runModel: async ({ tools, messages }) => {
+      modelCalls += 1
+      modelRequests.push(structuredClone(messages))
+      const names = tools.map((item) => item?.function?.name).filter(Boolean)
+      for (const required of ['read_file', 'write_file', 'edit_file', 'apply_patch', 'patch_file', 'bash_exec', 'run_command']) {
+        assert.ok(names.includes(required), `${required} must be dynamically mounted`)
+      }
+
+      if (modelCalls === 1) {
+        const systemText = messages.filter((item) => item.role === 'system').map((item) => item.content).join('\n')
+        assert.match(systemText, /\[CANONICAL LOCAL FILE CONTINUATION\]/)
+        assert.ok(systemText.includes(target.replaceAll('\\', '/')))
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'read-canonical-before-edit',
+            type: 'function',
+            function: { name: 'read_file', arguments: JSON.stringify({ path: target }) },
+          }],
+        }
+      }
+      if (modelCalls === 2) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'edit-canonical-fails',
+            type: 'function',
+            function: {
+              name: 'edit_file',
+              arguments: JSON.stringify({
+                path: target,
+                old_string: 'const card = staleCard',
+                new_string: 'const card = finalCard',
+              }),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 3) {
+        const systemText = messages.filter((item) => item.role === 'system').map((item) => item.content).join('\n')
+        assert.match(systemText, /\[DYNAMIC EXECUTION TOOL RECOVERY\]/)
+        assert.match(systemText, /switch to an equivalent available mutation tool/i)
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'patch-canonical-after-edit-failure',
+            type: 'function',
+            function: {
+              name: 'apply_patch',
+              arguments: JSON.stringify({
+                patch: `*** Begin Patch\n*** Update File: ${target}\n@@\n-const card = fixedCard\n+const card = finalCard\n*** End Patch`,
+              }),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 4) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'read-canonical-after-patch',
+            type: 'function',
+            function: { name: 'read_file', arguments: JSON.stringify({ path: target }) },
+          }],
+        }
+      }
+      return { content: '正式文件已原位修改并完成回读验证。', toolCalls: [] }
+    },
+    executeTool: async ({ name, args }) => {
+      executed.push({ name, args })
+      if (name === 'read_file') {
+        assert.equal(args.path, target)
+        return {
+          ok: true,
+          path: target,
+          content: patched ? 'const card = finalCard' : 'const card = fixedCard',
+          truncated: false,
+        }
+      }
+      if (name === 'edit_file') {
+        assert.equal(args.path, target)
+        return { ok: false, code: 'EDIT_STRING_NOT_FOUND', error: 'old_string was not found' }
+      }
+      assert.equal(name, 'apply_patch')
+      assert.ok(args.patch.includes(target))
+      patched = true
+      return { ok: true, changes: [{ path: target, additions: 1, deletions: 1 }] }
+    },
+  })
+
+  assert.equal(result.text, '正式文件已原位修改并完成回读验证。')
+  assert.equal(result.incomplete, undefined)
+  assert.deepEqual(executed.map((entry) => entry.name), [
+    'read_file',
+    'edit_file',
+    'apply_patch',
+    'read_file',
+  ])
+  assert.ok(approvalRequests.length >= 4)
+  assert.equal(modelRequests.some((messages) => messages.some((message) => (
+    message.role === 'system'
+      && String(message.content || '').includes('[DYNAMIC EXECUTION TOOL RECOVERY]')
+  ))), true)
+})
+
 test('a status inquiry keeps the immediately preceding failure after read-only inspection', async () => {
   const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
   let modelCalls = 0
@@ -1861,10 +2095,21 @@ test('verified directory resume rejects a repeated authorization wait claim and 
 
 test('already-authorized read-write directory refreshes the active tool schema without pausing', async () => {
   const initialNames = ['request_directory', 'list_directory', 'read_file']
+  const authorizedNames = [
+    ...initialNames,
+    'write_file',
+    'edit_file',
+    'bash_exec',
+    'run_command',
+  ]
   const initialSpecs = initialNames.map((name) => (
     SERVER_TOOL_SPECS.find((item) => item?.function?.name === name)
   ))
   assert.equal(initialSpecs.every(Boolean), true)
+  const authorizedTurnCatalog = authorizedNames.map((name) => (
+    SERVER_TOOL_SPECS.find((item) => item?.function?.name === name)
+  ))
+  assert.equal(authorizedTurnCatalog.every(Boolean), true)
 
   const directory = 'D:\\already-authorized-output'
   const outputPath = `${directory}\\authorized-resume.txt`
@@ -1886,7 +2131,7 @@ test('already-authorized read-write directory refreshes the active tool schema w
     }],
     intentMode: 'execute',
     toolSpecs: initialSpecs,
-    fallbackToolSpecs: SERVER_TOOL_SPECS,
+    fallbackToolSpecs: authorizedTurnCatalog,
     maxIters: 6,
     enableToolHooks: false,
     requestToolApproval: async ({ args }) => ({ proceed: true, args }),

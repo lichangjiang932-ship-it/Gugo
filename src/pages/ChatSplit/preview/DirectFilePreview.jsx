@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AlertCircle, FileText, LoaderCircle } from 'lucide-react'
+import { AlertCircle, FileText, LoaderCircle, RefreshCw } from 'lucide-react'
 import MarkdownRenderer from '../../../components/MarkdownRenderer.jsx'
 import { classifyDirectFile, loadDirectFilePreview } from '../../../lib/directFilePreview.js'
 import { createLocalHtmlPreviewSession, loadArtifactPreviewDocument, revokeLocalHtmlPreviewSession } from '../../../lib/jobClient.js'
@@ -89,27 +89,59 @@ function isVerifiedLocalFileUrl(url) {
 }
 
 function VerifiedLocalHtmlPreview({ file, t, url }) {
-  const [state, setState] = useState({ url: '', error: '' })
+  const [state, setState] = useState({ url: '', errorCode: '' })
+  const [retryVersion, setRetryVersion] = useState(0)
   useEffect(() => {
+    const controller = new AbortController()
     let disposed = false
     let activePreviewUrl = ''
-    createLocalHtmlPreviewSession(url).then((previewUrl) => {
+    createLocalHtmlPreviewSession(url, { signal: controller.signal }).then((previewUrl) => {
       activePreviewUrl = previewUrl
       if (disposed) {
         void revokeLocalHtmlPreviewSession(previewUrl).catch(() => {})
         return
       }
-      setState({ url: previewUrl, error: '' })
+      setState({ url: previewUrl, errorCode: '' })
     }).catch((cause) => {
-      if (!disposed) setState({ url: '', error: cause?.message || String(cause) })
+      if (!disposed && cause?.name !== 'AbortError') {
+        setState({
+          url: '',
+          errorCode: String(cause?.code || 'LOCAL_HTML_PREVIEW_SESSION_FAILED'),
+        })
+      }
     })
     return () => {
       disposed = true
+      controller.abort()
       if (activePreviewUrl) void revokeLocalHtmlPreviewSession(activePreviewUrl).catch(() => {})
     }
-  }, [url])
+  }, [retryVersion, url])
 
-  if (state.error) return <PreviewStatus icon={<AlertCircle className="h-6 w-6" />} text={t('chatPreview.previewFailed')} detail={state.error} />
+  if (state.errorCode) {
+    const serviceUnavailable = [
+      'LOCAL_HTML_PREVIEW_NOT_READY',
+      'LOCAL_HTML_PREVIEW_RUNTIME_MISMATCH',
+      'LOCAL_HTML_PREVIEW_ROUTE_UNAVAILABLE',
+    ].includes(state.errorCode)
+    const detailKey = serviceUnavailable
+      ? 'chatPreview.localHtmlServiceUnavailable'
+      : 'chatPreview.previewRetryHint'
+    return <PreviewStatus
+      icon={<AlertCircle className="h-6 w-6" />}
+      text={t('chatPreview.previewFailed')}
+      detail={t(detailKey)}
+      action={(
+        <button
+          type="button"
+          onClick={() => setRetryVersion((value) => value + 1)}
+          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-ink/10 bg-paper px-3 text-xs font-medium text-ink-soft hover:bg-paper-2 hover:text-ink"
+        >
+          <RefreshCw className="h-3.5 w-3.5" />
+          {t('chatPreview.retryPreview')}
+        </button>
+      )}
+    />
+  }
   if (!state.url) return <PreviewStatus icon={<LoaderCircle className="h-6 w-6 animate-spin" />} text={t('chatPreview.loadingFile')} />
   return <DirectHtmlUrlPreview file={file} t={t} url={state.url} />
 }
@@ -200,12 +232,13 @@ function WorkbookPreview({ sheets }) {
   )
 }
 
-function PreviewStatus({ icon, text, detail = '' }) {
+function PreviewStatus({ icon, text, detail = '', action = null }) {
   return (
     <div className="flex h-full min-h-[320px] flex-col items-center justify-center gap-3 p-6 text-center text-ink-fade" role="status">
       <span className="flex h-14 w-14 items-center justify-center rounded-2xl border border-ink/10 bg-paper shadow-sm">{icon}</span>
       <p className="max-w-sm text-sm font-medium text-ink-soft">{text}</p>
       {detail && <p className="max-w-sm break-words text-xs leading-relaxed text-ink-fade">{detail}</p>}
+      {action}
     </div>
   )
 }

@@ -237,7 +237,7 @@ export async function handleLocalFileAccessRequest(req, res) {
 
   try {
     const previewRevokeMatch = req.method === 'DELETE'
-      ? url.pathname.match(/^\/api\/local-files\/previews\/([^/]+)$/)
+      ? url.pathname.match(/^\/api\/local-files\/previews\/([^/]+)\/?$/)
       : null
     if (previewRevokeMatch) {
       revokeLocalHtmlPreviewSession({
@@ -249,7 +249,7 @@ export async function handleLocalFileAccessRequest(req, res) {
     }
 
     const previewSessionMatch = req.method === 'POST'
-      ? url.pathname.match(/^\/api\/local-files\/verified\/([^/]+)\/preview-session$/)
+      ? url.pathname.match(/^\/api\/local-files\/verified\/([^/]+)\/preview-session\/?$/)
       : null
     if (previewSessionMatch) {
       const fileId = decodeURIComponent(previewSessionMatch[1])

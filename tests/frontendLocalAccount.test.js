@@ -21,11 +21,11 @@ test('local mode hides mail diagnostics and links missing model configuration to
   const rail = read('../src/components/leftRail/useLeftRailController.js')
   const settings = read('../src/pages/SettingsView.jsx')
 
-  assert.match(diagnostics, /authMode !== 'local'[\s\S]*?<Group title="邮箱登录">/)
+  assert.match(diagnostics, /authMode !== 'local'[\s\S]*?<SettingsGroup title=\{t\('settings\.emailLogin'\)\}>/)
   assert.match(diagnostics, /authMode === 'local'[\s\S]*?model\?\.configured === false/)
   assert.match(diagnostics, /onClick=\{onConfigureModels\}/)
   assert.match(diagnostics, /t\('settings\.localAuthHint'\)/)
-  assert.match(settings, /<SettingsDiagnosticsPanel authMode=\{state\.authMode\}[^>]*onConfigureModels=\{\(\) => setActiveSection\(SETTINGS_TAB_MODELS\)\}[^>]*t=\{t\}/)
+  assert.match(settings, /<SettingsDiagnosticsPanel[^>]*authMode=\{state\.authMode\}[^>]*onConfigureModels=\{\(\) => setActiveSection\(SETTINGS_TAB_MODELS\)\}[^>]*t=\{t\}/)
   assert.match(rail, /if \(authMode === 'local'\) return/)
   assert.match(rail, /item\.requiresLogin && !getAuthToken\(\) && authMode !== 'local'/)
   assert.match(read('../src/components/LeftRail.jsx'), /state\.authMode !== 'local'/)

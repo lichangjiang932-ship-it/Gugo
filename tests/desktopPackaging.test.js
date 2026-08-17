@@ -292,6 +292,23 @@ test('desktop update stops the backend before handing control to NSIS', () => {
   assert.doesNotMatch(main, /quitAndInstall\(false,\s*true\)/)
 })
 
+test('desktop opens only its fixed runtime configuration through trusted IPC', () => {
+  const main = read('desktop/main.js')
+  const preload = read('desktop/preload.cjs')
+  const handlerStart = main.indexOf("ipcMain.handle('desktop:open-config-file'")
+  const handlerEnd = main.indexOf("ipcMain.handle('desktop:check-for-updates'", handlerStart)
+  const handler = main.slice(handlerStart, handlerEnd)
+
+  assert.ok(handlerStart >= 0 && handlerEnd > handlerStart)
+  assert.match(preload, /openConfigFile:\s*\(\) => ipcRenderer\.invoke\('desktop:open-config-file'\)/)
+  assert.match(handler, /assertTrustedIpc\(event\)/)
+  assert.match(handler, /event\.sender !== mainWindow\.webContents/)
+  assert.match(handler, /ensureDesktopRuntimeConfigFile\(\{ userData: app\.getPath\('userData'\) \}\)/)
+  assert.match(handler, /await shell\.openPath\(configPath\)/)
+  assert.match(handler, /if \(openError\) throw/)
+  assert.doesNotMatch(handler, /event,\s*(?:file)?path|payload|request/)
+})
+
 test('desktop shuts down the in-process fallback server before quitting', () => {
   const main = read('desktop/main.js')
   const start = main.indexOf('async function stopBackend()')
