@@ -8,32 +8,49 @@ const MIME_TYPES = Object.freeze({
   '.aac': 'audio/aac',
   '.avif': 'image/avif',
   '.bmp': 'image/bmp',
+  '.cjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
   '.csv': 'text/csv; charset=utf-8',
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.eot': 'application/vnd.ms-fontobject',
   '.gif': 'image/gif',
   '.htm': 'text/html; charset=utf-8',
   '.html': 'text/html; charset=utf-8',
+  '.ico': 'image/x-icon',
+  '.js': 'text/javascript; charset=utf-8',
   '.jpeg': 'image/jpeg',
   '.jpg': 'image/jpeg',
   '.json': 'application/json; charset=utf-8',
   '.m4a': 'audio/mp4',
   '.md': 'text/markdown; charset=utf-8',
+  '.map': 'application/json; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
   '.mov': 'video/quicktime',
   '.mp3': 'audio/mpeg',
   '.mp4': 'video/mp4',
   '.ogg': 'audio/ogg',
+  '.otf': 'font/otf',
   '.pdf': 'application/pdf',
   '.png': 'image/png',
   '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   '.svg': 'image/svg+xml',
   '.tsv': 'text/tab-separated-values; charset=utf-8',
   '.txt': 'text/plain; charset=utf-8',
+  '.ttf': 'font/ttf',
   '.wav': 'audio/wav',
+  '.wasm': 'application/wasm',
   '.webm': 'video/webm',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
   '.webp': 'image/webp',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   '.xml': 'application/xml; charset=utf-8',
 })
+
+export function localFileMimeType(filename = '') {
+  return MIME_TYPES[path.extname(String(filename)).toLowerCase()] || 'application/octet-stream'
+}
 
 function serviceError(message, statusCode, code) {
   const error = new Error(message)
@@ -90,7 +107,7 @@ export function getVerifiedLocalFile({ userId, sessionId, turnId, fileId } = {})
   return {
     fullPath: resolved.fullPath,
     filename,
-    mimeType: MIME_TYPES[path.extname(filename).toLowerCase()] || 'application/octet-stream',
+    mimeType: localFileMimeType(filename),
     size: stat.size,
     etag: `"local-${encodeURIComponent(String(fileId))}-${stat.size}-${Math.floor(stat.mtimeMs)}"`,
   }

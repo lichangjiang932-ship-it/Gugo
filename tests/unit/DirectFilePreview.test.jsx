@@ -51,12 +51,11 @@ test('native image, audio, and video previews expose loading and failure states'
   }
 })
 
-test('managed HTML artifacts load private assets into a sandboxed srcdoc', async () => {
+test('managed HTML artifacts embed private assets into an opaque-origin sandboxed srcdoc', async () => {
   const dom = setupDom()
   const rootElement = dom.window.document.getElementById('root')
   const root = createRoot(rootElement)
   const originalFetch = globalThis.fetch
-  const originalCreateObjectURL = globalThis.URL.createObjectURL
   const originalRevokeObjectURL = globalThis.URL.revokeObjectURL
   const requests = []
   const revoked = []
@@ -73,7 +72,6 @@ test('managed HTML artifacts load private assets into a sandboxed srcdoc', async
       blob: async () => new Blob(['portrait'], { type: 'image/jpeg' }),
     }
   }
-  globalThis.URL.createObjectURL = () => 'blob:managed-portrait'
   globalThis.URL.revokeObjectURL = (value) => revoked.push(value)
   try {
     await act(async () => root.render(
@@ -87,7 +85,7 @@ test('managed HTML artifacts load private assets into a sandboxed srcdoc', async
     const frame = rootElement.querySelector('iframe')
     assert.ok(frame)
     assert.equal(frame.getAttribute('src'), null)
-    assert.match(frame.getAttribute('srcdoc'), /blob:managed-portrait/)
+    assert.match(frame.getAttribute('srcdoc'), /data:image\/jpeg;base64,/)
     assert.doesNotMatch(frame.getAttribute('srcdoc'), /gugo-asset:\/\//)
     assert.equal(frame.getAttribute('sandbox'), 'allow-scripts allow-forms')
     assert.deepEqual(requests, [
@@ -97,9 +95,8 @@ test('managed HTML artifacts load private assets into a sandboxed srcdoc', async
   } finally {
     await act(async () => root.unmount())
     globalThis.fetch = originalFetch
-    globalThis.URL.createObjectURL = originalCreateObjectURL
     globalThis.URL.revokeObjectURL = originalRevokeObjectURL
-    assert.deepEqual(revoked, ['blob:managed-portrait'])
+    assert.deepEqual(revoked, [])
     dom.window.close()
   }
 })
@@ -130,6 +127,91 @@ test('ordinary workspace HTML keeps the direct sandboxed preview path', async ()
     assert.equal(fetchCalls, 0)
   } finally {
     await act(async () => root.unmount())
+    globalThis.fetch = originalFetch
+    dom.window.close()
+  }
+})
+
+test('verified local HTML uses a scoped preview URL so relative sidecar assets keep their base path', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  const originalFetch = globalThis.fetch
+  const requests = []
+  globalThis.fetch = async (input, init = {}) => {
+    requests.push({ input: String(input), init })
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ url: '/api/local-files/previews/opaque-ticket/site.html' }),
+    }
+  }
+  try {
+    await act(async () => root.render(
+      <DirectFilePreview
+        file={{ filename: 'site.html', type: 'html' }}
+        url="/api/local-files/verified/receipt-1?turnId=turn-1&preview=1&token=stale"
+        t={(key) => key}
+      />,
+    ))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    const frame = rootElement.querySelector('iframe')
+    assert.ok(frame)
+    assert.equal(frame.getAttribute('src'), '/api/local-files/previews/opaque-ticket/site.html')
+    assert.equal(frame.getAttribute('srcdoc'), null)
+    assert.equal(frame.getAttribute('sandbox'), 'allow-scripts allow-forms')
+    assert.equal(requests.length, 1)
+    assert.equal(requests[0].input, '/api/local-files/verified/receipt-1/preview-session?turnId=turn-1')
+    assert.equal(requests[0].init.method, 'POST')
+    assert.doesNotMatch(requests[0].input, /token=|stale/)
+  } finally {
+    await act(async () => root.unmount())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.equal(requests.length, 2)
+    assert.equal(requests[1].input, '/api/local-files/previews/opaque-ticket')
+    assert.equal(requests[1].init.method, 'DELETE')
+    globalThis.fetch = originalFetch
+    dom.window.close()
+  }
+})
+
+test('verified local HTML revokes a preview ticket that arrives after the sidebar closes', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  const originalFetch = globalThis.fetch
+  const requests = []
+  let resolveCreate
+  let mounted = true
+  globalThis.fetch = (input, init = {}) => {
+    requests.push({ input: String(input), init })
+    if (init.method === 'POST') {
+      return new Promise((resolve) => { resolveCreate = resolve })
+    }
+    return Promise.resolve({ ok: true, status: 204 })
+  }
+  try {
+    await act(async () => root.render(
+      <DirectFilePreview
+        file={{ filename: 'slow.html', type: 'html' }}
+        url="/api/local-files/verified/receipt-slow?turnId=turn-slow&preview=1"
+        t={(key) => key}
+      />,
+    ))
+    assert.equal(typeof resolveCreate, 'function')
+    await act(async () => root.unmount())
+    mounted = false
+    resolveCreate({
+      ok: true,
+      status: 200,
+      json: async () => ({ url: '/api/local-files/previews/late-ticket/slow.html' }),
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.equal(requests.length, 2)
+    assert.equal(requests[1].input, '/api/local-files/previews/late-ticket')
+    assert.equal(requests[1].init.method, 'DELETE')
+  } finally {
+    if (mounted) await act(async () => root.unmount())
     globalThis.fetch = originalFetch
     dom.window.close()
   }

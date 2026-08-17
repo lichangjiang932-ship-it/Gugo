@@ -6,6 +6,19 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.18] - 2026-08-17
+
+### Changed
+
+- Made verified local HTML previews load their adjacent images, stylesheets, scripts, fonts, media, and nested resources through a short-lived, owner-scoped preview session.
+- Made Agents reopen and validate final local HTML files, automatically repair broken or undecodable dependencies, and continue the same tool loop before claiming completion.
+
+### Fixed
+
+- Matched right-sidebar website rendering with opening the same file directly, including relative background images and linked assets.
+- Prevented historical HTML files from being mistaken for the current turn's deliverable and triggering unnecessary recovery calls.
+- Kept preview capability tickets out of account-auth URLs and request logs while blocking traversal, symlink escape, cross-user access, and revoked grants.
+
 ## [0.11.17] - 2026-08-17
 
 ### Changed

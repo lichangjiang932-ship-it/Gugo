@@ -17,6 +17,11 @@ import {
 import { HTML_ARTIFACT_RESPONSE_CSP } from '../../shared/htmlArtifactPolicy.js'
 import { readJson } from '../utils.js'
 import { getVerifiedLocalFile } from '../services/verifiedLocalFileService.js'
+import {
+  createLocalHtmlPreviewSession,
+  getLocalHtmlPreviewResource,
+  revokeLocalHtmlPreviewSession,
+} from '../services/localHtmlPreviewService.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
 
@@ -78,6 +83,66 @@ function previewSecurityHeaders(preview, mimeType) {
   return headers
 }
 
+function isTrue(value) {
+  return ['1', 'true'].includes(String(value || '').trim().toLowerCase())
+}
+
+function httpOrigin(raw, label = 'public URL') {
+  const url = new URL(String(raw || ''))
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
+    throw new Error(`${label} must be an HTTP(S) origin`)
+  }
+  return url.origin
+}
+
+function localPreviewRequestOrigin(req, env = process.env) {
+  const configured = String(env.APP_PUBLIC_URL || '').trim()
+  if (configured) return httpOrigin(configured, 'APP_PUBLIC_URL')
+
+  let protocol = req.socket?.encrypted ? 'https' : 'http'
+  let host = String(req.headers?.host || '').split(',')[0].trim()
+  if (isTrue(env.TRUST_PROXY)) {
+    const forwardedProtocol = String(req.headers?.['x-forwarded-proto'] || '').split(',')[0].trim()
+    const forwardedHost = String(req.headers?.['x-forwarded-host'] || '').split(',')[0].trim()
+    if (forwardedProtocol) protocol = forwardedProtocol
+    if (forwardedHost) host = forwardedHost
+  }
+  if (!host) throw new Error('request Host header is required')
+  return httpOrigin(`${protocol}://${host}`, 'request origin')
+}
+
+function localHtmlPreviewSecurityHeaders(req, mimeType, ticket, { isEntryDocument = false } = {}) {
+  if (!/^text\/html/i.test(mimeType)) return {}
+  let resourceSource = "'none'"
+  try {
+    const origin = localPreviewRequestOrigin(req)
+    resourceSource = `${origin}/api/local-files/previews/${ticket}/`
+  } catch {
+    // A browser request always has a valid Host header. Failing closed keeps a
+    // malformed proxy request from widening this capability-scoped policy.
+  }
+  return {
+    ...(isEntryDocument ? { 'X-Frame-Options': 'SAMEORIGIN' } : {}),
+    'Content-Security-Policy': [
+      'sandbox allow-scripts allow-forms',
+      ...(isEntryDocument ? ["frame-ancestors 'self'"] : []),
+      "default-src 'none'",
+      "base-uri 'none'",
+      "object-src 'none'",
+      "form-action 'none'",
+      `img-src data: blob: ${resourceSource}`,
+      `media-src data: blob: ${resourceSource}`,
+      `font-src data: blob: ${resourceSource}`,
+      `style-src 'unsafe-inline' ${resourceSource}`,
+      `script-src 'unsafe-inline' blob: ${resourceSource}`,
+      `worker-src blob: ${resourceSource}`,
+      `connect-src ${resourceSource}`,
+      `frame-src ${resourceSource}`,
+      `manifest-src ${resourceSource}`,
+    ].join('; '),
+  }
+}
+
 function streamLocalFile(res, fullPath, range) {
   const stream = fs.createReadStream(fullPath, range || undefined)
   stream.once('error', (error) => {
@@ -91,6 +156,71 @@ function streamLocalFile(res, fullPath, range) {
 
 export async function handleLocalFileAccessRequest(req, res) {
   const url = new URL(req.url, 'http://localhost')
+  const localPreviewPrefix = '/api/local-files/previews/'
+  const localPreviewResource = ['GET', 'HEAD'].includes(req.method)
+    && url.pathname.startsWith(localPreviewPrefix)
+
+  // The unguessable preview ticket is a short-lived, read-only capability
+  // scoped to one verified HTML entry and its statically validated dependency
+  // graph. Keeping it in the path lets nested CSS/JS/font/image URLs resolve
+  // naturally without exposing the user's account token to the sandbox.
+  if (localPreviewResource) {
+    try {
+      const remainder = url.pathname.slice(localPreviewPrefix.length)
+      const separator = remainder.indexOf('/')
+      if (separator <= 0) {
+        const error = new Error('网页预览地址无效')
+        error.statusCode = 404
+        error.code = 'LOCAL_HTML_PREVIEW_URL_INVALID'
+        throw error
+      }
+      const ticket = decodeURIComponent(remainder.slice(0, separator))
+      const resourcePath = remainder.slice(separator + 1)
+      const file = getLocalHtmlPreviewResource({ ticket, resourcePath })
+      const securityHeaders = localHtmlPreviewSecurityHeaders(req, file.mimeType, ticket, file)
+      if (file.isFrameTarget && !file.isEntryDocument) res.removeHeader('X-Frame-Options')
+      if (req.headers['if-none-match'] === file.etag) {
+        res.writeHead(304, {
+          ETag: file.etag,
+          'Cache-Control': 'private, no-cache',
+          'Access-Control-Allow-Origin': '*',
+          'Cross-Origin-Resource-Policy': 'cross-origin',
+          ...securityHeaders,
+        })
+        return res.end()
+      }
+      const requestedRange = req.headers.range
+      const range = requestedRange ? parseRange(requestedRange, file.size) : null
+      if (requestedRange && !range) {
+        res.writeHead(416, {
+          'Content-Range': `bytes */${file.size}`,
+          'Accept-Ranges': 'bytes',
+          'Access-Control-Allow-Origin': '*',
+          'Cross-Origin-Resource-Policy': 'cross-origin',
+          ...securityHeaders,
+        })
+        return res.end()
+      }
+      res.writeHead(range ? 206 : 200, {
+        'Content-Type': file.mimeType,
+        'Content-Length': String(range ? range.end - range.start + 1 : file.size),
+        'Content-Disposition': contentDisposition('inline', file.filename),
+        'Cache-Control': 'private, no-cache',
+        'Accept-Ranges': 'bytes',
+        ETag: file.etag,
+        'X-Content-Type-Options': 'nosniff',
+        'Access-Control-Allow-Origin': '*',
+        'Cross-Origin-Resource-Policy': 'cross-origin',
+        ...(range ? { 'Content-Range': `bytes ${range.start}-${range.end}/${file.size}` } : {}),
+        ...securityHeaders,
+      })
+      if (req.method === 'HEAD') return res.end()
+      return streamLocalFile(res, file.fullPath, range)
+    } catch (error) {
+      return sendError(res, error)
+    }
+  }
+
   const verifiedFileDownload = ['GET', 'HEAD'].includes(req.method)
     && url.pathname.startsWith('/api/local-files/verified/')
   const downloadToken = verifiedFileDownload ? url.searchParams.get('token') : ''
@@ -106,6 +236,32 @@ export async function handleLocalFileAccessRequest(req, res) {
   }
 
   try {
+    const previewRevokeMatch = req.method === 'DELETE'
+      ? url.pathname.match(/^\/api\/local-files\/previews\/([^/]+)$/)
+      : null
+    if (previewRevokeMatch) {
+      revokeLocalHtmlPreviewSession({
+        userId,
+        ticket: decodeURIComponent(previewRevokeMatch[1]),
+      })
+      res.writeHead(204)
+      return res.end()
+    }
+
+    const previewSessionMatch = req.method === 'POST'
+      ? url.pathname.match(/^\/api\/local-files\/verified\/([^/]+)\/preview-session$/)
+      : null
+    if (previewSessionMatch) {
+      const fileId = decodeURIComponent(previewSessionMatch[1])
+      const previewSession = await createLocalHtmlPreviewSession({
+        userId,
+        sessionId: url.searchParams.get('sessionId'),
+        turnId: url.searchParams.get('turnId'),
+        fileId,
+      })
+      return sendJson(res, 200, { ok: true, ...previewSession })
+    }
+
     if (['GET', 'HEAD'].includes(req.method) && url.pathname.startsWith('/api/local-files/verified/')) {
       const fileId = decodeURIComponent(url.pathname.slice('/api/local-files/verified/'.length))
       const file = getVerifiedLocalFile({

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { AlertCircle, FileText, LoaderCircle } from 'lucide-react'
 import MarkdownRenderer from '../../../components/MarkdownRenderer.jsx'
 import { classifyDirectFile, loadDirectFilePreview } from '../../../lib/directFilePreview.js'
-import { loadArtifactPreviewDocument } from '../../../lib/jobClient.js'
+import { createLocalHtmlPreviewSession, loadArtifactPreviewDocument, revokeLocalHtmlPreviewSession } from '../../../lib/jobClient.js'
 import { applyHtmlArtifactDocumentPolicy } from '../../../../shared/htmlArtifactPolicy.js'
 import { DocxPreview, PptxPreview, SourceView, XlsxPreview } from './ArtifactRenderers.jsx'
 
@@ -68,7 +68,50 @@ function InteractiveHtmlFilePreview({ file, t, url }) {
   if (isManagedArtifactPreviewUrl(url)) {
     return <ManagedHtmlArtifactPreview file={file} t={t} url={url} />
   }
+  if (isVerifiedLocalFileUrl(url)) {
+    return <VerifiedLocalHtmlPreview file={file} t={t} url={url} />
+  }
   return <DirectHtmlUrlPreview file={file} t={t} url={url} />
+}
+
+function isVerifiedLocalFileUrl(url) {
+  const raw = String(url || '').trim()
+  if (!raw) return false
+  try {
+    const baseOrigin = globalThis.location?.origin
+      || globalThis.window?.location?.origin
+      || 'http://localhost'
+    const parsed = new URL(raw, baseOrigin)
+    return parsed.origin === baseOrigin && /^\/api\/local-files\/verified\/[^/]+$/.test(parsed.pathname)
+  } catch {
+    return false
+  }
+}
+
+function VerifiedLocalHtmlPreview({ file, t, url }) {
+  const [state, setState] = useState({ url: '', error: '' })
+  useEffect(() => {
+    let disposed = false
+    let activePreviewUrl = ''
+    createLocalHtmlPreviewSession(url).then((previewUrl) => {
+      activePreviewUrl = previewUrl
+      if (disposed) {
+        void revokeLocalHtmlPreviewSession(previewUrl).catch(() => {})
+        return
+      }
+      setState({ url: previewUrl, error: '' })
+    }).catch((cause) => {
+      if (!disposed) setState({ url: '', error: cause?.message || String(cause) })
+    })
+    return () => {
+      disposed = true
+      if (activePreviewUrl) void revokeLocalHtmlPreviewSession(activePreviewUrl).catch(() => {})
+    }
+  }, [url])
+
+  if (state.error) return <PreviewStatus icon={<AlertCircle className="h-6 w-6" />} text={t('chatPreview.previewFailed')} detail={state.error} />
+  if (!state.url) return <PreviewStatus icon={<LoaderCircle className="h-6 w-6 animate-spin" />} text={t('chatPreview.loadingFile')} />
+  return <DirectHtmlUrlPreview file={file} t={t} url={state.url} />
 }
 
 function ManagedHtmlArtifactPreview({ file, t, url }) {

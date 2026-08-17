@@ -8,7 +8,29 @@ const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-local-file-routes-'))
 const allowedDir = path.join(tempDir, 'allowed')
 fs.mkdirSync(allowedDir)
 fs.writeFileSync(path.join(allowedDir, 'route.txt'), 'route access', 'utf8')
-fs.writeFileSync(path.join(allowedDir, 'preview.html'), '<!doctype html><title>verified preview</title><h1>ready</h1>', 'utf8')
+const previewAssetsDir = path.join(allowedDir, 'assets')
+fs.mkdirSync(previewAssetsDir)
+fs.writeFileSync(path.join(allowedDir, 'preview.html'), [
+  '<!doctype html><title>verified preview</title>',
+  '<link rel="stylesheet" href="./assets/site.css">',
+  '<script type="module" src="./assets/app.mjs"></script>',
+  '<h1>ready</h1><img src="./background.jpg"><iframe src="./child.html"></iframe>',
+].join(''), 'utf8')
+fs.writeFileSync(path.join(allowedDir, 'child.html'), '<!doctype html><title>nested child</title><img src="./background.jpg">', 'utf8')
+fs.writeFileSync(path.join(previewAssetsDir, 'site.css'), '@font-face{font-family:Preview;src:url(./preview.woff2)}body{background:url(../background.jpg)}', 'utf8')
+fs.writeFileSync(path.join(previewAssetsDir, 'app.mjs'), 'document.documentElement.dataset.previewReady="yes"', 'utf8')
+fs.writeFileSync(path.join(previewAssetsDir, 'preview.woff2'), Buffer.from('wOF2preview-font', 'ascii'))
+fs.writeFileSync(path.join(allowedDir, 'background.jpg'), Buffer.from([0xff, 0xd8, 0xff, 0xd9]))
+fs.writeFileSync(path.join(allowedDir, 'same-directory-secret.txt'), 'must remain private', 'utf8')
+fs.writeFileSync(path.join(tempDir, 'outside-secret.txt'), 'must not be exposed', 'utf8')
+let outsideLinkCreated = false
+try {
+  fs.symlinkSync(tempDir, path.join(allowedDir, 'outside-link'), process.platform === 'win32' ? 'junction' : 'dir')
+  outsideLinkCreated = true
+} catch {
+  // Some Windows hosts disable symlink/junction creation. The realpath guard
+  // remains covered wherever the platform permits creating the fixture.
+}
 fs.writeFileSync(path.join(allowedDir, 'preview.pdf'), Buffer.from('%PDF-1.7\nverified preview', 'ascii'))
 process.env.APP_DATA_DIR = tempDir
 const previousFsEnabled = process.env.WORKSPACE_FS_ENABLED
@@ -20,6 +42,8 @@ const { createAppServer } = await import('../server/appServer.js')
 const { closeDb } = await import('../server/db.js')
 const { setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
 const { getSessionSnapshot, upsertMessage, upsertSession } = await import('../server/services/sessionStore.js')
+const { getLocalHtmlPreviewResource } = await import('../server/services/localHtmlPreviewService.js')
+const { localFileMimeType } = await import('../server/services/verifiedLocalFileService.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 const server = createAppServer({ getEnv: () => ({}) })
@@ -38,6 +62,23 @@ test.after(async () => {
 
 function headers(token) {
   return { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }
+}
+
+async function withEnvironment(overrides, callback) {
+  const previous = new Map()
+  for (const [key, value] of Object.entries(overrides)) {
+    previous.set(key, process.env[key])
+    if (value == null) delete process.env[key]
+    else process.env[key] = String(value)
+  }
+  try {
+    return await callback()
+  } finally {
+    for (const [key, value] of previous) {
+      if (value == null) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
 }
 
 test('local file access routes require authentication', async () => {
@@ -157,6 +198,7 @@ test('verified turn receipts stream the real file and remain user-scoped', async
     body: JSON.stringify({ path: allowedDir, accessMode: 'read_only' }),
   })
   assert.equal(grantResponse.status, 200)
+  const grant = (await grantResponse.json()).grants[0]
 
   const turnId = 'verified-file-route-turn'
   const sessionId = 'verified-file-route-session'
@@ -211,6 +253,132 @@ test('verified turn receipts stream the real file and remain user-scoped', async
   assert.match(htmlHead.headers.get('content-disposition'), /^inline;/)
   assert.equal(await htmlHead.text(), '')
 
+  const previewSessionResponse = await fetch(
+    `${origin}/api/local-files/verified/${htmlFileId}/preview-session?turnId=${turnId}`,
+    { method: 'POST', headers: headers(alice.token) },
+  )
+  assert.equal(previewSessionResponse.status, 200)
+  const previewSession = await previewSessionResponse.json()
+  assert.match(previewSession.url, /^\/api\/local-files\/previews\/[^/]+\/preview\.html$/)
+  assert.doesNotMatch(previewSession.url, new RegExp(alice.token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+
+  const sessionHtmlUrl = new URL(previewSession.url, origin)
+  const sessionHtml = await fetch(sessionHtmlUrl)
+  assert.equal(sessionHtml.status, 200)
+  assert.match(sessionHtml.headers.get('content-type'), /^text\/html/)
+  assert.equal(sessionHtml.headers.get('access-control-allow-origin'), '*')
+  assert.equal(sessionHtml.headers.get('cross-origin-resource-policy'), 'cross-origin')
+  const sessionCsp = sessionHtml.headers.get('content-security-policy') || ''
+  const ticketResourceSource = `${origin}${previewSession.url.slice(0, previewSession.url.lastIndexOf('/') + 1)}`
+  assert.match(sessionCsp, /^sandbox allow-scripts allow-forms;/)
+  assert.doesNotMatch(sessionCsp, /allow-same-origin/)
+  assert.ok(sessionCsp.includes(`connect-src ${ticketResourceSource}`))
+  assert.ok(sessionCsp.includes(`script-src 'unsafe-inline' blob: ${ticketResourceSource}`))
+  assert.doesNotMatch(sessionCsp, /(?:^|\s)(?:https?|wss?):(?=\s|;|$)/)
+  assert.match(await sessionHtml.text(), /\.\/assets\/site\.css/)
+
+  const childFrame = await fetch(new URL('./child.html', sessionHtmlUrl))
+  assert.equal(childFrame.status, 200)
+  assert.match(childFrame.headers.get('content-type') || '', /^text\/html/)
+  assert.equal(childFrame.headers.get('x-frame-options'), null)
+  const childCsp = childFrame.headers.get('content-security-policy') || ''
+  assert.match(childCsp, /^sandbox allow-scripts allow-forms;/)
+  assert.doesNotMatch(childCsp, /frame-ancestors/)
+  assert.ok(childCsp.includes(`img-src data: blob: ${ticketResourceSource}`))
+  assert.match(await childFrame.text(), /nested child/)
+  const childHead = await fetch(new URL('./child.html', sessionHtmlUrl), { method: 'HEAD' })
+  assert.equal(childHead.status, 200)
+  assert.equal(childHead.headers.get('x-frame-options'), null)
+  assert.doesNotMatch(childHead.headers.get('content-security-policy') || '', /frame-ancestors/)
+  const cachedChild = await fetch(new URL('./child.html', sessionHtmlUrl), {
+    headers: { 'If-None-Match': childFrame.headers.get('etag') },
+  })
+  assert.equal(cachedChild.status, 304)
+  assert.equal(cachedChild.headers.get('x-frame-options'), null)
+  assert.doesNotMatch(cachedChild.headers.get('content-security-policy') || '', /frame-ancestors/)
+
+  const relativeResources = [
+    ['./assets/site.css', /^text\/css/, /background\.jpg/],
+    ['./assets/app.mjs', /^text\/javascript/, /previewReady/],
+    ['./assets/preview.woff2', /^font\/woff2/, null],
+    ['./background.jpg', /^image\/jpeg/, null],
+  ]
+  for (const [relativeUrl, mime, content] of relativeResources) {
+    const resource = await fetch(new URL(relativeUrl, sessionHtmlUrl))
+    assert.equal(resource.status, 200, relativeUrl)
+    assert.match(resource.headers.get('content-type') || '', mime, relativeUrl)
+    if (content) assert.match(await resource.text(), content, relativeUrl)
+    else assert.ok((await resource.arrayBuffer()).byteLength > 0, relativeUrl)
+  }
+
+  const undeclaredSibling = await fetch(new URL('./same-directory-secret.txt', sessionHtmlUrl))
+  assert.equal(undeclaredSibling.status, 403)
+  assert.equal((await undeclaredSibling.json()).error.code, 'LOCAL_HTML_PREVIEW_RESOURCE_NOT_DECLARED')
+
+  // An encoded slash must not turn the ticket into an arbitrary directory
+  // browser, even when the user has granted the HTML's parent directory.
+  const traversalUrl = `${origin}/api/local-files/previews/${previewSession.ticket}/%2e%2e%2foutside-secret.txt`
+  const traversal = await fetch(traversalUrl)
+  assert.equal(traversal.status, 403)
+  assert.equal((await traversal.json()).error.code, 'LOCAL_HTML_PREVIEW_PATH_OUTSIDE_ROOT')
+
+  if (outsideLinkCreated) {
+    const symlinkEscape = await fetch(new URL('./outside-link/outside-secret.txt', sessionHtmlUrl))
+    assert.equal(symlinkEscape.status, 403)
+    assert.doesNotMatch(await symlinkEscape.text(), /must not be exposed/)
+  }
+
+  let newestPreviewSession = previewSession
+  for (let index = 0; index < 8; index += 1) {
+    const nextResponse = await fetch(
+      `${origin}/api/local-files/verified/${htmlFileId}/preview-session?turnId=${turnId}`,
+      { method: 'POST', headers: headers(alice.token) },
+    )
+    assert.equal(nextResponse.status, 200)
+    newestPreviewSession = await nextResponse.json()
+  }
+  const evictedOldest = await fetch(sessionHtmlUrl)
+  assert.equal(evictedOldest.status, 404)
+  assert.equal((await evictedOldest.json()).error.code, 'LOCAL_HTML_PREVIEW_EXPIRED')
+  const retainedNewest = await fetch(new URL(newestPreviewSession.url, origin))
+  assert.equal(retainedNewest.status, 200)
+
+  const revocableResponse = await fetch(
+    `${origin}/api/local-files/verified/${htmlFileId}/preview-session?turnId=${turnId}`,
+    { method: 'POST', headers: headers(alice.token) },
+  )
+  assert.equal(revocableResponse.status, 200)
+  const revocableSession = await revocableResponse.json()
+  const revokeUrl = `${origin}/api/local-files/previews/${revocableSession.ticket}`
+  const anonymousRevoke = await fetch(revokeUrl, { method: 'DELETE' })
+  assert.equal(anonymousRevoke.status, 401)
+  const crossUserRevoke = await fetch(revokeUrl, { method: 'DELETE', headers: headers(bob.token) })
+  assert.equal(crossUserRevoke.status, 204)
+  assert.equal((await fetch(new URL(revocableSession.url, origin))).status, 200)
+  const ownerRevoke = await fetch(revokeUrl, { method: 'DELETE', headers: headers(alice.token) })
+  assert.equal(ownerRevoke.status, 204)
+  const afterOwnerRevoke = await fetch(new URL(revocableSession.url, origin))
+  assert.equal(afterOwnerRevoke.status, 404)
+  assert.equal((await afterOwnerRevoke.json()).error.code, 'LOCAL_HTML_PREVIEW_EXPIRED')
+  const repeatedRevoke = await fetch(revokeUrl, { method: 'DELETE', headers: headers(alice.token) })
+  assert.equal(repeatedRevoke.status, 204)
+
+  const crossUserPreviewSession = await fetch(
+    `${origin}/api/local-files/verified/${htmlFileId}/preview-session?turnId=${turnId}`,
+    { method: 'POST', headers: headers(bob.token) },
+  )
+  assert.equal(crossUserPreviewSession.status, 404)
+  assert.equal((await crossUserPreviewSession.json()).error.code, 'VERIFIED_FILE_NOT_FOUND')
+
+  assert.throws(
+    () => getLocalHtmlPreviewResource({
+      ticket: previewSession.ticket,
+      resourcePath: 'preview.html',
+      now: () => Date.now() + (3 * 60 * 60 * 1_000),
+    }),
+    (error) => error?.code === 'LOCAL_HTML_PREVIEW_EXPIRED',
+  )
+
   const pdfPreviewUrl = `${origin}/api/local-files/verified/${pdfFileId}?turnId=${turnId}&preview=1&token=${encodeURIComponent(alice.token)}`
   const pdfRange = await fetch(pdfPreviewUrl, { headers: { Range: 'bytes=0-3' } })
   assert.equal(pdfRange.status, 206)
@@ -240,6 +408,115 @@ test('verified turn receipts stream the real file and remain user-scoped', async
   const crossUserBrowserLink = await fetch(`${url}&token=${encodeURIComponent(bob.token)}`)
   assert.equal(crossUserBrowserLink.status, 404)
   assert.equal((await crossUserBrowserLink.json()).error.code, 'VERIFIED_FILE_NOT_FOUND')
+
+  const replacementSessionResponse = await fetch(
+    `${origin}/api/local-files/verified/${htmlFileId}/preview-session?turnId=${turnId}`,
+    { method: 'POST', headers: headers(alice.token) },
+  )
+  const replacementSession = await replacementSessionResponse.json()
+  const revoked = await fetch(`${origin}/api/local-files/grants/${grant.id}`, {
+    method: 'DELETE',
+    headers: headers(alice.token),
+  })
+  assert.equal(revoked.status, 200)
+  const revokedResource = await fetch(new URL(replacementSession.url, origin))
+  assert.equal(revokedResource.status, 403)
+  assert.equal((await revokedResource.json()).error.code, 'PATH_NOT_AUTHORIZED')
+})
+
+test('local preview MIME types cover common web sidecar assets', () => {
+  assert.equal(localFileMimeType('font.otf'), 'font/otf')
+  assert.equal(localFileMimeType('site.webmanifest'), 'application/manifest+json; charset=utf-8')
+  assert.equal(localFileMimeType('bundle.js.map'), 'application/json; charset=utf-8')
+  assert.equal(localFileMimeType('worker.cjs'), 'text/javascript; charset=utf-8')
+})
+
+test('local HTML preview CSP uses only configured or explicitly trusted public origins', async () => {
+  const alice = issueTestSession({ email: 'local-route-preview-origin@example.com' })
+  setApprovalMode({ userId: alice.userId, mode: 'normal' })
+  const grantResponse = await fetch(`${origin}/api/local-files/grants`, {
+    method: 'POST',
+    headers: headers(alice.token),
+    body: JSON.stringify({ path: allowedDir, accessMode: 'read_only' }),
+  })
+  assert.equal(grantResponse.status, 200)
+  const grant = (await grantResponse.json()).grants[0]
+
+  const turnId = 'verified-preview-origin-turn'
+  const sessionId = 'verified-preview-origin-session'
+  const fileId = 'verified-preview-origin-html'
+  const htmlPath = fs.realpathSync(path.join(allowedDir, 'preview.html'))
+  upsertSession({ id: sessionId, userId: alice.userId, title: 'verified preview origin' })
+  upsertMessage({
+    id: `${turnId}:assistant`,
+    userId: alice.userId,
+    sessionId,
+    role: 'assistant',
+    content: '已完成网页预览来源验证。',
+    modelContext: {
+      version: 1,
+      turnId,
+      verifiedLocalFiles: [{
+        id: fileId,
+        path: htmlPath,
+        filename: 'preview.html',
+        size: fs.statSync(htmlPath).size,
+      }],
+    },
+  })
+
+  const previewSessionResponse = await fetch(
+    `${origin}/api/local-files/verified/${fileId}/preview-session?turnId=${turnId}`,
+    { method: 'POST', headers: headers(alice.token) },
+  )
+  assert.equal(previewSessionResponse.status, 200)
+  const previewSession = await previewSessionResponse.json()
+  const previewUrl = new URL(previewSession.url, origin)
+  const capabilityPath = previewSession.url.slice(0, previewSession.url.lastIndexOf('/') + 1)
+
+  const requestCsp = (environment, requestHeaders) => withEnvironment(environment, async () => {
+    const response = await fetch(previewUrl, { headers: requestHeaders })
+    assert.equal(response.status, 200)
+    return response.headers.get('content-security-policy') || ''
+  })
+
+  const directCsp = await requestCsp(
+    { APP_PUBLIC_URL: null, TRUST_PROXY: null },
+    {
+      'X-Forwarded-Proto': 'https',
+      'X-Forwarded-Host': 'forged.example',
+    },
+  )
+  assert.ok(directCsp.includes(`${origin}${capabilityPath}`))
+  assert.doesNotMatch(directCsp, /forged\.example/)
+
+  const trustedProxyCsp = await requestCsp(
+    { APP_PUBLIC_URL: null, TRUST_PROXY: 'true' },
+    {
+      Host: 'internal.example:5180',
+      'X-Forwarded-Proto': 'https',
+      'X-Forwarded-Host': 'public.example',
+    },
+  )
+  assert.ok(trustedProxyCsp.includes(`https://public.example${capabilityPath}`))
+  assert.doesNotMatch(trustedProxyCsp, /internal\.example/)
+
+  const configuredCsp = await requestCsp(
+    { APP_PUBLIC_URL: 'https://configured.example/base/path', TRUST_PROXY: '1' },
+    {
+      Host: 'internal.example:5180',
+      'X-Forwarded-Proto': 'http',
+      'X-Forwarded-Host': 'forwarded.example',
+    },
+  )
+  assert.ok(configuredCsp.includes(`https://configured.example${capabilityPath}`))
+  assert.doesNotMatch(configuredCsp, /(?:internal|forwarded)\.example/)
+
+  const revoked = await fetch(`${origin}/api/local-files/grants/${grant.id}`, {
+    method: 'DELETE',
+    headers: headers(alice.token),
+  })
+  assert.equal(revoked.status, 200)
 })
 
 test('legacy bounded read evidence upgrades to a live current-file link without rewriting history', async () => {
