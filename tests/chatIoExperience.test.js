@@ -67,7 +67,7 @@ test('only the streaming assistant hides copy actions while completed messages r
   assert.match(markdownSource, /function CodeBlock\(\{ children, streaming = false \}\)/)
   assert.match(markdownSource, /!streaming && \(/)
   assert.match(messageRowSource, /const isMessageComplete = !isCurrentStreamingMessage/)
-  assert.match(messageRowSource, /const canPresentDeliverables = isMessageComplete[\s\S]*?msg\.meta\?\.interrupted === true[\s\S]*?msg\.meta\?\.failed === true/)
+  assert.match(messageRowSource, /const canPresentDeliverables = isMessageComplete[\s\S]*?msg\.meta\?\.failed !== true[\s\S]*?msg\.meta\?\.interrupted !== true/)
   assert.match(messageRowSource, /const showArtifactPreview = !!artifactPreview && canPresentDeliverables/)
   assert.match(chatViewSource, /isGenerating=\{isGenerating\}/)
 })

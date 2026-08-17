@@ -39,6 +39,7 @@ import { observeToolCalls, recordToolProgress, restoreToolProgress, serializeToo
 import { listTurnArtifacts } from './turnArtifactStore.js'
 import { createModelPhaseHeartbeat, DEFAULT_MODEL_PHASE_HEARTBEAT_MS } from './modelPhaseHeartbeat.js'
 import { getDefaultOutputDirectory, getProjectDirectory } from './localFileAccessService.js'
+import { createPartialResultFallback } from './partialResultFallback.js'
 
 import { withLogContext } from '../utils/logger.js'
 import { createRepeatCallGuard } from '../utils/repeatCallGuard.js'
@@ -47,6 +48,53 @@ const DELIVERABLE_SELECTION_GUARD_MARKER = '[FINAL DELIVERABLE SELECTION REQUIRE
 const MAX_DELIVERABLE_SELECTION_RETRIES = 2
 const SOURCE_HANDOFF_GUARD_MARKER = '[SOURCE HANDOFF BLOCKED]'
 const MAX_SOURCE_HANDOFF_RETRIES = 1
+const ARTIFACT_RECOVERY_DIAGNOSIS_MARKER = '[ARTIFACT RECOVERY DIAGNOSIS]'
+const ARTIFACT_RECOVERY_FORCE_MARKER = '[ARTIFACT RECOVERY GENERATOR REQUIRED]'
+const ARTIFACT_RECOVERY_PHASE_DIAGNOSE = 'diagnose'
+const ARTIFACT_RECOVERY_PHASE_FORCE = 'force'
+const MAX_ARTIFACT_RECOVERY_DIAGNOSTIC_ROUNDS = 2
+const PUBLIC_INCOMPLETE_TASK_TEXT = '任务尚未完成。请重试以继续；若仍失败，请检查模型和工具调用支持。'
+const PUBLIC_UNVERIFIED_FILE_TEXT = '任务尚未通过最终验证，未通过验证的文件不会显示或交付。请重试以继续。'
+const PUBLIC_FILTERED_CLARIFICATION_TEXT = '需要你补充信息后才能继续。已隐藏模型异常收尾时返回的代码内容。'
+const INTERNAL_TERMINAL_FAILURE_PATTERNS = [
+  /Model call failed\s*:/i,
+  /This reply could not be completed/i,
+  /The requested (?:file|artifact|mutation).*?(?:was not|could not|failed)/i,
+  /ARTIFACT_NOT_CREATED/i,
+  /(?:tool|artifact|model)[_-](?:execution|write|call)?[_-]?failed/i,
+  /(?:^|\n)\s*(?:Error|Exception|TypeError|RangeError|AbortError)\s*:/i,
+  /(?:任务中断|模型预算已用尽)\s*[:：][^\n]*[A-Za-z]/,
+  /任务未完全完成[^\n]*(?:保留|保存)/,
+  /(?:已保留|保存当前)[^\n]*(?:残缺|文件|进展|工具结果)/,
+  /(?:上面的工具结果|当前工具结果)[^\n]*(?:部分进展|已包含)/,
+]
+
+function isForcedToolChoiceCompatibilityError(error) {
+  const status = Number(error?.status ?? error?.statusCode)
+  if (Number.isFinite(status) && ![400, 422].includes(status)) return false
+
+  const parameter = String(error?.param || error?.parameter || error?.error?.param || '')
+  const code = String(error?.code || error?.type || error?.error?.code || error?.error?.type || '')
+  const message = [
+    error?.message,
+    error?.reason,
+    error?.responseBody,
+    parameter,
+    code,
+  ].filter(Boolean).join(' ')
+  const namesToolChoice = /tool[_ -]?choice|function[_ -]?(?:choice|call)|specific[_ -]?function/i.test(message)
+    || /tool[_ -]?choice/i.test(parameter)
+  const rejectsForcedChoice = /(?:not|isn't|is not)\s+supported|unsupported|invalid|unknown|unrecognized|not allowed|only\s+(?:auto|none)|must\s+be\s+(?:auto|none)|extra inputs?|不支持|无效|非法|未知|不允许|仅支持|只能/i.test(message)
+  return namesToolChoice && rejectsForcedChoice
+}
+
+function sanitizeIncompleteTerminalText(value, fallback = PUBLIC_INCOMPLETE_TASK_TEXT) {
+  const text = String(value || '').trim()
+  if (!text) return fallback
+  return INTERNAL_TERMINAL_FAILURE_PATTERNS.some((pattern) => pattern.test(text))
+    ? fallback
+    : text
+}
 
 function sourceHandoffViolation(text) {
   const value = String(text || '').trim()
@@ -145,7 +193,6 @@ import {
   extractMutationTargets,
   clearVerifiedDeletionTargets,
   clearVerifiedMutationTargets,
-  artifactDeliveryError,
   persistLocalToolArtifactsAsync,
   DIRECTORY_REVIEW_GUARD_MARKER,
   LIVE_STEERING_GUARD_MARKER,
@@ -572,6 +619,9 @@ export async function runToolsLoop({
     : restored && typeof restored === 'object'
       ? restored
       : null
+  const partialResultFallback = createPartialResultFallback({
+    entries: restoredState?.completionGuards?.partialResultEntries,
+  })
   const directoryAuthorizationResolution = restoredState?.directoryAuthorizationResolution
     && typeof restoredState.directoryAuthorizationResolution === 'object'
     ? restoredState.directoryAuthorizationResolution
@@ -714,27 +764,55 @@ export async function runToolsLoop({
     || convo.some((message) => message?.role === 'system' && String(message?.content || '').includes(DIRECTORY_REVIEW_GUARD_MARKER))
   let hasSuccessfulRepresentativeRead = successfulReadFileInMessages(convo)
   const artifactIds = normalizeArtifactIdList(restoredState?.artifactIds)
+  const artifactProvenance = new Map(
+    (Array.isArray(restoredState?.completionGuards?.artifactProvenance)
+      ? restoredState.completionGuards.artifactProvenance
+      : [])
+      .map((entry) => [
+        String(entry?.artifactId || '').trim(),
+        {
+          toolName: String(entry?.toolName || '').trim(),
+          verified: entry?.verified === true,
+        },
+      ])
+      .filter(([artifactId, entry]) => artifactIds.includes(artifactId) && entry.toolName),
+  )
   const protectTerminalText = (text, { incomplete = false } = {}) => {
-    const value = String(text || '')
+    const value = incomplete
+      ? sanitizeIncompleteTerminalText(
+          text,
+          requiresPersistedArtifact ? PUBLIC_UNVERIFIED_FILE_TEXT : PUBLIC_INCOMPLETE_TASK_TEXT,
+        )
+      : String(text || '')
     if (!requiresSourceHandoffProtection || !sourceHandoffViolation(value)) return value
 
     if (artifactIds.length > 0) {
       return incomplete
-        ? '文件已通过工具生成并保存当前进度，但任务尚未完整结束。已隐藏模型异常收尾时返回的代码内容。'
+        ? PUBLIC_UNVERIFIED_FILE_TEXT
         : '文件已通过工具生成并完成交付。已隐藏模型返回的代码内容。'
     }
     return incomplete
-      ? '任务已保存当前执行进度，但尚未完整结束。已隐藏模型异常收尾时返回的代码内容。'
+      ? PUBLIC_INCOMPLETE_TASK_TEXT
       : '任务已通过工具执行并完成必要验证。已隐藏模型返回的代码内容。'
   }
   const protectClarification = (clarification) => {
     if (!requiresSourceHandoffProtection || !clarification || typeof clarification !== 'object') {
       return clarification
     }
-    const safeQuestion = protectTerminalText(
-      clarification.question || clarification.message || clarification.why,
-      { incomplete: true },
-    ) || '需要你补充信息后才能继续。'
+    const detectionSeen = new WeakSet()
+    const containsSourceHandoff = (value) => {
+      if (typeof value === 'string') return sourceHandoffViolation(value)
+      if (!value || typeof value !== 'object' || detectionSeen.has(value)) return false
+      detectionSeen.add(value)
+      return Object.values(value).some(containsSourceHandoff)
+    }
+    const sourceWasFiltered = containsSourceHandoff(clarification)
+    const safeQuestion = sourceWasFiltered
+      ? PUBLIC_FILTERED_CLARIFICATION_TEXT
+      : protectTerminalText(
+          clarification.question || clarification.message || clarification.why,
+          { incomplete: true },
+        ) || '需要你补充信息后才能继续。'
     const seen = new WeakSet()
     const protectValue = (value) => {
       if (typeof value === 'string') {
@@ -791,21 +869,40 @@ export async function runToolsLoop({
     deliveryArtifactSelectionArtifactIds = []
     deliverableSelectionRetries = 0
   }
-  const recordArtifactIds = (ids) => {
+  const recordArtifactIds = (ids, provenance = null) => {
     let added = false
+    let selectedArtifactInvalidated = false
     for (const id of normalizeArtifactIdList(ids)) {
-      if (artifactIds.includes(id)) continue
-      artifactIds.push(id)
-      added = true
+      if (!artifactIds.includes(id)) {
+        artifactIds.push(id)
+        added = true
+      }
+      if (provenance?.toolName) {
+        const previous = artifactProvenance.get(id)
+        const next = {
+          toolName: String(provenance.toolName),
+          verified: provenance.verified === true,
+        }
+        artifactProvenance.set(id, next)
+        if (previous?.verified === true
+          && (next.verified !== true || previous.toolName !== next.toolName)
+          && deliveryArtifactIds.includes(id)) {
+          selectedArtifactInvalidated = true
+        }
+      }
     }
-    if (added && deliveryArtifactSelectionExplicit) invalidateDeliverableSelection()
+    if ((added || selectedArtifactInvalidated) && deliveryArtifactSelectionExplicit) {
+      invalidateDeliverableSelection()
+    }
     return added
   }
   const needsDeliverableSelection = () => job?.origin === 'chat'
     && artifactIds.length > 0
     && !hasCurrentDeliverableSelection()
-  const suppressUnselectedArtifacts = () => {
-    if (!needsDeliverableSelection()) return
+  const suppressTerminalArtifacts = () => {
+    // Draft/intermediate files remain in the durable checkpoint so an
+    // explicit retry can continue from them, but an incomplete/failed turn
+    // must never expose them as final clickable deliverables.
     deliveryArtifactIds = []
     deliveryArtifactSelectionArtifactIds = [...artifactIds]
     deliveryArtifactSelectionExplicit = true
@@ -850,6 +947,35 @@ export async function runToolsLoop({
         retryable: false,
       }
     }
+    if (requiresPersistedArtifact) {
+      const ineligibleArtifactIds = requested.filter((id) => {
+        const provenance = artifactProvenance.get(id)
+        return !provenance?.verified || !isFileArtifactTool(provenance.toolName)
+      })
+      if (ineligibleArtifactIds.length > 0) {
+        return {
+          ok: false,
+          code: 'deliverable_artifact_provenance_mismatch',
+          error: 'Final deliverables must come from a successfully completed file artifact tool. Intermediate files cannot be selected.',
+          invalidArtifactIds: ineligibleArtifactIds,
+          retryable: true,
+          hint: 'Call the requested create_* tool successfully, then select only its verified artifact IDs.',
+        }
+      }
+      const missingSelectedTools = [...expectedArtifactTools].filter((toolName) => (
+        !requested.some((id) => artifactProvenance.get(id)?.toolName === toolName)
+      ))
+      if (missingSelectedTools.length > 0) {
+        return {
+          ok: false,
+          code: 'required_deliverable_not_selected',
+          error: `Every requested file type must be selected. Missing verified deliverables from: ${missingSelectedTools.join(', ')}.`,
+          missingTools: missingSelectedTools,
+          retryable: true,
+          hint: 'Include the verified artifact ID produced by every requested create_* tool.',
+        }
+      }
+    }
     deliveryArtifactIds = [...requested]
     deliveryArtifactSelectionArtifactIds = [...artifactIds]
     deliveryArtifactSelectionExplicit = true
@@ -862,11 +988,54 @@ export async function runToolsLoop({
     }
   }
   let artifactDeliveryRetries = Math.max(0, Number(restoredState?.completionGuards?.artifactDeliveryRetries) || 0)
-  const deliveredArtifactTools = new Set(
-    Array.isArray(restoredState?.completionGuards?.deliveredArtifactTools)
-      ? restoredState.completionGuards.deliveredArtifactTools.filter((name) => expectedArtifactTools.has(name))
-      : [],
+  let forcedArtifactToolName = expectedArtifactTools.has(
+    String(restoredState?.completionGuards?.forcedArtifactToolName || '').trim(),
   )
+    ? String(restoredState.completionGuards.forcedArtifactToolName).trim()
+    : ''
+  const restoredArtifactRecoveryPhase = String(
+    restoredState?.completionGuards?.artifactRecoveryPhase || '',
+  ).trim()
+  let artifactRecoveryPhase = forcedArtifactToolName
+    ? ([ARTIFACT_RECOVERY_PHASE_DIAGNOSE, ARTIFACT_RECOVERY_PHASE_FORCE]
+        .includes(restoredArtifactRecoveryPhase)
+        ? restoredArtifactRecoveryPhase
+        : restoredState?.completionGuards?.forcedArtifactAttemptPending === false
+          ? ARTIFACT_RECOVERY_PHASE_DIAGNOSE
+          : ARTIFACT_RECOVERY_PHASE_FORCE)
+    : ''
+  let forcedArtifactAttemptPending = forcedArtifactToolName
+    && artifactRecoveryPhase === ARTIFACT_RECOVERY_PHASE_FORCE
+    ? (Object.hasOwn(restoredState?.completionGuards || {}, 'forcedArtifactAttemptPending')
+        ? restoredState.completionGuards.forcedArtifactAttemptPending === true
+        : true)
+    : false
+  let artifactRecoveryDiagnosticRounds = artifactRecoveryPhase === ARTIFACT_RECOVERY_PHASE_DIAGNOSE
+    ? Math.min(
+        MAX_ARTIFACT_RECOVERY_DIAGNOSTIC_ROUNDS,
+        Math.max(0, Math.floor(Number(
+          restoredState?.completionGuards?.artifactRecoveryDiagnosticRounds,
+        ) || 0)),
+      )
+    : 0
+  let artifactRecoveryIterationLimit = Math.max(
+    0,
+    Math.floor(Number(restoredState?.completionGuards?.artifactRecoveryIterationLimit) || 0),
+  )
+  // This is a checkpoint mirror, never an independent source of truth. An
+  // in-place replacement can reuse the same artifact ID, so an older success
+  // must disappear as soon as that ID's current provenance becomes unverified.
+  const deliveredArtifactTools = new Set()
+  const recomputeDeliveredArtifactTools = () => {
+    deliveredArtifactTools.clear()
+    for (const [artifactId, provenance] of artifactProvenance) {
+      if (!artifactIds.includes(artifactId)
+        || provenance?.verified !== true
+        || !expectedArtifactTools.has(provenance.toolName)) continue
+      deliveredArtifactTools.add(provenance.toolName)
+    }
+  }
+  recomputeDeliveredArtifactTools()
   const inheritedArtifactEvidence = ['verify', 'finalize'].includes(String(step?.kind || ''))
     && Array.isArray(job?.steps)
     && job.steps.some((priorStep) => (
@@ -1097,7 +1266,14 @@ export async function runToolsLoop({
       content: buildPdfLayoutExecutionContract(executionIntentText),
     })
   }
-  const missingArtifactTools = () => [...expectedArtifactTools].filter((name) => !deliveredArtifactTools.has(name))
+  const missingArtifactTools = () => {
+    const currentlyVerifiedTools = new Set(
+      [...artifactProvenance.entries()]
+        .filter(([artifactId, provenance]) => artifactIds.includes(artifactId) && provenance?.verified === true)
+        .map(([, provenance]) => provenance.toolName),
+    )
+    return [...expectedArtifactTools].filter((name) => !currentlyVerifiedTools.has(name))
+  }
   const hasRequiredArtifacts = () => !requiresPersistedArtifact || missingArtifactTools().length === 0
   const hasRequiredExecutionEvidence = () => !requiresExecutionEvidence
     || (mutationExecutionRequested
@@ -1110,10 +1286,11 @@ export async function runToolsLoop({
           )
         )
       : executionEvidenceObserved)
-  const assertRequiredArtifacts = () => {
-    if (!requiresPersistedArtifact) return
+  const missingArtifactBlockerText = () => {
     const missing = missingArtifactTools()
-    if (missing.length > 0) throw artifactDeliveryError(missing)
+    return missing.length > 0
+      ? `文件工具连续纠错后仍未成功生成所需文件（${missing.join(', ')}）。未通过验证的中间文件不会交付；请重试本任务或切换到支持工具调用的模型。`
+      : '所需文件尚未通过完整性验证，未通过验证的中间文件不会交付。'
   }
   let recovery = normalizeCompactionRecovery(restoredState?.recovery)
   const appliedSteeringIds = new Set(
@@ -1139,6 +1316,80 @@ export async function runToolsLoop({
   )
   const iterationWindowSize = Math.max(1, Math.floor(Number(maxIters) || MAX_ITERS))
   maxIters = iterationWindowStart + iterationWindowSize
+  const artifactRecoveryActive = () => Boolean(
+    forcedArtifactToolName
+      && [ARTIFACT_RECOVERY_PHASE_DIAGNOSE, ARTIFACT_RECOVERY_PHASE_FORCE]
+        .includes(artifactRecoveryPhase),
+  )
+  const forcedArtifactRequestPending = () => artifactRecoveryActive()
+    && artifactRecoveryPhase === ARTIFACT_RECOVERY_PHASE_FORCE
+    && forcedArtifactAttemptPending
+  if (artifactRecoveryActive()) {
+    // A diagnosis or forced generator call may have been checkpointed at the
+    // old window boundary. Restore only the small runtime-owned extension;
+    // never trust an unbounded checkpoint value to enlarge the loop.
+    artifactRecoveryIterationLimit = Math.min(
+      Math.max(artifactRecoveryIterationLimit, iter + 1),
+      iter + 2,
+    )
+    maxIters = Math.max(maxIters, artifactRecoveryIterationLimit)
+  } else {
+    artifactRecoveryIterationLimit = 0
+  }
+  const extendArtifactRecoveryWindow = () => {
+    if (!artifactRecoveryActive()) return
+    artifactRecoveryIterationLimit = Math.max(artifactRecoveryIterationLimit, iter + 2)
+    maxIters = Math.max(maxIters, artifactRecoveryIterationLimit)
+  }
+  const clearArtifactRecovery = () => {
+    forcedArtifactToolName = ''
+    artifactRecoveryPhase = ''
+    forcedArtifactAttemptPending = false
+    artifactRecoveryDiagnosticRounds = 0
+    artifactRecoveryIterationLimit = 0
+  }
+  const scheduleArtifactRecoveryDiagnosis = (toolName, { resetRounds = true } = {}) => {
+    const normalized = String(toolName || '').trim()
+    if (!expectedArtifactTools.has(normalized)) return false
+    forcedArtifactToolName = normalized
+    artifactRecoveryPhase = ARTIFACT_RECOVERY_PHASE_DIAGNOSE
+    forcedArtifactAttemptPending = false
+    if (resetRounds) artifactRecoveryDiagnosticRounds = 0
+    extendArtifactRecoveryWindow()
+    return true
+  }
+  const scheduleForcedArtifactAttempt = (toolName = forcedArtifactToolName) => {
+    const normalized = String(toolName || '').trim()
+    if (!expectedArtifactTools.has(normalized)) return false
+    forcedArtifactToolName = normalized
+    artifactRecoveryPhase = ARTIFACT_RECOVERY_PHASE_FORCE
+    forcedArtifactAttemptPending = true
+    artifactRecoveryDiagnosticRounds = 0
+    extendArtifactRecoveryWindow()
+    return true
+  }
+  const appendArtifactRecoveryDiagnosisPrompt = (toolName = forcedArtifactToolName) => {
+    convo.push({
+      role: 'system',
+      content: [
+        ARTIFACT_RECOVERY_DIAGNOSIS_MARKER,
+        `The required generator (${toolName}) just failed or returned no verified deliverable.`,
+        'Read the concrete tool result already present in this conversation and diagnose the cause before retrying.',
+        'The full tool set is available in this phase. Use list_directory, read_file, or other discovery/input tools when they are needed to obtain real source data, paths, attachment references, or valid arguments.',
+        'Do not claim completion, print source code for the user to save, or select a draft artifact. After gathering the missing evidence or input, retry the required generator.',
+      ].join(' '),
+    })
+  }
+  const appendForcedArtifactPrompt = (toolName = forcedArtifactToolName) => {
+    convo.push({
+      role: 'system',
+      content: [
+        ARTIFACT_RECOVERY_FORCE_MARKER,
+        `Diagnosis/input collection is complete. Call ${toolName} now with corrected, complete arguments.`,
+        'Only a successful tool result containing a verified deliverable artifact can complete this recovery attempt.',
+      ].join(' '),
+    })
+  }
   let modelBudgetExceededAfterResponse = null
   let checkpointCalls = Array.isArray(restoredState?.toolCalls)
     ? restoredState.toolCalls.map((call) => ({
@@ -1186,6 +1437,7 @@ export async function runToolsLoop({
     || restoredState?.final?.budgetExceeded
     || restoredState?.final?.noProgress,
   )
+  if (restoredFinalIsInterrupted || restoredFinalIsTerminal) suppressTerminalArtifacts()
   if (restoredState?.final?.text != null
     && String(restoredState.final.text).trim()
     && !restoredFinalIsInterrupted
@@ -1199,7 +1451,9 @@ export async function runToolsLoop({
     const restoredClarification = protectClarification(restoredState.final.clarification)
     return {
       ...restoredState.final,
-      text: String(restoredState.final.text),
+      text: restoredFinalIsTerminal
+        ? protectTerminalText(restoredState.final.text, { incomplete: true })
+        : String(restoredState.final.text),
       ...(restoredClarification ? { clarification: restoredClarification } : {}),
       artifactIds,
       ...deliverySelectionFields(),
@@ -1231,8 +1485,19 @@ export async function runToolsLoop({
       loopGuard: loopGuard.snapshot(),
       ...(directoryAuthorizationResolution ? { directoryAuthorizationResolution } : {}),
       completionGuards: {
+        partialResultEntries: partialResultFallback.snapshot(),
         representativeReadsInjected,
         artifactDeliveryRetries,
+        forcedArtifactToolName: forcedArtifactToolName || null,
+        forcedArtifactAttemptPending,
+        artifactRecoveryPhase: artifactRecoveryPhase || null,
+        artifactRecoveryDiagnosticRounds,
+        artifactRecoveryIterationLimit,
+        artifactProvenance: [...artifactProvenance.entries()].map(([artifactId, provenance]) => ({
+          artifactId,
+          toolName: provenance.toolName,
+          verified: provenance.verified === true,
+        })),
         deliveredArtifactTools: [...deliveredArtifactTools],
         deliverableSelectionRetries,
         deliveryArtifactSelectionArtifactIds: [...deliveryArtifactSelectionArtifactIds],
@@ -1352,7 +1617,12 @@ export async function runToolsLoop({
     }
   }
   const finishIncomplete = async ({ text, reason, steeringLeaseId = null }) => {
-    finalText = protectTerminalText(text, { incomplete: true })
+    const safePartialResult = partialResultFallback.apply({
+      text,
+      incomplete: true,
+      reason,
+    })
+    finalText = protectTerminalText(safePartialResult.text, { incomplete: true })
     const completion = await prepareCompletionForSteering({
       text: finalText,
       steeringLeaseId,
@@ -1360,7 +1630,7 @@ export async function runToolsLoop({
       reason,
     })
     if (!completion.closed) return { deferredForSteering: true }
-    suppressUnselectedArtifacts()
+    suppressTerminalArtifacts()
     if (!completion.prepared) convo.push({ role: 'assistant', content: finalText })
     try {
       await persistTurn({
@@ -1396,6 +1666,7 @@ export async function runToolsLoop({
     finalMetadata = {},
     appendTextToConversation = true,
   } = {}) => {
+    result = partialResultFallback.apply(result)
     const terminalIsIncomplete = result?.incomplete === true
       || result?.paused === true
       || result?.interrupted === true
@@ -1410,7 +1681,7 @@ export async function runToolsLoop({
     })
     if (!completion.closed) return null
     if (result?.incomplete === true || result?.paused === true || result?.interrupted === true) {
-      suppressUnselectedArtifacts()
+      suppressTerminalArtifacts()
     }
     if (!completion.prepared && text && appendTextToConversation) {
       convo.push({ role: 'assistant', content: text })
@@ -1464,6 +1735,7 @@ export async function runToolsLoop({
       intervalMs: modelHeartbeatIntervalMs,
     })
     const ephemeralMessages = pendingEphemeralToolMessages.splice(0)
+    let forcedToolChoiceCompatibilityFallbackUsed = false
     try {
       const request = await callModelWithContextRecovery({
         messages: modelMessages,
@@ -1471,11 +1743,33 @@ export async function runToolsLoop({
         tools: modelTools,
         callModel: async (modelRequest) => {
           await heartbeat.beginRequest()
-          return runWithModelBudget(
+          const invoke = (requestPayload) => runWithModelBudget(
             budget,
-            () => runModel(modelRequest),
+            () => runModel(requestPayload),
             { allowOverBudget },
           )
+          try {
+            return await invoke(modelRequest)
+          } catch (error) {
+            const forcedChoice = modelRequest?.toolChoice
+            if (forcedToolChoiceCompatibilityFallbackUsed
+              || !forcedChoice
+              || typeof forcedChoice !== 'object'
+              || !isForcedToolChoiceCompatibilityError(error)) {
+              throw error
+            }
+
+            // A number of OpenAI-compatible servers support tools but reject
+            // selecting one named function through tool_choice. The recovery
+            // prompt and runtime validator still require the same generator,
+            // so retry this logical request once without the incompatible wire
+            // field instead of terminating an otherwise recoverable file task.
+            forcedToolChoiceCompatibilityFallbackUsed = true
+            const compatibleRequest = { ...modelRequest }
+            delete compatibleRequest.toolChoice
+            await heartbeat.beginRequest()
+            return invoke(compatibleRequest)
+          }
         },
         isContextLengthError,
         contextWindow,
@@ -1548,11 +1842,21 @@ export async function runToolsLoop({
   }
 
   for (; iter < maxIters; iter += 1) {
+    if (artifactRecoveryActive()
+      && artifactDeliveryRetries >= MAX_ARTIFACT_DELIVERY_RETRIES
+      && !hasRequiredArtifacts()) {
+      return finishIncomplete({
+        text: missingArtifactBlockerText(),
+        reason: 'artifact_delivery_not_converged',
+      })
+    }
     if (signal?.aborted) {
       const error = new Error('Turn cancelled')
       error.name = 'AbortError'
       throw error
     }
+    const artifactRecoveryPhaseAtIterationStart = artifactRecoveryPhase
+    const artifactRecoveryToolAtIterationStart = forcedArtifactToolName
     let steeringLeaseId = null
     let toolCalls
     let modelMutationBatchScheduled = false
@@ -1618,6 +1922,14 @@ export async function runToolsLoop({
         const request = await callTrackedModel({
           messages: convo,
           tools: activeToolSpecs,
+          ...(forcedArtifactRequestPending()
+            ? {
+                toolChoice: {
+                  type: 'function',
+                  function: { name: forcedArtifactToolName },
+                },
+              }
+            : {}),
           consumeBudget: (cost) => budget.consume(cost),
           onTextDelta: async (text, metadata = {}) => {
             if (!text) return
@@ -1745,12 +2057,6 @@ export async function runToolsLoop({
         // 现在对齐:已经跑过至少一轮 + 不是用户主动取消 → 降级成部分结果,
         // 把中断原因和已查到的东西交给用户,而不是一个空的 failed。
         if (error?.code === 'MODEL_BUDGET_EXCEEDED') {
-          const collected = convo
-            .filter((m) => m.role === 'tool')
-            .map((m) => (typeof m.content === 'string' ? m.content : ''))
-            .filter(Boolean)
-            .join('\n')
-            .slice(0, 4000)
           let wrapUpText = ''
           try {
             const wrapUpRequest = await callTrackedModel({
@@ -1770,9 +2076,10 @@ export async function runToolsLoop({
           } catch (wrapUpError) {
             if (wrapUpError?.name === 'AbortError') throw wrapUpError
           }
-          assertRequiredArtifacts()
           const terminal = await finishTerminalResult({
-            text: wrapUpText || `(模型预算已用尽:${error.message})\n\n已经完成的部分:\n${collected || error.partialModelResult?.content || '(无)'}`,
+            text: !hasRequiredArtifacts()
+              ? missingArtifactBlockerText()
+              : wrapUpText || '模型预算已用尽，任务尚未完成。请重试以继续。',
             artifactIds,
             iterations: iter + 1,
             incomplete: true,
@@ -1787,14 +2094,8 @@ export async function runToolsLoop({
           if (steeringLeaseId) {
             if (typeof releaseSteering === 'function') await releaseSteering(steeringLeaseId)
           }
-          const collected = convo
-            .filter((message) => message.role === 'tool')
-            .map((message) => (typeof message.content === 'string' ? message.content : ''))
-            .filter(Boolean)
-            .join('\n')
-            .slice(0, 4000)
           const terminal = await finishTerminalResult({
-            text: `模型推理超过安全上限，任务已停止，以避免继续无休止重复。${collected ? `\n\n已保留的工具结果：\n${collected}` : ''}`,
+            text: '模型推理超过安全上限，任务已停止。请重试，或换用更适合执行工具任务的模型。',
             artifactIds,
             iterations: iter + 1,
             incomplete: true,
@@ -1816,23 +2117,17 @@ export async function runToolsLoop({
         }
         if (error?.name === 'AbortError' || iter === 0) throw error
 
-        const collected = convo
-          .filter((m) => m.role === 'tool')
-          .map((m) => (typeof m.content === 'string' ? m.content : ''))
-          .filter(Boolean)
-          .join('\n')
-          .slice(0, 4000)
-
-        assertRequiredArtifacts()
-        const terminal = await finishTerminalResult({
-          text: `(任务中断:${error?.message || String(error)})\n\n已经完成的部分:\n${collected || '(无)'}`,
+        const terminal = await finishTerminalResult(partialResultFallback.apply({
+          text: !hasRequiredArtifacts()
+            ? missingArtifactBlockerText()
+            : '任务执行被中断，尚未完成。请重试以继续。',
           artifactIds,
           iterations: iter + 1,
           interrupted: true,
           code: error?.code || 'MODEL_CALL_INTERRUPTED',
           reason: error?.message || String(error),
           recovery,
-        }, {
+        }), {
           steeringLeaseId,
           appendTextToConversation: false,
           finalMetadata: {
@@ -1877,10 +2172,56 @@ export async function runToolsLoop({
           continue
         }
         if (!hasRequiredArtifacts()) {
-          const canRetry = artifactDeliveryRetries < MAX_ARTIFACT_DELIVERY_RETRIES && iter + 1 < maxIters
           const missing = missingArtifactTools()
-          if (!canRetry) throw artifactDeliveryError(missing)
-          artifactDeliveryRetries += 1
+          if (artifactRecoveryPhase === ARTIFACT_RECOVERY_PHASE_DIAGNOSE
+            && forcedArtifactToolName) {
+            // A diagnosis round may decide that no more discovery is needed.
+            // Move to the bounded forced generator request without charging a
+            // generator attempt for this full-tool-set reasoning round.
+            if (content) convo.push({ role: 'assistant', content })
+            appendForcedArtifactPrompt(forcedArtifactToolName)
+            scheduleForcedArtifactAttempt(forcedArtifactToolName)
+            await persistTurn()
+            if (steeringLeaseId && typeof acknowledgeSteering === 'function') {
+              await acknowledgeSteering(steeringLeaseId)
+            }
+            continue
+          }
+          if (forcedArtifactRequestPending()) {
+            // The provider ignored an explicit required generator request. It
+            // still consumes one of the four bounded generation attempts, but
+            // there is no concrete tool error to diagnose, so retry the forced
+            // request directly instead of spending a discovery round.
+            forcedArtifactAttemptPending = false
+            artifactDeliveryRetries += 1
+            if (artifactDeliveryRetries >= MAX_ARTIFACT_DELIVERY_RETRIES) {
+              const incomplete = await finishIncomplete({
+                text: missingArtifactBlockerText(),
+                reason: 'artifact_delivery_not_converged',
+                steeringLeaseId,
+              })
+              if (incomplete.deferredForSteering) continue
+              return incomplete
+            }
+            if (content) convo.push({ role: 'assistant', content })
+            appendForcedArtifactPrompt(forcedArtifactToolName)
+            scheduleForcedArtifactAttempt(forcedArtifactToolName)
+            await persistTurn()
+            if (steeringLeaseId && typeof acknowledgeSteering === 'function') {
+              await acknowledgeSteering(steeringLeaseId)
+            }
+            continue
+          }
+          if (artifactDeliveryRetries >= MAX_ARTIFACT_DELIVERY_RETRIES) {
+            const incomplete = await finishIncomplete({
+              text: missingArtifactBlockerText(),
+              reason: 'artifact_delivery_not_converged',
+              steeringLeaseId,
+            })
+            if (incomplete.deferredForSteering) continue
+            return incomplete
+          }
+          scheduleForcedArtifactAttempt(missing[0] || '')
           if (content) convo.push({ role: 'assistant', content })
           convo.push({
             role: 'system',
@@ -1888,6 +2229,9 @@ export async function runToolsLoop({
               ARTIFACT_DELIVERY_GUARD_MARKER,
               'The user requested a real downloadable file, but the previous response did not create one.',
               `Call each missing artifact generator now: ${missing.join(', ')}.`,
+              forcedArtifactToolName
+                ? `The next model request will require ${forcedArtifactToolName}; provide valid, complete arguments.`
+                : '',
               codeSnippetRequested
                 ? 'The explicitly requested code snippet may be included, but it does not satisfy the required file delivery. Do not claim completion until the tool returns artifactId.'
                 : 'Do not ask for a directory, print complete source code, provide copy/save instructions, or claim completion until the tool returns artifactId. If the tool still fails, report a concise blocker without code.',
@@ -2245,6 +2589,17 @@ export async function runToolsLoop({
         }
       } else {
         const convergenceBlock = convergenceBlockFor(call)
+        const boundedForcedArtifactAttempt = forcedArtifactRequestPending()
+          && call.name === forcedArtifactToolName
+          && !hasRequiredArtifacts()
+        if (boundedForcedArtifactAttempt) {
+          // The artifact recovery counter is the hard fuse for these calls.
+          // Let all four promised generator attempts reach the executor even
+          // when the model reuses identical valid arguments; the generic
+          // duplicate-signature guard would otherwise block attempts 3/4 and
+          // make the persisted retry budget misleading.
+          loopGuard.resetRepetition?.()
+        }
         const guardDecision = convergenceBlock
           ? { ok: false, result: convergenceBlock, convergenceBlocked: true }
           : loopGuard.before(call)
@@ -2530,7 +2885,10 @@ export async function runToolsLoop({
       const executedCall = outcome.executionArgs === outcome.call?.args
         ? outcome.call
         : { ...outcome.call, args: outcome.executionArgs }
-      if (succeeded && !outcome.artifactId && localArtifactPublicationAllowed) {
+      if (succeeded
+        && !outcome.artifactId
+        && localArtifactPublicationAllowed
+        && !requiresPersistedArtifact) {
         const localArtifacts = await persistLocalToolArtifactsAsync({
           call: executedCall,
           result: outcome.result,
@@ -2550,6 +2908,7 @@ export async function runToolsLoop({
           }
         }
       }
+      partialResultFallback.record(executedCall, outcome.result)
       const progressChanges = progressChangesFor(executedCall, outcome.result)
       const semanticControlCall = executedCall?.name === 'set_deliverables'
       const installSignature = installAttemptSignature(executedCall)
@@ -2668,15 +3027,38 @@ export async function runToolsLoop({
         pendingDeletionTargets.clear()
         mutationVerificationRetries = 0
       }
-      if (Array.isArray(outcome.artifactIds)) recordArtifactIds(outcome.artifactIds)
-      else if (outcome.artifactId) recordArtifactIds([outcome.artifactId])
       const requiredArtifactDeliverySatisfied = !requiresLocalArtifactDelivery
         || outcome.result?.deliveryStatus !== 'managed_only'
-      if (succeeded
+      const artifactOutcomeVerified = succeeded
         && requiredArtifactDeliverySatisfied
-        && outcome.artifactId
+        && isFileArtifactTool(outcome.call?.name)
+      if (Array.isArray(outcome.artifactIds)) {
+        recordArtifactIds(outcome.artifactIds, {
+          toolName: outcome.call?.name,
+          verified: artifactOutcomeVerified,
+        })
+      } else if (outcome.artifactId) {
+        recordArtifactIds([outcome.artifactId], {
+          toolName: outcome.call?.name,
+          verified: artifactOutcomeVerified,
+        })
+      }
+      recomputeDeliveredArtifactTools()
+      const verifiedArtifactIds = normalizeArtifactIdList(
+        Array.isArray(outcome.artifactIds) && outcome.artifactIds.length > 0
+          ? outcome.artifactIds
+          : outcome.artifactId
+            ? [outcome.artifactId]
+            : [],
+      )
+      if (artifactOutcomeVerified
+        && verifiedArtifactIds.length > 0
         && expectedArtifactTools.has(outcome.call?.name)) {
-        deliveredArtifactTools.add(outcome.call.name)
+        // A forced generator remains mandatory across malformed calls, tool
+        // errors, and provider responses that merely echo the requested call.
+        // Release it only after that exact generator returns a verified,
+        // deliverable artifact; the next round may then select deliverables.
+        if (forcedArtifactToolName === outcome.call.name) clearArtifactRecovery()
       }
       if (executedCall?.name === 'read_file' && succeeded) {
         hasSuccessfulRepresentativeRead = true
@@ -2977,10 +3359,85 @@ export async function runToolsLoop({
       })
       pendingRepeatCallReminder = null
     }
+    let artifactRecoveryExhausted = false
+    const completedArtifactCall = (toolName) => toolCalls.some((call) => (
+      call.name === toolName
+        && call.checkpointStatus === 'completed'
+        && call.checkpointResult?.code !== 'tool_execution_superseded_by_steering'
+    ))
+    const recoverableArtifactCall = (toolName) => toolCalls.some((call) => (
+      call.name === toolName
+        && call.checkpointStatus === 'completed'
+        && call.checkpointResult?.code !== 'tool_execution_superseded_by_steering'
+        // A replacement authorization failure is an intentional safety stop,
+        // not a malformed generator attempt. Retrying it would repeatedly ask
+        // the model to bypass the exact user-authorized artifact target.
+        && call.checkpointResult?.code !== 'artifact_replacement_not_authorized'
+    ))
+    const recoveryTargetStillMissing = artifactRecoveryToolAtIterationStart
+      && !deliveredArtifactTools.has(artifactRecoveryToolAtIterationStart)
+    if (!batchSupersededBySteering && !hasRequiredArtifacts()
+      && artifactRecoveryToolAtIterationStart
+      && artifactRecoveryPhaseAtIterationStart
+      && recoveryTargetStillMissing) {
+      const targetAttempted = completedArtifactCall(artifactRecoveryToolAtIterationStart)
+      if (artifactRecoveryPhaseAtIterationStart === ARTIFACT_RECOVERY_PHASE_FORCE
+        || targetAttempted) {
+        // A forced request (including a malformed/wrong-tool response), or a
+        // voluntary generator retry during diagnosis, consumes exactly one of
+        // the four bounded generation attempts.
+        forcedArtifactAttemptPending = false
+        artifactDeliveryRetries += 1
+        if (artifactDeliveryRetries >= MAX_ARTIFACT_DELIVERY_RETRIES) {
+          artifactRecoveryIterationLimit = 0
+          artifactRecoveryExhausted = true
+        } else {
+          scheduleArtifactRecoveryDiagnosis(artifactRecoveryToolAtIterationStart)
+          appendArtifactRecoveryDiagnosisPrompt(artifactRecoveryToolAtIterationStart)
+        }
+        noProgressReason = null
+        noProgressCode = null
+      } else {
+        // Discovery/input tools completed with their results in `convo`. Give
+        // the model at most two full-tool-set rounds so it can list then read,
+        // then require the corrected generator call.
+        artifactRecoveryDiagnosticRounds += 1
+        if (artifactRecoveryDiagnosticRounds >= MAX_ARTIFACT_RECOVERY_DIAGNOSTIC_ROUNDS) {
+          appendForcedArtifactPrompt(artifactRecoveryToolAtIterationStart)
+          scheduleForcedArtifactAttempt(artifactRecoveryToolAtIterationStart)
+        } else {
+          scheduleArtifactRecoveryDiagnosis(
+            artifactRecoveryToolAtIterationStart,
+            { resetRounds: false },
+          )
+        }
+        noProgressReason = null
+        noProgressCode = null
+      }
+    } else if (!batchSupersededBySteering && !hasRequiredArtifacts()
+      && !artifactRecoveryActive()) {
+      // The initial required generator was genuinely executed but failed (or
+      // returned no verified artifact). Start recovery even at maxIters.
+      const failedExpectedToolName = missingArtifactTools().find(recoverableArtifactCall)
+      if (failedExpectedToolName) {
+        scheduleArtifactRecoveryDiagnosis(failedExpectedToolName)
+        appendArtifactRecoveryDiagnosisPrompt(failedExpectedToolName)
+        noProgressReason = null
+        noProgressCode = null
+      }
+    }
     checkpointCalls = null
     await persistTurn()
     await emitToolProgress('batch_completed')
     if (batchSupersededBySteering) continue
+    if (artifactRecoveryExhausted) {
+      const incomplete = await finishIncomplete({
+        text: missingArtifactBlockerText(),
+        reason: 'artifact_delivery_not_converged',
+      })
+      if (incomplete.deferredForSteering) continue
+      return incomplete
+    }
     if (needsDeliverableSelection() && iter + 1 >= maxIters) maxIters = iter + 2
     if (budgetExceeded) {
       // ★ Lens-4 fix:预算超限写 audit,审计员能追查 job 为什么没跑完
@@ -3032,9 +3489,10 @@ export async function runToolsLoop({
           finalText = ''
         }
       }
-      assertRequiredArtifacts()
       const terminal = await finishTerminalResult({
-        text: finalText || `(任务预算已用尽:${budgetExceeded}。上面的工具结果可能已包含部分进展,可以点「重试」从断点继续。)`,
+        text: !hasRequiredArtifacts()
+          ? missingArtifactBlockerText()
+          : finalText || `(任务预算已用尽:${budgetExceeded}。可以点「重试」从断点继续。)`,
         artifactIds,
         iterations: iter + 1,
         incomplete: true,
@@ -3087,9 +3545,10 @@ export async function runToolsLoop({
       } catch {
         finalText = ''
       }
-      assertRequiredArtifacts()
       const terminal = await finishTerminalResult({
-        text: finalText || `(工具循环已停止：${noProgressReason})`,
+        text: !hasRequiredArtifacts()
+          ? missingArtifactBlockerText()
+          : finalText || `(工具循环已停止：${noProgressReason})`,
         artifactIds,
         iterations: iter + 1,
         incomplete: true,
@@ -3142,12 +3601,17 @@ export async function runToolsLoop({
       finalText = ''
     }
     if (!finalText) {
-      finalText = `(已达到 ${maxIters} 轮工具调用上限,任务未能自行收尾。上面的工具结果可能已包含部分进展。)`
+      finalText = `已达到 ${maxIters} 轮工具调用上限，任务尚未完成。请重试以继续。`
     }
   }
   finalText = protectTerminalText(finalText, { incomplete: true })
 
-  assertRequiredArtifacts()
+  if (!hasRequiredArtifacts()) {
+    return finishIncomplete({
+      text: missingArtifactBlockerText(),
+      reason: 'artifact_delivery_not_converged',
+    })
+  }
   if (!hasRequiredExecutionEvidence()) {
     return finishIncomplete({
       text: '\u4efb\u52a1\u5c1a\u672a\u5b8c\u6210\uff1a\u5c1a\u672a\u53d6\u5f97\u7b26\u5408\u672c\u6b21\u4fee\u6539\u76ee\u6807\u7684\u5b9e\u9645\u6267\u884c\u8bc1\u636e\u3002\u53ef\u91cd\u8bd5\u672c\u4efb\u52a1\uff0c\u6216\u5207\u6362\u5230\u652f\u6301\u5de5\u5177\u8c03\u7528\u7684\u6a21\u578b\u3002',

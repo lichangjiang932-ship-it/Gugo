@@ -1147,8 +1147,12 @@ test('TurnEngine never publishes turn.paused when the paused assistant message c
 
   const turnEvents = events(turnId)
   assert.equal(turnEvents.some((event) => event.type === 'turn.paused'), false)
-  assert.equal(turnEvents.at(-1).type, 'turn.failed')
-  assert.match(turnEvents.at(-1).payload.message, /paused message write failed/)
+  assert.equal(turnEvents.some((event) => event.type === 'turn.completed'), false)
+  const failed = turnEvents.at(-1)
+  assert.equal(failed.type, 'turn.failed')
+  assert.equal(failed.payload.message, '任务执行遇到问题，尚未完成。请重试；若仍失败，请检查模型配置和工具调用支持。')
+  assert.doesNotMatch(failed.payload.message, /paused message write failed/)
+  assert.equal(engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId }).status, 'failed')
 })
 
 test('TurnEngine injects an ordinary clarification answer once when resuming', async () => {
@@ -1539,9 +1543,12 @@ test('TurnEngine preserves completed tools across a retryable model interruption
   const interrupted = interruptedEvents.at(-1)
   assert.equal(interrupted.type, 'turn.interrupted')
   assert.equal(interrupted.payload.code, 'MODEL_HTTP_503')
-  assert.equal(interrupted.payload.message, 'model provider returned HTTP 503')
+  assert.equal(interrupted.payload.message, '任务执行遇到问题，尚未完成。请重试；若仍失败，请检查模型配置和工具调用支持。')
+  assert.doesNotMatch(interrupted.payload.message, /model provider returned HTTP 503/)
   assert.equal(interrupted.payload.retryable, true)
-  assert.match(interrupted.payload.text, /durable README content/)
+  assert.match(interrupted.payload.text, /任务中断/)
+  assert.match(interrupted.payload.text, /read_file：路径：README\.md/)
+  assert.doesNotMatch(interrupted.payload.text, /durable README content/)
   assert.equal(interruptedEvents.some((event) => event.type === 'turn.completed'), false)
   assert.equal(engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId }).status, 'interrupted')
   const interruptedEvidence = listMessages({ userId, sessionId: 'turn-engine-session', limit: 100 })
@@ -1549,7 +1556,19 @@ test('TurnEngine preserves completed tools across a retryable model interruption
   assert.equal(interruptedEvidence?.modelContext?.turnEvidence, true)
   assert.equal(interruptedEvidence?.modelContext?.evidenceState, 'interrupted')
   assert.equal(interruptedEvidence?.modelContext?.serverLastSequence, interrupted.sequence)
-  assert.match(interruptedEvidence?.content || '', /durable README content/)
+  assert.equal(interruptedEvidence?.content, interrupted.payload.text)
+  assert.doesNotMatch(interruptedEvidence?.content || '', /durable README content/)
+  const interruptedCheckpoint = getTurnCheckpoint({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+  }).state
+  assert.match(
+    interruptedCheckpoint.messages.find((message) => (
+      message.role === 'tool' && message.tool_call_id === 'read-once'
+    ))?.content || '',
+    /durable README content/,
+  )
   assert.equal(executions, 1)
 
   await engine.resumeTurn({ userId, sessionId: 'turn-engine-session', turnId })
@@ -1754,15 +1773,16 @@ test('TurnEngine maps an incomplete loop result to failure instead of completion
   assert.equal(turnEvents.some((event) => event.type === 'turn.completed'), false)
   assert.equal(failed.payload.code, 'TURN_INCOMPLETE')
   assert.equal(failed.payload.error.retryable, true)
-  assert.equal(failed.payload.message, '任务未完全完成，已保留当前进展。')
+  assert.equal(failed.payload.message, '任务未完成，未通过验证的文件不会显示或交付。请重试以继续。')
   assert.doesNotMatch(failed.payload.message, /Turn did not complete/)
-  assert.equal(failed.payload.partialText, 'The requested mutation could not be verified.')
+  assert.equal(failed.payload.partialText, '任务未完成，未通过验证的文件不会显示或交付。请重试以继续。')
+  assert.doesNotMatch(failed.payload.partialText, /requested mutation could not be verified/i)
   assert.deepEqual(failed.payload.artifactIds, ['artifact-unverified'])
   assert.equal(engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId }).status, 'failed')
   const evidence = listMessages({ userId, sessionId: 'turn-engine-session', limit: 100 })
     .find((message) => message.id === `${turnId}:assistant`)
   assert.equal(evidence?.modelContext?.evidenceState, 'failed')
-  assert.equal(evidence?.content, 'The requested mutation could not be verified.')
+  assert.equal(evidence?.content, '任务未完成，未通过验证的文件不会显示或交付。请重试以继续。')
 })
 
 test('TurnEngine lease prevents duplicate resume and carries cancellation across instances', async () => {

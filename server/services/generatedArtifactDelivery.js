@@ -165,9 +165,18 @@ export function syncGeneratedArtifactToOutputDirectory({
     }), 'utf8')
     : null
 
-  const requestedDirectory = path.resolve(
-    String(outputDirectory || getDefaultOutputDirectory({ userId }) || '').trim(),
-  )
+  const explicitOutputDirectory = String(outputDirectory || '').trim()
+  const configuredOutputDirectory = String(getDefaultOutputDirectory({ userId }) || '').trim()
+  const rawRequestedDirectory = explicitOutputDirectory || configuredOutputDirectory
+  const requestedDirectory = explicitOutputDirectory && userId
+    ? resolveAuthorizedLocalPath({
+        userId,
+        rawPath: explicitOutputDirectory,
+        write: true,
+        allowMissing: true,
+        allowWorkspace: true,
+      }).fullPath
+    : path.resolve(rawRequestedDirectory)
   fs.mkdirSync(requestedDirectory, { recursive: true })
   const directory = fs.realpathSync(requestedDirectory)
   const snapshot = artifact?.replaced === true ? readArtifactSourceSnapshot(artifactId) : null

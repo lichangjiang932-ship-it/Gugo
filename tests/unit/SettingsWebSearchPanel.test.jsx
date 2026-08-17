@@ -8,7 +8,7 @@ import SettingsWebSearchPanel from '../../src/components/settings/SettingsWebSea
 
 function setupDom() {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
-    url: 'http://localhost/settings/web-search',
+    url: 'http://localhost/#/settings?tab=web-search',
   })
   globalThis.window = dom.window
   globalThis.document = dom.window.document

@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
+import sharp from 'sharp'
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-artifact-download-'))
 const artifactDir = path.join(tempDir, 'artifacts')
@@ -125,10 +126,12 @@ test('HTML media assets are owner-scoped, range-aware, and downloads become stan
   const url = registerArtifact({ filename, body: htmlBody, userId: owner.userId, index })
   const mediaDirectory = path.join(tempDir, 'media')
   const portraitPath = path.join(mediaDirectory, 'portrait.jpg')
-  const portrait = Buffer.from([0xff, 0xd8, 0xff, 0xdb, 1, 2, 3, 4, 5])
+  const portrait = await sharp({
+    create: { width: 2, height: 2, channels: 3, background: '#4f46e5' },
+  }).jpeg().toBuffer()
   fs.mkdirSync(mediaDirectory, { recursive: true })
   fs.writeFileSync(portraitPath, portrait)
-  finishHtmlArtifactAssetInstall(beginHtmlArtifactAssetInstall(stageHtmlArtifactAssets({
+  finishHtmlArtifactAssetInstall(beginHtmlArtifactAssetInstall(await stageHtmlArtifactAssets({
     artifactDirectory: artifactDir,
     artifactId,
     parentFilename: filename,
@@ -215,8 +218,11 @@ test('oversized offline HTML downloads return a stable 413 while managed preview
   const mediaDirectory = path.join(tempDir, 'large-media')
   const mediaPath = path.join(mediaDirectory, 'media.png')
   fs.mkdirSync(mediaDirectory, { recursive: true })
-  fs.writeFileSync(mediaPath, Buffer.alloc(1024 * 1024, 0x5a))
-  finishHtmlArtifactAssetInstall(beginHtmlArtifactAssetInstall(stageHtmlArtifactAssets({
+  const mediaBytes = await sharp({
+    create: { width: 1024, height: 1024, channels: 3, background: '#5a5a5a' },
+  }).png({ compressionLevel: 0 }).toBuffer()
+  fs.writeFileSync(mediaPath, mediaBytes)
+  finishHtmlArtifactAssetInstall(beginHtmlArtifactAssetInstall(await stageHtmlArtifactAssets({
     artifactDirectory: artifactDir,
     artifactId,
     parentFilename: filename,

@@ -53,30 +53,33 @@ export default function MessageRow({
     serverClarification?.suggested_path || serverClarification?.suggestedPath || '',
     serverClarification?.access_mode || serverClarification?.accessMode || '',
   ].join(':')
-  const deliveryArtifacts = resolveDeliveryArtifacts(msg.meta)
+  const resolvedDeliveryArtifacts = resolveDeliveryArtifacts(msg.meta)
   // Only server-confirmed final deliverables may become previewable UI. Legacy
   // artifactSource metadata can still help render a selected file, but it must
   // never create a clickable synthetic file by itself.
-  const artifactPreview = deliveryArtifacts.length > 0 ? buildMessageArtifactPreview(msg) : null
   const isCurrentStreamingMessage = msg.meta?.streaming === true
     || (msg.meta?.streaming == null && msg.id === generatingMessageId)
   // A new turn must not make completed artifact messages look "streaming" again.
   // Their collapsed source/link presentation is part of the message itself, not
   // global chat generation state.
   const isMessageComplete = !isCurrentStreamingMessage
-  // An interrupted turn may remain resumable/streaming while already having
-  // durable output. Keep those verified files available instead of hiding them
-  // until recovery finishes.
+  // A failed/interrupted turn may retain internal draft artifacts for durable
+  // recovery, but those files are not final deliverables and must never appear
+  // as clickable cards. Only a normally completed message may present files.
   const canPresentDeliverables = isMessageComplete
-    || msg.meta?.interrupted === true
-    || msg.meta?.failed === true
+    && msg.meta?.failed !== true
+    && msg.meta?.interrupted !== true
+  const deliveryArtifacts = canPresentDeliverables ? resolvedDeliveryArtifacts : []
+  const artifactPreview = deliveryArtifacts.length > 0 ? buildMessageArtifactPreview(msg) : null
   const showArtifactPreview = !!artifactPreview && canPresentDeliverables
-  const serverArtifactReferences = buildServerArtifactReferences({
-    artifacts: deliveryArtifacts,
-    content: String(msg.meta?.artifactSource || msg.content || ''),
-    messageId: msg.id,
-    preview: artifactPreview,
-  })
+  const serverArtifactReferences = canPresentDeliverables
+    ? buildServerArtifactReferences({
+        artifacts: deliveryArtifacts,
+        content: String(msg.meta?.artifactSource || msg.content || ''),
+        messageId: msg.id,
+        preview: artifactPreview,
+      })
+    : []
   const verifiedLocalFileReferences = canPresentDeliverables
     ? buildVerifiedLocalFileReferences({
         toolCalls: msg.meta?.toolCalls,
@@ -175,7 +178,7 @@ export default function MessageRow({
         {msg.role === 'assistant' && msg.meta?.failed && msg.meta?.type !== 'model_reply' && (
           <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-dashed border-ember/40 pt-2 text-[11px]">
             <span className="text-ember" data-testid="reply-completion-state">
-              {t(deliveryArtifacts.length > 0 ? 'chatMessages.replyPartiallyCompleted' : 'chatMessages.replyIncomplete')}
+              {t('chatMessages.replyIncomplete')}
             </span>
           </div>
         )}

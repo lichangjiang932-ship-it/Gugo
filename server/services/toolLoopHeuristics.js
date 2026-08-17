@@ -19,6 +19,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import { getDb } from '../db.js'
 import { appendJobArtifact } from './jobStore.js'
 import { appendTurnArtifact, getTurnArtifactById } from './turnArtifactStore.js'
 import { deleteArtifactSourceSnapshot, readArtifactSourcePage, writeArtifactSourceSnapshot } from './artifactSourceStore.js'
@@ -52,12 +53,17 @@ import { fetchAndExtract } from '../adapters/toolProxy.js'
 import { searchWeb } from './webSearchService.js'
 import { generateImage } from './mediaModelService.js'
 import { syncGeneratedArtifactToOutputDirectory } from './generatedArtifactDelivery.js'
+import {
+  discardInvalidGeneratedArtifactFile,
+  validateGeneratedArtifactFile,
+} from './generatedArtifactFormatValidation.js'
 import { getManagedAttachment } from './managedAttachmentStore.js'
 import {
   beginHtmlArtifactAssetInstall,
   discardStagedHtmlArtifactAssets,
   finishHtmlArtifactAssetInstall,
   htmlArtifactAssetIds,
+  htmlArtifactVisibleImageAssetIds,
   rollbackHtmlArtifactAssetInstall,
   stageHtmlArtifactAssets,
 } from './htmlArtifactAssets.js'
@@ -90,6 +96,76 @@ const HTML_INLINE_IMAGE_MIMES = new Set([
   'image/webp',
   'image/avif',
 ])
+const HTML_MEDIA_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif', '.bmp'])
+const COMPLETE_HTML_MEDIA_COLLECTION = /(?:(?:所有|全部|每(?:一|个|张)|确保)[\s\S]{0,40}(?:jpe?g|png|webp|图片|照片|图像)|(?:jpe?g|png|webp|图片|照片|图像)[\s\S]{0,40}(?:所有|全部|每(?:一|个|张)|都被使用)|(?:all|every|each|entire)[\s\S]{0,40}(?:jpe?g|png|webp|images?|photos?))/i
+
+function htmlCollectionError(code, message, extra = {}) {
+  const error = new Error(message)
+  error.code = code
+  error.retryable = true
+  Object.assign(error, extra)
+  return error
+}
+
+function comparableLocalPath(filePath) {
+  const normalized = path.normalize(String(filePath || ''))
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized
+}
+
+function requestedHtmlMediaExtensions(prompt = '') {
+  const text = String(prompt || '')
+  const extensions = new Set()
+  if (/jpe?g/i.test(text)) {
+    extensions.add('.jpg')
+    extensions.add('.jpeg')
+  }
+  if (/\bpng\b/i.test(text)) extensions.add('.png')
+  if (/\bwebp\b/i.test(text)) extensions.add('.webp')
+  if (/\bavif\b/i.test(text)) extensions.add('.avif')
+  if (extensions.size > 0) return extensions
+  return new Set(HTML_MEDIA_EXTENSIONS)
+}
+
+function collectHtmlMediaFiles(rootPath, { extensions, recursive = true, limit = 500 } = {}) {
+  const files = []
+  const pending = [fs.realpathSync(rootPath)]
+  while (pending.length > 0) {
+    const directory = pending.shift()
+    const entries = fs.readdirSync(directory, { withFileTypes: true })
+      .sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true }))
+    for (const entry of entries) {
+      const candidate = path.join(directory, entry.name)
+      if (entry.isDirectory()) {
+        if (recursive) pending.push(candidate)
+        continue
+      }
+      if (!entry.isFile() || !extensions.has(path.extname(entry.name).toLowerCase())) continue
+      files.push(fs.realpathSync(candidate))
+      if (files.length > limit) {
+        throw htmlCollectionError(
+          'HTML_MEDIA_COLLECTION_TOO_LARGE',
+          `The requested media collection contains more than ${limit} supported files. Split the gallery into smaller deliverables.`,
+        )
+      }
+    }
+  }
+  return files
+}
+
+function requestedArtifactOutputDirectory(prompt = '') {
+  const text = String(prompt || '')
+  const drive = text.match(/(?:写|保存|生成|导出|放|write|save|export).{0,18}?([a-z])\s*(?:盘|drive\b)/i)
+  if (drive?.[1]) return `${drive[1].toUpperCase()}:${path.sep}`
+  // A source file commonly appears shortly after words such as “生成” (for
+  // example: “生成 Word，把 C:\\source.png 插入其中”). Treat a local
+  // path as a destination only when the wording contains an explicit
+  // destination connector; otherwise the configured default directory wins.
+  const explicit = text.match(/(?:写入|放到|放至|保存(?:到|至)|生成(?:到|至)|导出(?:到|至)|(?:write|save|export)\s+(?:to|in))\s*["'`“‘]?([a-z]:[\\/][^\r\n"'`”’<>|?*]*)/i)
+  if (!explicit?.[1]) return ''
+  const candidate = explicit[1].trim().replace(/[，。；;,.!?！？]+$/u, '')
+  if (!candidate) return ''
+  return path.extname(candidate) ? path.dirname(candidate) : candidate
+}
 
 function attachmentUriOccurrences(source, uri) {
   let count = 0
@@ -137,7 +213,7 @@ async function inlineHtmlAttachmentUris(value, { userId } = {}) {
   return resolved
 }
 
-async function resolveHtmlArtifactArgs(args = {}, { userId } = {}) {
+async function resolveHtmlArtifactArgs(args = {}, { userId, prompt = '' } = {}) {
   const resolved = { ...args }
   if (typeof resolved.html === 'string') {
     resolved.html = await inlineHtmlAttachmentUris(resolved.html, { userId })
@@ -152,6 +228,7 @@ async function resolveHtmlArtifactArgs(args = {}, { userId } = {}) {
     .filter((value) => typeof value === 'string')
     .join('\n')
   const assetIds = htmlArtifactAssetIds(markerSource)
+  const visibleImageAssetIds = new Set(htmlArtifactVisibleImageAssetIds(markerSource))
   const referenced = new Set(assetIds)
   const seen = new Set()
   const sources = []
@@ -166,9 +243,71 @@ async function resolveHtmlArtifactArgs(args = {}, { userId } = {}) {
     const source = resolveForFileTool(rawPath, { userId })
     sources.push({ id, sourcePath: source.fullPath })
   }
+  const completeCollectionRequested = COMPLETE_HTML_MEDIA_COLLECTION.test(String(prompt || ''))
+  const collection = resolved.asset_collection && typeof resolved.asset_collection === 'object'
+    ? resolved.asset_collection
+    : null
+  if (completeCollectionRequested && !collection?.directory) {
+    throw htmlCollectionError(
+      'HTML_MEDIA_COLLECTION_REQUIRED',
+      'The user requested every image from a directory. Set asset_collection.directory, declare every returned file in assets, and reference every asset with gugo-asset://<id>.',
+    )
+  }
+  let collectionCount = 0
+  if (collection?.directory) {
+    let directory
+    try {
+      directory = resolveForFileTool(String(collection.directory), { userId })
+    } catch (cause) {
+      throw htmlCollectionError(
+        'HTML_MEDIA_COLLECTION_UNAVAILABLE',
+        `asset_collection.directory is unavailable: ${cause?.message || cause}`,
+      )
+    }
+    if (!fs.statSync(directory.fullPath).isDirectory()) {
+      throw htmlCollectionError('HTML_MEDIA_COLLECTION_NOT_DIRECTORY', 'asset_collection.directory must reference a readable directory.')
+    }
+    const extensions = completeCollectionRequested
+      ? requestedHtmlMediaExtensions(prompt)
+      : new Set((Array.isArray(collection.extensions) ? collection.extensions : [])
+          .map((extension) => `.${String(extension || '').replace(/^\./, '').toLowerCase()}`)
+          .filter((extension) => HTML_MEDIA_EXTENSIONS.has(extension)))
+    const requiredFiles = collectHtmlMediaFiles(directory.fullPath, {
+      extensions: extensions.size > 0 ? extensions : new Set(HTML_MEDIA_EXTENSIONS),
+      recursive: collection.recursive !== false,
+    })
+    if (completeCollectionRequested && requiredFiles.length === 0) {
+      throw htmlCollectionError('HTML_MEDIA_COLLECTION_EMPTY', 'No requested image files were found in asset_collection.directory.')
+    }
+    const providedPaths = new Set(sources.map(({ sourcePath }) => comparableLocalPath(sourcePath)))
+    const missingFiles = requiredFiles.filter((filePath) => !providedPaths.has(comparableLocalPath(filePath)))
+    if (missingFiles.length > 0) {
+      throw htmlCollectionError(
+        'HTML_MEDIA_COLLECTION_INCOMPLETE',
+        `The HTML media collection is incomplete: ${missingFiles.length} of ${requiredFiles.length} required files are missing from assets. Missing examples: ${missingFiles.slice(0, 20).map((filePath) => path.basename(filePath)).join(', ')}.`,
+        { missingCount: missingFiles.length, requiredCount: requiredFiles.length },
+      )
+    }
+    if (completeCollectionRequested) {
+      const requiredPaths = new Set(requiredFiles.map(comparableLocalPath))
+      const hiddenSources = sources.filter(({ id, sourcePath }) => (
+        requiredPaths.has(comparableLocalPath(sourcePath)) && !visibleImageAssetIds.has(id)
+      ))
+      if (hiddenSources.length > 0) {
+        throw htmlCollectionError(
+          'HTML_MEDIA_COLLECTION_NOT_VISIBLE',
+          `The HTML media collection is not visibly rendered: ${hiddenSources.length} of ${requiredFiles.length} required images are hidden or only referenced outside a visible image slot. Hidden examples: ${hiddenSources.slice(0, 20).map(({ sourcePath }) => path.basename(sourcePath)).join(', ')}.`,
+          { hiddenCount: hiddenSources.length, requiredCount: requiredFiles.length },
+        )
+      }
+    }
+    collectionCount = requiredFiles.length
+  }
   resolved.assets = assetIds.map((id) => ({ id }))
+  delete resolved.asset_collection
   Object.defineProperty(resolved, '_htmlAssetIds', { value: assetIds, enumerable: false })
   Object.defineProperty(resolved, '_htmlAssetSources', { value: sources, enumerable: false })
+  Object.defineProperty(resolved, '_htmlCollectionCount', { value: collectionCount, enumerable: false })
   return resolved
 }
 
@@ -208,7 +347,12 @@ const MAX_ITERS = (() => {
 })()
 const JOB_READ_CONCURRENCY = 4
 const ARTIFACT_DELIVERY_GUARD_MARKER = '[PERSISTED ARTIFACT DELIVERY REQUIRED]'
-const MAX_ARTIFACT_DELIVERY_RETRIES = 1
+// A completion guard must actively recover the requested file instead of
+// merely detecting that a model ignored the tool contract once. The runtime
+// uses these attempts with a forced tool choice and persists the counter, so
+// this remains bounded across restarts while giving weaker/local models enough
+// room to repair malformed arguments after the first forced call.
+const MAX_ARTIFACT_DELIVERY_RETRIES = 4
 const EXECUTION_EVIDENCE_GUARD_MARKER = '[EXECUTION EVIDENCE REQUIRED]'
 const EXECUTION_REASONING_RECOVERY_MARKER = '[EXECUTION REASONING RECOVERY REQUIRED]'
 const DIRECTORY_RESUME_GUARD_MARKER = '[VERIFIED DIRECTORY RESUME REQUIRED]'
@@ -1407,14 +1551,30 @@ function isInsideDirectory(filePath, directoryPath) {
  * artifact in place. The original database identity and filename remain
  * stable so existing chat cards continue to point at the revised file.
  */
-function publishGeneratedArtifact({ name, artifact, args, job, step }) {
+async function publishGeneratedArtifact({ name, artifact, args, job, step }) {
+  if (name !== 'create_html_app') {
+    try {
+      await validateGeneratedArtifactFile({
+        filePath: artifact?.fullPath,
+        filename: artifact?.filename,
+        artifactType: artifact?.type,
+        toolName: name,
+      })
+    } catch (error) {
+      discardInvalidGeneratedArtifactFile({
+        filePath: artifact?.fullPath,
+        artifactDirectory: getArtifactDir(),
+      })
+      throw error
+    }
+  }
   const replacementId = String(args?.replace_artifact_id || '').trim()
   if (!replacementId) {
     let assetStage = null
     let assetTransaction = null
     try {
       if (name === 'create_html_app') {
-        assetStage = stageHtmlArtifactAssets({
+        assetStage = await stageHtmlArtifactAssets({
           artifactDirectory: getArtifactDir(),
           artifactId: artifact.id,
           parentFilename: artifact.filename,
@@ -1431,7 +1591,10 @@ function publishGeneratedArtifact({ name, artifact, args, job, step }) {
       rollbackHtmlArtifactAssetInstall(assetTransaction)
       discardStagedHtmlArtifactAssets(assetStage)
       deleteArtifactSourceSnapshot(artifact.id)
-      try { fs.rmSync(artifact.fullPath, { force: true }) } catch { /* best-effort cleanup */ }
+      discardInvalidGeneratedArtifactFile({
+        filePath: artifact?.fullPath,
+        artifactDirectory: getArtifactDir(),
+      })
       throw error
     }
   }
@@ -1482,7 +1645,7 @@ function publishGeneratedArtifact({ name, artifact, args, job, step }) {
   let assetTransaction = null
   try {
     if (name === 'create_html_app') {
-      assetStage = stageHtmlArtifactAssets({
+      assetStage = await stageHtmlArtifactAssets({
         artifactDirectory: artifactDirectory,
         artifactId: target.id,
         parentFilename: target.filename,
@@ -1596,6 +1759,11 @@ function publishedArtifactResult({
         args,
         toolName: name,
         userId: job?.userId,
+        outputDirectory: String(
+          args?.output_directory
+          || args?._outputDirectory
+          || requestedArtifactOutputDirectory(job?.userPrompt || job?.prompt || ''),
+        ).trim(),
       }),
       deliveryStatus: 'delivered',
     }
@@ -1622,6 +1790,69 @@ function publishedArtifactResult({
       deliveryError,
       warning: 'The managed artifact was created, but its default-directory copy could not be written.',
     }
+  }
+}
+
+function cleanupGeneratedArtifactBatch({ artifacts = [], deliveries = [] } = {}) {
+  for (const delivery of deliveries) {
+    const deliveryPath = String(delivery?.path || delivery?.localPath || '').trim()
+    if (!deliveryPath || !path.isAbsolute(deliveryPath)) continue
+    try { fs.rmSync(deliveryPath, { force: true }) } catch { /* best-effort cleanup */ }
+  }
+  for (const artifact of artifacts) {
+    deleteArtifactSourceSnapshot(artifact?.id)
+    discardInvalidGeneratedArtifactFile({
+      filePath: artifact?.fullPath,
+      artifactDirectory: getArtifactDir(),
+    })
+  }
+}
+
+/**
+ * Publish a multi-file result as one observable unit. All files are validated
+ * before the first database row or default-directory copy is created. The DB
+ * transaction and explicit filesystem rollback prevent a later-page failure
+ * from leaking an earlier page as a deliverable.
+ */
+async function publishGeneratedArtifactBatch({ name, entries, job, step, requiresLocalArtifactDelivery }) {
+  const batch = Array.isArray(entries) ? entries : []
+  const artifacts = batch.map((entry) => entry.artifact)
+  for (const { artifact } of batch) {
+    await validateGeneratedArtifactFile({
+      filePath: artifact?.fullPath,
+      filename: artifact?.filename,
+      artifactType: artifact?.type,
+      toolName: name,
+    })
+  }
+
+  const deliveries = []
+  try {
+    getDb().transaction(() => {
+      for (const { artifact, args, extra } of batch) {
+        writeArtifactSourceSnapshot({ artifactId: artifact.id, toolName: name, args })
+        persistGeneratedArtifact({ artifact, args, job, step })
+        const delivery = publishedArtifactResult({
+          name,
+          artifact,
+          args,
+          job,
+          requiresLocalArtifactDelivery,
+          extra,
+        })
+        deliveries.push(delivery)
+        if (delivery.ok !== true) {
+          const error = new Error(delivery.error || 'The generated artifact batch could not be delivered.')
+          error.code = delivery.code || 'ARTIFACT_BATCH_DELIVERY_FAILED'
+          error.retryable = delivery.retryable !== false
+          throw error
+        }
+      }
+    })()
+    return deliveries
+  } catch (error) {
+    cleanupGeneratedArtifactBatch({ artifacts, deliveries })
+    throw error
   }
 }
 
@@ -2147,7 +2378,7 @@ async function executeServerTool({
       buffer: generated.buffer,
       mimeType: generated.mimeType,
     })
-    const artifact = publishGeneratedArtifact({ name, artifact: generatedArtifact, args, job, step })
+    const artifact = await publishGeneratedArtifact({ name, artifact: generatedArtifact, args, job, step })
     return await attachVisionFeedback({
       name,
       buffer: generated.buffer,
@@ -2177,20 +2408,42 @@ async function executeServerTool({
     }
     const inputName = path.basename(String(rendered.input || args?.input || 'document.pdf'))
     const baseTitle = String(args?.title || path.parse(inputName).name || 'PDF-page').trim()
-    const publishedPages = []
-    for (const page of rendered.pages) {
-      const pageTitle = rendered.pages.length === 1 && args?.title
-        ? String(args.title)
-        : `${baseTitle}-page-${page.page}`
-      const pageArgs = { ...args, title: pageTitle, pages: [page.page] }
-      const generatedArtifact = createImageArtifact({
-        title: pageTitle,
-        buffer: page.buffer,
-        mimeType: page.mimeType,
-      })
-      const artifact = publishGeneratedArtifact({
+    const stagedPages = []
+    try {
+      for (const page of rendered.pages) {
+        const pageTitle = rendered.pages.length === 1 && args?.title
+          ? String(args.title)
+          : `${baseTitle}-page-${page.page}`
+        const pageArgs = { ...args, title: pageTitle, pages: [page.page] }
+        const artifact = createImageArtifact({
+          title: pageTitle,
+          buffer: page.buffer,
+          mimeType: page.mimeType,
+        })
+        stagedPages.push({
+          page,
+          artifact,
+          args: pageArgs,
+          extra: {
+            page: page.page,
+            width: page.width,
+            height: page.height,
+            dpi: page.dpi,
+            imageMime: page.mimeType,
+          },
+        })
+      }
+    } catch (error) {
+      cleanupGeneratedArtifactBatch({ artifacts: stagedPages.map(({ artifact }) => artifact) })
+      throw error
+    }
+
+    let publishedPages
+    if (String(args?.replace_artifact_id || '').trim()) {
+      const [{ page, artifact: stagedArtifact, args: pageArgs, extra }] = stagedPages
+      const artifact = await publishGeneratedArtifact({
         name,
-        artifact: generatedArtifact,
+        artifact: stagedArtifact,
         args: pageArgs,
         job,
         step,
@@ -2201,15 +2454,28 @@ async function executeServerTool({
         args: pageArgs,
         job,
         requiresLocalArtifactDelivery,
-        extra: {
-          page: page.page,
-          width: page.width,
-          height: page.height,
-          dpi: page.dpi,
-          imageMime: page.mimeType,
-        },
+        extra,
       })
-      publishedPages.push({ page, artifact, delivery })
+      publishedPages = [{ page, artifact, delivery }]
+    } else {
+      let deliveries
+      try {
+        deliveries = await publishGeneratedArtifactBatch({
+          name,
+          entries: stagedPages,
+          job,
+          step,
+          requiresLocalArtifactDelivery,
+        })
+      } catch (error) {
+        cleanupGeneratedArtifactBatch({ artifacts: stagedPages.map(({ artifact }) => artifact) })
+        throw error
+      }
+      publishedPages = stagedPages.map(({ page, artifact }, index) => ({
+        page,
+        artifact,
+        delivery: deliveries[index],
+      }))
     }
     const artifacts = publishedPages.map(({ page, artifact, delivery }) => ({
       id: artifact.id,
@@ -2271,7 +2537,7 @@ async function executeServerTool({
       slides: pptxSlidesFromArtifactArgs(resolvedArgs),
       images: resolvedArgs._officeImages,
     })
-    const artifact = publishGeneratedArtifact({ name, artifact: generatedArtifact, args: resolvedArgs, job, step })
+    const artifact = await publishGeneratedArtifact({ name, artifact: generatedArtifact, args: resolvedArgs, job, step })
     return publishedArtifactResult({ name, artifact, args: resolvedArgs, job, requiresLocalArtifactDelivery })
   }
   if (name === 'create_docx') {
@@ -2281,7 +2547,7 @@ async function executeServerTool({
       paragraphs: docxParagraphsFromArtifactArgs(resolvedArgs),
       images: resolvedArgs._officeImages,
     })
-    const artifact = publishGeneratedArtifact({ name, artifact: generatedArtifact, args: resolvedArgs, job, step })
+    const artifact = await publishGeneratedArtifact({ name, artifact: generatedArtifact, args: resolvedArgs, job, step })
     return publishedArtifactResult({ name, artifact, args: resolvedArgs, job, requiresLocalArtifactDelivery })
   }
   if (name === 'create_xlsx') {
@@ -2291,7 +2557,7 @@ async function executeServerTool({
       sheets: xlsxSheetsFromArtifactArgs(resolvedArgs),
       images: resolvedArgs._officeImages,
     })
-    const artifact = publishGeneratedArtifact({ name, artifact: generatedArtifact, args: resolvedArgs, job, step })
+    const artifact = await publishGeneratedArtifact({ name, artifact: generatedArtifact, args: resolvedArgs, job, step })
     return publishedArtifactResult({ name, artifact, args: resolvedArgs, job, requiresLocalArtifactDelivery })
   }
   if (name === 'create_pdf') {
@@ -2301,24 +2567,28 @@ async function executeServerTool({
       blocks: pdfBlocksFromArtifactArgs(resolvedArgs),
       images: resolvedArgs._officeImages,
     })
-    const artifact = publishGeneratedArtifact({ name, artifact: generatedArtifact, args: resolvedArgs, job, step })
+    const artifact = await publishGeneratedArtifact({ name, artifact: generatedArtifact, args: resolvedArgs, job, step })
     return publishedArtifactResult({ name, artifact, args: resolvedArgs, job, requiresLocalArtifactDelivery })
   }
   if (name === 'create_html_app') {
-    const resolvedArgs = await resolveHtmlArtifactArgs(args, { userId: job?.userId || null })
+    const resolvedArgs = await resolveHtmlArtifactArgs(args, {
+      userId: job?.userId || null,
+      prompt: job?.userPrompt || job?.prompt || '',
+    })
     const generatedArtifact = createHtmlArtifact({
       title: resolvedArgs.title,
       html: resolvedArgs.html,
       files: resolvedArgs.files,
       assetIds: resolvedArgs._htmlAssetIds,
     })
-    const artifact = publishGeneratedArtifact({ name, artifact: generatedArtifact, args: resolvedArgs, job, step })
+    const artifact = await publishGeneratedArtifact({ name, artifact: generatedArtifact, args: resolvedArgs, job, step })
     return publishedArtifactResult({
       name,
       artifact,
       args: resolvedArgs,
       job,
       requiresLocalArtifactDelivery,
+      extra: { mediaAssetCount: resolvedArgs._htmlCollectionCount || resolvedArgs._htmlAssetIds.length },
     })
   }
   // fs/shell 工具不落 artifact,执行结果直接回给模型.
@@ -2725,6 +2995,7 @@ export {
   visionFeedbackMime,
   stripLocalInternalFields,
   attachVisionFeedback,
+  requestedArtifactOutputDirectory,
   SNAPSHOT_TOOL_NAMES,
   recordPreMutationSnapshot,
   executeServerTool,

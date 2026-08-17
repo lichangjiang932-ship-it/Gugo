@@ -9,7 +9,7 @@ import { I18nProvider } from '../../src/i18n/I18nProvider.jsx'
 
 function setupDom() {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
-    url: 'http://localhost/settings/models',
+    url: 'http://localhost/#/settings?tab=models',
   })
   globalThis.window = dom.window
   globalThis.document = dom.window.document

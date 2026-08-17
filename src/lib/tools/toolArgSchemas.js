@@ -67,6 +67,12 @@ export const TOOL_ARG_SCHEMAS = {
     title: z.string().min(1).max(200),
     html: z.string().min(1).max(2000000).optional(),
     files: z.record(z.string(), z.string()).optional(),
+    output_directory: z.string().min(2).max(2000).optional(),
+    asset_collection: z.object({
+      directory: z.string().min(1).max(2000),
+      extensions: z.array(z.enum(['jpg', 'jpeg', 'png', 'webp', 'avif', 'gif', 'bmp'])).max(8).optional(),
+      recursive: z.boolean().optional(),
+    }).strict().optional(),
     assets: z.array(z.object({
       id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
       path: z.string().min(1).optional(),

@@ -29,6 +29,7 @@ import { dispatchHooks } from './hooksService.js'
 import { buildSafetyBlock, prepareInlineSkillsForPrompt } from './promptCompiler.js'
 import { getBuiltinSpec } from './toolRegistry.js'
 import { normalizePromptContextIds, prepareOptionalPromptContext } from './optionalPromptContext.js'
+import { createPartialResultFallback } from './partialResultFallback.js'
 
 /** 读一个正整数 env,不合法就用默认值。 */
 function envInt(name, fallback) {
@@ -44,6 +45,8 @@ const MAX_SUBAGENT_DEPTH = envInt('SUBAGENT_MAX_DEPTH', 3)
 // 请求会被硬拆成两批,慢一倍。
 const MAX_SUBAGENTS_PER_BATCH = envInt('SUBAGENT_MAX_PER_BATCH', 8)
 const MAX_TRANSCRIPT_EVENT_CHARS = 12_000
+const SUBAGENT_CHECKPOINT_EVENT = 'runtime_checkpoint'
+const RESUMABLE_SUBAGENT_STATUSES = new Set(['interrupted'])
 
 /**
  * 独立跑的子代理默认预算。
@@ -422,12 +425,16 @@ async function executeSubagentTool(toolName, args, {
  * @param {Array} options.tools - OpenAI function-calling 工具规格
  * @param {AbortSignal} [options.signal]
  * @param {number} [options.maxIters=SUBAGENT_MAX_ITERS]
- * @returns {Promise<string>} 最终文本回答
+ * @returns {Promise<Object>} 保留 completed / paused / interrupted / incomplete 等终态的 loop 结果
  */
-async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS, userId = null, modelName = undefined, skillIds = [], skillDefinitions = [], sessionId = null, runId = null, depth = 0, callModel = callBackgroundModelWithTools, executeTool = executeSubagentTool, budget = null, approvalContext = null, slotLease = null, approveTool = requestApproval, onTranscriptEvent = null }) {
+async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS, userId = null, modelName = undefined, skillIds = [], skillDefinitions = [], sessionId = null, runId = null, depth = 0, callModel = callBackgroundModelWithTools, executeTool = executeSubagentTool, budget = null, approvalContext = null, slotLease = null, approveTool = requestApproval, onTranscriptEvent = null, loadCheckpoint = null, saveCheckpoint = null }) {
   const effectiveBudget = budget || createJobBudget({ ...SUBAGENT_BUDGET })
   const effectiveApprovalContext = approvalContext || createSubagentApprovalContext()
   const selectedModel = String(modelName || '').trim() || undefined
+  const partialResultFallback = createPartialResultFallback({
+    heading: '探索中断',
+    resultLabel: '已经查到的信息',
+  })
   const contextWindow = getModelContextWindow({ userId, modelName: selectedModel })
   const emitTranscript = (event) => {
     if (typeof onTranscriptEvent !== 'function') return
@@ -456,6 +463,8 @@ async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_
     approvalContext: effectiveApprovalContext,
     approvalOrigin: 'subagent',
     approvalSessionId: sessionId,
+    loadCheckpoint,
+    saveCheckpoint,
     enableToolHooks: false,
     requestToolApproval: ({ toolName, args, signal: approvalSignal }) => requestTreeApproval({
       context: effectiveApprovalContext,
@@ -510,24 +519,28 @@ async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_
       name: call.name,
       args: boundedTranscriptValue(call.args),
     }),
-    onToolCompleted: (outcome) => emitTranscript({
-      type: 'tool_result',
-      toolCallId: outcome.call.id,
-      name: outcome.call.name,
-      ok: outcome.result?.ok !== false,
-      result: boundedTranscriptValue(outcome.result),
-    }),
+    onToolCompleted: (outcome) => {
+      partialResultFallback.record(outcome.call, outcome.result)
+      emitTranscript({
+        type: 'tool_result',
+        toolCallId: outcome.call.id,
+        name: outcome.call.name,
+        ok: outcome.result?.ok !== false,
+        result: boundedTranscriptValue(outcome.result),
+      })
+    },
   })
 
   if (result.paused && result.clarification) {
     const clarification = result.clarification
-    return `⚠ 需要澄清(${clarification.blocker_kind}):${clarification.question}` +
+    return {
+      ...result,
+      text: `⚠ 需要澄清(${clarification.blocker_kind}):${clarification.question}` +
       (clarification.options ? `\n选项:${clarification.options.join(' / ')}` : '') +
-      (clarification.why ? `\n原因:${clarification.why}` : '')
+      (clarification.why ? `\n原因:${clarification.why}` : ''),
+    }
   }
-  return result.interrupted
-    ? String(result.text || '').replace(/^\(任务中断:/, '(探索中断:').replace('已经完成的部分:', '已经查到的信息:')
-    : result.text || ''
+  return partialResultFallback.apply(result)
 }
 
 /* ─── DB CRUD ─── */
@@ -536,13 +549,50 @@ function now() {
   return Date.now()
 }
 
+function parseTrace(value) {
+  if (!value) return []
+  try {
+    const trace = typeof value === 'string' ? JSON.parse(value) : value
+    return Array.isArray(trace) ? trace : []
+  } catch {
+    return []
+  }
+}
+
+function publicTrace(trace) {
+  return parseTrace(trace).filter((event) => event?.type !== SUBAGENT_CHECKPOINT_EVENT)
+}
+
+function checkpointFromTrace(trace) {
+  return parseTrace(trace).findLast((event) => (
+    event?.type === SUBAGENT_CHECKPOINT_EVENT
+    && event.state
+    && typeof event.state === 'object'
+  ))?.state || null
+}
+
+function traceWithCheckpoint(trace, state) {
+  return [
+    ...publicTrace(trace),
+    { type: SUBAGENT_CHECKPOINT_EVENT, state, at: now() },
+  ]
+}
+
+function subagentStatusForLoopResult(result) {
+  if (result?.paused) return 'paused'
+  if (result?.interrupted || result?.incomplete || result?.budgetExceeded || result?.noProgress) {
+    return 'interrupted'
+  }
+  return 'completed'
+}
+
 export function newSubagentRunId() {
   return `subagent-${randomUUID()}`
 }
 
 function toRun(row) {
   if (!row) return null
-  const trace = row.trace_json ? JSON.parse(row.trace_json) : []
+  const trace = publicTrace(row.trace_json)
   return {
     id: row.id,
     userId: row.user_id,
@@ -570,6 +620,40 @@ function insertRun({ id, userId, type, prompt, parentSessionId = null, parentMes
   ).run(id, userId, parentSessionId, parentMessageId, type, prompt, JSON.stringify(trace), now())
 }
 
+function getStoredRun({ id, userId }) {
+  return getDb().prepare('SELECT * FROM subagent_runs WHERE user_id = ? AND id = ?').get(userId, id) || null
+}
+
+function markRunRunning({ id, userId, trace }) {
+  const changed = getDb().prepare(
+    `UPDATE subagent_runs
+        SET status = 'running', trace_json = ?, finished_at = NULL
+      WHERE id = ? AND user_id = ?`
+  ).run(JSON.stringify(trace), id, userId).changes
+  if (!changed) throw new Error('subagent run not found')
+}
+
+function saveRunCheckpoint({ id, userId, trace, state }) {
+  if (!state || typeof state !== 'object') throw new Error('checkpoint state must be an object')
+  const checkpointTrace = traceWithCheckpoint(trace, state)
+  const changed = getDb().prepare(
+    `UPDATE subagent_runs SET trace_json = ? WHERE id = ? AND user_id = ? AND status = 'running'`
+  ).run(JSON.stringify(checkpointTrace), id, userId).changes
+  if (!changed) return null
+  trace.splice(0, trace.length, ...checkpointTrace)
+  return { state }
+}
+
+function makeCheckpointResumable(state) {
+  if (!state || typeof state !== 'object') return state || null
+  const iterations = Math.max(0, Number(state.iterations) || 0)
+  return {
+    ...state,
+    final: null,
+    iterationWindowStart: iterations,
+  }
+}
+
 function updateRun({ id, userId, status, resultText = '', trace = [] }) {
   const db = getDb()
   db.prepare(
@@ -581,6 +665,38 @@ function updateRun({ id, userId, status, resultText = '', trace = [] }) {
 export function getSubagentRun({ userId, id }) {
   const row = getDb().prepare('SELECT * FROM subagent_runs WHERE user_id = ? AND id = ?').get(userId, id)
   return toRun(row)
+}
+
+export function recoverInterruptedSubagentRuns({ at = now() } = {}) {
+  const db = getDb()
+  const rows = db.prepare("SELECT id, user_id, trace_json FROM subagent_runs WHERE status = 'running'").all()
+  if (!rows.length) return 0
+  const update = db.prepare(`
+    UPDATE subagent_runs
+       SET status = 'interrupted', result_text = ?, trace_json = ?, finished_at = ?
+     WHERE id = ? AND user_id = ? AND status = 'running'
+  `)
+  const recover = db.transaction(() => {
+    let changed = 0
+    for (const row of rows) {
+      const trace = parseTrace(row.trace_json)
+      trace.push({
+        type: 'interrupted',
+        reason: 'service_restart',
+        resumable: Boolean(checkpointFromTrace(trace)),
+        at,
+      })
+      changed += update.run(
+        '子代理因服务重启而中断；可使用原运行 ID 重试并从 checkpoint 继续。',
+        JSON.stringify(trace),
+        at,
+        row.id,
+        row.user_id,
+      ).changes
+    }
+    return changed
+  })
+  return recover()
 }
 
 export function listSubagentTypes() {
@@ -668,7 +784,7 @@ export async function runSubagentBatch({
   })))
   const runs = settled.map((result, index) => result.status === 'fulfilled'
     ? {
-        ok: true,
+        ok: result.value.status === 'completed',
         id: result.value.id,
         type: tasks[index].type,
         description: tasks[index].description,
@@ -737,20 +853,36 @@ export async function runSubagent({
   if (!Number.isInteger(depth) || depth < 0 || depth > MAX_SUBAGENT_DEPTH) {
     throw new Error(`subagent depth must be between 0 and ${MAX_SUBAGENT_DEPTH}`)
   }
+  const normalizedPrompt = String(prompt).trim()
+
+  const storedRun = getStoredRun({ id, userId })
+  if (storedRun) {
+    if (storedRun.agent_type !== type || storedRun.prompt !== normalizedPrompt) {
+      throw new Error('subagent run id belongs to a different task')
+    }
+    if (!RESUMABLE_SUBAGENT_STATUSES.has(storedRun.status)) {
+      if (storedRun.status === 'running') throw new Error('subagent run is already running')
+      return toRun(storedRun)
+    }
+  }
 
   const slotLease = createSlotLease(userId)
   await slotLease.acquire(signal)
   const effectiveBudget = budget || createJobBudget({ ...SUBAGENT_BUDGET })
   const effectiveApprovalContext = approvalContext || createSubagentApprovalContext()
 
-  const trace = [
-    { type: 'start', description, at: now() },
-    ...(team ? [{ type: 'team', team, at: now() }] : []),
-  ]
+  const trace = storedRun
+    ? parseTrace(storedRun.trace_json)
+    : [
+        { type: 'start', description, at: now() },
+        ...(team ? [{ type: 'team', team, at: now() }] : []),
+      ]
+  if (storedRun) trace.push({ type: 'resume', fromStatus: storedRun.status, at: now() })
   const onTranscriptEvent = (event) => trace.push({ ...event, type: 'transcript', eventType: event.type })
 
   try {
-    insertRun({ id, userId, type, prompt, parentSessionId, parentMessageId, trace })
+    if (storedRun) markRunRunning({ id, userId, trace })
+    else insertRun({ id, userId, type, prompt: normalizedPrompt, parentSessionId, parentMessageId, trace })
     const { system, tools } = SUBAGENT_TYPES[type]
     const promptContextMessages = prepareOptionalPromptContext({
       preparePromptContext,
@@ -759,7 +891,7 @@ export async function runSubagent({
         agentId,
         skillIds: normalizePromptContextIds(skillIds),
         skillDefinitions: prepareInlineSkillsForPrompt({ skillIds, skillDefinitions }),
-        query: String(prompt).trim(),
+        query: normalizedPrompt,
       },
       scope: 'subagent.prompt',
     }).messages
@@ -776,10 +908,17 @@ export async function runSubagent({
         role: 'system',
         content: `# Team Context\nTeam: ${team.name} (${team.id})\nMode: ${team.mode}\nYour role: ${team.role || description || type}\nWork only on your assigned scope. Your transcript is isolated from other members; return a concise result for the leader to merge.`,
       }] : []),
-      { role: 'user', content: String(prompt).trim() },
+      { role: 'user', content: normalizedPrompt },
     ]
 
-    const resultText = tools?.length
+    let checkpointState = checkpointFromTrace(trace)
+    if (storedRun && checkpointState) {
+      checkpointState = makeCheckpointResumable(checkpointState)
+      const resumedTrace = traceWithCheckpoint(trace, checkpointState)
+      trace.splice(0, trace.length, ...resumedTrace)
+      markRunRunning({ id, userId, trace })
+    }
+    const loopResult = tools?.length
       ? await subagentToolsLoop({
           messages,
           tools,
@@ -798,31 +937,54 @@ export async function runSubagent({
           executeTool,
           approveTool,
           onTranscriptEvent,
+          loadCheckpoint: () => checkpointState ? { state: checkpointState } : null,
+          saveCheckpoint: (state) => {
+            const saved = saveRunCheckpoint({ id, userId, trace, state })
+            if (saved) checkpointState = state
+            return saved
+          },
         })
       : await callBackgroundModel({ modelName, signal, messages, userId }).then((result) => {
           onTranscriptEvent({ type: 'model_response', content: boundedTranscriptValue(result), at: now() })
-          return result
+          return { text: result }
         })
 
-    trace.push({ type: 'done', at: now() })
+    const status = subagentStatusForLoopResult(loopResult)
+    const resultText = String(loopResult?.text || '')
+    if (status === 'interrupted' && checkpointState) {
+      checkpointState = makeCheckpointResumable(checkpointState)
+      saveRunCheckpoint({ id, userId, trace, state: checkpointState })
+    }
+    trace.push({
+      type: status === 'completed' ? 'done' : status,
+      ...(loopResult?.reason ? { reason: loopResult.reason } : {}),
+      at: now(),
+    })
     void dispatchHooks({
       userId,
       event: 'subagent_stop',
       tool: type,
-      args: { resultText: boundedTranscriptValue(resultText), status: 'completed' },
+      args: { resultText: boundedTranscriptValue(resultText), status },
       sessionId: parentSessionId || null,
     }).catch(() => { /* subagent_stop hook is best-effort */ })
-    return updateRun({ id, userId, status: 'completed', resultText, trace })
+    return updateRun({
+      id,
+      userId,
+      status,
+      resultText,
+      trace: status === 'completed' ? publicTrace(trace) : trace,
+    })
   } catch (err) {
     trace.push({ type: 'error', error: err?.message || String(err), at: now() })
+    const status = err?.name === 'AbortError' ? 'interrupted' : 'failed'
     void dispatchHooks({
       userId,
       event: 'subagent_stop',
       tool: type,
-      args: { error: err?.message || String(err), status: 'failed' },
+      args: { error: err?.message || String(err), status },
       sessionId: parentSessionId || null,
     }).catch(() => { /* subagent_stop hook is best-effort */ })
-    const run = updateRun({ id, userId, status: 'failed', resultText: err?.message || String(err), trace })
+    const run = updateRun({ id, userId, status, resultText: err?.message || String(err), trace })
     throw Object.assign(err, { run })
   } finally {
     slotLease.release()
@@ -842,6 +1004,7 @@ export const _testing = {
   withYieldedSlot,
   requestTreeApproval,
   approvalCacheKey,
+  subagentStatusForLoopResult,
   getLimiterSnapshot(userId) {
     const state = concurrencyByUser.get(userId)
     return { active: state?.active || 0, queued: state?.queue.length || 0 }

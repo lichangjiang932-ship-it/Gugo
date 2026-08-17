@@ -11,19 +11,56 @@ test('connection inbox stays hidden when no contact needs confirmation', () => {
 })
 
 test('settings feature hub no longer exposes the low-value channels entry', () => {
-  const source = read('../src/pages/SettingsView.jsx')
-  const featureHub = source.slice(source.indexOf('function renderFeatureHub'), source.indexOf('const renderActive'))
+  const source = read('../src/components/settings/SettingsSecondaryPanels.jsx')
+  const start = source.indexOf('export function SettingsFeatureHub')
+  const end = source.indexOf('export function SettingsPermissionsPanel', start)
+  assert.notEqual(start, -1)
+  assert.ok(end > start)
+  const featureHub = source.slice(start, end)
   assert.doesNotMatch(featureHub, /\/channels/)
 })
 
-test('settings keeps five consolidated destinations and removes the model tool toggle page', () => {
+test('settings keeps each useful module separate and removes the model tool toggle page', () => {
   const settings = read('../src/pages/SettingsView.jsx')
   const navigation = read('../src/lib/settingsNavigation.js')
-  assert.match(settings, /const SETTINGS_NAV_ITEMS = \[/)
-  assert.match(settings, /SETTINGS_PAGE_MODEL_SEARCH/)
-  assert.match(settings, /SETTINGS_PAGE_FILES_PERMISSIONS/)
-  assert.match(settings, /SETTINGS_PAGE_APPEARANCE_LANGUAGE/)
-  assert.match(settings, /SETTINGS_PAGE_SYSTEM_DATA/)
+  const expectedSections = [
+    'FEATURES',
+    'MODELS',
+    'WEB_SEARCH',
+    'FILES',
+    'PERMISSIONS',
+    'INTEGRATIONS',
+    'APPEARANCE',
+    'LANGUAGE',
+    'PET',
+    'DIAGNOSTICS',
+    'DATA',
+  ]
+  const navItems = settings.match(/const SETTINGS_NAV_ITEMS = \[([\s\S]*?)\n\]/)?.[1] || ''
+  const actualSections = [...navItems.matchAll(/SETTINGS_TAB_([A-Z_]+)/g)].map((match) => match[1])
+  assert.deepEqual(actualSections, expectedSections)
+
+  const renderActive = settings.match(
+    /function renderActive\(\) \{([\s\S]*?)\r?\n {2}\}\r?\n\r?\n {2}return \(/,
+  )?.[1] || ''
+  assert.notEqual(renderActive, '')
+  const panelMappings = {
+    FEATURES: /case SETTINGS_TAB_FEATURES:\s*return <SettingsFeatureHub/,
+    MODELS: /case SETTINGS_TAB_MODELS:\s*return renderModels\(\)/,
+    WEB_SEARCH: /case SETTINGS_TAB_WEB_SEARCH:\s*return <SettingsWebSearchPanel/,
+    FILES: /case SETTINGS_TAB_FILES:\s*return <SettingsFileOutputPanel/,
+    PERMISSIONS: /case SETTINGS_TAB_PERMISSIONS:\s*return <SettingsPermissionsPanel/,
+    INTEGRATIONS: /case SETTINGS_TAB_INTEGRATIONS:\s*return <SettingsIntegrationsPanel/,
+    APPEARANCE: /case SETTINGS_TAB_APPEARANCE:\s*default:\s*return <SettingsAppearancePanel/,
+    LANGUAGE: /case SETTINGS_TAB_LANGUAGE:\s*return renderLanguage\(\)/,
+    PET: /case SETTINGS_TAB_PET:\s*return <SettingsPetPanel/,
+    DIAGNOSTICS: /case SETTINGS_TAB_DIAGNOSTICS:\s*return <SettingsDiagnosticsPanel/,
+    DATA: /case SETTINGS_TAB_DATA:\s*return <SettingsDataExport/,
+  }
+  for (const section of expectedSections) {
+    assert.match(renderActive, panelMappings[section], `${section} must render its own panel`)
+  }
+  assert.doesNotMatch(settings, /SettingsSubnav|sectionOptions|SETTINGS_PAGE_/)
   assert.doesNotMatch(settings, /SettingsToolsPanel|SETTINGS_TAB_TOOLS/)
   assert.match(navigation, /settingsPathForSection/)
 })

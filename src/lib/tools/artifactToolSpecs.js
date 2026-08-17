@@ -144,7 +144,7 @@ export const ARTIFACT_TOOL_SPECS = {
         type: 'object',
         properties: {
           title: { type: 'string' },
-          html: { type: 'string', description: 'Complete HTML with inline CSS and JavaScript. Local media must use declared gugo-asset://<id> references.' },
+          html: { type: 'string', description: 'Complete HTML with inline CSS and JavaScript. Local media must use declared gugo-asset://<id> references in real resource slots such as src, poster, srcset, or CSS url(); comments and JavaScript strings do not count.' },
           assets: {
             type: 'array',
             maxItems: 500,

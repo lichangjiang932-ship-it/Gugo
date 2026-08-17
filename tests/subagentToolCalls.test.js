@@ -58,7 +58,7 @@ async function runLoop(script) {
     }
     return script[step++] || { content: '完成', toolCalls: [] }
   }
-  const text = await _testing.subagentToolsLoop({
+  const result = await _testing.subagentToolsLoop({
     messages: [
       { role: 'system', content: SUBAGENT_TYPES.explore.system },
       { role: 'user', content: `阅读 ${project}` },
@@ -67,7 +67,7 @@ async function runLoop(script) {
     userId: USER,
     callModel,
   })
-  return { text, toolResults, echoes }
+  return { result, text: result.text, toolResults, echoes }
 }
 
 test('★ 回归:wire 形状的 tool call 能正确派发,不再是 unknown tool: undefined', async () => {
@@ -106,7 +106,8 @@ test('grep_code 在已授权目录里可用', async () => {
 })
 
 test('request_clarification 是纯内存工具,任何情况下都不该失败', async () => {
-  const { text } = await runLoop([wireCall('request_clarification', { question: '要看哪部分?' })])
+  const { result, text } = await runLoop([wireCall('request_clarification', { question: '要看哪部分?' })])
+  assert.equal(result.paused, true)
   assert.match(text, /需要澄清/, '应把澄清问题作为最终输出返回')
 })
 
@@ -125,15 +126,16 @@ test('上游中途失败时降级为部分结果,而不是整个 run 失败', as
     if (step === 1) return wireCall('read_file', { path: path.join(project, 'package.json') })
     throw Object.assign(new Error('upstream 500'), { status: 500 })
   }
-  const text = await _testing.subagentToolsLoop({
+  const result = await _testing.subagentToolsLoop({
     messages: [{ role: 'user', content: 'x' }],
     tools: SUBAGENT_TYPES.explore.tools,
     userId: USER,
     callModel,
   })
   // 已经查到的东西必须留下来,不能整个丢掉
-  assert.match(text, /探索中断/)
-  assert.match(text, /已经查到的信息/)
+  assert.equal(result.interrupted, true)
+  assert.match(result.text, /探索中断/)
+  assert.match(result.text, /已经查到的信息/)
 })
 
 test('同一轮的独立只读工具最多 4 路并行,结果仍按调用顺序回填', async () => {
@@ -172,7 +174,7 @@ test('同一轮的独立只读工具最多 4 路并行,结果仍按调用顺序�
     callModel,
     executeTool,
   })
-  assert.equal(text, 'done')
+  assert.equal(text.text, 'done')
   assert.equal(maxActive, 3)
   assert.deepEqual(seenResults, ['a', 'b', 'c'])
 })
@@ -286,7 +288,7 @@ test('整棵子代理树沿用调用方传入的同一预算对象', async () =>
       return { ok: true }
     },
   })
-  assert.equal(result, 'done')
+  assert.equal(result.text, 'done')
   assert.equal(observedBudget, budget)
   assert.ok(budget.calls >= 1)
 })
@@ -317,7 +319,7 @@ test('nested Agent calls inherit the selected skills through the subagent tool a
     },
   })
 
-  assert.equal(result, 'done')
+  assert.equal(result.text, 'done')
   assert.deepEqual(nestedOptions?.skillIds, ['webpage'])
   assert.equal(nestedOptions?.skillDefinitions?.[0]?.id, 'webpage')
   assert.match(nestedOptions?.skillDefinitions?.[0]?.systemPrompt || '', /gugo-skill-quality:v1/)

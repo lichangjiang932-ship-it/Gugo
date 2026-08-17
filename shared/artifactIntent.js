@@ -102,6 +102,11 @@ const ARTIFACT_REVISION_ACTION = /(?:继续(?:修改|编辑|完善|优化|调整
 // substring in the middle of the sentence.
 const ARTIFACT_REVISION_PLACEMENT = /(?:^|[\n。！？!?；;，,])\s*(?:(?:(?:请|帮我|麻烦(?:你)?|直接|继续|再|只)\s*)*(?:(?:把|将)\s*[^。！？!?；;\n]{1,40}?(?:作为|设为|设置为|设成|用作|当作|当)\s*(?:网页|网站|页面|首页|文档|幻灯片|演示)?\s*(?:的)?\s*(?:背景(?:图|图片)?|封面(?:图|图片)?|主视觉)(?:使用)?|(?:用|使用|以)\s*[^。！？!?；;\n]{1,40}?(?:作为|用作|当作|来做|做(?:成)?)\s*(?:网页|网站|页面|首页|文档|幻灯片|演示)?\s*(?:的)?\s*(?:背景(?:图|图片)?|封面(?:图|图片)?|主视觉))|(?:(?:please\s+|(?:can|could|would)\s+you\s+)?(?:use|set|make)\s+(?:(?:this|that|these|those|the|my|your|uploaded|attached|provided|existing|current)\s+){0,4}(?:image|photo|picture|portrait|attachment)\s+(?:(?:as|for)\s+)?(?:(?:the|an?)\s+)?(?:(?:website|webpage|page|document|slide|deck)\s+)?(?:background(?!\s+(?:information|context|material|reference)\b)|cover|hero(?:\s+(?:image|art))?)))/i
 const EXISTING_ASSET_PLACEMENT = /(?:(?:这|那|该|此)(?:一)?(?:张|幅|个)?(?:人物)?(?:图|图片|图像|照片)|(?:上传(?:的)?|附件(?:中|里|的)?|我(?:上传|提供|发)(?:的)?)[^。！？!?；;\n]{0,12}(?:(?:人物)?(?:图|图片|图像|照片|附件)|[^\s。！？!?；;]+\.(?:avif|gif|jpe?g|png|webp))|attachment:\/\/[a-zA-Z0-9][a-zA-Z0-9_-]{7,127}|[^\s。！？!?；;]+\.(?:avif|gif|jpe?g|png|webp)|(?:(?:this|that|these|those|my|your)\s+)(?:(?:attached|uploaded|provided|existing|current)\s+)?(?:image|photo|picture|portrait|attachment)|(?:the\s+)?(?:attached|uploaded|provided|existing|current)\s+(?:image|photo|picture|portrait|attachment))/i
+// A complete image set read from a named directory is input material for the
+// requested website/document, even when the user naturally calls it an
+// “image website”. Only an independent “also create a new image” clause may
+// unlock generate_image in that situation.
+const EXISTING_IMAGE_COLLECTION_INPUT = /(?:(?:读取|扫描|遍历|使用|展示|收录|来自|从|read|scan|browse|use|show|include|from|目录|文件夹|folder|directory)[\s\S]{0,96}(?:全部|所有|每(?:一|个|张)|all|every|each)[\s\S]{0,40}(?:jpe?g|png|webp|图片|图像|照片|images?|photos?|pictures?)|(?:全部|所有|每(?:一|个|张)|all|every|each)[\s\S]{0,40}(?:jpe?g|png|webp|图片|图像|照片|images?|photos?|pictures?)[\s\S]{0,96}(?:读取|扫描|遍历|使用|展示|收录|目录|文件夹|read|scan|browse|use|show|include|folder|directory))/i
 const EXISTING_ASSET_MUTATION_COMMAND_PREFIX = /^(?:(?:请|帮我|麻烦(?:你)?|直接|继续|再|只)\s*)*(?:(?:把|将|在|向|给|用|使用)\s*|(?:please\s+)?(?:add|insert|put|place|embed|use|set|replace)\b)/i
 const EXISTING_ASSET_MUTATION_ACTION_BEFORE = /(?:加入|添加|插入|放入|放进|放到|置入|嵌入|作为|用作|设为|设置为|设成|替换为|(?:add|insert|put|place|embed|use|set|replace))\s*$/i
 const EXISTING_ASSET_MUTATION_ACTION_AFTER = /^\s*(?:加入|添加|插入|放入|放进|放到|置入|嵌入|作为|用作|设为|设置为|设成|替换为)/i
@@ -559,12 +564,14 @@ function detectArtifactIntentRaw(prompt = '', {
   const explicitNonImageArtifact = explicitPptx || explicitDocx || explicitXlsx || explicitHtml || explicitPdf
   const existingAssetPlacement = isExistingAssetPlacement(text)
     && (revisionRequest || explicitNonImageArtifact)
+  const existingImageCollectionInput = explicitNonImageArtifact
+    && EXISTING_IMAGE_COLLECTION_INPUT.test(text)
   const additionalImageProduction = ADDITIONAL_IMAGE_PRODUCTION.test(text)
   // In "use this image as the background", the image is an input asset, not
   // a request to generate a second image artifact. An independent clause such
   // as "also generate a new illustration" remains explicit production.
   const explicitImage = hasExplicitArtifactRequest(text, 'image')
-    && (!existingAssetPlacement || additionalImageProduction)
+    && (!(existingAssetPlacement || existingImageCollectionInput) || additionalImageProduction)
   const allowAdditionalFormat = (type) => Boolean(
     ADDITIONAL_ARTIFACT_CUE.test(text)
       && STRONG_ARTIFACT_FORMAT[type]?.test(text)

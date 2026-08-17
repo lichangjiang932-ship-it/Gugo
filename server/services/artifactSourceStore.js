@@ -39,6 +39,8 @@ function normalizeSourceArguments(args) {
     )
   }
   delete normalized.replace_artifact_id
+  delete normalized.output_directory
+  delete normalized.asset_collection
   return normalized
 }
 

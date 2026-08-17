@@ -33,7 +33,7 @@ import { applyHtmlArtifactDocumentPolicy, HTML_ARTIFACT_RESPONSE_CSP } from '../
 import { authenticateRequest } from '../middleware.js'
 import { getArtifactByFilename } from './jobStore.js'
 import { getTurnArtifactByFilename } from './turnArtifactStore.js'
-import { expandHtmlArtifactAssets, getHtmlArtifactAsset } from './htmlArtifactAssets.js'
+import { expandHtmlArtifactAssets, getHtmlArtifactAsset, htmlArtifactAssetIds } from './htmlArtifactAssets.js'
 import { officeImageSize, prepareOfficeArtifactImages } from './officeArtifactImages.js'
 import {
   HEAD_FONT, BODY_FONT, CJK_FONT,
@@ -163,7 +163,6 @@ export function createImageArtifact({ title = 'generated-image', buffer, mimeTyp
 export const MAX_HTML_ARTIFACT_BYTES = 2 * 1024 * 1024
 const HTML_FENCE = /^\s*```(?:html)?\s*([\s\S]*?)\s*```\s*$/i
 const HTML_LOCAL_RESOURCE_REFERENCE = /(?:\b(?:src|poster)\s*=\s*["']\s*|\burl\s*\(\s*["']?\s*|["'`])(?:file:\/\/{0,2}|[a-z]:[\\/]|\\\\[^\\\s"'`]+\\)/i
-const HTML_MANAGED_ASSET_URI = /gugo-asset:\/\/([A-Za-z0-9_-]{1,64})/g
 const HTML_REMOTE_RESOURCE_REFERENCE = /(?:\b(?:src|srcset|poster|data|background)\s*=\s*["']?\s*|\burl\s*\(\s*["']?\s*|@import\s+(?:url\s*\(\s*)?["']?\s*)(?:https?:|wss?:|ftp:|\/\/)/i
 const HTML_REMOTE_LINK_REFERENCE = /<(?:link|base)\b[^>]*\bhref\s*=\s*["']?\s*(?:https?:|wss?:|ftp:|\/\/)/i
 const HTML_FORM_SUBMISSION = /<(?:form\b[^>]*\baction|(?:button|input)\b[^>]*\bformaction)\s*=/i
@@ -296,7 +295,7 @@ export function validateHtmlArtifactSource(source, { assetIds = [] } = {}) {
       ? assetIds.map((value) => String(value || '').trim()).filter(Boolean)
       : [],
   )
-  const referencedAssetIds = new Set([...html.matchAll(HTML_MANAGED_ASSET_URI)].map((match) => match[1]))
+  const referencedAssetIds = new Set(htmlArtifactAssetIds(html))
   for (const id of referencedAssetIds) {
     if (!declaredAssetIds.has(id)) {
       throw new Error(`html artifact references undeclared managed asset: ${id}`)

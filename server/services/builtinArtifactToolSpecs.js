@@ -8,6 +8,12 @@ const REPLACE_ARTIFACT_ID_PROPERTY = Object.freeze({
   description: 'Set only when the runtime explicitly instructs an in-place revision of an adjacent delivered artifact. Use that exact artifact ID; omit this field when creating a new file or version.',
 })
 
+const OUTPUT_DIRECTORY_PROPERTY = Object.freeze({
+  type: 'string',
+  minLength: 2,
+  description: 'Optional explicitly requested absolute output directory. Use this when the user names a destination directory or drive but not an exact filename. Omit it to use the configured default output directory.',
+})
+
 const OFFICE_IMAGES_PROPERTY = Object.freeze({
   type: 'array',
   maxItems: 50,
@@ -74,6 +80,7 @@ export const BUILTIN_ARTIFACT_TOOL_SPECS = Object.freeze({
           model: { type: 'string' },
           providerKey: { type: 'string' },
           size: { type: 'string', enum: ['1024x1024', '1024x1536', '1536x1024'] },
+          output_directory: OUTPUT_DIRECTORY_PROPERTY,
           replace_artifact_id: REPLACE_ARTIFACT_ID_PROPERTY,
         },
         required: ['prompt'],
@@ -92,6 +99,7 @@ export const BUILTIN_ARTIFACT_TOOL_SPECS = Object.freeze({
           subtitle: { type: 'string' },
           theme: { type: 'string', enum: ['noir', 'paper', 'ocean', 'forest'] },
           brand: { type: 'string' },
+          output_directory: OUTPUT_DIRECTORY_PROPERTY,
           images: OFFICE_IMAGES_PROPERTY,
           replace_artifact_id: REPLACE_ARTIFACT_ID_PROPERTY,
           slides: {
@@ -177,6 +185,7 @@ export const BUILTIN_ARTIFACT_TOOL_SPECS = Object.freeze({
             },
           },
           images: OFFICE_IMAGES_PROPERTY,
+          output_directory: OUTPUT_DIRECTORY_PROPERTY,
           replace_artifact_id: REPLACE_ARTIFACT_ID_PROPERTY,
         },
         required: ['title', 'paragraphs'],
@@ -204,6 +213,7 @@ export const BUILTIN_ARTIFACT_TOOL_SPECS = Object.freeze({
             },
           },
           images: OFFICE_IMAGES_PROPERTY,
+          output_directory: OUTPUT_DIRECTORY_PROPERTY,
           replace_artifact_id: REPLACE_ARTIFACT_ID_PROPERTY,
         },
         required: ['title', 'sheets'],
@@ -221,6 +231,7 @@ export const BUILTIN_ARTIFACT_TOOL_SPECS = Object.freeze({
           title: { type: 'string' },
           markdown: { type: 'string' },
           images: OFFICE_IMAGES_PROPERTY,
+          output_directory: OUTPUT_DIRECTORY_PROPERTY,
           replace_artifact_id: REPLACE_ARTIFACT_ID_PROPERTY,
         },
         required: ['title'],
@@ -235,12 +246,24 @@ export const BUILTIN_ARTIFACT_TOOL_SPECS = Object.freeze({
     type: 'function',
     function: {
       name: 'create_html_app',
-      description: 'Create a polished managed HTML artifact that opens in Gugo preview. Use it for a standalone Gugo deliverable or an explicitly referenced managed artifact. Existing authorized local images/audio/video are input assets, not requests to generate new media: declare every one in assets and reference it from HTML as gugo-asset://<id>. Gugo bundles those files without exposing local paths. Do not use this tool when the user names a local/workspace HTML target; edit or write that exact file instead. External scripts, styles, frames, and network requests are rejected.',
+      description: 'Create a polished managed HTML artifact that opens in Gugo preview. Use it for a standalone deliverable, an explicitly referenced managed artifact, or when the user names only an output directory/drive (set output_directory). Existing authorized local images/audio/video are input assets, not requests to generate new media: declare every one in assets and reference it from HTML as gugo-asset://<id>. When the user asks for every image in a directory, set asset_collection and include every matching file. Gugo bundles those files without exposing local paths. Only bypass this tool when the user names an exact local/workspace .html filename; edit or write that exact file instead. External scripts, styles, frames, file:// URLs, and network requests are rejected.',
       parameters: {
         type: 'object',
         properties: {
           title: { type: 'string' },
-          html: { type: 'string', description: 'Complete HTML document with inline CSS and optional inline JavaScript. For every declared local asset, use its exact gugo-asset://<id> URI in src, poster, CSS url(), or a JavaScript string; never write file:// or a drive path into HTML.' },
+          output_directory: OUTPUT_DIRECTORY_PROPERTY,
+          html: { type: 'string', description: 'Complete HTML document with inline CSS and optional inline JavaScript. For every declared local asset, use its exact gugo-asset://<id> URI in a real browser resource slot such as src, poster, srcset, or CSS url(); comments and JavaScript strings do not count as asset references. Never write file:// or a drive path into HTML.' },
+          asset_collection: {
+            type: 'object',
+            additionalProperties: false,
+            description: 'Directory completeness contract. Required when the user asks to use every image in a folder. The server independently scans the directory and rejects the artifact unless every matching file is declared in assets and referenced in the HTML.',
+            properties: {
+              directory: { type: 'string', minLength: 1, description: 'Authorized absolute source directory containing the existing media.' },
+              extensions: { type: 'array', maxItems: 8, items: { type: 'string', enum: ['jpg', 'jpeg', 'png', 'webp', 'avif', 'gif', 'bmp'] } },
+              recursive: { type: 'boolean', description: 'Include matching files in subdirectories. Defaults to true.' },
+            },
+            required: ['directory'],
+          },
           assets: {
             type: 'array',
             maxItems: 500,
