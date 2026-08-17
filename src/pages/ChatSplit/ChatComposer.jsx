@@ -131,7 +131,7 @@ export default function ChatComposer({
 
   return (
     <div
-      className="chat-composer relative bg-paper/95 px-4 pb-4 pt-2 backdrop-blur-sm sm:px-6 sm:pb-5"
+      className="chat-composer relative bg-paper/95 px-4 pb-3 pt-2 backdrop-blur-sm sm:px-6 sm:pb-4"
       onDragEnter={(e) => {
         if (!isFileDrag(e)) return
         e.preventDefault()
@@ -183,7 +183,7 @@ export default function ChatComposer({
             if (event.defaultPrevented || event.target?.closest?.(COMPOSER_INTERACTIVE_SELECTOR)) return
             textareaRef.current?.focus()
           }}
-          className="flex min-h-[104px] flex-col justify-between rounded-2xl border border-ink/25 bg-paper px-3.5 py-3 shadow-[0_8px_28px_rgb(var(--color-ink-rgb)/0.07)] transition-[border-color,box-shadow,background-color] hover:border-ink/40 hover:bg-paper-2/20 focus-within:!border-ember focus-within:bg-paper focus-within:ring-[3px] focus-within:ring-ember/25 focus-within:shadow-[0_10px_36px_rgb(var(--color-ember-rgb)/0.18)]"
+          className="flex min-h-[96px] flex-col justify-between rounded-2xl border border-ink/15 bg-paper px-3.5 py-2.5 transition-[border-color,background-color] hover:border-ink/25 hover:bg-paper-2/15 focus-within:border-ink/35 focus-within:bg-paper"
         >
           <ComposerAttachments
             attachments={attachments}
@@ -199,7 +199,7 @@ export default function ChatComposer({
             {skillCommand.command && (
               <span
                 data-testid="active-skill-command"
-                className="mt-0.5 inline-flex h-6 shrink-0 items-center rounded-md bg-ink px-2 font-mono text-xs font-medium text-paper shadow-sm"
+                className="mt-0.5 inline-flex h-6 shrink-0 items-center rounded-md bg-ink/5 px-2 font-mono text-xs font-medium text-ink-soft"
               >
                 {skillCommand.command}
               </span>

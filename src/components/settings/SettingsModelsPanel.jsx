@@ -1,4 +1,5 @@
 import ModelProvidersPanel from '../ModelProvidersPanel.jsx'
+import { SettingsGroup, SettingsPanel, SettingsRow } from './SettingsPrimitives.jsx'
 
 /**
  * 模型设置页 —— 简洁优先：
@@ -9,24 +10,19 @@ export default function SettingsModelsPanel({ diagnostics, onChanged, t }) {
   const model = diagnostics?.model
   const configured = Boolean(model?.configured)
   return (
-    <section className="flex flex-col gap-5">
-      <header>
-        <h1 className="text-xl font-semibold text-ink">{t('modelProviders.navTitle')}</h1>
-        <p className="mt-1 text-sm text-ink-soft">{t('modelProviders.navSubtitle')}</p>
-      </header>
-      <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
-        <span className="inline-flex items-center gap-2">
+    <SettingsPanel title={t('modelProviders.navTitle')} description={t('modelProviders.navSubtitle')}>
+      <SettingsGroup>
+        <SettingsRow title={t('modelProviders.currentModel')} description={t(configured ? 'modelProviders.statusConfigured' : 'modelProviders.statusWaiting')}>
           <span className={`h-2 w-2 rounded-full ${configured ? 'bg-emerald-500' : 'bg-ink-fade'}`} aria-hidden="true" />
-          <span className="text-ink-fade">{t('modelProviders.currentModel')}</span>
-          <code className="rounded bg-paper-2 px-1.5 py-0.5 font-mono text-xs text-ink">{model?.modelName || t('modelProviders.notConfigured')}</code>
-        </span>
-        <span className="inline-flex items-center gap-2">
-          <span className="text-ink-fade">{t('modelProviders.baseUrlLabel')}</span>
-          <code className="max-w-[280px] truncate rounded bg-paper-2 px-1.5 py-0.5 font-mono text-xs text-ink">{model?.baseUrlMasked || t('modelProviders.notConfigured')}</code>
-        </span>
-        <span className={`text-xs ${configured ? 'text-emerald-700' : 'text-ink-fade'}`}>{t(configured ? 'modelProviders.statusConfigured' : 'modelProviders.statusWaiting')}</span>
-      </div>
-      <ModelProvidersPanel onChanged={onChanged} />
-    </section>
+          <code className="settings-link-value">{model?.modelName || t('modelProviders.notConfigured')}</code>
+        </SettingsRow>
+        <SettingsRow title={t('modelProviders.baseUrlLabel')}>
+          <code className="settings-link-value">{model?.baseUrlMasked || t('modelProviders.notConfigured')}</code>
+        </SettingsRow>
+      </SettingsGroup>
+      <SettingsGroup title={t('modelProviders.manage')}>
+        <div className="p-3"><ModelProvidersPanel onChanged={onChanged} /></div>
+      </SettingsGroup>
+    </SettingsPanel>
   )
 }

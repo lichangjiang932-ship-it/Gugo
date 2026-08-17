@@ -7,7 +7,8 @@ test('chat page keeps Coding Workbench and task actions out of the conversation 
   const source = fs.readFileSync(new URL('../src/pages/ChatSplit/index.jsx', import.meta.url), 'utf8')
   assert.doesNotMatch(source, /CodingWorkbench|showCodingWorkbench|<ChatHeader/)
   const settingsPanels = fs.readFileSync(new URL('../src/components/settings/SettingsSecondaryPanels.jsx', import.meta.url), 'utf8')
-  assert.match(settingsPanels, /\['\/agents', Users,/)
+  assert.match(settingsPanels, /navigate\('\/agents'\)/)
+  assert.doesNotMatch(settingsPanels, /SettingsFeatureHub/)
 })
 
 test('chat composer removes local-file and quick-skill clutter', () => {

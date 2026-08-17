@@ -11,6 +11,7 @@ import {
   resolveDesktopDevUrl,
 } from './security.js'
 import {
+  ensureDesktopRuntimeConfigFile,
   resolveDesktopDataPaths,
   resolveDesktopPluginRoots,
   resolveDesktopPort,
@@ -433,6 +434,16 @@ function registerDesktopIpc() {
   ipcMain.handle('desktop:get-version', (event) => {
     assertTrustedIpc(event)
     return app.getVersion()
+  })
+  ipcMain.handle('desktop:open-config-file', async (event) => {
+    assertTrustedIpc(event)
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) {
+      throw new Error('desktop runtime config is only available to the main window')
+    }
+    const configPath = ensureDesktopRuntimeConfigFile({ userData: app.getPath('userData') })
+    const openError = await shell.openPath(configPath)
+    if (openError) throw new Error(`unable to open desktop runtime config: ${openError}`)
+    return { opened: true }
   })
   ipcMain.handle('desktop:check-for-updates', async (event) => {
     assertTrustedIpc(event)

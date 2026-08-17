@@ -1329,6 +1329,10 @@ export class TurnEngine {
         intentMode: effectiveIntentMode,
         signal,
         toolSpecs: resolvedToolSpecs,
+        // The loop may progressively remount tools for an execution turn, but
+        // its recovery catalog must remain the same user-configured catalog
+        // resolved above. Never let it fall back to the global server catalog.
+        fallbackToolSpecs: resolvedToolSpecs,
         skillId: activeSkillId,
         executeTool: this.deps.executeTool,
         approvalOrigin: 'chat',

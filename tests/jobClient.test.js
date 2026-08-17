@@ -156,6 +156,121 @@ test('verified local HTML exchanges account auth for a scoped relative-resource 
   }
 })
 
+test('verified local HTML safely retries a transient 405 without changing the formal receipt URL', async () => {
+  const previousWindow = globalThis.window
+  globalThis.window = { localStorage: null, sessionStorage: null }
+  setAuthToken('local-preview-retry-secret')
+  const calls = []
+  try {
+    const previewUrl = await createLocalHtmlPreviewSession(
+      '/api/local-files/verified/formal-gallery?turnId=turn-gallery&preview=1&token=stale-secret',
+      {
+        retryDelays: [0, 0],
+        fetchImpl: async (url, init) => {
+          calls.push({ url, init })
+          if (calls.length < 3) return { ok: false, status: 405 }
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ url: '/api/local-files/previews/gallery-ticket/gallery.html' }),
+          }
+        },
+      },
+    )
+
+    assert.equal(previewUrl, '/api/local-files/previews/gallery-ticket/gallery.html')
+    assert.equal(calls.length, 3)
+    assert.deepEqual(new Set(calls.map((call) => call.url)), new Set([
+      '/api/local-files/verified/formal-gallery/preview-session?turnId=turn-gallery',
+    ]))
+    assert.ok(calls.every((call) => call.init.method === 'POST'))
+    assert.ok(calls.every((call) => call.init.headers.Authorization === 'Bearer local-preview-retry-secret'))
+    assert.ok(calls.every((call) => !call.url.includes('token=')))
+  } finally {
+    setAuthToken('')
+    globalThis.window = previousWindow
+  }
+})
+
+test('verified local HTML does not replay ambiguous non-405 failures', async () => {
+  let calls = 0
+  await assert.rejects(
+    createLocalHtmlPreviewSession(
+      '/api/local-files/verified/formal-gallery?turnId=turn-gallery&preview=1',
+      {
+        retryDelays: [0, 0],
+        fetchImpl: async () => {
+          calls += 1
+          return { ok: false, status: 503 }
+        },
+      },
+    ),
+    /local HTML preview session request failed: 503/,
+  )
+  assert.equal(calls, 1)
+})
+
+test('verified local HTML normalizes a trailing slash on the formal receipt URL', async () => {
+  const calls = []
+  const previewUrl = await createLocalHtmlPreviewSession(
+    '/api/local-files/verified/formal-gallery/?sessionId=s-1&turnId=t-1&preview=1',
+    {
+      fetchImpl: async (url, init) => {
+        calls.push({ url, init })
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ url: '/api/local-files/previews/gallery-ticket/gallery.html' }),
+        }
+      },
+    },
+  )
+  assert.equal(previewUrl, '/api/local-files/previews/gallery-ticket/gallery.html')
+  assert.equal(calls[0].url, '/api/local-files/verified/formal-gallery/preview-session?sessionId=s-1&turnId=t-1')
+})
+
+test('persistent preview-session 405 reports an explicit client/server mismatch', async () => {
+  const calls = []
+  await assert.rejects(
+    createLocalHtmlPreviewSession('/api/local-files/verified/formal-gallery?turnId=t-1', {
+      retryDelays: [],
+      fetchImpl: async (url) => {
+        calls.push(String(url))
+        if (url === '/api/health') {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ kernelRevision: 'old', capabilities: {} }),
+          }
+        }
+        return { ok: false, status: 405 }
+      },
+    }),
+    (error) => error?.code === 'LOCAL_HTML_PREVIEW_RUNTIME_MISMATCH'
+      && /版本不一致/.test(error.message),
+  )
+  assert.deepEqual(calls, [
+    '/api/local-files/verified/formal-gallery/preview-session?turnId=t-1',
+    '/api/health',
+  ])
+})
+
+test('preview-session retry stops immediately when the sidebar aborts', async () => {
+  const controller = new AbortController()
+  let calls = 0
+  const promise = createLocalHtmlPreviewSession('/api/local-files/verified/formal-gallery?turnId=t-1', {
+    signal: controller.signal,
+    retryDelays: [60_000],
+    fetchImpl: async () => {
+      calls += 1
+      return { ok: false, status: 405 }
+    },
+  })
+  controller.abort()
+  await assert.rejects(promise, (error) => error?.name === 'AbortError')
+  assert.equal(calls, 1)
+})
+
 test('verified local HTML preview tickets are revoked with account auth and never leak in query parameters', async () => {
   const previousWindow = globalThis.window
   globalThis.window = { localStorage: null, sessionStorage: null }

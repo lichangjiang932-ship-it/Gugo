@@ -193,7 +193,6 @@ test('assistant keeps narration and tools in true DOM order with the current com
     assert.equal(timelines[1].querySelector('.chat-tool-step-marker')?.textContent, '2')
     assert.match(timelines[1].querySelector('[data-testid="tool-detail-arguments"]')?.textContent || '', /npm test/)
     assert.match(timelines[1].querySelector('[data-testid="tool-live-output"]')?.textContent || '', /3 tests passed/)
-
     const runningToggle = timelines[1].querySelector('[data-testid="tool-step-toggle"]')
     assert.equal(runningToggle?.getAttribute('aria-expanded'), 'true')
     await act(async () => runningToggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
@@ -250,16 +249,16 @@ test('a persisted file owned by a tool call opens from the execution step summar
       </I18nProvider>,
     ))
 
-    const fileButton = rootElement.querySelector('[data-testid="tool-summary-open"]')
     const executionToggle = rootElement.querySelector('[data-testid="execution-toggle"]')
     assert.equal(executionToggle?.getAttribute('aria-expanded'), 'false')
     assert.equal(rootElement.querySelector('[data-testid="execution-content"]'), null)
     await act(async () => executionToggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
-    const expandedFileButton = rootElement.querySelector('[data-testid="tool-summary-open"]')
-    assert.equal(fileButton, null)
-    assert.ok(expandedFileButton)
-    assert.match(expandedFileButton.textContent, /inspect_pdf\.py/)
-    await act(async () => expandedFileButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    const fileButton = rootElement.querySelector('[data-testid="tool-summary-open"]')
+    assert.equal(executionToggle.getAttribute('aria-expanded'), 'true')
+    assert.ok(rootElement.querySelector('[data-testid="execution-content"]'))
+    assert.ok(fileButton)
+    assert.match(fileButton.textContent, /inspect_pdf\.py/)
+    await act(async () => fileButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
 
     assert.equal(opened.length, 1)
     assert.deepEqual(opened[0].directFile, {
@@ -329,7 +328,9 @@ test('only final deliverables are clickable in execution steps and appear below'
     await renderMessage(baseMessage)
     const executionToggle = rootElement.querySelector('[data-testid="execution-toggle"]')
     assert.equal(executionToggle?.getAttribute('aria-expanded'), 'false')
-    await act(async () => executionToggle.dispatchEvent(new window.MouseEvent('click', { bubbles: true })))
+    assert.equal(rootElement.querySelector('[data-testid="execution-content"]'), null)
+    await act(async () => executionToggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.equal(executionToggle.getAttribute('aria-expanded'), 'true')
     const stepSummaries = [...rootElement.querySelectorAll('.chat-tool-summary')]
     assert.deepEqual(
       stepSummaries.map((summary) => summary.textContent.trim().split(/[\\/]/).pop()),

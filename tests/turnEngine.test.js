@@ -833,6 +833,11 @@ test('TurnEngine persists and applies agent, skill, memory, and tools context', 
   assert.equal(loopOptions.messages[0].content, '# Skill\nreview carefully')
   assert.equal(loopOptions.messages[1].content, '# Memory\nproject uses SQLite')
   assert.deepEqual(loopOptions.toolSpecs.map((spec) => spec.function.name), ['read_file'])
+  assert.deepEqual(
+    loopOptions.fallbackToolSpecs.map((spec) => spec.function.name),
+    ['read_file'],
+    'dynamic recovery must receive only the current turn resolved/enabled catalog',
+  )
   assert.equal(loopOptions.skillId, 'skill-review')
   assert.equal(loopOptions.job.agentId, 'agent-resolved')
   assert.equal(loopOptions.job.modelName, 'context-model')

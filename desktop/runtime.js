@@ -54,6 +54,39 @@ export function resolveDesktopDataPaths(userData) {
   }
 }
 
+export function resolveDesktopRuntimeConfigPath(userData) {
+  const basePath = String(userData || '').trim()
+  if (!basePath) throw new TypeError('desktop user data path is required')
+  return path.join(resolveDesktopDataPaths(basePath).dataDir, 'runtime.json')
+}
+
+export function ensureDesktopRuntimeConfigFile({
+  userData,
+  mkdirSync = fs.mkdirSync,
+  writeFileSync = fs.writeFileSync,
+  lstatSync = fs.lstatSync,
+} = {}) {
+  const configPath = resolveDesktopRuntimeConfigPath(userData)
+  mkdirSync(path.dirname(configPath), { recursive: true })
+  try {
+    writeFileSync(configPath, '{\n  "env": {}\n}\n', {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o600,
+    })
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error
+  }
+
+  const stat = lstatSync(configPath)
+  if (!stat.isFile() || stat.isSymbolicLink()) {
+    const error = new Error('desktop runtime config must be a regular file')
+    error.code = 'INVALID_RUNTIME_CONFIG_FILE'
+    throw error
+  }
+  return configPath
+}
+
 function parseConfiguredRoots(value, delimiter = path.delimiter) {
   const input = String(value || '').trim()
   if (!input) return []

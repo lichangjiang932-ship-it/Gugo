@@ -43,6 +43,7 @@ import { createModelPhaseHeartbeat, DEFAULT_MODEL_PHASE_HEARTBEAT_MS } from './m
 import { getDefaultOutputDirectory, getProjectDirectory } from './localFileAccessService.js'
 import { createPartialResultFallback } from './partialResultFallback.js'
 import { validateLocalHtmlDelivery } from './localHtmlDeliveryValidation.js'
+import { resolveChatCapabilityMode } from './chatToolSelection.js'
 
 import { withLogContext } from '../utils/logger.js'
 import { createRepeatCallGuard } from '../utils/repeatCallGuard.js'
@@ -59,6 +60,31 @@ const ARTIFACT_RECOVERY_PHASE_DIAGNOSE = 'diagnose'
 const ARTIFACT_RECOVERY_PHASE_FORCE = 'force'
 const MAX_ARTIFACT_RECOVERY_DIAGNOSTIC_ROUNDS = 2
 const LIVE_ARTIFACT_CONTRACT_MARKER = '[LIVE ARTIFACT CONTRACT UPDATED]'
+const DYNAMIC_EXECUTION_TOOL_RECOVERY_MARKER = '[DYNAMIC EXECUTION TOOL RECOVERY]'
+const DYNAMIC_EXECUTION_TARGET_MARKER = '[CANONICAL LOCAL FILE CONTINUATION]'
+const DYNAMIC_EXECUTION_TOOL_NAMES = new Set([
+  'list_directory',
+  'read_file',
+  'write_file',
+  'edit_file',
+  'multi_edit',
+  'apply_patch',
+  'patch_file',
+  'bash_exec',
+  'run_command',
+  'run_project_check',
+  'git_status',
+  'git_diff',
+])
+const DYNAMIC_MUTATION_TOOL_NAMES = new Set([
+  'write_file',
+  'edit_file',
+  'multi_edit',
+  'apply_patch',
+  'patch_file',
+  'bash_exec',
+  'run_command',
+])
 const PRIOR_TURN_OUTCOME_MARKER = '[PRIOR TURN OUTCOME]'
 const STATUS_INQUIRY_PROMPT = /^(?:(?:请|先|那|那么|现在)\s*)?(?:(?:遇到|出现|发生)(?:了)?\s*(?:什么|哪些)?\s*(?:问题|错误|异常|阻塞)|(?:有|还有|到底有)\s*(?:什么|哪些)?\s*(?:问题|错误|异常)|(?:为什么|为何|怎么|哪里)\s*(?:会)?\s*(?:失败|报错|卡住|停止|中断|没(?:有)?完成|未完成)|(?:现在|当前)?\s*(?:是什么|什么)\s*(?:状态|进度)|(?:完成|做好|成功)(?:了)?\s*(?:吗|没有)|what\s+(?:went\s+wrong|failed)|why\s+(?:did\s+it\s+fail|is\s+it\s+stuck)|what(?:'s|\s+is)\s+the\s+(?:status|problem))(?:[了呢吗]?\s*[?？。.!！]*)$/i
 const FALSE_SUCCESS_STATUS = /(?:没有(?:任何)?(?:问题|错误|异常)|(?:已经|已|任务)(?:顺利|成功)?完成|完成了|all\s+good|completed\s+successfully)/i
@@ -109,6 +135,20 @@ function latestPriorTurnOutcome(messages = []) {
     } catch { /* trusted marker with malformed legacy payload: ignore */ }
   }
   return null
+}
+
+function restoreNamedToolSpecs(currentSpecs = [], fallbackSpecs = [], names = []) {
+  const wanted = new Set(Array.from(names || [], (name) => String(name || '').trim()).filter(Boolean))
+  const restored = new Map()
+  for (const spec of Array.isArray(currentSpecs) ? currentSpecs : []) {
+    const name = String(spec?.function?.name || '').trim()
+    if (name) restored.set(name, spec)
+  }
+  for (const spec of Array.isArray(fallbackSpecs) ? fallbackSpecs : []) {
+    const name = String(spec?.function?.name || '').trim()
+    if (wanted.has(name) && !restored.has(name)) restored.set(name, spec)
+  }
+  return [...restored.values()]
 }
 
 function isForcedToolChoiceCompatibilityError(error) {
@@ -305,6 +345,11 @@ function normalizeRepeatedUserRequest(value) {
   return text.trim().replace(/\s+/g, ' ')
 }
 
+function isLocalMutationContinuationRequest(value) {
+  const text = normalizeRepeatedUserRequest(value)
+  return /^(?:(?:继续|接着)(?:$|[\s,，:：。.!！?？]|刚才|之前|上次|原来|未完成|修改|处理|修复|完成|执行|做|这个|那个|上述)|continue(?:$|\s+(?:the|that|this|previous|unfinished|same|work|task|change|edit|fix))|go\s+ahead|proceed)(?:[\s\S]{0,80})$/i.test(text)
+}
+
 function recoverPriorLocalMutationTargets(messages, currentUserMessage) {
   const history = Array.isArray(messages) ? messages : []
   const currentUserIndex = history.lastIndexOf(currentUserMessage)
@@ -317,9 +362,11 @@ function recoverPriorLocalMutationTargets(messages, currentUserMessage) {
     }
   }
   const currentRequest = normalizeRepeatedUserRequest(currentUserMessage?.content)
+  const previousRequest = normalizeRepeatedUserRequest(history[priorUserIndex]?.content)
   if (priorUserIndex < 0
     || !currentRequest
-    || currentRequest !== normalizeRepeatedUserRequest(history[priorUserIndex]?.content)) {
+    || (currentRequest !== previousRequest
+      && !isLocalMutationContinuationRequest(currentUserMessage?.content))) {
     return { mutationTargets: [], deletionTargets: [] }
   }
 
@@ -410,7 +457,7 @@ export async function runToolsLoop({
   saveCheckpoint = null,
   contextWindow = undefined,
   toolSpecs = undefined,
-  fallbackToolSpecs = SERVER_TOOL_SPECS,
+  fallbackToolSpecs = undefined,
   skillId = undefined,
   approvalOrigin = 'job',
   approvalSessionId = null,
@@ -432,6 +479,17 @@ export async function runToolsLoop({
   toolRetryBaseDelayMs = 120,
   modelHeartbeatIntervalMs = DEFAULT_MODEL_PHASE_HEARTBEAT_MS,
 }) {
+  // Dynamic recovery may widen the model-visible subset, but only within the
+  // catalog that the current caller already resolved for this turn. In
+  // particular, an explicit `toolSpecs` array has already passed user tool
+  // configuration and permission filtering, so falling back to the global
+  // SERVER_TOOL_SPECS here would silently re-enable disabled tools. Callers
+  // that need a wider, still-authorized catalog must pass it explicitly.
+  const eligibleFallbackToolSpecs = Array.isArray(fallbackToolSpecs)
+    ? fallbackToolSpecs
+    : Array.isArray(toolSpecs)
+      ? toolSpecs
+      : SERVER_TOOL_SPECS
   // 文件产物工具按本次任务意图裁剪。同一份 spec 既喂给模型,也用于 validateToolCall ——
   // 这样"模型看不到"和"调了也会被拒"是同一个事实,不会两边漂移。
   //
@@ -442,6 +500,15 @@ export async function runToolsLoop({
   // schema,既增加 token,也会诱导模型继续生成已经结束的产物。
   const currentUserMessage = (Array.isArray(messages) ? messages : [])
     .findLast((message) => message?.role === 'user' && typeof message.content === 'string')
+  const currentUserIndex = Array.isArray(messages) ? messages.lastIndexOf(currentUserMessage) : -1
+  const previousUserMessage = currentUserIndex > 0
+    ? messages.slice(0, currentUserIndex).findLast((message) => (
+        message?.role === 'user' && typeof message.content === 'string'
+      ))
+    : null
+  const previousUserPrompt = String(
+    job?.previousUserPrompt || previousUserMessage?.content || '',
+  )
   const intentText = [
     job?.prompt || '',
     currentUserMessage?.content || '',
@@ -670,7 +737,7 @@ export async function runToolsLoop({
   const selectedToolSpecs = selectJobToolSpecs({
     prompt: intentText,
     userPrompt: artifactAuthorizationText,
-    previousUserPrompt: String(job?.previousUserPrompt || ''),
+    previousUserPrompt,
     priorArtifacts,
     priorArtifactTypes,
     hasExplicitManagedArtifactReference: explicitlyReferencedArtifacts.length > 0,
@@ -689,7 +756,7 @@ export async function runToolsLoop({
   const artifactToolSpecCatalog = new Map(
     [
       ...(Array.isArray(toolSpecs) ? toolSpecs : SERVER_TOOL_SPECS),
-      ...(Array.isArray(fallbackToolSpecs) ? fallbackToolSpecs : []),
+      ...eligibleFallbackToolSpecs,
       ...selectedToolSpecs,
     ]
       .filter((spec) => isFileArtifactTool(spec?.function?.name))
@@ -763,7 +830,11 @@ export async function runToolsLoop({
       return !isFileArtifactTool(name) || stepArtifactTools.has(name)
     }),
     directoryAuthorizationResolution,
-    fallbackToolSpecs,
+    // A persisted read_write/read_only directory grant is itself the authority
+    // that re-enables the file tools for the authorized path. Restore from the
+    // full catalog here so a resumed Job gets write/edit/exec capability back
+    // after the caller narrowed the specs while it was waiting for the grant.
+    SERVER_TOOL_SPECS,
   )
   if (artifactDeliveryStep) {
     const activeNames = new Set(activeToolSpecs.map((spec) => spec?.function?.name).filter(Boolean))
@@ -805,10 +876,17 @@ export async function runToolsLoop({
   // trusted planning call site; every other caller remains fail-closed on the
   // standard execution/evidence contract.
   const enforceExecutionIntent = executionGuardMode !== 'read_only_exploration'
-  const directExecutionRequested = enforceExecutionIntent && shouldRequireExecution({
-    intentMode,
-    text: executionIntentText,
-  })
+  const recoveredPriorLocalTargets = recoverPriorLocalMutationTargets(messages, currentUserMessage)
+  const inheritedLocalMutationContinuation = enforceExecutionIntent
+    && recoveredPriorLocalTargets.mutationTargets.length > 0
+    && isLocalMutationContinuationRequest(artifactAuthorizationText)
+  const directExecutionRequested = enforceExecutionIntent && (
+    shouldRequireExecution({
+      intentMode,
+      text: executionIntentText,
+    })
+    || inheritedLocalMutationContinuation
+  )
   // ★ 纯文本交付(生成周报/写文案/做总结,没有文件路径)不写文件,
   // 文字本身就是交付物。这类请求既不算 mutation 任务,也不要求工具执行证据 ——
   // 否则纯文本任务永远以 execution_evidence_missing 收尾。
@@ -816,6 +894,53 @@ export async function runToolsLoop({
   const mutationExecutionRequested = !textDeliverableOnly && (
     requiresPersistedArtifact
     || (directExecutionRequested && hasMutationExecutionIntent(executionIntentText)))
+  const priorTurnMutationToolObserved = currentUserIndex > 0
+    && messages.slice(Math.max(0, messages.slice(0, currentUserIndex)
+      .findLastIndex((message) => message?.role === 'user')), currentUserIndex)
+      .some((message) => message?.role === 'assistant'
+        && Array.isArray(message.tool_calls)
+        && message.tool_calls.some((call) => DYNAMIC_MUTATION_TOOL_NAMES.has(String(
+          call?.function?.name || call?.name || '',
+        ).trim())))
+  const restoredDynamicToolNames = new Set(
+    (Array.isArray(restoredState?.completionGuards?.dynamicallyMountedToolNames)
+      ? restoredState.completionGuards.dynamicallyMountedToolNames
+      : [])
+      .map((name) => String(name || '').trim())
+      .filter((name) => DYNAMIC_EXECUTION_TOOL_NAMES.has(name)),
+  )
+  const dynamicallyMountedToolNames = new Set(restoredDynamicToolNames)
+  const dynamicExecutionRecoverySignatures = new Set()
+  const capabilityMode = resolveChatCapabilityMode({
+    prompt: intentText,
+    userPrompt: artifactAuthorizationText,
+    previousUserPrompt,
+    intentMode,
+    executionRequired: directExecutionRequested || revisesAdjacentArtifact,
+  })
+  const shouldRestoreExecutionTools = approvalMode === 'bypass' && enforceExecutionIntent && (
+    mutationExecutionRequested
+    || revisesAdjacentArtifact
+    || (capabilityMode === 'execute' && (
+      hasMutationExecutionIntent(previousUserPrompt)
+      || priorTurnMutationToolObserved
+      || restoredDynamicToolNames.size > 0
+    ))
+  )
+  if (shouldRestoreExecutionTools) {
+    const activeNames = new Set(activeToolSpecs.map(toolNameFromSpec).filter(Boolean))
+    activeToolSpecs = restoreNamedToolSpecs(
+      activeToolSpecs,
+      eligibleFallbackToolSpecs,
+      new Set([...DYNAMIC_EXECUTION_TOOL_NAMES, ...restoredDynamicToolNames]),
+    )
+    for (const spec of activeToolSpecs) {
+      const name = toolNameFromSpec(spec)
+      if (DYNAMIC_EXECUTION_TOOL_NAMES.has(name) && !activeNames.has(name)) {
+        dynamicallyMountedToolNames.add(name)
+      }
+    }
+  }
   const executionConvergenceEnabled = enforceExecutionIntent && mutationExecutionRequested
   let requiresPdfLayoutVerification = mutationExecutionRequested
     && pdfLayoutDeliveryEligible
@@ -867,6 +992,19 @@ export async function runToolsLoop({
     approvalMode,
     ...outputDirectoryContext,
   })
+  if (shouldRestoreExecutionTools
+    && recoveredPriorLocalTargets.mutationTargets.length > 0
+    && !convo.some((message) => message?.role === 'system'
+      && String(message?.content || '').includes(DYNAMIC_EXECUTION_TARGET_MARKER))) {
+    convo.push({
+      role: 'system',
+      content: [
+        DYNAMIC_EXECUTION_TARGET_MARKER,
+        `The previous execution turn successfully mutated these canonical local targets: ${recoveredPriorLocalTargets.mutationTargets.map((target) => JSON.stringify(target)).join(', ')}.`,
+        'Continue against those exact formal files in place. Read the exact target before choosing an edit, preserve its path identity, and do not create a copy or substitute another path unless the user explicitly asks for one.',
+      ].join(' '),
+    })
+  }
   const hasRuntimeMarker = (marker) => convo.some((message) => (
     message?.role === 'system' && String(message?.content || '').includes(marker)
   ))
@@ -1212,7 +1350,7 @@ export async function runToolsLoop({
     : restoredState?.completionGuards?.pendingMutationVerification
       ? [PROJECT_SCOPE_TARGET]
       : []
-  const recoveredHistoricalTargets = recoverPriorLocalMutationTargets(messages, currentUserMessage)
+  const recoveredHistoricalTargets = recoveredPriorLocalTargets
   const pendingMutationTargets = new Set(
     [...restoredMutationTargets, ...recoveredHistoricalTargets.mutationTargets]
       .map(normalizeMutationTarget)
@@ -1723,6 +1861,7 @@ export async function runToolsLoop({
         executionEvidenceObserved,
         mutationExecutionObserved,
         priorOutcomeMutationObserved,
+        dynamicallyMountedToolNames: [...dynamicallyMountedToolNames],
         verifiedRecoveredMutationObserved,
         mutationSteeringPending,
         executionEvidenceRetries,
@@ -3053,6 +3192,37 @@ export async function runToolsLoop({
               || workspaceTargetValidationError(name, args)
           }
 
+          if (!result
+            && DYNAMIC_EXECUTION_TOOL_NAMES.has(name)
+            && capabilityMode === 'execute'
+            && approvalMode === 'bypass'
+            && !activeToolSpecs.some((spec) => toolNameFromSpec(spec) === name)) {
+            const refreshedSpecs = restoreNamedToolSpecs(
+              activeToolSpecs,
+              eligibleFallbackToolSpecs,
+              DYNAMIC_EXECUTION_TOOL_NAMES,
+            )
+            if (refreshedSpecs.some((spec) => toolNameFromSpec(spec) === name)) {
+              const previousNames = new Set(activeToolSpecs.map(toolNameFromSpec).filter(Boolean))
+              activeToolSpecs = refreshedSpecs
+              for (const spec of activeToolSpecs) {
+                const mountedName = toolNameFromSpec(spec)
+                if (DYNAMIC_EXECUTION_TOOL_NAMES.has(mountedName) && !previousNames.has(mountedName)) {
+                  dynamicallyMountedToolNames.add(mountedName)
+                }
+              }
+              convo = replaceRuntimeCapabilityBlock(convo, {
+                toolSpecs: activeToolSpecs,
+                approvalMode,
+                ...outputDirectoryContext,
+              })
+              availableVerificationToolNames = activeToolSpecs
+                .map(toolNameFromSpec)
+                .filter((toolName) => VERIFICATION_TOOLS.has(toolName)
+                  || isCommandExecutionTool(toolName))
+            }
+          }
+
           if (!result) {
             const validationError = validateToolCall(call, activeToolSpecs, {
               // 单测/嵌入方可注入自己的 executor；生产默认执行器仍严格限制在已声明工具集。
@@ -3351,6 +3521,32 @@ export async function runToolsLoop({
       })
       observeFailureRecovery(executedCall, outcome.result)
       if (!succeeded) outcome.artifactId = null
+      if (!succeeded
+        && DYNAMIC_MUTATION_TOOL_NAMES.has(String(executedCall?.name || ''))
+        && outcome.result?.denied !== true
+        && outcome.result?.requiresUserVerification !== true
+        && !['tool_budget_exceeded', 'approval_denied'].includes(String(outcome.result?.code || ''))) {
+        const recoverySignature = [
+          executedCall.name,
+          String(outcome.result?.code || outcome.result?.error || 'failed').slice(0, 240),
+        ].join(':')
+        if (!dynamicExecutionRecoverySignatures.has(recoverySignature)) {
+          dynamicExecutionRecoverySignatures.add(recoverySignature)
+          const alternatives = [...DYNAMIC_MUTATION_TOOL_NAMES]
+            .filter((toolName) => toolName !== executedCall.name
+              && activeToolSpecs.some((spec) => toolNameFromSpec(spec) === toolName))
+          deferredPostBatchMessages.push({
+            role: 'system',
+            content: [
+              DYNAMIC_EXECUTION_TOOL_RECOVERY_MARKER,
+              `The trusted execution tool ${executedCall.name} failed; this is recoverable runtime feedback, not a final answer.`,
+              'Inspect the structured tool result, correct the arguments or switch to an equivalent available mutation tool, and continue the original task now.',
+              alternatives.length > 0 ? `Equivalent mutation tools available: ${alternatives.join(', ')}.` : '',
+              'Do not paste source code, ask the user to save or run anything, expose the internal error as the final reply, or claim completion before the exact target is read back and verified.',
+            ].filter(Boolean).join(' '),
+          })
+        }
+      }
       const scheduledWaitEvidence = executedCall?.name === 'sleep_until'
         && outcome.result?.paused === true
         && outcome.result?.clarification?.blocker_kind === 'scheduled_wake'
@@ -3531,7 +3727,7 @@ export async function runToolsLoop({
             : []),
         ])
         const byName = new Map(activeToolSpecs.map((spec) => [toolNameFromSpec(spec), spec]))
-        for (const spec of Array.isArray(fallbackToolSpecs) ? fallbackToolSpecs : []) {
+        for (const spec of eligibleFallbackToolSpecs) {
           const name = toolNameFromSpec(spec)
           if (requiredNames.has(name) && !byName.has(name)) byName.set(name, spec)
         }

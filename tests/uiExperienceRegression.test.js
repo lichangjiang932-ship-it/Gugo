@@ -10,57 +10,58 @@ test('connection inbox stays hidden when no contact needs confirmation', () => {
   assert.match(source, /inboundInboxTitle:|BridgeInboundInbox/)
 })
 
-test('settings feature hub no longer exposes the low-value channels entry', () => {
-  const source = read('../src/components/settings/SettingsSecondaryPanels.jsx')
-  const start = source.indexOf('export function SettingsFeatureHub')
-  const end = source.indexOf('export function SettingsPermissionsPanel', start)
-  assert.notEqual(start, -1)
-  assert.ok(end > start)
-  const featureHub = source.slice(start, end)
-  assert.doesNotMatch(featureHub, /\/channels/)
+test('settings removes feature shortcuts without removing their standalone routes', () => {
+  const settings = read('../src/pages/SettingsView.jsx')
+  const panels = read('../src/components/settings/SettingsSecondaryPanels.jsx')
+  const app = read('../src/App.jsx')
+  assert.doesNotMatch(`${settings}\n${panels}`, /SettingsFeatureHub|\/task'|\/approvals'|\/memory'|\/desk'/)
+  for (const route of ['/task', '/approvals', '/memory', '/desk']) {
+    assert.match(app, new RegExp(`path="${route}"`))
+  }
 })
 
-test('settings keeps each useful module separate and removes the model tool toggle page', () => {
+test('settings uses a grouped modal and keeps configuration modules distinct', () => {
   const settings = read('../src/pages/SettingsView.jsx')
   const navigation = read('../src/lib/settingsNavigation.js')
   const expectedSections = [
-    'FEATURES',
+    'GENERAL',
     'MODELS',
-    'WEB_SEARCH',
-    'FILES',
-    'PERMISSIONS',
-    'INTEGRATIONS',
     'APPEARANCE',
     'LANGUAGE',
-    'PET',
-    'DIAGNOSTICS',
+    'PLUGINS',
+    'WEB_SEARCH',
+    'PERMISSIONS',
+    'AGENT_PRESETS',
+    'INTEGRATIONS',
     'DATA',
+    'ABOUT',
   ]
-  const navItems = settings.match(/const SETTINGS_NAV_ITEMS = \[([\s\S]*?)\n\]/)?.[1] || ''
-  const actualSections = [...navItems.matchAll(/SETTINGS_TAB_([A-Z_]+)/g)].map((match) => match[1])
+  const navGroups = settings.match(/const SETTINGS_NAV_GROUPS = \[([\s\S]*?)\n\]/)?.[1] || ''
+  const actualSections = [...navGroups.matchAll(/SETTINGS_TAB_([A-Z_]+)/g)].map((match) => match[1])
   assert.deepEqual(actualSections, expectedSections)
-
-  const renderActive = settings.match(
-    /function renderActive\(\) \{([\s\S]*?)\r?\n {2}\}\r?\n\r?\n {2}return \(/,
-  )?.[1] || ''
-  assert.notEqual(renderActive, '')
   const panelMappings = {
-    FEATURES: /case SETTINGS_TAB_FEATURES:\s*return <SettingsFeatureHub/,
+    GENERAL: /case SETTINGS_TAB_GENERAL:\s*return renderGeneral\(\)/,
     MODELS: /case SETTINGS_TAB_MODELS:\s*return renderModels\(\)/,
-    WEB_SEARCH: /case SETTINGS_TAB_WEB_SEARCH:\s*return <SettingsWebSearchPanel/,
-    FILES: /case SETTINGS_TAB_FILES:\s*return <SettingsFileOutputPanel/,
-    PERMISSIONS: /case SETTINGS_TAB_PERMISSIONS:\s*return <SettingsPermissionsPanel/,
-    INTEGRATIONS: /case SETTINGS_TAB_INTEGRATIONS:\s*return <SettingsIntegrationsPanel/,
-    APPEARANCE: /case SETTINGS_TAB_APPEARANCE:\s*default:\s*return <SettingsAppearancePanel/,
+    APPEARANCE: /case SETTINGS_TAB_APPEARANCE:\s*return <SettingsAppearancePanel/,
     LANGUAGE: /case SETTINGS_TAB_LANGUAGE:\s*return renderLanguage\(\)/,
-    PET: /case SETTINGS_TAB_PET:\s*return <SettingsPetPanel/,
-    DIAGNOSTICS: /case SETTINGS_TAB_DIAGNOSTICS:\s*return <SettingsDiagnosticsPanel/,
+    PLUGINS: /case SETTINGS_TAB_PLUGINS:\s*return <SettingsPluginsPanel/,
+    WEB_SEARCH: /case SETTINGS_TAB_WEB_SEARCH:\s*return <SettingsWebSearchPanel/,
+    PERMISSIONS: /case SETTINGS_TAB_PERMISSIONS:\s*return <SettingsPermissionsPanel/,
+    AGENT_PRESETS: /case SETTINGS_TAB_AGENT_PRESETS:\s*return <SettingsAgentPresetsPanel/,
+    INTEGRATIONS: /case SETTINGS_TAB_INTEGRATIONS:\s*return <SettingsIntegrationsPanel/,
     DATA: /case SETTINGS_TAB_DATA:\s*return <SettingsDataExport/,
+    ABOUT: /case SETTINGS_TAB_ABOUT:\s*default:\s*return renderAbout\(\)/,
   }
   for (const section of expectedSections) {
-    assert.match(renderActive, panelMappings[section], `${section} must render its own panel`)
+    assert.match(settings, panelMappings[section], `${section} must render its own panel`)
   }
-  assert.doesNotMatch(settings, /SettingsSubnav|sectionOptions|SETTINGS_PAGE_/)
+  assert.match(settings, /className="settings-page-backdrop"/)
+  assert.match(settings, /role="dialog"/)
+  assert.match(settings, /aria-modal="true"/)
+  assert.match(settings, /inert=""/)
+  assert.match(settings, /useModalFocusTrap/)
+  assert.match(settings, /settings\.openConfigFile/)
+  assert.doesNotMatch(settings, /SETTINGS_NAV_ITEMS|SETTINGS_TAB_FEATURES|SETTINGS_TAB_FILES|SETTINGS_TAB_PET/)
   assert.doesNotMatch(settings, /SettingsToolsPanel|SETTINGS_TAB_TOOLS/)
   assert.match(navigation, /settingsPathForSection/)
 })
@@ -177,7 +178,8 @@ test('skills open details before use and appearance offers a broader accent pale
 
   const palette = settings.match(/const ACCENT_COLORS = \[([^\]]+)\]/)?.[1] || ''
   assert.ok((palette.match(/#[0-9A-Fa-f]{6}/g) || []).length >= 8)
-  assert.match(settings, /flex flex-wrap gap-3/)
+  assert.match(settings, /flex max-w-\[260px\] flex-wrap justify-end gap-2/)
+  assert.match(settings, /<SettingsRow title=\{t\('settings\.accentColor'\)\}/)
 })
 
 test('skills and connections keep compact responsive surfaces across browser and desktop', () => {

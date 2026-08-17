@@ -105,8 +105,9 @@ const CHAT_SURFACE_TRANSLATIONS = {
     desktopPet: DESKTOP_PET_TRANSLATIONS.zh,
     chatComposer: { allSkills: '全部技能', dropFiles: '松开以上传文件', fullDisk: '全盘', viewImage: '点击查看大图', removeAttachment: '移除附件', clearAttachments: '清空附件', placeholder: '输入指令，或 / 调用技能…', attachment: '附件', context: '上下文 · {count}', stop: '停止', send: '发送', steer: '追加指令' },
     chatSteering: { sent: '已将指令追加到当前任务', failed: '追加指令失败，内容已恢复到输入框', textOnly: '当前任务运行中，请输入文字指令后发送', directoryAuthorizationRequired: '原任务正在等待目录授权，请在上方授权卡选择或确认目录后继续。', directoryResumePending: '目录已授权，正在恢复原任务，请稍候。' },
-    chatPreview: { htmlTitle: 'HTML 预览', previousPage: '上一页', nextPage: '下一页', pptTitle: 'PPT 预览', reactTitle: 'React 沙箱', reactLoading: '编译中…', runtimeError: '运行错误：', promiseError: 'Promise 错误：', missingDefault: '未找到 export default 组件', compileFailed: '编译/执行失败：', dependencyTimeout: '依赖加载超时，请检查网络', reloadSandbox: '重新加载沙箱（清状态）', openTabs: '已打开的预览', closeTab: '关闭 {filename}', close: '关闭预览', unsupported: '暂不支持预览', unsupportedHint: '你可以下载原文件或切换源码视图查看', closePanel: '关闭面板', exportFailed: '导出失败', editableExportFailed: '编辑版导出失败', pptxConvertFailed: '转 PPTX 失败', resize: '拖动调节宽度，双击重置', restore: '还原', maximize: '最大化', preview: '预览', source: '源码', copySource: '复制源内容', copy: '复制', editableTitle: '导出轻量可编辑版（视觉效果低于默认高清版）', exporting: '导出 {progress}', editable: '编辑版', convertTitle: '把 HTML 幻灯片转成可编辑 PPTX（每页截图 + 透明文本框）', converting: '转换 {progress}', convertPptx: '转 PPTX', download: '下载 {filename}', generating: '生成 {progress}', generatingShort: '生成中', downloadHd: '下载高清', downloadHtml: '下载 HTML', downloadDocx: '下载 Word', downloadXlsx: '下载 Excel', downloadMermaid: '下载 Mermaid', downloadJson: '下载 JSON', downloadSvg: '下载 SVG', downloadJsx: '下载 JSX', downloadText: '下载文本', downloadFile: '下载文件' },
+    chatPreview: { htmlTitle: 'HTML 预览', previousPage: '上一页', nextPage: '下一页', pptTitle: 'PPT 预览', reactTitle: 'React 沙箱', reactLoading: '编译中…', runtimeError: '运行错误：', promiseError: 'Promise 错误：', missingDefault: '未找到 export default 组件', compileFailed: '编译/执行失败：', dependencyTimeout: '依赖加载超时，请检查网络', reloadSandbox: '重新加载沙箱（清状态）', openTabs: '已打开的预览', closeTab: '关闭 {filename}', close: '关闭预览', unsupported: '暂不支持预览', unsupportedHint: '你可以下载原文件或切换源码视图查看', closePanel: '关闭面板', exportFailed: '导出失败', editableExportFailed: '编辑版导出失败', pptxConvertFailed: '转 PPTX 失败', resize: '拖动调节宽度，双击重置', restore: '还原', maximize: '最大化', preview: '预览', source: '源码', copySource: '复制源内容', copy: '复制', editableTitle: '导出轻量可编辑版（视觉效果低于默认高清版）', exporting: '导出 {progress}', editable: '编辑版', convertTitle: '把 HTML 幻灯片转成可编辑 PPTX（每页截图 + 透明文本框）', converting: '转换 {progress}', convertPptx: '转 PPTX', download: '下载 {filename}', generating: '生成 {progress}', generatingShort: '生成中', downloadHd: '下载高清', downloadHtml: '下载 HTML', downloadDocx: '下载 Word', downloadXlsx: '下载 Excel', downloadMermaid: '下载 Mermaid', downloadJson: '下载 JSON', downloadSvg: '下载 SVG', downloadJsx: '下载 JSX', downloadText: '下载文本', downloadFile: '下载文件', localHtmlRuntimeMismatch: '当前页面与本地服务版本不一致，请重启 Gugo 后重新打开此文件。', localHtmlRouteUnavailable: '本地 HTML 预览接口不可用，请重启 Gugo 后重试。' },
     chatWindow: { loadEarlier: '加载更早消息', olderHidden: '还有 {count} 条较早消息未显示' },
+    chatTimeline: { label: '对话时间轴', jumpTo: '跳转到第', turn: '第', attachmentFallback: '附件消息' },
     chatAttachments: { imageLimit: '一条消息最多发送 32 张图片。', imageTooLarge: '图片过大，无法在本地处理。', compressedTooLarge: '图片压缩后仍超过 4MB。', excelTooLong: 'Excel 内容过长', wordTooLong: 'Word 内容过长', pptTooLong: 'PPT 内容过长', textTooLong: '文本内容过长', unsupportedFormat: '该文件将以原始格式上传并由服务器读取。', readFailed: '本地预览失败', maxCountNotice: '附件最多 32 个，已保留前 32 个并丢弃 {count} 个。', addedNotice: '已上传 {count} 个附件。', uploading: '正在上传…', uploadFailed: '上传失败', uploadFailedCount: '{count} 个附件上传失败，请移除后重试。', waitingForUploads: '请等待附件上传完成后再发送。', removeFailed: '请移除上传失败的附件后再发送。' },
   },
   en: {
@@ -115,8 +116,9 @@ const CHAT_SURFACE_TRANSLATIONS = {
     desktopPet: DESKTOP_PET_TRANSLATIONS.en,
     chatComposer: { allSkills: 'All skills', dropFiles: 'Drop files to upload', fullDisk: 'All files', viewImage: 'View full image', removeAttachment: 'Remove attachment', clearAttachments: 'Clear attachments', placeholder: 'Enter a prompt, or use / for skills…', attachment: 'Attach', context: 'Context · {count}', stop: 'Stop', send: 'Send', steer: 'Add instruction' },
     chatSteering: { sent: 'Instruction added to the current task', failed: 'Could not add the instruction. Your draft was restored.', textOnly: 'Enter a text instruction to update the running task.', directoryAuthorizationRequired: 'The original task is waiting for directory access. Choose or confirm a directory in the authorization card above.', directoryResumePending: 'Directory access is granted. Resuming the original task…' },
-    chatPreview: { htmlTitle: 'HTML preview', previousPage: 'Previous', nextPage: 'Next', pptTitle: 'Presentation preview', reactTitle: 'React sandbox', reactLoading: 'Compiling…', runtimeError: 'Runtime error: ', promiseError: 'Promise error: ', missingDefault: 'No export default component found', compileFailed: 'Compile/runtime failed: ', dependencyTimeout: 'Dependency loading timed out. Check your network.', reloadSandbox: 'Reload sandbox (reset state)', openTabs: 'Open previews', closeTab: 'Close {filename}', close: 'Close preview', unsupported: 'Preview is not supported yet', unsupportedHint: 'Download the original file or switch to source view.', closePanel: 'Close panel', exportFailed: 'Export failed', editableExportFailed: 'Editable export failed', pptxConvertFailed: 'PPTX conversion failed', resize: 'Drag to resize; double-click to reset', restore: 'Restore', maximize: 'Maximize', preview: 'Preview', source: 'Source', copySource: 'Copy source', copy: 'Copy', editableTitle: 'Export a lightweight editable version (lower fidelity than HD)', exporting: 'Exporting {progress}', editable: 'Editable', convertTitle: 'Convert HTML slides to editable PPTX with text overlays', converting: 'Converting {progress}', convertPptx: 'To PPTX', download: 'Download {filename}', generating: 'Generating {progress}', generatingShort: 'Generating', downloadHd: 'Download HD', downloadHtml: 'Download HTML', downloadDocx: 'Download Word', downloadXlsx: 'Download Excel', downloadMermaid: 'Download Mermaid', downloadJson: 'Download JSON', downloadSvg: 'Download SVG', downloadJsx: 'Download JSX', downloadText: 'Download text', downloadFile: 'Download file' },
+    chatPreview: { htmlTitle: 'HTML preview', previousPage: 'Previous', nextPage: 'Next', pptTitle: 'Presentation preview', reactTitle: 'React sandbox', reactLoading: 'Compiling…', runtimeError: 'Runtime error: ', promiseError: 'Promise error: ', missingDefault: 'No export default component found', compileFailed: 'Compile/runtime failed: ', dependencyTimeout: 'Dependency loading timed out. Check your network.', reloadSandbox: 'Reload sandbox (reset state)', openTabs: 'Open previews', closeTab: 'Close {filename}', close: 'Close preview', unsupported: 'Preview is not supported yet', unsupportedHint: 'Download the original file or switch to source view.', closePanel: 'Close panel', exportFailed: 'Export failed', editableExportFailed: 'Editable export failed', pptxConvertFailed: 'PPTX conversion failed', resize: 'Drag to resize; double-click to reset', restore: 'Restore', maximize: 'Maximize', preview: 'Preview', source: 'Source', copySource: 'Copy source', copy: 'Copy', editableTitle: 'Export a lightweight editable version (lower fidelity than HD)', exporting: 'Exporting {progress}', editable: 'Editable', convertTitle: 'Convert HTML slides to editable PPTX with text overlays', converting: 'Converting {progress}', convertPptx: 'To PPTX', download: 'Download {filename}', generating: 'Generating {progress}', generatingShort: 'Generating', downloadHd: 'Download HD', downloadHtml: 'Download HTML', downloadDocx: 'Download Word', downloadXlsx: 'Download Excel', downloadMermaid: 'Download Mermaid', downloadJson: 'Download JSON', downloadSvg: 'Download SVG', downloadJsx: 'Download JSX', downloadText: 'Download text', downloadFile: 'Download file', localHtmlRuntimeMismatch: 'This page is out of sync with the local service. Restart Gugo and reopen the file.', localHtmlRouteUnavailable: 'The local HTML preview endpoint is unavailable. Restart Gugo and try again.' },
     chatWindow: { loadEarlier: 'Load earlier messages', olderHidden: '{count} earlier messages are hidden' },
+    chatTimeline: { label: 'Conversation timeline', jumpTo: 'Go to turn', turn: 'Turn', attachmentFallback: 'Attachment message' },
     chatAttachments: { imageLimit: 'A message can include up to 32 images.', imageTooLarge: 'The image is too large to process locally.', compressedTooLarge: 'The compressed image is still over 4MB.', excelTooLong: 'Excel content too long', wordTooLong: 'Word content too long', pptTooLong: 'Presentation content too long', textTooLong: 'Text content too long', unsupportedFormat: 'The original file will be uploaded for server-side reading.', readFailed: 'Local preview failed', maxCountNotice: 'Attachments are limited to 32. Kept the first 32 and dropped {count}.', addedNotice: 'Uploaded {count} attachments.', uploading: 'Uploading…', uploadFailed: 'Upload failed', uploadFailedCount: '{count} attachments failed to upload. Remove them and try again.', waitingForUploads: 'Wait for attachments to finish uploading before sending.', removeFailed: 'Remove failed attachments before sending.' },
   },
   ja: {
@@ -125,8 +127,9 @@ const CHAT_SURFACE_TRANSLATIONS = {
     desktopPet: DESKTOP_PET_TRANSLATIONS.ja,
     chatComposer: { allSkills: 'すべてのスキル', dropFiles: 'ドロップしてアップロード', fullDisk: '全ファイル', viewImage: '画像を拡大表示', removeAttachment: '添付を削除', clearAttachments: '添付をすべて削除', placeholder: '指示を入力、または / でスキルを呼び出す…', attachment: '添付', context: 'コンテキスト · {count}', stop: '停止', send: '送信', steer: '指示を追加' },
     chatSteering: { sent: '現在のタスクに指示を追加しました', failed: '指示を追加できませんでした。下書きを入力欄に戻しました。', textOnly: '実行中のタスクを更新するテキスト指示を入力してください。', directoryAuthorizationRequired: '元のタスクはディレクトリの許可を待っています。上の許可カードでディレクトリを選択または確認してください。', directoryResumePending: 'ディレクトリが許可されました。元のタスクを再開しています…' },
-    chatPreview: { htmlTitle: 'HTML プレビュー', previousPage: '前へ', nextPage: '次へ', pptTitle: 'PPT プレビュー', reactTitle: 'React サンドボックス', reactLoading: 'コンパイル中…', runtimeError: '実行エラー：', promiseError: 'Promise エラー：', missingDefault: 'export default コンポーネントが見つかりません', compileFailed: 'コンパイル／実行失敗：', dependencyTimeout: '依存関係の読み込みがタイムアウトしました。', reloadSandbox: 'サンドボックスを再読み込み', openTabs: '開いているプレビュー', closeTab: '{filename} を閉じる', close: 'プレビューを閉じる', unsupported: 'まだプレビューできません', unsupportedHint: '元ファイルをダウンロードするか、ソース表示に切り替えてください。', closePanel: 'パネルを閉じる', exportFailed: 'エクスポート失敗', editableExportFailed: '編集可能版の出力に失敗', pptxConvertFailed: 'PPTX 変換に失敗', resize: 'ドラッグで幅を変更、ダブルクリックでリセット', restore: '元に戻す', maximize: '最大化', preview: 'プレビュー', source: 'ソース', copySource: 'ソースをコピー', copy: 'コピー', editableTitle: '軽量な編集可能版を出力', exporting: '出力中 {progress}', editable: '編集可能版', convertTitle: 'HTML スライドを編集可能な PPTX に変換', converting: '変換中 {progress}', convertPptx: 'PPTX に変換', download: '{filename} をダウンロード', generating: '生成中 {progress}', generatingShort: '生成中', downloadHd: '高画質版をダウンロード', downloadHtml: 'HTML をダウンロード', downloadDocx: 'Word をダウンロード', downloadXlsx: 'Excel をダウンロード', downloadMermaid: 'Mermaid をダウンロード', downloadJson: 'JSON をダウンロード', downloadSvg: 'SVG をダウンロード', downloadJsx: 'JSX をダウンロード', downloadText: 'テキストをダウンロード', downloadFile: 'ファイルをダウンロード' },
+    chatPreview: { htmlTitle: 'HTML プレビュー', previousPage: '前へ', nextPage: '次へ', pptTitle: 'PPT プレビュー', reactTitle: 'React サンドボックス', reactLoading: 'コンパイル中…', runtimeError: '実行エラー：', promiseError: 'Promise エラー：', missingDefault: 'export default コンポーネントが見つかりません', compileFailed: 'コンパイル／実行失敗：', dependencyTimeout: '依存関係の読み込みがタイムアウトしました。', reloadSandbox: 'サンドボックスを再読み込み', openTabs: '開いているプレビュー', closeTab: '{filename} を閉じる', close: 'プレビューを閉じる', unsupported: 'まだプレビューできません', unsupportedHint: '元ファイルをダウンロードするか、ソース表示に切り替えてください。', closePanel: 'パネルを閉じる', exportFailed: 'エクスポート失敗', editableExportFailed: '編集可能版の出力に失敗', pptxConvertFailed: 'PPTX 変換に失敗', resize: 'ドラッグで幅を変更、ダブルクリックでリセット', restore: '元に戻す', maximize: '最大化', preview: 'プレビュー', source: 'ソース', copySource: 'ソースをコピー', copy: 'コピー', editableTitle: '軽量な編集可能版を出力', exporting: '出力中 {progress}', editable: '編集可能版', convertTitle: 'HTML スライドを編集可能な PPTX に変換', converting: '変換中 {progress}', convertPptx: 'PPTX に変換', download: '{filename} をダウンロード', generating: '生成中 {progress}', generatingShort: '生成中', downloadHd: '高画質版をダウンロード', downloadHtml: 'HTML をダウンロード', downloadDocx: 'Word をダウンロード', downloadXlsx: 'Excel をダウンロード', downloadMermaid: 'Mermaid をダウンロード', downloadJson: 'JSON をダウンロード', downloadSvg: 'SVG をダウンロード', downloadJsx: 'JSX をダウンロード', downloadText: 'テキストをダウンロード', downloadFile: 'ファイルをダウンロード', localHtmlRuntimeMismatch: 'このページはローカルサービスとバージョンが一致していません。Gugo を再起動してファイルを開き直してください。', localHtmlRouteUnavailable: 'ローカル HTML プレビューのエンドポイントを利用できません。Gugo を再起動してもう一度お試しください。' },
     chatWindow: { loadEarlier: '以前のメッセージを読み込む', olderHidden: '以前のメッセージが {count} 件あります' },
+    chatTimeline: { label: '会話タイムライン', jumpTo: 'ターンへ移動', turn: 'ターン', attachmentFallback: '添付メッセージ' },
     chatAttachments: { imageLimit: '1件のメッセージに添付できる画像は32枚までです。', imageTooLarge: '画像が大きすぎてローカルで処理できません。', compressedTooLarge: '圧縮後も画像が 4MB を超えています。', excelTooLong: 'Excel の内容が長すぎます', wordTooLong: 'Word の内容が長すぎます', pptTooLong: 'PPT の内容が長すぎます', textTooLong: 'テキストが長すぎます', unsupportedFormat: '元のファイルをアップロードし、サーバー側で読み取ります。', readFailed: 'ローカルプレビューに失敗しました', maxCountNotice: '添付は32件までです。先頭32件を保持し、{count} 件を除外しました。', addedNotice: '添付を {count} 件アップロードしました。', uploading: 'アップロード中…', uploadFailed: 'アップロードに失敗しました', uploadFailedCount: '{count} 件の添付をアップロードできませんでした。削除して再試行してください。', waitingForUploads: '添付のアップロード完了後に送信してください。', removeFailed: 'アップロードに失敗した添付を削除してから送信してください。' },
   },
   ko: {
@@ -135,8 +138,9 @@ const CHAT_SURFACE_TRANSLATIONS = {
     desktopPet: DESKTOP_PET_TRANSLATIONS.ko,
     chatComposer: { allSkills: '모든 스킬', dropFiles: '놓아서 업로드', fullDisk: '전체 파일', viewImage: '큰 이미지 보기', removeAttachment: '첨부 삭제', clearAttachments: '첨부 모두 지우기', placeholder: '지시를 입력하거나 / 로 스킬 호출…', attachment: '첨부', context: '컨텍스트 · {count}', stop: '중지', send: '보내기', steer: '지시 추가' },
     chatSteering: { sent: '현재 작업에 지시를 추가했습니다', failed: '지시를 추가하지 못했습니다. 초안을 입력창에 복원했습니다.', textOnly: '실행 중인 작업을 업데이트할 텍스트 지시를 입력하세요.', directoryAuthorizationRequired: '원래 작업이 디렉터리 권한을 기다리고 있습니다. 위 권한 카드에서 디렉터리를 선택하거나 확인하세요.', directoryResumePending: '디렉터리 권한이 승인되었습니다. 원래 작업을 재개하는 중입니다…' },
-    chatPreview: { htmlTitle: 'HTML 미리보기', previousPage: '이전', nextPage: '다음', pptTitle: 'PPT 미리보기', reactTitle: 'React 샌드박스', reactLoading: '컴파일 중…', runtimeError: '실행 오류: ', promiseError: 'Promise 오류: ', missingDefault: 'export default 컴포넌트를 찾지 못했습니다', compileFailed: '컴파일/실행 실패: ', dependencyTimeout: '종속성 로딩 시간이 초과되었습니다.', reloadSandbox: '샌드박스 다시 로드', openTabs: '열린 미리보기', closeTab: '{filename} 닫기', close: '미리보기 닫기', unsupported: '아직 미리보기를 지원하지 않습니다', unsupportedHint: '원본 파일을 다운로드하거나 소스 보기로 전환하세요.', closePanel: '패널 닫기', exportFailed: '내보내기 실패', editableExportFailed: '편집본 내보내기 실패', pptxConvertFailed: 'PPTX 변환 실패', resize: '드래그하여 너비 조절, 더블 클릭하여 초기화', restore: '복원', maximize: '최대화', preview: '미리보기', source: '소스', copySource: '소스 복사', copy: '복사', editableTitle: '가벼운 편집 가능 버전 내보내기', exporting: '내보내는 중 {progress}', editable: '편집본', convertTitle: 'HTML 슬라이드를 편집 가능한 PPTX로 변환', converting: '변환 중 {progress}', convertPptx: 'PPTX로 변환', download: '{filename} 다운로드', generating: '생성 중 {progress}', generatingShort: '생성 중', downloadHd: '고화질 다운로드', downloadHtml: 'HTML 다운로드', downloadDocx: 'Word 다운로드', downloadXlsx: 'Excel 다운로드', downloadMermaid: 'Mermaid 다운로드', downloadJson: 'JSON 다운로드', downloadSvg: 'SVG 다운로드', downloadJsx: 'JSX 다운로드', downloadText: '텍스트 다운로드', downloadFile: '파일 다운로드' },
+    chatPreview: { htmlTitle: 'HTML 미리보기', previousPage: '이전', nextPage: '다음', pptTitle: 'PPT 미리보기', reactTitle: 'React 샌드박스', reactLoading: '컴파일 중…', runtimeError: '실행 오류: ', promiseError: 'Promise 오류: ', missingDefault: 'export default 컴포넌트를 찾지 못했습니다', compileFailed: '컴파일/실행 실패: ', dependencyTimeout: '종속성 로딩 시간이 초과되었습니다.', reloadSandbox: '샌드박스 다시 로드', openTabs: '열린 미리보기', closeTab: '{filename} 닫기', close: '미리보기 닫기', unsupported: '아직 미리보기를 지원하지 않습니다', unsupportedHint: '원본 파일을 다운로드하거나 소스 보기로 전환하세요.', closePanel: '패널 닫기', exportFailed: '내보내기 실패', editableExportFailed: '편집본 내보내기 실패', pptxConvertFailed: 'PPTX 변환 실패', resize: '드래그하여 너비 조절, 더블 클릭하여 초기화', restore: '복원', maximize: '최대화', preview: '미리보기', source: '소스', copySource: '소스 복사', copy: '복사', editableTitle: '가벼운 편집 가능 버전 내보내기', exporting: '내보내는 중 {progress}', editable: '편집본', convertTitle: 'HTML 슬라이드를 편집 가능한 PPTX로 변환', converting: '변환 중 {progress}', convertPptx: 'PPTX로 변환', download: '{filename} 다운로드', generating: '생성 중 {progress}', generatingShort: '생성 중', downloadHd: '고화질 다운로드', downloadHtml: 'HTML 다운로드', downloadDocx: 'Word 다운로드', downloadXlsx: 'Excel 다운로드', downloadMermaid: 'Mermaid 다운로드', downloadJson: 'JSON 다운로드', downloadSvg: 'SVG 다운로드', downloadJsx: 'JSX 다운로드', downloadText: '텍스트 다운로드', downloadFile: '파일 다운로드', localHtmlRuntimeMismatch: '이 페이지는 로컬 서비스와 버전이 일치하지 않습니다. Gugo를 다시 시작한 뒤 파일을 다시 여세요.', localHtmlRouteUnavailable: '로컬 HTML 미리보기 엔드포인트를 사용할 수 없습니다. Gugo를 다시 시작한 뒤 다시 시도하세요.' },
     chatWindow: { loadEarlier: '이전 메시지 불러오기', olderHidden: '이전 메시지 {count}개가 숨겨져 있습니다' },
+    chatTimeline: { label: '대화 타임라인', jumpTo: '대화로 이동', turn: '대화', attachmentFallback: '첨부 메시지' },
     chatAttachments: { imageLimit: '메시지 하나에 이미지를 최대 32개까지 보낼 수 있습니다.', imageTooLarge: '이미지가 너무 커서 로컬에서 처리할 수 없습니다.', compressedTooLarge: '압축 후에도 이미지가 4MB를 초과합니다.', excelTooLong: 'Excel 내용이 너무 깁니다', wordTooLong: 'Word 내용이 너무 깁니다', pptTooLong: 'PPT 내용이 너무 깁니다', textTooLong: '텍스트가 너무 깁니다', unsupportedFormat: '원본 파일을 업로드하여 서버에서 읽습니다.', readFailed: '로컬 미리 보기에 실패했습니다', maxCountNotice: '첨부 파일은 최대 32개입니다. 처음 32개를 유지하고 {count}개를 제외했습니다.', addedNotice: '첨부 파일 {count}개를 업로드했습니다.', uploading: '업로드 중…', uploadFailed: '업로드 실패', uploadFailedCount: '첨부 파일 {count}개를 업로드하지 못했습니다. 삭제한 뒤 다시 시도하세요.', waitingForUploads: '첨부 파일 업로드가 끝난 후 전송하세요.', removeFailed: '업로드에 실패한 첨부 파일을 삭제한 후 전송하세요.' },
   },
   'zh-TW': {
@@ -145,17 +149,18 @@ const CHAT_SURFACE_TRANSLATIONS = {
     desktopPet: DESKTOP_PET_TRANSLATIONS['zh-TW'],
     chatComposer: { allSkills: '全部技能', dropFiles: '放開以上傳檔案', fullDisk: '全碟', viewImage: '點擊檢視大圖', removeAttachment: '移除附件', clearAttachments: '清空附件', placeholder: '輸入指令，或用 / 呼叫技能…', attachment: '附件', context: '上下文 · {count}', stop: '停止', send: '傳送', steer: '追加指令' },
     chatSteering: { sent: '已將指令追加到目前任務', failed: '追加指令失敗，內容已還原到輸入框', textOnly: '目前任務執行中，請輸入文字指令後傳送', directoryAuthorizationRequired: '原任務正在等待目錄授權，請在上方授權卡選擇或確認目錄後繼續。', directoryResumePending: '目錄已授權，正在恢復原任務，請稍候。' },
-    chatPreview: { htmlTitle: 'HTML 預覽', previousPage: '上一頁', nextPage: '下一頁', pptTitle: 'PPT 預覽', reactTitle: 'React 沙箱', reactLoading: '編譯中…', runtimeError: '執行錯誤：', promiseError: 'Promise 錯誤：', missingDefault: '找不到 export default 元件', compileFailed: '編譯／執行失敗：', dependencyTimeout: '相依套件載入逾時，請檢查網路', reloadSandbox: '重新載入沙箱（清除狀態）', openTabs: '已開啟的預覽', closeTab: '關閉 {filename}', close: '關閉預覽', unsupported: '暫不支援預覽', unsupportedHint: '你可以下載原始檔或切換到原始碼檢視。', closePanel: '關閉面板', exportFailed: '匯出失敗', editableExportFailed: '可編輯版匯出失敗', pptxConvertFailed: '轉換 PPTX 失敗', resize: '拖曳調整寬度，雙擊重設', restore: '還原', maximize: '最大化', preview: '預覽', source: '原始碼', copySource: '複製原始內容', copy: '複製', editableTitle: '匯出輕量可編輯版（視覺效果低於預設高清版）', exporting: '匯出 {progress}', editable: '編輯版', convertTitle: '將 HTML 投影片轉成可編輯 PPTX', converting: '轉換 {progress}', convertPptx: '轉 PPTX', download: '下載 {filename}', generating: '產生 {progress}', generatingShort: '產生中', downloadHd: '下載高清版', downloadHtml: '下載 HTML', downloadDocx: '下載 Word', downloadXlsx: '下載 Excel', downloadMermaid: '下載 Mermaid', downloadJson: '下載 JSON', downloadSvg: '下載 SVG', downloadJsx: '下載 JSX', downloadText: '下載文字', downloadFile: '下載檔案' },
+    chatPreview: { htmlTitle: 'HTML 預覽', previousPage: '上一頁', nextPage: '下一頁', pptTitle: 'PPT 預覽', reactTitle: 'React 沙箱', reactLoading: '編譯中…', runtimeError: '執行錯誤：', promiseError: 'Promise 錯誤：', missingDefault: '找不到 export default 元件', compileFailed: '編譯／執行失敗：', dependencyTimeout: '相依套件載入逾時，請檢查網路', reloadSandbox: '重新載入沙箱（清除狀態）', openTabs: '已開啟的預覽', closeTab: '關閉 {filename}', close: '關閉預覽', unsupported: '暫不支援預覽', unsupportedHint: '你可以下載原始檔或切換到原始碼檢視。', closePanel: '關閉面板', exportFailed: '匯出失敗', editableExportFailed: '可編輯版匯出失敗', pptxConvertFailed: '轉換 PPTX 失敗', resize: '拖曳調整寬度，雙擊重設', restore: '還原', maximize: '最大化', preview: '預覽', source: '原始碼', copySource: '複製原始內容', copy: '複製', editableTitle: '匯出輕量可編輯版（視覺效果低於預設高清版）', exporting: '匯出 {progress}', editable: '編輯版', convertTitle: '將 HTML 投影片轉成可編輯 PPTX', converting: '轉換 {progress}', convertPptx: '轉 PPTX', download: '下載 {filename}', generating: '產生 {progress}', generatingShort: '產生中', downloadHd: '下載高清版', downloadHtml: '下載 HTML', downloadDocx: '下載 Word', downloadXlsx: '下載 Excel', downloadMermaid: '下載 Mermaid', downloadJson: '下載 JSON', downloadSvg: '下載 SVG', downloadJsx: '下載 JSX', downloadText: '下載文字', downloadFile: '下載檔案', localHtmlRuntimeMismatch: '此頁面與本機服務版本不一致，請重新啟動 Gugo 後重新開啟此檔案。', localHtmlRouteUnavailable: '本機 HTML 預覽端點無法使用，請重新啟動 Gugo 後重試。' },
     chatWindow: { loadEarlier: '載入較早訊息', olderHidden: '還有 {count} 則較早訊息未顯示' },
+    chatTimeline: { label: '對話時間軸', jumpTo: '跳至第', turn: '第', attachmentFallback: '附件訊息' },
     chatAttachments: { imageLimit: '一則訊息最多傳送 32 張圖片。', imageTooLarge: '圖片過大，無法在本機處理。', compressedTooLarge: '圖片壓縮後仍超過 4MB。', excelTooLong: 'Excel 內容過長', wordTooLong: 'Word 內容過長', pptTooLong: 'PPT 內容過長', textTooLong: '文字內容過長', unsupportedFormat: '原始檔案會上傳並由伺服器讀取。', readFailed: '本機預覽失敗', maxCountNotice: '附件最多 32 個，已保留前 32 個並捨棄 {count} 個。', addedNotice: '已上傳 {count} 個附件。', uploading: '正在上傳…', uploadFailed: '上傳失敗', uploadFailedCount: '{count} 個附件上傳失敗，請移除後重試。', waitingForUploads: '請等待附件上傳完成後再傳送。', removeFailed: '請移除上傳失敗的附件後再傳送。' },
   },
 }
 
-Object.assign(CHAT_SURFACE_TRANSLATIONS.zh.chatPreview, { loadingFile: '正在读取文件…', previewFailed: '文件预览失败' })
-Object.assign(CHAT_SURFACE_TRANSLATIONS.en.chatPreview, { loadingFile: 'Loading file…', previewFailed: 'File preview failed' })
-Object.assign(CHAT_SURFACE_TRANSLATIONS.ja.chatPreview, { loadingFile: 'ファイルを読み込み中…', previewFailed: 'ファイルのプレビューに失敗しました' })
-Object.assign(CHAT_SURFACE_TRANSLATIONS.ko.chatPreview, { loadingFile: '파일을 불러오는 중…', previewFailed: '파일 미리보기 실패' })
-Object.assign(CHAT_SURFACE_TRANSLATIONS['zh-TW'].chatPreview, { loadingFile: '正在讀取檔案…', previewFailed: '檔案預覽失敗' })
+Object.assign(CHAT_SURFACE_TRANSLATIONS.zh.chatPreview, { loadingFile: '正在读取文件…', previewFailed: '文件预览失败', retryPreview: '重试预览', localHtmlServiceUnavailable: '本地预览服务尚未就绪。请稍后重试；正式文件不会被复制或更改。', previewRetryHint: '预览连接未能建立，请重试。正式文件仍保留在原位置。' })
+Object.assign(CHAT_SURFACE_TRANSLATIONS.en.chatPreview, { loadingFile: 'Loading file…', previewFailed: 'File preview failed', retryPreview: 'Retry preview', localHtmlServiceUnavailable: 'The local preview service is not ready yet. Retry shortly; the original file will not be copied or changed.', previewRetryHint: 'The preview connection could not be established. Retry to keep using the original file.' })
+Object.assign(CHAT_SURFACE_TRANSLATIONS.ja.chatPreview, { loadingFile: 'ファイルを読み込み中…', previewFailed: 'ファイルのプレビューに失敗しました', retryPreview: 'プレビューを再試行', localHtmlServiceUnavailable: 'ローカルプレビューサービスの準備ができていません。元のファイルはコピーも変更もされません。しばらくしてから再試行してください。', previewRetryHint: 'プレビュー接続を確立できませんでした。元のファイルをそのまま使用して再試行してください。' })
+Object.assign(CHAT_SURFACE_TRANSLATIONS.ko.chatPreview, { loadingFile: '파일을 불러오는 중…', previewFailed: '파일 미리보기 실패', retryPreview: '미리보기 다시 시도', localHtmlServiceUnavailable: '로컬 미리보기 서비스가 아직 준비되지 않았습니다. 원본 파일은 복사되거나 변경되지 않으니 잠시 후 다시 시도하세요.', previewRetryHint: '미리보기 연결을 만들지 못했습니다. 원본 파일을 그대로 사용해 다시 시도하세요.' })
+Object.assign(CHAT_SURFACE_TRANSLATIONS['zh-TW'].chatPreview, { loadingFile: '正在讀取檔案…', previewFailed: '檔案預覽失敗', retryPreview: '重試預覽', localHtmlServiceUnavailable: '本機預覽服務尚未就緒。請稍後重試；正式檔案不會被複製或變更。', previewRetryHint: '無法建立預覽連線，請重試。正式檔案仍保留在原位置。' })
 
 const FEATURE_PAGE_TRANSLATIONS = {
   zh: {
@@ -763,9 +768,72 @@ const STORAGE_NOTICE_TRANSLATIONS = {
   'zh-TW': { compactedTitle: '瀏覽器相容儲存配額不足', compactedBody: 'IndexedDB 無法使用時已改用受限的相容儲存；所有對話與訊息正文仍保留，僅省略可重新產生的大型中繼資料。建議匯出備份。', quotaTitle: '瀏覽器對話儲存配額已滿', quotaBody: '最新變更尚未持久儲存，上一次成功儲存的快照仍保留。請先匯出目前對話，再清理此網站的瀏覽器儲存。', unavailableTitle: '瀏覽器對話儲存無法使用', unavailableBody: '瀏覽器阻止此網站使用持久儲存。目前內容可能只存在於本頁面，請立即匯出對話備份。', errorTitle: '對話儲存失敗', errorBody: '瀏覽器儲存發生異常，上一次成功儲存的快照仍保留。請匯出備份後重試。', exportSessions: '匯出所有對話', dismiss: '關閉儲存提醒' },
 }
 
+const SETTINGS_MODAL_TRANSLATIONS = {
+  zh: {
+    navGroups: { general: '通用', capabilities: '能力', system: '系统' },
+    general: '通用设置', generalDescription: '管理本机输出位置与桌面体验。', plugins: '插件', agentPresets: 'Agent 预设', about: '关于',
+    diagnosticsChecking: '正在探测模型端点…', diagnosticsChecked: '端点探测完成。', diagnosticsRefreshed: '诊断状态已刷新。', modelTesting: '正在发送测试消息…', modelTestSucceeded: '测试成功，延迟 {latency} ms。',
+    configFileWebFallback: 'Web 版无法直接打开本机配置文件。', configFileOpened: '已打开配置文件。', configFileOpenFailed: '无法打开配置文件。', openConfigFile: '打开配置文件', close: '关闭设置',
+    interfaceLanguage: '界面语言', interfaceLanguageDescription: '切换后立即应用到整个工作台。', permissionsEnabledCount: '已启用 {enabled} / {total}',
+    themeDescription: '选择浅色、深色或跟随系统。', accentColor: '强调色', accentColorDescription: '用于主要操作和状态提示。', setAccentColor: '设置强调色 {color}', strongAccent: '强色调模式', strongAccentDescription: '提高主要控件的色彩对比。',
+    fontSize: '字体大小', fontSizeDescription: '调整工作台正文大小。', sizeSmall: '小', sizeMedium: '中', sizeLarge: '大', density: '界面密度', densityDescription: '控制列表和控件间距。', densityCompact: '紧凑', densityComfortable: '舒适', densityLoose: '宽松', animations: '动画效果', animationsDescription: '启用轻量过渡与状态动画。',
+    pluginsDescription: '管理技能插件与 MCP 扩展。', skillPlugins: '技能插件', skillPluginsDescription: '浏览并安装可复用技能包。', managePlugins: '管理插件', mcpExtensions: 'MCP 扩展', mcpExtensionsDescription: '连接外部工具、资源与 prompts。', manageMcp: '管理 MCP',
+    agentPresetsDescription: '管理人物、性格和 Agent 模板。', agentProfiles: 'Agent 配置', agentProfilesDescription: '编辑角色卡、技能和预设模板。', manageAgents: '管理 Agent', visionAssist: '视觉辅助',
+    aboutDescription: '查看运行模式、模型连接与系统状态。', runtimeMode: '运行模式', multiUserDescription: '当前使用账户隔离的多用户模式。', localMode: '本地单机', multiUserMode: '多用户', systemDiagnosticsDescription: '刷新状态或主动探测模型端点。', probeEndpoint: '探测端点', modelService: '模型服务', endpointStatus: '端点状态', endpointReady: '端点可用', endpointUnavailable: '端点不可用', endpointUnchecked: '尚未探测', testModel: '测试模型', testModelDescription: '发送一条最小测试请求验证配置。', availableModels: '可用模型', availableModelsDescription: '当前返回 {count} 个模型。', emailLogin: '邮箱登录', smtpService: 'SMTP 服务', smtpConfigured: '已配置', smtpWaiting: '未配置',
+  },
+  en: {
+    navGroups: { general: 'General', capabilities: 'Capabilities', system: 'System' },
+    general: 'General', generalDescription: 'Manage local output and desktop preferences.', plugins: 'Plugins', agentPresets: 'Agent presets', about: 'About',
+    diagnosticsChecking: 'Checking the model endpoint…', diagnosticsChecked: 'Endpoint check completed.', diagnosticsRefreshed: 'Diagnostics refreshed.', modelTesting: 'Sending a test message…', modelTestSucceeded: 'Test succeeded in {latency} ms.',
+    configFileWebFallback: 'The web app cannot open local configuration files.', configFileOpened: 'Configuration file opened.', configFileOpenFailed: 'Could not open the configuration file.', openConfigFile: 'Open config file', close: 'Close settings',
+    interfaceLanguage: 'Interface language', interfaceLanguageDescription: 'Applies immediately across the workbench.', permissionsEnabledCount: '{enabled} of {total} enabled',
+    themeDescription: 'Choose light, dark, or system appearance.', accentColor: 'Accent color', accentColorDescription: 'Used for primary actions and status.', setAccentColor: 'Set accent color {color}', strongAccent: 'Strong accent', strongAccentDescription: 'Increase contrast on primary controls.',
+    fontSize: 'Font size', fontSizeDescription: 'Adjust workbench body text.', sizeSmall: 'Small', sizeMedium: 'Medium', sizeLarge: 'Large', density: 'Interface density', densityDescription: 'Control spacing in lists and controls.', densityCompact: 'Compact', densityComfortable: 'Comfortable', densityLoose: 'Spacious', animations: 'Animations', animationsDescription: 'Enable lightweight transitions and status motion.',
+    pluginsDescription: 'Manage skill plugins and MCP extensions.', skillPlugins: 'Skill plugins', skillPluginsDescription: 'Browse and install reusable skill bundles.', managePlugins: 'Manage plugins', mcpExtensions: 'MCP extensions', mcpExtensionsDescription: 'Connect external tools, resources, and prompts.', manageMcp: 'Manage MCP',
+    agentPresetsDescription: 'Manage personas, profiles, and Agent templates.', agentProfiles: 'Agent profiles', agentProfilesDescription: 'Edit character cards, skills, and templates.', manageAgents: 'Manage Agents', visionAssist: 'Vision assistance',
+    aboutDescription: 'Review runtime mode, model connectivity, and system status.', runtimeMode: 'Runtime mode', multiUserDescription: 'Account-isolated multi-user mode is active.', localMode: 'Local', multiUserMode: 'Multi-user', systemDiagnosticsDescription: 'Refresh status or probe the model endpoint.', probeEndpoint: 'Probe endpoint', modelService: 'Model service', endpointStatus: 'Endpoint status', endpointReady: 'Endpoint available', endpointUnavailable: 'Endpoint unavailable', endpointUnchecked: 'Not checked', testModel: 'Test model', testModelDescription: 'Send a minimal request to verify the configuration.', availableModels: 'Available models', availableModelsDescription: '{count} models are currently available.', emailLogin: 'Email sign-in', smtpService: 'SMTP service', smtpConfigured: 'Configured', smtpWaiting: 'Not configured',
+  },
+  ja: {
+    navGroups: { general: '一般', capabilities: '機能', system: 'システム' },
+    general: '一般設定', generalDescription: 'ローカル出力先とデスクトップ設定を管理します。', plugins: 'プラグイン', agentPresets: 'Agent プリセット', about: 'このアプリについて',
+    diagnosticsChecking: 'モデルエンドポイントを確認中…', diagnosticsChecked: 'エンドポイント確認が完了しました。', diagnosticsRefreshed: '診断状態を更新しました。', modelTesting: 'テストメッセージを送信中…', modelTestSucceeded: 'テスト成功（{latency} ms）。',
+    configFileWebFallback: 'Web 版ではローカル設定ファイルを直接開けません。', configFileOpened: '設定ファイルを開きました。', configFileOpenFailed: '設定ファイルを開けませんでした。', openConfigFile: '設定ファイルを開く', close: '設定を閉じる',
+    interfaceLanguage: '表示言語', interfaceLanguageDescription: 'ワークベンチ全体にすぐ反映されます。', permissionsEnabledCount: '{total} 件中 {enabled} 件が有効',
+    themeDescription: 'ライト、ダーク、システム連動から選択します。', accentColor: 'アクセント色', accentColorDescription: '主要操作と状態表示に使用します。', setAccentColor: 'アクセント色 {color} を設定', strongAccent: '強いアクセント', strongAccentDescription: '主要コントロールのコントラストを上げます。',
+    fontSize: '文字サイズ', fontSizeDescription: '本文の大きさを調整します。', sizeSmall: '小', sizeMedium: '中', sizeLarge: '大', density: '表示密度', densityDescription: '一覧とコントロールの間隔を調整します。', densityCompact: 'コンパクト', densityComfortable: '標準', densityLoose: 'ゆったり', animations: 'アニメーション', animationsDescription: '軽い画面遷移と状態アニメーションを有効にします。',
+    pluginsDescription: 'スキルプラグインと MCP 拡張を管理します。', skillPlugins: 'スキルプラグイン', skillPluginsDescription: '再利用可能なスキルを参照・インストールします。', managePlugins: 'プラグインを管理', mcpExtensions: 'MCP 拡張', mcpExtensionsDescription: '外部ツール、リソース、prompts を接続します。', manageMcp: 'MCP を管理',
+    agentPresetsDescription: '人物設定と Agent テンプレートを管理します。', agentProfiles: 'Agent プロファイル', agentProfilesDescription: 'キャラクターカード、スキル、テンプレートを編集します。', manageAgents: 'Agent を管理', visionAssist: '画像支援',
+    aboutDescription: '実行モード、モデル接続、システム状態を確認します。', runtimeMode: '実行モード', multiUserDescription: 'アカウント分離のマルチユーザーモードです。', localMode: 'ローカル', multiUserMode: 'マルチユーザー', systemDiagnosticsDescription: '状態更新またはモデルエンドポイントを確認します。', probeEndpoint: 'エンドポイントを確認', modelService: 'モデルサービス', endpointStatus: 'エンドポイント状態', endpointReady: '利用可能', endpointUnavailable: '利用不可', endpointUnchecked: '未確認', testModel: 'モデルをテスト', testModelDescription: '最小リクエストで設定を確認します。', availableModels: '利用可能なモデル', availableModelsDescription: '現在 {count} 件のモデルがあります。', emailLogin: 'メールログイン', smtpService: 'SMTP サービス', smtpConfigured: '設定済み', smtpWaiting: '未設定',
+  },
+  ko: {
+    navGroups: { general: '일반', capabilities: '기능', system: '시스템' },
+    general: '일반 설정', generalDescription: '로컬 출력 위치와 데스크톱 환경을 관리합니다.', plugins: '플러그인', agentPresets: 'Agent 프리셋', about: '정보',
+    diagnosticsChecking: '모델 엔드포인트 확인 중…', diagnosticsChecked: '엔드포인트 확인 완료.', diagnosticsRefreshed: '진단 상태를 새로 고쳤습니다.', modelTesting: '테스트 메시지 전송 중…', modelTestSucceeded: '테스트 성공, {latency} ms.',
+    configFileWebFallback: '웹 앱에서는 로컬 설정 파일을 열 수 없습니다.', configFileOpened: '설정 파일을 열었습니다.', configFileOpenFailed: '설정 파일을 열 수 없습니다.', openConfigFile: '설정 파일 열기', close: '설정 닫기',
+    interfaceLanguage: '인터페이스 언어', interfaceLanguageDescription: '워크벤치 전체에 즉시 적용됩니다.', permissionsEnabledCount: '{total}개 중 {enabled}개 사용',
+    themeDescription: '라이트, 다크 또는 시스템 테마를 선택합니다.', accentColor: '강조색', accentColorDescription: '주요 작업과 상태에 사용됩니다.', setAccentColor: '강조색 {color} 설정', strongAccent: '강한 강조색', strongAccentDescription: '주요 컨트롤의 대비를 높입니다.',
+    fontSize: '글자 크기', fontSizeDescription: '본문 글자 크기를 조절합니다.', sizeSmall: '작게', sizeMedium: '보통', sizeLarge: '크게', density: '화면 밀도', densityDescription: '목록과 컨트롤 간격을 조절합니다.', densityCompact: '좁게', densityComfortable: '보통', densityLoose: '넓게', animations: '애니메이션', animationsDescription: '가벼운 전환과 상태 애니메이션을 사용합니다.',
+    pluginsDescription: '스킬 플러그인과 MCP 확장을 관리합니다.', skillPlugins: '스킬 플러그인', skillPluginsDescription: '재사용 가능한 스킬 번들을 설치합니다.', managePlugins: '플러그인 관리', mcpExtensions: 'MCP 확장', mcpExtensionsDescription: '외부 도구, 리소스 및 prompts를 연결합니다.', manageMcp: 'MCP 관리',
+    agentPresetsDescription: '페르소나와 Agent 템플릿을 관리합니다.', agentProfiles: 'Agent 프로필', agentProfilesDescription: '캐릭터 카드, 스킬 및 템플릿을 편집합니다.', manageAgents: 'Agent 관리', visionAssist: '비전 지원',
+    aboutDescription: '실행 모드, 모델 연결 및 시스템 상태를 확인합니다.', runtimeMode: '실행 모드', multiUserDescription: '계정이 분리된 다중 사용자 모드입니다.', localMode: '로컬', multiUserMode: '다중 사용자', systemDiagnosticsDescription: '상태를 새로 고치거나 모델 엔드포인트를 확인합니다.', probeEndpoint: '엔드포인트 확인', modelService: '모델 서비스', endpointStatus: '엔드포인트 상태', endpointReady: '사용 가능', endpointUnavailable: '사용 불가', endpointUnchecked: '확인 안 함', testModel: '모델 테스트', testModelDescription: '최소 요청으로 설정을 확인합니다.', availableModels: '사용 가능한 모델', availableModelsDescription: '현재 모델 {count}개를 사용할 수 있습니다.', emailLogin: '이메일 로그인', smtpService: 'SMTP 서비스', smtpConfigured: '설정됨', smtpWaiting: '설정 안 됨',
+  },
+  'zh-TW': {
+    navGroups: { general: '通用', capabilities: '能力', system: '系統' },
+    general: '通用設定', generalDescription: '管理本機輸出位置與桌面體驗。', plugins: '插件', agentPresets: 'Agent 預設', about: '關於',
+    diagnosticsChecking: '正在探測模型端點…', diagnosticsChecked: '端點探測完成。', diagnosticsRefreshed: '診斷狀態已重新整理。', modelTesting: '正在傳送測試訊息…', modelTestSucceeded: '測試成功，延遲 {latency} ms。',
+    configFileWebFallback: 'Web 版無法直接開啟本機設定檔。', configFileOpened: '已開啟設定檔。', configFileOpenFailed: '無法開啟設定檔。', openConfigFile: '開啟設定檔', close: '關閉設定',
+    interfaceLanguage: '介面語言', interfaceLanguageDescription: '切換後立即套用到整個工作台。', permissionsEnabledCount: '已啟用 {enabled} / {total}',
+    themeDescription: '選擇淺色、深色或跟隨系統。', accentColor: '強調色', accentColorDescription: '用於主要操作與狀態提示。', setAccentColor: '設定強調色 {color}', strongAccent: '強色調模式', strongAccentDescription: '提高主要控制項的色彩對比。',
+    fontSize: '字體大小', fontSizeDescription: '調整工作台正文大小。', sizeSmall: '小', sizeMedium: '中', sizeLarge: '大', density: '介面密度', densityDescription: '控制列表和控制項間距。', densityCompact: '緊湊', densityComfortable: '舒適', densityLoose: '寬鬆', animations: '動畫效果', animationsDescription: '啟用輕量轉場與狀態動畫。',
+    pluginsDescription: '管理技能插件與 MCP 擴充。', skillPlugins: '技能插件', skillPluginsDescription: '瀏覽並安裝可重複使用的技能包。', managePlugins: '管理插件', mcpExtensions: 'MCP 擴充', mcpExtensionsDescription: '連接外部工具、資源與 prompts。', manageMcp: '管理 MCP',
+    agentPresetsDescription: '管理人物、性格與 Agent 範本。', agentProfiles: 'Agent 設定', agentProfilesDescription: '編輯角色卡、技能與預設範本。', manageAgents: '管理 Agent', visionAssist: '視覺輔助',
+    aboutDescription: '查看執行模式、模型連線與系統狀態。', runtimeMode: '執行模式', multiUserDescription: '目前使用帳戶隔離的多使用者模式。', localMode: '本機單機', multiUserMode: '多使用者', systemDiagnosticsDescription: '重新整理狀態或主動探測模型端點。', probeEndpoint: '探測端點', modelService: '模型服務', endpointStatus: '端點狀態', endpointReady: '端點可用', endpointUnavailable: '端點不可用', endpointUnchecked: '尚未探測', testModel: '測試模型', testModelDescription: '傳送最小測試請求驗證設定。', availableModels: '可用模型', availableModelsDescription: '目前回傳 {count} 個模型。', emailLogin: '信箱登入', smtpService: 'SMTP 服務', smtpConfigured: '已設定', smtpWaiting: '未設定',
+  },
+}
+
 const SETTINGS_DATA_EXPORT_TRANSLATIONS = {
   zh: {
-    title: '数据 & 导出', exportData: '导出数据', exportSessions: '导出会话', exportSettings: '导出设置',
+    title: '数据 & 导出', subtitle: '导入、导出并管理当前浏览器中的工作台数据。', exportData: '导出数据', exportSessions: '导出会话', exportSessionsDescription: '下载所有本地会话的 JSON 备份。', exportSettings: '导出设置', exportSettingsDescription: '下载不含 API Key 的工作台设置。', clearTemporaryDescription: '移除可安全重新生成的本地临时项。',
     sessionsExported: '会话数据已导出 (schema v{version})。', settingsExported: '设置已导出 (schema v{version}，不含 API Key)。',
     importData: '导入数据', chooseJson: '选择 JSON 文件', importHint: '支持 schema v{version} 和旧版会话数组，导入前会校验结构。', importMode: '设置导入模式：',
     mergeHint: '合并（保留文件外项目）', replaceHint: '覆盖（以文件为准）', merge: '合并', replace: '覆盖',
@@ -776,7 +844,7 @@ const SETTINGS_DATA_EXPORT_TRANSLATIONS = {
     localCleanup: '本地清理', clearTemporary: '清理临时数据', clearAll: '清除本地会话和工作台设置', clearWarning: '清除数据只影响当前浏览器，不会修改后端 .env 模型配置。',
   },
   en: {
-    title: 'Data & Export', exportData: 'Export data', exportSessions: 'Export conversations', exportSettings: 'Export settings',
+    title: 'Data & Export', subtitle: 'Import, export, and manage workbench data in this browser.', exportData: 'Export data', exportSessions: 'Export conversations', exportSessionsDescription: 'Download a JSON backup of local conversations.', exportSettings: 'Export settings', exportSettingsDescription: 'Download workbench settings without API keys.', clearTemporaryDescription: 'Remove local temporary items that can be regenerated safely.',
     sessionsExported: 'Conversation data exported (schema v{version}).', settingsExported: 'Settings exported (schema v{version}; API keys excluded).',
     importData: 'Import data', chooseJson: 'Choose JSON file', importHint: 'Supports schema v{version} and legacy conversation arrays. The structure is validated before import.', importMode: 'Settings import mode:',
     mergeHint: 'Merge (keep settings outside the file)', replaceHint: 'Replace (use the file as the source of truth)', merge: 'merge', replace: 'replace',
@@ -787,7 +855,7 @@ const SETTINGS_DATA_EXPORT_TRANSLATIONS = {
     localCleanup: 'Local cleanup', clearTemporary: 'Clear temporary data', clearAll: 'Clear local conversations and workbench settings', clearWarning: 'Clearing data only affects this browser. It does not change backend .env model settings.',
   },
   ja: {
-    title: 'データとエクスポート', exportData: 'データをエクスポート', exportSessions: '会話をエクスポート', exportSettings: '設定をエクスポート',
+    title: 'データとエクスポート', subtitle: 'このブラウザーのワークベンチデータを管理します。', exportData: 'データをエクスポート', exportSessions: '会話をエクスポート', exportSessionsDescription: 'ローカル会話の JSON バックアップをダウンロードします。', exportSettings: '設定をエクスポート', exportSettingsDescription: 'API キーを含まない設定をダウンロードします。', clearTemporaryDescription: '安全に再生成できる一時データを削除します。',
     sessionsExported: '会話データをエクスポートしました (schema v{version})。', settingsExported: '設定をエクスポートしました (schema v{version}、API Key は含みません)。',
     importData: 'データをインポート', chooseJson: 'JSON ファイルを選択', importHint: 'schema v{version} と旧形式の会話配列に対応し、インポート前に構造を検証します。', importMode: '設定のインポート方法：',
     mergeHint: 'マージ（ファイル外の項目を保持）', replaceHint: '上書き（ファイルを正とする）', merge: 'マージ', replace: '上書き',
@@ -798,7 +866,7 @@ const SETTINGS_DATA_EXPORT_TRANSLATIONS = {
     localCleanup: 'ローカルデータの整理', clearTemporary: '一時データを削除', clearAll: 'ローカルの会話とワークベンチ設定を削除', clearWarning: 'データの削除はこのブラウザーにのみ影響し、バックエンドの .env モデル設定は変更しません。',
   },
   ko: {
-    title: '데이터 및 내보내기', exportData: '데이터 내보내기', exportSessions: '대화 내보내기', exportSettings: '설정 내보내기',
+    title: '데이터 및 내보내기', subtitle: '이 브라우저의 워크벤치 데이터를 관리합니다.', exportData: '데이터 내보내기', exportSessions: '대화 내보내기', exportSessionsDescription: '로컬 대화 JSON 백업을 다운로드합니다.', exportSettings: '설정 내보내기', exportSettingsDescription: 'API 키를 제외한 워크벤치 설정을 다운로드합니다.', clearTemporaryDescription: '안전하게 다시 만들 수 있는 임시 데이터를 삭제합니다.',
     sessionsExported: '대화 데이터를 내보냈습니다 (schema v{version}).', settingsExported: '설정을 내보냈습니다 (schema v{version}, API Key 제외).',
     importData: '데이터 가져오기', chooseJson: 'JSON 파일 선택', importHint: 'schema v{version} 및 이전 대화 배열을 지원하며 가져오기 전에 구조를 검증합니다.', importMode: '설정 가져오기 모드:',
     mergeHint: '병합(파일에 없는 항목 유지)', replaceHint: '덮어쓰기(파일 기준)', merge: '병합', replace: '덮어쓰기',
@@ -809,7 +877,7 @@ const SETTINGS_DATA_EXPORT_TRANSLATIONS = {
     localCleanup: '로컬 정리', clearTemporary: '임시 데이터 삭제', clearAll: '로컬 대화 및 워크벤치 설정 삭제', clearWarning: '데이터 삭제는 현재 브라우저에만 적용되며 백엔드 .env 모델 설정은 변경하지 않습니다.',
   },
   'zh-TW': {
-    title: '資料與匯出', exportData: '匯出資料', exportSessions: '匯出對話', exportSettings: '匯出設定',
+    title: '資料與匯出', subtitle: '匯入、匯出並管理目前瀏覽器中的工作台資料。', exportData: '匯出資料', exportSessions: '匯出對話', exportSessionsDescription: '下載所有本機對話的 JSON 備份。', exportSettings: '匯出設定', exportSettingsDescription: '下載不含 API Key 的工作台設定。', clearTemporaryDescription: '移除可安全重新產生的本機暫存項目。',
     sessionsExported: '對話資料已匯出 (schema v{version})。', settingsExported: '設定已匯出 (schema v{version}，不含 API Key)。',
     importData: '匯入資料', chooseJson: '選擇 JSON 檔案', importHint: '支援 schema v{version} 與舊版對話陣列，匯入前會驗證結構。', importMode: '設定匯入模式：',
     mergeHint: '合併（保留檔案外項目）', replaceHint: '覆寫（以檔案為準）', merge: '合併', replace: '覆寫',
@@ -946,6 +1014,7 @@ export const translations = {
       quoteSelectionTitle: '引用所选文本到输入框',
     },
     settings: {
+      ...SETTINGS_MODAL_TRANSLATIONS.zh,
       sectionTitle: '设置',
       groupModelSearch: '模型与联网搜索',
       groupPermissionsTools: '权限与工具',
@@ -1430,6 +1499,7 @@ export const translations = {
       quoteSelectionTitle: 'Quote selection into composer',
     },
     settings: {
+      ...SETTINGS_MODAL_TRANSLATIONS.en,
       sectionTitle: 'Settings',
       groupModelSearch: 'Models & Web Search',
       groupPermissionsTools: 'Permissions & Tools',
@@ -1914,6 +1984,7 @@ export const translations = {
       quoteSelectionTitle: '選択テキストを入力欄に引用',
     },
     settings: {
+      ...SETTINGS_MODAL_TRANSLATIONS.ja,
       sectionTitle: '設定',
       groupModelSearch: 'モデルとウェブ検索',
       groupPermissionsTools: '権限とツール',
@@ -2398,6 +2469,7 @@ export const translations = {
       quoteSelectionTitle: '선택한 텍스트를 입력란에 인용',
     },
     settings: {
+      ...SETTINGS_MODAL_TRANSLATIONS.ko,
       sectionTitle: '설정',
       groupModelSearch: '모델 및 웹 검색',
       groupPermissionsTools: '권한 및 도구',
@@ -2882,6 +2954,7 @@ export const translations = {
       quoteSelectionTitle: '引用所選文字到輸入框',
     },
     settings: {
+      ...SETTINGS_MODAL_TRANSLATIONS['zh-TW'],
       sectionTitle: '設定',
       groupModelSearch: '模型與聯網搜尋',
       groupPermissionsTools: '權限與工具',

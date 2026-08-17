@@ -3,24 +3,7 @@ import { AlertTriangle, CheckCircle2, Download, FileJson, HardDrive, MessageSqua
 import { clearPersistedState } from '../../store/AppContext.jsx'
 import { InvalidExportError, SCHEMA_VERSION, parseImport, wrapSessionsExport, wrapSettingsExport } from '../../store/exportSchema.js'
 import { useT } from '../../i18n/I18nProvider.jsx'
-
-function Group({ title, children }) {
-  return (
-    <div className="p-4 border border-ink/30 rounded-md flex flex-col gap-3">
-      <h3 className="font-semibold text-lg text-ink">{title}</h3>
-      {children}
-    </div>
-  )
-}
-
-function Stat({ icon: Icon, value, label }) {
-  return (
-    <div className="p-3 border border-ink-fade/30 rounded-md flex items-center gap-3">
-      <Icon className="w-5 h-5 text-ink-fade" />
-      <div><span className="text-sm text-ink">{value}</span><span className="text-xs text-ink-soft block">{label}</span></div>
-    </div>
-  )
-}
+import { SettingsGroup, SettingsPanel, SettingsRow } from './SettingsPrimitives.jsx'
 
 function formatBytes(bytes) {
   if (!bytes) return '0 KB'
@@ -116,19 +99,61 @@ export default function SettingsDataExport({ state, dispatch, storageBytes, stor
   }
 
   return (
-    <section className="flex flex-col gap-5 animate-float-up">
-      <div><span className="font-mono text-[9px] tracking-[0.22em] uppercase text-ink-fade">DATA & EXPORT</span><h1 className="font-semibold text-[28px] text-ink mt-1.5">{t('settingsDataExport.title')}</h1></div>
-      <Group title={t('settingsDataExport.exportData')}><div className="flex flex-wrap gap-2">
-        <button onClick={exportSessions} className="h-9 px-4 border border-ink/70 rounded-md text-sm text-ink hover:bg-paper-2 flex items-center gap-1.5"><FileJson className="w-3.5 h-3.5" />{t('settingsDataExport.exportSessions')}</button>
-        <button onClick={exportSettings} className="h-9 px-4 border border-ink/70 rounded-md text-sm text-ink hover:bg-paper-2 flex items-center gap-1.5"><Download className="w-3.5 h-3.5" />{t('settingsDataExport.exportSettings')}</button>
-      </div></Group>
-      <Group title={t('settingsDataExport.importData')}>
-        <div className="flex flex-wrap items-center gap-2"><input ref={inputRef} type="file" accept="application/json,.json" className="hidden" onChange={(event) => importFile(event.target.files?.[0])} /><button onClick={() => inputRef.current?.click()} className="h-9 px-4 border border-ink/70 rounded-md text-sm text-ink hover:bg-paper-2 flex items-center gap-1.5"><Upload className="w-3.5 h-3.5" />{t('settingsDataExport.chooseJson')}</button><span className="text-xs text-ink-soft">{t('settingsDataExport.importHint', { version: SCHEMA_VERSION })}</span></div>
-        <div className="flex flex-wrap items-center gap-3 mt-2 text-xs text-ink-soft"><span>{t('settingsDataExport.importMode')}</span>{[['merge', t('settingsDataExport.mergeHint')], ['replace', t('settingsDataExport.replaceHint')]].map(([value, label]) => <label key={value} className="flex items-center gap-1.5 cursor-pointer"><input type="radio" name="settingsImportMode" value={value} checked={importMode === value} onChange={() => setImportMode(value)} className="accent-ember" /><span className={importMode === value ? 'text-ink' : ''}>{label}</span></label>)}</div>
-      </Group>
-      <Group title={t('settingsDataExport.storageStats')}><div className="grid grid-cols-1 md:grid-cols-3 gap-3"><Stat icon={HardDrive} value={`${formatBytes(storageBytes)}${storageQuota ? ` / ${formatBytes(storageQuota)}` : ''}`} label={t('settingsDataExport.browserStorage')} /><Stat icon={MessageSquare} value={String(state.sessions.length)} label={t('settingsDataExport.sessionCount')} /><Stat icon={CheckCircle2} value={String(state.history.length)} label={t('settingsDataExport.historyCount')} /></div></Group>
-      <Group title={t('settingsDataExport.localCleanup')}><div className="flex flex-wrap gap-2"><button onClick={clearTemporary} className="h-9 px-4 border border-ink/70 rounded-md text-sm text-ink hover:bg-paper-2 flex items-center gap-1.5"><Zap className="w-3.5 h-3.5" />{t('settingsDataExport.clearTemporary')}</button><button onClick={clearAll} disabled={clearing} className="h-9 px-4 border border-ember-line rounded-md text-sm text-ember hover:bg-ember-soft disabled:cursor-wait disabled:opacity-60 flex items-center gap-1.5"><Trash2 className="w-3.5 h-3.5" />{t('settingsDataExport.clearAll')}</button></div>{message && <div className="p-3 border border-ink-fade/40 rounded-md text-sm text-ink-soft bg-paper-2">{message}</div>}</Group>
-      <div className="p-4 border border-dashed border-ember-line rounded-md bg-ember-soft/30 text-sm text-ember flex gap-2"><AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />{t('settingsDataExport.clearWarning')}</div>
-    </section>
+    <SettingsPanel title={t('settingsDataExport.title')} description={t('settingsDataExport.subtitle')}>
+      <SettingsGroup title={t('settingsDataExport.exportData')}>
+        <SettingsRow title={t('settingsDataExport.exportSessions')} description={t('settingsDataExport.exportSessionsDescription')}>
+          <button type="button" onClick={exportSessions} className="settings-action-button">
+            <FileJson className="h-3.5 w-3.5" />{t('settingsDataExport.exportSessions')}
+          </button>
+        </SettingsRow>
+        <SettingsRow title={t('settingsDataExport.exportSettings')} description={t('settingsDataExport.exportSettingsDescription')}>
+          <button type="button" onClick={exportSettings} className="settings-action-button">
+            <Download className="h-3.5 w-3.5" />{t('settingsDataExport.exportSettings')}
+          </button>
+        </SettingsRow>
+      </SettingsGroup>
+      <SettingsGroup title={t('settingsDataExport.importData')}>
+        <SettingsRow title={t('settingsDataExport.chooseJson')} description={t('settingsDataExport.importHint', { version: SCHEMA_VERSION })}>
+          <input ref={inputRef} type="file" accept="application/json,.json" className="hidden" onChange={(event) => importFile(event.target.files?.[0])} />
+          <button type="button" onClick={() => inputRef.current?.click()} className="settings-action-button">
+            <Upload className="h-3.5 w-3.5" />{t('settingsDataExport.chooseJson')}
+          </button>
+        </SettingsRow>
+        <SettingsRow title={t('settingsDataExport.importMode')}>
+          <select className="settings-select" value={importMode} onChange={(event) => setImportMode(event.target.value)}>
+            <option value="merge">{t('settingsDataExport.mergeHint')}</option>
+            <option value="replace">{t('settingsDataExport.replaceHint')}</option>
+          </select>
+        </SettingsRow>
+      </SettingsGroup>
+      <SettingsGroup title={t('settingsDataExport.storageStats')}>
+        <SettingsRow title={t('settingsDataExport.browserStorage')}>
+          <HardDrive className="h-3.5 w-3.5 text-ink-fade" />
+          <span className="settings-inline-status">{formatBytes(storageBytes)}{storageQuota ? ` / ${formatBytes(storageQuota)}` : ''}</span>
+        </SettingsRow>
+        <SettingsRow title={t('settingsDataExport.sessionCount')}>
+          <MessageSquare className="h-3.5 w-3.5 text-ink-fade" />
+          <span className="settings-inline-status">{state.sessions.length}</span>
+        </SettingsRow>
+        <SettingsRow title={t('settingsDataExport.historyCount')}>
+          <CheckCircle2 className="h-3.5 w-3.5 text-ink-fade" />
+          <span className="settings-inline-status">{state.history.length}</span>
+        </SettingsRow>
+      </SettingsGroup>
+      <SettingsGroup title={t('settingsDataExport.localCleanup')}>
+        <SettingsRow title={t('settingsDataExport.clearTemporary')} description={t('settingsDataExport.clearTemporaryDescription')}>
+          <button type="button" onClick={clearTemporary} className="settings-action-button">
+            <Zap className="h-3.5 w-3.5" />{t('settingsDataExport.clearTemporary')}
+          </button>
+        </SettingsRow>
+        <SettingsRow title={t('settingsDataExport.clearAll')} description={t('settingsDataExport.clearWarning')}>
+          <AlertTriangle className="h-3.5 w-3.5 text-ember" />
+          <button type="button" onClick={clearAll} disabled={clearing} className="settings-action-button text-ember">
+            <Trash2 className="h-3.5 w-3.5" />{t('settingsDataExport.clearAll')}
+          </button>
+        </SettingsRow>
+      </SettingsGroup>
+      {message ? <p className="settings-inline-status px-1" role="status">{message}</p> : null}
+    </SettingsPanel>
   )
 }

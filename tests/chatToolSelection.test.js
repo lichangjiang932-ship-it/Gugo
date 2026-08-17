@@ -380,6 +380,31 @@ test('a short authorization inherits only the immediately preceding user executi
   }
 })
 
+test('short visual revisions inherit the immediately preceding file execution request', () => {
+  const previousUserPrompt = '\u8bf7\u751f\u6210\u7f51\u7ad9\u5e76\u5199\u5165 E:\\u679c\\gallery.html\u3002'
+  for (const userPrompt of [
+    '\u989c\u8272\u518d\u6df1\u4e00\u70b9',
+    '\u518d\u7acb\u4f53\u4e00\u4e9b',
+    '\u628a\u80cc\u666f\u6362\u6210\u8fd9\u5f20\u56fe\u7247',
+    'make it a little darker',
+    'remove the red subtitle',
+  ]) {
+    assert.deepEqual(
+      namesOf(selectChat({ prompt: userPrompt, userPrompt, previousUserPrompt })),
+      EXECUTE_NAMES,
+      userPrompt,
+    )
+  }
+})
+
+test('a short visual preference cannot inherit execution from an answer-only question', () => {
+  assert.deepEqual(namesOf(selectChat({
+    prompt: '\u989c\u8272\u518d\u6df1\u4e00\u70b9',
+    userPrompt: '\u989c\u8272\u518d\u6df1\u4e00\u70b9',
+    previousUserPrompt: '\u8bf7\u89e3\u91ca\u6df1\u8272\u4e3b\u9898\u4e3a\u4ec0\u4e48\u66f4\u9002\u5408 OLED\u3002',
+  })), ANSWER_NAMES)
+})
+
 test('a short authorization cannot create execution intent or override answer mode', () => {
   const executionRequest = '\u8bf7\u4fee\u590d D:\\demo\\app.js \u5e76\u5199\u5165\u6587\u4ef6\u3002'
   const readOnlyRequest = '\u6574\u4e2a\u9879\u76ee\u53ea\u8bfb\uff0c\u4e0d\u8981\u4fee\u6539\u4efb\u4f55\u6587\u4ef6\u3002'

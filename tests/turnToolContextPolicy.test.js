@@ -159,3 +159,25 @@ test('bypass permission mode removes the redundant directory authorization tool'
     assert.ok(names.includes(name), `${name} must remain executable in bypass mode`)
   }
 })
+
+test('bypass permission mode still honors explicitly disabled execution tools', async () => {
+  const specs = await resolveTurnToolSpecs({
+    userId: null,
+    permissionMode: 'bypass',
+    baseSpecs: SERVER_TOOL_SPECS,
+    toolsConfig: {
+      enabled: ['read_file'],
+      disabled: ['write_file', 'edit_file', 'apply_patch', 'patch_file', 'bash_exec', 'run_command'],
+    },
+    prompt: '修改 D:\\work\\site.html 并验证',
+    messages: [{ role: 'user', content: '直接修改文件' }],
+    enabledConnectorTools: [],
+    webSearchReady: false,
+  })
+  const names = namesOf(specs)
+
+  assert.ok(names.includes('read_file'))
+  for (const name of ['write_file', 'edit_file', 'apply_patch', 'patch_file', 'bash_exec', 'run_command']) {
+    assert.equal(names.includes(name), false, `${name} must remain disabled in bypass mode`)
+  }
+})

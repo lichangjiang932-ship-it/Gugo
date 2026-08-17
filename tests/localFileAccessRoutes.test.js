@@ -254,7 +254,7 @@ test('verified turn receipts stream the real file and remain user-scoped', async
   assert.equal(await htmlHead.text(), '')
 
   const previewSessionResponse = await fetch(
-    `${origin}/api/local-files/verified/${htmlFileId}/preview-session?turnId=${turnId}`,
+    `${origin}/api/local-files/verified/${htmlFileId}/preview-session/?turnId=${turnId}`,
     { method: 'POST', headers: headers(alice.token) },
   )
   assert.equal(previewSessionResponse.status, 200)
@@ -349,7 +349,7 @@ test('verified turn receipts stream the real file and remain user-scoped', async
   )
   assert.equal(revocableResponse.status, 200)
   const revocableSession = await revocableResponse.json()
-  const revokeUrl = `${origin}/api/local-files/previews/${revocableSession.ticket}`
+  const revokeUrl = `${origin}/api/local-files/previews/${revocableSession.ticket}/`
   const anonymousRevoke = await fetch(revokeUrl, { method: 'DELETE' })
   assert.equal(anonymousRevoke.status, 401)
   const crossUserRevoke = await fetch(revokeUrl, { method: 'DELETE', headers: headers(bob.token) })

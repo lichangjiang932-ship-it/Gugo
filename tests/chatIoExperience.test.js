@@ -97,20 +97,20 @@ test('tool failures expose status, retryability, attempts, and recovery hints', 
   assert.match(toolCardSource, /call\.errorHint/)
 })
 
-test('selected slash skill renders as a dark tag inside the composer', () => {
+test('selected slash skill renders as a quiet inline tag inside the composer', () => {
   assert.match(composerSource, /function splitLeadingSkillCommand/)
   assert.match(composerSource, /data-testid="active-skill-command"/)
-  assert.match(composerSource, /bg-ink[\s\S]{0,120}text-paper/)
+  assert.match(composerSource, /bg-ink\/5[\s\S]{0,120}text-ink-soft/)
   assert.match(composerSource, /value=\{skillCommand\.command \? skillCommand\.body : input\}/)
   assert.match(chatSource, /runtimeSkillIds=\{runtimeSkills\.filter\(\(skill\) => skill\.runnable !== false\)\.map\(\(skill\) => skill\.id\)\}/)
   assert.match(chatViewSource, /skillIds=\{runtimeSkillIds\}/)
 })
 
-test('sent slash skill keeps its tag and depth in the user message', () => {
+test('sent slash skill keeps a quiet inline tag without restoring a message card', () => {
   assert.match(messagesSource, /function splitUserSkillCommand/)
   assert.match(messagesSource, /data-testid="sent-skill-command"/)
   assert.match(messagesSource, /chat-user-skill-message/)
-  assert.match(stylesSource, /\.chat-user-skill-message[\s\S]*?box-shadow:/)
+  assert.match(stylesSource, /\.chat-user-skill-message\s*\{[\s\S]*?background:\s*transparent;[\s\S]*?box-shadow:\s*none;/)
 })
 
 test('long-term memory remains internal instead of adding a disclosure after every answer', () => {
@@ -137,13 +137,29 @@ test('message time, model, and latency reveal with copy actions on hover or focu
   assert.match(stylesSource, /@media \(hover: none\), \(pointer: coarse\)[\s\S]*?\.chat-message-actions,\s*\.chat-message-meta\s*\{[\s\S]*?opacity:\s*1;[\s\S]*?pointer-events:\s*auto;/)
 })
 
-test('user message time and copy actions sit outside the compact bubble', () => {
+test('user messages stay right-aligned and flat while metadata remains outside the text flow', () => {
   const bubble = messageRowSource.match(/data-testid="user-message-bubble"[\s\S]*?<\/div>/)?.[0] || ''
   assert.match(bubble, /chat-user-message/)
-  assert.match(bubble, /px-3\.5 py-2/)
+  assert.doesNotMatch(bubble, /rounded-2xl|border bg-|bg-paper-2|shadow/)
   assert.doesNotMatch(bubble, /user-message-time|chat-message-actions/)
   assert.match(messageRowSource, /flex max-w-\[min\(720px,86%\)\] flex-col items-end/)
-  assert.match(messageRowSource, /mt-1 flex h-4[\s\S]{0,160}leading-none/)
+  assert.match(messageRowSource, /mt-0\.5 flex h-4[\s\S]{0,160}leading-none/)
+  assert.match(stylesSource, /\.chat-user-message\s*\{[\s\S]*?border:\s*0;[\s\S]*?background:\s*transparent;[\s\S]*?box-shadow:\s*none;/)
+})
+
+test('tool activity is an inline label while command arguments and logs default collapsed', () => {
+  assert.match(toolCardSource, />Tool call<\/span>/)
+  assert.match(toolCardSource, /chat-tool-label[^>]*>\{call\.name \|\| label\}/)
+  assert.match(toolCardSource, /const isExpanded = expanded === true/)
+  assert.doesNotMatch(activityTracesSource, /shouldAutoExpandToolCall|defaultExpandedCallKey/)
+  assert.match(stylesSource, /\.chat-tool-identity\s*\{[\s\S]*?display:\s*inline-flex;/)
+})
+
+test('composer stays compact and shadowless with a circular primary action', () => {
+  assert.match(composerSource, /data-testid="chat-composer-surface"/)
+  assert.match(composerSource, /rounded-2xl border border-ink\/15/)
+  assert.doesNotMatch(composerSource, /shadow-\[0_8px_28px|focus-within:shadow/)
+  assert.match(composerActionsSource, /h-8 w-8[\s\S]{0,80}rounded-full/)
 })
 
 test('reasoning stays a compact live status while tool traces remain inspectable', () => {
