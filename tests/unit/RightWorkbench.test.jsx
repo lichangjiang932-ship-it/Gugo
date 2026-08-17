@@ -245,3 +245,110 @@ test('right workbench hides live intermediates and synthetic previews outside de
     dom.window.close()
   }
 })
+
+test('right workbench prefers a verified formal local file over its managed preview artifact', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  const opened = []
+  const turnId = 'formal-workbench-turn'
+  const filePath = 'E:\\果\\gallery.html'
+
+  try {
+    await act(async () => root.render(
+      <RightWorkbench
+        messages={[{
+          id: `${turnId}:assistant`,
+          role: 'assistant',
+          content: `已完成：${filePath}`,
+          meta: {
+            serverTurnId: turnId,
+            serverArtifacts: [{
+              id: 'managed-gallery',
+              filename: 'gallery.html',
+              type: 'html',
+              url: '/api/artifacts/managed-gallery',
+            }],
+            serverDeliveryArtifactIds: ['managed-gallery'],
+            verifiedLocalFiles: [{
+              id: 'formal-gallery-receipt',
+              path: filePath,
+              filename: 'gallery.html',
+              size: 2048,
+              relatedArtifactIds: ['managed-gallery'],
+            }],
+          },
+        }]}
+        activeTab="files"
+        onTabChange={() => {}}
+        onClose={() => {}}
+        onOpenArtifact={(artifact) => opened.push(artifact)}
+        onSendMessage={() => {}}
+        isGenerating={false}
+      />,
+    ))
+
+    const links = [...rootElement.querySelectorAll('[data-testid="workbench-file-open"]')]
+    assert.equal(links.length, 1)
+    assert.match(links[0].getAttribute('href'), /\/api\/local-files\/verified\/formal-gallery-receipt/)
+    assert.doesNotMatch(links[0].getAttribute('href'), /\/api\/artifacts\//)
+    await act(async () => links[0].dispatchEvent(new dom.window.MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+    })))
+    assert.equal(opened.length, 1)
+    assert.equal(opened[0].directFile.path, filePath)
+    assert.equal(opened[0].directFile.type, 'html')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('right workbench keeps only the latest receipt for the same verified local path', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  const filePath = 'E:\\果\\gallery.html'
+  const messageFor = ({ turnId, receiptId, size }) => ({
+    id: `${turnId}:assistant`,
+    role: 'assistant',
+    content: `已完成：${filePath}`,
+    meta: {
+      serverTurnId: turnId,
+      serverDeliveryArtifactIds: [],
+      verifiedLocalFiles: [{
+        id: receiptId,
+        path: filePath,
+        filename: 'gallery.html',
+        size,
+      }],
+    },
+  })
+
+  try {
+    await act(async () => root.render(
+      <RightWorkbench
+        messages={[
+          messageFor({ turnId: 'gallery-first-turn', receiptId: 'gallery-first-receipt', size: 1024 }),
+          messageFor({ turnId: 'gallery-latest-turn', receiptId: 'gallery-latest-receipt', size: 2048 }),
+        ]}
+        activeTab="files"
+        onTabChange={() => {}}
+        onClose={() => {}}
+        onOpenArtifact={() => {}}
+        onSendMessage={() => {}}
+        isGenerating={false}
+      />,
+    ))
+
+    const links = [...rootElement.querySelectorAll('[data-testid="workbench-file-open"]')]
+    assert.equal(links.length, 1)
+    assert.match(links[0].getAttribute('href'), /gallery-latest-receipt/)
+    assert.doesNotMatch(links[0].getAttribute('href'), /gallery-first-receipt/)
+    assert.equal(rootElement.querySelector('[data-testid="workbench-file-count"]').textContent, '1')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})

@@ -226,6 +226,9 @@ function optionalContextVerifiedLocalFiles(context) {
         filename,
         ...(Number.isFinite(Number(file?.size)) ? { size: Math.max(0, Number(file.size)) } : {}),
         ...(Number.isFinite(Number(file?.verifiedAt)) ? { verifiedAt: Math.max(0, Number(file.verifiedAt)) } : {}),
+        ...(Array.isArray(file?.relatedArtifactIds) && file.relatedArtifactIds.length > 0
+          ? { relatedArtifactIds: [...new Set(file.relatedArtifactIds.map(String).filter(Boolean))] }
+          : {}),
       }
     })
     .filter(Boolean)

@@ -24,6 +24,7 @@ const { appendTurnEvent } = await import('../server/services/turnEventStore.js')
 const {
   buildAssistantModelContext,
   expandStoredMessages,
+  extractVerifiedLocalFiles,
   materializeManagedAttachmentMessages,
   selectAttachmentIdsForModelRequest,
   selectStoredMessagesAfterCompaction,
@@ -293,6 +294,43 @@ test('successful artifact calls retain a lightweight reference instead of 70k HT
   }])
   const expandedCall = expanded.find((message) => message.tool_calls)?.tool_calls[0]
   assert.deepEqual(JSON.parse(expandedCall.function.arguments), reference)
+})
+
+test('successful create_html_app local delivery becomes a verified file linked to its artifact', () => {
+  const outputPath = path.join(tempDir, 'gallery-output.html')
+  fs.writeFileSync(outputPath, '<!doctype html><html><body>gallery</body></html>')
+  const checkpointMessages = [{
+    role: 'assistant',
+    content: '',
+    tool_calls: [{
+      id: 'verified-html-delivery',
+      function: {
+        name: 'create_html_app',
+        arguments: JSON.stringify({ title: 'Gallery', html: '<!doctype html><html></html>' }),
+      },
+    }],
+  }, {
+    role: 'tool',
+    tool_call_id: 'verified-html-delivery',
+    name: 'create_html_app',
+    content: JSON.stringify({
+      ok: true,
+      artifactId: 'verified-html-artifact',
+      filename: 'gallery.html',
+      path: outputPath,
+      localPath: outputPath,
+      outputPath,
+    }),
+  }]
+
+  const receipts = extractVerifiedLocalFiles(checkpointMessages, {
+    baselineToolCallIds: new Set(),
+    resolvePath: ({ rawPath }) => ({ fullPath: rawPath }),
+  })
+
+  assert.equal(receipts.length, 1)
+  assert.equal(receipts[0].path, outputPath)
+  assert.deepEqual(receipts[0].relatedArtifactIds, ['verified-html-artifact'])
 })
 
 test('artifact source page contents are omitted from persisted tool trace', () => {

@@ -9,6 +9,7 @@ import {
   detectArtifactIntent,
   expectsFileArtifact,
   findAdjacentDeliveredArtifacts,
+  findContinuableArtifactTargets,
   findExplicitlyReferencedDeliveredArtifacts,
   isArtifactRevisionRequest,
   isFileArtifactTool,
@@ -1605,6 +1606,27 @@ test('only an adjacent delivered artifact can authorize an implicit revision', (
       prompt,
     )
   }
+  const transformation = '把它做成立体可旋转的，可以转为横着的，也可以转为竖着的'
+  assert.equal(isArtifactRevisionRequest(transformation, { hasPriorArtifact: true }), true)
+  assert.deepEqual(
+    [...allowedArtifactTools(transformation, { priorArtifactTypes: ['html'] })],
+    ['create_html_app'],
+  )
+  assert.equal(resolveArtifactRevisionMode(transformation), 'replace_original')
+  const copyTransformation = '把它做成立体的，另建版本并保留原版'
+  assert.equal(isArtifactRevisionRequest(copyTransformation, { hasPriorArtifact: true }), true)
+  assert.equal(resolveArtifactRevisionMode(copyTransformation), 'create_copy')
+  assert.deepEqual(
+    [...allowedArtifactTools(copyTransformation, { priorArtifactTypes: ['html'] })],
+    ['create_html_app'],
+  )
+  const explanation = '我想知道，把网页做成立体怎么实现？'
+  assert.equal(isArtifactRevisionRequest(explanation, { hasPriorArtifact: true }), false)
+  assert.equal(resolveArtifactRevisionMode(explanation), 'replace_original')
+  assert.deepEqual(
+    [...allowedArtifactTools(explanation, { priorArtifactTypes: ['html'] })],
+    [],
+  )
   for (const prompt of [
     '背景颜色太浅了',
     '人物再大一点',
@@ -1663,6 +1685,77 @@ test('only an adjacent delivered artifact can authorize an implicit revision', (
   assert.equal(allowedArtifactTools('如何修改配色？', { priorArtifactTypes: ['html'] }).size, 0)
   assert.equal(allowedArtifactTools('修改是什么意思？', { priorArtifactTypes: ['html'] }).size, 0)
   assert.deepEqual([...allowedArtifactTools('请另做一份 PDF', { priorArtifactTypes: ['html'] })], ['create_pdf'])
+})
+
+test('status questions do not sever the latest trusted HTML target', () => {
+  const currentPrompt = '把它做成立体可旋转的，可以转为横着的，也可以转为竖着的'
+  const messages = [
+    ...adjacentHtmlRevisionMessages('遇到什么问题了？'),
+    { role: 'assistant', content: '上一轮仍未完成。' },
+    { role: 'user', content: currentPrompt },
+  ]
+
+  assert.deepEqual(findAdjacentDeliveredArtifacts(messages), [])
+  assert.deepEqual(findContinuableArtifactTargets(messages, currentPrompt), [{
+    id: 'previous-html-artifact',
+    type: 'html',
+    filename: '产品网页.html',
+    url: '/api/artifacts/previous-html-artifact',
+    toolName: 'create_html_app',
+  }])
+
+  const unrelated = [
+    ...adjacentHtmlRevisionMessages('请解释一下 CSS 网格'),
+    { role: 'assistant', content: 'CSS 网格是一种布局系统。' },
+    { role: 'user', content: currentPrompt },
+  ]
+  assert.deepEqual(findContinuableArtifactTargets(unrelated, currentPrompt), [])
+})
+
+test('a verified local HTML delivery remains continuable after an incomplete turn and status question', () => {
+  const currentPrompt = '把它做成立体可旋转的，可以转为横着的，也可以转为竖着的'
+  const messages = [
+    { role: 'user', content: '读取 E:\\果 中全部 JPG，生成网站并写到 E 盘' },
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [{
+        id: 'incomplete-html-create',
+        function: {
+          name: 'create_html_app',
+          arguments: JSON.stringify(validArtifactArgs('create_html_app')),
+        },
+      }],
+    },
+    {
+      role: 'tool',
+      tool_call_id: 'incomplete-html-create',
+      name: 'create_html_app',
+      content: JSON.stringify({
+        ok: true,
+        artifactId: 'incomplete-html-artifact',
+        filename: 'gallery.html',
+        url: '/api/artifacts/gallery.html',
+        path: 'E:\\果\\gallery.html',
+        localPath: 'E:\\果\\gallery.html',
+        outputPath: 'E:\\果\\gallery.html',
+      }),
+    },
+    { role: 'assistant', content: '任务尚未完成。' },
+    { role: 'user', content: '遇到什么问题了？' },
+    { role: 'assistant', content: '上一轮仍未完成。' },
+    { role: 'user', content: currentPrompt },
+  ]
+
+  assert.deepEqual(findContinuableArtifactTargets(messages, currentPrompt), [{
+    id: 'incomplete-html-artifact',
+    type: 'html',
+    filename: 'gallery.html',
+    url: '/api/artifacts/gallery.html',
+    toolName: 'create_html_app',
+    localPath: 'E:\\果\\gallery.html',
+    continuationOnly: true,
+  }])
 })
 
 test('an unselected draft artifact from an incomplete turn is not inherited', () => {

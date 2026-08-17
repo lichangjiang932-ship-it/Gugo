@@ -31,7 +31,7 @@ test('chat drafts persist while typing and message actions stay copy-only', () =
   assert.match(chatEntrySource, /triggerSendFlow\(typedContent \|\| describeAttachmentPrompt\(currentAttachments\), currentAttachments\)/)
   assert.doesNotMatch(chatSource, /handleEditMessage|editingMessageId|handleRegenerate|handleDeleteMessage/)
   assert.match(messageRowSource, /<CopyButton content=\{msg\.content\}/)
-  assert.match(messageRowSource, /copyTextToClipboard\(content\)/)
+  assert.match(messageRowSource, /copyTextToClipboard\(copyableMessageText\(content\)\)/)
   assert.match(messageRowSource, /chatMessages\.copied/)
   assert.doesNotMatch(messagesSource, /onEditMessage|onRegenerateMessage|onDeleteMessage|<RefreshCw|<Trash2/)
 })

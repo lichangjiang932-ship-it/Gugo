@@ -390,7 +390,7 @@ test('similar names and fenced-code filenames do not become inline artifact link
   }
 })
 
-test('a generated filename inside a Windows path with spaces and Chinese opens inline', async () => {
+test('an unverified Windows path with spaces and Chinese keeps a managed-file fallback', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
@@ -422,13 +422,11 @@ test('a generated filename inside a Windows path with spaces and Chinese opens i
         t={(key) => key}
       />,
     ))
-    const link = rootElement.querySelector('[data-testid="inline-artifact-link"]')
-    assert.ok(link)
-    assert.match(link.className, /chat-output-file-name/)
-    assert.doesNotMatch(link.className, /text-ember/)
-    assert.equal(link.textContent, '填写后 答题卡.pdf')
-    assert.equal(rootElement.querySelectorAll('[data-testid="artifact-open-card"]').length, 0)
-    await act(async () => link.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })))
+    assert.equal(rootElement.querySelector('[data-testid="inline-artifact-link"]'), null)
+    assert.equal(rootElement.textContent.includes('D:\\本地 输出\\填写后 答题卡.pdf'), true)
+    const fallback = rootElement.querySelector('[data-testid="artifact-open-card"]')
+    assert.ok(fallback)
+    await act(async () => fallback.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })))
     assert.equal(opened[0].directFile.filename, '填写后 答题卡.pdf')
   } finally {
     await act(async () => root.unmount())
@@ -436,7 +434,7 @@ test('a generated filename inside a Windows path with spaces and Chinese opens i
   }
 })
 
-test('an inline-code Windows path opens only its selected deliverable artifact', async () => {
+test('an inline-code Windows path cannot be impersonated by a same-named managed artifact', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
@@ -470,15 +468,14 @@ test('an inline-code Windows path opens only its selected deliverable artifact',
       />,
     ))
     const links = [...rootElement.querySelectorAll('[data-testid="inline-artifact-link"]')]
-    assert.equal(links.length, 1)
-    assert.equal(links[0].textContent, finalPath)
-    assert.match(links[0].className, /chat-output-file-name/)
-    assert.ok(links[0].querySelector('code'))
-    assert.equal(rootElement.querySelectorAll('[data-testid="artifact-open-card"]').length, 0)
+    assert.equal(links.length, 0)
+    const fallback = rootElement.querySelector('[data-testid="artifact-open-card"]')
+    assert.ok(fallback)
+    assert.equal([...rootElement.querySelectorAll('code')].some((code) => code.textContent === finalPath), true)
     assert.equal([...rootElement.querySelectorAll('code')].some((code) => code.textContent === draftPath), true)
     assert.equal([...rootElement.querySelectorAll('code')].some((code) => code.textContent === unknownPath), true)
 
-    await act(async () => links[0].dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })))
+    await act(async () => fallback.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })))
     assert.equal(opened.length, 1)
     assert.equal(opened[0].directFile.id, 'final-pdf')
     assert.equal(opened[0].directFile.filename, 'final report-2.pdf')
@@ -488,7 +485,7 @@ test('an inline-code Windows path opens only its selected deliverable artifact',
   }
 })
 
-test('an explicit Markdown link to a local Windows output is rewritten to the persisted artifact', async () => {
+test('an explicit local-path Markdown link stays unverified without an exact local receipt', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
@@ -520,11 +517,11 @@ test('an explicit Markdown link to a local Windows output is rewritten to the pe
         t={(key) => key}
       />,
     ))
-    const link = rootElement.querySelector('[data-testid="inline-artifact-link"]')
-    assert.ok(link)
-    assert.match(link.getAttribute('href'), /^\/api\/artifacts\//)
-    assert.equal(rootElement.querySelectorAll('[data-testid="artifact-open-card"]').length, 0)
-    await act(async () => link.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })))
+    assert.equal(rootElement.querySelector('[data-testid="inline-artifact-link"]'), null)
+    assert.ok(rootElement.querySelector('[data-testid="unverified-local-path"]'))
+    const fallback = rootElement.querySelector('[data-testid="artifact-open-card"]')
+    assert.ok(fallback)
+    await act(async () => fallback.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true })))
     assert.equal(opened[0].directFile.filename, '填写后 答题卡.pdf')
   } finally {
     await act(async () => root.unmount())
@@ -585,6 +582,149 @@ test('a verified local-file receipt turns the full answer path into a real workb
     assert.equal(opened[0].directFile.filename, '最终网站.html')
   } finally {
     await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('a verified output path stays selectable, copies literally, and supersedes its managed artifact', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const opened = []
+  const copied = []
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: {
+      ...dom.window.navigator,
+      clipboard: { writeText: async (value) => copied.push(value) },
+    },
+  })
+  const turnId = 'formal-local-output-turn'
+  const filePath = 'E:\\果\\gallery.html'
+  const managedArtifact = {
+    id: 'managed-gallery',
+    filename: 'gallery.html',
+    type: 'html',
+    url: '/api/artifacts/managed-gallery',
+  }
+  const msg = {
+    id: `${turnId}:assistant`,
+    role: 'assistant',
+    content: `正式文件：${filePath}。`,
+    timestamp: Date.now(),
+    meta: {
+      serverTurnId: turnId,
+      serverArtifacts: [managedArtifact],
+      serverDeliveryArtifactIds: [managedArtifact.id],
+      verifiedLocalFiles: [{
+        id: 'formal-gallery-receipt',
+        path: filePath,
+        filename: 'gallery.html',
+        size: 2048,
+        relatedArtifactIds: [managedArtifact.id],
+      }],
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <MessageRow
+        msg={msg}
+        rowKey={msg.id}
+        generatingMessageId=""
+        lang="zh"
+        onOpenArtifact={(artifact) => opened.push(artifact)}
+        t={(key) => key}
+      />,
+    ))
+
+    const link = rootElement.querySelector('[data-testid="inline-artifact-link"]')
+    assert.ok(link)
+    assert.equal(link.textContent, filePath)
+    assert.match(link.getAttribute('href'), /\/api\/local-files\/verified\/formal-gallery-receipt/)
+    assert.equal(rootElement.querySelectorAll('[data-testid="artifact-open-card"]').length, 0)
+
+    const selection = {
+      isCollapsed: false,
+      rangeCount: 1,
+      getRangeAt: () => ({ intersectsNode: (node) => node === link }),
+    }
+    const originalGetSelection = dom.window.getSelection
+    dom.window.getSelection = () => selection
+    await act(async () => link.dispatchEvent(new dom.window.MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+    })))
+    assert.equal(opened.length, 0, 'selecting link text must not open the preview')
+    dom.window.getSelection = originalGetSelection
+
+    await act(async () => link.dispatchEvent(new dom.window.MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+    })))
+    assert.equal(opened.length, 1)
+    assert.equal(opened[0].directFile.path, filePath)
+
+    const copyPath = rootElement.querySelector('[data-testid="copy-local-path"]')
+    assert.ok(copyPath)
+    await act(async () => {
+      copyPath.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }))
+      await Promise.resolve()
+    })
+    assert.equal(copied.at(-1), filePath)
+  } finally {
+    await act(async () => root.unmount())
+    if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator)
+    else delete globalThis.navigator
+    dom.window.close()
+  }
+})
+
+test('copying a complete reply keeps rendered labels and removes markdown link targets', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const copied = []
+  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: {
+      ...dom.window.navigator,
+      clipboard: { writeText: async (value) => copied.push(value) },
+    },
+  })
+  const filePath = 'E:\\果\\gallery.html'
+  const msg = {
+    id: 'copy-clean-answer',
+    role: 'assistant',
+    content: `已完成：[${filePath}](http://127.0.0.1:5180/api/local-files/verified/receipt?turnId=copy)。`,
+    timestamp: Date.now(),
+    meta: { type: 'model_reply', modelName: 'test' },
+  }
+
+  try {
+    await act(async () => root.render(
+      <MessageRow
+        msg={msg}
+        rowKey={msg.id}
+        generatingMessageId=""
+        lang="zh"
+        t={(key) => key}
+      />,
+    ))
+    const copyReply = rootElement.querySelector('[data-testid="assistant-message-actions"] button')
+    assert.ok(copyReply)
+    await act(async () => {
+      copyReply.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      await Promise.resolve()
+    })
+    assert.equal(copied.at(-1), `已完成：${filePath}。`)
+    assert.doesNotMatch(copied.at(-1), /api\/local-files|\]\(/)
+  } finally {
+    await act(async () => root.unmount())
+    if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator)
+    else delete globalThis.navigator
     dom.window.close()
   }
 })

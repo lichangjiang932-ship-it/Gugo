@@ -14,7 +14,7 @@ import { copyTextToClipboard } from '../../../lib/clipboard.js'
 import { ArtifactReferenceLinks } from './ArtifactCards.jsx'
 import { ToolCallTrace } from './ActivityTraces.jsx'
 import ActivityStream from './ActivityStream.jsx'
-import { buildCollapsedUserMessagePreview, shouldCollapseUserMessage, splitUserSkillCommand } from './messageContent.js'
+import { buildCollapsedUserMessagePreview, copyableMessageText, shouldCollapseUserMessage, splitUserSkillCommand } from './messageContent.js'
 import DirectoryRequestCard from '../../taskRun/DirectoryRequestCard.jsx'
 import { buildAttachmentPreviewArtifact } from '../../../lib/attachmentPreview.js'
 
@@ -561,7 +561,7 @@ function CopyButton({ content, t }) {
 
   const copy = async () => {
     try {
-      await copyTextToClipboard(content)
+      await copyTextToClipboard(copyableMessageText(content))
       setCopyState('copied')
     } catch {
       setCopyState('error')

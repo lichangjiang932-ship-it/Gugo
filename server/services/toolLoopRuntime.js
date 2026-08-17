@@ -21,6 +21,7 @@ import { ensureSafetySystemMessages } from './promptCompiler.js'
 import {
   allowedArtifactTools,
   findAdjacentDeliveredArtifacts,
+  findContinuableArtifactTargets,
   findExplicitlyReferencedDeliveredArtifacts,
   isArtifactRevisionRequest,
   isExplicitCodeSnippetRequest,
@@ -58,6 +59,10 @@ const ARTIFACT_RECOVERY_PHASE_DIAGNOSE = 'diagnose'
 const ARTIFACT_RECOVERY_PHASE_FORCE = 'force'
 const MAX_ARTIFACT_RECOVERY_DIAGNOSTIC_ROUNDS = 2
 const LIVE_ARTIFACT_CONTRACT_MARKER = '[LIVE ARTIFACT CONTRACT UPDATED]'
+const PRIOR_TURN_OUTCOME_MARKER = '[PRIOR TURN OUTCOME]'
+const STATUS_INQUIRY_PROMPT = /^(?:(?:请|先|那|那么|现在)\s*)?(?:(?:遇到|出现|发生)(?:了)?\s*(?:什么|哪些)?\s*(?:问题|错误|异常|阻塞)|(?:有|还有|到底有)\s*(?:什么|哪些)?\s*(?:问题|错误|异常)|(?:为什么|为何|怎么|哪里)\s*(?:会)?\s*(?:失败|报错|卡住|停止|中断|没(?:有)?完成|未完成)|(?:现在|当前)?\s*(?:是什么|什么)\s*(?:状态|进度)|(?:完成|做好|成功)(?:了)?\s*(?:吗|没有)|what\s+(?:went\s+wrong|failed)|why\s+(?:did\s+it\s+fail|is\s+it\s+stuck)|what(?:'s|\s+is)\s+the\s+(?:status|problem))(?:[了呢吗]?\s*[?？。.!！]*)$/i
+const FALSE_SUCCESS_STATUS = /(?:没有(?:任何)?(?:问题|错误|异常)|(?:已经|已|任务)(?:顺利|成功)?完成|完成了|all\s+good|completed\s+successfully)/i
+const INCOMPLETE_STATUS = /(?:尚未完成|仍未完成|还没(?:有)?完成|没有完成|未完成|任务尚未|incomplete|not\s+(?:yet\s+)?complete)/i
 const PUBLIC_INCOMPLETE_TASK_TEXT = '任务尚未完成。请重试以继续；若仍失败，请检查模型和工具调用支持。'
 const PUBLIC_UNVERIFIED_FILE_TEXT = '任务尚未通过最终验证，未通过验证的文件不会显示或交付。请重试以继续。'
 const PUBLIC_FILTERED_CLARIFICATION_TEXT = '需要你补充信息后才能继续。已隐藏模型异常收尾时返回的代码内容。'
@@ -73,6 +78,38 @@ const INTERNAL_TERMINAL_FAILURE_PATTERNS = [
   /(?:已保留|保存当前)[^\n]*(?:残缺|文件|进展|工具结果)/,
   /(?:上面的工具结果|当前工具结果)[^\n]*(?:部分进展|已包含)/,
 ]
+
+function latestPriorTurnOutcome(messages = []) {
+  const history = Array.isArray(messages) ? messages : []
+  let currentUserIndex = -1
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    if (history[index]?.role === 'user') {
+      currentUserIndex = index
+      break
+    }
+  }
+  if (currentUserIndex < 0) return null
+
+  let previousUserIndex = -1
+  for (let index = currentUserIndex - 1; index >= 0; index -= 1) {
+    if (history[index]?.role === 'user') {
+      previousUserIndex = index
+      break
+    }
+  }
+  const turnStart = previousUserIndex + 1
+  for (let index = currentUserIndex - 1; index >= turnStart; index -= 1) {
+    const message = history[index]
+    const content = String(message?.content || '')
+    if (message?.role !== 'system' || !content.startsWith(PRIOR_TURN_OUTCOME_MARKER)) continue
+    const jsonLine = content.split(/\r?\n/, 3)[1]
+    try {
+      const parsed = JSON.parse(jsonLine || '{}')
+      if (['failed', 'interrupted'].includes(String(parsed?.state || ''))) return parsed
+    } catch { /* trusted marker with malformed legacy payload: ignore */ }
+  }
+  return null
+}
 
 function isForcedToolChoiceCompatibilityError(error) {
   const status = Number(error?.status ?? error?.statusCode)
@@ -418,7 +455,14 @@ export async function runToolsLoop({
   const artifactAuthorizationText = String(
     job?.userPrompt || currentUserMessage?.content || job?.prompt || '',
   )
+  const priorTurnOutcome = latestPriorTurnOutcome(messages)
+  const isPriorOutcomeStatusInquiry = Boolean(priorTurnOutcome)
+    && STATUS_INQUIRY_PROMPT.test(artifactAuthorizationText.trim())
   const adjacentArtifacts = findAdjacentDeliveredArtifacts(messages)
+  const continuableArtifacts = findContinuableArtifactTargets(
+    messages,
+    artifactAuthorizationText,
+  )
   const explicitlyReferencedArtifacts = findExplicitlyReferencedDeliveredArtifacts(
     messages,
     artifactAuthorizationText,
@@ -428,7 +472,9 @@ export async function runToolsLoop({
   // failed retry or when the user deliberately returns to an older artifact.
   const discoveredPriorArtifacts = explicitlyReferencedArtifacts.length > 0
     ? explicitlyReferencedArtifacts
-    : adjacentArtifacts
+    : adjacentArtifacts.length > 0
+      ? adjacentArtifacts
+      : continuableArtifacts
   const artifactDelivery = resolveArtifactDeliveryTargets(artifactAuthorizationText, {
     priorArtifacts: discoveredPriorArtifacts,
     priorArtifactTypes: [...new Set(discoveredPriorArtifacts.map((artifact) => artifact.type))],
@@ -453,10 +499,20 @@ export async function runToolsLoop({
     const args = call?.args && typeof call.args === 'object' && !Array.isArray(call.args)
       ? call.args
       : {}
-    // Only fill an omitted target. A non-empty wrong target must reach the
-    // authorization guard unchanged and be rejected, never silently retargeted.
-    if (matching.length !== 1 || String(args.replace_artifact_id || '').trim()) return call
-    const normalizedArgs = { ...args, replace_artifact_id: matching[0].id }
+    if (matching.length !== 1) return call
+    const replacementId = String(args.replace_artifact_id || '').trim()
+    // A non-empty wrong target must reach the authorization guard unchanged
+    // and be rejected, never silently retargeted.
+    if (replacementId && replacementId !== String(matching[0].id)) return call
+    const inheritedLocalPath = String(matching[0].localPath || '').trim()
+    const normalizedArgs = {
+      ...args,
+      ...(replacementId ? {} : { replace_artifact_id: matching[0].id }),
+      ...(!String(args.output_directory || '').trim() && inheritedLocalPath
+        ? { output_directory: path.dirname(inheritedLocalPath) }
+        : {}),
+    }
+    if (JSON.stringify(normalizedArgs) === JSON.stringify(args)) return call
     return {
       ...call,
       args: normalizedArgs,
@@ -1106,6 +1162,29 @@ export async function runToolsLoop({
   let mutationExecutionObserved = Boolean(restoredState?.completionGuards?.mutationExecutionObserved)
     || deliveredArtifactTools.size > 0
     || inheritedArtifactEvidence
+  let priorOutcomeMutationObserved = Boolean(
+    restoredState?.completionGuards?.priorOutcomeMutationObserved,
+  )
+  const guardPriorOutcomeStatusText = (value) => {
+    const text = String(value || '')
+    if (!isPriorOutcomeStatusInquiry
+      || (priorOutcomeMutationObserved && !hasPendingMutationVerification())
+      || INCOMPLETE_STATUS.test(text)
+      || !FALSE_SUCCESS_STATUS.test(text)) return text
+    const blocker = String(
+      priorTurnOutcome?.error?.message || priorTurnOutcome?.error?.code || '上一轮执行未完成',
+    ).trim()
+    const verifiedFiles = Array.isArray(priorTurnOutcome?.verifiedLocalFiles)
+      ? priorTurnOutcome.verifiedLocalFiles.map((file) => String(file?.path || '').trim()).filter(Boolean)
+      : []
+    return [
+      `上一轮仍未完成：${blocker}。`,
+      verifiedFiles.length > 0
+        ? `已确认存在的文件：${verifiedFiles.join('、')}；文件存在不代表整项任务已经完成。`
+        : '',
+      '在取得新的执行与验证证据前，不能标记为完成。',
+    ].filter(Boolean).join('\n')
+  }
   let executionEvidenceRetries = Math.max(
     0,
     Number(restoredState?.completionGuards?.executionEvidenceRetries) || 0,
@@ -1643,6 +1722,7 @@ export async function runToolsLoop({
         deliveryArtifactSelectionArtifactIds: [...deliveryArtifactSelectionArtifactIds],
         executionEvidenceObserved,
         mutationExecutionObserved,
+        priorOutcomeMutationObserved,
         verifiedRecoveredMutationObserved,
         mutationSteeringPending,
         executionEvidenceRetries,
@@ -2732,6 +2812,7 @@ export async function runToolsLoop({
           acceptedContent = protectTerminalText(content)
           responseTextPublished = false
         }
+        acceptedContent = guardPriorOutcomeStatusText(acceptedContent)
         if (!responseTextPublished && acceptedContent && typeof onModelDelta === 'function') {
           await onModelDelta({
             text: acceptedContent,
@@ -3285,6 +3366,7 @@ export async function runToolsLoop({
         : succeeded && isMutationExecutionCall(executedCall, outcome.artifactId)
       if (mutationExecutionSucceeded) {
         mutationExecutionObserved = true
+        priorOutcomeMutationObserved = true
         mutationSteeringPending = false
       }
       if (mutationExecutionSucceeded && isLocalMutationCall(executedCall)) {
@@ -3980,7 +4062,7 @@ export async function runToolsLoop({
       finalText = `已达到 ${maxIters} 轮工具调用上限，任务尚未完成。请重试以继续。`
     }
   }
-  finalText = protectTerminalText(finalText, { incomplete: true })
+  finalText = protectTerminalText(guardPriorOutcomeStatusText(finalText), { incomplete: true })
 
   if (!hasRequiredArtifacts()) {
     return finishIncomplete({

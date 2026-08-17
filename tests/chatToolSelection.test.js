@@ -102,6 +102,16 @@ test('implicit delegated commands retain execution tools without unrelated gener
   }
 })
 
+test('object-first webpage transformations retain write tools', () => {
+  const prompt = '把它做成立体可旋转的，可以转为横着的，也可以转为竖着的'
+  const selected = namesOf(selectChat({ prompt }))
+
+  for (const name of ['write_file', 'edit_file', 'apply_patch', 'bash_exec']) {
+    assert.ok(selected.includes(name), name)
+  }
+  assert.equal(selected.includes('generate_image'), false)
+})
+
 test('an explicit Chinese repair delegation retains the coding execution toolchain', () => {
   const prompt = '\u4f60\u6839\u636e\u5b9e\u9645\u60c5\u51b5\u6765\u8fdb\u884c\u4fee\u590d\uff0cpython\u7b49\u7684\u4ee3\u7801\u6267\u884c\u80fd\u529b\u662f\u5fc5\u987b\u6709\u7684'
   const selected = namesOf(selectChat({ prompt }))

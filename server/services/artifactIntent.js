@@ -156,6 +156,13 @@ function findDeliveredArtifactsBetween(history, startIndex, endIndex) {
         filename: String(candidate?.filename || result.filename || '').trim(),
         url: String(candidate?.url || result.url || '').trim(),
         toolName: call.name,
+        ...((candidate?.localPath || candidate?.outputPath || candidate?.path
+          || result.localPath || result.outputPath || result.path)
+          ? {
+              localPath: String(candidate?.localPath || candidate?.outputPath || candidate?.path
+                || result.localPath || result.outputPath || result.path).trim(),
+            }
+          : {}),
       })
     }
   }
@@ -167,6 +174,106 @@ function findDeliveredArtifactsBetween(history, startIndex, endIndex) {
   if (!Array.isArray(selectedIds)) return []
   const selected = new Set(selectedIds)
   return artifacts.filter((artifact) => selected.has(artifact.id))
+}
+
+const CONTINUATION_STATUS_QUESTION = /^(?:(?:请|先|那|那么|现在)\s*)?(?:(?:遇到|出现|发生)(?:了)?\s*(?:什么|哪些)?\s*(?:问题|错误|异常|阻塞)|(?:有|还有|到底有)\s*(?:什么|哪些)?\s*(?:问题|错误|异常)|(?:为什么|为何|怎么|哪里)\s*(?:会)?\s*(?:失败|报错|卡住|停止|中断|没(?:有)?完成|未完成)|(?:现在|当前)?\s*(?:是什么|什么)\s*(?:状态|进度)|(?:完成|做好|成功)(?:了)?\s*(?:吗|没有)|what\s+(?:went\s+wrong|failed)|why\s+(?:did\s+it\s+fail|is\s+it\s+stuck)|what(?:'s|\s+is)\s+the\s+(?:status|problem))(?:[了呢吗]?\s*[?？。.!！]*)$/i
+const CONTINUATION_RETRY_PROMPT = /^(?:继续|接着|重试|再试一次|继续处理|继续完成|continue|retry|try\s+again)[\s。.!！]*$/i
+
+function trustedLocalDeliveryPath(value = {}) {
+  for (const candidate of [value.localPath, value.outputPath, value.path]) {
+    const raw = String(candidate || '').trim()
+    if (/^(?:[a-z]:[\\/]|\/)/i.test(raw)) return raw
+  }
+  return ''
+}
+
+function findSuccessfulLocalArtifactsBetween(history, startIndex, endIndex) {
+  const turnMessages = history.slice(startIndex, endIndex)
+  const calls = new Map()
+  for (const message of turnMessages) {
+    if (message?.role !== 'assistant' || !Array.isArray(message.tool_calls)) continue
+    for (const rawCall of message.tool_calls) {
+      const id = String(rawCall?.id || '').trim()
+      const name = callName(rawCall)
+      if (!id || !ARTIFACT_TYPE_BY_TOOL[name]) continue
+      calls.set(id, { name })
+    }
+  }
+
+  const artifacts = []
+  const seen = new Set()
+  for (const message of turnMessages) {
+    if (message?.role !== 'tool') continue
+    const call = calls.get(String(message.tool_call_id || message.toolCallId || '').trim())
+    const result = parseObject(message.content)
+    if (!call || !result || result.ok === false) continue
+    const candidates = Array.isArray(result.artifacts) && result.artifacts.length > 0
+      ? result.artifacts
+      : result.artifactId
+        ? [result]
+        : []
+    for (const candidate of candidates) {
+      const id = String(candidate?.id || candidate?.artifactId || result.artifactId || '').trim()
+      const type = artifactType(candidate, ARTIFACT_TYPE_BY_TOOL[call.name])
+      const localPath = trustedLocalDeliveryPath(candidate) || trustedLocalDeliveryPath(result)
+      if (!id || !type || !localPath || seen.has(id)) continue
+      seen.add(id)
+      artifacts.push({
+        id,
+        type,
+        filename: String(candidate?.filename || result.filename || '').trim(),
+        url: String(candidate?.url || result.url || '').trim(),
+        toolName: call.name,
+        localPath,
+        continuationOnly: true,
+      })
+    }
+  }
+  return artifacts
+}
+
+function isTransparentContinuationPrompt(prompt = '') {
+  const text = String(prompt || '').trim()
+  return CONTINUATION_STATUS_QUESTION.test(text)
+    || CONTINUATION_RETRY_PROMPT.test(text)
+    || isArtifactRevisionRequest(text, { hasPriorArtifact: true })
+}
+
+/**
+ * Resolve the active artifact across a short continuation chain. A status
+ * question or failed revision must not erase the last trusted file target,
+ * while an unrelated explanatory/new-topic turn remains a hard boundary.
+ * Successful local generator results may be recovered from an incomplete
+ * turn because their concrete output path is stronger evidence than a draft
+ * artifact row without a delivery receipt.
+ */
+export function findContinuableArtifactTargets(messages = [], prompt = '') {
+  if (!isArtifactRevisionRequest(prompt, { hasPriorArtifact: true })) return []
+  const history = Array.isArray(messages) ? messages : []
+  let currentUserIndex = -1
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    if (history[index]?.role === 'user') { currentUserIndex = index; break }
+  }
+  if (currentUserIndex <= 0) return []
+
+  let turnEnd = currentUserIndex
+  for (let searchIndex = currentUserIndex - 1; searchIndex >= 0;) {
+    let previousUserIndex = -1
+    for (let index = searchIndex; index >= 0; index -= 1) {
+      if (history[index]?.role === 'user') { previousUserIndex = index; break }
+    }
+    if (previousUserIndex < 0) break
+
+    const delivered = findDeliveredArtifactsBetween(history, previousUserIndex + 1, turnEnd)
+    if (delivered.length > 0) return delivered
+    const localDeliveries = findSuccessfulLocalArtifactsBetween(history, previousUserIndex + 1, turnEnd)
+    if (localDeliveries.length > 0) return localDeliveries
+
+    if (!isTransparentContinuationPrompt(history[previousUserIndex]?.content)) break
+    turnEnd = previousUserIndex
+    searchIndex = previousUserIndex - 1
+  }
+  return []
 }
 
 const REFERENCE_TOKEN_CHARACTER = /[\p{L}\p{N}._-]/u

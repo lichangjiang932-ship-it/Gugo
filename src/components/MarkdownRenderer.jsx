@@ -64,6 +64,87 @@ function isManagedArtifactHref(href = '') {
   }
 }
 
+function selectedTextIntersects(element) {
+  const selection = element?.ownerDocument?.defaultView?.getSelection?.()
+  if (!selection || selection.isCollapsed || selection.rangeCount < 1) return false
+  for (let index = 0; index < selection.rangeCount; index += 1) {
+    try {
+      if (selection.getRangeAt(index).intersectsNode(element)) return true
+    } catch {
+      // A stale selection range can disappear while React handles the click.
+    }
+  }
+  return false
+}
+
+function referenceLocalPath(reference) {
+  const candidates = [
+    reference?.path,
+    reference?.fullPath,
+    reference?.outputPath,
+    reference?.localPath,
+  ]
+  return candidates.find((value) => normalizeArtifactLocalPath(value)) || ''
+}
+
+function SelectableFileLink({
+  anchorProps,
+  children,
+  href,
+  localPath,
+  onLinkClick,
+}) {
+  const { t } = useT()
+  const [copyState, setCopyState] = useState('idle')
+  const copyPath = async (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    try {
+      await copyTextToClipboard(localPath)
+      setCopyState('copied')
+    } catch {
+      setCopyState('error')
+    }
+    window.setTimeout(() => setCopyState('idle'), 1600)
+  }
+
+  return (
+    <span className="chat-inline-file-reference">
+      <a
+        {...anchorProps}
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        data-testid="inline-artifact-link"
+        className="chat-output-file-name font-semibold decoration-current/45 underline-offset-4 hover:decoration-current"
+        onClick={(event) => {
+          if (selectedTextIntersects(event.currentTarget)) {
+            event.preventDefault()
+            return
+          }
+          if (onLinkClick?.(href, event)) event.preventDefault()
+        }}
+      >
+        {children}
+      </a>
+      {localPath && (
+        <button
+          type="button"
+          data-testid="copy-local-path"
+          className="chat-inline-path-copy"
+          aria-label={copyState === 'copied' ? t('chatMessages.copied') : t('chatMessages.copyContent')}
+          title={copyState === 'copied' ? t('chatMessages.copied') : localPath}
+          onClick={copyPath}
+        >
+          {copyState === 'copied'
+            ? <Check className="h-3 w-3 text-emerald-600" />
+            : <Copy className="h-3 w-3" />}
+        </button>
+      )}
+    </span>
+  )
+}
+
 function CodeBlock({ children, streaming = false }) {
   const { t } = useT()
   const [copyState, setCopyState] = useState('idle')
@@ -126,10 +207,12 @@ function MarkdownRenderer({ artifactReferences = [], children, className = '', o
           // 自定义链接：本地路径可点击打开;普通链接新标签页打开 + noopener
           a: ({ href, children, ...props }) => {
             const isLocalPath = isLocalPathHref(href)
-            const isArtifactReference = Boolean(
-              findArtifactReferenceByHref(artifactReferences, href)
-              || (isLocalPath && findArtifactReferenceByLocalPath(artifactReferences, href)),
-            )
+            const artifactReference = findArtifactReferenceByHref(artifactReferences, href)
+              || (isLocalPath && findArtifactReferenceByLocalPath(artifactReferences, href))
+            const isArtifactReference = Boolean(artifactReference)
+            const visibleLocalPath = nodeText(children).trim()
+            const normalizedVisibleLocalPath = normalizeArtifactLocalPath(visibleLocalPath)
+            const trustedLocalPath = referenceLocalPath(artifactReference)
             const anchorProps = { ...props }
             delete anchorProps.node
             if (!isArtifactReference && isManagedArtifactHref(href)) {
@@ -146,15 +229,38 @@ function MarkdownRenderer({ artifactReferences = [], children, className = '', o
                 </span>
               )
             }
+            if (isArtifactReference
+              && normalizedVisibleLocalPath
+              && normalizeArtifactLocalPath(trustedLocalPath) !== normalizedVisibleLocalPath) {
+              return (
+                <span
+                  {...anchorProps}
+                  data-testid="unverified-local-path"
+                  className="font-mono text-[0.88em] text-ink-soft"
+                >
+                  {children}
+                </span>
+              )
+            }
+            if (isArtifactReference) {
+              return (
+                <SelectableFileLink
+                  anchorProps={anchorProps}
+                  href={artifactReference?.url || href}
+                  localPath={trustedLocalPath}
+                  onLinkClick={onLinkClick}
+                >
+                  {children}
+                </SelectableFileLink>
+              )
+            }
             return (
               <a
                 {...anchorProps}
                 href={isLocalPath ? undefined : href}
                 {...(isLocalPath ? {} : { target: '_blank', rel: 'noopener noreferrer' })}
-                data-testid={isArtifactReference ? 'inline-artifact-link' : isLocalPath ? 'inline-local-path-link' : undefined}
-                className={isArtifactReference
-                  ? 'chat-output-file-name font-semibold decoration-current/45 underline-offset-4 hover:decoration-current'
-                  : isLocalPath
+                data-testid={isLocalPath ? 'inline-local-path-link' : undefined}
+                className={isLocalPath
                     ? 'font-mono text-[0.88em] text-cyan underline decoration-cyan/40 underline-offset-4 hover:decoration-cyan'
                     : anchorProps.className}
                 onClick={(event) => {

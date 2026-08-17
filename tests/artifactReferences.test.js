@@ -143,7 +143,7 @@ test('artifact source previews obey live, failure, and explicit delivery boundar
   assert.equal(selected.type, 'html')
 })
 
-test('absolute Windows paths resolve only to a unique registered artifact', () => {
+test('absolute Windows paths require an exact registered source or delivery path', () => {
   const reference = {
     id: 'execution-check',
     filename: 'execution-check-2.txt',
@@ -157,7 +157,7 @@ test('absolute Windows paths resolve only to a unique registered artifact', () =
   )
   assert.equal(
     findArtifactReferenceByLocalPath([reference], 'D:\\Gugo\\output\\execution-check.txt'),
-    reference,
+    null,
   )
   assert.equal(
     findArtifactReferenceByLocalPath([reference], 'D:/Gugo/output/unregistered.txt'),

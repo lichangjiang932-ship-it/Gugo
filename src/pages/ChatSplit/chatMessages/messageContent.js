@@ -28,3 +28,14 @@ export function splitUserSkillCommand(content = '') {
   const match = raw.match(/^\/([a-z0-9_-]+)(?:\s+([\s\S]*))?$/i)
   return match ? { command: `/${match[1]}`, body: match[2] || '' } : { command: '', body: raw }
 }
+
+/**
+ * Copy what the answer visibly says, not the hidden Markdown destination used
+ * to open a managed or verified file. Local paths therefore remain literal
+ * while private API URLs and inline-code wrappers stay out of the clipboard.
+ */
+export function copyableMessageText(content = '') {
+  return String(content || '')
+    .replace(/!?\[([^\]\n]*)\]\(\s*(?:<[^>\n]*>|[^)\n]*)\s*\)/g, '$1')
+    .replace(/`([^`\n]+)`/g, '$1')
+}

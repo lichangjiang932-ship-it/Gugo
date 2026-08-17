@@ -38,6 +38,31 @@ test('auto mode recognizes concise Chinese and English work orders', () => {
   }
 })
 
+test('object-first transformation requests are executable mutations', () => {
+  for (const text of [
+    '把它做成立体可旋转的，可以转为横着的，也可以转为竖着的',
+    '把这个网页改成可以横向和竖向旋转的 3D 展廊',
+    '将当前页面改造为立体画廊',
+  ]) {
+    assert.equal(shouldRequireExecution({ text }), true, text)
+    assert.equal(hasMutationExecutionIntent(text), true, text)
+  }
+
+  for (const text of [
+    '为什么它会变成立体的？',
+    '如何把网页做成立体可旋转的？',
+    '我想知道，把网页做成立体怎么实现？',
+    '先不要把它改成立体的',
+  ]) {
+    assert.equal(shouldRequireExecution({ text }), false, text)
+    assert.equal(hasMutationExecutionIntent(text), false, text)
+  }
+
+  const createCopy = '把它做成立体的，另建版本并保留原版'
+  assert.equal(shouldRequireExecution({ text: createCopy }), true)
+  assert.equal(hasMutationExecutionIntent(createCopy), true)
+})
+
 test('auto mode recognizes write orders with Chinese filenames and nested Windows paths', () => {
   const screenshotPrompt = [
     'As analyzed above, career competition and financial pressure should not be ignored. 写入 Task 1。',

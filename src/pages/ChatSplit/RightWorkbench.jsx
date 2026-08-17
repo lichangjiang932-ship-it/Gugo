@@ -12,7 +12,8 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { resolveDeliveryArtifacts } from '../../lib/artifactReferences.js'
+import { normalizeArtifactLocalPath, resolveDeliveryArtifacts } from '../../lib/artifactReferences.js'
+import { buildVerifiedLocalFileReferences } from '../../lib/localFileReferences.js'
 import { runWorkbenchTerminal } from '../../lib/workbenchClient.js'
 import { useT } from '../../i18n/I18nProvider.jsx'
 import { withDownloadToken } from '../../lib/jobClient.js'
@@ -38,7 +39,7 @@ function readStoredWidth() {
 }
 
 function collectArtifacts(messages) {
-  return messages.flatMap((message, index) => {
+  const newestFirst = messages.flatMap((message, index) => {
     if (
       message?.role !== 'assistant'
       || message?.meta?.streaming
@@ -47,14 +48,41 @@ function collectArtifacts(messages) {
       || message?.meta?.paused
     ) return []
     const deliveryArtifacts = resolveDeliveryArtifacts(message?.meta)
-    return deliveryArtifacts
+    const verifiedLocalFiles = buildVerifiedLocalFileReferences({
+      toolCalls: message?.meta?.toolCalls,
+      verifiedLocalFiles: message?.meta?.verifiedLocalFiles,
+      messageId: message?.id,
+      turnId: message?.meta?.serverTurnId,
+    }).map((reference) => ({
+      ...(reference.previewArtifact?.directFile || {}),
+      id: reference.id,
+      messageId: message.id,
+      verifiedLocalFile: true,
+    }))
+    const managedArtifacts = deliveryArtifacts
       .filter((artifact) => artifact?.url)
       .map((artifact) => ({
         ...artifact,
         id: artifact.id || `${message.id || index}-${artifact.url}`,
         messageId: message.id,
       }))
+    return [...managedArtifacts, ...verifiedLocalFiles]
   }).reverse()
+  const seenVerifiedLocalFiles = new Set()
+  return newestFirst.filter((artifact) => {
+    if (artifact?.verifiedLocalFile !== true) return true
+    const normalizedPath = normalizeArtifactLocalPath(
+      artifact.path || artifact.fullPath || artifact.localPath || artifact.outputPath,
+    )
+    const identity = normalizedPath
+      ? `path:${normalizedPath}`
+      : String(artifact.id || '').trim()
+        ? `receipt:${String(artifact.id).trim()}`
+        : ''
+    if (!identity || seenVerifiedLocalFiles.has(identity)) return !identity
+    seenVerifiedLocalFiles.add(identity)
+    return true
+  })
 }
 
 function openArtifactLink(event, onOpenArtifact, artifact) {

@@ -146,7 +146,8 @@ function isExistingAssetPlacement(text = '') {
   return false
 }
 const ARTIFACT_REVISION_DENIAL = /(?:不要|不用|无需|别|禁止|停止|取消)[^，,；;：:。！？!?\n]{0,20}(?:修改|编辑|更新|优化|调整|重做|生成|导出)|(?:do\s+not|don't|dont|never|stop|cancel)[^,;:.!?\n]{0,24}(?:revise|edit|update|change|generate|export)/i
-const ARTIFACT_REVISION_DISCUSSION = /^(?:为什么|为何|怎么|如何|请?(?:解释|说明|分析|讨论)|告诉我)[^。！？!?\n]{0,40}|(?:修改|编辑|调整|优化|改|换)[^。！？!?\n]{0,10}(?:是什么|什么意思|含义|原则|方法|逻辑|代码|工具)/i
+const ARTIFACT_REVISION_DISCUSSION = /^(?:(?:我想|我只是想|只是想)?(?:知道|了解|问(?:一下)?)?\s*[,，：:]?\s*(?:为什么|为何|怎么|如何)|请?(?:解释|说明|分析|讨论)|告诉我)[^。！？!?\n]{0,80}|(?:修改|编辑|调整|优化|改|换)[^。！？!?\n]{0,10}(?:是什么|什么意思|含义|原则|方法|逻辑|代码|工具)/i
+const ARTIFACT_REVISION_EXPLANATION_QUESTION = /^\s*(?:我(?:只是)?想(?:知道|了解|问(?:一下)?)|只是想(?:知道|了解))[^。！？!?\n]{0,120}(?:怎么|如何|为什么|为何)[^。！？!?\n]*[?？]\s*$/i
 // Once a deliverable is immediately adjacent, users often describe only the
 // desired visual state instead of repeating an edit verb or filename. Keep
 // these cues contextual: the same complaint in an unrelated conversation must
@@ -157,6 +158,11 @@ const ARTIFACT_REVISION_CONTEXTUAL_FEEDBACK = /^(?=[^。！？!?\n]{2,64}[。.!�
 const ARTIFACT_REVISION_CONTEXTUAL_DENIAL = /^(?:不要|别|不用|无需|禁止|停止|取消|先不要|暂时不要|do\s+not|don't|dont|never|stop|cancel)/i
 const ARTIFACT_REVISION_CONTEXTUAL_QUESTION = /^(?:是不是|是否|能否|可否|要不要|你觉得|你认为|should\b|could\b|can\b|would\b|is\b|are\b)|[?？]\s*$/i
 const ARTIFACT_REPLACE_ORIGINAL_CUE = /(?:原地(?:修改|编辑|更新|覆盖)|(?:修改|编辑|更新|覆盖|改动?|调整)(?:原版|原文件|原文档|原表格|原演示|当前文件|当前版本|上一版)|(?:在|基于)(?:原版|原文件|当前文件|当前版本|上一版)(?:上|中|直接)?(?:修改|编辑|更新|覆盖|改动?|调整)|直接覆盖(?:原版|原文件|当前文件|上一版)|(?:edit|update|modify|overwrite)\s+(?:the\s+)?(?:original|existing|same)\s+(?:file|artifact|document|deck|workbook|page)|in[ -]?place)/i
+// Object-first follow-ups name an already established artifact through a
+// pronoun or current-page noun. In a continuation turn they mean "change the
+// same thing", not "create a sibling copy". Keep image/source conversions
+// out of this cue by restricting the subject to the current artifact itself.
+const ARTIFACT_OBJECT_TRANSFORMATION = /(?:^|[\s,，。；;!！])(?:请|帮我|麻烦(?:你)?|继续|直接)?\s*(?:把|将)\s*(?:它|这个(?:网页|网站|页面|文件|文档|表格|演示)?|该(?:网页|网站|页面|文件|文档|表格|演示)|当前(?:网页|网站|页面|文件|文档|表格|演示)|网页|网站|页面)\s*(?:做成|改成|改为|改造(?:成|为)|变成|转成|转为)/i
 const ARTIFACT_CREATE_COPY_CUE = /(?:(?:新建|另建|另做|另生成|另外生成|重新创建)(?:一|1)?(?:个|份)?(?:新)?(?:文件|版本|副本)?|(?:创建|生成|制作)(?:一|1)?(?:个|份)?新(?:文件|版本|副本)|另存为|(?:create|make|save)\s+(?:a\s+)?(?:new|separate)\s+(?:file|copy|version))/i
 const ARTIFACT_CREATE_COPY_DENIAL = /(?:(?:不要|别|无需)(?:再)?(?:新建|另建|另做|新生成|创建新(?:文件|版本|副本))|without\s+creating\s+(?:a\s+)?new\s+(?:file|copy))/gi
 const ARTIFACT_REPLACE_ORIGINAL_DENIAL = /(?:(?:保留|不改|不要修改|不要覆盖)(?:原版|原文件|当前文件|上一版)|keep\s+(?:the\s+)?original)/gi
@@ -398,6 +404,7 @@ export function resolveArtifactRevisionMode(prompt = '') {
     || ARTIFACT_CREATE_COPY_CUE.test(dispositionText.replace(ARTIFACT_CREATE_COPY_DENIAL, ''))
   const replaceOriginal = createCopyDenied
     || ARTIFACT_REPLACE_ORIGINAL_CUE.test(dispositionText.replace(ARTIFACT_REPLACE_ORIGINAL_DENIAL, ''))
+    || (!createCopy && ARTIFACT_OBJECT_TRANSFORMATION.test(dispositionText))
     || (preserveFilename && !createCopy)
   if (replaceOriginal && createCopy) return 'conflict'
   if (replaceOriginal) return 'replace_original'
@@ -419,11 +426,13 @@ export function isArtifactRevisionRequest(prompt = '', { hasPriorArtifact = fals
   if (!text
     || GLOBAL_DENIAL.test(text)
     || ARTIFACT_REVISION_DENIAL.test(text)
-    || ARTIFACT_REVISION_DISCUSSION.test(text)) return false
+    || ARTIFACT_REVISION_DISCUSSION.test(text)
+    || ARTIFACT_REVISION_EXPLANATION_QUESTION.test(text)) return false
   const existingAssetPlacement = isExistingAssetPlacement(text)
   const actionText = text.replace(ARTIFACT_REVISION_SHORT_DENIAL, ' ')
   ARTIFACT_REVISION_SHORT_DENIAL.lastIndex = 0
   const explicitRevision = ARTIFACT_REVISION_ACTION.test(actionText)
+    || ARTIFACT_OBJECT_TRANSFORMATION.test(actionText)
     || existingAssetPlacement
     || resolveArtifactRevisionMode(text) !== 'unspecified'
   if (explicitRevision || !hasPriorArtifact) return explicitRevision
@@ -584,7 +593,7 @@ function occurrenceIsExplicitRequest(text, match, type) {
 export function hasExplicitArtifactRequest(prompt = '', type) {
   const text = String(prompt || '').trim()
   const matcher = ARTIFACT_TERMS[type]
-  if (!text || !matcher) return false
+  if (!text || !matcher || ARTIFACT_REVISION_EXPLANATION_QUESTION.test(text)) return false
   // Denials are scoped to each concrete format occurrence below. Treating a
   // sentence-wide denial as universal would turn “continue the website, but
   // do not generate a new image” into no artifact intent at all. The image

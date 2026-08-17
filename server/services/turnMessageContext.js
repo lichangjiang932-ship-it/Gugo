@@ -94,7 +94,7 @@ function resolveVerifiedLocalPath(rawPath, { userId, resolvePath }) {
   }
 }
 
-function localFileReceipt(fullPath, { statFile, verifiedAt }) {
+function localFileReceipt(fullPath, { statFile, verifiedAt, relatedArtifactIds = [] }) {
   try {
     const stat = statFile(fullPath)
     if (!stat?.isFile?.()) return null
@@ -106,6 +106,9 @@ function localFileReceipt(fullPath, { statFile, verifiedAt }) {
       filename: path.basename(normalized),
       size: Math.max(0, Number(stat.size) || 0),
       verifiedAt: Math.max(0, Number(verifiedAt) || Date.now()),
+      ...((Array.isArray(relatedArtifactIds) && relatedArtifactIds.length > 0)
+        ? { relatedArtifactIds: [...new Set(relatedArtifactIds.map(String).filter(Boolean))] }
+        : {}),
     }
   } catch {
     return null
@@ -198,6 +201,9 @@ function normalizedVerifiedLocalFiles(values) {
       ...(Number.isFinite(Number(value?.verifiedAt))
         ? { verifiedAt: Math.max(0, Number(value.verifiedAt)) }
         : {}),
+      ...(Array.isArray(value?.relatedArtifactIds) && value.relatedArtifactIds.length > 0
+        ? { relatedArtifactIds: [...new Set(value.relatedArtifactIds.map(String).filter(Boolean))] }
+        : {}),
     })
     if (receipts.length >= MAX_VERIFIED_LOCAL_FILES) break
   }
@@ -233,6 +239,37 @@ function extractVerifiedLocalFilesWithReadEvidence(messages, {
     if (!call || !result) continue
     const resultName = String(message.name || '').trim()
     if (resultName && resultName !== call.name) continue
+
+    // Artifact generators validate their output before returning success and
+    // may synchronously copy the finished file to an explicit/default local
+    // directory. That concrete path is already stronger evidence than a
+    // separate read_file sample, and must survive into the next turn so an
+    // in-place follow-up can target the same file and directory.
+    if (SOURCE_BEARING_ARTIFACT_TOOLS.has(call.name) && result.ok === true) {
+      const candidates = Array.isArray(result.artifacts) && result.artifacts.length > 0
+        ? result.artifacts
+        : [result]
+      for (const candidate of candidates) {
+        const rawPath = String(
+          candidate?.localPath || candidate?.outputPath || candidate?.path
+          || result.localPath || result.outputPath || result.path || '',
+        ).trim()
+        const fullPath = resolveVerifiedLocalPath(rawPath, { userId, resolvePath })
+        if (!fullPath) continue
+        const relatedArtifactIds = [
+          candidate?.id,
+          candidate?.artifactId,
+          result.artifactId,
+        ].map((value) => String(value || '').trim()).filter(Boolean)
+        const receipt = localFileReceipt(fullPath, {
+          statFile,
+          verifiedAt,
+          relatedArtifactIds,
+        })
+        if (receipt) receipts.set(canonicalLocalPath(fullPath), receipt)
+      }
+      continue
+    }
 
     if (LOCAL_FILE_MUTATION_TOOLS.has(call.name)) {
       for (const rawPath of mutationResultPaths(call, result)) {
@@ -639,6 +676,41 @@ function storedMessageToWire(message) {
   return wire
 }
 
+function priorTurnOutcomeWire(message) {
+  const context = message?.modelContext && typeof message.modelContext === 'object'
+    ? message.modelContext
+    : null
+  const state = context?.turnEvidence === true ? String(context.evidenceState || '').trim() : ''
+  if (!['failed', 'interrupted'].includes(state)) return null
+  const errorValue = context?.error
+  const error = errorValue && typeof errorValue === 'object'
+    ? {
+        code: String(errorValue.code || '').slice(0, 160),
+        message: String(errorValue.message || errorValue.error || '').slice(0, 1_000),
+      }
+    : { message: String(errorValue || '').slice(0, 1_000) }
+  const verifiedLocalFiles = normalizedVerifiedLocalFiles(context.verifiedLocalFiles)
+    .map((file) => ({
+      id: file.id,
+      path: file.path,
+      filename: file.filename,
+      ...(Array.isArray(file.relatedArtifactIds)
+        ? { relatedArtifactIds: file.relatedArtifactIds }
+        : {}),
+    }))
+  const deliveryArtifactIds = [...new Set((Array.isArray(context.deliveryArtifactIds)
+    ? context.deliveryArtifactIds
+    : []).map(String).filter(Boolean))]
+  return {
+    role: 'system',
+    content: [
+      '[PRIOR TURN OUTCOME]',
+      JSON.stringify({ state, error, verifiedLocalFiles, deliveryArtifactIds }),
+      'This prior turn did not complete. A status answer must preserve that failure state and its concrete blocker. Do not claim that it completed or had no problem unless this current turn obtains new successful execution and verification evidence. Verified local files may be reused as continuation targets, but they do not by themselves change the failed overall outcome into success.',
+    ].join('\n'),
+  }
+}
+
 /**
  * Materialize managed attachment references only for the provider request.
  * The tool loop and its checkpoints keep the original lightweight messages,
@@ -710,6 +782,8 @@ export function expandStoredMessages(messages) {
         tagStoredMessageSource({ ...item }, message.id)
       )))
     }
+    const priorOutcome = priorTurnOutcomeWire(message)
+    if (priorOutcome) expanded.push(tagStoredMessageSource(priorOutcome, message.id))
     const wire = storedMessageToWire(message)
     if (wire) expanded.push(tagStoredMessageSource(wire, message.id))
   })

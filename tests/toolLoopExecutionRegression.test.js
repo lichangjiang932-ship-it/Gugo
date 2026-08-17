@@ -1143,6 +1143,130 @@ test('a mutation request cannot be completed by an unrelated read-only success',
   assert.equal(modelCalls, 3)
 })
 
+test('a status inquiry keeps the immediately preceding failure after read-only inspection', async () => {
+  const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
+  let modelCalls = 0
+  const messages = [
+    { role: 'user', content: '生成并验证 result.txt' },
+    {
+      role: 'system',
+      content: '[PRIOR TURN OUTCOME]\n{"state":"failed","error":{"message":"最终验证没有通过"}}\nThe prior turn did not complete.',
+    },
+    { role: 'assistant', content: '任务尚未完成。' },
+    { role: 'user', content: '完成了吗？' },
+  ]
+
+  const result = await runToolsLoop({
+    job: { id: 'job-prior-failure-read-only', userId: null, origin: 'chat', prompt: '完成了吗？' },
+    step: { id: 'step-prior-failure-read-only', kind: 'chat' },
+    messages,
+    toolSpecs: [readFile],
+    maxIters: 3,
+    enableToolHooks: false,
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'inspect-prior-output',
+            type: 'function',
+            function: { name: 'read_file', arguments: JSON.stringify({ path: 'result.txt' }) },
+          }],
+        }
+      }
+      return { content: '已经完成，没有任何问题。', toolCalls: [] }
+    },
+    executeTool: async () => ({ ok: true, path: 'result.txt', content: 'partial output' }),
+  })
+
+  assert.equal(modelCalls, 2)
+  assert.match(result.text, /上一轮仍未完成：最终验证没有通过/)
+  assert.doesNotMatch(result.text, /没有任何问题/)
+})
+
+test('an older failure cannot leak through a newer successful turn into a status inquiry', async () => {
+  const messages = [
+    { role: 'user', content: '第一次生成 result.txt' },
+    {
+      role: 'system',
+      content: '[PRIOR TURN OUTCOME]\n{"state":"failed","error":{"message":"第一次生成失败"}}\nThe prior turn did not complete.',
+    },
+    { role: 'assistant', content: '任务尚未完成。' },
+    { role: 'user', content: '重新生成并验证' },
+    { role: 'assistant', content: '已重新生成并验证。' },
+    { role: 'user', content: '完成了吗？' },
+  ]
+
+  const result = await runToolsLoop({
+    job: { id: 'job-stale-prior-failure', userId: null, origin: 'chat', prompt: '完成了吗？' },
+    step: { id: 'step-stale-prior-failure', kind: 'chat' },
+    messages,
+    toolSpecs: [],
+    maxIters: 2,
+    enableToolHooks: false,
+    runModel: async () => ({ content: '已经完成，没有任何问题。', toolCalls: [] }),
+    executeTool: async () => ({ ok: true }),
+  })
+
+  assert.equal(result.text, '已经完成，没有任何问题。')
+})
+
+test('a status inquiry may report success after a new mutation and matching verification', async () => {
+  const writeFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'write_file')
+  const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
+  let modelCalls = 0
+  const messages = [
+    { role: 'user', content: '生成并验证 result.txt' },
+    {
+      role: 'system',
+      content: '[PRIOR TURN OUTCOME]\n{"state":"failed","error":{"message":"最终验证没有通过"}}\nThe prior turn did not complete.',
+    },
+    { role: 'assistant', content: '任务尚未完成。' },
+    { role: 'user', content: '完成了吗？' },
+  ]
+
+  const result = await runToolsLoop({
+    job: { id: 'job-prior-failure-recovered', userId: null, origin: 'chat', prompt: '完成了吗？' },
+    step: { id: 'step-prior-failure-recovered', kind: 'chat' },
+    messages,
+    toolSpecs: [writeFile, readFile],
+    maxIters: 5,
+    enableToolHooks: false,
+    runModel: async () => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'repair-prior-output',
+            type: 'function',
+            function: { name: 'write_file', arguments: JSON.stringify({ path: 'result.txt', content: 'fixed' }) },
+          }],
+        }
+      }
+      if (modelCalls === 2) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'verify-prior-output',
+            type: 'function',
+            function: { name: 'read_file', arguments: JSON.stringify({ path: 'result.txt' }) },
+          }],
+        }
+      }
+      return { content: '已经完成，没有任何问题。', toolCalls: [] }
+    },
+    executeTool: async ({ name }) => name === 'write_file'
+      ? { ok: true, path: 'result.txt', bytes: 5 }
+      : { ok: true, path: 'result.txt', content: 'fixed' },
+  })
+
+  assert.equal(modelCalls, 3)
+  assert.equal(result.text, '已经完成，没有任何问题。')
+  assert.equal(result.incomplete, undefined)
+})
+
 test('a verification-only continuation ignores injected mutation wording and completes from real reads', async () => {
   const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
   const listDirectory = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'list_directory')

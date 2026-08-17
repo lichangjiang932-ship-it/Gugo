@@ -21,6 +21,7 @@ const verifiedLocalFileSchema = z.object({
   filename: z.string().min(1).max(1_024),
   size: z.number().nonnegative().optional(),
   verifiedAt: z.number().int().nonnegative().optional(),
+  relatedArtifactIds: z.array(z.string().min(1).max(160)).max(32).optional(),
 }).strict()
 const verifiedLocalFilesSchema = z.array(verifiedLocalFileSchema).max(64).optional()
 const managedAttachmentSchema = z.object({

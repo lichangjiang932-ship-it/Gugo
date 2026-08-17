@@ -27,7 +27,22 @@ export function resolveDeliveryArtifacts(meta = {}) {
   const ids = [...new Set((Array.isArray(meta.serverDeliveryArtifactIds)
     ? meta.serverDeliveryArtifactIds
     : []).map((id) => String(id || '').trim()).filter(Boolean))]
-  return ids.map((id) => byId.get(id)).filter(Boolean)
+  const supersededIds = new Set((Array.isArray(meta?.verifiedLocalFiles)
+    ? meta.verifiedLocalFiles
+    : []).flatMap((receipt) => {
+    if (!receipt?.id || !normalizeArtifactLocalPath(receipt?.path)) return []
+    return [
+      receipt.relatedArtifactIds,
+      receipt.artifactIds,
+      receipt.managedArtifactIds,
+      receipt.artifactId,
+      receipt.managedArtifactId,
+    ].flatMap((value) => (Array.isArray(value) ? value : [value]))
+  }).map((id) => String(id || '').trim()).filter(Boolean))
+  return ids
+    .filter((id) => !supersededIds.has(id))
+    .map((id) => byId.get(id))
+    .filter(Boolean)
 }
 
 function declaresManagedFileArtifact(meta = {}) {
@@ -246,10 +261,9 @@ function findArtifactReferenceByFilename(references = [], filename = '') {
 }
 
 /**
- * Resolve an absolute Windows path only against registered artifact URLs.
- * References that carry a real absolute source path must match exactly.
- * Managed artifacts that do not know their source path may still use a unique
- * basename, because their persisted URL is the only available identity.
+ * Resolve an absolute Windows path only against a registered, exact source or
+ * delivery path. A pathless managed artifact must never impersonate a local
+ * path merely because its filename happens to match.
  */
 export function findArtifactReferenceByLocalPath(references = [], value = '') {
   const target = normalizeArtifactLocalPath(value)
@@ -259,11 +273,7 @@ export function findArtifactReferenceByLocalPath(references = [], value = '') {
     normalizeArtifactLocalPath(reference?.[field]) === target
   )))
   const exact = uniqueArtifactReference(exactMatches)
-  if (exact) return exact
-  const pathless = registered.filter((reference) => !ARTIFACT_PATH_FIELDS.some((field) => (
-    normalizeArtifactLocalPath(reference?.[field])
-  )))
-  return findArtifactReferenceByFilename(pathless, target.split('/').pop() || '')
+  return exact || null
 }
 
 function localFileHrefMatchesReference(href, reference) {
@@ -290,6 +300,7 @@ function referenceForInlineHref(references, label, href) {
   const direct = findArtifactReferenceByHref(references, href)
     || findArtifactReferenceByLocalPath(references, href)
   if (direct) return direct
+  if (normalizeArtifactLocalPath(href)) return null
   const normalizedLabel = String(label || '').normalize('NFC').trim().toLowerCase()
   if (!normalizedLabel) return null
   return uniqueArtifactReference(references.filter((reference) => (
@@ -386,7 +397,7 @@ function markdownWithoutNonLinkableContent(content = '') {
 // artifact pass treat an unknown absolute path as one indivisible span and
 // prevents its trailing basename from linking to a file in another directory.
 const ABSOLUTE_FILE_PATH_WITH_SPACES_RE = new RegExp(
-  '(^|[\\s(（\\[：:])([a-zA-Z]:[\\\\/][^\\r\\n<>\\x22|?*，。；：、（）\\[\\]…]*?\\.[a-zA-Z0-9]{1,12})(?=$|[\\s,;:!?，。；：、）)\\]…！？]|\\.(?=$|[\\s,;:!?，。；：、）)\\]…！？]))',
+  '(^|[`\\s(（\\[：:])([a-zA-Z]:[\\\\/][^\\r\\n<>\\x22|?*，。；：、（）\\[\\]…]*?\\.[a-zA-Z0-9]{1,12})(?=$|[`\\s,;:!?，。；：、）)\\]…！？]|\\.(?=$|[`\\s,;:!?，。；：、）)\\]…！？]))',
   'g',
 )
 
@@ -463,11 +474,10 @@ function findExactArtifactReferenceByLocalPath(references = [], value = '') {
 function pathContainsRegisteredArtifactFilename(value = '', references = []) {
   const lowerPath = String(value || '').toLowerCase()
   return references.some((reference) => (
-    ARTIFACT_PATH_FIELDS.some((field) => Boolean(normalizeArtifactLocalPath(reference?.[field])))
-      && artifactFilenameAliases(reference).some((alias) => {
-        const index = lowerPath.indexOf(alias.value.toLowerCase())
-        return index > 0 && /[\\/]/.test(lowerPath[index - 1])
-      })
+    artifactFilenameAliases(reference).some((alias) => {
+      const index = lowerPath.indexOf(alias.value.toLowerCase())
+      return index > 0 && /[\\/]/.test(lowerPath[index - 1])
+    })
   ))
 }
 
@@ -528,8 +538,6 @@ function linkVerifiedCompactPaths(value, references) {
       // to a same-named file from another directory.
       nodes.push({ type: 'text', value: path })
     } else {
-      // Pathless managed artifacts retain their legacy filename-only link.
-      // They have no asserted source location that this prose could spoof.
       nodes.push(...linkTextNode(path, references))
     }
     cursor = end
@@ -597,6 +605,7 @@ function persistedReferenceForLocalFileLink(node, references) {
   if (absoluteReference && artifactFilenameAliases(absoluteReference).some((alias) => alias.normalized === normalizedLabel)) {
     return absoluteReference
   }
+  if (normalizeArtifactLocalPath(node.url)) return null
   return uniqueArtifactReference(references.filter((reference) => (
     reference?.url
       && artifactFilenameAliases(reference).some((alias) => alias.normalized === normalizedLabel)
@@ -611,8 +620,9 @@ function linkArtifactNodes(parent, references, markdownSource) {
     if (node?.type === 'inlineCode') {
       const source = String(node.value || '')
       const trimmed = source.trim()
-      const reference = findArtifactReferenceByLocalPath(references, trimmed)
-        || findArtifactReferenceByFilename(references, trimmed)
+      const reference = normalizeArtifactLocalPath(trimmed)
+        ? findArtifactReferenceByLocalPath(references, trimmed)
+        : findArtifactReferenceByFilename(references, trimmed)
       if (!reference) return [node]
       return [{ type: 'link', url: reference.url, children: [node] }]
     }
