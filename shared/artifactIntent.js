@@ -53,14 +53,14 @@ const ARTIFACT_TERMS = Object.freeze({
 })
 
 const BEFORE_ACTION = /(?:帮我|请|麻烦|给我|我要|我需要|我想要|希望|来(?:一|个|份|套)?|写|编写|撰写|做|制作|生成|创建|输出|导出|整理成|转换成|转换为|转成|转为|改成|改为|做成|放入|放进|加入|写入|整理到|设计|起草|重做|重制|修改|编辑|更新|优化|润色|make|create|generate|build|produce|export|convert|design|draft|prepare|write|revise|edit|update|redesign|give\s+me|i\s+(?:want|need))[^。！？!?\n]{0,32}$/i
-const AFTER_ACTION = /^[^。！？!?\n]{0,12}(?:写|编写|撰写|做|制作|生成|创建|输出|导出|重做|修改|编辑|更新|优化|润色|make|create|generate|export|edit|update)/i
-const DIRECT_NEGATION = /(?:不要|不再|别再?|禁止|避免|无需|不用|不需要|不可|不能|不应|不想要|勿|拒绝|防止|阻止|确保不会|没有要求|没要求|没有让|没让|未要求|without|do\s+not|don't|dont|never|avoid|prevent|stop|must\s+not|should\s+not|no\s+need\s+to)[^。！？!?\n]{0,28}$/i
+const AFTER_ACTION = /^[^，,；;。！？!?\n]{0,12}(?:写|编写|撰写|做|制作|生成|创建|输出|导出|重做|修改|编辑|更新|优化|润色|make|create|generate|export|edit|update)/i
+const DIRECT_NEGATION = /(?:不要|不再|别再?|禁止|避免|无需|不用|不需要|不可|不能|不应|不想要|勿|拒绝|防止|阻止|确保不会|没有要求|没要求|没有让|没让|未要求|(?:没有|没|未)(?:有)?说(?:过)?(?:要)?|without|do\s+not|don't|dont|never|avoid|prevent|stop|must\s+not|should\s+not|no\s+need\s+to)[^，,；;。！？!?\n]{0,28}$/i
 const AUTO_OR_ACCIDENTAL = /(?:自动|随意|擅自|自行|莫名|错误|意外|偷偷|被|乱)[^。！？!?\n]{0,10}(?:生成|制作|创建|输出|导出|变成|转成|generate|create|make|export)[^。！？!?\n]{0,8}$/i
 const META_QUESTION = /(?:为什么|为何|怎么会|怎会|如何避免|排查|检查|调查|修复|解决|防止|阻止|关于|提到|讨论|解释|原因|问题|bug|逻辑|代码|工具|why|how\s+did|fix|debug|investigate|prevent|stop|about|discuss)[^。！？!?\n]{0,28}$/i
 const CAPABILITY_QUESTION = /(?:能不能|能否|可以不可以|是否可以|会不会|能|可以)[^。！？!?\n]{0,8}(?:生成|制作|创建|导出)[^。！？!?\n]{0,4}$/i
-const NEGATION_AFTER = /^[^。！？!?\n]{0,10}(?:不要|不用|不需要|禁止|别|无需|不可|不能|do\s+not|don't|dont|never|not\s+needed)/i
+const NEGATION_AFTER = /^[^，,；;。！？!?\n]{0,10}(?:不要|不用|不需要|禁止|别|无需|不可|不能|do\s+not|don't|dont|never|not\s+needed)/i
 const META_AFTER = /^[^。！？!?\n]{0,12}(?:问题|bug|逻辑|代码|工具|为什么|为何|自动生成|误生成|被生成|乱生成|随意生成|problem|issue|bug|logic|tool)/i
-const GLOBAL_DENIAL = /(?:没有|没|未)(?:有)?(?:让|要求|叫|授权)[^。！？!?\n]{0,18}(?:生成|制作|创建|输出|导出|变成|转成)|(?:i\s+did(?:\s+not|n't)|without\s+me)\s+(?:ask|request|authoriz)[^.!?\n]{0,24}(?:creat|generat|mak|export)/i
+const GLOBAL_DENIAL = /(?:没有|没|未)(?:有)?(?:说(?:过)?(?:要)?|让|要求|叫|授权)[^。！？!?\n]{0,24}(?:生成|制作|创建|输出|导出|变成|转成)|(?:i\s+did(?:\s+not|n't)|without\s+me)\s+(?:ask|request|authoriz|say|tell)[^.!?\n]{0,24}(?:creat|generat|mak|export)/i
 // “请报告真实 exitCode / report the test result” asks the assistant to
 // state execution evidence in chat. `报告` / `report` is a verb there, not
 // a request for a downloadable Word document. Explicit authoring phrases
@@ -107,6 +107,8 @@ const EXISTING_ASSET_PLACEMENT = /(?:(?:这|那|该|此)(?:一)?(?:张|幅|个)?
 // “image website”. Only an independent “also create a new image” clause may
 // unlock generate_image in that situation.
 const EXISTING_IMAGE_COLLECTION_INPUT = /(?:(?:读取|扫描|遍历|使用|展示|收录|来自|从|read|scan|browse|use|show|include|from|目录|文件夹|folder|directory)[\s\S]{0,96}(?:全部|所有|每(?:一|个|张)|all|every|each)[\s\S]{0,40}(?:jpe?g|png|webp|图片|图像|照片|images?|photos?|pictures?)|(?:全部|所有|每(?:一|个|张)|all|every|each)[\s\S]{0,40}(?:jpe?g|png|webp|图片|图像|照片|images?|photos?|pictures?)[\s\S]{0,96}(?:读取|扫描|遍历|使用|展示|收录|目录|文件夹|read|scan|browse|use|show|include|folder|directory))/i
+const EXISTING_IMAGE_SET_CONTEXT = /(?:(?:已有|现有|本地|上传(?:的)?|附件(?:中|里|的)?|existing|local|uploaded|attached)[^。！？!?；;\n]{0,32}(?:jpe?g|png|webp|图片|图像|照片|images?|photos?|pictures?)|(?:目录|文件夹|路径|盘|地方|位置|folder|directory|path|drive|location)[^。！？!?；;\n]{0,32}(?:有(?:很多|许多|大量|一批)?|包含|存放|放着|contains?|has|with)[^。！？!?；;\n]{0,32}(?:jpe?g|png|webp|图片|图像|照片|images?|photos?|pictures?)|(?:有很多|有许多|有大量|有一批|many|multiple|a\s+collection\s+of)[^。！？!?；;\n]{0,24}(?:jpe?g|png|webp|图片|图像|照片|images?|photos?|pictures?))/i
+const EXISTING_IMAGE_REUSE_CONTEXT = /(?:(?:用|使用|利用|读取|扫描|遍历|展示|显示|收录|包含|引用|导入|use|using|read|scan|browse|show|display|include|reference|import)[^。！？!?；;\n]{0,40}(?:(?:这些|那些|上述|其中|已有|现有|本地|上传(?:的)?|附件(?:中|里|的)?|these|those|existing|local|uploaded|attached)[^。！？!?；;\n]{0,16})?(?:jpe?g|png|webp|图片|图像|照片|images?|photos?|pictures?)|(?:确保|保证|make\s+sure|ensure)[^。！？!?；;\n]{0,64}(?:全部|所有|每(?:一|个|张)|所有内容|all|every|each|everything)[^。！？!?；;\n]{0,32}(?:被?使用|展示|显示|收录|包含|use|used|show|shown|display|include|included))/i
 const EXISTING_ASSET_MUTATION_COMMAND_PREFIX = /^(?:(?:请|帮我|麻烦(?:你)?|直接|继续|再|只)\s*)*(?:(?:把|将|在|向|给|用|使用)\s*|(?:please\s+)?(?:add|insert|put|place|embed|use|set|replace)\b)/i
 const EXISTING_ASSET_MUTATION_ACTION_BEFORE = /(?:加入|添加|插入|放入|放进|放到|置入|嵌入|作为|用作|设为|设置为|设成|替换为|(?:add|insert|put|place|embed|use|set|replace))\s*$/i
 const EXISTING_ASSET_MUTATION_ACTION_AFTER = /^\s*(?:加入|添加|插入|放入|放进|放到|置入|嵌入|作为|用作|设为|设置为|设成|替换为)/i
@@ -499,6 +501,59 @@ function artifactMentionIsInputMaterial(text, match, type) {
   return !directProduction
 }
 
+function artifactMentionsBetween(text, start, end) {
+  const mentions = []
+  for (const [type, matcher] of Object.entries(ARTIFACT_TERMS)) {
+    const probe = new RegExp(matcher.source, matcher.flags.includes('g') ? matcher.flags : `${matcher.flags}g`)
+    for (const mention of text.slice(start, end).matchAll(probe)) {
+      mentions.push({ type, index: start + mention.index })
+    }
+  }
+  return mentions.sort((left, right) => left.index - right.index)
+}
+
+/**
+ * Bind a generic correction such as “I never asked it to generate that” to
+ * the closest artifact mention instead of denying every format in the turn.
+ * An explicit object in the same comma-delimited clause wins; otherwise the
+ * correction refers back to the nearest preceding artifact mention.
+ */
+function occurrenceIsDeniedByCorrection(text, match, type) {
+  const sentenceStart = Math.max(
+    text.lastIndexOf('。', match.index - 1),
+    text.lastIndexOf('！', match.index - 1),
+    text.lastIndexOf('？', match.index - 1),
+    text.lastIndexOf('!', match.index - 1),
+    text.lastIndexOf('?', match.index - 1),
+    text.lastIndexOf('\n', match.index - 1),
+  ) + 1
+  const sentenceTail = text.slice(match.index + match[0].length)
+  const sentenceBoundary = sentenceTail.search(/[。！？!?\n]/)
+  const sentenceEnd = sentenceBoundary < 0
+    ? text.length
+    : match.index + match[0].length + sentenceBoundary
+  const denialProbe = new RegExp(GLOBAL_DENIAL.source, GLOBAL_DENIAL.flags.includes('g')
+    ? GLOBAL_DENIAL.flags
+    : `${GLOBAL_DENIAL.flags}g`)
+
+  for (const denial of text.slice(sentenceStart, sentenceEnd).matchAll(denialProbe)) {
+    const denialStart = sentenceStart + denial.index
+    const denialEnd = denialStart + denial[0].length
+    const minorTail = text.slice(denialEnd, sentenceEnd)
+    const minorBoundary = minorTail.search(/[，,；;]/)
+    const minorEnd = minorBoundary < 0 ? sentenceEnd : denialEnd + minorBoundary
+    const explicitObjects = artifactMentionsBetween(text, denialEnd, minorEnd)
+    if (explicitObjects.length > 0) {
+      if (explicitObjects.some((mention) => mention.type === type)) return true
+      continue
+    }
+
+    const preceding = artifactMentionsBetween(text, sentenceStart, denialStart).at(-1)
+    if (preceding?.type === type) return true
+  }
+  return false
+}
+
 function occurrenceIsExplicitRequest(text, match, type) {
   const before = text.slice(Math.max(0, match.index - 48), match.index)
   const after = text.slice(match.index + match[0].length, match.index + match[0].length + 32)
@@ -510,6 +565,7 @@ function occurrenceIsExplicitRequest(text, match, type) {
     && !ARTIFACT_PRODUCTION_BEFORE.test(before)) return false
   if (DIRECT_NEGATION.test(before) || NEGATION_AFTER.test(after)) return false
   if (AUTO_OR_ACCIDENTAL.test(before) || CAPABILITY_QUESTION.test(before)) return false
+  if (occurrenceIsDeniedByCorrection(text, match, type)) return false
   if (artifactMentionIsInputMaterial(text, match, type)) return false
 
   const requested = BEFORE_ACTION.test(before)
@@ -529,7 +585,11 @@ export function hasExplicitArtifactRequest(prompt = '', type) {
   const text = String(prompt || '').trim()
   const matcher = ARTIFACT_TERMS[type]
   if (!text || !matcher) return false
-  if (GLOBAL_DENIAL.test(text)) return false
+  // Denials are scoped to each concrete format occurrence below. Treating a
+  // sentence-wide denial as universal would turn “continue the website, but
+  // do not generate a new image” into no artifact intent at all. The image
+  // occurrence is rejected by DIRECT_NEGATION while the positive website
+  // request remains authorized.
   matcher.lastIndex = 0
   for (const match of text.matchAll(matcher)) {
     if (occurrenceIsExplicitRequest(text, match, type)) return true
@@ -565,7 +625,8 @@ function detectArtifactIntentRaw(prompt = '', {
   const existingAssetPlacement = isExistingAssetPlacement(text)
     && (revisionRequest || explicitNonImageArtifact)
   const existingImageCollectionInput = explicitNonImageArtifact
-    && EXISTING_IMAGE_COLLECTION_INPUT.test(text)
+    && (EXISTING_IMAGE_COLLECTION_INPUT.test(text)
+      || (EXISTING_IMAGE_SET_CONTEXT.test(text) && EXISTING_IMAGE_REUSE_CONTEXT.test(text)))
   const additionalImageProduction = ADDITIONAL_IMAGE_PRODUCTION.test(text)
   // In "use this image as the background", the image is an input asset, not
   // a request to generate a second image artifact. An independent clause such
@@ -583,6 +644,12 @@ function detectArtifactIntentRaw(prompt = '', {
     && revisionRequest
     ? normalizePriorArtifactTypes(priorArtifactTypes)
     : new Set()
+  // When an existing/uploaded image is being placed into another deliverable,
+  // that image is input material. A previously delivered image artifact must
+  // not turn the revision into a second generate_image requirement. Keep the
+  // surrounding HTML/PPTX/DOCX/etc. contract and require image generation only
+  // when the user independently asks for a new image.
+  if (existingAssetPlacement && !additionalImageProduction) inherited.delete('image')
   return {
     pptx: pptx || inherited.has('pptx'),
     // "PPT report" / "PPT 汇报" describes the deck's purpose; it is not a

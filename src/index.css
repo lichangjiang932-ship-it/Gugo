@@ -268,7 +268,6 @@ html[data-density="loose"] {
 
 .chat-execution-disclosure {
   margin-bottom: 0.65rem;
-  border-bottom: 1px solid rgb(var(--color-ink-rgb) / 0.08);
 }
 
 .chat-execution-toggle {

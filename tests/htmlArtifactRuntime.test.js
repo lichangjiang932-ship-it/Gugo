@@ -177,6 +177,56 @@ test('a complete JPG directory is fully bundled, delivered to the explicit direc
   assert.doesNotMatch(snapshot.source, new RegExp(sourceDirectory.replaceAll('\\', '\\\\'), 'i'))
   assert.doesNotMatch(snapshot.source, new RegExp(explicitOutputDirectory.replaceAll('\\', '\\\\'), 'i'))
 
+  const runtimePriorityOutput = path.join(root, 'runtime-priority-output')
+  const runtimePriorityPrompt = `“${sourceDirectory}”有很多人物 JPG，用这些图片写一个网站，确保该文件下的所有 JPG 都被使用，写到 ${runtimePriorityOutput}，完成后验证`
+  const runtimePriorityResult = await executeServerTool({
+    name: 'create_html_app',
+    args: {
+      title: '显式保存位置优先',
+      html,
+      // Simulate a model copying the configured default into its call. The
+      // runtime must still obey the explicit destination in the user turn.
+      output_directory: defaultOutputDirectory,
+      asset_collection: { directory: sourceDirectory, extensions: ['jpg', 'jpeg'], recursive: true },
+      assets: files.map((file, index) => ({ id: ids[index], path: file })),
+    },
+    job: {
+      id: 'html-runtime-output-priority-turn', userId, sessionId, origin: 'chat',
+      prompt: runtimePriorityPrompt,
+      userPrompt: runtimePriorityPrompt,
+    },
+    step: { id: 'html-runtime-output-priority-step', kind: 'chat' },
+    allowedArtifactTools: new Set(['create_html_app']),
+    requiresLocalArtifactDelivery: true,
+  })
+
+  assert.equal(runtimePriorityResult.ok, true)
+  assert.equal(path.dirname(runtimePriorityResult.path), fs.realpathSync(runtimePriorityOutput))
+  assert.notEqual(path.dirname(runtimePriorityResult.path), fs.realpathSync(defaultOutputDirectory))
+
+  const defaultDirectiveResult = await executeServerTool({
+    name: 'create_html_app',
+    args: {
+      title: '否定显式目录后使用默认目录',
+      html,
+      output_directory: runtimePriorityOutput,
+      asset_collection: { directory: sourceDirectory, extensions: ['jpg', 'jpeg'], recursive: true },
+      assets: files.map((file, index) => ({ id: ids[index], path: file })),
+    },
+    job: {
+      id: 'html-default-output-directive-turn', userId, sessionId, origin: 'chat',
+      prompt: `不要写到 ${runtimePriorityOutput}，使用默认目录`,
+      userPrompt: `不要写到 ${runtimePriorityOutput}，使用默认目录`,
+    },
+    step: { id: 'html-default-output-directive-step', kind: 'chat' },
+    allowedArtifactTools: new Set(['create_html_app']),
+    requiresLocalArtifactDelivery: true,
+  })
+
+  assert.equal(defaultDirectiveResult.ok, true)
+  assert.equal(path.dirname(defaultDirectiveResult.path), fs.realpathSync(defaultOutputDirectory))
+  assert.notEqual(path.dirname(defaultDirectiveResult.path), fs.realpathSync(runtimePriorityOutput))
+
   await assert.rejects(() => executeServerTool({
     name: 'create_html_app',
     args: {
@@ -216,6 +266,46 @@ test('a complete JPG directory is fully bundled, delivered to the explicit direc
   }), (error) => error?.code === 'HTML_MEDIA_COLLECTION_NOT_VISIBLE' && error?.hiddenCount === 1)
 
   assert.equal(requestedArtifactOutputDirectory('把网页写到E盘'), `E:${path.sep}`)
+  assert.equal(requestedArtifactOutputDirectory(
+    '"E:\\果"这个地方有很多人物图片，用这些人物图片你来写一个网站，确保该文件下的所有内容都被使用，写到E盘',
+  ), `E:${path.sep}`)
+  assert.equal(
+    requestedArtifactOutputDirectory('读取 E:\\果 中全部 JPG，生成网站，写到 E:\\网页输出，完成后验证'),
+    path.normalize('E:\\网页输出'),
+  )
+  assert.equal(
+    requestedArtifactOutputDirectory('保存到 "E:\\网页 输出"'),
+    path.normalize('E:\\网页 输出'),
+  )
+  assert.equal(
+    requestedArtifactOutputDirectory('不要保存到 D:\\默认目录，纠正：写到 E 盘'),
+    `E:${path.sep}`,
+  )
+  assert.equal(
+    requestedArtifactOutputDirectory('把网站保存到 E:\\网页输出\\gallery.html，完成后告诉我'),
+    path.normalize('E:\\网页输出'),
+  )
+  assert.equal(
+    requestedArtifactOutputDirectory('读取 E:\\果 中全部 JPG 并生成网站'),
+    '',
+    'a source path without a destination connector must not replace the configured output directory',
+  )
+  for (const sourceOnly of [
+    '生成网站，读取 E 盘图片',
+    '生成网页，扫描 E 盘全部 JPG',
+    '制作图片网站，使用 E 盘现有图片',
+  ]) {
+    assert.equal(requestedArtifactOutputDirectory(sourceOnly), '', sourceOnly)
+  }
+  assert.equal(
+    requestedArtifactOutputDirectory('不要写到 E 盘，使用默认目录'),
+    '',
+    'a negated drive destination must not override the configured default directory',
+  )
+  assert.equal(
+    requestedArtifactOutputDirectory('不要使用默认目录，改为写到 E 盘'),
+    `E:${path.sep}`,
+  )
 })
 
 test('a failed replacement cannot corrupt the current HTML or media bundle', async () => {

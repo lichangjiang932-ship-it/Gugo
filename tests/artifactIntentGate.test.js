@@ -354,6 +354,19 @@ test('placing a provided image in an adjacent artifact retains only the original
     assert.deepEqual([...allowedArtifactTools(prompt, options)], [expectedTool], prompt)
     assert.equal(detectArtifactIntent(prompt, options).image, false, prompt)
   }
+
+  for (const [prompt, containerType, expectedTool] of [
+    ['把这张人物图作为背景', 'html', 'create_html_app'],
+    ['请把上传图片加入原版 PPT', 'pptx', 'create_pptx'],
+    ['Use the uploaded photo as the existing document cover', 'docx', 'create_docx'],
+  ]) {
+    const options = {
+      priorArtifactTypes: [containerType, 'image'],
+      hasPriorArtifact: true,
+    }
+    assert.deepEqual([...allowedArtifactTools(prompt, options)], [expectedTool], prompt)
+    assert.equal(detectArtifactIntent(prompt, options).image, false, prompt)
+  }
 })
 
 test('all artifact formats distinguish create, replace, copy, convert, and input-only intent', () => {
@@ -513,6 +526,10 @@ test('existing uploaded images route to the requested file generator instead of 
       expected: ['create_html_app'],
     },
     {
+      prompt: '"E:\\果"这个地方有很多人物图片，用这些人物图片你来写一个网站，使用双列瀑布流的样式展示图片，确保该文件下的所有内容都被使用，我想在网站看这些，这样更方便，写到E盘',
+      expected: ['create_html_app'],
+    },
+    {
       prompt: 'Read every JPG from D:\\photos and build an image gallery website',
       expected: ['create_html_app'],
     },
@@ -563,6 +580,17 @@ test('existing uploaded images route to the requested file generator instead of 
       assert.equal(visible.includes(generator), expected.includes(generator), `${prompt}: ${generator}`)
     }
   }
+
+  assert.deepEqual(
+    [...allowedArtifactTools('我没有说要用 AI 生成一张图片')],
+    [],
+    'a correction that rejects generated media must not keep generate_image authorized',
+  )
+  assert.deepEqual(
+    [...allowedArtifactTools('纠正：只使用已有本地图片制作网站，不要生成任何新图片')],
+    ['create_html_app'],
+    'a scoped image denial must retain the explicitly requested website',
+  )
 })
 
 test('explicit workspace filenames are not standalone managed artifacts', () => {
@@ -1635,6 +1663,25 @@ test('only an adjacent delivered artifact can authorize an implicit revision', (
   assert.equal(allowedArtifactTools('如何修改配色？', { priorArtifactTypes: ['html'] }).size, 0)
   assert.equal(allowedArtifactTools('修改是什么意思？', { priorArtifactTypes: ['html'] }).size, 0)
   assert.deepEqual([...allowedArtifactTools('请另做一份 PDF', { priorArtifactTypes: ['html'] })], ['create_pdf'])
+})
+
+test('an unselected draft artifact from an incomplete turn is not inherited', () => {
+  const draftId = 'unselected-draft-html'
+  const messages = [
+    ...deliveredArtifactMessages({
+      prefix: 'unselected-draft',
+      tool: 'create_html_app',
+      artifactId: draftId,
+      filename: 'draft.html',
+      type: 'html',
+    }).filter((message) => {
+      if (message?.name === 'set_deliverables') return false
+      return !message?.tool_calls?.some((call) => call?.function?.name === 'set_deliverables')
+    }),
+    { role: 'user', content: '把这张图片设为背景' },
+  ]
+
+  assert.deepEqual(findAdjacentDeliveredArtifacts(messages), [])
 })
 
 test('keeping the original filename is an in-place revision, not a request for a copy', () => {

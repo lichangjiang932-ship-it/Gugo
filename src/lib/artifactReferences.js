@@ -381,22 +381,49 @@ function markdownWithoutNonLinkableContent(content = '') {
     .replace(/<(?:(?:https?:\/\/|\/)[^>]+|[^>]+)>/g, '')
 }
 
+// Unlike the compact bare-path matcher used for generic file:// links, this
+// matcher keeps spaces inside a Windows filename/path. That lets the verified
+// artifact pass treat an unknown absolute path as one indivisible span and
+// prevents its trailing basename from linking to a file in another directory.
+const ABSOLUTE_FILE_PATH_WITH_SPACES_RE = new RegExp(
+  '(^|[\\s(（\\[：:])([a-zA-Z]:[\\\\/][^\\r\\n<>\\x22|?*，。；：、（）\\[\\]…]*?\\.[a-zA-Z0-9]{1,12})(?=$|[\\s,;:!?，。；：、）)\\]…！？]|\\.(?=$|[\\s,;:!?，。；：、）)\\]…！？]))',
+  'g',
+)
+
+function absoluteFilePathSpans(value = '') {
+  const source = String(value || '')
+  const spans = []
+  ABSOLUTE_FILE_PATH_WITH_SPACES_RE.lastIndex = 0
+  let match
+  while ((match = ABSOLUTE_FILE_PATH_WITH_SPACES_RE.exec(source)) !== null) {
+    const prefix = String(match[1] || '')
+    const path = trimPathTrailingPunctuation(match[2])
+    if (!path) continue
+    const start = match.index + prefix.length
+    spans.push({ start, end: start + path.length, path })
+  }
+  return spans
+}
+
 export function artifactHasInlineReference(content = '', artifact = {}, references = [artifact]) {
   const candidates = Array.isArray(references) && references.length > 0 ? references : [artifact]
   if (artifactHasInlineLink(content, artifact, candidates)) return true
   const filename = String(artifact?.filename || artifact?.title || '').trim()
   if (!filename) return false
   const visibleContent = markdownWithoutNonLinkableContent(content)
-  BARE_ABSOLUTE_PATH_RE.lastIndex = 0
-  let pathMatch
-  while ((pathMatch = BARE_ABSOLUTE_PATH_RE.exec(visibleContent)) !== null) {
-    const path = trimPathTrailingPunctuation(pathMatch[2])
-    const reference = findArtifactReferenceByLocalPath(candidates, path)
+  const absoluteSpans = absoluteFilePathSpans(visibleContent)
+  for (const span of absoluteSpans) {
+    const reference = findArtifactReferenceByLocalPath(candidates, span.path)
     if (sameArtifactReference(reference, artifact)) return true
   }
+  const maskedContent = [...visibleContent]
+  for (const span of absoluteSpans) {
+    for (let index = span.start; index < span.end; index += 1) maskedContent[index] = ' '
+  }
+  const filenameContent = maskedContent.join('')
   let cursor = 0
-  while (cursor < visibleContent.length) {
-    const match = findFilenameMatch(visibleContent, candidates, cursor)
+  while (cursor < filenameContent.length) {
+    const match = findFilenameMatch(filenameContent, candidates, cursor)
     if (!match) return false
     if (sameArtifactReference(match.reference, artifact)) return true
     cursor = match.index + match.filename.length
@@ -421,6 +448,115 @@ function linkTextNode(value, references) {
   }
   if (cursor < value.length) nodes.push({ type: 'text', value: value.slice(cursor) })
   return nodes.length > 0 ? nodes : [{ type: 'text', value }]
+}
+
+function findExactArtifactReferenceByLocalPath(references = [], value = '') {
+  const target = normalizeArtifactLocalPath(value)
+  if (!target) return null
+  return uniqueArtifactReference(references.filter((reference) => (
+    reference?.url && ARTIFACT_PATH_FIELDS.some((field) => (
+      normalizeArtifactLocalPath(reference?.[field]) === target
+    ))
+  )))
+}
+
+function pathContainsRegisteredArtifactFilename(value = '', references = []) {
+  const lowerPath = String(value || '').toLowerCase()
+  return references.some((reference) => (
+    ARTIFACT_PATH_FIELDS.some((field) => Boolean(normalizeArtifactLocalPath(reference?.[field])))
+      && artifactFilenameAliases(reference).some((alias) => {
+        const index = lowerPath.indexOf(alias.value.toLowerCase())
+        return index > 0 && /[\\/]/.test(lowerPath[index - 1])
+      })
+  ))
+}
+
+function exactReferencePathMatch(value, references, fromIndex = 0) {
+  const source = String(value || '')
+  const lowerSource = source.toLowerCase()
+  let best = null
+  const hasPathBoundary = (index, length) => {
+    const before = index > 0 ? source[index - 1] : ''
+    const after = index + length < source.length ? source[index + length] : ''
+    const pathCharacter = /[\p{L}\p{N}\p{M}_./\\:%+~-]/u
+    return (!before || !pathCharacter.test(before))
+      && (!after || !pathCharacter.test(after))
+  }
+  for (const reference of references) {
+    for (const field of ARTIFACT_PATH_FIELDS) {
+      const raw = decodedPathText(reference?.[field]).trim()
+      if (!normalizeArtifactLocalPath(raw)) continue
+      const candidates = [...new Set([raw, raw.replaceAll('\\', '/')])]
+      for (const candidate of candidates) {
+        const lowerCandidate = candidate.toLowerCase()
+        let index = lowerSource.indexOf(lowerCandidate, fromIndex)
+        while (index >= 0 && !hasPathBoundary(index, candidate.length)) {
+          index = lowerSource.indexOf(lowerCandidate, index + 1)
+        }
+        if (index < 0) continue
+        if (!best || index < best.index || (index === best.index && candidate.length > best.path.length)) {
+          best = {
+            index,
+            path: source.slice(index, index + candidate.length),
+            reference,
+          }
+        }
+      }
+    }
+  }
+  return best
+}
+
+function linkVerifiedCompactPaths(value, references) {
+  const source = String(value || '')
+  if (!/[a-zA-Z]:[\\/]/.test(source)) return linkTextNode(source, references)
+  const nodes = []
+  let cursor = 0
+  for (const span of absoluteFilePathSpans(source)) {
+    const { path, start, end } = span
+    const reference = findExactArtifactReferenceByLocalPath(references, path)
+    if (start > cursor) nodes.push(...linkTextNode(source.slice(cursor, start), references))
+    if (reference?.url) {
+      nodes.push({
+        type: 'link',
+        url: reference.url,
+        children: [{ type: 'text', value: path }],
+      })
+    } else if (pathContainsRegisteredArtifactFilename(path, references)) {
+      // An absolute path is an indivisible identity. If its complete path is
+      // not registered, keep the whole span as text instead of falling back
+      // to a same-named file from another directory.
+      nodes.push({ type: 'text', value: path })
+    } else {
+      // Pathless managed artifacts retain their legacy filename-only link.
+      // They have no asserted source location that this prose could spoof.
+      nodes.push(...linkTextNode(path, references))
+    }
+    cursor = end
+  }
+  if (cursor < source.length) nodes.push(...linkTextNode(source.slice(cursor), references))
+  return nodes.length > 0 ? nodes : [{ type: 'text', value: source }]
+}
+
+function linkVerifiedAbsolutePaths(value, references) {
+  const source = String(value || '')
+  const nodes = []
+  let cursor = 0
+  let match = exactReferencePathMatch(source, references, cursor)
+  while (match) {
+    if (match.index > cursor) {
+      nodes.push(...linkVerifiedCompactPaths(source.slice(cursor, match.index), references))
+    }
+    nodes.push({
+      type: 'link',
+      url: match.reference.url,
+      children: [{ type: 'text', value: match.path }],
+    })
+    cursor = match.index + match.path.length
+    match = exactReferencePathMatch(source, references, cursor)
+  }
+  if (cursor < source.length) nodes.push(...linkVerifiedCompactPaths(source.slice(cursor), references))
+  return nodes.length > 0 ? nodes : [{ type: 'text', value: source }]
 }
 
 const NON_LINKABLE_MARKDOWN_NODES = new Set([
@@ -471,7 +607,7 @@ function persistedReferenceForLocalFileLink(node, references) {
 function linkArtifactNodes(parent, references, markdownSource) {
   if (!Array.isArray(parent?.children)) return
   parent.children = parent.children.flatMap((node) => {
-    if (node?.type === 'text') return linkTextNode(String(node.value || ''), references)
+    if (node?.type === 'text') return linkVerifiedAbsolutePaths(String(node.value || ''), references)
     if (node?.type === 'inlineCode') {
       const source = String(node.value || '')
       const trimmed = source.trim()
@@ -505,7 +641,7 @@ export function remarkArtifactReferences({ references = [] } = {}) {
 
 // ── Bare absolute paths become clickable links ───────────────────────────
 
-const BARE_ABSOLUTE_PATH_RE = /(^|[\s(（[])([a-zA-Z]:[\\/][^\]\s<>\x22|?*，。；：、（）()[…]+)/g
+const BARE_ABSOLUTE_PATH_RE = /(^|[\s(（[：:])([a-zA-Z]:[\\/][^\]\s<>\x22|?*，。；：、（）()[…]+)/g
 
 function trimPathTrailingPunctuation(value) {
   let raw = String(value || '')
@@ -552,6 +688,10 @@ export function remarkLocalPathLinks() {
       if (!Array.isArray(parent?.children)) return
       parent.children = parent.children.flatMap((node) => {
         if (node?.type === 'text') return barePathLinkNodes(node.value)
+        if (node?.type === 'link') {
+          const path = normalizeArtifactLocalPath(node.url)
+          if (path) return [{ ...node, url: `file:///${path}` }]
+        }
         if (!NON_LINKABLE_MARKDOWN_NODES.has(node?.type)) visit(node)
         return [node]
       })

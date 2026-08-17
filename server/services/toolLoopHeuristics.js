@@ -152,19 +152,70 @@ function collectHtmlMediaFiles(rootPath, { extensions, recursive = true, limit =
   return files
 }
 
-function requestedArtifactOutputDirectory(prompt = '') {
+function requestedArtifactOutputDirective(prompt = '') {
   const text = String(prompt || '')
-  const drive = text.match(/(?:写|保存|生成|导出|放|write|save|export).{0,18}?([a-z])\s*(?:盘|drive\b)/i)
-  if (drive?.[1]) return `${drive[1].toUpperCase()}:${path.sep}`
   // A source file commonly appears shortly after words such as “生成” (for
   // example: “生成 Word，把 C:\\source.png 插入其中”). Treat a local
   // path as a destination only when the wording contains an explicit
   // destination connector; otherwise the configured default directory wins.
-  const explicit = text.match(/(?:写入|放到|放至|保存(?:到|至)|生成(?:到|至)|导出(?:到|至)|(?:write|save|export)\s+(?:to|in))\s*["'`“‘]?([a-z]:[\\/][^\r\n"'`”’<>|?*]*)/i)
-  if (!explicit?.[1]) return ''
-  const candidate = explicit[1].trim().replace(/[，。；;,.!?！？]+$/u, '')
-  if (!candidate) return ''
-  return path.extname(candidate) ? path.dirname(candidate) : candidate
+  const connector = '(?:写入|写到|写至|存到|存至|放到|放至|保存(?:到|至)|生成(?:到|至)|导出(?:到|至)|(?:write|save|export)\\s+(?:to|in))'
+  const candidates = []
+  const isNegated = (index) => /(?:不要|别再?|不再|禁止|勿|无需|不用|不需要|do\s+not|don't|never)[^。！？!?，,；;\n]{0,16}$/i
+    .test(text.slice(Math.max(0, index - 32), index))
+  const addCandidate = (index, rawValue) => {
+    if (isNegated(index)) {
+      candidates.push({ index, directory: '' })
+      return
+    }
+    let candidate = String(rawValue || '').trim()
+      .replace(/[，。；;,.!?！？]+$/u, '')
+      .replace(/\s+(?:(?:然后|并且|并|再|完成后)[\s\S]*|(?:and\s+then|then|afterwards)\b[\s\S]*)$/i, '')
+      .replace(/\s+(?:这个|该)?(?:目录|文件夹|路径)$/u, '')
+      .trim()
+    if (!candidate) return
+    if (/^[a-z]:$/i.test(candidate)) candidate += path.sep
+    if (!path.isAbsolute(candidate)) return
+    const extension = path.extname(path.basename(candidate)).toLowerCase()
+    const generatedFileExtensions = new Set([
+      '.html', '.htm', '.pptx', '.docx', '.xlsx', '.pdf',
+      '.png', '.jpg', '.jpeg', '.webp', '.avif',
+    ])
+    candidates.push({
+      index,
+      directory: generatedFileExtensions.has(extension) ? path.dirname(candidate) : candidate,
+    })
+  }
+
+  const quoted = new RegExp(`${connector}\\s*["'\u0060“‘]((?:[a-z]:[\\\\/]|/)[^\\r\\n"'\u0060”’<>|?*]+)["'\u0060”’]`, 'gi')
+  for (const match of text.matchAll(quoted)) addCandidate(match.index, match[1])
+
+  const unquoted = new RegExp(`${connector}\\s*((?:[a-z]:[\\\\/]|/)[^\\r\\n，。；;!?！？"'\u0060”’<>|?*]*)`, 'gi')
+  for (const match of text.matchAll(unquoted)) addCandidate(match.index, match[1])
+
+  // Keep the drive adjacent to a destination connector. A broad gap here
+  // turns “生成网站，读取 E 盘图片” into a false E-drive output request.
+  const drive = /(?:写(?:入|到|至)|存(?:到|至)|保存(?:到|至)?|生成(?:到|至)|导出(?:到|至)|放(?:到|至)|(?:write|save|export)\s+(?:to|in))\s*([a-z])\s*(?:盘|drive\b)/gi
+  for (const match of text.matchAll(drive)) {
+    candidates.push({
+      index: match.index,
+      directory: isNegated(match.index) ? '' : `${match[1].toUpperCase()}:${path.sep}`,
+    })
+  }
+
+  const configuredDefault = /(?:(?:使用|改用|用|恢复使用|回到|写到|保存到)\s*)?(?:默认(?:的)?(?:生成|输出|保存)?(?:目录|文件夹|位置|路径)|default\s+(?:output\s+)?(?:directory|folder|location|path))/gi
+  for (const match of text.matchAll(configuredDefault)) {
+    if (!isNegated(match.index)) candidates.push({ index: match.index, directory: '' })
+  }
+
+  candidates.sort((left, right) => left.index - right.index)
+  const selected = candidates.at(-1)
+  return selected
+    ? { hasDirective: true, directory: selected.directory }
+    : { hasDirective: false, directory: '' }
+}
+
+function requestedArtifactOutputDirectory(prompt = '') {
+  return requestedArtifactOutputDirective(prompt).directory
 }
 
 function attachmentUriOccurrences(source, uri) {
@@ -1752,6 +1803,14 @@ function publishedArtifactResult({
     ...extra,
   }
   try {
+    // The latest user instruction is authoritative. A model can accidentally
+    // echo the configured default directory into output_directory even when
+    // the same turn explicitly says "write to E drive". Resolve that
+    // deterministic destination first so model arguments cannot reverse the
+    // documented explicit-path > default-directory priority.
+    const requestedOutput = requestedArtifactOutputDirective(
+      job?.userPrompt || job?.prompt || '',
+    )
     return {
       ...result,
       ...syncGeneratedArtifactToOutputDirectory({
@@ -1760,9 +1819,9 @@ function publishedArtifactResult({
         toolName: name,
         userId: job?.userId,
         outputDirectory: String(
-          args?.output_directory
-          || args?._outputDirectory
-          || requestedArtifactOutputDirectory(job?.userPrompt || job?.prompt || ''),
+          requestedOutput.hasDirective
+            ? requestedOutput.directory
+            : args?.output_directory || args?._outputDirectory || '',
         ).trim(),
       }),
       deliveryStatus: 'delivered',
@@ -2995,6 +3054,7 @@ export {
   visionFeedbackMime,
   stripLocalInternalFields,
   attachVisionFeedback,
+  requestedArtifactOutputDirective,
   requestedArtifactOutputDirectory,
   SNAPSHOT_TOOL_NAMES,
   recordPreMutationSnapshot,

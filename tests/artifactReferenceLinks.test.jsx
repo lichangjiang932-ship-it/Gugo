@@ -532,6 +532,155 @@ test('an explicit Markdown link to a local Windows output is rewritten to the pe
   }
 })
 
+test('a verified local-file receipt turns the full answer path into a real workbench link', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const opened = []
+  const turnId = 'verified-answer-path-turn'
+  const filePath = 'D:\\交付 文件\\最终网站.html'
+  const msg = {
+    id: `${turnId}:assistant`,
+    role: 'assistant',
+    content: `已完成：${filePath}。`,
+    timestamp: Date.now(),
+    meta: {
+      serverTurnId: turnId,
+      verifiedLocalFiles: [{
+        id: 'verified-answer-path-file',
+        path: filePath,
+        filename: '最终网站.html',
+        size: 2048,
+      }],
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <MessageRow
+        msg={msg}
+        rowKey={msg.id}
+        generatingMessageId=""
+        lang="zh"
+        onOpenArtifact={(artifact) => opened.push(artifact)}
+        t={(key) => key}
+      />,
+    ))
+
+    const link = rootElement.querySelector('[data-testid="inline-artifact-link"]')
+    assert.ok(link)
+    assert.equal(link.textContent, filePath)
+    assert.equal(
+      link.getAttribute('href'),
+      '/api/local-files/verified/verified-answer-path-file?turnId=verified-answer-path-turn',
+    )
+    assert.equal(rootElement.querySelector('[data-testid="artifact-open-card"]'), null)
+
+    await act(async () => link.dispatchEvent(new dom.window.MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+    })))
+    assert.equal(opened.length, 1)
+    assert.equal(opened[0].directFile.path, filePath)
+    assert.equal(opened[0].directFile.filename, '最终网站.html')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('absolute local paths require a complete path match before becoming clickable', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const opened = []
+  const turnId = 'verified-path-boundary-turn'
+  const verifiedPath = 'D:\\a\\page.html'
+  const wrongDirectory = 'E:\\wrong dir\\page.html'
+  const extraSuffix = 'D:\\a\\page.html.bak'
+  const msg = {
+    id: `${turnId}:assistant`,
+    role: 'assistant',
+    content: `错误目录：${wrongDirectory}；备份：${extraSuffix}；正确：${verifiedPath}。`,
+    timestamp: Date.now(),
+    meta: {
+      serverTurnId: turnId,
+      verifiedLocalFiles: [{
+        id: 'verified-path-boundary-file',
+        path: verifiedPath,
+        filename: 'page.html',
+        size: 2048,
+      }],
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <MessageRow
+        msg={msg}
+        rowKey={msg.id}
+        generatingMessageId=""
+        lang="zh"
+        onOpenArtifact={(artifact) => opened.push(artifact)}
+        t={(key) => key}
+      />,
+    ))
+
+    const links = [...rootElement.querySelectorAll('[data-testid="inline-artifact-link"]')]
+    assert.equal(links.length, 1)
+    assert.equal(links[0].textContent, verifiedPath)
+    assert.ok(rootElement.textContent.includes(wrongDirectory))
+    assert.ok(rootElement.textContent.includes(extraSuffix))
+
+    await act(async () => links[0].dispatchEvent(new dom.window.MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+    })))
+    assert.equal(opened.length, 1)
+    assert.equal(opened[0].directFile.path, verifiedPath)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('unverified local paths stay plain text instead of pretending to be clickable files', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const filePath = 'D:\\未验证\\missing.html'
+  const msg = {
+    id: 'unverified-answer-path',
+    role: 'assistant',
+    content: `未确认文件：${filePath}。 [missing.html](<${filePath}>)`,
+    timestamp: Date.now(),
+    meta: { serverTurnId: 'unverified-answer-path-turn' },
+  }
+
+  try {
+    await act(async () => root.render(
+      <MessageRow
+        msg={msg}
+        rowKey={msg.id}
+        generatingMessageId=""
+        lang="zh"
+        onOpenArtifact={() => assert.fail('an unverified path must not open the workbench')}
+        t={(key) => key}
+      />,
+    ))
+
+    assert.equal(rootElement.querySelector('[data-testid="inline-artifact-link"]'), null)
+    assert.equal(rootElement.querySelectorAll('a').length, 0)
+    const paths = [...rootElement.querySelectorAll('[data-testid="unverified-local-path"]')]
+    assert.equal(paths.length, 2)
+    assert.equal(paths[0].textContent, filePath)
+    assert.equal(paths[1].textContent, 'missing.html')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
 test('a paused assistant message renders a camelCase directory request inline', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')

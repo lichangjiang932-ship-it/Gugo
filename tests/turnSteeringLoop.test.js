@@ -179,6 +179,501 @@ test('multiple steering batches reuse one stable system contract', async () => {
   assert.ok(requests[1].some((message) => message.role === 'user' && message.content === 'Direction 2'))
 })
 
+test('live artifact correction cancels an obsolete image generator and clears its forced retry', async () => {
+  const prompt = '生成图片并做网站'
+  const correction = '纠正：只使用已有本地图片制作网站，不要生成任何新图片'
+  const modelRequests = []
+  const checkpoints = []
+  const executions = []
+  let claims = 0
+
+  const result = await baseRun({
+    job: {
+      id: 'steering-artifact-contract',
+      userId: 'turn-steering-user',
+      title: 'Steering artifact contract',
+      prompt,
+      userPrompt: prompt,
+    },
+    messages: [{ role: 'user', content: prompt }],
+    toolSpecs: SERVER_TOOL_SPECS,
+    intentMode: 'execute',
+    maxIters: 7,
+    claimSteering: async () => {
+      claims += 1
+      // The runtime checks steering both before model calls and immediately
+      // before mutating/artifact tools. Wait until the old image recovery has
+      // actually been scheduled, then correct that contract.
+      if (claims !== 4) return { leaseId: null, messages: [] }
+      return {
+        leaseId: 'artifact-contract-correction-lease',
+        messages: [{ id: 'artifact-contract-correction', content: correction }],
+      }
+    },
+    acknowledgeSteering: async () => {},
+    saveCheckpoint: async (state) => {
+      checkpoints.push(structuredClone(state))
+      return true
+    },
+    executeTool: async ({ name }) => {
+      executions.push(name)
+      assert.equal(name, 'create_html_app')
+      return {
+        ok: true,
+        artifactId: 'steered-html-artifact',
+        filename: 'steered.html',
+        url: '/api/artifacts/steered.html',
+      }
+    },
+    runModel: async (request) => {
+      modelRequests.push({
+        messages: structuredClone(request.messages),
+        tools: structuredClone(request.tools),
+        toolChoice: request.toolChoice ? structuredClone(request.toolChoice) : null,
+      })
+      const call = modelRequests.length
+      if (call === 1) {
+        assert.ok(request.tools.some((spec) => spec?.function?.name === 'generate_image'))
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'steered-html-create',
+            function: {
+              name: 'create_html_app',
+              arguments: JSON.stringify({
+                title: 'Existing image site',
+                html: '<!doctype html><html><body><main>Existing image</main></body></html>',
+              }),
+            },
+          }],
+        }
+      }
+      if (call === 2) return { content: 'Both files are ready.', toolCalls: [] }
+
+      const visibleNames = request.tools.map((spec) => spec?.function?.name)
+      const context = request.messages.map((message) => String(message?.content || '')).join('\n')
+      assert.ok(visibleNames.includes('create_html_app'))
+      assert.equal(visibleNames.includes('generate_image'), false)
+      assert.notEqual(request.toolChoice?.function?.name, 'generate_image')
+      assert.equal(context.includes('must successfully call: generate_image'), false)
+      assert.equal(context.includes('Call each missing artifact generator now: generate_image'), false)
+      assert.ok(context.includes('Cancelled artifact generators: generate_image'))
+      return { content: '已使用现有图片完成网页。', toolCalls: [] }
+    },
+  })
+
+  assert.equal(result.text, '已使用现有图片完成网页。')
+  assert.deepEqual(executions, ['create_html_app'])
+  assert.ok(modelRequests.length >= 3)
+  assert.ok(checkpoints.some((state) => (
+    state.completionGuards?.artifactContractText === correction
+      && state.completionGuards?.activeArtifactTools?.join(',') === 'create_html_app'
+      && !state.completionGuards?.forcedArtifactToolName
+  )))
+})
+
+test('style-only live steering preserves every existing artifact deliverable', async () => {
+  const prompt = '生成一个网站和一份 PPT'
+  const steering = 'PPT 不要动画，网站继续完善配色'
+  const modelRequests = []
+  const executions = []
+  let claims = 0
+
+  const result = await baseRun({
+    job: {
+      id: 'steering-style-preserves-artifacts',
+      userId: 'turn-steering-user',
+      title: 'Style steering preserves artifacts',
+      prompt,
+      userPrompt: prompt,
+    },
+    messages: [{ role: 'user', content: prompt }],
+    toolSpecs: SERVER_TOOL_SPECS,
+    intentMode: 'execute',
+    maxIters: 4,
+    claimSteering: async () => {
+      claims += 1
+      if (claims !== 1) return { leaseId: null, messages: [] }
+      return {
+        leaseId: 'style-steering-lease',
+        messages: [{ id: 'style-steering', content: steering }],
+      }
+    },
+    acknowledgeSteering: async () => {},
+    saveCheckpoint: async () => true,
+    executeTool: async ({ name }) => {
+      executions.push(name)
+      return {
+        ok: true,
+        artifactId: `style-${name}`,
+        filename: name === 'create_html_app' ? 'style.html' : 'style.pptx',
+        url: `/api/artifacts/style-${name}`,
+      }
+    },
+    runModel: async (request) => {
+      modelRequests.push({
+        messages: structuredClone(request.messages),
+        tools: structuredClone(request.tools),
+        toolChoice: request.toolChoice ? structuredClone(request.toolChoice) : null,
+      })
+      const names = request.tools.map((spec) => spec?.function?.name)
+      assert.ok(names.includes('create_html_app'))
+      assert.ok(names.includes('create_pptx'))
+      if (modelRequests.length === 1) {
+        return {
+          content: '',
+          toolCalls: [
+            {
+              id: 'style-html-create',
+              function: {
+                name: 'create_html_app',
+                arguments: JSON.stringify({
+                  title: 'Style website',
+                  html: '<!doctype html><html><body><main>Style</main></body></html>',
+                }),
+              },
+            },
+            {
+              id: 'style-pptx-create',
+              function: {
+                name: 'create_pptx',
+                arguments: JSON.stringify({ title: 'Style deck', slides: [{ title: 'Style' }] }),
+              },
+            },
+          ],
+        }
+      }
+      return { content: '网站和 PPT 均已完成。', toolCalls: [] }
+    },
+  })
+
+  assert.equal(result.text, '网站和 PPT 均已完成。')
+  assert.deepEqual(executions.sort(), ['create_html_app', 'create_pptx'])
+})
+
+for (const steering of [
+  '不要生成任何新图片，继续完成网站',
+  '别生成图片，继续完成网站',
+  '别再生成图片，继续完成网站',
+  '不用生成图片，继续完成网站',
+  '不需要生成图片，继续完成网站',
+]) {
+test(`live steering can cancel only image generation with ${steering.split('，')[0]}`, async () => {
+  const prompt = '生成图片并做网站'
+  const modelRequests = []
+  const executions = []
+  let claims = 0
+
+  const result = await baseRun({
+    job: {
+      id: 'steering-cancel-one-artifact',
+      userId: 'turn-steering-user',
+      title: 'Cancel one artifact',
+      prompt,
+      userPrompt: prompt,
+    },
+    messages: [{ role: 'user', content: prompt }],
+    toolSpecs: SERVER_TOOL_SPECS,
+    intentMode: 'execute',
+    maxIters: 4,
+    claimSteering: async () => {
+      claims += 1
+      if (claims !== 1) return { leaseId: null, messages: [] }
+      return {
+        leaseId: 'cancel-image-steering-lease',
+        messages: [{ id: 'cancel-image-steering', content: steering }],
+      }
+    },
+    acknowledgeSteering: async () => {},
+    saveCheckpoint: async () => true,
+    executeTool: async ({ name }) => {
+      executions.push(name)
+      assert.equal(name, 'create_html_app')
+      return {
+        ok: true,
+        artifactId: 'cancel-image-html',
+        filename: 'cancel-image.html',
+        url: '/api/artifacts/cancel-image.html',
+      }
+    },
+    runModel: async (request) => {
+      modelRequests.push({
+        messages: structuredClone(request.messages),
+        tools: structuredClone(request.tools),
+        toolChoice: request.toolChoice ? structuredClone(request.toolChoice) : null,
+      })
+      const names = request.tools.map((spec) => spec?.function?.name)
+      assert.ok(names.includes('create_html_app'))
+      assert.equal(names.includes('generate_image'), false)
+      assert.notEqual(request.toolChoice?.function?.name, 'generate_image')
+      if (modelRequests.length === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'cancel-image-html-create',
+            function: {
+              name: 'create_html_app',
+              arguments: JSON.stringify({
+                title: 'Existing image website',
+                html: '<!doctype html><html><body><main>Existing image</main></body></html>',
+              }),
+            },
+          }],
+        }
+      }
+      return { content: '已使用现有图片完成网站。', toolCalls: [] }
+    },
+  })
+
+  assert.equal(result.text, '已使用现有图片完成网站。')
+  assert.deepEqual(executions, ['create_html_app'])
+})
+}
+
+for (const scenario of [
+  { label: 'drive root', steering: '补充：写到 E 盘' },
+  { label: 'absolute directory', steering: '补充：写到 E:\\交付网站' },
+]) {
+  test(`live steering updates the enforced artifact output target for ${scenario.label}`, async () => {
+    const prompt = '生成一个网站'
+    const checkpoints = []
+    let claimed = false
+    let modelCalls = 0
+    let executions = 0
+
+    const result = await baseRun({
+      job: {
+        id: `steering-output-${scenario.label}`,
+        userId: 'turn-steering-user',
+        title: 'Steering output target',
+        prompt,
+        userPrompt: prompt,
+      },
+      messages: [{ role: 'user', content: prompt }],
+      toolSpecs: SERVER_TOOL_SPECS,
+      intentMode: 'execute',
+      maxIters: 4,
+      claimSteering: async () => {
+        if (claimed) return { leaseId: null, messages: [] }
+        claimed = true
+        return {
+          leaseId: `output-${scenario.label}-lease`,
+          messages: [{ id: `output-${scenario.label}-steering`, content: scenario.steering }],
+        }
+      },
+      acknowledgeSteering: async () => {},
+      saveCheckpoint: async (state) => {
+        checkpoints.push(structuredClone(state))
+        return true
+      },
+      executeTool: async ({ name, job }) => {
+        executions += 1
+        assert.equal(name, 'create_html_app')
+        assert.equal(job.userPrompt, scenario.steering)
+        return {
+          ok: true,
+          artifactId: `steered-output-${scenario.label}`,
+          filename: 'steered-output.html',
+          url: '/api/artifacts/steered-output.html',
+        }
+      },
+      runModel: async ({ messages }) => {
+        modelCalls += 1
+        assert.ok(messages.some((message) => message.role === 'user' && message.content === scenario.steering))
+        if (modelCalls === 1) {
+          return {
+            content: '',
+            toolCalls: [{
+              id: `create-output-${scenario.label}`,
+              function: {
+                name: 'create_html_app',
+                arguments: JSON.stringify({
+                  title: 'Steered output',
+                  html: '<!doctype html><html><body><main>Ready</main></body></html>',
+                }),
+              },
+            }],
+          }
+        }
+        return { content: '网站已生成并保存到指定位置。', toolCalls: [] }
+      },
+    })
+
+    assert.equal(result.text, '网站已生成并保存到指定位置。')
+    assert.equal(executions, 1)
+    assert.ok(checkpoints.some((state) => (
+      state.completionGuards?.artifactOutputPrompt === scenario.steering
+    )))
+  })
+}
+
+test('checkpoint resume keeps the latest steered artifact contract instead of reviving the original image requirement', async () => {
+  const prompt = '生成图片并做网站'
+  const correction = '纠正：只使用已有本地图片制作网站，不要生成任何新图片'
+  const modelRequests = []
+  const checkpoint = {
+    messages: [
+      { role: 'user', content: prompt },
+      { role: 'user', content: correction },
+    ],
+    toolCalls: [],
+    artifactIds: [],
+    appliedSteeringIds: ['artifact-contract-correction'],
+    iterations: 0,
+    completionGuards: {
+      activeArtifactTools: ['create_html_app'],
+      requiredArtifactTools: ['create_html_app'],
+      artifactContractText: correction,
+      artifactProvenance: [],
+      artifactDeliveryRetries: 0,
+    },
+  }
+
+  const result = await baseRun({
+    job: {
+      id: 'steering-artifact-contract-resume',
+      userId: 'turn-steering-user',
+      title: 'Resume steering artifact contract',
+      prompt,
+      userPrompt: prompt,
+    },
+    messages: [{ role: 'user', content: prompt }],
+    toolSpecs: SERVER_TOOL_SPECS,
+    intentMode: 'execute',
+    maxIters: 4,
+    loadCheckpoint: async () => ({ state: checkpoint }),
+    saveCheckpoint: async () => true,
+    executeTool: async () => ({
+      ok: true,
+      artifactId: 'resumed-steered-html',
+      filename: 'resumed-steered.html',
+      url: '/api/artifacts/resumed-steered.html',
+    }),
+    runModel: async (request) => {
+      modelRequests.push({
+        messages: structuredClone(request.messages),
+        tools: structuredClone(request.tools),
+        toolChoice: request.toolChoice ? structuredClone(request.toolChoice) : null,
+      })
+      const names = request.tools.map((spec) => spec?.function?.name)
+      assert.ok(names.includes('create_html_app'))
+      assert.equal(names.includes('generate_image'), false)
+      assert.notEqual(request.toolChoice?.function?.name, 'generate_image')
+      if (modelRequests.length === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'resumed-html-create',
+            function: {
+              name: 'create_html_app',
+              arguments: JSON.stringify({
+                title: 'Resumed site',
+                html: '<!doctype html><html><body><main>Resumed</main></body></html>',
+              }),
+            },
+          }],
+        }
+      }
+      return { content: '恢复后网页已完成。', toolCalls: [] }
+    },
+  })
+
+  assert.equal(result.text, '恢复后网页已完成。')
+  assert.deepEqual(result.artifactIds, ['resumed-steered-html'])
+  assert.ok(modelRequests.every((request) => (
+    !request.messages.some((message) => String(message?.content || '').includes('Call each missing artifact generator now: generate_image'))
+  )))
+})
+
+test('checkpoint resume keeps optional artifact tools available without forcing them as deliverables', async () => {
+  const prompt = '生成图片并做网站'
+  const correction = '继续制作网站；已有图片够用，如确实需要可以使用图片工具'
+  const modelRequests = []
+  const executions = []
+  const checkpoint = {
+    messages: [
+      { role: 'user', content: prompt },
+      { role: 'user', content: correction },
+    ],
+    toolCalls: [],
+    artifactIds: [],
+    appliedSteeringIds: ['artifact-contract-optional-image'],
+    iterations: 0,
+    completionGuards: {
+      activeArtifactTools: ['create_html_app', 'generate_image'],
+      requiredArtifactTools: ['create_html_app'],
+      artifactContractText: correction,
+      artifactProvenance: [],
+      artifactDeliveryRetries: 0,
+    },
+  }
+
+  const result = await baseRun({
+    job: {
+      id: 'steering-artifact-contract-optional-resume',
+      userId: 'turn-steering-user',
+      title: 'Resume optional artifact tool contract',
+      prompt,
+      userPrompt: prompt,
+    },
+    messages: [{ role: 'user', content: prompt }],
+    toolSpecs: SERVER_TOOL_SPECS,
+    intentMode: 'execute',
+    maxIters: 5,
+    loadCheckpoint: async () => ({ state: checkpoint }),
+    saveCheckpoint: async () => true,
+    executeTool: async ({ name }) => {
+      executions.push(name)
+      assert.equal(name, 'create_html_app')
+      return {
+        ok: true,
+        artifactId: 'optional-tool-resumed-html',
+        filename: 'optional-tool-resumed.html',
+        url: '/api/artifacts/optional-tool-resumed.html',
+      }
+    },
+    runModel: async (request) => {
+      modelRequests.push({
+        messages: structuredClone(request.messages),
+        tools: structuredClone(request.tools),
+        toolChoice: request.toolChoice ? structuredClone(request.toolChoice) : null,
+      })
+      const names = request.tools.map((spec) => spec?.function?.name)
+      const context = request.messages.map((message) => String(message?.content || '')).join('\n')
+      assert.ok(names.includes('create_html_app'))
+      assert.ok(names.includes('generate_image'))
+      assert.notEqual(request.toolChoice?.function?.name, 'generate_image')
+      assert.equal(context.includes('Call each missing artifact generator now: generate_image'), false)
+      assert.equal(context.includes('must successfully call: generate_image'), false)
+
+      if (modelRequests.length === 1) {
+        return { content: '网站已经完成。', toolCalls: [] }
+      }
+      if (modelRequests.length === 2) {
+        assert.equal(request.toolChoice?.function?.name, 'create_html_app')
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'optional-tool-html-create',
+            function: {
+              name: 'create_html_app',
+              arguments: JSON.stringify({
+                title: 'Optional image tool site',
+                html: '<!doctype html><html><body><main>Existing image</main></body></html>',
+              }),
+            },
+          }],
+        }
+      }
+      return { content: '恢复后网页已完成并验证。', toolCalls: [] }
+    },
+  })
+
+  assert.equal(result.text, '恢复后网页已完成并验证。')
+  assert.deepEqual(executions, ['create_html_app'])
+  assert.deepEqual(result.artifactIds, ['optional-tool-resumed-html'])
+})
+
 test('checkpoint tool calls are completed before the loop claims new steering', async () => {
   const events = []
   const readFile = SERVER_TOOL_SPECS.find((spec) => spec?.function?.name === 'read_file')

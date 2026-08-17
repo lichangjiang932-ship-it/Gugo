@@ -57,6 +57,7 @@ const ARTIFACT_RECOVERY_FORCE_MARKER = '[ARTIFACT RECOVERY GENERATOR REQUIRED]'
 const ARTIFACT_RECOVERY_PHASE_DIAGNOSE = 'diagnose'
 const ARTIFACT_RECOVERY_PHASE_FORCE = 'force'
 const MAX_ARTIFACT_RECOVERY_DIAGNOSTIC_ROUNDS = 2
+const LIVE_ARTIFACT_CONTRACT_MARKER = '[LIVE ARTIFACT CONTRACT UPDATED]'
 const PUBLIC_INCOMPLETE_TASK_TEXT = '任务尚未完成。请重试以继续；若仍失败，请检查模型和工具调用支持。'
 const PUBLIC_UNVERIFIED_FILE_TEXT = '任务尚未通过最终验证，未通过验证的文件不会显示或交付。请重试以继续。'
 const PUBLIC_FILTERED_CLARIFICATION_TEXT = '需要你补充信息后才能继续。已隐藏模型异常收尾时返回的代码内容。'
@@ -206,6 +207,7 @@ import {
   resolveVisionFeedbackMaxBytes,
   visionFeedbackMime,
   attachVisionFeedback,
+  requestedArtifactOutputDirective,
   executeServerTool,
   supportsIdempotentResume,
   SERVER_TOOL_SPECS,
@@ -591,7 +593,12 @@ export async function runToolsLoop({
     priorArtifactTypes,
     hasExplicitManagedArtifactReference: explicitlyReferencedArtifacts.length > 0,
   }
-  const explicitArtifactTools = allowedArtifactTools(artifactAuthorizationText, artifactIntentOptions)
+  // Keep current-turn intent separate from adjacent-artifact inheritance.
+  // Otherwise both sets are identical and `inheritsAdjacentArtifact` can
+  // never describe a real implicit revision.
+  const explicitArtifactTools = allowedArtifactTools(artifactAuthorizationText, {
+    skillId: explicitSkillId || skillId,
+  })
   const authorizedArtifactTools = allowedArtifactTools(artifactAuthorizationText, artifactIntentOptions)
   const inheritsAdjacentArtifact = explicitArtifactTools.size === 0
     && authorizedArtifactTools.size > 0
@@ -623,6 +630,15 @@ export async function runToolsLoop({
     : restored && typeof restored === 'object'
       ? restored
       : null
+  const artifactToolSpecCatalog = new Map(
+    [
+      ...(Array.isArray(toolSpecs) ? toolSpecs : SERVER_TOOL_SPECS),
+      ...(Array.isArray(fallbackToolSpecs) ? fallbackToolSpecs : []),
+      ...selectedToolSpecs,
+    ]
+      .filter((spec) => isFileArtifactTool(spec?.function?.name))
+      .map((spec) => [spec.function.name, spec]),
+  )
   const partialResultFallback = createPartialResultFallback({
     entries: restoredState?.completionGuards?.partialResultEntries,
   })
@@ -645,16 +661,40 @@ export async function runToolsLoop({
   const expectedArtifactTools = new Set(
     [...requestedArtifactTools].filter((name) => selectedToolNames.has(name)),
   )
+  const restoredArtifactContract = restoredState?.completionGuards
+  let activeArtifactContractText = String(
+    restoredArtifactContract?.artifactContractText || artifactAuthorizationText,
+  )
+  let activeArtifactOutputPrompt = String(
+    restoredArtifactContract?.artifactOutputPrompt || artifactAuthorizationText,
+  )
+  if (Object.hasOwn(restoredArtifactContract || {}, 'activeArtifactTools')) {
+    const restoredToolNames = (value) => new Set(
+      (Array.isArray(value) ? value : [])
+        .map((name) => String(name || '').trim())
+        .filter((name) => artifactToolSpecCatalog.has(name)),
+    )
+    const restoredAuthorizedNames = restoredToolNames(restoredArtifactContract.activeArtifactTools)
+    const restoredRequiredNames = Object.hasOwn(restoredArtifactContract, 'requiredArtifactTools')
+      ? restoredToolNames(restoredArtifactContract.requiredArtifactTools)
+      : new Set(restoredAuthorizedNames)
+    authorizedArtifactTools.clear()
+    expectedArtifactTools.clear()
+    for (const name of restoredAuthorizedNames) authorizedArtifactTools.add(name)
+    for (const name of restoredRequiredNames) {
+      if (artifactDeliveryStep && restoredAuthorizedNames.has(name)) expectedArtifactTools.add(name)
+    }
+  }
   // Verify/finalize/plan steps inherit the original job prompt, so they still
   // mention the requested format. Their job is to inspect or summarize the
   // artifact already produced by execute/batch_item, not manufacture a second
   // copy. Chat and delivery steps keep the strict persisted-file contract.
-  const requiresPersistedArtifact = expectedArtifactTools.size > 0 && artifactDeliveryStep
+  let requiresPersistedArtifact = expectedArtifactTools.size > 0 && artifactDeliveryStep
   // A PDF named only as source material for another managed deliverable (for
   // example "read report.pdf and create a Word document") must not activate
   // the PDF layout validator. Keep the strict validator for create_pdf and
   // direct local-file work, where no managed artifact generator is expected.
-  const pdfLayoutDeliveryEligible = expectedArtifactTools.size === 0
+  let pdfLayoutDeliveryEligible = expectedArtifactTools.size === 0
     || expectedArtifactTools.has('create_pdf')
   // A standalone Gugo artifact is written to the managed artifact store. It
   // never needs access to an arbitrary user folder. Hiding request_directory
@@ -669,6 +709,16 @@ export async function runToolsLoop({
     directoryAuthorizationResolution,
     fallbackToolSpecs,
   )
+  if (artifactDeliveryStep) {
+    const activeNames = new Set(activeToolSpecs.map((spec) => spec?.function?.name).filter(Boolean))
+    for (const name of authorizedArtifactTools) {
+      const spec = artifactToolSpecCatalog.get(name)
+      if (spec && !activeNames.has(name)) {
+        activeToolSpecs.push(spec)
+        activeNames.add(name)
+      }
+    }
+  }
   if (requiresPersistedArtifact && !EXPLICIT_LOCAL_DIRECTORY_CONTEXT.test(intentText)) {
     activeToolSpecs = activeToolSpecs.filter((spec) => spec?.function?.name !== 'request_directory')
   }
@@ -719,7 +769,7 @@ export async function runToolsLoop({
   // when routing produced no usable tool; otherwise prose such as "done" would
   // be accepted precisely when the harness cannot perform the requested work.
   const requiresExecutionEvidence = directExecutionRequested && !textDeliverableOnly
-  const requiresSourceHandoffProtection = !codeSnippetRequested && (
+  let requiresSourceHandoffProtection = !codeSnippetRequested && (
     directExecutionRequested || requiresPersistedArtifact || revisesAdjacentArtifact
   )
   let availableVerificationToolNames = activeToolSpecs
@@ -748,7 +798,7 @@ export async function runToolsLoop({
   } catch {
     // Prompt context is best-effort and must never block a turn.
   }
-  const requiresLocalArtifactDelivery = ['workspace_file', 'mixed'].includes(artifactDelivery.target)
+  let requiresLocalArtifactDelivery = ['workspace_file', 'mixed'].includes(artifactDelivery.target)
     || artifactRevisionMode === 'replace_original'
     || Boolean(String(outputDirectoryContext.defaultOutputDirectory || '').trim())
   let convo = ensureSafetySystemMessages(
@@ -954,7 +1004,9 @@ export async function runToolsLoop({
     if (requiresPersistedArtifact) {
       const ineligibleArtifactIds = requested.filter((id) => {
         const provenance = artifactProvenance.get(id)
-        return !provenance?.verified || !isFileArtifactTool(provenance.toolName)
+        return !provenance?.verified
+          || !isFileArtifactTool(provenance.toolName)
+          || !authorizedArtifactTools.has(provenance.toolName)
       })
       if (ineligibleArtifactIds.length > 0) {
         return {
@@ -1571,6 +1623,10 @@ export async function runToolsLoop({
       completionGuards: {
         partialResultEntries: partialResultFallback.snapshot(),
         representativeReadsInjected,
+        activeArtifactTools: [...authorizedArtifactTools],
+        requiredArtifactTools: [...expectedArtifactTools],
+        artifactContractText: activeArtifactContractText,
+        artifactOutputPrompt: activeArtifactOutputPrompt,
         artifactDeliveryRetries,
         forcedArtifactToolName: forcedArtifactToolName || null,
         forcedArtifactAttemptPending,
@@ -1617,6 +1673,144 @@ export async function runToolsLoop({
       return true
     })
   }
+  const steeringArtifactTerms = new Map([
+    ['create_html_app', '(?:网页|网站|页面|HTML(?:\\s*(?:文件|页面))?|web(?:site|page)|site)'],
+    ['create_pptx', '(?:PPTX?|幻灯片|演示文稿|PowerPoint|slide(?:\\s*deck)?)'],
+    ['create_docx', '(?:DOCX?|Word(?:\\s*document)?|文档|报告文件)'],
+    ['create_xlsx', '(?:XLSX?|Excel|电子表格|工作簿|spreadsheet|workbook)'],
+    ['create_pdf', '(?:PDF(?:\\s*(?:文件|文档))?)'],
+    ['generate_image', '(?:图片|图像|插图|海报|image|picture)'],
+  ])
+  const cancelledArtifactToolsFromSteering = (value) => {
+    const text = String(value || '')
+    const cancelled = new Set()
+    for (const [toolName, term] of steeringArtifactTerms) {
+      const explicitCancellation = new RegExp([
+        `(?:不要|不再|停止|别|不用|不需要)(?:再|继续)?\\s*(?:生成|创建|制作|输出|导出|交付|调用)\\s*(?:(?:任何|新的?|一张|一个|一份)\\s*)*${term}`,
+        `(?:取消|放弃|去掉|删除|无需|不必|不再需要)\\s*(?:生成|创建|制作|输出|导出|交付)?\\s*(?:(?:任何|新的?|一张|一个|一份)\\s*)*${term}`,
+        `不要\\s*(?:(?:任何|新的?|一张|一个|一份)\\s*)*${term}(?:文件|产物)?(?:了|啦)?(?=[，,。；;！!？?\\s]|$)`,
+        `${term}\\s*(?:不要|无需|不必|不再)\\s*(?:生成|创建|制作|输出|导出|交付)`,
+        `(?:do\\s+not|don't|no\\s+longer|stop|cancel)\\s+(?:create|generate|make|export|deliver|produce)\\s+(?:a\\s+|an\\s+|any\\s+|new\\s+)?${term}`,
+      ].join('|'), 'i')
+      if (explicitCancellation.test(text)) cancelled.add(toolName)
+    }
+    return cancelled
+  }
+  const steeringDefinesExclusiveArtifactContract = (value, detectedTools) => {
+    if (!(detectedTools instanceof Set) || detectedTools.size === 0) return false
+    const text = String(value || '')
+    return /(?:只|仅)(?:需|需要|要|生成|创建|制作|输出|导出|交付|保留|使用|用)|(?:改为|换成|替换为)\s*(?:只|仅)?|\bonly\b|\binstead\b/i.test(text)
+  }
+  const refreshArtifactContractFromSteering = (value) => {
+    const text = String(value || '').trim()
+    if (!text) return false
+
+    const steeringSkillId = parseSkillIdFromPrompt(text)
+    const detectedTools = new Set(
+      [...allowedArtifactTools(text, {
+        ...artifactIntentOptions,
+        skillId: steeringSkillId || undefined,
+      })].filter((name) => artifactToolSpecCatalog.has(name)),
+    )
+    const cancelledTools = cancelledArtifactToolsFromSteering(text)
+    const exclusive = steeringDefinesExclusiveArtifactContract(text, detectedTools)
+    if (!exclusive && detectedTools.size === 0 && cancelledTools.size === 0) return false
+
+    const previousAuthorizedTools = new Set(authorizedArtifactTools)
+    const previousRequiredTools = new Set(expectedArtifactTools)
+    const nextAuthorizedTools = exclusive
+      ? detectedTools
+      : new Set([...authorizedArtifactTools, ...detectedTools])
+    const nextRequiredTools = exclusive
+      ? detectedTools
+      : new Set([...expectedArtifactTools, ...detectedTools])
+    for (const name of cancelledTools) {
+      nextAuthorizedTools.delete(name)
+      nextRequiredTools.delete(name)
+    }
+    const changed = previousAuthorizedTools.size !== nextAuthorizedTools.size
+      || [...previousAuthorizedTools].some((name) => !nextAuthorizedTools.has(name))
+      || previousRequiredTools.size !== nextRequiredTools.size
+      || [...previousRequiredTools].some((name) => !nextRequiredTools.has(name))
+    if (!changed) {
+      activeArtifactContractText = text
+      return false
+    }
+
+    authorizedArtifactTools.clear()
+    expectedArtifactTools.clear()
+    for (const name of nextAuthorizedTools) authorizedArtifactTools.add(name)
+    for (const name of nextRequiredTools) {
+      if (artifactDeliveryStep && nextAuthorizedTools.has(name)) expectedArtifactTools.add(name)
+    }
+    activeArtifactContractText = text
+    requiresPersistedArtifact = expectedArtifactTools.size > 0 && artifactDeliveryStep
+    pdfLayoutDeliveryEligible = expectedArtifactTools.size === 0
+      || expectedArtifactTools.has('create_pdf')
+    requiresSourceHandoffProtection = !codeSnippetRequested && (
+      directExecutionRequested || requiresPersistedArtifact || revisesAdjacentArtifact
+    )
+    requiresLocalArtifactDelivery = ['workspace_file', 'mixed'].includes(
+      resolveArtifactDeliveryTargets(text, artifactIntentOptions).target,
+    ) || artifactRevisionMode === 'replace_original'
+      || Boolean(String(outputDirectoryContext.defaultOutputDirectory || '').trim())
+
+    const activeByName = new Map(
+      activeToolSpecs
+        .filter((spec) => !isFileArtifactTool(spec?.function?.name)
+          || authorizedArtifactTools.has(spec.function.name))
+        .map((spec) => [spec?.function?.name, spec]),
+    )
+    if (artifactDeliveryStep) {
+      for (const name of authorizedArtifactTools) {
+        const spec = artifactToolSpecCatalog.get(name)
+        if (spec) activeByName.set(name, spec)
+      }
+    }
+    activeToolSpecs = [...activeByName.values()].filter(Boolean)
+    if (hasManagedAttachments) {
+      activeToolSpecs = activeToolSpecs.filter((spec) => spec?.function?.name !== 'request_directory')
+    }
+    availableVerificationToolNames = activeToolSpecs
+      .map(toolNameFromSpec)
+      .filter((name) => VERIFICATION_TOOLS.has(name) || isCommandExecutionTool(name))
+    requiresPdfLayoutVerification = mutationExecutionRequested
+      && pdfLayoutDeliveryEligible
+      && shouldRequirePdfLayoutVerification(text)
+      && hasCommandExecutionTool(activeToolSpecs)
+
+    artifactDeliveryRetries = 0
+    clearArtifactRecovery()
+    recomputeDeliveredArtifactTools()
+    invalidateDeliverableSelection()
+    convo = convo.filter((message) => {
+      if (message?.role !== 'system') return true
+      const content = String(message?.content || '')
+      return !content.includes(ARTIFACT_DELIVERY_GUARD_MARKER)
+        && !content.includes(ARTIFACT_RECOVERY_DIAGNOSIS_MARKER)
+        && !content.includes(ARTIFACT_RECOVERY_FORCE_MARKER)
+        && !content.includes(LIVE_ARTIFACT_CONTRACT_MARKER)
+    })
+    convo = replaceRuntimeCapabilityBlock(convo, {
+      toolSpecs: activeToolSpecs,
+      approvalMode,
+      ...outputDirectoryContext,
+    })
+    const removed = [...previousAuthorizedTools].filter((name) => !authorizedArtifactTools.has(name))
+    const added = [...expectedArtifactTools].filter((name) => !previousRequiredTools.has(name))
+    convo.push({
+      role: 'system',
+      content: [
+        LIVE_ARTIFACT_CONTRACT_MARKER,
+        'The latest live user direction has updated the relevant parts of the file-delivery contract.',
+        `Required artifact generators now: ${[...expectedArtifactTools].join(', ') || '(none)'}.`,
+        removed.length > 0 ? `Cancelled artifact generators: ${removed.join(', ')}. Do not call or deliver them.` : '',
+        added.length > 0 ? `Newly required artifact generators: ${added.join(', ')}.` : '',
+        'Use only the currently exposed tools. Earlier recovery prompts for cancelled generators are obsolete.',
+      ].filter(Boolean).join(' '),
+    })
+    return true
+  }
   const appendSteeringMessages = (messages = []) => {
     if (!messages.length) return 0
     // 用户干预改变了上下文,跨干预的重复调用不算死循环。
@@ -1634,6 +1828,10 @@ export async function runToolsLoop({
       const id = String(steering?.id || '').trim()
       if (id) appliedSteeringIds.add(id)
       convo.push({ role: 'user', content: steering.content })
+      if (requestedArtifactOutputDirective(steering.content).hasDirective) {
+        activeArtifactOutputPrompt = String(steering.content || '').trim()
+      }
+      refreshArtifactContractFromSteering(steering.content)
       if (hasMutationExecutionIntent(String(steering?.content || ''))) {
         mutationSteeringPending = true
         verifiedRecoveredMutationObserved = false
@@ -2929,7 +3127,9 @@ export async function runToolsLoop({
                       execute: () => executeTool({
                         name,
                         args: executionArgs,
-                        job,
+                        job: activeArtifactOutputPrompt
+                          ? { ...job, userPrompt: activeArtifactOutputPrompt }
+                          : job,
                         step,
                         signal: abortScope.signal,
                         budget,

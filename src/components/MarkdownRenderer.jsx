@@ -6,7 +6,7 @@ import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import rehypeHighlight from 'rehype-highlight'
 import FullscreenMediaModal from './FullscreenMediaModal.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
-import { findArtifactReferenceByHref, findArtifactReferenceByLocalPath, remarkArtifactReferences, remarkLocalPathLinks } from '../lib/artifactReferences.js'
+import { findArtifactReferenceByHref, findArtifactReferenceByLocalPath, normalizeArtifactLocalPath, remarkArtifactReferences, remarkLocalPathLinks } from '../lib/artifactReferences.js'
 import { copyTextToClipboard } from '../lib/clipboard.js'
 
 /**
@@ -38,7 +38,8 @@ const sanitizeSchema = {
 }
 
 function isLocalPathHref(href = '') {
-  return /^file:\/\//i.test(String(href || ''))
+  const value = String(href || '')
+  return /^file:\/\//i.test(value) || Boolean(normalizeArtifactLocalPath(value))
 }
 
 function markdownUrlTransform(value) {
@@ -133,6 +134,17 @@ function MarkdownRenderer({ artifactReferences = [], children, className = '', o
             delete anchorProps.node
             if (!isArtifactReference && isManagedArtifactHref(href)) {
               return <span {...anchorProps} data-testid="blocked-artifact-link">{children}</span>
+            }
+            if (isLocalPath && !isArtifactReference) {
+              return (
+                <span
+                  {...anchorProps}
+                  data-testid="unverified-local-path"
+                  className="font-mono text-[0.88em] text-ink-soft"
+                >
+                  {children}
+                </span>
+              )
             }
             return (
               <a

@@ -113,6 +113,11 @@ function findDeliveredArtifactsBetween(history, startIndex, endIndex) {
   const calls = new Map()
   let selectedIds = null
   for (const message of turnMessages) {
+    const persistedSelection = message?.role === 'assistant'
+      && Object.hasOwn(message?.modelContext || {}, 'deliveryArtifactIds')
+      ? message.modelContext.deliveryArtifactIds
+      : undefined
+    if (Array.isArray(persistedSelection)) selectedIds = persistedSelection.map(String)
     if (message?.role !== 'assistant' || !Array.isArray(message.tool_calls)) continue
     for (const call of message.tool_calls) {
       const id = String(call?.id || '').trim()
@@ -154,7 +159,12 @@ function findDeliveredArtifactsBetween(history, startIndex, endIndex) {
       })
     }
   }
-  if (!Array.isArray(selectedIds)) return artifacts
+  // A successful generator result is still a draft until the turn explicitly
+  // selects it for delivery. Failed/interrupted turns frequently contain such
+  // results; inheriting them would revive stale file requirements on the next
+  // user message. Persisted deliveryArtifactIds provide the compatibility
+  // receipt for compacted histories that no longer contain set_deliverables.
+  if (!Array.isArray(selectedIds)) return []
   const selected = new Set(selectedIds)
   return artifacts.filter((artifact) => selected.has(artifact.id))
 }

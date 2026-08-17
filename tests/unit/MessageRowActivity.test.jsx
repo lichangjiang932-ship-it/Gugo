@@ -437,7 +437,9 @@ test('a failed turn never exposes retained artifacts as deliverables', async () 
       </I18nProvider>,
     ))
 
-    assert.equal(rootElement.querySelector('[data-testid="reply-completion-state"]')?.textContent, 'Unverified files were not delivered')
+    const completionState = rootElement.querySelector('[data-testid="reply-completion-state"]')
+    assert.equal(completionState?.textContent, 'Unverified files were not delivered')
+    assert.doesNotMatch(completionState?.parentElement?.className || '', /border|dashed/)
     assert.equal(rootElement.querySelector('[data-testid="artifact-open-card"]'), null)
   } finally {
     await act(async () => root.unmount())
