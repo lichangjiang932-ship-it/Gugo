@@ -94,6 +94,53 @@ test('one-shot schedules are consumed and cron catch-up chooses one future occur
   assert.equal(nextRunAfterExecution(cronJob, { scheduledAt: cronJob.nextRunAt, now }), Date.UTC(2026, 0, 1, 0, 15, 0))
 })
 
+test('startup catch-up runs one missed occurrence and records missedRun', async () => {
+  const { userId } = issueTestSession()
+  const now = Date.now()
+  const job = createCronJob({
+    userId,
+    title: 'Startup catch-up',
+    kind: 'cron',
+    scheduleType: 'every',
+    scheduleValue: '60000',
+    execType: 'direct_notify',
+    execPayload: { title: 'Caught up' },
+  }, { now })
+  getDb().prepare('UPDATE cron_jobs SET next_run_at = ? WHERE id = ?').run(now - 180_000, job.id)
+
+  const scheduler = new CronScheduler()
+  let executionJob = null
+  let resolveTick
+  const ticked = new Promise((resolve) => { resolveTick = resolve })
+  const execute = scheduler.execute.bind(scheduler)
+  scheduler.execute = async (nextJob) => {
+    executionJob = nextJob
+    return execute(nextJob)
+  }
+  const tick = scheduler.tick.bind(scheduler)
+  scheduler.tick = async (...args) => {
+    const result = await tick(...args)
+    if (args[0] === job.id) resolveTick(result)
+    return result
+  }
+
+  scheduler.start()
+  const result = await Promise.race([
+    ticked,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('startup catch-up did not run')), 1000)),
+  ])
+  const updated = getCronJob(job.id)
+
+  assert.equal(result.status, 'success')
+  assert.equal(result.missedRun, true)
+  assert.equal(executionJob.missedRun, true)
+  assert.ok(updated.nextRunAt > Date.now())
+  assert.equal(updated.lastRunAt, result.job.lastRunAt)
+  const notification = listNotifications({ userId }).find((entry) => entry.data?.cronJobId === job.id)
+  assert.equal(notification?.data?.missedRun, true)
+  scheduler.stop()
+})
+
 test('tick agent_session creates a background job', async () => {
   const { userId } = issueTestSession()
   const job = createCronJob({
@@ -224,6 +271,36 @@ test('all cron job kinds skip an overlapping execution of the same job', async (
   assert.equal(second.status, 'skipped')
   assert.match(second.error, /already running/)
   assert.equal(firstResult.status, 'success')
+})
+
+test('stop and restart preserve the overlap lock until the active run settles', async () => {
+  const { userId } = issueTestSession()
+  const job = createCronJob({
+    userId,
+    title: 'Restart overlap',
+    kind: 'cron',
+    scheduleType: 'every',
+    scheduleValue: '60000',
+    execType: 'direct_notify',
+    execPayload: { title: 'restart' },
+  })
+  const scheduler = new CronScheduler()
+  let release
+  scheduler.execute = () => new Promise((resolve) => {
+    release = () => resolve({ ok: true })
+  })
+
+  const first = scheduler.tick(job.id, { manual: true })
+  await new Promise((resolve) => setImmediate(resolve))
+  scheduler.stop()
+  scheduler.start()
+  const overlapping = await scheduler.tick(job.id, { manual: true })
+  release()
+  const completed = await first
+
+  assert.equal(overlapping.status, 'skipped')
+  assert.equal(completed.status, 'success')
+  scheduler.stop()
 })
 
 test('plugin_action is rejected on create and legacy rows fail closed at execution', async () => {
