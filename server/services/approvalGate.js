@@ -95,6 +95,78 @@ function terminalDecision(approval) {
 }
 
 /**
+ * An approval authorizes one call, but it must not freeze the permission mode
+ * that was active when the inbox row was created. In particular, switching to
+ * plan while a decision is pending must take effect before that decision can
+ * be consumed, including after a process restart.
+ */
+export function revalidateToolPermission({
+  userId,
+  origin = 'job',
+  toolName,
+  args = {},
+} = {}) {
+  if (!userId) return { proceed: true, args }
+
+  try {
+    const settings = getApprovalSettings({ userId })
+    const riskOverride = settings.riskOverrides?.find((item) => item?.toolName === toolName) || null
+    const dynamicMetadata = getToolMetadata(toolName, { args, userId })
+    const metadata = riskOverride
+      ? {
+          ...(dynamicMetadata || {}),
+          riskClass: riskOverride.riskClass,
+          requiresApproval: riskOverride.riskClass !== 'read',
+          reason: `用户风险覆盖: ${riskOverride.riskClass}`,
+        }
+      : dynamicMetadata
+    const verdict = classifyToolRisk(toolName, args, {
+      origin,
+      // This call has already been approved or reached the executing
+      // checkpoint. Revalidation only asks whether the user's current
+      // permission mode still forbids it; it must not reopen or depend on the
+      // deployment-level approval queue (which may legitimately be `off`).
+      mode: 'unattended',
+      permissionMode: settings.mode,
+      rememberedGrants: settings.rememberedGrants,
+      metadata,
+    })
+    if (!verdict.denied) return { proceed: true, args, permissionMode: settings.mode }
+    return {
+      proceed: false,
+      reason: verdict.reason,
+      policyDenied: settings.mode === 'plan',
+      permissionMode: settings.mode,
+      suggestedPermissionMode: settings.mode === 'plan' ? 'acceptEdits' : 'normal',
+    }
+  } catch (err) {
+    console.error('[approval] 重验当前权限失败,已保守拒绝:', err?.stack || err)
+    return {
+      proceed: false,
+      reason: '无法确认当前权限模式,已保守拒绝',
+      systemFailure: true,
+      retryable: true,
+    }
+  }
+}
+
+function terminalDecisionForCurrentMode(approval) {
+  const decision = terminalDecision(approval)
+  if (!decision?.proceed) return decision
+
+  const args = decision.args ?? approval.effectiveArgs ?? approval.args ?? {}
+  const currentPermission = revalidateToolPermission({
+    userId: approval.userId,
+    origin: approval.origin,
+    toolName: approval.toolName,
+    args,
+  })
+  return currentPermission.proceed
+    ? decision
+    : { ...currentPermission, approvalId: approval.id }
+}
+
+/**
  * 把 gate 的拒绝结果翻译成给模型看的工具结果。
  *
  * 关键是让模型能区分三种情况并采取不同行动:
@@ -339,7 +411,7 @@ export function waitForDecision({
         }
         return
       }
-      const decision = terminalDecision(approval)
+      const decision = terminalDecisionForCurrentMode(approval)
       if (decision) settle(decision)
     }
 
@@ -390,7 +462,7 @@ export function resumePersistedApproval({ approvalId, signal = null } = {}) {
       retryable: true,
     })
   }
-  const decision = terminalDecision(getApprovalById(approvalId))
+  const decision = terminalDecisionForCurrentMode(getApprovalById(approvalId))
   return decision ? Promise.resolve(decision) : waitForDecision({ approvalId, signal })
 }
 

@@ -42,7 +42,8 @@ export async function applyPlanExecutionConfirmation(confirmation, {
       return { proceed: false, applied: false }
     }
     const saved = await changeApprovalMode(confirmation.approvalMode)
-    if (saved === false || saved == null) return { proceed: false, applied: false }
+    const savedMode = typeof saved === 'string' ? saved : saved?.mode
+    if (savedMode !== confirmation.approvalMode) return { proceed: false, applied: false }
   }
   dispatch?.({ type: 'SET_AGENT_MODE', payload: confirmation.agentMode })
   return { proceed: true, applied: true }

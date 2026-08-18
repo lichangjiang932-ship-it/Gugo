@@ -71,3 +71,20 @@ test('failed permission persistence stops the execution confirmation', async () 
   assert.deepEqual(result, { proceed: false, applied: false })
   assert.deepEqual(actions, [])
 })
+
+test('a stale permission response cannot switch a planned send into execution', async () => {
+  const calls = []
+  const result = await applyPlanExecutionConfirmation({
+    agentMode: 'code', approvalMode: 'acceptEdits', intentMode: 'execute',
+  }, {
+    currentApprovalMode: 'plan',
+    changeApprovalMode: async (mode) => {
+      calls.push(`permission:${mode}`)
+      return { mode: 'plan' }
+    },
+    dispatch: (action) => calls.push(`agent:${action.payload}`),
+  })
+
+  assert.deepEqual(result, { proceed: false, applied: false })
+  assert.deepEqual(calls, ['permission:acceptEdits'])
+})

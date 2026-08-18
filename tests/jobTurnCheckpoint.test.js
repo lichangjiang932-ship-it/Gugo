@@ -14,6 +14,7 @@ const {
   saveJobTurnCheckpoint,
 } = await import('../server/services/jobTurnCheckpointStore.js')
 const { runToolsLoop } = await import('../server/services/jobTools.js')
+const { setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
 const alice = issueTestSession({ email: 'checkpoint-alice@example.com' }).userId
@@ -276,6 +277,76 @@ test('an explicitly idempotent executor safely resumes an executing call with th
   })
   assert.equal(executions[1]?.toolCallId, 'verify-write-retry')
   assert.equal(checkpoint.final.text, 'resumed safely')
+})
+
+test('an executing connector checkpoint switched to plan is denied before idempotent resume', async () => {
+  const toolCallId = 'connector-write-retry'
+  const expectedKey = `job:connector-plan-job:step:connector-plan-step:tool:${toolCallId}`
+  const originalArgs = { owner: 'octo', repo: 'demo', title: 'original' }
+  const finalArgs = { owner: 'octo', repo: 'demo', title: 'approved title' }
+  let checkpoint = {
+    messages: [
+      { role: 'user', content: 'create the issue' },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: toolCallId,
+          type: 'function',
+          function: { name: 'github_create_issue', arguments: JSON.stringify(originalArgs) },
+        }],
+      },
+    ],
+    toolCalls: [{
+      ...call(toolCallId, 'github_create_issue', originalArgs, 'executing'),
+      checkpointApprovalId: 'connector-approved-before-restart',
+      checkpointExecutionArgs: finalArgs,
+      idempotencyKey: expectedKey,
+    }],
+    artifactIds: [],
+    iterations: 0,
+  }
+  let executeCalls = 0
+  let deniedResult = null
+  const executeTool = async () => {
+    executeCalls += 1
+    return { ok: true }
+  }
+  executeTool.supportsIdempotentResume = ({ name, args, idempotencyKey }) => (
+    name === 'github_create_issue'
+      && args === checkpoint.toolCalls[0].checkpointExecutionArgs
+      && idempotencyKey === expectedKey
+  )
+
+  setApprovalMode({ userId: alice, mode: 'plan' })
+  try {
+    const result = await runToolsLoop({
+      job: { id: 'connector-plan-job', userId: alice },
+      step: { id: 'connector-plan-step' },
+      messages: [],
+      loadCheckpoint: async () => ({ state: checkpoint }),
+      saveCheckpoint: async (state) => {
+        checkpoint = structuredClone(state)
+        return { state: checkpoint }
+      },
+      executeTool,
+      runModel: async ({ messages }) => {
+        deniedResult = JSON.parse(messages.find((message) => (
+          message.role === 'tool' && message.tool_call_id === toolCallId
+        )).content)
+        return { content: 'connector write remained blocked in plan mode', toolCalls: [] }
+      },
+    })
+
+    assert.equal(result.text, 'connector write remained blocked in plan mode')
+    assert.equal(executeCalls, 0)
+    assert.equal(deniedResult.policyDenied, true)
+    assert.equal(deniedResult.permissionMode, 'plan')
+    assert.match(deniedResult.error, /工具存在/)
+    assert.match(deniedResult.error, /自动接受编辑模式/)
+  } finally {
+    setApprovalMode({ userId: alice, mode: 'normal' })
+  }
 })
 
 test('a final response checkpoint returns without another model request', async () => {

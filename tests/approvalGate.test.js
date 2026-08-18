@@ -17,6 +17,7 @@ process.env.APP_DATA_DIR = TMP_DIR
 
 const {
   requestApproval,
+  resumePersistedApproval,
   waitForDecision,
   releaseApproval,
   releaseApprovalsForJob,
@@ -24,6 +25,7 @@ const {
   _resetWaiters,
 } = await import('../server/services/approvalGate.js')
 const {
+  createPendingApproval,
   decideApproval,
   listPendingApprovals,
   countPendingApprovals,
@@ -241,6 +243,51 @@ test('Hook pre-authorization cannot bypass plan mode', async () => {
   assert.match(formatted.error, /自动接受编辑模式/)
   assert.doesNotMatch(formatted.error, /缺少写入或执行工具[^。]*$/)
   assert.equal(countPendingApprovals({ userId }), 0)
+})
+
+test('switching to plan invalidates a mutating approval before a live waiter consumes it', async () => {
+  const { userId, jobId } = newUser('live-plan-revalidation')
+  const pending = requestApproval({
+    userId,
+    origin: 'job',
+    jobId,
+    toolName: 'write_file',
+    args: { path: 'must-not-write.txt', content: 'blocked' },
+    mode: 'unattended',
+  })
+  const row = await waitForPendingRow(userId)
+
+  setApprovalMode({ userId, mode: 'plan' })
+  decideApproval({ userId, id: row.id, decision: 'approve' })
+  releaseApproval(row.id)
+
+  const result = await pending
+  assert.equal(result.proceed, false)
+  assert.equal(result.policyDenied, true)
+  assert.equal(result.permissionMode, 'plan')
+  assert.match(result.reason, /计划模式/)
+  assert.equal(countPendingApprovals({ userId }), 0)
+})
+
+test('restart recovery revalidates an approved mutation against the current plan mode', async () => {
+  const { userId, jobId } = newUser('restart-plan-revalidation')
+  const approval = createPendingApproval({
+    userId,
+    origin: 'job',
+    jobId,
+    toolName: 'write_file',
+    args: { path: 'restart-must-not-write.txt', content: 'blocked' },
+    risk: 'medium',
+    reason: '修改本地数据',
+  })
+  decideApproval({ userId, id: approval.id, decision: 'approve' })
+  setApprovalMode({ userId, mode: 'plan' })
+
+  const result = await resumePersistedApproval({ approvalId: approval.id })
+  assert.equal(result.proceed, false)
+  assert.equal(result.policyDenied, true)
+  assert.equal(result.permissionMode, 'plan')
+  assert.match(result.reason, /计划模式/)
 })
 
 test('真实用户档位依次执行 plan / normal / acceptEdits / bypass 语义', async () => {

@@ -13,7 +13,7 @@ import { isLoopPauseResult } from '../utils/agenticTools.js'
 import { getToolMetadata } from './toolRegistry.js'
 import { createToolAbortScope } from '../utils/toolCancellation.js'
 import { attachJobBudget, getJobBudget, createJobBudget, runWithModelBudget } from '../utils/jobBudget.js'
-import { formatDeniedToolResult, requestApproval, resumePersistedApproval } from './approvalGate.js'
+import { formatDeniedToolResult, requestApproval, resumePersistedApproval, revalidateToolPermission } from './approvalGate.js'
 import { writeToolAudit } from '../utils/audit.js'
 import { isContextLengthError } from '../adapters/modelProxy.js'
 import { callModelWithContextRecovery } from './contextCompactionRuntime.js'
@@ -3483,8 +3483,12 @@ export async function runToolsLoop({
               if (idempotentResume) {
                 effectiveArgs = call.checkpointExecutionArgs ?? effectiveArgs
                 gate = {
-                  proceed: true,
-                  args: effectiveArgs,
+                  ...revalidateToolPermission({
+                    userId: job?.userId || null,
+                    origin: approvalOrigin,
+                    toolName: name,
+                    args: effectiveArgs,
+                  }),
                   approvalId: call.checkpointApprovalId || null,
                   resumedIdempotentExecution: true,
                 }
