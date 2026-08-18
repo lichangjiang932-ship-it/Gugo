@@ -20,6 +20,13 @@ const SCOPED_CONTENT_PRESERVATION_BOUNDARY = /\b(?:do not|don't|never)\b[^\r\n.!
 const SCOPED_CONTENT_FIDELITY_BOUNDARY = /\b(?:preserve|keep|retain)\b[^\r\n.!?;]{0,80}\b(?:article|body|text|wording|content)\b[^\r\n.!?;]{0,80}\b(?:do not|don't|never)\b[^\r\n.!?;]{0,32}\b(?:change|modify|edit|polish|delete|remove|add|rewrite|alter)\b[^\r\n.!?;]{0,32}\b(?:content|text|wording|paragraphs?|spelling|grammar|punctuation)\b|(?:\u4fdd\u7559|\u4fdd\u6301)[^\r\n\u3002\uff1b]{0,80}(?:\u6587\u7ae0|\u6b63\u6587|\u539f\u6587)[^\r\n\u3002\uff1b]{0,80}(?:\u4e0d\u8981|\u4e0d\u5f97|\u7981\u6b62)[^\r\n\u3002\uff1b]{0,32}(?:\u4fee\u6539|\u7f16\u8f91|\u6da6\u8272|\u5220\u51cf|\u589e\u52a0|\u6539\u5199)[^\r\n\u3002\uff1b]{0,24}(?:\u5185\u5bb9|\u6587\u5b57|\u6bb5\u843d|\u62fc\u5199|\u8bed\u6cd5|\u6807\u70b9)/i
 const EXECUTION_CONTINUATION = /^(?:continue(?:\s+(?:with\s+)?(?:it|this|the\s+(?:work|changes?|implementation)))?|go\s+ahead|proceed|approved?|i\s+(?:approve|authorize\s+you)(?:\s+to\s+(?:continue|proceed|execute|make\s+the\s+changes?))?|\u7ee7\u7eed(?:\u6267\u884c|\u5904\u7406|\u4fee\u6539|\u5b8c\u6210|\u505a|\u4e0b\u53bb)?(?:\u5427)?|\u6211(?:\u540c\u610f|\u6279\u51c6|\u6388\u6743\u7ed9\u4f60)(?:[\s,\uff0c]*(?:\u7ee7\u7eed|\u6267\u884c|\u4fee\u6539|\u5904\u7406|\u64cd\u4f5c))?|\u6388\u6743\u7ed9\u4f60(?:[\s,\uff0c]*(?:\u7ee7\u7eed|\u6267\u884c|\u4fee\u6539|\u5904\u7406|\u64cd\u4f5c))?)[.!?\u3002\uff01\uff1f\s]*$/i
 const EXECUTION_REVISION = /^(?:(?:(?:\u628a|\u5c06)?(?:\u5b83|\u8fd9\u4e2a|\u8be5)?(?:\u9875\u9762|\u7f51\u7ad9|\u7f51\u9875|\u6587\u4ef6|\u56fe\u7247|\u80cc\u666f|\u989c\u8272|\u5b57\u4f53|\u5e03\u5c40|\u52a8\u753b|\u6548\u679c|\u5361\u7247)?\s*(?:\u518d|\u7a0d\u5fae|\u66f4|\u6709\u70b9)(?:\u6df1|\u6d45|\u5927|\u5c0f|\u4eae|\u6697|\u5feb|\u6162|\u7acb\u4f53|\u5706\u6da6|\u7d27\u51d1|\u6e05\u6670|\u660e\u663e|\u7a81\u51fa|\u73b0\u4ee3|\u7b80\u6d01)(?:\u4e00\u70b9|\u4e00\u4e9b|\u70b9|\u4e9b)?|(?:\u628a|\u5c06)?(?:\u5b83|\u8fd9\u4e2a|\u8be5)?(?:\u9875\u9762|\u7f51\u7ad9|\u7f51\u9875|\u6587\u4ef6|\u56fe\u7247|\u80cc\u666f|\u989c\u8272|\u5b57\u4f53|\u5e03\u5c40|\u52a8\u753b|\u6548\u679c|\u5361\u7247)?\s*(?:\u6362\u6210|\u6539\u6210|\u8c03\u6210|\u505a\u6210|\u52a0\u6df1|\u8c03\u6697|\u589e\u52a0|\u6dfb\u52a0|\u52a0\u4e0a|\u53bb\u6389|\u5220\u9664|\u79fb\u9664|\u8c03\u6574|\u4f18\u5316|\u5b8c\u5584|\u4fee\u6539|\u4fee\u590d|\u66ff\u6362).{0,100})|(?:(?:make|change|turn|set)\s+(?:it|this|the\s+(?:page|site|file|image|background|color|layout))\b.{0,100}|(?:a\s+(?:little|bit)\s+)?(?:darker|lighter|bigger|smaller|faster|slower|clearer|rounder|more\s+(?:dynamic|compact|modern|prominent|three-dimensional))|(?:add|remove|delete|replace|adjust|tweak|revise|update)\b.{0,100}))[.!?\u3002\uff01\uff1f\s]*$/iu
+// Follow-up revisions are often phrased as an invariant instead of an edit
+// command (for example, "no matter how I rotate it, every image must keep
+// facing me"). This pattern is deliberately usable only through
+// shouldInheritExecutionIntent, where a real preceding execution request is
+// required and explicit answer/read-only modes still win.
+const EXECUTION_REVISION_REQUIREMENT = /^(?:(?:\u65e0\u8bba|\u4e0d\u7ba1).{1,120}(?:\u56fe\u7247|\u56fe\u50cf|\u5361\u7247|\u9875\u9762|\u7f51\u9875|\u52a8\u753b|\u5143\u7d20|\u6587\u5b57|\u6807\u9898|\u80cc\u666f|\u6309\u94ae|\u6587\u4ef6|\u4ee3\u7801|\u5e03\u5c40|\u6548\u679c).{0,100}(?:\u8981|\u5fc5\u987b|\u59cb\u7ec8|\u4e00\u76f4|\u4fdd\u6301).{0,100}|(?:\u8ba9|\u786e\u4fdd|\u4fdd\u8bc1|\u4fdd\u6301)(?=.{0,140}(?:\u56fe\u7247|\u56fe\u50cf|\u5361\u7247|\u9875\u9762|\u7f51\u9875|\u52a8\u753b|\u5143\u7d20|\u6587\u5b57|\u6807\u9898|\u80cc\u666f|\u6309\u94ae|\u6587\u4ef6|\u4ee3\u7801|\u5e03\u5c40|\u6548\u679c)).{1,140}|(?:\u56fe\u7247|\u56fe\u50cf|\u5361\u7247|\u9875\u9762|\u7f51\u9875|\u52a8\u753b|\u5143\u7d20|\u6587\u5b57|\u6807\u9898|\u80cc\u666f|\u6309\u94ae|\u6587\u4ef6|\u4ee3\u7801|\u5e03\u5c40|\u6548\u679c)\s*(?:\u8981|\u5fc5\u987b|\u5e94\u8be5|\u9700\u8981)\s*(?:\u59cb\u7ec8|\u4e00\u76f4|\u4fdd\u6301|\u6c38\u8fdc).{0,100}|(?:ensure|keep|make\s+sure)\b(?=.{0,140}\b(?:image|card|page|element|title|background|button|file|code|layout|effect)\b).{1,140}|(?:(?:the|each|every)\s+)?(?:image|card|page|element|title|background|button|file|code|layout|effect)\b.{0,48}\b(?:must|should|needs?\s+to|always)\b.{0,100})[.!?\u3002\uff01\uff1f\s]*$/iu
+const RESPONSE_ONLY_REQUIREMENT = /\b(?:explain|describe|answer|reply|respond)\b|\bin\s+(?:your|the)\s+(?:answer|response|reply)\b|(?:\u89e3\u91ca|\u8bf4\u660e|\u56de\u7b54|\u7b54\u590d|\u56de\u590d|\u544a\u77e5)/iu
 
 // Code generation and execution requests get the execution toolset even when
 // no file target is named. Otherwise the model receives read-only tools only
@@ -76,6 +83,15 @@ function toolName(spec) {
   return String(spec?.function?.name || '').trim()
 }
 
+function emitSelectionDecision(onDecision, decision) {
+  if (typeof onDecision !== 'function') return
+  try {
+    onDecision(decision)
+  } catch {
+    // Selection diagnostics are advisory and must never block a chat turn.
+  }
+}
+
 function isReadOnlyRequest(userPrompt) {
   // Printed forms commonly contain local layout instructions such as
   // "Do not write below this line". They constrain where generated content
@@ -106,11 +122,16 @@ function isReadOnlyRequest(userPrompt) {
 export function shouldInheritExecutionIntent(userPrompt, previousUserPrompt, { intentMode = 'auto' } = {}) {
   const current = String(userPrompt || '').trim()
   const previous = String(previousUserPrompt || '').trim()
+  const revisionRequirement = EXECUTION_REVISION_REQUIREMENT.test(current)
   if (normalizeTurnIntentMode(intentMode) === 'answer') return false
   if (!current || !previous || current.length > 160
     || (!EXECUTION_CONTINUATION.test(current)
       && !EXECUTION_REVISION.test(current)
+      && !revisionRequirement
       && !isExecutionCapabilityChallenge(current))) return false
+  if (revisionRequirement
+    && RESPONSE_ONLY_REQUIREMENT.test(current)
+    && !hasMutationExecutionIntent(current)) return false
   // A prior global/read-only instruction remains authoritative. A short reply
   // can confirm an existing user-authored work order, but cannot create one.
   if (isReadOnlyRequest(current) || isReadOnlyRequest(previous)) return false
@@ -247,6 +268,7 @@ export function selectChatToolSpecs({
   executionRequired = false,
   userId = null,
   metadataResolver = getToolMetadata,
+  onDecision = null,
 } = {}) {
   const capabilityMode = resolveChatCapabilityMode({
     prompt,
@@ -256,9 +278,20 @@ export function selectChatToolSpecs({
     executionRequired,
   })
   const stableSpecs = stableUniqueSpecs(specs)
-  const routedSpecs = LOCAL_FILE_TARGET_REFERENCE.test(String(userPrompt || ''))
+  const hasLocalFileTarget = LOCAL_FILE_TARGET_REFERENCE.test(String(userPrompt || ''))
+  const routedSpecs = hasLocalFileTarget
     ? stableSpecs.filter((spec) => toolName(spec) !== 'read_artifact_source')
     : stableSpecs
+  const excludedTools = hasLocalFileTarget
+    && stableSpecs.some((spec) => toolName(spec) === 'read_artifact_source')
+    ? [{
+        name: 'read_artifact_source',
+        stage: 'chat_capability',
+        reason: 'local_file_target_not_managed_artifact',
+      }]
+    : []
+  let selectedSpecs
+  let intentToolNames = []
   if (capabilityMode === 'execute') {
     const requiredNames = resolveRequiredChatToolNames({
       userPrompt,
@@ -267,14 +300,48 @@ export function selectChatToolSpecs({
       executionRequired,
       specs: routedSpecs,
     })
-    return requiredNames
+    intentToolNames = requiredNames ? [...requiredNames].sort().slice(0, 256) : []
+    selectedSpecs = requiredNames
       ? routedSpecs.filter((spec) => requiredNames.has(toolName(spec)))
       : routedSpecs
+    if (requiredNames) {
+      const selectedNames = new Set(selectedSpecs.map(toolName))
+      for (const spec of routedSpecs) {
+        const name = toolName(spec)
+        if (name && !selectedNames.has(name)) {
+          excludedTools.push({ name, stage: 'chat_capability', reason: 'intent_policy_not_needed' })
+        }
+      }
+    }
+  } else {
+    selectedSpecs = routedSpecs.filter((spec) => {
+      const name = toolName(spec)
+      return !ORCHESTRATION_TOOL_NAMES.has(name)
+        && (ANSWER_RECOVERY_TOOL_NAMES.has(name)
+          || readOnlyMetadata(name, { userId, metadataResolver }))
+    })
+    const selectedNames = new Set(selectedSpecs.map(toolName))
+    for (const spec of routedSpecs) {
+      const name = toolName(spec)
+      if (!name || selectedNames.has(name)) continue
+      excludedTools.push({
+        name,
+        stage: 'chat_capability',
+        reason: ORCHESTRATION_TOOL_NAMES.has(name)
+          ? 'answer_mode_orchestration_hidden'
+          : 'intent_answer_mode',
+      })
+    }
   }
-  return routedSpecs.filter((spec) => {
-    const name = toolName(spec)
-    return !ORCHESTRATION_TOOL_NAMES.has(name)
-      && (ANSWER_RECOVERY_TOOL_NAMES.has(name)
-        || readOnlyMetadata(name, { userId, metadataResolver }))
+  emitSelectionDecision(onDecision, {
+    version: 1,
+    capabilityMode,
+    intentToolNames,
+    eligibleToolNames: routedSpecs.map(toolName).filter(Boolean).sort().slice(0, 256),
+    selectedToolNames: selectedSpecs.map(toolName).filter(Boolean).sort().slice(0, 256),
+    excludedTools: excludedTools
+      .sort((left, right) => left.name.localeCompare(right.name, 'en'))
+      .slice(0, 256),
   })
+  return selectedSpecs
 }

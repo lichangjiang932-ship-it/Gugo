@@ -578,6 +578,71 @@ test('short visual revisions inherit the immediately preceding file execution re
   }
 })
 
+test('behavioral revision requirements inherit a preceding file modification turn', () => {
+  for (const previousUserPrompt of [
+    '\u4f60\u6765\u4fee\u6539',
+    '\u8bf7\u4fee\u6539 E:\\\\u679c\\gallery.html \u7684\u5361\u7247\u65cb\u8f6c\u6548\u679c\u5e76\u5199\u56de\u539f\u6587\u4ef6\u3002',
+  ]) {
+    for (const userPrompt of [
+      '\u65e0\u8bba\u6211\u600e\u4e48\u65cb\u8f6c\uff0c\u56fe\u7247\u8981\u59cb\u7ec8\u9762\u5411\u6211',
+      '\u786e\u4fdd\u65cb\u8f6c\u65f6\u6bcf\u5f20\u5361\u7247\u59cb\u7ec8\u9762\u5411\u955c\u5934',
+      '\u786e\u4fdd\u8fd9\u4e2a\u6587\u4ef6\u59cb\u7ec8\u4f1a\u81ea\u52a8\u91cd\u65b0\u521b\u5efa',
+      'keep every image facing me while the ring rotates',
+    ]) {
+      assert.deepEqual(
+        namesOf(selectChat({ prompt: userPrompt, userPrompt, previousUserPrompt })),
+        LOCAL_EXECUTE_NAMES,
+        `${previousUserPrompt} -> ${userPrompt}`,
+      )
+    }
+  }
+})
+
+test('response-format requirements do not inherit file mutation intent', () => {
+  const previousUserPrompt = '\u8bf7\u4fee\u6539 E:\\\\u679c\\gallery.html \u5e76\u5199\u56de\u539f\u6587\u4ef6\u3002'
+  for (const userPrompt of [
+    'make sure you explain the code',
+    '\u786e\u4fdd\u4f60\u89e3\u91ca\u4e00\u4e0b\u4ee3\u7801',
+    '\u4fdd\u6301\u6587\u4ef6\u540d\u5728\u56de\u7b54\u4e2d\u53ef\u89c1',
+    'keep the file name visible in your answer',
+  ]) {
+    assert.deepEqual(
+      namesOf(selectChat({ prompt: userPrompt, userPrompt, previousUserPrompt })),
+      ANSWER_NAMES,
+      userPrompt,
+    )
+  }
+})
+
+test('capability decisions cap large tool catalogs without changing selection', () => {
+  const specs = Array.from({ length: 320 }, (_, index) => spec(`read_${String(index).padStart(3, '0')}`))
+  let decision = null
+  const selected = selectChatToolSpecs({
+    prompt: 'summarize the available information',
+    specs,
+    metadataResolver: () => ({ isReadOnly: true, riskClass: 'read' }),
+    onDecision: (value) => { decision = value },
+  })
+  assert.equal(selected.length, 320)
+  assert.equal(decision?.eligibleToolNames.length, 256)
+  assert.equal(decision?.selectedToolNames.length, 256)
+})
+
+test('behavioral requirements cannot invent a file mutation without execution context', () => {
+  const userPrompt = '\u65e0\u8bba\u6211\u600e\u4e48\u65cb\u8f6c\uff0c\u56fe\u7247\u8981\u59cb\u7ec8\u9762\u5411\u6211'
+  for (const previousUserPrompt of [
+    '',
+    '\u8bf7\u89e3\u91ca\u4e3a\u4ec0\u4e48 3D \u5361\u7247\u9700\u8981\u9762\u5411\u955c\u5934\u3002',
+    '\u53ea\u8bfb\u5206\u6790 E:\\\\u679c\\gallery.html\uff0c\u4e0d\u8981\u4fee\u6539\u6587\u4ef6\u3002',
+  ]) {
+    assert.deepEqual(
+      namesOf(selectChat({ prompt: userPrompt, userPrompt, previousUserPrompt })),
+      ANSWER_NAMES,
+      previousUserPrompt,
+    )
+  }
+})
+
 test('a short visual preference cannot inherit execution from an answer-only question', () => {
   assert.deepEqual(namesOf(selectChat({
     prompt: '\u989c\u8272\u518d\u6df1\u4e00\u70b9',

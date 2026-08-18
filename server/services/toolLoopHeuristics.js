@@ -1954,6 +1954,7 @@ export function selectJobToolSpecs({
   intentMode = 'auto',
   userId = null,
   metadataResolver = undefined,
+  onDecision = null,
 } = {}) {
   // Final-delivery selection is a server-owned chat control, not a user
   // capability toggle. Older clients and persisted settings do not know about
@@ -1982,8 +1983,20 @@ export function selectJobToolSpecs({
     if (name === 'set_deliverables' && origin !== 'chat') return false
     return !isFileArtifactTool(name) || allowed.has(name)
   })
+  const artifactSelectedNames = new Set(artifactFiltered.map((spec) => spec?.function?.name).filter(Boolean))
+  const artifactExcludedTools = routedSpecs
+    .map((spec) => String(spec?.function?.name || '').trim())
+    .filter((name) => name && !artifactSelectedNames.has(name))
+    .map((name) => ({
+      name,
+      stage: 'artifact_contract',
+      reason: name === 'set_deliverables'
+        ? 'turn_artifact_control_not_available'
+        : 'artifact_contract_not_requested',
+    }))
   if (origin === 'chat') {
-    return selectChatToolSpecs({
+    let chatDecision = null
+    const selected = selectChatToolSpecs({
       prompt,
       userPrompt,
       previousUserPrompt,
@@ -1992,7 +2005,36 @@ export function selectJobToolSpecs({
       executionRequired: allowed.size > 0,
       userId,
       ...(metadataResolver ? { metadataResolver } : {}),
+      onDecision: (decision) => { chatDecision = decision },
     })
+    if (typeof onDecision === 'function') {
+      try {
+        onDecision({
+          ...(chatDecision || {}),
+          excludedTools: [
+            ...artifactExcludedTools,
+            ...(Array.isArray(chatDecision?.excludedTools) ? chatDecision.excludedTools : []),
+          ].slice(0, 256),
+        })
+      } catch {
+        // Diagnostics are advisory and must never block tool selection.
+      }
+    }
+    return selected
+  }
+  if (typeof onDecision === 'function') {
+    try {
+      onDecision({
+        version: 1,
+        capabilityMode: 'job',
+        intentToolNames: [],
+        eligibleToolNames: routedSpecs.map((spec) => spec?.function?.name).filter(Boolean).sort().slice(0, 256),
+        selectedToolNames: artifactFiltered.map((spec) => spec?.function?.name).filter(Boolean).sort().slice(0, 256),
+        excludedTools: artifactExcludedTools.slice(0, 256),
+      })
+    } catch {
+      // Diagnostics are advisory and must never block tool selection.
+    }
   }
   return artifactFiltered
 }

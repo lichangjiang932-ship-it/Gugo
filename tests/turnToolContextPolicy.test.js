@@ -49,6 +49,37 @@ test('ordinary turns omit remote schemas unless the user asks for them', async (
   assert.equal(names.some((name) => name.startsWith('mcp__')), false)
 })
 
+test('Chinese web-search intent survives local-task routing and reports readiness', async () => {
+  const prompt = '联网搜索资料并修改 D:\\work\\site.html'
+  const readySpecs = await resolveTurnToolSpecs({
+    userId: null,
+    baseSpecs: SERVER_TOOL_SPECS,
+    prompt,
+    messages: [{ role: 'user', content: prompt }],
+    enabledConnectorTools: [],
+    webSearchReady: true,
+  })
+  let unavailableDecision = null
+  const unavailableSpecs = await resolveTurnToolSpecs({
+    userId: null,
+    baseSpecs: SERVER_TOOL_SPECS,
+    prompt,
+    messages: [{ role: 'user', content: prompt }],
+    enabledConnectorTools: [],
+    webSearchReady: false,
+    onDecision: (decision) => { unavailableDecision = decision },
+  })
+
+  for (const name of ['web_search', 'fetch_url', 'read_file', 'write_file']) {
+    assert.ok(namesOf(readySpecs).includes(name), `${name} should be mounted when ready`)
+  }
+  assert.equal(namesOf(unavailableSpecs).includes('web_search'), false)
+  assert.ok(namesOf(unavailableSpecs).includes('fetch_url'))
+  assert.ok(unavailableDecision?.excludedTools.some((entry) => (
+    entry.name === 'web_search' && entry.reason === 'web_search_not_ready'
+  )))
+})
+
 test('ambiguous brand words do not activate remote connectors without provider intent', async () => {
   const specs = await resolveTurnToolSpecs({
     userId: null,

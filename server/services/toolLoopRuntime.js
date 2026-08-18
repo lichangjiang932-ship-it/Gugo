@@ -85,6 +85,16 @@ const DYNAMIC_MUTATION_TOOL_NAMES = new Set([
   'bash_exec',
   'run_command',
 ])
+const CAPABILITY_CONTROL_TOOL_NAMES = new Set([
+  'Agent',
+  'manage_todos',
+  'reflect',
+  'request_clarification',
+  'request_directory',
+  'set_deliverables',
+  'sleep_until',
+])
+const MAX_CAPABILITY_TOOL_NAMES = 256
 const PRIOR_TURN_OUTCOME_MARKER = '[PRIOR TURN OUTCOME]'
 const STATUS_INQUIRY_PROMPT = /^(?:(?:请|先|那|那么|现在)\s*)?(?:(?:遇到|出现|发生)(?:了)?\s*(?:什么|哪些)?\s*(?:问题|错误|异常|阻塞)|(?:有|还有|到底有)\s*(?:什么|哪些)?\s*(?:问题|错误|异常)|(?:为什么|为何|怎么|哪里)\s*(?:会)?\s*(?:失败|报错|卡住|停止|中断|没(?:有)?完成|未完成)|(?:现在|当前)?\s*(?:是什么|什么)\s*(?:状态|进度)|(?:完成|做好|成功)(?:了)?\s*(?:吗|没有)|what\s+(?:went\s+wrong|failed)|why\s+(?:did\s+it\s+fail|is\s+it\s+stuck)|what(?:'s|\s+is)\s+the\s+(?:status|problem))(?:[了呢吗]?\s*[?？。.!！]*)$/i
 const FALSE_SUCCESS_STATUS = /(?:没有(?:任何)?(?:问题|错误|异常)|(?:已经|已|任务)(?:顺利|成功)?完成|完成了|all\s+good|completed\s+successfully)/i
@@ -345,12 +355,19 @@ function normalizeRepeatedUserRequest(value) {
   return text.trim().replace(/\s+/g, ' ')
 }
 
-function isLocalMutationContinuationRequest(value) {
+function isExplicitLocalMutationRetryRequest(value) {
   const text = normalizeRepeatedUserRequest(value)
   return /^(?:(?:继续|接着)(?:$|[\s,，:：。.!！?？]|刚才|之前|上次|原来|未完成|修改|处理|修复|完成|执行|做|这个|那个|上述)|continue(?:$|\s+(?:the|that|this|previous|unfinished|same|work|task|change|edit|fix))|go\s+ahead|proceed)(?:[\s\S]{0,80})$/i.test(text)
 }
 
-function recoverPriorLocalMutationTargets(messages, currentUserMessage) {
+function isLocalMutationContinuationRequest(value, previousValue = '', { intentMode = 'auto' } = {}) {
+  const text = normalizeRepeatedUserRequest(value)
+  const previous = normalizeRepeatedUserRequest(previousValue)
+  return isExplicitLocalMutationRetryRequest(text)
+    || shouldInheritExecutionIntent(text, previous, { intentMode })
+}
+
+function recoverPriorLocalMutationTargets(messages, currentUserMessage, { intentMode = 'auto' } = {}) {
   const history = Array.isArray(messages) ? messages : []
   const currentUserIndex = history.lastIndexOf(currentUserMessage)
   if (currentUserIndex <= 0) return { mutationTargets: [], deletionTargets: [] }
@@ -366,7 +383,7 @@ function recoverPriorLocalMutationTargets(messages, currentUserMessage) {
   if (priorUserIndex < 0
     || !currentRequest
     || (currentRequest !== previousRequest
-      && !isLocalMutationContinuationRequest(currentUserMessage?.content))) {
+      && !isLocalMutationContinuationRequest(currentRequest, previousRequest, { intentMode }))) {
     return { mutationTargets: [], deletionTargets: [] }
   }
 
@@ -458,6 +475,7 @@ export async function runToolsLoop({
   contextWindow = undefined,
   toolSpecs = undefined,
   fallbackToolSpecs = undefined,
+  toolResolutionDecision = null,
   skillId = undefined,
   approvalOrigin = 'job',
   approvalSessionId = null,
@@ -643,10 +661,10 @@ export async function runToolsLoop({
     }
     return null
   }
-  const exactWorkspaceTargetPaths = artifactDelivery.localFileTargets
+  let exactWorkspaceTargetPaths = artifactDelivery.localFileTargets
     .map((target) => String(target?.path || '').trim())
     .filter(Boolean)
-  const exactWorkspaceTargetConstraint = requestedArtifactRevisionMode === 'replace_original'
+  let exactWorkspaceTargetConstraint = requestedArtifactRevisionMode === 'replace_original'
     && ['workspace_file', 'mixed'].includes(artifactDelivery.target)
     && exactWorkspaceTargetPaths.length > 0
   const isManagedArtifactStorePath = (candidate) => (
@@ -734,6 +752,7 @@ export async function runToolsLoop({
   // manufacture another one merely because the original prompt names a format.
   const artifactDeliveryStep = !['plan', 'verify', 'finalize'].includes(String(step?.kind || ''))
   const stepArtifactTools = artifactDeliveryStep ? authorizedArtifactTools : new Set()
+  let chatToolSelectionDecision = null
   const selectedToolSpecs = selectJobToolSpecs({
     prompt: intentText,
     userPrompt: artifactAuthorizationText,
@@ -746,6 +765,7 @@ export async function runToolsLoop({
     origin: job?.origin,
     intentMode,
     userId: job?.userId || null,
+    onDecision: (decision) => { chatToolSelectionDecision = decision },
   })
   const restored = typeof loadCheckpoint === 'function' ? await loadCheckpoint() : null
   const restoredState = restored?.state && typeof restored.state === 'object'
@@ -876,14 +896,52 @@ export async function runToolsLoop({
   // trusted planning call site; every other caller remains fail-closed on the
   // standard execution/evidence contract.
   const enforceExecutionIntent = executionGuardMode !== 'read_only_exploration'
-  const recoveredPriorLocalTargets = recoverPriorLocalMutationTargets(messages, currentUserMessage)
+  const recoveredPriorLocalTargets = recoverPriorLocalMutationTargets(messages, currentUserMessage, {
+    intentMode,
+  })
+  const recoveredPriorLocalTargetPaths = [...new Set([
+    ...recoveredPriorLocalTargets.mutationTargets,
+    ...recoveredPriorLocalTargets.deletionTargets,
+  ].map((target) => String(target || '').trim()).filter((target) => (
+    target && target !== PROJECT_SCOPE_TARGET
+  )))]
   const inheritedLocalMutationContinuation = enforceExecutionIntent
-    && recoveredPriorLocalTargets.mutationTargets.length > 0
-    && isLocalMutationContinuationRequest(artifactAuthorizationText)
+    && recoveredPriorLocalTargetPaths.length > 0
+    && isLocalMutationContinuationRequest(artifactAuthorizationText, previousUserPrompt, { intentMode })
+  // A semantic revision (for example, "keep every image facing me") starts a
+  // new mutation obligation. The earlier successful write identifies the
+  // canonical file only; unlike an explicit "continue the unfinished work"
+  // retry, it must never count as this turn's mutation evidence.
+  const inheritedFreshLocalMutationRevision = inheritedLocalMutationContinuation
+    && !isExplicitLocalMutationRetryRequest(artifactAuthorizationText)
+    && !isExecutionCapabilityChallenge(artifactAuthorizationText)
   const inheritedCapabilityChallenge = enforceExecutionIntent
     && isExecutionCapabilityChallenge(executionIntentText)
     && shouldInheritExecutionIntent(executionIntentText, previousUserPrompt, { intentMode })
     && hasMutationExecutionIntent(previousUserPrompt)
+  if (inheritedLocalMutationContinuation || inheritedCapabilityChallenge) {
+    const inheritedRequestDelivery = resolveArtifactDeliveryTargets(previousUserPrompt, {
+      priorArtifacts: [],
+      priorArtifactTypes: [],
+      skillId: explicitSkillId || skillId,
+    })
+    const inheritedRequestedPaths = (Array.isArray(inheritedRequestDelivery?.localFileTargets)
+      ? inheritedRequestDelivery.localFileTargets
+      : [])
+      .map((target) => String(target?.path || '').trim())
+      .filter(Boolean)
+    // An explicit current-turn target is authoritative. Historical targets are
+    // only a path-recovery fallback for pronoun/semantic revisions that omit a
+    // filename; otherwise a request to switch from file A to file B would keep
+    // both paths writable.
+    if (exactWorkspaceTargetPaths.length === 0) {
+      exactWorkspaceTargetPaths = [...new Set([
+        ...recoveredPriorLocalTargetPaths,
+        ...inheritedRequestedPaths,
+      ])]
+    }
+    if (exactWorkspaceTargetPaths.length > 0) exactWorkspaceTargetConstraint = true
+  }
   const directExecutionRequested = enforceExecutionIntent && (
     shouldRequireExecution({
       intentMode,
@@ -900,6 +958,7 @@ export async function runToolsLoop({
     requiresPersistedArtifact
     || (directExecutionRequested && (
       hasMutationExecutionIntent(executionIntentText)
+      || inheritedLocalMutationContinuation
       || inheritedCapabilityChallenge
     )))
   const priorTurnMutationToolObserved = currentUserIndex > 0
@@ -964,6 +1023,112 @@ export async function runToolsLoop({
   let availableVerificationToolNames = activeToolSpecs
     .map(toolNameFromSpec)
     .filter((name) => VERIFICATION_TOOLS.has(name) || isCommandExecutionTool(name))
+  const capabilityDecisionSnapshot = () => {
+    const allSelectedTools = [...new Set(activeToolSpecs.map(toolNameFromSpec).filter(Boolean))].sort()
+    const selectedTools = allSelectedTools.slice(0, MAX_CAPABILITY_TOOL_NAMES)
+    const selectedToolSet = new Set(allSelectedTools)
+    const requiredCapabilities = []
+    const unmetCapabilities = []
+    if (requiresExecutionEvidence) requiredCapabilities.push('execution_evidence')
+    if (mutationExecutionRequested) {
+      requiredCapabilities.push('mutation_evidence', 'post_mutation_verification')
+      const mutationToolAvailable = allSelectedTools.some((name) => {
+        if (CAPABILITY_CONTROL_TOOL_NAMES.has(name)) return false
+        if (DYNAMIC_MUTATION_TOOL_NAMES.has(name)
+          || FILE_WRITE_TOOL_NAMES.has(name)
+          || isCommandExecutionTool(name)
+          || isFileArtifactTool(name)) return true
+        try {
+          return getToolMetadata(name, { userId: job?.userId || null }).isReadOnly === false
+        } catch {
+          return false
+        }
+      })
+      if (!mutationToolAvailable) {
+        unmetCapabilities.push({
+          capability: 'mutation_evidence',
+          reason: 'no_authorized_mutation_tool_in_turn_catalog',
+        })
+      }
+      if (!allSelectedTools.some((name) => (
+        VERIFICATION_TOOLS.has(name) || isCommandExecutionTool(name)
+      ))) {
+        unmetCapabilities.push({
+          capability: 'post_mutation_verification',
+          reason: 'no_authorized_verification_tool_in_turn_catalog',
+        })
+      }
+    }
+    if (requiresPersistedArtifact) {
+      requiredCapabilities.push('artifact_generation')
+      const missingGenerators = [...expectedArtifactTools]
+        .filter((name) => !selectedToolSet.has(name))
+        .sort()
+      if (missingGenerators.length > 0) {
+        unmetCapabilities.push({
+          capability: 'artifact_generation',
+          reason: 'required_generator_not_authorized_in_turn_catalog',
+          tools: missingGenerators.slice(0, MAX_CAPABILITY_TOOL_NAMES),
+        })
+      }
+    }
+    const upstreamExcluded = Array.isArray(toolResolutionDecision?.excludedTools)
+      ? toolResolutionDecision.excludedTools
+      : []
+    const selectionExcluded = Array.isArray(chatToolSelectionDecision?.excludedTools)
+      ? chatToolSelectionDecision.excludedTools
+      : []
+    const excludedTools = []
+    const excludedKeys = new Set()
+    for (const entry of [...upstreamExcluded, ...selectionExcluded]) {
+      const name = String(entry?.name || '').trim()
+      const stage = String(entry?.stage || '').trim()
+      const reason = String(entry?.reason || '').trim()
+      if (!name || !reason || selectedToolSet.has(name)) continue
+      const key = `${name}\u0000${stage}\u0000${reason}`
+      if (excludedKeys.has(key)) continue
+      excludedKeys.add(key)
+      excludedTools.push({ name, ...(stage ? { stage } : {}), reason })
+      if (excludedTools.length >= 256) break
+    }
+    return {
+      version: 1,
+      capabilityMode,
+      intentMode: String(intentMode || 'auto'),
+      requiredCapabilities: [...new Set(requiredCapabilities)].sort(),
+      intentToolNames: Array.isArray(chatToolSelectionDecision?.intentToolNames)
+        ? chatToolSelectionDecision.intentToolNames
+            .map((name) => String(name || '').trim())
+            .filter(Boolean)
+            .slice(0, MAX_CAPABILITY_TOOL_NAMES)
+        : [],
+      eligibleTools: Array.isArray(toolResolutionDecision?.eligibleToolNames)
+        ? toolResolutionDecision.eligibleToolNames
+            .map((name) => String(name || '').trim())
+            .filter(Boolean)
+            .slice(0, MAX_CAPABILITY_TOOL_NAMES)
+        : (Array.isArray(toolSpecs) ? toolSpecs : SERVER_TOOL_SPECS)
+            .map(toolNameFromSpec)
+            .filter(Boolean)
+            .sort()
+            .slice(0, MAX_CAPABILITY_TOOL_NAMES),
+      selectedTools,
+      dynamicallyMountedTools: [...dynamicallyMountedToolNames]
+        .sort()
+        .slice(0, MAX_CAPABILITY_TOOL_NAMES),
+      excludedTools,
+      discoveryIssues: Array.isArray(toolResolutionDecision?.discoveryIssues)
+        ? toolResolutionDecision.discoveryIssues
+            .map((issue) => ({
+              source: String(issue?.source || '').trim(),
+              reason: String(issue?.reason || '').trim(),
+            }))
+            .filter((issue) => issue.source && issue.reason)
+            .slice(0, 16)
+        : [],
+      unmetCapabilities,
+    }
+  }
   const representativeReadCalls = buildRepresentativeReadCalls(job?.prompt, job?.id)
   const requiresRepresentativeRead = job?.origin === 'chat'
     && DIRECTORY_REVIEW_INTENT.test(String(job?.userPrompt || ''))
@@ -1001,14 +1166,14 @@ export async function runToolsLoop({
     ...outputDirectoryContext,
   })
   if (shouldRestoreExecutionTools
-    && recoveredPriorLocalTargets.mutationTargets.length > 0
+    && recoveredPriorLocalTargetPaths.length > 0
     && !convo.some((message) => message?.role === 'system'
       && String(message?.content || '').includes(DYNAMIC_EXECUTION_TARGET_MARKER))) {
     convo.push({
       role: 'system',
       content: [
         DYNAMIC_EXECUTION_TARGET_MARKER,
-        `The previous execution turn successfully mutated these canonical local targets: ${recoveredPriorLocalTargets.mutationTargets.map((target) => JSON.stringify(target)).join(', ')}.`,
+        `The previous execution turn established these canonical local targets: ${recoveredPriorLocalTargetPaths.map((target) => JSON.stringify(target)).join(', ')}.`,
         'Continue against those exact formal files in place. Read the exact target before choosing an edit, preserve its path identity, and do not create a copy or substitute another path unless the user explicitly asks for one.',
       ].join(' '),
     })
@@ -1360,7 +1525,10 @@ export async function runToolsLoop({
       : []
   const recoveredHistoricalTargets = recoveredPriorLocalTargets
   const pendingMutationTargets = new Set(
-    [...restoredMutationTargets, ...recoveredHistoricalTargets.mutationTargets]
+    [
+      ...restoredMutationTargets,
+      ...(inheritedFreshLocalMutationRevision ? [] : recoveredHistoricalTargets.mutationTargets),
+    ]
       .map(normalizeMutationTarget)
       .filter(Boolean),
   )
@@ -1369,7 +1537,7 @@ export async function runToolsLoop({
       ...(Array.isArray(restoredState?.completionGuards?.pendingDeletionTargets)
         ? restoredState.completionGuards.pendingDeletionTargets
         : []),
-      ...recoveredHistoricalTargets.deletionTargets,
+      ...(inheritedFreshLocalMutationRevision ? [] : recoveredHistoricalTargets.deletionTargets),
     ]
       .map(normalizeMutationTarget)
       .filter(Boolean),
@@ -1844,6 +2012,7 @@ export async function runToolsLoop({
       progress: serializeToolProgress(progressState),
       failureRecovery: serializeFailureRecovery(failureRecovery),
       loopGuard: loopGuard.snapshot(),
+      capabilityDecision: capabilityDecisionSnapshot(),
       ...(directoryAuthorizationResolution ? { directoryAuthorizationResolution } : {}),
       completionGuards: {
         partialResultEntries: partialResultFallback.snapshot(),

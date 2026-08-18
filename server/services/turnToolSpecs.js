@@ -174,6 +174,7 @@ export function resolveTurnToolPolicy({ prompt = '', messages = [], skillIds = [
     || [...used].some((name) => name.startsWith('browser_'))
   const includeWeb = webSkill
     || /https?:\/\//i.test(text)
+    || /(?:联网|网络)\s*(?:搜索|查找|调研)/i.test(text)
     || /(?:搜索|查找|调研).{0,12}(?:网络|网上|互联网|在线资料)|(?:网络|网上|互联网).{0,12}(?:搜索|查找|调研)/i.test(text)
     || /\b(?:web search|search (?:the )?(?:web|internet|online)|research online|fetch (?:the )?(?:url|page))\b/i.test(text)
     || used.has('web_search') || used.has('fetch_url')
@@ -242,6 +243,31 @@ function mcpSpecMatchesPolicy(name, policy) {
   if (policy.explicitMcp) return true
   const prefix = name.split('__').slice(0, 2).join('__')
   return [...policy.historicalTools].some((used) => used === name || used.startsWith(`${prefix}__`))
+}
+
+function emitToolDecision(onDecision, decision) {
+  if (typeof onDecision !== 'function') return
+  try {
+    onDecision(decision)
+  } catch {
+    // Diagnostics are advisory and must never block tool discovery.
+  }
+}
+
+function serializeToolPolicy(policy) {
+  return {
+    legacyFullCatalog: policy.legacyFullCatalog === true,
+    localTask: policy.localTask === true,
+    includeWeb: policy.includeWeb === true,
+    includeBrowser: policy.includeBrowser === true,
+    includeMcp: policy.includeMcp === true,
+    includeAllConnectors: policy.includeAllConnectors === true,
+    connectorProviders: [...(policy.connectorProviders || [])].sort(),
+    artifactKinds: [...(policy.artifactKinds || [])].sort(),
+    includeGit: policy.includeGit === true,
+    includeDocker: policy.includeDocker === true,
+    includeWait: policy.includeWait === true,
+  }
 }
 
 export function normalizeServerToolsConfig(value) {
@@ -340,9 +366,11 @@ export async function resolveTurnToolSpecs({
   prompt = '',
   messages = [],
   skillIds = [],
+  onDecision = null,
 } = {}) {
   const policy = resolveTurnToolPolicy({ prompt, messages, skillIds })
   const resolvedPermissionMode = effectivePermissionMode(userId, permissionMode)
+  const discoveryIssues = []
   let mcpSpecs = []
   if (policy.includeMcp) {
     try {
@@ -350,11 +378,16 @@ export async function resolveTurnToolSpecs({
       mcpSpecs = Array.isArray(result?.specs) ? result.specs : []
     } catch {
       // Optional MCP discovery must not block the chat turn.
+      discoveryIssues.push({ source: 'mcp', reason: 'discovery_failed' })
     }
   }
   let browserSpecs = []
   if (policy.includeBrowser) {
-    try { browserSpecs = listRegisteredBrowserToolSpecs() } catch { /* optional browser tools */ }
+    try {
+      browserSpecs = listRegisteredBrowserToolSpecs()
+    } catch {
+      discoveryIssues.push({ source: 'browser', reason: 'discovery_failed' })
+    }
   }
   const merged = new Map()
   for (const spec of [...baseSpecs, ...mcpSpecs, ...browserSpecs]) {
@@ -367,30 +400,69 @@ export async function resolveTurnToolSpecs({
       connectorTools = listEnabledIntegrationToolNames({ userId })
     } catch {
       connectorTools = []
+      discoveryIssues.push({ source: 'integrations', reason: 'discovery_failed' })
     }
   }
   const connectorNames = new Set(CONNECTOR_TOOL_NAMES)
   const enabledConnectorNames = new Set(connectorTools)
+  const excludedByName = new Map()
+  const exclude = (name, reason, stage = 'availability') => {
+    if (name && !excludedByName.has(name)) excludedByName.set(name, { name, stage, reason })
+    return false
+  }
   const readySpecs = [...merged.values()].filter((spec) => {
     const name = toolName(spec)
-    if (!isVisibleToUser(userId, name)) return false
+    if (!isVisibleToUser(userId, name)) return exclude(name, 'permission_hidden')
     // "Allow all" grants path access directly in localFileAccessService. Do
     // not advertise a directory-authorization action that can only add a
     // redundant pause and contradicts the effective runtime authority.
-    if (resolvedPermissionMode === 'bypass' && name === 'request_directory') return false
-    if (name === 'web_search') return webSearchReady === true && policy.includeWeb
-    if (name === 'fetch_url') return policy.includeWeb
-    if (name.startsWith('browser_')) return policy.includeBrowser
-    if (name.startsWith('mcp__')) return policy.includeMcp && mcpSpecMatchesPolicy(name, policy)
+    if (resolvedPermissionMode === 'bypass' && name === 'request_directory') {
+      return exclude(name, 'permission_mode_redundant')
+    }
+    if (name === 'web_search') {
+      if (!policy.includeWeb) return exclude(name, 'intent_policy_not_needed', 'intent_policy')
+      return webSearchReady === true || exclude(name, 'web_search_not_ready')
+    }
+    if (name === 'fetch_url') {
+      return policy.includeWeb || exclude(name, 'intent_policy_not_needed', 'intent_policy')
+    }
+    if (name.startsWith('browser_')) {
+      return policy.includeBrowser || exclude(name, 'intent_policy_not_needed', 'intent_policy')
+    }
+    if (name.startsWith('mcp__')) {
+      return policy.includeMcp && mcpSpecMatchesPolicy(name, policy)
+        || exclude(name, 'intent_policy_not_needed', 'intent_policy')
+    }
     if (connectorNames.has(name)) {
       const provider = connectorProvider(name)
-      return enabledConnectorNames.has(name)
-        && (policy.includeAllConnectors || policy.connectorProviders.has(provider))
+      if (!enabledConnectorNames.has(name)) return exclude(name, 'integration_disabled')
+      if (!policy.includeAllConnectors && !policy.connectorProviders.has(provider)) {
+        return exclude(name, 'connector_not_requested', 'intent_policy')
+      }
+      return true
     }
-    if (policy.localTask && !localToolMatchesPolicy(name, policy)) return false
+    if (policy.localTask && !localToolMatchesPolicy(name, policy)) {
+      return exclude(name, 'intent_policy_not_needed', 'intent_policy')
+    }
     return true
   })
-  return applyServerToolsConfig(readySpecs, toolsConfig)
+  const resolvedSpecs = applyServerToolsConfig(readySpecs, toolsConfig)
     .map(canonicalizeToolSpec)
     .sort((left, right) => String(left?.function?.name || '').localeCompare(String(right?.function?.name || ''), 'en'))
+  const resolvedNames = new Set(resolvedSpecs.map(toolName))
+  for (const spec of readySpecs) {
+    const name = toolName(spec)
+    if (name && !resolvedNames.has(name)) exclude(name, 'user_disabled', 'user_config')
+  }
+  emitToolDecision(onDecision, {
+    version: 1,
+    policy: serializeToolPolicy(policy),
+    candidateToolNames: [...merged.keys()].sort().slice(0, 256),
+    eligibleToolNames: [...resolvedNames].sort().slice(0, 256),
+    excludedTools: [...excludedByName.values()]
+      .sort((left, right) => left.name.localeCompare(right.name, 'en'))
+      .slice(0, 256),
+    discoveryIssues: discoveryIssues.slice(0, 16),
+  })
+  return resolvedSpecs
 }

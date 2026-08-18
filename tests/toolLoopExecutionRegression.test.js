@@ -1253,6 +1253,150 @@ test('a first-turn visual edit exposes write tools and rejects a false missing-t
   assert.equal(modelCalls, 5)
 })
 
+test('a behavioral revision rejects a post-read missing-tool claim and rewrites the canonical target', async () => {
+  const target = 'E:\\果\\gallery.html'
+  const originalRequest = `请修改 ${target} 的图片圆环旋转效果并写回原文件。`
+  const previousUserPrompt = '你来修改'
+  const revision = '无论我怎么旋转，图片要始终面向我'
+  const names = ['read_file', 'write_file', 'edit_file', 'apply_patch']
+  const specs = names.map((name) => SERVER_TOOL_SPECS.find((item) => item?.function?.name === name))
+  assert.equal(specs.every(Boolean), true)
+
+  const executed = []
+  const checkpoints = []
+  let modelCalls = 0
+  let updated = false
+  const result = await runToolsLoop({
+    job: {
+      id: 'job-behavioral-file-revision',
+      userId: null,
+      origin: 'chat',
+      prompt: revision,
+      userPrompt: revision,
+      previousUserPrompt,
+    },
+    step: { id: 'step-behavioral-file-revision', kind: 'chat' },
+    messages: [
+      { role: 'user', content: originalRequest },
+      { role: 'assistant', content: '我可以先说明修改方案。' },
+      { role: 'user', content: previousUserPrompt },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{
+          id: 'prior-gallery-write',
+          type: 'function',
+          function: {
+            name: 'write_file',
+            arguments: JSON.stringify({ path: target, content: '<!doctype html><title>round</title>' }),
+          },
+        }],
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'prior-gallery-write',
+        name: 'write_file',
+        content: JSON.stringify({ ok: true, path: target, changedPaths: [target] }),
+      },
+      { role: 'assistant', content: '已直接修改 gallery.html。' },
+      { role: 'user', content: revision },
+    ],
+    toolSpecs: specs,
+    approvalMode: 'bypass',
+    maxIters: 5,
+    enableToolHooks: false,
+    saveCheckpoint: async (checkpoint) => {
+      checkpoints.push(structuredClone(checkpoint))
+      return true
+    },
+    runModel: async ({ messages, tools }) => {
+      modelCalls += 1
+      const visibleNames = tools.map((item) => item?.function?.name).filter(Boolean)
+      for (const name of names) assert.ok(visibleNames.includes(name), `${name} must remain mounted`)
+
+      if (modelCalls === 1) {
+        const systemText = messages
+          .filter((item) => item.role === 'system')
+          .map((item) => item.content)
+          .join('\n')
+        assert.match(systemText, /\[CANONICAL LOCAL FILE CONTINUATION\]/)
+        assert.ok(systemText.includes(target.replaceAll('\\', '/')))
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'read-facing-gallery-before-change',
+            type: 'function',
+            function: { name: 'read_file', arguments: JSON.stringify({ path: target }) },
+          }],
+        }
+      }
+      if (modelCalls === 2) {
+        return { content: '当前轮次没有文件写入工具，所以我不能直接修改。', toolCalls: [] }
+      }
+      if (modelCalls === 3) {
+        const systemText = messages
+          .filter((item) => item.role === 'system')
+          .map((item) => item.content)
+          .join('\n')
+        assert.match(systemText, /\[EXECUTION EVIDENCE REQUIRED\]/)
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'write-facing-gallery',
+            type: 'function',
+            function: {
+              name: 'write_file',
+              arguments: JSON.stringify({ path: target, content: '<!doctype html><title>always-facing</title>' }),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 4) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'verify-facing-gallery',
+            type: 'function',
+            function: { name: 'read_file', arguments: JSON.stringify({ path: target }) },
+          }],
+        }
+      }
+      return { content: '已让所有图片在旋转时始终面向镜头，并回读验证。', toolCalls: [] }
+    },
+    executeTool: async ({ name, args }) => {
+      executed.push(name)
+      assert.equal(args.path, target)
+      if (name === 'write_file') {
+        updated = true
+        return { ok: true, path: target, bytes: Buffer.byteLength(args.content), changedPaths: [target] }
+      }
+      assert.equal(name, 'read_file')
+      return {
+        ok: true,
+        path: target,
+        content: updated
+          ? '<!doctype html><title>always-facing</title>'
+          : '<!doctype html><title>round</title>',
+        truncated: false,
+      }
+    },
+  })
+
+  assert.equal(result.text, '已让所有图片在旋转时始终面向镜头，并回读验证。')
+  assert.equal(result.incomplete, undefined)
+  assert.deepEqual(executed, ['read_file', 'write_file', 'read_file'])
+  assert.equal(modelCalls, 5)
+  const capabilityDecision = checkpoints.at(-1)?.capabilityDecision
+  assert.deepEqual(capabilityDecision?.requiredCapabilities, [
+    'execution_evidence',
+    'mutation_evidence',
+    'post_mutation_verification',
+  ])
+  assert.equal(capabilityDecision?.capabilityMode, 'execute')
+  for (const name of names) assert.ok(capabilityDecision?.selectedTools.includes(name), name)
+  assert.deepEqual(capabilityDecision?.unmetCapabilities, [])
+})
+
 test('a capability challenge after a false refusal rechecks tools and completes the prior mutation', async () => {
   const target = 'E:\\果\\gallery.html'
   const previousUserPrompt = `请修改 ${target} 的卡片翻转方向并写回原文件。`

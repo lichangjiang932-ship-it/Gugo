@@ -1206,6 +1206,7 @@ export class TurnEngine {
     const effectiveSkillIds = preparedSkillIds.length ? preparedSkillIds : normalizeIds(skillIds)
     const effectiveApprovalMode = this.deps.readApprovalMode({ userId })
     let resolvedToolSpecs = this.deps.toolSpecs
+    let toolResolutionDecision = null
     try {
       const authorizationAwareBaseSpecs = restoreDirectoryAuthorizationToolSpecs(
         this.deps.toolSpecs,
@@ -1220,10 +1221,35 @@ export class TurnEngine {
         prompt: content,
         messages,
         skillIds: effectiveSkillIds,
+        onDecision: (decision) => { toolResolutionDecision = decision },
       })
-      if (Array.isArray(resolved)) resolvedToolSpecs = resolved
+      if (Array.isArray(resolved)) {
+        resolvedToolSpecs = resolved
+        if (!toolResolutionDecision) {
+          toolResolutionDecision = {
+            version: 1,
+            eligibleToolNames: resolved
+              .map((spec) => String(spec?.function?.name || '').trim())
+              .filter(Boolean)
+              .sort()
+              .slice(0, 256),
+            excludedTools: [],
+            discoveryIssues: [],
+          }
+        }
+      }
     } catch {
       // MCP/browser discovery is optional; retain the built-in tool set on failure.
+      toolResolutionDecision = {
+        version: 1,
+        eligibleToolNames: resolvedToolSpecs
+          .map((spec) => String(spec?.function?.name || '').trim())
+          .filter(Boolean)
+          .sort()
+          .slice(0, 256),
+        excludedTools: [],
+        discoveryIssues: [{ source: 'tool_resolution', reason: 'discovery_failed' }],
+      }
     }
     const activeSkillId = effectiveSkillIds.at(0) || null
     const baselineToolCallIds = collectToolCallIds(messages)
@@ -1333,6 +1359,7 @@ export class TurnEngine {
         // its recovery catalog must remain the same user-configured catalog
         // resolved above. Never let it fall back to the global server catalog.
         fallbackToolSpecs: resolvedToolSpecs,
+        toolResolutionDecision,
         skillId: activeSkillId,
         executeTool: this.deps.executeTool,
         approvalOrigin: 'chat',
