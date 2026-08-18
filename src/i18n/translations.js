@@ -481,6 +481,9 @@ const LOCAL_FILES_TRANSLATIONS = {
 
 const WORKSPACE_TRUST_TRANSLATIONS = {
   zh: {
+    authorizationLifetime: '授权保留时间',
+    authorizationSession: '仅本会话（服务重启后失效）',
+    authorizationPersistent: '永久记住',
     workspaceTrustTitle: '信任此工作区配置',
     workspaceTrustHint: '此信任控制共享工作区能力与 .gugo/config.json。独立授权的本地目录按 read_only/read_write 模式生效；代码执行状态见权限中心。',
     workspaceTrusted: '已信任工作区配置。',
@@ -489,6 +492,9 @@ const WORKSPACE_TRUST_TRANSLATIONS = {
     codeExecutionTitle: '代码执行运行时', codeExecutionHint: '仅明确授权的 read_write 目录可执行代码；单文件、只读和“全部文件”授权不会获得 Shell 权限。是否询问由当前审批模式决定；“全部放行”不会再询问。', codeExecutionRuntime: '后端运行时', codeExecutionToolGate: '用户工具 Gate', codeExecutionWritableDirectories: '可执行读写目录', codeExecutionEnabled: '已启用', codeExecutionDisabled: '已关闭', codeExecutionLoading: '检查中', codeExecutionUnknown: '未报告', codeExecutionChecking: '正在读取代码执行状态…', codeExecutionRuntimeUnknown: '后端未报告代码执行状态；请重启服务以应用最新版本。', codeExecutionRuntimeBlocked: '当前部署已关闭本地代码执行。可由管理员检查 LOCAL_CODE_EXECUTION_ENABLED。', codeExecutionToolBlocked: '代码执行运行时可用，但 bash_exec 已在权限中心关闭。', codeExecutionNeedsWritableDirectory: '代码执行可用；请先给目标文件所在目录授予 read_write 权限。', codeExecutionReady: '代码执行已就绪，可在 {count} 个已授权读写目录中运行命令。',
   },
   en: {
+    authorizationLifetime: 'Authorization lifetime',
+    authorizationSession: 'This session (cleared when the service restarts)',
+    authorizationPersistent: 'Remember permanently',
     workspaceTrustTitle: 'Trust this workspace configuration',
     workspaceTrustHint: 'This trust controls shared-workspace capabilities and .gugo/config.json. Separately authorized local folders follow their read_only/read_write grants; see Permissions for code-execution status.',
     workspaceTrusted: 'Workspace configuration trusted.',
@@ -497,6 +503,9 @@ const WORKSPACE_TRUST_TRANSLATIONS = {
     codeExecutionTitle: 'Code execution runtime', codeExecutionHint: 'Code runs only inside explicitly authorized read_write folders. File-only, read-only, and all-files grants never add shell authority. Prompts follow the active approval mode; Bypass all asks no further questions.', codeExecutionRuntime: 'Backend runtime', codeExecutionToolGate: 'User tool gate', codeExecutionWritableDirectories: 'Executable write folders', codeExecutionEnabled: 'Enabled', codeExecutionDisabled: 'Disabled', codeExecutionLoading: 'Checking', codeExecutionUnknown: 'Not reported', codeExecutionChecking: 'Checking code-execution status…', codeExecutionRuntimeUnknown: 'The backend did not report code-execution status. Restart the service to apply the latest version.', codeExecutionRuntimeBlocked: 'Local code execution is disabled for this deployment. An administrator can check LOCAL_CODE_EXECUTION_ENABLED.', codeExecutionToolBlocked: 'The runtime is available, but bash_exec is disabled in Permissions.', codeExecutionNeedsWritableDirectory: 'Code execution is available. Authorize the target file’s folder with read_write access first.', codeExecutionReady: 'Code execution is ready in {count} authorized read/write folder(s).',
   },
   ja: {
+    authorizationLifetime: '許可の保持期間',
+    authorizationSession: 'このセッションのみ（サービス再起動時に解除）',
+    authorizationPersistent: '永続的に記憶',
     workspaceTrustTitle: 'このワークスペース設定を信頼',
     workspaceTrustHint: 'この信頼設定は共有ワークスペース機能と .gugo/config.json を制御します。個別に許可したローカルフォルダーは read_only/read_write 設定に従います。',
     workspaceTrusted: 'ワークスペース設定を信頼しました。',
@@ -505,6 +514,9 @@ const WORKSPACE_TRUST_TRANSLATIONS = {
     codeExecutionTitle: 'コード実行ランタイム', codeExecutionHint: 'コードは明示的に read_write 許可したフォルダー内だけで実行できます。単一ファイル、読み取り専用、全ファイル許可では Shell 権限は追加されません。確認の有無は承認モードに従い、「すべて許可」では確認しません。', codeExecutionRuntime: 'バックエンド', codeExecutionToolGate: 'ユーザーツール Gate', codeExecutionWritableDirectories: '実行可能フォルダー', codeExecutionEnabled: '有効', codeExecutionDisabled: '無効', codeExecutionLoading: '確認中', codeExecutionUnknown: '未報告', codeExecutionChecking: 'コード実行状態を確認しています…', codeExecutionRuntimeUnknown: 'バックエンドがコード実行状態を報告していません。最新版を反映するためサービスを再起動してください。', codeExecutionRuntimeBlocked: 'この環境ではローカルコード実行が無効です。管理者は LOCAL_CODE_EXECUTION_ENABLED を確認してください。', codeExecutionToolBlocked: 'ランタイムは利用できますが、権限センターで bash_exec が無効です。', codeExecutionNeedsWritableDirectory: 'コード実行は利用できます。対象ファイルのフォルダーを read_write で許可してください。', codeExecutionReady: '{count} 個の許可済み読み書きフォルダーでコード実行を利用できます。',
   },
   ko: {
+    authorizationLifetime: '권한 유지 기간',
+    authorizationSession: '이 세션만 (서비스 재시작 시 해제)',
+    authorizationPersistent: '영구적으로 기억',
     workspaceTrustTitle: '이 작업 공간 설정 신뢰',
     workspaceTrustHint: '이 신뢰 설정은 공유 작업 공간 기능과 .gugo/config.json을 제어합니다. 별도로 허용한 로컬 폴더는 read_only/read_write 권한을 따릅니다.',
     workspaceTrusted: '작업 공간 설정을 신뢰했습니다.',
@@ -513,6 +525,9 @@ const WORKSPACE_TRUST_TRANSLATIONS = {
     codeExecutionTitle: '코드 실행 런타임', codeExecutionHint: '코드는 명시적으로 read_write 허용한 폴더 안에서만 실행됩니다. 단일 파일, 읽기 전용 및 전체 파일 허용은 Shell 권한을 추가하지 않습니다. 확인 여부는 승인 모드를 따르며 “모두 허용”에서는 다시 묻지 않습니다.', codeExecutionRuntime: '백엔드 런타임', codeExecutionToolGate: '사용자 도구 Gate', codeExecutionWritableDirectories: '실행 가능한 쓰기 폴더', codeExecutionEnabled: '활성', codeExecutionDisabled: '비활성', codeExecutionLoading: '확인 중', codeExecutionUnknown: '보고되지 않음', codeExecutionChecking: '코드 실행 상태를 확인하는 중…', codeExecutionRuntimeUnknown: '백엔드가 코드 실행 상태를 보고하지 않았습니다. 최신 버전을 적용하려면 서비스를 다시 시작하세요.', codeExecutionRuntimeBlocked: '이 배포에서는 로컬 코드 실행이 꺼져 있습니다. 관리자는 LOCAL_CODE_EXECUTION_ENABLED를 확인하세요.', codeExecutionToolBlocked: '런타임은 사용 가능하지만 권한 센터에서 bash_exec가 꺼져 있습니다.', codeExecutionNeedsWritableDirectory: '코드 실행을 사용할 수 있습니다. 대상 파일 폴더를 read_write로 허용하세요.', codeExecutionReady: '{count}개의 허용된 읽기/쓰기 폴더에서 코드 실행을 사용할 수 있습니다.',
   },
   'zh-TW': {
+    authorizationLifetime: '授權保留時間',
+    authorizationSession: '僅限本次工作階段（服務重新啟動後失效）',
+    authorizationPersistent: '永久記住',
     workspaceTrustTitle: '信任此工作區設定',
     workspaceTrustHint: '此信任控制共享工作區能力與 .gugo/config.json。獨立授權的本機資料夾依 read_only/read_write 模式生效；程式碼執行狀態請見權限中心。',
     workspaceTrusted: '已信任工作區設定。',

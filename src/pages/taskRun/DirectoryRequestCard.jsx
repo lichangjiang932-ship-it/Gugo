@@ -44,11 +44,11 @@ export default function DirectoryRequestCard({ request, busy, error = '', onAuth
           value={authorizationScope}
           onChange={(event) => setAuthorizationScope(event.target.value)}
           disabled={!!busy}
-          aria-label="Authorization lifetime"
+          aria-label={t('localFiles.authorizationLifetime')}
           className="h-9 rounded-md border border-sky-500/30 bg-paper px-2 text-xs text-ink"
         >
-          <option value="session">仅本会话 / This session</option>
-          <option value="persistent">永久记住 / Remember</option>
+          <option value="session">{t('localFiles.authorizationSession')}</option>
+          <option value="persistent">{t('localFiles.authorizationPersistent')}</option>
         </select>
         <button
           type="button"

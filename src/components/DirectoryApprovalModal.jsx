@@ -104,7 +104,7 @@ export default function DirectoryApprovalModal({ open, request, busy, error, onA
 
           <div className="sm:col-span-2">
             <label htmlFor="directory-approval-scope" className="mb-1.5 block text-xs text-ink-soft">
-              授权保留时间 / Authorization lifetime
+              {t('localFiles.authorizationLifetime')}
             </label>
             <select
               id="directory-approval-scope"
@@ -113,8 +113,8 @@ export default function DirectoryApprovalModal({ open, request, busy, error, onA
               disabled={!!busy}
               className="h-10 w-full rounded-md border border-ink/15 bg-paper px-3 text-sm text-ink disabled:opacity-60"
             >
-              <option value="session">仅本会话（服务重启后失效） / This session</option>
-              <option value="persistent">永久记住 / Remember permanently</option>
+              <option value="session">{t('localFiles.authorizationSession')}</option>
+              <option value="persistent">{t('localFiles.authorizationPersistent')}</option>
             </select>
           </div>
 

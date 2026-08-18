@@ -29,6 +29,9 @@ const labels = {
   'taskSteering.chooseDirectory': '选择目录',
   'taskSteering.directorySecurityHint': '只有明确选择的目录会被授权。',
   'taskSteering.directoryBrowserSelectCurrent': '选择当前目录',
+  'localFiles.authorizationLifetime': '授权保留时间',
+  'localFiles.authorizationSession': '仅本会话（服务重启后失效）',
+  'localFiles.authorizationPersistent': '永久记住',
 }
 const t = (key) => labels[key] || key
 
@@ -72,10 +75,16 @@ test('目录请求卡保留建议路径、最小权限并通过内联浏览更�
     })
 
     const input = rootElement.querySelector('input')
-    const select = rootElement.querySelector('select')
+    const [accessModeSelect, authorizationScopeSelect] = rootElement.querySelectorAll('select')
     const buttons = [...rootElement.querySelectorAll('button')]
     assert.equal(input.value, 'D:\\Reports')
-    assert.equal(select.value, 'read_only')
+    assert.equal(accessModeSelect.value, 'read_only')
+    assert.equal(authorizationScopeSelect.value, 'session')
+    assert.equal(authorizationScopeSelect.getAttribute('aria-label'), '授权保留时间')
+    assert.deepEqual(
+      [...authorizationScopeSelect.options].map((option) => option.textContent),
+      ['仅本会话（服务重启后失效）', '永久记住'],
+    )
     assert.match(rootElement.textContent, /读取季度报告/)
 
     await click(dom, buttons.find((button) => button.textContent.includes('授权此路径')))
