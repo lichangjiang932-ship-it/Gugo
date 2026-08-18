@@ -44,6 +44,7 @@ import { handleMediaRequest } from './server/routes/mediaRoutes.js'
 import { handleAttachmentRequest } from './server/routes/attachmentRoutes.js'
 import { handleWebSearchRequest } from './server/routes/webSearchRoutes.js'
 import { handleRuntimeConfigRequest } from './server/routes/runtimeConfigRoutes.js'
+import { handleAuditRequest } from './server/routes/auditRoutes.js'
 import { attachTurnWebSocketServer } from './server/services/turnWebSocket.js'
 
 function authAccountPlugin() {
@@ -178,6 +179,10 @@ function fallbackApiPlugin() {
         }
         if (req.url?.startsWith('/api/hooks')) {
           handleHooksRequest(req, res)
+          return
+        }
+        if (req.url?.startsWith('/api/audit')) {
+          handleAuditRequest(req, res)
           return
         }
         if (req.url?.startsWith('/api/mcp/') || req.url?.startsWith('/api/tools/mcp/')) {
