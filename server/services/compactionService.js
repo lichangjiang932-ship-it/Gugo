@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { getDb } from '../db.js'
 
 const COMMAND_EXECUTION_TOOL_NAMES = new Set(['bash_exec', 'run_command'])
@@ -11,17 +11,81 @@ const MIN_SUMMARY_INPUT_TOKEN_BUDGET = 2_048
 const SUMMARY_INPUT_OVERHEAD_TOKENS = 768
 const MAX_EVIDENCE_DIGEST_CHARS = 16_000
 
-export function validateToolCallChain(messages = []) {
-  const seen = new Set()
+function inspectToolPairing(messages = [], { allowPending = false } = {}) {
+  const pending = new Map()
+  const completed = new Set()
   for (const message of messages) {
     if (message?.role === 'assistant' && Array.isArray(message.tool_calls)) {
       for (const call of message.tool_calls) {
-        if (call?.id) seen.add(call.id)
+        const id = String(call?.id || '').trim()
+        if (!id) return { ok: false, error: 'assistant tool_call is missing an id' }
+        if (pending.has(id) || completed.has(id)) {
+          return { ok: false, error: `duplicate assistant tool_call id: ${id}` }
+        }
+        pending.set(id, call)
       }
     }
-    if (message?.role === 'tool' && message.tool_call_id && !seen.has(message.tool_call_id)) {
-      return { ok: false, error: `tool message without prior assistant tool_call: ${message.tool_call_id}` }
+    if (message?.role === 'tool') {
+      const id = String(message.tool_call_id || '').trim()
+      if (!id || !pending.has(id)) {
+        return { ok: false, error: `tool message without prior assistant tool_call: ${id || '(missing id)'}` }
+      }
+      pending.delete(id)
+      completed.add(id)
     }
+  }
+  if (!allowPending && pending.size > 0) {
+    return {
+      ok: false,
+      error: `assistant tool_call without matching tool result: ${[...pending.keys()].join(', ')}`,
+      pendingToolCallIds: [...pending.keys()],
+    }
+  }
+  return { ok: true }
+}
+
+export function validateToolCallChain(messages = []) {
+  return inspectToolPairing(messages, { allowPending: true })
+}
+
+export function toolPairingBalanced(messages = []) {
+  return inspectToolPairing(messages, { allowPending: false })
+}
+
+function compactCheckpointDigest(messages = []) {
+  return createHash('sha256').update(JSON.stringify(messages)).digest('hex')
+}
+
+export function createCompactCheckpointSource(messages = []) {
+  const source = Array.isArray(messages) ? messages : []
+  const pairing = toolPairingBalanced(source)
+  if (!pairing.ok) return { ok: false, error: pairing.error }
+  return {
+    ok: true,
+    value: {
+      v: 1,
+      messageCount: source.length,
+      sha256: compactCheckpointDigest(source),
+      toolPairingBalanced: true,
+    },
+  }
+}
+
+export function validateCompactCheckpointSource(marker, messages = []) {
+  if (!marker || typeof marker !== 'object' || Array.isArray(marker)) {
+    return { ok: false, error: 'compaction checkpoint source marker is missing' }
+  }
+  if (marker.v !== 1 || marker.toolPairingBalanced !== true) {
+    return { ok: false, error: 'compaction checkpoint source marker is incompatible' }
+  }
+  const source = Array.isArray(messages) ? messages : []
+  if (marker.messageCount !== source.length) {
+    return { ok: false, error: 'compaction checkpoint source message count does not match archive' }
+  }
+  const pairing = toolPairingBalanced(source)
+  if (!pairing.ok) return pairing
+  if (marker.sha256 !== compactCheckpointDigest(source)) {
+    return { ok: false, error: 'compaction checkpoint source digest does not match archive' }
   }
   return { ok: true }
 }
@@ -273,6 +337,11 @@ export function buildCompaction({
     }
   }
 
+  const sourcePairing = toolPairingBalanced(messages)
+  if (!sourcePairing.ok) {
+    return { ok: false, error: `compaction refused: ${sourcePairing.error}` }
+  }
+
   const allSystem = messages.filter((message) => message.role === 'system')
   const system = allSystem.slice(-Math.min(32, maxMessages - 2))
   const nonSystem = messages.filter((message) => message.role !== 'system')
@@ -336,6 +405,11 @@ export function buildCompaction({
   }
   head = head.filter((_, index) => !hoistedIndexes.has(index))
 
+  const checkpointSource = createCompactCheckpointSource(head)
+  if (!checkpointSource.ok) {
+    return { ok: false, error: `compaction boundary is not tool-pair balanced: ${checkpointSource.error}` }
+  }
+
   const resolvedSummaryText = String(summaryText || structuredMechanicalSummary(head)).slice(0, MAX_SUMMARY_CHARS)
   const summaryMessage = {
     role: 'assistant',
@@ -344,12 +418,13 @@ export function buildCompaction({
       type: 'context_summary',
       compaction: true,
       compressedCount: head.length,
+      compactCheckpointSource: checkpointSource.value,
       outboundView: true,
       forced: messages.length > maxMessages || allSystem.length !== system.length,
     },
   }
   const compactedMessages = [...system, summaryMessage, ...hoisted, ...tail]
-  const compactedChain = validateToolCallChain(compactedMessages)
+  const compactedChain = toolPairingBalanced(compactedMessages)
   if (!compactedChain.ok) {
     return { ok: false, error: compactedChain.error }
   }

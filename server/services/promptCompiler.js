@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import { getAgentTemplateSystemPrompt } from './agentTemplates.js'
 import { getRuntimeSkill, listRuntimeSkillCatalog } from './skillRegistry.js'
-import { getCompactionArchive } from './compactionService.js'
+import { getCompactionArchive, validateCompactCheckpointSource } from './compactionService.js'
 import { boundCompactionSummary } from './contextCompactionRuntime.js'
 import { resolveStoredMessagesAfterCompaction } from './turnMessageContext.js'
 import { buildPersonaManifestBlock } from './agentStore.js'
@@ -484,6 +484,9 @@ export function findCompactionArchiveReference(recentMessages) {
         referenceMessageId: String(message?.id || '').trim() || null,
         firstKeptMessageId: String(message?.modelContext?.compactionFirstKeptMessageId || '').trim() || null,
         lastCompactedMessageId: String(message?.modelContext?.compactionLastCompactedMessageId || '').trim() || null,
+        compactCheckpointSource: message?.meta?.compactCheckpointSource
+          || message?.modelContext?.compactCheckpointSource
+          || null,
       }
     }
   }
@@ -495,6 +498,13 @@ function loadArchive({ userId, sessionId, reference }) {
   try {
     const archive = getCompactionArchive({ userId, id: reference.id })
     if (!archive || (sessionId && archive.sessionId !== sessionId)) return null
+    if (reference.compactCheckpointSource) {
+      const checkpoint = validateCompactCheckpointSource(
+        reference.compactCheckpointSource,
+        archive.archivedMessages,
+      )
+      if (!checkpoint.ok) return null
+    }
     return { archive, reference }
   } catch {
     return null

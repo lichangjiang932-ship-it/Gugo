@@ -5,8 +5,11 @@ import {
   buildCompaction,
   buildCompactionEvidenceMessages,
   buildCompactionSummaryBatches,
+  createCompactCheckpointSource,
   extractCompactionState,
   MAX_OUTBOUND_MESSAGES,
+  toolPairingBalanced,
+  validateCompactCheckpointSource,
   validateToolCallChain,
 } from '../server/services/compactionService.js'
 
@@ -106,6 +109,60 @@ test('compaction keeps the latest parallel tool-call batch and every matching re
   assert.equal(result.archivedMessages.includes(assistantCall), false)
   assert.equal(toolResults.some((message) => result.archivedMessages.includes(message)), false)
   assert.equal(validateToolCallChain(result.outboundMessages).ok, true)
+})
+
+test('compaction refuses an unresolved tool call instead of archiving an orphan boundary', () => {
+  const result = buildCompaction({
+    messages: [
+      { role: 'user', content: 'Run the pending operation.' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{
+          id: 'pending-write',
+          type: 'function',
+          function: { name: 'write_file', arguments: '{"path":"pending.txt"}' },
+        }],
+      },
+    ],
+    keepMessages: 1,
+    force: true,
+  })
+
+  assert.equal(result.ok, false)
+  assert.match(result.error, /without matching tool result/u)
+})
+
+test('compaction checkpoint source proves the archived range is balanced and unchanged', () => {
+  const archivedPair = [
+    { role: 'user', content: 'Read the file.' },
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [{
+        id: 'checkpoint-read',
+        type: 'function',
+        function: { name: 'read_file', arguments: '{"path":"proof.txt"}' },
+      }],
+    },
+    { role: 'tool', tool_call_id: 'checkpoint-read', name: 'read_file', content: '{"ok":true}' },
+  ]
+  const result = buildCompaction({
+    messages: [...archivedPair, { role: 'user', content: 'Continue with the proof.' }],
+    keepMessages: 1,
+    force: true,
+  })
+  const marker = result.summaryMessage.meta.compactCheckpointSource
+
+  assert.equal(result.ok, true)
+  assert.equal(toolPairingBalanced(result.outboundMessages).ok, true)
+  assert.deepEqual(result.archivedMessages, archivedPair)
+  assert.equal(validateCompactCheckpointSource(marker, result.archivedMessages).ok, true)
+  assert.equal(createCompactCheckpointSource(result.archivedMessages).value.sha256, marker.sha256)
+  assert.equal(validateCompactCheckpointSource(marker, [
+    ...result.archivedMessages.slice(0, -1),
+    { ...result.archivedMessages.at(-1), content: '{"ok":false}' },
+  ]).ok, false)
 })
 
 test('semantic summary input is split into bounded batches instead of serializing the whole archive', () => {

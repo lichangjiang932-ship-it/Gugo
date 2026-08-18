@@ -450,10 +450,14 @@ function normalizeCompactionRecovery(value) {
   if (!archiveId) return null
   const firstKeptMessageId = String(value?.firstKeptMessageId || '').trim()
   const lastCompactedMessageId = String(value?.lastCompactedMessageId || '').trim()
+  const compactCheckpointSource = value?.compactCheckpointSource
   return {
     archiveId,
     ...(firstKeptMessageId ? { firstKeptMessageId } : {}),
     ...(lastCompactedMessageId ? { lastCompactedMessageId } : {}),
+    ...(compactCheckpointSource && typeof compactCheckpointSource === 'object'
+      ? { compactCheckpointSource }
+      : {}),
   }
 }
 
