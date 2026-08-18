@@ -2,9 +2,8 @@ import { WebSocketServer } from 'ws'
 import { getSessionByToken } from '../db.js'
 import { listTurnEvents, subscribeTurnEvents, turnEventForClient } from './turnEventStore.js'
 import { subscribeTurnActivities } from './turnActivityBus.js'
-import { decideApproval, getPendingApproval } from './approvalStore.js'
-import { releaseApproval } from './approvalGate.js'
-import { getJobRuntime } from './jobRuntime.js'
+import { decideApprovalRequest } from './approvalDecisionService.js'
+import { logWarn } from '../utils/logger.js'
 import {
   createTurnWebSocketFrame,
   validateTurnWebSocketClientFrame,
@@ -25,6 +24,33 @@ function tokenFromRequest(request) {
     .split(',').map((value) => value.trim())
   const bearer = protocol.find((value) => value.startsWith('bearer.'))
   return url.searchParams.get('token') || (bearer ? bearer.slice(7) : null)
+}
+
+function logRejectedClientFrame(rejection, { userId, sink } = {}) {
+  logWarn('realtime.protocol', 'rejected client frame', {
+    userId,
+    code: rejection.code,
+    expectedVersion: rejection.expectedVersion,
+    receivedVersion: rejection.receivedVersion,
+    issueCount: rejection.issues?.length,
+  }, sink)
+}
+
+export function parseTurnWebSocketClientFrame(raw, { userId, logSink } = {}) {
+  let message
+  try {
+    message = JSON.parse(String(raw))
+  } catch {
+    const rejection = { ok: false, code: 'INVALID_JSON' }
+    logRejectedClientFrame(rejection, { userId, sink: logSink })
+    return rejection
+  }
+
+  const validation = validateTurnWebSocketClientFrame(message)
+  if (!validation.ok) {
+    logRejectedClientFrame(validation, { userId, sink: logSink })
+  }
+  return validation
 }
 
 export function pollTurnSubscriptions({
@@ -146,12 +172,7 @@ export function attachTurnWebSocketServer(server) {
     send(socket, { type: 'ready' })
 
     socket.on('message', (raw) => {
-      let message
-      try { message = JSON.parse(String(raw)) } catch {
-        send(socket, { type: 'error', code: 'INVALID_JSON' })
-        return
-      }
-      const validation = validateTurnWebSocketClientFrame(message)
+      const validation = parseTurnWebSocketClientFrame(raw, { userId: request.userId })
       if (!validation.ok) {
         send(socket, {
           type: 'error',
@@ -166,7 +187,7 @@ export function attachTurnWebSocketServer(server) {
         })
         return
       }
-      message = validation.value
+      const message = validation.value
       if (message?.type === 'subscribe.turn') {
         const sessionId = String(message.sessionId || '')
         const turnId = String(message.turnId || '')
@@ -203,23 +224,22 @@ export function attachTurnWebSocketServer(server) {
           send(socket, { type: 'error', code: 'INVALID_APPROVAL_DECISION' })
           return
         }
-        const existing = getPendingApproval({ userId: request.userId, id })
-        if (!existing) {
-          send(socket, { type: 'error', code: 'APPROVAL_NOT_FOUND' })
-          return
+        try {
+          const result = decideApprovalRequest({
+            userId: request.userId,
+            id,
+            decision,
+            editedArgs: decision === 'edit' ? message.args : null,
+            decidedBy: request.userId,
+          })
+          send(socket, { type: 'approval.resolved', approvalId: id, result })
+        } catch (error) {
+          send(socket, {
+            type: 'error',
+            code: error?.code || 'APPROVAL_DECISION_FAILED',
+            message: error?.message || 'Approval decision failed.',
+          })
         }
-        const result = decideApproval({
-          userId: request.userId,
-          id,
-          decision,
-          editedArgs: decision === 'edit' ? message.args : null,
-          decidedBy: request.userId,
-        })
-        releaseApproval(id)
-        if (existing.origin === 'job' && existing.jobId) {
-          getJobRuntime().resumeAfterApproval(existing.jobId, { userId: request.userId, stepId: existing.stepId })
-        }
-        send(socket, { type: 'approval.resolved', approvalId: id, result })
       }
     })
     socket.on('close', clearSubscriptions)

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import Database from 'better-sqlite3'
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-turn-checkpoint-'))
 process.env.APP_DATA_DIR = tempDir
@@ -152,4 +153,84 @@ test('checkpoint event and mutable state commit atomically', () => {
     sessionId: 'checkpoint-session',
     turnId: 'turn-atomic',
   }).state.iterations, 1)
+})
+
+test('checkpoint event and state have no externally visible intermediate state', () => {
+  const writer = getDb()
+  const databasePath = writer.pragma('database_list').find((entry) => entry.name === 'main')?.file
+  assert.ok(databasePath)
+  const observer = new Database(databasePath, { readonly: true })
+  const scope = ['checkpoint-user', 'checkpoint-session', 'turn-isolation']
+  const duringTransaction = []
+
+  try {
+    writer.function('observe_checkpoint_pair', (stage) => {
+      duringTransaction.push({
+        stage,
+        events: observer.prepare(`
+          SELECT COUNT(*) AS count FROM turn_events
+           WHERE user_id = ? AND session_id = ? AND turn_id = ?
+        `).get(...scope).count,
+        checkpoints: observer.prepare(`
+          SELECT COUNT(*) AS count FROM turn_checkpoints
+           WHERE user_id = ? AND session_id = ? AND turn_id = ?
+        `).get(...scope).count,
+      })
+      return 0
+    })
+    writer.exec(`
+      CREATE TEMP TRIGGER observe_checkpoint_pair_after_event_insert
+      AFTER INSERT ON turn_events
+      WHEN NEW.id = 'isolation-checkpoint-event'
+      BEGIN
+        SELECT observe_checkpoint_pair('after-event-insert');
+      END;
+      CREATE TEMP TRIGGER observe_checkpoint_pair_after_checkpoint_insert
+      AFTER INSERT ON turn_checkpoints
+      WHEN NEW.turn_id = 'turn-isolation'
+      BEGIN
+        SELECT observe_checkpoint_pair('after-checkpoint-insert');
+      END
+    `)
+
+    appendTurnEvent({
+      userId: scope[0],
+      event: createTurnEvent({
+        id: 'isolation-checkpoint-event',
+        sessionId: scope[1],
+        turnId: scope[2],
+        sequence: 0,
+        type: 'turn.checkpoint',
+        payload: {
+          storage: 'turn_checkpoints',
+          checkpointVersion: 1,
+          iterations: 2,
+          toolCallCount: 0,
+        },
+        createdAt: 600,
+      }),
+      checkpointState: { messages: [], iterations: 2 },
+    })
+
+    assert.deepEqual(duringTransaction, [
+      { stage: 'after-event-insert', events: 0, checkpoints: 0 },
+      { stage: 'after-checkpoint-insert', events: 0, checkpoints: 0 },
+    ])
+    assert.deepEqual({
+      events: observer.prepare(`
+        SELECT COUNT(*) AS count FROM turn_events
+         WHERE user_id = ? AND session_id = ? AND turn_id = ?
+      `).get(...scope).count,
+      checkpoints: observer.prepare(`
+        SELECT COUNT(*) AS count FROM turn_checkpoints
+         WHERE user_id = ? AND session_id = ? AND turn_id = ?
+      `).get(...scope).count,
+    }, { events: 1, checkpoints: 1 })
+  } finally {
+    writer.exec(`
+      DROP TRIGGER IF EXISTS observe_checkpoint_pair_after_event_insert;
+      DROP TRIGGER IF EXISTS observe_checkpoint_pair_after_checkpoint_insert;
+    `)
+    observer.close()
+  }
 })

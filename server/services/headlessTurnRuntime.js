@@ -6,6 +6,7 @@ import { getDb } from '../db.js'
 import { TurnEngine } from './TurnEngine.js'
 import { decideApproval } from './approvalStore.js'
 import { releaseApproval } from './approvalGate.js'
+import { createTurnExecutionLeaseCoordinator } from './turnExecutionLeaseRuntime.js'
 import {
   listTurnEvents,
   subscribeTurnEvents,
@@ -150,7 +151,12 @@ export async function runHeadlessTurn({
   const subscribeEvents = dependencies.subscribeEvents || subscribeTurnEvents
   const decide = dependencies.decideApproval || decideApproval
   const release = dependencies.releaseApproval || releaseApproval
-  const createEngine = dependencies.createEngine || ((options) => new TurnEngine(options))
+  const createEngine = dependencies.createEngine || ((options) => new TurnEngine({
+    ...options,
+    executionLeases: createTurnExecutionLeaseCoordinator({
+      leaseMs: Number(options?.env?.TURN_EXECUTION_LEASE_MS) || undefined,
+    }),
+  }))
   const engine = dependencies.engine || createEngine({
     readApprovalMode: () => permissionMode,
     env,
@@ -211,15 +217,17 @@ export async function runHeadlessTurn({
     }
   }
 
+  const wait = dependencies.wait || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
   let unsubscribe = () => {}
   try {
     unsubscribe = subscribeEvents(scope, deliver)
+    let recoveryOutcome = null
     if (resumeTurnId) {
       drainPersistedEvents()
       // A recovered checkpoint may already be waiting on an approval. Resolve
       // replayed approval events before the loop re-enters its durable waiter.
       await Promise.all([...pendingApprovalTasks])
-      await engine.recoverTurn({ ...scope, authMode })
+      recoveryOutcome = await engine.recoverTurn({ ...scope, authMode })
     } else {
       const content = String(prompt || '').trim()
       if (!content) throw new HeadlessTurnError('PROMPT_REQUIRED', 'prompt is required', 2)
@@ -232,6 +240,25 @@ export async function runHeadlessTurn({
       })
     }
 
+    // A crashed process may leave a still-valid durable execution lease. The
+    // first recovery attempt must not steal it, but a headless invocation has
+    // no background recovery worker to retry after that lease expires. Keep
+    // re-entering the atomic recovery path until this process owns the turn or
+    // another process writes a durable stop event.
+    while (
+      resumeTurnId
+      && recoveryOutcome
+      && !recoveryOutcome.terminal
+      && !recoveryOutcome.paused
+      && recoveryOutcome.locallyActive === false
+      && !STOP_EVENT_TYPES.has(lastEvent?.type)
+    ) {
+      await wait(250)
+      drainPersistedEvents()
+      if (STOP_EVENT_TYPES.has(lastEvent?.type)) break
+      recoveryOutcome = await engine.recoverTurn({ ...scope, authMode })
+    }
+
     await engine.waitForTurn(scope)
     drainPersistedEvents()
     await Promise.all([...pendingApprovalTasks])
@@ -240,7 +267,7 @@ export async function runHeadlessTurn({
     // A different process may own the execution lease. Its events are durable
     // but are not published through this process's in-memory subscription.
     while (!STOP_EVENT_TYPES.has(lastEvent?.type)) {
-      await (dependencies.wait || ((ms) => new Promise((resolve) => setTimeout(resolve, ms))))(250)
+      await wait(250)
       drainPersistedEvents()
     }
     return { ...resultForLastEvent({ sessionId: resolvedSessionId, turnId, lastEvent }), workspace }

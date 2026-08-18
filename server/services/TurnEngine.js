@@ -4,7 +4,8 @@ import { callBackgroundModel, callStreamingModelWithTools, getModelContextWindow
 import { createTurnActivity, createTurnEvent } from '../../shared/turnEvents.js'
 import { canonicalizeSkillId } from '../../shared/artifactIntent.js'
 import { normalizeModelUsage } from '../../shared/modelUsage.js'
-import { runToolLoop, SERVER_TOOL_SPECS } from './toolLoopRuntime.js'
+import { runToolLoop } from './loop/index.js'
+import { SERVER_TOOL_SPECS } from './toolLoopRuntime.js'
 import {
   claimLocalChatSession,
   deleteMessage,

@@ -8,7 +8,7 @@ const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-approval-routes-'))
 process.env.APP_DATA_DIR = tempDir
 
 const { createAppServer } = await import('../server/appServer.js')
-const { closeDb } = await import('../server/db.js')
+const { closeDb, getDb } = await import('../server/db.js')
 const { createPendingApproval } = await import('../server/services/approvalStore.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
@@ -86,7 +86,7 @@ test('approval settings persist isolated risk overrides and allow clearing them'
   assert.deepEqual((await cleared.json()).riskOverrides, [])
 })
 
-test('permission widening requires confirmation and bypass justification while tightening is immediate', async () => {
+test('permission widening uses the durable inbox while tightening remains immediate', async () => {
   const user = issueTestSession({ email: 'approval-mode-transition@example.com' })
 
   const rejected = await fetch(`${origin}/api/approvals/settings`, {
@@ -98,13 +98,36 @@ test('permission widening requires confirmation and bypass justification while t
   assert.equal((await rejected.json()).error.code, 'PERMISSION_ESCALATION_REQUIRED')
   assert.equal((await (await fetch(`${origin}/api/approvals/settings`, { headers: headers(user.token) })).json()).mode, 'normal')
 
-  const widened = await fetch(`${origin}/api/approvals/settings`, {
+  const widenedRequest = await fetch(`${origin}/api/approvals/settings`, {
     method: 'POST',
     headers: headers(user.token),
     body: JSON.stringify({ mode: 'acceptEdits', approveEscalation: true }),
   })
-  assert.equal(widened.status, 200)
-  assert.equal((await widened.json()).mode, 'acceptEdits')
+  const widenedRequestBody = await widenedRequest.json()
+  assert.equal(widenedRequest.status, 202)
+  assert.equal(widenedRequestBody.mode, 'normal')
+  assert.equal(widenedRequestBody.modeTransition.pending, true)
+  assert.equal(widenedRequestBody.modeTransition.requestedMode, 'acceptEdits')
+
+  const denied = await fetch(`${origin}/api/approvals/${widenedRequestBody.modeTransition.approvalId}/decide`, {
+    method: 'POST', headers: headers(user.token), body: JSON.stringify({ decision: 'deny' }),
+  })
+  assert.equal(denied.status, 200)
+  assert.equal((await denied.json()).approvalSettings.mode, 'normal')
+
+  const approvedRequest = await fetch(`${origin}/api/approvals/settings`, {
+    method: 'POST',
+    headers: headers(user.token),
+    body: JSON.stringify({ mode: 'acceptEdits', approveEscalation: true }),
+  })
+  const approvedRequestBody = await approvedRequest.json()
+  const approved = await fetch(`${origin}/api/approvals/${approvedRequestBody.modeTransition.approvalId}/decide`, {
+    method: 'POST', headers: headers(user.token), body: JSON.stringify({ decision: 'approve' }),
+  })
+  const approvedBody = await approved.json()
+  assert.equal(approved.status, 200)
+  assert.equal(approvedBody.approvalSettings.mode, 'acceptEdits')
+  assert.equal(approvedBody.modeTransition.widened, true)
 
   const noReason = await fetch(`${origin}/api/approvals/settings`, {
     method: 'POST',
@@ -120,9 +143,23 @@ test('permission widening requires confirmation and bypass justification while t
     body: JSON.stringify({ mode: 'bypass', approveEscalation: true, justification: 'trusted local release workspace' }),
   })
   const bypassBody = await bypass.json()
-  assert.equal(bypass.status, 200)
-  assert.equal(bypassBody.mode, 'bypass')
-  assert.equal(bypassBody.modeHistory[0].justification, 'trusted local release workspace')
+  assert.equal(bypass.status, 202)
+  assert.equal(bypassBody.mode, 'acceptEdits')
+  const bypassApproved = await fetch(`${origin}/api/approvals/${bypassBody.modeTransition.approvalId}/decide`, {
+    method: 'POST', headers: headers(user.token), body: JSON.stringify({ decision: 'approve' }),
+  })
+  const bypassApprovedBody = await bypassApproved.json()
+  assert.equal(bypassApprovedBody.approvalSettings.mode, 'bypass')
+  assert.equal(bypassApprovedBody.approvalSettings.modeHistory[0].justification, 'trusted local release workspace')
+
+  const bypassApprovedAgain = await fetch(`${origin}/api/approvals/${bypassBody.modeTransition.approvalId}/decide`, {
+    method: 'POST', headers: headers(user.token), body: JSON.stringify({ decision: 'approve' }),
+  })
+  const bypassApprovedAgainBody = await bypassApprovedAgain.json()
+  assert.equal(bypassApprovedAgain.status, 200)
+  assert.equal(bypassApprovedAgainBody.ok, false)
+  assert.equal(bypassApprovedAgainBody.alreadyDecided, true)
+  assert.equal(bypassApprovedAgainBody.approvalSettings.mode, 'bypass')
 
   const tightened = await fetch(`${origin}/api/approvals/settings`, {
     method: 'POST',
@@ -133,9 +170,14 @@ test('permission widening requires confirmation and bypass justification while t
   assert.equal(tightened.status, 200)
   assert.equal(tightenedBody.mode, 'normal')
   assert.equal(tightenedBody.modeHistory[0].transitionKind, 'tightened')
+
+  const history = await fetch(`${origin}/api/approvals?status=all`, { headers: headers(user.token) })
+  const permissionApprovals = (await history.json()).approvals
+    .filter((approval) => approval.toolName === 'permission_mode_change')
+  assert.deepEqual(permissionApprovals.map((approval) => approval.status).sort(), ['approved', 'approved', 'denied'])
 })
 
-test('plan mode cannot widen to normal or bypass without explicit approval', async () => {
+test('plan mode widening requires inbox approval and a denied request leaves plan active', async () => {
   const user = issueTestSession({ email: 'approval-plan-transition@example.com' })
   const plan = await fetch(`${origin}/api/approvals/settings`, {
     method: 'POST', headers: headers(user.token), body: JSON.stringify({ mode: 'plan' }),
@@ -144,13 +186,122 @@ test('plan mode cannot widen to normal or bypass without explicit approval', asy
 
   for (const mode of ['normal', 'bypass']) {
     const response = await fetch(`${origin}/api/approvals/settings`, {
-      method: 'POST', headers: headers(user.token), body: JSON.stringify({ mode }),
+      method: 'POST',
+      headers: headers(user.token),
+      body: JSON.stringify({
+        mode,
+        ...(mode === 'bypass' ? { justification: 'verify explicit escalation approval' } : {}),
+      }),
     })
     assert.equal(response.status, 409, mode)
     assert.equal((await response.json()).error.code, 'PERMISSION_ESCALATION_REQUIRED')
   }
   const settings = await fetch(`${origin}/api/approvals/settings`, { headers: headers(user.token) })
   assert.equal((await settings.json()).mode, 'plan')
+
+  const normalRequest = await fetch(`${origin}/api/approvals/settings`, {
+    method: 'POST', headers: headers(user.token), body: JSON.stringify({ mode: 'normal', approveEscalation: true }),
+  })
+  const normalRequestBody = await normalRequest.json()
+  assert.equal(normalRequest.status, 202)
+  assert.equal(normalRequestBody.mode, 'plan')
+  const normalApproval = await fetch(`${origin}/api/approvals/${normalRequestBody.modeTransition.approvalId}/decide`, {
+    method: 'POST', headers: headers(user.token), body: JSON.stringify({ decision: 'approve' }),
+  })
+  assert.equal((await normalApproval.json()).approvalSettings.mode, 'normal')
+
+  await fetch(`${origin}/api/approvals/settings`, {
+    method: 'POST', headers: headers(user.token), body: JSON.stringify({ mode: 'plan' }),
+  })
+  const bypassRequest = await fetch(`${origin}/api/approvals/settings`, {
+    method: 'POST',
+    headers: headers(user.token),
+    body: JSON.stringify({
+      mode: 'bypass',
+      approveEscalation: true,
+      justification: 'temporary trusted plan escape',
+    }),
+  })
+  const bypassRequestBody = await bypassRequest.json()
+  assert.equal(bypassRequest.status, 202)
+  const bypassDenied = await fetch(`${origin}/api/approvals/${bypassRequestBody.modeTransition.approvalId}/decide`, {
+    method: 'POST', headers: headers(user.token), body: JSON.stringify({ decision: 'deny' }),
+  })
+  assert.equal((await bypassDenied.json()).approvalSettings.mode, 'plan')
+})
+
+test('permission escalation arguments cannot be edited and stale approvals fail closed', async () => {
+  const user = issueTestSession({ email: 'approval-mode-stale@example.com' })
+  const request = await fetch(`${origin}/api/approvals/settings`, {
+    method: 'POST', headers: headers(user.token),
+    body: JSON.stringify({ mode: 'acceptEdits', approveEscalation: true }),
+  })
+  const requestBody = await request.json()
+  const approvalId = requestBody.modeTransition.approvalId
+
+  const edited = await fetch(`${origin}/api/approvals/${approvalId}/decide`, {
+    method: 'POST', headers: headers(user.token),
+    body: JSON.stringify({ decision: 'edit', args: { fromMode: 'normal', toMode: 'bypass' } }),
+  })
+  assert.equal(edited.status, 400)
+  assert.equal((await edited.json()).error.code, 'PERMISSION_APPROVAL_EDIT_FORBIDDEN')
+
+  const remembered = await fetch(`${origin}/api/approvals/${approvalId}/decide`, {
+    method: 'POST', headers: headers(user.token),
+    body: JSON.stringify({ decision: 'approve', remember: true }),
+  })
+  assert.equal(remembered.status, 400)
+  assert.equal((await remembered.json()).error.code, 'PERMISSION_APPROVAL_REMEMBER_FORBIDDEN')
+
+  const tightened = await fetch(`${origin}/api/approvals/settings`, {
+    method: 'POST', headers: headers(user.token), body: JSON.stringify({ mode: 'plan' }),
+  })
+  assert.equal((await tightened.json()).mode, 'plan')
+  const stale = await fetch(`${origin}/api/approvals/${approvalId}/decide`, {
+    method: 'POST', headers: headers(user.token), body: JSON.stringify({ decision: 'approve' }),
+  })
+  assert.equal(stale.status, 409)
+  const staleBody = await stale.json()
+  assert.equal(staleBody.error.code, 'PERMISSION_APPROVAL_STALE')
+  assert.equal(staleBody.error.currentMode, 'plan')
+  assert.equal(staleBody.approval.status, 'cancelled')
+
+  const staleDetail = await fetch(`${origin}/api/approvals/${approvalId}`, { headers: headers(user.token) })
+  assert.equal((await staleDetail.json()).approval.status, 'cancelled')
+})
+
+test('permission approval and mode migration roll back together when the event write fails', async () => {
+  const user = issueTestSession({ email: 'approval-mode-atomic@example.com' })
+  const request = await fetch(`${origin}/api/approvals/settings`, {
+    method: 'POST', headers: headers(user.token),
+    body: JSON.stringify({ mode: 'acceptEdits', approveEscalation: true }),
+  })
+  const requestBody = await request.json()
+  const approvalId = requestBody.modeTransition.approvalId
+  const db = getDb()
+  db.exec(`
+    CREATE TRIGGER fail_permission_mode_event
+    BEFORE INSERT ON permission_mode_events
+    BEGIN
+      SELECT RAISE(ABORT, 'forced permission event failure');
+    END;
+  `)
+  try {
+    const response = await fetch(`${origin}/api/approvals/${approvalId}/decide`, {
+      method: 'POST', headers: headers(user.token), body: JSON.stringify({ decision: 'approve' }),
+    })
+    assert.equal(response.status, 500)
+    assert.equal((await response.json()).error.code, 'APPROVAL_DECISION_FAILED')
+  } finally {
+    db.exec('DROP TRIGGER IF EXISTS fail_permission_mode_event')
+  }
+
+  const detail = await fetch(`${origin}/api/approvals/${approvalId}`, { headers: headers(user.token) })
+  assert.equal((await detail.json()).approval.status, 'pending')
+  const settings = await fetch(`${origin}/api/approvals/settings`, { headers: headers(user.token) })
+  const settingsBody = await settings.json()
+  assert.equal(settingsBody.mode, 'normal')
+  assert.deepEqual(settingsBody.modeHistory, [])
 })
 
 test('pending approval shows up in list, count and detail', async () => {
@@ -198,7 +349,7 @@ test('another user gets 404 (not 403) on detail and decide, leaking nothing', as
     body: JSON.stringify({ decision: 'approve' }),
   })
   assert.equal(decide.status, 404)
-  assert.equal((await decide.json()).error.code, 'not_found')
+  assert.equal((await decide.json()).error.code, 'APPROVAL_NOT_FOUND')
 
   // owner 的记录仍是 pending,没有被陌生人改动
   const ownerDetail = await fetch(`${origin}/api/approvals/${created.id}`, { headers: headers(owner.token) })

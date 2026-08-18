@@ -106,6 +106,7 @@ export const DEFAULT_APPROVAL_SETTINGS = Object.freeze({
   rememberedGrants: [],
   riskOverrides: [],
   modeHistory: [],
+  modeTransition: null,
   modes: PERMISSION_MODES,
 })
 
@@ -124,6 +125,9 @@ function normalizeSettings(data) {
       ? data.riskOverrides.filter((item) => item?.toolName && TOOL_RISK_CLASSES.includes(item.riskClass))
       : [],
     modeHistory: Array.isArray(data.modeHistory) ? data.modeHistory : [],
+    modeTransition: data.modeTransition && typeof data.modeTransition === 'object'
+      ? data.modeTransition
+      : null,
     modes: Array.isArray(data.modes) && data.modes.length ? data.modes : PERMISSION_MODES,
   }
 }

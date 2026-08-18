@@ -3475,6 +3475,7 @@ test('tool_choice compatibility fallback remains bounded across checkpoint resum
     },
   }
 
+  const restartCause = new Error('simulated restart after compatible tool_choice fallback')
   await assert.rejects(
     runToolsLoop({
       ...sharedOptions,
@@ -3487,12 +3488,17 @@ test('tool_choice compatibility fallback remains bounded across checkpoint resum
           && guards.artifactRecoveryPhase === 'force'
           && guards.forcedArtifactAttemptPending === true) {
           crashInjected = true
-          throw new Error('simulated restart after compatible tool_choice fallback')
+          throw restartCause
         }
         return true
       },
     }),
-    /simulated restart/,
+    (error) => {
+      assert.equal(error?.code, 'CHECKPOINT_FLUSH_FAILED')
+      assert.equal(error?.retryable, true)
+      assert.equal(error?.cause, restartCause)
+      return true
+    },
   )
 
   assert.equal(crashInjected, true)
@@ -3767,6 +3773,7 @@ test('artifact recovery resumes at a maxIters boundary and succeeds on the fourt
     },
   }
 
+  const restartCause = new Error('simulated process restart after forced artifact failure')
   await assert.rejects(
     runToolsLoop({
       ...sharedOptions,
@@ -3781,12 +3788,17 @@ test('artifact recovery resumes at a maxIters boundary and succeeds on the fourt
             && guards.artifactRecoveryPhase === 'diagnose'
             && guards.forcedArtifactAttemptPending === false) {
           crashInjected = true
-          throw new Error('simulated process restart after forced artifact failure')
+          throw restartCause
         }
         return true
       },
     }),
-    /simulated process restart/,
+    (error) => {
+      assert.equal(error?.code, 'CHECKPOINT_FLUSH_FAILED')
+      assert.equal(error?.retryable, true)
+      assert.equal(error?.cause, restartCause)
+      return true
+    },
   )
 
   assert.equal(crashInjected, true)

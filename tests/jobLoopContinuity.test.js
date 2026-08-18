@@ -507,7 +507,12 @@ test('pending 策略提示在 checkpoint 中断后恢复且不会重放已完成
         return true
       },
     }),
-    /simulated advisory checkpoint interruption/,
+    (error) => {
+      assert.equal(error?.code, 'CHECKPOINT_FLUSH_FAILED')
+      assert.equal(error?.retryable, true)
+      assert.match(error?.cause?.message || '', /simulated advisory checkpoint interruption/)
+      return true
+    },
   )
 
   assert.equal(initialReadExecutions, 4)

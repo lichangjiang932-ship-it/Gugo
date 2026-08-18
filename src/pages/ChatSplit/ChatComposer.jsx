@@ -161,7 +161,7 @@ export default function ChatComposer({
       }}
     >
       {isDraggingFile && (
-        <div className="absolute inset-2 z-20 rounded-md border-2 border-dashed border-ember bg-ember-soft/80 flex items-center justify-center pointer-events-none">
+        <div className="absolute inset-2 z-20 rounded-card border-2 border-dashed border-ember bg-ember-soft/80 flex items-center justify-center pointer-events-none">
           <span className="inline-flex items-center gap-2 text-sm text-ember font-medium">
             <Paperclip className="w-4 h-4" />
             {t('chatComposer.dropFiles')}
@@ -203,7 +203,7 @@ export default function ChatComposer({
             {skillCommand.command && (
               <span
                 data-testid="active-skill-command"
-                className="mt-0.5 inline-flex h-6 shrink-0 items-center rounded-md bg-ink/5 px-2 font-mono text-xs font-medium text-ink-soft"
+                className="mt-0.5 inline-flex h-6 shrink-0 items-center rounded-control bg-ink/5 px-2 font-mono text-xs font-medium text-ink-soft"
               >
                 {skillCommand.command}
               </span>
@@ -253,7 +253,7 @@ export default function ChatComposer({
                 rows={1}
               />
               {showInputHistoryHint && (
-                <p id="chat-input-history-hint" className="mt-0.5 hidden text-[11px] leading-4 text-ink-fade peer-focus:block">
+                <p id="chat-input-history-hint" className="mt-0.5 hidden text-xs leading-4 text-ink-fade peer-focus:block">
                   {t('chatComposer.inputHistoryHint')}
                 </p>
               )}

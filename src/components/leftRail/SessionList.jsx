@@ -135,7 +135,7 @@ export default function SessionList({
         aria-haspopup="menu"
         aria-expanded={isMenuOpen}
         aria-controls={isMenuOpen ? menuId : undefined}
-        className={`absolute right-1.5 top-1.5 rounded-md p-1 text-ink-fade transition-opacity hover:bg-paper hover:text-ink focus:opacity-100 focus:outline-none ${isMenuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+        className={`absolute right-1.5 top-1.5 rounded-control p-1 text-ink-fade transition-opacity hover:bg-paper hover:text-ink focus:opacity-100 focus:outline-none ${isMenuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
       >
         <MoreHorizontal className="h-4 w-4" />
       </button>
@@ -146,17 +146,17 @@ export default function SessionList({
         aria-label={t('nav.sessionMenu')}
         onKeyDown={moveMenuFocus}
         style={contextPosition ? { left: contextPosition.left, top: contextPosition.top } : undefined}
-        className={`${contextPosition ? 'fixed' : 'absolute right-0 top-9'} z-50 min-w-44 rounded-lg border border-ink/10 bg-paper p-1.5 shadow-xl`}
+        className={`${contextPosition ? 'fixed' : 'absolute right-0 top-9'} z-50 min-w-44 rounded-card border border-ink/10 bg-paper p-1.5 shadow-xl`}
       >
-        <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); onPinToggle(session) }} className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
+        <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); onPinToggle(session) }} className="flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
           {session.pinnedAt ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
           {session.pinnedAt ? t('nav.unpinSession') : t('nav.pinSession')}
         </button>
-        <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); onArchiveToggle(session) }} className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
+        <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); onArchiveToggle(session) }} className="flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
           {session.archivedAt ? <ArchiveRestore className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}
           {session.archivedAt ? t('nav.unarchiveSession') : t('nav.archiveSession')}
         </button>
-        <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); onDelete(session) }} className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
+        <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); onDelete(session) }} className="flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
           <X className="h-3.5 w-3.5" />{t('nav.deleteSession')}
         </button>
       </div>}
@@ -165,14 +165,14 @@ export default function SessionList({
 
   return <section aria-label={t('nav.history')}>
     <div className="mb-1 flex h-7 items-center gap-0.5">
-      <button type="button" onClick={() => { onMenuClose(); setExpanded((value) => !value) }} aria-expanded={expanded} className="flex h-7 min-w-0 flex-1 items-center gap-1 rounded-md px-1.5 text-[11px] font-medium text-ink-fade hover:bg-ink/[0.035] hover:text-ink-soft">
+      <button type="button" onClick={() => { onMenuClose(); setExpanded((value) => !value) }} aria-expanded={expanded} className="flex h-7 min-w-0 flex-1 items-center gap-1 rounded-control px-1.5 text-xs font-medium text-ink-fade hover:bg-ink/[0.035] hover:text-ink-soft">
         <ChevronDown className={`h-[18px] w-[18px] transition-transform ${expanded ? '' : '-rotate-90'}`} />
         <span className="flex-1 text-left">{t('nav.history')}</span>
       </button>
-      <button type="button" onClick={() => { onMenuClose(); onSearch?.() }} title={t('nav.searchPlaceholder')} aria-label={t('nav.searchPlaceholder')} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-fade hover:bg-ink/[0.035] hover:text-ink-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/30">
+      <button type="button" onClick={() => { onMenuClose(); onSearch?.() }} title={t('nav.searchPlaceholder')} aria-label={t('nav.searchPlaceholder')} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-control text-ink-fade hover:bg-ink/[0.035] hover:text-ink-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/30">
         <Search className="h-[18px] w-[18px]" />
       </button>
     </div>
-    {expanded && (groupedSessions.length ? <div className="flex flex-col gap-3">{groupedSessions.map((group) => <div key={group.project} className="min-w-0"><div className="mb-1 px-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-ghost">{group.project}</div><div className="flex flex-col gap-1">{group.sessions.map((session, index) => renderSession(session, index))}</div></div>)}</div> : <div className="px-3 py-8 text-center"><p className="text-xs text-ink-fade">{t('nav.emptyTitle')}</p><p className="mt-1 text-[11px] leading-5 text-ink-ghost">{t('nav.emptyHint')}</p></div>)}
+    {expanded && (groupedSessions.length ? <div className="flex flex-col gap-3">{groupedSessions.map((group) => <div key={group.project} className="min-w-0"><div className="mb-1 px-2 text-xs font-semibold uppercase tracking-[0.08em] text-ink-ghost">{group.project}</div><div className="flex flex-col gap-1">{group.sessions.map((session, index) => renderSession(session, index))}</div></div>)}</div> : <div className="px-3 py-8 text-center"><p className="text-xs text-ink-fade">{t('nav.emptyTitle')}</p><p className="mt-1 text-xs leading-5 text-ink-ghost">{t('nav.emptyHint')}</p></div>)}
   </section>
 }

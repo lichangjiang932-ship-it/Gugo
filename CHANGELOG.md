@@ -6,6 +6,29 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.24] - 2026-08-19
+
+### Added
+
+- Added a headless `gugo run` entry point with piped prompts, resumable turns, durable lease recovery, JSONL output, and fail-closed non-interactive approvals.
+- Added project trust management, declared tool-risk metadata, full-stage redacted tool auditing, and durable inbox approval for permission escalation.
+- Added a shared extensible tool-loop entry point with waterfall events, atomic pre-side-effect checkpoints, and benchmarked recovery paths.
+
+### Changed
+
+- Centralized tool schemas and runtime execution primitives so Chat, Jobs, Turns, CLI, and nested agents share the same validation and lifecycle behavior.
+- Split loop responsibilities into focused modules for context, guards, steering, checkpoints, events, runtime state, and tool execution.
+- Refined the conversation workspace with neutral colors, clearer Chinese typography, calmer code and tool labels, roomier navigation, and consistent depth and rounding.
+
+### Fixed
+
+- Distinguished artifact edits from new artifact generation, preventing repair prompts from forcing unrelated generators or entering retry loops.
+- Made composer history navigation respect multiline editing boundaries and clearly expose its active state and preference.
+- Hardened read-only Shell detection with exact argument prefixes and unconditional metacharacter rejection.
+- Added scheduler catch-up and overlap protection, balanced compaction boundaries, atomic checkpoint persistence, and resumable post-compaction tool rounds.
+- Versioned and validated WebSocket frames while rejecting malformed input without logging raw payloads.
+- Kept permission widening pending until durable approval, rejected editable or stale escalation requests, and applied tightening immediately.
+
 ## [0.11.18] - 2026-08-17
 
 ### Changed

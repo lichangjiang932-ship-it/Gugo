@@ -610,6 +610,8 @@ const APPROVAL_TRANSLATIONS = {
       bypass: '全部放行', bypassHint: '不再询问任何操作。仅在完全信任的本机环境使用',
       escalationConfirm: '此操作会放宽模型权限。确认继续吗？',
       bypassJustification: '请输入切换到“全部放行”的理由（必填）：',
+      escalationPendingTitle: '权限升级等待审批',
+      escalationPendingBody: '当前权限未改变。请在审批收件箱批准后生效。',
     },
     inbox: {
       title: '审批收件箱', subtitle: '无人值守的后台任务和定时任务需要批准时，会排队到这里。日常对话里的审批直接在对话中完成。',
@@ -632,6 +634,8 @@ const APPROVAL_TRANSLATIONS = {
       bypass: 'Bypass all', bypassHint: 'Never ask. Only for a fully trusted local machine',
       escalationConfirm: 'This change broadens model permissions. Continue?',
       bypassJustification: 'Enter a required reason for enabling “Bypass all”:',
+      escalationPendingTitle: 'Permission upgrade pending',
+      escalationPendingBody: 'Permissions are unchanged until you approve the request in the approval inbox.',
     },
     inbox: {
       title: 'Approval inbox', subtitle: 'Unattended background and scheduled jobs queue their approval requests here. Approvals during a chat happen inline in the conversation.',
@@ -654,6 +658,8 @@ const APPROVAL_TRANSLATIONS = {
       bypass: 'すべて許可', bypassHint: '一切確認しません。完全に信頼できる端末でのみ使用してください',
       escalationConfirm: 'この変更はモデルの権限を拡大します。続行しますか？',
       bypassJustification: '「すべて許可」に切り替える理由を入力してください（必須）：',
+      escalationPendingTitle: '権限の拡張は承認待ちです',
+      escalationPendingBody: '承認インボックスで承認するまで現在の権限は変更されません。',
     },
     inbox: {
       title: '承認インボックス', subtitle: '無人実行のバックグラウンドジョブと定期ジョブの承認要求がここに入ります。チャット中の承認は会話内で行います。',
@@ -676,6 +682,8 @@ const APPROVAL_TRANSLATIONS = {
       bypass: '모두 허용', bypassHint: '확인하지 않습니다. 완전히 신뢰하는 로컬 환경에서만 사용하세요',
       escalationConfirm: '이 변경은 모델 권한을 확대합니다. 계속할까요?',
       bypassJustification: '“모두 허용”을 켜는 이유를 입력하세요(필수):',
+      escalationPendingTitle: '권한 확대 승인 대기 중',
+      escalationPendingBody: '승인 받은편지함에서 승인할 때까지 현재 권한은 변경되지 않습니다.',
     },
     inbox: {
       title: '승인 받은편지함', subtitle: '무인 실행되는 백그라운드 작업과 예약 작업의 승인 요청이 여기에 쌓입니다. 채팅 중 승인은 대화 안에서 처리됩니다.',
@@ -698,6 +706,8 @@ const APPROVAL_TRANSLATIONS = {
       bypass: '全部放行', bypassHint: '不再詢問任何操作。僅在完全信任的本機環境使用',
       escalationConfirm: '此操作會放寬模型權限。確定繼續嗎？',
       bypassJustification: '請輸入切換到「全部放行」的理由（必填）：',
+      escalationPendingTitle: '權限升級等待審批',
+      escalationPendingBody: '目前權限不會變更；請在審批收件匣批准後生效。',
     },
     inbox: {
       title: '審批收件匣', subtitle: '無人值守的背景任務和定時任務需要批准時，會排隊到這裡。日常對話中的審批直接在對話中完成。',

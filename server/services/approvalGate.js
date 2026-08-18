@@ -209,6 +209,65 @@ export function formatDeniedToolResult(gate) {
 }
 
 /**
+ * Persist one approval request and publish the standard inbox notification.
+ * Administrative callers use this non-blocking primitive; tool execution
+ * calls it and then waits through waitForDecision().
+ */
+export function enqueueApprovalRequest({
+  userId,
+  origin = 'job',
+  jobId = null,
+  stepId = null,
+  sessionId = null,
+  toolName,
+  args = {},
+  risk = 'medium',
+  metadataSource = 'fallback',
+  reason = null,
+  expiresAt = null,
+  notificationTitle = null,
+  notificationBody = null,
+  notificationData = null,
+} = {}) {
+  const approval = createPendingApproval({
+    userId,
+    origin,
+    jobId,
+    stepId,
+    sessionId,
+    toolName,
+    args,
+    risk,
+    metadataSource,
+    reason,
+    expiresAt,
+  })
+
+  try {
+    createNotification({
+      userId,
+      kind: 'approval',
+      title: notificationTitle || `需要批准:${toolName}`,
+      body: notificationBody || reason || '有一个操作等待你的批准',
+      link: `/approvals?id=${encodeURIComponent(approval.id)}`,
+      data: {
+        ...(notificationData && typeof notificationData === 'object' ? notificationData : {}),
+        approvalId: approval.id,
+        toolName,
+        risk,
+        metadataSource: approval.metadataSource,
+        jobId,
+        origin,
+      },
+    })
+  } catch (err) {
+    // The durable inbox row is authoritative; realtime notification is best effort.
+    console.error('[approval] 通知发送失败:', err?.stack || err)
+  }
+  return approval
+}
+
+/**
  * 请求审批。不需要审批时立即放行,需要时挂起等待人决策。
  *
  * @returns {Promise<{ proceed: boolean, args?: object, approvalId?: string, reason?: string, edited?: boolean }>}
@@ -293,7 +352,7 @@ export async function requestApproval({
 
   let approval
   try {
-    approval = createPendingApproval({
+    approval = enqueueApprovalRequest({
       userId,
       origin,
       jobId,
@@ -316,28 +375,6 @@ export async function requestApproval({
       systemFailure: true,
       retryable: true,
     }
-  }
-
-  try {
-    createNotification({
-      userId,
-      kind: 'approval',
-      title: `需要批准:${toolName}`,
-      body: verdict.reason || '有一个操作等待你的批准',
-      // 前端是 HashRouter + navigate(link),这里给路由路径而非带 /#/ 的完整 URL
-      link: `/approvals?id=${encodeURIComponent(approval.id)}`,
-      data: {
-        approvalId: approval.id,
-        toolName,
-        risk: verdict.risk,
-        metadataSource: approval.metadataSource,
-        jobId,
-        origin,
-      },
-    })
-  } catch (err) {
-    // 通知失败不阻断门控本身,用户仍可在收件箱看到
-    console.error('[approval] 通知发送失败:', err?.stack || err)
   }
 
   if (typeof onPending === 'function') {

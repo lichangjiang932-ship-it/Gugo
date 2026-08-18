@@ -97,7 +97,7 @@ export default function ModelPicker({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listboxId : undefined}
-        className={`inline-flex h-7 max-w-56 items-center gap-1.5 rounded-full border px-2.5 text-xs transition-colors ${open ? 'border-ember bg-ember-soft text-ember' : 'border-ink-fade/60 text-ink-soft hover:border-ink-fade'}`}
+        className={`inline-flex h-7 max-w-56 items-center gap-1.5 rounded-pill border px-2.5 text-xs transition-colors ${open ? 'border-ember bg-ember-soft text-ember' : 'border-ink-fade/60 text-ink-soft hover:border-ink-fade'}`}
         title={t('chat.modelPicker.open')}
         data-testid="model-picker-trigger"
       >
@@ -107,12 +107,12 @@ export default function ModelPicker({
 
       {open && (
         <div
-          className="absolute bottom-full right-0 z-40 mb-2 w-[min(22rem,calc(100vw-3rem))] overflow-hidden rounded-lg border border-ink-fade/40 bg-paper shadow-xl"
+          className="absolute bottom-full right-0 z-40 mb-2 w-[min(22rem,calc(100vw-3rem))] overflow-hidden rounded-card border border-ink-fade/40 bg-paper shadow-xl"
           data-testid="model-picker-panel"
         >
           <div className="border-b border-ink-fade/30 px-3 py-2.5">
             <div className="text-sm font-medium text-ink">{t('chat.modelPicker.title')}</div>
-            <div className="mt-0.5 text-[11px] text-ink-fade">{t('chat.modelPicker.subtitle')}</div>
+            <div className="mt-0.5 text-xs text-ink-fade">{t('chat.modelPicker.subtitle')}</div>
           </div>
           <div
             id={listboxId}
@@ -128,7 +128,7 @@ export default function ModelPicker({
               const groupLabelId = `${listboxId}-group-${groupIndex}`
               return (
                 <div key={group.key} role="group" aria-labelledby={groupLabelId} data-testid="model-picker-group">
-                  <div id={groupLabelId} className="sticky top-0 z-10 flex items-center gap-2 bg-paper/95 px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-ink-fade backdrop-blur">
+                  <div id={groupLabelId} className="sticky top-0 z-10 flex items-center gap-2 bg-paper/95 px-2.5 pb-1 pt-2 text-xs font-semibold uppercase tracking-wide text-ink-fade backdrop-blur">
                     <span className="min-w-0 flex-1 truncate">{groupLabel}</span>
                     <span aria-hidden="true">{group.models.length}</span>
                   </div>
@@ -149,13 +149,13 @@ export default function ModelPicker({
                           onSelect?.(model.name)
                           onClose?.()
                         }}
-                        className={`flex w-full items-center gap-3 rounded-md px-2.5 py-2 text-left transition-colors ${selected ? 'bg-ember-soft text-ember' : 'text-ink hover:bg-ink-ghost'}`}
+                        className={`flex w-full items-center gap-3 rounded-control px-2.5 py-2 text-left transition-colors ${selected ? 'bg-ember-soft text-ember' : 'text-ink hover:bg-ink-ghost'}`}
                         data-testid="model-picker-option"
                       >
                         <span className="min-w-0 flex-1">
                           <span className="block truncate text-sm font-medium">{model.name}</span>
                           {(windowLabel || hasMultiplier) && (
-                            <span className="mt-0.5 block text-[10px] text-ink-fade">
+                            <span className="mt-0.5 block text-xs text-ink-fade">
                               {windowLabel ? `${windowLabel} ${t('chat.modelPicker.context')}` : ''}
                               {windowLabel && hasMultiplier ? ' · ' : ''}
                               {hasMultiplier ? `×${model.multiplier}` : ''}

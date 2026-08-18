@@ -172,12 +172,12 @@ function CodeBlock({ children, streaming = false }) {
   return (
     <div className="chat-code-block not-prose my-3 overflow-hidden rounded-card border border-neutral-200 bg-neutral-50 shadow-sm">
       <div className="flex h-7 items-center justify-between border-b border-ink/10 px-2.5">
-        <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-ink-fade">{language}</span>
+        <span className="font-mono text-xs uppercase tracking-[0.16em] text-ink-fade">{language}</span>
         {!streaming && (
           <button
             type="button"
             onClick={copy}
-            className={`inline-flex items-center gap-1 rounded-control px-1.5 py-0.5 text-[11px] transition-colors hover:bg-paper hover:text-ink ${copyState === 'error' ? 'text-rose-700' : 'text-ink-fade'}`}
+            className={`inline-flex items-center gap-1 rounded-control px-1.5 py-0.5 text-xs transition-colors hover:bg-paper hover:text-ink ${copyState === 'error' ? 'text-rose-700' : 'text-ink-fade'}`}
             aria-label={copyState === 'idle' ? t('chatMessages.copyContent') : copyLabel}
             aria-live="polite"
           >
@@ -307,7 +307,7 @@ function MarkdownRenderer({ artifactReferences = [], children, className = '', o
           ),
           // 表格
           table: ({ children, ...props }) => (
-            <div className="my-2.5 overflow-x-auto rounded-md border border-ink/15">
+            <div className="my-2.5 overflow-x-auto rounded-card border border-ink/15">
               <table className="m-0 w-full border-collapse text-sm" {...props}>{children}</table>
             </div>
           ),

@@ -9,6 +9,7 @@ import { buildRememberedGrant, DEFAULT_PERMISSION_MODE, PERMISSION_MODES } from 
 
 const RISK_CLASSES = new Set(['read', 'write_local', 'exec', 'external'])
 export const INITIAL_USER_PERMISSION_MODE = 'normal'
+export const PERMISSION_MODE_CHANGE_TOOL = 'permission_mode_change'
 export const WIDER_PERMISSION_MODES = Object.freeze({
   plan: Object.freeze(['normal', 'acceptEdits', 'bypass']),
   normal: Object.freeze(['acceptEdits', 'bypass']),
@@ -28,6 +29,28 @@ function permissionModeError(message, { code, statusCode = 400, currentMode, req
 export function isPermissionModeWidening(currentMode, requestedMode) {
   if (!PERMISSION_MODES.includes(currentMode) || !PERMISSION_MODES.includes(requestedMode)) return false
   return WIDER_PERMISSION_MODES[currentMode]?.includes(requestedMode) === true
+}
+
+export function preparePermissionModeChange({ userId, mode, justification = '' } = {}) {
+  if (!userId) throw new Error('userId 必填')
+  if (!PERMISSION_MODES.includes(mode)) throw new Error(`非法模式: ${mode}`)
+  const currentMode = getApprovalMode({ userId })
+  const widened = isPermissionModeWidening(currentMode, mode)
+  const normalizedJustification = String(justification || '').trim().slice(0, 1000)
+  if (mode === 'bypass' && currentMode !== mode && !normalizedJustification) {
+    throw permissionModeError('切换到全部放行必须填写理由', {
+      code: 'PERMISSION_JUSTIFICATION_REQUIRED',
+      currentMode,
+      requestedMode: mode,
+    })
+  }
+  return {
+    mode,
+    previousMode: currentMode,
+    changed: currentMode !== mode,
+    widened,
+    justification: normalizedJustification,
+  }
 }
 
 export function getApprovalMode({ userId } = {}) {
@@ -62,15 +85,14 @@ export function changeApprovalMode({
   approveEscalation = false,
   justification = '',
 } = {}) {
-  if (!userId) throw new Error('userId 必填')
-  if (!PERMISSION_MODES.includes(mode)) throw new Error(`非法模式: ${mode}`)
-  const currentMode = getApprovalMode({ userId })
+  const prepared = preparePermissionModeChange({ userId, mode, justification })
+  const currentMode = prepared.previousMode
   if (currentMode === mode) {
     return { mode, previousMode: currentMode, changed: false, widened: false }
   }
 
-  const widened = isPermissionModeWidening(currentMode, mode)
-  const normalizedJustification = String(justification || '').trim().slice(0, 1000)
+  const widened = prepared.widened
+  const normalizedJustification = prepared.justification
   if (widened && approveEscalation !== true) {
     throw permissionModeError('放宽权限需要明确批准', {
       code: 'PERMISSION_ESCALATION_REQUIRED',
@@ -79,14 +101,6 @@ export function changeApprovalMode({
       requestedMode: mode,
     })
   }
-  if (mode === 'bypass' && !normalizedJustification) {
-    throw permissionModeError('切换到全部放行必须填写理由', {
-      code: 'PERMISSION_JUSTIFICATION_REQUIRED',
-      currentMode,
-      requestedMode: mode,
-    })
-  }
-
   const now = Date.now()
   const db = getDb()
   db.transaction(() => {
@@ -110,6 +124,29 @@ export function changeApprovalMode({
   })()
 
   return { mode, previousMode: currentMode, changed: true, widened }
+}
+
+export function applyApprovedPermissionModeChange({
+  userId,
+  fromMode,
+  mode,
+  justification = '',
+} = {}) {
+  const currentMode = getApprovalMode({ userId })
+  if (currentMode !== fromMode) {
+    throw permissionModeError('审批创建后权限模式已变化，请重新发起升级', {
+      code: 'PERMISSION_APPROVAL_STALE',
+      statusCode: 409,
+      currentMode,
+      requestedMode: mode,
+    })
+  }
+  return changeApprovalMode({
+    userId,
+    mode,
+    approveEscalation: true,
+    justification,
+  })
 }
 
 export function listPermissionModeEvents({ userId, limit = 20 } = {}) {

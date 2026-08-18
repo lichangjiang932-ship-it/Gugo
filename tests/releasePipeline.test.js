@@ -93,7 +93,7 @@ test('Web release includes the server parser dependency closure without browser 
     assert.equal(WEB_RELEASE_ENTRIES.includes(entry), true, `missing runtime parser dependency ${entry}`)
   }
 
-  const heuristics = read('server/services/toolLoopHeuristics.js')
+  const heuristics = read('server/services/loop/heuristics/artifactPublishing.js')
   assert.match(heuristics, /officeExport\/documentExport\.js/)
   assert.match(heuristics, /officeExport\/spreadsheetExport\.js/)
   assert.match(heuristics, /presentationExport\/presentationParser\.js/)

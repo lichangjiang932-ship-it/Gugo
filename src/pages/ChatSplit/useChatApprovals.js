@@ -115,6 +115,13 @@ export default function useChatApprovals({ setWorkbenchMessage, toast, t }) {
       })
       const safe = saved && typeof saved === 'object' ? saved : next
       setApprovalSettings(safe)
+      if (safe.modeTransition?.pending) {
+        toast.info({
+          title: t('approvals.mode.escalationPendingTitle'),
+          body: t('approvals.mode.escalationPendingBody'),
+        })
+        return safe
+      }
       return safe
     } catch (error) {
       setApprovalSettings(previous)

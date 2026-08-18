@@ -91,7 +91,7 @@ test('a steering checkpoint persists applied ids before acknowledging its lease'
   })
 
   assert.equal(result.text, 'Applied')
-  assert.deepEqual(order, ['save', 'ack'])
+  assert.deepEqual(order, ['save', 'save', 'ack'])
   assert.deepEqual(checkpoints[0].appliedSteeringIds, ['steering-checkpoint-order'])
 })
 
@@ -850,7 +850,12 @@ test('tool-boundary steering releases its lease when the durable checkpoint fail
         },
       ],
     }),
-  }), /boundary checkpoint failed/)
+  }), (error) => {
+    assert.equal(error?.code, 'CHECKPOINT_FLUSH_FAILED')
+    assert.equal(error?.retryable, true)
+    assert.match(error?.cause?.message || '', /boundary checkpoint failed/)
+    return true
+  })
 
   assert.deepEqual(released, ['boundary-save-failure-lease'])
 })
@@ -1040,7 +1045,16 @@ for (const failure of ['gate', 'save']) {
         return true
       },
       releaseSteering: async (leaseId) => released.push(leaseId),
-    }), error)
+    }), (caught) => {
+      if (failure === 'save') {
+        assert.equal(caught?.code, 'CHECKPOINT_FLUSH_FAILED')
+        assert.equal(caught?.retryable, true)
+        assert.equal(caught?.cause, error)
+      } else {
+        assert.equal(caught, error)
+      }
+      return true
+    })
 
     assert.deepEqual(released, [`lease-${failure}-failure`])
   })

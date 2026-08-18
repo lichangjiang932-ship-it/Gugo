@@ -1,7 +1,7 @@
 {
   "name": "gugo",
   "private": true,
-  "version": "0.11.23",
+  "version": "0.11.24",
   "description": "Self-hosted AI workspace for browser and Windows desktop with agents, tools, memory, jobs, and MCP.",
   "author": "lichangjiang932-ship-it",
   "license": "MIT",
@@ -39,6 +39,7 @@
     "test:coverage": "node scripts/run-tests.js --coverage",
     "i18n:check": "node --test tests/i18nHardcoded.test.js tests/i18n.test.js",
     "debt:check": "node --test tests/codeDebt.test.js",
+    "benchmark:checkpoint": "node scripts/benchmark-loop-checkpoint.mjs",
     "licenses": "node scripts/check-licenses.mjs",
     "hooks:install": "git config core.hooksPath .githooks",
     "serve": "node server/start.js",

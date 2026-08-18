@@ -194,7 +194,7 @@ export function appendTurnEvent({ userId, event, checkpointState = null }) {
         eventSequence: value.sequence,
         state: checkpointState,
         now: value.createdAt,
-      })
+      }, db)
       if (!checkpoint?.state) throw new Error('Failed to persist turn checkpoint')
     }
     if (inserted.changes > 0 && value.type === 'turn.checkpoint') {

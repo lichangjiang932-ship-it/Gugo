@@ -12,7 +12,6 @@ import { readJson, sendJson } from '../utils.js'
 import { subscribeNotifications } from '../services/notificationsStore.js'
 import {
   countPendingApprovals,
-  decideApproval,
   getPendingApproval,
   listPendingApprovals,
 } from '../services/approvalStore.js'
@@ -21,11 +20,12 @@ import {
   changeApprovalMode,
   forgetTool,
   getApprovalSettings,
-  rememberTool,
+  PERMISSION_MODE_CHANGE_TOOL,
+  preparePermissionModeChange,
   setRiskOverride,
 } from '../services/approvalSettingsStore.js'
-import { releaseApproval } from '../services/approvalGate.js'
-import { getJobRuntime } from '../services/jobRuntime.js'
+import { enqueueApprovalRequest } from '../services/approvalGate.js'
+import { decideApprovalRequest } from '../services/approvalDecisionService.js'
 import { createStreamTicket, consumeStreamTicket } from '../utils/streamTicket.js'
 
 const VALID_DECISIONS = new Set(['approve', 'deny', 'edit'])
@@ -93,14 +93,65 @@ export async function handleApprovalRequest(req, res) {
     if (req.method === 'POST' && pathname === '/api/approvals/settings') {
       const body = await readJson(req)
       let modeTransition = null
+      let responseStatus = 200
       if (body?.mode !== undefined) {
         try {
-          modeTransition = changeApprovalMode({
+          const requestedMode = String(body.mode)
+          const prepared = preparePermissionModeChange({
             userId,
-            mode: String(body.mode),
-            approveEscalation: body.approveEscalation === true,
+            mode: requestedMode,
             justification: body.justification,
           })
+          if (!prepared.changed) {
+            modeTransition = prepared
+          } else if (prepared.widened) {
+            if (body.approveEscalation !== true) {
+              const error = new Error('放宽权限需要明确批准')
+              error.code = 'PERMISSION_ESCALATION_REQUIRED'
+              error.statusCode = 409
+              error.currentMode = prepared.previousMode
+              error.requestedMode = requestedMode
+              throw error
+            }
+            const existing = listPendingApprovals({ userId, status: 'pending', limit: 500 })
+              .find((approval) => (
+                approval.toolName === PERMISSION_MODE_CHANGE_TOOL
+                && approval.args?.fromMode === prepared.previousMode
+                && approval.args?.toMode === requestedMode
+              ))
+            const approval = existing || enqueueApprovalRequest({
+              userId,
+              origin: 'chat',
+              toolName: PERMISSION_MODE_CHANGE_TOOL,
+              args: {
+                fromMode: prepared.previousMode,
+                toMode: requestedMode,
+                justification: prepared.justification,
+              },
+              risk: 'high',
+              metadataSource: 'declared',
+              reason: `权限模式升级：${prepared.previousMode} → ${requestedMode}`,
+              notificationTitle: '权限升级等待批准',
+              notificationBody: `批准后将权限模式从 ${prepared.previousMode} 切换为 ${requestedMode}`,
+              notificationData: { requestedMode },
+            })
+            modeTransition = {
+              mode: prepared.previousMode,
+              previousMode: prepared.previousMode,
+              requestedMode,
+              changed: false,
+              widened: true,
+              pending: true,
+              approvalId: approval.id,
+            }
+            responseStatus = 202
+          } else {
+            modeTransition = changeApprovalMode({
+              userId,
+              mode: requestedMode,
+              justification: body.justification,
+            })
+          }
         } catch (err) {
           return sendJson(res, err?.statusCode || 400, {
             error: {
@@ -122,7 +173,7 @@ export async function handleApprovalRequest(req, res) {
           riskClass: body.riskOverride.riskClass,
         })
       }
-      return sendJson(res, 200, { ...getApprovalSettings({ userId }), modeTransition })
+      return sendJson(res, responseStatus, { ...getApprovalSettings({ userId }), modeTransition })
     }
 
     if (req.method === 'GET' && pathname === '/api/approvals') {
@@ -147,48 +198,15 @@ export async function handleApprovalRequest(req, res) {
       if (!VALID_DECISIONS.has(decision)) {
         return badRequest(res, `decision 必须是 approve / deny / edit,收到:${decision || '(空)'}`)
       }
-      const existing = getPendingApproval({ userId, id })
-      if (!existing) return notFound(res)
-
-      // 「总是允许这个工具」:批准的同时记住,下次同名工具不再问
-      let rememberedSettings = null
-      if (decision === 'approve' && body?.remember === true) {
-        rememberTool({ userId, toolName: existing.toolName, args: existing.args })
-        rememberedSettings = getApprovalSettings({ userId })
-      }
-
-      const result = decideApproval({
+      const result = decideApprovalRequest({
         userId,
         id,
         decision,
         editedArgs: decision === 'edit' ? body?.args : null,
+        remember: body?.remember === true,
         decidedBy: userId,
       })
-      // 无论抢到与否都唤醒等待的 agent 循环(它会自己去 DB 读权威状态)
-      releaseApproval(id)
-      if (existing.origin === 'job' && existing.jobId) {
-        getJobRuntime().resumeAfterApproval(existing.jobId, {
-          userId,
-          stepId: existing.stepId,
-        })
-      }
-      if (!result.ok && result.alreadyDecided) {
-        // 幂等:已被决策过不算错,把当前状态如实返回
-        return sendJson(res, 200, {
-          ok: false,
-          alreadyDecided: true,
-          approval: result.approval,
-          rememberedTools: rememberedSettings?.rememberedTools || null,
-          rememberedGrants: rememberedSettings?.rememberedGrants || null,
-        })
-      }
-      if (!result.ok) return notFound(res)
-      return sendJson(res, 200, {
-        ok: true,
-        approval: result.approval,
-        rememberedTools: rememberedSettings?.rememberedTools || null,
-        rememberedGrants: rememberedSettings?.rememberedGrants || null,
-      })
+      return sendJson(res, 200, result)
     }
 
     const detailMatch = pathname.match(/^\/api\/approvals\/([^/]+)$/)
@@ -205,7 +223,13 @@ export async function handleApprovalRequest(req, res) {
   } catch (err) {
     const status = err?.statusCode || 400
     return sendJson(res, status, {
-      error: { code: 'approval_error', message: err?.message || String(err) },
+      error: {
+        code: err?.code || 'approval_error',
+        message: err?.message || String(err),
+        ...(err?.currentMode ? { currentMode: err.currentMode } : {}),
+        ...(err?.requestedMode ? { requestedMode: err.requestedMode } : {}),
+      },
+      ...(err?.approval ? { approval: err.approval } : {}),
     })
   }
 }

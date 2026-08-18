@@ -38,6 +38,7 @@ export function ApprovalCard({ approval, onDecide, busy, t }) {
   const tone = RISK_TONE[approval.risk] || RISK_TONE.low
   const Icon = TOOL_ICON[approval.toolName] || ShieldAlert
   const metadataSource = approval.metadataSource === 'declared' ? 'declared' : 'fallback'
+  const editable = approval.toolName !== 'permission_mode_change'
 
   const submitEdit = () => {
     let parsed
@@ -144,14 +145,16 @@ export function ApprovalCard({ approval, onDecide, busy, t }) {
               <X className="w-3.5 h-3.5" />
               {t('approvals.inbox.deny')}
             </button>
-            <button
-              onClick={() => setEditing(true)}
-              disabled={busy}
-              className="h-8 px-3 border border-dashed border-ink-fade/60 rounded-md font-semibold text-sm text-ink-soft hover:border-ink-fade transition-colors flex items-center gap-1.5 disabled:opacity-50"
-            >
-              <Pencil className="w-3.5 h-3.5" />
-              {t('approvals.inbox.edit')}
-            </button>
+            {editable && (
+              <button
+                onClick={() => setEditing(true)}
+                disabled={busy}
+                className="h-8 px-3 border border-dashed border-ink-fade/60 rounded-md font-semibold text-sm text-ink-soft hover:border-ink-fade transition-colors flex items-center gap-1.5 disabled:opacity-50"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+                {t('approvals.inbox.edit')}
+              </button>
+            )}
           </>
         )}
       </div>
