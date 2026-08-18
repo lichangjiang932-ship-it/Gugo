@@ -1600,7 +1600,8 @@ export class TurnEngine {
         },
         onApprovalPending: async (approval) => emitter('approval.required', {
           approvalId: approval.id, toolName: approval.toolName, args: approval.args,
-          risk: approval.risk, reason: approval.reason, expiresAt: approval.expiresAt,
+          risk: approval.risk, metadataSource: approval.metadataSource,
+          reason: approval.reason, expiresAt: approval.expiresAt,
         }),
         onApprovalResolved: async (decision) => emitter('approval.resolved', {
           approvalId: decision.approvalId || null,

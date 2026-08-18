@@ -29,20 +29,24 @@ const ROUTED_BROWSER_TOOL_NAMES = new Set([
   'browser_screenshot',
 ])
 
-// \u2605 #18: \u5de5\u5177\u53c2\u6570 zod schema \u2014 \u6a21\u578b\u53ef\u80fd\u7ed9\u51fa\u810f\u6570\u636e,\u5148\u6821\u9a8c\u518d\u6267\u884c
 import { EXECUTORS } from './builtinExecutors.js'
 import { callJson } from './toolHttpClient.js'
-import { TOOL_ARG_SCHEMAS } from './toolArgSchemas.js'
-import { TOOL_SPECS } from './toolSpecs.js'
 export { buildToolSpecs, listToolNames, resolveToolsForMode } from './toolSpecs.js'
 
-export function getStandaloneToolClientStatus() {
-  const specNames = Object.keys(TOOL_SPECS)
-  const executorNames = Object.keys(EXECUTORS)
+export function getStandaloneToolClientStatus(catalog = []) {
+  const catalogNames = new Set((Array.isArray(catalog) ? catalog : [])
+    .map((entry) => String((entry?.tool || entry)?.function?.name || '').trim())
+    .filter(Boolean))
+  const standaloneNames = [...new Set([...Object.keys(EXECUTORS), ...ROUTED_BROWSER_TOOL_NAMES])]
   return {
     scope: 'standalone_client',
-    missingExecutors: specNames.filter((name) => !ROUTED_BROWSER_TOOL_NAMES.has(name) && typeof EXECUTORS[name] !== 'function'),
-    missingSpecs: executorNames.filter((name) => !TOOL_SPECS[name]),
+    // The compatibility surface is derived from actual executors/routes, not
+    // a second model-facing schema table. When a live catalog is supplied we
+    // can still report clients that the server no longer advertises.
+    missingExecutors: [],
+    missingSpecs: catalogNames.size > 0
+      ? standaloneNames.filter((name) => !catalogNames.has(name))
+      : [],
   }
 }
 
@@ -53,6 +57,19 @@ export function getBuiltinToolRuntimeStatus() {
     missingExecutors: status.missingExecutors,
     missingSpecs: status.missingSpecs,
   }
+}
+
+function serializeServerToolError(error, extra = {}) {
+  return JSON.stringify({
+    ...(error?.code ? { code: error.code } : {}),
+    error: error?.message || String(error),
+    ...(Number.isInteger(error?.status) ? { status: error.status } : {}),
+    ...(typeof error?.retryable === 'boolean' ? { retryable: error.retryable } : {}),
+    ...(error?.hint ? { hint: error.hint } : {}),
+    ...(Array.isArray(error?.issues) ? { issues: error.issues } : {}),
+    ...(error?.path ? { path: error.path } : {}),
+    ...extra,
+  })
 }
 
 /**
@@ -123,7 +140,7 @@ export async function executeToolCall(call, options = {}) {  const { maxRetries 
         attempts: 1,
       }
     } catch (err) {
-      return { ok: false, content: JSON.stringify({ error: err.message || String(err) }) }
+      return { ok: false, content: serializeServerToolError(err), attempts: 1 }
     }
   }
 
@@ -151,7 +168,7 @@ export async function executeToolCall(call, options = {}) {  const { maxRetries 
         : result
       return { ok: true, content: JSON.stringify(compact), attempts: 1 }
     } catch (err) {
-      return { ok: false, content: JSON.stringify({ error: err.message || String(err) }), attempts: 1 }
+      return { ok: false, content: serializeServerToolError(err), attempts: 1 }
     }
   }
 
@@ -172,24 +189,13 @@ export async function executeToolCall(call, options = {}) {  const { maxRetries 
         : await callJson(route, parsedArgs)
       return { ok: true, content: JSON.stringify(data?.result ?? data?.apps ?? data), attempts: 1 }
     } catch (err) {
-      return { ok: false, content: JSON.stringify({ error: err.message || String(err) }), attempts: 1 }
+      return { ok: false, content: serializeServerToolError(err), attempts: 1 }
     }
   }
 
   const fn = EXECUTORS[name]
   if (!fn) {
     return { ok: false, content: JSON.stringify({ error: `\u672a\u77e5\u5de5\u5177: ${name}` }) }
-  }
-
-  // \u2605 #18: zod \u53c2\u6570\u6821\u9a8c \u2014 \u5931\u8d25\u76f4\u63a5\u8fd4\u56de (\u4e0d\u53ef\u91cd\u8bd5)
-  const schema = TOOL_ARG_SCHEMAS[name]
-  if (schema) {
-    const parsed = schema.safeParse(parsedArgs)
-    if (!parsed.success) {
-      const issues = parsed.error.issues.map((i) => i.message).join('; ')
-      return { ok: false, content: JSON.stringify({ error: `\u53c2\u6570\u65e0\u6548: ${issues}` }) }
-    }
-    parsedArgs = parsed.data
   }
 
   // \u2605 #24: \u5931\u8d25\u91cd\u8bd5 \u2014 \u7f51\u7edc/\u53cd\u722c\u77ac\u65f6\u9519\u8bef\u81ea\u52a8\u91cd\u8bd5 (\u6700\u591a maxRetries \u6b21,\u6307\u6570\u9000\u907f)
@@ -245,6 +251,7 @@ export async function executeToolCall(call, options = {}) {  const { maxRetries 
       const msg = err?.message || String(err)
       // \u4e0d\u53ef\u91cd\u8bd5:\u53c2\u6570\u6821\u9a8c\u7c7b\u9519\u8bef / \u6c99\u7bb1\u7b56\u7565\u62d2\u7edd
       let nonRetriable = /\u53c2\u6570|\u4e0d\u80fd\u4e3a\u7a7a|invalid|required|\u6c99\u7bb1/i.test(msg)
+      if (err?.retryable === false) nonRetriable = true
       // \u2605 404(\u8def\u7531\u4e0d\u5b58\u5728)/ 403(\u6743\u9650\u4e0d\u8db3)/ 401 \u91cd\u8bd5\u6beb\u65e0\u610f\u4e49 \u2014\u2014 \u8fd9\u4e9b\u662f
       // \u786e\u5b9a\u6027\u5931\u8d25,\u9000\u907f\u518d\u6253\u4e09\u6b21\u53ea\u662f\u628a\u4e00\u6b21\u5931\u8d25\u53d8\u6210\u4e09\u6b21\u5931\u8d25 + \u4e24\u6b21\u7b49\u5f85\u3002
       // \u5b9e\u6d4b\u65e5\u5fd7\u91cc grep_code \u56e0\u4e3a\u540e\u7aef\u6f0f\u6ce8\u518c\u8def\u7531,\u6bcf\u6b21\u8c03\u7528\u90fd\u767d\u7b49\u4e24\u8f6e\u9000\u907f,
@@ -259,16 +266,13 @@ export async function executeToolCall(call, options = {}) {  const { maxRetries 
   }
   return {
     ok: false,
-    content: JSON.stringify({
-      ...(lastErr?.code ? { code: lastErr.code } : {}),
-      error: lastErr?.message || String(lastErr),
+    content: serializeServerToolError(lastErr, {
       // \u771f\u5b9e\u5c1d\u8bd5\u6b21\u6570 \u2014\u2014 \u786e\u5b9a\u6027\u5931\u8d25\u4f1a\u63d0\u524d break,\u4e0d\u8be5\u8c0e\u62a5\u6210 maxRetries + 1
       attempts: usedAttempts,
       // \u786e\u5b9a\u6027\u5931\u8d25\u8981\u660e\u786e\u544a\u8bc9\u6a21\u578b\u522b\u518d\u8bd5\u540c\u4e00\u4e2a\u5de5\u5177
       ...(lastErr?.retryable === false || lastErr?.status === 404 || lastErr?.status === 403 || lastErr?.status === 401
         ? { retryable: false, hint: lastErr?.hint || '\u8fd9\u662f\u786e\u5b9a\u6027\u5931\u8d25\uff0c\u91cd\u8bd5\u6216\u6362\u53c2\u6570\u90fd\u6ca1\u7528\uff0c\u8bf7\u6539\u7528\u5176\u4ed6\u5de5\u5177\u3002' }
         : {}),
-      ...(lastErr?.path ? { path: lastErr.path } : {}),
     }),
   }
 }

@@ -518,8 +518,31 @@ test('onPending 在开始等待之前带着已创建的审批触发', async () =
   assert.equal(seen.id, row.id)
   assert.equal(seen.status, 'pending')
   assert.equal(seen.toolName, 'write_file')
+  assert.equal(seen.metadataSource, 'declared')
+  assert.equal(row.metadataSource, 'declared')
 
   decideApproval({ userId, id: row.id, decision: 'approve' })
+  releaseApproval(row.id)
+  await pending
+})
+
+test('unregistered tool approvals persist fallback as their metadata source', async () => {
+  const { userId, jobId } = newUser('fallback-source')
+  let seen = null
+  const pending = requestApproval({
+    userId,
+    origin: 'job',
+    jobId,
+    toolName: 'unregistered_external_action',
+    args: { target: 'example' },
+    mode: 'all',
+    onPending: (approval) => { seen = approval },
+  })
+
+  const row = await waitForPendingRow(userId)
+  assert.equal(row.metadataSource, 'fallback')
+  assert.equal(seen?.metadataSource, 'fallback')
+  decideApproval({ userId, id: row.id, decision: 'deny' })
   releaseApproval(row.id)
   await pending
 })

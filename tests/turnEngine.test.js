@@ -1790,6 +1790,35 @@ test('TurnEngine maps an incomplete loop result to failure instead of completion
   assert.equal(evidence?.content, '任务未完成，未通过验证的文件不会显示或交付。请重试以继续。')
 })
 
+test('TurnEngine preserves approval metadata source in the durable approval event', async () => {
+  const turnId = 'turn-approval-metadata-source'
+  const engine = createTestEngine({
+    runLoop: async ({ onApprovalPending }) => {
+      await onApprovalPending({
+        id: 'approval-declared',
+        toolName: 'write_file',
+        args: { path: 'demo.txt' },
+        risk: 'medium',
+        metadataSource: 'declared',
+        reason: 'writes a local file',
+        expiresAt: Date.now() + 60_000,
+      })
+      return { text: 'Approval event emitted.', artifactIds: [], iterations: 1 }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'Emit an approval event.',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const required = events(turnId).find((event) => event.type === 'approval.required')
+  assert.equal(required.payload.metadataSource, 'declared')
+})
+
 test('TurnEngine lease prevents duplicate resume and carries cancellation across instances', async () => {
   const sessionId = 'turn-engine-cross-instance-session'
   const turnId = 'turn-cross-instance'

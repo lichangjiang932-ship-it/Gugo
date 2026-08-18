@@ -2,18 +2,24 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import { buildToolSpecs, listToolNames, resolveToolsForMode } from '../src/lib/tools/index.js'
+import { listBuiltinSpecs } from '../server/services/toolRegistry.js'
 
-test('chat tools expose git status/diff/check but never expose commit/push to the model', () => {
-  const names = listToolNames()
+const SERVER_CATALOG = listBuiltinSpecs()
+
+test('frontend consumes the canonical server git capability catalog', () => {
+  const names = listToolNames(SERVER_CATALOG)
   assert.ok(names.includes('git_status'))
   assert.ok(names.includes('git_diff'))
   assert.ok(names.includes('run_project_check'))
-  assert.ok(!names.includes('git_commit'))
-  assert.ok(!names.includes('git_push'))
+  assert.ok(names.includes('git_commit'))
+  assert.ok(names.includes('git_push'))
 })
 
 test('shell and git tool schemas accept authorized directory cwd values', () => {
-  const specs = buildToolSpecs(['bash_exec', 'git_status', 'git_diff', 'run_project_check'])
+  const specs = buildToolSpecs(
+    ['bash_exec', 'git_status', 'git_diff', 'run_project_check'],
+    SERVER_CATALOG,
+  )
   for (const spec of specs) {
     assert.ok(spec.function.parameters.properties.cwd, `${spec.function.name} should expose cwd`)
   }

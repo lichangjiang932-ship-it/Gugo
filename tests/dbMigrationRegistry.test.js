@@ -14,6 +14,8 @@ import { migrateToV50 } from '../server/migrations/v50DefaultExecutionPermission
 import { migrateToV51 } from '../server/migrations/v51TurnCheckpoints.js'
 import { migrateToV52 } from '../server/migrations/v52DefaultOutputDirectory.js'
 import { migrateToV53 } from '../server/migrations/v53PermissionModeEvents.js'
+import { migrateToV54 } from '../server/migrations/v54ApprovalMetadataSource.js'
+import { migrateToV56 } from '../server/migrations/v56McpToolRiskDeclarations.js'
 
 test('schema migration registry is contiguous and owns the latest version', () => {
   const legacy = Array.from({ length: 29 }, (_, index) => ({
@@ -22,10 +24,60 @@ test('schema migration registry is contiguous and owns the latest version', () =
   }))
   const plan = createSchemaMigrationPlan(legacy)
 
-  assert.deepEqual(plan.map(({ version }) => version), Array.from({ length: 52 }, (_, index) => index + 2))
-  assert.equal(LATEST_SCHEMA_VERSION, 53)
+  assert.deepEqual(
+    plan.map(({ version }) => version),
+    Array.from({ length: LATEST_SCHEMA_VERSION - 1 }, (_, index) => index + 2),
+  )
+  assert.equal(LATEST_SCHEMA_VERSION, 56)
   assert.equal(DB_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
   assert.equal(schemaMigrations.at(-1).version, LATEST_SCHEMA_VERSION)
+})
+
+test('v56 persists MCP per-tool risk declarations without rewriting existing rows', () => {
+  const db = new Database(':memory:')
+  try {
+    db.exec("CREATE TABLE mcp_servers (id TEXT PRIMARY KEY); INSERT INTO mcp_servers (id) VALUES ('legacy-mcp');")
+    migrateToV56(db)
+    migrateToV56(db)
+
+    const column = db.prepare('PRAGMA table_info(mcp_servers)').all()
+      .find((item) => item.name === 'tools_json')
+    assert.equal(column.notnull, 1)
+    assert.equal(column.dflt_value, "'{}'")
+    assert.equal(db.prepare('SELECT tools_json FROM mcp_servers WHERE id = ?').get('legacy-mcp').tools_json, '{}')
+  } finally {
+    db.close()
+  }
+})
+
+test('v54 persists approval metadata source and backfills legacy rows as fallback', () => {
+  const db = new Database(':memory:')
+  try {
+    db.exec(`
+      CREATE TABLE pending_approvals (id TEXT PRIMARY KEY);
+      INSERT INTO pending_approvals (id) VALUES ('legacy-approval');
+    `)
+    migrateToV54(db)
+    migrateToV54(db)
+
+    const column = db.prepare('PRAGMA table_info(pending_approvals)').all()
+      .find((item) => item.name === 'metadata_source')
+    assert.equal(column.notnull, 1)
+    assert.equal(column.dflt_value, "'fallback'")
+    assert.equal(
+      db.prepare('SELECT metadata_source FROM pending_approvals WHERE id = ?').get('legacy-approval').metadata_source,
+      'fallback',
+    )
+    db.prepare('INSERT INTO pending_approvals (id, metadata_source) VALUES (?, ?)')
+      .run('declared-approval', 'declared')
+    assert.throws(
+      () => db.prepare('INSERT INTO pending_approvals (id, metadata_source) VALUES (?, ?)')
+        .run('invalid-approval', 'guessed'),
+      /CHECK constraint failed/,
+    )
+  } finally {
+    db.close()
+  }
 })
 
 test('v53 stores queryable permission-mode transition history', () => {

@@ -155,7 +155,7 @@ test('plan mode cannot widen to normal or bypass without explicit approval', asy
 
 test('pending approval shows up in list, count and detail', async () => {
   const alice = issueTestSession({ email: 'approval-list-alice@example.com' })
-  const created = seed(alice.userId)
+  const created = seed(alice.userId, { metadataSource: 'declared' })
 
   const list = await fetch(`${origin}/api/approvals`, { headers: headers(alice.token) })
   assert.equal(list.status, 200)
@@ -164,6 +164,7 @@ test('pending approval shows up in list, count and detail', async () => {
   assert.equal(approvals[0].id, created.id)
   assert.equal(approvals[0].toolName, 'fs_write')
   assert.equal(approvals[0].status, 'pending')
+  assert.equal(approvals[0].metadataSource, 'declared')
 
   const count = await fetch(`${origin}/api/approvals/pending-count`, { headers: headers(alice.token) })
   assert.equal(count.status, 200)
@@ -176,6 +177,7 @@ test('pending approval shows up in list, count and detail', async () => {
   assert.deepEqual(approval.args, { path: 'C:/tmp/a.txt', content: 'hello' })
   assert.deepEqual(approval.effectiveArgs, { path: 'C:/tmp/a.txt', content: 'hello' })
   assert.equal(approval.risk, 'high')
+  assert.equal(approval.metadataSource, 'declared')
   assert.equal(approval.reason, 'writes outside workspace')
 })
 

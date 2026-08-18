@@ -585,6 +585,7 @@ const APPROVAL_TRANSLATIONS = {
   zh: {
     nav: '审批',
     risk: { high: '高风险', medium: '中风险', low: '低风险' },
+    source: { label: '风险来源', declared: '显式声明', fallback: '兼容兜底' },
     origin: { job: '后台任务', subagent: '子代理', chat: '对话' },
     mode: {
       label: '权限',
@@ -606,6 +607,7 @@ const APPROVAL_TRANSLATIONS = {
   en: {
     nav: 'Approvals',
     risk: { high: 'High risk', medium: 'Medium risk', low: 'Low risk' },
+    source: { label: 'Risk source', declared: 'Declared metadata', fallback: 'Compatibility fallback' },
     origin: { job: 'Background job', subagent: 'Subagent', chat: 'Chat' },
     mode: {
       label: 'Permissions',
@@ -627,6 +629,7 @@ const APPROVAL_TRANSLATIONS = {
   ja: {
     nav: '承認',
     risk: { high: '高リスク', medium: '中リスク', low: '低リスク' },
+    source: { label: 'リスク判定元', declared: '明示メタデータ', fallback: '互換フォールバック' },
     origin: { job: 'バックグラウンドジョブ', subagent: 'サブエージェント', chat: 'チャット' },
     mode: {
       label: '権限',
@@ -648,6 +651,7 @@ const APPROVAL_TRANSLATIONS = {
   ko: {
     nav: '승인',
     risk: { high: '높은 위험', medium: '보통 위험', low: '낮은 위험' },
+    source: { label: '위험 출처', declared: '명시된 메타데이터', fallback: '호환성 폴백' },
     origin: { job: '백그라운드 작업', subagent: '서브에이전트', chat: '채팅' },
     mode: {
       label: '권한',
@@ -669,6 +673,7 @@ const APPROVAL_TRANSLATIONS = {
   'zh-TW': {
     nav: '審批',
     risk: { high: '高風險', medium: '中風險', low: '低風險' },
+    source: { label: '風險來源', declared: '明確宣告', fallback: '相容性後備' },
     origin: { job: '背景任務', subagent: '子代理', chat: '對話' },
     mode: {
       label: '權限',

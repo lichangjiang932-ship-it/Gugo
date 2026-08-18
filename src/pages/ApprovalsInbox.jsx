@@ -30,13 +30,14 @@ function formatTime(ts) {
   }
 }
 
-function ApprovalCard({ approval, onDecide, busy, t }) {
+export function ApprovalCard({ approval, onDecide, busy, t }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(() => JSON.stringify(approval.args ?? {}, null, 2))
   const [jsonError, setJsonError] = useState(null)
 
   const tone = RISK_TONE[approval.risk] || RISK_TONE.low
   const Icon = TOOL_ICON[approval.toolName] || ShieldAlert
+  const metadataSource = approval.metadataSource === 'declared' ? 'declared' : 'fallback'
 
   const submitEdit = () => {
     let parsed
@@ -69,6 +70,12 @@ function ApprovalCard({ approval, onDecide, busy, t }) {
               <span className={`inline-flex items-center gap-1 font-mono text-[9px] tracking-wider uppercase ${tone.text}`}>
                 <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} />
                 {t(`approvals.risk.${approval.risk}`)}
+              </span>
+              <span
+                data-testid="approval-risk-source"
+                className="font-mono text-[9px] text-ink-fade"
+              >
+                {t('approvals.source.label')}: {t(`approvals.source.${metadataSource}`)}
               </span>
             </div>
             {approval.reason && (

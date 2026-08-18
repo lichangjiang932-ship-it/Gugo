@@ -1,7 +1,21 @@
 import { callJson } from './tools/toolHttpClient.js'
-import { BROWSER_TOOL_NAMES, BROWSER_TOOL_SPECS } from './tools/browserToolSpecs.js'
 
-const DYNAMIC_CONTEXT_TOOL_NAMES = new Set(BROWSER_TOOL_NAMES)
+// Browser tools are registered dynamically on the server. Their names remain
+// useful for offline context estimation, but their descriptions/parameters
+// must always come from the live catalog.
+const DYNAMIC_CONTEXT_TOOL_NAMES = new Set([
+  'browser_open_url',
+  'browser_navigate',
+  'browser_state',
+  'browser_snapshot',
+  'browser_console',
+  'browser_click',
+  'browser_type',
+  'browser_select',
+  'browser_press',
+  'browser_wait',
+  'browser_screenshot',
+])
 
 function toolName(spec) {
   return String(spec?.function?.name || '').trim()
@@ -30,13 +44,9 @@ export function normalizeServerToolCatalog(payload) {
  * catalog endpoint is temporarily unavailable. These placeholders are never
  * executed and intentionally do not duplicate the server-owned JSON schema.
  */
-export function buildServerToolCatalogFallback(enabledNames, localSpecs = []) {
+export function buildServerToolCatalogFallback(enabledNames, dynamicNames = DYNAMIC_CONTEXT_TOOL_NAMES) {
   const byName = new Map()
-  for (const spec of [...Object.values(BROWSER_TOOL_SPECS), ...(Array.isArray(localSpecs) ? localSpecs : [])]) {
-    const name = toolName(spec)
-    if (name) byName.set(name, spec)
-  }
-  for (const value of enabledNames || []) {
+  for (const value of [...(enabledNames || []), ...(dynamicNames || [])]) {
     const name = String(value || '').trim()
     if (!name || byName.has(name)) continue
     byName.set(name, {
@@ -44,7 +54,6 @@ export function buildServerToolCatalogFallback(enabledNames, localSpecs = []) {
       function: {
         name,
         description: 'Server-managed tool placeholder for context estimation while the live catalog is unavailable; never used for execution.',
-        parameters: { type: 'object', additionalProperties: true },
       },
     })
   }

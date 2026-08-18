@@ -1112,7 +1112,7 @@ test('dispatchTurnEvent maps tool and approval events to existing chat actions',
   }), { dispatch, taskId: 'task', onArtifact: (artifact) => artifacts.push(artifact) })
   await dispatchTurnEvent(createTurnEvent({
     id: 'approval', sessionId: 's', turnId: 't', sequence: 2, type: 'approval.required',
-    payload: { approvalId: 'p1', toolName: 'write_file', args: { path: 'a' }, risk: 'medium' }, createdAt: 3,
+    payload: { approvalId: 'p1', toolName: 'write_file', args: { path: 'a' }, risk: 'medium', metadataSource: 'declared' }, createdAt: 3,
   }), { dispatch, taskId: 'task', onApproval: (approval) => approvals.push(approval) })
   assert.equal(actions.some((action) => action.type === 'APPEND_TOOL_CALL_TO_LAST_MESSAGE'), true)
   assert.equal(actions.find((action) => action.type === 'APPEND_TOOL_CALL_TO_LAST_MESSAGE').messageId, 'assistant-1')
@@ -1127,6 +1127,16 @@ test('dispatchTurnEvent maps tool and approval events to existing chat actions',
   assert.equal(artifacts[0].filename, 'a.docx')
   assert.equal(artifacts[0].toolCallId, 'c1')
   assert.equal(approvals[0].id, 'p1')
+  assert.equal(approvals[0].metadataSource, 'declared')
+})
+
+test('dispatchTurnEvent treats a legacy approval event without metadata source as fallback', async () => {
+  const approvals = []
+  await dispatchTurnEvent(createTurnEvent({
+    id: 'legacy-approval', sessionId: 's', turnId: 't', sequence: 0, type: 'approval.required',
+    payload: { approvalId: 'legacy-p1', toolName: 'legacy_tool', risk: 'high' }, createdAt: 1,
+  }), { taskId: 'task', onApproval: (approval) => approvals.push(approval) })
+  assert.equal(approvals[0].metadataSource, 'fallback')
 })
 
 test('dispatchTurnEvent maps model failover/retry to a fallback notice', async () => {

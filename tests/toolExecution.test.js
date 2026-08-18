@@ -1,13 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { buildToolSpecs, executeToolCall, getBuiltinToolRuntimeStatus, listToolNames } from '../src/lib/tools/index.js'
+import { executeToolCall, getBuiltinToolRuntimeStatus } from '../src/lib/tools/index.js'
 import { TOKEN_KEY } from '../src/lib/accountClient.js'
 
-test('所有向模型公开的内置工具都有真实执行器', () => {
+test('standalone compatibility tools are derived from real executors and routes', () => {
   const status = getBuiltinToolRuntimeStatus()
   assert.deepEqual(status.missingExecutors, [])
-  assert.equal(buildToolSpecs(listToolNames()).length, listToolNames().length)
+  assert.deepEqual(status.missingSpecs, [])
 })
 
 test('file artifact executors require an explicit per-turn grant', async () => {
@@ -102,6 +102,42 @@ test('executeToolCall rejects malformed JSON before any backend call', async () 
     assert.equal(result.ok, false)
     assert.equal(JSON.parse(result.content).code, 'invalid_tool_arguments')
     assert.equal(fetchCalls, 0)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('executeToolCall surfaces authoritative server argument errors without zod interception', async () => {
+  const originalFetch = globalThis.fetch
+  let fetchCalls = 0
+  globalThis.fetch = async (url) => {
+    fetchCalls += 1
+    assert.equal(url, '/api/tools/fs/read')
+    return new Response(JSON.stringify({
+      ok: false,
+      code: 'tool_arguments_validation_failed',
+      error: '工具参数校验失败：$.path 应为 string',
+      issues: ['$.path 应为 string'],
+      hint: '请按工具参数定义修正后重新调用。',
+      retryable: false,
+    }), {
+      status: 400,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  try {
+    const result = await executeToolCall({
+      name: 'read_file',
+      arguments: JSON.stringify({ path: 3 }),
+    })
+    const error = JSON.parse(result.content)
+    assert.equal(fetchCalls, 1, 'client must defer field validation to the server')
+    assert.equal(result.ok, false)
+    assert.equal(error.code, 'tool_arguments_validation_failed')
+    assert.deepEqual(error.issues, ['$.path 应为 string'])
+    assert.equal(error.hint, '请按工具参数定义修正后重新调用。')
+    assert.equal(error.retryable, false)
   } finally {
     globalThis.fetch = originalFetch
   }

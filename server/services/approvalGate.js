@@ -302,6 +302,7 @@ export async function requestApproval({
       toolName,
       args,
       risk: verdict.risk,
+      metadataSource: metadata?.source,
       reason: verdict.reason,
       expiresAt: Date.now() + resolveApprovalTimeoutMs(),
     })
@@ -329,6 +330,7 @@ export async function requestApproval({
         approvalId: approval.id,
         toolName,
         risk: verdict.risk,
+        metadataSource: approval.metadataSource,
         jobId,
         origin,
       },
