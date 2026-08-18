@@ -3425,8 +3425,40 @@ export async function runToolsLoop({
         error.name = 'AbortError'
         throw error
       }
-      if (typeof onToolStarted === 'function') await onToolStarted(call)
       const { name, args } = call
+      const auditStartedAt = Date.now()
+      let auditTerminalStage = null
+      let toolExecutionAttempted = false
+      const auditStage = (stage, {
+        auditArgs = args,
+        auditResult = null,
+        status = 'ok',
+      } = {}) => {
+        if (!job?.userId) return
+        writeToolAudit({
+          userId: job.userId,
+          origin: approvalOrigin,
+          toolName: name,
+          callId: call.id,
+          stage,
+          args: auditArgs,
+          result: auditResult,
+          status,
+          durationMs: ['finished', 'filtered', 'denied'].includes(stage)
+            ? Math.max(0, Date.now() - auditStartedAt)
+            : null,
+        })
+      }
+      const auditOutcomeStatus = (value) => {
+        if (value?.ok === true) return 'ok'
+        if (value?.denied === true || value?.policyDenied === true || value?.deniedByUser === true) return 'denied'
+        if (value?.cancelled === true || value?.code === 'cancelled') return 'cancelled'
+        if (value?.code === 'timeout' || value?.timeout === true) return 'timeout'
+        return 'error'
+      }
+      auditStage('proposed')
+      auditStage('started')
+      if (typeof onToolStarted === 'function') await onToolStarted(call)
       // ★ 死循环 advisory：连续发出「同一工具 + 相同参数」时,记一条待注入提醒。
       // 只提醒不拦截 —— 模型自己决定换策略还是收尾(见 repeatCallGuard)。
       const repeatReminder = repeatCallGuard.record(name, args)
@@ -3686,6 +3718,7 @@ export async function runToolsLoop({
                     forceApprovalReason: hookApprovalReason,
                     preAuthorized: hookAuthorizedCall,
                     onPending: async (approval) => {
+                      auditStage('approval_requested', { auditArgs: approval.args ?? effectiveArgs })
                       await markCall(call, {
                         checkpointStatus: 'awaiting_approval',
                         checkpointApprovalId: approval.id,
@@ -3697,9 +3730,18 @@ export async function runToolsLoop({
               }
               if (gate && !gate.proceed) {
                 result = formatDeniedToolResult(gate)
+                auditTerminalStage = 'denied'
+                auditStage('denied', {
+                  auditArgs: gate.args ?? effectiveArgs,
+                  auditResult: result,
+                  status: 'denied',
+                })
               } else if (gate) {
                 const executionArgs = gate.args ?? effectiveArgs
                 executionArgsUsed = executionArgs
+                auditStage(gate.approvalId ? 'approved' : 'auto_allowed', {
+                  auditArgs: executionArgs,
+                })
                 const finalValidationError = redundantImageGenerationGuard(name)
                   || validateToolCall(
                   { ...call, args: executionArgs },
@@ -3728,6 +3770,7 @@ export async function runToolsLoop({
                     })
                   }
                   try {
+                    toolExecutionAttempted = true
                     result = await executeToolWithRetry({
                       metadata: executionMetadata,
                       signal: abortScope.signal,
@@ -3793,6 +3836,20 @@ export async function runToolsLoop({
             }
           }
         }
+      }
+
+      if (toolExecutionAttempted) {
+        auditStage('finished', {
+          auditArgs: executionArgsUsed,
+          auditResult: result,
+          status: auditOutcomeStatus(result),
+        })
+      } else if (!auditTerminalStage) {
+        auditStage('filtered', {
+          auditArgs: executionArgsUsed,
+          auditResult: result,
+          status: auditOutcomeStatus(result),
+        })
       }
 
       return {
