@@ -686,8 +686,11 @@ export function getToolMetadata(name, { args = {}, userId = null } = {}) {
       isDestructive: false,
     }, { origin: 'builtin' })
   }
-  const isReadOnly = name === 'bash_exec' || name === 'run_command'
-    ? isReadOnlyShellCommand(args?.command ?? args?.cmd)
+  // Only bash_exec is covered by bashGuard's exact argv classifier. Other
+  // command runners may use a different shell/wire format and must remain
+  // approval-required until they have a dedicated parser.
+  const isReadOnly = name === 'bash_exec'
+    ? isReadOnlyShellCommand(args?.command)
     : READ_ONLY_MODE_TOOLS.has(name)
   const riskClass = isReadOnly
     ? 'read'
@@ -696,7 +699,7 @@ export function getToolMetadata(name, { args = {}, userId = null } = {}) {
   return normalizeToolRiskMetadata({
     riskClass,
     isReadOnly,
-    isConcurrencySafe: ((name === 'bash_exec' || name === 'run_command') && isReadOnly)
+    isConcurrencySafe: (name === 'bash_exec' && isReadOnly)
       || BUILTIN_CONCURRENCY_SAFE_TOOLS.has(name),
     interruptBehavior: isReadOnly ? 'cancel' : 'block',
     isDestructive: !isReadOnly,

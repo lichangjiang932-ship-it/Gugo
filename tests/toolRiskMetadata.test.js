@@ -53,6 +53,11 @@ test('builtin metadata derives shell read-only and path semantics per call', () 
   assert.equal(write.isReadOnly, false)
   assert.equal(write.interruptBehavior, 'block')
 
+  const ambiguousRunner = getToolMetadata('run_command', { args: { command: 'git status' } })
+  assert.equal(ambiguousRunner.riskClass, 'exec')
+  assert.equal(ambiguousRunner.isReadOnly, false)
+  assert.equal(ambiguousRunner.requiresApproval, true)
+
   const reflect = getToolMetadata('reflect')
   assert.equal(reflect.isReadOnly, true)
   assert.equal(reflect.isConcurrencySafe, false, 'loop-control tools must remain ordered')
