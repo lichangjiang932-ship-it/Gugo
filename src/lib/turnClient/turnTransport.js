@@ -1,4 +1,8 @@
 import { parseTurnActivity, parseTurnEvent } from '../../../shared/turnEvents.js'
+import {
+  createTurnWebSocketFrame,
+  validateTurnWebSocketServerFrame,
+} from '../../../shared/turnWebSocketProtocol.js'
 import { getAuthToken } from '../accountClient.js'
 
 // `turn.paused` ends the current client subscription while remaining resumable
@@ -235,7 +239,7 @@ export function streamServerTurnEventsWebSocket({
       if (settled) return
       clearConnectTimer()
       try {
-        socket.send(JSON.stringify({ type: 'subscribe.turn', sessionId, turnId, after }))
+        socket.send(JSON.stringify(createTurnWebSocketFrame('subscribe.turn', { sessionId, turnId, after })))
       } catch (error) {
         finish(error)
         return
@@ -253,6 +257,18 @@ export function streamServerTurnEventsWebSocket({
         finishAfterPendingEvents(error)
         return
       }
+      const validation = validateTurnWebSocketServerFrame(frame)
+      if (!validation.ok) {
+        const error = new Error(validation.message)
+        error.code = validation.code === 'VERSION_MISMATCH'
+          ? 'TURN_WEBSOCKET_VERSION_MISMATCH'
+          : 'TURN_WEBSOCKET_INVALID_FRAME'
+        error.expectedVersion = validation.expectedVersion
+        error.receivedVersion = validation.receivedVersion
+        finishAfterPendingEvents(error)
+        return
+      }
+      frame = validation.value
       if (frame.type === 'subscribed.turn') {
         if (frame.sessionId === sessionId && frame.turnId === turnId) clearSubscribeTimer()
         return

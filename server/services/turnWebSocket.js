@@ -5,12 +5,18 @@ import { subscribeTurnActivities } from './turnActivityBus.js'
 import { decideApproval, getPendingApproval } from './approvalStore.js'
 import { releaseApproval } from './approvalGate.js'
 import { getJobRuntime } from './jobRuntime.js'
+import {
+  createTurnWebSocketFrame,
+  validateTurnWebSocketClientFrame,
+} from '../../shared/turnWebSocketProtocol.js'
 
 const VALID_DECISIONS = new Set(['approve', 'deny', 'edit'])
 const CROSS_PROCESS_POLL_MS = 1_000
 
 function send(socket, value) {
-  if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(value))
+  if (socket.readyState === socket.OPEN) {
+    socket.send(JSON.stringify(createTurnWebSocketFrame(value.type, value)))
+  }
 }
 
 function tokenFromRequest(request) {
@@ -145,6 +151,22 @@ export function attachTurnWebSocketServer(server) {
         send(socket, { type: 'error', code: 'INVALID_JSON' })
         return
       }
+      const validation = validateTurnWebSocketClientFrame(message)
+      if (!validation.ok) {
+        send(socket, {
+          type: 'error',
+          code: validation.code,
+          message: validation.message,
+          ...(validation.code === 'VERSION_MISMATCH'
+            ? {
+                expectedVersion: validation.expectedVersion,
+                receivedVersion: validation.receivedVersion,
+              }
+            : {}),
+        })
+        return
+      }
+      message = validation.value
       if (message?.type === 'subscribe.turn') {
         const sessionId = String(message.sessionId || '')
         const turnId = String(message.turnId || '')
