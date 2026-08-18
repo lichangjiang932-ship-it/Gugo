@@ -92,7 +92,7 @@ export default function ArtifactPreview({ preview, content, downloading, onDownl
   const [showSource, setShowSource] = useState(false)
 
   return (
-    <div className="w-full overflow-hidden rounded-md border border-ink-fade/30 bg-paper-2">
+    <div className="w-full overflow-hidden rounded-md border border-ink-fade/30 bg-paper-2" data-artifact-surface="inline-preview">
       <div className="flex flex-wrap items-center gap-3 border-b border-dashed border-ink-fade/40 px-4 py-3">
         <div className="w-9 h-9 rounded-md border border-ink-fade/50 bg-paper flex items-center justify-center text-ember shrink-0">
           <ArtifactIcon type={preview.type} />

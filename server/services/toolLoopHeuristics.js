@@ -1937,9 +1937,8 @@ export const SERVER_TOOL_SPECS = [
 ].filter(Boolean)
 
 /**
- * 为一次运行选择稳定的工具 schema 集。聊天按回答/执行两类能力路由，
- * 让模型从已启用工具中选择具体能力，不再逐类猜关键词；后台 Job 已有
- * 明确计划步骤，继续保留更窄的产物合同。
+ * 为一次运行选择稳定的工具 schema 集。聊天始终保留完整已注册目录，
+ * 回答/执行分类只参与执行与完成门禁；后台 Job 继续保留更窄的产物合同。
  */
 export function selectJobToolSpecs({
   prompt = '',
@@ -2000,7 +1999,7 @@ export function selectJobToolSpecs({
       prompt,
       userPrompt,
       previousUserPrompt,
-      specs: artifactFiltered,
+      specs: routedSpecs,
       intentMode,
       executionRequired: allowed.size > 0,
       userId,

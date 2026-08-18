@@ -157,18 +157,18 @@ test('preview reducer opens, activates, and closes tabs without losing sibling f
   assert.equal(state.previewArtifact, null)
 })
 
-test('preview reducer refreshes a revised direct file instead of duplicating its tab', () => {
+test('preview reducer replaces a verified local file tab when a new receipt points to the same path', () => {
   const original = {
     messageId: 'msg-original',
     artifactIdentity: 'msg-original:smoke.html',
     content: '',
     preview: null,
     directFile: {
-      id: 'local-file-stable',
+      id: 'local-file-original',
       filename: 'smoke.html',
       type: 'html',
       path: 'D:\\output\\smoke.html',
-      url: '/api/local-files/verified/local-file-stable?turnId=turn-original',
+      url: '/api/local-files/verified/local-file-original?turnId=turn-original',
     },
   }
   const revised = {
@@ -178,7 +178,8 @@ test('preview reducer refreshes a revised direct file instead of duplicating its
     preview: null,
     directFile: {
       ...original.directFile,
-      url: '/api/local-files/verified/local-file-stable?turnId=turn-revised',
+      id: 'local-file-revised',
+      url: '/api/local-files/verified/local-file-revised?turnId=turn-revised',
     },
   }
   const dispatch = (state, payload) => reduceTaskSettingsState(state, {
@@ -194,6 +195,176 @@ test('preview reducer refreshes a revised direct file instead of duplicating its
   assert.equal(state.previewActiveId, originalTabId)
   assert.equal(state.previewArtifact, revised)
   assert.match(state.previewArtifact.directFile.url, /turn-revised/)
+})
+
+test('preview reducer keeps verified local files with the same name in different directories as separate tabs', () => {
+  const createArtifact = (id, path) => ({
+    messageId: `msg-${id}`,
+    content: '',
+    preview: null,
+    directFile: {
+      id,
+      filename: 'smoke.html',
+      type: 'html',
+      path,
+      url: `/api/local-files/verified/${id}?turnId=turn-${id}`,
+    },
+  })
+  const first = createArtifact('receipt-one', 'D:\\output\\one\\smoke.html')
+  const second = createArtifact('receipt-two', 'D:\\output\\two\\smoke.html')
+  const dispatch = (state, payload) => reduceTaskSettingsState(state, {
+    type: 'OPEN_PREVIEW_ARTIFACT',
+    payload,
+  })
+
+  let state = dispatch(createInitialState(), first)
+  state = dispatch(state, second)
+
+  assert.equal(state.previewTabs.length, 2)
+  assert.deepEqual(state.previewTabs.map((tab) => tab.artifact), [first, second])
+})
+
+test('preview reducer normalizes Windows case, separators, and dot segments for verified local file tabs', () => {
+  const original = {
+    messageId: 'msg-windows-original',
+    content: '',
+    preview: null,
+    directFile: {
+      id: 'windows-original',
+      filename: 'Gallery.HTML',
+      type: 'html',
+      path: 'D:\\Output\\Gallery.HTML',
+      url: '/api/local-files/verified/windows-original?turnId=turn-original',
+    },
+  }
+  const revised = {
+    messageId: 'msg-windows-revised',
+    content: '',
+    preview: null,
+    directFile: {
+      id: 'windows-revised',
+      filename: 'gallery.html',
+      type: 'html',
+      path: 'd:/output/cache/.././gallery.html',
+      url: '/api/local-files/verified/windows-revised?turnId=turn-revised',
+    },
+  }
+  const dispatch = (state, payload) => reduceTaskSettingsState(state, {
+    type: 'OPEN_PREVIEW_ARTIFACT',
+    payload,
+  })
+
+  let state = dispatch(createInitialState(), original)
+  state = dispatch(state, revised)
+
+  assert.equal(state.previewTabs.length, 1)
+  assert.equal(state.previewArtifact, revised)
+})
+
+test('preview reducer normalizes UNC paths for verified local file tabs', () => {
+  const createArtifact = (id, path) => ({
+    messageId: `msg-${id}`,
+    content: '',
+    preview: null,
+    directFile: {
+      id,
+      filename: 'gallery.html',
+      type: 'html',
+      path,
+      url: `/api/local-files/verified/${id}?turnId=turn-${id}`,
+    },
+  })
+  const original = createArtifact('unc-original', '\\\\Server\\Share\\Gallery.HTML')
+  const revised = createArtifact('unc-revised', '//server/share/cache/../gallery.html')
+  const dispatch = (state, payload) => reduceTaskSettingsState(state, {
+    type: 'OPEN_PREVIEW_ARTIFACT',
+    payload,
+  })
+
+  let state = dispatch(createInitialState(), original)
+  state = dispatch(state, revised)
+
+  assert.equal(state.previewTabs.length, 1)
+  assert.equal(state.previewArtifact, revised)
+})
+
+test('preview reducer replaces a verified local file tab for the same normalized POSIX path', () => {
+  const createArtifact = (id, path) => ({
+    messageId: `msg-${id}`,
+    content: '',
+    preview: null,
+    directFile: {
+      id,
+      filename: 'gallery.html',
+      type: 'html',
+      path,
+      url: `/api/local-files/verified/${id}?turnId=turn-${id}`,
+    },
+  })
+  const original = createArtifact('posix-original', '/Users/alice/output/gallery.html')
+  const revised = createArtifact('posix-revised', '/Users/alice/output/cache/.././gallery.html')
+  const dispatch = (state, payload) => reduceTaskSettingsState(state, {
+    type: 'OPEN_PREVIEW_ARTIFACT',
+    payload,
+  })
+
+  let state = dispatch(createInitialState(), original)
+  state = dispatch(state, revised)
+
+  assert.equal(state.previewTabs.length, 1)
+  assert.equal(state.previewArtifact, revised)
+})
+
+test('preview reducer falls back to receipt identity for a verified file without an absolute path', () => {
+  const createArtifact = (messageId, url) => ({
+    messageId,
+    content: '',
+    preview: null,
+    directFile: {
+      id: 'stable-receipt',
+      filename: 'gallery.html',
+      type: 'html',
+      url,
+    },
+  })
+  const original = createArtifact('msg-receipt-original', '/api/local-files/verified/stable-receipt?turnId=one')
+  const revised = createArtifact('msg-receipt-revised', '/api/local-files/verified/stable-receipt?turnId=two')
+  const dispatch = (state, payload) => reduceTaskSettingsState(state, {
+    type: 'OPEN_PREVIEW_ARTIFACT',
+    payload,
+  })
+
+  let state = dispatch(createInitialState(), original)
+  state = dispatch(state, revised)
+
+  assert.equal(state.previewTabs.length, 1)
+  assert.equal(state.previewArtifact, revised)
+})
+
+test('preview reducer does not apply verified-path deduplication to ordinary direct files', () => {
+  const createArtifact = (id) => ({
+    messageId: `msg-${id}`,
+    content: '',
+    preview: null,
+    directFile: {
+      id,
+      filename: 'report.html',
+      type: 'html',
+      path: 'D:\\output\\report.html',
+      url: `/api/artifacts/${id}`,
+    },
+  })
+  const first = createArtifact('managed-one')
+  const second = createArtifact('managed-two')
+  const dispatch = (state, payload) => reduceTaskSettingsState(state, {
+    type: 'OPEN_PREVIEW_ARTIFACT',
+    payload,
+  })
+
+  let state = dispatch(createInitialState(), first)
+  state = dispatch(state, second)
+
+  assert.equal(state.previewTabs.length, 2)
 })
 
 test('RightPreviewPane closes on Escape', async () => {

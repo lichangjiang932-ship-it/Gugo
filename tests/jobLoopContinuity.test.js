@@ -330,7 +330,7 @@ test('用户主动取消不被降级吞掉 —— AbortError 必须继续上抛'
   )
 })
 
-test('托管附件优先使用本地读取且不暴露云盘发现或目录授权工具', async () => {
+test('托管附件保持完整工具目录并携带本地附件引用', async () => {
   const wantedNames = new Set(['read_file', 'request_directory', 'dropbox_list_files', 'google_drive_search'])
   const toolSpecs = SERVER_TOOL_SPECS.filter((item) => wantedNames.has(item?.function?.name))
   let observed
@@ -354,10 +354,7 @@ test('托管附件优先使用本地读取且不暴露云盘发现或目录授�
     },
   })
   const names = observed.tools.map((item) => item.function.name)
-  assert.ok(names.includes('read_file'))
-  assert.equal(names.includes('request_directory'), false)
-  assert.equal(names.includes('dropbox_list_files'), false)
-  assert.equal(names.includes('google_drive_search'), false)
+  for (const name of wantedNames) assert.ok(names.includes(name), name)
   assert.match(observed.messages.map((item) => item.content || '').join('\n'), /attachment:\/\/report-id/)
   assert.equal(result.text, '已分析上传文件')
 })

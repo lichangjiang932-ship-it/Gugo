@@ -1,3 +1,5 @@
+import { verifiedLocalFileIdentity } from '../../../lib/verifiedLocalFileIdentity.js'
+
 function normalizeDirectFileType(file, filename) {
   const extension = String(filename.split('.').pop() || '').toLowerCase()
   const rawType = String(file?.type || extension || 'file').toLowerCase()
@@ -41,9 +43,27 @@ function firstStableValue(...values) {
   return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '')
 }
 
+function isVerifiedLocalDirectFile(file) {
+  if (file?.verifiedLocalFile === true) return true
+  const url = String(firstStableValue(file?.url, file?.downloadUrl, file?.uri) || '').trim()
+  if (!url) return false
+  try {
+    return new URL(url, 'http://local.invalid').pathname.startsWith('/api/local-files/verified/')
+  } catch {
+    return false
+  }
+}
+
+function verifiedLocalPathIdentity(artifact, file) {
+  if (!isVerifiedLocalDirectFile(file)) return ''
+  return verifiedLocalFileIdentity(file, artifact)
+}
+
 export function previewArtifactTabId(artifact) {
   const file = artifact?.directFile
   if (file) {
+    const verifiedPathIdentity = verifiedLocalPathIdentity(artifact, file)
+    if (verifiedPathIdentity) return `file:verified-${verifiedPathIdentity}`
     const fileIdentity = firstStableValue(
       file.id,
       file.uri,

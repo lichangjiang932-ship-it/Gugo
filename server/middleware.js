@@ -227,10 +227,35 @@ function requestRateLimitIdentity(req, env) {
   return `client:${resolveClientId(req, env)}`
 }
 
-export function createApiRateLimitMiddleware({ env = process.env, now } = {}) {
+function localHtmlPreviewTicket(req) {
+  if (!['GET', 'HEAD'].includes(req.method)) return ''
+  let pathname
+  try {
+    pathname = new URL(String(req.url || ''), 'http://localhost').pathname
+  } catch {
+    return ''
+  }
+  const match = pathname.match(/^\/api\/local-files\/previews\/([^/]+)\/.+$/)
+  if (!match) return ''
+  try {
+    return decodeURIComponent(match[1])
+  } catch {
+    return ''
+  }
+}
+
+export function createApiRateLimitMiddleware({
+  env = process.env,
+  now,
+  isActiveLocalHtmlPreviewTicket = () => false,
+} = {}) {
   const readPerMinute = positiveInt(env.API_RATE_LIMIT_READ_PER_MINUTE, 600)
   const writePerMinute = positiveInt(env.API_RATE_LIMIT_WRITE_PER_MINUTE, 180)
   const anonymousPerMinute = positiveInt(env.API_RATE_LIMIT_ANONYMOUS_PER_MINUTE, 120)
+  // One validated HTML document may declare up to 2,000 local resources. Keep
+  // its unguessable capability ticket out of the generic anonymous 30-request
+  // burst while retaining a separate per-ticket ceiling for abusive reloads.
+  const localHtmlPreviewPerMinute = positiveInt(env.API_RATE_LIMIT_LOCAL_HTML_PREVIEW_PER_MINUTE, 2_100)
   const readLimiter = createRateLimiter({
     capacity: readPerMinute,
     refillPerMin: readPerMinute,
@@ -249,11 +274,21 @@ export function createApiRateLimitMiddleware({ env = process.env, now } = {}) {
     burstCap: Math.min(anonymousPerMinute, positiveInt(env.API_RATE_LIMIT_ANONYMOUS_BURST, 30)),
     now,
   })
+  const localHtmlPreviewLimiter = createRateLimiter({
+    capacity: localHtmlPreviewPerMinute,
+    refillPerMin: localHtmlPreviewPerMinute,
+    burstCap: Math.min(
+      localHtmlPreviewPerMinute,
+      positiveInt(env.API_RATE_LIMIT_LOCAL_HTML_PREVIEW_BURST, 2_100),
+    ),
+    now,
+  })
 
   if (env.NODE_ENV !== 'test' && !env.VITEST && !env.NODE_TEST_CONTEXT) {
     readLimiter.startSweep()
     writeLimiter.startSweep()
     anonymousLimiter.startSweep()
+    localHtmlPreviewLimiter.startSweep()
   }
 
   const middleware = (req, res, next) => {
@@ -261,11 +296,24 @@ export function createApiRateLimitMiddleware({ env = process.env, now } = {}) {
       next()
       return
     }
-    const identity = requestRateLimitIdentity(req, env)
+    const previewTicket = localHtmlPreviewTicket(req)
+    let activePreviewTicket = false
+    if (previewTicket) {
+      try {
+        activePreviewTicket = isActiveLocalHtmlPreviewTicket(previewTicket) === true
+      } catch {
+        activePreviewTicket = false
+      }
+    }
+    const identity = activePreviewTicket
+      ? `local-html-preview:${previewTicket}`
+      : requestRateLimitIdentity(req, env)
     const authenticated = identity.startsWith('user:')
     const isRead = req.method === 'GET' || req.method === 'HEAD'
-    const limiter = authenticated ? (isRead ? readLimiter : writeLimiter) : anonymousLimiter
-    const bucket = isRead ? 'read' : 'write'
+    const limiter = activePreviewTicket
+      ? localHtmlPreviewLimiter
+      : (authenticated ? (isRead ? readLimiter : writeLimiter) : anonymousLimiter)
+    const bucket = activePreviewTicket ? 'resource' : (isRead ? 'read' : 'write')
     if (limiter.tryConsume(identity, bucket)) {
       next()
       return
@@ -279,6 +327,7 @@ export function createApiRateLimitMiddleware({ env = process.env, now } = {}) {
     readLimiter.stopSweep()
     writeLimiter.stopSweep()
     anonymousLimiter.stopSweep()
+    localHtmlPreviewLimiter.stopSweep()
   }
   return middleware
 }

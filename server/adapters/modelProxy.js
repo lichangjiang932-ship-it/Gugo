@@ -697,12 +697,18 @@ export function buildOpenAICompatibleRequest({
   if (Number.isFinite(outputCap) && outputCap > 0) {
     body.max_tokens = outputCap
   }
-  // ★ 工具调用:仅当上游提供 tools 字段时才透传,避免不支持工具的模型报 400
-  //
-  // 增加能力门控:端点画像说不支持 function calling 时(比如 llama.cpp 默认、
-  // 或用户在 provider 里显式关掉),**直接不发 tools**。原来无脑下发,
-  // 不支持的小模型直接 400,整轮报废且错误信息完全看不懂。
-  if (Array.isArray(tools) && tools.length > 0 && endpoint.supportsTools) {
+  // A configured tool loop must never silently degrade into a text-only turn.
+  // Doing so makes a real catalog look missing and encourages the model to
+  // falsely claim that tools are unavailable. Fail with a structured
+  // configuration error so the caller can select a tool-compatible adapter.
+  if (Array.isArray(tools) && tools.length > 0 && endpoint.supportsTools !== true) {
+    const error = new Error('当前模型端点未启用 function calling，无法执行需要工具的任务。请启用工具调用支持或选择兼容模型。')
+    error.code = 'MODEL_TOOLS_UNSUPPORTED'
+    error.type = 'configuration_error'
+    error.retryable = false
+    throw error
+  }
+  if (Array.isArray(tools) && tools.length > 0) {
     body.tools = tools
     if (toolChoice) body.tool_choice = toolChoice
     if (endpoint.supportsParallelTools) body.parallel_tool_calls = true

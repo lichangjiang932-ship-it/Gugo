@@ -31,7 +31,6 @@ const READ_ONLY_NAMES = new Set([
   'list_directory', 'read_file', 'grep_code', 'git_diff', 'web_search',
   'browser_snapshot', 'notion_search', 'mcp__airtable__list_records',
 ])
-const ANSWER_RECOVERY_NAMES = new Set(['request_clarification', 'request_directory'])
 const ALWAYS_VISIBLE_LOCAL_EXECUTION_NAMES = new Set([
   'write_file', 'edit_file', 'apply_patch', 'bash_exec', 'run_project_check',
 ])
@@ -39,22 +38,11 @@ const SPECS = TOOL_NAMES.map(spec)
 const ARTIFACT_NAMES = new Set([
   'create_pptx', 'create_docx', 'create_xlsx', 'create_html_app', 'generate_image',
 ])
-const EXECUTE_NAMES = sorted([
-  ...TOOL_NAMES.filter((name) => !ARTIFACT_NAMES.has(name)),
-  'set_deliverables',
-])
-const LOCAL_EXECUTE_NAMES = sorted([
-  'list_directory', 'read_file', 'grep_code',
-  'write_file', 'edit_file', 'apply_patch',
-  'bash_exec', 'run_project_check', 'git_diff',
-  'request_clarification', 'request_directory', 'set_deliverables',
-])
-const LOCAL_REWIND_EXECUTE_NAMES = sorted([...LOCAL_EXECUTE_NAMES, 'rewind_files'])
-const ANSWER_NAMES = sorted([
-  ...READ_ONLY_NAMES,
-  ...ANSWER_RECOVERY_NAMES,
-  ...ALWAYS_VISIBLE_LOCAL_EXECUTION_NAMES,
-])
+const STABLE_CHAT_NAMES = sorted([...TOOL_NAMES, 'set_deliverables'])
+const EXECUTE_NAMES = STABLE_CHAT_NAMES
+const LOCAL_EXECUTE_NAMES = STABLE_CHAT_NAMES
+const LOCAL_REWIND_EXECUTE_NAMES = STABLE_CHAT_NAMES
+const ANSWER_NAMES = STABLE_CHAT_NAMES
 const metadataResolver = (name) => ({
   isReadOnly: READ_ONLY_NAMES.has(name),
   riskClass: READ_ONLY_NAMES.has(name) ? 'read' : 'external',
@@ -69,7 +57,7 @@ function selectChat(options = {}) {
   })
 }
 
-test('ordinary questions retain a stable local execution harness without mounting remote writes', () => {
+test('ordinary questions retain the complete stable tool catalog', () => {
   for (const prompt of [
     '为什么登录状态会过期？',
     'How does OAuth refresh-token rotation work?',
@@ -79,8 +67,8 @@ test('ordinary questions retain a stable local execution harness without mountin
   }
   assert.ok(ANSWER_NAMES.includes('write_file'))
   assert.ok(ANSWER_NAMES.includes('bash_exec'))
-  assert.ok(!ANSWER_NAMES.includes('slack_send_message'))
-  assert.ok(!ANSWER_NAMES.includes('Agent'))
+  assert.ok(ANSWER_NAMES.includes('slack_send_message'))
+  assert.ok(ANSWER_NAMES.includes('Agent'))
 })
 
 test('refreshed conversations and terse follow-ups retain authorized local tools on every new turn', () => {
@@ -103,7 +91,7 @@ test('refreshed conversations and terse follow-ups retain authorized local tools
       assert.ok(selected.includes(name), `${userPrompt}: ${name}`)
     }
     for (const name of ['slack_send_message', 'mcp__airtable__create_record', 'Agent']) {
-      assert.equal(selected.includes(name), false, `${userPrompt}: ${name}`)
+      assert.equal(selected.includes(name), true, `${userPrompt}: ${name}`)
     }
   }
 })
@@ -142,7 +130,7 @@ test('implicit delegated commands retain execution tools without unrelated gener
     const selected = namesOf(selectChat({ prompt }))
     assert.deepEqual(selected, LOCAL_EXECUTE_NAMES)
     for (const name of ['browser_click', 'slack_send_message', 'mcp__airtable__create_record']) {
-      assert.ok(!selected.includes(name), `${prompt}: ${name}`)
+      assert.ok(selected.includes(name), `${prompt}: ${name}`)
     }
   }
 })
@@ -154,7 +142,7 @@ test('object-first webpage transformations retain write tools', () => {
   for (const name of ['write_file', 'edit_file', 'apply_patch', 'bash_exec']) {
     assert.ok(selected.includes(name), name)
   }
-  assert.equal(selected.includes('generate_image'), false)
+  assert.equal(selected.includes('generate_image'), true)
 })
 
 test('first-turn visual edits retain file mutation tools before any capability challenge', () => {
@@ -171,7 +159,7 @@ test('first-turn visual edits retain file mutation tools before any capability c
   }
 })
 
-test('an exact local file path excludes managed-artifact source reads', () => {
+test('an exact local file path does not alter the stable catalog', () => {
   const prompt = '"E:\\果\\gallery.html"这个网站，是用了很多图片，但是现在我还有几个需求，1.图片之间太过拥挤2.旋转的时候似乎无法维系圆形'
   const localNames = namesOf(selectJobToolSpecs({
     origin: 'chat',
@@ -181,7 +169,7 @@ test('an exact local file path excludes managed-artifact source reads', () => {
   }))
   assert.ok(localNames.includes('read_file'))
   assert.ok(localNames.includes('write_file'))
-  assert.equal(localNames.includes('read_artifact_source'), false)
+  assert.equal(localNames.includes('read_artifact_source'), true)
 
   const currentArtifactNames = namesOf(selectChatToolSpecs({
     prompt: '修改当前已生成产物的颜色。',
@@ -205,7 +193,7 @@ test('analysis of local-file requirements remains answer-only while local tools 
   }
 })
 
-test('local UI surface names do not mount unrelated web, browser, or connector tools', () => {
+test('local UI surface names do not prune web, browser, or connector schemas', () => {
   for (const prompt of [
     '修改联网搜索页面的颜色和图标。',
     '只修改当前这一张「联网搜索」配置页面，功能全部保留不变。',
@@ -220,17 +208,17 @@ test('local UI surface names do not mount unrelated web, browser, or connector t
       'web_search', 'browser_snapshot', 'browser_click',
       'slack_send_message', 'mcp__airtable__create_record',
     ]) {
-      assert.ok(!selected.includes(name), `${prompt}: ${name}`)
+      assert.ok(selected.includes(name), `${prompt}: ${name}`)
     }
   }
 })
 
-test('explicit web, browser, and connector actions mount their authorized capabilities', () => {
+test('explicit web, browser, and connector actions keep the same stable catalog', () => {
   const web = namesOf(selectChat({
     prompt: '请联网搜索最新 Node.js LTS 版本并修改 D:\\demo\\README.md。',
   }))
   for (const name of ['web_search', 'write_file']) assert.ok(web.includes(name), name)
-  for (const name of ['browser_click', 'slack_send_message']) assert.ok(!web.includes(name), name)
+  for (const name of ['browser_click', 'slack_send_message']) assert.ok(web.includes(name), name)
 
   const browser = namesOf(selectChat({
     prompt: 'Use the browser to visit the website, then write D:\\demo\\result.txt.',
@@ -238,14 +226,14 @@ test('explicit web, browser, and connector actions mount their authorized capabi
   for (const name of ['browser_snapshot', 'browser_click', 'write_file']) {
     assert.ok(browser.includes(name), name)
   }
-  for (const name of ['web_search', 'slack_send_message']) assert.ok(!browser.includes(name), name)
+  for (const name of ['web_search', 'slack_send_message']) assert.ok(browser.includes(name), name)
 
   const connector = namesOf(selectChat({ prompt: '请发送发布通知到 Slack。' }))
   assert.ok(connector.includes('slack_send_message'))
 })
 
-test('rewind_files is mounted only for explicit file rollback or undo intent', () => {
-  assert.equal(namesOf(selectChat({ prompt: '普通修改 notes.txt。' })).includes('rewind_files'), false)
+test('rewind_files stays discoverable before explicit rollback intent', () => {
+  assert.equal(namesOf(selectChat({ prompt: '普通修改 notes.txt。' })).includes('rewind_files'), true)
   for (const prompt of [
     'Rewrite notes.txt then revert the change.',
     'Undo the changes in notes.txt.',
@@ -267,11 +255,11 @@ test('an explicit Chinese repair delegation retains the coding execution toolcha
     assert.ok(selected.includes(name), name)
   }
   for (const name of ['git_push', 'browser_click', 'slack_send_message']) {
-    assert.ok(!selected.includes(name), name)
+    assert.ok(selected.includes(name), name)
   }
 })
 
-test('explicit execute mode retains file, browser, connector, and MCP tools without unrelated generators', () => {
+test('explicit execute mode retains the complete stable catalog', () => {
   const selected = namesOf(selectChat({
     prompt: 'Continue with the requested work.',
     intentMode: 'execute',
@@ -282,7 +270,7 @@ test('explicit execute mode retains file, browser, connector, and MCP tools with
   ]) {
     assert.ok(selected.includes(name), name)
   }
-  for (const name of ARTIFACT_NAMES) assert.ok(!selected.includes(name), name)
+  for (const name of ARTIFACT_NAMES) assert.ok(selected.includes(name), name)
   assert.deepEqual(selected, EXECUTE_NAMES)
 })
 
@@ -304,7 +292,7 @@ test('chat execution restores the internal delivery control when upstream tool c
     intentMode: 'answer',
     metadataResolver,
   }))
-  assert.deepEqual(answerNames, ['read_file', 'write_file'])
+  assert.deepEqual(answerNames, ['read_file', 'set_deliverables', 'write_file'])
 
   const jobNames = namesOf(selectJobToolSpecs({
     origin: 'job',
@@ -322,11 +310,11 @@ test('explicit answer mode suppresses the execution obligation but retains local
   })), ANSWER_NAMES)
 })
 
-test('artifact skill contracts retain execution tools and only their requested generator', () => {
+test('artifact skill contracts do not prune unrelated registered generators', () => {
   const selected = namesOf(selectChat({ prompt: '/ppt Q3 strategy', skillId: 'ppt' }))
-  assert.deepEqual(selected, sorted([...EXECUTE_NAMES, 'create_pptx']))
+  assert.deepEqual(selected, STABLE_CHAT_NAMES)
   assert.ok(selected.includes('create_pptx'))
-  assert.ok(!selected.includes('create_docx'))
+  assert.ok(selected.includes('create_docx'))
 })
 
 test('managed attachment questions retain local tools without mounting an unrequested generator', () => {
@@ -336,12 +324,12 @@ test('managed attachment questions retain local tools without mounting an unrequ
   assert.deepEqual(summarize, ANSWER_NAMES)
   assert.ok(summarize.includes('read_file'))
   assert.ok(summarize.includes('write_file'))
-  assert.ok(!summarize.includes('create_docx'))
+  assert.ok(summarize.includes('create_docx'))
 
   const deliver = namesOf(selectChat({
     prompt: '[GUGO_MANAGED_ATTACHMENT id="a1"]\n把附件整理好并导出一份可编辑报告',
   }))
-  assert.deepEqual(deliver, sorted([...EXECUTE_NAMES, 'create_docx']))
+  assert.deepEqual(deliver, STABLE_CHAT_NAMES)
   assert.ok(deliver.includes('create_docx'))
 })
 
@@ -736,7 +724,7 @@ test('a capability question preserves the immediately preceding explicit read-on
     onDecision: (value) => { decision = value },
   }))
 
-  assert.deepEqual(selected, ANSWER_NAMES)
+  assert.deepEqual(selected, sorted(TOOL_NAMES))
   assert.equal(decision?.explicitReadOnly, true)
   for (const name of ALWAYS_VISIBLE_LOCAL_EXECUTION_NAMES) {
     assert.ok(decision?.selectedToolNames.includes(name), name)
@@ -776,7 +764,7 @@ test('a read-only PDF verifier does not downgrade the surrounding creation workf
   }
 })
 
-test('disabled tools remain absent and routing never recreates them in answer or execute mode', () => {
+test('tool switches do not prune the stable catalog in answer or execute mode', () => {
   const configured = applyServerToolsConfig(SPECS, {
     enabled: ['read_file'],
     disabled: ['create_docx', 'bash_exec', 'browser_click', 'slack_send_message', 'read_file'],
@@ -792,12 +780,12 @@ test('disabled tools remain absent and routing never recreates them in answer or
       metadataResolver,
     }))
     for (const name of ['create_docx', 'bash_exec', 'browser_click', 'slack_send_message', 'read_file']) {
-      assert.ok(!selected.includes(name), `${intentMode}: ${name}`)
+      assert.ok(selected.includes(name), `${intentMode}: ${name}`)
     }
   }
 })
 
-test('answer-mode diagnostics do not report retained local tools as intent exclusions', () => {
+test('answer-mode diagnostics do not report any registered tool as an intent exclusion', () => {
   let decision = null
   const selected = namesOf(selectChatToolSpecs({
     prompt: '为什么还是没有写入工具',
@@ -810,12 +798,10 @@ test('answer-mode diagnostics do not report retained local tools as intent exclu
     assert.ok(selected.includes(name), name)
     assert.equal(decision?.excludedTools.some((entry) => entry.name === name), false, name)
   }
-  assert.ok(decision?.excludedTools.some((entry) => (
-    entry.name === 'slack_send_message' && entry.reason === 'intent_answer_mode'
-  )))
+  assert.deepEqual(decision?.excludedTools, [])
 })
 
-test('answer-mode recovery tools remain absent when disabled upstream', () => {
+test('answer-mode recovery tools stay visible when their execution switches are disabled', () => {
   const configured = applyServerToolsConfig(SPECS, {
     enabled: ['request_clarification', 'request_directory'],
     disabled: ['request_clarification', 'request_directory'],
@@ -825,8 +811,8 @@ test('answer-mode recovery tools remain absent when disabled upstream', () => {
     specs: configured,
     metadataResolver,
   }))
-  assert.ok(!selected.includes('request_clarification'))
-  assert.ok(!selected.includes('request_directory'))
+  assert.ok(selected.includes('request_clarification'))
+  assert.ok(selected.includes('request_directory'))
 })
 
 test('equivalent route classes keep deterministic schema order for provider caching', () => {

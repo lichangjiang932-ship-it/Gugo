@@ -50,15 +50,15 @@ export function PreviewHeader({ tabs, activeId, maximized, setMaximized, onSelec
   }
 
   return (
-    <div data-testid="preview-header" className="chat-preview-tabbar flex h-12 shrink-0 items-center gap-2 border-b border-ink/10 bg-paper px-3">
-      <div role="tablist" aria-label={t('chatPreview.openTabs')} className="chat-preview-tabs flex min-w-0 flex-1 items-center gap-1 overflow-x-auto py-1">
+    <div data-testid="preview-header" className="chat-preview-tabbar flex h-10 shrink-0 items-center gap-1.5 border-b border-ink/10 bg-paper px-2.5">
+      <div role="tablist" aria-label={t('chatPreview.openTabs')} className="chat-preview-tabs flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto py-1">
         {tabs.map((tab, index) => {
           const active = tab.id === activeId
           return (
             <div
               key={tab.id}
               data-testid="preview-tab-item"
-              className={`flex h-8 min-w-[8rem] max-w-[14rem] flex-none items-center rounded-lg border transition-colors ${active ? 'chat-preview-active-tab border-ink/10 bg-paper-2 text-ink shadow-sm' : 'border-transparent text-ink-fade hover:border-ink/10 hover:bg-paper-2/60 hover:text-ink'}`}
+              className={`flex h-[30px] min-w-[8rem] max-w-[14rem] flex-none items-center rounded-md border transition-colors ${active ? 'chat-preview-active-tab border-ink/10 bg-ink/[0.055] text-ink' : 'border-transparent text-ink-fade hover:bg-ink/[0.035] hover:text-ink'}`}
             >
               <button
                 type="button"
@@ -69,10 +69,10 @@ export function PreviewHeader({ tabs, activeId, maximized, setMaximized, onSelec
                 data-testid="preview-tab"
                 onClick={() => onSelectTab(tab.id)}
                 onKeyDown={(event) => handleTabKeyDown(event, index)}
-                className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-l-lg pl-2.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ember/50"
+                className="flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-l-md pl-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ink/25"
                 title={tab.preview.filename}
               >
-                <span className={`shrink-0 ${active ? 'text-ember' : 'text-ink-fade'}`}><ArtifactIcon type={tab.preview.type} /></span>
+                <span className={`shrink-0 ${active ? 'text-ink-soft' : 'text-ink-fade'}`}><ArtifactIcon type={tab.preview.type} /></span>
                 <span className="truncate text-xs font-medium">{tab.preview.filename}</span>
               </button>
               <button
@@ -81,7 +81,7 @@ export function PreviewHeader({ tabs, activeId, maximized, setMaximized, onSelec
                 onClick={(event) => { event.stopPropagation(); onCloseTab(tab.id) }}
                 aria-label={t('chatPreview.closeTab', { filename: tab.preview.filename })}
                 title={t('chatPreview.closeTab', { filename: tab.preview.filename })}
-                className="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded text-ink-fade outline-none transition-colors hover:bg-ink/5 hover:text-ember focus-visible:ring-2 focus-visible:ring-ember/50"
+                className="mr-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded text-ink-fade outline-none transition-colors hover:bg-ink/[0.065] hover:text-ink focus-visible:ring-2 focus-visible:ring-ink/25"
               >
                 <X className="h-3.5 w-3.5" />
               </button>
@@ -93,7 +93,7 @@ export function PreviewHeader({ tabs, activeId, maximized, setMaximized, onSelec
         <button type="button" onClick={() => setMaximized((value) => !value)} aria-label={t(maximized ? 'chatPreview.restore' : 'chatPreview.maximize')} className="chat-preview-maximize-toggle flex h-8 w-8 items-center justify-center rounded-md text-ink-fade transition-colors hover:bg-paper-2 hover:text-ink" title={t(maximized ? 'chatPreview.restore' : 'chatPreview.maximize')}>
           {maximized ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
         </button>
-        <button type="button" data-testid="preview-close" onClick={onClose} aria-label={t('chatPreview.close')} className="flex h-10 w-10 items-center justify-center rounded-md text-ink-soft transition-colors hover:bg-paper-2 hover:text-ember" title={t('chatPreview.close')}>
+        <button type="button" data-testid="preview-close" onClick={onClose} aria-label={t('chatPreview.close')} className="flex h-10 w-10 items-center justify-center rounded-md text-ink-soft transition-colors hover:bg-paper-2 hover:text-ink" title={t('chatPreview.close')}>
           <X className="h-4 w-4" />
         </button>
       </div>
@@ -108,7 +108,7 @@ export function PreviewToolbar({ preview, content, view, setView, exports, t }) 
     : t(actions.downloadLabelKey)
 
   return (
-    <div data-testid="preview-command-bar" className="chat-preview-toolbar flex min-h-14 shrink-0 items-center gap-3 border-b border-ink/10 bg-paper px-3 py-2">
+    <div data-testid="preview-command-bar" className="chat-preview-toolbar flex min-h-11 shrink-0 items-center gap-3 border-b border-ink/10 bg-paper px-3 py-1.5">
       <FileIdentity preview={preview} />
       <div className="chat-preview-toolbar-actions ml-auto flex shrink-0 items-center gap-1.5">
         <div className="inline-flex h-8 overflow-hidden rounded-lg border border-ink/10 bg-paper-2 text-[11px]">
@@ -135,10 +135,10 @@ export function PreviewToolbar({ preview, content, view, setView, exports, t }) 
 export function DirectFileToolbar({ filename, type, url, t }) {
   const preview = { filename, label: type.toUpperCase() }
   return (
-    <div data-testid="preview-command-bar" className="chat-preview-toolbar flex min-h-14 shrink-0 items-center gap-3 border-b border-ink/10 bg-paper px-3 py-2">
+    <div data-testid="preview-command-bar" className="chat-preview-toolbar flex min-h-11 shrink-0 items-center gap-3 border-b border-ink/10 bg-paper px-3 py-1.5">
       <FileIdentity preview={preview} />
       {url && (
-        <a href={url} download={filename} className="ml-auto inline-flex h-8 max-w-[12rem] shrink-0 items-center gap-1.5 rounded-lg bg-ember px-3 text-[11px] font-medium text-paper shadow-sm transition-colors hover:brightness-95">
+        <a href={url} download={filename} className="ml-auto inline-flex h-8 max-w-[12rem] shrink-0 items-center gap-1.5 rounded-md border border-ink/10 bg-ink px-3 text-[11px] font-medium text-paper transition-colors hover:bg-ink-soft">
           <Download className="h-3.5 w-3.5" />
           <span className="truncate">{t('chatPreview.download', { filename })}</span>
         </a>
@@ -150,7 +150,7 @@ export function DirectFileToolbar({ filename, type, url, t }) {
 function FileIdentity({ preview }) {
   return (
     <div className="min-w-0 flex-1">
-      <div className="truncate text-sm font-semibold tracking-[-0.01em] text-ink" title={preview.filename}>{preview.filename}</div>
+      <div className="truncate text-[13px] font-medium tracking-[-0.01em] text-ink" title={preview.filename}>{preview.filename}</div>
       {preview.summary && <div className="mt-0.5 truncate text-[10px] text-ink-fade">{preview.summary}</div>}
     </div>
   )
@@ -164,7 +164,7 @@ function ActionButton({ compact = false, disabled, icon, label, onClick, primary
       disabled={disabled}
       aria-label={label}
       title={label}
-      className={`inline-flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 text-[11px] font-medium transition-colors disabled:opacity-50 ${primary ? 'bg-ember text-paper shadow-sm hover:brightness-95' : 'border border-ink/10 bg-paper text-ink-soft hover:bg-paper-2 hover:text-ink'} ${compact ? 'chat-preview-compact-action' : ''}`}
+      className={`inline-flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-[11px] font-medium transition-colors disabled:opacity-50 ${primary ? 'bg-ink text-paper hover:bg-ink-soft' : 'border border-ink/10 bg-paper text-ink-soft hover:bg-paper-2 hover:text-ink'} ${compact ? 'chat-preview-compact-action' : ''}`}
     >
       {icon}<span className={compact ? 'chat-preview-action-label' : ''}>{label}</span>
     </button>

@@ -714,7 +714,7 @@ test('TurnEngine reads the user approval mode once and shares it with discovery 
   assert.equal(loopOptions.job.origin, 'chat')
 })
 
-test('TurnEngine projects the stored bypass mode into model-visible capabilities', async (t) => {
+test('TurnEngine keeps schemas stable while projecting stored bypass capabilities', async (t) => {
   setApprovalMode({ userId, mode: 'bypass' })
   t.after(() => {
     getDb().prepare('DELETE FROM user_approval_settings WHERE user_id = ?').run(userId)
@@ -746,7 +746,7 @@ test('TurnEngine projects the stored bypass mode into model-visible capabilities
   assert.ok(modelRequest)
   assert.equal(
     modelRequest.tools.some((tool) => tool?.function?.name === 'request_directory'),
-    false,
+    true,
   )
   const capabilityMessage = modelRequest.messages.find((message) => (
     message?.role === 'system'

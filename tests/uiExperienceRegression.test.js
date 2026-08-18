@@ -58,7 +58,7 @@ test('settings uses a grouped modal and keeps configuration modules distinct', (
   assert.match(settings, /className="settings-page-backdrop"/)
   assert.match(settings, /role="dialog"/)
   assert.match(settings, /aria-modal="true"/)
-  assert.match(settings, /inert=""/)
+  assert.match(settings, /inert=\{true\}/)
   assert.match(settings, /useModalFocusTrap/)
   assert.match(settings, /settings\.openConfigFile/)
   assert.match(settings, /openRuntimeConfigInBrowser/)

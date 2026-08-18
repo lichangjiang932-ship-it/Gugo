@@ -253,6 +253,13 @@ function buildGeminiRequest({ config, messages, stream, tools, toolChoice, profi
 }
 
 export function buildNativeProviderRequest(args = {}) {
+  if (Array.isArray(args.tools) && args.tools.length > 0 && args.profile?.supportsTools !== true) {
+    const error = new Error('当前模型端点未启用 function calling，无法执行需要工具的任务。请启用工具调用支持或选择兼容模型。')
+    error.code = 'MODEL_TOOLS_UNSUPPORTED'
+    error.type = 'configuration_error'
+    error.retryable = false
+    throw error
+  }
   if (args.profile?.kind === 'anthropic') return buildAnthropicRequest(args)
   if (args.profile?.kind === 'gemini') return buildGeminiRequest(args)
   throw new Error(`Unsupported native provider kind: ${args.profile?.kind || 'unknown'}`)

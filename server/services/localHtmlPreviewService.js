@@ -183,6 +183,11 @@ export function getLocalHtmlPreviewResource({ ticket, resourcePath, now = Date.n
   }
 }
 
+export function isLocalHtmlPreviewTicketActive(ticket, { now = Date.now } = {}) {
+  sweepExpired(now())
+  return previewSessions.has(String(ticket || ''))
+}
+
 export function revokeLocalHtmlPreviewSession({ userId, ticket } = {}) {
   const key = String(ticket || '')
   const session = previewSessions.get(key)

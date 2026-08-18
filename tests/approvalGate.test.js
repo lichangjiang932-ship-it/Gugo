@@ -606,6 +606,20 @@ test('★ 用户拒绝不标 retryable,并提示模型换方案', () => {
   assert.match(out.error, /换一个方案/)
 })
 
+test('计划模式拒绝返回稳定策略码且不伪装成工具缺失', () => {
+  const out = formatDeniedToolResult({
+    proceed: false,
+    reason: '当前为计划模式',
+    policyDenied: true,
+    permissionMode: 'plan',
+    suggestedPermissionMode: 'acceptEdits',
+  })
+  assert.equal(out.code, 'policy_denied_plan_mode')
+  assert.equal(out.policyDenied, true)
+  assert.match(out.error, /工具存在/)
+  assert.doesNotMatch(out.error, /工具不存在|本轮不可用/)
+})
+
 test('超时与取消各有独立措辞,不与用户拒绝混淆', () => {
   const expired = formatDeniedToolResult({ proceed: false, reason: '审批超时未处理(视同拒绝)', expired: true })
   assert.equal(expired.expired, true)

@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import { applyAccent, hexToHsl } from '../../src/lib/themeAccent.js'
 
 test('hexToHsl(#E86A3C) → ember 落在橙色 hue 区间', () => {
@@ -48,6 +49,22 @@ test('applyAccent({ strong:true }) → className theme-accent-strong + 更深/�
   const strongS = parseInt(strong.vars['--accent-s'], 10)
   assert.ok(strongL <= baseL, `strong L should be ≤ base L, got ${strongL} vs ${baseL}`)
   assert.ok(strongS >= baseS, `strong S should be ≥ base S, got ${strongS} vs ${baseS}`)
+  assert.equal(strong.vars['--workbench-accent'], strong.vars['--accent'])
+  assert.equal(strong.vars['--workbench-accent-h'], strong.vars['--accent-h'])
+})
+
+test('artifact and document surfaces use neutral tokens outside the workbench accent domain', () => {
+  const css = fs.readFileSync(new URL('../../src/index.css', import.meta.url), 'utf8')
+  assert.match(css, /\[data-artifact-surface\]\s*\{/)
+  assert.match(css, /--artifact-accent-rgb:\s*var\(--color-ink-soft-rgb\)/)
+  assert.match(css, /--color-ember-rgb:\s*var\(--artifact-accent-rgb\)/)
+  assert.match(css, /--accent:\s*var\(--artifact-accent\)/)
+  assert.doesNotMatch(css, /\.theme-accent-strong\s+\[data-artifact-surface\]/)
+  assert.doesNotMatch(css, /\.theme-accent-strong\s+\.chat-output-file-name/)
+  assert.doesNotMatch(css, /(?:^|\r?\n)\s*\[data-artifact-surface\][^{}]*\{[^{}]*!important/m)
+  assert.match(css, /\.theme-accent-strong a\.primary:not\(\[data-artifact-surface\]\):not\(\[data-artifact-surface\] \*\)/)
+  assert.match(css, /\.theme-accent-strong button\.primary:not\(\[data-artifact-surface\]\):not\(\[data-artifact-surface\] \*\)/)
+  assert.match(css, /color:\s*var\(--accent\)\s*!important/)
 })
 
 test('applyAccent({}) 缺省回退到 ember 默认色', () => {

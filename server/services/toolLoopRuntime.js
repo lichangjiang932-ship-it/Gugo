@@ -30,7 +30,7 @@ import {
   resolveArtifactDeliveryTargets,
   resolveArtifactRevisionMode,
 } from './artifactIntent.js'
-import { restoreDirectoryAuthorizationToolSpecs } from './turnToolSpecs.js'
+import { normalizeServerToolsConfig, restoreDirectoryAuthorizationToolSpecs } from './turnToolSpecs.js'
 import { createSubagentApprovalContext, rememberApprovedSubagentCall } from './subagentRuntime.js'
 import { buildAssistantToolCallsMessage, buildToolResultMessage, buildToolResultMessageBundle, createToolLoopGuard, executeToolWithRetry, isSubstantiveToolCall, mapWithConcurrency, normalizeToolError, normalizeToolResult, normalizeToolCalls, resolveToolResultMaxChars, stripEphemeralToolMediaMessages, validateToolCall } from '../utils/toolCallHarness.js'
 import { extractTextToolCalls } from '../utils/textToolCalls.js'
@@ -53,6 +53,7 @@ import { withLogContext } from '../utils/logger.js'
 import { createRepeatCallGuard } from '../utils/repeatCallGuard.js'
 
 const DELIVERABLE_SELECTION_GUARD_MARKER = '[FINAL DELIVERABLE SELECTION REQUIRED]'
+const DELIVERABLE_SELECTION_FALLBACK_MARKER = '[FINAL DELIVERABLE SAFE FALLBACK]'
 const MAX_DELIVERABLE_SELECTION_RETRIES = 2
 const SOURCE_HANDOFF_GUARD_MARKER = '[SOURCE HANDOFF BLOCKED]'
 const MAX_SOURCE_HANDOFF_RETRIES = 1
@@ -479,6 +480,7 @@ export async function runToolsLoop({
   contextWindow = undefined,
   toolSpecs = undefined,
   fallbackToolSpecs = undefined,
+  toolsConfig = null,
   toolResolutionDecision = null,
   skillId = undefined,
   approvalOrigin = 'job',
@@ -777,6 +779,32 @@ export async function runToolsLoop({
     : restored && typeof restored === 'object'
       ? restored
       : null
+  const hasCurrentToolsConfig = toolsConfig && typeof toolsConfig === 'object'
+  const restoredDisabledToolNames = Array.isArray(
+    restoredState?.completionGuards?.disabledToolNames,
+  )
+    ? restoredState.completionGuards.disabledToolNames
+    : []
+  const executionToolsConfig = normalizeServerToolsConfig(
+    hasCurrentToolsConfig ? toolsConfig : { disabled: restoredDisabledToolNames },
+  )
+  const disabledToolNames = new Set(
+    executionToolsConfig.disabled.filter((name) => name !== 'set_deliverables'),
+  )
+  const disabledToolValidationError = (name) => {
+    const normalizedName = String(name || '').trim()
+    if (!normalizedName || !disabledToolNames.has(normalizedName)) return null
+    return {
+      ok: false,
+      denied: true,
+      policyDenied: true,
+      code: 'tool_disabled_by_config',
+      error: `工具 ${normalizedName} 已加载，但在当前工具配置中被禁用，因此本次调用被策略拒绝。`,
+      retryable: false,
+      tool: normalizedName,
+      hint: '如需执行，请先在工具设置中启用该工具；不要把此结果描述为工具不存在或本轮不可用。',
+    }
+  }
   const artifactToolSpecCatalog = new Map(
     [
       ...(Array.isArray(toolSpecs) ? toolSpecs : SERVER_TOOL_SPECS),
@@ -851,7 +879,7 @@ export async function runToolsLoop({
   let activeToolSpecs = restoreDirectoryAuthorizationToolSpecs(
     selectedToolSpecs.filter((spec) => {
       const name = spec?.function?.name
-      return !isFileArtifactTool(name) || stepArtifactTools.has(name)
+      return job?.origin === 'chat' || !isFileArtifactTool(name) || stepArtifactTools.has(name)
     }),
     directoryAuthorizationResolution,
     // A persisted read_write/read_only directory grant is itself the authority
@@ -870,10 +898,11 @@ export async function runToolsLoop({
       }
     }
   }
-  if (requiresPersistedArtifact && !EXPLICIT_LOCAL_DIRECTORY_CONTEXT.test(intentText)) {
+  if (job?.origin !== 'chat'
+    && requiresPersistedArtifact && !EXPLICIT_LOCAL_DIRECTORY_CONTEXT.test(intentText)) {
     activeToolSpecs = activeToolSpecs.filter((spec) => spec?.function?.name !== 'request_directory')
   }
-  if (hasManagedAttachments) {
+  if (job?.origin !== 'chat' && hasManagedAttachments) {
     // Managed attachments never need a local-directory grant. Keep explicitly
     // configured connector/browser tools available, though: the user may
     // legitimately ask to compare an attachment with Drive or a web page.
@@ -1344,6 +1373,7 @@ export async function runToolsLoop({
   }
   const needsDeliverableSelection = () => job?.origin === 'chat'
     && artifactIds.length > 0
+    && deliveryContractReadyForSelection()
     && !hasCurrentDeliverableSelection()
   const suppressTerminalArtifacts = () => {
     // Draft/intermediate files remain in the durable checkpoint so an
@@ -1834,6 +1864,43 @@ export async function runToolsLoop({
           )
         )
       : executionEvidenceObserved)
+  const deliveryContractReadyForSelection = () => hasRequiredArtifacts()
+    && hasRequiredExecutionEvidence()
+    && !hasPendingMutationVerification()
+    && (!requiresPdfLayoutVerification || pdfLayoutVerificationObserved)
+    && !localHtmlDeliveryValidationPending
+  const safeFallbackDeliverableIds = () => {
+    // Automatic fallback is deliberately narrower than an explicit model
+    // selection: only verified outputs from every required generator qualify.
+    // Unknown checkpoint artifacts and auxiliary/intermediate artifacts are
+    // never attached automatically.
+    if (!requiresPersistedArtifact || expectedArtifactTools.size === 0) return []
+    const candidates = artifactIds.filter((artifactId) => {
+      const provenance = artifactProvenance.get(artifactId)
+      return provenance?.verified === true
+        && expectedArtifactTools.has(provenance.toolName)
+        && isFileArtifactTool(provenance.toolName)
+        && authorizedArtifactTools.has(provenance.toolName)
+    })
+    const coveredTools = new Set(
+      candidates.map((artifactId) => artifactProvenance.get(artifactId)?.toolName).filter(Boolean),
+    )
+    return [...expectedArtifactTools].every((name) => coveredTools.has(name))
+      ? candidates
+      : []
+  }
+  const applySafeDeliverableFallback = () => {
+    if (!deliveryContractReadyForSelection()) return null
+    const artifactIdsForFallback = safeFallbackDeliverableIds()
+    if (artifactIdsForFallback.length === 0) return null
+    const selection = selectDeliverables({ artifact_ids: artifactIdsForFallback })
+    if (selection?.ok !== true) return null
+    return {
+      ...selection,
+      code: 'deliverable_selection_safe_fallback',
+      fallback: true,
+    }
+  }
   const missingArtifactBlockerText = () => {
     const missing = missingArtifactTools()
     return missing.length > 0
@@ -2059,6 +2126,7 @@ export async function runToolsLoop({
         })),
         deliveredArtifactTools: [...deliveredArtifactTools],
         deliverableSelectionRetries,
+        disabledToolNames: [...disabledToolNames].sort(),
         deliveryArtifactSelectionArtifactIds: [...deliveryArtifactSelectionArtifactIds],
         executionEvidenceObserved,
         mutationExecutionObserved,
@@ -2176,21 +2244,26 @@ export async function runToolsLoop({
     ) || artifactRevisionMode === 'replace_original'
       || Boolean(String(outputDirectoryContext.defaultOutputDirectory || '').trim())
 
-    const activeByName = new Map(
-      activeToolSpecs
-        .filter((spec) => !isFileArtifactTool(spec?.function?.name)
-          || authorizedArtifactTools.has(spec.function.name))
-        .map((spec) => [spec?.function?.name, spec]),
-    )
-    if (artifactDeliveryStep) {
-      for (const name of authorizedArtifactTools) {
-        const spec = artifactToolSpecCatalog.get(name)
-        if (spec) activeByName.set(name, spec)
+    // Steering changes which artifact calls are authorized and which outputs
+    // must be delivered; it must not mutate the model-visible chat catalog.
+    // Background jobs keep their narrower artifact contract.
+    if (job?.origin !== 'chat') {
+      const activeByName = new Map(
+        activeToolSpecs
+          .filter((spec) => !isFileArtifactTool(spec?.function?.name)
+            || authorizedArtifactTools.has(spec.function.name))
+          .map((spec) => [spec?.function?.name, spec]),
+      )
+      if (artifactDeliveryStep) {
+        for (const name of authorizedArtifactTools) {
+          const spec = artifactToolSpecCatalog.get(name)
+          if (spec) activeByName.set(name, spec)
+        }
       }
-    }
-    activeToolSpecs = [...activeByName.values()].filter(Boolean)
-    if (hasManagedAttachments) {
-      activeToolSpecs = activeToolSpecs.filter((spec) => spec?.function?.name !== 'request_directory')
+      activeToolSpecs = [...activeByName.values()].filter(Boolean)
+      if (hasManagedAttachments) {
+        activeToolSpecs = activeToolSpecs.filter((spec) => spec?.function?.name !== 'request_directory')
+      }
     }
     availableVerificationToolNames = activeToolSpecs
       .map(toolNameFromSpec)
@@ -2665,7 +2738,14 @@ export async function runToolsLoop({
         const request = await callTrackedModel({
           messages: convo,
           tools: activeToolSpecs,
-          ...(forcedArtifactRequestPending()
+          ...(needsDeliverableSelection()
+            ? {
+                toolChoice: {
+                  type: 'function',
+                  function: { name: 'set_deliverables' },
+                },
+              }
+            : forcedArtifactRequestPending()
             ? {
                 toolChoice: {
                   type: 'function',
@@ -3100,32 +3180,43 @@ export async function runToolsLoop({
         }
         if (needsDeliverableSelection()) {
           if (deliverableSelectionRetries >= MAX_DELIVERABLE_SELECTION_RETRIES) {
-            const incomplete = await finishIncomplete({
-              text: 'Files were created, but the model did not explicitly select the final deliverables. No intermediate files were attached to the answer.',
-              reason: 'deliverable_selection_missing',
-              steeringLeaseId,
+            const fallback = applySafeDeliverableFallback()
+            if (fallback) {
+              convo.push({
+                role: 'system',
+                content: `${DELIVERABLE_SELECTION_FALLBACK_MARKER} The runtime selected only the current turn's verified outputs that satisfy every required generator. Continue with one concise final answer and do not call set_deliverables again unless another artifact is created.`,
+              })
+              await persistTurn()
+            } else {
+              const incomplete = await finishIncomplete({
+                text: 'Files were created, but final deliverable selection did not converge. No unverified or intermediate files were attached to the answer.',
+                reason: 'deliverable_selection_missing',
+                steeringLeaseId,
+              })
+              if (incomplete.deferredForSteering) continue
+              return incomplete
+            }
+          }
+          if (needsDeliverableSelection()) {
+            deliverableSelectionRetries += 1
+            if (content) convo.push({ role: 'assistant', content })
+            convo.push({
+              role: 'system',
+              content: [
+                DELIVERABLE_SELECTION_GUARD_MARKER,
+                'The previous completion was discarded because this chat turn created files without explicitly selecting its final deliverables.',
+                `Current artifact IDs: ${artifactIds.join(', ')}.`,
+                'Call set_deliverables now with only the artifact_ids that should appear in the final answer. Use an empty array only when no file should be delivered.',
+                'If any later tool creates another artifact, call set_deliverables again after that tool finishes.',
+              ].join(' '),
             })
-            if (incomplete.deferredForSteering) continue
-            return incomplete
+            if (iter + 1 >= maxIters) maxIters = iter + 2
+            await persistTurn()
+            if (steeringLeaseId && typeof acknowledgeSteering === 'function') {
+              await acknowledgeSteering(steeringLeaseId)
+            }
+            continue
           }
-          deliverableSelectionRetries += 1
-          if (content) convo.push({ role: 'assistant', content })
-          convo.push({
-            role: 'system',
-            content: [
-              DELIVERABLE_SELECTION_GUARD_MARKER,
-              'The previous completion was discarded because this chat turn created files without explicitly selecting its final deliverables.',
-              `Current artifact IDs: ${artifactIds.join(', ')}.`,
-              'Call set_deliverables now with only the artifact_ids that should appear in the final answer. Use an empty array only when no file should be delivered.',
-              'If any later tool creates another artifact, call set_deliverables again after that tool finishes.',
-            ].join(' '),
-          })
-          if (iter + 1 >= maxIters) maxIters = iter + 2
-          await persistTurn()
-          if (steeringLeaseId && typeof acknowledgeSteering === 'function') {
-            await acknowledgeSteering(steeringLeaseId)
-          }
-          continue
         }
         const sourceViolation = requiresSourceHandoffProtection
           ? sourceHandoffViolation(content)
@@ -3328,7 +3419,13 @@ export async function runToolsLoop({
       const readOnlyResumeValidationError = call.checkpointStatus === 'executing'
         ? explicitReadOnlyValidationError(name, checkpointExecutionArgs)
         : null
-      if (readOnlyResumeValidationError) {
+      const configuredToolValidationError = disabledToolValidationError(name)
+      if (configuredToolValidationError) {
+        // The schema remains visible by design, but the execution switch is
+        // authoritative for fresh calls, awaiting approvals and executing
+        // checkpoints alike. Run this before hooks/approval/idempotent resume.
+        result = configuredToolValidationError
+      } else if (readOnlyResumeValidationError) {
         result = readOnlyResumeValidationError
       } else if (call.modelOutputTruncated) {
         result = {
@@ -3463,8 +3560,12 @@ export async function runToolsLoop({
           if (!result && name === 'set_deliverables') {
             try {
               result = selectDeliverables(args)
+              if (result?.ok !== true && deliveryContractReadyForSelection()) {
+                deliverableSelectionRetries += 1
+              }
             } catch (error) {
               result = normalizeToolError(error)
+              if (deliveryContractReadyForSelection()) deliverableSelectionRetries += 1
             }
           }
 
@@ -4294,6 +4395,24 @@ export async function runToolsLoop({
       })
       if (incomplete.deferredForSteering) continue
       return incomplete
+    }
+    if (needsDeliverableSelection()
+      && deliverableSelectionRetries >= MAX_DELIVERABLE_SELECTION_RETRIES) {
+      const fallback = applySafeDeliverableFallback()
+      if (!fallback) {
+        const incomplete = await finishIncomplete({
+          text: 'Files were created, but final deliverable selection did not converge. No unverified or intermediate files were attached to the answer.',
+          reason: 'deliverable_selection_missing',
+          steeringLeaseId,
+        })
+        if (incomplete.deferredForSteering) continue
+        return incomplete
+      }
+      convo.push({
+        role: 'system',
+        content: `${DELIVERABLE_SELECTION_FALLBACK_MARKER} The runtime selected only the current turn's verified outputs that satisfy every required generator. Continue with one concise final answer and do not call set_deliverables again unless another artifact is created.`,
+      })
+      await persistTurn()
     }
     if (needsDeliverableSelection() && iter + 1 >= maxIters) maxIters = iter + 2
     if (!batchSupersededBySteering

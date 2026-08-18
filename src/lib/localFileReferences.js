@@ -1,9 +1,9 @@
 import { buildArtifactPreview } from './artifactPreview.js'
 import {
   buildArtifactReferenceIdentity,
-  normalizeArtifactLocalPath,
   normalizeArtifactReferenceType,
 } from './artifactReferences.js'
+import { normalizeVerifiedLocalFilePath } from './verifiedLocalFileIdentity.js'
 
 const MUTATION_TOOL_NAMES = new Set([
   'apply_patch',
@@ -54,7 +54,7 @@ function callSucceeded(call, result) {
 
 function absolutePath(value) {
   const path = String(value || '').trim()
-  const key = normalizeArtifactLocalPath(path)
+  const key = normalizeVerifiedLocalFilePath(path)
   return key ? { key, path } : null
 }
 
@@ -146,7 +146,7 @@ function mutationEvidence(toolCalls = []) {
 }
 
 function fileHref(path) {
-  const key = normalizeArtifactLocalPath(path)
+  const key = normalizeVerifiedLocalFilePath(path)
   return `/__local-file-reference__/${encodeURIComponent(key)}`
 }
 
@@ -200,7 +200,7 @@ function referencesFromReceipts(receipts, { messageId = '', mutations = new Map(
     const id = String(receipt?.id || '').trim()
     const path = String(receipt?.path || '').trim()
     const filename = String(receipt?.filename || basename(path)).trim()
-    const key = normalizeArtifactLocalPath(path)
+    const key = normalizeVerifiedLocalFilePath(path)
     const url = verifiedFileHref({ id, turnId })
     if (!id || !key || !filename || !url || seen.has(id)) continue
     seen.add(id)

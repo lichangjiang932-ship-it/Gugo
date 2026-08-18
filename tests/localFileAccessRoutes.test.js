@@ -10,10 +10,16 @@ fs.mkdirSync(allowedDir)
 fs.writeFileSync(path.join(allowedDir, 'route.txt'), 'route access', 'utf8')
 const previewAssetsDir = path.join(allowedDir, 'assets')
 fs.mkdirSync(previewAssetsDir)
+const burstPreviewImages = Array.from({ length: 43 }, (_, index) => `burst-${String(index + 1).padStart(2, '0')}.jpg`)
+for (const filename of burstPreviewImages) {
+  fs.writeFileSync(path.join(allowedDir, filename), Buffer.from([0xff, 0xd8, 0xff, 0xd9]))
+}
 fs.writeFileSync(path.join(allowedDir, 'preview.html'), [
   '<!doctype html><title>verified preview</title>',
   '<link rel="stylesheet" href="./assets/site.css">',
   '<script type="module" src="./assets/app.mjs"></script>',
+  '<script>const gallery=[{src:"./dynamic-gallery.png",name:"missing-caption-only.png"}]</script>',
+  `<script>const burstGallery=${JSON.stringify(burstPreviewImages.map((src) => ({ src })))};</script>`,
   '<h1>ready</h1><img src="./background.jpg"><iframe src="./child.html"></iframe>',
 ].join(''), 'utf8')
 fs.writeFileSync(path.join(allowedDir, 'child.html'), '<!doctype html><title>nested child</title><img src="./background.jpg">', 'utf8')
@@ -21,6 +27,7 @@ fs.writeFileSync(path.join(previewAssetsDir, 'site.css'), '@font-face{font-famil
 fs.writeFileSync(path.join(previewAssetsDir, 'app.mjs'), 'document.documentElement.dataset.previewReady="yes"', 'utf8')
 fs.writeFileSync(path.join(previewAssetsDir, 'preview.woff2'), Buffer.from('wOF2preview-font', 'ascii'))
 fs.writeFileSync(path.join(allowedDir, 'background.jpg'), Buffer.from([0xff, 0xd8, 0xff, 0xd9]))
+fs.writeFileSync(path.join(allowedDir, 'dynamic-gallery.png'), Buffer.from('dynamic-image-bytes', 'utf8'))
 fs.writeFileSync(path.join(allowedDir, 'same-directory-secret.txt'), 'must remain private', 'utf8')
 fs.writeFileSync(path.join(tempDir, 'outside-secret.txt'), 'must not be exposed', 'utf8')
 let outsideLinkCreated = false
@@ -302,6 +309,7 @@ test('verified turn receipts stream the real file and remain user-scoped', async
     ['./assets/app.mjs', /^text\/javascript/, /previewReady/],
     ['./assets/preview.woff2', /^font\/woff2/, null],
     ['./background.jpg', /^image\/jpeg/, null],
+    ['./dynamic-gallery.png', /^image\/png/, null],
   ]
   for (const [relativeUrl, mime, content] of relativeResources) {
     const resource = await fetch(new URL(relativeUrl, sessionHtmlUrl))
@@ -309,6 +317,14 @@ test('verified turn receipts stream the real file and remain user-scoped', async
     assert.match(resource.headers.get('content-type') || '', mime, relativeUrl)
     if (content) assert.match(await resource.text(), content, relativeUrl)
     else assert.ok((await resource.arrayBuffer()).byteLength > 0, relativeUrl)
+  }
+  const burstResponses = await Promise.all(burstPreviewImages.map((filename) => (
+    fetch(new URL(`./${filename}`, sessionHtmlUrl))
+  )))
+  assert.equal(burstResponses.length, 43)
+  for (const response of burstResponses) {
+    assert.equal(response.status, 200)
+    assert.match(response.headers.get('content-type') || '', /^image\/jpeg/)
   }
 
   const undeclaredSibling = await fetch(new URL('./same-directory-secret.txt', sessionHtmlUrl))

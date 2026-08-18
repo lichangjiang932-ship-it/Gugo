@@ -80,7 +80,7 @@ export default function SessionList({
     const menuId = `session-actions-${session.id}`
     return <div
       key={session.id ?? index}
-      className={`group relative flex min-h-10 items-stretch rounded-lg transition-colors ${isActive ? 'bg-ink/[0.065]' : 'hover:bg-ink/[0.04]'}`}
+      className={`group relative flex min-h-10 items-stretch rounded-lg transition-colors ${isActive ? 'bg-ink/[0.055]' : 'hover:bg-ink/[0.04]'}`}
       onContextMenu={(event) => {
         if (menuRef.current?.contains(event.target)) return
         event.preventDefault()
@@ -90,7 +90,6 @@ export default function SessionList({
         onMenuOpen(session.id)
       }}
     >
-      {isActive && <span aria-hidden="true" className="absolute inset-y-2 left-0 w-0.5 rounded-r-full bg-ember" />}
       <button
         type="button"
         data-session-open

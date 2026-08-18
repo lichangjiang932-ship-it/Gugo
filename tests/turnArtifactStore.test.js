@@ -399,12 +399,18 @@ test('created chat artifacts require an explicit set_deliverables call before no
     messages: [{ role: 'user', content: 'What is the status of the generated report?' }],
     intentMode: 'auto',
     toolSpecs: [setDeliverables],
+    toolsConfig: { disabled: ['set_deliverables'] },
     maxIters: 6,
     enableToolHooks: false,
     loadCheckpoint: async () => ({ state: { artifactIds: [artifactId], iterations: 0 } }),
     saveCheckpoint: async () => true,
-    runModel: async ({ messages }) => {
+    runModel: async ({ messages, toolChoice }) => {
       modelCalls += 1
+      if (modelCalls <= 2) {
+        assert.equal(toolChoice?.function?.name, 'set_deliverables')
+      } else {
+        assert.equal(toolChoice, undefined)
+      }
       if (modelCalls === 1) return { content: 'The report is ready.', toolCalls: [] }
       if (modelCalls === 2) {
         guardObserved = messages.some((message) => String(message?.content || '').includes('[FINAL DELIVERABLE SELECTION REQUIRED]'))

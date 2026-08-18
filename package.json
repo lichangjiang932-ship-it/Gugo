@@ -58,8 +58,9 @@
     "cli": "node bin/yma-cli.js"
   },
   "dependencies": {
-    "@napi-rs/canvas": "^0.1.65",
     "@e965/xlsx": "^0.20.3",
+    "@napi-rs/canvas": "^0.1.65",
+    "acorn": "^8.18.0",
     "better-sqlite3": "^12.10.0",
     "electron-updater": "^6.8.9",
     "fontkit": "^2.0.4",
@@ -86,8 +87,8 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@eslint/js": "^10.0.1",
     "@electron/asar": "3.4.1",
+    "@eslint/js": "^10.0.1",
     "@ffmpeg-installer/ffmpeg": "1.1.0",
     "@ffprobe-installer/ffprobe": "2.1.2",
     "@tailwindcss/typography": "^0.5.19",

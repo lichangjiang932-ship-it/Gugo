@@ -65,7 +65,7 @@ test('read-only directory authorization restores only read tools', () => {
   assert.equal(toolNames(restored).includes('bash_exec'), false)
 })
 
-test('read-write directory authorization restores read, write, edit, and execution tools', () => {
+test('read-write directory authorization restores schemas without overriding disabled execution switches', () => {
   const resolution = {
     type: 'directory_authorization',
     approved: true,
@@ -83,8 +83,8 @@ test('read-write directory authorization restores read, write, edit, and executi
     enabled: [],
     disabled: expected,
   }, resolution)
-  assert.deepEqual(configured.enabled, expected)
-  assert.deepEqual(configured.disabled, [])
+  assert.deepEqual(configured.enabled, [])
+  assert.deepEqual(configured.disabled, expected)
 })
 
 test('non-directory resolution cannot restore local execution tools', () => {
@@ -239,9 +239,6 @@ test('directory authorization restores code tools missing from the pre-authoriza
     turnId,
     content: `读取 ${sourcePdf}，再在授权目录中运行代码并验证输出。`,
     intentMode: 'execute',
-    toolsConfig: {
-      disabled: ['bash_exec', 'write_file', 'edit_file'],
-    },
   })
   await engine.waitForTurn({ userId, sessionId, turnId })
 

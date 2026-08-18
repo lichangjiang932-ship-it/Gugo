@@ -58,6 +58,7 @@ import { handleModelProviderRequest } from './routes/modelProviderRoutes.js'
 import { handleBrowserRequest } from './routes/browserRoutes.js'
 import { handleConnectorRequest } from './routes/connectorRoutes.js'
 import { handleLocalFileAccessRequest } from './routes/localFileAccessRoutes.js'
+import { isLocalHtmlPreviewTicketActive } from './services/localHtmlPreviewService.js'
 import { handleFileSnapshotRequest } from './routes/fileSnapshotRoutes.js'
 import { handleTurnEventRequest } from './routes/turnEventRoutes.js'
 import { handleMediaRequest } from './routes/mediaRoutes.js'
@@ -485,7 +486,10 @@ function createRouter(getEnv = getRuntimeEnv, staticDir = distDir) {
 
 export function createAppServer({ getEnv = getRuntimeEnv, staticDir = distDir } = {}) {
   const env = { ...process.env, ...(getEnv() || {}) }
-  const apiRateLimitMiddleware = createApiRateLimitMiddleware({ env })
+  const apiRateLimitMiddleware = createApiRateLimitMiddleware({
+    env,
+    isActiveLocalHtmlPreviewTicket: isLocalHtmlPreviewTicketActive,
+  })
   const server = http.createServer(applyMiddlewares(createRouter(getEnv, staticDir), apiRateLimitMiddleware))
   attachTurnWebSocketServer(server)
   server.once('close', () => apiRateLimitMiddleware.close())

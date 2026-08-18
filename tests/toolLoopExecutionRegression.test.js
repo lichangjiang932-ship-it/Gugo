@@ -223,6 +223,82 @@ test('execution reasoning runaway stops without an automatic model retry and per
   assert.equal(checkpoint?.final?.text, result.text)
 })
 
+test('disabled tools remain model-visible but fail closed at the unified execution gate', async () => {
+  const disabledNames = ['run_command', 'git_push', 'file_download']
+  const specs = disabledNames.map((name) => (
+    SERVER_TOOL_SPECS.find((item) => item?.function?.name === name)
+  ))
+  assert.equal(specs.every(Boolean), true)
+
+  const completed = []
+  let executions = 0
+  let modelCalls = 0
+  const result = await runToolsLoop({
+    job: {
+      id: 'job-disabled-tools-visible',
+      userId: null,
+      origin: 'chat',
+      prompt: 'Report the current configured tool catalog.',
+    },
+    step: { id: 'step-disabled-tools-visible', kind: 'chat' },
+    messages: [{ role: 'user', content: 'Report the current configured tool catalog.' }],
+    intentMode: 'auto',
+    toolSpecs: specs,
+    toolsConfig: { disabled: disabledNames },
+    maxIters: 3,
+    enableToolHooks: false,
+    onToolCompleted: async (outcome) => {
+      completed.push({ name: outcome.call.name, result: structuredClone(outcome.result) })
+    },
+    runModel: async ({ messages, tools }) => {
+      modelCalls += 1
+      for (const name of disabledNames) {
+        assert.ok(tools.some((item) => item?.function?.name === name), name)
+      }
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [
+            {
+              id: 'disabled-command',
+              type: 'function',
+              function: { name: 'run_command', arguments: JSON.stringify({ command: 'echo blocked' }) },
+            },
+            {
+              id: 'disabled-push',
+              type: 'function',
+              function: { name: 'git_push', arguments: '{}' },
+            },
+            {
+              id: 'disabled-download',
+              type: 'function',
+              function: {
+                name: 'file_download',
+                arguments: JSON.stringify({ url: 'https://example.com/file.txt', path: 'file.txt' }),
+              },
+            },
+          ],
+        }
+      }
+      const disabledResults = messages.filter((message) => (
+        message.role === 'tool' && String(message.content || '').includes('tool_disabled_by_config')
+      ))
+      assert.equal(disabledResults.length, disabledNames.length)
+      return { content: 'The configured tools are visible but disabled for execution.', toolCalls: [] }
+    },
+    executeTool: async () => {
+      executions += 1
+      return { ok: true }
+    },
+  })
+
+  assert.equal(executions, 0)
+  assert.equal(modelCalls, 2)
+  assert.deepEqual(completed.map((entry) => entry.name).sort(), [...disabledNames].sort())
+  assert.equal(completed.every((entry) => entry.result?.code === 'tool_disabled_by_config'), true)
+  assert.equal(result.text, 'The configured tools are visible but disabled for execution.')
+})
+
 test('default client config keeps bash_exec available through a read-only local PDF execution turn', async () => {
   const pdfPath = 'D:\\destok\\answer-sheet.pdf'
   const injectedPrompt = [
@@ -1199,7 +1275,7 @@ test('refreshed terse chat keeps the same local write catalog on every model rou
   for (const name of ['write_file', 'edit_file', 'apply_patch', 'patch_file', 'bash_exec', 'run_command', 'run_project_check', 'run_test']) {
     assert.ok(catalogs[0].includes(name), name)
   }
-  assert.equal(catalogs[0].includes('slack_send_message'), false)
+  assert.equal(catalogs[0].includes('slack_send_message'), true)
   assert.equal(result.text, '已检查当前状态。')
 })
 
@@ -1571,7 +1647,7 @@ test('a capability challenge after an explicit read-only turn sees write tools b
   })
   assert.deepEqual(
     selectedCatalog.map((item) => item?.function?.name).sort(),
-    [...catalogNames].sort(),
+    [...catalogNames, 'set_deliverables'].sort(),
   )
 
   let modelCalls = 0

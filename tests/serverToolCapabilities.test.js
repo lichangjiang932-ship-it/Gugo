@@ -116,7 +116,7 @@ test('core execution tools survive the canonical turn catalog when enabled', asy
   }
 })
 
-test('resolveTurnToolSpecs removes explicitly disabled builtins after merging tools', async () => {
+test('resolveTurnToolSpecs keeps explicitly disabled builtins discoverable after merging tools', async () => {
   const resolved = await resolveTurnToolSpecs({
     userId: 'server-tool-capability-test',
     baseSpecs: SERVER_TOOL_SPECS,
@@ -127,13 +127,14 @@ test('resolveTurnToolSpecs removes explicitly disabled builtins after merging to
     webSearchReady: true,
   })
   const names = namesOf(resolved)
-  assert.equal(names.includes('list_directory'), false)
-  assert.equal(names.includes('read_file'), false, 'disabled must win over enabled')
-  assert.equal(names.includes('bash_exec'), false)
+  assert.equal(names.includes('list_directory'), true)
+  assert.equal(names.includes('read_file'), true)
+  assert.equal(names.includes('bash_exec'), true)
   assert.equal(names.includes('web_search'), true)
+  assert.equal(names.includes('set_deliverables'), true)
 })
 
-test('model-visible schemas exclude tools disabled by the authoritative server permission gate', async () => {
+test('model-visible schemas remain stable when the authoritative server permission gate disables execution', async () => {
   const userId = 'server-tool-schema-permission-user'
   createUser({ id: userId, email: 'server-tool-schema-permission@example.com' })
   setUserToolPermission({ userId, toolName: 'bash_exec', enabled: false })
@@ -147,8 +148,9 @@ test('model-visible schemas exclude tools disabled by the authoritative server p
     webSearchReady: false,
   })
 
-  assert.equal(namesOf(resolved).includes('bash_exec'), false)
+  assert.equal(namesOf(resolved).includes('bash_exec'), true)
   assert.equal(namesOf(resolved).includes('run_project_check'), true)
+  assert.equal(namesOf(resolved).includes('set_deliverables'), true)
 })
 
 test('writable turns retain read-only verification tools despite legacy client defaults', async () => {
@@ -167,7 +169,8 @@ test('writable turns retain read-only verification tools despite legacy client d
   assert.ok(names.includes('write_file'))
   assert.ok(names.includes('read_file'))
   assert.ok(names.includes('list_directory'))
-  assert.equal(names.includes('edit_file'), false, 'an explicitly disabled write tool stays disabled')
+  assert.ok(names.includes('edit_file'), 'an explicitly disabled write tool stays discoverable')
+  assert.ok(names.includes('set_deliverables'))
 })
 
 test('Git mutation turns retain status and diff for preflight and verification', async () => {
@@ -200,12 +203,12 @@ test('every bash_exec spec tells models to quote Windows absolute paths', () => 
   }
 })
 
-test('resolveTurnToolSpecs exposes web search only when dedicated configuration is ready', async () => {
+test('resolveTurnToolSpecs keeps web search discoverable before dedicated configuration is ready', async () => {
   const baseSpecs = [getBuiltinSpec('web_search'), getBuiltinSpec('fetch_url')]
   const hidden = await resolveTurnToolSpecs({ userId: 'search-unconfigured', baseSpecs, webSearchReady: false })
   const visible = await resolveTurnToolSpecs({ userId: 'search-configured', baseSpecs, webSearchReady: true })
-  assert.deepEqual(namesOf(hidden), ['fetch_url'])
-  assert.deepEqual(namesOf(visible), ['fetch_url', 'web_search'])
+  assert.deepEqual(namesOf(hidden), ['fetch_url', 'set_deliverables', 'web_search'])
+  assert.deepEqual(namesOf(visible), ['fetch_url', 'set_deliverables', 'web_search'])
 })
 
 test('resolveTurnToolSpecs advertises only connector tools backed by enabled integrations', async () => {
@@ -218,7 +221,7 @@ test('resolveTurnToolSpecs advertises only connector tools backed by enabled int
     enabledConnectorTools: ['github_search_repositories'],
     webSearchReady: false,
   })
-  assert.deepEqual(namesOf(resolved), ['github_search_repositories', 'read_file'])
+  assert.deepEqual(namesOf(resolved), ['github_search_repositories', 'read_file', 'set_deliverables'])
 })
 
 test('resolveTurnToolSpecs canonicalizes equivalent schema object order for prompt caching', async () => {

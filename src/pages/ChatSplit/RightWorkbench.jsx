@@ -12,11 +12,12 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { normalizeArtifactLocalPath, resolveDeliveryArtifacts } from '../../lib/artifactReferences.js'
+import { resolveDeliveryArtifacts } from '../../lib/artifactReferences.js'
 import { buildVerifiedLocalFileReferences } from '../../lib/localFileReferences.js'
 import { runWorkbenchTerminal } from '../../lib/workbenchClient.js'
 import { useT } from '../../i18n/I18nProvider.jsx'
 import { withDownloadToken } from '../../lib/jobClient.js'
+import { verifiedLocalFileIdentity } from '../../lib/verifiedLocalFileIdentity.js'
 
 const TABS = { files: Files, chat: MessageSquare, browser: Globe2, terminal: TerminalSquare }
 const DEFAULT_WIDTH = 420
@@ -71,14 +72,7 @@ function collectArtifacts(messages) {
   const seenVerifiedLocalFiles = new Set()
   return newestFirst.filter((artifact) => {
     if (artifact?.verifiedLocalFile !== true) return true
-    const normalizedPath = normalizeArtifactLocalPath(
-      artifact.path || artifact.fullPath || artifact.localPath || artifact.outputPath,
-    )
-    const identity = normalizedPath
-      ? `path:${normalizedPath}`
-      : String(artifact.id || '').trim()
-        ? `receipt:${String(artifact.id).trim()}`
-        : ''
+    const identity = verifiedLocalFileIdentity(artifact)
     if (!identity || seenVerifiedLocalFiles.has(identity)) return !identity
     seenVerifiedLocalFiles.add(identity)
     return true
@@ -269,7 +263,7 @@ export default function RightWorkbench({
       </nav>
 
       {activeTab === 'files' && (
-        <section data-testid="workbench-files" className="min-h-0 flex-1 overflow-y-auto px-2 py-3">
+        <section data-testid="workbench-files" data-artifact-surface="workbench-files" className="min-h-0 flex-1 overflow-y-auto px-2 py-3">
           <div className="mb-2 flex items-end justify-between gap-3 px-1">
             <div>
               <h3 className="text-xs font-semibold text-ink">{t('workbench.recentArtifacts')}</h3>

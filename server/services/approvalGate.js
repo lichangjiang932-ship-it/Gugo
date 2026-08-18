@@ -196,6 +196,9 @@ export function formatDeniedToolResult(gate) {
     const suggestedMode = gate.suggestedPermissionMode === 'acceptEdits' ? '自动接受编辑模式' : '正常模式'
     return {
       ...base,
+      code: gate.permissionMode === 'plan'
+        ? 'policy_denied_plan_mode'
+        : 'policy_denied_permission_mode',
       policyDenied: true,
       permissionMode: gate.permissionMode || null,
       suggestedPermissionMode: gate.suggestedPermissionMode || 'normal',

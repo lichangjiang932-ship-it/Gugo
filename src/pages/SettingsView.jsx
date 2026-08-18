@@ -280,7 +280,7 @@ export default function SettingsView() {
 
   return (
     <div className="settings-page h-screen flex overflow-hidden">
-      <div className="settings-page-background flex min-w-0 flex-1" aria-hidden="true" inert="">
+      <div className="settings-page-background flex min-w-0 flex-1" aria-hidden="true" inert={true}>
         <LeftRail />
         <div className="min-w-0 flex-1 bg-paper-2/25" />
       </div>

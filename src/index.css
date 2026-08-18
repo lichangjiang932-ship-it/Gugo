@@ -37,6 +37,10 @@ html[data-theme="light"] {
   --color-cyan-rgb: 46 143 163;
 
   /* Accent color tokens (动态写入 by ThemeWrapper / applyAccent) */
+  --workbench-accent-h: 21;
+  --workbench-accent-s: 79%;
+  --workbench-accent-l: 57%;
+  --workbench-accent: hsl(var(--workbench-accent-h) var(--workbench-accent-s) var(--workbench-accent-l));
   --accent-h: 21;
   --accent-s: 79%;
   --accent-l: 57%;
@@ -101,6 +105,20 @@ html[data-theme="white"] {
   --color-skel-2-rgb: 209 213 219;
   --color-ember-rgb: 232 106 60;
   --color-cyan-rgb: 36 127 145;
+}
+
+/* Workbench accent and authored output are separate design domains. Theme
+ * changes may recolor shell controls, but artifact/document identity stays on
+ * stable neutral tokens inherited from the active light/white/dark theme. */
+[data-artifact-surface] {
+  --artifact-accent-rgb: var(--color-ink-soft-rgb);
+  --artifact-accent: rgb(var(--artifact-accent-rgb));
+  --color-ember-rgb: var(--artifact-accent-rgb);
+  --color-ember: var(--artifact-accent);
+  --color-ember-soft: rgb(var(--artifact-accent-rgb) / 0.1);
+  --color-ember-line: rgb(var(--artifact-accent-rgb) / 0.28);
+  --color-ember-glow: rgb(var(--artifact-accent-rgb) / 0.06);
+  --accent: var(--artifact-accent);
 }
 
 @layer base {
@@ -386,15 +404,15 @@ html[data-density="loose"] {
   margin-bottom: 0.65rem;
   overflow: hidden;
   border: 1px solid rgb(var(--color-ink-rgb) / 0.12);
-  border-radius: 0.8rem;
-  background: linear-gradient(180deg, rgb(var(--color-paper-rgb) / 0.82), rgb(var(--color-paper-2-rgb) / 0.38));
-  box-shadow: 0 8px 24px rgb(var(--color-ink-rgb) / 0.035);
+  border-radius: 0.55rem;
+  background: rgb(var(--color-paper-rgb) / 0.72);
+  box-shadow: none;
   transition: border-color 180ms ease, box-shadow 180ms ease, background-color 180ms ease;
 }
 
 .chat-activity-panel[data-status="running"] {
   border-color: rgb(var(--color-cyan-rgb) / 0.28);
-  box-shadow: 0 8px 28px rgb(var(--color-cyan-rgb) / 0.055);
+  box-shadow: none;
 }
 
 .chat-activity-panel[data-status="error"] {
@@ -1037,12 +1055,9 @@ html[data-density="loose"] {
   font-size: 0.65rem;
 }
 
-/* Delivered filenames follow their surrounding answer instead of the user
- * accent. Strong-accent mode may emphasize controls, never output identity. */
+/* Delivered filenames follow their surrounding answer instead of the user accent. */
 .chat-output-file-name,
-.theme-accent-strong .chat-output-file-name,
-.chat-output-file-name code,
-.theme-accent-strong .chat-output-file-name code {
+.chat-output-file-name code {
   color: inherit !important;
 }
 
@@ -1300,7 +1315,7 @@ html[data-density="loose"] {
 .chat-preview-pane {
   min-height: 0;
   container: chat-preview / inline-size;
-  box-shadow: -10px 0 28px rgb(var(--color-ink-rgb) / 0.045);
+  box-shadow: -6px 0 18px rgb(var(--color-ink-rgb) / 0.035);
 }
 
 .chat-preview-backdrop {
@@ -1333,7 +1348,7 @@ html[data-density="loose"] {
 }
 
 .chat-preview-active-tab {
-  box-shadow: 0 1px 2px rgb(var(--color-ink-rgb) / 0.06);
+  box-shadow: none;
 }
 
 @media (max-width: 1023px) {
@@ -1407,17 +1422,17 @@ html[data-theme="dark"] .chat-code-block .hljs-function { color: #d2a8ff; }
  * 这样不动 tailwind config 也能让用户"看到"强调色生效.
  */
 .theme-accent-strong {
-  --accent: hsl(var(--accent-h) var(--accent-s) var(--accent-l));
+  --accent: var(--workbench-accent);
 }
 
-.theme-accent-strong a.primary,
-.theme-accent-strong button.primary,
-.theme-accent-strong [data-accent] {
+.theme-accent-strong a.primary:not([data-artifact-surface]):not([data-artifact-surface] *),
+.theme-accent-strong button.primary:not([data-artifact-surface]):not([data-artifact-surface] *),
+.theme-accent-strong [data-accent]:not([data-artifact-surface]):not([data-artifact-surface] *) {
   color: var(--accent) !important;
 }
 
-.theme-accent-strong button.primary,
-.theme-accent-strong [data-accent-bg] {
+.theme-accent-strong button.primary:not([data-artifact-surface]):not([data-artifact-surface] *),
+.theme-accent-strong [data-accent-bg]:not([data-artifact-surface]):not([data-artifact-surface] *) {
   background-color: var(--accent) !important;
   color: #fff !important;
   border-color: var(--accent) !important;

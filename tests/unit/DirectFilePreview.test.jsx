@@ -231,6 +231,44 @@ test('verified local HTML offers an in-place retry after a persistent 405 and ke
   }
 })
 
+test('verified local HTML displays structured preview-session failure details', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 422,
+    json: async () => ({
+      error: {
+        code: 'HTML_DELIVERY_RESOURCE_MISSING',
+        message: '图片 images/missing.png 不存在',
+        hint: '检查 HTML 中的相对路径',
+      },
+    }),
+  })
+  try {
+    await act(async () => root.render(
+      <DirectFilePreview
+        file={{ filename: 'gallery.html', type: 'html' }}
+        url="/api/local-files/verified/formal-gallery?turnId=turn-gallery&preview=1"
+        t={(key) => key}
+      />,
+    ))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    const status = rootElement.querySelector('[role="status"]')
+    assert.ok(status)
+    assert.equal(status.getAttribute('data-error-code'), 'HTML_DELIVERY_RESOURCE_MISSING')
+    assert.match(status.textContent, /images\/missing\.png/)
+    assert.match(status.textContent, /检查 HTML 中的相对路径/)
+    assert.doesNotMatch(status.textContent, /chatPreview\.localHtmlServiceUnavailable/)
+  } finally {
+    await act(async () => root.unmount())
+    globalThis.fetch = originalFetch
+    dom.window.close()
+  }
+})
+
 test('verified local HTML revokes a preview ticket that arrives after the sidebar closes', async () => {
   const dom = setupDom()
   const rootElement = dom.window.document.getElementById('root')

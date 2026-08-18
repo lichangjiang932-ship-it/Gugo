@@ -204,12 +204,33 @@ function waitForPreviewRetry(delayMs, signal) {
   })
 }
 
-async function previewSessionCompatibilityError({ fetchImpl, signal, status }) {
+async function structuredPreviewSessionError(response) {
+  const status = Number(response?.status) || 0
+  let payload = null
+  try {
+    if (typeof response?.json === 'function') payload = await response.json()
+  } catch {
+    payload = null
+  }
+  const details = payload?.error && typeof payload.error === 'object'
+    ? payload.error
+    : payload && typeof payload === 'object' ? payload : null
+  const error = new Error(
+    String(details?.message || '').trim()
+      || `local HTML preview session request failed: ${status}`,
+  )
+  error.statusCode = status
+  error.code = String(details?.code || '').trim() || 'LOCAL_HTML_PREVIEW_SESSION_FAILED'
+  if (details?.hint) error.hint = String(details.hint)
+  if (details?.path) error.path = String(details.path)
+  error.details = details
+  return error
+}
+
+async function previewSessionCompatibilityError({ fetchImpl, signal, response }) {
+  const status = Number(response?.status) || 0
   if (status !== 405) {
-    const error = new Error(`local HTML preview session request failed: ${status}`)
-    error.statusCode = status
-    error.code = 'LOCAL_HTML_PREVIEW_SESSION_FAILED'
-    return error
+    return structuredPreviewSessionError(response)
   }
   try {
     const response = await fetchImpl('/api/health', {
@@ -264,7 +285,7 @@ export async function createLocalHtmlPreviewSession(url, {
     await waitForPreviewRetry(delay, signal)
     response = await request()
   }
-  if (!response.ok) throw await previewSessionCompatibilityError({ fetchImpl, signal, status: response.status })
+  if (!response.ok) throw await previewSessionCompatibilityError({ fetchImpl, signal, response })
   const payload = await response.json()
   const previewUrl = new URL(String(payload?.url || ''), baseOrigin)
   if (previewUrl.origin !== baseOrigin || !previewUrl.pathname.startsWith('/api/local-files/previews/')) {

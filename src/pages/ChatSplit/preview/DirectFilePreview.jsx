@@ -89,7 +89,7 @@ function isVerifiedLocalFileUrl(url) {
 }
 
 function VerifiedLocalHtmlPreview({ file, t, url }) {
-  const [state, setState] = useState({ url: '', errorCode: '' })
+  const [state, setState] = useState({ url: '', error: null })
   const [retryVersion, setRetryVersion] = useState(0)
   useEffect(() => {
     const controller = new AbortController()
@@ -101,12 +101,16 @@ function VerifiedLocalHtmlPreview({ file, t, url }) {
         void revokeLocalHtmlPreviewSession(previewUrl).catch(() => {})
         return
       }
-      setState({ url: previewUrl, errorCode: '' })
+      setState({ url: previewUrl, error: null })
     }).catch((cause) => {
       if (!disposed && cause?.name !== 'AbortError') {
         setState({
           url: '',
-          errorCode: String(cause?.code || 'LOCAL_HTML_PREVIEW_SESSION_FAILED'),
+          error: {
+            code: String(cause?.code || 'LOCAL_HTML_PREVIEW_SESSION_FAILED'),
+            message: String(cause?.message || ''),
+            hint: String(cause?.hint || ''),
+          },
         })
       }
     })
@@ -117,19 +121,24 @@ function VerifiedLocalHtmlPreview({ file, t, url }) {
     }
   }, [retryVersion, url])
 
-  if (state.errorCode) {
+  if (state.error) {
     const serviceUnavailable = [
       'LOCAL_HTML_PREVIEW_NOT_READY',
       'LOCAL_HTML_PREVIEW_RUNTIME_MISMATCH',
       'LOCAL_HTML_PREVIEW_ROUTE_UNAVAILABLE',
-    ].includes(state.errorCode)
+    ].includes(state.error.code)
     const detailKey = serviceUnavailable
       ? 'chatPreview.localHtmlServiceUnavailable'
       : 'chatPreview.previewRetryHint'
+    const structuredDetail = [state.error.message, state.error.hint]
+      .map((value) => String(value || '').trim())
+      .filter((value, index, values) => value && values.indexOf(value) === index)
+      .join(' ')
     return <PreviewStatus
       icon={<AlertCircle className="h-6 w-6" />}
       text={t('chatPreview.previewFailed')}
-      detail={t(detailKey)}
+      detail={serviceUnavailable ? t(detailKey) : (structuredDetail || t(detailKey))}
+      errorCode={state.error.code}
       action={(
         <button
           type="button"
@@ -232,9 +241,9 @@ function WorkbookPreview({ sheets }) {
   )
 }
 
-function PreviewStatus({ icon, text, detail = '', action = null }) {
+function PreviewStatus({ icon, text, detail = '', action = null, errorCode = '' }) {
   return (
-    <div className="flex h-full min-h-[320px] flex-col items-center justify-center gap-3 p-6 text-center text-ink-fade" role="status">
+    <div className="flex h-full min-h-[320px] flex-col items-center justify-center gap-3 p-6 text-center text-ink-fade" role="status" data-error-code={errorCode || undefined}>
       <span className="flex h-14 w-14 items-center justify-center rounded-2xl border border-ink/10 bg-paper shadow-sm">{icon}</span>
       <p className="max-w-sm text-sm font-medium text-ink-soft">{text}</p>
       {detail && <p className="max-w-sm break-words text-xs leading-relaxed text-ink-fade">{detail}</p>}
