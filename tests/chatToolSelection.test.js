@@ -21,7 +21,7 @@ const sorted = (names) => [...names].sort((a, b) => a.localeCompare(b, 'en'))
 const TOOL_NAMES = [
   'create_pptx', 'create_docx', 'create_xlsx', 'create_html_app', 'generate_image',
   'list_directory', 'read_file', 'grep_code', 'write_file', 'edit_file', 'apply_patch',
-  'bash_exec', 'run_project_check', 'git_diff', 'git_push', 'web_search',
+  'bash_exec', 'run_project_check', 'git_diff', 'git_push', 'rewind_files', 'web_search',
   'browser_snapshot', 'browser_click', 'Agent', 'manage_todos', 'remember',
   'request_clarification', 'request_directory',
   'notion_search', 'slack_send_message', 'mcp__airtable__list_records',
@@ -40,6 +40,13 @@ const EXECUTE_NAMES = sorted([
   ...TOOL_NAMES.filter((name) => !ARTIFACT_NAMES.has(name)),
   'set_deliverables',
 ])
+const LOCAL_EXECUTE_NAMES = sorted([
+  'list_directory', 'read_file', 'grep_code',
+  'write_file', 'edit_file', 'apply_patch',
+  'bash_exec', 'run_project_check', 'git_diff',
+  'request_clarification', 'request_directory', 'set_deliverables',
+])
+const LOCAL_REWIND_EXECUTE_NAMES = sorted([...LOCAL_EXECUTE_NAMES, 'rewind_files'])
 const ANSWER_NAMES = sorted([...READ_ONLY_NAMES, ...ANSWER_RECOVERY_NAMES])
 const metadataResolver = (name) => ({
   isReadOnly: READ_ONLY_NAMES.has(name),
@@ -98,7 +105,11 @@ test('implicit delegated commands retain execution tools without unrelated gener
     'Please handle the login issue and verify the result.',
     'As analyzed above... 写入 Task 1。\n[附件: 雅思写作最新答题纸.pdf]"D:\\desktop\\雅思写作最新答题纸.pdf"',
   ]) {
-    assert.deepEqual(namesOf(selectChat({ prompt })), EXECUTE_NAMES)
+    const selected = namesOf(selectChat({ prompt }))
+    assert.deepEqual(selected, LOCAL_EXECUTE_NAMES)
+    for (const name of ['browser_click', 'slack_send_message', 'mcp__airtable__create_record']) {
+      assert.ok(!selected.includes(name), `${prompt}: ${name}`)
+    }
   }
 })
 
@@ -112,13 +123,116 @@ test('object-first webpage transformations retain write tools', () => {
   assert.equal(selected.includes('generate_image'), false)
 })
 
+test('first-turn visual edits retain file mutation tools before any capability challenge', () => {
+  for (const prompt of [
+    '"E:\\果\\gallery.html"这个网站，是用了很多图片，但是现在我还有几个需求，1.图片之间太过拥挤2.旋转的时候似乎无法维系圆形',
+    '请读取 E:\\果\\gallery.html，把卡片翻转后的背面显示和朝向调整好。',
+    '编辑 E:\\果\\gallery.html，修好卡片背面和翻转方向。',
+    '把这个页面的卡片翻转效果改一下。',
+  ]) {
+    const selected = namesOf(selectChat({ prompt }))
+    for (const name of ['read_file', 'write_file', 'edit_file', 'apply_patch']) {
+      assert.ok(selected.includes(name), `${prompt}: ${name}`)
+    }
+  }
+})
+
+test('an exact local file path excludes managed-artifact source reads', () => {
+  const prompt = '"E:\\果\\gallery.html"这个网站，是用了很多图片，但是现在我还有几个需求，1.图片之间太过拥挤2.旋转的时候似乎无法维系圆形'
+  const localNames = namesOf(selectJobToolSpecs({
+    origin: 'chat',
+    specs: SERVER_TOOL_SPECS,
+    prompt,
+    userPrompt: prompt,
+  }))
+  assert.ok(localNames.includes('read_file'))
+  assert.ok(localNames.includes('write_file'))
+  assert.equal(localNames.includes('read_artifact_source'), false)
+
+  const currentArtifactNames = namesOf(selectChatToolSpecs({
+    prompt: '修改当前已生成产物的颜色。',
+    userPrompt: '修改当前已生成产物的颜色。',
+    specs: [spec('read_artifact_source'), spec('read_file'), spec('write_file')],
+    metadataResolver,
+  }))
+  assert.ok(currentArtifactNames.includes('read_artifact_source'))
+})
+
+test('analysis of local-file requirements remains read-only', () => {
+  for (const prompt of [
+    '"E:\\果\\gallery.html"这个文件有什么问题？',
+    '请分析 "E:\\果\\gallery.html" 的以下需求：1.图片是否拥挤2.旋转是否圆滑',
+  ]) {
+    const selected = namesOf(selectChat({ prompt }))
+    for (const name of ['write_file', 'edit_file', 'apply_patch', 'bash_exec']) {
+      assert.equal(selected.includes(name), false, `${prompt}: ${name}`)
+    }
+  }
+})
+
+test('local UI surface names do not mount unrelated web, browser, or connector tools', () => {
+  for (const prompt of [
+    '修改联网搜索页面的颜色和图标。',
+    '只修改当前这一张「联网搜索」配置页面，功能全部保留不变。',
+    '修改通知页面的颜色和图标。',
+    '修改 Slack 消息页面的样式。',
+    'Edit the gallery page and adjust the card flip direction.',
+    'Edit the web search settings page styles.',
+  ]) {
+    const selected = namesOf(selectChat({ prompt }))
+    assert.deepEqual(selected, LOCAL_EXECUTE_NAMES, prompt)
+    for (const name of [
+      'web_search', 'browser_snapshot', 'browser_click',
+      'slack_send_message', 'mcp__airtable__create_record',
+    ]) {
+      assert.ok(!selected.includes(name), `${prompt}: ${name}`)
+    }
+  }
+})
+
+test('explicit web, browser, and connector actions mount their authorized capabilities', () => {
+  const web = namesOf(selectChat({
+    prompt: '请联网搜索最新 Node.js LTS 版本并修改 D:\\demo\\README.md。',
+  }))
+  for (const name of ['web_search', 'write_file']) assert.ok(web.includes(name), name)
+  for (const name of ['browser_click', 'slack_send_message']) assert.ok(!web.includes(name), name)
+
+  const browser = namesOf(selectChat({
+    prompt: 'Use the browser to visit the website, then write D:\\demo\\result.txt.',
+  }))
+  for (const name of ['browser_snapshot', 'browser_click', 'write_file']) {
+    assert.ok(browser.includes(name), name)
+  }
+  for (const name of ['web_search', 'slack_send_message']) assert.ok(!browser.includes(name), name)
+
+  const connector = namesOf(selectChat({ prompt: '请发送发布通知到 Slack。' }))
+  assert.ok(connector.includes('slack_send_message'))
+})
+
+test('rewind_files is mounted only for explicit file rollback or undo intent', () => {
+  assert.equal(namesOf(selectChat({ prompt: '普通修改 notes.txt。' })).includes('rewind_files'), false)
+  for (const prompt of [
+    'Rewrite notes.txt then revert the change.',
+    'Undo the changes in notes.txt.',
+    '回滚 notes.txt 的修改。',
+    '撤销对 notes.txt 的改动。',
+    '把 notes.txt 恢复原状。',
+  ]) {
+    const selected = namesOf(selectChat({ prompt }))
+    assert.deepEqual(selected, LOCAL_REWIND_EXECUTE_NAMES, prompt)
+  }
+})
+
 test('an explicit Chinese repair delegation retains the coding execution toolchain', () => {
   const prompt = '\u4f60\u6839\u636e\u5b9e\u9645\u60c5\u51b5\u6765\u8fdb\u884c\u4fee\u590d\uff0cpython\u7b49\u7684\u4ee3\u7801\u6267\u884c\u80fd\u529b\u662f\u5fc5\u987b\u6709\u7684'
   const selected = namesOf(selectChat({ prompt }))
 
-  assert.deepEqual(selected, EXECUTE_NAMES)
-  for (const name of ['write_file', 'edit_file', 'apply_patch', 'bash_exec', 'git_push']) {
+  assert.deepEqual(selected, LOCAL_EXECUTE_NAMES)
+  for (const name of ['write_file', 'edit_file', 'apply_patch', 'bash_exec']) {
     assert.ok(selected.includes(name), name)
+  }
+  for (const name of ['git_push', 'browser_click', 'slack_send_message']) {
+    assert.ok(!selected.includes(name), name)
   }
 })
 
@@ -207,7 +321,7 @@ test('read-only path grants do not downgrade a user write request to answer mode
   const userPrompt = 'Write the completed answers into D:\\demo\\README.md and verify the file.'
   for (const intentMode of ['auto', 'execute']) {
     const selected = namesOf(selectChat({ prompt, userPrompt, intentMode }))
-    assert.deepEqual(selected, EXECUTE_NAMES)
+    assert.deepEqual(selected, LOCAL_EXECUTE_NAMES)
     for (const name of ['write_file', 'bash_exec', 'request_directory']) {
       assert.ok(selected.includes(name), `${intentMode}: ${name}`)
     }
@@ -222,7 +336,7 @@ test('keeping the source file unchanged does not downgrade an output-copy workfl
 
   for (const intentMode of ['auto', 'execute']) {
     const selected = namesOf(selectChat({ prompt: userPrompt, userPrompt, intentMode }))
-    assert.deepEqual(selected, EXECUTE_NAMES)
+    assert.deepEqual(selected, LOCAL_EXECUTE_NAMES)
     for (const name of ['write_file', 'edit_file', 'bash_exec', 'request_directory']) {
       assert.ok(selected.includes(name), `${intentMode}: ${name}`)
     }
@@ -234,7 +348,7 @@ test('preserving article content does not downgrade a separate output workflow',
 
   for (const intentMode of ['auto', 'execute']) {
     const selected = namesOf(selectChat({ prompt: userPrompt, userPrompt, intentMode }))
-    assert.deepEqual(selected, EXECUTE_NAMES)
+    assert.deepEqual(selected, LOCAL_EXECUTE_NAMES)
     for (const name of ['write_file', 'bash_exec', 'request_directory']) {
       assert.ok(selected.includes(name), `${intentMode}: ${name}`)
     }
@@ -374,9 +488,76 @@ test('a short authorization inherits only the immediately preceding user executi
   for (const userPrompt of ['\u7ee7\u7eed', '\u6211\u6388\u6743\u7ed9\u4f60\uff0c\u7ee7\u7eed']) {
     assert.deepEqual(
       namesOf(selectChat({ prompt: userPrompt, userPrompt, previousUserPrompt })),
-      EXECUTE_NAMES,
+      LOCAL_EXECUTE_NAMES,
       userPrompt,
     )
+  }
+})
+
+test('a capability challenge rechecks tools and inherits the preceding unfinished mutation', () => {
+  const previousUserPrompt = '请修改 D:\\demo\\app.js，写入文件并运行测试。'
+  for (const userPrompt of [
+    '为什么不能你来改',
+    '为什么不能你自己修改？',
+    '为什么你不能直接改？',
+    '你不能直接改吗？',
+    '为什么没有写入工具？',
+    '那你不能直接改吗？',
+    '所以为什么不能你来修改？',
+    '难道你不能自己改？',
+    '既然有工具，为什么不能直接改？',
+    '为什么不直接由你来改？',
+    '怎么不自己修改？',
+    '你不能修改用户资料？',
+    "Why can't you edit it yourself?",
+  ]) {
+    assert.deepEqual(
+      namesOf(selectChat({ prompt: userPrompt, userPrompt, previousUserPrompt })),
+      LOCAL_EXECUTE_NAMES,
+      userPrompt,
+    )
+  }
+})
+
+test('a capability challenge cannot invent mutation intent or override read-only context', () => {
+  const challenge = '为什么不能你自己修改？'
+  for (const previousUserPrompt of [
+    '',
+    '请解释 OAuth 刷新令牌如何工作。',
+    '请解释为什么需要修改 D:\\demo\\app.js。',
+    '整个项目只读，不要修改任何文件。',
+    'Inspect D:\\demo\\app.js read-only. Do not modify it; explain how you would fix it.',
+  ]) {
+    assert.deepEqual(
+      namesOf(selectChat({ prompt: challenge, userPrompt: challenge, previousUserPrompt })),
+      ANSWER_NAMES,
+      previousUserPrompt,
+    )
+  }
+  assert.deepEqual(namesOf(selectChat({
+    prompt: challenge,
+    userPrompt: challenge,
+    previousUserPrompt: '请修改 D:\\demo\\app.js。',
+    intentMode: 'answer',
+  })), ANSWER_NAMES)
+  assert.deepEqual(namesOf(selectChat({
+    prompt: '为什么不能修改只读文件？',
+    userPrompt: '为什么不能修改只读文件？',
+    previousUserPrompt: '请修改 D:\\demo\\app.js。',
+  })), ANSWER_NAMES)
+  for (const userPrompt of [
+    '为什么用户不能直接修改昵称？',
+    '为什么当前用户不能修改昵称？',
+    '为什么系统管理员不能编辑成员资料？',
+    '为什么当前页面不能修改标题？',
+    '你能解释为什么用户不能修改昵称吗？',
+    'Why is the current system unable to edit records?',
+  ]) {
+    assert.deepEqual(namesOf(selectChat({
+      prompt: userPrompt,
+      userPrompt,
+      previousUserPrompt: '请修改 D:\\demo\\app.js。',
+    })), ANSWER_NAMES, userPrompt)
   }
 })
 
@@ -391,7 +572,7 @@ test('short visual revisions inherit the immediately preceding file execution re
   ]) {
     assert.deepEqual(
       namesOf(selectChat({ prompt: userPrompt, userPrompt, previousUserPrompt })),
-      EXECUTE_NAMES,
+      LOCAL_EXECUTE_NAMES,
       userPrompt,
     )
   }
@@ -454,7 +635,7 @@ test('PDF layout boundaries do not downgrade a real write-and-render request to 
   ].join('\n')
 
   const selected = namesOf(selectChat({ prompt: userPrompt, userPrompt }))
-  assert.deepEqual(selected, EXECUTE_NAMES)
+  assert.deepEqual(selected, LOCAL_EXECUTE_NAMES)
   for (const name of ['bash_exec', 'write_file', 'request_directory']) {
     assert.ok(selected.includes(name), name)
   }
@@ -512,4 +693,44 @@ test('equivalent route classes keep deterministic schema order for provider cach
     namesOf(selectChat({ prompt: '什么是 OAuth？' })),
     namesOf(selectChat({ prompt: 'Explain OAuth.' })),
   )
+})
+
+test('local mutation selection is deterministic across catalog permutations and repeated runs', () => {
+  const prompt = '修改 D:\\demo\\app.js，写入文件并运行测试。'
+  const permutations = [
+    SPECS,
+    [...SPECS].reverse(),
+    [...SPECS.slice(7), ...SPECS.slice(0, 7)],
+  ]
+  for (let run = 0; run < 5; run += 1) {
+    for (const specs of permutations) {
+      const selected = namesOf(selectJobToolSpecs({
+        origin: 'chat',
+        specs,
+        prompt,
+        userPrompt: prompt,
+        metadataResolver,
+      }))
+      assert.deepEqual(selected, LOCAL_EXECUTE_NAMES, `${run}`)
+    }
+  }
+})
+
+test('duplicate tool names resolve to one canonical schema independent of load order', () => {
+  const schemaA = spec('write_file')
+  const schemaB = spec('write_file')
+  schemaA.function.description = 'schema-A'
+  schemaB.function.description = 'schema-B'
+  const prompt = '修改 D:\\demo\\app.js。'
+  const selectDuplicate = (specs) => selectChatToolSpecs({
+    prompt,
+    userPrompt: prompt,
+    specs,
+    metadataResolver,
+  })
+
+  const forward = selectDuplicate([spec('read_file'), schemaB, schemaA])
+  const reversed = selectDuplicate([schemaA, schemaB, spec('read_file')])
+  assert.deepEqual(forward, reversed)
+  assert.equal(forward.find((item) => item.function.name === 'write_file')?.function.description, 'schema-A')
 })

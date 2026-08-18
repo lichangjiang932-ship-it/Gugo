@@ -237,7 +237,7 @@ html[data-density="loose"] {
 }
 
 .chat-mini-timeline {
-  left: max(0.375rem, calc(50% - 28rem));
+  left: 0.5rem;
 }
 
 .chat-mini-timeline-list {

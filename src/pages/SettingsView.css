@@ -145,6 +145,27 @@
   padding: 22px 28px 32px;
 }
 
+/* Keep this one configuration view in the same quiet, light console palette
+ * as the restyled web-search cards without changing any other settings tab. */
+.settings-dialog-main:has(.web-search-settings) {
+  background: #faf8f3;
+}
+
+.settings-dialog-main:has(.web-search-settings) .settings-dialog-toolbar {
+  border-bottom-color: #e8e6e0;
+}
+
+.settings-dialog-main:has(.web-search-settings) .settings-config-button,
+.settings-dialog-main:has(.web-search-settings) .settings-close-button {
+  color: #66645e;
+}
+
+.settings-dialog-main:has(.web-search-settings) .settings-config-button:hover,
+.settings-dialog-main:has(.web-search-settings) .settings-close-button:hover {
+  background: #f5f5f0;
+  color: #1c1c1a;
+}
+
 .settings-panel {
   width: 100%;
   max-width: 680px;

@@ -117,6 +117,11 @@ test('long-term memory remains internal instead of adding a disclosure after eve
   assert.doesNotMatch(messagesSource, /MemoryUsageDisclosure|getMemoriesByIdsApi|chatMessages\.memoryUsed/)
 })
 
+test('mini timeline stays beside the history rail divider instead of the output column', () => {
+  assert.match(stylesSource, /\.chat-mini-timeline\s*\{\s*left:\s*0\.5rem;\s*\}/)
+  assert.doesNotMatch(stylesSource, /\.chat-mini-timeline\s*\{[^}]*calc\(50%\s*-\s*28rem\)/)
+})
+
 test('message time, model, and latency reveal with copy actions on hover or focus', () => {
   const userTime = messageRowSource.match(/data-testid="user-message-time"[\s\S]*?<\/span>/)?.[0] || ''
   const assistantMeta = messageRowSource.match(/data-testid="assistant-message-meta"[\s\S]*?<\/div>/)?.[0] || ''

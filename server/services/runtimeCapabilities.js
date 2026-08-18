@@ -28,6 +28,8 @@ export function buildRuntimeCapabilityBlock({
   const lines = [
     RUNTIME_CAPABILITIES_MARKER,
     'Only capabilities backed by tools in this turn are listed below. Use the tools instead of claiming the capability is unavailable.',
+    'Before saying that a tool or capability is missing, inspect the exact tool schemas supplied with this request and the capability list below. Calling only read tools is not evidence that write tools are absent.',
+    'If the user challenges a prior claim that you cannot make an unfinished change, re-check this turn\'s schemas and continue the change when the required tools are present. Do not repeat the prior capability claim from memory.',
     'When the user asks for a concrete change or deliverable and a relevant tool is exposed, call the tool now. Do not substitute copy-paste code, shell commands, or manual instructions for execution.',
     'If a tool fails, use its code, error, and hint to diagnose the cause, change the arguments or inspect state with another exposed tool, and continue. Do not repeat the identical failed call; ask the user only for a real permission, approval, or indispensable input blocker.',
     'Before claiming completion, verify changed or generated outputs with an exposed read, inspect, probe, diff, or check tool.',

@@ -61,6 +61,8 @@ test('settings uses a grouped modal and keeps configuration modules distinct', (
   assert.match(settings, /inert=""/)
   assert.match(settings, /useModalFocusTrap/)
   assert.match(settings, /settings\.openConfigFile/)
+  assert.match(settings, /openRuntimeConfigInBrowser/)
+  assert.doesNotMatch(settings, /configFileWebFallback/)
   assert.doesNotMatch(settings, /SETTINGS_NAV_ITEMS|SETTINGS_TAB_FEATURES|SETTINGS_TAB_FILES|SETTINGS_TAB_PET/)
   assert.doesNotMatch(settings, /SettingsToolsPanel|SETTINGS_TAB_TOOLS/)
   assert.match(navigation, /settingsPathForSection/)

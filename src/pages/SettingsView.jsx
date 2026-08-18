@@ -17,6 +17,7 @@ import { SettingsGroup, SettingsPanel, SettingsRow } from '../components/setting
 import SettingsWebSearchPanel from '../components/settings/SettingsWebSearchPanel.jsx'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { getSystemDiagnostics, testModelEndpoint } from '../lib/modelClient.js'
+import { openRuntimeConfigInBrowser } from '../lib/runtimeConfigClient.js'
 import {
   SETTINGS_TAB_ABOUT,
   SETTINGS_TAB_AGENT_PRESETS,
@@ -187,13 +188,11 @@ export default function SettingsView() {
 
   const openConfigFile = useCallback(async () => {
     const desktopOpen = globalThis.window?.gugoDesktop?.openConfigFile
-    if (typeof desktopOpen !== 'function') {
-      setConfigMessage(t('settings.configFileWebFallback'))
-      return
-    }
     try {
-      const result = await desktopOpen()
-      if (result?.opened !== true) throw new Error('desktop config was not opened')
+      const result = typeof desktopOpen === 'function'
+        ? await desktopOpen()
+        : await openRuntimeConfigInBrowser()
+      if (result?.opened !== true) throw new Error('runtime config was not opened')
       setConfigMessage(t('settings.configFileOpened'))
     } catch {
       setConfigMessage(t('settings.configFileOpenFailed'))

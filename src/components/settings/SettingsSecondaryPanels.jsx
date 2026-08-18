@@ -55,7 +55,8 @@ export function SettingsPermissionsPanel({ navigate, t, state, enabledPermCount 
 
 export function SettingsAppearancePanel({ t, state, dispatch }) {
   const themeOptions = [
-    { value: 'light', aliases: ['white'], label: t('settings.themeLight') },
+    { value: 'light', label: t('settings.themeLight') },
+    { value: 'white', label: t('settings.themeWhite') },
     { value: 'dark', label: t('settings.themeDark') },
     { value: 'system', label: t('settings.themeSystem') },
   ]

@@ -1,5 +1,6 @@
 import {
   hasMutationExecutionIntent,
+  isExecutionCapabilityChallenge,
   normalizeTurnIntentMode,
   shouldRequireExecution,
 } from '../utils/executionIntent.js'
@@ -9,6 +10,8 @@ const ORCHESTRATION_TOOL_NAMES = new Set(['Agent', 'manage_todos'])
 const ANSWER_RECOVERY_TOOL_NAMES = new Set(['request_clarification', 'request_directory'])
 
 const EXPLICIT_READ_ONLY = /\b(?:read[- ]only|no[- ]write)\b|\b(?:do not|don't|never|without)\b.{0,24}\b(?:change|modify|edit|write|delete|remove|rename|move|patch|mutate)\b|\u53ea\u8bfb|\u4ec5(?:\u67e5\u770b|\u5206\u6790|\u68c0\u67e5)|\u4e0d\u8981.{0,16}(?:\u4fee\u6539|\u7f16\u8f91|\u5199\u5165|\u5220\u9664|\u79fb\u9664|\u91cd\u547d\u540d|\u79fb\u52a8|\u6253\u8865\u4e01|\u6539\u52a8|\u53d8\u66f4|\u4fee\u590d)/i
+const ANALYSIS_ONLY_REQUEST = /^\s*(?:\u8bf7)?\s*(?:\u5206\u6790|\u89e3\u91ca|\u8bf4\u660e|\u8bc4\u4f30|\u5ba1\u67e5|\u8ba8\u8bba|\u68b3\u7406|\u603b\u7ed3|\u5217\u51fa|\u8bc6\u522b)/i
+const LOCAL_FILE_TARGET_REFERENCE = /(?:^|[\s"'`(])(?:[a-z]:[\\/]|\.\.?[\\/]|\/)(?:[^\r\n"'`]+[\\/])*[^\r\n"'`]+\.[a-z0-9]{1,12}(?=$|[\s"'`),;:\uff0c\u3002\uff1b\uff1a\uff01\uff1f])/iu
 const LOCAL_LAYOUT_WRITE_BOUNDARY = /\b(?:do not|don't|never)\s+write\s+(?:below|above|outside|past|beyond|within|inside|in|on)\b[^\r\n.!?]{0,80}\b(?:line|margin|box|area|region|field|space|page|section)\b[^\r\n.!?]*/gi
 const SCOPED_READ_ONLY_VERIFIER = /(?:\b(?:separate|independent)\s+)?\bread[- ]only\b(?=\s+(?:(?:verification|validation|checker|validator|script|tool)\b|[\w.-]*(?:verify|validat|check)[\w.-]*\.(?:py|js|ts|mjs|cjs|sh|ps1)\b))|(?:\u53e6\u5199|\u53e6\u5efa|\u5355\u72ec|\u72ec\u7acb|\u53e6\u5916)?\s*\u53ea\u8bfb(?=\s*(?:(?:\u9a8c\u8bc1|\u6821\u9a8c|\u68c0\u67e5)(?:\u811a\u672c|\u5668|\u7a0b\u5e8f|\u5de5\u5177)?|[\w.-]*(?:verify|validat|check)[\w.-]*\.(?:py|js|ts|mjs|cjs|sh|ps1)\b))/gi
 const GLOBAL_READ_ONLY = /\b(?:do not|don't|never)\b[^\r\n.!?;]{0,48}\b(?:change|modify|edit|write|delete|remove|rename|move|patch|mutate)\b[^\r\n.!?;]{0,32}\b(?:any|all)\s+(?:files?|documents?|artifacts?)\b|\b(?:read[- ]only|no[- ]write)\b[^\r\n.!?;]{0,32}\b(?:entire|whole|all)\s+(?:project|repository|repo|workspace)\b|\b(?:entire|whole)\s+(?:project|repository|repo|workspace)\b[^\r\n.!?;]{0,32}\b(?:read[- ]only|no[- ]write)\b|(?:\u4e0d\u8981|\u4e0d\u5f97|\u7981\u6b62)[^\r\n\u3002\uff1b]{0,32}(?:\u4fee\u6539|\u7f16\u8f91|\u5199\u5165|\u5220\u9664|\u79fb\u52a8|\u91cd\u547d\u540d)[^\r\n\u3002\uff1b]{0,24}(?:\u4efb\u4f55|\u6240\u6709)(?:\u6587\u4ef6|\u6587\u6863|\u4ea7\u7269)|(?:\u6574\u4e2a|\u5168\u90e8)(?:\u9879\u76ee|\u4ed3\u5e93|\u5de5\u4f5c\u533a)[^\r\n\u3002\uff1b]{0,24}(?:\u53ea\u8bfb|\u4ec5\u67e5\u770b|\u4ec5\u5206\u6790|\u4e0d\u8981\u4fee\u6539)/i
@@ -36,6 +39,39 @@ const CODE_EXECUTION_INTENT = new RegExp(
   'i',
 )
 
+// A local mutation is one capability contract, not a collection of unrelated
+// switches for the model to discover by chance. Keep the group deliberately
+// small and stable: inspect, change, and verify. Upstream permission/config
+// filtering still wins, so this selector never recreates an explicitly
+// disabled tool.
+const LOCAL_MUTATION_REQUIRED_TOOL_NAMES = new Set([
+  'list_directory',
+  'read_file',
+  'read_artifact_source',
+  'grep_code',
+  'find_symbol',
+  'list_imports',
+  'write_file',
+  'edit_file',
+  'apply_patch',
+  'patch_file',
+  'bash_exec',
+  'run_command',
+  'run_project_check',
+  'run_test',
+  'git_status',
+  'git_diff',
+  'request_directory',
+  'request_clarification',
+  'reflect',
+  'set_deliverables',
+])
+const REMOTE_MUTATION_INTENT = /(?:^|[\s,\uff0c\u3002\uff1b;!\uff01])(?:(?:please|directly|now|help\s+(?:me\s+)?|\u8bf7|\u76f4\u63a5|\u73b0\u5728|\u7acb\u5373|\u5e2e\u6211|\u7ed9\u6211)\s*){0,3}(?:send|notify|post|publish|email)\b|(?:^|[\s,\uff0c\u3002\uff1b;!\uff01])(?:(?:\u8bf7|\u76f4\u63a5|\u73b0\u5728|\u7acb\u5373|\u5e2e\u6211|\u7ed9\u6211)\s*){0,3}(?:\u53d1\u9001|\u901a\u77e5(?!\s*(?:\u9875\u9762|\u8bbe\u7f6e|\u914d\u7f6e|\u9762\u677f|\u6837\u5f0f|\u7ec4\u4ef6))|\u53d1\u5e03(?=[^\uff0c\u3002\uff1b\r\n]{0,20}(?:\u901a\u77e5|\u6d88\u606f|\u516c\u544a|\u5e16\u5b50|\u5230|\u81f3)))|\b(?:create|update|delete|add)\b[^.!?\r\n]{0,48}\b(?:slack|notion|airtable|jira|salesforce|asana|trello|discord|calendar)\b|(?:slack|notion|airtable|jira|salesforce|asana|trello|discord|\u90ae\u7bb1|\u65e5\u5386)[^\uff0c\u3002\uff1b\r\n]{0,32}(?:\u53d1\u9001|\u53d1\u5e03|\u521b\u5efa|\u65b0\u5efa|\u66f4\u65b0|\u5220\u9664|\u6dfb\u52a0)/i
+const GIT_MUTATION_INTENT = /\bgit\s+(?:commit|push|revert|rollback)\b|\b(?:commit|push)\b|(?:\u63d0\u4ea4|\u63a8\u9001|\u56de\u6eda).{0,12}(?:\u4ee3\u7801|\u4ed3\u5e93|\u5206\u652f|git)/i
+const FILE_REWIND_INTENT = /\b(?:revert|undo|rollback)\b|\brestore\b[^.!?\r\n]{0,40}\b(?:file|change|edit|original|previous|state)\b|(?:\u56de\u6eda|\u64a4\u9500|\u6062\u590d\u539f\u72b6|\u8fd8\u539f(?:\u6587\u4ef6|\u6539\u52a8|\u4fee\u6539|\u66f4\u6539|\u539f\u72b6)?)/i
+const BROWSER_EXECUTION_INTENT = /\b(?:use|open|launch)\s+(?:the\s+)?browser\b|\b(?:navigate|visit)\s+(?:to\s+)?(?:https?:\/\/|(?:the\s+)?(?:page|site|website)\b)|\b(?:click|press|select)\s+(?:on\s+)?(?:the\s+)?(?:button|link|tab|menu|element)\b|\b(?:take|capture)\s+(?:a\s+)?screenshot\b|\bbrowser\s+automation\b|(?:\u4f7f\u7528|\u7528|\u6253\u5f00|\u542f\u52a8)\s*\u6d4f\u89c8\u5668|(?:\u8bbf\u95ee|\u8fdb\u5165)(?:\u7f51\u9875|\u7f51\u7ad9|\u7f51\u5740|\u9875\u9762)|(?:\u70b9\u51fb|\u6309\u4e0b|\u9009\u62e9)(?:\u6309\u94ae|\u94fe\u63a5|\u6807\u7b7e|\u83dc\u5355|\u5143\u7d20)|(?:\u7f51\u9875|\u9875\u9762)\u622a\u56fe|\u622a\u56fe(?:\u7f51\u9875|\u9875\u9762)/i
+const WEB_LOOKUP_INTENT = /\b(?:search|research)\s+(?:the\s+)?(?:web|internet|online)\b|\blook\s+up\b[^.!?\r\n]{0,48}\bonline\b|\b(?:use|run|do)\s+(?:a\s+)?web\s+search\b|\bweb\s+search\b(?![^.!?\r\n]{0,32}\b(?:page|panel|settings?|configuration|option|feature|button|ui|style)\b)|\b(?:fetch|open|read|inspect|visit)\s+https?:\/\/|(?:\u8054\u7f51\u641c\u7d22|\u7f51\u7edc\u641c\u7d22)(?![^\uff0c\u3002\uff1b\r\n]{0,24}(?:\u9875\u9762|\u9762\u677f|\u8bbe\u7f6e|\u914d\u7f6e|\u9009\u9879|\u529f\u80fd|\u6309\u94ae|\u754c\u9762|\u6837\u5f0f))|(?:\u5728\u7f51\u4e0a|\u5230\u7f51\u4e0a|\u4ece\u7f51\u4e0a|\u5728\u7ebf)(?:\u641c\u7d22|\u67e5\u627e|\u67e5\u8be2|\u68c0\u7d22|\u8c03\u7814)|(?:\u641c\u7d22|\u67e5\u627e|\u67e5\u8be2|\u68c0\u7d22|\u8c03\u7814)(?:\u4e00\u4e0b|\u4e0b)?(?:\u4e92\u8054\u7f51|\u7f51\u7edc|\u7f51\u9875|\u7f51\u4e0a|\u5728\u7ebf)/i
+
 function toolName(spec) {
   return String(spec?.function?.name || '').trim()
 }
@@ -51,6 +87,8 @@ function isReadOnlyRequest(userPrompt) {
   const promptWithoutLayoutBoundaries = String(userPrompt || '')
     .replace(LOCAL_LAYOUT_WRITE_BOUNDARY, ' ')
     .replace(SCOPED_READ_ONLY_VERIFIER, ' ')
+  if (ANALYSIS_ONLY_REQUEST.test(promptWithoutLayoutBoundaries)
+    && !hasMutationExecutionIntent(promptWithoutLayoutBoundaries)) return true
   if (!EXPLICIT_READ_ONLY.test(promptWithoutLayoutBoundaries)) return false
   if (GLOBAL_READ_ONLY.test(promptWithoutLayoutBoundaries)) return true
 
@@ -65,25 +103,97 @@ function isReadOnlyRequest(userPrompt) {
   return true
 }
 
-function shouldInheritExecutionIntent(userPrompt, previousUserPrompt) {
+export function shouldInheritExecutionIntent(userPrompt, previousUserPrompt, { intentMode = 'auto' } = {}) {
   const current = String(userPrompt || '').trim()
   const previous = String(previousUserPrompt || '').trim()
+  if (normalizeTurnIntentMode(intentMode) === 'answer') return false
   if (!current || !previous || current.length > 160
-    || (!EXECUTION_CONTINUATION.test(current) && !EXECUTION_REVISION.test(current))) return false
+    || (!EXECUTION_CONTINUATION.test(current)
+      && !EXECUTION_REVISION.test(current)
+      && !isExecutionCapabilityChallenge(current))) return false
   // A prior global/read-only instruction remains authoritative. A short reply
   // can confirm an existing user-authored work order, but cannot create one.
-  if (isReadOnlyRequest(previous)) return false
+  if (isReadOnlyRequest(current) || isReadOnlyRequest(previous)) return false
   return shouldRequireExecution({ intentMode: 'auto', text: previous })
 }
 
+function localMutationIntentSource({ userPrompt, previousUserPrompt, intentMode }) {
+  const current = String(userPrompt || '').trim()
+  const previous = String(previousUserPrompt || '').trim()
+  if (current && !isExecutionCapabilityChallenge(current)
+    && hasMutationExecutionIntent(current)) return current
+  if (shouldInheritExecutionIntent(current, previous, { intentMode })
+    && hasMutationExecutionIntent(previous)) return previous
+  return ''
+}
+
+/**
+ * Resolve the deterministic model-visible group for a concrete local change.
+ * A null result means the request is either answer-only, an artifact contract,
+ * an external mutation, or too ambiguous to narrow safely; callers then keep
+ * the already-authorized catalog selected by the upstream context policy.
+ */
+export function resolveRequiredChatToolNames({
+  userPrompt = '',
+  previousUserPrompt = '',
+  intentMode = 'auto',
+  executionRequired = false,
+  specs = [],
+} = {}) {
+  const source = localMutationIntentSource({ userPrompt, previousUserPrompt, intentMode })
+  if (executionRequired && !LOCAL_FILE_TARGET_REFERENCE.test(source)) return null
+  if (!source || REMOTE_MUTATION_INTENT.test(source)) return null
+
+  const required = new Set(LOCAL_MUTATION_REQUIRED_TOOL_NAMES)
+  if (GIT_MUTATION_INTENT.test(source)) {
+    for (const name of ['git_write', 'git_commit', 'git_push', 'git_rollback']) required.add(name)
+  }
+  if (FILE_REWIND_INTENT.test(source)) required.add('rewind_files')
+  if (BROWSER_EXECUTION_INTENT.test(source)) {
+    for (const spec of Array.isArray(specs) ? specs : []) {
+      const name = toolName(spec)
+      if (name.startsWith('browser_')) required.add(name)
+    }
+  }
+  if (WEB_LOOKUP_INTENT.test(source)) {
+    required.add('web_search')
+    required.add('fetch_url')
+  }
+  return required
+}
+
+function canonicalizeSpecValue(value) {
+  if (Array.isArray(value)) return value.map(canonicalizeSpecValue)
+  if (!value || typeof value !== 'object') return value
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort((left, right) => left.localeCompare(right, 'en'))
+      .filter((key) => value[key] !== undefined)
+      .map((key) => [key, canonicalizeSpecValue(value[key])]),
+  )
+}
+
+function canonicalSpecKey(spec) {
+  try {
+    return JSON.stringify(canonicalizeSpecValue(spec))
+  } catch {
+    return String(spec?.function?.description || '')
+  }
+}
+
 function stableUniqueSpecs(specs) {
+  const candidates = (Array.isArray(specs) ? specs : [])
+    .map((spec) => ({ spec, name: toolName(spec), key: canonicalSpecKey(spec) }))
+    .filter((entry) => entry.name)
+    .sort((left, right) => left.name.localeCompare(right.name, 'en')
+      || left.key.localeCompare(right.key, 'en'))
   const byName = new Map()
-  for (const spec of Array.isArray(specs) ? specs : []) {
-    const name = toolName(spec)
-    if (name) byName.set(name, spec)
+  for (const entry of candidates) {
+    // Duplicate registrations resolve to the lexicographically smallest
+    // canonical schema, so provider-visible tools do not depend on load order.
+    if (!byName.has(entry.name)) byName.set(entry.name, entry.spec)
   }
   return [...byName.values()]
-    .sort((left, right) => toolName(left).localeCompare(toolName(right), 'en'))
 }
 
 function readOnlyMetadata(name, { userId, metadataResolver }) {
@@ -112,8 +222,13 @@ export function resolveChatCapabilityMode({
   if (normalized === 'answer') return 'answer'
   if (normalized === 'execute') return 'execute'
   if (executionRequired) return 'execute'
-  if (shouldInheritExecutionIntent(userPrompt, previousUserPrompt)) return 'execute'
-  if (CODE_EXECUTION_INTENT.test(String(userPrompt || ''))) return 'execute'
+  if (shouldInheritExecutionIntent(userPrompt, previousUserPrompt, { intentMode: normalized })) return 'execute'
+  // "Why is there no write tool?" contains the lexical sequence "write ...
+  // tool", but it is a capability challenge rather than a fresh code-writing
+  // order. It inherits execution only from a real preceding work request via
+  // shouldInheritExecutionIntent above.
+  if (CODE_EXECUTION_INTENT.test(String(userPrompt || ''))
+    && !isExecutionCapabilityChallenge(userPrompt)) return 'execute'
   return shouldRequireExecution({ intentMode: normalized, text: userPrompt }) ? 'execute' : 'answer'
 }
 
@@ -141,8 +256,22 @@ export function selectChatToolSpecs({
     executionRequired,
   })
   const stableSpecs = stableUniqueSpecs(specs)
-  if (capabilityMode === 'execute') return stableSpecs
-  return stableSpecs.filter((spec) => {
+  const routedSpecs = LOCAL_FILE_TARGET_REFERENCE.test(String(userPrompt || ''))
+    ? stableSpecs.filter((spec) => toolName(spec) !== 'read_artifact_source')
+    : stableSpecs
+  if (capabilityMode === 'execute') {
+    const requiredNames = resolveRequiredChatToolNames({
+      userPrompt,
+      previousUserPrompt,
+      intentMode,
+      executionRequired,
+      specs: routedSpecs,
+    })
+    return requiredNames
+      ? routedSpecs.filter((spec) => requiredNames.has(toolName(spec)))
+      : routedSpecs
+  }
+  return routedSpecs.filter((spec) => {
     const name = toolName(spec)
     return !ORCHESTRATION_TOOL_NAMES.has(name)
       && (ANSWER_RECOVERY_TOOL_NAMES.has(name)

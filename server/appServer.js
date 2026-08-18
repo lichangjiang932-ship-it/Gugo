@@ -63,6 +63,7 @@ import { handleTurnEventRequest } from './routes/turnEventRoutes.js'
 import { handleMediaRequest } from './routes/mediaRoutes.js'
 import { handleAttachmentRequest } from './routes/attachmentRoutes.js'
 import { handleWebSearchRequest } from './routes/webSearchRoutes.js'
+import { handleRuntimeConfigRequest } from './routes/runtimeConfigRoutes.js'
 import { handleMcpServerRequest } from './mcp/mcpServer.js'
 import { attachTurnWebSocketServer } from './services/turnWebSocket.js'
 import { RUNTIME_CAPABILITIES, RUNTIME_KERNEL_REVISION } from '../shared/runtimeCapabilities.js'
@@ -296,6 +297,10 @@ function createRouter(getEnv = getRuntimeEnv, staticDir = distDir) {
   }
 
   // 系统诊断
+  if (req.url?.startsWith('/api/system/runtime-config')) {
+    return handleRuntimeConfigRequest(req, res, { env: getEnv() })
+  }
+
   if (req.url?.startsWith('/api/system/diagnostics')) {
     return handleSystemDiagnosticsRequest(req, res)
   }

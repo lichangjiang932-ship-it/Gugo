@@ -46,7 +46,6 @@ export default function ChatMiniTimeline({ activeTurnIndex, messages, onSelectTu
         ref={markerListRef}
         className="chat-mini-timeline-list relative flex max-h-[min(52vh,28rem)] w-7 flex-col items-center gap-1.5 overflow-y-auto py-2"
       >
-        <span aria-hidden="true" className="pointer-events-none absolute bottom-2 left-1/2 top-2 w-px -translate-x-1/2 bg-ink/10" />
         {turns.map((turn) => {
           const active = turn.messageIndex === activeTurnIndex
           const label = `${t('chatTimeline.jumpTo')} ${turn.number}: ${turn.summary}`

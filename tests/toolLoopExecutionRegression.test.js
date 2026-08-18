@@ -1143,6 +1143,271 @@ test('a mutation request cannot be completed by an unrelated read-only success',
   assert.equal(modelCalls, 3)
 })
 
+test('a first-turn visual edit exposes write tools and rejects a false missing-tool answer after reads', async () => {
+  const target = 'E:\\果\\gallery.html'
+  const prompt = `"${target}"这个网站，是用了很多图片，但是现在我还有几个需求，1.图片之间太过拥挤2.旋转的时候似乎无法维系圆形`
+  const names = ['read_file', 'write_file', 'edit_file', 'apply_patch', 'grep_code', 'find_symbol']
+  const specs = names.map((name) => SERVER_TOOL_SPECS.find((item) => item?.function?.name === name))
+  assert.equal(specs.every(Boolean), true)
+
+  const executed = []
+  let modelCalls = 0
+  let updated = false
+  const result = await runToolsLoop({
+    job: {
+      id: 'job-first-turn-visual-edit-tools',
+      userId: null,
+      origin: 'chat',
+      prompt,
+      userPrompt: prompt,
+    },
+    step: { id: 'step-first-turn-visual-edit-tools', kind: 'chat' },
+    messages: [{ role: 'user', content: prompt }],
+    toolSpecs: specs,
+    approvalMode: 'bypass',
+    maxIters: 7,
+    enableToolHooks: false,
+    runModel: async ({ messages, tools }) => {
+      modelCalls += 1
+      const visibleNames = tools.map((item) => item?.function?.name).filter(Boolean)
+      for (const name of ['read_file', 'write_file', 'edit_file', 'apply_patch']) {
+        assert.ok(visibleNames.includes(name), `first-turn schema must include ${name}`)
+      }
+      if (modelCalls === 1) {
+        const systemText = messages
+          .filter((item) => item.role === 'system')
+          .map((item) => item.content)
+          .join('\n')
+        assert.match(systemText, /\[RUNTIME CAPABILITIES\]/)
+        assert.match(systemText, /File changes: create or edit authorized local files/)
+        assert.match(systemText, /Calling only read tools is not evidence that write tools are absent/)
+        assert.match(systemText, /\[AVAILABLE TOOL CAPABILITIES\]/)
+        assert.match(systemText, /apply_patch\/edit_file\/write_file can create or modify authorized files/)
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'inspect-gallery-first',
+            type: 'function',
+            function: { name: 'read_file', arguments: JSON.stringify({ path: target }) },
+          }],
+        }
+      }
+      if (modelCalls === 2) {
+        return {
+          content: '没有文件写入工具可用。我只能给出完整修改后的代码。',
+          toolCalls: [],
+        }
+      }
+      if (modelCalls === 3) {
+        const systemText = messages
+          .filter((item) => item.role === 'system')
+          .map((item) => item.content)
+          .join('\n')
+        assert.match(systemText, /\[EXECUTION EVIDENCE REQUIRED\]/)
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'write-gallery-after-denial',
+            type: 'function',
+            function: {
+              name: 'write_file',
+              arguments: JSON.stringify({ path: target, content: '<!doctype html><title>fixed</title>' }),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 4) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'verify-gallery-after-write',
+            type: 'function',
+            function: { name: 'read_file', arguments: JSON.stringify({ path: target }) },
+          }],
+        }
+      }
+      return { content: '已原位修改并回读验证 gallery.html。', toolCalls: [] }
+    },
+    executeTool: async ({ name, args }) => {
+      executed.push(name)
+      assert.equal(args.path, target)
+      if (name === 'write_file') {
+        updated = true
+        return { ok: true, path: target, bytes: Buffer.byteLength(args.content), changedPaths: [target] }
+      }
+      assert.equal(name, 'read_file')
+      return {
+        ok: true,
+        path: target,
+        content: updated
+          ? '<!doctype html><title>fixed</title>'
+          : '<!doctype html><title>broken</title>',
+        truncated: false,
+      }
+    },
+  })
+
+  assert.equal(result.text, '已原位修改并回读验证 gallery.html。')
+  assert.equal(result.incomplete, undefined)
+  assert.deepEqual(executed, ['read_file', 'write_file', 'read_file'])
+  assert.equal(modelCalls, 5)
+})
+
+test('a capability challenge after a false refusal rechecks tools and completes the prior mutation', async () => {
+  const target = 'E:\\果\\gallery.html'
+  const previousUserPrompt = `请修改 ${target} 的卡片翻转方向并写回原文件。`
+  const challenge = '为什么不能你自己修改？'
+  const names = ['read_file', 'write_file', 'edit_file', 'apply_patch']
+  const specs = names.map((name) => SERVER_TOOL_SPECS.find((item) => item?.function?.name === name))
+  assert.equal(specs.every(Boolean), true)
+
+  const executed = []
+  let modelCalls = 0
+  let updated = false
+  const result = await runToolsLoop({
+    job: {
+      id: 'job-capability-challenge-continuation',
+      userId: null,
+      origin: 'chat',
+      prompt: challenge,
+      userPrompt: challenge,
+      previousUserPrompt,
+    },
+    step: { id: 'step-capability-challenge-continuation', kind: 'chat' },
+    messages: [
+      { role: 'user', content: previousUserPrompt },
+      { role: 'assistant', content: '我不能直接修改，因为当前没有文件写入工具。' },
+      { role: 'user', content: challenge },
+    ],
+    toolSpecs: specs,
+    approvalMode: 'bypass',
+    maxIters: 6,
+    enableToolHooks: false,
+    runModel: async ({ messages, tools }) => {
+      modelCalls += 1
+      const visibleNames = tools.map((item) => item?.function?.name).filter(Boolean)
+      for (const name of names) assert.ok(visibleNames.includes(name), `${name} must be rechecked`)
+
+      if (modelCalls === 1) {
+        const systemText = messages
+          .filter((item) => item.role === 'system')
+          .map((item) => item.content)
+          .join('\n')
+        assert.match(systemText, /If the user challenges a prior claim/)
+        return { content: '仍然没有文件写入工具，所以我无法替你修改。', toolCalls: [] }
+      }
+      if (modelCalls === 2) {
+        const systemText = messages
+          .filter((item) => item.role === 'system')
+          .map((item) => item.content)
+          .join('\n')
+        assert.match(systemText, /\[EXECUTION EVIDENCE REQUIRED\]/)
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'write-after-capability-challenge',
+            type: 'function',
+            function: {
+              name: 'write_file',
+              arguments: JSON.stringify({ path: target, content: '<!doctype html><title>fixed</title>' }),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 3) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'verify-after-capability-challenge',
+            type: 'function',
+            function: { name: 'read_file', arguments: JSON.stringify({ path: target }) },
+          }],
+        }
+      }
+      return { content: '已直接修改并回读验证 gallery.html。', toolCalls: [] }
+    },
+    executeTool: async ({ name, args }) => {
+      executed.push(name)
+      assert.equal(args.path, target)
+      if (name === 'write_file') {
+        updated = true
+        return { ok: true, path: target, bytes: Buffer.byteLength(args.content), changedPaths: [target] }
+      }
+      assert.equal(name, 'read_file')
+      return {
+        ok: true,
+        path: target,
+        content: updated
+          ? '<!doctype html><title>fixed</title>'
+          : '<!doctype html><title>broken</title>',
+        truncated: false,
+      }
+    },
+  })
+
+  assert.equal(result.text, '已直接修改并回读验证 gallery.html。')
+  assert.equal(result.incomplete, undefined)
+  assert.deepEqual(executed, ['write_file', 'read_file'])
+  assert.equal(modelCalls, 4)
+})
+
+test('a capability challenge after an explicit read-only turn never restores writes or mutation evidence', async () => {
+  const target = 'E:\\果\\gallery.html'
+  const previousUserPrompt = `请只分析 ${target} 的卡片翻转问题，不要编辑、调整或写回文件。`
+  const challenge = '为什么不能你自己修改？'
+  const catalogNames = ['read_file', 'write_file', 'edit_file', 'apply_patch']
+  const catalog = catalogNames.map((name) => SERVER_TOOL_SPECS.find((item) => item?.function?.name === name))
+  assert.equal(catalog.every(Boolean), true)
+
+  let modelCalls = 0
+  let executorCalls = 0
+  const result = await runToolsLoop({
+    job: {
+      id: 'job-read-only-capability-challenge',
+      userId: null,
+      origin: 'chat',
+      prompt: challenge,
+      userPrompt: challenge,
+      previousUserPrompt,
+    },
+    step: { id: 'step-read-only-capability-challenge', kind: 'chat' },
+    messages: [
+      { role: 'user', content: previousUserPrompt },
+      { role: 'assistant', content: '按你的要求只做分析，因此不能也无需写入文件。' },
+      { role: 'user', content: challenge },
+    ],
+    toolSpecs: catalog,
+    approvalMode: 'bypass',
+    maxIters: 3,
+    enableToolHooks: false,
+    runModel: async ({ messages, tools }) => {
+      modelCalls += 1
+      const visibleNames = tools.map((item) => item?.function?.name).filter(Boolean)
+      assert.ok(visibleNames.includes('read_file'))
+      for (const name of ['write_file', 'edit_file', 'apply_patch']) {
+        assert.equal(visibleNames.includes(name), false, `${name} must remain unavailable`)
+      }
+
+      const systemText = messages
+        .filter((item) => item.role === 'system')
+        .map((item) => item.content)
+        .join('\n')
+      assert.doesNotMatch(systemText, /\[EXECUTION EVIDENCE REQUIRED\]/)
+      assert.doesNotMatch(systemText, /File changes: create or edit authorized local files/)
+      return { content: '上一轮要求只分析，因此没有执行文件修改。', toolCalls: [] }
+    },
+    executeTool: async () => {
+      executorCalls += 1
+      return { ok: true }
+    },
+  })
+
+  assert.equal(result.text, '上一轮要求只分析，因此没有执行文件修改。')
+  assert.equal(result.incomplete, undefined)
+  assert.equal(modelCalls, 1)
+  assert.equal(executorCalls, 0)
+})
+
 test('bypass recovery never remounts a tool excluded from the current turn enabled catalog', async () => {
   const target = 'D:\\work\\disabled-tool-guard.txt'
   const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')

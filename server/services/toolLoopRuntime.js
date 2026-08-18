@@ -36,14 +36,14 @@ import { buildAssistantToolCallsMessage, buildToolResultMessage, buildToolResult
 import { extractTextToolCalls } from '../utils/textToolCalls.js'
 import { dispatchHooks } from './hooksService.js'
 import { replaceRuntimeCapabilityBlock } from './runtimeCapabilities.js'
-import { hasMutationExecutionIntent, isTextDeliverableRequest, shouldRequireExecution } from '../utils/executionIntent.js'
+import { hasMutationExecutionIntent, isExecutionCapabilityChallenge, isTextDeliverableRequest, shouldRequireExecution } from '../utils/executionIntent.js'
 import { observeToolCalls, recordToolProgress, restoreToolProgress, serializeToolProgress, toolProgressPayload } from '../utils/toolProgress.js'
 import { listTurnArtifacts } from './turnArtifactStore.js'
 import { createModelPhaseHeartbeat, DEFAULT_MODEL_PHASE_HEARTBEAT_MS } from './modelPhaseHeartbeat.js'
 import { getDefaultOutputDirectory, getProjectDirectory } from './localFileAccessService.js'
 import { createPartialResultFallback } from './partialResultFallback.js'
 import { validateLocalHtmlDelivery } from './localHtmlDeliveryValidation.js'
-import { resolveChatCapabilityMode } from './chatToolSelection.js'
+import { resolveChatCapabilityMode, shouldInheritExecutionIntent } from './chatToolSelection.js'
 
 import { withLogContext } from '../utils/logger.js'
 import { createRepeatCallGuard } from '../utils/repeatCallGuard.js'
@@ -880,12 +880,17 @@ export async function runToolsLoop({
   const inheritedLocalMutationContinuation = enforceExecutionIntent
     && recoveredPriorLocalTargets.mutationTargets.length > 0
     && isLocalMutationContinuationRequest(artifactAuthorizationText)
+  const inheritedCapabilityChallenge = enforceExecutionIntent
+    && isExecutionCapabilityChallenge(executionIntentText)
+    && shouldInheritExecutionIntent(executionIntentText, previousUserPrompt, { intentMode })
+    && hasMutationExecutionIntent(previousUserPrompt)
   const directExecutionRequested = enforceExecutionIntent && (
     shouldRequireExecution({
       intentMode,
       text: executionIntentText,
     })
     || inheritedLocalMutationContinuation
+    || inheritedCapabilityChallenge
   )
   // ★ 纯文本交付(生成周报/写文案/做总结,没有文件路径)不写文件,
   // 文字本身就是交付物。这类请求既不算 mutation 任务,也不要求工具执行证据 ——
@@ -893,7 +898,10 @@ export async function runToolsLoop({
   const textDeliverableOnly = isTextDeliverableRequest(executionIntentText)
   const mutationExecutionRequested = !textDeliverableOnly && (
     requiresPersistedArtifact
-    || (directExecutionRequested && hasMutationExecutionIntent(executionIntentText)))
+    || (directExecutionRequested && (
+      hasMutationExecutionIntent(executionIntentText)
+      || inheritedCapabilityChallenge
+    )))
   const priorTurnMutationToolObserved = currentUserIndex > 0
     && messages.slice(Math.max(0, messages.slice(0, currentUserIndex)
       .findLastIndex((message) => message?.role === 'user')), currentUserIndex)

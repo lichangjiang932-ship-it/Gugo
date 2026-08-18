@@ -1229,7 +1229,11 @@ export async function* streamOpenAICompatible({
       : null
     const compatibleStreamState = createCompatibleModelStreamState()
     let finishReason = null
-    // 思考累计字数 + 上限(0 = 不限)。见下面 REASONING_RUNAWAY 的注释。
+    // 思考累计字数 + 显式可选上限（0 = 不限）。
+    //
+    // 本地推理模型在正常工具轮里也可能先输出很长的 reasoning；字符数不是
+    // “失控”的可靠信号。未配置时必须让首 token + idle 双轨超时负责连接
+    // 健康，不能再按工作量主动截断。用户确实需要成本护栏时仍可显式设置。
     let reasoningChars = 0
     const reasoningCharLimit = (() => {
       const executionWithTools = Array.isArray(tools)
@@ -1240,11 +1244,7 @@ export async function* streamOpenAICompatible({
         : env?.MODEL_REASONING_MAX_CHARS
       const raw = Number(configured)
       if (Number.isFinite(raw) && raw >= 0) return Math.floor(raw)
-      // Execution turns should act before they spend an entire response
-      // re-deriving plans or layout arithmetic. The tool loop can recover this
-      // bounded abort with a direct-action prompt; ordinary answer turns keep
-      // the larger ceiling for genuinely long reasoning.
-      return executionWithTools ? 20_000 : 60_000
+      return 0
     })()
     let lastUsage = null
     for await (const line of readModelSseLines(reader, {
