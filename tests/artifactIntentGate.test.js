@@ -745,6 +745,37 @@ test('bare named artifact files remain managed deliverables', () => {
   }
 })
 
+test('local HTML patch intent stays on file tools while explicit image creation remains available', () => {
+  const patchPrompt = '修改本地文件 gallery.html，让图片旋转时保持圆形'
+  const patchDelivery = resolveArtifactDeliveryTargets(patchPrompt)
+  assert.equal(patchDelivery.intent, 'patch_intent')
+  assert.equal(patchDelivery.target, 'workspace_file')
+  assert.deepEqual(patchDelivery.managedArtifactTypes, [])
+  assert.deepEqual([...allowedArtifactTools(patchPrompt)], [])
+
+  for (const prompt of ['生成一张营销图', '生成一个 logo']) {
+    const delivery = resolveArtifactDeliveryTargets(prompt)
+    assert.equal(delivery.intent, 'create_intent', prompt)
+    assert.deepEqual(delivery.managedArtifactTypes, ['image'], prompt)
+    assert.deepEqual([...allowedArtifactTools(prompt)], ['generate_image'], prompt)
+  }
+
+  for (const prompt of [
+    '修复本地文件 gallery.html 后再生成一张营销图片',
+    '修复本地文件 gallery.html 后再生成一张图',
+  ]) {
+    const delivery = resolveArtifactDeliveryTargets(prompt)
+    assert.equal(delivery.intent, 'mixed_intent', prompt)
+    assert.equal(delivery.target, 'mixed', prompt)
+    assert.deepEqual(delivery.managedArtifactTypes, ['image'], prompt)
+    assert.deepEqual([...allowedArtifactTools(prompt)], ['generate_image'], prompt)
+  }
+
+  const negated = '不要生成图片，只修复本地文件 gallery.html 的旋转'
+  assert.equal(resolveArtifactDeliveryTargets(negated).intent, 'patch_intent')
+  assert.deepEqual([...allowedArtifactTools(negated)], [])
+})
+
 test('mixed local HTML and managed PDF expose only the PDF generator', () => {
   const prompt = '修改本地文件“index.html”，并另外生成一份 PDF'
   const delivery = resolveArtifactDeliveryTargets(prompt)

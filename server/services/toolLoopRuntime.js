@@ -90,6 +90,12 @@ const DYNAMIC_MUTATION_TOOL_NAMES = new Set([
   'bash_exec',
   'run_command',
 ])
+const PATCH_WRITE_TOOL_NAMES = new Set([
+  'write_file',
+  'edit_file',
+  'patch_file',
+  'apply_patch',
+])
 const CAPABILITY_CONTROL_TOOL_NAMES = new Set([
   'Agent',
   'manage_todos',
@@ -572,6 +578,8 @@ export async function runToolsLoop({
     hasExplicitManagedArtifactReference: explicitlyReferencedArtifacts.length > 0,
     skillId: explicitSkillId || skillId,
   })
+  const patchOnlyWorkspaceIntent = artifactDelivery.intent === 'patch_intent'
+  const independentImageCreationRequested = artifactDelivery.managedArtifactTypes.includes('image')
   const localArtifactPublicationAllowed = !['workspace_file', 'mixed'].includes(artifactDelivery.target)
   // A complete filename can name either a local/workspace file or a managed
   // artifact. Explicit local-file/no-artifact wording wins: do not bind an
@@ -779,6 +787,24 @@ export async function runToolsLoop({
     : restored && typeof restored === 'object'
       ? restored
       : null
+  let successfulExpectedPathWriteObserved = Boolean(
+    restoredState?.completionGuards?.successfulExpectedPathWriteObserved,
+  )
+  const redundantImageGenerationGuard = (name) => (
+    name === 'generate_image'
+      && successfulExpectedPathWriteObserved
+      && patchOnlyWorkspaceIntent
+      && !independentImageCreationRequested
+      ? {
+          ok: false,
+          code: 'image_generation_not_requested_after_file_patch',
+          error: '已有修复写入成功，无需重新生成图像。',
+          retryable: false,
+          suppressed: true,
+          hint: '继续验证用户指定的已修改文件，或直接说明修复已完成；不要创建无关的新图片。',
+        }
+      : null
+  )
   const hasCurrentToolsConfig = toolsConfig && typeof toolsConfig === 'object'
   const restoredDisabledToolNames = Array.isArray(
     restoredState?.completionGuards?.disabledToolNames,
@@ -859,6 +885,9 @@ export async function runToolsLoop({
     for (const name of restoredRequiredNames) {
       if (artifactDeliveryStep && restoredAuthorizedNames.has(name)) expectedArtifactTools.add(name)
     }
+  }
+  if (patchOnlyWorkspaceIntent && successfulExpectedPathWriteObserved) {
+    expectedArtifactTools.clear()
   }
   // Verify/finalize/plan steps inherit the original job prompt, so they still
   // mention the requested format. Their job is to inspect or summarize the
@@ -2114,6 +2143,7 @@ export async function runToolsLoop({
         artifactContractText: activeArtifactContractText,
         artifactOutputPrompt: activeArtifactOutputPrompt,
         artifactDeliveryRetries,
+        successfulExpectedPathWriteObserved,
         forcedArtifactToolName: forcedArtifactToolName || null,
         forcedArtifactAttemptPending,
         artifactRecoveryPhase: artifactRecoveryPhase || null,
@@ -3482,6 +3512,10 @@ export async function runToolsLoop({
           }
 
           if (!result) {
+            result = redundantImageGenerationGuard(name)
+          }
+
+          if (!result) {
             // 被产物门控挡下的文件工具单独给一条可执行的说明,否则模型只看到
             // 「未知工具：create_pptx」会以为是系统故障,继续重试到耗尽预算。
             if (isFileArtifactTool(call.name) && !stepArtifactTools.has(call.name)) {
@@ -3662,7 +3696,8 @@ export async function runToolsLoop({
               } else if (gate) {
                 const executionArgs = gate.args ?? effectiveArgs
                 executionArgsUsed = executionArgs
-                const finalValidationError = validateToolCall(
+                const finalValidationError = redundantImageGenerationGuard(name)
+                  || validateToolCall(
                   { ...call, args: executionArgs },
                   activeToolSpecs,
                   { allowUnknown: executeTool !== executeServerTool },
@@ -3879,6 +3914,21 @@ export async function runToolsLoop({
         : executionConvergenceEnabled
         ? productiveExecution
         : succeeded && isMutationExecutionCall(executedCall, outcome.artifactId)
+      if (succeeded
+        && patchOnlyWorkspaceIntent
+        && PATCH_WRITE_TOOL_NAMES.has(String(executedCall?.name || ''))) {
+        const writeTargets = extractMutationTargets(executedCall, outcome.result)
+        const matchedExpectedPath = exactWorkspaceTargetPaths.some((expectedPath) => (
+          [...writeTargets].some((target) => targetsMatch(target, expectedPath))
+        ))
+        if (matchedExpectedPath) {
+          successfulExpectedPathWriteObserved = true
+          requiresPersistedArtifact = false
+          expectedArtifactTools.clear()
+          artifactDeliveryRetries = 0
+          clearArtifactRecovery()
+        }
+      }
       if (mutationExecutionSucceeded) {
         mutationExecutionObserved = true
         priorOutcomeMutationObserved = true

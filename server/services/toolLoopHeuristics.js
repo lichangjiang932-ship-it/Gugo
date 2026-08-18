@@ -1568,8 +1568,9 @@ function clearVerifiedMutationTargets(pendingTargets, call, result) {
 
 function artifactDeliveryError(expectedTools) {
   const names = [...expectedTools].join(', ')
-  const error = new Error(`The requested file was not created. The model must successfully call: ${names}.`)
+  const error = new Error(`The user expected artifact type(s) from ${names}, but the current tool calls did not produce them. Decide whether to continue the requested work or explain what is already complete.`)
   error.code = 'ARTIFACT_NOT_CREATED'
+  error.retryable = false
   return error
 }
 

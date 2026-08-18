@@ -13,6 +13,7 @@ const { createUser, getDb } = await import('../server/db.js')
 const { upsertSession } = await import('../server/services/sessionStore.js')
 const { appendTurnArtifact } = await import('../server/services/turnArtifactStore.js')
 const {
+  artifactDeliveryError,
   isLocalMutationCall,
   isVerificationCall,
 } = await import('../server/services/toolLoopHeuristics.js')
@@ -1387,6 +1388,106 @@ test('a first-turn visual edit exposes write tools and rejects a false missing-t
   assert.equal(result.incomplete, undefined)
   assert.deepEqual(executed, ['read_file', 'write_file', 'read_file'])
   assert.equal(modelCalls, 5)
+})
+
+test('a successful expected-path HTML patch suppresses a stray generate_image call', async () => {
+  const target = 'E:\\果\\gallery.html'
+  const prompt = '修改本地文件 ' + target + '，修复图片旋转时无法维持圆形的问题。'
+  const specs = ['write_file', 'read_file', 'generate_image']
+    .map((name) => SERVER_TOOL_SPECS.find((item) => item?.function?.name === name))
+  const executed = []
+  let modelCalls = 0
+
+  const result = await runToolsLoop({
+    job: {
+      id: 'job-html-patch-image-fallback-guard',
+      userId: null,
+      origin: 'chat',
+      prompt,
+      userPrompt: prompt,
+    },
+    step: { id: 'step-html-patch-image-fallback-guard', kind: 'chat' },
+    messages: [{ role: 'user', content: prompt }],
+    toolSpecs: specs,
+    approvalMode: 'bypass',
+    maxIters: 6,
+    enableToolHooks: false,
+    runModel: async ({ messages, tools }) => {
+      modelCalls += 1
+      const names = tools.map((item) => item?.function?.name)
+      assert.ok(names.includes('write_file'))
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'patch-html-file',
+            function: {
+              name: 'write_file',
+              arguments: JSON.stringify({
+                path: target,
+                content: '<!doctype html><html><body><div class="ring">fixed</div></body></html>',
+              }),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 2) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'stray-image-fallback',
+            function: {
+              name: 'generate_image',
+              arguments: JSON.stringify({ prompt: 'unrequested replacement image' }),
+            },
+          }],
+        }
+      }
+      if (modelCalls === 3) {
+        const feedback = messages.findLast((message) => message.role === 'tool'
+          && message.tool_call_id === 'stray-image-fallback')
+        assert.ok(feedback)
+        const parsed = JSON.parse(feedback.content)
+        assert.equal(parsed.code, 'image_generation_not_requested_after_file_patch')
+        assert.equal(parsed.retryable, false)
+        assert.match(parsed.error, /已有修复写入成功/)
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'verify-html-file',
+            function: { name: 'read_file', arguments: JSON.stringify({ path: target }) },
+          }],
+        }
+      }
+      return { content: '已修复并验证指定 HTML 文件。', toolCalls: [] }
+    },
+    executeTool: async ({ name, args }) => {
+      executed.push(name)
+      assert.notEqual(name, 'generate_image')
+      if (name === 'write_file') return { ok: true, path: target, changedPaths: [target] }
+      if (name === 'read_file') {
+        return {
+          ok: true,
+          path: args.path,
+          content: '<!doctype html><html><body><div class="ring">fixed</div></body></html>',
+          truncated: false,
+        }
+      }
+      assert.fail('unexpected executor call: ' + name)
+    },
+  })
+
+  assert.deepEqual(executed, ['write_file', 'read_file'])
+  assert.equal(result.incomplete, undefined)
+  assert.equal(result.text, '已修复并验证指定 HTML 文件。')
+})
+
+test('artifact delivery errors are advisory and non-retryable', () => {
+  const error = artifactDeliveryError(['generate_image'])
+  assert.equal(error.code, 'ARTIFACT_NOT_CREATED')
+  assert.equal(error.retryable, false)
+  assert.doesNotMatch(error.message, /must successfully call/i)
+  assert.match(error.message, /Decide whether to continue/)
 })
 
 test('a behavioral revision rejects a post-read missing-tool claim and rewrites the canonical target', async () => {
