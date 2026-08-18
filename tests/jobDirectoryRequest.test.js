@@ -20,13 +20,14 @@ test('目录授权提交成功后才恢复原 Job', async () => {
     },
   })
 
-  assert.deepEqual(order[0], ['grant', { path: 'D:\\Reports', accessMode: 'read_only' }])
+  assert.deepEqual(order[0], ['grant', { path: 'D:\\Reports', accessMode: 'read_only', scope: 'session' }])
   assert.equal(order[1][0], 'resume')
   assert.equal(order[1][1].jobId, 'job-1')
   assert.equal(order[1][1].payload.path, 'D:\\Reports')
   assert.equal(order[1][1].payload.accessMode, 'read_only')
   assert.equal(typeof order[1][1].payload.purpose, 'string')
   assert.equal(result.path, 'D:\\Reports')
+  assert.equal(result.scope, 'session')
   assert.equal(result.job.status, 'queued')
 })
 

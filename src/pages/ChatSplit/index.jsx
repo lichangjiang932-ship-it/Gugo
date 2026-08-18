@@ -156,6 +156,7 @@ export default function ChatSplit() {
     message,
     path,
     accessMode,
+    authorizationScope,
   }) => {
     const sessionId = stateRef.current.activeSessionId
     const turnId = message?.meta?.serverTurnId
@@ -166,6 +167,7 @@ export default function ChatSplit() {
       pausedSequence: message?.meta?.serverLastSequence,
       path,
       accessMode,
+      scope: authorizationScope,
       purpose: clarification.purpose || clarification.why || '',
     })
     dispatch({

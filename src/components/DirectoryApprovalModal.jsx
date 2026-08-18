@@ -17,6 +17,7 @@ export default function DirectoryApprovalModal({ open, request, busy, error, onA
   const { t } = useT()
   const [path, setPath] = useState(() => initialPath(request))
   const [accessMode, setAccessMode] = useState(() => initialAccessMode(request))
+  const [authorizationScope, setAuthorizationScope] = useState('session')
   const [trustWorkspaceConfig, setTrustWorkspaceConfig] = useState(false)
   const [browserOpen, setBrowserOpen] = useState(false)
   const requiresWrite = initialAccessMode(request) === 'read_write'
@@ -75,7 +76,7 @@ export default function DirectoryApprovalModal({ open, request, busy, error, onA
               onChange={(event) => setPath(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === 'Enter' && path.trim() && !busy) {
-                  onAuthorize?.({ path: path.trim(), accessMode, trustWorkspaceConfig })
+                  onAuthorize?.({ path: path.trim(), accessMode, authorizationScope, trustWorkspaceConfig })
                 }
               }}
               disabled={!!busy}
@@ -98,6 +99,22 @@ export default function DirectoryApprovalModal({ open, request, busy, error, onA
             >
               <option value="read_only">{t('taskSteering.directoryReadOnly')}</option>
               <option value="read_write">{t('taskSteering.directoryReadWrite')}</option>
+            </select>
+          </div>
+
+          <div className="sm:col-span-2">
+            <label htmlFor="directory-approval-scope" className="mb-1.5 block text-xs text-ink-soft">
+              授权保留时间 / Authorization lifetime
+            </label>
+            <select
+              id="directory-approval-scope"
+              value={authorizationScope}
+              onChange={(event) => setAuthorizationScope(event.target.value)}
+              disabled={!!busy}
+              className="h-10 w-full rounded-md border border-ink/15 bg-paper px-3 text-sm text-ink disabled:opacity-60"
+            >
+              <option value="session">仅本会话（服务重启后失效） / This session</option>
+              <option value="persistent">永久记住 / Remember permanently</option>
             </select>
           </div>
 
@@ -157,7 +174,12 @@ export default function DirectoryApprovalModal({ open, request, busy, error, onA
           </button>
           <button
             type="button"
-            onClick={() => onAuthorize?.({ path: path.trim(), accessMode, trustWorkspaceConfig })}
+            onClick={() => onAuthorize?.({
+              path: path.trim(),
+              accessMode,
+              authorizationScope,
+              trustWorkspaceConfig,
+            })}
             disabled={!!busy || !path.trim()}
             data-testid="directory-approval-authorize"
             className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-ink px-4 text-sm text-paper transition-colors hover:bg-ink-soft disabled:opacity-60"

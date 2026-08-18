@@ -81,7 +81,11 @@ test('目录请求卡保留建议路径、最小权限并通过内联浏览更�
     await click(dom, buttons.find((button) => button.textContent.includes('授权此路径')))
     await click(dom, buttons.find((button) => button.textContent.includes('选择目录')))
     assert.ok(rootElement.querySelector('[data-testid="inline-directory-browser"]'))
-    assert.deepEqual(decisions, [{ path: 'D:\\Reports', accessMode: 'read_only' }])
+    assert.deepEqual(decisions, [{
+      path: 'D:\\Reports',
+      accessMode: 'read_only',
+      authorizationScope: 'session',
+    }])
 
     const archiveButton = [...rootElement.querySelectorAll('button')]
       .find((button) => button.textContent.includes('Archive'))
@@ -95,8 +99,8 @@ test('目录请求卡保留建议路径、最小权限并通过内联浏览更�
     await click(dom, [...rootElement.querySelectorAll('button')]
       .find((button) => button.textContent.includes('授权此路径')))
     assert.deepEqual(decisions, [
-      { path: 'D:\\Reports', accessMode: 'read_only' },
-      { path: 'D:\\Reports\\Archive', accessMode: 'read_only' },
+      { path: 'D:\\Reports', accessMode: 'read_only', authorizationScope: 'session' },
+      { path: 'D:\\Reports\\Archive', accessMode: 'read_only', authorizationScope: 'session' },
     ])
     assert.deepEqual(browsedPaths, ['D:\\Reports', 'D:\\Reports\\Archive'])
   } finally {

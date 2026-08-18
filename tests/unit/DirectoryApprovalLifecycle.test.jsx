@@ -165,6 +165,11 @@ test('a replacement approval aborts and rejects the old request without acceptin
       })
     })
     assert.equal(deferred.requests.length, 2)
+    assert.deepEqual(JSON.parse(deferred.requests[1].init.body), {
+      path: 'D:\\second',
+      accessMode: 'read_only',
+      scope: 'session',
+    })
     await act(async () => {
       deferred.requests[1].resolve(grantResponse('D:\\second'))
       await secondAuthorizationPromise
@@ -174,8 +179,10 @@ test('a replacement approval aborts and rejects the old request without acceptin
       approved: true,
       path: 'D:\\second',
       accessMode: 'read_only',
+      authorizationScope: 'session',
       resourceType: 'directory',
       workspaceConfigTrusted: false,
+      workspaceTrustScope: null,
     })
     assert.equal(getLatest().directoryApproval.open, false)
     assert.equal(toastEvents.length, 1)

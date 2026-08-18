@@ -46,7 +46,7 @@ const previousGitEnabled = process.env.WORKSPACE_GIT_ENABLED
 process.env.WORKSPACE_GIT_ENABLED = '1'
 
 const { createAppServer } = await import('../server/appServer.js')
-const { closeDb } = await import('../server/db.js')
+const { closeDb, getDb } = await import('../server/db.js')
 const { setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
 const { getSessionSnapshot, upsertMessage, upsertSession } = await import('../server/services/sessionStore.js')
 const { getLocalHtmlPreviewResource } = await import('../server/services/localHtmlPreviewService.js')
@@ -96,6 +96,73 @@ test('local file access routes require authentication', async () => {
   const { token } = issueTestSession({ email: 'local-route-query-auth@example.com' })
   const queryTokenResponse = await fetch(`${origin}/api/local-files?token=${encodeURIComponent(token)}`)
   assert.equal(queryTokenResponse.status, 401)
+})
+
+test('directory and workspace trust routes preserve session scope without database persistence', async () => {
+  const alice = issueTestSession({ email: 'local-route-session-scope@example.com' })
+  const bob = issueTestSession({ email: 'local-route-session-scope-other@example.com' })
+  setApprovalMode({ userId: alice.userId, mode: 'normal' })
+  setApprovalMode({ userId: bob.userId, mode: 'normal' })
+
+  const grantResponse = await fetch(`${origin}/api/local-files/grants`, {
+    method: 'POST',
+    headers: headers(alice.token),
+    body: JSON.stringify({ path: allowedDir, accessMode: 'read_only', scope: 'session' }),
+  })
+  assert.equal(grantResponse.status, 200)
+  const grantBody = await grantResponse.json()
+  assert.equal(grantBody.grant.scope, 'session')
+  assert.equal(grantBody.grants[0].scope, 'session')
+  assert.equal(
+    getDb().prepare('SELECT COUNT(*) AS count FROM local_file_grants WHERE user_id = ?').get(alice.userId).count,
+    0,
+  )
+
+  const trustResponse = await fetch(`${origin}/api/local-files/workspace-trust`, {
+    method: 'POST',
+    headers: headers(alice.token),
+    body: JSON.stringify({
+      path: allowedDir,
+      trusted: true,
+      scope: 'session',
+      confirmation: 'TRUST_WORKSPACE_CONFIG',
+    }),
+  })
+  assert.equal(trustResponse.status, 200)
+  const trustBody = await trustResponse.json()
+  assert.equal(trustBody.trust.trustScope, 'session')
+  assert.equal(trustBody.trustedWorkspaces[0].trustScope, 'session')
+  assert.equal(
+    getDb().prepare('SELECT COUNT(*) AS count FROM workspace_trust WHERE user_id = ?').get(alice.userId).count,
+    0,
+  )
+
+  const bobStatus = await fetch(`${origin}/api/local-files`, { headers: headers(bob.token) })
+  assert.equal(bobStatus.status, 200)
+  assert.deepEqual((await bobStatus.json()).grants, [])
+
+  const invalidScope = await fetch(`${origin}/api/local-files/grants`, {
+    method: 'POST',
+    headers: headers(alice.token),
+    body: JSON.stringify({ path: allowedDir, accessMode: 'read_only', scope: 'forever-ish' }),
+  })
+  assert.equal(invalidScope.status, 400)
+  assert.equal((await invalidScope.json()).error.code, 'INVALID_GRANT_SCOPE')
+
+  const untrust = await fetch(`${origin}/api/local-files/workspace-trust`, {
+    method: 'POST',
+    headers: headers(alice.token),
+    body: JSON.stringify({ path: allowedDir, trusted: false, scope: 'session' }),
+  })
+  assert.equal(untrust.status, 200)
+  assert.equal((await untrust.json()).trust, true)
+
+  const revoke = await fetch(`${origin}/api/local-files/grants/${encodeURIComponent(grantBody.grant.id)}`, {
+    method: 'DELETE',
+    headers: headers(alice.token),
+  })
+  assert.equal(revoke.status, 200)
+  assert.deepEqual((await revoke.json()).grants, [])
 })
 
 test('authorized path can be used by file tools and remains user-scoped', async () => {

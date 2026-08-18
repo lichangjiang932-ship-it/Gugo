@@ -35,7 +35,12 @@ export default function useDirectoryApproval({ lang, t, toast }) {
     settleDirectoryApprovalRequest(directoryApprovalRequestRef.current, decision)
   }, [settleDirectoryApprovalRequest])
 
-  const authorizeDirectory = useCallback(async ({ path, accessMode, trustWorkspaceConfig = false }) => {
+  const authorizeDirectory = useCallback(async ({
+    path,
+    accessMode,
+    authorizationScope = 'session',
+    trustWorkspaceConfig = false,
+  }) => {
     const requestRecord = directoryApprovalRequestRef.current
     if (!requestRecord || requestRecord.settled) return
 
@@ -63,11 +68,20 @@ export default function useDirectoryApproval({ lang, t, toast }) {
         return
       }
       const safeAccessMode = accessMode === 'read_write' ? 'read_write' : 'read_only'
-      const result = await grantLocalPathApi({ path: selectedPath, accessMode: safeAccessMode }, { signal: controller.signal })
+      const safeScope = authorizationScope === 'persistent' ? 'persistent' : 'session'
+      const result = await grantLocalPathApi({
+        path: selectedPath,
+        accessMode: safeAccessMode,
+        scope: safeScope,
+      }, { signal: controller.signal })
       if (!isCurrentRequest()) return
       const grant = result?.grant
       if (trustWorkspaceConfig && grant?.resourceType === 'directory') {
-        await setWorkspaceTrustApi({ path: grant.path || selectedPath, trusted: true }, { signal: controller.signal })
+        await setWorkspaceTrustApi({
+          path: grant.path || selectedPath,
+          trusted: true,
+          scope: safeScope,
+        }, { signal: controller.signal })
         if (!isCurrentRequest()) return
       }
       toast.success({ title: t('taskSteering.directoryGranted') })
@@ -75,8 +89,12 @@ export default function useDirectoryApproval({ lang, t, toast }) {
         approved: true,
         path: grant?.path || selectedPath,
         accessMode: grant?.accessMode || safeAccessMode,
+        authorizationScope: grant?.scope || safeScope,
         resourceType: grant?.resourceType || 'directory',
         workspaceConfigTrusted: trustWorkspaceConfig && grant?.resourceType === 'directory',
+        workspaceTrustScope: trustWorkspaceConfig && grant?.resourceType === 'directory'
+          ? safeScope
+          : null,
       })
     } catch (error) {
       if (!isCurrentRequest()) return

@@ -55,11 +55,11 @@ export async function getLocalFileAccessApi({ signal } = {}) {
   return parse(await fetch('/api/local-files', { headers: authHeaders(), signal }))
 }
 
-export async function grantLocalPathApi({ path, accessMode }, options = {}) {
+export async function grantLocalPathApi({ path, accessMode, scope = 'persistent' }, options = {}) {
   return parse(await fetchWithTimeout('/api/local-files/grants', {
     method: 'POST',
     headers: authHeaders(true),
-    body: JSON.stringify({ path, accessMode }),
+    body: JSON.stringify({ path, accessMode, scope }),
   }, options))
 }
 
@@ -81,13 +81,14 @@ export async function setAllFilesAccessApi(enabled) {
   }))
 }
 
-export async function setWorkspaceTrustApi({ path, trusted }, options = {}) {
+export async function setWorkspaceTrustApi({ path, trusted, scope = 'persistent' }, options = {}) {
   return parse(await fetchWithTimeout('/api/local-files/workspace-trust', {
     method: 'POST',
     headers: authHeaders(true),
     body: JSON.stringify({
       path,
       trusted,
+      scope,
       confirmation: trusted ? 'TRUST_WORKSPACE_CONFIG' : undefined,
     }),
   }, options))

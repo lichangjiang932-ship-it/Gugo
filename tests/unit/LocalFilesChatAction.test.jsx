@@ -58,19 +58,24 @@ test('local-file chat wording renders an in-app grant dialog and enables read to
     const card = rootElement.querySelector('[data-testid="directory-approval-card"]')
     const pathInput = rootElement.querySelector('#directory-approval-path')
     const modeSelect = rootElement.querySelector('#directory-approval-mode')
+    const scopeSelect = rootElement.querySelector('#directory-approval-scope')
     assert.ok(modal)
     assert.ok(card)
     assert.equal(card.getAttribute('role'), 'region')
     assert.equal(card.hasAttribute('aria-modal'), false)
     assert.equal(pathInput.value, 'D:\\destok\\money')
     assert.equal(modeSelect.value, 'read_only')
+    assert.equal(scopeSelect.value, 'session')
 
     const authorizeButton = [...rootElement.querySelectorAll('button')].at(-1)
     await act(async () => {
       authorizeButton.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }))
     })
     assert.deepEqual(decisions, [{
-      path: 'D:\\destok\\money', accessMode: 'read_only', trustWorkspaceConfig: false,
+      path: 'D:\\destok\\money',
+      accessMode: 'read_only',
+      authorizationScope: 'session',
+      trustWorkspaceConfig: false,
     }])
     assert.deepEqual(resolveLocalPathToolNames([], request), ['list_directory', 'read_file'])
   } finally {

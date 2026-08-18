@@ -9,6 +9,11 @@ import { resolveManagedAttachmentPath } from './managedAttachmentStore.js'
 
 const MAX_GRANTS = 64
 const MAX_DIRECTORY_BROWSER_ENTRIES = 500
+export const LOCAL_FILE_GRANT_SCOPES = Object.freeze({
+  PERSISTENT: 'persistent',
+  SESSION: 'session',
+})
+const sessionGrantsByUser = new Map()
 
 function isLoopbackHost(value) {
   const host = String(value || '').trim().toLowerCase().replace(/^\[|\]$/g, '')
@@ -90,6 +95,20 @@ function isInside(root, target) {
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))
 }
 
+function pathKey(value) {
+  const normalized = path.normalize(value)
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized
+}
+
+function normalizeGrantScope(scope = LOCAL_FILE_GRANT_SCOPES.PERSISTENT) {
+  if (scope === LOCAL_FILE_GRANT_SCOPES.PERSISTENT || scope === LOCAL_FILE_GRANT_SCOPES.SESSION) return scope
+  throw serviceError('scope 仅支持 persistent 或 session', 400, 'INVALID_GRANT_SCOPE')
+}
+
+function accessModeSatisfies(actual, requested) {
+  return actual === 'read_write' || requested === 'read_only'
+}
+
 function assertPathWritable(canonicalPath, stat) {
   let descriptor = null
   let probePath = canonicalPath
@@ -159,6 +178,7 @@ function mapGrant(row) {
     path: row.root_path,
     resourceType: row.resource_type,
     accessMode: row.access_mode,
+    scope: row.scope || LOCAL_FILE_GRANT_SCOPES.PERSISTENT,
     available,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -196,10 +216,18 @@ export function resolveDirectoryRequestPath({ userId, rawPath = '' } = {}) {
     : path.resolve(getProjectDirectory({ userId }), input)
 }
 
-function getGrantRows(userId) {
+function getPersistentGrantRows(userId) {
   return getDb().prepare(
     'SELECT * FROM local_file_grants WHERE user_id = ? ORDER BY created_at ASC'
-  ).all(userId)
+  ).all(userId).map((row) => ({ ...row, scope: LOCAL_FILE_GRANT_SCOPES.PERSISTENT }))
+}
+
+function getSessionGrantRows(userId) {
+  return userId ? [...(sessionGrantsByUser.get(userId)?.values() || [])] : []
+}
+
+function getGrantRows(userId) {
+  return [...getPersistentGrantRows(userId), ...getSessionGrantRows(userId)]
 }
 
 export function getLocalFileAccessStatus({ userId }) {
@@ -275,6 +303,7 @@ export function findAuthorizedDirectoryGrant({
       path: authorizedPath,
       resourceType: 'directory',
       accessMode: 'read_write',
+      scope: 'bypass',
       available: target.exists,
       createdAt: null,
       updatedAt: null,
@@ -305,11 +334,18 @@ export function isExistingLocalDirectory(rawPath) {
   }
 }
 
-export function grantLocalPath({ userId, rootPath, accessMode = 'read_write', now = Date.now() }) {
+export function grantLocalPath({
+  userId,
+  rootPath,
+  accessMode = 'read_write',
+  scope = LOCAL_FILE_GRANT_SCOPES.PERSISTENT,
+  now = Date.now(),
+}) {
   if (!userId) throw serviceError('userId 必填', 400, 'USER_REQUIRED')
   if (!['read_only', 'read_write'].includes(accessMode)) {
     throw serviceError('accessMode 仅支持 read_only 或 read_write', 400, 'INVALID_ACCESS_MODE')
   }
+  const normalizedScope = normalizeGrantScope(scope)
   if (typeof rootPath !== 'string' || !rootPath.trim()) {
     throw serviceError('请选择或输入文件/文件夹绝对路径', 400, 'PATH_REQUIRED')
   }
@@ -328,13 +364,45 @@ export function grantLocalPath({ userId, rootPath, accessMode = 'read_write', no
   }
   if (accessMode === 'read_write') assertPathWritable(canonicalPath, stat)
 
-  const db = getDb()
-  const rows = getGrantRows(userId)
-  const existing = rows.find((row) => samePath(row.root_path, canonicalPath))
-  if (!existing && rows.length >= MAX_GRANTS) {
+  const persistentRows = getPersistentGrantRows(userId)
+  const sessionRows = getSessionGrantRows(userId)
+  const persistent = persistentRows.find((row) => samePath(row.root_path, canonicalPath))
+  const session = sessionRows.find((row) => samePath(row.root_path, canonicalPath))
+  if (
+    normalizedScope === LOCAL_FILE_GRANT_SCOPES.SESSION
+    && persistent
+    && accessModeSatisfies(persistent.access_mode, accessMode)
+  ) {
+    return mapGrant(persistent)
+  }
+  const existing = normalizedScope === LOCAL_FILE_GRANT_SCOPES.SESSION ? session : persistent
+  const uniqueRoots = new Set([...persistentRows, ...sessionRows].map((row) => pathKey(row.root_path)))
+  if (!existing && !uniqueRoots.has(pathKey(canonicalPath)) && uniqueRoots.size >= MAX_GRANTS) {
     throw serviceError(`最多授权 ${MAX_GRANTS} 个文件或文件夹`, 409, 'GRANT_LIMIT_REACHED')
   }
-  const id = existing?.id || crypto.randomUUID()
+  if (normalizedScope === LOCAL_FILE_GRANT_SCOPES.SESSION) {
+    let grants = sessionGrantsByUser.get(userId)
+    if (!grants) {
+      grants = new Map()
+      sessionGrantsByUser.set(userId, grants)
+    }
+    const key = pathKey(canonicalPath)
+    const row = {
+      id: existing?.id || `session:${crypto.randomUUID()}`,
+      user_id: userId,
+      root_path: canonicalPath,
+      resource_type: stat.isDirectory() ? 'directory' : 'file',
+      access_mode: accessMode,
+      created_at: existing?.created_at || now,
+      updated_at: now,
+      scope: LOCAL_FILE_GRANT_SCOPES.SESSION,
+    }
+    grants.set(key, row)
+    return mapGrant(row)
+  }
+
+  const db = getDb()
+  const id = persistent?.id || crypto.randomUUID()
   db.prepare(`
     INSERT INTO local_file_grants
       (id, user_id, root_path, resource_type, access_mode, created_at, updated_at)
@@ -350,15 +418,36 @@ export function grantLocalPath({ userId, rootPath, accessMode = 'read_write', no
     canonicalPath,
     stat.isDirectory() ? 'directory' : 'file',
     accessMode,
-    existing?.created_at || now,
+    persistent?.created_at || now,
     now
   )
+  if (session && accessModeSatisfies(accessMode, session.access_mode)) {
+    const grants = sessionGrantsByUser.get(userId)
+    grants?.delete(pathKey(canonicalPath))
+    if (grants?.size === 0) sessionGrantsByUser.delete(userId)
+  }
   return mapGrant(db.prepare('SELECT * FROM local_file_grants WHERE id = ? AND user_id = ?').get(id, userId))
 }
 
 export function revokeLocalPath({ userId, id }) {
   if (!userId || !id) return false
+  const grants = sessionGrantsByUser.get(userId)
+  if (grants) {
+    const entry = [...grants.entries()].find(([, row]) => row.id === id)
+    if (entry) {
+      grants.delete(entry[0])
+      if (grants.size === 0) sessionGrantsByUser.delete(userId)
+      return true
+    }
+  }
   return getDb().prepare('DELETE FROM local_file_grants WHERE id = ? AND user_id = ?').run(id, userId).changes > 0
+}
+
+export function clearSessionLocalFileGrants({ userId } = {}) {
+  if (userId) return sessionGrantsByUser.delete(userId)
+  const hadEntries = sessionGrantsByUser.size > 0
+  sessionGrantsByUser.clear()
+  return hadEntries
 }
 
 export function setAllFilesAccess({ userId, enabled, confirmation, now = Date.now() }) {
