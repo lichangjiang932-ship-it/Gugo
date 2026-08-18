@@ -127,6 +127,13 @@ export function SettingsAppearancePanel({ t, state, dispatch }) {
             onChange={(value) => dispatch({ type: 'SET_ANIMATIONS', payload: value })}
           />
         </SettingsRow>
+        <SettingsRow title={t('settings.inputHistoryNavigation')} description={t('settings.inputHistoryNavigationDescription')}>
+          <SettingsToggle
+            checked={state.inputHistoryNavigationEnabled !== false}
+            label={t('settings.inputHistoryNavigation')}
+            onChange={(value) => dispatch({ type: 'SET_INPUT_HISTORY_NAVIGATION', payload: value })}
+          />
+        </SettingsRow>
       </SettingsGroup>
     </SettingsPanel>
   )

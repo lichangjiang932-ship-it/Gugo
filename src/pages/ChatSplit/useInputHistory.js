@@ -10,19 +10,29 @@ export function getUserInputHistory(messages, limit = MAX_INPUT_HISTORY) {
     .reverse()
 }
 
-export function shouldNavigateInputHistory(event, direction) {
+export function shouldNavigateInputHistory(event, direction, enabled = true) {
+  if (!enabled) return false
   if (!event || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return false
   const target = event.currentTarget
   if (!target || typeof target.value !== 'string') return false
+  if (target.value.trim() !== '' || target.value.includes('\n')) return false
   const start = Number(target.selectionStart)
   const end = Number(target.selectionEnd)
   if (!Number.isFinite(start) || start !== end) return false
-  if (direction === 'up') return !target.value.slice(0, start).includes('\n')
-  if (direction === 'down') return !target.value.slice(end).includes('\n')
-  return false
+  return direction === 'up' || direction === 'down'
 }
 
-export default function useInputHistory({ messages, input, setInput, sessionId }) {
+function canContinueInputHistory(event, input, history, cursor) {
+  if (cursor < 0 || input !== history[cursor] || input.includes('\n')) return false
+  if (!event || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return false
+  const target = event.currentTarget
+  if (!target || target.value !== input) return false
+  const start = Number(target.selectionStart)
+  const end = Number(target.selectionEnd)
+  return Number.isFinite(start) && start === end
+}
+
+export default function useInputHistory({ messages, input, setInput, sessionId, enabled = true }) {
   const history = useMemo(() => getUserInputHistory(messages), [messages])
   const cursorRef = useRef(-1)
   const draftRef = useRef('')
@@ -30,14 +40,20 @@ export default function useInputHistory({ messages, input, setInput, sessionId }
   useEffect(() => {
     cursorRef.current = -1
     draftRef.current = ''
-  }, [sessionId])
+  }, [enabled, sessionId])
 
   return useCallback((event) => {
     const direction = event.key === 'ArrowUp' ? 'up' : event.key === 'ArrowDown' ? 'down' : null
-    if (!direction || !shouldNavigateInputHistory(event, direction)) return false
+    if (!direction || !enabled) return false
 
     let cursor = cursorRef.current
-    if (cursor >= 0 && input !== history[cursor]) cursor = -1
+    const continuing = canContinueInputHistory(event, input, history, cursor)
+    if (cursor >= 0 && !continuing) {
+      cursor = -1
+      cursorRef.current = -1
+      draftRef.current = ''
+    }
+    if (!continuing && !shouldNavigateInputHistory(event, direction, enabled)) return false
 
     if (direction === 'up') {
       if (!history.length) return false
@@ -53,7 +69,8 @@ export default function useInputHistory({ messages, input, setInput, sessionId }
     cursor -= 1
     cursorRef.current = cursor
     setInput(cursor < 0 ? draftRef.current : history[cursor])
+    if (cursor < 0) draftRef.current = ''
     event.preventDefault()
     return true
-  }, [history, input, setInput])
+  }, [enabled, history, input, setInput])
 }

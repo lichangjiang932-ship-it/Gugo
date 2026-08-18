@@ -85,7 +85,13 @@ export default function ChatSplit() {
     latestServerAssistant?.meta?.serverLastSequence ?? '',
     latestServerAssistant?.meta?.serverResumeResolution ? 'resolution' : '',
   ].join(':')
-  const navigateInputHistory = useInputHistory({ messages, input, setInput, sessionId: activeSessionId })
+  const navigateInputHistory = useInputHistory({
+    messages,
+    input,
+    setInput,
+    sessionId: activeSessionId,
+    enabled: state.inputHistoryNavigationEnabled !== false,
+  })
   const fallbackContextToolSpecs = useMemo(() => {
     const enabledNames = SERVER_TURN_TOOL_TOGGLE_NAMES.filter((name) => state.toolsConfig?.[name] === true)
     return buildServerToolCatalogFallback(enabledNames)

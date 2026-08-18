@@ -37,6 +37,7 @@ export default function SettingsDataExport({ state, dispatch, storageBytes, stor
     downloadJson(`settings-${Date.now()}.json`, wrapSettingsExport({
       theme: state.theme, accentColor: state.accentColor, fontSize: state.fontSize, density: state.density,
       animationsEnabled: state.animationsEnabled, permissions: state.permissions, skillConfigs: state.skillConfigs,
+      inputHistoryNavigationEnabled: state.inputHistoryNavigationEnabled !== false,
     }))
     setMessage(t('settingsDataExport.settingsExported', { version: SCHEMA_VERSION }))
   }

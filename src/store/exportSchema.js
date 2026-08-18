@@ -115,8 +115,11 @@ export function parseImport(raw) {
     if ('theme' in p && !isThemeMode(p.theme)) {
       throw new InvalidExportError('settings.theme 不是受支持的主题')
     }
-    if ('animationsEnabled' in p && typeof p.animationsEnabled !== 'boolean') {
-      throw new InvalidExportError('settings.animationsEnabled 必须为布尔')
+    const booleanFields = ['animationsEnabled', 'inputHistoryNavigationEnabled']
+    for (const k of booleanFields) {
+      if (k in p && typeof p[k] !== 'boolean') {
+        throw new InvalidExportError(`settings.${k} 必须为布尔`)
+      }
     }
     if ('permissions' in p && !Array.isArray(p.permissions)) {
       throw new InvalidExportError('settings.permissions 必须为数组')

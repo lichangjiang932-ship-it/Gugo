@@ -45,6 +45,7 @@ export default function ChatComposer({
   approvalMode,
   onApprovalModeChange,
   handleKeyDown,
+  inputHistoryNavigationEnabled = true,
   skillIds = [],
   slashCommands = [],
   onSlashCommandSelect,
@@ -61,6 +62,9 @@ export default function ChatComposer({
   const slashMenuOpen = !!slashMatch && !slashMenuDismissed
   const safeSlashIndex = Math.min(slashSelectedIndex, Math.max(0, slashCommands.length - 1))
   const attachmentState = attachmentSendState(attachments)
+  const showInputHistoryHint = inputHistoryNavigationEnabled
+    && String(input || '').trim() === ''
+    && !String(input || '').includes('\n')
 
   useEffect(() => {
     if (!slashMenuOpen) return undefined
@@ -204,48 +208,56 @@ export default function ChatComposer({
                 {skillCommand.command}
               </span>
             )}
-            <textarea
-              ref={textareaRef}
-              value={skillCommand.command ? skillCommand.body : input}
-              onChange={(e) => {
-              setSlashMenuDismissed(false)
-              setSlashSelectedIndex(0)
-              setInput(skillCommand.command ? `${skillCommand.command} ${e.target.value}` : e.target.value)
+            <div className="min-w-0 flex-1 cursor-text">
+              <textarea
+                ref={textareaRef}
+                value={skillCommand.command ? skillCommand.body : input}
+                onChange={(e) => {
+                setSlashMenuDismissed(false)
+                setSlashSelectedIndex(0)
+                setInput(skillCommand.command ? `${skillCommand.command} ${e.target.value}` : e.target.value)
 
-              // ★ #21: 自动撑高 textarea (1 ~ 8 行)
-              const ta = e.target
-              ta.style.height = 'auto'
-              ta.style.height = Math.min(ta.scrollHeight, 24 * 8) + 'px'
-              }}
-              onKeyDown={(e) => {
-                if (slashMenuOpen) {
-                  const action = resolveSlashMenuKey(e.key, safeSlashIndex, slashCommands.length)
-                  if (action.handled) {
+                // ★ #21: 自动撑高 textarea (1 ~ 8 行)
+                const ta = e.target
+                ta.style.height = 'auto'
+                ta.style.height = Math.min(ta.scrollHeight, 24 * 8) + 'px'
+                }}
+                onKeyDown={(e) => {
+                  if (slashMenuOpen) {
+                    const action = resolveSlashMenuKey(e.key, safeSlashIndex, slashCommands.length)
+                    if (action.handled) {
+                      e.preventDefault()
+                      if (action.selectedIndex !== undefined) setSlashSelectedIndex(action.selectedIndex)
+                      if (action.dismiss) setSlashMenuDismissed(true)
+                      if (action.selectIndex !== undefined) onSlashCommandSelect?.(slashCommands[action.selectIndex])
+                      return
+                    }
+                  }
+                  if (skillCommand.command && !skillCommand.body && e.key === 'Backspace' && !e.nativeEvent?.isComposing) {
                     e.preventDefault()
-                    if (action.selectedIndex !== undefined) setSlashSelectedIndex(action.selectedIndex)
-                    if (action.dismiss) setSlashMenuDismissed(true)
-                    if (action.selectIndex !== undefined) onSlashCommandSelect?.(slashCommands[action.selectIndex])
+                    setInput('')
                     return
                   }
-                }
-                if (skillCommand.command && !skillCommand.body && e.key === 'Backspace' && !e.nativeEvent?.isComposing) {
+                  handleKeyDown(e)
+                }}
+                onPaste={(e) => {
+                  const files = getClipboardFiles(e.clipboardData)
+                  if (!files.length) return
                   e.preventDefault()
-                  setInput('')
-                  return
-                }
-                handleKeyDown(e)
-              }}
-              onPaste={(e) => {
-                const files = getClipboardFiles(e.clipboardData)
-                if (!files.length) return
-                e.preventDefault()
-                onFileChange?.({ target: { files, value: '' } })
-              }}
-              placeholder={t('chatComposer.placeholder')}
-              aria-label={t('chatComposer.placeholder')}
-              className="w-full min-w-0 cursor-text bg-transparent outline-none text-sm text-ink placeholder:text-ink-soft resize-none flex-1 leading-6 max-h-48 overflow-y-auto"
-              rows={1}
-            />
+                  onFileChange?.({ target: { files, value: '' } })
+                }}
+                placeholder={t('chatComposer.placeholder')}
+                aria-label={t('chatComposer.placeholder')}
+                aria-describedby={showInputHistoryHint ? 'chat-input-history-hint' : undefined}
+                className="peer w-full min-w-0 cursor-text bg-transparent outline-none text-sm text-ink placeholder:text-ink-soft resize-none leading-6 max-h-48 overflow-y-auto"
+                rows={1}
+              />
+              {showInputHistoryHint && (
+                <p id="chat-input-history-hint" className="mt-0.5 hidden text-[11px] leading-4 text-ink-fade peer-focus:block">
+                  {t('chatComposer.inputHistoryHint')}
+                </p>
+              )}
+            </div>
           </div>
           <ComposerActions
             approvalMode={approvalMode}

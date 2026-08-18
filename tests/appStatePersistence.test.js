@@ -21,6 +21,7 @@ import {
   writeLightweightSnapshot,
   writeStateClearEpoch,
 } from '../src/store/appStatePersistence.js'
+import { reduceTaskSettingsState } from '../src/store/reducers/taskSettingsReducer.js'
 
 function createStorage(entries = []) {
   const values = new Map(entries)
@@ -37,6 +38,19 @@ test('new installs enable every app permission and tool toggle by default', () =
   assert.ok(state.permissions.length > 0)
   assert.equal(state.permissions.every((permission) => permission.enabled === true), true)
   assert.equal(Object.values(state.toolsConfig).every((enabled) => enabled === true), true)
+  assert.equal(state.inputHistoryNavigationEnabled, true)
+})
+
+test('input history navigation opt-out persists while invalid values use the enabled default', () => {
+  const disabled = reduceTaskSettingsState(createInitialState(), {
+    type: 'SET_INPUT_HISTORY_NAVIGATION',
+    payload: false,
+  })
+  assert.equal(disabled.inputHistoryNavigationEnabled, false)
+  assert.equal(selectPersistedSnapshot(disabled).inputHistoryNavigationEnabled, false)
+  assert.equal(normalizePersistedFields({ inputHistoryNavigationEnabled: false }).inputHistoryNavigationEnabled, false)
+  assert.equal(normalizePersistedFields({ inputHistoryNavigationEnabled: 'false' }).inputHistoryNavigationEnabled, undefined)
+  assert.equal(selectPersistedSnapshot(createInitialState()).inputHistoryNavigationEnabled, true)
 })
 
 test('current persisted permission opt-outs remain explicit', () => {
@@ -69,6 +83,7 @@ test('lightweight local snapshot excludes sessions and other large state', () =>
     fontSize: undefined,
     density: undefined,
     animationsEnabled: undefined,
+    inputHistoryNavigationEnabled: undefined,
     skillConfigs: undefined,
     toolsConfigSchemaVersion: undefined,
     toolsConfig: undefined,

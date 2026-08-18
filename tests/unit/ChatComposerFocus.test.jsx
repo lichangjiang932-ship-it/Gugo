@@ -76,6 +76,9 @@ test('composer whitespace focuses the textarea while controls keep their own cli
     outside.focus()
     await act(async () => surface.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
     assert.equal(document.activeElement, textarea)
+    assert.equal(rootElement.querySelector('#chat-input-history-hint')?.textContent, '↑/↓ 查看历史输入 · Enter 发送 · Shift+Enter 换行')
+    assert.equal(textarea.getAttribute('aria-describedby'), 'chat-input-history-hint')
+    assert.ok(rootElement.querySelector('#chat-input-history-hint').classList.contains('peer-focus:block'))
 
     outside.focus()
     await act(async () => actions.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))

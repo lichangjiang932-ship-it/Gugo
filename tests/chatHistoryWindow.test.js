@@ -13,14 +13,36 @@ test('input history returns recent user prompts from newest to oldest', () => {
   assert.deepEqual(getUserInputHistory(messages, 2), ['third', 'second'])
 })
 
-test('input history only captures arrow keys at multiline boundaries', () => {
-  const event = (value, cursor) => ({
+test('input history navigation only starts from an empty single-line input', () => {
+  const event = (value, cursor = 0, extra = {}) => ({
     currentTarget: { value, selectionStart: cursor, selectionEnd: cursor },
+    ...extra,
   })
-  assert.equal(shouldNavigateInputHistory(event('one\ntwo', 0), 'up'), true)
-  assert.equal(shouldNavigateInputHistory(event('one\ntwo', 5), 'up'), false)
-  assert.equal(shouldNavigateInputHistory(event('one\ntwo', 3), 'down'), false)
-  assert.equal(shouldNavigateInputHistory(event('one\ntwo', 7), 'down'), true)
+  const matrix = [
+    { name: 'empty up', event: event(''), direction: 'up', expected: true },
+    { name: 'empty down', event: event(''), direction: 'down', expected: true },
+    { name: 'whitespace-only', event: event('   ', 2), direction: 'up', expected: true },
+    { name: 'non-empty up at start', event: event('one', 0), direction: 'up', expected: false },
+    { name: 'non-empty down at end', event: event('one', 3), direction: 'down', expected: false },
+    { name: 'multiline up at start', event: event('one\ntwo', 0), direction: 'up', expected: false },
+    { name: 'multiline down at end', event: event('one\ntwo', 7), direction: 'down', expected: false },
+    { name: 'empty multiline', event: event('\n', 0), direction: 'up', expected: false },
+    { name: 'modified arrow', event: event('', 0, { shiftKey: true }), direction: 'up', expected: false },
+    { name: 'unknown direction', event: event(''), direction: 'left', expected: false },
+  ]
+  for (const entry of matrix) {
+    assert.equal(shouldNavigateInputHistory(entry.event, entry.direction), entry.expected, entry.name)
+  }
+
+  const selection = event('  ', 0)
+  selection.currentTarget.selectionEnd = 1
+  assert.equal(shouldNavigateInputHistory(selection, 'up'), false)
+})
+
+test('input history navigation setting disables both arrow directions', () => {
+  const event = { currentTarget: { value: '', selectionStart: 0, selectionEnd: 0 } }
+  assert.equal(shouldNavigateInputHistory(event, 'up', false), false)
+  assert.equal(shouldNavigateInputHistory(event, 'down', false), false)
 })
 
 test('message window mounts the recent 80 messages and expands by page', () => {

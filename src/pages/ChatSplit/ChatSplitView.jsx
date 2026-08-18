@@ -261,6 +261,7 @@ export default function ChatSplitView({
           approvalMode={approvalMode}
           onApprovalModeChange={onApprovalModeChange}
           handleKeyDown={onKeyDown}
+          inputHistoryNavigationEnabled={state.inputHistoryNavigationEnabled !== false}
           skillIds={runtimeSkillIds}
           slashCommands={slashCommands}
           onSlashCommandSelect={onSlashCommandSelect}
