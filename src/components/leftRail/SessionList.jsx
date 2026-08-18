@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Archive, ArchiveRestore, ChevronDown, MoreHorizontal, Pin, PinOff, Search, X } from 'lucide-react'
-import { sortSessions } from './sessionListUtils.js'
+import {
+  formatRelativeSessionTime,
+  groupSessionsByProject,
+  sessionProjectLabel,
+  sessionSummaryLabel,
+  timestampOf,
+} from './sessionListUtils.js'
 
 const CONTEXT_MENU_WIDTH = 176
 const CONTEXT_MENU_HEIGHT = 122
@@ -40,13 +46,14 @@ export default function SessionList({
   onPinToggle,
   onArchiveToggle,
   onDelete,
+  lang = 'zh-CN',
   t,
 }) {
   const menuRef = useRef(null)
   const menuOriginRef = useRef(null)
   const [contextMenu, setContextMenu] = useState(null)
   const [expanded, setExpanded] = useState(true)
-  const orderedSessions = useMemo(() => sortSessions(sessions), [sessions])
+  const groupedSessions = useMemo(() => groupSessionsByProject(sessions), [sessions])
 
   useEffect(() => {
     if (openMenuId == null) return undefined
@@ -78,9 +85,10 @@ export default function SessionList({
     const isMenuOpen = openMenuId === session.id
     const contextPosition = contextMenu?.sessionId === session.id ? contextMenu : null
     const menuId = `session-actions-${session.id}`
+    const timestamp = timestampOf(session)
     return <div
       key={session.id ?? index}
-      className={`group relative flex min-h-10 items-stretch rounded-lg transition-colors ${isActive ? 'bg-ink/[0.055]' : 'hover:bg-ink/[0.04]'}`}
+      className={`group relative flex min-h-14 items-stretch rounded-card transition-colors ${isActive ? 'bg-ink/[0.055]' : 'hover:bg-ink/[0.04]'}`}
       onContextMenu={(event) => {
         if (menuRef.current?.contains(event.target)) return
         event.preventDefault()
@@ -104,9 +112,14 @@ export default function SessionList({
         }}
         aria-current={isActive ? 'page' : undefined}
         aria-keyshortcuts="Shift+F10"
-        className="min-w-0 flex-1 rounded-lg py-2.5 pl-2.5 pr-8 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/25"
+        className="min-w-0 flex-1 rounded-card py-2.5 pl-2.5 pr-9 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/30"
       >
-        <span className={`block truncate text-[13px] leading-[18px] ${isActive ? 'font-medium text-ink' : 'text-ink-soft'}`}>{session.title}</span>
+        <span className={`block break-words text-[13px] font-medium leading-5 ${isActive ? 'text-ink' : 'text-ink-soft'}`}>{sessionSummaryLabel(session)}</span>
+        <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs leading-5 text-ink-fade">
+          <span className="min-w-0 truncate">{sessionProjectLabel(session)}</span>
+          <span aria-hidden="true">·</span>
+          <time className="shrink-0 tabular-nums" dateTime={timestamp ? new Date(timestamp).toISOString() : undefined}>{formatRelativeSessionTime(session, { locale: lang })}</time>
+        </span>
       </button>
       <button
         type="button"
@@ -124,7 +137,7 @@ export default function SessionList({
         aria-controls={isMenuOpen ? menuId : undefined}
         className={`absolute right-1.5 top-1.5 rounded-md p-1 text-ink-fade transition-opacity hover:bg-paper hover:text-ink focus:opacity-100 focus:outline-none ${isMenuOpen ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
       >
-        <MoreHorizontal className="h-3.5 w-3.5" />
+        <MoreHorizontal className="h-4 w-4" />
       </button>
       {isMenuOpen && <div
         ref={menuRef}
@@ -153,13 +166,13 @@ export default function SessionList({
   return <section aria-label={t('nav.history')}>
     <div className="mb-1 flex h-7 items-center gap-0.5">
       <button type="button" onClick={() => { onMenuClose(); setExpanded((value) => !value) }} aria-expanded={expanded} className="flex h-7 min-w-0 flex-1 items-center gap-1 rounded-md px-1.5 text-[11px] font-medium text-ink-fade hover:bg-ink/[0.035] hover:text-ink-soft">
-        <ChevronDown className={`h-3 w-3 transition-transform ${expanded ? '' : '-rotate-90'}`} />
+        <ChevronDown className={`h-[18px] w-[18px] transition-transform ${expanded ? '' : '-rotate-90'}`} />
         <span className="flex-1 text-left">{t('nav.history')}</span>
       </button>
       <button type="button" onClick={() => { onMenuClose(); onSearch?.() }} title={t('nav.searchPlaceholder')} aria-label={t('nav.searchPlaceholder')} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-fade hover:bg-ink/[0.035] hover:text-ink-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/30">
-        <Search className="h-3.5 w-3.5" />
+        <Search className="h-[18px] w-[18px]" />
       </button>
     </div>
-    {expanded && (orderedSessions.length ? <div className="flex flex-col gap-0.5">{orderedSessions.map((session, index) => renderSession(session, index))}</div> : <div className="px-3 py-8 text-center"><p className="text-xs text-ink-fade">{t('nav.emptyTitle')}</p><p className="mt-1 text-[10px] text-ink-ghost">{t('nav.emptyHint')}</p></div>)}
+    {expanded && (groupedSessions.length ? <div className="flex flex-col gap-3">{groupedSessions.map((group) => <div key={group.project} className="min-w-0"><div className="mb-1 px-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-ghost">{group.project}</div><div className="flex flex-col gap-1">{group.sessions.map((session, index) => renderSession(session, index))}</div></div>)}</div> : <div className="px-3 py-8 text-center"><p className="text-xs text-ink-fade">{t('nav.emptyTitle')}</p><p className="mt-1 text-[11px] leading-5 text-ink-ghost">{t('nav.emptyHint')}</p></div>)}
   </section>
 }

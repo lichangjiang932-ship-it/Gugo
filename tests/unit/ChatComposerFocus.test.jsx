@@ -65,10 +65,11 @@ test('composer whitespace focuses the textarea while controls keep their own cli
     assert.ok(textarea.placeholder.trim())
     assert.equal(textarea.getAttribute('aria-label'), textarea.placeholder)
     assert.equal(surface.classList.contains('cursor-text'), false)
-    for (const className of ['border-ink/15', 'hover:border-ink/25', 'focus-within:border-ink/35']) {
+    for (const className of ['border-neutral-200', 'hover:border-neutral-300', 'focus-within:border-blue-400/60']) {
       assert.ok(surface.classList.contains(className), `composer surface is missing ${className}`)
     }
-    assert.equal([...surface.classList].some((className) => className.includes('shadow')), false)
+    assert.ok(surface.classList.contains('shadow-sm'))
+    assert.ok(surface.classList.contains('focus-within:shadow-md'))
     assert.ok(textarea.classList.contains('cursor-text'))
     assert.ok(textarea.parentElement.classList.contains('cursor-text'))
     assert.ok(textarea.classList.contains('placeholder:text-ink-soft'))

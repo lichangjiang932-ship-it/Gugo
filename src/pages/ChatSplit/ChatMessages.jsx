@@ -42,7 +42,7 @@ export default function ChatMessages({
   return (
     <div className="chat-messages-shell relative min-h-0 flex-1">
       <div ref={bindContainer} className="chat-scroll-region relative h-full overflow-y-auto px-4 py-4 sm:px-7">
-        <div className="chat-conversation-column mx-auto flex w-full max-w-[840px] flex-col gap-1.5">
+        <div className="chat-conversation-column mx-auto flex w-full max-w-[840px] flex-col gap-5">
         {workbenchMessage && (
           <div className="rounded-lg border border-ink/10 bg-paper-2/55 px-3 py-2 text-xs text-ink-soft">{workbenchMessage}</div>
         )}

@@ -230,7 +230,7 @@ export default function RightWorkbench({
             <h2 className="truncate text-xs font-semibold text-ink">{t('workbench.title')}</h2>
             <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${isGenerating ? 'animate-pulse bg-ember' : 'bg-emerald-500'}`} aria-hidden="true" />
           </div>
-          <p className="mt-0.5 truncate text-[10px] text-ink-fade" title={statusMessage || undefined}>
+          <p className="mt-0.5 truncate text-[11px] leading-5 text-ink-fade" title={statusMessage || undefined}>
             {statusMessage || t(isGenerating ? 'workbench.active' : 'workbench.ready')}
           </p>
         </div>
@@ -253,10 +253,12 @@ export default function RightWorkbench({
             type="button"
             onClick={() => onTabChange(tab)}
             aria-current={activeTab === tab ? 'page' : undefined}
-            className={`group relative flex min-w-0 flex-1 items-center justify-center gap-1.5 border-b-2 px-1 text-[11px] transition-colors ${activeTab === tab ? 'border-ink text-ink' : 'border-transparent text-ink-fade hover:text-ink'}`}
+            aria-label={t(`workbench.${tab}`)}
+            title={t(`workbench.${tab}`)}
+            className={`group relative flex min-w-0 flex-1 items-center justify-center gap-1.5 border-b-2 px-1 text-xs transition-colors ${activeTab === tab ? 'border-blue-500 text-blue-600' : 'border-transparent text-ink-fade hover:text-ink'}`}
           >
-            <Icon className={`h-3.5 w-3.5 shrink-0 ${activeTab === tab ? 'text-ember' : ''}`} />
-            <span className="truncate">{t(`workbench.${tab}`)}</span>
+            <Icon className="h-[18px] w-[18px] shrink-0" />
+            <span className="sr-only">{t(`workbench.${tab}`)}</span>
             {tab === 'files' && artifacts.length > 0 && <span data-testid="workbench-file-count" className="min-w-4 rounded bg-ink/[0.08] px-1 py-0.5 text-center text-[9px] font-semibold leading-none text-ink-soft">{artifacts.length}</span>}
           </button>
         ))}

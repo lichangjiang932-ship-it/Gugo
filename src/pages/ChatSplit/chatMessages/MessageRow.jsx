@@ -527,7 +527,7 @@ function InlineDirectoryRequestCard({ msg, onAuthorize, t }) {
 
 function UserMeta({ lang, msg, t }) {
   return (
-    <div className="mt-0.5 flex h-4 items-center justify-end gap-3 text-[10px] leading-none text-ink-fade">
+    <div className="mt-1 flex min-h-5 items-center justify-end gap-3 text-[11px] leading-5 text-ink-fade tabular-nums">
       <span data-testid="user-message-time" className="chat-message-meta pointer-events-none opacity-0 transition-opacity group-hover/message:pointer-events-auto group-hover/message:opacity-100 group-focus-within/message:pointer-events-auto group-focus-within/message:opacity-100" title={formatMessageDateTime(msg.timestamp, lang)}>{formatMessageTime(msg.timestamp, lang)}</span>
       {!msg.meta?.streaming && (
         <div className="chat-message-actions pointer-events-none flex items-center gap-3 opacity-0 transition-opacity group-hover/message:pointer-events-auto group-hover/message:opacity-100 group-focus-within/message:pointer-events-auto group-focus-within/message:opacity-100">

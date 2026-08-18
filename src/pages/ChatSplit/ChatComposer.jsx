@@ -187,7 +187,7 @@ export default function ChatComposer({
             if (event.defaultPrevented || event.target?.closest?.(COMPOSER_INTERACTIVE_SELECTOR)) return
             textareaRef.current?.focus()
           }}
-          className="flex min-h-[96px] flex-col justify-between rounded-2xl border border-ink/15 bg-paper px-3.5 py-2.5 transition-[border-color,background-color] hover:border-ink/25 hover:bg-paper-2/15 focus-within:border-ink/35 focus-within:bg-paper"
+          className="flex min-h-[96px] flex-col justify-between rounded-card border border-neutral-200 bg-paper px-3.5 py-2.5 shadow-sm transition-[border-color,background-color,box-shadow,transform] hover:border-neutral-300 hover:bg-neutral-50 focus-within:-translate-y-px focus-within:border-blue-400/60 focus-within:bg-paper focus-within:shadow-md"
         >
           <ComposerAttachments
             attachments={attachments}

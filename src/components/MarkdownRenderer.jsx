@@ -170,14 +170,14 @@ function CodeBlock({ children, streaming = false }) {
       : t('chatMessages.copy')
 
   return (
-    <div className="chat-code-block not-prose my-2.5 overflow-hidden rounded-md border border-ink/15 bg-paper-2">
+    <div className="chat-code-block not-prose my-3 overflow-hidden rounded-card border border-neutral-200 bg-neutral-50 shadow-sm">
       <div className="flex h-7 items-center justify-between border-b border-ink/10 px-2.5">
-        <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-fade">{language}</span>
+        <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-ink-fade">{language}</span>
         {!streaming && (
           <button
             type="button"
             onClick={copy}
-            className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] transition-colors hover:bg-paper hover:text-ink ${copyState === 'error' ? 'text-rose-700' : 'text-ink-fade'}`}
+            className={`inline-flex items-center gap-1 rounded-control px-1.5 py-0.5 text-[11px] transition-colors hover:bg-paper hover:text-ink ${copyState === 'error' ? 'text-rose-700' : 'text-ink-fade'}`}
             aria-label={copyState === 'idle' ? t('chatMessages.copyContent') : copyLabel}
             aria-live="polite"
           >
@@ -195,7 +195,7 @@ function MarkdownRenderer({ artifactReferences = [], children, className = '', o
   const [fullscreen, setFullscreen] = useState(null)
 
   return (
-    <div className={`chat-markdown prose prose-sm max-w-none ${className}`}>
+    <div className={`chat-markdown prose prose-sm max-w-none leading-[1.75] ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm, [remarkArtifactReferences, { references: artifactReferences }], remarkLocalPathLinks]}
         urlTransform={markdownUrlTransform}
@@ -261,7 +261,7 @@ function MarkdownRenderer({ artifactReferences = [], children, className = '', o
                 {...(isLocalPath ? {} : { target: '_blank', rel: 'noopener noreferrer' })}
                 data-testid={isLocalPath ? 'inline-local-path-link' : undefined}
                 className={isLocalPath
-                    ? 'font-mono text-[0.88em] text-cyan underline decoration-cyan/40 underline-offset-4 hover:decoration-cyan'
+                    ? 'inline-flex rounded-control border border-neutral-200 bg-neutral-100 px-1.5 py-0.5 font-medium text-[0.88em] text-neutral-700 no-underline hover:border-blue-300 hover:text-blue-600'
                     : anchorProps.className}
                 onClick={(event) => {
                   if (isLocalPath) event.preventDefault()
@@ -278,7 +278,7 @@ function MarkdownRenderer({ artifactReferences = [], children, className = '', o
           code: ({ className, children, ...props }) => {
             if (!className) {
               return (
-                <code className="rounded-md border border-ink/10 bg-paper-2 px-1.5 py-0.5 text-[0.86em] font-mono text-ember" {...props}>
+                <code className="rounded-control border border-neutral-200 bg-neutral-100 px-1.5 py-0.5 text-[0.86em] font-medium text-neutral-700" {...props}>
                   {children}
                 </code>
               )
@@ -301,7 +301,7 @@ function MarkdownRenderer({ artifactReferences = [], children, className = '', o
           ),
           // 引用块
           blockquote: ({ children, ...props }) => (
-            <blockquote className="my-2.5 rounded-r border-l-2 border-ember bg-ember-soft/30 py-1.5 pl-3 pr-2.5 text-ink-soft" {...props}>
+            <blockquote className="my-3 rounded-r-control border-l-2 border-neutral-300 bg-neutral-50 py-2 pl-3.5 pr-3 text-ink-soft" {...props}>
               {children}
             </blockquote>
           ),
