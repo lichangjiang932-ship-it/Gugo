@@ -25,7 +25,7 @@ function canonicalizeToolSpec(spec) {
 }
 
 const LOCAL_TASK_TOOL_NAMES = new Set([
-  'list_directory', 'read_file', 'read_artifact_source', 'write_file', 'edit_file', 'apply_patch', 'patch_file',
+  'list_directory', 'read_file', 'read_artifact_source', 'write_file', 'edit_file', 'multi_edit', 'apply_patch', 'patch_file',
   'bash_exec', 'run_command', 'bash_background', 'process_list', 'process_kill',
   'grep_code', 'find_symbol', 'list_imports', 'run_project_check', 'run_test', 'docker_exec',
   'git_status', 'git_diff', 'git_write', 'git_commit', 'git_push', 'git_rollback',
@@ -38,7 +38,7 @@ const LOCAL_TASK_TOOL_NAMES = new Set([
 ])
 
 const LOCAL_CORE_TOOL_NAMES = new Set([
-  'list_directory', 'read_file', 'read_artifact_source', 'write_file', 'edit_file', 'apply_patch', 'patch_file',
+  'list_directory', 'read_file', 'read_artifact_source', 'write_file', 'edit_file', 'multi_edit', 'apply_patch', 'patch_file',
   'bash_exec', 'run_command', 'bash_background', 'process_list', 'process_kill',
   'grep_code', 'find_symbol', 'list_imports', 'run_project_check', 'run_test',
   'request_directory', 'file_download', 'rewind_files', 'set_deliverables',

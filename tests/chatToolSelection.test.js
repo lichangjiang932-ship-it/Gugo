@@ -32,6 +32,9 @@ const READ_ONLY_NAMES = new Set([
   'browser_snapshot', 'notion_search', 'mcp__airtable__list_records',
 ])
 const ANSWER_RECOVERY_NAMES = new Set(['request_clarification', 'request_directory'])
+const ALWAYS_VISIBLE_LOCAL_EXECUTION_NAMES = new Set([
+  'write_file', 'edit_file', 'apply_patch', 'bash_exec', 'run_project_check',
+])
 const SPECS = TOOL_NAMES.map(spec)
 const ARTIFACT_NAMES = new Set([
   'create_pptx', 'create_docx', 'create_xlsx', 'create_html_app', 'generate_image',
@@ -47,7 +50,11 @@ const LOCAL_EXECUTE_NAMES = sorted([
   'request_clarification', 'request_directory', 'set_deliverables',
 ])
 const LOCAL_REWIND_EXECUTE_NAMES = sorted([...LOCAL_EXECUTE_NAMES, 'rewind_files'])
-const ANSWER_NAMES = sorted([...READ_ONLY_NAMES, ...ANSWER_RECOVERY_NAMES])
+const ANSWER_NAMES = sorted([
+  ...READ_ONLY_NAMES,
+  ...ANSWER_RECOVERY_NAMES,
+  ...ALWAYS_VISIBLE_LOCAL_EXECUTION_NAMES,
+])
 const metadataResolver = (name) => ({
   isReadOnly: READ_ONLY_NAMES.has(name),
   riskClass: READ_ONLY_NAMES.has(name) ? 'read' : 'external',
@@ -62,7 +69,7 @@ function selectChat(options = {}) {
   })
 }
 
-test('ordinary questions expose only a stable read-only capability set', () => {
+test('ordinary questions retain a stable local execution harness without mounting remote writes', () => {
   for (const prompt of [
     '为什么登录状态会过期？',
     'How does OAuth refresh-token rotation work?',
@@ -70,9 +77,35 @@ test('ordinary questions expose only a stable read-only capability set', () => {
   ]) {
     assert.deepEqual(namesOf(selectChat({ prompt })), ANSWER_NAMES)
   }
-  assert.ok(!ANSWER_NAMES.includes('write_file'))
+  assert.ok(ANSWER_NAMES.includes('write_file'))
+  assert.ok(ANSWER_NAMES.includes('bash_exec'))
   assert.ok(!ANSWER_NAMES.includes('slack_send_message'))
   assert.ok(!ANSWER_NAMES.includes('Agent'))
+})
+
+test('refreshed conversations and terse follow-ups retain authorized local tools on every new turn', () => {
+  for (const userPrompt of [
+    '你来操作',
+    '为什么还是没有写入工具',
+    '解释一下这个页面',
+  ]) {
+    const selected = namesOf(selectChat({
+      prompt: userPrompt,
+      userPrompt,
+      previousUserPrompt: '请说明上一轮的处理结果。',
+    }))
+    assert.equal(resolveChatCapabilityMode({
+      prompt: userPrompt,
+      userPrompt,
+      previousUserPrompt: '请说明上一轮的处理结果。',
+    }), 'answer', userPrompt)
+    for (const name of ['write_file', 'edit_file', 'apply_patch', 'bash_exec', 'run_project_check']) {
+      assert.ok(selected.includes(name), `${userPrompt}: ${name}`)
+    }
+    for (const name of ['slack_send_message', 'mcp__airtable__create_record', 'Agent']) {
+      assert.equal(selected.includes(name), false, `${userPrompt}: ${name}`)
+    }
+  }
 })
 
 test('code generation and execution requests keep command execution tools', () => {
@@ -94,7 +127,8 @@ test('code generation and execution requests keep command execution tools', () =
     '介绍一下 Python 的装饰器',
   ]) {
     const selected = namesOf(selectChat({ prompt }))
-    assert.ok(!selected.includes('bash_exec'), `${prompt}: answer mode`)
+    assert.equal(resolveChatCapabilityMode({ prompt }), 'answer', `${prompt}: answer mode`)
+    assert.ok(selected.includes('bash_exec'), `${prompt}: local execution visible`)
     assert.deepEqual(selected, ANSWER_NAMES, prompt)
   }
 })
@@ -158,14 +192,15 @@ test('an exact local file path excludes managed-artifact source reads', () => {
   assert.ok(currentArtifactNames.includes('read_artifact_source'))
 })
 
-test('analysis of local-file requirements remains read-only', () => {
+test('analysis of local-file requirements remains answer-only while local tools stay visible', () => {
   for (const prompt of [
     '"E:\\果\\gallery.html"这个文件有什么问题？',
     '请分析 "E:\\果\\gallery.html" 的以下需求：1.图片是否拥挤2.旋转是否圆滑',
   ]) {
     const selected = namesOf(selectChat({ prompt }))
+    assert.equal(resolveChatCapabilityMode({ prompt }), 'answer', prompt)
     for (const name of ['write_file', 'edit_file', 'apply_patch', 'bash_exec']) {
-      assert.equal(selected.includes(name), false, `${prompt}: ${name}`)
+      assert.equal(selected.includes(name), true, `${prompt}: ${name}`)
     }
   }
 })
@@ -269,7 +304,7 @@ test('chat execution restores the internal delivery control when upstream tool c
     intentMode: 'answer',
     metadataResolver,
   }))
-  assert.deepEqual(answerNames, ['read_file'])
+  assert.deepEqual(answerNames, ['read_file', 'write_file'])
 
   const jobNames = namesOf(selectJobToolSpecs({
     origin: 'job',
@@ -279,7 +314,7 @@ test('chat execution restores the internal delivery control when upstream tool c
   assert.equal(jobNames.includes('set_deliverables'), false)
 })
 
-test('explicit answer mode wins over mutation words and artifact skill contracts', () => {
+test('explicit answer mode suppresses the execution obligation but retains local tools', () => {
   assert.deepEqual(namesOf(selectChat({
     prompt: '/ppt 生成一份发布计划',
     skillId: 'ppt',
@@ -294,13 +329,14 @@ test('artifact skill contracts retain execution tools and only their requested g
   assert.ok(!selected.includes('create_docx'))
 })
 
-test('managed attachments retain read access for questions and full capabilities for deliverables', () => {
+test('managed attachment questions retain local tools without mounting an unrequested generator', () => {
   const summarize = namesOf(selectChat({
     prompt: '[GUGO_MANAGED_ATTACHMENT id="a1"]\n请概括附件内容',
   }))
   assert.deepEqual(summarize, ANSWER_NAMES)
   assert.ok(summarize.includes('read_file'))
-  assert.ok(!summarize.includes('write_file'))
+  assert.ok(summarize.includes('write_file'))
+  assert.ok(!summarize.includes('create_docx'))
 
   const deliver = namesOf(selectChat({
     prompt: '[GUGO_MANAGED_ATTACHMENT id="a1"]\n把附件整理好并导出一份可编辑报告',
@@ -719,20 +755,43 @@ test('a read-only PDF verifier does not downgrade the surrounding creation workf
   }
 })
 
-test('disabled tools remain absent and routing never recreates them', () => {
+test('disabled tools remain absent and routing never recreates them in answer or execute mode', () => {
   const configured = applyServerToolsConfig(SPECS, {
     enabled: ['read_file'],
     disabled: ['create_docx', 'bash_exec', 'browser_click', 'slack_send_message', 'read_file'],
   })
-  const selected = namesOf(selectChatToolSpecs({
-    prompt: 'Implement the whole workflow.',
-    intentMode: 'execute',
-    specs: configured,
-    metadataResolver,
-  }))
-  for (const name of ['create_docx', 'bash_exec', 'browser_click', 'slack_send_message', 'read_file']) {
-    assert.ok(!selected.includes(name), name)
+  for (const { prompt, intentMode } of [
+    { prompt: 'Implement the whole workflow.', intentMode: 'execute' },
+    { prompt: 'Explain the whole workflow.', intentMode: 'answer' },
+  ]) {
+    const selected = namesOf(selectChatToolSpecs({
+      prompt,
+      intentMode,
+      specs: configured,
+      metadataResolver,
+    }))
+    for (const name of ['create_docx', 'bash_exec', 'browser_click', 'slack_send_message', 'read_file']) {
+      assert.ok(!selected.includes(name), `${intentMode}: ${name}`)
+    }
   }
+})
+
+test('answer-mode diagnostics do not report retained local tools as intent exclusions', () => {
+  let decision = null
+  const selected = namesOf(selectChatToolSpecs({
+    prompt: '为什么还是没有写入工具',
+    specs: SPECS,
+    metadataResolver,
+    onDecision: (value) => { decision = value },
+  }))
+
+  for (const name of ['write_file', 'edit_file', 'apply_patch', 'bash_exec', 'run_project_check']) {
+    assert.ok(selected.includes(name), name)
+    assert.equal(decision?.excludedTools.some((entry) => entry.name === name), false, name)
+  }
+  assert.ok(decision?.excludedTools.some((entry) => (
+    entry.name === 'slack_send_message' && entry.reason === 'intent_answer_mode'
+  )))
 })
 
 test('answer-mode recovery tools remain absent when disabled upstream', () => {

@@ -9,6 +9,23 @@ import { getToolMetadata } from './toolRegistry.js'
 const ORCHESTRATION_TOOL_NAMES = new Set(['Agent', 'manage_todos'])
 const ANSWER_RECOVERY_TOOL_NAMES = new Set(['request_clarification', 'request_directory'])
 
+// Keep the authorized local editing harness model-visible on every chat round.
+// This is a visibility contract, not an execution obligation: answer/read-only
+// turns may ignore these tools, and the normal permission/approval gates still
+// govern every call. The selector only retains specs that survived upstream
+// configuration and permission filtering; it never restores a disabled tool.
+const ALWAYS_VISIBLE_LOCAL_EXECUTION_TOOL_NAMES = new Set([
+  'write_file',
+  'edit_file',
+  'multi_edit',
+  'apply_patch',
+  'patch_file',
+  'bash_exec',
+  'run_command',
+  'run_project_check',
+  'run_test',
+])
+
 const EXPLICIT_READ_ONLY = /\b(?:read[- ]only|no[- ]write)\b|\b(?:do not|don't|never|without)\b.{0,24}\b(?:change|modify|edit|write|delete|remove|rename|move|patch|mutate)\b|\u53ea\u8bfb|\u4ec5(?:\u67e5\u770b|\u5206\u6790|\u68c0\u67e5)|\u4e0d\u8981.{0,16}(?:\u4fee\u6539|\u7f16\u8f91|\u5199\u5165|\u5220\u9664|\u79fb\u9664|\u91cd\u547d\u540d|\u79fb\u52a8|\u6253\u8865\u4e01|\u6539\u52a8|\u53d8\u66f4|\u4fee\u590d)/i
 const ANALYSIS_ONLY_REQUEST = /^\s*(?:\u8bf7)?\s*(?:\u5206\u6790|\u89e3\u91ca|\u8bf4\u660e|\u8bc4\u4f30|\u5ba1\u67e5|\u8ba8\u8bba|\u68b3\u7406|\u603b\u7ed3|\u5217\u51fa|\u8bc6\u522b)/i
 const LOCAL_FILE_TARGET_REFERENCE = /(?:^|[\s"'`(])(?:[a-z]:[\\/]|\.\.?[\\/]|\/)(?:[^\r\n"'`]+[\\/])*[^\r\n"'`]+\.[a-z0-9]{1,12}(?=$|[\s"'`),;:\uff0c\u3002\uff1b\uff1a\uff01\uff1f])/iu
@@ -255,9 +272,11 @@ export function resolveChatCapabilityMode({
 
 /**
  * Permissions/configuration are applied before this function. It only removes
- * capabilities; it never recreates a disabled tool. Answer mode retains tools
- * whose registered metadata is genuinely read-only, excluding orchestration
- * because delegated agents may perform mutations outside this local filter.
+ * capabilities; it never recreates a disabled tool. Every chat round retains
+ * the already-authorized local editing harness so the model can decide whether
+ * to use it. Answer mode also retains genuinely read-only and recovery tools,
+ * excluding orchestration because delegated agents may mutate outside this
+ * local filter.
  */
 export function selectChatToolSpecs({
   prompt = '',
@@ -317,7 +336,8 @@ export function selectChatToolSpecs({
     selectedSpecs = routedSpecs.filter((spec) => {
       const name = toolName(spec)
       return !ORCHESTRATION_TOOL_NAMES.has(name)
-        && (ANSWER_RECOVERY_TOOL_NAMES.has(name)
+        && (ALWAYS_VISIBLE_LOCAL_EXECUTION_TOOL_NAMES.has(name)
+          || ANSWER_RECOVERY_TOOL_NAMES.has(name)
           || readOnlyMetadata(name, { userId, metadataResolver }))
     })
     const selectedNames = new Set(selectedSpecs.map(toolName))

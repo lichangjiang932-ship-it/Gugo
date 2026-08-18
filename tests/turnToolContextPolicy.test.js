@@ -32,21 +32,30 @@ test('website and file turns expose a compact local execution catalog', async ()
   assert.ok(names.length < 60, `website catalog unexpectedly contains ${names.length} tools`)
 })
 
-test('ordinary turns omit remote schemas unless the user asks for them', async () => {
-  const specs = await resolveTurnToolSpecs({
-    userId: null,
-    baseSpecs: SERVER_TOOL_SPECS,
-    prompt: '解释一下这个概念',
-    messages: [{ role: 'user', content: '解释概念' }],
-    enabledConnectorTools: allConnectorsEnabled,
-    webSearchReady: true,
-  })
-  const names = namesOf(specs)
+test('ordinary and refreshed terse turns keep local execution while omitting unrequested remote schemas', async () => {
+  for (const prompt of ['解释一下这个概念', '你来操作', '为什么还是没有写入工具']) {
+    const specs = await resolveTurnToolSpecs({
+      userId: null,
+      baseSpecs: SERVER_TOOL_SPECS,
+      prompt,
+      messages: [
+        { role: 'user', content: '上一轮内容' },
+        { role: 'assistant', content: '上一轮回答' },
+        { role: 'user', content: prompt },
+      ],
+      enabledConnectorTools: allConnectorsEnabled,
+      webSearchReady: true,
+    })
+    const names = namesOf(specs)
 
-  assert.ok(names.includes('request_clarification'))
-  assert.equal(names.includes('web_search'), false)
-  assert.equal(names.includes('github_search_repositories'), false)
-  assert.equal(names.some((name) => name.startsWith('mcp__')), false)
+    for (const name of ['write_file', 'edit_file', 'apply_patch', 'patch_file', 'bash_exec', 'run_command', 'run_project_check', 'run_test']) {
+      assert.ok(names.includes(name), `${prompt}: ${name}`)
+    }
+    assert.ok(names.includes('request_clarification'))
+    assert.equal(names.includes('web_search'), false)
+    assert.equal(names.includes('github_search_repositories'), false)
+    assert.equal(names.some((name) => name.startsWith('mcp__')), false)
+  }
 })
 
 test('Chinese web-search intent survives local-task routing and reports readiness', async () => {

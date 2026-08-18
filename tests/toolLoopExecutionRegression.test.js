@@ -6,7 +6,7 @@ import { createInitialState } from '../src/store/appStateBootstrap.js'
 import { applyServerToolsConfig } from '../server/services/turnToolSpecs.js'
 import { parseModelProviderResponse } from '../server/adapters/modelProviderResponse.js'
 
-const { runToolsLoop, SERVER_TOOL_SPECS } = await import('../server/services/jobTools.js')
+const { runToolsLoop, SERVER_TOOL_SPECS, selectJobToolSpecs } = await import('../server/services/jobTools.js')
 const { registerDynamicTool, unregisterDynamicTool } = await import('../server/services/toolRegistry.js')
 const { createJobBudget } = await import('../server/utils/jobBudget.js')
 const { createUser, getDb } = await import('../server/db.js')
@@ -1141,6 +1141,66 @@ test('a mutation request cannot be completed by an unrelated read-only success',
   assert.equal(result.incomplete, true)
   assert.equal(result.reason, 'execution_evidence_missing')
   assert.equal(modelCalls, 3)
+})
+
+test('refreshed terse chat keeps the same local write catalog on every model round', async () => {
+  const prompt = '你来操作'
+  const selectedSpecs = selectJobToolSpecs({
+    origin: 'chat',
+    specs: SERVER_TOOL_SPECS,
+    prompt,
+    userPrompt: prompt,
+    previousUserPrompt: '请说明上一轮的处理结果。',
+  })
+  const catalogs = []
+  let modelCalls = 0
+
+  const result = await runToolsLoop({
+    job: {
+      id: 'job-refreshed-terse-local-catalog',
+      userId: null,
+      origin: 'chat',
+      prompt,
+      userPrompt: prompt,
+    },
+    step: { id: 'step-refreshed-terse-local-catalog', kind: 'chat' },
+    messages: [
+      { role: 'user', content: '请说明上一轮的处理结果。' },
+      { role: 'assistant', content: '上一轮回答。' },
+      { role: 'user', content: prompt },
+    ],
+    toolSpecs: selectedSpecs,
+    maxIters: 3,
+    enableToolHooks: false,
+    runModel: async ({ tools }) => {
+      modelCalls += 1
+      catalogs.push(tools.map((item) => item?.function?.name).filter(Boolean).sort())
+      if (modelCalls <= 2) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: `read-round-${modelCalls}`,
+            type: 'function',
+            function: {
+              name: 'read_file',
+              arguments: JSON.stringify({ path: `round-${modelCalls}.txt` }),
+            },
+          }],
+        }
+      }
+      return { content: '已检查当前状态。', toolCalls: [] }
+    },
+    executeTool: async ({ name, args }) => ({ ok: true, path: args.path, content: name }),
+  })
+
+  assert.equal(modelCalls, 3)
+  assert.deepEqual(catalogs[1], catalogs[0])
+  assert.deepEqual(catalogs[2], catalogs[0])
+  for (const name of ['write_file', 'edit_file', 'apply_patch', 'patch_file', 'bash_exec', 'run_command', 'run_project_check', 'run_test']) {
+    assert.ok(catalogs[0].includes(name), name)
+  }
+  assert.equal(catalogs[0].includes('slack_send_message'), false)
+  assert.equal(result.text, '已检查当前状态。')
 })
 
 test('a first-turn visual edit exposes write tools and rejects a false missing-tool answer after reads', async () => {
