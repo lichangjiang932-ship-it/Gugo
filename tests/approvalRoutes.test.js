@@ -86,6 +86,73 @@ test('approval settings persist isolated risk overrides and allow clearing them'
   assert.deepEqual((await cleared.json()).riskOverrides, [])
 })
 
+test('permission widening requires confirmation and bypass justification while tightening is immediate', async () => {
+  const user = issueTestSession({ email: 'approval-mode-transition@example.com' })
+
+  const rejected = await fetch(`${origin}/api/approvals/settings`, {
+    method: 'POST',
+    headers: headers(user.token),
+    body: JSON.stringify({ mode: 'acceptEdits' }),
+  })
+  assert.equal(rejected.status, 409)
+  assert.equal((await rejected.json()).error.code, 'PERMISSION_ESCALATION_REQUIRED')
+  assert.equal((await (await fetch(`${origin}/api/approvals/settings`, { headers: headers(user.token) })).json()).mode, 'normal')
+
+  const widened = await fetch(`${origin}/api/approvals/settings`, {
+    method: 'POST',
+    headers: headers(user.token),
+    body: JSON.stringify({ mode: 'acceptEdits', approveEscalation: true }),
+  })
+  assert.equal(widened.status, 200)
+  assert.equal((await widened.json()).mode, 'acceptEdits')
+
+  const noReason = await fetch(`${origin}/api/approvals/settings`, {
+    method: 'POST',
+    headers: headers(user.token),
+    body: JSON.stringify({ mode: 'bypass', approveEscalation: true }),
+  })
+  assert.equal(noReason.status, 400)
+  assert.equal((await noReason.json()).error.code, 'PERMISSION_JUSTIFICATION_REQUIRED')
+
+  const bypass = await fetch(`${origin}/api/approvals/settings`, {
+    method: 'POST',
+    headers: headers(user.token),
+    body: JSON.stringify({ mode: 'bypass', approveEscalation: true, justification: 'trusted local release workspace' }),
+  })
+  const bypassBody = await bypass.json()
+  assert.equal(bypass.status, 200)
+  assert.equal(bypassBody.mode, 'bypass')
+  assert.equal(bypassBody.modeHistory[0].justification, 'trusted local release workspace')
+
+  const tightened = await fetch(`${origin}/api/approvals/settings`, {
+    method: 'POST',
+    headers: headers(user.token),
+    body: JSON.stringify({ mode: 'normal' }),
+  })
+  const tightenedBody = await tightened.json()
+  assert.equal(tightened.status, 200)
+  assert.equal(tightenedBody.mode, 'normal')
+  assert.equal(tightenedBody.modeHistory[0].transitionKind, 'tightened')
+})
+
+test('plan mode cannot widen to normal or bypass without explicit approval', async () => {
+  const user = issueTestSession({ email: 'approval-plan-transition@example.com' })
+  const plan = await fetch(`${origin}/api/approvals/settings`, {
+    method: 'POST', headers: headers(user.token), body: JSON.stringify({ mode: 'plan' }),
+  })
+  assert.equal(plan.status, 200)
+
+  for (const mode of ['normal', 'bypass']) {
+    const response = await fetch(`${origin}/api/approvals/settings`, {
+      method: 'POST', headers: headers(user.token), body: JSON.stringify({ mode }),
+    })
+    assert.equal(response.status, 409, mode)
+    assert.equal((await response.json()).error.code, 'PERMISSION_ESCALATION_REQUIRED')
+  }
+  const settings = await fetch(`${origin}/api/approvals/settings`, { headers: headers(user.token) })
+  assert.equal((await settings.json()).mode, 'plan')
+})
+
 test('pending approval shows up in list, count and detail', async () => {
   const alice = issueTestSession({ email: 'approval-list-alice@example.com' })
   const created = seed(alice.userId)

@@ -9,6 +9,26 @@ import { buildRememberedGrant, DEFAULT_PERMISSION_MODE, PERMISSION_MODES } from 
 
 const RISK_CLASSES = new Set(['read', 'write_local', 'exec', 'external'])
 export const INITIAL_USER_PERMISSION_MODE = 'normal'
+export const WIDER_PERMISSION_MODES = Object.freeze({
+  plan: Object.freeze(['normal', 'acceptEdits', 'bypass']),
+  normal: Object.freeze(['acceptEdits', 'bypass']),
+  acceptEdits: Object.freeze(['bypass']),
+  bypass: Object.freeze([]),
+})
+
+function permissionModeError(message, { code, statusCode = 400, currentMode, requestedMode } = {}) {
+  const error = new Error(message)
+  error.code = code || 'PERMISSION_MODE_ERROR'
+  error.statusCode = statusCode
+  error.currentMode = currentMode
+  error.requestedMode = requestedMode
+  return error
+}
+
+export function isPermissionModeWidening(currentMode, requestedMode) {
+  if (!PERMISSION_MODES.includes(currentMode) || !PERMISSION_MODES.includes(requestedMode)) return false
+  return WIDER_PERMISSION_MODES[currentMode]?.includes(requestedMode) === true
+}
 
 export function getApprovalMode({ userId } = {}) {
   if (!userId) return DEFAULT_PERMISSION_MODE
@@ -34,6 +54,81 @@ export function setApprovalMode({ userId, mode } = {}) {
     ON CONFLICT(user_id) DO UPDATE SET mode = @mode, updated_at = @now
   `).run({ userId, mode, now })
   return getApprovalMode({ userId })
+}
+
+export function changeApprovalMode({
+  userId,
+  mode,
+  approveEscalation = false,
+  justification = '',
+} = {}) {
+  if (!userId) throw new Error('userId 必填')
+  if (!PERMISSION_MODES.includes(mode)) throw new Error(`非法模式: ${mode}`)
+  const currentMode = getApprovalMode({ userId })
+  if (currentMode === mode) {
+    return { mode, previousMode: currentMode, changed: false, widened: false }
+  }
+
+  const widened = isPermissionModeWidening(currentMode, mode)
+  const normalizedJustification = String(justification || '').trim().slice(0, 1000)
+  if (widened && approveEscalation !== true) {
+    throw permissionModeError('放宽权限需要明确批准', {
+      code: 'PERMISSION_ESCALATION_REQUIRED',
+      statusCode: 409,
+      currentMode,
+      requestedMode: mode,
+    })
+  }
+  if (mode === 'bypass' && !normalizedJustification) {
+    throw permissionModeError('切换到全部放行必须填写理由', {
+      code: 'PERMISSION_JUSTIFICATION_REQUIRED',
+      currentMode,
+      requestedMode: mode,
+    })
+  }
+
+  const now = Date.now()
+  const db = getDb()
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO user_approval_settings (user_id, mode, updated_at)
+      VALUES (@userId, @mode, @now)
+      ON CONFLICT(user_id) DO UPDATE SET mode = @mode, updated_at = @now
+    `).run({ userId, mode, now })
+    db.prepare(`
+      INSERT INTO permission_mode_events
+        (user_id, from_mode, to_mode, transition_kind, justification, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      userId,
+      currentMode,
+      mode,
+      widened ? 'widened' : 'tightened',
+      normalizedJustification || null,
+      now,
+    )
+  })()
+
+  return { mode, previousMode: currentMode, changed: true, widened }
+}
+
+export function listPermissionModeEvents({ userId, limit = 20 } = {}) {
+  if (!userId) return []
+  const safeLimit = Math.max(1, Math.min(100, Number(limit) || 20))
+  return getDb().prepare(`
+    SELECT id, from_mode, to_mode, transition_kind, justification, created_at
+      FROM permission_mode_events
+     WHERE user_id = ?
+     ORDER BY created_at DESC, id DESC
+     LIMIT ?
+  `).all(userId, safeLimit).map((row) => ({
+    id: row.id,
+    fromMode: row.from_mode,
+    toMode: row.to_mode,
+    transitionKind: row.transition_kind,
+    justification: row.justification,
+    createdAt: row.created_at,
+  }))
 }
 
 export function listRememberedTools({ userId } = {}) {
@@ -116,5 +211,6 @@ export function getApprovalSettings({ userId } = {}) {
     rememberedGrants: listRememberedGrants({ userId }),
     riskOverrides: listRiskOverrides({ userId }),
     modes: PERMISSION_MODES,
+    modeHistory: listPermissionModeEvents({ userId }),
   }
 }

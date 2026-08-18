@@ -13,6 +13,7 @@ import { migrateToV49 } from '../server/migrations/v49HookArgumentMatcher.js'
 import { migrateToV50 } from '../server/migrations/v50DefaultExecutionPermissions.js'
 import { migrateToV51 } from '../server/migrations/v51TurnCheckpoints.js'
 import { migrateToV52 } from '../server/migrations/v52DefaultOutputDirectory.js'
+import { migrateToV53 } from '../server/migrations/v53PermissionModeEvents.js'
 
 test('schema migration registry is contiguous and owns the latest version', () => {
   const legacy = Array.from({ length: 29 }, (_, index) => ({
@@ -21,10 +22,30 @@ test('schema migration registry is contiguous and owns the latest version', () =
   }))
   const plan = createSchemaMigrationPlan(legacy)
 
-  assert.deepEqual(plan.map(({ version }) => version), Array.from({ length: 51 }, (_, index) => index + 2))
-  assert.equal(LATEST_SCHEMA_VERSION, 52)
+  assert.deepEqual(plan.map(({ version }) => version), Array.from({ length: 52 }, (_, index) => index + 2))
+  assert.equal(LATEST_SCHEMA_VERSION, 53)
   assert.equal(DB_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
   assert.equal(schemaMigrations.at(-1).version, LATEST_SCHEMA_VERSION)
+})
+
+test('v53 stores queryable permission-mode transition history', () => {
+  const db = new Database(':memory:')
+  try {
+    db.exec("CREATE TABLE users (id TEXT PRIMARY KEY); INSERT INTO users VALUES ('user-1');")
+    migrateToV53(db)
+    migrateToV53(db)
+    db.prepare(`
+      INSERT INTO permission_mode_events
+        (user_id, from_mode, to_mode, transition_kind, justification, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run('user-1', 'normal', 'bypass', 'widened', 'trusted local machine', 1)
+    assert.deepEqual(
+      db.prepare('SELECT from_mode, to_mode, transition_kind, justification FROM permission_mode_events').get(),
+      { from_mode: 'normal', to_mode: 'bypass', transition_kind: 'widened', justification: 'trusted local machine' },
+    )
+  } finally {
+    db.close()
+  }
 })
 
 test('v52 persists a user default output directory without changing all-files access', () => {
@@ -276,6 +297,7 @@ test('schema migration registry upgrades a v30 database through every registered
       'managed_attachments',
       'turn_execution_leases',
       'turn_checkpoints',
+      'permission_mode_events',
     ]) {
       assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table), table)
     }

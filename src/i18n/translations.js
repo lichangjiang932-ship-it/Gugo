@@ -592,6 +592,8 @@ const APPROVAL_TRANSLATIONS = {
       acceptEdits: '自动接受编辑', acceptEditsHint: '改文件不再问，执行命令和对外请求仍然问',
       plan: '计划模式', planHint: '只读。模型只能看和想，任何写操作直接拒绝',
       bypass: '全部放行', bypassHint: '不再询问任何操作。仅在完全信任的本机环境使用',
+      escalationConfirm: '此操作会放宽模型权限。确认继续吗？',
+      bypassJustification: '请输入切换到“全部放行”的理由（必填）：',
     },
     inbox: {
       title: '审批收件箱', subtitle: '无人值守的后台任务和定时任务需要批准时，会排队到这里。日常对话里的审批直接在对话中完成。',
@@ -611,6 +613,8 @@ const APPROVAL_TRANSLATIONS = {
       acceptEdits: 'Accept edits', acceptEditsHint: 'File edits go through; commands and outbound requests still ask',
       plan: 'Plan mode', planHint: 'Read-only. The model can look and think; writes are refused',
       bypass: 'Bypass all', bypassHint: 'Never ask. Only for a fully trusted local machine',
+      escalationConfirm: 'This change broadens model permissions. Continue?',
+      bypassJustification: 'Enter a required reason for enabling “Bypass all”:',
     },
     inbox: {
       title: 'Approval inbox', subtitle: 'Unattended background and scheduled jobs queue their approval requests here. Approvals during a chat happen inline in the conversation.',
@@ -630,6 +634,8 @@ const APPROVAL_TRANSLATIONS = {
       acceptEdits: '編集を自動承認', acceptEditsHint: 'ファイル編集は確認なし。コマンドと外部リクエストは確認します',
       plan: 'プランモード', planHint: '読み取り専用。書き込み操作はすべて拒否されます',
       bypass: 'すべて許可', bypassHint: '一切確認しません。完全に信頼できる端末でのみ使用してください',
+      escalationConfirm: 'この変更はモデルの権限を拡大します。続行しますか？',
+      bypassJustification: '「すべて許可」に切り替える理由を入力してください（必須）：',
     },
     inbox: {
       title: '承認インボックス', subtitle: '無人実行のバックグラウンドジョブと定期ジョブの承認要求がここに入ります。チャット中の承認は会話内で行います。',
@@ -649,6 +655,8 @@ const APPROVAL_TRANSLATIONS = {
       acceptEdits: '편집 자동 승인', acceptEditsHint: '파일 편집은 묻지 않고, 명령과 외부 요청은 계속 확인합니다',
       plan: '계획 모드', planHint: '읽기 전용. 쓰기 작업은 모두 거부됩니다',
       bypass: '모두 허용', bypassHint: '확인하지 않습니다. 완전히 신뢰하는 로컬 환경에서만 사용하세요',
+      escalationConfirm: '이 변경은 모델 권한을 확대합니다. 계속할까요?',
+      bypassJustification: '“모두 허용”을 켜는 이유를 입력하세요(필수):',
     },
     inbox: {
       title: '승인 받은편지함', subtitle: '무인 실행되는 백그라운드 작업과 예약 작업의 승인 요청이 여기에 쌓입니다. 채팅 중 승인은 대화 안에서 처리됩니다.',
@@ -668,6 +676,8 @@ const APPROVAL_TRANSLATIONS = {
       acceptEdits: '自動接受編輯', acceptEditsHint: '改檔案不再問，執行命令和對外請求仍然問',
       plan: '計劃模式', planHint: '唯讀。模型只能看和想，任何寫入操作直接拒絕',
       bypass: '全部放行', bypassHint: '不再詢問任何操作。僅在完全信任的本機環境使用',
+      escalationConfirm: '此操作會放寬模型權限。確定繼續嗎？',
+      bypassJustification: '請輸入切換到「全部放行」的理由（必填）：',
     },
     inbox: {
       title: '審批收件匣', subtitle: '無人值守的背景任務和定時任務需要批准時，會排隊到這裡。日常對話中的審批直接在對話中完成。',

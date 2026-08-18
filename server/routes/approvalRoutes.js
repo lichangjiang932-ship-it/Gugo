@@ -18,11 +18,11 @@ import {
 } from '../services/approvalStore.js'
 import {
   clearRememberedTools,
+  changeApprovalMode,
   forgetTool,
   getApprovalSettings,
   rememberTool,
   setRiskOverride,
-  setApprovalMode,
 } from '../services/approvalSettingsStore.js'
 import { releaseApproval } from '../services/approvalGate.js'
 import { getJobRuntime } from '../services/jobRuntime.js'
@@ -92,11 +92,24 @@ export async function handleApprovalRequest(req, res) {
 
     if (req.method === 'POST' && pathname === '/api/approvals/settings') {
       const body = await readJson(req)
+      let modeTransition = null
       if (body?.mode !== undefined) {
         try {
-          setApprovalMode({ userId, mode: String(body.mode) })
+          modeTransition = changeApprovalMode({
+            userId,
+            mode: String(body.mode),
+            approveEscalation: body.approveEscalation === true,
+            justification: body.justification,
+          })
         } catch (err) {
-          return badRequest(res, err?.message || '非法模式')
+          return sendJson(res, err?.statusCode || 400, {
+            error: {
+              code: err?.code || 'bad_request',
+              message: err?.message || '非法模式',
+              currentMode: err?.currentMode,
+              requestedMode: err?.requestedMode,
+            },
+          })
         }
       }
       // 允许一次请求里同时改档位和撤销某个「总是允许」
@@ -109,7 +122,7 @@ export async function handleApprovalRequest(req, res) {
           riskClass: body.riskOverride.riskClass,
         })
       }
-      return sendJson(res, 200, getApprovalSettings({ userId }))
+      return sendJson(res, 200, { ...getApprovalSettings({ userId }), modeTransition })
     }
 
     if (req.method === 'GET' && pathname === '/api/approvals') {
