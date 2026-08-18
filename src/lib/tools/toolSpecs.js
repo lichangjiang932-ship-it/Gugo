@@ -10,7 +10,6 @@ export const TOOL_SPECS = {
   ...BROWSER_TOOL_SPECS,
 }
 
-const READ_ONLY_MODE_TOOLS = new Set(['web_search', 'fetch_url', 'list_directory', 'read_file', 'git_status', 'git_diff', 'manage_todos', 'Agent', 'browser_state', 'browser_snapshot', 'browser_console', 'browser_wait', 'browser_screenshot'])
 const CODE_MODE_TOOLS = ['list_directory', 'read_file', 'write_file', 'edit_file', 'bash_exec', 'git_status', 'git_diff', 'run_project_check', 'manage_todos', 'Agent']
 
 function sortToolSpecsByName(specs = []) {
@@ -26,9 +25,10 @@ export function resolveToolsForMode(toolsConfig = {}, mode = 'chat') {
     .filter(([, on]) => !!on)
     .map(([name]) => name)
 
-  if (mode === 'plan') {
-    return enabled.filter((name) => READ_ONLY_MODE_TOOLS.has(name))
-  }
+  // Permission modes constrain execution at the server approval gate. Keep
+  // enabled tools visible in plan mode so the model can distinguish a policy
+  // refusal from a missing capability.
+  if (mode === 'plan') return enabled
 
   if (mode === 'code') {
     return [...new Set([...enabled, ...CODE_MODE_TOOLS])]

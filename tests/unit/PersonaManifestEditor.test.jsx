@@ -29,6 +29,22 @@ async function change(dom, element, value) {
   })
 }
 
+test('PersonaManifestEditor defaults an empty manifest to normal permission mode', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  try {
+    await act(async () => {
+      root.render(<PersonaManifestEditor value={null} onChange={() => {}} t={t} />)
+    })
+
+    assert.equal(rootElement.querySelector('select').value, 'normal')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
 test('PersonaManifestEditor edits IDs and emits permission recommendations only', async () => {
   const dom = setupDom()
   const updates = []

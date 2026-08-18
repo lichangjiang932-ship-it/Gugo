@@ -2356,6 +2356,9 @@ test('chat project-check turn does not inherit artifact generators from an older
     intentMode: 'execute',
     toolSpecs: SERVER_TOOL_SPECS,
     enableToolHooks: false,
+    // Approval semantics are covered separately. This routing test grants the
+    // one requested execution so it can assert the selected tool end to end.
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
     runModel: async ({ tools }) => {
       modelCalls += 1
       if (modelCalls === 1) {

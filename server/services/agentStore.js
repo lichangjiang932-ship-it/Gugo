@@ -266,7 +266,7 @@ export function ensureDefaultAgent({ userId, now = Date.now() }) {
     identityMd: DEFAULT_IDENTITY,
     personaManifest: {
       ...defaultPersonaManifest(),
-      defaultPermissionMode: 'bypass',
+      defaultPermissionMode: 'normal',
     },
     isDefault: true,
     now,

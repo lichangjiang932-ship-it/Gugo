@@ -718,9 +718,30 @@ test('an explicit user read-only request remains a hard boundary in execute mode
     'Fix, delete, patch, run, and build this project.',
   ].join('\n')
   const userPrompt = 'Inspect this file read-only and do not modify it.'
-  assert.deepEqual(namesOf(selectChat({ prompt, userPrompt, intentMode: 'execute' })), ANSWER_NAMES)
-  assert.ok(ANSWER_NAMES.includes('request_clarification'))
-  assert.ok(ANSWER_NAMES.includes('request_directory'))
+  const selected = namesOf(selectChat({ prompt, userPrompt, intentMode: 'execute' }))
+  assert.deepEqual(selected, ANSWER_NAMES)
+  assert.ok(selected.includes('request_clarification'))
+  assert.ok(selected.includes('request_directory'))
+  for (const name of ALWAYS_VISIBLE_LOCAL_EXECUTION_NAMES) assert.ok(selected.includes(name), name)
+})
+
+test('a capability question preserves the immediately preceding explicit read-only boundary', () => {
+  let decision = null
+  const selected = namesOf(selectChatToolSpecs({
+    prompt: '\u4e3a\u4ec0\u4e48\u4e0d\u80fd\u4f60\u81ea\u5df1\u4fee\u6539\uff1f',
+    userPrompt: '\u4e3a\u4ec0\u4e48\u4e0d\u80fd\u4f60\u81ea\u5df1\u4fee\u6539\uff1f',
+    previousUserPrompt: '\u8bf7\u53ea\u5206\u6790\u95ee\u9898\uff0c\u4e0d\u8981\u7f16\u8f91\u3001\u8c03\u6574\u6216\u5199\u56de\u4efb\u4f55\u6587\u4ef6\u3002',
+    specs: SPECS,
+    metadataResolver,
+    onDecision: (value) => { decision = value },
+  }))
+
+  assert.deepEqual(selected, ANSWER_NAMES)
+  assert.equal(decision?.explicitReadOnly, true)
+  for (const name of ALWAYS_VISIBLE_LOCAL_EXECUTION_NAMES) {
+    assert.ok(decision?.selectedToolNames.includes(name), name)
+    assert.ok(!decision?.excludedTools.some((entry) => entry.name === name), name)
+  }
 })
 
 test('PDF layout boundaries do not downgrade a real write-and-render request to answer mode', () => {

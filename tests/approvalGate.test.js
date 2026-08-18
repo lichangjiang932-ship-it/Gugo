@@ -95,15 +95,21 @@ test("chat mode 'all' 自动放行只读 bash_exec 且不建审批行", async ()
   assert.equal(countPendingApprovals({ userId }), 0)
 })
 
-test('新用户默认直接执行命令和文件写入', async () => {
-  const { userId, jobId } = newUser('default-bypass', { permissionMode: null })
-  assert.equal(getApprovalSettings({ userId }).mode, 'bypass')
+test('新用户默认使用 normal，命令和文件写入批准后才继续', async () => {
+  const { userId, jobId } = newUser('default-normal', { permissionMode: null })
+  assert.equal(getApprovalSettings({ userId }).mode, 'normal')
   for (const [toolName, args] of [
     ['bash_exec', { command: 'npm test' }],
     ['write_file', { path: 'default.txt', content: 'ok' }],
   ]) {
-    const result = await requestApproval({ userId, origin: 'job', jobId, toolName, args, mode: 'unattended' })
+    const pending = requestApproval({ userId, origin: 'job', jobId, toolName, args, mode: 'unattended' })
+    const row = await waitForPendingRow(userId)
+    assert.equal(row.toolName, toolName)
+    decideApproval({ userId, id: row.id, decision: 'approve' })
+    releaseApproval(row.id)
+    const result = await pending
     assert.equal(result.proceed, true)
+    assert.deepEqual(result.args, args)
   }
   assert.equal(countPendingApprovals({ userId }), 0)
 })
@@ -210,6 +216,33 @@ test('Hook force approval does not elevate a write call out of plan mode', async
   assert.equal(countPendingApprovals({ userId }), 0)
 })
 
+test('Hook pre-authorization cannot bypass plan mode', async () => {
+  const { userId, jobId } = newUser('hook-allow-plan')
+  setApprovalMode({ userId, mode: 'plan' })
+  const result = await requestApproval({
+    userId,
+    origin: 'chat',
+    jobId,
+    toolName: 'write_file',
+    args: { path: 'blocked-by-plan.txt', content: 'x' },
+    mode: 'all',
+    preAuthorized: true,
+  })
+
+  assert.equal(result.proceed, false)
+  assert.match(result.reason, /计划模式/)
+  assert.equal(result.policyDenied, true)
+  assert.equal(result.permissionMode, 'plan')
+  assert.equal(result.suggestedPermissionMode, 'acceptEdits')
+  const formatted = formatDeniedToolResult(result)
+  assert.equal(formatted.policyDenied, true)
+  assert.equal(formatted.deniedByUser, undefined)
+  assert.match(formatted.error, /工具存在/)
+  assert.match(formatted.error, /自动接受编辑模式/)
+  assert.doesNotMatch(formatted.error, /缺少写入或执行工具[^。]*$/)
+  assert.equal(countPendingApprovals({ userId }), 0)
+})
+
 test('真实用户档位依次执行 plan / normal / acceptEdits / bypass 语义', async () => {
   const planUser = newUser('mode-plan')
   setApprovalMode({ userId: planUser.userId, mode: 'plan' })
@@ -251,6 +284,19 @@ test('真实用户档位依次执行 plan / normal / acceptEdits / bypass 语义
   assert.equal(edited.proceed, true)
   assert.equal(countPendingApprovals({ userId: editsUser.userId }), 0)
 
+  const editsShellController = new AbortController()
+  const editsShellPending = requestApproval({
+    ...editsUser,
+    origin: 'chat',
+    toolName: 'bash_exec',
+    args: { command: 'npm test' },
+    mode: 'unattended',
+    signal: editsShellController.signal,
+  })
+  await waitForPendingRow(editsUser.userId)
+  editsShellController.abort()
+  assert.equal((await editsShellPending).proceed, false)
+
   const bypassUser = newUser('mode-bypass')
   setApprovalMode({ userId: bypassUser.userId, mode: 'bypass' })
   const bypassed = await requestApproval({
@@ -273,6 +319,51 @@ test('真实用户档位依次执行 plan / normal / acceptEdits / bypass 语义
     forceApprovalReason: 'pre_tool_use Hook 要求逐次批准',
   })
   assert.equal(hookForced.proceed, true)
+  assert.equal(countPendingApprovals({ userId: bypassUser.userId }), 0)
+})
+
+test('run_project_check 通过真实门控执行四档权限语义', async () => {
+  const args = { check: 'test' }
+
+  const planUser = newUser('project-check-plan', { permissionMode: 'plan' })
+  const planned = await requestApproval({
+    ...planUser,
+    origin: 'chat',
+    toolName: 'run_project_check',
+    args,
+    mode: 'unattended',
+  })
+  assert.equal(planned.proceed, false)
+  assert.match(planned.reason, /计划模式/)
+  assert.equal(countPendingApprovals({ userId: planUser.userId }), 0)
+
+  for (const permissionMode of ['normal', 'acceptEdits']) {
+    const gatedUser = newUser(`project-check-${permissionMode}`, { permissionMode })
+    const controller = new AbortController()
+    const pending = requestApproval({
+      ...gatedUser,
+      origin: 'chat',
+      toolName: 'run_project_check',
+      args,
+      mode: 'unattended',
+      signal: controller.signal,
+    })
+    const row = await waitForPendingRow(gatedUser.userId)
+    assert.equal(row.toolName, 'run_project_check')
+    assert.equal(row.risk, 'high')
+    controller.abort()
+    assert.equal((await pending).proceed, false)
+  }
+
+  const bypassUser = newUser('project-check-bypass', { permissionMode: 'bypass' })
+  const bypassed = await requestApproval({
+    ...bypassUser,
+    origin: 'chat',
+    toolName: 'run_project_check',
+    args,
+    mode: 'off',
+  })
+  assert.equal(bypassed.proceed, true)
   assert.equal(countPendingApprovals({ userId: bypassUser.userId }), 0)
 })
 

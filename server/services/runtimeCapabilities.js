@@ -25,12 +25,15 @@ export function buildRuntimeCapabilityBlock({
   projectDirectory = '',
 } = {}) {
   const names = toolNames(toolSpecs)
+  const isPlanMode = approvalMode === 'plan'
   const lines = [
     RUNTIME_CAPABILITIES_MARKER,
     'Only capabilities backed by tools in this turn are listed below. Use the tools instead of claiming the capability is unavailable.',
     'Before saying that a tool or capability is missing, inspect the exact tool schemas supplied with this request and the capability list below. Calling only read tools is not evidence that write tools are absent.',
     'If the user challenges a prior claim that you cannot make an unfinished change, re-check this turn\'s schemas and continue the change when the required tools are present. Do not repeat the prior capability claim from memory.',
-    'When the user asks for a concrete change or deliverable and a relevant tool is exposed, call the tool now. Do not substitute copy-paste code, shell commands, or manual instructions for execution.',
+    isPlanMode
+      ? 'Plan mode is a policy boundary, not a missing capability. Use exposed local read tools for analysis, but do not call file-mutation, command-execution, network, connector, browser-action, or other side-effect tools. If execution is requested, say that plan mode blocks it and ask to switch to acceptEdits or normal; never say the tool is absent.'
+      : 'When the user asks for a concrete change or deliverable and a relevant tool is exposed, call the tool now. Do not substitute copy-paste code, shell commands, or manual instructions for execution.',
     'If a tool fails, use its code, error, and hint to diagnose the cause, change the arguments or inspect state with another exposed tool, and continue. Do not repeat the identical failed call; ask the user only for a real permission, approval, or indispensable input blocker.',
     'Before claiming completion, verify changed or generated outputs with an exposed read, inspect, probe, diff, or check tool.',
   ]
@@ -38,9 +41,13 @@ export function buildRuntimeCapabilityBlock({
   add(lines, hasAny(names, ['list_directory', 'read_file']),
     '- Files: inspect authorized workspace/local files with list_directory and read_file.')
   add(lines, hasAny(names, ['write_file', 'edit_file', 'apply_patch', 'patch_file', 'multi_edit']),
-    '- File changes: create or edit authorized local files, then verify the result by reading or checking it.')
-  add(lines, hasAny(names, ['bash_exec', 'run_command', 'run_test', 'docker_exec']),
-    '- Code and automation: run shell commands for builds, tests, scripts, and specialized local tooling; declare expected output files.')
+    isPlanMode
+      ? '- File changes: the schemas are present, but plan mode forbids creating or editing files. Ask to switch modes before execution.'
+      : '- File changes: create or edit authorized local files, then verify the result by reading or checking it.')
+  add(lines, hasAny(names, ['bash_exec', 'run_command', 'run_project_check', 'run_test', 'docker_exec']),
+    isPlanMode
+      ? '- Code and automation: command and project-check schemas are present, but plan mode forbids executing them.'
+      : '- Code and automation: run shell commands for builds, tests, scripts, and specialized local tooling; declare expected output files.')
   add(lines, hasAny(names, ['git_status', 'git_diff', 'git_commit', 'git_push', 'git_rollback', 'git_write']),
     '- Git: inspect repository state and use only the exact Git mutation tools that are exposed.')
   add(lines, names.has('media_probe') || names.has('media_transform'),
@@ -54,7 +61,9 @@ export function buildRuntimeCapabilityBlock({
   add(lines, hasAny(names, ['create_pptx', 'create_docx', 'create_xlsx', 'create_pdf', 'create_html_app', 'generate_image', 'render_pdf_pages']),
     '- Artifacts: use the exposed create_*, generate_image, or render_pdf_pages tool only when the user requested that deliverable. Existing files are inputs to the matching deterministic file tool; generate_image is only for a genuinely new AI-created image.')
   add(lines, hasAny(names, ['web_search', 'fetch_url']),
-    '- Web: search or fetch current public information when those tools are exposed.')
+    isPlanMode
+      ? '- Web: schemas may be present, but plan mode is local read-only and forbids network requests.'
+      : '- Web: search or fetch current public information when those tools are exposed.')
   add(lines, names.has('file_download'),
     '- Downloads: stream public HTTP/HTTPS binary files into authorized local paths with size and optional SHA-256 verification.')
   add(lines, [...names].some((name) => name.startsWith('browser_')),
@@ -80,6 +89,12 @@ export function buildRuntimeCapabilityBlock({
   }
   if (approvalMode === 'bypass') {
     lines.push('- Approval mode: bypass (allow all). Local file, directory, shell, and Git operations do not require an authorization prompt; continue with the tools directly.')
+  } else if (approvalMode === 'plan') {
+    lines.push('- Approval mode: plan (local read-only). Restricted tools remain visible so they are not mistaken for missing capabilities, but the runtime will reject their execution. Ask the user to switch to acceptEdits or normal to continue.')
+  } else if (approvalMode === 'acceptEdits') {
+    lines.push('- Approval mode: acceptEdits. Authorized local file edits proceed automatically; commands and external side effects still require approval.')
+  } else if (approvalMode === 'normal') {
+    lines.push('- Approval mode: normal. File changes, commands, and external side effects require approval before execution.')
   } else if (approvalMode) {
     lines.push(`- Approval mode: ${String(approvalMode)}. Request authorization only when the runtime reports a real permission blocker.`)
   }

@@ -13,7 +13,11 @@ const { closeDb, createUser } = await import('../server/db.js')
 const { readArtifactSourceSnapshot } = await import('../server/services/artifactSourceStore.js')
 const { getArtifactDir } = await import('../server/services/artifactGen.js')
 const { getHtmlArtifactAsset } = await import('../server/services/htmlArtifactAssets.js')
-const { setAllFilesAccess, setDefaultOutputDirectory } = await import('../server/services/localFileAccessService.js')
+const {
+  grantLocalPath,
+  setAllFilesAccess,
+  setDefaultOutputDirectory,
+} = await import('../server/services/localFileAccessService.js')
 const { executeServerTool, requestedArtifactOutputDirectory } = await import('../server/services/toolLoopHeuristics.js')
 const { upsertSession } = await import('../server/services/sessionStore.js')
 const { getTurnArtifactById, listSessionTurnArtifacts } = await import('../server/services/turnArtifactStore.js')
@@ -37,6 +41,7 @@ test('create_html_app bundles authorized media, delivers offline, and retains it
   createUser({ id: userId, email: 'html-runtime@example.com' })
   upsertSession({ id: sessionId, userId, title: 'HTML runtime' })
   setDefaultOutputDirectory({ userId, rootPath: outputDirectory })
+  grantLocalPath({ userId, rootPath: sourceDirectory, accessMode: 'read_only' })
 
   const firstHtml = '<!doctype html><html><body><img src="gugo-asset://portrait"><main>First</main></body></html>'
   const first = await executeServerTool({

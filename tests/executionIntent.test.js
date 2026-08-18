@@ -9,6 +9,7 @@ import {
   normalizeTurnIntentMode,
   shouldRequireExecution,
 } from '../server/utils/executionIntent.js'
+import { isExplicitReadOnlyRequest } from '../server/services/chatToolSelection.js'
 
 test('turn intent mode is strict and defaults unknown callers to auto', () => {
   assert.equal(normalizeTurnIntentMode(' execute '), 'execute')
@@ -36,6 +37,25 @@ test('auto mode recognizes concise Chinese and English work orders', () => {
   ]
   for (const text of workOrders) {
     assert.equal(shouldRequireExecution({ text }), true, text)
+  }
+})
+
+test('explicit read-only boundaries distinguish whole-turn constraints from scoped source preservation', () => {
+  for (const text of [
+    '只分析这个项目，不要修改任何文件。',
+    '请检查 D:\\work\\app.js，整个工作区保持只读。',
+    'Do not edit or write any files; only explain the issue.',
+    'Keep the whole repository read-only.',
+  ]) {
+    assert.equal(isExplicitReadOnlyRequest(text), true, text)
+  }
+
+  for (const text of [
+    '不要修改源 PDF，请创建一个新的 DOCX。',
+    'Do not change the source PDF; create a separate Word document.',
+    '只修改当前页面，其他功能不变。',
+  ]) {
+    assert.equal(isExplicitReadOnlyRequest(text), false, text)
   }
 })
 

@@ -119,6 +119,17 @@ export function formatDeniedToolResult(gate) {
   if (gate?.cancelled) {
     return { ...base, cancelled: true, error: gate.reason }
   }
+  if (gate?.policyDenied) {
+    const currentMode = gate.permissionMode === 'plan' ? '计划模式' : String(gate.permissionMode || '当前模式')
+    const suggestedMode = gate.suggestedPermissionMode === 'acceptEdits' ? '自动接受编辑模式' : '正常模式'
+    return {
+      ...base,
+      policyDenied: true,
+      permissionMode: gate.permissionMode || null,
+      suggestedPermissionMode: gate.suggestedPermissionMode || 'normal',
+      error: `该工具存在，但操作在${currentMode}下被策略禁止。请切换到${suggestedMode}后继续；不要将此解释为缺少写入或执行工具。`,
+    }
+  }
   return { ...base, deniedByUser: true, error: `${gate?.reason || '用户拒绝了这次调用'}。请换一个方案,不要重复请求同一个操作。` }
 }
 
@@ -140,6 +151,7 @@ export async function requestApproval({
   onPending = null,
   forceApproval = false,
   forceApprovalReason = null,
+  preAuthorized = false,
 } = {}) {
   // 系统/内部调用(无 userId)不 gate —— 和 fsShellTools.assertToolPermitted 一致的口径
   if (!userId) return { proceed: true, args }
@@ -170,7 +182,20 @@ export async function requestApproval({
     metadata,
   })
   // plan 档位:直接拒,不排队等人 —— 用户要的就是「只看不动」
-  if (verdict.denied) return { proceed: false, reason: verdict.reason }
+  if (verdict.denied) {
+    return {
+      proceed: false,
+      reason: verdict.reason,
+      policyDenied: settings.mode === 'plan',
+      permissionMode: settings.mode,
+      suggestedPermissionMode: settings.mode === 'plan' ? 'acceptEdits' : 'normal',
+    }
+  }
+  // A trusted pre-tool hook may waive an approval prompt, but it cannot cross
+  // the user's plan/read-only boundary above.
+  if (preAuthorized === true) {
+    return { proceed: true, args, hookAuthorized: true }
+  }
   // “全部放行”是用户对审批层的最终选择。Hook 仍可拒绝调用，
   // 但 permissionDecision=ask 不能把 bypass 重新降级为等待审批。
   if (forceApproval === true && settings.mode !== 'bypass') {

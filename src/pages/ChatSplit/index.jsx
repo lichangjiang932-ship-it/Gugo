@@ -118,7 +118,10 @@ export default function ChatSplit() {
     workbenchOpen,
   })
   const triggerSendFlow = useChatSendFlow({
-    abortCtrlRef, abortSessionIdRef, attachments, directoryApprovalResolveRef: directory.directoryApprovalResolveRef,
+    abortCtrlRef, abortSessionIdRef, attachments,
+    approvalMode: approvals.approvalSettings?.mode || 'normal',
+    changeApprovalMode: approvals.changeApprovalMode,
+    directoryApprovalResolveRef: directory.directoryApprovalResolveRef,
     dispatch, effectiveAgentId, ensureLocalPathAccess: directory.ensureLocalPathAccess, isGenerating, modelOptions,
     probeLocalPathAccess: directory.probeLocalPathAccess, requestServerToolApproval: approvals.requestServerToolApproval,
     resolveToolApprovalForOwner: approvals.resolveToolApprovalForOwner, runtimeSkills, selectedModel, setContextSystemPrompts,

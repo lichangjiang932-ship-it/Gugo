@@ -58,7 +58,7 @@ test('builtin metadata derives shell read-only and path semantics per call', () 
   assert.equal(reflect.isConcurrencySafe, false, 'loop-control tools must remain ordered')
 })
 
-test('PDF/archive inspection tools are read-only, concurrency-safe, and available in plan mode', () => {
+test('PDF/archive metadata stays accurate while plan mode keeps the full catalog visible', () => {
   const metadata = getToolMetadata('pdf_text')
   assert.equal(metadata.riskClass, 'read')
   assert.equal(metadata.isReadOnly, true)
@@ -75,10 +75,10 @@ test('PDF/archive inspection tools are read-only, concurrency-safe, and availabl
   assert.ok(planNames.includes('pdf_info'))
   assert.ok(planNames.includes('pdf_text'))
   assert.ok(planNames.includes('archive_list'))
-  assert.ok(!planNames.includes('pdf_transform'))
+  assert.ok(planNames.includes('pdf_transform'))
 })
 
-test('set_deliverables is available only to execution capability sets and never requires approval', () => {
+test('set_deliverables remains catalog-visible in plan mode but is classified as non-read-only', () => {
   const metadata = getToolMetadata('set_deliverables')
   assert.equal(metadata.isReadOnly, false)
   assert.equal(metadata.isConcurrencySafe, false)
@@ -88,6 +88,16 @@ test('set_deliverables is available only to execution capability sets and never 
 
   const planNames = resolveSpecsForMode('plan').map((entry) => entry.name)
   const codeNames = resolveSpecsForMode('code').map((entry) => entry.name)
-  assert.equal(planNames.includes('set_deliverables'), false)
+  assert.equal(planNames.includes('set_deliverables'), true)
   assert.equal(codeNames.includes('set_deliverables'), true)
+})
+
+test('plan mode does not hide dynamic tools from the catalog', () => {
+  registerDynamicTool({ name: 'plan_visible_external', origin: 'mcp', spec })
+  try {
+    const planNames = resolveSpecsForMode('plan').map((entry) => entry.name)
+    assert.ok(planNames.includes('plan_visible_external'))
+  } finally {
+    unregisterDynamicTool('plan_visible_external')
+  }
 })

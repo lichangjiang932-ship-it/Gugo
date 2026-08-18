@@ -50,6 +50,7 @@ export const APPROVAL_REQUIRED_TOOLS = Object.freeze({
   // 文件系统 / shell:已有静态开关,但那是 per 工具名,这里补 per 调用
   bash_exec: 'high',
   run_command: 'high',
+  run_project_check: 'high',
   run_test: 'high',
   docker_exec: 'high',
   bash_background: 'high',
@@ -127,16 +128,40 @@ export const NEVER_APPROVE_TOOLS = Object.freeze([
   'create_pdf',
   'create_html_app',
   'render_pdf_pages',
-  'run_project_check',
 ])
 
 const NEVER = new Set(NEVER_APPROVE_TOOLS)
+
+// Plan mode keeps schemas visible so the model never mistakes a policy
+// restriction for a missing capability, but execution is limited to local,
+// side-effect-free inspection. Network/connector/dynamic tools fail closed
+// even when they describe themselves as read-only.
+const PLAN_LOCAL_READ_TOOLS = new Set([
+  'reflect',
+  'request_clarification',
+  'manage_todos',
+  'read_artifact_source',
+  'list_directory',
+  'read_file',
+  'grep_code',
+  'find_symbol',
+  'list_imports',
+  'git_status',
+  'git_diff',
+  'image_info',
+  'media_probe',
+  'pdf_info',
+  'pdf_text',
+  'archive_list',
+  'file_hash_manifest',
+  'process_list',
+])
 
 /** 动态工具(MCP / 插件)里带这些词的按写操作处理。 */
 const WRITE_INTENT_RE = /(^|_)(create|update|delete|remove|write|send|post|put|patch|publish|merge|close|comment|reply|invite|archive|move|rename|upload|execute|run|approve|pay|order|schedule)(_|$)/i
 
 const SAFE_HTTP_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
-const SHELL_TOOLS = new Set(['bash_exec', 'run_command', 'run_test', 'docker_exec'])
+const SHELL_TOOLS = new Set(['bash_exec', 'run_command', 'run_project_check', 'run_test', 'docker_exec'])
 const TARGET_KEYS = Object.freeze([
   'to', 'recipient', 'recipientEmail', 'email', 'channelId', 'channel', 'conversationId',
   'repository', 'repo', 'owner', 'url', 'path', 'target', 'resourceId', 'id',
@@ -261,6 +286,22 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
       reason: '工具名为空,无法判定风险,已拒绝(这通常是上游返回格式未被正确解析)',
     }
   }
+
+  // The mode controls whether a loaded tool may execute; it must not be used
+  // as a reason to remove schemas from the model-visible catalog. Plan mode is
+  // deliberately stricter than the generic NEVER_APPROVE list because some
+  // entries there create artifacts or contact the network without prompting.
+  if (permissionMode === 'plan') {
+    if (PLAN_LOCAL_READ_TOOLS.has(name)) {
+      return { needsApproval: false, risk: 'low', reason: null }
+    }
+    return {
+      needsApproval: false,
+      denied: true,
+      risk: APPROVAL_REQUIRED_TOOLS[name] || 'medium',
+      reason: '当前是计划模式（仅限工作区只读）。该工具仍已加载，但写入、命令、网络和外部工具被策略禁止执行。请切换到自动接受编辑模式或正常模式后继续。',
+    }
+  }
   if (NEVER.has(name)) return { needsApproval: false, risk: 'low', reason: null }
 
   let risk = APPROVAL_REQUIRED_TOOLS[name] || (alwaysConfirm ? 'medium' : undefined)
@@ -278,15 +319,6 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
   const metadata = opts.metadata && typeof opts.metadata === 'object' ? opts.metadata : null
   if (metadata) {
     if (!alwaysConfirm && (metadata.requiresApproval === false || metadata.riskClass === 'read')) {
-      // 风险覆盖可以在正常执行时免审,但不能把已知写工具伪装成只读来绕过 plan。
-      if (permissionMode === 'plan' && (risk || WRITE_INTENT_RE.test(name))) {
-        return {
-          needsApproval: false,
-          denied: true,
-          risk: risk || 'medium',
-          reason: '当前是计划模式(只读),不执行任何写操作。要执行请切回正常模式。',
-        }
-      }
       return { needsApproval: false, risk: 'low', reason: null }
     }
     risk = metadata.riskClass === 'exec' ? 'high' : 'medium'
@@ -337,16 +369,6 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
     reason = '打开外部应用'
   } else if (name === 'qq_mail_send') {
     reason = '发送外部邮件'
-  }
-
-  // 用户档位是最终权限边界；部署级开关不能削弱它。
-  if (permissionMode === 'plan') {
-    return {
-      needsApproval: false,
-      denied: true,
-      risk,
-      reason: '当前是计划模式(只读),不执行任何写操作。要执行请切回正常模式。',
-    }
   }
 
   // bypass 是唯一对已识别副作用工具全放行的档位。

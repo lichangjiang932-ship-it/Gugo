@@ -58,6 +58,29 @@ test('ordinary and refreshed terse turns keep local execution while omitting unr
   }
 })
 
+test('plan permission mode keeps local execution tools model-visible', async () => {
+  const specs = await resolveTurnToolSpecs({
+    userId: null,
+    permissionMode: 'plan',
+    baseSpecs: SERVER_TOOL_SPECS,
+    prompt: '检查项目并说明如何修改，但不要执行。',
+    messages: [{ role: 'user', content: '检查项目并说明如何修改，但不要执行。' }],
+    enabledConnectorTools: [],
+    webSearchReady: false,
+  })
+  const names = namesOf(specs)
+
+  for (const name of ['list_directory', 'read_file', 'grep_code']) {
+    assert.ok(names.includes(name), name)
+  }
+  for (const name of ['git_status', 'git_diff']) {
+    assert.equal(names.includes(name), false, `${name} still requires explicit Git intent`)
+  }
+  for (const name of ['write_file', 'edit_file', 'apply_patch', 'patch_file', 'bash_exec', 'run_command', 'run_project_check', 'run_test']) {
+    assert.equal(names.includes(name), true, name)
+  }
+})
+
 test('Chinese web-search intent survives local-task routing and reports readiness', async () => {
   const prompt = '联网搜索资料并修改 D:\\work\\site.html'
   const readySpecs = await resolveTurnToolSpecs({

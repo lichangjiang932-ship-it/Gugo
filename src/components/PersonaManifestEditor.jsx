@@ -4,7 +4,7 @@ const DEFAULT_MANIFEST = {
   version: 1,
   capabilityIds: [],
   recommendedConnectorIds: [],
-  defaultPermissionMode: 'bypass',
+  defaultPermissionMode: 'normal',
 }
 
 export default function PersonaManifestEditor({ value, onChange, t }) {

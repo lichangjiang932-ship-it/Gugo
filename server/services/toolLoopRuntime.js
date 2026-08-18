@@ -43,7 +43,11 @@ import { createModelPhaseHeartbeat, DEFAULT_MODEL_PHASE_HEARTBEAT_MS } from './m
 import { getDefaultOutputDirectory, getProjectDirectory } from './localFileAccessService.js'
 import { createPartialResultFallback } from './partialResultFallback.js'
 import { validateLocalHtmlDelivery } from './localHtmlDeliveryValidation.js'
-import { resolveChatCapabilityMode, shouldInheritExecutionIntent } from './chatToolSelection.js'
+import {
+  hasEffectiveReadOnlyBoundary,
+  resolveChatCapabilityMode,
+  shouldInheritExecutionIntent,
+} from './chatToolSelection.js'
 
 import { withLogContext } from '../utils/logger.js'
 import { createRepeatCallGuard } from '../utils/repeatCallGuard.js'
@@ -889,6 +893,27 @@ export async function runToolsLoop({
       || job?.prompt
       || '',
   )
+  const explicitReadOnlyConstraint = hasEffectiveReadOnlyBoundary(
+    executionIntentText,
+    previousUserPrompt,
+  )
+  const explicitReadOnlyValidationError = (name, args) => {
+    if (!explicitReadOnlyConstraint) return null
+    const metadata = getToolMetadata(name, {
+      args,
+      userId: job?.userId || null,
+    })
+    if (metadata?.isReadOnly === true) return null
+    return {
+      ok: false,
+      denied: true,
+      policyDenied: true,
+      code: 'explicit_read_only_constraint',
+      error: '用户明确要求本轮只读。该工具已加载，但这次调用可能修改数据或产生副作用，因此已被策略拒绝；这不是缺少写入或执行工具。',
+      retryable: false,
+      hint: '本轮仅使用只读检查工具。需要修改时，请让用户在新的消息中明确授权执行。',
+    }
+  }
   // Planning explorers inspect the same user prompt as the later executor. A
   // request such as "fix the project" therefore still contains mutation
   // intent, but the explorer is deliberately read-only and should be allowed
@@ -3290,16 +3315,22 @@ export async function runToolsLoop({
       let clarification = null
       let artifactId = null
       let artifactIds = []
+      const checkpointExecutionArgs = call.checkpointExecutionArgs ?? args
       const idempotentResume = call.checkpointStatus === 'executing'
         && supportsIdempotentResume(executeTool, {
           name,
-          args: call.checkpointExecutionArgs ?? args,
+          args: checkpointExecutionArgs,
           job,
           step,
           toolCallId: call.id,
           idempotencyKey: call.idempotencyKey,
         })
-      if (call.modelOutputTruncated) {
+      const readOnlyResumeValidationError = call.checkpointStatus === 'executing'
+        ? explicitReadOnlyValidationError(name, checkpointExecutionArgs)
+        : null
+      if (readOnlyResumeValidationError) {
+        result = readOnlyResumeValidationError
+      } else if (call.modelOutputTruncated) {
         result = {
           ok: false,
           code: 'tool_call_truncated',
@@ -3308,7 +3339,10 @@ export async function runToolsLoop({
           hint: 'Generate a fresh complete tool call. Shorten large inline content or split the work into smaller calls when necessary.',
         }
       } else if (call.checkpointStatus === 'executing'
-        && getToolMetadata(name, { args, userId: job?.userId || null }).isReadOnly !== true
+        && getToolMetadata(name, {
+          args: checkpointExecutionArgs,
+          userId: job?.userId || null,
+        }).isReadOnly !== true
         && !idempotentResume) {
         // We cannot prove whether a side effect committed before the process
         // stopped. Never replay it automatically: report the uncertainty to
@@ -3408,6 +3442,10 @@ export async function runToolsLoop({
             if (validationError) result = validationError
           }
 
+          if (!result) {
+            result = explicitReadOnlyValidationError(name, args)
+          }
+
           if (!result && name === 'request_directory' && hasVerifiedDirectoryResolution) {
             result = {
               ok: false,
@@ -3487,10 +3525,10 @@ export async function runToolsLoop({
                     { ...call, args: effectiveArgs },
                     activeToolSpecs,
                     { allowUnknown: executeTool !== executeServerTool },
-                  )
+                  ) || explicitReadOnlyValidationError(name, effectiveArgs)
                   if (hookValidationError) result = hookValidationError
                 }
-                if (!result && !hookAuthorizedCall) {
+                if (!result) {
                   gate = await requestToolApproval({
                     userId: job?.userId || null,
                     origin: approvalOrigin,
@@ -3503,6 +3541,7 @@ export async function runToolsLoop({
                     mode: approvalMode,
                     forceApproval: hookRequiresApproval,
                     forceApprovalReason: hookApprovalReason,
+                    preAuthorized: hookAuthorizedCall,
                     onPending: async (approval) => {
                       await markCall(call, {
                         checkpointStatus: 'awaiting_approval',
@@ -3511,9 +3550,6 @@ export async function runToolsLoop({
                       if (typeof onApprovalPending === 'function') await onApprovalPending(approval)
                     },
                   })
-                }
-                if (!result && hookAuthorizedCall) {
-                  gate = { proceed: true, args: effectiveArgs, hookAuthorized: true }
                 }
               }
               if (gate && !gate.proceed) {
@@ -3525,7 +3561,8 @@ export async function runToolsLoop({
                   { ...call, args: executionArgs },
                   activeToolSpecs,
                   { allowUnknown: executeTool !== executeServerTool },
-                ) || artifactReplacementValidationError(name, executionArgs)
+                ) || explicitReadOnlyValidationError(name, executionArgs)
+                  || artifactReplacementValidationError(name, executionArgs)
                   || workspaceTargetValidationError(name, executionArgs)
                 if (finalValidationError) {
                   result = finalValidationError

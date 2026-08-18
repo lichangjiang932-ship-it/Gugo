@@ -8,7 +8,7 @@ import { getDb } from '../db.js'
 import { buildRememberedGrant, DEFAULT_PERMISSION_MODE, PERMISSION_MODES } from '../utils/approvalPolicy.js'
 
 const RISK_CLASSES = new Set(['read', 'write_local', 'exec', 'external'])
-export const INITIAL_USER_PERMISSION_MODE = 'bypass'
+export const INITIAL_USER_PERMISSION_MODE = 'normal'
 
 export function getApprovalMode({ userId } = {}) {
   if (!userId) return DEFAULT_PERMISSION_MODE

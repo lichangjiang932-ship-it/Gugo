@@ -96,9 +96,11 @@ export default function useChatApprovals({ setWorkbenchMessage, toast, t }) {
       const saved = await updateApprovalSettings({ mode })
       const safe = saved && typeof saved === 'object' ? saved : next
       setApprovalSettings(safe)
+      return safe
     } catch (error) {
       setApprovalSettings(previous)
       toast.error({ title: t('errors.saveFailed'), body: error.message })
+      return false
     }
   }, [approvalSettings, toast, t])
 

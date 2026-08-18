@@ -19,7 +19,7 @@ test('shell and git tool schemas accept authorized directory cwd values', () => 
   }
 })
 
-test('plan mode keeps tools read-only and excludes write/shell/check tools', () => {
+test('plan mode keeps enabled tools visible while the server gate owns execution policy', () => {
   const enabled = resolveToolsForMode({
     web_search: true,
     read_file: true,
@@ -30,7 +30,16 @@ test('plan mode keeps tools read-only and excludes write/shell/check tools', () 
     git_diff: true,
     run_project_check: true,
   }, 'plan')
-  assert.deepEqual(enabled.sort(), ['git_diff', 'git_status', 'read_file', 'web_search'].sort())
+  assert.deepEqual(enabled.sort(), [
+    'web_search',
+    'read_file',
+    'write_file',
+    'edit_file',
+    'bash_exec',
+    'git_status',
+    'git_diff',
+    'run_project_check',
+  ].sort())
 })
 
 test('code mode enables Claude/Codex workspace loop tools', () => {

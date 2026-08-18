@@ -562,7 +562,16 @@ const BUILTIN_WRITE_LOCAL_TOOLS = new Set([
   'rewind_files',
   'set_deliverables',
 ])
-const BUILTIN_EXEC_TOOLS = new Set(['bash_exec', 'run_command', 'media_transform', 'run_test', 'docker_exec', 'bash_background', 'process_kill'])
+const BUILTIN_EXEC_TOOLS = new Set([
+  'bash_exec',
+  'run_command',
+  'run_project_check',
+  'media_transform',
+  'run_test',
+  'docker_exec',
+  'bash_background',
+  'process_kill',
+])
 const CODE_MODE_TOOLS = [
   'read_file',
   'write_file',
@@ -722,17 +731,13 @@ export function listAllSpecs({ userId = null } = {}) {
 /**
  * 按 mode 过滤可用工具：
  *   - chat / undefined  → 所有 builtin + dynamic（前端再按 toolsConfig 勾选过滤）
- *   - plan              → 只读 builtin + 标记为 readOnly 的 dynamic
+ *   - plan              → 保持完整目录可见；执行边界由 approval gate 强制
  *   - code              → builtin 中的 CODE_MODE_TOOLS + 所有 dynamic
  *   - subagent:<type>   → 由 subagentRegistry 给出白名单（这里只看 builtin 列表）
  */
 export function resolveSpecsForMode(mode = 'chat', { subagentWhitelist = null, userId = null } = {}) {
   const all = listAllSpecs({ userId })
-  if (mode === 'plan') {
-    return all.filter((s) => {
-      return s.metadata?.isReadOnly === true
-    })
-  }
+  if (mode === 'plan') return all
   if (mode === 'code') {
     return all.filter((s) => {
       if (s.origin === 'builtin') return CODE_MODE_TOOLS.includes(s.name)

@@ -1555,16 +1555,27 @@ test('a capability challenge after a false refusal rechecks tools and completes 
   assert.equal(modelCalls, 4)
 })
 
-test('a capability challenge after an explicit read-only turn never restores writes or mutation evidence', async () => {
+test('a capability challenge after an explicit read-only turn sees write tools but cannot execute them', async () => {
   const target = 'E:\\果\\gallery.html'
   const previousUserPrompt = `请只分析 ${target} 的卡片翻转问题，不要编辑、调整或写回文件。`
   const challenge = '为什么不能你自己修改？'
   const catalogNames = ['read_file', 'write_file', 'edit_file', 'apply_patch']
   const catalog = catalogNames.map((name) => SERVER_TOOL_SPECS.find((item) => item?.function?.name === name))
   assert.equal(catalog.every(Boolean), true)
+  const selectedCatalog = selectJobToolSpecs({
+    origin: 'chat',
+    specs: catalog,
+    prompt: challenge,
+    userPrompt: challenge,
+    previousUserPrompt,
+  })
+  assert.deepEqual(
+    selectedCatalog.map((item) => item?.function?.name).sort(),
+    [...catalogNames].sort(),
+  )
 
   let modelCalls = 0
-  let executorCalls = 0
+  const executed = []
   const result = await runToolsLoop({
     job: {
       id: 'job-read-only-capability-challenge',
@@ -1580,7 +1591,7 @@ test('a capability challenge after an explicit read-only turn never restores wri
       { role: 'assistant', content: '按你的要求只做分析，因此不能也无需写入文件。' },
       { role: 'user', content: challenge },
     ],
-    toolSpecs: catalog,
+    toolSpecs: selectedCatalog,
     approvalMode: 'bypass',
     maxIters: 3,
     enableToolHooks: false,
@@ -1589,7 +1600,7 @@ test('a capability challenge after an explicit read-only turn never restores wri
       const visibleNames = tools.map((item) => item?.function?.name).filter(Boolean)
       assert.ok(visibleNames.includes('read_file'))
       for (const name of ['write_file', 'edit_file', 'apply_patch']) {
-        assert.equal(visibleNames.includes(name), false, `${name} must remain unavailable`)
+        assert.equal(visibleNames.includes(name), true, `${name} must remain visible`)
       }
 
       const systemText = messages
@@ -1597,19 +1608,219 @@ test('a capability challenge after an explicit read-only turn never restores wri
         .map((item) => item.content)
         .join('\n')
       assert.doesNotMatch(systemText, /\[EXECUTION EVIDENCE REQUIRED\]/)
-      assert.doesNotMatch(systemText, /File changes: create or edit authorized local files/)
+      assert.match(systemText, /File changes: create or edit authorized local files/)
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'forbidden-read-only-write',
+            type: 'function',
+            function: {
+              name: 'write_file',
+              arguments: JSON.stringify({ path: target, content: 'must not be written' }),
+            },
+          }],
+        }
+      }
+      const toolResult = messages.find((item) => (
+        item.role === 'tool' && item.tool_call_id === 'forbidden-read-only-write'
+      ))
+      assert.match(String(toolResult?.content || ''), /explicit_read_only_constraint/)
+      assert.match(String(toolResult?.content || ''), /不是缺少写入或执行工具/)
       return { content: '上一轮要求只分析，因此没有执行文件修改。', toolCalls: [] }
     },
-    executeTool: async () => {
-      executorCalls += 1
+    executeTool: async ({ name }) => {
+      executed.push(name)
       return { ok: true }
     },
   })
 
   assert.equal(result.text, '上一轮要求只分析，因此没有执行文件修改。')
   assert.equal(result.incomplete, undefined)
-  assert.equal(modelCalls, 1)
-  assert.equal(executorCalls, 0)
+  assert.deepEqual(executed, [])
+  assert.equal(modelCalls, 2)
+})
+
+test('a current-turn explicit read-only constraint blocks mutating calls before execution', async () => {
+  const target = 'D:\\work\\read-only-audit.txt'
+  const readFile = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'read_file')
+  assert.ok(readFile)
+  let modelCalls = 0
+  const executed = []
+
+  const result = await runToolsLoop({
+    job: {
+      id: 'job-current-turn-read-only-guard',
+      userId: null,
+      origin: 'chat',
+      prompt: `只读检查 ${target}，不要修改或写回任何文件。`,
+      userPrompt: `只读检查 ${target}，不要修改或写回任何文件。`,
+    },
+    step: { id: 'step-current-turn-read-only-guard', kind: 'chat' },
+    messages: [{ role: 'user', content: `只读检查 ${target}，不要修改或写回任何文件。` }],
+    // The write tool is intentionally absent from the model-visible catalog.
+    // A custom executor would normally accept unknown calls, so this proves
+    // the execution boundary is independent of visibility filtering.
+    toolSpecs: [readFile],
+    approvalMode: 'bypass',
+    maxIters: 3,
+    enableToolHooks: false,
+    runModel: async ({ messages }) => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'read-only-write-attempt',
+            type: 'function',
+            function: {
+              name: 'write_file',
+              arguments: JSON.stringify({ path: target, content: 'forbidden' }),
+            },
+          }],
+        }
+      }
+      const denied = messages.find((message) => (
+        message.role === 'tool' && message.tool_call_id === 'read-only-write-attempt'
+      ))
+      assert.match(String(denied?.content || ''), /explicit_read_only_constraint/)
+      assert.match(String(denied?.content || ''), /不是缺少写入或执行工具/)
+      return { content: '已完成只读检查，没有修改文件。', toolCalls: [] }
+    },
+    executeTool: async ({ name }) => {
+      executed.push(name)
+      return { ok: true }
+    },
+  })
+
+  assert.equal(result.text, '已完成只读检查，没有修改文件。')
+  assert.deepEqual(executed, [])
+  assert.equal(modelCalls, 2)
+})
+
+test('an explicit read-only constraint revalidates approval-edited arguments', async () => {
+  const bashExec = SERVER_TOOL_SPECS.find((item) => item?.function?.name === 'bash_exec')
+  assert.ok(bashExec)
+  let modelCalls = 0
+  let approvalCalls = 0
+  let executeCalls = 0
+
+  const result = await runToolsLoop({
+    job: {
+      id: 'job-read-only-approval-edit-guard',
+      userId: null,
+      origin: 'chat',
+      prompt: '只读检查仓库，不要修改任何文件。',
+      userPrompt: '只读检查仓库，不要修改任何文件。',
+    },
+    step: { id: 'step-read-only-approval-edit-guard', kind: 'chat' },
+    messages: [{ role: 'user', content: '只读检查仓库，不要修改任何文件。' }],
+    toolSpecs: [bashExec],
+    maxIters: 3,
+    enableToolHooks: false,
+    requestToolApproval: async ({ args }) => {
+      approvalCalls += 1
+      assert.equal(args.command, 'git status --short')
+      return {
+        proceed: true,
+        args: { command: 'node -e "require(\'fs\').writeFileSync(\'forbidden.txt\',\'x\')"' },
+        edited: true,
+      }
+    },
+    runModel: async ({ messages }) => {
+      modelCalls += 1
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'read-only-approval-edit',
+            type: 'function',
+            function: { name: 'bash_exec', arguments: JSON.stringify({ command: 'git status --short' }) },
+          }],
+        }
+      }
+      const denied = messages.find((message) => (
+        message.role === 'tool' && message.tool_call_id === 'read-only-approval-edit'
+      ))
+      assert.match(String(denied?.content || ''), /explicit_read_only_constraint/)
+      return { content: '只读检查结束，没有执行改写后的命令。', toolCalls: [] }
+    },
+    executeTool: async () => {
+      executeCalls += 1
+      return { ok: true }
+    },
+  })
+
+  assert.equal(result.text, '只读检查结束，没有执行改写后的命令。')
+  assert.equal(approvalCalls, 1)
+  assert.equal(executeCalls, 0)
+})
+
+test('an executing checkpoint cannot resume with mutating args under a current read-only constraint', async () => {
+  const callId = 'read-only-resumed-call'
+  let checkpoint = {
+    messages: [
+      { role: 'user', content: '只读检查仓库，不要修改任何文件。' },
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{
+          id: callId,
+          type: 'function',
+          function: { name: 'bash_exec', arguments: JSON.stringify({ command: 'git status --short' }) },
+        }],
+      },
+    ],
+    toolCalls: [{
+      id: callId,
+      name: 'bash_exec',
+      args: { command: 'git status --short' },
+      argumentsText: JSON.stringify({ command: 'git status --short' }),
+      parseError: null,
+      checkpointStatus: 'executing',
+      checkpointApprovalId: 'persisted-read-only-approval',
+      checkpointExecutionArgs: {
+        command: 'node -e "require(\'fs\').writeFileSync(\'forbidden-resume.txt\',\'x\')"',
+      },
+    }],
+    artifactIds: [],
+    iterations: 0,
+  }
+  let executeCalls = 0
+
+  const result = await runToolsLoop({
+    job: {
+      id: 'job-read-only-resume-guard',
+      userId: null,
+      origin: 'chat',
+      prompt: '只读检查仓库，不要修改任何文件。',
+      userPrompt: '只读检查仓库，不要修改任何文件。',
+    },
+    step: { id: 'step-read-only-resume-guard', kind: 'chat' },
+    messages: [],
+    toolSpecs: [],
+    maxIters: 3,
+    enableToolHooks: false,
+    loadCheckpoint: async () => ({ state: checkpoint }),
+    saveCheckpoint: async (state) => {
+      checkpoint = structuredClone(state)
+      return true
+    },
+    runModel: async ({ messages }) => {
+      const denied = messages.find((message) => (
+        message.role === 'tool' && message.tool_call_id === callId
+      ))
+      assert.match(String(denied?.content || ''), /explicit_read_only_constraint/)
+      return { content: '恢复后仍保持只读，没有执行写入命令。', toolCalls: [] }
+    },
+    executeTool: async () => {
+      executeCalls += 1
+      return { ok: true }
+    },
+  })
+
+  assert.equal(result.text, '恢复后仍保持只读，没有执行写入命令。')
+  assert.equal(executeCalls, 0)
 })
 
 test('bypass recovery never remounts a tool excluded from the current turn enabled catalog', async () => {

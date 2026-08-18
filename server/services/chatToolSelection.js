@@ -35,6 +35,7 @@ const GLOBAL_READ_ONLY = /\b(?:do not|don't|never)\b[^\r\n.!?;]{0,48}\b(?:change
 const SCOPED_SOURCE_READ_ONLY_BOUNDARY = /\b(?:do not|don't|never)\b[^\r\n.!?;]{0,40}\b(?:change|modify|edit|write|delete|remove|rename|move|patch|mutate)\b[^\r\n.!?;]{0,24}\b(?:the\s+|this\s+)?(?:source|input|original)\s+(?:pdf|file|document|image)\b|(?:\u4e0d\u8981|\u4e0d\u5f97|\u7981\u6b62)[^\r\n\u3002\uff1b]{0,32}(?:\u4fee\u6539|\u7f16\u8f91|\u5199\u5165|\u8986\u76d6|\u5220\u9664|\u79fb\u52a8|\u91cd\u547d\u540d)[^\r\n\u3002\uff1b]{0,24}(?:\u6e90|\u8f93\u5165|\u539f\u59cb)(?:\s*PDF|\u6587\u4ef6|\u6587\u6863|\u56fe\u7247)/i
 const SCOPED_CONTENT_PRESERVATION_BOUNDARY = /\b(?:do not|don't|never)\b[^\r\n.!?;]{0,40}\b(?:change|modify|edit|rewrite|alter)\b[^\r\n.!?;]{0,24}\b(?:the\s+|this\s+)?(?:article(?:'s)?(?:\s+(?:content|text|wording))?|body(?:\s+(?:content|text))?|copy|wording|text\s+content)\b|(?:\u4e0d\u8981|\u4e0d\u5f97|\u7981\u6b62)[^\r\n\u3002\uff1b]{0,24}(?:\u4fee\u6539|\u7f16\u8f91|\u6539\u52a8|\u53d8\u66f4|\u6539\u5199)[^\r\n\u3002\uff1b]{0,20}(?:(?:\u8fd9\u7bc7|\u8be5\u7bc7|\u539f\u59cb|\u6e90)?\u6587\u7ae0(?:\u7684)?(?:\u5185\u5bb9|\u6587\u5b57|\u63aa\u8f9e)?|\u6b63\u6587(?:\u7684)?(?:\u5185\u5bb9|\u6587\u5b57|\u63aa\u8f9e)?|\u539f\u6587(?:\u7684)?(?:\u5185\u5bb9|\u6587\u5b57|\u63aa\u8f9e)?|\u6587\u672c\u5185\u5bb9|\u6587\u5b57\u5185\u5bb9|\u6587\u6848|\u63aa\u8f9e)/i
 const SCOPED_CONTENT_FIDELITY_BOUNDARY = /\b(?:preserve|keep|retain)\b[^\r\n.!?;]{0,80}\b(?:article|body|text|wording|content)\b[^\r\n.!?;]{0,80}\b(?:do not|don't|never)\b[^\r\n.!?;]{0,32}\b(?:change|modify|edit|polish|delete|remove|add|rewrite|alter)\b[^\r\n.!?;]{0,32}\b(?:content|text|wording|paragraphs?|spelling|grammar|punctuation)\b|(?:\u4fdd\u7559|\u4fdd\u6301)[^\r\n\u3002\uff1b]{0,80}(?:\u6587\u7ae0|\u6b63\u6587|\u539f\u6587)[^\r\n\u3002\uff1b]{0,80}(?:\u4e0d\u8981|\u4e0d\u5f97|\u7981\u6b62)[^\r\n\u3002\uff1b]{0,32}(?:\u4fee\u6539|\u7f16\u8f91|\u6da6\u8272|\u5220\u51cf|\u589e\u52a0|\u6539\u5199)[^\r\n\u3002\uff1b]{0,24}(?:\u5185\u5bb9|\u6587\u5b57|\u6bb5\u843d|\u62fc\u5199|\u8bed\u6cd5|\u6807\u70b9)/i
+const READ_ONLY_EXPLANATION_QUESTION = /^(?:(?:\u8bf7)?(?:\u89e3\u91ca|\u8bf4\u660e)?\s*(?:\u4e3a\u4ec0\u4e48|\u4e3a\u4f55|\u600e\u4e48)|(?:can\s+you\s+)?(?:explain\s+)?(?:why|how)).*(?:\u53ea\u8bfb|read[- ]only).*[?\uff1f]\s*$/iu
 const EXECUTION_CONTINUATION = /^(?:continue(?:\s+(?:with\s+)?(?:it|this|the\s+(?:work|changes?|implementation)))?|go\s+ahead|proceed|approved?|i\s+(?:approve|authorize\s+you)(?:\s+to\s+(?:continue|proceed|execute|make\s+the\s+changes?))?|\u7ee7\u7eed(?:\u6267\u884c|\u5904\u7406|\u4fee\u6539|\u5b8c\u6210|\u505a|\u4e0b\u53bb)?(?:\u5427)?|\u6211(?:\u540c\u610f|\u6279\u51c6|\u6388\u6743\u7ed9\u4f60)(?:[\s,\uff0c]*(?:\u7ee7\u7eed|\u6267\u884c|\u4fee\u6539|\u5904\u7406|\u64cd\u4f5c))?|\u6388\u6743\u7ed9\u4f60(?:[\s,\uff0c]*(?:\u7ee7\u7eed|\u6267\u884c|\u4fee\u6539|\u5904\u7406|\u64cd\u4f5c))?)[.!?\u3002\uff01\uff1f\s]*$/i
 const EXECUTION_REVISION = /^(?:(?:(?:\u628a|\u5c06)?(?:\u5b83|\u8fd9\u4e2a|\u8be5)?(?:\u9875\u9762|\u7f51\u7ad9|\u7f51\u9875|\u6587\u4ef6|\u56fe\u7247|\u80cc\u666f|\u989c\u8272|\u5b57\u4f53|\u5e03\u5c40|\u52a8\u753b|\u6548\u679c|\u5361\u7247)?\s*(?:\u518d|\u7a0d\u5fae|\u66f4|\u6709\u70b9)(?:\u6df1|\u6d45|\u5927|\u5c0f|\u4eae|\u6697|\u5feb|\u6162|\u7acb\u4f53|\u5706\u6da6|\u7d27\u51d1|\u6e05\u6670|\u660e\u663e|\u7a81\u51fa|\u73b0\u4ee3|\u7b80\u6d01)(?:\u4e00\u70b9|\u4e00\u4e9b|\u70b9|\u4e9b)?|(?:\u628a|\u5c06)?(?:\u5b83|\u8fd9\u4e2a|\u8be5)?(?:\u9875\u9762|\u7f51\u7ad9|\u7f51\u9875|\u6587\u4ef6|\u56fe\u7247|\u80cc\u666f|\u989c\u8272|\u5b57\u4f53|\u5e03\u5c40|\u52a8\u753b|\u6548\u679c|\u5361\u7247)?\s*(?:\u6362\u6210|\u6539\u6210|\u8c03\u6210|\u505a\u6210|\u52a0\u6df1|\u8c03\u6697|\u589e\u52a0|\u6dfb\u52a0|\u52a0\u4e0a|\u53bb\u6389|\u5220\u9664|\u79fb\u9664|\u8c03\u6574|\u4f18\u5316|\u5b8c\u5584|\u4fee\u6539|\u4fee\u590d|\u66ff\u6362).{0,100})|(?:(?:make|change|turn|set)\s+(?:it|this|the\s+(?:page|site|file|image|background|color|layout))\b.{0,100}|(?:a\s+(?:little|bit)\s+)?(?:darker|lighter|bigger|smaller|faster|slower|clearer|rounder|more\s+(?:dynamic|compact|modern|prominent|three-dimensional))|(?:add|remove|delete|replace|adjust|tweak|revise|update)\b.{0,100}))[.!?\u3002\uff01\uff1f\s]*$/iu
 // Follow-up revisions are often phrased as an invariant instead of an edit
@@ -109,7 +110,7 @@ function emitSelectionDecision(onDecision, decision) {
   }
 }
 
-function isReadOnlyRequest(userPrompt) {
+function readOnlyBoundaryText(userPrompt) {
   // Printed forms commonly contain local layout instructions such as
   // "Do not write below this line". They constrain where generated content
   // may be placed; they are not a request to keep the entire file read-only.
@@ -117,11 +118,14 @@ function isReadOnlyRequest(userPrompt) {
   // an otherwise mutating workflow. It must not downgrade the whole turn.
   // A separate whole-request boundary such as "do not modify the file" is
   // intentionally left intact and still wins below.
-  const promptWithoutLayoutBoundaries = String(userPrompt || '')
+  return String(userPrompt || '')
     .replace(LOCAL_LAYOUT_WRITE_BOUNDARY, ' ')
     .replace(SCOPED_READ_ONLY_VERIFIER, ' ')
-  if (ANALYSIS_ONLY_REQUEST.test(promptWithoutLayoutBoundaries)
-    && !hasMutationExecutionIntent(promptWithoutLayoutBoundaries)) return true
+}
+
+export function isExplicitReadOnlyRequest(userPrompt) {
+  const promptWithoutLayoutBoundaries = readOnlyBoundaryText(userPrompt)
+  if (READ_ONLY_EXPLANATION_QUESTION.test(promptWithoutLayoutBoundaries.trim())) return false
   if (!EXPLICIT_READ_ONLY.test(promptWithoutLayoutBoundaries)) return false
   if (GLOBAL_READ_ONLY.test(promptWithoutLayoutBoundaries)) return true
 
@@ -134,6 +138,22 @@ function isReadOnlyRequest(userPrompt) {
     return !hasMutationExecutionIntent(promptWithoutLayoutBoundaries)
   }
   return true
+}
+
+function isReadOnlyRequest(userPrompt) {
+  const promptWithoutLayoutBoundaries = readOnlyBoundaryText(userPrompt)
+  if (ANALYSIS_ONLY_REQUEST.test(promptWithoutLayoutBoundaries)
+    && !hasMutationExecutionIntent(promptWithoutLayoutBoundaries)) return true
+  return isExplicitReadOnlyRequest(promptWithoutLayoutBoundaries)
+}
+
+export function hasEffectiveReadOnlyBoundary(userPrompt, previousUserPrompt) {
+  if (isExplicitReadOnlyRequest(userPrompt)) return true
+  // A question about why execution was unavailable is not itself permission to
+  // discard the immediately preceding read-only instruction. A later concrete
+  // mutation request is evaluated normally and can start a new execution turn.
+  return isExecutionCapabilityChallenge(String(userPrompt || '').trim())
+    && isExplicitReadOnlyRequest(previousUserPrompt)
 }
 
 export function shouldInheritExecutionIntent(userPrompt, previousUserPrompt, { intentMode = 'auto' } = {}) {
@@ -289,6 +309,7 @@ export function selectChatToolSpecs({
   metadataResolver = getToolMetadata,
   onDecision = null,
 } = {}) {
+  const explicitReadOnly = hasEffectiveReadOnlyBoundary(userPrompt, previousUserPrompt)
   const capabilityMode = resolveChatCapabilityMode({
     prompt,
     userPrompt,
@@ -356,6 +377,7 @@ export function selectChatToolSpecs({
   emitSelectionDecision(onDecision, {
     version: 1,
     capabilityMode,
+    explicitReadOnly,
     intentToolNames,
     eligibleToolNames: routedSpecs.map(toolName).filter(Boolean).sort().slice(0, 256),
     selectedToolNames: selectedSpecs.map(toolName).filter(Boolean).sort().slice(0, 256),

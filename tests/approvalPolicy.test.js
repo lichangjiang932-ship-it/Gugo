@@ -45,12 +45,11 @@ test('every NEVER_APPROVE_TOOLS entry is never gated (regression guard)', () => 
   }
 })
 
-test('server-executable artifact tools and run_project_check are whitelisted by name', () => {
+test('server-executable artifact generators are whitelisted by name', () => {
   const artifactTools = [
     'create_pptx',
     'create_docx',
     'create_xlsx',
-    'run_project_check',
   ]
   for (const name of artifactTools) {
     assert.ok(NEVER_APPROVE_TOOLS.includes(name), `${name} missing from NEVER_APPROVE_TOOLS`)
@@ -334,6 +333,79 @@ test('run_command inherits shell-grade approval and cannot use standing grants',
   assert.throws(() => buildRememberedGrant('run_command', { command: 'python -V' }), /Shell tools/)
 })
 
+test('run_project_check follows the four permission modes and cannot use standing grants', () => {
+  const args = { check: 'test' }
+  for (const permissionMode of ['normal', 'acceptEdits']) {
+    const verdict = classifyToolRisk('run_project_check', args, {
+      origin: 'job',
+      mode: 'unattended',
+      permissionMode,
+      metadata: { riskClass: 'exec', isReadOnly: false },
+    })
+    assert.equal(verdict.needsApproval, true, permissionMode)
+    assert.equal(verdict.denied, undefined, permissionMode)
+    assert.equal(verdict.risk, 'high', permissionMode)
+  }
+
+  const plan = classifyToolRisk('run_project_check', args, {
+    origin: 'job',
+    mode: 'unattended',
+    permissionMode: 'plan',
+    metadata: { riskClass: 'exec', isReadOnly: false },
+  })
+  assert.equal(plan.needsApproval, false)
+  assert.equal(plan.denied, true)
+  assert.equal(plan.risk, 'high')
+  assert.match(plan.reason, /计划模式/)
+
+  const bypass = classifyToolRisk('run_project_check', args, {
+    origin: 'job',
+    mode: 'unattended',
+    permissionMode: 'bypass',
+    metadata: { riskClass: 'exec', isReadOnly: false },
+  })
+  assert.equal(bypass.needsApproval, false)
+  assert.equal(bypass.denied, undefined)
+  assert.equal(bypass.risk, 'high')
+
+  assert.throws(
+    () => buildRememberedGrant('run_project_check', args),
+    /Shell tools cannot be remembered/,
+  )
+  assert.equal(matchesRememberedGrant('run_project_check', args, [{
+    toolName: 'run_project_check',
+    commandPrefix: 'args:legacy',
+  }]), false)
+})
+
+test('plan mode keeps tools loaded but executes only local read operations', () => {
+  for (const name of [
+    'read_file', 'list_directory', 'grep_code', 'find_symbol', 'list_imports',
+    'git_status', 'git_diff', 'image_info', 'pdf_text', 'archive_list', 'process_list',
+  ]) {
+    assert.deepEqual(
+      classifyToolRisk(name, {}, { ...JOB, permissionMode: 'plan' }),
+      { needsApproval: false, risk: 'low', reason: null },
+      name,
+    )
+  }
+
+  for (const name of [
+    'write_file', 'apply_patch', 'bash_exec', 'run_project_check', 'create_docx',
+    'web_search', 'fetch_url', 'browser_snapshot', 'connected_app_list', 'jira_query',
+  ]) {
+    const verdict = classifyToolRisk(name, {}, {
+      ...JOB,
+      permissionMode: 'plan',
+      metadata: { riskClass: 'read', requiresApproval: false, isReadOnly: true, origin: 'mcp' },
+    })
+    assert.equal(verdict.needsApproval, false, name)
+    assert.equal(verdict.denied, true, name)
+    assert.match(verdict.reason, /工具仍已加载/, name)
+    assert.match(verdict.reason, /自动接受编辑模式或正常模式/, name)
+  }
+})
+
 test('run_command approval names requested host credentials without exposing values', () => {
   const out = classifyToolRisk('run_command', {
     command: 'npm publish',
@@ -442,16 +514,17 @@ test('plan cannot be bypassed by read metadata on a known mutating tool', () => 
   }
 })
 
-test('plan still allows parameter-level read-only operations', () => {
+test('plan rejects write-tool previews and network reads while keeping schemas loaded', () => {
   for (const mode of ['off', 'unattended', 'all']) {
-    assert.deepEqual(
-      classifyToolRisk('apply_patch', { dry_run: true }, { mode, permissionMode: 'plan' }),
-      { needsApproval: false, risk: 'low', reason: null },
-    )
-    assert.deepEqual(
-      classifyToolRisk('fetch_url', { method: 'GET' }, { mode, permissionMode: 'plan' }),
-      { needsApproval: false, risk: 'low', reason: null },
-    )
+    for (const [name, args] of [
+      ['apply_patch', { dry_run: true }],
+      ['fetch_url', { method: 'GET' }],
+    ]) {
+      const verdict = classifyToolRisk(name, args, { mode, permissionMode: 'plan' })
+      assert.equal(verdict.needsApproval, false, `${name}/${mode}`)
+      assert.equal(verdict.denied, true, `${name}/${mode}`)
+      assert.match(verdict.reason, /工具仍已加载/, `${name}/${mode}`)
+    }
   }
 })
 
