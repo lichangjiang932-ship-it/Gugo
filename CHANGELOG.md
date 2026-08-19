@@ -6,6 +6,20 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.29] - 2026-08-19
+
+### Changed
+
+- Replaced account credentials in channel and notification event streams with short-lived, one-time, stream-scoped tickets and safe reconnect reconciliation.
+- Made right-sidebar file tabs preserve and upgrade retained or verified local outputs across cancellation, restart, and session snapshot races.
+- Loaded managed and local HTML through scoped preview sessions so relative images, styles, fonts, media, and nested pages render without exposing account tokens.
+
+### Fixed
+
+- Kept delivered local files available after interrupted turns and runtime restarts while deduplicating repeated receipts and cross-turn tool-call identifiers.
+- Made the sidebar reliably open images, audio, video, PDF, Office, text, Markdown, data, code, and HTML files with retry and original-file fallbacks.
+- Prevented query-authenticated HTML attachment previews from executing scripts, submitting forms, or exfiltrating credentials.
+
 ## [0.11.28] - 2026-08-19
 
 ### Added
