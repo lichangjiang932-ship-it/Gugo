@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
+import { rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -113,6 +115,74 @@ test('searchMessages returns matches across sessions', () => {
   const { userId } = seedSearchData()
   const rows = searchMessages({ userId, query: 'beta' })
   assert.deepEqual(new Set(rows.map((row) => row.sessionId)), new Set(['search-s1', 'search-s2']))
+})
+
+test('searchMessages binds only parameters used by Node SQLite', {
+  skip: Number.parseInt(process.versions.node, 10) < 22,
+}, () => {
+  const appDataDir = path.join(
+    os.tmpdir(),
+    'yma-session-search-node-sqlite-tests',
+    `${process.pid}-${Date.now()}`,
+  )
+  const script = `
+    const { issueTestSession } = await import('./tests/helpers/testAuth.js')
+    const { upsertMessage, upsertSession } = await import('./server/services/sessionStore.js')
+    const { searchMessages } = await import('./server/services/sessionSearchService.js')
+
+    const { userId } = issueTestSession()
+    upsertSession({ id: 'node-sqlite-s1', userId, title: 'First', createdAt: 1000, updatedAt: 1000 })
+    upsertSession({ id: 'node-sqlite-s2', userId, title: 'Second', createdAt: 2000, updatedAt: 2000 })
+    upsertMessage({
+      id: 'node-sqlite-m1',
+      userId,
+      sessionId: 'node-sqlite-s1',
+      role: 'user',
+      content: 'strictneedle first',
+      createdAt: 1100,
+    })
+    upsertMessage({
+      id: 'node-sqlite-m2',
+      userId,
+      sessionId: 'node-sqlite-s2',
+      role: 'user',
+      content: 'strictneedle second',
+      createdAt: 2100,
+    })
+
+    const allRows = searchMessages({ userId, query: 'strictneedle' })
+    if (allRows.length !== 2) throw new Error('Expected unscoped search to return both rows')
+
+    const scopedRows = searchMessages({
+      userId,
+      query: 'strictneedle',
+      sessionId: 'node-sqlite-s1',
+    })
+    if (scopedRows.length !== 1 || scopedRows[0].sessionId !== 'node-sqlite-s1') {
+      throw new Error('Expected scoped search to return only the requested session')
+    }
+  `
+
+  try {
+    const result = spawnSync(process.execPath, [
+      '--no-warnings',
+      '--input-type=module',
+      '--eval',
+      script,
+    ], {
+      cwd: path.resolve('.'),
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        APP_DATA_DIR: appDataDir,
+        GUGO_SQLITE_DRIVER: 'node',
+      },
+    })
+
+    assert.equal(result.status, 0, [result.stdout, result.stderr].filter(Boolean).join('\n'))
+  } finally {
+    rmSync(appDataDir, { recursive: true, force: true })
+  }
 })
 
 test('archiveSession and unarchiveSession flip archived state', () => {
