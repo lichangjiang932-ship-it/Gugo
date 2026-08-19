@@ -44,7 +44,7 @@ export function searchMessages({ userId, query, sessionId = null, limit = 20, of
   const params = {
     userId,
     query: ftsQuery,
-    sessionId,
+    ...(sessionId ? { sessionId } : {}),
     limit: clampLimit(limit),
     offset: clampOffset(offset),
   }
