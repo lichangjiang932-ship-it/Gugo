@@ -242,6 +242,40 @@ export async function revokeArtifactHtmlPreviewSession(url, { fetchImpl = fetch 
   if (!response.ok) throw new Error(`artifact HTML preview revoke failed: ${response.status}`)
 }
 
+function controlledHtmlPreviewUrl(value) {
+  const raw = String(value || '').trim()
+  const baseOrigin = globalThis.location?.origin || 'http://localhost'
+  const parsed = new URL(raw, baseOrigin)
+  const controlledPath = /^\/api\/artifacts\/previews\/[^/]+\/index\.html$/.test(parsed.pathname)
+    || /^\/api\/local-files\/previews\/[^/]+\/[^/]+$/.test(parsed.pathname)
+  if (parsed.origin !== baseOrigin || !controlledPath) {
+    const error = new Error('HTML preview probe URL must be a controlled same-origin session URL')
+    error.code = 'HTML_PREVIEW_SESSION_URL_INVALID'
+    throw error
+  }
+  return `${parsed.pathname}${parsed.search}`
+}
+
+/**
+ * Verify a capability-scoped HTML document before mounting it in an iframe.
+ * iframe load events do not expose HTTP 401/403/404/5xx responses, so they
+ * cannot distinguish the real document from a server-generated error page.
+ */
+export async function probeHtmlPreviewSession(url, { fetchImpl = fetch, signal } = {}) {
+  const requestUrl = controlledHtmlPreviewUrl(url)
+  const response = await fetchImpl(requestUrl, {
+    method: 'HEAD',
+    credentials: 'same-origin',
+    cache: 'no-store',
+    signal,
+  })
+  if (response.ok) return requestUrl
+  const error = new Error(`HTML preview session is unavailable: ${response.status}`)
+  error.statusCode = Number(response.status) || 0
+  error.code = 'HTML_PREVIEW_SESSION_UNAVAILABLE'
+  throw error
+}
+
 function waitForPreviewRetry(delayMs, signal) {
   if (signal?.aborted) return Promise.reject(signal.reason || new DOMException('Aborted', 'AbortError'))
   return new Promise((resolve, reject) => {

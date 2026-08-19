@@ -777,6 +777,26 @@ test('local HTML preview CSP uses only configured or explicitly trusted public o
   assert.ok(configuredCsp.includes(`https://configured.example${capabilityPath}`))
   assert.doesNotMatch(configuredCsp, /(?:internal|forwarded)\.example/)
 
+  const remoteImageCsp = await requestCsp(
+    {
+      APP_PUBLIC_URL: null,
+      TRUST_PROXY: null,
+      HTML_PREVIEW_REMOTE_IMAGE_ORIGINS: [
+        'https://images.example.test',
+        'http://insecure.example.test',
+        'https://path.example.test/assets',
+      ].join(','),
+    },
+    {},
+  )
+  const imgDirective = remoteImageCsp.split('; ').find((directive) => directive.startsWith('img-src ')) || ''
+  assert.match(imgDirective, /https:\/\/images\.example\.test/)
+  assert.doesNotMatch(remoteImageCsp, /insecure|path\.example/)
+  for (const directive of ['connect-src', 'script-src', 'style-src', 'frame-src']) {
+    const value = remoteImageCsp.split('; ').find((candidate) => candidate.startsWith(`${directive} `)) || ''
+    assert.doesNotMatch(value, /images\.example\.test/, directive)
+  }
+
   const revoked = await fetch(`${origin}/api/local-files/grants/${grant.id}`, {
     method: 'DELETE',
     headers: headers(alice.token),

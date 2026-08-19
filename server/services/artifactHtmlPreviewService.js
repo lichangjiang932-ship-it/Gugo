@@ -5,6 +5,7 @@ import { getArtifactDir } from './artifactGen.js'
 import { getHtmlArtifactAsset, htmlArtifactAssetIds } from './htmlArtifactAssets.js'
 import { getArtifactById, listArtifactsByFilename } from './jobStore.js'
 import { getTurnArtifactByIdForUser, listTurnArtifactsByFilename } from './turnArtifactStore.js'
+import { htmlPreviewRemoteImageOrigins } from './htmlPreviewRemoteImagePolicy.js'
 
 const SESSION_TTL_MS = 10 * 60 * 1_000
 const SESSION_MAX_AGE_MS = 60 * 60 * 1_000
@@ -15,25 +16,30 @@ const HASH_CHUNK_BYTES = 1024 * 1024
 const ASSET_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
 const previewSessions = new Map()
 
-export const ARTIFACT_HTML_PREVIEW_CSP = [
-  'sandbox allow-scripts',
-  "frame-ancestors 'self'",
-  "default-src 'none'",
-  "base-uri 'none'",
-  "object-src 'none'",
-  "frame-src 'none'",
-  "child-src 'none'",
-  "connect-src 'none'",
-  "form-action 'none'",
-  "navigate-to 'none'",
-  "img-src 'self' data: blob:",
-  "media-src 'self' data: blob:",
-  'font-src data:',
-  "style-src 'unsafe-inline'",
-  "script-src 'unsafe-inline'",
-  "worker-src 'none'",
-  "manifest-src 'none'",
-].join('; ')
+export function artifactHtmlPreviewCsp(env = process.env) {
+  const remoteImageSources = htmlPreviewRemoteImageOrigins(env).join(' ')
+  return [
+    'sandbox allow-scripts',
+    "frame-ancestors 'self'",
+    "default-src 'none'",
+    "base-uri 'none'",
+    "object-src 'none'",
+    "frame-src 'none'",
+    "child-src 'none'",
+    "connect-src 'none'",
+    "form-action 'none'",
+    "navigate-to 'none'",
+    `img-src 'self' data: blob:${remoteImageSources ? ` ${remoteImageSources}` : ''}`,
+    "media-src 'self' data: blob:",
+    'font-src data:',
+    "style-src 'unsafe-inline'",
+    "script-src 'unsafe-inline'",
+    "worker-src 'none'",
+    "manifest-src 'none'",
+  ].join('; ')
+}
+
+export const ARTIFACT_HTML_PREVIEW_CSP = artifactHtmlPreviewCsp({})
 
 function previewError(message, statusCode, code) {
   const error = new Error(message)

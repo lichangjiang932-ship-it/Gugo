@@ -14,6 +14,7 @@ const { createAppServer } = await import('../server/appServer.js')
 const { closeDb } = await import('../server/db.js')
 const { appendJobArtifact, createJob } = await import('../server/services/jobStore.js')
 const {
+  artifactHtmlPreviewCsp,
   clearArtifactHtmlPreviewSessions,
   createArtifactHtmlPreviewSession,
   getArtifactHtmlPreviewDocument,
@@ -90,6 +91,26 @@ async function listen(server) {
 async function close(server) {
   await new Promise((resolve) => server.close(resolve))
 }
+
+test('managed HTML preview CSP permits configured HTTPS image origins only in img-src', () => {
+  const csp = artifactHtmlPreviewCsp({
+    HTML_PREVIEW_REMOTE_IMAGE_ORIGINS: [
+      'https://images.example.test',
+      'https://images.example.test',
+      'http://insecure.example.test',
+      'https://path.example.test/assets',
+      'https://*.wildcard.example.test',
+    ].join(','),
+  })
+  const imgDirective = csp.split('; ').find((directive) => directive.startsWith('img-src ')) || ''
+  assert.match(imgDirective, /https:\/\/images\.example\.test/)
+  assert.equal((imgDirective.match(/https:\/\/images\.example\.test/g) || []).length, 1)
+  assert.doesNotMatch(csp, /insecure|path\.example|wildcard/)
+  for (const directive of ['connect-src', 'script-src', 'style-src', 'frame-src']) {
+    const value = csp.split('; ').find((candidate) => candidate.startsWith(`${directive} `)) || ''
+    assert.doesNotMatch(value, /images\.example\.test/, directive)
+  }
+})
 
 test('managed HTML preview tickets are owner-issued, same-origin, read-only, and declaration-scoped', async () => {
   const owner = issueTestSession()
