@@ -460,12 +460,30 @@ export function subscribeToJobEvents(
   }
 }
 
-// Append the auth token for browser download links, which cannot carry headers.
+function isTrustedDownloadUrl(value) {
+  const raw = String(value || '').trim()
+  if (!raw || /^(?:data|blob):/i.test(raw)) return false
+  if (/^\/api(?:\/|[?#]|$)/.test(raw)) return true
+  if (typeof window === 'undefined' || !window.location?.origin) return false
+  try {
+    const parsed = new URL(raw, window.location.origin)
+    return parsed.origin === window.location.origin
+      && /^\/api(?:\/|$)/.test(parsed.pathname)
+  } catch {
+    return false
+  }
+}
+
+// Browser download links cannot carry headers. Limit the query credential to
+// the authenticated same-origin API so external previews can never receive it.
 export function withDownloadToken(url) {
   if (!url) return url
-  if (/^(?:data|blob):/i.test(url)) return url
+  if (!isTrustedDownloadUrl(url)) return url
   const token = getAuthToken?.()
   if (!token) return url
-  const separator = url.includes('?') ? '&' : '?'
-  return `${url}${separator}token=${encodeURIComponent(token)}`
+  const hashIndex = url.indexOf('#')
+  const base = hashIndex >= 0 ? url.slice(0, hashIndex) : url
+  const hash = hashIndex >= 0 ? url.slice(hashIndex) : ''
+  const separator = base.includes('?') ? '&' : '?'
+  return `${base}${separator}token=${encodeURIComponent(token)}${hash}`
 }
