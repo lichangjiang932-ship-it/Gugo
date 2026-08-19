@@ -58,6 +58,9 @@ test('composer primary action switches in place from send to stop', async () => 
   try {
     await act(async () => root.render(renderActions()))
     const sendButton = rootElement.querySelector('[data-testid="composer-primary-action"]')
+    const fileInput = rootElement.querySelector('input[type="file"]')
+    assert.match(fileInput.accept, /audio\/\*/)
+    assert.match(fileInput.accept, /video\/\*/)
     assert.equal(sendButton.getAttribute('aria-label'), 'Send')
     assert.equal(sendButton.getAttribute('title'), 'Send')
     assert.match(sendButton.className, /\bh-8\b/)

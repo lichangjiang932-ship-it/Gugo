@@ -41,18 +41,23 @@ function readStoredWidth() {
   }
 }
 
-function collectArtifacts(messages) {
-  const newestFirst = messages.flatMap((message, index) => {
+function collectAttachmentArtifacts(attachments, { messageId = '', current = false } = {}) {
+  return (Array.isArray(attachments) ? attachments : [])
+    .map((attachment) => buildAttachmentPreviewArtifact(attachment, { messageId }))
+    .filter(Boolean)
+    .map((artifact, index) => ({
+      ...artifact.directFile,
+      id: artifact.directFile.id || `${messageId || 'current'}-${index}-${artifact.directFile.url}`,
+      messageId,
+      userAttachment: true,
+      currentAttachment: current,
+    }))
+}
+
+function collectArtifacts(messages, currentAttachments = []) {
+  const messageArtifacts = messages.flatMap((message, index) => {
     if (message?.role === 'user') {
-      return (Array.isArray(message.attachments) ? message.attachments : [])
-        .map((attachment) => buildAttachmentPreviewArtifact(attachment, { messageId: message.id }))
-        .filter(Boolean)
-        .map((artifact) => ({
-          ...artifact.directFile,
-          id: artifact.directFile.id || `${message.id || index}-${artifact.directFile.url}`,
-          messageId: message.id,
-          userAttachment: true,
-        }))
+      return collectAttachmentArtifacts(message.attachments, { messageId: message.id || String(index) })
     }
     if (
       message?.role !== 'assistant'
@@ -83,6 +88,10 @@ function collectArtifacts(messages) {
       }))
     return [...managedArtifacts, ...verifiedLocalFiles]
   }).reverse()
+  const newestFirst = [
+    ...collectAttachmentArtifacts(currentAttachments, { current: true }).reverse(),
+    ...messageArtifacts,
+  ]
   const seenVerifiedLocalFiles = new Set()
   const seenAttachments = new Set()
   return newestFirst.filter((artifact) => {
@@ -137,6 +146,7 @@ function normalizeBrowserUrl(value) {
 
 export default function RightWorkbench({
   messages = [],
+  attachments = [],
   activeTab,
   onTabChange,
   onClose,
@@ -146,7 +156,7 @@ export default function RightWorkbench({
   statusMessage = '',
 }) {
   const { t } = useT()
-  const artifacts = useMemo(() => collectArtifacts(messages), [messages])
+  const artifacts = useMemo(() => collectArtifacts(messages, attachments), [attachments, messages])
   const resizeRef = useRef(null)
   const [panelWidth, setPanelWidth] = useState(readStoredWidth)
   const [sideInput, setSideInput] = useState('')
@@ -281,7 +291,7 @@ export default function RightWorkbench({
         >
           <RotateCcw className="h-3.5 w-3.5" />
         </button>
-        <button type="button" onClick={onClose} aria-label={t('workbench.close')} title={t('workbench.close')} className="flex h-7 w-7 items-center justify-center rounded-control text-ink-fade transition-colors hover:bg-ink/5 hover:text-ink"><X className="h-4 w-4" /></button>
+        <button type="button" data-testid="workbench-close" onClick={onClose} aria-label={t('workbench.close')} title={t('workbench.close')} className="flex h-7 w-7 items-center justify-center rounded-control text-ink-fade transition-colors hover:bg-ink/5 hover:text-ink"><X className="h-4 w-4" /></button>
       </header>
 
       <nav data-testid="workbench-navigation" className="flex h-10 shrink-0 items-stretch gap-1 border-b border-ink/10 px-2" aria-label={t('workbench.show')}>
@@ -289,6 +299,7 @@ export default function RightWorkbench({
           <button
             key={tab}
             type="button"
+            data-testid={`workbench-tab-${tab}`}
             onClick={() => onTabChange(tab)}
             aria-current={activeTab === tab ? 'page' : undefined}
             aria-label={t(`workbench.${tab}`)}

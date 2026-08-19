@@ -261,6 +261,12 @@ test('right workbench lists user attachments with image thumbnails and opens the
   try {
     await act(async () => root.render(
       <RightWorkbench
+        attachments={[{
+          id: 'attachment-video',
+          name: '现场片段.mp4',
+          mimeType: 'video/mp4',
+          downloadUrl: '/api/attachments/attachment-video/content',
+        }]}
         messages={[{
           id: 'user-with-files',
           role: 'user',
@@ -286,9 +292,10 @@ test('right workbench lists user attachments with image thumbnails and opens the
       />,
     ))
 
-    assert.equal(rootElement.querySelector('[data-testid="workbench-file-count"]').textContent, '2')
+    assert.equal(rootElement.querySelector('[data-testid="workbench-file-count"]').textContent, '3')
     const links = [...rootElement.querySelectorAll('[data-testid="workbench-file-open"]')]
     assert.deepEqual(links.map((link) => link.textContent.trim()).map((value) => value.replace(/\s+/g, ' ')), [
+      '现场片段.mp4video/mp4',
       '访谈.opusaudio/ogg',
       '现场照片.JFIFimage/jpeg',
     ])
