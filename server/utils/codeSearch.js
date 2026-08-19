@@ -16,11 +16,17 @@
 import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
+import { rgPath } from '@vscode/ripgrep'
 import { sanitizeChildEnv } from './sensitiveEnv.js'
 import { resolveAuthorizedLocalPath } from '../services/localFileAccessService.js'
 import { assertWorkspaceCapability } from '../services/workspaceTrustService.js'
 
-const RG_BIN = process.env.RG_BIN || 'rg'
+export function resolveRipgrepExecutablePath(candidate) {
+  const marker = `${path.sep}app.asar${path.sep}`
+  return String(candidate || '').replace(marker, `${path.sep}app.asar.unpacked${path.sep}`)
+}
+
+const RG_BIN = process.env.RG_BIN || resolveRipgrepExecutablePath(rgPath)
 const RG_TIMEOUT_MS = 15_000
 const RG_MAX_OUTPUT = 4 * 1024 * 1024 // 4MB 结构化输出上限
 const DEFAULT_MAX_RESULTS = 50

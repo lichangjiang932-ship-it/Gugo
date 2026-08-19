@@ -5,6 +5,7 @@ asar: true
 asarUnpack:
   - node_modules/sharp/**/*
   - node_modules/@img/**/*
+  - node_modules/@vscode/ripgrep-*/**/*
 extraResources:
   - from: resources/bin
     to: bin

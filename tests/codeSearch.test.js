@@ -4,10 +4,24 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { grepCodeTool, findSymbolTool, listImportsTool } from '../server/utils/codeSearch.js'
+import {
+  findSymbolTool,
+  grepCodeTool,
+  listImportsTool,
+  resolveRipgrepExecutablePath,
+} from '../server/utils/codeSearch.js'
 
 let tmpRoot
 let savedWsRoot
+
+test('bundled ripgrep resolves to the executable ASAR-unpacked path', () => {
+  const packaged = path.join('root', 'resources', 'app.asar', 'node_modules', '@vscode', 'ripgrep-win32-x64', 'bin', 'rg.exe')
+  const expected = path.join('root', 'resources', 'app.asar.unpacked', 'node_modules', '@vscode', 'ripgrep-win32-x64', 'bin', 'rg.exe')
+  assert.equal(resolveRipgrepExecutablePath(packaged), expected)
+
+  const regular = path.join('root', 'node_modules', '@vscode', 'ripgrep-linux-x64', 'bin', 'rg')
+  assert.equal(resolveRipgrepExecutablePath(regular), regular)
+})
 
 before(() => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-codesearch-'))
