@@ -13,6 +13,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Added a local-owner-only, versioned runtime plugin inventory exposing pure JSON manifests and lifecycle metadata across the server/renderer boundary.
 - Added sandbox-preflighted transformer reloads that atomically switch source for new calls while preserving the active tool and old source on validation failure.
 - Added a user-scoped, append-only self-evolution evidence corpus for explicit feedback and whitelisted structured Reviewer verdicts, without any automatic mutation path.
+- Added deterministic self-evolution dataset curation with secret/path redaction, content deduplication, rule-versioned failure clusters, stable fingerprints, and reversible user-scoped exclusions.
 
 ## [0.11.31] - 2026-08-20
 

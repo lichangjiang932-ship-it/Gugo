@@ -17,3 +17,23 @@ export async function listEvolutionEvidenceApi({ limit = 100 } = {}) {
   const resp = await fetch(`/api/evolution/evidence?${query}`, { headers: authHeaders() })
   return jsonOk(resp)
 }
+
+export async function getEvolutionDatasetApi({ limit = 200 } = {}) {
+  const query = new URLSearchParams({ limit: String(limit) })
+  const resp = await fetch(`/api/evolution/dataset?${query}`, { headers: authHeaders() })
+  return jsonOk(resp)
+}
+
+export async function listEvolutionExclusionsApi() {
+  const resp = await fetch('/api/evolution/exclusions', { headers: authHeaders() })
+  return jsonOk(resp)
+}
+
+export async function setEvolutionEvidenceExcludedApi(evidenceId, excluded, reason = null) {
+  const resp = await fetch('/api/evolution/exclusions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ evidenceId, excluded, reason }),
+  })
+  return jsonOk(resp)
+}
