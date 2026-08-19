@@ -5,6 +5,7 @@ import { classifyDirectFile, loadDirectFilePreview } from '../../../lib/directFi
 import {
   createArtifactHtmlPreviewSession,
   createLocalHtmlPreviewSession,
+  probeHtmlPreviewSession,
   revokeArtifactHtmlPreviewSession,
   revokeLocalHtmlPreviewSession,
 } from '../../../lib/jobClient.js'
@@ -147,6 +148,26 @@ function isLocalReceiptFileUrl(url) {
   }
 }
 
+async function issueUsableHtmlPreviewSession({ createSession, revokeSession, signal }) {
+  let previewUrl = ''
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    previewUrl = await createSession({ signal })
+    if (signal.aborted) {
+      await revokeSession(previewUrl).catch(() => {})
+      throw signal.reason || new DOMException('Aborted', 'AbortError')
+    }
+    try {
+      await probeHtmlPreviewSession(previewUrl, { signal })
+      return previewUrl
+    } catch (cause) {
+      await revokeSession(previewUrl).catch(() => {})
+      previewUrl = ''
+      if (signal.aborted || cause?.name === 'AbortError' || attempt === 1) throw cause
+    }
+  }
+  return previewUrl
+}
+
 function LocalReceiptHtmlPreview({ file, t, url }) {
   const [state, setState] = useState({ url: '', error: null })
   const [retryVersion, setRetryVersion] = useState(0)
@@ -158,7 +179,11 @@ function LocalReceiptHtmlPreview({ file, t, url }) {
     const controller = new AbortController()
     let disposed = false
     let activePreviewUrl = ''
-    createLocalHtmlPreviewSession(url, { signal: controller.signal }).then((previewUrl) => {
+    issueUsableHtmlPreviewSession({
+      createSession: ({ signal }) => createLocalHtmlPreviewSession(url, { signal }),
+      revokeSession: revokeLocalHtmlPreviewSession,
+      signal: controller.signal,
+    }).then((previewUrl) => {
       activePreviewUrl = previewUrl
       if (disposed) {
         void revokeLocalHtmlPreviewSession(previewUrl).catch(() => {})
@@ -216,7 +241,11 @@ function ManagedHtmlArtifactPreview({ file, t, url }) {
     const controller = new AbortController()
     let disposed = false
     let activePreviewUrl = ''
-    createArtifactHtmlPreviewSession(url, { signal: controller.signal }).then((previewUrl) => {
+    issueUsableHtmlPreviewSession({
+      createSession: ({ signal }) => createArtifactHtmlPreviewSession(url, { signal }),
+      revokeSession: revokeArtifactHtmlPreviewSession,
+      signal: controller.signal,
+    }).then((previewUrl) => {
       activePreviewUrl = previewUrl
       if (disposed) {
         void revokeArtifactHtmlPreviewSession(previewUrl).catch(() => {})

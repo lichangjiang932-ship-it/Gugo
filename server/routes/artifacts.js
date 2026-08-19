@@ -7,7 +7,7 @@ import {
   renderArtifactPreviewPng,
 } from '../services/artifactGen.js'
 import {
-  ARTIFACT_HTML_PREVIEW_CSP,
+  artifactHtmlPreviewCsp,
   createArtifactHtmlPreviewSession,
   getArtifactHtmlPreviewAsset,
   getArtifactHtmlPreviewDocument,
@@ -82,7 +82,7 @@ function sendPreviewDocument(req, res, document) {
     'X-Frame-Options': 'SAMEORIGIN',
     'Cross-Origin-Resource-Policy': 'same-origin',
     'Referrer-Policy': 'no-referrer',
-    'Content-Security-Policy': ARTIFACT_HTML_PREVIEW_CSP,
+    'Content-Security-Policy': artifactHtmlPreviewCsp(),
   }
   res.writeHead(200, headers)
   if (req.method === 'HEAD') res.end()

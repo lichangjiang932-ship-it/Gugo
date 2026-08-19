@@ -158,7 +158,7 @@ test('local HTML delivery rejects remote resources while allowing data and blob 
     for (const [filename, body, reference] of remoteCases) {
       const htmlPath = write(root, filename, `<!doctype html><main>Page</main>${body}`)
       await assert.rejects(
-        validateLocalHtmlDelivery({ filePath: htmlPath, decodeImages: false }),
+        validateLocalHtmlDelivery({ filePath: htmlPath, decodeImages: false, remoteImageOrigins: [] }),
         (error) => error?.code === 'HTML_DELIVERY_REMOTE_RESOURCE_UNSUPPORTED'
           && error?.reference === reference,
       )
@@ -169,6 +169,42 @@ test('local HTML delivery rejects remote resources while allowing data and blob 
       <script>fetch("blob:https://example.test/opaque-id")</script>`)
     const result = await validateLocalHtmlDelivery({ filePath: allowedPath })
     assert.equal(result.resourceCount, 0)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('local HTML delivery allows only explicitly trusted HTTPS image origins', async () => {
+  const root = temporarySite()
+  try {
+    const allowedPath = write(root, 'trusted-images.html', `<!doctype html><main>Gallery</main>
+      <img src="https://images.example.test/hero.png">
+      <picture><source srcset="https://images.example.test/hero@2x.png 2x"><img src="data:image/gif;base64,AAAA"></picture>
+      <video poster="https://images.example.test/poster.jpg"></video>`)
+    const result = await validateLocalHtmlDelivery({
+      filePath: allowedPath,
+      remoteImageOrigins: ['https://images.example.test'],
+    })
+    assert.equal(result.resourceCount, 0)
+
+    const rejected = [
+      '<img src="http://images.example.test/insecure.png">',
+      '<img src="https://other.example.test/image.png">',
+      '<script>fetch("https://images.example.test/data.json")</script>',
+      '<link rel="stylesheet" href="https://images.example.test/site.css">',
+      '<iframe src="https://images.example.test/page.html"></iframe>',
+    ]
+    for (const [index, body] of rejected.entries()) {
+      const htmlPath = write(root, `rejected-${index}.html`, `<!doctype html><main>Page</main>${body}`)
+      await assert.rejects(
+        validateLocalHtmlDelivery({
+          filePath: htmlPath,
+          decodeImages: false,
+          remoteImageOrigins: ['https://images.example.test'],
+        }),
+        (error) => error?.code === 'HTML_DELIVERY_REMOTE_RESOURCE_UNSUPPORTED',
+      )
+    }
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }

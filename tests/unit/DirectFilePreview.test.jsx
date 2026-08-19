@@ -286,17 +286,19 @@ test('managed HTML artifacts exchange auth for a scoped ticket iframe', async ()
     assert.equal(frame.getAttribute('src'), '/api/artifacts/previews/opaque-ticket/index.html')
     assert.equal(frame.getAttribute('srcdoc'), null)
     assert.equal(frame.getAttribute('sandbox'), 'allow-scripts')
-    assert.equal(requests.length, 1)
+    assert.equal(requests.length, 2)
     assert.equal(requests[0].input, '/api/artifacts/interactive.html/preview-session')
     assert.equal(requests[0].init.method, 'POST')
     assert.doesNotMatch(requests[0].input, /token=|test/)
+    assert.equal(requests[1].input, '/api/artifacts/previews/opaque-ticket/index.html')
+    assert.equal(requests[1].init.method, 'HEAD')
   } finally {
     await act(async () => root.unmount())
     await new Promise((resolve) => setTimeout(resolve, 0))
     globalThis.fetch = originalFetch
-    assert.equal(requests.length, 2)
-    assert.equal(requests[1].input, '/api/artifacts/previews/opaque-ticket')
-    assert.equal(requests[1].init.method, 'DELETE')
+    assert.equal(requests.length, 3)
+    assert.equal(requests[2].input, '/api/artifacts/previews/opaque-ticket')
+    assert.equal(requests[2].init.method, 'DELETE')
     dom.window.close()
   }
 })
@@ -391,16 +393,18 @@ test('verified local HTML uses a scoped preview URL so relative sidecar assets k
     assert.equal(frame.getAttribute('src'), '/api/local-files/previews/opaque-ticket/site.html')
     assert.equal(frame.getAttribute('srcdoc'), null)
     assert.equal(frame.getAttribute('sandbox'), '')
-    assert.equal(requests.length, 1)
+    assert.equal(requests.length, 2)
     assert.equal(requests[0].input, '/api/local-files/verified/receipt-1/preview-session?turnId=turn-1')
     assert.equal(requests[0].init.method, 'POST')
     assert.doesNotMatch(requests[0].input, /token=|stale/)
+    assert.equal(requests[1].input, '/api/local-files/previews/opaque-ticket/site.html')
+    assert.equal(requests[1].init.method, 'HEAD')
   } finally {
     await act(async () => root.unmount())
     await new Promise((resolve) => setTimeout(resolve, 0))
-    assert.equal(requests.length, 2)
-    assert.equal(requests[1].input, '/api/local-files/previews/opaque-ticket')
-    assert.equal(requests[1].init.method, 'DELETE')
+    assert.equal(requests.length, 3)
+    assert.equal(requests[2].input, '/api/local-files/previews/opaque-ticket')
+    assert.equal(requests[2].init.method, 'DELETE')
     globalThis.fetch = originalFetch
     dom.window.close()
   }
@@ -441,6 +445,157 @@ test('retained local HTML uses the retained preview-session route without claimi
     assert.equal(requests[0].input, '/api/local-files/retained/retained-receipt-1/preview-session?turnId=retained-turn')
     assert.equal(requests[0].init.method, 'POST')
     assert.doesNotMatch(requests[0].input, /token=|stale/)
+  } finally {
+    await act(async () => root.unmount())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    globalThis.fetch = originalFetch
+    dom.window.close()
+  }
+})
+
+test('expired local HTML ticket is preflighted and automatically reissued once', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  const originalFetch = globalThis.fetch
+  const requests = []
+  let created = 0
+  globalThis.fetch = async (input, init = {}) => {
+    const request = { input: String(input), init }
+    requests.push(request)
+    if (init.method === 'POST') {
+      created += 1
+      const ticket = created === 1 ? 'expired-ticket' : 'fresh-ticket'
+      return {
+        ok: true,
+        status: 201,
+        json: async () => ({ url: `/api/local-files/previews/${ticket}/gallery.html` }),
+      }
+    }
+    if (init.method === 'HEAD') {
+      return { ok: !request.input.includes('expired-ticket'), status: request.input.includes('expired-ticket') ? 404 : 200 }
+    }
+    return { ok: true, status: 204 }
+  }
+  try {
+    await act(async () => root.render(
+      <DirectFilePreview
+        file={{ filename: 'gallery.html', type: 'html' }}
+        url="/api/local-files/verified/gallery?turnId=turn-gallery&preview=1"
+        t={(key) => key}
+      />,
+    ))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+
+    const frame = rootElement.querySelector('iframe')
+    assert.ok(frame)
+    assert.equal(frame.getAttribute('src'), '/api/local-files/previews/fresh-ticket/gallery.html')
+    assert.deepEqual(requests.map((request) => request.init.method), ['POST', 'HEAD', 'DELETE', 'POST', 'HEAD'])
+    assert.equal(requests[2].input, '/api/local-files/previews/expired-ticket')
+  } finally {
+    await act(async () => root.unmount())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    globalThis.fetch = originalFetch
+    dom.window.close()
+  }
+})
+
+test('HTML ticket recovery stops after one reissue and exposes the HTTP failure', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  const originalFetch = globalThis.fetch
+  const requests = []
+  let created = 0
+  globalThis.fetch = async (input, init = {}) => {
+    requests.push({ input: String(input), init })
+    if (init.method === 'POST') {
+      created += 1
+      return {
+        ok: true,
+        status: 201,
+        json: async () => ({ url: `/api/artifacts/previews/broken-${created}/index.html` }),
+      }
+    }
+    if (init.method === 'HEAD') return { ok: false, status: created === 1 ? 500 : 403 }
+    return { ok: true, status: 204 }
+  }
+  try {
+    await act(async () => root.render(
+      <DirectFilePreview
+        file={{ filename: 'broken.html', type: 'html' }}
+        url="/api/artifacts/broken.html?preview=1"
+        t={(key) => key}
+      />,
+    ))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+
+    assert.equal(rootElement.querySelector('iframe'), null)
+    const status = rootElement.querySelector('[role="status"]')
+    assert.equal(status?.getAttribute('data-error-code'), 'HTML_PREVIEW_SESSION_UNAVAILABLE')
+    assert.match(status?.textContent || '', /403/)
+    assert.equal(requests.filter((request) => request.init.method === 'POST').length, 2)
+    assert.deepEqual(requests.map((request) => request.init.method), ['POST', 'HEAD', 'DELETE', 'POST', 'HEAD', 'DELETE'])
+  } finally {
+    await act(async () => root.unmount())
+    globalThis.fetch = originalFetch
+    dom.window.close()
+  }
+})
+
+test('switching HTML artifacts aborts a pending probe and ignores its late result', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  const originalFetch = globalThis.fetch
+  const requests = []
+  let resolveOldProbe
+  globalThis.fetch = (input, init = {}) => {
+    const request = { input: String(input), init }
+    requests.push(request)
+    if (init.method === 'POST') {
+      const artifact = request.input.includes('/artifact-a.') ? 'artifact-a' : 'artifact-b'
+      return Promise.resolve({
+        ok: true,
+        status: 201,
+        json: async () => ({ url: `/api/artifacts/previews/${artifact}/index.html` }),
+      })
+    }
+    if (init.method === 'HEAD' && request.input.includes('/artifact-a/')) {
+      return new Promise((resolve) => { resolveOldProbe = resolve })
+    }
+    return Promise.resolve({ ok: true, status: 204 })
+  }
+  try {
+    await act(async () => root.render(
+      <DirectFilePreview
+        file={{ id: 'artifact-a', filename: 'artifact-a.html', type: 'html' }}
+        url="/api/artifacts/artifact-a.html?preview=1"
+        t={(key) => key}
+      />,
+    ))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    const oldProbe = requests.find((request) => request.init.method === 'HEAD')
+    assert.equal(typeof resolveOldProbe, 'function')
+
+    await act(async () => root.render(
+      <DirectFilePreview
+        file={{ id: 'artifact-b', filename: 'artifact-b.html', type: 'html' }}
+        url="/api/artifacts/artifact-b.html?preview=1"
+        t={(key) => key}
+      />,
+    ))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    assert.equal(oldProbe.init.signal.aborted, true)
+    assert.equal(rootElement.querySelector('iframe')?.getAttribute('src'), '/api/artifacts/previews/artifact-b/index.html')
+
+    await act(async () => {
+      resolveOldProbe({ ok: true, status: 200 })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    assert.equal(rootElement.querySelector('iframe')?.getAttribute('src'), '/api/artifacts/previews/artifact-b/index.html')
+    assert.ok(requests.some((request) => request.input === '/api/artifacts/previews/artifact-a'
+      && request.init.method === 'DELETE'))
   } finally {
     await act(async () => root.unmount())
     await new Promise((resolve) => setTimeout(resolve, 0))

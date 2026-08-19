@@ -34,6 +34,10 @@ import { authenticateRequest } from '../middleware.js'
 import { getArtifactByFilename } from './jobStore.js'
 import { getTurnArtifactByFilename } from './turnArtifactStore.js'
 import { expandHtmlArtifactAssets, getHtmlArtifactAsset, htmlArtifactAssetIds } from './htmlArtifactAssets.js'
+import {
+  htmlPreviewRemoteImageOrigins,
+  maskAllowedHtmlPreviewRemoteImages,
+} from './htmlPreviewRemoteImagePolicy.js'
 import { officeImageSize, prepareOfficeArtifactImages } from './officeArtifactImages.js'
 import {
   HEAD_FONT, BODY_FONT, CJK_FONT,
@@ -275,7 +279,10 @@ function assertHtmlIsPageContent(source) {
   }
 }
 
-export function validateHtmlArtifactSource(source, { assetIds = [] } = {}) {
+export function validateHtmlArtifactSource(source, {
+  assetIds = [],
+  remoteImageOrigins = htmlPreviewRemoteImageOrigins(),
+} = {}) {
   const html = normalizeHtmlArtifactSource(source)
   if (!html) throw new Error('html is required')
   if (Buffer.byteLength(html, 'utf8') > MAX_HTML_ARTIFACT_BYTES) {
@@ -306,6 +313,7 @@ export function validateHtmlArtifactSource(source, { assetIds = [] } = {}) {
       throw new Error(`html artifact declares an unused managed asset: ${id}`)
     }
   }
+  const networkValidationSource = maskAllowedHtmlPreviewRemoteImages(html, remoteImageOrigins)
   const blocked = [
     /<script\b[^>]*\bsrc\s*=/i,
     /<link\b[^>]*\brel\s*=\s*["']?stylesheet["']?[^>]*\bhref\s*=/i,
@@ -317,7 +325,7 @@ export function validateHtmlArtifactSource(source, { assetIds = [] } = {}) {
     HTML_NETWORK_API_CALL,
     /javascript\s*:/i,
   ]
-  if (blocked.some((pattern) => pattern.test(html))) {
+  if (blocked.some((pattern) => pattern.test(networkValidationSource))) {
     throw new Error('html artifact must be self-contained and cannot load external scripts, styles, frames, or network requests')
   }
   assertHtmlIsPageContent(html)

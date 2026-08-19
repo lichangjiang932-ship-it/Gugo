@@ -3,6 +3,10 @@ import path from 'node:path'
 import { parse } from 'acorn'
 import { JSDOM } from 'jsdom'
 import sharp from 'sharp'
+import {
+  htmlPreviewRemoteImageOrigins,
+  isAllowedHtmlPreviewRemoteImage,
+} from './htmlPreviewRemoteImagePolicy.js'
 
 const MAX_HTML_BYTES = 16 * 1024 * 1024
 const MAX_TEXT_DEPENDENCY_BYTES = 8 * 1024 * 1024
@@ -102,11 +106,18 @@ function stripQueryAndFragment(value) {
   return marker >= 0 ? text.slice(0, marker) : text
 }
 
-function classifyReference(rawValue, { sourceLabel = 'HTML' } = {}) {
+function classifyReference(rawValue, {
+  referenceKind = 'resource',
+  remoteImageOrigins = [],
+  sourceLabel = 'HTML',
+} = {}) {
   const value = String(rawValue || '').trim()
   if (!value || value.startsWith('#')) return null
   if (/^(?:data|blob|about|mailto|tel):/i.test(value)) return null
   if (/^(?:https?:)?\/\//i.test(value)) {
+    if (referenceKind === 'image' && isAllowedHtmlPreviewRemoteImage(value, remoteImageOrigins)) {
+      return { external: true, value }
+    }
     invalid(
       'HTML_DELIVERY_REMOTE_RESOURCE_UNSUPPORTED',
       `${sourceLabel} references a remote resource that the side preview cannot load: ${value.slice(0, 160)}`,
@@ -155,9 +166,16 @@ function classifyReference(rawValue, { sourceLabel = 'HTML' } = {}) {
   return { external: false, value, decoded }
 }
 
-function canonicalResourcePath({ rootDirectory, ownerPath, reference, sourceLabel }) {
-  const classified = classifyReference(reference, { sourceLabel })
-  if (!classified) return null
+function canonicalResourcePath({
+  rootDirectory,
+  ownerPath,
+  reference,
+  referenceKind,
+  remoteImageOrigins,
+  sourceLabel,
+}) {
+  const classified = classifyReference(reference, { referenceKind, remoteImageOrigins, sourceLabel })
+  if (!classified || classified.external) return null
   const candidate = path.resolve(path.dirname(ownerPath), ...classified.decoded.split('/'))
   if (!isPathInside(rootDirectory, candidate)) {
     invalid(
@@ -184,8 +202,23 @@ function rethrowPathAuthorization(cause) {
   if (cause?.code === 'PATH_NOT_AUTHORIZED') throw cause
 }
 
-function readResourceFile({ rootDirectory, ownerPath, reference, sourceLabel, resolveReadPath }) {
-  const resolved = canonicalResourcePath({ rootDirectory, ownerPath, reference, sourceLabel })
+function readResourceFile({
+  rootDirectory,
+  ownerPath,
+  reference,
+  referenceKind,
+  remoteImageOrigins,
+  sourceLabel,
+  resolveReadPath,
+}) {
+  const resolved = canonicalResourcePath({
+    rootDirectory,
+    ownerPath,
+    reference,
+    referenceKind,
+    remoteImageOrigins,
+    sourceLabel,
+  })
   if (!resolved) return null
   let canonical
   let stat
@@ -798,6 +831,7 @@ export async function validateLocalHtmlDelivery({
   filePath,
   source: suppliedSource,
   decodeImages = true,
+  remoteImageOrigins = htmlPreviewRemoteImageOrigins(),
   resolveReadPath,
 } = {}) {
   const rawPath = String(filePath || '').trim()
@@ -862,6 +896,8 @@ export async function validateLocalHtmlDelivery({
       rootDirectory,
       ownerPath: item.ownerPath,
       reference: item.value,
+      referenceKind: item.kind,
+      remoteImageOrigins,
       sourceLabel: item.label,
       resolveReadPath,
     })

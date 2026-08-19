@@ -292,6 +292,32 @@ test('HTML artifact validation rejects local disk paths and undeclared managed a
   )
 })
 
+test('HTML artifact validation allows only explicitly trusted HTTPS image origins', () => {
+  const remoteImageOrigins = ['https://images.example.test']
+  const allowed = `<!doctype html><html><head></head><body><main>Gallery</main>
+    <img src="https://images.example.test/hero.png">
+    <picture><source srcset="https://images.example.test/hero-small.png 1x, https://images.example.test/hero-large.png 2x"><img src="data:image/gif;base64,AAAA"></picture>
+    <video poster="https://images.example.test/poster.jpg"></video></body></html>`
+  assert.equal(validateHtmlArtifactSource(allowed, { remoteImageOrigins }), allowed)
+
+  const rejected = [
+    '<img src="http://images.example.test/insecure.png">',
+    '<img src="https://other.example.test/pixel.png">',
+    '<script>fetch("https://images.example.test/data.json")</script>',
+    '<script>const image = new Image(); image.src = "https://images.example.test/beacon.png"</script>',
+    '<link rel="stylesheet" href="https://images.example.test/site.css">',
+    '<iframe src="https://images.example.test/page.html"></iframe>',
+  ]
+  for (const body of rejected) {
+    const html = `<!doctype html><html><head>${body}</head><body><main>Unsafe</main></body></html>`
+    assert.throws(
+      () => validateHtmlArtifactSource(html, { remoteImageOrigins }),
+      /self-contained/i,
+      body,
+    )
+  }
+})
+
 test('HTML artifact validation rejects remote resources, submissions, and network APIs', () => {
   const unsafeBodies = [
     '<img src="https://attacker.invalid/pixel.png">',

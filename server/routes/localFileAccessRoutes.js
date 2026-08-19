@@ -25,6 +25,7 @@ import {
   getLocalHtmlPreviewResource,
   revokeLocalHtmlPreviewSession,
 } from '../services/localHtmlPreviewService.js'
+import { htmlPreviewRemoteImageOrigins } from '../services/htmlPreviewRemoteImagePolicy.js'
 
 const JSON_HEADERS = { 'Content-Type': 'application/json; charset=utf-8' }
 
@@ -124,6 +125,7 @@ function localHtmlPreviewSecurityHeaders(req, mimeType, ticket, { isEntryDocumen
     // A browser request always has a valid Host header. Failing closed keeps a
     // malformed proxy request from widening this capability-scoped policy.
   }
+  const remoteImageSources = htmlPreviewRemoteImageOrigins().join(' ')
   return {
     ...(isEntryDocument ? { 'X-Frame-Options': 'SAMEORIGIN' } : {}),
     'Content-Security-Policy': [
@@ -133,7 +135,7 @@ function localHtmlPreviewSecurityHeaders(req, mimeType, ticket, { isEntryDocumen
       "base-uri 'none'",
       "object-src 'none'",
       "form-action 'none'",
-      `img-src data: blob: ${resourceSource}`,
+      `img-src data: blob: ${resourceSource}${remoteImageSources ? ` ${remoteImageSources}` : ''}`,
       `media-src data: blob: ${resourceSource}`,
       `font-src data: blob: ${resourceSource}`,
       `style-src 'unsafe-inline' ${resourceSource}`,

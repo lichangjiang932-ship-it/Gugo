@@ -9,6 +9,7 @@ import {
   loadArtifactPreviewDocument,
   loadArtifactPreviewHtml,
   listJobs,
+  probeHtmlPreviewSession,
   revokeArtifactHtmlPreviewSession,
   revokeLocalHtmlPreviewSession,
   retryJob,
@@ -251,6 +252,57 @@ test('managed HTML exchanges account auth for a scoped preview ticket without le
   } finally {
     setAuthToken('')
     globalThis.window = previousWindow
+  }
+})
+
+test('HTML preview ticket probes are same-origin HEAD requests without account tokens', async () => {
+  const previousWindow = globalThis.window
+  globalThis.window = { localStorage: null, sessionStorage: null }
+  setAuthToken('must-not-enter-probe')
+  const calls = []
+  try {
+    const url = await probeHtmlPreviewSession('/api/artifacts/previews/ticket-1/index.html?revision=2', {
+      fetchImpl: async (input, init = {}) => {
+        calls.push({ input: String(input), init })
+        return { ok: true, status: 200 }
+      },
+    })
+    assert.equal(url, '/api/artifacts/previews/ticket-1/index.html?revision=2')
+    assert.equal(calls[0].input, url)
+    assert.equal(calls[0].init.method, 'HEAD')
+    assert.equal(calls[0].init.credentials, 'same-origin')
+    assert.equal(calls[0].init.cache, 'no-store')
+    assert.equal(calls[0].init.headers, undefined)
+
+    let fetched = false
+    await assert.rejects(
+      probeHtmlPreviewSession('https://attacker.invalid/api/artifacts/previews/ticket/index.html', {
+        fetchImpl: async () => { fetched = true },
+      }),
+      (error) => error?.code === 'HTML_PREVIEW_SESSION_URL_INVALID',
+    )
+    await assert.rejects(
+      probeHtmlPreviewSession('/api/workspace/files/unscoped.html', {
+        fetchImpl: async () => { fetched = true },
+      }),
+      (error) => error?.code === 'HTML_PREVIEW_SESSION_URL_INVALID',
+    )
+    assert.equal(fetched, false)
+  } finally {
+    setAuthToken('')
+    globalThis.window = previousWindow
+  }
+})
+
+test('HTML preview ticket probes reject HTTP error documents before iframe mounting', async () => {
+  for (const status of [401, 403, 404, 500]) {
+    await assert.rejects(
+      probeHtmlPreviewSession('/api/local-files/previews/ticket/site.html', {
+        fetchImpl: async () => ({ ok: false, status }),
+      }),
+      (error) => error?.code === 'HTML_PREVIEW_SESSION_UNAVAILABLE'
+        && error?.statusCode === status,
+    )
   }
 })
 
