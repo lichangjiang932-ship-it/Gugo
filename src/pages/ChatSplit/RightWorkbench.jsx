@@ -23,6 +23,7 @@ import { runWorkbenchTerminal } from '../../lib/workbenchClient.js'
 import { useT } from '../../i18n/I18nProvider.jsx'
 import { withDownloadToken } from '../../lib/jobClient.js'
 import { verifiedLocalFileIdentity } from '../../lib/verifiedLocalFileIdentity.js'
+import { UiContributionRenderer, useUiContributions } from '../../plugins/uiContributionRegistry.js'
 
 const TABS = { files: Files, chat: MessageSquare, browser: Globe2, terminal: TerminalSquare }
 const DEFAULT_WIDTH = 420
@@ -171,6 +172,7 @@ export default function RightWorkbench({
   statusMessage = '',
 }) {
   const { t } = useT()
+  const contributedTabs = useUiContributions('workbench-tab')
   const artifacts = useMemo(() => collectArtifacts(messages, attachments), [attachments, messages])
   const resizeRef = useRef(null)
   const [panelWidth, setPanelWidth] = useState(readStoredWidth)
@@ -326,6 +328,21 @@ export default function RightWorkbench({
             {tab === 'files' && artifacts.length > 0 && <span data-testid="workbench-file-count" data-compact-numeric-badge className="min-w-4 rounded-pill bg-ink/[0.08] px-1 py-0.5 text-center text-[9px] font-semibold leading-none text-ink-soft">{artifacts.length}</span>}
           </button>
         ))}
+        {contributedTabs.map((contribution) => {
+          const Icon = contribution.icon || Files
+          const label = contribution.labelKey ? t(contribution.labelKey) : contribution.label
+          return <button
+            key={contribution.key}
+            type="button"
+            data-testid={`workbench-tab-${contribution.tabId}`}
+            data-ui-plugin={contribution.pluginId}
+            onClick={() => onTabChange(contribution.tabId)}
+            aria-current={activeTab === contribution.tabId ? 'page' : undefined}
+            aria-label={label}
+            title={label}
+            className={`group relative flex min-w-0 flex-1 items-center justify-center border-b-2 px-1 text-xs transition-colors ${activeTab === contribution.tabId ? 'border-blue-500 text-blue-600' : 'border-transparent text-ink-fade hover:text-ink'}`}
+          ><Icon className="h-[18px] w-[18px] shrink-0" /><span className="sr-only">{label}</span></button>
+        })}
       </nav>
 
       {activeTab === 'files' && (
@@ -393,6 +410,22 @@ export default function RightWorkbench({
           <form onSubmit={runCommand} className="flex gap-2 border-t border-white/10 p-2"><input value={command} onChange={(event) => setCommand(event.target.value)} placeholder={t('workbench.command')} className="h-9 min-w-0 flex-1 rounded border border-white/10 bg-black/30 px-2 font-mono text-xs outline-none focus:border-ember" /><button disabled={terminalBusy || !command.trim()} aria-label={t('workbench.run')} className="flex h-9 w-9 items-center justify-center rounded bg-ember disabled:opacity-50"><Play className="h-3.5 w-3.5" /></button></form>
         </section>
       )}
+      {contributedTabs.map((contribution) => activeTab === contribution.tabId && (
+        <UiContributionRenderer
+          key={contribution.key}
+          contribution={contribution}
+          context={{
+            artifacts,
+            attachments,
+            isGenerating,
+            messages,
+            onOpenArtifact,
+            onSendMessage,
+            t,
+          }}
+          fallback={<div role="alert" className="p-4 text-sm text-red-600">{t('errors.unknown')}</div>}
+        />
+      ))}
     </aside>
   )
 }

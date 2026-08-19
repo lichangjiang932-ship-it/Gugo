@@ -1,13 +1,27 @@
 import { ChevronUp, Link2, Settings, Wrench } from 'lucide-react'
 import BrandMark from '../BrandMark.jsx'
 import DesktopUpdateCard from '../DesktopUpdateCard.jsx'
+import { UiContributionRenderer, useUiContributions } from '../../plugins/uiContributionRegistry.js'
 
 export default function AccountArea({ compact = false, accountMenuOpen, accountMenuRef, user, pendingApprovals, onToggle, onNavigate, t }) {
+  const contributedMenuItems = useUiContributions('account-menu')
   return <div ref={accountMenuRef} className="relative border-t border-ink/10 pt-2">
     {accountMenuOpen && <div className={`absolute bottom-full z-30 mb-2 w-56 overflow-hidden rounded-card border border-ink/15 bg-paper p-1.5 shadow-xl ${compact ? 'left-0' : 'left-0 right-0'}`}>
       <MenuButton icon={Link2} label={t('access.title')} onClick={() => onNavigate({ path: '/access', requiresLogin: true })} />
       <MenuButton icon={Settings} label={t('nav.settings')} onClick={() => onNavigate({ path: '/settings', requiresLogin: true })} badge={pendingApprovals} />
       <MenuButton icon={Wrench} label={t('nav.skills')} onClick={() => onNavigate({ path: '/skills' })} />
+      {contributedMenuItems.map((contribution) => contribution.component
+        ? <UiContributionRenderer
+            key={contribution.key}
+            contribution={contribution}
+            context={{ onNavigate, t }}
+          />
+        : <MenuButton
+            key={contribution.key}
+            icon={contribution.icon || Link2}
+            label={contribution.labelKey ? t(contribution.labelKey) : contribution.label}
+            onClick={() => onNavigate({ path: contribution.path, requiresLogin: contribution.requiresLogin })}
+          />)}
     </div>}
     <DesktopUpdateCard compact={compact} />
     <button type="button" data-settings-focus-return onClick={onToggle} title={compact ? (user.name || t('settings.account')) : undefined} aria-label={user.name || t('settings.account')} aria-expanded={accountMenuOpen} className={`flex h-11 w-full items-center rounded-control text-left transition-colors hover:bg-paper-2 ${compact ? 'justify-center px-0' : 'gap-2.5 px-2'}`}>

@@ -22,6 +22,7 @@ import ActivityStream from './ActivityStream.jsx'
 import { buildCollapsedUserMessagePreview, copyableMessageText, shouldCollapseUserMessage, splitUserSkillCommand } from './messageContent.js'
 import DirectoryRequestCard from '../../taskRun/DirectoryRequestCard.jsx'
 import { buildAttachmentPreviewArtifact } from '../../../lib/attachmentPreview.js'
+import { UiContributionSlot } from '../../../plugins/uiContributionRegistry.js'
 
 function stableTimelineSegments(content, toolCalls) {
   let previousToolKey = 'start'
@@ -212,6 +213,12 @@ export default function MessageRow({
                 : t('chatMessages.replyIncomplete')}
             </span>
           </div>
+        )}
+        {msg.role === 'assistant' && (
+          <UiContributionSlot
+            slot="conversation-node"
+            context={{ msg, isCurrentStreamingMessage, isMessageComplete, onOpenArtifact: openArtifact, t }}
+          />
         )}
         {msg.role === 'assistant' && msg.meta?.type === 'context_summary' && (
           <div className="mt-3 border-t border-ink/10 pt-2 text-xs text-ink-fade">

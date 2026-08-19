@@ -37,36 +37,37 @@ const LEGACY_SECTION_ALIASES = new Map([
   [SETTINGS_TAB_DIAGNOSTICS, SETTINGS_TAB_ABOUT],
 ])
 
-function canonicalSettingsSection(section) {
+function canonicalSettingsSection(section, allowedSections = []) {
   const canonical = LEGACY_SECTION_ALIASES.get(section) || section
-  return SETTINGS_SECTIONS.has(canonical) ? canonical : SETTINGS_TAB_GENERAL
+  const contributed = new Set(Array.isArray(allowedSections) ? allowedSections : [])
+  return SETTINGS_SECTIONS.has(canonical) || contributed.has(canonical) ? canonical : SETTINGS_TAB_GENERAL
 }
 
 export function settingsPathAfterLogin() {
   return '/settings'
 }
 
-export function resolveSettingsSectionFromSearch(search = '') {
+export function resolveSettingsSectionFromSearch(search = '', allowedSections = []) {
   try {
     const params = new URLSearchParams(search || '')
-    return canonicalSettingsSection(params.get('tab'))
+    return canonicalSettingsSection(params.get('tab'), allowedSections)
   } catch {
     return SETTINGS_TAB_GENERAL
   }
 }
 
-export function resolveSettingsNavFromSearch(search = '') {
-  return resolveSettingsSectionFromSearch(search)
+export function resolveSettingsNavFromSearch(search = '', allowedSections = []) {
+  return resolveSettingsSectionFromSearch(search, allowedSections)
 }
 
-export function defaultSettingsSection(section) {
-  return canonicalSettingsSection(section)
+export function defaultSettingsSection(section, allowedSections = []) {
+  return canonicalSettingsSection(section, allowedSections)
 }
 
-export function settingsPathForSection(section) {
+export function settingsPathForSection(section, allowedSections = []) {
   if ([SETTINGS_TAB_FILES, SETTINGS_TAB_PET, SETTINGS_TAB_DIAGNOSTICS].includes(section)) {
     return `/settings?tab=${encodeURIComponent(section)}`
   }
-  const resolved = canonicalSettingsSection(section)
+  const resolved = canonicalSettingsSection(section, allowedSections)
   return resolved === SETTINGS_TAB_GENERAL ? '/settings' : `/settings?tab=${encodeURIComponent(resolved)}`
 }

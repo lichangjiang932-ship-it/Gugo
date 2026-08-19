@@ -3,6 +3,7 @@ import { ChevronDown, Loader2 } from 'lucide-react'
 import ToolCallCard from '../../../components/ToolCallCard.jsx'
 import SubagentCard from '../../../components/SubagentCard.jsx'
 import LiveElapsed from '../../../components/LiveElapsed.jsx'
+import { UiContributionRenderer, useUiContributions } from '../../../plugins/uiContributionRegistry.js'
 
 // Execution traces (reasoning status / tool timeline) use English technical
 // labels regardless of UI language: they are technical facts.
@@ -17,6 +18,7 @@ export function ReasoningTrace({ text = '', streaming = false, label = '', testI
 
 export function ToolCallTrace({ calls = [], stepOffset = 0, artifacts = [], onOpenArtifact }) {
   const normalizedCalls = Array.isArray(calls) ? calls : []
+  const contributedToolViews = useUiContributions('tool-view')
   const [showAll, setShowAll] = useState(false)
   const [expandedCallKey, setExpandedCallKey] = useState(null)
   const visibleLimit = 4
@@ -69,27 +71,44 @@ export function ToolCallTrace({ calls = [], stepOffset = 0, artifacts = [], onOp
         {visibleEntries.map(({ call, index: callIndex }) => {
           const stepNumber = stepOffset + callIndex + 1
           const callKey = stableCallKey(call, normalizedCalls, callIndex)
+          const toggle = () => {
+            if (expandedCallKey === callKey) {
+              setExpandedCallKey(null)
+              return
+            }
+            setExpandedCallKey(callKey)
+          }
+          const defaultView = call.name === 'Agent'
+            ? <SubagentCard call={call} stepNumber={stepNumber} />
+            : <ToolCallCard
+                call={call}
+                stepNumber={stepNumber}
+                artifacts={artifacts}
+                onOpenArtifact={onOpenArtifact}
+                expanded={expandedCallKey === callKey}
+                onToggle={toggle}
+              />
+          const contributedView = contributedToolViews.find((entry) => entry.toolNames.includes(call.name))
           return (
             <div
               key={callKey}
               className="chat-tool-step-motion"
+              data-ui-plugin={contributedView?.pluginId}
             >
-              {call.name === 'Agent'
-                ? <SubagentCard call={call} stepNumber={stepNumber} />
-                : <ToolCallCard
-                    call={call}
-                    stepNumber={stepNumber}
-                    artifacts={artifacts}
-                    onOpenArtifact={onOpenArtifact}
-                    expanded={expandedCallKey === callKey}
-                    onToggle={() => {
-                      if (expandedCallKey === callKey) {
-                        setExpandedCallKey(null)
-                        return
-                      }
-                      setExpandedCallKey(callKey)
+              {contributedView
+                ? <UiContributionRenderer
+                    contribution={contributedView}
+                    context={{
+                      artifacts,
+                      call,
+                      expanded: expandedCallKey === callKey,
+                      onOpenArtifact,
+                      onToggle: toggle,
+                      stepNumber,
                     }}
-                  />}
+                    fallback={defaultView}
+                  />
+                : defaultView}
             </div>
           )
         })}
