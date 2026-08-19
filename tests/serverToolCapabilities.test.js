@@ -181,7 +181,8 @@ test('a server-only dynamic tool reaches the API and validator with one schema d
   t.after(() => unregisterDynamicTool(name))
 
   const resolved = resolveSpecsForMode('chat').find((entry) => entry.name === name)
-  assert.equal(resolved?.tool, spec)
+  assert.deepEqual(resolved?.tool, spec)
+  assert.notEqual(resolved?.tool, spec)
 
   const [invalid] = normalizeToolCalls([{ name, arguments: '{"value":0}' }])
   const validation = validateToolCall(invalid, [resolved.tool])

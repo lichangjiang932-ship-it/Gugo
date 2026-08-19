@@ -110,8 +110,14 @@ export function revalidateToolPermission({
 
   try {
     const settings = getApprovalSettings({ userId })
-    const riskOverride = settings.riskOverrides?.find((item) => item?.toolName === toolName) || null
     const dynamicMetadata = getToolMetadata(toolName, { args, userId })
+    const isRuntimePlugin = dynamicMetadata?.origin === 'plugin'
+    // Stored policies are keyed only by tool name. A newly installed or
+    // shadowing plugin must not inherit another implementation's standing
+    // grant or a persisted risk downgrade.
+    const riskOverride = isRuntimePlugin
+      ? null
+      : settings.riskOverrides?.find((item) => item?.toolName === toolName) || null
     const metadata = riskOverride
       ? {
           ...(dynamicMetadata || {}),
@@ -128,7 +134,7 @@ export function revalidateToolPermission({
       // deployment-level approval queue (which may legitimately be `off`).
       mode: 'unattended',
       permissionMode: settings.mode,
-      rememberedGrants: settings.rememberedGrants,
+      rememberedGrants: isRuntimePlugin ? [] : settings.rememberedGrants,
       metadata,
     })
     if (!verdict.denied) return { proceed: true, args, permissionMode: settings.mode }
@@ -298,8 +304,14 @@ export async function requestApproval({
   } catch (err) {
     console.error('[approval] 读取用户档位失败,按默认最严处理:', err?.stack || err)
   }
-  const riskOverride = settings.riskOverrides?.find((item) => item?.toolName === toolName) || null
   const dynamicMetadata = getToolMetadata(toolName, { args, userId })
+  const isRuntimePlugin = dynamicMetadata?.origin === 'plugin'
+  // Runtime registrations have process-local owner identities, whereas these
+  // persisted policies are name-only. Do not let one plugin inherit another
+  // plugin's grant or risk override after shadowing/restart.
+  const riskOverride = isRuntimePlugin
+    ? null
+    : settings.riskOverrides?.find((item) => item?.toolName === toolName) || null
   const metadata = riskOverride
     ? {
         ...(dynamicMetadata || {}),
@@ -312,7 +324,7 @@ export async function requestApproval({
     origin,
     mode: effectiveMode,
     permissionMode: settings.mode,
-    rememberedGrants: settings.rememberedGrants,
+    rememberedGrants: isRuntimePlugin ? [] : settings.rememberedGrants,
     metadata,
   })
   // plan 档位:直接拒,不排队等人 —— 用户要的就是「只看不动」

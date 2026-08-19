@@ -3,7 +3,7 @@ import { assertRuntimeStage } from './runtimeContract.js'
 export async function executeToolCalls(s) {
   assertRuntimeStage(s, 'execute-tool-calls')
   const i = s.iteration
-  const { CHECKPOINT_FLUSH_ERROR_CODE, DYNAMIC_EXECUTION_TOOL_NAMES, FAILURE_RECOVERY_MARKER, FAILURE_RECOVERY_THRESHOLD, TOOL_HOOK_RESULT, VERIFICATION_TOOLS, contradictedCapabilityClarification, createToolAbortScope, executeServerTool, executeToolWithRetry, formatDeniedToolResult, getToolMetadata, isCommandExecutionTool, isFileArtifactTool, isLoopPauseResult, isSubstantiveToolCall, isSuccessfulToolResult, normalizeArtifactIdList, normalizeToolError, rememberApprovedSubagentCall, replaceRuntimeCapabilityBlock, restoreFailureRecovery, restoreNamedToolSpecs, resumePersistedApproval, revalidateToolPermission, runPostTool, runPreTool, shouldReflectOnFailure, supportsIdempotentResume, toolNameFromSpec, validateToolCall, writeToolAudit } = s.d
+  const { CHECKPOINT_FLUSH_ERROR_CODE, DYNAMIC_EXECUTION_TOOL_NAMES, FAILURE_RECOVERY_MARKER, FAILURE_RECOVERY_THRESHOLD, TOOL_HOOK_RESULT, VERIFICATION_TOOLS, contradictedCapabilityClarification, createToolAbortScope, executeServerTool, executeToolWithRetry, formatDeniedToolResult, getToolMetadata, isCommandExecutionTool, isFileArtifactTool, isLoopPauseResult, isSubstantiveToolCall, isSuccessfulToolResult, matchesDynamicToolRegistration, normalizeArtifactIdList, normalizeToolError, rememberApprovedSubagentCall, replaceRuntimeCapabilityBlock, restoreFailureRecovery, restoreNamedToolSpecs, resumePersistedApproval, revalidateToolPermission, runPostTool, runPreTool, shouldReflectOnFailure, supportsIdempotentResume, toolNameFromSpec, validateToolCall, writeToolAudit } = s.d
   i.pausedByClarification = null
   i.budgetExceededByCompletedModelResponse = s.modelBudgetExceededAfterResponse
   s.modelBudgetExceededAfterResponse = null
@@ -130,6 +130,37 @@ export async function executeToolCalls(s) {
         let clarification = null
         let artifactId = null
         let artifactIds = []
+        const expectedDynamicRegistrationId = String(call.dynamicToolRegistrationId || '').trim() || null
+        const dynamicRegistrationValidationError = (validationArgs = args) => {
+          const metadata = getToolMetadata(name, {
+            args: validationArgs,
+            userId: s.job?.userId || null,
+          })
+          if (expectedDynamicRegistrationId) {
+            if (matchesDynamicToolRegistration(name, expectedDynamicRegistrationId, {
+              userId: s.job?.userId || null,
+            })) return null
+            return {
+              ok: false,
+              code: 'dynamic_tool_registration_changed',
+              error: `The registered implementation for ${name} changed after its schema was shown to the model. The stale call was not executed.`,
+              retryable: false,
+              refreshToolCatalog: true,
+            }
+          }
+          // A checkpoint created before registration identities existed cannot
+          // safely authorize a runtime plugin by name alone.
+          if (metadata.origin === 'plugin') {
+            return {
+              ok: false,
+              code: 'dynamic_tool_registration_unbound',
+              error: `The runtime plugin call for ${name} has no bound registration identity and was not executed.`,
+              retryable: false,
+              refreshToolCatalog: true,
+            }
+          }
+          return null
+        }
         const checkpointExecutionArgs = call.checkpointExecutionArgs ?? args
         const idempotentResume = call.checkpointStatus === 'executing'
           && supportsIdempotentResume(s.executeTool, {
@@ -143,8 +174,11 @@ export async function executeToolCalls(s) {
         const readOnlyResumeValidationError = call.checkpointStatus === 'executing'
           ? s.explicitReadOnlyValidationError(name, checkpointExecutionArgs)
           : null
+        const registrationValidationError = dynamicRegistrationValidationError(checkpointExecutionArgs)
         const configuredToolValidationError = s.disabledToolValidationError(name)
-        if (configuredToolValidationError) {
+        if (registrationValidationError) {
+          result = registrationValidationError
+        } else if (configuredToolValidationError) {
           // The schema remains visible by design, but the execution switch is
           // authoritative for fresh calls, awaiting approvals and executing
           // checkpoints alike. Run this before hooks/approval/idempotent resume.
@@ -393,7 +427,8 @@ export async function executeToolCalls(s) {
                   auditStage(gate.approvalId ? 'approved' : 'auto_allowed', {
                     auditArgs: executionArgs,
                   })
-                  const finalValidationError = s.redundantImageGenerationGuard(name)
+                  const finalValidationError = dynamicRegistrationValidationError(executionArgs)
+                    || s.redundantImageGenerationGuard(name)
                     || validateToolCall(
                     { ...call, args: executionArgs },
                     s.activeToolSpecs,
@@ -459,6 +494,7 @@ export async function executeToolCalls(s) {
                             approvalContext: s.subagentApprovalContext,
                             allowedArtifactTools: s.stepArtifactTools,
                             requiresLocalArtifactDelivery: s.requiresLocalArtifactDelivery,
+                            dynamicToolRegistrationId: expectedDynamicRegistrationId,
                           })
                         },
                       })

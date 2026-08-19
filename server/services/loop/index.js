@@ -5,6 +5,7 @@ import {
 } from '../subagentRuntime.js'
 import { registerSubagentBatchHandler } from '../subagentBatchBridge.js'
 import { dispatchHooks } from '../hooksService.js'
+import { bindRuntimePluginsToLoop } from '../../plugins/pluginRegistry.js'
 import { createLoopContext } from './context.js'
 import { createLoopEvents, LOOP_EVENT_NAMES } from './events.js'
 import { installToolHookBridge } from './executeToolCalls.js'
@@ -12,6 +13,10 @@ import { runToolsLoopCore } from './runtime.js'
 
 export async function runToolsLoop(options = {}) {
   const context = createLoopContext(options)
+  const disposeRuntimePlugins = bindRuntimePluginsToLoop(context.events, {
+    job: context.input.job,
+    step: context.input.step,
+  })
   const disposeHookBridge = installToolHookBridge({
     loopEvents: context.events,
     dispatchHooks,
@@ -23,6 +28,7 @@ export async function runToolsLoop(options = {}) {
     return await runToolsLoopCore(context)
   } finally {
     disposeHookBridge()
+    disposeRuntimePlugins()
   }
 }
 

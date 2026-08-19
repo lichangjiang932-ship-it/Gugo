@@ -1,12 +1,6 @@
-export const LOOP_EVENT_NAMES = Object.freeze([
-  'pre-step',
-  'request',
-  'request-error',
-  'pre-tool',
-  'post-tool',
-  'compaction',
-  'turn-stopping',
-])
+import { LOOP_EVENT_NAMES } from './eventNames.js'
+
+export { LOOP_EVENT_NAMES } from './eventNames.js'
 
 const LOOP_EVENT_NAME_SET = new Set(LOOP_EVENT_NAMES)
 

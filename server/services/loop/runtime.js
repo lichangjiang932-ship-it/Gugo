@@ -1,6 +1,11 @@
 import path from 'node:path'
 import { isLoopPauseResult } from '../../utils/agenticTools.js'
-import { getToolMetadata } from '../toolRegistry.js'
+import {
+  filterCurrentDynamicToolSpecs,
+  getToolMetadata,
+  matchesDynamicToolRegistration,
+  snapshotDynamicToolSpecRegistrations,
+} from '../toolRegistry.js'
 import { createToolAbortScope } from '../../utils/toolCancellation.js'
 import { attachJobBudget, getJobBudget, createJobBudget, runWithModelBudget } from '../../utils/jobBudget.js'
 import { formatDeniedToolResult, requestApproval, resumePersistedApproval, revalidateToolPermission } from '../approvalGate.js'
@@ -200,6 +205,7 @@ const runtimeDependencies = {
   executeToolWithRetry,
   extractMutationTargets,
   extractTextToolCalls,
+  filterCurrentDynamicToolSpecs,
   findAdjacentDeliveredArtifacts,
   findContinuableArtifactTargets,
   findExplicitlyReferencedDeliveredArtifacts,
@@ -208,6 +214,7 @@ const runtimeDependencies = {
   getJobBudget,
   getProjectDirectory,
   getToolMetadata,
+  matchesDynamicToolRegistration,
   hasCommandExecutionTool,
   hasEffectiveReadOnlyBoundary,
   hasMutationExecutionIntent,
@@ -276,6 +283,7 @@ const runtimeDependencies = {
   sanitizeIncompleteTerminalText,
   scopeTextToolCallIds,
   selectJobToolSpecs,
+  snapshotDynamicToolSpecRegistrations,
   serializeExecutionConvergence,
   serializeFailureRecovery,
   serializeToolProgress,

@@ -2,7 +2,11 @@ import { listUserToolSpecs } from '../mcp/mcpManager.js'
 import { listRegisteredBrowserToolSpecs } from './browserTools.js'
 import { CONNECTOR_TOOL_NAMES } from './connectorTools.js'
 import { listEnabledIntegrationToolNames } from './integrationsStore.js'
-import { getBuiltinSpec } from './toolRegistry.js'
+import {
+  getBuiltinSpec,
+  inheritDynamicToolSpecRegistration,
+  listAllSpecs,
+} from './toolRegistry.js'
 
 function normalizeNames(values, limit = 256) {
   return [...new Set((Array.isArray(values) ? values : []).map(String).map((name) => name.trim()).filter(Boolean))]
@@ -19,7 +23,7 @@ function canonicalizeJson(value) {
 }
 
 function canonicalizeToolSpec(spec) {
-  return canonicalizeJson(spec)
+  return inheritDynamicToolSpecRegistration(canonicalizeJson(spec), spec)
 }
 
 const LOCAL_TASK_TOOL_NAMES = new Set([
@@ -317,9 +321,23 @@ export async function resolveTurnToolSpecs({
   } catch {
     discoveryIssues.push({ source: 'browser', reason: 'discovery_failed' })
   }
+  let runtimeSpecs = []
+  try {
+    // listUserToolSpecs above connects any enabled MCP servers first. Read the
+    // canonical registry afterwards so every reversible runtime contribution
+    // (including global and user-scoped plugin tools) reaches the real turn.
+    // Builtins remain caller-owned through baseSpecs; only dynamic entries are
+    // merged here so narrow catalog consumers do not unexpectedly expand.
+    runtimeSpecs = listAllSpecs({ userId })
+      .filter((entry) => entry?.origin === 'plugin')
+      .map((entry) => entry?.tool)
+      .filter(Boolean)
+  } catch {
+    discoveryIssues.push({ source: 'runtime_registry', reason: 'discovery_failed' })
+  }
   const merged = new Map()
   const deliveryControlSpec = getBuiltinSpec('set_deliverables')
-  for (const spec of [...baseSpecs, deliveryControlSpec, ...mcpSpecs, ...browserSpecs]) {
+  for (const spec of [...baseSpecs, deliveryControlSpec, ...mcpSpecs, ...browserSpecs, ...runtimeSpecs]) {
     const name = String(spec?.function?.name || '')
     if (name) merged.set(name, spec)
   }

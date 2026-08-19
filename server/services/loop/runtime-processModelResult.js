@@ -317,6 +317,7 @@ export async function processModelResult(s) {
           toolSpecs: s.activeToolSpecs,
         }).map(s.normalizeArtifactReplacementCall).map((call) => ({
           ...call,
+          dynamicToolRegistrationId: i.dynamicToolRegistrations?.[call.name] || null,
           modelOutputTruncated: i.modelOutputTruncated,
           idempotencyKey: buildJobToolIdempotencyKey({
             jobId: s.job?.id,

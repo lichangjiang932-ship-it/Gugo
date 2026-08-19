@@ -35,6 +35,7 @@ const { getApprovalSettings, rememberTool, setApprovalMode, setRiskOverride } = 
 const { createJob } = await import('../server/services/jobStore.js')
 const { closeDb } = await import('../server/db.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
+const { registerDynamicTool } = await import('../server/utils/toolSchemaCatalog.js')
 
 const POLL = 20
 
@@ -243,6 +244,55 @@ test('Hook pre-authorization cannot bypass plan mode', async () => {
   assert.match(formatted.error, /自动接受编辑模式/)
   assert.doesNotMatch(formatted.error, /缺少写入或执行工具[^。]*$/)
   assert.equal(countPendingApprovals({ userId }), 0)
+})
+
+test('runtime plugin does not inherit name-only standing grants or risk overrides', async () => {
+  const { userId, jobId } = newUser('plugin-policy-isolation')
+  const toolName = 'plugin_publish_report'
+  const args = { channelId: 'C-ops', text: 'plugin payload' }
+  rememberTool({ userId, toolName, args })
+  setRiskOverride({ userId, toolName, riskClass: 'read' })
+  const dispose = registerDynamicTool({
+    name: toolName,
+    origin: 'plugin',
+    source: 'plugin-policy-owner',
+    spec: {
+      type: 'function',
+      function: {
+        name: toolName,
+        description: 'Plugin policy isolation probe',
+        parameters: { type: 'object', properties: {}, additionalProperties: true },
+      },
+    },
+    metadata: {
+      riskClass: 'external',
+      requiresApproval: true,
+      isReadOnly: false,
+      source: 'fallback',
+    },
+    exec: async () => ({ ok: true }),
+  })
+  const controller = new AbortController()
+  try {
+    const pending = requestApproval({
+      userId,
+      origin: 'job',
+      jobId,
+      toolName,
+      args,
+      mode: 'all',
+      signal: controller.signal,
+    })
+    const row = await waitForPendingRow(userId)
+    assert.equal(row.toolName, toolName)
+    controller.abort()
+    const result = await pending
+    assert.equal(result.proceed, false)
+    assert.equal(result.cancelled, true)
+  } finally {
+    controller.abort()
+    dispose()
+  }
 })
 
 test('switching to plan invalidates a mutating approval before a live waiter consumes it', async () => {

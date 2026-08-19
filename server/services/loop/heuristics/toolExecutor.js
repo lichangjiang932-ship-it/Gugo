@@ -63,6 +63,9 @@ import {
   normalizeToolError,
 } from '../../../utils/toolCallHarness.js'
 import {
+  getDynamicTool,
+} from '../../../utils/toolSchemaCatalog.js'
+import {
   publishTurnActivity,
 } from '../../turnActivityBus.js'
 import {
@@ -110,6 +113,7 @@ export async function executeServerTool({
   requiresLocalArtifactDelivery = false,
   toolCallId,
   idempotencyKey,
+  dynamicToolRegistrationId = null,
 }) {
   const publishLiveOutput = (delta) => {
     if (job?.origin !== 'chat' || !job?.sessionId || !job?.id) return
@@ -452,6 +456,42 @@ export async function executeServerTool({
     } catch (err) {
       if (signal?.aborted || err?.name === 'AbortError') throw err
       return normalizeToolError(err, { fallbackCode: 'mcp_tool_failed' })
+    }
+  }
+  const dynamicTool = getDynamicTool(name, { userId: job?.userId || null })
+  if (dynamicToolRegistrationId
+    && dynamicTool?.registrationId !== dynamicToolRegistrationId) {
+    return {
+      ok: false,
+      code: 'dynamic_tool_registration_changed',
+      error: `The registered implementation for ${name} changed before execution. The stale call was not executed.`,
+      retryable: false,
+      refreshToolCatalog: true,
+    }
+  }
+  if (typeof dynamicTool?.exec === 'function') {
+    try {
+      const result = await dynamicTool.exec(args || {}, {
+        name,
+        userId: job?.userId || null,
+        job,
+        step,
+        signal,
+        budget,
+        skillId,
+        approvalContext,
+        toolCallId,
+        idempotencyKey,
+        origin: dynamicTool.origin,
+        source: dynamicTool.source,
+      })
+      if (result && typeof result === 'object' && !Array.isArray(result)) {
+        return Object.hasOwn(result, 'ok') ? result : { ok: true, ...result }
+      }
+      return { ok: true, result }
+    } catch (err) {
+      if (signal?.aborted || err?.name === 'AbortError') throw err
+      return normalizeToolError(err, { fallbackCode: 'plugin_tool_failed' })
     }
   }
   return { ok: false, error: `unknown tool: ${name}` }

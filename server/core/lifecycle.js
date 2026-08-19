@@ -17,7 +17,7 @@ import { logger } from '../utils/logger.js'
 import { closeCronScheduler } from '../services/cronScheduler.js'
 import { shutdownAll as shutdownMcpAll } from '../mcp/mcpManager.js'
 import { seedSystemSkills } from '../services/seedSystemSkills.js'
-import { initPlugins } from '../plugins/pluginRegistry.js'
+import { initPlugins, shutdownRuntimePlugins } from '../plugins/pluginRegistry.js'
 import { getEnabledIntegrationCredentials, listEnabledIntegrationCredentials } from '../services/integrationsStore.js'
 import { setVisionAssistResolver } from '../adapters/visionAssist.js'
 import { socialBridgeManager } from '../services/socialBridgeManager.js'
@@ -95,10 +95,11 @@ export function bootstrap({ silent = process.env.NODE_ENV === 'production' } = {
 /**
  * 优雅关闭。供 SIGINT / SIGTERM 信号处理器调用。
  *   1. 关闭 HTTP server（停止接受新请求）
- *   2. 关闭 JobRuntime（等当前 step 跑完）
- *   3. 关闭 MCP（关 stdio / sse transport）
- *   4. 关闭 DB（flush WAL）
- *   5. 超时强退
+ *   2. 停止 cron / turn recovery，并排空 JobRuntime 当前 step
+ *   3. 卸载 runtime plugins（此时不会再有 Job 回调进入插件）
+ *   4. 关闭 social bridge / browser / MCP transport
+ *   5. 关闭 DB（flush WAL）
+ *   6. 超时强退
  */
 export function gracefulShutdown(server, { silent = process.env.NODE_ENV === 'production', exit = true } = {}) {
   if (!silent) logger.info('\n[lifecycle] shutdown signal received')
@@ -114,17 +115,29 @@ export function gracefulShutdown(server, { silent = process.env.NODE_ENV === 'pr
       resolve(code)
       if (exit) process.exit(code)
     }
+    let runtimeClosePromise = null
     const closeRuntime = () => {
-      if (!silent) logger.info('[lifecycle] http server closed')
-      try { closeCronScheduler() } catch { /* ignore */ }
-      try { closeTurnRecoveryRuntime() } catch { /* ignore */ }
-      try { closeJobRuntime() } catch { /* ignore */ }
-      try { socialBridgeManager.stopAll() } catch { /* ignore */ }
-      try { shutdownBrowsers() } catch { /* ignore */ }
-      try { shutdownMcpAll() } catch { /* ignore */ }
-      try { closeDb() } catch { /* ignore */ }
-      if (!silent) logger.info('[lifecycle] db closed')
-      finish(0)
+      if (runtimeClosePromise) return runtimeClosePromise
+      runtimeClosePromise = (async () => {
+        let exitCode = 0
+        if (!silent) logger.info('[lifecycle] http server closed')
+        try { closeCronScheduler() } catch { /* ignore */ }
+        try { closeTurnRecoveryRuntime() } catch { /* ignore */ }
+        try { await closeJobRuntime() } catch { /* ignore */ }
+        try {
+          await shutdownRuntimePlugins()
+        } catch (error) {
+          exitCode = 1
+          console.error('[lifecycle] runtime plugin shutdown failed:', error?.message || error)
+        }
+        try { await socialBridgeManager.stopAll() } catch { /* ignore */ }
+        try { shutdownBrowsers() } catch { /* ignore */ }
+        try { shutdownMcpAll() } catch { /* ignore */ }
+        try { closeDb() } catch { /* ignore */ }
+        if (!silent) logger.info('[lifecycle] db closed')
+        finish(exitCode)
+      })()
+      return runtimeClosePromise
     }
 
     timeoutId = setTimeout(() => {
@@ -135,10 +148,13 @@ export function gracefulShutdown(server, { silent = process.env.NODE_ENV === 'pr
     timeoutId.unref?.()
 
     try {
-      if (server && typeof server.close === 'function') server.close(closeRuntime)
-      else closeRuntime()
+      if (server && typeof server.close === 'function') {
+        server.close(() => { void closeRuntime() })
+      } else {
+        void closeRuntime()
+      }
     } catch {
-      closeRuntime()
+      void closeRuntime()
     }
   })
 }

@@ -11,6 +11,7 @@ import { runToolLoop } from './loop/index.js'
 import { selectToolSpecs, SERVER_TOOL_SPECS } from './toolLoopRuntime.js'
 import { listUserToolSpecs } from '../mcp/mcpManager.js'
 import { listRegisteredBrowserToolSpecs } from './browserTools.js'
+import { listAllSpecs } from './toolRegistry.js'
 import { allowedArtifactTools, isExplicitCodeSnippetRequest } from './artifactIntent.js'
 import { ensureSafetySystemMessages } from './promptCompiler.js'
 import { injectJobPromptContext, resolveJobSkillContext } from './jobPromptContext.js'
@@ -70,8 +71,9 @@ function newId(prefix) {
   return `${prefix}-${crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
 }
 
-export function selectPlanningToolSpecs(prompt = '') {
-  return selectToolSpecs({ prompt }).filter((spec) => PLANNING_READ_ONLY_TOOLS.has(spec?.function?.name))
+export function selectPlanningToolSpecs(prompt = '', { userId = null } = {}) {
+  return selectToolSpecs({ prompt, specs: SERVER_TOOL_SPECS, userId })
+    .filter((spec) => PLANNING_READ_ONLY_TOOLS.has(spec?.function?.name))
 }
 
 /**
@@ -102,7 +104,7 @@ export async function runPlanningExploration({
   const normalizedPrompt = String(prompt || '').trim()
   const selectedModel = String(modelName || '').trim().slice(0, 512) || undefined
   const swarmId = newId('planning-swarm')
-  const toolSpecs = selectPlanningToolSpecs(normalizedPrompt)
+  const toolSpecs = selectPlanningToolSpecs(normalizedPrompt, { userId })
   const contextWindow = getModelContextWindow({ userId, modelName: selectedModel })
   const baseMessages = Array.isArray(messages) ? messages : []
   const settled = await Promise.allSettled(PLANNING_EXPLORER_ROLES.map(async (role) => {
@@ -270,20 +272,23 @@ export function createDefaultExecuteStep({
     //   外加一句「不要把内容写成纯文本回答」,等于在推模型把中期汇报做成 PPT。
     //   现在:用户没要文件,就一个字都不提文件工具;要了哪种,才注入哪种的规则。
     const artifactTools = allowedArtifactTools(job.prompt, { skillId })
-    const staticJobToolSpecs = selectToolSpecs({
-      prompt: job.prompt,
-      skillId,
-      specs: SERVER_TOOL_SPECS,
-    })
     const { specs: mcpToolSpecs } = enableServerTools
       ? await listUserToolSpecs(job.userId)
       : { specs: [] }
     const browserToolSpecs = enableServerTools ? listRegisteredBrowserToolSpecs() : []
-    const jobToolSpecs = [...new Map(
-      [...staticJobToolSpecs, ...mcpToolSpecs, ...browserToolSpecs]
+    const runtimeToolSpecs = enableServerTools
+      ? listAllSpecs({ userId: job.userId }).filter((entry) => entry?.origin === 'plugin').map((entry) => entry?.tool) : []
+    const visibleJobToolSpecs = [...new Map(
+      [...SERVER_TOOL_SPECS, ...mcpToolSpecs, ...browserToolSpecs, ...runtimeToolSpecs]
         .filter((spec) => spec?.function?.name)
         .map((spec) => [spec.function.name, spec]),
     ).values()]
+    const jobToolSpecs = selectToolSpecs({
+      prompt: job.prompt,
+      skillId,
+      specs: visibleJobToolSpecs,
+      userId: job.userId,
+    })
     let outputDirectoryContext = {}
     try {
       outputDirectoryContext = {
@@ -450,6 +455,9 @@ export class JobRuntime {
     this.listeners = new Map()
     this.activeControllers = new Map()
     this.activeJobIds = new Set()
+    this.activeTicks = new Set()
+    this.shutdownRequested = false
+    this.shutdownPromise = null
     this.scheduler = createJobRuntimeScheduler({
       tickMs,
       maxConcurrency,
@@ -551,11 +559,19 @@ export class JobRuntime {
   }
 
   start() {
-    this.scheduler.start()
+    if (this.shutdownRequested) return false
+    return this.scheduler.start()
   }
 
   stop() {
     this.scheduler.stop()
+  }
+
+  shutdown() {
+    if (this.shutdownPromise) return this.shutdownPromise
+    this.shutdownRequested = true
+    this.shutdownPromise = this.scheduler.shutdown().then(() => Promise.allSettled([...this.activeTicks]))
+    return this.shutdownPromise
   }
 
   async createJob(prompt, { userId, requirePlanApproval = false, modelName } = {}) {
@@ -862,7 +878,15 @@ export class JobRuntime {
     return this.getJob(jobId, { userId })
   }
 
-  async runOneTick() {
+  runOneTick() {
+    if (this.shutdownRequested) return Promise.resolve(false)
+    let tick
+    tick = this._runOneTick().finally(() => this.activeTicks.delete(tick))
+    this.activeTicks.add(tick)
+    return tick
+  }
+
+  async _runOneTick() {
     for (const wake of claimDueJobWakes()) {
       const sleepingJob = getJobRow(wake.jobId, { userId: wake.userId })
       if (!sleepingJob || sleepingJob.status !== 'waiting') continue
@@ -1331,9 +1355,11 @@ export class JobRuntime {
 }
 
 let singletonRuntime = null
+let singletonClosePromise = null
 
 export function getJobRuntime() {
   if (!singletonRuntime) {
+    singletonClosePromise = null
     singletonRuntime = new JobRuntime()
     singletonRuntime.start()
   }
@@ -1348,8 +1374,11 @@ export function setJobRuntimeForTesting(runtime) {
 }
 
 export function closeJobRuntime() {
-  singletonRuntime?.stop()
+  if (!singletonRuntime) return singletonClosePromise || Promise.resolve()
+  const runtime = singletonRuntime
   singletonRuntime = null
+  singletonClosePromise = runtime.shutdown()
+  return singletonClosePromise
 }
 
 /**

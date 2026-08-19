@@ -1,6 +1,6 @@
 export async function runModelRequest(s) {
   const i = s.iteration
-  const { DIRECTORY_REVIEW_GUARD_MARKER, extractTextToolCalls, mergeCompactionRecovery, sourceHandoffViolation } = s.d
+  const { DIRECTORY_REVIEW_GUARD_MARKER, extractTextToolCalls, filterCurrentDynamicToolSpecs, mergeCompactionRecovery, snapshotDynamicToolSpecRegistrations, sourceHandoffViolation } = s.d
   {
           const claimed = await s.steeringController.claimFresh(s.appliedSteeringIds)
           if (claimed.messages.length > 0) {
@@ -10,6 +10,15 @@ export async function runModelRequest(s) {
         }
   i.modelResult = undefined
   i.responseTextPublished = false
+  // An active loop may outlive a runtime plugin. Never show a stale schema on
+  // a later model round after its executor was revoked or replaced.
+  s.activeToolSpecs = filterCurrentDynamicToolSpecs(s.activeToolSpecs, {
+    userId: s.job?.userId || null,
+  })
+  // Capture before the provider call starts. Runtime plugins can be replaced
+  // while the model is thinking; any returned call stays bound to the schema
+  // (and therefore implementation) that the model actually saw.
+  i.dynamicToolRegistrations = snapshotDynamicToolSpecRegistrations(s.activeToolSpecs)
   try {
           let streamedText = false
           const request = await s.callTrackedModel({

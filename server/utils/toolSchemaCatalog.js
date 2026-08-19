@@ -13,6 +13,7 @@ import { CODING_AGENT_TOOL_SPECS } from '../adapters/codingAgentTools.js'
 import { CODE_SEARCH_TOOL_SPECS } from './codeSearch.js'
 import { APPLY_PATCH_TOOL_SPECS } from './applyPatch.js'
 import { AGENTIC_TOOL_SPECS } from './agenticTools.js'
+import { randomUUID } from 'node:crypto'
 
 function specsByName(specs) {
   return Object.fromEntries((Array.isArray(specs) ? specs : [])
@@ -701,6 +702,77 @@ const CODE_MODE_TOOLS = [
 // origin: 'mcp' | 'skill' | 'subagent'
 const globalDynamicTools = new Map()
 const userDynamicTools = new Map()
+const DYNAMIC_REGISTRATION_STATE = Symbol('gugo.dynamicToolRegistrationState')
+const dynamicToolSpecRegistrationIds = new WeakMap()
+
+function newDynamicRegistrationId() {
+  return `dynamic-tool:${randomUUID()}`
+}
+
+function bindToolSpecRegistration(spec, registrationId) {
+  if (spec && typeof spec === 'object' && registrationId) {
+    dynamicToolSpecRegistrationIds.set(spec, registrationId)
+  }
+  return spec
+}
+
+/**
+ * Preserve the host-only registration identity when a schema is cloned for
+ * canonical ordering. The identity lives in a WeakMap, so it is never sent to
+ * a model/provider as an unsupported schema field.
+ */
+export function inheritDynamicToolSpecRegistration(target, source) {
+  return bindToolSpecRegistration(target, dynamicToolSpecRegistrationIds.get(source) || null)
+}
+
+export function getDynamicToolSpecRegistrationId(spec) {
+  return spec && typeof spec === 'object'
+    ? dynamicToolSpecRegistrationIds.get(spec) || null
+    : null
+}
+
+export function snapshotDynamicToolSpecRegistrations(specs = []) {
+  const snapshot = Object.create(null)
+  for (const spec of Array.isArray(specs) ? specs : []) {
+    const name = String(spec?.function?.name || '').trim()
+    const registrationId = getDynamicToolSpecRegistrationId(spec)
+    if (name && registrationId) snapshot[name] = registrationId
+  }
+  return snapshot
+}
+
+/**
+ * Remove dynamic schemas whose registration was revoked or replaced after an
+ * active loop was created. Static and legacy unbound schemas are left intact;
+ * execution still rejects an unbound runtime-plugin call at the gate.
+ */
+export function filterCurrentDynamicToolSpecs(specs = [], { userId = null } = {}) {
+  return (Array.isArray(specs) ? specs : []).filter((spec) => {
+    const registrationId = getDynamicToolSpecRegistrationId(spec)
+    if (!registrationId) return true
+    const name = String(spec?.function?.name || '').trim()
+    return Boolean(name) && matchesDynamicToolRegistration(name, registrationId, { userId })
+  })
+}
+
+function registrationState(registration) {
+  return registration?.[DYNAMIC_REGISTRATION_STATE] || null
+}
+
+function nearestActiveRegistration(registration) {
+  let current = registration
+  while (current) {
+    const state = registrationState(current)
+    if (!state || state.active) return current
+    current = state.previous
+  }
+  return null
+}
+
+function deactivateRegistration(registration) {
+  const state = registrationState(registration)
+  if (state) state.active = false
+}
 
 function normalizeUserScope(userId) {
   const normalized = String(userId || '').trim()
@@ -720,18 +792,54 @@ function getDynamicToolMap(userId, { create = false } = {}) {
 
 export function registerDynamicTool({ name, origin, source = null, spec, exec = null, metadata = null, userId = null }) {
   if (!name || !spec) throw new Error('registerDynamicTool 缺少 name/spec')
-  getDynamicToolMap(userId, { create: true }).set(name, {
+  const map = getDynamicToolMap(userId, { create: true })
+  const previous = map.get(name)
+  const registrationId = newDynamicRegistrationId()
+  // Give every registration its own outer schema identity. A caller may reuse
+  // the same schema object for a later shadow registration; sharing that object
+  // would otherwise rewrite the identity of the registration being restored.
+  const registeredSpec = bindToolSpecRegistration({
+    ...spec,
+    ...(spec?.function && typeof spec.function === 'object'
+      ? { function: { ...spec.function } }
+      : {}),
+  }, registrationId)
+  const registration = {
+    registrationId,
     origin,
     source,
-    spec,
+    spec: registeredSpec,
     exec,
     metadata: normalizeToolRiskMetadata(metadata, { origin }),
+  }
+  Object.defineProperty(registration, DYNAMIC_REGISTRATION_STATE, {
+    value: { active: true, previous },
   })
+  map.set(name, registration)
+
+  // Dynamic registration is a reversible side effect. The identity check is
+  // important when a newer registration replaces this one: disposing the old
+  // owner must not remove the newer tool. If this call shadowed an existing
+  // registration, unloading restores it exactly.
+  let disposed = false
+  return () => {
+    if (disposed) return false
+    disposed = true
+    deactivateRegistration(registration)
+    if (map.get(name) !== registration) return false
+    const restore = nearestActiveRegistration(previous)
+    if (restore) map.set(name, restore)
+    else map.delete(name)
+    const scope = normalizeUserScope(userId)
+    if (scope && map.size === 0) userDynamicTools.delete(scope)
+    return true
+  }
 }
 
 export function unregisterDynamicTool(name, { userId = null } = {}) {
   const map = getDynamicToolMap(userId)
   if (!map) return false
+  deactivateRegistration(map.get(name))
   const removed = map.delete(name)
   const scope = normalizeUserScope(userId)
   if (scope && map.size === 0) userDynamicTools.delete(scope)
@@ -747,7 +855,10 @@ export function unregisterByOrigin(origin, sourceMatch = null, { userId = null }
     if (sourceMatch && info.source !== sourceMatch) continue
     toRemove.push(name)
   }
-  toRemove.forEach((n) => map.delete(n))
+  toRemove.forEach((n) => {
+    deactivateRegistration(map.get(n))
+    map.delete(n)
+  })
   const scope = normalizeUserScope(userId)
   if (scope && map.size === 0) userDynamicTools.delete(scope)
   return toRemove.length
@@ -770,6 +881,16 @@ export function getBuiltinSpec(name) {
 export function getDynamicTool(name, { userId = null } = {}) {
   const scoped = getDynamicToolMap(userId)
   return scoped?.get(name) || globalDynamicTools.get(name) || null
+}
+
+export function getDynamicToolRegistrationId(name, { userId = null } = {}) {
+  return getDynamicTool(name, { userId })?.registrationId || null
+}
+
+export function matchesDynamicToolRegistration(name, expectedRegistrationId, { userId = null } = {}) {
+  const expected = String(expectedRegistrationId || '').trim()
+  if (!expected) return false
+  return getDynamicToolRegistrationId(name, { userId }) === expected
 }
 
 export function getToolMetadata(name, { args = {}, userId = null } = {}) {

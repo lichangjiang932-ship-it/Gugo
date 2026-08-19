@@ -6,6 +6,18 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.26] - 2026-08-19
+
+### Added
+
+- Added a reversible runtime plugin lifecycle for tools, events, and services, including dependency checks, failed-install rollback, asynchronous cancellation, and graceful shutdown.
+- Added automatic, user-scoped runtime plugin discovery to interactive turns and background jobs.
+
+### Fixed
+
+- Bound dynamic tool schemas, approvals, checkpoints, and execution to one immutable plugin registration so a same-name hot swap cannot execute the replacement plugin for an older call.
+- Prevented runtime plugins from shadowing reserved server tools, forging tenant scope, or inheriting name-only approval grants and risk overrides.
+
 ## [0.11.25] - 2026-08-19
 
 ### Changed
