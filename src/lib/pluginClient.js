@@ -18,6 +18,15 @@ export async function getPluginApi(id) {
 }
 
 /**
+ * 拉取本机 owner 可见的 runtime plugin 只读清单。
+ * 返回值只含 JSON manifest 与生命周期元数据；不会加载 plugin entry 或 renderer 代码。
+ */
+export async function listRuntimePluginInventoryApi() {
+  const resp = await fetch('/api/plugins/runtime', { headers: authHeaders() })
+  return jsonOk(resp)
+}
+
+/**
  * 将 type='skill-bundle' 的 plugin 安装为当前用户的 skill。
  * 需登录。2xx 返 { ok:true, skill }; 其他返 { ok:false, error } 抑或抛。
  */

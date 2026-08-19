@@ -50,3 +50,13 @@ tool:plugin_<normalized-plugin-id>
 ```
 
 宿主 manifest 精确声明该工具；实际 transformer 源码仍由 worker sandbox 执行，输入上限、源码上限、能力白名单、本地 owner 限制和多用户 fail-closed 策略不变。
+
+## Read-only inventory
+
+`GET /api/plugins/runtime` 为 renderer 提供版本化的只读清单。端点只接受已登录、loopback 来源且属于本地安装 owner 的请求；多用户模式 fail closed。响应中的 `schemaVersion: 1` 每项包含：
+
+- 纯 JSON `manifest`（`id/name/version/requires/contributes`）；
+- `source`、`controllable`、`active`、`runtimeState` 和 `installedAt`；
+- transformer 的持久期望状态、生成工具名及脱敏后的最近错误。
+
+清单会合并活跃的宿主 runtime plugin、磁盘 transformer 和 SQLite 中遗留的期望状态。它不序列化 setup、tool executor、event listener、service value 或 model adapter，也不会向 renderer 暴露 entry source、绝对路径或任意 JavaScript 加载能力。renderer 的 `listRuntimePluginInventoryApi()` 仅执行该 GET 请求。
