@@ -430,7 +430,7 @@ function createRouter(getEnv = getRuntimeEnv, staticDir = distDir) {
 
   // Plugin SDK (stage-2.2) — 静态只读
   if (req.url?.startsWith('/api/plugins')) {
-    return handlePluginRequest(req, res)
+    return handlePluginRequest(req, res, { env: getEnv() })
   }
 
   if (req.url?.startsWith('/api/agent-templates')) {

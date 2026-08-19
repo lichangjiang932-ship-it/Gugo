@@ -9,11 +9,18 @@
  */
 
 import fs from 'node:fs'
+import { isIP } from 'node:net'
 import { getPlugin, listPlugins } from '../plugins/pluginRegistry.js'
 import { runTransformer } from '../plugins/pluginSandbox.js'
+import { isLocalOwnerUser } from '../adapters/authAccount.js'
 import { authenticateRequest } from '../middleware.js'
 import { installPluginAsSkill } from '../services/pluginToSkill.js'
 import { listAllRuntimeSkillIds } from '../services/skillRegistry.js'
+import {
+  disableRuntimePlugin,
+  enableRuntimePlugin,
+  listRuntimePluginInventory,
+} from '../services/runtimePluginControlService.js'
 import { readJson, sendJson } from '../utils.js'
 
 const ENTRY_PREVIEW_LIMIT = 50 * 1024
@@ -64,8 +71,85 @@ function serializedInputSize(input) {
   return Buffer.byteLength(JSON.stringify(input), 'utf8')
 }
 
-export async function handlePluginRequest(req, res) {
+function isLoopbackRequest(req) {
+  const address = String(req.socket?.remoteAddress || '').trim().toLowerCase()
+  if (isIP(address) === 4) return Number(address.split('.')[0]) === 127
+  if (isIP(address) !== 6) return false
+  try {
+    const normalized = new URL(`http://[${address}]/`).hostname.slice(1, -1)
+    if (normalized === '::1') return true
+    const mapped = normalized.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/)
+    return mapped ? (Number.parseInt(mapped[1], 16) >> 8) === 127 : false
+  } catch {
+    return false
+  }
+}
+
+function authorizeRuntimeControl(req, res, env) {
+  const userId = authenticateRequest(req)
+  if (!userId) {
+    sendJson(res, 401, {
+      ok: false,
+      error: { code: 'UNAUTHORIZED', message: '请先登录' },
+    })
+    return null
+  }
+  if (!isLoopbackRequest(req) || !isLocalOwnerUser(userId, env)) {
+    sendJson(res, 403, {
+      ok: false,
+      error: {
+        code: 'LOCAL_OWNER_ONLY',
+        message: '运行时插件只能由服务宿主机的本地所有者管理',
+      },
+    })
+    return null
+  }
+  return userId
+}
+
+function runtimeControlError(res, error) {
+  const status = Number(error?.statusCode) || 500
+  return sendJson(res, status, {
+    ok: false,
+    error: {
+      code: error?.code || 'RUNTIME_PLUGIN_CONTROL_FAILED',
+      message: status >= 500 ? '运行时插件操作失败' : error?.message || '运行时插件操作失败',
+    },
+  })
+}
+
+export async function handlePluginRequest(req, res, { env = process.env } = {}) {
   const url = new URL(req.url, 'http://localhost')
+
+  const runtimeAction = url.pathname.match(
+    /^\/api\/plugins\/runtime\/([a-z0-9][a-z0-9-]*)\/(enable|disable)$/i,
+  )
+  if (url.pathname === '/api/plugins/runtime' || runtimeAction) {
+    if (!authorizeRuntimeControl(req, res, env)) return
+    if (url.pathname === '/api/plugins/runtime') {
+      if (req.method !== 'GET') {
+        return sendJson(res, 405, {
+          ok: false,
+          error: { code: 'METHOD_NOT_ALLOWED', message: '不支持的请求' },
+        })
+      }
+      return sendJson(res, 200, { ok: true, plugins: listRuntimePluginInventory() })
+    }
+    if (req.method !== 'POST') {
+      return sendJson(res, 405, {
+        ok: false,
+        error: { code: 'METHOD_NOT_ALLOWED', message: '不支持的请求' },
+      })
+    }
+    try {
+      const plugin = runtimeAction[2].toLowerCase() === 'enable'
+        ? await enableRuntimePlugin(runtimeAction[1])
+        : await disableRuntimePlugin(runtimeAction[1])
+      return sendJson(res, 200, { ok: true, plugin })
+    } catch (error) {
+      return runtimeControlError(res, error)
+    }
+  }
 
   // POST /api/plugins/:id/run-sandbox — 需登录，运行 transformer plugin 的受限入口
   const sandboxMatch = url.pathname.match(/^\/api\/plugins\/([a-z0-9][a-z0-9-]*)\/run-sandbox$/i)
