@@ -13,6 +13,7 @@ test('graceful shutdown waits for runtime plugin disposal before resolving', asy
     id: 'shutdown-plugin',
     name: 'Shutdown Plugin',
     version: '1.0.0',
+    contributes: ['tool:shutdown_probe'],
   }, (ctx) => {
     ctx.tools.register({
       name: 'shutdown_probe',

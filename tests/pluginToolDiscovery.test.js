@@ -29,7 +29,15 @@ for (const [id, email] of [[OWNER, 'owner@example.com'], [OTHER, 'other@example.
 }
 
 function manifest(id) {
-  return { id, name: id, version: '1.0.0' }
+  return {
+    id,
+    name: id,
+    version: '1.0.0',
+    contributes: [
+      'tool:plugin_global_discovery',
+      'tool:plugin_scoped_discovery',
+    ],
+  }
 }
 
 function toolDefinition(name, { userId = null } = {}) {

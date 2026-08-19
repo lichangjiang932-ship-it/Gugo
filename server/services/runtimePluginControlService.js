@@ -127,7 +127,7 @@ async function activateTransformer(plugin) {
     id: plugin.id,
     name: plugin.name,
     version: plugin.version,
-    contributes: [toolName],
+    contributes: [`tool:${toolName}`],
   }, (context) => context.tools.register({
     name: toolName,
     spec: transformerToolSpec(plugin, toolName),

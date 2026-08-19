@@ -32,11 +32,37 @@ const TOOL_SPEC = {
   },
 }
 
+const TEST_CONTRIBUTIONS = Object.freeze([
+  'tool:plugin_echo',
+  'tool:plugin_failed',
+  'tool:plugin_restore',
+  'tool:plugin_mutable_probe',
+  'tool:plugin_cyclic_probe',
+  'tool:plugin_registration_shadow_race',
+  'tool:plugin_registration_restore_race',
+  'tool:reflect',
+  'tool:connected_app_list',
+  'tool:mcp__example__read',
+  'tool:browser_plugin_probe',
+  'event:request',
+  'event:pre-step',
+  'service:echo',
+  'service:base-service',
+  'service:immutable-base-service',
+  'service:shutdown-installing-service',
+  'service:async-base-service',
+  'service:cleanup-base-service',
+  'service:rollback-base-service',
+  'service:loop-marker',
+  'service:atomic-service',
+])
+
 function manifest(id, overrides = {}) {
   return {
     id,
     name: id,
     version: '1.0.0',
+    contributes: TEST_CONTRIBUTIONS,
     ...overrides,
   }
 }
@@ -123,6 +149,51 @@ test('setup failure rolls back active event and tool side effects before rejecti
   await events.waterfall('pre-step', {}, {})
   assert.deepEqual(observed, ['rolled-back'])
   unbind()
+})
+
+test('undeclared runtime contributions fail closed before producing side effects', async () => {
+  const cases = [
+    {
+      id: 'undeclared-tool-plugin',
+      declaration: 'tool:plugin_echo',
+      setup: (ctx) => ctx.tools.register({
+        name: 'plugin_echo',
+        spec: TOOL_SPEC,
+        exec: async () => ({ ok: true }),
+      }),
+    },
+    {
+      id: 'undeclared-event-plugin',
+      declaration: 'event:request',
+      setup: (ctx) => ctx.events.on('request', (request) => request),
+    },
+    {
+      id: 'undeclared-service-plugin',
+      declaration: 'service:undeclared-service',
+      setup: (ctx) => ctx.services.provide('undeclared-service', true),
+    },
+    {
+      id: 'undeclared-provider-plugin',
+      declaration: 'model-provider:undeclared-provider',
+      setup: (ctx) => ctx.models.providers.register('undeclared-provider', {}),
+    },
+  ]
+
+  for (const item of cases) {
+    const registry = createRuntimePluginRegistry()
+    await assert.rejects(
+      registry.registerPlugin(manifest(item.id, { contributes: [] }), item.setup),
+      (error) => {
+        assert.equal(error?.code, 'PLUGIN_CONTRIBUTION_UNDECLARED')
+        assert.equal(error?.retryable, false)
+        assert.match(error?.message || '', new RegExp(item.declaration))
+        return true
+      },
+    )
+    assert.equal(registry.getPlugin(item.id), null)
+    assert.deepEqual(registry.listPlugins(), [])
+  }
+  assert.equal(getDynamicTool('plugin_echo'), null)
 })
 
 test('dependency guard prevents unloading a service required by an active plugin', async () => {
