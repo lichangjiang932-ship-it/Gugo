@@ -324,6 +324,12 @@ const DEV_PORT = Number(RUNTIME_ENV.VITE_DEV_PORT || RUNTIME_ENV.SERVER_PORT || 
 export default defineConfig({
   plugins: [localAuthExposureGuardPlugin(), turnRealtimePlugin(), react(), authAccountPlugin(), modelProxyPlugin(), toolProxyPlugin(), fallbackApiPlugin()],
   base: PUBLIC_BASE_PATH,
+  // Office previews load these packages on demand. Pre-bundle them during
+  // startup so the first DOCX/XLSX preview cannot invalidate an in-flight
+  // browser session with Vite's `Outdated Optimize Dep` response.
+  optimizeDeps: {
+    include: ['jszip', '@e965/xlsx'],
+  },
   server: {
     host: DEV_HOST,
     port: DEV_PORT,
