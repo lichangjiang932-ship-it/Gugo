@@ -14,8 +14,44 @@ import {
   retryJob,
   retryStep,
   subscribeToJobEvents,
+  withDownloadToken,
 } from '../src/lib/jobClient.js'
 import { setAuthToken } from '../src/lib/accountClient.js'
+
+test('download tokens are limited to same-origin API URLs', () => {
+  const previousWindow = globalThis.window
+  globalThis.window = {
+    localStorage: null,
+    sessionStorage: null,
+    location: { origin: 'https://gugo.local' },
+  }
+  setAuthToken('download-session-secret')
+  try {
+    assert.equal(
+      withDownloadToken('/api/artifacts/report.pdf#page=2'),
+      '/api/artifacts/report.pdf?token=download-session-secret#page=2',
+    )
+    assert.equal(
+      withDownloadToken('https://gugo.local/api/artifacts/report.pdf?preview=1'),
+      'https://gugo.local/api/artifacts/report.pdf?preview=1&token=download-session-secret',
+    )
+    assert.equal(
+      withDownloadToken('https://attacker.example/pixel.png'),
+      'https://attacker.example/pixel.png',
+    )
+    assert.equal(withDownloadToken('//attacker.example/pixel.png'), '//attacker.example/pixel.png')
+    assert.equal(
+      withDownloadToken('//gugo.local/api/artifacts/report.pdf'),
+      '//gugo.local/api/artifacts/report.pdf',
+    )
+    assert.equal(withDownloadToken('https://gugo.local/help'), 'https://gugo.local/help')
+    assert.equal(withDownloadToken('data:image/png;base64,AAAA'), 'data:image/png;base64,AAAA')
+    assert.equal(withDownloadToken('blob:https://gugo.local/id'), 'blob:https://gugo.local/id')
+  } finally {
+    setAuthToken('')
+    globalThis.window = previousWindow
+  }
+})
 
 test('job client uses expected endpoints', async () => {
   const calls = []

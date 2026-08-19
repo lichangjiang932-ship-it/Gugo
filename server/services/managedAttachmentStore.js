@@ -517,10 +517,19 @@ export function cleanupManagedAttachments({
     WHERE token = ? AND user_id = ? AND (id IS NOT NULL OR title IS NOT NULL)
   `)
   const staleBefore = now - pendingTtlMs
+  const orphanedSessionBefore = now - orphanGraceMs
   const expiredRows = rows.filter((row) => {
     if (row.status !== 'ready') return true
     if (row.message_id == null && Number(row.updated_at) < staleBefore) return true
-    if (row.session_id && !sessionExists.get(row.session_id, row.user_id)) return true
+    // A browser can begin uploading immediately after dispatching NEW_SESSION,
+    // before session sync has persisted that token. Keep fresh rows during the
+    // same grace period used for disk orphans so concurrent uploads cannot
+    // delete one another while the new session is still being created.
+    if (
+      row.session_id
+      && Number(row.updated_at) <= orphanedSessionBefore
+      && !sessionExists.get(row.session_id, row.user_id)
+    ) return true
     try { return !fs.existsSync(rowPath(row, env)) } catch { return true }
   })
   const removedRows = deleteAttachmentRows(expiredRows, { env })
