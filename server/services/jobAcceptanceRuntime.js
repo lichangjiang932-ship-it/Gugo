@@ -77,6 +77,17 @@ export async function buildTextStepResult({ job, step, text, taskEvaluator }) {
   }
 }
 
+export function emitTaskReviewEvent({ emit, jobId, stepId, acceptance, repairAttempt = 0 }) {
+  if (!acceptance) return null
+  return emit(appendJobEvent({
+    jobId,
+    stepId,
+    type: 'task_reviewed',
+    message: `Reviewer verdict: ${acceptance.verdict}`,
+    payload: { acceptance, repairAttempts: repairAttempt, reviewer: acceptance.reviewer || null },
+  }))
+}
+
 function acceptanceSignature(acceptance) {
   return JSON.stringify({
     verdict: acceptance?.verdict || '',
@@ -201,6 +212,7 @@ export function persistRejectedStepResult({
       finishedAt: Date.now(),
     })
     cancelJobWake({ jobId: job.id, userId: job.userId })
+    emitTaskReviewEvent({ emit, jobId: job.id, stepId: nextStep.id, acceptance: result.acceptance, repairAttempt })
     emit(appendJobEvent({
       jobId: job.id,
       stepId: nextStep.id,
