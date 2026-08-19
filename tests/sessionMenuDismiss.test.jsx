@@ -95,7 +95,7 @@ test('session menu closes on an outside pointer without swallowing menu item cli
   }
 })
 
-test('session history groups concise summaries by project and uses relative time', async () => {
+test('session history keeps one compact title-only list without project groups or metadata', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
@@ -112,9 +112,9 @@ test('session history groups concise summaries by project and uses relative time
     const sessionButtons = rootElement.querySelectorAll('[data-session-open]')
 
     assert.equal(historyToggle.textContent.trim(), 'nav.history')
-    assert.match(sessionButtons[0].textContent, /Session oneGugo/)
-    assert.match(sessionButtons[1].textContent, /Session twoGugo/)
-    assert.match(sessionButtons[0].textContent, /此刻|分钟/)
+    assert.equal(sessionButtons[0].textContent.trim(), 'Session one')
+    assert.equal(sessionButtons[1].textContent.trim(), 'Session two')
+    assert.doesNotMatch(rootElement.textContent, /Gugo|此刻|分钟/)
     assert.doesNotMatch(rootElement.textContent, /nav\.groupToday|nav\.groupYesterday|nav\.groupWeek|nav\.groupEarlier/)
     assert.doesNotMatch(rootElement.textContent, /nav\.filterActive|history\.messageCount|\d{2}:\d{2}/)
   } finally {

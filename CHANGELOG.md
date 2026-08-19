@@ -6,6 +6,16 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.25] - 2026-08-19
+
+### Changed
+
+- Restored the left conversation history to a compact one-line list while preserving pinned/recent ordering, search, collapse, and session actions.
+
+### Fixed
+
+- Removed the input-history and Enter/Shift+Enter shortcut hint from the chat composer without changing keyboard navigation or send behavior.
+
 ## [0.11.24] - 2026-08-19
 
 ### Added

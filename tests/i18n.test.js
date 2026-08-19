@@ -43,10 +43,8 @@ test('QQ Mail local environment fallback is explained in all five languages', ()
   }
 })
 
-test('input history navigation copy exists in all five languages', () => {
+test('input history navigation setting copy exists in all five languages', () => {
   for (const lang of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
-    assert.match(translations[lang]?.chatComposer?.inputHistoryHint || '', /↑\/↓/)
-    assert.match(translations[lang]?.chatComposer?.inputHistoryHint || '', /Enter/)
     assert.ok(translations[lang]?.settings?.inputHistoryNavigation)
     assert.ok(translations[lang]?.settings?.inputHistoryNavigationDescription)
   }
