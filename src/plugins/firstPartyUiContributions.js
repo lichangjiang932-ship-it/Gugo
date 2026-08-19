@@ -1,13 +1,24 @@
 import { lazy } from 'react'
 import { Blocks } from 'lucide-react'
-import { listUiContributions, registerUiContributions } from './uiContributionRegistry.js'
+import { getUiPlugin, registerTrustedUiPlugin } from './uiContributionRegistry.js'
 
 const McpServersView = lazy(() => import('../pages/McpServersView.jsx'))
 const ReasonixWorkspace = lazy(() => import('../pages/ReasonixWorkspace.jsx'))
 
+const FIRST_PARTY_UI_MANIFEST = Object.freeze({
+  id: 'gugo-first-party',
+  name: 'Gugo first-party UI',
+  version: '1.0.0',
+  contributes: Object.freeze([
+    'ui:route:mcp-route',
+    'ui:route:reasonix-route',
+    'ui:account-menu:mcp-account-menu',
+  ]),
+})
+
 export function registerFirstPartyUiContributions() {
-  if (listUiContributions('route').some((entry) => entry.pluginId === 'gugo-first-party')) return null
-  return registerUiContributions('gugo-first-party', [
+  if (getUiPlugin(FIRST_PARTY_UI_MANIFEST.id)) return null
+  return registerTrustedUiPlugin(FIRST_PARTY_UI_MANIFEST, [
     {
       id: 'mcp-route',
       slot: 'route',

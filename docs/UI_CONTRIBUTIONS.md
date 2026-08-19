@@ -7,9 +7,15 @@ Gugo 的 React 壳层通过 `src/plugins/uiContributionRegistry.js` 暴露稳定
 ## 生命周期
 
 ```jsx
-import { registerUiContributions } from './uiContributionRegistry.js'
+import { registerTrustedUiPlugin } from './uiContributionRegistry.js'
 
-const dispose = registerUiContributions('example-plugin', [
+const dispose = registerTrustedUiPlugin({
+  id: 'example-plugin',
+  name: 'Example plugin',
+  version: '1.0.0',
+  requires: [],
+  contributes: ['ui:route:example-route'],
+}, [
   {
     id: 'example-route',
     slot: 'route',
@@ -23,9 +29,11 @@ const dispose = registerUiContributions('example-plugin', [
 dispose()
 ```
 
-一次 `registerUiContributions()` 是原子的：任一条目无效、ID 重复或目标冲突时，整批均不会生效。返回的 disposer 会逆向撤销该批次。`unregisterUiPlugin(pluginId)` 可撤销该插件在所有 slot 中的 contribution。
+`shared/pluginManifest.js` 是 runtime plugin 与可信 UI plugin 共用的 manifest envelope：`id`、`name`、`version`、`requires`、`contributes`。UI 声明使用 `ui:<slot>:<id>`，并必须与实际注册项精确一致；缺失依赖、声明漂移、ID/目标冲突时整批均不会生效。活跃依赖存在时，`unregisterUiPlugin(pluginId)` 会拒绝卸载被依赖插件。
 
-注册结果按 `order`、再按稳定 key 排序。宿主核心 route、settings section 和 workbench tab 是保留目标，扩展不能覆盖；不同插件也不能声明相同目标。
+`registerUiContributions()` 仍是宿主内部与测试使用的低级原子 registry API。新的构建期插件模块应使用 `registerTrustedUiPlugin()`，以免绕过 manifest 与依赖生命周期。两种 API 返回的 disposer 都是幂等的。
+
+注册结果按 `order`、再按稳定 key 排序。宿主核心 route、settings section 和 workbench tab 是保留目标，扩展不能覆盖；不同插件也不能声明相同目标。`listUiPlugins()` / `getUiPlugin()` 只返回冻结的生命周期快照。
 
 ## Slots
 
@@ -47,5 +55,5 @@ dispose()
 ## 当前限制
 
 - UI 模块仍是构建期可信代码，不支持从磁盘热加载不受信任的 React bundle。
-- 服务端 runtime plugin 与 renderer registry 已采用相同的 `pluginId + contribution + disposer` 生命周期原则，但尚未跨进程共享一份可执行 manifest。
+- 服务端 runtime plugin 与 renderer registry 已共享纯 JSON manifest envelope 和 `pluginId + contribution + disposer` 生命周期原则，但不会跨进程共享或执行 renderer 代码。
 - 若未来支持第三方 UI bundle，必须先加入签名、版本兼容、权限声明、CSP/隔离执行、审计和崩溃熔断；不能直接复用数据插件入口执行代码。

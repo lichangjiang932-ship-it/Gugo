@@ -6,6 +6,10 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Added a shared immutable plugin manifest envelope for runtime and trusted build-time UI plugins, with exact UI contribution declarations and dependency-aware unload protection.
+
 ## [0.11.31] - 2026-08-20
 
 ### Added
