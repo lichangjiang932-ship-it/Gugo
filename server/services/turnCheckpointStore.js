@@ -25,19 +25,23 @@ function mapCheckpoint(row) {
   }
 }
 
-function ownsSession({ userId, sessionId }) {
+function ownsSession(db, { userId, sessionId }) {
   if (!userId || !sessionId) return false
-  return Boolean(getDb().prepare(`
+  return Boolean(db.prepare(`
     SELECT 1 FROM sessions WHERE user_id = ? AND token = ?
   `).get(userId, sessionId))
 }
 
-export function getTurnCheckpoint({ userId, sessionId, turnId } = {}) {
-  if (!userId || !sessionId || !turnId) return null
-  return mapCheckpoint(getDb().prepare(`
+function readTurnCheckpoint(db, { userId, sessionId, turnId }) {
+  return mapCheckpoint(db.prepare(`
     SELECT * FROM turn_checkpoints
      WHERE user_id = ? AND session_id = ? AND turn_id = ?
   `).get(userId, sessionId, turnId))
+}
+
+export function getTurnCheckpoint({ userId, sessionId, turnId } = {}) {
+  if (!userId || !sessionId || !turnId) return null
+  return readTurnCheckpoint(getDb(), { userId, sessionId, turnId })
 }
 
 export function saveTurnCheckpoint({
@@ -47,7 +51,7 @@ export function saveTurnCheckpoint({
   eventSequence,
   state,
   now = Date.now(),
-} = {}) {
+} = {}, transactionDb = null) {
   const sequence = Number(eventSequence)
   if (!state || typeof state !== 'object' || Array.isArray(state)) {
     throw new Error('checkpoint state must be an object')
@@ -55,10 +59,11 @@ export function saveTurnCheckpoint({
   if (!Number.isInteger(sequence) || sequence < 0) {
     throw new Error('checkpoint event sequence must be a non-negative integer')
   }
-  if (!ownsSession({ userId, sessionId })) return null
+  const db = transactionDb || getDb()
+  if (!ownsSession(db, { userId, sessionId })) return null
   const normalized = { ...state, checkpointVersion: CHECKPOINT_VERSION }
   const timestamp = Number.isFinite(Number(now)) ? Math.max(0, Math.floor(Number(now))) : Date.now()
-  getDb().prepare(`
+  db.prepare(`
     INSERT INTO turn_checkpoints
       (user_id, session_id, turn_id, event_sequence, state_json, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -76,7 +81,7 @@ export function saveTurnCheckpoint({
     timestamp,
     timestamp,
   )
-  return getTurnCheckpoint({ userId, sessionId, turnId })
+  return readTurnCheckpoint(db, { userId, sessionId, turnId })
 }
 
 export function deleteTurnCheckpoint({ userId, sessionId, turnId } = {}) {

@@ -361,6 +361,43 @@ test('buildSessionsBlock keeps canonical history when the referenced archive is 
   assert.equal(block.sources.compactionBoundary, null)
 })
 
+test('buildSessionsBlock fails closed when a checkpoint source does not match its archive', () => {
+  clearPromptCompilerCache('sessions')
+  const archive = createCompactionArchive({
+    userId: 'u_archive_tampered_source',
+    sessionId: 's_archive_tampered_source',
+    archivedMessages: [{ role: 'user', content: 'ARCHIVED_SOURCE' }],
+    summaryText: 'TAMPERED_ARCHIVE_SUMMARY_MUST_NOT_LOAD',
+  })
+  const block = buildSessionsBlock({
+    userId: 'u_archive_tampered_source',
+    sessionId: 's_archive_tampered_source',
+    recentMessages: [
+      {
+        id: 'checkpoint-reference',
+        role: 'assistant',
+        content: 'CANONICAL_REFERENCE_MUST_SURVIVE',
+        meta: {
+          archiveId: archive.id,
+          compactCheckpointSource: {
+            v: 1,
+            messageCount: 1,
+            sha256: '0'.repeat(64),
+            toolPairingBalanced: true,
+          },
+        },
+      },
+      { id: 'current-turn:user', role: 'user', content: 'CURRENT_REQUEST_MUST_SURVIVE' },
+    ],
+  })
+
+  assert.doesNotMatch(block.text, /TAMPERED_ARCHIVE_SUMMARY_MUST_NOT_LOAD/u)
+  assert.match(block.text, /CANONICAL_REFERENCE_MUST_SURVIVE/u)
+  assert.match(block.text, /CURRENT_REQUEST_MUST_SURVIVE/u)
+  assert.equal(block.sources.archiveId, null)
+  assert.equal(block.sources.compactionBoundary, null)
+})
+
 test('buildSessionsBlock keeps canonical history when the archive belongs to another session', () => {
   clearPromptCompilerCache('sessions')
   const archive = createCompactionArchive({

@@ -305,8 +305,9 @@ test('existing artifacts used as inputs unlock only the explicitly requested out
       specs: SERVER_TOOL_SPECS,
     }))
     for (const generator of ARTIFACT_GENERATOR_NAMES) {
-      assert.equal(visible.includes(generator), generator === expectedTool, `${prompt}: ${generator}`)
+      assert.equal(visible.includes(generator), true, `${prompt}: ${generator}`)
     }
+    assert.ok(visible.includes('set_deliverables'), prompt)
   }
 
   for (const [prompt, expectedTool] of [
@@ -473,7 +474,7 @@ test('object-first attachment placement inherits the adjacent webpage revision c
     ]) {
       assert.ok(visible.includes(name), `${prompt}: ${name}`)
     }
-    assert.equal(visible.includes('generate_image'), false, prompt)
+    assert.equal(visible.includes('generate_image'), true, prompt)
   }
 
   for (const prompt of [
@@ -578,8 +579,9 @@ test('existing uploaded images route to the requested file generator instead of 
       specs: SERVER_TOOL_SPECS,
     }))
     for (const generator of ARTIFACT_GENERATOR_NAMES) {
-      assert.equal(visible.includes(generator), expected.includes(generator), `${prompt}: ${generator}`)
+      assert.equal(visible.includes(generator), true, `${prompt}: ${generator}`)
     }
+    assert.ok(visible.includes('set_deliverables'), prompt)
   }
 
   assert.deepEqual(
@@ -743,6 +745,37 @@ test('bare named artifact files remain managed deliverables', () => {
   }
 })
 
+test('local HTML patch intent stays on file tools while explicit image creation remains available', () => {
+  const patchPrompt = '修改本地文件 gallery.html，让图片旋转时保持圆形'
+  const patchDelivery = resolveArtifactDeliveryTargets(patchPrompt)
+  assert.equal(patchDelivery.intent, 'patch_intent')
+  assert.equal(patchDelivery.target, 'workspace_file')
+  assert.deepEqual(patchDelivery.managedArtifactTypes, [])
+  assert.deepEqual([...allowedArtifactTools(patchPrompt)], [])
+
+  for (const prompt of ['生成一张营销图', '生成一个 logo']) {
+    const delivery = resolveArtifactDeliveryTargets(prompt)
+    assert.equal(delivery.intent, 'create_intent', prompt)
+    assert.deepEqual(delivery.managedArtifactTypes, ['image'], prompt)
+    assert.deepEqual([...allowedArtifactTools(prompt)], ['generate_image'], prompt)
+  }
+
+  for (const prompt of [
+    '修复本地文件 gallery.html 后再生成一张营销图片',
+    '修复本地文件 gallery.html 后再生成一张图',
+  ]) {
+    const delivery = resolveArtifactDeliveryTargets(prompt)
+    assert.equal(delivery.intent, 'mixed_intent', prompt)
+    assert.equal(delivery.target, 'mixed', prompt)
+    assert.deepEqual(delivery.managedArtifactTypes, ['image'], prompt)
+    assert.deepEqual([...allowedArtifactTools(prompt)], ['generate_image'], prompt)
+  }
+
+  const negated = '不要生成图片，只修复本地文件 gallery.html 的旋转'
+  assert.equal(resolveArtifactDeliveryTargets(negated).intent, 'patch_intent')
+  assert.deepEqual([...allowedArtifactTools(negated)], [])
+})
+
 test('mixed local HTML and managed PDF expose only the PDF generator', () => {
   const prompt = '修改本地文件“index.html”，并另外生成一份 PDF'
   const delivery = resolveArtifactDeliveryTargets(prompt)
@@ -764,8 +797,9 @@ test('mixed local HTML and managed PDF expose only the PDF generator', () => {
     intentMode: 'execute',
     specs: SERVER_TOOL_SPECS,
   }))
-  assert.equal(names.includes('create_html_app'), false)
+  assert.equal(names.includes('create_html_app'), true)
   assert.equal(names.includes('create_pdf'), true)
+  assert.equal(names.includes('set_deliverables'), true)
 })
 
 test('workspace HTML targets use filesystem tools without a managed-artifact completion guard', async () => {
@@ -831,7 +865,7 @@ test('workspace HTML targets use filesystem tools without a managed-artifact com
       runModel: async ({ messages, tools }) => {
         modelCalls += 1
         const names = tools.map((tool) => tool.function.name)
-        assert.equal(names.includes('create_html_app'), false, scenario.label)
+        assert.equal(names.includes('create_html_app'), true, scenario.label)
         assert.equal(
           messages.some((message) => String(message.content || '').includes('[PERSISTED ARTIFACT DELIVERY REQUIRED]')),
           false,
@@ -1874,12 +1908,9 @@ for (const format of [
           modelCalls += 1
           const visible = nameOf(tools)
           for (const generator of ARTIFACT_GENERATOR_NAMES) {
-            assert.equal(
-              visible.includes(generator),
-              generator === format.tool,
-              `${format.tool} ${mode}: ${generator}`,
-            )
+            assert.equal(visible.includes(generator), true, `${format.tool} ${mode}: ${generator}`)
           }
+          assert.ok(visible.includes('set_deliverables'))
           if (modelCalls === 1) {
             return {
               content: '',
@@ -2333,7 +2364,7 @@ test('a terse adjacent webpage critique creates and delivers a new file without 
   assert.equal(result.text, '已直接修改并生成新的网页文件。')
 })
 
-test('chat project-check turn does not inherit artifact generators from an older Word request', async () => {
+test('chat project-check turn does not execute artifact generators from an older Word request', async () => {
   const currentPrompt = 'Run only run_project_check and report whether the project tests pass.'
   let visibleNames = []
   let modelCalls = 0
@@ -2356,6 +2387,9 @@ test('chat project-check turn does not inherit artifact generators from an older
     intentMode: 'execute',
     toolSpecs: SERVER_TOOL_SPECS,
     enableToolHooks: false,
+    // Approval semantics are covered separately. This routing test grants the
+    // one requested execution so it can assert the selected tool end to end.
+    requestToolApproval: async ({ args }) => ({ proceed: true, args }),
     runModel: async ({ tools }) => {
       modelCalls += 1
       if (modelCalls === 1) {
@@ -2379,7 +2413,7 @@ test('chat project-check turn does not inherit artifact generators from an older
 
   assert.ok(visibleNames.includes('run_project_check'))
   for (const name of ARTIFACT_GENERATOR_NAMES) {
-    assert.equal(visibleNames.includes(name), false, `${name} leaked into a project-check-only turn`)
+    assert.equal(visibleNames.includes(name), true, `${name} missing from the stable chat catalog`)
   }
   assert.deepEqual(executions, ['run_project_check'])
   assert.deepEqual(result.artifactIds, [])
@@ -2696,7 +2730,7 @@ test('an existing-image gallery request completes after the HTML artifact withou
   assert.deepEqual(result.deliveryArtifactIds, ['existing-image-gallery-html'])
   assert.equal(result.text, '图片画廊网页已生成。')
   assert.ok(visibleToolNames.every((names) => names.includes('create_html_app')))
-  assert.ok(visibleToolNames.every((names) => !names.includes('generate_image')))
+  assert.ok(visibleToolNames.every((names) => names.includes('generate_image')))
   assert.ok(modelMessages.every((message) => !message.includes('must successfully call: generate_image')))
 })
 
@@ -2775,8 +2809,9 @@ for (const scenario of [
         const visible = nameOf(tools)
         modelContexts.push(messages.map((message) => String(message.content || '')).join('\n'))
         for (const generator of ARTIFACT_GENERATOR_NAMES) {
-          assert.equal(visible.includes(generator), generator === scenario.tool, `${scenario.prompt}: ${generator}`)
+          assert.equal(visible.includes(generator), true, `${scenario.prompt}: ${generator}`)
         }
+        assert.ok(visible.includes('set_deliverables'))
         if (modelCalls === 1) {
           return {
             content: '',
@@ -3047,7 +3082,7 @@ test('webpage delivery retries natural-language fallback until a real artifact e
   assert.deepEqual(result.deliveryArtifactIds, ['guarded-html-1'])
   assert.equal(result.text, 'The webpage is ready.')
   assert.equal(deltas.join(''), 'The webpage is ready.')
-  assert.equal(visibleToolNames[0].includes('request_directory'), false)
+  assert.equal(visibleToolNames[0].includes('request_directory'), true)
 })
 
 test('webpage delivery rejects handoff prose disguised as HTML and accepts the corrected tool call', async () => {
@@ -3368,7 +3403,7 @@ test('forced artifact recovery falls back when a compatible provider rejects nam
         }
       }
       if (modelCalls === 4) {
-        assert.equal(toolChoice, undefined)
+        assert.equal(toolChoice?.function?.name, 'set_deliverables')
         return {
           content: '',
           toolCalls: [{
@@ -3388,7 +3423,7 @@ test('forced artifact recovery falls back when a compatible provider rejects nam
 
   assert.equal(modelCalls, 5)
   assert.equal(generatorExecutions, 1)
-  assert.deepEqual(observedChoices, [null, 'create_html_app', null, null, null])
+  assert.deepEqual(observedChoices, [null, 'create_html_app', null, 'set_deliverables', null])
   assert.equal(result.incomplete, undefined)
   assert.deepEqual(result.deliveryArtifactIds, [artifactId])
   assert.equal(result.text, '网页已成功生成、验证并交付。')
@@ -3440,6 +3475,7 @@ test('tool_choice compatibility fallback remains bounded across checkpoint resum
     },
   }
 
+  const restartCause = new Error('simulated restart after compatible tool_choice fallback')
   await assert.rejects(
     runToolsLoop({
       ...sharedOptions,
@@ -3452,12 +3488,17 @@ test('tool_choice compatibility fallback remains bounded across checkpoint resum
           && guards.artifactRecoveryPhase === 'force'
           && guards.forcedArtifactAttemptPending === true) {
           crashInjected = true
-          throw new Error('simulated restart after compatible tool_choice fallback')
+          throw restartCause
         }
         return true
       },
     }),
-    /simulated restart/,
+    (error) => {
+      assert.equal(error?.code, 'CHECKPOINT_FLUSH_FAILED')
+      assert.equal(error?.retryable, true)
+      assert.equal(error?.cause, restartCause)
+      return true
+    },
   )
 
   assert.equal(crashInjected, true)
@@ -3599,7 +3640,7 @@ test('artifact recovery diagnoses a failed generator before forcing it again', a
         return { content: '', toolCalls: [generatorCall('forced-generator-success', 'Recovered')] }
       }
       if (modelCalls === 7) {
-        assert.equal(forcedName, null)
+        assert.equal(forcedName, 'set_deliverables')
         return {
           content: '',
           toolCalls: [{
@@ -3630,7 +3671,7 @@ test('artifact recovery diagnoses a failed generator before forcing it again', a
     'create_html_app',
     null,
     'create_html_app',
-    null,
+    'set_deliverables',
     null,
   ])
   assert.equal(
@@ -3714,7 +3755,7 @@ test('artifact recovery resumes at a maxIters boundary and succeeds on the fourt
         return { content: '正在根据上一次工具结果诊断生成参数。', toolCalls: [] }
       }
       if (!deliverableSelected) {
-        assert.equal(forcedName, null)
+        assert.equal(forcedName, 'set_deliverables')
         deliverableSelected = true
         return {
           content: '',
@@ -3732,6 +3773,7 @@ test('artifact recovery resumes at a maxIters boundary and succeeds on the fourt
     },
   }
 
+  const restartCause = new Error('simulated process restart after forced artifact failure')
   await assert.rejects(
     runToolsLoop({
       ...sharedOptions,
@@ -3746,12 +3788,17 @@ test('artifact recovery resumes at a maxIters boundary and succeeds on the fourt
             && guards.artifactRecoveryPhase === 'diagnose'
             && guards.forcedArtifactAttemptPending === false) {
           crashInjected = true
-          throw new Error('simulated process restart after forced artifact failure')
+          throw restartCause
         }
         return true
       },
     }),
-    /simulated process restart/,
+    (error) => {
+      assert.equal(error?.code, 'CHECKPOINT_FLUSH_FAILED')
+      assert.equal(error?.retryable, true)
+      assert.equal(error?.cause, restartCause)
+      return true
+    },
   )
 
   assert.equal(crashInjected, true)
@@ -3778,7 +3825,7 @@ test('artifact recovery resumes at a maxIters boundary and succeeds on the fourt
     'create_html_app',
     null,
     'create_html_app',
-    null,
+    'set_deliverables',
     null,
   ])
   assert.equal(result.incomplete, undefined)

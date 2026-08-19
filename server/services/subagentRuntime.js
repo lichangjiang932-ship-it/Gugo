@@ -30,6 +30,13 @@ import { buildSafetyBlock, prepareInlineSkillsForPrompt } from './promptCompiler
 import { getBuiltinSpec } from './toolRegistry.js'
 import { normalizePromptContextIds, prepareOptionalPromptContext } from './optionalPromptContext.js'
 import { createPartialResultFallback } from './partialResultFallback.js'
+import {
+  approvalCacheKey,
+  createSubagentApprovalContext,
+  rememberApprovedSubagentCall,
+} from './subagentApprovalContext.js'
+
+export { createSubagentApprovalContext, rememberApprovedSubagentCall }
 
 /** 读一个正整数 env,不合法就用默认值。 */
 function envInt(name, fallback) {
@@ -59,6 +66,14 @@ const SUBAGENT_BUDGET = Object.freeze({
 })
 
 const concurrencyByUser = new Map()
+let defaultRunToolLoop = null
+
+export function configureSubagentLoopRunner(runToolLoop) {
+  if (typeof runToolLoop !== 'function') {
+    throw new TypeError('subagent loop runner must be a function')
+  }
+  defaultRunToolLoop = runToolLoop
+}
 
 // 同 jobTools:死循环护栏而非工作预算,收敛靠 jobBudget。
 // ★ 150 → 1000 并可配。子代理常被派去「把整个模块读一遍」,
@@ -157,36 +172,9 @@ async function withYieldedSlot(slotLease, signal, callback) {
   }
 }
 
-function canonicalJson(value) {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
-  if (value && typeof value === 'object') {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`
-  }
-  const encoded = JSON.stringify(value)
-  return encoded === undefined ? String(value) : encoded
-}
-
 function boundedTranscriptValue(value, maxChars = MAX_TRANSCRIPT_EVENT_CHARS) {
   const text = typeof value === 'string' ? value : JSON.stringify(value ?? null)
   return text.length <= maxChars ? text : `${text.slice(0, maxChars)}\n[transcript event truncated]`
-}
-
-export function createSubagentApprovalContext() {
-  return { approved: new Map(), pending: new Map() }
-}
-
-function approvalCacheKey(toolName, args) {
-  return `${String(toolName)}\n${canonicalJson(args || {})}`
-}
-
-export function rememberApprovedSubagentCall(context, toolName, args, gate) {
-  if (!context?.approved || !gate?.proceed || !gate.approvalId || gate.edited) return false
-  context.approved.set(approvalCacheKey(toolName, args), {
-    proceed: true,
-    args: gate.args ?? args,
-    approvalId: gate.approvalId,
-  })
-  return true
 }
 
 async function requestTreeApproval({ context, approveTool = requestApproval, ...request }) {
@@ -358,6 +346,7 @@ async function executeSubagentTool(toolName, args, {
   approvalContext = null,
   slotLease = null,
   approveTool = requestApproval,
+  runToolLoop = null,
 } = {}) {
   switch (toolName) {
     case 'web_search':
@@ -407,6 +396,7 @@ async function executeSubagentTool(toolName, args, {
           budget,
           approvalContext,
           approveTool,
+          runToolLoop,
         }))
     }
     default:
@@ -427,7 +417,7 @@ async function executeSubagentTool(toolName, args, {
  * @param {number} [options.maxIters=SUBAGENT_MAX_ITERS]
  * @returns {Promise<Object>} 保留 completed / paused / interrupted / incomplete 等终态的 loop 结果
  */
-async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS, userId = null, modelName = undefined, skillIds = [], skillDefinitions = [], sessionId = null, runId = null, depth = 0, callModel = callBackgroundModelWithTools, executeTool = executeSubagentTool, budget = null, approvalContext = null, slotLease = null, approveTool = requestApproval, onTranscriptEvent = null, loadCheckpoint = null, saveCheckpoint = null }) {
+async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_MAX_ITERS, userId = null, modelName = undefined, skillIds = [], skillDefinitions = [], sessionId = null, runId = null, depth = 0, callModel = callBackgroundModelWithTools, executeTool = executeSubagentTool, budget = null, approvalContext = null, slotLease = null, approveTool = requestApproval, runToolLoop = defaultRunToolLoop, onTranscriptEvent = null, loadCheckpoint = null, saveCheckpoint = null }) {
   const effectiveBudget = budget || createJobBudget({ ...SUBAGENT_BUDGET })
   const effectiveApprovalContext = approvalContext || createSubagentApprovalContext()
   const selectedModel = String(modelName || '').trim() || undefined
@@ -440,9 +430,9 @@ async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_
     if (typeof onTranscriptEvent !== 'function') return
     onTranscriptEvent({ ...event, at: now() })
   }
-  // jobTools 会调度 Agent 工具；这里延迟加载可避免静态循环依赖，同时让
-  // 主任务、聊天和子代理共用同一套预算、guard、审批、并发与收尾语义。
-  const { runToolLoop } = await import('./toolLoopRuntime.js')
+  if (typeof runToolLoop !== 'function') {
+    throw new TypeError('subagent tool loop requires an injected runToolLoop function')
+  }
   const loopJob = {
     id: runId || sessionId || `subagent-${randomUUID()}`,
     userId,
@@ -495,6 +485,7 @@ async function subagentToolsLoop({ messages, tools, signal, maxIters = SUBAGENT_
       approvalContext: effectiveApprovalContext,
       slotLease,
       approveTool,
+      runToolLoop,
     }),
     onModelPhase: (event) => {
       if (event.phase === 'started') {
@@ -742,6 +733,7 @@ export async function runSubagentBatch({
   callModel = undefined,
   executeTool = undefined,
   preparePromptContext,
+  runToolLoop = defaultRunToolLoop,
 } = {}) {
   if (!userId) throw new Error('userId is required')
   if (depth >= MAX_SUBAGENT_DEPTH) {
@@ -781,6 +773,7 @@ export async function runSubagentBatch({
     callModel,
     executeTool,
     preparePromptContext,
+    runToolLoop,
   })))
   const runs = settled.map((result, index) => result.status === 'fulfilled'
     ? {
@@ -846,6 +839,7 @@ export async function runSubagent({
   executeTool = executeSubagentTool,
   approveTool = requestApproval,
   preparePromptContext,
+  runToolLoop = defaultRunToolLoop,
 } = {}) {
   if (!userId) throw new Error('userId is required')
   if (!prompt || !String(prompt).trim()) throw new Error('prompt is required')
@@ -936,6 +930,7 @@ export async function runSubagent({
           callModel,
           executeTool,
           approveTool,
+          runToolLoop,
           onTranscriptEvent,
           loadCheckpoint: () => checkpointState ? { state: checkpointState } : null,
           saveCheckpoint: (state) => {

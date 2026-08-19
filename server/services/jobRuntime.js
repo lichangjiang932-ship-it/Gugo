@@ -7,9 +7,11 @@ import {
 } from './jobStore.js'
 import { createDocx } from './artifactGen.js'
 import { callBackgroundModel, callBackgroundModelWithTools, formatProxyError, getModelContextWindow } from '../adapters/modelProxy.js'
-import { runToolLoop, selectToolSpecs, SERVER_TOOL_SPECS } from './toolLoopRuntime.js'
+import { runToolLoop } from './loop/index.js'
+import { selectToolSpecs, SERVER_TOOL_SPECS } from './toolLoopRuntime.js'
 import { listUserToolSpecs } from '../mcp/mcpManager.js'
 import { listRegisteredBrowserToolSpecs } from './browserTools.js'
+import { listAllSpecs } from './toolRegistry.js'
 import { allowedArtifactTools, isExplicitCodeSnippetRequest } from './artifactIntent.js'
 import { ensureSafetySystemMessages } from './promptCompiler.js'
 import { injectJobPromptContext, resolveJobSkillContext } from './jobPromptContext.js'
@@ -20,14 +22,9 @@ import {
   buildDelayedFollowupPrompt,
 } from './jobPromptBlocks.js'
 import { createNotification } from './notificationsStore.js'
-import { releaseApprovalsForJob } from './approvalGate.js'
 import { dispatchHooks } from './hooksService.js'
 import { getLatestJobApproval } from './approvalStore.js'
 import { getApprovalMode, setApprovalMode } from './approvalSettingsStore.js'
-import {
-  deleteJobTurnCheckpoint, getJobTurnCheckpoint,
-  makeJobTurnCheckpointResumable, saveJobTurnCheckpoint,
-} from './jobTurnCheckpointStore.js'
 import { cancelJobWake, claimDueJobWakes, scheduleJobWake } from './jobWakeStore.js'
 import {
   acknowledgeJobSteering,
@@ -50,11 +47,12 @@ import {
 } from './jobWorkflow.js'
 import { createJobRuntimeScheduler } from './jobRuntimeScheduler.js'
 import { createJobExecutionLeaseCoordinator } from './jobExecutionLeaseRuntime.js'
+import { createJobRuntimeCore } from './runtimeCore.js'
 import { releaseJobBudget } from '../utils/jobBudget.js'
 import { userCancellationError } from '../utils/toolCancellation.js'
 import { resumeJobDirectoryAuthorization } from './jobDirectoryAuthorization.js'
 import { getDefaultOutputDirectory, getProjectDirectory } from './localFileAccessService.js'
-import { lostJobExecutionLease, markJobAwaitingApproval, markJobRunningAgain, notifyJobStopHook, notifyJobTerminal, recoverInterruptedJobs, runOwnedJobTransition } from './jobRuntimeLifecycle.js'
+import { lostJobExecutionLease, markJobAwaitingApproval, markJobRunningAgain, notifyJobStopHook, notifyJobTerminal, recoverInterruptedJobs } from './jobRuntimeLifecycle.js'
 export { recoverInterruptedJobs } from './jobRuntimeLifecycle.js'
 const TERMINAL_JOB_STATUSES = new Set(['completed', 'failed', 'cancelled'])
 // ★ 注意:awaiting_approval 故意不在这里。等人的 job 崩溃恢复时若被重排成 queued,
@@ -73,8 +71,9 @@ function newId(prefix) {
   return `${prefix}-${crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
 }
 
-export function selectPlanningToolSpecs(prompt = '') {
-  return selectToolSpecs({ prompt }).filter((spec) => PLANNING_READ_ONLY_TOOLS.has(spec?.function?.name))
+export function selectPlanningToolSpecs(prompt = '', { userId = null } = {}) {
+  return selectToolSpecs({ prompt, specs: SERVER_TOOL_SPECS, userId })
+    .filter((spec) => PLANNING_READ_ONLY_TOOLS.has(spec?.function?.name))
 }
 
 /**
@@ -105,7 +104,7 @@ export async function runPlanningExploration({
   const normalizedPrompt = String(prompt || '').trim()
   const selectedModel = String(modelName || '').trim().slice(0, 512) || undefined
   const swarmId = newId('planning-swarm')
-  const toolSpecs = selectPlanningToolSpecs(normalizedPrompt)
+  const toolSpecs = selectPlanningToolSpecs(normalizedPrompt, { userId })
   const contextWindow = getModelContextWindow({ userId, modelName: selectedModel })
   const baseMessages = Array.isArray(messages) ? messages : []
   const settled = await Promise.allSettled(PLANNING_EXPLORER_ROLES.map(async (role) => {
@@ -213,6 +212,7 @@ export function createDefaultExecuteStep({
   createDocxImpl = createDocx,
   enableServerTools = true,
   preparePromptContext,
+  runtimeCore = createJobRuntimeCore(),
 } = {}) {
   return async function defaultExecuteStep({
     job,
@@ -272,20 +272,23 @@ export function createDefaultExecuteStep({
     //   外加一句「不要把内容写成纯文本回答」,等于在推模型把中期汇报做成 PPT。
     //   现在:用户没要文件,就一个字都不提文件工具;要了哪种,才注入哪种的规则。
     const artifactTools = allowedArtifactTools(job.prompt, { skillId })
-    const staticJobToolSpecs = selectToolSpecs({
-      prompt: job.prompt,
-      skillId,
-      specs: SERVER_TOOL_SPECS,
-    })
     const { specs: mcpToolSpecs } = enableServerTools
       ? await listUserToolSpecs(job.userId)
       : { specs: [] }
     const browserToolSpecs = enableServerTools ? listRegisteredBrowserToolSpecs() : []
-    const jobToolSpecs = [...new Map(
-      [...staticJobToolSpecs, ...mcpToolSpecs, ...browserToolSpecs]
+    const runtimeToolSpecs = enableServerTools
+      ? listAllSpecs({ userId: job.userId }).filter((entry) => entry?.origin === 'plugin').map((entry) => entry?.tool) : []
+    const visibleJobToolSpecs = [...new Map(
+      [...SERVER_TOOL_SPECS, ...mcpToolSpecs, ...browserToolSpecs, ...runtimeToolSpecs]
         .filter((spec) => spec?.function?.name)
         .map((spec) => [spec.function.name, spec]),
     ).values()]
+    const jobToolSpecs = selectToolSpecs({
+      prompt: job.prompt,
+      skillId,
+      specs: visibleJobToolSpecs,
+      userId: job.userId,
+    })
     let outputDirectoryContext = {}
     try {
       outputDirectoryContext = {
@@ -358,16 +361,14 @@ export function createDefaultExecuteStep({
         acknowledgeSteering,
         releaseSteering,
         loadCheckpoint: checkpointEnabled
-          ? () => getJobTurnCheckpoint({ jobId: job.id, stepId: step.id, userId: job.userId })
+          ? () => runtimeCore.checkpoint.load({ jobId: job.id, stepId: step.id, userId: job.userId })
           : null,
         saveCheckpoint: checkpointEnabled
           ? (state) => {
-              const save = () => saveJobTurnCheckpoint({
-                jobId: job.id,
-                stepId: step.id,
-                userId: job.userId,
+              const save = () => runtimeCore.checkpoint.save(
+                { jobId: job.id, stepId: step.id, userId: job.userId },
                 state,
-              })
+              )
               return typeof commitCheckpoint === 'function' ? commitCheckpoint(save) : save()
             }
           : null,
@@ -383,7 +384,7 @@ export function createDefaultExecuteStep({
       // interrupted = the model failed after partial progress; the shared loop returned a safe partial result.
       // 同样算截断,但**不算 failed** —— 用户能看到已经做完的部分。
       if (result.paused && checkpointEnabled) {
-        const makeResumable = () => makeJobTurnCheckpointResumable({
+        const makeResumable = () => runtimeCore.checkpoint.makeResumable({
           jobId: job.id, stepId: step.id, userId: job.userId,
         })
         const saved = typeof commitCheckpoint === 'function' ? commitCheckpoint(makeResumable) : makeResumable()
@@ -441,18 +442,22 @@ export class JobRuntime {
       exploreModel: ({ messages }) => runPlanningExploration({ prompt, messages, userId, modelName }),
       runModel: ({ messages }) => callBackgroundModel({ messages, userId, modelName }),
     }),
-    executeStep = createDefaultExecuteStep(),
+    executeStep = null,
     tickMs = 250,
     maxConcurrency = process.env.JOB_RUNTIME_CONCURRENCY,
     executionLeases = createJobExecutionLeaseCoordinator(),
+    runtimeCore = null,
   } = {}) {
     this.planner = planner
-    this.executeStep = executeStep
+    this.runtimeCore = runtimeCore || createJobRuntimeCore({ executionLeases })
+    this.executeStep = executeStep || createDefaultExecuteStep({ runtimeCore: this.runtimeCore })
     // listeners 改成 Map<listener, userId>;userId === null 表示无过滤(给内部/测试用)。
     this.listeners = new Map()
     this.activeControllers = new Map()
     this.activeJobIds = new Set()
-    this.executionLeases = executionLeases
+    this.activeTicks = new Set()
+    this.shutdownRequested = false
+    this.shutdownPromise = null
     this.scheduler = createJobRuntimeScheduler({
       tickMs,
       maxConcurrency,
@@ -518,7 +523,7 @@ export class JobRuntime {
   recover() {
     releaseAllJobSteeringLeases()
     const jobs = listRecoverableJobs()
-    const orphanedJobs = jobs.filter((job) => !this.executionLeases.isActive(job.id))
+    const orphanedJobs = jobs.filter((job) => !this.runtimeCore.lease.isActive({ jobId: job.id }))
     const recovered = recoverInterruptedJobs(orphanedJobs)
     for (const job of recovered) {
       this.jobUserCache.set(job.id, job.userId || null)
@@ -554,11 +559,19 @@ export class JobRuntime {
   }
 
   start() {
-    this.scheduler.start()
+    if (this.shutdownRequested) return false
+    return this.scheduler.start()
   }
 
   stop() {
     this.scheduler.stop()
+  }
+
+  shutdown() {
+    if (this.shutdownPromise) return this.shutdownPromise
+    this.shutdownRequested = true
+    this.shutdownPromise = this.scheduler.shutdown().then(() => Promise.allSettled([...this.activeTicks]))
+    return this.shutdownPromise
   }
 
   async createJob(prompt, { userId, requirePlanApproval = false, modelName } = {}) {
@@ -738,12 +751,11 @@ export class JobRuntime {
         // tool results instead of either returning the old failure immediately
         // or replaying the whole step from scratch. Cancelled steps normally
         // have no checkpoint, making this a harmless no-op for that path.
-        makeJobTurnCheckpointResumable({
+        this.runtimeCore.checkpoint.makeResumable({
           jobId,
           stepId: step.id,
           userId,
-          resetBudget: true,
-        })
+        }, { resetBudget: true })
         updateJobStep(step.id, {
           status: 'queued',
           error: null,
@@ -784,7 +796,7 @@ export class JobRuntime {
       completedAt,
     })
     cancelJobWake({ jobId, userId })
-    deleteJobTurnCheckpoint({ jobId, stepId, userId })
+    this.runtimeCore.checkpoint.clear({ jobId, stepId, userId })
     const completedStep = this.getJob(jobId, { userId })?.steps.find((item) => item.id === stepId)
     const normalizedEvidence = Array.isArray(completedStep?.output?.evidence)
       ? completedStep.output.evidence
@@ -841,7 +853,10 @@ export class JobRuntime {
     // Preserve completed calls, their results, idempotency keys, and the
     // accumulated budget. Only the old terminal result must be removed before
     // the loop can continue from this checkpoint.
-    makeJobTurnCheckpointResumable({ jobId, stepId, userId, resetBudget: true })
+    this.runtimeCore.checkpoint.makeResumable(
+      { jobId, stepId, userId },
+      { resetBudget: true },
+    )
     updateJobStep(stepId, {
       status: 'queued',
       error: null,
@@ -863,7 +878,15 @@ export class JobRuntime {
     return this.getJob(jobId, { userId })
   }
 
-  async runOneTick() {
+  runOneTick() {
+    if (this.shutdownRequested) return Promise.resolve(false)
+    let tick
+    tick = this._runOneTick().finally(() => this.activeTicks.delete(tick))
+    this.activeTicks.add(tick)
+    return tick
+  }
+
+  async _runOneTick() {
     for (const wake of claimDueJobWakes()) {
       const sleepingJob = getJobRow(wake.jobId, { userId: wake.userId })
       if (!sleepingJob || sleepingJob.status !== 'waiting') continue
@@ -886,16 +909,17 @@ export class JobRuntime {
       ...runnableJobs.filter((candidate) => candidate.status === 'queued'),
       ...runnableJobs.filter((candidate) => !['cancel_requested', 'queued'].includes(candidate.status)),
     ]
-    const job = candidates.find((candidate) => this.executionLeases.claim(candidate.id))
+    const job = candidates.find((candidate) => this.runtimeCore.lease.claim({ jobId: candidate.id }))
     if (!job) return false
     const controller = new AbortController()
     this.activeJobIds.add(job.id)
     this.activeControllers.set(job.id, controller)
-    const releaseExecutionLease = this.executionLeases.hold(job.id, controller)
-    const commitOwned = (callback) => runOwnedJobTransition(this.executionLeases, job.id, callback)
-    const leaseIsOwned = () => (
-      typeof this.executionLeases.owns !== 'function' || this.executionLeases.owns(job.id)
+    const leaseScope = { jobId: job.id }
+    const releaseExecutionLease = this.runtimeCore.lease.hold(leaseScope, controller)
+    const commitOwned = (callback) => (
+      this.runtimeCore.lease.runIfOwned(leaseScope, callback)?.owned === true
     )
+    const leaseIsOwned = () => this.runtimeCore.lease.owns(leaseScope)
     try {
     const abandonedSteps = ['planning', 'running'].includes(job.status)
       ? listJobSteps(job.id).filter((step) => step.status === 'running')
@@ -1052,7 +1076,7 @@ export class JobRuntime {
           leaseId,
         }),
         commitCheckpoint: (save) => {
-          const outcome = this.executionLeases.runIfOwned(job.id, save)
+          const outcome = this.runtimeCore.lease.runIfOwned(leaseScope, save)
           return outcome?.owned ? outcome.value : null
         },
       })
@@ -1168,7 +1192,7 @@ export class JobRuntime {
         // 又要把所有 read 重做一遍,然后再次超预算。
         // 现在保留断点,retryStep 才能真的「从停下的地方继续」。
         // (用户主动取消的路径仍然删除,见下面的 cancelled 分支。)
-        releaseApprovalsForJob(job.id)
+        this.runtimeCore.approval.release({ jobId: job.id, userId: job.userId })
         notifyJobTerminal({ ...job, error: why }, { status: 'failed', body: why })
         notifyJobStopHook(job, { status: 'failed', error: why, stepId: nextStep.id })
         return true
@@ -1184,7 +1208,7 @@ export class JobRuntime {
           output: result?.output ?? null,
           finishedAt: Date.now(),
         })
-        deleteJobTurnCheckpoint({ jobId: job.id, stepId: nextStep.id, userId: job.userId })
+        this.runtimeCore.checkpoint.clear({ jobId: job.id, stepId: nextStep.id, userId: job.userId })
         cancelJobWake({ jobId: job.id, userId: job.userId })
         const updatedSteps = listJobSteps(job.id)
         updateJob(job.id, { progress: deriveJobProgress(updatedSteps) })
@@ -1252,7 +1276,7 @@ export class JobRuntime {
             progress: deriveJobProgress(listJobSteps(job.id)),
             finishedAt: Date.now(),
           })
-          deleteJobTurnCheckpoint({ jobId: job.id, stepId: nextStep.id, userId: job.userId })
+          this.runtimeCore.checkpoint.clear({ jobId: job.id, stepId: nextStep.id, userId: job.userId })
           cancelJobWake({ jobId: job.id, userId: job.userId })
           this.emit(appendJobEvent({
             jobId: job.id,
@@ -1331,9 +1355,11 @@ export class JobRuntime {
 }
 
 let singletonRuntime = null
+let singletonClosePromise = null
 
 export function getJobRuntime() {
   if (!singletonRuntime) {
+    singletonClosePromise = null
     singletonRuntime = new JobRuntime()
     singletonRuntime.start()
   }
@@ -1348,8 +1374,11 @@ export function setJobRuntimeForTesting(runtime) {
 }
 
 export function closeJobRuntime() {
-  singletonRuntime?.stop()
+  if (!singletonRuntime) return singletonClosePromise || Promise.resolve()
+  const runtime = singletonRuntime
   singletonRuntime = null
+  singletonClosePromise = runtime.shutdown()
+  return singletonClosePromise
 }
 
 /**

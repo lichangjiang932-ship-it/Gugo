@@ -697,12 +697,18 @@ export function buildOpenAICompatibleRequest({
   if (Number.isFinite(outputCap) && outputCap > 0) {
     body.max_tokens = outputCap
   }
-  // ★ 工具调用:仅当上游提供 tools 字段时才透传,避免不支持工具的模型报 400
-  //
-  // 增加能力门控:端点画像说不支持 function calling 时(比如 llama.cpp 默认、
-  // 或用户在 provider 里显式关掉),**直接不发 tools**。原来无脑下发,
-  // 不支持的小模型直接 400,整轮报废且错误信息完全看不懂。
-  if (Array.isArray(tools) && tools.length > 0 && endpoint.supportsTools) {
+  // A configured tool loop must never silently degrade into a text-only turn.
+  // Doing so makes a real catalog look missing and encourages the model to
+  // falsely claim that tools are unavailable. Fail with a structured
+  // configuration error so the caller can select a tool-compatible adapter.
+  if (Array.isArray(tools) && tools.length > 0 && endpoint.supportsTools !== true) {
+    const error = new Error('当前模型端点未启用 function calling，无法执行需要工具的任务。请启用工具调用支持或选择兼容模型。')
+    error.code = 'MODEL_TOOLS_UNSUPPORTED'
+    error.type = 'configuration_error'
+    error.retryable = false
+    throw error
+  }
+  if (Array.isArray(tools) && tools.length > 0) {
     body.tools = tools
     if (toolChoice) body.tool_choice = toolChoice
     if (endpoint.supportsParallelTools) body.parallel_tool_calls = true
@@ -1229,7 +1235,11 @@ export async function* streamOpenAICompatible({
       : null
     const compatibleStreamState = createCompatibleModelStreamState()
     let finishReason = null
-    // 思考累计字数 + 上限(0 = 不限)。见下面 REASONING_RUNAWAY 的注释。
+    // 思考累计字数 + 显式可选上限（0 = 不限）。
+    //
+    // 本地推理模型在正常工具轮里也可能先输出很长的 reasoning；字符数不是
+    // “失控”的可靠信号。未配置时必须让首 token + idle 双轨超时负责连接
+    // 健康，不能再按工作量主动截断。用户确实需要成本护栏时仍可显式设置。
     let reasoningChars = 0
     const reasoningCharLimit = (() => {
       const executionWithTools = Array.isArray(tools)
@@ -1240,11 +1250,7 @@ export async function* streamOpenAICompatible({
         : env?.MODEL_REASONING_MAX_CHARS
       const raw = Number(configured)
       if (Number.isFinite(raw) && raw >= 0) return Math.floor(raw)
-      // Execution turns should act before they spend an entire response
-      // re-deriving plans or layout arithmetic. The tool loop can recover this
-      // bounded abort with a direct-action prompt; ordinary answer turns keep
-      // the larger ceiling for genuinely long reasoning.
-      return executionWithTools ? 20_000 : 60_000
+      return 0
     })()
     let lastUsage = null
     for await (const line of readModelSseLines(reader, {

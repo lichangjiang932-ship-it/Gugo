@@ -124,6 +124,7 @@ test('generated file names follow the answer tone and open the right-pane payloa
     await act(async () => root.render(<ArtifactReferenceLinks msg={msg} preview={preview} onOpen={(artifact) => opened.push(artifact)} />))
     const link = rootElement.querySelector('a[data-testid="artifact-open-card"]')
     assert.ok(link)
+    assert.equal(link.closest('[data-artifact-surface]')?.getAttribute('data-artifact-surface'), 'delivery-links')
     assert.match(link.getAttribute('href'), /\/api\/artifacts\/file-1/)
     assert.match(link.textContent, /calculator\.html/)
     assert.doesNotMatch(link.className, /text-ember|bg-ember-soft/)

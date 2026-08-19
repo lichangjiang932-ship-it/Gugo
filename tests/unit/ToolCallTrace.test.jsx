@@ -124,7 +124,7 @@ test('ToolCallTrace never hides an older running call behind newer completed cal
   assert.match(markup, /aria-busy="true"/)
 })
 
-test('ToolCallTrace defaults the running command open and preserves the selected detail across live updates', async () => {
+test('ToolCallTrace defaults command details closed and preserves an explicit selection across live updates', async () => {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
     url: 'http://localhost/chat',
   })
@@ -153,9 +153,8 @@ test('ToolCallTrace defaults the running command open and preserves the selected
     ))
 
     let toggles = [...rootElement.querySelectorAll('[data-testid="tool-step-toggle"]')]
-    assert.deepEqual(toggles.map((toggle) => toggle.getAttribute('aria-expanded')), ['false', 'true'])
-    assert.equal(rootElement.querySelectorAll('[data-testid="tool-step-details"]').length, 1)
-    assert.match(rootElement.querySelector('[data-testid="tool-step-details"]').textContent, /starting/)
+    assert.deepEqual(toggles.map((toggle) => toggle.getAttribute('aria-expanded')), ['false', 'false'])
+    assert.equal(rootElement.querySelectorAll('[data-testid="tool-step-details"]').length, 0)
 
     await act(async () => toggles[0].dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
     toggles = [...rootElement.querySelectorAll('[data-testid="tool-step-toggle"]')]

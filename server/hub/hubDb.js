@@ -10,7 +10,11 @@
 
 import { getDb } from '../db.js'
 
-export const HUB_SCHEMA_VERSION = 1
+export const HUB_SCHEMA_VERSION = 2
+
+function hasColumn(db, table, column) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().some((entry) => entry.name === column)
+}
 
 /**
  * 幂等迁移。多次调用应当无副作用。
@@ -29,9 +33,25 @@ export function runHubMigrations(db = getDb()) {
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         last_run_at INTEGER,
+        consumed_at INTEGER,
         last_error TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_hub_jobs_status ON hub_jobs(status, created_at);
+    `)
+  }
+
+  if (current < 2) {
+    if (!hasColumn(db, 'hub_jobs', 'consumed_at')) {
+      db.exec('ALTER TABLE hub_jobs ADD COLUMN consumed_at INTEGER')
+    }
+    db.prepare(`
+      UPDATE hub_jobs
+      SET consumed_at = COALESCE(last_run_at, updated_at)
+      WHERE status <> 'pending' AND consumed_at IS NULL
+    `).run()
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_hub_jobs_consumable
+      ON hub_jobs(status, consumed_at, created_at);
     `)
   }
 
@@ -62,6 +82,7 @@ function mapJob(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     lastRunAt: row.last_run_at,
+    consumedAt: row.consumed_at ?? null,
     lastError: row.last_error,
   }
 }
@@ -93,17 +114,20 @@ export function claimNextPending(db = getDb()) {
   const tx = db.transaction(() => {
     const row = db
       .prepare(
-        `SELECT id FROM hub_jobs WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1`
+        `SELECT id FROM hub_jobs
+         WHERE status = 'pending' AND consumed_at IS NULL
+         ORDER BY created_at ASC, id ASC LIMIT 1`
       )
       .get()
     if (!row) return null
     const now = Date.now()
     const res = db
       .prepare(
-        `UPDATE hub_jobs SET status = 'running', updated_at = ?, last_run_at = ?
-         WHERE id = ? AND status = 'pending'`
+        `UPDATE hub_jobs
+         SET status = 'running', updated_at = ?, last_run_at = ?, consumed_at = ?
+         WHERE id = ? AND status = 'pending' AND consumed_at IS NULL`
       )
-      .run(now, now, row.id)
+      .run(now, now, now, row.id)
     if (res.changes !== 1) return null
     return getJob(row.id, db)
   })
@@ -113,7 +137,8 @@ export function claimNextPending(db = getDb()) {
 export function markDone(id, { lastError = null } = {}, db = getDb()) {
   const now = Date.now()
   db.prepare(
-    `UPDATE hub_jobs SET status = 'done', updated_at = ?, last_error = ? WHERE id = ?`
+    `UPDATE hub_jobs SET status = 'done', updated_at = ?, last_error = ?
+     WHERE id = ? AND status = 'running' AND consumed_at IS NOT NULL`
   ).run(now, lastError, id)
   return getJob(id, db)
 }
@@ -121,7 +146,8 @@ export function markDone(id, { lastError = null } = {}, db = getDb()) {
 export function markFailed(id, errorMessage, db = getDb()) {
   const now = Date.now()
   db.prepare(
-    `UPDATE hub_jobs SET status = 'failed', updated_at = ?, last_error = ? WHERE id = ?`
+    `UPDATE hub_jobs SET status = 'failed', updated_at = ?, last_error = ?
+     WHERE id = ? AND status = 'running' AND consumed_at IS NOT NULL`
   ).run(now, String(errorMessage || 'unknown error'), id)
   return getJob(id, db)
 }

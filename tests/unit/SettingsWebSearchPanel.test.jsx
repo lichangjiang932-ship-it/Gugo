@@ -69,6 +69,7 @@ test('web search settings edit and persist an ordered multi-API fallback list wi
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
     assert.equal(rootElement.querySelectorAll('[data-testid="web-search-connections"] > div').length, 2)
+    assert.equal(rootElement.querySelectorAll('[data-testid="web-search-connection-actions"]').length, 2)
     assert.match(rootElement.textContent, /Tavily/)
     assert.match(rootElement.textContent, /Brave Search/)
     assert.doesNotMatch(rootElement.textContent, /secret/i)
@@ -93,6 +94,59 @@ test('web search settings edit and persist an ordered multi-API fallback list wi
     assert.equal(payload.connections[0].id, 'primary')
     assert.equal(payload.connections[2].id, 'backup')
     assert.equal(payload.connections.some((item) => Object.hasOwn(item, 'apiKey')), false)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('web search settings hide single-API actions and restore them only while multiple APIs exist', async () => {
+  const originalFetch = globalThis.fetch
+  const dom = setupDom()
+  globalThis.fetch = async () => jsonResponse({
+    ok: true,
+    config: {
+      version: 2,
+      enabled: true,
+      strategy: 'fallback',
+      connections: [
+        { id: 'primary', provider: 'tavily', enabled: true, config: {}, apiKeyPresent: true },
+      ],
+    },
+  })
+
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  try {
+    await act(async () => {
+      root.render(<SettingsWebSearchPanel t={t} />)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    const panel = rootElement.querySelector('.web-search-settings')
+    assert.ok(panel)
+    assert.equal(panel.classList.contains('animate-float-up'), false)
+    assert.equal(rootElement.querySelectorAll('[data-testid="web-search-connection-actions"]').length, 0)
+
+    const templateGrid = rootElement.querySelector('[data-testid="web-search-template-grid"]')
+    assert.ok(templateGrid)
+    assert.ok(templateGrid.classList.contains('grid-cols-2'))
+    assert.ok(templateGrid.classList.contains('lg:grid-cols-3'))
+    assert.equal(templateGrid.querySelectorAll('button[data-provider]').length, 6)
+    for (const button of templateGrid.querySelectorAll('button[data-provider]')) {
+      assert.equal(button.querySelector('.truncate'), null)
+    }
+
+    const add = [...rootElement.querySelectorAll('button')].find((button) => button.textContent.includes('webSearch.addApi'))
+    await act(async () => add.click())
+    assert.equal(rootElement.querySelectorAll('[data-testid="web-search-connections"] > div').length, 2)
+    assert.equal(rootElement.querySelectorAll('[data-testid="web-search-connection-actions"]').length, 2)
+
+    const removeButtons = rootElement.querySelectorAll('button[aria-label="webSearch.removeApi"]')
+    await act(async () => removeButtons[1].click())
+    assert.equal(rootElement.querySelectorAll('[data-testid="web-search-connections"] > div').length, 1)
+    assert.equal(rootElement.querySelectorAll('[data-testid="web-search-connection-actions"]').length, 0)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

@@ -1,10 +1,12 @@
 import { listUserToolSpecs } from '../mcp/mcpManager.js'
-import { isToolPermittedForUser } from '../db.js'
 import { listRegisteredBrowserToolSpecs } from './browserTools.js'
-import { getApprovalMode } from './approvalSettingsStore.js'
 import { CONNECTOR_TOOL_NAMES } from './connectorTools.js'
 import { listEnabledIntegrationToolNames } from './integrationsStore.js'
-import { isWebSearchReady } from './webSearchService.js'
+import {
+  getBuiltinSpec,
+  inheritDynamicToolSpecRegistration,
+  listAllSpecs,
+} from './toolRegistry.js'
 
 function normalizeNames(values, limit = 256) {
   return [...new Set((Array.isArray(values) ? values : []).map(String).map((name) => name.trim()).filter(Boolean))]
@@ -21,11 +23,11 @@ function canonicalizeJson(value) {
 }
 
 function canonicalizeToolSpec(spec) {
-  return canonicalizeJson(spec)
+  return inheritDynamicToolSpecRegistration(canonicalizeJson(spec), spec)
 }
 
 const LOCAL_TASK_TOOL_NAMES = new Set([
-  'list_directory', 'read_file', 'read_artifact_source', 'write_file', 'edit_file', 'apply_patch', 'patch_file',
+  'list_directory', 'read_file', 'read_artifact_source', 'write_file', 'edit_file', 'multi_edit', 'apply_patch', 'patch_file',
   'bash_exec', 'run_command', 'bash_background', 'process_list', 'process_kill',
   'grep_code', 'find_symbol', 'list_imports', 'run_project_check', 'run_test', 'docker_exec',
   'git_status', 'git_diff', 'git_write', 'git_commit', 'git_push', 'git_rollback',
@@ -35,14 +37,6 @@ const LOCAL_TASK_TOOL_NAMES = new Set([
   'generate_image', 'image_info', 'image_transform', 'media_probe', 'media_transform',
   'pdf_info', 'pdf_text', 'pdf_transform', 'archive_create', 'archive_list', 'archive_extract',
   'batch_rename', 'file_hash_manifest',
-])
-
-const LOCAL_CORE_TOOL_NAMES = new Set([
-  'list_directory', 'read_file', 'read_artifact_source', 'write_file', 'edit_file', 'apply_patch', 'patch_file',
-  'bash_exec', 'run_command', 'bash_background', 'process_list', 'process_kill',
-  'grep_code', 'find_symbol', 'list_imports', 'run_project_check', 'run_test',
-  'request_directory', 'file_download', 'rewind_files', 'set_deliverables',
-  'manage_todos', 'request_clarification', 'reflect', 'Agent',
 ])
 
 const ARTIFACT_KIND_TOOLS = {
@@ -80,30 +74,6 @@ const PROVIDER_ALIASES = new Map([
 
 function toolName(spec) {
   return String(spec?.function?.name || '')
-}
-
-function effectivePermissionMode(userId, explicitMode) {
-  const normalized = String(explicitMode || '').trim()
-  if (normalized) return normalized
-  if (!userId) return null
-  try {
-    return getApprovalMode({ userId })
-  } catch {
-    // Tool discovery is advisory and must not block a chat turn. The runtime
-    // permission gate remains authoritative when settings storage is unavailable.
-    return null
-  }
-}
-
-function isVisibleToUser(userId, name) {
-  if (!userId || !name) return Boolean(name)
-  try {
-    return isToolPermittedForUser(userId, name)
-  } catch {
-    // Preserve availability on a transient settings read failure; execution
-    // still passes through the same server-side permission gate.
-    return true
-  }
 }
 
 function connectorProvider(name) {
@@ -174,6 +144,7 @@ export function resolveTurnToolPolicy({ prompt = '', messages = [], skillIds = [
     || [...used].some((name) => name.startsWith('browser_'))
   const includeWeb = webSkill
     || /https?:\/\//i.test(text)
+    || /(?:联网|网络)\s*(?:搜索|查找|调研)/i.test(text)
     || /(?:搜索|查找|调研).{0,12}(?:网络|网上|互联网|在线资料)|(?:网络|网上|互联网).{0,12}(?:搜索|查找|调研)/i.test(text)
     || /\b(?:web search|search (?:the )?(?:web|internet|online)|research online|fetch (?:the )?(?:url|page))\b/i.test(text)
     || used.has('web_search') || used.has('fetch_url')
@@ -226,22 +197,29 @@ export function resolveTurnToolPolicy({ prompt = '', messages = [], skillIds = [
   }
 }
 
-function localToolMatchesPolicy(name, policy) {
-  if (LOCAL_CORE_TOOL_NAMES.has(name)) return true
-  if (name.startsWith('git_')) return policy.includeGit
-  if (name === 'docker_exec') return policy.includeDocker
-  if (name === 'sleep_until') return policy.includeWait
-  for (const kind of policy.artifactKinds) {
-    if (ARTIFACT_KIND_TOOLS[kind]?.has(name)) return true
+function emitToolDecision(onDecision, decision) {
+  if (typeof onDecision !== 'function') return
+  try {
+    onDecision(decision)
+  } catch {
+    // Diagnostics are advisory and must never block tool discovery.
   }
-  return false
 }
 
-function mcpSpecMatchesPolicy(name, policy) {
-  if (!name.startsWith('mcp__')) return true
-  if (policy.explicitMcp) return true
-  const prefix = name.split('__').slice(0, 2).join('__')
-  return [...policy.historicalTools].some((used) => used === name || used.startsWith(`${prefix}__`))
+function serializeToolPolicy(policy) {
+  return {
+    legacyFullCatalog: policy.legacyFullCatalog === true,
+    localTask: policy.localTask === true,
+    includeWeb: policy.includeWeb === true,
+    includeBrowser: policy.includeBrowser === true,
+    includeMcp: policy.includeMcp === true,
+    includeAllConnectors: policy.includeAllConnectors === true,
+    connectorProviders: [...(policy.connectorProviders || [])].sort(),
+    artifactKinds: [...(policy.artifactKinds || [])].sort(),
+    includeGit: policy.includeGit === true,
+    includeDocker: policy.includeDocker === true,
+    includeWait: policy.includeWait === true,
+  }
 }
 
 export function normalizeServerToolsConfig(value) {
@@ -269,8 +247,10 @@ export function applyDirectoryAuthorizationToolsConfig(toolsConfig, resolution) 
   const enabled = new Set(normalized.enabled)
   const disabled = new Set(normalized.disabled)
   for (const name of required) {
-    enabled.add(name)
-    disabled.delete(name)
+    // Directory authorization grants a path boundary; it must not silently
+    // override the independent per-tool execution switch. Keep disabled
+    // tools discoverable, but let the runtime gate reject their calls.
+    if (!disabled.has(name)) enabled.add(name)
   }
   return {
     enabled: [...enabled].sort(),
@@ -306,58 +286,58 @@ export function restoreDirectoryAuthorizationToolSpecs(baseSpecs, resolution, fa
 }
 
 export function applyServerToolsConfig(specs, toolsConfig) {
-  const normalized = normalizeServerToolsConfig(toolsConfig)
-  const disabled = new Set(normalized.disabled)
-  const enabled = new Set(normalized.enabled)
-  // File mutation and post-mutation verification are one capability contract.
-  // Older/persisted UI state may explicitly enable a write tool while keeping
-  // the read tools at their historical false defaults. Keep the dangerous
-  // mutation switches authoritative, but never advertise a write capability
-  // without its read-only verification companions.
-  if (enabled.has('write_file') || enabled.has('edit_file')
-    || enabled.has('apply_patch') || enabled.has('patch_file')) {
-    disabled.delete('list_directory')
-    disabled.delete('read_file')
-  }
-  if (enabled.has('git_commit') || enabled.has('git_push')
-    || enabled.has('git_rollback') || enabled.has('git_write')) {
-    disabled.delete('git_status')
-    disabled.delete('git_diff')
-  }
-  return (Array.isArray(specs) ? specs : []).filter((spec) => {
-    const name = String(spec?.function?.name || '')
-    return name && !disabled.has(name)
-  })
+  const current = (Array.isArray(specs) ? specs : []).filter((spec) => (
+    Boolean(String(spec?.function?.name || '').trim())
+  ))
+  // Tool switches are execution policy, not schema discovery. Referencing the
+  // normalized value here keeps malformed/legacy inputs harmless while every
+  // registered schema remains model-visible on refresh and resume.
+  if (toolsConfig && typeof toolsConfig === 'object') normalizeServerToolsConfig(toolsConfig)
+  return current
 }
 
 export async function resolveTurnToolSpecs({
   userId,
   baseSpecs = [],
-  toolsConfig,
-  permissionMode,
-  webSearchReady = isWebSearchReady({ userId }),
   enabledConnectorTools,
   prompt = '',
   messages = [],
   skillIds = [],
+  onDecision = null,
 } = {}) {
   const policy = resolveTurnToolPolicy({ prompt, messages, skillIds })
-  const resolvedPermissionMode = effectivePermissionMode(userId, permissionMode)
+  const discoveryIssues = []
   let mcpSpecs = []
-  if (policy.includeMcp) {
-    try {
-      const result = await listUserToolSpecs(userId)
-      mcpSpecs = Array.isArray(result?.specs) ? result.specs : []
-    } catch {
-      // Optional MCP discovery must not block the chat turn.
-    }
+  try {
+    const result = await listUserToolSpecs(userId)
+    mcpSpecs = Array.isArray(result?.specs) ? result.specs : []
+  } catch {
+    // Optional MCP discovery must not block the chat turn.
+    discoveryIssues.push({ source: 'mcp', reason: 'discovery_failed' })
   }
   let browserSpecs = []
-  if (policy.includeBrowser) {
-    try { browserSpecs = listRegisteredBrowserToolSpecs() } catch { /* optional browser tools */ }
+  try {
+    browserSpecs = listRegisteredBrowserToolSpecs()
+  } catch {
+    discoveryIssues.push({ source: 'browser', reason: 'discovery_failed' })
+  }
+  let runtimeSpecs = []
+  try {
+    // listUserToolSpecs above connects any enabled MCP servers first. Read the
+    // canonical registry afterwards so every reversible runtime contribution
+    // (including global and user-scoped plugin tools) reaches the real turn.
+    // Builtins remain caller-owned through baseSpecs; only dynamic entries are
+    // merged here so narrow catalog consumers do not unexpectedly expand.
+    runtimeSpecs = listAllSpecs({ userId })
+      .filter((entry) => entry?.origin === 'plugin')
+      .map((entry) => entry?.tool)
+      .filter(Boolean)
+  } catch {
+    discoveryIssues.push({ source: 'runtime_registry', reason: 'discovery_failed' })
   }
   const merged = new Map()
-  for (const spec of [...baseSpecs, ...mcpSpecs, ...browserSpecs]) {
+  const deliveryControlSpec = getBuiltinSpec('set_deliverables')
+  for (const spec of [...baseSpecs, deliveryControlSpec, ...mcpSpecs, ...browserSpecs, ...runtimeSpecs]) {
     const name = String(spec?.function?.name || '')
     if (name) merged.set(name, spec)
   }
@@ -367,30 +347,41 @@ export async function resolveTurnToolSpecs({
       connectorTools = listEnabledIntegrationToolNames({ userId })
     } catch {
       connectorTools = []
+      discoveryIssues.push({ source: 'integrations', reason: 'discovery_failed' })
     }
   }
   const connectorNames = new Set(CONNECTOR_TOOL_NAMES)
   const enabledConnectorNames = new Set(connectorTools)
+  const excludedByName = new Map()
+  const exclude = (name, reason, stage = 'availability') => {
+    if (name && !excludedByName.has(name)) excludedByName.set(name, { name, stage, reason })
+    return false
+  }
   const readySpecs = [...merged.values()].filter((spec) => {
     const name = toolName(spec)
-    if (!isVisibleToUser(userId, name)) return false
-    // "Allow all" grants path access directly in localFileAccessService. Do
-    // not advertise a directory-authorization action that can only add a
-    // redundant pause and contradicts the effective runtime authority.
-    if (resolvedPermissionMode === 'bypass' && name === 'request_directory') return false
-    if (name === 'web_search') return webSearchReady === true && policy.includeWeb
-    if (name === 'fetch_url') return policy.includeWeb
-    if (name.startsWith('browser_')) return policy.includeBrowser
-    if (name.startsWith('mcp__')) return policy.includeMcp && mcpSpecMatchesPolicy(name, policy)
     if (connectorNames.has(name)) {
-      const provider = connectorProvider(name)
-      return enabledConnectorNames.has(name)
-        && (policy.includeAllConnectors || policy.connectorProviders.has(provider))
+      if (!enabledConnectorNames.has(name)) return exclude(name, 'integration_disabled')
     }
-    if (policy.localTask && !localToolMatchesPolicy(name, policy)) return false
     return true
   })
-  return applyServerToolsConfig(readySpecs, toolsConfig)
+  // Discovery is intentionally independent from intent, approval mode,
+  // sandbox authorization and per-tool execution switches. Those controls are
+  // enforced when a concrete call is attempted. Keeping the schema catalog
+  // stable prevents short follow-ups, refresh/resume and plan mode from
+  // fabricating a "tool unavailable this round" state.
+  const resolvedSpecs = readySpecs
     .map(canonicalizeToolSpec)
     .sort((left, right) => String(left?.function?.name || '').localeCompare(String(right?.function?.name || ''), 'en'))
+  const resolvedNames = new Set(resolvedSpecs.map(toolName))
+  emitToolDecision(onDecision, {
+    version: 1,
+    policy: serializeToolPolicy(policy),
+    candidateToolNames: [...merged.keys()].sort().slice(0, 256),
+    eligibleToolNames: [...resolvedNames].sort().slice(0, 256),
+    excludedTools: [...excludedByName.values()]
+      .sort((left, right) => left.name.localeCompare(right.name, 'en'))
+      .slice(0, 256),
+    discoveryIssues: discoveryIssues.slice(0, 16),
+  })
+  return resolvedSpecs
 }

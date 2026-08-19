@@ -1,5 +1,6 @@
 import { resolveArtifactToolForSkillId } from '../../shared/artifactIntent.js'
 import { buildArtifactPreview } from './artifactPreview.js'
+import { normalizeVerifiedLocalFilePath } from './verifiedLocalFileIdentity.js'
 
 const PREVIEW_TYPE_ALIASES = Object.freeze({
   htm: 'html',
@@ -30,7 +31,7 @@ export function resolveDeliveryArtifacts(meta = {}) {
   const supersededIds = new Set((Array.isArray(meta?.verifiedLocalFiles)
     ? meta.verifiedLocalFiles
     : []).flatMap((receipt) => {
-    if (!receipt?.id || !normalizeArtifactLocalPath(receipt?.path)) return []
+    if (!receipt?.id || !normalizeVerifiedLocalFilePath(receipt?.path)) return []
     return [
       receipt.relatedArtifactIds,
       receipt.artifactIds,

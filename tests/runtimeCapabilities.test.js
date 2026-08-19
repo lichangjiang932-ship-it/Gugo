@@ -50,6 +50,27 @@ test('bypass capability block forbids redundant directory authorization prompts'
   assert.doesNotMatch(text, /Approval mode: unattended/)
 })
 
+test('plan capability block keeps mutation schemas visible but describes a policy boundary', () => {
+  const text = buildRuntimeCapabilityBlock({
+    toolSpecs: [spec('read_file'), spec('write_file'), spec('bash_exec'), spec('run_project_check'), spec('web_search')],
+    approvalMode: 'plan',
+  })
+
+  assert.match(text, /Plan mode is a policy boundary, not a missing capability/i)
+  assert.match(text, /schemas are present, but plan mode forbids creating or editing files/i)
+  assert.match(text, /command and project-check schemas are present/i)
+  assert.match(text, /local read-only and forbids network requests/i)
+  assert.match(text, /Restricted tools remain visible/i)
+  assert.match(text, /switch to acceptEdits or normal/i)
+  assert.doesNotMatch(text, /call the tool now/i)
+})
+
+test('normal and acceptEdits capability blocks describe their distinct approval behavior', () => {
+  const tools = [spec('write_file'), spec('bash_exec')]
+  assert.match(buildRuntimeCapabilityBlock({ toolSpecs: tools, approvalMode: 'normal' }), /File changes, commands, and external side effects require approval/i)
+  assert.match(buildRuntimeCapabilityBlock({ toolSpecs: tools, approvalMode: 'acceptEdits' }), /local file edits proceed automatically; commands and external side effects still require approval/i)
+})
+
 test('capability block advertises PDF generation when create_pdf is exposed', () => {
   const text = buildRuntimeCapabilityBlock({ toolSpecs: [spec('create_pdf')] })
   assert.match(text, /Artifacts:/)

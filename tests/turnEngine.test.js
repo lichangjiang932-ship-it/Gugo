@@ -15,7 +15,12 @@ const { TurnEngine } = await import('../server/services/TurnEngine.js')
 const { resolveChatCapabilityMode } = await import('../server/services/chatToolSelection.js')
 const { createTurnExecutionLeaseCoordinator } = await import('../server/services/turnExecutionLeaseRuntime.js')
 const { listMessages, upsertMessage, upsertSession } = await import('../server/services/sessionStore.js')
-const { createCompactionArchive } = await import('../server/services/compactionService.js')
+const {
+  buildCompaction,
+  createCompactionArchive,
+  validateCompactCheckpointSource,
+  validateToolCallChain,
+} = await import('../server/services/compactionService.js')
 const { prepareTurnPromptContext } = await import('../server/services/turnPromptContext.js')
 const { appendTurnEvent, listTurnEvents } = await import('../server/services/turnEventStore.js')
 const { getTurnCheckpoint } = await import('../server/services/turnCheckpointStore.js')
@@ -714,7 +719,7 @@ test('TurnEngine reads the user approval mode once and shares it with discovery 
   assert.equal(loopOptions.job.origin, 'chat')
 })
 
-test('TurnEngine projects the stored bypass mode into model-visible capabilities', async (t) => {
+test('TurnEngine keeps schemas stable while projecting stored bypass capabilities', async (t) => {
   setApprovalMode({ userId, mode: 'bypass' })
   t.after(() => {
     getDb().prepare('DELETE FROM user_approval_settings WHERE user_id = ?').run(userId)
@@ -746,7 +751,7 @@ test('TurnEngine projects the stored bypass mode into model-visible capabilities
   assert.ok(modelRequest)
   assert.equal(
     modelRequest.tools.some((tool) => tool?.function?.name === 'request_directory'),
-    false,
+    true,
   )
   const capabilityMessage = modelRequest.messages.find((message) => (
     message?.role === 'system'
@@ -1790,6 +1795,35 @@ test('TurnEngine maps an incomplete loop result to failure instead of completion
   assert.equal(evidence?.content, '任务未完成，未通过验证的文件不会显示或交付。请重试以继续。')
 })
 
+test('TurnEngine preserves approval metadata source in the durable approval event', async () => {
+  const turnId = 'turn-approval-metadata-source'
+  const engine = createTestEngine({
+    runLoop: async ({ onApprovalPending }) => {
+      await onApprovalPending({
+        id: 'approval-declared',
+        toolName: 'write_file',
+        args: { path: 'demo.txt' },
+        risk: 'medium',
+        metadataSource: 'declared',
+        reason: 'writes a local file',
+        expiresAt: Date.now() + 60_000,
+      })
+      return { text: 'Approval event emitted.', artifactIds: [], iterations: 1 }
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'Emit an approval event.',
+  })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  const required = events(turnId).find((event) => event.type === 'approval.required')
+  assert.equal(required.payload.metadataSource, 'declared')
+})
+
 test('TurnEngine lease prevents duplicate resume and carries cancellation across instances', async () => {
   const sessionId = 'turn-engine-cross-instance-session'
   const turnId = 'turn-cross-instance'
@@ -1883,6 +1917,110 @@ test('TurnEngine resumes a durable completed tool call without executing it twic
     totalTokens: 490,
   })
   assert.equal(engine.getTurn({ userId: 'another-user', sessionId: 'turn-engine-session', turnId: 'turn-resume' }), null)
+})
+
+test('TurnEngine resumes a compacted checkpoint and completes a legal tool round', async () => {
+  const sessionId = 'turn-engine-session'
+  const turnId = 'turn-resume-compacted-tool-loop'
+  const canonicalMessages = [
+    { role: 'user', content: 'Read the earlier proof.' },
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [{
+        id: 'archived-read',
+        type: 'function',
+        function: { name: 'read_file', arguments: '{"path":"earlier.txt"}' },
+      }],
+    },
+    {
+      role: 'tool',
+      tool_call_id: 'archived-read',
+      name: 'read_file',
+      content: '{"ok":true,"content":"earlier proof"}',
+    },
+    { role: 'user', content: 'Continue by reading final.txt.' },
+  ]
+  const compaction = buildCompaction({ messages: canonicalMessages, keepMessages: 1, force: true })
+  assert.equal(compaction.ok, true)
+  assert.equal(validateToolCallChain(compaction.outboundMessages).ok, true)
+  assert.equal(
+    validateCompactCheckpointSource(
+      compaction.summaryMessage.meta.compactCheckpointSource,
+      compaction.archivedMessages,
+    ).ok,
+    true,
+  )
+  const archive = createCompactionArchive({
+    userId,
+    sessionId,
+    archivedMessages: compaction.archivedMessages,
+    summaryText: compaction.summaryText,
+  })
+  const checkpointMessages = compaction.outboundMessages.map((message) => (
+    message === compaction.summaryMessage
+      ? { ...message, meta: { ...message.meta, archiveId: archive.id } }
+      : message
+  ))
+  appendTurnEvent({
+    userId,
+    event: createTurnEvent({
+      id: `${turnId}:started`, sessionId, turnId, sequence: 0,
+      type: 'turn.started', payload: { content: 'Continue by reading final.txt.', modelName: 'stub' }, createdAt: 1,
+    }),
+  })
+  appendTurnEvent({
+    userId,
+    event: createTurnEvent({
+      id: `${turnId}:checkpoint`, sessionId, turnId, sequence: 1,
+      type: 'turn.checkpoint', payload: { storage: 'turn_checkpoints', checkpointVersion: 1 }, createdAt: 2,
+    }),
+    checkpointState: {
+      messages: checkpointMessages,
+      toolCalls: [],
+      artifactIds: [],
+      iterations: 1,
+      recovery: {
+        archiveId: archive.id,
+        compactCheckpointSource: compaction.summaryMessage.meta.compactCheckpointSource,
+      },
+    },
+  })
+
+  let modelCalls = 0
+  let executions = 0
+  const modelRequests = []
+  const engine = createTestEngine({
+    runModel: async ({ messages } = {}) => {
+      modelCalls += 1
+      modelRequests.push(messages)
+      if (modelCalls === 1) {
+        return {
+          content: '',
+          toolCalls: [{
+            id: 'resumed-final-read',
+            function: { name: 'read_file', arguments: '{"path":"final.txt"}' },
+          }],
+        }
+      }
+      return { content: 'Compacted recovery completed.', toolCalls: [] }
+    },
+    executeTool: async ({ name, args }) => {
+      executions += 1
+      assert.equal(name, 'read_file')
+      assert.equal(args.path, 'final.txt')
+      return { ok: true, content: 'final proof' }
+    },
+  })
+
+  await engine.resumeTurn({ userId, sessionId, turnId })
+  await engine.waitForTurn({ userId, sessionId, turnId })
+
+  assert.equal(modelCalls, 2)
+  assert.equal(executions, 1)
+  assert.equal(modelRequests.every((messages) => validateToolCallChain(messages).ok), true)
+  assert.equal(events(turnId).at(-1)?.type, 'turn.completed')
+  assert.equal(events(turnId).at(-1)?.payload?.text, 'Compacted recovery completed.')
 })
 
 test('TurnEngine creates a missing owned session but cannot claim another user session id', async () => {

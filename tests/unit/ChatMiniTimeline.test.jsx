@@ -80,6 +80,8 @@ test('timeline previews, selects, highlights, and appends conversation turns', a
   try {
     let markers = rootElement.querySelectorAll('[data-testid="chat-timeline-marker"]')
     assert.equal(markers.length, 2)
+    assert.equal(rootElement.querySelector('.chat-mini-timeline-list > span[aria-hidden="true"]'), null)
+    assert.ok(markers[0].querySelector('span[aria-hidden="true"]'))
     assert.equal(markers[0].getAttribute('aria-current'), 'step')
 
     await act(async () => {

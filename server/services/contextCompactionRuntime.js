@@ -755,6 +755,7 @@ export async function compactForModel({
     summaryTruncated: fit.summaryTruncated,
     replacedMessageCount: result.replacedMessageCount,
     archiveId: archive?.id || null,
+    compactCheckpointSource: result.summaryMessage?.meta?.compactCheckpointSource || null,
     ...messageBoundary,
     semanticSummary: semanticTelemetry,
     rollingToolResultsCompacted: rollingToolResults.compactedCount,

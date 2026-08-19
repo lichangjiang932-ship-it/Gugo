@@ -176,6 +176,39 @@ test('Gemini 官方裸域名自动补 v1beta', () => {
   assert.equal(request.url, 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent')
 })
 
+test('native providers reject tool turns when function calling is unsupported', () => {
+  for (const provider of [
+    {
+      kind: 'anthropic',
+      baseUrl: 'https://api.anthropic.com',
+      modelName: 'claude-without-tools',
+    },
+    {
+      kind: 'gemini',
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+      modelName: 'gemini-without-tools',
+    },
+  ]) {
+    assert.throws(
+      () => buildModelProviderRequest({
+        config: { baseUrl: provider.baseUrl, modelName: provider.modelName },
+        profile: { kind: provider.kind, supportsTools: false },
+        messages: [{ role: 'user', content: 'Read the report.' }],
+        tools: [TOOL],
+        toolChoice: 'required',
+      }),
+      (error) => {
+        assert.equal(error?.code, 'MODEL_TOOLS_UNSUPPORTED')
+        assert.equal(error?.type, 'configuration_error')
+        assert.equal(error?.retryable, false)
+        assert.match(error?.message || '', /function calling/)
+        return true
+      },
+      provider.kind,
+    )
+  }
+})
+
 test('Gemini 响应归一化正文、函数调用与 usage', () => {
   const parsed = parseModelProviderResponse({
     candidates: [{

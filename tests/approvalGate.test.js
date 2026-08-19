@@ -17,6 +17,7 @@ process.env.APP_DATA_DIR = TMP_DIR
 
 const {
   requestApproval,
+  resumePersistedApproval,
   waitForDecision,
   releaseApproval,
   releaseApprovalsForJob,
@@ -24,6 +25,7 @@ const {
   _resetWaiters,
 } = await import('../server/services/approvalGate.js')
 const {
+  createPendingApproval,
   decideApproval,
   listPendingApprovals,
   countPendingApprovals,
@@ -33,6 +35,7 @@ const { getApprovalSettings, rememberTool, setApprovalMode, setRiskOverride } = 
 const { createJob } = await import('../server/services/jobStore.js')
 const { closeDb } = await import('../server/db.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
+const { registerDynamicTool } = await import('../server/utils/toolSchemaCatalog.js')
 
 const POLL = 20
 
@@ -95,15 +98,21 @@ test("chat mode 'all' 自动放行只读 bash_exec 且不建审批行", async ()
   assert.equal(countPendingApprovals({ userId }), 0)
 })
 
-test('新用户默认直接执行命令和文件写入', async () => {
-  const { userId, jobId } = newUser('default-bypass', { permissionMode: null })
-  assert.equal(getApprovalSettings({ userId }).mode, 'bypass')
+test('新用户默认使用 normal，命令和文件写入批准后才继续', async () => {
+  const { userId, jobId } = newUser('default-normal', { permissionMode: null })
+  assert.equal(getApprovalSettings({ userId }).mode, 'normal')
   for (const [toolName, args] of [
     ['bash_exec', { command: 'npm test' }],
     ['write_file', { path: 'default.txt', content: 'ok' }],
   ]) {
-    const result = await requestApproval({ userId, origin: 'job', jobId, toolName, args, mode: 'unattended' })
+    const pending = requestApproval({ userId, origin: 'job', jobId, toolName, args, mode: 'unattended' })
+    const row = await waitForPendingRow(userId)
+    assert.equal(row.toolName, toolName)
+    decideApproval({ userId, id: row.id, decision: 'approve' })
+    releaseApproval(row.id)
+    const result = await pending
     assert.equal(result.proceed, true)
+    assert.deepEqual(result.args, args)
   }
   assert.equal(countPendingApprovals({ userId }), 0)
 })
@@ -210,6 +219,127 @@ test('Hook force approval does not elevate a write call out of plan mode', async
   assert.equal(countPendingApprovals({ userId }), 0)
 })
 
+test('Hook pre-authorization cannot bypass plan mode', async () => {
+  const { userId, jobId } = newUser('hook-allow-plan')
+  setApprovalMode({ userId, mode: 'plan' })
+  const result = await requestApproval({
+    userId,
+    origin: 'chat',
+    jobId,
+    toolName: 'write_file',
+    args: { path: 'blocked-by-plan.txt', content: 'x' },
+    mode: 'all',
+    preAuthorized: true,
+  })
+
+  assert.equal(result.proceed, false)
+  assert.match(result.reason, /计划模式/)
+  assert.equal(result.policyDenied, true)
+  assert.equal(result.permissionMode, 'plan')
+  assert.equal(result.suggestedPermissionMode, 'acceptEdits')
+  const formatted = formatDeniedToolResult(result)
+  assert.equal(formatted.policyDenied, true)
+  assert.equal(formatted.deniedByUser, undefined)
+  assert.match(formatted.error, /工具存在/)
+  assert.match(formatted.error, /自动接受编辑模式/)
+  assert.doesNotMatch(formatted.error, /缺少写入或执行工具[^。]*$/)
+  assert.equal(countPendingApprovals({ userId }), 0)
+})
+
+test('runtime plugin does not inherit name-only standing grants or risk overrides', async () => {
+  const { userId, jobId } = newUser('plugin-policy-isolation')
+  const toolName = 'plugin_publish_report'
+  const args = { channelId: 'C-ops', text: 'plugin payload' }
+  rememberTool({ userId, toolName, args })
+  setRiskOverride({ userId, toolName, riskClass: 'read' })
+  const dispose = registerDynamicTool({
+    name: toolName,
+    origin: 'plugin',
+    source: 'plugin-policy-owner',
+    spec: {
+      type: 'function',
+      function: {
+        name: toolName,
+        description: 'Plugin policy isolation probe',
+        parameters: { type: 'object', properties: {}, additionalProperties: true },
+      },
+    },
+    metadata: {
+      riskClass: 'external',
+      requiresApproval: true,
+      isReadOnly: false,
+      source: 'fallback',
+    },
+    exec: async () => ({ ok: true }),
+  })
+  const controller = new AbortController()
+  try {
+    const pending = requestApproval({
+      userId,
+      origin: 'job',
+      jobId,
+      toolName,
+      args,
+      mode: 'all',
+      signal: controller.signal,
+    })
+    const row = await waitForPendingRow(userId)
+    assert.equal(row.toolName, toolName)
+    controller.abort()
+    const result = await pending
+    assert.equal(result.proceed, false)
+    assert.equal(result.cancelled, true)
+  } finally {
+    controller.abort()
+    dispose()
+  }
+})
+
+test('switching to plan invalidates a mutating approval before a live waiter consumes it', async () => {
+  const { userId, jobId } = newUser('live-plan-revalidation')
+  const pending = requestApproval({
+    userId,
+    origin: 'job',
+    jobId,
+    toolName: 'write_file',
+    args: { path: 'must-not-write.txt', content: 'blocked' },
+    mode: 'unattended',
+  })
+  const row = await waitForPendingRow(userId)
+
+  setApprovalMode({ userId, mode: 'plan' })
+  decideApproval({ userId, id: row.id, decision: 'approve' })
+  releaseApproval(row.id)
+
+  const result = await pending
+  assert.equal(result.proceed, false)
+  assert.equal(result.policyDenied, true)
+  assert.equal(result.permissionMode, 'plan')
+  assert.match(result.reason, /计划模式/)
+  assert.equal(countPendingApprovals({ userId }), 0)
+})
+
+test('restart recovery revalidates an approved mutation against the current plan mode', async () => {
+  const { userId, jobId } = newUser('restart-plan-revalidation')
+  const approval = createPendingApproval({
+    userId,
+    origin: 'job',
+    jobId,
+    toolName: 'write_file',
+    args: { path: 'restart-must-not-write.txt', content: 'blocked' },
+    risk: 'medium',
+    reason: '修改本地数据',
+  })
+  decideApproval({ userId, id: approval.id, decision: 'approve' })
+  setApprovalMode({ userId, mode: 'plan' })
+
+  const result = await resumePersistedApproval({ approvalId: approval.id })
+  assert.equal(result.proceed, false)
+  assert.equal(result.policyDenied, true)
+  assert.equal(result.permissionMode, 'plan')
+  assert.match(result.reason, /计划模式/)
+})
+
 test('真实用户档位依次执行 plan / normal / acceptEdits / bypass 语义', async () => {
   const planUser = newUser('mode-plan')
   setApprovalMode({ userId: planUser.userId, mode: 'plan' })
@@ -251,6 +381,19 @@ test('真实用户档位依次执行 plan / normal / acceptEdits / bypass 语义
   assert.equal(edited.proceed, true)
   assert.equal(countPendingApprovals({ userId: editsUser.userId }), 0)
 
+  const editsShellController = new AbortController()
+  const editsShellPending = requestApproval({
+    ...editsUser,
+    origin: 'chat',
+    toolName: 'bash_exec',
+    args: { command: 'npm test' },
+    mode: 'unattended',
+    signal: editsShellController.signal,
+  })
+  await waitForPendingRow(editsUser.userId)
+  editsShellController.abort()
+  assert.equal((await editsShellPending).proceed, false)
+
   const bypassUser = newUser('mode-bypass')
   setApprovalMode({ userId: bypassUser.userId, mode: 'bypass' })
   const bypassed = await requestApproval({
@@ -273,6 +416,51 @@ test('真实用户档位依次执行 plan / normal / acceptEdits / bypass 语义
     forceApprovalReason: 'pre_tool_use Hook 要求逐次批准',
   })
   assert.equal(hookForced.proceed, true)
+  assert.equal(countPendingApprovals({ userId: bypassUser.userId }), 0)
+})
+
+test('run_project_check 通过真实门控执行四档权限语义', async () => {
+  const args = { check: 'test' }
+
+  const planUser = newUser('project-check-plan', { permissionMode: 'plan' })
+  const planned = await requestApproval({
+    ...planUser,
+    origin: 'chat',
+    toolName: 'run_project_check',
+    args,
+    mode: 'unattended',
+  })
+  assert.equal(planned.proceed, false)
+  assert.match(planned.reason, /计划模式/)
+  assert.equal(countPendingApprovals({ userId: planUser.userId }), 0)
+
+  for (const permissionMode of ['normal', 'acceptEdits']) {
+    const gatedUser = newUser(`project-check-${permissionMode}`, { permissionMode })
+    const controller = new AbortController()
+    const pending = requestApproval({
+      ...gatedUser,
+      origin: 'chat',
+      toolName: 'run_project_check',
+      args,
+      mode: 'unattended',
+      signal: controller.signal,
+    })
+    const row = await waitForPendingRow(gatedUser.userId)
+    assert.equal(row.toolName, 'run_project_check')
+    assert.equal(row.risk, 'high')
+    controller.abort()
+    assert.equal((await pending).proceed, false)
+  }
+
+  const bypassUser = newUser('project-check-bypass', { permissionMode: 'bypass' })
+  const bypassed = await requestApproval({
+    ...bypassUser,
+    origin: 'chat',
+    toolName: 'run_project_check',
+    args,
+    mode: 'off',
+  })
+  assert.equal(bypassed.proceed, true)
   assert.equal(countPendingApprovals({ userId: bypassUser.userId }), 0)
 })
 
@@ -380,8 +568,31 @@ test('onPending 在开始等待之前带着已创建的审批触发', async () =
   assert.equal(seen.id, row.id)
   assert.equal(seen.status, 'pending')
   assert.equal(seen.toolName, 'write_file')
+  assert.equal(seen.metadataSource, 'declared')
+  assert.equal(row.metadataSource, 'declared')
 
   decideApproval({ userId, id: row.id, decision: 'approve' })
+  releaseApproval(row.id)
+  await pending
+})
+
+test('unregistered tool approvals persist fallback as their metadata source', async () => {
+  const { userId, jobId } = newUser('fallback-source')
+  let seen = null
+  const pending = requestApproval({
+    userId,
+    origin: 'job',
+    jobId,
+    toolName: 'unregistered_external_action',
+    args: { target: 'example' },
+    mode: 'all',
+    onPending: (approval) => { seen = approval },
+  })
+
+  const row = await waitForPendingRow(userId)
+  assert.equal(row.metadataSource, 'fallback')
+  assert.equal(seen?.metadataSource, 'fallback')
+  decideApproval({ userId, id: row.id, decision: 'deny' })
   releaseApproval(row.id)
   await pending
 })
@@ -466,6 +677,20 @@ test('★ 用户拒绝不标 retryable,并提示模型换方案', () => {
   assert.notEqual(out.retryable, true, '用户说不,重试是骚扰')
   assert.notEqual(out.systemFailure, true)
   assert.match(out.error, /换一个方案/)
+})
+
+test('计划模式拒绝返回稳定策略码且不伪装成工具缺失', () => {
+  const out = formatDeniedToolResult({
+    proceed: false,
+    reason: '当前为计划模式',
+    policyDenied: true,
+    permissionMode: 'plan',
+    suggestedPermissionMode: 'acceptEdits',
+  })
+  assert.equal(out.code, 'policy_denied_plan_mode')
+  assert.equal(out.policyDenied, true)
+  assert.match(out.error, /工具存在/)
+  assert.doesNotMatch(out.error, /工具不存在|本轮不可用/)
 })
 
 test('超时与取消各有独立措辞,不与用户拒绝混淆', () => {

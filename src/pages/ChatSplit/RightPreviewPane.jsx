@@ -162,6 +162,7 @@ function PreviewShell({ children, onClose, pane, paneRef, shellKey, t, testId })
         ref={paneRef}
         key={shellKey}
         data-testid={testId}
+        data-artifact-surface="preview"
         onTouchStart={pane.handleTouchStart}
         onTouchMove={pane.handleTouchMove}
         onTouchEnd={pane.handleTouchEnd}

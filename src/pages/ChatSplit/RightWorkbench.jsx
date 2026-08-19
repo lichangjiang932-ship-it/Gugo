@@ -12,11 +12,12 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { normalizeArtifactLocalPath, resolveDeliveryArtifacts } from '../../lib/artifactReferences.js'
+import { resolveDeliveryArtifacts } from '../../lib/artifactReferences.js'
 import { buildVerifiedLocalFileReferences } from '../../lib/localFileReferences.js'
 import { runWorkbenchTerminal } from '../../lib/workbenchClient.js'
 import { useT } from '../../i18n/I18nProvider.jsx'
 import { withDownloadToken } from '../../lib/jobClient.js'
+import { verifiedLocalFileIdentity } from '../../lib/verifiedLocalFileIdentity.js'
 
 const TABS = { files: Files, chat: MessageSquare, browser: Globe2, terminal: TerminalSquare }
 const DEFAULT_WIDTH = 420
@@ -71,14 +72,7 @@ function collectArtifacts(messages) {
   const seenVerifiedLocalFiles = new Set()
   return newestFirst.filter((artifact) => {
     if (artifact?.verifiedLocalFile !== true) return true
-    const normalizedPath = normalizeArtifactLocalPath(
-      artifact.path || artifact.fullPath || artifact.localPath || artifact.outputPath,
-    )
-    const identity = normalizedPath
-      ? `path:${normalizedPath}`
-      : String(artifact.id || '').trim()
-        ? `receipt:${String(artifact.id).trim()}`
-        : ''
+    const identity = verifiedLocalFileIdentity(artifact)
     if (!identity || seenVerifiedLocalFiles.has(identity)) return !identity
     seenVerifiedLocalFiles.add(identity)
     return true
@@ -234,9 +228,9 @@ export default function RightWorkbench({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <h2 className="truncate text-xs font-semibold text-ink">{t('workbench.title')}</h2>
-            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${isGenerating ? 'animate-pulse bg-ember' : 'bg-emerald-500'}`} aria-hidden="true" />
+            <span className={`h-1.5 w-1.5 shrink-0 rounded-pill ${isGenerating ? 'animate-pulse bg-ember' : 'bg-emerald-500'}`} aria-hidden="true" />
           </div>
-          <p className="mt-0.5 truncate text-[10px] text-ink-fade" title={statusMessage || undefined}>
+          <p className="mt-0.5 truncate text-xs leading-5 text-ink-fade" title={statusMessage || undefined}>
             {statusMessage || t(isGenerating ? 'workbench.active' : 'workbench.ready')}
           </p>
         </div>
@@ -245,11 +239,11 @@ export default function RightWorkbench({
           onClick={() => setPanelWidth(clampWidth(DEFAULT_WIDTH))}
           aria-label={t('workbench.resetWidth')}
           title={t('workbench.resetWidth')}
-          className="flex h-7 w-7 items-center justify-center rounded text-ink-fade transition-colors hover:bg-ink/5 hover:text-ink"
+          className="flex h-7 w-7 items-center justify-center rounded-control text-ink-fade transition-colors hover:bg-ink/5 hover:text-ink"
         >
           <RotateCcw className="h-3.5 w-3.5" />
         </button>
-        <button type="button" onClick={onClose} aria-label={t('workbench.close')} title={t('workbench.close')} className="flex h-7 w-7 items-center justify-center rounded text-ink-fade transition-colors hover:bg-ink/5 hover:text-ink"><X className="h-4 w-4" /></button>
+        <button type="button" onClick={onClose} aria-label={t('workbench.close')} title={t('workbench.close')} className="flex h-7 w-7 items-center justify-center rounded-control text-ink-fade transition-colors hover:bg-ink/5 hover:text-ink"><X className="h-4 w-4" /></button>
       </header>
 
       <nav data-testid="workbench-navigation" className="flex h-10 shrink-0 items-stretch gap-1 border-b border-ink/10 px-2" aria-label={t('workbench.show')}>
@@ -259,28 +253,30 @@ export default function RightWorkbench({
             type="button"
             onClick={() => onTabChange(tab)}
             aria-current={activeTab === tab ? 'page' : undefined}
-            className={`group relative flex min-w-0 flex-1 items-center justify-center gap-1.5 border-b-2 px-1 text-[11px] transition-colors ${activeTab === tab ? 'border-ink text-ink' : 'border-transparent text-ink-fade hover:text-ink'}`}
+            aria-label={t(`workbench.${tab}`)}
+            title={t(`workbench.${tab}`)}
+            className={`group relative flex min-w-0 flex-1 items-center justify-center gap-1.5 border-b-2 px-1 text-xs transition-colors ${activeTab === tab ? 'border-blue-500 text-blue-600' : 'border-transparent text-ink-fade hover:text-ink'}`}
           >
-            <Icon className={`h-3.5 w-3.5 shrink-0 ${activeTab === tab ? 'text-ember' : ''}`} />
-            <span className="truncate">{t(`workbench.${tab}`)}</span>
-            {tab === 'files' && artifacts.length > 0 && <span data-testid="workbench-file-count" className="min-w-4 rounded bg-ink/[0.08] px-1 py-0.5 text-center text-[9px] font-semibold leading-none text-ink-soft">{artifacts.length}</span>}
+            <Icon className="h-[18px] w-[18px] shrink-0" />
+            <span className="sr-only">{t(`workbench.${tab}`)}</span>
+            {tab === 'files' && artifacts.length > 0 && <span data-testid="workbench-file-count" data-compact-numeric-badge className="min-w-4 rounded-pill bg-ink/[0.08] px-1 py-0.5 text-center text-[9px] font-semibold leading-none text-ink-soft">{artifacts.length}</span>}
           </button>
         ))}
       </nav>
 
       {activeTab === 'files' && (
-        <section data-testid="workbench-files" className="min-h-0 flex-1 overflow-y-auto px-2 py-3">
+        <section data-testid="workbench-files" data-artifact-surface="workbench-files" className="min-h-0 flex-1 overflow-y-auto px-2 py-3">
           <div className="mb-2 flex items-end justify-between gap-3 px-1">
             <div>
               <h3 className="text-xs font-semibold text-ink">{t('workbench.recentArtifacts')}</h3>
-              <p className="mt-1 text-[11px] leading-4 text-ink-fade">{t('workbench.filesHint')}</p>
+              <p className="mt-1 text-xs leading-4 text-ink-fade">{t('workbench.filesHint')}</p>
             </div>
-            {artifacts.length > 0 && <span className="shrink-0 text-[10px] text-ink-fade">{t('workbench.itemCount', { count: artifacts.length })}</span>}
+            {artifacts.length > 0 && <span className="shrink-0 text-xs text-ink-fade tabular-nums">{t('workbench.itemCount', { count: artifacts.length })}</span>}
           </div>
           {artifacts.length === 0 ? (
             <div className="flex h-44 flex-col items-center justify-center gap-2 text-ink-fade"><Files className="h-7 w-7 opacity-30" /><span className="text-xs">{t('workbench.noFiles')}</span></div>
           ) : artifacts.map((artifact) => (
-            <div key={artifact.id} className="group flex w-full items-center rounded-md transition-colors hover:bg-ink/5">
+            <div key={artifact.id} className="group flex w-full items-center rounded-control transition-colors hover:bg-ink/5">
               <a
                 href={withDownloadToken(artifact.url)}
                 target="_blank"
@@ -289,11 +285,11 @@ export default function RightWorkbench({
                 onClick={(event) => openArtifactLink(event, onOpenArtifact, artifact)}
                 className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left"
               >
-                <span className="flex h-7 w-7 items-center justify-center rounded bg-ink/5 text-ink-fade"><FileText className="h-3.5 w-3.5" /></span>
-                <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-ink">{artifact.filename || t('workbench.untitledArtifact')}</span><span className="mt-0.5 block truncate text-[11px] uppercase tracking-wide text-ink-fade">{artifact.type || t('workbench.fileType')}</span></span>
+                <span className="flex h-7 w-7 items-center justify-center rounded-control bg-ink/5 text-ink-fade"><FileText className="h-3.5 w-3.5" /></span>
+                <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-ink">{artifact.filename || t('workbench.untitledArtifact')}</span><span className="mt-0.5 block truncate text-xs uppercase tracking-wide text-ink-fade">{artifact.type || t('workbench.fileType')}</span></span>
                 <ExternalLink className="h-3.5 w-3.5 text-ink-fade" />
               </a>
-              <a href={withDownloadToken(artifact.url)} download={artifact.filename || ''} aria-label={t('chatPreview.download', { filename: artifact.filename || t('workbench.untitledArtifact') })} title={t('chatPreview.download', { filename: artifact.filename || t('workbench.untitledArtifact') })} className="mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded text-ink-fade hover:bg-paper hover:text-ember"><Download className="h-3.5 w-3.5" /></a>
+              <a href={withDownloadToken(artifact.url)} download={artifact.filename || ''} aria-label={t('chatPreview.download', { filename: artifact.filename || t('workbench.untitledArtifact') })} title={t('chatPreview.download', { filename: artifact.filename || t('workbench.untitledArtifact') })} className="mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-ink-fade hover:bg-paper hover:text-ember"><Download className="h-3.5 w-3.5" /></a>
             </div>
           ))}
         </section>
@@ -304,14 +300,14 @@ export default function RightWorkbench({
           <div className="flex-1 space-y-4 overflow-y-auto px-3 py-4">
             {messages.filter((message) => ['user', 'assistant'].includes(message.role)).slice(-16).map((message, index) => (
               <article key={message.id || index} className={`border-l-2 py-1 pl-3 ${message.role === 'user' ? 'ml-6 border-ember/50' : 'mr-3 border-ink/15'}`}>
-                <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-ink-fade">{t(message.role === 'user' ? 'workbench.you' : 'workbench.assistant')}</p>
+                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-ink-fade">{t(message.role === 'user' ? 'workbench.you' : 'workbench.assistant')}</p>
                 <p className="whitespace-pre-wrap break-words text-xs leading-5 text-ink-soft">{String(message.content || '').slice(0, 1200)}</p>
               </article>
             ))}
           </div>
           <form onSubmit={submitSideChat} className="border-t border-ink/10 p-3">
-            <textarea value={sideInput} onChange={(event) => setSideInput(event.target.value)} rows={3} placeholder={t('workbench.chatPlaceholder')} className="w-full resize-none rounded-md border border-ink/15 bg-paper px-3 py-2.5 text-sm outline-none transition-colors focus:border-ink/40" />
-            <div className="mt-2 flex justify-end"><button disabled={!sideInput.trim() || isGenerating} className="h-8 rounded-md bg-ink px-4 text-xs font-medium text-paper disabled:opacity-40">{t(isGenerating ? 'workbench.generating' : 'workbench.send')}</button></div>
+            <textarea value={sideInput} onChange={(event) => setSideInput(event.target.value)} rows={3} placeholder={t('workbench.chatPlaceholder')} className="w-full resize-none rounded-control border border-ink/15 bg-paper px-3 py-2.5 text-sm outline-none transition-colors focus:border-ink/40" />
+            <div className="mt-2 flex justify-end"><button disabled={!sideInput.trim() || isGenerating} className="h-8 rounded-control bg-ink px-4 text-xs font-medium text-paper disabled:opacity-40">{t(isGenerating ? 'workbench.generating' : 'workbench.send')}</button></div>
           </form>
         </section>
       )}
@@ -319,8 +315,8 @@ export default function RightWorkbench({
       {activeTab === 'browser' && (
         <section className="flex min-h-0 flex-1 flex-col">
           <form onSubmit={navigateBrowser} className="border-b border-ink/10 p-2">
-            <div className="flex gap-2"><input value={browserInput} onChange={(event) => setBrowserInput(event.target.value)} aria-label={t('workbench.browserUrl')} className="h-9 min-w-0 flex-1 rounded-lg border border-ink/15 bg-paper px-3 text-xs outline-none focus:border-ember" /><button className="h-9 rounded-lg bg-ink px-3 text-xs text-paper">{t('workbench.go')}</button></div>
-            {browserError && <p role="alert" className="mt-1.5 px-1 text-[11px] text-red-600">{browserError}</p>}
+            <div className="flex gap-2"><input value={browserInput} onChange={(event) => setBrowserInput(event.target.value)} aria-label={t('workbench.browserUrl')} className="h-9 min-w-0 flex-1 rounded-control border border-ink/15 bg-paper px-3 text-xs outline-none focus:border-ember" /><button className="h-9 rounded-control bg-ink px-3 text-xs text-paper">{t('workbench.go')}</button></div>
+            {browserError && <p role="alert" className="mt-1.5 px-1 text-xs text-red-600">{browserError}</p>}
           </form>
           {browserUrl ? <iframe title={t('workbench.browser')} src={browserUrl} sandbox="allow-scripts allow-forms allow-popups" referrerPolicy="no-referrer" className="min-h-0 flex-1 border-0 bg-white" /> : <div className="flex flex-1 flex-col items-center justify-center gap-2 text-ink-fade"><Globe2 className="h-9 w-9 opacity-35" /><span className="text-sm">{t('workbench.browserHint')}</span></div>}
         </section>

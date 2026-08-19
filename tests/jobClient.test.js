@@ -210,6 +210,46 @@ test('verified local HTML does not replay ambiguous non-405 failures', async () 
   assert.equal(calls, 1)
 })
 
+test('verified local HTML preserves structured non-405 preview-session errors', async () => {
+  for (const scenario of [
+    {
+      status: 422,
+      code: 'HTML_DELIVERY_RESOURCE_MISSING',
+      message: '图片 images/missing.png 不存在',
+      hint: '检查 HTML 中的相对路径',
+    },
+    {
+      status: 403,
+      code: 'PATH_NOT_AUTHORIZED',
+      message: '目录尚未授权',
+      hint: '授权 HTML 所在目录的只读访问',
+    },
+  ]) {
+    let calls = 0
+    await assert.rejects(
+      createLocalHtmlPreviewSession(
+        '/api/local-files/verified/formal-gallery?turnId=turn-gallery&preview=1',
+        {
+          retryDelays: [0, 0],
+          fetchImpl: async () => {
+            calls += 1
+            return {
+              ok: false,
+              status: scenario.status,
+              json: async () => ({ error: scenario }),
+            }
+          },
+        },
+      ),
+      (error) => error?.statusCode === scenario.status
+        && error?.code === scenario.code
+        && error?.message === scenario.message
+        && error?.hint === scenario.hint,
+    )
+    assert.equal(calls, 1)
+  }
+})
+
 test('verified local HTML normalizes a trailing slash on the formal receipt URL', async () => {
   const calls = []
   const previewUrl = await createLocalHtmlPreviewSession(

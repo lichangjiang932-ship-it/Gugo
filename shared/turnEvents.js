@@ -178,7 +178,8 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
   }),
   'approval.required': z.object({
     approvalId: z.string().optional(), toolName: z.string().optional(), args: jsonRecord.optional(),
-    risk: z.unknown().optional(), reason: nullableText, expiresAt: z.number().int().nonnegative().optional(),
+    risk: z.unknown().optional(), metadataSource: z.enum(['declared', 'fallback']).optional(),
+    reason: nullableText, expiresAt: z.number().int().nonnegative().optional(),
   }).strict(),
   'approval.resolved': z.object({
     approvalId: nullableText, proceed: z.boolean(), edited: z.boolean(), args: jsonRecord.nullable().optional(),

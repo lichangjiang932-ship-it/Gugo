@@ -12,7 +12,11 @@ async function parse(res) {
   let data
   try { data = await res.json() } catch { data = null }
   if (!res.ok) {
-    throw new Error(data?.error?.message || `请求失败：HTTP ${res.status}`)
+    const error = new Error(data?.error?.message || `请求失败：HTTP ${res.status}`)
+    error.code = data?.error?.code || null
+    error.status = res.status
+    error.details = data?.error || null
+    throw error
   }
   return data
 }
@@ -84,6 +88,16 @@ export async function decideApproval(id, decision, args = null, { fetchImpl = fe
 }
 
 export const PERMISSION_MODES = ['normal', 'acceptEdits', 'plan', 'bypass']
+export const WIDER_PERMISSION_MODES = Object.freeze({
+  plan: Object.freeze(['normal', 'acceptEdits', 'bypass']),
+  normal: Object.freeze(['acceptEdits', 'bypass']),
+  acceptEdits: Object.freeze(['bypass']),
+  bypass: Object.freeze([]),
+})
+
+export function isPermissionModeWidening(currentMode, requestedMode) {
+  return WIDER_PERMISSION_MODES[currentMode]?.includes(requestedMode) === true
+}
 
 /** 兜底值:任何拿不到设置的情况都退回最严格的档位,绝不放宽权限。 */
 export const DEFAULT_APPROVAL_SETTINGS = Object.freeze({
@@ -91,6 +105,8 @@ export const DEFAULT_APPROVAL_SETTINGS = Object.freeze({
   rememberedTools: [],
   rememberedGrants: [],
   riskOverrides: [],
+  modeHistory: [],
+  modeTransition: null,
   modes: PERMISSION_MODES,
 })
 
@@ -108,6 +124,10 @@ function normalizeSettings(data) {
     riskOverrides: Array.isArray(data.riskOverrides)
       ? data.riskOverrides.filter((item) => item?.toolName && TOOL_RISK_CLASSES.includes(item.riskClass))
       : [],
+    modeHistory: Array.isArray(data.modeHistory) ? data.modeHistory : [],
+    modeTransition: data.modeTransition && typeof data.modeTransition === 'object'
+      ? data.modeTransition
+      : null,
     modes: Array.isArray(data.modes) && data.modes.length ? data.modes : PERMISSION_MODES,
   }
 }

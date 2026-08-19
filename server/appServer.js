@@ -58,11 +58,14 @@ import { handleModelProviderRequest } from './routes/modelProviderRoutes.js'
 import { handleBrowserRequest } from './routes/browserRoutes.js'
 import { handleConnectorRequest } from './routes/connectorRoutes.js'
 import { handleLocalFileAccessRequest } from './routes/localFileAccessRoutes.js'
+import { isLocalHtmlPreviewTicketActive } from './services/localHtmlPreviewService.js'
 import { handleFileSnapshotRequest } from './routes/fileSnapshotRoutes.js'
 import { handleTurnEventRequest } from './routes/turnEventRoutes.js'
+import { handleAuditRequest } from './routes/auditRoutes.js'
 import { handleMediaRequest } from './routes/mediaRoutes.js'
 import { handleAttachmentRequest } from './routes/attachmentRoutes.js'
 import { handleWebSearchRequest } from './routes/webSearchRoutes.js'
+import { handleRuntimeConfigRequest } from './routes/runtimeConfigRoutes.js'
 import { handleMcpServerRequest } from './mcp/mcpServer.js'
 import { attachTurnWebSocketServer } from './services/turnWebSocket.js'
 import { RUNTIME_CAPABILITIES, RUNTIME_KERNEL_REVISION } from '../shared/runtimeCapabilities.js'
@@ -296,6 +299,10 @@ function createRouter(getEnv = getRuntimeEnv, staticDir = distDir) {
   }
 
   // 系统诊断
+  if (req.url?.startsWith('/api/system/runtime-config')) {
+    return handleRuntimeConfigRequest(req, res, { env: getEnv() })
+  }
+
   if (req.url?.startsWith('/api/system/diagnostics')) {
     return handleSystemDiagnosticsRequest(req, res)
   }
@@ -473,6 +480,10 @@ function createRouter(getEnv = getRuntimeEnv, staticDir = distDir) {
     return handleTurnEventRequest(req, res, undefined, { env: getEnv() })
   }
 
+  if (req.url?.startsWith('/api/audit')) {
+    return handleAuditRequest(req, res)
+  }
+
   // 静态文件
   serveStatic(req, res, staticDir)
   }
@@ -480,7 +491,10 @@ function createRouter(getEnv = getRuntimeEnv, staticDir = distDir) {
 
 export function createAppServer({ getEnv = getRuntimeEnv, staticDir = distDir } = {}) {
   const env = { ...process.env, ...(getEnv() || {}) }
-  const apiRateLimitMiddleware = createApiRateLimitMiddleware({ env })
+  const apiRateLimitMiddleware = createApiRateLimitMiddleware({
+    env,
+    isActiveLocalHtmlPreviewTicket: isLocalHtmlPreviewTicketActive,
+  })
   const server = http.createServer(applyMiddlewares(createRouter(getEnv, staticDir), apiRateLimitMiddleware))
   attachTurnWebSocketServer(server)
   server.once('close', () => apiRateLimitMiddleware.close())

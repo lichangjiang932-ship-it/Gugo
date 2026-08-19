@@ -4,8 +4,8 @@ import { callBackgroundModel, callStreamingModelWithTools, getModelContextWindow
 import { createTurnActivity, createTurnEvent } from '../../shared/turnEvents.js'
 import { canonicalizeSkillId } from '../../shared/artifactIntent.js'
 import { normalizeModelUsage } from '../../shared/modelUsage.js'
-import { releaseApprovalsForTurn } from './approvalGate.js'
-import { runToolLoop, SERVER_TOOL_SPECS } from './toolLoopRuntime.js'
+import { runToolLoop } from './loop/index.js'
+import { SERVER_TOOL_SPECS } from './toolLoopRuntime.js'
 import {
   claimLocalChatSession,
   deleteMessage,
@@ -17,7 +17,6 @@ import {
   upsertSession,
 } from './sessionStore.js'
 import { appendTurnEvent, getLastTurnEvent, listTurnEvents } from './turnEventStore.js'
-import { getTurnCheckpoint, saveTurnCheckpoint } from './turnCheckpointStore.js'
 import { publishTurnActivity } from './turnActivityBus.js'
 import { dispatchHooks as dispatchHooksService } from './hooksService.js'
 import { getApprovalMode } from './approvalSettingsStore.js'
@@ -49,6 +48,7 @@ import {
   getAutoCompactionThreshold,
 } from './contextCompactionRuntime.js'
 import { createTurnExecutionLeaseCoordinator } from './turnExecutionLeaseRuntime.js'
+import { createTurnRuntimeCore } from './runtimeCore.js'
 import {
   acknowledgeAppliedTurnSteering,
   acknowledgeTurnSteering,
@@ -602,8 +602,8 @@ export class TurnEngine {
     publishActivity = publishTurnActivity,
     lastEvent = getLastTurnEvent,
     replayEvents = listTurnEvents,
-    readCheckpoint = getTurnCheckpoint,
-    writeCheckpoint = saveTurnCheckpoint,
+    readCheckpoint = null,
+    writeCheckpoint = null,
     readSession = getSession,
     claimSession = claimLocalChatSession,
     writeSession = upsertSession,
@@ -625,6 +625,7 @@ export class TurnEngine {
     bindAttachments = bindManagedAttachmentsToMessage,
     prepareAttachments = prepareManagedAttachmentsForModel,
     executionLeases = createTurnExecutionLeaseCoordinator(),
+    runtimeCore = null,
     enqueueSteering = enqueueTurnSteering,
     claimSteering = claimTurnSteering,
     acknowledgeSteering = acknowledgeTurnSteering,
@@ -634,14 +635,17 @@ export class TurnEngine {
     dispatchHooks = dispatchHooksService,
     env = process.env,
   } = {}) {
+    const runtimeCoreOptions = { executionLeases }
+    if (typeof readCheckpoint === 'function') runtimeCoreOptions.readCheckpoint = readCheckpoint
+    if (typeof writeCheckpoint === 'function') runtimeCoreOptions.writeCheckpoint = writeCheckpoint
+    const sharedRuntimeCore = runtimeCore || createTurnRuntimeCore(runtimeCoreOptions)
     this.deps = {
       runLoop, runModel, executeTool, appendEvent, publishActivity, lastEvent, replayEvents,
-      readCheckpoint, writeCheckpoint,
       readSession, claimSession, writeSession, readMessages, readPreviousUserMessage,
       writeMessage, idFactory, now, toolSpecs,
       readApprovalMode, preparePromptContext, resolveToolSpecs, scheduleMemoryExtraction, runMemoryModel, env,
       getContextWindow, readFileAccessStatus, validateAttachments, bindAttachments, prepareAttachments,
-      removeMessage, executionLeases,
+      removeMessage, executionLeases, runtimeCore: sharedRuntimeCore,
       enqueueSteering, claimSteering, acknowledgeSteering, acknowledgeAppliedSteering,
       releaseSteering, releaseStaleSteering, dispatchHooks,
     }
@@ -654,7 +658,7 @@ export class TurnEngine {
     const last = this.deps.lastEvent({ userId, sessionId, turnId })
     let running = this.active.has(key)
     if (!running) {
-      try { running = !!this.deps.executionLeases.isActive({ userId, sessionId, turnId }) } catch { /* advisory */ }
+      try { running = !!this.deps.runtimeCore.lease.isActive({ userId, sessionId, turnId }) } catch { /* advisory */ }
     }
     return last ? {
       sessionId,
@@ -691,7 +695,7 @@ export class TurnEngine {
     if (this.startingSessions.has(sessionKey(userId, sessionId))) return true
     const prefix = `${userId}\u0000${sessionId}\u0000`
     if ([...this.active.keys()].some((key) => key.startsWith(prefix))) return true
-    try { return !!this.deps.executionLeases.hasActiveSession({ userId, sessionId }) } catch { return false }
+    try { return !!this.deps.runtimeCore.lease.hasActiveSession({ userId, sessionId }) } catch { return false }
   }
 
   async startTurn(args) {
@@ -1003,18 +1007,18 @@ export class TurnEngine {
     const running = this.active.get(key)
     const scope = { userId, sessionId, turnId }
     if (running) {
-      try { this.deps.executionLeases.requestCancellation(scope) } catch { /* local abort still applies */ }
+      try { this.deps.runtimeCore.lease.requestCancellation(scope) } catch { /* local abort still applies */ }
       running.controller.abort(abortError('TURN_CANCEL_REQUESTED', 'Cancelled by user'))
-      releaseApprovalsForTurn({ userId, sessionId, turnId })
+      this.deps.runtimeCore.approval.release(scope)
       return { ...this.getTurn({ userId, sessionId, turnId }), status: 'cancelling' }
     }
     const last = this.deps.lastEvent({ userId, sessionId, turnId })
     if (!last) throw new TurnEngineError('TURN_NOT_FOUND', 'turn not found', 404)
     if (TERMINAL_TYPES.has(last.type)) return this.getTurn({ userId, sessionId, turnId })
     let cancellationRequested = false
-    try { cancellationRequested = this.deps.executionLeases.requestCancellation(scope) } catch { /* fall through */ }
+    try { cancellationRequested = this.deps.runtimeCore.lease.requestCancellation(scope) } catch { /* fall through */ }
     if (cancellationRequested) {
-      releaseApprovalsForTurn({ userId, sessionId, turnId })
+      this.deps.runtimeCore.approval.release(scope)
       return { ...this.getTurn({ userId, sessionId, turnId }), status: 'cancelling' }
     }
     const emit = this.#createEmitter({ userId, sessionId, turnId, sequence: last.sequence + 1 })
@@ -1022,7 +1026,7 @@ export class TurnEngine {
       reason: 'Cancelled by user',
       verifiedLocalFiles: latestVerifiedLocalFiles(this.deps.replayEvents, scope),
     })
-    releaseApprovalsForTurn({ userId, sessionId, turnId })
+    this.deps.runtimeCore.approval.release(scope)
     return this.getTurn({ userId, sessionId, turnId })
   }
 
@@ -1065,9 +1069,10 @@ export class TurnEngine {
     const key = activeKey(context.userId, context.sessionId, context.turnId)
     if (this.active.has(key)) return false
     const scope = { userId: context.userId, sessionId: context.sessionId, turnId: context.turnId }
-    if (!this.deps.executionLeases.claim(scope)) return false
-    const controller = new AbortController()
-    const releaseLease = this.deps.executionLeases.hold(scope, controller)
+    const lease = this.deps.runtimeCore.lease.acquire(scope)
+    if (!lease) return false
+    const { controller } = lease
+    const releaseLease = () => lease.release()
     const entry = { controller, promise: null, releaseLease }
     this.active.set(key, entry)
     entry.promise = Promise.resolve()
@@ -1110,10 +1115,10 @@ export class TurnEngine {
     const effectiveTurnStartedAt = Number.isFinite(Number(turnStartedAt))
       ? Math.max(0, Number(turnStartedAt))
       : this.deps.now()
-    const checkpoint = storedCheckpointEvent(this.deps.readCheckpoint(checkpointScope))
+    const checkpoint = storedCheckpointEvent(this.deps.runtimeCore.checkpoint.load(checkpointScope))
       || latestLegacyCheckpoint(this.deps.replayEvents, checkpointScope)
     const restoredCheckpointState = checkpointStateForResolution(checkpoint?.payload?.state, resumeContext)
-    const steeringOwnerId = normalizeOptionalId(this.deps.executionLeases.ownerId)
+    const steeringOwnerId = normalizeOptionalId(this.deps.runtimeCore.lease.ownerId)
     const steeringScope = { userId, sessionId, turnId, ownerId: steeringOwnerId }
     if (steeringOwnerId) {
       const appliedSteeringIds = Array.isArray(checkpoint?.payload?.state?.appliedSteeringIds)
@@ -1206,6 +1211,7 @@ export class TurnEngine {
     const effectiveSkillIds = preparedSkillIds.length ? preparedSkillIds : normalizeIds(skillIds)
     const effectiveApprovalMode = this.deps.readApprovalMode({ userId })
     let resolvedToolSpecs = this.deps.toolSpecs
+    let toolResolutionDecision = null
     try {
       const authorizationAwareBaseSpecs = restoreDirectoryAuthorizationToolSpecs(
         this.deps.toolSpecs,
@@ -1220,10 +1226,35 @@ export class TurnEngine {
         prompt: content,
         messages,
         skillIds: effectiveSkillIds,
+        onDecision: (decision) => { toolResolutionDecision = decision },
       })
-      if (Array.isArray(resolved)) resolvedToolSpecs = resolved
+      if (Array.isArray(resolved)) {
+        resolvedToolSpecs = resolved
+        if (!toolResolutionDecision) {
+          toolResolutionDecision = {
+            version: 1,
+            eligibleToolNames: resolved
+              .map((spec) => String(spec?.function?.name || '').trim())
+              .filter(Boolean)
+              .sort()
+              .slice(0, 256),
+            excludedTools: [],
+            discoveryIssues: [],
+          }
+        }
+      }
     } catch {
       // MCP/browser discovery is optional; retain the built-in tool set on failure.
+      toolResolutionDecision = {
+        version: 1,
+        eligibleToolNames: resolvedToolSpecs
+          .map((spec) => String(spec?.function?.name || '').trim())
+          .filter(Boolean)
+          .sort()
+          .slice(0, 256),
+        excludedTools: [],
+        discoveryIssues: [{ source: 'tool_resolution', reason: 'discovery_failed' }],
+      }
     }
     const activeSkillId = effectiveSkillIds.at(0) || null
     const baselineToolCallIds = collectToolCallIds(messages)
@@ -1329,10 +1360,12 @@ export class TurnEngine {
         intentMode: effectiveIntentMode,
         signal,
         toolSpecs: resolvedToolSpecs,
+        toolsConfig: effectiveToolsConfig,
         // The loop may progressively remount tools for an execution turn, but
         // its recovery catalog must remain the same user-configured catalog
         // resolved above. Never let it fall back to the global server catalog.
         fallbackToolSpecs: resolvedToolSpecs,
+        toolResolutionDecision,
         skillId: activeSkillId,
         executeTool: this.deps.executeTool,
         approvalOrigin: 'chat',
@@ -1360,7 +1393,7 @@ export class TurnEngine {
           : null,
         beforeFinalCompletion: steeringOwnerId
           ? async () => {
-              const decision = this.deps.executionLeases.closeSteeringInbox({ userId, sessionId, turnId })
+              const decision = this.deps.runtimeCore.lease.closeSteeringInbox({ userId, sessionId, turnId })
               if (!decision?.closed && decision?.reason !== 'pending') {
                 throw abortError('TURN_LEASE_LOST', 'Turn execution lease was lost before completion')
               }
@@ -1395,19 +1428,19 @@ export class TurnEngine {
             iterations: checkpointIterations,
             toolCallCount: Array.isArray(checkpointState?.toolCalls) ? checkpointState.toolCalls.length : 0,
           }, { checkpointState })
-          let saved = this.deps.readCheckpoint({ userId, sessionId, turnId })
+          let saved = this.deps.runtimeCore.checkpoint.load({ userId, sessionId, turnId })
           if (saved?.eventSequence !== checkpointEvent.sequence) {
             // Custom event-store adapters may not implement the atomic
             // checkpointState extension. Preserve dependency compatibility
             // with a post-append upsert fallback.
-            saved = await this.deps.writeCheckpoint({
-              userId,
-              sessionId,
-              turnId,
-              eventSequence: checkpointEvent.sequence,
-              state: checkpointState,
-              now: checkpointEvent.createdAt,
-            })
+            saved = await this.deps.runtimeCore.checkpoint.save(
+              { userId, sessionId, turnId },
+              checkpointState,
+              {
+                eventSequence: checkpointEvent.sequence,
+                now: checkpointEvent.createdAt,
+              },
+            )
           }
           if (!saved?.state) throw new Error('Failed to persist turn checkpoint')
           return true
@@ -1572,7 +1605,8 @@ export class TurnEngine {
         },
         onApprovalPending: async (approval) => emitter('approval.required', {
           approvalId: approval.id, toolName: approval.toolName, args: approval.args,
-          risk: approval.risk, reason: approval.reason, expiresAt: approval.expiresAt,
+          risk: approval.risk, metadataSource: approval.metadataSource,
+          reason: approval.reason, expiresAt: approval.expiresAt,
         }),
         onApprovalResolved: async (decision) => emitter('approval.resolved', {
           approvalId: decision.approvalId || null,

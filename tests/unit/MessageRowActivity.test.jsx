@@ -128,7 +128,7 @@ test('completed assistant turn renders its persisted total elapsed time', async 
   }
 })
 
-test('assistant keeps narration and tools in true DOM order with the current command expanded last', async () => {
+test('assistant keeps narration and tools in true DOM order with command details collapsed by default', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
@@ -191,13 +191,13 @@ test('assistant keeps narration and tools in true DOM order with the current com
     assert.equal(timelines.length, 2)
     assert.equal(timelines[0].querySelector('.chat-tool-step-marker')?.textContent, '1')
     assert.equal(timelines[1].querySelector('.chat-tool-step-marker')?.textContent, '2')
+    const runningToggle = timelines[1].querySelector('[data-testid="tool-step-toggle"]')
+    assert.equal(runningToggle?.getAttribute('aria-expanded'), 'false')
+    assert.equal(timelines[1].querySelector('[data-testid="tool-step-details"]'), null)
+    await act(async () => runningToggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
+    assert.equal(runningToggle.getAttribute('aria-expanded'), 'true')
     assert.match(timelines[1].querySelector('[data-testid="tool-detail-arguments"]')?.textContent || '', /npm test/)
     assert.match(timelines[1].querySelector('[data-testid="tool-live-output"]')?.textContent || '', /3 tests passed/)
-    const runningToggle = timelines[1].querySelector('[data-testid="tool-step-toggle"]')
-    assert.equal(runningToggle?.getAttribute('aria-expanded'), 'true')
-    await act(async () => runningToggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true })))
-    assert.equal(timelines[1].querySelector('[data-testid="tool-step-details"]'), null)
-    assert.equal(runningToggle.getAttribute('aria-expanded'), 'false')
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

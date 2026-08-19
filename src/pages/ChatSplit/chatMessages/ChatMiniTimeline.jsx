@@ -46,7 +46,6 @@ export default function ChatMiniTimeline({ activeTurnIndex, messages, onSelectTu
         ref={markerListRef}
         className="chat-mini-timeline-list relative flex max-h-[min(52vh,28rem)] w-7 flex-col items-center gap-1.5 overflow-y-auto py-2"
       >
-        <span aria-hidden="true" className="pointer-events-none absolute bottom-2 left-1/2 top-2 w-px -translate-x-1/2 bg-ink/10" />
         {turns.map((turn) => {
           const active = turn.messageIndex === activeTurnIndex
           const label = `${t('chatTimeline.jumpTo')} ${turn.number}: ${turn.summary}`
@@ -71,7 +70,7 @@ export default function ChatMiniTimeline({ activeTurnIndex, messages, onSelectTu
             >
               <span
                 aria-hidden="true"
-                className={`block h-0.5 rounded-full transition-[width,background-color] duration-150 ${active ? 'w-4 bg-ember' : 'w-2 bg-ink-fade/55 group-hover:w-3.5 group-hover:bg-ink-soft'}`}
+                className={`block h-0.5 rounded-pill transition-[width,background-color] duration-150 ${active ? 'w-4 bg-ember' : 'w-2 bg-ink-fade/55 group-hover:w-3.5 group-hover:bg-ink-soft'}`}
               />
             </button>
           )
@@ -79,11 +78,11 @@ export default function ChatMiniTimeline({ activeTurnIndex, messages, onSelectTu
       </div>
       {preview && (
         <div
-          className="pointer-events-none absolute left-8 w-56 -translate-y-1/2 rounded-lg border border-ink/10 bg-paper px-3 py-2 text-left"
+          className="pointer-events-none absolute left-8 w-56 -translate-y-1/2 rounded-card border border-ink/10 bg-paper px-3 py-2 text-left shadow-sm"
           style={{ top: preview.top }}
           data-testid="chat-timeline-preview"
         >
-          <div className="mb-0.5 text-[10px] font-medium text-ink-fade">
+          <div className="mb-0.5 text-xs font-medium text-ink-fade">
             {t('chatTimeline.turn')} {preview.number}
           </div>
           <div className="line-clamp-3 text-xs leading-5 text-ink-soft">{preview.summary}</div>

@@ -7,10 +7,12 @@
 
 import { loadPlugins } from './pluginLoader.js'
 import { logger } from '../utils/logger.js'
+import { createRuntimePluginRegistry } from './runtimePluginRegistry.js'
 
 let CURRENT = []
 let LAST_ERRORS = []
 let INITIALIZED = false
+const RUNTIME = createRuntimePluginRegistry()
 
 /**
  * @param {{ rootDir?: string, silent?: boolean }} [opts]
@@ -53,9 +55,43 @@ export function isInitialized() {
   return INITIALIZED
 }
 
+/** Install a process-local runtime plugin with reversible side effects. */
+export function registerPlugin(manifest, setup) {
+  return RUNTIME.registerPlugin(manifest, setup)
+}
+
+/** Uninstall a runtime plugin after checking active dependants. */
+export function unregisterPlugin(id) {
+  return RUNTIME.unregisterPlugin(id)
+}
+
+export function listRuntimePlugins() {
+  return RUNTIME.listPlugins()
+}
+
+export function getRuntimePlugin(id) {
+  return RUNTIME.getPlugin(id)
+}
+
+export function getPluginService(name) {
+  return RUNTIME.getService(name)
+}
+
+export function bindRuntimePluginsToLoop(loopEvents, context = {}) {
+  return RUNTIME.bindLoopEvents(loopEvents, context)
+}
+
+export function shutdownRuntimePlugins() {
+  return RUNTIME.shutdown()
+}
+
 // 仅供测试使用：重置内部状态
 export function _resetForTests() {
   CURRENT = []
   LAST_ERRORS = []
   INITIALIZED = false
+}
+
+export function _resetRuntimePluginsForTests() {
+  return RUNTIME.shutdown()
 }

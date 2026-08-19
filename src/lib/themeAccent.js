@@ -68,6 +68,10 @@ export function applyAccent({ hex, strong } = {}) {
   const finalS = strong ? Math.min(100, hsl.s + 8) : hsl.s
   const finalL = strong ? Math.max(0, hsl.l - 6) : hsl.l
   const vars = {
+    '--workbench-accent-h': String(hsl.h),
+    '--workbench-accent-s': `${finalS}%`,
+    '--workbench-accent-l': `${finalL}%`,
+    '--workbench-accent': `hsl(${hsl.h} ${finalS}% ${finalL}%)`,
     '--accent-h': String(hsl.h),
     '--accent-s': `${finalS}%`,
     '--accent-l': `${finalL}%`,

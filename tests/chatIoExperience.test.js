@@ -117,6 +117,11 @@ test('long-term memory remains internal instead of adding a disclosure after eve
   assert.doesNotMatch(messagesSource, /MemoryUsageDisclosure|getMemoriesByIdsApi|chatMessages\.memoryUsed/)
 })
 
+test('mini timeline stays beside the history rail divider instead of the output column', () => {
+  assert.match(stylesSource, /\.chat-mini-timeline\s*\{\s*left:\s*0\.5rem;\s*\}/)
+  assert.doesNotMatch(stylesSource, /\.chat-mini-timeline\s*\{[^}]*calc\(50%\s*-\s*28rem\)/)
+})
+
 test('message time, model, and latency reveal with copy actions on hover or focus', () => {
   const userTime = messageRowSource.match(/data-testid="user-message-time"[\s\S]*?<\/span>/)?.[0] || ''
   const assistantMeta = messageRowSource.match(/data-testid="assistant-message-meta"[\s\S]*?<\/div>/)?.[0] || ''
@@ -143,7 +148,7 @@ test('user messages stay right-aligned and flat while metadata remains outside t
   assert.doesNotMatch(bubble, /rounded-2xl|border bg-|bg-paper-2|shadow/)
   assert.doesNotMatch(bubble, /user-message-time|chat-message-actions/)
   assert.match(messageRowSource, /flex max-w-\[min\(720px,86%\)\] flex-col items-end/)
-  assert.match(messageRowSource, /mt-0\.5 flex h-4[\s\S]{0,160}leading-none/)
+  assert.match(messageRowSource, /mt-1 flex min-h-5[\s\S]{0,180}leading-5[\s\S]{0,80}tabular-nums/)
   assert.match(stylesSource, /\.chat-user-message\s*\{[\s\S]*?border:\s*0;[\s\S]*?background:\s*transparent;[\s\S]*?box-shadow:\s*none;/)
 })
 
@@ -155,10 +160,10 @@ test('tool activity is an inline label while command arguments and logs default 
   assert.match(stylesSource, /\.chat-tool-identity\s*\{[\s\S]*?display:\s*inline-flex;/)
 })
 
-test('composer stays compact and shadowless with a circular primary action', () => {
+test('composer stays compact, lifts on focus, and keeps a circular primary action', () => {
   assert.match(composerSource, /data-testid="chat-composer-surface"/)
-  assert.match(composerSource, /rounded-2xl border border-ink\/15/)
-  assert.doesNotMatch(composerSource, /shadow-\[0_8px_28px|focus-within:shadow/)
+  assert.match(composerSource, /rounded-card border border-neutral-200/)
+  assert.match(composerSource, /shadow-sm[\s\S]{0,240}focus-within:shadow-md/)
   assert.match(composerActionsSource, /h-8 w-8[\s\S]{0,80}rounded-full/)
 })
 

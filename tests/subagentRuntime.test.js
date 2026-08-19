@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import '../server/services/loop/index.js'
 import { issueTestSession } from './helpers/testAuth.js'
 import {
   SUBAGENT_TYPES,

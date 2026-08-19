@@ -45,6 +45,7 @@ async function startFakeMcpServer() {
         tools: [{
           name: 'inspect_page',
           description: 'Inspect a test page.',
+          annotations: { readOnlyHint: true, destructiveHint: false },
           inputSchema: {
             type: 'object',
             properties: { url: { type: 'string' } },
@@ -87,6 +88,7 @@ test('autonomous jobs receive and execute only the current user MCP tools', asyn
     env: {},
     headers: {},
     autoApprove: [],
+    tools: {},
   })
   setApprovalMode({ userId: owner, mode: 'bypass' })
 
@@ -94,19 +96,33 @@ test('autonomous jobs receive and execute only the current user MCP tools', asyn
     let { specs, errors } = await listUserToolSpecs(owner)
     assert.deepEqual(errors, [])
     assert.deepEqual(specs.map((spec) => spec.function.name), ['mcp__devtools__inspect_page'])
-    assert.equal(getDynamicTool('mcp__devtools__inspect_page', { userId: owner }).metadata.requiresApproval, true)
+    const fallbackMetadata = getDynamicTool('mcp__devtools__inspect_page', { userId: owner }).metadata
+    assert.equal(fallbackMetadata.riskClass, 'external')
+    assert.equal(fallbackMetadata.riskLevel, 'high')
+    assert.equal(fallbackMetadata.requiresApproval, true)
+    assert.equal(fallbackMetadata.source, 'fallback')
     assert.equal(getDynamicTool('mcp__devtools__inspect_page', { userId: otherUser }), null)
     assert.deepEqual((await listUserToolSpecs(otherUser)).specs, [])
 
     disconnectServer(owner, configured.id)
-    upsertServer({
+    const declaredServer = upsertServer({
       ...configured,
       userId: owner,
-      autoApprove: ['inspect_page'],
+      autoApprove: [],
+      tools: {
+        inspect_page: { riskLevel: 'low', requiresApproval: false },
+      },
+    })
+    assert.deepEqual(declaredServer.tools, {
+      inspect_page: { riskLevel: 'low', requiresApproval: false },
     })
     ;({ specs, errors } = await listUserToolSpecs(owner))
     assert.deepEqual(errors, [])
-    assert.equal(getDynamicTool('mcp__devtools__inspect_page', { userId: owner }).metadata.requiresApproval, false)
+    const declaredMetadata = getDynamicTool('mcp__devtools__inspect_page', { userId: owner }).metadata
+    assert.equal(declaredMetadata.riskClass, 'read')
+    assert.equal(declaredMetadata.riskLevel, 'low')
+    assert.equal(declaredMetadata.requiresApproval, false)
+    assert.equal(declaredMetadata.source, 'declared')
 
     let invocations = 0
     let observedToolResult = ''

@@ -28,9 +28,9 @@ export default function usePermissionsDashboard(t) {
     catch (error) { setLocalFileError(error?.message || t('localFiles.workspaceTrustLoadFailed')) }
   }, [t])
   useEffect(() => { Promise.resolve().then(refreshLocalFiles) }, [refreshLocalFiles])
-  const changeWorkspaceTrust = async (rootPath, trusted) => {
+  const changeWorkspaceTrust = async (rootPath, trusted, scope = 'persistent') => {
     setTrustBusyPath(rootPath)
-    try { setLocalFiles(await setWorkspaceTrustApi({ path: rootPath, trusted })); setLocalFileError(null) }
+    try { setLocalFiles(await setWorkspaceTrustApi({ path: rootPath, trusted, scope })); setLocalFileError(null) }
     catch (error) { setLocalFileError(error?.message || t('localFiles.workspaceTrustFailed')) }
     finally { setTrustBusyPath('') }
   }

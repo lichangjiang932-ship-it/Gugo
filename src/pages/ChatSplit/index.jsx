@@ -85,7 +85,13 @@ export default function ChatSplit() {
     latestServerAssistant?.meta?.serverLastSequence ?? '',
     latestServerAssistant?.meta?.serverResumeResolution ? 'resolution' : '',
   ].join(':')
-  const navigateInputHistory = useInputHistory({ messages, input, setInput, sessionId: activeSessionId })
+  const navigateInputHistory = useInputHistory({
+    messages,
+    input,
+    setInput,
+    sessionId: activeSessionId,
+    enabled: state.inputHistoryNavigationEnabled !== false,
+  })
   const fallbackContextToolSpecs = useMemo(() => {
     const enabledNames = SERVER_TURN_TOOL_TOGGLE_NAMES.filter((name) => state.toolsConfig?.[name] === true)
     return buildServerToolCatalogFallback(enabledNames)
@@ -118,7 +124,10 @@ export default function ChatSplit() {
     workbenchOpen,
   })
   const triggerSendFlow = useChatSendFlow({
-    abortCtrlRef, abortSessionIdRef, attachments, directoryApprovalResolveRef: directory.directoryApprovalResolveRef,
+    abortCtrlRef, abortSessionIdRef, attachments,
+    approvalMode: approvals.approvalSettings?.mode || 'normal',
+    changeApprovalMode: approvals.changeApprovalMode,
+    directoryApprovalResolveRef: directory.directoryApprovalResolveRef,
     dispatch, effectiveAgentId, ensureLocalPathAccess: directory.ensureLocalPathAccess, isGenerating, modelOptions,
     probeLocalPathAccess: directory.probeLocalPathAccess, requestServerToolApproval: approvals.requestServerToolApproval,
     resolveToolApprovalForOwner: approvals.resolveToolApprovalForOwner, runtimeSkills, selectedModel, setContextSystemPrompts,
@@ -147,6 +156,7 @@ export default function ChatSplit() {
     message,
     path,
     accessMode,
+    authorizationScope,
   }) => {
     const sessionId = stateRef.current.activeSessionId
     const turnId = message?.meta?.serverTurnId
@@ -157,6 +167,7 @@ export default function ChatSplit() {
       pausedSequence: message?.meta?.serverLastSequence,
       path,
       accessMode,
+      scope: authorizationScope,
       purpose: clarification.purpose || clarification.why || '',
     })
     dispatch({

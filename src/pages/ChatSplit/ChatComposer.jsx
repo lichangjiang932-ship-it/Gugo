@@ -157,7 +157,7 @@ export default function ChatComposer({
       }}
     >
       {isDraggingFile && (
-        <div className="absolute inset-2 z-20 rounded-md border-2 border-dashed border-ember bg-ember-soft/80 flex items-center justify-center pointer-events-none">
+        <div className="absolute inset-2 z-20 rounded-card border-2 border-dashed border-ember bg-ember-soft/80 flex items-center justify-center pointer-events-none">
           <span className="inline-flex items-center gap-2 text-sm text-ember font-medium">
             <Paperclip className="w-4 h-4" />
             {t('chatComposer.dropFiles')}
@@ -183,7 +183,7 @@ export default function ChatComposer({
             if (event.defaultPrevented || event.target?.closest?.(COMPOSER_INTERACTIVE_SELECTOR)) return
             textareaRef.current?.focus()
           }}
-          className="flex min-h-[96px] flex-col justify-between rounded-2xl border border-ink/15 bg-paper px-3.5 py-2.5 transition-[border-color,background-color] hover:border-ink/25 hover:bg-paper-2/15 focus-within:border-ink/35 focus-within:bg-paper"
+          className="flex min-h-[96px] flex-col justify-between rounded-card border border-neutral-200 bg-paper px-3.5 py-2.5 shadow-sm transition-[border-color,background-color,box-shadow,transform] hover:border-neutral-300 hover:bg-neutral-50 focus-within:-translate-y-px focus-within:border-blue-400/60 focus-within:bg-paper focus-within:shadow-md"
         >
           <ComposerAttachments
             attachments={attachments}
@@ -199,7 +199,7 @@ export default function ChatComposer({
             {skillCommand.command && (
               <span
                 data-testid="active-skill-command"
-                className="mt-0.5 inline-flex h-6 shrink-0 items-center rounded-md bg-ink/5 px-2 font-mono text-xs font-medium text-ink-soft"
+                className="mt-0.5 inline-flex h-6 shrink-0 items-center rounded-control bg-ink/5 px-2 font-mono text-xs font-medium text-ink-soft"
               >
                 {skillCommand.command}
               </span>
@@ -208,14 +208,14 @@ export default function ChatComposer({
               ref={textareaRef}
               value={skillCommand.command ? skillCommand.body : input}
               onChange={(e) => {
-              setSlashMenuDismissed(false)
-              setSlashSelectedIndex(0)
-              setInput(skillCommand.command ? `${skillCommand.command} ${e.target.value}` : e.target.value)
+                setSlashMenuDismissed(false)
+                setSlashSelectedIndex(0)
+                setInput(skillCommand.command ? `${skillCommand.command} ${e.target.value}` : e.target.value)
 
-              // ★ #21: 自动撑高 textarea (1 ~ 8 行)
-              const ta = e.target
-              ta.style.height = 'auto'
-              ta.style.height = Math.min(ta.scrollHeight, 24 * 8) + 'px'
+                // ★ #21: 自动撑高 textarea (1 ~ 8 行)
+                const ta = e.target
+                ta.style.height = 'auto'
+                ta.style.height = Math.min(ta.scrollHeight, 24 * 8) + 'px'
               }}
               onKeyDown={(e) => {
                 if (slashMenuOpen) {
@@ -243,7 +243,7 @@ export default function ChatComposer({
               }}
               placeholder={t('chatComposer.placeholder')}
               aria-label={t('chatComposer.placeholder')}
-              className="w-full min-w-0 cursor-text bg-transparent outline-none text-sm text-ink placeholder:text-ink-soft resize-none flex-1 leading-6 max-h-48 overflow-y-auto"
+              className="w-full min-w-0 flex-1 cursor-text resize-none overflow-y-auto bg-transparent text-sm leading-6 text-ink outline-none placeholder:text-ink-soft max-h-48"
               rows={1}
             />
           </div>

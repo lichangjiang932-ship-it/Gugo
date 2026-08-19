@@ -255,18 +255,25 @@ test('★ 备用 provider 没有同名模型时不作为备选 —— 不能偷�
   )
 })
 
-test('不支持工具的端点不下发 tools —— 小模型收到 tools 会直接 400', () => {
+test('不支持工具的端点对工具轮返回结构化配置错误，不再静默退化成无工具回答', () => {
   const tools = [{ type: 'function', function: { name: 'read_file', parameters: {} } }]
   const messages = [{ role: 'user', content: 'hi' }]
 
   // llama.cpp 默认不声明支持 tools
-  const llamacpp = buildOpenAICompatibleRequest({
-    config: { baseUrl: 'http://127.0.0.1:8080/v1', modelName: 'local' },
-    messages,
-    tools,
-    env: {},
-  })
-  assert.equal(JSON.parse(llamacpp.init.body).tools, undefined, 'llama.cpp 不该收到 tools')
+  assert.throws(
+    () => buildOpenAICompatibleRequest({
+      config: { baseUrl: 'http://127.0.0.1:8080/v1', modelName: 'local' },
+      messages,
+      tools,
+      env: {},
+    }),
+    (error) => {
+      assert.equal(error?.code, 'MODEL_TOOLS_UNSUPPORTED')
+      assert.equal(error?.type, 'configuration_error')
+      assert.equal(error?.retryable, false)
+      return true
+    },
+  )
 
   // Ollama 支持
   const ollama = buildOpenAICompatibleRequest({

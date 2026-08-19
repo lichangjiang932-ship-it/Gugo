@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import '../server/services/loop/index.js'
 
 /**
  * 回归:子代理工具循环读错了 tool call 的字段名。

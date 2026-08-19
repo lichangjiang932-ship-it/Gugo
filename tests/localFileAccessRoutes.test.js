@@ -10,10 +10,16 @@ fs.mkdirSync(allowedDir)
 fs.writeFileSync(path.join(allowedDir, 'route.txt'), 'route access', 'utf8')
 const previewAssetsDir = path.join(allowedDir, 'assets')
 fs.mkdirSync(previewAssetsDir)
+const burstPreviewImages = Array.from({ length: 43 }, (_, index) => `burst-${String(index + 1).padStart(2, '0')}.jpg`)
+for (const filename of burstPreviewImages) {
+  fs.writeFileSync(path.join(allowedDir, filename), Buffer.from([0xff, 0xd8, 0xff, 0xd9]))
+}
 fs.writeFileSync(path.join(allowedDir, 'preview.html'), [
   '<!doctype html><title>verified preview</title>',
   '<link rel="stylesheet" href="./assets/site.css">',
   '<script type="module" src="./assets/app.mjs"></script>',
+  '<script>const gallery=[{src:"./dynamic-gallery.png",name:"missing-caption-only.png"}]</script>',
+  `<script>const burstGallery=${JSON.stringify(burstPreviewImages.map((src) => ({ src })))};</script>`,
   '<h1>ready</h1><img src="./background.jpg"><iframe src="./child.html"></iframe>',
 ].join(''), 'utf8')
 fs.writeFileSync(path.join(allowedDir, 'child.html'), '<!doctype html><title>nested child</title><img src="./background.jpg">', 'utf8')
@@ -21,6 +27,7 @@ fs.writeFileSync(path.join(previewAssetsDir, 'site.css'), '@font-face{font-famil
 fs.writeFileSync(path.join(previewAssetsDir, 'app.mjs'), 'document.documentElement.dataset.previewReady="yes"', 'utf8')
 fs.writeFileSync(path.join(previewAssetsDir, 'preview.woff2'), Buffer.from('wOF2preview-font', 'ascii'))
 fs.writeFileSync(path.join(allowedDir, 'background.jpg'), Buffer.from([0xff, 0xd8, 0xff, 0xd9]))
+fs.writeFileSync(path.join(allowedDir, 'dynamic-gallery.png'), Buffer.from('dynamic-image-bytes', 'utf8'))
 fs.writeFileSync(path.join(allowedDir, 'same-directory-secret.txt'), 'must remain private', 'utf8')
 fs.writeFileSync(path.join(tempDir, 'outside-secret.txt'), 'must not be exposed', 'utf8')
 let outsideLinkCreated = false
@@ -39,7 +46,7 @@ const previousGitEnabled = process.env.WORKSPACE_GIT_ENABLED
 process.env.WORKSPACE_GIT_ENABLED = '1'
 
 const { createAppServer } = await import('../server/appServer.js')
-const { closeDb } = await import('../server/db.js')
+const { closeDb, getDb } = await import('../server/db.js')
 const { setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
 const { getSessionSnapshot, upsertMessage, upsertSession } = await import('../server/services/sessionStore.js')
 const { getLocalHtmlPreviewResource } = await import('../server/services/localHtmlPreviewService.js')
@@ -89,6 +96,73 @@ test('local file access routes require authentication', async () => {
   const { token } = issueTestSession({ email: 'local-route-query-auth@example.com' })
   const queryTokenResponse = await fetch(`${origin}/api/local-files?token=${encodeURIComponent(token)}`)
   assert.equal(queryTokenResponse.status, 401)
+})
+
+test('directory and workspace trust routes preserve session scope without database persistence', async () => {
+  const alice = issueTestSession({ email: 'local-route-session-scope@example.com' })
+  const bob = issueTestSession({ email: 'local-route-session-scope-other@example.com' })
+  setApprovalMode({ userId: alice.userId, mode: 'normal' })
+  setApprovalMode({ userId: bob.userId, mode: 'normal' })
+
+  const grantResponse = await fetch(`${origin}/api/local-files/grants`, {
+    method: 'POST',
+    headers: headers(alice.token),
+    body: JSON.stringify({ path: allowedDir, accessMode: 'read_only', scope: 'session' }),
+  })
+  assert.equal(grantResponse.status, 200)
+  const grantBody = await grantResponse.json()
+  assert.equal(grantBody.grant.scope, 'session')
+  assert.equal(grantBody.grants[0].scope, 'session')
+  assert.equal(
+    getDb().prepare('SELECT COUNT(*) AS count FROM local_file_grants WHERE user_id = ?').get(alice.userId).count,
+    0,
+  )
+
+  const trustResponse = await fetch(`${origin}/api/local-files/workspace-trust`, {
+    method: 'POST',
+    headers: headers(alice.token),
+    body: JSON.stringify({
+      path: allowedDir,
+      trusted: true,
+      scope: 'session',
+      confirmation: 'TRUST_WORKSPACE_CONFIG',
+    }),
+  })
+  assert.equal(trustResponse.status, 200)
+  const trustBody = await trustResponse.json()
+  assert.equal(trustBody.trust.trustScope, 'session')
+  assert.equal(trustBody.trustedWorkspaces[0].trustScope, 'session')
+  assert.equal(
+    getDb().prepare('SELECT COUNT(*) AS count FROM workspace_trust WHERE user_id = ?').get(alice.userId).count,
+    0,
+  )
+
+  const bobStatus = await fetch(`${origin}/api/local-files`, { headers: headers(bob.token) })
+  assert.equal(bobStatus.status, 200)
+  assert.deepEqual((await bobStatus.json()).grants, [])
+
+  const invalidScope = await fetch(`${origin}/api/local-files/grants`, {
+    method: 'POST',
+    headers: headers(alice.token),
+    body: JSON.stringify({ path: allowedDir, accessMode: 'read_only', scope: 'forever-ish' }),
+  })
+  assert.equal(invalidScope.status, 400)
+  assert.equal((await invalidScope.json()).error.code, 'INVALID_GRANT_SCOPE')
+
+  const untrust = await fetch(`${origin}/api/local-files/workspace-trust`, {
+    method: 'POST',
+    headers: headers(alice.token),
+    body: JSON.stringify({ path: allowedDir, trusted: false, scope: 'session' }),
+  })
+  assert.equal(untrust.status, 200)
+  assert.equal((await untrust.json()).trust, true)
+
+  const revoke = await fetch(`${origin}/api/local-files/grants/${encodeURIComponent(grantBody.grant.id)}`, {
+    method: 'DELETE',
+    headers: headers(alice.token),
+  })
+  assert.equal(revoke.status, 200)
+  assert.deepEqual((await revoke.json()).grants, [])
 })
 
 test('authorized path can be used by file tools and remains user-scoped', async () => {
@@ -302,6 +376,7 @@ test('verified turn receipts stream the real file and remain user-scoped', async
     ['./assets/app.mjs', /^text\/javascript/, /previewReady/],
     ['./assets/preview.woff2', /^font\/woff2/, null],
     ['./background.jpg', /^image\/jpeg/, null],
+    ['./dynamic-gallery.png', /^image\/png/, null],
   ]
   for (const [relativeUrl, mime, content] of relativeResources) {
     const resource = await fetch(new URL(relativeUrl, sessionHtmlUrl))
@@ -309,6 +384,14 @@ test('verified turn receipts stream the real file and remain user-scoped', async
     assert.match(resource.headers.get('content-type') || '', mime, relativeUrl)
     if (content) assert.match(await resource.text(), content, relativeUrl)
     else assert.ok((await resource.arrayBuffer()).byteLength > 0, relativeUrl)
+  }
+  const burstResponses = await Promise.all(burstPreviewImages.map((filename) => (
+    fetch(new URL(`./${filename}`, sessionHtmlUrl))
+  )))
+  assert.equal(burstResponses.length, 43)
+  for (const response of burstResponses) {
+    assert.equal(response.status, 200)
+    assert.match(response.headers.get('content-type') || '', /^image\/jpeg/)
   }
 
   const undeclaredSibling = await fetch(new URL('./same-directory-secret.txt', sessionHtmlUrl))

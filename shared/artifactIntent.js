@@ -49,7 +49,7 @@ const ARTIFACT_TERMS = Object.freeze({
   xlsx: /\bxlsx?\b|\.xlsx?\b|\bexcel\b|工作簿|电子表格|spread\s*sheet/gi,
   html: /\bhtml?\b|\.html?\b|\bweb\s*page\b|\bwebsite\b|\blanding\s*page\b|网页|网站|落地页/gi,
   pdf: /\bpdf\b|\.pdf\b|便携式文档/gi,
-  image: /\bimages?\b|\bpictures?\b|\bphotos?\b|\billustrations?\b|\bposters?\b|\bcover\s+art\b|\bhero\s+art\b|\u56fe\u7247|\u56fe\u50cf|\u63d2\u56fe|\u914d\u56fe|\u6d77\u62a5|\u5c01\u9762\u56fe/gi,
+  image: /\bimages?\b|\bpictures?\b|\bphotos?\b|\billustrations?\b|\bposters?\b|\blogos?\b|\bmarketing\s+(?:images?|graphics?|art)\b|\bcover\s+art\b|\bhero\s+art\b|\u56fe\u7247|\u56fe\u50cf|\u63d2\u56fe|\u63d2\u753b|\u914d\u56fe|\u6d77\u62a5|\u8425\u9500\u56fe|\u5ba3\u4f20\u56fe|\u5e7f\u544a\u56fe|\u5c01\u9762\u56fe|\u5fbd\u6807|(?:\u54c1\u724c)?\u6807\u5fd7/gi,
 })
 
 const BEFORE_ACTION = /(?:帮我|请|麻烦|给我|我要|我需要|我想要|希望|来(?:一|个|份|套)?|写|编写|撰写|做|制作|生成|创建|输出|导出|整理成|转换成|转换为|转成|转为|改成|改为|做成|放入|放进|加入|写入|整理到|设计|起草|重做|重制|修改|编辑|更新|优化|润色|make|create|generate|build|produce|export|convert|design|draft|prepare|write|revise|edit|update|redesign|give\s+me|i\s+(?:want|need))[^。！？!?\n]{0,32}$/i
@@ -113,6 +113,17 @@ const EXISTING_ASSET_MUTATION_COMMAND_PREFIX = /^(?:(?:请|帮我|麻烦(?:你)?
 const EXISTING_ASSET_MUTATION_ACTION_BEFORE = /(?:加入|添加|插入|放入|放进|放到|置入|嵌入|作为|用作|设为|设置为|设成|替换为|(?:add|insert|put|place|embed|use|set|replace))\s*$/i
 const EXISTING_ASSET_MUTATION_ACTION_AFTER = /^\s*(?:加入|添加|插入|放入|放进|放到|置入|嵌入|作为|用作|设为|设置为|设成|替换为)/i
 const ADDITIONAL_IMAGE_PRODUCTION = /(?:(?:另外|另行|同时|还要|并且|以及|再)\s*(?:请|帮我|麻烦)?\s*(?:生成|创建|制作|画|绘制)|(?:also|additionally|separately)\s+(?:generate|create|make|draw))[^。！？!?\n]{0,32}(?:图|图片|图像|照片|海报|插图|image|photo|picture|poster|illustration)/i
+const EXPLICIT_IMAGE_CREATION = /(?:(?:生成|创建|制作|设计|画|绘制)\s*(?:一|1)?(?:张|幅|个)?[^。！？!?\n]{0,16}(?:图|图片|图像|照片|海报|插图|插画|徽标|标志|logo)|(?:generate|create|make|design|draw)\s+(?:an?\s+)?[^.!?\n]{0,16}(?:image|picture|photo|poster|illustration|logo|graphic))/i
+
+function hasUnnegatedExplicitImageCreation(prompt = '') {
+  const text = String(prompt || '')
+  const matcher = new RegExp(EXPLICIT_IMAGE_CREATION.source, 'gi')
+  for (const match of text.matchAll(matcher)) {
+    const before = text.slice(Math.max(0, match.index - 32), match.index)
+    if (!DIRECT_NEGATION.test(before)) return true
+  }
+  return false
+}
 const ARTIFACT_REVISION_SHORT_DENIAL = /(?:不要|不用|无需|别|禁止|停止|取消)\s*(?:再)?\s*(?:改|换|删|加|补|调|修)(?:一?下|掉|成|为)?/gi
 
 function isExistingAssetPlacement(text = '') {
@@ -195,6 +206,9 @@ const LOCAL_MUTATION_ACTION = /(?:继续\s*)?(?:修改|编辑|更新|覆盖|改�
 const LOCAL_MUTATION_AFTER = /^\s*(?:这个|该|现有的?|已有的?|原版的?|原)?\s*(?:文件)?\s*(?:修改|编辑|更新|覆盖|改写|调整|优化|完善|润色|修复|替换|edit|update|modify|overwrite|revise|adjust|refine)\b/i
 const FILE_CREATION_ACTION = /(?:新建|创建|生成|制作|导出|另存为|create|generate|make|produce|export|save\s+as)\s*(?:一个|一份|新的?|the|a|an)?\s*$/i
 const LEADING_FILE_ACTION = /^(?:(?:请|帮我|麻烦|给我|直接|继续|把|将|再|重新)\s*)*(?:新建|创建|生成|制作|导出|修改|编辑|更新|覆盖|打开|读取|检查)\s*/iu
+const LOCAL_PATCH_INTENT = /(?:修复|修改|编辑|更新|覆盖|改写|调整|优化|完善|润色|替换|fix|edit|update|modify|overwrite|revise|adjust|refine)/i
+const ARTIFACT_CREATION_BEFORE = /(?:另外|另行|另外再|并另外|随后|之后|后再|再|重新)?\s*(?:新建|创建|生成|制作|导出|另存为|create|generate|make|produce|export|save\s+as)(?:[^。！？!?\n]{0,24})$/i
+const ARTIFACT_CREATION_AFTER = /^[^，,；;。！？!?\n]{0,12}(?:新建|创建|生成|制作|导出|create|generate|make|produce|export)/i
 
 export const ARTIFACT_DELIVERY_TARGETS = Object.freeze({
   WORKSPACE_FILE: 'workspace_file',
@@ -293,6 +307,7 @@ export function resolveArtifactDeliveryTargets(prompt = '', {
     || (Array.isArray(priorArtifactTypes) && priorArtifactTypes.length > 0)
   const localFileTargets = []
   const managedFileTargets = []
+  let hasLocalPatchIntent = false
   // “保留原文件名” describes the replacement disposition; its “原文件”
   // substring is not evidence that the named file lives in the workspace.
   // Mask it at equal length so reference indices continue to line up.
@@ -335,6 +350,9 @@ export function resolveArtifactDeliveryTargets(prompt = '', {
       filename: reference.filename,
       type: reference.type,
     })
+    if (local && (mutationContext || LOCAL_PATCH_INTENT.test(before) || LOCAL_PATCH_INTENT.test(after))) {
+      hasLocalPatchIntent = true
+    }
   }
 
   const workspaceArtifactTypes = [...new Set(localFileTargets.map(({ type }) => type))]
@@ -359,9 +377,20 @@ export function resolveArtifactDeliveryTargets(prompt = '', {
     priorArtifactTypes: localFileTargets.length > 0 ? [] : priorArtifactTypes,
     hasPriorArtifact: localFileTargets.length === 0 && hasPriorArtifactContext,
   })
+  const residualIntentTypes = intentTypes(residualIntent)
+  // A local patch often names content inside the file (for example “fix the
+  // image rotation in gallery.html”). Those nouns are patch subjects, not a
+  // request for a second managed artifact. Preserve only independently stated
+  // creation clauses such as “then generate a marketing image”.
+  const explicitCreationTypes = Object.keys(ARTIFACT_TERMS)
+    .filter((type) => hasExplicitArtifactCreationRequest(residualText, type))
+  if (hasUnnegatedExplicitImageCreation(residualText) && !explicitCreationTypes.includes('image')) {
+    explicitCreationTypes.push('image')
+  }
+  const managedResidualTypes = hasLocalPatchIntent ? explicitCreationTypes : residualIntentTypes
   const managedArtifactTypes = [...new Set([
     ...managedFileTargets.map(({ type }) => type),
-    ...intentTypes(residualIntent),
+    ...managedResidualTypes,
   ])]
 
   const hasLocal = localFileTargets.length > 0
@@ -377,6 +406,9 @@ export function resolveArtifactDeliveryTargets(prompt = '', {
 
   return {
     target,
+    intent: hasLocalPatchIntent
+      ? hasManaged ? 'mixed_intent' : 'patch_intent'
+      : hasManaged ? 'create_intent' : 'none',
     localFileTargets,
     workspaceArtifactTypes,
     managedArtifactTypes,
@@ -590,6 +622,20 @@ function occurrenceIsExplicitRequest(text, match, type) {
   return true
 }
 
+function hasExplicitArtifactCreationRequest(prompt = '', type) {
+  const text = String(prompt || '').trim()
+  const matcher = ARTIFACT_TERMS[type]
+  if (!text || !matcher) return false
+  matcher.lastIndex = 0
+  for (const match of text.matchAll(matcher)) {
+    if (!occurrenceIsExplicitRequest(text, match, type)) continue
+    const before = text.slice(Math.max(0, match.index - 64), match.index)
+    const after = text.slice(match.index + match[0].length, match.index + match[0].length + 32)
+    if (ARTIFACT_CREATION_BEFORE.test(before) || ARTIFACT_CREATION_AFTER.test(after)) return true
+  }
+  return false
+}
+
 export function hasExplicitArtifactRequest(prompt = '', type) {
   const text = String(prompt || '').trim()
   const matcher = ARTIFACT_TERMS[type]
@@ -640,7 +686,7 @@ function detectArtifactIntentRaw(prompt = '', {
   // In "use this image as the background", the image is an input asset, not
   // a request to generate a second image artifact. An independent clause such
   // as "also generate a new illustration" remains explicit production.
-  const explicitImage = hasExplicitArtifactRequest(text, 'image')
+  const explicitImage = (hasExplicitArtifactRequest(text, 'image') || hasUnnegatedExplicitImageCreation(text))
     && (!(existingAssetPlacement || existingImageCollectionInput) || additionalImageProduction)
   const allowAdditionalFormat = (type) => Boolean(
     ADDITIONAL_ARTIFACT_CUE.test(text)

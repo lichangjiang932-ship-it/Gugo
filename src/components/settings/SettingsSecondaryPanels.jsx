@@ -55,7 +55,8 @@ export function SettingsPermissionsPanel({ navigate, t, state, enabledPermCount 
 
 export function SettingsAppearancePanel({ t, state, dispatch }) {
   const themeOptions = [
-    { value: 'light', aliases: ['white'], label: t('settings.themeLight') },
+    { value: 'light', label: t('settings.themeLight') },
+    { value: 'white', label: t('settings.themeWhite') },
     { value: 'dark', label: t('settings.themeDark') },
     { value: 'system', label: t('settings.themeSystem') },
   ]
@@ -124,6 +125,13 @@ export function SettingsAppearancePanel({ t, state, dispatch }) {
             checked={Boolean(state.animationsEnabled)}
             label={t('settings.animations')}
             onChange={(value) => dispatch({ type: 'SET_ANIMATIONS', payload: value })}
+          />
+        </SettingsRow>
+        <SettingsRow title={t('settings.inputHistoryNavigation')} description={t('settings.inputHistoryNavigationDescription')}>
+          <SettingsToggle
+            checked={state.inputHistoryNavigationEnabled !== false}
+            label={t('settings.inputHistoryNavigation')}
+            onChange={(value) => dispatch({ type: 'SET_INPUT_HISTORY_NAVIGATION', payload: value })}
           />
         </SettingsRow>
       </SettingsGroup>

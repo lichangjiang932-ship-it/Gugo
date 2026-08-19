@@ -7,8 +7,9 @@ export default function DirectoryRequestCard({ request, busy, error = '', onAuth
   const [browserOpen, setBrowserOpen] = useState(false)
   const requestedMode = request.access_mode || request.accessMode
   const [accessMode, setAccessMode] = useState(requestedMode === 'read_write' ? 'read_write' : 'read_only')
+  const [authorizationScope, setAuthorizationScope] = useState('session')
 
-  const authorize = () => onAuthorize({ path, accessMode })
+  const authorize = () => onAuthorize({ path, accessMode, authorizationScope })
 
   return (
     <div className="mt-3 rounded-md border border-dashed border-sky-500/50 bg-sky-500/5 p-3" data-testid="directory-request-card">
@@ -38,6 +39,16 @@ export default function DirectoryRequestCard({ request, busy, error = '', onAuth
         >
           <option value="read_only">{t('taskSteering.directoryReadOnly')}</option>
           <option value="read_write">{t('taskSteering.directoryReadWrite')}</option>
+        </select>
+        <select
+          value={authorizationScope}
+          onChange={(event) => setAuthorizationScope(event.target.value)}
+          disabled={!!busy}
+          aria-label={t('localFiles.authorizationLifetime')}
+          className="h-9 rounded-md border border-sky-500/30 bg-paper px-2 text-xs text-ink"
+        >
+          <option value="session">{t('localFiles.authorizationSession')}</option>
+          <option value="persistent">{t('localFiles.authorizationPersistent')}</option>
         </select>
         <button
           type="button"

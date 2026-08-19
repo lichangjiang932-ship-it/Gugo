@@ -1,7 +1,7 @@
 {
   "name": "gugo",
   "private": true,
-  "version": "0.11.22",
+  "version": "0.11.26",
   "description": "Self-hosted AI workspace for browser and Windows desktop with agents, tools, memory, jobs, and MCP.",
   "author": "lichangjiang932-ship-it",
   "license": "MIT",
@@ -39,6 +39,7 @@
     "test:coverage": "node scripts/run-tests.js --coverage",
     "i18n:check": "node --test tests/i18nHardcoded.test.js tests/i18n.test.js",
     "debt:check": "node --test tests/codeDebt.test.js",
+    "benchmark:checkpoint": "node scripts/benchmark-loop-checkpoint.mjs",
     "licenses": "node scripts/check-licenses.mjs",
     "hooks:install": "git config core.hooksPath .githooks",
     "serve": "node server/start.js",
@@ -58,8 +59,9 @@
     "cli": "node bin/yma-cli.js"
   },
   "dependencies": {
-    "@napi-rs/canvas": "^0.1.65",
     "@e965/xlsx": "^0.20.3",
+    "@napi-rs/canvas": "^0.1.65",
+    "acorn": "^8.18.0",
     "better-sqlite3": "^12.10.0",
     "electron-updater": "^6.8.9",
     "fontkit": "^2.0.4",
@@ -86,8 +88,8 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@eslint/js": "^10.0.1",
     "@electron/asar": "3.4.1",
+    "@eslint/js": "^10.0.1",
     "@ffmpeg-installer/ffmpeg": "1.1.0",
     "@ffprobe-installer/ffprobe": "2.1.2",
     "@tailwindcss/typography": "^0.5.19",

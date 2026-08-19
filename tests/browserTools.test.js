@@ -5,7 +5,6 @@ import { listRegisteredBrowserToolSpecs, registerBrowserTools } from '../server/
 import { listAllSpecs, unregisterByOrigin } from '../server/services/toolRegistry.js'
 import { resolveTurnToolSpecs } from '../server/services/turnToolSpecs.js'
 import { _browserInternals } from '../server/adapters/browserAutomation.js'
-import { buildToolSpecs as buildFallbackToolSpecs } from '../src/lib/tools/toolSpecs.js'
 import { executeToolCall } from '../src/lib/tools/index.js'
 import { TOKEN_KEY } from '../src/lib/accountClient.js'
 import { buildServerToolCatalogFallback, selectEnabledServerToolSpecs } from '../src/lib/serverToolCatalog.js'
@@ -59,11 +58,14 @@ test('browser interaction tools reach the model-facing turn catalog', async () =
 
 test('frontend fallback catalog keeps browser interaction tools available', () => {
   const expected = ['browser_navigate', 'browser_snapshot', 'browser_click', 'browser_type', 'browser_select', 'browser_press']
-  const localSpecs = buildFallbackToolSpecs(expected)
-  const fallbackNames = new Set(buildServerToolCatalogFallback([], localSpecs).map((spec) => spec.function.name))
-  const liveNames = new Set(selectEnabledServerToolSpecs(localSpecs, {}).map((spec) => spec.function.name))
+  registerBrowserTools()
+  const liveSpecs = listRegisteredBrowserToolSpecs()
+  const fallback = buildServerToolCatalogFallback([], expected)
+  const fallbackNames = new Set(fallback.map((spec) => spec.function.name))
+  const liveNames = new Set(selectEnabledServerToolSpecs(liveSpecs, {}).map((spec) => spec.function.name))
   assert.ok(expected.every((name) => fallbackNames.has(name)), 'fallback catalog dropped browser tools')
-  assert.deepEqual([...liveNames].sort(), [...expected].sort())
+  assert.ok(expected.every((name) => liveNames.has(name)), 'live catalog dropped browser tools')
+  assert.ok(fallback.every((spec) => !Object.hasOwn(spec.function, 'parameters')))
 })
 
 test('standalone compatibility client routes standard browser actions to their HTTP endpoints', async () => {

@@ -234,6 +234,234 @@ test('local HTML delivery discovers SVG use, image-set, workers, XHR, and execut
   }
 })
 
+test('local HTML delivery discovers statically declared DOM resource properties without treating names as resources', async () => {
+  const root = temporarySite()
+  try {
+    const htmlPath = write(root, 'index.html', `<!doctype html><main>Gallery</main><script>
+      const poster = 'images/poster.png';
+      const srcset = 'images/one.png 1x, images/two.png 2x';
+      const images = [
+        { src: 'images/one.png', name: 'missing-name-only.jpg' },
+        { src: \`images/two.png\`, name: 'another-missing-name.jpg' },
+      ];
+      const direct = 'images/direct.png';
+      image.src = direct;
+      const preload = new Image();
+      preload.src = 'images/preload.png';
+      video.poster = poster;
+      picture.srcset = srcset;
+      image.setAttribute('src', 'images/attribute.png');
+    </script>`)
+    for (const filename of ['one.png', 'two.png', 'direct.png', 'preload.png', 'poster.png', 'attribute.png']) {
+      const imagePath = path.join(root, 'images', filename)
+      fs.mkdirSync(path.dirname(imagePath), { recursive: true })
+      await sharp({ create: { width: 4, height: 4, channels: 4, background: '#4070ec' } }).png().toFile(imagePath)
+    }
+
+    const result = await validateLocalHtmlDelivery({ filePath: htmlPath })
+    assert.equal(result.decodedImageCount, 6)
+    assert.deepEqual(
+      result.resources.map((resource) => path.relative(root, resource.path)).sort(),
+      ['attribute.png', 'direct.png', 'one.png', 'poster.png', 'preload.png', 'two.png']
+        .map((filename) => path.join('images', filename)).sort(),
+    )
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('local HTML delivery resolves const values within lexical scope and before their use only', async () => {
+  const root = temporarySite()
+  try {
+    const htmlPath = write(root, 'scopes.html', `<!doctype html><main>Scoped gallery</main><script>
+      const asset = 'images/shown.png';
+      function unused() {
+        const asset = 'images/unused-secret.png';
+        return asset;
+      }
+      cover.src = asset;
+
+      function renderInner() {
+        const asset = 'images/inner.png';
+        portrait.src = asset;
+      }
+
+      function firstSibling() {
+        const sibling = 'images/first.png';
+        first.src = sibling;
+      }
+      function secondSibling() {
+        const sibling = 'images/second.png';
+        second.src = sibling;
+      }
+
+      beforeDeclaration.src = lateAsset;
+      const lateAsset = 'images/tdz-secret.png';
+    </script>`)
+    const expected = ['shown.png', 'inner.png', 'first.png', 'second.png']
+    const excluded = ['unused-secret.png', 'tdz-secret.png']
+    for (const filename of [...expected, ...excluded]) {
+      const imagePath = path.join(root, 'images', filename)
+      fs.mkdirSync(path.dirname(imagePath), { recursive: true })
+      await sharp({ create: { width: 4, height: 4, channels: 4, background: '#4070ec' } }).png().toFile(imagePath)
+    }
+
+    const result = await validateLocalHtmlDelivery({ filePath: htmlPath })
+    assert.equal(result.decodedImageCount, expected.length)
+    assert.deepEqual(
+      result.resources.map((resource) => path.relative(root, resource.path)).sort(),
+      expected.map((filename) => path.join('images', filename)).sort(),
+    )
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('local HTML delivery ignores non-resource object metadata and business URLs', async () => {
+  const root = temporarySite()
+  try {
+    const htmlPath = write(root, 'index.html', `<!doctype html><main>Dashboard</main><script>
+      const records = [{
+        data: 'sales',
+        href: '#section',
+        src: 'customer avatar',
+        srcset: 'small medium',
+        poster: 'summer campaign',
+      }, {
+        data: 'https://api.example.com/sales',
+        href: 'https://business.example.com/report',
+        src: 'https://cdn.example.com/avatar',
+      }];
+      const image = new Image();
+      image.src = 'images/real.png';
+    </script>`)
+    const imagePath = path.join(root, 'images', 'real.png')
+    fs.mkdirSync(path.dirname(imagePath), { recursive: true })
+    await sharp({ create: { width: 4, height: 4, channels: 4, background: '#4070ec' } }).png().toFile(imagePath)
+
+    const result = await validateLocalHtmlDelivery({ filePath: htmlPath })
+    assert.equal(result.resourceCount, 1)
+    assert.equal(result.decodedImageCount, 1)
+    assert.equal(path.relative(root, result.resources[0].path), path.join('images', 'real.png'))
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('local HTML delivery accepts file-shaped values for every supported object resource property', async () => {
+  const root = temporarySite()
+  try {
+    const htmlPath = write(root, 'index.html', `<!doctype html><main>Resources</main><script>
+      const resources = {
+        src: 'images/source.png?size=large',
+        srcset: 'images/one.png 1x, images/two.png 2x',
+        poster: 'images/poster.png',
+        href: 'pages/help.html#usage',
+        data: 'data/report.json',
+      };
+    </script>`)
+    for (const filename of ['source.png', 'one.png', 'two.png', 'poster.png']) {
+      const imagePath = path.join(root, 'images', filename)
+      fs.mkdirSync(path.dirname(imagePath), { recursive: true })
+      await sharp({ create: { width: 4, height: 4, channels: 4, background: '#4070ec' } }).png().toFile(imagePath)
+    }
+    write(root, 'pages/help.html', '<!doctype html><title>Help</title>')
+    write(root, 'data/report.json', '{"ok":true}')
+
+    const result = await validateLocalHtmlDelivery({ filePath: htmlPath })
+    assert.equal(result.resourceCount, 6)
+    assert.equal(result.decodedImageCount, 4)
+    assert.deepEqual(
+      result.resources.map((resource) => path.relative(root, resource.path)).sort(),
+      [
+        'data/report.json',
+        'images/one.png',
+        'images/poster.png',
+        'images/source.png',
+        'images/two.png',
+        'pages/help.html',
+      ].map((filename) => path.normalize(filename)).sort(),
+    )
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('local HTML delivery still rejects remote DOM assignments and setAttribute calls', async () => {
+  const root = temporarySite()
+  try {
+    const assignmentPath = write(root, 'assignment.html', `<!doctype html><main>Remote</main><script>
+      const image = new Image();
+      image.src = 'https://cdn.example.com/image.png';
+    </script>`)
+    await assert.rejects(
+      validateLocalHtmlDelivery({ filePath: assignmentPath }),
+      (error) => error?.code === 'HTML_DELIVERY_REMOTE_RESOURCE_UNSUPPORTED',
+    )
+
+    const attributePath = write(root, 'attribute.html', `<!doctype html><main>Remote</main><script>
+      image.setAttribute('src', 'https://cdn.example.com/image.png');
+    </script>`)
+    await assert.rejects(
+      validateLocalHtmlDelivery({ filePath: attributePath }),
+      (error) => error?.code === 'HTML_DELIVERY_REMOTE_RESOURCE_UNSUPPORTED',
+    )
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('local HTML delivery extracts static script resources without executing user code', async () => {
+  const root = temporarySite()
+  try {
+    const htmlPath = write(root, 'index.html', `<!doctype html><main>Gallery</main><script>
+      document.documentElement.remove();
+      const image = { src: 'images/one.png' };
+    </script>`)
+    const imagePath = path.join(root, 'images', 'one.png')
+    fs.mkdirSync(path.dirname(imagePath), { recursive: true })
+    await sharp({ create: { width: 4, height: 4, channels: 4, background: '#4070ec' } }).png().toFile(imagePath)
+
+    const result = await validateLocalHtmlDelivery({ filePath: htmlPath })
+    assert.equal(result.resourceCount, 1)
+    assert.equal(result.decodedImageCount, 1)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('local HTML delivery rejects missing or escaping static DOM resources but ignores computed unknown values', async () => {
+  const root = temporarySite()
+  const parent = path.dirname(root)
+  try {
+    const missingPath = write(root, 'missing.html', `<!doctype html><main>Gallery</main>
+      <script>const images = [{ src: 'images/missing.png', name: 'caption.png' }];</script>`)
+    await assert.rejects(
+      validateLocalHtmlDelivery({ filePath: missingPath }),
+      (error) => error?.code === 'HTML_DELIVERY_RESOURCE_MISSING'
+        && error?.reference === 'images/missing.png',
+    )
+
+    const outsideName = `${path.basename(root)}-outside.png`
+    write(parent, outsideName, 'outside')
+    const escapingPath = write(root, 'escaping.html', `<!doctype html><main>Gallery</main>
+      <script>const image = { src: '../${outsideName}' };</script>`)
+    await assert.rejects(
+      validateLocalHtmlDelivery({ filePath: escapingPath, decodeImages: false }),
+      (error) => error?.code === 'HTML_DELIVERY_RESOURCE_OUTSIDE_ROOT',
+    )
+
+    write(root, 'secret.png', 'not exposed')
+    const computedPath = write(root, 'computed.html', `<!doctype html><main>Gallery</main>
+      <script>const image = { src: chooseAtRuntime('secret.png'), name: 'secret.png' };</script>`)
+    const computed = await validateLocalHtmlDelivery({ filePath: computedPath, decodeImages: false })
+    assert.equal(computed.resourceCount, 0)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+    fs.rmSync(path.join(parent, `${path.basename(root)}-outside.png`), { force: true })
+  }
+})
+
 test('local file MIME mapping serves CommonJS as JavaScript', () => {
   assert.equal(localFileMimeType('worker.cjs'), 'text/javascript; charset=utf-8')
 })

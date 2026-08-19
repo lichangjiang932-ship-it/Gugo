@@ -32,6 +32,25 @@ test('turn event protocol accepts known events and rejects protocol drift', () =
   assert.throws(() => parseTurnEvent({ ...event, sequence: -1 }))
 })
 
+test('approval events accept declared metadata sources while remaining compatible with legacy events', () => {
+  const base = {
+    sessionId: 's1', turnId: 't1', sequence: 1, type: 'approval.required', createdAt: 2,
+    payload: { approvalId: 'approval-1', toolName: 'write_file', risk: 'medium' },
+  }
+  const declared = createTurnEvent({
+    ...base,
+    id: 'approval-declared',
+    payload: { ...base.payload, metadataSource: 'declared' },
+  })
+  assert.equal(declared.payload.metadataSource, 'declared')
+  assert.equal(createTurnEvent({ ...base, id: 'approval-legacy' }).payload.metadataSource, undefined)
+  assert.throws(() => createTurnEvent({
+    ...base,
+    id: 'approval-invalid-source',
+    payload: { ...base.payload, metadataSource: 'guessed' },
+  }))
+})
+
 test('turn.started enforces inline prompts by UTF-8 bytes, not JavaScript string length', () => {
   const maxBytes = INLINE_SKILL_DEFINITION_LIMITS.systemPrompt.maxUtf8Bytes
   assert.throws(() => createTurnEvent({

@@ -6,6 +6,18 @@ function responseErrorMessage(data, fallback) {
   return fallback
 }
 
+function attachServerError(error, data, status) {
+  const nested = data?.error && typeof data.error === 'object' ? data.error : {}
+  error.status = status
+  error.code = nested.code || data?.code
+  error.retryable = nested.retryable ?? data?.retryable
+  error.path = nested.path || data?.path
+  error.hint = nested.hint || data?.hint
+  const issues = nested.issues || data?.issues
+  if (Array.isArray(issues)) error.issues = issues
+  return error
+}
+
 export async function callJson(url, body, { method = 'POST' } = {}) {
   const headers = { 'Content-Type': 'application/json' }
   const token = getAuthToken?.()
@@ -19,13 +31,11 @@ export async function callJson(url, body, { method = 'POST' } = {}) {
   let data
   try { data = text ? JSON.parse(text) : {} } catch { data = { raw: text } }
   if (!resp.ok || data?.ok === false) {
-    const err = new Error(responseErrorMessage(data, `HTTP ${resp.status}`))
-    err.status = resp.status
-    err.code = data?.error?.code || data?.code
-    err.retryable = data?.retryable
-    err.path = data?.path
-    err.hint = data?.hint
-    throw err
+    throw attachServerError(
+      new Error(responseErrorMessage(data, `HTTP ${resp.status}`)),
+      data,
+      resp.status,
+    )
   }
   return data
 }
@@ -56,12 +66,7 @@ export async function callWorkspaceJson(url, body) {
         + '\u6362\u8def\u5f84\u91cd\u8bd5\u6ca1\u6709\u7528\uff0c\u8bf7\u6539\u7528\u5176\u4ed6\u5de5\u5177\uff08\u5982 read_file / list_directory\uff09\u5b8c\u6210\u4efb\u52a1\uff0c'
         + '\u5e76\u5728\u6700\u7ec8\u56de\u590d\u91cc\u544a\u8bc9\u7528\u6237\u8fd9\u4e2a\u63a5\u53e3\u4e0d\u53ef\u7528\u3002'
     }
-    const err = new Error(message)
-    err.status = resp.status
-    err.code = data?.error?.code || data?.code
-    err.retryable = data?.retryable
-    err.path = data?.path
-    err.hint = data?.hint
+    const err = attachServerError(new Error(message), data, resp.status)
     err.suggestGrantPath = data?.suggestGrantPath
     err.requiredAccessMode = data?.requiredAccessMode
     throw err

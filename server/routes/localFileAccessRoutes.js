@@ -341,6 +341,7 @@ export async function handleLocalFileAccessRequest(req, res) {
         userId,
         rootPath: body.path,
         accessMode: body.accessMode,
+        scope: body.scope,
       })
       return sendJson(res, 200, { ok: true, grant, ...getLocalFileAccessStatus({ userId }) })
     }
@@ -380,6 +381,7 @@ export async function handleLocalFileAccessRequest(req, res) {
         rootPath,
         trusted,
         confirmation: body.confirmation,
+        scope: body.scope,
       })
       return sendJson(res, 200, {
         ok: true,

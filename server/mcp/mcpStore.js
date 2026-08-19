@@ -9,8 +9,34 @@ import { randomUUID } from 'node:crypto'
 import { openCredentialObject, sealCredentialObject } from '../utils/credentialVault.js'
 
 const TRANSPORTS = ['stdio', 'sse', 'http']
+const MCP_RISK_LEVELS = new Set(['low', 'medium', 'high'])
 const MCP_ENV_PURPOSE = 'mcp-server-env'
 const MCP_HEADERS_PURPOSE = 'mcp-server-headers'
+
+function normalizeToolDeclarations(value) {
+  if (value == null) return {}
+  if (typeof value !== 'object' || Array.isArray(value)) throw new Error('tools 必须是工具名到风险声明的对象')
+  const normalized = {}
+  for (const [rawName, declaration] of Object.entries(value)) {
+    const name = String(rawName || '').trim()
+    if (!name) throw new Error('tools 中的工具名不能为空')
+    if (!declaration || typeof declaration !== 'object' || Array.isArray(declaration)) {
+      throw new Error(`tools.${name} 必须是对象`)
+    }
+    if (!MCP_RISK_LEVELS.has(declaration.riskLevel)) {
+      throw new Error(`tools.${name}.riskLevel 必须是 low / medium / high`)
+    }
+    const approval = declaration.requiresApproval ?? declaration.requiredApproval
+    if (typeof approval !== 'boolean') {
+      throw new Error(`tools.${name}.requiresApproval 必须是 boolean`)
+    }
+    normalized[name] = {
+      riskLevel: declaration.riskLevel,
+      requiresApproval: approval,
+    }
+  }
+  return normalized
+}
 
 function decodeLegacyCredential(raw) {
   try {
@@ -39,10 +65,12 @@ function row2server(row) {
   if (!row) return null
   let argsArr = []
   let autoApprove = []
+  let tools = {}
   try { argsArr = row.args_json ? JSON.parse(row.args_json) : [] } catch { /* keep empty */ }
   const env = readCredentialColumn(row, 'env_json', MCP_ENV_PURPOSE)
   const headers = readCredentialColumn(row, 'headers_json', MCP_HEADERS_PURPOSE)
   try { autoApprove = row.auto_approve_json ? JSON.parse(row.auto_approve_json) : [] } catch { /* keep empty */ }
+  try { tools = normalizeToolDeclarations(row.tools_json ? JSON.parse(row.tools_json) : {}) } catch { /* keep empty */ }
   return {
     id: row.id,
     userId: row.user_id,
@@ -56,6 +84,7 @@ function row2server(row) {
     headers,
     enabled: !!row.enabled,
     autoApprove,
+    tools,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -79,7 +108,7 @@ export function getServer(userId, id) {
   return row2server(db.prepare('SELECT * FROM mcp_servers WHERE user_id = ? AND id = ?').get(userId, id))
 }
 
-export function upsertServer({ id, userId, name, transport, command, args, env, cwd, url, headers, enabled, autoApprove }) {
+export function upsertServer({ id, userId, name, transport, command, args, env, cwd, url, headers, enabled, autoApprove, tools }) {
   if (!userId) throw new Error('userId 必填')
   if (!name?.trim()) throw new Error('name 不能为空')
   if (!TRANSPORTS.includes(transport)) throw new Error('transport 必须是 stdio / http / sse')
@@ -95,15 +124,16 @@ export function upsertServer({ id, userId, name, transport, command, args, env, 
   const envJson = sealCredentialObject(env || {}, { purpose: MCP_ENV_PURPOSE })
   const headersJson = sealCredentialObject(headers || {}, { purpose: MCP_HEADERS_PURPOSE })
   const autoApproveJson = JSON.stringify(Array.isArray(autoApprove) ? autoApprove : [])
+  const toolsJson = JSON.stringify(normalizeToolDeclarations(tools))
 
   const existing = db.prepare('SELECT id FROM mcp_servers WHERE user_id = ? AND id = ?').get(userId, serverId)
   if (existing) {
-    db.prepare(`UPDATE mcp_servers SET name=?, transport=?, command=?, args_json=?, env_json=?, cwd=?, url=?, headers_json=?, enabled=?, auto_approve_json=?, updated_at=? WHERE id=?`).run(
-      name.trim(), transport, command || null, argsJson, envJson, cwd || null, url || null, headersJson, enabled ? 1 : 0, autoApproveJson, now, serverId,
+    db.prepare(`UPDATE mcp_servers SET name=?, transport=?, command=?, args_json=?, env_json=?, cwd=?, url=?, headers_json=?, enabled=?, auto_approve_json=?, tools_json=?, updated_at=? WHERE id=?`).run(
+      name.trim(), transport, command || null, argsJson, envJson, cwd || null, url || null, headersJson, enabled ? 1 : 0, autoApproveJson, toolsJson, now, serverId,
     )
   } else {
-    db.prepare(`INSERT INTO mcp_servers (id, user_id, name, transport, command, args_json, env_json, cwd, url, headers_json, enabled, auto_approve_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-      serverId, userId, name.trim(), transport, command || null, argsJson, envJson, cwd || null, url || null, headersJson, enabled ? 1 : 0, autoApproveJson, now, now,
+    db.prepare(`INSERT INTO mcp_servers (id, user_id, name, transport, command, args_json, env_json, cwd, url, headers_json, enabled, auto_approve_json, tools_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      serverId, userId, name.trim(), transport, command || null, argsJson, envJson, cwd || null, url || null, headersJson, enabled ? 1 : 0, autoApproveJson, toolsJson, now, now,
     )
   }
   return getServer(userId, serverId)

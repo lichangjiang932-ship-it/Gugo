@@ -8,7 +8,21 @@ import {
   selectEnabledServerToolSpecs,
 } from '../src/lib/serverToolCatalog.js'
 import { SERVER_TURN_TOOL_TOGGLE_NAMES } from '../src/lib/serverToolConfig.js'
-import { BROWSER_TOOL_NAMES, BROWSER_TOOL_SPECS } from '../src/lib/tools/browserToolSpecs.js'
+import { buildToolSpecs } from '../src/lib/tools/toolSpecs.js'
+
+const BROWSER_TOOL_NAMES = [
+  'browser_open_url',
+  'browser_navigate',
+  'browser_state',
+  'browser_snapshot',
+  'browser_console',
+  'browser_click',
+  'browser_type',
+  'browser_select',
+  'browser_press',
+  'browser_wait',
+  'browser_screenshot',
+]
 
 function spec(name) {
   return { type: 'function', function: { name, parameters: { type: 'object', properties: {} } } }
@@ -17,7 +31,6 @@ function spec(name) {
 test('fallback keeps enabled server-only tools without copying their live schemas', () => {
   const result = buildServerToolCatalogFallback(
     ['read_file', 'pdf_transform', 'media_transform'],
-    [spec('read_file')],
   )
   assert.deepEqual(
     result.map((item) => item.function.name),
@@ -25,17 +38,13 @@ test('fallback keeps enabled server-only tools without copying their live schema
       .sort((left, right) => left.localeCompare(right, 'en')),
   )
 
-  const byName = new Map(result.map((item) => [item.function.name, item]))
-  assert.deepEqual(byName.get('media_transform')?.function.parameters, {
-    type: 'object',
-    additionalProperties: true,
-  })
-  assert.deepEqual(byName.get('pdf_transform')?.function.parameters, {
-    type: 'object',
-    additionalProperties: true,
-  })
-  assert.deepEqual(byName.get('read_file'), spec('read_file'))
-  assert.equal(byName.get('browser_click'), BROWSER_TOOL_SPECS.browser_click)
+  for (const item of result) {
+    assert.equal(
+      Object.hasOwn(item.function, 'parameters'),
+      false,
+      `${item.function.name} fallback must not duplicate server parameters`,
+    )
+  }
 })
 
 test('fallback represents every configurable server turn tool without the retired client catalog', () => {
@@ -70,6 +79,26 @@ test('selects only switches explicitly enabled in the persisted server tool conf
     { pdf_info: true, pdf_transform: false },
   )
   assert.deepEqual(result.map((item) => item.function.name), ['pdf_info'])
+})
+
+test('a newly returned server tool needs no frontend schema registration', () => {
+  const serverOnlySpec = {
+    type: 'function',
+    function: {
+      name: 'server_only_new_tool',
+      description: 'Defined only by the server catalog.',
+      parameters: {
+        type: 'object',
+        properties: { value: { type: 'integer', minimum: 1 } },
+        required: ['value'],
+      },
+    },
+  }
+  const catalog = normalizeServerToolCatalog({
+    specs: [{ origin: 'builtin', tool: serverOnlySpec }],
+  })
+
+  assert.equal(buildToolSpecs(['server_only_new_tool'], catalog)[0], serverOnlySpec)
 })
 
 test('fetches canonical specs from the server catalog endpoint', async () => {

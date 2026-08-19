@@ -43,6 +43,21 @@ test('QQ Mail local environment fallback is explained in all five languages', ()
   }
 })
 
+test('input history navigation setting copy exists in all five languages', () => {
+  for (const lang of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
+    assert.ok(translations[lang]?.settings?.inputHistoryNavigation)
+    assert.ok(translations[lang]?.settings?.inputHistoryNavigationDescription)
+  }
+})
+
+test('directory authorization lifetime copy exists in all five languages', () => {
+  for (const lang of ['zh', 'en', 'ja', 'ko', 'zh-TW']) {
+    assert.ok(translations[lang]?.localFiles?.authorizationLifetime)
+    assert.ok(translations[lang]?.localFiles?.authorizationSession)
+    assert.ok(translations[lang]?.localFiles?.authorizationPersistent)
+  }
+})
+
 test('新增语言 ja/ko/zh-TW 的 key 与 zh 完全对称', () => {
   const zhKeys = leafKeys(translations.zh).sort()
   for (const lang of ['ja', 'ko', 'zh-TW']) {

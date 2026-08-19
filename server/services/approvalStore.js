@@ -35,6 +35,10 @@ function stringifyArgs(args) {
   }
 }
 
+function normalizeMetadataSource(source) {
+  return source === 'declared' ? 'declared' : 'fallback'
+}
+
 function mapApproval(row) {
   if (!row) return null
   const decidedArgs = parseJson(row.decided_args_json)
@@ -48,6 +52,7 @@ function mapApproval(row) {
     toolName: row.tool_name,
     args: parseJson(row.args_json, {}),
     risk: row.risk,
+    metadataSource: normalizeMetadataSource(row.metadata_source),
     reason: row.reason || null,
     status: row.status,
     decidedArgs,
@@ -71,6 +76,7 @@ export function createPendingApproval({
   toolName,
   args = {},
   risk = 'medium',
+  metadataSource = 'fallback',
   reason = null,
   expiresAt = null,
 } = {}) {
@@ -87,10 +93,10 @@ export function createPendingApproval({
   getDb().prepare(`
     INSERT INTO pending_approvals
       (id, user_id, origin, job_id, step_id, session_id, tool_name, args_json,
-       risk, reason, status, expires_at, created_at, updated_at)
+       risk, metadata_source, reason, status, expires_at, created_at, updated_at)
     VALUES
       (@id, @userId, @origin, @jobId, @stepId, @sessionId, @toolName, @argsJson,
-       @risk, @reason, 'pending', @expiresAt, @now, @now)
+       @risk, @metadataSource, @reason, 'pending', @expiresAt, @now, @now)
   `).run({
     id,
     userId,
@@ -101,6 +107,7 @@ export function createPendingApproval({
     toolName,
     argsJson: stringifyArgs(args),
     risk,
+    metadataSource: normalizeMetadataSource(metadataSource),
     reason: reason ? String(reason).slice(0, 500) : null,
     expiresAt: expiry,
     now,

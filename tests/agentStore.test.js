@@ -96,6 +96,7 @@ test('agentStore: ensureDefaultAgent 幂等', { concurrency: false }, async () =
   const a = agMod.ensureDefaultAgent({ userId })
   assert.equal(a.name, 'Gugo')
   assert.equal(a.isDefault, true)
+  assert.equal(a.personaManifest.defaultPermissionMode, 'normal')
   assert.ok(a.soulMd.length > 0)
 
   const b = agMod.ensureDefaultAgent({ userId })

@@ -104,6 +104,7 @@ export default function ToolApprovalCard({ open, request, onDecide, busy }) {
   if (!open || !request) return null
 
   const { name, args, risk, reason, preview } = request
+  const metadataSource = request.metadataSource === 'declared' ? 'declared' : 'fallback'
   const tone = RISK_TONE[risk] || RISK_TONE.low
   const Icon = TOOL_ICON[name] || AlertTriangle
   const main = headline(name, args)
@@ -120,6 +121,12 @@ export default function ToolApprovalCard({ open, request, onDecide, busy }) {
             <span className={`inline-flex items-center gap-1 font-mono text-[9px] uppercase tracking-wider ${tone.text}`}>
               <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} />
               {t(`approvals.risk.${risk}`)}
+            </span>
+            <span
+              data-testid="tool-risk-source"
+              className="font-mono text-[9px] text-ink-fade"
+            >
+              {t('approvals.source.label')}: {t(`approvals.source.${metadataSource}`)}
             </span>
           </div>
           {reason && <p className="text-xs text-ink-soft mt-1">{reason}</p>}

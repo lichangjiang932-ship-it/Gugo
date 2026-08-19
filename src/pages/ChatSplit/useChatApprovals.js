@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { decideApproval as decideApprovalApi, fetchApprovalSettings, updateApprovalSettings } from '../../lib/approvalClient.js'
+import {
+  decideApproval as decideApprovalApi,
+  fetchApprovalSettings,
+  isPermissionModeWidening,
+  updateApprovalSettings,
+} from '../../lib/approvalClient.js'
 import { createApprovalEpochGuard, createApprovalOwnerGuard } from './approvalOwnerGuard.js'
 
 export default function useChatApprovals({ setWorkbenchMessage, toast, t }) {
@@ -90,15 +95,38 @@ export default function useChatApprovals({ setWorkbenchMessage, toast, t }) {
 
   const changeApprovalMode = useCallback(async (mode) => {
     const previous = approvalSettings
+    const widened = isPermissionModeWidening(previous.mode, mode)
+    let justification = ''
+    if (widened && typeof window !== 'undefined') {
+      const approved = window.confirm(t('approvals.mode.escalationConfirm'))
+      if (!approved) return false
+      if (mode === 'bypass') {
+        justification = String(window.prompt(t('approvals.mode.bypassJustification')) || '').trim()
+        if (!justification) return false
+      }
+    }
     const next = { ...approvalSettings, mode }
     setApprovalSettings(next)
     try {
-      const saved = await updateApprovalSettings({ mode })
+      const saved = await updateApprovalSettings({
+        mode,
+        approveEscalation: widened,
+        ...(justification ? { justification } : {}),
+      })
       const safe = saved && typeof saved === 'object' ? saved : next
       setApprovalSettings(safe)
+      if (safe.modeTransition?.pending) {
+        toast.info({
+          title: t('approvals.mode.escalationPendingTitle'),
+          body: t('approvals.mode.escalationPendingBody'),
+        })
+        return safe
+      }
+      return safe
     } catch (error) {
       setApprovalSettings(previous)
       toast.error({ title: t('errors.saveFailed'), body: error.message })
+      return false
     }
   }, [approvalSettings, toast, t])
 

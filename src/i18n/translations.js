@@ -481,6 +481,9 @@ const LOCAL_FILES_TRANSLATIONS = {
 
 const WORKSPACE_TRUST_TRANSLATIONS = {
   zh: {
+    authorizationLifetime: '授权保留时间',
+    authorizationSession: '仅本会话（服务重启后失效）',
+    authorizationPersistent: '永久记住',
     workspaceTrustTitle: '信任此工作区配置',
     workspaceTrustHint: '此信任控制共享工作区能力与 .gugo/config.json。独立授权的本地目录按 read_only/read_write 模式生效；代码执行状态见权限中心。',
     workspaceTrusted: '已信任工作区配置。',
@@ -489,6 +492,9 @@ const WORKSPACE_TRUST_TRANSLATIONS = {
     codeExecutionTitle: '代码执行运行时', codeExecutionHint: '仅明确授权的 read_write 目录可执行代码；单文件、只读和“全部文件”授权不会获得 Shell 权限。是否询问由当前审批模式决定；“全部放行”不会再询问。', codeExecutionRuntime: '后端运行时', codeExecutionToolGate: '用户工具 Gate', codeExecutionWritableDirectories: '可执行读写目录', codeExecutionEnabled: '已启用', codeExecutionDisabled: '已关闭', codeExecutionLoading: '检查中', codeExecutionUnknown: '未报告', codeExecutionChecking: '正在读取代码执行状态…', codeExecutionRuntimeUnknown: '后端未报告代码执行状态；请重启服务以应用最新版本。', codeExecutionRuntimeBlocked: '当前部署已关闭本地代码执行。可由管理员检查 LOCAL_CODE_EXECUTION_ENABLED。', codeExecutionToolBlocked: '代码执行运行时可用，但 bash_exec 已在权限中心关闭。', codeExecutionNeedsWritableDirectory: '代码执行可用；请先给目标文件所在目录授予 read_write 权限。', codeExecutionReady: '代码执行已就绪，可在 {count} 个已授权读写目录中运行命令。',
   },
   en: {
+    authorizationLifetime: 'Authorization lifetime',
+    authorizationSession: 'This session (cleared when the service restarts)',
+    authorizationPersistent: 'Remember permanently',
     workspaceTrustTitle: 'Trust this workspace configuration',
     workspaceTrustHint: 'This trust controls shared-workspace capabilities and .gugo/config.json. Separately authorized local folders follow their read_only/read_write grants; see Permissions for code-execution status.',
     workspaceTrusted: 'Workspace configuration trusted.',
@@ -497,6 +503,9 @@ const WORKSPACE_TRUST_TRANSLATIONS = {
     codeExecutionTitle: 'Code execution runtime', codeExecutionHint: 'Code runs only inside explicitly authorized read_write folders. File-only, read-only, and all-files grants never add shell authority. Prompts follow the active approval mode; Bypass all asks no further questions.', codeExecutionRuntime: 'Backend runtime', codeExecutionToolGate: 'User tool gate', codeExecutionWritableDirectories: 'Executable write folders', codeExecutionEnabled: 'Enabled', codeExecutionDisabled: 'Disabled', codeExecutionLoading: 'Checking', codeExecutionUnknown: 'Not reported', codeExecutionChecking: 'Checking code-execution status…', codeExecutionRuntimeUnknown: 'The backend did not report code-execution status. Restart the service to apply the latest version.', codeExecutionRuntimeBlocked: 'Local code execution is disabled for this deployment. An administrator can check LOCAL_CODE_EXECUTION_ENABLED.', codeExecutionToolBlocked: 'The runtime is available, but bash_exec is disabled in Permissions.', codeExecutionNeedsWritableDirectory: 'Code execution is available. Authorize the target file’s folder with read_write access first.', codeExecutionReady: 'Code execution is ready in {count} authorized read/write folder(s).',
   },
   ja: {
+    authorizationLifetime: '許可の保持期間',
+    authorizationSession: 'このセッションのみ（サービス再起動時に解除）',
+    authorizationPersistent: '永続的に記憶',
     workspaceTrustTitle: 'このワークスペース設定を信頼',
     workspaceTrustHint: 'この信頼設定は共有ワークスペース機能と .gugo/config.json を制御します。個別に許可したローカルフォルダーは read_only/read_write 設定に従います。',
     workspaceTrusted: 'ワークスペース設定を信頼しました。',
@@ -505,6 +514,9 @@ const WORKSPACE_TRUST_TRANSLATIONS = {
     codeExecutionTitle: 'コード実行ランタイム', codeExecutionHint: 'コードは明示的に read_write 許可したフォルダー内だけで実行できます。単一ファイル、読み取り専用、全ファイル許可では Shell 権限は追加されません。確認の有無は承認モードに従い、「すべて許可」では確認しません。', codeExecutionRuntime: 'バックエンド', codeExecutionToolGate: 'ユーザーツール Gate', codeExecutionWritableDirectories: '実行可能フォルダー', codeExecutionEnabled: '有効', codeExecutionDisabled: '無効', codeExecutionLoading: '確認中', codeExecutionUnknown: '未報告', codeExecutionChecking: 'コード実行状態を確認しています…', codeExecutionRuntimeUnknown: 'バックエンドがコード実行状態を報告していません。最新版を反映するためサービスを再起動してください。', codeExecutionRuntimeBlocked: 'この環境ではローカルコード実行が無効です。管理者は LOCAL_CODE_EXECUTION_ENABLED を確認してください。', codeExecutionToolBlocked: 'ランタイムは利用できますが、権限センターで bash_exec が無効です。', codeExecutionNeedsWritableDirectory: 'コード実行は利用できます。対象ファイルのフォルダーを read_write で許可してください。', codeExecutionReady: '{count} 個の許可済み読み書きフォルダーでコード実行を利用できます。',
   },
   ko: {
+    authorizationLifetime: '권한 유지 기간',
+    authorizationSession: '이 세션만 (서비스 재시작 시 해제)',
+    authorizationPersistent: '영구적으로 기억',
     workspaceTrustTitle: '이 작업 공간 설정 신뢰',
     workspaceTrustHint: '이 신뢰 설정은 공유 작업 공간 기능과 .gugo/config.json을 제어합니다. 별도로 허용한 로컬 폴더는 read_only/read_write 권한을 따릅니다.',
     workspaceTrusted: '작업 공간 설정을 신뢰했습니다.',
@@ -513,6 +525,9 @@ const WORKSPACE_TRUST_TRANSLATIONS = {
     codeExecutionTitle: '코드 실행 런타임', codeExecutionHint: '코드는 명시적으로 read_write 허용한 폴더 안에서만 실행됩니다. 단일 파일, 읽기 전용 및 전체 파일 허용은 Shell 권한을 추가하지 않습니다. 확인 여부는 승인 모드를 따르며 “모두 허용”에서는 다시 묻지 않습니다.', codeExecutionRuntime: '백엔드 런타임', codeExecutionToolGate: '사용자 도구 Gate', codeExecutionWritableDirectories: '실행 가능한 쓰기 폴더', codeExecutionEnabled: '활성', codeExecutionDisabled: '비활성', codeExecutionLoading: '확인 중', codeExecutionUnknown: '보고되지 않음', codeExecutionChecking: '코드 실행 상태를 확인하는 중…', codeExecutionRuntimeUnknown: '백엔드가 코드 실행 상태를 보고하지 않았습니다. 최신 버전을 적용하려면 서비스를 다시 시작하세요.', codeExecutionRuntimeBlocked: '이 배포에서는 로컬 코드 실행이 꺼져 있습니다. 관리자는 LOCAL_CODE_EXECUTION_ENABLED를 확인하세요.', codeExecutionToolBlocked: '런타임은 사용 가능하지만 권한 센터에서 bash_exec가 꺼져 있습니다.', codeExecutionNeedsWritableDirectory: '코드 실행을 사용할 수 있습니다. 대상 파일 폴더를 read_write로 허용하세요.', codeExecutionReady: '{count}개의 허용된 읽기/쓰기 폴더에서 코드 실행을 사용할 수 있습니다.',
   },
   'zh-TW': {
+    authorizationLifetime: '授權保留時間',
+    authorizationSession: '僅限本次工作階段（服務重新啟動後失效）',
+    authorizationPersistent: '永久記住',
     workspaceTrustTitle: '信任此工作區設定',
     workspaceTrustHint: '此信任控制共享工作區能力與 .gugo/config.json。獨立授權的本機資料夾依 read_only/read_write 模式生效；程式碼執行狀態請見權限中心。',
     workspaceTrusted: '已信任工作區設定。',
@@ -585,6 +600,7 @@ const APPROVAL_TRANSLATIONS = {
   zh: {
     nav: '审批',
     risk: { high: '高风险', medium: '中风险', low: '低风险' },
+    source: { label: '风险来源', declared: '显式声明', fallback: '兼容兜底' },
     origin: { job: '后台任务', subagent: '子代理', chat: '对话' },
     mode: {
       label: '权限',
@@ -592,6 +608,10 @@ const APPROVAL_TRANSLATIONS = {
       acceptEdits: '自动接受编辑', acceptEditsHint: '改文件不再问，执行命令和对外请求仍然问',
       plan: '计划模式', planHint: '只读。模型只能看和想，任何写操作直接拒绝',
       bypass: '全部放行', bypassHint: '不再询问任何操作。仅在完全信任的本机环境使用',
+      escalationConfirm: '此操作会放宽模型权限。确认继续吗？',
+      bypassJustification: '请输入切换到“全部放行”的理由（必填）：',
+      escalationPendingTitle: '权限升级等待审批',
+      escalationPendingBody: '当前权限未改变。请在审批收件箱批准后生效。',
     },
     inbox: {
       title: '审批收件箱', subtitle: '无人值守的后台任务和定时任务需要批准时，会排队到这里。日常对话里的审批直接在对话中完成。',
@@ -604,6 +624,7 @@ const APPROVAL_TRANSLATIONS = {
   en: {
     nav: 'Approvals',
     risk: { high: 'High risk', medium: 'Medium risk', low: 'Low risk' },
+    source: { label: 'Risk source', declared: 'Declared metadata', fallback: 'Compatibility fallback' },
     origin: { job: 'Background job', subagent: 'Subagent', chat: 'Chat' },
     mode: {
       label: 'Permissions',
@@ -611,6 +632,10 @@ const APPROVAL_TRANSLATIONS = {
       acceptEdits: 'Accept edits', acceptEditsHint: 'File edits go through; commands and outbound requests still ask',
       plan: 'Plan mode', planHint: 'Read-only. The model can look and think; writes are refused',
       bypass: 'Bypass all', bypassHint: 'Never ask. Only for a fully trusted local machine',
+      escalationConfirm: 'This change broadens model permissions. Continue?',
+      bypassJustification: 'Enter a required reason for enabling “Bypass all”:',
+      escalationPendingTitle: 'Permission upgrade pending',
+      escalationPendingBody: 'Permissions are unchanged until you approve the request in the approval inbox.',
     },
     inbox: {
       title: 'Approval inbox', subtitle: 'Unattended background and scheduled jobs queue their approval requests here. Approvals during a chat happen inline in the conversation.',
@@ -623,6 +648,7 @@ const APPROVAL_TRANSLATIONS = {
   ja: {
     nav: '承認',
     risk: { high: '高リスク', medium: '中リスク', low: '低リスク' },
+    source: { label: 'リスク判定元', declared: '明示メタデータ', fallback: '互換フォールバック' },
     origin: { job: 'バックグラウンドジョブ', subagent: 'サブエージェント', chat: 'チャット' },
     mode: {
       label: '権限',
@@ -630,6 +656,10 @@ const APPROVAL_TRANSLATIONS = {
       acceptEdits: '編集を自動承認', acceptEditsHint: 'ファイル編集は確認なし。コマンドと外部リクエストは確認します',
       plan: 'プランモード', planHint: '読み取り専用。書き込み操作はすべて拒否されます',
       bypass: 'すべて許可', bypassHint: '一切確認しません。完全に信頼できる端末でのみ使用してください',
+      escalationConfirm: 'この変更はモデルの権限を拡大します。続行しますか？',
+      bypassJustification: '「すべて許可」に切り替える理由を入力してください（必須）：',
+      escalationPendingTitle: '権限の拡張は承認待ちです',
+      escalationPendingBody: '承認インボックスで承認するまで現在の権限は変更されません。',
     },
     inbox: {
       title: '承認インボックス', subtitle: '無人実行のバックグラウンドジョブと定期ジョブの承認要求がここに入ります。チャット中の承認は会話内で行います。',
@@ -642,6 +672,7 @@ const APPROVAL_TRANSLATIONS = {
   ko: {
     nav: '승인',
     risk: { high: '높은 위험', medium: '보통 위험', low: '낮은 위험' },
+    source: { label: '위험 출처', declared: '명시된 메타데이터', fallback: '호환성 폴백' },
     origin: { job: '백그라운드 작업', subagent: '서브에이전트', chat: '채팅' },
     mode: {
       label: '권한',
@@ -649,6 +680,10 @@ const APPROVAL_TRANSLATIONS = {
       acceptEdits: '편집 자동 승인', acceptEditsHint: '파일 편집은 묻지 않고, 명령과 외부 요청은 계속 확인합니다',
       plan: '계획 모드', planHint: '읽기 전용. 쓰기 작업은 모두 거부됩니다',
       bypass: '모두 허용', bypassHint: '확인하지 않습니다. 완전히 신뢰하는 로컬 환경에서만 사용하세요',
+      escalationConfirm: '이 변경은 모델 권한을 확대합니다. 계속할까요?',
+      bypassJustification: '“모두 허용”을 켜는 이유를 입력하세요(필수):',
+      escalationPendingTitle: '권한 확대 승인 대기 중',
+      escalationPendingBody: '승인 받은편지함에서 승인할 때까지 현재 권한은 변경되지 않습니다.',
     },
     inbox: {
       title: '승인 받은편지함', subtitle: '무인 실행되는 백그라운드 작업과 예약 작업의 승인 요청이 여기에 쌓입니다. 채팅 중 승인은 대화 안에서 처리됩니다.',
@@ -661,6 +696,7 @@ const APPROVAL_TRANSLATIONS = {
   'zh-TW': {
     nav: '審批',
     risk: { high: '高風險', medium: '中風險', low: '低風險' },
+    source: { label: '風險來源', declared: '明確宣告', fallback: '相容性後備' },
     origin: { job: '背景任務', subagent: '子代理', chat: '對話' },
     mode: {
       label: '權限',
@@ -668,6 +704,10 @@ const APPROVAL_TRANSLATIONS = {
       acceptEdits: '自動接受編輯', acceptEditsHint: '改檔案不再問，執行命令和對外請求仍然問',
       plan: '計劃模式', planHint: '唯讀。模型只能看和想，任何寫入操作直接拒絕',
       bypass: '全部放行', bypassHint: '不再詢問任何操作。僅在完全信任的本機環境使用',
+      escalationConfirm: '此操作會放寬模型權限。確定繼續嗎？',
+      bypassJustification: '請輸入切換到「全部放行」的理由（必填）：',
+      escalationPendingTitle: '權限升級等待審批',
+      escalationPendingBody: '目前權限不會變更；請在審批收件匣批准後生效。',
     },
     inbox: {
       title: '審批收件匣', subtitle: '無人值守的背景任務和定時任務需要批准時，會排隊到這裡。日常對話中的審批直接在對話中完成。',
@@ -775,7 +815,7 @@ const SETTINGS_MODAL_TRANSLATIONS = {
     diagnosticsChecking: '正在探测模型端点…', diagnosticsChecked: '端点探测完成。', diagnosticsRefreshed: '诊断状态已刷新。', modelTesting: '正在发送测试消息…', modelTestSucceeded: '测试成功，延迟 {latency} ms。',
     configFileWebFallback: 'Web 版无法直接打开本机配置文件。', configFileOpened: '已打开配置文件。', configFileOpenFailed: '无法打开配置文件。', openConfigFile: '打开配置文件', close: '关闭设置',
     interfaceLanguage: '界面语言', interfaceLanguageDescription: '切换后立即应用到整个工作台。', permissionsEnabledCount: '已启用 {enabled} / {total}',
-    themeDescription: '选择浅色、深色或跟随系统。', accentColor: '强调色', accentColorDescription: '用于主要操作和状态提示。', setAccentColor: '设置强调色 {color}', strongAccent: '强色调模式', strongAccentDescription: '提高主要控件的色彩对比。',
+    themeDescription: '选择浅色、纯白、深色或跟随系统。', accentColor: '强调色', accentColorDescription: '用于主要操作和状态提示。', setAccentColor: '设置强调色 {color}', strongAccent: '强色调模式', strongAccentDescription: '仅增强工作台主要控件，不影响输出文件和预览内容。',
     fontSize: '字体大小', fontSizeDescription: '调整工作台正文大小。', sizeSmall: '小', sizeMedium: '中', sizeLarge: '大', density: '界面密度', densityDescription: '控制列表和控件间距。', densityCompact: '紧凑', densityComfortable: '舒适', densityLoose: '宽松', animations: '动画效果', animationsDescription: '启用轻量过渡与状态动画。',
     pluginsDescription: '管理技能插件与 MCP 扩展。', skillPlugins: '技能插件', skillPluginsDescription: '浏览并安装可复用技能包。', managePlugins: '管理插件', mcpExtensions: 'MCP 扩展', mcpExtensionsDescription: '连接外部工具、资源与 prompts。', manageMcp: '管理 MCP',
     agentPresetsDescription: '管理人物、性格和 Agent 模板。', agentProfiles: 'Agent 配置', agentProfilesDescription: '编辑角色卡、技能和预设模板。', manageAgents: '管理 Agent', visionAssist: '视觉辅助',
@@ -787,7 +827,7 @@ const SETTINGS_MODAL_TRANSLATIONS = {
     diagnosticsChecking: 'Checking the model endpoint…', diagnosticsChecked: 'Endpoint check completed.', diagnosticsRefreshed: 'Diagnostics refreshed.', modelTesting: 'Sending a test message…', modelTestSucceeded: 'Test succeeded in {latency} ms.',
     configFileWebFallback: 'The web app cannot open local configuration files.', configFileOpened: 'Configuration file opened.', configFileOpenFailed: 'Could not open the configuration file.', openConfigFile: 'Open config file', close: 'Close settings',
     interfaceLanguage: 'Interface language', interfaceLanguageDescription: 'Applies immediately across the workbench.', permissionsEnabledCount: '{enabled} of {total} enabled',
-    themeDescription: 'Choose light, dark, or system appearance.', accentColor: 'Accent color', accentColorDescription: 'Used for primary actions and status.', setAccentColor: 'Set accent color {color}', strongAccent: 'Strong accent', strongAccentDescription: 'Increase contrast on primary controls.',
+    themeDescription: 'Choose light, white, dark, or system appearance.', accentColor: 'Accent color', accentColorDescription: 'Used for primary actions and status.', setAccentColor: 'Set accent color {color}', strongAccent: 'Strong accent', strongAccentDescription: 'Only strengthens primary workbench controls; output files and previews stay unchanged.',
     fontSize: 'Font size', fontSizeDescription: 'Adjust workbench body text.', sizeSmall: 'Small', sizeMedium: 'Medium', sizeLarge: 'Large', density: 'Interface density', densityDescription: 'Control spacing in lists and controls.', densityCompact: 'Compact', densityComfortable: 'Comfortable', densityLoose: 'Spacious', animations: 'Animations', animationsDescription: 'Enable lightweight transitions and status motion.',
     pluginsDescription: 'Manage skill plugins and MCP extensions.', skillPlugins: 'Skill plugins', skillPluginsDescription: 'Browse and install reusable skill bundles.', managePlugins: 'Manage plugins', mcpExtensions: 'MCP extensions', mcpExtensionsDescription: 'Connect external tools, resources, and prompts.', manageMcp: 'Manage MCP',
     agentPresetsDescription: 'Manage personas, profiles, and Agent templates.', agentProfiles: 'Agent profiles', agentProfilesDescription: 'Edit character cards, skills, and templates.', manageAgents: 'Manage Agents', visionAssist: 'Vision assistance',
@@ -799,7 +839,7 @@ const SETTINGS_MODAL_TRANSLATIONS = {
     diagnosticsChecking: 'モデルエンドポイントを確認中…', diagnosticsChecked: 'エンドポイント確認が完了しました。', diagnosticsRefreshed: '診断状態を更新しました。', modelTesting: 'テストメッセージを送信中…', modelTestSucceeded: 'テスト成功（{latency} ms）。',
     configFileWebFallback: 'Web 版ではローカル設定ファイルを直接開けません。', configFileOpened: '設定ファイルを開きました。', configFileOpenFailed: '設定ファイルを開けませんでした。', openConfigFile: '設定ファイルを開く', close: '設定を閉じる',
     interfaceLanguage: '表示言語', interfaceLanguageDescription: 'ワークベンチ全体にすぐ反映されます。', permissionsEnabledCount: '{total} 件中 {enabled} 件が有効',
-    themeDescription: 'ライト、ダーク、システム連動から選択します。', accentColor: 'アクセント色', accentColorDescription: '主要操作と状態表示に使用します。', setAccentColor: 'アクセント色 {color} を設定', strongAccent: '強いアクセント', strongAccentDescription: '主要コントロールのコントラストを上げます。',
+    themeDescription: 'ライト、ホワイト、ダーク、システム連動から選択します。', accentColor: 'アクセント色', accentColorDescription: '主要操作と状態表示に使用します。', setAccentColor: 'アクセント色 {color} を設定', strongAccent: '強いアクセント', strongAccentDescription: 'ワークベンチの主要操作だけを強調し、出力ファイルやプレビューには影響しません。',
     fontSize: '文字サイズ', fontSizeDescription: '本文の大きさを調整します。', sizeSmall: '小', sizeMedium: '中', sizeLarge: '大', density: '表示密度', densityDescription: '一覧とコントロールの間隔を調整します。', densityCompact: 'コンパクト', densityComfortable: '標準', densityLoose: 'ゆったり', animations: 'アニメーション', animationsDescription: '軽い画面遷移と状態アニメーションを有効にします。',
     pluginsDescription: 'スキルプラグインと MCP 拡張を管理します。', skillPlugins: 'スキルプラグイン', skillPluginsDescription: '再利用可能なスキルを参照・インストールします。', managePlugins: 'プラグインを管理', mcpExtensions: 'MCP 拡張', mcpExtensionsDescription: '外部ツール、リソース、prompts を接続します。', manageMcp: 'MCP を管理',
     agentPresetsDescription: '人物設定と Agent テンプレートを管理します。', agentProfiles: 'Agent プロファイル', agentProfilesDescription: 'キャラクターカード、スキル、テンプレートを編集します。', manageAgents: 'Agent を管理', visionAssist: '画像支援',
@@ -811,7 +851,7 @@ const SETTINGS_MODAL_TRANSLATIONS = {
     diagnosticsChecking: '모델 엔드포인트 확인 중…', diagnosticsChecked: '엔드포인트 확인 완료.', diagnosticsRefreshed: '진단 상태를 새로 고쳤습니다.', modelTesting: '테스트 메시지 전송 중…', modelTestSucceeded: '테스트 성공, {latency} ms.',
     configFileWebFallback: '웹 앱에서는 로컬 설정 파일을 열 수 없습니다.', configFileOpened: '설정 파일을 열었습니다.', configFileOpenFailed: '설정 파일을 열 수 없습니다.', openConfigFile: '설정 파일 열기', close: '설정 닫기',
     interfaceLanguage: '인터페이스 언어', interfaceLanguageDescription: '워크벤치 전체에 즉시 적용됩니다.', permissionsEnabledCount: '{total}개 중 {enabled}개 사용',
-    themeDescription: '라이트, 다크 또는 시스템 테마를 선택합니다.', accentColor: '강조색', accentColorDescription: '주요 작업과 상태에 사용됩니다.', setAccentColor: '강조색 {color} 설정', strongAccent: '강한 강조색', strongAccentDescription: '주요 컨트롤의 대비를 높입니다.',
+    themeDescription: '라이트, 화이트, 다크 또는 시스템 테마를 선택합니다.', accentColor: '강조색', accentColorDescription: '주요 작업과 상태에 사용됩니다.', setAccentColor: '강조색 {color} 설정', strongAccent: '강한 강조색', strongAccentDescription: '워크벤치의 주요 컨트롤만 강조하며 출력 파일과 미리보기에는 영향을 주지 않습니다.',
     fontSize: '글자 크기', fontSizeDescription: '본문 글자 크기를 조절합니다.', sizeSmall: '작게', sizeMedium: '보통', sizeLarge: '크게', density: '화면 밀도', densityDescription: '목록과 컨트롤 간격을 조절합니다.', densityCompact: '좁게', densityComfortable: '보통', densityLoose: '넓게', animations: '애니메이션', animationsDescription: '가벼운 전환과 상태 애니메이션을 사용합니다.',
     pluginsDescription: '스킬 플러그인과 MCP 확장을 관리합니다.', skillPlugins: '스킬 플러그인', skillPluginsDescription: '재사용 가능한 스킬 번들을 설치합니다.', managePlugins: '플러그인 관리', mcpExtensions: 'MCP 확장', mcpExtensionsDescription: '외부 도구, 리소스 및 prompts를 연결합니다.', manageMcp: 'MCP 관리',
     agentPresetsDescription: '페르소나와 Agent 템플릿을 관리합니다.', agentProfiles: 'Agent 프로필', agentProfilesDescription: '캐릭터 카드, 스킬 및 템플릿을 편집합니다.', manageAgents: 'Agent 관리', visionAssist: '비전 지원',
@@ -823,7 +863,7 @@ const SETTINGS_MODAL_TRANSLATIONS = {
     diagnosticsChecking: '正在探測模型端點…', diagnosticsChecked: '端點探測完成。', diagnosticsRefreshed: '診斷狀態已重新整理。', modelTesting: '正在傳送測試訊息…', modelTestSucceeded: '測試成功，延遲 {latency} ms。',
     configFileWebFallback: 'Web 版無法直接開啟本機設定檔。', configFileOpened: '已開啟設定檔。', configFileOpenFailed: '無法開啟設定檔。', openConfigFile: '開啟設定檔', close: '關閉設定',
     interfaceLanguage: '介面語言', interfaceLanguageDescription: '切換後立即套用到整個工作台。', permissionsEnabledCount: '已啟用 {enabled} / {total}',
-    themeDescription: '選擇淺色、深色或跟隨系統。', accentColor: '強調色', accentColorDescription: '用於主要操作與狀態提示。', setAccentColor: '設定強調色 {color}', strongAccent: '強色調模式', strongAccentDescription: '提高主要控制項的色彩對比。',
+    themeDescription: '選擇淺色、純白、深色或跟隨系統。', accentColor: '強調色', accentColorDescription: '用於主要操作與狀態提示。', setAccentColor: '設定強調色 {color}', strongAccent: '強色調模式', strongAccentDescription: '僅增強工作台主要控制項，不影響輸出檔案與預覽內容。',
     fontSize: '字體大小', fontSizeDescription: '調整工作台正文大小。', sizeSmall: '小', sizeMedium: '中', sizeLarge: '大', density: '介面密度', densityDescription: '控制列表和控制項間距。', densityCompact: '緊湊', densityComfortable: '舒適', densityLoose: '寬鬆', animations: '動畫效果', animationsDescription: '啟用輕量轉場與狀態動畫。',
     pluginsDescription: '管理技能插件與 MCP 擴充。', skillPlugins: '技能插件', skillPluginsDescription: '瀏覽並安裝可重複使用的技能包。', managePlugins: '管理插件', mcpExtensions: 'MCP 擴充', mcpExtensionsDescription: '連接外部工具、資源與 prompts。', manageMcp: '管理 MCP',
     agentPresetsDescription: '管理人物、性格與 Agent 範本。', agentProfiles: 'Agent 設定', agentProfilesDescription: '編輯角色卡、技能與預設範本。', manageAgents: '管理 Agent', visionAssist: '視覺輔助',
@@ -1045,6 +1085,8 @@ export const translations = {
       localAuthDescription: '当前设备无需注册或登录，启动后即可使用。',
       localAuthHint: '请在“模型”中配置自己的 API 地址、模型名和密钥。只有部署到局域网或公网时才需要启用多用户登录。',
       appearanceSubtitle: '所有调整都会即时应用到工作台，并自动保存在本机。',
+      inputHistoryNavigation: '输入框历史导航',
+      inputHistoryNavigationDescription: '输入框为空时，可用 ↑/↓ 查看已发送的输入。',
       appearancePreview: '实时工作台预览',
       appearancePreviewAssistant: '这是当前主题、字号、密度与强调色的即时效果。',
       appearancePreviewUser: '调整后无需刷新页面。',
@@ -1530,6 +1572,8 @@ export const translations = {
       localAuthDescription: 'No account or sign-in is required on this device.',
       localAuthHint: 'Configure your own API endpoint, model, and key under Models. Enable multi-user sign-in only for LAN or public deployments.',
       appearanceSubtitle: 'Changes apply instantly across the workbench and are saved locally.',
+      inputHistoryNavigation: 'Input history navigation',
+      inputHistoryNavigationDescription: 'When the input is empty, use ↑/↓ to browse sent prompts.',
       appearancePreview: 'Live workspace preview',
       appearancePreviewAssistant: 'This previews the current theme, type size, density, and accent color.',
       appearancePreviewUser: 'No refresh is required after a change.',
@@ -2015,6 +2059,8 @@ export const translations = {
       localAuthDescription: 'この端末では登録やログインなしで利用できます。',
       localAuthHint: '「モデル」で API エンドポイント、モデル名、キーを設定してください。LAN や公開環境に展開する場合のみマルチユーザーログインを有効にします。',
       appearanceSubtitle: '変更はワークベンチ全体に即時反映され、ローカルに保存されます。',
+      inputHistoryNavigation: '入力履歴ナビゲーション',
+      inputHistoryNavigationDescription: '入力欄が空のとき、↑/↓ で送信済みの入力を表示します。',
       appearancePreview: 'ライブワークスペースプレビュー',
       appearancePreviewAssistant: '現在のテーマ、文字サイズ、密度、アクセント色のプレビューです。',
       appearancePreviewUser: '変更後の再読み込みは不要です。',
@@ -2500,6 +2546,8 @@ export const translations = {
       localAuthDescription: '이 기기에서는 가입이나 로그인 없이 사용할 수 있습니다.',
       localAuthHint: '모델 설정에서 API 엔드포인트, 모델명, 키를 직접 구성하세요. LAN 또는 공개 배포에서만 다중 사용자 로그인을 활성화하세요.',
       appearanceSubtitle: '변경 사항은 워크벤치에 즉시 적용되고 로컬에 저장됩니다.',
+      inputHistoryNavigation: '입력 기록 탐색',
+      inputHistoryNavigationDescription: '입력창이 비어 있을 때 ↑/↓ 키로 전송한 입력을 찾아봅니다.',
       appearancePreview: '실시간 워크스페이스 미리보기',
       appearancePreviewAssistant: '현재 테마, 글자 크기, 밀도 및 강조색 미리보기입니다.',
       appearancePreviewUser: '변경 후 새로고침할 필요가 없습니다.',
@@ -2985,6 +3033,8 @@ export const translations = {
       localAuthDescription: '此裝置無需註冊或登入，啟動後即可使用。',
       localAuthHint: '請在「模型」中設定自己的 API 位址、模型名稱和金鑰。只有部署到區域網路或公網時才需啟用多使用者登入。',
       appearanceSubtitle: '所有調整都會即時套用到工作台，並自動儲存在本機。',
+      inputHistoryNavigation: '輸入框歷史導覽',
+      inputHistoryNavigationDescription: '輸入框為空時，可用 ↑/↓ 檢視已傳送的輸入。',
       appearancePreview: '即時工作台預覽',
       appearancePreviewAssistant: '這是目前主題、字級、密度與強調色的即時效果。',
       appearancePreviewUser: '調整後無需重新整理頁面。',

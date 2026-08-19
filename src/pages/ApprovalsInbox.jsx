@@ -30,13 +30,15 @@ function formatTime(ts) {
   }
 }
 
-function ApprovalCard({ approval, onDecide, busy, t }) {
+export function ApprovalCard({ approval, onDecide, busy, t }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(() => JSON.stringify(approval.args ?? {}, null, 2))
   const [jsonError, setJsonError] = useState(null)
 
   const tone = RISK_TONE[approval.risk] || RISK_TONE.low
   const Icon = TOOL_ICON[approval.toolName] || ShieldAlert
+  const metadataSource = approval.metadataSource === 'declared' ? 'declared' : 'fallback'
+  const editable = approval.toolName !== 'permission_mode_change'
 
   const submitEdit = () => {
     let parsed
@@ -69,6 +71,12 @@ function ApprovalCard({ approval, onDecide, busy, t }) {
               <span className={`inline-flex items-center gap-1 font-mono text-[9px] tracking-wider uppercase ${tone.text}`}>
                 <span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} />
                 {t(`approvals.risk.${approval.risk}`)}
+              </span>
+              <span
+                data-testid="approval-risk-source"
+                className="font-mono text-[9px] text-ink-fade"
+              >
+                {t('approvals.source.label')}: {t(`approvals.source.${metadataSource}`)}
               </span>
             </div>
             {approval.reason && (
@@ -137,14 +145,16 @@ function ApprovalCard({ approval, onDecide, busy, t }) {
               <X className="w-3.5 h-3.5" />
               {t('approvals.inbox.deny')}
             </button>
-            <button
-              onClick={() => setEditing(true)}
-              disabled={busy}
-              className="h-8 px-3 border border-dashed border-ink-fade/60 rounded-md font-semibold text-sm text-ink-soft hover:border-ink-fade transition-colors flex items-center gap-1.5 disabled:opacity-50"
-            >
-              <Pencil className="w-3.5 h-3.5" />
-              {t('approvals.inbox.edit')}
-            </button>
+            {editable && (
+              <button
+                onClick={() => setEditing(true)}
+                disabled={busy}
+                className="h-8 px-3 border border-dashed border-ink-fade/60 rounded-md font-semibold text-sm text-ink-soft hover:border-ink-fade transition-colors flex items-center gap-1.5 disabled:opacity-50"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+                {t('approvals.inbox.edit')}
+              </button>
+            )}
           </>
         )}
       </div>

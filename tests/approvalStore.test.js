@@ -47,6 +47,7 @@ test('createPendingApproval returns mapped pending row with parsed args', () => 
     toolName: 'write_file',
     args,
     risk: 'high',
+    metadataSource: 'declared',
     reason: 'writes outside workspace',
   })
 
@@ -57,6 +58,7 @@ test('createPendingApproval returns mapped pending row with parsed args', () => 
   assert.equal(approval.jobId, 'job-create-1')
   assert.equal(approval.stepId, 'step-1')
   assert.equal(approval.risk, 'high')
+  assert.equal(approval.metadataSource, 'declared')
   assert.equal(approval.reason, 'writes outside workspace')
   assert.deepEqual(approval.args, args)
   assert.deepEqual(approval.effectiveArgs, args)
@@ -86,6 +88,7 @@ test('approvals are isolated per user', () => {
   const bobList = listPendingApprovals({ userId: bob })
   assert.equal(bobList.length, 1)
   assert.equal(bobList[0].toolName, 'read_file')
+  assert.equal(bobList[0].metadataSource, 'fallback')
 
   assert.equal(countPendingApprovals({ userId: alice }), 1)
   assert.equal(countPendingApprovals({ userId: bob }), 1)

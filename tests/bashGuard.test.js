@@ -156,3 +156,37 @@ test('classifies only conservative shell reads as read-only', () => {
     assert.equal(isReadOnlyShellCommand(command), false, command)
   }
 })
+
+test('read-only shell classification requires exact argv prefixes', () => {
+  for (const command of [
+    'git status',
+    'git status --short',
+    'git diff -- src',
+    'git log --oneline -5',
+  ]) {
+    assert.equal(isReadOnlyShellCommand(command), true, command)
+  }
+
+  for (const command of [
+    'git statusfoo',
+    'git diffstat',
+    'git logger',
+  ]) {
+    assert.equal(isReadOnlyShellCommand(command), false, command)
+  }
+})
+
+test('shell metacharacters always disable read-only auto-allow', () => {
+  for (const metacharacterCommand of [
+    'git status; rm -rf build',
+    'git status && rm -rf build',
+    'git status | cat',
+    'git status > status.txt',
+    'git status < input.txt',
+    'git status `whoami`',
+    'git status $(whoami)',
+    "git status\nrm -rf build",
+  ]) {
+    assert.equal(isReadOnlyShellCommand(metacharacterCommand), false, metacharacterCommand)
+  }
+})

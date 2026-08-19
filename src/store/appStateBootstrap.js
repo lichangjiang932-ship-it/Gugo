@@ -38,6 +38,7 @@ export function createInitialState() {
     fontSize: 'medium',
     density: 'comfortable',
     animationsEnabled: true,
+    inputHistoryNavigationEnabled: true,
     draftInput: '',
     newDraftVersion: 0,
     skillConfigs: {},
@@ -100,6 +101,9 @@ export function normalizePersistedFields(saved, { cancelRunningTasks = false } =
   const base = createInitialState()
   const normalized = {}
   for (const key of PERSIST_KEYS) if (saved?.[key] !== undefined) normalized[key] = saved[key]
+  if (normalized.inputHistoryNavigationEnabled !== undefined && typeof normalized.inputHistoryNavigationEnabled !== 'boolean') {
+    delete normalized.inputHistoryNavigationEnabled
+  }
   if (normalized.theme !== undefined) normalized.theme = normalizeThemeMode(normalized.theme)
   if (saved?.toolsConfig && typeof saved.toolsConfig === 'object') {
     normalized.toolsConfig = { ...base.toolsConfig, ...saved.toolsConfig }

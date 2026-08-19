@@ -7,15 +7,15 @@
 :root,
 html[data-theme="light"] {
   /* Full-color variables for direct CSS / inline-style use */
-  --color-paper: #F4EFE5;
-  --color-paper-2: #EAE2D2;
-  --color-paper-dark: #1a1510;
-  --color-ink: #2A1F17;
-  --color-ink-soft: #5E4F40;
-  --color-ink-fade: #8A7B68;
-  --color-ink-ghost: #B8AC97;
-  --color-skel: #DBD2BE;
-  --color-skel-2: #C9BFA8;
+  --color-paper: #F7F8FA;
+  --color-paper-2: #EEF0F3;
+  --color-paper-dark: #111827;
+  --color-ink: #1F2937;
+  --color-ink-soft: #4B5563;
+  --color-ink-fade: #6B7280;
+  --color-ink-ghost: #9CA3AF;
+  --color-skel: #E5E7EB;
+  --color-skel-2: #D1D5DB;
   --color-ember: #E86A3C;
   --color-ember-soft: rgba(232, 106, 60, 0.18);
   --color-ember-line: rgba(232, 106, 60, 0.55);
@@ -24,19 +24,38 @@ html[data-theme="light"] {
   --color-cyan-soft: rgba(46, 143, 163, 0.14);
 
   /* RGB-channel variables for Tailwind opacity modifiers */
-  --color-paper-rgb: 244 239 229;
-  --color-paper-2-rgb: 234 226 210;
-  --color-paper-dark-rgb: 26 21 16;
-  --color-ink-rgb: 42 31 23;
-  --color-ink-soft-rgb: 94 79 64;
-  --color-ink-fade-rgb: 138 123 104;
-  --color-ink-ghost-rgb: 184 172 151;
-  --color-skel-rgb: 219 210 190;
-  --color-skel-2-rgb: 201 191 168;
+  --color-paper-rgb: 247 248 250;
+  --color-paper-2-rgb: 238 240 243;
+  --color-paper-dark-rgb: 17 24 39;
+  --color-ink-rgb: 31 41 55;
+  --color-ink-soft-rgb: 75 85 99;
+  --color-ink-fade-rgb: 107 114 128;
+  --color-ink-ghost-rgb: 156 163 175;
+  --color-skel-rgb: 229 231 235;
+  --color-skel-2-rgb: 209 213 219;
   --color-ember-rgb: 232 106 60;
   --color-cyan-rgb: 46 143 163;
 
+  --color-neutral-50-rgb: 250 250 250;
+  --color-neutral-100-rgb: 245 245 245;
+  --color-neutral-200-rgb: 229 231 235;
+  --color-neutral-300-rgb: 209 213 219;
+  --color-neutral-400-rgb: 156 163 175;
+  --color-neutral-500-rgb: 107 114 128;
+  --color-neutral-600-rgb: 75 85 99;
+  --color-neutral-700-rgb: 55 65 81;
+  --color-neutral-800-rgb: 31 41 55;
+  --color-neutral-900-rgb: 17 24 39;
+
+  --radius-card: 12px;
+  --radius-control: 8px;
+  --radius-pill: 999px;
+
   /* Accent color tokens (动态写入 by ThemeWrapper / applyAccent) */
+  --workbench-accent-h: 21;
+  --workbench-accent-s: 79%;
+  --workbench-accent-l: 57%;
+  --workbench-accent: hsl(var(--workbench-accent-h) var(--workbench-accent-s) var(--workbench-accent-l));
   --accent-h: 21;
   --accent-s: 79%;
   --accent-l: 57%;
@@ -44,15 +63,15 @@ html[data-theme="light"] {
 }
 
 html[data-theme="dark"] {
-  --color-paper: #1a1510;
-  --color-paper-2: #2a2318;
-  --color-paper-dark: #F4EFE5;
-  --color-ink: #f4efe5;
-  --color-ink-soft: #c9bfa8;
-  --color-ink-fade: #8a7b68;
-  --color-ink-ghost: #6a5f50;
-  --color-skel: #3a3228;
-  --color-skel-2: #4a4238;
+  --color-paper: #18181B;
+  --color-paper-2: #27272A;
+  --color-paper-dark: #FAFAFA;
+  --color-ink: #F4F4F5;
+  --color-ink-soft: #D4D4D8;
+  --color-ink-fade: #A1A1AA;
+  --color-ink-ghost: #71717A;
+  --color-skel: #3F3F46;
+  --color-skel-2: #52525B;
   --color-ember: #E86A3C;
   --color-ember-soft: rgba(232, 106, 60, 0.18);
   --color-ember-line: rgba(232, 106, 60, 0.55);
@@ -60,17 +79,28 @@ html[data-theme="dark"] {
   --color-cyan: #2E8FA3;
   --color-cyan-soft: rgba(46, 143, 163, 0.14);
 
-  --color-paper-rgb: 26 21 16;
-  --color-paper-2-rgb: 42 35 24;
-  --color-paper-dark-rgb: 244 239 229;
-  --color-ink-rgb: 244 239 229;
-  --color-ink-soft-rgb: 201 191 168;
-  --color-ink-fade-rgb: 138 123 104;
-  --color-ink-ghost-rgb: 106 95 80;
-  --color-skel-rgb: 58 50 40;
-  --color-skel-2-rgb: 74 66 56;
+  --color-paper-rgb: 24 24 27;
+  --color-paper-2-rgb: 39 39 42;
+  --color-paper-dark-rgb: 250 250 250;
+  --color-ink-rgb: 244 244 245;
+  --color-ink-soft-rgb: 212 212 216;
+  --color-ink-fade-rgb: 161 161 170;
+  --color-ink-ghost-rgb: 113 113 122;
+  --color-skel-rgb: 63 63 70;
+  --color-skel-2-rgb: 82 82 91;
   --color-ember-rgb: 232 106 60;
   --color-cyan-rgb: 46 143 163;
+
+  --color-neutral-50-rgb: 31 31 35;
+  --color-neutral-100-rgb: 39 39 42;
+  --color-neutral-200-rgb: 63 63 70;
+  --color-neutral-300-rgb: 82 82 91;
+  --color-neutral-400-rgb: 113 113 122;
+  --color-neutral-500-rgb: 161 161 170;
+  --color-neutral-600-rgb: 212 212 216;
+  --color-neutral-700-rgb: 228 228 231;
+  --color-neutral-800-rgb: 244 244 245;
+  --color-neutral-900-rgb: 250 250 250;
 }
 
 html[data-theme="white"] {
@@ -101,6 +131,31 @@ html[data-theme="white"] {
   --color-skel-2-rgb: 209 213 219;
   --color-ember-rgb: 232 106 60;
   --color-cyan-rgb: 36 127 145;
+
+  --color-neutral-50-rgb: 250 250 250;
+  --color-neutral-100-rgb: 245 245 245;
+  --color-neutral-200-rgb: 229 231 235;
+  --color-neutral-300-rgb: 209 213 219;
+  --color-neutral-400-rgb: 156 163 175;
+  --color-neutral-500-rgb: 107 114 128;
+  --color-neutral-600-rgb: 75 85 99;
+  --color-neutral-700-rgb: 55 65 81;
+  --color-neutral-800-rgb: 31 41 55;
+  --color-neutral-900-rgb: 17 24 39;
+}
+
+/* Workbench accent and authored output are separate design domains. Theme
+ * changes may recolor shell controls, but artifact/document identity stays on
+ * stable neutral tokens inherited from the active light/white/dark theme. */
+[data-artifact-surface] {
+  --artifact-accent-rgb: var(--color-ink-soft-rgb);
+  --artifact-accent: rgb(var(--artifact-accent-rgb));
+  --color-ember-rgb: var(--artifact-accent-rgb);
+  --color-ember: var(--artifact-accent);
+  --color-ember-soft: rgb(var(--artifact-accent-rgb) / 0.1);
+  --color-ember-line: rgb(var(--artifact-accent-rgb) / 0.28);
+  --color-ember-glow: rgb(var(--artifact-accent-rgb) / 0.06);
+  --accent: var(--artifact-accent);
 }
 
 @layer base {
@@ -109,9 +164,13 @@ html[data-theme="white"] {
     margin: 0;
     background: var(--color-paper);
     color: var(--color-ink);
-    font-family: "Inter", system-ui, sans-serif;
+    font-family: "Inter", "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+  }
+
+  html {
+    letter-spacing: -0.005em;
   }
 
   #root {
@@ -125,6 +184,13 @@ html[data-theme="white"] {
 }
 
 @layer utilities {
+  .font-cn {
+    letter-spacing: 0.02em;
+  }
+
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
   /* Custom animations */
   @keyframes pulse-ember {
     0%, 100% { box-shadow: 0 0 0 0 rgb(var(--color-ember-rgb) / 0.25); }
@@ -237,7 +303,7 @@ html[data-density="loose"] {
 }
 
 .chat-mini-timeline {
-  left: max(0.375rem, calc(50% - 28rem));
+  left: 0.5rem;
 }
 
 .chat-mini-timeline-list {
@@ -386,15 +452,15 @@ html[data-density="loose"] {
   margin-bottom: 0.65rem;
   overflow: hidden;
   border: 1px solid rgb(var(--color-ink-rgb) / 0.12);
-  border-radius: 0.8rem;
-  background: linear-gradient(180deg, rgb(var(--color-paper-rgb) / 0.82), rgb(var(--color-paper-2-rgb) / 0.38));
-  box-shadow: 0 8px 24px rgb(var(--color-ink-rgb) / 0.035);
+  border-radius: 0.55rem;
+  background: rgb(var(--color-paper-rgb) / 0.72);
+  box-shadow: none;
   transition: border-color 180ms ease, box-shadow 180ms ease, background-color 180ms ease;
 }
 
 .chat-activity-panel[data-status="running"] {
   border-color: rgb(var(--color-cyan-rgb) / 0.28);
-  box-shadow: 0 8px 28px rgb(var(--color-cyan-rgb) / 0.055);
+  box-shadow: none;
 }
 
 .chat-activity-panel[data-status="error"] {
@@ -484,7 +550,15 @@ html[data-density="loose"] {
   grid-template-columns: 1.55rem minmax(0, 1fr);
   gap: 0.45rem;
   padding: 0.42rem 0;
-  transition: background-color 160ms ease, opacity 160ms ease;
+  border-radius: var(--radius-card);
+  box-shadow: 0 1px 3px rgb(17 24 39 / 0.04);
+  transition: background-color 160ms ease, opacity 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.chat-tool-step:hover {
+  background: rgb(var(--color-neutral-50-rgb) / 0.72);
+  box-shadow: 0 6px 18px rgb(17 24 39 / 0.07);
+  transform: translateY(-1px);
 }
 
 .chat-tool-step-motion {
@@ -1037,12 +1111,9 @@ html[data-density="loose"] {
   font-size: 0.65rem;
 }
 
-/* Delivered filenames follow their surrounding answer instead of the user
- * accent. Strong-accent mode may emphasize controls, never output identity. */
+/* Delivered filenames follow their surrounding answer instead of the user accent. */
 .chat-output-file-name,
-.theme-accent-strong .chat-output-file-name,
-.chat-output-file-name code,
-.theme-accent-strong .chat-output-file-name code {
+.chat-output-file-name code {
   color: inherit !important;
 }
 
@@ -1148,7 +1219,7 @@ html[data-density="loose"] {
   margin-top: 0.42rem;
   padding: 0.55rem;
   border: 1px solid rgb(var(--color-ink-rgb) / 0.07);
-  border-radius: 0.5rem;
+  border-radius: var(--radius-control);
   background: rgb(var(--color-ink-rgb) / 0.018);
 }
 
@@ -1156,7 +1227,7 @@ html[data-density="loose"] {
   min-width: 0;
   overflow: hidden;
   border: 1px solid rgb(var(--color-ink-rgb) / 0.08);
-  border-radius: 0.34rem;
+  border-radius: var(--radius-control);
   background: rgb(var(--color-paper-rgb) / 0.5);
 }
 
@@ -1300,7 +1371,7 @@ html[data-density="loose"] {
 .chat-preview-pane {
   min-height: 0;
   container: chat-preview / inline-size;
-  box-shadow: -10px 0 28px rgb(var(--color-ink-rgb) / 0.045);
+  box-shadow: -6px 0 18px rgb(var(--color-ink-rgb) / 0.035);
 }
 
 .chat-preview-backdrop {
@@ -1333,7 +1404,7 @@ html[data-density="loose"] {
 }
 
 .chat-preview-active-tab {
-  box-shadow: 0 1px 2px rgb(var(--color-ink-rgb) / 0.06);
+  box-shadow: none;
 }
 
 @media (max-width: 1023px) {
@@ -1407,17 +1478,17 @@ html[data-theme="dark"] .chat-code-block .hljs-function { color: #d2a8ff; }
  * 这样不动 tailwind config 也能让用户"看到"强调色生效.
  */
 .theme-accent-strong {
-  --accent: hsl(var(--accent-h) var(--accent-s) var(--accent-l));
+  --accent: var(--workbench-accent);
 }
 
-.theme-accent-strong a.primary,
-.theme-accent-strong button.primary,
-.theme-accent-strong [data-accent] {
+.theme-accent-strong a.primary:not([data-artifact-surface]):not([data-artifact-surface] *),
+.theme-accent-strong button.primary:not([data-artifact-surface]):not([data-artifact-surface] *),
+.theme-accent-strong [data-accent]:not([data-artifact-surface]):not([data-artifact-surface] *) {
   color: var(--accent) !important;
 }
 
-.theme-accent-strong button.primary,
-.theme-accent-strong [data-accent-bg] {
+.theme-accent-strong button.primary:not([data-artifact-surface]):not([data-artifact-surface] *),
+.theme-accent-strong [data-accent-bg]:not([data-artifact-surface]):not([data-artifact-surface] *) {
   background-color: var(--accent) !important;
   color: #fff !important;
   border-color: var(--accent) !important;

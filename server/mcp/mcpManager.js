@@ -172,18 +172,57 @@ function buildRegisteredToolSpec(server, tool) {
 }
 
 function buildMcpRiskMetadata(server, tool, toolName) {
+  const configuredTools = server.tools && typeof server.tools === 'object' && !Array.isArray(server.tools)
+    ? server.tools
+    : {}
+  const declaration = configuredTools[tool.name] || configuredTools[toolName]
+  if (declaration && typeof declaration === 'object' && !Array.isArray(declaration)) {
+    const riskLevel = ['low', 'medium', 'high'].includes(declaration.riskLevel)
+      ? declaration.riskLevel
+      : 'high'
+    const approvalDeclaration = declaration.requiredApproval ?? declaration.requiresApproval
+    const requiredApproval = typeof approvalDeclaration === 'boolean' ? approvalDeclaration : true
+    const category = ['read', 'write_local', 'exec', 'external'].includes(declaration.category)
+      ? declaration.category
+      : (riskLevel === 'low' && requiredApproval === false ? 'read' : 'external')
+    const isReadOnly = category === 'read'
+    return {
+      riskLevel,
+      category,
+      requiredApproval,
+      requiresApproval: requiredApproval,
+      isReadOnly,
+      isConcurrencySafe: declaration.isConcurrencySafe == null
+        ? isReadOnly
+        : declaration.isConcurrencySafe === true,
+      isIdempotent: declaration.isIdempotent == null
+        ? isReadOnly || tool.annotations?.idempotentHint === true
+        : declaration.isIdempotent === true,
+      interruptBehavior: isReadOnly ? 'cancel' : 'block',
+      isDestructive: declaration.isDestructive == null
+        ? !isReadOnly
+        : declaration.isDestructive === true,
+      source: 'declared',
+      reason: isReadOnly ? null : `MCP: ${server.name}`,
+    }
+  }
+
+  // autoApprove is retained as a legacy compatibility fallback. MCP
+  // annotations are advisory only and never bypass approval on their own.
   const autoApprove = Array.isArray(server.autoApprove)
     && (server.autoApprove.includes(tool.name) || server.autoApprove.includes(toolName))
-  const readOnly = tool.annotations?.readOnlyHint === true && tool.annotations?.destructiveHint !== true
   return {
-    riskClass: readOnly ? 'read' : 'external',
-    requiresApproval: autoApprove ? false : !readOnly,
-    isReadOnly: readOnly,
-    isConcurrencySafe: readOnly,
-    isIdempotent: readOnly || tool.annotations?.idempotentHint === true,
-    interruptBehavior: readOnly ? 'cancel' : 'block',
-    isDestructive: tool.annotations?.destructiveHint !== false && !readOnly,
-    reason: readOnly ? null : `MCP: ${server.name}`,
+    riskLevel: 'high',
+    category: 'external',
+    requiredApproval: !autoApprove,
+    requiresApproval: !autoApprove,
+    isReadOnly: false,
+    isConcurrencySafe: false,
+    isIdempotent: tool.annotations?.idempotentHint === true,
+    interruptBehavior: 'block',
+    isDestructive: tool.annotations?.destructiveHint !== false,
+    source: 'fallback',
+    reason: `MCP: ${server.name}`,
   }
 }
 

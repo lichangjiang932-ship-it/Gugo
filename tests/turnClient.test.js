@@ -61,7 +61,16 @@ class FakeWebSocket {
 
   emit(type, value = {}) {
     if (type === 'open') this.readyState = FakeWebSocket.OPEN
-    for (const listener of this.listeners.get(type) || []) listener(value)
+    let event = value
+    if (type === 'message' && typeof value?.data === 'string') {
+      try {
+        const frame = JSON.parse(value.data)
+        event = { ...value, data: JSON.stringify(frame?.v == null ? { v: 1, ...frame } : frame) }
+      } catch {
+        // Keep malformed JSON unchanged so the transport parser is exercised.
+      }
+    }
+    for (const listener of this.listeners.get(type) || []) listener(event)
   }
 
   send(value) {
@@ -118,6 +127,7 @@ test('WebSocket turn stream times out without a subscription acknowledgement', a
       (error) => error.code === 'TURN_WEBSOCKET_SUBSCRIBE_TIMEOUT' && error.name !== 'AbortError',
     )
     assert.deepEqual(JSON.parse(socket.sent[0]), {
+      v: 1,
       type: 'subscribe.turn',
       sessionId: 's-subscribe-timeout',
       turnId: 't-subscribe-timeout',
@@ -229,6 +239,28 @@ test('WebSocket protocol errors fail immediately without waiting for acknowledge
     socket.emit('open')
     socket.emit('message', { data: JSON.stringify({ type: 'error', code: 'TURN_SUBSCRIBE_FAILED' }) })
     await assert.rejects(stream, (error) => error.code === 'TURN_SUBSCRIBE_FAILED')
+    assert.equal(socket.closed, true)
+  })
+})
+
+test('WebSocket version mismatch fails with a refreshable protocol error', async () => {
+  await withWebSocketAuth(async () => {
+    const socket = new FakeWebSocket()
+    const stream = streamServerTurnEventsWebSocket({
+      sessionId: 's-version-error',
+      turnId: 't-version-error',
+      connectTimeoutMs: 100,
+      subscribeTimeoutMs: 60_000,
+      webSocketFactory: () => socket,
+    })
+    socket.emit('open')
+    socket.emit('message', { data: JSON.stringify({ v: 2, type: 'ready' }) })
+    await assert.rejects(
+      stream,
+      (error) => error.code === 'TURN_WEBSOCKET_VERSION_MISMATCH'
+        && error.expectedVersion === 1
+        && error.receivedVersion === 2,
+    )
     assert.equal(socket.closed, true)
   })
 })
@@ -1080,7 +1112,7 @@ test('dispatchTurnEvent maps tool and approval events to existing chat actions',
   }), { dispatch, taskId: 'task', onArtifact: (artifact) => artifacts.push(artifact) })
   await dispatchTurnEvent(createTurnEvent({
     id: 'approval', sessionId: 's', turnId: 't', sequence: 2, type: 'approval.required',
-    payload: { approvalId: 'p1', toolName: 'write_file', args: { path: 'a' }, risk: 'medium' }, createdAt: 3,
+    payload: { approvalId: 'p1', toolName: 'write_file', args: { path: 'a' }, risk: 'medium', metadataSource: 'declared' }, createdAt: 3,
   }), { dispatch, taskId: 'task', onApproval: (approval) => approvals.push(approval) })
   assert.equal(actions.some((action) => action.type === 'APPEND_TOOL_CALL_TO_LAST_MESSAGE'), true)
   assert.equal(actions.find((action) => action.type === 'APPEND_TOOL_CALL_TO_LAST_MESSAGE').messageId, 'assistant-1')
@@ -1095,6 +1127,16 @@ test('dispatchTurnEvent maps tool and approval events to existing chat actions',
   assert.equal(artifacts[0].filename, 'a.docx')
   assert.equal(artifacts[0].toolCallId, 'c1')
   assert.equal(approvals[0].id, 'p1')
+  assert.equal(approvals[0].metadataSource, 'declared')
+})
+
+test('dispatchTurnEvent treats a legacy approval event without metadata source as fallback', async () => {
+  const approvals = []
+  await dispatchTurnEvent(createTurnEvent({
+    id: 'legacy-approval', sessionId: 's', turnId: 't', sequence: 0, type: 'approval.required',
+    payload: { approvalId: 'legacy-p1', toolName: 'legacy_tool', risk: 'high' }, createdAt: 1,
+  }), { taskId: 'task', onApproval: (approval) => approvals.push(approval) })
+  assert.equal(approvals[0].metadataSource, 'fallback')
 })
 
 test('dispatchTurnEvent maps model failover/retry to a fallback notice', async () => {

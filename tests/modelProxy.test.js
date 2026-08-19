@@ -929,6 +929,28 @@ test('★ 思考超过硬顶必须取消上游并抛 REASONING_RUNAWAY', async (
   assert.equal(cancelled, true, '必须取消响应流，不能让上游在后台继续计费')
 })
 
+test('未显式配置思考字符上限时，工具执行轮的长推理不会被截断', async () => {
+  const reasoning = '思'.repeat(25_000)
+  const frames = [
+    `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: reasoning } }] })}\n\n`,
+    `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call-1', function: { name: 'read_file', arguments: '{"path":"demo.txt"}' } }] }, finish_reason: 'tool_calls' }] })}\n\n`,
+    'data: [DONE]\n\n',
+  ]
+  const events = []
+
+  for await (const event of streamOpenAICompatible({
+    config: { baseUrl: 'https://example.test/v1', apiKey: 'x', modelName: 'thinking-model' },
+    messages: [{ role: 'user', content: 'inspect the file' }],
+    tools: [{ type: 'function', function: { name: 'read_file', parameters: { type: 'object' } } }],
+    toolChoice: 'auto',
+    fetchImpl: async () => streamedResponse(frames),
+    env: {},
+  })) events.push(event)
+
+  assert.equal(events.find((event) => event.type === 'reasoning')?.delta.length, reasoning.length)
+  assert.equal(events.some((event) => event.type === 'tool_calls'), true)
+})
+
 test('execution turns use the tighter reasoning ceiling without shrinking ordinary answer turns', async () => {
   const reasoningFrame = `data: ${JSON.stringify({
     choices: [{ delta: { reasoning_content: '0123456789' } }],

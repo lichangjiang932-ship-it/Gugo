@@ -1,6 +1,7 @@
 import { grantLocalPathApi } from './localFileAccessClient.js'
 
 const VALID_ACCESS_MODES = new Set(['read_only', 'read_write'])
+const VALID_SCOPES = new Set(['session', 'persistent'])
 
 export async function authorizeChatDirectoryRequest({
   sessionId,
@@ -8,6 +9,7 @@ export async function authorizeChatDirectoryRequest({
   pausedSequence,
   path = '',
   accessMode = 'read_only',
+  scope = 'session',
   purpose = '',
 } = {}, {
   grantPath = grantLocalPathApi,
@@ -18,11 +20,12 @@ export async function authorizeChatDirectoryRequest({
     throw new Error('pausedSequence is required')
   }
   if (!VALID_ACCESS_MODES.has(accessMode)) throw new Error('invalid directory access mode')
+  if (!VALID_SCOPES.has(scope)) throw new Error('invalid directory authorization scope')
 
   const selectedPath = String(path || '').trim()
   if (!selectedPath) throw new Error('directory path is required')
 
-  const grantResult = await grantPath({ path: selectedPath, accessMode })
+  const grantResult = await grantPath({ path: selectedPath, accessMode, scope })
   const grant = grantResult?.grant
   const grantedPath = String(grant?.path || selectedPath).trim()
   const grantedAccessMode = grant?.accessMode === 'read_write' ? 'read_write' : accessMode
@@ -31,11 +34,13 @@ export async function authorizeChatDirectoryRequest({
     cancelled: false,
     path: grantedPath,
     accessMode: grantedAccessMode,
+    scope: grant?.scope || scope,
     resolution: {
       type: 'directory_authorization',
       approved: true,
       path: grantedPath,
       access_mode: grantedAccessMode,
+      authorization_scope: grant?.scope || scope,
       paused_sequence: pausedSequence,
       purpose: String(purpose || '').trim(),
     },

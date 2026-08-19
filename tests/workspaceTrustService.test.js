@@ -7,7 +7,15 @@ import test from 'node:test'
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-workspace-trust-'))
 const workspaceDir = path.join(tempDir, 'workspace')
 const configDir = path.join(workspaceDir, '.gugo')
+const ancestorWorkspaceDir = path.join(tempDir, 'ancestor-workspace')
+const ancestorChildDir = path.join(ancestorWorkspaceDir, 'packages', 'child')
+const ancestorConfigDir = path.join(ancestorWorkspaceDir, '.gugo')
+const dangerousWorkspaceDir = path.join(tempDir, 'dangerous-workspace')
+const dangerousConfigDir = path.join(dangerousWorkspaceDir, '.gugo')
 fs.mkdirSync(configDir, { recursive: true })
+fs.mkdirSync(ancestorChildDir, { recursive: true })
+fs.mkdirSync(ancestorConfigDir, { recursive: true })
+fs.mkdirSync(dangerousConfigDir, { recursive: true })
 fs.writeFileSync(path.join(configDir, 'config.json'), JSON.stringify({
   permissions: {
     fileSystem: true,
@@ -15,6 +23,24 @@ fs.writeFileSync(path.join(configDir, 'config.json'), JSON.stringify({
     shell: false,
     git: true,
     gitMutation: false,
+  },
+}), 'utf8')
+fs.writeFileSync(path.join(ancestorConfigDir, 'config.json'), JSON.stringify({
+  permissions: {
+    fileSystem: true,
+    fileSystemWrite: true,
+    shell: false,
+    git: true,
+    gitMutation: false,
+  },
+}), 'utf8')
+fs.writeFileSync(path.join(dangerousConfigDir, 'config.json'), JSON.stringify({
+  permissions: {
+    fileSystem: true,
+    fileSystemWrite: true,
+    shell: true,
+    git: true,
+    gitMutation: true,
   },
 }), 'utf8')
 
@@ -28,6 +54,7 @@ process.env.WORKSPACE_GIT_MUTATION_ENABLED = '1'
 const { closeDb, createUser, DB_SCHEMA_VERSION, getDb } = await import('../server/db.js')
 const {
   assertWorkspaceCapability,
+  clearSessionWorkspaceTrust,
   getWorkspaceTrustStatus,
   listWorkspaceTrust,
   setWorkspaceTrust,
@@ -35,6 +62,8 @@ const {
 
 createUser({ id: 'trust-user-a', email: 'trust-a@example.com' })
 createUser({ id: 'trust-user-b', email: 'trust-b@example.com' })
+createUser({ id: 'trust-session-user', email: 'trust-session@example.com' })
+createUser({ id: 'trust-session-other', email: 'trust-session-other@example.com' })
 
 test.after(() => {
   closeDb()
@@ -152,6 +181,78 @@ test('invalid trusted config fails closed and reports the error', () => {
         gitMutation: false,
       },
     }), 'utf8')
+  }
+})
+
+test('session trust is user-scoped, memory-only, and inherited by descendant workspaces', () => {
+  const trusted = setWorkspaceTrust({
+    userId: 'trust-session-user',
+    rootPath: ancestorWorkspaceDir,
+    trusted: true,
+    confirmation: 'TRUST_WORKSPACE_CONFIG',
+    scope: 'session',
+    now: 200,
+  })
+  assert.equal(trusted.trustScope, 'session')
+  assert.equal(
+    getDb().prepare('SELECT COUNT(*) AS count FROM workspace_trust WHERE user_id = ?')
+      .get('trust-session-user').count,
+    0,
+  )
+
+  const child = getWorkspaceTrustStatus({ userId: 'trust-session-user', rootPath: ancestorChildDir })
+  assert.equal(child.trusted, true)
+  assert.equal(child.inherited, true)
+  assert.equal(child.trustScope, 'session')
+  assert.equal(child.trustRootPath, fs.realpathSync(ancestorWorkspaceDir))
+  assert.equal(child.config.sourceRoot, fs.realpathSync(ancestorWorkspaceDir))
+  assert.equal(child.config.loaded, true)
+  assert.equal(child.effective.fileSystemWrite, true)
+  assert.equal(child.effective.shell, false)
+  assert.equal(
+    getWorkspaceTrustStatus({ userId: 'trust-session-other', rootPath: ancestorChildDir }).trusted,
+    false,
+  )
+  assert.equal(listWorkspaceTrust({ userId: 'trust-session-user' })[0].trustScope, 'session')
+
+  assert.equal(clearSessionWorkspaceTrust({ userId: 'trust-session-user' }), true)
+  assert.equal(
+    getWorkspaceTrustStatus({ userId: 'trust-session-user', rootPath: ancestorChildDir }).trusted,
+    false,
+  )
+})
+
+test('dangerous workspace config is never read before trust and is reported as fail-closed', () => {
+  const configPath = fs.realpathSync(path.join(dangerousConfigDir, 'config.json'))
+  const originalReadFileSync = fs.readFileSync
+  let configReads = 0
+  fs.readFileSync = function guardedReadFileSync(filePath, ...args) {
+    if (path.resolve(String(filePath)) === configPath) configReads += 1
+    return originalReadFileSync.call(this, filePath, ...args)
+  }
+  try {
+    const status = getWorkspaceTrustStatus({
+      userId: 'trust-session-other',
+      rootPath: dangerousWorkspaceDir,
+      env: {
+        WORKSPACE_FS_ENABLED: '1',
+        WORKSPACE_SHELL_ENABLED: '1',
+        WORKSPACE_GIT_ENABLED: '1',
+        WORKSPACE_GIT_MUTATION_ENABLED: '1',
+      },
+    })
+    assert.equal(configReads, 0)
+    assert.equal(status.trusted, false)
+    assert.equal(status.config.loaded, false)
+    assert.equal(status.config.blocked, true)
+    assert.match(status.config.warning, /not loaded.*not trusted/i)
+    assert.equal(status.effective.fileSystem, true)
+    assert.equal(status.effective.fileSystemWrite, false)
+    assert.equal(status.effective.shell, false)
+    assert.equal(status.effective.git, false)
+    assert.equal(status.effective.gitMutation, false)
+  } finally {
+    fs.readFileSync = originalReadFileSync
   }
 })
 

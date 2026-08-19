@@ -4,6 +4,11 @@ import { isLoggedInLocally } from '../../lib/accountClient.js'
 import { readStoredModel, resolveInitialModel, resolveSessionModel } from '../../lib/modelSelection.js'
 import { inferSkillIdFromPrompt, parseSkillCommand } from '../../lib/skillCommands.js'
 import { buildServerTurnMessageIds, runServerChatTurn } from './serverTurnFlow.js'
+import {
+  applyPlanExecutionConfirmation,
+  intentModeForAgentMode,
+  resolvePlanExecutionConfirmation,
+} from './chatSendMode.js'
 import { serializeServerTurnHistory } from './serverTurnHistory.js'
 import { hasTurnRun } from './turnRunRegistry.js'
 
@@ -11,6 +16,8 @@ export default function useChatSendFlow({
   abortCtrlRef,
   abortSessionIdRef,
   attachments,
+  approvalMode = 'normal',
+  changeApprovalMode,
   directoryApprovalResolveRef,
   dispatch,
   effectiveAgentId,
@@ -69,13 +76,21 @@ export default function useChatSendFlow({
       toast.error(t('errors.loginRequired'))
       return
     }
+    const planExecutionConfirmation = resolvePlanExecutionConfirmation({
+      content,
+      agentMode: state.agentMode,
+      approvalMode,
+    })
+    const modeTransition = await applyPlanExecutionConfirmation(planExecutionConfirmation, {
+      currentApprovalMode: approvalMode,
+      changeApprovalMode,
+      dispatch,
+    })
+    if (!modeTransition.proceed) return
     const localPathAccess = await ensureLocalPathAccess(content)
     if (!localPathAccess.proceed) return
-    const intentMode = state.agentMode === 'code'
-      ? 'execute'
-      : state.agentMode === 'plan'
-        ? 'answer'
-        : 'auto'
+    const effectiveAgentMode = planExecutionConfirmation?.agentMode || state.agentMode
+    const intentMode = intentModeForAgentMode(effectiveAgentMode)
     const taskId = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`
     await runServerChatTurn({
       abortCtrlRef,
@@ -106,7 +121,8 @@ export default function useChatSendFlow({
       userPrompt: parsedSkill.skillId && skill ? parsedSkill.userPrompt : content,
     })
   }, [
-    abortCtrlRef, abortSessionIdRef, attachments, directoryApprovalResolveRef, dispatch, effectiveAgentId,
+    abortCtrlRef, abortSessionIdRef, attachments, approvalMode, changeApprovalMode,
+    directoryApprovalResolveRef, dispatch, effectiveAgentId,
     ensureLocalPathAccess, isGenerating, modelOptions, probeLocalPathAccess, requestServerToolApproval,
     resolveToolApprovalForOwner, runtimeSkills, selectedModel, setContextSystemPrompts, clearToolApprovalForOwner,
     state.activeSessionId, state.agentMode, state.sessions, state.skillConfigs, state.toolsConfig, t, toast,

@@ -29,9 +29,10 @@ execFileSync('git', ['init'], { cwd: executionRepo, stdio: 'ignore' })
 process.env.APP_DB_PATH = path.join(tempDir, 'app.db')
 process.env.WORKSPACE_FS_ENABLED = '1'
 
-const { closeDb, createUser } = await import('../server/db.js')
+const { closeDb, createUser, getDb } = await import('../server/db.js')
 const {
   browseLocalDirectories,
+  clearSessionLocalFileGrants,
   findAuthorizedDirectoryGrant,
   getLocalFileAccessStatus,
   grantLocalPath,
@@ -56,6 +57,7 @@ createUser({ id: 'grant-lookup-user', email: 'grant-lookup@example.com' })
 createUser({ id: 'file-grant-user', email: 'file-grant@example.com' })
 createUser({ id: 'all-files-grant-user', email: 'all-files-grant@example.com' })
 createUser({ id: 'default-output-user', email: 'default-output@example.com' })
+createUser({ id: 'session-grant-user', email: 'session-grant@example.com' })
 
 for (const userId of [
   'local-user-a',
@@ -68,6 +70,7 @@ for (const userId of [
   'file-grant-user',
   'all-files-grant-user',
   'default-output-user',
+  'session-grant-user',
 ]) {
   setApprovalMode({ userId, mode: 'normal' })
 }
@@ -113,6 +116,41 @@ test('local file grants are user-scoped and default to no access', async () => {
   await assert.rejects(
     () => readFileTool({ userId: 'local-user-b', path: path.join(grantedDir, 'note.txt') }),
     /未获得读取授权/
+  )
+})
+
+test('session-only directory grants stay in memory, cover descendants, and disappear with the process session', async () => {
+  const grant = grantLocalPath({
+    userId: 'session-grant-user',
+    rootPath: grantedDir,
+    accessMode: 'read_only',
+    scope: 'session',
+    now: 123,
+  })
+  assert.equal(grant.scope, 'session')
+  assert.match(grant.id, /^session:/)
+  assert.equal(
+    getDb().prepare('SELECT COUNT(*) AS count FROM local_file_grants WHERE user_id = ?').get('session-grant-user').count,
+    0,
+  )
+  assert.equal(
+    findAuthorizedDirectoryGrant({
+      userId: 'session-grant-user',
+      rawPath: path.join(grantedDir, 'nested', 'future.txt'),
+      accessMode: 'read_only',
+    })?.scope,
+    'session',
+  )
+  assert.equal((await readFileTool({
+    userId: 'session-grant-user',
+    path: path.join(grantedDir, 'note.txt'),
+  })).content, 'hello local files')
+
+  assert.equal(clearSessionLocalFileGrants({ userId: 'session-grant-user' }), true)
+  assert.deepEqual(getLocalFileAccessStatus({ userId: 'session-grant-user' }).grants, [])
+  await assert.rejects(
+    () => readFileTool({ userId: 'session-grant-user', path: path.join(grantedDir, 'note.txt') }),
+    /未获得读取授权/,
   )
 })
 

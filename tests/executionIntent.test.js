@@ -5,9 +5,11 @@ import {
   hasActionableNumberedSteps,
   hasFileTargetReference,
   hasMutationExecutionIntent,
+  isExecutionCapabilityChallenge,
   normalizeTurnIntentMode,
   shouldRequireExecution,
 } from '../server/utils/executionIntent.js'
+import { isExplicitReadOnlyRequest } from '../server/services/chatToolSelection.js'
 
 test('turn intent mode is strict and defaults unknown callers to auto', () => {
   assert.equal(normalizeTurnIntentMode(' execute '), 'execute')
@@ -38,6 +40,25 @@ test('auto mode recognizes concise Chinese and English work orders', () => {
   }
 })
 
+test('explicit read-only boundaries distinguish whole-turn constraints from scoped source preservation', () => {
+  for (const text of [
+    '只分析这个项目，不要修改任何文件。',
+    '请检查 D:\\work\\app.js，整个工作区保持只读。',
+    'Do not edit or write any files; only explain the issue.',
+    'Keep the whole repository read-only.',
+  ]) {
+    assert.equal(isExplicitReadOnlyRequest(text), true, text)
+  }
+
+  for (const text of [
+    '不要修改源 PDF，请创建一个新的 DOCX。',
+    'Do not change the source PDF; create a separate Word document.',
+    '只修改当前页面，其他功能不变。',
+  ]) {
+    assert.equal(isExplicitReadOnlyRequest(text), false, text)
+  }
+})
+
 test('object-first transformation requests are executable mutations', () => {
   for (const text of [
     '把它做成立体可旋转的，可以转为横着的，也可以转为竖着的',
@@ -61,6 +82,105 @@ test('object-first transformation requests are executable mutations', () => {
   const createCopy = '把它做成立体的，另建版本并保留原版'
   assert.equal(shouldRequireExecution({ text: createCopy }), true)
   assert.equal(hasMutationExecutionIntent(createCopy), true)
+})
+
+test('visual and file editing orders use the mutation toolchain on the first turn', () => {
+  for (const text of [
+    '"E:\\果\\gallery.html"这个网站，是用了很多图片，但是现在我还有几个需求，1.图片之间太过拥挤2.旋转的时候似乎无法维系圆形',
+    '请读取 E:\\果\\gallery.html，把卡片翻转后的背面显示和朝向调整好。',
+    '编辑 E:\\果\\gallery.html，修好卡片背面和翻转方向。',
+    '把这个页面的卡片翻转效果改一下。',
+    '修改联网搜索页面的颜色和图标。',
+    '只修改当前这一张「联网搜索」配置页面，页面功能和交互逻辑全部保留不变。',
+    'mini timeline中间的竖线去掉。',
+    '主题添加一个白色。',
+    '1. 网页版设置里面配置文件打不开；2. 主题添加一个白色；3. 不要随机分配工具了，要按需挂载。',
+    'Edit the gallery page and adjust the card flip direction.',
+  ]) {
+    assert.equal(shouldRequireExecution({ text }), true, text)
+    assert.equal(hasMutationExecutionIntent(text), true, text)
+  }
+
+  for (const text of [
+    '"E:\\果\\gallery.html"这个文件有什么问题？',
+    '请分析 "E:\\果\\gallery.html" 的以下需求：1.图片是否拥挤2.旋转是否圆滑',
+    '如何编辑这个页面？',
+    '为什么需要调整卡片翻转方向？',
+    '不要编辑或调整这个页面，只分析翻转问题。',
+    'How do I edit the gallery page?',
+    'Do not edit or adjust the gallery page; only explain the flip issue.',
+  ]) {
+    assert.equal(shouldRequireExecution({ text }), false, text)
+    assert.equal(hasMutationExecutionIntent(text), false, text)
+  }
+})
+
+test('routing, addition, and rewind orders distinguish affirmative work from prohibitions', () => {
+  for (const text of [
+    '要按需挂载',
+    '不要随机分配工具了，要按需挂载',
+    '添加一个白色主题',
+    '主题添加一个白色',
+    'Rewrite notes.txt then revert the change.',
+    'Undo the changes in notes.txt.',
+    '回滚 notes.txt 的修改。',
+    '撤销对 notes.txt 的改动。',
+    '把 notes.txt 恢复原状。',
+  ]) {
+    assert.equal(shouldRequireExecution({ text }), true, text)
+    assert.equal(hasMutationExecutionIntent(text), true, text)
+  }
+
+  for (const text of [
+    '不要添加白色主题',
+    '不要增加白色主题',
+    '不要按需挂载工具',
+    '不要随机分配工具',
+    '不要撤销 notes.txt 的修改',
+    '无需还原 notes.txt',
+  ]) {
+    assert.equal(shouldRequireExecution({ text }), false, text)
+    assert.equal(hasMutationExecutionIntent(text), false, text)
+  }
+})
+
+test('capability challenges are recognized without becoming standalone write orders', () => {
+  for (const text of [
+    '为什么不能你来改',
+    '为什么不能你自己修改？',
+    '为什么你不能直接改？',
+    '你不能直接改吗？',
+    '为什么没有写入工具？',
+    '那你不能直接改吗？',
+    '可是为什么不能你来改？',
+    '难道你不能自己修改？',
+    '既然有工具，为什么不能直接改？',
+    '为什么不直接由你来改？',
+    '怎么不自己修改？',
+    '你不能修改用户资料？',
+    "Why can't you edit it yourself?",
+    'Why are you unable to write the file?',
+    "But why can't you just fix it yourself?",
+  ]) {
+    assert.equal(isExecutionCapabilityChallenge(text), true, text)
+    assert.equal(shouldRequireExecution({ text }), false, text)
+  }
+
+  for (const text of [
+    '为什么登录状态会过期？',
+    '为什么不能修改只读文件？',
+    '为什么用户不能修改昵称？',
+    '为什么管理员不能直接编辑成员资料？',
+    '为什么当前用户不能修改昵称？',
+    '为什么系统管理员不能编辑成员资料？',
+    '为什么当前页面不能修改标题？',
+    '你能解释为什么用户不能修改昵称吗？',
+    '只解释为什么不能修改，不要改文件。',
+    'Why is this API response immutable?',
+    'Why is the current system unable to edit records?',
+  ]) {
+    assert.equal(isExecutionCapabilityChallenge(text), false, text)
+  }
 })
 
 test('auto mode recognizes write orders with Chinese filenames and nested Windows paths', () => {

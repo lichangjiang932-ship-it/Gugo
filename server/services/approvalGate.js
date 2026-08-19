@@ -95,6 +95,84 @@ function terminalDecision(approval) {
 }
 
 /**
+ * An approval authorizes one call, but it must not freeze the permission mode
+ * that was active when the inbox row was created. In particular, switching to
+ * plan while a decision is pending must take effect before that decision can
+ * be consumed, including after a process restart.
+ */
+export function revalidateToolPermission({
+  userId,
+  origin = 'job',
+  toolName,
+  args = {},
+} = {}) {
+  if (!userId) return { proceed: true, args }
+
+  try {
+    const settings = getApprovalSettings({ userId })
+    const dynamicMetadata = getToolMetadata(toolName, { args, userId })
+    const isRuntimePlugin = dynamicMetadata?.origin === 'plugin'
+    // Stored policies are keyed only by tool name. A newly installed or
+    // shadowing plugin must not inherit another implementation's standing
+    // grant or a persisted risk downgrade.
+    const riskOverride = isRuntimePlugin
+      ? null
+      : settings.riskOverrides?.find((item) => item?.toolName === toolName) || null
+    const metadata = riskOverride
+      ? {
+          ...(dynamicMetadata || {}),
+          riskClass: riskOverride.riskClass,
+          requiresApproval: riskOverride.riskClass !== 'read',
+          reason: `用户风险覆盖: ${riskOverride.riskClass}`,
+        }
+      : dynamicMetadata
+    const verdict = classifyToolRisk(toolName, args, {
+      origin,
+      // This call has already been approved or reached the executing
+      // checkpoint. Revalidation only asks whether the user's current
+      // permission mode still forbids it; it must not reopen or depend on the
+      // deployment-level approval queue (which may legitimately be `off`).
+      mode: 'unattended',
+      permissionMode: settings.mode,
+      rememberedGrants: isRuntimePlugin ? [] : settings.rememberedGrants,
+      metadata,
+    })
+    if (!verdict.denied) return { proceed: true, args, permissionMode: settings.mode }
+    return {
+      proceed: false,
+      reason: verdict.reason,
+      policyDenied: settings.mode === 'plan',
+      permissionMode: settings.mode,
+      suggestedPermissionMode: settings.mode === 'plan' ? 'acceptEdits' : 'normal',
+    }
+  } catch (err) {
+    console.error('[approval] 重验当前权限失败,已保守拒绝:', err?.stack || err)
+    return {
+      proceed: false,
+      reason: '无法确认当前权限模式,已保守拒绝',
+      systemFailure: true,
+      retryable: true,
+    }
+  }
+}
+
+function terminalDecisionForCurrentMode(approval) {
+  const decision = terminalDecision(approval)
+  if (!decision?.proceed) return decision
+
+  const args = decision.args ?? approval.effectiveArgs ?? approval.args ?? {}
+  const currentPermission = revalidateToolPermission({
+    userId: approval.userId,
+    origin: approval.origin,
+    toolName: approval.toolName,
+    args,
+  })
+  return currentPermission.proceed
+    ? decision
+    : { ...currentPermission, approvalId: approval.id }
+}
+
+/**
  * 把 gate 的拒绝结果翻译成给模型看的工具结果。
  *
  * 关键是让模型能区分三种情况并采取不同行动:
@@ -119,7 +197,80 @@ export function formatDeniedToolResult(gate) {
   if (gate?.cancelled) {
     return { ...base, cancelled: true, error: gate.reason }
   }
+  if (gate?.policyDenied) {
+    const currentMode = gate.permissionMode === 'plan' ? '计划模式' : String(gate.permissionMode || '当前模式')
+    const suggestedMode = gate.suggestedPermissionMode === 'acceptEdits' ? '自动接受编辑模式' : '正常模式'
+    return {
+      ...base,
+      code: gate.permissionMode === 'plan'
+        ? 'policy_denied_plan_mode'
+        : 'policy_denied_permission_mode',
+      policyDenied: true,
+      permissionMode: gate.permissionMode || null,
+      suggestedPermissionMode: gate.suggestedPermissionMode || 'normal',
+      error: `该工具存在，但操作在${currentMode}下被策略禁止。请切换到${suggestedMode}后继续；不要将此解释为缺少写入或执行工具。`,
+    }
+  }
   return { ...base, deniedByUser: true, error: `${gate?.reason || '用户拒绝了这次调用'}。请换一个方案,不要重复请求同一个操作。` }
+}
+
+/**
+ * Persist one approval request and publish the standard inbox notification.
+ * Administrative callers use this non-blocking primitive; tool execution
+ * calls it and then waits through waitForDecision().
+ */
+export function enqueueApprovalRequest({
+  userId,
+  origin = 'job',
+  jobId = null,
+  stepId = null,
+  sessionId = null,
+  toolName,
+  args = {},
+  risk = 'medium',
+  metadataSource = 'fallback',
+  reason = null,
+  expiresAt = null,
+  notificationTitle = null,
+  notificationBody = null,
+  notificationData = null,
+} = {}) {
+  const approval = createPendingApproval({
+    userId,
+    origin,
+    jobId,
+    stepId,
+    sessionId,
+    toolName,
+    args,
+    risk,
+    metadataSource,
+    reason,
+    expiresAt,
+  })
+
+  try {
+    createNotification({
+      userId,
+      kind: 'approval',
+      title: notificationTitle || `需要批准:${toolName}`,
+      body: notificationBody || reason || '有一个操作等待你的批准',
+      link: `/approvals?id=${encodeURIComponent(approval.id)}`,
+      data: {
+        ...(notificationData && typeof notificationData === 'object' ? notificationData : {}),
+        approvalId: approval.id,
+        toolName,
+        risk,
+        metadataSource: approval.metadataSource,
+        jobId,
+        origin,
+      },
+    })
+  } catch (err) {
+    // The durable inbox row is authoritative; realtime notification is best effort.
+    console.error('[approval] 通知发送失败:', err?.stack || err)
+  }
+  return approval
 }
 
 /**
@@ -140,6 +291,7 @@ export async function requestApproval({
   onPending = null,
   forceApproval = false,
   forceApprovalReason = null,
+  preAuthorized = false,
 } = {}) {
   // 系统/内部调用(无 userId)不 gate —— 和 fsShellTools.assertToolPermitted 一致的口径
   if (!userId) return { proceed: true, args }
@@ -152,8 +304,14 @@ export async function requestApproval({
   } catch (err) {
     console.error('[approval] 读取用户档位失败,按默认最严处理:', err?.stack || err)
   }
-  const riskOverride = settings.riskOverrides?.find((item) => item?.toolName === toolName) || null
   const dynamicMetadata = getToolMetadata(toolName, { args, userId })
+  const isRuntimePlugin = dynamicMetadata?.origin === 'plugin'
+  // Runtime registrations have process-local owner identities, whereas these
+  // persisted policies are name-only. Do not let one plugin inherit another
+  // plugin's grant or risk override after shadowing/restart.
+  const riskOverride = isRuntimePlugin
+    ? null
+    : settings.riskOverrides?.find((item) => item?.toolName === toolName) || null
   const metadata = riskOverride
     ? {
         ...(dynamicMetadata || {}),
@@ -166,11 +324,24 @@ export async function requestApproval({
     origin,
     mode: effectiveMode,
     permissionMode: settings.mode,
-    rememberedGrants: settings.rememberedGrants,
+    rememberedGrants: isRuntimePlugin ? [] : settings.rememberedGrants,
     metadata,
   })
   // plan 档位:直接拒,不排队等人 —— 用户要的就是「只看不动」
-  if (verdict.denied) return { proceed: false, reason: verdict.reason }
+  if (verdict.denied) {
+    return {
+      proceed: false,
+      reason: verdict.reason,
+      policyDenied: settings.mode === 'plan',
+      permissionMode: settings.mode,
+      suggestedPermissionMode: settings.mode === 'plan' ? 'acceptEdits' : 'normal',
+    }
+  }
+  // A trusted pre-tool hook may waive an approval prompt, but it cannot cross
+  // the user's plan/read-only boundary above.
+  if (preAuthorized === true) {
+    return { proceed: true, args, hookAuthorized: true }
+  }
   // “全部放行”是用户对审批层的最终选择。Hook 仍可拒绝调用，
   // 但 permissionDecision=ask 不能把 bypass 重新降级为等待审批。
   if (forceApproval === true && settings.mode !== 'bypass') {
@@ -193,7 +364,7 @@ export async function requestApproval({
 
   let approval
   try {
-    approval = createPendingApproval({
+    approval = enqueueApprovalRequest({
       userId,
       origin,
       jobId,
@@ -202,6 +373,7 @@ export async function requestApproval({
       toolName,
       args,
       risk: verdict.risk,
+      metadataSource: metadata?.source,
       reason: verdict.reason,
       expiresAt: Date.now() + resolveApprovalTimeoutMs(),
     })
@@ -215,27 +387,6 @@ export async function requestApproval({
       systemFailure: true,
       retryable: true,
     }
-  }
-
-  try {
-    createNotification({
-      userId,
-      kind: 'approval',
-      title: `需要批准:${toolName}`,
-      body: verdict.reason || '有一个操作等待你的批准',
-      // 前端是 HashRouter + navigate(link),这里给路由路径而非带 /#/ 的完整 URL
-      link: `/approvals?id=${encodeURIComponent(approval.id)}`,
-      data: {
-        approvalId: approval.id,
-        toolName,
-        risk: verdict.risk,
-        jobId,
-        origin,
-      },
-    })
-  } catch (err) {
-    // 通知失败不阻断门控本身,用户仍可在收件箱看到
-    console.error('[approval] 通知发送失败:', err?.stack || err)
   }
 
   if (typeof onPending === 'function') {
@@ -314,7 +465,7 @@ export function waitForDecision({
         }
         return
       }
-      const decision = terminalDecision(approval)
+      const decision = terminalDecisionForCurrentMode(approval)
       if (decision) settle(decision)
     }
 
@@ -365,7 +516,7 @@ export function resumePersistedApproval({ approvalId, signal = null } = {}) {
       retryable: true,
     })
   }
-  const decision = terminalDecision(getApprovalById(approvalId))
+  const decision = terminalDecisionForCurrentMode(getApprovalById(approvalId))
   return decision ? Promise.resolve(decision) : waitForDecision({ approvalId, signal })
 }
 

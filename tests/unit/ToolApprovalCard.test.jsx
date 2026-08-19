@@ -5,6 +5,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import ToolApprovalCard from '../../src/components/ToolApprovalCard.jsx'
 import PermissionModeSwitcher from '../../src/components/PermissionModeSwitcher.jsx'
+import { ApprovalCard } from '../../src/pages/ApprovalsInbox.jsx'
 import { I18nProvider } from '../../src/i18n/I18nProvider.jsx'
 
 function setupDom() {
@@ -46,6 +47,7 @@ const FILE_REQUEST = {
   name: 'write_file',
   args: { path: 'demo.txt', content: 'hello' },
   risk: 'medium',
+  metadataSource: 'declared',
   reason: '写入文件',
   preview: null,
 }
@@ -59,6 +61,10 @@ test('shell approval never offers a standing-rule action', async () => {
   assert.match(html, /允许一次/)
   assert.doesNotMatch(html, /总是允许/)
   assert.match(html, /拒绝/)
+  assert.equal(
+    dom.window.document.querySelector('[data-testid="tool-risk-source"]').textContent.trim(),
+    '风险来源: 兼容兜底',
+  )
   const actionGroup = dom.window.document.querySelector('[data-testid="tool-approval-actions"]')
   assert.ok(actionGroup.classList.contains('ml-auto'))
   assert.ok(actionGroup.classList.contains('flex-wrap'))
@@ -120,6 +126,10 @@ test('non-shell approval actions return one-time, standing-rule, and deny decisi
   const byText = (text) => buttons.find((button) => button.textContent.includes(text))
   const actionGroup = dom.window.document.querySelector('[data-testid="tool-approval-actions"]')
   const hint = dom.window.document.querySelector('[data-testid="tool-approval-hint"]')
+  assert.equal(
+    dom.window.document.querySelector('[data-testid="tool-risk-source"]').textContent.trim(),
+    '风险来源: 显式声明',
+  )
   assert.equal(hint.parentElement.firstElementChild, hint)
   assert.equal(actionGroup.parentElement.lastElementChild, actionGroup)
   assert.ok(hint.classList.contains('mr-auto'))
@@ -153,6 +163,33 @@ test('ToolApprovalCard tolerates a request with optional fields missing', async 
     <ToolApprovalCard open request={{ name: 'mystery_tool' }} onDecide={() => {}} busy={false} />
   ))
   assert.match(view.html(), /mystery_tool/)
+  assert.match(view.html(), /兼容兜底/)
+  await view.cleanup()
+})
+
+test('approval inbox card displays the persisted metadata source', async () => {
+  const dom = setupDom()
+  const labels = {
+    'approvals.risk.medium': '中风险',
+    'approvals.source.label': '风险来源',
+    'approvals.source.declared': '显式声明',
+    'approvals.origin.job': '后台任务',
+  }
+  const view = await renderInto(dom, (
+    <ApprovalCard
+      approval={{
+        id: 'approval-1', toolName: 'write_file', args: { path: 'demo.txt' },
+        risk: 'medium', metadataSource: 'declared', origin: 'job', createdAt: 1,
+      }}
+      busy={false}
+      onDecide={() => {}}
+      t={(key) => labels[key] || key}
+    />
+  ))
+  assert.equal(
+    dom.window.document.querySelector('[data-testid="approval-risk-source"]').textContent.trim(),
+    '风险来源: 显式声明',
+  )
   await view.cleanup()
 })
 

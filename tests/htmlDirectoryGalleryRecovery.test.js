@@ -146,7 +146,10 @@ test('a failed local-path gallery call self-corrects, bundles every JPG, and exp
         }
       }
       if (modelCalls === 4) {
-        assert.equal(toolChoice, undefined)
+        assert.deepEqual(toolChoice, {
+          type: 'function',
+          function: { name: 'set_deliverables' },
+        })
         const artifactId = JSON.parse(messages.findLast((message) => (
           message?.role === 'tool' && message?.name === 'create_html_app'
         )).content).artifactId

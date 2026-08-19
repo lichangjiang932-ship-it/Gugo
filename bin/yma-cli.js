@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync, mkdirSync, chmodSync, existsSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
+import { createInterface } from 'node:readline'
+import { fileURLToPath } from 'node:url'
 
 const HELP = `gugo — server-first CLI for Gugo (legacy alias: yma-cli)
 
@@ -11,6 +13,10 @@ Usage:
   gugo session list [--archived true|false|all]
   gugo agent list
   gugo skill list
+  gugo run "<prompt>" [--model <name>] [--mode normal|acceptEdits|plan|bypass]
+                     [--cwd <dir>] [--session-id <id>]
+  gugo run --resume <turnId> [--session-id <id>] [--cwd <dir>]
+  echo "<prompt>" | gugo run [options]
   gugo --help
 
 Environment:
@@ -18,7 +24,121 @@ Environment:
   SERVER_HOST   server host (default 127.0.0.1)
 
 Auth token is stored at ~/.yma-cli/token (chmod 0600).
+Run emits durable TurnEngine events as one JSON object per stdout line (JSONL).
 `
+
+const RUN_VALUE_FLAGS = new Set(['model', 'mode', 'cwd', 'session-id', 'resume'])
+const RUN_MODES = new Set(['normal', 'acceptEdits', 'plan', 'bypass'])
+const MAX_STDIN_PROMPT_BYTES = 1024 * 1024
+
+export class CliUsageError extends Error {
+  constructor(code, message) {
+    super(message)
+    this.name = 'CliUsageError'
+    this.code = code
+    this.exitCode = 2
+  }
+}
+
+export function parseRunArgs(argv = []) {
+  const options = { prompt: '', model: null, mode: 'normal', cwd: process.cwd(), sessionId: null, resumeTurnId: null }
+  const positional = []
+  let positionalOnly = false
+  for (let i = 0; i < argv.length; i++) {
+    const raw = String(argv[i])
+    if (!positionalOnly && raw === '--') {
+      positionalOnly = true
+      continue
+    }
+    if (!positionalOnly && raw.startsWith('--')) {
+      const equalAt = raw.indexOf('=')
+      const key = raw.slice(2, equalAt >= 0 ? equalAt : undefined)
+      if (!RUN_VALUE_FLAGS.has(key)) throw new CliUsageError('CLI_OPTION_UNKNOWN', `unknown run option: --${key}`)
+      const value = equalAt >= 0 ? raw.slice(equalAt + 1) : argv[++i]
+      if (value === undefined || value === '' || String(value).startsWith('--')) {
+        throw new CliUsageError('CLI_OPTION_VALUE_REQUIRED', `--${key} requires a value`)
+      }
+      if (key === 'model') options.model = String(value)
+      if (key === 'mode') options.mode = String(value)
+      if (key === 'cwd') options.cwd = resolve(String(value))
+      if (key === 'session-id') options.sessionId = String(value)
+      if (key === 'resume') options.resumeTurnId = String(value)
+      continue
+    }
+    positional.push(raw)
+  }
+  options.prompt = positional.join(' ').trim()
+  if (!RUN_MODES.has(options.mode)) {
+    throw new CliUsageError('CLI_MODE_INVALID', 'mode must be one of normal, acceptEdits, plan, bypass')
+  }
+  if (options.resumeTurnId && options.prompt) {
+    throw new CliUsageError('CLI_RESUME_PROMPT_CONFLICT', 'prompt cannot be combined with --resume')
+  }
+  return options
+}
+
+export async function readPromptFromStdin(input = process.stdin) {
+  let prompt = ''
+  for await (const chunk of input) {
+    prompt += String(chunk)
+    if (Buffer.byteLength(prompt, 'utf8') > MAX_STDIN_PROMPT_BYTES) {
+      throw new CliUsageError('CLI_STDIN_TOO_LARGE', 'stdin prompt exceeds 1 MiB')
+    }
+  }
+  return prompt.trim()
+}
+
+function writeJsonLine(output, value) {
+  output.write(`${JSON.stringify(value)}\n`)
+}
+
+function createApprovalPrompt(input, diagnostics) {
+  return async (event) => {
+    const tool = event?.payload?.toolName || 'unknown'
+    const args = JSON.stringify(event?.payload?.args || {})
+    const rl = createInterface({ input, output: diagnostics })
+    try {
+      const answer = await new Promise((done) => rl.question(`[approval] tool=${tool} args=${args} [y/N] `, done))
+      return { decision: /^y(?:es)?$/i.test(String(answer).trim()) ? 'approve' : 'deny' }
+    } finally {
+      rl.close()
+    }
+  }
+}
+
+export async function cmdRun(argv, {
+  stdin = process.stdin,
+  stdout = process.stdout,
+  stderr = process.stderr,
+  runTurn = null,
+} = {}) {
+  try {
+    const options = parseRunArgs(argv)
+    if (!options.resumeTurnId && !options.prompt) {
+      if (stdin.isTTY) throw new CliUsageError('PROMPT_REQUIRED', 'prompt is required')
+      options.prompt = await readPromptFromStdin(stdin)
+      if (!options.prompt) throw new CliUsageError('PROMPT_REQUIRED', 'prompt is required')
+    }
+    const runtime = runTurn || (await import('../server/services/headlessTurnRuntime.js')).runHeadlessTurn
+    const interactive = stdin.isTTY === true && stderr.isTTY === true
+    const result = await runtime({
+      ...options,
+      token: readToken() || '',
+      interactive,
+      onEvent: (event) => writeJsonLine(stdout, event),
+      onToken: (token) => writeToken(token),
+      onDiagnostic: (message) => stderr.write(`${message}\n`),
+      onApproval: createApprovalPrompt(stdin, stderr),
+    })
+    return Number.isInteger(result?.exitCode) ? result.exitCode : 0
+  } catch (error) {
+    const code = error?.code || 'CLI_RUN_FAILED'
+    const message = error?.message || String(error)
+    writeJsonLine(stdout, { type: 'cli.error', error: { code, message } })
+    stderr.write(`Error [${code}]: ${message}\n`)
+    return Number.isInteger(error?.exitCode) ? error.exitCode : 1
+  }
+}
 
 function parseFlags(argv) {
   const out = {}
@@ -157,8 +277,7 @@ async function cmdSkillList() {
   process.stdout.write(JSON.stringify(res, null, 2) + '\n')
 }
 
-async function main() {
-  const argv = process.argv.slice(2)
+export async function main(argv = process.argv.slice(2)) {
   if (argv.length === 0 || argv[0] === '--help' || argv[0] === '-h' || argv[0] === 'help') {
     process.stdout.write(HELP)
     return
@@ -173,6 +292,10 @@ async function main() {
   if (cmd === 'verify') {
     return cmdVerify(parseFlags(argv.slice(1)))
   }
+  if (cmd === 'run') {
+    process.exitCode = await cmdRun(argv.slice(1))
+    return
+  }
   if (cmd === 'session' && sub === 'list') return cmdSessionList(flags)
   if (cmd === 'agent' && sub === 'list') return cmdAgentList()
   if (cmd === 'skill' && sub === 'list') return cmdSkillList()
@@ -181,7 +304,9 @@ async function main() {
   process.exit(2)
 }
 
-main().catch((err) => {
-  process.stderr.write(`Fatal: ${err?.message || err}\n`)
-  process.exit(1)
-})
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((err) => {
+    process.stderr.write(`Fatal: ${err?.message || err}\n`)
+    process.exitCode = 1
+  })
+}

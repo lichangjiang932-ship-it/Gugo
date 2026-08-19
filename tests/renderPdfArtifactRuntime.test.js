@@ -56,11 +56,12 @@ test('runToolsLoop records and delivers every page returned by render_pdf_pages'
     toolSpecs: SERVER_TOOL_SPECS,
     enableToolHooks: false,
     requestToolApproval: async ({ args }) => ({ proceed: true, args }),
-    runModel: async ({ messages, tools }) => {
+    runModel: async ({ messages, tools, toolChoice }) => {
       modelCalls += 1
       const names = tools.map((spec) => spec?.function?.name)
-      assert.equal(names.includes('generate_image'), false)
+      assert.equal(names.includes('generate_image'), true)
       assert.equal(names.includes('render_pdf_pages'), true)
+      assert.equal(names.includes('set_deliverables'), true)
       if (modelCalls === 1) {
         return {
           content: '',
@@ -79,6 +80,10 @@ test('runToolsLoop records and delivers every page returned by render_pdf_pages'
       const rendered = JSON.parse(renderedMessage.content)
       assert.equal(rendered.artifactIds.length, 2)
       if (modelCalls === 2) {
+        assert.deepEqual(toolChoice, {
+          type: 'function',
+          function: { name: 'set_deliverables' },
+        })
         return {
           content: '',
           toolCalls: [{

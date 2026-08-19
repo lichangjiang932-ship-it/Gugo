@@ -12,11 +12,20 @@ process.env.WORKSPACE_FS_ENABLED = '1'
 process.env.WORKSPACE_SHARED_TRUSTED = '1'
 
 const { SERVER_TURN_TOOL_TOGGLE_NAMES } = await import('../src/lib/serverToolConfig.js')
-const { WORKSPACE_TOOL_SPECS } = await import('../src/lib/tools/workspaceToolSpecs.js')
 const { FS_SHELL_TOOL_SPECS } = await import('../server/adapters/fsShellTools.js')
 const { runToolsLoop, SERVER_TOOL_SPECS } = await import('../server/services/toolLoopRuntime.js')
 const { createUser, setUserToolPermission } = await import('../server/db.js')
-const { getBuiltinSpec, getToolMetadata, listBuiltinSpecs } = await import('../server/services/toolRegistry.js')
+const {
+  getBuiltinSpec,
+  getToolMetadata,
+  handleToolSpecsRequest,
+  listBuiltinSpecs,
+  registerDynamicTool,
+  resolveSpecsForMode,
+  unregisterDynamicTool,
+} = await import('../server/services/toolRegistry.js')
+const { BUILTIN_TOOL_SCHEMA_CATALOG } = await import('../server/utils/toolSchemaCatalog.js')
+const { normalizeToolCalls, validateToolCall } = await import('../server/utils/toolCallHarness.js')
 const { CONNECTOR_TOOL_NAMES } = await import('../server/services/connectorTools.js')
 const { resolveTurnToolSpecs } = await import('../server/services/turnToolSpecs.js')
 
@@ -62,20 +71,20 @@ test('HTML artifact generation is an executable server capability', () => {
   assert.equal(serverNames.has('create_html_app'), true)
 })
 
-test('run_command and bash_exec share command-aware concurrency metadata', () => {
-  for (const name of ['bash_exec', 'run_command']) {
-    const readOnly = getToolMetadata(name, { args: { command: 'git status --short' } })
-    assert.equal(readOnly.isReadOnly, true, `${name} read-only command classification`)
-    assert.equal(readOnly.isConcurrencySafe, true, `${name} read-only command concurrency`)
+test('only bash_exec receives command-aware concurrency metadata', () => {
+  const readOnly = getToolMetadata('bash_exec', { args: { command: 'git status --short' } })
+  assert.equal(readOnly.isReadOnly, true)
+  assert.equal(readOnly.isConcurrencySafe, true)
 
-    const mutating = getToolMetadata(name, { args: { command: 'node -e "require(\'fs\').writeFileSync(\'out.txt\', \'x\')"' } })
-    assert.equal(mutating.isReadOnly, false, `${name} mutating command classification`)
-    assert.equal(mutating.isConcurrencySafe, false, `${name} mutating command concurrency`)
-  }
+  const mutating = getToolMetadata('bash_exec', { args: { command: 'node -e "require(\'fs\').writeFileSync(\'out.txt\', \'x\')"' } })
+  assert.equal(mutating.isReadOnly, false)
+  assert.equal(mutating.isConcurrencySafe, false)
 
-  const cmdAlias = getToolMetadata('run_command', { args: { cmd: 'git diff --stat' } })
-  assert.equal(cmdAlias.isReadOnly, true)
-  assert.equal(cmdAlias.isConcurrencySafe, true)
+  const runner = getToolMetadata('run_command', { args: { command: 'git diff --stat' } })
+  assert.equal(runner.riskClass, 'exec')
+  assert.equal(runner.requiresApproval, true)
+  assert.equal(runner.isReadOnly, false)
+  assert.equal(runner.isConcurrencySafe, false)
 })
 
 test('core execution tools survive the canonical turn catalog when enabled', async () => {
@@ -116,7 +125,7 @@ test('core execution tools survive the canonical turn catalog when enabled', asy
   }
 })
 
-test('resolveTurnToolSpecs removes explicitly disabled builtins after merging tools', async () => {
+test('resolveTurnToolSpecs keeps explicitly disabled builtins discoverable after merging tools', async () => {
   const resolved = await resolveTurnToolSpecs({
     userId: 'server-tool-capability-test',
     baseSpecs: SERVER_TOOL_SPECS,
@@ -127,13 +136,74 @@ test('resolveTurnToolSpecs removes explicitly disabled builtins after merging to
     webSearchReady: true,
   })
   const names = namesOf(resolved)
-  assert.equal(names.includes('list_directory'), false)
-  assert.equal(names.includes('read_file'), false, 'disabled must win over enabled')
-  assert.equal(names.includes('bash_exec'), false)
+  assert.equal(names.includes('list_directory'), true)
+  assert.equal(names.includes('read_file'), true)
+  assert.equal(names.includes('bash_exec'), true)
   assert.equal(names.includes('web_search'), true)
+  assert.equal(names.includes('set_deliverables'), true)
 })
 
-test('model-visible schemas exclude tools disabled by the authoritative server permission gate', async () => {
+test('registry, API resolution, and TurnEngine retain the canonical schema object references', () => {
+  const apiEntries = resolveSpecsForMode('chat')
+  for (const spec of listBuiltinSpecs()) {
+    const name = spec.function.name
+    assert.equal(spec, BUILTIN_TOOL_SCHEMA_CATALOG[name], `${name} catalog identity`)
+    assert.equal(getBuiltinSpec(name), spec, `${name} registry identity`)
+    assert.equal(
+      apiEntries.find((entry) => entry.name === name)?.tool,
+      spec,
+      `${name} API identity`,
+    )
+    assert.equal(
+      SERVER_TOOL_SPECS.find((candidate) => candidate?.function?.name === name),
+      spec,
+      `${name} TurnEngine identity`,
+    )
+  }
+})
+
+test('a server-only dynamic tool reaches the API and validator with one schema definition', (t) => {
+  const name = 'server_only_schema_regression_tool'
+  const spec = {
+    type: 'function',
+    function: {
+      name,
+      description: 'Regression schema registered only on the server.',
+      parameters: {
+        type: 'object',
+        properties: { value: { type: 'integer', minimum: 1 } },
+        required: ['value'],
+        additionalProperties: false,
+      },
+    },
+  }
+  registerDynamicTool({ name, origin: 'test', spec })
+  t.after(() => unregisterDynamicTool(name))
+
+  const resolved = resolveSpecsForMode('chat').find((entry) => entry.name === name)
+  assert.deepEqual(resolved?.tool, spec)
+  assert.notEqual(resolved?.tool, spec)
+
+  const [invalid] = normalizeToolCalls([{ name, arguments: '{"value":0}' }])
+  const validation = validateToolCall(invalid, [resolved.tool])
+  assert.equal(validation.code, 'tool_arguments_validation_failed')
+  assert.match(validation.issues.join('\n'), /不能小于 1/)
+
+  let status = 0
+  let body = ''
+  handleToolSpecsRequest(
+    { method: 'GET', url: '/api/tools/specs?mode=chat', headers: {} },
+    {
+      writeHead(nextStatus) { status = nextStatus },
+      end(chunk) { body += String(chunk || '') },
+    },
+  )
+  assert.equal(status, 200)
+  const apiSpec = JSON.parse(body).specs.find((entry) => entry.name === name)?.tool
+  assert.deepEqual(apiSpec, spec)
+})
+
+test('model-visible schemas remain stable when the authoritative server permission gate disables execution', async () => {
   const userId = 'server-tool-schema-permission-user'
   createUser({ id: userId, email: 'server-tool-schema-permission@example.com' })
   setUserToolPermission({ userId, toolName: 'bash_exec', enabled: false })
@@ -147,8 +217,9 @@ test('model-visible schemas exclude tools disabled by the authoritative server p
     webSearchReady: false,
   })
 
-  assert.equal(namesOf(resolved).includes('bash_exec'), false)
+  assert.equal(namesOf(resolved).includes('bash_exec'), true)
   assert.equal(namesOf(resolved).includes('run_project_check'), true)
+  assert.equal(namesOf(resolved).includes('set_deliverables'), true)
 })
 
 test('writable turns retain read-only verification tools despite legacy client defaults', async () => {
@@ -167,7 +238,8 @@ test('writable turns retain read-only verification tools despite legacy client d
   assert.ok(names.includes('write_file'))
   assert.ok(names.includes('read_file'))
   assert.ok(names.includes('list_directory'))
-  assert.equal(names.includes('edit_file'), false, 'an explicitly disabled write tool stays disabled')
+  assert.ok(names.includes('edit_file'), 'an explicitly disabled write tool stays discoverable')
+  assert.ok(names.includes('set_deliverables'))
 })
 
 test('Git mutation turns retain status and diff for preflight and verification', async () => {
@@ -187,10 +259,11 @@ test('Git mutation turns retain status and diff for preflight and verification',
 
 test('every bash_exec spec tells models to quote Windows absolute paths', () => {
   const fsShellSpec = FS_SHELL_TOOL_SPECS.find((spec) => spec?.function?.name === 'bash_exec')
+  const registrySpec = getBuiltinSpec('bash_exec')
+  assert.equal(registrySpec, fsShellSpec)
   const descriptions = [
     fsShellSpec?.function?.description,
-    getBuiltinSpec('bash_exec')?.function?.description,
-    WORKSPACE_TOOL_SPECS.bash_exec?.function?.description,
+    registrySpec?.function?.description,
   ]
 
   for (const description of descriptions) {
@@ -200,12 +273,12 @@ test('every bash_exec spec tells models to quote Windows absolute paths', () => 
   }
 })
 
-test('resolveTurnToolSpecs exposes web search only when dedicated configuration is ready', async () => {
+test('resolveTurnToolSpecs keeps web search discoverable before dedicated configuration is ready', async () => {
   const baseSpecs = [getBuiltinSpec('web_search'), getBuiltinSpec('fetch_url')]
   const hidden = await resolveTurnToolSpecs({ userId: 'search-unconfigured', baseSpecs, webSearchReady: false })
   const visible = await resolveTurnToolSpecs({ userId: 'search-configured', baseSpecs, webSearchReady: true })
-  assert.deepEqual(namesOf(hidden), ['fetch_url'])
-  assert.deepEqual(namesOf(visible), ['fetch_url', 'web_search'])
+  assert.deepEqual(namesOf(hidden), ['fetch_url', 'set_deliverables', 'web_search'])
+  assert.deepEqual(namesOf(visible), ['fetch_url', 'set_deliverables', 'web_search'])
 })
 
 test('resolveTurnToolSpecs advertises only connector tools backed by enabled integrations', async () => {
@@ -218,7 +291,7 @@ test('resolveTurnToolSpecs advertises only connector tools backed by enabled int
     enabledConnectorTools: ['github_search_repositories'],
     webSearchReady: false,
   })
-  assert.deepEqual(namesOf(resolved), ['github_search_repositories', 'read_file'])
+  assert.deepEqual(namesOf(resolved), ['github_search_repositories', 'read_file', 'set_deliverables'])
 })
 
 test('resolveTurnToolSpecs canonicalizes equivalent schema object order for prompt caching', async () => {

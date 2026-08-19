@@ -44,7 +44,7 @@ test('runHubMigrations 幂等且创建 hub_jobs 表', () => {
   const cols = rows.map((r) => r.name).sort()
   assert.deepEqual(
     cols,
-    ['created_at', 'id', 'last_error', 'last_run_at', 'name', 'payload', 'status', 'updated_at'].sort()
+    ['consumed_at', 'created_at', 'id', 'last_error', 'last_run_at', 'name', 'payload', 'status', 'updated_at'].sort()
   )
   const versionRow = db.prepare("SELECT value FROM meta WHERE key = 'hub_schema_version'").get()
   assert.equal(Number(versionRow.value), HUB_SCHEMA_VERSION)
@@ -64,12 +64,16 @@ test('enqueue + claimNextPending + markDone 端到端', () => {
   assert.equal(claimed.id, job.id)
   assert.equal(claimed.status, 'running')
   assert.ok(claimed.lastRunAt >= job.createdAt)
+  assert.equal(claimed.consumedAt, claimed.lastRunAt)
 
   const done = markDone(job.id, { lastError: 'echo:hi' })
   assert.equal(done.status, 'done')
   assert.equal(done.lastError, 'echo:hi')
 
-  const failed = markFailed(enqueueJob({ name: 'echo', payload: { text: 'x' } }).id, 'boom')
+  const failedJob = enqueueJob({ name: 'echo', payload: { text: 'x' } })
+  const claimedFailure = claimNextPending()
+  assert.equal(claimedFailure.id, failedJob.id)
+  const failed = markFailed(failedJob.id, 'boom')
   assert.equal(failed.status, 'failed')
   assert.equal(failed.lastError, 'boom')
 
@@ -90,6 +94,43 @@ test('重复 claim 不会拉到同一条', () => {
   const ids = new Set([first.id, second.id])
   assert.ok(ids.has(a.id) && ids.has(b.id))
   assert.equal(third, null, 'queue exhausted')
+})
+
+test('持久消费标记阻止 running、done 和 failed 行再次领取', () => {
+  const running = enqueueJob({ name: 'echo', payload: { text: 'running' } })
+  const claimed = claimNextPending()
+  assert.equal(claimed.id, running.id)
+  assert.ok(claimed.consumedAt)
+  assert.equal(claimNextPending(), null)
+
+  const done = markDone(running.id)
+  assert.equal(done.status, 'done')
+  assert.equal(done.consumedAt, claimed.consumedAt)
+  assert.equal(claimNextPending(), null)
+
+  const failed = enqueueJob({ name: 'echo', payload: { text: 'failed' } })
+  assert.equal(claimNextPending().id, failed.id)
+  assert.equal(markFailed(failed.id, 'expected').status, 'failed')
+  assert.equal(claimNextPending(), null)
+})
+
+test('Hub v2 migration backfills legacy consumed rows without consuming pending rows', () => {
+  const db = getDb()
+  const now = Date.now()
+  db.prepare(`
+    INSERT INTO hub_jobs (
+      id, name, payload, status, created_at, updated_at, last_run_at, consumed_at, last_error
+    ) VALUES (?, 'echo', NULL, 'done', ?, ?, ?, NULL, NULL)
+  `).run('legacy_done', now - 10, now, now - 5)
+  const pending = enqueueJob({ name: 'echo', payload: { text: 'pending' } })
+  db.prepare("UPDATE meta SET value = '1' WHERE key = 'hub_schema_version'").run()
+
+  runHubMigrations(db)
+
+  const legacy = db.prepare('SELECT consumed_at FROM hub_jobs WHERE id = ?').get('legacy_done')
+  const untouched = db.prepare('SELECT consumed_at FROM hub_jobs WHERE id = ?').get(pending.id)
+  assert.equal(legacy.consumed_at, now - 5)
+  assert.equal(untouched.consumed_at, null)
 })
 
 test('echo handler 端到端跑通（runOnce）', async () => {
@@ -114,4 +155,6 @@ test('未知 handler 标记 failed', async () => {
   const row = db.prepare('SELECT * FROM hub_jobs WHERE id = ?').get(job.id)
   assert.equal(row.status, 'failed')
   assert.match(row.last_error, /no handler/)
+  assert.ok(row.consumed_at)
+  assert.equal(await runOnce(), false)
 })

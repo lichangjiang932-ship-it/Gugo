@@ -2,15 +2,12 @@
  * @deprecated Import the shared loop from toolLoopRuntime.js.
  * This facade remains for third-party extensions and older tests.
  */
-import {
-  runToolLoop as runToolLoopRuntime,
-  runToolsLoop as runToolsLoopRuntime,
-} from './toolLoopRuntime.js'
+import { runToolLoop as runToolLoopRuntime } from './loop/index.js'
 
 export * from './toolLoopRuntime.js'
 
 export async function runToolsLoop(options = {}) {
-  return runToolsLoopRuntime(options)
+  return runToolLoopRuntime(options)
 }
 
 export async function runToolLoop(options = {}) {

@@ -140,11 +140,17 @@ export default function useTaskRunController({ linkedJobId, t, toast }) {
   const pendingClarification = latestSuspension?.type === 'awaiting_user' ? latestSuspension.payload?.clarification : null
   const pendingPlan = latestSuspension?.type === 'plan_proposed' ? latestSuspension.payload?.plan : null
   const pendingDirectoryRequest = pendingClarification?.request_type === 'directory' ? pendingClarification : null
-  const handleDirectoryAuthorization = async ({ path, accessMode }) => {
+  const handleDirectoryAuthorization = async ({ path, accessMode, authorizationScope }) => {
     if (!selectedJob || directoryBusy) return
     setDirectoryBusy('grant'); setError('')
     try {
-      const result = await authorizeRequestedDirectory({ jobId: selectedJob.id, path, accessMode, purpose: pendingDirectoryRequest?.purpose || pendingDirectoryRequest?.why || '' })
+      const result = await authorizeRequestedDirectory({
+        jobId: selectedJob.id,
+        path,
+        accessMode,
+        scope: authorizationScope,
+        purpose: pendingDirectoryRequest?.purpose || pendingDirectoryRequest?.why || '',
+      })
       if (result.job) updateJob(result.job)
       toast.success({ title: t('taskSteering.directoryGranted'), body: result.path })
     } catch (reason) { setError(reason.message); toast.error({ title: t('taskSteering.directoryGrantFailed'), body: reason.message }) }

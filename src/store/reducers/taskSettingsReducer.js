@@ -105,6 +105,10 @@ export function reduceTaskSettingsState(state, action) {
       return { ...state, animationsEnabled: !!action.payload }
     }
 
+    case 'SET_INPUT_HISTORY_NAVIGATION': {
+      return { ...state, inputHistoryNavigationEnabled: !!action.payload }
+    }
+
     case 'ADD_HISTORY': {
       const item = {
         id: crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -162,6 +166,7 @@ export function reduceTaskSettingsState(state, action) {
       if (typeof p.theme === 'string') next.theme = normalizeThemeMode(p.theme)
       if (typeof p.animationsEnabled === 'boolean') next.animationsEnabled = p.animationsEnabled
       if (typeof p.strongAccent === 'boolean') next.strongAccent = p.strongAccent
+      if (typeof p.inputHistoryNavigationEnabled === 'boolean') next.inputHistoryNavigationEnabled = p.inputHistoryNavigationEnabled
       if (Array.isArray(p.permissions)) {
         const incomingMap = new Map(p.permissions.map((perm) => [perm.id, !!perm.enabled]))
         if (mode === 'replace') {

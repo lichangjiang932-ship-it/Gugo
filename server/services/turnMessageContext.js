@@ -867,6 +867,10 @@ export function buildAssistantModelContext({
     ...(compactionRecovery?.lastCompactedMessageId
       ? { compactionLastCompactedMessageId: String(compactionRecovery.lastCompactedMessageId) }
       : {}),
+    ...(compactionRecovery?.compactCheckpointSource
+      && typeof compactionRecovery.compactCheckpointSource === 'object'
+      ? { compactCheckpointSource: compactionRecovery.compactCheckpointSource }
+      : {}),
   }
 }
 

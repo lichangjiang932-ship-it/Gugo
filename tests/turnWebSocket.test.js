@@ -1,6 +1,64 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { pollTurnSubscriptions, subscribeTurnSubscription } from '../server/services/turnWebSocket.js'
+import {
+  parseTurnWebSocketClientFrame,
+  pollTurnSubscriptions,
+  subscribeTurnSubscription,
+} from '../server/services/turnWebSocket.js'
+
+test('turn WebSocket rejects and logs invalid client frames without leaking their payload', () => {
+  const warnings = []
+  const logSink = { warn: (message) => warnings.push(message) }
+  const secret = 'do-not-log-this-secret'
+
+  const invalidJson = parseTurnWebSocketClientFrame(`{"v":1,"secret":"${secret}"`, {
+    userId: 'user-1',
+    logSink,
+  })
+  const invalidFrame = parseTurnWebSocketClientFrame(JSON.stringify({
+    v: 1,
+    type: 'subscribe.turn',
+    sessionId: '',
+    turnId: 'turn-1',
+    after: -1,
+    secret,
+  }), { userId: 'user-1', logSink })
+  const incompatible = parseTurnWebSocketClientFrame(JSON.stringify({
+    v: 2,
+    type: 'subscribe.turn',
+    sessionId: 'session-1',
+    turnId: 'turn-1',
+    after: -1,
+  }), { userId: 'user-1', logSink })
+
+  assert.deepEqual(invalidJson, { ok: false, code: 'INVALID_JSON' })
+  assert.equal(invalidFrame.ok, false)
+  assert.equal(invalidFrame.code, 'INVALID_FRAME')
+  assert.equal(incompatible.ok, false)
+  assert.equal(incompatible.code, 'VERSION_MISMATCH')
+  assert.equal(warnings.length, 3)
+  assert.match(warnings[0], /scope=realtime\.protocol/)
+  assert.match(warnings[0], /code=INVALID_JSON/)
+  assert.match(warnings[1], /code=INVALID_FRAME/)
+  assert.match(warnings[2], /code=VERSION_MISMATCH/)
+  assert.match(warnings[2], /expectedVersion=1/)
+  assert.match(warnings[2], /receivedVersion=2/)
+  assert.equal(warnings.some((message) => message.includes(secret)), false)
+})
+
+test('turn WebSocket accepts valid client frames without rejection logs', () => {
+  const warnings = []
+  const validation = parseTurnWebSocketClientFrame(JSON.stringify({
+    v: 1,
+    type: 'subscribe.turn',
+    sessionId: 'session-1',
+    turnId: 'turn-1',
+    after: -1,
+  }), { userId: 'user-1', logSink: { warn: (message) => warnings.push(message) } })
+
+  assert.equal(validation.ok, true)
+  assert.equal(warnings.length, 0)
+})
 
 test('turn WebSocket polling isolates a failed subscription and continues delivering others', () => {
   const broken = { sessionId: 'session-broken', turnId: 'turn-broken', cursor: 3 }

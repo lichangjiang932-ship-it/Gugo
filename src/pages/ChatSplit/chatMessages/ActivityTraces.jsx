@@ -7,12 +7,6 @@ import LiveElapsed from '../../../components/LiveElapsed.jsx'
 // Execution traces (reasoning status / tool timeline) use English technical
 // labels regardless of UI language: they are technical facts.
 
-const LIVE_COMMAND_TOOLS = new Set(['shell', 'bash', 'bash_exec', 'run_command', 'bash_background', 'docker_exec'])
-
-function isLiveCommandCall(call) {
-  return call?.status === 'running' && LIVE_COMMAND_TOOLS.has(call?.name)
-}
-
 export function ReasoningTrace({ text = '', streaming = false, label = '', testId }) {
   // Providers can stream very large private reasoning payloads. Rendering that
   // payload makes the answer harder to follow and can freeze long chats. Keep
@@ -25,7 +19,6 @@ export function ToolCallTrace({ calls = [], stepOffset = 0, artifacts = [], onOp
   const normalizedCalls = Array.isArray(calls) ? calls : []
   const [showAll, setShowAll] = useState(false)
   const [expandedCallKey, setExpandedCallKey] = useState(null)
-  const [dismissedAutoKey, setDismissedAutoKey] = useState(null)
   const visibleLimit = 4
   const collapsedEntries = (() => {
     const visibleIndexes = new Set()
@@ -48,12 +41,6 @@ export function ToolCallTrace({ calls = [], stepOffset = 0, artifacts = [], onOp
   const running = normalizedCalls.some((call) => call.status === 'running')
   const failed = normalizedCalls.some((call) => call.status === 'error')
   const cancelled = normalizedCalls.some((call) => call.status === 'cancelled')
-  const autoOpenIndex = normalizedCalls.findLastIndex(isLiveCommandCall)
-  const autoOpenKey = autoOpenIndex >= 0
-    ? stableCallKey(normalizedCalls[autoOpenIndex], normalizedCalls, autoOpenIndex)
-    : null
-  const effectiveAutoKey = autoOpenKey !== dismissedAutoKey ? autoOpenKey : null
-  const effectiveExpandedCallKey = effectiveAutoKey || expandedCallKey
   if (normalizedCalls.length === 0) return null
 
   return (
@@ -94,15 +81,13 @@ export function ToolCallTrace({ calls = [], stepOffset = 0, artifacts = [], onOp
                     stepNumber={stepNumber}
                     artifacts={artifacts}
                     onOpenArtifact={onOpenArtifact}
-                    expanded={effectiveExpandedCallKey === callKey}
+                    expanded={expandedCallKey === callKey}
                     onToggle={() => {
-                      if (effectiveExpandedCallKey === callKey) {
+                      if (expandedCallKey === callKey) {
                         setExpandedCallKey(null)
-                        if (autoOpenKey === callKey) setDismissedAutoKey(callKey)
                         return
                       }
                       setExpandedCallKey(callKey)
-                      setDismissedAutoKey(autoOpenKey)
                     }}
                   />}
             </div>

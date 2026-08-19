@@ -383,6 +383,7 @@ export async function dispatchTurnEvent(event, {
       name: payload.toolName,
       args: payload.args || {},
       risk: payload.risk,
+      metadataSource: payload.metadataSource === 'declared' ? 'declared' : 'fallback',
       reason: payload.reason,
     })
   } else if (event.type === 'approval.resolved') {

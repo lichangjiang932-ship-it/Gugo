@@ -81,7 +81,9 @@ test('right workbench renders compact tabs, persists width, and opens generated 
     assert.ok(navigation)
     assert.match(navigation.className, /flex/)
     assert.equal(navigation.querySelectorAll(':scope > button').length, 4)
-    assert.equal(navigation.querySelector('[aria-current="page"] span.truncate').textContent, '相关文件')
+    const activeNavigation = navigation.querySelector('[aria-current="page"]')
+    assert.equal(activeNavigation.getAttribute('aria-label'), '相关文件')
+    assert.equal(activeNavigation.querySelector('span.sr-only').textContent, '相关文件')
     assert.equal(rootElement.querySelector('[data-testid="workbench-file-count"]').textContent, '2')
     const resizeHandle = rootElement.querySelector('[data-testid="workbench-resize-handle"]')
     assert.ok(resizeHandle)
@@ -346,6 +348,61 @@ test('right workbench keeps only the latest receipt for the same verified local 
     assert.equal(links.length, 1)
     assert.match(links[0].getAttribute('href'), /gallery-latest-receipt/)
     assert.doesNotMatch(links[0].getAttribute('href'), /gallery-first-receipt/)
+    assert.equal(rootElement.querySelector('[data-testid="workbench-file-count"]').textContent, '1')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
+test('right workbench keeps only the latest receipt for the same normalized POSIX path', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  const messageFor = ({ turnId, receiptId, path }) => ({
+    id: `${turnId}:assistant`,
+    role: 'assistant',
+    content: `Completed: ${path}`,
+    meta: {
+      serverTurnId: turnId,
+      serverDeliveryArtifactIds: [],
+      verifiedLocalFiles: [{
+        id: receiptId,
+        path,
+        filename: 'gallery.html',
+        size: 2048,
+      }],
+    },
+  })
+
+  try {
+    await act(async () => root.render(
+      <RightWorkbench
+        messages={[
+          messageFor({
+            turnId: 'posix-first-turn',
+            receiptId: 'posix-first-receipt',
+            path: '/Users/alice/output/gallery.html',
+          }),
+          messageFor({
+            turnId: 'posix-latest-turn',
+            receiptId: 'posix-latest-receipt',
+            path: '/Users/alice/output/cache/../gallery.html',
+          }),
+        ]}
+        activeTab="files"
+        onTabChange={() => {}}
+        onClose={() => {}}
+        onOpenArtifact={() => {}}
+        onSendMessage={() => {}}
+        isGenerating={false}
+      />,
+    ))
+
+    const links = [...rootElement.querySelectorAll('[data-testid="workbench-file-open"]')]
+    assert.equal(links.length, 1)
+    assert.match(links[0].getAttribute('href'), /posix-latest-receipt/)
+    assert.doesNotMatch(links[0].getAttribute('href'), /posix-first-receipt/)
     assert.equal(rootElement.querySelector('[data-testid="workbench-file-count"]').textContent, '1')
   } finally {
     await act(async () => root.unmount())
