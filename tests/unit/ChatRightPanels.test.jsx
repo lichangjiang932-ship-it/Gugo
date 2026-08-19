@@ -25,6 +25,12 @@ test('a generated file preview is the only mounted right panel', async () => {
   const baseProps = {
     workbenchOpen: true,
     messages: [],
+    attachments: [{
+      id: 'current-audio',
+      name: 'current-audio.mp3',
+      mimeType: 'audio/mpeg',
+      downloadUrl: '/api/attachments/current-audio/content',
+    }],
     workbenchTab: 'files',
     onWorkbenchTabChange: noop,
     onCloseWorkbench: noop,
@@ -81,6 +87,7 @@ test('a generated file preview is the only mounted right panel', async () => {
       <I18nProvider><ChatRightPanels {...baseProps} previewArtifact={null} /></I18nProvider>,
     ))
     assert.ok(rootElement.querySelector('[data-testid="right-workbench"]'))
+    assert.match(rootElement.textContent, /current-audio\.mp3/)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

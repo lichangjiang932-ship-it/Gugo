@@ -18,6 +18,8 @@ const MIME_BY_EXTENSION = Object.freeze({
   '.json': 'application/json',
   '.xml': 'application/xml',
   '.html': 'text/html',
+  '.htm': 'text/html',
+  '.xhtml': 'application/xhtml+xml',
   '.css': 'text/css',
   '.js': 'text/javascript',
   '.ts': 'text/typescript',
@@ -27,7 +29,28 @@ const MIME_BY_EXTENSION = Object.freeze({
   '.jpeg': 'image/jpeg',
   '.gif': 'image/gif',
   '.webp': 'image/webp',
+  '.avif': 'image/avif',
+  '.bmp': 'image/bmp',
+  '.ico': 'image/vnd.microsoft.icon',
+  '.tif': 'image/tiff',
+  '.tiff': 'image/tiff',
   '.svg': 'image/svg+xml',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.m4a': 'audio/mp4',
+  '.m4b': 'audio/mp4',
+  '.aac': 'audio/aac',
+  '.ogg': 'audio/ogg',
+  '.oga': 'audio/ogg',
+  '.flac': 'audio/flac',
+  '.opus': 'audio/ogg',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.m4v': 'video/x-m4v',
+  '.ogv': 'video/ogg',
+  '.avi': 'video/x-msvideo',
+  '.mkv': 'video/x-matroska',
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
@@ -133,18 +156,42 @@ function detectedMimeType(prefix, name) {
   if (prefix.length >= 8 && prefix.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return 'image/png'
   if (prefix.length >= 3 && prefix[0] === 0xff && prefix[1] === 0xd8 && prefix[2] === 0xff) return 'image/jpeg'
   if (prefix.subarray(0, 6).toString('ascii').match(/^GIF8[79]a$/)) return 'image/gif'
-  if (prefix.subarray(0, 4).toString('ascii') === 'RIFF' && prefix.subarray(8, 12).toString('ascii') === 'WEBP') return 'image/webp'
-  if (prefix.subarray(0, 4).toString('binary') === 'PK\u0003\u0004') return extMime || 'application/zip'
-  return extMime
+  if (prefix.length >= 2 && prefix.subarray(0, 2).toString('ascii') === 'BM') return 'image/bmp'
+  if (prefix.length >= 4 && prefix.subarray(0, 4).equals(Buffer.from([0, 0, 1, 0]))) return 'image/vnd.microsoft.icon'
+  if (prefix.subarray(4, 8).toString('ascii') === 'ftyp') {
+    const brands = prefix.subarray(8).toString('ascii')
+    if (brands.includes('avif') || brands.includes('avis')) return 'image/avif'
+    if (brands.startsWith('M4A ') || brands.startsWith('M4B ')) return 'audio/mp4'
+    if (brands.startsWith('qt  ')) return 'video/quicktime'
+    return extMime && /^(?:audio|video)\//.test(extMime) ? extMime : 'video/mp4'
+  }
+  if (prefix.subarray(0, 4).toString('ascii') === 'RIFF') {
+    if (prefix.subarray(8, 12).toString('ascii') === 'WEBP') return 'image/webp'
+    if (prefix.subarray(8, 12).toString('ascii') === 'WAVE') return 'audio/wav'
+    if (prefix.subarray(8, 12).toString('ascii') === 'AVI ') return 'video/x-msvideo'
+  }
+  if (prefix.subarray(0, 4).toString('ascii') === 'fLaC') return 'audio/flac'
+  if (prefix.subarray(0, 3).toString('ascii') === 'ID3') return 'audio/mpeg'
+  if (prefix.subarray(0, 4).toString('ascii') === 'OggS') {
+    return extMime === 'video/ogg' ? extMime : 'audio/ogg'
+  }
+  if (prefix.length >= 2 && prefix[0] === 0xff && (prefix[1] & 0xf6) === 0xf0) return 'audio/aac'
+  if (prefix.length >= 4 && prefix.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]))) {
+    return extMime === 'video/webm' ? extMime : 'video/x-matroska'
+  }
+  if (prefix.subarray(0, 4).toString('binary') === 'PK\u0003\u0004') {
+    return extMime === 'application/zip' || extMime?.includes('officedocument')
+      ? extMime
+      : 'application/zip'
+  }
+  return null
 }
 
 function resolvedMimeType(claimed, prefix, name) {
   const detected = detectedMimeType(prefix, name)
-  if (!detected) return claimed
-  if (claimed === 'application/octet-stream') return detected
-  if (detected.startsWith('image/') || detected === 'application/pdf') return detected
-  if (detected.includes('officedocument')) return detected
-  return claimed
+  if (detected) return detected
+  if (claimed !== 'application/octet-stream') return claimed
+  return MIME_BY_EXTENSION[path.extname(name).toLowerCase()] || claimed
 }
 
 function rowPath(row, env = process.env) {

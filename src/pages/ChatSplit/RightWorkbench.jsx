@@ -13,6 +13,8 @@ import {
   X,
 } from 'lucide-react'
 import { resolveDeliveryArtifacts } from '../../lib/artifactReferences.js'
+import { buildAttachmentPreviewArtifact } from '../../lib/attachmentPreview.js'
+import { classifyDirectFile, withArtifactPreviewMode } from '../../lib/directFilePreview.js'
 import { buildVerifiedLocalFileReferences } from '../../lib/localFileReferences.js'
 import { runWorkbenchTerminal } from '../../lib/workbenchClient.js'
 import { useT } from '../../i18n/I18nProvider.jsx'
@@ -39,8 +41,24 @@ function readStoredWidth() {
   }
 }
 
-function collectArtifacts(messages) {
-  const newestFirst = messages.flatMap((message, index) => {
+function collectAttachmentArtifacts(attachments, { messageId = '', current = false } = {}) {
+  return (Array.isArray(attachments) ? attachments : [])
+    .map((attachment) => buildAttachmentPreviewArtifact(attachment, { messageId }))
+    .filter(Boolean)
+    .map((artifact, index) => ({
+      ...artifact.directFile,
+      id: artifact.directFile.id || `${messageId || 'current'}-${index}-${artifact.directFile.url}`,
+      messageId,
+      userAttachment: true,
+      currentAttachment: current,
+    }))
+}
+
+function collectArtifacts(messages, currentAttachments = []) {
+  const messageArtifacts = messages.flatMap((message, index) => {
+    if (message?.role === 'user') {
+      return collectAttachmentArtifacts(message.attachments, { messageId: message.id || String(index) })
+    }
     if (
       message?.role !== 'assistant'
       || message?.meta?.streaming
@@ -70,14 +88,42 @@ function collectArtifacts(messages) {
       }))
     return [...managedArtifacts, ...verifiedLocalFiles]
   }).reverse()
+  const newestFirst = [
+    ...collectAttachmentArtifacts(currentAttachments, { current: true }).reverse(),
+    ...messageArtifacts,
+  ]
   const seenVerifiedLocalFiles = new Set()
+  const seenAttachments = new Set()
   return newestFirst.filter((artifact) => {
+    if (artifact?.userAttachment === true) {
+      const identity = String(artifact.id || artifact.url || '')
+      if (!identity || seenAttachments.has(identity)) return false
+      seenAttachments.add(identity)
+      return true
+    }
     if (artifact?.verifiedLocalFile !== true) return true
     const identity = verifiedLocalFileIdentity(artifact)
     if (!identity || seenVerifiedLocalFiles.has(identity)) return !identity
     seenVerifiedLocalFiles.add(identity)
     return true
   })
+}
+
+function WorkbenchFileVisual({ artifact }) {
+  const kind = classifyDirectFile(artifact)
+  if (kind !== 'image' || !artifact?.url) {
+    return <FileText className="h-3.5 w-3.5" />
+  }
+  const previewUrl = withArtifactPreviewMode(withDownloadToken(artifact.url))
+  return (
+    <img
+      src={previewUrl}
+      alt=""
+      loading="lazy"
+      referrerPolicy="no-referrer"
+      className="h-full w-full rounded-control object-cover"
+    />
+  )
 }
 
 function openArtifactLink(event, onOpenArtifact, artifact) {
@@ -100,6 +146,7 @@ function normalizeBrowserUrl(value) {
 
 export default function RightWorkbench({
   messages = [],
+  attachments = [],
   activeTab,
   onTabChange,
   onClose,
@@ -109,7 +156,7 @@ export default function RightWorkbench({
   statusMessage = '',
 }) {
   const { t } = useT()
-  const artifacts = useMemo(() => collectArtifacts(messages), [messages])
+  const artifacts = useMemo(() => collectArtifacts(messages, attachments), [attachments, messages])
   const resizeRef = useRef(null)
   const [panelWidth, setPanelWidth] = useState(readStoredWidth)
   const [sideInput, setSideInput] = useState('')
@@ -244,7 +291,7 @@ export default function RightWorkbench({
         >
           <RotateCcw className="h-3.5 w-3.5" />
         </button>
-        <button type="button" onClick={onClose} aria-label={t('workbench.close')} title={t('workbench.close')} className="flex h-7 w-7 items-center justify-center rounded-control text-ink-fade transition-colors hover:bg-ink/5 hover:text-ink"><X className="h-4 w-4" /></button>
+        <button type="button" data-testid="workbench-close" onClick={onClose} aria-label={t('workbench.close')} title={t('workbench.close')} className="flex h-7 w-7 items-center justify-center rounded-control text-ink-fade transition-colors hover:bg-ink/5 hover:text-ink"><X className="h-4 w-4" /></button>
       </header>
 
       <nav data-testid="workbench-navigation" className="flex h-10 shrink-0 items-stretch gap-1 border-b border-ink/10 px-2" aria-label={t('workbench.show')}>
@@ -252,6 +299,7 @@ export default function RightWorkbench({
           <button
             key={tab}
             type="button"
+            data-testid={`workbench-tab-${tab}`}
             onClick={() => onTabChange(tab)}
             aria-current={activeTab === tab ? 'page' : undefined}
             aria-label={t(`workbench.${tab}`)}
@@ -286,7 +334,7 @@ export default function RightWorkbench({
                 onClick={(event) => openArtifactLink(event, onOpenArtifact, artifact)}
                 className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left"
               >
-                <span className="flex h-7 w-7 items-center justify-center rounded-control bg-ink/5 text-ink-fade"><FileText className="h-3.5 w-3.5" /></span>
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-control bg-ink/5 text-ink-fade"><WorkbenchFileVisual artifact={artifact} /></span>
                 <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-ink">{artifact.filename || t('workbench.untitledArtifact')}</span><span className="mt-0.5 block truncate text-xs uppercase tracking-wide text-ink-fade">{artifact.type || t('workbench.fileType')}</span></span>
                 <ExternalLink className="h-3.5 w-3.5 text-ink-fade" />
               </a>

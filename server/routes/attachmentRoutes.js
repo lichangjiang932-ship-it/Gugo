@@ -12,12 +12,41 @@ import {
 
 const SAFE_INLINE_MIME_TYPES = new Set([
   'application/pdf',
+  'audio/aac',
+  'audio/flac',
+  'audio/mp4',
+  'audio/mpeg',
+  'audio/ogg',
+  'audio/opus',
+  'audio/wav',
   'image/gif',
+  'image/avif',
+  'image/bmp',
   'image/jpeg',
   'image/png',
+  'image/tiff',
+  'image/vnd.microsoft.icon',
   'image/webp',
+  'image/x-icon',
+  'text/csv',
+  'text/markdown',
   'text/plain',
+  'video/mp4',
+  'video/ogg',
+  'video/quicktime',
+  'video/webm',
+  'video/x-m4v',
+  'video/x-matroska',
+  'video/x-msvideo',
 ])
+
+const ACTIVE_PREVIEW_MIME_TYPES = new Set([
+  'application/xhtml+xml',
+  'image/svg+xml',
+  'text/html',
+])
+
+const ACTIVE_PREVIEW_CSP = "sandbox; default-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data: blob:"
 
 function publicAttachment(attachment) {
   if (!attachment) return null
@@ -48,8 +77,58 @@ function routeParts(pathname) {
   return pathname.split('/').filter(Boolean)
 }
 
+function parseRange(header, size) {
+  const match = String(header || '').match(/^bytes=(\d*)-(\d*)$/)
+  if (!match || (!match[1] && !match[2])) return null
+  let start = match[1] ? Number(match[1]) : null
+  let end = match[2] ? Number(match[2]) : null
+  if (start == null) {
+    if (!Number.isSafeInteger(end) || end <= 0) return null
+    start = Math.max(0, size - end)
+    end = size - 1
+  } else {
+    end = end == null ? size - 1 : Math.min(end, size - 1)
+  }
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)
+    || start < 0 || end < start || start >= size) return null
+  return { start, end }
+}
+
+function attachmentPresentation(mimeType, preview) {
+  const activePreview = preview && ACTIVE_PREVIEW_MIME_TYPES.has(mimeType)
+  const inline = activePreview || SAFE_INLINE_MIME_TYPES.has(mimeType)
+  return {
+    activePreview,
+    contentType: inline ? mimeType : 'application/octet-stream',
+    inline,
+  }
+}
+
+function attachmentSecurityHeaders({ activePreview, inline, mimeType, preview }) {
+  return {
+    'X-Content-Type-Options': 'nosniff',
+    'Cross-Origin-Resource-Policy': 'same-origin',
+    'Referrer-Policy': 'no-referrer',
+    ...(activePreview ? { 'Content-Security-Policy': ACTIVE_PREVIEW_CSP } : {}),
+    ...(!inline ? { 'Content-Security-Policy': "sandbox; default-src 'none'" } : {}),
+    ...(preview && (activePreview || mimeType === 'application/pdf')
+      ? { 'X-Frame-Options': 'SAMEORIGIN' }
+      : {}),
+  }
+}
+
+function streamAttachment(res, fullPath, range) {
+  const stream = fs.createReadStream(fullPath, range || undefined)
+  stream.once('error', (error) => {
+    if (!res.headersSent) return sendError(res, error)
+    if (!res.destroyed) res.destroy(error)
+  })
+  stream.pipe(res)
+  return stream
+}
+
 function authenticateAttachmentRequest(req, url, parts) {
-  const contentRead = req.method === 'GET'
+  const contentRead = ['GET', 'HEAD'].includes(req.method)
     && parts.length === 4
     && parts[0] === 'api'
     && parts[1] === 'attachments'
@@ -121,20 +200,36 @@ export async function handleAttachmentRequest(req, res) {
       if (req.method === 'GET' && parts.length === 3) {
         return sendJson(res, 200, { attachment: publicAttachment(attachment) })
       }
-      if (req.method === 'GET' && parts.length === 4 && parts[3] === 'content') {
-        const inline = SAFE_INLINE_MIME_TYPES.has(attachment.mimeType)
-        res.writeHead(200, {
-          'Content-Type': inline ? attachment.mimeType : 'application/octet-stream',
-          'Content-Length': String(attachment.size),
-          'Content-Disposition': contentDisposition(attachment.name, inline),
-          'Cache-Control': 'private, max-age=31536000, immutable',
-          ETag: `"sha256-${attachment.sha256}"`,
-          'X-Content-Type-Options': 'nosniff',
-          'Cross-Origin-Resource-Policy': 'same-origin',
-          'Referrer-Policy': 'no-referrer',
-          ...(!inline ? { 'Content-Security-Policy': "sandbox; default-src 'none'" } : {}),
+      if (['GET', 'HEAD'].includes(req.method) && parts.length === 4 && parts[3] === 'content') {
+        const preview = url.searchParams.get('preview') === '1'
+        const presentation = attachmentPresentation(attachment.mimeType, preview)
+        const requestedRange = req.headers.range
+        const range = requestedRange ? parseRange(requestedRange, attachment.size) : null
+        const securityHeaders = attachmentSecurityHeaders({
+          ...presentation,
+          mimeType: attachment.mimeType,
+          preview,
         })
-        return fs.createReadStream(attachment.fullPath).pipe(res)
+        if (requestedRange && !range) {
+          res.writeHead(416, {
+            'Content-Range': `bytes */${attachment.size}`,
+            'Accept-Ranges': 'bytes',
+            ...securityHeaders,
+          })
+          return res.end()
+        }
+        res.writeHead(range ? 206 : 200, {
+          'Content-Type': presentation.contentType,
+          'Content-Length': String(range ? range.end - range.start + 1 : attachment.size),
+          'Content-Disposition': contentDisposition(attachment.name, presentation.inline),
+          'Cache-Control': 'private, max-age=31536000, immutable',
+          'Accept-Ranges': 'bytes',
+          ETag: `"sha256-${attachment.sha256}"`,
+          ...(range ? { 'Content-Range': `bytes ${range.start}-${range.end}/${attachment.size}` } : {}),
+          ...securityHeaders,
+        })
+        if (req.method === 'HEAD') return res.end()
+        return streamAttachment(res, attachment.fullPath, range)
       }
       if (req.method === 'DELETE' && parts.length === 3) {
         deleteManagedAttachment({ userId, id })

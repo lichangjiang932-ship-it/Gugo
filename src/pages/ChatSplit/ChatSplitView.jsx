@@ -13,6 +13,7 @@ import { estimateClientContextUsage, sumSessionModelUsage } from '../../lib/cont
 export function ChatRightPanels({
   workbenchOpen,
   messages,
+  attachments,
   workbenchTab,
   onWorkbenchTabChange,
   onCloseWorkbench,
@@ -43,6 +44,7 @@ export function ChatRightPanels({
   return (
     <RightWorkbench
       messages={messages}
+      attachments={attachments}
       activeTab={workbenchTab}
       onTabChange={onWorkbenchTabChange}
       onClose={onCloseWorkbench}
@@ -270,6 +272,7 @@ export default function ChatSplitView({
       <ChatRightPanels
         workbenchOpen={workbenchOpen}
         messages={messages}
+        attachments={attachments}
         workbenchTab={workbenchTab}
         onWorkbenchTabChange={onWorkbenchTabChange}
         onCloseWorkbench={onCloseWorkbench}

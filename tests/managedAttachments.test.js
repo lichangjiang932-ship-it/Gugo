@@ -92,6 +92,7 @@ test('embedded attachment previews and downloads accept a content-scoped query t
   assert.equal(previewResponse.headers.get('content-type'), 'application/pdf')
   assert.equal(previewResponse.headers.get('content-disposition')?.startsWith('inline;'), true)
   assert.equal(previewResponse.headers.get('referrer-policy'), 'no-referrer')
+  assert.equal(previewResponse.headers.get('x-frame-options'), 'SAMEORIGIN')
   assert.deepEqual(Buffer.from(await previewResponse.arrayBuffer()), pdfBytes)
 
   const downloadResponse = await fetch(
@@ -112,6 +113,48 @@ test('embedded attachment previews and downloads accept a content-scoped query t
     `${origin}/api/attachments?token=${encodeURIComponent(alice.token)}`,
   )
   assert.equal(listWithQueryToken.status, 401)
+})
+
+test('content endpoint supports HEAD and single byte ranges for browser media seek', async () => {
+  assert.ok(uploaded)
+  const contentUrl = `${origin}${uploaded.downloadUrl}?preview=1&token=${encodeURIComponent(alice.token)}`
+
+  const head = await fetch(contentUrl, { method: 'HEAD' })
+  assert.equal(head.status, 200)
+  assert.equal(head.headers.get('content-type'), 'application/pdf')
+  assert.equal(head.headers.get('content-length'), String(pdfBytes.length))
+  assert.equal(head.headers.get('accept-ranges'), 'bytes')
+  assert.equal(head.headers.get('x-frame-options'), 'SAMEORIGIN')
+  assert.equal((await head.arrayBuffer()).byteLength, 0)
+
+  const prefix = await fetch(contentUrl, { headers: { Range: 'bytes=0-3' } })
+  assert.equal(prefix.status, 206)
+  assert.equal(prefix.headers.get('content-range'), `bytes 0-3/${pdfBytes.length}`)
+  assert.equal(prefix.headers.get('content-length'), '4')
+  assert.equal(prefix.headers.get('accept-ranges'), 'bytes')
+  assert.deepEqual(Buffer.from(await prefix.arrayBuffer()), pdfBytes.subarray(0, 4))
+
+  const suffix = await fetch(contentUrl, { headers: { Range: 'bytes=-5' } })
+  assert.equal(suffix.status, 206)
+  assert.equal(suffix.headers.get('content-range'), `bytes ${pdfBytes.length - 5}-${pdfBytes.length - 1}/${pdfBytes.length}`)
+  assert.deepEqual(Buffer.from(await suffix.arrayBuffer()), pdfBytes.subarray(-5))
+
+  const rangeHead = await fetch(contentUrl, {
+    method: 'HEAD',
+    headers: { Range: 'bytes=4-7' },
+  })
+  assert.equal(rangeHead.status, 206)
+  assert.equal(rangeHead.headers.get('content-range'), `bytes 4-7/${pdfBytes.length}`)
+  assert.equal(rangeHead.headers.get('content-length'), '4')
+  assert.equal((await rangeHead.arrayBuffer()).byteLength, 0)
+
+  for (const range of [`bytes=${pdfBytes.length}-`, 'bytes=0-1,4-5', 'bytes=-0']) {
+    const invalid = await fetch(contentUrl, { headers: { Range: range } })
+    assert.equal(invalid.status, 416)
+    assert.equal(invalid.headers.get('content-range'), `bytes */${pdfBytes.length}`)
+    assert.equal(invalid.headers.get('accept-ranges'), 'bytes')
+    assert.equal((await invalid.arrayBuffer()).byteLength, 0)
+  }
 })
 
 test('attachment preview query tokens retain owner isolation and header precedence', async () => {

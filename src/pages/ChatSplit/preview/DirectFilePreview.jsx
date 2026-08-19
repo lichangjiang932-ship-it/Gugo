@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { AlertCircle, FileText, LoaderCircle, RefreshCw } from 'lucide-react'
+import { AlertCircle, ExternalLink, FileText, LoaderCircle, RefreshCw } from 'lucide-react'
 import MarkdownRenderer from '../../../components/MarkdownRenderer.jsx'
 import { classifyDirectFile, loadDirectFilePreview } from '../../../lib/directFilePreview.js'
 import {
@@ -82,8 +82,13 @@ function SourceFileRenderer({ preview }) {
   return <SourceView content={preview.text || ''} />
 }
 
-function UnsupportedFileRenderer({ file, t }) {
-  return <PreviewStatus icon={<FileText className="h-6 w-6" />} text={file.filename || file.title || 'artifact'} detail={t('chatPreview.unsupportedHint')} />
+function UnsupportedFileRenderer({ file, t, url }) {
+  return <PreviewStatus
+    icon={<FileText className="h-6 w-6" />}
+    text={file.filename || file.title || 'artifact'}
+    detail={t('chatPreview.unsupportedHint')}
+    action={<OpenOriginalLink url={url} t={t} />}
+  />
 }
 
 function isManagedArtifactPreviewUrl(url) {
@@ -242,7 +247,8 @@ function ManagedHtmlArtifactPreview({ file, t, url }) {
 
 export function DirectHtmlUrlPreview({ file, onRetry, t, timeoutMs = 5_000, url }) {
   const [attempt, setAttempt] = useState(0)
-  const requestKey = `${url}:${attempt}`
+  const requestUrl = withPreviewRetry(url, attempt)
+  const requestKey = `${requestUrl}:${attempt}`
   const [loadState, setLoadState] = useState({ key: '', status: 'loading' })
   const status = loadState.key === requestKey ? loadState.status : 'loading'
   useEffect(() => {
@@ -267,7 +273,7 @@ export function DirectHtmlUrlPreview({ file, onRetry, t, timeoutMs = 5_000, url 
     <div className="relative h-full min-h-0 bg-white">
       <iframe
         key={requestKey}
-        src={url}
+        src={requestUrl}
         title={file.filename || file.title || t('chatPreview.htmlTitle')}
         sandbox="allow-scripts allow-forms"
         referrerPolicy="no-referrer"
@@ -280,7 +286,7 @@ export function DirectHtmlUrlPreview({ file, onRetry, t, timeoutMs = 5_000, url 
         icon={<AlertCircle className="h-6 w-6" />}
         text={t('chatPreview.previewFailed')}
         detail={t('chatPreview.previewRetryHint')}
-        action={<RetryPreviewButton onClick={retry} t={t} />}
+        action={<PreviewFallbackActions onRetry={retry} t={t} url={url} />}
       />}
     </div>
   )
@@ -299,18 +305,66 @@ function RetryPreviewButton({ onClick, t }) {
   )
 }
 
+function OpenOriginalLink({ t, url }) {
+  if (!url) return null
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex h-8 items-center gap-1.5 rounded-md border border-ink/10 bg-paper px-3 text-xs font-medium text-ink-soft hover:bg-paper-2 hover:text-ink"
+    >
+      <ExternalLink className="h-3.5 w-3.5" />
+      {t('chatPreview.openOriginal')}
+    </a>
+  )
+}
+
+function PreviewFallbackActions({ onRetry, t, url }) {
+  return (
+    <span className="flex flex-wrap items-center justify-center gap-2">
+      <RetryPreviewButton onClick={onRetry} t={t} />
+      <OpenOriginalLink url={url} t={t} />
+    </span>
+  )
+}
+
+function withPreviewRetry(url, attempt) {
+  if (!attempt || !url || /^(?:data|blob):/i.test(url)) return url
+  try {
+    const baseOrigin = globalThis.location?.origin
+      || globalThis.window?.location?.origin
+      || 'http://localhost'
+    const parsed = new URL(url, baseOrigin)
+    parsed.searchParams.set('previewRetry', String(attempt))
+    if (/^[a-z][a-z\d+.-]*:/i.test(url)) return parsed.href
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`
+  } catch {
+    const hashIndex = url.indexOf('#')
+    const hash = hashIndex >= 0 ? url.slice(hashIndex) : ''
+    const base = hashIndex >= 0 ? url.slice(0, hashIndex) : url
+    return `${base}${base.includes('?') ? '&' : '?'}previewRetry=${attempt}${hash}`
+  }
+}
+
 function NativeFilePreview({ file, kind, t, url }) {
   const [status, setStatus] = useState('loading')
+  const [attempt, setAttempt] = useState(0)
+  const requestUrl = withPreviewRetry(url, attempt)
   const ready = () => setStatus('ready')
   const failed = () => setStatus('failed')
+  const retry = () => {
+    setStatus('loading')
+    setAttempt((value) => value + 1)
+  }
   return (
     <div className={`relative flex h-full min-h-0 items-center justify-center overflow-auto ${kind === 'video' ? 'bg-black p-3' : 'bg-paper-2 p-5'}`}>
-      {kind === 'image' && <img src={url} alt={file.filename || file.title || ''} onLoad={ready} onError={failed} className={`${status === 'failed' ? 'hidden' : 'block'} max-h-full max-w-full rounded-sm object-contain shadow-sm`} />}
-      {kind === 'pdf' && <iframe src={url} title={file.filename || file.title || 'PDF'} onLoad={ready} onError={failed} referrerPolicy="no-referrer" className={`${status === 'failed' ? 'hidden' : 'block'} h-full w-full border-0 bg-white`} />}
-      {kind === 'audio' && <audio controls preload="metadata" src={url} onLoadedMetadata={ready} onError={failed} className={`${status === 'failed' ? 'hidden' : 'block'} w-full max-w-xl`} />}
-      {kind === 'video' && <video controls preload="metadata" src={url} onLoadedMetadata={ready} onError={failed} className={`${status === 'failed' ? 'hidden' : 'block'} max-h-full max-w-full`} />}
+      {kind === 'image' && <img key={attempt} src={requestUrl} alt={file.filename || file.title || ''} onLoad={ready} onError={failed} referrerPolicy="no-referrer" className={`${status === 'failed' ? 'hidden' : 'block'} max-h-full max-w-full rounded-sm object-contain shadow-sm`} />}
+      {kind === 'pdf' && <iframe key={attempt} src={requestUrl} title={file.filename || file.title || 'PDF'} onLoad={ready} onError={failed} referrerPolicy="no-referrer" className={`${status === 'failed' ? 'hidden' : 'block'} h-full w-full border-0 bg-white`} />}
+      {kind === 'audio' && <audio key={attempt} controls preload="metadata" src={requestUrl} onLoadedMetadata={ready} onError={failed} className={`${status === 'failed' ? 'hidden' : 'block'} w-full max-w-xl`} />}
+      {kind === 'video' && <video key={attempt} controls preload="metadata" src={requestUrl} onLoadedMetadata={ready} onError={failed} className={`${status === 'failed' ? 'hidden' : 'block'} max-h-full max-w-full`} />}
       {status === 'loading' && <div className="absolute inset-0 flex items-center justify-center bg-paper-2/90"><PreviewStatus icon={<LoaderCircle className="h-6 w-6 animate-spin" />} text={t('chatPreview.loadingFile')} /></div>}
-      {status === 'failed' && <PreviewStatus icon={<AlertCircle className="h-6 w-6" />} text={t('chatPreview.previewFailed')} detail={t('chatPreview.unsupportedHint')} />}
+      {status === 'failed' && <PreviewStatus icon={<AlertCircle className="h-6 w-6" />} text={t('chatPreview.previewFailed')} detail={t('chatPreview.unsupportedHint')} action={<PreviewFallbackActions onRetry={retry} t={t} url={url} />} />}
     </div>
   )
 }
