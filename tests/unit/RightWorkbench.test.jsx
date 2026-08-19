@@ -303,14 +303,23 @@ test('right workbench lists user attachments with image thumbnails and opens the
     assert.ok(thumbnail)
     assert.match(thumbnail.getAttribute('src'), /preview=1/)
 
+    const videoLink = links.find((link) => link.textContent.includes('现场片段.mp4'))
+    await act(async () => videoLink.dispatchEvent(new dom.window.MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+    })))
+    assert.equal(opened.length, 1)
+    assert.equal(opened[0].directFile.id, 'attachment-video')
+    assert.equal(opened[0].directFile.mimeType, 'video/mp4')
+
     const photoLink = links.find((link) => link.textContent.includes('现场照片.JFIF'))
     await act(async () => photoLink.dispatchEvent(new dom.window.MouseEvent('click', {
       bubbles: true,
       cancelable: true,
     })))
-    assert.equal(opened.length, 1)
-    assert.equal(opened[0].directFile.id, 'attachment-photo')
-    assert.equal(opened[0].directFile.mimeType, 'image/jpeg')
+    assert.equal(opened.length, 2)
+    assert.equal(opened[1].directFile.id, 'attachment-photo')
+    assert.equal(opened[1].directFile.mimeType, 'image/jpeg')
   } finally {
     await act(async () => root.unmount())
     dom.window.close()
