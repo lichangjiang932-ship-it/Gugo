@@ -23,6 +23,7 @@ import { migrateToV60 } from '../server/migrations/v60RuntimePluginStates.js'
 import { migrateToV61 } from '../server/migrations/v61EvolutionEvidence.js'
 import { migrateToV62 } from '../server/migrations/v62EvolutionExclusions.js'
 import { migrateToV63 } from '../server/migrations/v63EvolutionCandidates.js'
+import { migrateToV64 } from '../server/migrations/v64EvolutionReplay.js'
 
 test('schema migration registry is contiguous and owns the latest version', () => {
   const legacy = Array.from({ length: 29 }, (_, index) => ({
@@ -35,9 +36,49 @@ test('schema migration registry is contiguous and owns the latest version', () =
     plan.map(({ version }) => version),
     Array.from({ length: LATEST_SCHEMA_VERSION - 1 }, (_, index) => index + 2),
   )
-  assert.equal(LATEST_SCHEMA_VERSION, 63)
+  assert.equal(LATEST_SCHEMA_VERSION, 64)
   assert.equal(DB_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
   assert.equal(schemaMigrations.at(-1).version, LATEST_SCHEMA_VERSION)
+})
+
+test('v64 persists immutable replay suites and constrained completed runs', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    db.exec(`
+      CREATE TABLE users (id TEXT PRIMARY KEY);
+      CREATE TABLE evolution_candidates (id TEXT PRIMARY KEY);
+      INSERT INTO users (id) VALUES ('user-1');
+      INSERT INTO evolution_candidates (id) VALUES ('candidate-1');
+    `)
+    migrateToV64(db)
+    migrateToV64(db)
+    db.prepare(`
+      INSERT INTO evolution_replay_suites (
+        id, user_id, name, dataset_fingerprint, curation_version,
+        source_record_ids_json, cases_json, suite_fingerprint, created_at
+      ) VALUES ('suite-1', 'user-1', 'Suite', ?, 'v1', '[]', '[]', ?, 1)
+    `).run('a'.repeat(64), 'b'.repeat(64))
+    db.prepare(`
+      INSERT INTO evolution_replay_runs (
+        id, user_id, suite_id, candidate_id, baseline_content, baseline_sha256,
+        candidate_sha256, model_name, temperature, max_tokens, isolation_mode,
+        results_json, run_fingerprint, created_at
+      ) VALUES ('run-1', 'user-1', 'suite-1', 'candidate-1', 'baseline', ?, ?, 'model', 0, 512, 'model_no_tools', '[]', ?, 2)
+    `).run('c'.repeat(64), 'd'.repeat(64), 'e'.repeat(64))
+    assert.deepEqual(
+      db.prepare('SELECT isolation_mode, temperature, max_tokens FROM evolution_replay_runs').get(),
+      { isolation_mode: 'model_no_tools', temperature: 0, max_tokens: 512 },
+    )
+    assert.throws(() => db.prepare(`
+      UPDATE evolution_replay_runs SET max_tokens = 0 WHERE id = 'run-1'
+    `).run(), /CHECK constraint failed/)
+    db.prepare("DELETE FROM users WHERE id = 'user-1'").run()
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM evolution_replay_runs').get().count, 0)
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM evolution_replay_suites').get().count, 0)
+  } finally {
+    db.close()
+  }
 })
 
 test('v63 persists inert user-scoped candidate objects with constrained kinds', () => {

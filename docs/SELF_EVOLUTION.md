@@ -48,14 +48,27 @@ dataset 指纹只能证明同一 curation 规则下的输入与派生结果，�
 
 不存在 candidate update、delete、apply、install、approve 或 rollout API。`permissionsRequested` 只是等待后续独立权限审查的元数据，不授予 manifest contribution、工具信任或 renderer 权限。
 
+## Phase 4: isolated replay（当前已实现）
+
+`POST /api/evolution/replay-suites` 创建 user-scoped、不可变 replay suite。每个 suite 绑定一个 P6 dataset fingerprint，包含 1–10 个显式 case；case 的 title/input 会再次脱敏并绑定 curated source record。dataset 过期或 record 不存在时 fail closed。
+
+`POST /api/evolution/replays/run` 当前只接受 `prompt` candidate：
+
+- suite 和 candidate 必须来自同一 dataset fingerprint；plugin/config 在具备专用 sandbox harness 前返回 `EVOLUTION_REPLAY_KIND_UNSUPPORTED`，不以文本模拟冒充真实执行；
+- baseline 与 candidate 使用完全相同的 case、显式固定 model、temperature 和 maxTokens；实际模型名发生漂移时 run 失败；
+- 每次模型调用都没有 tools。候选不能访问文件、网络、service 或 runtime state；仅宿主到已配置 model provider 的推理传输存在；
+- baseline、case 和双方输出都经过敏感信息脱敏；任一调用失败、输出为空或过大时不写入部分 run；
+- 完成后保存双方输出、耗时、模型参数、baseline/candidate SHA-256、suite/candidate 引用和整体 run fingerprint。
+
+`GET /api/evolution/replay-suites`、`GET /api/evolution/replays` 返回摘要，单项 GET 返回不可变详情；全部 `Cache-Control: no-store`。Replay 结果没有 verdict，也不存在 evaluate、approve、apply、install 或 rollout API；同场输出不等于质量结论。
+
 ## Required next gates
 
 后续能力必须按以下顺序增加，不能跳级：
 
-1. **Isolated replay**：固定数据集、固定模型/参数、网络与文件能力隔离，记录基线和候选的同场结果。
-2. **Evaluation**：结构化 rubric、独立 Reviewer、回归/安全/成本/延迟指标；缺证据不得 pass。
-3. **Human approval**：显示 diff、来源、评测结果、权限变化和明确回滚目标；仅本地 owner 可批准。
-4. **Canary rollout**：小比例、限定作用域、不可变版本标识和完整观测。
-5. **Automatic rollback**：预先声明阈值；质量、安全或可靠性退化时恢复上一不可变版本。
+1. **Evaluation**：结构化 rubric、独立 Reviewer、回归/安全/成本/延迟指标；缺证据不得 pass。
+2. **Human approval**：显示 diff、来源、评测结果、权限变化和明确回滚目标；仅本地 owner 可批准。
+3. **Canary rollout**：小比例、限定作用域、不可变版本标识和完整观测。
+4. **Automatic rollback**：预先声明阈值；质量、安全或可靠性退化时恢复上一不可变版本。
 
 任何候选都不能扩大 manifest `contributes`、工具风险信任或 renderer 执行权限而不经过独立权限审批。磁盘 transformer 仍只能在 worker sandbox 中运行，不能注入 React/renderer JavaScript。

@@ -15,6 +15,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Added a user-scoped, append-only self-evolution evidence corpus for explicit feedback and whitelisted structured Reviewer verdicts, without any automatic mutation path.
 - Added deterministic self-evolution dataset curation with secret/path redaction, content deduplication, rule-versioned failure clusters, stable fingerprints, and reversible user-scoped exclusions.
 - Added no-tool self-evolution candidate generation that stores inert, user-scoped prompt/plugin/config proposals with curated provenance and no apply or install path.
+- Added immutable prompt replay suites that run baseline and candidate instructions against identical sanitized cases, fixed models, and fixed parameters without tools or evaluation authority.
 
 ## [0.11.31] - 2026-08-20
 
