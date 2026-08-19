@@ -29,8 +29,9 @@ import { migrateToV58 } from './v58CronTaskGrants.js'
 import { migrateToV59 } from './v59SessionBranches.js'
 import { migrateToV60 } from './v60RuntimePluginStates.js'
 import { migrateToV61 } from './v61EvolutionEvidence.js'
+import { migrateToV62 } from './v62EvolutionExclusions.js'
 
-export { migrateToV31, migrateToV32, migrateToV33, migrateToV34, migrateToV35, migrateToV36, migrateToV37, migrateToV38, migrateToV39, migrateToV40, migrateToV41, migrateToV42, migrateToV43, migrateToV44, migrateToV45, migrateToV46, migrateToV47, migrateToV48, migrateToV49, migrateToV50, migrateToV51, migrateToV52, migrateToV53, migrateToV54, migrateToV55, migrateToV56, migrateToV57, migrateToV58, migrateToV59, migrateToV60, migrateToV61 }
+export { migrateToV31, migrateToV32, migrateToV33, migrateToV34, migrateToV35, migrateToV36, migrateToV37, migrateToV38, migrateToV39, migrateToV40, migrateToV41, migrateToV42, migrateToV43, migrateToV44, migrateToV45, migrateToV46, migrateToV47, migrateToV48, migrateToV49, migrateToV50, migrateToV51, migrateToV52, migrateToV53, migrateToV54, migrateToV55, migrateToV56, migrateToV57, migrateToV58, migrateToV59, migrateToV60, migrateToV61, migrateToV62 }
 
 /**
  * V2-V30 stay in db.js for upgrade compatibility. New migrations are registered
@@ -68,6 +69,7 @@ export const schemaMigrations = Object.freeze([
   { version: 59, up: migrateToV59 },
   { version: 60, up: migrateToV60 },
   { version: 61, up: migrateToV61 },
+  { version: 62, up: migrateToV62 },
 ])
 
 export const LATEST_SCHEMA_VERSION = schemaMigrations.at(-1)?.version || 30

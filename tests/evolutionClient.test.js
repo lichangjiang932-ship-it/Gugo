@@ -2,8 +2,11 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  getEvolutionDatasetApi,
   listEvolutionEvidenceApi,
+  listEvolutionExclusionsApi,
   recordChatFeedback,
+  setEvolutionEvidenceExcludedApi,
 } from '../src/lib/evolutionClient.js'
 
 test('evolution client persists feedback and reads only the versioned evidence corpus', async () => {
@@ -32,6 +35,43 @@ test('evolution client persists feedback and reads only the versioned evidence c
     })
     assert.equal(requests[1].url, '/api/evolution/evidence?limit=25')
     assert.equal(requests[1].init.method, undefined)
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('evolution client reads curated datasets and manages reversible exclusions', async () => {
+  const originalFetch = globalThis.fetch
+  const requests = []
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url, init })
+    const body = url.startsWith('/api/evolution/dataset')
+      ? { ok: true, dataset: { schemaVersion: 1, records: [] } }
+      : url === '/api/evolution/exclusions' && init.method === 'POST'
+        ? { ok: true, exclusion: { evidenceId: 'feedback:1', excluded: true } }
+        : { ok: true, exclusions: [] }
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+
+  try {
+    const dataset = await getEvolutionDatasetApi({ limit: 50 })
+    const exclusions = await listEvolutionExclusionsApi()
+    const result = await setEvolutionEvidenceExcludedApi('feedback:1', true, 'duplicate')
+    assert.equal(dataset.dataset.schemaVersion, 1)
+    assert.deepEqual(exclusions.exclusions, [])
+    assert.equal(result.exclusion.excluded, true)
+    assert.equal(requests[0].url, '/api/evolution/dataset?limit=50')
+    assert.equal(requests[1].url, '/api/evolution/exclusions')
+    assert.equal(requests[1].init.method, undefined)
+    assert.equal(requests[2].init.method, 'POST')
+    assert.deepEqual(JSON.parse(requests[2].init.body), {
+      evidenceId: 'feedback:1',
+      excluded: true,
+      reason: 'duplicate',
+    })
   } finally {
     globalThis.fetch = originalFetch
   }
