@@ -28,6 +28,7 @@ import { shutdownBrowsers } from '../adapters/browserAutomation.js'
 import { initCodexPluginSkills } from '../adapters/codexPluginSkills.js'
 import { closeTurnRecoveryRuntime, startTurnRecoveryRuntime } from '../services/turnRecoveryRuntime.js'
 import { recoverInterruptedSubagentRuns } from '../services/subagentRuntime.js'
+import { restoreEnabledRuntimePlugins } from '../services/runtimePluginControlService.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DEFAULT_PLUGIN_ROOT = path.resolve(__dirname, '../../plugins')
@@ -54,6 +55,14 @@ export function bootstrap({ silent = process.env.NODE_ENV === 'production' } = {
     // 加载失败绝不阻塞主进程启动
     console.error('[server] initPlugins failed:', err.message)
   }
+  void restoreEnabledRuntimePlugins().then((results) => {
+    for (const result of results) {
+      if (!result.ok) logger.warn(`[plugins] runtime restore failed for ${result.pluginId}: ${result.error}`)
+    }
+  }).catch((err) => {
+    // Runtime plugin recovery is optional and must never block the server.
+    console.error('[server] restore runtime plugins failed:', err?.message || err)
+  })
   try {
     initCodexPluginSkills()
   } catch (err) {

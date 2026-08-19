@@ -19,6 +19,7 @@ import { migrateToV56 } from '../server/migrations/v56McpToolRiskDeclarations.js
 import { migrateToV57 } from '../server/migrations/v57EventWriteFailures.js'
 import { migrateToV58 } from '../server/migrations/v58CronTaskGrants.js'
 import { migrateToV59 } from '../server/migrations/v59SessionBranches.js'
+import { migrateToV60 } from '../server/migrations/v60RuntimePluginStates.js'
 
 test('schema migration registry is contiguous and owns the latest version', () => {
   const legacy = Array.from({ length: 29 }, (_, index) => ({
@@ -31,9 +32,40 @@ test('schema migration registry is contiguous and owns the latest version', () =
     plan.map(({ version }) => version),
     Array.from({ length: LATEST_SCHEMA_VERSION - 1 }, (_, index) => index + 2),
   )
-  assert.equal(LATEST_SCHEMA_VERSION, 59)
+  assert.equal(LATEST_SCHEMA_VERSION, 60)
   assert.equal(DB_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
   assert.equal(schemaMigrations.at(-1).version, LATEST_SCHEMA_VERSION)
+})
+
+test('v60 persists runtime plugin state with boolean enforcement and is idempotent', () => {
+  const db = new Database(':memory:')
+  try {
+    migrateToV60(db)
+    migrateToV60(db)
+
+    assert.ok(
+      db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'runtime_plugin_states'").get(),
+    )
+    assert.ok(
+      db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_runtime_plugin_states_enabled'").get(),
+    )
+    db.prepare('INSERT INTO runtime_plugin_states (plugin_id, updated_at) VALUES (?, ?)')
+      .run('default-disabled', 10)
+    assert.deepEqual(
+      db.prepare('SELECT enabled, last_error, updated_at FROM runtime_plugin_states WHERE plugin_id = ?')
+        .get('default-disabled'),
+      { enabled: 0, last_error: null, updated_at: 10 },
+    )
+    assert.throws(
+      () => db.prepare(`
+        INSERT INTO runtime_plugin_states (plugin_id, enabled, updated_at)
+        VALUES (?, ?, ?)
+      `).run('invalid-enabled', 2, 11),
+      /CHECK constraint failed/,
+    )
+  } finally {
+    db.close()
+  }
 })
 
 test('v59 persists session lineage and releases children when a parent is deleted', () => {
@@ -441,6 +473,7 @@ test('schema migration registry upgrades a v30 database through every registered
       'turn_execution_leases',
       'turn_checkpoints',
       'permission_mode_events',
+      'runtime_plugin_states',
     ]) {
       assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table), table)
     }

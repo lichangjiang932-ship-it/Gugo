@@ -116,6 +116,17 @@ export function resolveAuthMode(env = process.env) {
   throw new Error('AUTH_MODE must be local or multi_user')
 }
 
+export function isLocalOwnerUser(userId, env = process.env) {
+  const normalizedUserId = String(userId || '').trim()
+  if (!normalizedUserId || resolveAuthMode(env) !== 'local') return false
+  const configuredId = String(env.LOCAL_USER_ID || '').trim()
+  if (configuredId) return configuredId === normalizedUserId
+  const storedOwnerId = getDb().prepare(
+    'SELECT value FROM meta WHERE key = ?',
+  ).get(LOCAL_OWNER_META_KEY)?.value
+  return String(storedOwnerId || '').trim() === normalizedUserId
+}
+
 function rememberLocalOwner(userId) {
   getDb().prepare(
     'INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
