@@ -448,7 +448,7 @@ test('max-iteration wrap-up filters source from terminal text, events, and check
 
   assert.equal(modelCalls, 2)
   assert.deepEqual(result.artifactIds, ['max-iteration-docx-artifact'])
-  assert.equal(result.text, '任务尚未通过最终验证，未通过验证的文件不会显示或交付。请重试以继续。')
+  assert.equal(result.text, '任务尚未通过最终验收。已提交到本地的文件仍会保留并显示其验证状态；未通过验证的受管理产物不会作为最终交付。请重试以继续。')
   assert.equal(result.text.includes('<!doctype html>'), false)
   assert.equal(result.text.includes('请自行保存并运行'), false)
   assert.equal(phases.some((event) => String(event.content || '').includes('copy me')), false)

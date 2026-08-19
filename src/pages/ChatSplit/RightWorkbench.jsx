@@ -62,13 +62,13 @@ function collectArtifacts(messages, currentAttachments = []) {
     if (message?.role === 'user') {
       return collectAttachmentArtifacts(message.attachments, { messageId: message.id || String(index) })
     }
-    if (
-      message?.role !== 'assistant'
-      || message?.meta?.streaming
-      || message?.meta?.interrupted
-      || message?.meta?.paused
-    ) return []
-    const deliveryArtifacts = message?.meta?.failed
+    if (message?.role !== 'assistant') return []
+    const suspended = message?.meta?.interrupted === true || message?.meta?.paused === true
+    const canPresentLocalFiles = message?.meta?.streaming !== true
+      || suspended
+      || message?.meta?.failed === true
+    if (!canPresentLocalFiles) return []
+    const deliveryArtifacts = message?.meta?.failed || suspended || message?.meta?.streaming
       ? []
       : resolveDeliveryArtifacts(message?.meta)
     const verifiedLocalFiles = buildVerifiedLocalFileReferences({

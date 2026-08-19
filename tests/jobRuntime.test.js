@@ -11,6 +11,7 @@ const {
   recoverInterruptedJobs,
 } = await import('../server/services/jobRuntime.js')
 const { getApprovalMode, setApprovalMode } = await import('../server/services/approvalSettingsStore.js')
+const { updateJobStep } = await import('../server/services/jobStore.js')
 const {
   getJobTurnCheckpoint,
   saveJobTurnCheckpoint,
@@ -91,6 +92,113 @@ test('runtime completes queued child steps in order', async () => {
   assert.equal(loaded.status, 'completed')
   assert.deepEqual(executed, ['plan', 'batch_item', 'batch_item', 'verify', 'finalize'])
   assert.deepEqual(loaded.steps.map((step) => step.status), ['completed', 'completed', 'completed', 'completed', 'completed'])
+})
+
+test('runtime retries fixable verification and only completes after a passing verdict', async () => {
+  let verificationRuns = 0
+  const runtime = new JobRuntime({
+    executeStep: async ({ step }) => {
+      if (step.kind === 'verify') {
+        verificationRuns += 1
+        const acceptance = verificationRuns === 1
+          ? { verdict: 'fixable', summary: 'One check still fails', issues: ['check A'], evidence: [] }
+          : { verdict: 'pass', summary: 'All checks pass', issues: [], evidence: ['check A passed'] }
+        return {
+          ok: acceptance.verdict === 'pass',
+          acceptance,
+          output: { text: acceptance.summary, acceptance },
+        }
+      }
+      return { ok: true, output: { text: step.title, complete: true } }
+    },
+  })
+  const job = runtime.createPlan({
+    userId: TEST_USER,
+    title: 'repair verification',
+    prompt: 'repair and verify',
+    steps: [{ kind: 'execute', title: 'work' }],
+  })
+
+  await runtime.drain()
+
+  const loaded = runtime.getJob(job.id, { userId: TEST_USER })
+  assert.equal(loaded.status, 'completed')
+  assert.equal(verificationRuns, 2)
+  const verify = loaded.steps.find((step) => step.kind === 'verify')
+  assert.equal(verify.output.acceptance.verdict, 'pass')
+  assert.equal(verify.output.repairAttempts, 1)
+  assert.ok(loaded.events.some((event) => event.type === 'verification_repair_started'))
+})
+
+test('runtime bounds repeated verification repairs and preserves the failed verdict', async () => {
+  let verificationRuns = 0
+  const runtime = new JobRuntime({
+    executeStep: async ({ step }) => {
+      if (step.kind === 'verify') {
+        verificationRuns += 1
+        const acceptance = {
+          verdict: 'fixable',
+          summary: 'The same assertion still fails',
+          issues: ['persistent failure'],
+          evidence: [],
+        }
+        return { ok: false, acceptance, error: acceptance.summary, output: { acceptance } }
+      }
+      return { ok: true, output: { text: step.title, complete: true } }
+    },
+  })
+  const job = runtime.createPlan({
+    userId: TEST_USER,
+    title: 'bounded repair',
+    prompt: 'do not loop forever',
+    steps: [{ kind: 'execute', title: 'work' }],
+  })
+
+  await runtime.drain()
+
+  const loaded = runtime.getJob(job.id, { userId: TEST_USER })
+  assert.equal(loaded.status, 'failed')
+  assert.equal(verificationRuns, 2)
+  const verify = loaded.steps.find((step) => step.kind === 'verify')
+  assert.equal(verify.status, 'failed')
+  assert.equal(verify.output.acceptance.verdict, 'fixable')
+  assert.equal(verify.output.repairAttempts, 1)
+  assert.ok(loaded.events.some((event) => event.type === 'verification_repair_stalled'))
+})
+
+test('finalize rejection cannot transition a job to completed', async () => {
+  const runtime = new JobRuntime({
+    executeStep: async ({ step }) => {
+      if (step.kind === 'finalize') {
+        return {
+          ok: false,
+          error: 'Required deliverable is missing',
+          output: {
+            phase: 'finalize',
+            complete: false,
+            summary: 'Required deliverable is missing',
+            issues: ['missing deliverable'],
+          },
+        }
+      }
+      return { ok: true, output: { text: step.title } }
+    },
+  })
+  const job = runtime.createPlan({
+    userId: TEST_USER,
+    title: 'finalization gate',
+    prompt: 'produce required output',
+    steps: [{ kind: 'execute', title: 'work' }],
+  })
+
+  await runtime.drain()
+
+  const loaded = runtime.getJob(job.id, { userId: TEST_USER })
+  assert.equal(loaded.status, 'failed')
+  const finalize = loaded.steps.find((step) => step.kind === 'finalize')
+  assert.equal(finalize.status, 'failed')
+  assert.equal(finalize.output.complete, false)
+  assert.equal(loaded.events.some((event) => event.type === 'completed'), false)
 })
 
 test('goal jobs always pause for durable plan approval regardless of the global approval mode', async () => {
@@ -399,9 +507,42 @@ test('default executor turns generated text into a downloadable artifact', async
   await runtime.drain()
   const loaded = runtime.getJob(job.id, { userId: TEST_USER })
 
+  assert.equal(loaded.status, 'completed')
   assert.equal(loaded.artifacts.length, 1)
   assert.equal(loaded.artifacts[0].filename, 'result.docx')
   assert.equal(loaded.steps[1].output.text, '结果：整理会议纪要并导出')
+})
+
+test('default finalize executor rejects an incomplete final output', async () => {
+  const executeStep = createDefaultExecuteStep({ enableServerTools: false })
+  const result = await executeStep({
+    job: {
+      id: 'job-final-output-gate',
+      userId: TEST_USER,
+      title: 'Required PDF',
+      prompt: '生成并交付 PDF 文件',
+      artifacts: [],
+      steps: [
+        { kind: 'execute', status: 'completed', output: { text: 'Drafted content' } },
+        {
+          kind: 'verify',
+          status: 'completed',
+          output: {
+            text: 'Checks pass',
+            acceptance: { verdict: 'pass', summary: 'Checks pass', issues: [], evidence: ['checked'] },
+          },
+        },
+        { kind: 'finalize', status: 'running' },
+      ],
+    },
+    step: { id: 'finalize-gate', kind: 'finalize' },
+    signal: new AbortController().signal,
+  })
+
+  assert.equal(result.ok, false)
+  assert.equal(result.output.complete, false)
+  assert.match(result.error, /部分完成/)
+  assert.ok(result.output.issues.some((issue) => /没有生成任何产物/.test(issue)))
 })
 
 test('default executor forwards cancellation signals to the model runner', async () => {
@@ -570,6 +711,38 @@ test('manual step completion persists verification evidence', () => {
     exitCode: 0,
   }])
   assert.ok(completed.events.some((event) => event.type === 'step_completed'))
+})
+
+test('manual completion cannot bypass a rejected structured acceptance verdict', () => {
+  const runtime = new JobRuntime()
+  const job = runtime.createPlan({
+    userId: TEST_USER,
+    title: 'Manual acceptance gate',
+    prompt: 'Verify before completion',
+    steps: [{ id: 'verify', title: 'Verify', kind: 'verify' }],
+  })
+  const verify = job.steps.find((step) => step.kind === 'verify')
+  const finalize = job.steps.find((step) => step.kind === 'finalize')
+  updateJobStep(verify.id, {
+    output: {
+      acceptance: {
+        verdict: 'blocked',
+        summary: 'External dependency unavailable',
+        issues: ['dependency unavailable'],
+        evidence: [],
+      },
+    },
+  })
+
+  runtime.completeStep(job.id, verify.id, {
+    userId: TEST_USER,
+    evidence: [{ type: 'check', summary: 'dependency probe completed', command: 'probe-dependency', ok: true }],
+  })
+  const completed = runtime.completeStep(job.id, finalize.id, { userId: TEST_USER })
+
+  assert.equal(completed.status, 'failed')
+  assert.equal(completed.error, 'External dependency unavailable')
+  assert.equal(completed.events.some((event) => event.type === 'completed'), false)
 })
 
 test('manual execution completion rejects missing evidence without changing job state', () => {

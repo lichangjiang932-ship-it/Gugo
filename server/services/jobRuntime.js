@@ -39,11 +39,13 @@ import {
   buildPriorStepsContext,
   buildVerificationPrompt,
   deriveJobProgress,
+  evaluateTaskAcceptance,
   findNextRunnableStep,
   normalizeStructuredPlanSteps,
   resolveWorkflowState,
   shouldCompileDocx, stepRequiresPlanApproval, withStableStepIds,
 } from './jobWorkflow.js'
+import { buildTextStepResult, buildToolStepResult, completeManualJobTransition, persistRejectedStepResult, runVerificationRepairLoop } from './jobAcceptanceRuntime.js'
 import { createJobRuntimeScheduler } from './jobRuntimeScheduler.js'
 import { createJobExecutionLeaseCoordinator } from './jobExecutionLeaseRuntime.js'
 import { createJobRuntimeCore } from './runtimeCore.js'
@@ -213,6 +215,7 @@ export function createDefaultExecuteStep({
   enableServerTools = true,
   preparePromptContext,
   runtimeCore = createJobRuntimeCore(),
+  taskEvaluator = evaluateTaskAcceptance,
 } = {}) {
   return async function defaultExecuteStep({
     job,
@@ -233,7 +236,7 @@ export function createDefaultExecuteStep({
     }
 
     if (step.kind === 'finalize') {
-      const finalOutput = buildFinalOutput(job)
+      let finalOutput = buildFinalOutput(job)
       const generatedTexts = (job.steps || [])
         .filter((item) => ['execute', 'batch_item'].includes(item.kind))
         .map((item) => item.output?.text)
@@ -256,10 +259,16 @@ export function createDefaultExecuteStep({
           url: artifact.url,
           filename: artifact.filename,
         })
-        finalOutput.artifactIds = [...new Set([...finalOutput.artifactIds, artifact.id])]
+        const refreshedJob = getJobWithChildren(job.id) || {
+          ...job,
+          artifacts: [...(job.artifacts || []), artifact],
+        }
+        finalOutput = buildFinalOutput(refreshedJob)
       }
       return {
-        ok: true,
+        ok: finalOutput.complete !== false,
+        error: finalOutput.complete === false ? finalOutput.summary : null,
+        acceptance: finalOutput.acceptance || null,
         output: { phase: 'finalize', ...finalOutput },
       }
     }
@@ -390,24 +399,7 @@ export function createDefaultExecuteStep({
         const saved = typeof commitCheckpoint === 'function' ? commitCheckpoint(makeResumable) : makeResumable()
         if (!saved) throw new Error('Failed to persist resumable job turn checkpoint')
       }
-      const truncated = !!(result.incomplete || result.paused || result.budgetExceeded || result.noProgress || result.interrupted)
-      return {
-        ok: !truncated,
-        truncated, incomplete: !!result.incomplete,
-        paused: !!result.paused,
-        clarification: result.clarification || null,
-        budgetExceeded: !!result.budgetExceeded,
-        noProgress: !!result.noProgress,
-        interrupted: !!result.interrupted,
-        reason: result.reason || (result.paused ? '需要用户澄清' : null),
-        output: {
-          phase: step.kind,
-          text: result.text,
-          artifactIds: result.artifactIds,
-          toolIterations: result.iterations,
-          evidence: step.kind === 'verify' && result.text ? [result.text] : [],
-        },
-      }
+      return buildToolStepResult({ job, step, result, taskEvaluator })
     }
 
     // 兼容路径:enableServerTools=false 时退回纯文本(老行为)
@@ -421,14 +413,7 @@ export function createDefaultExecuteStep({
       userId: job.userId,
       modelName: selectedModel,
     })
-    return {
-      ok: true,
-      output: {
-        phase: step.kind,
-        text,
-        evidence: step.kind === 'verify' && text ? [text] : [],
-      },
-    }
+    return buildTextStepResult({ job, step, text, taskEvaluator })
   }
 }
 
@@ -805,14 +790,7 @@ export class JobRuntime {
       payload: { evidenceCount: normalizedEvidence.length },
     }))
     const updated = this.getJob(jobId, { userId })
-    if (updated?.steps?.every((s) => s.status === 'completed')) {
-      updateJob(jobId, { status: 'completed', progress: 100, finishedAt: Date.now() })
-      this.emit(appendJobEvent({ jobId, type: 'completed', message: '任务已完成' }))
-      notifyJobTerminal(updated, { status: 'completed', body: '任务已完成' })
-      notifyJobStopHook(updated, { status: 'completed', stepId })
-    } else {
-      updateJob(jobId, { progress: deriveJobProgress(updated.steps) })
-    }
+    completeManualJobTransition({ jobId, stepId, updated, emit: this.emit.bind(this) })
     return this.getJob(jobId, { userId })
   }
 
@@ -1048,9 +1026,9 @@ export class JobRuntime {
       if (freshJob?.cancelRequested || freshJob?.status === 'cancel_requested') {
         controller.abort(userCancellationError('JOB_CANCEL_REQUESTED', 'Cancelled by user'))
       }
-      const result = await this.executeStep({
-        job: freshJob,
-        step: nextStep,
+      const executeCurrentStep = (stepToExecute) => this.executeStep({
+        job: getJobWithChildren(job.id) || freshJob,
+        step: stepToExecute,
         signal: controller.signal,
         claimSteering: () => claimJobSteering({ jobId: job.id, userId: job.userId }),
         acknowledgeSteering: (leaseId) => {
@@ -1076,7 +1054,22 @@ export class JobRuntime {
           return outcome?.owned ? outcome.value : null
         },
       })
+      let result = await executeCurrentStep(nextStep)
       if (lostJobExecutionLease(controller.signal) || !leaseIsOwned()) return true
+
+      const repair = await runVerificationRepairLoop({
+        initialResult: result,
+        nextStep,
+        job,
+        executeCurrentStep,
+        leaseIsValid: () => !lostJobExecutionLease(controller.signal) && leaseIsOwned(),
+        commitOwned,
+        checkpoint: this.runtimeCore.checkpoint,
+        emit: this.emit.bind(this),
+      })
+      if (repair.leaseLost) return true
+      result = repair.result
+      const { repairAttempt } = repair
       // ★ 截断(需澄清 / 预算耗尽):不是失败也不是成功,如实标记并通知用户,
       // 不能再像以前那样被吞成 ok:true 假装完成。
       if (result?.paused) {
@@ -1194,7 +1187,16 @@ export class JobRuntime {
         return true
       }
       if (result?.ok === false) {
-        throw new Error(result.error || '步骤执行失败')
+        persistRejectedStepResult({
+          result,
+          repairAttempt,
+          job,
+          nextStep,
+          runtimeCore: this.runtimeCore,
+          commitOwned,
+          emit: this.emit.bind(this),
+        })
+        return true
       }
       const requiresPlanApproval = stepRequiresPlanApproval(nextStep, getApprovalMode({ userId: job.userId }))
       let plan = null
