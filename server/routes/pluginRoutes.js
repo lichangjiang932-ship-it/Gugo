@@ -5,6 +5,7 @@
  *   GET /api/plugins              → 列出所有 plugin（可选 ?type=ppt-theme 过滤）
  *   GET /api/plugins/:id          → plugin 详情 + entry 内容预览（限 50KB）
  *   GET /api/plugins/runtime      → 本地 owner 的版本化 runtime manifest 清单
+ *   POST /api/plugins/runtime/:id/(enable|disable|reload) → 本地 owner 管理 transformer runtime
  *   POST /api/plugins/:id/run-sandbox → 登录后运行 transformer 沙箱
  *   POST /api/plugins/:id/install-as-skill → 登录后安装 skill-bundle
  */
@@ -21,6 +22,7 @@ import {
   disableRuntimePlugin,
   enableRuntimePlugin,
   listRuntimePluginInventory,
+  reloadRuntimePlugin,
 } from '../services/runtimePluginControlService.js'
 import { readJson, sendJson } from '../utils.js'
 
@@ -123,7 +125,7 @@ export async function handlePluginRequest(req, res, { env = process.env } = {}) 
   const url = new URL(req.url, 'http://localhost')
 
   const runtimeAction = url.pathname.match(
-    /^\/api\/plugins\/runtime\/([a-z0-9][a-z0-9-]*)\/(enable|disable)$/i,
+    /^\/api\/plugins\/runtime\/([a-z0-9][a-z0-9-]*)\/(enable|disable|reload)$/i,
   )
   if (url.pathname === '/api/plugins/runtime' || runtimeAction) {
     if (!authorizeRuntimeControl(req, res, env)) return
@@ -147,9 +149,12 @@ export async function handlePluginRequest(req, res, { env = process.env } = {}) 
       })
     }
     try {
-      const plugin = runtimeAction[2].toLowerCase() === 'enable'
+      const action = runtimeAction[2].toLowerCase()
+      const plugin = action === 'enable'
         ? await enableRuntimePlugin(runtimeAction[1])
-        : await disableRuntimePlugin(runtimeAction[1])
+        : action === 'reload'
+          ? await reloadRuntimePlugin(runtimeAction[1])
+          : await disableRuntimePlugin(runtimeAction[1])
       return sendJson(res, 200, { ok: true, plugin })
     } catch (error) {
       return runtimeControlError(res, error)

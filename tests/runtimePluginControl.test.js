@@ -16,13 +16,15 @@ function writePlugin(dirName, manifest, source) {
   fs.writeFileSync(path.join(dir, manifest.entry), source)
 }
 
+const INITIAL_TRANSFORMER_SOURCE = "function transform(input) { return typeof input === 'string' ? input.toUpperCase() : input }"
+
 writePlugin('test-transformer', {
   id: 'test-transformer',
   name: 'Test Transformer',
   version: '1.0.0',
   type: 'transformer',
   entry: 'entry.js',
-}, "function transform(input) { return typeof input === 'string' ? input.toUpperCase() : input }")
+}, INITIAL_TRANSFORMER_SOURCE)
 
 writePlugin('test-prompt', {
   id: 'test-prompt',
@@ -90,6 +92,7 @@ function localOwner() {
 test.beforeEach(async () => {
   await _resetRuntimePluginsForTests()
   _resetForTests()
+  fs.writeFileSync(path.join(pluginRoot, 'test-transformer', 'entry.js'), INITIAL_TRANSFORMER_SOURCE)
   const db = getDb()
   db.prepare('DELETE FROM runtime_plugin_states').run()
   db.prepare('DELETE FROM sessions').run()
@@ -305,6 +308,90 @@ test('enabling a transformer exposes a sandboxed tool and disabling removes it',
   assert.equal(disabled.body.plugin.active, false)
   assert.equal(getDynamicTool(toolName), null)
   assert.equal(getRuntimePluginState('test-transformer').enabled, false)
+})
+
+test('reload atomically switches validated transformer source and preserves the tool registration', async () => {
+  const owner = localOwner()
+  await requestRuntime({
+    url: '/api/plugins/runtime/test-transformer/enable',
+    token: owner.token,
+    method: 'POST',
+  })
+  const toolName = runtimeTransformerToolName('test-transformer')
+  const originalTool = getDynamicTool(toolName)
+
+  fs.writeFileSync(
+    path.join(pluginRoot, 'test-transformer', 'entry.js'),
+    "function transform(input) { return typeof input === 'string' ? input.toLowerCase() : input }",
+  )
+  const reloaded = await requestRuntime({
+    url: '/api/plugins/runtime/test-transformer/reload',
+    token: owner.token,
+    method: 'POST',
+  })
+  assert.equal(reloaded.status, 200)
+  assert.equal(reloaded.body.plugin.active, true)
+  assert.equal(getDynamicTool(toolName), originalTool)
+  assert.equal((await originalTool.exec({ input: 'HELLO' })).output, 'hello')
+
+  fs.writeFileSync(path.join(pluginRoot, 'test-transformer', 'entry.js'), 'function transform( {')
+  const rejected = await requestRuntime({
+    url: '/api/plugins/runtime/test-transformer/reload',
+    token: owner.token,
+    method: 'POST',
+  })
+  assert.equal(rejected.status, 400)
+  assert.equal(rejected.body.error.code, 'PLUGIN_RELOAD_VALIDATION_FAILED')
+  assert.equal(getDynamicTool(toolName), originalTool)
+  assert.equal((await originalTool.exec({ input: 'STILL-OLD' })).output, 'still-old')
+  assert.match(getRuntimePluginState('test-transformer').lastError, /PLUGIN_RELOAD_VALIDATION_FAILED/)
+})
+
+test('reload isolates in-flight calls on the old source while new calls use the replacement', async () => {
+  const owner = localOwner()
+  await requestRuntime({
+    url: '/api/plugins/runtime/test-transformer/enable',
+    token: owner.token,
+    method: 'POST',
+  })
+  const tool = getDynamicTool(runtimeTransformerToolName('test-transformer'))
+  const entryPath = path.join(pluginRoot, 'test-transformer', 'entry.js')
+
+  fs.writeFileSync(entryPath, `
+    function transform(input) {
+      const startedAt = Date.now()
+      while (Date.now() - startedAt < 150) {}
+      return 'old:' + input
+    }
+  `)
+  assert.equal((await requestRuntime({
+    url: '/api/plugins/runtime/test-transformer/reload',
+    token: owner.token,
+    method: 'POST',
+  })).status, 200)
+
+  const inFlight = tool.exec({ input: 'call' })
+  fs.writeFileSync(entryPath, "function transform(input) { return 'new:' + input }")
+  assert.equal((await requestRuntime({
+    url: '/api/plugins/runtime/test-transformer/reload',
+    token: owner.token,
+    method: 'POST',
+  })).status, 200)
+
+  assert.equal((await inFlight).output, 'old:call')
+  assert.equal((await tool.exec({ input: 'call' })).output, 'new:call')
+})
+
+test('reload rejects inactive transformers without changing desired state', async () => {
+  const owner = localOwner()
+  const response = await requestRuntime({
+    url: '/api/plugins/runtime/test-transformer/reload',
+    token: owner.token,
+    method: 'POST',
+  })
+  assert.equal(response.status, 409)
+  assert.equal(response.body.error.code, 'PLUGIN_RUNTIME_NOT_ACTIVE')
+  assert.equal(getRuntimePluginState('test-transformer'), null)
 })
 
 test('enabled transformer state restores from SQLite after runtime registry reset', async () => {
