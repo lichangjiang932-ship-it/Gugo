@@ -20,8 +20,8 @@ export default function CustomSkillModal({ market, t }) {
           <Field label={t('skillsMarket.instructions')}><textarea value={market.draft.systemPrompt} onChange={(event) => update('systemPrompt', event.target.value, true)} rows={5} placeholder={t('skillsMarket.instructionsPlaceholder')} className="field-area resize-y" /></Field>
           <Field label={t('skillsMarket.permissions')}><input value={market.draft.perms} onChange={(event) => update('perms', event.target.value)} placeholder={t('skillsMarket.permissionsPlaceholder')} className="field-input" /></Field>
         </div>
-        {market.draftError && <div className="p-2 border border-ember-line bg-ember-soft/30 rounded-md text-sm text-ember">{market.draftError}</div>}
-        <div className="flex gap-2 justify-end"><button type="button" onClick={() => market.setCustomModal(false)} className="h-9 px-4 border border-ink/40 rounded-md font-semibold text-sm text-ink-soft hover:border-ink">{t('skillsMarket.cancel')}</button><button type="button" onClick={market.saveCustomSkill} disabled={!market.draft.id.trim() || !market.draft.name.trim() || !market.draft.systemPrompt.trim()} className="h-9 px-4 bg-ember text-paper rounded-md font-semibold text-sm hover:bg-ember/90 disabled:opacity-40">{t('skillsMarket.create')}</button></div>
+        {market.draftError && <div className="p-2 border border-danger/35 bg-danger/5 rounded-md text-sm text-danger">{market.draftError}</div>}
+        <div className="flex gap-2 justify-end"><button type="button" onClick={() => market.setCustomModal(false)} className="h-9 px-4 border border-ink/40 rounded-md font-semibold text-sm text-ink-soft hover:border-ink">{t('skillsMarket.cancel')}</button><button type="button" onClick={market.saveCustomSkill} disabled={!market.draft.id.trim() || !market.draft.name.trim() || !market.draft.systemPrompt.trim()} className="h-9 px-4 bg-accent text-accent-contrast rounded-md font-semibold text-sm hover:bg-accent/90 disabled:opacity-40">{t('skillsMarket.create')}</button></div>
       </div>
     </div>
   )

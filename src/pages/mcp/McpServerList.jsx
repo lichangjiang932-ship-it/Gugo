@@ -13,7 +13,7 @@ export default function McpServerList({ controller, t }) {
         const connected = runtime?.connected === true
         const credentialCount = Object.keys(server.transport === 'stdio' ? (server.env || {}) : (server.headers || {})).length
         return (
-          <div key={server.id} className={`border-b border-ink/5 ${editing?.id === server.id ? 'bg-ember/10' : ''}`}>
+          <div key={server.id} className={`border-b border-ink/5 ${editing?.id === server.id ? 'bg-accent/10' : ''}`}>
             <button type="button" onClick={() => controller.selectServer(server)} className="w-full px-4 pb-2 pt-3 text-left hover:bg-paper-2/70">
               <div className="flex items-center gap-2">
                 {server.transport === 'stdio' ? <Terminal className="h-3.5 w-3.5 text-ink-fade" /> : <Globe className="h-3.5 w-3.5 text-ink-fade" />}
@@ -24,7 +24,7 @@ export default function McpServerList({ controller, t }) {
               <div className="mt-1 truncate text-[10px] text-ink-fade">{server.transport === 'stdio' ? `${server.command} ${(server.args || []).join(' ')}` : server.url}</div>
               <div className="mt-1 flex gap-3 text-[10px] text-ink-fade"><span>{t('mcp.toolCount', { count: runtime?.tools?.length || 0 })}</span><span>{t('mcp.credentialCount', { count: credentialCount })}</span>{server.oauth?.configured && <span className={server.oauth.connected ? 'text-emerald-700' : 'text-amber-700'}>{t(server.oauth.connected ? 'mcp.oauthConnectedStatus' : 'mcp.oauthExpiredStatus')}</span>}</div>
             </button>
-            <div className="flex items-center gap-2 px-4 pb-3"><button type="button" onClick={() => { controller.selectServer(server); controller.test(server.id) }} className="flex items-center gap-1 text-[10px] text-ember hover:underline"><Play className="h-3 w-3" />{t('mcp.test')}</button><button type="button" onClick={() => controller.connect(server.id)} className="flex items-center gap-1 text-[10px] text-ember hover:underline"><Zap className="h-3 w-3" />{t('mcp.connect')}</button><button type="button" onClick={() => controller.disconnect(server.id)} className="text-[10px] text-ink-fade hover:text-ink">{t('mcp.disconnect')}</button></div>
+            <div className="flex items-center gap-2 px-4 pb-3"><button type="button" onClick={() => { controller.selectServer(server); controller.test(server.id) }} className="flex items-center gap-1 text-[10px] text-accent-ink hover:underline"><Play className="h-3 w-3" />{t('mcp.test')}</button><button type="button" onClick={() => controller.connect(server.id)} className="flex items-center gap-1 text-[10px] text-accent-ink hover:underline"><Zap className="h-3 w-3" />{t('mcp.connect')}</button><button type="button" onClick={() => controller.disconnect(server.id)} className="text-[10px] text-ink-fade hover:text-ink">{t('mcp.disconnect')}</button></div>
           </div>
         )
       })}

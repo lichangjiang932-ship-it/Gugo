@@ -28,10 +28,10 @@ export default function EditablePlanCard({ plan, disabled = false, onApprove, t 
     <div className="mt-3 rounded-md border border-dashed border-cyan/50 bg-cyan/5 p-3">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <p className="text-[11px] text-cyan">{t('taskSteering.planTitle')}</p>
+          <p className="text-xs text-cyan">{t('taskSteering.planTitle')}</p>
           <p className="text-sm text-ink mt-1">{plan?.objective}</p>
         </div>
-        <span className="text-[11px] text-ink-fade shrink-0">
+        <span className="text-xs text-ink-fade shrink-0">
           {t('taskSteering.editPlanHint')}
         </span>
       </div>

@@ -18,7 +18,7 @@ export function HtmlPreview({ html, previewType }) {
   const iframeRef = useRef(null)
   const isDeck = useMemo(() => isHtmlDeckLike(html), [html])
   const sendDeckCommand = (type) => iframeRef.current?.contentWindow?.postMessage({ type }, '*')
-  return <div className={`relative w-full h-full ${isDeck ? 'html-deck-stage' : ''}`}><iframe ref={iframeRef} title={t('chatPreview.htmlTitle')} sandbox="allow-scripts allow-forms" referrerPolicy="no-referrer" srcDoc={srcDoc} className={isDeck ? 'html-deck-frame border-0 bg-white' : 'w-full h-full border-0 bg-white'} />{isDeck && <div className="absolute left-3 bottom-3 z-10 flex items-center gap-1 rounded-full border border-ink-fade/30 bg-paper/85 p-1 shadow-sm backdrop-blur"><button type="button" onClick={() => sendDeckCommand('yma-deck-prev')} className="h-7 px-2 rounded-full text-xs text-ink-soft hover:bg-paper-2 hover:text-ember" title={t('chatPreview.previousPage')}>{t('chatPreview.previousPage')}</button><button type="button" onClick={() => sendDeckCommand('yma-deck-next')} className="h-7 px-2 rounded-full text-xs text-ink-soft hover:bg-paper-2 hover:text-ember" title={t('chatPreview.nextPage')}>{t('chatPreview.nextPage')}</button></div>}</div>
+  return <div className={`relative w-full h-full ${isDeck ? 'html-deck-stage' : ''}`}><iframe ref={iframeRef} title={t('chatPreview.htmlTitle')} sandbox="allow-scripts allow-forms" referrerPolicy="no-referrer" srcDoc={srcDoc} className={isDeck ? 'html-deck-frame border-0 bg-white' : 'w-full h-full border-0 bg-white'} />{isDeck && <div className="absolute left-3 bottom-3 z-10 flex items-center gap-1 rounded-full border border-ink-fade/30 bg-paper/85 p-1 shadow-sm backdrop-blur"><button type="button" onClick={() => sendDeckCommand('yma-deck-prev')} className="h-7 px-2 rounded-full text-xs text-ink-soft hover:bg-paper-2 hover:text-accent-ink" title={t('chatPreview.previousPage')}>{t('chatPreview.previousPage')}</button><button type="button" onClick={() => sendDeckCommand('yma-deck-next')} className="h-7 px-2 rounded-full text-xs text-ink-soft hover:bg-paper-2 hover:text-accent-ink" title={t('chatPreview.nextPage')}>{t('chatPreview.nextPage')}</button></div>}</div>
 }
 
 export function PptxPreview({ content }) {
@@ -33,7 +33,7 @@ export function DocxPreview({ blocks, title }) {
 
 function DocumentBlock({ block }) {
   if (block.type === 'heading' || block.type === 'title') return <div className="pt-3 font-semibold text-ink text-base break-words">{block.text}</div>
-  if (block.type === 'bullet') return <div className="grid grid-cols-[14px_1fr] gap-1.5"><span className="text-ember">•</span><span className="break-words">{block.text}</span></div>
+  if (block.type === 'bullet') return <div className="grid grid-cols-[14px_1fr] gap-1.5"><span className="text-accent-ink">•</span><span className="break-words">{block.text}</span></div>
   return <p className="break-words">{block.text}</p>
 }
 

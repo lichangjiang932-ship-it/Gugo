@@ -12,14 +12,14 @@ function PptPreview({ preview }) {
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
       {preview.slides.map((slide, index) => (
         <div key={`${slide.title}-${index}`} className="aspect-video rounded-card border border-ink-fade/30 bg-paper overflow-hidden flex flex-col">
-          <div className="h-1 bg-ember" />
+          <div className="h-1 bg-accent" />
           <div className="p-3 flex-1 min-h-0 flex flex-col gap-2">
             <div className="text-xs font-mono text-ink-fade tabular-nums">{index + 1}</div>
             <div className="font-semibold text-ink text-sm leading-snug break-words line-clamp-2">{slide.title}</div>
             <div className="flex flex-col gap-1 text-xs text-ink-soft leading-snug overflow-hidden">
               {slide.bullets.slice(0, 4).map((bullet, bulletIndex) => (
                 <div key={bulletIndex} className="grid grid-cols-[10px_1fr] gap-1">
-                  <span className="text-ember">•</span>
+                  <span className="text-accent-ink">•</span>
                   <span className="break-words line-clamp-2">{bullet}</span>
                 </div>
               ))}
@@ -43,7 +43,7 @@ function DocPreview({ preview }) {
           if (block.type === 'bullet') {
             return (
               <div key={index} className="grid grid-cols-[14px_1fr] gap-1">
-                <span className="text-ember">•</span>
+                <span className="text-accent-ink">•</span>
                 <span className="break-words">{block.text}</span>
               </div>
             )
@@ -107,7 +107,7 @@ export default function ArtifactPreview({ preview, content, downloading, onDownl
         <button
           onClick={onDownload}
           disabled={downloading}
-          className="h-8 px-3 rounded-control border border-ember-line text-ember hover:bg-ember-soft transition-colors disabled:opacity-50 inline-flex items-center gap-1.5 text-xs"
+          className="h-8 px-3 rounded-control border border-accent-line text-accent-ink hover:bg-accent-soft transition-colors disabled:opacity-50 inline-flex items-center gap-1.5 text-xs"
           title={t('artifact.downloadTitle', { filename: preview.filename })}
         >
           <Download className="w-3.5 h-3.5" />
@@ -116,7 +116,7 @@ export default function ArtifactPreview({ preview, content, downloading, onDownl
         <button
           type="button"
           onClick={() => onExpand?.()}
-          className="h-8 px-3 rounded-control border border-ink-fade/40 text-ink-soft hover:bg-paper hover:text-ember hover:border-ember/40 transition-colors inline-flex items-center gap-1.5 text-xs"
+          className="h-8 px-3 rounded-control border border-ink-fade/40 text-ink-soft hover:bg-paper hover:text-accent-ink hover:border-accent/40 transition-colors inline-flex items-center gap-1.5 text-xs"
           title={t('artifact.openPanel')}
         >
           <Maximize2 className="w-3.5 h-3.5" />

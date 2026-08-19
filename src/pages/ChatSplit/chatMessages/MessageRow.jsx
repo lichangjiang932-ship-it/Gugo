@@ -207,7 +207,7 @@ export default function MessageRow({
         )}
         {msg.role === 'assistant' && msg.meta?.failed && msg.meta?.type !== 'model_reply' && (
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-            <span className="text-ember" data-testid="reply-completion-state">
+            <span className="text-accent-ink" data-testid="reply-completion-state">
               {localFileReferences.length > 0
                 ? t('chatMessages.replyPartiallyCompleted')
                 : t('chatMessages.replyIncomplete')}
@@ -515,7 +515,7 @@ function UserContent({ attachments, command, content, onOpenAttachment, t }) {
               aria-label={toggleLabel}
               title={toggleLabel}
               onClick={() => setExpanded((value) => !value)}
-              className="mt-1 inline-flex min-h-7 items-center gap-1 rounded-control px-1.5 text-xs font-medium text-ink-soft transition-colors hover:bg-ink/5 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/45"
+              className="mt-1 inline-flex min-h-7 items-center gap-1 rounded-control px-1.5 text-xs font-medium text-ink-soft transition-colors hover:bg-ink/5 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/45"
             >
               {expanded
                 ? <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
@@ -526,7 +526,7 @@ function UserContent({ attachments, command, content, onOpenAttachment, t }) {
         </div>
       )}
       {files.length > 0 && <div className={`${displayContent || command?.command ? 'mt-2' : ''} flex flex-wrap gap-1.5`} data-testid="user-message-attachments">
-        {files.map((file) => <button key={file.id} type="button" onClick={() => onOpenAttachment?.(file)} className="inline-flex max-w-full items-center gap-1.5 rounded-control border border-ink/10 bg-paper px-2 py-1 text-xs text-ink-soft transition-colors hover:border-ember/40 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/45">
+        {files.map((file) => <button key={file.id} type="button" onClick={() => onOpenAttachment?.(file)} className="inline-flex max-w-full items-center gap-1.5 rounded-control border border-ink/10 bg-paper px-2 py-1 text-xs text-ink-soft transition-colors hover:border-accent/40 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/45">
           <FileText className="h-3.5 w-3.5 shrink-0 text-ink-fade" />
           <span className="truncate">{file.name}</span>
         </button>)}

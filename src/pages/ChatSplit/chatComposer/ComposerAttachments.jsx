@@ -16,7 +16,7 @@ export default function ComposerAttachments({ attachments, onClear, onOpen, onRe
             type="button"
             data-testid="composer-attachment-open"
             onClick={() => onOpen(item)}
-            className="flex min-w-0 flex-1 items-center gap-2 rounded text-left hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/45"
+            className="flex min-w-0 flex-1 items-center gap-2 rounded text-left hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/45"
             title={openTitle}
             aria-label={`${openTitle}: ${item.name}`}
           >
@@ -24,11 +24,11 @@ export default function ComposerAttachments({ attachments, onClear, onOpen, onRe
             {label}
           </button>
         ) : <div className="flex min-w-0 flex-1 items-center gap-2">{icon}{label}</div>}
-        {item.uploadStatus === 'uploading' && <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin text-ember" aria-label={t('chatAttachments.uploading')} />}
-        {item.uploadStatus === 'error' && <CircleAlert className="h-3.5 w-3.5 shrink-0 text-rose-700" aria-label={t('chatAttachments.uploadFailed')} />}
+        {item.uploadStatus === 'uploading' && <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin text-running" aria-label={t('chatAttachments.uploading')} />}
+        {item.uploadStatus === 'error' && <CircleAlert className="h-3.5 w-3.5 shrink-0 text-danger" aria-label={t('chatAttachments.uploadFailed')} />}
         <button type="button" onClick={() => onRemove(item.id)} className="text-ink-fade hover:text-ink" title={t('chatComposer.removeAttachment')}><X className="h-3 w-3" /></button>
         {item.uploadStatus === 'uploading' && <p className="w-full text-xs leading-4 text-ink-fade">{t('chatAttachments.uploading')}</p>}
-        {item.uploadStatus === 'error' && <p className="w-full text-xs leading-4 text-rose-700">{t('chatAttachments.uploadFailed')}{item.uploadError ? `：${item.uploadError}` : ''}</p>}
+        {item.uploadStatus === 'error' && <p className="w-full text-xs leading-4 text-danger">{t('chatAttachments.uploadFailed')}{item.uploadError ? `：${item.uploadError}` : ''}</p>}
       </div>
     })}
     <button type="button" onClick={onClear} className="rounded-control border border-dashed border-ink-fade/50 px-2 py-1.5 text-xs text-ink-fade hover:text-ink">{t('chatComposer.clearAttachments')}</button>

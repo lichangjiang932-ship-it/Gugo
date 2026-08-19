@@ -97,7 +97,7 @@ export default function ModelPicker({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listboxId : undefined}
-        className={`inline-flex h-7 max-w-56 items-center gap-1.5 rounded-pill border px-2.5 text-xs transition-colors ${open ? 'border-ember bg-ember-soft text-ember' : 'border-ink-fade/60 text-ink-soft hover:border-ink-fade'}`}
+        className={`inline-flex h-7 max-w-56 items-center gap-1.5 rounded-pill border px-2.5 text-xs transition-colors ${open ? 'border-accent bg-accent-soft text-accent-ink' : 'border-ink-fade/60 text-ink-soft hover:border-ink-fade'}`}
         title={t('chat.modelPicker.open')}
         data-testid="model-picker-trigger"
       >
@@ -149,7 +149,7 @@ export default function ModelPicker({
                           onSelect?.(model.name)
                           onClose?.()
                         }}
-                        className={`flex w-full items-center gap-3 rounded-control px-2.5 py-2 text-left transition-colors ${selected ? 'bg-ember-soft text-ember' : 'text-ink hover:bg-ink-ghost'}`}
+                        className={`flex w-full items-center gap-3 rounded-control px-2.5 py-2 text-left transition-colors ${selected ? 'bg-accent-soft text-accent-ink' : 'text-ink hover:bg-ink-ghost'}`}
                         data-testid="model-picker-option"
                       >
                         <span className="min-w-0 flex-1">

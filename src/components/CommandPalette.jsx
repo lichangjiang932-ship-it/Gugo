@@ -146,7 +146,7 @@ export default function CommandPalette() {
                 onClick={() => execute(cmd)}
                 onMouseEnter={() => setSelectedIdx(idx)}
                 className={`w-full text-left flex items-center gap-3 px-4 py-2.5 transition-colors ${
-                  idx === safeSelectedIdx ? 'bg-ember/10' : 'hover:bg-paper-2'
+                  idx === safeSelectedIdx ? 'bg-accent/10' : 'hover:bg-paper-2'
                 }`}
               >
                 <span className={`w-7 h-7 rounded-md flex items-center justify-center shrink-0 ${
@@ -159,10 +159,10 @@ export default function CommandPalette() {
                 </span>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="font-mono text-[12px] text-ember">/{cmd.id}</span>
+                    <span className="font-mono text-[12px] text-accent-ink">/{cmd.id}</span>
                     <span className="text-[10px] uppercase tracking-wider text-ink-fade">{cmd.kind}</span>
                   </div>
-                  {cmd.description && <div className="text-[11px] text-ink-fade truncate mt-0.5">{cmd.description}</div>}
+                  {cmd.description && <div className="text-xs text-ink-fade truncate mt-0.5">{cmd.description}</div>}
                 </div>
                 <ChevronRight className="w-3.5 h-3.5 text-ink-fade shrink-0" />
               </button>

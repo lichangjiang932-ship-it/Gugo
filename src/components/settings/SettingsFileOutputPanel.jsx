@@ -102,7 +102,7 @@ export default function SettingsFileOutputPanel({ compact = false, t }) {
         </div>
       ) : null}
       {message.text ? (
-        <p className={`px-4 py-2 text-xs ${message.type === 'error' ? 'text-red-600' : 'text-emerald-700'}`} role="status">
+        <p className={`px-4 py-2 text-xs ${message.type === 'error' ? 'text-danger' : 'text-success'}`} role="status">
           {message.text}
         </p>
       ) : null}

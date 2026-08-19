@@ -131,7 +131,7 @@ export default function ToolApprovalCard({ open, request, onDecide, busy }) {
           </div>
           {reason && <p className="text-xs text-ink-soft mt-1">{reason}</p>}
           {main && (
-            <pre className="mt-2 px-2.5 py-1.5 rounded bg-paper border border-ink/15 font-mono text-[11px] text-ink overflow-x-auto whitespace-pre-wrap break-all">
+            <pre className="mt-2 px-2.5 py-1.5 rounded bg-paper border border-ink/15 font-mono text-xs text-ink overflow-x-auto whitespace-pre-wrap break-all">
               {main}
             </pre>
           )}
@@ -168,7 +168,7 @@ export default function ToolApprovalCard({ open, request, onDecide, busy }) {
             type="button"
             disabled={busy}
             onClick={() => onDecide?.({ approved: true })}
-            className="h-8 px-3 rounded-md bg-ember text-paper text-sm flex items-center gap-1.5 disabled:opacity-50"
+            className="h-8 px-3 rounded-md bg-accent text-accent-contrast text-sm flex items-center gap-1.5 disabled:opacity-50"
           >
             <Check className="w-3.5 h-3.5" />
             {t('toolApproval.allowOnce')}

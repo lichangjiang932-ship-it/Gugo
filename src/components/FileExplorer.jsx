@@ -115,7 +115,7 @@ function FileNode({ file, depth, onClick, onDelete, active }) {
   return (
     <div
       className={`group flex items-center gap-1.5 py-1 px-2 rounded-lg text-xs cursor-pointer transition-all ${
-        active ? 'bg-ember-soft/30 text-ink' : 'text-ink-soft hover:bg-paper-2/40 hover:text-ink'
+        active ? 'bg-accent-soft/30 text-ink' : 'text-ink-soft hover:bg-paper-2/40 hover:text-ink'
       }`}
       style={{ paddingLeft: `${depth * 12 + 20}px` }}
     >
@@ -160,7 +160,7 @@ export default function FileExplorer({ files, onFileClick, onFileDelete, onRefre
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="搜索文件…"
-          className="w-full h-7 pl-7 pr-6 border border-ink-fade/15 rounded-lg bg-paper/60 text-[11px] text-ink outline-none focus:border-ember/40 transition-all placeholder:text-ink-fade/40"
+          className="w-full h-7 pl-7 pr-6 border border-ink-fade/15 rounded-lg bg-paper/60 text-xs text-ink outline-none focus:border-focus/40 transition-all placeholder:text-ink-fade/40"
         />
         {searchQuery && (
           <button onClick={() => setSearchQuery('')} className="absolute right-4 top-1/2 -translate-y-1/2 text-ink-fade hover:text-ink">
@@ -182,7 +182,7 @@ export default function FileExplorer({ files, onFileClick, onFileDelete, onRefre
         ) : (
           <div className="py-8 text-center">
             <Folder className="w-8 h-8 text-ink-fade/20 mx-auto mb-2" />
-            <p className="text-[11px] text-ink-fade/50">{searchQuery ? '无匹配文件' : '暂无文件'}</p>
+            <p className="text-xs text-ink-fade/50">{searchQuery ? '无匹配文件' : '暂无文件'}</p>
           </div>
         )}
       </div>

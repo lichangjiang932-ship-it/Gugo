@@ -212,7 +212,7 @@ export default function IntegrationsPanel({ kind, t }) {
     <div className="border border-ink-fade/40 rounded-md p-4 flex flex-col gap-4 bg-paper">
       <IntegrationPanelHeader kind={kind} kindLabel={kindLabel} visionStatus={visionStatus} visionHintOpen={visionHintOpen} onVisionHintChange={setVisionHintOpen} providers={visibleProviders} menuOpen={providerMenuOpen} onMenuChange={setProviderMenuOpen} onOpenProvider={openNew} t={t} />
 
-      {error ? <div className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div> : null}
+      {error ? <div className="rounded-md border border-danger/35 bg-danger/5 px-3 py-2 text-sm text-danger">{error}</div> : null}
       {loading ? <div className="text-sm text-ink-fade">{t('common.loading')}</div> : null}
 
       {!loading && integrations.length === 0 ? (
@@ -228,7 +228,7 @@ export default function IntegrationsPanel({ kind, t }) {
             type="button"
             onClick={() => visibleProviders[0] && openNew(visibleProviders[0])}
             disabled={!visibleProviders.length}
-            className="h-9 px-4 rounded-md bg-ember text-paper text-sm hover:bg-ember/90 disabled:opacity-50"
+            className="h-9 px-4 rounded-md bg-accent text-accent-contrast text-sm hover:bg-accent/90 disabled:opacity-50"
           >
             {t('integrations.emptyCta')}
           </button>

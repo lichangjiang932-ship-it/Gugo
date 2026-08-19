@@ -204,7 +204,7 @@ export default function DesktopPet({
           <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${STATUS_DOT_CLASS[status.kind]} ${['thinking', 'tool'].includes(status.kind) ? 'motion-safe:animate-pulse' : ''}`} aria-hidden="true" />
           <span className="min-w-0">
             <span className="block text-xs font-semibold text-ink">{statusLabel}</span>
-            <span className="mt-0.5 block text-[11px] leading-4 text-ink-fade">{activityLabel}</span>
+            <span className="mt-0.5 block text-xs leading-4 text-ink-fade">{activityLabel}</span>
           </span>
         </div>
       )}

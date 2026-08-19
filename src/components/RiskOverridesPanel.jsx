@@ -52,7 +52,7 @@ export default function RiskOverridesPanel() {
         <span className="font-semibold text-base text-ink-soft">{t('permissionsDashboard.riskOverridesTitle')}</span>
       </div>
       <p className="mb-2 text-xs text-ink-fade">{t('permissionsDashboard.riskOverridesHint')}</p>
-      {error && <div className="mb-2 rounded-md border border-dashed border-ember/60 px-3 py-2 text-xs text-ember">{error}</div>}
+      {error && <div className="mb-2 rounded-md border border-dashed border-danger/45 bg-danger/5 px-3 py-2 text-xs text-danger">{error}</div>}
       <div className="overflow-hidden rounded-md border border-ink/30">
         <form
           className="grid gap-2 border-b border-dashed border-ink-fade/40 bg-paper-2 p-3 sm:grid-cols-[1fr_180px_auto]"
@@ -65,12 +65,12 @@ export default function RiskOverridesPanel() {
             value={toolName}
             onChange={(event) => setToolName(event.target.value)}
             placeholder={t('permissionsDashboard.riskToolPlaceholder')}
-            className="h-9 rounded-md border border-ink-fade/50 bg-paper px-3 font-mono text-xs text-ink outline-none focus:border-ember"
+            className="h-9 rounded-md border border-ink-fade/50 bg-paper px-3 font-mono text-xs text-ink outline-none focus:border-focus"
           />
           <select
             value={riskClass}
             onChange={(event) => setRiskClass(event.target.value)}
-            className="h-9 rounded-md border border-ink-fade/50 bg-paper px-2 text-xs text-ink outline-none focus:border-ember"
+            className="h-9 rounded-md border border-ink-fade/50 bg-paper px-2 text-xs text-ink outline-none focus:border-focus"
           >
             {TOOL_RISK_CLASSES.map((value) => <option key={value} value={value}>{riskLabels[value]}</option>)}
           </select>
@@ -102,7 +102,7 @@ export default function RiskOverridesPanel() {
               type="button"
               disabled={busyTool === item.toolName}
               onClick={() => saveOverride(item.toolName, null)}
-              className="inline-flex h-8 items-center justify-center gap-1 rounded-md border border-ink-fade/50 px-2 text-xs text-ink-soft hover:text-ember disabled:opacity-50"
+              className="inline-flex h-8 items-center justify-center gap-1 rounded-md border border-ink-fade/50 px-2 text-xs text-ink-soft hover:text-accent-ink disabled:opacity-50"
             >
               <Trash2 className="h-3 w-3" />
               {t('permissionsDashboard.riskClear')}

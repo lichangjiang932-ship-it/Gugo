@@ -55,6 +55,30 @@ export function hexToHsl(hex) {
 }
 
 const DEFAULT_HEX = '#E86A3C' // ember
+const LIGHT_CONTRAST_RGB = { r: 255, g: 255, b: 255 }
+const DARK_CONTRAST_RGB = { r: 0, g: 0, b: 0 }
+
+function relativeLuminance({ r, g, b }) {
+  const channels = [r, g, b].map((value) => {
+    const channel = clampByte(value) / 255
+    return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+  })
+  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+}
+
+function contrastRatio(first, second) {
+  const firstLuminance = relativeLuminance(first)
+  const secondLuminance = relativeLuminance(second)
+  return (Math.max(firstLuminance, secondLuminance) + 0.05) / (Math.min(firstLuminance, secondLuminance) + 0.05)
+}
+
+export function accentContrastRgb(hex) {
+  const accent = parseHex(hex) || parseHex(DEFAULT_HEX)
+  const foreground = contrastRatio(accent, DARK_CONTRAST_RGB) >= contrastRatio(accent, LIGHT_CONTRAST_RGB)
+    ? DARK_CONTRAST_RGB
+    : LIGHT_CONTRAST_RGB
+  return `${foreground.r} ${foreground.g} ${foreground.b}`
+}
 
 /**
  * applyAccent({ hex, strong }) → { vars, className }
@@ -76,6 +100,7 @@ export function applyAccent({ hex, strong } = {}) {
     '--accent-s': `${finalS}%`,
     '--accent-l': `${finalL}%`,
     '--accent': `hsl(${hsl.h} ${finalS}% ${finalL}%)`,
+    '--color-accent-contrast-rgb': accentContrastRgb(hex),
   }
   return {
     vars,

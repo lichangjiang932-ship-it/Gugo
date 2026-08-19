@@ -99,19 +99,25 @@ test('long-form markdown, tool labels, and artifact identity stay neutral', () =
   assert.doesNotMatch(artifactPreviewSource, /tracking-\[0\.18em\] text-ember/)
 })
 
-test('normal text tokens meet WCAG AA against each theme paper surface', () => {
+test('normal and semantic text tokens meet WCAG AA against each theme paper surface', () => {
   const themes = [
     ['light', stylesSource.match(/:root,\s*html\[data-theme="light"\]\s*\{([^}]*)\}/)?.[1] || ''],
     ['dark', stylesSource.match(/html\[data-theme="dark"\]\s*\{([^}]*)\}/)?.[1] || ''],
     ['white', stylesSource.match(/html\[data-theme="white"\]\s*\{([^}]*)\}/)?.[1] || ''],
   ]
 
+  for (const token of ['accent', 'accent-contrast', 'accent-ink', 'danger', 'warning', 'running', 'success', 'focus']) {
+    assert.match(tailwindSource, new RegExp(`['"]?${token}['"]?:\\s*'rgb\\(var\\(--color-${token}-rgb\\)`))
+  }
+
   for (const [themeName, block] of themes) {
     assert.ok(block, `missing ${themeName} theme block`)
     const paper = hexToken(block, 'paper')
-    for (const token of ['ink', 'ink-soft', 'ink-fade']) {
+    for (const token of ['ink', 'ink-soft', 'ink-fade', 'accent-ink', 'danger', 'warning', 'running', 'success']) {
       const ratio = contrastRatio(hexToken(block, token), paper)
       assert.ok(ratio >= 4.5, `${themeName} ${token}/paper contrast ${ratio.toFixed(2)} is below 4.5`)
     }
+    const focusRatio = contrastRatio(hexToken(block, 'focus'), paper)
+    assert.ok(focusRatio >= 3, `${themeName} focus/paper contrast ${focusRatio.toFixed(2)} is below 3`)
   }
 })

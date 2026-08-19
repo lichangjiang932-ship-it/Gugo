@@ -111,7 +111,7 @@ export function PreviewToolbar({ preview, content, view, setView, exports, t }) 
     <div data-testid="preview-command-bar" className="chat-preview-toolbar flex min-h-11 shrink-0 items-center gap-3 border-b border-ink/10 bg-paper px-3 py-1.5">
       <FileIdentity preview={preview} />
       <div className="chat-preview-toolbar-actions ml-auto flex shrink-0 items-center gap-1.5">
-        <div className="inline-flex h-8 overflow-hidden rounded-lg border border-ink/10 bg-paper-2 text-[11px]">
+        <div className="inline-flex h-8 overflow-hidden rounded-lg border border-ink/10 bg-paper-2 text-xs">
           <Tab active={view === 'preview'} onClick={() => setView('preview')} icon={<Eye className="h-3.5 w-3.5" />} label={t('chatPreview.preview')} />
           <Tab active={view === 'source'} onClick={() => setView('source')} icon={<Code className="h-3.5 w-3.5" />} label={t('chatPreview.source')} bordered />
         </div>
@@ -138,7 +138,7 @@ export function DirectFileToolbar({ filename, type, url, t }) {
     <div data-testid="preview-command-bar" className="chat-preview-toolbar flex min-h-11 shrink-0 items-center gap-3 border-b border-ink/10 bg-paper px-3 py-1.5">
       <FileIdentity preview={preview} />
       {url && (
-        <a href={url} download={filename} className="ml-auto inline-flex h-8 max-w-[12rem] shrink-0 items-center gap-1.5 rounded-md border border-ink/10 bg-ink px-3 text-[11px] font-medium text-paper transition-colors hover:bg-ink-soft">
+        <a href={url} download={filename} className="ml-auto inline-flex h-8 max-w-[12rem] shrink-0 items-center gap-1.5 rounded-md border border-ink/10 bg-ink px-3 text-xs font-medium text-paper transition-colors hover:bg-ink-soft">
           <Download className="h-3.5 w-3.5" />
           <span className="truncate">{t('chatPreview.download', { filename })}</span>
         </a>
@@ -164,7 +164,7 @@ function ActionButton({ compact = false, disabled, icon, label, onClick, primary
       disabled={disabled}
       aria-label={label}
       title={label}
-      className={`inline-flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-[11px] font-medium transition-colors disabled:opacity-50 ${primary ? 'bg-ink text-paper hover:bg-ink-soft' : 'border border-ink/10 bg-paper text-ink-soft hover:bg-paper-2 hover:text-ink'} ${compact ? 'chat-preview-compact-action' : ''}`}
+      className={`inline-flex h-8 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-xs font-medium transition-colors disabled:opacity-50 ${primary ? 'bg-ink text-paper hover:bg-ink-soft' : 'border border-ink/10 bg-paper text-ink-soft hover:bg-paper-2 hover:text-ink'} ${compact ? 'chat-preview-compact-action' : ''}`}
     >
       {icon}<span className={compact ? 'chat-preview-action-label' : ''}>{label}</span>
     </button>

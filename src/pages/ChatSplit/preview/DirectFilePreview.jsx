@@ -395,7 +395,7 @@ function WorkbookPreview({ sheets }) {
     <div className="flex h-full min-h-0 flex-col bg-paper">
       {sheets.length > 1 && (
         <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-ink/10 bg-paper-2 px-2 py-1.5">
-          {sheets.map((sheet, index) => <button key={`${index}-${sheet.name}`} type="button" onClick={() => setActiveIndex(index)} className={`h-7 shrink-0 rounded-md px-2.5 text-[11px] ${index === safeActiveIndex ? 'bg-paper font-medium text-ink shadow-sm' : 'text-ink-fade hover:text-ink'}`}>{sheet.name}</button>)}
+          {sheets.map((sheet, index) => <button key={`${index}-${sheet.name}`} type="button" onClick={() => setActiveIndex(index)} className={`h-7 shrink-0 rounded-md px-2.5 text-xs ${index === safeActiveIndex ? 'bg-paper font-medium text-ink shadow-sm' : 'text-ink-fade hover:text-ink'}`}>{sheet.name}</button>)}
         </div>
       )}
       <div className="min-h-0 flex-1"><XlsxPreview rows={active.rows || []} /></div>

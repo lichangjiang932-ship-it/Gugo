@@ -163,7 +163,7 @@ export default function HistoryView() {
                     <button
                       key={key}
                       onClick={() => setArchiveFilter(key)}
-                      className={`inline-flex items-center h-7 px-2.5 rounded-full text-[11px] border transition-colors ${
+                      className={`inline-flex items-center h-7 px-2.5 rounded-full text-xs border transition-colors ${
                         effectiveArchiveFilter === key
                           ? 'bg-ink text-paper border-ink'
                           : 'border-ink-fade/50 text-ink-soft hover:border-ink-fade'

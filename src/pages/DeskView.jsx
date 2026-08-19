@@ -133,10 +133,10 @@ export default function DeskView() {
       <LeftRail />
       <div className="flex-1 flex flex-col min-w-0">
         <div className="px-6 py-4 border-b border-ink/10 flex items-center gap-3">
-          <NotebookPen className="w-5 h-5 text-ember" />
+          <NotebookPen className="w-5 h-5 text-accent-ink" />
           <div className="flex-1">
             <div className="text-base font-semibold text-ink">{t('desk.title') || '书桌'}</div>
-            <div className="text-[11px] text-ink-fade">
+            <div className="text-xs text-ink-fade">
               {t('desk.subtitle') || '随手便笺、灵感、TODO；自动保存，钉选置顶。'}
             </div>
           </div>
@@ -144,7 +144,7 @@ export default function DeskView() {
           <button
             type="button"
             onClick={onCreate}
-            className="h-8 px-3 bg-ember text-paper rounded-md text-xs hover:bg-ember/90 flex items-center gap-1"
+            className="h-8 px-3 bg-accent text-accent-contrast rounded-md text-xs hover:bg-accent/90 flex items-center gap-1"
           >
             <Plus className="w-3.5 h-3.5" />
             {t('desk.new') || '新建'}
@@ -166,16 +166,16 @@ export default function DeskView() {
                 type="button"
                 onClick={() => setActiveId(n.id)}
                 className={`w-full text-left border-b border-ink/5 px-4 py-3 hover:bg-paper-2 ${
-                  activeId === n.id ? 'bg-ember/10' : ''
+                  activeId === n.id ? 'bg-accent/10' : ''
                 }`}
               >
                 <div className="flex items-center gap-1.5">
-                  {n.pinned && <Pin className="w-3 h-3 text-ember" />}
+                  {n.pinned && <Pin className="w-3 h-3 text-accent-ink" />}
                   <span className="text-xs font-medium text-ink truncate flex-1">
                     {n.title || (t('desk.untitled') || '未命名')}
                   </span>
                 </div>
-                <div className="text-[11px] text-ink-fade truncate mt-0.5">{n.body || ' '}</div>
+                <div className="text-xs text-ink-fade truncate mt-0.5">{n.body || ' '}</div>
               </button>
             ))}
           </div>
@@ -193,7 +193,7 @@ export default function DeskView() {
                     value={draft.title}
                     onChange={(e) => onTitle(e.target.value)}
                     placeholder={t('desk.titlePlaceholder') || '标题'}
-                    className="flex-1 text-lg font-medium bg-transparent border-b border-ink/10 focus:border-ember/60 outline-none py-1.5 text-ink"
+                    className="flex-1 text-lg font-medium bg-transparent border-b border-ink/10 focus:border-focus/60 outline-none py-1.5 text-ink"
                   />
                   <button
                     type="button"
@@ -217,9 +217,9 @@ export default function DeskView() {
                   value={draft.body}
                   onChange={(e) => onBody(e.target.value)}
                   placeholder={t('desk.bodyPlaceholder') || '在这里随手写点什么…'}
-                  className="flex-1 min-h-[60vh] resize-none bg-paper-2 border border-ink/10 rounded-md p-4 text-sm leading-relaxed text-ink outline-none focus:border-ember/40 font-mono"
+                  className="flex-1 min-h-[60vh] resize-none bg-paper-2 border border-ink/10 rounded-md p-4 text-sm leading-relaxed text-ink outline-none focus:border-focus/40 font-mono"
                 />
-                <div className="text-[11px] text-ink-fade text-right">
+                <div className="text-xs text-ink-fade text-right">
                   {(t('desk.savedAt') || '更新于')} {new Date(active.updatedAt).toLocaleString()}
                 </div>
               </div>

@@ -50,7 +50,7 @@ export default function ChatMessages({
           <>
             {hiddenCount > 0 && (
               <div className="flex flex-col items-center gap-1 py-1 text-xs text-ink-fade tabular-nums">
-                <button type="button" onClick={loadEarlierMessages} className="rounded-pill border border-ink-fade/40 bg-paper px-3 py-1.5 text-ink-soft transition-colors hover:border-ember/50 hover:text-ink">
+                <button type="button" onClick={loadEarlierMessages} className="rounded-pill border border-ink-fade/40 bg-paper px-3 py-1.5 text-ink-soft transition-colors hover:border-accent/50 hover:text-ink">
                   {t('chatWindow.loadEarlier')}
                 </button>
                 <span>{t('chatWindow.olderHidden', { count: hiddenCount })}</span>
@@ -91,7 +91,7 @@ export default function ChatMessages({
             type="button"
             onMouseDown={(event) => { event.preventDefault(); quoteSelection() }}
             style={{ top: quoteBubble.top, left: quoteBubble.left, transform: 'translateX(-50%)' }}
-            className="absolute z-20 inline-flex h-7 items-center gap-1 rounded-pill bg-ink px-2.5 text-xs font-medium text-paper transition-colors hover:bg-ember"
+            className="absolute z-20 inline-flex h-7 items-center gap-1 rounded-pill bg-ink px-2.5 text-xs font-medium text-accent-contrast transition-colors hover:bg-accent"
             title={t('nav.quoteSelectionTitle')}
             aria-label={t('nav.quoteSelectionTitle')}
           >

@@ -42,10 +42,10 @@ export default function ChoicePicker({ text, onChoose, disabled }) {
             className={`
               relative px-4 py-2.5 rounded-lg text-left text-sm border transition-all
               ${selected === opt.id
-                ? 'bg-ember/10 border-ember text-ink shadow-sm'
+                ? 'bg-accent/10 border-accent text-ink shadow-sm'
                 : selected
                   ? 'bg-paper-2 border-ink-fade/30 text-ink-fade cursor-not-allowed'
-                  : 'bg-paper-2/60 border-ink-fade/30 text-ink hover:border-ember/50 hover:bg-ember-soft/5 hover:shadow-sm cursor-pointer'
+                  : 'bg-paper-2/60 border-ink-fade/30 text-ink hover:border-accent/50 hover:bg-accent-soft/5 hover:shadow-sm cursor-pointer'
               }
             `}
           >

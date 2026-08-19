@@ -157,8 +157,8 @@ export default function ChatComposer({
       }}
     >
       {isDraggingFile && (
-        <div className="absolute inset-2 z-20 rounded-card border-2 border-dashed border-ember bg-ember-soft/80 flex items-center justify-center pointer-events-none">
-          <span className="inline-flex items-center gap-2 text-sm text-ember font-medium">
+        <div className="absolute inset-2 z-20 rounded-card border-2 border-dashed border-accent bg-accent-soft/80 flex items-center justify-center pointer-events-none">
+          <span className="inline-flex items-center gap-2 text-sm text-accent-ink font-medium">
             <Paperclip className="w-4 h-4" />
             {t('chatComposer.dropFiles')}
           </span>

@@ -55,7 +55,7 @@ export default function ContextUsagePanel({
       </div>
       <div className="mt-3 border-t border-ink/10 pt-2">
         {(hasMeasuredPromptTokens || serverEstimatedPromptTokens !== null) && (
-          <p className="pb-1 text-[11px] leading-4 text-ink-fade">{t('chat.contextUsage.estimateNotice')}</p>
+          <p className="pb-1 text-xs leading-4 text-ink-fade">{t('chat.contextUsage.estimateNotice')}</p>
         )}
         <UsageRow color="bg-slate-400" label={t('chat.contextUsage.systemPrompt')} value={contextUsage.systemTokens} />
         <UsageRow color="bg-violet-500" label={t('chat.contextUsage.tools')} value={toolTokens} />

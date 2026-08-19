@@ -42,7 +42,9 @@ export default function ThemeWrapper({ children }) {
     const hex = state.accentColor || ACCENT_DEFAULT_HEX
     const strong = !!state.strongAccent
     const rgb = hexToRgb(hex)
-    // 保留旧 ember RGB 通道,免得既有 bg-ember 类失效
+    // Accent controls follow user preference; semantic status and focus tokens do not.
+    document.documentElement.style.setProperty('--color-accent-rgb', rgb)
+    // Keep the authored/export compatibility channel until those non-UI domains migrate.
     document.documentElement.style.setProperty('--color-ember-rgb', rgb)
 
     const { vars, className } = applyAccent({ hex, strong })

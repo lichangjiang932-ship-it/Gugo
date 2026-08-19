@@ -75,7 +75,7 @@ function HighlightedSnippet({ value }) {
     <>
       {segments.map((segment, index) => {
         return segment.marked
-          ? <mark key={index} className="bg-ember-soft text-ember rounded px-0.5">{segment.text}</mark>
+          ? <mark key={index} className="bg-accent-soft text-accent-ink rounded px-0.5">{segment.text}</mark>
           : <span key={index}>{segment.text}</span>
       })}
     </>
@@ -221,7 +221,7 @@ export default function SessionSearchModal() {
                   <div className="flex items-center gap-2">
                     <span className="text-sm text-ink truncate">{result.sessionTitle}</span>
                     <span className="font-mono text-[10px] text-ink-fade shrink-0">{result.role}</span>
-                    <span className="text-[11px] text-ink-fade shrink-0">
+                    <span className="text-xs text-ink-fade shrink-0">
                       {new Date(result.createdAt).toLocaleString()}
                     </span>
                   </div>
@@ -234,7 +234,7 @@ export default function SessionSearchModal() {
           })}
         </div>
         {error && (
-          <div className="px-4 py-2 border-t border-ink-fade/30 text-[11px] text-ink-fade">
+          <div className="px-4 py-2 border-t border-ink-fade/30 text-xs text-ink-fade">
             {t('sessionSearch.localFallback')} · {error}
           </div>
         )}
