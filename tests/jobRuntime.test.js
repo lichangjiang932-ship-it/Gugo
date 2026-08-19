@@ -128,6 +128,9 @@ test('runtime retries fixable verification and only completes after a passing ve
   assert.equal(verify.output.acceptance.verdict, 'pass')
   assert.equal(verify.output.repairAttempts, 1)
   assert.ok(loaded.events.some((event) => event.type === 'verification_repair_started'))
+  assert.ok(loaded.events.some((event) => (
+    event.type === 'task_reviewed' && event.payload?.acceptance?.verdict === 'pass'
+  )))
 })
 
 test('runtime bounds repeated verification repairs and preserves the failed verdict', async () => {
@@ -164,6 +167,9 @@ test('runtime bounds repeated verification repairs and preserves the failed verd
   assert.equal(verify.output.acceptance.verdict, 'fixable')
   assert.equal(verify.output.repairAttempts, 1)
   assert.ok(loaded.events.some((event) => event.type === 'verification_repair_stalled'))
+  assert.ok(loaded.events.some((event) => (
+    event.type === 'task_reviewed' && event.payload?.acceptance?.verdict === 'fixable'
+  )))
 })
 
 test('finalize rejection cannot transition a job to completed', async () => {

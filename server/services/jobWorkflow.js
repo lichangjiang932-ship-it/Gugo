@@ -237,12 +237,24 @@ function normalizeStringList(value) {
     .slice(0, 50)
 }
 
+function normalizeReviewer(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  return {
+    independent: value.independent === true,
+    mode: cleanText(value.mode).slice(0, 120) || 'unknown',
+    reviewerModel: cleanText(value.reviewerModel).slice(0, 512) || null,
+    workerModel: cleanText(value.workerModel).slice(0, 512) || null,
+    ...(cleanText(value.error) ? { error: cleanText(value.error).slice(0, 1_000) } : {}),
+  }
+}
+
 function normalizeAcceptance(value, fallback = {}) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const verdict = cleanText(value.verdict).toLowerCase()
   if (!ACCEPTANCE_VERDICTS.has(verdict)) return null
   const issues = normalizeStringList(value.issues)
   const evidence = normalizeStringList(value.evidence)
+  const reviewer = normalizeReviewer(value.reviewer || fallback.reviewer)
   return {
     verdict,
     summary: cleanText(value.summary) || cleanText(fallback.summary) || (
@@ -251,6 +263,7 @@ function normalizeAcceptance(value, fallback = {}) {
     issues,
     evidence,
     source: cleanText(value.source) || cleanText(fallback.source) || 'structured',
+    ...(reviewer ? { reviewer } : {}),
   }
 }
 

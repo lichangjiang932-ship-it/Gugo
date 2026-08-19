@@ -39,13 +39,13 @@ import {
   buildPriorStepsContext,
   buildVerificationPrompt,
   deriveJobProgress,
-  evaluateTaskAcceptance,
   findNextRunnableStep,
   normalizeStructuredPlanSteps,
   resolveWorkflowState,
   shouldCompileDocx, stepRequiresPlanApproval, withStableStepIds,
 } from './jobWorkflow.js'
-import { buildTextStepResult, buildToolStepResult, completeManualJobTransition, persistRejectedStepResult, runVerificationRepairLoop } from './jobAcceptanceRuntime.js'
+import { buildTextStepResult, buildToolStepResult, completeManualJobTransition, emitTaskReviewEvent, persistRejectedStepResult, runVerificationRepairLoop } from './jobAcceptanceRuntime.js'
+import { createTaskReviewer } from './taskReviewer.js'
 import { createJobRuntimeScheduler } from './jobRuntimeScheduler.js'
 import { createJobExecutionLeaseCoordinator } from './jobExecutionLeaseRuntime.js'
 import { createJobRuntimeCore } from './runtimeCore.js'
@@ -215,7 +215,7 @@ export function createDefaultExecuteStep({
   enableServerTools = true,
   preparePromptContext,
   runtimeCore = createJobRuntimeCore(),
-  taskEvaluator = evaluateTaskAcceptance,
+  taskEvaluator = createTaskReviewer(),
 } = {}) {
   return async function defaultExecuteStep({
     job,
@@ -227,6 +227,7 @@ export function createDefaultExecuteStep({
     commitCheckpoint = null,
   }) {
     const selectedModel = String(job?.modelName || '').trim() || undefined
+    const evaluateCurrentStep = (input) => taskEvaluator({ ...input, signal, workerModelName: selectedModel })
     if (step.kind === 'plan') {
       const text = buildPlanningBrief(job)
       return {
@@ -399,7 +400,7 @@ export function createDefaultExecuteStep({
         const saved = typeof commitCheckpoint === 'function' ? commitCheckpoint(makeResumable) : makeResumable()
         if (!saved) throw new Error('Failed to persist resumable job turn checkpoint')
       }
-      return buildToolStepResult({ job, step, result, taskEvaluator })
+      return buildToolStepResult({ job, step, result, taskEvaluator: evaluateCurrentStep })
     }
 
     // 兼容路径:enableServerTools=false 时退回纯文本(老行为)
@@ -413,7 +414,7 @@ export function createDefaultExecuteStep({
       userId: job.userId,
       modelName: selectedModel,
     })
-    return buildTextStepResult({ job, step, text, taskEvaluator })
+    return buildTextStepResult({ job, step, text, taskEvaluator: evaluateCurrentStep })
   }
 }
 
@@ -1210,6 +1211,7 @@ export class JobRuntime {
         cancelJobWake({ jobId: job.id, userId: job.userId })
         const updatedSteps = listJobSteps(job.id)
         updateJob(job.id, { progress: deriveJobProgress(updatedSteps) })
+        emitTaskReviewEvent({ emit: this.emit.bind(this), jobId: job.id, stepId: nextStep.id, acceptance: result?.acceptance, repairAttempt })
         this.emit(appendJobEvent({
           jobId: job.id,
           stepId: nextStep.id,
