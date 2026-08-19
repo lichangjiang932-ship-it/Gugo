@@ -1,4 +1,5 @@
 import { authHeaders, jsonOk } from './agentClient.js'
+import { subscribeToTicketedSse } from './ticketedSseClient.js'
 
 function qs(params = {}) {
   const search = new URLSearchParams()
@@ -80,4 +81,78 @@ export async function sendChannelMessageApi(id, content) {
 
 export function channelStreamUrl(id) {
   return `/api/channels/${encodeURIComponent(id)}/stream`
+}
+
+export function subscribeToChannelMessages(id, onMessage, options = {}) {
+  const channelId = String(id || '').trim()
+  const EventSourceImpl = Object.prototype.hasOwnProperty.call(options, 'EventSourceImpl')
+    ? options.EventSourceImpl
+    : globalThis.EventSource
+  if (!channelId || !EventSourceImpl || typeof onMessage !== 'function') return () => {}
+  const encodedId = encodeURIComponent(channelId)
+  return subscribeToTicketedSse({
+    ...options,
+    EventSourceImpl,
+    ticketUrl: `/api/channels/${encodedId}/stream-ticket`,
+    streamUrl: (ticket) => `/api/channels/${encodedId}/stream?ticket=${encodeURIComponent(ticket)}`,
+    eventName: 'channel_message',
+    headers: authHeaders,
+    onEvent: (event) => {
+      try { onMessage(JSON.parse(event.data)) } catch { /* malformed event */ }
+    },
+  })
+}
+
+export function mergeChannelMessages(current, incoming) {
+  const records = new Map()
+  let order = 0
+  for (const message of [...(current || []), ...(incoming || [])]) {
+    const key = message?.id == null ? `missing-${order}` : String(message.id)
+    const existing = records.get(key)
+    records.set(key, { message, order: existing?.order ?? order })
+    order += 1
+  }
+  return [...records.values()]
+    .sort((left, right) => {
+      const leftTime = Number(left.message?.createdAt)
+      const rightTime = Number(right.message?.createdAt)
+      if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) {
+        return leftTime - rightTime
+      }
+      return left.order - right.order
+    })
+    .map((entry) => entry.message)
+}
+
+export function startChannelMessageSync({
+  channelId,
+  applyMessages,
+  reportError = () => {},
+  listMessages = listChannelMessagesApi,
+  subscribe = subscribeToChannelMessages,
+} = {}) {
+  if (!channelId || typeof applyMessages !== 'function') return () => {}
+  let cancelled = false
+
+  const reconcile = (surfaceError = false) => listMessages(channelId, { limit: 50 })
+    .then((data) => {
+      if (!cancelled) applyMessages(data.messages || [])
+    })
+    .catch((error) => {
+      if (!cancelled && surfaceError) reportError(error)
+    })
+
+  void reconcile(true)
+  const close = subscribe(channelId, (message) => {
+    if (!cancelled) applyMessages([message])
+  }, {
+    onConnectionChange: ({ state }) => {
+      if (state === 'open' && !cancelled) void reconcile()
+    },
+  })
+
+  return () => {
+    cancelled = true
+    close()
+  }
 }

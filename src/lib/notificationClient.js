@@ -1,4 +1,5 @@
 import { getAuthToken } from './accountClient.js'
+import { subscribeToTicketedSse } from './ticketedSseClient.js'
 
 function authHeaders() {
   const token = getAuthToken?.()
@@ -47,18 +48,22 @@ export function deleteNotification(id, { fetchImpl = fetch } = {}) {
   }))
 }
 
-export function subscribeToNotifications(onNotification, { EventSourceImpl = globalThis.EventSource } = {}) {
+export function subscribeToNotifications(onNotification, options = {}) {
+  const EventSourceImpl = Object.prototype.hasOwnProperty.call(options, 'EventSourceImpl')
+    ? options.EventSourceImpl
+    : globalThis.EventSource
   if (!EventSourceImpl || typeof onNotification !== 'function') return () => {}
   const token = getAuthToken?.()
   if (!token) return () => {}
-  const stream = new EventSourceImpl(`/api/notifications/stream?token=${encodeURIComponent(token)}`)
-  const handler = (event) => {
-    try {
-      onNotification(JSON.parse(event.data))
-    } catch {
-      // Ignore malformed SSE messages and keep the stream alive.
-    }
-  }
-  stream.addEventListener('notification', handler)
-  return () => stream.close()
+  return subscribeToTicketedSse({
+    ...options,
+    EventSourceImpl,
+    ticketUrl: '/api/notifications/stream-ticket',
+    streamUrl: (ticket) => `/api/notifications/stream?ticket=${encodeURIComponent(ticket)}`,
+    eventName: 'notification',
+    headers: authHeaders,
+    onEvent: (event) => {
+      try { onNotification(JSON.parse(event.data)) } catch { /* malformed event */ }
+    },
+  })
 }

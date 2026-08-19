@@ -43,27 +43,29 @@ function firstStableValue(...values) {
   return values.find((value) => value !== undefined && value !== null && String(value).trim() !== '')
 }
 
-function isVerifiedLocalDirectFile(file) {
-  if (file?.verifiedLocalFile === true) return true
+function isLocalReceiptDirectFile(file) {
+  if (file?.verifiedLocalFile === true || file?.retainedLocalFile === true) return true
   const url = String(firstStableValue(file?.url, file?.downloadUrl, file?.uri) || '').trim()
   if (!url) return false
   try {
-    return new URL(url, 'http://local.invalid').pathname.startsWith('/api/local-files/verified/')
+    return /^\/api\/local-files\/(?:verified|retained)\//.test(
+      new URL(url, 'http://local.invalid').pathname,
+    )
   } catch {
     return false
   }
 }
 
-function verifiedLocalPathIdentity(artifact, file) {
-  if (!isVerifiedLocalDirectFile(file)) return ''
+function localReceiptPathIdentity(artifact, file) {
+  if (!isLocalReceiptDirectFile(file)) return ''
   return verifiedLocalFileIdentity(file, artifact)
 }
 
 export function previewArtifactTabId(artifact) {
   const file = artifact?.directFile
   if (file) {
-    const verifiedPathIdentity = verifiedLocalPathIdentity(artifact, file)
-    if (verifiedPathIdentity) return `file:verified-${verifiedPathIdentity}`
+    const localPathIdentity = localReceiptPathIdentity(artifact, file)
+    if (localPathIdentity) return `file:local-${localPathIdentity}`
     const fileIdentity = firstStableValue(
       file.id,
       file.uri,

@@ -60,6 +60,8 @@ jobs:
         run: npm run lint
 
       - name: Test
+        env:
+          TEST_CONCURRENCY: ${{ runner.os == 'Windows' && '2' || '4' }}
         run: npm test
 
       - name: Checkpoint performance guard

@@ -22,6 +22,7 @@ import {
 } from '../src/lib/turnClient.js'
 import { createTurnFailureError, normalizeTurnFailurePayload } from '../src/lib/turnClient/turnEventDispatch.js'
 import { reduceMessageState } from '../src/store/reducers/messageReducer.js'
+import { mergeServerSessionMessages } from '../src/store/sessionServerSync.js'
 
 function response(body, status = 200) {
   return { ok: status >= 200 && status < 300, status, json: async () => body }
@@ -1629,6 +1630,221 @@ test('turn failure payloads retain recovery evidence and dispatch it without app
   assert.equal(meta.failed, true)
 })
 
+test('retained local files survive terminal dispatch, snapshot restore, and authoritative session merge', async () => {
+  const retainedLocalFiles = [{
+    id: 'retained-client-file',
+    path: 'D:\\workspace\\partial.html',
+    filename: 'partial.html',
+    size: 2048,
+    retainedAt: 123,
+    relatedArtifactIds: ['draft-1', 'draft-1'],
+  }]
+  const actions = []
+  const event = createTurnEvent({
+    id: 'retained-failed-event',
+    sessionId: 'retained-session',
+    turnId: 'retained-turn',
+    sequence: 4,
+    type: 'turn.failed',
+    payload: {
+      code: 'DELIVERY_VALIDATION_FAILED',
+      message: 'The final artifact did not pass validation.',
+      retainedLocalFiles,
+    },
+    createdAt: 5,
+  })
+  assert.deepEqual(event.payload.retainedLocalFiles, retainedLocalFiles)
+  await dispatchTurnEvent(event, {
+    dispatch: (action) => actions.push(action),
+    messageTarget: { sessionId: 'retained-session', messageId: 'retained-turn:assistant' },
+  })
+
+  const liveMeta = actions.find((action) => action.type === 'UPDATE_LAST_MESSAGE_META')?.payload
+  assert.deepEqual(liveMeta.retainedLocalFiles, [{
+    ...retainedLocalFiles[0],
+    relatedArtifactIds: ['draft-1'],
+  }])
+
+  const snapshot = normalizeServerSessionSnapshot({
+    complete: true,
+    messages: [{
+      id: 'retained-turn:assistant',
+      role: 'assistant',
+      content: 'The modified file was retained.',
+      createdAt: 5,
+      modelContext: {
+        turnId: 'retained-turn',
+        turnEvidence: true,
+        evidenceState: 'failed',
+        retainedLocalFiles,
+      },
+    }],
+  })
+  assert.deepEqual(snapshot.messages[0].meta.retainedLocalFiles, [{
+    ...retainedLocalFiles[0],
+    relatedArtifactIds: ['draft-1'],
+  }])
+
+  const [merged] = mergeServerSessionMessages([{
+    ...snapshot.messages[0],
+    meta: {
+      ...snapshot.messages[0].meta,
+      retainedLocalFiles: [{
+        id: 'stale-retained-file',
+        path: 'D:\\workspace\\stale.html',
+        filename: 'stale.html',
+      }],
+    },
+  }], snapshot.messages)
+  assert.deepEqual(merged.meta.retainedLocalFiles, snapshot.messages[0].meta.retainedLocalFiles)
+})
+
+test('verified receipts supersede matching retained receipts in SSE and snapshots', async () => {
+  const verifiedLocalFiles = [{
+    id: 'verified-upgrade',
+    path: 'D:\\workspace\\REPORT.HTML',
+    filename: 'REPORT.HTML',
+    verifiedAt: 456,
+  }, {
+    id: 'same-receipt-id',
+    path: 'D:\\workspace\\renamed.html',
+    filename: 'renamed.html',
+    verifiedAt: 457,
+  }]
+  const unrelated = {
+    id: 'retained-unrelated',
+    path: 'D:\\workspace\\other.html',
+    filename: 'other.html',
+    retainedAt: 123,
+  }
+  const retainedLocalFiles = [{
+    id: 'retained-old-path-id',
+    path: 'd:/WORKSPACE/report.html',
+    filename: 'report.html',
+    retainedAt: 121,
+  }, {
+    id: 'same-receipt-id',
+    path: 'D:\\workspace\\old-name.html',
+    filename: 'old-name.html',
+    retainedAt: 122,
+  }, unrelated]
+  const actions = []
+
+  await dispatchTurnEvent(createTurnEvent({
+    id: 'verified-upgrade-completed',
+    sessionId: 'verified-upgrade-session',
+    turnId: 'verified-upgrade-turn',
+    sequence: 9,
+    type: 'turn.completed',
+    payload: { verifiedLocalFiles, retainedLocalFiles },
+    createdAt: 10,
+  }), {
+    dispatch: (action) => actions.push(action),
+    messageTarget: {
+      sessionId: 'verified-upgrade-session',
+      messageId: 'verified-upgrade-turn:assistant',
+    },
+  })
+
+  const liveMeta = actions.find((action) => action.type === 'UPDATE_LAST_MESSAGE_META')?.payload
+  assert.deepEqual(liveMeta.verifiedLocalFiles, verifiedLocalFiles)
+  assert.deepEqual(liveMeta.retainedLocalFiles, [unrelated])
+
+  const snapshot = normalizeServerSessionSnapshot({
+    complete: true,
+    messages: [{
+      id: 'verified-upgrade-turn:assistant',
+      role: 'assistant',
+      content: 'done',
+      createdAt: 10,
+      modelContext: {
+        turnId: 'verified-upgrade-turn',
+        verifiedLocalFiles,
+        retainedLocalFiles,
+      },
+    }],
+  })
+  assert.deepEqual(snapshot.messages[0].meta.verifiedLocalFiles, verifiedLocalFiles)
+  assert.deepEqual(snapshot.messages[0].meta.retainedLocalFiles, [unrelated])
+})
+
+test('terminal verified receipts prune matching retained state when retained is omitted', async () => {
+  const verified = {
+    id: 'verified-upgrade',
+    path: 'd:/WORKSPACE/report.html',
+    filename: 'REPORT.HTML',
+  }
+  const retained = {
+    id: 'retained-old-path',
+    path: 'D:\\workspace\\report.html',
+    filename: 'report.html',
+  }
+  const unrelated = {
+    id: 'retained-unrelated',
+    path: 'D:\\workspace\\other.html',
+    filename: 'other.html',
+  }
+
+  for (const type of [
+    'turn.completed',
+    'turn.failed',
+    'turn.interrupted',
+    'turn.paused',
+    'turn.cancelled',
+  ]) {
+    let state = {
+      activeSessionId: 'terminal-files-session',
+      sessions: [{
+        id: 'terminal-files-session',
+        messages: [{
+          id: 'terminal-files-assistant',
+          role: 'assistant',
+          content: 'done',
+          meta: {
+            streaming: true,
+            serverTurnId: 'terminal-files-turn',
+            serverLastSequence: 4,
+            retainedLocalFiles: [retained, unrelated],
+          },
+        }],
+      }],
+    }
+    const dispatch = (action) => {
+      const next = reduceMessageState(state, action)
+      if (next) state = next
+    }
+
+    await dispatchTurnEvent(createTurnEvent({
+      id: `terminal-files-${type}`,
+      sessionId: 'terminal-files-session',
+      turnId: 'terminal-files-turn',
+      sequence: 5,
+      type,
+      payload: {
+        ...(type === 'turn.interrupted'
+          ? { code: 'MODEL_INTERRUPTED', message: 'interrupted after saving the file', retryable: true }
+          : {}),
+        ...(type === 'turn.paused'
+          ? { text: '', clarification: 'Authorize the workspace directory.' }
+          : {}),
+        verifiedLocalFiles: [verified],
+      },
+      createdAt: 6,
+    }), {
+      dispatch,
+      taskId: 'terminal-files-task',
+      messageTarget: {
+        sessionId: 'terminal-files-session',
+        messageId: 'terminal-files-assistant',
+      },
+    })
+
+    const meta = state.sessions[0].messages[0].meta
+    assert.deepEqual(meta.verifiedLocalFiles, [verified], type)
+    assert.deepEqual(meta.retainedLocalFiles, [unrelated], type)
+  }
+})
+
 test('interrupted turns retain resumable evidence and a recovery attempt clears stale failure state', async () => {
   const actions = []
   const dispatch = (action) => actions.push(action)
@@ -2113,7 +2329,7 @@ test('server snapshot restores a paused directory request for inline authorizati
   assert.notEqual(snapshot.messages[0].meta.serverClarification, clarification)
 })
 
-test('server snapshot restores failed and interrupted turn evidence after reload', () => {
+test('server snapshot restores failed, interrupted, and cancelled turn evidence after reload', () => {
   const snapshot = normalizeServerSessionSnapshot({
     complete: true,
     messages: [{
@@ -2149,6 +2365,18 @@ test('server snapshot restores failed and interrupted turn evidence after reload
         artifactIds: ['report-1'],
         error: { code: 'MODEL_CALL_INTERRUPTED', message: 'Connection lost', retryable: true },
       },
+    }, {
+      id: 'turn-cancelled:assistant',
+      role: 'assistant',
+      content: 'Stopped after saving the draft.',
+      createdAt: 3,
+      modelContext: {
+        turnId: 'turn-cancelled',
+        turnEvidence: true,
+        evidenceState: 'cancelled',
+        serverLastSequence: 11,
+        artifactIds: ['cancelled-draft'],
+      },
     }],
   })
 
@@ -2178,6 +2406,14 @@ test('server snapshot restores failed and interrupted turn evidence after reload
   assert.equal(snapshot.messages[1].meta.failed, undefined)
   assert.deepEqual(snapshot.messages[1].meta.serverArtifactIds, ['report-1'])
   assert.equal(snapshot.messages[1].meta.serverFailure.code, 'MODEL_CALL_INTERRUPTED')
+  assert.equal(snapshot.messages[2].meta.cancelled, true)
+  assert.equal(snapshot.messages[2].meta.serverConnectionState, 'cancelled')
+  assert.equal(snapshot.messages[2].meta.streaming, false)
+  assert.equal(snapshot.messages[2].meta.turnCompletedAt, 3)
+  assert.equal(snapshot.messages[2].meta.serverLastSequence, 11)
+  assert.equal(snapshot.messages[2].meta.failed, undefined)
+  assert.equal(snapshot.messages[2].meta.interrupted, undefined)
+  assert.deepEqual(snapshot.messages[2].meta.serverArtifactIds, ['cancelled-draft'])
 })
 
 test('server snapshot restores structured tool failure details', () => {

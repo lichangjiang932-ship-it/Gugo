@@ -1,5 +1,6 @@
 import { TOOL_CALL_STATUS } from '../../store/taskStatus.js'
 import { normalizeModelUsage } from '../../../shared/modelUsage.js'
+import { removeVerifiedLocalFilesFromRetained } from '../localFileReferences.js'
 import { DEFAULT_SNAPSHOT_PAGE_SIZE, DEFAULT_SNAPSHOT_REVISION_ATTEMPTS, headers, parseResponse } from './turnTransport.js'
 
 function parseToolResult(content) {
@@ -210,10 +211,10 @@ function recoverSelectedToolArtifacts(context, deliveryArtifactIds) {
   return deliveryArtifactIds.map((id) => recovered.get(id)).filter(Boolean)
 }
 
-function optionalContextVerifiedLocalFiles(context) {
-  if (!context || typeof context !== 'object' || !Object.hasOwn(context, 'verifiedLocalFiles')) return undefined
+function optionalContextLocalFileReceipts(context, key, timestampKey) {
+  if (!context || typeof context !== 'object' || !Object.hasOwn(context, key)) return undefined
   const seen = new Set()
-  return (Array.isArray(context.verifiedLocalFiles) ? context.verifiedLocalFiles : [])
+  return (Array.isArray(context[key]) ? context[key] : [])
     .map((file) => {
       const id = String(file?.id || '').trim()
       const path = String(file?.path || '').trim()
@@ -225,7 +226,9 @@ function optionalContextVerifiedLocalFiles(context) {
         path,
         filename,
         ...(Number.isFinite(Number(file?.size)) ? { size: Math.max(0, Number(file.size)) } : {}),
-        ...(Number.isFinite(Number(file?.verifiedAt)) ? { verifiedAt: Math.max(0, Number(file.verifiedAt)) } : {}),
+        ...(Number.isFinite(Number(file?.[timestampKey]))
+          ? { [timestampKey]: Math.max(0, Number(file[timestampKey])) }
+          : {}),
         ...(Array.isArray(file?.relatedArtifactIds) && file.relatedArtifactIds.length > 0
           ? { relatedArtifactIds: [...new Set(file.relatedArtifactIds.map(String).filter(Boolean))] }
           : {}),
@@ -234,12 +237,20 @@ function optionalContextVerifiedLocalFiles(context) {
     .filter(Boolean)
 }
 
+function optionalContextVerifiedLocalFiles(context) {
+  return optionalContextLocalFileReceipts(context, 'verifiedLocalFiles', 'verifiedAt')
+}
+
+function optionalContextRetainedLocalFiles(context) {
+  return optionalContextLocalFileReceipts(context, 'retainedLocalFiles', 'retainedAt')
+}
+
 function turnEvidenceMeta(message) {
   const context = message?.modelContext && typeof message.modelContext === 'object'
     ? message.modelContext
     : {}
   const state = context.turnEvidence === true ? String(context.evidenceState || '') : ''
-  if (state !== 'failed' && state !== 'interrupted') return {}
+  if (!['cancelled', 'failed', 'interrupted'].includes(state)) return {}
 
   const failure = context.error && typeof context.error === 'object' ? context.error : null
   const artifactIds = [...new Set((Array.isArray(context.artifactIds) ? context.artifactIds : [])
@@ -253,7 +264,13 @@ function turnEvidenceMeta(message) {
   return {
     ...(state === 'failed'
       ? { failed: true }
-      : {
+      : state === 'cancelled'
+        ? {
+            cancelled: true,
+            streaming: false,
+            serverConnectionState: 'cancelled',
+          }
+        : {
           interrupted: true,
           streaming: true,
           turnCompletedAt: null,
@@ -383,6 +400,12 @@ export function normalizeServerSessionSnapshot(snapshot) {
       const verifiedLocalFiles = message.role === 'assistant'
         ? optionalContextVerifiedLocalFiles(message?.modelContext)
         : undefined
+      const retainedLocalFiles = message.role === 'assistant'
+        ? removeVerifiedLocalFilesFromRetained(
+            optionalContextRetainedLocalFiles(message?.modelContext),
+            verifiedLocalFiles,
+          )
+        : undefined
       const modelUsage = message.role === 'assistant'
         ? normalizeModelUsage(message?.modelContext?.usage)
         : null
@@ -458,6 +481,7 @@ export function normalizeServerSessionSnapshot(snapshot) {
             ...(serverArtifacts.length ? { serverArtifacts } : {}),
             ...(serverDeliveryArtifactIds !== undefined ? { serverDeliveryArtifactIds } : {}),
             ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
+            ...(retainedLocalFiles !== undefined ? { retainedLocalFiles } : {}),
             ...(modelUsage ? {
               modelUsage,
               actualPromptTokens: modelUsage.promptTokens,

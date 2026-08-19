@@ -587,6 +587,67 @@ test('a verified local-file receipt turns the full answer path into a real workb
   }
 })
 
+test('a failed turn exposes its retained file as pending verification without upgrading it', async () => {
+  const dom = setupDom()
+  const rootElement = document.getElementById('root')
+  const root = createRoot(rootElement)
+  const opened = []
+  const turnId = 'retained-answer-path-turn'
+  const filePath = 'D:\\交付 文件\\已保留网站.html'
+  const msg = {
+    id: `${turnId}:assistant`,
+    role: 'assistant',
+    content: `产物验证未完成，已修改文件保留在：${filePath}。`,
+    timestamp: Date.now(),
+    meta: {
+      failed: true,
+      serverTurnId: turnId,
+      retainedLocalFiles: [{
+        id: 'retained-answer-path-file',
+        path: filePath,
+        filename: '已保留网站.html',
+        size: 1024,
+        retainedAt: 123,
+      }],
+    },
+  }
+
+  try {
+    await act(async () => root.render(
+      <MessageRow
+        msg={msg}
+        rowKey={msg.id}
+        generatingMessageId=""
+        lang="zh"
+        onOpenArtifact={(artifact) => opened.push(artifact)}
+        t={(key) => key}
+      />,
+    ))
+
+    const link = rootElement.querySelector('[data-testid="inline-artifact-link"]')
+    assert.ok(link)
+    assert.equal(
+      link.getAttribute('href'),
+      '/api/local-files/retained/retained-answer-path-file?turnId=retained-answer-path-turn',
+    )
+    assert.equal(rootElement.querySelector('[data-testid="reply-completion-state"]')?.textContent, 'chatMessages.replyPartiallyCompleted')
+
+    await act(async () => link.dispatchEvent(new dom.window.MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+    })))
+    assert.equal(opened.length, 1)
+    assert.equal(opened[0].retainedLocalFile, true)
+    assert.equal(opened[0].verificationPending, true)
+    assert.equal(opened[0].directFile.retainedLocalFile, true)
+    assert.equal(opened[0].directFile.verificationPending, true)
+    assert.equal(Object.hasOwn(opened[0].directFile, 'verifiedLocalFile'), false)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
 test('a verified output path stays selectable, copies literally, and supersedes its managed artifact', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')

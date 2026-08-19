@@ -126,13 +126,13 @@ function InteractiveHtmlFilePreview({ file, t, url }) {
   if (isManagedArtifactPreviewUrl(url)) {
     return <ManagedHtmlArtifactPreview file={file} t={t} url={url} />
   }
-  if (isVerifiedLocalFileUrl(url)) {
-    return <VerifiedLocalHtmlPreview file={file} t={t} url={url} />
+  if (isLocalReceiptFileUrl(url)) {
+    return <LocalReceiptHtmlPreview file={file} t={t} url={url} />
   }
   return <DirectHtmlUrlPreview file={file} t={t} url={url} />
 }
 
-function isVerifiedLocalFileUrl(url) {
+function isLocalReceiptFileUrl(url) {
   const raw = String(url || '').trim()
   if (!raw) return false
   try {
@@ -140,13 +140,14 @@ function isVerifiedLocalFileUrl(url) {
       || globalThis.window?.location?.origin
       || 'http://localhost'
     const parsed = new URL(raw, baseOrigin)
-    return parsed.origin === baseOrigin && /^\/api\/local-files\/verified\/[^/]+$/.test(parsed.pathname)
+    return parsed.origin === baseOrigin
+      && /^\/api\/local-files\/(?:verified|retained)\/[^/]+$/.test(parsed.pathname)
   } catch {
     return false
   }
 }
 
-function VerifiedLocalHtmlPreview({ file, t, url }) {
+function LocalReceiptHtmlPreview({ file, t, url }) {
   const [state, setState] = useState({ url: '', error: null })
   const [retryVersion, setRetryVersion] = useState(0)
   const retry = () => {
@@ -259,10 +260,10 @@ function ManagedHtmlArtifactPreview({ file, t, url }) {
     />
   }
   if (!state.url) return <PreviewStatus icon={<LoaderCircle className="h-6 w-6 animate-spin" />} text={t('chatPreview.loadingFile')} />
-  return <DirectHtmlUrlPreview file={file} t={t} url={state.url} onRetry={retry} />
+  return <DirectHtmlUrlPreview allowScripts file={file} t={t} url={state.url} onRetry={retry} />
 }
 
-export function DirectHtmlUrlPreview({ file, onRetry, t, timeoutMs = 5_000, url }) {
+export function DirectHtmlUrlPreview({ allowScripts = false, file, onRetry, t, timeoutMs = 5_000, url }) {
   const [attempt, setAttempt] = useState(0)
   const requestUrl = withPreviewRetry(url, attempt)
   const requestKey = `${requestUrl}:${attempt}`
@@ -292,7 +293,7 @@ export function DirectHtmlUrlPreview({ file, onRetry, t, timeoutMs = 5_000, url 
         key={requestKey}
         src={requestUrl}
         title={file.filename || file.title || t('chatPreview.htmlTitle')}
-        sandbox="allow-scripts allow-forms"
+        sandbox={allowScripts ? 'allow-scripts' : ''}
         referrerPolicy="no-referrer"
         onLoad={() => setLoadState({ key: requestKey, status: 'ready' })}
         onError={() => setLoadState({ key: requestKey, status: 'failed' })}

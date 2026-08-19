@@ -28,6 +28,26 @@ fs.writeFileSync(path.join(previewAssetsDir, 'app.mjs'), 'document.documentEleme
 fs.writeFileSync(path.join(previewAssetsDir, 'preview.woff2'), Buffer.from('wOF2preview-font', 'ascii'))
 fs.writeFileSync(path.join(allowedDir, 'background.jpg'), Buffer.from([0xff, 0xd8, 0xff, 0xd9]))
 fs.writeFileSync(path.join(allowedDir, 'dynamic-gallery.png'), Buffer.from('dynamic-image-bytes', 'utf8'))
+const retainedAssetsDir = path.join(allowedDir, 'retained-assets')
+fs.mkdirSync(retainedAssetsDir)
+fs.writeFileSync(path.join(retainedAssetsDir, 'available.css'), [
+  'body{background-image:url(./damaged-image.png)}',
+  '.missing{background-image:url(./missing-from-css.png)}',
+].join(''), 'utf8')
+fs.writeFileSync(path.join(retainedAssetsDir, 'damaged-image.png'), Buffer.from('not-a-decodable-png', 'utf8'))
+fs.writeFileSync(path.join(retainedAssetsDir, 'overflow-present.png'), Buffer.from('must-stay-outside-the-bounded-graph', 'utf8'))
+fs.writeFileSync(path.join(allowedDir, 'retained-incomplete.html'), [
+  '<link rel="stylesheet" href="./retained-assets/available.css">',
+  '<div>retained incomplete preview',
+  '<img src="./retained-assets/missing-image.png">',
+  '<img src="./outside-link/outside-secret.txt">',
+  '<img src="https://remote.invalid/tracker.png">',
+].join(''), 'utf8')
+fs.writeFileSync(path.join(allowedDir, 'retained-reference-limit.html'), [
+  '<div>bounded retained preview',
+  ...Array.from({ length: 2_005 }, (_, index) => `<img src="https://invalid-${index}.example/image.png">`),
+  '<img src="./retained-assets/overflow-present.png">',
+].join(''), 'utf8')
 fs.writeFileSync(path.join(allowedDir, 'same-directory-secret.txt'), 'must remain private', 'utf8')
 fs.writeFileSync(path.join(tempDir, 'outside-secret.txt'), 'must not be exposed', 'utf8')
 let outsideLinkCreated = false
@@ -277,10 +297,17 @@ test('verified turn receipts stream the real file and remain user-scoped', async
   const turnId = 'verified-file-route-turn'
   const sessionId = 'verified-file-route-session'
   const fileId = 'verified-file-receipt'
+  const retainedFileId = 'retained-file-receipt'
+  const retainedHtmlFileId = 'retained-html-receipt'
+  const retainedIncompleteHtmlFileId = 'retained-incomplete-html-receipt'
+  const retainedReferenceLimitFileId = 'retained-reference-limit-receipt'
+  const verifiedIncompleteHtmlFileId = 'verified-incomplete-html-receipt'
   const htmlFileId = 'verified-html-receipt'
   const pdfFileId = 'verified-pdf-receipt'
   const filePath = fs.realpathSync(path.join(allowedDir, 'route.txt'))
   const htmlPath = fs.realpathSync(path.join(allowedDir, 'preview.html'))
+  const incompleteHtmlPath = fs.realpathSync(path.join(allowedDir, 'retained-incomplete.html'))
+  const referenceLimitHtmlPath = fs.realpathSync(path.join(allowedDir, 'retained-reference-limit.html'))
   const pdfPath = fs.realpathSync(path.join(allowedDir, 'preview.pdf'))
   upsertSession({ id: sessionId, userId: alice.userId, title: 'verified file route' })
   upsertMessage({
@@ -295,7 +322,14 @@ test('verified turn receipts stream the real file and remain user-scoped', async
       verifiedLocalFiles: [
         { id: fileId, path: filePath, filename: 'route.txt', size: 12 },
         { id: htmlFileId, path: htmlPath, filename: 'preview.html', size: fs.statSync(htmlPath).size },
+        { id: verifiedIncompleteHtmlFileId, path: incompleteHtmlPath, filename: 'retained-incomplete.html', size: fs.statSync(incompleteHtmlPath).size },
         { id: pdfFileId, path: pdfPath, filename: 'preview.pdf', size: fs.statSync(pdfPath).size },
+      ],
+      retainedLocalFiles: [
+        { id: retainedFileId, path: filePath, filename: 'route.txt', size: 12, retainedAt: Date.now() },
+        { id: retainedHtmlFileId, path: htmlPath, filename: 'preview.html', size: fs.statSync(htmlPath).size, retainedAt: Date.now() },
+        { id: retainedIncompleteHtmlFileId, path: incompleteHtmlPath, filename: 'retained-incomplete.html', size: fs.statSync(incompleteHtmlPath).size, retainedAt: Date.now() },
+        { id: retainedReferenceLimitFileId, path: referenceLimitHtmlPath, filename: 'retained-reference-limit.html', size: fs.statSync(referenceLimitHtmlPath).size, retainedAt: Date.now() },
       ],
     },
   })
@@ -307,12 +341,51 @@ test('verified turn receipts stream the real file and remain user-scoped', async
   assert.match(response.headers.get('content-disposition'), /^attachment;/)
   assert.equal(await response.text(), 'route access')
 
+  const retainedUrl = `${origin}/api/local-files/retained/${retainedFileId}?turnId=${turnId}`
+  const retainedResponse = await fetch(retainedUrl, { headers: headers(alice.token) })
+  assert.equal(retainedResponse.status, 200)
+  assert.match(retainedResponse.headers.get('content-disposition'), /^attachment;/)
+  assert.equal(await retainedResponse.text(), 'route access')
+
+  const retainedBrowserLink = await fetch(`${retainedUrl}&token=${encodeURIComponent(alice.token)}`)
+  assert.equal(retainedBrowserLink.status, 200)
+  assert.equal(await retainedBrowserLink.text(), 'route access')
+
+  const retainedTextPreview = await fetch(`${retainedUrl}&preview=1&token=${encodeURIComponent(alice.token)}`)
+  assert.equal(retainedTextPreview.status, 200)
+  assert.match(retainedTextPreview.headers.get('content-disposition'), /^inline;/)
+  assert.equal(await retainedTextPreview.text(), 'route access')
+
+  const retainedHtmlQueryTokenPreview = await fetch(
+    `${origin}/api/local-files/retained/${retainedHtmlFileId}?turnId=${turnId}&preview=1&token=${encodeURIComponent(alice.token)}`,
+  )
+  assert.equal(retainedHtmlQueryTokenPreview.status, 400)
+  assert.equal(
+    (await retainedHtmlQueryTokenPreview.json()).error.code,
+    'LOCAL_HTML_QUERY_TOKEN_PREVIEW_FORBIDDEN',
+  )
+
   const browserLinkResponse = await fetch(`${url}&token=${encodeURIComponent(alice.token)}`)
   assert.equal(browserLinkResponse.status, 200)
   assert.equal(await browserLinkResponse.text(), 'route access')
 
-  const htmlPreviewUrl = `${origin}/api/local-files/verified/${htmlFileId}?turnId=${turnId}&preview=1&token=${encodeURIComponent(alice.token)}`
-  const htmlPreview = await fetch(htmlPreviewUrl)
+  const htmlDownloadUrl = `${origin}/api/local-files/verified/${htmlFileId}?turnId=${turnId}&token=${encodeURIComponent(alice.token)}`
+  const htmlDownload = await fetch(htmlDownloadUrl)
+  assert.equal(htmlDownload.status, 200)
+  assert.match(htmlDownload.headers.get('content-disposition'), /^attachment;/)
+  assert.match(await htmlDownload.text(), /verified preview/)
+
+  const htmlQueryTokenPreview = await fetch(
+    `${origin}/api/local-files/verified/${htmlFileId}?turnId=${turnId}&preview=1&token=${encodeURIComponent(alice.token)}`,
+  )
+  assert.equal(htmlQueryTokenPreview.status, 400)
+  assert.equal(
+    (await htmlQueryTokenPreview.json()).error.code,
+    'LOCAL_HTML_QUERY_TOKEN_PREVIEW_FORBIDDEN',
+  )
+
+  const htmlPreviewUrl = `${origin}/api/local-files/verified/${htmlFileId}?turnId=${turnId}&preview=1`
+  const htmlPreview = await fetch(htmlPreviewUrl, { headers: headers(alice.token) })
   assert.equal(htmlPreview.status, 200)
   assert.match(htmlPreview.headers.get('content-type'), /^text\/html/)
   assert.match(htmlPreview.headers.get('content-disposition'), /^inline;/)
@@ -321,7 +394,7 @@ test('verified turn receipts stream the real file and remain user-scoped', async
   assert.doesNotMatch(htmlPreview.headers.get('content-security-policy') || '', /allow-(?:same-origin|forms)/)
   assert.match(await htmlPreview.text(), /verified preview/)
 
-  const htmlHead = await fetch(htmlPreviewUrl, { method: 'HEAD' })
+  const htmlHead = await fetch(htmlPreviewUrl, { method: 'HEAD', headers: headers(alice.token) })
   assert.equal(htmlHead.status, 200)
   assert.equal(htmlHead.headers.get('x-frame-options'), 'SAMEORIGIN')
   assert.match(htmlHead.headers.get('content-disposition'), /^inline;/)
@@ -344,19 +417,97 @@ test('verified turn receipts stream the real file and remain user-scoped', async
   assert.equal(sessionHtml.headers.get('cross-origin-resource-policy'), 'cross-origin')
   const sessionCsp = sessionHtml.headers.get('content-security-policy') || ''
   const ticketResourceSource = `${origin}${previewSession.url.slice(0, previewSession.url.lastIndexOf('/') + 1)}`
-  assert.match(sessionCsp, /^sandbox allow-scripts allow-forms;/)
-  assert.doesNotMatch(sessionCsp, /allow-same-origin/)
-  assert.ok(sessionCsp.includes(`connect-src ${ticketResourceSource}`))
-  assert.ok(sessionCsp.includes(`script-src 'unsafe-inline' blob: ${ticketResourceSource}`))
+  assert.match(sessionCsp, /^sandbox;/)
+  assert.doesNotMatch(sessionCsp, /allow-(?:scripts|forms|same-origin)/)
+  assert.ok(sessionCsp.includes("connect-src 'none'"))
+  assert.ok(sessionCsp.includes("script-src 'none'"))
   assert.doesNotMatch(sessionCsp, /(?:^|\s)(?:https?|wss?):(?=\s|;|$)/)
   assert.match(await sessionHtml.text(), /\.\/assets\/site\.css/)
+
+  const retainedPreviewSessionResponse = await fetch(
+    `${origin}/api/local-files/retained/${retainedHtmlFileId}/preview-session?turnId=${turnId}`,
+    { method: 'POST', headers: headers(alice.token) },
+  )
+  assert.equal(retainedPreviewSessionResponse.status, 200)
+  const retainedPreviewSession = await retainedPreviewSessionResponse.json()
+  assert.match(retainedPreviewSession.url, /^\/api\/local-files\/previews\/[^/]+\/preview\.html$/)
+  const retainedSessionHtml = await fetch(new URL(retainedPreviewSession.url, origin))
+  assert.equal(retainedSessionHtml.status, 200)
+  assert.match(await retainedSessionHtml.text(), /verified preview/)
+
+  const strictIncompletePreview = await fetch(
+    `${origin}/api/local-files/verified/${verifiedIncompleteHtmlFileId}/preview-session?turnId=${turnId}`,
+    { method: 'POST', headers: headers(alice.token) },
+  )
+  assert.equal(strictIncompletePreview.status, 422)
+  assert.equal((await strictIncompletePreview.json()).error.code, 'HTML_DELIVERY_DOCUMENT_INCOMPLETE')
+
+  const tolerantPreviewResponse = await fetch(
+    `${origin}/api/local-files/retained/${retainedIncompleteHtmlFileId}/preview-session?turnId=${turnId}`,
+    { method: 'POST', headers: headers(alice.token) },
+  )
+  assert.equal(tolerantPreviewResponse.status, 200)
+  const tolerantPreview = await tolerantPreviewResponse.json()
+  const tolerantHtmlUrl = new URL(tolerantPreview.url, origin)
+  const tolerantHtml = await fetch(tolerantHtmlUrl)
+  assert.equal(tolerantHtml.status, 200)
+  assert.match(await tolerantHtml.text(), /retained incomplete preview/)
+  const tolerantCsp = tolerantHtml.headers.get('content-security-policy') || ''
+  assert.match(tolerantCsp, /^sandbox;/)
+  assert.doesNotMatch(tolerantCsp, /allow-(?:scripts|forms|same-origin)/)
+  assert.ok(tolerantCsp.includes("connect-src 'none'"))
+  assert.ok(tolerantCsp.includes("script-src 'none'"))
+  assert.doesNotMatch(tolerantCsp, /(?:^|\s)(?:https?|wss?):(?=\s|;|$)/)
+
+  const tolerantCss = await fetch(new URL('./retained-assets/available.css', tolerantHtmlUrl))
+  assert.equal(tolerantCss.status, 200)
+  assert.match(await tolerantCss.text(), /missing-from-css\.png/)
+  const damagedImage = await fetch(new URL('./retained-assets/damaged-image.png', tolerantHtmlUrl))
+  assert.equal(damagedImage.status, 200)
+  assert.equal(Buffer.from(await damagedImage.arrayBuffer()).toString('utf8'), 'not-a-decodable-png')
+
+  for (const resourceName of [
+    './retained-assets/missing-image.png',
+    './retained-assets/missing-from-css.png',
+    './same-directory-secret.txt',
+  ]) {
+    const unavailable = await fetch(new URL(resourceName, tolerantHtmlUrl))
+    assert.equal(unavailable.status, 403, resourceName)
+    assert.equal((await unavailable.json()).error.code, 'LOCAL_HTML_PREVIEW_RESOURCE_NOT_DECLARED')
+  }
+  if (outsideLinkCreated) {
+    const retainedSymlinkEscape = await fetch(new URL('./outside-link/outside-secret.txt', tolerantHtmlUrl))
+    assert.equal(retainedSymlinkEscape.status, 403)
+    assert.doesNotMatch(await retainedSymlinkEscape.text(), /must not be exposed/)
+  }
+
+  const boundedPreviewResponse = await fetch(
+    `${origin}/api/local-files/retained/${retainedReferenceLimitFileId}/preview-session?turnId=${turnId}`,
+    { method: 'POST', headers: headers(alice.token) },
+  )
+  assert.equal(boundedPreviewResponse.status, 200)
+  const boundedPreview = await boundedPreviewResponse.json()
+  const overflowResource = await fetch(new URL(
+    './retained-assets/overflow-present.png',
+    new URL(boundedPreview.url, origin),
+  ))
+  assert.equal(overflowResource.status, 403)
+  assert.equal((await overflowResource.json()).error.code, 'LOCAL_HTML_PREVIEW_RESOURCE_NOT_DECLARED')
+
+  const crossUserRetainedPreviewSession = await fetch(
+    `${origin}/api/local-files/retained/${retainedHtmlFileId}/preview-session?turnId=${turnId}`,
+    { method: 'POST', headers: headers(bob.token) },
+  )
+  assert.equal(crossUserRetainedPreviewSession.status, 404)
+  assert.equal((await crossUserRetainedPreviewSession.json()).error.code, 'RETAINED_FILE_NOT_FOUND')
 
   const childFrame = await fetch(new URL('./child.html', sessionHtmlUrl))
   assert.equal(childFrame.status, 200)
   assert.match(childFrame.headers.get('content-type') || '', /^text\/html/)
   assert.equal(childFrame.headers.get('x-frame-options'), null)
   const childCsp = childFrame.headers.get('content-security-policy') || ''
-  assert.match(childCsp, /^sandbox allow-scripts allow-forms;/)
+  assert.match(childCsp, /^sandbox;/)
+  assert.doesNotMatch(childCsp, /allow-(?:scripts|forms|same-origin)/)
   assert.doesNotMatch(childCsp, /frame-ancestors/)
   assert.ok(childCsp.includes(`img-src data: blob: ${ticketResourceSource}`))
   assert.match(await childFrame.text(), /nested child/)
@@ -484,9 +635,19 @@ test('verified turn receipts stream the real file and remain user-scoped', async
   assert.equal(missing.status, 404)
   assert.equal((await missing.json()).error.code, 'VERIFIED_FILE_NOT_FOUND')
 
+  const missingRetained = await fetch(`${origin}/api/local-files/retained/missing?turnId=${turnId}`, {
+    headers: headers(alice.token),
+  })
+  assert.equal(missingRetained.status, 404)
+  assert.equal((await missingRetained.json()).error.code, 'RETAINED_FILE_NOT_FOUND')
+
   const crossUser = await fetch(url, { headers: headers(bob.token) })
   assert.equal(crossUser.status, 404)
   assert.equal((await crossUser.json()).error.code, 'VERIFIED_FILE_NOT_FOUND')
+
+  const crossUserRetained = await fetch(retainedUrl, { headers: headers(bob.token) })
+  assert.equal(crossUserRetained.status, 404)
+  assert.equal((await crossUserRetained.json()).error.code, 'RETAINED_FILE_NOT_FOUND')
 
   const crossUserBrowserLink = await fetch(`${url}&token=${encodeURIComponent(bob.token)}`)
   assert.equal(crossUserBrowserLink.status, 404)
@@ -512,6 +673,27 @@ test('local preview MIME types cover common web sidecar assets', () => {
   assert.equal(localFileMimeType('site.webmanifest'), 'application/manifest+json; charset=utf-8')
   assert.equal(localFileMimeType('bundle.js.map'), 'application/json; charset=utf-8')
   assert.equal(localFileMimeType('worker.cjs'), 'text/javascript; charset=utf-8')
+})
+
+test('local preview MIME types cover browser-native sidebar media and Office variants', () => {
+  const expected = new Map([
+    ['photo.apng', 'image/apng'],
+    ['photo.jfif', 'image/jpeg'],
+    ['sound.flac', 'audio/flac'],
+    ['sound.m4b', 'audio/mp4'],
+    ['sound.oga', 'audio/ogg'],
+    ['sound.opus', 'audio/ogg'],
+    ['movie.m4v', 'video/mp4'],
+    ['movie.ogv', 'video/ogg'],
+    ['sheet.ods', 'application/vnd.oasis.opendocument.spreadsheet'],
+    ['sheet.xls', 'application/vnd.ms-excel'],
+    ['sheet.xlsb', 'application/vnd.ms-excel.sheet.binary.macroEnabled.12'],
+    ['sheet.xlsm', 'application/vnd.ms-excel.sheet.macroEnabled.12'],
+    ['slides.pptm', 'application/vnd.ms-powerpoint.presentation.macroEnabled.12'],
+  ])
+  for (const [filename, mimeType] of expected) {
+    assert.equal(localFileMimeType(filename), mimeType, filename)
+  }
 })
 
 test('local HTML preview CSP uses only configured or explicitly trusted public origins', async () => {

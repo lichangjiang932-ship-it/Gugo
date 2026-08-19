@@ -1,3 +1,5 @@
+import { removeVerifiedLocalFilesFromRetained } from '../lib/localFileReferences.js'
+
 const SERVER_MUTATION_TYPES = new Set([
   'DELETE_SESSION',
   'CLEAR_CURRENT_SESSION',
@@ -142,14 +144,35 @@ export function mergeServerSessionMessages(localMessages, serverMessages) {
           // IDs can revive a draft that the current turn already invalidated.
           merged.meta.serverDeliveryArtifactIds = []
         }
-        if (Object.hasOwn(serverMeta, 'verifiedLocalFiles')) {
-          merged.meta.verifiedLocalFiles = serverMeta.verifiedLocalFiles
+        for (const key of ['verifiedLocalFiles', 'retainedLocalFiles']) {
+          if (localHasNewerTurnState) {
+            if (Object.hasOwn(localMeta, key)) merged.meta[key] = localMeta[key]
+            else delete merged.meta[key]
+          } else if (Object.hasOwn(serverMeta, key)) {
+            merged.meta[key] = serverMeta[key]
+          }
+        }
+        if (Object.hasOwn(merged.meta, 'retainedLocalFiles')) {
+          merged.meta.retainedLocalFiles = removeVerifiedLocalFilesFromRetained(
+            merged.meta.retainedLocalFiles,
+            merged.meta.verifiedLocalFiles,
+          )
         }
 
         const localResumeInFlight = localMeta.directoryAuthorizationPending === true
           || localMeta.serverResumeResolution != null
 
-        if (serverMeta.interrupted === true && !localHasNewerTurnState) {
+        if (serverMeta.cancelled === true && !localHasNewerTurnState) {
+          merged.meta.cancelled = true
+          merged.meta.failed = false
+          merged.meta.interrupted = false
+          merged.meta.paused = false
+          merged.meta.streaming = false
+          merged.meta.serverConnectionState = 'cancelled'
+          if (serverPauseSequence !== null) {
+            merged.meta.serverLastSequence = serverPauseSequence
+          }
+        } else if (serverMeta.interrupted === true && !localHasNewerTurnState) {
           merged.meta.streaming = true
           merged.meta.turnCompletedAt = null
           merged.meta.latency = null

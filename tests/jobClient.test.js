@@ -194,6 +194,36 @@ test('verified local HTML exchanges account auth for a scoped relative-resource 
   }
 })
 
+test('retained local HTML uses its own receipt route for the scoped preview session', async () => {
+  const previousWindow = globalThis.window
+  globalThis.window = { localStorage: null, sessionStorage: null }
+  setAuthToken('retained-preview-account-secret')
+  const calls = []
+  try {
+    const previewUrl = await createLocalHtmlPreviewSession(
+      '/api/local-files/retained/retained-file-1?turnId=retained-turn&preview=1&token=stale-secret',
+      {
+        fetchImpl: async (url, init) => {
+          calls.push({ url, init })
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ url: '/api/local-files/previews/retained-ticket/index.html' }),
+          }
+        },
+      },
+    )
+    assert.equal(previewUrl, '/api/local-files/previews/retained-ticket/index.html')
+    assert.equal(calls[0].url, '/api/local-files/retained/retained-file-1/preview-session?turnId=retained-turn')
+    assert.equal(calls[0].init.method, 'POST')
+    assert.equal(calls[0].init.headers.Authorization, 'Bearer retained-preview-account-secret')
+    assert.doesNotMatch(calls[0].url, /token=|stale-secret|retained-preview-account-secret/)
+  } finally {
+    setAuthToken('')
+    globalThis.window = previousWindow
+  }
+})
+
 test('managed HTML exchanges account auth for a scoped preview ticket without leaking tokens', async () => {
   const previousWindow = globalThis.window
   globalThis.window = { localStorage: null, sessionStorage: null }

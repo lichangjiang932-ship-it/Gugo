@@ -16,7 +16,10 @@ import {
 } from '../services/workspaceOnboardingService.js'
 import { HTML_ARTIFACT_RESPONSE_CSP } from '../../shared/htmlArtifactPolicy.js'
 import { readJson } from '../utils.js'
-import { getVerifiedLocalFile } from '../services/verifiedLocalFileService.js'
+import {
+  getRetainedLocalFile,
+  getVerifiedLocalFile,
+} from '../services/verifiedLocalFileService.js'
 import {
   createLocalHtmlPreviewSession,
   getLocalHtmlPreviewResource,
@@ -124,7 +127,7 @@ function localHtmlPreviewSecurityHeaders(req, mimeType, ticket, { isEntryDocumen
   return {
     ...(isEntryDocument ? { 'X-Frame-Options': 'SAMEORIGIN' } : {}),
     'Content-Security-Policy': [
-      'sandbox allow-scripts allow-forms',
+      'sandbox',
       ...(isEntryDocument ? ["frame-ancestors 'self'"] : []),
       "default-src 'none'",
       "base-uri 'none'",
@@ -134,9 +137,9 @@ function localHtmlPreviewSecurityHeaders(req, mimeType, ticket, { isEntryDocumen
       `media-src data: blob: ${resourceSource}`,
       `font-src data: blob: ${resourceSource}`,
       `style-src 'unsafe-inline' ${resourceSource}`,
-      `script-src 'unsafe-inline' blob: ${resourceSource}`,
-      `worker-src blob: ${resourceSource}`,
-      `connect-src ${resourceSource}`,
+      "script-src 'none'",
+      "worker-src 'none'",
+      "connect-src 'none'",
       `frame-src ${resourceSource}`,
       `manifest-src ${resourceSource}`,
     ].join('; '),
@@ -221,12 +224,12 @@ export async function handleLocalFileAccessRequest(req, res) {
     }
   }
 
-  const verifiedFileDownload = ['GET', 'HEAD'].includes(req.method)
-    && url.pathname.startsWith('/api/local-files/verified/')
-  const downloadToken = verifiedFileDownload ? url.searchParams.get('token') : ''
+  const receiptFileDownload = ['GET', 'HEAD'].includes(req.method)
+    && /^\/api\/local-files\/(?:verified|retained)\//.test(url.pathname)
+  const downloadToken = receiptFileDownload ? url.searchParams.get('token') : ''
   // Browser links and embedded previews cannot attach an Authorization header.
   // Match persisted artifact downloads, but scope query-token auth strictly to
-  // the read-only verified receipt endpoint.
+  // the read-only verified/retained receipt endpoints.
   if (downloadToken && !req.headers.authorization) {
     req.headers.authorization = `Bearer ${downloadToken}`
   }
@@ -249,28 +252,44 @@ export async function handleLocalFileAccessRequest(req, res) {
     }
 
     const previewSessionMatch = req.method === 'POST'
-      ? url.pathname.match(/^\/api\/local-files\/verified\/([^/]+)\/preview-session\/?$/)
+      ? url.pathname.match(/^\/api\/local-files\/(verified|retained)\/([^/]+)\/preview-session\/?$/)
       : null
     if (previewSessionMatch) {
-      const fileId = decodeURIComponent(previewSessionMatch[1])
+      const receiptKind = previewSessionMatch[1]
+      const fileId = decodeURIComponent(previewSessionMatch[2])
       const previewSession = await createLocalHtmlPreviewSession({
         userId,
         sessionId: url.searchParams.get('sessionId'),
         turnId: url.searchParams.get('turnId'),
         fileId,
+        receiptKind,
       })
       return sendJson(res, 200, { ok: true, ...previewSession })
     }
 
-    if (['GET', 'HEAD'].includes(req.method) && url.pathname.startsWith('/api/local-files/verified/')) {
-      const fileId = decodeURIComponent(url.pathname.slice('/api/local-files/verified/'.length))
-      const file = getVerifiedLocalFile({
+    const receiptFileMatch = ['GET', 'HEAD'].includes(req.method)
+      ? url.pathname.match(/^\/api\/local-files\/(verified|retained)\/([^/]+)\/?$/)
+      : null
+    if (receiptFileMatch) {
+      const receiptKind = receiptFileMatch[1]
+      const fileId = decodeURIComponent(receiptFileMatch[2])
+      const file = (receiptKind === 'retained' ? getRetainedLocalFile : getVerifiedLocalFile)({
         userId,
         sessionId: url.searchParams.get('sessionId'),
         turnId: url.searchParams.get('turnId'),
         fileId,
       })
       const preview = url.searchParams.get('preview') === '1'
+      if (
+        preview
+        && url.searchParams.has('token')
+        && /^text\/html/i.test(file.mimeType)
+      ) {
+        const error = new Error('本地 HTML 必须通过隔离预览会话打开')
+        error.statusCode = 400
+        error.code = 'LOCAL_HTML_QUERY_TOKEN_PREVIEW_FORBIDDEN'
+        throw error
+      }
       const securityHeaders = previewSecurityHeaders(preview, file.mimeType)
       if (req.headers['if-none-match'] === file.etag) {
         res.writeHead(304, {
