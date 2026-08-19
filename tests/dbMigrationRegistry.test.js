@@ -20,6 +20,7 @@ import { migrateToV57 } from '../server/migrations/v57EventWriteFailures.js'
 import { migrateToV58 } from '../server/migrations/v58CronTaskGrants.js'
 import { migrateToV59 } from '../server/migrations/v59SessionBranches.js'
 import { migrateToV60 } from '../server/migrations/v60RuntimePluginStates.js'
+import { migrateToV61 } from '../server/migrations/v61EvolutionEvidence.js'
 
 test('schema migration registry is contiguous and owns the latest version', () => {
   const legacy = Array.from({ length: 29 }, (_, index) => ({
@@ -32,9 +33,51 @@ test('schema migration registry is contiguous and owns the latest version', () =
     plan.map(({ version }) => version),
     Array.from({ length: LATEST_SCHEMA_VERSION - 1 }, (_, index) => index + 2),
   )
-  assert.equal(LATEST_SCHEMA_VERSION, 60)
+  assert.equal(LATEST_SCHEMA_VERSION, 61)
   assert.equal(DB_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
   assert.equal(schemaMigrations.at(-1).version, LATEST_SCHEMA_VERSION)
+})
+
+test('v61 persists user-scoped evolution feedback and preserves referential cleanup', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    db.exec(`
+      CREATE TABLE users (id TEXT PRIMARY KEY);
+      CREATE TABLE sessions (
+        token TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE
+      );
+      INSERT INTO users (id) VALUES ('user-1');
+      INSERT INTO sessions (token, user_id) VALUES ('session-1', 'user-1');
+    `)
+    migrateToV61(db)
+    migrateToV61(db)
+
+    db.prepare(`
+      INSERT INTO evolution_feedback (id, user_id, session_id, body, created_at)
+      VALUES ('feedback-1', 'user-1', 'session-1', 'use clearer errors', 10)
+    `).run()
+    assert.ok(
+      db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_evolution_feedback_user_created'").get(),
+    )
+    db.prepare("DELETE FROM sessions WHERE token = 'session-1'").run()
+    assert.equal(
+      db.prepare("SELECT session_id FROM evolution_feedback WHERE id = 'feedback-1'").get().session_id,
+      null,
+    )
+    assert.throws(
+      () => db.prepare(`
+        INSERT INTO evolution_feedback (id, user_id, body, created_at)
+        VALUES ('feedback-empty', 'user-1', '', 11)
+      `).run(),
+      /CHECK constraint failed/,
+    )
+    db.prepare("DELETE FROM users WHERE id = 'user-1'").run()
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM evolution_feedback').get().count, 0)
+  } finally {
+    db.close()
+  }
 })
 
 test('v60 persists runtime plugin state with boolean enforcement and is idempotent', () => {

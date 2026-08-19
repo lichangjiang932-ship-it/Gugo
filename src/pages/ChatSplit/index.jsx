@@ -15,7 +15,7 @@ import { parseSlashCommandInput } from '../../lib/slashCommandRegistry.js'
 import { getSlashActionCopy } from '../../lib/slashCoreCommands.js'
 import { TASK_STATUS } from '../../store/taskStatus.js'
 import { persistSlashGoals } from '../../lib/slashGoals.js'
-import { recordLocalChatFeedback } from '../../lib/localChatFeedback.js'
+import { recordChatFeedback } from '../../lib/evolutionClient.js'
 import { fetchCompactionArchive } from '../../lib/compactionClient.js'
 import { resolveModelContextWindow } from '../../lib/contextUsage.js'
 import { MAX_CHAT_ATTACHMENTS_PER_MESSAGE } from '../../lib/chatAttachmentParser.js'
@@ -341,7 +341,7 @@ export default function ChatSplit() {
         triggerSendFlow(prompt)
       }}
       onSend={handleSend} onSlashCommandSelect={executeSlashEntry}
-      onSubmitFeedback={(value) => recordLocalChatFeedback(value, stateRef.current.activeSessionId)}
+      onSubmitFeedback={(value) => recordChatFeedback(value, stateRef.current.activeSessionId)}
       onToolApproval={approvals.resolveToolApproval} onVoiceClick={handleVoice} onWorkbenchSend={triggerSendFlow}
       onWorkbenchTabChange={setWorkbenchTab} onWorkbenchToggle={() => setWorkbenchOpen((open) => !open)}
       previewArtifact={state.previewArtifact} previewTabs={state.previewTabs} previewActiveId={state.previewActiveId}
