@@ -1,7 +1,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
-const INSTRUCTION_FILES = Object.freeze(['AGENTS.md', 'CLAUDE.md'])
+// Explicit agent instructions always win. README is a conservative fallback
+// for repositories that have not adopted an agent-specific instruction file.
+const INSTRUCTION_FILES = Object.freeze(['AGENTS.md', 'CLAUDE.md', 'README.md'])
 const MAX_INSTRUCTION_BYTES = 64 * 1024
 const cache = new Map()
 

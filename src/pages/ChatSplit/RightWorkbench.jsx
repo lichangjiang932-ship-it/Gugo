@@ -44,11 +44,12 @@ function collectArtifacts(messages) {
     if (
       message?.role !== 'assistant'
       || message?.meta?.streaming
-      || message?.meta?.failed
       || message?.meta?.interrupted
       || message?.meta?.paused
     ) return []
-    const deliveryArtifacts = resolveDeliveryArtifacts(message?.meta)
+    const deliveryArtifacts = message?.meta?.failed
+      ? []
+      : resolveDeliveryArtifacts(message?.meta)
     const verifiedLocalFiles = buildVerifiedLocalFileReferences({
       toolCalls: message?.meta?.toolCalls,
       verifiedLocalFiles: message?.meta?.verifiedLocalFiles,
@@ -206,7 +207,7 @@ export default function RightWorkbench({
     <aside
       id="right-workbench"
       data-testid="right-workbench"
-      className="relative flex h-full shrink-0 flex-col border-l border-ink/10 bg-paper"
+      className="relative flex h-full min-w-0 max-w-[calc(100vw-60px)] shrink flex-col overflow-hidden border-l border-ink/10 bg-paper"
       style={{ width: `${panelWidth}px` }}
     >
       <button

@@ -66,6 +66,40 @@ test('runToolsLoop executes an all-read batch concurrently and preserves result 
   assert.deepEqual(orderedResults, ['first.txt', 'second.txt', 'third.txt'])
 })
 
+test('runToolsLoop caps a large parallel read batch at three active tools', async () => {
+  let modelTurns = 0
+  let active = 0
+  let peak = 0
+
+  const result = await runToolsLoop({
+    job: { id: 'job-read-parallel-cap', userId: TEST_USER, title: 'bounded parallel reads' },
+    step: { id: 'step-read-parallel-cap', kind: 'execute' },
+    messages: [{ role: 'user', content: 'Read five files.' }],
+    runModel: async () => {
+      modelTurns += 1
+      if (modelTurns === 1) {
+        return {
+          content: '',
+          toolCalls: Array.from({ length: 5 }, (_, index) => (
+            toolCall(`bounded-read-${index}`, 'read_file', { path: `bounded-${index}.txt` })
+          )),
+        }
+      }
+      return { content: 'bounded done', toolCalls: [] }
+    },
+    executeTool: async ({ args }) => {
+      active += 1
+      peak = Math.max(peak, active)
+      await delay(25)
+      active -= 1
+      return { ok: true, path: args.path }
+    },
+  })
+
+  assert.equal(result.text, 'bounded done')
+  assert.equal(peak, 3)
+})
+
 test('runToolsLoop runs read segments concurrently around a durable write barrier and preserves result order', async () => {
   const writeUser = issueTestSession({ email: 'job-tools-concurrency-write@example.com' }).userId
   setApprovalMode({ userId: writeUser, mode: 'bypass' })

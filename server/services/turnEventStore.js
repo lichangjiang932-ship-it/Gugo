@@ -162,56 +162,129 @@ function maybePruneTurnEvents(now = Date.now()) {
   }
 }
 
-export function appendTurnEvent({ userId, event, checkpointState = null }) {
+function normalizeAppendEntry({ userId, event, checkpointState = null } = {}) {
   if (!userId) throw new Error('user id is required')
   const value = parseTurnEvent(event)
   if (checkpointState !== null && value.type !== 'turn.checkpoint') {
     throw new Error('checkpoint state requires a turn.checkpoint event')
   }
+  return {
+    userId,
+    value,
+    checkpointState,
+    payloadJson: JSON.stringify(value.payload),
+  }
+}
+
+/** Persist a write-behind batch in one SQLite transaction. */
+export function appendTurnEvents(entries = []) {
+  if (!Array.isArray(entries)) throw new TypeError('turn event entries must be an array')
+  if (entries.length === 0) return []
+  const normalized = entries.map(normalizeAppendEntry)
   const db = getDb()
-  const session = db.prepare(`
+  const ownsSession = db.prepare(`
     SELECT token FROM sessions
     WHERE user_id = ? AND token = ? AND (id IS NOT NULL OR title IS NOT NULL)
-  `).get(userId, value.sessionId)
-  if (!session) throw new Error('session not found')
-  let inserted
-  let row
+  `)
+  const insertEvent = db.prepare(`INSERT OR IGNORE INTO turn_events
+    (id, user_id, session_id, turn_id, sequence, type, payload_json, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+  const readEvent = db.prepare(`SELECT * FROM turn_events
+    WHERE user_id = ? AND session_id = ? AND turn_id = ? AND sequence = ?`)
+  const deleteOlderCheckpoints = db.prepare(`DELETE FROM turn_events
+    WHERE user_id = ? AND session_id = ? AND turn_id = ?
+      AND type = 'turn.checkpoint' AND sequence < ?`)
+  const stored = []
+  const insertedEvents = []
+
   db.transaction(() => {
-    inserted = db.prepare(`INSERT OR IGNORE INTO turn_events
-      (id, user_id, session_id, turn_id, sequence, type, payload_json, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(value.id, userId, value.sessionId, value.turnId, value.sequence, value.type, JSON.stringify(value.payload), value.createdAt)
-    row = db.prepare('SELECT * FROM turn_events WHERE user_id = ? AND session_id = ? AND turn_id = ? AND sequence = ?')
-      .get(userId, value.sessionId, value.turnId, value.sequence)
-    if (row.id !== value.id || row.type !== value.type || row.payload_json !== JSON.stringify(value.payload)) {
-      throw new Error('turn event sequence conflict')
-    }
-    if (inserted.changes > 0 && checkpointState !== null) {
-      const checkpoint = saveTurnCheckpoint({
+    for (const entry of normalized) {
+      const { userId, value, checkpointState, payloadJson } = entry
+      if (!ownsSession.get(userId, value.sessionId)) throw new Error('session not found')
+      const inserted = insertEvent.run(
+        value.id,
         userId,
-        sessionId: value.sessionId,
-        turnId: value.turnId,
-        eventSequence: value.sequence,
-        state: checkpointState,
-        now: value.createdAt,
-      }, db)
-      if (!checkpoint?.state) throw new Error('Failed to persist turn checkpoint')
-    }
-    if (inserted.changes > 0 && value.type === 'turn.checkpoint') {
-      db.prepare(`DELETE FROM turn_events
-        WHERE user_id = ? AND session_id = ? AND turn_id = ?
-          AND type = 'turn.checkpoint' AND sequence < ?`)
-        .run(userId, value.sessionId, value.turnId, value.sequence)
+        value.sessionId,
+        value.turnId,
+        value.sequence,
+        value.type,
+        payloadJson,
+        value.createdAt,
+      )
+      const row = readEvent.get(userId, value.sessionId, value.turnId, value.sequence)
+      if (!row || row.id !== value.id || row.type !== value.type || row.payload_json !== payloadJson) {
+        throw new Error('turn event sequence conflict')
+      }
+      const mapped = mapRow(row)
+      stored.push(mapped)
+      if (inserted.changes === 0) continue
+      if (checkpointState !== null) {
+        const checkpoint = saveTurnCheckpoint({
+          userId,
+          sessionId: value.sessionId,
+          turnId: value.turnId,
+          eventSequence: value.sequence,
+          state: checkpointState,
+          now: value.createdAt,
+        }, db)
+        if (!checkpoint?.state) throw new Error('Failed to persist turn checkpoint')
+      }
+      if (value.type === 'turn.checkpoint') {
+        deleteOlderCheckpoints.run(userId, value.sessionId, value.turnId, value.sequence)
+      }
+      insertedEvents.push({ userId, event: mapped })
     }
   })()
-  const stored = mapRow(row)
-  if (inserted.changes > 0) {
-    publishTurnEvent(userId, turnEventForClient(stored))
-    // Event timestamps and retention share the same clock. This also makes a
-    // first append after process restart eligible to clean up an old database.
-    maybePruneTurnEvents(value.createdAt)
+
+  for (const entry of insertedEvents) {
+    publishTurnEvent(entry.userId, turnEventForClient(entry.event))
+  }
+  if (insertedEvents.length > 0) {
+    // Event timestamps and retention share the same clock. A single cleanup
+    // after the committed batch avoids turning maintenance into write pressure.
+    maybePruneTurnEvents(Math.max(...insertedEvents.map(({ event }) => event.createdAt)))
   }
   return stored
+}
+
+export function appendTurnEvent(entry) {
+  return appendTurnEvents([entry])[0]
+}
+
+export function recordTurnEventWriteFailure({
+  batch = [],
+  errorMessage = 'event write failed',
+  attempts = 3,
+  failedAt = Date.now(),
+} = {}) {
+  if (!Array.isArray(batch) || batch.length === 0) return 0
+  const db = getDb()
+  const insert = db.prepare(`INSERT INTO event_write_failures
+    (user_id, session_id, turn_id, event_id, event_sequence, event_type,
+      payload_json, error_message, attempts, failed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  let changes = 0
+  db.transaction(() => {
+    for (const item of batch) {
+      const event = item?.event && typeof item.event === 'object' ? item.event : {}
+      let payloadJson
+      try { payloadJson = JSON.stringify(event.payload ?? {}) }
+      catch { payloadJson = '{"serializationError":true}' }
+      changes += insert.run(
+        item?.userId ? String(item.userId) : null,
+        event.sessionId ? String(event.sessionId) : null,
+        event.turnId ? String(event.turnId) : null,
+        event.id ? String(event.id) : null,
+        Number.isInteger(event.sequence) ? event.sequence : null,
+        event.type ? String(event.type) : null,
+        payloadJson,
+        String(errorMessage || 'event write failed').slice(0, 2_000),
+        Math.max(1, Math.floor(Number(attempts) || 1)),
+        Math.max(0, Math.floor(Number(failedAt) || Date.now())),
+      ).changes
+    }
+  })()
+  return changes
 }
 
 export function listTurnEvents({ userId, sessionId, turnId, after = -1, limit = 500 }) {

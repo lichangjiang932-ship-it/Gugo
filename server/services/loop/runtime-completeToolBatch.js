@@ -27,7 +27,9 @@ export async function completeToolBatch(s) {
         // is not proof that a side effect can be replayed after a crash. Keep
         // every mutation on the durable serial path even when a dynamic/MCP
         // tool explicitly declares itself concurrency-safe.
-        return metadata.isReadOnly === true && metadata.isConcurrencySafe === true
+        return metadata.executionMode === 'parallel'
+          && metadata.isReadOnly === true
+          && metadata.isConcurrencySafe === true
       }
   i.requiresPreExecutionSteeringCheck = (call) => {
         if (!call) return false
@@ -134,7 +136,15 @@ export async function completeToolBatch(s) {
           const outcomes = await mapWithConcurrency(
             readSegment,
             (candidate) => i.executeOne(candidate, { durableExecution: false }),
-            { concurrency: JOB_READ_CONCURRENCY },
+            {
+              concurrency: readSegment.reduce((limit, candidate) => {
+                const declared = getToolMetadata(candidate.name, {
+                  args: candidate.args,
+                  userId: s.job?.userId || null,
+                }).maxParallel
+                return Number.isInteger(declared) ? Math.min(limit, declared) : limit
+              }, JOB_READ_CONCURRENCY),
+            },
           )
           const hardNoProgressOutcome = outcomes.find((outcome) => outcome.noProgressReason) || null
           for (const outcome of outcomes) await i.recordOutcome(outcome)

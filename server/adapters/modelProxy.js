@@ -28,12 +28,13 @@ import { scheduleAutoMemoryExtraction } from '../services/autoMemoryService.js'
 import { getRuntimeEnv } from '../utils/runtimeEnv.js'
 import { bindSseClientDisconnect, createEmptyModelResponseError } from './sseLifecycle.js'
 import { fetchWithEnvProxy } from './proxyFetch.js'
-import { normalizeModelContentForEndpoint } from '../utils/modelContentCapabilities.js'
+import { prepareOutboundMessages } from './outboundMessagePipeline.js'
 import {
   buildNativeProviderRequest,
   consumeNativeProviderStreamPayload,
   createNativeProviderStreamState,
   finishNativeProviderStream,
+  getNativeProviderRequestAdapter,
   isNativeProviderKind,
 } from './nativeModelProviders.js'
 import {
@@ -672,6 +673,7 @@ export function buildOpenAICompatibleRequest({
   toolChoice,
   env = process.env,
   profile = null,
+  ephemeralContext = '',
 }) {
   const endpoint = profile || profileForConfig(config || {}, env)
   const model = config?.modelName
@@ -685,9 +687,19 @@ export function buildOpenAICompatibleRequest({
     headers.Authorization = `Bearer ${config.apiKey}`
   }
 
+  const outboundMessages = prepareOutboundMessages({
+    messages,
+    profile: endpoint,
+    modelName: model,
+    providerKind: endpoint.kind,
+    providerId: config?.providerId,
+    ephemeralContext,
+  })
+  if (outboundMessages.length === 0) throw new Error('消息不能为空。')
+
   const body = {
     model,
-    messages: normalizeModelContentForEndpoint(normalizeMessagesForOpenAI(messages), endpoint),
+    messages: normalizeMessagesForOpenAI(outboundMessages),
     temperature: config?.temperature ?? 0.7,
     stream,
   }
@@ -811,13 +823,14 @@ export async function callBackgroundModel({
   const candidates = resolveModelFailoverConfigs({ modelName: selectedModel, env: runtimeEnv })
   return runWithProviderFailover(candidates, async (candidate) => {
     const profile = profileForConfig(candidate, runtimeEnv)
-    const { url, init } = buildModelProviderRequest({
+    const providerRequest = buildModelProviderRequest({
       config: candidate,
       messages,
       stream: false,
       env: runtimeEnv,
       profile,
     })
+    const { url, init } = providerRequest
     return withRetry(async () => {
       // ★ 原来这里完全没有超时 —— 一个挂死的本地端点会让 job 永远卡在
       // running,不发事件、不发通知,只能重启进程。
@@ -840,7 +853,7 @@ export async function callBackgroundModel({
         error.retryAfter = response.headers?.get?.('retry-after') ?? null
         throw error
       }
-      const parsed = parseModelProviderResponse(data, profile)
+      const parsed = parseModelProviderResponse(data, profile, { providerRequest })
       recordUsage(candidate.modelName, parsed.usage)
       if (!parsed.content) throw new Error('模型返回为空，请检查模型名称或端点响应格式。')
       return parsed.content
@@ -882,7 +895,7 @@ export async function callBackgroundModelWithTools({
   const candidates = resolveModelFailoverConfigs({ modelName: selectedModel, env: runtimeEnv })
   return runWithProviderFailover(candidates, async (candidate) => {
     const profile = profileForConfig(candidate, runtimeEnv)
-    const { url, init } = buildModelProviderRequest({
+    const providerRequest = buildModelProviderRequest({
       config: candidate,
       messages,
       stream: false,
@@ -891,6 +904,7 @@ export async function callBackgroundModelWithTools({
       env: runtimeEnv,
       profile,
     })
+    const { url, init } = providerRequest
     return withRetry(async () => {
       const response = await fetchWithTimeout(fetchImpl, url, init, {
         timeoutMs: profile.timeouts.backgroundMs,
@@ -913,7 +927,7 @@ export async function callBackgroundModelWithTools({
         error.retryAfter = response.headers?.get?.('retry-after') ?? null
         throw error
       }
-      const parsed = parseModelProviderResponse(data, profile)
+      const parsed = parseModelProviderResponse(data, profile, { providerRequest })
       const compatibilityCall = parsed.toolCalls?.length ? null : extractTextToolCalls(parsed.content)
       const usage = parsed.usage
       recordUsage(candidate.modelName, usage)
@@ -1173,7 +1187,9 @@ export async function* streamOpenAICompatible({
     })
     return
   }
-  const { url, init } = buildModelProviderRequest({ config, messages, stream: true, tools, toolChoice, profile })
+  const providerRequest = buildModelProviderRequest({ config, messages, stream: true, tools, toolChoice, profile })
+  const { url, init } = providerRequest
+  const providerAdapter = getNativeProviderRequestAdapter(providerRequest)
   const controller = new AbortController()
 
   let timedOutPhase = null
@@ -1221,7 +1237,7 @@ export async function* streamOpenAICompatible({
       throw error
     }
 
-    const jsonEvents = await readJsonModelResponseEvents(response, profile, { onFirstByte })
+    const jsonEvents = await readJsonModelResponseEvents(response, profile, { onFirstByte, providerRequest })
     if (jsonEvents) { yield* jsonEvents; return }
 
     const reader = response.body?.getReader()
@@ -1230,8 +1246,8 @@ export async function* streamOpenAICompatible({
     // ★ tool_call 增量合并:OpenAI 流式协议每个 chunk 给 tool_calls[i].function.arguments 的片段,需要按 index 累加
     const toolCallAcc = new Map() // index -> { id, name, arguments }
     const readyToolCallIndexes = new Set()
-    const nativeStreamState = isNativeProviderKind(profile.kind)
-      ? createNativeProviderStreamState(profile.kind)
+    const nativeStreamState = providerAdapter || isNativeProviderKind(profile.kind)
+      ? createNativeProviderStreamState(profile.kind, providerAdapter)
       : null
     const compatibleStreamState = createCompatibleModelStreamState()
     let finishReason = null
@@ -1455,7 +1471,11 @@ export async function handleModelProxyRequest(req, res) {
     })
     const requestConfig = resolveModelConfigForModel({ modelName: selectedModel, env: runtimeEnv })
     const requestProfile = profileForConfig(requestConfig, runtimeEnv)
-    if (!testMode && hasVisionContent(messages) && !requestProfile.supportsVision) {
+    const resolvedCandidates = resolveModelFailoverConfigs({ modelName: selectedModel, env: runtimeEnv })
+    const hasVisionCandidate = resolvedCandidates.some((candidate) => (
+      profileForConfig(candidate, runtimeEnv).supportsVision
+    ))
+    if (!testMode && hasVisionContent(messages) && !requestProfile.supportsVision && !hasVisionCandidate) {
       const sessionForAssist = session || (authToken(req) ? getSessionByToken(authToken(req)) : null)
       const userIdForAssist = sessionForAssist?.user_id || null
       if (hasVisionAssistConfigured({ userId: userIdForAssist, env: runtimeEnv })) {
@@ -1609,7 +1629,6 @@ export async function handleModelProxyRequest(req, res) {
     }
 
     const requiresVision = hasVisionContent(messages)
-    const resolvedCandidates = resolveModelFailoverConfigs({ modelName: selectedModel, env: runtimeEnv })
     const requestCandidates = resolvedCandidates.filter((candidate) =>
       !requiresVision || profileForConfig(candidate, runtimeEnv).supportsVision
     )
@@ -1812,12 +1831,13 @@ export async function handleModelProxyRequest(req, res) {
     const started = Date.now()
     const completion = await runWithProviderFailover(requestCandidates, async (candidate) => {
       const candidateProfile = profileForConfig(candidate, runtimeEnv)
-      const { url, init } = buildModelProviderRequest({
+      const providerRequest = buildModelProviderRequest({
         config: candidate,
         messages,
         env: runtimeEnv,
         profile: candidateProfile,
       })
+      const { url, init } = providerRequest
       // ★ 计时器移到 withRetry **内部**(fetchWithTimeout 里每次尝试各起一个)。
       // 原来 timer 起在外面,3 次重试共享同一个 60s 预算 —— 第 1 次尝试耗掉 55s,
       // 后两次尝试根本没机会跑完就被同一个 controller 掐了。
@@ -1840,7 +1860,7 @@ export async function handleModelProxyRequest(req, res) {
         }
         return parsed
       })
-      const parsed = parseModelProviderResponse(data, candidateProfile)
+      const parsed = parseModelProviderResponse(data, candidateProfile, { providerRequest })
       const usage = parsed.usage
       recordUsage(candidate.modelName, usage)
       if (!parsed.content) throw new Error('模型返回为空，请检查模型名称或端点响应格式。')

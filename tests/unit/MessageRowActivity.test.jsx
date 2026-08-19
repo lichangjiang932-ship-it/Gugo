@@ -402,7 +402,7 @@ test('an interrupted resumable turn hides retained output until the turn complet
   }
 })
 
-test('a failed turn never exposes retained artifacts as deliverables', async () => {
+test('a failed turn hides managed artifacts but exposes independently verified local modifications', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
@@ -413,6 +413,7 @@ test('a failed turn never exposes retained artifacts as deliverables', async () 
     timestamp: Date.now(),
     meta: {
       failed: true,
+      serverTurnId: 'turn-partial-delivery',
       serverArtifacts: [{
         id: 'delivered-html',
         filename: 'gallery.html',
@@ -420,6 +421,11 @@ test('a failed turn never exposes retained artifacts as deliverables', async () 
         url: '/api/artifacts/delivered-html',
       }],
       serverDeliveryArtifactIds: ['delivered-html'],
+      verifiedLocalFiles: [{
+        id: 'verified-gallery',
+        path: 'D:\\work\\gallery.html',
+        filename: 'gallery.html',
+      }],
     },
   }
 
@@ -431,17 +437,20 @@ test('a failed turn never exposes retained artifacts as deliverables', async () 
           rowKey={msg.id}
           generatingMessageId=""
           lang="en"
-          t={(key) => key === 'chatMessages.replyIncomplete'
-            ? 'Unverified files were not delivered'
+          t={(key) => key === 'chatMessages.replyPartiallyCompleted'
+            ? 'Artifact validation failed, but verified edits were retained'
             : key}
         />
       </I18nProvider>,
     ))
 
     const completionState = rootElement.querySelector('[data-testid="reply-completion-state"]')
-    assert.equal(completionState?.textContent, 'Unverified files were not delivered')
+    assert.equal(completionState?.textContent, 'Artifact validation failed, but verified edits were retained')
     assert.doesNotMatch(completionState?.parentElement?.className || '', /border|dashed/)
-    assert.equal(rootElement.querySelector('[data-testid="artifact-open-card"]'), null)
+    const cards = [...rootElement.querySelectorAll('[data-testid="artifact-open-card"]')]
+    assert.equal(cards.length, 1)
+    assert.match(cards[0].textContent, /gallery\.html/)
+    assert.doesNotMatch(cards[0].textContent, /delivered-html/)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

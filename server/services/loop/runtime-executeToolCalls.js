@@ -402,6 +402,7 @@ export async function executeToolCalls(s) {
                       forceApproval: hookRequiresApproval,
                       forceApprovalReason: hookApprovalReason,
                       preAuthorized: hookAuthorizedCall,
+                      taskGrants: s.job?.sourceType === 'cron' ? s.job.grants : [],
                       onPending: async (approval) => {
                         auditStage('approval_requested', { auditArgs: approval.args ?? effectiveArgs })
                         await i.markCall(call, {
@@ -426,6 +427,12 @@ export async function executeToolCalls(s) {
                   executionArgsUsed = executionArgs
                   auditStage(gate.approvalId ? 'approved' : 'auto_allowed', {
                     auditArgs: executionArgs,
+                    auditResult: gate.authorization
+                      ? {
+                          grantSource: gate.authorization.source || gate.authorization.kind || null,
+                          grantKind: gate.authorization.kind || null,
+                        }
+                      : null,
                   })
                   const finalValidationError = dynamicRegistrationValidationError(executionArgs)
                     || s.redundantImageGenerationGuard(name)

@@ -250,7 +250,12 @@ async function runAgentSession(job) {
     prompt,
     SAFE_DELIMITER_END,
   ].filter(Boolean).join('\n')
-  const backgroundJob = await runtime.createJob(finalPrompt, { userId: job.userId })
+  const backgroundJob = await runtime.createJob(finalPrompt, {
+    userId: job.userId,
+    sourceType: 'cron',
+    sourceId: job.id,
+    grants: job.grants,
+  })
   return { backgroundJobId: backgroundJob?.id || null, agentId }
 }
 

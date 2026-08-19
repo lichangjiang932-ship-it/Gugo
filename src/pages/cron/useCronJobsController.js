@@ -5,7 +5,18 @@ import { listPluginsApi } from '../../lib/pluginClient.js'
 
 export const DEFAULT_CRON_FORM = {
   agentId: '', title: '', kind: 'cron', scheduleType: 'every', scheduleValue: '3600000', execType: 'direct_notify',
-  prompt: '', notifyTitle: '', notifyBody: '', pluginId: '', actionId: '', pluginParams: '{}',
+  prompt: '', notifyTitle: '', notifyBody: '', pluginId: '', actionId: '', pluginParams: '{}', grantsJson: '[]',
+}
+
+export function parseCronGrantsJson(value, t = (key) => key) {
+  let grants
+  try {
+    grants = JSON.parse(String(value || '').trim() || '[]')
+  } catch (error) {
+    throw new Error(t('cron.invalidGrants'), { cause: error })
+  }
+  if (!Array.isArray(grants)) throw new Error(t('cron.invalidGrants'))
+  return grants
 }
 
 export default function useCronJobsController(t) {
@@ -55,7 +66,7 @@ export default function useCronJobsController(t) {
       await createCronJobApi({
         agentId: form.agentId || null, title: form.title, kind: form.kind,
         scheduleType: form.kind === 'heartbeat' ? 'every' : form.scheduleType, scheduleValue: form.scheduleValue,
-        execType: form.execType, execPayload: buildPayload(), enabled: true,
+        execType: form.execType, execPayload: buildPayload(), grants: parseCronGrantsJson(form.grantsJson, t), enabled: true,
       })
       setShowCreate(false)
       setForm(DEFAULT_CRON_FORM)

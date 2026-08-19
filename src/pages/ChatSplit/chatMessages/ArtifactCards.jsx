@@ -4,10 +4,12 @@ import { artifactHasInlineReference, artifactReferenceOpenPayload, buildServerAr
 import { mergeArtifactReferences, verifiedLocalFileOpenPayload } from '../../../lib/localFileReferences.js'
 import { withDownloadToken } from '../../../lib/jobClient.js'
 
-export function ArtifactReferenceLinks({ msg, preview, onOpen, referenceContent, verifiedLocalFileReferences = [] }) {
+export function ArtifactReferenceLinks({ deliveryArtifacts, msg, preview, onOpen, referenceContent, verifiedLocalFileReferences = [] }) {
   const source = String(msg?.meta?.artifactSource || msg?.content || '')
   const serverReferences = buildServerArtifactReferences({
-    artifacts: resolveDeliveryArtifacts(msg?.meta),
+    artifacts: Array.isArray(deliveryArtifacts)
+      ? deliveryArtifacts
+      : resolveDeliveryArtifacts(msg?.meta),
     content: source,
     messageId: msg?.id,
     preview,

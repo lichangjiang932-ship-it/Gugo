@@ -305,7 +305,7 @@ test('existing artifacts used as inputs unlock only the explicitly requested out
       specs: SERVER_TOOL_SPECS,
     }))
     for (const generator of ARTIFACT_GENERATOR_NAMES) {
-      assert.equal(visible.includes(generator), true, `${prompt}: ${generator}`)
+      assert.equal(visible.includes(generator), generator === expectedTool, `${prompt}: ${generator}`)
     }
     assert.ok(visible.includes('set_deliverables'), prompt)
   }
@@ -474,7 +474,7 @@ test('object-first attachment placement inherits the adjacent webpage revision c
     ]) {
       assert.ok(visible.includes(name), `${prompt}: ${name}`)
     }
-    assert.equal(visible.includes('generate_image'), true, prompt)
+    assert.equal(visible.includes('generate_image'), false, prompt)
   }
 
   for (const prompt of [
@@ -579,7 +579,7 @@ test('existing uploaded images route to the requested file generator instead of 
       specs: SERVER_TOOL_SPECS,
     }))
     for (const generator of ARTIFACT_GENERATOR_NAMES) {
-      assert.equal(visible.includes(generator), true, `${prompt}: ${generator}`)
+      assert.equal(visible.includes(generator), expected.includes(generator), `${prompt}: ${generator}`)
     }
     assert.ok(visible.includes('set_deliverables'), prompt)
   }
@@ -797,7 +797,7 @@ test('mixed local HTML and managed PDF expose only the PDF generator', () => {
     intentMode: 'execute',
     specs: SERVER_TOOL_SPECS,
   }))
-  assert.equal(names.includes('create_html_app'), true)
+  assert.equal(names.includes('create_html_app'), false)
   assert.equal(names.includes('create_pdf'), true)
   assert.equal(names.includes('set_deliverables'), true)
 })
@@ -865,7 +865,7 @@ test('workspace HTML targets use filesystem tools without a managed-artifact com
       runModel: async ({ messages, tools }) => {
         modelCalls += 1
         const names = tools.map((tool) => tool.function.name)
-        assert.equal(names.includes('create_html_app'), true, scenario.label)
+        assert.equal(names.includes('create_html_app'), false, scenario.label)
         assert.equal(
           messages.some((message) => String(message.content || '').includes('[PERSISTED ARTIFACT DELIVERY REQUIRED]')),
           false,
@@ -1908,7 +1908,11 @@ for (const format of [
           modelCalls += 1
           const visible = nameOf(tools)
           for (const generator of ARTIFACT_GENERATOR_NAMES) {
-            assert.equal(visible.includes(generator), true, `${format.tool} ${mode}: ${generator}`)
+            assert.equal(
+              visible.includes(generator),
+              generator === format.tool,
+              `${format.tool} ${mode}: ${generator}`,
+            )
           }
           assert.ok(visible.includes('set_deliverables'))
           if (modelCalls === 1) {
@@ -2413,7 +2417,7 @@ test('chat project-check turn does not execute artifact generators from an older
 
   assert.ok(visibleNames.includes('run_project_check'))
   for (const name of ARTIFACT_GENERATOR_NAMES) {
-    assert.equal(visibleNames.includes(name), true, `${name} missing from the stable chat catalog`)
+    assert.equal(visibleNames.includes(name), false, `${name} leaked from the older Word request`)
   }
   assert.deepEqual(executions, ['run_project_check'])
   assert.deepEqual(result.artifactIds, [])
@@ -2730,7 +2734,7 @@ test('an existing-image gallery request completes after the HTML artifact withou
   assert.deepEqual(result.deliveryArtifactIds, ['existing-image-gallery-html'])
   assert.equal(result.text, '图片画廊网页已生成。')
   assert.ok(visibleToolNames.every((names) => names.includes('create_html_app')))
-  assert.ok(visibleToolNames.every((names) => names.includes('generate_image')))
+  assert.ok(visibleToolNames.every((names) => !names.includes('generate_image')))
   assert.ok(modelMessages.every((message) => !message.includes('must successfully call: generate_image')))
 })
 
@@ -2809,7 +2813,11 @@ for (const scenario of [
         const visible = nameOf(tools)
         modelContexts.push(messages.map((message) => String(message.content || '')).join('\n'))
         for (const generator of ARTIFACT_GENERATOR_NAMES) {
-          assert.equal(visible.includes(generator), true, `${scenario.prompt}: ${generator}`)
+          assert.equal(
+            visible.includes(generator),
+            generator === scenario.tool,
+            `${scenario.prompt}: ${generator}`,
+          )
         }
         assert.ok(visible.includes('set_deliverables'))
         if (modelCalls === 1) {

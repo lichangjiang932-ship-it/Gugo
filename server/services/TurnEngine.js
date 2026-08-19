@@ -16,7 +16,14 @@ import {
   upsertMessage,
   upsertSession,
 } from './sessionStore.js'
-import { appendTurnEvent, getLastTurnEvent, listTurnEvents } from './turnEventStore.js'
+import {
+  appendTurnEvent,
+  appendTurnEvents,
+  getLastTurnEvent,
+  listTurnEvents,
+  recordTurnEventWriteFailure,
+} from './turnEventStore.js'
+import { createEventWriteBehind } from './eventWriteBehind.js'
 import { publishTurnActivity } from './turnActivityBus.js'
 import { dispatchHooks as dispatchHooksService } from './hooksService.js'
 import { getApprovalMode } from './approvalSettingsStore.js'
@@ -67,7 +74,7 @@ const TURN_RESOLUTION_MARKER = '[TURN_RESOLUTION:'
 const ATTACHMENT_CONTEXT_HEADROOM_TOKENS = 64
 const PUBLIC_TURN_FAILURE = '任务执行遇到问题，尚未完成。请重试；若仍失败，请检查模型配置和工具调用支持。'
 const PUBLIC_TURN_INTERRUPTED = '模型服务暂时中断。请重试，系统会继续处理尚未完成的任务。'
-const PUBLIC_TURN_INCOMPLETE = '任务未完成，未通过验证的文件不会显示或交付。请重试以继续。'
+const PUBLIC_TURN_INCOMPLETE = '任务未完成。已验证的本地修改会保留，未通过验证的产物不会交付。请重试以继续。'
 const PUBLIC_REASONING_RUNAWAY = '模型推理超过安全上限，任务已停止。请重试，或换用更适合执行工具任务的模型。'
 const INTERNAL_TERMINAL_FAILURE_PATTERNS = [
   /Model call failed\s*:/i,
@@ -599,6 +606,9 @@ export class TurnEngine {
     runModel = callStreamingModelWithTools,
     executeTool,
     appendEvent = appendTurnEvent,
+    appendEventBatch = null,
+    eventWriteBehind = null,
+    recordEventWriteFailure = recordTurnEventWriteFailure,
     publishActivity = publishTurnActivity,
     lastEvent = getLastTurnEvent,
     replayEvents = listTurnEvents,
@@ -639,6 +649,17 @@ export class TurnEngine {
     if (typeof readCheckpoint === 'function') runtimeCoreOptions.readCheckpoint = readCheckpoint
     if (typeof writeCheckpoint === 'function') runtimeCoreOptions.writeCheckpoint = writeCheckpoint
     const sharedRuntimeCore = runtimeCore || createTurnRuntimeCore(runtimeCoreOptions)
+    const defaultBatchAppender = appendEvent === appendTurnEvent
+      ? appendTurnEvents
+      : (entries) => Promise.all(entries.map((entry) => appendEvent(entry)))
+    const batchAppender = typeof appendEventBatch === 'function'
+      ? appendEventBatch
+      : defaultBatchAppender
+    const deferredEventWriter = eventWriteBehind || createEventWriteBehind({
+      writeBatch: batchAppender,
+      writeBatchSync: batchAppender === appendTurnEvents ? appendTurnEvents : null,
+      recordFailure: recordEventWriteFailure,
+    })
     this.deps = {
       runLoop, runModel, executeTool, appendEvent, publishActivity, lastEvent, replayEvents,
       readSession, claimSession, writeSession, readMessages, readPreviousUserMessage,
@@ -648,6 +669,7 @@ export class TurnEngine {
       removeMessage, executionLeases, runtimeCore: sharedRuntimeCore,
       enqueueSteering, claimSteering, acknowledgeSteering, acknowledgeAppliedSteering,
       releaseSteering, releaseStaleSteering, dispatchHooks,
+      eventWriteBehind: deferredEventWriter,
     }
     this.active = new Map()
     this.startingSessions = new Map()
@@ -1054,7 +1076,14 @@ export class TurnEngine {
           payload, createdAt: this.deps.now(),
         })
         await beforeAppend?.(event)
-        const stored = await this.deps.appendEvent({ userId, event, checkpointState })
+        let stored
+        if (STREAM_DELTA_TYPES.includes(type) && checkpointState === null) {
+          const queued = this.deps.eventWriteBehind.enqueue({ userId, event, checkpointState })
+          stored = queued?.event || event
+        } else {
+          await this.deps.eventWriteBehind.flush()
+          stored = await this.deps.appendEvent({ userId, event, checkpointState })
+        }
         nextSequence += 1
         return stored
       })
@@ -1684,7 +1713,10 @@ export class TurnEngine {
           hint: '请重试本任务；系统会继续处理尚未完成的步骤。',
         }, { retryable: !nonRetryable })
         const artifactIds = normalizeArtifactIds(result.artifactIds ?? checkpointArtifactIds)
-        const deliveryArtifactIds = []
+        // An incomplete loop may still return an explicit, already-validated
+        // partial selection. Never revive an implicit checkpoint selection:
+        // only the terminal result is authoritative for partial delivery.
+        const deliveryArtifactIds = optionalDeliveryArtifactIds(result, [])
         const iterations = Math.max(0, Number(result.iterations) || checkpointIterations)
         const verifiedLocalFiles = verifiedLocalFilesAt()
         persistTurnEvidence({
@@ -1854,7 +1886,7 @@ export class TurnEngine {
         failure.message,
       )
       const artifactIds = normalizeArtifactIds(error?.artifactIds ?? checkpointArtifactIds)
-      const deliveryArtifactIds = []
+      const deliveryArtifactIds = optionalDeliveryArtifactIds(error, [])
       const iterations = Math.max(0, Number(error?.iterations) || checkpointIterations)
       const verifiedLocalFiles = verifiedLocalFilesAt()
       try {

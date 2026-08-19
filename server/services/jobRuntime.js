@@ -39,15 +39,15 @@ import {
   buildPriorStepsContext,
   buildVerificationPrompt,
   deriveJobProgress,
-  findNextRunnableStep, normalizeJobCreationSteps,
+  findNextRunnableStep,
   normalizeStructuredPlanSteps,
   resolveWorkflowState,
-  shouldCompileDocx, stepRequiresPlanApproval,
-  withStableStepIds,
+  shouldCompileDocx, stepRequiresPlanApproval, withStableStepIds,
 } from './jobWorkflow.js'
 import { createJobRuntimeScheduler } from './jobRuntimeScheduler.js'
 import { createJobExecutionLeaseCoordinator } from './jobExecutionLeaseRuntime.js'
 import { createJobRuntimeCore } from './runtimeCore.js'
+import { persistPlannedJob } from './jobCreation.js'
 import { releaseJobBudget } from '../utils/jobBudget.js'
 import { userCancellationError } from '../utils/toolCancellation.js'
 import { resumeJobDirectoryAuthorization } from './jobDirectoryAuthorization.js'
@@ -574,28 +574,24 @@ export class JobRuntime {
     return this.shutdownPromise
   }
 
-  async createJob(prompt, { userId, requirePlanApproval = false, modelName } = {}) {
+  async createJob(prompt, options = {}) {
+    const { userId, requirePlanApproval = false, modelName, sourceType = null, sourceId = null, grants = [] } = options
     if (!userId) throw new Error('createJob requires userId')
     const selectedModel = String(modelName || '').trim().slice(0, 512) || undefined
     const plan = await this.planner(prompt, { userId, modelName: selectedModel })
     const id = newId('job')
-    const normalizedSteps = normalizeJobCreationSteps(plan.steps, { requirePlanApproval })
-    persistJob({
+    const event = persistPlannedJob({
       id,
       userId,
-      title: plan.title,
-      prompt: plan.prompt || String(prompt || '').trim(),
+      prompt,
+      plan,
       modelName: selectedModel,
-      status: 'queued',
+      requirePlanApproval,
+      sourceType,
+      sourceId,
+      grants,
     })
     this.jobUserCache.set(id, userId)
-    appendJobSteps(id, withStableStepIds(id, normalizedSteps))
-    const event = appendJobEvent({
-      jobId: id,
-      type: 'created',
-      message: '任务已创建',
-      payload: { stepCount: normalizedSteps.length, requirePlanApproval: requirePlanApproval === true },
-    })
     this.emit(event)
     return this.getJob(id, { userId })
   }

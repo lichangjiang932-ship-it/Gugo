@@ -4,10 +4,13 @@ import { getTurnEngine } from '../services/TurnEngine.js'
 import {
   archiveSession,
   deleteSession,
+  forkSession,
+  getSessionBranches,
   getSessionSnapshot,
   listSessions,
   pinSession,
   replaceSessionMessages,
+  SessionBranchDepthError,
   SessionMutationValidationError,
   SessionRevisionConflictError,
   unarchiveSession,
@@ -30,6 +33,15 @@ function sendSessionError(res, error) {
         code: error.code,
         message: error.message,
         currentRevision: error.currentRevision,
+      },
+    })
+  }
+  if (error instanceof SessionBranchDepthError) {
+    return sendJson(res, 409, {
+      error: {
+        code: error.code,
+        message: error.message,
+        maxDepth: error.maxDepth,
       },
     })
   }
@@ -82,6 +94,32 @@ export async function handleSessionRequest(req, res, engine = getTurnEngine()) {
     })
     return snapshot
       ? sendJson(res, 200, { snapshot })
+      : sendJson(res, 404, { error: { code: 'SESSION_NOT_FOUND', message: 'session not found' } })
+  }
+
+  if (req.method === 'GET' && parts[0] === 'api' && parts[1] === 'sessions' && parts[2]
+    && parts[3] === 'branches' && parts.length === 4) {
+    const result = getSessionBranches({
+      userId,
+      sessionId: decodeURIComponent(parts[2]),
+    })
+    return result
+      ? sendJson(res, 200, result)
+      : sendJson(res, 404, { error: { code: 'SESSION_NOT_FOUND', message: 'session not found' } })
+  }
+
+  if (req.method === 'POST' && parts[0] === 'api' && parts[1] === 'sessions' && parts[2]
+    && parts[3] === 'fork' && parts.length === 4) {
+    const sessionId = decodeURIComponent(parts[2])
+    const body = await readJson(req, { maxBytes: 64 * 1024 })
+    if (engine.hasActiveSession({ userId, sessionId })) {
+      return sendJson(res, 409, {
+        error: { code: 'SESSION_ACTIVE', message: 'session has an active turn' },
+      })
+    }
+    const result = forkSession({ userId, sessionId, label: body.label })
+    return result
+      ? sendJson(res, 201, { ok: true, ...result })
       : sendJson(res, 404, { error: { code: 'SESSION_NOT_FOUND', message: 'session not found' } })
   }
 

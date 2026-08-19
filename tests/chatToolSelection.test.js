@@ -34,11 +34,14 @@ const READ_ONLY_NAMES = new Set([
 const ALWAYS_VISIBLE_LOCAL_EXECUTION_NAMES = new Set([
   'write_file', 'edit_file', 'apply_patch', 'bash_exec', 'run_project_check',
 ])
-const SPECS = TOOL_NAMES.map(spec)
 const ARTIFACT_NAMES = new Set([
   'create_pptx', 'create_docx', 'create_xlsx', 'create_html_app', 'generate_image',
 ])
-const STABLE_CHAT_NAMES = sorted([...TOOL_NAMES, 'set_deliverables'])
+const SPECS = TOOL_NAMES.map(spec)
+const STABLE_CHAT_NAMES = sorted([
+  ...TOOL_NAMES.filter((name) => !ARTIFACT_NAMES.has(name)),
+  'set_deliverables',
+])
 const EXECUTE_NAMES = STABLE_CHAT_NAMES
 const LOCAL_EXECUTE_NAMES = STABLE_CHAT_NAMES
 const LOCAL_REWIND_EXECUTE_NAMES = STABLE_CHAT_NAMES
@@ -142,7 +145,7 @@ test('object-first webpage transformations retain write tools', () => {
   for (const name of ['write_file', 'edit_file', 'apply_patch', 'bash_exec']) {
     assert.ok(selected.includes(name), name)
   }
-  assert.equal(selected.includes('generate_image'), true)
+  assert.equal(selected.includes('generate_image'), false)
 })
 
 test('first-turn visual edits retain file mutation tools before any capability challenge', () => {
@@ -259,7 +262,7 @@ test('an explicit Chinese repair delegation retains the coding execution toolcha
   }
 })
 
-test('explicit execute mode retains the complete stable catalog', () => {
+test('explicit execute mode retains the stable non-generator catalog', () => {
   const selected = namesOf(selectChat({
     prompt: 'Continue with the requested work.',
     intentMode: 'execute',
@@ -270,7 +273,7 @@ test('explicit execute mode retains the complete stable catalog', () => {
   ]) {
     assert.ok(selected.includes(name), name)
   }
-  for (const name of ARTIFACT_NAMES) assert.ok(selected.includes(name), name)
+  for (const name of ARTIFACT_NAMES) assert.equal(selected.includes(name), false, name)
   assert.deepEqual(selected, EXECUTE_NAMES)
 })
 
@@ -307,14 +310,14 @@ test('explicit answer mode suppresses the execution obligation but retains local
     prompt: '/ppt 生成一份发布计划',
     skillId: 'ppt',
     intentMode: 'answer',
-  })), ANSWER_NAMES)
+  })), sorted([...ANSWER_NAMES, 'create_pptx']))
 })
 
-test('artifact skill contracts do not prune unrelated registered generators', () => {
+test('artifact skill contracts expose only their authorized generator', () => {
   const selected = namesOf(selectChat({ prompt: '/ppt Q3 strategy', skillId: 'ppt' }))
-  assert.deepEqual(selected, STABLE_CHAT_NAMES)
+  assert.deepEqual(selected, sorted([...STABLE_CHAT_NAMES, 'create_pptx']))
   assert.ok(selected.includes('create_pptx'))
-  assert.ok(selected.includes('create_docx'))
+  assert.equal(selected.includes('create_docx'), false)
 })
 
 test('managed attachment questions retain local tools without mounting an unrequested generator', () => {
@@ -324,12 +327,12 @@ test('managed attachment questions retain local tools without mounting an unrequ
   assert.deepEqual(summarize, ANSWER_NAMES)
   assert.ok(summarize.includes('read_file'))
   assert.ok(summarize.includes('write_file'))
-  assert.ok(summarize.includes('create_docx'))
+  assert.equal(summarize.includes('create_docx'), false)
 
   const deliver = namesOf(selectChat({
     prompt: '[GUGO_MANAGED_ATTACHMENT id="a1"]\n把附件整理好并导出一份可编辑报告',
   }))
-  assert.deepEqual(deliver, STABLE_CHAT_NAMES)
+  assert.deepEqual(deliver, sorted([...STABLE_CHAT_NAMES, 'create_docx']))
   assert.ok(deliver.includes('create_docx'))
 })
 

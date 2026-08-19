@@ -189,6 +189,59 @@ export async function loadArtifactPreviewDocument(url, {
   }
 }
 
+function artifactHtmlPreviewSessionRequestUrl(value) {
+  const raw = String(value || '').trim()
+  if (!raw) throw new Error('artifact URL is required')
+  const baseOrigin = globalThis.location?.origin || 'http://localhost'
+  const parsed = new URL(raw, baseOrigin)
+  if (parsed.origin !== baseOrigin || !/^\/api\/artifacts\/[^/]+\/?$/.test(parsed.pathname)) {
+    throw new Error('artifact HTML preview URL must be same-origin')
+  }
+  parsed.searchParams.delete('preview')
+  parsed.searchParams.delete('token')
+  const artifactPath = parsed.pathname.replace(/\/$/, '')
+  return `${artifactPath}/preview-session${parsed.search}`
+}
+
+export async function createArtifactHtmlPreviewSession(url, {
+  fetchImpl = fetch,
+  signal,
+} = {}) {
+  const response = await fetchImpl(artifactHtmlPreviewSessionRequestUrl(url), {
+    method: 'POST',
+    headers: authHeaders(),
+    credentials: 'same-origin',
+    signal,
+  })
+  if (!response.ok) {
+    throw await structuredPreviewSessionError(response, 'artifact HTML preview session request failed')
+  }
+  const payload = await response.json()
+  const baseOrigin = globalThis.location?.origin || 'http://localhost'
+  const previewUrl = new URL(String(payload?.url || ''), baseOrigin)
+  if (previewUrl.origin !== baseOrigin || !/^\/api\/artifacts\/previews\/[^/]+\/.+/.test(previewUrl.pathname)) {
+    throw new Error('artifact HTML preview session returned an invalid URL')
+  }
+  return `${previewUrl.pathname}${previewUrl.search}`
+}
+
+export async function revokeArtifactHtmlPreviewSession(url, { fetchImpl = fetch } = {}) {
+  const raw = String(url || '').trim()
+  const baseOrigin = globalThis.location?.origin || 'http://localhost'
+  const parsed = new URL(raw, baseOrigin)
+  const match = parsed.pathname.match(/^\/api\/artifacts\/previews\/([^/]+)(?:\/.*)?$/)
+  if (parsed.origin !== baseOrigin || !match) {
+    throw new Error('artifact HTML preview URL must be same-origin')
+  }
+  const response = await fetchImpl(`/api/artifacts/previews/${match[1]}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+    credentials: 'same-origin',
+    keepalive: true,
+  })
+  if (!response.ok) throw new Error(`artifact HTML preview revoke failed: ${response.status}`)
+}
+
 function waitForPreviewRetry(delayMs, signal) {
   if (signal?.aborted) return Promise.reject(signal.reason || new DOMException('Aborted', 'AbortError'))
   return new Promise((resolve, reject) => {
@@ -204,7 +257,7 @@ function waitForPreviewRetry(delayMs, signal) {
   })
 }
 
-async function structuredPreviewSessionError(response) {
+async function structuredPreviewSessionError(response, fallbackLabel = 'local HTML preview session request failed') {
   const status = Number(response?.status) || 0
   let payload = null
   try {
@@ -217,7 +270,7 @@ async function structuredPreviewSessionError(response) {
     : payload && typeof payload === 'object' ? payload : null
   const error = new Error(
     String(details?.message || '').trim()
-      || `local HTML preview session request failed: ${status}`,
+      || `${fallbackLabel}: ${status}`,
   )
   error.statusCode = status
   error.code = String(details?.code || '').trim() || 'LOCAL_HTML_PREVIEW_SESSION_FAILED'

@@ -4,6 +4,7 @@ export function createPluginContext({
   track,
   registerTool,
   registerEvent,
+  registerModelProvider,
   provideService,
   getService,
   hasService,
@@ -26,6 +27,13 @@ export function createPluginContext({
       on(event, listener) {
         return registerEvent(event, listener)
       },
+    }),
+    models: Object.freeze({
+      providers: Object.freeze({
+        register(kind, adapter) {
+          return registerModelProvider(kind, adapter)
+        },
+      }),
     }),
     services: Object.freeze({
       provide(name, value) {

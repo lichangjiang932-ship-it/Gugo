@@ -3,10 +3,15 @@ import fs from 'node:fs'
 import test from 'node:test'
 import { readSourceTree } from '../sourceTree.js'
 
-const composerSource = readSourceTree('../src/pages/ChatSplit/chatComposer/') + fs.readFileSync(
+const chatComposerSource = fs.readFileSync(
   new URL('../../src/pages/ChatSplit/ChatComposer.jsx', import.meta.url),
   'utf8',
 )
+const chatPageSource = fs.readFileSync(
+  new URL('../../src/pages/ChatSplit/index.jsx', import.meta.url),
+  'utf8',
+)
+const composerSource = readSourceTree('../src/pages/ChatSplit/chatComposer/') + chatComposerSource
 
 test('chat composer keeps only essential input controls', () => {
   assert.match(composerSource, /<textarea/)
@@ -20,4 +25,14 @@ test('chat composer keeps only essential input controls', () => {
     composerSource,
     /LocalFilesModal|local-files-chat-action|QUICK_SKILLS|SlashAutocomplete|onContextClick/,
   )
+})
+
+test('chat composer keeps keyboard history without rendering shortcut hints in the input', () => {
+  assert.doesNotMatch(
+    chatComposerSource,
+    /inputHistoryNavigation|historyHint|sendHint|<kbd|↑\s*\/?\s*↓|查看历史|Enter\s*(?:发送|Send)/i,
+  )
+  assert.match(chatComposerSource, /handleKeyDown\(e\)/)
+  assert.match(chatPageSource, /if \(navigateInputHistory\(event\)\) return/)
+  assert.match(chatPageSource, /event\.key === 'Enter' && !event\.shiftKey/)
 })

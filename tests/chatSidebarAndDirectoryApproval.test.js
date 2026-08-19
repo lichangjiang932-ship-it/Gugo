@@ -74,6 +74,23 @@ test('right workbench toggle leaves the navigation rail mounted', () => {
   assert.match(chat, /writeWorkbenchOpen\(workbenchOpen\)/)
 })
 
+test('narrow chat layout lets the conversation and workbench shrink without horizontal overflow', () => {
+  const view = read('../src/pages/ChatSplit/ChatSplitView.jsx')
+  const workbench = read('../src/pages/ChatSplit/RightWorkbench.jsx')
+  const rail = read('../src/components/LeftRail.jsx')
+
+  assert.match(view, /flex min-w-0 flex-\[1_1_640px\] flex-col overflow-hidden/)
+  assert.equal(
+    (view.match(/max-w-\[min\(872px,calc\(100vw-360px\)\)\]/g) || []).length,
+    2,
+  )
+  assert.doesNotMatch(view, /max-w-\[872px\]/)
+  assert.match(workbench, /h-full min-w-0 max-w-\[calc\(100vw-60px\)\] shrink flex-col overflow-hidden/)
+  assert.doesNotMatch(workbench, /h-full shrink-0 flex-col/)
+  assert.match(rail, /NARROW_RAIL_QUERY = '\(max-width: 959px\)'/)
+  assert.match(rail, /w-\[min\(320px,calc\(100vw-60px\)\)\] min-w-0 max-w-\[320px\]/)
+})
+
 test('right workbench exposes files, side chat, browser, and terminal tools', () => {
   const workbench = read('../src/pages/ChatSplit/RightWorkbench.jsx')
 
@@ -90,7 +107,8 @@ test('right workbench exposes files, side chat, browser, and terminal tools', ()
   assert.match(workbench, /data-testid="workbench-file-count"/)
   assert.match(workbench, /data-testid="workbench-resize-handle"/)
   assert.match(workbench, /WIDTH_STORAGE_KEY/)
-  assert.match(workbench, /const deliveryArtifacts = resolveDeliveryArtifacts\(message\?\.meta\)/)
+  assert.match(workbench, /const deliveryArtifacts = message\?\.meta\?\.failed[\s\S]{0,80}\? \[\][\s\S]{0,80}: resolveDeliveryArtifacts\(message\?\.meta\)/)
+  assert.ok(workbench.indexOf('const verifiedLocalFiles = buildVerifiedLocalFileReferences({') > workbench.indexOf('const deliveryArtifacts = message?.meta?.failed'))
   assert.doesNotMatch(workbench, /artifactSource \|\| message\?\.content/)
 })
 

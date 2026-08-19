@@ -147,10 +147,10 @@ export default function ChatSplitView({
   const toggleContextPanel = () => setShowContextPanel((current) => !current)
 
   return (
-    <div className="h-screen flex bg-paper overflow-hidden">
+    <div className="flex h-screen min-w-0 overflow-hidden bg-paper">
       <LeftRail />
 
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex min-w-0 flex-[1_1_640px] flex-col overflow-hidden">
         <div className="flex h-12 shrink-0 items-center justify-end border-b border-ink/10 px-3">
           <button
             type="button"
@@ -214,7 +214,7 @@ export default function ChatSplitView({
         )}
 
         {toolApproval.open && (
-          <div className="mx-auto w-full max-w-[872px] px-4 pb-2">
+          <div className="mx-auto w-full min-w-0 max-w-[min(872px,calc(100vw-360px))] px-4 pb-2">
             <ToolApprovalCard
               open={toolApproval.open}
               request={toolApproval.request}
@@ -225,7 +225,7 @@ export default function ChatSplitView({
         )}
 
         {resumeAvailable && !isGenerating && (
-          <div className="mx-auto w-full max-w-[872px] px-4 pb-1.5">
+          <div className="mx-auto w-full min-w-0 max-w-[min(872px,calc(100vw-360px))] px-4 pb-1.5">
             <div className="flex items-center gap-2 text-xs border border-amber-500/40 bg-amber-500/5 rounded-md px-3 py-2">
               <span className="flex-1 text-ink-soft">{t('toast.chatResumeHint')}</span>
               <button type="button" onClick={onResume} className="h-7 px-3 rounded-md bg-ember text-paper">

@@ -32,6 +32,45 @@ export function reduceSessionLifecycleState(state, action) {
       }
     }
 
+    case 'ADD_SERVER_FORK': {
+      const metadata = action.payload?.session
+      const id = String(metadata?.id || '').trim()
+      if (!id) return state
+      const parent = state.sessions.find((session) => session.id === metadata.parentSessionId)
+      const suppliedMessages = Array.isArray(action.payload?.messages)
+        ? action.payload.messages
+        : []
+      const revision = Number(metadata.revision)
+      const forkedSession = {
+        id,
+        title: metadata.title || parent?.title || '\u65b0\u5bf9\u8bdd',
+        messages: suppliedMessages,
+        createdAt: Number(metadata.createdAt) || Date.now(),
+        updatedAt: Number(metadata.updatedAt) || Number(metadata.createdAt) || Date.now(),
+        lastViewedAt: metadata.lastViewedAt ?? null,
+        archivedAt: metadata.archivedAt ?? null,
+        pinnedAt: metadata.pinnedAt ?? null,
+        parentSessionId: metadata.parentSessionId || null,
+        branchLabel: metadata.branchLabel || null,
+        forkedAt: metadata.forkedAt ?? null,
+        serverRevision: Number.isInteger(revision) && revision >= 0 ? revision : 0,
+        agentId: parent?.agentId || null,
+        ...(parent?.modelName ? { modelName: parent.modelName } : {}),
+      }
+      const existingIndex = state.sessions.findIndex((session) => session.id === id)
+      if (existingIndex >= 0) {
+        return {
+          ...state,
+          sessions: state.sessions.map((session, index) => (
+            index === existingIndex
+              ? { ...session, ...forkedSession, messages: suppliedMessages.length ? suppliedMessages : session.messages }
+              : session
+          )),
+        }
+      }
+      return { ...state, sessions: [forkedSession, ...state.sessions] }
+    }
+
     case 'SET_SESSION_AGENT': {
       const { sessionId, agentId } = action.payload || {}
       if (!sessionId) return state

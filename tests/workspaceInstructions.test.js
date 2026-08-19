@@ -22,6 +22,21 @@ test('workspace instructions are opt-in with file access and prefer AGENTS.md', 
   }
 })
 
+test('workspace instructions fall back to README.md when no explicit agent file exists', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-instructions-'))
+  try {
+    fs.writeFileSync(path.join(root, 'README.md'), '# Demo\n\nRun the focused tests before release.')
+    const result = readWorkspaceInstructions({
+      env: { WORKSPACE_ROOT: root, WORKSPACE_FS_ENABLED: '1' },
+    })
+    assert.match(result.text, /Source: README\.md/)
+    assert.match(result.text, /Run the focused tests before release\./)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+    clearWorkspaceInstructionsCache()
+  }
+})
+
 test('workspace instruction cache invalidates when the file changes', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'gugo-instructions-'))
   const filepath = path.join(root, 'AGENTS.md')

@@ -140,6 +140,7 @@ export const BUILTIN_TOOL_SCHEMA_CATALOG = {
         properties: {
           command: { type: 'string' },
           cwd: { type: 'string', description: 'Optional workspace-relative or authorized absolute working directory.' },
+          session: { type: 'string', enum: ['new', 'reuse'], default: 'new', description: 'Use reuse to keep cwd, environment variables, and virtual-environment activation across calls for the same user and authorized root.' },
           timeout_ms: { type: 'integer' },
           expected_outputs: { type: 'array', items: { type: 'string' }, description: 'Files this command is expected to create or modify; omit for read-only commands.' },
         },
@@ -514,12 +515,14 @@ const RISK_LEVEL_BY_CATEGORY = Object.freeze({
 
 function builtinMetadata(category, isConcurrencySafe, overrides = {}) {
   const requiredApproval = overrides.requiredApproval ?? category !== 'read'
+  const executionMode = category === 'read' && isConcurrencySafe ? 'parallel' : 'exclusive'
   return Object.freeze({
     riskLevel: RISK_LEVEL_BY_CATEGORY[category],
     requiredApproval,
     requiresApproval: requiredApproval,
     category,
     isConcurrencySafe,
+    executionMode,
     isDestructive: category !== 'read',
     ...overrides,
   })

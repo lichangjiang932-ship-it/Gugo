@@ -2,9 +2,14 @@ import { useEffect, useMemo, useState } from 'react'
 import { AlertCircle, FileText, LoaderCircle, RefreshCw } from 'lucide-react'
 import MarkdownRenderer from '../../../components/MarkdownRenderer.jsx'
 import { classifyDirectFile, loadDirectFilePreview } from '../../../lib/directFilePreview.js'
-import { createLocalHtmlPreviewSession, loadArtifactPreviewDocument, revokeLocalHtmlPreviewSession } from '../../../lib/jobClient.js'
-import { applyHtmlArtifactDocumentPolicy } from '../../../../shared/htmlArtifactPolicy.js'
+import {
+  createArtifactHtmlPreviewSession,
+  createLocalHtmlPreviewSession,
+  revokeArtifactHtmlPreviewSession,
+  revokeLocalHtmlPreviewSession,
+} from '../../../lib/jobClient.js'
 import { DocxPreview, PptxPreview, SourceView, XlsxPreview } from './ArtifactRenderers.jsx'
+import { previewRendererRegistry } from './previewRendererRegistry.js'
 
 export default function DirectFilePreview({ file, url, t }) {
   const filename = String(file?.filename || '')
@@ -13,7 +18,8 @@ export default function DirectFilePreview({ file, url, t }) {
   const mimeType = String(file?.mimeType || '')
   const previewFile = useMemo(() => ({ filename, title, type, mimeType }), [filename, mimeType, title, type])
   const kind = classifyDirectFile(previewFile)
-  const needsFetch = !['pdf', 'image', 'audio', 'video', 'html', 'unsupported'].includes(kind)
+  const initialRenderer = previewRendererRegistry.resolve(kind) || previewRendererRegistry.resolve('unsupported')
+  const needsFetch = initialRenderer?.needsFetch === true
   const requestKey = `${kind}:${url}:${filename}:${mimeType}`
   const [loadState, setLoadState] = useState(() => ({ key: '', preview: null, error: '' }))
 
@@ -39,14 +45,44 @@ export default function DirectFilePreview({ file, url, t }) {
 
   if (loading) return <PreviewStatus icon={<LoaderCircle className="h-6 w-6 animate-spin" />} text={t('chatPreview.loadingFile')} />
   if (error) return <PreviewStatus icon={<AlertCircle className="h-6 w-6" />} text={t('chatPreview.previewFailed')} detail={error} />
-  if (['image', 'pdf', 'audio', 'video'].includes(preview.kind)) return <NativeFilePreview key={`${preview.kind}:${url}`} kind={preview.kind} file={file} url={url} t={t} />
-  if (preview.kind === 'html') return <InteractiveHtmlFilePreview key={`html:${url}`} file={file} url={url} t={t} />
-  if (preview.kind === 'docx') return <DocxPreview blocks={preview.blocks || []} title={preview.title} />
-  if (preview.kind === 'pptx') return <PptxPreview content={preview.content || ''} />
-  if (preview.kind === 'xlsx') return <WorkbookPreview sheets={preview.sheets || []} />
-  if (preview.kind === 'csv') return <XlsxPreview rows={preview.rows || []} />
-  if (preview.kind === 'markdown') return <div className="h-full overflow-auto bg-paper px-6 py-5"><MarkdownRenderer>{preview.text}</MarkdownRenderer></div>
-  if (['json', 'xml', 'code', 'text'].includes(preview.kind)) return <SourceView content={preview.text || ''} />
+  const descriptor = previewRendererRegistry.resolve(preview?.kind) || previewRendererRegistry.resolve('unsupported')
+  const Renderer = descriptor.component
+  return <Renderer preview={preview} file={file} url={url} t={t} />
+}
+
+function NativePreviewRenderer({ file, preview, t, url }) {
+  return <NativeFilePreview key={`${preview.kind}:${url}`} kind={preview.kind} file={file} url={url} t={t} />
+}
+
+function HtmlPreviewRenderer({ file, t, url }) {
+  return <InteractiveHtmlFilePreview key={`html:${url}`} file={file} url={url} t={t} />
+}
+
+function DocxFileRenderer({ preview }) {
+  return <DocxPreview blocks={preview.blocks || []} title={preview.title} />
+}
+
+function PptxFileRenderer({ preview }) {
+  return <PptxPreview content={preview.content || ''} />
+}
+
+function WorkbookFileRenderer({ preview }) {
+  return <WorkbookPreview sheets={preview.sheets || []} />
+}
+
+function CsvFileRenderer({ preview }) {
+  return <XlsxPreview rows={preview.rows || []} />
+}
+
+function MarkdownFileRenderer({ preview }) {
+  return <div className="h-full overflow-auto bg-paper px-6 py-5"><MarkdownRenderer>{preview.text}</MarkdownRenderer></div>
+}
+
+function SourceFileRenderer({ preview }) {
+  return <SourceView content={preview.text || ''} />
+}
+
+function UnsupportedFileRenderer({ file, t }) {
   return <PreviewStatus icon={<FileText className="h-6 w-6" />} text={file.filename || file.title || 'artifact'} detail={t('chatPreview.unsupportedHint')} />
 }
 
@@ -91,6 +127,10 @@ function isVerifiedLocalFileUrl(url) {
 function VerifiedLocalHtmlPreview({ file, t, url }) {
   const [state, setState] = useState({ url: '', error: null })
   const [retryVersion, setRetryVersion] = useState(0)
+  const retry = () => {
+    setState({ url: '', error: null })
+    setRetryVersion((value) => value + 1)
+  }
   useEffect(() => {
     const controller = new AbortController()
     let disposed = false
@@ -139,73 +179,123 @@ function VerifiedLocalHtmlPreview({ file, t, url }) {
       text={t('chatPreview.previewFailed')}
       detail={serviceUnavailable ? t(detailKey) : (structuredDetail || t(detailKey))}
       errorCode={state.error.code}
-      action={(
-        <button
-          type="button"
-          onClick={() => setRetryVersion((value) => value + 1)}
-          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-ink/10 bg-paper px-3 text-xs font-medium text-ink-soft hover:bg-paper-2 hover:text-ink"
-        >
-          <RefreshCw className="h-3.5 w-3.5" />
-          {t('chatPreview.retryPreview')}
-        </button>
-      )}
+      action={<RetryPreviewButton onClick={retry} t={t} />}
     />
   }
   if (!state.url) return <PreviewStatus icon={<LoaderCircle className="h-6 w-6 animate-spin" />} text={t('chatPreview.loadingFile')} />
-  return <DirectHtmlUrlPreview file={file} t={t} url={state.url} />
+  return <DirectHtmlUrlPreview file={file} t={t} url={state.url} onRetry={retry} />
 }
 
 function ManagedHtmlArtifactPreview({ file, t, url }) {
-  const [state, setState] = useState({ html: '', error: '' })
+  const [state, setState] = useState({ url: '', error: null })
+  const [retryVersion, setRetryVersion] = useState(0)
   useEffect(() => {
     const controller = new AbortController()
-    let objectUrls = []
-    loadArtifactPreviewDocument(url, { signal: controller.signal }).then((document) => {
-      if (controller.signal.aborted) {
-        for (const objectUrl of document.objectUrls) URL.revokeObjectURL?.(objectUrl)
+    let disposed = false
+    let activePreviewUrl = ''
+    createArtifactHtmlPreviewSession(url, { signal: controller.signal }).then((previewUrl) => {
+      activePreviewUrl = previewUrl
+      if (disposed) {
+        void revokeArtifactHtmlPreviewSession(previewUrl).catch(() => {})
         return
       }
-      objectUrls = document.objectUrls
-      setState({ html: applyHtmlArtifactDocumentPolicy(document.html), error: '' })
+      setState({ url: previewUrl, error: null })
     }).catch((cause) => {
-      if (!controller.signal.aborted) setState({ html: '', error: cause?.message || String(cause) })
+      if (!disposed && cause?.name !== 'AbortError') {
+        setState({
+          url: '',
+          error: {
+            code: String(cause?.code || 'ARTIFACT_HTML_PREVIEW_SESSION_FAILED'),
+            message: String(cause?.message || cause || ''),
+            hint: String(cause?.hint || ''),
+          },
+        })
+      }
     })
     return () => {
+      disposed = true
       controller.abort()
-      for (const objectUrl of objectUrls) URL.revokeObjectURL?.(objectUrl)
+      if (activePreviewUrl) void revokeArtifactHtmlPreviewSession(activePreviewUrl).catch(() => {})
     }
-  }, [url])
-  return (
-    <div className="relative h-full min-h-0 bg-white">
-      {state.html && <iframe
-        srcDoc={state.html}
-        title={file.filename || file.title || t('chatPreview.htmlTitle')}
-        sandbox="allow-scripts allow-forms"
-        referrerPolicy="no-referrer"
-        className="block h-full w-full border-0 bg-white"
-      />}
-      {!state.html && !state.error && <div className="absolute inset-0 flex items-center justify-center bg-paper-2/90"><PreviewStatus icon={<LoaderCircle className="h-6 w-6 animate-spin" />} text={t('chatPreview.loadingFile')} /></div>}
-      {state.error && <PreviewStatus icon={<AlertCircle className="h-6 w-6" />} text={t('chatPreview.previewFailed')} detail={state.error} />}
-    </div>
-  )
+  }, [retryVersion, url])
+
+  const retry = () => {
+    setState({ url: '', error: null })
+    setRetryVersion((value) => value + 1)
+  }
+  if (state.error) {
+    const detail = [state.error.message, state.error.hint]
+      .map((value) => String(value || '').trim())
+      .filter((value, index, values) => value && values.indexOf(value) === index)
+      .join(' ')
+    return <PreviewStatus
+      icon={<AlertCircle className="h-6 w-6" />}
+      text={t('chatPreview.previewFailed')}
+      detail={detail || t('chatPreview.previewRetryHint')}
+      errorCode={state.error.code}
+      action={<RetryPreviewButton onClick={retry} t={t} />}
+    />
+  }
+  if (!state.url) return <PreviewStatus icon={<LoaderCircle className="h-6 w-6 animate-spin" />} text={t('chatPreview.loadingFile')} />
+  return <DirectHtmlUrlPreview file={file} t={t} url={state.url} onRetry={retry} />
 }
 
-function DirectHtmlUrlPreview({ file, t, url }) {
-  const [status, setStatus] = useState('loading')
+export function DirectHtmlUrlPreview({ file, onRetry, t, timeoutMs = 5_000, url }) {
+  const [attempt, setAttempt] = useState(0)
+  const requestKey = `${url}:${attempt}`
+  const [loadState, setLoadState] = useState({ key: '', status: 'loading' })
+  const status = loadState.key === requestKey ? loadState.status : 'loading'
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setLoadState((current) => (
+        current.key === requestKey && current.status === 'ready'
+          ? current
+          : { key: requestKey, status: 'failed' }
+      ))
+    }, Math.max(0, Number(timeoutMs) || 0))
+    return () => clearTimeout(timer)
+  }, [requestKey, timeoutMs])
+
+  const retry = () => {
+    if (typeof onRetry === 'function') {
+      onRetry()
+      return
+    }
+    setAttempt((value) => value + 1)
+  }
   return (
     <div className="relative h-full min-h-0 bg-white">
       <iframe
+        key={requestKey}
         src={url}
         title={file.filename || file.title || t('chatPreview.htmlTitle')}
         sandbox="allow-scripts allow-forms"
         referrerPolicy="no-referrer"
-        onLoad={() => setStatus('ready')}
-        onError={() => setStatus('failed')}
+        onLoad={() => setLoadState({ key: requestKey, status: 'ready' })}
+        onError={() => setLoadState({ key: requestKey, status: 'failed' })}
         className={`${status === 'failed' ? 'hidden' : 'block'} h-full w-full border-0 bg-white`}
       />
       {status === 'loading' && <div className="absolute inset-0 flex items-center justify-center bg-paper-2/90"><PreviewStatus icon={<LoaderCircle className="h-6 w-6 animate-spin" />} text={t('chatPreview.loadingFile')} /></div>}
-      {status === 'failed' && <PreviewStatus icon={<AlertCircle className="h-6 w-6" />} text={t('chatPreview.previewFailed')} detail={t('chatPreview.unsupportedHint')} />}
+      {status === 'failed' && <PreviewStatus
+        icon={<AlertCircle className="h-6 w-6" />}
+        text={t('chatPreview.previewFailed')}
+        detail={t('chatPreview.previewRetryHint')}
+        action={<RetryPreviewButton onClick={retry} t={t} />}
+      />}
     </div>
+  )
+}
+
+function RetryPreviewButton({ onClick, t }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex h-8 items-center gap-1.5 rounded-md border border-ink/10 bg-paper px-3 text-xs font-medium text-ink-soft hover:bg-paper-2 hover:text-ink"
+    >
+      <RefreshCw className="h-3.5 w-3.5" />
+      {t('chatPreview.retryPreview')}
+    </button>
   )
 }
 
@@ -250,4 +340,28 @@ function PreviewStatus({ icon, text, detail = '', action = null, errorCode = '' 
       {action}
     </div>
   )
+}
+
+const builtInPreviewRendererCleanups = [
+  ['image', { component: NativePreviewRenderer }],
+  ['pdf', { component: NativePreviewRenderer }],
+  ['audio', { component: NativePreviewRenderer }],
+  ['video', { component: NativePreviewRenderer }],
+  ['html', { component: HtmlPreviewRenderer }],
+  ['docx', { component: DocxFileRenderer, needsFetch: true }],
+  ['pptx', { component: PptxFileRenderer, needsFetch: true }],
+  ['xlsx', { component: WorkbookFileRenderer, needsFetch: true }],
+  ['csv', { component: CsvFileRenderer, needsFetch: true }],
+  ['markdown', { component: MarkdownFileRenderer, needsFetch: true }],
+  ['json', { component: SourceFileRenderer, needsFetch: true }],
+  ['xml', { component: SourceFileRenderer, needsFetch: true }],
+  ['code', { component: SourceFileRenderer, needsFetch: true }],
+  ['text', { component: SourceFileRenderer, needsFetch: true }],
+  ['unsupported', { component: UnsupportedFileRenderer }],
+].map(([kind, descriptor]) => previewRendererRegistry.register(kind, descriptor))
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    for (const unregister of builtInPreviewRendererCleanups) unregister()
+  })
 }

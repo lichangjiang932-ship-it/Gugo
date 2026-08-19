@@ -30,11 +30,23 @@ import {
 } from './mcpJsonRpc.js'
 import { listEnabledServers, getServer } from './mcpStore.js'
 import {
-  registerDynamicTool,
-  unregisterByOrigin,
-} from '../services/toolRegistry.js'
+  createMcpConnectionFailedError,
+  createMcpConnectionSupervisor,
+  createMcpRecoveringError,
+} from './mcpConnectionSupervisor.js'
+import {
+  buildRegisteredToolSpec,
+  onMcpEvent,
+  onMcpToolsChange,
+  safeMcpName as safeName,
+  synchronizeToolsForConnection,
+  unregisterAllMcpToolsForUser,
+  unregisterToolsForServer,
+} from './mcpToolRegistry.js'
 import { writeToolAudit } from '../utils/audit.js'
 import { getMcpOAuthHeaders } from './mcpOAuth.js'
+
+export { onMcpEvent, onMcpToolsChange }
 
 const DEFAULT_ALLOWED_COMMANDS = ['npx', 'node', 'uvx', 'python', 'python3']
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000
@@ -51,19 +63,11 @@ function stdioEnabled() {
   return process.env.MCP_STDIO_ENABLED !== '0'
 }
 
-function safeName(s) {
-  return String(s || '').replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 40)
-}
-
 /**
  * 每个用户 → Map<serverId, Connection>
  *   Connection: { server, transport, tools, resources?, prompts?, status, lastError, startedAt }
  */
 const userConnections = new Map() // userId → Map<serverId, Connection>
-
-// 正在建立的连接：`${userId}:${serverId}` → Promise<Connection>。
-// 用于 ensureServerConnected 的 in-flight 去重，防止并发 miss 重复 spawn。
-const inFlightConnections = new Map()
 
 let idleSweepTimer = null
 
@@ -158,128 +162,48 @@ async function startConnection(userId, server) {
   return { transport, tools, resources, prompts, startedAt, lastUsedAt: startedAt }
 }
 
-function buildRegisteredToolSpec(server, tool) {
-  const sn = safeName(server.name)
-  const toolName = `mcp__${sn}__${safeName(tool.name)}`
-  return {
-    type: 'function',
-    function: {
-      name: toolName,
-      description: tool.description || `${server.name} - ${tool.name}`,
-      parameters: tool.inputSchema || { type: 'object', properties: {} },
-    },
-  }
-}
-
-function buildMcpRiskMetadata(server, tool, toolName) {
-  const configuredTools = server.tools && typeof server.tools === 'object' && !Array.isArray(server.tools)
-    ? server.tools
-    : {}
-  const declaration = configuredTools[tool.name] || configuredTools[toolName]
-  if (declaration && typeof declaration === 'object' && !Array.isArray(declaration)) {
-    const riskLevel = ['low', 'medium', 'high'].includes(declaration.riskLevel)
-      ? declaration.riskLevel
-      : 'high'
-    const approvalDeclaration = declaration.requiredApproval ?? declaration.requiresApproval
-    const requiredApproval = typeof approvalDeclaration === 'boolean' ? approvalDeclaration : true
-    const category = ['read', 'write_local', 'exec', 'external'].includes(declaration.category)
-      ? declaration.category
-      : (riskLevel === 'low' && requiredApproval === false ? 'read' : 'external')
-    const isReadOnly = category === 'read'
-    return {
-      riskLevel,
-      category,
-      requiredApproval,
-      requiresApproval: requiredApproval,
-      isReadOnly,
-      isConcurrencySafe: declaration.isConcurrencySafe == null
-        ? isReadOnly
-        : declaration.isConcurrencySafe === true,
-      isIdempotent: declaration.isIdempotent == null
-        ? isReadOnly || tool.annotations?.idempotentHint === true
-        : declaration.isIdempotent === true,
-      interruptBehavior: isReadOnly ? 'cancel' : 'block',
-      isDestructive: declaration.isDestructive == null
-        ? !isReadOnly
-        : declaration.isDestructive === true,
-      source: 'declared',
-      reason: isReadOnly ? null : `MCP: ${server.name}`,
-    }
-  }
-
-  // autoApprove is retained as a legacy compatibility fallback. MCP
-  // annotations are advisory only and never bypass approval on their own.
-  const autoApprove = Array.isArray(server.autoApprove)
-    && (server.autoApprove.includes(tool.name) || server.autoApprove.includes(toolName))
-  return {
-    riskLevel: 'high',
-    category: 'external',
-    requiredApproval: !autoApprove,
-    requiresApproval: !autoApprove,
-    isReadOnly: false,
-    isConcurrencySafe: false,
-    isIdempotent: tool.annotations?.idempotentHint === true,
-    interruptBehavior: 'block',
-    isDestructive: tool.annotations?.destructiveHint !== false,
-    source: 'fallback',
-    reason: `MCP: ${server.name}`,
-  }
-}
-
-function registerToolsForConnection(userId, server, conn) {
-  for (const tool of conn.tools) {
-    const spec = buildRegisteredToolSpec(server, tool)
-    const toolName = spec.function.name
-    registerDynamicTool({
-      name: toolName,
-      origin: 'mcp',
-      source: `${userId}:${server.id}`,
-      userId,
-      spec,
-      metadata: buildMcpRiskMetadata(server, tool, toolName),
-    })
-  }
-}
-
-function unregisterToolsForServer(userId, serverId) {
-  unregisterByOrigin('mcp', `${userId}:${serverId}`, { userId })
-}
-
-export async function ensureServerConnected(userId, server) {
-  if (!server?.enabled) return null
+function installConnection({ userId, server, connection, previousConnection }) {
   const map = getUserMap(userId)
-  if (map.has(server.id) && map.get(server.id).transport?.isAlive?.()) {
-    return touchConnection(map.get(server.id))
+  const previous = map.get(server.id) || previousConnection || null
+  connection.status = 'connected'
+  connection.lastError = null
+  map.set(server.id, connection)
+  synchronizeToolsForConnection(userId, server, previous, connection)
+  ensureIdleSweeper()
+  if (previous && previous !== connection) {
+    try { previous.transport?.stop?.() } catch { /* best effort */ }
   }
-  // in-flight 去重：并发 miss（如两个工具调用同时触发）共享同一次连接建立，
-  // 避免重复 spawn stdio 子进程 / 重复建立 SSE，导致前一个连接泄漏。
-  const pendingKey = `${userId}:${server.id}`
-  const inFlight = inFlightConnections.get(pendingKey)
-  if (inFlight) {
-    try {
-      return await inFlight
-    } catch {
-      // 等待方等到的连接失败了，允许它自己重试一次
-    }
-  }
-  const connecting = (async () => {
-    try {
-      // 重新连
-      if (map.has(server.id)) {
-        try { map.get(server.id).transport?.stop?.() } catch { /* ignore */ }
-        unregisterToolsForServer(userId, server.id)
-      }
-      const conn = await startConnection(userId, server)
-      map.set(server.id, conn)
-      registerToolsForConnection(userId, server, conn)
-      ensureIdleSweeper()
-      return conn
-    } finally {
-      inFlightConnections.delete(pendingKey)
-    }
-  })()
-  inFlightConnections.set(pendingKey, connecting)
-  return connecting
+}
+
+const connectionSupervisor = createMcpConnectionSupervisor({
+  connect: ({ userId, server }) => startConnection(userId, server),
+  onConnected: installConnection,
+  onConnectionLost: ({ connection, error }) => {
+    if (!connection) return
+    connection.status = 'reconnecting'
+    connection.lastError = error?.message || String(error || '')
+  },
+  onStateChange: (state) => {
+    const connection = userConnections.get(state.userId)?.get(state.serverId)
+    if (!connection) return
+    connection.status = state.status
+    connection.reconnectAttempt = state.attempt
+    connection.lastError = state.lastError
+  },
+})
+
+export async function ensureServerConnected(userId, server, { manual = true } = {}) {
+  if (!server?.enabled) return null
+  const connection = await connectionSupervisor.ensure(userId, server, { manual })
+  return touchConnection(connection)
+}
+
+export async function reconnectServer(userId, server) {
+  return ensureServerConnected(userId, server, { manual: true })
+}
+
+export function getMcpConnectionState(userId, serverId) {
+  return connectionSupervisor.getState(userId, serverId)
 }
 
 export async function ensureUserServers(userId) {
@@ -288,8 +212,18 @@ export async function ensureUserServers(userId) {
   let connected = 0
   const errors = []
   for (const s of servers) {
+    const state = connectionSupervisor.getState(userId, s.id)
+    if (state?.status === 'connected') {
+      connected += 1
+      continue
+    }
+    if (state?.status === 'reconnecting') {
+      const error = createMcpRecoveringError(state)
+      errors.push({ serverId: s.id, name: s.name, error: error.message, code: error.code, retryable: true })
+      continue
+    }
     try {
-      await ensureServerConnected(userId, s)
+      await ensureServerConnected(userId, s, { manual: false })
       connected += 1
     } catch (err) {
       errors.push({ serverId: s.id, name: s.name, error: err.message })
@@ -312,7 +246,8 @@ export async function listUserToolSpecs(userId, { connect = true } = {}) {
   const specsByName = new Map()
   for (const server of listEnabledServers(userId)) {
     const conn = map.get(server.id)
-    if (!conn?.transport?.isAlive?.()) continue
+    const state = connectionSupervisor.getState(userId, server.id)
+    if (!conn || (!conn.transport?.isAlive?.() && state?.status !== 'reconnecting')) continue
     for (const tool of conn.tools || []) {
       const spec = buildRegisteredToolSpec(server, tool)
       specsByName.set(spec.function.name, spec)
@@ -324,6 +259,30 @@ export async function listUserToolSpecs(userId, { connect = true } = {}) {
   return { specs, errors: connectionResult.errors || [] }
 }
 
+function stateErrorForConnection(userId, serverId) {
+  const state = connectionSupervisor.getState(userId, serverId)
+  if (state?.status === 'reconnecting') return createMcpRecoveringError(state)
+  if (state?.status === 'failed') return createMcpConnectionFailedError(state)
+  return null
+}
+
+async function connectionForOperation(userId, server) {
+  const stateError = stateErrorForConnection(userId, server.id)
+  if (stateError) throw stateError
+  const map = getUserMap(userId)
+  let connection = map.get(server.id)
+  if (connection && !connection.transport?.isAlive?.()) {
+    connectionSupervisor.reportTransportFailure(
+      userId,
+      server.id,
+      new Error(`MCP server "${server.name}" transport is not alive`),
+    )
+    throw createMcpRecoveringError(connectionSupervisor.getState(userId, server.id) || {})
+  }
+  if (!connection) connection = await ensureServerConnected(userId, server, { manual: false })
+  return touchConnection(connection)
+}
+
 /**
  * 解析工具名 mcp__<server>__<tool>，找到对应连接，发 tools/call。
  */
@@ -333,17 +292,11 @@ export async function callTool({ userId, fullToolName, args, idempotencyKey, too
   const wantedServerSafeName = m[1]
   const innerTool = m[2]
 
-  const map = getUserMap(userId)
   // 找 server (按 safeName 匹配)
   const servers = listEnabledServers(userId)
   const server = servers.find((s) => safeName(s.name) === wantedServerSafeName)
   if (!server) throw new Error(`未配置的 MCP server: ${wantedServerSafeName}`)
-  // 找连接,没活的就重连
-  let conn = map.get(server.id)
-  if (!conn || !conn.transport?.isAlive?.()) {
-    conn = await ensureServerConnected(userId, server)
-  }
-  touchConnection(conn)
+  const conn = await connectionForOperation(userId, server)
   if (!conn) throw new Error(`MCP server "${server.name}" 未启用`)
 
   // 找原始 tool 名（恢复 safeName 前的名字）
@@ -360,6 +313,12 @@ export async function callTool({ userId, fullToolName, args, idempotencyKey, too
     )
   } catch (err) {
     status = 'error'
+    const recoveryState = connectionSupervisor.getState(userId, server.id)
+    if (recoveryState?.status === 'reconnecting') {
+      const recovering = createMcpRecoveringError(recoveryState)
+      recovering.cause = err
+      throw recovering
+    }
     throw err
   } finally {
     // ★ P0:走统一 audit 写入器
@@ -399,11 +358,15 @@ export function getUserCatalog(userId) {
   const out = []
   for (const s of servers) {
     const conn = map.get(s.id)
+    const state = connectionSupervisor.getState(userId, s.id)
     out.push({
       serverId: s.id,
       name: s.name,
       transport: s.transport,
-      connected: !!conn?.transport?.isAlive?.(),
+      connected: state?.status === 'connected' && !!conn?.transport?.isAlive?.(),
+      status: state?.status || 'disconnected',
+      reconnectAttempt: state?.attempt || 0,
+      lastError: state?.lastError || null,
       tools: conn?.tools || [],
       resources: conn?.resources || [],
       prompts: conn?.prompts || [],
@@ -415,47 +378,44 @@ export function getUserCatalog(userId) {
 export async function readResource({ userId, serverId, uri }) {
   const server = getServer(userId, serverId)
   if (!server) throw new Error('server 不存在')
-  const conn = await ensureServerConnected(userId, server)
-  touchConnection(conn)
+  const conn = await connectionForOperation(userId, server)
   return await conn.transport.request(buildResourceReadRequest(uri), { timeoutMs: 30000 })
 }
 
 export async function getPrompt({ userId, serverId, name, args }) {
   const server = getServer(userId, serverId)
   if (!server) throw new Error('server 不存在')
-  const conn = await ensureServerConnected(userId, server)
-  touchConnection(conn)
+  const conn = await connectionForOperation(userId, server)
   return await conn.transport.request(buildPromptGetRequest(name, args), { timeoutMs: 15000 })
 }
 
 export function disconnectServer(userId, serverId) {
   const map = userConnections.get(userId)
-  if (!map) return false
-  const conn = map.get(serverId)
-  if (!conn) return false
-  try { conn.transport.stop() } catch { /* ignore */ }
-  map.delete(serverId)
-  unregisterToolsForServer(userId, serverId)
-  if (map.size === 0) userConnections.delete(userId)
+  const conn = map?.get(serverId) || null
+  const supervised = connectionSupervisor.disconnect(userId, serverId)
+  if (!conn && !supervised) return false
+  map?.delete(serverId)
+  unregisterToolsForServer(userId, serverId, conn)
+  if (map?.size === 0) userConnections.delete(userId)
   return true
 }
 
 export function disconnectUser(userId) {
   const map = userConnections.get(userId)
+  const supervised = connectionSupervisor.disconnectUser(userId)
   if (!map) {
-    unregisterByOrigin('mcp', null, { userId })
-    return 0
+    unregisterAllMcpToolsForUser(userId)
+    return supervised
   }
   let disconnected = 0
   for (const [serverId, conn] of map) {
-    try { conn.transport.stop() } catch { /* ignore */ }
-    unregisterToolsForServer(userId, serverId)
+    unregisterToolsForServer(userId, serverId, conn)
     disconnected += 1
   }
   map.clear()
   userConnections.delete(userId)
-  unregisterByOrigin('mcp', null, { userId })
-  return disconnected
+  unregisterAllMcpToolsForUser(userId)
+  return Math.max(disconnected, supervised)
 }
 
 export function sweepIdleConnections({ now = Date.now(), timeoutMs = idleTimeoutMs() } = {}) {
@@ -476,12 +436,17 @@ export function shutdownAll() {
     clearInterval(idleSweepTimer)
     idleSweepTimer = null
   }
+  connectionSupervisor.shutdown()
   for (const [userId, map] of userConnections) {
     for (const [serverId, conn] of map) {
-      try { conn.transport.stop() } catch { /* ignore */ }
-      unregisterToolsForServer(userId, serverId)
+      unregisterToolsForServer(userId, serverId, conn)
     }
     map.clear()
   }
   userConnections.clear()
 }
+
+export const _mcpManagerInternals = Object.freeze({
+  connectionSupervisor,
+  synchronizeToolsForConnection,
+})

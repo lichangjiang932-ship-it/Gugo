@@ -54,3 +54,9 @@ test('request log URLs redact local HTML preview capability tickets from path se
   assert.equal(logged, '/api/local-files/previews/[REDACTED]/assets/site.css?v=1')
   assert.doesNotMatch(logged, /super-secret-preview-ticket/)
 })
+
+test('request log URLs redact managed artifact preview capability tickets from path segments', () => {
+  const logged = redactUrlForLog('/api/artifacts/previews/managed-secret-ticket/assets/portrait?v=1')
+  assert.equal(logged, '/api/artifacts/previews/[REDACTED]/assets/portrait?v=1')
+  assert.doesNotMatch(logged, /managed-secret-ticket/)
+})

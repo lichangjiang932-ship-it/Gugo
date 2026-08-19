@@ -235,6 +235,12 @@ const FEATURE_PAGE_TRANSLATIONS = {
   },
 }
 
+Object.assign(FEATURE_PAGE_TRANSLATIONS.zh.chatMessages, { replyPartiallyCompleted: '产物未通过验证，但已修改文件已保留' })
+Object.assign(FEATURE_PAGE_TRANSLATIONS.en.chatMessages, { replyPartiallyCompleted: 'Artifact validation failed, but verified file changes were retained' })
+Object.assign(FEATURE_PAGE_TRANSLATIONS.ja.chatMessages, { replyPartiallyCompleted: '成果物の検証には失敗しましたが、検証済みのファイル変更は保持されています' })
+Object.assign(FEATURE_PAGE_TRANSLATIONS.ko.chatMessages, { replyPartiallyCompleted: '산출물 검증에 실패했지만 검증된 파일 변경 사항은 유지되었습니다' })
+Object.assign(FEATURE_PAGE_TRANSLATIONS['zh-TW'].chatMessages, { replyPartiallyCompleted: '產物未通過驗證，但已驗證的檔案修改已保留' })
+
 Object.assign(FEATURE_PAGE_TRANSLATIONS.zh.chatMessages, {
   preparingTask: '正在准备任务…', waitingForModel: '正在等待模型响应…', draftingResponse: '正在生成回复…', reviewingResults: '正在整理执行结果…', continuingTask: '正在继续处理…', reconnectingTask: '连接中断，正在重连…', cancellingTask: '正在停止任务…', toolLiveOutput: '实时输出', toolLiveOutputHint: '展开查看完整输出',
   artifactReadyGeneric: '任务已完成，最终文件已准备好。', artifactReadySingle: '任务已完成，{type} 文件已准备好：{filename}', artifactReadySingleFile: '任务已完成，最终文件已准备好：{filename}', artifactReadyMultiple: '任务已完成，{count} 个最终文件已准备好：{filenames}',
@@ -1043,6 +1049,9 @@ export const translations = {
       sessionMenu: '会话菜单',
       pinSession: '置顶会话',
       unpinSession: '取消置顶',
+      forkSession: '从此分叉',
+      forkFailed: '无法分叉会话',
+      forkActive: '当前会话仍在运行，请完成或停止后再分叉。',
       archiveSession: '归档会话',
       unarchiveSession: '取消归档',
       deleteSession: '删除会话',
@@ -1250,6 +1259,9 @@ export const translations = {
       action: 'Action',
       params: '参数 JSON',
       invalidPluginParams: '参数 JSON 不合法',
+      grants: '任务授权 JSON',
+      grantsHint: '填写 JSON 数组。Shell 目标使用精确 argv 数组，外部工具目标使用一个精确字段。',
+      invalidGrants: '任务授权必须是有效的 JSON 数组',
       confirmDelete: '删除“{title}”？',
     },
     toast: {
@@ -1530,6 +1542,9 @@ export const translations = {
       sessionMenu: 'Session menu',
       pinSession: 'Pin conversation',
       unpinSession: 'Unpin conversation',
+      forkSession: 'Fork from here',
+      forkFailed: 'Could not fork conversation',
+      forkActive: 'This conversation is still running. Finish or stop it before forking.',
       archiveSession: 'Archive session',
       unarchiveSession: 'Unarchive',
       deleteSession: 'Delete conversation',
@@ -1737,6 +1752,9 @@ export const translations = {
       action: 'Action',
       params: 'Params JSON',
       invalidPluginParams: 'Invalid params JSON',
+      grants: 'Task grants JSON',
+      grantsHint: 'Enter a JSON array. Shell targets use exact argv arrays; external tools use one exact target field.',
+      invalidGrants: 'Task grants must be a valid JSON array',
       confirmDelete: 'Delete “{title}”?',
     },
     toast: {
@@ -2017,6 +2035,9 @@ export const translations = {
       sessionMenu: 'セッションメニュー',
       pinSession: '会話をピン留め',
       unpinSession: 'ピン留めを解除',
+      forkSession: 'ここから分岐',
+      forkFailed: '会話を分岐できませんでした',
+      forkActive: 'この会話は実行中です。完了または停止してから分岐してください。',
       archiveSession: 'セッションをアーカイブ',
       unarchiveSession: 'アーカイブ解除',
       deleteSession: '会話を削除',
@@ -2224,6 +2245,9 @@ export const translations = {
       action: 'Action',
       params: 'パラメータ JSON',
       invalidPluginParams: 'パラメータ JSON が無効です',
+      grants: 'タスク権限 JSON',
+      grantsHint: 'JSON 配列を入力します。Shell は完全一致の argv 配列、外部ツールは 1 つの完全一致フィールドを使用します。',
+      invalidGrants: 'タスク権限は有効な JSON 配列である必要があります',
       confirmDelete: '「{title}」を削除しますか？',
     },
     toast: {
@@ -2504,6 +2528,9 @@ export const translations = {
       sessionMenu: '세션 메뉴',
       pinSession: '대화 고정',
       unpinSession: '고정 해제',
+      forkSession: '여기서 분기',
+      forkFailed: '대화를 분기할 수 없음',
+      forkActive: '이 대화가 아직 실행 중입니다. 완료하거나 중지한 뒤 분기하세요.',
       archiveSession: '세션 보관',
       unarchiveSession: '보관 해제',
       deleteSession: '대화 삭제',
@@ -2711,6 +2738,9 @@ export const translations = {
       action: 'Action',
       params: '매개변수 JSON',
       invalidPluginParams: '매개변수 JSON이 올바르지 않습니다',
+      grants: '작업 권한 JSON',
+      grantsHint: 'JSON 배열을 입력하세요. Shell 대상은 정확한 argv 배열을, 외부 도구는 하나의 정확한 대상 필드를 사용합니다.',
+      invalidGrants: '작업 권한은 올바른 JSON 배열이어야 합니다',
       confirmDelete: '"{title}"을(를) 삭제할까요?',
     },
     toast: {
@@ -2991,6 +3021,9 @@ export const translations = {
       sessionMenu: '會話選單',
       pinSession: '置頂會話',
       unpinSession: '取消置頂',
+      forkSession: '從此分支',
+      forkFailed: '無法分支會話',
+      forkActive: '目前會話仍在執行，請完成或停止後再分支。',
       archiveSession: '封存會話',
       unarchiveSession: '取消封存',
       deleteSession: '刪除會話',
@@ -3198,6 +3231,9 @@ export const translations = {
       action: 'Action',
       params: '參數 JSON',
       invalidPluginParams: '參數 JSON 不合法',
+      grants: '任務授權 JSON',
+      grantsHint: '填寫 JSON 陣列。Shell 目標使用精確 argv 陣列，外部工具目標使用一個精確欄位。',
+      invalidGrants: '任務授權必須是有效的 JSON 陣列',
       confirmDelete: '刪除「{title}」？',
     },
     toast: {

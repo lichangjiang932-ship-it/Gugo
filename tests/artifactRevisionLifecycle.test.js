@@ -332,7 +332,7 @@ test('an adjacent webpage revision safely inlines an owned background-image atta
         for (const name of ['create_html_app', 'image_info', 'image_transform', 'read_artifact_source']) {
           assert.ok(names.includes(name), name)
         }
-        assert.equal(names.includes('generate_image'), true)
+        assert.equal(names.includes('generate_image'), false)
         return {
           content: '',
           toolCalls: [{

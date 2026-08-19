@@ -2,12 +2,14 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   cancelJob,
+  createArtifactHtmlPreviewSession,
   createLocalHtmlPreviewSession,
   createJob,
   getJob,
   loadArtifactPreviewDocument,
   loadArtifactPreviewHtml,
   listJobs,
+  revokeArtifactHtmlPreviewSession,
   revokeLocalHtmlPreviewSession,
   retryJob,
   retryStep,
@@ -150,6 +152,57 @@ test('verified local HTML exchanges account auth for a scoped relative-resource 
     assert.equal(calls[0].init.method, 'POST')
     assert.equal(calls[0].init.headers.Authorization, 'Bearer local-preview-account-secret')
     assert.doesNotMatch(calls[0].url, /token=|stale-secret|local-preview-account-secret/)
+  } finally {
+    setAuthToken('')
+    globalThis.window = previousWindow
+  }
+})
+
+test('managed HTML exchanges account auth for a scoped preview ticket without leaking tokens', async () => {
+  const previousWindow = globalThis.window
+  globalThis.window = { localStorage: null, sessionStorage: null }
+  const calls = []
+  setAuthToken('artifact-preview-account-secret')
+  try {
+    const previewUrl = await createArtifactHtmlPreviewSession(
+      '/api/artifacts/interactive.html?preview=1&token=stale-secret',
+      {
+        fetchImpl: async (url, init = {}) => {
+          calls.push({ url, init })
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ url: '/api/artifacts/previews/opaque-ticket/index.html' }),
+          }
+        },
+      },
+    )
+    assert.equal(previewUrl, '/api/artifacts/previews/opaque-ticket/index.html')
+    assert.equal(calls[0].url, '/api/artifacts/interactive.html/preview-session')
+    assert.equal(calls[0].init.method, 'POST')
+    assert.equal(calls[0].init.headers.Authorization, 'Bearer artifact-preview-account-secret')
+    assert.doesNotMatch(calls[0].url, /token=|stale-secret|artifact-preview-account-secret/)
+  } finally {
+    setAuthToken('')
+    globalThis.window = previousWindow
+  }
+})
+
+test('managed HTML preview tickets are revoked with account auth', async () => {
+  const previousWindow = globalThis.window
+  globalThis.window = { localStorage: null, sessionStorage: null }
+  const calls = []
+  setAuthToken('artifact-preview-revoke-secret')
+  try {
+    await revokeArtifactHtmlPreviewSession('/api/artifacts/previews/opaque-ticket/index.html?ignored=1', {
+      fetchImpl: async (url, init = {}) => {
+        calls.push({ url, init })
+        return { ok: true, status: 204 }
+      },
+    })
+    assert.equal(calls[0].url, '/api/artifacts/previews/opaque-ticket')
+    assert.equal(calls[0].init.method, 'DELETE')
+    assert.equal(calls[0].init.headers.Authorization, 'Bearer artifact-preview-revoke-secret')
   } finally {
     setAuthToken('')
     globalThis.window = previousWindow

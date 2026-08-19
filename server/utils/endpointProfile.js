@@ -29,6 +29,26 @@ const KIND_BY_PORT = new Map([
 ])
 
 export const ENDPOINT_KINDS = ['ollama', 'lmstudio', 'llamacpp', 'vllm', 'anthropic', 'gemini', 'openai-compatible']
+const CUSTOM_ENDPOINT_KIND_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
+const CUSTOM_ENDPOINT_KINDS = new Set()
+
+export function registerEndpointKind(kind) {
+  const normalized = String(kind || '').trim().toLowerCase()
+  if (!CUSTOM_ENDPOINT_KIND_RE.test(normalized)) {
+    throw new TypeError('endpoint kind must match [a-z0-9][a-z0-9_-]{0,63}')
+  }
+  if (ENDPOINT_KINDS.includes(normalized)) return () => false
+  if (CUSTOM_ENDPOINT_KINDS.has(normalized)) {
+    throw new Error(`endpoint kind already registered: ${normalized}`)
+  }
+  CUSTOM_ENDPOINT_KINDS.add(normalized)
+  let disposed = false
+  return () => {
+    if (disposed) return false
+    disposed = true
+    return CUSTOM_ENDPOINT_KINDS.delete(normalized)
+  }
+}
 
 /**
  * 云端默认超时 —— 沿用改造前的既有值,不动云端行为。
@@ -312,8 +332,9 @@ export function resolveEndpointProfile({
   const safeEnv = env || {}
   const safeOverrides = overrides || {}
   const isLocal = isLocalEndpoint(baseUrl)
-  const kind = ENDPOINT_KINDS.includes(safeOverrides.kind)
-    ? safeOverrides.kind
+  const requestedKind = String(safeOverrides.kind || '').trim().toLowerCase()
+  const kind = (ENDPOINT_KINDS.includes(requestedKind) || CUSTOM_ENDPOINT_KINDS.has(requestedKind))
+    ? requestedKind
     : inferEndpointKind(baseUrl)
   const caps = KIND_CAPABILITIES[kind] || KIND_CAPABILITIES['openai-compatible']
   const selectedModel = String(modelName || safeEnv.MODEL_NAME || '').trim()

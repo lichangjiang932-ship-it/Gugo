@@ -501,3 +501,56 @@ test('TurnEngine persists the same verified receipt in the completed event and a
   assert.deepEqual(assistant.modelContext.verifiedLocalFiles, completed.payload.verifiedLocalFiles)
   assert.equal(completed.payload.verifiedLocalFiles[0].path, fs.realpathSync(fullPath))
 })
+
+test('TurnEngine keeps a verified edited file clickable when a later artifact step fails', async () => {
+  const turnId = 'verified-local-files-partial-delivery-turn'
+  const relativePath = 'partial/gallery.html'
+  const fullPath = path.join(workspace, relativePath)
+  const content = '<!doctype html>\n<title>edited and verified</title>'
+  fs.mkdirSync(path.dirname(fullPath), { recursive: true })
+  fs.writeFileSync(fullPath, content, 'utf8')
+  const checkpointMessages = mutationAndReadMessages({
+    mutationId: 'partial-edit',
+    mutationName: 'edit_file',
+    mutationArgs: { path: relativePath, old_text: 'old', new_text: 'new' },
+    mutationResult: { ok: true, path: relativePath },
+    readId: 'partial-read',
+    readPath: relativePath,
+    content,
+  })
+  const engine = new TurnEngine({
+    scheduleMemoryExtraction: () => {},
+    runLoop: async ({ saveCheckpoint }) => {
+      await saveCheckpoint({ messages: checkpointMessages, artifactIds: ['failed-image'], iterations: 2 })
+      return {
+        incomplete: true,
+        text: 'The image generator failed after the HTML edit.',
+        artifactIds: ['failed-image'],
+        deliveryArtifactIds: [],
+        iterations: 2,
+      }
+    },
+  })
+
+  await engine.startTurn({
+    userId: integrationUserId,
+    sessionId: integrationSessionId,
+    turnId,
+    content: 'Edit the gallery and generate an image.',
+  })
+  await engine.waitForTurn({ userId: integrationUserId, sessionId: integrationSessionId, turnId })
+
+  const failed = listTurnEvents({
+    requestedUser: integrationUserId,
+    userId: integrationUserId,
+    sessionId: integrationSessionId,
+    turnId,
+    limit: 100,
+  }).find((event) => event.type === 'turn.failed')
+  const assistant = listMessages({ userId: integrationUserId, sessionId: integrationSessionId })
+    .find((message) => message.id === `${turnId}:assistant`)
+  assert.deepEqual(failed.payload.deliveryArtifactIds, [])
+  assert.equal(failed.payload.verifiedLocalFiles.length, 1)
+  assert.equal(failed.payload.verifiedLocalFiles[0].path, fs.realpathSync(fullPath))
+  assert.deepEqual(assistant.modelContext.verifiedLocalFiles, failed.payload.verifiedLocalFiles)
+})
