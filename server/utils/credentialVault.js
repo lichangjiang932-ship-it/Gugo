@@ -1,6 +1,10 @@
 import crypto from 'node:crypto'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
+
+import { logger } from './logger.js'
 
 const VAULT_VERSION = 1
 const VAULT_MARKER = '__yma_credential_vault'
@@ -51,6 +55,109 @@ function readKeyFile(keyPath) {
   }
 }
 
+function windowsAccount(env, userInfo) {
+  const username = String(userInfo()?.username || env.USERNAME || '').trim()
+  if (!username) return ''
+  if (username.includes('\\') || username.includes('@')) return username
+  const domain = String(env.USERDOMAIN || '').trim()
+  return domain ? `${domain}\\${username}` : username
+}
+
+/**
+ * Restrict the credential key to the current user without making vault startup
+ * depend on host ACL tooling. Windows mode bits do not enforce a private ACL,
+ * so icacls must remove inherited grants and replace the current user's grant.
+ */
+export function hardenCredentialKeyFile(keyPath, {
+  platform = process.platform,
+  env = process.env,
+  spawn = spawnSync,
+  chmod = fs.chmodSync,
+  userInfo = () => os.userInfo(),
+} = {}) {
+  const target = String(keyPath || '').trim()
+  if (!target) return { ok: false, method: null, code: 'KEY_PATH_REQUIRED' }
+
+  if (platform !== 'win32') {
+    try {
+      chmod(target, 0o600)
+      return { ok: true, method: 'chmod', code: null }
+    } catch (error) {
+      return {
+        ok: false,
+        method: 'chmod',
+        code: error?.code || 'CHMOD_FAILED',
+      }
+    }
+  }
+
+  let account
+  try {
+    account = windowsAccount(env, userInfo)
+  } catch (error) {
+    return {
+      ok: false,
+      method: 'icacls',
+      code: error?.code || 'WINDOWS_ACCOUNT_UNAVAILABLE',
+    }
+  }
+  if (!account) {
+    return { ok: false, method: 'icacls', code: 'WINDOWS_ACCOUNT_UNAVAILABLE' }
+  }
+
+  try {
+    const spawnOptions = {
+      encoding: 'utf8',
+      shell: false,
+      windowsHide: true,
+    }
+    // /grant:r only replaces grants for the named account. Reset first so a
+    // pre-existing key cannot retain explicit grants for another principal.
+    const resetResult = spawn('icacls.exe', [target, '/reset'], spawnOptions)
+    if (resetResult?.error) {
+      return {
+        ok: false,
+        method: 'icacls',
+        code: resetResult.error.code || 'ICACLS_FAILED',
+      }
+    }
+    if (resetResult?.status !== 0) {
+      return {
+        ok: false,
+        method: 'icacls',
+        code: `ICACLS_EXIT_${Number.isInteger(resetResult?.status) ? resetResult.status : 'UNKNOWN'}`,
+      }
+    }
+    const result = spawn('icacls.exe', [
+      target,
+      '/inheritance:r',
+      '/grant:r',
+      `${account}:(R,W)`,
+    ], spawnOptions)
+    if (result?.error) {
+      return {
+        ok: false,
+        method: 'icacls',
+        code: result.error.code || 'ICACLS_FAILED',
+      }
+    }
+    if (result?.status !== 0) {
+      return {
+        ok: false,
+        method: 'icacls',
+        code: `ICACLS_EXIT_${Number.isInteger(result?.status) ? result.status : 'UNKNOWN'}`,
+      }
+    }
+    return { ok: true, method: 'icacls', code: null }
+  } catch (error) {
+    return {
+      ok: false,
+      method: 'icacls',
+      code: error?.code || 'ICACLS_FAILED',
+    }
+  }
+}
+
 function loadVaultKey(env = process.env) {
   const configured = String(env.CREDENTIAL_ENCRYPTION_KEY || '').trim()
   if (configured) {
@@ -73,8 +180,15 @@ function loadVaultKey(env = process.env) {
       }
     }
   }
-  if (process.platform !== 'win32') {
-    try { fs.chmodSync(keyPath, 0o600) } catch { /* read remains the authority */ }
+  const permissionResult = hardenCredentialKeyFile(keyPath, { env })
+  if (!permissionResult.ok) {
+    // ACL tooling can be unavailable under managed Windows policies or minimal
+    // service environments. Preserve existing startup behavior, but make the
+    // privacy degradation visible instead of silently claiming a private key.
+    logger.warn(
+      '[credential-vault] unable to enforce private key permissions; continuing for compatibility',
+      permissionResult.code,
+    )
   }
   const key = readKeyFile(keyPath)
   keyCache.set(cacheId, key)

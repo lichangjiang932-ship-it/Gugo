@@ -12,6 +12,7 @@ delete process.env.CREDENTIAL_ENCRYPTION_KEY
 
 const {
   credentialKeyPath,
+  hardenCredentialKeyFile,
   isCredentialEnvelope,
   openCredentialObject,
   sealCredentialObject,
@@ -37,6 +38,106 @@ const {
 test.after(() => {
   closeDb()
   fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test('Windows credential key ACL removes inheritance and grants only current-user read/write without a shell', () => {
+  const calls = []
+  const result = hardenCredentialKeyFile('C:\\Users\\Alice Example\\.credentials.key', {
+    platform: 'win32',
+    env: { USERDOMAIN: 'WORKSTATION', USERNAME: 'Alice' },
+    userInfo: () => ({ username: 'Alice' }),
+    spawn(command, args, options) {
+      calls.push({ command, args, options })
+      return { status: 0, stdout: '', stderr: '' }
+    },
+  })
+
+  assert.deepEqual(result, { ok: true, method: 'icacls', code: null })
+  assert.deepEqual(calls, [
+    {
+      command: 'icacls.exe',
+      args: ['C:\\Users\\Alice Example\\.credentials.key', '/reset'],
+      options: {
+        encoding: 'utf8',
+        shell: false,
+        windowsHide: true,
+      },
+    },
+    {
+      command: 'icacls.exe',
+      args: [
+        'C:\\Users\\Alice Example\\.credentials.key',
+        '/inheritance:r',
+        '/grant:r',
+        'WORKSTATION\\Alice:(R,W)',
+      ],
+      options: {
+        encoding: 'utf8',
+        shell: false,
+        windowsHide: true,
+      },
+    },
+  ])
+})
+
+test('Windows credential ACL keeps Unicode and metacharacters inside argument boundaries', () => {
+  const calls = []
+  const result = hardenCredentialKeyFile('C:\\凭据 & secrets\\.credentials.key', {
+    platform: 'win32',
+    env: { USERDOMAIN: '域 & admin', USERNAME: 'ignored' },
+    userInfo: () => ({ username: '用户;name' }),
+    spawn(command, args, options) {
+      calls.push({ command, args, options })
+      return { status: 0, stdout: '', stderr: '' }
+    },
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(calls.length, 2)
+  assert.equal(calls[1].args[3], '域 & admin\\用户;name:(R,W)')
+  assert.equal(calls[1].options.shell, false)
+})
+
+test('credential key permission failures degrade without throwing so vault startup remains available', () => {
+  assert.deepEqual(hardenCredentialKeyFile('C:\\vault\\.credentials.key', {
+    platform: 'win32',
+    env: { USERNAME: 'Alice' },
+    spawn() {
+      return {
+        status: null,
+        error: Object.assign(new Error('icacls unavailable'), { code: 'ENOENT' }),
+      }
+    },
+  }), {
+    ok: false,
+    method: 'icacls',
+    code: 'ENOENT',
+  })
+
+  assert.deepEqual(hardenCredentialKeyFile('C:\\vault\\.credentials.key', {
+    platform: 'win32',
+    env: { USERNAME: 'Alice' },
+    spawn() {
+      return { status: 5, stdout: '', stderr: 'Access is denied.' }
+    },
+  }), {
+    ok: false,
+    method: 'icacls',
+    code: 'ICACLS_EXIT_5',
+  })
+})
+
+test('non-Windows credential key permissions remain chmod 0600', () => {
+  const calls = []
+  assert.deepEqual(hardenCredentialKeyFile('/tmp/.credentials.key', {
+    platform: 'linux',
+    chmod(target, mode) { calls.push({ target, mode }) },
+  }), {
+    ok: true,
+    method: 'chmod',
+    code: null,
+  })
+  assert.deepEqual(calls, [{ target: '/tmp/.credentials.key', mode: 0o600 }])
 })
 
 test('AES-GCM envelope round-trips and rejects tampering or purpose swapping', () => {

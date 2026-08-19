@@ -84,6 +84,9 @@ jobs:
           if (-not ($desktopAssets | Where-Object { $_ -like '*.exe' })) {
             throw 'Windows installer was not generated'
           }
+          if (-not ($desktopAssets | Where-Object { $_ -like '*.blockmap' })) {
+            throw 'Windows differential update blockmap was not generated'
+          }
           if (-not ($desktopAssets | Where-Object { $_ -like '*latest.yml' })) {
             throw 'Auto-update metadata latest.yml was not generated'
           }
