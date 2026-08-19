@@ -39,7 +39,7 @@ export default function DesktopUpdateCard({ compact = false }) {
         : <Download className="h-3.5 w-3.5" />
     const indicatorClass = passive
       ? 'bg-ink/5 text-ink-soft'
-      : 'bg-ember/[0.12] text-ember ring-1 ring-ember/20'
+      : 'bg-accent/[0.12] text-accent-ink ring-1 ring-accent/20'
     const action = ready
       ? () => window.gugoDesktop.installUpdate()
       : error
@@ -47,33 +47,33 @@ export default function DesktopUpdateCard({ compact = false }) {
         : null
     return <section className="mb-1 flex justify-center" aria-live="polite" aria-atomic="true" data-desktop-update-notice="compact">
       {action ? <button type="button" onClick={action} title={statusLabel} aria-label={statusLabel} className={`relative flex h-9 w-9 items-center justify-center rounded-lg ${indicatorClass}`}>
-        {icon}<span aria-hidden="true" className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-ember" />
+        {icon}<span aria-hidden="true" className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-accent" />
       </button> : <span role="status" title={statusLabel} aria-label={statusLabel} className={`relative flex h-9 w-9 items-center justify-center rounded-lg ${indicatorClass}`}>
-        {icon}{!passive && <span aria-hidden="true" className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-ember" />}
+        {icon}{!passive && <span aria-hidden="true" className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-accent" />}
       </span>}
     </section>
   }
 
   return (
     <section
-      className={`mb-2 rounded-xl border p-3 shadow-sm ${passive ? 'border-ink/10 bg-paper-2' : 'border-ember/35 bg-ember/10 ring-1 ring-ember/10'}`}
+      className={`mb-2 rounded-xl border p-3 shadow-sm ${passive ? 'border-ink/10 bg-paper-2' : 'border-accent/35 bg-accent/10 ring-1 ring-accent/10'}`}
       aria-live="polite"
       aria-atomic="true"
       data-desktop-update-notice="primary"
     >
       <div className="flex items-start gap-2.5">
-        <span className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${passive ? 'bg-ink/5 text-ink-soft' : 'bg-ember text-paper shadow-sm'}`}>
+        <span className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${passive ? 'bg-ink/5 text-ink-soft' : 'bg-accent text-accent-contrast shadow-sm'}`}>
           {ready || installing ? <RotateCw className={`h-3.5 w-3.5 ${installing ? 'animate-spin' : ''}`} /> : <Download className="h-3.5 w-3.5" />}
         </span>
         <div className="min-w-0 flex-1">
-          <div className={`text-xs font-semibold ${passive ? 'text-ink' : 'text-ember'}`}>{statusLabel}</div>
+          <div className={`text-xs font-semibold ${passive ? 'text-ink' : 'text-accent-ink'}`}>{statusLabel}</div>
           {update.version && <div className="mt-0.5 text-[10px] font-medium text-ink-soft">Gugo v{update.version}</div>}
         </div>
       </div>
       {downloading && (
         <div className="mt-2.5">
           <div className="h-1.5 overflow-hidden rounded-full bg-ink/10">
-            <div className="h-full rounded-full bg-ember transition-[width] duration-300" style={{ width: `${percent}%` }} />
+            <div className="h-full rounded-full bg-accent transition-[width] duration-300" style={{ width: `${percent}%` }} />
           </div>
           <div className="mt-1.5 flex justify-between text-[10px] text-ink-fade">
             <span>{formatBytes(update.transferred)} / {formatBytes(update.total)}</span>
@@ -81,9 +81,9 @@ export default function DesktopUpdateCard({ compact = false }) {
           </div>
         </div>
       )}
-      {ready && <button type="button" onClick={() => window.gugoDesktop.installUpdate()} className="mt-2.5 h-9 w-full rounded-lg bg-ember text-xs font-semibold text-paper shadow-sm transition-colors hover:bg-ember/90">{t('desktopUpdate.restartInstall')}</button>}
+      {ready && <button type="button" onClick={() => window.gugoDesktop.installUpdate()} className="mt-2.5 h-9 w-full rounded-lg bg-accent text-xs font-semibold text-accent-contrast shadow-sm transition-colors hover:bg-accent/90">{t('desktopUpdate.restartInstall')}</button>}
       {installing && <div className="mt-2 text-[10px] leading-4 text-ink-fade">{t('desktopUpdate.installingHint')}</div>}
-      {error && <button type="button" onClick={() => window.gugoDesktop.checkForUpdates()} className="mt-2 flex h-9 w-full items-center justify-center gap-1.5 rounded-lg border border-ember/30 bg-paper text-xs font-medium text-ember hover:bg-ember/5"><RefreshCw className="h-3 w-3" />{t('desktopUpdate.retry')}</button>}
+      {error && <button type="button" onClick={() => window.gugoDesktop.checkForUpdates()} className="mt-2 flex h-9 w-full items-center justify-center gap-1.5 rounded-lg border border-danger/30 bg-paper text-xs font-medium text-danger hover:bg-danger/5"><RefreshCw className="h-3 w-3" />{t('desktopUpdate.retry')}</button>}
     </section>
   )
 }

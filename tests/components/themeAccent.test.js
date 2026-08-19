@@ -1,7 +1,31 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import { applyAccent, hexToHsl } from '../../src/lib/themeAccent.js'
+import { accentContrastRgb, applyAccent, hexToHsl } from '../../src/lib/themeAccent.js'
+
+function relativeLuminance({ r, g, b }) {
+  const channels = [r, g, b].map((value) => {
+    const channel = value / 255
+    return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+  })
+  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+}
+
+function contrastRatio(first, second) {
+  const firstLuminance = relativeLuminance(first)
+  const secondLuminance = relativeLuminance(second)
+  return (Math.max(firstLuminance, secondLuminance) + 0.05) / (Math.min(firstLuminance, secondLuminance) + 0.05)
+}
+
+function parseHexRgb(hex) {
+  const value = hex.replace('#', '')
+  return { r: parseInt(value.slice(0, 2), 16), g: parseInt(value.slice(2, 4), 16), b: parseInt(value.slice(4, 6), 16) }
+}
+
+function parseChannelRgb(value) {
+  const [r, g, b] = value.split(/\s+/).map(Number)
+  return { r, g, b }
+}
 
 test('hexToHsl(#E86A3C) → ember 落在橙色 hue 区间', () => {
   const hsl = hexToHsl('#E86A3C')
@@ -38,6 +62,17 @@ test('applyAccent({ hex: ember, strong:false }) → vars + 空 className', () =>
   assert.ok(h >= 10 && h <= 35)
 })
 
+test('accent controls choose a WCAG AA foreground for every selectable color', () => {
+  const colors = ['#E86A3C', '#D94A64', '#B45DE5', '#7459E8', '#3D6FE0', '#2E8FA3', '#23A68B', '#A5C97A', '#D4A4FF', '#D59B32', '#000000', '#FFFFFF']
+  for (const color of colors) {
+    const foreground = accentContrastRgb(color)
+    const ratio = contrastRatio(parseHexRgb(color), parseChannelRgb(foreground))
+    assert.ok(ratio >= 4.5, `${color} accent foreground contrast ${ratio.toFixed(2)} is below 4.5`)
+    assert.equal(applyAccent({ hex: color }).vars['--color-accent-contrast-rgb'], foreground)
+  }
+  assert.equal(accentContrastRgb('invalid'), accentContrastRgb('#E86A3C'))
+})
+
 test('applyAccent({ strong:true }) → className theme-accent-strong + 更深/更艳', () => {
   const base = applyAccent({ hex: '#E86A3C', strong: false })
   const strong = applyAccent({ hex: '#E86A3C', strong: true })
@@ -57,6 +92,9 @@ test('artifact and document surfaces use neutral tokens outside the workbench ac
   const css = fs.readFileSync(new URL('../../src/index.css', import.meta.url), 'utf8')
   assert.match(css, /\[data-artifact-surface\]\s*\{/)
   assert.match(css, /--artifact-accent-rgb:\s*var\(--color-ink-soft-rgb\)/)
+  assert.match(css, /--color-accent-rgb:\s*var\(--artifact-accent-rgb\)/)
+  assert.match(css, /--color-accent-contrast-rgb:\s*var\(--color-paper-rgb\)/)
+  assert.match(css, /--color-accent-ink-rgb:\s*var\(--artifact-accent-rgb\)/)
   assert.match(css, /--color-ember-rgb:\s*var\(--artifact-accent-rgb\)/)
   assert.match(css, /--accent:\s*var\(--artifact-accent\)/)
   assert.doesNotMatch(css, /\.theme-accent-strong\s+\[data-artifact-surface\]/)

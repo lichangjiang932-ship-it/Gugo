@@ -106,7 +106,7 @@ export function WorkspaceOnboardingPromptController({
             </div>
             <div className="flex flex-col-reverse gap-2 border-t border-dashed border-ink-fade/40 px-5 py-4 sm:flex-row sm:justify-end">
               <button type="button" onClick={defer} className="h-9 rounded-md border border-ink-fade/60 px-4 text-sm text-ink-soft transition-colors hover:bg-paper-2">{t('permissionsDashboard.onboardingPromptLater')}</button>
-              <button type="button" onClick={openGuide} className="flex h-9 items-center justify-center gap-1.5 rounded-md bg-ember px-4 text-sm text-paper transition-colors hover:bg-ember/90">{t('permissionsDashboard.onboardingPromptOpen')}<ArrowRight className="h-4 w-4" /></button>
+              <button type="button" onClick={openGuide} className="flex h-9 items-center justify-center gap-1.5 rounded-md bg-accent px-4 text-sm text-accent-contrast transition-colors hover:bg-accent/90">{t('permissionsDashboard.onboardingPromptOpen')}<ArrowRight className="h-4 w-4" /></button>
             </div>
           </section>
         </div>
@@ -124,7 +124,7 @@ export function WorkspaceOnboardingPromptController({
         >
           <ShieldAlert className="h-4 w-4 shrink-0 text-amber-700" />
           <span className="truncate">{t('permissionsDashboard.onboardingPromptReminder')}</span>
-          <span className="shrink-0 font-medium text-ember">{t('permissionsDashboard.onboardingPromptReminderAction')}</span>
+          <span className="shrink-0 font-medium text-accent-ink">{t('permissionsDashboard.onboardingPromptReminderAction')}</span>
         </button>
       )}
     </>

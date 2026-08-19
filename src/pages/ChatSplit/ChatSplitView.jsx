@@ -230,7 +230,7 @@ export default function ChatSplitView({
           <div className="mx-auto w-full min-w-0 max-w-[min(872px,calc(100vw-360px))] px-4 pb-1.5">
             <div className="flex items-center gap-2 text-xs border border-amber-500/40 bg-amber-500/5 rounded-md px-3 py-2">
               <span className="flex-1 text-ink-soft">{t('toast.chatResumeHint')}</span>
-              <button type="button" onClick={onResume} className="h-7 px-3 rounded-md bg-ember text-paper">
+              <button type="button" onClick={onResume} className="h-7 px-3 rounded-md bg-accent text-accent-contrast">
                 {t('toast.chatResumeButton')}
               </button>
               <button type="button" onClick={onDismissResume} className="h-7 px-2 text-ink-fade hover:text-ink">

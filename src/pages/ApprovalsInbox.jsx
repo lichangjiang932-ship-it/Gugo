@@ -96,14 +96,14 @@ export function ApprovalCard({ approval, onDecide, busy, t }) {
             onChange={(e) => setDraft(e.target.value)}
             rows={Math.min(14, Math.max(4, draft.split('\n').length))}
             spellCheck={false}
-            className="w-full font-mono text-[11px] p-2.5 border border-ink/30 rounded bg-paper text-ink resize-y"
+            className="w-full font-mono text-xs p-2.5 border border-ink/30 rounded bg-paper text-ink resize-y"
           />
           {jsonError && (
             <p className="font-semibold text-sm text-red-600 mt-1">{jsonError}</p>
           )}
         </div>
       ) : (
-        <pre className="mt-3 p-2.5 border border-ink/20 rounded bg-paper/60 font-mono text-[11px] text-ink-soft overflow-x-auto max-h-48">
+        <pre className="mt-3 p-2.5 border border-ink/20 rounded bg-paper/60 font-mono text-xs text-ink-soft overflow-x-auto max-h-48">
           {JSON.stringify(approval.args ?? {}, null, 2)}
         </pre>
       )}
@@ -254,7 +254,7 @@ export default function ApprovalsInbox() {
         </div>
 
         {error && (
-          <div className="mb-4 px-4 py-2.5 border border-dashed border-ember/60 rounded-md font-semibold text-sm text-ember">
+          <div className="mb-4 px-4 py-2.5 border border-dashed border-accent/60 rounded-md font-semibold text-sm text-accent-ink">
             {error}
           </div>
         )}

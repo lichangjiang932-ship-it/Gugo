@@ -20,7 +20,7 @@ export function ChannelListGroup({ title, channels, activeId, onSelect }) {
         return (
           <button key={channel.id} type="button" onClick={() => onSelect(channel.id)} className={`flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-2 text-left ${active ? 'border border-ink-fade/40 bg-paper-2 text-ink' : 'text-ink-soft hover:bg-paper-2/60'}`}>
             <Icon className="h-4 w-4 shrink-0 text-ink-fade" />
-            <span className="min-w-0 flex-1"><span className="block truncate text-sm">{channel.name}</span><span className="block truncate text-[11px] text-ink-fade">{channel.agents?.map(agentLabel).join(', ') || 'No agents'}</span></span>
+            <span className="min-w-0 flex-1"><span className="block truncate text-sm">{channel.name}</span><span className="block truncate text-xs text-ink-fade">{channel.agents?.map(agentLabel).join(', ') || 'No agents'}</span></span>
           </button>
         )
       })}
@@ -30,7 +30,7 @@ export function ChannelListGroup({ title, channels, activeId, onSelect }) {
 
 export function AgentChip({ agent, active, onRemove }) {
   return (
-    <span className={`inline-flex h-7 max-w-40 items-center gap-1.5 rounded-md border px-2 text-xs ${active ? 'border-ember/50 bg-ember-soft text-ember' : 'border-ink-fade/40 bg-paper-2 text-ink-soft'}`}>
+    <span className={`inline-flex h-7 max-w-40 items-center gap-1.5 rounded-md border px-2 text-xs ${active ? 'border-accent/50 bg-accent-soft text-accent-ink' : 'border-ink-fade/40 bg-paper-2 text-ink-soft'}`}>
       <span className="truncate">{agentLabel(agent)}</span>
       {agent.role === 'owner' && <span className="font-mono text-[9px] uppercase text-ink-fade">owner</span>}
       {onRemove && <button type="button" onClick={() => onRemove(agent)} className="text-ink-fade hover:text-ink"><X className="h-3 w-3" /></button>}
@@ -52,7 +52,7 @@ export function SettingsPanel({ channel, agents, onClose, onUpdated, t }) {
   return (
     <div className="absolute right-4 top-14 z-40 flex w-[360px] flex-col gap-4 rounded-md border border-ink-fade/40 bg-paper p-4 shadow-xl">
       <div className="flex items-center justify-between"><h2 className="font-display text-lg text-ink">{t('channels.settings')}</h2><button type="button" onClick={onClose} className="rounded p-1 text-ink-fade hover:bg-paper-2 hover:text-ink"><X className="h-4 w-4" /></button></div>
-      <label className="flex flex-col gap-1.5"><span className="text-xs text-ink-fade">{t('channels.name')}</span><input value={name} onChange={(event) => setName(event.target.value)} className="h-9 rounded-md border border-ink-fade/40 bg-paper px-3 text-sm outline-none focus:border-ember" /></label>
+      <label className="flex flex-col gap-1.5"><span className="text-xs text-ink-fade">{t('channels.name')}</span><input value={name} onChange={(event) => setName(event.target.value)} className="h-9 rounded-md border border-ink-fade/40 bg-paper px-3 text-sm outline-none focus:border-focus" /></label>
       <label className="flex flex-col gap-1.5"><span className="text-xs text-ink-fade">{t('channels.defaultAgent')}</span><select value={defaultAgentId} onChange={(event) => setDefaultAgentId(event.target.value)} className="h-9 rounded-md border border-ink-fade/40 bg-paper px-3 text-sm"><option value="">{t('channels.noDefault')}</option>{channel.agents?.map((agent) => <option key={agent.id} value={agent.id}>{agentLabel(agent)}</option>)}</select></label>
       <button type="button" disabled={saving} onClick={() => runUpdate(() => updateChannelApi(channel.id, { name, defaultAgentId: defaultAgentId || null }))} className="h-9 rounded-md bg-ink px-3 text-sm text-paper hover:bg-ink-soft disabled:opacity-50">{saving ? t('common.saving') : t('common.save')}</button>
       <div className="flex flex-col gap-2"><span className="text-xs text-ink-fade">{t('channels.members')}</span><div className="flex flex-wrap gap-1.5">{channel.agents?.map((agent) => <AgentChip key={agent.id} agent={agent} active={agent.id === channel.defaultAgentId} onRemove={channel.agents.length > 1 ? () => runUpdate(() => removeChannelAgentApi(channel.id, agent.id)) : null} />)}</div></div>
@@ -84,11 +84,11 @@ export function CreateChannelPanel({ agents, onClose, onCreated, t }) {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/35 p-4">
       <form onSubmit={submit} className="flex w-full max-w-md flex-col gap-4 rounded-md border border-ink bg-paper p-5 shadow-xl">
         <div className="flex items-center justify-between"><h2 className="font-display text-xl text-ink">{t('channels.newChannel')}</h2><button type="button" onClick={onClose} className="rounded p-1 text-ink-fade hover:bg-paper-2 hover:text-ink"><X className="h-4 w-4" /></button></div>
-        <input value={name} onChange={(event) => setName(event.target.value)} placeholder={t('channels.name')} className="h-10 rounded-md border border-ink-fade/40 bg-paper px-3 text-sm outline-none focus:border-ember" />
+        <input value={name} onChange={(event) => setName(event.target.value)} placeholder={t('channels.name')} className="h-10 rounded-md border border-ink-fade/40 bg-paper px-3 text-sm outline-none focus:border-focus" />
         <div className="grid grid-cols-2 gap-1 rounded-md border border-ink-fade/40 p-1">{['group', 'dm'].map((item) => <button key={item} type="button" onClick={() => { setKind(item); setSelected([]); setDefaultAgentId('') }} className={`h-8 rounded text-sm ${kind === item ? 'bg-paper-2 text-ink' : 'text-ink-fade hover:bg-paper-2/60'}`}>{t(`channels.${item}`)}</button>)}</div>
         <div className="flex max-h-56 flex-col gap-1 overflow-y-auto">{agents.map((agent) => { const checked = selected.includes(agent.id); const disabled = kind === 'dm' && !checked && selected.length >= 1; return <label key={agent.id} className={`flex items-center gap-2 rounded-md px-2 py-2 ${disabled ? 'opacity-45' : 'hover:bg-paper-2'}`}><input type="checkbox" disabled={disabled} checked={checked} onChange={() => toggle(agent.id)} /><span className="text-sm text-ink-soft">{agentLabel(agent)}</span></label> })}</div>
         <select value={defaultAgentId} onChange={(event) => setDefaultAgentId(event.target.value)} className="h-9 rounded-md border border-ink-fade/40 bg-paper px-3 text-sm"><option value="">{t('channels.defaultAgent')}</option>{selected.map((id) => <option key={id} value={id}>{agentLabel(agents.find((item) => item.id === id))}</option>)}</select>
-        <button disabled={saving || !name.trim() || selected.length === 0} className="h-10 rounded-md bg-ember text-sm text-paper hover:bg-ember/90 disabled:opacity-50">{saving ? t('common.saving') : t('channels.create')}</button>
+        <button disabled={saving || !name.trim() || selected.length === 0} className="h-10 rounded-md bg-accent text-sm text-accent-contrast hover:bg-accent/90 disabled:opacity-50">{saving ? t('common.saving') : t('channels.create')}</button>
       </form>
     </div>
   )
@@ -110,7 +110,7 @@ export function MentionedText({ text, agents }) {
   }
   if (cursor < body.length) parts.push({ text: body.slice(cursor), mention: false })
   if (!parts.length) return body
-  return parts.map((part, index) => part.mention ? <mark key={index} className="rounded bg-ember-soft px-1 text-ember">{part.text}</mark> : <span key={index}>{part.text}</span>)
+  return parts.map((part, index) => part.mention ? <mark key={index} className="rounded bg-accent-soft px-1 text-accent-ink">{part.text}</mark> : <span key={index}>{part.text}</span>)
 }
 
 export function MessageBubble({ activeAgents, message, t }) {
@@ -121,7 +121,7 @@ export function MessageBubble({ activeAgents, message, t }) {
     <article className={`flex gap-3 ${isUser ? 'justify-end' : 'justify-start'}`}>
       {!isUser && <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-md border border-ink-fade/40 bg-paper-2">{agent?.avatarUrl ? <img src={agent.avatarUrl} alt="" className="h-full w-full object-cover" /> : <Bot className="h-4 w-4 text-ink-fade" />}</div>}
       <div className={`max-w-[76%] rounded-md border px-3 py-2 ${isUser ? 'border-ink bg-ink text-paper' : 'border-ink-fade/30 bg-paper-2 text-ink'}`}>
-        <div className={`mb-1 flex items-center gap-2 text-[11px] ${isUser ? 'text-paper/70' : 'text-ink-fade'}`}>{isUser ? <User className="h-3 w-3" /> : <Bot className="h-3 w-3" />}<span>{isUser ? t('channels.you') : agentLabel(agent)}</span>{!isUser && <span className="rounded border border-ink-fade/30 px-1 font-mono uppercase">agent</span>}<span>{time}</span></div>
+        <div className={`mb-1 flex items-center gap-2 text-xs ${isUser ? 'text-paper/70' : 'text-ink-fade'}`}>{isUser ? <User className="h-3 w-3" /> : <Bot className="h-3 w-3" />}<span>{isUser ? t('channels.you') : agentLabel(agent)}</span>{!isUser && <span className="rounded border border-ink-fade/30 px-1 font-mono uppercase">agent</span>}<span>{time}</span></div>
         <div className="whitespace-pre-wrap break-words text-sm leading-relaxed"><MentionedText text={message.content} agents={activeAgents} /></div>
       </div>
     </article>

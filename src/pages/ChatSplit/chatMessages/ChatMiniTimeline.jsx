@@ -59,7 +59,7 @@ export default function ChatMiniTimeline({ activeTurnIndex, messages, onSelectTu
               type="button"
               aria-current={active ? 'step' : undefined}
               aria-label={label}
-              className="chat-mini-timeline-marker group relative z-10 flex h-3 w-7 shrink-0 items-center justify-center rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/45"
+              className="chat-mini-timeline-marker group relative z-10 flex h-3 w-7 shrink-0 items-center justify-center rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/45"
               data-turn-index={turn.messageIndex}
               data-testid="chat-timeline-marker"
               onClick={() => onSelectTurn(turn.messageIndex)}
@@ -70,7 +70,7 @@ export default function ChatMiniTimeline({ activeTurnIndex, messages, onSelectTu
             >
               <span
                 aria-hidden="true"
-                className={`block h-0.5 rounded-pill transition-[width,background-color] duration-150 ${active ? 'w-4 bg-ember' : 'w-2 bg-ink-fade/55 group-hover:w-3.5 group-hover:bg-ink-soft'}`}
+                className={`block h-0.5 rounded-pill transition-[width,background-color] duration-150 ${active ? 'w-4 bg-accent' : 'w-2 bg-ink-fade/55 group-hover:w-3.5 group-hover:bg-ink-soft'}`}
               />
             </button>
           )

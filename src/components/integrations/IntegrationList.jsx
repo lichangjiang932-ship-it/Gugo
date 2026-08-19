@@ -17,7 +17,7 @@ export default function IntegrationList({ integrations, providersById, testingId
         <button type="button" onClick={() => onTest(integration.id)} disabled={testingId === integration.id} className="h-8 px-2 rounded-md border border-ink-fade/40 text-xs text-ink-soft hover:bg-paper-2 disabled:opacity-50 inline-flex items-center gap-1"><TestTube2 className="w-3.5 h-3.5" />{testingId === integration.id ? t('integrations.testing') : t('integrations.test')}</button>
         <button type="button" onClick={() => onEdit(integration)} className="w-8 h-8 rounded-md border border-ink-fade/40 text-ink-soft hover:bg-paper-2 inline-flex items-center justify-center" title={t('common.save')}><Pencil className="w-3.5 h-3.5" /></button>
         <IntegrationToggle enabled={integration.enabled !== false} onClick={() => onToggle(integration, integration.enabled === false)} label={integration.enabled === false ? t('integrations.disabled') : t('integrations.enabled')} />
-        <button type="button" onClick={() => onRemove(integration)} className="w-8 h-8 rounded-md border border-ember-line text-ember hover:bg-ember-soft inline-flex items-center justify-center" title={t('integrations.delete')}><Trash2 className="w-3.5 h-3.5" /></button>
+        <button type="button" onClick={() => onRemove(integration)} className="w-8 h-8 rounded-md border border-accent-line text-accent-ink hover:bg-accent-soft inline-flex items-center justify-center" title={t('integrations.delete')}><Trash2 className="w-3.5 h-3.5" /></button>
       </div>
     </div>
   })}</div>

@@ -16,7 +16,7 @@ export default function SkillsGrid({ skills, onSelect, onDelete, t }) {
             <button
               type="button"
               onClick={() => onSelect(skill)}
-              className="absolute inset-0 z-0 rounded-[18px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/50 focus-visible:ring-inset"
+              className="absolute inset-0 z-0 rounded-[18px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/50 focus-visible:ring-inset"
               aria-label={detailLabel}
               data-skill-open
             />
@@ -31,7 +31,7 @@ export default function SkillsGrid({ skills, onSelect, onDelete, t }) {
               <button
                 type="button"
                 onClick={(event) => onDelete(event, skill.id)}
-                className="absolute bottom-2.5 right-3 z-20 flex h-8 w-8 items-center justify-center rounded-lg text-ink-fade opacity-0 transition hover:bg-ink/[0.06] hover:text-ink group-hover:opacity-100 focus:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/50"
+                className="absolute bottom-2.5 right-3 z-20 flex h-8 w-8 items-center justify-center rounded-lg text-ink-fade opacity-0 transition hover:bg-ink/[0.06] hover:text-ink group-hover:opacity-100 focus:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/50"
                 title={t('skillsMarket.deleteCustom')}
                 aria-label={t('skillsMarket.deleteCustom')}
                 data-skill-action="delete"

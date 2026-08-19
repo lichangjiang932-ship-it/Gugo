@@ -277,7 +277,7 @@ export default function RightWorkbench({
       <button
         type="button"
         data-testid="workbench-resize-handle"
-        className="absolute inset-y-0 -left-1 z-20 w-2 cursor-col-resize touch-none bg-transparent outline-none after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:bg-transparent hover:after:bg-ember/50 focus-visible:after:bg-ember"
+        className="absolute inset-y-0 -left-1 z-20 w-2 cursor-col-resize touch-none bg-transparent outline-none after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:bg-transparent hover:after:bg-accent/50 focus-visible:after:bg-focus"
         aria-label={t('workbench.resize')}
         aria-valuemin={MIN_WIDTH}
         aria-valuemax={clampWidth(Number.MAX_SAFE_INTEGER)}
@@ -293,7 +293,7 @@ export default function RightWorkbench({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <h2 className="truncate text-xs font-semibold text-ink">{t('workbench.title')}</h2>
-            <span className={`h-1.5 w-1.5 shrink-0 rounded-pill ${isGenerating ? 'animate-pulse bg-ember' : 'bg-emerald-500'}`} aria-hidden="true" />
+            <span className={`h-1.5 w-1.5 shrink-0 rounded-pill ${isGenerating ? 'animate-pulse bg-running' : 'bg-success'}`} aria-hidden="true" />
           </div>
           <p className="mt-0.5 truncate text-xs leading-5 text-ink-fade" title={statusMessage || undefined}>
             {statusMessage || t(isGenerating ? 'workbench.active' : 'workbench.ready')}
@@ -370,7 +370,7 @@ export default function RightWorkbench({
                 <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-ink">{artifact.filename || t('workbench.untitledArtifact')}</span><span className="mt-0.5 block truncate text-xs uppercase tracking-wide text-ink-fade">{artifact.type || t('workbench.fileType')}</span></span>
                 <ExternalLink className="h-3.5 w-3.5 text-ink-fade" />
               </a>
-              <a href={withDownloadToken(artifact.url)} download={artifact.filename || ''} aria-label={t('chatPreview.download', { filename: artifact.filename || t('workbench.untitledArtifact') })} title={t('chatPreview.download', { filename: artifact.filename || t('workbench.untitledArtifact') })} className="mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-ink-fade hover:bg-paper hover:text-ember"><Download className="h-3.5 w-3.5" /></a>
+              <a href={withDownloadToken(artifact.url)} download={artifact.filename || ''} aria-label={t('chatPreview.download', { filename: artifact.filename || t('workbench.untitledArtifact') })} title={t('chatPreview.download', { filename: artifact.filename || t('workbench.untitledArtifact') })} className="mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-ink-fade hover:bg-paper hover:text-accent-ink"><Download className="h-3.5 w-3.5" /></a>
             </div>
           ))}
         </section>
@@ -380,7 +380,7 @@ export default function RightWorkbench({
         <section className="flex min-h-0 flex-1 flex-col">
           <div className="flex-1 space-y-4 overflow-y-auto px-3 py-4">
             {messages.filter((message) => ['user', 'assistant'].includes(message.role)).slice(-16).map((message, index) => (
-              <article key={message.id || index} className={`border-l-2 py-1 pl-3 ${message.role === 'user' ? 'ml-6 border-ember/50' : 'mr-3 border-ink/15'}`}>
+              <article key={message.id || index} className={`border-l-2 py-1 pl-3 ${message.role === 'user' ? 'ml-6 border-accent/50' : 'mr-3 border-ink/15'}`}>
                 <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-ink-fade">{t(message.role === 'user' ? 'workbench.you' : 'workbench.assistant')}</p>
                 <p className="whitespace-pre-wrap break-words text-xs leading-5 text-ink-soft">{String(message.content || '').slice(0, 1200)}</p>
               </article>
@@ -396,8 +396,8 @@ export default function RightWorkbench({
       {activeTab === 'browser' && (
         <section className="flex min-h-0 flex-1 flex-col">
           <form onSubmit={navigateBrowser} className="border-b border-ink/10 p-2">
-            <div className="flex gap-2"><input value={browserInput} onChange={(event) => setBrowserInput(event.target.value)} aria-label={t('workbench.browserUrl')} className="h-9 min-w-0 flex-1 rounded-control border border-ink/15 bg-paper px-3 text-xs outline-none focus:border-ember" /><button className="h-9 rounded-control bg-ink px-3 text-xs text-paper">{t('workbench.go')}</button></div>
-            {browserError && <p role="alert" className="mt-1.5 px-1 text-xs text-red-600">{browserError}</p>}
+            <div className="flex gap-2"><input value={browserInput} onChange={(event) => setBrowserInput(event.target.value)} aria-label={t('workbench.browserUrl')} className="h-9 min-w-0 flex-1 rounded-control border border-ink/15 bg-paper px-3 text-xs outline-none focus:border-focus" /><button className="h-9 rounded-control bg-ink px-3 text-xs text-paper">{t('workbench.go')}</button></div>
+            {browserError && <p role="alert" className="mt-1.5 px-1 text-xs text-danger">{browserError}</p>}
           </form>
           {browserUrl ? <iframe title={t('workbench.browser')} src={browserUrl} sandbox="allow-scripts allow-forms allow-popups" referrerPolicy="no-referrer" className="min-h-0 flex-1 border-0 bg-white" /> : <div className="flex flex-1 flex-col items-center justify-center gap-2 text-ink-fade"><Globe2 className="h-9 w-9 opacity-35" /><span className="text-sm">{t('workbench.browserHint')}</span></div>}
         </section>
@@ -405,9 +405,9 @@ export default function RightWorkbench({
 
       {activeTab === 'terminal' && (
         <section className="flex min-h-0 flex-1 flex-col bg-[#191919] text-stone-200">
-          <div className="flex items-center gap-2 border-b border-white/10 p-2"><input value={cwd} onChange={(event) => setCwd(event.target.value)} aria-label={t('workbench.cwd')} className="h-8 min-w-0 flex-1 rounded border border-white/10 bg-black/20 px-2 font-mono text-xs outline-none focus:border-ember" /><button type="button" onClick={() => setTerminalOutput('')} aria-label={t('workbench.clearTerminal')} title={t('workbench.clearTerminal')} className="flex h-8 w-8 items-center justify-center rounded text-stone-400 hover:bg-white/10 hover:text-stone-100"><Trash2 className="h-3.5 w-3.5" /></button></div>
+          <div className="flex items-center gap-2 border-b border-white/10 p-2"><input value={cwd} onChange={(event) => setCwd(event.target.value)} aria-label={t('workbench.cwd')} className="h-8 min-w-0 flex-1 rounded border border-white/10 bg-black/20 px-2 font-mono text-xs outline-none focus:border-focus" /><button type="button" onClick={() => setTerminalOutput('')} aria-label={t('workbench.clearTerminal')} title={t('workbench.clearTerminal')} className="flex h-8 w-8 items-center justify-center rounded text-stone-400 hover:bg-white/10 hover:text-stone-100"><Trash2 className="h-3.5 w-3.5" /></button></div>
           <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap p-3 font-mono text-xs leading-5">{terminalOutput || t('workbench.terminalHint')}</pre>
-          <form onSubmit={runCommand} className="flex gap-2 border-t border-white/10 p-2"><input value={command} onChange={(event) => setCommand(event.target.value)} placeholder={t('workbench.command')} className="h-9 min-w-0 flex-1 rounded border border-white/10 bg-black/30 px-2 font-mono text-xs outline-none focus:border-ember" /><button disabled={terminalBusy || !command.trim()} aria-label={t('workbench.run')} className="flex h-9 w-9 items-center justify-center rounded bg-ember disabled:opacity-50"><Play className="h-3.5 w-3.5" /></button></form>
+          <form onSubmit={runCommand} className="flex gap-2 border-t border-white/10 p-2"><input value={command} onChange={(event) => setCommand(event.target.value)} placeholder={t('workbench.command')} className="h-9 min-w-0 flex-1 rounded border border-white/10 bg-black/30 px-2 font-mono text-xs outline-none focus:border-focus" /><button disabled={terminalBusy || !command.trim()} aria-label={t('workbench.run')} className="flex h-9 w-9 items-center justify-center rounded bg-accent disabled:opacity-50"><Play className="h-3.5 w-3.5" /></button></form>
         </section>
       )}
       {contributedTabs.map((contribution) => activeTab === contribution.tabId && (
@@ -423,7 +423,7 @@ export default function RightWorkbench({
             onSendMessage,
             t,
           }}
-          fallback={<div role="alert" className="p-4 text-sm text-red-600">{t('errors.unknown')}</div>}
+          fallback={<div role="alert" className="p-4 text-sm text-danger">{t('errors.unknown')}</div>}
         />
       ))}
     </aside>

@@ -122,7 +122,7 @@ export default function ModelProvidersPanel({ onChanged }) {
 
   return <div className="border border-ink/20 rounded-md bg-paper p-4 flex flex-col gap-3">
     <div className="flex items-start gap-3">
-      <Server className="w-4 h-4 text-ember mt-0.5" />
+      <Server className="w-4 h-4 text-accent-ink mt-0.5" />
       <div className="flex-1"><div className="text-sm font-semibold text-ink">{t('modelProviders.title')}</div><div className="text-xs text-ink-fade mt-0.5">{t('modelProviders.subtitle')}</div></div>
       <button type="button" onClick={() => setEditing(emptyProvider())} className="h-8 px-3 bg-ink text-paper rounded-md text-xs flex items-center gap-1"><Plus className="w-3.5 h-3.5" />{t('modelProviders.add')}</button>
     </div>

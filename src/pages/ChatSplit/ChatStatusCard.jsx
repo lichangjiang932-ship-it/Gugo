@@ -50,7 +50,7 @@ export default function ChatStatusCard({
       </div>
 
       <button type="button" onClick={onOpenContext} className="mt-3 block w-full rounded-xl bg-ink/[0.035] px-3 py-2.5 text-left hover:bg-ink/[0.055]">
-        <div className="flex items-center justify-between text-[11px] text-ink-fade">
+        <div className="flex items-center justify-between text-xs text-ink-fade">
           <span>{copy.context}</span>
           <span className="font-mono">~{usage.estimatedTokens.toLocaleString()} / {usage.contextWindow.toLocaleString()} · {usage.percent}%</span>
         </div>
@@ -60,10 +60,10 @@ export default function ChatStatusCard({
       </button>
 
       <div className="mt-3 grid grid-cols-2 gap-x-5 gap-y-3 sm:grid-cols-4">
-        <div className="min-w-0"><div className="text-[11px] text-ink-fade">{copy.chatId}</div><div title={session?.id} className={valueClass('font-mono')}>{session?.id || copy.noChat}</div></div>
-        <div className="min-w-0"><div className="text-[11px] text-ink-fade">{copy.model}</div><div title={model} className={valueClass()}>{model || '—'}</div></div>
-        <div className="min-w-0"><div className="text-[11px] text-ink-fade">{copy.messages}</div><div className={valueClass()}>{messages.length}</div></div>
-        <div className="min-w-0"><div className="text-[11px] text-ink-fade">{copy.approval}</div><div className={valueClass()}>{modeLabel}</div></div>
+        <div className="min-w-0"><div className="text-xs text-ink-fade">{copy.chatId}</div><div title={session?.id} className={valueClass('font-mono')}>{session?.id || copy.noChat}</div></div>
+        <div className="min-w-0"><div className="text-xs text-ink-fade">{copy.model}</div><div title={model} className={valueClass()}>{model || '—'}</div></div>
+        <div className="min-w-0"><div className="text-xs text-ink-fade">{copy.messages}</div><div className={valueClass()}>{messages.length}</div></div>
+        <div className="min-w-0"><div className="text-xs text-ink-fade">{copy.approval}</div><div className={valueClass()}>{modeLabel}</div></div>
       </div>
 
       <div className="mt-3 flex items-center justify-between border-t border-ink/[0.08] pt-2.5">

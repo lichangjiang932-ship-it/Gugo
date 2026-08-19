@@ -43,12 +43,12 @@ function PresetPicker({ editing, setEditing, setShowAdvanced, providers, t }) {
     return <span className="ml-auto shrink-0 rounded bg-paper-2 px-1.5 py-0.5 text-[10px] text-ink-fade">{tokens}</span>
   }
   return <div className="flex flex-col gap-3">
-    <div className="flex items-center gap-2 text-xs font-medium text-ink"><Cloud className="h-4 w-4 text-ember" />{t('modelProviders.chooseProvider')}</div>
-    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">{CLOUD_PRESETS.map((preset) => <button key={preset.id} type="button" onClick={() => applyPreset(preset)} className={`min-h-14 rounded-lg border px-3 py-2 text-left text-xs flex flex-col gap-1 ${editing.presetId === preset.id ? 'border-ember bg-ember-soft/30 text-ink' : 'border-ink/15 bg-paper hover:border-ink/40 text-ink-soft'}`}><span className="flex items-center gap-2"><span className="font-medium">{presetLabel(preset)}</span>{contextBadge(preset)}</span><span className="text-[10px] text-ink-fade">{preset.models?.length ? t('modelProviders.modelsCount', { count: preset.models.length }) : '—'}</span></button>)}</div>
-    <div className="text-[11px] font-medium text-ink-soft">{t('modelProviders.localPreset')}</div>
+    <div className="flex items-center gap-2 text-xs font-medium text-ink"><Cloud className="h-4 w-4 text-accent-ink" />{t('modelProviders.chooseProvider')}</div>
+    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">{CLOUD_PRESETS.map((preset) => <button key={preset.id} type="button" onClick={() => applyPreset(preset)} className={`min-h-14 rounded-lg border px-3 py-2 text-left text-xs flex flex-col gap-1 ${editing.presetId === preset.id ? 'border-accent bg-accent-soft/30 text-ink' : 'border-ink/15 bg-paper hover:border-ink/40 text-ink-soft'}`}><span className="flex items-center gap-2"><span className="font-medium">{presetLabel(preset)}</span>{contextBadge(preset)}</span><span className="text-[10px] text-ink-fade">{preset.models?.length ? t('modelProviders.modelsCount', { count: preset.models.length }) : '—'}</span></button>)}</div>
+    <div className="text-xs font-medium text-ink-soft">{t('modelProviders.localPreset')}</div>
     <div className="flex flex-wrap gap-2">
-      {LOCAL_PRESETS.map((preset) => <button key={preset.id} type="button" onClick={() => applyPreset(preset)} className={`h-8 px-3 rounded-md border text-xs ${editing.presetId === preset.id ? 'border-ember bg-ember-soft/30 text-ink' : 'border-ink-fade/50 bg-paper text-ink hover:border-ink'}`}>{preset.label}</button>)}
-      <button type="button" onClick={() => { setEditing({ ...emptyProvider(), presetId: 'custom' }); setShowAdvanced(true) }} className={`h-8 px-3 rounded-md border text-xs ${editing.presetId === 'custom' ? 'border-ember bg-ember-soft/30' : 'border-ink-fade/50 bg-paper'}`}>{t('modelProviders.custom')}</button>
+      {LOCAL_PRESETS.map((preset) => <button key={preset.id} type="button" onClick={() => applyPreset(preset)} className={`h-8 px-3 rounded-md border text-xs ${editing.presetId === preset.id ? 'border-accent bg-accent-soft/30 text-ink' : 'border-ink-fade/50 bg-paper text-ink hover:border-ink'}`}>{preset.label}</button>)}
+      <button type="button" onClick={() => { setEditing({ ...emptyProvider(), presetId: 'custom' }); setShowAdvanced(true) }} className={`h-8 px-3 rounded-md border text-xs ${editing.presetId === 'custom' ? 'border-accent bg-accent-soft/30' : 'border-ink-fade/50 bg-paper'}`}>{t('modelProviders.custom')}</button>
     </div>
   </div>
 }
@@ -71,14 +71,14 @@ function CapabilityFields({ editing, setEditing, t }) {
     setEditing({ ...editing, modelProfiles })
   }
   return <div className="flex flex-col gap-3 p-3 rounded-md border border-ink-fade/30 bg-paper-2">
-    <div><div className="text-xs font-medium text-ink">{t('modelProviders.capsTitle')}</div><div className="text-[11px] text-ink-fade mt-0.5">{t('modelProviders.capsHint')}</div></div>
-    {editing.baseUrl.trim() && <div className="text-[11px] text-ink-fade break-all">{t('modelProviders.effectiveUrl')}: <code>{effectiveUrl(editing.baseUrl)}</code></div>}
+    <div><div className="text-xs font-medium text-ink">{t('modelProviders.capsTitle')}</div><div className="text-xs text-ink-fade mt-0.5">{t('modelProviders.capsHint')}</div></div>
+    {editing.baseUrl.trim() && <div className="text-xs text-ink-fade break-all">{t('modelProviders.effectiveUrl')}: <code>{effectiveUrl(editing.baseUrl)}</code></div>}
     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
       <Field label={t('modelProviders.kind')}><select value={editing.kind} onChange={(event) => setEditing({ ...editing, kind: event.target.value })}>{KIND_OPTIONS.map((kind) => <option key={kind || 'auto'} value={kind}>{kind || t('modelProviders.kindAuto')}</option>)}</select></Field>
       <Field label={t('modelProviders.contextWindow')}><input type="number" min="1024" value={editing.contextWindow} onChange={(event) => setEditing({ ...editing, contextWindow: event.target.value })} placeholder="8192" /></Field>
     </div>
     {models.length > 0 && <div className="flex flex-col gap-2">
-      <div className="text-[11px] text-ink-fade">{t('modelProviders.contextWindow')} / model</div>
+      <div className="text-xs text-ink-fade">{t('modelProviders.contextWindow')} / model</div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
         {models.map((model) => <Field key={model} label={model}><input type="number" min="1024" value={editing.modelProfiles?.[model]?.contextWindow || ''} onChange={(event) => updateModelContext(model, event.target.value)} placeholder={editing.contextWindow || '128000'} /></Field>)}
       </div>
@@ -92,7 +92,7 @@ function CapabilityFields({ editing, setEditing, t }) {
     </div>
     {(editing.kind === 'ollama' || /:11434/.test(editing.baseUrl)) && <Field label={`${t('modelProviders.keepAlive')} · ${t('modelProviders.keepAliveHint')}`}><input value={editing.keepAlive} onChange={(event) => setEditing({ ...editing, keepAlive: event.target.value })} placeholder="30m" /></Field>}
     <Field label={t('modelProviders.failoverEnabled')}><select value={editing.failoverEnabled} onChange={(event) => setEditing({ ...editing, failoverEnabled: event.target.value })}>{TRIBOOL_VALUES.map((value) => <option key={value || 'auto'} value={value}>{value === '' ? t('modelProviders.capAuto') : value === '1' ? t('modelProviders.capYes') : t('modelProviders.capNo')}</option>)}</select></Field>
-    <div className="text-[11px] text-ink-fade">{t('modelProviders.failoverHint')}</div>
+    <div className="text-xs text-ink-fade">{t('modelProviders.failoverHint')}</div>
   </div>
 }
 
@@ -110,10 +110,10 @@ export default function ProviderEditor({ editing, setEditing, providers = [], bu
         {editing.presetId && editing.presetId !== 'custom' && <div className="flex flex-col gap-3">
           <div className="flex flex-wrap items-center gap-2">
             <div className="text-sm font-semibold text-ink">{editing.label}</div>
-            {modelList.length > 0 && <span className="rounded-full bg-paper-2 px-2 py-0.5 text-[11px] text-ink-soft">{t('modelProviders.modelsCount', { count: modelList.length })}</span>}
+            {modelList.length > 0 && <span className="rounded-full bg-paper-2 px-2 py-0.5 text-xs text-ink-soft">{t('modelProviders.modelsCount', { count: modelList.length })}</span>}
           </div>
           {!isLocalPreset && <Field label={`API Key${editing.hasApiKey ? ` · ${t('modelProviders.keepSecret')}` : ''}`}><input type="password" value={editing.apiKey} onInput={(event) => setEditing({ ...editing, apiKey: event.currentTarget.value })} placeholder={editing.hasApiKey ? '••••••••' : t('modelProviders.apiKeyPlaceholder')} autoFocus /></Field>}
-          {!isLocalPreset && <div className="text-[11px] text-ink-fade">{t('modelProviders.presetFilled')}</div>}
+          {!isLocalPreset && <div className="text-xs text-ink-fade">{t('modelProviders.presetFilled')}</div>}
           {modelList.length > 1 && <Field label={t('modelProviders.defaultModel')}><select value={editing.defaultModel} onChange={(event) => setEditing({ ...editing, defaultModel: event.target.value })}>{modelList.map((model) => <option key={model} value={model}>{model}{selectedPreset?.legacyModels?.includes(model) ? ' · legacy' : ''}</option>)}</select></Field>}
           {isLocalPreset && <div className="text-xs text-ink-fade">{t('modelProviders.localDetectHint')}</div>}
         </div>}
@@ -130,7 +130,7 @@ export default function ProviderEditor({ editing, setEditing, providers = [], bu
       </div>
       <div className="flex justify-end gap-2 shrink-0 px-5 py-4 border-t border-ink/10 bg-paper">
         <button type="button" disabled={busy || detecting || !editing.baseUrl.trim() || (!isLocalOrCustom && !editing.apiKey.trim() && !editing.hasApiKey)} onClick={onDiscover} className="h-9 px-4 border border-ink/50 text-ink rounded-md text-sm flex items-center gap-1 disabled:opacity-40"><RefreshCw className={`w-4 h-4 ${detecting ? 'animate-spin' : ''}`} />{detecting ? t('modelProviders.detecting') : t('modelProviders.discover')}</button>
-        <button type="button" disabled={busy || detecting || !canSave} onClick={onSave} className="h-9 px-4 bg-ember text-paper rounded-md text-sm flex items-center gap-1 disabled:opacity-40"><Save className="w-4 h-4" />{t('modelProviders.save')}</button>
+        <button type="button" disabled={busy || detecting || !canSave} onClick={onSave} className="h-9 px-4 bg-accent text-accent-contrast rounded-md text-sm flex items-center gap-1 disabled:opacity-40"><Save className="w-4 h-4" />{t('modelProviders.save')}</button>
       </div>
     </div>
   </div>, document.body)

@@ -34,7 +34,7 @@ export default function MentionsAutocomplete({
             onMouseEnter={() => setSelectedIndex?.(index)}
             onClick={() => onPick?.(agent, mentionState)}
             className={`w-full min-w-0 flex items-center gap-2 px-2 py-2 rounded-md text-left ${
-              selected ? 'bg-ember-soft text-ember' : 'text-ink-soft hover:bg-paper-2'
+              selected ? 'bg-accent-soft text-accent-ink' : 'text-ink-soft hover:bg-paper-2'
             }`}
           >
             <span className="w-7 h-7 rounded-md border border-ink-fade/40 bg-paper-2 flex items-center justify-center shrink-0 overflow-hidden">
@@ -46,7 +46,7 @@ export default function MentionsAutocomplete({
             </span>
             <span className="min-w-0 flex-1">
               <span className="block text-sm font-medium truncate">@{agent.name || agent.id}</span>
-              <span className="block text-[11px] text-ink-fade truncate">{agent.id}</span>
+              <span className="block text-xs text-ink-fade truncate">{agent.id}</span>
             </span>
           </button>
         )

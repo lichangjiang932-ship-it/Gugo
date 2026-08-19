@@ -82,7 +82,7 @@ export function SettingsAppearancePanel({ t, state, dispatch }) {
                 style={{ background: color, border: state.accentColor === color ? '2px solid var(--color-ink)' : '1px solid rgb(var(--color-ink-rgb) / 0.16)' }}
                 aria-label={t('settings.setAccentColor', { color })}
               >
-                {state.accentColor === color ? <Check className="absolute inset-0 m-auto h-3.5 w-3.5 text-white" /> : null}
+                {state.accentColor === color ? <Check className="absolute inset-0 m-auto h-3.5 w-3.5 text-accent-contrast" /> : null}
               </button>
             ))}
           </div>

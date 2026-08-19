@@ -32,11 +32,11 @@ export default function MemoriesPanel({ copy, kindOptions }) {
       <input value={draft.content} onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))} placeholder={copy.contentPlaceholder} className="h-9 rounded-md border border-ink/30 bg-paper px-3 text-sm text-ink md:col-span-5" />
       <button type="submit" disabled={submitting || !draft.title.trim() || !draft.content.trim()} className="flex h-9 items-center justify-center gap-1 rounded-md bg-ink px-3 text-sm text-paper hover:bg-ink-soft disabled:opacity-50 md:col-span-1"><Plus className="h-4 w-4" /></button>
     </form>
-    {error && <div className="mb-3 rounded-md border border-ember/40 bg-ember-soft/30 p-2 text-sm text-ember">{error}</div>}
+    {error && <div className="mb-3 rounded-md border border-danger/40 bg-danger/5 p-2 text-sm text-danger">{error}</div>}
     {loading ? <div className="text-sm text-ink-fade">{copy.loading}</div> : items.length === 0 ? <div className="rounded-md border border-dashed border-ink-fade/40 p-8 text-center text-sm text-ink-fade">{copy.empty}</div> : <div className="divide-y divide-ink-fade/20 rounded-md border border-ink-fade/30">{items.map((item) => <div key={item.id} className="flex items-start gap-3 p-3">
-      <button onClick={() => toggle(item)} className="mt-0.5 shrink-0 text-ink-fade hover:text-ember" title={item.enabled ? copy.disable : copy.enable}>{item.enabled ? <ToggleRight className="h-5 w-5 text-ember" /> : <ToggleLeft className="h-5 w-5" />}</button>
+      <button onClick={() => toggle(item)} className="mt-0.5 shrink-0 text-ink-fade hover:text-accent-ink" title={item.enabled ? copy.disable : copy.enable}>{item.enabled ? <ToggleRight className="h-5 w-5 text-accent-ink" /> : <ToggleLeft className="h-5 w-5" />}</button>
       <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><span className="rounded bg-ink/5 px-1.5 py-0.5 font-mono text-xs text-ink-soft">{kindOptions.find((kind) => kind.id === item.kind)?.label || item.kind}</span><span className="truncate font-semibold text-base text-ink">{item.title}</span><span className="ml-auto font-mono text-xs text-ink-fade">~{item.tokens}t</span></div><div className="mt-1 whitespace-pre-wrap break-words text-sm text-ink-soft">{item.content}</div></div>
-      <button onClick={() => remove(item)} className="shrink-0 text-ink-fade hover:text-ember" title={copy.delete}><Trash2 className="h-4 w-4" /></button>
+      <button onClick={() => remove(item)} className="shrink-0 text-ink-fade hover:text-accent-ink" title={copy.delete}><Trash2 className="h-4 w-4" /></button>
     </div>)}</div>}
   </Section>
 }

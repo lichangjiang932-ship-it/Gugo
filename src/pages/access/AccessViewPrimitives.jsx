@@ -63,7 +63,7 @@ export function CapabilityLegend({ t }) {
         aria-expanded={open}
         aria-controls="access-capability-popover"
         onClick={() => setOpen((current) => !current)}
-        className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full border border-ink-fade/40 bg-paper px-3 text-xs text-ink-soft transition-colors hover:border-ink-fade hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/45"
+        className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full border border-ink-fade/40 bg-paper px-3 text-xs text-ink-soft transition-colors hover:border-ink-fade hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/45"
         data-testid="access-capability-help"
       >
         <Info className="h-3.5 w-3.5" aria-hidden="true" />
@@ -104,7 +104,7 @@ function InboundMessage({ message, busy, highlighted, onAllow, onReject, t }) {
   const attachmentCount = Array.isArray(message.payload?.attachments) ? message.payload.attachments.length : 0
   const date = new Date(message.createdAt)
   return (
-    <article id={`bridge-parking-${message.id}`} className={`rounded-xl border bg-paper p-4 transition-shadow ${highlighted ? 'border-ember ring-2 ring-ember/25 shadow-md' : 'border-amber-200'}`} data-testid={`bridge-parking-${message.id}`}>
+    <article id={`bridge-parking-${message.id}`} className={`rounded-xl border bg-paper p-4 transition-shadow ${highlighted ? 'border-accent ring-2 ring-accent/25 shadow-md' : 'border-amber-200'}`} data-testid={`bridge-parking-${message.id}`}>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><strong className="text-sm font-medium text-ink">{sender}</strong><span className="rounded-full border border-ink-fade/30 bg-paper-2 px-2 py-0.5 font-mono text-[9px] uppercase tracking-wide text-ink-fade">{message.provider}</span><time dateTime={Number.isNaN(date.getTime()) ? undefined : date.toISOString()} className="text-[10px] text-ink-fade">{Number.isNaN(date.getTime()) ? '' : date.toLocaleString()}</time></div><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-ink-soft">{text || t('access.attachmentMessage').replace('{count}', String(attachmentCount))}</p></div><div className="flex shrink-0 flex-wrap gap-2 sm:justify-end"><button type="button" disabled={busy} onClick={() => onReject(message.id)} className="inline-flex h-8 items-center gap-1.5 rounded-md border border-red-200 px-3 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"><Ban className="h-3.5 w-3.5" />{t('access.rejectSender')}</button><button type="button" disabled={busy} onClick={() => onAllow(message.id)} className="inline-flex h-8 min-w-28 items-center justify-center gap-1.5 rounded-md bg-ink px-3 text-xs text-paper hover:bg-ink-soft disabled:opacity-50">{busy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}{busy ? t('access.delivering') : t('access.allowAndDeliver')}</button></div></div>
     </article>
   )

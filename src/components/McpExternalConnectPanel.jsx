@@ -48,14 +48,14 @@ export default function McpExternalConnectPanel({ endpoint }) {
   return (
     <section className="mx-6 mt-4 p-4 border border-ink/15 rounded-lg bg-paper-2" aria-labelledby="mcp-external-title">
       <div className="flex items-start gap-3">
-        <div className="w-8 h-8 rounded-lg bg-ember/10 text-ember flex items-center justify-center shrink-0">
+        <div className="w-8 h-8 rounded-lg bg-accent/10 text-accent-ink flex items-center justify-center shrink-0">
           <Globe className="w-4 h-4" />
         </div>
         <div className="flex-1 min-w-0">
           <div id="mcp-external-title" className="text-sm font-semibold text-ink">{t('mcpExternal.title')}</div>
-          <div className="text-[11px] text-ink-fade mt-0.5">{t('mcpExternal.instruction')}</div>
+          <div className="text-xs text-ink-fade mt-0.5">{t('mcpExternal.instruction')}</div>
         </div>
-        <button type="button" onClick={() => navigate('/mobile-keys')} className="h-8 px-2.5 border border-ink/15 rounded-md text-xs text-ink-soft hover:border-ember/40 hover:text-ember flex items-center gap-1.5">
+        <button type="button" onClick={() => navigate('/mobile-keys')} className="h-8 px-2.5 border border-ink/15 rounded-md text-xs text-ink-soft hover:border-accent/40 hover:text-accent-ink flex items-center gap-1.5">
           <KeyRound className="w-3.5 h-3.5" />
           {t('mcpExternal.createKey')}
           <ExternalLink className="w-3 h-3" />
@@ -64,11 +64,11 @@ export default function McpExternalConnectPanel({ endpoint }) {
 
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(220px,0.7fr)_minmax(360px,1.3fr)] gap-3 mt-3">
         <div className="space-y-2.5">
-          <label className="block text-[11px] text-ink-fade">
+          <label className="block text-xs text-ink-fade">
             {t('mcpExternal.endpoint')}
             <input value={endpoint} readOnly className="w-full h-8 mt-1 px-2.5 text-xs font-mono bg-paper border border-ink/10 rounded-md text-ink-soft" />
           </label>
-          <label className="block text-[11px] text-ink-fade">
+          <label className="block text-xs text-ink-fade">
             {t('mcpExternal.keyLabel')}
             <input
               type="password"
@@ -77,7 +77,7 @@ export default function McpExternalConnectPanel({ endpoint }) {
               autoComplete="off"
               spellCheck="false"
               placeholder="ymak_..."
-              className={`w-full h-8 mt-1 px-2.5 text-xs font-mono bg-paper border rounded-md outline-none ${validKey ? 'border-ink/10 focus:border-ember/50' : 'border-rose-400'}`}
+              className={`w-full h-8 mt-1 px-2.5 text-xs font-mono bg-paper border rounded-md outline-none ${validKey ? 'border-ink/10 focus:border-focus/50' : 'border-rose-400'}`}
             />
           </label>
           <div className={`text-[10px] ${validKey ? 'text-ink-fade' : 'text-rose-700'}`}>
@@ -93,7 +93,7 @@ export default function McpExternalConnectPanel({ endpoint }) {
                 type="button"
                 onClick={() => { setAppId(app.id); setCopyState('idle') }}
                 aria-pressed={appId === app.id}
-                className={`px-2 py-1 rounded-md border text-[10px] transition-colors ${appId === app.id ? 'border-ember bg-ember/10 text-ember' : 'border-ink/15 text-ink-fade hover:border-ember/40 hover:text-ink'}`}
+                className={`px-2 py-1 rounded-md border text-[10px] transition-colors ${appId === app.id ? 'border-accent bg-accent/10 text-accent-ink' : 'border-ink/15 text-ink-fade hover:border-accent/40 hover:text-ink'}`}
               >
                 {app.label}
               </button>
@@ -104,7 +104,7 @@ export default function McpExternalConnectPanel({ endpoint }) {
             <span className={`text-[10px] ${copyState === 'error' ? 'text-rose-700' : 'text-ink-fade'}`} role="status">
               {copyState === 'error' ? t('mcpExternal.copyError') : t('mcpExternal.configHint')}
             </span>
-            <button type="button" onClick={copyConfig} disabled={!validKey} className="h-8 px-3 bg-ember text-paper rounded-md text-xs hover:bg-ember/90 disabled:opacity-50 flex items-center gap-1.5 shrink-0">
+            <button type="button" onClick={copyConfig} disabled={!validKey} className="h-8 px-3 bg-accent text-accent-contrast rounded-md text-xs hover:bg-accent/90 disabled:opacity-50 flex items-center gap-1.5 shrink-0">
               {copyState === 'copied' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
               {copyState === 'copied' ? t('mcpExternal.copied') : t('mcpExternal.copy')}
             </button>

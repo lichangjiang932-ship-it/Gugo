@@ -131,7 +131,7 @@ function ToolCallCard({ call, stepNumber, artifacts = [], onOpenArtifact, expand
             <span aria-hidden="true">·</span>
           </span>
           {summaryCanOpen ? (
-            <a href={managedArtifactHref(summaryArtifact)} target="_blank" rel="noopener noreferrer" className="chat-tool-summary chat-tool-summary-button text-left underline decoration-current/30 underline-offset-2 hover:decoration-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/45" title={summary} data-testid="tool-summary-open" onClick={(event) => openArtifactLink(event, onOpenArtifact, summaryArtifact, call)}>{summary}</a>
+            <a href={managedArtifactHref(summaryArtifact)} target="_blank" rel="noopener noreferrer" className="chat-tool-summary chat-tool-summary-button text-left underline decoration-current/30 underline-offset-2 hover:decoration-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/45" title={summary} data-testid="tool-summary-open" onClick={(event) => openArtifactLink(event, onOpenArtifact, summaryArtifact, call)}>{summary}</a>
           ) : <span className="chat-tool-summary" title={summary}>{summary}</span>}
           <span className="chat-tool-status"><StatusIcon className={call.status === 'running' ? 'animate-spin' : ''} aria-hidden="true" /><span>{statusText}</span>{call.status === 'running' && <LiveElapsed className="chat-tool-elapsed" />}</span>
           <button type="button" className="chat-tool-step-toggle" data-testid="tool-step-toggle" aria-expanded={isExpanded} aria-controls={detailsId} aria-label={isExpanded ? 'Collapse details' : 'Expand details'} onClick={(event) => { event.stopPropagation(); onToggle?.() }}><ChevronDown aria-hidden="true" /></button>

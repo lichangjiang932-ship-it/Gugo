@@ -52,7 +52,7 @@ export default function AccessView() {
           )}
           <label className="relative mb-3 block w-full">
             <Search className="absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-fade" />
-            <input value={controller.query} onChange={(event) => controller.setQuery(event.target.value)} placeholder={t('access.searchPlaceholder')} aria-label={t('access.searchPlaceholder')} className="h-11 w-full rounded-xl border border-ink-fade/45 bg-paper pl-11 pr-4 text-sm shadow-sm outline-none focus:border-ember" />
+            <input value={controller.query} onChange={(event) => controller.setQuery(event.target.value)} placeholder={t('access.searchPlaceholder')} aria-label={t('access.searchPlaceholder')} className="h-11 w-full rounded-xl border border-ink-fade/45 bg-paper pl-11 pr-4 text-sm shadow-sm outline-none focus:border-focus" />
           </label>
           <div className="mb-6 flex items-start gap-3">
             <div className="flex min-w-0 flex-1 gap-2 overflow-x-auto pb-1" aria-label={t('access.filterLabel')}>
@@ -63,7 +63,7 @@ export default function AccessView() {
             <CapabilityLegend t={t} />
           </div>
           {controller.error && <div className="mb-5 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-700">{controller.error}</div>}
-          {controller.loading ? <div className="flex h-52 items-center justify-center"><LoaderCircle className="h-6 w-6 animate-spin text-ember" /></div> : <AccessConnectorGrid controller={controller} t={t} />}
+          {controller.loading ? <div className="flex h-52 items-center justify-center"><LoaderCircle className="h-6 w-6 animate-spin text-running" /></div> : <AccessConnectorGrid controller={controller} t={t} />}
         </div>
       </main>
       {controller.activeConnector && <AccessConnectModal connector={controller.activeConnector} integration={controller.byProvider[controller.activeConnector.provider]} onClose={() => controller.setActiveConnector(null)} onConnected={controller.connected} t={t} />}

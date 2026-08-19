@@ -136,7 +136,7 @@
 .settings-dialog-status {
   margin-right: auto;
   color: var(--color-ink-fade);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .settings-dialog-content {
@@ -216,7 +216,7 @@
 .settings-group-header p {
   margin: 3px 0 0;
   color: var(--color-ink-fade);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.5;
 }
 
@@ -252,7 +252,7 @@
 .settings-row-copy p {
   margin: 3px 0 0;
   color: var(--color-ink-fade);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.5;
 }
 
@@ -316,7 +316,7 @@
   padding: 5px 10px;
   color: var(--color-ink-soft);
   font: inherit;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .settings-segmented button[aria-pressed="true"] {
@@ -355,7 +355,7 @@
   padding: 6px 10px;
   color: var(--color-ink-soft);
   font: inherit;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .settings-action-button:hover {
@@ -391,7 +391,7 @@
 
 .settings-inline-status {
   color: var(--color-ink-fade);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 @media (max-width: 720px) {

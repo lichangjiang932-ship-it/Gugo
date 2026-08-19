@@ -84,7 +84,7 @@ export default function PermissionModeSwitcher({ mode = 'normal', onChange, disa
                 <span className="min-w-0">
                   <span className="block text-sm text-ink">
                     {t(`approvals.mode.${m.id}`)}
-                    {active && <span className="ml-1.5 font-mono text-[9px] text-ember">●</span>}
+                    {active && <span className="ml-1.5 font-mono text-[9px] text-accent-ink">●</span>}
                   </span>
                   <span className="block text-xs text-ink-soft mt-0.5">{t(`approvals.mode.${m.id}Hint`)}</span>
                 </span>

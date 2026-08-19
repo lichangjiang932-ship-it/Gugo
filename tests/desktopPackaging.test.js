@@ -469,5 +469,5 @@ test('desktop update notice is the primary message directly above the account ca
   assert.ok(updateNotice > accountRegion)
   assert.ok(accountButton > updateNotice)
   assert.match(card, /data-desktop-update-notice="primary"/)
-  assert.match(card, /border-ember\/35 bg-ember\/10/)
+  assert.match(card, /border-accent\/35 bg-accent\/10/)
 })

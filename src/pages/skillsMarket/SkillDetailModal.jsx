@@ -29,9 +29,9 @@ export default function SkillDetailModal({ skill, copy, lang, onClose, onUse, t 
               <dt className="text-ink-fade">{copy.requirements}</dt><dd className="min-w-0 space-y-1 text-ink-soft">{describeSkillRequirements(skill, lang).map((requirement) => <div key={requirement}>{requirement}</div>)}</dd>
             </dl>
           </section>
-          {skill.runnable === false && <div className="rounded-md border border-ember-line bg-ember-soft/30 p-3 text-xs leading-5 text-ember">{t('skillsMarket.incompatibleHint')}</div>}
+          {skill.runnable === false && <div className="rounded-md border border-warning/35 bg-warning/5 p-3 text-xs leading-5 text-warning">{t('skillsMarket.incompatibleHint')}</div>}
           {skill.codexPlugin && <PluginSource skill={skill} t={t} />}
-          {(skill.perms || []).length > 0 && <section><h3 className="mb-2 text-xs font-medium text-ink">{t('nav.permissions')}</h3><div className="flex flex-wrap gap-1.5">{skill.perms.map((permission) => <span key={permission} className="rounded-full border border-ink-fade/40 px-2 py-1 text-[11px] text-ink-soft">{permission}</span>)}</div></section>}
+          {(skill.perms || []).length > 0 && <section><h3 className="mb-2 text-xs font-medium text-ink">{t('nav.permissions')}</h3><div className="flex flex-wrap gap-1.5">{skill.perms.map((permission) => <span key={permission} className="rounded-full border border-ink-fade/40 px-2 py-1 text-xs text-ink-soft">{permission}</span>)}</div></section>}
           {skill.systemPrompt && <section><h3 className="mb-2 text-xs font-medium text-ink">{t('nav.skillInstructions')}</h3><div className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded-md border border-ink/15 bg-paper-2 p-3 text-xs leading-5 text-ink-soft">{skill.systemPrompt}</div></section>}
         </div>
         <div className="flex justify-end border-t border-ink/15 px-5 py-4"><button type="button" onClick={onUse} disabled={skill.runnable === false} className="h-9 rounded-md bg-ink px-4 text-sm text-paper hover:bg-ink-soft disabled:cursor-not-allowed disabled:opacity-40">{skill.runnable === false ? t('skillsMarket.unavailable') : t('nav.useSkill')}</button></div>
@@ -47,5 +47,5 @@ function PluginSource({ skill, t }) {
     skill.license && [t('skillsMarket.license'), skill.license],
     skill.source?.rootName && [t('skillsMarket.localSource'), skill.source.rootName],
   ].filter(Boolean)
-  return <section><h3 className="mb-2 text-xs font-medium text-ink">{t('skillsMarket.pluginSource')}</h3><dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 rounded-md border border-ink/15 bg-paper-2 p-3 text-xs">{rows.map(([label, value]) => <div key={label} className="contents"><dt className="text-ink-fade">{label}</dt><dd className="min-w-0 break-words text-ink-soft">{value}</dd></div>)}{skill.repository && <><dt className="text-ink-fade">GitHub</dt><dd className="min-w-0 break-all"><a href={skill.repository} target="_blank" rel="noreferrer" className="text-ember underline">{skill.repository}</a></dd></>}</dl></section>
+  return <section><h3 className="mb-2 text-xs font-medium text-ink">{t('skillsMarket.pluginSource')}</h3><dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 rounded-md border border-ink/15 bg-paper-2 p-3 text-xs">{rows.map(([label, value]) => <div key={label} className="contents"><dt className="text-ink-fade">{label}</dt><dd className="min-w-0 break-words text-ink-soft">{value}</dd></div>)}{skill.repository && <><dt className="text-ink-fade">GitHub</dt><dd className="min-w-0 break-all"><a href={skill.repository} target="_blank" rel="noreferrer" className="text-accent-ink underline">{skill.repository}</a></dd></>}</dl></section>
 }

@@ -207,7 +207,7 @@ export default function AccessConnectModal({ connector, integration, onClose, on
                   {busy ? <LoaderCircle className="w-4 h-4 animate-spin" /> : <ExternalLink className="w-4 h-4" />}
                   {busy ? t('access.oauthConnecting') : t('access.oauthConnect')}
                 </button>
-                <div className="flex items-center gap-3 text-[11px] text-ink-fade">
+                <div className="flex items-center gap-3 text-xs text-ink-fade">
                   <span className="h-px bg-ink-fade/30 flex-1" />
                   {t('access.oauthManualFallback')}
                   <span className="h-px bg-ink-fade/30 flex-1" />
@@ -244,7 +244,7 @@ export default function AccessConnectModal({ connector, integration, onClose, on
                 <TextField type="number" label={t('access.imapPort')} value={form.imapPort} onChange={(value) => set('imapPort', value)} placeholder="993" />
               </div>
               <TextField type="password" label={t('access.mailPassword')} value={form.password} onChange={(value) => set('password', value)} placeholder={passwordPlaceholder} />
-              <p className="-mt-2 text-[11px] leading-4 text-ink-fade">{t('access.qqMailPasswordHint')}</p>
+              <p className="-mt-2 text-xs leading-4 text-ink-fade">{t('access.qqMailPasswordHint')}</p>
             </>}
             {['notion', 'github', 'google_drive', 'google_calendar', 'jira', 'linear', 'trello', 'gitlab', 'asana', 'clickup', 'airtable', 'monday', 'hubspot', 'zendesk', 'todoist', 'dropbox', 'onedrive', 'confluence', 'salesforce', 'slack'].includes(connector.provider) && <TextField type="password" label={t('access.token')} value={form.token} onChange={(value) => set('token', value)} placeholder={passwordPlaceholder} required={!integration} />}
             {connector.provider === 'feishu' && <TextField type="password" label={t('access.appSecret')} value={form.appSecret} onChange={(value) => set('appSecret', value)} placeholder={passwordPlaceholder} required={!integration} />}
@@ -252,7 +252,7 @@ export default function AccessConnectModal({ connector, integration, onClose, on
             {connector.provider === 'discord' && <TextField type="password" label={t('access.botToken')} value={form.token} onChange={(value) => set('token', value)} placeholder={passwordPlaceholder} required={!integration} />}
             {connector.provider === 'qq' && <TextField type="password" label={t('access.appSecret')} value={form.appSecret} onChange={(value) => set('appSecret', value)} placeholder={passwordPlaceholder} required={!integration} />}
             {connector.provider === 'qq' && <TextField type="password" label={t('access.botTokenOptional')} value={form.token} onChange={(value) => set('token', value)} placeholder={passwordPlaceholder} />}
-            {connector.setupUrl && <a href={connector.setupUrl} target="_blank" rel="noreferrer" className="text-xs text-ember hover:underline inline-flex items-center gap-1">{t('access.openSetup')}<ExternalLink className="w-3 h-3" /></a>}
+            {connector.setupUrl && <a href={connector.setupUrl} target="_blank" rel="noreferrer" className="text-xs text-accent-ink hover:underline inline-flex items-center gap-1">{t('access.openSetup')}<ExternalLink className="w-3 h-3" /></a>}
             {message && <p className="text-sm text-red-600">{message}</p>}
             <div className="flex justify-end gap-2 pt-2">
               <button type="button" onClick={onClose} className="h-9 px-4 rounded-md border border-ink-fade/50 text-sm">{t('access.cancel')}</button>
@@ -266,5 +266,5 @@ export default function AccessConnectModal({ connector, integration, onClose, on
 }
 
 function TextField({ label, value, onChange, type = 'text', placeholder = '', required = false }) {
-  return <label className="flex flex-col gap-1.5"><span className="text-xs text-ink-soft">{label}</span><input type={type} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} required={required} className="h-10 px-3 rounded-md border border-ink-fade/50 bg-paper outline-none focus:border-ember text-sm" /></label>
+  return <label className="flex flex-col gap-1.5"><span className="text-xs text-ink-soft">{label}</span><input type={type} value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} required={required} className="h-10 px-3 rounded-md border border-ink-fade/50 bg-paper outline-none focus:border-focus text-sm" /></label>
 }

@@ -117,7 +117,7 @@ export default function InlineDirectoryBrowser({
         )}
       </div>
 
-      {error && <p className="mt-2 text-xs text-red-600" role="alert">{error}</p>}
+      {error && <p className="mt-2 text-xs text-danger" role="alert">{error}</p>}
       <div className="mt-2 flex justify-end gap-2">
         {onCancel && (
           <button type="button" onClick={onCancel} className="h-8 rounded-md border border-ink/15 px-3 text-xs text-ink-soft">

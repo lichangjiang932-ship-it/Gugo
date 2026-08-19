@@ -41,7 +41,7 @@ export default function SkillsToolbar({
           <button type="button" onClick={() => openGithub()} className="h-9 px-4 border border-ink/70 rounded-md font-semibold text-sm flex items-center gap-1.5 hover:bg-paper-2">
             <GitBranch className="w-4 h-4" />{t('skillsMarket.fromGithub')}
           </button>
-          <button type="button" onClick={openCustomModal} className="h-9 px-4 bg-ember text-paper rounded-md font-semibold text-sm flex items-center gap-1.5 hover:bg-ember/90">
+          <button type="button" onClick={openCustomModal} className="h-9 px-4 bg-accent text-accent-contrast rounded-md font-semibold text-sm flex items-center gap-1.5 hover:bg-accent/90">
             <Plus className="w-4 h-4" />{t('skillsMarket.custom')}
           </button>
         </div>

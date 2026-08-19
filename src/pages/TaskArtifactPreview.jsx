@@ -63,7 +63,7 @@ export default function TaskArtifactPreview({ artifact, onClose }) {
         <a
           href={downloadUrl}
           download={artifact.filename || ''}
-          className="h-8 px-3 inline-flex items-center gap-1.5 rounded-md bg-ember text-paper text-xs"
+          className="h-8 px-3 inline-flex items-center gap-1.5 rounded-md bg-accent text-accent-contrast text-xs"
         >
           <Download className="w-3.5 h-3.5" />
           {t('artifact.download')}

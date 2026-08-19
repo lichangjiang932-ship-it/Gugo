@@ -148,8 +148,8 @@ export default function SettingsDataExport({ state, dispatch, storageBytes, stor
           </button>
         </SettingsRow>
         <SettingsRow title={t('settingsDataExport.clearAll')} description={t('settingsDataExport.clearWarning')}>
-          <AlertTriangle className="h-3.5 w-3.5 text-ember" />
-          <button type="button" onClick={clearAll} disabled={clearing} className="settings-action-button text-ember">
+          <AlertTriangle className="h-3.5 w-3.5 text-accent-ink" />
+          <button type="button" onClick={clearAll} disabled={clearing} className="settings-action-button text-accent-ink">
             <Trash2 className="h-3.5 w-3.5" />{t('settingsDataExport.clearAll')}
           </button>
         </SettingsRow>

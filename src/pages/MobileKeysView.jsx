@@ -103,17 +103,17 @@ export default function MobileKeysView() {
       <LeftRail />
       <div className="flex-1 flex flex-col min-w-0">
         <div className="px-6 py-4 border-b border-ink/10 flex items-center gap-3">
-          <MonitorSmartphone className="w-5 h-5 text-ember" />
+          <MonitorSmartphone className="w-5 h-5 text-accent-ink" />
           <div className="flex-1">
             <div className="text-base font-semibold text-ink">{t('mobile.title') || '手机入口'}</div>
-            <div className="text-[11px] text-ink-fade">
+            <div className="text-xs text-ink-fade">
               {t('mobile.subtitle') || '生成 access key，在手机/局域网浏览器打开 /mobile.html 即可登录使用。'}
             </div>
           </div>
           <button
             type="button"
             onClick={() => setShowCreate(true)}
-            className="h-8 px-3 bg-ember text-paper rounded-md text-xs hover:bg-ember/90 flex items-center gap-1"
+            className="h-8 px-3 bg-accent text-accent-contrast rounded-md text-xs hover:bg-accent/90 flex items-center gap-1"
           >
             <Plus className="w-3.5 h-3.5" />
             {t('mobile.new') || '新建 Key'}
@@ -138,7 +138,7 @@ export default function MobileKeysView() {
                     <div className="text-sm font-medium text-ink truncate">
                       {k.label || (t('mobile.noLabel') || '(无标签)')}
                     </div>
-                    <div className="text-[11px] text-ink-fade mt-0.5 flex flex-wrap gap-x-3">
+                    <div className="text-xs text-ink-fade mt-0.5 flex flex-wrap gap-x-3">
                       <span>{t('mobile.created') || '创建'}：{fmtTs(k.createdAt)}</span>
                       <span>{t('mobile.lastUsed') || '上次使用'}：{fmtTs(k.lastUsedAt)}</span>
                       <span>{t('mobile.ttl') || '有效期'}：{fmtTtl(k)}</span>
@@ -178,7 +178,7 @@ export default function MobileKeysView() {
                   value={newLabel}
                   onChange={(e) => setNewLabel(e.target.value)}
                   placeholder="iPhone 15 / 客厅 iPad"
-                  className="w-full mt-1 border border-ink/10 rounded-md px-2 py-1.5 text-sm bg-paper-2 outline-none focus:border-ember/40"
+                  className="w-full mt-1 border border-ink/10 rounded-md px-2 py-1.5 text-sm bg-paper-2 outline-none focus:border-focus/40"
                 />
               </label>
               <label className="text-xs text-ink-soft">
@@ -190,7 +190,7 @@ export default function MobileKeysView() {
                   value={newTtlHours}
                   onChange={(e) => setNewTtlHours(e.target.value)}
                   placeholder="24"
-                  className="w-full mt-1 border border-ink/10 rounded-md px-2 py-1.5 text-sm bg-paper-2 outline-none focus:border-ember/40"
+                  className="w-full mt-1 border border-ink/10 rounded-md px-2 py-1.5 text-sm bg-paper-2 outline-none focus:border-focus/40"
                 />
               </label>
               <div className="flex items-center gap-2 justify-end pt-2">
@@ -205,7 +205,7 @@ export default function MobileKeysView() {
                   type="button"
                   onClick={onCreate}
                   disabled={creating}
-                  className="h-8 px-3 rounded-md bg-ember text-paper text-xs hover:bg-ember/90 disabled:opacity-60"
+                  className="h-8 px-3 rounded-md bg-accent text-accent-contrast text-xs hover:bg-accent/90 disabled:opacity-60"
                 >
                   {creating ? (t('mobile.creating') || '创建中…') : (t('mobile.create') || '创建')}
                 </button>
@@ -217,7 +217,7 @@ export default function MobileKeysView() {
         {/* show-once 显示明文 key */}
         {revealed && (
           <div className="fixed inset-0 bg-ink/40 flex items-center justify-center z-50">
-            <div className="bg-paper rounded-md border border-ember/40 p-5 w-[520px] max-w-[90vw] flex flex-col gap-3">
+            <div className="bg-paper rounded-md border border-accent/40 p-5 w-[520px] max-w-[90vw] flex flex-col gap-3">
               <div className="flex items-center gap-2">
                 <div className="text-base font-semibold text-ink flex-1">
                   {t('mobile.revealTitle') || '只显示一次，请立即复制'}
@@ -244,12 +244,12 @@ export default function MobileKeysView() {
                 <button
                   type="button"
                   onClick={() => setRevealed(null)}
-                  className="h-8 px-3 rounded-md bg-ember text-paper text-xs hover:bg-ember/90"
+                  className="h-8 px-3 rounded-md bg-accent text-accent-contrast text-xs hover:bg-accent/90"
                 >
                   {t('mobile.done') || '我已保存'}
                 </button>
               </div>
-              <div className="text-[11px] text-ink-fade pt-1 border-t border-ink/5">
+              <div className="text-xs text-ink-fade pt-1 border-t border-ink/5">
                 {t('mobile.howTo') || '使用方法：手机浏览器打开'} <span className="font-mono">/mobile.html</span> {t('mobile.thenPaste') || '，粘贴此 key 即可登录。'}
               </div>
             </div>

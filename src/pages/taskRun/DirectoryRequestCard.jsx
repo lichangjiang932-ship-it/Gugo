@@ -12,11 +12,11 @@ export default function DirectoryRequestCard({ request, busy, error = '', onAuth
   const authorize = () => onAuthorize({ path, accessMode, authorizationScope })
 
   return (
-    <div className="mt-3 rounded-md border border-dashed border-sky-500/50 bg-sky-500/5 p-3" data-testid="directory-request-card">
+    <div className="mt-3 rounded-md border border-dashed border-running/45 bg-running/5 p-3" data-testid="directory-request-card">
       <div className="flex items-start gap-2">
-        <FolderOpen className="mt-0.5 h-4 w-4 shrink-0 text-sky-700" />
+        <FolderOpen className="mt-0.5 h-4 w-4 shrink-0 text-running" />
         <div className="min-w-0">
-          <p className="text-[11px] text-sky-700">{t('taskSteering.directoryRequestTitle')}</p>
+          <p className="text-xs font-medium text-running">{t('taskSteering.directoryRequestTitle')}</p>
           <p className="mt-1 text-sm text-ink">{request.why || request.purpose || request.question}</p>
         </div>
       </div>
@@ -28,14 +28,14 @@ export default function DirectoryRequestCard({ request, busy, error = '', onAuth
             if (event.key === 'Enter' && path.trim() && !busy) authorize()
           }}
           placeholder={t('taskSteering.directoryPathPlaceholder')}
-          className="h-9 min-w-0 flex-1 rounded-md border border-sky-500/30 bg-paper px-3 font-mono text-xs text-ink outline-none focus:border-sky-600"
+          className="h-9 min-w-0 flex-1 rounded-md border border-running/30 bg-paper px-3 font-mono text-xs text-ink outline-none focus:border-focus"
         />
         <select
           value={accessMode}
           onChange={(event) => setAccessMode(event.target.value)}
           disabled={!!busy}
           aria-label={t('taskSteering.directoryAccessMode')}
-          className="h-9 rounded-md border border-sky-500/30 bg-paper px-2 text-xs text-ink"
+          className="h-9 rounded-md border border-running/30 bg-paper px-2 text-xs text-ink"
         >
           <option value="read_only">{t('taskSteering.directoryReadOnly')}</option>
           <option value="read_write">{t('taskSteering.directoryReadWrite')}</option>
@@ -45,7 +45,7 @@ export default function DirectoryRequestCard({ request, busy, error = '', onAuth
           onChange={(event) => setAuthorizationScope(event.target.value)}
           disabled={!!busy}
           aria-label={t('localFiles.authorizationLifetime')}
-          className="h-9 rounded-md border border-sky-500/30 bg-paper px-2 text-xs text-ink"
+          className="h-9 rounded-md border border-running/30 bg-paper px-2 text-xs text-ink"
         >
           <option value="session">{t('localFiles.authorizationSession')}</option>
           <option value="persistent">{t('localFiles.authorizationPersistent')}</option>
@@ -54,7 +54,7 @@ export default function DirectoryRequestCard({ request, busy, error = '', onAuth
           type="button"
           onClick={authorize}
           disabled={!!busy || !path.trim()}
-          className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-sky-600/50 px-3 text-xs text-sky-800 disabled:opacity-40"
+          className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md border border-running/50 px-3 text-xs text-running disabled:opacity-40"
         >
           {busy === 'grant' && <LoaderCircle className="h-3.5 w-3.5 animate-spin" />}
           {t('taskSteering.authorizeDirectory')}
@@ -63,7 +63,7 @@ export default function DirectoryRequestCard({ request, busy, error = '', onAuth
           type="button"
           onClick={() => setBrowserOpen((open) => !open)}
           disabled={!!busy}
-          className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md bg-sky-700 px-3 text-xs text-white disabled:opacity-40"
+          className="inline-flex h-9 items-center justify-center gap-1.5 rounded-md bg-running px-3 text-xs text-paper disabled:opacity-40"
         >
           <FolderOpen className="h-3.5 w-3.5" />
           {t('taskSteering.chooseDirectory')}
@@ -81,8 +81,8 @@ export default function DirectoryRequestCard({ request, busy, error = '', onAuth
           browseDirectories={browseDirectories}
         />
       )}
-      {error && <p className="mt-2 text-[11px] text-red-600" role="alert">{error}</p>}
-      <p className="mt-2 text-[11px] text-ink-fade">{t('taskSteering.directorySecurityHint')}</p>
+      {error && <p className="mt-2 text-xs text-danger" role="alert">{error}</p>}
+      <p className="mt-2 text-xs text-ink-fade">{t('taskSteering.directorySecurityHint')}</p>
     </div>
   )
 }

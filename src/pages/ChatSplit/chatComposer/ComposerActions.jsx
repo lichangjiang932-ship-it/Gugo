@@ -120,7 +120,7 @@ export default function ComposerActions({
           disabled={!isGenerating && sendDisabled}
           title={primaryActionLabel}
           aria-label={primaryActionLabel}
-          className={`flex h-8 w-8 items-center justify-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${isGenerating ? 'bg-ember hover:bg-ember/90' : 'bg-ink hover:bg-ink-soft'}`}
+          className={`flex h-8 w-8 items-center justify-center rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${isGenerating ? 'bg-accent hover:bg-accent/90' : 'bg-ink hover:bg-ink-soft'}`}
         >
           {isGenerating
             ? <Square className="h-3.5 w-3.5 fill-current text-paper" />
