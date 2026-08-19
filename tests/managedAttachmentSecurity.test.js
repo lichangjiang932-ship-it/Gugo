@@ -154,6 +154,63 @@ test('cleanup removes expired pending rows, stale temporary files, and disk orph
   for (const filePath of staleFiles) assert.equal(fs.existsSync(filePath), false)
 })
 
+test('cleanup preserves fresh uploads until a newly-created session finishes syncing', async () => {
+  const identity = makeIdentity('session-sync-race')
+  const futureSessionId = 'managed-security-session-sync-race-future'
+  const now = Date.now()
+  const attachment = await upload({
+    identity,
+    sessionId: futureSessionId,
+    name: 'fresh-before-session.txt',
+    now,
+  })
+  const env = {
+    ...process.env,
+    ATTACHMENT_PENDING_TTL_MS: '10000',
+    ATTACHMENT_ORPHAN_GRACE_MS: '1000',
+  }
+
+  assert.deepEqual(cleanupManagedAttachments({
+    userId: identity.userId,
+    now: now + 999,
+    env,
+  }), { removedRows: 0, removedFiles: 0 })
+  assert.equal(rowCount(attachment.id), 1)
+  assert.equal(fs.existsSync(attachment.fullPath), true)
+
+  upsertSession({ id: futureSessionId, userId: identity.userId, title: 'Synced session' })
+  assert.deepEqual(cleanupManagedAttachments({
+    userId: identity.userId,
+    now: now + 5_000,
+    env,
+  }), { removedRows: 0, removedFiles: 0 })
+  assert.equal(rowCount(attachment.id), 1)
+  assert.equal(fs.existsSync(attachment.fullPath), true)
+})
+
+test('cleanup removes an attachment after its provisional session misses the grace period', async () => {
+  const identity = makeIdentity('session-sync-timeout')
+  const now = Date.now()
+  const attachment = await upload({
+    identity,
+    sessionId: 'managed-security-session-sync-timeout-missing',
+    name: 'orphaned-session.txt',
+    now,
+  })
+
+  assert.deepEqual(cleanupManagedAttachments({
+    userId: identity.userId,
+    now: now + 1_000,
+    env: {
+      ...process.env,
+      ATTACHMENT_PENDING_TTL_MS: '10000',
+      ATTACHMENT_ORPHAN_GRACE_MS: '1000',
+    },
+  }), { removedRows: 1, removedFiles: 0 })
+  assert.equal(rowCount(attachment.id), 0)
+  assert.equal(fs.existsSync(attachment.fullPath), false)
+})
+
 test('cleanup never treats DB-backed files outside the maintenance batch as orphans', async () => {
   const identity = makeIdentity('cleanup-batch')
   const createdAt = Date.now() - 5_000
