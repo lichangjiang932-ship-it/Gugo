@@ -360,7 +360,7 @@ test('only final deliverables are clickable in execution steps and appear below'
   }
 })
 
-test('an interrupted resumable turn hides retained output until the turn completes', async () => {
+test('an interrupted resumable turn keeps committed local receipts visible', async () => {
   const dom = setupDom()
   const rootElement = document.getElementById('root')
   const root = createRoot(rootElement)
@@ -373,10 +373,11 @@ test('an interrupted resumable turn hides retained output until the turn complet
       streaming: true,
       interrupted: true,
       serverTurnId: 'turn-interrupted-delivery',
-      verifiedLocalFiles: [{
-        id: 'verified-report',
-        path: 'D:\\work\\verified-report.pdf',
-        filename: 'verified-report.pdf',
+      retainedLocalFiles: [{
+        id: 'retained-report',
+        path: 'D:\\work\\retained-report.pdf',
+        filename: 'retained-report.pdf',
+        retainedAt: Date.now(),
       }],
     },
   }
@@ -395,7 +396,9 @@ test('an interrupted resumable turn hides retained output until the turn complet
     ))
 
     assert.equal(rootElement.querySelector('[data-testid="execution-toggle"]')?.getAttribute('aria-expanded'), 'true')
-    assert.equal(rootElement.querySelector('[data-testid="artifact-open-card"]'), null)
+    const receipt = rootElement.querySelector('[data-testid="artifact-open-card"]')
+    assert.ok(receipt)
+    assert.match(receipt.textContent, /retained-report\.pdf/)
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

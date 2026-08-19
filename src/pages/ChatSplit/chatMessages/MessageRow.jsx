@@ -22,6 +22,7 @@ import ActivityStream from './ActivityStream.jsx'
 import { buildCollapsedUserMessagePreview, copyableMessageText, shouldCollapseUserMessage, splitUserSkillCommand } from './messageContent.js'
 import DirectoryRequestCard from '../../taskRun/DirectoryRequestCard.jsx'
 import { buildAttachmentPreviewArtifact } from '../../../lib/attachmentPreview.js'
+import { UiContributionSlot } from '../../../plugins/uiContributionRegistry.js'
 
 function stableTimelineSegments(content, toolCalls) {
   let previousToolKey = 'start'
@@ -69,16 +70,16 @@ export default function MessageRow({
   // Their collapsed source/link presentation is part of the message itself, not
   // global chat generation state.
   const isMessageComplete = !isCurrentStreamingMessage
-  // Managed artifacts remain final-delivery only. A failed turn may still
-  // expose authorized local receipts, while their verified/retained flags keep
-  // readback-complete and verification-pending files distinct. Interrupted or
-  // paused turns stay hidden because they may resume.
+  // Managed artifacts remain final-delivery only. Local file receipts describe
+  // committed filesystem state, so terminal failure/suspension must not hide
+  // them. Their verified/retained flags remain independent from task acceptance.
+  const isSuspendedTurn = msg.meta?.interrupted === true || msg.meta?.paused === true
   const canPresentManagedDeliverables = isMessageComplete
     && msg.meta?.failed !== true
-    && msg.meta?.interrupted !== true
+    && !isSuspendedTurn
   const canPresentLocalFiles = isMessageComplete
-    && msg.meta?.interrupted !== true
-    && msg.meta?.paused !== true
+    || isSuspendedTurn
+    || msg.meta?.failed === true
   const canPresentDeliverables = canPresentManagedDeliverables || canPresentLocalFiles
   const deliveryArtifacts = canPresentManagedDeliverables ? resolvedDeliveryArtifacts : []
   const artifactPreview = deliveryArtifacts.length > 0 ? buildMessageArtifactPreview(msg) : null
@@ -212,6 +213,12 @@ export default function MessageRow({
                 : t('chatMessages.replyIncomplete')}
             </span>
           </div>
+        )}
+        {msg.role === 'assistant' && (
+          <UiContributionSlot
+            slot="conversation-node"
+            context={{ msg, isCurrentStreamingMessage, isMessageComplete, onOpenArtifact: openArtifact, t }}
+          />
         )}
         {msg.role === 'assistant' && msg.meta?.type === 'context_summary' && (
           <div className="mt-3 border-t border-ink/10 pt-2 text-xs text-ink-fade">

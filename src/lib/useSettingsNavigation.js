@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useMemo } from 'react'
 
 import { useLocation, useNavigate } from './router.jsx'
 import {
@@ -6,24 +6,30 @@ import {
   resolveSettingsSectionFromSearch,
   settingsPathForSection,
 } from './settingsNavigation.js'
+import { useUiContributions } from '../plugins/uiContributionRegistry.js'
 
 export default function useSettingsNavigation() {
   const location = useLocation()
   const navigate = useNavigate()
-  const activeSection = resolveSettingsSectionFromSearch(location.search)
-  const activeNav = resolveSettingsNavFromSearch(location.search)
+  const contributedSections = useUiContributions('settings-section')
+  const allowedSections = useMemo(
+    () => contributedSections.map((contribution) => contribution.sectionId),
+    [contributedSections],
+  )
+  const activeSection = resolveSettingsSectionFromSearch(location.search, allowedSections)
+  const activeNav = resolveSettingsNavFromSearch(location.search, allowedSections)
 
   const setActiveNav = useCallback((nextNav) => {
     if (nextNav === activeNav) return false
-    navigate(settingsPathForSection(nextNav))
+    navigate(settingsPathForSection(nextNav, allowedSections))
     return true
-  }, [activeNav, navigate])
+  }, [activeNav, allowedSections, navigate])
 
   const setActiveSection = useCallback((nextSection) => {
     if (nextSection === activeSection) return false
-    navigate(settingsPathForSection(nextSection))
+    navigate(settingsPathForSection(nextSection, allowedSections))
     return true
-  }, [activeSection, navigate])
+  }, [activeSection, allowedSections, navigate])
 
   return {
     activeNav,

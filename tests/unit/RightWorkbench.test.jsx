@@ -440,6 +440,58 @@ test('right workbench shows and opens retained files as verification-pending', a
   }
 })
 
+test('right workbench exposes retained receipts from a paused streaming turn', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+
+  try {
+    await act(async () => root.render(
+      <RightWorkbench
+        messages={[{
+          id: 'paused-receipt-message',
+          role: 'assistant',
+          content: 'Paused after writing the draft.',
+          meta: {
+            streaming: true,
+            paused: true,
+            serverTurnId: 'paused-receipt-turn',
+            serverArtifacts: [{
+              id: 'paused-managed-draft',
+              filename: 'managed-draft.html',
+              url: '/api/artifacts/paused-managed-draft',
+            }],
+            serverDeliveryArtifactIds: ['paused-managed-draft'],
+            retainedLocalFiles: [{
+              id: 'paused-retained-receipt',
+              path: 'E:\\output\\paused-draft.html',
+              filename: 'paused-draft.html',
+              retainedAt: 123,
+            }],
+          },
+        }]}
+        activeTab="files"
+        onTabChange={() => {}}
+        onClose={() => {}}
+        onOpenArtifact={() => {}}
+        onSendMessage={() => {}}
+        isGenerating
+      />,
+    ))
+
+    assert.equal(rootElement.querySelector('[data-testid="workbench-file-count"]').textContent, '1')
+    assert.match(rootElement.textContent, /paused-draft\.html/)
+    assert.doesNotMatch(rootElement.textContent, /managed-draft\.html/)
+    assert.match(
+      rootElement.querySelector('[data-testid="workbench-file-open"]').getAttribute('href'),
+      /\/api\/local-files\/retained\/paused-retained-receipt/,
+    )
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
 test('right workbench keeps only the latest receipt for the same verified local path', async () => {
   const dom = setupDom()
   const rootElement = dom.window.document.getElementById('root')

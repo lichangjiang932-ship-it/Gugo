@@ -3,7 +3,9 @@ import test from 'node:test'
 import {
   buildFinalOutput,
   buildPriorStepsContext,
+  evaluateTaskAcceptance,
   normalizeStructuredPlanSteps,
+  parseTaskEvaluation,
   resolveWorkflowState,
   shouldCompileDocx,
   withStableStepIds,
@@ -61,6 +63,41 @@ test('workflow refuses to report incomplete non-runnable work as completed', () 
   ])
   assert.equal(resolution.state, 'blocked')
   assert.match(resolution.reason, /未完成/)
+})
+
+test('workflow refuses completed steps whose structured acceptance did not pass', () => {
+  const resolution = resolveWorkflowState([
+    { kind: 'execute', status: 'completed' },
+    {
+      kind: 'verify',
+      status: 'completed',
+      output: { acceptance: { verdict: 'blocked', summary: '缺少外部服务' } },
+    },
+    { kind: 'finalize', status: 'completed', output: { complete: true } },
+  ])
+  assert.equal(resolution.state, 'failed')
+  assert.equal(resolution.reason, '缺少外部服务')
+})
+
+test('task evaluator prefers a structured verdict and normalizes its evidence', () => {
+  const text = [
+    'Checks finished.',
+    '<task_evaluation>{"verdict":"fixable","summary":"One assertion failed","issues":["test A"],"evidence":["npm test: 1 failed"]}</task_evaluation>',
+  ].join('\n')
+  assert.deepEqual(parseTaskEvaluation(text), {
+    verdict: 'fixable',
+    summary: 'One assertion failed',
+    issues: ['test A'],
+    evidence: ['npm test: 1 failed'],
+    source: 'model',
+  })
+  assert.equal(evaluateTaskAcceptance({ text }).verdict, 'fixable')
+})
+
+test('task evaluator falls back to a bounded repair verdict for legacy prose', () => {
+  const acceptance = evaluateTaskAcceptance({ text: '构建失败，仍有错误需要修正。' })
+  assert.equal(acceptance.verdict, 'fixable')
+  assert.equal(acceptance.source, 'fallback')
 })
 
 test('prior step context carries completed results but not future work', () => {

@@ -35,6 +35,7 @@ import useSettingsNavigation from '../lib/useSettingsNavigation.js'
 import useModalFocusTrap from '../lib/useModalFocusTrap.js'
 import { useAppContext } from '../store/AppContext'
 import { estimatePersistedSnapshotBytes } from '../store/indexedDbPersistence.js'
+import { UiContributionRenderer, useUiContributions } from '../plugins/uiContributionRegistry.js'
 import './SettingsView.css'
 
 const SETTINGS_NAV_GROUPS = [
@@ -107,6 +108,7 @@ export default function SettingsView() {
   const { state, dispatch } = useAppContext()
   const { activeSection, navigate, setActiveSection } = useSettingsNavigation()
   const { t, lang, setLang, languages } = useT()
+  const contributedSettings = useUiContributions('settings-section')
   const closeButtonRef = useRef(null)
   const dialogRef = useRef(null)
   const [storageTick, setStorageTick] = useState(0)
@@ -251,6 +253,14 @@ export default function SettingsView() {
   }
 
   function renderActive() {
+    const contributed = contributedSettings.find((entry) => entry.sectionId === activeSection)
+    if (contributed) {
+      return <UiContributionRenderer
+        contribution={contributed}
+        context={{ dispatch, lang, navigate, state, t }}
+        fallback={<div role="alert" className="settings-empty-state">{t('errors.unknown')}</div>}
+      />
+    }
     switch (activeSection) {
       case SETTINGS_TAB_GENERAL:
         return renderGeneral()
@@ -317,6 +327,24 @@ export default function SettingsView() {
                   </div>
                 </section>
               ))}
+              {contributedSettings.length > 0 && (
+                <section className="settings-nav-group" data-ui-contribution-slot="settings-section">
+                  <h2 className="settings-nav-group-label">{t('settings.plugins')}</h2>
+                  <div className="settings-nav-group-items">
+                    {contributedSettings.map((contribution) => (
+                      <button
+                        key={contribution.key}
+                        type="button"
+                        aria-current={activeSection === contribution.sectionId ? 'page' : undefined}
+                        onClick={() => setActiveSection(contribution.sectionId)}
+                        className="settings-nav-item"
+                      >
+                        {contribution.labelKey ? t(contribution.labelKey) : contribution.label}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              )}
             </nav>
           </aside>
           <main className="settings-dialog-main">

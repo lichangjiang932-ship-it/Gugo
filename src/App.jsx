@@ -11,6 +11,8 @@ import PreviewBanner from './components/PreviewBanner.jsx'
 import StoragePersistenceNotice from './components/StoragePersistenceNotice.jsx'
 import CommandPalette from './components/CommandPalette.jsx'
 import WorkspaceOnboardingPrompt from './components/WorkspaceOnboardingPrompt.jsx'
+import './plugins/firstPartyUiContributions.js'
+import { UiContributionRenderer, useUiContributions } from './plugins/uiContributionRegistry.js'
 
 const ChatSplit = lazy(() => import('./pages/ChatSplit'))
 const SkillsMarket = lazy(() => import('./pages/SkillsMarket'))
@@ -22,8 +24,6 @@ const SettingsView = lazy(() => import('./pages/SettingsView'))
 const MemoryView = lazy(() => import('./pages/MemoryView'))
 const DeskView = lazy(() => import('./pages/DeskView'))
 const AgentList = lazy(() => import('./pages/AgentList'))
-const McpServersView = lazy(() => import('./pages/McpServersView'))
-const ReasonixWorkspace = lazy(() => import('./pages/ReasonixWorkspace'))
 const ChannelsPage = lazy(() => import('./pages/ChannelsPage'))
 const AccessView = lazy(() => import('./pages/AccessView'))
 
@@ -42,7 +42,20 @@ function RoutedTaskRunPanel() {
   return <TaskRunPanel key={searchParams.get('job') || ''} />
 }
 
+function ContributedRoute({ contribution }) {
+  const { t } = useT()
+  const content = (
+    <UiContributionRenderer
+      contribution={contribution}
+      context={contribution.componentProps || {}}
+      fallback={<div role="alert" className="p-6 text-sm text-red-600">{t('errors.unknown')}</div>}
+    />
+  )
+  return contribution.requiresAuth ? <RequireAuth>{content}</RequireAuth> : content
+}
+
 function App() {
+  const contributedRoutes = useUiContributions('route')
   return (
     <I18nProvider>
     <ToastProvider>
@@ -70,8 +83,13 @@ function App() {
           <Route path="/agents" element={<RequireAuth><AgentList /></RequireAuth>} />
           <Route path="/channels" element={<RequireAuth><ChannelsPage /></RequireAuth>} />
           <Route path="/access" element={<RequireAuth><AccessView /></RequireAuth>} />
-          <Route path="/mcp" element={<RequireAuth><McpServersView /></RequireAuth>} />
-          <Route path="/reasonix" element={<RequireAuth><ReasonixWorkspace /></RequireAuth>} />
+          {contributedRoutes.map((contribution) => (
+            <Route
+              key={contribution.key}
+              path={contribution.path}
+              element={<ContributedRoute contribution={contribution} />}
+            />
+          ))}
 
           <Route path="/login" element={<Navigate to="/chat" replace />} />
           <Route path="*" element={<Navigate to="/chat" replace />} />

@@ -17,6 +17,8 @@ const chatViewSource = fs.readFileSync(new URL('../src/pages/ChatSplit/ChatSplit
 const markdownSource = fs.readFileSync(new URL('../src/components/MarkdownRenderer.jsx', import.meta.url), 'utf8')
 const toolCardSource = fs.readFileSync(new URL('../src/components/ToolCallCard.jsx', import.meta.url), 'utf8')
 const stylesSource = fs.readFileSync(new URL('../src/index.css', import.meta.url), 'utf8')
+const runtimeCompletionSource = fs.readFileSync(new URL('../server/services/loop/runtime-initializeCompletion.js', import.meta.url), 'utf8')
+const runtimeStateSource = fs.readFileSync(new URL('../server/services/loop/runtimeState.js', import.meta.url), 'utf8')
 
 test('chat composer accepts pasted files and shows managed upload state', () => {
   assert.match(composerSource, /onPaste=/)
@@ -67,11 +69,20 @@ test('only the streaming assistant hides copy actions while completed messages r
   assert.match(markdownSource, /function CodeBlock\(\{ children, streaming = false \}\)/)
   assert.match(markdownSource, /!streaming && \(/)
   assert.match(messageRowSource, /const isMessageComplete = !isCurrentStreamingMessage/)
-  assert.match(messageRowSource, /const canPresentManagedDeliverables = isMessageComplete[\s\S]*?msg\.meta\?\.failed !== true[\s\S]*?msg\.meta\?\.interrupted !== true/)
-  assert.match(messageRowSource, /const canPresentLocalFiles = isMessageComplete[\s\S]*?msg\.meta\?\.interrupted !== true[\s\S]*?msg\.meta\?\.paused !== true/)
+  assert.match(messageRowSource, /const isSuspendedTurn = msg\.meta\?\.interrupted === true \|\| msg\.meta\?\.paused === true/)
+  assert.match(messageRowSource, /const canPresentManagedDeliverables = isMessageComplete[\s\S]*?msg\.meta\?\.failed !== true[\s\S]*?!isSuspendedTurn/)
+  assert.match(messageRowSource, /const canPresentLocalFiles = isMessageComplete[\s\S]*?\|\| isSuspendedTurn[\s\S]*?\|\| msg\.meta\?\.failed === true/)
   assert.match(messageRowSource, /const canPresentDeliverables = canPresentManagedDeliverables \|\| canPresentLocalFiles/)
   assert.match(messageRowSource, /const showArtifactPreview = !!artifactPreview && canPresentManagedDeliverables/)
   assert.match(chatViewSource, /isGenerating=\{isGenerating\}/)
+})
+
+test('local mutation receipts stay visible when managed-artifact acceptance fails', () => {
+  assert.doesNotMatch(runtimeCompletionSource, /未通过验证的中间文件不会交付/)
+  assert.match(runtimeCompletionSource, /已成功提交到本地的文件仍会保留并显示其验证状态/)
+  assert.match(runtimeStateSource, /已提交到本地的文件仍会保留并显示其验证状态/)
+  assert.match(runtimeStateSource, /未通过验证的受管理产物不会作为最终交付/)
+  assert.match(messageRowSource, /const canPresentLocalFiles = isMessageComplete[\s\S]*?\|\| isSuspendedTurn[\s\S]*?\|\| msg\.meta\?\.failed === true/)
 })
 
 test('composer uses one stable primary button for send and stop', () => {

@@ -10,6 +10,9 @@ const RUNNABLE_STEP_STATUSES = new Set(['queued', 'pending'])
 //   这句**否定式的验收标准**误判成失败,导致每个正常任务都被标「部分完成」。
 //   所以这里只匹配带否定语义的说法,并在匹配前剥掉回显的完成标准段落。
 const VERIFICATION_FAILURE = /(未通过|不通过|未能|没能|无法(?:完成|修复|运行|验证)|执行失败|构建失败|测试失败|验证失败|仍然?报错|没有(?:完成|修复|通过)|未完成|尚未(?:修复|完成)|仍(?:然)?存在阻塞|仍有错误|not\s+(?:complete|completed|fixed|passing|working)|tests?\s+failed|build\s+failed)/i
+const VERIFICATION_NEEDS_USER = /(需要(?:用户|你)(?:提供|补充|确认|选择|授权)|等待(?:用户|你)|缺少(?:凭据|授权|输入|信息)|needs?\s+(?:user|input|approval)|waiting\s+for\s+(?:user|approval))/i
+const VERIFICATION_BLOCKED = /(外部(?:服务|依赖).*?(?:不可用|阻塞)|权限不足|环境(?:不可用|缺失)|无法在当前环境|blocked\s+by|environment\s+(?:is\s+)?unavailable|missing\s+(?:dependency|credential|permission))/i
+const ACCEPTANCE_VERDICTS = new Set(['pass', 'fixable', 'blocked', 'needs_user'])
 
 /** 剥掉 verify 提示词回显的「完成标准」清单,只对模型真正的结论做失败判定。 */
 function stripEchoedAcceptance(text = '') {
@@ -17,6 +20,11 @@ function stripEchoedAcceptance(text = '') {
     .replace(/完成标准：[\s\S]*?(?=\n\s*\n|$)/g, '')
     .replace(/现在进入验证与修正阶段。[^\n]*/g, '')
     .replace(/原始任务：[^\n]*/g, '')
+    .replace(/能运行测试、构建、格式检查或读取产物时[^\n]*/g, '')
+    .replace(/发现任务范围内且可修复的问题就直接修正并重新验证[^\n]*/g, '')
+    .replace(/最后给出简短验收结论[^\n]*/g, '')
+    .replace(/结尾必须单独输出一行\s*<task_evaluation>[^\n]*/gi, '')
+    .replace(/只有所有完成标准均有证据时才能使用 pass[^\n]*/gi, '')
 }
 
 function cleanText(value) {
@@ -130,6 +138,26 @@ export function resolveWorkflowState(steps = []) {
   if (!steps.length) return { state: 'invalid', reason: '任务没有可执行步骤' }
   const failed = steps.find((step) => step.status === 'failed')
   if (failed) return { state: 'failed', reason: failed.error || `步骤“${failed.title}”执行失败` }
+  const rejectedAcceptance = steps.find((step) => (
+    step.kind === 'verify'
+    && step.output?.acceptance?.verdict
+    && step.output.acceptance.verdict !== 'pass'
+  ))
+  if (rejectedAcceptance) {
+    return {
+      state: 'failed',
+      reason: rejectedAcceptance.output.acceptance.summary || '任务未通过结构化验收',
+    }
+  }
+  const incompleteFinalization = steps.find((step) => (
+    step.kind === 'finalize' && step.output?.complete === false
+  ))
+  if (incompleteFinalization) {
+    return {
+      state: 'failed',
+      reason: incompleteFinalization.output?.summary || '任务最终交付未通过验收',
+    }
+  }
   if (steps.every((step) => step.status === 'completed')) return { state: 'completed', reason: null }
   const unresolved = steps.filter((step) => step.status !== 'completed')
   return {
@@ -187,15 +215,114 @@ export function buildPlanningBrief(job) {
 
 export function buildVerificationPrompt(job, step) {
   const acceptance = Array.isArray(step?.input?.acceptance) ? step.input.acceptance : []
+  const repair = step?.input?.repairContext
   return [
     `原始任务：${job.prompt}`,
     '',
     '现在进入验证与修正阶段。检查此前产出是否真正满足任务，而不是只检查是否调用过工具。',
     acceptance.length ? `完成标准：\n- ${acceptance.join('\n- ')}` : '',
+    repair ? `上一次验收未通过（修正轮次 ${step.input.repairAttempt || 1}）：\n${JSON.stringify(repair)}` : '',
     '能运行测试、构建、格式检查或读取产物时，使用相应工具取得证据。',
-    '发现任务范围内的问题就直接修正并重新验证；不要改动任务范围外的用户内容。',
+    '发现任务范围内且可修复的问题就直接修正并重新验证；不要改动任务范围外的用户内容。',
     '最后给出简短验收结论，列出已执行的检查、结果以及仍存在的限制。',
+    '结尾必须单独输出一行 <task_evaluation>{"verdict":"pass|fixable|blocked|needs_user","summary":"简短结论","issues":["问题"],"evidence":["检查证据"]}</task_evaluation>。',
+    '只有所有完成标准均有证据时才能使用 pass；可在当前任务范围内继续修复用 fixable；外部依赖阻塞用 blocked；必须由用户补充信息或授权用 needs_user。',
   ].filter(Boolean).join('\n')
+}
+
+function normalizeStringList(value) {
+  return (Array.isArray(value) ? value : [])
+    .map((item) => cleanText(item))
+    .filter(Boolean)
+    .slice(0, 50)
+}
+
+function normalizeAcceptance(value, fallback = {}) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const verdict = cleanText(value.verdict).toLowerCase()
+  if (!ACCEPTANCE_VERDICTS.has(verdict)) return null
+  const issues = normalizeStringList(value.issues)
+  const evidence = normalizeStringList(value.evidence)
+  return {
+    verdict,
+    summary: cleanText(value.summary) || cleanText(fallback.summary) || (
+      verdict === 'pass' ? '任务已通过验收' : '任务尚未通过验收'
+    ),
+    issues,
+    evidence,
+    source: cleanText(value.source) || cleanText(fallback.source) || 'structured',
+  }
+}
+
+export function parseTaskEvaluation(text = '') {
+  const source = String(text || '')
+  const marker = source.match(/<task_evaluation>\s*({[\s\S]*?})\s*<\/task_evaluation>/i)
+  if (!marker) return null
+  try {
+    return normalizeAcceptance(JSON.parse(marker[1]), { source: 'model' })
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Default TaskEvaluator SPI. A runtime plugin may replace this function via
+ * createDefaultExecuteStep({ taskEvaluator }) without changing orchestration.
+ */
+export function evaluateTaskAcceptance({ text = '', evidence = [] } = {}) {
+  const structured = parseTaskEvaluation(text)
+  if (structured) {
+    return {
+      ...structured,
+      evidence: structured.evidence.length ? structured.evidence : normalizeStringList(evidence),
+    }
+  }
+
+  const conclusion = stripEchoedAcceptance(text)
+  const normalizedEvidence = normalizeStringList(evidence)
+  if (!cleanText(conclusion)) {
+    return {
+      verdict: 'blocked',
+      summary: '验证步骤没有返回可判定的验收结论',
+      issues: ['缺少验收结论'],
+      evidence: normalizedEvidence,
+      source: 'fallback',
+    }
+  }
+  if (VERIFICATION_NEEDS_USER.test(conclusion)) {
+    return {
+      verdict: 'needs_user',
+      summary: '任务需要用户补充信息或授权后才能继续',
+      issues: [cleanText(conclusion).slice(0, 500)],
+      evidence: normalizedEvidence,
+      source: 'fallback',
+    }
+  }
+  if (VERIFICATION_BLOCKED.test(conclusion)) {
+    return {
+      verdict: 'blocked',
+      summary: '任务被当前环境或外部依赖阻塞',
+      issues: [cleanText(conclusion).slice(0, 500)],
+      evidence: normalizedEvidence,
+      source: 'fallback',
+    }
+  }
+  if (VERIFICATION_FAILURE.test(conclusion)) {
+    return {
+      verdict: 'fixable',
+      summary: '验收发现仍可继续修正的问题',
+      issues: [cleanText(conclusion).slice(0, 500)],
+      evidence: normalizedEvidence,
+      source: 'fallback',
+    }
+  }
+  return {
+    verdict: 'pass',
+    summary: '任务已通过验收',
+    issues: [],
+    evidence: normalizedEvidence.length ? normalizedEvidence : [cleanText(conclusion).slice(0, 1000)],
+    source: 'fallback',
+  }
 }
 
 /**
@@ -225,9 +352,12 @@ export function buildFinalOutput(job) {
   const texts = resultSteps.map(stepText).filter(Boolean)
   const verification = steps.find((step) => step.kind === 'verify')
   const verificationText = stepText(verification)
-  const artifactIds = [...new Set(steps.flatMap((step) => (
-    Array.isArray(step.output?.artifactIds) ? step.output.artifactIds : []
-  )))]
+  const artifactIds = [...new Set([
+    ...steps.flatMap((step) => (
+      Array.isArray(step.output?.artifactIds) ? step.output.artifactIds : []
+    )),
+    ...(Array.isArray(job?.artifacts) ? job.artifacts.map((artifact) => artifact?.id) : []),
+  ].filter(Boolean))]
 
   const issues = []
 
@@ -244,7 +374,10 @@ export function buildFinalOutput(job) {
   ))
   if (unfinished.length) issues.push(`${unfinished.length} 个步骤未走到完成状态`)
 
-  if (verificationText && VERIFICATION_FAILURE.test(stripEchoedAcceptance(verificationText))) {
+  const acceptance = normalizeAcceptance(verification?.output?.acceptance)
+  if (acceptance && acceptance.verdict !== 'pass') {
+    issues.push(acceptance.summary || '验证步骤未通过结构化验收')
+  } else if (!acceptance && verificationText && VERIFICATION_FAILURE.test(stripEchoedAcceptance(verificationText))) {
     issues.push('验证步骤的结论包含未通过项')
   }
 
@@ -269,5 +402,6 @@ export function buildFinalOutput(job) {
     artifactIds,
     complete,
     issues,
+    acceptance: acceptance || null,
   }
 }

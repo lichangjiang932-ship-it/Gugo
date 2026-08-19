@@ -436,8 +436,8 @@ export async function initializeCompletion(s) {
   s.missingArtifactBlockerText = () => {
       const missing = s.missingArtifactTools()
       return missing.length > 0
-        ? `文件工具连续纠错后仍未成功生成所需文件（${missing.join(', ')}）。未通过验证的中间文件不会交付；请重试本任务或切换到支持工具调用的模型。`
-        : '所需文件尚未通过完整性验证，未通过验证的中间文件不会交付。'
+        ? `文件工具连续纠错后仍未成功生成所需文件（${missing.join(', ')}）。已成功提交到本地的文件仍会保留并显示其验证状态；未通过验证的受管理产物不会标记为最终交付。请重试本任务或切换到支持工具调用的模型。`
+        : '所需文件尚未通过完整性验证。已成功提交到本地的文件仍会保留并显示其验证状态；未通过验证的受管理产物不会标记为最终交付。'
     }
   return { kind: 'next' }
 }
