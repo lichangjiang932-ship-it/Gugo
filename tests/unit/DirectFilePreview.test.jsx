@@ -78,6 +78,183 @@ test('native image, audio, and video previews expose loading and failure states'
   }
 })
 
+test('fetched markdown preview retries in place and keeps the original-file fallback', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  const originalFetch = globalThis.fetch
+  const requests = []
+  let resolveRetry
+  globalThis.fetch = (input) => {
+    requests.push(String(input))
+    if (requests.length === 1) return Promise.resolve({ ok: false, status: 503 })
+    return new Promise((resolve) => { resolveRetry = resolve })
+  }
+
+  try {
+    await act(async () => root.render(
+      <DirectFilePreview
+        file={{ filename: 'recover.md', type: 'text/markdown' }}
+        url="/api/attachments/recover/content?preview=1"
+        t={(key) => key}
+      />,
+    ))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+
+    assert.match(rootElement.textContent, /chatPreview\.previewFailed/)
+    const original = rootElement.querySelector('a[target="_blank"]')
+    assert.ok(original)
+    assert.match(original.getAttribute('href'), /\/api\/attachments\/recover\/content\?preview=1$/)
+    const retry = [...rootElement.querySelectorAll('button')]
+      .find((button) => button.textContent.includes('chatPreview.retryPreview'))
+    assert.ok(retry)
+
+    await act(async () => retry.click())
+    assert.match(rootElement.textContent, /chatPreview\.loadingFile/)
+    assert.equal(typeof resolveRetry, 'function')
+    await act(async () => {
+      resolveRetry({
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => new TextEncoder().encode('# Retry recovered').buffer,
+      })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    assert.equal(requests.length, 2)
+    assert.match(requests[1], /preview=1&previewRetry=1$/)
+    assert.match(rootElement.textContent, /Retry recovered/)
+    assert.doesNotMatch(rootElement.textContent, /chatPreview\.previewFailed/)
+  } finally {
+    await act(async () => root.unmount())
+    globalThis.fetch = originalFetch
+    dom.window.close()
+  }
+})
+
+test('fetched data and blob previews retry even when their URL cannot take a cache buster', async () => {
+  const originalFetch = globalThis.fetch
+  const cases = [
+    ['data', 'data:text/markdown,%23%20Inline'],
+    ['blob', 'blob:http://localhost/preview-source'],
+  ]
+
+  try {
+    for (const [label, url] of cases) {
+      const dom = setupDom()
+      const rootElement = dom.window.document.getElementById('root')
+      const root = createRoot(rootElement)
+      const requests = []
+      globalThis.fetch = async (input) => {
+        requests.push(String(input))
+        if (requests.length === 1) return { ok: false, status: 503 }
+        return {
+          ok: true,
+          status: 200,
+          arrayBuffer: async () => new TextEncoder().encode(`# ${label} recovered`).buffer,
+        }
+      }
+
+      try {
+        await act(async () => root.render(
+          <DirectFilePreview
+            file={{ id: `${label}-file`, filename: `${label}.md`, type: 'text/markdown' }}
+            url={url}
+            t={(key) => key}
+          />,
+        ))
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+        assert.match(rootElement.textContent, /chatPreview\.previewFailed/, label)
+
+        const retry = [...rootElement.querySelectorAll('button')]
+          .find((button) => button.textContent.includes('chatPreview.retryPreview'))
+        assert.ok(retry, label)
+        await act(async () => retry.click())
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+
+        assert.deepEqual(requests, [url, url], label)
+        assert.match(rootElement.textContent, new RegExp(`${label} recovered`), label)
+        assert.doesNotMatch(rootElement.textContent, /chatPreview\.previewFailed/, label)
+      } finally {
+        await act(async () => root.unmount())
+        dom.window.close()
+      }
+    }
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('switching fetched artifacts resets retry state and ignores the previous request result', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  const originalFetch = globalThis.fetch
+  const requests = []
+  let resolveOldRetry
+  globalThis.fetch = (input, init = {}) => {
+    const request = { input: String(input), init }
+    requests.push(request)
+    if (requests.length === 1) return Promise.resolve({ ok: false, status: 503 })
+    if (requests.length === 2) {
+      return new Promise((resolve) => { resolveOldRetry = resolve })
+    }
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      arrayBuffer: async () => new TextEncoder().encode('# Fresh artifact B').buffer,
+    })
+  }
+
+  try {
+    await act(async () => root.render(
+      <DirectFilePreview
+        file={{ id: 'artifact-a', filename: 'a.md', type: 'text/markdown' }}
+        url="/api/attachments/a/content?preview=1"
+        t={(key) => key}
+      />,
+    ))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    const retry = [...rootElement.querySelectorAll('button')]
+      .find((button) => button.textContent.includes('chatPreview.retryPreview'))
+    assert.ok(retry)
+
+    await act(async () => retry.click())
+    assert.equal(typeof resolveOldRetry, 'function')
+    assert.match(requests[1].input, /previewRetry=1$/)
+
+    await act(async () => root.render(
+      <DirectFilePreview
+        file={{ id: 'artifact-b', filename: 'b.md', type: 'text/markdown' }}
+        url="/api/attachments/b/content?preview=1"
+        t={(key) => key}
+      />,
+    ))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+
+    assert.equal(requests.length, 3)
+    assert.equal(requests[2].input, '/api/attachments/b/content?preview=1')
+    assert.equal(requests[1].init.signal?.aborted, true)
+    assert.match(rootElement.textContent, /Fresh artifact B/)
+
+    await act(async () => {
+      resolveOldRetry({
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => new TextEncoder().encode('# Stale artifact A').buffer,
+      })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    assert.match(rootElement.textContent, /Fresh artifact B/)
+    assert.doesNotMatch(rootElement.textContent, /Stale artifact A/)
+  } finally {
+    await act(async () => root.unmount())
+    globalThis.fetch = originalFetch
+    dom.window.close()
+  }
+})
+
 test('managed HTML artifacts exchange auth for a scoped ticket iframe', async () => {
   const dom = setupDom()
   const rootElement = dom.window.document.getElementById('root')

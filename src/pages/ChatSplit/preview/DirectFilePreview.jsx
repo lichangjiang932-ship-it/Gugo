@@ -11,7 +11,17 @@ import {
 import { DocxPreview, PptxPreview, SourceView, XlsxPreview } from './ArtifactRenderers.jsx'
 import { previewRendererRegistry } from './previewRendererRegistry.js'
 
-export default function DirectFilePreview({ file, url, t }) {
+function directFilePreviewIdentity(file = {}, url = '') {
+  return [file.id, file.filename, file.title, file.type, file.mimeType, file.path, url]
+    .map((value) => String(value || ''))
+    .join('\u0000')
+}
+
+export default function DirectFilePreview(props) {
+  return <DirectFilePreviewRequest key={directFilePreviewIdentity(props.file, props.url)} {...props} />
+}
+
+function DirectFilePreviewRequest({ file, url, t }) {
   const filename = String(file?.filename || '')
   const title = String(file?.title || '')
   const type = String(file?.type || '')
@@ -20,7 +30,9 @@ export default function DirectFilePreview({ file, url, t }) {
   const kind = classifyDirectFile(previewFile)
   const initialRenderer = previewRendererRegistry.resolve(kind) || previewRendererRegistry.resolve('unsupported')
   const needsFetch = initialRenderer?.needsFetch === true
-  const requestKey = `${kind}:${url}:${filename}:${mimeType}`
+  const [retryAttempt, setRetryAttempt] = useState(0)
+  const requestUrl = needsFetch ? withPreviewRetry(url, retryAttempt) : url
+  const requestKey = `${kind}:${requestUrl}:${filename}:${mimeType}:${retryAttempt}`
   const [loadState, setLoadState] = useState(() => ({ key: '', preview: null, error: '' }))
 
   useEffect(() => {
@@ -28,7 +40,7 @@ export default function DirectFilePreview({ file, url, t }) {
     const controller = new AbortController()
     loadDirectFilePreview({
       file: previewFile,
-      url,
+      url: requestUrl,
       fetchImpl: (input, init) => fetch(input, { ...init, signal: controller.signal }),
     }).then((result) => {
       if (!controller.signal.aborted) setLoadState({ key: requestKey, preview: result, error: '' })
@@ -36,7 +48,7 @@ export default function DirectFilePreview({ file, url, t }) {
       if (!controller.signal.aborted) setLoadState({ key: requestKey, preview: null, error: cause?.message || String(cause) })
     })
     return () => controller.abort()
-  }, [needsFetch, previewFile, requestKey, url])
+  }, [needsFetch, previewFile, requestKey, requestUrl])
 
   const currentLoadState = loadState.key === requestKey ? loadState : null
   const preview = needsFetch ? currentLoadState?.preview : { kind, url }
@@ -44,7 +56,12 @@ export default function DirectFilePreview({ file, url, t }) {
   const error = currentLoadState?.error || ''
 
   if (loading) return <PreviewStatus icon={<LoaderCircle className="h-6 w-6 animate-spin" />} text={t('chatPreview.loadingFile')} />
-  if (error) return <PreviewStatus icon={<AlertCircle className="h-6 w-6" />} text={t('chatPreview.previewFailed')} detail={error} />
+  if (error) return <PreviewStatus
+    icon={<AlertCircle className="h-6 w-6" />}
+    text={t('chatPreview.previewFailed')}
+    detail={error}
+    action={<PreviewFallbackActions onRetry={() => setRetryAttempt((value) => value + 1)} t={t} url={url} />}
+  />
   const descriptor = previewRendererRegistry.resolve(preview?.kind) || previewRendererRegistry.resolve('unsupported')
   const Renderer = descriptor.component
   return <Renderer preview={preview} file={file} url={url} t={t} />
