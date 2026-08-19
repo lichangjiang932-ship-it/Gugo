@@ -22,6 +22,7 @@ import { migrateToV59 } from '../server/migrations/v59SessionBranches.js'
 import { migrateToV60 } from '../server/migrations/v60RuntimePluginStates.js'
 import { migrateToV61 } from '../server/migrations/v61EvolutionEvidence.js'
 import { migrateToV62 } from '../server/migrations/v62EvolutionExclusions.js'
+import { migrateToV63 } from '../server/migrations/v63EvolutionCandidates.js'
 
 test('schema migration registry is contiguous and owns the latest version', () => {
   const legacy = Array.from({ length: 29 }, (_, index) => ({
@@ -34,9 +35,52 @@ test('schema migration registry is contiguous and owns the latest version', () =
     plan.map(({ version }) => version),
     Array.from({ length: LATEST_SCHEMA_VERSION - 1 }, (_, index) => index + 2),
   )
-  assert.equal(LATEST_SCHEMA_VERSION, 62)
+  assert.equal(LATEST_SCHEMA_VERSION, 63)
   assert.equal(DB_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
   assert.equal(schemaMigrations.at(-1).version, LATEST_SCHEMA_VERSION)
+})
+
+test('v63 persists inert user-scoped candidate objects with constrained kinds', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    db.exec("CREATE TABLE users (id TEXT PRIMARY KEY); INSERT INTO users (id) VALUES ('user-1')")
+    migrateToV63(db)
+    migrateToV63(db)
+    db.prepare(`
+      INSERT INTO evolution_candidates (
+        id, user_id, kind, target, title, summary, content,
+        assumptions_json, expected_impact_json, permissions_requested_json,
+        dataset_fingerprint, curation_version, source_record_ids_json, source_evidence_ids_json,
+        generator_model, generator_mode, content_sha256, created_at
+      ) VALUES (
+        'candidate-1', 'user-1', 'prompt', 'prompt:system', 'Title', 'Summary', 'Content',
+        '[]', '[]', '[]', ?, 'v1', '[]', '[]',
+        'model-a', 'background_model_no_tools', ?, 10
+      )
+    `).run('a'.repeat(64), 'b'.repeat(64))
+    assert.deepEqual(
+      db.prepare('SELECT id, kind, target, generator_mode FROM evolution_candidates').get(),
+      {
+        id: 'candidate-1',
+        kind: 'prompt',
+        target: 'prompt:system',
+        generator_mode: 'background_model_no_tools',
+      },
+    )
+    assert.throws(() => db.prepare(`
+      INSERT INTO evolution_candidates (
+        id, user_id, kind, target, title, summary, content,
+        assumptions_json, expected_impact_json, permissions_requested_json,
+        dataset_fingerprint, curation_version, source_record_ids_json, source_evidence_ids_json,
+        generator_mode, content_sha256, created_at
+      ) VALUES ('bad', 'user-1', 'executable', 'plugin:x', 'T', 'S', 'C', '[]', '[]', '[]', ?, 'v1', '[]', '[]', 'background_model_no_tools', ?, 11)
+    `).run('a'.repeat(64), 'b'.repeat(64)), /CHECK constraint failed/)
+    db.prepare("DELETE FROM users WHERE id = 'user-1'").run()
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM evolution_candidates').get().count, 0)
+  } finally {
+    db.close()
+  }
 })
 
 test('v62 persists reversible user-scoped evidence exclusions', () => {

@@ -165,7 +165,7 @@ test('curation redacts, deduplicates, clusters, fingerprints, and reversibly exc
   assert.doesNotMatch(rawJson, /BOB_PRIVATE_DATASET_EVIDENCE/)
 })
 
-test('curation rejects invalid exclusion mutations and exposes no candidate endpoint', async () => {
+test('curation rejects invalid exclusion mutations and exposes no candidate apply endpoint', async () => {
   const session = issueTestSession({ email: 'dataset-validation@example.com' })
   const item = await feedback(session.token, 'validation sample')
 
@@ -196,8 +196,10 @@ test('curation rejects invalid exclusion mutations and exposes no candidate endp
   assert.equal(reasonTooLarge.status, 400)
   assert.equal((await reasonTooLarge.json()).error.code, 'EVOLUTION_EXCLUSION_REASON_TOO_LARGE')
 
-  const candidate = await fetch(`${origin}/api/evolution/candidates`, {
-    headers: headers(session.token),
+  const apply = await fetch(`${origin}/api/evolution/candidates/not-a-candidate/apply`, {
+    method: 'POST',
+    headers: headers(session.token, true),
+    body: '{}',
   })
-  assert.equal(candidate.status, 404)
+  assert.equal(apply.status, 404)
 })

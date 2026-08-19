@@ -37,3 +37,25 @@ export async function setEvolutionEvidenceExcludedApi(evidenceId, excluded, reas
   })
   return jsonOk(resp)
 }
+
+export async function generateEvolutionCandidateApi(input) {
+  const resp = await fetch('/api/evolution/candidates/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(input || {}),
+  })
+  return jsonOk(resp)
+}
+
+export async function listEvolutionCandidatesApi({ limit = 50 } = {}) {
+  const query = new URLSearchParams({ limit: String(limit) })
+  const resp = await fetch(`/api/evolution/candidates?${query}`, { headers: authHeaders() })
+  return jsonOk(resp)
+}
+
+export async function getEvolutionCandidateApi(id) {
+  const resp = await fetch(`/api/evolution/candidates/${encodeURIComponent(String(id || ''))}`, {
+    headers: authHeaders(),
+  })
+  return jsonOk(resp)
+}

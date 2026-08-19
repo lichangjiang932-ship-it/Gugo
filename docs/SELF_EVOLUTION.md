@@ -31,17 +31,31 @@ Gugo 的“自我进化”不是让当前模型直接修改生产 prompt、plugi
 
 人工排除通过 `POST /api/evolution/exclusions` 写入独立的 user-scoped curation 元数据；`excluded: false` 可撤销。`GET /api/evolution/exclusions` 仅列出当前用户的排除项。排除会让派生 dataset 忽略对应 evidence，但不会删除、改写或隐藏原始 evidence；其他用户的 evidence ID 会按不存在处理。排除原因同样经过脱敏。
 
-Phase 2 仍然没有 candidate、replay、approval、rollout 或生产 mutation API。dataset 指纹只能证明同一 curation 规则下的输入与派生结果，不能证明候选质量。
+dataset 指纹只能证明同一 curation 规则下的输入与派生结果，不能证明候选质量。
+
+## Phase 3: candidate generation（当前已实现）
+
+`POST /api/evolution/candidates/generate` 只接受当前用户的 `datasetFingerprint` 和 1–20 个显式选择的 curated `sourceRecordIds`。服务在模型调用前后都会重新计算 dataset；指纹过期或生成期间 dataset 变化时 fail closed，候选不会落库。
+
+候选生成边界：
+
+- 只把 P6 已脱敏的 selected records 和再次脱敏的 objective 发给后台模型；原始 feedback、job payload、prompt、transcript 和 tool trace 不进入生成请求；
+- 模型调用不提供 tools，不允许声称已 apply、install、activate、approve、test 或 deploy；dataset 文本按不可信数据处理，不作为指令；
+- 模型输出必须是结构化 JSON，并在落库前再次执行 secret、邮箱和本地路径脱敏；无效、空或过大的输出被拒绝；
+- `prompt`、`plugin`、`config` 只作为惰性文本对象写入 append-only `evolution_candidates`，状态固定为 `proposed`；plugin 内容不会进入 runtime plugin loader 或 renderer；
+- provenance 保存 dataset/curation 版本、curated record IDs、不可变 evidence IDs、实际 generator model、无工具生成模式和内容 SHA-256；
+- `GET /api/evolution/candidates?limit=1..100` 返回摘要，`GET /api/evolution/candidates/:id` 返回当前用户的完整候选；全部响应 `Cache-Control: no-store`。
+
+不存在 candidate update、delete、apply、install、approve 或 rollout API。`permissionsRequested` 只是等待后续独立权限审查的元数据，不授予 manifest contribution、工具信任或 renderer 权限。
 
 ## Required next gates
 
 后续能力必须按以下顺序增加，不能跳级：
 
-1. **Candidate generation**：候选 prompt/plugin/config 作为独立对象保存；不得覆盖 active 版本。
-2. **Isolated replay**：固定数据集、固定模型/参数、网络与文件能力隔离，记录基线和候选的同场结果。
-3. **Evaluation**：结构化 rubric、独立 Reviewer、回归/安全/成本/延迟指标；缺证据不得 pass。
-4. **Human approval**：显示 diff、来源、评测结果、权限变化和明确回滚目标；仅本地 owner 可批准。
-5. **Canary rollout**：小比例、限定作用域、不可变版本标识和完整观测。
-6. **Automatic rollback**：预先声明阈值；质量、安全或可靠性退化时恢复上一不可变版本。
+1. **Isolated replay**：固定数据集、固定模型/参数、网络与文件能力隔离，记录基线和候选的同场结果。
+2. **Evaluation**：结构化 rubric、独立 Reviewer、回归/安全/成本/延迟指标；缺证据不得 pass。
+3. **Human approval**：显示 diff、来源、评测结果、权限变化和明确回滚目标；仅本地 owner 可批准。
+4. **Canary rollout**：小比例、限定作用域、不可变版本标识和完整观测。
+5. **Automatic rollback**：预先声明阈值；质量、安全或可靠性退化时恢复上一不可变版本。
 
 任何候选都不能扩大 manifest `contributes`、工具风险信任或 renderer 执行权限而不经过独立权限审批。磁盘 transformer 仍只能在 worker sandbox 中运行，不能注入 React/renderer JavaScript。

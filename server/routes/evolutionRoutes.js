@@ -1,5 +1,10 @@
 import { authenticateRequest } from '../middleware.js'
 import {
+  generateEvolutionCandidate,
+  getEvolutionCandidate,
+  listEvolutionCandidates,
+} from '../services/evolutionCandidateService.js'
+import {
   buildEvolutionDataset,
   listEvolutionExclusions,
   setEvolutionEvidenceExcluded,
@@ -14,7 +19,7 @@ function errorBody(code, message) {
   return { ok: false, error: { code, message } }
 }
 
-export async function handleEvolutionRequest(req, res) {
+export async function handleEvolutionRequest(req, res, { runCandidateModel } = {}) {
   res.setHeader('Cache-Control', 'no-store')
   const userId = authenticateRequest(req)
   if (!userId) return sendJson(res, 401, errorBody('UNAUTHORIZED', '请先登录'))
@@ -70,6 +75,44 @@ export async function handleEvolutionRequest(req, res) {
         reason: body.reason,
       })
       return sendJson(res, 200, { ok: true, exclusion })
+    }
+    if (url.pathname === '/api/evolution/candidates/generate') {
+      if (req.method !== 'POST') {
+        return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 POST'))
+      }
+      const body = await readJson(req, { maxBytes: 16 * 1024 })
+      const candidate = await generateEvolutionCandidate({
+        userId,
+        kind: body.kind,
+        target: body.target,
+        objective: body.objective,
+        datasetFingerprint: body.datasetFingerprint,
+        sourceRecordIds: body.sourceRecordIds,
+        modelName: body.modelName,
+        ...(typeof runCandidateModel === 'function' ? { runModel: runCandidateModel } : {}),
+      })
+      return sendJson(res, 201, { ok: true, candidate })
+    }
+    if (url.pathname === '/api/evolution/candidates') {
+      if (req.method !== 'GET') {
+        return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET'))
+      }
+      const candidates = listEvolutionCandidates({
+        userId,
+        limit: url.searchParams.get('limit'),
+      })
+      return sendJson(res, 200, { ok: true, schemaVersion: 1, candidates })
+    }
+    const candidateMatch = url.pathname.match(/^\/api\/evolution\/candidates\/([^/]+)$/u)
+    if (candidateMatch) {
+      if (req.method !== 'GET') {
+        return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET'))
+      }
+      const candidate = getEvolutionCandidate({
+        userId,
+        id: decodeURIComponent(candidateMatch[1]),
+      })
+      return sendJson(res, 200, { ok: true, candidate })
     }
     return sendJson(res, 404, errorBody('NOT_FOUND', '证据端点不存在'))
   } catch (error) {
