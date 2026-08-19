@@ -40,6 +40,10 @@ test('download tokens are limited to same-origin API URLs', () => {
       'https://attacker.example/pixel.png',
     )
     assert.equal(withDownloadToken('//attacker.example/pixel.png'), '//attacker.example/pixel.png')
+    assert.equal(
+      withDownloadToken('//gugo.local/api/artifacts/report.pdf'),
+      '//gugo.local/api/artifacts/report.pdf',
+    )
     assert.equal(withDownloadToken('https://gugo.local/help'), 'https://gugo.local/help')
     assert.equal(withDownloadToken('data:image/png;base64,AAAA'), 'data:image/png;base64,AAAA')
     assert.equal(withDownloadToken('blob:https://gugo.local/id'), 'blob:https://gugo.local/id')

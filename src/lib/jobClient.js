@@ -463,6 +463,7 @@ export function subscribeToJobEvents(
 function isTrustedDownloadUrl(value) {
   const raw = String(value || '').trim()
   if (!raw || /^(?:data|blob):/i.test(raw)) return false
+  if (raw.startsWith('//')) return false
   if (/^\/api(?:\/|[?#]|$)/.test(raw)) return true
   if (typeof window === 'undefined' || !window.location?.origin) return false
   try {
