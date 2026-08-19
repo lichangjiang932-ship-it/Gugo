@@ -61,6 +61,7 @@
   "dependencies": {
     "@e965/xlsx": "^0.20.3",
     "@napi-rs/canvas": "^0.1.65",
+    "@vscode/ripgrep": "1.18.0",
     "acorn": "^8.18.0",
     "better-sqlite3": "^12.10.0",
     "electron-updater": "^6.8.9",

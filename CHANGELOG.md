@@ -18,6 +18,7 @@ follow [Semantic Versioning](https://semver.org/).
 
 - Moved host focus and status styling away from the customizable brand accent and automatically select a WCAG-compliant foreground for accent backgrounds.
 - Preflight capability-scoped HTML preview tickets with same-origin HEAD requests before mounting iframe content.
+- Bundled a version-locked, platform-specific ripgrep executable for code search instead of depending on host package managers.
 
 ### Fixed
 

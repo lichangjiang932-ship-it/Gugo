@@ -63,6 +63,8 @@ test('NSIS package includes server runtime dependencies and updater metadata', (
   assert.match(config, /npmRebuild:\s*false/)
   assert.match(config, /asarUnpack:[\s\S]*node_modules\/sharp\/\*\*\/\*/)
   assert.match(config, /asarUnpack:[\s\S]*node_modules\/@img\/\*\*\/\*/)
+  assert.match(config, /asarUnpack:[\s\S]*node_modules\/@vscode\/ripgrep-\*\/\*\*\/\*/)
+  assert.equal(packageJson.dependencies['@vscode/ripgrep'], '1.18.0')
   assert.match(config, /^\s*icon:\s*build\/icon\.ico\s*$/m)
   assert.match(config, /^\s*installerIcon:\s*build\/icon\.ico\s*$/m)
   assert.match(config, /^\s*uninstallerIcon:\s*build\/icon\.ico\s*$/m)
