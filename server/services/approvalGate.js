@@ -292,6 +292,7 @@ export async function requestApproval({
   forceApproval = false,
   forceApprovalReason = null,
   preAuthorized = false,
+  taskGrants = [],
 } = {}) {
   // 系统/内部调用(无 userId)不 gate —— 和 fsShellTools.assertToolPermitted 一致的口径
   if (!userId) return { proceed: true, args }
@@ -324,6 +325,7 @@ export async function requestApproval({
     origin,
     mode: effectiveMode,
     permissionMode: settings.mode,
+    taskGrants,
     rememberedGrants: isRuntimePlugin ? [] : settings.rememberedGrants,
     metadata,
   })

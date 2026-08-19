@@ -25,6 +25,7 @@ import {
   createDesktopPetDragSession,
   resolveDesktopPetDragMove,
 } from './petDrag.js'
+import { createDesktopUpdateRuntime } from './updateRuntime.js'
 
 const { autoUpdater } = updaterPackage
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -38,6 +39,7 @@ let backendProcess = null
 let backendServer = null
 let applicationOrigin = null
 let updateReady = false
+let desktopUpdateRuntime = null
 let allowQuit = false
 let shutdownPromise = null
 let petState = { visible: false, status: { kind: 'idle', tool: '' } }
@@ -447,8 +449,8 @@ function registerDesktopIpc() {
   })
   ipcMain.handle('desktop:check-for-updates', async (event) => {
     assertTrustedIpc(event)
-    if (!app.isPackaged) return { supported: false }
-    await autoUpdater.checkForUpdates()
+    if (!app.isPackaged || !desktopUpdateRuntime) return { supported: false }
+    await desktopUpdateRuntime.checkForUpdates()
     return { supported: true }
   })
   ipcMain.handle('desktop:install-update', async (event) => {
@@ -523,30 +525,41 @@ function registerDesktopIpc() {
 function configureAutoUpdates() {
   if (!app.isPackaged) return
 
-  autoUpdater.autoDownload = true
+  // The built-in downloader discards a stalled differential transfer and then
+  // starts the whole installer again. Keep electron-updater for release checks
+  // and NSIS installation, while the desktop runtime owns resumable downloads.
+  autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = true
   // Community builds are currently unsigned: keep publisherName absent so the updater
   // uses GitHub HTTPS plus latest.yml SHA-512 integrity checks without a false signer claim.
   autoUpdater.allowPrerelease = false
   autoUpdater.allowDowngrade = false
+  try {
+    desktopUpdateRuntime = createDesktopUpdateRuntime({
+      updater: autoUpdater,
+      updateBaseUrl: process.env.GUGO_UPDATE_BASE_URL,
+      onStatus(payload = {}) {
+        const { status, ...details } = payload
+        if (status) sendUpdateStatus(status, details)
+      },
+    })
+  } catch (error) {
+    sendUpdateStatus('error', { message: error?.message || 'update runtime configuration failed' })
+    return
+  }
   autoUpdater.on('checking-for-update', () => sendUpdateStatus('checking'))
   autoUpdater.on('update-available', (info) => sendUpdateStatus('available', { version: info.version }))
   autoUpdater.on('update-not-available', () => sendUpdateStatus('current'))
-  autoUpdater.on('download-progress', (progress) => {
-    sendUpdateStatus('downloading', {
-      percent: Number(progress.percent || 0),
-      bytesPerSecond: Number(progress.bytesPerSecond || 0),
-      transferred: Number(progress.transferred || 0),
-      total: Number(progress.total || 0),
-    })
-  })
   autoUpdater.on('update-downloaded', (info) => {
     updateReady = true
     sendUpdateStatus('ready', { version: info.version })
   })
   autoUpdater.on('error', (error) => sendUpdateStatus('error', { message: error?.message || 'update failed' }))
 
-  const check = () => void autoUpdater.checkForUpdates().catch(() => {})
+  const check = () => {
+    if (updateReady || desktopUpdateRuntime.downloading) return
+    void desktopUpdateRuntime.checkForUpdates().catch(() => {})
+  }
   setTimeout(check, 10_000).unref()
   setInterval(check, UPDATE_INTERVAL_MS).unref()
 }

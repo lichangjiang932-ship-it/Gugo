@@ -88,6 +88,38 @@ test('notification HTTP errors reach transport error handlers', async () => {
   })
 })
 
+test('request transport failures emit lifecycle errors but JSON-RPC errors do not', async () => {
+  await withServer(async (req, res) => {
+    const message = await readBody(req)
+    if (message.method === 'tools/call') {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      return res.end(JSON.stringify({
+        jsonrpc: '2.0',
+        id: message.id,
+        error: { code: -32602, message: 'invalid tool arguments' },
+      }))
+    }
+    res.writeHead(503, { 'Content-Type': 'text/plain' })
+    return res.end('temporarily unavailable')
+  }, async (url) => {
+    const errors = []
+    const transport = new SseTransport({ url })
+    transport.onError((error) => errors.push(error.message))
+
+    await assert.rejects(
+      transport.request({ jsonrpc: '2.0', id: 10, method: 'tools/call' }),
+      /invalid tool arguments/,
+    )
+    assert.deepEqual(errors, [], 'tool-level JSON-RPC failures must not trigger reconnect')
+
+    await assert.rejects(
+      transport.request({ jsonrpc: '2.0', id: 11, method: 'health/check' }),
+      /MCP HTTP 503/,
+    )
+    assert.deepEqual(errors, ['MCP HTTP 503: temporarily unavailable'])
+  })
+})
+
 test('Streamable HTTP request observes an explicit cancellation signal', async () => {
   await withServer(async (_req, res) => {
     await new Promise((resolve) => setTimeout(resolve, 200))

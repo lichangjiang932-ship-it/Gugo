@@ -6,7 +6,7 @@ export const MAX_ITERS = (() => {
   const raw = Number(process.env.JOB_MAX_ITERS)
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 2000
 })()
-export const JOB_READ_CONCURRENCY = 4
+export const JOB_READ_CONCURRENCY = 3
 export const ARTIFACT_DELIVERY_GUARD_MARKER = '[PERSISTED ARTIFACT DELIVERY REQUIRED]'
 // A completion guard must actively recover the requested file instead of
 // merely detecting that a model ignored the tool contract once. The runtime

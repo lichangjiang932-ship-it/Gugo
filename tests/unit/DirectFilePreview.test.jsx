@@ -4,7 +4,8 @@ import { JSDOM } from 'jsdom'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 
-import DirectFilePreview from '../../src/pages/ChatSplit/preview/DirectFilePreview.jsx'
+import DirectFilePreview, { DirectHtmlUrlPreview } from '../../src/pages/ChatSplit/preview/DirectFilePreview.jsx'
+import { listPreviewRenderers } from '../../src/pages/ChatSplit/preview/previewRendererRegistry.js'
 import { DirectFileToolbar } from '../../src/pages/ChatSplit/preview/PreviewChrome.jsx'
 
 function setupDom() {
@@ -18,6 +19,22 @@ function setupDom() {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true
   return dom
 }
+
+test('direct-file preview registry preserves every built-in kind and fallback', () => {
+  const entries = listPreviewRenderers()
+  const byKind = new Map(entries.map(({ kind, descriptor }) => [kind, descriptor]))
+  assert.deepEqual(
+    [...byKind.keys()],
+    ['image', 'pdf', 'audio', 'video', 'html', 'docx', 'pptx', 'xlsx', 'csv', 'markdown', 'json', 'xml', 'code', 'text', 'unsupported'],
+  )
+  for (const kind of ['image', 'pdf', 'audio', 'video', 'html', 'unsupported']) {
+    assert.equal(byKind.get(kind)?.needsFetch, false, kind)
+  }
+  for (const kind of ['docx', 'pptx', 'xlsx', 'csv', 'markdown', 'json', 'xml', 'code', 'text']) {
+    assert.equal(byKind.get(kind)?.needsFetch, true, kind)
+  }
+  for (const descriptor of byKind.values()) assert.equal(typeof descriptor.component, 'function')
+})
 
 test('native image, audio, and video previews expose loading and failure states', async () => {
   const dom = setupDom()
@@ -51,28 +68,23 @@ test('native image, audio, and video previews expose loading and failure states'
   }
 })
 
-test('managed HTML artifacts embed private assets into an opaque-origin sandboxed srcdoc', async () => {
+test('managed HTML artifacts exchange auth for a scoped ticket iframe', async () => {
   const dom = setupDom()
   const rootElement = dom.window.document.getElementById('root')
   const root = createRoot(rootElement)
   const originalFetch = globalThis.fetch
-  const originalRevokeObjectURL = globalThis.URL.revokeObjectURL
   const requests = []
-  const revoked = []
-  globalThis.fetch = async (input) => {
-    requests.push(String(input))
-    if (requests.length === 1) {
+  globalThis.fetch = async (input, init = {}) => {
+    requests.push({ input: String(input), init })
+    if (init.method === 'POST') {
       return {
         ok: true,
-        text: async () => '<!doctype html><html><body><img src="gugo-asset://portrait"></body></html>',
+        status: 200,
+        json: async () => ({ url: '/api/artifacts/previews/opaque-ticket/index.html' }),
       }
     }
-    return {
-      ok: true,
-      blob: async () => new Blob(['portrait'], { type: 'image/jpeg' }),
-    }
+    return { ok: true, status: 204 }
   }
-  globalThis.URL.revokeObjectURL = (value) => revoked.push(value)
   try {
     await act(async () => root.render(
       <DirectFilePreview
@@ -84,19 +96,49 @@ test('managed HTML artifacts embed private assets into an opaque-origin sandboxe
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     const frame = rootElement.querySelector('iframe')
     assert.ok(frame)
-    assert.equal(frame.getAttribute('src'), null)
-    assert.match(frame.getAttribute('srcdoc'), /data:image\/jpeg;base64,/)
-    assert.doesNotMatch(frame.getAttribute('srcdoc'), /gugo-asset:\/\//)
+    assert.equal(frame.getAttribute('src'), '/api/artifacts/previews/opaque-ticket/index.html')
+    assert.equal(frame.getAttribute('srcdoc'), null)
     assert.equal(frame.getAttribute('sandbox'), 'allow-scripts allow-forms')
-    assert.deepEqual(requests, [
-      '/api/artifacts/interactive.html?preview=1',
-      '/api/artifacts/interactive.html/assets/portrait',
-    ])
+    assert.equal(requests.length, 1)
+    assert.equal(requests[0].input, '/api/artifacts/interactive.html/preview-session')
+    assert.equal(requests[0].init.method, 'POST')
+    assert.doesNotMatch(requests[0].input, /token=|test/)
   } finally {
     await act(async () => root.unmount())
+    await new Promise((resolve) => setTimeout(resolve, 0))
     globalThis.fetch = originalFetch
-    globalThis.URL.revokeObjectURL = originalRevokeObjectURL
-    assert.deepEqual(revoked, [])
+    assert.equal(requests.length, 2)
+    assert.equal(requests[1].input, '/api/artifacts/previews/opaque-ticket')
+    assert.equal(requests[1].init.method, 'DELETE')
+    dom.window.close()
+  }
+})
+
+test('HTML iframe leaves loading after five seconds and retries in place', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  try {
+    await act(async () => root.render(
+      <DirectHtmlUrlPreview
+        file={{ filename: 'slow.html', type: 'html' }}
+        url="/slow.html"
+        timeoutMs={5}
+        t={(key) => key}
+      />,
+    ))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 15)) })
+    assert.match(rootElement.textContent, /chatPreview\.previewFailed/)
+    assert.doesNotMatch(rootElement.textContent, /chatPreview\.loadingFile/)
+    const firstFrame = rootElement.querySelector('iframe')
+    const retry = [...rootElement.querySelectorAll('button')]
+      .find((button) => button.textContent.includes('chatPreview.retryPreview'))
+    assert.ok(retry)
+    await act(async () => retry.click())
+    assert.match(rootElement.textContent, /chatPreview\.loadingFile/)
+    assert.notEqual(rootElement.querySelector('iframe'), firstFrame)
+  } finally {
+    await act(async () => root.unmount())
     dom.window.close()
   }
 })

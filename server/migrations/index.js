@@ -24,8 +24,11 @@ import { migrateToV53 } from './v53PermissionModeEvents.js'
 import { migrateToV54 } from './v54ApprovalMetadataSource.js'
 import { migrateToV55 } from './v55ToolAuditLifecycle.js'
 import { migrateToV56 } from './v56McpToolRiskDeclarations.js'
+import { migrateToV57 } from './v57EventWriteFailures.js'
+import { migrateToV58 } from './v58CronTaskGrants.js'
+import { migrateToV59 } from './v59SessionBranches.js'
 
-export { migrateToV31, migrateToV32, migrateToV33, migrateToV34, migrateToV35, migrateToV36, migrateToV37, migrateToV38, migrateToV39, migrateToV40, migrateToV41, migrateToV42, migrateToV43, migrateToV44, migrateToV45, migrateToV46, migrateToV47, migrateToV48, migrateToV49, migrateToV50, migrateToV51, migrateToV52, migrateToV53, migrateToV54, migrateToV55, migrateToV56 }
+export { migrateToV31, migrateToV32, migrateToV33, migrateToV34, migrateToV35, migrateToV36, migrateToV37, migrateToV38, migrateToV39, migrateToV40, migrateToV41, migrateToV42, migrateToV43, migrateToV44, migrateToV45, migrateToV46, migrateToV47, migrateToV48, migrateToV49, migrateToV50, migrateToV51, migrateToV52, migrateToV53, migrateToV54, migrateToV55, migrateToV56, migrateToV57, migrateToV58, migrateToV59 }
 
 /**
  * V2-V30 stay in db.js for upgrade compatibility. New migrations are registered
@@ -58,6 +61,9 @@ export const schemaMigrations = Object.freeze([
   { version: 54, up: migrateToV54 },
   { version: 55, up: migrateToV55 },
   { version: 56, up: migrateToV56 },
+  { version: 57, up: migrateToV57 },
+  { version: 58, up: migrateToV58 },
+  { version: 59, up: migrateToV59 },
 ])
 
 export const LATEST_SCHEMA_VERSION = schemaMigrations.at(-1)?.version || 30

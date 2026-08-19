@@ -1,10 +1,43 @@
-import { normalizeModelContentForEndpoint } from '../utils/modelContentCapabilities.js'
 import { normalizeOptionalUsageNumber } from '../../shared/modelUsage.js'
+import { prepareOutboundMessages } from './outboundMessagePipeline.js'
+import {
+  getModelProviderAdapter,
+  hasModelProviderAdapter,
+  listModelProviderAdapterKinds,
+  registerModelProviderAdapter,
+  unregisterModelProviderAdapter,
+} from './modelProviderRegistry.js'
 
 export const NATIVE_PROVIDER_KINDS = new Set(['anthropic', 'gemini'])
+const CUSTOM_STREAM_ADAPTER = Symbol('customModelProviderStreamAdapter')
+const customRequestAdapters = new WeakMap()
+
+export {
+  registerModelProviderAdapter,
+  unregisterModelProviderAdapter,
+}
+
+export function listNativeProviderKinds() {
+  return [...new Set([...NATIVE_PROVIDER_KINDS, ...listModelProviderAdapterKinds()])].sort()
+}
 
 export function isNativeProviderKind(kind = '') {
-  return NATIVE_PROVIDER_KINDS.has(String(kind || ''))
+  const normalized = String(kind || '').trim().toLowerCase()
+  return NATIVE_PROVIDER_KINDS.has(normalized) || hasModelProviderAdapter(normalized)
+}
+
+export function getNativeProviderRequestAdapter(request) {
+  return request && typeof request === 'object'
+    ? customRequestAdapters.get(request) || null
+    : null
+}
+
+function captureRequestAdapter(request, adapter) {
+  if (!request || typeof request !== 'object' || Array.isArray(request)) {
+    throw new TypeError('native provider buildRequest must return a request object')
+  }
+  customRequestAdapters.set(request, adapter)
+  return request
 }
 
 function json(value, fallback = {}) {
@@ -131,8 +164,7 @@ function anthropicToolChoice(toolChoice) {
 }
 
 function buildAnthropicRequest({ config, messages, stream, tools, toolChoice, profile }) {
-  const normalized = normalizeModelContentForEndpoint(messages, profile)
-  const converted = anthropicMessages(normalized)
+  const converted = anthropicMessages(messages)
   const headers = {
     'Content-Type': 'application/json',
     'anthropic-version': '2023-06-01',
@@ -217,8 +249,7 @@ function geminiToolMode(toolChoice) {
 }
 
 function buildGeminiRequest({ config, messages, stream, tools, toolChoice, profile }) {
-  const normalized = normalizeModelContentForEndpoint(messages, profile)
-  const converted = geminiMessages(normalized)
+  const converted = geminiMessages(messages)
   const headers = { 'Content-Type': 'application/json', ...(config?.headers || {}) }
   if (config?.apiKey && !headers['x-goog-api-key'] && !headers.Authorization) headers['x-goog-api-key'] = config.apiKey
   const body = {
@@ -260,8 +291,20 @@ export function buildNativeProviderRequest(args = {}) {
     error.retryable = false
     throw error
   }
-  if (args.profile?.kind === 'anthropic') return buildAnthropicRequest(args)
-  if (args.profile?.kind === 'gemini') return buildGeminiRequest(args)
+  const messages = prepareOutboundMessages({
+    messages: args.messages,
+    profile: args.profile,
+    modelName: args.config?.modelName,
+    providerKind: args.profile?.kind,
+    providerId: args.config?.providerId,
+    ephemeralContext: args.ephemeralContext,
+  })
+  if (messages.length === 0) throw new Error('消息不能为空。')
+  const prepared = { ...args, messages }
+  if (args.profile?.kind === 'anthropic') return buildAnthropicRequest(prepared)
+  if (args.profile?.kind === 'gemini') return buildGeminiRequest(prepared)
+  const adapter = getModelProviderAdapter(args.profile?.kind)
+  if (adapter) return captureRequestAdapter(adapter.buildRequest(prepared), adapter)
   throw new Error(`Unsupported native provider kind: ${args.profile?.kind || 'unknown'}`)
 }
 
@@ -324,7 +367,7 @@ function anthropicUsage(usage, { allowPartial = false } = {}) {
   return normalized
 }
 
-export function extractNativeProviderUsage(data, kind = '', options = {}) {
+export function extractNativeProviderUsage(data, kind = '', options = {}, adapterSnapshot = null) {
   if (kind === 'anthropic') {
     const usage = data?.usage
     if (!usage) return null
@@ -340,6 +383,8 @@ export function extractNativeProviderUsage(data, kind = '', options = {}) {
       cached: usage.cachedContentTokenCount,
     }, options)
   }
+  const adapter = adapterSnapshot || getModelProviderAdapter(kind)
+  if (adapter?.extractUsage) return adapter.extractUsage(data, options)
   return null
 }
 
@@ -351,7 +396,7 @@ function normalizedToolCall({ id, name, args }, index = 0) {
   }
 }
 
-export function parseNativeProviderResponse(data, kind = '') {
+export function parseNativeProviderResponse(data, kind = '', adapterSnapshot = null) {
   if (kind === 'anthropic') {
     const blocks = Array.isArray(data?.content) ? data.content : []
     return {
@@ -363,6 +408,9 @@ export function parseNativeProviderResponse(data, kind = '') {
       finishReason: data?.stop_reason === 'max_tokens' ? 'length' : data?.stop_reason === 'tool_use' ? 'tool_calls' : 'stop',
     }
   }
+  const adapter = adapterSnapshot || getModelProviderAdapter(kind)
+  if (adapter) return adapter.parseResponse(data, { kind })
+  if (kind !== 'gemini') throw new Error(`Unsupported native provider kind: ${kind || 'unknown'}`)
   const candidate = data?.candidates?.[0]
   const parts = Array.isArray(candidate?.content?.parts) ? candidate.content.parts : []
   return {
@@ -375,7 +423,20 @@ export function parseNativeProviderResponse(data, kind = '') {
   }
 }
 
-export function createNativeProviderStreamState(kind = '') {
+export function createNativeProviderStreamState(kind = '', adapterSnapshot = null) {
+  const adapter = adapterSnapshot || getModelProviderAdapter(kind)
+  if (adapter) {
+    if (typeof adapter.createStreamState !== 'function') {
+      throw new Error(`Native provider does not support streaming: ${kind}`)
+    }
+    const state = adapter.createStreamState(kind)
+    if (!state || typeof state !== 'object' || Array.isArray(state)) {
+      throw new TypeError(`Native provider stream state must be an object: ${kind}`)
+    }
+    if (!Object.hasOwn(state, 'kind')) state.kind = String(kind || '')
+    Object.defineProperty(state, CUSTOM_STREAM_ADAPTER, { value: adapter })
+    return state
+  }
   return { kind, toolCalls: new Map(), usage: null, finishReason: null, finished: false }
 }
 
@@ -419,6 +480,15 @@ function finishEvents(state) {
 }
 
 export function consumeNativeProviderStreamPayload(data, state) {
+  const customAdapter = state?.[CUSTOM_STREAM_ADAPTER] || getModelProviderAdapter(state?.kind)
+  if (customAdapter) {
+    if (typeof customAdapter.consumeStreamPayload !== 'function') {
+      throw new Error(`Native provider does not support streaming: ${state?.kind || 'unknown'}`)
+    }
+    const events = customAdapter.consumeStreamPayload(data, state)
+    if (!Array.isArray(events)) throw new TypeError('native provider stream adapter must return an event array')
+    return events
+  }
   const events = []
   if (state.kind === 'anthropic') {
     const usage = extractNativeProviderUsage(
@@ -483,5 +553,11 @@ export function consumeNativeProviderStreamPayload(data, state) {
 }
 
 export function finishNativeProviderStream(state) {
+  const customAdapter = state?.[CUSTOM_STREAM_ADAPTER] || getModelProviderAdapter(state?.kind)
+  if (customAdapter) {
+    const events = customAdapter.finishStream(state)
+    if (!Array.isArray(events)) throw new TypeError('native provider stream adapter must return an event array')
+    return events
+  }
   return finishEvents(state)
 }

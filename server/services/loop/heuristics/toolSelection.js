@@ -40,8 +40,8 @@ export const SERVER_TOOL_SPECS = [
 ].filter(Boolean)
 
 /**
- * 为一次运行选择稳定的工具 schema 集。聊天始终保留完整已注册目录，
- * 回答/执行分类只参与执行与完成门禁；后台 Job 继续保留更窄的产物合同。
+ * 为一次运行选择稳定的工具 schema 集。生成类工具必须经过当前交付
+ * 意图授权；回答/执行分类只参与其余工具的执行与完成门禁。
  */
 export function selectJobToolSpecs({
   prompt = '',
@@ -102,7 +102,7 @@ export function selectJobToolSpecs({
       prompt,
       userPrompt,
       previousUserPrompt,
-      specs: routedSpecs,
+      specs: artifactFiltered,
       intentMode,
       executionRequired: allowed.size > 0,
       userId,

@@ -153,6 +153,25 @@ export async function unpinSessionRemote(sessionId, { fetchImpl = fetch } = {}) 
   return parseResponse(response)
 }
 
+export async function forkSessionRemote(
+  sessionId,
+  { label = null, fetchImpl = fetch } = {},
+) {
+  const response = await fetchImpl(`/api/sessions/${encodeURIComponent(sessionId)}/fork`, {
+    method: 'POST',
+    headers: authHeaders(true),
+    body: JSON.stringify({ label }),
+  })
+  return parseResponse(response)
+}
+
+export async function getSessionBranchesRemote(sessionId, { fetchImpl = fetch } = {}) {
+  const response = await fetchImpl(`/api/sessions/${encodeURIComponent(sessionId)}/branches`, {
+    headers: authHeaders(),
+  })
+  return parseResponse(response)
+}
+
 export async function getSessionMetadataRemote(sessionId, { fetchImpl = fetch } = {}) {
   const response = await fetchImpl(
     `/api/sessions/${encodeURIComponent(sessionId)}/snapshot?limit=1&offset=0`,

@@ -91,6 +91,10 @@ test('right workbench renders compact tabs, persists width, and opens generated 
     assert.equal(resizeHandle.getAttribute('aria-valuemax'), '704')
     const panel = rootElement.querySelector('[data-testid="right-workbench"]')
     assert.equal(panel.style.width, '520px')
+    assert.match(panel.className, /\bmin-w-0\b/)
+    assert.match(panel.className, /\bshrink\b/)
+    assert.match(panel.className, /\boverflow-hidden\b/)
+    assert.doesNotMatch(panel.className, /\bshrink-0\b/)
     assert.equal(dom.window.localStorage.getItem('yma:right-workbench-width'), '520')
 
     await act(async () => {

@@ -41,8 +41,13 @@ export class StdioTransport {
     this.pending = new Map() // requestId → { resolve, reject, timer }
     this.notificationHandlers = new Set()
     this.errorHandlers = new Set()
+    this.closeHandlers = new Set()
+    this.exitHandlers = new Set()
     this.stderr = ''
     this.closed = false
+    this.intentionalStop = false
+    this.closeEmitted = false
+    this.exitEmitted = false
   }
 
   start() {
@@ -69,7 +74,14 @@ export class StdioTransport {
       this.closed = true
       const reason = new Error(`MCP server "${this.label}" 已退出 (code=${code}, signal=${signal})`)
       this._rejectAll(reason)
-      this._emitError(reason)
+      const details = { code, signal, reason, intentional: this.intentionalStop }
+      this._emitExit(details)
+      if (!this.intentionalStop) this._emitError(reason)
+    })
+    this.child.on('close', (code, signal) => {
+      this.closed = true
+      const reason = new Error(`MCP server "${this.label}" 已关闭 (code=${code}, signal=${signal})`)
+      this._emitClose({ code, signal, reason, intentional: this.intentionalStop })
     })
 
     this.child.stdout.setEncoding('utf8')
@@ -140,9 +152,35 @@ export class StdioTransport {
     return () => this.errorHandlers.delete(fn)
   }
 
+  onClose(fn) {
+    this.closeHandlers.add(fn)
+    return () => this.closeHandlers.delete(fn)
+  }
+
+  onExit(fn) {
+    this.exitHandlers.add(fn)
+    return () => this.exitHandlers.delete(fn)
+  }
+
   _emitError(err) {
     for (const fn of this.errorHandlers) {
       try { fn(err) } catch { /* ignore */ }
+    }
+  }
+
+  _emitClose(details) {
+    if (this.closeEmitted) return
+    this.closeEmitted = true
+    for (const fn of this.closeHandlers) {
+      try { fn(details) } catch { /* ignore */ }
+    }
+  }
+
+  _emitExit(details) {
+    if (this.exitEmitted) return
+    this.exitEmitted = true
+    for (const fn of this.exitHandlers) {
+      try { fn(details) } catch { /* ignore */ }
     }
   }
 
@@ -212,6 +250,7 @@ export class StdioTransport {
    */
   stop() {
     if (!this.child || this.closed) return
+    this.intentionalStop = true
     this.closed = true
     const child = this.child
     try { child.stdin.end() } catch { /* ignore */ }

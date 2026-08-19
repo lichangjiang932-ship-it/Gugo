@@ -16,6 +16,9 @@ import { migrateToV52 } from '../server/migrations/v52DefaultOutputDirectory.js'
 import { migrateToV53 } from '../server/migrations/v53PermissionModeEvents.js'
 import { migrateToV54 } from '../server/migrations/v54ApprovalMetadataSource.js'
 import { migrateToV56 } from '../server/migrations/v56McpToolRiskDeclarations.js'
+import { migrateToV57 } from '../server/migrations/v57EventWriteFailures.js'
+import { migrateToV58 } from '../server/migrations/v58CronTaskGrants.js'
+import { migrateToV59 } from '../server/migrations/v59SessionBranches.js'
 
 test('schema migration registry is contiguous and owns the latest version', () => {
   const legacy = Array.from({ length: 29 }, (_, index) => ({
@@ -28,9 +31,97 @@ test('schema migration registry is contiguous and owns the latest version', () =
     plan.map(({ version }) => version),
     Array.from({ length: LATEST_SCHEMA_VERSION - 1 }, (_, index) => index + 2),
   )
-  assert.equal(LATEST_SCHEMA_VERSION, 56)
+  assert.equal(LATEST_SCHEMA_VERSION, 59)
   assert.equal(DB_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)
   assert.equal(schemaMigrations.at(-1).version, LATEST_SCHEMA_VERSION)
+})
+
+test('v59 persists session lineage and releases children when a parent is deleted', () => {
+  const db = new Database(':memory:')
+  try {
+    db.pragma('foreign_keys = ON')
+    db.exec(`
+      CREATE TABLE sessions (
+        token TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        id TEXT,
+        title TEXT
+      );
+      INSERT INTO sessions (token, user_id, id, title)
+      VALUES ('parent', 'user-1', 'parent', 'Parent');
+    `)
+    migrateToV59(db)
+    migrateToV59(db)
+    db.prepare(`
+      INSERT INTO sessions
+        (token, user_id, id, title, parent_session_id, branch_label, forked_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run('child', 'user-1', 'child', 'Child', 'parent', 'Alternative', 100)
+
+    assert.deepEqual(
+      db.prepare('SELECT parent_session_id, branch_label, forked_at FROM sessions WHERE token = ?').get('child'),
+      { parent_session_id: 'parent', branch_label: 'Alternative', forked_at: 100 },
+    )
+    assert.ok(
+      db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_sessions_user_parent'").get(),
+    )
+    db.prepare('DELETE FROM sessions WHERE token = ?').run('parent')
+    assert.equal(
+      db.prepare('SELECT parent_session_id FROM sessions WHERE token = ?').get('child').parent_session_id,
+      null,
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test('v58 persists cron grants and scheduled job provenance', () => {
+  const db = new Database(':memory:')
+  try {
+    db.exec(`
+      CREATE TABLE cron_jobs (id TEXT PRIMARY KEY);
+      CREATE TABLE jobs (id TEXT PRIMARY KEY, created_at INTEGER NOT NULL DEFAULT 0);
+      INSERT INTO cron_jobs (id) VALUES ('cron-legacy');
+      INSERT INTO jobs (id, created_at) VALUES ('job-legacy', 1);
+    `)
+    migrateToV58(db)
+    migrateToV58(db)
+
+    assert.deepEqual(
+      db.prepare('SELECT grants_json FROM cron_jobs WHERE id = ?').get('cron-legacy'),
+      { grants_json: '[]' },
+    )
+    assert.deepEqual(
+      db.prepare('SELECT source_type, source_id, grants_json FROM jobs WHERE id = ?').get('job-legacy'),
+      { source_type: null, source_id: null, grants_json: '[]' },
+    )
+    db.prepare('UPDATE jobs SET source_type = ?, source_id = ?, grants_json = ? WHERE id = ?')
+      .run('cron', 'cron-1', '[{"tool":"bash_exec"}]', 'job-legacy')
+    assert.ok(
+      db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_jobs_source'").get(),
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test('v57 stores exhausted event write-behind failures for diagnostics', () => {
+  const db = new Database(':memory:')
+  try {
+    migrateToV57(db)
+    migrateToV57(db)
+    db.prepare(`INSERT INTO event_write_failures
+      (user_id, session_id, turn_id, event_id, event_sequence, event_type,
+        payload_json, error_message, attempts, failed_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run('u-1', 's-1', 't-1', 'e-1', 4, 'assistant.delta', '{"text":"x"}', 'disk full', 3, 100)
+    const row = db.prepare('SELECT * FROM event_write_failures WHERE event_id = ?').get('e-1')
+    assert.equal(row.event_type, 'assistant.delta')
+    assert.equal(row.attempts, 3)
+    assert.equal(row.error_message, 'disk full')
+  } finally {
+    db.close()
+  }
 })
 
 test('v56 persists MCP per-tool risk declarations without rewriting existing rows', () => {

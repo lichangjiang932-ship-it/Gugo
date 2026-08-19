@@ -28,6 +28,12 @@ function isLoopbackHttpUrl(raw) {
   }
 }
 
+function mcpRpcError(message) {
+  const error = new Error(message || 'MCP error')
+  error.isMcpRpcError = true
+  return error
+}
+
 export class SseTransport {
   constructor({ url, headers = {}, getHeaders, label = 'mcp', timeoutMs = 30000 }) {
     if (!url || !/^https?:\/\//.test(url)) throw new Error('SSE transport 需要 http/https url')
@@ -43,13 +49,21 @@ export class SseTransport {
     this.sessionId = null
     this.notificationHandlers = new Set()
     this.errorHandlers = new Set()
+    this.closeHandlers = new Set()
+    this.closeEmitted = false
   }
 
   start() { /* no-op for HTTP */ }
 
   onNotification(fn) { this.notificationHandlers.add(fn); return () => this.notificationHandlers.delete(fn) }
   onError(fn) { this.errorHandlers.add(fn); return () => this.errorHandlers.delete(fn) }
+  onClose(fn) { this.closeHandlers.add(fn); return () => this.closeHandlers.delete(fn) }
   _emitError(err) { for (const fn of this.errorHandlers) { try { fn(err) } catch { /* ignore */ } } }
+  _emitClose(details) {
+    if (this.closeEmitted) return
+    this.closeEmitted = true
+    for (const fn of this.closeHandlers) { try { fn(details) } catch { /* ignore */ } }
+  }
 
   send(message) {
     // 通知（无 id）：fire-and-forget POST
@@ -93,10 +107,11 @@ export class SseTransport {
       }
       const text = await resp.text()
       const data = text ? JSON.parse(text) : {}
-      if (data.error) throw new Error(data.error.message || 'MCP error')
+      if (data.error) throw mcpRpcError(data.error.message)
       return data.result
     } catch (error) {
       if (signal?.aborted) throw signal.reason || error
+      if (!error?.isMcpRpcError) this._emitError(error)
       throw error
     } finally {
       clearTimeout(t)
@@ -142,7 +157,7 @@ export class SseTransport {
         let msg
         try { msg = JSON.parse(payload) } catch { continue }
         if (msg.id !== undefined && msg.id === expectedId) {
-          if (msg.error) throw new Error(msg.error.message || 'MCP error')
+          if (msg.error) throw mcpRpcError(msg.error.message)
           // 关掉 reader,后续 event 丢弃
           try { await reader.cancel() } catch { /* ignore */ }
           return msg.result
@@ -156,7 +171,9 @@ export class SseTransport {
   }
 
   stop() {
+    if (this.closed) return
     this.closed = true
+    this._emitClose({ reason: new Error(`MCP "${this.label}" 主动关闭`), intentional: true })
   }
 
   isAlive() {

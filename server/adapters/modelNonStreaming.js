@@ -1,7 +1,7 @@
 import { parseModelProviderResponse } from './modelProviderResponse.js'
 
-export function* modelProviderResponseEvents(data, profile) {
-  const parsed = parseModelProviderResponse(data, profile)
+export function* modelProviderResponseEvents(data, profile, options = {}) {
+  const parsed = parseModelProviderResponse(data, profile, options)
   if (parsed.usage) yield { type: 'usage', usage: parsed.usage }
   if (parsed.content) yield { type: 'text', delta: parsed.content }
   if (parsed.toolCalls.length) {
@@ -79,7 +79,7 @@ export async function* requestNonStreamingAsEvents({
   buildRequest,
   createTimeoutError,
 }) {
-  const { url, init } = buildRequest({
+  const providerRequest = buildRequest({
     config,
     messages,
     stream: false,
@@ -88,6 +88,7 @@ export async function* requestNonStreamingAsEvents({
     env,
     profile,
   })
+  const { url, init } = providerRequest
   const { response, text } = await fetchTextWithTimeout(fetchImpl, url, init, {
     timeoutMs: profile.timeouts.requestMs,
     externalSignal,
@@ -109,5 +110,5 @@ export async function* requestNonStreamingAsEvents({
     throw error
   }
 
-  yield* modelProviderResponseEvents(data, profile)
+  yield* modelProviderResponseEvents(data, profile, { providerRequest })
 }

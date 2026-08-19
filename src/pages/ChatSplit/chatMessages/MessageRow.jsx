@@ -64,16 +64,20 @@ export default function MessageRow({
   // Their collapsed source/link presentation is part of the message itself, not
   // global chat generation state.
   const isMessageComplete = !isCurrentStreamingMessage
-  // A failed/interrupted turn may retain internal draft artifacts for durable
-  // recovery, but those files are not final deliverables and must never appear
-  // as clickable cards. Only a normally completed message may present files.
-  const canPresentDeliverables = isMessageComplete
+  // Managed artifacts remain final-delivery only. A failed turn may still
+  // expose local files that have independent mutation + full read-back
+  // receipts; interrupted/paused turns stay hidden because they may resume.
+  const canPresentManagedDeliverables = isMessageComplete
     && msg.meta?.failed !== true
     && msg.meta?.interrupted !== true
-  const deliveryArtifacts = canPresentDeliverables ? resolvedDeliveryArtifacts : []
+  const canPresentVerifiedLocalFiles = isMessageComplete
+    && msg.meta?.interrupted !== true
+    && msg.meta?.paused !== true
+  const canPresentDeliverables = canPresentManagedDeliverables || canPresentVerifiedLocalFiles
+  const deliveryArtifacts = canPresentManagedDeliverables ? resolvedDeliveryArtifacts : []
   const artifactPreview = deliveryArtifacts.length > 0 ? buildMessageArtifactPreview(msg) : null
-  const showArtifactPreview = !!artifactPreview && canPresentDeliverables
-  const serverArtifactReferences = canPresentDeliverables
+  const showArtifactPreview = !!artifactPreview && canPresentManagedDeliverables
+  const serverArtifactReferences = canPresentManagedDeliverables
     ? buildServerArtifactReferences({
         artifacts: deliveryArtifacts,
         content: String(msg.meta?.artifactSource || msg.content || ''),
@@ -81,7 +85,7 @@ export default function MessageRow({
         preview: artifactPreview,
       })
     : []
-  const verifiedLocalFileReferences = canPresentDeliverables
+  const verifiedLocalFileReferences = canPresentVerifiedLocalFiles
     ? buildVerifiedLocalFileReferences({
         toolCalls: msg.meta?.toolCalls,
         verifiedLocalFiles: msg.meta?.verifiedLocalFiles,
@@ -125,6 +129,7 @@ export default function MessageRow({
             <CollapsedArtifactContent
               artifactReferences={artifactReferences}
               artifactPreview={artifactPreview}
+              deliveryArtifacts={deliveryArtifacts}
               msg={msg}
               onOpenArtifact={openArtifact}
               t={t}
@@ -135,6 +140,7 @@ export default function MessageRow({
               artifactPreview={artifactPreview}
               artifactReferences={artifactReferences}
               canPresentDeliverables={canPresentDeliverables}
+              deliveryArtifacts={deliveryArtifacts}
               isCurrentStreamingMessage={isCurrentStreamingMessage}
               isMessageComplete={isMessageComplete}
               msg={msg}
@@ -180,7 +186,9 @@ export default function MessageRow({
         {msg.role === 'assistant' && msg.meta?.failed && msg.meta?.type !== 'model_reply' && (
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
             <span className="text-ember" data-testid="reply-completion-state">
-              {t('chatMessages.replyIncomplete')}
+              {verifiedLocalFileReferences.length > 0
+                ? t('chatMessages.replyPartiallyCompleted')
+                : t('chatMessages.replyIncomplete')}
             </span>
           </div>
         )}
@@ -194,7 +202,7 @@ export default function MessageRow({
   )
 }
 
-function AssistantContent({ artifactPreview, artifactReferences, canPresentDeliverables, isCurrentStreamingMessage, isMessageComplete, msg, onOpenArtifact, showArtifactPreview, t, verifiedLocalFileReferences }) {
+function AssistantContent({ artifactPreview, artifactReferences, canPresentDeliverables, deliveryArtifacts, isCurrentStreamingMessage, isMessageComplete, msg, onOpenArtifact, showArtifactPreview, t, verifiedLocalFileReferences }) {
   const inlineFileReferences = artifactReferences
   const openInlineArtifact = (href) => {
     // 先按产物 URL 匹配,再按本地路径(含 file:/// 与 D:\ 形式)匹配,
@@ -258,6 +266,7 @@ function AssistantContent({ artifactPreview, artifactReferences, canPresentDeliv
       )}
       {canPresentDeliverables && (showArtifactPreview || resolveDeliveryArtifacts(msg.meta).length > 0 || verifiedLocalFileReferences.length > 0) && (
         <ArtifactReferenceLinks
+          deliveryArtifacts={deliveryArtifacts}
           msg={msg}
           preview={artifactPreview}
           onOpen={onOpenArtifact}
@@ -410,7 +419,7 @@ function collapsedArtifactSummary(artifactReferences, t) {
   })
 }
 
-function CollapsedArtifactContent({ artifactPreview, artifactReferences, msg, onOpenArtifact, t, verifiedLocalFileReferences }) {
+function CollapsedArtifactContent({ artifactPreview, artifactReferences, deliveryArtifacts, msg, onOpenArtifact, t, verifiedLocalFileReferences }) {
   const openToolArtifact = (reference) => {
     const payload = artifactReferenceOpenPayload(reference, msg.id)
     if (!payload) return false
@@ -433,6 +442,7 @@ function CollapsedArtifactContent({ artifactPreview, artifactReferences, msg, on
         <p data-testid="artifact-completion-summary">{collapsedArtifactSummary(artifactReferences, t)}</p>
       </div>
       <ArtifactReferenceLinks
+        deliveryArtifacts={deliveryArtifacts}
         msg={msg}
         preview={artifactPreview}
         onOpen={onOpenArtifact}

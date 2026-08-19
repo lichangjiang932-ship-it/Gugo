@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import test from 'node:test'
 
 import { pinnedTimestampOf, sortSessions, timestampOf } from '../src/components/leftRail/sessionListUtils.js'
+
+const sessionListSource = fs.readFileSync(
+  new URL('../src/components/leftRail/SessionList.jsx', import.meta.url),
+  'utf8',
+)
 
 test('session history is one continuous newest-first list', () => {
   const sessions = [
@@ -12,6 +18,16 @@ test('session history is one continuous newest-first list', () => {
 
   assert.deepEqual(sortSessions(sessions).map(({ id }) => id), ['today-new', 'today-old', 'last-week'])
   assert.deepEqual(sortSessions([]), [])
+})
+
+test('session history stays a single-line list without project groups or time subtitles', () => {
+  assert.match(sessionListSource, /orderedSessions\.map\(\(session, index\) => renderSession\(session, index\)\)/)
+  assert.match(sessionListSource, /block truncate text-\[13px\] leading-\[18px\]/)
+  assert.equal((sessionListSource.match(/\{session\.title\}/g) || []).length, 1)
+  assert.doesNotMatch(
+    sessionListSource,
+    /groupSessions|groupedSessions|formatRelative|relativeTime|session\.(?:project|projectName|updatedAt|createdAt)|data-session-(?:project|time)/,
+  )
 })
 
 test('timestampOf accepts message timestamps and rejects invalid values', () => {

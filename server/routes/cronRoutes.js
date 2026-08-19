@@ -27,6 +27,7 @@ function normalizeBody(body = {}) {
     scheduleValue: body.scheduleValue ?? body.schedule_value,
     execType: body.execType ?? body.exec_type,
     execPayload: body.execPayload ?? body.exec_payload ?? body.exec_payload_json,
+    grants: body.grants,
     enabled: body.enabled,
   }
 }

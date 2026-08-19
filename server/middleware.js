@@ -141,7 +141,7 @@ function isSensitiveLogQueryKey(value) {
 export function redactUrlForLog(value = '') {
   const raw = String(value || '')
   const redactPathCapabilities = (url) => url.replace(
-    /(\/api\/local-files\/previews\/)[^/?#]+/gi,
+    /(\/api\/(?:local-files|artifacts)\/previews\/)[^/?#]+/gi,
     '$1[REDACTED]',
   )
   if (!raw.includes('?')) return redactPathCapabilities(raw)

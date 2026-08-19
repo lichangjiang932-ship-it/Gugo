@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { PanelLeftClose, PanelLeftOpen, Plus, Search } from 'lucide-react'
 import { useLocation, useNavigate } from '../lib/router.jsx'
 import { useAppContext } from '../store/AppContext'
-import { archiveSessionRemote, pinSessionRemote, unarchiveSessionRemote, unpinSessionRemote } from '../lib/sessionClient.js'
+import { archiveSessionRemote, forkSessionRemote, pinSessionRemote, unarchiveSessionRemote, unpinSessionRemote } from '../lib/sessionClient.js'
 import { getAuthToken } from '../lib/accountClient.js'
 import { useT } from '../i18n/I18nProvider.jsx'
 import { useToast } from './Toast.jsx'
@@ -13,7 +13,7 @@ import SessionList from './leftRail/SessionList.jsx'
 import useLeftRailController from './leftRail/useLeftRailController.js'
 
 const COLLAPSED_KEY = 'gugo:left-rail-collapsed'
-const NARROW_RAIL_QUERY = '(max-width: 719px)'
+const NARROW_RAIL_QUERY = '(max-width: 959px)'
 
 function initialCollapsed() {
   try { return window.localStorage?.getItem(COLLAPSED_KEY) === '1' } catch { return false }
@@ -34,6 +34,11 @@ export default function LeftRail() {
   const [narrowViewport, setNarrowViewport] = useState(initialNarrowViewport)
   const [mobileExpanded, setMobileExpanded] = useState(false)
   const collapsed = narrowViewport ? !mobileExpanded : collapsedPreference
+  const railWidthClass = collapsed
+    ? 'w-[60px] max-w-full px-2 py-2.5'
+    : narrowViewport
+      ? 'w-[min(320px,calc(100vw-60px))] min-w-0 max-w-[320px] px-2.5 py-2.5'
+      : 'w-[clamp(280px,20vw,320px)] min-w-[280px] max-w-[320px] px-2.5 py-2.5'
   const sessions = state.sessions.filter((session) => !session.archivedAt)
 
   useEffect(() => {
@@ -61,6 +66,22 @@ export default function LeftRail() {
   const handleDelete = (session) => {
     controller.setOpenMenuId(null)
     if (confirm(t('nav.confirmDeleteSession', { title: session.title }))) dispatch({ type: 'DELETE_SESSION', payload: session.id })
+  }
+  const handleFork = async (session) => {
+    controller.setOpenMenuId(null)
+    try {
+      const result = await forkSessionRemote(session.id)
+      if (!result?.session?.id) throw new Error(t('nav.forkFailed'))
+      dispatch({ type: 'ADD_SERVER_FORK', payload: { session: result.session } })
+      dispatch({ type: 'SWITCH_SESSION', payload: result.session.id })
+      closeMobileRail()
+      navigate('/chat')
+    } catch (error) {
+      toast.error({
+        title: t('nav.forkFailed'),
+        body: error?.code === 'SESSION_ACTIVE' ? t('nav.forkActive') : error.message,
+      })
+    }
   }
   const handleArchiveToggle = async (session) => {
     controller.setOpenMenuId(null)
@@ -96,7 +117,7 @@ export default function LeftRail() {
 
   return <>
     {narrowViewport && mobileExpanded && <button type="button" aria-label={t('chatMessages.hideSidebar')} onClick={() => setMobileExpanded(false)} className="fixed inset-0 z-40 cursor-default bg-ink/20" />}
-    <aside role="navigation" aria-label={`Gugo · ${t('nav.chat')}`} data-collapsed={collapsed ? 'true' : 'false'} className={`flex h-full shrink-0 flex-col border-r border-ink/[0.07] bg-paper transition-[width] duration-200 ${collapsed ? 'w-[60px] px-2 py-2.5' : 'w-[clamp(280px,20vw,320px)] min-w-[280px] max-w-[320px] px-2.5 py-2.5'} ${narrowViewport && mobileExpanded ? 'fixed inset-y-0 left-0 z-50 shadow-2xl' : ''}`}>
+    <aside role="navigation" aria-label={`Gugo · ${t('nav.chat')}`} data-collapsed={collapsed ? 'true' : 'false'} className={`flex h-full shrink-0 flex-col border-r border-ink/[0.07] bg-paper transition-[width] duration-200 ${railWidthClass} ${narrowViewport && mobileExpanded ? 'fixed inset-y-0 left-0 z-50 shadow-2xl' : ''}`}>
       <header className={`flex h-10 items-center ${collapsed ? 'justify-center' : 'gap-2 px-1'}`}>
         {!collapsed && <button type="button" onClick={() => { controller.closeSessionMenu(); closeMobileRail(); navigate('/chat') }} aria-label="Gugo" className="flex min-w-0 flex-1 items-center gap-2.5 rounded-control text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ember/30"><BrandMark className="h-7 w-7 shrink-0 text-ember" /><span className="min-w-0"><span className="block truncate text-[14px] font-semibold leading-4 text-ink">Gugo</span><span className="block truncate text-xs leading-4 text-ink-fade">{t('nav.chat')}</span></span></button>}
         <button type="button" onClick={() => setRailCollapsed(!collapsed)} title={collapsed ? t('chatMessages.showSidebar') : t('chatMessages.hideSidebar')} aria-label={collapsed ? t('chatMessages.showSidebar') : t('chatMessages.hideSidebar')} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-control text-ink-fade transition-colors hover:bg-ink/[0.05] hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/30">{collapsed ? <PanelLeftOpen className="h-[18px] w-[18px]" /> : <PanelLeftClose className="h-[18px] w-[18px]" />}</button>
@@ -107,7 +128,7 @@ export default function LeftRail() {
         {collapsed && navButton(Search, t('nav.searchPlaceholder'), handleSearch)}
       </div>
 
-      {!collapsed && <div className="mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-0.5"><SessionList sessions={sessions} activeSessionId={state.activeSessionId} openMenuId={controller.openMenuId} onMenuOpen={controller.setOpenMenuId} onMenuToggle={(id) => controller.setOpenMenuId(controller.openMenuId === id ? null : id)} onMenuClose={controller.closeSessionMenu} onSearch={handleSearch} onOpen={handleOpenSession} onPinToggle={handlePinToggle} onArchiveToggle={handleArchiveToggle} onDelete={handleDelete} t={t} /></div>}
+      {!collapsed && <div className="mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-0.5"><SessionList sessions={sessions} activeSessionId={state.activeSessionId} openMenuId={controller.openMenuId} onMenuOpen={controller.setOpenMenuId} onMenuToggle={(id) => controller.setOpenMenuId(controller.openMenuId === id ? null : id)} onMenuClose={controller.closeSessionMenu} onSearch={handleSearch} onOpen={handleOpenSession} onFork={handleFork} onPinToggle={handlePinToggle} onArchiveToggle={handleArchiveToggle} onDelete={handleDelete} t={t} /></div>}
       {collapsed && <div className="min-h-0 flex-1" />}
       <AccountArea compact={collapsed} accountMenuOpen={controller.accountMenuOpen} accountMenuRef={controller.accountMenuRef} user={state.user} pendingApprovals={controller.pendingApprovals} onToggle={() => { controller.closeSessionMenu(); controller.setAccountMenuOpen((open) => !open) }} onNavigate={(item) => { closeMobileRail(); controller.navigateItem(item) }} t={t} />
     </aside>

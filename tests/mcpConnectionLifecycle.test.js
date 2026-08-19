@@ -41,7 +41,9 @@ lines.on('close', () => process.exit(0))
 const { closeDb, createSession, createUser, getSessionByToken } = await import('../server/db.js')
 const { handleAuthAccountRequest } = await import('../server/adapters/authAccount.js')
 const {
+  callTool,
   ensureServerConnected,
+  getMcpConnectionState,
   getUserCatalog,
   shutdownAll,
   sweepIdleConnections,
@@ -78,6 +80,16 @@ function response() {
     writeHead(statusCode) { this.statusCode = statusCode },
     end(chunk = '') { this.body += chunk },
   }
+}
+
+async function waitFor(predicate, { timeoutMs = 5_000, intervalMs = 10 } = {}) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const value = predicate()
+    if (value) return value
+    await new Promise((resolve) => setTimeout(resolve, intervalMs))
+  }
+  throw new Error(`condition was not met within ${timeoutMs}ms`)
 }
 
 test.after(() => {
@@ -132,4 +144,55 @@ test('M1: concurrent ensureServerConnected calls share a single connection', asy
   assert.equal(a, b, '并发调用应返回同一个 connection 实例')
   assert.equal(getUserCatalog('mcp-inflight-user')[0].connected, true)
   assert.ok(getDynamicTool('mcp__Inflight_Server__ping', { userId: 'mcp-inflight-user' }))
+})
+
+test('K1: an explicit ensure manually reconnects a failed server', async () => {
+  createUser({ id: 'mcp-manual-user', email: 'mcp-manual@example.com' })
+  const server = addServer('mcp-manual-user', 'mcp-manual-server', 'Manual Server')
+  server.args = ['-e', 'process.exit(1)']
+
+  await assert.rejects(ensureServerConnected('mcp-manual-user', server), /initialize failed/i)
+  assert.equal(getMcpConnectionState('mcp-manual-user', server.id)?.status, 'failed')
+
+  server.args = ['-e', fakeServerSource]
+  const connection = await ensureServerConnected('mcp-manual-user', server)
+  assert.ok(connection.transport.isAlive())
+  assert.equal(getMcpConnectionState('mcp-manual-user', server.id)?.status, 'connected')
+})
+
+test('K1: killed stdio transport keeps tools visible, returns retryable, and reconnects automatically', async () => {
+  createUser({ id: 'mcp-recovery-user', email: 'mcp-recovery@example.com' })
+  const server = addServer('mcp-recovery-user', 'mcp-recovery-server', 'Recovery Server')
+  const first = await ensureServerConnected('mcp-recovery-user', server)
+  const firstPid = first.transport.child?.pid
+
+  first.transport.child?.kill()
+  await waitFor(() => getMcpConnectionState('mcp-recovery-user', server.id)?.status === 'reconnecting')
+
+  assert.ok(
+    getDynamicTool('mcp__Recovery_Server__ping', { userId: 'mcp-recovery-user' }),
+    'tool registration must remain visible during backoff',
+  )
+  await assert.rejects(
+    callTool({
+      userId: 'mcp-recovery-user',
+      fullToolName: 'mcp__Recovery_Server__ping',
+      args: {},
+    }),
+    (error) => error.code === 'mcp_connection_recovering'
+      && error.reason === 'mcp_connection_recovering'
+      && error.retryable === true,
+  )
+
+  await waitFor(() => getMcpConnectionState('mcp-recovery-user', server.id)?.status === 'connected')
+  const recovered = await ensureServerConnected('mcp-recovery-user', server)
+  assert.notEqual(recovered.transport.child?.pid, firstPid)
+  assert.deepEqual(
+    await callTool({
+      userId: 'mcp-recovery-user',
+      fullToolName: 'mcp__Recovery_Server__ping',
+      args: {},
+    }),
+    { content: [{ type: 'text', text: 'pong' }] },
+  )
 })

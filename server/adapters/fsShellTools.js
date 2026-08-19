@@ -46,6 +46,7 @@ import {
   resolveAuthorizedLocalPath,
 } from '../services/localFileAccessService.js'
 import { assertWorkspaceCapability } from '../services/workspaceTrustService.js'
+import { runShellSessionCommand } from '../services/shellSessionStore.js'
 import {
   extractManagedAttachmentContent,
   extractPdfBufferContent,
@@ -145,6 +146,19 @@ function requestedEnvValues(keys) {
   return [...new Set(keys
     .map((key) => String(process.env[key] || ''))
     .filter(Boolean))]
+}
+
+function normalizeShellSession(value) {
+  const session = value == null || value === '' ? 'new' : String(value).trim().toLowerCase()
+  if (session === 'new' || session === 'reuse') return session
+  const error = badReq('session 必须是 new 或 reuse')
+  error.code = 'SHELL_SESSION_INVALID'
+  throw error
+}
+
+function displayShellCwd(resolvedCwd, currentCwd) {
+  if (resolvedCwd.source !== 'workspace') return currentCwd
+  return path.relative(resolvedCwd.rootPath, currentCwd).split(path.sep).join('/')
 }
 
 function redactSensitiveValues(value, secrets) {
@@ -820,6 +834,7 @@ function assertShellCommandPathsAuthorized(command, { userId, expectedTargets })
 export async function bashExecTool({
   command,
   cwd: rawCwd,
+  session,
   timeout_ms,
   expected_outputs,
   env_keys,
@@ -832,6 +847,7 @@ export async function bashExecTool({
   assertToolPermitted(userId, effectivePermissionToolName(permissionToolName, 'bash_exec'))
   if (typeof command !== 'string' || !command.trim()) throw badReq('command 必填')
   if (command.length > 10_000) throw badReq('command 过长', 413)
+  const sessionMode = normalizeShellSession(session)
   const inheritedEnvKeys = normalizeShellEnvKeys(env_keys)
   const sensitiveEnvValues = requestedEnvValues(inheritedEnvKeys)
 
@@ -850,16 +866,22 @@ export async function bashExecTool({
 
   const resolvedCwd = resolveShellCwdForCommand(rawCwd, { command, userId })
   const cwd = resolvedCwd.fullPath
-  const displayCwd = resolvedCwd.displayPath
+  let displayCwd = resolvedCwd.displayPath
   if (!fs.statSync(cwd).isDirectory()) throw badReq('cwd 不是目录')
-  const expectedTargets = await prepareExpectedOutputs(expected_outputs, { cwd, userId })
-  const inferredTargets = expectedTargets.length === 0
-    ? await prepareExpectedOutputs(inferCodeExecutionOutputPaths(command), { cwd, userId })
-    : []
-  assertShellCommandPathsAuthorized(command, {
-    userId,
-    expectedTargets: [...expectedTargets, ...inferredTargets],
-  })
+  let expectedTargets = []
+  let inferredTargets = []
+
+  const prepareExecution = async (effectiveCwd) => {
+    if (!fs.statSync(effectiveCwd).isDirectory()) throw badReq('持久 Shell 当前 cwd 不是目录')
+    expectedTargets = await prepareExpectedOutputs(expected_outputs, { cwd: effectiveCwd, userId })
+    inferredTargets = expectedTargets.length === 0
+      ? await prepareExpectedOutputs(inferCodeExecutionOutputPaths(command), { cwd: effectiveCwd, userId })
+      : []
+    assertShellCommandPathsAuthorized(command, {
+      userId,
+      expectedTargets: [...expectedTargets, ...inferredTargets],
+    })
+  }
 
   const timeout = Math.min(
     Math.max(Number(timeout_ms) || SHELL_DEFAULT_TIMEOUT_MS, 1000),
@@ -867,32 +889,57 @@ export async function bashExecTool({
   )
 
   const isWin = process.platform === 'win32'
-  const shellPath = isWin ? (process.env.COMSPEC || 'cmd.exe') : '/bin/sh'
-  const shellArgs = isWin ? ['/d', '/s', '/c', command] : ['-c', command]
   const startedAt = Date.now()
   const outputLogPath = sensitiveEnvValues.length > 0 ? null : createShellOutputLogPath()
-  const rawResult = await runProcessWithGroup({
-    shellPath,
-    shellArgs,
-    cwd,
-    env: buildCodeExecutionEnv(sanitizeChildEnv({}, { inheritKeys: inheritedEnvKeys })),
-    timeout,
-    maxBuffer: SHELL_MAX_OUTPUT,
-    windowsHide: true,
-    // Node's default Windows argv quoting rewrites embedded quotes in the
-    // command passed to cmd.exe. Preserve the command exactly so quoted paths
-    // containing characters such as parentheses remain valid.
-    windowsVerbatimArguments: isWin,
-    signal,
-    overflowMode: 'tail',
-    fullOutputPath: outputLogPath,
-    onOutput,
-  })
+  let rawResult
+  if (sessionMode === 'reuse') {
+    rawResult = await runShellSessionCommand({
+      userId,
+      rootPath: resolvedCwd.rootPath || cwd,
+      cwd,
+      command,
+      env: buildCodeExecutionEnv(sanitizeChildEnv()),
+      timeout,
+      maxBuffer: SHELL_MAX_OUTPUT,
+      signal,
+      fullOutputPath: outputLogPath,
+      onOutput,
+      beforeExecute: async ({ cwd: effectiveCwd }) => {
+        await prepareExecution(effectiveCwd)
+        return {
+          ephemeralEnv: Object.fromEntries(inheritedEnvKeys.map((key) => [key, process.env[key]])),
+        }
+      },
+    })
+    if (rawResult.currentCwd) displayCwd = displayShellCwd(resolvedCwd, rawResult.currentCwd)
+  } else {
+    await prepareExecution(cwd)
+    const shellPath = isWin ? (process.env.COMSPEC || 'cmd.exe') : '/bin/sh'
+    const shellArgs = isWin ? ['/d', '/s', '/c', command] : ['-c', command]
+    rawResult = await runProcessWithGroup({
+      shellPath,
+      shellArgs,
+      cwd,
+      env: buildCodeExecutionEnv(sanitizeChildEnv({}, { inheritKeys: inheritedEnvKeys })),
+      timeout,
+      maxBuffer: SHELL_MAX_OUTPUT,
+      windowsHide: true,
+      // Node's default Windows argv quoting rewrites embedded quotes in the
+      // command passed to cmd.exe. Preserve the command exactly so quoted paths
+      // containing characters such as parentheses remain valid.
+      windowsVerbatimArguments: isWin,
+      signal,
+      overflowMode: 'tail',
+      fullOutputPath: outputLogPath,
+      onOutput,
+    })
+  }
   const r = redactProcessOutput(rawResult, sensitiveEnvValues)
   const durationMs = Date.now() - startedAt
   const auditArgs = {
     command,
     cwd: displayCwd,
+    ...(sessionMode === 'reuse' ? { session: 'reuse' } : {}),
     ...(inheritedEnvKeys.length > 0 ? { env_keys: inheritedEnvKeys } : {}),
     ...(expectedTargets.length > 0
       ? { expected_outputs: expectedTargets.map((target) => target.path) }
@@ -917,6 +964,10 @@ export async function bashExecTool({
   })
   const executionMetadata = {
     durationMs,
+    ...(sessionMode === 'reuse' ? {
+      session: 'reuse',
+      ...(r.sessionRecovered ? { sessionRecovered: true } : {}),
+    } : {}),
     ...(r.truncated ? {
       truncated: true,
       totalOutputBytes: r.totalOutputBytes,
@@ -949,12 +1000,25 @@ export async function bashExecTool({
       ...verificationFields,
     }
   }
+  if (r.sessionBoundaryViolation) {
+    if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'error', durationMs })
+    return {
+      ok: false,
+      code: 'SHELL_SESSION_BOUNDARY_VIOLATION',
+      error: r.error || '持久 Shell 当前目录越出授权根，会话已重置',
+      stdout: r.stdout,
+      stderr: r.stderr,
+      cwd: displayCwd,
+      ...executionMetadata,
+      ...verificationFields,
+    }
+  }
   if (r.aborted) {
     if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'cancelled', durationMs })
     return {
       ok: false,
       cancelled: true,
-      error: '命令已取消，进程组已清理',
+      error: sessionMode === 'reuse' ? '命令已取消，持久 Shell 可继续使用' : '命令已取消，进程组已清理',
       stdout: r.stdout,
       stderr: r.stderr,
       cwd: displayCwd,
@@ -968,12 +1032,29 @@ export async function bashExecTool({
     return {
       ok: false,
       timedOut: true,
-      error: `命令超时(${timeout}ms),进程组已被清理`,
+      error: sessionMode === 'reuse'
+        ? `命令超时(${timeout}ms)，当前命令已中断，持久 Shell 可继续使用`
+        : `命令超时(${timeout}ms),进程组已被清理`,
       stdout: r.stdout,
       stderr: r.stderr,
       cwd: displayCwd,
       ...executionMetadata,
       ...(failureHint ? { hint: failureHint } : {}),
+      ...verificationFields,
+    }
+  }
+  if (r.sessionCrashed) {
+    if (userId) writeToolAudit({ userId, origin: 'bash', toolName: 'bash_exec', args: auditArgs, status: 'error', durationMs })
+    return {
+      ok: false,
+      code: 'SHELL_SESSION_CRASHED',
+      exitCode: r.code,
+      signal: r.signal,
+      error: r.error || '持久 Shell 已退出；下次调用将自动重建',
+      stdout: r.stdout,
+      stderr: r.stderr,
+      cwd: displayCwd,
+      ...executionMetadata,
       ...verificationFields,
     }
   }
@@ -1151,6 +1232,7 @@ export const FS_SHELL_TOOL_SPECS = [
         properties: {
           command: { type: 'string', description: '完整命令字符串,例如 "ls -la src" 或 "npm test"' },
           cwd: { type: 'string', description: 'workspace 相对目录或用户已授权目录的绝对路径,默认 workspace 根' },
+          session: { type: 'string', enum: ['new', 'reuse'], default: 'new', description: 'new 每次启动独立 Shell（默认）；reuse 按用户和授权目录复用 Shell，保留 cd、环境变量与虚拟环境状态。' },
           timeout_ms: { type: 'integer', default: SHELL_DEFAULT_TIMEOUT_MS, minimum: 1000, maximum: SHELL_MAX_TIMEOUT_MS, description: '超时毫秒数，默认 600000，最大 21600000（6 小时）' },
           expected_outputs: { type: 'array', default: [], items: { type: 'string' }, description: '命令预期创建或修改的文件路径;只读命令留空.' },
           env_keys: { type: 'array', maxItems: SHELL_MAX_ENV_KEYS, uniqueItems: true, items: { type: 'string', pattern: '^[A-Za-z_][A-Za-z0-9_]*$' }, description: '可选宿主环境变量名称。仅在本次高风险审批通过后按名称注入；变量值不会进入工具参数或结果，Gugo 自身模型/认证密钥始终禁止。' },

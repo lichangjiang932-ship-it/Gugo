@@ -151,6 +151,7 @@ test('tick agent_session creates a background job', async () => {
     scheduleValue: '60000',
     execType: 'agent_session',
     execPayload: { prompt: 'Summarize the day', agentId: 'agt_external' },
+    grants: [{ tool: 'bash_exec', target: ['git', 'pull'], scope: 'forever' }],
   })
   const scheduler = new CronScheduler()
   const before = listJobs({ userId }).length
@@ -159,6 +160,11 @@ test('tick agent_session creates a background job', async () => {
   assert.equal(result.status, 'success')
   assert.equal(after.length, before + 1)
   assert.match(after[0].prompt, /Summarize the day/)
+  assert.equal(after[0].sourceType, 'cron')
+  assert.equal(after[0].sourceId, job.id)
+  assert.deepEqual(after[0].grants, [
+    { tool: 'bash_exec', target: ['git', 'pull'], scope: 'forever' },
+  ])
   closeJobRuntime()
 })
 

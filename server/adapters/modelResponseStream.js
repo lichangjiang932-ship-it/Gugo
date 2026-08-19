@@ -10,7 +10,7 @@ function notifyObserver(observer) {
   try { observer() } catch { /* observability must not fail the request */ }
 }
 
-export async function readJsonModelResponseEvents(response, profile, { onFirstByte } = {}) {
+export async function readJsonModelResponseEvents(response, profile, { onFirstByte, providerRequest = null } = {}) {
   const contentType = String(response.headers?.get?.('content-type') || '')
   if (!/\bapplication\/(?:[^;\s]+\+)?json\b/i.test(contentType)) return null
 
@@ -18,7 +18,7 @@ export async function readJsonModelResponseEvents(response, profile, { onFirstBy
   notifyObserver(onFirstByte)
   let data
   try { data = text ? JSON.parse(text) : null } catch { data = { raw: text } }
-  return [...modelProviderResponseEvents(data, profile)]
+  return [...modelProviderResponseEvents(data, profile, { providerRequest })]
 }
 
 /**

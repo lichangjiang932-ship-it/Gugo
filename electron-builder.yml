@@ -44,6 +44,7 @@ files:
   - desktop/preload.cjs
   - desktop/runtime.js
   - desktop/security.js
+  - desktop/updateRuntime.js
   - build/icon.ico
   - package.json
 win:

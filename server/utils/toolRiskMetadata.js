@@ -5,6 +5,7 @@ const VALID = new Set(Object.values(TOOL_RISK_CLASSES))
 const VALID_LEVELS = new Set(Object.values(TOOL_RISK_LEVELS))
 const VALID_SOURCES = new Set(['declared', 'fallback'])
 const INTERRUPT_BEHAVIORS = new Set(['cancel', 'block'])
+const EXECUTION_MODES = new Set(['parallel', 'exclusive'])
 const DEFAULT_LEVEL_BY_CATEGORY = Object.freeze({
   [TOOL_RISK_CLASSES.READ]: TOOL_RISK_LEVELS.LOW,
   [TOOL_RISK_CLASSES.WRITE_LOCAL]: TOOL_RISK_LEVELS.MEDIUM,
@@ -35,6 +36,16 @@ export function normalizeToolRiskMetadata(metadata, { origin = 'dynamic', source
     ? (value.readOnly == null ? category === TOOL_RISK_CLASSES.READ : value.readOnly === true)
     : value.isReadOnly === true
   const isConcurrencySafe = value.isConcurrencySafe == null ? isReadOnly : value.isConcurrencySafe === true
+  const declaredExecutionMode = EXECUTION_MODES.has(value.executionMode) ? value.executionMode : null
+  const executionMode = declaredExecutionMode === 'parallel' && isReadOnly && isConcurrencySafe
+    ? 'parallel'
+    : declaredExecutionMode === 'exclusive'
+      ? 'exclusive'
+      : (isReadOnly && isConcurrencySafe ? 'parallel' : 'exclusive')
+  const declaredMaxParallel = Number(value.maxParallel)
+  const maxParallel = executionMode === 'parallel' && Number.isInteger(declaredMaxParallel)
+    ? Math.max(1, Math.min(16, declaredMaxParallel))
+    : null
   const isIdempotent = value.isIdempotent == null ? isReadOnly : value.isIdempotent === true
   const interruptBehavior = INTERRUPT_BEHAVIORS.has(value.interruptBehavior)
     ? value.interruptBehavior
@@ -55,6 +66,8 @@ export function normalizeToolRiskMetadata(metadata, { origin = 'dynamic', source
     isReadOnly,
     readOnly: isReadOnly,
     isConcurrencySafe,
+    executionMode,
+    maxParallel,
     isIdempotent,
     interruptBehavior,
     isDestructive,

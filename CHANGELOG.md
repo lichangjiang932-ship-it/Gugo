@@ -6,6 +6,31 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.27] - 2026-08-19
+
+### Added
+
+- Added supervised MCP reconnection with bounded backoff, user-scoped live tool registration, and connection-state events.
+- Added resumable desktop updates with verified range downloads, differential blockmaps, retained partial progress, and safe full-download fallback.
+- Added reusable persistent Shell sessions with isolated working directories, serialized commands, interruption recovery, and idle cleanup.
+- Added user-scoped session forks with durable lineage, fresh message identities, a depth-five limit, and a compact context-menu action.
+- Added exact scheduled-task grants and durable job provenance for approved Shell and external targets.
+- Added extensible model-provider and preview-renderer registries plus an immutable outbound-message privacy boundary.
+
+### Changed
+
+- Buffered high-frequency turn events behind durability barriers and recorded exhausted writes for later diagnosis.
+- Made managed HTML previews owner-scoped, time-limited, same-origin, read-only, and restricted to declared assets.
+- Cached workspace instructions safely and kept the responsive chat and workbench layout usable on narrower windows.
+- Kept the composer free of shortcut hints and the conversation history flat, with session forks available only from the context menu.
+
+### Fixed
+
+- Prevented local HTML repair turns and existing media transformations from being redirected to unrelated image generation.
+- Kept custom provider response adapters bound to in-flight requests even after plugin unload.
+- Kept verified local file edits available after later managed-artifact failures without exposing drafts.
+- Restricted task grants to explicit supported tools and exact safe targets while preserving approval requirements for local writes.
+
 ## [0.11.26] - 2026-08-19
 
 ### Added

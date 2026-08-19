@@ -10,6 +10,7 @@
 import { checkBashCommandDanger } from './bashGuard.js'
 import { createHash } from 'node:crypto'
 import { CONNECTOR_WRITE_TOOL_SET } from '../../shared/connectorWriteTools.js'
+import { findMatchingTaskGrant } from './taskGrants.js'
 
 export const APPROVAL_MODES = Object.freeze(['off', 'unattended', 'all'])
 export const DEFAULT_APPROVAL_MODE = 'unattended'
@@ -257,6 +258,7 @@ export function resolveApprovalTimeoutMs(env = process.env) {
  * @param {string} [options.origin] 'job' | 'subagent' | 'chat'
  * @param {string} [options.mode]   env 级审批模式,默认读 env
  * @param {string} [options.permissionMode] 用户档位 normal|acceptEdits|plan|bypass
+ * @param {object[]} [options.taskGrants] 当前持久化任务的精确目标授权
  * @param {object[]} [options.rememberedGrants] 参数范围化的常驻授权规则
  * @returns {{ needsApproval: boolean, risk: 'low'|'medium'|'high', reason: string|null, denied?: boolean }}
  */
@@ -270,6 +272,7 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
     ? opts.permissionMode
     : DEFAULT_PERMISSION_MODE
   const rememberedGrants = Array.isArray(opts.rememberedGrants) ? opts.rememberedGrants : []
+  const taskGrants = Array.isArray(opts.taskGrants) ? opts.taskGrants : []
   const safeArgs = args && typeof args === 'object' ? args : {}
   const parameterConfirmationReason = explicitConfirmationReason(name, safeArgs)
   const alwaysConfirm = ALWAYS_CONFIRM_TOOLS.has(name) || !!parameterConfirmationReason
@@ -371,12 +374,24 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
     reason = '发送外部邮件'
   }
 
-  // bypass 是唯一对已识别副作用工具全放行的档位。
-  if (permissionMode === 'bypass') return { needsApproval: false, risk, reason: null }
-
-  // acceptEdits:可逆的本地编辑自动放行；shell、外部写入及 PDF 覆盖/填表仍需确认。
-  if (permissionMode === 'acceptEdits' && EDIT_TOOLS.includes(name) && !alwaysConfirm) {
-    return { needsApproval: false, risk, reason: null }
+  // Cron/task grants are narrower than remembered or global policies and win
+  // when their exact target matches. Local writes are rejected by the grant
+  // validator/matcher and still follow the regular approval path.
+  const taskGrant = findMatchingTaskGrant(name, safeArgs, taskGrants)
+  if (taskGrant) {
+    return {
+      needsApproval: false,
+      risk,
+      reason: null,
+      authorization: {
+        kind: 'task_grant',
+        source: 'task_grant',
+        toolName: name,
+        target: taskGrant.target,
+        scope: taskGrant.scope,
+        ...(taskGrant.expiresAt ? { expiresAt: taskGrant.expiresAt } : {}),
+      },
+    }
   }
 
   // 用户对这个目标范围点过「总是允许」。高风险 shell 和强制逐次确认项不会命中此处。
@@ -392,6 +407,14 @@ export function classifyToolRisk(toolName, args = {}, options = {}) {
         scope: rememberedGrant.commandPrefix || '',
       },
     }
+  }
+
+  // bypass 是唯一对已识别副作用工具全放行的档位。
+  if (permissionMode === 'bypass') return { needsApproval: false, risk, reason: null }
+
+  // acceptEdits:可逆的本地编辑自动放行；shell、外部写入及 PDF 覆盖/填表仍需确认。
+  if (permissionMode === 'acceptEdits' && EDIT_TOOLS.includes(name) && !alwaysConfirm) {
+    return { needsApproval: false, risk, reason: null }
   }
 
   // off 只关闭审批队列,不代表信任所有调用。没有其它授权时保守拒绝。

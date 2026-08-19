@@ -1,5 +1,6 @@
 import crypto from 'node:crypto'
 import { getDb } from '../db.js'
+import { normalizeTaskGrants } from '../utils/taskGrants.js'
 import { parseSchedule } from './cronScheduler.js'
 
 export const CRON_JOB_KINDS = new Set(['heartbeat', 'cron'])
@@ -21,6 +22,14 @@ function parseJson(value, fallback = {}) {
   }
 }
 
+function parseGrants(value) {
+  try {
+    return normalizeTaskGrants(parseJson(value, []))
+  } catch {
+    return []
+  }
+}
+
 function mapCronJob(row) {
   if (!row) return null
   return {
@@ -33,6 +42,7 @@ function mapCronJob(row) {
     scheduleValue: row.schedule_value,
     execType: row.exec_type,
     execPayload: parseJson(row.exec_payload_json, {}),
+    grants: parseGrants(row.grants_json),
     enabled: !!row.enabled,
     lastRunAt: row.last_run_at || null,
     nextRunAt: row.next_run_at || null,
@@ -73,6 +83,7 @@ function normalizeInput(input = {}, existing = null, now = Date.now()) {
     scheduleValue: input.scheduleValue ?? input.schedule_value ?? existing?.scheduleValue ?? '',
     execType: input.execType ?? input.exec_type ?? existing?.execType ?? 'direct_notify',
     execPayload: input.execPayload ?? input.exec_payload ?? input.exec_payload_json ?? existing?.execPayload ?? {},
+    grants: input.grants === undefined ? existing?.grants ?? [] : input.grants,
     enabled: input.enabled === undefined ? existing?.enabled ?? true : !!input.enabled,
   }
 
@@ -82,6 +93,7 @@ function normalizeInput(input = {}, existing = null, now = Date.now()) {
   next.scheduleValue = String(next.scheduleValue || '').trim()
   next.execType = String(next.execType || '').trim()
   next.execPayload = normalizePayload(next.execPayload)
+  next.grants = normalizeTaskGrants(next.grants)
 
   if (!next.userId) throw new Error('userId is required')
   if (!next.title) throw new Error('title is required')
@@ -117,9 +129,9 @@ export function createCronJob(input = {}, { now = Date.now() } = {}) {
     INSERT INTO cron_jobs (
       id, user_id, agent_id, title, kind, schedule_type, schedule_value,
       exec_type, exec_payload_json, enabled, last_run_at, next_run_at,
-      last_status, last_error, created_at, updated_at
+      last_status, last_error, created_at, updated_at, grants_json
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL, ?, ?, ?)
   `).run(
     job.id,
     job.userId,
@@ -134,6 +146,7 @@ export function createCronJob(input = {}, { now = Date.now() } = {}) {
     job.nextRunAt,
     now,
     now,
+    JSON.stringify(job.grants),
   )
   return getCronJob(job.id)
 }
@@ -190,7 +203,7 @@ export function updateCronJob(id, patch = {}, { userId, now = Date.now() } = {})
   getDb().prepare(`
     UPDATE cron_jobs
     SET agent_id = ?, title = ?, kind = ?, schedule_type = ?, schedule_value = ?,
-        exec_type = ?, exec_payload_json = ?, enabled = ?, next_run_at = ?, updated_at = ?
+        exec_type = ?, exec_payload_json = ?, grants_json = ?, enabled = ?, next_run_at = ?, updated_at = ?
     WHERE id = ? AND user_id = ?
   `).run(
     next.agentId,
@@ -200,6 +213,7 @@ export function updateCronJob(id, patch = {}, { userId, now = Date.now() } = {})
     next.scheduleValue,
     next.execType,
     JSON.stringify(next.execPayload),
+    JSON.stringify(next.grants),
     next.enabled ? 1 : 0,
     next.nextRunAt,
     now,

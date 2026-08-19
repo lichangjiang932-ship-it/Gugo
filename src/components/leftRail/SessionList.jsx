@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Archive, ArchiveRestore, ChevronDown, MoreHorizontal, Pin, PinOff, Search, X } from 'lucide-react'
+import { Archive, ArchiveRestore, ChevronDown, GitFork, MoreHorizontal, Pin, PinOff, Search, X } from 'lucide-react'
 import { sortSessions } from './sessionListUtils.js'
 
 const CONTEXT_MENU_WIDTH = 176
-const CONTEXT_MENU_HEIGHT = 122
+const CONTEXT_MENU_HEIGHT = 160
 const VIEWPORT_MARGIN = 8
 
 function contextMenuPosition(event) {
@@ -37,6 +37,7 @@ export default function SessionList({
   onMenuClose,
   onSearch,
   onOpen,
+  onFork,
   onPinToggle,
   onArchiveToggle,
   onDelete,
@@ -142,6 +143,9 @@ export default function SessionList({
         <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); onArchiveToggle(session) }} className="flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
           {session.archivedAt ? <ArchiveRestore className="h-3.5 w-3.5" /> : <Archive className="h-3.5 w-3.5" />}
           {session.archivedAt ? t('nav.unarchiveSession') : t('nav.archiveSession')}
+        </button>
+        <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); onFork?.(session) }} className="flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
+          <GitFork className="h-3.5 w-3.5" />{t('nav.forkSession')}
         </button>
         <button type="button" role="menuitem" onClick={(event) => { event.stopPropagation(); onDelete(session) }} className="flex w-full items-center gap-2 rounded-control px-2.5 py-2 text-xs text-ink-soft hover:bg-paper-2 focus:bg-paper-2 focus:outline-none">
           <X className="h-3.5 w-3.5" />{t('nav.deleteSession')}

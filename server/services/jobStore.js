@@ -1,4 +1,5 @@
 import { getDb } from '../db.js'
+import { normalizeTaskGrants } from '../utils/taskGrants.js'
 
 const STRUCTURED_EVIDENCE_STEP_KINDS = new Set(['execute', 'batch_item', 'verify'])
 const COMPLETION_EVIDENCE_TYPE_ALIASES = new Map([
@@ -101,6 +102,15 @@ function mapJob(row) {
     title: row.title,
     prompt: row.prompt,
     modelName: row.model_name || null,
+    sourceType: row.source_type || null,
+    sourceId: row.source_id || null,
+    grants: (() => {
+      try {
+        return normalizeTaskGrants(parseJson(row.grants_json, []))
+      } catch {
+        return []
+      }
+    })(),
     status: row.status,
     progress: row.progress,
     cancelRequested: !!row.cancel_requested,
@@ -170,16 +180,41 @@ export function createJob({
   title,
   prompt,
   modelName = null,
+  sourceType = null,
+  sourceId = null,
+  grants = [],
   status = 'queued',
   progress = 0,
   now = Date.now(),
 }) {
   if (!userId) throw new Error('createJob requires userId')
   const selectedModel = boundedText(modelName, 512) || null
+  const normalizedSourceType = boundedText(sourceType, 64) || null
+  const normalizedSourceId = boundedText(sourceId, 512) || null
+  const normalizedGrants = normalizeTaskGrants(grants)
+  if ((normalizedSourceType === null) !== (normalizedSourceId === null)) {
+    throw new Error('sourceType and sourceId must be provided together')
+  }
   getDb().prepare(`
-    INSERT INTO jobs (id, user_id, title, prompt, model_name, status, progress, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, userId, title, prompt, selectedModel, status, progress, now, now)
+    INSERT INTO jobs (
+      id, user_id, title, prompt, model_name, source_type, source_id, grants_json,
+      status, progress, created_at, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    userId,
+    title,
+    prompt,
+    selectedModel,
+    normalizedSourceType,
+    normalizedSourceId,
+    JSON.stringify(normalizedGrants),
+    status,
+    progress,
+    now,
+    now,
+  )
   return getJob(id)
 }
 
@@ -451,6 +486,13 @@ export function getArtifactById(artifactId) {
  */
 export function getArtifactByFilename(filename) {
   return mapArtifact(getDb().prepare('SELECT * FROM job_artifacts WHERE filename = ?').get(filename))
+}
+
+export function listArtifactsByFilename(filename) {
+  if (!filename) return []
+  return getDb().prepare('SELECT * FROM job_artifacts WHERE filename = ? ORDER BY created_at ASC')
+    .all(filename)
+    .map(mapArtifact)
 }
 
 export function getJobWithChildren(id, { userId } = {}) {

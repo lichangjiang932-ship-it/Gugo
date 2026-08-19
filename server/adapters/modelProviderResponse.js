@@ -1,4 +1,5 @@
 import {
+  getNativeProviderRequestAdapter,
   isNativeProviderKind,
   parseNativeProviderResponse,
 } from './nativeModelProviders.js'
@@ -184,11 +185,12 @@ function normalizeCompatibleFinishReason(value, hasToolCalls = false) {
   return raw || null
 }
 
-export function parseModelProviderResponse(data, profile = {}) {
+export function parseModelProviderResponse(data, profile = {}, { providerRequest = null } = {}) {
   const responseError = extractModelResponseError(data)
   if (responseError) throw responseError
-  if (isNativeProviderKind(profile.kind)) {
-    const parsed = parseNativeProviderResponse(data, profile.kind)
+  const adapterSnapshot = getNativeProviderRequestAdapter(providerRequest)
+  if (adapterSnapshot || isNativeProviderKind(profile.kind)) {
+    const parsed = parseNativeProviderResponse(data, profile.kind, adapterSnapshot)
     return { ...parsed, content: stripEmbeddedReasoning(parsed?.content) }
   }
   const toolCalls = extractCompatibleToolCalls(data)

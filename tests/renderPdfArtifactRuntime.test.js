@@ -59,7 +59,7 @@ test('runToolsLoop records and delivers every page returned by render_pdf_pages'
     runModel: async ({ messages, tools, toolChoice }) => {
       modelCalls += 1
       const names = tools.map((spec) => spec?.function?.name)
-      assert.equal(names.includes('generate_image'), true)
+      assert.equal(names.includes('generate_image'), false)
       assert.equal(names.includes('render_pdf_pages'), true)
       assert.equal(names.includes('set_deliverables'), true)
       if (modelCalls === 1) {

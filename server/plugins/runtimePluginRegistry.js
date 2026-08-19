@@ -7,6 +7,7 @@ import {
   registerDynamicTool,
 } from '../utils/toolSchemaCatalog.js'
 import { createPluginContext } from './pluginContext.js'
+import { registerModelProviderAdapter } from '../adapters/modelProviderRegistry.js'
 import {
   createEffectTracker,
   normalizeRuntimePluginManifest,
@@ -154,6 +155,7 @@ function pluginSnapshot(record) {
 export function createRuntimePluginRegistry({
   config = {},
   registerTool = registerDynamicTool,
+  registerModelProvider = registerModelProviderAdapter,
   audit = null,
 } = {}) {
   const plugins = new Map()
@@ -361,6 +363,15 @@ export function createRuntimePluginRegistry({
     return trackVisibleEffect(record, dispose)
   }
 
+  const registerModelProviderContribution = (record, kind, adapter) => {
+    assertPluginWritable(record)
+    const dispose = registerModelProvider(kind, adapter)
+    if (typeof dispose !== 'function') {
+      throw new TypeError('model provider registration must return a disposer')
+    }
+    return trackVisibleEffect(record, dispose)
+  }
+
   const registerPlugin = async (manifest, setup) => {
     if (shuttingDown) {
       const error = new Error('runtime plugin registry is shutting down')
@@ -400,6 +411,7 @@ export function createRuntimePluginRegistry({
       track: record.effects.track,
       registerTool: (definition) => registerToolContribution(record, definition),
       registerEvent: (event, listener) => registerEventContribution(record, event, listener),
+      registerModelProvider: (kind, adapter) => registerModelProviderContribution(record, kind, adapter),
       provideService: (name, value) => provideService(record, name, value),
       getService: (name) => {
         const contribution = services.get(String(name || '').trim())

@@ -45,7 +45,20 @@ export function getTurnArtifactById({ id, userId, sessionId }) {
     WHERE id = ? AND user_id = ? AND session_id = ?`).get(id, userId, sessionId))
 }
 
+export function getTurnArtifactByIdForUser({ id, userId }) {
+  if (!id || !userId) return null
+  return mapArtifact(getDb().prepare(`SELECT * FROM turn_artifacts
+    WHERE id = ? AND user_id = ?`).get(id, userId))
+}
+
 export function getTurnArtifactByFilename(filename) {
   if (!filename) return null
   return mapArtifact(getDb().prepare('SELECT * FROM turn_artifacts WHERE filename = ?').get(filename))
+}
+
+export function listTurnArtifactsByFilename(filename) {
+  if (!filename) return []
+  return getDb().prepare('SELECT * FROM turn_artifacts WHERE filename = ? ORDER BY created_at ASC')
+    .all(filename)
+    .map(mapArtifact)
 }

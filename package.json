@@ -1,7 +1,7 @@
 {
   "name": "gugo",
   "private": true,
-  "version": "0.11.26",
+  "version": "0.11.27",
   "description": "Self-hosted AI workspace for browser and Windows desktop with agents, tools, memory, jobs, and MCP.",
   "author": "lichangjiang932-ship-it",
   "license": "MIT",
@@ -47,7 +47,7 @@
     "local": "npm run build && npm run serve",
     "desktop:dev": "node desktop/dev.mjs",
     "desktop:start": "npm run build && electron .",
-    "desktop:check": "node --check desktop/main.js && node --check desktop/dev.mjs && node --check desktop/preload.cjs && node --test tests/desktopSecurity.test.js tests/desktopPackaging.test.js",
+    "desktop:check": "node --check desktop/main.js && node --check desktop/updateRuntime.js && node --check desktop/dev.mjs && node --check desktop/preload.cjs && node --test tests/desktopSecurity.test.js tests/desktopPackaging.test.js tests/desktopUpdateRuntime.test.js",
     "desktop:verify-package": "node scripts/verify-desktop-package.cjs",
     "desktop:smoke-package": "node scripts/smoke-test-desktop-package.mjs",
     "desktop:media-sidecars": "node scripts/prepare-media-sidecars.mjs",

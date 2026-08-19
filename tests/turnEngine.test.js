@@ -22,7 +22,8 @@ const {
   validateToolCallChain,
 } = await import('../server/services/compactionService.js')
 const { prepareTurnPromptContext } = await import('../server/services/turnPromptContext.js')
-const { appendTurnEvent, listTurnEvents } = await import('../server/services/turnEventStore.js')
+const { appendTurnEvent, appendTurnEvents, listTurnEvents } = await import('../server/services/turnEventStore.js')
+const { createEventWriteBehind } = await import('../server/services/eventWriteBehind.js')
 const { getTurnCheckpoint } = await import('../server/services/turnCheckpointStore.js')
 const { createTurnEvent } = await import('../shared/turnEvents.js')
 const {
@@ -47,6 +48,73 @@ function events(turnId, requestedUser = userId) {
 function createTestEngine(options = {}) {
   return new TurnEngine({ scheduleMemoryExtraction: () => {}, ...options })
 }
+
+test('TurnEngine flushes deferred deltas before tools, checkpoints, and terminal events', async () => {
+  const turnId = 'turn-write-behind-barrier'
+  const batches = []
+  const writer = createEventWriteBehind({
+    writeBatch: (entries) => {
+      batches.push(entries.map(({ event }) => event.type))
+      return appendTurnEvents(entries)
+    },
+    writeBatchSync: appendTurnEvents,
+    maxDelayMs: 10_000,
+  })
+  const engine = createTestEngine({
+    eventWriteBehind: writer,
+    runLoop: async ({ onModelDelta, onReasoningDelta, onToolStarted, saveCheckpoint }) => {
+      await onModelDelta({ text: 'answer', iteration: 0, modelName: 'test' })
+      await onReasoningDelta({ text: 'thought', iteration: 0, modelName: 'test' })
+      assert.equal(writer.getStats().pending, 2)
+      await onToolStarted({ id: 'tool-1', name: 'read_file', args: { path: 'README.md' } })
+      assert.equal(writer.getStats().pending, 0)
+      await onModelDelta({ text: ' after tool', iteration: 1, modelName: 'test' })
+      await saveCheckpoint({ messages: [], artifactIds: [], iterations: 1 })
+      return { text: 'answer after tool', artifactIds: [], iterations: 1 }
+    },
+  })
+
+  await engine.startTurn({ userId, sessionId: 'turn-engine-session', turnId, content: 'run barriers' })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  assert.deepEqual(batches, [
+    ['assistant.delta', 'reasoning.delta'],
+    ['assistant.delta'],
+  ])
+  const types = events(turnId).map(({ type }) => type)
+  assert.ok(types.indexOf('assistant.delta') < types.indexOf('tool.started'))
+  assert.ok(types.lastIndexOf('assistant.delta') < types.indexOf('turn.checkpoint'))
+  assert.ok(types.indexOf('turn.checkpoint') < types.indexOf('turn.completed'))
+})
+
+test('TurnEngine completes when deferred delta persistence exhausts its retries', async () => {
+  const turnId = 'turn-write-behind-failure'
+  let attempts = 0
+  let failures = 0
+  const writer = createEventWriteBehind({
+    writeBatch() {
+      attempts += 1
+      throw new Error('simulated delta write failure')
+    },
+    recordFailure({ batch }) { failures += batch.length },
+    logger: { error() {} },
+    maxDelayMs: 10_000,
+  })
+  const engine = createTestEngine({
+    eventWriteBehind: writer,
+    runLoop: async ({ onModelDelta }) => {
+      await onModelDelta({ text: 'recoverable stream', iteration: 0, modelName: 'test' })
+      return { text: 'durable completion', artifactIds: [], iterations: 0 }
+    },
+  })
+
+  await engine.startTurn({ userId, sessionId: 'turn-engine-session', turnId, content: 'survive write failure' })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  assert.equal(attempts, 3)
+  assert.equal(failures, 1)
+  assert.equal(events(turnId).at(-1).type, 'turn.completed')
+})
 
 test('TurnEngine emits every artifact produced by one completed local tool call', async () => {
   const localArtifacts = [
@@ -1783,16 +1851,16 @@ test('TurnEngine maps an incomplete loop result to failure instead of completion
   assert.equal(turnEvents.some((event) => event.type === 'turn.completed'), false)
   assert.equal(failed.payload.code, 'TURN_INCOMPLETE')
   assert.equal(failed.payload.error.retryable, true)
-  assert.equal(failed.payload.message, '任务未完成，未通过验证的文件不会显示或交付。请重试以继续。')
+  assert.equal(failed.payload.message, '任务未完成。已验证的本地修改会保留，未通过验证的产物不会交付。请重试以继续。')
   assert.doesNotMatch(failed.payload.message, /Turn did not complete/)
-  assert.equal(failed.payload.partialText, '任务未完成，未通过验证的文件不会显示或交付。请重试以继续。')
+  assert.equal(failed.payload.partialText, '任务未完成。已验证的本地修改会保留，未通过验证的产物不会交付。请重试以继续。')
   assert.doesNotMatch(failed.payload.partialText, /requested mutation could not be verified/i)
   assert.deepEqual(failed.payload.artifactIds, ['artifact-unverified'])
   assert.equal(engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId }).status, 'failed')
   const evidence = listMessages({ userId, sessionId: 'turn-engine-session', limit: 100 })
     .find((message) => message.id === `${turnId}:assistant`)
   assert.equal(evidence?.modelContext?.evidenceState, 'failed')
-  assert.equal(evidence?.content, '任务未完成，未通过验证的文件不会显示或交付。请重试以继续。')
+  assert.equal(evidence?.content, '任务未完成。已验证的本地修改会保留，未通过验证的产物不会交付。请重试以继续。')
 })
 
 test('TurnEngine preserves approval metadata source in the durable approval event', async () => {
