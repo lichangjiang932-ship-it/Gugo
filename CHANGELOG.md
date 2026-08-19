@@ -6,6 +6,24 @@ follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.11.31] - 2026-08-20
+
+### Added
+
+- Added a model-isolated terminal Reviewer with auditable verdicts and strict fail-closed enforcement when independent review cannot be proven.
+- Added semantic UI roles for accent contrast, focus, danger, warning, running, and success, with WCAG contrast and text-size regression gates.
+- Added an explicit, fail-closed HTTPS image-origin allowlist for managed and local HTML side previews without enabling remote scripts, styles, frames, forms, or network APIs.
+
+### Changed
+
+- Moved host focus and status styling away from the customizable brand accent and automatically select a WCAG-compliant foreground for accent backgrounds.
+- Preflight capability-scoped HTML preview tickets with same-origin HEAD requests before mounting iframe content.
+
+### Fixed
+
+- Automatically revoke and reissue one expired, evicted, or failed HTML preview ticket while preventing late results from a previous tab from replacing the current preview.
+- Prevented iframe `load` events from treating 401, 403, 404, or 5xx server error documents as successful artifact or local-file previews.
+
 ## [0.11.29] - 2026-08-19
 
 ### Changed
