@@ -94,18 +94,30 @@ function resolveVerifiedLocalPath(rawPath, { userId, resolvePath }) {
   }
 }
 
-function localFileReceipt(fullPath, { statFile, verifiedAt, relatedArtifactIds = [] }) {
+function localFileReceipt(fullPath, {
+  statFile,
+  verifiedAt,
+  retainedAt,
+  relatedArtifactIds = [],
+}) {
   try {
     const stat = statFile(fullPath)
     if (!stat?.isFile?.()) return null
     const normalized = path.normalize(fullPath)
     const id = `local-file-${createHash('sha256').update(canonicalLocalPath(normalized)).digest('hex').slice(0, 24)}`
+    const normalizedVerifiedAt = Number.isFinite(Number(verifiedAt))
+      ? Math.max(0, Number(verifiedAt))
+      : null
+    const normalizedRetainedAt = Number.isFinite(Number(retainedAt))
+      ? Math.max(0, Number(retainedAt))
+      : null
     return {
       id,
       path: normalized,
       filename: path.basename(normalized),
       size: Math.max(0, Number(stat.size) || 0),
-      verifiedAt: Math.max(0, Number(verifiedAt) || Date.now()),
+      ...(normalizedVerifiedAt !== null ? { verifiedAt: normalizedVerifiedAt } : {}),
+      ...(normalizedRetainedAt !== null ? { retainedAt: normalizedRetainedAt } : {}),
       ...((Array.isArray(relatedArtifactIds) && relatedArtifactIds.length > 0)
         ? { relatedArtifactIds: [...new Set(relatedArtifactIds.map(String).filter(Boolean))] }
         : {}),
@@ -200,6 +212,34 @@ function normalizedVerifiedLocalFiles(values) {
       ...(Number.isFinite(Number(value?.size)) ? { size: Math.max(0, Number(value.size)) } : {}),
       ...(Number.isFinite(Number(value?.verifiedAt))
         ? { verifiedAt: Math.max(0, Number(value.verifiedAt)) }
+        : {}),
+      ...(Array.isArray(value?.relatedArtifactIds) && value.relatedArtifactIds.length > 0
+        ? { relatedArtifactIds: [...new Set(value.relatedArtifactIds.map(String).filter(Boolean))] }
+        : {}),
+    })
+    if (receipts.length >= MAX_VERIFIED_LOCAL_FILES) break
+  }
+  return receipts
+}
+
+function normalizedRetainedLocalFiles(values) {
+  const receipts = []
+  const seen = new Set()
+  for (const value of Array.isArray(values) ? values : []) {
+    const fullPath = typeof value?.path === 'string' ? path.normalize(value.path.trim()) : ''
+    const id = String(value?.id || '').trim()
+    const filename = String(value?.filename || path.basename(fullPath)).trim()
+    if (!id || !fullPath || !path.isAbsolute(fullPath) || !filename) continue
+    const key = canonicalLocalPath(fullPath)
+    if (seen.has(key)) continue
+    seen.add(key)
+    receipts.push({
+      id,
+      path: fullPath,
+      filename,
+      ...(Number.isFinite(Number(value?.size)) ? { size: Math.max(0, Number(value.size)) } : {}),
+      ...(Number.isFinite(Number(value?.retainedAt))
+        ? { retainedAt: Math.max(0, Number(value.retainedAt)) }
         : {}),
       ...(Array.isArray(value?.relatedArtifactIds) && value.relatedArtifactIds.length > 0
         ? { relatedArtifactIds: [...new Set(value.relatedArtifactIds.map(String).filter(Boolean))] }
@@ -306,6 +346,51 @@ function extractVerifiedLocalFilesWithReadEvidence(messages, {
  */
 export function extractVerifiedLocalFiles(messages, options = {}) {
   return extractVerifiedLocalFilesWithReadEvidence(messages, options, completeReadEvidence)
+}
+
+/**
+ * Build authorization-safe receipts for successful local mutations even when
+ * the turn did not reach its independent readback/project verification step.
+ * These receipts prove only that the mutation tool returned success and that
+ * the resulting path still resolves to a readable file. They must never be
+ * treated as completion or verification evidence.
+ */
+export function extractRetainedLocalFiles(messages, {
+  userId = null,
+  baselineToolCallIds = new Set(),
+  retainedAt = Date.now(),
+  resolvePath = resolveAuthorizedLocalPath,
+  statFile = fs.statSync,
+} = {}) {
+  const calls = new Map()
+  const receipts = new Map()
+
+  for (const message of Array.isArray(messages) ? messages : []) {
+    if (message?.role === 'assistant' && Array.isArray(message.tool_calls)) {
+      for (const rawCall of message.tool_calls) {
+        const call = toolCallParts(rawCall)
+        if (!call || baselineToolCallIds.has(call.id)) continue
+        calls.set(call.id, call)
+      }
+      continue
+    }
+    if (message?.role !== 'tool') continue
+    const toolCallId = String(message.tool_call_id || message.toolCallId || '').trim()
+    const call = calls.get(toolCallId)
+    const result = parsedObject(message.content)
+    if (!call || !result) continue
+    const resultName = String(message.name || '').trim()
+    if (resultName && resultName !== call.name) continue
+
+    for (const rawPath of mutationResultPaths(call, result)) {
+      const fullPath = resolveVerifiedLocalPath(rawPath, { userId, resolvePath })
+      if (!fullPath) continue
+      const receipt = localFileReceipt(fullPath, { statFile, retainedAt })
+      if (receipt) receipts.set(canonicalLocalPath(fullPath), receipt)
+    }
+  }
+
+  return normalizedRetainedLocalFiles([...receipts.values()].slice(-MAX_VERIFIED_LOCAL_FILES))
 }
 
 /**
@@ -698,6 +783,12 @@ function priorTurnOutcomeWire(message) {
         ? { relatedArtifactIds: file.relatedArtifactIds }
         : {}),
     }))
+  const retainedLocalFiles = normalizedRetainedLocalFiles(context.retainedLocalFiles)
+    .map((file) => ({
+      id: file.id,
+      path: file.path,
+      filename: file.filename,
+    }))
   const deliveryArtifactIds = [...new Set((Array.isArray(context.deliveryArtifactIds)
     ? context.deliveryArtifactIds
     : []).map(String).filter(Boolean))]
@@ -705,8 +796,8 @@ function priorTurnOutcomeWire(message) {
     role: 'system',
     content: [
       '[PRIOR TURN OUTCOME]',
-      JSON.stringify({ state, error, verifiedLocalFiles, deliveryArtifactIds }),
-      'This prior turn did not complete. A status answer must preserve that failure state and its concrete blocker. Do not claim that it completed or had no problem unless this current turn obtains new successful execution and verification evidence. Verified local files may be reused as continuation targets, but they do not by themselves change the failed overall outcome into success.',
+      JSON.stringify({ state, error, verifiedLocalFiles, retainedLocalFiles, deliveryArtifactIds }),
+      'This prior turn did not complete. A status answer must preserve that failure state and its concrete blocker. Do not claim that it completed or had no problem unless this current turn obtains new successful execution and verification evidence. Verified local files may be reused as continuation targets. Retained local files were written successfully but still require verification; they may be inspected or continued from, but must not be described as verified.',
     ].join('\n'),
   }
 }
@@ -796,6 +887,7 @@ export function buildAssistantModelContext({
   baselineToolCallIds,
   userId = null,
   verifiedLocalFiles,
+  retainedLocalFiles = [],
   artifactIds = [],
   deliveryArtifactIds,
   iterations = 0,
@@ -815,6 +907,10 @@ export function buildAssistantModelContext({
       verifiedAt: turnCompletedAt || Date.now(),
     }),
   )
+  const retainedFileReceipts = normalizedRetainedLocalFiles(retainedLocalFiles)
+    .filter((retained) => !localFileReceipts.some((verified) => (
+      canonicalLocalPath(verified.path) === canonicalLocalPath(retained.path)
+    )))
   const normalizedUsage = normalizeModelUsage(usage)
   const normalizedTurnModelUsage = normalizeModelUsage(turnModelUsage)
   const normalizedEstimatedPromptTokens = (
@@ -844,6 +940,9 @@ export function buildAssistantModelContext({
     // so restored clients never reinterpret an intentionally unverified write
     // through the legacy tool-trace compatibility path.
     verifiedLocalFiles: localFileReceipts,
+    // A retained receipt is authorized and clickable, but explicitly does not
+    // satisfy the independent verification gate.
+    retainedLocalFiles: retainedFileReceipts,
     artifactIds: Array.isArray(artifactIds) ? artifactIds.map(String) : [],
     ...(Array.isArray(deliveryArtifactIds)
       ? { deliveryArtifactIds: deliveryArtifactIds.map(String) }

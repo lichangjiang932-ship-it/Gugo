@@ -482,6 +482,159 @@ test('an interrupted snapshot keeps streaming and advances a stale local replay 
   assert.equal(merged.meta.serverConnectionState, 'interrupted')
 })
 
+test('an authoritative cancelled snapshot restores cancellation instead of ordinary completion', () => {
+  const [merged] = mergeServerSessionMessages([{
+    id: 'turn-cancelled:assistant',
+    role: 'assistant',
+    content: 'local partial',
+    meta: {
+      streaming: true,
+      serverTurnId: 'turn-cancelled',
+      serverLastSequence: 4,
+      serverConnectionState: 'connected',
+    },
+  }], [{
+    id: 'turn-cancelled:assistant',
+    role: 'assistant',
+    content: 'stopped',
+    meta: {
+      cancelled: true,
+      streaming: false,
+      serverTurnId: 'turn-cancelled',
+      serverLastSequence: 5,
+      serverConnectionState: 'cancelled',
+      serverAuthoritative: true,
+    },
+  }])
+
+  assert.equal(merged.meta.cancelled, true)
+  assert.equal(merged.meta.streaming, false)
+  assert.equal(merged.meta.serverConnectionState, 'cancelled')
+  assert.equal(merged.meta.serverLastSequence, 5)
+})
+
+test('verified snapshot receipts prune matching retained files even when retained is omitted', () => {
+  const unrelated = {
+    id: 'unrelated-retained',
+    path: 'D:\\workspace\\other.html',
+    filename: 'other.html',
+  }
+  const [merged] = mergeServerSessionMessages([{
+    id: 'turn-files:assistant',
+    role: 'assistant',
+    content: 'done',
+    meta: {
+      serverTurnId: 'turn-files',
+      serverLastSequence: 7,
+      retainedLocalFiles: [{
+        id: 'old-receipt',
+        path: 'D:\\Workspace\\REPORT.HTML',
+        filename: 'REPORT.HTML',
+      }, unrelated],
+    },
+  }], [{
+    id: 'turn-files:assistant',
+    role: 'assistant',
+    content: 'done',
+    meta: {
+      serverTurnId: 'turn-files',
+      serverLastSequence: 8,
+      verifiedLocalFiles: [{
+        id: 'new-receipt',
+        path: 'd:/workspace/report.html',
+        filename: 'report.html',
+      }],
+    },
+  }])
+
+  assert.deepEqual(merged.meta.retainedLocalFiles, [unrelated])
+  assert.equal(merged.meta.verifiedLocalFiles[0].id, 'new-receipt')
+})
+
+test('a stale snapshot cannot replace newer SSE file receipts', () => {
+  const localVerified = [{
+    id: 'live-verified',
+    path: 'D:\\workspace\\live.html',
+    filename: 'live.html',
+  }]
+  const [merged] = mergeServerSessionMessages([{
+    id: 'turn-files-newer:assistant',
+    role: 'assistant',
+    content: 'live',
+    meta: {
+      serverTurnId: 'turn-files-newer',
+      serverLastSequence: 10,
+      verifiedLocalFiles: localVerified,
+      retainedLocalFiles: [{
+        id: 'stale-live-retained',
+        path: 'd:/WORKSPACE/LIVE.HTML',
+        filename: 'LIVE.HTML',
+      }],
+    },
+  }], [{
+    id: 'turn-files-newer:assistant',
+    role: 'assistant',
+    content: 'snapshot',
+    meta: {
+      serverTurnId: 'turn-files-newer',
+      serverLastSequence: 9,
+      verifiedLocalFiles: [{
+        id: 'snapshot-verified',
+        path: 'D:\\workspace\\snapshot.html',
+        filename: 'snapshot.html',
+      }],
+      retainedLocalFiles: [{
+        id: 'snapshot-retained',
+        path: 'D:\\workspace\\retained.html',
+        filename: 'retained.html',
+      }],
+    },
+  }])
+
+  assert.deepEqual(merged.meta.verifiedLocalFiles, localVerified)
+  assert.deepEqual(merged.meta.retainedLocalFiles, [])
+  assert.equal(merged.meta.serverLastSequence, 10)
+})
+
+test('newer SSE retained receipts do not inherit stale snapshot verification', () => {
+  const localRetained = [{
+    id: 'live-retained',
+    path: 'D:\\workspace\\report.html',
+    filename: 'report.html',
+  }, {
+    id: 'live-unrelated',
+    path: 'D:\\workspace\\other.html',
+    filename: 'other.html',
+  }]
+  const [merged] = mergeServerSessionMessages([{
+    id: 'turn-files-retained-newer:assistant',
+    role: 'assistant',
+    content: 'newer retained state',
+    meta: {
+      serverTurnId: 'turn-files-retained-newer',
+      serverLastSequence: 10,
+      retainedLocalFiles: localRetained,
+    },
+  }], [{
+    id: 'turn-files-retained-newer:assistant',
+    role: 'assistant',
+    content: 'stale verified state',
+    meta: {
+      serverTurnId: 'turn-files-retained-newer',
+      serverLastSequence: 5,
+      verifiedLocalFiles: [{
+        id: 'stale-verified',
+        path: 'd:/WORKSPACE/report.html',
+        filename: 'REPORT.HTML',
+      }],
+    },
+  }])
+
+  assert.equal(Object.hasOwn(merged.meta, 'verifiedLocalFiles'), false)
+  assert.deepEqual(merged.meta.retainedLocalFiles, localRetained)
+  assert.equal(merged.meta.serverLastSequence, 10)
+})
+
 test('recovery stubs stay resumable until a real server assistant replaces them', () => {
   const local = [{
     id: 'turn-1:assistant',

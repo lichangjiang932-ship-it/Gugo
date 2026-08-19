@@ -1760,6 +1760,79 @@ test('TurnEngine aborts an active model request with an explicit cancelled event
   assert.deepEqual(cancelled.payload.deliveryArtifactIds, [])
 })
 
+test('TurnEngine keeps turn.cancelled durable when cancelled evidence message persistence fails', async () => {
+  const turnId = 'turn-cancel-message-write-failure'
+  let ready
+  const checkpointReady = new Promise((resolve) => { ready = resolve })
+  const engine = createTestEngine({
+    runLoop: async ({ signal }) => {
+      ready()
+      await new Promise((resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+      })
+      return { text: 'unreachable' }
+    },
+    writeMessage: (message) => {
+      if (message.id === `${turnId}:assistant`) throw new Error('cancelled message write failed')
+      return upsertMessage(message)
+    },
+  })
+
+  await engine.startTurn({
+    userId,
+    sessionId: 'turn-engine-session',
+    turnId,
+    content: 'Wait until cancelled.',
+  })
+  await checkpointReady
+  await engine.cancelTurn({ userId, sessionId: 'turn-engine-session', turnId })
+  await engine.waitForTurn({ userId, sessionId: 'turn-engine-session', turnId })
+
+  assert.equal(events(turnId).at(-1)?.type, 'turn.cancelled')
+  assert.equal(listMessages({ userId, sessionId: 'turn-engine-session', limit: 500 })
+    .some((message) => message.id === `${turnId}:assistant`), false)
+})
+
+test('TurnEngine does not persist a cancelled message when terminal event append fails', async () => {
+  const turnId = 'turn-cancel-event-append-failure'
+  appendTurnEvent({
+    userId,
+    event: createTurnEvent({
+      id: `${turnId}:started`,
+      sessionId: 'turn-engine-session',
+      turnId,
+      sequence: 0,
+      type: 'turn.started',
+      payload: { content: 'Cancel after worker restart.' },
+      createdAt: 1,
+    }),
+  })
+  let assistantWrites = 0
+  const engine = createTestEngine({
+    executionLeases: {
+      ownerId: 'cancel-event-failure-worker',
+      isActive: () => false,
+      requestCancellation: () => false,
+    },
+    appendEvent: async ({ event, ...rest }) => {
+      if (event.type === 'turn.cancelled') throw new Error('cancel event append failed')
+      return appendTurnEvent({ event, ...rest })
+    },
+    writeMessage: (message) => {
+      if (message.id === `${turnId}:assistant`) assistantWrites += 1
+      return upsertMessage(message)
+    },
+  })
+
+  await assert.rejects(
+    engine.cancelTurn({ userId, sessionId: 'turn-engine-session', turnId }),
+    /cancel event append failed/,
+  )
+  assert.equal(assistantWrites, 0)
+  assert.equal(listMessages({ userId, sessionId: 'turn-engine-session', limit: 500 })
+    .some((message) => message.id === `${turnId}:assistant`), false)
+})
+
 test('TurnEngine treats an internal AbortError as a structured failure and persists evidence', async () => {
   const turnId = 'turn-internal-abort-timeout'
   const engine = createTestEngine({
@@ -1851,16 +1924,16 @@ test('TurnEngine maps an incomplete loop result to failure instead of completion
   assert.equal(turnEvents.some((event) => event.type === 'turn.completed'), false)
   assert.equal(failed.payload.code, 'TURN_INCOMPLETE')
   assert.equal(failed.payload.error.retryable, true)
-  assert.equal(failed.payload.message, '任务未完成。已验证的本地修改会保留，未通过验证的产物不会交付。请重试以继续。')
+  assert.equal(failed.payload.message, '任务尚未完全通过验证。已成功写入的本地修改会保留，并可在文件栏中查看；待验证文件不代表验证通过。请重试以继续完成验证。')
   assert.doesNotMatch(failed.payload.message, /Turn did not complete/)
-  assert.equal(failed.payload.partialText, '任务未完成。已验证的本地修改会保留，未通过验证的产物不会交付。请重试以继续。')
+  assert.equal(failed.payload.partialText, '任务尚未完全通过验证。已成功写入的本地修改会保留，并可在文件栏中查看；待验证文件不代表验证通过。请重试以继续完成验证。')
   assert.doesNotMatch(failed.payload.partialText, /requested mutation could not be verified/i)
   assert.deepEqual(failed.payload.artifactIds, ['artifact-unverified'])
   assert.equal(engine.getTurn({ userId, sessionId: 'turn-engine-session', turnId }).status, 'failed')
   const evidence = listMessages({ userId, sessionId: 'turn-engine-session', limit: 100 })
     .find((message) => message.id === `${turnId}:assistant`)
   assert.equal(evidence?.modelContext?.evidenceState, 'failed')
-  assert.equal(evidence?.content, '任务未完成。已验证的本地修改会保留，未通过验证的产物不会交付。请重试以继续。')
+  assert.equal(evidence?.content, '任务尚未完全通过验证。已成功写入的本地修改会保留，并可在文件栏中查看；待验证文件不代表验证通过。请重试以继续完成验证。')
 })
 
 test('TurnEngine preserves approval metadata source in the durable approval event', async () => {

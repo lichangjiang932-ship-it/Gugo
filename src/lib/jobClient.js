@@ -315,14 +315,14 @@ export async function createLocalHtmlPreviewSession(url, {
   const raw = String(url || '').trim()
   const baseOrigin = globalThis.location?.origin || 'http://localhost'
   const parsed = new URL(raw, baseOrigin)
-  const match = parsed.pathname.match(/^\/api\/local-files\/verified\/([^/]+)\/?$/)
+  const match = parsed.pathname.match(/^\/api\/local-files\/(?:verified|retained)\/([^/]+)\/?$/)
   if (parsed.origin !== baseOrigin || !match) {
-    throw new Error('verified local HTML preview URL must be same-origin')
+    throw new Error('local receipt HTML preview URL must be same-origin')
   }
   parsed.searchParams.delete('preview')
   parsed.searchParams.delete('token')
-  const verifiedPath = parsed.pathname.replace(/\/$/, '')
-  const requestUrl = `${verifiedPath}/preview-session${parsed.search}`
+  const receiptPath = parsed.pathname.replace(/\/$/, '')
+  const requestUrl = `${receiptPath}/preview-session${parsed.search}`
   const request = () => fetchImpl(requestUrl, {
     method: 'POST',
     headers: authHeaders(),

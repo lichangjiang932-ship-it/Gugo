@@ -385,6 +385,61 @@ test('right workbench prefers a verified formal local file over its managed prev
   }
 })
 
+test('right workbench shows and opens retained files as verification-pending', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  const opened = []
+  const turnId = 'retained-workbench-turn'
+  const filePath = 'E:\\output\\partially-updated.html'
+
+  try {
+    await act(async () => root.render(
+      <RightWorkbench
+        messages={[{
+          id: `${turnId}:assistant`,
+          role: 'assistant',
+          content: `产物验证未完成，已保留：${filePath}`,
+          meta: {
+            failed: true,
+            serverTurnId: turnId,
+            serverDeliveryArtifactIds: [],
+            retainedLocalFiles: [{
+              id: 'retained-workbench-receipt',
+              path: filePath,
+              filename: 'partially-updated.html',
+              size: 2048,
+              retainedAt: 123,
+            }],
+          },
+        }]}
+        activeTab="files"
+        onTabChange={() => {}}
+        onClose={() => {}}
+        onOpenArtifact={(artifact) => opened.push(artifact)}
+        onSendMessage={() => {}}
+        isGenerating={false}
+      />,
+    ))
+
+    const link = rootElement.querySelector('[data-testid="workbench-file-open"]')
+    assert.ok(link)
+    assert.match(link.getAttribute('href'), /\/api\/local-files\/retained\/retained-workbench-receipt\?turnId=retained-workbench-turn/)
+    await act(async () => link.dispatchEvent(new dom.window.MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+    })))
+    assert.equal(opened.length, 1)
+    assert.equal(opened[0].directFile.path, filePath)
+    assert.equal(opened[0].directFile.retainedLocalFile, true)
+    assert.equal(opened[0].directFile.verificationPending, true)
+    assert.equal(Object.hasOwn(opened[0].directFile, 'verifiedLocalFile'), false)
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
 test('right workbench keeps only the latest receipt for the same verified local path', async () => {
   const dom = setupDom()
   const rootElement = dom.window.document.getElementById('root')

@@ -1,5 +1,6 @@
 import { TOOL_CALL_STATUS } from '../../store/taskStatus.js'
 import { normalizeModelUsage } from '../../../shared/modelUsage.js'
+import { removeVerifiedLocalFilesFromRetained } from '../localFileReferences.js'
 import { createToolOutputBuffer } from './toolOutputBuffer.js'
 
 const TOOL_OUTPUT_FLUSH_EVENT_TYPES = new Set([
@@ -35,10 +36,10 @@ function optionalArtifactIds(payload, key) {
     .map((value) => String(value || '').trim()).filter(Boolean))]
 }
 
-function optionalVerifiedLocalFiles(payload) {
-  if (!payload || typeof payload !== 'object' || !Object.hasOwn(payload, 'verifiedLocalFiles')) return undefined
+function optionalLocalFileReceipts(payload, key, timestampKey) {
+  if (!payload || typeof payload !== 'object' || !Object.hasOwn(payload, key)) return undefined
   const seen = new Set()
-  return (Array.isArray(payload.verifiedLocalFiles) ? payload.verifiedLocalFiles : [])
+  return (Array.isArray(payload[key]) ? payload[key] : [])
     .map((file) => {
       const id = String(file?.id || '').trim()
       const path = String(file?.path || '').trim()
@@ -50,13 +51,26 @@ function optionalVerifiedLocalFiles(payload) {
         path,
         filename,
         ...(Number.isFinite(Number(file?.size)) ? { size: Math.max(0, Number(file.size)) } : {}),
-        ...(Number.isFinite(Number(file?.verifiedAt)) ? { verifiedAt: Math.max(0, Number(file.verifiedAt)) } : {}),
+        ...(Number.isFinite(Number(file?.[timestampKey]))
+          ? { [timestampKey]: Math.max(0, Number(file[timestampKey])) }
+          : {}),
         ...(Array.isArray(file?.relatedArtifactIds) && file.relatedArtifactIds.length > 0
           ? { relatedArtifactIds: [...new Set(file.relatedArtifactIds.map(String).filter(Boolean))] }
           : {}),
       }
     })
     .filter(Boolean)
+}
+
+function optionalVerifiedLocalFiles(payload) {
+  return optionalLocalFileReceipts(payload, 'verifiedLocalFiles', 'verifiedAt')
+}
+
+function optionalRetainedLocalFiles(payload) {
+  return removeVerifiedLocalFilesFromRetained(
+    optionalLocalFileReceipts(payload, 'retainedLocalFiles', 'retainedAt'),
+    optionalVerifiedLocalFiles(payload),
+  )
 }
 
 export function normalizeTurnFailurePayload(payload = {}, {
@@ -79,6 +93,7 @@ export function normalizeTurnFailurePayload(payload = {}, {
   const iterations = optionalInteger(payload.iterations, 0)
   const deliveryArtifactIds = optionalArtifactIds(payload, 'deliveryArtifactIds')
   const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)
+  const retainedLocalFiles = optionalRetainedLocalFiles(payload)
   const modelUsage = normalizeModelUsage(payload.usage)
   const turnModelUsage = normalizeModelUsage(payload.turnModelUsage)
   const estimatedPromptTokens = optionalInteger(payload.estimatedPromptTokens, 0)
@@ -89,6 +104,7 @@ export function normalizeTurnFailurePayload(payload = {}, {
       .map((value) => String(value || '').trim()).filter(Boolean))],
     ...(deliveryArtifactIds !== undefined ? { deliveryArtifactIds } : {}),
     ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
+    ...(retainedLocalFiles !== undefined ? { retainedLocalFiles } : {}),
     ...(iterations !== undefined ? { iterations } : {}),
     ...(modelUsage ? { modelUsage } : {}),
     ...(turnModelUsage ? { turnModelUsage } : {}),
@@ -391,6 +407,7 @@ export async function dispatchTurnEvent(event, {
   } else if (event.type === 'turn.paused') {
     const deliveryArtifactIds = optionalArtifactIds(payload, 'deliveryArtifactIds')
     const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)
+    const retainedLocalFiles = optionalRetainedLocalFiles(payload)
     const modelUsage = normalizeModelUsage(payload.usage)
     const turnModelUsage = normalizeModelUsage(payload.turnModelUsage)
     const estimatedPromptTokens = optionalInteger(payload.estimatedPromptTokens, 0)
@@ -412,6 +429,7 @@ export async function dispatchTurnEvent(event, {
         ...(estimatedPromptTokens !== undefined ? { serverEstimatedPromptTokens: estimatedPromptTokens } : {}),
         ...(deliveryArtifactIds !== undefined ? { serverDeliveryArtifactIds: deliveryArtifactIds } : {}),
         ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
+        ...(retainedLocalFiles !== undefined ? { retainedLocalFiles } : {}),
       },
       ...streamCursor,
     })
@@ -420,6 +438,7 @@ export async function dispatchTurnEvent(event, {
   } else if (event.type === 'turn.completed') {
     const deliveryArtifactIds = optionalArtifactIds(payload, 'deliveryArtifactIds')
     const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)
+    const retainedLocalFiles = optionalRetainedLocalFiles(payload)
     const modelUsage = normalizeModelUsage(payload.usage)
     const turnModelUsage = normalizeModelUsage(payload.turnModelUsage)
     const estimatedPromptTokens = optionalInteger(payload.estimatedPromptTokens, 0)
@@ -435,6 +454,7 @@ export async function dispatchTurnEvent(event, {
         finalizeRunningToolCalls: terminalToolFinalizer,
         ...(deliveryArtifactIds !== undefined ? { serverDeliveryArtifactIds: deliveryArtifactIds } : {}),
         ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
+        ...(retainedLocalFiles !== undefined ? { retainedLocalFiles } : {}),
         ...(modelUsage ? {
           modelUsage,
           actualPromptTokens: modelUsage.promptTokens,
@@ -447,6 +467,7 @@ export async function dispatchTurnEvent(event, {
     cursorCommitted = true
   } else if (event.type === 'turn.cancelled') {
     const verifiedLocalFiles = optionalVerifiedLocalFiles(payload)
+    const retainedLocalFiles = optionalRetainedLocalFiles(payload)
     const modelUsage = normalizeModelUsage(payload.usage)
     const turnModelUsage = normalizeModelUsage(payload.turnModelUsage)
     const estimatedPromptTokens = optionalInteger(payload.estimatedPromptTokens, 0)
@@ -457,6 +478,10 @@ export async function dispatchTurnEvent(event, {
         turnCompletedAt: event.createdAt,
         modelActivity: null,
         progress: null,
+        cancelled: true,
+        failed: false,
+        interrupted: false,
+        paused: false,
         serverConnectionState: 'cancelled',
         serverArtifactIds: optionalArtifactIds(payload, 'artifactIds') || [],
         serverDeliveryArtifactIds: optionalArtifactIds(payload, 'deliveryArtifactIds') || [],
@@ -465,6 +490,7 @@ export async function dispatchTurnEvent(event, {
         ...(turnModelUsage ? { turnModelUsage } : {}),
         ...(estimatedPromptTokens !== undefined ? { serverEstimatedPromptTokens: estimatedPromptTokens } : {}),
         ...(verifiedLocalFiles !== undefined ? { verifiedLocalFiles } : {}),
+        ...(retainedLocalFiles !== undefined ? { retainedLocalFiles } : {}),
       },
       ...streamCursor,
     })
@@ -491,6 +517,9 @@ export async function dispatchTurnEvent(event, {
           : {}),
         ...(failure.verifiedLocalFiles !== undefined
           ? { verifiedLocalFiles: failure.verifiedLocalFiles }
+          : {}),
+        ...(failure.retainedLocalFiles !== undefined
+          ? { retainedLocalFiles: failure.retainedLocalFiles }
           : {}),
         ...(failure.iterations !== undefined ? { serverIterations: failure.iterations } : {}),
         finalizeRunningToolCalls: terminalToolFinalizer,

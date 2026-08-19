@@ -24,6 +24,15 @@ const verifiedLocalFileSchema = z.object({
   relatedArtifactIds: z.array(z.string().min(1).max(160)).max(32).optional(),
 }).strict()
 const verifiedLocalFilesSchema = z.array(verifiedLocalFileSchema).max(64).optional()
+const retainedLocalFileSchema = z.object({
+  id: z.string().min(1).max(160),
+  path: z.string().min(1).max(32_768),
+  filename: z.string().min(1).max(1_024),
+  size: z.number().nonnegative().optional(),
+  retainedAt: z.number().int().nonnegative().optional(),
+  relatedArtifactIds: z.array(z.string().min(1).max(160)).max(32).optional(),
+}).strict()
+const retainedLocalFilesSchema = z.array(retainedLocalFileSchema).max(64).optional()
 const managedAttachmentSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
@@ -202,6 +211,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),
     verifiedLocalFiles: verifiedLocalFilesSchema,
+    retainedLocalFiles: retainedLocalFilesSchema,
     iterations: z.number().int().nonnegative().optional(),
     usage: jsonRecord.nullable().optional(),
     turnModelUsage: jsonRecord.nullable().optional(),
@@ -213,6 +223,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),
     verifiedLocalFiles: verifiedLocalFilesSchema,
+    retainedLocalFiles: retainedLocalFilesSchema,
     iterations: z.number().int().nonnegative().optional(),
     usage: jsonRecord.nullable().optional(),
     turnModelUsage: jsonRecord.nullable().optional(),
@@ -235,6 +246,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
   'turn.completed': z.object({
     text: z.string().optional(), artifactIds: z.array(z.string()).optional(), deliveryArtifactIds: z.array(z.string()).optional(), iterations: z.number().int().nonnegative().optional(),
     verifiedLocalFiles: verifiedLocalFilesSchema,
+    retainedLocalFiles: retainedLocalFilesSchema,
     usage: jsonRecord.nullable().optional(),
     turnModelUsage: jsonRecord.nullable().optional(),
     estimatedPromptTokens: z.number().int().nonnegative().optional(),
@@ -245,6 +257,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),
     verifiedLocalFiles: verifiedLocalFilesSchema,
+    retainedLocalFiles: retainedLocalFilesSchema,
     iterations: z.number().int().nonnegative().optional(),
     usage: jsonRecord.nullable().optional(),
     turnModelUsage: jsonRecord.nullable().optional(),
@@ -259,6 +272,7 @@ export const TURN_EVENT_PAYLOAD_SCHEMAS = Object.freeze({
     artifactIds: z.array(z.string()).optional(),
     deliveryArtifactIds: z.array(z.string()).optional(),
     verifiedLocalFiles: verifiedLocalFilesSchema,
+    retainedLocalFiles: retainedLocalFilesSchema,
     iterations: z.number().int().nonnegative().optional(),
     usage: jsonRecord.nullable().optional(),
     turnModelUsage: jsonRecord.nullable().optional(),

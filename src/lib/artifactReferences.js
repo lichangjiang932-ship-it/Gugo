@@ -28,9 +28,11 @@ export function resolveDeliveryArtifacts(meta = {}) {
   const ids = [...new Set((Array.isArray(meta.serverDeliveryArtifactIds)
     ? meta.serverDeliveryArtifactIds
     : []).map((id) => String(id || '').trim()).filter(Boolean))]
-  const supersededIds = new Set((Array.isArray(meta?.verifiedLocalFiles)
-    ? meta.verifiedLocalFiles
-    : []).flatMap((receipt) => {
+  const localFileReceipts = [
+    ...(Array.isArray(meta?.verifiedLocalFiles) ? meta.verifiedLocalFiles : []),
+    ...(Array.isArray(meta?.retainedLocalFiles) ? meta.retainedLocalFiles : []),
+  ]
+  const supersededIds = new Set(localFileReceipts.flatMap((receipt) => {
     if (!receipt?.id || !normalizeVerifiedLocalFilePath(receipt?.path)) return []
     return [
       receipt.relatedArtifactIds,

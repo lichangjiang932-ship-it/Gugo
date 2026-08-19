@@ -23,13 +23,15 @@ process.env.WORKSPACE_SHARED_TRUSTED = '1'
 const { closeDb, createUser } = await import('../server/db.js')
 const { TurnEngine } = await import('../server/services/TurnEngine.js')
 const { listMessages, upsertSession } = await import('../server/services/sessionStore.js')
-const { listTurnEvents } = await import('../server/services/turnEventStore.js')
+const { appendTurnEvent, listTurnEvents } = await import('../server/services/turnEventStore.js')
+const { createTurnEvent } = await import('../shared/turnEvents.js')
 const {
   serializeToolResult,
   TRUNCATED_TOOL_RESULT_METADATA_KEY,
 } = await import('../server/utils/toolCallHarness.js')
 const {
   buildAssistantModelContext,
+  extractRetainedLocalFiles,
   extractVerifiedLocalFiles,
   recoverLegacyVerifiedLocalFiles,
   TURN_TOOL_CONTEXT_LIMITS,
@@ -150,6 +152,46 @@ test('new turn context persists an authoritative empty receipt list without read
   })
 
   assert.deepEqual(context.verifiedLocalFiles, [])
+  assert.deepEqual(context.retainedLocalFiles, [])
+})
+
+test('a successful write without readback creates only a retained pending-verification receipt', () => {
+  const relativePath = 'pages/retained-pending.html'
+  const fullPath = path.join(workspace, relativePath)
+  const content = '<!doctype html>\n<title>Retained pending</title>'
+  fs.mkdirSync(path.dirname(fullPath), { recursive: true })
+  fs.writeFileSync(fullPath, content, 'utf8')
+  const messages = [
+    assistantCall('retained-pending-write', 'write_file', { path: relativePath, content }),
+    toolResult('retained-pending-write', 'write_file', {
+      ok: true,
+      path: relativePath,
+      bytes: Buffer.byteLength(content),
+    }),
+  ]
+
+  const retainedLocalFiles = extractRetainedLocalFiles(messages, {
+    userId: integrationUserId,
+    retainedAt: 333,
+  })
+  assert.deepEqual(extractVerifiedLocalFiles(messages, { userId: integrationUserId }), [])
+  assert.deepEqual(retainedLocalFiles, [{
+    id: retainedLocalFiles[0].id,
+    path: fs.realpathSync(fullPath),
+    filename: 'retained-pending.html',
+    size: Buffer.byteLength(content),
+    retainedAt: 333,
+  }])
+
+  const context = buildAssistantModelContext({
+    turnId: 'retained-pending-turn',
+    checkpointMessages: messages,
+    baselineToolCallIds: new Set(),
+    userId: integrationUserId,
+    retainedLocalFiles,
+  })
+  assert.deepEqual(context.verifiedLocalFiles, [])
+  assert.deepEqual(context.retainedLocalFiles, retainedLocalFiles)
 })
 
 test('a nonzero partial read after edit produces a link without embedding the whole file', () => {
@@ -498,8 +540,73 @@ test('TurnEngine persists the same verified receipt in the completed event and a
   const assistant = listMessages({ userId: integrationUserId, sessionId: integrationSessionId })
     .find((message) => message.id === `${turnId}:assistant`)
   assert.equal(completed.payload.verifiedLocalFiles.length, 1)
+  assert.deepEqual(completed.payload.retainedLocalFiles, [])
   assert.deepEqual(assistant.modelContext.verifiedLocalFiles, completed.payload.verifiedLocalFiles)
+  assert.deepEqual(assistant.modelContext.retainedLocalFiles, [])
   assert.equal(completed.payload.verifiedLocalFiles[0].path, fs.realpathSync(fullPath))
+})
+
+test('TurnEngine keeps current-turn receipts when a provider reuses a historical tool call id', async () => {
+  const turnId = 'verified-local-files-reused-call-id-turn'
+  const prompt = 'Update the current file despite reused provider ids.'
+  const historicalPath = 'reused-id/historical.html'
+  const currentPath = 'reused-id/current.html'
+  const historicalContent = '<title>historical</title>'
+  const currentContent = '<title>current</title>'
+  for (const [relativePath, value] of [[historicalPath, historicalContent], [currentPath, currentContent]]) {
+    const fullPath = path.join(workspace, relativePath)
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true })
+    fs.writeFileSync(fullPath, value, 'utf8')
+  }
+  const checkpointMessages = [
+    { role: 'user', content: 'Historical request.' },
+    assistantCall('call-0-write_file', 'write_file', { path: historicalPath, content: historicalContent }),
+    toolResult('call-0-write_file', 'write_file', { ok: true, path: historicalPath }),
+    { role: 'user', content: prompt },
+    assistantCall('call-0-write_file', 'write_file', { path: currentPath, content: currentContent }),
+    toolResult('call-0-write_file', 'write_file', { ok: true, path: currentPath }),
+    assistantCall('call-1-read_file', 'read_file', { path: currentPath, offset: 0, limit: 0 }),
+    toolResult('call-1-read_file', 'read_file', {
+      ok: true,
+      path: currentPath,
+      offset: 0,
+      returnedLines: 1,
+      totalLines: 1,
+      complete: true,
+      content: currentContent,
+    }),
+  ]
+  const engine = new TurnEngine({
+    scheduleMemoryExtraction: () => {},
+    runLoop: async ({ saveCheckpoint }) => {
+      await saveCheckpoint({ messages: checkpointMessages, artifactIds: [], iterations: 1 })
+      return { text: 'Current file updated.', artifactIds: [], iterations: 1 }
+    },
+  })
+
+  await engine.startTurn({
+    userId: integrationUserId,
+    sessionId: integrationSessionId,
+    turnId,
+    content: prompt,
+  })
+  await engine.waitForTurn({ userId: integrationUserId, sessionId: integrationSessionId, turnId })
+
+  const completed = listTurnEvents({
+    requestedUser: integrationUserId,
+    userId: integrationUserId,
+    sessionId: integrationSessionId,
+    turnId,
+    limit: 100,
+  }).find((event) => event.type === 'turn.completed')
+  assert.deepEqual(completed.payload.verifiedLocalFiles.map((file) => file.path), [
+    fs.realpathSync(path.join(workspace, currentPath)),
+  ])
+  const assistant = listMessages({ userId: integrationUserId, sessionId: integrationSessionId })
+    .find((message) => message.id === `${turnId}:assistant`)
+  assert.equal(assistant.modelContext.toolTrace.some((message) => (
+    message.role === 'tool' && message.tool_call_id === 'call-0-write_file'
+  )), true)
 })
 
 test('TurnEngine keeps a verified edited file clickable when a later artifact step fails', async () => {
@@ -551,6 +658,318 @@ test('TurnEngine keeps a verified edited file clickable when a later artifact st
     .find((message) => message.id === `${turnId}:assistant`)
   assert.deepEqual(failed.payload.deliveryArtifactIds, [])
   assert.equal(failed.payload.verifiedLocalFiles.length, 1)
+  assert.deepEqual(failed.payload.retainedLocalFiles, [])
   assert.equal(failed.payload.verifiedLocalFiles[0].path, fs.realpathSync(fullPath))
   assert.deepEqual(assistant.modelContext.verifiedLocalFiles, failed.payload.verifiedLocalFiles)
+  assert.deepEqual(assistant.modelContext.retainedLocalFiles, [])
+})
+
+test('TurnEngine preserves an unverified successful write as a retained file on an incomplete turn', async () => {
+  const turnId = 'retained-local-files-incomplete-turn'
+  const relativePath = 'partial/retained.html'
+  const fullPath = path.join(workspace, relativePath)
+  const content = '<!doctype html>\n<title>written but pending verification</title>'
+  fs.mkdirSync(path.dirname(fullPath), { recursive: true })
+  fs.writeFileSync(fullPath, content, 'utf8')
+  const checkpointMessages = [
+    assistantCall('retained-write', 'write_file', { path: relativePath, content }),
+    toolResult('retained-write', 'write_file', {
+      ok: true,
+      path: relativePath,
+      bytes: Buffer.byteLength(content),
+    }),
+  ]
+  const engine = new TurnEngine({
+    scheduleMemoryExtraction: () => {},
+    runLoop: async ({ saveCheckpoint }) => {
+      await saveCheckpoint({ messages: checkpointMessages, artifactIds: [], iterations: 1 })
+      return {
+        incomplete: true,
+        reason: 'post_mutation_verification_missing',
+        text: 'The write succeeded but readback is pending.',
+        artifactIds: [],
+        deliveryArtifactIds: [],
+        iterations: 1,
+      }
+    },
+  })
+
+  await engine.startTurn({
+    userId: integrationUserId,
+    sessionId: integrationSessionId,
+    turnId,
+    content: 'Update the file and verify it.',
+  })
+  await engine.waitForTurn({ userId: integrationUserId, sessionId: integrationSessionId, turnId })
+
+  const failed = listTurnEvents({
+    requestedUser: integrationUserId,
+    userId: integrationUserId,
+    sessionId: integrationSessionId,
+    turnId,
+    limit: 100,
+  }).find((event) => event.type === 'turn.failed')
+  const assistant = listMessages({ userId: integrationUserId, sessionId: integrationSessionId })
+    .find((message) => message.id === `${turnId}:assistant`)
+  assert.equal(failed.payload.code, 'TURN_INCOMPLETE')
+  assert.deepEqual(failed.payload.verifiedLocalFiles, [])
+  assert.equal(failed.payload.retainedLocalFiles.length, 1)
+  assert.equal(failed.payload.retainedLocalFiles[0].path, fs.realpathSync(fullPath))
+  assert.deepEqual(assistant.modelContext.retainedLocalFiles, failed.payload.retainedLocalFiles)
+  assert.equal(assistant.modelContext.evidenceState, 'failed')
+  assert.match(failed.payload.message, /已成功写入的本地修改会保留/)
+})
+
+test('TurnEngine keeps retained writes distinct from verified files in every remaining terminal state', async () => {
+  const cases = [
+    {
+      name: 'completed',
+      eventType: 'turn.completed',
+      outcome: () => ({ text: 'Written; verification is still pending.', iterations: 1 }),
+    },
+    {
+      name: 'interrupted',
+      eventType: 'turn.interrupted',
+      outcome: () => ({
+        interrupted: true,
+        code: 'MODEL_HTTP_503',
+        reason: 'provider unavailable',
+        text: 'The write finished before interruption.',
+        iterations: 1,
+      }),
+    },
+    {
+      name: 'paused',
+      eventType: 'turn.paused',
+      outcome: () => ({
+        paused: true,
+        text: 'Choose how to continue verification.',
+        clarification: { question: 'Continue verification?' },
+        iterations: 1,
+      }),
+    },
+    {
+      name: 'failed',
+      eventType: 'turn.failed',
+      outcome: () => {
+        const error = new Error('verification service failed')
+        error.code = 'VERIFY_FAILED'
+        error.iterations = 1
+        throw error
+      },
+    },
+  ]
+
+  for (const terminalCase of cases) {
+    const turnId = `retained-local-files-${terminalCase.name}-turn`
+    const relativePath = `terminal/${terminalCase.name}.html`
+    const fullPath = path.join(workspace, relativePath)
+    const content = `<title>${terminalCase.name} pending verification</title>`
+    fs.mkdirSync(path.dirname(fullPath), { recursive: true })
+    fs.writeFileSync(fullPath, content, 'utf8')
+    const mutationId = `${turnId}-write`
+    const checkpointMessages = [
+      assistantCall(mutationId, 'write_file', { path: relativePath, content }),
+      toolResult(mutationId, 'write_file', {
+        ok: true,
+        path: relativePath,
+        bytes: Buffer.byteLength(content),
+      }),
+    ]
+    const engine = new TurnEngine({
+      scheduleMemoryExtraction: () => {},
+      runLoop: async ({ saveCheckpoint }) => {
+        await saveCheckpoint({ messages: checkpointMessages, artifactIds: [], iterations: 1 })
+        return terminalCase.outcome()
+      },
+    })
+
+    await engine.startTurn({
+      userId: integrationUserId,
+      sessionId: integrationSessionId,
+      turnId,
+      content: `Write the ${terminalCase.name} fixture.`,
+    })
+    await engine.waitForTurn({
+      userId: integrationUserId,
+      sessionId: integrationSessionId,
+      turnId,
+    })
+
+    const terminal = listTurnEvents({
+      requestedUser: integrationUserId,
+      userId: integrationUserId,
+      sessionId: integrationSessionId,
+      turnId,
+      limit: 100,
+    }).find((event) => event.type === terminalCase.eventType)
+    const assistant = listMessages({ userId: integrationUserId, sessionId: integrationSessionId })
+      .find((message) => message.id === `${turnId}:assistant`)
+    assert.ok(terminal, `${terminalCase.name} must emit ${terminalCase.eventType}`)
+    assert.deepEqual(terminal.payload.verifiedLocalFiles, [])
+    assert.equal(terminal.payload.retainedLocalFiles.length, 1)
+    assert.equal(terminal.payload.retainedLocalFiles[0].path, fs.realpathSync(fullPath))
+    assert.equal(Object.hasOwn(terminal.payload.retainedLocalFiles[0], 'verifiedAt'), false)
+    assert.deepEqual(assistant.modelContext.verifiedLocalFiles, [])
+    assert.deepEqual(assistant.modelContext.retainedLocalFiles, terminal.payload.retainedLocalFiles)
+  }
+})
+
+test('TurnEngine persists retained writes when an active turn is cancelled', async () => {
+  const turnId = 'retained-local-files-cancelled-turn'
+  const relativePath = 'terminal/cancelled.html'
+  const fullPath = path.join(workspace, relativePath)
+  const content = '<title>cancelled pending verification</title>'
+  fs.mkdirSync(path.dirname(fullPath), { recursive: true })
+  fs.writeFileSync(fullPath, content, 'utf8')
+  const checkpointMessages = [
+    assistantCall('cancelled-write', 'write_file', { path: relativePath, content }),
+    toolResult('cancelled-write', 'write_file', {
+      ok: true,
+      path: relativePath,
+      bytes: Buffer.byteLength(content),
+    }),
+  ]
+  let checkpointReady
+  const ready = new Promise((resolve) => { checkpointReady = resolve })
+  const engine = new TurnEngine({
+    scheduleMemoryExtraction: () => {},
+    runLoop: async ({ saveCheckpoint, signal }) => {
+      await saveCheckpoint({ messages: checkpointMessages, artifactIds: [], iterations: 1 })
+      checkpointReady()
+      await new Promise((resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+      })
+      return { text: 'unreachable' }
+    },
+  })
+
+  await engine.startTurn({
+    userId: integrationUserId,
+    sessionId: integrationSessionId,
+    turnId,
+    content: 'Write, then wait before verification.',
+  })
+  await ready
+  await engine.cancelTurn({ userId: integrationUserId, sessionId: integrationSessionId, turnId })
+  await engine.waitForTurn({ userId: integrationUserId, sessionId: integrationSessionId, turnId })
+
+  const cancelled = listTurnEvents({
+    requestedUser: integrationUserId,
+    userId: integrationUserId,
+    sessionId: integrationSessionId,
+    turnId,
+    limit: 100,
+  }).find((event) => event.type === 'turn.cancelled')
+  const assistant = listMessages({ userId: integrationUserId, sessionId: integrationSessionId })
+    .find((message) => message.id === `${turnId}:assistant`)
+  assert.deepEqual(cancelled.payload.verifiedLocalFiles, [])
+  assert.equal(cancelled.payload.retainedLocalFiles.length, 1)
+  assert.equal(cancelled.payload.retainedLocalFiles[0].path, fs.realpathSync(fullPath))
+  assert.deepEqual(assistant.modelContext.retainedLocalFiles, cancelled.payload.retainedLocalFiles)
+  assert.equal(assistant.modelContext.evidenceState, 'cancelled')
+})
+
+test('TurnEngine restores checkpoint-only retained files when a restarted worker cancels the turn', async () => {
+  const turnId = 'retained-local-files-restarted-cancel-turn'
+  const retainedRelativePath = 'terminal/restarted-cancel-retained.html'
+  const verifiedRelativePath = 'terminal/restarted-cancel-verified.txt'
+  const retainedFullPath = path.join(workspace, retainedRelativePath)
+  const verifiedFullPath = path.join(workspace, verifiedRelativePath)
+  const retainedContent = '<title>checkpoint-only retained write</title>'
+  const verifiedContent = 'checkpoint verified write\n'
+  fs.mkdirSync(path.dirname(retainedFullPath), { recursive: true })
+  fs.writeFileSync(retainedFullPath, retainedContent, 'utf8')
+  fs.writeFileSync(verifiedFullPath, verifiedContent, 'utf8')
+  const checkpointMessages = [
+    assistantCall('restarted-retained-write', 'write_file', {
+      path: retainedRelativePath,
+      content: retainedContent,
+    }),
+    toolResult('restarted-retained-write', 'write_file', {
+      ok: true,
+      path: retainedRelativePath,
+      bytes: Buffer.byteLength(retainedContent),
+    }),
+    ...mutationAndReadMessages({
+      mutationId: 'restarted-verified-write',
+      mutationArgs: { path: verifiedRelativePath, content: verifiedContent },
+      mutationResult: {
+        ok: true,
+        path: verifiedRelativePath,
+        bytes: Buffer.byteLength(verifiedContent),
+      },
+      readId: 'restarted-verified-read',
+      readPath: verifiedRelativePath,
+      content: verifiedContent,
+    }),
+  ]
+  appendTurnEvent({
+    userId: integrationUserId,
+    event: createTurnEvent({
+      id: `${turnId}:started`,
+      sessionId: integrationSessionId,
+      turnId,
+      sequence: 0,
+      type: 'turn.started',
+      payload: { content: 'Write both files, then verify one.' },
+      createdAt: 100,
+    }),
+  })
+  appendTurnEvent({
+    userId: integrationUserId,
+    event: createTurnEvent({
+      id: `${turnId}:checkpoint`,
+      sessionId: integrationSessionId,
+      turnId,
+      sequence: 1,
+      type: 'turn.checkpoint',
+      payload: { storage: 'turn_checkpoints', checkpointVersion: 1 },
+      createdAt: 200,
+    }),
+    checkpointState: {
+      messages: checkpointMessages,
+      artifactIds: [],
+      iterations: 1,
+    },
+  })
+
+  // A fresh engine has no in-memory active entry, and this worker cannot find
+  // an active lease. The receipts therefore have to come from the durable
+  // checkpoint rather than from a terminal/intermediate event payload.
+  const restartedEngine = new TurnEngine({
+    scheduleMemoryExtraction: () => {},
+    executionLeases: {
+      ownerId: 'restarted-cancel-worker',
+      isActive: () => false,
+      requestCancellation: () => false,
+    },
+  })
+  await restartedEngine.cancelTurn({
+    userId: integrationUserId,
+    sessionId: integrationSessionId,
+    turnId,
+  })
+
+  const cancelled = listTurnEvents({
+    requestedUser: integrationUserId,
+    userId: integrationUserId,
+    sessionId: integrationSessionId,
+    turnId,
+    limit: 100,
+  }).find((event) => event.type === 'turn.cancelled')
+  const assistant = listMessages({ userId: integrationUserId, sessionId: integrationSessionId })
+    .find((message) => message.id === `${turnId}:assistant`)
+  assert.equal(cancelled.payload.retainedLocalFiles.length, 1)
+  assert.equal(cancelled.payload.retainedLocalFiles[0].path, fs.realpathSync(retainedFullPath))
+  assert.equal(cancelled.payload.verifiedLocalFiles.length, 1)
+  assert.equal(cancelled.payload.verifiedLocalFiles[0].path, fs.realpathSync(verifiedFullPath))
+  assert.equal(
+    cancelled.payload.retainedLocalFiles.some((file) => file.path === fs.realpathSync(verifiedFullPath)),
+    false,
+  )
+  assert.deepEqual(assistant.modelContext.retainedLocalFiles, cancelled.payload.retainedLocalFiles)
+  assert.deepEqual(assistant.modelContext.verifiedLocalFiles, cancelled.payload.verifiedLocalFiles)
+  assert.equal(assistant.modelContext.evidenceState, 'cancelled')
+  assert.equal(assistant.modelContext.turnEvidence, true)
 })

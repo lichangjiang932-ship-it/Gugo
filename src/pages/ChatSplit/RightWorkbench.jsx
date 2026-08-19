@@ -15,7 +15,10 @@ import {
 import { resolveDeliveryArtifacts } from '../../lib/artifactReferences.js'
 import { buildAttachmentPreviewArtifact } from '../../lib/attachmentPreview.js'
 import { classifyDirectFile, withArtifactPreviewMode } from '../../lib/directFilePreview.js'
-import { buildVerifiedLocalFileReferences } from '../../lib/localFileReferences.js'
+import {
+  buildRetainedLocalFileReferences,
+  buildVerifiedLocalFileReferences,
+} from '../../lib/localFileReferences.js'
 import { runWorkbenchTerminal } from '../../lib/workbenchClient.js'
 import { useT } from '../../i18n/I18nProvider.jsx'
 import { withDownloadToken } from '../../lib/jobClient.js'
@@ -79,6 +82,18 @@ function collectArtifacts(messages, currentAttachments = []) {
       messageId: message.id,
       verifiedLocalFile: true,
     }))
+    const retainedLocalFiles = buildRetainedLocalFileReferences({
+      toolCalls: message?.meta?.toolCalls,
+      retainedLocalFiles: message?.meta?.retainedLocalFiles,
+      messageId: message?.id,
+      turnId: message?.meta?.serverTurnId,
+    }).map((reference) => ({
+      ...(reference.previewArtifact?.directFile || {}),
+      id: reference.id,
+      messageId: message.id,
+      retainedLocalFile: true,
+      verificationPending: true,
+    }))
     const managedArtifacts = deliveryArtifacts
       .filter((artifact) => artifact?.url)
       .map((artifact) => ({
@@ -86,13 +101,13 @@ function collectArtifacts(messages, currentAttachments = []) {
         id: artifact.id || `${message.id || index}-${artifact.url}`,
         messageId: message.id,
       }))
-    return [...managedArtifacts, ...verifiedLocalFiles]
+    return [...managedArtifacts, ...retainedLocalFiles, ...verifiedLocalFiles]
   }).reverse()
   const newestFirst = [
     ...collectAttachmentArtifacts(currentAttachments, { current: true }).reverse(),
     ...messageArtifacts,
   ]
-  const seenVerifiedLocalFiles = new Set()
+  const seenLocalFiles = new Set()
   const seenAttachments = new Set()
   return newestFirst.filter((artifact) => {
     if (artifact?.userAttachment === true) {
@@ -101,10 +116,10 @@ function collectArtifacts(messages, currentAttachments = []) {
       seenAttachments.add(identity)
       return true
     }
-    if (artifact?.verifiedLocalFile !== true) return true
+    if (artifact?.verifiedLocalFile !== true && artifact?.retainedLocalFile !== true) return true
     const identity = verifiedLocalFileIdentity(artifact)
-    if (!identity || seenVerifiedLocalFiles.has(identity)) return !identity
-    seenVerifiedLocalFiles.add(identity)
+    if (!identity || seenLocalFiles.has(identity)) return !identity
+    seenLocalFiles.add(identity)
     return true
   })
 }

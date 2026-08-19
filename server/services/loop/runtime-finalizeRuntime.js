@@ -49,15 +49,15 @@ export async function finalizeRuntime(s) {
   if (s.hasPendingMutationVerification()) {
       return s.finishIncomplete({
         text: s.availableVerificationToolNames.length > 0
-          ? '\u4fee\u6539\u5df2\u7ecf\u6267\u884c\uff0c\u4f46\u5c1a\u672a\u901a\u8fc7\u8bfb\u56de\u3001\u5dee\u5f02\u68c0\u67e5\u6216\u9879\u76ee\u68c0\u67e5\u9a8c\u8bc1\uff0c\u56e0\u6b64\u6ca1\u6709\u6807\u8bb0\u4e3a\u5b8c\u6210\u3002'
-          : '\u4fee\u6539\u5df2\u7ecf\u6267\u884c\uff0c\u4f46\u5f53\u524d\u6ca1\u6709\u53ef\u7528\u7684\u9a8c\u8bc1\u5de5\u5177\uff0c\u56e0\u6b64\u65e0\u6cd5\u786e\u8ba4\u5b8c\u6210\u3002',
+          ? '修改已成功写入并保留，可在文件栏查看；但尚未通过读回、差异检查或项目检查，因此仍标记为待验证。'
+          : '修改已成功写入并保留，可在文件栏查看；当前没有可用的验证工具，因此仍无法确认验证通过。',
         reason: 'post_mutation_verification_missing',
       })
     }
   s.finalLocalHtmlDeliveryFailure = await s.validateLocalHtmlDeliveries()
   if (s.finalLocalHtmlDeliveryFailure) {
       return s.finishIncomplete({
-        text: '网页文件尚未通过资源完整性验证，因此没有作为已完成文件显示或交付。请重试以继续自动修复。',
+        text: '网页修改已成功写入并保留，可在文件栏查看；资源完整性验证尚未通过，因此仍标记为待验证。请重试以继续自动修复。',
         reason: 'local_html_delivery_validation_failed',
       })
     }

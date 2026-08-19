@@ -1,10 +1,18 @@
 import { BarChart3, Code2, Download, ExternalLink, FileText, LayoutList } from 'lucide-react'
 import { useT } from '../../../i18n/I18nProvider.jsx'
 import { artifactHasInlineReference, artifactReferenceOpenPayload, buildServerArtifactReferences, resolveDeliveryArtifacts } from '../../../lib/artifactReferences.js'
-import { mergeArtifactReferences, verifiedLocalFileOpenPayload } from '../../../lib/localFileReferences.js'
+import { localFileOpenPayload, mergeArtifactReferences } from '../../../lib/localFileReferences.js'
 import { withDownloadToken } from '../../../lib/jobClient.js'
 
-export function ArtifactReferenceLinks({ deliveryArtifacts, msg, preview, onOpen, referenceContent, verifiedLocalFileReferences = [] }) {
+export function ArtifactReferenceLinks({
+  deliveryArtifacts,
+  msg,
+  preview,
+  onOpen,
+  referenceContent,
+  retainedLocalFileReferences = [],
+  verifiedLocalFileReferences = [],
+}) {
   const source = String(msg?.meta?.artifactSource || msg?.content || '')
   const serverReferences = buildServerArtifactReferences({
     artifacts: Array.isArray(deliveryArtifacts)
@@ -16,6 +24,7 @@ export function ArtifactReferenceLinks({ deliveryArtifacts, msg, preview, onOpen
   })
   const allReferences = mergeArtifactReferences({
     serverReferences,
+    retainedLocalFileReferences,
     verifiedLocalFileReferences,
   })
   const visibleContent = referenceContent === undefined ? msg?.content : referenceContent
@@ -26,7 +35,7 @@ export function ArtifactReferenceLinks({ deliveryArtifacts, msg, preview, onOpen
 
   const openReference = (event, reference) => {
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
-    const artifact = verifiedLocalFileOpenPayload(reference)
+    const artifact = localFileOpenPayload(reference)
       || artifactReferenceOpenPayload(reference, msg?.id)
     if (!artifact || typeof onOpen !== 'function') return
     event.preventDefault()

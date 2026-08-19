@@ -157,6 +157,13 @@ function verifiedFileHref({ id, turnId }) {
   return `/api/local-files/verified/${encodeURIComponent(safeId)}?turnId=${encodeURIComponent(safeTurnId)}`
 }
 
+function retainedFileHref({ id, turnId }) {
+  const safeId = String(id || '').trim()
+  const safeTurnId = String(turnId || '').trim()
+  if (!safeId || !safeTurnId) return ''
+  return `/api/local-files/retained/${encodeURIComponent(safeId)}?turnId=${encodeURIComponent(safeTurnId)}`
+}
+
 function basename(path) {
   return String(path || '').split(/[\\/]/u).filter(Boolean).at(-1) || 'file'
 }
@@ -193,15 +200,59 @@ function completeReadContent(result) {
   return offset === 0 && returnedLines >= totalLines ? result.content : null
 }
 
-function referencesFromReceipts(receipts, { messageId = '', mutations = new Map(), turnId = '' } = {}) {
+/**
+ * A retained receipt represents the same file as a verified receipt when
+ * either its opaque receipt id or canonical absolute path matches. Verified
+ * state always wins: a retained link must not survive as a second, stale link
+ * after verification upgrades the file in place.
+ *
+ * This accepts both persisted receipts and their UI reference projections.
+ */
+export function removeVerifiedLocalFilesFromRetained(
+  retainedLocalFiles,
+  verifiedLocalFiles,
+) {
+  if (!Array.isArray(retainedLocalFiles) || retainedLocalFiles.length === 0) {
+    return retainedLocalFiles
+  }
+  if (!Array.isArray(verifiedLocalFiles) || verifiedLocalFiles.length === 0) {
+    return retainedLocalFiles
+  }
+
+  const verifiedIds = new Set()
+  const verifiedPaths = new Set()
+  for (const file of verifiedLocalFiles) {
+    const id = String(file?.id || '').trim()
+    const path = normalizeVerifiedLocalFilePath(file?.path ?? file?.fullPath)
+    if (id) verifiedIds.add(id)
+    if (path) verifiedPaths.add(path)
+  }
+  if (verifiedIds.size === 0 && verifiedPaths.size === 0) return retainedLocalFiles
+
+  return retainedLocalFiles.filter((file) => {
+    const id = String(file?.id || '').trim()
+    const path = normalizeVerifiedLocalFilePath(file?.path ?? file?.fullPath)
+    return !(id && verifiedIds.has(id)) && !(path && verifiedPaths.has(path))
+  })
+}
+
+function referencesFromReceipts(receipts, {
+  kind = 'verified',
+  messageId = '',
+  mutations = new Map(),
+  turnId = '',
+} = {}) {
   const references = []
   const seen = new Set()
+  const retained = kind === 'retained'
   for (const receipt of Array.isArray(receipts) ? receipts : []) {
     const id = String(receipt?.id || '').trim()
     const path = String(receipt?.path || '').trim()
     const filename = String(receipt?.filename || basename(path)).trim()
     const key = normalizeVerifiedLocalFilePath(path)
-    const url = verifiedFileHref({ id, turnId })
+    const url = retained
+      ? retainedFileHref({ id, turnId })
+      : verifiedFileHref({ id, turnId })
     if (!id || !key || !filename || !url || seen.has(id)) continue
     seen.add(id)
     const type = normalizeArtifactReferenceType({ filename })
@@ -216,7 +267,9 @@ function referencesFromReceipts(receipts, { messageId = '', mutations = new Map(
       path,
       fullPath: path,
       url,
-      verifiedLocalFile: true,
+      ...(retained
+        ? { retainedLocalFile: true, verificationPending: true }
+        : { verifiedLocalFile: true }),
       ...(mutation?.toolCallId ? { toolCallId: mutation.toolCallId } : {}),
       ...(mutation?.relatedArtifactIds?.length > 0
         ? { relatedArtifactIds: mutation.relatedArtifactIds }
@@ -226,6 +279,7 @@ function referencesFromReceipts(receipts, { messageId = '', mutations = new Map(
         artifactIdentity: identity,
         content: '',
         preview: null,
+        ...(retained ? { retainedLocalFile: true, verificationPending: true } : {}),
         directFile: {
           id,
           filename,
@@ -233,6 +287,7 @@ function referencesFromReceipts(receipts, { messageId = '', mutations = new Map(
           type,
           url,
           path,
+          ...(retained ? { retainedLocalFile: true, verificationPending: true } : {}),
           ...(Number.isFinite(Number(receipt?.size))
             ? { size: Math.max(0, Number(receipt.size)), summary: `${Math.max(0, Number(receipt.size))} bytes` }
             : {}),
@@ -317,6 +372,27 @@ export function buildVerifiedLocalFileReferences({
 }
 
 /**
+ * Build clickable references for files whose mutation succeeded but whose
+ * independent readback/project verification did not finish. Only persisted,
+ * server-authorized receipts qualify; raw tool output is not enough to create
+ * a retained-file link in the browser.
+ */
+export function buildRetainedLocalFileReferences({
+  toolCalls = [],
+  retainedLocalFiles,
+  messageId = '',
+  turnId = '',
+} = {}) {
+  if (!Array.isArray(retainedLocalFiles)) return []
+  return referencesFromReceipts(retainedLocalFiles, {
+    kind: 'retained',
+    messageId,
+    mutations: mutationEvidence(toolCalls),
+    turnId,
+  })
+}
+
+/**
  * A local mutation can also publish a managed artifact snapshot. When the
  * successful tool result explicitly associates both with the same path, keep
  * the verified local file: it reflects later in-place edits while the snapshot
@@ -325,10 +401,19 @@ export function buildVerifiedLocalFileReferences({
 export function mergeArtifactReferences({
   serverReferences = [],
   verifiedLocalFileReferences = [],
+  retainedLocalFileReferences = [],
 } = {}) {
-  const localReferences = Array.isArray(verifiedLocalFileReferences)
+  const verifiedReferences = Array.isArray(verifiedLocalFileReferences)
     ? verifiedLocalFileReferences
     : []
+  const retainedReferences = removeVerifiedLocalFilesFromRetained(
+    Array.isArray(retainedLocalFileReferences) ? retainedLocalFileReferences : [],
+    verifiedReferences,
+  )
+  const localReferences = [
+    ...verifiedReferences,
+    ...retainedReferences,
+  ]
   const supersededArtifactIds = new Set(localReferences.flatMap((reference) => (
     Array.isArray(reference?.relatedArtifactIds) ? reference.relatedArtifactIds : []
   )).map((id) => String(id || '').trim()).filter(Boolean))
@@ -339,4 +424,14 @@ export function mergeArtifactReferences({
 
 export function verifiedLocalFileOpenPayload(reference) {
   return reference?.verifiedLocalFile === true ? reference.previewArtifact || null : null
+}
+
+export function retainedLocalFileOpenPayload(reference) {
+  return reference?.retainedLocalFile === true && reference?.verificationPending === true
+    ? reference.previewArtifact || null
+    : null
+}
+
+export function localFileOpenPayload(reference) {
+  return verifiedLocalFileOpenPayload(reference) || retainedLocalFileOpenPayload(reference)
 }

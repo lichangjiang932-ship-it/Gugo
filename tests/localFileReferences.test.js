@@ -2,7 +2,12 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  buildRetainedLocalFileReferences,
   buildVerifiedLocalFileReferences,
+  localFileOpenPayload,
+  mergeArtifactReferences,
+  removeVerifiedLocalFilesFromRetained,
+  retainedLocalFileOpenPayload,
   verifiedLocalFileOpenPayload,
 } from '../src/lib/localFileReferences.js'
 import { findArtifactReferenceByLocalPath } from '../src/lib/artifactReferences.js'
@@ -273,4 +278,90 @@ test('persisted receipts open the authenticated real-file URL without embedding 
     size: 12_345,
     summary: '12345 bytes',
   })
+})
+
+test('retained mutation receipts stay previewable without claiming verification', () => {
+  const [reference] = buildRetainedLocalFileReferences({
+    messageId: 'retained-turn:assistant',
+    turnId: 'retained-turn',
+    retainedLocalFiles: [{
+      id: 'retained receipt/1',
+      path: target,
+      filename: 'qa-second-revision-test.html',
+      size: 4096,
+      retainedAt: 456,
+    }],
+  })
+
+  assert.equal(
+    reference.url,
+    '/api/local-files/retained/retained%20receipt%2F1?turnId=retained-turn',
+  )
+  assert.equal(reference.retainedLocalFile, true)
+  assert.equal(reference.verificationPending, true)
+  assert.equal(Object.hasOwn(reference, 'verifiedLocalFile'), false)
+  assert.equal(reference.previewArtifact.retainedLocalFile, true)
+  assert.equal(reference.previewArtifact.verificationPending, true)
+  assert.equal(reference.previewArtifact.directFile.retainedLocalFile, true)
+  assert.equal(reference.previewArtifact.directFile.verificationPending, true)
+  assert.equal(verifiedLocalFileOpenPayload(reference), null)
+  assert.equal(retainedLocalFileOpenPayload(reference), reference.previewArtifact)
+  assert.equal(localFileOpenPayload(reference), reference.previewArtifact)
+})
+
+test('verified files supersede retained files by receipt id or canonical path', () => {
+  const unrelated = {
+    id: 'retained-unrelated',
+    path: 'D:\\workspace\\other.html',
+    filename: 'other.html',
+  }
+  const retained = [{
+    id: 'same-id',
+    path: 'D:\\workspace\\old-name.html',
+    filename: 'old-name.html',
+  }, {
+    id: 'old-path-id',
+    path: 'D:\\Workspace\\nested\\..\\REPORT.HTML',
+    filename: 'REPORT.HTML',
+  }, unrelated]
+  const verified = [{
+    id: 'same-id',
+    path: 'D:\\workspace\\renamed.html',
+    filename: 'renamed.html',
+  }, {
+    id: 'new-path-id',
+    path: 'd:/workspace/report.html',
+    filename: 'report.html',
+  }]
+
+  assert.deepEqual(removeVerifiedLocalFilesFromRetained(retained, verified), [unrelated])
+})
+
+test('artifact reference merge renders only the verified link after an in-place upgrade', () => {
+  const retained = buildRetainedLocalFileReferences({
+    messageId: 'upgrade:assistant',
+    turnId: 'upgrade',
+    retainedLocalFiles: [{
+      id: 'retained-id',
+      path: 'D:\\Workspace\\REPORT.HTML',
+      filename: 'REPORT.HTML',
+    }],
+  })
+  const verified = buildVerifiedLocalFileReferences({
+    messageId: 'upgrade:assistant',
+    turnId: 'upgrade',
+    verifiedLocalFiles: [{
+      id: 'verified-id',
+      path: 'd:/workspace/report.html',
+      filename: 'report.html',
+    }],
+  })
+
+  const references = mergeArtifactReferences({
+    retainedLocalFileReferences: retained,
+    verifiedLocalFileReferences: verified,
+  })
+  assert.equal(references.length, 1)
+  assert.equal(references[0].verifiedLocalFile, true)
+  assert.equal(references[0].id, 'local-file:verified-id')
 })

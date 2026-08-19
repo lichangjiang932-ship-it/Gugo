@@ -1,4 +1,5 @@
 import { TOOL_LIVE_OUTPUT_CHAR_LIMIT } from '../../lib/turnClient/toolOutputBuffer.js'
+import { removeVerifiedLocalFilesFromRetained } from '../../lib/localFileReferences.js'
 import { TOOL_CALL_STATUS } from '../taskStatus.js'
 
 function applyStreamCursor(message, action) {
@@ -258,7 +259,16 @@ export function reduceMessageState(state, action) {
           if (last.role !== 'assistant') return s
           const cursor = applyStreamCursor(last, action)
           if (cursor.ignored) return s
-          const nextMeta = finalizeRunningToolCalls({ ...cursor.meta, ...meta }, finalizer)
+          const finalizedMeta = finalizeRunningToolCalls({ ...cursor.meta, ...meta }, finalizer)
+          const nextMeta = Object.hasOwn(finalizedMeta, 'retainedLocalFiles')
+            ? {
+                ...finalizedMeta,
+                retainedLocalFiles: removeVerifiedLocalFilesFromRetained(
+                  finalizedMeta.retainedLocalFiles,
+                  finalizedMeta.verifiedLocalFiles,
+                ),
+              }
+            : finalizedMeta
           msgs[messageIndex] = { ...last, meta: nextMeta }
           return { ...s, messages: msgs, updatedAt: Date.now() }
         }),

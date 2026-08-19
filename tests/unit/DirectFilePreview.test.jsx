@@ -285,7 +285,7 @@ test('managed HTML artifacts exchange auth for a scoped ticket iframe', async ()
     assert.ok(frame)
     assert.equal(frame.getAttribute('src'), '/api/artifacts/previews/opaque-ticket/index.html')
     assert.equal(frame.getAttribute('srcdoc'), null)
-    assert.equal(frame.getAttribute('sandbox'), 'allow-scripts allow-forms')
+    assert.equal(frame.getAttribute('sandbox'), 'allow-scripts')
     assert.equal(requests.length, 1)
     assert.equal(requests[0].input, '/api/artifacts/interactive.html/preview-session')
     assert.equal(requests[0].init.method, 'POST')
@@ -354,7 +354,7 @@ test('ordinary workspace HTML keeps the direct sandboxed preview path', async ()
     assert.ok(frame)
     assert.equal(frame.getAttribute('src'), '/api/workspace/files/workspace-page.html?preview=1')
     assert.equal(frame.getAttribute('srcdoc'), null)
-    assert.equal(frame.getAttribute('sandbox'), 'allow-scripts allow-forms')
+    assert.equal(frame.getAttribute('sandbox'), '')
     assert.equal(fetchCalls, 0)
   } finally {
     await act(async () => root.unmount())
@@ -390,7 +390,7 @@ test('verified local HTML uses a scoped preview URL so relative sidecar assets k
     assert.ok(frame)
     assert.equal(frame.getAttribute('src'), '/api/local-files/previews/opaque-ticket/site.html')
     assert.equal(frame.getAttribute('srcdoc'), null)
-    assert.equal(frame.getAttribute('sandbox'), 'allow-scripts allow-forms')
+    assert.equal(frame.getAttribute('sandbox'), '')
     assert.equal(requests.length, 1)
     assert.equal(requests[0].input, '/api/local-files/verified/receipt-1/preview-session?turnId=turn-1')
     assert.equal(requests[0].init.method, 'POST')
@@ -401,6 +401,49 @@ test('verified local HTML uses a scoped preview URL so relative sidecar assets k
     assert.equal(requests.length, 2)
     assert.equal(requests[1].input, '/api/local-files/previews/opaque-ticket')
     assert.equal(requests[1].init.method, 'DELETE')
+    globalThis.fetch = originalFetch
+    dom.window.close()
+  }
+})
+
+test('retained local HTML uses the retained preview-session route without claiming verification', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  const originalFetch = globalThis.fetch
+  const requests = []
+  globalThis.fetch = async (input, init = {}) => {
+    requests.push({ input: String(input), init })
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ url: '/api/local-files/previews/retained-ticket/site.html' }),
+    }
+  }
+  try {
+    await act(async () => root.render(
+      <DirectFilePreview
+        file={{
+          filename: 'site.html',
+          type: 'html',
+          retainedLocalFile: true,
+          verificationPending: true,
+        }}
+        url="/api/local-files/retained/retained-receipt-1?turnId=retained-turn&preview=1&token=stale"
+        t={(key) => key}
+      />,
+    ))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    const frame = rootElement.querySelector('iframe')
+    assert.ok(frame)
+    assert.equal(frame.getAttribute('src'), '/api/local-files/previews/retained-ticket/site.html')
+    assert.equal(frame.getAttribute('sandbox'), '')
+    assert.equal(requests[0].input, '/api/local-files/retained/retained-receipt-1/preview-session?turnId=retained-turn')
+    assert.equal(requests[0].init.method, 'POST')
+    assert.doesNotMatch(requests[0].input, /token=|stale/)
+  } finally {
+    await act(async () => root.unmount())
+    await new Promise((resolve) => setTimeout(resolve, 0))
     globalThis.fetch = originalFetch
     dom.window.close()
   }

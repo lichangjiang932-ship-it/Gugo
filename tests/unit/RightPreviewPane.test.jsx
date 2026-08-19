@@ -197,6 +197,50 @@ test('preview reducer replaces a verified local file tab when a new receipt poin
   assert.match(state.previewArtifact.directFile.url, /turn-revised/)
 })
 
+test('preview reducer upgrades a retained tab in place when the same path becomes verified', () => {
+  const retained = {
+    messageId: 'msg-retained',
+    content: '',
+    preview: null,
+    directFile: {
+      id: 'retained-receipt',
+      filename: 'smoke.html',
+      type: 'html',
+      path: 'D:\\output\\smoke.html',
+      url: '/api/local-files/retained/retained-receipt?turnId=turn-retained',
+      retainedLocalFile: true,
+      verificationPending: true,
+    },
+  }
+  const verified = {
+    messageId: 'msg-verified',
+    content: '',
+    preview: null,
+    directFile: {
+      id: 'verified-receipt',
+      filename: 'smoke.html',
+      type: 'html',
+      path: 'd:/output/smoke.html',
+      url: '/api/local-files/verified/verified-receipt?turnId=turn-verified',
+      verifiedLocalFile: true,
+    },
+  }
+  const dispatch = (state, payload) => reduceTaskSettingsState(state, {
+    type: 'OPEN_PREVIEW_ARTIFACT',
+    payload,
+  })
+
+  let state = dispatch(createInitialState(), retained)
+  const retainedTabId = state.previewActiveId
+  state = dispatch(state, verified)
+
+  assert.equal(state.previewTabs.length, 1)
+  assert.equal(state.previewActiveId, retainedTabId)
+  assert.equal(state.previewArtifact, verified)
+  assert.equal(state.previewArtifact.directFile.verifiedLocalFile, true)
+  assert.equal(Object.hasOwn(state.previewArtifact.directFile, 'verificationPending'), false)
+})
+
 test('preview reducer keeps verified local files with the same name in different directories as separate tabs', () => {
   const createArtifact = (id, path) => ({
     messageId: `msg-${id}`,
