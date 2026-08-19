@@ -10,6 +10,33 @@ const VAULT_VERSION = 1
 const VAULT_MARKER = '__yma_credential_vault'
 const KEY_BYTES = 32
 const keyCache = new Map()
+const WINDOWS_ACL_TARGET_ENV = 'GUGO_CREDENTIAL_ACL_TARGET'
+const WINDOWS_ACL_ACCOUNT_ENV = 'GUGO_CREDENTIAL_ACL_ACCOUNT'
+const WINDOWS_ACL_SCRIPT = `
+$ErrorActionPreference = 'Stop'
+$target = [Environment]::GetEnvironmentVariable('${WINDOWS_ACL_TARGET_ENV}', 'Process')
+$account = [Environment]::GetEnvironmentVariable('${WINDOWS_ACL_ACCOUNT_ENV}', 'Process')
+if ([String]::IsNullOrWhiteSpace($target) -or [String]::IsNullOrWhiteSpace($account)) {
+  throw 'Credential ACL target and account are required'
+}
+$acl = [System.IO.File]::GetAccessControl(
+  $target,
+  [System.Security.AccessControl.AccessControlSections]::Access
+)
+$acl.SetAccessRuleProtection($true, $false)
+foreach ($existingRule in @($acl.Access)) {
+  [void]$acl.RemoveAccessRuleSpecific($existingRule)
+}
+$rights = [System.Security.AccessControl.FileSystemRights]::Read -bor [System.Security.AccessControl.FileSystemRights]::Write
+$rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+  $account,
+  $rights,
+  [System.Security.AccessControl.AccessControlType]::Allow
+)
+[void]$acl.AddAccessRule($rule)
+[System.IO.File]::SetAccessControl($target, $acl)
+`.trim()
+const WINDOWS_ACL_ENCODED_SCRIPT = Buffer.from(WINDOWS_ACL_SCRIPT, 'utf16le').toString('base64')
 
 function vaultError(message, code = 'CREDENTIAL_VAULT_ERROR', cause) {
   const error = new Error(message, cause ? { cause } : undefined)
@@ -63,10 +90,16 @@ function windowsAccount(env, userInfo) {
   return domain ? `${domain}\\${username}` : username
 }
 
+function windowsPowerShellPath() {
+  const systemRoot = String(process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows').trim()
+  return path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+}
+
 /**
  * Restrict the credential key to the current user without making vault startup
- * depend on host ACL tooling. Windows mode bits do not enforce a private ACL,
- * so icacls must remove inherited grants and replace the current user's grant.
+ * depend on host ACL tooling. Windows mode bits do not enforce a private ACL.
+ * Build a replacement DACL in memory and commit it once so failures cannot
+ * leave the key in an intermediate, more permissive state.
  */
 export function hardenCredentialKeyFile(keyPath, {
   platform = process.platform,
@@ -74,6 +107,7 @@ export function hardenCredentialKeyFile(keyPath, {
   spawn = spawnSync,
   chmod = fs.chmodSync,
   userInfo = () => os.userInfo(),
+  powershellPath = windowsPowerShellPath(),
 } = {}) {
   const target = String(keyPath || '').trim()
   if (!target) return { ok: false, method: null, code: 'KEY_PATH_REQUIRED' }
@@ -97,63 +131,51 @@ export function hardenCredentialKeyFile(keyPath, {
   } catch (error) {
     return {
       ok: false,
-      method: 'icacls',
+      method: 'powershell-acl',
       code: error?.code || 'WINDOWS_ACCOUNT_UNAVAILABLE',
     }
   }
   if (!account) {
-    return { ok: false, method: 'icacls', code: 'WINDOWS_ACCOUNT_UNAVAILABLE' }
+    return { ok: false, method: 'powershell-acl', code: 'WINDOWS_ACCOUNT_UNAVAILABLE' }
   }
 
   try {
-    const spawnOptions = {
+    const result = spawn(powershellPath, [
+      '-NoLogo',
+      '-NoProfile',
+      '-NonInteractive',
+      '-EncodedCommand',
+      WINDOWS_ACL_ENCODED_SCRIPT,
+    ], {
       encoding: 'utf8',
+      env: {
+        ...process.env,
+        [WINDOWS_ACL_TARGET_ENV]: target,
+        [WINDOWS_ACL_ACCOUNT_ENV]: account,
+      },
       shell: false,
       windowsHide: true,
-    }
-    // /grant:r only replaces grants for the named account. Reset first so a
-    // pre-existing key cannot retain explicit grants for another principal.
-    const resetResult = spawn('icacls.exe', [target, '/reset'], spawnOptions)
-    if (resetResult?.error) {
-      return {
-        ok: false,
-        method: 'icacls',
-        code: resetResult.error.code || 'ICACLS_FAILED',
-      }
-    }
-    if (resetResult?.status !== 0) {
-      return {
-        ok: false,
-        method: 'icacls',
-        code: `ICACLS_EXIT_${Number.isInteger(resetResult?.status) ? resetResult.status : 'UNKNOWN'}`,
-      }
-    }
-    const result = spawn('icacls.exe', [
-      target,
-      '/inheritance:r',
-      '/grant:r',
-      `${account}:(R,W)`,
-    ], spawnOptions)
+    })
     if (result?.error) {
       return {
         ok: false,
-        method: 'icacls',
-        code: result.error.code || 'ICACLS_FAILED',
+        method: 'powershell-acl',
+        code: result.error.code || 'POWERSHELL_ACL_FAILED',
       }
     }
     if (result?.status !== 0) {
       return {
         ok: false,
-        method: 'icacls',
-        code: `ICACLS_EXIT_${Number.isInteger(result?.status) ? result.status : 'UNKNOWN'}`,
+        method: 'powershell-acl',
+        code: `POWERSHELL_ACL_EXIT_${Number.isInteger(result?.status) ? result.status : 'UNKNOWN'}`,
       }
     }
-    return { ok: true, method: 'icacls', code: null }
+    return { ok: true, method: 'powershell-acl', code: null }
   } catch (error) {
     return {
       ok: false,
-      method: 'icacls',
-      code: error?.code || 'ICACLS_FAILED',
+      method: 'powershell-acl',
+      code: error?.code || 'POWERSHELL_ACL_FAILED',
     }
   }
 }

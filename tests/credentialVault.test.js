@@ -40,7 +40,7 @@ test.after(() => {
   fs.rmSync(dir, { recursive: true, force: true })
 })
 
-test('Windows credential key ACL removes inheritance and grants only current-user read/write without a shell', () => {
+test('Windows credential key ACL is replaced atomically for only the current user without a shell', () => {
   const calls = []
   const result = hardenCredentialKeyFile('C:\\Users\\Alice Example\\.credentials.key', {
     platform: 'win32',
@@ -52,32 +52,23 @@ test('Windows credential key ACL removes inheritance and grants only current-use
     },
   })
 
-  assert.deepEqual(result, { ok: true, method: 'icacls', code: null })
-  assert.deepEqual(calls, [
-    {
-      command: 'icacls.exe',
-      args: ['C:\\Users\\Alice Example\\.credentials.key', '/reset'],
-      options: {
-        encoding: 'utf8',
-        shell: false,
-        windowsHide: true,
-      },
-    },
-    {
-      command: 'icacls.exe',
-      args: [
-        'C:\\Users\\Alice Example\\.credentials.key',
-        '/inheritance:r',
-        '/grant:r',
-        'WORKSTATION\\Alice:(R,W)',
-      ],
-      options: {
-        encoding: 'utf8',
-        shell: false,
-        windowsHide: true,
-      },
-    },
-  ])
+  assert.deepEqual(result, { ok: true, method: 'powershell-acl', code: null })
+  assert.equal(calls.length, 1)
+  const [{ command, args, options }] = calls
+  assert.match(command, /[\\/]System32[\\/]WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$/i)
+  assert.deepEqual(args.slice(0, -1), ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand'])
+  const script = Buffer.from(args.at(-1), 'base64').toString('utf16le')
+  assert.match(script, /\[System\.IO\.File\]::GetAccessControl/)
+  assert.match(script, /SetAccessRuleProtection\(\$true, \$false\)/)
+  assert.match(script, /RemoveAccessRuleSpecific/)
+  assert.match(script, /\[System\.IO\.File\]::SetAccessControl\(\$target, \$acl\)/)
+  assert.equal((script.match(/::SetAccessControl/g) || []).length, 1)
+  assert.doesNotMatch(script, /Alice Example|WORKSTATION\\Alice/)
+  assert.equal(options.encoding, 'utf8')
+  assert.equal(options.shell, false)
+  assert.equal(options.windowsHide, true)
+  assert.equal(options.env.GUGO_CREDENTIAL_ACL_TARGET, 'C:\\Users\\Alice Example\\.credentials.key')
+  assert.equal(options.env.GUGO_CREDENTIAL_ACL_ACCOUNT, 'WORKSTATION\\Alice')
 })
 
 test('Windows credential ACL keeps Unicode and metacharacters inside argument boundaries', () => {
@@ -93,38 +84,49 @@ test('Windows credential ACL keeps Unicode and metacharacters inside argument bo
   })
 
   assert.equal(result.ok, true)
-  assert.equal(calls.length, 2)
-  assert.equal(calls[1].args[3], '域 & admin\\用户;name:(R,W)')
-  assert.equal(calls[1].options.shell, false)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].options.env.GUGO_CREDENTIAL_ACL_TARGET, 'C:\\凭据 & secrets\\.credentials.key')
+  assert.equal(calls[0].options.env.GUGO_CREDENTIAL_ACL_ACCOUNT, '域 & admin\\用户;name')
+  assert.equal(calls[0].options.shell, false)
+  const script = Buffer.from(calls[0].args.at(-1), 'base64').toString('utf16le')
+  assert.doesNotMatch(script, /凭据|域 & admin|用户;name/)
 })
 
-test('credential key permission failures degrade without throwing so vault startup remains available', () => {
+test('atomic Windows ACL failures do not trigger a second mutation or throw during startup hardening', () => {
+  const unavailableCalls = []
   assert.deepEqual(hardenCredentialKeyFile('C:\\vault\\.credentials.key', {
     platform: 'win32',
     env: { USERNAME: 'Alice' },
-    spawn() {
+    userInfo: () => ({ username: 'Alice' }),
+    spawn(...args) {
+      unavailableCalls.push(args)
       return {
         status: null,
-        error: Object.assign(new Error('icacls unavailable'), { code: 'ENOENT' }),
+        error: Object.assign(new Error('PowerShell unavailable'), { code: 'ENOENT' }),
       }
     },
   }), {
     ok: false,
-    method: 'icacls',
+    method: 'powershell-acl',
     code: 'ENOENT',
   })
+  assert.equal(unavailableCalls.length, 1)
 
+  const deniedCalls = []
   assert.deepEqual(hardenCredentialKeyFile('C:\\vault\\.credentials.key', {
     platform: 'win32',
     env: { USERNAME: 'Alice' },
-    spawn() {
+    userInfo: () => ({ username: 'Alice' }),
+    spawn(...args) {
+      deniedCalls.push(args)
       return { status: 5, stdout: '', stderr: 'Access is denied.' }
     },
   }), {
     ok: false,
-    method: 'icacls',
-    code: 'ICACLS_EXIT_5',
+    method: 'powershell-acl',
+    code: 'POWERSHELL_ACL_EXIT_5',
   })
+  assert.equal(deniedCalls.length, 1)
 })
 
 test('non-Windows credential key permissions remain chmod 0600', () => {
