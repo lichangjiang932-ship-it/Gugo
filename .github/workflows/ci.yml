@@ -47,7 +47,14 @@ jobs:
 
       - name: Install ripgrep (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
+        run: |
+          if command -v rg >/dev/null 2>&1; then
+            rg --version
+            exit 0
+          fi
+          sudo timeout 120s apt-get update -qq
+          sudo timeout 120s apt-get install -y -qq ripgrep
+          rg --version
 
       - name: Install ripgrep (Windows)
         if: runner.os == 'Windows'
