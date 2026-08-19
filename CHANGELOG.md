@@ -14,6 +14,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Added sandbox-preflighted transformer reloads that atomically switch source for new calls while preserving the active tool and old source on validation failure.
 - Added a user-scoped, append-only self-evolution evidence corpus for explicit feedback and whitelisted structured Reviewer verdicts, without any automatic mutation path.
 - Added deterministic self-evolution dataset curation with secret/path redaction, content deduplication, rule-versioned failure clusters, stable fingerprints, and reversible user-scoped exclusions.
+- Added no-tool self-evolution candidate generation that stores inert, user-scoped prompt/plugin/config proposals with curated provenance and no apply or install path.
 
 ## [0.11.31] - 2026-08-20
 

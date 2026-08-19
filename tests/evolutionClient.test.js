@@ -2,7 +2,10 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  generateEvolutionCandidateApi,
+  getEvolutionCandidateApi,
   getEvolutionDatasetApi,
+  listEvolutionCandidatesApi,
   listEvolutionEvidenceApi,
   listEvolutionExclusionsApi,
   recordChatFeedback,
@@ -72,6 +75,46 @@ test('evolution client reads curated datasets and manages reversible exclusions'
       excluded: true,
       reason: 'duplicate',
     })
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('evolution client generates and reads inert candidates without an apply client', async () => {
+  const originalFetch = globalThis.fetch
+  const requests = []
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url, init })
+    const body = url === '/api/evolution/candidates/generate'
+      ? { ok: true, candidate: { id: 'candidate-1', state: 'proposed' } }
+      : url === '/api/evolution/candidates?limit=10'
+        ? { ok: true, schemaVersion: 1, candidates: [] }
+        : { ok: true, candidate: { id: 'candidate-1', content: 'proposal' } }
+    return new Response(JSON.stringify(body), {
+      status: url === '/api/evolution/candidates/generate' ? 201 : 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+
+  try {
+    const input = {
+      kind: 'prompt',
+      target: 'prompt:system',
+      objective: 'Improve verification',
+      datasetFingerprint: 'a'.repeat(64),
+      sourceRecordIds: ['record:1234567890abcdef12345678'],
+    }
+    const generated = await generateEvolutionCandidateApi(input)
+    const listed = await listEvolutionCandidatesApi({ limit: 10 })
+    const detail = await getEvolutionCandidateApi('candidate/1')
+    assert.equal(generated.candidate.state, 'proposed')
+    assert.deepEqual(listed.candidates, [])
+    assert.equal(detail.candidate.content, 'proposal')
+    assert.equal(requests[0].url, '/api/evolution/candidates/generate')
+    assert.equal(requests[0].init.method, 'POST')
+    assert.deepEqual(JSON.parse(requests[0].init.body), input)
+    assert.equal(requests[1].url, '/api/evolution/candidates?limit=10')
+    assert.equal(requests[2].url, '/api/evolution/candidates/candidate%2F1')
   } finally {
     globalThis.fetch = originalFetch
   }
