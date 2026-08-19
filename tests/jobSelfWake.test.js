@@ -7,7 +7,7 @@ process.env.APP_DATA_DIR = path.join(os.tmpdir(), 'yma-job-self-wake-tests', Str
 process.env.APPROVAL_MODE = 'off'
 
 const { createDefaultExecuteStep, JobRuntime } = await import('../server/services/jobRuntime.js')
-const { getJobWake } = await import('../server/services/jobWakeStore.js')
+const { getJobWake, scheduleJobWake } = await import('../server/services/jobWakeStore.js')
 const { sleepUntilTool } = await import('../server/utils/agenticTools.js')
 const { issueTestSession } = await import('./helpers/testAuth.js')
 
@@ -32,10 +32,6 @@ function sleepCall(wakeAt) {
   }
 }
 
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
 test('sleep_until validates future times and produces a loop pause', () => {
   const now = Date.now()
   const result = sleepUntilTool({ wake_at: new Date(now + 60_000).toISOString(), reason: 'follow up' }, { now })
@@ -49,9 +45,10 @@ test('sleep_until validates future times and produces a loop pause', () => {
 test('a sleeping job survives runtime reconstruction and resumes the same checkpoint at wake time', async () => {
   let modelCalls = 0
   let resumedMessages = null
-  // Keep the wake comfortably beyond the first drain even when the full test
-  // suite is saturating Windows workers; 80ms made the pre-wake assertion race.
-  const wakeAt = Date.now() + 1_000
+  // Keep the initial wake far enough in the future that a saturated CI worker
+  // cannot consume it during the first drain. The test explicitly reschedules
+  // the durable wake below, so it never depends on wall-clock sleeping.
+  const wakeAt = Date.now() + 60_000
   const executeStep = createDefaultExecuteStep({
     runModelWithTools: async ({ messages }) => {
       modelCalls += 1
@@ -67,11 +64,19 @@ test('a sleeping job survives runtime reconstruction and resumes the same checkp
   const sleeping = firstRuntime.getJob(created.id, { userId })
   assert.equal(sleeping.status, 'waiting')
   assert.ok(sleeping.events.some((event) => event.type === 'sleeping'))
-  assert.equal(getJobWake({ jobId: created.id, userId }).status, 'scheduled')
+  const scheduledWake = getJobWake({ jobId: created.id, userId })
+  assert.equal(scheduledWake.status, 'scheduled')
+
+  scheduleJobWake({
+    jobId: created.id,
+    stepId: scheduledWake.stepId,
+    userId,
+    wakeAt: Date.now() - 1,
+    reason: scheduledWake.reason,
+  })
 
   // A new runtime instance represents a process restart: only SQLite state is shared.
   const secondRuntime = new JobRuntime({ planner: oneStepPlanner, executeStep })
-  await delay(1_100)
   await secondRuntime.drain()
 
   const completed = secondRuntime.getJob(created.id, { userId })

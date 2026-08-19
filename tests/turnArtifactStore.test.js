@@ -7,6 +7,8 @@ import test from 'node:test'
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yma-turn-artifacts-'))
 process.env.APP_DATA_DIR = tempDir
 process.env.ARTIFACT_DIR = path.join(tempDir, 'artifacts')
+process.env.YMA_TEST_DATA_ROOT = tempDir
+process.env.YMA_TEST_DEFAULT_OUTPUT_DIR = path.join(tempDir, 'output')
 
 const { closeDb, createUser } = await import('../server/db.js')
 const { TurnEngine } = await import('../server/services/TurnEngine.js')
@@ -57,6 +59,7 @@ test('chat TurnEngine persists generated files without a jobs-table foreign key'
   assert.equal(artifacts[0].type, 'docx')
   assert.equal(getTurnArtifactByFilename(artifacts[0].filename).userId, 'artifact-user')
   assert.deepEqual(listTurnArtifacts({ userId: 'other-user', sessionId: 'artifact-session', turnId: 'artifact-turn' }), [])
+  assert.equal(fs.existsSync(path.join(process.env.YMA_TEST_DEFAULT_OUTPUT_DIR, artifacts[0].filename)), true)
   const assistant = getSessionSnapshot({ userId: 'artifact-user', sessionId: 'artifact-session' })
     .messages.find((message) => message.id === 'artifact-turn:assistant')
   assert.deepEqual(assistant.artifacts.map(({ id, filename, type, url }) => ({ id, filename, type, url })), [{

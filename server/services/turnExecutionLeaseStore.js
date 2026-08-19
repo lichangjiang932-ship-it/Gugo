@@ -1,6 +1,10 @@
 import { getDb } from '../db.js'
 
-export const DEFAULT_TURN_EXECUTION_LEASE_MS = 30_000
+// A turn can briefly monopolize the event loop while packaging a large local
+// artifact. Keep enough expiry headroom for a saturated Windows host; the
+// heartbeat still renews every third of this window and explicit test/runtime
+// overrides can use shorter leases when fast takeover is required.
+export const DEFAULT_TURN_EXECUTION_LEASE_MS = 120_000
 
 function normalizedDuration(leaseMs) {
   return Math.max(1_000, Number(leaseMs) || DEFAULT_TURN_EXECUTION_LEASE_MS)
