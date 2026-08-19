@@ -5,7 +5,10 @@ import '../src/plugins/firstPartyUiContributions.js'
 import { resolveSettingsSectionFromSearch, settingsPathForSection } from '../src/lib/settingsNavigation.js'
 import {
   UI_CONTRIBUTION_SLOTS,
+  getUiPlugin,
   listUiContributions,
+  listUiPlugins,
+  registerTrustedUiPlugin,
   registerUiContributions,
   unregisterUiPlugin,
 } from '../src/plugins/uiContributionRegistry.js'
@@ -20,6 +23,80 @@ test('first-party pages use the shared UI route contribution seam', () => {
   const menu = listUiContributions('account-menu').find((entry) => entry.id === 'mcp-account-menu')
   assert.equal(menu.path, '/mcp')
   assert.equal(menu.labelKey, 'nav.mcp')
+
+  const plugin = getUiPlugin('gugo-first-party')
+  assert.equal(plugin.state, 'active')
+  assert.deepEqual(plugin.contributes, [
+    'ui:route:mcp-route',
+    'ui:route:reasonix-route',
+    'ui:account-menu:mcp-account-menu',
+  ])
+  assert.equal(listUiPlugins().some((entry) => entry.id === 'gugo-first-party'), true)
+})
+
+test('trusted UI plugins bind shared manifests, dependencies, and disposal', () => {
+  const disposeBase = registerTrustedUiPlugin({
+    id: 'test-ui-base',
+    name: 'Test UI base',
+    version: '1.0.0',
+    contributes: ['ui:conversation-node:base-node'],
+  }, [
+    { id: 'base-node', slot: 'conversation-node', component: EmptyContribution },
+  ])
+  const disposeDependent = registerTrustedUiPlugin({
+    id: 'test-ui-dependent',
+    name: 'Test UI dependent',
+    version: '1.0.0',
+    requires: ['test-ui-base'],
+    contributes: ['ui:conversation-node:dependent-node'],
+  }, [
+    { id: 'dependent-node', slot: 'conversation-node', component: EmptyContribution },
+  ])
+
+  try {
+    const snapshot = getUiPlugin('test-ui-dependent')
+    assert.equal(snapshot.state, 'active')
+    assert.deepEqual(snapshot.requires, ['test-ui-base'])
+    assert.equal(Object.isFrozen(snapshot), true)
+    assert.equal(Object.isFrozen(snapshot.requires), true)
+    assert.throws(() => disposeBase(), /required by active plugins: test-ui-dependent/)
+  } finally {
+    assert.equal(disposeDependent(), true)
+    assert.equal(disposeDependent(), false)
+    assert.equal(disposeBase(), true)
+  }
+  assert.equal(getUiPlugin('test-ui-base'), null)
+  assert.equal(getUiPlugin('test-ui-dependent'), null)
+})
+
+test('trusted UI plugin registration fails atomically on missing dependencies or manifest drift', () => {
+  const countBefore = listUiContributions('conversation-node').length
+  assert.throws(
+    () => registerTrustedUiPlugin({
+      id: 'test-ui-missing-dependency',
+      name: 'Missing dependency',
+      version: '1.0.0',
+      requires: ['not-installed'],
+      contributes: ['ui:conversation-node:node'],
+    }, [
+      { id: 'node', slot: 'conversation-node', component: EmptyContribution },
+    ]),
+    /dependencies are not active: not-installed/,
+  )
+  assert.throws(
+    () => registerTrustedUiPlugin({
+      id: 'test-ui-manifest-drift',
+      name: 'Manifest drift',
+      version: '1.0.0',
+      contributes: ['ui:conversation-node:different-node'],
+    }, [
+      { id: 'node', slot: 'conversation-node', component: EmptyContribution },
+    ]),
+    /must exactly match/,
+  )
+  assert.equal(listUiContributions('conversation-node').length, countBefore)
+  assert.equal(getUiPlugin('test-ui-missing-dependency'), null)
+  assert.equal(getUiPlugin('test-ui-manifest-drift'), null)
 })
 
 test('UI contributions register atomically, sort deterministically, and dispose cleanly', () => {

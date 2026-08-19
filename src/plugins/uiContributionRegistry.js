@@ -1,4 +1,5 @@
 import { Component as ReactComponent, Fragment, createElement, useSyncExternalStore } from 'react'
+import { normalizePluginManifest } from '../../shared/pluginManifest.js'
 
 export const UI_CONTRIBUTION_SLOTS = Object.freeze([
   'route',
@@ -22,6 +23,7 @@ const RESERVED_WORKBENCH_TABS = new Set(['files', 'chat', 'browser', 'terminal']
 const contributionsBySlot = new Map(UI_CONTRIBUTION_SLOTS.map((slot) => [slot, new Map()]))
 const snapshots = new Map(UI_CONTRIBUTION_SLOTS.map((slot) => [slot, Object.freeze([])]))
 const listeners = new Set()
+const uiPlugins = new Map()
 
 function boundedIdentifier(value, label) {
   const text = typeof value === 'string' ? value.trim() : ''
@@ -87,6 +89,9 @@ function refreshSnapshots(changedSlots) {
 
 export function registerUiContributions(pluginIdValue, inputs) {
   const pluginId = boundedIdentifier(pluginIdValue, 'UI plugin id')
+  if (uiPlugins.has(pluginId)) {
+    throw new Error(`UI plugin contributions are lifecycle-managed: ${pluginId}`)
+  }
   if (!Array.isArray(inputs) || inputs.length === 0 || inputs.length > 100) {
     throw new TypeError('UI contributions must contain between 1 and 100 entries')
   }
@@ -124,8 +129,82 @@ export function registerUiContributions(pluginIdValue, inputs) {
   }
 }
 
+function uiPluginSnapshot(record) {
+  if (!record) return null
+  return Object.freeze({
+    ...record.manifest,
+    requires: Object.freeze([...record.manifest.requires]),
+    contributes: Object.freeze([...record.manifest.contributes]),
+    state: record.state,
+    installedAt: record.installedAt,
+  })
+}
+
+export function registerTrustedUiPlugin(manifest, inputs) {
+  const normalizedManifest = normalizePluginManifest(manifest)
+  if (uiPlugins.has(normalizedManifest.id)) {
+    throw new Error(`UI plugin already registered: ${normalizedManifest.id}`)
+  }
+  const missing = normalizedManifest.requires.filter((id) => uiPlugins.get(id)?.state !== 'active')
+  if (missing.length > 0) {
+    throw new Error(`UI plugin dependencies are not active: ${missing.join(', ')}`)
+  }
+  if (!Array.isArray(inputs) || inputs.length === 0 || inputs.length > 100) {
+    throw new TypeError('UI contributions must contain between 1 and 100 entries')
+  }
+  const normalizedContributions = inputs.map((input) => normalizeContribution(normalizedManifest.id, input))
+  const actualDeclarations = normalizedContributions.map((contribution) => (
+    `ui:${contribution.slot}:${contribution.id}`
+  ))
+  const declared = new Set(normalizedManifest.contributes)
+  const declaredUi = normalizedManifest.contributes.filter((entry) => entry.startsWith('ui:'))
+  if (declaredUi.length !== actualDeclarations.length
+    || actualDeclarations.some((entry) => !declared.has(entry))) {
+    throw new TypeError('UI plugin manifest contributions must exactly match registered UI contributions')
+  }
+
+  const disposeContributions = registerUiContributions(normalizedManifest.id, inputs)
+  const record = {
+    manifest: normalizedManifest,
+    state: 'active',
+    installedAt: new Date().toISOString(),
+    disposeContributions,
+  }
+  uiPlugins.set(normalizedManifest.id, record)
+  let disposed = false
+  return () => {
+    if (disposed) return false
+    const removed = unregisterUiPlugin(normalizedManifest.id)
+    if (removed) disposed = true
+    return removed
+  }
+}
+
+export function listUiPlugins() {
+  return [...uiPlugins.values()]
+    .map(uiPluginSnapshot)
+    .sort((left, right) => left.id.localeCompare(right.id))
+}
+
+export function getUiPlugin(pluginIdValue) {
+  const pluginId = String(pluginIdValue || '').trim()
+  return uiPluginSnapshot(uiPlugins.get(pluginId))
+}
+
 export function unregisterUiPlugin(pluginIdValue) {
   const pluginId = boundedIdentifier(pluginIdValue, 'UI plugin id')
+  const record = uiPlugins.get(pluginId)
+  if (record) {
+    const dependents = [...uiPlugins.values()]
+      .filter((candidate) => candidate !== record && candidate.manifest.requires.includes(pluginId))
+      .map((candidate) => candidate.manifest.id)
+    if (dependents.length > 0) {
+      throw new Error(`UI plugin is required by active plugins: ${dependents.join(', ')}`)
+    }
+    uiPlugins.delete(pluginId)
+    return record.disposeContributions()
+  }
+
   const changedSlots = new Set()
   for (const [slot, entries] of contributionsBySlot) {
     for (const [key, contribution] of entries) {
