@@ -12,6 +12,7 @@ delete process.env.CREDENTIAL_ENCRYPTION_KEY
 
 const {
   credentialKeyPath,
+  hardenCredentialKeyFile,
   isCredentialEnvelope,
   openCredentialObject,
   sealCredentialObject,
@@ -37,6 +38,108 @@ const {
 test.after(() => {
   closeDb()
   fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test('Windows credential key ACL is replaced atomically for only the current user without a shell', () => {
+  const calls = []
+  const result = hardenCredentialKeyFile('C:\\Users\\Alice Example\\.credentials.key', {
+    platform: 'win32',
+    env: { USERDOMAIN: 'WORKSTATION', USERNAME: 'Alice' },
+    userInfo: () => ({ username: 'Alice' }),
+    spawn(command, args, options) {
+      calls.push({ command, args, options })
+      return { status: 0, stdout: '', stderr: '' }
+    },
+  })
+
+  assert.deepEqual(result, { ok: true, method: 'powershell-acl', code: null })
+  assert.equal(calls.length, 1)
+  const [{ command, args, options }] = calls
+  assert.match(command, /[\\/]System32[\\/]WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$/i)
+  assert.deepEqual(args.slice(0, -1), ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand'])
+  const script = Buffer.from(args.at(-1), 'base64').toString('utf16le')
+  assert.match(script, /\[System\.IO\.File\]::GetAccessControl/)
+  assert.match(script, /SetAccessRuleProtection\(\$true, \$false\)/)
+  assert.match(script, /RemoveAccessRuleSpecific/)
+  assert.match(script, /\[System\.IO\.File\]::SetAccessControl\(\$target, \$acl\)/)
+  assert.equal((script.match(/::SetAccessControl/g) || []).length, 1)
+  assert.doesNotMatch(script, /Alice Example|WORKSTATION\\Alice/)
+  assert.equal(options.encoding, 'utf8')
+  assert.equal(options.shell, false)
+  assert.equal(options.windowsHide, true)
+  assert.equal(options.env.GUGO_CREDENTIAL_ACL_TARGET, 'C:\\Users\\Alice Example\\.credentials.key')
+  assert.equal(options.env.GUGO_CREDENTIAL_ACL_ACCOUNT, 'WORKSTATION\\Alice')
+})
+
+test('Windows credential ACL keeps Unicode and metacharacters inside argument boundaries', () => {
+  const calls = []
+  const result = hardenCredentialKeyFile('C:\\凭据 & secrets\\.credentials.key', {
+    platform: 'win32',
+    env: { USERDOMAIN: '域 & admin', USERNAME: 'ignored' },
+    userInfo: () => ({ username: '用户;name' }),
+    spawn(command, args, options) {
+      calls.push({ command, args, options })
+      return { status: 0, stdout: '', stderr: '' }
+    },
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].options.env.GUGO_CREDENTIAL_ACL_TARGET, 'C:\\凭据 & secrets\\.credentials.key')
+  assert.equal(calls[0].options.env.GUGO_CREDENTIAL_ACL_ACCOUNT, '域 & admin\\用户;name')
+  assert.equal(calls[0].options.shell, false)
+  const script = Buffer.from(calls[0].args.at(-1), 'base64').toString('utf16le')
+  assert.doesNotMatch(script, /凭据|域 & admin|用户;name/)
+})
+
+test('atomic Windows ACL failures do not trigger a second mutation or throw during startup hardening', () => {
+  const unavailableCalls = []
+  assert.deepEqual(hardenCredentialKeyFile('C:\\vault\\.credentials.key', {
+    platform: 'win32',
+    env: { USERNAME: 'Alice' },
+    userInfo: () => ({ username: 'Alice' }),
+    spawn(...args) {
+      unavailableCalls.push(args)
+      return {
+        status: null,
+        error: Object.assign(new Error('PowerShell unavailable'), { code: 'ENOENT' }),
+      }
+    },
+  }), {
+    ok: false,
+    method: 'powershell-acl',
+    code: 'ENOENT',
+  })
+  assert.equal(unavailableCalls.length, 1)
+
+  const deniedCalls = []
+  assert.deepEqual(hardenCredentialKeyFile('C:\\vault\\.credentials.key', {
+    platform: 'win32',
+    env: { USERNAME: 'Alice' },
+    userInfo: () => ({ username: 'Alice' }),
+    spawn(...args) {
+      deniedCalls.push(args)
+      return { status: 5, stdout: '', stderr: 'Access is denied.' }
+    },
+  }), {
+    ok: false,
+    method: 'powershell-acl',
+    code: 'POWERSHELL_ACL_EXIT_5',
+  })
+  assert.equal(deniedCalls.length, 1)
+})
+
+test('non-Windows credential key permissions remain chmod 0600', () => {
+  const calls = []
+  assert.deepEqual(hardenCredentialKeyFile('/tmp/.credentials.key', {
+    platform: 'linux',
+    chmod(target, mode) { calls.push({ target, mode }) },
+  }), {
+    ok: true,
+    method: 'chmod',
+    code: null,
+  })
+  assert.deepEqual(calls, [{ target: '/tmp/.credentials.key', mode: 0o600 }])
 })
 
 test('AES-GCM envelope round-trips and rejects tampering or purpose swapping', () => {

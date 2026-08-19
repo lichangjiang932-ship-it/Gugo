@@ -65,6 +65,7 @@ test('Release workflow is gated by reusable CI and reruns update existing releas
   assert.match(ci, /npm run audit:prod/)
   assert.match(ci, /gitleaks\/gitleaks-action/)
   assert.match(ci, /docker build --tag gugo:ci/)
+  assert.match(release, /Windows differential update blockmap was not generated/)
   assert.match(release, /uses:\s*\.\/\.github\/workflows\/ci\.yml/)
   assert.match(release, /needs:\s*ci/)
   assert.match(release, /npm run desktop:check/)

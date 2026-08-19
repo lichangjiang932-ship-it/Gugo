@@ -1,11 +1,42 @@
 import crypto from 'node:crypto'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
+
+import { logger } from './logger.js'
 
 const VAULT_VERSION = 1
 const VAULT_MARKER = '__yma_credential_vault'
 const KEY_BYTES = 32
 const keyCache = new Map()
+const WINDOWS_ACL_TARGET_ENV = 'GUGO_CREDENTIAL_ACL_TARGET'
+const WINDOWS_ACL_ACCOUNT_ENV = 'GUGO_CREDENTIAL_ACL_ACCOUNT'
+const WINDOWS_ACL_SCRIPT = `
+$ErrorActionPreference = 'Stop'
+$target = [Environment]::GetEnvironmentVariable('${WINDOWS_ACL_TARGET_ENV}', 'Process')
+$account = [Environment]::GetEnvironmentVariable('${WINDOWS_ACL_ACCOUNT_ENV}', 'Process')
+if ([String]::IsNullOrWhiteSpace($target) -or [String]::IsNullOrWhiteSpace($account)) {
+  throw 'Credential ACL target and account are required'
+}
+$acl = [System.IO.File]::GetAccessControl(
+  $target,
+  [System.Security.AccessControl.AccessControlSections]::Access
+)
+$acl.SetAccessRuleProtection($true, $false)
+foreach ($existingRule in @($acl.Access)) {
+  [void]$acl.RemoveAccessRuleSpecific($existingRule)
+}
+$rights = [System.Security.AccessControl.FileSystemRights]::Read -bor [System.Security.AccessControl.FileSystemRights]::Write
+$rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+  $account,
+  $rights,
+  [System.Security.AccessControl.AccessControlType]::Allow
+)
+[void]$acl.AddAccessRule($rule)
+[System.IO.File]::SetAccessControl($target, $acl)
+`.trim()
+const WINDOWS_ACL_ENCODED_SCRIPT = Buffer.from(WINDOWS_ACL_SCRIPT, 'utf16le').toString('base64')
 
 function vaultError(message, code = 'CREDENTIAL_VAULT_ERROR', cause) {
   const error = new Error(message, cause ? { cause } : undefined)
@@ -51,6 +82,104 @@ function readKeyFile(keyPath) {
   }
 }
 
+function windowsAccount(env, userInfo) {
+  const username = String(userInfo()?.username || env.USERNAME || '').trim()
+  if (!username) return ''
+  if (username.includes('\\') || username.includes('@')) return username
+  const domain = String(env.USERDOMAIN || '').trim()
+  return domain ? `${domain}\\${username}` : username
+}
+
+function windowsPowerShellPath() {
+  const systemRoot = String(process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows').trim()
+  return path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+}
+
+/**
+ * Restrict the credential key to the current user without making vault startup
+ * depend on host ACL tooling. Windows mode bits do not enforce a private ACL.
+ * Build a replacement DACL in memory and commit it once so failures cannot
+ * leave the key in an intermediate, more permissive state.
+ */
+export function hardenCredentialKeyFile(keyPath, {
+  platform = process.platform,
+  env = process.env,
+  spawn = spawnSync,
+  chmod = fs.chmodSync,
+  userInfo = () => os.userInfo(),
+  powershellPath = windowsPowerShellPath(),
+} = {}) {
+  const target = String(keyPath || '').trim()
+  if (!target) return { ok: false, method: null, code: 'KEY_PATH_REQUIRED' }
+
+  if (platform !== 'win32') {
+    try {
+      chmod(target, 0o600)
+      return { ok: true, method: 'chmod', code: null }
+    } catch (error) {
+      return {
+        ok: false,
+        method: 'chmod',
+        code: error?.code || 'CHMOD_FAILED',
+      }
+    }
+  }
+
+  let account
+  try {
+    account = windowsAccount(env, userInfo)
+  } catch (error) {
+    return {
+      ok: false,
+      method: 'powershell-acl',
+      code: error?.code || 'WINDOWS_ACCOUNT_UNAVAILABLE',
+    }
+  }
+  if (!account) {
+    return { ok: false, method: 'powershell-acl', code: 'WINDOWS_ACCOUNT_UNAVAILABLE' }
+  }
+
+  try {
+    const result = spawn(powershellPath, [
+      '-NoLogo',
+      '-NoProfile',
+      '-NonInteractive',
+      '-EncodedCommand',
+      WINDOWS_ACL_ENCODED_SCRIPT,
+    ], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        [WINDOWS_ACL_TARGET_ENV]: target,
+        [WINDOWS_ACL_ACCOUNT_ENV]: account,
+      },
+      shell: false,
+      windowsHide: true,
+    })
+    if (result?.error) {
+      return {
+        ok: false,
+        method: 'powershell-acl',
+        code: result.error.code || 'POWERSHELL_ACL_FAILED',
+      }
+    }
+    if (result?.status !== 0) {
+      return {
+        ok: false,
+        method: 'powershell-acl',
+        code: `POWERSHELL_ACL_EXIT_${Number.isInteger(result?.status) ? result.status : 'UNKNOWN'}`,
+      }
+    }
+    return { ok: true, method: 'powershell-acl', code: null }
+  } catch (error) {
+    return {
+      ok: false,
+      method: 'powershell-acl',
+      code: error?.code || 'POWERSHELL_ACL_FAILED',
+    }
+  }
+}
+
 function loadVaultKey(env = process.env) {
   const configured = String(env.CREDENTIAL_ENCRYPTION_KEY || '').trim()
   if (configured) {
@@ -73,8 +202,15 @@ function loadVaultKey(env = process.env) {
       }
     }
   }
-  if (process.platform !== 'win32') {
-    try { fs.chmodSync(keyPath, 0o600) } catch { /* read remains the authority */ }
+  const permissionResult = hardenCredentialKeyFile(keyPath, { env })
+  if (!permissionResult.ok) {
+    // ACL tooling can be unavailable under managed Windows policies or minimal
+    // service environments. Preserve existing startup behavior, but make the
+    // privacy degradation visible instead of silently claiming a private key.
+    logger.warn(
+      '[credential-vault] unable to enforce private key permissions; continuing for compatibility',
+      permissionResult.code,
+    )
   }
   const key = readKeyFile(keyPath)
   keyCache.set(cacheId, key)
