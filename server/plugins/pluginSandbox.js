@@ -17,7 +17,7 @@ function truncateError(err) {
 }
 
 try {
-  const { source, input, capabilities } = workerData
+  const { source, input, capabilities, validateOnly } = workerData
   const context = vm.createContext({})
   vm.runInContext(
     "globalThis.module = Object.create(null); globalThis.module.exports = undefined; globalThis.exports = Object.create(null); Object.defineProperty(globalThis, 'console', { value: undefined, writable: false, configurable: true });",
@@ -36,9 +36,13 @@ try {
   if (typeof transform !== 'function') {
     throw new Error('transform must be a function')
   }
-  const output = transform(input)
-  JSON.stringify(output)
-  parentPort.postMessage({ ok: true, output })
+  if (validateOnly) {
+    parentPort.postMessage({ ok: true })
+  } else {
+    const output = transform(input)
+    JSON.stringify(output)
+    parentPort.postMessage({ ok: true, output })
+  }
 } catch (err) {
   parentPort.postMessage({ ok: false, error: truncateError(err) })
 }
@@ -58,20 +62,10 @@ function isMemoryLimitError(err) {
   return msg.includes('memory') || msg.includes('heap') || msg.includes('out of memory')
 }
 
-/**
- * Run a transformer plugin in a worker thread and a vm context.
- *
- * @param {object} args
- * @param {object} args.plugin Plugin registry object. Uses plugin.source when present, otherwise plugin.entryPath.
- * @param {unknown} args.input JSON-serializable input passed to transform(input).
- * @param {number} [args.timeoutMs]
- * @param {number} [args.memoryLimitMb]
- * @param {string[]} [args.capabilities]
- * @returns {Promise<{ ok: true, output: unknown, durationMs: number } | { ok: false, error: string, timedOut?: boolean, durationMs: number }>}
- */
-export async function runTransformer({
+async function runTransformerWorker({
   plugin,
   input,
+  validateOnly = false,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   memoryLimitMb = DEFAULT_MEMORY_LIMIT_MB,
   capabilities = [],
@@ -90,7 +84,7 @@ export async function runTransformer({
     let terminatingForTimeout = false
     const worker = new Worker(WORKER_SOURCE, {
       eval: true,
-      workerData: { source, input, capabilities: allowedCapabilities },
+      workerData: { source, input, capabilities: allowedCapabilities, validateOnly },
       resourceLimits: { maxOldGenerationSizeMb: memoryLimitMb },
     })
 
@@ -110,7 +104,7 @@ export async function runTransformer({
     worker.once('message', (message) => {
       worker.terminate().catch(() => {})
       if (message && message.ok === true) {
-        settle({ ok: true, output: message.output })
+        settle(validateOnly ? { ok: true } : { ok: true, output: message.output })
         return
       }
       settle({ ok: false, error: String(message?.error || 'plugin_error').slice(0, ERROR_LIMIT) })
@@ -126,4 +120,14 @@ export async function runTransformer({
       settle({ ok: false, error: 'memory_limit' })
     })
   })
+}
+
+/** Run a transformer plugin in a worker thread and a vm context. */
+export function runTransformer(options) {
+  return runTransformerWorker(options)
+}
+
+/** Validate transformer loading in the sandbox without invoking transform(input). */
+export function validateTransformer(options) {
+  return runTransformerWorker({ ...options, validateOnly: true })
 }

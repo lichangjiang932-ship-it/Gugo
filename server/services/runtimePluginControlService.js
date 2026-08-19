@@ -10,7 +10,7 @@ import {
   registerPlugin,
   unregisterPlugin,
 } from '../plugins/pluginRegistry.js'
-import { runTransformer } from '../plugins/pluginSandbox.js'
+import { runTransformer, validateTransformer } from '../plugins/pluginSandbox.js'
 import {
   getRuntimePluginState,
   listRuntimePluginStates,
@@ -21,6 +21,7 @@ import {
 const MAX_TRANSFORMER_SOURCE_BYTES = 512 * 1024
 const MAX_TRANSFORMER_INPUT_BYTES = 64 * 1024
 const operations = new Map()
+const activeTransformerSources = new Map()
 
 function serviceError(code, message, statusCode) {
   const error = new Error(message)
@@ -123,29 +124,56 @@ async function activateTransformer(plugin) {
   }
 
   const source = await readTransformerSource(plugin)
+  const validation = await validateTransformer({
+    plugin: { source },
+    capabilities: plugin.capabilities || [],
+  })
+  if (!validation.ok) {
+    throw serviceError(
+      'PLUGIN_ACTIVATION_VALIDATION_FAILED',
+      `插件源码预检失败：${String(validation.error || 'plugin_error').slice(0, 500)}`,
+      400,
+    )
+  }
+  const sourceRef = { source }
   const toolName = runtimeTransformerToolName(plugin.id)
-  return registerPlugin({
-    id: plugin.id,
-    name: plugin.name,
-    version: plugin.version,
-    contributes: [`tool:${toolName}`],
-  }, (context) => context.tools.register({
-    name: toolName,
-    spec: transformerToolSpec(plugin, toolName),
-    exec: async (args = {}) => {
-      if (!Object.hasOwn(args, 'input')) {
-        return { ok: false, code: 'PLUGIN_INPUT_REQUIRED', error: 'input is required' }
-      }
-      if (serializedInputSize(args.input) > MAX_TRANSFORMER_INPUT_BYTES) {
-        return { ok: false, code: 'PLUGIN_INPUT_TOO_LARGE', error: 'input exceeds 64KB' }
-      }
-      return runTransformer({
-        plugin: { source },
-        input: args.input,
-        capabilities: plugin.capabilities || [],
+  activeTransformerSources.set(plugin.id, sourceRef)
+  try {
+    return await registerPlugin({
+      id: plugin.id,
+      name: plugin.name,
+      version: plugin.version,
+      contributes: [`tool:${toolName}`],
+    }, (context) => {
+      context.lifecycle.onDispose(() => {
+        if (activeTransformerSources.get(plugin.id) === sourceRef) {
+          activeTransformerSources.delete(plugin.id)
+        }
       })
-    },
-  }))
+      context.tools.register({
+        name: toolName,
+        spec: transformerToolSpec(plugin, toolName),
+        exec: async (args = {}) => {
+          if (!Object.hasOwn(args, 'input')) {
+            return { ok: false, code: 'PLUGIN_INPUT_REQUIRED', error: 'input is required' }
+          }
+          if (serializedInputSize(args.input) > MAX_TRANSFORMER_INPUT_BYTES) {
+            return { ok: false, code: 'PLUGIN_INPUT_TOO_LARGE', error: 'input exceeds 64KB' }
+          }
+          return runTransformer({
+            plugin: { source: sourceRef.source },
+            input: args.input,
+            capabilities: plugin.capabilities || [],
+          })
+        },
+      })
+    })
+  } catch (error) {
+    if (activeTransformerSources.get(plugin.id) === sourceRef) {
+      activeTransformerSources.delete(plugin.id)
+    }
+    throw error
+  }
 }
 
 function runtimeManifestView({ plugin, runtime }) {
@@ -221,6 +249,38 @@ export function enableRuntimePlugin(pluginId) {
     setRuntimePluginState({ pluginId: id, enabled: true })
     try {
       await activateTransformer(plugin)
+      const state = setRuntimePluginState({ pluginId: id, enabled: true })
+      return inventoryEntry(plugin, state)
+    } catch (error) {
+      recordRuntimePluginError({ pluginId: id, error: safeErrorSummary(error) })
+      throw error
+    }
+  })
+}
+
+export function reloadRuntimePlugin(pluginId) {
+  const id = String(pluginId || '').trim()
+  return serializePluginOperation(id, async () => {
+    const plugin = requireTransformerPlugin(id)
+    const runtime = getRuntimePlugin(id)
+    const sourceRef = activeTransformerSources.get(id)
+    if (runtime?.state !== 'active' || !sourceRef) {
+      throw serviceError('PLUGIN_RUNTIME_NOT_ACTIVE', '插件尚未激活，无法重新加载', 409)
+    }
+    try {
+      const source = await readTransformerSource(plugin)
+      const validation = await validateTransformer({
+        plugin: { source },
+        capabilities: plugin.capabilities || [],
+      })
+      if (!validation.ok) {
+        throw serviceError(
+          'PLUGIN_RELOAD_VALIDATION_FAILED',
+          `插件源码预检失败：${String(validation.error || 'plugin_error').slice(0, 500)}`,
+          400,
+        )
+      }
+      sourceRef.source = source
       const state = setRuntimePluginState({ pluginId: id, enabled: true })
       return inventoryEntry(plugin, state)
     } catch (error) {

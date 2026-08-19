@@ -11,6 +11,7 @@ follow [Semantic Versioning](https://semver.org/).
 - Added a shared immutable plugin manifest envelope for runtime and trusted build-time UI plugins, with exact UI contribution declarations and dependency-aware unload protection.
 - Enforced runtime plugin contribution declarations as a fail-closed permission boundary for tools, loop events, services, and model providers.
 - Added a local-owner-only, versioned runtime plugin inventory exposing pure JSON manifests and lifecycle metadata across the server/renderer boundary.
+- Added sandbox-preflighted transformer reloads that atomically switch source for new calls while preserving the active tool and old source on validation failure.
 
 ## [0.11.31] - 2026-08-20
 

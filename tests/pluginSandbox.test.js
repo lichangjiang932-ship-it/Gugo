@@ -3,13 +3,27 @@ import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 
-import { runTransformer } from '../server/plugins/pluginSandbox.js'
+import { runTransformer, validateTransformer } from '../server/plugins/pluginSandbox.js'
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
 const examplePlugin = {
   id: 'example-transformer-upper',
   entryPath: path.join(repoRoot, 'plugins/example-transformer-upper/entry.js'),
 }
+
+test('validateTransformer: validates loading without invoking transform', async () => {
+  const valid = await validateTransformer({
+    plugin: { source: "function transform() { throw new Error('must not run') }" },
+  })
+  assert.equal(valid.ok, true)
+  assert.equal(Object.hasOwn(valid, 'output'), false)
+
+  const invalid = await validateTransformer({
+    plugin: { source: 'function transform( {' },
+  })
+  assert.equal(invalid.ok, false)
+  assert.match(invalid.error, /Unexpected|SyntaxError|token/i)
+})
 
 test('runTransformer: 基本调用 string input 转大写', async () => {
   const result = await runTransformer({
