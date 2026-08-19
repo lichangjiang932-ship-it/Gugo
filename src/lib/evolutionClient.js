@@ -59,3 +59,40 @@ export async function getEvolutionCandidateApi(id) {
   })
   return jsonOk(resp)
 }
+
+export async function createEvolutionReplaySuiteApi(input) {
+  const resp = await fetch('/api/evolution/replay-suites', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(input || {}),
+  })
+  return jsonOk(resp)
+}
+
+export async function listEvolutionReplaySuitesApi({ limit = 50 } = {}) {
+  const query = new URLSearchParams({ limit: String(limit) })
+  const resp = await fetch(`/api/evolution/replay-suites?${query}`, { headers: authHeaders() })
+  return jsonOk(resp)
+}
+
+export async function runEvolutionReplayApi(input) {
+  const resp = await fetch('/api/evolution/replays/run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(input || {}),
+  })
+  return jsonOk(resp)
+}
+
+export async function listEvolutionReplayRunsApi({ limit = 50 } = {}) {
+  const query = new URLSearchParams({ limit: String(limit) })
+  const resp = await fetch(`/api/evolution/replays?${query}`, { headers: authHeaders() })
+  return jsonOk(resp)
+}
+
+export async function getEvolutionReplayRunApi(id) {
+  const resp = await fetch(`/api/evolution/replays/${encodeURIComponent(String(id || ''))}`, {
+    headers: authHeaders(),
+  })
+  return jsonOk(resp)
+}

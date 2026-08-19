@@ -2,13 +2,18 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  createEvolutionReplaySuiteApi,
   generateEvolutionCandidateApi,
   getEvolutionCandidateApi,
   getEvolutionDatasetApi,
+  getEvolutionReplayRunApi,
   listEvolutionCandidatesApi,
   listEvolutionEvidenceApi,
   listEvolutionExclusionsApi,
+  listEvolutionReplayRunsApi,
+  listEvolutionReplaySuitesApi,
   recordChatFeedback,
+  runEvolutionReplayApi,
   setEvolutionEvidenceExcludedApi,
 } from '../src/lib/evolutionClient.js'
 
@@ -115,6 +120,43 @@ test('evolution client generates and reads inert candidates without an apply cli
     assert.deepEqual(JSON.parse(requests[0].init.body), input)
     assert.equal(requests[1].url, '/api/evolution/candidates?limit=10')
     assert.equal(requests[2].url, '/api/evolution/candidates/candidate%2F1')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
+})
+
+test('evolution client creates suites and reads isolated replay results without evaluation or apply clients', async () => {
+  const originalFetch = globalThis.fetch
+  const requests = []
+  globalThis.fetch = async (url, init = {}) => {
+    requests.push({ url, init })
+    const body = url === '/api/evolution/replay-suites' && init.method === 'POST'
+      ? { ok: true, suite: { id: 'suite-1' } }
+      : url === '/api/evolution/replays/run'
+        ? { ok: true, replay: { id: 'run-1', state: 'completed' } }
+        : url.startsWith('/api/evolution/replay-suites?')
+          ? { ok: true, suites: [] }
+          : url.startsWith('/api/evolution/replays?')
+            ? { ok: true, replays: [] }
+            : { ok: true, replay: { id: 'run-1', results: [] } }
+    return new Response(JSON.stringify(body), {
+      status: init.method === 'POST' ? 201 : 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+  try {
+    await createEvolutionReplaySuiteApi({ name: 'suite' })
+    await listEvolutionReplaySuitesApi({ limit: 10 })
+    await runEvolutionReplayApi({ suiteId: 'suite-1' })
+    await listEvolutionReplayRunsApi({ limit: 20 })
+    await getEvolutionReplayRunApi('run/1')
+    assert.equal(requests[0].url, '/api/evolution/replay-suites')
+    assert.equal(requests[0].init.method, 'POST')
+    assert.equal(requests[1].url, '/api/evolution/replay-suites?limit=10')
+    assert.equal(requests[2].url, '/api/evolution/replays/run')
+    assert.equal(requests[2].init.method, 'POST')
+    assert.equal(requests[3].url, '/api/evolution/replays?limit=20')
+    assert.equal(requests[4].url, '/api/evolution/replays/run%2F1')
   } finally {
     globalThis.fetch = originalFetch
   }

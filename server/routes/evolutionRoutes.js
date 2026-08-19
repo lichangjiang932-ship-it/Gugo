@@ -13,13 +13,24 @@ import {
   appendEvolutionFeedback,
   listEvolutionEvidence,
 } from '../services/evolutionEvidenceStore.js'
+import {
+  createEvolutionReplaySuite,
+  getEvolutionReplayRun,
+  getEvolutionReplaySuite,
+  listEvolutionReplayRuns,
+  listEvolutionReplaySuites,
+  runEvolutionReplay,
+} from '../services/evolutionReplayService.js'
 import { readJson, sendJson } from '../utils.js'
 
 function errorBody(code, message) {
   return { ok: false, error: { code, message } }
 }
 
-export async function handleEvolutionRequest(req, res, { runCandidateModel } = {}) {
+export async function handleEvolutionRequest(req, res, {
+  runCandidateModel,
+  runReplayModel,
+} = {}) {
   res.setHeader('Cache-Control', 'no-store')
   const userId = authenticateRequest(req)
   if (!userId) return sendJson(res, 401, errorBody('UNAUTHORIZED', '请先登录'))
@@ -113,6 +124,68 @@ export async function handleEvolutionRequest(req, res, { runCandidateModel } = {
         id: decodeURIComponent(candidateMatch[1]),
       })
       return sendJson(res, 200, { ok: true, candidate })
+    }
+    if (url.pathname === '/api/evolution/replay-suites') {
+      if (req.method === 'GET') {
+        return sendJson(res, 200, {
+          ok: true,
+          schemaVersion: 1,
+          suites: listEvolutionReplaySuites({ userId, limit: url.searchParams.get('limit') }),
+        })
+      }
+      if (req.method !== 'POST') {
+        return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET 或 POST'))
+      }
+      const body = await readJson(req, { maxBytes: 64 * 1024 })
+      const suite = createEvolutionReplaySuite({
+        userId,
+        name: body.name,
+        datasetFingerprint: body.datasetFingerprint,
+        cases: body.cases,
+      })
+      return sendJson(res, 201, { ok: true, suite })
+    }
+    const suiteMatch = url.pathname.match(/^\/api\/evolution\/replay-suites\/([^/]+)$/u)
+    if (suiteMatch) {
+      if (req.method !== 'GET') {
+        return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET'))
+      }
+      const suite = getEvolutionReplaySuite({ userId, id: decodeURIComponent(suiteMatch[1]) })
+      return sendJson(res, 200, { ok: true, suite })
+    }
+    if (url.pathname === '/api/evolution/replays/run') {
+      if (req.method !== 'POST') {
+        return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 POST'))
+      }
+      const body = await readJson(req, { maxBytes: 48 * 1024 })
+      const replay = await runEvolutionReplay({
+        userId,
+        suiteId: body.suiteId,
+        candidateId: body.candidateId,
+        baselineContent: body.baselineContent,
+        modelName: body.modelName,
+        parameters: body.parameters,
+        ...(typeof runReplayModel === 'function' ? { runModel: runReplayModel } : {}),
+      })
+      return sendJson(res, 201, { ok: true, replay })
+    }
+    if (url.pathname === '/api/evolution/replays') {
+      if (req.method !== 'GET') {
+        return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET'))
+      }
+      return sendJson(res, 200, {
+        ok: true,
+        schemaVersion: 1,
+        replays: listEvolutionReplayRuns({ userId, limit: url.searchParams.get('limit') }),
+      })
+    }
+    const replayMatch = url.pathname.match(/^\/api\/evolution\/replays\/([^/]+)$/u)
+    if (replayMatch) {
+      if (req.method !== 'GET') {
+        return sendJson(res, 405, errorBody('METHOD_NOT_ALLOWED', '仅支持 GET'))
+      }
+      const replay = getEvolutionReplayRun({ userId, id: decodeURIComponent(replayMatch[1]) })
+      return sendJson(res, 200, { ok: true, replay })
     }
     return sendJson(res, 404, errorBody('NOT_FOUND', '证据端点不存在'))
   } catch (error) {
