@@ -6,6 +6,7 @@ import {
   getPlugin,
   getRuntimePlugin,
   listPlugins,
+  listRuntimePlugins,
   registerPlugin,
   unregisterPlugin,
 } from '../plugins/pluginRegistry.js'
@@ -147,18 +148,47 @@ async function activateTransformer(plugin) {
   }))
 }
 
-function inventoryEntry(plugin, state) {
-  const runtime = getRuntimePlugin(plugin?.id || state?.pluginId)
+function runtimeManifestView({ plugin, runtime }) {
+  if (runtime) {
+    return {
+      id: runtime.id,
+      name: runtime.name,
+      version: runtime.version,
+      requires: [...runtime.requires],
+      contributes: [...runtime.contributes],
+    }
+  }
+  if (plugin?.type !== 'transformer') return null
   return {
-    id: plugin?.id || state.pluginId,
-    name: plugin?.name || state.pluginId,
-    version: plugin?.version || null,
-    type: plugin?.type || null,
-    available: !!plugin,
-    enabled: state?.enabled === true,
+    id: plugin.id,
+    name: plugin.name,
+    version: plugin.version,
+    requires: [],
+    contributes: [`tool:${runtimeTransformerToolName(plugin.id)}`],
+  }
+}
+
+function inventoryEntry(plugin, state, runtimeValue = null) {
+  const id = plugin?.id || state?.pluginId || runtimeValue?.id
+  const runtime = runtimeValue || getRuntimePlugin(id)
+  const isTransformer = plugin?.type === 'transformer'
+  const processOnly = !plugin && !!runtime
+  return {
+    id,
+    name: plugin?.name || runtime?.name || state?.pluginId || id,
+    version: plugin?.version || runtime?.version || null,
+    type: plugin?.type || (runtime ? 'runtime' : null),
+    source: isTransformer
+      ? 'installed-transformer'
+      : processOnly ? 'host-runtime' : 'persisted-state',
+    available: !!plugin || !!runtime,
+    controllable: isTransformer,
+    enabled: processOnly ? runtime?.state === 'active' : state?.enabled === true,
     active: runtime?.state === 'active',
     runtimeState: runtime?.state || 'inactive',
-    toolName: plugin?.type === 'transformer' ? runtimeTransformerToolName(plugin.id) : null,
+    installedAt: runtime?.installedAt || null,
+    manifest: runtimeManifestView({ plugin, runtime }),
+    toolName: isTransformer ? runtimeTransformerToolName(plugin.id) : null,
     lastError: state?.lastError || null,
     updatedAt: state?.updatedAt || null,
   }
@@ -166,13 +196,21 @@ function inventoryEntry(plugin, state) {
 
 export function listRuntimePluginInventory() {
   const states = new Map(listRuntimePluginStates().map((state) => [state.pluginId, state]))
+  const runtimes = new Map(listRuntimePlugins().map((runtime) => [runtime.id, runtime]))
   const plugins = listPlugins({ type: 'transformer' })
   const inventory = plugins.map((plugin) => {
     const state = states.get(plugin.id) || null
+    const runtime = runtimes.get(plugin.id) || null
     states.delete(plugin.id)
-    return inventoryEntry(plugin, state)
+    runtimes.delete(plugin.id)
+    return inventoryEntry(plugin, state, runtime)
   })
-  for (const state of states.values()) inventory.push(inventoryEntry(null, state))
+  for (const state of states.values()) {
+    const runtime = runtimes.get(state.pluginId) || null
+    runtimes.delete(state.pluginId)
+    inventory.push(inventoryEntry(null, state, runtime))
+  }
+  for (const runtime of runtimes.values()) inventory.push(inventoryEntry(null, null, runtime))
   return inventory.sort((left, right) => left.id.localeCompare(right.id))
 }
 

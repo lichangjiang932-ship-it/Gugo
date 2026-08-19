@@ -38,6 +38,7 @@ const {
   _resetForTests,
   _resetRuntimePluginsForTests,
   initPlugins,
+  registerPlugin,
 } = await import('../server/plugins/pluginRegistry.js')
 const { handlePluginRequest } = await import('../server/routes/pluginRoutes.js')
 const {
@@ -194,8 +195,84 @@ test('local installation owner can list runtime transformer inventory', async ()
   const response = await requestRuntime({ token: owner.token })
   assert.equal(response.status, 200)
   assert.equal(response.body.ok, true)
+  assert.equal(response.body.schemaVersion, 1)
   assert.deepEqual(response.body.plugins.map((plugin) => plugin.id), ['test-transformer'])
-  assert.equal(response.body.plugins[0].active, false)
+  const transformer = response.body.plugins[0]
+  const toolName = runtimeTransformerToolName('test-transformer')
+  assert.equal(transformer.active, false)
+  assert.equal(transformer.source, 'installed-transformer')
+  assert.equal(transformer.controllable, true)
+  assert.deepEqual(transformer.manifest, {
+    id: 'test-transformer',
+    name: 'Test Transformer',
+    version: '1.0.0',
+    requires: [],
+    contributes: [`tool:${toolName}`],
+  })
+})
+
+test('runtime inventory serializes host plugins as manifest-only JSON', async () => {
+  await registerPlugin({
+    id: 'host-observer',
+    name: 'Host Observer',
+    version: '1.2.3',
+    requires: [],
+    contributes: ['service:private-observer'],
+  }, (context) => context.services.provide('private-observer', {
+    privateValue: 'DO_NOT_SERIALIZE',
+    execute() {},
+  }))
+
+  const owner = localOwner()
+  const response = await requestRuntime({ token: owner.token })
+  assert.equal(response.status, 200)
+  const observer = response.body.plugins.find((plugin) => plugin.id === 'host-observer')
+  assert.deepEqual(observer, {
+    id: 'host-observer',
+    name: 'Host Observer',
+    version: '1.2.3',
+    type: 'runtime',
+    source: 'host-runtime',
+    available: true,
+    controllable: false,
+    enabled: true,
+    active: true,
+    runtimeState: 'active',
+    installedAt: observer.installedAt,
+    manifest: {
+      id: 'host-observer',
+      name: 'Host Observer',
+      version: '1.2.3',
+      requires: [],
+      contributes: ['service:private-observer'],
+    },
+    toolName: null,
+    lastError: null,
+    updatedAt: null,
+  })
+  assert.match(observer.installedAt, /^\d{4}-\d{2}-\d{2}T/)
+  assert.equal(JSON.stringify(response.body).includes('DO_NOT_SERIALIZE'), false)
+  assert.doesNotThrow(() => structuredClone(response.body))
+})
+
+test('runtime inventory retains unavailable persisted states without inventing a manifest', async () => {
+  setRuntimePluginState({
+    pluginId: 'missing-transformer',
+    enabled: true,
+    lastError: 'PLUGIN_NOT_FOUND: 插件不存在',
+    now: 25,
+  })
+  const owner = localOwner()
+  const response = await requestRuntime({ token: owner.token })
+  const missing = response.body.plugins.find((plugin) => plugin.id === 'missing-transformer')
+  assert.equal(missing.source, 'persisted-state')
+  assert.equal(missing.available, false)
+  assert.equal(missing.controllable, false)
+  assert.equal(missing.enabled, true)
+  assert.equal(missing.active, false)
+  assert.equal(missing.manifest, null)
+  assert.equal(missing.lastError, 'PLUGIN_NOT_FOUND: 插件不存在')
+  assert.equal(missing.updatedAt, 25)
 })
 
 test('enabling a transformer exposes a sandboxed tool and disabling removes it', async () => {
@@ -210,6 +287,7 @@ test('enabling a transformer exposes a sandboxed tool and disabling removes it',
   assert.equal(enabled.body.plugin.active, true)
 
   const toolName = runtimeTransformerToolName('test-transformer')
+  assert.deepEqual(enabled.body.plugin.manifest.contributes, [`tool:${toolName}`])
   const tool = getDynamicTool(toolName)
   assert.ok(tool)
   const result = await tool.exec({ input: 'hello' })

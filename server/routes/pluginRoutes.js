@@ -4,6 +4,7 @@
  * 公开 GET 端点 + 受控登录 POST：
  *   GET /api/plugins              → 列出所有 plugin（可选 ?type=ppt-theme 过滤）
  *   GET /api/plugins/:id          → plugin 详情 + entry 内容预览（限 50KB）
+ *   GET /api/plugins/runtime      → 本地 owner 的版本化 runtime manifest 清单
  *   POST /api/plugins/:id/run-sandbox → 登录后运行 transformer 沙箱
  *   POST /api/plugins/:id/install-as-skill → 登录后安装 skill-bundle
  */
@@ -133,7 +134,11 @@ export async function handlePluginRequest(req, res, { env = process.env } = {}) 
           error: { code: 'METHOD_NOT_ALLOWED', message: '不支持的请求' },
         })
       }
-      return sendJson(res, 200, { ok: true, plugins: listRuntimePluginInventory() })
+      return sendJson(res, 200, {
+        ok: true,
+        schemaVersion: 1,
+        plugins: listRuntimePluginInventory(),
+      })
     }
     if (req.method !== 'POST') {
       return sendJson(res, 405, {
