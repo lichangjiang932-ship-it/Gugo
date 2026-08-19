@@ -77,19 +77,27 @@ function McpStatusPanel({ copy, onClose, onManage }) {
 function FeedbackPanel({ copy, onClose, onSubmit }) {
   const [value, setValue] = useState('')
   const [notice, setNotice] = useState({ type: '', text: '' })
-  const submit = () => {
+  const [busy, setBusy] = useState(false)
+  const submit = async () => {
     const feedback = value.trim()
-    if (!feedback) { setNotice({ type: 'error', text: copy.required }); return }
-    const saved = onSubmit?.(feedback) !== false
-    if (!saved) { setNotice({ type: 'error', text: copy.failed }); return }
-    setValue('')
-    setNotice({ type: 'success', text: copy.saved })
+    if (!feedback || busy) { if (!feedback) setNotice({ type: 'error', text: copy.required }); return }
+    setBusy(true)
+    try {
+      const saved = await onSubmit?.(feedback)
+      if (saved === false) { setNotice({ type: 'error', text: copy.failed }); return }
+      setValue('')
+      setNotice({ type: 'success', text: copy.saved })
+    } catch {
+      setNotice({ type: 'error', text: copy.failed })
+    } finally {
+      setBusy(false)
+    }
   }
   return (
     <PanelShell testId="slash-feedback-panel" icon={MessageSquare} title={copy.title} closeLabel={copy.close} onClose={onClose}>
       <textarea autoFocus value={value} onChange={(event) => { setValue(event.target.value); setNotice({ type: '', text: '' }) }} placeholder={copy.placeholder} rows={3} className="mt-3 w-full resize-none rounded-card border border-ink/[0.12] bg-paper-2/60 px-3 py-2.5 text-[13px] leading-5 text-ink outline-none placeholder:text-ink-fade focus:border-ink/25" />
       <div className="mt-1.5 min-h-4 text-xs text-ink-fade">{notice.text ? <span className={notice.type === 'error' ? 'text-red-700' : 'text-emerald-700'}>{notice.text}</span> : copy.note}</div>
-      <div className="mt-2 flex justify-end gap-2"><button type="button" onClick={onClose} className="rounded-control px-3 py-1.5 text-xs text-ink-soft hover:bg-ink/[0.05]">{copy.cancel}</button><button type="button" onClick={submit} className="rounded-control bg-ink px-3 py-1.5 text-xs text-paper hover:bg-ink/85">{copy.submit}</button></div>
+      <div className="mt-2 flex justify-end gap-2"><button type="button" onClick={onClose} disabled={busy} className="rounded-control px-3 py-1.5 text-xs text-ink-soft hover:bg-ink/[0.05] disabled:opacity-40">{copy.cancel}</button><button type="button" onClick={submit} disabled={busy} className="rounded-control bg-ink px-3 py-1.5 text-xs text-paper hover:bg-ink/85 disabled:opacity-40">{copy.submit}</button></div>
     </PanelShell>
   )
 }

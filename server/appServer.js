@@ -62,6 +62,7 @@ import { isLocalHtmlPreviewTicketActive } from './services/localHtmlPreviewServi
 import { handleFileSnapshotRequest } from './routes/fileSnapshotRoutes.js'
 import { handleTurnEventRequest } from './routes/turnEventRoutes.js'
 import { handleAuditRequest } from './routes/auditRoutes.js'
+import { handleEvolutionRequest } from './routes/evolutionRoutes.js'
 import { handleMediaRequest } from './routes/mediaRoutes.js'
 import { handleAttachmentRequest } from './routes/attachmentRoutes.js'
 import { handleWebSearchRequest } from './routes/webSearchRoutes.js'
@@ -482,6 +483,10 @@ function createRouter(getEnv = getRuntimeEnv, staticDir = distDir) {
 
   if (req.url?.startsWith('/api/audit')) {
     return handleAuditRequest(req, res)
+  }
+
+  if (req.url?.startsWith('/api/evolution/')) {
+    return handleEvolutionRequest(req, res)
   }
 
   // 静态文件

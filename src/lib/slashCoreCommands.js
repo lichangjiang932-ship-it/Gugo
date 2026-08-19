@@ -87,7 +87,8 @@ export function buildCoreSlashCommands(_t, lang = 'en') {
         ctx.openFeedback?.()
         return ''
       }
-      ctx.recordFeedback?.(value)
+      const saved = await ctx.recordFeedback?.(value)
+      if (saved === false) throw new Error(copy.feedbackPanel.failed)
       return copy.notices.feedback
     }, { hint: '<feedback>' }),
     command('continue', copy, async (_args, ctx = {}) => {

@@ -1,5 +1,5 @@
 import { useCallback } from 'react'
-import { recordLocalChatFeedback } from '../../lib/localChatFeedback.js'
+import { recordChatFeedback } from '../../lib/evolutionClient.js'
 import { createJob } from '../../lib/jobClient.js'
 import { compressSession } from '../../lib/compactionClient.js'
 
@@ -42,7 +42,7 @@ export default function useSlashCommandExecution({
         createGoalJob: (goal, options) => createJob(goal, { ...options, modelName }),
         togglePet: () => setDesktopPetVisible((visible) => !visible),
         setApprovalMode: changeApprovalMode,
-        recordFeedback: (value) => recordLocalChatFeedback(value, stateRef.current.activeSessionId),
+        recordFeedback: (value) => recordChatFeedback(value, stateRef.current.activeSessionId),
       })
       if (result && typeof result === 'object' && Object.hasOwn(result, 'input')) {
         const nextInput = String(result.input || '')
