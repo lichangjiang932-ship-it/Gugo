@@ -156,11 +156,11 @@ const CHAT_SURFACE_TRANSLATIONS = {
   },
 }
 
-Object.assign(CHAT_SURFACE_TRANSLATIONS.zh.chatPreview, { loadingFile: '正在读取文件…', previewFailed: '文件预览失败', retryPreview: '重试预览', localHtmlServiceUnavailable: '本地预览服务尚未就绪。请稍后重试；正式文件不会被复制或更改。', previewRetryHint: '预览连接未能建立，请重试。正式文件仍保留在原位置。' })
-Object.assign(CHAT_SURFACE_TRANSLATIONS.en.chatPreview, { loadingFile: 'Loading file…', previewFailed: 'File preview failed', retryPreview: 'Retry preview', localHtmlServiceUnavailable: 'The local preview service is not ready yet. Retry shortly; the original file will not be copied or changed.', previewRetryHint: 'The preview connection could not be established. Retry to keep using the original file.' })
-Object.assign(CHAT_SURFACE_TRANSLATIONS.ja.chatPreview, { loadingFile: 'ファイルを読み込み中…', previewFailed: 'ファイルのプレビューに失敗しました', retryPreview: 'プレビューを再試行', localHtmlServiceUnavailable: 'ローカルプレビューサービスの準備ができていません。元のファイルはコピーも変更もされません。しばらくしてから再試行してください。', previewRetryHint: 'プレビュー接続を確立できませんでした。元のファイルをそのまま使用して再試行してください。' })
-Object.assign(CHAT_SURFACE_TRANSLATIONS.ko.chatPreview, { loadingFile: '파일을 불러오는 중…', previewFailed: '파일 미리보기 실패', retryPreview: '미리보기 다시 시도', localHtmlServiceUnavailable: '로컬 미리보기 서비스가 아직 준비되지 않았습니다. 원본 파일은 복사되거나 변경되지 않으니 잠시 후 다시 시도하세요.', previewRetryHint: '미리보기 연결을 만들지 못했습니다. 원본 파일을 그대로 사용해 다시 시도하세요.' })
-Object.assign(CHAT_SURFACE_TRANSLATIONS['zh-TW'].chatPreview, { loadingFile: '正在讀取檔案…', previewFailed: '檔案預覽失敗', retryPreview: '重試預覽', localHtmlServiceUnavailable: '本機預覽服務尚未就緒。請稍後重試；正式檔案不會被複製或變更。', previewRetryHint: '無法建立預覽連線，請重試。正式檔案仍保留在原位置。' })
+Object.assign(CHAT_SURFACE_TRANSLATIONS.zh.chatPreview, { loadingFile: '正在读取文件…', previewFailed: '文件预览失败', retryPreview: '重试预览', openOriginal: '打开原文件', localHtmlServiceUnavailable: '本地预览服务尚未就绪。请稍后重试；正式文件不会被复制或更改。', previewRetryHint: '预览连接未能建立，请重试。正式文件仍保留在原位置。' })
+Object.assign(CHAT_SURFACE_TRANSLATIONS.en.chatPreview, { loadingFile: 'Loading file…', previewFailed: 'File preview failed', retryPreview: 'Retry preview', openOriginal: 'Open original', localHtmlServiceUnavailable: 'The local preview service is not ready yet. Retry shortly; the original file will not be copied or changed.', previewRetryHint: 'The preview connection could not be established. Retry to keep using the original file.' })
+Object.assign(CHAT_SURFACE_TRANSLATIONS.ja.chatPreview, { loadingFile: 'ファイルを読み込み中…', previewFailed: 'ファイルのプレビューに失敗しました', retryPreview: 'プレビューを再試行', openOriginal: '元のファイルを開く', localHtmlServiceUnavailable: 'ローカルプレビューサービスの準備ができていません。元のファイルはコピーも変更もされません。しばらくしてから再試行してください。', previewRetryHint: 'プレビュー接続を確立できませんでした。元のファイルをそのまま使用して再試行してください。' })
+Object.assign(CHAT_SURFACE_TRANSLATIONS.ko.chatPreview, { loadingFile: '파일을 불러오는 중…', previewFailed: '파일 미리보기 실패', retryPreview: '미리보기 다시 시도', openOriginal: '원본 파일 열기', localHtmlServiceUnavailable: '로컬 미리보기 서비스가 아직 준비되지 않았습니다. 원본 파일은 복사되거나 변경되지 않으니 잠시 후 다시 시도하세요.', previewRetryHint: '미리보기 연결을 만들지 못했습니다. 원본 파일을 그대로 사용해 다시 시도하세요.' })
+Object.assign(CHAT_SURFACE_TRANSLATIONS['zh-TW'].chatPreview, { loadingFile: '正在讀取檔案…', previewFailed: '檔案預覽失敗', retryPreview: '重試預覽', openOriginal: '開啟原始檔', localHtmlServiceUnavailable: '本機預覽服務尚未就緒。請稍後重試；正式檔案不會被複製或變更。', previewRetryHint: '無法建立預覽連線，請重試。正式檔案仍保留在原位置。' })
 
 const FEATURE_PAGE_TRANSLATIONS = {
   zh: {

@@ -6,7 +6,7 @@ import { createRoot } from 'react-dom/client'
 
 import SessionList from '../src/components/leftRail/SessionList.jsx'
 
-test('compact session history keeps fork in the context menu without an inline branch row', async () => {
+test('compact session history hides branch details while keeping fork in the context menu', async () => {
   const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { url: 'http://localhost/chat' })
   globalThis.window = dom.window
   globalThis.document = dom.window.document
@@ -38,9 +38,13 @@ test('compact session history keeps fork in the context menu without an inline b
     const row = rootElement.querySelector('[data-session-open]')
     assert.equal(row.textContent, 'Simple history row')
     assert.equal(row.querySelector('svg'), null)
+    assert.doesNotMatch(row.textContent, /parent-1|Experiment/)
+    assert.deepEqual(
+      [...rootElement.querySelectorAll('[role="menuitem"]')].map((button) => button.textContent.trim()),
+      ['nav.pinSession', 'nav.archiveSession', 'nav.forkSession', 'nav.deleteSession'],
+    )
     const forkButton = [...rootElement.querySelectorAll('[role="menuitem"]')]
       .find((button) => button.textContent.includes('nav.forkSession'))
-    assert.ok(forkButton)
     await act(async () => forkButton.click())
     assert.equal(forked, session)
   } finally {

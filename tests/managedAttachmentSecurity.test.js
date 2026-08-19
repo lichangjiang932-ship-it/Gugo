@@ -263,26 +263,65 @@ test('deleting a chat session also removes its managed attachment bytes', async 
   assert.equal(fs.existsSync(attachment.fullPath), false)
 })
 
-test('content route inlines safe documents and downloads active content types', async () => {
+test('content route inlines passive media and downloads active content by default', async () => {
   const identity = makeIdentity('headers')
   const fixtures = [
-    { name: 'safe.pdf', mimeType: 'application/pdf', body: '%PDF-1.4\n%%EOF', inline: true },
+    {
+      name: 'safe.pdf', mimeType: 'application/pdf', body: '%PDF-1.4\n%%EOF',
+      expectedMimeType: 'application/pdf', inline: true,
+    },
     {
       name: 'safe.png',
       mimeType: 'image/png',
       body: Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]),
+      expectedMimeType: 'image/png',
       inline: true,
     },
-    { name: 'active.html', mimeType: 'text/html', body: '<script>alert(1)</script>', inline: false },
-    { name: 'active.svg', mimeType: 'image/svg+xml', body: '<svg onload="alert(1)"/>', inline: false },
+    {
+      name: 'safe.avif', mimeType: 'application/octet-stream', body: 'avif-by-extension',
+      expectedMimeType: 'image/avif', inline: true,
+    },
+    {
+      name: 'safe.bmp', mimeType: 'application/octet-stream', body: Buffer.from('BMbrowser-bitmap'),
+      expectedMimeType: 'image/bmp', inline: true,
+    },
+    {
+      name: 'seek.mp3', mimeType: 'application/octet-stream', body: Buffer.from('ID3media-audio'),
+      expectedMimeType: 'audio/mpeg', inline: true,
+    },
+    {
+      name: 'seek.mp4', mimeType: 'application/octet-stream',
+      body: Buffer.from([0, 0, 0, 24, 102, 116, 121, 112, 105, 115, 111, 109, 0, 0, 0, 0]),
+      expectedMimeType: 'video/mp4', inline: true,
+    },
+    {
+      name: 'audiobook.m4b', mimeType: 'application/octet-stream',
+      body: Buffer.from([0, 0, 0, 24, 102, 116, 121, 112, 77, 52, 66, 32, 0, 0, 0, 0]),
+      expectedMimeType: 'audio/mp4', inline: true,
+    },
+    {
+      name: 'disguised.html', mimeType: 'application/octet-stream',
+      body: Buffer.from([80, 75, 3, 4, 0, 0, 0, 0]),
+      expectedMimeType: 'application/zip', inline: false,
+    },
+    {
+      name: 'active.html', mimeType: 'application/octet-stream', body: '<script>alert(1)</script>',
+      expectedMimeType: 'text/html', inline: false,
+    },
+    {
+      name: 'active.svg', mimeType: 'application/octet-stream', body: '<svg onload="alert(1)"/>',
+      expectedMimeType: 'image/svg+xml', inline: false,
+    },
   ]
   for (const fixture of fixtures) {
     const attachment = await upload({ identity, ...fixture })
+    assert.equal(attachment.mimeType, fixture.expectedMimeType)
     const response = await fetch(`${origin}${attachment.downloadUrl}`, {
       headers: authorization(identity),
     })
     assert.equal(response.status, 200)
     assert.equal(response.headers.get('x-content-type-options'), 'nosniff')
+    assert.equal(response.headers.get('accept-ranges'), 'bytes')
     assert.match(response.headers.get('content-disposition'), fixture.inline ? /^inline;/ : /^attachment;/)
     if (fixture.inline) {
       assert.equal(response.headers.get('content-type'), attachment.mimeType)
@@ -292,6 +331,38 @@ test('content route inlines safe documents and downloads active content types', 
       assert.match(response.headers.get('content-security-policy'), /sandbox/)
     }
     assert.deepEqual(Buffer.from(await response.arrayBuffer()), Buffer.from(fixture.body))
+  }
+})
+
+test('HTML and SVG require preview mode and remain constrained by a no-script sandbox', async () => {
+  const identity = makeIdentity('active-preview')
+  const fixtures = [
+    { name: 'preview.html', mimeType: 'text/html', body: '<script>alert(1)</script>' },
+    { name: 'preview.svg', mimeType: 'image/svg+xml', body: '<svg onload="alert(1)"/>' },
+  ]
+  for (const fixture of fixtures) {
+    const attachment = await upload({ identity, ...fixture })
+    const download = await fetch(`${origin}${attachment.downloadUrl}`, {
+      headers: authorization(identity),
+    })
+    assert.equal(download.headers.get('content-type'), 'application/octet-stream')
+    assert.match(download.headers.get('content-disposition'), /^attachment;/)
+    assert.match(download.headers.get('content-security-policy'), /sandbox/)
+    await download.arrayBuffer()
+
+    const preview = await fetch(`${origin}${attachment.downloadUrl}?preview=1`, {
+      headers: authorization(identity),
+    })
+    assert.equal(preview.status, 200)
+    assert.equal(preview.headers.get('content-type'), attachment.mimeType)
+    assert.match(preview.headers.get('content-disposition'), /^inline;/)
+    assert.equal(preview.headers.get('x-frame-options'), 'SAMEORIGIN')
+    const csp = preview.headers.get('content-security-policy') || ''
+    assert.match(csp, /(?:^|;)\s*sandbox(?:;|$)/)
+    assert.match(csp, /default-src 'none'/)
+    assert.match(csp, /script-src 'none'/)
+    assert.doesNotMatch(csp, /allow-scripts/)
+    assert.deepEqual(Buffer.from(await preview.arrayBuffer()), Buffer.from(fixture.body))
   }
 })
 

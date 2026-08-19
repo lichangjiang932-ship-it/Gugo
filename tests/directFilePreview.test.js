@@ -14,7 +14,7 @@ import {
 
 test('classifies mainstream direct file formats and keeps unknown binaries download-only', () => {
   const cases = {
-    'report.pdf': 'pdf', 'photo.avif': 'image', 'scan.bmp': 'image', 'page.svg': 'image', 'index.html': 'html',
+    'report.pdf': 'pdf', 'photo.avif': 'image', 'scan.bmp': 'image', 'page.svg': 'image', 'still.jfif': 'image', 'icon.ico': 'image', 'index.html': 'html',
     'notes.md': 'markdown', 'app.tsx': 'code', 'data.json': 'json', 'feed.xml': 'xml',
     'table.csv': 'csv', 'table.tsv': 'csv', 'report.docx': 'docx', 'book.ods': 'xlsx',
     'book.xls': 'xlsx', 'deck.pptx': 'pptx', 'voice.opus': 'audio', 'movie.ogv': 'video',
@@ -24,6 +24,11 @@ test('classifies mainstream direct file formats and keeps unknown binaries downl
     assert.equal(classifyDirectFile({ filename }), expected, filename)
   }
   assert.equal(withArtifactPreviewMode('/api/artifacts/report.pdf?token=abc'), '/api/artifacts/report.pdf?token=abc&preview=1')
+  assert.equal(withArtifactPreviewMode('/api/artifacts/report.pdf?preview=0&token=abc'), '/api/artifacts/report.pdf?preview=1&token=abc')
+  assert.equal(withArtifactPreviewMode('data:image/png;base64,iVBORw0KGgo='), 'data:image/png;base64,iVBORw0KGgo=')
+  assert.equal(withArtifactPreviewMode('blob:http://localhost/opaque-id'), 'blob:http://localhost/opaque-id')
+  assert.equal(classifyDirectFile({ type: 'png' }), 'image')
+  assert.equal(classifyDirectFile({ type: 'text/plain; charset=utf-8' }), 'text')
 })
 
 test('parses real DOCX paragraphs and headings from OOXML bytes', async () => {

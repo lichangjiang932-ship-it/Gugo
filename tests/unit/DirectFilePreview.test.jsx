@@ -61,6 +61,16 @@ test('native image, audio, and video previews expose loading and failure states'
       await act(async () => media.dispatchEvent(new dom.window.Event('error')))
       assert.match(rootElement.textContent, /chatPreview\.previewFailed/, `${kind} failure state`)
       assert.doesNotMatch(rootElement.textContent, /chatPreview\.loadingFile/, `${kind} loading cleared`)
+      assert.ok(rootElement.querySelector('a[target="_blank"]'), `${kind} open-original fallback`)
+      const retry = [...rootElement.querySelectorAll('button')]
+        .find((button) => button.textContent.includes('chatPreview.retryPreview'))
+      assert.ok(retry, `${kind} retry fallback`)
+      const failedUrl = media.getAttribute('src')
+      await act(async () => retry.click())
+      const retriedMedia = rootElement.querySelector(selector)
+      assert.notEqual(retriedMedia, media, `${kind} retry remount`)
+      assert.notEqual(retriedMedia.getAttribute('src'), failedUrl, `${kind} retry URL`)
+      assert.match(retriedMedia.getAttribute('src'), /previewRetry=1/, `${kind} retry cache buster`)
     }
   } finally {
     await act(async () => root.unmount())
@@ -136,7 +146,9 @@ test('HTML iframe leaves loading after five seconds and retries in place', async
     assert.ok(retry)
     await act(async () => retry.click())
     assert.match(rootElement.textContent, /chatPreview\.loadingFile/)
-    assert.notEqual(rootElement.querySelector('iframe'), firstFrame)
+    const retriedFrame = rootElement.querySelector('iframe')
+    assert.notEqual(retriedFrame, firstFrame)
+    assert.equal(retriedFrame.getAttribute('src'), '/slow.html?previewRetry=1')
   } finally {
     await act(async () => root.unmount())
     dom.window.close()

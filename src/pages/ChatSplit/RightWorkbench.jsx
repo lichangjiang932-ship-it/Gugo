@@ -13,6 +13,8 @@ import {
   X,
 } from 'lucide-react'
 import { resolveDeliveryArtifacts } from '../../lib/artifactReferences.js'
+import { buildAttachmentPreviewArtifact } from '../../lib/attachmentPreview.js'
+import { classifyDirectFile, withArtifactPreviewMode } from '../../lib/directFilePreview.js'
 import { buildVerifiedLocalFileReferences } from '../../lib/localFileReferences.js'
 import { runWorkbenchTerminal } from '../../lib/workbenchClient.js'
 import { useT } from '../../i18n/I18nProvider.jsx'
@@ -41,6 +43,17 @@ function readStoredWidth() {
 
 function collectArtifacts(messages) {
   const newestFirst = messages.flatMap((message, index) => {
+    if (message?.role === 'user') {
+      return (Array.isArray(message.attachments) ? message.attachments : [])
+        .map((attachment) => buildAttachmentPreviewArtifact(attachment, { messageId: message.id }))
+        .filter(Boolean)
+        .map((artifact) => ({
+          ...artifact.directFile,
+          id: artifact.directFile.id || `${message.id || index}-${artifact.directFile.url}`,
+          messageId: message.id,
+          userAttachment: true,
+        }))
+    }
     if (
       message?.role !== 'assistant'
       || message?.meta?.streaming
@@ -71,13 +84,37 @@ function collectArtifacts(messages) {
     return [...managedArtifacts, ...verifiedLocalFiles]
   }).reverse()
   const seenVerifiedLocalFiles = new Set()
+  const seenAttachments = new Set()
   return newestFirst.filter((artifact) => {
+    if (artifact?.userAttachment === true) {
+      const identity = String(artifact.id || artifact.url || '')
+      if (!identity || seenAttachments.has(identity)) return false
+      seenAttachments.add(identity)
+      return true
+    }
     if (artifact?.verifiedLocalFile !== true) return true
     const identity = verifiedLocalFileIdentity(artifact)
     if (!identity || seenVerifiedLocalFiles.has(identity)) return !identity
     seenVerifiedLocalFiles.add(identity)
     return true
   })
+}
+
+function WorkbenchFileVisual({ artifact }) {
+  const kind = classifyDirectFile(artifact)
+  if (kind !== 'image' || !artifact?.url) {
+    return <FileText className="h-3.5 w-3.5" />
+  }
+  const previewUrl = withArtifactPreviewMode(withDownloadToken(artifact.url))
+  return (
+    <img
+      src={previewUrl}
+      alt=""
+      loading="lazy"
+      referrerPolicy="no-referrer"
+      className="h-full w-full rounded-control object-cover"
+    />
+  )
 }
 
 function openArtifactLink(event, onOpenArtifact, artifact) {
@@ -286,7 +323,7 @@ export default function RightWorkbench({
                 onClick={(event) => openArtifactLink(event, onOpenArtifact, artifact)}
                 className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left"
               >
-                <span className="flex h-7 w-7 items-center justify-center rounded-control bg-ink/5 text-ink-fade"><FileText className="h-3.5 w-3.5" /></span>
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-control bg-ink/5 text-ink-fade"><WorkbenchFileVisual artifact={artifact} /></span>
                 <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-ink">{artifact.filename || t('workbench.untitledArtifact')}</span><span className="mt-0.5 block truncate text-xs uppercase tracking-wide text-ink-fade">{artifact.type || t('workbench.fileType')}</span></span>
                 <ExternalLink className="h-3.5 w-3.5 text-ink-fade" />
               </a>

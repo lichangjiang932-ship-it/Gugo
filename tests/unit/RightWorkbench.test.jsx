@@ -252,6 +252,64 @@ test('right workbench hides live intermediates and synthetic previews outside de
   }
 })
 
+test('right workbench lists user attachments with image thumbnails and opens them in the shared preview pane', async () => {
+  const dom = setupDom()
+  const rootElement = dom.window.document.getElementById('root')
+  const root = createRoot(rootElement)
+  const opened = []
+
+  try {
+    await act(async () => root.render(
+      <RightWorkbench
+        messages={[{
+          id: 'user-with-files',
+          role: 'user',
+          content: '请查看附件',
+          attachments: [{
+            id: 'attachment-photo',
+            name: '现场照片.JFIF',
+            mimeType: 'image/jpeg',
+            downloadUrl: '/api/attachments/attachment-photo/content',
+          }, {
+            id: 'attachment-audio',
+            name: '访谈.opus',
+            mimeType: 'audio/ogg',
+            downloadUrl: '/api/attachments/attachment-audio/content',
+          }],
+        }]}
+        activeTab="files"
+        onTabChange={() => {}}
+        onClose={() => {}}
+        onOpenArtifact={(artifact) => opened.push(artifact)}
+        onSendMessage={() => {}}
+        isGenerating={false}
+      />,
+    ))
+
+    assert.equal(rootElement.querySelector('[data-testid="workbench-file-count"]').textContent, '2')
+    const links = [...rootElement.querySelectorAll('[data-testid="workbench-file-open"]')]
+    assert.deepEqual(links.map((link) => link.textContent.trim()).map((value) => value.replace(/\s+/g, ' ')), [
+      '访谈.opusaudio/ogg',
+      '现场照片.JFIFimage/jpeg',
+    ])
+    const thumbnail = rootElement.querySelector('img[src*="attachment-photo"]')
+    assert.ok(thumbnail)
+    assert.match(thumbnail.getAttribute('src'), /preview=1/)
+
+    const photoLink = links.find((link) => link.textContent.includes('现场照片.JFIF'))
+    await act(async () => photoLink.dispatchEvent(new dom.window.MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+    })))
+    assert.equal(opened.length, 1)
+    assert.equal(opened[0].directFile.id, 'attachment-photo')
+    assert.equal(opened[0].directFile.mimeType, 'image/jpeg')
+  } finally {
+    await act(async () => root.unmount())
+    dom.window.close()
+  }
+})
+
 test('right workbench prefers a verified formal local file over its managed preview artifact', async () => {
   const dom = setupDom()
   const rootElement = dom.window.document.getElementById('root')

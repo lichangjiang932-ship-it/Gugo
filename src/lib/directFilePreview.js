@@ -1,8 +1,8 @@
 const TEXT_PREVIEW_LIMIT = 4 * 1024 * 1024
 const OFFICE_PREVIEW_LIMIT = 64 * 1024 * 1024
 
-const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'avif'])
-const AUDIO_EXTENSIONS = new Set(['mp3', 'wav', 'm4a', 'aac', 'ogg', 'oga', 'flac', 'opus'])
+const IMAGE_EXTENSIONS = new Set(['png', 'apng', 'jpg', 'jpeg', 'jfif', 'gif', 'webp', 'svg', 'bmp', 'avif', 'ico'])
+const AUDIO_EXTENSIONS = new Set(['mp3', 'wav', 'm4a', 'm4b', 'aac', 'ogg', 'oga', 'flac', 'opus'])
 const VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'm4v', 'ogv'])
 const MARKDOWN_EXTENSIONS = new Set(['md', 'markdown', 'mdx'])
 const CODE_EXTENSIONS = new Set([
@@ -15,12 +15,14 @@ const TEXT_EXTENSIONS = new Set(['txt', 'rtf', ...CODE_EXTENSIONS])
 export function directFileExtension(file = {}) {
   const filename = String(file.filename || file.title || '')
   const match = filename.toLowerCase().match(/\.([a-z0-9]{1,12})$/)
-  return match?.[1] || ''
+  if (match?.[1]) return match[1]
+  const declaredType = String(file.mimeType || file.type || '').trim().toLowerCase()
+  return /^[a-z0-9]{1,12}$/.test(declaredType) ? declaredType : ''
 }
 
 export function classifyDirectFile(file = {}) {
   const extension = directFileExtension(file)
-  const mime = String(file.mimeType || file.type || '').toLowerCase()
+  const mime = String(file.mimeType || file.type || '').split(';', 1)[0].trim().toLowerCase()
   if (mime === 'application/pdf' || extension === 'pdf') return 'pdf'
   if (mime.startsWith('image/') || IMAGE_EXTENSIONS.has(extension)) return 'image'
   if (mime.startsWith('audio/') || AUDIO_EXTENSIONS.has(extension)) return 'audio'
@@ -41,10 +43,22 @@ export function classifyDirectFile(file = {}) {
 export function withArtifactPreviewMode(value = '') {
   const url = String(value || '')
   if (!url) return ''
-  const hashIndex = url.indexOf('#')
-  const hash = hashIndex >= 0 ? url.slice(hashIndex) : ''
-  const base = hashIndex >= 0 ? url.slice(0, hashIndex) : url
-  return `${base}${base.includes('?') ? '&' : '?'}preview=1${hash}`
+  if (/^(?:data|blob):/i.test(url)) return url
+  try {
+    const baseOrigin = globalThis.location?.origin
+      || globalThis.window?.location?.origin
+      || 'http://localhost'
+    const parsed = new URL(url, baseOrigin)
+    parsed.searchParams.set('preview', '1')
+    if (/^[a-z][a-z\d+.-]*:/i.test(url)) return parsed.href
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`
+  } catch {
+    const hashIndex = url.indexOf('#')
+    const hash = hashIndex >= 0 ? url.slice(hashIndex) : ''
+    const base = hashIndex >= 0 ? url.slice(0, hashIndex) : url
+    const separator = base.includes('?') ? '&' : '?'
+    return `${base}${separator}preview=1${hash}`
+  }
 }
 
 function xmlUnescape(value = '') {
